@@ -2721,8 +2721,23 @@ private:
     }
 
     // n_tokens_cur: the number of tokens added to the batch for the current slot
-    void create_checkpoint(server_slot & slot, const int64_t n_tokens_cur, llama_pos pos_min, llama_pos pos_max) {
+    // supersede_prev: erase the checkpoints of previous tasks within min-step before the new one
+    void create_checkpoint(server_slot & slot, const int64_t n_tokens_cur, llama_pos pos_min, llama_pos pos_max, bool supersede_prev = false) {
         const int id_task = slot.task->id;
+
+        if (supersede_prev) {
+            const int64_t n_tokens_new = slot.prompt.n_tokens() - n_tokens_cur;
+            for (auto it = slot.prompt.checkpoints.begin(); it != slot.prompt.checkpoints.end(); ) {
+                if (it->id_task != id_task && it->n_tokens < n_tokens_new && it->n_tokens + params_base.checkpoint_min_step >= n_tokens_new) {
+                    SLT_TRC(slot, "erasing context checkpoint superseded by a later one (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
+                            it->pos_min, it->pos_max, it->n_tokens, (float) it->size() / 1024 / 1024);
+
+                    it = slot.prompt.checkpoints.erase(it);
+                    continue;
+                }
+                ++it;
+            }
+        }
 
         // evict checkpoints within min-step of a previous checkpoint, unless they were
         // created by the current task
@@ -4460,6 +4475,16 @@ private:
 
                     const int32_t n_decision_first = slot.task->type == SERVER_TASK_TYPE_DECISION ? slot.task->decision.pos_first() : -1;
 
+                    // end of the last user message: where a resent chat prompt diverges from a cached one (the
+                    // generation prompt / assistant turn follows), so the best place to resume a recurrent state from
+                    int32_t last_user_end = -1;
+                    for (auto it = spans.spans.rbegin(); it != spans.spans.rend(); ++it) {
+                        if (it->role == COMMON_CHAT_ROLE_USER) {
+                            last_user_end = (int32_t) (it->pos + it->len);
+                            break;
+                        }
+                    }
+
                     // add prompt tokens for processing in the current batch
                     while (slot.prompt.n_tokens() < slot.task->n_tokens() && batch.size() < n_batch) {
                         // get next token to process
@@ -4509,6 +4534,11 @@ private:
                             }
                         }
 
+                        // break at the end of the last user message, so that a checkpoint is created there
+                        if (do_checkpoint && last_user_end > 0 && slot.prompt.n_tokens() == last_user_end) {
+                            break;
+                        }
+
                         // process the last few tokens of the prompt separately in order to allow for a checkpoint to be created.
                         // create checkpoints that many tokens before the end of the prompt:
                         //  - 4 + n_ubatch
@@ -4540,6 +4570,7 @@ private:
 
                     const bool is_user_start = spans.is_user_start(n_tokens_start);
                     const bool is_last_user_message = n_tokens_start == last_user_pos;
+                    const bool is_last_user_end     = last_user_end > 0 && n_tokens_start == last_user_end;
 
                     // entire prompt has been processed
                     if (slot.prompt.n_tokens() == slot.task->n_tokens()) {
@@ -4557,7 +4588,7 @@ private:
                     } else {
                         // skip ordinary mid-prompt checkpoints, unless the batch starts a user
                         // message or we are near the end of the prompt
-                        if (!is_user_start && !near_prompt_end) {
+                        if (!is_user_start && !is_last_user_end && !near_prompt_end) {
                             do_checkpoint = false;
                         }
                     }
@@ -4577,14 +4608,16 @@ private:
                     // no need to create checkpoints that are too close together, unless it's the last user message
                     do_checkpoint = do_checkpoint && (
                             slot.prompt.checkpoints.empty() ||
-                            is_last_user_message || near_prompt_end ||
+                            is_last_user_message || is_last_user_end || near_prompt_end ||
                             n_tokens_start > slot.prompt.checkpoints.back().n_tokens + params_base.checkpoint_min_step);
                     SLT_DBG(slot, "main/do_checkpoint = %s, pos_min = %d, pos_max = %d\n", do_checkpoint ? "yes" : "no", pos_min, pos_max);
 
                     // note: we create the checkpoint before calling llama_decode(), so the current batch is not
                     //       yet processed and therefore it is not part of the checkpoint.
                     if (do_checkpoint) {
-                        create_checkpoint(slot, n_tokens_cur, pos_min, pos_max);
+                        // a checkpoint at the end of the last user message is created on every turn and is never
+                        // invalidated by the next one: let it replace the earlier ones instead of accumulating
+                        create_checkpoint(slot, n_tokens_cur, pos_min, pos_max, is_last_user_end);
                     }
                 }
 
