@@ -251,6 +251,16 @@ set_tests_properties(test-generate-models PROPERTIES
     FIXTURES_SETUP generate-models
 )
 
+llama_build(test-memory-iswa-seq-rm.cpp)
+llama_test(
+    test-memory-iswa-seq-rm
+    LABEL "main behavior"
+    ARGS "${MODEL_DIR}/gemma3-dense.gguf"
+)
+set_tests_properties(test-memory-iswa-seq-rm PROPERTIES
+    FIXTURES_REQUIRED generate-models
+)
+
 # Target model for test-speculative-rejection-sampling
 set(SPEC_TARGET_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-speculative-models/target")
 file(MAKE_DIRECTORY "${SPEC_TARGET_DIR}")
