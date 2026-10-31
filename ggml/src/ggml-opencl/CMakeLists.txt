@@ -114,6 +114,15 @@ set(GGML_OPENCL_KERNELS
     gemv_noshuffle_iq2_xs_f32
     gemm_noshuffle_iq2_s_q8_1_dp4a
     gemv_noshuffle_iq2_s_f32
+    gemm_noshuffle_q2_0_f32
+    gemm_noshuffle_q2_0_q8_1_dp4a
+    gemv_noshuffle_q2_0_f32
+    gemm_noshuffle_iq1_m_f32
+    gemm_noshuffle_iq1_m_q8_1_dp4a
+    gemv_noshuffle_iq1_m_f32
+    gemm_noshuffle_iq1_s_f32
+    gemm_noshuffle_iq1_s_q8_1_dp4a
+    gemv_noshuffle_iq1_s_f32
     gemm_noshuffle_q3_k_q8_1_dp4a
     gemv_noshuffle_q3_k_f32
     mul_mv_q2_k_f32
@@ -130,6 +139,16 @@ set(GGML_OPENCL_KERNELS
     mul_mm_iq2_xs_f32_l4_lm
     mul_mv_iq2_s_f32_flat
     mul_mm_iq2_s_f32_l4_lm
+    mul_mv_q2_0_f32
+    mul_mv_q2_0_f32_flat
+    mul_mm_q2_0_f32_l4_lm
+    mul_mv_iq1_m_f32
+    mul_mv_iq1_m_f32_flat
+    mul_mm_iq1_m_f32_l4_lm
+    iq1_s_grid
+    mul_mv_iq1_s_f32
+    mul_mv_iq1_s_f32_flat
+    mul_mm_iq1_s_f32_l4_lm
     mul_mv_q3_k_f32_flat
     mul_mm_q3_k_f32_l4_lm
     mul_mv_q2_k_f32_flat

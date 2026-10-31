@@ -846,6 +846,9 @@ class GGUFWriter:
     def add_shared_kv_layers(self, value: int) -> None:
         self.add_uint32(Keys.Attention.SHARED_KV_LAYERS.format(arch=self.arch), value)
 
+    def add_kv_source_map(self, value: Sequence[int]) -> None:
+        self.add_array(Keys.Attention.KV_SOURCE_MAP.format(arch=self.arch), value)
+
     # if input is array, true means SWA and false means full_attention for each layer
     def add_sliding_window_pattern(self, value: int | Sequence[bool]) -> None:
         key = Keys.Attention.SLIDING_WINDOW_PATTERN.format(arch=self.arch)

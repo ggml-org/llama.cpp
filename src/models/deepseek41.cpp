@@ -632,7 +632,7 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
         GGML_ASSERT(top_k && "DeepSeek-V4.1: top-k source layer produced no top-k");
 
         // a quantized K cache stores the window Hadamard-rotated (as build_raw_attention)
-        ggml_tensor * k_rot = inp_attn->self_k_rot;
+        ggml_tensor * k_rot = inp_attn->self_k_rot[il];
         if (k_rot) {
             q  = llama_mul_mat_hadamard(ctx0, q, k_rot);
             kv = llama_mul_mat_hadamard(ctx0, kv, k_rot);
