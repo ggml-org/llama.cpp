@@ -1607,6 +1607,10 @@ std::string server_task_result_metrics::to_metrics() {
             "spec_decode_num_drafts_total",
             "Speculative: Total speculative decoding verification steps",
             (double) metrics.n_draft_verif_steps
+        }, {
+            "prefill_budget_steps_total",
+            "Number of server steps whose prompt tokens were capped by --prefill-budget-busy",
+            (double) metrics.n_prefill_budget_steps
         },
     };
 
