@@ -15,11 +15,10 @@ enum htp_get_rows_kernel_type {
 };
 
 struct htp_get_rows_kernel_params {
-    int32_t  n_threads;
-    int32_t  kernel_type;
-    int32_t  total_tasks;
-    int32_t  tasks_per_thread;
-    int32_t  vtcm_size;
+    uint8_t  kernel_type;
+    uint32_t n_threads;
+    uint32_t total_tasks;
+    uint32_t vtcm_size;
 
     // Fastdiv helpers
     struct fastdiv_values div_ne10;
@@ -64,7 +63,7 @@ static inline void htp_get_rows_vtcm_layout_build(
         size_t src0_row_size = 0;
         if (kernel_type == HTP_GET_ROWS_KERNEL_TILED) {
             const size_t tile_stride = htp_tensor_get_tile_padded_size(type);
-            const uint32_t n_k_tiles = ne00 / HTP_TENSOR_TILE_N_COLS;
+            const uint32_t n_k_tiles = ne00 / htp_tensor_get_tile_k(type);
             src0_row_size = n_k_tiles > 0 ? (n_k_tiles * tile_stride) : tile_stride;
         } else {
             src0_row_size = htp_tensor_get_row_size(type, ne00);

@@ -130,4 +130,23 @@ void test_json_parser(testing &t) {
             t.assert_true("fail", result.fail());
         });
     });
+
+    // json-value is entered once per level
+    t.test("deep JSON", [](testing &t) {
+        auto json = build_peg_parser([](common_peg_parser_builder & p) { return p.json(); });
+
+        const auto parse = [&](size_t depth) {
+            std::string input = std::string(depth, '[') + std::string(depth, ']');
+            common_peg_parse_context ctx(input);
+            try {
+                return json.parse(ctx).success() ? std::string() : std::string("fail");
+            } catch (const common_peg_recursion_error & e) {
+                return std::string(e.what());
+            }
+        };
+
+        t.assert_equal("64 levels", std::string(), parse(64));
+        t.assert_true("65 levels", parse(65).find("nested more than 64 levels deep") != std::string::npos);
+        t.assert_true("100000 levels", parse(100000).find("nested more than 64 levels deep") != std::string::npos);
+    });
 }
