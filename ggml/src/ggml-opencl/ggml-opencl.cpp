@@ -10968,6 +10968,16 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
         return false;
     }
 
+    // src1 precision floor (ggml_prec_set_src): the matmul paths for non-f32 weights convert
+    // src1 to f16 or q8_1, so a floor finer than Q8 (e.g. F32 for activations beyond the f16
+    // range) cannot be met; leave those ops to a backend that can.
+    if ((op->op == GGML_OP_MUL_MAT || op->op == GGML_OP_MUL_MAT_ID) && op->src[0]->type != GGML_TYPE_F32) {
+        const int32_t prec_src1 = ggml_get_op_params_i32(op, 3);
+        if (prec_src1 != GGML_PREC_UNDEFINED && prec_src1 < GGML_PREC_Q8) {
+            return false;
+        }
+    }
+
     switch (op->op) {
         case GGML_OP_NONE:
             return true;
