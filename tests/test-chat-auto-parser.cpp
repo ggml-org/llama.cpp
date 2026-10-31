@@ -2585,6 +2585,63 @@ static void test_bailing_v3_tool_format(testing & t) {
         "</tool_call>";
     common_peg_parse_context ctx(output, COMMON_PEG_PARSE_FLAG_LENIENT);
     t.assert_true("multi-argument tool call", parser.parse(ctx).success());
+
+    // Verify required and optional arguments can appear in any order and repetition is bounded by total_params
+    generation_params mixed_inputs;
+    mixed_inputs.tools = json::array({
+        {
+            { "type", "function" },
+            { "function", {
+                { "name", "write" },
+                { "parameters", {
+                    { "type", "object" },
+                    { "properties", {
+                        { "content", { { "type", "string" } } },
+                        { "i",       { { "type", "string" } } },
+                        { "path",    { { "type", "string" } } },
+                    } },
+                    { "required", json::array({ "path", "i" }) },
+                } },
+            } },
+        },
+    });
+    mixed_inputs.reasoning_format = COMMON_REASONING_FORMAT_NONE;
+    auto mixed_parser = analysis.build_parser(mixed_inputs, "");
+
+    const std::string out_of_order_output =
+        "<tool_call>write\n"
+        "<arg_key>path</arg_key>\n"
+        "<arg_value>db.py</arg_value>\n"
+        "<arg_key>content</arg_key>\n"
+        "<arg_value>print(1)</arg_value>\n"
+        "<arg_key>i</arg_key>\n"
+        "<arg_value>Write db module</arg_value>\n"
+        "</tool_call>";
+    common_peg_parse_context ctx_ooo(out_of_order_output);
+    auto res_ooo = mixed_parser.parse(ctx_ooo);
+    t.assert_true("out-of-order required and optional tagged arguments", res_ooo.success());
+
+    const std::string duplicate_arg_output =
+        "<tool_call>write\n"
+        "<arg_key>path</arg_key>\n"
+        "<arg_value>db.py</arg_value>\n"
+        "<arg_key>i</arg_key>\n"
+        "<arg_value>Write db</arg_value>\n"
+        "<arg_key>i</arg_key>\n"
+        "<arg_value>Duplicate intent</arg_value>\n"
+        "</tool_call>";
+    common_peg_parse_context ctx_dup(duplicate_arg_output);
+    t.assert_true("rejects duplicate argument even within total_params count", !mixed_parser.parse(ctx_dup).success());
+
+    const std::string missing_req_output =
+        "<tool_call>write\n"
+        "<arg_key>path</arg_key>\n"
+        "<arg_value>db.py</arg_value>\n"
+        "<arg_key>content</arg_key>\n"
+        "<arg_value>print(1)</arg_value>\n"
+        "</tool_call>";
+    common_peg_parse_context ctx_missing(missing_req_output);
+    t.assert_true("rejects tool call missing a required argument", !mixed_parser.parse(ctx_missing).success());
 }
 
 // Test that reproduces the Seed-OSS template issue with embedded quotes
