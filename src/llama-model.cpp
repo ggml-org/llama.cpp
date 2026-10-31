@@ -486,7 +486,9 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             GGML_ASSERT(length_prefix != std::string::npos);
             prefix = tensor_name.substr(0, length_prefix + 1);
             il = std::stoull(tensor_name.substr(4, length_prefix));
-            rotation = get_il_eff(il) % ud->n_devices;
+            const bool is_attn = tensor_name.compare(prefix.size(), 5, "attn_") == 0;
+            // attention heads must be on the same device as the KV of the source layer
+            rotation = get_il_eff(is_attn ? hparams.kv_source(il) : il) % ud->n_devices;
         } else if (tensor_name.substr(0, 6) == "cache_") {
             const size_t layer_index_start = tensor_name.find("_l", 6);
             GGML_ASSERT(layer_index_start != std::string::npos);
@@ -589,7 +591,7 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_1, "ssm_out.weight");
         }
         if (std::regex_match(tensor_name, pattern_r_cache) || std::regex_match(tensor_name, pattern_s_cache)) {
-            if (ud->model->arch == LLM_ARCH_LFM2 || ud->model->arch == LLM_ARCH_LFM2MOE) {
+            if (ud->model->arch == LLM_ARCH_LFM2 || ud->model->arch == LLM_ARCH_LFM2MOE || ud->model->arch == LLM_ARCH_LFM3) {
                 // the LFM2 shortconv block runs fully mirrored, so its conv state must be mirrored too
                 return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_MIRRORED, "");
             }
@@ -3283,14 +3285,8 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                     llama_kv_cache::layer_share_cb share = nullptr;
 
                     if (arch == LLM_ARCH_GEMMA3N || arch == LLM_ARCH_GEMMA4) {
-                        reuse = [&](uint32_t il) {
-                            GGML_ASSERT(hparams.n_layer_kv_from_start >= 2);
-
-                            if (il >= (uint32_t)hparams.n_layer_kv_from_start) {
-                                return hparams.n_layer_kv_from_start - (hparams.is_swa(il) ? 2 : 1);
-                            }
-
-                            return -1;
+                        reuse = [&](int32_t il) -> int32_t {
+                            return hparams.has_kv(il) ? -1 : (int32_t) hparams.kv_source(il);
                         };
                     }
 
