@@ -3600,7 +3600,10 @@ uint8_t llama_vocab::impl::token_to_byte(llama_token id) const {
 
 llama_token_attr llama_vocab::impl::token_get_attr(llama_token id) const {
     GGML_ASSERT(type != LLAMA_VOCAB_TYPE_NONE);
-    return id_to_token.at(id).attr;
+    if (id < 0 || (size_t) id >= id_to_token.size()) {
+        return LLAMA_TOKEN_ATTR_UNDEFINED;
+    }
+    return id_to_token[id].attr;
 }
 
 void llama_vocab::impl::init_tokenizer(enum llama_vocab_type type) {
