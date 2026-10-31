@@ -1982,16 +1982,23 @@ ggml_tensor * llama_kv_cache::build_rope_shift(
         tmp = ggml_rope_ext(ctx, tmp,
                 shift, factors, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                 yarn_ext_factor, yarn_attn_factor, yarn_beta_fast, yarn_beta_slow);
+        ggml_rope_set_truncate(tmp, hparams.yarn_truncate);
 
         // rotate fwd
         tmp = llama_mul_mat_hadamard(ctx, tmp, rot);
 
         tmp = ggml_cpy(ctx, tmp, cur);
-    } else {
+    } else if (hparams.yarn_truncate) {
         // we rotate only the first n_rot dimensions
         tmp = ggml_rope_ext_inplace(ctx, cur,
                 shift, factors, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                 yarn_ext_factor, yarn_attn_factor, yarn_beta_fast, yarn_beta_slow);
+    } else {
+        tmp = ggml_rope_ext(ctx, cur,
+                shift, factors, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                yarn_ext_factor, yarn_attn_factor, yarn_beta_fast, yarn_beta_slow);
+        ggml_rope_set_truncate(tmp, false);
+        tmp = ggml_cpy(ctx, tmp, cur);
     }
 
     return tmp;
