@@ -337,7 +337,7 @@ llama_kv_cache::llama_kv_cache(
             sl.push_back({ layer.k, layer.v });
         }
         ggml_backend_dev_t dev = ggml_backend_buft_get_device(ggml_backend_buffer_get_type(layers[0].k->buffer));
-        stream = std::make_unique<llama_kv_stream>(sl, n_slots, n_slots_decode, kv_size, dev, hparams.no_alloc);
+        stream = std::make_unique<llama_kv_stream>(sl, n_slots, n_slots_decode, kv_size, dev, no_alloc);
 
     }
 
@@ -1405,6 +1405,7 @@ uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo) const {
 uint32_t llama_kv_cache::get_n_kv_mask(uint32_t n_kv, const slot_info * sinfo, const llama_ubatch & ubatch,
         bool causal_attn, bool flash_attn) const {
     // the batch's cells lie in the last n_tokens + n_pad_cur - 1 cells of n_kv (get_n_kv pads the used cells)
+    const uint32_t n_pad = 256;
     const uint32_t n_pad_cur = std::max(n_pad, 256u);
     const uint32_t n_cols    = std::min<uint32_t>(n_kv, GGML_PAD(ubatch.n_tokens + n_pad_cur - 1, 256));
     if (!kq_mask_compact || !flash_attn || !causal_attn || n_cols >= n_kv || swa_type != LLAMA_SWA_TYPE_NONE ||
@@ -1674,6 +1675,7 @@ static uint32_t kv_stream_pages(uint32_t n_cells) {
 uint32_t llama_kv_cache::kv_stream_pages_next(uint32_t n_tokens) const {
     // the batch goes after the used cells, or after the head if find_slot starts past them; get_n_kv pads the result
     const uint32_t n_cells   = std::max(v_cells[0].used_max_p1(), v_heads[0]) + n_tokens;
+    const uint32_t n_pad = 256;
     const uint32_t n_pad_cur = std::max(n_pad, 256u);
     return std::min(kv_stream_pages(get_size()), kv_stream_pages(GGML_PAD(n_cells, n_pad_cur)));
 }
@@ -1752,8 +1754,8 @@ bool llama_kv_cache::resize_kv_stream(size_t resident_size, bool decode, uint32_
     reshape(n_rows);
 
     bool ok = true;
-    for (size_t i = 0; i < ctxs_bufs.size() && ok; ++i) {
-        auto & [ctx, buf] = ctxs_bufs[i];
+    for (size_t i = 0; i < ctxs_bufs.bufs.size() && ok; ++i) {
+        auto & [ctx, buf] = ctxs_bufs.bufs[i];
         buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), ctxs_bufts[i]));
         if (buf) {
             ggml_backend_buffer_clear(buf.get(), 0);
