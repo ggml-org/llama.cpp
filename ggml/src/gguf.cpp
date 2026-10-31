@@ -1096,7 +1096,15 @@ const void * gguf_get_arr_data(const struct gguf_context * ctx, int64_t key_id) 
 const char * gguf_get_arr_str(const struct gguf_context * ctx, int64_t key_id, size_t i) {
     GGML_ASSERT(key_id >= 0 && key_id < gguf_get_n_kv(ctx));
     GGML_ASSERT(ctx->kv[key_id].get_type() == GGUF_TYPE_STRING);
+    GGML_ASSERT(i < ctx->kv[key_id].data_string.size());
     return ctx->kv[key_id].data_string[i].c_str();
+}
+
+size_t gguf_get_arr_str_len(const struct gguf_context * ctx, int64_t key_id, size_t i) {
+    GGML_ASSERT(key_id >= 0 && key_id < gguf_get_n_kv(ctx));
+    GGML_ASSERT(ctx->kv[key_id].get_type() == GGUF_TYPE_STRING);
+    GGML_ASSERT(i < ctx->kv[key_id].data_string.size());
+    return ctx->kv[key_id].data_string[i].size();
 }
 
 size_t gguf_get_arr_n(const struct gguf_context * ctx, int64_t key_id) {
