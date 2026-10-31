@@ -1,0 +1,441 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : enable
+#extension GL_EXT_shader_16bit_storage : require
+
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+
+#if defined(BFLOAT16)
+#extension GL_EXT_bfloat16 : enable
+#endif
+
+#extension GL_KHR_shader_subgroup_basic : enable
+#extension GL_KHR_shader_subgroup_vote : enable
+#extension GL_KHR_shader_subgroup_shuffle : enable
+#extension GL_KHR_memory_scope_semantics : enable
+#extension GL_KHR_cooperative_matrix : enable
+
+#include "types.glsl"
+#include "flash_attn_base.glsl"
+
+layout (binding = 0) readonly buffer QV4 {vec4 data_qv4[];};
+layout (binding = 1) readonly buffer KU {uvec4 data_ku[];};
+layout (binding = 1) readonly buffer KF4 {FLOAT_TYPEV4 data_kf4[];};
+layout (binding = 2) readonly buffer VU {uvec4 data_vu[];};
+layout (binding = 2) readonly buffer VF4 {FLOAT_TYPEV4 data_vf4[];};
+layout (binding = 3) readonly buffer M {float16_t data_m[];};
+
+const uint32_t D_pad = HSK_pad > HSV_pad ? HSK_pad : HSV_pad;
+
+// Flipped coopmat1 FA: each subgroup owns 16 Q rows and the full head dim. K/V tiles are either
+// staged once per workgroup in LDS or, with FLIP_DIRECT, loaded by each subgroup from global memory.
+// Requires gqa_ratio == 1, aligned KV, f16/bf16 K/V, HSK/HSV multiples of 16, Br == row_split * 16.
+
+const uint32_t FL_LPR = SubGroupSize / 16;
+const uint32_t FL_CPL = Bc / FL_LPR;
+const uint32_t FL_OCPL = 16 / FL_LPR;
+
+const uint32_t FL_KLD = CEIL_DIV(Bc * HSK_pad / 8, WorkGroupSize);
+const uint32_t FL_VLD = CEIL_DIV(Bc * HSV_pad / 8, WorkGroupSize);
+
+// V^T staging: each thread packs FL_VLD consecutive KV rows (multiple of 4) of 8 d values
+const bool FL_VT = (uint32_t((FL_VLD % 4) == 0) * uint32_t((WorkGroupSize % (HSV_pad / 8)) == 0) *
+                    uint32_t(FL_VLD * (WorkGroupSize / (HSV_pad / 8)) == Bc)) != 0;
+
+// LDS in uvec2 (4 halfs) units
+const uint32_t fl_kstride = D_pad / 4 + 2;
+const uint32_t fl_vtstride = Bc / 4 + 2;
+const uint32_t fl_vtsize = FL_VT ? HSV_pad * fl_vtstride : 0;
+const uint32_t fl_kvbuf = fl_vtsize > Bc * fl_kstride ? fl_vtsize : Bc * fl_kstride;
+// 16 B keeps the following shared arrays 16-B aligned for coopmat load/store
+shared uvec2 kvshf[FLIP_DIRECT ? 2 : 2 * fl_kvbuf];
+
+#if defined(ACC_TYPE_MAX)
+const uint32_t fl_sstride = Bc / 4 + 2;
+#else
+const uint32_t fl_sstride = Bc / 4 + 1;
+#endif
+shared ACC_TYPEV4 sshf[row_split * 16 * fl_sstride];
+
+// P and Q (the coopmat A operands) are staged through the S slab, which is idle
+// between the S read and the PV matmul. f16 K/V aliases into sshf (f32acc packs two
+// f16 rows per element, FL_PACK==2; f16acc stores natively, FL_PACK==1); bf16 keeps pshf.
+#if !defined(BFLOAT16)
+#define FL_P_IN_SSHF 1
+#endif
+#if !defined(BFLOAT16) && !defined(ACC_TYPE_MAX)
+#define FL_PACK 2
+#else
+#define FL_PACK 1
+#endif
+
+#if defined(FL_P_IN_SSHF)
+const uint32_t fl_astride = fl_sstride;
+#else
+const uint32_t fl_astride = Bc / 4 + 2;
+shared FLOAT_TYPEV4 pshf[row_split * 16 * fl_astride];
+#endif
+
+// Store one vec4 (column group cfv) of the A slab.
+void fl_store_a(const uint32_t e_base, const uint32_t cfv, const FLOAT_TYPEV4 val) {
+#if FL_PACK == 2
+    const uint32_t e = e_base + cfv / 2;
+    const uint32_t h = (cfv & 1u) * 2u;
+    sshf[e][h]     = uintBitsToFloat(packFloat2x16(f16vec2(val.xy)));
+    sshf[e][h + 1] = uintBitsToFloat(packFloat2x16(f16vec2(val.zw)));
+#elif defined(FL_P_IN_SSHF)
+    sshf[e_base + cfv] = ACC_TYPEV4(val);
+#else
+    pshf[e_base + cfv] = val;
+#endif
+}
+
+void fl_load_a(out coopmat<FLOAT_TYPE, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> a, const uint32_t e) {
+#if defined(FL_P_IN_SSHF)
+    coopMatLoad(a, sshf, e, fl_sstride, gl_CooperativeMatrixLayoutRowMajor);
+#else
+    coopMatLoad(a, pshf, e, fl_astride, gl_CooperativeMatrixLayoutRowMajor);
+#endif
+}
+
+#if defined(ACC_TYPE_MAX)
+const float FL_TAU = 0.0;
+#else
+const float FL_TAU = 8.0;
+#endif
+
+uvec4 fl_kr[FL_KLD];
+uvec4 fl_vr[FL_VLD];
+
+uint32_t fl_mo_offset, fl_mo_idx, fl_mo_word;
+
+uint32_t fl_mask_bits(const uint32_t j) {
+    if (!MASK_ENABLE || !USE_MASK_OPT) {
+        return 0;
+    }
+    if (fl_mo_idx != j / 16) {
+        fl_mo_idx = j / 16;
+        fl_mo_word = data_mask_opt[fl_mo_offset + fl_mo_idx];
+    }
+    return (fl_mo_word >> ((j % 16) * 2)) & 0x3;
+}
+
+uint32_t fl_next_tile(uint32_t j) {
+    while (j < end_j && fl_mask_bits(j) == MASK_OPT_ALL_NEG_INF) {
+        ++j;
+    }
+    return j;
+}
+
+void fl_load_k(const uint32_t j, const uint32_t k_offset) {
+    [[unroll]] for (uint32_t l = 0; l < FL_KLD; ++l) {
+        const uint32_t idx = l * WorkGroupSize + gl_LocalInvocationIndex;
+        if (idx < Bc * HSK_pad / 8) {
+            const uint32_t c = idx / (HSK_pad / 8);
+            const uint32_t d = idx % (HSK_pad / 8);
+            fl_kr[l] = data_ku[(k_offset + (j * Bc + c) * k_stride) / 8 + d];
+        }
+    }
+}
+
+void fl_load_v(const uint32_t j, const uint32_t v_offset) {
+    [[unroll]] for (uint32_t l = 0; l < FL_VLD; ++l) {
+        const uint32_t idx = l * WorkGroupSize + gl_LocalInvocationIndex;
+        if (idx < Bc * HSV_pad / 8) {
+            uint32_t c = idx / (HSV_pad / 8);
+            const uint32_t d = idx % (HSV_pad / 8);
+            if (FL_VT) {
+                c = (gl_LocalInvocationIndex / (HSV_pad / 8)) * FL_VLD + l;
+            }
+            fl_vr[l] = data_vu[(v_offset + (j * Bc + c) * v_stride) / 8 + d];
+        }
+    }
+}
+
+void fl_store_k() {
+    [[unroll]] for (uint32_t l = 0; l < FL_KLD; ++l) {
+        const uint32_t idx = l * WorkGroupSize + gl_LocalInvocationIndex;
+        if (idx < Bc * HSK_pad / 8) {
+            const uint32_t a = (idx / (HSK_pad / 8)) * fl_kstride + 2 * (idx % (HSK_pad / 8));
+            kvshf[a] = fl_kr[l].xy;
+            kvshf[a + 1] = fl_kr[l].zw;
+        }
+    }
+}
+
+void fl_store_v(const uint32_t base) {
+    if (FL_VT) {
+        const uint32_t d0 = (gl_LocalInvocationIndex % (HSV_pad / 8)) * 8;
+        const uint32_t c0 = (gl_LocalInvocationIndex / (HSV_pad / 8)) * FL_VLD;
+        [[unroll]] for (uint32_t dd = 0; dd < 8; ++dd) {
+            const uint32_t ddv = (dd + gl_LocalInvocationIndex) & 7u;   // rotate store order to spread banks
+            const uint32_t sh = (ddv % 2) * 16;
+            [[unroll]] for (uint32_t l = 0; l < FL_VLD; l += 4) {
+                const uvec2 w = uvec2(((fl_vr[l    ][ddv / 2] >> sh) & 0xFFFF) | (((fl_vr[l + 1][ddv / 2] >> sh) & 0xFFFF) << 16),
+                                      ((fl_vr[l + 2][ddv / 2] >> sh) & 0xFFFF) | (((fl_vr[l + 3][ddv / 2] >> sh) & 0xFFFF) << 16));
+                kvshf[base + (d0 + ddv) * fl_vtstride + (c0 + l) / 4] = w;
+            }
+        }
+        return;
+    }
+    [[unroll]] for (uint32_t l = 0; l < FL_VLD; ++l) {
+        const uint32_t idx = l * WorkGroupSize + gl_LocalInvocationIndex;
+        if (idx < Bc * HSV_pad / 8) {
+            const uint32_t a = base + (idx / (HSV_pad / 8)) * fl_kstride + 2 * (idx % (HSV_pad / 8));
+            kvshf[a] = fl_vr[l].xy;
+            kvshf[a + 1] = fl_vr[l].zw;
+        }
+    }
+}
+
+void fl_sg_barrier() {
+    controlBarrier(gl_ScopeSubgroup, gl_ScopeSubgroup, gl_StorageSemanticsShared, gl_SemanticsAcquireRelease);
+}
+
+float fl_row_max(float v) {
+    [[unroll]] for (uint32_t o = 1; o < FL_LPR; o *= 2) {
+        v = max(v, subgroupShuffleXor(v, o));
+    }
+    return v;
+}
+
+float fl_row_sum(float v) {
+    [[unroll]] for (uint32_t o = 1; o < FL_LPR; o *= 2) {
+        v += subgroupShuffleXor(v, o);
+    }
+    return v;
+}
+
+void fl_rescale(inout coopmat<ACC_TYPE, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> o, const uint32_t ss_base, const uint32_t lr, const uint32_t lc, const float alpha) {
+    fl_sg_barrier();
+    coopMatStore(o, sshf, ss_base, fl_sstride, gl_CooperativeMatrixLayoutRowMajor);
+    fl_sg_barrier();
+    [[unroll]] for (uint32_t v = 0; v < FL_OCPL / 4; ++v) {
+        const uint32_t a = ss_base + lr * fl_sstride + lc * (FL_OCPL / 4) + v;
+        sshf[a] = sshf[a] * ACC_TYPE(alpha);
+    }
+    fl_sg_barrier();
+    coopMatLoad(o, sshf, ss_base, fl_sstride, gl_CooperativeMatrixLayoutRowMajor);
+}
+
+void main() {
+    init_indices();
+
+    const uint32_t sg = gl_SubgroupID;
+    const uint32_t lane = gl_SubgroupInvocationID;
+    const uint32_t lr = lane / FL_LPR;
+    const uint32_t lc = lane % FL_LPR;
+    const uint32_t row0 = i * Br + sg * 16;
+    const uint32_t myrow = row0 + lr;
+
+    const uint32_t ss_base = sg * 16 * fl_sstride;
+    const uint32_t a_base = sg * 16 * fl_astride;
+
+    const uint32_t q_offset = (iq2 * p.nb02 + iq3 * p.nb03) / 4;
+
+    // Q (scaled) -> coopmat A registers, staged through this subgroup's A slab
+    coopmat<FLOAT_TYPE, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> Qa[HSK_pad / 16];
+    const uint32_t qdt = fl_astride * FL_PACK / 4;
+    [[unroll]] for (uint32_t dbase = 0; dbase < HSK_pad / 16; dbase += qdt) {
+        [[unroll]] for (uint32_t idx0 = 0; idx0 < 16 * qdt * 4; idx0 += SubGroupSize) {
+            const uint32_t idx = idx0 + lane;
+            const uint32_t r = idx / (qdt * 4);
+            const uint32_t dv = idx % (qdt * 4);
+            const uint32_t d = dbase * 4 + dv;
+            if (r < 16) {
+                FLOAT_TYPEV4 val = FLOAT_TYPEV4(0);
+                if (d < HSK / 4 && row0 + r < N) {
+                    val = FLOAT_TYPEV4(data_qv4[q_offset / 4 + (row0 + r) * p.nb01 / 4 + d] * p.scale);
+                }
+                fl_store_a(a_base + r * fl_astride, dv, val);
+            }
+        }
+        fl_sg_barrier();
+        [[unroll]] for (uint32_t dd = 0; dd < qdt; ++dd) {
+            if (dbase + dd < HSK_pad / 16) {
+                fl_load_a(Qa[dbase + dd], a_base + dd * (4 / FL_PACK));
+            }
+        }
+        fl_sg_barrier();
+    }
+
+    coopmat<ACC_TYPE, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> Oacc[HSV_pad / 16];
+    [[unroll]] for (uint32_t t = 0; t < HSV_pad / 16; ++t) {
+        Oacc[t] = coopmat<ACC_TYPE, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0);
+    }
+
+    float M = NEG_FLT_MAX_OVER_2;
+    float L = 0;
+
+    float slope_v = 1.0;
+    if (p.max_bias > 0.0f) {
+        slope_v = float(perElemOpComputeSlope(0, 0, ACC_TYPE(0), iq2));
+    }
+
+    const uint32_t k_offset = (ik2 * p.nb12 + ik3 * p.nb13) / FaBlockBytesK;
+    const uint32_t v_offset = (iv2 * p.nb22 + iv3 * p.nb23) / FaBlockBytesV;
+    uint32_t m_offset = 0;
+    const uint32_t mo_stride = CEIL_DIV(KV, 16 * Bc);
+    fl_mo_offset = mo_stride * i;
+    fl_mo_idx = ~0u;
+    fl_mo_word = 0;
+    if (p.nem2 != 1 || p.nem3 != 1) {
+        m_offset += ((iq3 % p.nem3) * p.nem2 + (iq2 % p.nem2)) * p.nem1 * KV;
+        fl_mo_offset += ((iq3 % p.nem3) * p.nem2 + (iq2 % p.nem2)) * CEIL_DIV(p.nem1, Br) * mo_stride;
+    }
+
+    uint32_t j = (FLIP_DIRECT && row0 >= N) ? end_j : fl_next_tile(start_j);
+    if (!FLIP_DIRECT && j < end_j) {
+        fl_load_k(j, k_offset);
+        fl_load_v(j, v_offset);
+    }
+
+    [[dont_unroll]]
+    while (j < end_j) {
+        const uint32_t jn = fl_next_tile(j + 1);
+        const uint32_t mask_bits = fl_mask_bits(j);
+
+        if (!FLIP_DIRECT) {
+            barrier();
+            fl_store_k();
+            fl_store_v(fl_kvbuf);
+            barrier();
+            if (jn < end_j) {
+                fl_load_k(jn, k_offset);
+                fl_load_v(jn, v_offset);
+            }
+        }
+
+        coopmat<ACC_TYPE, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> Sacc[Bc / 16];
+        [[unroll]] for (uint32_t c = 0; c < Bc / 16; ++c) {
+            Sacc[c] = coopmat<ACC_TYPE, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0);
+        }
+        [[unroll]] for (uint32_t d = 0; d < HSK_pad / 16; ++d) {
+            [[unroll]] for (uint32_t c = 0; c < Bc / 16; ++c) {
+                coopmat<FLOAT_TYPE, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> Kb;
+                if (FLIP_DIRECT) {
+                    coopMatLoad(Kb, data_kf4, (k_offset + (j * Bc + c * 16) * k_stride) / 4 + d * 4, k_stride / 4, gl_CooperativeMatrixLayoutColumnMajor);
+                } else {
+                    coopMatLoad(Kb, kvshf, c * 16 * fl_kstride + d * 4, fl_kstride, gl_CooperativeMatrixLayoutColumnMajor);
+                }
+                Sacc[c] = coopMatMulAdd(Qa[d], Kb, Sacc[c]);
+            }
+        }
+
+        fl_sg_barrier();
+        [[unroll]] for (uint32_t c = 0; c < Bc / 16; ++c) {
+            coopMatStore(Sacc[c], sshf, ss_base + c * 4, fl_sstride, gl_CooperativeMatrixLayoutRowMajor);
+        }
+        fl_sg_barrier();
+        float s[FL_CPL];
+        [[unroll]] for (uint32_t v = 0; v < FL_CPL / 4; ++v) {
+            const vec4 sv = vec4(sshf[ss_base + lr * fl_sstride + lc * (FL_CPL / 4) + v]);
+            [[unroll]] for (uint32_t k = 0; k < 4; ++k) {
+                s[v * 4 + k] = sv[k];
+            }
+        }
+
+        if (LOGIT_SOFTCAP) {
+            [[unroll]] for (uint32_t k = 0; k < FL_CPL; ++k) {
+                s[k] = p.logit_softcap * tanh(s[k]);
+            }
+        }
+
+        if (MASK_ENABLE && mask_bits != MASK_OPT_ALL_ZERO && myrow < p.nem1) {
+            const uint32_t moff = m_offset + myrow * KV + j * Bc + lc * FL_CPL;
+            [[unroll]] for (uint32_t k = 0; k < FL_CPL; ++k) {
+                s[k] += slope_v * float(data_m[moff + k]);
+            }
+        }
+
+        float mx = s[0];
+        [[unroll]] for (uint32_t k = 1; k < FL_CPL; ++k) {
+            mx = max(mx, s[k]);
+        }
+        mx = fl_row_max(mx) + FATTN_KQ_MAX_OFFSET;
+
+        if (subgroupAny(mx > M + FL_TAU)) {
+            const float Mn = max(M, mx);
+            const float alpha = exp(M - Mn);
+            const bool o_empty = subgroupAll(M == NEG_FLT_MAX_OVER_2);
+            M = Mn;
+            L *= alpha;
+            if (!o_empty) {
+                [[unroll]] for (uint32_t t = 0; t < HSV_pad / 16; ++t) {
+                    fl_rescale(Oacc[t], ss_base, lr, lc, alpha);
+                }
+            }
+        }
+
+        fl_sg_barrier();
+        [[unroll]] for (uint32_t v = 0; v < FL_CPL / 4; ++v) {
+            const vec4 pv = exp(vec4(s[v * 4], s[v * 4 + 1], s[v * 4 + 2], s[v * 4 + 3]) - M);
+            L += pv.x + pv.y + pv.z + pv.w;
+            fl_store_a(a_base + lr * fl_astride, lc * (FL_CPL / 4) + v, FLOAT_TYPEV4(pv));
+        }
+        fl_sg_barrier();
+
+        coopmat<FLOAT_TYPE, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> Pa[Bc / 16];
+        [[unroll]] for (uint32_t c = 0; c < Bc / 16; ++c) {
+            fl_load_a(Pa[c], a_base + c * (4 / FL_PACK));
+        }
+
+        [[unroll]] for (uint32_t t = 0; t < HSV_pad / 16; ++t) {
+            [[unroll]] for (uint32_t c = 0; c < Bc / 16; ++c) {
+                coopmat<FLOAT_TYPE, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> Vb;
+                if (FLIP_DIRECT) {
+                    coopMatLoad(Vb, data_vf4, (v_offset + (j * Bc + c * 16) * v_stride) / 4 + t * 4, v_stride / 4, gl_CooperativeMatrixLayoutRowMajor);
+                } else if (FL_VT) {
+                    coopMatLoad(Vb, kvshf, fl_kvbuf + t * 16 * fl_vtstride + c * 4, fl_vtstride, gl_CooperativeMatrixLayoutColumnMajor);
+                } else {
+                    coopMatLoad(Vb, kvshf, fl_kvbuf + c * 16 * fl_kstride + t * 4, fl_kstride, gl_CooperativeMatrixLayoutRowMajor);
+                }
+                Oacc[t] = coopMatMulAdd(Pa[c], Vb, Oacc[t]);
+            }
+        }
+
+        j = jn;
+    }
+
+    L = fl_row_sum(L);
+
+    float oscale = 1.0;
+    uint32_t o_row_offset;
+    if (p.k_num > 1) {
+        o_row_offset = HSV * p.ne1 * (split_k_index + p.k_num * (myrow + p.ne2 * iq3)) / 4 + iq2 * HSV / 4;
+        if (myrow < N && lc == 0) {
+            const uint32_t lm_offset = HSV * p.ne1 * p.k_num * p.ne2 * p.ne3 + p.ne1 * 2 * (split_k_index + p.k_num * (myrow + p.ne2 * iq3));
+            data_o[lm_offset + iq2] = D_TYPE(L);
+            data_o[lm_offset + p.ne1 + iq2] = D_TYPE(M);
+        }
+    } else {
+        if ((p.mask_n_head_log2 & SINK_ENABLE_BIT) != 0) {
+            const float sink = float(perElemOpGetSink(0, 0u, ACC_TYPE(0), iq2));
+            float ms = 1.0f;
+            float vs = 1.0f;
+            if (sink > M) {
+                ms = exp(M - sink);
+            } else {
+                vs = exp(sink - M);
+            }
+            L = L * ms + vs;
+            oscale = ms;
+        }
+        oscale *= (L == 0.0) ? 0.0 : (1.0 / L);
+        o_row_offset = (iq3 * p.ne2 * p.ne1 * HSV + iq2 * HSV + myrow * p.ne1 * HSV) / 4;
+    }
+
+    [[unroll]] for (uint32_t t = 0; t < HSV_pad / 16; ++t) {
+        fl_sg_barrier();
+        coopMatStore(Oacc[t], sshf, ss_base, fl_sstride, gl_CooperativeMatrixLayoutRowMajor);
+        fl_sg_barrier();
+        [[unroll]] for (uint32_t v = 0; v < FL_OCPL / 4; ++v) {
+            const uint32_t d4 = t * 4 + lc * (FL_OCPL / 4) + v;
+            const vec4 o = vec4(sshf[ss_base + lr * fl_sstride + lc * (FL_OCPL / 4) + v]) * oscale;
+            if (myrow < N && d4 < HSV / 4) {
+                data_ov4[o_row_offset + d4] = D_TYPEV4(o);
+            }
+        }
+    }
+}
