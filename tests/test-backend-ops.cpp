@@ -10232,6 +10232,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     test_cases.emplace_back(new test_get_rows_back(GGML_TYPE_F32, 1, 8, 2, 1, false));
     test_cases.emplace_back(new test_get_rows_back(GGML_TYPE_F32, 1, 70000, 4, 1, false)); // row count > CUDA grid-y limit (65535)
+    test_cases.emplace_back(new test_get_rows_back(GGML_TYPE_F32, 1500, 16, 64, 1, false)); // row wider than one threadgroup, many repeated rows
+    test_cases.emplace_back(new test_get_rows_back(GGML_TYPE_F32, 32, 100, 40000, 1, false)); // index count > one Metal mask chunk (32768)
     for (ggml_type type : all_types) {
         for (bool v : {false, true}) {
             test_cases.emplace_back(new test_get_rows_back(type, 256, 5, 4, 1, v));
@@ -12650,6 +12652,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
             test_cases.emplace_back(new test_pool2d(
                 GGML_OP_POOL_MAX, GGML_TYPE_F32, {n_ps, 4, n_tokens, 1}, 128, 1, 128, 1, 0, 0));
         }
+    }
+
+    // GET_ROWS_BACK: token embedding grad, [n_embd, n_vocab] from n_tokens rows
+    for (int n_tokens : {64, 512}) {
+        test_cases.emplace_back(new test_get_rows_back(GGML_TYPE_F32, 4096, 32000, n_tokens, 1, false));
     }
 
     // RMS_NORM and fused variants at decode and prefill shapes
