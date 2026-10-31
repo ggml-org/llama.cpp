@@ -32,7 +32,7 @@ jobs:
         id-token: write
         attestations: write
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     outputs:
       should_release: ${{ steps.check.outputs.should_release }}

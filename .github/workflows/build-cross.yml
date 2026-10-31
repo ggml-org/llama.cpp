@@ -163,7 +163,7 @@ jobs:
   #         cmake --build build --config Release -j $(nproc)
 
   debian-13-loongarch64-cpu-cross:
-    runs-on: ${{ 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    runs-on: ${{ 'ubuntu-26.04-arm' || 'ubuntu-26.04' }}
     container: debian@sha256:653dfb9f86c3782e8369d5f7d29bb8faba1f4bff9025db46e807fa4c22903671
 
     steps:
@@ -218,7 +218,7 @@ jobs:
           cmake --build build --config Release -j $(nproc)
 
   debian-13-loongarch64-vulkan-cross:
-    runs-on: ${{ 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    runs-on: ${{ 'ubuntu-26.04-arm' || 'ubuntu-26.04' }}
     container: debian@sha256:653dfb9f86c3782e8369d5f7d29bb8faba1f4bff9025db46e807fa4c22903671
 
     steps:
@@ -277,7 +277,7 @@ jobs:
           cmake --build build --config Release -j $(nproc)
 
   ubuntu-24-riscv64-cpu-spacemit-ime-cross:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
 
     env:
       # Make sure this is in sync with build-cache.yml

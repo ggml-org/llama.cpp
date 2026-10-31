@@ -32,7 +32,7 @@ concurrency:
 
 jobs:
   ubuntu-24-virtgpu:
-    runs-on: ${{ 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    runs-on: ${{ 'ubuntu-26.04-arm' || 'ubuntu-26.04' }}
 
     steps:
       - name: Clone

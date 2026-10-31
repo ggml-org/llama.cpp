@@ -41,7 +41,7 @@ jobs:
   #        version: ${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}
 
   ubuntu-24-openvino-cache:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
 
     env:
       # Sync versions in build-openvino.yml, ci-self-hosted-openvino.yml, release.yml, release-publish.yml, build-cache.yml, .devops/openvino.Dockerfile, docs/backend/OPENVINO.md
