@@ -4378,10 +4378,7 @@ struct clip_model_loader {
             if (hparams.n_mel_bins <= 0 || (fft_based && hparams.n_mel_bins > 256)) {
                 throw std::runtime_error(string_format("%s: invalid n_mel_bins (%d), must be in [1, 256]\n", __func__, hparams.n_mel_bins));
             }
-            // nemotron transcribe: normalized and raw log-mel
-            const int n_rows = ctx_clip.model.proj_type == PROJECTOR_TYPE_NEMOTRON_TRANSCRIBE
-                ? 2 * hparams.n_mel_bins : hparams.n_mel_bins;
-            img.set_size({hparams.warmup_audio_size, n_rows}, false, false);
+            img.set_size({hparams.warmup_audio_size, hparams.n_mel_bins}, false, false);
             LOG_INF("%s: warmup with audio size = %d\n", __func__, hparams.warmup_audio_size);
         }
         batch.entries.push_back(img);
@@ -6674,8 +6671,9 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                     positions[i] = (int32_t) i;
                 }
                 set_input_i32("positions", positions);
+                GGML_ASSERT(params->enc_state != nullptr);
+                set_input_f32("inp_norm", params->enc_state->mel_norm);
                 if (ggml_graph_get_tensor(gf, "spk_prev") != nullptr) {
-                    GGML_ASSERT(params->enc_state != nullptr);
                     set_input_f32("spk_prev", params->enc_state->spk_prev);
                 }
             } break;

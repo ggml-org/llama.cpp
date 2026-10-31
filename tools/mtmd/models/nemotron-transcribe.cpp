@@ -24,6 +24,7 @@ static constexpr float SPK_MIN_POS_RATE      = 0.5f;
 static constexpr float SPK_SCORE_OFFSET = 2.0f; // -log(0.5) in _get_log_pred_scores
 static constexpr float SPK_STRONG_BOOST = 4.0f; // _boost_topk_scores, scale_factor 2
 static constexpr float SPK_WEAK_BOOST   = 2.0f; // _boost_topk_scores, scale_factor 1
+static constexpr float SPK_SPEECH_THR   = 0.5f; // _disable_low_scores: a speaker's frames at or below it are not cached
 
 // the speaker expert has its own layers, width and head count, which build_vit does not take; full rotary
 ggml_tensor * clip_graph_nemotron_transcribe::build_spk_encoder(ggml_tensor * cur, ggml_tensor * pos) {
@@ -61,16 +62,18 @@ ggml_cgraph * clip_graph_nemotron_transcribe::build() {
     const int64_t n_mel        = hparams.n_mel_bins;
     const int64_t n_mel_frames = img.nx();
     const int64_t n_pos        = (n_mel_frames + sub - 1) / sub;
-    GGML_ASSERT(img.ny() == 2 * n_mel);
+    GGML_ASSERT(img.ny() == n_mel);
 
     // warmup: the largest graph, with a full speaker cache and FIFO
     const int64_t n_prev = state == nullptr ? SPK_CACHE_LEN + SPK_FIFO_LEN
         : (int64_t) state->spk_prev.size() / hparams.spk_n_embd;
 
-    // [n_frames, 2*n_mel]: normalized log-mel rows for the ASR expert, then raw rows for the speaker expert
+    // [n_frames, n_mel] log-mel: raw for the speaker expert, normalized over the recording (encode_windows) for the ASR one
     ggml_tensor * inp = build_inp_raw(1);
-    auto stack_mel = [&](int64_t first_row) {
-        ggml_tensor * mel = ggml_view_2d(ctx0, inp, n_mel_frames, n_mel, inp->nb[1], first_row * inp->nb[1]);
+    ggml_tensor * inp_norm = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_mel_frames, n_mel);
+    ggml_set_name(inp_norm, "inp_norm");
+    ggml_set_input(inp_norm);
+    auto stack_mel = [&](ggml_tensor * mel) {
         return build_stack(ggml_cont(ctx0, ggml_transpose(ctx0, mel)), sub, n_mel);
     };
 
@@ -91,12 +94,12 @@ ggml_cgraph * clip_graph_nemotron_transcribe::build() {
         return ggml_rope_ext(ctx0, cur, asr_pos, nullptr, hparams.audio_rope_dims, GGML_ROPE_TYPE_NEOX, 0, 10000.0f, 1.0f,
                              0.0f, 1.0f, 0.0f, 0.0f);
     };
-    ggml_tensor * asr = build_vit(build_mm(model.inp_proj_w, stack_mel(0)), n_pos, NORM_TYPE_NORMAL, FFN_GELU_ERF, nullptr,
+    ggml_tensor * asr = build_vit(build_mm(model.inp_proj_w, stack_mel(inp_norm)), n_pos, NORM_TYPE_NORMAL, FFN_GELU_ERF, nullptr,
                                   add_pos);
     cb(asr, "asr_out", -1);
 
     // speaker expert over [cache | FIFO | window]; the window's rows and predictions feed the next window's state
-    ggml_tensor * chunk = build_mm(model.spk_inp_proj_w, stack_mel(n_mel));
+    ggml_tensor * chunk = build_mm(model.spk_inp_proj_w, stack_mel(inp));
     ggml_set_name(chunk, "spk_chunk");
     ggml_set_output(chunk);
     ggml_tensor * spk = spk_prev ? ggml_concat(ctx0, spk_prev, chunk, 1) : chunk;
@@ -175,7 +178,7 @@ static void spk_compress_cache(std::vector<float> & emb, std::vector<float> & pr
                 }
             }
             prod *= std::max(pt[s], SPK_PRED_SCORE_THR);
-            sc[t] = pt[s] > 0.5f ? prod * SPK_SCORE_OFFSET : disabled;
+            sc[t] = pt[s] > SPK_SPEECH_THR ? prod * SPK_SCORE_OFFSET : disabled;
             n_pos += sc[t] > 1.0f;
         }
         if (n_pos >= min_pos) {
@@ -271,6 +274,23 @@ bool clip_graph_nemotron_transcribe::encode_windows(clip_ctx * ctx, const clip_m
     auto & out = *params->out_embd;
     GGML_ASSERT(out.size() == (size_t) n_embd * clip_n_output_tokens(ctx, &rec));
 
+    // the ASR expert's input: per-feature normalization over the whole recording (NeMo normalize_batch, per_feature)
+    std::vector<double> mean(n_rows), denom(n_rows);
+    for (int64_t r = 0; r < n_rows; r++) {
+        const float * row = buf.data() + r * n_frames;
+        double sum = 0.0;
+        double sq_diff_sum = 0.0;
+        for (int64_t t = 0; t < n_frames; t++) {
+            sum += (double) row[t];
+        }
+        mean[r] = sum / n_frames;
+        for (int64_t t = 0; t < n_frames; t++) {
+            const double diff = (double) row[t] - mean[r];
+            sq_diff_sum += diff * diff;
+        }
+        denom[r] = std::sqrt(sq_diff_sum / (n_frames - 1.0)) + 1e-5;
+    }
+
     spk_stream     ss;
     clip_enc_state st;
     size_t n_out = 0;
@@ -282,8 +302,13 @@ bool clip_graph_nemotron_transcribe::encode_windows(clip_ctx * ctx, const clip_m
         const int64_t win_len    = win_end - win_begin;
 
         std::vector<float> data((size_t) win_len * n_rows);
+        st.mel_norm.resize(data.size());
         for (int64_t r = 0; r < n_rows; r++) {
-            std::copy_n(buf.data() + r * n_frames + win_begin, win_len, data.data() + r * win_len);
+            const float * src = buf.data() + r * n_frames + win_begin;
+            std::copy_n(src, win_len, data.data() + r * win_len);
+            for (int64_t t = 0; t < win_len; t++) {
+                st.mel_norm[r * win_len + t] = (float) ((src[t] - mean[r]) / denom[r]);
+            }
         }
         clip_image_f32_batch batch;
         batch.is_audio = true;

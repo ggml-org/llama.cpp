@@ -500,7 +500,8 @@ struct clip_enc_state {
     // lfm3a: same order as list_lfm3a_state_slots(), F32 [ne0, ne1], updated in place
     std::vector<ggml_tensor *> slots;
 
-    // nemotron transcribe: speaker cache and FIFO rows in, the window's speaker rows and predictions out
+    // nemotron transcribe: the window's normalized log-mel, cache and FIFO rows in; its speaker rows and predictions out
+    std::vector<float> mel_norm;
     std::vector<float> spk_prev;
     std::vector<float> spk_chunk, spk_preds;
 };

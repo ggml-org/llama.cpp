@@ -3272,10 +3272,6 @@ void mtmd_debug_encode_audio(mtmd_context * ctx, const std::vector<float> & inpu
         return;
     }
     int n_mel = clip_get_hparams(ctx->ctx_a)->n_mel_bins;
-    // nemotron transcribe: normalized and raw log-mel
-    if (clip_get_projector_type(ctx->ctx_a) == PROJECTOR_TYPE_NEMOTRON_TRANSCRIBE) {
-        n_mel *= 2;
-    }
     const int audio_nx = (int)input.size();
     std::vector<float> audio_buf(audio_nx * n_mel);
     for (int i = 0; i < audio_nx; i++) {

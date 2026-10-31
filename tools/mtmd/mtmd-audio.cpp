@@ -1468,39 +1468,38 @@ bool mtmd_audio_preprocessor_parakeet::preprocess(const float * samples,
     log_mel(samples, n_samples_in, out_full);
 
     // Per-feature normalization (only on valid frames)
-    normalize_per_feature(out_full, n_samples_in / hparams.audio_hop_len);
+    {
+        const double eps = 1e-5;
+        int valid_frames = n_samples_in / hparams.audio_hop_len;
+
+        for (int j = 0; j < out_full.n_mel; j++) {
+            double sum = 0.0;
+            double sq_diff_sum = 0.0;
+
+            // Calculate Mean ONLY on valid audio frames
+            for (int i = 0; i < valid_frames; i++) {
+                sum += (double)out_full.data[j * out_full.n_len + i];
+            }
+            double mean = sum / valid_frames;
+
+            // Calculate Variance ONLY on valid audio frames
+            for (int i = 0; i < valid_frames; i++) {
+                double diff = (double)out_full.data[j * out_full.n_len + i] - mean;
+                sq_diff_sum += diff * diff;
+            }
+
+            double std_dev = std::sqrt(sq_diff_sum / (valid_frames - 1.0));
+            double denominator = std_dev + eps;
+
+            // Apply to ALL frames (including the padded ones)
+            for (int i = 0; i < out_full.n_len; i++) {
+                out_full.data[j * out_full.n_len + i] = (float)((out_full.data[j * out_full.n_len + i] - mean) / denominator);
+            }
+        }
+    }
 
     output.push_back(std::move(out_full));
     return true;
-}
-
-void mtmd_audio_preprocessor_parakeet::normalize_per_feature(mtmd_audio_mel & out_full, int valid_frames) {
-    const double eps = 1e-5;
-
-    for (int j = 0; j < out_full.n_mel; j++) {
-        double sum = 0.0;
-        double sq_diff_sum = 0.0;
-
-        // Calculate Mean ONLY on valid audio frames
-        for (int i = 0; i < valid_frames; i++) {
-            sum += (double)out_full.data[j * out_full.n_len + i];
-        }
-        double mean = sum / valid_frames;
-
-        // Calculate Variance ONLY on valid audio frames
-        for (int i = 0; i < valid_frames; i++) {
-            double diff = (double)out_full.data[j * out_full.n_len + i] - mean;
-            sq_diff_sum += diff * diff;
-        }
-
-        double std_dev = std::sqrt(sq_diff_sum / (valid_frames - 1.0));
-        double denominator = std_dev + eps;
-
-        // Apply to ALL frames (including the padded ones)
-        for (int i = 0; i < out_full.n_len; i++) {
-            out_full.data[j * out_full.n_len + i] = (float)((out_full.data[j * out_full.n_len + i] - mean) / denominator);
-        }
-    }
 }
 
 //
@@ -1517,24 +1516,15 @@ bool mtmd_audio_preprocessor_nemotron_transcribe::preprocess(const float *      
     mtmd_audio_mel mel;
     log_mel(samples, n_samples, mel);
 
-    // frames past n_samples / hop are padding (NeMo get_seq_len)
-    const int64_t n_mel    = mel.n_mel;
+    // frames past n_samples / hop are padding (NeMo get_seq_len); kept raw, encode_windows normalizes them for ASR
     const int64_t n_frames = n_samples / hparams.audio_hop_len;
-
-    // normalized rows for the ASR expert, then raw rows for the speaker expert
-    mtmd_audio_mel out;
-    out.n_mel     = 2 * n_mel;
-    out.n_len     = n_frames;
-    out.n_len_org = n_frames;
-    out.data.resize(out.n_mel * out.n_len);
-    for (int64_t j = 0; j < n_mel; j++) {
-        std::copy_n(mel.data.data() + j * mel.n_len, n_frames, out.data.data() + (n_mel + j) * n_frames);
+    for (int64_t j = 1; j < mel.n_mel; j++) {
+        std::copy_n(mel.data.begin() + j * mel.n_len, n_frames, mel.data.begin() + j * n_frames);
     }
-    normalize_per_feature(mel, (int) n_frames);
-    for (int64_t j = 0; j < n_mel; j++) {
-        std::copy_n(mel.data.data() + j * mel.n_len, n_frames, out.data.data() + j * n_frames);
-    }
-    output.push_back(std::move(out));
+    mel.n_len     = n_frames;
+    mel.n_len_org = n_frames;
+    mel.data.resize(mel.n_mel * n_frames);
+    output.push_back(std::move(mel));
     return true;
 }
 

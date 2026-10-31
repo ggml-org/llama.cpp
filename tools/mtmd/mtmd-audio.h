@@ -177,12 +177,10 @@ struct mtmd_audio_preprocessor_parakeet : mtmd_audio_preprocessor {
     bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const override;
 
   protected:
-    mtmd_audio_cache cache;
-
     void log_mel(const float * samples, size_t n_samples, mtmd_audio_mel & out) const;
 
-    // statistics over the first valid_frames frames, applied to all frames
-    static void normalize_per_feature(mtmd_audio_mel & out_full, int valid_frames);
+  private:
+    mtmd_audio_cache cache;
 
     static void worker_thread(int ith, const float * window_func, int window_size,
                               const std::vector<float> & samples, int n_samples,
@@ -191,7 +189,7 @@ struct mtmd_audio_preprocessor_parakeet : mtmd_audio_preprocessor {
                               const mtmd_audio_cache & cache, mtmd_audio_mel & mel);
 };
 
-// one chunk per recording: normalized log-mel rows, then raw ones
+// one chunk per recording: the raw log-mel of its valid frames
 struct mtmd_audio_preprocessor_nemotron_transcribe : mtmd_audio_preprocessor_parakeet {
     mtmd_audio_preprocessor_nemotron_transcribe(clip_ctx * ctx) : mtmd_audio_preprocessor_parakeet(ctx) { }
     bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const override;
