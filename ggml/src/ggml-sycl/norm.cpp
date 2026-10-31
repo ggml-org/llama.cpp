@@ -188,9 +188,28 @@ static void rms_norm_f32(const float* x, float* dst, const int ncols,
 
     float tmp = 0.0f; // partial sum for thread in warp
 
-    for (int col = tid; col < ncols; col += block_size) {
-        const float xi = x[col * src_stride_col];
-        tmp += xi * xi;
+    // float4 path for contiguous, 16-byte aligned rows (decode), views and odd lengths stay strided
+    bool contig = src_stride_col == 1 && dst_stride_col == 1 && ncols % 4 == 0 && (uintptr_t) x % 16 == 0 &&
+                  (uintptr_t) dst % 16 == 0;
+    if constexpr (do_multiply) {
+        contig = contig && (uintptr_t) mul % 16 == 0;
+    }
+    if constexpr (do_add) {
+        contig = contig && (uintptr_t) add % 16 == 0;
+    }
+    const int n4 = ncols / 4;
+
+    if (contig) {
+        const sycl::float4 * x4 = reinterpret_cast<const sycl::float4 *>(x);
+        for (int i = tid; i < n4; i += block_size) {
+            const sycl::float4 v = x4[i];
+            tmp += sycl::dot(v, v);
+        }
+    } else {
+        for (int col = tid; col < ncols; col += block_size) {
+            const float xi = x[col * src_stride_col];
+            tmp += xi * xi;
+        }
     }
 
     // sum up partial sums
@@ -216,17 +235,37 @@ static void rms_norm_f32(const float* x, float* dst, const int ncols,
     const float mean = tmp / ncols;
     const float scale = sycl::rsqrt(mean + eps);
 
-    for (int col = tid; col < ncols; col += block_size) {
-        if constexpr (do_multiply && do_add) {
-            dst[col * dst_stride_col] = scale * x[col * src_stride_col] * mul[col] + add[col];
-        } else if constexpr (do_multiply) {
-            dst[col * dst_stride_col] = scale * x[col * src_stride_col] * mul[col];
-        } else {
-            // folded epilogue of a fused GGML_OP_SCALE consumer (qwen35 GDN l2 norms);
-            // the explicit temporary keeps the float evaluation order identical to
-            // running rms_norm and scale as two separate kernels
-            const float v = scale * x[col * src_stride_col];
-            dst[col * dst_stride_col] = v * scale_mul;
+    if (contig) {
+        const sycl::float4 * x4 = reinterpret_cast<const sycl::float4 *>(x);
+        sycl::float4 *       d4 = reinterpret_cast<sycl::float4 *>(dst);
+        const sycl::float4 * m4 = reinterpret_cast<const sycl::float4 *>(mul);
+        const sycl::float4 * a4 = reinterpret_cast<const sycl::float4 *>(add);
+        for (int i = tid; i < n4; i += block_size) {
+            const sycl::float4 v = x4[i];
+            if constexpr (do_multiply && do_add) {
+                const sycl::float4 m = m4[i];
+                const sycl::float4 a = a4[i];
+                d4[i]                = scale * v * m + a;
+            } else if constexpr (do_multiply) {
+                const sycl::float4 m = m4[i];
+                d4[i]                = scale * v * m;
+            } else {
+                d4[i] = scale * v * scale_mul;
+            }
+        }
+    } else {
+        for (int col = tid; col < ncols; col += block_size) {
+            if constexpr (do_multiply && do_add) {
+                dst[col * dst_stride_col] = scale * x[col * src_stride_col] * mul[col] + add[col];
+            } else if constexpr (do_multiply) {
+                dst[col * dst_stride_col] = scale * x[col * src_stride_col] * mul[col];
+            } else {
+                // folded epilogue of a fused GGML_OP_SCALE consumer (qwen35 GDN l2 norms);
+                // the explicit temporary keeps the float evaluation order identical to
+                // running rms_norm and scale as two separate kernels
+                const float v             = scale * x[col * src_stride_col];
+                dst[col * dst_stride_col] = v * scale_mul;
+            }
         }
     }
 }
