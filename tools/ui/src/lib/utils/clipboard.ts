@@ -25,18 +25,22 @@ export async function copyToClipboard(
 	successMessage = 'Copied to clipboard',
 	errorMessage = 'Failed to copy to clipboard'
 ): Promise<boolean> {
-	try {
-		// Try modern clipboard API first (secure contexts only)
-		if (navigator.clipboard && navigator.clipboard.writeText) {
+	// 1. Try modern clipboard API first
+	if (navigator.clipboard && navigator.clipboard.writeText) {
+		try {
 			await navigator.clipboard.writeText(text);
 			toast.success(successMessage);
-
 			return true;
+		} catch (error) {
+			// Modern API failed (e.g., Firefox HTTP restriction or lost focus).
+			// Catch it and fall through to the legacy method.
+			console.warn('Modern clipboard API failed, falling back to execCommand:', error);
 		}
+	}
 
-		// Fallback for non-secure contexts
+	// 2. Fallback for non-secure contexts or when modern API fails
+	try {
 		const textArea = document.createElement('textarea');
-
 		textArea.value = text;
 		textArea.style.position = 'fixed';
 		textArea.style.left = '-999999px';
@@ -46,20 +50,17 @@ export async function copyToClipboard(
 		textArea.select();
 
 		const successful = document.execCommand('copy');
-
 		document.body.removeChild(textArea);
 
 		if (successful) {
 			toast.success(successMessage);
-
 			return true;
 		} else {
-			throw new Error('execCommand failed');
+			throw new Error('execCommand returned false');
 		}
 	} catch (error) {
-		console.error('Failed to copy to clipboard:', error);
+		console.error('Failed to copy to clipboard (fallback also failed):', error);
 		toast.error(errorMessage);
-
 		return false;
 	}
 }
