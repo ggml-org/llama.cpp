@@ -111,6 +111,14 @@ extern int g_ggml_sycl_mmid_sched;
 static constexpr int GGML_SYCL_XMX_GATHER_SHAPES_DEFAULT = 0xff;
 extern int g_ggml_sycl_xmx_gather_shapes;
 
+// GGML_SYCL_HWEMUL: architectures whose XMX combinations a GGML_SYCL_XMX_EMULATION build offers next to
+// the device's own, one bit each; GGML_SYCL_XMX_GATHER_SHAPES then chooses among all of them
+enum {
+    GGML_SYCL_HWEMUL_XEHPG = 1 << 0, // Arc A-series, ARL-H: the sub-group 8 combinations
+    GGML_SYCL_HWEMUL_XE2   = 1 << 1, // Xe2, Xe3, Xe-HPC: the sub-group 16 combinations
+};
+extern int g_ggml_sycl_hwemul;
+
 // GGML_SYCL_DYNAMIC_PRECISION: operand type of the XMX dequant-GEMM paths. F32 turns them off and
 // keeps the library GEMM in f32. A src1 precision request of an op [TAG_GGML_PREC] is always met.
 enum ggml_sycl_dynamic_precision {
