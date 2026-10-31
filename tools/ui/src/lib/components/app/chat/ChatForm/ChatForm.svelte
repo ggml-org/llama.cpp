@@ -45,8 +45,6 @@
 	} from '$lib/types';
 	import {
 		buildMentionInsertion,
-		containsCodeSpan,
-		containsFileMentionLink,
 		findCommandToken,
 		findMentionToken,
 		getConversationModel,
@@ -109,27 +107,13 @@
 	}: Props = $props();
 
 	// Component References
-	// Shared handle of the two input renderers (plain textarea + rich chat form input).
-	type ChatInputHandle = {
-		focus(): void;
-		resetHeight(): void;
-		getElement(): HTMLElement | undefined;
-		getCaretOffset(): number;
-		setCaretOffset(offset: number): void;
-	};
 
 	let audioRecorder: AudioRecorder | undefined;
 	let chatFormActionsRef: ChatFormActions | undefined = $state(undefined);
 	let fileInputRef: ChatFormInputFileInputInvisible | undefined = $state(undefined);
 	let pickersRef: { handleKeydown: (event: KeyboardEvent) => boolean } | undefined =
 		$state(undefined);
-	let inputRef: ChatInputHandle | undefined = $state(undefined);
-
-	// Render-mode gate: the plain textarea by default, the rich chat form input
-	// while the buffer carries a `file://` mention link or a complete code
-	// span (badges and code chips need a DOM the textarea cannot provide).
-	// Demotes back once neither remains.
-	let useRichInput = $state(false);
+	let inputRef: ChatFormInput | undefined = $state(undefined);
 
 	// Audio Recording State
 	let isRecording = $state(false);
@@ -219,34 +203,6 @@
 	);
 	let canSubmit = $derived(value.trim().length > 0 || hasAttachments);
 
-	// Caret offset restored after a renderer swap. Callers that mutate
-	// `value` themselves (e.g. the mention picker) pin the target offset
-	// BEFORE the assignment; otherwise the swap effect snapshots the
-	// current caret.
-	let pendingCaretOffset = 0;
-	let caretOffsetPinned = false;
-
-	function queueCaretRestore() {
-		queueMicrotask(() => {
-			inputRef?.focus();
-			inputRef?.setCaretOffset(pendingCaretOffset);
-			caretOffsetPinned = false;
-		});
-	}
-
-	$effect(() => {
-		const wantRichInput = containsFileMentionLink(value ?? '') || containsCodeSpan(value ?? '');
-
-		if (useRichInput === wantRichInput) return;
-
-		if (!caretOffsetPinned) {
-			pendingCaretOffset = inputRef?.getCaretOffset() ?? (value ?? '').length;
-		}
-
-		useRichInput = wantRichInput;
-		queueCaretRestore();
-	});
-
 	onMount(() => {
 		recordingSupported = isAudioRecordingSupported();
 		audioRecorder = new AudioRecorder();
@@ -254,10 +210,6 @@
 
 	export function focus() {
 		inputRef?.focus();
-	}
-
-	export function resetTextareaHeight() {
-		inputRef?.resetHeight();
 	}
 
 	export function openModelSelector() {
@@ -296,8 +248,10 @@
 
 	function handleKeydown(event: KeyboardEvent) {
 		// Pickers consume navigation/escape keys first; when consumed, skip
-		// the enter-to-submit logic below.
+		// the enter-to-submit logic below and keep the key from the editor.
 		if (pickers.handleKeydown(event)) {
+			event.preventDefault();
+
 			return;
 		}
 
@@ -306,10 +260,8 @@
 			const sendOnEnter = currentConfig.sendOnEnter !== false;
 
 			// Caret inside a fenced code block (closed, or still open
-			// while being typed): Enter adds a line, never submits. The
-			// rich chat form input consumes this case locally; this gate
-			// covers the plain textarea, where skipping submit lets the
-			// native newline through.
+			// while being typed): Enter adds a line, never submits -
+			// skipping submit lets the editor's own newline through.
 			if (!isModifier && isOffsetInCodeBlock(value ?? '', inputRef?.getCaretOffset() ?? 0)) {
 				return;
 			}
@@ -501,20 +453,9 @@
 
 		if (!built) return;
 
-		// Pin the post-insertion caret BEFORE the swap effect runs;
-		// otherwise the effect clobbers it with the textarea's selection
-		// at promotion time (browser-dependent: usually reset to 0).
-		pendingCaretOffset = built.caretOffset;
-		caretOffsetPinned = true;
-
 		value = built.newValue;
 		onValueChange?.(built.newValue);
-
-		// Already in rich chat form input mode: no renderer flip, so the swap
-		// effect's caret restore never runs.
-		if (useRichInput) {
-			queueCaretRestore();
-		}
+		inputRef?.setCaretOffset(built.caretOffset);
 	}
 
 	async function handleMicClick() {
@@ -617,7 +558,6 @@
 				onKeydown={handleKeydown}
 				onPaste={handlePaste}
 				{placeholder}
-				{useRichInput}
 			/>
 
 			{#if mcpStore.resources.hasAttachments}

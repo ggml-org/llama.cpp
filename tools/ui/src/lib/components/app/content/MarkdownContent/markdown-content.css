@@ -10,7 +10,7 @@
 }
 
 /* Streaming code block uses .code-block-wrapper styles */
-.streaming-code-block .streaming-code-pre {
+.markdown-content :global(.streaming-code-block .streaming-code-pre) {
 	background: transparent;
 	padding: 0.5rem;
 	margin: 0;
@@ -259,11 +259,11 @@ div.markdown-user-content :global(.table-wrapper) {
 	max-height: var(--max-message-height);
 }
 
-.markdown-content .markdown-block:not(:first-child) :global(.code-block-wrapper) {
+.markdown-content :global(.markdown-block:not(:first-child) .code-block-wrapper) {
 	margin-top: 1rem;
 }
 
-.markdown-content .markdown-block:not(:last-child) :global(.code-block-wrapper) {
+.markdown-content :global(.markdown-block:not(:last-child) .code-block-wrapper) {
 	margin-bottom: 1rem;
 }
 
@@ -287,7 +287,7 @@ div.markdown-user-content :global(.table-wrapper) {
 }
 
 .full-height-code-blocks :global(.code-block-scroll-container),
-.full-height-code-blocks .streaming-code-scroll-container {
+.full-height-code-blocks :global(.streaming-code-scroll-container) {
 	max-height: none;
 	overflow-y: visible;
 }
