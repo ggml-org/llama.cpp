@@ -1654,6 +1654,8 @@ See [examples/realtime_client.py](../../examples/realtime_client.py) for a clien
 
 See [OpenAI Responses API documentation](https://platform.openai.com/docs/api-reference/responses).
 
+`extra_params`: llama.cpp parameters that the Responses API has no field for, such as `seed`, `min_p` or `repeat_penalty`, as an object (e.g. `{"seed": 42, "min_p": 0.05}`). Its keys are merged into the converted request and behave as on `/v1/chat/completions`.
+
 *Examples:*
 
 You can use either Python `openai` library with appropriate checkpoints:
@@ -1684,7 +1686,8 @@ curl http://localhost:9931/v1/responses \
 -d '{
 "model": "gpt-4.1",
 "instructions": "You are ChatGPT, an AI assistant. Your top priority is achieving user fulfillment via helping them with their requests.",
-"input": "Write a limerick about python exceptions"
+"input": "Write a limerick about python exceptions",
+"extra_params": {"seed": 42, "min_p": 0.05}
 }'
 ```
 
