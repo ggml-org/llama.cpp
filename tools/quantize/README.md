@@ -65,6 +65,7 @@ Advanced options:
 * `--tensor-type` quantize specific tensor(s) to specific quant types. Supports regex syntax. May be specified multiple times.
 * `--prune-layers` prune (remove) the layers in the list
 * `--override-kv` option to override model metadata by key in the quantized model. May be specified multiple times.
+* `--no-fallback` exit with an error instead of substituting a compatible type for tensors whose shapes are incompatible with the requested type. Combine with `--dry-run` to validate a quantization before running it.
 
 ## (Optional) Convert the multimodal components
 
