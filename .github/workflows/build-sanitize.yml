@@ -43,13 +43,12 @@ jobs:
     strategy:
       matrix:
         include:
-        # thread and address doesn't run properly on some self hosted machines, so run it on Github instead
         - sanitizer: ADDRESS
           machine: ubuntu-24.04
         - sanitizer: THREAD
           machine: ubuntu-24.04
         - sanitizer: UNDEFINED
-          machine: ubuntu-26.04
+          machine: ubuntu-26.04 # ubuntu 26 has a newer gcc that doesn't error out in release mode
 
     runs-on: ${{ matrix.machine }}
 

@@ -49,7 +49,7 @@ concurrency:
 
 jobs:
   server:
-    runs-on: hf-jobs-cpu-performance
+    runs-on: hf-jobs-cpu-upgrade:ubuntu26_04
 
     strategy:
       matrix:
@@ -67,7 +67,6 @@ jobs:
 
       - name: Install dependencies
         run: |
-          echo $(nproc)
           sudo apt update
           sudo apt install -y build-essential cmake python3-full
 
