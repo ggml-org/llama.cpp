@@ -20,7 +20,7 @@ namespace {
 // class = floor(log2(CRF)), at most n_class - 1; each slot is in the LRU list of the class, as of its last use
 // victim: an empty slot, or the least recently used slot of each list not in the current plan() with the max age/2^class
 struct moe_cache_lru {
-    static constexpr int   n_class  = 4;
+    static constexpr int   n_class  = 8; // floor(log2(1/(1 - 2^(-1/crf_half_life)))) = 7, CRF_max for half-life of 128
     static constexpr float crf_half_life = 128.0f; // tokens
 
     int32_t n_expert = 0;
@@ -32,8 +32,8 @@ struct moe_cache_lru {
     // one LRU list per class, the head is the least recently used end
     std::vector<int32_t> prev;    // [n_slots] -1 at the ends
     std::vector<int32_t> next;    // [n_slots]
-    int32_t head[n_class] = { -1, -1, -1, -1 };
-    int32_t tail[n_class] = { -1, -1, -1, -1 };
+    int32_t head[n_class];
+    int32_t tail[n_class];
     std::vector<int8_t>  list_of; // [n_slots] class list of the slot
 
     std::vector<float>   crf;      // [n_layer*n_expert]
@@ -54,6 +54,10 @@ struct moe_cache_lru {
         for (int32_t s = 0; s < n_slots; ++s) {
             prev[s] = s - 1;
             next[s] = s + 1 < n_slots ? s + 1 : -1;
+        }
+        for (int c = 0; c < n_class; ++c) {
+            head[c] = -1;
+            tail[c] = -1;
         }
         head[0] = 0;
         tail[0] = n_slots - 1;
@@ -526,8 +530,9 @@ struct llama_moe_cache::impl {
                 ggml_backend_buft_name(d.buft), d.buf_size/1024.0/1024.0, d.host_bytes/1024.0/1024.0);
             for (const group & g : groups) {
                 if (g.id == (int32_t) id) {
-                    LLAMA_LOG_INFO("%s: %2zu layers, %s: %5d slots (%.1f%%)\n", __func__,
-                        g.layers.size(), ggml_type_name(g.ref.back()->type), g.n_slots, 100.0*g.n_slots/(g.layers.size()*g.ref[0]->ne[2]));
+                    LLAMA_LOG_INFO("%s: %2zu layers, %s: %5d slots (%.1f%%, %.1f tokens worth)\n", __func__,
+                        g.layers.size(), ggml_type_name(g.ref.back()->type), g.n_slots, 100.0*g.n_slots/(g.layers.size()*g.ref[0]->ne[2]),
+                        (double) g.n_slots/(g.layers.size()*n_expert_used));
                 }
             }
         }
