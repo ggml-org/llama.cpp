@@ -348,7 +348,10 @@ static bool recv_msg(socket_ptr sock, std::vector<uint8_t> & input) {
     }
     try {
         input.resize(size);
-    } catch (const std::bad_alloc & e) {
+    } catch (const std::length_error &) {
+        LOG_ERROR("Failed to allocate input buffer of size %" PRIu64 "\n", size);
+        return false;
+    } catch (const std::bad_alloc &) {
         LOG_ERROR("Failed to allocate input buffer of size %" PRIu64 "\n", size);
         return false;
     }
@@ -971,6 +974,9 @@ static ggml_backend_buffer_i ggml_backend_rpc_buffer_interface = {
     /* .cpy_tensor      = */ ggml_backend_rpc_buffer_cpy_tensor,
     /* .clear           = */ ggml_backend_rpc_buffer_clear,
     /* .reset           = */ NULL,
+    /* .set_tensor_n    = */ NULL,
+    /* .get_tensor_n    = */ NULL,
+    /* .cpy_tensor_n    = */ NULL,
 };
 
 static const char * ggml_backend_rpc_buffer_type_name(ggml_backend_buffer_type_t buft) {

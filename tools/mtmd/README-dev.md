@@ -55,7 +55,7 @@ For example, Qwen3-TTS:
 Due to wide variety of audio generation pipelines, the `mtmd_gen_audio` system is designed to be flexible and reusable by new models.
 
 `mtmd_gen_audio` is split into 2 main API:
-- Core API `mtmd.h`: handles main inference. Important: the API surface must be stateless; caller must handle state management and audio frame accumulation.
+- Core API `mtmd.h`: handles main inference. Important: `mtmd_gen_state` holds only the per-sequence data that the mmproj itself writes and reads back (RNG, decoder KV / conv state, output buffers). Data that goes to or comes from the backbone (hidden states, codes, PCM) must stay explicit in `mtmd_gen_inp` / `mtmd_gen_out`; the caller drives the backbone and handles audio frame accumulation.
 - Helper API `mtmd-helper.h`: provides a model-agnostic stateful API. Usage example can be found in the `tools/tts` directory.
 
 ### Checklist for porting new audio generation models to mtmd

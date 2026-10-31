@@ -15,7 +15,7 @@ import {
 	RECENT_MODEL_LIMIT,
 	RECENT_MODELS_LOCALSTORAGE_KEY
 } from '$lib/constants';
-import { ServerModelStatus } from '$lib/enums';
+import { ReasoningEffort, ServerModelStatus } from '$lib/enums';
 import { HuggingFaceService } from '$lib/services/huggingface.service';
 import { ModelsService } from '$lib/services/models.service';
 // direct imports between stores, not via the barrel, to avoid circular deps
@@ -23,10 +23,9 @@ import { conversationsStore } from '$lib/stores/conversations/index.svelte';
 import { type ModelPropsHost, ModelPropsManager } from '$lib/stores/models/props.svelte';
 import { type ModelStatusHost, ModelStatusManager } from '$lib/stores/models/status.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
-import type { ModelSidecarBadge, ParsedModelId } from '$lib/types/models';
+import type { ParsedModelId } from '$lib/types/models';
 import { getConversationModel } from '$lib/utils/conversation-utils';
 import { repoOf } from '$lib/utils/model-names';
-import { isAuxSidecar } from '$lib/utils/sidecars';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
 
@@ -38,24 +37,6 @@ const MAX_GROUP_OPEN_ENTRIES = 200;
  * list window and the rest of the rows fetch as they scroll near the viewport.
  */
 const HUB_WARM_LIMIT = 12;
-
-/** Union of the draft sidecar badges two sources report for one repo. */
-function mergedDraftSidecars(
-	fromListing: ModelSidecarBadge[] | undefined,
-	fromArgs: ModelSidecarBadge[]
-): ModelSidecarBadge[] {
-	if (!fromListing || fromListing.length === 0) return fromArgs;
-
-	if (fromArgs.length === 0) return fromListing;
-
-	const merged = [...fromListing];
-
-	for (const badge of fromArgs) {
-		if (!merged.some((b) => b.kind === badge.kind && b.repo === badge.repo)) merged.push(badge);
-	}
-
-	return merged;
-}
 
 /** Models kept out of the selector. */
 function loadHiddenModels(): Set<string> {
@@ -307,6 +288,9 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			const response = await ModelsService.list();
 
 			this.routerModels = response.data;
+			// a download an earlier run left unfinished is listed as incomplete, and
+			// is offered as paused until it is resumed
+			this._status.syncPausedDownloads();
 			// keep the selector options in sync: a downloaded / deleted model shows
 			// up here too, not only in the router model rows
 			this.models = this.buildModelOptions(response);
@@ -412,6 +396,13 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			this.selectedModelName = option.model;
 
 			if (options?.recordRecent) this.recordRecentModel(modelId);
+
+			// reasoning levels belong to the model that answered: another model in the chat starts at Default
+			const conversationModel = getConversationModel(conversationsStore.activeMessages);
+
+			if (conversationModel && conversationModel !== option.model) {
+				void conversationsStore.preferences.setReasoningEffort(ReasoningEffort.DEFAULT);
+			}
 		} finally {
 			this.updating = false;
 		}
@@ -576,46 +567,24 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			item,
 			parsed: ModelsService.parseModelId(item.id)
 		}));
-		// sidecar entries mark downloaded sidecar files, not loadable models, and the router
-		// lists them under their own `<repo>:<quant>-<sidecar>` id: pair each draft with its
-		// repo here and drop the entries below
-		const draftSidecarsByRepo = new SvelteMap<string, ModelSidecarBadge[]>();
-
-		for (const { item, parsed } of entries) {
-			if (!parsed.sidecar || isAuxSidecar(parsed.sidecar)) continue;
-
-			const repo = repoOf(item.id);
-			// the entry id's quant is the sidecar file's own quant
-			const badge: ModelSidecarBadge = {
-				kind: parsed.sidecar,
-				quant: parsed.quantization,
-				repo
-			};
-			const kinds = draftSidecarsByRepo.get(repo);
-
-			if (kinds) {
-				if (!kinds.some((b) => b.kind === badge.kind && b.repo === badge.repo)) {
-					kinds.push(badge);
-				}
-			} else {
-				draftSidecarsByRepo.set(repo, [badge]);
-			}
-		}
 
 		return (
 			entries
-				// the router also lists projector files by filename, which carry the
-				// sidecar token inside the id rather than after a colon
-				.filter(({ item, parsed }) => !parsed.sidecar && !ModelsService.isSidecarEntry(item.id))
-				// in-flight downloads are not usable models yet; the selector tracks
-				// them in its "Download in progress" section instead
-				.filter(({ item }) => item.status?.value !== ServerModelStatus.DOWNLOADING)
+				// a models dir can still name an entry after a projector file, which is
+				// no loadable model
+				.filter(({ parsed }) => !parsed.sidecar)
+				// in-flight and unfinished downloads are not usable models yet; the
+				// selector tracks them in its "Download in progress" section instead
+				.filter(
+					({ item }) =>
+						item.status?.value !== ServerModelStatus.DOWNLOADING &&
+						item.status?.value !== ServerModelStatus.INCOMPLETE
+				)
 				.map(({ details, item }) => {
 					const rawCapabilities = Array.isArray(details?.capabilities) ? details?.capabilities : [];
 					const displayNameSource =
 						details?.name && details.name.trim().length > 0 ? details.name : item.id;
 					const modelId = details?.model || item.id;
-					const repo = repoOf(modelId);
 
 					return {
 						aliases: item.aliases ?? [],
@@ -631,12 +600,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 								: undefined),
 						description: details?.description,
 						details: details?.details,
-						draftSidecars: mergedDraftSidecars(
-							draftSidecarsByRepo.get(repo),
-							// models the router serves with a draft record it in their
-							// --model-draft args instead of a listing entry
-							this._status.getDraftSidecars(repo)
-						),
+						draftSidecars: this._status.getDraftSidecars(modelId),
 						id: item.id,
 						meta: item.meta ?? null,
 						modalities: this.props.buildArchitectureModalities(item.architecture),

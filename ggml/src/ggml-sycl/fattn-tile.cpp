@@ -54,6 +54,6 @@ void ggml_sycl_flash_attn_ext_tile(ggml_backend_sycl_context & ctx, ggml_tensor 
         } break;
         default: {
             GGML_ABORT("Unsupported head size");
-        } break;
+        }
     }
 }
