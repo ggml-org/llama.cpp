@@ -23073,13 +23073,15 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
                                ((d_head_q == 256 && (mq_gqa == 2 || mq_gqa == 6)) ||
                                 (d_head_q == 512 && (mq_gqa == 2 || mq_gqa == 16)) ||
                                 (d_head_q == 128 && mq_gqa == 16 && backend_ctx->has_subgroup_shuffle));
-    const bool mq_decode_shape = backend_ctx->gpu_family == ADRENO && is_mixed && n_q == 1 &&
-                                 d_head_q == d_head_v && n_head_kv > 0 && n_head % n_head_kv == 0 &&
-                                 ((((d_head_q == 64 && mq_gqa == 8) || (d_head_q == 128 && mq_gqa == 4)) &&
-                                   backend_ctx->has_subgroup_shuffle) ||
-                                  ((d_head_q == 256 || d_head_q == 512) && (mq_gqa == 4 || mq_gqa == 8)) ||
-                                  mq_decode_x2e);
-    if (mq_decode_shape && n_kv >= 32) {
+    const bool mq_decode_kernel = backend_ctx->gpu_family == ADRENO && is_mixed &&
+                                  d_head_q == d_head_v && n_head_kv > 0 && n_head % n_head_kv == 0 &&
+                                  ((((d_head_q == 64 && mq_gqa == 8) || (d_head_q == 128 && mq_gqa == 4)) &&
+                                    backend_ctx->has_subgroup_shuffle) ||
+                                   ((d_head_q == 256 || d_head_q == 512) && (mq_gqa == 4 || mq_gqa == 8)) ||
+                                   mq_decode_x2e);
+    const bool mq_decode_shape = mq_decode_kernel && n_q == 1;
+    // compile on the first call for this shape (the warmup is a prefill), not on the first decode
+    if (mq_decode_kernel) {
         ggml_opencl_ensure_fa_f32_f16_mq_decode(backend_ctx, d_head_q, d_head_v, mq_gqa);
     }
 
