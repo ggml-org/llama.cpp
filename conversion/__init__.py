@@ -217,6 +217,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "VoxtralRealtimeForConditionalGeneration": "mistral3",
     "MistralForCausalLM": "llama",
     "MixtralForCausalLM": "llama",
+    "modeling_sparsetral.MistralForCausalLM": "sparsetral",
     "ModernBertDecisionModel": "bert",
     "ModernBertForMaskedLM": "bert",
     "ModernBertForSequenceClassification": "bert",
