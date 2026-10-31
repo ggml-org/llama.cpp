@@ -18,6 +18,7 @@
 #define REQD_SUBGROUP_SIZE_128 __attribute__((qcom_reqd_sub_group_size("full")))
 #endif
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 1
 //------------------------------------------------------------------------------
 // rms_norm
 //------------------------------------------------------------------------------
@@ -94,7 +95,9 @@ kernel void kernel_rms_norm(
         }
     }
 }
+#endif
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 2
 //------------------------------------------------------------------------------
 // rms_norm_mul
 //------------------------------------------------------------------------------
@@ -188,7 +191,9 @@ kernel void kernel_rms_norm_mul(
         y[i00] = (x[i00] * scale) * f[i00%(ne10/4)];
     }
 }
+#endif
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 3
 //------------------------------------------------------------------------------
 // rms_norm + mul (norm weight) + add (residual), fused. Mirrors
 // kernel_rms_norm_mul with an extra residual operand src2: computes
@@ -275,7 +280,9 @@ kernel void kernel_rms_norm_mul_add(
         y[i00] = (x[i00] * scale) * f[i00%(ne10/4)] + g[i00%(ne20/4)];
     }
 }
+#endif
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 4
 //------------------------------------------------------------------------------
 // rms_norm + mul(norm weight) + add(residual) + mul(scalar scale), fused.
 // Computes y = ((rmsnorm(x) * w) + g) * s, where s is a broadcast SCALAR (e.g.
@@ -367,3 +374,4 @@ kernel void kernel_rms_norm_mul_add_scale(
         y[i00] = ((x[i00] * scale) * f[i00%(ne10/4)] + g[i00%(ne20/4)]) * sc;
     }
 }
+#endif
