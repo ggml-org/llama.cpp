@@ -337,6 +337,50 @@ class OrdinaryControls(unittest.TestCase):
         self.controls = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.controls)
 
+    def test_mixed_command_keeps_neural_and_ngram_limits_independent(self):
+        from types import SimpleNamespace
+        args=SimpleNamespace(server=Path("server"),target=Path("target"),draft=Path("draft"),port=1249,
+            draft_k="q8_0",draft_v="q4_0",arena_mib=1024,spec_mode="dflash-k4v",
+            ngram_n=12,ngram_m=7,ngram_min_hits=2)
+        command=self.controls.server_command(args,8192,3)
+        self.assertGreaterEqual(int(command[command.index("-lv")+1]),4)
+        for flag,value in (("--spec-type","ngram-map-k4v,draft-dflash"),("--spec-draft-n-max","3"),
+                ("--spec-ngram-map-k4v-size-n","12"),("--spec-ngram-map-k4v-size-m","7"),
+                ("--spec-ngram-map-k4v-min-hits","2"),("--model-draft","draft")):
+            self.assertEqual(command[command.index(flag)+1],value)
+        self.assertNotIn("--spec-draft-type-k",command)
+        self.assertNotIn("--spec-draft-type-v",command)
+        args.prompt_tokens=8192;args.decode_tokens=256;args.prompt_headroom=4
+        with self.assertRaises(ValueError): self.controls.prompt_count(args,8192,3)
+        for name,value in (("ngram_n",0),("ngram_n",65536),("ngram_m",8),("ngram_m",False),("ngram_min_hits",0)):
+            with self.subTest(name=name,value=value),self.assertRaises(ValueError):
+                self.controls.server_command(SimpleNamespace(**(vars(args)|{name:value})),8192,3)
+
+    def test_mixed_source_proof_requires_two_suppliers_and_a_neural_forward(self):
+        text="\n".join("statistics %s: #calls(b,g,a) = 1 4 2, #gen drafts = 2, #acc drafts = 1, #gen tokens = 7, #acc tokens = 3, #prediction forwards = %d" % (kind,count)
+            for kind,count in (("ngram-map-k4v",0),("draft-dflash",2)))
+        stats=self.controls.validate_mixed_sources(text)
+        self.assertEqual(stats["draft-dflash"]["prediction_forwards"],2)
+        self.assertEqual(stats["ngram-map-k4v"]["generated_tokens"],7)
+        self.controls.validate_mixed_sources(text,generated_tokens=14,accepted_tokens=6)
+        for totals in ({"generated_tokens":15},{"accepted_tokens":7}):
+            with self.subTest(totals=totals),self.assertRaises(ValueError):
+                self.controls.validate_mixed_sources(text,**totals)
+        for bad in (text.splitlines()[0],text.splitlines()[1],text.replace("#prediction forwards = 2","#prediction forwards = 0"),
+                text.replace("#gen tokens = 7","#gen tokens = 0"),text.replace("#acc tokens = 3","#acc tokens = 8")):
+            with self.subTest(text=bad),self.assertRaises(ValueError): self.controls.validate_mixed_sources(bad)
+        inactive=text.replace("#gen drafts = 2, #acc drafts = 1, #gen tokens = 7, #acc tokens = 3, #prediction forwards = 0",
+            "#gen drafts = 0, #acc drafts = 0, #gen tokens = 0, #acc tokens = 0, #prediction forwards = 0")
+        self.assertEqual(self.controls.validate_mixed_sources(inactive,require_both=False)["ngram-map-k4v"]["generated_tokens"],0)
+
+    def test_cpu_profile_is_separate_from_uninstrumented_timing_and_native_capture(self):
+        from types import SimpleNamespace
+        args=SimpleNamespace(spec_mode="dflash-k4v",trace_library=Path("trace.so"),cpu_profile=True,nsys=None,compare_to=None)
+        self.assertEqual(self.controls.control_modes(args),["timing","cpu-profile"])
+        for changed in ({"trace_library":None},{"nsys":Path("nsys")},{"compare_to":Path("native")},{"spec_mode":"mtp"},{"lifecycle":True}):
+            with self.subTest(changed=changed),self.assertRaises(ValueError):
+                self.controls.control_modes(SimpleNamespace(**(vars(args)|changed)))
+
     def test_streamed_draft_cache_inherits_target_without_cli_overrides(self):
         from types import SimpleNamespace
         for mode, depth in (("mtp", 3), ("dflash", 7)):
@@ -408,7 +452,7 @@ class OrdinaryControls(unittest.TestCase):
             self.controls.validate_control_log(line, [])
 
     def test_lifecycle_pair_requires_exact_case_outputs_and_actual_cache_counts(self):
-        result={"tokens":[1,2],"stop_type":"limit","stopping_word":"",
+        result: dict[str, Any]={"tokens":[1,2],"stop_type":"limit","stopping_word":"",
             "timings":{"predicted_n":2,"draft_n":3,"draft_n_accepted":1,"cache_n":59,"prompt_n":5}}
         self.controls.validate_lifecycle_pair(result,copy.deepcopy(result))
         for key in ("tokens","stop_type","stopping_word"):
@@ -421,7 +465,7 @@ class OrdinaryControls(unittest.TestCase):
                 self.controls.validate_lifecycle_pair(result,changed)
 
     def test_lifecycle_pair_rejects_matching_but_invalid_or_incomplete_records(self):
-        valid={"tokens":[1,2],"stop_type":"limit","stopping_word":"",
+        valid: dict[str, Any]={"tokens":[1,2],"stop_type":"limit","stopping_word":"",
             "timings":{"predicted_n":2,"draft_n":3,"draft_n_accepted":1,"cache_n":59,"prompt_n":5}}
         for field,value in (("predicted_n",1),("draft_n_accepted",4),("cache_n",-1),("prompt_n",True)):
             bad=copy.deepcopy(valid);bad["timings"][field]=value
@@ -443,7 +487,7 @@ class OrdinaryControls(unittest.TestCase):
         with self.assertRaises(ValueError): self.controls.validate_lifecycle_state("erase",{},0,0)
 
     def test_lifecycle_pair_honors_stock_omitted_zero_draft_counters(self):
-        one={"tokens":[1],"stop_type":"limit","timings":{"predicted_n":1,"cache_n":0,"prompt_n":64}}
+        one: dict[str, Any]={"tokens":[1],"stop_type":"limit","timings":{"predicted_n":1,"cache_n":0,"prompt_n":64}}
         self.controls.validate_lifecycle_pair(one,copy.deepcopy(one))
         explicit=copy.deepcopy(one);explicit["timings"].update(draft_n=0,draft_n_accepted=0)
         self.controls.validate_lifecycle_pair(one,explicit)
@@ -703,6 +747,34 @@ class OrdinaryControls(unittest.TestCase):
 
 
 class DflashPlotTests(unittest.TestCase):
+    def test_mixed_performance_points_keep_lookup_and_proposal_parameters(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);log=root/"server.log";log.write_text("memory_phase: phase=decode kv_pool=900000000\n")
+            row={"mode":"timing","status":"ok","context":8192,"depth":7,"arena_mib":1024,"log":str(log),
+                "spec_mode":"dflash-k4v","ngram":{"ngram_n":12,"ngram_m":7,"ngram_min_hits":2},
+                "result":{"timings":{"prompt_per_second":1000,"predicted_per_second":60,"draft_n":100,"draft_n_accepted":40}}}
+            (root/"results.jsonl").write_text(json.dumps(row)+"\n")
+            point=self.plot.load_series(root)[0]
+            self.assertEqual((point["spec_type"],point["ngram_n"],point["ngram_m"],point["ngram_min_hits"]),("dflash-k4v",12,7,2))
+            row["ngram"]["ngram_m"]=48
+            (root/"results.jsonl").write_text(json.dumps(row)+"\n")
+            with self.assertRaises(ValueError): self.plot.load_series(root)
+
+    def test_throughput_overlay_preserves_history_and_zero_y_axes(self):
+        point={"context":8192,"depth":7,"spec_type":"dflash-k4v","ngram_n":12,"ngram_m":7,"ngram_min_hits":2,
+            "prefill_tps":1000.,"decode_tps":60.,"arena_mib":1024,"decode_kv_pool_mib":900,"acceptance_pct":40}
+        historical={**point,"spec_type":"mtp","depth":3,"ngram_n":None,"ngram_m":None,"ngram_min_hits":None}
+        figure,axes=self.plot.throughput_figure([("Current",[point])],[historical],[])
+        try:
+            for axis in axes:
+                self.assertEqual(axis.get_ylim()[0],0)
+                labels=[line.get_label() for line in axis.lines]
+                self.assertTrue(any("Current" in label and "K4V" in label for label in labels))
+                self.assertTrue(any("Earlier" in label and "MTP" in label for label in labels))
+        finally:
+            import matplotlib.pyplot as plt
+            plt.close(figure)
+
     def test_unified_control_rows_keep_target_mtp_and_dflash_distinct(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -773,6 +845,34 @@ class ProfileAnalysisTests(unittest.TestCase):
         assert spec is not None and spec.loader is not None
         self.profile = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.profile)
+
+    def test_lookup_latency_separates_first_indexing_and_statistics_from_steady_calls(self):
+        base={"event":"ngram_draft","map_reserved_bytes":1048576,"history_capacity_bytes":16384,
+            "first_use":False,"first_statistics":False,"outcome":"supplied"}
+        rows=[{**base,"first_use":True,"first_statistics":True,"host_wall_ns":100000}]
+        rows.extend({**base,"host_wall_ns":ns,"outcome":outcome} for ns,outcome in
+            ((1000,"no_match"),(2000,"minimum_hits"),(3000,"ambiguous"),(4000,"acceptance_suppressed")))
+        result=self.profile.summarize_cpu_trace(rows)
+        self.assertEqual(result["lookup"]["all"]["count"],5)
+        self.assertEqual(result["lookup"]["steady"]["p99_us"],4.0)
+        self.assertEqual(result["lookup"]["first_use"]["p50_us"],100.0)
+        self.assertEqual(result["lookup"]["first_statistics"]["count"],1)
+        self.assertEqual(result["lookup"]["outcomes"]["ambiguous"],1)
+        self.assertEqual(result["map_reserved_bytes_peak"],1048576)
+        self.assertEqual(result["history_capacity_bytes_peak"],16384)
+        for value in (-1,True,float("nan")):
+            with self.subTest(value=value),self.assertRaises(ValueError):
+                self.profile.summarize_cpu_trace([{**base,"host_wall_ns":value}])
+
+    def test_cpu_profile_excludes_startup_and_prefill_before_generation(self):
+        process={"event":"process","host_wall_ns":1000,"role":"draft","kind":"tokens","rows":8}
+        rows=[process,{**process,"role":"target","rows":256,"host_wall_ns":2000},
+            {"event":"generation_begin"},
+            {"event":"draft_driver_begin"},{**process,"host_wall_ns":3000}]
+        result=self.profile.summarize_cpu_trace(rows)
+        self.assertNotIn("prefill/target/tokens/256",result["process_calls"])
+        self.assertEqual(result["process_calls"]["decode/draft/tokens/8"]["total_host_us"],3.0)
+        self.assertNotIn("draft/tokens/8",result["process_calls"])
 
     def test_interval_union_does_not_double_count_overlap(self):
         self.assertEqual(self.profile.interval_ns([(0, 10), (5, 15), (15, 20), (30, 35)]), 25)

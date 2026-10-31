@@ -4,6 +4,8 @@
 #include "../src/llama-batch.h"
 #include "../src/llama-kv-cache-iswa.h"
 #include "../src/llama-memory-hybrid.h"
+#include "../common/ngram-map.h"
+#include "../common/speculative.h"
 #include "ggml-backend.h"
 #include "../vendor/hash/hash.h"
 #include "../vendor/nlohmann/json.hpp"
@@ -11,6 +13,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <dlfcn.h>
@@ -36,10 +39,65 @@ struct trace_context {
 
 std::map<llama_context *, std::unique_ptr<trace_context>> contexts;
 std::mutex trace_mutex;
+std::map<const common_ngram_map *, size_t> ngram_calls;
+std::map<const common_ngram_map *, std::vector<size_t>> ngram_cursors;
+thread_local bool nested_context_init = false;
 size_t payload_bytes = 0;
 size_t payload_id = 0;
 const size_t payload_limit = 1024*1024*1024;
 const size_t payload_file_limit = 128*1024*1024;
+
+uint64_t clock_ns() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+std::string ngram_outcome(const common_ngram_map & map, const llama_tokens & history,
+        llama_token sampled, const llama_tokens & draft) {
+    if (!draft.empty()) return "supplied";
+    const size_t n = map.size_key;
+    if (history.size() < 2*n+map.size_value) return "short_history";
+    for (const auto & key : map.keys) {
+        if (key.key_idx > history.size() || n > history.size()-key.key_idx) {
+            throw std::runtime_error("invalid traced ngram key index");
+        }
+        bool matches = true;
+        for (size_t i = 0; i < n; ++i) {
+            const auto token = i+1 == n ? sampled : history[history.size()-n+1+i];
+            if (history[key.key_idx+i] != token) { matches = false; break; }
+        }
+        if (!matches) continue;
+        if (key.key_num < map.min_hits) return "minimum_hits";
+        uint32_t total = 0;
+        size_t best = 0;
+        for (size_t i = 0; i < COMMON_NGRAM_MAX_VALUES; ++i) {
+            total += key.values[i].value_num;
+            if (key.values[i].value_num > key.values[best].value_num) best = i;
+        }
+        const uint32_t maximum = key.values[best].value_num;
+        if (total > maximum && maximum < 2*(total-maximum)) return "ambiguous";
+        if (key.values[best].n_accepted <= 0) return "acceptance_suppressed";
+        return "empty";
+    }
+    return "no_match";
+}
+
+json ngram_memory(const common_ngram_map & map, const llama_tokens & history) {
+    return {{"keys_size", map.keys.size()}, {"keys_capacity", map.keys.capacity()},
+            {"map_reserved_bytes", map.key_map.capacity()*sizeof(uint32_t)+map.keys.capacity()*sizeof(common_ngram_map_key)},
+            {"history_size", history.size()}, {"history_capacity_bytes", history.capacity()*sizeof(llama_token)},
+            {"hash_indexed_through", map.key_map_last_idx}};
+}
+
+bool ngram_statistics_started(const common_ngram_map & map, std::vector<size_t> & seen) {
+    seen.resize(map.keys.size(), 0);
+    bool started = false;
+    for (size_t i = 0; i < map.keys.size(); ++i) {
+        started |= seen[i] == 0 && map.keys[i].stat_idx > 0;
+        seen[i] = map.keys[i].stat_idx;
+    }
+    return started;
+}
 
 bool payload_fits(size_t bytes) {
     return bytes && bytes <= payload_file_limit && payload_bytes <= payload_limit && bytes <= payload_limit-payload_bytes;
@@ -199,7 +257,8 @@ template<typename T> T next(const char * name) {
 }
 }
 
-extern "C" llama_context * llama_init_from_model(llama_model * model, llama_context_params params) {
+namespace {
+llama_context * traced_init(llama_model * model, llama_context_params params, uint32_t prediction_rows, bool extended) {
     try {
         auto state = std::make_unique<trace_context>();
         char arch[64] = {};
@@ -211,9 +270,15 @@ extern "C" llama_context * llama_init_from_model(llama_model * model, llama_cont
             params.cb_eval = evaluate;
             params.cb_eval_user_data = state.get();
         }
-        auto * ctx = next<decltype(&llama_init_from_model)>("llama_init_from_model")(model, params);
+        using ordinary_init = llama_context * (*)(llama_model *, llama_context_params);
+        using extended_init = llama_context * (*)(llama_model *, llama_context_params, uint32_t);
+        nested_context_init = true;
+        auto * ctx = extended ? next<extended_init>("_Z21llama_init_from_modelP11llama_model20llama_context_paramsj")(model, params, prediction_rows) :
+            next<ordinary_init>("llama_init_from_model")(model, params);
+        nested_context_init = false;
         record({{"event", "context"}, {"role", state->role}, {"ok", ctx != nullptr},
                 {"n_ctx", params.n_ctx}, {"n_ubatch", params.n_ubatch}, {"n_rs_seq", params.n_rs_seq},
+                {"serial_prediction_rows", prediction_rows},
                 {"type_k", ggml_type_name(params.type_k)}, {"type_v", ggml_type_name(params.type_v)}});
         if (ctx) {
             memory(ctx, *state);
@@ -224,6 +289,19 @@ extern "C" llama_context * llama_init_from_model(llama_model * model, llama_cont
         std::fprintf(stderr, "DFlash control trace init failed: %s\n", error.what());
         std::abort();
     }
+}
+}
+
+extern "C" llama_context * llama_init_from_model(llama_model * model, llama_context_params params) {
+    return traced_init(model, params, 0, false);
+}
+
+llama_context * llama_init_from_model(llama_model * model, llama_context_params params, uint32_t prediction_rows) {
+    if (nested_context_init) {
+        using fn = llama_context * (*)(llama_model *, llama_context_params, uint32_t);
+        return next<fn>("_Z21llama_init_from_modelP11llama_model20llama_context_paramsj")(model, params, prediction_rows);
+    }
+    return traced_init(model, params, prediction_rows, true);
 }
 
 extern "C" int32_t llama_process(llama_context * ctx, llama_process_type type, llama_batch_ext * batch) {
@@ -250,7 +328,9 @@ extern "C" int32_t llama_process(llama_context * ctx, llama_process_type type, l
         if (capture_enabled() && batch->n_embd && state.captured["features"]++ < 2) {
             row["features"] = payload(batch->embd.data(), batch->embd.size()*sizeof(float));
         }
+        const auto started = clock_ns();
         const int ret = next<decltype(&llama_process)>("llama_process")(ctx, type, batch);
+        row["host_wall_ns"] = clock_ns()-started;
         row["ret"] = ret;
         if (capture_enabled() && state.role == "draft" && !batch->n_embd && ret == 0 && state.captured["lattice"]++ < 2) {
             const size_t width = llama_model_n_embd(llama_get_model(ctx));
@@ -276,6 +356,53 @@ extern "C" void llama_free(llama_context * ctx) {
     contexts.erase(ctx);
 }
 
+void common_ngram_map_begin(common_ngram_map & map, const llama_tokens & history) {
+    const auto fn = next<decltype(&common_ngram_map_begin)>("_Z22common_ngram_map_beginR16common_ngram_mapRKSt6vectorIiSaIiEE");
+    const auto started = clock_ns();
+    fn(map, history);
+    const auto elapsed = clock_ns()-started;
+    ngram_calls[&map] = 0;
+    ngram_cursors[&map].clear();
+    auto row = ngram_memory(map, history);
+    row.update({{"event", "ngram_begin"}, {"host_wall_ns", elapsed}});
+    record(std::move(row));
+}
+
+void common_ngram_map_draft(common_ngram_map & map, const llama_tokens & history,
+        llama_token sampled, llama_tokens & draft) {
+    const auto fn = next<decltype(&common_ngram_map_draft)>("_Z22common_ngram_map_draftR16common_ngram_mapRKSt6vectorIiSaIiEEiRS3_");
+    const size_t indexed_before = map.key_map_last_idx;
+    const auto started = clock_ns();
+    fn(map, history, sampled, draft);
+    const auto elapsed = clock_ns()-started;
+    auto row = ngram_memory(map, history);
+    row.update({{"event", "ngram_draft"}, {"host_wall_ns", elapsed}, {"first_use", ngram_calls[&map]++ == 0},
+            {"first_statistics", ngram_statistics_started(map, ngram_cursors[&map])}, {"indexed_before", indexed_before},
+            {"draft_tokens", draft.size()}, {"outcome", ngram_outcome(map, history, sampled, draft)}});
+    record(std::move(row));
+}
+
+void common_speculative_draft(common_speculative * spec) {
+    const auto fn = next<decltype(&common_speculative_draft)>("_Z24common_speculative_draftP18common_speculative");
+    record({{"event", "draft_driver_begin"}});
+    const auto started = clock_ns();
+    fn(spec);
+    const auto elapsed = clock_ns()-started;
+    json sources = json::array();
+    for (const auto & row : common_speculative_get_stats(spec)) {
+        sources.push_back({{"type", common_speculative_type_to_str(row.type)}, {"draft_calls", row.n_call_draft},
+                {"generated_drafts", row.n_gen_drafts}, {"generated_tokens", row.n_gen_tokens},
+                {"accepted_tokens", row.n_acc_tokens}, {"prediction_forwards", row.n_predict}});
+    }
+    record({{"event", "draft_driver"}, {"host_wall_ns", elapsed}, {"sources", sources}});
+}
+
+void common_speculative_begin(common_speculative * spec, llama_seq_id seq, const llama_tokens & history) {
+    const auto fn = next<decltype(&common_speculative_begin)>("_Z24common_speculative_beginP18common_speculativeiRKSt6vectorIiSaIiEE");
+    fn(spec, seq, history);
+    record({{"event", "generation_begin"}, {"sequence", seq}, {"prompt_tokens", history.size()}});
+}
+
 #ifdef DFLASH_CONTROL_TRACE_TEST
 #include "../tests/testing.h"
 #include "ggml-alloc.h"
@@ -283,6 +410,39 @@ extern "C" void llama_free(llama_context * ctx) {
 
 int main() {
     testing t;
+    t.test("ngram_trace_distinguishes_empty_reasons_without_mutating_history", [&](testing & t) {
+        common_ngram_map map(2, 2, false, 2);
+        const llama_tokens history{91, 1, 2, 3, 4, 1, 2, 5, 6, 1};
+        const auto saved = history;
+        t.assert_true(ngram_outcome(map, history, 2, {}) == "no_match");
+        common_ngram_map_key key{};
+        key.key_idx = 1;
+        key.key_num = 1;
+        key.values[0] = {3, 2, 2};
+        key.values[1] = {7, 2, 2};
+        map.keys.push_back(key);
+        t.assert_true(ngram_outcome(map, history, 2, {}) == "minimum_hits");
+        map.keys[0].key_num = 2;
+        t.assert_true(ngram_outcome(map, history, 2, {}) == "ambiguous");
+        map.keys[0].values[0] = {3, 4, 0};
+        t.assert_true(ngram_outcome(map, history, 2, {}) == "acceptance_suppressed");
+        std::vector<size_t> seen;
+        t.assert_true(!ngram_statistics_started(map, seen));
+        map.keys[0].stat_idx = 5;
+        t.assert_true(ngram_statistics_started(map, seen));
+        t.assert_true(!ngram_statistics_started(map, seen));
+        map.keys.push_back(key);
+        t.assert_true(!ngram_statistics_started(map, seen));
+        map.keys[1].stat_idx = 5;
+        t.assert_true(ngram_statistics_started(map, seen));
+        t.assert_true(ngram_outcome(map, history, 2, {3, 4}) == "supplied");
+        t.assert_true(ngram_outcome(map, {1}, 2, {}) == "short_history");
+        t.assert_true(history == saved);
+        map.keys[0].key_idx = history.size();
+        bool rejected = false;
+        try { ngram_outcome(map, history, 2, {}); } catch (const std::runtime_error &) { rejected = true; }
+        t.assert_true(rejected);
+    });
     auto * ctx = ggml_init({65536, nullptr, true});
     auto * mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, 8, 2);
     auto * k = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, 128, 8, 8);

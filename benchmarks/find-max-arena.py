@@ -7,6 +7,7 @@ The result is workload-specific, not a guarantee for other image/prompt shapes.
 
 import argparse
 import base64
+import hashlib
 import importlib.util
 import json
 import math
@@ -20,7 +21,9 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "benchmarks/server-ab"))
+sys.path.insert(0, str(ROOT / "benchmarks"))
 from server_ab import request_json
+from run_dflash_controls import ngram_command, ngram_settings, speculative_source_stats, validate_mixed_sources
 
 SPEC = importlib.util.spec_from_file_location("arena_sweep", ROOT / "benchmarks/run-fixed-span-sweep.py")
 assert SPEC is not None and SPEC.loader is not None
@@ -28,7 +31,8 @@ SWEEP = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(SWEEP)
 MARKER = "<__media__>"
 REMOVED_ENV = ("GGML_CUDA_ENABLE_UNIFIED_MEMORY", "GGML_CUDA_PREFER_MODEL_WEIGHTS", "GGML_CUDA_PREFER_KV_HOST",
-    "GGML_CUDA_KV_ACCESSED_BY_GPU", "GGML_CUDA_DISABLE_GRAPHS", "LLAMA_RS_HOST_SPILL", "LLAMA_RS_STAGED_PUBLICATION")
+    "GGML_CUDA_KV_ACCESSED_BY_GPU", "GGML_CUDA_DISABLE_GRAPHS", "LLAMA_RS_HOST_SPILL", "LLAMA_RS_STAGED_PUBLICATION",
+    "LD_PRELOAD", "DFLASH_CONTROL_TRACE", "DFLASH_CONTROL_CAPTURE")
 
 
 def arguments(argv=None):
@@ -38,7 +42,10 @@ def arguments(argv=None):
     parser.add_argument("--context-size", type=int, default=262144)
     parser.add_argument("--cache-type-k", choices=SWEEP.KV_TYPES, default="q8_0")
     parser.add_argument("--cache-type-v", choices=SWEEP.KV_TYPES, default="q4_0")
-    parser.add_argument("--spec-mode", choices=("none", "mtp", "dflash"), default="none")
+    parser.add_argument("--spec-mode", choices=("none", "mtp", "dflash", "dflash-k4v"), default="none")
+    parser.add_argument("--ngram-n", type=int, help="mixed K4V lookup length (default: 12)")
+    parser.add_argument("--ngram-m", type=int, help="mixed K4V maximum proposals (default: 7; supported: 1-7)")
+    parser.add_argument("--ngram-min-hits", type=int, help="mixed K4V minimum hits (default: 2)")
     parser.add_argument("--draft-length", type=int)
     parser.add_argument("--model-draft", type=Path)
     parser.add_argument("--mmproj", type=Path, help="configure the deferred projector; images are optional")
@@ -50,6 +57,10 @@ def arguments(argv=None):
                         help="full: test the requested workload for every candidate; preflight: use bounded text history plus real decoding")
     parser.add_argument("--validate-selected", action="store_true",
                         help="after a preflight search, run the full requested workload once at the selected arena; fail if it does not fit")
+    parser.add_argument("--copy-probe", action="store_true",
+                        help="also validate a separate 32-output copying path; always enabled for mixed K4V, optional for matched non-mixed sizing")
+    parser.add_argument("--no-webui", action="store_true", help="disable the test server's web UI")
+    parser.add_argument("--verbosity", type=int, default=3, help="server log threshold 0-5; route proofs require at least 4")
     parser.add_argument("--decode-tokens", type=int, default=256)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--ubatch-size", type=int, default=256)
@@ -63,22 +74,28 @@ def arguments(argv=None):
     if args.validate_selected and args.probe_mode != "preflight":
         parser.error("--validate-selected requires --probe-mode preflight")
     if args.draft_length is None:
-        args.draft_length = {"none":0, "mtp":3, "dflash":7}[args.spec_mode]
+        args.draft_length = {"none":0, "mtp":3, "dflash":7, "dflash-k4v":7}[args.spec_mode]
     if not (args.spec_mode == "none" and args.draft_length == 0 or
             args.spec_mode == "mtp" and 1 <= args.draft_length <= 3 or
-            args.spec_mode == "dflash" and 1 <= args.draft_length <= 7):
+            args.spec_mode in ("dflash", "dflash-k4v") and 1 <= args.draft_length <= 7):
         parser.error("target-only uses length 0; MTP supports 1-3; DFlash supports 1-7")
-    if args.spec_mode == "dflash" and not args.model_draft:
+    try:
+        ngram_settings(args)
+    except ValueError as error:
+        parser.error(str(error))
+    if args.spec_mode in ("dflash", "dflash-k4v") and not args.model_draft:
         parser.error("--model-draft is required for DFlash")
     if args.spec_mode == "none" and args.model_draft:
         parser.error("--model-draft requires MTP or DFlash")
-    if args.image and not args.mmproj or args.mmproj and args.spec_mode == "dflash":
+    if args.image and not args.mmproj or args.mmproj and args.spec_mode in ("dflash", "dflash-k4v"):
         parser.error("--image requires --mmproj; vision+DFlash is unsupported")
     if args.prompt_file and not args.image or args.prompt_tokens is not None and args.image:
         parser.error("--prompt-file requires image validation; --prompt-tokens is for text probes")
+    if args.copy_probe and args.image:
+        parser.error("--copy-probe is a text-only resource check; omit it for image validation")
     if (not 512 <= args.context_size <= 262144 or not 8 <= args.decode_tokens < args.context_size-15 or
             not 1 <= args.batch_size <= 2**31-1 or not 0 <= args.ubatch_size <= 2**31-1 or
-            not 1 <= args.initial_arena_mib <= 1048576 or not 1 <= args.port <= 65535 or
+            not 1 <= args.initial_arena_mib <= 1048576 or not 1 <= args.port <= 65535 or not 0 <= args.verbosity <= 5 or
             not math.isfinite(args.request_timeout) or not 1 <= args.request_timeout <= 43200 or
             not 1 <= args.image_min_tokens <= args.image_max_tokens or
             (args.image and args.image_max_tokens > args.context_size) or len(args.image) > 32):
@@ -93,12 +110,16 @@ def server_command(args, arena_mib):
         "--batch-size", str(args.batch_size), "--ubatch-size", str(args.ubatch_size), "--parallel", "1",
         "--n-gpu-layers", "999", "--flash-attn", "on", "--cache-type-k", args.cache_type_k,
         "--cache-type-v", args.cache_type_v, "--shared-device-memory-mib", str(arena_mib), "--fit", "off",
-        "--spec-type", {"none":"none", "mtp":"draft-mtp", "dflash":"draft-dflash"}[args.spec_mode],
-        "--host", "127.0.0.1", "--port", str(args.port), "--offline", "--no-context-shift", "--cache-ram", "0", "-lv", "3"]
+        "--spec-type", {"none":"none", "mtp":"draft-mtp", "dflash":"draft-dflash", "dflash-k4v":"ngram-map-k4v,draft-dflash"}[args.spec_mode],
+        "--host", "127.0.0.1", "--port", str(args.port), "--offline", "--no-context-shift", "--cache-ram", "0",
+        "-lv", str(max(args.verbosity, 4 if args.spec_mode == "dflash-k4v" or args.copy_probe else 0))]
+    if args.no_webui:
+        command.append("--no-webui")
     if args.draft_length:
         command += ["--spec-draft-n-max", str(args.draft_length), "--spec-draft-n-min", "0", "--spec-draft-p-min", "0"]
     if args.model_draft:
         command += ["--model-draft", str(args.model_draft), "--spec-draft-ngl", "999"]
+    command += ngram_command(args)
     if args.mmproj:
         command += ["--mmproj", str(args.mmproj), "--image-min-tokens", str(args.image_min_tokens),
             "--image-max-tokens", str(args.image_max_tokens)]
@@ -154,8 +175,37 @@ def validate_result(args, result, expected_prompt):
         raise RuntimeError("request exceeded the configured context/headroom or omitted prompt timing")
     if expected_prompt is not None and count != expected_prompt:
         raise RuntimeError("incomplete prefill response")
-    if args.spec_mode != "none" and not timing.get("draft_n", 0) > 0:
+    if args.spec_mode != "none" and (type(timing.get("draft_n")) is not int or timing["draft_n"] <= 0):
         raise RuntimeError("speculative workload completed without generating drafts")
+
+
+def mixed_route_probe(args, url, prompt, candidate):
+    settings = ngram_settings(args)
+    if settings is None and not args.copy_probe:
+        return None
+    count = 32
+    length = min(len(prompt), args.context_size-count-15)
+    tail = 2*settings["ngram_n"]+settings["ngram_m"]+2 if settings else 33
+    if length < tail:
+        raise ValueError("mixed route proof needs at least 2*N+M+2 prompt tokens with decode headroom")
+    ids = request_json(url+"/tokenize", {"content":"B", "add_special":False}, timeout=args.request_timeout)["tokens"]
+    if len(ids) != 1 or type(ids[0]) is not int or not 0 <= ids[0] <= 2**31-1:
+        raise ValueError("mixed route proof requires a single ordinary token for B")
+    proof_prompt = list(prompt[:length])
+    proof_prompt[-tail:] = ids*tail
+    config = argparse.Namespace(**vars(args))
+    config.decode_tokens = count
+    request = payload(config, proof_prompt, [])
+    request["logit_bias"] = [[ids[0], 1000]]
+    result = request_json(url+"/completion", request, timeout=args.request_timeout)
+    path = args.output/f"arena-{candidate}-mixed-proof.json"
+    path.write_text(json.dumps({"payload":request, "result":result}, indent=2)+"\n")
+    validate_result(config, result, length)
+    if result["tokens"] != ids*count:
+        raise RuntimeError("mixed route proof violated the target sampling constraint")
+    return {"response":str(path), "response_sha256":hashlib.sha256(path.read_bytes()).hexdigest(),
+            "prompt_tokens":length, "decode_tokens":count, "ngram":settings, "timings":result["timings"],
+            "scope":"Separate target-bias-constrained text path/resource check; mixed mode additionally proves both sources. Not performance or model quality evidence"}
 
 
 def probe(args, candidate):
@@ -170,6 +220,9 @@ def probe(args, candidate):
     command = server_command(args, candidate)
     failure = None
     result = {}
+    mixed_proof = None
+    response_path = None
+    prompt_sha256 = None
     with log_path.open("x") as log:
         process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, env=environment())
         try:
@@ -188,7 +241,12 @@ def probe(args, candidate):
                     raise ValueError("corpus is too short; provide more text or set --prompt-tokens")
                 prompt, images = tokens[:expected], []
             result = request_json(url+"/completion", payload(args,prompt,images), timeout=args.request_timeout)
+            response_path = args.output/f"arena-{candidate}-response.json"
+            response_path.write_text(json.dumps(result, indent=2)+"\n")
+            if not args.image:
+                prompt_sha256 = hashlib.sha256(json.dumps(prompt, separators=(",", ":")).encode()).hexdigest()
             validate_result(args, result, expected)
+            mixed_proof = mixed_route_probe(args, url, prompt, candidate)
         except Exception as error:
             failure = error
         finally:
@@ -199,7 +257,19 @@ def probe(args, candidate):
     if failure is None:
         try:
             SWEEP.validate_execution_log(text)
-        except RuntimeError as error:
+            if args.spec_mode == "dflash-k4v":
+                if mixed_proof is None:
+                    raise RuntimeError("missing completed mixed route probe")
+                mixed_proof["source_stats"] = validate_mixed_sources(text,
+                    generated_tokens=result["timings"]["draft_n"]+mixed_proof["timings"]["draft_n"],
+                    accepted_tokens=result["timings"]["draft_n_accepted"]+mixed_proof["timings"]["draft_n_accepted"])
+            elif mixed_proof is not None:
+                mixed_proof["source_stats"] = speculative_source_stats(text)
+                for source_key, timing_key in (("generated_tokens", "draft_n"), ("accepted_tokens", "draft_n_accepted")):
+                    expected = result["timings"].get(timing_key, 0)+mixed_proof["timings"].get(timing_key, 0)
+                    if sum(row[source_key] for row in mixed_proof["source_stats"].values()) != expected:
+                        raise ValueError("copy-path source totals differ from completed request counters")
+        except (RuntimeError, ValueError) as error:
             failure = error
     minimum = SWEEP.arena_minimum_mib(text)
     if minimum is not None:
@@ -207,6 +277,10 @@ def probe(args, candidate):
     if failure and not SWEEP.is_arena_capacity_failure(text):
         raise RuntimeError(f"probe failed; not a physical OOM: {failure}; see {log_path}") from failure
     return {"arena_mib":candidate, "fits":failure is None, "log":str(log_path), "command":command,
+        "log_sha256":hashlib.sha256(log_path.read_bytes()).hexdigest(),
+        "response":str(response_path) if response_path else None,
+        "response_sha256":hashlib.sha256(response_path.read_bytes()).hexdigest() if response_path else None,
+        "prompt_ids_sha256":prompt_sha256, "mixed_proof":mixed_proof,
         "probe_mode":args.probe_mode, "timings":result.get("timings"), "error":str(failure) if failure else None}
 
 
@@ -249,6 +323,8 @@ def fit(args):
         "command":server_command(args,maximum), "uvm":False, "reserve_mib":0,
         "context_size":args.context_size, "cache_type_k":args.cache_type_k, "cache_type_v":args.cache_type_v,
         "spec_mode":args.spec_mode, "draft_length":args.draft_length, "images":[str(path) for path in args.image],
+        "ngram":ngram_settings(args), "mixed_routes_validated":args.spec_mode == "dflash-k4v" and bool(selected and selected.get("mixed_proof")),
+        "copy_path_validated":bool(selected and selected.get("mixed_proof")), "headless":args.no_webui,
         "model_draft":str(args.model_draft) if args.model_draft else None,
         "prompt_file":str(args.prompt_file) if args.prompt_file else None,
         "projector_configured":bool(args.mmproj), "vision_execution_validated":bool(args.image) and runtime_validated,

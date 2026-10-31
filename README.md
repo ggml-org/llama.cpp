@@ -32,7 +32,7 @@ The reference targets are Unsloth Qwen3.8-27B `UD-IQ4_XS` and Gemma 4 31B `Q3_K_
 | --- | --- | --- | --- | --- |
 | Qwen3.8-27B, target-only | Up to 262,144 positions | None | None | Matching F16 mmproj supported |
 | Qwen3.8-27B, embedded MTP | Up to 262,144 positions | 1-3 predictions; target verification through TG4 | Full history, streamed as an auxiliary KV layer | Supported with the matching mmproj and shared arena |
-| Qwen3.8-27B + IncoAI DFlash2 sidecar | Up to 262,144 positions | 1-7 predictions; target verification through TG8 | Bounded 2,048-position window plus execution headroom | Not supported with the vision arena |
+| Qwen3.8-27B + IncoAI DFlash2 sidecar, optionally CPU K4V | Up to 262,144 positions | 1-7 proposals per source; target verification through TG8 | Bounded 2,048-position draft window; K4V map/history in RAM | Not supported with the vision arena |
 | Gemma 4 31B, target-only | 8-120 Ki target-only sweep; metadata capacity 262144 | None | Ten full-attention histories streamed; fifty bounded SWA histories resident | Matching local Q8 projector with Q3_K_S; scoped below |
 | Gemma 4 31B + matching MTP assistant | 8-120 Ki text sweep, all lengths 1-3; MTP3-only through 256 Ki | 1-3 predictions; target verification TG1-TG4 | Read-only target KV; no assistant KV append/catch-up | Matching local Q8 projector with Q3_K_S; lengths 1-3, scoped below |
 | Other Gemma variants, Muse Glimmer and other architectures | Not qualified here | Not qualified | Need model topology, admission and numerical qualification | Not qualified |
@@ -242,6 +242,20 @@ KV_COMMON=(--model "$KV_MODEL" --ctx-size 262144 --parallel 1
   --model-draft "$KV_DFLASH" --spec-draft-ngl 999 \
   --spec-type draft-dflash --spec-draft-n-max 7 --spec-draft-n-min 0 --spec-draft-p-min 0
 ```
+
+**DFlash2 + K4V:** the CPU history map supplies a proposal when useful, otherwise DFlash predicts. Fit this mode separately; the 1,500 MiB below is only an example. Explicit K4V M=7 is required because its native default is larger. Use the same target, matching sidecar and inherited cache types:
+
+```bash
+"$KV_SERVER" "${KV_COMMON[@]}" --shared-device-memory-mib 1500 \
+  --cache-type-k q8_0 --cache-type-v q4_0 --no-mmproj \
+  --model-draft "$KV_DFLASH" --spec-draft-ngl 999 \
+  --spec-type ngram-map-k4v,draft-dflash --spec-draft-n-max 7 \
+  --spec-draft-n-min 0 --spec-draft-p-min 0 \
+  --spec-ngram-map-k4v-size-n 12 --spec-ngram-map-k4v-size-m 7 \
+  --spec-ngram-map-k4v-min-hits 2
+```
+
+K4V remains opt-in; fewer draft forwards do not guarantee faster generation. The [K7 support report](docs/development/dflash2-k4v.md) covers mixed-mode arena sizing, reset/rollback behavior, the two qualified scheduling optimizations and measured limits. The unfinished K15 extension is preserved separately.
 
 **Gemma target-only and separate shared-KV MTP:** use different fitted budgets for each mode. These 8 Ki sizes are measured examples on the reference card, not portable defaults.
 

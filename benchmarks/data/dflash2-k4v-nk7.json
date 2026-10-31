@@ -1,0 +1,539 @@
+{
+  "status": "complete for K4V M<=7 and DFlash F<=7",
+  "updated": "2026-10-31",
+  "branch": "feature/adaptive-kv-dflash2-k4v",
+  "optimization_commits": {
+    "flexible_target_prefetch": "985c8cac410f18fa6e32b15e6fe42871ee08238b",
+    "post_input_recurrent_restore": "8793469b2bc4894561c6e3967414fa33b0c31d9c"
+  },
+  "deferred_extension": {
+    "name": "K15/TG16",
+    "qualified": false,
+    "branch": "wip/dflash2-k4v-k15-20261031",
+    "commit": "e59e929e98c419fbfe4b6576651b3d03e1053927"
+  },
+  "admission": {
+    "target": "pinned Qwen3.8-27B, qwen35 metadata",
+    "draft": "matching pinned DFlash2 Q4_K_M sidecar",
+    "device": "one CUDA GPU",
+    "requests": "one serial text request",
+    "max_dflash_proposals": 7,
+    "max_k4v_proposals": 7,
+    "target_verification_rows": "1-8, independent of neural prediction width",
+    "tested_full_server_cache_pairs": [
+      "q8_0/q4_0",
+      "q8_0/q8_0",
+      "q5_1/q5_1"
+    ],
+    "no_draft_cache_overrides": true
+  },
+  "restore_qualification": {
+    "accepted_gpu_gates": 21,
+    "strict_zero_error_gates": 5,
+    "cpu_asan_ubsan_suites": 9,
+    "file_parser_asan": true,
+    "ordinary_requests": 18,
+    "matched_mode_context_pairs": 9,
+    "final_source_nsight_captures": 2,
+    "source": {
+      "commit": "985c8cac410f18fa6e32b15e6fe42871ee08238b",
+      "diff_sha256": "7017488c591f3f7f7888b4cf61a5cf58ce0d54af6feec66ddd34b63874b869b2"
+    },
+    "native_prefill_sanitizer_attempts": "Incomplete, not passes; strict streamed MTP compares all full-history records against the complete ordinary-native oracle."
+  },
+  "performance": {
+    "flexible_prefetch": {
+      "csv": "dflash2-k4v-flexible-prefetch.csv",
+      "source": "One fresh uninstrumented baseline/fixed pair per natural OpenSWE prompt/mode. Same-mode IDs/counters/layout exact; no repeated-trial/statistical gain claim. Cross-mode response lengths and work can differ; use each mode versus its own baseline. No K15 runtime.",
+      "rows": [
+        {
+          "case": 2,
+          "mode": "mtp",
+          "prompt_tokens": 8186,
+          "outputs": 215,
+          "draft_tokens": 180,
+          "accepted_draft_tokens": 154,
+          "baseline_prefill_tps": 1676.0210041097937,
+          "fixed_prefill_tps": 1677.8633539557895,
+          "prefill_change_percent": 0.10992403087302094,
+          "baseline_decode_tps": 102.98239915304194,
+          "fixed_decode_tps": 102.71286761847257,
+          "decode_change_percent": -0.2617258257586519,
+          "baseline_request_wall_seconds": 6.967446420007036,
+          "fixed_request_wall_seconds": 6.965870547996019,
+          "output_ids_and_source_counts_exact": true,
+          "physical_decode_layout_exact": true
+        },
+        {
+          "case": 2,
+          "mode": "dflash",
+          "prompt_tokens": 8186,
+          "outputs": 208,
+          "draft_tokens": 336,
+          "accepted_draft_tokens": 159,
+          "baseline_prefill_tps": 1616.5830694816725,
+          "fixed_prefill_tps": 1617.179639498931,
+          "prefill_change_percent": 0.036903146427835765,
+          "baseline_decode_tps": 97.10750974124367,
+          "fixed_decode_tps": 97.93689079232362,
+          "decode_change_percent": 0.8540853877212484,
+          "baseline_request_wall_seconds": 7.20225359100732,
+          "fixed_request_wall_seconds": 7.17953948500508,
+          "output_ids_and_source_counts_exact": true,
+          "physical_decode_layout_exact": true
+        },
+        {
+          "case": 2,
+          "mode": "mixed",
+          "prompt_tokens": 8186,
+          "outputs": 208,
+          "draft_tokens": 336,
+          "accepted_draft_tokens": 159,
+          "baseline_prefill_tps": 1616.8768283931947,
+          "fixed_prefill_tps": 1617.0876342576835,
+          "prefill_change_percent": 0.013037843129848348,
+          "baseline_decode_tps": 98.03554759483757,
+          "fixed_decode_tps": 98.04645981231917,
+          "decode_change_percent": 0.011130878287834989,
+          "baseline_request_wall_seconds": 7.177965758004575,
+          "fixed_request_wall_seconds": 7.178278174993466,
+          "output_ids_and_source_counts_exact": true,
+          "physical_decode_layout_exact": true
+        },
+        {
+          "case": 10,
+          "mode": "mtp",
+          "prompt_tokens": 64865,
+          "outputs": 2048,
+          "draft_tokens": 1944,
+          "accepted_draft_tokens": 1398,
+          "baseline_prefill_tps": 1211.1780012655704,
+          "fixed_prefill_tps": 1211.9591906537833,
+          "prefill_change_percent": 0.06449831382311366,
+          "baseline_decode_tps": 75.84377590109409,
+          "fixed_decode_tps": 75.9081875082787,
+          "decode_change_percent": 0.08492668833972594,
+          "baseline_request_wall_seconds": 80.56052824899962,
+          "fixed_request_wall_seconds": 80.50380832099472,
+          "output_ids_and_source_counts_exact": true,
+          "physical_decode_layout_exact": true
+        },
+        {
+          "case": 10,
+          "mode": "dflash",
+          "prompt_tokens": 64865,
+          "outputs": 2048,
+          "draft_tokens": 4118,
+          "accepted_draft_tokens": 1456,
+          "baseline_prefill_tps": 1231.3529239909844,
+          "fixed_prefill_tps": 1231.3530408668164,
+          "prefill_change_percent": 9.491659924698581e-06,
+          "baseline_decode_tps": 64.47678272004583,
+          "fixed_decode_tps": 64.71941839912046,
+          "decode_change_percent": 0.3763148048625986,
+          "baseline_request_wall_seconds": 84.44192555699556,
+          "fixed_request_wall_seconds": 84.32949755800655,
+          "output_ids_and_source_counts_exact": true,
+          "physical_decode_layout_exact": true
+        },
+        {
+          "case": 10,
+          "mode": "mixed",
+          "prompt_tokens": 64865,
+          "outputs": 2048,
+          "draft_tokens": 4125,
+          "accepted_draft_tokens": 1455,
+          "baseline_prefill_tps": 1231.0818785127065,
+          "fixed_prefill_tps": 1231.9529996208514,
+          "prefill_change_percent": 0.07076061498016983,
+          "baseline_decode_tps": 64.51323566086184,
+          "fixed_decode_tps": 64.58657508561664,
+          "decode_change_percent": 0.11368120666019887,
+          "baseline_request_wall_seconds": 84.43714196699148,
+          "fixed_request_wall_seconds": 84.3620135569945,
+          "output_ids_and_source_counts_exact": true,
+          "physical_decode_layout_exact": true
+        },
+        {
+          "case": 14,
+          "mode": "mtp",
+          "prompt_tokens": 126794,
+          "outputs": 738,
+          "draft_tokens": 558,
+          "accepted_draft_tokens": 551,
+          "baseline_prefill_tps": 894.9763524835503,
+          "fixed_prefill_tps": 895.2991196801975,
+          "prefill_change_percent": 0.03606432681171334,
+          "baseline_decode_tps": 48.861966998481634,
+          "fixed_decode_tps": 48.85939499207775,
+          "decode_change_percent": -0.005263820844458866,
+          "baseline_request_wall_seconds": 156.78511241999513,
+          "fixed_request_wall_seconds": 156.73851930700766,
+          "output_ids_and_source_counts_exact": true,
+          "physical_decode_layout_exact": true
+        },
+        {
+          "case": 14,
+          "mode": "dflash",
+          "prompt_tokens": 126794,
+          "outputs": 738,
+          "draft_tokens": 700,
+          "accepted_draft_tokens": 637,
+          "baseline_prefill_tps": 944.4391584136431,
+          "fixed_prefill_tps": 944.348278064026,
+          "prefill_change_percent": -0.009622679111465082,
+          "baseline_decode_tps": 81.22617356391133,
+          "fixed_decode_tps": 83.98756072431692,
+          "decode_change_percent": 3.399627286680995,
+          "baseline_request_wall_seconds": 143.356286462993,
+          "fixed_request_wall_seconds": 143.0706330559915,
+          "output_ids_and_source_counts_exact": true,
+          "physical_decode_layout_exact": true
+        },
+        {
+          "case": 14,
+          "mode": "mixed",
+          "prompt_tokens": 126794,
+          "outputs": 738,
+          "draft_tokens": 702,
+          "accepted_draft_tokens": 636,
+          "baseline_prefill_tps": 944.2291753246824,
+          "fixed_prefill_tps": 944.3318623799677,
+          "prefill_change_percent": 0.010875225842288394,
+          "baseline_decode_tps": 83.34310569884778,
+          "fixed_decode_tps": 86.1749332436584,
+          "decode_change_percent": 3.3977945998834747,
+          "baseline_request_wall_seconds": 143.15558220399544,
+          "fixed_request_wall_seconds": 142.85116935700353,
+          "output_ids_and_source_counts_exact": true,
+          "physical_decode_layout_exact": true
+        }
+      ]
+    },
+    "restore_overlap": {
+      "csv": "dflash2-k4v-restore-overlap.csv",
+      "rows": [
+        {
+          "prompt_tokens": 8186,
+          "mode": "MTP3",
+          "outputs": 215,
+          "baseline_decode_tps": 102.98334076032505,
+          "candidate_decode_tps": 104.0682415336352,
+          "decode_change_percent": 1.0534721104407119,
+          "baseline_prefill_tps": 1677.5174545014888,
+          "candidate_prefill_tps": 1678.8784943991582,
+          "prefill_change_percent": 0.08113417204793638,
+          "output_ids_exact": true,
+          "proposal_counters_exact": true,
+          "physical_layout_exact": true
+        },
+        {
+          "prompt_tokens": 8186,
+          "mode": "DFlash2 (7 proposals)",
+          "outputs": 208,
+          "baseline_decode_tps": 97.63464737619856,
+          "candidate_decode_tps": 102.8626118258213,
+          "decode_change_percent": 5.354620096571594,
+          "baseline_prefill_tps": 1613.5616446186655,
+          "candidate_prefill_tps": 1620.3070032455623,
+          "prefill_change_percent": 0.41804158207361386,
+          "output_ids_exact": true,
+          "proposal_counters_exact": true,
+          "physical_layout_exact": true
+        },
+        {
+          "prompt_tokens": 8186,
+          "mode": "DFlash2 (7) + K4V N12/M7/H1",
+          "outputs": 208,
+          "baseline_decode_tps": 98.03545473532557,
+          "candidate_decode_tps": 103.06183261862193,
+          "decode_change_percent": 5.127102125314242,
+          "baseline_prefill_tps": 1617.231077546882,
+          "candidate_prefill_tps": 1616.3602670765817,
+          "prefill_change_percent": -0.05384576653209017,
+          "output_ids_exact": true,
+          "proposal_counters_exact": true,
+          "physical_layout_exact": true
+        },
+        {
+          "prompt_tokens": 64865,
+          "mode": "MTP3",
+          "outputs": 2048,
+          "baseline_decode_tps": 76.48537913040197,
+          "candidate_decode_tps": 78.37916331870473,
+          "decode_change_percent": 2.476008107476324,
+          "baseline_prefill_tps": 1212.4203658135698,
+          "candidate_prefill_tps": 1213.4380126981382,
+          "prefill_change_percent": 0.08393515263045437,
+          "output_ids_exact": true,
+          "proposal_counters_exact": true,
+          "physical_layout_exact": true
+        },
+        {
+          "prompt_tokens": 64865,
+          "mode": "DFlash2 (7 proposals)",
+          "outputs": 2048,
+          "baseline_decode_tps": 64.80177273844188,
+          "candidate_decode_tps": 68.17265739582912,
+          "decode_change_percent": 5.201840188837226,
+          "baseline_prefill_tps": 1233.2960774549103,
+          "candidate_prefill_tps": 1232.9342249311485,
+          "prefill_change_percent": -0.02934028011413181,
+          "output_ids_exact": true,
+          "proposal_counters_exact": true,
+          "physical_layout_exact": true
+        },
+        {
+          "prompt_tokens": 64865,
+          "mode": "DFlash2 (7) + K4V N12/M7/H1",
+          "outputs": 2048,
+          "baseline_decode_tps": 64.70516964592301,
+          "candidate_decode_tps": 68.19311530702909,
+          "decode_change_percent": 5.390520850486413,
+          "baseline_prefill_tps": 1233.4774352165728,
+          "candidate_prefill_tps": 1233.2196384614103,
+          "prefill_change_percent": -0.020899997665313474,
+          "output_ids_exact": true,
+          "proposal_counters_exact": true,
+          "physical_layout_exact": true
+        },
+        {
+          "prompt_tokens": 126794,
+          "mode": "MTP3",
+          "outputs": 738,
+          "baseline_decode_tps": 48.96340745985748,
+          "candidate_decode_tps": 48.91772682177547,
+          "decode_change_percent": -0.09329546380011378,
+          "baseline_prefill_tps": 897.0192295923952,
+          "candidate_prefill_tps": 896.9398726720868,
+          "prefill_change_percent": -0.008846735687528806,
+          "output_ids_exact": true,
+          "proposal_counters_exact": true,
+          "physical_layout_exact": true
+        },
+        {
+          "prompt_tokens": 126794,
+          "mode": "DFlash2 (7 proposals)",
+          "outputs": 738,
+          "baseline_decode_tps": 83.94822274094706,
+          "candidate_decode_tps": 84.66669010222267,
+          "decode_change_percent": 0.855845827126922,
+          "baseline_prefill_tps": 946.0794057993966,
+          "candidate_prefill_tps": 946.4532401198986,
+          "prefill_change_percent": 0.03951405328246338,
+          "output_ids_exact": true,
+          "proposal_counters_exact": true,
+          "physical_layout_exact": true
+        },
+        {
+          "prompt_tokens": 126794,
+          "mode": "DFlash2 (7) + K4V N12/M7/H1",
+          "outputs": 738,
+          "baseline_decode_tps": 86.31728194960407,
+          "candidate_decode_tps": 86.57589628372084,
+          "decode_change_percent": 0.29960898707139805,
+          "baseline_prefill_tps": 946.1111309802192,
+          "candidate_prefill_tps": 946.3951639963973,
+          "prefill_change_percent": 0.03002110501373334,
+          "output_ids_exact": true,
+          "proposal_counters_exact": true,
+          "physical_layout_exact": true
+        }
+      ],
+      "scope": "One fresh equal-1GiB baseline/candidate pair per mode/context. Baseline already includes flexible prefetch. All within-mode IDs/counters/layout exact; not statistical repetition."
+    },
+    "maximum_arena_swe_sample": {
+      "csv": "dflash2-k4v-swe-maxarena.csv",
+      "points": 18,
+      "actual_rejected_upper_neighbors": 18,
+      "runtime_cohort": "Flexible-prefetch only, before restore-overlap; no latest-runtime timing claim. Each mode/context sized independently, not equal-response/equal-memory latency."
+    },
+    "k4v_vs_dflash": {
+      "dflash_vs_h2": {
+        "exact_pairs": 20,
+        "different_output_pairs": 0,
+        "median_decode_change_percent": -0.04236683092635474,
+        "scope": "One measurement per arm; differing outputs excluded individually; no task-quality equivalence claim."
+      },
+      "dflash_vs_h1": {
+        "exact_pairs": 18,
+        "different_output_pairs": 2,
+        "median_decode_change_percent": 0.1755039511988188,
+        "scope": "One measurement per arm; differing outputs excluded individually; no task-quality equivalence claim."
+      },
+      "h2_vs_h1": {
+        "exact_pairs": 18,
+        "different_output_pairs": 2,
+        "median_decode_change_percent": 0.1810390482676616,
+        "scope": "One measurement per arm; differing outputs excluded individually; no task-quality equivalence claim."
+      }
+    },
+    "scope": "Keep experiment cohorts separate. Do not add/multiply different-cohort percentages. K4V itself has no demonstrated broad natural-workload gain; remains opt-in. Old full sweep was stopped and is not completed by these samples."
+  },
+  "raw_evidence": {
+    "benchmarks/results/dflash-prefetch-fix-20261029/qualification-audit.json": "34d12ceaa713365818a6df90d2e48fad592185072efd8bbcef12c429d6307fc9",
+    "benchmarks/results/dflash-prefetch-fix-20261029/prefetch-commit-mapping.json": "9968fe6f1b806b76325a1733f3acc3eb9f3a4b27ba2cddfa4b75854f68b4748a",
+    "benchmarks/results/dflash-prefetch-fix-20261029/benchmark-v1/analysis.json": "e5d515fe30eb9c4f96514be6ed6e40ea3cf4a959a64a4a2f46df1e26781f9c64",
+    "benchmarks/results/dflash-prefetch-fix-20261029/swe-maxarena-six-point-v1/run-v1/measurement-audit.json": "6c7a58d78c22b6af2de20592ec1a7eeff11f64c70dac2378bc7b0533a0e7ee2d",
+    "benchmarks/results/recurrent-restore-overlap-20261030/completion-audit.json": "d73a24ad0dd6c586d29cc8dc17fc0c5ef2721cd57ab4ae9ee1e55753ac71b9a1",
+    "benchmarks/results/recurrent-restore-overlap-20261030/restore-commit-mapping.json": "61525117428597e79a873f4474758a60e06965951691b78e6753d47125d43486",
+    "benchmarks/results/recurrent-restore-overlap-20261030/final-comparison.json": "c89895d3be5a7a6a5f8186a0ec90d186cd10f6bff83d495c9ee59f9742d71cb5",
+    "benchmarks/results/recurrent-restore-overlap-20261030/final-profile-df7-overlap.json": "38899056c5abe68da0e8b679a48115567c0f0591a0c8d9ab3351b19673494388",
+    "benchmarks/results/recurrent-restore-overlap-20261030/final-profile-mtp3-overlap.json": "88e3d05536e147286fb35adf095c57e3eb708761ab11e99e013dd23fd303666c",
+    "benchmarks/results/dflash2-k4v-20261028-nk7-open-swe-chzefv53/comparison-resume-20261029/audit.json": "aa899ea8a59474f6ade69eff4d2b5b5d8a53f0b4aec696b9d57feb8301ab1969",
+    "benchmarks/results/dflash2-k4v-20261028-nk7-open-swe-chzefv53/comparison-resume-20261029/comparison-analysis.json": "117e2b3cd460669317f94853186ce464e0303d53f863f6fb75c03db3dfa87b74",
+    "benchmarks/results/dflash2-k4v-20261028-nk7-confirm-profile-Y6612u/audit.json": "d96dbbd0c84533be0258a14576eb6270d6b4217287cb2c8177e5e47f009adfeb"
+  },
+  "published_files": {
+    "benchmarks/data/dflash2-k4v-flexible-prefetch.csv": "a47b9b464609e16ff6fce7f1740a1b67f08090d0e082ce3d8206e9dacb1f5ab6",
+    "benchmarks/data/dflash2-k4v-restore-overlap.csv": "84881e864f39858cd5c0127ec1d3d5b3c695e0b167fe37ec6b975dad08ba2ea9",
+    "benchmarks/data/dflash2-k4v-swe-maxarena.csv": "a10841d3e55a73ade61d83c80ce4cd8e3fb72ebaf8a1f46712ed8ab7514c6c57"
+  },
+  "historical_whole_call_cpu_diagnostics": {
+    "source": {
+      "commit": "ff466c57d1e02b511a69416251284e9b94d09942",
+      "diff_sha256": "ac86c3c9313da059229c9b1d186462e95bb0ceb8d38b5bf545805bcf0e5a82d1"
+    },
+    "rows": [
+      {
+        "case": "08-prose-8192-dflash-k4v-current",
+        "context": 8192,
+        "lookup_calls": 89,
+        "whole_call_p50_us": 0.586,
+        "whole_call_p95_us": 0.872,
+        "whole_call_p99_us": 161.787,
+        "steady_p50_us": 0.584,
+        "first_use_us": 161.787,
+        "map_reserved_bytes_peak": 1048576,
+        "history_capacity_bytes_peak": 32696,
+        "first_statistics": {
+          "count": 0,
+          "total_host_us": 0.0,
+          "p50_us": null,
+          "p95_us": null,
+          "p99_us": null
+        },
+        "outcomes": {
+          "no_match": 89
+        }
+      },
+      {
+        "case": "09-prose-65536-dflash-k4v-current",
+        "context": 65536,
+        "lookup_calls": 69,
+        "whole_call_p50_us": 0.638,
+        "whole_call_p95_us": 0.973,
+        "whole_call_p99_us": 879.224,
+        "steady_p50_us": 0.635,
+        "first_use_us": 879.224,
+        "map_reserved_bytes_peak": 1048664,
+        "history_capacity_bytes_peak": 262052,
+        "first_statistics": {
+          "count": 0,
+          "total_host_us": 0.0,
+          "p50_us": null,
+          "p95_us": null,
+          "p99_us": null
+        },
+        "outcomes": {
+          "no_match": 68,
+          "minimum_hits": 1
+        }
+      },
+      {
+        "case": "10-copy-code-8192-dflash-k4v-current",
+        "context": 8192,
+        "lookup_calls": 32,
+        "whole_call_p50_us": 1.618,
+        "whole_call_p95_us": 10.92,
+        "whole_call_p99_us": 33.531,
+        "steady_p50_us": 1.01,
+        "first_use_us": 33.531,
+        "map_reserved_bytes_peak": 1049984,
+        "history_capacity_bytes_peak": 32676,
+        "first_statistics": {
+          "count": 15,
+          "total_host_us": 148.305,
+          "p50_us": 10.048,
+          "p95_us": 10.92,
+          "p99_us": 10.92
+        },
+        "outcomes": {
+          "minimum_hits": 15,
+          "supplied": 17
+        }
+      },
+      {
+        "case": "11-copy-code-65536-dflash-k4v-current",
+        "context": 65536,
+        "lookup_calls": 32,
+        "whole_call_p50_us": 14.805,
+        "whole_call_p95_us": 97.487,
+        "whole_call_p99_us": 639.936,
+        "steady_p50_us": 1.059,
+        "first_use_us": 639.936,
+        "map_reserved_bytes_peak": 1049984,
+        "history_capacity_bytes_peak": 262052,
+        "first_statistics": {
+          "count": 15,
+          "total_host_us": 1225.754,
+          "p50_us": 78.288,
+          "p95_us": 97.487,
+          "p99_us": 97.487
+        },
+        "outcomes": {
+          "minimum_hits": 15,
+          "supplied": 17
+        }
+      },
+      {
+        "case": "12-ambiguous-code-65536-dflash-k4v-current",
+        "context": 65536,
+        "lookup_calls": 32,
+        "whole_call_p50_us": 1.063,
+        "whole_call_p95_us": 84.538,
+        "whole_call_p99_us": 269.912,
+        "steady_p50_us": 1.036,
+        "first_use_us": 269.912,
+        "map_reserved_bytes_peak": 1051392,
+        "history_capacity_bytes_peak": 262052,
+        "first_statistics": {
+          "count": 2,
+          "total_host_us": 159.12,
+          "p50_us": 74.582,
+          "p95_us": 84.538,
+          "p99_us": 84.538
+        },
+        "outcomes": {
+          "minimum_hits": 30,
+          "supplied": 1,
+          "ambiguous": 1
+        }
+      }
+    ],
+    "scope": "Accepted original K7 diagnostic cohort before the two scheduling optimizations. Whole-call host wall times with first-use/statistics included; nearest-rank percentiles on small samples, not tail guarantees. Not GPU execution or ordinary throughput. Map reservation excludes allocator overhead and other host memory.",
+    "evidence": {
+      "benchmarks/results/dflash2-k4v-20261028-nk7-confirm-profile-Y6612u/screen/08-prose-8192-dflash-k4v-current/result.json": "802203c8aa5297da1ec8b66416acda19bf59bca034bcea260b3bd59d58f5505c",
+      "benchmarks/results/dflash2-k4v-20261028-nk7-confirm-profile-Y6612u/screen/09-prose-65536-dflash-k4v-current/result.json": "e38d882ebceea1c92557c0d7dfda42b98cbd97e4c8e7909e320f501efe5d0de4",
+      "benchmarks/results/dflash2-k4v-20261028-nk7-confirm-profile-Y6612u/screen/10-copy-code-8192-dflash-k4v-current/result.json": "9b3b1ab0ce2eb0f804f0a84fa2f29fd1640006908cadf2b617e46521eb0f6bbb",
+      "benchmarks/results/dflash2-k4v-20261028-nk7-confirm-profile-Y6612u/screen/11-copy-code-65536-dflash-k4v-current/result.json": "b042d6637987940c77b268aeb1932436d407d37fd1eed3b23f522937e6ea8841",
+      "benchmarks/results/dflash2-k4v-20261028-nk7-confirm-profile-Y6612u/screen/12-ambiguous-code-65536-dflash-k4v-current/result.json": "8ee6bc4fefdba961484936814ba16e50871c1c858af0b32554d265cf17362aa1"
+    }
+  },
+  "integration_checks": {
+    "host_tests": {
+      "dflash_artifacts": 65,
+      "finder": 33,
+      "fixed_span": 43,
+      "gemma_artifacts": 10,
+      "total": 151
+    },
+    "diagnostic_helper": {
+      "normal_assertions": 24,
+      "asan_ubsan_assertions": 24,
+      "failures": 0
+    },
+    "upstream_readme": "byte-for-byte preserved",
+    "qualification_source": "Both production changes map exactly to the measured source; Git-only integration and NK7 tools/docs require no new GPU matrix."
+  }
+}

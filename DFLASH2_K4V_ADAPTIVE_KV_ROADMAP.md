@@ -1,6 +1,10 @@
 # DFlash2 + K4V adaptive KV streaming roadmap
 
-Status: implementation in progress on `feature/adaptive-kv-dflash2-k4v`. NK0-NK6 are complete; NK7 is pending. Mixed streaming admission is open only for the bounded serial DFlash2/K4V configuration below. Whole-path numerical, lifecycle, three-format server and strict memory qualification pass. Performance promotion and faithful mixed-mode sizing remain pending. No mixed-mode speedup is claimed. Updated: 2026-10-28.
+Status: complete for the bounded K7 implementation on `feature/adaptive-kv-dflash2-k4v`. NK0-NK7 are complete within the seven-token scope. The two qualified scheduling fixes are `985c8cac4` (flexible target prefetch) and `8793469b2` (post-input recurrent restore overlap). Mixed mode remains opt-in; its correctness and useful scheduling gains do not establish a general K4V-over-DFlash speedup. Updated: 2026-10-31. See the [support/reproduction report](docs/development/dflash2-k4v.md) and [NK7 evidence index](benchmarks/data/dflash2-k4v-nk7.json).
+
+The user selected completion of K7 and separate preservation of the unfinished K15/TG16 extension on 2026-10-31. Its exact tracked snapshot is on `wip/dflash2-k4v-k15-20261031` at `e59e929e9`; full native-equivalence qualification remains unfinished there. No K15 source is admitted by this completion. The old 96-point sweep remains intentionally stopped; no completed full-sweep claim is added.
+
+The stage descriptions below retain historical plans and evidence. This current status and the NK7 ledger govern completion; earlier references to later stages remaining mandatory describe their state at that time.
 
 Source baseline: `bcf1a81d641c478db5690d2f2c048c691801fcb2`. The mechanism investigation originally used `1b7c0f46e`; the relevant common, n-gram, context, rollback and server source files were verified unchanged between that revision and this baseline. Recheck those files before implementation if HEAD changes.
 
@@ -25,7 +29,7 @@ Related plans: [DFlash2 integration](DFLASH2_ADAPTIVE_KV_ROADMAP.md), [memory co
 - Preserve native/non-streaming behavior and the existing target-only, embedded-MTP, Gemma-assistant and DFlash-only streaming paths.
 - Use existing common ownership and backend operations. No new attention kernel, quantization format, arithmetic order, GPU map, independent arena or generic speculative execution framework is expected.
 
-The 1-7 K4V limit and reset policy below are proposed first-release design choices, not already implemented support. Any material expansion needs explicit review rather than a silent change to this scope.
+The 1-7 K4V limit and reset policy below are the qualified release contract. Any expansion needs separate resource, rollback, numerical and lifecycle qualification.
 
 ## Current mechanisms and gaps
 
@@ -351,7 +355,13 @@ Exit: exact matched-path correctness, clean strict memory qualification, bounded
 
 ### NK7 - Performance, arena finder and documentation
 
-Status: pending. Depends on NK6 for promotion; small diagnostic measurements may follow focused correctness earlier.
+Status: complete for bounded K7. The user selected this release scope and preservation of K15 separately. The [NK7 report](docs/development/dflash2-k4v.md) records portable launch/finder examples, reset/memory limits, measured lookup costs, natural-workload tradeoffs and the two qualified scheduling fixes; [data and raw receipt hashes](benchmarks/data/dflash2-k4v-nk7.json) preserve separate runtime cohorts.
+
+The finder supports `dflash-k4v` with explicit N/M/min-hits, rejects unsupported M>7, inherits target KV types and proves both K4V and actual DFlash forwards with a separate resource probe. Preflight and selected full validation remain distinct. An earlier prefetch-only natural Open-SWE cohort completed 18 independently maximum-fit points near 8/64/128/160/200/256 Ki, each with actual selected full work and a rejected +1 MiB neighbor. Those timings are not relabelled as a restore-overlap sweep.
+
+Flexible target prefetch passed complete state/ring/memory controls and fresh matched ordinary comparisons; the selected long pure/mixed DFlash sample improved 3.40%. Restore overlap passed 21 GPU gates, five strict zero-error summaries, nine CPU ASAN/UBSAN suites plus file-parser ASAN, 18 current-source ordinary requests and two final-source Nsight captures. The selected 8K/64K DFlash/mixed samples improved about 5.1-5.4% over the prefetch-fixed baseline; longest-prompt changes were small. All own-mode outputs/counters/layouts match. Do not multiply percentages from separate cohorts. Native-instrumented prefill timeouts remain incomplete, not passes; strict streamed MTP compares the complete ordinary-native oracle. Existing capacity limits remain recorded.
+
+The 20-task natural dataset comparison found no broad K4V gain (H2 median -0.042%; H1 +0.176% on 18 same-output pairs, with two different responses excluded). Lookup is not the dominant target/transport cost. This is a supported opt-in implementation and two useful shared scheduling fixes, not a promise that every copied proposal is faster. The historical full sweep was stopped at the user's direction and remains incomplete. Remaining bullets are the historical NK7 measurement contract, addressed by the scoped evidence and limits above.
 
 Benchmark repetitive code/copying, ordinary prose and ambiguous repetition. Preserve the corpus, prompt token IDs, tokenizer/model identities, greedy sampling settings, output counts, batch sizes, UVM setting and declared budgets. Start with a small representative screen before expanding expensive runs.
 
@@ -384,11 +394,11 @@ Exit: a reproducible mixed-mode invocation, faithful sizing, workload-specific p
 | Exact model tests | `tests/kv-stream-dflash-test.h`, `tests/test-kv-stream-context.cpp`, existing owner/cache/phase tests and server tests |
 | Reproduction and docs | `benchmarks/find-max-arena.py`, `benchmarks/run_dflash_controls.py`, their host tests, `docs/speculative.md` and concise supported-scope README updates after qualification |
 
-These are investigation boundaries, not authorization to modify every listed file. Prefer extending existing helpers and tests. No public C API change or new device code is expected; revisit the design if either becomes necessary. Rebuild affected normal and sanitizer consumers consistently if private layouts change, without starting a clean compile-time benchmark or an unnecessary heavy shader rebuild.
+These are investigation boundaries, not authorization to modify every listed file. Prefer extending existing helpers and tests. The original plan expected no public inference API or new device code. The qualified restore optimization adds one optional generic ggml scheduler pre-compute callback so submission occurs after input uploads; it defaults to null. The llama C parameter layout, backend operation interfaces and device kernels are unchanged. Rebuild affected normal and sanitizer consumers consistently if private layouts change, without starting a clean compile-time benchmark or an unnecessary heavy shader rebuild.
 
-## Proposed user-facing invocation after qualification
+## Qualified user-facing invocation
 
-The following fragment documents intended options, not a currently working streaming configuration. Combine it with the ordinary admitted target, arena, cache, context and device settings only after qualification:
+The following qualified K7 option fragment is used with the admitted target/sidecar, fitted shared arena and inherited target cache types. The [support report](docs/development/dflash2-k4v.md#run-it) gives complete portable commands:
 
 ```sh
 --spec-type ngram-map-k4v,draft-dflash \
@@ -419,7 +429,7 @@ CLI order must not change the existing K4V-before-DFlash priority. This fragment
 - [x] NK4: source switching, feature continuity and every accepted prefix are correct; scoped public admission, ordinary paired outputs and fresh strict memory checks pass.
 - [x] NK5: declared cache/window/state/restart/cancellation, stock sampling/termination and failure/reconstruction cases pass; no new probabilistic-rejection or performance claim.
 - [x] NK6: matched native/streamed exactness across three server KV formats, strict safety, long ring/state lifecycle and supported-mode regressions pass.
-- [ ] NK7: meaningful performance scope, faithful finder, examples and limitations are documented.
+- [x] NK7: bounded K7 support, faithful mixed-route finder, matched scheduling gains, natural-workload limits and portable examples are documented; unfinished K15 is preserved separately.
 
 ## Primary references
 

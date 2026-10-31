@@ -19,6 +19,100 @@ class ArenaFinderTests(unittest.TestCase):
     def args(self, *extra):
         return FINDER.arguments(["--model", "model.gguf", "--context-size", "8192", *extra])
 
+    def test_mixed_finder_has_explicit_bounded_ngram_options(self):
+        args=self.args("--spec-mode","dflash-k4v","--model-draft","draft.gguf","--draft-length","3",
+            "--ngram-n","12","--ngram-m","7","--ngram-min-hits","2")
+        command=FINDER.server_command(args,1024)
+        for flag,value in (("--spec-type","ngram-map-k4v,draft-dflash"),("--spec-draft-n-max","3"),
+                ("--spec-ngram-map-k4v-size-n","12"),("--spec-ngram-map-k4v-size-m","7"),("--spec-ngram-map-k4v-min-hits","2")):
+            self.assertEqual(command[command.index(flag)+1],value)
+        self.assertNotIn("--spec-draft-type-k",command)
+        self.assertGreaterEqual(int(command[command.index("-lv")+1]),4)
+        for options in (("--ngram-m","8"),("--ngram-n","0"),("--ngram-min-hits","0"),("--mmproj","vision.gguf")):
+            with self.subTest(options=options),self.assertRaises(SystemExit):
+                self.args("--spec-mode","dflash-k4v","--model-draft","draft.gguf",*options)
+        with self.assertRaises(SystemExit): self.args("--ngram-m","7")
+
+    def test_common_copy_probe_and_headless_logging_keep_fit_protocols_comparable(self):
+        for mode in ("mtp","dflash","dflash-k4v"):
+            options=["--model-draft","draft.gguf"] if mode!="mtp" else []
+            args=self.args("--spec-mode",mode,"--copy-probe","--no-webui","--verbosity","4",*options)
+            command=FINDER.server_command(args,1024)
+            self.assertTrue(args.copy_probe)
+            self.assertIn("--no-webui",command)
+            self.assertEqual(command[command.index("-lv")+1],"4")
+        with self.assertRaises(SystemExit): self.args("--copy-probe","--mmproj","v.gguf","--image","x.png")
+
+    def test_finder_does_not_inherit_an_instrumented_process(self):
+        with patch.dict(os.environ,{"LD_PRELOAD":"profile.so","DFLASH_CONTROL_TRACE":"old","DFLASH_CONTROL_CAPTURE":"1"},clear=True):
+            env=FINDER.environment()
+        for name in ("LD_PRELOAD","DFLASH_CONTROL_TRACE","DFLASH_CONTROL_CAPTURE"):
+            self.assertTrue(name not in env,name+" leaked into finder environment")
+
+    def test_nonmixed_copy_probe_checks_real_outputs_and_aggregate_counters(self):
+        for wrong_total in (False,True):
+            with self.subTest(wrong_total=wrong_total),tempfile.TemporaryDirectory() as temporary:
+                args=self.args("--spec-mode","mtp","--copy-probe","--probe-mode","preflight","--decode-tokens","8")
+                args.output=Path(temporary);args.prefill_text=args.output/"corpus.txt";args.prefill_text.write_text("corpus")
+                def launch(*unused,**kwargs):
+                    kwargs["stdout"].write("statistics draft-mtp: #calls(b,g,a) = 2 4 2, #gen drafts = 2, #acc drafts = 1, #gen tokens = %d, #acc tokens = 6, #prediction forwards = 0" % (13 if wrong_total else 14))
+                    return object()
+                def request(url,body,**kwargs):
+                    if url.endswith("/tokenize"): return {"tokens":[33] if body["content"]=="B" else list(range(4096))}
+                    count=body["n_predict"]
+                    return {"tokens":[33]*count,"timings":{"prompt_n":len(body["prompt"]),"predicted_n":count,"draft_n":7,"draft_n_accepted":3}}
+                with patch.object(FINDER.subprocess,"Popen",side_effect=launch),patch.object(FINDER.SWEEP,"wait_ready"), \
+                        patch.object(FINDER.SWEEP,"stop_process"),patch.object(FINDER,"request_json",side_effect=request):
+                    if wrong_total:
+                        with self.assertRaises(RuntimeError): FINDER.probe(args,1024)
+                    else:
+                        report=FINDER.probe(args,1024)
+                        self.assertEqual(report["timings"]["predicted_n"],8)
+                        self.assertIsNone(report["mixed_proof"]["ngram"])
+                        self.assertEqual(report["mixed_proof"]["decode_tokens"],32)
+
+    def test_mixed_probe_executes_both_routes_without_replacing_workload_timing(self):
+        args=self.args("--spec-mode","dflash-k4v","--model-draft","draft.gguf","--probe-mode","preflight","--decode-tokens","8")
+        calls=[]
+        stats="\n".join("statistics %s: #calls(b,g,a) = 2 4 2, #gen drafts = 2, #acc drafts = 1, #gen tokens = 7, #acc tokens = 3, #prediction forwards = %d" % (kind,count)
+            for kind,count in (("ngram-map-k4v",0),("draft-dflash",2)))
+        with tempfile.TemporaryDirectory() as temporary:
+            args.output=Path(temporary);args.prefill_text=args.output/"corpus.txt";args.prefill_text.write_text("corpus")
+            def launch(*unused,**kwargs):
+                kwargs["stdout"].write(stats)
+                return object()
+            def request(url,body,**kwargs):
+                if url.endswith("/tokenize"): return {"tokens":[33] if body["content"]=="B" else list(range(4096))}
+                calls.append(body)
+                count=body["n_predict"]
+                return {"tokens":[33]*count,"timings":{"prompt_n":len(body["prompt"]),"predicted_n":count,"draft_n":7,"draft_n_accepted":3}}
+            with patch.object(FINDER.subprocess,"Popen",side_effect=launch),patch.object(FINDER.SWEEP,"wait_ready"), \
+                    patch.object(FINDER.SWEEP,"stop_process"),patch.object(FINDER,"request_json",side_effect=request):
+                report=FINDER.probe(args,1024)
+            self.assertEqual(len(calls),2)
+            self.assertEqual(calls[0]["n_predict"],8)
+            self.assertEqual(calls[1]["logit_bias"],[[33,1000]])
+            self.assertEqual(report["timings"]["predicted_n"],8)
+            self.assertEqual(report["mixed_proof"]["source_stats"]["draft-dflash"]["prediction_forwards"],2)
+
+    def test_mixed_probe_refuses_missing_route_or_wrong_forced_outputs(self):
+        stats="statistics draft-dflash: #calls(b,g,a) = 2 4 2, #gen drafts = 2, #acc drafts = 1, #gen tokens = 7, #acc tokens = 3, #prediction forwards = 2"
+        for wrong_output in (False,True):
+            with self.subTest(wrong_output=wrong_output),tempfile.TemporaryDirectory() as temporary:
+                args=self.args("--spec-mode","dflash-k4v","--model-draft","draft.gguf","--probe-mode","preflight","--decode-tokens","8")
+                args.output=Path(temporary);args.prefill_text=args.output/"corpus.txt";args.prefill_text.write_text("corpus")
+                def launch(*unused,**kwargs):
+                    kwargs["stdout"].write(stats)
+                    return object()
+                def request(url,body,**kwargs):
+                    if url.endswith("/tokenize"): return {"tokens":[33] if body["content"]=="B" else list(range(4096))}
+                    count=body["n_predict"]
+                    token=34 if wrong_output and "logit_bias" in body else 33
+                    return {"tokens":[token]*count,"timings":{"prompt_n":len(body["prompt"]),"predicted_n":count,"draft_n":7,"draft_n_accepted":3}}
+                with patch.object(FINDER.subprocess,"Popen",side_effect=launch),patch.object(FINDER.SWEEP,"wait_ready"), \
+                        patch.object(FINDER.SWEEP,"stop_process"),patch.object(FINDER,"request_json",side_effect=request),self.assertRaises(RuntimeError):
+                    FINDER.probe(args,1024)
+
     def test_preflight_caps_history_but_keeps_native_capacity_and_requested_decode(self):
         args = self.args("--context-size", "262144", "--probe-mode", "preflight",
                          "--spec-mode", "mtp", "--model-draft", "assistant.gguf", "--mmproj", "vision.gguf")
