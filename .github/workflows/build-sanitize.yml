@@ -73,22 +73,9 @@ jobs:
       #     evict-old-files: 1d
       #     save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
-      # with UNDEFINED sanitizer, we have to build in Debug to avoid GCC 13 false-positive warnings
-      - name: Build (undefined)
-        id: cmake_build_undefined
-        if: ${{ matrix.sanitizer == 'UNDEFINED' }}
-        run: |
-          cmake -B build \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DLLAMA_FATAL_WARNINGS=ON \
-            -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
-            -DGGML_SANITIZE_${{ matrix.sanitizer }}=ON
-
-          cmake --build build --config Debug -j $(nproc)
-
       - name: Build
         id: cmake_build
-        if: ${{ matrix.sanitizer == 'ADDRESS' }}
+        if: ${{ matrix.sanitizer == 'ADDRESS' || matrix.sanitizer == 'UNDEFINED' }}
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
