@@ -2655,6 +2655,132 @@ static bool htp_kparams_solve_concat(
     return false;
 }
 
+// Merge dense leading dims into one element, then transpose axes dense in dst and src.
+static bool htp_cpy_as_transpose(const ggml_tensor *           src0,
+                                 const ggml_tensor *           dst,
+                                 uint32_t                      type_size,
+                                 htp_gather_transpose_params * tp) {
+    int64_t ne[GGML_MAX_DIMS];
+    size_t  nbs[GGML_MAX_DIMS];
+    size_t  nbd[GGML_MAX_DIMS];
+
+    for (int d = 0; d < GGML_MAX_DIMS; d++) {
+        if (src0->ne[d] <= 0 || src0->ne[d] > UINT32_MAX || src0->nb[d] > UINT32_MAX || dst->nb[d] > UINT32_MAX) {
+            return false;
+        }
+    }
+
+    if (ggml_is_contiguous(dst)) {
+        // dst takes the elements in src's logical order, so view it with src's shape
+        size_t stride = type_size;
+        for (int d = 0; d < GGML_MAX_DIMS; d++) {
+            ne[d]  = src0->ne[d];
+            nbs[d] = src0->nb[d];
+            nbd[d] = stride;
+            stride *= (size_t) src0->ne[d];
+        }
+    } else if (ggml_are_same_shape(src0, dst)) {
+        for (int d = 0; d < GGML_MAX_DIMS; d++) {
+            ne[d]  = src0->ne[d];
+            nbs[d] = src0->nb[d];
+            nbd[d] = dst->nb[d];
+        }
+    } else {
+        return false;
+    }
+
+    int64_t cne[GGML_MAX_DIMS];
+    size_t  cs[GGML_MAX_DIMS];
+    size_t  cd[GGML_MAX_DIMS];
+    int     n = 0;
+    for (int d = 0; d < GGML_MAX_DIMS; d++) {
+        if (ne[d] == 1) {
+            continue;
+        }
+        if (n > 0 && nbs[d] == cs[n - 1] * (size_t) cne[n - 1] && nbd[d] == cd[n - 1] * (size_t) cne[n - 1]) {
+            cne[n - 1] *= ne[d];
+            continue;
+        }
+        cne[n] = ne[d];
+        cs[n]  = nbs[d];
+        cd[n]  = nbd[d];
+        n++;
+    }
+
+    size_t elem = type_size;
+    for (int i = 0; i < n; i++) {
+        if (cs[i] == type_size && cd[i] == type_size) {
+            elem = type_size * (size_t) cne[i];
+            for (int k = i; k + 1 < n; k++) {
+                cne[k] = cne[k + 1];
+                cs[k]  = cs[k + 1];
+                cd[k]  = cd[k + 1];
+            }
+            n--;
+            break;
+        }
+    }
+
+    // Plain DMA rows handle elements larger than one vector.
+    if (elem % 2 != 0 || elem > 128) {
+        return false;
+    }
+
+    int a = -1;
+    int b = -1;
+    for (int i = 0; i < n; i++) {
+        if (a < 0 && cd[i] == elem) {
+            a = i;
+        }
+        if (b < 0 && cs[i] == elem) {
+            b = i;
+        }
+    }
+    if (a < 0 || b < 0 || a == b) {
+        return false;
+    }
+    if (cs[a] > 0x00FFFFFF || cd[b] > 0x00FFFFFF) {
+        return false;
+    }
+
+    int64_t one[2] = { 1, 1 };
+    size_t  os[2]  = { 0, 0 };
+    size_t  od[2]  = { 0, 0 };
+    int     m      = 0;
+    for (int i = 0; i < n; i++) {
+        if (i == a || i == b) {
+            continue;
+        }
+        one[m] = cne[i];
+        os[m]  = cs[i];
+        od[m]  = cd[i];
+        m++;
+    }
+
+    const size_t lim = UINT32_MAX;
+    if ((size_t) cne[a] > lim || (size_t) cne[b] > lim || (size_t) one[0] > lim || (size_t) one[1] > lim ||
+        cs[a] > lim || cd[b] > lim || os[0] > lim || os[1] > lim || od[0] > lim || od[1] > lim) {
+        return false;
+    }
+
+    memset(tp, 0, sizeof(*tp));
+    tp->elem_size = (uint32_t) elem;
+    tp->ne_a      = (uint32_t) cne[a];
+    tp->ne_b      = (uint32_t) cne[b];
+    tp->ne2       = (uint32_t) one[0];
+    tp->ne3       = (uint32_t) one[1];
+    tp->nb_a_src  = (uint32_t) cs[a];
+    tp->nb_b_dst  = (uint32_t) cd[b];
+    tp->nb2_src   = (uint32_t) os[0];
+    tp->nb3_src   = (uint32_t) os[1];
+    tp->nb2_dst   = (uint32_t) od[0];
+    tp->nb3_dst   = (uint32_t) od[1];
+    // Keep F16 gather offsets below 32 KB.
+    tp->tile_a    = MIN(tp->ne_a, 128u);
+    tp->tile_b    = MIN(tp->ne_b, 256u / tp->elem_size);
+    return true;
+}
+
 static bool htp_kparams_solve_cpy(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op,
@@ -2748,6 +2874,20 @@ static bool htp_kparams_solve_cpy(
                 kparams->kernel_type = HTP_COPY_KERNEL_GATHER_ROWS;
                 kparams->n_threads   = (uint8_t) n_threads;
                 kparams->vtcm_size   = kparams->u.gather.slice * n_threads;
+                return true;
+            }
+        }
+
+        struct htp_gather_transpose_params tp;
+        if (nelem_src <= UINT32_MAX && htp_cpy_as_transpose(src0, dst, src_type_size, &tp)) {
+            struct htp_gather_rows_params      gp = {};
+            struct htp_gather_rows_vtcm_layout layout;
+            htp_gather_transpose_layout_build(&tp, &gp, &layout);
+            if (layout.total_per_thread * n_threads <= vtcm_size) {
+                kparams->kernel_type = HTP_COPY_KERNEL_TRANSPOSE;
+                kparams->n_threads   = (uint8_t) n_threads;
+                kparams->vtcm_size   = layout.total_per_thread * n_threads;
+                kparams->u.transpose = tp;
                 return true;
             }
         }
