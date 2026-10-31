@@ -3999,13 +3999,26 @@ static bool htp_kparams_conv2d_tiled(
     const int32_t s0 = ggml_get_op_params_i32(dst, 0);
     const int32_t d0 = ggml_get_op_params_i32(dst, is3d ? 6 : 4);
 
+    // range checks in 64 bits before narrowing, conv_3d folds KD into KH and OD into OH
+    const int64_t kh_w  = is3d ? src0->ne[2] * src0->ne[1] : src0->ne[1];
+    const int64_t cin_w = is3d ? ggml_get_op_params_i32(dst, 9) : src0->ne[2];
+    const int64_t oh_w  = is3d ? dst->ne[2] * dst->ne[1] : dst->ne[1];
+    const int64_t n_w   = is3d ? ggml_get_op_params_i32(dst, 10) : dst->ne[3];
+    const int64_t k_w   = src0->ne[0] * kh_w * cin_w;
+    const int64_t ct_w  = n_w * oh_w * ((dst->ne[0] + 31) / 32);
+
+    // each stage buffer keeps KH input DMAs in flight on a 256-entry queue (main.c), which holds at most 255
+    if (kh_w < 1 || kh_w > 255 || k_w < 1 || k_w > (1 << 24) || ct_w < 1 || ct_w > UINT32_MAX) {
+        return false;
+    }
+
     const uint32_t KW   = src0->ne[0];
-    const uint32_t KH   = is3d ? src0->ne[2] * src0->ne[1] : src0->ne[1];
-    const uint32_t Cin  = is3d ? ggml_get_op_params_i32(dst, 9) : src0->ne[2];
+    const uint32_t KH   = kh_w;
+    const uint32_t Cin  = cin_w;
     const uint32_t Cout = is3d ? ggml_get_op_params_i32(dst, 11) : src0->ne[3];
     const uint32_t OW   = dst->ne[0];
-    const uint32_t OH   = is3d ? dst->ne[2] * dst->ne[1] : dst->ne[1];
-    const uint32_t N    = is3d ? ggml_get_op_params_i32(dst, 10) : dst->ne[3];
+    const uint32_t OH   = oh_w;
+    const uint32_t N    = n_w;
     const size_t   es   = ggml_type_size(src0->type);
 
     if (s0 != 1 || dst->nb[0] != sizeof(float)) {
@@ -4042,10 +4055,6 @@ static bool htp_kparams_conv2d_tiled(
     const uint32_t wk    = (std::min)(k_pad, 512u);
     const uint32_t nth   = htp_session_n_threads(sess);
     const size_t   tile  = 2048;
-
-    if (KH > 255) {
-        return false;
-    }
 
     uint32_t rt_block = n_rt;
     uint32_t ct       = (std::min)(n_ct, 64u);
@@ -4387,9 +4396,12 @@ static bool htp_kparams_solve_conv3d(
         return false;
     }
 
-    const uint32_t total_rows = (uint32_t) (dst->ne[1] * dst->ne[2] * dst->ne[3]);
-    kparams->total_rows = total_rows;
-    kparams->n_threads  = total_rows == 0 ? 1 : (std::min)((uint32_t) htp_session_n_threads(sess), total_rows);
+    const int64_t total_rows = dst->ne[1] * dst->ne[2] * dst->ne[3];
+    if (total_rows > UINT32_MAX) {
+        return false;
+    }
+    kparams->total_rows = (uint32_t) total_rows;
+    kparams->n_threads  = total_rows == 0 ? 1 : (std::min)((uint32_t) htp_session_n_threads(sess), (uint32_t) total_rows);
 
     return htp_kparams_conv2d_tiled(sess, op, kparams);
 }
