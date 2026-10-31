@@ -42,7 +42,8 @@ def _apply_over_grouped_rows(func: Callable[[np.ndarray], np.ndarray], arr: np.n
 # round away from zero
 # ref: https://stackoverflow.com/a/59143326/22827863
 def np_roundf(n: np.ndarray) -> np.ndarray:
-    a = abs(n)
+    # np.abs, not abs(): numpy < 2.3 on Python 3.14 can write abs() in place into n when the caller passes a temporary (numpy/numpy#28681), dropping the sign
+    a = np.abs(n)
     floored = np.floor(a)
     b = floored + np.floor(2 * (a - floored))
     return np.sign(n) * b
@@ -815,6 +816,23 @@ class NVFP4(__Quant, qtype=GGMLQuantizationType.NVFP4):
         vals = np.take_along_axis(kvalues, vals, axis=-1)
 
         return (d * vals.astype(np.float32)).reshape(n_super, 64)
+
+
+class F8_E4M3(__Quant, qtype=GGMLQuantizationType.F8_E4M3):
+    @classmethod
+    def dequantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
+        bits = blocks.astype(np.uint8)
+        sign = np.where(bits & 0x80, np.float32(-1.0), np.float32(1.0))
+        magnitude = bits & 0x7F
+        exponent = magnitude >> 3
+        mantissa = magnitude & 0x07
+        values = np.where(
+            exponent == 0,
+            np.ldexp(mantissa.astype(np.float32), -9),
+            np.ldexp(1.0 + mantissa.astype(np.float32) / 8.0, exponent.astype(np.int32) - 7),
+        )
+        values = np.where(magnitude == 0x7F, np.nan, sign * values)
+        return values.astype(np.float32, copy=False)
 
 
 class IQ2_XXS(__Quant, qtype=GGMLQuantizationType.IQ2_XXS):

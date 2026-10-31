@@ -296,19 +296,20 @@ class GraniteSwitchModel(GraniteMoeModel):
     def set_vocab(self):
         super().set_vocab()
         if self._has_decision_adapter():
-            self.gguf_writer.add_chat_template([{"name": "systemone", "template": self._systemone_template()}])
+            systemone_template = self._systemone_template()
+            logger.info("System One Template: %s", systemone_template)
+            self.gguf_writer.add_chat_template([{"name": "systemone", "template": systemone_template}])
 
     def _systemone_template(self) -> str:
         # prompt of the decision aLoRA: a state turn, then a question turn that opens with the control token
         # (it replaces the first token of "### DECISION"), the answer is the label token that comes next
         description = jinja_str_or_json("o.description")
         option = (
-            "{% if type != 'noul' %}{{ letters[loop.index0] }}: {% if o.description %}" + description + "{% endif %}"
+            "{% if type != 'noul' %}{{ o.label }}: {% if o.description %}" + description + "{% endif %}"
             "{% elif o.key == 'true' %}A: {% if o.description %}" + description + "{% else %}The statement is true.{% endif %}"
             "{% else %}B: {% if o.description %}" + description + "{% else %}The statement is false.{% endif %}{% endif %}"
         )
         return (
-            "{% set letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz' %}"
             "<|start_of_role|>user<|end_of_role|>State:\n" + jinja_str_or_json("state") + "<|end_of_text|>\n"
             "<|start_of_role|>user<|end_of_role|><|decision|> DECISION\nQuestion:\n" + jinja_str_or_json("instructions")
             + "{% if type == 'score' %} Rate along the ordered levels below (lowest first).{% endif %}"

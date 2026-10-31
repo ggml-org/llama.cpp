@@ -215,6 +215,7 @@ def parse_log(file_path, pmu_index=None, limit=None, device_filter=None, op_filt
                 'unwrapped_cycles_start': unwrapped_cycles_start,
                 'pmu_val':      pmu_val,
                 'evt_val':      evt_val,
+                'mhz':          float(op_match.group('mhz')) if op_match.group('mhz') else None,
                 'abs_usec':     abs_usec,
                 'trace_events': [],
                 'device':       device
@@ -630,6 +631,165 @@ def generate_report(ops, top_n, width_overrides, sort_col, pmu_name=None):
         logger.info("| " + " | ".join(row_vals) + " |")
 
 
+def has_perf_print(file_path):
+    if file_path == "-":
+        return True
+    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+        return any("common_perf_print" in line for line in f)
+
+
+def pct_delta(a, b):
+    return (b - a) * 100.0 / a if a else None
+
+
+def fmt_pct(p):
+    return f"{p:+.2f}%" if p is not None else "n/a"
+
+
+def print_table(title, cols, rows, width_overrides):
+    # cols: list of (cli name, header); rows: list of dicts keyed by cli name
+    logger.info(f"\n# {title}\n")
+    if not rows:
+        logger.info("None.")
+        return
+
+    headers, keys, widths = [], [], []
+    for key, header in cols:
+        natural_width = max([len(str(row[key])) for row in rows] + [len(header)])
+        target_width  = width_overrides.get(key, natural_width)
+        if target_width == 0:
+            continue
+        headers.append(header)
+        keys.append(key)
+        widths.append(target_width)
+
+    logger.info("| " + " | ".join(f"{h:<{widths[i]}}" for i, h in enumerate(headers)) + " |")
+    logger.info("| " + " | ".join("-" * widths[i] for i in range(len(headers))) + " |")
+    for row in rows:
+        row_vals = []
+        for i, key in enumerate(keys):
+            val = str(row[key])
+            if len(val) > widths[i]:
+                val = val[:widths[i] - 3] + "..."
+            row_vals.append(f"{val:<{widths[i]}}")
+        logger.info("| " + " | ".join(row_vals) + " |")
+
+
+def generate_compare_report(ops_a, ops_b, file_a, file_b, top_n, width_overrides, min_delta):
+    def summarize(ops):
+        batches = [o for o in ops if o['name'] == "OPBATCH"]
+        others  = [o for o in ops if o['name'] != "OPBATCH"]
+        mhz     = [o['mhz'] for o in others if o['mhz'] is not None]
+        return {
+            'n_ops':     len(others),
+            'tot_usec':  sum(o['usec'] for o in others),
+            'n_batch':   len(batches),
+            'batch_usec': sum(o['usec'] for o in batches),
+            'avg_mhz':   statistics.mean(mhz) if mhz else 0.0,
+        }
+
+    sa, sb = summarize(ops_a), summarize(ops_b)
+
+    logger.info("\n# Compare Summary (OPBATCH excluded from op totals)\n")
+    logger.info(f"  A (baseline) : {file_a}")
+    logger.info(f"  B (new)      : {file_b}")
+    logger.info("  Deltas are B - A: negative means B is faster\n")
+    logger.info(f"  Ops          : A {sa['n_ops']}  B {sb['n_ops']}")
+    logger.info(f"  Tot op usec  : A {sa['tot_usec']}  B {sb['tot_usec']}  delta {sb['tot_usec'] - sa['tot_usec']:+d} ({fmt_pct(pct_delta(sa['tot_usec'], sb['tot_usec']))})")
+    logger.info(f"  OPBATCH      : A {sa['n_batch']} / {sa['batch_usec']} usec  B {sb['n_batch']} / {sb['batch_usec']} usec")
+    logger.info(f"  Avg op mhz   : A {sa['avg_mhz']:.1f}  B {sb['avg_mhz']:.1f}")
+
+    if sa['n_batch'] != sb['n_batch']:
+        logger.warning(f"  WARNING: OPBATCH counts differ (A {sa['n_batch']}, B {sb['n_batch']}), one log may be incomplete")
+    for label, path in (("A", file_a), ("B", file_b)):
+        if not has_perf_print(path):
+            logger.warning(f"  WARNING: log {label} has no common_perf_print line, run may be incomplete")
+
+    # Per-op-name rollup
+    by_name = defaultdict(lambda: [0, 0, 0, 0])
+    for idx, ops in ((0, ops_a), (1, ops_b)):
+        for op in ops:
+            if op['name'] == "OPBATCH":
+                continue
+            by_name[op['name']][idx] += 1
+            by_name[op['name']][idx + 2] += op['usec']
+
+    rows = []
+    for name, (cnt_a, cnt_b, tot_a, tot_b) in by_name.items():
+        p = pct_delta(tot_a, tot_b)
+        if min_delta and p is not None and abs(p) < min_delta:
+            continue
+        rows.append({'op': name, 'count-a': cnt_a, 'count-b': cnt_b, 'tot-usec-a': tot_a, 'tot-usec-b': tot_b,
+                     'delta-usec': f"{tot_b - tot_a:+d}", 'delta-pct': fmt_pct(p), '_sort': abs(tot_b - tot_a)})
+    rows.sort(key=lambda r: r['_sort'], reverse=True)
+
+    print_table("Per-Op Rollup (delta = B - A, sorted by abs delta usec)", [
+        ("op", "Op"), ("count-a", "Count A"), ("count-b", "Count B"), ("tot-usec-a", "Tot usec A"),
+        ("tot-usec-b", "Tot usec B"), ("delta-usec", "Delta usec"), ("delta-pct", "Delta %")], rows, width_overrides)
+
+    # Per-group compare keyed on (op, dims, dtypes)
+    def group(ops):
+        grouped = defaultdict(list)
+        for op in ops:
+            if op['name'] != "OPBATCH":
+                grouped[(op['name'], op['dims'], op['types'])].append(op['usec'])
+        return grouped
+
+    ga, gb = group(ops_a), group(ops_b)
+
+    rows = []
+    for key in ga.keys() & gb.keys():
+        ua, ub = ga[key], gb[key]
+        tot_a, tot_b = sum(ua), sum(ub)
+        avg_a, avg_b = tot_a / len(ua), tot_b / len(ub)
+        p = pct_delta(avg_a, avg_b)
+        if min_delta and p is not None and abs(p) < min_delta:
+            continue
+        rows.append({'op': key[0], 'dims': key[1], 'dtypes': key[2], 'count-a': len(ua), 'count-b': len(ub),
+                     'avg-usec-a': f"{avg_a:.2f}", 'avg-usec-b': f"{avg_b:.2f}", 'delta-pct': fmt_pct(p),
+                     'tot-usec-a': tot_a, 'tot-usec-b': tot_b, 'delta-usec': f"{tot_b - tot_a:+d}", '_sort': abs(tot_b - tot_a)})
+    rows.sort(key=lambda r: r['_sort'], reverse=True)
+
+    print_table(f"Per-Group Compare (delta = B - A, top {top_n} sorted by abs delta usec)", [
+        ("op", "Op"), ("dims", "Dims"), ("dtypes", "DTypes"), ("count-a", "Count A"), ("count-b", "Count B"),
+        ("avg-usec-a", "Avg usec A"), ("avg-usec-b", "Avg usec B"), ("delta-pct", "Delta %"),
+        ("tot-usec-a", "Tot usec A"), ("tot-usec-b", "Tot usec B"), ("delta-usec", "Delta usec")], rows[:top_n], width_overrides)
+
+    # Groups present in only one log
+    for label, g, other in (("A", ga, gb), ("B", gb, ga)):
+        rows = [{'op': k[0], 'dims': k[1], 'dtypes': k[2], 'count': len(v), 'tot-usec': sum(v)} for k, v in g.items() if k not in other]
+        rows.sort(key=lambda r: r['tot-usec'], reverse=True)
+        print_table(f"Groups only in {label} (Top {top_n} sorted by tot usec)", [
+            ("op", "Op"), ("dims", "Dims"), ("dtypes", "DTypes"), ("count", "Count"), ("tot-usec", "Tot usec")], rows[:top_n], width_overrides)
+
+
+def filter_ops(ops, args):
+    if args.filter:
+        try:
+            filter_re = re.compile(args.filter)
+        except re.error as e:
+            logger.error(f"Invalid regex filter: {e}")
+            sys.exit(1)
+        ops = [op for op in ops if filter_re.search(op['op_text'])]
+
+    if args.head is not None or args.tail is not None:
+        ops_by_dev = defaultdict(list)
+        for op in ops:
+            ops_by_dev[op['device']].append(op)
+
+        filtered_ops = []
+        for dev in sorted(ops_by_dev.keys()):
+            dev_ops = ops_by_dev[dev]
+            if args.head is not None:
+                dev_ops = dev_ops[:args.head]
+            elif args.tail is not None:
+                dev_ops = dev_ops[-args.tail:]
+            filtered_ops.extend(dev_ops)
+        ops = filtered_ops
+
+    return ops
+
+
 def main():
     parser = argparse.ArgumentParser(description="Post-process Op profile info.")
     parser.add_argument("logfile")
@@ -642,6 +802,8 @@ def main():
                         help="Output ASCII art event summary or thread idle bubble analysis (default: summary)")
     parser.add_argument("--filter", type=str, help="Regex filter matching against the original profile-op line")
     parser.add_argument("--device", type=str, help="Device to filter by (e.g. HTP0, HTP0:0) or 'split' to generate separate reports per device")
+    parser.add_argument("--compare", type=str, metavar="LOGFILE", help="Compare against another log (logfile is baseline A, this is B)")
+    parser.add_argument("--min-delta", type=float, default=0, metavar="PCT", help="In compare mode hide rows with abs(Delta %%) below PCT")
 
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--head", type=int, help="Limit to first N ops")
@@ -653,6 +815,10 @@ def main():
 
     if "pmu" in args.sort and args.pmu_index is None:
         logger.error(f"Cannot sort by '{args.sort}' without --pmu-index.")
+        sys.exit(1)
+
+    if args.compare and (args.timeline or args.device == "split"):
+        logger.error("--compare cannot be used with --timeline or --device split.")
         sys.exit(1)
 
     overrides = {}
@@ -680,6 +846,13 @@ def main():
 
     if args.device and args.device != "split":
         ops = [op for op in ops if device_matches(op['device'], args.device)]
+
+    if args.compare:
+        ops_b = parse_log(args.compare, pmu_index=args.pmu_index, limit=limit, device_filter=device_filter, op_filter_re=op_filter_re)
+        if device_filter:
+            ops_b = [op for op in ops_b if device_matches(op['device'], device_filter)]
+        generate_compare_report(filter_ops(ops, args), filter_ops(ops_b, args), args.logfile, args.compare, args.top, overrides, args.min_delta)
+        return
 
     if args.device == "split":
         unique_devices = sorted(list(set(op['device'] for op in ops)))
@@ -712,28 +885,7 @@ def main():
             else:
                 generate_report(dev_ops, args.top, overrides, args.sort, pmu_name=final_pmu_name)
     else:
-        if args.filter:
-            try:
-                filter_re = re.compile(args.filter)
-            except re.error as e:
-                logger.error(f"Invalid regex filter: {e}")
-                sys.exit(1)
-            ops = [op for op in ops if filter_re.search(op['op_text'])]
-
-        if args.head is not None or args.tail is not None:
-            ops_by_dev = defaultdict(list)
-            for op in ops:
-                ops_by_dev[op['device']].append(op)
-
-            filtered_ops = []
-            for dev in sorted(ops_by_dev.keys()):
-                dev_ops = ops_by_dev[dev]
-                if args.head is not None:
-                    dev_ops = dev_ops[:args.head]
-                elif args.tail is not None:
-                    dev_ops = dev_ops[-args.tail:]
-                filtered_ops.extend(dev_ops)
-            ops = filtered_ops
+        ops = filter_ops(ops, args)
 
         if args.timeline:
             for op in ops:
