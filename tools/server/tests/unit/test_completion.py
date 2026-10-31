@@ -1,10 +1,14 @@
 import pytest
+import re
 import requests
 import time
 import random
 
 from openai import OpenAI
 from utils import *
+from test_sleep import fetch_metrics, get_metric
+from test_slot_save import tokenize
+from test_vision_api import get_img_url
 
 server = ServerPreset.tinyllama2()
 
@@ -772,3 +776,218 @@ def test_completion_checkpoint_kept_after_restore():
     for suffix in suffixes[1:]:
         assert len(suffix) > server.n_ubatch + 4
         assert cache_n(prefix + suffix) == len(prefix) - 1
+
+
+# --slot-attach: a prompt starts from the KV cells of another slot that holds the same prefix (on by default)
+SLOT_ATTACH_TEXT = "Once upon a time, a little fox lived in a quiet forest near a wide river. "
+
+
+def slot_attach_prompts(n_repeat=48, n_prefix=None):
+    prefix = tokenize(server, SLOT_ATTACH_TEXT * n_repeat)[:n_prefix]
+    return (prefix + tokenize(server, " The fox found a red apple under the old tree."),
+            prefix + tokenize(server, " The river was cold, and the fish swam fast."))
+
+
+# cache_n, and the ids and logprobs of the top tokens for the first generated token
+def slot_attach_completion(prompt, id_slot, n_predict=1, **extra):
+    res = server.make_request("POST", "/completion", data={
+        "prompt": prompt,
+        "id_slot": id_slot,
+        "n_predict": n_predict,
+        "n_probs": 5,
+        **extra,
+    })
+    assert res.status_code == 200
+    top = res.body["completion_probabilities"][0]["top_logprobs"]
+    return res.body["timings"]["cache_n"], [p["id"] for p in top], [p["logprob"] for p in top]
+
+
+# the same for a chat request, with the top tokens as text
+def slot_attach_chat(system, user, id_slot, **extra):
+    res = server.make_request("POST", "/chat/completions", data={
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        "id_slot": id_slot,
+        "logprobs": True,
+        "top_logprobs": 5,
+        **extra,
+    })
+    assert res.status_code == 200
+    top = res.body["choices"][0]["logprobs"]["content"][0]["top_logprobs"]
+    return res.body["timings"]["cache_n"], [p["token"] for p in top], [p["logprob"] for p in top]
+
+
+def slot_attach_assert_same(actual, expected):
+    assert actual[:2] == expected[:2]
+    assert actual[2] == pytest.approx(expected[2], abs=1e-5)
+
+
+def slot_attach_log():
+    with open(server.log_path) as f:
+        return f.read()
+
+
+# the slot that attaches and the donor compute what they compute from their own cells
+@pytest.mark.parametrize("cache_idle_slots", [True, False])
+def test_slot_attach(cache_idle_slots: bool):
+    global server
+    server.n_ctx = 8192
+    server.kv_unified = True
+    server.no_cache_idle_slots = not cache_idle_slots
+    server.server_metrics = True
+    server.temperature = 0.0
+    server.start()
+
+    a, b = slot_attach_prompts()
+    n_shared = next(i for i, (x, y) in enumerate(zip(a, b)) if x != y)
+
+    slot_attach_completion(a, 0)
+    expected_a = slot_attach_completion(a, 0)
+
+    # b attaches the cells of a and writes its own cells after them; with cache_idle_slots, slot 0 is then cleared
+    actual_b = slot_attach_completion(b, 1, n_predict=16)
+    assert actual_b[0] == n_shared
+    metrics = fetch_metrics(server)
+    assert get_metric(metrics, "slot_attach_total") == 1
+    assert get_metric(metrics, "slot_attach_tokens_total") == n_shared
+
+    if not cache_idle_slots:
+        slot_attach_assert_same(slot_attach_completion(a, 0), expected_a)
+
+    # the same prefix, reused by slot 1 itself
+    slot_attach_completion(a, 1)
+    slot_attach_assert_same(slot_attach_completion(b, 1), actual_b)
+
+    # the n_cache_reuse of a request is ignored: nothing of b is reused once its first tokens are dropped
+    assert slot_attach_completion(b[100:], 1, n_cache_reuse=256)[0] == 0
+
+
+# b does not attach
+@pytest.mark.parametrize("kv_unified,slot_attach,spec_type,n_cache_reuse,n_repeat,level", [
+    (False, None,  None,        None, 48, "I"),  # attach needs a unified KV cache
+    (True,  None,  "ngram-mod", None, 48, "I"),  # and turns itself off with speculative decoding
+    (True,  True,  None,        256,  48, "W"),  # or with --cache-reuse, which stays on; a warning when --slot-attach is explicit
+    (True,  False, None,        None, 48, None), # --no-slot-attach turns it off without a message
+    (True,  None,  None,        None, 7,  None), # a prefix shorter than 256 tokens is not attached
+])
+def test_slot_attach_off(kv_unified, slot_attach, spec_type, n_cache_reuse, n_repeat, level, tmp_path):
+    global server
+    server.n_ctx = 8192
+    server.n_batch = 128 # room for the draft tokens of ngram-mod
+    server.kv_unified = kv_unified
+    server.slot_attach = slot_attach
+    server.spec_type = spec_type
+    server.n_cache_reuse = n_cache_reuse
+    server.server_metrics = True
+    server.log_path = str(tmp_path / "server.log")
+    server.start()
+
+    a, b = slot_attach_prompts(n_repeat)
+    slot_attach_completion(a, 0)
+    assert slot_attach_completion(b, 1)[0] == 0
+    assert get_metric(fetch_metrics(server), "slot_attach_total") == 0
+
+    # the startup line when attach turns itself off
+    m = re.search(r" ([IW]) srv +init: .*slot.attach .*, disabling", slot_attach_log())
+    assert (m.group(1) if m else None) == level
+
+    if n_cache_reuse:
+        # b without its first tokens: slot 1 reuses the rest of b by shifting its cells
+        assert slot_attach_completion(b[100:], 1)[0] > 0
+
+
+# tinyopenjev has hybrid memory: a prompt attaches at a checkpoint of another slot
+def slot_attach_hybrid_server(tmp_path):
+    server = ServerPreset.tinyopenjev()
+    server.jinja = True
+    server.n_batch = 1024
+    server.n_ubatch = 1024
+    server.n_slots = 3
+    server.kv_unified = True
+    server.no_cache_idle_slots = True
+    server.slot_save_path = str(tmp_path) # for /slots erase
+    server.server_metrics = True
+    server.temperature = 0.0
+    server.n_predict = 1
+    return server
+
+
+# hybrid memory attaches at a checkpoint, and adds one where the system prompts of two sessions diverge
+def test_slot_attach_hybrid(tmp_path):
+    global server
+    server = slot_attach_hybrid_server(tmp_path)
+    server.no_mmproj = True
+    server.n_cache_reuse = 256 # turned off at load for hybrid memory, so attach stays on
+    server.start()
+
+    # the sessions differ at the end of the system prompt, about 1,200 tokens in
+    def chat(session, id_slot):
+        return slot_attach_chat(f"{SLOT_ATTACH_TEXT * 64}Session: {session}", "Tell me a story.", id_slot)
+
+    chat("first", 0)
+
+    # the only checkpoint of slot 0 in the shared prefix is about n_ubatch tokens before the end of its prompt, under 256 tokens: no attach
+    # slot 1 adds a checkpoint where the sessions diverge
+    assert chat("second", 1)[0] == 0
+    assert get_metric(fetch_metrics(server), "slot_attach_checkpoints_total") == 1
+
+    # attaches up to where the sessions diverge
+    actual = chat("third", 2)
+    assert actual[0] >= 1024
+
+    # the same, from the checkpoint that slot 1 holds itself
+    assert server.make_request("POST", "/slots/2?action=erase").status_code == 200
+    slot_attach_assert_same(chat("third", 1), actual)
+
+
+# with a projector loaded, a prompt without media attaches, also from a slot whose prompt has an image, and a prompt with media does not
+def test_slot_attach_media(tmp_path):
+    global server
+    server = slot_attach_hybrid_server(tmp_path)
+    server.start()
+
+    system = SLOT_ATTACH_TEXT * 32
+    with_image = [
+        {"type": "image_url", "image_url": {"url": get_img_url("IMG_BASE64_URI_0")}},
+        {"type": "text", "text": "What is this?"},
+    ]
+
+    # slot 0 has a checkpoint where its user message starts, before the image
+    slot_attach_chat(system, with_image, 0)
+
+    # slot 1 attaches the system prompt from slot 0, without the cells of the image
+    actual = slot_attach_chat(system, "Tell me a story.", 1)
+    assert actual[0] >= 256
+
+    # a prompt with media does not attach
+    assert slot_attach_chat(system, with_image, 2)[0] == 0
+    assert get_metric(fetch_metrics(server), "slot_attach_total") == 1
+
+    # the same, from the checkpoint that slot 0 holds itself
+    for id_slot in [1, 2]:
+        assert server.make_request("POST", f"/slots/{id_slot}?action=erase").status_code == 200
+    slot_attach_assert_same(slot_attach_chat(system, "Tell me a story.", 0), actual)
+
+
+# when the KV cache is full, the idle slots whose cells no other slot holds are purged first
+def test_slot_attach_purge_order(tmp_path):
+    global server
+    server.n_ctx = 1024
+    server.n_slots = 4
+    server.kv_unified = True
+    server.cache_ram = 0 # no idle slots are cleared when a task starts
+    server.temperature = 0.0
+    server.log_path = str(tmp_path / "server.log")
+    server.start()
+
+    # slots 0 and 1 share a prefix of 400 tokens, slot 2 holds 300 tokens of its own
+    a, b = slot_attach_prompts(16, 400)
+    slot_attach_completion(a, 0)
+    assert slot_attach_completion(b, 1)[0] >= 400
+    slot_attach_completion(tokenize(server, "The quick brown fox jumps over the lazy dog. " * 40)[:300], 2)
+
+    # 500 more tokens do not fit
+    slot_attach_completion(tokenize(server, "A cat sat on the warm mat by the door. " * 40)[:500], 3)
+    assert re.findall(r"purging slot (\d+)", slot_attach_log()) == ["2"]

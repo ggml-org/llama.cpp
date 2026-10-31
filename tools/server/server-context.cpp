@@ -45,6 +45,15 @@
 
 constexpr int HTTP_POLLING_SECONDS = 1;
 
+// recurrent/hybrid memory: min position of a checkpoint where a prompt diverges from a known prompt, as each checkpoint holds a copy of the whole recurrent state in host memory
+constexpr int32_t SLOT_ATTACH_CKPT_MIN_TOKENS = 1024;
+
+// recurrent/hybrid memory: no such checkpoint closer than this many tokens after the part of the prompt that the slot reuses
+constexpr int32_t SLOT_ATTACH_CKPT_GAP = 512;
+
+// min number of tokens to attach (recurrent/hybrid memory: the position of the checkpoint), a shorter attach saves little
+constexpr int32_t SLOT_ATTACH_MIN_TOKENS = 256;
+
 static common_speculative_output_limits server_output_limits(const common_params & params) {
     if (!params.mmproj.path.empty()) {
         const auto mcaps = mtmd_get_cap_from_file(params.mmproj.path.c_str());
@@ -340,6 +349,12 @@ struct server_slot {
 
     server_prompt prompt;
 
+    // create a checkpoint when the prompt reaches this many tokens (where it diverges from a known prompt), -1 = no
+    int32_t n_ckpt_div = -1;
+
+    // another slot may hold some of the cells of this slot (--slot-attach, or a copy to a child task), see try_clear_idle_slots()
+    bool may_share_cells = false;
+
     bool prompt_save(server_prompt_cache & prompt_cache) const {
         if (prompt.tokens.size() == 0) {
             return false;
@@ -366,10 +381,15 @@ struct server_slot {
         return true;
     }
 
-    bool prompt_load(server_prompt_cache & prompt_cache, const server_tokens & tokens) {
-        bool res = prompt_cache.load(prompt, tokens, ctx_tgt, ctx_dft, id);
+    bool prompt_load(server_prompt_cache & prompt_cache, std::list<server_prompt_cache_state>::iterator it) {
+        // a restored prompt has cells of its own
+        const bool restore = it != prompt_cache.states.end();
+
+        bool res = prompt_cache.load(it, prompt, ctx_tgt, ctx_dft, id);
         if (!res) {
             SLT_WRN(*this, "%s", "failed to load prompt from cache\n");
+        } else if (restore) {
+            may_share_cells = false;
         }
 
         return res;
@@ -381,6 +401,8 @@ struct server_slot {
         mem.seq_rm(id, -1, -1);
 
         prompt.clear();
+
+        may_share_cells = false;
     }
 
     std::vector<common_adapter_lora_info> lora;
@@ -841,19 +863,26 @@ struct server_slot {
         return res;
     }
 
-    // the other slot continues from the tokens processed so far
-    void copy_prompt_to(server_slot & other) const {
+    // with a unified KV cache, both slots then hold the same cells
+    void copy_cells_to(server_slot & other) {
         mem.seq_rm(other.id,     -1, -1);
         mem.seq_cp(id, other.id, -1, -1);
+
+        may_share_cells       = true;
+        other.may_share_cells = true;
+    }
+
+    // the other slot continues from the tokens processed so far
+    void copy_prompt_to(server_slot & other) {
+        copy_cells_to(other);
 
         other.prompt = prompt.clone();
     }
 
-    void copy_state_to(server_slot & other) const {
+    void copy_state_to(server_slot & other) {
         GGML_ASSERT(state == SLOT_STATE_DONE_PROMPT);
 
-        mem.seq_rm(other.id,     -1, -1);
-        mem.seq_cp(id, other.id, -1, -1);
+        copy_cells_to(other);
 
         other.i_batch = i_batch;
 
@@ -1676,6 +1705,44 @@ private:
             }
         }
 
+        if (params_base.slot_attach) {
+            const bool is_rs = llama_model_is_recurrent(model_tgt) || llama_model_is_hybrid(model_tgt);
+
+            // the DeepSeek V4 cache has a sliding window, but llama_model_n_swa() reports 0 for this model
+            char arch[64] = "";
+            llama_model_meta_val_str(model_tgt, "general.architecture", arch, sizeof(arch));
+
+            // plain KV cache, or recurrent/hybrid memory resumed from checkpoints - no SWA
+            const bool can_share_mem = llama_model_n_swa(model_tgt) == 0 && strcmp(arch, "deepseek4") != 0 && (
+                    (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_PART && !is_rs) ||
+                    (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL &&  is_rs));
+
+            const char * reason = nullptr;
+            if (!params_base.kv_unified) {
+                reason = "requires --kv-unified";
+            } else if (!can_share_mem) {
+                reason = "is not supported by this model";
+            } else if (ctx_dft || spec || !params_base.lora_adapters.empty()) {
+                // TODO: support speculative decoding
+                reason = "is not supported with speculative decoding or LoRA adapters";
+            } else if (params_base.ctx_shift) {
+                // context shift moves KV cells, which would corrupt cells that other slots share
+                reason = "is not supported with --context-shift";
+            } else if (params_base.n_cache_reuse > 0) {
+                // cache reuse moves KV cells too (load_model() has turned it off where the memory cannot shift)
+                reason = "is not supported with --cache-reuse";
+            }
+
+            if (reason) {
+                if (params_base.slot_attach_explicit) {
+                    SRV_WRN("--slot-attach %s, disabling\n", reason);
+                } else {
+                    SRV_INF("slot attach %s, disabling\n", reason);
+                }
+                params_base.slot_attach = false;
+            }
+        }
+
         {
             const std::string & cfg = params_base.ui_config_json;
             if (!cfg.empty()) {
@@ -1794,6 +1861,145 @@ private:
         return nullptr;
     }
 
+    // prompt prefixes are shared only for completions that use the prompt cache
+    // TODO: support prompts with media
+    bool can_share_prefix(const server_task & task) const {
+        return task.type == SERVER_TASK_TYPE_COMPLETION && task.params.cache_prompt && !task.tokens.has_media();
+    }
+
+    // the last checkpoint of the prompt at or before n_tokens, nullptr if none
+    static const common_prompt_checkpoint * find_ckpt(const server_prompt & prompt, int32_t n_tokens) {
+        const auto it = std::find_if(prompt.checkpoints.rbegin(), prompt.checkpoints.rend(), [&](const auto & ckpt) {
+            return ckpt.n_tokens <= n_tokens;
+        });
+
+        return it == prompt.checkpoints.rend() ? nullptr : &*it;
+    }
+
+    // number of tokens of the prompt that a slot holding it can keep for the new tokens
+    int32_t n_reusable(const server_prompt & prompt, const server_tokens & tokens) const {
+        const int32_t n_lcp = prompt.tokens.get_common_prefix(tokens);
+
+        // recurrent/hybrid memory resumes at the end of the prompt or at a checkpoint
+        if (ctx_tgt_seq_rm_type != COMMON_CONTEXT_SEQ_RM_TYPE_FULL || n_lcp == (int32_t) prompt.tokens.size()) {
+            return n_lcp;
+        }
+
+        const auto * ckpt = find_ckpt(prompt, n_lcp);
+
+        return ckpt ? ckpt->n_tokens : 0;
+    }
+
+    struct slot_attach {
+        int32_t id_donor = -1;
+        int32_t n_tokens = 0;
+        const common_prompt_checkpoint * ckpt = nullptr; // state of the memory that cannot be truncated, at n_tokens
+    };
+
+    // find the other slot that holds the longest prefix of the task prompt
+    slot_attach find_attach(const server_slot & slot, const server_task & task) const {
+        slot_attach res;
+
+        if (!params_base.slot_attach || !can_share_prefix(task)) {
+            return res;
+        }
+
+        // recurrent/hybrid memory resumes only at a checkpoint
+        const bool use_ckpt = ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
+
+        // at least one token of the prompt is evaluated [TAG_PROMPT_LOGITS]
+        const int32_t n_max = task.n_tokens() - 1;
+
+        for (const auto & other : slots) {
+            if (other.id == slot.id) {
+                continue;
+            }
+
+            // a slot aborted by an error can hold fewer cells than tokens
+            const int32_t n_mem = llama_memory_seq_pos_max(llama_get_memory(ctx_tgt), other.id) + 1;
+
+            const int32_t n_lcp = std::min({ n_max, n_mem, (int32_t) other.prompt.tokens.get_common_prefix(task.tokens) });
+            if (n_lcp <= res.n_tokens) {
+                continue;
+            }
+
+            const auto * ckpt = use_ckpt ? find_ckpt(other.prompt, n_lcp) : nullptr;
+            const int32_t n_tokens = use_ckpt ? (ckpt ? (int32_t) ckpt->n_tokens : 0) : n_lcp;
+            if (n_tokens > res.n_tokens) {
+                res = { other.id, n_tokens, ckpt };
+            }
+        }
+
+        if (res.n_tokens < SLOT_ATTACH_MIN_TOKENS) {
+            return {};
+        }
+
+        return res;
+    }
+
+    // share the KV cells of the donor prefix with the slot, no data is copied
+    void apply_attach(server_slot & slot, const slot_attach & plan) {
+        auto & donor = *get_slot_by_id(plan.id_donor);
+
+        // llama_memory_hybrid_idx copies only whole sequences: copy all of the donor, then drop the cells after the prefix
+        slot.prompt_clear();
+        donor.copy_cells_to(slot);
+
+        if (plan.ckpt) {
+            // the slot now shares the recurrent state of the donor, which is past n_tokens and cannot be cut
+            // the checkpoint gives the slot its own state at n_tokens - 1, before the cells after it are dropped
+            if (!plan.ckpt->load_tgt(ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY)) {
+                SLT_WRN(slot, "failed to load the checkpoint of slot %d, not attaching\n", donor.id);
+                slot.prompt_clear();
+                return;
+            }
+
+            slot.prompt.checkpoints.push_back(*plan.ckpt);
+        }
+
+        if (!llama_memory_seq_rm(llama_get_memory(ctx_tgt), slot.id, plan.n_tokens, -1)) {
+            SLT_WRN(slot, "failed to drop the cells of slot %d after the prefix, not attaching\n", donor.id);
+            slot.prompt_clear();
+            return;
+        }
+
+        slot.prompt.tokens = donor.prompt.tokens.clone();
+        slot.prompt.tokens.keep_first(plan.n_tokens);
+
+        metrics.n_slot_attach        += 1;
+        metrics.n_slot_attach_tokens += plan.n_tokens;
+
+        SLT_INF(slot, "attached %d prompt tokens from slot %d\n", plan.n_tokens, donor.id);
+    }
+
+    // recurrent/hybrid memory: where the prompt diverges from a known prompt before the first user message (-1 = none), for a checkpoint that later prompts can attach at
+    // call it before the prompt of the slot is cut to n_past, so that the match with its own previous prompt counts
+    int32_t find_ckpt_div(const server_slot & slot, int32_t n_past) const {
+        if (!params_base.slot_attach || !can_share_prefix(*slot.task) ||
+            ctx_tgt_seq_rm_type != COMMON_CONTEXT_SEQ_RM_TYPE_FULL || params_base.n_ctx_checkpoints <= 0) {
+            return -1;
+        }
+
+        const int32_t n_user = slot.task->params.message_spans.first_user_message_pos();
+
+        const int32_t n_min = std::max(SLOT_ATTACH_CKPT_MIN_TOKENS, n_past + SLOT_ATTACH_CKPT_GAP + 1);
+        if (n_user <= n_min) {
+            return -1;
+        }
+
+        int32_t n_div = 0;
+        for (const auto & other : slots) {
+            n_div = std::max<int32_t>(n_div, other.prompt.tokens.get_common_prefix(slot.task->tokens));
+        }
+        if (prompt_cache) {
+            for (const auto & state : prompt_cache->states) {
+                n_div = std::max<int32_t>(n_div, state.prompt.tokens.get_common_prefix(slot.task->tokens));
+            }
+        }
+
+        return n_div >= n_min && n_div < n_user ? n_div : -1;
+    }
+
     server_slot * get_available_slot(const server_task & task) {
         server_slot * ret = nullptr;
 
@@ -1883,6 +2089,12 @@ private:
             // cache prompts only for the tasks that reuse them
             update_cache = update_cache && !task.is_stateless();
 
+            // attach if it keeps at least as many tokens as the prompt cache or the slot itself: the cells are then shared, not copied
+            const auto attach = find_attach(*ret, task);
+            const auto attach_wins = [&](const server_prompt & prompt) {
+                return attach.id_donor >= 0 && attach.n_tokens >= n_reusable(prompt, task.tokens);
+            };
+
             if (update_cache) {
                 SRV_TRC("%s", "updating prompt cache\n");
 
@@ -1890,7 +2102,11 @@ private:
 
                 ret->prompt_save(*prompt_cache);
 
-                if (!ret->prompt_load(*prompt_cache, task.tokens)) {
+                // without attach, the slot continues from a cached prompt or from its own
+                const auto it = prompt_cache->find(ret->prompt, task.tokens);
+                const auto & prompt_alt = it != prompt_cache->states.end() ? it->prompt : ret->prompt;
+
+                if (!attach_wins(prompt_alt) && !ret->prompt_load(*prompt_cache, it)) {
                     ret->prompt_clear();
                 }
 
@@ -1898,9 +2114,19 @@ private:
 
                 SRV_TRC("prompt cache update took %.2f ms\n", (ggml_time_us() - t_start) / 1000.0);
             }
+
+            // if the attach fails, the slot is left empty and processes the whole prompt
+            if (attach_wins(ret->prompt)) {
+                apply_attach(*ret, attach);
+            }
         }
 
         return ret;
+    }
+
+    // purging a slot whose cells other slots still hold frees little, so these slots go last
+    bool try_clear_idle_slots() {
+        return try_clear_idle_slot(false) || try_clear_idle_slot(true);
     }
 
     // return true if at least one slot has been cleared
@@ -1908,7 +2134,7 @@ private:
     //       - smarter decision which slot to clear (LRU or longest prompt?)
     //       - move slot to level 2 cache instead of removing?
     //       - instead of purging, try to store and resume later?
-    bool try_clear_idle_slots() {
+    bool try_clear_idle_slot(bool shared) {
         bool res = false;
 
         if (!params_base.kv_unified) {
@@ -1916,7 +2142,7 @@ private:
         }
 
         for (auto & slot : slots) {
-            if (slot.is_processing()) {
+            if (slot.is_processing() || slot.may_share_cells != shared) {
                 continue;
             }
 
@@ -4128,10 +4354,17 @@ private:
 
                                 if (!can_cache_reuse && n_cache_reuse > 0) {
                                     SLT_WRN(slot, "cache reuse is not supported - ignoring n_cache_reuse = %d\n", n_cache_reuse);
-                                }
-
-                                // reuse chunks from the cached prompt by shifting their KV cache in the new position
-                                if (can_cache_reuse && n_cache_reuse > 0) {
+                                } else if (params_base.slot_attach && n_cache_reuse > 0) {
+                                    // cache reuse moves KV cells, which other slots may hold too
+                                    static bool logged = false;
+                                    if (!logged) {
+                                        SLT_INF(slot, "ignoring n_cache_reuse = %d of this and later requests while --slot-attach is on, see --no-slot-attach\n", n_cache_reuse);
+                                        logged = true;
+                                    } else {
+                                        SLT_DBG(slot, "ignoring n_cache_reuse = %d while --slot-attach is on\n", n_cache_reuse);
+                                    }
+                                } else if (n_cache_reuse > 0) {
+                                    // reuse chunks from the cached prompt by shifting their KV cache in the new position
                                     GGML_ASSERT(!slot.prompt.tokens.has_mtmd);
 
                                     size_t head_c = n_past; // cache
@@ -4324,6 +4557,8 @@ private:
 
                         metrics.add_prompt_cached(n_past);
 
+                        slot.n_ckpt_div = find_ckpt_div(slot, n_past);
+
                         slot.prompt.tokens.keep_first(n_past);
 
                         // this is to signal the client that the request has started processing
@@ -4499,6 +4734,11 @@ private:
                         }
                         slot.prompt.tokens.push_back(cur_tok);
 
+                        // stop at the divergence point, so that a checkpoint can be created there before the next batch
+                        if (slot.prompt.n_tokens() == slot.n_ckpt_div) {
+                            break;
+                        }
+
                         // break at the last user message, or at user messages at least min step past the last checkpoint
                         if (do_checkpoint && spans.is_user_start(slot.prompt.n_tokens())) {
                             const auto pos = slot.prompt.n_tokens();
@@ -4580,6 +4820,14 @@ private:
                             is_last_user_message || near_prompt_end ||
                             n_tokens_start > slot.prompt.checkpoints.back().n_tokens + params_base.checkpoint_min_step);
                     SLT_DBG(slot, "main/do_checkpoint = %s, pos_min = %d, pos_max = %d\n", do_checkpoint ? "yes" : "no", pos_min, pos_max);
+
+                    // the checkpoint where this prompt diverges from a known prompt
+                    if (n_tokens_start == slot.n_ckpt_div) {
+                        do_checkpoint = pos_min >= 0;
+                        slot.n_ckpt_div = -1;
+
+                        metrics.n_slot_attach_ckpt += do_checkpoint ? 1 : 0;
+                    }
 
                     // note: we create the checkpoint before calling llama_decode(), so the current batch is not
                     //       yet processed and therefore it is not part of the checkpoint.

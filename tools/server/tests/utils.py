@@ -71,6 +71,7 @@ class ServerProcess:
     n_batch: int | None = None
     n_ubatch: int | None = None
     n_ctx: int | None = None
+    n_cache_reuse: int | None = None
     n_ga: int | None = None
     n_ga_w: int | None = None
     n_predict: int | None = None
@@ -88,6 +89,7 @@ class ServerProcess:
     server_reranking: bool | None = False
     server_metrics: bool | None = False
     kv_unified: bool | None = False
+    slot_attach: bool | None = None
     swa_full: bool | None = False
     server_slots: bool | None = False
     pooling: str | None = None
@@ -213,6 +215,8 @@ class ServerProcess:
             server_args.append("--metrics")
         if self.kv_unified:
             server_args.append("--kv-unified")
+        if self.slot_attach is not None:
+            server_args.append("--slot-attach" if self.slot_attach else "--no-slot-attach")
         if self.swa_full:
             server_args.append("--swa-full")
         if self.server_slots:
@@ -227,6 +231,8 @@ class ServerProcess:
             server_args.extend(["--tags", self.model_tags])
         if self.n_ctx:
             server_args.extend(["--ctx-size", self.n_ctx])
+        if self.n_cache_reuse is not None:
+            server_args.extend(["--cache-reuse", self.n_cache_reuse])
         if self.n_slots:
             server_args.extend(["--parallel", self.n_slots])
         if self.ctk:
