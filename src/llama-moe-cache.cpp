@@ -16,11 +16,11 @@ namespace {
 
 // ClassLRU: one LRU list per frequency class, over the experts of a group of layers
 // slot_map[il][e] is the slot of expert e of layer il, -1 if not cached, the host slot map tensor
-// CRF (combined recency and frequency) = uses of an expert, decayed with a half-life of crf_half_life tokens, retained across evictions
+// CRF (combined recency and frequency) = uses of an expert, decayed with a half-life of N tokens, retained across evictions
 // class = floor(log2(CRF)), at most n_class - 1; each slot is in the LRU list of the class, as of its last use
 // victim: an empty slot, or the least recently used slot of each list not in the current plan() with the max age/2^class
 struct moe_cache_lru {
-    static constexpr int   n_class  = 8; // floor(log2(1/(1 - 2^(-1/crf_half_life)))) = 7, CRF_max for half-life of 128
+    static constexpr int   n_class  = 8; // floor(log2(1/(1 - 2^(-1/crf_half_life)))) = 7, class of CRF_max for half-life of 128
     static constexpr float crf_half_life = 128.0f; // tokens
 
     int32_t n_expert = 0;
@@ -45,6 +45,7 @@ struct moe_cache_lru {
     std::vector<int32_t> uniq;  // the distinct selected experts
 
     void init(int32_t n_layer, int32_t n_expert, int32_t n_slots) {
+        GGML_ASSERT(n_class == (int) std::log2(1.0f/(1.0f - std::exp2(-1.0f/crf_half_life))) + 1);
         this->n_expert = n_expert;
         this->n_slots  = n_slots;
         slot_map.assign(n_layer, nullptr);
