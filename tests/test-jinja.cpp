@@ -2064,6 +2064,50 @@ static void test_array_methods(testing & t) {
         "{\"x\": 2}"
     );
 
+    test_template(t, "array|map with filter int materialized",
+        "{{ arr|map('int')|list|join(',') }}",
+        {{"arr", json::array({"1", "2", "3"})}},
+        "1,2,3"
+    );
+
+    test_template(t, "array|map with filter upper for schema union type",
+        "{{ item_value|map('upper')|list|join(',') }}",
+        {{"item_value", json::array({"string", "null"})}},
+        "STRING,NULL"
+    );
+
+    test_template(t, "array|map with filter arguments",
+        "{{ arr|map('replace', 'a', 'o')|join(',') }}",
+        {{"arr", json::array({"cat", "bat"})}},
+        "cot,bot"
+    );
+
+    test_template(t, "array|map with filter keyword arguments",
+        "{{ arr|map('join', '-', attribute='name')|join(';') }}",
+        {{"arr", json::array({
+            json::array({
+                json({{"name", "a"}}),
+                json({{"name", "b"}}),
+            }),
+            json::array({
+                json({{"name", "c"}}),
+            }),
+        })}},
+        "a-b;c"
+    );
+
+    test_template(t, "array|map with count alias",
+        "{{ arr|map('count')|join(',') }}",
+        {{"arr", json::array({"cat", "hello"})}},
+        "3,5"
+    );
+
+    test_template(t, "array|map with default alias and arguments",
+        "{{ arr|map('d', 'fallback', true)|join(',') }}",
+        {{"arr", json::array({"", "value"})}},
+        "fallback,value"
+    );
+
     // not used by any chat templates
     // test_template(t, "array.insert()",
     //     "{% set _ = arr.insert(1, 'x') %}{{ arr|join(',') }}",
