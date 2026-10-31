@@ -661,6 +661,7 @@ struct ggml_backend_opencl_context {
     size_t global_mem_size;
     size_t max_alloc_size;
     size_t max_workgroup_size;
+    cl_ulong local_mem_size;
     bool fp16_support;
     bool has_vector_subgroup_broadcast;
     bool has_khr_subgroup_shuffle = false;
@@ -885,6 +886,8 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_cpy_f32_f32_pack = nullptr;
     cl_kernel kernel_cpy_f32_f32_flat = nullptr;
     cl_kernel kernel_mul_mat_f32_f32;
+    cl_kernel kernel_fwht[2] = {};
+    size_t fwht_workgroup_size[2] = {};
     cl_kernel kernel_mul_mat_f16_f16;
     cl_kernel kernel_mul_mat_f16_f32_1row;
     cl_program program_mul_mv_f16_f32_mrow;
@@ -2721,6 +2724,30 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
         cl_program prog = build_program_from_source(backend_ctx, (iq2_s_grid_src + kernel_src).c_str(), compile_opts);
         CL_CHECK((backend_ctx->kernel_mul_mv_iq2_s_f32 = clCreateKernel(prog, "kernel_mul_mv_iq2_s_f32", &err), err));
         CL_CHECK(clReleaseProgram(prog));
+        GGML_LOG_CONT(".");
+    }
+
+    // fwht
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "fwht.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("fwht.cl");
+#endif
+        for (int i = 0; i < 2; ++i) {
+            const std::string opts = compile_opts + (i == 0 ? " -DSRC_TYPE=float" : " -DSRC_TYPE=half");
+            cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), opts);
+            CL_CHECK((backend_ctx->kernel_fwht[i] = clCreateKernel(prog, "kernel_fwht", &err), err));
+            CL_CHECK(clReleaseProgram(prog));
+            size_t nth = 128;
+            const size_t max_workgroup = backend_ctx->get_kernel_workgroup_size(backend_ctx->kernel_fwht[i]);
+            while (nth > max_workgroup) {
+                nth /= 2;
+            }
+            backend_ctx->fwht_workgroup_size[i] = nth;
+        }
         GGML_LOG_CONT(".");
     }
 
@@ -8552,6 +8579,7 @@ static ggml_backend_opencl_context * ggml_cl_init(ggml_backend_dev_t dev) {
     CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_IMAGE2D_MAX_WIDTH, sizeof(size_t), &backend_ctx->image2d_max_width, NULL));
     CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_IMAGE2D_MAX_HEIGHT, sizeof(size_t), &backend_ctx->image2d_max_height, NULL));
     CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_MAX_WORK_GROUP_SIZE, sizeof(size_t), &backend_ctx->max_workgroup_size, NULL));
+    CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_LOCAL_MEM_SIZE, sizeof(cl_ulong), &backend_ctx->local_mem_size, NULL));
     CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_SVM_CAPABILITIES, sizeof(cl_device_svm_capabilities), &backend_ctx->svm_caps, 0));
 
     if (opencl_c_version.major >= 3) {
@@ -10959,6 +10987,19 @@ inline bool use_q5_k_bin_kernels(const ggml_backend_opencl_context *backend_ctx,
 #endif
 }
 
+static bool ggml_cl_mul_mat_can_use_fwht(const ggml_backend_opencl_context * backend_ctx, const ggml_tensor * op) {
+    const ggml_tensor * a = op->src[0];
+    const ggml_tensor * b = op->src[1];
+    const int64_t n = a->ne[0];
+
+    return ggml_get_op_params_i32(op, 1) == GGML_HINT_SRC0_IS_HADAMARD &&
+           a->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
+           (b->type == GGML_TYPE_F32 || b->type == GGML_TYPE_F16) &&
+           n >= 2 && n <= std::numeric_limits<int>::max() && (n & (n - 1)) == 0 && a->ne[1] == n &&
+           (uint64_t)n <= backend_ctx->local_mem_size/sizeof(float) &&
+           ggml_is_contiguous_rows(b) && ggml_is_contiguous(op) && ggml_are_same_shape(b, op);
+}
+
 static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
     ggml_backend_opencl_device_context * dev_ctx     = (ggml_backend_opencl_device_context *)dev->context;
     ggml_backend_opencl_context *        backend_ctx = dev_ctx->backend_ctx;
@@ -11182,6 +11223,9 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
         case GGML_OP_GROUP_NORM:
             return ggml_is_contiguous(op->src[0]);
         case GGML_OP_MUL_MAT:
+            if (ggml_cl_mul_mat_can_use_fwht(backend_ctx, op)) {
+                return true;
+            }
             if (op->src[0]->type == GGML_TYPE_F16) {
                 return true;
             } else if (op->src[0]->type == GGML_TYPE_BF16) {
@@ -28627,6 +28671,46 @@ static void ggml_cl_mul_mat_iq2_xxs_f32_adreno(ggml_backend_t backend, const ggm
 }
 #endif
 
+static void ggml_cl_fwht(ggml_backend_t backend, const ggml_tensor * src, ggml_tensor * dst) {
+    auto * backend_ctx = (ggml_backend_opencl_context *) backend->context;
+
+    auto * extra_src = (ggml_tensor_extra_cl *) src->extra;
+    auto * extra_dst = (ggml_tensor_extra_cl *) dst->extra;
+
+    const cl_ulong offset_src = extra_src->offset + src->view_offs;
+    const cl_ulong offset_dst = extra_dst->offset + dst->view_offs;
+
+    const cl_ulong ne1 = src->ne[1];
+    const cl_ulong ne2 = src->ne[2];
+    const cl_ulong nb1 = src->nb[1];
+    const cl_ulong nb2 = src->nb[2];
+    const cl_ulong nb3 = src->nb[3];
+
+    const int n = src->ne[0];
+    const float scale = 1.0f/sqrtf((float)n);
+    const int type_index = src->type == GGML_TYPE_F16 ? 1 : 0;
+
+    cl_kernel kernel = backend_ctx->kernel_fwht[type_index];
+    const size_t nth = std::min((size_t)n/2, backend_ctx->fwht_workgroup_size[type_index]);
+
+    CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra_src->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong), &offset_src));
+    CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra_dst->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offset_dst));
+    CL_CHECK(clSetKernelArg(kernel,  4, sizeof(int),      &n));
+    CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &ne1));
+    CL_CHECK(clSetKernelArg(kernel,  6, sizeof(cl_ulong), &ne2));
+    CL_CHECK(clSetKernelArg(kernel,  7, sizeof(cl_ulong), &nb1));
+    CL_CHECK(clSetKernelArg(kernel,  8, sizeof(cl_ulong), &nb2));
+    CL_CHECK(clSetKernelArg(kernel,  9, sizeof(cl_ulong), &nb3));
+    CL_CHECK(clSetKernelArg(kernel, 10, sizeof(float), &scale));
+    CL_CHECK(clSetKernelArg(kernel, 11, n*sizeof(float), nullptr));
+
+    size_t global[] = { nth, (size_t)ggml_nrows(src) };
+    size_t local[] = { nth, 1 };
+    backend_ctx->enqueue_ndrange_kernel(kernel, 2, global, local, dst);
+}
+
 static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     GGML_ASSERT(src0);
     GGML_ASSERT(src0->extra);
@@ -28640,6 +28724,11 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
     const enum ggml_type src1t = src1->type;
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
+
+    if (ggml_cl_mul_mat_can_use_fwht(backend_ctx, dst)) {
+        ggml_cl_fwht(backend, src1, dst);
+        return;
+    }
 
     // quant kv without FA
     // used for non-contiguous src0 (the usual head-major permuted K view when n_head_kv>1)
