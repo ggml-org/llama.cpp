@@ -5173,13 +5173,14 @@ const char * clip_gen_voice_name(const clip_ctx * ctx, int32_t idx) {
     return std::next(ctx->model.gen_voices.begin(), idx)->first.c_str();
 }
 
-int32_t clip_gen_get_voice(const clip_ctx * ctx, const char * name, const float ** embd) {
+int32_t clip_gen_get_voice(const clip_ctx * ctx, const char * name, const float ** embd, int32_t * n_embd) {
     const auto it = ctx->model.gen_voices.find(name);
     if (it == ctx->model.gen_voices.end()) {
         return 0;
     }
-    *embd = it->second.data();
-    return (int32_t) (it->second.size() / ctx->model.gen_input_lin_w->ne[1]);
+    *embd   = it->second.data();
+    *n_embd = (int32_t) ctx->model.gen_input_lin_w->ne[1];
+    return (int32_t) (it->second.size() / *n_embd);
 }
 
 clip_enc_state * clip_enc_state_init(clip_ctx * ctx, int32_t n_frames_max) {

@@ -430,7 +430,7 @@ private:
 
     // runs the reference wav through the speaker encoder, returns one x-vector embedding row
     bool encode_speaker(mtmd_bitmap * bitmap, std::vector<float> & out) {
-        if (!mtmd_support_audio(mctx)) {
+        if (!mtmd_bitmap_is_voice(bitmap) && !mtmd_support_audio(mctx)) {
             LOG_ERR("mtmd_helper_gen_audio: mmproj has no speaker/audio encoder\n");
             return false;
         }
@@ -581,24 +581,8 @@ public:
             return 1;
         }
 
-        // a predefined voice takes the place of the encoded speaker reference
         std::vector<float> voice;
-        if (inp->voice && inp->voice[0]) {
-            const float * embd = nullptr;
-            const int32_t n_rows = mtmd_gen_audio_get_voice(mctx, inp->voice, &embd);
-            if (n_rows > 0) {
-                if (inp->speaker_ref) {
-                    LOG_WRN("mtmd_helper_gen_audio: both a voice and a speaker reference given, using voice \"%s\"\n", inp->voice);
-                }
-                voice.assign(embd, embd + (size_t) n_rows * n_embd);
-            } else if (mtmd_gen_audio_get_info(mctx).n_voices > 0) {
-                LOG_ERR("mtmd_helper_gen_audio: no voice \"%s\" in this model\n", inp->voice);
-                return 1;
-            } else {
-                LOG_WRN("mtmd_helper_gen_audio: this model has no predefined voices, \"%s\" is ignored\n", inp->voice);
-            }
-        }
-        if (voice.empty() && inp->speaker_ref) {
+        if (inp->speaker_ref) {
             if (!encode_speaker(inp->speaker_ref, voice)) {
                 return 1;
             }
@@ -1014,7 +998,7 @@ private:
 
     // runs the reference wav through the mimi encoder, returns one row per 12.5Hz frame
     bool encode_speaker(mtmd_bitmap * bitmap, std::vector<float> & out) {
-        if (!mtmd_support_audio(mctx)) {
+        if (!mtmd_bitmap_is_voice(bitmap) && !mtmd_support_audio(mctx)) {
             LOG_ERR("mtmd_helper_gen_audio: mmproj has no voice encoder\n");
             return false;
         }
@@ -1314,7 +1298,8 @@ public:
         reset();
         seq_id = inp->seq_id;
 
-        if (inp->speaker_ref) {
+        // a voice is named in the prompt instead
+        if (inp->speaker_ref && !mtmd_bitmap_is_voice(inp->speaker_ref)) {
             LOG_WRN("mtmd_helper_gen_audio: the model has no voice conditioning, the speaker file is ignored\n");
         }
 

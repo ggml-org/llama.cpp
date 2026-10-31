@@ -174,6 +174,7 @@ struct mtmd_bitmap {
     uint32_t ny = 0;
     std::string id; // optional user-defined id, for ex: can be set to image hash, useful for KV cache tracking
     bool is_audio = false; // true if the bitmap is audio
+    bool is_voice = false;
     bool mergeable = false; // [QWEN_VIDEO] set only on frames of the same video
     bool is_video  = false; // see mtmd_bitmap_set_is_video()
 
@@ -197,6 +198,16 @@ struct mtmd_bitmap {
             this->data.resize(data_size);
             std::memcpy(this->data.data(), data, data_size);
         }
+    }
+
+    static mtmd_bitmap * init_voice(const std::string & name, const float * rows, uint32_t n_embd, uint32_t n_rows) {
+        auto * bitmap = new mtmd_bitmap(nullptr, n_embd, n_rows);
+        bitmap->is_voice = true;
+        bitmap->id = name;
+        if (rows) {
+            bitmap->data.assign((const unsigned char *) rows, (const unsigned char *) (rows + (size_t) n_embd * n_rows));
+        }
+        return bitmap;
     }
 
     const std::vector<unsigned char> & get_ro_buf() const {
@@ -351,6 +362,9 @@ struct mtmd_audio_tokens {
 
     // true if one of entries in batch_f32 is a placeholder
     bool is_placeholder() const {
+        if (track && track->batch_f32.entries.empty()) {
+            return track->embd.empty(); // a voice: its rows are not serialized
+        }
         for (const auto & entry : (track ? track->batch_f32 : batch_f32).entries) {
             if (entry.is_placeholder()) {
                 return true;
@@ -1534,6 +1548,10 @@ struct mtmd_tokenizer {
         GGML_ASSERT(!bitmaps.empty());
 
         // note: only one type of media is supported per call, caller should enforce this
+        if (bitmaps[0]->is_voice) {
+            GGML_ASSERT(bitmaps.size() == 1);
+            return add_voice(*bitmaps[0]);
+        }
         const bool is_vision = !bitmaps[0]->is_audio;
 
         if (is_vision) {
@@ -1869,6 +1887,30 @@ struct mtmd_tokenizer {
     }
 
     // a piece of a soundtrack goes in without the audio markers, it lies inside the span of its video
+    int32_t add_voice(const mtmd_bitmap & bitmap) {
+        if (bitmap.ny == 0) {
+            LOG_ERR("%s: error: voice \"%s\" holds no embeddings\n", __func__, bitmap.id.c_str());
+            return 2;
+        }
+        auto track = std::make_shared<mtmd_audio_track>();
+        track->n_tokens = bitmap.ny;
+        const auto & buf = bitmap.get_ro_buf();
+        track->embd.assign((const float *) buf.data(), (const float *) (buf.data() + buf.size()));
+
+        mtmd_audio_tokens_ptr audio_tokens(new mtmd_audio_tokens);
+        audio_tokens->n_tokens = bitmap.ny;
+        audio_tokens->id       = bitmap.id;
+        audio_tokens->track    = std::move(track);
+
+        cur.entries.emplace_back(mtmd_input_chunk{
+            MTMD_INPUT_CHUNK_TYPE_AUDIO,
+            {}, // text tokens
+            nullptr, // image tokens
+            std::move(audio_tokens),
+        });
+        return 0;
+    }
+
     int32_t add_soundtrack_piece(soundtrack & st, const mtmd_bitmap & bitmap) {
         if (!st.track) {
             std::vector<float> samples;
@@ -2163,10 +2205,6 @@ static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk
         }
         return mtmd_encode_impl(ctx, chunk->tokens_image.get(), out_embd);
     } else if (chunk->type == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
-        if (!ctx->ctx_a) {
-            LOG_ERR("%s: model does not support audio input\n", __func__);
-            return 1;
-        }
         if (chunk->tokens_audio == nullptr) {
             LOG_ERR("%s: audio tokens are null\n", __func__);
             return 1;
@@ -2175,22 +2213,27 @@ static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk
             LOG_ERR("%s: audio tokens batch is placeholder\n", __func__);
             return 1;
         }
-        int n_mmproj_embd = ctx->n_embd_out();
         const auto & track = chunk->tokens_audio->track;
+        // a filled track (e.g. a voice) needs no audio encoder
+        if (!ctx->ctx_a && (!track || track->embd.empty())) {
+            LOG_ERR("%s: model does not support audio input\n", __func__);
+            return 1;
+        }
         if (track) {
             if (track->embd.empty()) {
-                track->embd.resize((size_t) track->n_tokens * n_mmproj_embd);
+                track->embd.resize((size_t) track->n_tokens * ctx->n_embd_out());
                 if (!clip_image_batch_encode(ctx->ctx_a, ctx->n_threads, &track->batch_f32, track->embd)) {
                     track->embd.clear();
                     return 1;
                 }
             }
+            const size_t n_mmproj_embd = track->embd.size() / track->n_tokens;
             const size_t off = (size_t) chunk->tokens_audio->row_begin * n_mmproj_embd;
             out_embd.assign(track->embd.begin() + off,
                             track->embd.begin() + off + (size_t) chunk->tokens_audio->n_tokens * n_mmproj_embd);
             return 0;
         }
-        out_embd.resize((size_t)chunk->tokens_audio->n_tokens * n_mmproj_embd);
+        out_embd.resize((size_t)chunk->tokens_audio->n_tokens * ctx->n_embd_out());
         bool ok = clip_image_batch_encode(
             ctx->ctx_a,
             ctx->n_threads,
@@ -2230,6 +2273,9 @@ float * mtmd_get_output_embd(mtmd_context * ctx) {
 // audio generation
 //
 
+// must match the "tts" chat template, see conversion/lfm3.py
+static const char * lfm3a_voices[] = { "female", "male" };
+
 mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
     mtmd_gen_audio_info info{};
     info.model_variant = "";
@@ -2255,6 +2301,7 @@ mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
         case PROJECTOR_TYPE_LFM3A_GEN:
             info.type = MTMD_GEN_AUDIO_TYPE_LFM3A;
             info.sample_rate = 24000;
+            info.n_voices = (int32_t) std::size(lfm3a_voices);
             break;
         default:
             info.type = MTMD_GEN_AUDIO_TYPE_NONE;
@@ -2264,17 +2311,34 @@ mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
 }
 
 const char * mtmd_gen_audio_voice_name(const mtmd_context * ctx, int32_t idx) {
-    if (!ctx->ctx_gen_a) {
+    if (!ctx->ctx_gen_a || idx < 0) {
         return nullptr;
+    }
+    if (clip_get_projector_type(ctx->ctx_gen_a) == PROJECTOR_TYPE_LFM3A_GEN) {
+        return idx < (int32_t) std::size(lfm3a_voices) ? lfm3a_voices[idx] : nullptr;
     }
     return clip_gen_voice_name(ctx->ctx_gen_a, idx);
 }
 
-int32_t mtmd_gen_audio_get_voice(const mtmd_context * ctx, const char * name, const float ** embd) {
+mtmd_bitmap * mtmd_gen_audio_get_ref(const mtmd_context * ctx, const char * name) {
     if (!ctx->ctx_gen_a || !name) {
-        return 0;
+        return nullptr;
     }
-    return clip_gen_get_voice(ctx->ctx_gen_a, name, embd);
+    if (clip_get_projector_type(ctx->ctx_gen_a) == PROJECTOR_TYPE_LFM3A_GEN) {
+        for (const char * voice : lfm3a_voices) {
+            if (strcmp(voice, name) == 0) {
+                return mtmd_bitmap::init_voice(name, nullptr, 0, 0);
+            }
+        }
+        return nullptr;
+    }
+    const float * embd   = nullptr;
+    int32_t       n_embd = 0;
+    const int32_t n_rows = clip_gen_get_voice(ctx->ctx_gen_a, name, &embd, &n_embd);
+    if (n_rows == 0) {
+        return nullptr;
+    }
+    return mtmd_bitmap::init_voice(name, embd, (uint32_t) n_embd, (uint32_t) n_rows);
 }
 
 mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
@@ -2816,6 +2880,10 @@ size_t mtmd_bitmap_get_n_bytes(const mtmd_bitmap * bitmap) {
 
 bool mtmd_bitmap_is_audio(const mtmd_bitmap * bitmap) {
     return bitmap->is_audio;
+}
+
+bool mtmd_bitmap_is_voice(const mtmd_bitmap * bitmap) {
+    return bitmap->is_voice;
 }
 
 const char * mtmd_bitmap_get_id(const mtmd_bitmap * bitmap) {

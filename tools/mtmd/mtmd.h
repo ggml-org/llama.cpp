@@ -191,6 +191,8 @@ MTMD_API const char * mtmd_get_marker(const mtmd_context * ctx);
 // if bitmap is audio:
 //     length of data must be n_samples * sizeof(float)
 //     the data is in float format (PCM F32)
+// if bitmap is voice (see mtmd_gen_audio_get_ref()):
+//     nx = n_embd, ny = number of rows, data is F32 rows (can be empty), id is the voice name
 //
 // if data == nullptr:
 //     the bitmap is considered "empty", and will be treated as a placeholder for counting tokens
@@ -203,6 +205,7 @@ MTMD_API uint32_t              mtmd_bitmap_get_ny     (const mtmd_bitmap * bitma
 MTMD_API const unsigned char * mtmd_bitmap_get_data   (const mtmd_bitmap * bitmap);
 MTMD_API size_t                mtmd_bitmap_get_n_bytes(const mtmd_bitmap * bitmap);
 MTMD_API bool                  mtmd_bitmap_is_audio   (const mtmd_bitmap * bitmap);
+MTMD_API bool                  mtmd_bitmap_is_voice   (const mtmd_bitmap * bitmap);
 MTMD_API void                  mtmd_bitmap_free       (mtmd_bitmap * bitmap);
 // bitmap ID is optional, but useful for KV cache tracking
 // these getters/setters are dedicated functions, so you can for example calculate the hash of the image based on mtmd_bitmap_get_data()
@@ -468,18 +471,17 @@ struct mtmd_gen_audio_info {
     enum mtmd_gen_audio_type type;
     int32_t sample_rate; // in Hz, for example 24000 for qwen3tts
     const char * model_variant; // name of the weight variant, can be nullptr if not applicable
-    int32_t n_voices; // predefined voices held by the mmproj, see mtmd_gen_audio_voice_name()
+    int32_t n_voices; // predefined voices, see mtmd_gen_audio_voice_name()
 };
 
 MTMD_API struct mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx);
 
-// predefined voices of the audio generation model: the mmproj holds the input embeddings of a voice prompt
-// for each of them, which take the place of an encoded speaker reference (e.g. pocket-tts without voice cloning)
-// name of the idx-th voice, nullptr when idx is out of range
+// name of the idx-th predefined voice, nullptr when idx is out of range
 MTMD_API const char * mtmd_gen_audio_voice_name(const mtmd_context * ctx, int32_t idx);
-// embeddings of the voice with this name
-// returns the number of rows of n_embd floats (n_embd of the text model), 0 if there is no such voice
-MTMD_API int32_t mtmd_gen_audio_get_voice(const mtmd_context * ctx, const char * name, const float ** embd);
+
+// predefined voice with this name as a voice bitmap, to pass as speaker reference
+// returns nullptr if there is no such voice, the caller must free it
+MTMD_API mtmd_bitmap * mtmd_gen_audio_get_ref(const mtmd_context * ctx, const char * name);
 
 
 enum mtmd_gen_process_type {

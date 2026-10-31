@@ -112,6 +112,23 @@ int main(int argc, char ** argv) {
         speaker_bitmap.reset(wrapper.bitmap);
     }
 
+    // a model without predefined voices only names the voice in the prompt
+    if (!params.tts_voice.empty() && mtmd_gen_audio_get_info(mctx.get()).n_voices > 0) {
+        if (speaker_bitmap) {
+            LOG_ERR("--tts-voice and --tts-speaker-file cannot be used together\n");
+            return 1;
+        }
+        speaker_bitmap.reset(mtmd_gen_audio_get_ref(mctx.get(), params.tts_voice.c_str()));
+        if (!speaker_bitmap) {
+            LOG_ERR("unknown voice \"%s\", the model has:", params.tts_voice.c_str());
+            for (int32_t i = 0; const char * name = mtmd_gen_audio_voice_name(mctx.get(), i); i++) {
+                LOG(" %s", name);
+            }
+            LOG("\n");
+            return 1;
+        }
+    }
+
     // a model with a "tts" chat template (e.g. LFM3-Audio) speaks the prompt rendered from it
     auto tmpls = common_chat_templates_init(model, "");
     std::string prompt = common_chat_get_tts_prompt(tmpls.get(), params.prompt, params.tts_lang, params.tts_voice);
@@ -127,7 +144,6 @@ int main(int argc, char ** argv) {
     inp.prompt_len  = prompt.size();
     inp.speaker_ref = speaker_bitmap.get();
     inp.lang        = params.tts_lang.c_str();
-    inp.voice       = params.tts_voice.c_str();
     inp.top_k       = params.sampling.top_k;
     inp.top_p       = params.sampling.top_p;
     inp.seed        = params.sampling.seed;

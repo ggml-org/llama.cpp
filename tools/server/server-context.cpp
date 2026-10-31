@@ -6487,16 +6487,16 @@ void server_routes::init_routes() {
         const std::string voice      = json_value(body, "voice", std::string());
         const std::string tts_prompt = common_chat_get_tts_prompt(meta->chat_params.tmpls.get(), prompt, lang, voice);
         // a model with predefined voices only speaks with one of them
+        mtmd::bitmap_ptr voice_ref;
         if (!voice.empty() && info.n_voices > 0) {
-            const float * embd = nullptr;
-            if (mtmd_gen_audio_get_voice(ctx_server.mctx, voice.c_str(), &embd) == 0) {
+            voice_ref.reset(mtmd_gen_audio_get_ref(ctx_server.mctx, voice.c_str()));
+            if (!voice_ref) {
                 res->error(format_error_response("unknown voice \"" + voice + "\", see \"voices\" in GET /props", ERROR_TYPE_INVALID_REQUEST));
                 return res;
             }
         }
         task.tts_inp.set_prompt(tts_prompt.empty() ? prompt : tts_prompt);
         task.tts_inp.set_lang(lang);
-        task.tts_inp.set_voice(voice);
         task.tts_inp.data.stream    = stream;
         task.tts_inp.data.out_type  = response_format == "pcm"
             ? MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM
@@ -6535,6 +6535,10 @@ void server_routes::init_routes() {
         }
 
         if (speaker_ref_len > 0) {
+            if (voice_ref) {
+                res->error(format_error_response("\"voice\" and \"speaker_ref\" cannot be used together", ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            }
             if (!mtmd_support_audio(ctx_server.mctx)) {
                 res->error(format_error_response("this model has no voice encoder, \"speaker_ref\" cannot be used", ERROR_TYPE_INVALID_REQUEST));
                 return res;
@@ -6545,6 +6549,8 @@ void server_routes::init_routes() {
                 return res;
             }
             task.tts_inp.set_speaker_ref(mtmd::bitmap_ptr(wrapper.bitmap));
+        } else if (voice_ref) {
+            task.tts_inp.set_speaker_ref(std::move(voice_ref));
         } else {
             SRV_WRN("%s", "no speaker reference provided, the model may behave randomly\n");
         }
