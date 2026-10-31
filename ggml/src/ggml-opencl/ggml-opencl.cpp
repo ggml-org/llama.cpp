@@ -1324,6 +1324,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_gemm_noshuffle_q4_0_f32;
     cl_kernel kernel_gemv_noshuffle_q4_0_f32;
     cl_kernel kernel_gemv_noshuffle_q4_0_f32_mc3;  // multi-column (N=3) verify GEMV (spec/MTP)
+    cl_kernel kernel_gemv_noshuffle_q4_0_f32_o4;   // 4-output-per-WI, long-vocab lm_head
     cl_kernel kernel_gemm_noshuffle_q4_0_f32_32b_trans_ila_a8_bin;
     cl_kernel kernel_gemm_noshuffle_q4_0_q8_1_dp4a_ila_a8_bin;
     cl_kernel kernel_gemv_noshuffle_q4_0_f32_32b_trans;
@@ -5348,6 +5349,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
 
         CL_CHECK((backend_ctx->kernel_gemv_noshuffle_q4_0_f32 = clCreateKernel(prog, "kernel_gemv_noshuffle_q4_0_f32", &err), err));
         CL_CHECK((backend_ctx->kernel_gemv_noshuffle_q4_0_f32_mc3 = clCreateKernel(prog, "kernel_gemv_noshuffle_q4_0_f32_mc3", &err), err));
+        CL_CHECK((backend_ctx->kernel_gemv_noshuffle_q4_0_f32_o4 = clCreateKernel(prog, "kernel_gemv_noshuffle_q4_0_f32_o4", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -23495,6 +23497,35 @@ static void ggml_cl_mul_mat_q4_0_f32_adreno(ggml_backend_t backend, const ggml_t
         img_desc.image_width = K * N / 4;
         img_desc.buffer = b_sub_buf;
         CL_CHECK((b_img = clCreateImage(context, CL_MEM_READ_ONLY, &img_fmt, &img_desc, NULL, &err), err));
+
+        // 4-output-per-WI o4 variant for the long-vocab lm_head/embed GEMV
+        // (ne01 = vocab, e.g. 256K on Gemma). Shares one activation read across
+        // 4 output rows. Decode only, default on; opt-out GGML_OPENCL_Q4_0_O4=0.
+        static const bool q4_0_o4_env = []{
+            const char * e = std::getenv("GGML_OPENCL_Q4_0_O4");
+            return !e || e[0] == '\0' || e[0] != '0';
+        }();
+        if (ne1 == 1 && !use_q40_mc3 && q4_0_o4_env &&
+            backend_ctx->kernel_gemv_noshuffle_q4_0_f32_o4 != nullptr &&
+            (ne01 % 4 == 0) && (ne01 >= 32768)) {
+            cl_kernel k_o4 = backend_ctx->kernel_gemv_noshuffle_q4_0_f32_o4;
+            CL_CHECK(clSetKernelArg(k_o4, 0, sizeof(cl_mem),   &q_img));
+            CL_CHECK(clSetKernelArg(k_o4, 1, sizeof(cl_mem),   &extra0_q4_0->d));
+            CL_CHECK(clSetKernelArg(k_o4, 2, sizeof(cl_mem),   &b_img));
+            CL_CHECK(clSetKernelArg(k_o4, 3, sizeof(cl_mem),   &extrad->data_device));
+            CL_CHECK(clSetKernelArg(k_o4, 4, sizeof(cl_ulong), &offsetd));
+            CL_CHECK(clSetKernelArg(k_o4, 5, sizeof(cl_int),   &K));
+            CL_CHECK(clSetKernelArg(k_o4, 6, sizeof(cl_int),   &M));
+            // N_SIMDGROUP is 4 in the o4 kernel
+            size_t o4_local_work_size[3]  = { 64, 4, 1 };
+            size_t o4_global_work_size[3] = { (size_t)CEIL_DIV(ne01 / 4, 64) * 64, 4, 1 };
+            backend_ctx->enqueue_ndrange_kernel(k_o4, 3, o4_global_work_size, o4_local_work_size, dst);
+
+            CL_CHECK(clReleaseMemObject(q_img));
+            CL_CHECK(clReleaseMemObject(b_sub_buf));
+            CL_CHECK(clReleaseMemObject(b_img));
+            return;
+        }
 
         if (use_q40_mc3) {
             kernel = backend_ctx->kernel_gemv_noshuffle_q4_0_f32_mc3;
