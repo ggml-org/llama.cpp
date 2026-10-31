@@ -584,7 +584,7 @@ static std::optional<gguf_remote_model> fetch_or_cached(
             auto result = gguf_parse_meta(cached);
             if (result.has_value()) {
                 if (verbose) {
-                    fprintf(stderr, "gguf_fetch: loaded from cache: %s\n", fs_path_to_utf8(cache_path).c_str());
+                    fprintf(stderr, "gguf_fetch: loaded from cache: %s\n", cache_path.string().c_str());
                 }
                 return result;
             }
@@ -685,7 +685,7 @@ gguf_context_ptr gguf_fetch_gguf_ctx(
     ggml_context_ptr ggml_ctx_ptr;
     ggml_context * ggml_ctx{};
     gguf_init_params params{true, &ggml_ctx};
-    gguf_context_ptr ctx{gguf_init_from_file(fs_path_to_utf8(cache_path).c_str(), params)};
+    gguf_context_ptr ctx{gguf_init_from_file(cache_path.string().c_str(), params)};
     ggml_ctx_ptr.reset(ggml_ctx);
 
     if (ctx == nullptr) {
@@ -723,7 +723,7 @@ gguf_context_ptr gguf_fetch_gguf_ctx(
             ggml_context_ptr shard_ggml_ctx_ptr;
             ggml_context * shard_ggml_ctx{};
             gguf_init_params shard_params{true, &shard_ggml_ctx};
-            gguf_context_ptr shard_ctx{gguf_init_from_file(fs_path_to_utf8(shard_path).c_str(), shard_params)};
+            gguf_context_ptr shard_ctx{gguf_init_from_file(shard_path.string().c_str(), shard_params)};
             shard_ggml_ctx_ptr.reset(shard_ggml_ctx);
 
             if (shard_ctx == nullptr) {

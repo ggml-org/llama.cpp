@@ -61,7 +61,16 @@ jobs:
           RELEASE_BRANCH: ${{ github.ref_name }}
           SKIP_APIABI_CHECK: ${{ github.event.inputs.skip_apiabi_check }}
           APIABI_COMPARE_TAG: ${{ github.event.inputs.apiabi_compare_tag }}
+          APIABI_REPORT_DIR: ${{ runner.temp }}/apiabi-reports
           REQUIRE_DOCKER: ${{ github.event.inputs.require_docker }}
+
+      - name: Upload API/ABI reports
+        if: ${{ always() && github.event.inputs.skip_apiabi_check != 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: apiabi-reports
+          path: ${{ runner.temp }}/apiabi-reports
+          if-no-files-found: ignore
 
       - name: Create release tag
         if: ${{ github.event.inputs.dry_run == 'false' }}

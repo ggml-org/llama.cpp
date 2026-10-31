@@ -218,7 +218,7 @@ it('filters by search', async () => {
 
 	await screen.getByPlaceholder('Search your models').fill('beta');
 
-	await expect.element(screen.getByText(/alpha\s+8B/)).not.toBeVisible();
+	await expect.element(screen.getByText(/alpha\s+8B/)).not.toBeInTheDocument();
 	await expect.element(screen.getByText(/beta\s+8B/)).toBeVisible();
 });
 
@@ -231,7 +231,7 @@ it('filters by context and sorts from the Hub details cache', async () => {
 	await screen.getByText('Context:').click();
 	await screen.getByText('32K or more').click();
 
-	await expect.element(screen.getByText(/alpha\s+8B/)).not.toBeVisible();
+	await expect.element(screen.getByText(/alpha\s+8B/)).not.toBeInTheDocument();
 	await expect.element(screen.getByText(/gamma\s+8B/)).toBeVisible();
 
 	// sorting re-runs once the cache answers

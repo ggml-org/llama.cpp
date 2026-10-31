@@ -1513,6 +1513,23 @@ static void test_all(const std::string & title, std::function<void(const TestCas
         ""
     });
 
+    test({
+        FAILURE,
+        "allOf with a $ref cycle",
+        R"""({
+            "allOf": [{"$ref": "#/$defs/a"}],
+            "$defs": {"a": {"$ref": "#/$defs/a"}}
+        })""",
+        ""
+    });
+
+    test({
+        FAILURE,
+        "long property name with additionalProperties",
+        R"""({"type": "object", "properties": {")""" + std::string(1000, 'a') + R"""(": {"type": "string"}}, "additionalProperties": true})""",
+        ""
+    });
+
     // only the property with the bad pattern degrades
     test({
         SUCCESS,

@@ -3,6 +3,7 @@
 #include "value.h"
 #include "utils.h"
 
+#include <exception>
 #include <string>
 #include <vector>
 #include <memory>
@@ -52,32 +53,39 @@ static void ensure_key_type_allowed(const value & val) {
 
 // execute with error handling
 value statement::execute(context & ctx) const {
+    std::exception_ptr pending;
+    std::string message;
     try {
         return execute_impl(ctx);
     } catch (const continue_statement::signal & /* ex */) {
-        throw;
+        pending = std::current_exception();
     } catch (const break_statement::signal & /* ex */) {
-        throw;
+        pending = std::current_exception();
     } catch (const rethrown_exception & /* ex */) {
-        throw;
+        pending = std::current_exception();
     } catch (const not_implemented_exception & /* ex */) {
-        throw;
+        pending = std::current_exception();
     } catch (const std::exception & e) {
         const std::string & source = *ctx.src;
         if (source.empty()) {
             std::ostringstream oss;
             oss << "\nError executing " << type() << " at position " << pos << ": " << e.what();
-            throw rethrown_exception(oss.str());
+            message = oss.str();
         } else {
             std::ostringstream oss;
             oss << "\n------------\n";
             oss << "While executing " << type() << " at " << get_line_col(source, pos) << " in source:\n";
             oss << peak_source(source, pos) << "\n";
             oss << "Error: " << e.what();
-            // throw as another exception to avoid repeated formatting
-            throw rethrown_exception(oss.str());
+            message = oss.str();
         }
     }
+    // throw outside the catch: MSVC keeps the unwound frames on the stack while a catch block runs
+    if (pending) {
+        std::rethrow_exception(pending);
+    }
+    // throw as another exception to avoid repeated formatting
+    throw rethrown_exception(message);
 }
 
 value identifier::execute_impl(context & ctx) const {
@@ -747,7 +755,11 @@ value macro_statement::execute_impl(context & ctx) const {
     std::string name = cast_stmt<identifier>(this->name)->val;
 
     const func_handler func = [this, name](const func_args & args) -> value {
+        if (args.ctx.macro_depth >= JINJA_RECURSIVE_LIMIT) {
+            throw std::runtime_error("macro calls are nested more than " + std::to_string(JINJA_RECURSIVE_LIMIT) + " levels deep");
+        }
         context macro_ctx(args.ctx); // new scope for macro execution
+        macro_ctx.macro_depth = args.ctx.macro_depth + 1;
 
         bind_parameters(name, this->args, args, macro_ctx);
 
@@ -778,7 +790,11 @@ value call_statement::execute_impl(context & ctx) const {
     context caller_ctx(ctx); // new scope for caller execution
 
     const func_handler func = [this, caller_ctx = std::move(caller_ctx)](const func_args & args) -> value {
+        if (args.ctx.macro_depth >= JINJA_RECURSIVE_LIMIT) {
+            throw std::runtime_error("macro calls are nested more than " + std::to_string(JINJA_RECURSIVE_LIMIT) + " levels deep");
+        }
         context block_ctx(caller_ctx); // new scope for block execution
+        block_ctx.macro_depth = args.ctx.macro_depth + 1;
 
         bind_parameters("caller", this->caller_args, args, block_ctx);
 

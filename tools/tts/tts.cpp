@@ -1,4 +1,5 @@
 #include "arg.h"
+#include "chat.h"
 #include "common.h"
 #include "sampling.h"
 #include "log.h"
@@ -36,7 +37,7 @@ static void print_usage(int, char ** argv) {
     LOG("\nexample usage:\n");
     LOG("\n    %s -m backbone.gguf -mm mmproj.gguf -p \"text to speak\" -o output.wav", argv[0]);
     LOG("\n    %s -hf user/model -p \"text to speak\" -o output.wav\n", argv[0]);
-    LOG("\nnote: --tts-lang and --tts-speaker-file may not be supported in all models");
+    LOG("\nnote: --tts-lang, --tts-voice and --tts-speaker-file may not be supported in all models");
     LOG("\n      use -n to limit the output length");
     LOG("\n      see tts/README.md for per-model usage notes");
     LOG("\n\n");
@@ -111,17 +112,25 @@ int main(int argc, char ** argv) {
         speaker_bitmap.reset(wrapper.bitmap);
     }
 
-    mtmd_helper::gen_audio gen(lctx, mctx.get());
-    mtmd_helper_gen_audio_inp inp{};
+    // a model with a "tts" chat template (e.g. LFM3-Audio) speaks the prompt rendered from it
+    auto tmpls = common_chat_templates_init(model, "");
+    std::string prompt = common_chat_get_tts_prompt(tmpls.get(), params.prompt, params.tts_lang, params.tts_voice);
+    if (prompt.empty()) {
+        prompt = params.prompt;
+    }
+
+    mtmd_helper::gen_audio gen;
+    gen.init(lctx, mctx.get());
+    mtmd_helper_gen_audio_inp inp = mtmd_helper_gen_audio_inp_default();
     inp.seq_id      = 0;
-    inp.prompt      = params.prompt.c_str();
-    inp.prompt_len  = params.prompt.size();
+    inp.prompt      = prompt.c_str();
+    inp.prompt_len  = prompt.size();
     inp.speaker_ref = speaker_bitmap.get();
     inp.lang        = params.tts_lang.c_str();
+    inp.voice       = params.tts_voice.c_str();
     inp.top_k       = params.sampling.top_k;
     inp.top_p       = params.sampling.top_p;
     inp.seed        = params.sampling.seed;
-    inp.out_type    = MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV;
 
     //
     // stage 1: process prompt via backbone model, generate semantic representation
