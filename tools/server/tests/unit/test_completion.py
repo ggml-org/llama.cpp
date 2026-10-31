@@ -260,6 +260,27 @@ def test_pinned_request_on_busy_slot():
     assert run(pin_busy=True) == baseline
 
 
+# a request pinned to an empty slot still loads its prompt from the prompt cache
+# ref: https://github.com/ggml-org/llama.cpp/issues/28139
+def test_pinned_request_on_empty_slot():
+    global server
+    server.n_ctx = 4096
+    server.start()
+    story = "Once upon a time a dragon named Ember guarded a golden key in a deep cave. " * 8
+
+    def timings(prompt: str, id_slot: int) -> dict:
+        res = server.make_request("POST", "/completion", data={"prompt": prompt, "id_slot": id_slot, "n_predict": 0})
+        assert res.status_code == 200
+        return res.body["timings"]
+
+    n_prompt = timings(story, 0)["prompt_n"]
+    # another prompt on slot 0 moves the story to the prompt cache, slot 1 stays empty
+    timings("To bake bread, mix flour, water and salt, then", 0)
+    t = timings(story, 1)
+    assert t["cache_n"] > 0
+    assert t["prompt_n"] + t["cache_n"] == n_prompt
+
+
 def test_json_prompt_no_mtmd():
     global server
     server.start()
