@@ -4,12 +4,20 @@
 #define LOAD_VEC_B 4
 
 #define BM 64
+#ifndef BN
 #define BN 64
+#endif
 #define BK 16
 #define TM 4
+#ifndef TN
 #define TN 8
+#endif
 
-kernel void kernel_mul_mm_f16_f32_l4_lm(
+#ifndef KERNEL_NAME_LM
+#define KERNEL_NAME_LM kernel_mul_mm_f16_f32_l4_lm
+#endif
+
+kernel void KERNEL_NAME_LM(
     global half4 * src0,
     ulong offset0,
     global float4 * src1,
@@ -93,7 +101,8 @@ kernel void kernel_mul_mm_f16_f32_l4_lm(
             }
         }
 
-        for (int l = 0; l < BN; l += loadstride_b) {
+        // BN=8 uses only the threads that load a column inside the tile.
+        for (int l = 0; loadc_b + l < BN; l += loadstride_b) {
             if (ic*BN + loadc_b + l < ne11) {
                 const int idx = pos_b + (loadc_b + l) * stride_b / LOAD_VEC_B + loadr_b;
                 buf_b[(loadr_b * LOAD_VEC_B + 0) * BN + loadc_b + l] = src1[idx].s0;
