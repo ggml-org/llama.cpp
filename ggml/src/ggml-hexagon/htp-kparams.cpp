@@ -2655,6 +2655,94 @@ static bool htp_kparams_solve_concat(
     return false;
 }
 
+// Permuted copy where dst dim 0 is strided in src but another src dim is contiguous,
+// e.g. channel-first <-> channel-last. RESHAPE would issue one DMA per element here.
+static bool htp_kparams_solve_cpy_transpose(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * src0,
+    const struct ggml_tensor * dst,
+    uint32_t type_size,
+    struct htp_copy_kernel_params * kparams) {
+
+    if (src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) {
+        return false;
+    }
+    if (!ggml_is_contiguous(dst) || !ggml_are_same_shape(src0, dst)) {
+        return false;
+    }
+
+    struct htp_copy_transpose_params & tp = kparams->u.transpose;
+
+    int n = 0;
+    for (int d = 0; d < GGML_MAX_DIMS; d++) {
+        if (src0->ne[d] == 1) {
+            continue;
+        }
+        if (n > 0 && src0->nb[d] == (size_t) tp.nb[n - 1] * tp.ne[n - 1]) {
+            tp.ne[n - 1] *= (uint32_t) src0->ne[d];
+            continue;
+        }
+        tp.ne[n] = (uint32_t) src0->ne[d];
+        tp.nb[n] = (uint32_t) src0->nb[d];
+        n++;
+    }
+    if (n < 2 || tp.nb[0] == type_size) {
+        return false;
+    }
+
+    int dim_k = -1;
+    for (int d = 1; d < n; d++) {
+        if (tp.nb[d] == type_size) {
+            dim_k = d;
+            break;
+        }
+    }
+    if (dim_k < 0) {
+        return false;
+    }
+    for (int d = n; d < 4; d++) {
+        tp.ne[d] = 1;
+        tp.nb[d] = tp.nb[d - 1] * tp.ne[d - 1];
+    }
+
+    tp.dim_k = (uint8_t) dim_k;
+    tp.dim_p = 0;
+    tp.dim_q = 0;
+    for (int d = 1; d < 4; d++) {
+        if (d == dim_k) {
+            continue;
+        }
+        if (tp.dim_p == 0) {
+            tp.dim_p = (uint8_t) d;
+        } else {
+            tp.dim_q = (uint8_t) d;
+        }
+    }
+
+    const uint32_t n_threads = htp_session_n_threads(sess) > 0 ? htp_session_n_threads(sess) : 4;
+    const size_t   vtcm_size = htp_session_vtcm_size(sess);
+    for (uint32_t blk_bytes = HTP_COPY_TRANSPOSE_BLK_BYTES; ; blk_bytes /= 2) {
+        if (!htp_copy_transpose_layout_build(&tp, tp.ne[0], tp.ne[dim_k], type_size, blk_bytes, dim_k == 1)) {
+            return false;
+        }
+        const uint64_t vtcm = (uint64_t) n_threads * 2 * (tp.in_buf_size + tp.out_buf_size);
+        if (vtcm_size == 0 || vtcm <= vtcm_size) {
+            kparams->vtcm_size = (uint32_t) vtcm;
+            break;
+        }
+    }
+
+    const uint64_t total_tiles = (uint64_t) tp.n0b * tp.nkb * tp.ne[tp.dim_p] * tp.ne[tp.dim_q];
+    if (total_tiles > UINT32_MAX) {
+        return false;
+    }
+    tp.total_tiles = (uint32_t) total_tiles;
+
+    kparams->kernel_type = HTP_COPY_KERNEL_TRANSPOSE;
+    kparams->n_threads   = (uint8_t) n_threads;
+    return true;
+}
+
 static bool htp_kparams_solve_cpy(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op,
@@ -2750,6 +2838,10 @@ static bool htp_kparams_solve_cpy(
                 kparams->vtcm_size   = kparams->u.gather.slice * n_threads;
                 return true;
             }
+        }
+
+        if (htp_kparams_solve_cpy_transpose(sess, src0, dst, src_type_size, kparams)) {
+            return true;
         }
 
         if (sameshape) {
