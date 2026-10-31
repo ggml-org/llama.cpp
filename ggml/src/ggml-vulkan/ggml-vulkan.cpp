@@ -13205,6 +13205,54 @@ bool ggml_backend_vk_buffer_cpy_tensor(ggml_backend_buffer_t buffer, const ggml_
     UNUSED(buffer);
 }
 
+static vk_buffer & ggml_vk_tensor_dev_buffer(const ggml_tensor * tensor) {
+    ggml_backend_buffer_t buffer = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+    return ((ggml_backend_vk_buffer_context *) buffer->context)->dev_buffer;
+}
+
+void ggml_backend_vk_buffer_set_tensor_n(ggml_backend_buffer_t buffer, ggml_tensor * const * tensors, const void * const * data,
+                                         const size_t * offsets, const size_t * sizes, size_t n_tensors) {
+    VK_LOG_DEBUG("ggml_backend_vk_buffer_set_tensor_n(" << buffer << ", " << n_tensors << ")");
+    std::vector<vk_buffer_region> regions(n_tensors);
+    for (size_t i = 0; i < n_tensors; i++) {
+        regions[i] = { ggml_vk_tensor_dev_buffer(tensors[i]), vk_tensor_offset(tensors[i]) + tensors[i]->view_offs + offsets[i], const_cast<void *>(data[i]), sizes[i] };
+    }
+    ggml_vk_buffer_write_n(regions.data(), n_tensors);
+
+    UNUSED(buffer);
+}
+
+void ggml_backend_vk_buffer_get_tensor_n(ggml_backend_buffer_t buffer, const ggml_tensor * const * tensors, void * const * data,
+                                         const size_t * offsets, const size_t * sizes, size_t n_tensors) {
+    VK_LOG_DEBUG("ggml_backend_vk_buffer_get_tensor_n(" << buffer << ", " << n_tensors << ")");
+    std::vector<vk_buffer_region> regions(n_tensors);
+    for (size_t i = 0; i < n_tensors; i++) {
+        regions[i] = { ggml_vk_tensor_dev_buffer(tensors[i]), vk_tensor_offset(tensors[i]) + tensors[i]->view_offs + offsets[i], data[i], sizes[i] };
+    }
+    ggml_vk_buffer_read_n(regions.data(), n_tensors);
+
+    UNUSED(buffer);
+}
+
+bool ggml_backend_vk_buffer_cpy_tensor_n(ggml_backend_buffer_t buffer, const ggml_tensor * const * srcs, ggml_tensor * const * dsts, size_t n_tensors) {
+    VK_LOG_DEBUG("ggml_backend_vk_buffer_cpy_tensor_n(" << buffer << ", " << n_tensors << ")");
+    for (size_t i = 0; i < n_tensors; i++) {
+        if (!ggml_backend_buffer_is_vk(srcs[i]->view_src ? srcs[i]->view_src->buffer : srcs[i]->buffer)) {
+            return false;
+        }
+    }
+
+    std::vector<vk_buffer_copy_region> regions(n_tensors);
+    for (size_t i = 0; i < n_tensors; i++) {
+        regions[i] = { ggml_vk_tensor_dev_buffer(dsts[i]), vk_tensor_offset(dsts[i]) + dsts[i]->view_offs,
+                       ggml_vk_tensor_dev_buffer(srcs[i]), vk_tensor_offset(srcs[i]) + srcs[i]->view_offs, ggml_nbytes(srcs[i]) };
+    }
+    ggml_vk_buffer_copy_n(regions.data(), n_tensors);
+    return true;
+
+    UNUSED(buffer);
+}
+
 void ggml_backend_vk_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
     ggml_backend_vk_buffer_context * ctx = (ggml_backend_vk_buffer_context *)buffer->context;
 
