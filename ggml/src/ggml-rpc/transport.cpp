@@ -517,6 +517,11 @@ bool socket_t::impl::rdma_recv(void * data, size_t size) {
 
         int slot = (int)wc.wr_id;
         size_t got = wc.byte_len;
+        if (got > rem) {
+            LOG_ERROR("RDMA recv overrun: got=%zu rem=%zu\n", got, rem);
+            c->post_rx(slot);
+            return false;
+        }
         memcpy(dst, c->rx_slot(slot), got);
 
         if (!c->post_rx(slot)) return false;

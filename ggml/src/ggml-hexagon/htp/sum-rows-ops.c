@@ -18,6 +18,7 @@
 #include "htp-ctx.h"
 #include "htp-ops.h"
 #include "htp-tensor.h"
+#include "sum-rows-ops.h"
 
 #define sum_rows_preamble                         \
     const struct htp_tensor *src0 = octx->src[0]; \
@@ -52,7 +53,6 @@ struct sum_rows_context {
     size_t          dst_stride;
     uint32_t        rows_per_thread;
     uint32_t        total_rows;
-    bool            opt_path;
 };
 
 static void sum_rows_thread_f32(unsigned int nth, unsigned int ith, void *data) {
@@ -71,7 +71,6 @@ static void sum_rows_thread_f32(unsigned int nth, unsigned int ith, void *data) 
     const size_t   src_stride = smctx->src_stride;
     const size_t   dst_stride = smctx->dst_stride;
     const uint32_t ne00       = smctx->ne00;
-    const bool     opt_path   = smctx->opt_path;
 
     const float * restrict src_th = (const float *) (smctx->src_data + (start_row * src_stride));
     float       * restrict dst_th = (float *)       (smctx->dst_data + (start_row * dst_stride));
@@ -90,11 +89,7 @@ static void sum_rows_thread_f32(unsigned int nth, unsigned int ith, void *data) 
             hex_l2fetch((const uint8_t *) src_local + src_stride, src_stride, src_stride, 1);
         }
 
-        if (opt_path) {
-            *dst_local = hvx_reduce_sum_f32_a((const uint8_t *) src_local, ne00);
-        } else {
-            *dst_local = hvx_reduce_sum_f32((const uint8_t *) src_local, ne00);
-        }
+        *dst_local = hvx_reduce_sum_f32((const uint8_t *) src_local, ne00);
     }
 
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) start_row);
@@ -109,6 +104,13 @@ int op_sum_rows(struct htp_ops_context * octx) {
 
     if (htp_tensor_is_extended(src0) || htp_tensor_is_extended(dst)) {
         return HTP_STATUS_NO_SUPPORT;
+    }
+
+    const struct htp_sum_rows_kernel_params * kparams =
+        (const struct htp_sum_rows_kernel_params *) octx->kernel_params;
+
+    if (!htp_ops_context_set_n_threads(octx, kparams->n_threads)) {
+        return HTP_STATUS_INVAL_PARAMS;
     }
 
     const uint32_t src0_nrows      = ne01 * ne02 * ne03;
@@ -129,13 +131,8 @@ int op_sum_rows(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
     }
 
-    const uint32_t n_threads = octx->n_threads;
+    const uint32_t n_threads       = octx->n_threads;
     const uint32_t rows_per_thread = fastdiv(nrows + n_threads - 1, &octx->n_threads_div);
-
-    bool opt_path = false;
-    if ((0 == hex_is_aligned((void *) src0->data, VLEN)) && !(nb01 & (VLEN - 1))) {
-        opt_path = true;
-    }
 
     struct sum_rows_context smctx = {
         .octx            = octx,
@@ -146,7 +143,6 @@ int op_sum_rows(struct htp_ops_context * octx) {
         .dst_stride      = nb1,
         .rows_per_thread = rows_per_thread,
         .total_rows      = nrows,
-        .opt_path        = opt_path,
     };
 
     work_queue_run(octx->ctx->work_queue, sum_rows_thread_f32, &smctx, n_threads);
@@ -197,6 +193,13 @@ int op_sum(struct htp_ops_context * octx) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
+    const struct htp_sum_rows_kernel_params * kparams =
+        (const struct htp_sum_rows_kernel_params *) octx->kernel_params;
+
+    if (!htp_ops_context_set_n_threads(octx, kparams->n_threads)) {
+        return HTP_STATUS_INVAL_PARAMS;
+    }
+
     if (octx->ctx->mdev.count > 1 && octx->ctx->mdev.idx > 0) {
         return HTP_STATUS_OK;
     }
@@ -207,9 +210,8 @@ int op_sum(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
     }
 
-    const uint32_t n_threads = (total_elems >= 1024) ? MIN(octx->n_threads, HTP_MAX_NTHREADS) : 1;
-    const uint32_t raw_chunk = (total_elems + n_threads - 1) / n_threads;
-    const uint32_t elems_per_thread = hex_round_up(raw_chunk, 32);
+    const uint32_t n_threads        = octx->n_threads;
+    const uint32_t elems_per_thread = kparams->elems_per_thread;
 
     struct sum_context sctx = {
         .octx             = octx,
@@ -324,6 +326,13 @@ int op_argmax(struct htp_ops_context * octx) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
+    const struct htp_sum_rows_kernel_params * kparams =
+        (const struct htp_sum_rows_kernel_params *) octx->kernel_params;
+
+    if (!htp_ops_context_set_n_threads(octx, kparams->n_threads)) {
+        return HTP_STATUS_INVAL_PARAMS;
+    }
+
     const uint32_t ne00 = src0->ne[0];
     const uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
 
@@ -341,9 +350,8 @@ int op_argmax(struct htp_ops_context * octx) {
             return HTP_STATUS_OK;
         }
 
-        const uint32_t n_threads = (ne00 >= 1024) ? MIN(octx->n_threads, HTP_MAX_NTHREADS) : 1;
-        const uint32_t raw_chunk = (ne00 + n_threads - 1) / n_threads;
-        const uint32_t elems_per_thread = hex_round_up(raw_chunk, 32);
+        const uint32_t n_threads        = octx->n_threads;
+        const uint32_t elems_per_thread = kparams->elems_per_thread;
 
         struct argmax_context actx = {
             .octx             = octx,
@@ -389,8 +397,8 @@ int op_argmax(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
     }
 
-    const uint32_t n_threads = MIN(octx->n_threads, nrows);
-    const uint32_t rows_per_thread = (nrows + n_threads - 1) / n_threads;
+    const uint32_t n_threads       = octx->n_threads;
+    const uint32_t rows_per_thread = fastdiv(nrows + n_threads - 1, &octx->n_threads_div);
 
     struct argmax_context actx = {
         .octx             = octx,

@@ -3030,6 +3030,22 @@ kernel void kernel_mul_mv_iq4_xs_f32(
     kernel_mul_mv_iq4_xs_f32_impl<N_R0_IQ4_XS, constant ggml_metal_kargs_mul_mv &>(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg);
 }
 
+// decode the E2M1 value in the low nibble of n, scaled by 2^-14, without a lookup table: the 3 magnitude bits
+// land in the fp16 exponent/mantissa (e=0 gives the 0.5 subnormal). same decode as MLX's fp4_e2m1
+static inline half mxfp4_dq1(uint32_t n) {
+    const half c = as_type<half>(ushort((n & 7) << 9));
+    return (n & 8) ? -c : c;
+}
+
+// low / high nibbles of the 4 bytes of w, in byte order, scaled by 2^-14
+static inline float4 mxfp4_lo4(uint32_t w) {
+    return float4(mxfp4_dq1(w), mxfp4_dq1(w >> 8), mxfp4_dq1(w >> 16), mxfp4_dq1(w >> 24));
+}
+
+static inline float4 mxfp4_hi4(uint32_t w) {
+    return float4(mxfp4_dq1(w >> 4), mxfp4_dq1(w >> 12), mxfp4_dq1(w >> 20), mxfp4_dq1(w >> 28));
+}
+
 template<int NR0, typename args_t>
 void kernel_mul_mv_mxfp4_f32_impl(
         args_t args,
@@ -3041,8 +3057,6 @@ void kernel_mul_mv_mxfp4_f32_impl(
         ushort tiisg,
         ushort sgitg) {
     const short NSG = FC_mul_mv_nsg;
-
-    threadgroup float * shmem_f32 = (threadgroup float *) shmem;
 
     const int r0 = tgpig.x;
     const int r1 = tgpig.y;
@@ -3065,9 +3079,6 @@ void kernel_mul_mv_mxfp4_f32_impl(
     const short ix = tiisg/2;  // 0...15
     const short it = tiisg%2;  // 0 or 1
 
-    shmem_f32[tiisg] = kvalues_mxfp4_f[tiisg%16];
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-
     float4 yl[4];
     float sumf[NR0]={0.f};
 
@@ -3087,14 +3098,25 @@ void kernel_mul_mv_mxfp4_f32_impl(
             device const block_mxfp4 & xb = x[row*ns01 + ib];
             device const uint8_t     * q2 = (device const uint8_t *)(xb.qs + 8*it);
 
-            float4 acc1 = yl[0]*float4(shmem_f32[q2[0] &  0x0F], shmem_f32[q2[1] &  0x0F], shmem_f32[q2[2] &  0x0F], shmem_f32[q2[3] &  0x0F]);
-            float4 acc2 = yl[1]*float4(shmem_f32[q2[0] >> 4   ], shmem_f32[q2[1] >> 4   ], shmem_f32[q2[2] >> 4   ], shmem_f32[q2[3] >> 4   ]);
-            float4 acc3 = yl[2]*float4(shmem_f32[q2[4] &  0x0F], shmem_f32[q2[5] &  0x0F], shmem_f32[q2[6] &  0x0F], shmem_f32[q2[7] &  0x0F]);
-            float4 acc4 = yl[3]*float4(shmem_f32[q2[4] >> 4   ], shmem_f32[q2[5] >> 4   ], shmem_f32[q2[6] >> 4   ], shmem_f32[q2[7] >> 4   ]);
+            // blocks are 17 bytes, so the 8 quant bytes are only byte aligned: read the aligned words that cover them
+            // and funnel-shift. the third word is read only when needed so no word past the block end is touched
+            device const uint32_t * pw = (device const uint32_t *)((ulong) q2 & ~3ul);
+            const uint sh = ((uint)(ulong) q2 & 3u)*8;
+            const uint32_t a = pw[0];
+            const uint32_t b = pw[1];
+            const uint32_t c = pw[sh ? 2 : 1];
+            const uint32_t w0 = (a >> sh) | ((b << 1) << (31 - sh));
+            const uint32_t w1 = (b >> sh) | ((c << 1) << (31 - sh));
+
+            float4 acc1 = yl[0]*mxfp4_lo4(w0);
+            float4 acc2 = yl[1]*mxfp4_hi4(w0);
+            float4 acc3 = yl[2]*mxfp4_lo4(w1);
+            float4 acc4 = yl[3]*mxfp4_hi4(w1);
 
             acc1 = (acc1 + acc3) + (acc2 + acc4);
 
-            sumf[row] += e8m0_to_fp32(xb.e) * ((acc1[0] + acc1[1]) + (acc1[2] + acc1[3]));
+            // 16384 undoes the 2^-14 of the decode
+            sumf[row] += (e8m0_to_fp32(xb.e)*16384.0f) * ((acc1[0] + acc1[1]) + (acc1[2] + acc1[3]));
         }
 
         yb += 16 * QK_MXFP4;
@@ -3941,7 +3963,8 @@ kernel void kernel_mul_mv_id(
         uint3  tgpig[[threadgroup_position_in_grid]],
         ushort tiitg[[thread_index_in_threadgroup]],
         ushort tiisg[[thread_index_in_simdgroup]],
-        ushort sgitg[[simdgroup_index_in_threadgroup]]) {
+        ushort sgitg[[simdgroup_index_in_threadgroup]],
+        ushort3 ntg [[threads_per_threadgroup]]) {
     const int iid1 = tgpig.z/args.nei0;
     const int idx  = tgpig.z%args.nei0;
 
@@ -3955,10 +3978,19 @@ kernel void kernel_mul_mv_id(
     const int64_t i1 = idx;
     const int64_t i2 = i12;
 
+    device char * dst_cur = dst + (i1*args.ne0 + i2*args.ne1*args.ne0)*sizeof(float);
+
+    if (i02 == -1) {
+        device float * dst_f32 = (device float *) dst_cur;
+        const ushort nth = ntg.x*ntg.y*ntg.z;
+        for (int i0 = tiitg; i0 < args.ne0; i0 += nth) {
+            dst_f32[i0] = 0.0f;
+        }
+        return;
+    }
+
     device const char * src0_cur = src0s + i02*args.nb02;
     device const char * src1_cur = src1  + i11*args.nb11 + i12*args.nb12;
-
-    device char * dst_cur = dst + (i1*args.ne0 + i2*args.ne1*args.ne0)*sizeof(float);
 
     ggml_metal_kargs_mul_mv args0 = {
         /*.ne00 =*/ args.ne00,

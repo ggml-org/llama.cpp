@@ -144,6 +144,7 @@
 	);
 
 	const pickers = useChatFormPickers({
+		canCompact: () => chatStore.canCompact(conversationsStore.activeMessages),
 		focusInput: refocusInput,
 		getCaretOffset: () => inputRef?.getCaretOffset(),
 		getCwd: () => cwd,
@@ -163,6 +164,7 @@
 				.getServers()
 				.some((s) => s.enabled && prefs.isServerToolsEnabled(s.id) && s.url.trim());
 		},
+		onCompact: () => chatStore.compactConversation(),
 		openModelSelector: () => chatFormActionsRef?.openModelSelector(),
 		setCaretOffset: (offset) => inputRef?.setCaretOffset(offset),
 		setValue: (v) => {
@@ -477,12 +479,9 @@
 		queueMicrotask(() => inputRef?.focus());
 	}
 
-	// A flow outside the chat, e.g. the models manager closing onto it, asks for the
-	// composer back. The dialog's focus scope is still tearing down, so focus on a
-	// frame of its own.
+	// A flow outside the chat, e.g. the models page returning to it, asks for the
+	// composer back. Focus on a frame of its own, once the route has settled.
 	$effect(() => {
-		if (uiStore.manageModelsOpen) return;
-
 		if (!uiStore.composerFocusRequested) return;
 
 		uiStore.composerFocusRequested = false;

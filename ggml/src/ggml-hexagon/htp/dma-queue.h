@@ -436,10 +436,10 @@ static inline void dma_sync_write(dma_queue * dma_q, dma_addr_t dst, const void 
     }
 }
 
-#define DMA_CACHE_MAX_SIZE 256U
+#define DMA_CACHE_MAX_SIZE 128U
 
 // Fully assoc LRU cache
-typedef struct {
+typedef struct __attribute__((aligned(128))) {
     uint8_t *base;
     uint32_t line_size;
     uint32_t capacity;
@@ -485,7 +485,7 @@ static inline bool dma_cache_fa_push(dma_queue *q, dma_cache_fa *c, dma_addr_t s
 }
 
 // Direct mapped cache
-typedef struct {
+typedef struct __attribute__((aligned(128))) {
     uint8_t *base;
     uint32_t line_size;
     uint32_t capacity;

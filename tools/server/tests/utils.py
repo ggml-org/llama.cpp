@@ -29,7 +29,7 @@ from re import RegexFlag
 import wget
 
 
-DEFAULT_HTTP_TIMEOUT = 60
+DEFAULT_HTTP_TIMEOUT = 600
 
 # per-request timeout, a hung server fails the test instead of stalling the CI for hours
 DEFAULT_REQUEST_TIMEOUT = 600
@@ -94,6 +94,7 @@ class ServerProcess:
     api_key: str | None = None
     models_dir: str | None = None
     models_max: int | None = None
+    models_memory_margin: int | None = None
     models_preset: str | None = None
     no_models_autoload: bool | None = None
     lora_files: List[str] | None = None
@@ -127,6 +128,7 @@ class ServerProcess:
     mcp_servers_config: str | None = None
     mcp_servers_json: str | None = None
     cors_origins: str | None = None
+    llama_cache: str | None = None
 
     # session variables
     process: subprocess.Popen | None = None
@@ -145,7 +147,9 @@ class ServerProcess:
             **os.environ,
             "LLAMA_SERVER_DEBUG_FAKE_TIMING": "1",
         }
-        if "LLAMA_CACHE" not in os.environ:
+        if self.llama_cache is not None:
+            env["LLAMA_CACHE"] = self.llama_cache
+        elif "LLAMA_CACHE" not in os.environ:
             env["LLAMA_CACHE"] = "tmp"
         if self.external_server:
             print(f"[external_server]: Assuming external server running on {self.server_host}:{self.server_port}")
@@ -185,6 +189,8 @@ class ServerProcess:
             server_args.extend(["--models-dir", self.models_dir])
         if self.models_max is not None:
             server_args.extend(["--models-max", self.models_max])
+        if self.models_memory_margin is not None:
+            server_args.extend(["--models-memory-margin", self.models_memory_margin])
         if self.models_preset:
             server_args.extend(["--models-preset", self.models_preset])
         if self.cors_origins:

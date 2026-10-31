@@ -44,12 +44,14 @@ struct htp_thread_trace {
 };
 
 static inline void htp_trace_event(struct htp_thread_trace * tr, uint16_t id, uint16_t info, uint32_t type) {
-    if (tr->count < tr->max_events) {
-        uint32_t i = tr->count;
+    if (!tr->max_events) {
+        return;
+    }
+    uint32_t i = tr->count++;
+    if (i < tr->max_events) {
         tr->events[i].id     = id;
         tr->events[i].info   = info | (type == HTP_TRACE_EVT_STOP ? 0x8000 : 0);
         tr->events[i].cycles = (uint32_t) hex_get_cycles();
-        tr->count++;
     }
 }
 
