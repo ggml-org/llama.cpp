@@ -250,6 +250,26 @@ struct ggml_webgpu_get_rows_pipeline_key_hash {
     }
 };
 
+/** Group Norm **/
+
+struct ggml_webgpu_group_norm_pipeline_key {
+    bool inplace;
+    uint32_t wg_size;
+
+    bool operator==(const ggml_webgpu_group_norm_pipeline_key & other) const {
+        return inplace == other.inplace && wg_size == other.wg_size;
+    }
+};
+
+struct ggml_webgpu_group_norm_pipeline_key_hash {
+    size_t operator()(const ggml_webgpu_group_norm_pipeline_key & key) const {
+        size_t seed = 0;
+        ggml_webgpu_hash_combine(seed, key.inplace);
+        ggml_webgpu_hash_combine(seed, key.wg_size);
+        return seed;
+    }
+};
+
 /** Row Norm **/
 
 struct ggml_webgpu_row_norm_pipeline_key {
@@ -1207,6 +1227,9 @@ inline bool ggml_webgpu_can_use_mmvq(const ggml_tensor * src0,
 }
 
 class ggml_webgpu_shader_lib {
+    std::unordered_map<ggml_webgpu_group_norm_pipeline_key, webgpu_pipeline, ggml_webgpu_group_norm_pipeline_key_hash>
+        group_norm_pipelines;
+
     wgpu::Device           device;
     pre_wgsl::Preprocessor preprocessor;
 
@@ -1307,6 +1330,32 @@ class ggml_webgpu_shader_lib {
         auto processed        = preprocessor.preprocess(wgsl_sum_rows, defines);
         sum_rows_pipelines[1] = ggml_webgpu_create_pipeline(device, processed, "sum_rows");
         return sum_rows_pipelines[1];
+    }
+
+    webgpu_pipeline get_group_norm_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        const ggml_webgpu_group_norm_pipeline_key key = {
+            ggml_webgpu_tensor_equal(context.src0, context.dst),
+            std::min(context.max_wg_size, 128u),
+        };
+        auto it = group_norm_pipelines.find(key);
+        if (it != group_norm_pipelines.end()) {
+            return it->second;
+        }
+
+        std::vector<std::string> defines = { "WG_SIZE=" + std::to_string(key.wg_size) };
+        std::string variant = "group_norm_f32";
+        if (key.inplace) {
+            defines.push_back("INPLACE");
+            variant += "_inplace";
+        }
+        auto processed = preprocessor.preprocess(wgsl_group_norm, defines);
+        auto decisions = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+        decisions->wg_size = key.wg_size;
+        decisions->inplace = key.inplace;
+        auto pipeline = ggml_webgpu_create_pipeline(device, processed, variant);
+        pipeline.context = decisions;
+        group_norm_pipelines[key] = pipeline;
+        return pipeline;
     }
 
     webgpu_pipeline get_row_norm_pipeline(const ggml_webgpu_shader_lib_context & context) {
