@@ -82,6 +82,8 @@ layout (constant_id = 7) const uint TM = 4;
 layout (constant_id = 8) const uint TN = 2;
 layout (constant_id = 9) const uint TK = 1;  // Only needed for coopmat
 layout (constant_id = 10) const uint WARP = 32;
+// Use the mixed signedness dot product, for devices that accelerate only that one
+layout (constant_id = 11) const bool MMQ_SUDOT = false;
 
 #define BK 32
 
@@ -101,6 +103,13 @@ shared block_b_cache buf_b[BN * BK_STEP];
 // Register cache
 block_a_cache cache_a[WMITER * TM];
 block_b_cache cache_b;
+
+#if defined(DATA_A_Q8_0) || defined(DATA_A_MXFP4) || defined(DATA_A_IQ4_XS) || defined(DATA_A_IQ3_S) || defined(DATA_A_Q3_K) || defined(DATA_A_Q6_K)
+// These quants are signed. MMQ_SUDOT gives them a bias and uses the sum of each half of the q8_1 block to remove it.
+#define MMQ_B_SUMS
+shared int32_t buf_b_qsum[MMQ_SUDOT ? BN * BK_STEP * 2 : 1];
+int32_t cache_b_qsum[2];
+#endif
 
 #define LOAD_VEC_A (4 * QUANT_R_MMQ)
 #define LOAD_VEC_B 16
