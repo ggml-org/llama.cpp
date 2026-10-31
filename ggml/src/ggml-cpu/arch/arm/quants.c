@@ -920,6 +920,30 @@ void ggml_vec_dot_nvfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
     *s = sumf;
 }
 
+#if defined(__ARM_FEATURE_SVE)
+// Values beyond the first 32 bits of qh are undefined. Do not use this
+// loader for VL > 1024: it may cause a SEGV.
+static inline svbool_t load_as_svbool(const uint8_t * p) {
+#if defined(__GNUC__) || defined(__clang__)
+    if (ggml_cpu_get_sve_cnt() * 8 < 512) {
+        svbool_t r;
+        __asm__("ldr %0, %1"
+                : "=Upa"(r)
+                : "Q"(*(const char (*)[32]) p));
+        return r;
+    }
+#endif
+    const uint64_t vector_length = ggml_cpu_get_sve_cnt() * 8;
+    const svbool_t active = vector_length >= 512 ? svptrue_pat_b8(SV_VL32) : svptrue_b8();
+    const uint64_t load_bytes = vector_length >= 512 ? 4 : svcntd();
+    const svbool_t load = svwhilelt_b8_u64(0, load_bytes);
+    const svuint8_t raw = svld1_u8(load, p);
+    const svuint8_t sel = svlsr_n_u8_x(active, svindex_u8(0, 1), 3);
+    const svuint8_t msk = svdupq_n_u8(1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128);
+    return svcmpne_n_u8(active, svand_u8_x(active, svtbl_u8(raw, sel), msk), 0);
+}
+#endif
+
 void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     const int qk = QK8_0;
     const int nb = n / qk;
@@ -938,7 +962,107 @@ void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
     const block_q5_0 * GGML_RESTRICT x = vx;
     const block_q8_0 * GGML_RESTRICT y = vy;
 
-#if defined(__ARM_NEON)
+#if defined(__ARM_FEATURE_SVE)
+    svfloat32_t sumv0 = svdup_n_f32(0.0f);
+    svfloat32_t sumv1 = svdup_n_f32(0.0f);
+
+    const int vector_length = ggml_cpu_get_sve_cnt()*8;
+
+    switch (vector_length) {
+        case 128:
+            {
+                const svbool_t p16 = svptrue_pat_b8(SV_VL16);
+                const svbool_t p4  = svptrue_pat_b32(SV_VL4);
+
+                for (; ib + 1 < nb; ib += 2) {
+                    const block_q5_0 * GGML_RESTRICT x0 = &x[ib];
+                    const block_q5_0 * GGML_RESTRICT x1 = &x[ib + 1];
+                    const block_q8_0 * GGML_RESTRICT y0 = &y[ib];
+                    const block_q8_0 * GGML_RESTRICT y1 = &y[ib + 1];
+
+                    const svbool_t qhl0p = load_as_svbool(x0->qh);
+                    const svbool_t qhh0p = load_as_svbool(((const uint8_t *) x0->qh + 2));
+                    const svbool_t qhl1p = load_as_svbool(x1->qh);
+                    const svbool_t qhh1p = load_as_svbool(((const uint8_t *) x1->qh + 2));
+
+                    const svint8_t qhl0 = svdup_n_s8_z(svnot_b_z(p16, qhl0p), 0x10);
+                    const svint8_t qhh0 = svdup_n_s8_z(svnot_b_z(p16, qhh0p), 0x10);
+                    const svint8_t qhl1 = svdup_n_s8_z(svnot_b_z(p16, qhl1p), 0x10);
+                    const svint8_t qhh1 = svdup_n_s8_z(svnot_b_z(p16, qhh1p), 0x10);
+
+                    const svuint8_t qx0r = svld1rq_u8(p16, x0->qs);
+                    const svuint8_t qx1r = svld1rq_u8(p16, x1->qs);
+
+                    const svint8_t qx0l = svreinterpret_s8_u8(svand_n_u8_x(p16, qx0r, 0x0F));
+                    const svint8_t qx0h = svreinterpret_s8_u8(svlsr_n_u8_x(p16, qx0r, 0x04));
+                    const svint8_t qx1l = svreinterpret_s8_u8(svand_n_u8_x(p16, qx1r, 0x0F));
+                    const svint8_t qx1h = svreinterpret_s8_u8(svlsr_n_u8_x(p16, qx1r, 0x04));
+
+                    const svint8_t qx0lf = svsub_s8_x(p16, qx0l, qhl0);
+                    const svint8_t qx0hf = svsub_s8_x(p16, qx0h, qhh0);
+                    const svint8_t qx1lf = svsub_s8_x(p16, qx1l, qhl1);
+                    const svint8_t qx1hf = svsub_s8_x(p16, qx1h, qhh1);
+
+                    const svint8_t qy0l = svld1_s8(p16, y0->qs);
+                    const svint8_t qy0h = svld1_s8(p16, y0->qs + 16);
+                    const svint8_t qy1l = svld1_s8(p16, y1->qs);
+                    const svint8_t qy1h = svld1_s8(p16, y1->qs + 16);
+
+                    sumv0 = svmla_n_f32_x(p4, sumv0, svcvt_f32_s32_x(p4, svadd_s32_x(p4,
+                                    svdot_s32(svdup_n_s32(0), qx0lf, qy0l),
+                                    svdot_s32(svdup_n_s32(0), qx0hf, qy0h))), GGML_CPU_FP16_TO_FP32(x0->d)*GGML_CPU_FP16_TO_FP32(y0->d));
+                    sumv1 = svmla_n_f32_x(p4, sumv1, svcvt_f32_s32_x(p4, svadd_s32_x(p4,
+                                    svdot_s32(svdup_n_s32(0), qx1lf, qy1l),
+                                    svdot_s32(svdup_n_s32(0), qx1hf, qy1h))), GGML_CPU_FP16_TO_FP32(x1->d)*GGML_CPU_FP16_TO_FP32(y1->d));
+                }
+
+                sumf = svaddv_f32(p4, svadd_f32_x(p4, sumv0, sumv1));
+            } break;
+        case 256:
+        case 512:
+            {
+                const svbool_t p32  = svptrue_pat_b8(SV_VL32);
+                const svbool_t p16h = svptrue_pat_b8(SV_VL16);
+                const svbool_t p16l = svnot_b_z(p32, p16h);
+                const svbool_t p8   = svptrue_pat_b32(SV_VL8);
+
+                for (; ib + 1 < nb; ib += 2) {
+                    const block_q5_0 * GGML_RESTRICT x0 = &x[ib];
+                    const block_q5_0 * GGML_RESTRICT x1 = &x[ib + 1];
+                    const block_q8_0 * GGML_RESTRICT y0 = &y[ib];
+                    const block_q8_0 * GGML_RESTRICT y1 = &y[ib + 1];
+
+                    svbool_t qhbits0p = load_as_svbool(x0->qh);
+                    svbool_t qhbits1p = load_as_svbool(x1->qh);
+                    const svint8_t qhbits0 = svdup_n_s8_z(svnot_b_z(p32, qhbits0p), 0x10);
+                    const svint8_t qhbits1 = svdup_n_s8_z(svnot_b_z(p32, qhbits1p), 0x10);
+
+                    const svuint8_t qx0r = svld1rq_u8(p32, x0->qs);
+                    const svuint8_t qx1r = svld1rq_u8(p32, x1->qs);
+
+                    const svint8_t qx0 = svreinterpret_s8_u8(svlsr_n_u8_m(p16l, svand_n_u8_m(p16h, qx0r, 0x0F), 0x04));
+                    const svint8_t qx1 = svreinterpret_s8_u8(svlsr_n_u8_m(p16l, svand_n_u8_m(p16h, qx1r, 0x0F), 0x04));
+
+                    const svint8_t qx0f = svsub_s8_x(p32, qx0, qhbits0);
+                    const svint8_t qx1f = svsub_s8_x(p32, qx1, qhbits1);
+
+                    const svint8_t qy0 = svld1_s8(p32, y0->qs);
+                    const svint8_t qy1 = svld1_s8(p32, y1->qs);
+
+                    sumv0 = svmla_n_f32_x(p8, sumv0, svcvt_f32_s32_x(p8,
+                                svdot_s32(svdup_n_s32(0), qx0f, qy0)), GGML_CPU_FP16_TO_FP32(x0->d)*GGML_CPU_FP16_TO_FP32(y0->d));
+                    sumv1 = svmla_n_f32_x(p8, sumv1, svcvt_f32_s32_x(p8,
+                                svdot_s32(svdup_n_s32(0), qx1f, qy1)), GGML_CPU_FP16_TO_FP32(x1->d)*GGML_CPU_FP16_TO_FP32(y1->d));
+                }
+
+                sumf = svaddv_f32(p8, svadd_f32_x(p8, sumv0, sumv1));
+            } break;
+        default:
+            assert(false && "Unsupported vector length");
+            break;
+    }
+
+#elif defined(__ARM_NEON)
     float32x4_t sumv0 = vdupq_n_f32(0.0f);
     float32x4_t sumv1 = vdupq_n_f32(0.0f);
 
@@ -1050,7 +1174,116 @@ void ggml_vec_dot_q5_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
     const block_q5_1 * GGML_RESTRICT x = vx;
     const block_q8_1 * GGML_RESTRICT y = vy;
 
-#if defined(__ARM_NEON)
+#if defined(__ARM_FEATURE_SVE)
+    svfloat32_t sumv0 = svdup_n_f32(0.0f);
+    svfloat32_t sumv1 = svdup_n_f32(0.0f);
+
+    float summs0 = 0.0f;
+    float summs1 = 0.0f;
+
+    const int vector_length = ggml_cpu_get_sve_cnt()*8;
+
+    switch (vector_length) {
+        case 128:
+            {
+                const svbool_t p16 = svptrue_pat_b8(SV_VL16);
+                const svbool_t p4  = svptrue_pat_b32(SV_VL4);
+
+                for (; ib + 1 < nb; ib += 2) {
+                    const block_q5_1 * GGML_RESTRICT x0 = &x[ib];
+                    const block_q5_1 * GGML_RESTRICT x1 = &x[ib + 1];
+                    const block_q8_1 * GGML_RESTRICT y0 = &y[ib];
+                    const block_q8_1 * GGML_RESTRICT y1 = &y[ib + 1];
+
+                    summs0 += GGML_CPU_FP16_TO_FP32(x0->m) * GGML_CPU_FP16_TO_FP32(y0->s);
+                    summs1 += GGML_CPU_FP16_TO_FP32(x1->m) * GGML_CPU_FP16_TO_FP32(y1->s);
+
+                    const svbool_t qhl0p = load_as_svbool(x0->qh);
+                    const svbool_t qhh0p = load_as_svbool(((const uint8_t *) x0->qh + 2));
+                    const svbool_t qhl1p = load_as_svbool(x1->qh);
+                    const svbool_t qhh1p = load_as_svbool(((const uint8_t *) x1->qh + 2));
+
+                    const svint8_t qhl0 = svdup_n_s8_z(qhl0p, 0x10);
+                    const svint8_t qhh0 = svdup_n_s8_z(qhh0p, 0x10);
+                    const svint8_t qhl1 = svdup_n_s8_z(qhl1p, 0x10);
+                    const svint8_t qhh1 = svdup_n_s8_z(qhh1p, 0x10);
+
+                    const svuint8_t qx0r = svld1rq_u8(p16, x0->qs);
+                    const svuint8_t qx1r = svld1rq_u8(p16, x1->qs);
+
+                    const svint8_t qx0l = svreinterpret_s8_u8(svand_n_u8_x(p16, qx0r, 0x0F));
+                    const svint8_t qx0h = svreinterpret_s8_u8(svlsr_n_u8_x(p16, qx0r, 0x04));
+                    const svint8_t qx1l = svreinterpret_s8_u8(svand_n_u8_x(p16, qx1r, 0x0F));
+                    const svint8_t qx1h = svreinterpret_s8_u8(svlsr_n_u8_x(p16, qx1r, 0x04));
+
+                    const svint8_t qx0lf = svreinterpret_s8_u8(svorr_u8_x(p16, svreinterpret_u8_s8(qx0l), svreinterpret_u8_s8(qhl0)));
+                    const svint8_t qx0hf = svreinterpret_s8_u8(svorr_u8_x(p16, svreinterpret_u8_s8(qx0h), svreinterpret_u8_s8(qhh0)));
+                    const svint8_t qx1lf = svreinterpret_s8_u8(svorr_u8_x(p16, svreinterpret_u8_s8(qx1l), svreinterpret_u8_s8(qhl1)));
+                    const svint8_t qx1hf = svreinterpret_s8_u8(svorr_u8_x(p16, svreinterpret_u8_s8(qx1h), svreinterpret_u8_s8(qhh1)));
+
+                    const svint8_t qy0l = svld1_s8(p16, y0->qs);
+                    const svint8_t qy0h = svld1_s8(p16, y0->qs + 16);
+                    const svint8_t qy1l = svld1_s8(p16, y1->qs);
+                    const svint8_t qy1h = svld1_s8(p16, y1->qs + 16);
+
+                    sumv0 = svmla_n_f32_x(p4, sumv0, svcvt_f32_s32_x(p4, svadd_s32_x(p4,
+                                    svdot_s32(svdup_n_s32(0), qx0lf, qy0l),
+                                    svdot_s32(svdup_n_s32(0), qx0hf, qy0h))), GGML_CPU_FP16_TO_FP32(x0->d)*GGML_CPU_FP16_TO_FP32(y0->d));
+                    sumv1 = svmla_n_f32_x(p4, sumv1, svcvt_f32_s32_x(p4, svadd_s32_x(p4,
+                                    svdot_s32(svdup_n_s32(0), qx1lf, qy1l),
+                                    svdot_s32(svdup_n_s32(0), qx1hf, qy1h))), GGML_CPU_FP16_TO_FP32(x1->d)*GGML_CPU_FP16_TO_FP32(y1->d));
+                }
+
+                sumf = svaddv_f32(p4, svadd_f32_x(p4, sumv0, sumv1)) + summs0 + summs1;
+            } break;
+        case 256:
+        case 512:
+            {
+                const svbool_t p32  = svptrue_pat_b8(SV_VL32);
+                const svbool_t p16h = svptrue_pat_b8(SV_VL16);
+                const svbool_t p16l = svnot_b_z(p32, p16h);
+                const svbool_t p8   = svptrue_pat_b32(SV_VL8);
+
+                for (; ib + 1 < nb; ib += 2) {
+                    const block_q5_1 * GGML_RESTRICT x0 = &x[ib];
+                    const block_q5_1 * GGML_RESTRICT x1 = &x[ib + 1];
+                    const block_q8_1 * GGML_RESTRICT y0 = &y[ib];
+                    const block_q8_1 * GGML_RESTRICT y1 = &y[ib + 1];
+
+                    summs0 += GGML_CPU_FP16_TO_FP32(x0->m) * GGML_CPU_FP16_TO_FP32(y0->s);
+                    summs1 += GGML_CPU_FP16_TO_FP32(x1->m) * GGML_CPU_FP16_TO_FP32(y1->s);
+
+                    const svbool_t qhbits0p = load_as_svbool(x0->qh);
+                    const svbool_t qhbits1p = load_as_svbool(x1->qh);
+                    const svint8_t qhbits0 = svdup_n_s8_z(qhbits0p, 0x10);
+                    const svint8_t qhbits1 = svdup_n_s8_z(qhbits1p, 0x10);
+
+                    const svuint8_t qx0r = svld1rq_u8(p32, x0->qs);
+                    const svuint8_t qx1r = svld1rq_u8(p32, x1->qs);
+
+                    const svint8_t qx0 = svreinterpret_s8_u8(svlsr_n_u8_m(p16l, svand_n_u8_m(p16h, qx0r, 0x0F), 0x04));
+                    const svint8_t qx1 = svreinterpret_s8_u8(svlsr_n_u8_m(p16l, svand_n_u8_m(p16h, qx1r, 0x0F), 0x04));
+
+                    const svint8_t qx0f = svreinterpret_s8_u8(svorr_u8_x(p32, svreinterpret_u8_s8(qx0), svreinterpret_u8_s8(qhbits0)));
+                    const svint8_t qx1f = svreinterpret_s8_u8(svorr_u8_x(p32, svreinterpret_u8_s8(qx1), svreinterpret_u8_s8(qhbits1)));
+
+                    const svint8_t qy0 = svld1_s8(p32, y0->qs);
+                    const svint8_t qy1 = svld1_s8(p32, y1->qs);
+
+                    sumv0 = svmla_n_f32_x(p8, sumv0, svcvt_f32_s32_x(p8,
+                                svdot_s32(svdup_n_s32(0), qx0f, qy0)), GGML_CPU_FP16_TO_FP32(x0->d)*GGML_CPU_FP16_TO_FP32(y0->d));
+                    sumv1 = svmla_n_f32_x(p8, sumv1, svcvt_f32_s32_x(p8,
+                                svdot_s32(svdup_n_s32(0), qx1f, qy1)), GGML_CPU_FP16_TO_FP32(x1->d)*GGML_CPU_FP16_TO_FP32(y1->d));
+                }
+
+                sumf = svaddv_f32(p8, svadd_f32_x(p8, sumv0, sumv1)) + summs0 + summs1;
+            } break;
+        default:
+            assert(false && "Unsupported vector length");
+            break;
+    }
+
+#elif defined(__ARM_NEON)
     float32x4_t sumv0 = vdupq_n_f32(0.0f);
     float32x4_t sumv1 = vdupq_n_f32(0.0f);
 
