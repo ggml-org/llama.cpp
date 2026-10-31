@@ -12,6 +12,10 @@
 #include <stdint.h>
 #include <string.h>
 
+#ifdef __cplusplus
+#include <cmath>
+#endif
+
 #ifdef __ARM_FEATURE_SVE
 #include <arm_sve.h>
 #endif // __ARM_FEATURE_SVE
@@ -588,19 +592,29 @@ static inline int ggml_round_to_nearest_even(float x) {
     return fraction > 0.5f || (fraction == 0.5f && (value & 1)) ? value + 1 : value;
 }
 
+#ifdef __cplusplus
+#define GGML_SIGNBIT(x) std::signbit(x)
+#define GGML_ISNAN(x)   std::isnan(x)
+#define GGML_ISINF(x)   std::isinf(x)
+#else
+#define GGML_SIGNBIT(x) signbit(x)
+#define GGML_ISNAN(x)   isnan(x)
+#define GGML_ISINF(x)   isinf(x)
+#endif
+
 // Supports saturating conversion only; infinities and overflow clamp to +/-448.
 static inline uint8_t ggml_fp32_to_f8_e4m3(float x) {
-    const uint8_t sign = signbit(x) ? 0x80 : 0;
+    const uint8_t sign = GGML_SIGNBIT(x) ? 0x80 : 0;
     x = fabsf(x);
 
-    if (isnan(x)) {
+    if (GGML_ISNAN(x)) {
         // OCP FP8 leaves NaN sign handling to the implementation; use canonical 0x7F.
         return 0x7F;
     }
     if (x == 0.0f) {
         return sign;
     }
-    if (isinf(x) || x >= 448.0f) {
+    if (GGML_ISINF(x) || x >= 448.0f) {
         return sign | 0x7E;
     }
     if (x < 0.015625f) {
