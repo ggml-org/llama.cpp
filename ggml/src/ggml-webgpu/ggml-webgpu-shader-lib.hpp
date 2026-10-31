@@ -26,8 +26,9 @@
 // Matches GGML_PAD(..., 256) in src/llama-context.cpp for KV cache sizing.
 #define GGML_WEBGPU_KV_SEQ_PAD                       256u
 
-#define GGML_WEBGPU_ARGSORT_MERGE_MAX_WG_SIZE 512u
-#define GGML_WEBGPU_COUNT_EQUAL_WG_SIZE       256u
+#define GGML_WEBGPU_ARGSORT_MERGE_MAX_WG_SIZE      512u
+#define GGML_WEBGPU_COUNT_EQUAL_WG_SIZE            256u
+#define GGML_WEBGPU_COUNT_EQUAL_SINGLE_WG_MAX_SIZE 1024u
 
 // Matrix multiplication parameters
 
@@ -1229,7 +1230,7 @@ class ggml_webgpu_shader_lib {
     wgpu::Device           device;
     pre_wgsl::Preprocessor preprocessor;
 
-    std::unordered_map<int, webgpu_pipeline> count_equal_pipelines;    // key is src_overlap
+    std::unordered_map<int, webgpu_pipeline> count_equal_pipelines;    // key is src_overlap and single_wg
     std::unordered_map<int, webgpu_pipeline> sum_rows_pipelines;       // key is fixed, no variants yet
     std::unordered_map<int, webgpu_pipeline> argmax_pipelines;         // key is vec4
     std::unordered_map<int, webgpu_pipeline> argsort_pipelines;        // key is order
@@ -1320,8 +1321,9 @@ class ggml_webgpu_shader_lib {
   public:
     ggml_webgpu_shader_lib(wgpu::Device device) { this->device = device; }
 
-    webgpu_pipeline get_count_equal_pipeline(bool src_overlap) {
-        auto it = count_equal_pipelines.find(src_overlap);
+    webgpu_pipeline get_count_equal_pipeline(bool src_overlap, bool single_wg) {
+        const int key = (src_overlap << 1) | single_wg;
+        auto      it  = count_equal_pipelines.find(key);
         if (it != count_equal_pipelines.end()) {
             return it->second;
         }
@@ -1329,9 +1331,12 @@ class ggml_webgpu_shader_lib {
         if (src_overlap) {
             defines.push_back("SRC_OVERLAP");
         }
-        auto processed                     = preprocessor.preprocess(wgsl_count_equal, defines);
-        count_equal_pipelines[src_overlap] = ggml_webgpu_create_pipeline(device, processed, "count_equal");
-        return count_equal_pipelines[src_overlap];
+        if (single_wg) {
+            defines.push_back("SINGLE_WG");
+        }
+        auto processed             = preprocessor.preprocess(wgsl_count_equal, defines);
+        count_equal_pipelines[key] = ggml_webgpu_create_pipeline(device, processed, "count_equal");
+        return count_equal_pipelines[key];
     }
 
     webgpu_pipeline get_sum_rows_pipeline(const ggml_webgpu_shader_lib_context & context) {

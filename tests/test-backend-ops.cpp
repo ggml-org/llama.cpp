@@ -10810,7 +10810,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     test_cases.emplace_back(new test_count_equal(GGML_TYPE_F32, {4,  500, 1, 1}));
     test_cases.emplace_back(new test_count_equal(GGML_TYPE_F32, {4, 5000, 1, 1}));
-    for (int64_t n : {1, 255, 256, 257, 1025, 65537}) {
+    for (int64_t n : {1, 255, 256, 257, 1023, 1024, 1025, 65537}) {
         for (int match_every : {0, 1, 3}) {
             test_cases.emplace_back(new test_count_equal_i32({n, 1, 1, 1}, match_every));
         }
@@ -10818,6 +10818,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_count_equal_i32({257, 3, 1, 1}, 3, true));
     test_cases.emplace_back(new test_count_equal_i32({17, 5, 1, 1}, 1, true));
     test_cases.emplace_back(new test_count_equal_i32({257, 1, 1, 1}, 1, true, true));
+    test_cases.emplace_back(new test_count_equal_i32({1024, 1, 1, 1}, 1, true, true));
+    test_cases.emplace_back(new test_count_equal_i32({1025, 1, 1, 1}, 1, true, true));
 
     test_cases.emplace_back(new test_argmax(GGML_TYPE_F32, {32,    1, 1, 1}));
     test_cases.emplace_back(new test_argmax(GGML_TYPE_F32, {32,  513, 1, 1}));
@@ -12999,7 +13001,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {64, 64, 20, 1}, false, false, GGML_TYPE_F32, {1, 1}, 1.0f, 0.0f));
     test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {77, 64, 20, 1}, false, false, GGML_TYPE_F32, {1, 1}, 1.0f, 0.0f));
 
-    for (int64_t n : {256, 4096, 65536, 1048576}) {
+    for (int64_t n : {256, 1024, 1025, 4096, 65536, 1048576}) {
         test_cases.emplace_back(new test_count_equal_i32({n, 1, 1, 1}, 3));
     }
 
