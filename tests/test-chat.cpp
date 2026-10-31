@@ -8,6 +8,7 @@
 #include "../src/llama-grammar.h"
 #include "../src/unicode.h"
 #include "../tools/server/server-chat.h"
+#include "../tools/server/server-task.h"
 #include "chat-auto-parser.h"
 #include "chat.h"
 #include "json-schema-to-grammar.h"
@@ -1965,6 +1966,41 @@ static void test_convert_responses_to_chatcmpl() {
         assert_equals(true, result.contains("max_tokens"));
         assert_equals(false, result.contains("max_output_tokens"));
         assert_equals(100, result.at("max_tokens").get<int>());
+    }
+
+    // Test structured output conversion
+    {
+        json input = json::parse(R"({
+            "input": "Hello",
+            "model": "test-model",
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "TestOutput",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "message": {"type": "string"}
+                        },
+                        "required": ["message"],
+                        "additionalProperties": false
+                    },
+                    "strict": true
+                }
+            }
+        })");
+
+        json result = server_chat_convert_responses_to_chatcmpl(input);
+
+        assert_equals(false, result.contains("text"));
+        assert_equals(true, result.contains("response_format"));
+        const auto & response_format = result.at("response_format");
+        assert_equals(std::string("json_schema"), response_format.at("type").get<std::string>());
+        const auto & json_schema = response_format.at("json_schema");
+        assert_equals(std::string("TestOutput"), json_schema.at("name").get<std::string>());
+        assert_equals(true, json_schema.at("strict").get<bool>());
+        assert_equals(std::string("object"), json_schema.at("schema").at("type").get<std::string>());
+        assert_equals(false, json_schema.contains("type"));
     }
 
     // Test mixed Responses tools: convert only function tools
@@ -8420,6 +8456,61 @@ static void test_msg_diffs_compute() {
     }
 }
 
+
+static void test_responses_stream_output_indexes() {
+    for (int mask = 0; mask < 4; mask++) {
+        uint64_t sequence = 0;
+        server_task_result_cmpl_partial partial;
+        partial.index = 7;
+        partial.n_decoded = 1;
+        partial.oai_seq_num_ptr = &sequence;
+        partial.oai_resp_reasoning_id = "rs_test";
+        partial.oai_resp_message_id = "msg_test";
+        partial.anthropic_has_reasoning = (mask & 1) != 0;
+        partial.accumulated_reasoning_content = partial.anthropic_has_reasoning ? "thinking" : "";
+
+        common_chat_msg message;
+        message.reasoning_content = partial.accumulated_reasoning_content;
+        message.content = (mask & 2) ? "answer" : "";
+        message.tool_calls = {{"first", "{}", "a"}, {"second", "{}", "b"}};
+        partial.oaicompat_msg_diffs = common_chat_msg_diff::compute_diffs({}, message);
+
+        json events = partial.to_json_oaicompat_resp();
+        server_task_result_cmpl_final final;
+        final.index = 7;
+        final.oai_seq_num_ptr = &sequence;
+        final.oai_resp_reasoning_id = partial.oai_resp_reasoning_id;
+        final.oai_resp_message_id = partial.oai_resp_message_id;
+        final.oaicompat_msg = message;
+        final.thinking_block_done = partial.thinking_block_done;
+        json final_events = final.to_json_oaicompat_resp_stream();
+        for (const auto & event : final_events) {
+            events.push_back(event);
+        }
+
+        size_t reasoning_done = 0;
+        uint64_t expected_sequence = 0;
+        const size_t text_index = partial.anthropic_has_reasoning ? 1 : 0;
+        const size_t tool_index = text_index + (message.content.empty() ? 0 : 1);
+        for (const auto & event : events) {
+            const auto & data = event.at("data");
+            GGML_ASSERT(data.at("sequence_number").get<uint64_t>() == expected_sequence++);
+            if (data.at("type") == "response.reasoning_text.done") {
+                reasoning_done++;
+            }
+            if (data.contains("output_index")) {
+                std::string id = data.contains("item") ? data.at("item").at("id").get<std::string>()
+                                                      : data.at("item_id").get<std::string>();
+                size_t expected = id == "rs_test" ? 0 : id == "msg_test" ? text_index
+                                                  : id == "fc_a" ? tool_index : tool_index + 1;
+                GGML_ASSERT(data.at("output_index").get<size_t>() == expected);
+            }
+        }
+        GGML_ASSERT(reasoning_done == (partial.anthropic_has_reasoning ? 1u : 0u));
+        GGML_ASSERT(events.back().at("data").at("response").at("output").size() == tool_index + 2);
+    }
+}
+
 int main(int argc, char ** argv) {
     bool detailed_debug    = false;
     bool only_run_filtered = false;
@@ -8497,6 +8588,7 @@ int main(int argc, char ** argv) {
         test_msg_token_delimiters_split();
         test_tools_oaicompat_json_conversion();
         test_convert_responses_to_chatcmpl();
+        test_responses_stream_output_indexes();
         test_developer_role_to_system_workaround();
         test_translate_gemma();
         test_deepseek_v4_thinking_retention();
