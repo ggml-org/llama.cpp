@@ -230,6 +230,8 @@ ggml_tensor * llama_model_clover_moe::graph::build_clover(
 ggml_tensor * llama_model_clover_moe::graph::build_clover_coreset(ggml_tensor * logits) {
     const int64_t width = logits->ne[1];
 
+    ggml_build_forward_order(gf, logits);
+    const int begin = ggml_graph_n_nodes(gf);
     auto * probs    = ggml_soft_max(ctx0, logits);
     auto * ids      = build_clover_top_k(logits, n_expert_used);
     auto * shaped   = ggml_reshape_3d(ctx0, probs, 1, n_expert, width);
@@ -253,7 +255,13 @@ ggml_tensor * llama_model_clover_moe::graph::build_clover_coreset(ggml_tensor * 
             ggml_reshape_2d(ctx0, keep, 1, n_expert), order);
     allowed = ggml_reshape_2d(ctx0, allowed, n_expert, 1);
     auto * mask = ggml_scale_bias(ctx0, allowed, 1e30f, -1e30f);
-    return ggml_add_inplace(ctx0, logits, mask);
+    auto * result = ggml_add(ctx0, logits, mask);
+    ggml_build_forward_order(gf, result);
+    // Keep the small coreset graph with its CPU sorts to avoid repeated device transfers.
+    for (int i = begin; i < ggml_graph_n_nodes(gf); ++i) {
+        ggml_backend_sched_set_tensor_backend(sched, ggml_graph_node(gf, i), backend_cpu);
+    }
+    return result;
 }
 
 std::unique_ptr<llm_graph_context> llama_model_clover_moe::build_arch_graph(const llm_graph_params & params) const {
@@ -633,11 +641,21 @@ ggml_tensor * llama_model_clover_moe::graph::build_layer_ffn(ggml_tensor * cur, 
     if (hparams.clover_coreset) {
         cb(router_logits, "clover_router_raw", il);
         auto * raw = ggml_view_2d(ctx0, router_logits, router_logits->ne[0], router_logits->ne[1], router_logits->nb[1], 0);
-        ggml_tensor * branches[] = { raw, build_clover_coreset(router_logits) };
-        router_logits = ggml_build_forward_select(gf, branches, 2, cparams.causal_attn || router_logits->ne[1] == 0 ? 0 : 1);
+        auto * masked = build_clover_coreset(router_logits);
+        const int branch = cparams.causal_attn || router_logits->ne[1] == 0 ? 0 : 1;
+        // Select experts on the CPU before copying masked logits back to the device.
+        ggml_tensor * expert_branches[] = {
+            build_clover_top_k(router_logits, n_expert_used),
+            build_clover_top_k(masked, n_expert_used),
+        };
+        selected_experts = ggml_build_forward_select(gf, expert_branches, 2, branch);
+        ggml_tensor * branches[] = { raw, ggml_cpy(ctx0, masked, router_logits) };
+        router_logits = ggml_build_forward_select(gf, branches, 2, branch);
         cb(router_logits, "clover_router_masked", il);
     }
-    selected_experts = build_clover_top_k(router_logits, n_expert_used);
+    if (!selected_experts) {
+        selected_experts = build_clover_top_k(router_logits, n_expert_used);
+    }
     ggml_tensor * moe_out =
         build_moe_ffn(cur,
             model.layers[il].ffn_gate_inp,
