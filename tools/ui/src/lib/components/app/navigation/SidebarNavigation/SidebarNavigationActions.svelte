@@ -20,18 +20,18 @@
 
 	interface Props {
 		class: string;
+		/** The items to show: the sidebar's top actions unless given, e.g. its footer's. */
+		items?: DesktopIconStripItem[];
 		onAction?: (action: SidebarAction) => void;
 		/** Called before following a route item, so a phone can collapse the sidebar. */
 		onNavigate?: () => void;
 	}
 
-	let { class: className, onAction, onNavigate }: Props = $props();
+	let { class: className, items = SIDEBAR_ACTIONS_ITEMS, onAction, onNavigate }: Props = $props();
 
 	// the models manager stays desktop-only: a phone picks its models in the selector
 	const actions = $derived(
-		SIDEBAR_ACTIONS_ITEMS.filter(
-			(item) => item.action !== SidebarAction.MANAGE_MODELS || !deviceStore.isMobile
-		)
+		items.filter((item) => item.action !== SidebarAction.MANAGE_MODELS || !deviceStore.isMobile)
 	);
 	let initialized = $state(false);
 	let showIcons = $state(false);

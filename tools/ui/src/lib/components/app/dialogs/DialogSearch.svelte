@@ -7,7 +7,8 @@
 		ICON_CLASS_DEFAULT,
 		ICON_CLASS_SM,
 		ICON_CLASS_XS,
-		SIDEBAR_ACTIONS_ITEMS
+		SIDEBAR_ACTIONS_ITEMS,
+		SIDEBAR_FOOTER_ITEMS
 	} from '$lib/constants';
 	import { KeyboardKey, SidebarAction } from '$lib/enums';
 	import { RouterService } from '$lib/services/router.service';
@@ -72,12 +73,13 @@
 	const actionEntries = $derived.by((): SearchEntry[] =>
 		// every sidebar action but Search itself, which is what opened this dialog, and the models
 		// manager on a phone, which picks its models in the selector
-		SIDEBAR_ACTIONS_ITEMS.filter(
-			(item) =>
-				item.action &&
-				item.action !== SidebarAction.SEARCH &&
-				(item.action !== SidebarAction.MANAGE_MODELS || !deviceStore.isMobile)
-		)
+		[...SIDEBAR_ACTIONS_ITEMS, ...SIDEBAR_FOOTER_ITEMS]
+			.filter(
+				(item) =>
+					item.action &&
+					item.action !== SidebarAction.SEARCH &&
+					(item.action !== SidebarAction.MANAGE_MODELS || !deviceStore.isMobile)
+			)
 			.map((item) => ({
 				icon: item.icon,
 				id: `action-${item.action}`,
