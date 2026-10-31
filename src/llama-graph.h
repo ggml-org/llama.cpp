@@ -982,7 +982,8 @@ public:
     ggml_context_ptr ctx_compute;
 
     // memory buffers used to evaluate the model
-    std::vector<uint8_t> buf_compute_meta;
+    std::unique_ptr<uint8_t, decltype(&std::free)> buf_compute_meta{nullptr, &std::free};
+    size_t buf_compute_meta_size = 0;
 
     ggml_cgraph * gf;
 
