@@ -157,6 +157,9 @@ public:
     const std::vector<uint32_t> & get_rs_idx() const;
     void update_rs_for_ubatches(const std::vector<llama_ubatch> & ubatches);
 
+    // copy the sources into their mirrors after a state read
+    void refill_comp_mirrors();
+
 private:
     llama_hparams hparams_raw;
     llama_hparams hparams_csa;
@@ -177,6 +180,8 @@ private:
 
     // [n_layer] layer -> layer whose compressed-KV storage it reads (itself, its V4.1 kv source or a mirror), -1 = none
     std::vector<int32_t> comp_read;
+
+    bool comp_mirrors_stale = false;
 
     std::unique_ptr<llama_kv_cache_iswa> kv_raw;
     std::unique_ptr<llama_kv_cache>      kv_csa;
@@ -422,5 +427,5 @@ private:
 
     const llama_memory_status status;
 
-    const llama_kv_cache_dsv4 * kv = nullptr;
+    llama_kv_cache_dsv4 * kv = nullptr;
 };
