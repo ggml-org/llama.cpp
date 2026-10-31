@@ -351,6 +351,19 @@ if (GGML_METAL AND NOT GGML_BACKEND_DL)
     target_include_directories(test-metal-graph-optimize PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src ${PROJECT_SOURCE_DIR}/ggml/src/ggml-metal)
 endif()
 
+if (GGML_CUDA AND GGML_CUDA_GRAPHS AND NOT GGML_BACKEND_DL AND (NOT WIN32 OR NOT BUILD_SHARED_LIBS))
+    enable_language(CUDA)
+    find_package(CUDAToolkit REQUIRED)
+    llama_build_and_test(test-cuda-graph.cu LINK ggml ggml-cuda CUDA::cudart CUDA::cublas)
+    target_include_directories(test-cuda-graph PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src ${PROJECT_SOURCE_DIR}/ggml/src/ggml-cuda)
+    target_compile_definitions(test-cuda-graph PRIVATE GGML_CUDA_USE_GRAPHS)
+    get_target_property(GGML_CUDA_TEST_ARCHITECTURES ggml-cuda CUDA_ARCHITECTURES)
+    set_target_properties(test-cuda-graph PROPERTIES
+        CUDA_STANDARD 17
+        CUDA_STANDARD_REQUIRED ON
+        CUDA_ARCHITECTURES "${GGML_CUDA_TEST_ARCHITECTURES}")
+endif()
+
 llama_build(test-backend-ops.cpp LINK ggml)
 
 llama_build_and_test(test-backend-tensor.cpp LINK ggml)
