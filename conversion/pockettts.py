@@ -358,10 +358,11 @@ class PocketTTSMmprojModel(MmprojModel):
             kv = []
             for il in range(n_layer):
                 prefix = f"transformer.layers.{il}.self_attn/"
-                if any(prefix + k not in state for k in ("cache", "offset", "pad")):
+                if any(prefix + k not in state for k in ("cache", "offset")):
                     break
                 n_pos = int(state[prefix + "offset"].item())
-                if int(state[prefix + "pad"].item()) != 0:
+                # older packs have no pad entry, their states are not padded
+                if prefix + "pad" in state and int(state[prefix + "pad"].item()) != 0:
                     break
                 kv.append(state[prefix + "cache"][:, 0, :n_pos].flatten(2))  # [k/v, pos, n_embd]
             if len(kv) != n_layer or any(t.shape != kv[0].shape for t in kv) or kv[0].shape[1] < 2 or \
