@@ -1657,6 +1657,35 @@ ggml_tensor * rpc_server::deserialize_tensor(struct ggml_context * ctx, const rp
         return nullptr;
     }
 
+    // validate the element count fits in int64_t (ggml_new_tensor_impl asserts)
+    {
+        uint64_t nelements = tensor->ne[0];
+        for (uint32_t i = 1; i < GGML_MAX_DIMS; i++) {
+            if (tensor->ne[i] > 1) {
+                if (nelements >= (uint64_t) INT64_MAX / tensor->ne[i]) {
+                    LOG_ERROR("[%s] tensor type %u ne [%" PRIu32 ", %" PRIu32 ", %" PRIu32 ", %" PRIu32 "] element count overflows int64_t\n",
+                              __func__, tensor->type,
+                              tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
+                    return nullptr;
+                }
+                nelements *= tensor->ne[i];
+            }
+        }
+    }
+
+    // validate ne[0] is a multiple of the block size (ggml_row_size asserts)
+    if (tensor->ne[0] % (uint64_t) ggml_blck_size((enum ggml_type)tensor->type) != 0) {
+        LOG_ERROR("[%s] tensor type %u ne0 %" PRIu32 " is not a multiple of the block size\n",
+                  __func__, tensor->type, tensor->ne[0]);
+        return nullptr;
+    }
+
+    // validate op before it is passed to ggml_op_name()
+    if (tensor->op >= GGML_OP_COUNT) {
+        LOG_ERROR("[%s] invalid tensor op received: %u\n", __func__, tensor->op);
+        return nullptr;
+    }
+
     ggml_tensor * result = ggml_new_tensor_4d(ctx, (ggml_type) tensor->type,
         tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
 
