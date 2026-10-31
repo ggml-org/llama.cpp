@@ -31,6 +31,7 @@ layout (push_constant) uniform parameter {
 shared uint histo[RADIX_SIZE];
 shared uint sh_bucket;
 shared uint sh_above;
+shared uint sh_equal;
 shared uint out_count;
 
 // order-preserving float -> uint mapping
@@ -67,6 +68,37 @@ float load(uint row, uint i, bool first) {
         return v;
     }
     return scratch[off];
+}
+
+// fill the slots of the ties in column order; histo is not used any more, so it holds the prefix sum of a tile
+void tie_select(const uint row, const uint threshold, const uint desired) {
+    const uint tid = gl_LocalInvocationID.x;
+    const uint ncols = p.ncols;
+    const uint row_out = row * p.k;
+    const uint tile = min(uint(BLOCK_SIZE), uint(RADIX_SIZE));
+    uint pos0 = p.k - desired;
+    for (uint i0 = 0; i0 < ncols && pos0 < p.k; i0 += tile) {
+        const uint i  = i0 + tid;
+        const uint eq = (tid < tile && i < ncols && f2ui(load(row, i, false)) == threshold) ? 1u : 0u;
+        if (tid < tile) {
+            histo[tid] = eq;
+        }
+        barrier();
+        for (uint off = 1; off < tile; off <<= 1) {
+            const uint t = (tid < tile && tid >= off) ? histo[tid - off] : 0u;
+            barrier();
+            if (tid < tile) {
+                histo[tid] += t;
+            }
+            barrier();
+        }
+        const uint pos = pos0 + (tid < tile ? histo[tid] : 0u) - eq;
+        if (eq != 0u && pos < p.k) {
+            data_d[row_out + pos] = int(i);
+        }
+        pos0 += histo[tile - 1];
+        barrier();
+    }
 }
 
 // one workgroup per row: radix-select the K-th largest, then compact it plus enough ties
@@ -106,6 +138,7 @@ void topk(const uint row) {
             }
             sh_bucket = b;
             sh_above  = acc;
+            sh_equal  = histo[b];
         }
         barrier();
 
@@ -134,6 +167,13 @@ void topk(const uint row) {
                 data_d[row_out + pos] = int(i);
             }
         }
+    }
+
+    // with surplus ties the loop above takes the ties in the invocation timing order, so take them again in a fixed order
+    if (sh_equal != desired) {
+        memoryBarrierBuffer();
+        barrier();
+        tie_select(row, threshold, desired);
     }
 }
 
