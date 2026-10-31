@@ -468,9 +468,18 @@ struct mtmd_gen_audio_info {
     enum mtmd_gen_audio_type type;
     int32_t sample_rate; // in Hz, for example 24000 for qwen3tts
     const char * model_variant; // name of the weight variant, can be nullptr if not applicable
+    int32_t n_voices; // predefined voices held by the mmproj, see mtmd_gen_audio_voice_name()
 };
 
 MTMD_API struct mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx);
+
+// predefined voices of the audio generation model: the mmproj holds the input embeddings of a voice prompt
+// for each of them, which take the place of an encoded speaker reference (e.g. pocket-tts without voice cloning)
+// name of the idx-th voice, nullptr when idx is out of range
+MTMD_API const char * mtmd_gen_audio_voice_name(const mtmd_context * ctx, int32_t idx);
+// embeddings of the voice with this name
+// returns the number of rows of n_embd floats (n_embd of the text model), 0 if there is no such voice
+MTMD_API int32_t mtmd_gen_audio_get_voice(const mtmd_context * ctx, const char * name, const float ** embd);
 
 
 enum mtmd_gen_process_type {

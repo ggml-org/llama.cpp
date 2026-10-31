@@ -888,6 +888,10 @@ struct clip_model {
     ggml_tensor * gen_upsample_w  = nullptr; // depthwise convtr, frame rate -> encoder frame rate
     std::vector<clip_layer> gen_tfm_layers; // mimi decoder_transformer
 
+    // pocket-tts: predefined voices, the backbone input embeddings of each voice prompt
+    // tensors voice.<name> of [n_embd, n_frames], kept on the host
+    std::map<std::string, std::vector<float>> gen_voices;
+
     // soprano: Vocos decoder, hidden states -> STFT coefficients
     clip_vocos vocos;
 

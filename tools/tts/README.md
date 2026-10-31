@@ -39,6 +39,7 @@ llama-tts -hf ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF \
 
 Available params:
 - `--tts-speaker-file` should point to a speaker reference audio file (wav, mp3). It is required, the model produces almost no audio without it
+- `--tts-voice` selects one of the predefined voices shipped with the weights (e.g. `giovanni`), when the GGUF holds them. The converter reads them from `embeddings/*.safetensors` next to the weights, of both repositories, and logs how closely each one is reproduced (some packs ship voice states computed with other weights, the converter warns above 5% and skips a voice only when it does not belong to the model at all)
 - Note: `lang` is not used, the language is a property of the weights
 
 Example usage:
@@ -48,6 +49,16 @@ llama-tts -m pocket-tts.gguf \
     -mm mmproj-pocket-tts.gguf \
     -p "Hello world" \
     --tts-speaker-file speaker.mp3 \
+    --output out.wav
+```
+
+The weights [without voice cloning](https://huggingface.co/kyutai/pocket-tts-without-voice-cloning) ship a set of predefined voices (`embeddings/*.safetensors`) next to each language; the converter stores them in the mmproj, as the voice prompt embeddings, and leaves out the zeroed voice encoder. With such a model `--tts-speaker-file` is rejected and a voice is selected with `--tts-voice`:
+
+```sh
+llama-tts -m pocket-tts.gguf \
+    -mm mmproj-pocket-tts.gguf \
+    -p "Ciao a tutti" \
+    --tts-voice giovanni \
     --output out.wav
 ```
 

@@ -660,9 +660,8 @@ struct mtmd_context {
         ctx_v = res.ctx_v;
         ctx_a = res.ctx_a;
         ctx_gen_a = res.ctx_gen_a;
-        // soprano has no speaker encoder, its mmproj only holds the decoder
-        const bool gen_only = ctx_gen_a && clip_get_projector_type(ctx_gen_a) == PROJECTOR_TYPE_SOPRANO;
-        if (!ctx_v && !ctx_a && !gen_only) {
+        // an audio generation mmproj may have no encoder: soprano has none, pocket-tts without voice cloning drops it
+        if (!ctx_v && !ctx_a && !ctx_gen_a) {
             throw std::runtime_error(string_format("Failed to load CLIP model from %s\n", mmproj_fname));
         }
 
@@ -2239,6 +2238,7 @@ mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
         return info;
     }
     info.model_variant = clip_get_hparams(ctx->ctx_gen_a)->gen_model_variant.c_str();
+    info.n_voices      = clip_gen_n_voices(ctx->ctx_gen_a);
     switch (clip_get_projector_type(ctx->ctx_gen_a)) {
         case PROJECTOR_TYPE_QWEN3TTS_GEN:
             info.type = MTMD_GEN_AUDIO_TYPE_QWEN3TTS;
@@ -2261,6 +2261,20 @@ mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
             break;
     }
     return info;
+}
+
+const char * mtmd_gen_audio_voice_name(const mtmd_context * ctx, int32_t idx) {
+    if (!ctx->ctx_gen_a) {
+        return nullptr;
+    }
+    return clip_gen_voice_name(ctx->ctx_gen_a, idx);
+}
+
+int32_t mtmd_gen_audio_get_voice(const mtmd_context * ctx, const char * name, const float ** embd) {
+    if (!ctx->ctx_gen_a || !name) {
+        return 0;
+    }
+    return clip_gen_get_voice(ctx->ctx_gen_a, name, embd);
 }
 
 mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
