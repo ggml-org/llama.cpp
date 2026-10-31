@@ -713,6 +713,11 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
         specialization_entries[i].size = sizeof(uint32_t);
     }
 
+    // Specialization constant 63 is AVOID_8BIT_VECTORS from types.glsl.
+    // Shaders that do not declare it ignore this entry.
+    specialization_entries.push_back({ 63, (uint32_t)(specialization_constants.size() * sizeof(uint32_t)), sizeof(uint32_t) });
+    specialization_constants.push_back(device->avoid_8bit_vectors ? 1 : 0);
+
     vk::SpecializationInfo specialization_info(
         specialization_entries.size(),
         specialization_entries.data(),
@@ -4198,6 +4203,9 @@ vk_device ggml_vk_get_device(size_t idx) {
         device->physical_device.getProperties2(&props2);
         device->properties = props2.properties;
         device->vendor_id = device->properties.vendorID;
+        // Qualcomm drivers miscompile unpack8()/pack32() on 8-bit vectors, see types.glsl
+        device->avoid_8bit_vectors = device->vendor_id == VK_VENDOR_ID_QUALCOMM ||
+                                     getenv("GGML_VK_AVOID_8BIT_VECTORS") != nullptr;
         device->driver_id = driver_props.driverID;
 
         device->external_memory_host = device->external_memory_host && ggml_vk_external_memory_host_usable(device->driver_id);
