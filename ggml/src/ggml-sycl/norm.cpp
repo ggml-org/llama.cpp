@@ -1,4 +1,6 @@
 #include "norm.hpp"
+
+#include "fusion.hpp"
 #include "ggml-sycl/common.hpp"
 #include "ggml-sycl/presets.hpp"
 
@@ -955,6 +957,127 @@ void ggml_sycl_op_rms_norm_fused_add(ggml_backend_sycl_context & ctx, ggml_tenso
         s00, s01, s02, s03, d00, d01, d02, d03,
         mul_s01, mul_s02, mul_s03, mul_nrows, mul_nchannels, mul_nsamples,
         add_s01, add_s02, add_s03, add_nrows, add_nchannels, add_nsamples, eps, main_stream, ctx.device);
+}
+
+// ADD(a, b) -> RMS_NORM -> MUL(w) in one launch. The sum (read by a later residual add) and
+// normed * w are written after a barrier, as mul->data may alias a.
+static void add_rms_norm_mul_f32(const float *            a,
+                                 const float *            b,
+                                 float *                  sum,
+                                 const float *            mul,
+                                 float *                  dst,
+                                 const int                ncols,
+                                 const float              eps,
+                                 const sycl::nd_item<3> & item_ct1,
+                                 float *                  s_sum,
+                                 const int                block_size) {
+    const int    row = item_ct1.get_group(2);
+    const size_t off = (size_t) row * ncols;
+    const int    tid = item_ct1.get_local_id(2);
+    const int    n4  = ncols / 4;
+
+    const sycl::float4 * a4 = reinterpret_cast<const sycl::float4 *>(a + off);
+    const sycl::float4 * b4 = reinterpret_cast<const sycl::float4 *>(b + off);
+
+    sycl::float4 v[2];
+    float        tmp = 0.0f;
+#pragma unroll
+    for (int k = 0; k < 2; ++k) {
+        const int i = tid + k * block_size;
+        if (i < n4) {
+            const sycl::float4 va = a4[i];
+            const sycl::float4 vb = b4[i];
+            v[k]                  = va + vb;
+            tmp += sycl::dot(v[k], v[k]);
+        }
+    }
+
+    const int nwarps = block_size / WARP_SIZE;
+    tmp              = warp_reduce_sum(tmp, item_ct1);
+    if (block_size > WARP_SIZE) {
+        const auto sub_group = item_ct1.get_sub_group();
+        if (sub_group.get_local_linear_id() == 0) {
+            s_sum[sub_group.get_group_linear_id()] = tmp;
+        }
+        item_ct1.barrier(sycl::access::fence_space::local_space);
+        const size_t nreduce = ceil_div(nwarps, WARP_SIZE);
+        tmp                  = 0.0f;
+        for (size_t i = 0; i < nreduce; i += 1) {
+            tmp += s_sum[sub_group.get_local_linear_id() + i * WARP_SIZE];
+        }
+        tmp = warp_reduce_sum(tmp, item_ct1);
+    }
+
+    const float mean  = tmp / ncols;
+    const float scale = sycl::rsqrt(mean + eps);
+
+    sycl::float4 *       s4 = reinterpret_cast<sycl::float4 *>(sum + off);
+    sycl::float4 *       d4 = reinterpret_cast<sycl::float4 *>(dst + off);
+    const sycl::float4 * m4 = reinterpret_cast<const sycl::float4 *>(mul);
+#pragma unroll
+    for (int k = 0; k < 2; ++k) {
+        const int i = tid + k * block_size;
+        if (i < n4) {
+            const sycl::float4 m = m4[i];
+            const sycl::float4 u = scale * v[k] * m;
+            s4[i]                = v[k];
+            d4[i]                = u;
+        }
+    }
+}
+
+static void add_rms_norm_mul_f32_sycl(const float * a,
+                                      const float * b,
+                                      float *       sum,
+                                      const float * mul,
+                                      float *       dst,
+                                      const int     ncols,
+                                      const int     nrows,
+                                      const float   eps,
+                                      queue_ptr     stream,
+                                      int           device) {
+    const int work_group_size = ggml_sycl_info().max_work_group_sizes[device];
+    GGML_ASSERT(work_group_size % (WARP_SIZE * WARP_SIZE) == 0);
+    const sycl::range<3> global_dims(1, 1, nrows);
+    const sycl::range<3> block_dims(1, 1, work_group_size);
+    stream->submit([&](sycl::handler & cgh) {
+        sycl::local_accessor<float, 1> s_sum(sycl::range<1>(work_group_size / WARP_SIZE), cgh);
+        cgh.parallel_for(sycl::nd_range<3>(global_dims * block_dims, block_dims),
+                         [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                             add_rms_norm_mul_f32(a, b, sum, mul, dst, ncols, eps, item_ct1, get_pointer(s_sum),
+                                                  work_group_size);
+                         });
+    });
+}
+
+bool ggml_sycl_op_add_rms_norm_fused(ggml_backend_sycl_context & ctx,
+                                     ggml_tensor *               add,
+                                     ggml_tensor *               rms,
+                                     ggml_tensor *               mul) {
+    ggml_tensor * a     = add->src[0];
+    ggml_tensor * b     = add->src[1];
+    ggml_tensor * w     = mul->src[0] == rms ? mul->src[1] : mul->src[0];
+    const int64_t ncols = add->ne[0];
+    const int     wg    = ggml_sycl_info().max_work_group_sizes[ctx.device];
+    // whole rows of float4, at most two per work-item, from 16-byte aligned contiguous tensors
+    if (add->ne[2] != 1 || add->ne[3] != 1 || ncols < 1024 || ncols % 4 != 0 || ncols > 8 * (int64_t) wg ||
+        w->ne[1] != 1) {
+        return false;
+    }
+    for (const ggml_tensor * t : { a, b, add, mul, w }) {
+        if (!ggml_is_contiguous(t) || (uintptr_t) t->data % 16 != 0) {
+            return false;
+        }
+    }
+    float eps = 0.0f;
+    memcpy(&eps, rms->op_params, sizeof(float));
+    if (!(eps >= 0.0f)) {
+        return false;
+    }
+    add_rms_norm_mul_f32_sycl((const float *) a->data, (const float *) b->data, (float *) add->data,
+                              (const float *) w->data, (float *) mul->data, (int) ncols, (int) add->ne[1], eps,
+                              ctx.stream(), ctx.device);
+    return true;
 }
 
 void ggml_sycl_op_rms_norm_back(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
