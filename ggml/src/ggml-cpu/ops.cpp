@@ -9517,23 +9517,6 @@ static void ggml_compute_forward_flash_attn_ext_f16(
         // disable for NUMA
         const bool disable_chunking = ggml_is_numa();
 
-        // 4x chunks per thread
-        int nth_scaled = nth * 4;
-        int64_t chunk_size = (nr + nth_scaled - 1) / nth_scaled;
-        int64_t nchunk     = (nr + chunk_size - 1) / chunk_size;
-
-        if (nth == 1 || nchunk < nth || disable_chunking) {
-            nchunk = nth;
-        }
-
-        if (ith == 0) {
-            ggml_threadpool_chunk_set(params->threadpool, nth);
-        }
-
-        ggml_barrier(params->threadpool);
-
-        const int64_t dr = (nr + nchunk - 1) / nchunk;
-
         static constexpr int64_t Q_TILE_SZ  = ggml_fa_tile_config::Q;
         bool use_tiled = !use_ref &&
                                (q->type == GGML_TYPE_F32 &&
@@ -9548,6 +9531,32 @@ static void ggml_compute_forward_flash_attn_ext_f16(
 #endif
         use_tiled &= (DV % f32_epr == 0);
 #endif
+
+        // 4x chunks per thread
+        int nth_scaled = nth * 4;
+        int64_t chunk_size = (nr + nth_scaled - 1) / nth_scaled;
+
+        // tiled: use whole Q tiles per chunk, a partial tile costs as much as a full one
+        bool align_chunks = use_tiled && neq1 % Q_TILE_SZ == 0;
+        if (align_chunks) {
+            chunk_size = std::max(Q_TILE_SZ, chunk_size / Q_TILE_SZ * Q_TILE_SZ);
+        }
+        int64_t nchunk     = (nr + chunk_size - 1) / chunk_size;
+
+        if (nth == 1 || nchunk < nth || disable_chunking) {
+            nchunk = nth;
+            align_chunks = false;
+        }
+
+        if (ith == 0) {
+            ggml_threadpool_chunk_set(params->threadpool, nth);
+        }
+
+        ggml_barrier(params->threadpool);
+
+        // ceil(nr/nchunk) is not always a multiple of Q_TILE_SZ
+        const int64_t dr = align_chunks ? chunk_size : (nr + nchunk - 1) / nchunk;
+
         int current_chunk = ith;
 
         while (current_chunk < nchunk) {
