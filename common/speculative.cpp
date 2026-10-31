@@ -12,6 +12,8 @@
 
 #include "../src/llama-ext.h" // staging API: llama_set_embeddings_nextn / llama_get_embeddings_nextn_ith (used by MTP)
 #include "../src/llama-context-memory.h"
+#include "../src/llama-memory-hybrid.h"
+#include "../src/llama-kv-stream-model.h"
 
 #include <algorithm>
 #include <cassert>
@@ -2684,11 +2686,25 @@ common_params common_base_params_to_speculative(const common_params & params) {
 
 struct common_speculative_init_result::impl {
     impl() = default;
-    ~impl() = default;
+    ~impl() {
+        // Restore the target before destroying the child that borrows its parent.
+        if (prefetch_source) {
+            const bool append = prefetch_source->schedule_next_consumer(
+                llama_kv_stream_access_role::append, previous_append);
+            const bool read = prefetch_source->schedule_next_consumer(
+                llama_kv_stream_access_role::read, previous_read);
+            if (!append || !read) {
+                LOG_ERR("%s: failed to restore target prefetch intent\n", __func__);
+            }
+        }
+    }
 
     // note: the order in which model, context, etc. are declared matters because their destructors will be called bottom-to-top
     llama_model_ptr   model;
     llama_context_ptr context;
+    llama_kv_stream_model * prefetch_source = nullptr;
+    llama_kv_stream_next_consumer previous_append;
+    llama_kv_stream_next_consumer previous_read;
 };
 
 common_speculative_init_result::common_speculative_init_result(
@@ -2789,6 +2805,21 @@ common_speculative_init_result::common_speculative_init_result(
         }
 
         pimpl->context.reset(ctx_dft);
+    }
+
+    if (streamed_block && pimpl->context) {
+        auto * hybrid = dynamic_cast<llama_memory_hybrid *>(llama_get_memory(ctx_tgt));
+        auto * source = hybrid ? hybrid->get_mem_attn()->get_kv_stream() : nullptr;
+        if (!source) throw std::runtime_error("streamed DFlash2 target has no prefetch source");
+        const auto append = source->next_consumer(llama_kv_stream_access_role::append);
+        const auto read = source->next_consumer(llama_kv_stream_access_role::read);
+        // The next proposal source can choose any admitted verification width.
+        if (!llama_kv_stream_schedule_next(ctx_tgt, ctx_tgt, 0)) {
+            throw std::runtime_error("failed to register flexible DFlash2 target prefetch");
+        }
+        pimpl->previous_append = append;
+        pimpl->previous_read = read;
+        pimpl->prefetch_source = source;
     }
 }
 

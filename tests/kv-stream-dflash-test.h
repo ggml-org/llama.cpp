@@ -5,6 +5,115 @@
 
 #include <set>
 
+static void test_dflash_prefetch_intent(testing & t, llama_model * model, const char * sidecar) {
+    for (bool custom : {true, false}) {
+        auto cp = llama_context_default_params();
+        cp.n_ctx = custom ? 4096 : 8192; cp.n_batch = cp.n_ubatch = 256;
+        cp.n_seq_max = 1; cp.n_rs_seq = 7;
+        cp.n_outputs_max = cp.n_outputs_max_per_seq = 8;
+        cp.type_k = GGML_TYPE_Q8_0; cp.type_v = GGML_TYPE_Q4_0;
+        cp.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+        cp.shared_device_memory_bytes = size_t(custom ? 1024 : 228)*1024*1024;
+        context_ptr target(llama_init_from_model(model, cp), llama_free);
+        if (!t.assert_true(bool(target))) return;
+        auto * hybrid = dynamic_cast<llama_memory_hybrid *>(llama_get_memory(target.get()));
+        auto * source = hybrid ? hybrid->get_mem_attn()->get_kv_stream() : nullptr;
+        if (!t.assert_true(source != nullptr)) return;
+        const auto initial_append = source->next_consumer(llama_kv_stream_access_role::append);
+        const auto initial_read = source->next_consumer(llama_kv_stream_access_role::read);
+        llama_kv_stream_next_consumer previous;
+        previous.cache_id = custom ? source->host()->cache_id() : 0; previous.future_tokens = custom ? 3 : 0;
+        if (!t.assert_true(source->schedule_next_consumer(llama_kv_stream_access_role::append, previous))) return;
+        auto previous_read = previous; previous_read.cache_id = source->host()->cache_id(); previous_read.future_tokens = 1;
+        if (!t.assert_true(source->schedule_next_consumer(llama_kv_stream_access_role::read, previous_read))) return;
+        common_params base;
+        base.n_ctx = cp.n_ctx; base.n_batch = base.n_ubatch = 256;
+        base.n_parallel = 1; base.n_gpu_layers = 999;
+        base.shared_device_memory_bytes = cp.shared_device_memory_bytes;
+        base.fit_params = false;
+        base.cache_type_k = cp.type_k; base.cache_type_v = cp.type_v;
+        base.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+        base.speculative.types = {COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH};
+        if (custom) base.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V);
+        base.speculative.draft.n_max = 3; base.speculative.draft.n_min = 0; base.speculative.draft.p_min = 0;
+        base.speculative.draft.n_gpu_layers = 999; base.speculative.draft.mparams.path = sidecar;
+        base.speculative.ngram_map_k4v.size_m = 7;
+        auto params = common_base_params_to_speculative(base);
+        params.n_ubatch = 8;
+        auto owned = common_speculative_init_from_params(params, model, target.get());
+        if (!t.assert_true(owned && owned->context())) return;
+        const auto flexible = [&] {
+            const auto next = source->next_consumer(llama_kv_stream_access_role::append);
+            return next.access == llama_kv_stream_access_role::append &&
+                next.cache_id == source->host()->cache_id() && next.future_tokens == 0;
+        };
+        if (!t.assert_true("serial block drafter owns flexible next-target prefetch", flexible())) return;
+        auto * parent = target->get_compute_memory()->shared_parent();
+        params.speculative.draft.ctx_tgt = target.get();
+        params.speculative.draft.ctx_dft = owned->context();
+        common_speculative_ptr first(common_speculative_init(params.speculative, 1));
+        common_speculative_ptr second(common_speculative_init(params.speculative, 1));
+        if (!t.assert_true(first && second && flexible())) return;
+        first.reset();
+        t.assert_true("one probe driver cannot remove the context owner's prefetch intent", flexible());
+        size_t position = 0;
+        if (!custom) {
+            const auto submit = [&](size_t rows, bool decode) {
+                common_batch batch(target.get());
+                for (size_t i = 0; i < rows; ++i) batch.add(1000+llama_token((position+i)%17),
+                    llama_pos(position+i), 0, decode || i+1 == rows);
+                llama_set_kv_stream_decode(target.get(), decode);
+                if (!t.assert_equal(0, llama_process(target.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get())) ||
+                        !t.assert_true(common_speculative_process(second.get(), batch))) return false;
+                position += rows;
+                return true;
+            };
+            while (position < 6143) if (!submit(std::min(size_t(256),6143-position), false)) return;
+            if (!submit(1, true)) return;
+            t.assert_true("lookahead does not cross a physical KV layout boundary", !source->prefetch_primed());
+            if (!submit(1, true)) return;
+            if (!t.assert_true("the committed ring source is primed for a variable verification width", source->prefetch_primed())) return;
+            if (!submit(8, true)) return;
+            llama_synchronize(target.get()); llama_synchronize(owned->context());
+            llama_kv_stream_runtime_diagnostics diagnostics;
+            if (!t.assert_true(source->runtime_diagnostics(diagnostics) && diagnostics.streaming_active)) return;
+            t.assert_true("actual TG8 adopts the existing flexible ring prime",
+                source->sequence_stats(llama_kv_stream_access_role::append).adopted);
+            t.assert_true("child teardown is exercised with a retained idle prime", source->prefetch_primed());
+        }
+        second.reset();
+        t.assert_true("prefetch intent outlives all drivers sharing its owned child", flexible());
+        owned.reset();
+        const auto restored = source->next_consumer(llama_kv_stream_access_role::append);
+        const auto restored_read = source->next_consumer(llama_kv_stream_access_role::read);
+        t.assert_equal(previous.cache_id, restored.cache_id);
+        t.assert_equal(previous.future_tokens, restored.future_tokens);
+        t.assert_equal(previous_read.cache_id, restored_read.cache_id);
+        t.assert_equal(previous_read.future_tokens, restored_read.future_tokens);
+        t.assert_true(!target->get_compute_memory()->has_speculative_consumer());
+        t.assert_true(parent == target->get_compute_memory()->shared_parent());
+        params.speculative.draft.ctx_dft = nullptr;
+        auto invalid = params;
+        invalid.speculative.draft.n_max = 8;
+        bool rejected = false;
+        try { auto failure = common_speculative_init_from_params(invalid, model, target.get()); }
+        catch (const std::invalid_argument &) { rejected = true; }
+        t.assert_true("failed admission preserves the previous prefetch owner", rejected &&
+            source->next_consumer(llama_kv_stream_access_role::append).future_tokens == previous.future_tokens &&
+            source->next_consumer(llama_kv_stream_access_role::read).future_tokens == previous_read.future_tokens &&
+            !target->get_compute_memory()->has_speculative_consumer());
+        t.assert_true(source->schedule_next_consumer(llama_kv_stream_access_role::append, initial_append));
+        t.assert_true(source->schedule_next_consumer(llama_kv_stream_access_role::read, initial_read));
+        common_batch resumed(target.get()); resumed.add(1000, llama_pos(position), 0, true);
+        llama_set_kv_stream_decode(target.get(), true);
+        if (!t.assert_equal(0, llama_process(target.get(), LLAMA_PROCESS_TYPE_DECODE, resumed.get()))) return;
+        llama_synchronize(target.get());
+        const auto * logits = llama_get_logits_ith(target.get(), -1);
+        const auto vocab = size_t(llama_vocab_n_tokens(llama_model_get_vocab(model)));
+        t.assert_true(logits && std::all_of(logits, logits+vocab, [](float x) { return std::isfinite(x); }));
+    }
+}
+
 static llama_context_params dflash_independent_child_params(llama_context_params target, llama_context * parent) {
     target.shared_device_memory_bytes = 0;
     target.n_rs_seq = 0;
@@ -193,12 +302,13 @@ static std::vector<uint32_t> dflash_exact_lattice(const float * data,size_t rows
 // Match the same block execution and force decisions independently of sampler acceptance.
 static void test_kv_stream_dflash_exact(testing & t,llama_model * model,const char * sidecar,bool lifecycle=false,bool context_end=false,bool sustained_rejection=false,
         ggml_type key=GGML_TYPE_Q8_0,ggml_type value=GGML_TYPE_Q4_0,bool matching_cache=false,bool short_profile=false,bool independent_rows=false,
-        bool small_injection_batch=false) {
+        bool small_injection_batch=false,uint32_t only_depth=0) {
     const auto vocabulary=llama_model_get_vocab(model);
     const auto vocab=llama_vocab_n_tokens(vocabulary);
     const auto seed=common_tokenize(vocabulary,"A controlled comparison of windowed drafting and target recovery. ",true);
     const auto profiles = dflash_exact_profiles(lifecycle,context_end,sustained_rejection,short_profile,key,value);
     for (const auto profile : profiles) {
+        if (only_depth && profile[0] != only_depth) continue;
         for (bool quantized : {false,true}) {
             if (matching_cache && !quantized) continue;
             if (lifecycle && !quantized && profile[1] != 2049) continue;
@@ -505,8 +615,10 @@ static void test_kv_stream_dflash_exact(testing & t,llama_model * model,const ch
 
 static void test_dflash_mixed_switching(testing & t,llama_model * model,const char * sidecar,
         ggml_type key=GGML_TYPE_Q8_0,ggml_type value=GGML_TYPE_Q4_0,
-        const char * export_native=nullptr,const char * import_native=nullptr,bool all_widths=false) {
-    if (!t.assert_true(!(export_native && import_native))) return;
+        const char * export_native=nullptr,const char * import_native=nullptr,bool all_widths=false,
+        bool streamed_control=false,int predictions=3) {
+    if (!t.assert_true(!(export_native && import_native) && (predictions == 3 || predictions == 7))) return;
+    const size_t prefix = streamed_control ? 6143 : 2047;
     struct round {
         std::string name;
         int key;
@@ -546,8 +658,8 @@ static void test_dflash_mixed_switching(testing & t,llama_model * model,const ch
     const auto vocab=size_t(llama_vocab_n_tokens(llama_model_get_vocab(model)));
     if (!t.assert_true(vocab>6000)) return;
     kv_stream_bit_oracle matched,continuity;
-    const std::array<uint64_t,16> profile{1,8192,2047,vocab,uint64_t(llama_model_n_embd(model)),uint64_t(key),
-        uint64_t(value),3,7,2,1,256,8,program.size(),228,0};
+    const std::array<uint64_t,16> profile{uint64_t(streamed_control ? 2 : 1),8192,prefix,vocab,uint64_t(llama_model_n_embd(model)),uint64_t(key),
+        uint64_t(value),uint64_t(predictions),7,2,1,256,8,program.size(),228,uint64_t(streamed_control)};
     if (import_native) {
         std::unique_ptr<FILE,kv_stream_exact_file_free> input(std::fopen(import_native,"rb"));
         if (!input) throw std::runtime_error("cannot open mixed native control");
@@ -556,9 +668,10 @@ static void test_dflash_mixed_switching(testing & t,llama_model * model,const ch
     std::vector<decision> transcript;
     for (int mode=0;mode<3;++mode) {
         if (import_native && mode!=2) continue;
-        const bool reference=mode==1,streamed=mode==2;
+        if (streamed_control && (mode==1 || (export_native && mode==2))) continue;
+        const bool reference=mode==1,streamed=mode==2 || streamed_control;
         if (reference) continuity.compare();
-        if (streamed) matched.compare();
+        if (mode==2) matched.compare();
         auto cp=llama_context_default_params();
         cp.n_ctx=8192; cp.n_batch=cp.n_ubatch=256; cp.n_seq_max=1; cp.n_rs_seq=7;
         cp.n_outputs_max=cp.n_outputs_max_per_seq=8;
@@ -572,7 +685,7 @@ static void test_dflash_mixed_switching(testing & t,llama_model * model,const ch
         base.speculative.types=reference ? std::vector<common_speculative_type>{COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH} :
             std::vector<common_speculative_type>{COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH,COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V};
         if (streamed) std::reverse(base.speculative.types.begin(),base.speculative.types.end());
-        base.speculative.draft.n_max=3; base.speculative.draft.n_min=0; base.speculative.draft.p_min=0;
+        base.speculative.draft.n_max=predictions; base.speculative.draft.n_min=0; base.speculative.draft.p_min=0;
         base.speculative.draft.n_gpu_layers=999; base.speculative.draft.mparams.path=sidecar;
         base.speculative.draft.cache_type_k=key; base.speculative.draft.cache_type_v=value;
         base.speculative.ngram_map_k4v.size_n=2; base.speculative.ngram_map_k4v.size_m=7; base.speculative.ngram_map_k4v.min_hits=1;
@@ -663,7 +776,7 @@ static void test_dflash_mixed_switching(testing & t,llama_model * model,const ch
             }
             return true;
         };
-        if (!fill(2047) || !record_state("prefill")) return;
+        if (!fill(prefix) || !record_state("prefill")) return;
         common_speculative_begin(spec.get(),0,history);
         const auto predict=[&](common_speculative * drafter,llama_token anchor,int limit) {
             llama_tokens result;
@@ -676,7 +789,7 @@ static void test_dflash_mixed_switching(testing & t,llama_model * model,const ch
         };
         const auto selector=[&](const std::string & label,const llama_tokens & proposed) {
             shared_bytes(label+"/proposals",proposed.data(),proposed.size()*sizeof(llama_token));
-            const auto lattice=dflash_exact_lattice(llama_get_embeddings_nextn(draft->context()),4,
+            const auto lattice=dflash_exact_lattice(llama_get_embeddings_nextn(draft->context()),size_t(predictions+1),
                 size_t(llama_model_n_embd(draft->model())),size_t(llama_model_dflash_selector_top_k(draft->model())),vocab);
             shared_bytes(label+"/selector",lattice.data(),lattice.size()*sizeof(uint32_t));
         };
@@ -706,7 +819,7 @@ static void test_dflash_mixed_switching(testing & t,llama_model * model,const ch
                 if (!t.assert_equal("actual selected proposal source",expected,supplied)) return;
             }
             const size_t length=expected==COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V ? std::min(7,step.limit) :
-                expected==COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH ? std::min(3,step.limit) : 0;
+                expected==COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH ? std::min(predictions,step.limit) : 0;
             if (!t.assert_equal(length,proposed.size()) || !t.assert_true(step.accepted<=proposed.size())) return;
             if (mode==0) transcript.push_back({anchor,supplied,proposed});
             if (expected==COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH) selector(step.name+"/predict",proposed);
@@ -755,7 +868,7 @@ static void test_dflash_mixed_switching(testing & t,llama_model * model,const ch
             if (!output) throw std::runtime_error("cannot create mixed native control");
             matched.save_control(output.get(),profile);
         }
-        if (streamed) {
+        if (mode==2) {
             if (!t.assert_true("actual mixed protocol reaches streaming ring",ring)) return;
             matched.finish();
         }

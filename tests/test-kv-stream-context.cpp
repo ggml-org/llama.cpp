@@ -52,6 +52,8 @@ static bool dflash_exact_control = false;
 static bool dflash_short_control = false;
 static bool dflash_independent_rows = false;
 static bool dflash_independent_quotas = false;
+static bool dflash_prefetch_hint = false;
+static bool dflash_stream_control = false, dflash_full_prediction = false, dflash_native_f3 = false;
 static bool dflash_independent_small_batch = false;
 static bool dflash_mixed_switching = false;
 static bool dflash_mixed_all_widths = false;
@@ -3525,6 +3527,10 @@ int main(int argc,char ** argv) {
             dflash_independent_small_batch = dflash_independent_rows = dflash_short_control = dflash_exact_control = true;
         }
         if (!std::strcmp(argv[i], "--dflash-independent-quotas")) dflash_independent_quotas = true;
+        if (!std::strcmp(argv[i], "--dflash-prefetch-hint")) dflash_prefetch_hint = true;
+        if (!std::strcmp(argv[i], "--dflash-stream-control")) dflash_stream_control = dflash_mixed_all_widths = dflash_mixed_switching = true;
+        if (!std::strcmp(argv[i], "--dflash-full-prediction")) dflash_full_prediction = true;
+        if (!std::strcmp(argv[i], "--dflash-native-f3")) dflash_native_f3 = dflash_short_control = dflash_exact_control = true;
         if (!std::strcmp(argv[i], "--dflash-mixed-switching")) dflash_mixed_switching = true;
         if (!std::strcmp(argv[i], "--dflash-mixed-all-widths")) dflash_mixed_all_widths = dflash_mixed_switching = true;
         if (!std::strcmp(argv[i], "--dflash-mixed-recovery")) dflash_mixed_recovery = true;
@@ -3727,6 +3733,13 @@ int main(int argc,char ** argv) {
             [&](testing & t) { test_gemma_bounded_cache(t,model.get()); });
         return t.summary();
     }
+    if (dflash_prefetch_hint) {
+        if (!t.assert_true(bool(model) && dflash_native_model)) return t.summary();
+        t.test("DFlash_context_owns_flexible_prefetch_and_restores_previous_intents", [&](testing & t) {
+            test_dflash_prefetch_intent(t, model.get(), dflash_native_model);
+        });
+        return t.summary();
+    }
     if (dflash_mixed_recovery) {
         if (!t.assert_true(bool(model) && dflash_native_model)) return t.summary();
         const char * export_native=nullptr,* import_native=nullptr;
@@ -3757,7 +3770,7 @@ int main(int argc,char ** argv) {
             }
         }
         t.test("mixed_K4V_DFlash_switching_matches_native_and_independent_feature_maintenance",[&](testing & t) {
-            test_dflash_mixed_switching(t,model.get(),dflash_native_model,test_cache_k,test_cache_v,export_native,import_native,dflash_mixed_all_widths);
+            test_dflash_mixed_switching(t,model.get(),dflash_native_model,test_cache_k,test_cache_v,export_native,import_native,dflash_mixed_all_widths,dflash_stream_control,dflash_full_prediction ? 7 : 3);
         });
         return t.summary();
     }
@@ -3781,7 +3794,7 @@ int main(int argc,char ** argv) {
         t.test("streamed_DFlash2_matches_native_forced_decisions",[&](testing & t) {
             test_kv_stream_dflash_exact(t,model.get(),dflash_native_model,lifecycle,context_end || sustained,sustained,
                 test_cache_k,test_cache_v,test_cache_explicit || dflash_short_control,dflash_short_control,dflash_independent_rows,
-                dflash_independent_small_batch);
+                dflash_independent_small_batch,dflash_native_f3 ? 3 : 0);
         });
         return t.summary();
     }
