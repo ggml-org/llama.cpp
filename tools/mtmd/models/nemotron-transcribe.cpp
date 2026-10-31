@@ -221,17 +221,16 @@ static void spk_compress_cache(std::vector<float> & emb, std::vector<float> & pr
     preds.swap(out_preds);
 }
 
-// speaker cache and FIFO of one recording, with their predictions
+// speaker cache, with its predictions, and FIFO of one recording
 struct spk_stream {
     std::vector<float> cache, cache_preds;
-    std::vector<float> fifo,  fifo_preds;
+    std::vector<float> fifo;
 };
 
 // every update has a full window, which overflows the FIFO and the cache (NeMo's update period of 300 never applies)
 static_assert(clip_graph_nemotron_transcribe::window_core - SPK_FIFO_LEN > SPK_CACHE_LEN);
 
-// NeMo SortformerModules.streaming_update: the window's core rows join the FIFO, overflow moves to the cache, which is
-// compressed back to SPK_CACHE_LEN rows
+// NeMo SortformerModules.streaming_update: core rows join the FIFO, its overflow moves to the cache, which is compressed
 static void update_spk_state(spk_stream & ss, const clip_enc_state & st, const clip_model & model, int64_t core_begin,
                              int64_t n_core) {
     const int64_t d       = model.hparams.spk_n_embd;
@@ -243,15 +242,14 @@ static void update_spk_state(spk_stream & ss, const clip_enc_state & st, const c
     const float * preds      = st.spk_preds.data();
     const float * core_preds = preds + (n_cache + n_fifo + core_begin) * n_spk;
 
-    ss.fifo_preds.assign(preds + n_cache * n_spk, preds + (n_cache + n_fifo) * n_spk);
+    std::vector<float> fifo_preds(preds + n_cache * n_spk, preds + (n_cache + n_fifo) * n_spk);
     ss.fifo.insert(ss.fifo.end(), st.spk_chunk.begin() + core_begin * d, st.spk_chunk.begin() + (core_begin + n_core) * d);
-    ss.fifo_preds.insert(ss.fifo_preds.end(), core_preds, core_preds + n_core * n_spk);
+    fifo_preds.insert(fifo_preds.end(), core_preds, core_preds + n_core * n_spk);
 
     const int64_t n_pop = n_fifo + n_core - SPK_FIFO_LEN;
     ss.cache.insert(ss.cache.end(), ss.fifo.begin(), ss.fifo.begin() + n_pop * d);
-    ss.cache_preds.insert(ss.cache_preds.end(), ss.fifo_preds.begin(), ss.fifo_preds.begin() + n_pop * n_spk);
+    ss.cache_preds.insert(ss.cache_preds.end(), fifo_preds.begin(), fifo_preds.begin() + n_pop * n_spk);
     ss.fifo.erase(ss.fifo.begin(), ss.fifo.begin() + n_pop * d);
-    ss.fifo_preds.erase(ss.fifo_preds.begin(), ss.fifo_preds.begin() + n_pop * n_spk);
     spk_compress_cache(ss.cache, ss.cache_preds, (int) (ss.cache.size() / d), (int) d, (int) n_spk, model.spk_sil_emb);
 }
 
