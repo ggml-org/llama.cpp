@@ -473,6 +473,29 @@ struct case_state_restore_failure : ctx_test {
 
                 return nread == 0;
             }},
+            { "device", [&]() {
+                std::vector<uint8_t> state(llama_state_seq_get_size_ext(ctx.get(), 0, LLAMA_STATE_SEQ_FLAGS_ON_DEVICE));
+                GGML_ASSERT(llama_state_seq_get_data_ext(ctx.get(), state.data(), state.size(), 0, LLAMA_STATE_SEQ_FLAGS_ON_DEVICE) == state.size());
+                llama_memory_seq_rm(mem, 0, -1, -1);
+
+                // the state starts with the magic and the source seq_id; the seq_id selects the stored device data
+                const llama_seq_id seq_id_unknown = 3;
+
+                std::vector<std::vector<uint8_t>> inputs(5, state);
+                inputs[0][0] ^= 0xff;
+                inputs[1].resize(sizeof(uint32_t) / 2);
+                inputs[2].resize(sizeof(uint32_t) + sizeof(llama_seq_id) / 2);
+                memcpy(inputs[3].data() + sizeof(uint32_t), &seq_id_unknown, sizeof(seq_id_unknown));
+                inputs[4].resize(sizeof(uint32_t) + sizeof(llama_seq_id) + 1);
+
+                for (const auto & data : inputs) {
+                    if (llama_state_seq_set_data_ext(ctx.get(), data.data(), data.size(), 0, LLAMA_STATE_SEQ_FLAGS_ON_DEVICE) != 0) {
+                        return false;
+                    }
+                }
+
+                return true;
+            }},
         };
 
         for (const auto & [name, restore_failed] : sub_cases) {
