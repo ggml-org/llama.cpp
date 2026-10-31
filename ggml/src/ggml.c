@@ -4109,13 +4109,22 @@ static struct ggml_tensor * ggml_diag_mask_inf_impl(
         struct ggml_tensor  * a,
         int                   n_past,
         bool                  inplace) {
-    struct ggml_tensor * result = inplace ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
+    // ggml_tri has no diagonal offset: n_past 0 keeps the diagonal, n_past -1 masks it as well
+    struct ggml_tensor * result;
+    switch (n_past) {
+        case  0: result = ggml_tri(ctx, a, GGML_TRI_TYPE_LOWER_DIAG); break;
+        case -1: result = ggml_tri(ctx, a, GGML_TRI_TYPE_LOWER);      break;
+        default: GGML_ABORT("%s: n_past must be 0 or -1, ggml_tri has no other diagonal offset", __func__);
+    }
 
-    int32_t params[] = { n_past };
-    ggml_set_op_params(result, params, sizeof(params));
+    // -inf in the discarded cells, by subtracting +inf there: ggml_tri writes an exact 0.0 to them,
+    // so 0 - inf is -inf for any input, and the kept cells go through x - 0, which keeps -0.0f
+    result = ggml_sub(ctx, result, ggml_tri(ctx, ggml_fill(ctx, a, INFINITY),
+                                            n_past == 0 ? GGML_TRI_TYPE_UPPER : GGML_TRI_TYPE_UPPER_DIAG));
 
-    result->op     = GGML_OP_DIAG_MASK_INF;
-    result->src[0] = a;
+    if (inplace) {
+        result = ggml_cpy(ctx, result, ggml_view_tensor(ctx, a));
+    }
 
     return result;
 }
@@ -4141,13 +4150,17 @@ static struct ggml_tensor * ggml_diag_mask_zero_impl(
         struct ggml_tensor  * a,
         int                   n_past,
         bool                  inplace) {
-    struct ggml_tensor * result = inplace ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
+    // see ggml_diag_mask_inf_impl
+    struct ggml_tensor * result;
+    switch (n_past) {
+        case  0: result = ggml_tri(ctx, a, GGML_TRI_TYPE_LOWER_DIAG); break;
+        case -1: result = ggml_tri(ctx, a, GGML_TRI_TYPE_LOWER);      break;
+        default: GGML_ABORT("%s: n_past must be 0 or -1, ggml_tri has no other diagonal offset", __func__);
+    }
 
-    int32_t params[] = { n_past };
-    ggml_set_op_params(result, params, sizeof(params));
-
-    result->op     = GGML_OP_DIAG_MASK_ZERO;
-    result->src[0] = a;
+    if (inplace) {
+        result = ggml_cpy(ctx, result, ggml_view_tensor(ctx, a));
+    }
 
     return result;
 }
@@ -7485,6 +7498,7 @@ void ggml_build_backward_expand(
             // gradients in node->src[0] for one reason or another have no effect on output gradients
             case GGML_OP_IM2COL:      // only used for its shape
             case GGML_OP_IM2COL_BACK: // same as IM2COL
+            case GGML_OP_FILL:        // only used for its shape, the output does not depend on the values of src0
                 ignore_src[0] = true;
                 break;
             case GGML_OP_UNARY: {
