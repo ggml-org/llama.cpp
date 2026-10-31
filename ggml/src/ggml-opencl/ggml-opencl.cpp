@@ -44,6 +44,8 @@ typedef const void * (*get_adreno_bin_kernel_func_t)(
 #include <cmath>
 #include <map>
 #include <memory>
+#include <chrono>
+#include <cstdlib>
 #include <charconv>
 #include <mutex>
 #include <regex>
@@ -1566,6 +1568,32 @@ static cl_program build_program_from_source(ggml_backend_opencl_context * backen
     // Best-effort save of the freshly-built binary (no-op if cache disabled).
     if (p != nullptr) {
         cl_program_cache_try_save(backend_ctx->program_cache, p, dev, program_buffer, compile_opts);
+    }
+    return p;
+}
+
+// Flash-attention programs are compiled lazily (first graph that needs a given DK/DV/variant), after
+// model load, so they used to bypass the on-disk program cache and recompile in every process.
+// Same cache and key as build_program_from_source(); keeps the clFinish+retry semantics of
+// build_program_from_source_ex() on a miss and never fails the build because of the cache.
+// With GGML_OPENCL_KERNEL_CACHE_DEBUG set it emits one "fa_cache HIT/MISS ms=.. tag=.." stderr line
+// per program so the host can report a gpu_fa_programs phase.
+static cl_program build_program_from_source_cached_ex(ggml_backend_opencl_context * backend_ctx, const char* program_buffer, const std::string &compile_opts, bool fatal, const char *tag, cl_command_queue retry_queue) {
+    const auto t0 = std::chrono::steady_clock::now();
+    cl_program p = cl_program_cache_try_load(
+        backend_ctx->program_cache, backend_ctx->context, backend_ctx->device, program_buffer, compile_opts);
+    const bool hit = p != nullptr;
+    if (!hit) {
+        p = build_program_from_source_ex(backend_ctx->context, backend_ctx->device, program_buffer, compile_opts, fatal, tag, retry_queue);
+        if (p != nullptr) {
+            cl_program_cache_try_save(backend_ctx->program_cache, p, backend_ctx->device, program_buffer, compile_opts);
+        }
+    }
+    static const bool debug = [] { const char * e = std::getenv("GGML_OPENCL_KERNEL_CACHE_DEBUG"); return e && *e; }();
+    if (debug) {
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        fprintf(stderr, "ggml_opencl: fa_cache %s ms=%.0f ok=%d tag=%s\n", hit ? "HIT" : "MISS", ms, p != nullptr ? 1 : 0, tag ? tag : "?");
+        fflush(stderr);
     }
     return p;
 }
@@ -7245,8 +7273,7 @@ static void ggml_opencl_ensure_fa_pre_kernels(ggml_backend_opencl_context * back
     const std::string src  = ggml_opencl_fa_kernel_src(FA_VARIANT_PRE);
     const std::string opts = ggml_opencl_fa_compile_opts(backend_ctx, cfg, FA_VARIANT_PRE);
     // retry when kernel compile fails
-    cl_program prog_pre_f16 = build_program_from_source_ex(
-        backend_ctx->context, backend_ctx->device, src.c_str(), opts,
+    cl_program prog_pre_f16 = build_program_from_source_cached_ex(backend_ctx, src.c_str(), opts,
         /*fatal=*/false, "fa prepass f16", backend_ctx->queue);
     if (!prog_pre_f16) { return; }
     cl_kernel k_kv_pad_f16  = clCreateKernel(prog_pre_f16, "flash_attn_kv_pad_f16",   &err);
@@ -7286,8 +7313,7 @@ static bool ggml_opencl_ensure_fa_f32_f16_vec_512(ggml_backend_opencl_context * 
     // Compile only vec decode and merge to stay within the Adreno compiler's memory limit.
     const std::string opts = ggml_opencl_fa_compile_opts(backend_ctx, cfg, FA_VARIANT_F32_F16) +
                              " -D FA_DECODE_ONLY -D FA_VEC_ONLY";
-    cl_program prog = build_program_from_source_ex(
-        backend_ctx->context, backend_ctx->device,
+    cl_program prog = build_program_from_source_cached_ex(backend_ctx,
         ggml_opencl_fa_kernel_src(FA_VARIANT_F32_F16).c_str(), opts,
         /*fatal=*/false, "fa f32_f16 decode512 vec", backend_ctx->queue);
     if (!prog) {
@@ -7401,8 +7427,7 @@ static bool ggml_opencl_ensure_fa_f32_f16_prefill_512(ggml_backend_opencl_contex
 
     const ggml_opencl_fa_variant variant = split ? FA_VARIANT_F32_F16_SPLIT : FA_VARIANT_F32_F16;
     std::string opts = ggml_opencl_fa_compile_opts(backend_ctx, cfg, variant) + " -D FA_PREFILL_ONLY";
-    cl_program prog = build_program_from_source_ex(
-        backend_ctx->context, backend_ctx->device,
+    cl_program prog = build_program_from_source_cached_ex(backend_ctx,
         ggml_opencl_fa_kernel_src(FA_VARIANT_F32_F16).c_str(), opts,
         /*fatal=*/false, split ? "fa f32_f16 prefill512 split" : "fa f32_f16 prefill512",
         backend_ctx->queue);
@@ -7426,8 +7451,7 @@ static bool ggml_opencl_ensure_fa_f32_f16_prefill_512(ggml_backend_opencl_contex
     if (split && pkimg_build && backend_ctx->fa.f32_f16_split_k_img.count(dk_dv) == 0) {
         std::string opts_img = ggml_opencl_fa_compile_opts(backend_ctx, cfg, variant) +
             " -D FA_PREFILL_ONLY -D FA_K_IMG -D FA_TILE_NAME=flash_attn_f32_f16_k_img";
-        cl_program prog_img = build_program_from_source_ex(
-            backend_ctx->context, backend_ctx->device,
+        cl_program prog_img = build_program_from_source_cached_ex(backend_ctx,
             ggml_opencl_fa_kernel_src(FA_VARIANT_F32_F16).c_str(), opts_img,
             /*fatal=*/false, "fa f32_f16 prefill512 split k_img", backend_ctx->queue);
         if (prog_img) {
@@ -7584,8 +7608,7 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
         case FA_VARIANT_Q4_0_SPLIT:      tag = "fa q4_0 split";      break;
         default: break;
     }
-    cl_program prog = build_program_from_source_ex(
-        backend_ctx->context, backend_ctx->device, src.c_str(), opts + opts_cl_c_gqa4,
+    cl_program prog = build_program_from_source_cached_ex(backend_ctx, src.c_str(), opts + opts_cl_c_gqa4,
         /*fatal=*/false, tag, backend_ctx->queue);
     if (!prog) { return false; }
 
@@ -7716,8 +7739,7 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
             // footprint inside the 192-thread WG cap (see fa_cl_c_gqa4 above
             // for the per-gen default).
             const std::string opts_g8 = opts + " -D MQ_GQA=8 -D MQ_NSG=3 -D MQ_NSG_SPLIT=3 -D FA_MQ_ONLY -D FA_CL_C=" + fa_cl_c_g8_val;
-            cl_program prog_g8 = fa_decode_only ? nullptr : build_program_from_source_ex(
-                backend_ctx->context, backend_ctx->device, src.c_str(), opts_g8,
+            cl_program prog_g8 = fa_decode_only ? nullptr : build_program_from_source_cached_ex(backend_ctx, src.c_str(), opts_g8,
                 /*fatal=*/false, "fa f32_f16 MQ_GQA=8", backend_ctx->queue);
             if (prog_g8) {
                 const size_t mq_g8_required_wg = 192;  // Q1_WG_SIZE(64) * MQ_NSG_SPLIT(3)
@@ -7788,8 +7810,7 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
             if (!fa_decode_only && backend_ctx->has_subgroup_shuffle &&
                 backend_ctx->fa.f32_f16_q1_vec_mq_split_c8.count({dk, dv}) == 0) {
                 const std::string opts_c8_ns2 = opts + " -D FA_MQ_ONLY -D MQ_GQA=4 -D MQ_NSG=2 -D MQ_NSG_SPLIT=2" + opts_cl_c_gqa4;
-                cl_program prog_c8 = build_program_from_source_ex(
-                    backend_ctx->context, backend_ctx->device, src.c_str(), opts_c8_ns2,
+                cl_program prog_c8 = build_program_from_source_cached_ex(backend_ctx, src.c_str(), opts_c8_ns2,
                     /*fatal=*/false, "fa f32_f16 c8 NSG2", backend_ctx->queue);
                 if (prog_c8) {
                     cl_kernel k_c8 = clCreateKernel(prog_c8, "flash_attn_f32_f16_q1_vec_mq_split_c8", &err);
@@ -7811,8 +7832,7 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
             if (!fa_decode_only && backend_ctx->has_subgroup_shuffle &&
                 dk == 256 && dv == 256) {
                 const std::string opts_g8_c32 = opts + " -D FA_MQ_ONLY -D MQ_GQA=8 -D MQ_NSG=2 -D MQ_NSG_SPLIT=2 -D FA_CL_C=32";
-                cl_program prog_g8_c32 = build_program_from_source_ex(
-                    backend_ctx->context, backend_ctx->device, src.c_str(), opts_g8_c32,
+                cl_program prog_g8_c32 = build_program_from_source_cached_ex(backend_ctx, src.c_str(), opts_g8_c32,
                     /*fatal=*/false, "fa f32_f16 c32 g8 d256 NSG2", backend_ctx->queue);
                 if (prog_g8_c32) {
                     cl_kernel k_g8_c32 = clCreateKernel(prog_g8_c32, "flash_attn_f32_f16_q1_vec_mq_split_c8", &err);
@@ -7831,8 +7851,7 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
             if (!fa_decode_only && backend_ctx->has_subgroup_shuffle &&
                 backend_ctx->fa.f32_f16_q1_vec_mq_split_g8_c8.count({dk, dv}) == 0) {
                 const std::string opts_g8_c8_ns2 = opts + " -D FA_MQ_ONLY -D MQ_GQA=8 -D MQ_NSG=2 -D MQ_NSG_SPLIT=2 -D FA_CL_C=" + fa_cl_c_g8_val;
-                cl_program prog_g8_c8 = build_program_from_source_ex(
-                    backend_ctx->context, backend_ctx->device, src.c_str(), opts_g8_c8_ns2,
+                cl_program prog_g8_c8 = build_program_from_source_cached_ex(backend_ctx, src.c_str(), opts_g8_c8_ns2,
                     /*fatal=*/false, "fa f32_f16 c8 g8 NSG2", backend_ctx->queue);
                 if (prog_g8_c8) {
                     cl_kernel k_g8_c8 = clCreateKernel(prog_g8_c8, "flash_attn_f32_f16_q1_vec_mq_split_c8", &err);
@@ -7911,8 +7930,7 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
             auto & m_mq_split_g8 = is_q8 ? backend_ctx->fa.f32_q8_0_q1_vec_mq_split_g8
                                          : backend_ctx->fa.f32_q4_0_q1_vec_mq_split_g8;
             const std::string opts_mq_g8 = opts + " -D MQ_GQA=8 -D MQ_NSG=3 -D MQ_NSG_SPLIT=3";
-            cl_program prog_mq_g8 = build_program_from_source_ex(
-                backend_ctx->context, backend_ctx->device, src.c_str(), opts_mq_g8,
+            cl_program prog_mq_g8 = build_program_from_source_cached_ex(backend_ctx, src.c_str(), opts_mq_g8,
                 /*fatal=*/false, is_q8 ? "fa q8_0 MQ_GQA=8" : "fa q4_0 MQ_GQA=8",
                 backend_ctx->queue);
             if (prog_mq_g8) {
@@ -7935,8 +7953,7 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
                                          : backend_ctx->fa.f32_q4_0_q1_vec_mq_split_c8;
                 const std::string name_c8_gqa4 = name_q1 + "_vec_mq_split_c8";
                 const std::string opts_c8_gqa4 = opts + " -D MQ_GQA=4 -D MQ_NSG=2 -D MQ_NSG_SPLIT=2" + opts_cl_c_gqa4;
-                cl_program prog_c8_gqa4 = build_program_from_source_ex(
-                    backend_ctx->context, backend_ctx->device, src.c_str(), opts_c8_gqa4,
+                cl_program prog_c8_gqa4 = build_program_from_source_cached_ex(backend_ctx, src.c_str(), opts_c8_gqa4,
                     /*fatal=*/false, is_q8 ? "fa q8_0 c8 GQA4 NSG2" : "fa q4_0 c8 GQA4 NSG2",
                     backend_ctx->queue);
                 if (prog_c8_gqa4) {
@@ -7956,8 +7973,7 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
             // Cluster-parallel q4_0 decode kernel
             if (!is_q8 && backend_ctx->has_subgroup_shuffle) {
                 const std::string opts_c8 = opts + " -D MQ_GQA=8 -D MQ_NSG=2 -D MQ_NSG_SPLIT=2";
-                cl_program prog_c8 = build_program_from_source_ex(
-                    backend_ctx->context, backend_ctx->device, src.c_str(), opts_c8,
+                cl_program prog_c8 = build_program_from_source_cached_ex(backend_ctx, src.c_str(), opts_c8,
                     /*fatal=*/false, "fa q4_0 c8 NSG2", backend_ctx->queue);
                 if (prog_c8) {
                     cl_kernel k_c8 = clCreateKernel(prog_c8, "flash_attn_f32_q4_0_q1_vec_mq_split_c8", &err);
@@ -8068,8 +8084,7 @@ static bool ggml_opencl_ensure_fa_quant_split_override(
 
     const std::string tag = std::string("fa ") + (is_q8_0 ? "q8_0" : "q4_0") +
         " split DK=" + std::to_string(dk);
-    cl_program prog = build_program_from_source_ex(
-        backend_ctx->context, backend_ctx->device, src.c_str(), opts,
+    cl_program prog = build_program_from_source_cached_ex(backend_ctx, src.c_str(), opts,
         /*fatal=*/false, tag.c_str(), backend_ctx->queue);
     if (!prog) { return false; }
     cl_int err;
