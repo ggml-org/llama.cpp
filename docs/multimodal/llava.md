@@ -13,11 +13,11 @@ After API is confirmed, more models will be supported / uploaded.
 ## Usage
 Build the `llama-mtmd-cli` binary.
 
-After building, run: `./llama-mtmd-cli` to see the usage. For example:
+After building, run: `./build/bin/llama-mtmd-cli` to see the usage. For example:
 
 ```sh
-./llama-mtmd-cli -m ../llava-v1.5-7b/ggml-model-f16.gguf \
-    --mmproj ../llava-v1.5-7b/mmproj-model-f16.gguf \
+./build/bin/llama-mtmd-cli -m llava-v1.5-7b/ggml-model-f16.gguf \
+    --mmproj llava-v1.5-7b/mmproj-model-f16.gguf \
     --chat-template vicuna
 ```
 
@@ -43,19 +43,19 @@ pip install -r tools/mtmd/requirements.txt
 3. Use `llava_surgery.py` to split the LLaVA model to LLaMA and multimodel projector constituents:
 
 ```sh
-python ./tools/mtmd/llava_surgery.py -m ../llava-v1.5-7b
+python ./tools/mtmd/legacy-models/llava_surgery.py -m llava-v1.5-7b
 ```
 
 4. Use `convert_image_encoder_to_gguf.py` to convert the LLaVA image encoder to GGUF:
 
 ```sh
-python ./tools/mtmd/convert_image_encoder_to_gguf.py -m ../clip-vit-large-patch14-336 --llava-projector ../llava-v1.5-7b/llava.projector --output-dir ../llava-v1.5-7b
+python ./tools/mtmd/legacy-models/convert_image_encoder_to_gguf.py -m clip-vit-large-patch14-336 --llava-projector llava-v1.5-7b/llava.projector --output-dir llava-v1.5-7b
 ```
 
 5. Use `examples/convert_legacy_llama.py` to convert the LLaMA part of LLaVA to GGUF:
 
 ```sh
-python ./examples/convert_legacy_llama.py ../llava-v1.5-7b --skip-unknown
+python ./examples/convert_legacy_llama.py llava-v1.5-7b --skip-unknown --outtype f16 --outfile llava-v1.5-7b/ggml-model-f16.gguf
 ```
 
 Now both the LLaMA part and the image encoder are in the `llava-v1.5-7b` directory.
@@ -74,32 +74,32 @@ pip install -r tools/mtmd/requirements.txt
 
 3) Use `llava_surgery_v2.py` which also supports llava-1.5 variants pytorch as well as safetensor models:
 ```console
-python tools/mtmd/llava_surgery_v2.py -C -m ../llava-v1.6-vicuna-7b/
+python tools/mtmd/legacy-models/llava_surgery_v2.py -C -m llava-v1.6-vicuna-7b/
 ```
 - you will find a llava.projector and a llava.clip file in your model directory
 
 4) Copy the llava.clip file into a subdirectory (like vit), rename it to pytorch_model.bin and add a fitting vit configuration to the directory:
 ```console
 mkdir vit
-cp ../llava-v1.6-vicuna-7b/llava.clip vit/pytorch_model.bin
-cp ../llava-v1.6-vicuna-7b/llava.projector vit/
+cp llava-v1.6-vicuna-7b/llava.clip vit/pytorch_model.bin
+cp llava-v1.6-vicuna-7b/llava.projector vit/
 curl -s -q https://huggingface.co/cmp-nct/llava-1.6-gguf/raw/main/config_vit.json -o vit/config.json
 ```
 
 5) Create the visual gguf model:
 ```console
-python ./tools/mtmd/convert_image_encoder_to_gguf.py -m vit --llava-projector vit/llava.projector --output-dir vit --clip-model-is-vision
+python ./tools/mtmd/legacy-models/convert_image_encoder_to_gguf.py -m vit --llava-projector vit/llava.projector --output-dir vit --clip-model-is-vision
 ```
 - This is similar to llava-1.5, the difference is that we tell the encoder that we are working with the pure vision model part of CLIP
 
 6) Then convert the model to gguf format:
 ```console
-python ./examples/convert_legacy_llama.py ../llava-v1.6-vicuna-7b/ --skip-unknown
+python ./examples/convert_legacy_llama.py llava-v1.6-vicuna-7b/ --skip-unknown --outtype f16 --outfile llava-v1.6-vicuna-7b/ggml-model-f16.gguf
 ```
 
 7) And finally we can run the llava cli using the 1.6 model version:
 ```console
-./llama-mtmd-cli -m ../llava-v1.6-vicuna-7b/ggml-model-f16.gguf --mmproj vit/mmproj-model-f16.gguf
+./build/bin/llama-mtmd-cli -m llava-v1.6-vicuna-7b/ggml-model-f16.gguf --mmproj vit/mmproj-model-f16.gguf
 ```
 
 **note** llava-1.6 needs more context than llava-1.5, at least 3000 is needed (just run it at -c 4096)
