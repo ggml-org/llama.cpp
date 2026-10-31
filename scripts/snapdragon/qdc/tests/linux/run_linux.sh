@@ -155,6 +155,28 @@ run_completion_case() {
   fi
 }
 
+# GGML_HEXAGON_VMEM=0 makes the backend measure the mappable NPU memory instead of using the default; run it last since an abort can leave the DSP session degraded.
+run_completion_vmem_probe_case() {
+  local log="$LOG_DIR/llama_completion_HTP0_vmem_probe.log"
+  local prompt="$LOG_DIR/bench_prompt.txt"
+  echo 'What is the capital of France?' > "$prompt"
+  local extra
+  extra="$(completion_extra_args npu) -ngl 99"
+  echo "=== [completion:npu-vmem-probe] llama-completion --device HTP0 (GGML_HEXAGON_VMEM=0) ==="
+  timeout 600 env GGML_HEXAGON_NDEV=1 GGML_HEXAGON_VMEM=0 ./bin/llama-completion \
+      -m "$MODEL_PATH" \
+      -f "$prompt" \
+      $extra \
+      > "$log" 2>&1 < /dev/null
+  local rc=$?
+  note_timeout_if_triggered "$rc" 600 "$log"
+  if [ $rc -eq 0 ]; then
+    xml_case_pass "tests.test_bench_posix" "test_llama_completion_vmem_probe[npu]"
+  else
+    xml_case_fail "tests.test_bench_posix" "test_llama_completion_vmem_probe[npu]" "$rc" "$log"
+  fi
+}
+
 run_bench_case() {
   local name=$1
   local parts=($(backend_env "$name"))
@@ -214,6 +236,7 @@ case "{TEST_MODE}" in
   bench)
     for b in cpu gpu npu; do run_completion_case "$b"; done
     for b in cpu gpu npu; do run_bench_case "$b"; done
+    run_completion_vmem_probe_case
     ;;
   backend-ops)
     for d in mxfp4 fp16 q4_0; do run_backend_ops_case "$d"; done
@@ -222,6 +245,7 @@ case "{TEST_MODE}" in
     for b in cpu gpu npu; do run_completion_case "$b"; done
     for b in cpu gpu npu; do run_bench_case "$b"; done
     for d in mxfp4 fp16 q4_0; do run_backend_ops_case "$d"; done
+    run_completion_vmem_probe_case
     ;;
   *)
     echo "FATAL: unsupported TEST_MODE={TEST_MODE}"
