@@ -15,7 +15,7 @@
 	import { FileTypeCategory, MessageRole } from '$lib/enums';
 	import { useChatFormModel } from '$lib/hooks/use-chat-form-model.svelte';
 	import { ChatService } from '$lib/services';
-	import { chatStore, conversationsStore, settingsStore } from '$lib/stores';
+	import { chatStore, conversationsStore, modelsStore, settingsStore } from '$lib/stores';
 	import { getFileTypeCategory } from '$lib/utils';
 
 	interface Props {
@@ -25,6 +25,7 @@
 		isLoading?: boolean;
 		isReasoning?: boolean;
 		isRecording?: boolean;
+		isTranscribing?: boolean;
 		showAddButton?: boolean;
 		showModelSelector?: boolean;
 		uploadedFiles?: ChatUploadedFile[];
@@ -41,6 +42,7 @@
 		isLoading = false,
 		isReasoning = false,
 		isRecording = false,
+		isTranscribing = false,
 		onFileUpload,
 		onMicClick,
 		onStop,
@@ -70,8 +72,13 @@
 	let hasAudioAttachments = $derived(
 		uploadedFiles.some((file) => getFileTypeCategory(file.type) === FileTypeCategory.AUDIO)
 	);
+	// text-only active model: mic input is transcribed by another loaded audio model
+	let transcriptionModelId = $derived(hasAudioModality ? null : modelsStore.transcriptionModelId);
+	// keep the button while a recording or transcription is still in flight so it can be stopped
 	let shouldShowRecordButton = $derived(
-		hasAudioModality && !canSend && !hasAudioAttachments && currentConfig.autoMicOnEmpty
+		(hasAudioModality || transcriptionModelId !== null) &&
+			currentConfig.autoMicOnEmpty &&
+			(isRecording || isTranscribing || (!canSend && !hasAudioAttachments))
 	);
 
 	let selectorModelRef: ModelsSelector | undefined = $state(undefined);
@@ -205,7 +212,16 @@
 			/>
 		</Button>
 	{:else if shouldShowRecordButton}
-		<ChatFormActionRecord {disabled} {hasAudioModality} {isLoading} {isRecording} {onMicClick} />
+		<ChatFormActionRecord
+			{disabled}
+			{isLoading}
+			{isRecording}
+			{isTranscribing}
+			{onMicClick}
+			transcriptionModelName={transcriptionModelId
+				? modelsStore.toDisplayName(transcriptionModelId)
+				: null}
+		/>
 	{:else}
 		<ChatFormActionSubmit
 			canSend={canSend && (showModelSelector ? hasModelSelected && isSelectedModelInCache : true)}
