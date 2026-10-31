@@ -6489,7 +6489,7 @@ void server_routes::init_routes() {
         // a model with predefined voices only speaks with one of them
         mtmd::bitmap_ptr voice_ref;
         if (!voice.empty() && info.n_voices > 0) {
-            voice_ref.reset(mtmd_gen_audio_get_ref(ctx_server.mctx, voice.c_str()));
+            voice_ref.reset(mtmd_gen_audio_get_voice(ctx_server.mctx, voice.c_str()));
             if (!voice_ref) {
                 res->error(format_error_response("unknown voice \"" + voice + "\", see \"voices\" in GET /props", ERROR_TYPE_INVALID_REQUEST));
                 return res;

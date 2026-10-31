@@ -118,7 +118,7 @@ int main(int argc, char ** argv) {
             LOG_ERR("--tts-voice and --tts-speaker-file cannot be used together\n");
             return 1;
         }
-        speaker_bitmap.reset(mtmd_gen_audio_get_ref(mctx.get(), params.tts_voice.c_str()));
+        speaker_bitmap.reset(mtmd_gen_audio_get_voice(mctx.get(), params.tts_voice.c_str()));
         if (!speaker_bitmap) {
             LOG_ERR("unknown voice \"%s\", the model has:", params.tts_voice.c_str());
             for (int32_t i = 0; const char * name = mtmd_gen_audio_voice_name(mctx.get(), i); i++) {

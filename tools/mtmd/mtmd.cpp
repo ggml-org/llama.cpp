@@ -2320,7 +2320,7 @@ const char * mtmd_gen_audio_voice_name(const mtmd_context * ctx, int32_t idx) {
     return clip_gen_voice_name(ctx->ctx_gen_a, idx);
 }
 
-mtmd_bitmap * mtmd_gen_audio_get_ref(const mtmd_context * ctx, const char * name) {
+mtmd_bitmap * mtmd_gen_audio_get_voice(const mtmd_context * ctx, const char * name) {
     if (!ctx->ctx_gen_a || !name) {
         return nullptr;
     }

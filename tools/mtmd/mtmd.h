@@ -191,7 +191,7 @@ MTMD_API const char * mtmd_get_marker(const mtmd_context * ctx);
 // if bitmap is audio:
 //     length of data must be n_samples * sizeof(float)
 //     the data is in float format (PCM F32)
-// if bitmap is voice (see mtmd_gen_audio_get_ref()):
+// if bitmap is voice (see mtmd_gen_audio_get_voice()):
 //     nx = n_embd, ny = number of rows, data is F32 rows (can be empty), id is the voice name
 //
 // if data == nullptr:
@@ -481,7 +481,7 @@ MTMD_API const char * mtmd_gen_audio_voice_name(const mtmd_context * ctx, int32_
 
 // predefined voice with this name as a voice bitmap, to pass as speaker reference
 // returns nullptr if there is no such voice, the caller must free it
-MTMD_API mtmd_bitmap * mtmd_gen_audio_get_ref(const mtmd_context * ctx, const char * name);
+MTMD_API mtmd_bitmap * mtmd_gen_audio_get_voice(const mtmd_context * ctx, const char * name);
 
 
 enum mtmd_gen_process_type {
