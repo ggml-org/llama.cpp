@@ -315,55 +315,51 @@ static void bitonic_sort_vtcm_desc(uint8_t * values, uint8_t * indices, uint32_t
     }
 }
 
-static void top_k_select_tiled(dma_queue * dma_q, struct htp_thread_trace * tr,
-                               dma_addr_t src_addr, uint32_t n, uint32_t k,
-                               float * values_buf, int32_t * indices_buf,
-                               float * out_values, int32_t * out_indices,
-                               uint32_t chunk_base) {
-    const uint32_t tile_elems = 1024;
-    uint32_t n_tiles            = (n + tile_elems - 1) / tile_elems;
-    uint32_t candidate_count    = n_tiles * k;
-    uint32_t merge_n_vec        = hmx_ceil_div(candidate_count, 32);
-    uint32_t merge_n_vec_pow2   = 1;
-    while (merge_n_vec_pow2 < merge_n_vec) merge_n_vec_pow2 <<= 1;
-    uint32_t merge_elems        = merge_n_vec_pow2 * 32;
-    float * candidate_values    = values_buf + tile_elems;
-    int32_t * candidate_indices = indices_buf + tile_elems;
-    uint32_t candidate_pos      = 0;
+// top-k of one row held in VTCM, k <= 64. Keeps a sorted list of the k best, rejects 256-float blocks with one max-reduce.
+// Writes k values and k indices (ties: first seen wins). Slots with no finite value get -INF and index 0.
+static void top_k_scan(const float * vals, uint32_t n, uint32_t k, float * out_v, int32_t * out_i) {
+    float   best_v[64];
+    int32_t best_i[64];
+    uint32_t cnt = 0;
+    float    thr = -INFINITY;
 
-    for (uint32_t offset = 0; offset < n; offset += tile_elems) {
-        uint32_t tile_count = MIN(tile_elems, n - offset);
-        dma_sync_read(dma_q, values_buf, src_addr + (size_t) offset * sizeof(float), tile_count * sizeof(float));
-
-        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) offset);
-        if (tile_count < tile_elems) {
-            hvx_splat_f32_u((uint8_t *) (values_buf + tile_count), -INFINITY, tile_elems - tile_count);
+    const uint32_t blk = 256;
+    for (uint32_t off = 0; off < n; off += blk) {
+        const uint32_t bn = MIN(blk, n - off);
+        if (hvx_reduce_max_f32((const uint8_t *) (vals + off), bn) <= thr) {
+            continue;
         }
-
-        bitonic_sort_vtcm_desc((uint8_t *) values_buf, (uint8_t *) indices_buf, tile_elems / 32, true);
-        uint32_t tile_k = MIN(k, tile_count);
-        for (uint32_t j = 0; j < tile_k; j++) {
-            candidate_values[candidate_pos] = values_buf[j];
-            candidate_indices[candidate_pos] = indices_buf[j] + (int32_t) offset;
-            candidate_pos++;
-        }
-        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) offset);
-    }
-
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, 0);
-    if (merge_elems > candidate_pos) {
-        hvx_splat_f32_u((uint8_t *) (candidate_values + candidate_pos), -INFINITY, merge_elems - candidate_pos);
-        for (uint32_t j = candidate_pos; j < merge_elems; j++) {
-            candidate_indices[j] = 0;
+        for (uint32_t i = 0; i < bn; i++) {
+            const float v = vals[off + i];
+            if (!(v > thr)) continue;
+            uint32_t pos = cnt < k ? cnt++ : k - 1;
+            while (pos > 0 && best_v[pos - 1] < v) {
+                best_v[pos] = best_v[pos - 1];
+                best_i[pos] = best_i[pos - 1];
+                pos--;
+            }
+            best_v[pos] = v;
+            best_i[pos] = (int32_t) (off + i);
+            if (cnt == k) thr = best_v[k - 1];
         }
     }
 
-    bitonic_sort_vtcm_desc((uint8_t *) candidate_values, (uint8_t *) candidate_indices, merge_n_vec_pow2, false);
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, 0);
+    // fewer than k values above -INF: take -INF or NaN elements, then pad with index 0
+    for (uint32_t i = 0; i < n && cnt < k; i++) {
+        if (!(vals[i] > -INFINITY)) {
+            best_v[cnt] = -INFINITY;
+            best_i[cnt] = (int32_t) i;
+            cnt++;
+        }
+    }
+    for (; cnt < k; cnt++) {
+        best_v[cnt] = -INFINITY;
+        best_i[cnt] = 0;
+    }
 
     for (uint32_t j = 0; j < k; j++) {
-        out_values[j]  = candidate_values[j];
-        out_indices[j] = candidate_indices[j] + (int32_t) chunk_base;
+        out_v[j] = best_v[j];
+        out_i[j] = best_i[j];
     }
 }
 
@@ -509,10 +505,14 @@ static void htp_sort_chunk_job(unsigned int n, unsigned int i, void * data) {
         }
 
         if (local_k > 1 && local_k <= 64 && chunk_elems > 1024) {
-            top_k_select_tiled(octx->ctx->dma[i], tr, src_addr, real_count, local_k,
-                               values_buf, indices_buf,
-                               &merge_values[i * local_k], &merge_indices[i * local_k],
-                               chunk_base);
+            dma_sync_read(octx->ctx->dma[i], values_buf, src_addr, real_count * sizeof(float));
+
+            htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) i);
+            top_k_scan(values_buf, real_count, local_k, &merge_values[i * local_k], &merge_indices[i * local_k]);
+            for (uint32_t j = 0; j < local_k; j++) {
+                merge_indices[i * local_k + j] += (int32_t) chunk_base;
+            }
+            htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) i);
             return;
         }
 
@@ -668,10 +668,14 @@ static inline void compute_row_sort(
     uint32_t ne00,
     uint32_t chunk_elems,
     bool is_top_k,
-    enum ggml_sort_order order
+    enum ggml_sort_order order,
+    uint32_t k
 ) {
     if (is_top_k) {
-        if (ne00 == 32 || ne00 == 64 || ne00 == 128 || ne00 == 256 || ne00 == 512 || ne00 == 1024) {
+        if (k > 1 && k <= 64 && ne00 > 1024) {
+            float out_v[64];
+            top_k_scan(cur_values, ne00, k, out_v, cur_indices);
+        } else if (ne00 == 32 || ne00 == 64 || ne00 == 128 || ne00 == 256 || ne00 == 512 || ne00 == 1024) {
             switch (ne00) {
                 case 32:   sort32_f32_hvx((uint8_t *) cur_values, (uint8_t *) cur_indices, GGML_SORT_ORDER_DESC); break;
                 case 64:   sort64_f32_hvx((uint8_t *) cur_values, (uint8_t *) cur_indices, GGML_SORT_ORDER_DESC); break;
@@ -788,7 +792,7 @@ static void htp_sort_multi_row_job(unsigned int n, unsigned int ith, void * data
             dma_queue_pop(dma_q);
 
             htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) r);
-            compute_row_sort(cur_values, cur_indices, ne00, chunk_elems, is_top_k, order);
+            compute_row_sort(cur_values, cur_indices, ne00, chunk_elems, is_top_k, order, k);
             htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) r);
 
             // Push writeback of current slot
@@ -817,7 +821,7 @@ static void htp_sort_multi_row_job(unsigned int n, unsigned int ith, void * data
             dma_sync_read(dma_q, values_buf, src_addr, src_bytes);
 
             htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) r);
-            compute_row_sort(values_buf, indices_buf, ne00, chunk_elems, is_top_k, order);
+            compute_row_sort(values_buf, indices_buf, ne00, chunk_elems, is_top_k, order, k);
             htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) r);
 
             dma_sync_write(dma_q, dst_addr, indices_buf, dst_bytes);
