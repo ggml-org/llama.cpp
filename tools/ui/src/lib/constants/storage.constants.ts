@@ -16,8 +16,6 @@ export const DB_APP_NAME_DEPRECATED = 'LlamacppWebui';
 
 export const ALWAYS_ALLOWED_TOOLS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.alwaysAllowedTools`;
 
-/** Paused model download ids (`<repo>:<tag>`), restored on the next page load. */
-export const PAUSED_MODEL_DOWNLOADS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.pausedModelDownloads`;
 export const CONFIG_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.config`;
 export const DISABLED_TOOLS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.disabledTools`;
 
@@ -38,6 +36,8 @@ export const RECENT_MODELS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.recentModels`
 export const HIDDEN_MODELS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.hiddenModels`;
 export const REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.reasoningEffortDefault`;
 export const CONVERSATION_TABS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.conversationTabs`;
+export const SIDEBAR_EXPANDED_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.sidebarExpanded`;
+export const SIDEBAR_WIDTH_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.sidebarWidth`;
 export const USER_OVERRIDES_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.userOverrides`;
 export const DISMISSED_RECOMMENDED_MCP_SERVERS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.dismissedRecommendedMcpServers`;
 
