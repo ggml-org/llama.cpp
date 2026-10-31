@@ -15,6 +15,7 @@ class llama_kv_cache_msa : public llama_memory_i {
 public:
     llama_kv_cache_msa(
             const llama_model & model,
+                         bool   no_alloc,
                     ggml_type   type_k,
                     ggml_type   type_v,
                          bool   v_trans,
@@ -22,7 +23,6 @@ public:
                          bool   unified,
                      uint32_t   kv_size,
                      uint32_t   n_seq_max,
-                     uint32_t   n_pad,
                      uint32_t   n_swa,
                llama_swa_type   swa_type,
         const layer_filter_cb & filter,
@@ -67,7 +67,6 @@ public:
     llama_kv_cache * get_base() const;
     llama_kv_cache * get_idx () const;
 
-    uint32_t       get_n_pad()    const { return n_pad; }
     uint32_t       get_n_seq_max() const { return n_seq_max; }
     uint32_t       get_n_swa()    const { return n_swa; }
     llama_swa_type get_swa_type() const { return swa_type; }
@@ -78,7 +77,6 @@ private:
 
     const uint32_t n_stream  = 1;
     const uint32_t n_seq_max = 1;
-    const uint32_t n_pad     = 1;
 
     const uint32_t       n_swa    = 0;
     const llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;

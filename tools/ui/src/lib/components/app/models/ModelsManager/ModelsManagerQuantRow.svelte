@@ -3,7 +3,7 @@
 	import ModelDraftSidecars from '../ModelDraftSidecars.svelte';
 	import ModelsManagerStatusCell from './ModelsManagerStatusCell.svelte';
 	import { modelRowActions } from './row-actions';
-	import { configuredContext } from './utils';
+	import { configuredContext, isRowControlClick } from './utils';
 	import { MoreHorizontal } from '@lucide/svelte';
 	import { DropdownMenuActions } from '$lib/components/app';
 	import { Badge } from '$lib/components/ui/badge';
@@ -28,13 +28,20 @@
 	let quant = $derived(option.parsedId?.quantization ?? option.model);
 </script>
 
+<!-- the whole row opens the quant for a pointer; keyboard users reach the same action
+     through the quant's own button -->
+<!-- svelte-ignore a11y_click_events_have_key_events -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
 	class={[
 		MODEL_ROW_GRID_CLASS,
-		'group relative rounded-md px-2 py-2 transition max-md:px-3 max-md:py-3',
+		'group relative cursor-pointer rounded-md px-2 py-2 transition max-md:px-3 max-md:py-3',
 		isHidden && 'opacity-60',
 		selected ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/40'
 	]}
+	onclick={(event) => {
+		if (!isRowControlClick(event)) onSelect(option);
+	}}
 >
 	<!-- the row holds a load control and an actions menu, so only the quant itself is
 	     the button: a button nested in a role="button" row is invalid -->

@@ -6,7 +6,7 @@ SDK_CONFIGS = (
     {
         "name": "Hexagon SDK",
         "repo": "snapdragon-toolchain/hexagon-sdk",
-        "default_version": "6.6.0.0",
+        "default_version": "6.7.0.0",
         "parent_dir": "Hexagon_SDK",
         "archive_prefix": "hexagon-sdk-v",
         "markers": ("hexagon_sdk.json",),
