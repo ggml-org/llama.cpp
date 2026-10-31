@@ -1,5 +1,7 @@
 #include "utils.h"
 
+#include "ggml-impl.h"
+
 #include <cmath>
 #include <cstddef>
 #include <ctime>
@@ -90,24 +92,6 @@ ov::Output<ov::Node> rope_yarn_ramp_mix(int num_elements, const float corr_dims[
     return ramp_mix;
 }
 
-float ggml_rope_yarn_corr_dim(int n_dims, int n_ctx_orig, float n_rot, float base) {
-#ifndef M_PI
-#    define M_PI 3.14159265358979323846
-#endif
-    return n_dims * logf(n_ctx_orig / (n_rot * 2 * (float) M_PI)) / (2 * logf(base));
-}
-
-void ggml_rope_yarn_corr_dims(int n_dims,
-                              int n_ctx_orig,
-                              float freq_base,
-                              float beta_fast,
-                              float beta_slow,
-                              float dims[2]) {
-    float start = floorf(ggml_rope_yarn_corr_dim(n_dims, n_ctx_orig, beta_fast, freq_base));
-    float end = ceilf(ggml_rope_yarn_corr_dim(n_dims, n_ctx_orig, beta_slow, freq_base));
-    dims[0] = std::max(0.0f, start);
-    dims[1] = std::min(static_cast<float>(n_dims - 1), end);
-}
 }  // namespace
 
 std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params,
@@ -154,6 +138,7 @@ std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params
     float beta_slow;
     const int n_dims = rope_params[1];
     const size_t n_dims_half = n_dims >> 1;
+    const bool truncate = rope_params[3] == 0;
     const int n_ctx_orig = rope_params[4];
     memcpy(&freq_base, rope_params + 5, sizeof(float));
     memcpy(&freq_scale, rope_params + 6, sizeof(float));
@@ -248,7 +233,7 @@ std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params
             theta = theta_interp;
         } else {
             float corr_dims[2];
-            ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, corr_dims);
+            ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, truncate, corr_dims);
             auto ramp_mix = rope_yarn_ramp_mix(num_pairs, corr_dims, ext_factor);
             Output<Node> one = ov::op::v0::Constant::create(ov::element::f32, Shape{1, 1, 1, 1}, {1.0f});
             auto one_minus_ramp = std::make_shared<ov::op::v1::Subtract>(one, ramp_mix);
@@ -261,7 +246,7 @@ std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params
         std::vector<float> factor(n_dims_half);
         Output<Node> freq_factors;
         float corr_dims[2];
-        ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, corr_dims);
+        ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, truncate, corr_dims);
         factor[0] = 1.0f;
         for (size_t i = 1; i < factor.size(); i++) {
             factor[i] = theta_scale * factor[i - 1];
