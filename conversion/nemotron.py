@@ -863,8 +863,11 @@ class NemotronTranscribeModel(NemotronHModel):
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         name, gen = item
-        if not name.startswith("llm.") or "_extra_state" in name:
+        if name.startswith(("perception.", "ctc_timestamp.")) or "_extra_state" in name:
             return None
+        if not name.startswith("llm."):
+            # the FP8 and NVFP4 releases store the decoder as backbone.*
+            raise ValueError(f"unexpected tensor {name}: only the BF16 checkpoint layout (llm.*) is supported")
         if name in cls._renames:
             name = cls._renames[name]
         elif name.startswith("llm.model.layers."):
