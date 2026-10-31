@@ -73,6 +73,16 @@ struct mtmd_audio_preprocessor_whisper : mtmd_audio_preprocessor {
     mtmd_audio_cache cache;
 };
 
+// Inkling dMel: 100 ms Slaney-mel magnitude windows at a 50 ms hop, quantized to 16 bins.
+struct mtmd_audio_preprocessor_inkling : mtmd_audio_preprocessor {
+    mtmd_audio_preprocessor_inkling(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
+    void initialize() override;
+    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const override;
+
+private:
+    mtmd_audio_cache cache;
+};
+
 struct mtmd_audio_preprocessor_muse_spark_audio : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_muse_spark_audio(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
     void initialize() override {}
