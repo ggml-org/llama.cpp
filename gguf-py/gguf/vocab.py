@@ -621,12 +621,24 @@ class LlamaHfVocab(Vocab):
                 "You can install it with `pip install transformers`."
             ) from e
 
+        # some checkpoints ship "extra_special_tokens" as a list, which crashes transformers on load
+        # pass an empty dict to override the malformed value
+        from_pretrained_kwargs: dict[str, Any] = {}
+        tokenizer_config_file = base_path / 'tokenizer_config.json'
+        if tokenizer_config_file.is_file():
+            with open(tokenizer_config_file, encoding='utf-8') as f:
+                tokenizer_config = json.load(f)
+            if not isinstance(tokenizer_config.get('extra_special_tokens', {}), dict):
+                logger.warning(f'{tokenizer_config_file.name}: "extra_special_tokens" is not a dict, ignoring it')
+                from_pretrained_kwargs['extra_special_tokens'] = {}
+
         # Allow the tokenizer to default to slow or fast versions.
         # Explicitly set tokenizer to use local paths.
         self.tokenizer = AutoTokenizer.from_pretrained(
             base_path,
             cache_dir=base_path,
             local_files_only=True,
+            **from_pretrained_kwargs,
         )
         assert self.tokenizer.is_fast  # assume tokenizer.json is used  # ty: ignore[unresolved-attribute]
 
