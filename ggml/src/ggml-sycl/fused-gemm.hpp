@@ -31,8 +31,9 @@ struct ggml_sycl_grouped_gemm_rows {
 #    endif
 #endif
 
+// an XMX-emulation build (xmx-compat.hpp) launches every combination on hardware sub-groups of 16
 template <int SG> static constexpr bool fg_built() {
-#if defined(FG_AOT_SG)
+#if defined(FG_AOT_SG) && !defined(GGML_SYCL_XMX_EMULATION)
     return SG == FG_AOT_SG;
 #else
     return true;
