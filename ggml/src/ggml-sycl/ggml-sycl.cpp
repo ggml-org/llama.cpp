@@ -7314,7 +7314,8 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
                     return false;
                 }
 
-                if (src0_type == GGML_TYPE_TQ2_0 || src0_type == GGML_TYPE_TQ1_0) {
+                // the fallback path dequantizes src0, so it needs a type the SYCL converters implement
+                if (!ggml_sycl_supports_type(src0_type)) {
                     return false;
                 }
 
@@ -7374,7 +7375,7 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
 
         case GGML_OP_SET_ROWS:
             {
-                if (op->type == GGML_TYPE_TQ2_0 || op->type == GGML_TYPE_TQ1_0) {
+                if (!ggml_sycl_supports_type(op->type)) {
                     return false;
                 }
                 auto res = (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16 ||
@@ -7408,6 +7409,16 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
             {
                 ggml_type src0_type = op->src[0]->type;
                 ggml_type src1_type = op->src[1]->type;
+                // contiguous same-type copies are a memcpy and work for any type; the rest needs kernels,
+                // which also exist for I16 and I32
+                auto cpy_type_ok = [](ggml_type t) {
+                    return ggml_sycl_supports_type(t) || t == GGML_TYPE_I16 || t == GGML_TYPE_I32;
+                };
+                const bool is_memcpy = src0_type == src1_type && ggml_is_contiguous(op->src[0]) &&
+                                       ggml_is_contiguous(op->src[1]);
+                if (!is_memcpy && (!cpy_type_ok(src0_type) || !cpy_type_ok(src1_type))) {
+                    return false;
+                }
 
                 if (src0_type == GGML_TYPE_F16) {
                     if (src1_type == GGML_TYPE_Q2_K ||
@@ -7495,16 +7506,9 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
                         src1_type == GGML_TYPE_IQ3_XXS ||
                         src1_type == GGML_TYPE_IQ3_S ||
                         src1_type == GGML_TYPE_IQ1_S ||
-                        src1_type == GGML_TYPE_IQ1_M ||
-                        src1_type == GGML_TYPE_TQ2_0 ||
-                        src1_type == GGML_TYPE_TQ1_0) {
+                        src1_type == GGML_TYPE_IQ1_M) {
                         return false;
                     }
-                }
-
-                if (src0_type == GGML_TYPE_TQ2_0 || src1_type == GGML_TYPE_TQ2_0 ||
-                    src0_type == GGML_TYPE_TQ1_0 || src1_type == GGML_TYPE_TQ1_0) {
-                    return false;
                 }
 
                 return true;
