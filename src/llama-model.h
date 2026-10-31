@@ -655,6 +655,9 @@ struct llama_layer {
     struct ggml_tensor * mudd_up          = nullptr;
     struct ggml_tensor * mudd_up_b        = nullptr;
 
+    // diffusion-gemma encoder-mode per-layer output scale (prompt positions)
+    struct ggml_tensor * enc_out_scale = nullptr;
+
     struct llama_layer_posnet posnet;
 
     struct llama_layer_convnext convnext;
@@ -778,6 +781,12 @@ struct llama_model {
 
     // hrm-text initial low-cycle state
     struct ggml_tensor * hrm_z_l_init = nullptr;
+
+    // diffusion-gemma self-conditioning gated MLP (model-level, decoder-only)
+    struct ggml_tensor * sc_pre_norm = nullptr;
+    struct ggml_tensor * sc_gate     = nullptr;
+    struct ggml_tensor * sc_up       = nullptr;
+    struct ggml_tensor * sc_down     = nullptr;
 
     // DeepSeek-V4
     struct ggml_tensor * hc_head_fn    = nullptr;
