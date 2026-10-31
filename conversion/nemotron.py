@@ -619,7 +619,11 @@ class NemotronHModel(GraniteHybridModel):
         vocab_size = -(vocab_size // -pad_vocab) * pad_vocab
         self.hparams["vocab_size"] = vocab_size
 
-        assert max(id_ for tok, id_ in tokenizer.vocab.items() if tok not in self._vocab_skip) < vocab_size  # ty: ignore[unresolved-attribute]
+        # draft-model converters (DFlash, LiLiCorr) call this with their own instance, which has neither hook
+        vocab_skip = getattr(self, "_vocab_skip", ())
+        user_defined_tokens = getattr(self, "_user_defined_tokens", None)
+
+        assert max(id_ for tok, id_ in tokenizer.vocab.items() if tok not in vocab_skip) < vocab_size  # ty: ignore[unresolved-attribute]
 
         tokpre = self.get_vocab_base_pre(tokenizer)
 
@@ -641,7 +645,7 @@ class NemotronHModel(GraniteHybridModel):
                         if previous_token != token:
                             logger.info(f"{repr(previous_token)} is encoded and decoded back to {repr(token)} using AutoTokenizer")
 
-                    printed = self._user_defined_tokens is not None and self._user_defined_tokens.fullmatch(token)
+                    printed = user_defined_tokens is not None and user_defined_tokens.fullmatch(token)
                     if (added_tokens_decoder[i].special or self.does_token_look_special(token)) and not printed:
                         toktypes.append(gguf.TokenType.CONTROL)
                     else:
