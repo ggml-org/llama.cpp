@@ -35,6 +35,7 @@ import shutil
 import sys
 import tempfile
 import time
+import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
 from dataclasses import dataclass, field
@@ -109,6 +110,12 @@ _RUN_PY = _SCRIPTS_DIR.parent / "run.py"
 # --- Linux (BASH) assets ------------------------------------------------------
 _RUN_LINUX_TEMPLATE = _TESTS_DIR / "linux" / "run_linux.sh"
 _LINUX_ENTRY_SCRIPT = "/bin/bash /data/local/tmp/TestContent/run_linux.sh"
+
+# --- Windows (POWERSHELL) assets ----------------------------------------------
+_WINDOWS_DIR = _SCRIPTS_DIR / "windows"
+_WINDOWS_ENTRY_SCRIPT = "C:\\Temp\\TestContent\\run_tests.ps1"
+_WINDOWS_PYTHON_EMBED_URL = "https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-arm64.zip"
+_WINDOWS_GET_PIP_URL = "https://bootstrap.pypa.io/get-pip.py"
 
 # =============================================================================
 # Artifact builders (per platform)
@@ -207,6 +214,39 @@ def _build_linux_artifact(
     return Path(f"{zip_base}.zip")
 
 
+def _build_windows_artifact(
+    pkg_dir: Path,
+    stage_dir: Path,
+    test_mode: str,
+    model_url: str | None,
+) -> Path:
+    """Windows zip (POWERSHELL framework). Extracted by QDC to C:\\Temp\\TestContent\\.
+
+    Only test-backend-ops on HTP0 runs on Windows, whatever ``test_mode`` is.
+
+    Zip structure:
+      run_tests.ps1              entry script (trusts the HTP cert, runs pytest)
+      llama.cpp/                 installed package (incl. run.py, ggml-htp-v1.cer)
+      tests/test_backend_ops.py  test-backend-ops on HTP0
+      python-embed-arm64.zip     Python for the device (it has none)
+      get-pip.py
+    """
+    shutil.copytree(pkg_dir, stage_dir / "llama.cpp")
+    shutil.copy(_RUN_PY, stage_dir / "llama.cpp" / "run.py")
+
+    tests_dir = stage_dir / "tests"
+    tests_dir.mkdir()
+    shutil.copy(_WINDOWS_DIR / "test_backend_ops.py", tests_dir)
+
+    shutil.copy(_WINDOWS_DIR / "run_tests.ps1", stage_dir)
+    urllib.request.urlretrieve(_WINDOWS_PYTHON_EMBED_URL, stage_dir / "python-embed-arm64.zip")
+    urllib.request.urlretrieve(_WINDOWS_GET_PIP_URL, stage_dir / "get-pip.py")
+
+    zip_base = str(stage_dir / "artifact")
+    shutil.make_archive(zip_base, "zip", stage_dir)
+    return Path(f"{zip_base}.zip")
+
+
 # =============================================================================
 # Platform enum + strategy table
 # =============================================================================
@@ -215,6 +255,7 @@ def _build_linux_artifact(
 class Platform(enum.Enum):
     ANDROID = "android"
     LINUX = "linux"
+    WINDOWS = "windows"
 
 
 @dataclass(frozen=True)
@@ -238,6 +279,12 @@ PLATFORM_SPECS: dict[Platform, PlatformSpec] = {
         build_artifact=_build_linux_artifact,
         job_name_fmt="{base} (Linux)",
     ),
+    Platform.WINDOWS: PlatformSpec(
+        test_framework=TestFramework.POWERSHELL,
+        entry_script=_WINDOWS_ENTRY_SCRIPT,
+        build_artifact=_build_windows_artifact,
+        job_name_fmt="{base} (Win)",
+    ),
 }
 
 DEVICE_PLATFORM: dict[str, Platform] = {
@@ -245,6 +292,7 @@ DEVICE_PLATFORM: dict[str, Platform] = {
     "SM8650": Platform.ANDROID,
     "SM8850": Platform.ANDROID,
     "QCS9075M": Platform.LINUX,
+    "SC8480XP": Platform.WINDOWS,
 }
 
 

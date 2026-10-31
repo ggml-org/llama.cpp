@@ -100,15 +100,46 @@ jobs:
           name: llama-cpp-linux-arm64-snapdragon
           path: pkg-snapdragon/llama.cpp
 
+  windows-snapdragon:
+    runs-on: windows-11-arm
+    defaults:
+      run:
+        shell: pwsh
+
+    permissions:
+      actions: write
+      contents: read
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          lfs: false
+
+      - name: Install Hexagon and OpenCL SDKs
+        run: python scripts/snapdragon/setup-sdk.py --hexagon --opencl
+
+      - name: Build Llama.CPP for Snapdragon Windows
+        id: build_llama_cpp_snapdragon_windows
+        run: scripts/snapdragon/qdc/windows/build.ps1
+
+      - name: Upload Llama.CPP Snapdragon Windows Build Artifact
+        if: ${{ always() && steps.build_llama_cpp_snapdragon_windows.outcome == 'success' }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: llama-cpp-windows-arm64-snapdragon
+          path: pkg-snapdragon/llama.cpp
+
   test-snapdragon-qdc:
     name: Test on QDC Device (${{ matrix.device }})
-    needs: [android-ndk-snapdragon, linux-iot-snapdragon]
+    needs: [android-ndk-snapdragon, linux-iot-snapdragon, windows-snapdragon]
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
-        device: [SM8850, QCS9075M]
+        device: [SM8850, QCS9075M, SC8480XP]
 
     permissions:
       actions: read
@@ -121,7 +152,7 @@ jobs:
       - name: Download build artifact
         uses: actions/download-artifact@v7
         with:
-          name: ${{ startsWith(matrix.device, 'QCS') && 'llama-cpp-linux-arm64-snapdragon' || 'llama-cpp-android-arm64-snapdragon' }}
+          name: ${{ startsWith(matrix.device, 'QCS') && 'llama-cpp-linux-arm64-snapdragon' || startsWith(matrix.device, 'SC') && 'llama-cpp-windows-arm64-snapdragon' || 'llama-cpp-android-arm64-snapdragon' }}
           path: pkg-snapdragon/llama.cpp
 
       - name: Set up Python
