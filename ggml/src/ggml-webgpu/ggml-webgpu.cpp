@@ -4386,7 +4386,8 @@ static ggml_backend_buffer_type_t ggml_backend_webgpu_device_get_buffer_type(ggm
                         /* .get_alloc_size      = */ ggml_backend_webgpu_buffer_type_get_alloc_size,
                         /* .get_alloc_size_n    = */ NULL,
                         /* .is_host             = */ NULL,  // defaults to false
-        },
+            /* .get_max_alloc_size  = */ NULL,
+                        },
         /* .device  = */
         dev,
         /* .context = */ NULL

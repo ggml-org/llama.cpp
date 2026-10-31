@@ -13243,6 +13243,11 @@ size_t ggml_backend_vk_buffer_type_get_max_size(ggml_backend_buffer_type_t buft)
     return ctx->device->suballocation_block_size;
 }
 
+size_t ggml_backend_vk_buffer_type_get_max_alloc_size(ggml_backend_buffer_type_t buft) {
+    ggml_backend_vk_buffer_type_context * ctx = (ggml_backend_vk_buffer_type_context *) buft->context;
+    return ctx->device->max_buffer_size;
+}
+
 size_t ggml_backend_vk_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor) {
     return ggml_nbytes(tensor);
 
@@ -13313,6 +13318,7 @@ ggml_backend_buffer_type_t ggml_backend_vk_host_buffer_type() {
             /* .get_alloc_size      = */ ggml_backend_cpu_buffer_type()->iface.get_alloc_size,
             /* .get_alloc_size_n    = */ NULL,
             /* .is_host             = */ ggml_backend_cpu_buffer_type()->iface.is_host,
+            /* .get_max_alloc_size  = */ NULL,
         },
         /* .device   = */ ggml_backend_reg_dev_get(ggml_backend_vk_reg(), 0),
         /* .context  = */ nullptr,

@@ -5251,6 +5251,7 @@ ggml_backend_buffer_type_t ggml_backend_cpu_repack_buffer_type(void) {
                            /* .get_alloc_size       = */ nullptr,  // defaults to ggml_nbytes
                            /* .get_alloc_size_n     = */ NULL,
                            /* .is_host              = */ nullptr,
+                           /* .get_max_alloc_size   = */ nullptr,
                            },
         /* .device  = */ ggml_backend_reg_dev_get(ggml_backend_cpu_reg(), 0),
         /* .context = */ new ggml::cpu::repack::extra_buffer_type(),

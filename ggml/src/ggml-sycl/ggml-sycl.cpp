@@ -1323,6 +1323,7 @@ static const ggml_backend_buffer_type_i ggml_backend_sycl_buffer_type_interface 
     /* .get_alloc_size      = */ ggml_backend_sycl_buffer_type_get_alloc_size,
     /* .get_alloc_size_n    = */ NULL,
     /* .is_host             = */ NULL,
+    /* .get_max_alloc_size  = */ NULL,
 };
 
 ggml_backend_buffer_type_t ggml_backend_sycl_buffer_type(int device) {
@@ -1769,6 +1770,7 @@ static ggml_backend_buffer_type_i ggml_backend_sycl_split_buffer_type_interface 
     /* .get_alloc_size      = */ ggml_backend_sycl_split_buffer_type_get_alloc_size,
     /* .get_alloc_size_n    = */ NULL,
     /* .is_host             = */ ggml_backend_sycl_split_buffer_type_is_host,
+    /* .get_max_alloc_size  = */ NULL,
 };
 
 ggml_backend_buffer_type_t ggml_backend_sycl_split_buffer_type(int main_device, const float * tensor_split) {

@@ -469,6 +469,7 @@ ggml_backend_buffer_type_t ggml_backend_zdnn_buffer_type(void) {
             /* .get_alloc_size      = */ NULL,  // defaults to ggml_nbytes
             /* .get_alloc_size_n    = */ NULL,
             /* .is_host             = */ ggml_backend_zdnn_buffer_type_is_host,
+            /* .get_max_alloc_size  = */ NULL,
         },
         /* .device  = */ &g_ggml_backend_zdnn_device,
         /* .context = */ NULL,
