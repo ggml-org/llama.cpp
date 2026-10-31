@@ -428,6 +428,9 @@ class NemotronHModel(GraniteHybridModel):
     is_moe: bool = False
     supports_mtp_export = True
     _experts: list[dict[str, Tensor]] | None = None
+    # tokens past the embedding rows (left out of the vocab), and special tokens that are printed as text
+    _vocab_skip: tuple[str, ...] = ()
+    _user_defined_tokens: re.Pattern[str] | None = None
 
     _SSM_LAYER_TYPES = {"mamba", "linear_attention"}
     _ATTN_LAYER_TYPES = {"attention", "full_attention"}
@@ -616,7 +619,7 @@ class NemotronHModel(GraniteHybridModel):
         vocab_size = -(vocab_size // -pad_vocab) * pad_vocab
         self.hparams["vocab_size"] = vocab_size
 
-        assert max(tokenizer.vocab.values()) < vocab_size  # ty: ignore[unresolved-attribute]
+        assert max(id_ for tok, id_ in tokenizer.vocab.items() if tok not in self._vocab_skip) < vocab_size  # ty: ignore[unresolved-attribute]
 
         tokpre = self.get_vocab_base_pre(tokenizer)
 
@@ -638,7 +641,8 @@ class NemotronHModel(GraniteHybridModel):
                         if previous_token != token:
                             logger.info(f"{repr(previous_token)} is encoded and decoded back to {repr(token)} using AutoTokenizer")
 
-                    if added_tokens_decoder[i].special or self.does_token_look_special(token):
+                    printed = self._user_defined_tokens is not None and self._user_defined_tokens.fullmatch(token)
+                    if (added_tokens_decoder[i].special or self.does_token_look_special(token)) and not printed:
                         toktypes.append(gguf.TokenType.CONTROL)
                     else:
                         token = token.replace(b"\xe2\x96\x81".decode("utf-8"), " ")  # pre-normalize user-defined spaces
@@ -834,3 +838,140 @@ class NemotronHPuzzleModel(NemotronHModel):
         if item[0].startswith("mtp."):
             return None
         return super().filter_tensors(item)
+
+
+# NeMo speechlm2 SALM checkpoint: a Nemotron-H decoder under llm.*, the speech encoder under perception.*
+@ModelBase.register("Nemotron3_5TranscribeForConditionalGeneration")
+@ModelBase.example("nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B")
+class NemotronTranscribeModel(NemotronHModel):
+    model_arch = gguf.MODEL_ARCH.NEMOTRON_H
+    # the audio placeholder (id vocab_size) has no embedding row; speaker, event and style tags print with the transcript
+    _vocab_skip = ("<|audio|>",)
+    _user_defined_tokens = re.compile(r"<spk:\d+>|<ev:[a-z_]+>|<sty:(?:stt|end):[a-z_]+>")
+    _renames = {
+        "llm.model.embed_tokens.weight": "backbone.embeddings.weight",
+        "llm.model.norm.weight":         "backbone.norm_f.weight",
+        "llm.lm_head.weight":            "lm_head.weight",
+    }
+    # grouped experts: [n_expert, n_in, n_out] -> [n_expert, n_out, n_in]
+    _grouped_experts = {"gate_and_up_projs": "up_proj", "down_projs": "down_proj"}
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+        if not name.startswith("llm.") or "_extra_state" in name:
+            return None
+        if name in cls._renames:
+            name = cls._renames[name]
+        elif name.startswith("llm.model.layers."):
+            name = "backbone.layers." + name[len("llm.model.layers."):]
+        elif name.startswith("llm.mtp.layers."):
+            name = "mtp.layers." + name[len("llm.mtp.layers."):]
+        else:
+            raise ValueError(f"unexpected decoder tensor {name}")
+        return super().filter_tensors((name.replace("._fp32_params.", "."), gen))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        leaf = name.rsplit(".", 1)[-1]
+        if ".mixer.experts." in name and leaf in self._grouped_experts:
+            if name.startswith("mtp."):
+                assert self._mtp_bid is not None, f"{name}: MTP head is not exported"
+                bid = self._mtp_bid
+            assert bid is not None
+            data_torch = data_torch.permute(0, 2, 1).contiguous()
+            name = f"model.layers.{bid}.mlp.experts.{self._grouped_experts[leaf]}.weight"
+            yield from ModelBase.modify_tensors(self, data_torch, name, bid)
+            return
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("Nemotron3_5TranscribeForConditionalGeneration")
+class NemotronTranscribeAudioModel(MmprojModel):
+    # NeMo ParallelExpertEncoder: ASR and speaker transformers, speaker activity fused into the ASR states
+    has_vision_encoder = False
+    has_audio_encoder = True
+
+    def get_audio_config(self) -> dict[str, Any] | None:
+        asr = self.global_config["pe_encoder_config"]["asr_encoder_cfg"]
+        return {
+            "hidden_size":         asr["d_model"],
+            "intermediate_size":   int(float(asr.get("ff_expansion", 4)) * asr["d_model"]),
+            "num_hidden_layers":   asr["n_layers"],
+            "num_attention_heads": asr["n_heads"],
+        }
+
+    @staticmethod
+    def _rope_dims(cfg: dict[str, Any]) -> int:
+        assert cfg.get("self_attention_model") == "rope" and cfg.get("subsampling", "feature_stacking") == "feature_stacking"
+        assert cfg.get("attn_mode", "full") == "full" and not cfg.get("xscaling", False) and cfg.get("pre_block_norm", True)
+        assert float(cfg.get("rope_base", 10000.0)) == 10000.0
+        n_rot = int(cfg["d_model"] // cfg["n_heads"] * float(cfg.get("rotary_fraction", 1.0)))
+        assert n_rot >= 2 and n_rot % 2 == 0
+        return n_rot
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        pe = self.global_config["pe_encoder_config"]
+        asr = pe["asr_encoder_cfg"]
+        diar = pe["diarization_model_cfg"]
+        spk = diar["encoder"]
+        assert pe.get("asr_encoder_type") == "transformer" and pe.get("speaker_feature_mode", "thresholded") == "thresholded"
+        assert pe.get("asr_normalize_type") == "per_feature" and pe.get("diar_normalize_type") in (None, "NA")
+        assert asr["subsampling_factor"] == spk["subsampling_factor"] == 8 and asr["feat_in"] == spk["feat_in"]
+        assert self._rope_dims(spk) == spk["d_model"] // spk["n_heads"] and not spk.get("qkv_bias", False)
+        assert diar.get("high_resolution", False)
+        # constants in clip: the ParallelExpertEncoder online settings and the Sortformer streaming config
+        assert (pe.get("online_inference_length", 500), pe.get("chunk_left_context", 50), pe.get("chunk_right_context", 50),
+                pe.get("diar_spkcache_len", 188), pe.get("diar_fifo_len", 40), pe.get("diar_spkcache_update_period", 300),
+                pe.get("speaker_activity_threshold", 0.5)) == (500, 50, 50, 188, 40, 300, 0.5), \
+            "streaming settings differ from the constants in tools/mtmd/models/nemotron-transcribe.cpp"
+        sm = diar["sortformer_modules"]
+        assert (sm["spkcache_sil_frames_per_spk"], sm["pred_score_threshold"], sm["scores_boost_latest"], sm["strong_boost_rate"],
+                sm["weak_boost_rate"], sm["min_pos_scores_rate"], sm["use_learnable_sil_emb"]) == (1, 0.25, 0.05, 0.75, 1.5, 0.5, True), \
+            "speaker cache settings differ from the constants in tools/mtmd/models/nemotron-transcribe.cpp"
+
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.NEMOTRON_TRANSCRIBE)
+        self.gguf_writer.add_audio_num_mel_bins(asr["feat_in"])
+        self.gguf_writer.add_audio_attention_layernorm_eps(1e-5)
+        self.gguf_writer.add_audio_subsampling_factor(asr["subsampling_factor"])
+        self.gguf_writer.add_audio_rope_dims(self._rope_dims(asr))
+        self.gguf_writer.add_audio_spk_block_count(spk["n_layers"])
+        self.gguf_writer.add_audio_spk_head_count(spk["n_heads"])
+
+    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        # ParallelExpertEncoder._build_sinusoid_position_encoding
+        pe = self.global_config["pe_encoder_config"]
+        n_spk = int(pe["diarization_model_cfg"]["sortformer_modules"]["num_spks"])
+        d = int(pe["asr_encoder_cfg"]["d_model"])
+        scale = float(pe.get("spk_kernel_scale", 1.0))
+        pos = torch.arange(n_spk, dtype=torch.float32)[:, None]
+        div = torch.exp(torch.arange(0, d, 2, dtype=torch.float32) * -(np.log(10000.0) / d))
+        kernel = torch.zeros(n_spk, d, dtype=torch.float32)
+        kernel[:, 0::2] = torch.sin(pos * div)
+        kernel[:, 1::2] = torch.cos(pos * div)
+        # stored as [d, n_spk]: the graph multiplies it with the speaker activity directly
+        yield self.format_tensor_name(gguf.MODEL_TENSOR.A_FUSION_SPK_KERNEL, suffix=""), (kernel * scale).T.contiguous()
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.A_SPK_HEAD_UPSAMPLE, None):
+            return gguf.GGMLQuantizationType.F16  # ggml_conv_1d kernel
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+        if not name.startswith("perception.") or "_extra_state" in name:
+            return None
+        # training-only head; the speaker model's unused front end
+        if name.startswith(("perception.encoder.diarization_model.sortformer_modules.hidden_to_spks.",
+                            "perception.encoder.diarization_model.preprocessor.")):
+            return None
+        return name, gen
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name == self.format_tensor_name(gguf.MODEL_TENSOR.A_FUSION_SPK_KERNEL, suffix=""):  # generate_extra_tensors
+            yield name, data_torch
+            return
+        if name == "perception.preprocessor.featurizer.fb":
+            data_torch = data_torch.squeeze(0)
+        yield from super().modify_tensors(data_torch, name, bid)

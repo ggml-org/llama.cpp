@@ -506,6 +506,11 @@ class Keys:
         WINDOW_SIZE         = "clip.audio.window_size"
         LOCAL_BLOCK_COUNT   = "clip.audio.local_block_count" # mimo-v2.5: input_local_transformer layer count
         LOCAL_GROUP_SIZE    = "clip.audio.local_group_size"  # mimo-v2.5: input_local_transformer grouping size
+        ROPE_DIMS           = "clip.audio.rope_dims"         # nemotron-transcribe
+
+        class Speaker: # nemotron-transcribe
+            BLOCK_COUNT         = "clip.audio.spk.block_count"
+            HEAD_COUNT          = "clip.audio.spk.head_count"
 
         class Attention:
             HEAD_COUNT      = "clip.audio.attention.head_count"
@@ -1410,6 +1415,24 @@ class MODEL_TENSOR(IntEnum):
     A_ENC_CONV_NORM_VAR    = auto() # parakeet
     A_ENC_MEL_FILTERS      = auto() # parakeet
     A_ENC_WINDOW           = auto() # parakeet
+    A_ENC_ATTN_QKV         = auto() # nemotron-transcribe
+    A_SPK_INP_PROJ         = auto() # nemotron-transcribe
+    A_SPK_PRE_NORM         = auto() # nemotron-transcribe
+    A_SPK_POST_NORM        = auto() # nemotron-transcribe
+    A_SPK_ATTN_NORM        = auto() # nemotron-transcribe
+    A_SPK_ATTN_QKV         = auto() # nemotron-transcribe
+    A_SPK_ATTN_OUT         = auto() # nemotron-transcribe
+    A_SPK_FFN_NORM         = auto() # nemotron-transcribe
+    A_SPK_FFN_UP           = auto() # nemotron-transcribe
+    A_SPK_FFN_DOWN         = auto() # nemotron-transcribe
+    A_SPK_HEAD_PROJ        = auto() # nemotron-transcribe
+    A_SPK_HEAD_UPSAMPLE    = auto() # nemotron-transcribe
+    A_SPK_HEAD_FC1         = auto() # nemotron-transcribe
+    A_SPK_HEAD_FC2         = auto() # nemotron-transcribe
+    A_SPK_SIL_EMB          = auto() # nemotron-transcribe
+    A_FUSION_ASR_NORM      = auto() # nemotron-transcribe
+    A_FUSION_SPK_NORM      = auto() # nemotron-transcribe
+    A_FUSION_SPK_KERNEL    = auto() # nemotron-transcribe
     A_CTC_OUT              = auto()
     A_CTC_OUT_MID          = auto()
     A_ENC_ATTN_REL_POS_EMB = auto()
@@ -2217,6 +2240,24 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.A_ENC_CONV_NORM_VAR:       "a.blk.{bid}.conv_norm_var",
     MODEL_TENSOR.A_ENC_MEL_FILTERS:         "a.mel_filters",
     MODEL_TENSOR.A_ENC_WINDOW:              "a.window",
+    MODEL_TENSOR.A_ENC_ATTN_QKV:            "a.blk.{bid}.attn_qkv",
+    MODEL_TENSOR.A_SPK_INP_PROJ:            "a.spk.input_projection",
+    MODEL_TENSOR.A_SPK_PRE_NORM:            "a.spk.pre_ln",
+    MODEL_TENSOR.A_SPK_POST_NORM:           "a.spk.post_ln",
+    MODEL_TENSOR.A_SPK_ATTN_NORM:           "a.spk.blk.{bid}.ln1",
+    MODEL_TENSOR.A_SPK_ATTN_QKV:            "a.spk.blk.{bid}.attn_qkv",
+    MODEL_TENSOR.A_SPK_ATTN_OUT:            "a.spk.blk.{bid}.attn_out",
+    MODEL_TENSOR.A_SPK_FFN_NORM:            "a.spk.blk.{bid}.ln2",
+    MODEL_TENSOR.A_SPK_FFN_UP:              "a.spk.blk.{bid}.ffn_up",
+    MODEL_TENSOR.A_SPK_FFN_DOWN:            "a.spk.blk.{bid}.ffn_down",
+    MODEL_TENSOR.A_SPK_HEAD_PROJ:           "a.spk.head.proj",
+    MODEL_TENSOR.A_SPK_HEAD_UPSAMPLE:       "a.spk.head.upsample",
+    MODEL_TENSOR.A_SPK_HEAD_FC1:            "a.spk.head.fc1",
+    MODEL_TENSOR.A_SPK_HEAD_FC2:            "a.spk.head.fc2",
+    MODEL_TENSOR.A_SPK_SIL_EMB:             "a.spk.head.sil_emb",
+    MODEL_TENSOR.A_FUSION_ASR_NORM:         "a.fusion.asr_norm",
+    MODEL_TENSOR.A_FUSION_SPK_NORM:         "a.fusion.spk_norm",
+    MODEL_TENSOR.A_FUSION_SPK_KERNEL:       "a.fusion.spk_kernel",
     MODEL_TENSOR.A_CTC_OUT:                 "a.enc_ctc_out",
     MODEL_TENSOR.A_CTC_OUT_MID:             "a.enc_ctc_out_mid",
     MODEL_TENSOR.A_ENC_ATTN_REL_POS_EMB:    "a.blk.{bid}.attn_rel_pos_emb",
@@ -2585,6 +2626,24 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.A_ENC_CONV_NORM_VAR,
         MODEL_TENSOR.A_ENC_MEL_FILTERS,
         MODEL_TENSOR.A_ENC_WINDOW,
+        MODEL_TENSOR.A_ENC_ATTN_QKV,
+        MODEL_TENSOR.A_SPK_INP_PROJ,
+        MODEL_TENSOR.A_SPK_PRE_NORM,
+        MODEL_TENSOR.A_SPK_POST_NORM,
+        MODEL_TENSOR.A_SPK_ATTN_NORM,
+        MODEL_TENSOR.A_SPK_ATTN_QKV,
+        MODEL_TENSOR.A_SPK_ATTN_OUT,
+        MODEL_TENSOR.A_SPK_FFN_NORM,
+        MODEL_TENSOR.A_SPK_FFN_UP,
+        MODEL_TENSOR.A_SPK_FFN_DOWN,
+        MODEL_TENSOR.A_SPK_HEAD_PROJ,
+        MODEL_TENSOR.A_SPK_HEAD_UPSAMPLE,
+        MODEL_TENSOR.A_SPK_HEAD_FC1,
+        MODEL_TENSOR.A_SPK_HEAD_FC2,
+        MODEL_TENSOR.A_SPK_SIL_EMB,
+        MODEL_TENSOR.A_FUSION_ASR_NORM,
+        MODEL_TENSOR.A_FUSION_SPK_NORM,
+        MODEL_TENSOR.A_FUSION_SPK_KERNEL,
         MODEL_TENSOR.A_MM_INP_PROJ,
         MODEL_TENSOR.A_MM_SOFT_EMB_NORM,
         MODEL_TENSOR.A_MM_EMBEDDING,
@@ -6707,6 +6766,7 @@ class VisionProjectorType:
     MINICPMV4_7    = "minicpmv4_7"
     MINICPM_OCR_1_0 = "minicpm_ocr_1_0"
     GRANITE_SPEECH = "granite_speech"  # audio
+    NEMOTRON_TRANSCRIBE = "nemotron_transcribe"  # audio
     MIMOVL         = "mimovl"
     MIMO_AUDIO     = "mimo_audio"
     GRANITE4_VISION = "granite4_vision"
