@@ -166,6 +166,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_gemma_embedding2(params);
         case LLM_ARCH_STARCODER2:
             return new llama_model_starcoder2(params);
+        case LLM_ARCH_LIGHTNING:
+            return new llama_model_lightning(params);
         case LLM_ARCH_MAMBA:
             return new llama_model_mamba(params);
         case LLM_ARCH_MAMBA2:
@@ -3658,6 +3660,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_GEMMA_EMBEDDING:
         case LLM_ARCH_GEMMA_EMBEDDING2:
         case LLM_ARCH_STARCODER2:
+        case LLM_ARCH_LIGHTNING:
         case LLM_ARCH_OPENELM:
         case LLM_ARCH_GPTNEOX:
         case LLM_ARCH_CODESHELL:

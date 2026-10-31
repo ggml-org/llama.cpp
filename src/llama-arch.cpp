@@ -12,6 +12,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_LLAMA4,           "llama4"           },
     { LLM_ARCH_DECI,             "deci"             },
     { LLM_ARCH_FALCON,           "falcon"           },
+    { LLM_ARCH_LIGHTNING,        "lightning"        },
     { LLM_ARCH_GROK,             "grok"             },
     { LLM_ARCH_GPT2,             "gpt2"             },
     { LLM_ARCH_GPTJ,             "gptj"             },
