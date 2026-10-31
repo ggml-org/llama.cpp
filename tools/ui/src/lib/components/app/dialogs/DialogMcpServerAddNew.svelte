@@ -10,6 +10,7 @@
 		RECOMMENDED_MCP_SERVERS
 	} from '$lib/constants';
 	import { BooleanString, HealthCheckStatus } from '$lib/enums';
+	import { PreferencesService } from '$lib/services/preferences.service';
 	import { deviceStore, mcpStore } from '$lib/stores';
 	import { canonicalizeServerUrl, parseHeadersToArray, uuid } from '$lib/utils';
 
@@ -91,7 +92,7 @@
 	function readRecommendationsDismissed(): boolean {
 		if (!browser) return false;
 
-		const raw = localStorage.getItem(DISMISSED_RECOMMENDED_MCP_SERVERS_LOCALSTORAGE_KEY);
+		const raw = PreferencesService.getItem(DISMISSED_RECOMMENDED_MCP_SERVERS_LOCALSTORAGE_KEY);
 
 		if (!raw) return false;
 
@@ -112,7 +113,7 @@
 		recommendationsDismissed = dismissed;
 
 		if (browser) {
-			localStorage.setItem(
+			PreferencesService.setItem(
 				DISMISSED_RECOMMENDED_MCP_SERVERS_LOCALSTORAGE_KEY,
 				dismissed ? BooleanString.TRUE : BooleanString.FALSE
 			);

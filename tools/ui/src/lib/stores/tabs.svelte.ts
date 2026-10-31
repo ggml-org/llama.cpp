@@ -20,6 +20,7 @@
 import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
 import { CONVERSATION_TABS_LOCALSTORAGE_KEY, NEW_CHAT_TAB_ID, ROUTES } from '$lib/constants';
+import { PreferencesService } from '$lib/services/preferences.service';
 import { RouterService } from '$lib/services/router.service';
 import type { TabView } from '$lib/utils/chat-tabs';
 import { untrack } from 'svelte';
@@ -182,7 +183,7 @@ export class TabsStore {
 
 	private load(): string[] {
 		try {
-			const raw = localStorage.getItem(CONVERSATION_TABS_LOCALSTORAGE_KEY);
+			const raw = PreferencesService.getItem(CONVERSATION_TABS_LOCALSTORAGE_KEY);
 			const parsed: unknown = raw ? JSON.parse(raw) : [];
 
 			return Array.isArray(parsed) ? parsed.filter((id) => typeof id === 'string') : [];
@@ -196,7 +197,7 @@ export class TabsStore {
 		// write would clobber them
 		if (!browser || !this.initialized) return;
 
-		localStorage.setItem(CONVERSATION_TABS_LOCALSTORAGE_KEY, JSON.stringify(this.openTabs));
+		PreferencesService.setItem(CONVERSATION_TABS_LOCALSTORAGE_KEY, JSON.stringify(this.openTabs));
 	}
 }
 

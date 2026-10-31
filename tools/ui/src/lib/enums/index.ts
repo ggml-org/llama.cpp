@@ -112,3 +112,5 @@ export {
 } from './tools.enums';
 
 export { SplashOrientation } from './splash.enums';
+
+export { PreferenceScope } from './storage.enums';
