@@ -305,6 +305,57 @@ MAKE_TEST(test_temporal_merge_grouping) {
 // mtmd_audio
 //
 
+MAKE_TEST(test_audio_preprocessor_whisper_chunks) {
+    clip_hparams hparams;
+    hparams.n_mel_bins        = 128;
+    hparams.audio_sample_rate = 16000;
+    hparams.audio_n_fft       = 400;
+    hparams.audio_window_len  = 400;
+    hparams.audio_hop_len     = 160;
+
+    mtmd_audio_preprocessor_whisper preproc(hparams);
+    preproc.initialize();
+
+    // { sample count, expected chunks }, including sub-frame tails
+    const std::vector<std::pair<size_t, size_t>> cases = {
+        {       0, 0 },
+        {       1, 1 },
+        {     200, 1 },
+        {     201, 1 },
+        {   32000, 1 },
+        {  479834, 1 },
+        {  479839, 1 },
+        {  479840, 1 },
+        {  479999, 1 },
+        {  480000, 1 },
+        {  480001, 2 },
+        {  480159, 2 },
+        {  480160, 2 },
+        {  959840, 2 },
+        {  959999, 2 },
+        {  960000, 2 },
+        {  960001, 3 },
+        { 1440000, 3 },
+    };
+
+    for (const auto & [n_samples, expected] : cases) {
+        const std::string name = std::to_string(n_samples) + " samples";
+        std::vector<float> samples(n_samples, 0.0f);
+        if (n_samples > 0) {
+            samples.back() = 0.5f;
+        }
+        std::vector<mtmd_audio_mel> mels;
+        const bool ok = preproc.preprocess(samples.data(), samples.size(), mels);
+        t.assert_equal("preprocess " + name, n_samples > 0, ok);
+        t.assert_equal("chunks for " + name, expected, mels.size());
+        for (const auto & mel : mels) {
+            t.assert_equal("frames for " + name, (int64_t) 3000, mel.n_len);
+            t.assert_equal("mel bins for " + name, (int64_t) 128, mel.n_mel);
+            t.assert_equal("mel data size for " + name, (size_t) (128 * 3000), mel.data.size());
+        }
+    }
+}
+
 MAKE_TEST(test_audio_preprocessor_conformer) {
     clip_hparams hparams;
     hparams.n_mel_bins        = 128;
