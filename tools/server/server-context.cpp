@@ -877,15 +877,26 @@ static int encode_mtmd_chunk(const server_slot & slot, mtmd::batch_ptr & mbatch,
 
     // try batching as much as possible
     int n_added = 1;
+    std::vector<std::pair<const mtmd_input_chunk *, std::shared_ptr<std::vector<float>>>> to_store;
+    if (auto buffer = slot.task->decision.get_image_embd(idx)) {
+        to_store.push_back({chunk.get(), std::move(buffer)});
+    }
     size_t idx_cur = idx;
     while (res == 0) {
         auto [next_chunk, next_idx] = input_tokens.find_next_media_chunk(idx_cur);
         if (next_chunk == nullptr) {
             break;
         }
+        idx_cur = next_idx;
+        auto buffer = slot.task->decision.get_image_embd(next_idx);
+        if (buffer && !buffer->empty()) {
+            continue;
+        }
         res = mtmd_batch_add_chunk(mbatch.get(), next_chunk->get());
         n_added += (res == 0 ? 1 : 0);
-        idx_cur = next_idx;
+        if (res == 0 && buffer) {
+            to_store.push_back({next_chunk->get(), std::move(buffer)});
+        }
         SLT_DBG(slot, "try adding media chunk idx = %zu to batch, res = %d\n", next_idx, res);
         // if res != 0, batch is full or chunk is not compatible -> this loop breaks
     }
@@ -899,6 +910,15 @@ static int encode_mtmd_chunk(const server_slot & slot, mtmd::batch_ptr & mbatch,
         return -1;
     }
 
+    // Save every output in this batch, including chunks consumed later.
+    const size_t n_embd = llama_model_n_embd_inp(llama_get_model(slot.ctx_tgt));
+    for (auto & entry : to_store) {
+        const float * embd = mtmd_batch_get_output_embd(mbatch.get(), entry.first);
+        if (!embd) {
+            return -1;
+        }
+        entry.second->assign(embd, embd + mtmd_input_chunk_get_n_tokens(entry.first) * n_embd);
+    }
     return 0;
 }
 
@@ -913,10 +933,15 @@ static int process_mtmd_chunk(const server_slot & slot, mtmd::batch_ptr & mbatch
     const auto & input_tokens = slot.task->tokens;
     const auto & chunk = input_tokens.find_chunk(idx);
     int32_t res = 0;
+    const auto shared_embd = slot.task->decision.get_image_embd(idx);
 
     auto try_decode = [&]() -> int32_t {
-        if (mbatch) {
-            float * embd = mtmd_batch_get_output_embd(mbatch.get(), chunk.get());
+        {
+            float * embd = mbatch ? mtmd_batch_get_output_embd(mbatch.get(), chunk.get()) : nullptr;
+            if (!embd && shared_embd && !shared_embd->empty()) {
+                embd = shared_embd->data();
+                SLT_DBG(slot, "reuse decision image features, idx = %zu\n", idx);
+            }
             if (embd) {
                 struct cb_data_t {
                     common_speculative * spec;
@@ -4629,6 +4654,11 @@ private:
             const auto & chunk = input_tokens.find_chunk(cur_token_idx);
 
             float * embd = slot.mbatch ? mtmd_batch_get_output_embd(slot.mbatch.get(), chunk.get()) : nullptr;
+            const auto shared_embd = slot.task->decision.get_image_embd(cur_token_idx);
+            if (!embd && shared_embd && !shared_embd->empty()) {
+                embd = shared_embd->data();
+                SLT_DBG(slot, "reuse decision image features, idx = %d\n", cur_token_idx);
+            }
             if (!embd) {
                 // encode on the worker thread, so we can still handle metrics tasks
                 int32_t res = 0;
@@ -6622,6 +6652,7 @@ void server_routes::init_routes() {
 
         // one task per variant of each question, or one task for all the questions
         auto & rd = res->rd;
+        std::vector<std::shared_ptr<std::vector<float>>> image_embeddings;
         {
             std::vector<server_task> tasks;
             if (decision.is_joint()) {
@@ -6642,6 +6673,7 @@ void server_routes::init_routes() {
             if (decision.can_share_prompt()) {
                 tasks = server_decision_group_tasks(std::move(tasks), params.n_parallel);
             }
+            image_embeddings = server_decision_share_images(tasks);
             rd.post_tasks(std::move(tasks));
         }
 
