@@ -1502,6 +1502,58 @@ static void test_all(const std::string & title, std::function<void(const TestCas
         )"""
     });
 
+    test({
+        SUCCESS,
+        "regexp with raw control characters in a character class",
+        R"""({
+            "type": "string",
+            "pattern": "^[^\u0000-\u001f]+$"
+        })""",
+        R"""(
+            root ::= "\"" ([^\x00-\x1F]+) "\""
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "regexp with a raw control character in a literal",
+        R"""({
+            "type": "string",
+            "pattern": "^a\u0000b$"
+        })""",
+        R"""(
+            root ::= "\"" ("a\x00b") "\""
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "regexp with a raw DEL character",
+        R"""({
+            "type": "string",
+            "pattern": "^\u007f$"
+        })""",
+        R"""(
+            root ::= "\"" ("\x7F") "\""
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "regexp with an escaped NUL in a character class",
+        R"""({
+            "type": "string",
+            "pattern": "^[^\\x00-\\x1f]+$"
+        })""",
+        R"""(
+            root ::= "\"" ([^\x00-\x1f]+) "\""
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
     // a regexp that is invalid under any flavor is still an error
     test({
         FAILURE,
