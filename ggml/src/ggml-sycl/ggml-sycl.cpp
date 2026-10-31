@@ -7599,7 +7599,7 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
         case GGML_OP_MEAN:
             return ggml_is_contiguous(op->src[0]);
         case GGML_OP_ARGSORT:
-            return true;
+            return ggml_is_contiguous(op->src[0]);
         case GGML_OP_TOP_K: {
             const ggml_tensor * src0 = op->src[0];
             const int k = op->ne[0];

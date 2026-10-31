@@ -7219,19 +7219,30 @@ struct test_argsort : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne;
     ggml_sort_order order;
+    const int view;
 
     std::string vars() override {
-        return VARS_TO_STR3(type, ne, order);
+        return view == 0 ? VARS_TO_STR3(type, ne, order) : VARS_TO_STR4(type, ne, order, view);
     }
 
     test_argsort(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne = {16, 10, 10, 10},
-            ggml_sort_order order = GGML_SORT_ORDER_ASC)
-        : type(type), ne(ne), order(order) {}
+            ggml_sort_order order = GGML_SORT_ORDER_ASC, int view = 0)
+        : type(type), ne(ne), order(order), view(view) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
+        auto ne_base = ne;
+        if (view == 1) {
+            ne_base[1] *= 2;
+            ne_base[2] *= 2;
+        }
+        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne_base.data());
         ggml_set_name(a, "a");
+        if (view == 1) {
+            a = ggml_view_4d(ctx, a, ne[0], ne[1], ne[2], ne[3], a->nb[1], a->nb[2], a->nb[3], 0);
+        } else if (view == 2) {
+            a = ggml_transpose(ctx, a);
+        }
 
         ggml_tensor * out = ggml_argsort(ctx, a, order);
         ggml_set_name(out, "out");
@@ -7243,6 +7254,9 @@ struct test_argsort : public test_case {
         std::random_device rd;
         std::default_random_engine rng(rd());
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->view_src) {
+                continue;
+            }
             if (t->type == GGML_TYPE_I32) {
                 // indices
                 std::vector<int> data(ggml_nelements(t));
@@ -7256,7 +7270,7 @@ struct test_argsort : public test_case {
                 for (int64_t r = 0; r < ggml_nrows(t); r++) {
                     std::vector<float> data(t->ne[0]);
                     for (int i = 0; i < t->ne[0]; i++) {
-                        data[i] = i;
+                        data[i] = r * t->ne[0] + i;
                     }
                     std::shuffle(data.begin(), data.end(), rng);
                     ggml_backend_tensor_set(t, data.data(), r * t->nb[1], t->ne[0] * sizeof(float));
@@ -7274,24 +7288,25 @@ struct test_top_k : public test_case {
     const std::array<int64_t, 4> ne;
     const int k;
     const bool ties;
+    const int view;
     ggml_tensor * input {};
 
     std::string vars() override {
-        return VARS_TO_STR4(type, ne, k, ties);
+        return view == 0 ? VARS_TO_STR4(type, ne, k, ties) : VARS_TO_STR5(type, ne, k, ties, view);
     }
 
     test_top_k(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne = {16, 10, 10, 10},
-            int k = 4, bool ties = false)
-        : type(type), ne(ne), k(k), ties(ties) {}
+            int k = 4, bool ties = false, int view = 0)
+        : type(type), ne(ne), k(k), ties(ties), view(view) {}
 
     double max_err() override {
         return 0.0;
     }
 
-    // When there are ties, only validate the final result.
+    // When there are ties or a view, only validate the final result.
     // The logic in err can't handle the sentinel tensors.
-    bool run_whole_graph() override { return ties; }
+    bool run_whole_graph() override { return ties || view != 0; }
 
     double err(const float * a, const float * b, size_t n) override {
         // When there are no ties, we expect the exact same set of indices,
@@ -7355,11 +7370,22 @@ struct test_top_k : public test_case {
     }
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
+        auto ne_base = ne;
+        if (view == 1) {
+            ne_base[1] *= 2;
+            ne_base[2] *= 2;
+        }
+        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne_base.data());
         ggml_set_name(a, "a");
 
         // Save 'a' for err()
         input = a;
+
+        if (view == 1) {
+            a = ggml_view_4d(ctx, a, ne[0], ne[1], ne[2], ne[3], a->nb[1], a->nb[2], a->nb[3], 0);
+        } else if (view == 2) {
+            a = ggml_transpose(ctx, a);
+        }
 
         ggml_tensor * out = ggml_top_k(ctx, a, k);
         ggml_set_name(out, "out");
@@ -7371,6 +7397,9 @@ struct test_top_k : public test_case {
         std::random_device rd;
         std::default_random_engine rng(rd());
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->view_src) {
+                continue;
+            }
             int tie_denom = std::max(1, std::min(10, k / 2));
             for (int64_t r = 0; r < ggml_nrows(t); r++) {
                 std::vector<float> data(t->ne[0]);
@@ -7378,6 +7407,9 @@ struct test_top_k : public test_case {
                     if (ties) {
                         // integer division to introduce duplicates
                         data[i] = i / tie_denom;
+                    } else if (view != 0) {
+                        // unique values across rows: a transposed row mixes values from several base rows
+                        data[i] = r * t->ne[0] + i;
                     } else {
                         data[i] = i;
                     }
@@ -11918,6 +11950,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {i, 1, 1, 1}));
         }
         test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {16, 10, 10, 10}, order));
+        test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {16, 3, 2, 2}, order, 1));
+        test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {16, 3, 2, 2}, order, 2));
         test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {60, 10, 10, 10}, order)); // qwen
         test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {1023, 2, 1, 3}, order));
         test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {1024, 2, 1, 3}, order));
@@ -11935,6 +11969,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {n, 2, 1, 3}, k, true));
         }
     }
+    test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {16, 3, 2, 2}, 2, false, 1));
+    test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {16, 3, 2, 2}, 2, false, 2));
     for (int k : {1, 10, 40}) {
         test_cases.emplace_back(new test_top_k_inf({4096, 2, 1, 1}, k));
         test_cases.emplace_back(new test_top_k_inf({248320, 1, 1, 1}, k));
