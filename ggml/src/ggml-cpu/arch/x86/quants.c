@@ -3334,7 +3334,65 @@ void ggml_vec_dot_iq3_xxs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const 
 
     const int nb = n / QK_K;
 
-#if defined(__AVX2__)
+#if defined(__AVX512BW__) && defined(__AVX512VL__)
+
+    // Same integer arithmetic as the AVX2 path below. The 8 sign words of a block are
+    // expanded once: four 7-bit sign indices per word become one byte each, bit 7 is the
+    // parity of the other seven, and the resulting 32-bit mask is applied with a masked
+    // subtract. This replaces the keven_signs_q2xs lookups and _mm256_sign_epi8.
+    const __m256i zero = _mm256_setzero_si256();
+    const __m256i m7   = _mm256_set1_epi32(127);
+    const __m256i m0f  = _mm256_set1_epi32(0x0F0F0F0F);
+    const __m256i m01  = _mm256_set1_epi32(0x01010101);
+    const __m256i one  = _mm256_set1_epi32(1);
+    const __m256i dup16 = _mm256_set1_epi32(0x00010001);
+
+    uint32_t mk[8];
+    uint32_t sc[8];
+
+    __m256 accumf = _mm256_setzero_ps();
+    for (int i = 0; i < nb; ++i) {
+        const float d = GGML_CPU_FP16_TO_FP32(x[i].d) * y[i].d;
+        const uint8_t * GGML_RESTRICT q3 = x[i].qs;
+        const int8_t  * GGML_RESTRICT q8 = y[i].qs;
+
+        const __m256i S  = _mm256_loadu_si256((const __m256i *)(x[i].qs + QK_K/4));
+        const __m256i ls = _mm256_srli_epi32(S, 28);
+        _mm256_storeu_si256((__m256i *)sc, _mm256_mullo_epi32(_mm256_add_epi32(_mm256_slli_epi32(ls, 1), one), dup16));
+
+        __m256i v = _mm256_and_si256(S, m7);
+        v = _mm256_or_si256(v, _mm256_slli_epi32(_mm256_and_si256(_mm256_srli_epi32(S,  7), m7),  8));
+        v = _mm256_or_si256(v, _mm256_slli_epi32(_mm256_and_si256(_mm256_srli_epi32(S, 14), m7), 16));
+        v = _mm256_or_si256(v, _mm256_slli_epi32(_mm256_and_si256(_mm256_srli_epi32(S, 21), m7), 24));
+        __m256i t = _mm256_xor_si256(v, _mm256_and_si256(_mm256_srli_epi32(v, 4), m0f));
+        t = _mm256_xor_si256(t, _mm256_srli_epi32(t, 2));
+        t = _mm256_xor_si256(t, _mm256_srli_epi32(t, 1));
+        v = _mm256_or_si256(v, _mm256_slli_epi32(_mm256_and_si256(t, m01), 7));
+        _mm256_storeu_si256((__m256i *)mk, v);
+
+        __m256i sumi1 = zero;
+        __m256i sumi2 = zero;
+        for (int ib = 0; ib < QK_K/64; ++ib) {
+            const int p1 = 2*ib, p2 = 2*ib + 1;
+            const uint8_t * GGML_RESTRICT a = q3 + 16*ib;
+            const __m256i q8_1 = _mm256_loadu_si256((const __m256i *)q8);
+            const __m256i q8_2 = _mm256_loadu_si256((const __m256i *)(q8 + 32)); q8 += 64;
+            const __m256i g1 = _mm256_set_epi32(iq3xxs_grid[a[7]], iq3xxs_grid[a[6]], iq3xxs_grid[a[5]], iq3xxs_grid[a[4]],
+                                                iq3xxs_grid[a[3]], iq3xxs_grid[a[2]], iq3xxs_grid[a[1]], iq3xxs_grid[a[0]]);
+            const __m256i g2 = _mm256_set_epi32(iq3xxs_grid[a[15]], iq3xxs_grid[a[14]], iq3xxs_grid[a[13]], iq3xxs_grid[a[12]],
+                                                iq3xxs_grid[a[11]], iq3xxs_grid[a[10]], iq3xxs_grid[a[ 9]], iq3xxs_grid[a[ 8]]);
+            const __m256i n1 = _mm256_mask_sub_epi8(q8_1, (__mmask32)mk[p1], zero, q8_1);
+            const __m256i n2 = _mm256_mask_sub_epi8(q8_2, (__mmask32)mk[p2], zero, q8_2);
+            sumi1 = _mm256_add_epi32(sumi1, _mm256_madd_epi16(_mm256_maddubs_epi16(g1, n1), _mm256_set1_epi32((int)sc[p1])));
+            sumi2 = _mm256_add_epi32(sumi2, _mm256_madd_epi16(_mm256_maddubs_epi16(g2, n2), _mm256_set1_epi32((int)sc[p2])));
+        }
+
+        accumf = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(_mm256_add_epi32(sumi1, sumi2)), accumf);
+    }
+
+    *s = 0.25f * hsum_float_8(accumf);
+
+#elif defined(__AVX2__)
 
     const uint64_t * signs64 = (const uint64_t *)keven_signs_q2xs;
 
