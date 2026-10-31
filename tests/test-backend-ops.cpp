@@ -5753,6 +5753,46 @@ struct test_mul_mat_id_dup : public test_mul_mat_id {
     }
 };
 
+// Quantized weights without an MMQ kernel (IQ1_M) use dequantize + cuBLAS above the MMVQ batch limit.
+// The results here are about 1.3e5, above the fp16 range, so an fp16 result buffer returns inf.
+static void init_fp16_result_overflow(ggml_tensor * t) {
+    if (ggml_is_quantized(t->type)) {
+        init_tensor_uniform(t, 60.0f, 64.0f);
+    } else {
+        init_tensor_uniform(t, 1.9f, 2.1f);
+    }
+}
+
+struct test_mul_mat_fp16_result_overflow : public test_mul_mat {
+    test_mul_mat_fp16_result_overflow(ggml_type type_a, int64_t n)
+        : test_mul_mat(type_a, GGML_TYPE_F32, 32, n, 4*256, {1, 1}, {1, 1}) {}
+
+    std::string vars() override { return test_mul_mat::vars() + ",fp16_overflow=1"; }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            init_fp16_result_overflow(t);
+        }
+    }
+};
+
+struct test_mul_mat_id_fp16_result_overflow : public test_mul_mat_id {
+    // n_used == n_mats so that every expert receives all n tokens and stays above the MMVQ batch limit
+    test_mul_mat_id_fp16_result_overflow(ggml_type type_a, int64_t n)
+        : test_mul_mat_id(type_a, GGML_TYPE_F32, 2, 2, false, 32, n, 4*256) {}
+
+    std::string vars() override { return test_mul_mat_id::vars() + ",fp16_overflow=1"; }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->type != GGML_TYPE_I32) {
+                init_fp16_result_overflow(t);
+            }
+        }
+        init_mul_mat_id_ids(ctx, n_mats);
+    }
+};
+
 // FP4 W4A8 path on the MoE path (GGML_PREC_Q8 on src1 disallows 4-bit activations)
 struct test_mul_mat_id_w4a8 : public test_mul_mat_id {
     test_mul_mat_id_w4a8(ggml_type type_a = GGML_TYPE_NVFP4, ggml_type type_b = GGML_TYPE_F32,
@@ -12616,6 +12656,19 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 #pragma optimize("", on)
 #endif
 
+// Results above the fp16 range. Only for backends that accumulate quantized matrix multiplications in fp32;
+// Vulkan uses fp16 accumulation at default precision on purpose.
+static std::vector<std::unique_ptr<test_case>> make_test_cases_fp16_result_overflow() {
+    std::vector<std::unique_ptr<test_case>> test_cases;
+
+    for (int n : {16, 32}) {
+        test_cases.emplace_back(new test_mul_mat_fp16_result_overflow(GGML_TYPE_IQ1_M, n));
+        test_cases.emplace_back(new test_mul_mat_id_fp16_result_overflow(GGML_TYPE_IQ1_M, n));
+    }
+
+    return test_cases;
+}
+
 // Test cases for performance evaluation: should be representative of real-world use cases
 static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     std::vector<std::unique_ptr<test_case>> test_cases;
@@ -13347,6 +13400,11 @@ static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mo
         case MODE_GRAD:
         case MODE_SUPPORT:
             test_cases = make_test_cases_eval();
+            if (mode == MODE_TEST && strcmp(ggml_backend_reg_name(ggml_backend_dev_backend_reg(dev)), "CUDA") == 0) {
+                for (auto & tc : make_test_cases_fp16_result_overflow()) {
+                    test_cases.emplace_back(std::move(tc));
+                }
+            }
             break;
         case MODE_PERF:
             test_cases = make_test_cases_perf();
