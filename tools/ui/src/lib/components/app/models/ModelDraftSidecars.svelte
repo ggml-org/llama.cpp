@@ -31,8 +31,6 @@
 </script>
 
 {#each badges as badge (badge.kind + (badge.quant ?? ''))}
-	<span aria-hidden="true" class="text-muted-foreground">+</span>
-
 	<span
 		class={MODEL_VARIANT_BADGE_CLASS}
 		title="{badge.kind.toUpperCase()} draft model{badge.quant ? ` at ${badge.quant}` : ''}"

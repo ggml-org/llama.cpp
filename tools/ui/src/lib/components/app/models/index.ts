@@ -59,4 +59,10 @@ export { default as ModelCapabilityIcons } from './ModelCapabilityIcons.svelte';
 
 /** Draft sidecar badges, rendered as `+ [KIND] [QUANT]` per sidecar. */
 export { default as ModelDraftSidecars } from './ModelDraftSidecars.svelte';
+
+/** Compact draft download line, embedded in the item it belongs to. */
+export { default as ModelDraftSubline } from './ModelDraftSubline.svelte';
 export * from './ModelsSelector';
+
+/** Model details drawer, mounted once and opened over any page through `uiStore.openModelDetails`. */
+export { default as ModelsManagerModelDrawer } from './ModelsManager/ModelsManagerModelDrawer.svelte';

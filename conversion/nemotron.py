@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Callable, Iterable, Sequence, TYPE_CHECKING
 
 import numpy as np
@@ -367,9 +368,21 @@ class NemotronModel(TextModel):
     model_arch = gguf.MODEL_ARCH.NEMOTRON
 
     def set_vocab(self):
-        self._set_vocab_sentencepiece()
-        self.gguf_writer.add_pad_token_id(0)
-        self.gguf_writer.add_unk_token_id(1)
+        if (self.dir_model / "tokenizer.model").exists():
+            self._set_vocab_sentencepiece()
+            self.gguf_writer.add_pad_token_id(0)
+            self.gguf_writer.add_unk_token_id(1)
+        else:
+            # SPM-style BPE (Metaspace + byte fallback): mark <0xXX> tokens as BYTE so they decode to raw bytes
+            tokens, toktypes, tokpre = self.get_vocab_base()
+            toktypes = [gguf.TokenType.BYTE if re.fullmatch(r"<0x[0-9A-F]{2}>", tok) else typ for tok, typ in zip(tokens, toktypes)]
+            self.gguf_writer.add_tokenizer_model("gpt2")
+            self.gguf_writer.add_tokenizer_pre(tokpre)
+            self.gguf_writer.add_token_list(tokens)
+            self.gguf_writer.add_token_types(toktypes)
+
+            special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+            special_vocab.add_to_gguf(self.gguf_writer)
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -383,7 +396,10 @@ class NemotronModel(TextModel):
         rot_pct = self.rope_parameters["partial_rotary_factor"]
         n_embd = self.find_hparam(["hidden_size", "n_embd"])
         n_head = self.find_hparam(["num_attention_heads", "n_head"])
-        self.gguf_writer.add_rope_dimension_count(int(rot_pct * n_embd) // n_head)
+        # Use explicit head_dim when available; fallback keeps standard Nemotron working.
+        # Without this, models where n_head * head_dim != n_embd (e.g. 48 heads, head_dim=128) produce the wrong rope dimension count.
+        head_dim = self.hparams.get("head_dim") or n_embd // n_head
+        self.gguf_writer.add_rope_dimension_count(int(rot_pct * head_dim))
 
         # * RopeScaling for Nemotron
         factor = self.hparams.get("factor") or self.rope_parameters.get("factor")
@@ -416,6 +432,11 @@ class NemotronHModel(GraniteHybridModel):
     _SSM_LAYER_TYPES = {"mamba", "linear_attention"}
     _ATTN_LAYER_TYPES = {"attention", "full_attention"}
     _MLP_LAYER_TYPES = {"moe"}
+
+    def _map_fp8_weight_names(self, name: str) -> tuple[str, ...]:
+        if ".mixer.experts." in name:
+            name = name.replace("backbone.", "model.").replace(".mixer.experts.", ".mlp.experts.")
+        return super()._map_fp8_weight_names(name)
 
     def __init__(self, *args, **kwargs):
         # We have to determine the correct model architecture (MoE vs non-MoE) before

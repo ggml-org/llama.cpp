@@ -4,7 +4,7 @@
 #include <climits>
 #include <mutex>
 
-namespace {
+namespace ggml_cuda_gated_delta_net_mma {
 constexpr int D = 128;
 using bf16      = nv_bfloat16;
 
@@ -417,6 +417,7 @@ static gdn_path select_gdn_mma_path(int device, const ggml_cuda_gdn_mma_args & a
 #endif // GGML_USE_HIP
 }
 }  // namespace
+using namespace ggml_cuda_gated_delta_net_mma;
 
 bool ggml_cuda_gdn_mma_launch(int device, const ggml_cuda_gdn_mma_args & a, cudaStream_t stream) {
     if (!a.state_out) {
