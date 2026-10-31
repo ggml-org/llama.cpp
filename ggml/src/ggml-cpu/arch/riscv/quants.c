@@ -5528,6 +5528,19 @@ static NOINLINE void ggml_vec_dot_iq4_nl_q8_0_vl128(int n, float * GGML_RESTRICT
         sumf += ((GGML_CPU_FP16_TO_FP32(x[ib + 1].d) * GGML_CPU_FP16_TO_FP32(y[ib + 1].d) * acc2));
     }
 
+    if (ib < nb) {
+        vuint8m1_t iq4_packed = __riscv_vle8_v_u8m1(x[ib].qs, 16);
+        vint8m2_t q8b = __riscv_vle8_v_i8m2(y[ib].qs, 32);
+        vuint8m2_t iq4bits = __riscv_vcreate_v_u8m1_u8m2(
+            __riscv_vand_vx_u8m1(iq4_packed, 0xf, 16),
+            __riscv_vsrl_vx_u8m1(iq4_packed, 4, 16)
+        );
+        vint8m2_t iq4b = __riscv_vrgather_vv_i8m2(values, iq4bits, 32);
+        vint16m4_t sum = __riscv_vwmul_vv_i16m4(q8b, iq4b, 32);
+        __riscv_vse32_v_i32m1(&acc1, __riscv_vwredsum_vs_i16m4_i32m1(sum, __riscv_vmv_v_x_i32m1(0, 1), 32), 1);
+        sumf += GGML_CPU_FP16_TO_FP32(x[ib].d) * GGML_CPU_FP16_TO_FP32(y[ib].d) * acc1;
+    }
+
     *s = sumf;
 }
 
@@ -5583,6 +5596,20 @@ static NOINLINE void ggml_vec_dot_iq4_nl_q8_0_vl256(int n, float * GGML_RESTRICT
         __riscv_vse32_v_i32m1(&acc2,__riscv_vwredsum_vs_i16m1_i32m1(sum2, __riscv_vmv_v_x_i32m1(0, 1), 16), 1);
         sumf += ((GGML_CPU_FP16_TO_FP32(x[ib + 0].d) * GGML_CPU_FP16_TO_FP32(y[ib + 0].d) * acc1));
         sumf += ((GGML_CPU_FP16_TO_FP32(x[ib + 1].d) * GGML_CPU_FP16_TO_FP32(y[ib + 1].d) * acc2));
+    }
+
+    if (ib < nb) {
+        vuint8mf2_t iq4_packed = __riscv_vle8_v_u8mf2(x[ib].qs, 16);
+        vint8mf2_t q8b_lo = __riscv_vle8_v_i8mf2(y[ib].qs, 16);
+        vint8mf2_t q8b_hi = __riscv_vle8_v_i8mf2(y[ib].qs + 16, 16);
+        vuint8mf2_t iq4bits_lo = __riscv_vand_vx_u8mf2(iq4_packed, 0xf, 16);
+        vuint8mf2_t iq4bits_hi = __riscv_vsrl_vx_u8mf2(iq4_packed, 4, 16);
+        vint8mf2_t iq4b_lo = __riscv_vrgather_vv_i8mf2(values, iq4bits_lo, 16);
+        vint8mf2_t iq4b_hi = __riscv_vrgather_vv_i8mf2(values, iq4bits_hi, 16);
+        vint16m1_t sum = __riscv_vwmul_vv_i16m1(q8b_lo, iq4b_lo, 16);
+        sum = __riscv_vwmacc_vv_i16m1(sum, q8b_hi, iq4b_hi, 16);
+        __riscv_vse32_v_i32m1(&acc1, __riscv_vwredsum_vs_i16m1_i32m1(sum, __riscv_vmv_v_x_i32m1(0, 1), 16), 1);
+        sumf += GGML_CPU_FP16_TO_FP32(x[ib].d) * GGML_CPU_FP16_TO_FP32(y[ib].d) * acc1;
     }
 
     *s = sumf;
@@ -6519,6 +6546,19 @@ static NOINLINE void ggml_vec_dot_mxfp4_q8_0_vl128(int n, float * GGML_RESTRICT 
         sumf += ((GGML_E8M0_TO_FP32_HALF(x[ib + 1].e) * GGML_CPU_FP16_TO_FP32(y[ib + 1].d) * acc2));
     }
 
+    if (ib < nb) {
+        vuint8m1_t mx_packed = __riscv_vle8_v_u8m1(x[ib].qs, 16);
+        vint8m2_t q8b = __riscv_vle8_v_i8m2(y[ib].qs, 32);
+        vuint8m2_t mxbits = __riscv_vcreate_v_u8m1_u8m2(
+            __riscv_vand_vx_u8m1(mx_packed, 0xf, 16),
+            __riscv_vsrl_vx_u8m1(mx_packed, 4, 16)
+        );
+        vint8m2_t mxb = __riscv_vrgather_vv_i8m2(values, mxbits, 32);
+        vint16m4_t sum = __riscv_vwmul_vv_i16m4(q8b, mxb, 32);
+        __riscv_vse32_v_i32m1(&acc1, __riscv_vwredsum_vs_i16m4_i32m1(sum, __riscv_vmv_v_x_i32m1(0, 1), 32), 1);
+        sumf += GGML_E8M0_TO_FP32_HALF(x[ib].e) * GGML_CPU_FP16_TO_FP32(y[ib].d) * acc1;
+    }
+
     *s = sumf;
 }
 
@@ -6574,6 +6614,20 @@ static NOINLINE void ggml_vec_dot_mxfp4_q8_0_vl256(int n, float * GGML_RESTRICT 
         __riscv_vse32_v_i32m1(&acc2,__riscv_vwredsum_vs_i16m1_i32m1(sum2, __riscv_vmv_v_x_i32m1(0, 1), 16), 1);
         sumf += ((GGML_E8M0_TO_FP32_HALF(x[ib + 0].e) * GGML_CPU_FP16_TO_FP32(y[ib + 0].d) * acc1));
         sumf += ((GGML_E8M0_TO_FP32_HALF(x[ib + 1].e) * GGML_CPU_FP16_TO_FP32(y[ib + 1].d) * acc2));
+    }
+
+    if (ib < nb) {
+        vuint8mf2_t mx_packed = __riscv_vle8_v_u8mf2(x[ib].qs, 16);
+        vint8mf2_t q8b_lo = __riscv_vle8_v_i8mf2(y[ib].qs, 16);
+        vint8mf2_t q8b_hi = __riscv_vle8_v_i8mf2(y[ib].qs + 16, 16);
+        vuint8mf2_t mxbits_lo = __riscv_vand_vx_u8mf2(mx_packed, 0xf, 16);
+        vuint8mf2_t mxbits_hi = __riscv_vsrl_vx_u8mf2(mx_packed, 4, 16);
+        vint8mf2_t mxb_lo = __riscv_vrgather_vv_i8mf2(values, mxbits_lo, 16);
+        vint8mf2_t mxb_hi = __riscv_vrgather_vv_i8mf2(values, mxbits_hi, 16);
+        vint16m1_t sum = __riscv_vwmul_vv_i16m1(q8b_lo, mxb_lo, 16);
+        sum = __riscv_vwmacc_vv_i16m1(sum, q8b_hi, mxb_hi, 16);
+        __riscv_vse32_v_i32m1(&acc1, __riscv_vwredsum_vs_i16m1_i32m1(sum, __riscv_vmv_v_x_i32m1(0, 1), 16), 1);
+        sumf += GGML_E8M0_TO_FP32_HALF(x[ib].e) * GGML_CPU_FP16_TO_FP32(y[ib].d) * acc1;
     }
 
     *s = sumf;
