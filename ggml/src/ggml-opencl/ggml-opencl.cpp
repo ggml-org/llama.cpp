@@ -7524,6 +7524,15 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
     if (fa_decode_only) {
         opts += " -D FA_DECODE_ONLY -D FA_DECODE_MINIMAL";
     }
+    // E031 compilers on a7x crash building the mixed-KV q1_vec kernel
+    // (DK-independent); exclude just that kernel via FA_DECODE_MINIMAL for
+    // both the plain and the N_SPLIT>1 programs. The prefill, q1, mq and
+    // split decode kernels still compile.
+    if (!fa_decode_only &&
+        (variant == FA_VARIANT_F32_F16 || variant == FA_VARIANT_F32_F16_SPLIT) &&
+        backend_ctx->adreno_gen == ADRENO_GPU_GEN::A7X) {
+        opts += " -D FA_DECODE_MINIMAL";
+    }
 
     // c8 cluster width (GGML_OPENCL_FA_CL_C overrides): value = GQA4 cluster
     // width (kernel default 8); the g8 programs use 2x the value (default 16).
@@ -11425,12 +11434,11 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
             // is DK-independent). It is a driver crash, not codegen-wrong-output, so
             // it cannot be caught in-process (fatal=false only handles clean compile
             // errors). The uniform f16_f16 / f32_f32 programs compile fine on this
-            // compiler, so decline only the KV-convert variants; ggml then runs
-            // those (f16-KV / quant-KV) attention layers on the CPU backend.
-            // Negative compiler carve-out, same idiom as the Intel DK=512 decline
-            // below and the X1E driver-quirk guards.
+            // compiler, and f32_f16 is fine now too: its crashing kernel (q1_vec) is
+            // excluded via FA_DECODE_MINIMAL below. Only the quant-KV variants stay
+            // declined (their kernel sources have no such guard).
             if (backend_ctx && backend_ctx->adreno_gen == ADRENO_GPU_GEN::A7X &&
-                (is_f32_f16 || is_f32_q8_0 || is_f32_q4_0)) {
+                (is_f32_q8_0 || is_f32_q4_0)) {
                 return false;
             }
 
@@ -11450,10 +11458,10 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
             }
 
             // Some compilers for A7x (Adreno 740, compiler E031.41) crashes when
-            // building FA kernels with mixed or quant types (f32_f16, f32_q8_0, f32_q4_0)
-            // Here we skip all A7x for these kernels to avoid crash
+            // building FA kernels with mixed or quant types. f32_f16 is safe now
+            // (q1_vec excluded via FA_DECODE_MINIMAL); q8_0/q4_0 stay declined.
             if (backend_ctx->adreno_gen == ADRENO_GPU_GEN::A7X &&
-                (is_f32_f16 || is_f32_q8_0 || is_f32_q4_0)) {
+                (is_f32_q8_0 || is_f32_q4_0)) {
                 return false;
             }
 
