@@ -9107,7 +9107,14 @@ struct ggml_tensor_extra_cl_mxfp4 {
     }
 };
 
+enum class ggml_cl_layout {
+    native,
+    transposed,
+};
+
 struct ggml_tensor_extra_cl_q8_0 {
+    ggml_cl_layout layout = ggml_cl_layout::native;
+
     cl_mem q = nullptr;
     cl_mem q_img = nullptr;
 
@@ -9148,8 +9155,19 @@ struct ggml_tensor_extra_cl_q8_0 {
         d_img = nullptr;
         size_q = 0;
         size_d = 0;
+        layout = ggml_cl_layout::native;
     }
 };
+
+static ggml_tensor_extra_cl_q8_0 * ggml_cl_get_q8_0_extra(const ggml_tensor * tensor) {
+    const ggml_tensor * parent = tensor->view_src != nullptr ? tensor->view_src : tensor;
+    return (ggml_tensor_extra_cl_q8_0 *) parent->extra;
+}
+
+static bool ggml_cl_q8_0_is_transposed(const ggml_tensor * tensor) {
+    auto * extra = ggml_cl_get_q8_0_extra(tensor);
+    return extra != nullptr && extra->layout == ggml_cl_layout::transposed;
+}
 
 struct ggml_tensor_extra_cl_iq4_nl {
     cl_mem q = nullptr;
@@ -12129,9 +12147,7 @@ struct ggml_backend_opencl_buffer_context {
     std::vector<ggml_tensor_extra_cl_q6_K *> temp_tensor_extras_q6_K_in_use;
 
     // q8_0 tensors with AoS->SoA layout conversion installed by set_tensor.
-    // Two types of tensors get SOA'ed - normal weights and MoE weights.
-    // In Q8_0's case, we only have normal weights. If we ever have Q8_0 as MoE
-    // weights, they need to be added to this set in `set_tensors`.
+    // This includes normal weights and Q8_0 MoE weights.
     std::unordered_set<const ggml_tensor *> q8_0_soa_tensors;
 
     // Same for q4_0. KV-cache q4_0 tensors are allocated but never pass
@@ -13725,7 +13741,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
         ggml_tensor_extra_cl * extra_orig = (ggml_tensor_extra_cl *)tensor->extra;
         GGML_ASSERT(extra_orig && "Tesnors in OpenCL backend should have been allocated and initialized");
 
-        // Allocate the new extra and create aliases from the original.
+        // Get a temporary extra and create aliases from the original.
         ggml_backend_opencl_buffer_context * ctx = (ggml_backend_opencl_buffer_context *) buffer->context;
         ggml_tensor_extra_cl_q8_0 * extra = ctx->ggml_opencl_alloc_temp_tensor_extra_q8_0();
 
@@ -13817,6 +13833,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
 
             transpose_2d_as_32b(backend_ctx, extra->q, extra->q, size_q, K/4,  M);
             transpose_2d_as_16b(backend_ctx, extra->d, extra->d, size_d, K/32, M);
+            extra->layout = ggml_cl_layout::transposed;
         } // end transpose
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
 
@@ -15545,13 +15562,14 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, 
         }
         // SoA extra lives on the parent — follow view_src.
         const ggml_tensor * extra_src = tensor->view_src != nullptr ? tensor->view_src : tensor;
-        ggml_tensor_extra_cl_q8_0 * extra = (ggml_tensor_extra_cl_q8_0 *)extra_src->extra;
+        ggml_tensor_extra_cl_q8_0 * extra     = ggml_cl_get_q8_0_extra(extra_src);
+        GGML_ASSERT(extra != nullptr);
 
         cl_mem data_device = ggml_cl_create_temp_download_buffer(context, queue, ggml_nbytes(tensor), tensor->name);
         GGML_ASSERT(data_device != NULL && "get_tensor: temp download buffer alloc failed");
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
-        if (enable_adreno_trans_weight(backend_ctx, tensor)) {
+        if (ggml_cl_q8_0_is_transposed(extra_src)) {
             cl_kernel kernel = backend_ctx->kernel_restore_block_q8_0_trans;
 
             int ne00 = tensor->ne[0];
@@ -16964,7 +16982,8 @@ static void ggml_cl_set_rows(ggml_backend_t backend, const ggml_tensor * src0, c
         cl_mem q_mem = nullptr;
         cl_mem d_mem = nullptr;
         if (q8_0_soa) {
-            ggml_tensor_extra_cl_q8_0 * e = (ggml_tensor_extra_cl_q8_0 *)soa_src->extra;
+            ggml_tensor_extra_cl_q8_0 * e = ggml_cl_get_q8_0_extra(soa_src);
+            GGML_ASSERT(e != nullptr);
             q_mem = e->q;
             d_mem = e->d;
         } else {
@@ -20082,7 +20101,8 @@ static bool ggml_cl_flash_attn_reconstruct_aos(
     cl_mem extra_q = NULL;
     cl_mem extra_d = NULL;
     if (is_q8_0) {
-        auto * e = (ggml_tensor_extra_cl_q8_0 *) soa_src->extra;
+        auto * e = ggml_cl_get_q8_0_extra(soa_src);
+        GGML_ASSERT(e != nullptr);
         GGML_ASSERT(e && e->q && e->d);
         extra_q = e->q;
         extra_d = e->d;
@@ -24672,7 +24692,8 @@ static void ggml_cl_mul_mat_q8_0_f32_adreno(ggml_backend_t backend, const ggml_t
     ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
     // SoA extra lives on view_src (view->extra is pre-SoA).
     const ggml_tensor * soa0_src = src0->view_src != nullptr ? src0->view_src : src0;
-    ggml_tensor_extra_cl_q8_0 * extra0_q8_0 = (ggml_tensor_extra_cl_q8_0 *)soa0_src->extra;
+    ggml_tensor_extra_cl_q8_0 * extra0_q8_0 = ggml_cl_get_q8_0_extra(soa0_src);
+    GGML_ASSERT(extra0_q8_0 != nullptr);
 
     cl_ulong offset1 = extra1->offset + src1->view_offs;
     cl_ulong offsetd = extrad->offset + dst->view_offs;
@@ -27301,8 +27322,9 @@ static cl_mem ggml_cl_mul_mat_dequant_quant_to_f16(
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         const int p_ne00 = (int) parent->ne[0];
         const int p_ne01 = (int) parent->ne[1];
-        if (tensor->type == GGML_TYPE_Q8_0 && enable_adreno_trans_weight(backend_ctx, parent)) {
-            auto * extra = (ggml_tensor_extra_cl_q8_0 *) soa_src->extra;
+        if (tensor->type == GGML_TYPE_Q8_0 && ggml_cl_q8_0_is_transposed(parent)) {
+            auto * extra = ggml_cl_get_q8_0_extra(soa_src);
+            GGML_ASSERT(extra != nullptr);
             pool_key_buf = (uintptr_t) extra->q;
             cl_kernel kernel = backend_ctx->kernel_restore_block_q8_0_trans;
             CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &extra->q));
@@ -27314,8 +27336,7 @@ static cl_mem ggml_cl_mul_mat_dequant_quant_to_f16(
             size_t lws[] = { 64, 1, 1 };
             CL_CHECK(clEnqueueNDRangeKernel(backend_ctx->queue, kernel, 3, NULL, gws, lws, 0, NULL, NULL));
             restored = true;
-        } else if (tensor->type == GGML_TYPE_Q4_0 &&
-                   use_adreno_kernels(backend_ctx, parent) &&
+        } else if (tensor->type == GGML_TYPE_Q4_0 && use_adreno_kernels(backend_ctx, parent) &&
                    !use_adreno_moe_kernels(backend_ctx, parent)) {
             auto * extra = (ggml_tensor_extra_cl_q4_0 *) soa_src->extra;
             pool_key_buf = (uintptr_t) extra->q;
@@ -27347,7 +27368,8 @@ static cl_mem ggml_cl_mul_mat_dequant_quant_to_f16(
         if (!restored) {
             cl_kernel kernel;
             if (tensor->type == GGML_TYPE_Q8_0) {
-                auto * extra = (ggml_tensor_extra_cl_q8_0 *) soa_src->extra;
+                auto * extra = ggml_cl_get_q8_0_extra(soa_src);
+                GGML_ASSERT(extra != nullptr);
                 kernel = backend_ctx->kernel_restore_block_q8_0;
                 CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &extra->q));
                 CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &extra->d));
@@ -28641,6 +28663,8 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
 
+    const bool q8_0_soa = src0t == GGML_TYPE_Q8_0 && ggml_cl_is_q8_0_soa(src0);
+
     // quant kv without FA
     // used for non-contiguous src0 (the usual head-major permuted K view when n_head_kv>1)
     // AND for the contiguous case that occurs when n_head_kv==1 (e.g. Gemma-4 E2B)
@@ -28655,7 +28679,7 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                       use_q4_0_bin_kernels(backend_ctx, src0);
 #endif
     if ((src0t == GGML_TYPE_Q4_0 || src0t == GGML_TYPE_Q8_0) && !q4_0_bin_layout &&
-        (!ggml_is_contiguous(src0) || src1->ne[2] > src0->ne[2])) {
+        (!ggml_is_contiguous(src0) || src1->ne[2] > src0->ne[2] || (src0t == GGML_TYPE_Q8_0 && !q8_0_soa))) {
         cl_mem f16_buf = ggml_cl_mul_mat_dequant_quant_to_f16(backend_ctx, src0, nullptr);
 
         ggml_tensor         fake_src0 = *src0;
@@ -28694,7 +28718,7 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
     ggml_tensor_extra_cl_q5_0 * extra0_q5_0 = (ggml_tensor_extra_cl_q5_0 *)soa0_src->extra;
     ggml_tensor_extra_cl_q5_1 * extra0_q5_1 = (ggml_tensor_extra_cl_q5_1 *)soa0_src->extra;
     ggml_tensor_extra_cl_mxfp4 * extra0_mxfp4 = (ggml_tensor_extra_cl_mxfp4 *)soa0_src->extra;
-    ggml_tensor_extra_cl_q8_0 * extra0_q8_0 = (ggml_tensor_extra_cl_q8_0 *)soa0_src->extra;
+    ggml_tensor_extra_cl_q8_0 *   extra0_q8_0   = ggml_cl_get_q8_0_extra(soa0_src);
     ggml_tensor_extra_cl_iq4_nl * extra0_iq4_nl = (ggml_tensor_extra_cl_iq4_nl *)soa0_src->extra;
     ggml_tensor_extra_cl_q2_K * extra0_q2_K = (ggml_tensor_extra_cl_q2_K *)soa0_src->extra;
     ggml_tensor_extra_cl_q3_K * extra0_q3_K = (ggml_tensor_extra_cl_q3_K *)soa0_src->extra;
@@ -29098,10 +29122,9 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
         }
 
         // q8_0 x fp32
-        if (src0t == GGML_TYPE_Q8_0 && src1t == GGML_TYPE_F32 &&
-            enable_adreno_trans_weight(backend_ctx, src0)) {
-                ggml_cl_mul_mat_q8_0_f32_adreno(backend, src0, src1, dst);
-                return;
+        if (src0t == GGML_TYPE_Q8_0 && src1t == GGML_TYPE_F32 && ggml_cl_q8_0_is_transposed(src0)) {
+            ggml_cl_mul_mat_q8_0_f32_adreno(backend, src0, src1, dst);
+            return;
         }
 
         // q2_k x fp32
@@ -31998,7 +32021,8 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
     ggml_tensor_extra_cl_q5_K * extra0_q5_K = (ggml_tensor_extra_cl_q5_K *)soa0_src->extra;
     ggml_tensor_extra_cl_q6_K * extra0_q6_K = (ggml_tensor_extra_cl_q6_K *)soa0_src->extra;
     ggml_tensor_extra_cl_mxfp4 * extra0_mxfp4 = (ggml_tensor_extra_cl_mxfp4 *)soa0_src->extra;
-    ggml_tensor_extra_cl_q8_0 * extra0_q8_0 = (ggml_tensor_extra_cl_q8_0 *)soa0_src->extra;
+    ggml_tensor_extra_cl_q8_0 *  extra0_q8_0  = ggml_cl_get_q8_0_extra(soa0_src);
+    GGML_ASSERT(extra0_q8_0 != nullptr);
 
 #endif
 
