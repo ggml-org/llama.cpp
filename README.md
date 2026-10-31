@@ -1,6 +1,6 @@
 # llama.cpp
 
-This is the `fluxaeros-mtp` fork. Its demand-paged MoE path is a hardware-specific release candidate, not an upstream llama.cpp release. See [FluxAeros setup, cache warmup, measurements and limitations](docs/fluxaeros.md) before using this branch.
+See [demand-paged MoE setup, cache warmup, measurements and limitations](docs/moe-direct-io.md) for the experimental Linux/CUDA paging path.
 
 ![llama](https://raw.githubusercontent.com/ggml-org/llama.brand/refs/heads/master/cover/llama-cpp/cover-llama-cpp-dark.svg)
 

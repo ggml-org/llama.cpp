@@ -600,7 +600,7 @@ struct common_params {
     bool no_host           = false; // bypass host buffer allowing extra buffers to be used
     bool load_mtp          = false; // load MTP/NextN layers
 
-    // ---- sparse MoE direct-IO engine (FluxAeros) -------------------------
+    // sparse MoE demand paging
     bool    moe_direct_io   = false; // stream routed-expert weights via O_DIRECT into a VRAM slot pool
     int32_t moe_slots       = 4096;  // total VRAM slots shared across all MoE layers
     std::string moe_profile = "";    // hot-expert profile for slot seeding (empty = built-in table)

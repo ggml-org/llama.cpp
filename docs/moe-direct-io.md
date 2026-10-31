@@ -1,4 +1,4 @@
-# FluxAeros demand-paged MoE
+# Demand-paged MoE
 
 This branch adds a VRAM expert pool, demand-ordered I/O, a registered host victim cache and optional automatic cache warmup. Selected experts and stored quantized weights are not pruned or requantized. It is a release candidate for the configuration below, not a claim of portability or production readiness on every llama.cpp backend.
 
