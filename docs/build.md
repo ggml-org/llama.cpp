@@ -132,7 +132,7 @@ Full steps, threading notes, and a fallback for older CMake: [AOCL.md](./backend
 
 ### Intel oneMKL
 
-Building through oneAPI compilers will make avx_vnni instruction set available for intel processors that do not support avx512 and avx512_vnni. Please note that this build config **does not support Intel GPU**. For Intel GPU support, please refer to [llama.cpp for SYCL](./backend/SYCL.md).
+Building through oneAPI compilers will make avx_vnni instruction set available for intel processors that do not support avx512 and avx512_vnni. Please note that this build config **does not support Intel GPU and NPU**, refer to [Supported backend for Intel hardware](../README.md#supported-backends).
 
 - Using manual oneAPI installation:
   By default, `GGML_BLAS_VENDOR` is set to `Generic`, so if you already sourced intel environment script and assign `-DGGML_BLAS=ON` in cmake, the mkl version of Blas will automatically been selected. Otherwise please install oneAPI and follow the below steps:
@@ -444,9 +444,9 @@ Launch `w64devkit.exe` and run the following commands to copy Vulkan dependencie
 ```sh
 SDK_VERSION=1.3.283.0
 cp /VulkanSDK/$SDK_VERSION/Bin/glslc.exe $W64DEVKIT_HOME/bin/
-cp /VulkanSDK/$SDK_VERSION/Lib/vulkan-1.lib $W64DEVKIT_HOME/x86_64-w64-mingw32/lib/
-cp -r /VulkanSDK/$SDK_VERSION/Include/* $W64DEVKIT_HOME/x86_64-w64-mingw32/include/
-cat > $W64DEVKIT_HOME/x86_64-w64-mingw32/lib/pkgconfig/vulkan.pc <<EOF
+cp /VulkanSDK/$SDK_VERSION/Lib/vulkan-1.lib $W64DEVKIT_HOME/lib/
+cp -r /VulkanSDK/$SDK_VERSION/Include/* $W64DEVKIT_HOME/include/
+cat > $W64DEVKIT_HOME/lib/pkgconfig/vulkan.pc <<EOF
 Name: Vulkan-Loader
 Description: Vulkan Loader
 Version: $SDK_VERSION
@@ -481,7 +481,7 @@ cmake --build build --config Release
 Now you can load the model in conversation mode using `Vulkan`
 
 ```sh
-build/bin/Release/llama-cli -m "[PATH TO MODEL]" -ngl 100 -c 16384 -t 10 -n -2 -cnv
+build/bin/Release/llama-cli -m "[PATH TO MODEL]" -ngl 100 -c 16384 -t 10 -n -2
 ```
 
 **MSYS2**
@@ -890,9 +890,14 @@ To read documentation for how to build on IBM Z & LinuxONE, [click here](./build
 
 [OpenVINO](https://docs.openvino.ai/) is an open-source toolkit for optimizing and deploying high-performance AI inference, specifically designed for Intel hardware (CPUs, GPUs, and NPUs).
 
+Use this backend when you want to:
+
+- Accelerate execution across Intel CPU, GPU and NPU with one runtime, selected at run time with `GGML_OPENVINO_DEVICE`. OpenVINO is the only backend with support for Intel NPU.
+- Let the runtime repack weights: GGUF quantized weights are repacked, or re-quantized where needed, to match OpenVINO's optimized low-bit kernels.
+
 For build instructions and usage examples, refer to [OPENVINO.md](backend/OPENVINO.md).
 
-### Hexagon
+## Hexagon
 
 Check [README.md](./backend/snapdragon/README.md) for target specific build and run info.
 

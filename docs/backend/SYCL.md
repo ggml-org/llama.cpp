@@ -59,7 +59,7 @@ The packages for FP32 and FP16 would have different accuracy and performance on 
 - 2026.04-05
   - Optimize mul_mat by reorder feature for data type: Q4_K, Q5_K, Q6_K, Q8_0.
   - Fused MoE.
-  - Upgrate CI and built package for oneAPI 2025.3.3, support Ubuntu 24.04 built package.
+  - Upgrade CI and built package for oneAPI 2025.3.3, support Ubuntu 24.04 built package.
 
 - 2026.03
   - Support Flash-Attention: less memory usage, performance impact depends on LLM.
@@ -128,8 +128,6 @@ SYCL backend supports Intel GPU Family:
 - Intel Built-in Arc GPU
 - Intel iGPU in Core CPU (11th Generation Core CPU and newer, refer to [oneAPI supported GPU](https://www.intel.com/content/www/us/en/developer/articles/system-requirements/intel-oneapi-base-toolkit-system-requirements.html#inpage-nav-1-1)).
 
-On older Intel GPUs, you may try [OpenCL](/docs/backend/OPENCL.md) although the performance is not optimal, and some GPUs may not support OpenCL nor have any GPGPU capabilities.
-
 #### Verified devices
 
 | Intel GPU                     | Status  | Verified Model                        |
@@ -144,7 +142,7 @@ On older Intel GPUs, you may try [OpenCL](/docs/backend/OPENCL.md) although the 
 *Notes:*
 
 - **Memory**
-  - The device memory is a limitation when running a large model. The loaded model size, *`llm_load_tensors: buffer_size`*, is displayed in the log when running `./bin/llama-completion`.
+  - The device memory is a limitation when running a large model. The loaded model size is displayed in the log when running `./bin/llama-completion`, for example *`load_tensors: SYCL0 model buffer size = 3577.56 MiB`*.
   - Please make sure the GPU shared memory from the host is large enough to account for the model's size. For e.g. the *llama-2-7b.Q4_0* requires at least 8.0GB for integrated GPU and 4.0GB for discrete GPU.
 
 - **Execution Unit (EU)**
@@ -169,12 +167,12 @@ Please refer to [Docker with SYCL](../docker.md#docker-with-sycl) for details.
 
 This chapter is for quick development & try with SYCL backend on Intel GPU.
 
-You need to install following sofeware before development:
+You need to install following software before development:
    - Intel GPU driver
    - oneAPI package
    - other development tools.
 
-Please refer to [Linux](#linux) or [Windows](#windows-1) for above installation and resolve the trouble in usage. There are the detailed guide.
+Please refer to [Linux](#linux) or [Windows](#windows-1) for above installation and resolve the trouble in usage. They have the detailed guide.
 
 - Linux
 
@@ -470,7 +468,7 @@ Download the binary package for Windows from: https://github.com/ggml-org/llama.
 
 Extract the package to local folder, run the llama tools directly. Refer to [Run the inference](#iii-run-the-inference-1).
 
-Note, the package includes the SYCL running time and all depended dll files, no need to install oneAPI package and activte them.
+Note, the package includes the SYCL running time and all depended dll files, no need to install oneAPI package and activate them.
 
 ### Option 2: build locally from the source code.
 
@@ -480,7 +478,7 @@ Note, the package includes the SYCL running time and all depended dll files, no 
 
 If you already have a recent version of Microsoft Visual Studio, you can skip this step. Otherwise, please refer to the official download page for [Microsoft Visual Studio](https://visualstudio.microsoft.com/).
 
-2. Install Intel® oneAPI Base toolkit
+2. Install Intel® oneAPI Toolkit
 
 SYCL backend depends on:
   - Intel® oneAPI DPC++/C++ compiler/running-time.
@@ -488,11 +486,10 @@ SYCL backend depends on:
   - Intel® oneAPI Deep Neural Network Library (oneDNN).
   - Intel® oneAPI Math Kernel Library (oneMKL).
 
-All above are included in both **Intel® oneAPI Base toolkit** and **Intel® Deep Learning Essentials** packages.
+a. Install the toolkit
 
-It's recommended to install **Intel® Deep Learning Essentials** which only provides the necessary libraries with less size.
-
-The **Intel® oneAPI Base toolkit** and **Intel® Deep Learning Essentials** can be obtained from the official [Intel® oneAPI Base Toolkit](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit.html) page.
+It's recommended to install the **Intel® oneAPI Toolkit**. The [Linux](#linux) section has the details and the list of verified releases.
+Alternatively, users can install **Intel® Deep Learning Essentials** + **oneDNN** to provide the necessary libraries with lesser size.
 
 Please follow the instructions for downloading and installing the Toolkit for Windows, and preferably keep the default installation values unchanged, notably the installation path *(`C:\Program Files (x86)\Intel\oneAPI` by default)*.
 
@@ -788,7 +785,7 @@ User can use the device management in [docs/multi-gpu.md](https://github.com/ggm
 | GGML_SYCL_GRAPH    | ON *(default)* \|OFF *(Optional)*     | Enable build with [SYCL Graph extension](https://github.com/intel/llvm/blob/sycl/sycl/doc/extensions/experimental/sycl_ext_oneapi_graph.asciidoc). |
 | GGML_SYCL_DNN      | ON *(default)* \|OFF *(Optional)*     | Enable build with oneDNN.                   |
 | GGML_SYCL_HOST_MEM_FALLBACK | ON *(default)* \|OFF *(Optional)* | Allow host memory fallback when device memory is full during quantized weight reorder. Enables inference to continue at reduced speed (reading over PCIe) instead of failing. Requires Linux kernel 6.8+. |
-| GGML_SYCL_SUPPORT_LEVEL_ZERO_API | ON *(default)* \|OFF *(Optional)* | Support to use Level Zero API for device memory allocation. Requires Level Zero headers/library at build time and Intel GPU driver (Level Zero runtime) at run time. Reduces system RAM usage during multi-GPU inference. SYCL backend always runs on Level Zero running time even if it's set as OFF (The SYCL api will be usage for memory allocation).|
+| GGML_SYCL_SUPPORT_LEVEL_ZERO_API | ON *(default)* \|OFF *(Optional)* | Support to use Level Zero API for device memory allocation. Requires Level Zero headers/library at build time and Intel GPU driver (Level Zero runtime) at run time. Reduces system RAM usage during multi-GPU inference. SYCL backend always runs on Level Zero running time even if it's set as OFF (the SYCL API is then used for memory allocation).|
 | CMAKE_C_COMPILER   | `icx` *(Linux)*, `icx/cl` *(Windows)* | Set `icx` compiler for SYCL code path.      |
 | CMAKE_CXX_COMPILER | `icpx` *(Linux)*, `icx` *(Windows)*   | Set `icpx/icx` compiler for SYCL code path. |
 
@@ -805,11 +802,11 @@ User can use the device management in [docs/multi-gpu.md](https://github.com/ggm
 | GGML_SYCL_ENABLE_OPT | 0 or 1 (default)| Enable optimize features for Intel GPUs. (Recommended to 0 for Intel devices older than Gen 10) |
 | GGML_SYCL_ENABLE_GRAPH | 0 (default) or 1 | Enable running computations through SYCL Graphs feature. Disabled by default because SYCL Graph is still in development, performance depends on model and device. [1.](#sycl-graph-footnote) |
 | GGML_SYCL_GRAPH_EVICTION_TIMEOUT | 10 (default) or positive integer | Seconds a cached SYCL graph can go unused before it is evicted. Checked on a sweep that runs every half of this timeout. |
-| GGML_SYCL_ENABLE_HOST_PINNED_MEM | 0 or 1 (default) | Enable host pinned memory to speed up copy data from host to device. When disable it, host memory will common malloc() on CPU. Disable it when use `--load-model mlock`.|
+| GGML_SYCL_ENABLE_HOST_PINNED_MEM | 0 or 1 (default) | Enable host pinned memory to speed up copy data from host to device. When disable it, host memory will common malloc() on CPU. Disable it when use `--load-mode mlock`.|
 | GGML_SYCL_HOST_PINNED_MEM_2G | 0 (default) or 1 | Limit the max memory allocation to be no more than 2GB when enable host pinned memory. USM allocations above 2 GiB take the relaxed/large-allocation path, which serializes H2D copies with compute and prevents copy/compute overlap. It will impact the startup time. Need more test. Depend on `GGML_SYCL_ENABLE_HOST_PINNED_MEM=1`.|
 | GGML_SYCL_UPLOAD_STAGING_SLOTS | 4 (default) or non-negative integer | Number of 8 MiB pinned host slots used to stage tensor uploads (model loading), so the host copy of one slot overlaps the transfer of the previous one. Set to 0 to use the old path: a malloc'd bounce buffer and a blocking copy per tensor. |
 | GGML_SYCL_GET_MEM_API | 0 (default) or 1  | Set to get memory info (free, total) by Level Zero or SYCL API:<br>0 - Level Zero API: support more GPUs, only run on Level Zero running time. When there is an error, fallback to call SYCL API. Depend on GGML_SYCL_SUPPORT_LEVEL_ZERO_API.<br>1 - SYCL API: legacy, support more running time, it can't get the free size of some GPUs (like Arc770). In such case, return the free size as value of total size.|
-| GGML_SYCL_USE_LEVEL_ZERO_API | 1 (default) or 0 | Use Level Zero API for device memory allocation instead of SYCL. Reduces system RAM usage on Intel dGPUs by avoiding DMA-buf/TTM host memory staging. Requires GGML_SYCL_SUPPORT_LEVEL_ZERO_API=ON at build time. SYCL backend always runs on Level Zero running time even if it's set as OFF (The SYCL api will be usage for memory allocation).|
+| GGML_SYCL_USE_LEVEL_ZERO_API | 1 (default) or 0 | Use Level Zero API for device memory allocation instead of SYCL. Reduces system RAM usage on Intel dGPUs by avoiding DMA-buf/TTM host memory staging. Requires GGML_SYCL_SUPPORT_LEVEL_ZERO_API=ON at build time. SYCL backend always runs on Level Zero running time even if it's set as OFF (the SYCL API is then used for memory allocation).|
 | GGML_SYCL_ENABLE_DNN | 0 or 1 (default)| Enable running computations through oneDNN and always use oneMKL. |
 | GGML_SYCL_FA_ONEDNN | 1 (default) or 0 | Enable the oneDNN fused SDPA (flash-attention) path on supported GPUs. Set to 0 to always use the native SYCL flash-attention kernel. |
 | GGML_SYCL_FA_ONEDNN_MAX_KV | 0 (default, disabled) or positive integer | By default (0), all sequences are handled by the oneDNN fused SDPA path, regardless of KV length; a positive value caps that length, past which sequences fall back to the native kernel. If GPU driver watchdog resets (DEVICE_LOST) occur during long-context inference, set this near the context depth where they start, e.g. 24576. |
@@ -834,7 +831,7 @@ User can use the device management in [docs/multi-gpu.md](https://github.com/ggm
 | GGML_SYCL_SPARSE_FA_DEBUG | 0 (default) or 1 | Enable to debug for Sparse Flash-attention.|
 | GGML_SYCL_SPARSE_FA_MARGIN | [0,..] default:256 | Set the margin value for Sparse Flash-attention.|
 | ZES_ENABLE_SYSMAN | 0 (default) or 1 | Support to get free memory of GPU by sycl::aspect::ext_intel_free_memory.<br>Recommended to use when --split-mode = layer |
-| UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS | 0 (default) or 1 | Allow SYCL/Unified Runtime Level Zero device allocations larger than 4 GiB. llama.cpp's direct Level Zero allocation path requests the relaxed maximum-size limit itself when GGML_SYCL_ENABLE_LEVEL_ZERO=1. |
+| UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS | 0 (default) or 1 | Allow SYCL/Unified Runtime Level Zero device allocations larger than 4 GiB. llama.cpp's direct Level Zero allocation path requests the relaxed maximum-size limit itself when GGML_SYCL_USE_LEVEL_ZERO_API=1. |
 | GGML_SYCL_USM_SYSTEM | 0 (default) or 1 | Enable experimental support for [USM system allocations](https://github.khronos.org/SYCL_Reference/iface/usm_basic_concept.html#system-allocations) for large GPU buffers. This requires enough host memory for model weights and caches, an Intel Xe2+ GPU such as BMG or newer and supported on Linux only, with CONFIG_DRM_XE_GPUSVM enabled. |
 
 1. <a id="sycl-graph-footnote"></a>SYCL Graph support (`GGML_SYCL_ENABLE_GRAPH=1`) is limited to single-GPU workloads and may also depend on the model architecture and kernels in use.
@@ -944,7 +941,7 @@ Pass these via `CXXFLAGS` or add a one-off `#define` to enable a flag on the spo
 
 - `ggml_backend_sycl_buffer_type_alloc_buffer: can't allocate 5000000000 Bytes of memory on device`
 
-  With the default `GGML_SYCL_ENABLE_LEVEL_ZERO=1`, llama.cpp requests Level Zero's relaxed maximum-size allocation limit directly. If Level Zero support is disabled at build time or runtime and the allocation goes through SYCL/Unified Runtime instead, enable support for allocations larger than 4 GiB by:
+  With the default `GGML_SYCL_USE_LEVEL_ZERO_API=1`, llama.cpp requests Level Zero's relaxed maximum-size allocation limit directly. If Level Zero support is disabled at build time or runtime and the allocation goes through SYCL/Unified Runtime instead, enable support for allocations larger than 4 GiB by:
   ```
     export UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS=1
     set UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS=1
