@@ -1,6 +1,7 @@
 import pytest
 from openai import OpenAI
 from utils import *
+import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -243,3 +244,23 @@ def test_local_media_file(media_path, image_url, success,):
         assert res.status_code == 200
     else:
         assert res.status_code == 400
+
+
+def test_invalid_grammar_trigger_type_does_not_crash_server():
+    global server
+    server = ServerPreset.tinyllama2()
+    local_model = os.environ.get("LLAMA_SERVER_TEST_LOCAL_MODEL")
+    if local_model:
+        server.model_file = local_model
+        server.model_hf_repo = None
+        server.model_hf_file = None
+        server.model_alias = None
+    server.start()
+    res = server.make_request("POST", "/completion", data={
+        "prompt": "hi",
+        "n_predict": 1,
+        "grammar_triggers": [{"type": 99, "value": "x"}],
+    })
+    assert res.status_code == 400
+    health = server.make_request("GET", "/health")
+    assert health.status_code == 200
