@@ -1,3 +1,6 @@
+import os
+import re
+import tempfile
 import pytest
 from utils import *
 import base64
@@ -674,6 +677,31 @@ def test_slot_restore_preserves_context_checkpoints(swa_server, filename):
     })
     assert res.status_code == 200
     assert res.body["timings"]["prompt_n"] == n_live
+
+
+# a cache_prompt = false task creates no context checkpoints, a cache_prompt = true task still does
+def test_nocache_prompt_creates_no_checkpoints(swa_server):
+    server = swa_server
+    server.debug = True
+    fd, server.log_path = tempfile.mkstemp(suffix='.log')
+    os.close(fd)
+    server.start()
+
+    prompt = "The quick brown fox jumps over the lazy dog. " * 20
+    for id_slot, cache_prompt in [(1, False), (0, True)]:
+        res = server.make_request("POST", "/completion", data={
+            "prompt": prompt,
+            "id_slot": id_slot,
+            "cache_prompt": cache_prompt,
+        })
+        assert res.status_code == 200
+
+    # the log is written in order, so the slot 1 lines are complete once the slot 0 lines are there
+    with open(server.log_path) as f:
+        log = f.read()
+    n_created = lambda id_slot: len(re.findall(rf"id +{id_slot} \| task \d+ \| created context checkpoint", log))
+    assert n_created(0) > 0
+    assert n_created(1) == 0
 
 
 # checkpoint appendix: magic(4) version(4) count(4), then per checkpoint

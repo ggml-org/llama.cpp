@@ -1878,6 +1878,9 @@ private:
         }
 
         if (ret) {
+            // a no-cache task overwrites the whole slot, save it first
+            update_cache = update_cache || !task.params.cache_prompt;
+
             update_cache = update_cache && prompt_cache;
 
             // cache prompts only for the tasks that reuse them
@@ -1890,7 +1893,8 @@ private:
 
                 ret->prompt_save(*prompt_cache);
 
-                if (!ret->prompt_load(*prompt_cache, task.tokens)) {
+                // a no-cache task cannot use a loaded prompt
+                if (task.params.cache_prompt && !ret->prompt_load(*prompt_cache, task.tokens)) {
                     ret->prompt_clear();
                 }
 
@@ -4402,6 +4406,9 @@ private:
                             ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
                             ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS ||
                             n_swa > 0);
+
+                    // skip checkpoints for future prompt reuse when caching is disabled
+                    do_checkpoint = do_checkpoint && slot.task->params.cache_prompt;
 
                     // TODO: do the same for all models, then remove process_mtmd_chunk()
                     if (use_mixed_batch() && !slot.can_split() && input_tokens.has_mtmd) {
