@@ -250,7 +250,7 @@ llama_model_step35::graph::graph(const llama_model & model, const llm_graph_para
 
             const float kq_scale = 1.0f / sqrtf(float(n_embd_head_k));
             ggml_tensor * attn_out = build_attn(inp_attn,
-                    nullptr, nullptr, nullptr,
+                    nullptr, nullptr,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
             cb(attn_out, "attn_out", il);
             // head-wise attention gate: sigmoid(g_proj(x)) in torch
@@ -274,7 +274,7 @@ llama_model_step35::graph::graph(const llama_model & model, const llm_graph_para
             }
 
             // output projection
-            cur = build_lora_mm(model.layers[il].wo, attn_out, model.layers[il].wo_s);
+            cur = build_lora_mm(model.layers[il].wo, attn_out);
             cb(cur, "attn_proj", il);
         }
 
@@ -293,9 +293,9 @@ llama_model_step35::graph::graph(const llama_model & model, const llm_graph_para
         if (model.layers[il].ffn_gate_inp == nullptr) {
             // dense MLP
             cur = build_ffn(cur,
-                    model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   nullptr,
-                    model.layers[il].ffn_gate, model.layers[il].ffn_gate_b, nullptr,
-                    model.layers[il].ffn_down, model.layers[il].ffn_down_b, nullptr,
+                    model.layers[il].ffn_up,   model.layers[il].ffn_up_b,
+                    model.layers[il].ffn_gate, model.layers[il].ffn_gate_b,
+                    model.layers[il].ffn_down, model.layers[il].ffn_down_b,
                     nullptr,
                     LLM_FFN_SILU, LLM_FFN_PAR, il);
             cb(cur, "ffn_out", il);
@@ -316,9 +316,9 @@ llama_model_step35::graph::graph(const llama_model & model, const llm_graph_para
 
             // shared expert MLP (always added on MoE layers in Step35)
             ggml_tensor * sh_out = build_ffn(cur,
-                    model.layers[il].ffn_up_shexp,   nullptr, nullptr,
-                    model.layers[il].ffn_gate_shexp, nullptr, nullptr,
-                    model.layers[il].ffn_down_shexp, nullptr, nullptr,
+                    model.layers[il].ffn_up_shexp,   nullptr,
+                    model.layers[il].ffn_gate_shexp, nullptr,
+                    model.layers[il].ffn_down_shexp, nullptr,
                     nullptr,
                     LLM_FFN_SILU, LLM_FFN_PAR, il);
             cb(sh_out, "ffn_shared_out", il);
@@ -348,7 +348,7 @@ llama_model_step35::graph::graph(const llama_model & model, const llm_graph_para
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 }
@@ -458,7 +458,7 @@ llama_model_step35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
 
     const float kq_scale = 1.0f / sqrtf(float(n_embd_head_k));
     ggml_tensor * attn_out = build_attn(inp_attn,
-            nullptr, nullptr, nullptr,
+            nullptr, nullptr,
             Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
     cb(attn_out, "mtp_attn_out", il);
 
@@ -481,7 +481,7 @@ llama_model_step35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
         cb(attn_out, "mtp_attn_gated", il);
     }
 
-    cur = build_lora_mm(layer.wo, attn_out, layer.wo_s);
+    cur = build_lora_mm(layer.wo, attn_out);
     cb(cur, "mtp_attn_proj", il);
 
     cur = ggml_add(ctx0, cur, inpSA);
@@ -494,9 +494,9 @@ llama_model_step35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
     // FFN: dense MLP or MoE (mirrors trunk path)
     if (layer.ffn_gate_inp == nullptr) {
         cur = build_ffn(cur,
-                layer.ffn_up,   layer.ffn_up_b,   nullptr,
-                layer.ffn_gate, layer.ffn_gate_b, nullptr,
-                layer.ffn_down, layer.ffn_down_b, nullptr,
+                layer.ffn_up,   layer.ffn_up_b,
+                layer.ffn_gate, layer.ffn_gate_b,
+                layer.ffn_down, layer.ffn_down_b,
                 nullptr,
                 LLM_FFN_SILU, LLM_FFN_PAR, il);
         cb(cur, "mtp_ffn_out", il);
@@ -515,9 +515,9 @@ llama_model_step35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
         cb(moe_out, "mtp_ffn_moe_out", il);
 
         ggml_tensor * sh_out = build_ffn(cur,
-                layer.ffn_up_shexp,   nullptr, nullptr,
-                layer.ffn_gate_shexp, nullptr, nullptr,
-                layer.ffn_down_shexp, nullptr, nullptr,
+                layer.ffn_up_shexp,   nullptr,
+                layer.ffn_gate_shexp, nullptr,
+                layer.ffn_down_shexp, nullptr,
                 nullptr,
                 LLM_FFN_SILU, LLM_FFN_PAR, il);
         cb(sh_out, "mtp_ffn_shared_out", il);

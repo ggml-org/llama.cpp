@@ -183,15 +183,6 @@ void llama_model_nemotron_h::load_arch_tensors(llama_model_loader & ml) {
         layer.ffn_up_exps     = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,     "weight", i), {moe_n_embd, n_ff_exp,   n_expert}, mtp_flags);
         layer.ffn_down_shexp  = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP,  "weight", i), {n_ff_shexp, n_embd}, mtp_flags);
         layer.ffn_up_shexp    = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,    "weight", i), {n_embd, n_ff_shexp}, mtp_flags);
-
-        layer.ffn_down_exps_s     = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS,  "scale",       i), {n_expert}, mtp_flags | TENSOR_NOT_REQUIRED);
-        layer.ffn_up_exps_s       = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,    "scale",       i), {n_expert}, mtp_flags | TENSOR_NOT_REQUIRED);
-        layer.ffn_down_exps_in_s  = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS,  "input_scale", i), {n_expert}, mtp_flags | TENSOR_NOT_REQUIRED);
-        layer.ffn_up_exps_in_s    = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,    "input_scale", i), {n_expert}, mtp_flags | TENSOR_NOT_REQUIRED);
-        layer.ffn_down_shexp_s    = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "scale",       i), {1},        mtp_flags | TENSOR_NOT_REQUIRED);
-        layer.ffn_up_shexp_s      = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "scale",       i), {1},        mtp_flags | TENSOR_NOT_REQUIRED);
-        layer.ffn_down_shexp_in_s = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "input_scale", i), {1},        mtp_flags | TENSOR_NOT_REQUIRED);
-        layer.ffn_up_shexp_in_s   = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "input_scale", i), {1},        mtp_flags | TENSOR_NOT_REQUIRED);
     }
 }
 
@@ -270,7 +261,7 @@ llama_model_nemotron_h::graph::graph(const llama_model & model, const llm_graph_
     res->t_embd = cur;
 
     // lm_head
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 }
@@ -285,7 +276,7 @@ ggml_tensor * llama_model_nemotron_h::graph::build_attention_layer(ggml_tensor *
     const float kq_scale =
         hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
     cur = build_attn(inp_attn,
-            model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
+            model.layers[il].wo, model.layers[il].wo_b,
             Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
     cb(cur, "attn_out", il);
     return cur;
@@ -294,9 +285,9 @@ ggml_tensor * llama_model_nemotron_h::graph::build_attention_layer(ggml_tensor *
 ggml_tensor * llama_model_nemotron_h::graph::build_ffn_layer(ggml_tensor * cur, const llama_model & model, int il) {
     if (model.layers[il].ffn_gate_inp == nullptr) {
         cur = build_ffn(cur,
-                model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   model.layers[il].ffn_up_s,
-                NULL,                      NULL,                        NULL,
-                model.layers[il].ffn_down, model.layers[il].ffn_down_b, model.layers[il].ffn_down_s,
+                model.layers[il].ffn_up,   model.layers[il].ffn_up_b,
+                NULL,                      NULL,
+                model.layers[il].ffn_down, model.layers[il].ffn_down_b,
                 NULL,
                 LLM_FFN_RELU_SQR, LLM_FFN_PAR, il);
         cb(cur, "ffn_out", il);
@@ -305,7 +296,7 @@ ggml_tensor * llama_model_nemotron_h::graph::build_ffn_layer(ggml_tensor * cur, 
         ggml_tensor * inp_latent = cur;
 
         if (model.layers[il].ffn_latent_down) {
-            inp_latent = ggml_mul_mat(ctx0, model.layers[il].ffn_latent_down, cur);
+            inp_latent = build_lora_mm(model.layers[il].ffn_latent_down, cur);
         }
 
         ggml_tensor * router_logits = build_lora_mm(model.layers[il].ffn_gate_inp, cur);
@@ -323,20 +314,17 @@ ggml_tensor * llama_model_nemotron_h::graph::build_ffn_layer(ggml_tensor * cur, 
                     hparams.expert_weights_scale,
                     LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID,
                     il,
-                    router_logits, nullptr,
-                    model.layers[il].ffn_up_exps_s,
-                    nullptr, // no gate
-                    model.layers[il].ffn_down_exps_s);
+                    router_logits, nullptr);
         cb(moe_out, "ffn_moe_out", il);
 
         if (model.layers[il].ffn_latent_up) {
-            moe_out = ggml_mul_mat(ctx0, model.layers[il].ffn_latent_up, moe_out);
+            moe_out = build_lora_mm(model.layers[il].ffn_latent_up, moe_out);
         }
 
         ggml_tensor * ffn_shexp = build_ffn(inp_emb,
-                    model.layers[il].ffn_up_shexp,   NULL, model.layers[il].ffn_up_shexp_s,
-                    NULL /* no gate */           ,   NULL, NULL,
-                    model.layers[il].ffn_down_shexp, NULL, model.layers[il].ffn_down_shexp_s,
+                    model.layers[il].ffn_up_shexp,   NULL,
+                    NULL /* no gate */           ,   NULL,
+                    model.layers[il].ffn_down_shexp, NULL,
                     NULL,
                     LLM_FFN_RELU_SQR, LLM_FFN_PAR, il);
         cb(ffn_shexp, "ffn_shexp", il);

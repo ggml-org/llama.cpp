@@ -205,7 +205,7 @@ llama_model_mistral3::graph::graph(const llama_model & model, const llm_graph_pa
             }
 
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
+                    model.layers[il].wo, model.layers[il].wo_b,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
             cb(cur, "attn_out", il);
         }
@@ -227,9 +227,9 @@ llama_model_mistral3::graph::graph(const llama_model & model, const llm_graph_pa
             if (t_cond) {
                 // ada rms norm: scale the normalized input by (1 + mlp(t_cond))
                 ggml_tensor * ada = build_ffn(t_cond,
-                        model.layers[il].ffn_norm_ada_down, NULL, NULL,
-                        NULL, NULL, NULL,
-                        model.layers[il].ffn_norm_ada_up, NULL, NULL,
+                        model.layers[il].ffn_norm_ada_down, NULL,
+                        NULL, NULL,
+                        model.layers[il].ffn_norm_ada_up, NULL,
                         NULL,
                         LLM_FFN_GELU_ERF, LLM_FFN_SEQ, il);
                 cur = ggml_add(ctx0, cur, ggml_mul(ctx0, cur, ada));
@@ -237,9 +237,9 @@ llama_model_mistral3::graph::graph(const llama_model & model, const llm_graph_pa
             }
 
             cur = build_ffn(cur,
-                    model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   model.layers[il].ffn_up_s,
-                    model.layers[il].ffn_gate, model.layers[il].ffn_gate_b, model.layers[il].ffn_gate_s,
-                    model.layers[il].ffn_down, model.layers[il].ffn_down_b, model.layers[il].ffn_down_s,
+                    model.layers[il].ffn_up,   model.layers[il].ffn_up_b,
+                    model.layers[il].ffn_gate, model.layers[il].ffn_gate_b,
+                    model.layers[il].ffn_down, model.layers[il].ffn_down_b,
                     NULL,
                     LLM_FFN_SILU, LLM_FFN_PAR, il);
             cb(cur, "ffn_out", il);
@@ -261,10 +261,7 @@ llama_model_mistral3::graph::graph(const llama_model & model, const llm_graph_pa
                     hparams.expert_weights_scale,
                     LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
                     il,
-                    nullptr, nullptr,
-                    model.layers[il].ffn_up_exps_s,
-                    model.layers[il].ffn_gate_exps_s,
-                    model.layers[il].ffn_down_exps_s);
+                    nullptr, nullptr);
             cb(cur, "ffn_moe_out", il);
         }
         cur = ggml_add(ctx0, cur, ffn_inp);
@@ -286,7 +283,7 @@ llama_model_mistral3::graph::graph(const llama_model & model, const llm_graph_pa
     res->t_embd = cur;
 
     // lm_head
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;

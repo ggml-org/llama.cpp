@@ -134,7 +134,7 @@ llama_model_hy_v3::graph::graph(const llama_model & model, const llm_graph_param
                     ext_factor, attn_factor, beta_fast, beta_slow);
 
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
+                    model.layers[il].wo, model.layers[il].wo_b,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
             cb(cur, "attn_out", il);
         }
@@ -153,9 +153,9 @@ llama_model_hy_v3::graph::graph(const llama_model & model, const llm_graph_param
         if (model.layers[il].ffn_gate_inp == nullptr) {
             // dense FFN (leading dense blocks)
             cur = build_ffn(cur,
-                    model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   model.layers[il].ffn_up_s,
-                    model.layers[il].ffn_gate, model.layers[il].ffn_gate_b, model.layers[il].ffn_gate_s,
-                    model.layers[il].ffn_down, model.layers[il].ffn_down_b, model.layers[il].ffn_down_s,
+                    model.layers[il].ffn_up,   model.layers[il].ffn_up_b,
+                    model.layers[il].ffn_gate, model.layers[il].ffn_gate_b,
+                    model.layers[il].ffn_down, model.layers[il].ffn_down_b,
                     nullptr,
                     LLM_FFN_SILU, LLM_FFN_PAR, il);
             cb(cur, "ffn_dense_out", il);
@@ -173,17 +173,14 @@ llama_model_hy_v3::graph::graph(const llama_model & model, const llm_graph_param
                     hparams.expert_weights_scale,
                     (llama_expert_gating_func_type) hparams.expert_gating_func,
                     il,
-                    nullptr, model.layers[il].ffn_gate_up_exps,
-                    model.layers[il].ffn_up_exps_s,
-                    model.layers[il].ffn_gate_exps_s,
-                    model.layers[il].ffn_down_exps_s);
+                    nullptr, model.layers[il].ffn_gate_up_exps);
             cb(moe_out, "ffn_moe_out", il);
 
             // shared expert (always active, no gate)
             ggml_tensor * sh_out = build_ffn(cur,
-                    model.layers[il].ffn_up_shexp,   nullptr, model.layers[il].ffn_up_shexp_s,
-                    model.layers[il].ffn_gate_shexp, nullptr, model.layers[il].ffn_gate_shexp_s,
-                    model.layers[il].ffn_down_shexp, nullptr, model.layers[il].ffn_down_shexp_s,
+                    model.layers[il].ffn_up_shexp,   nullptr,
+                    model.layers[il].ffn_gate_shexp, nullptr,
+                    model.layers[il].ffn_down_shexp, nullptr,
                     nullptr,
                     LLM_FFN_SILU, LLM_FFN_PAR, il);
             cb(sh_out, "ffn_shared_out", il);
@@ -214,7 +211,7 @@ llama_model_hy_v3::graph::graph(const llama_model & model, const llm_graph_param
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 }
@@ -303,7 +300,7 @@ llama_model_hy_v3::graph_mtp::graph_mtp(const llama_model & model, const llm_gra
         const float kq_scale = 1.0f / sqrtf(float(n_embd_head));
 
         cur = build_attn(inp_attn,
-                layer.wo, layer.wo_b, layer.wo_s,
+                layer.wo, layer.wo_b,
                 Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
         cb(cur, "mtp_attn_out", il);
     }
@@ -316,9 +313,9 @@ llama_model_hy_v3::graph_mtp::graph_mtp(const llama_model & model, const llm_gra
 
     if (layer.ffn_gate_inp == nullptr) {
         cur = build_ffn(cur,
-                layer.ffn_up,   layer.ffn_up_b,   layer.ffn_up_s,
-                layer.ffn_gate, layer.ffn_gate_b, layer.ffn_gate_s,
-                layer.ffn_down, layer.ffn_down_b, layer.ffn_down_s,
+                layer.ffn_up,   layer.ffn_up_b,
+                layer.ffn_gate, layer.ffn_gate_b,
+                layer.ffn_down, layer.ffn_down_b,
                 nullptr,
                 LLM_FFN_SILU, LLM_FFN_PAR, il);
         cb(cur, "mtp_ffn_dense_out", il);
@@ -335,16 +332,13 @@ llama_model_hy_v3::graph_mtp::graph_mtp(const llama_model & model, const llm_gra
                 hparams.expert_weights_scale,
                 (llama_expert_gating_func_type) hparams.expert_gating_func,
                 il,
-                nullptr, layer.ffn_gate_up_exps,
-                layer.ffn_up_exps_s,
-                layer.ffn_gate_exps_s,
-                layer.ffn_down_exps_s);
+                nullptr, layer.ffn_gate_up_exps);
         cb(moe_out, "mtp_ffn_moe_out", il);
 
         ggml_tensor * sh_out = build_ffn(cur,
-                layer.ffn_up_shexp,   nullptr, layer.ffn_up_shexp_s,
-                layer.ffn_gate_shexp, nullptr, layer.ffn_gate_shexp_s,
-                layer.ffn_down_shexp, nullptr, layer.ffn_down_shexp_s,
+                layer.ffn_up_shexp,   nullptr,
+                layer.ffn_gate_shexp, nullptr,
+                layer.ffn_down_shexp, nullptr,
                 nullptr,
                 LLM_FFN_SILU, LLM_FFN_PAR, il);
         cb(sh_out, "mtp_ffn_shared_out", il);
@@ -372,9 +366,8 @@ llama_model_hy_v3::graph_mtp::graph_mtp(const llama_model & model, const llm_gra
     cb(cur, "mtp_shared_head_norm", -1);
 
     ggml_tensor * head_w = layer.nextn.shared_head_head ? layer.nextn.shared_head_head : model.output;
-    ggml_tensor * head_s = layer.nextn.shared_head_head ? layer.nextn.shared_head_head_s : model.output_s;
     GGML_ASSERT(head_w && "HY_V3 MTP: missing LM head (nextn.shared_head_head or model.output)");
-    cur = build_lora_mm(head_w, cur, head_s);
+    cur = build_lora_mm(head_w, cur);
     cb(cur, "result_output", -1);
 
     res->t_logits = cur;

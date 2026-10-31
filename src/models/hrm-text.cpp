@@ -123,7 +123,7 @@ ggml_tensor * llama_model_hrm_text::graph::build_stack(llm_graph_input_attn_kv *
             cb(Kcur, "Kcur", s);
 
             cur = build_attn(inp_attn,
-                nullptr, nullptr, nullptr,
+                nullptr, nullptr,
                 Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, s);
             cb(cur, "attn_pregate", s);
 
@@ -133,7 +133,7 @@ ggml_tensor * llama_model_hrm_text::graph::build_stack(llm_graph_input_attn_kv *
             cur = ggml_mul(ctx0, cur, gate);
             cb(cur, "attn_gated", s);
 
-            cur = build_lora_mm(layer.wo, cur, layer.wo_s);
+            cur = build_lora_mm(layer.wo, cur);
             cb(cur, "attn_out", s);
         }
 
@@ -145,9 +145,9 @@ ggml_tensor * llama_model_hrm_text::graph::build_stack(llm_graph_input_attn_kv *
         cb(cur, "ffn_norm", s);
 
         cur = build_ffn(cur,
-            layer.ffn_up, nullptr, nullptr,
-            layer.ffn_gate, nullptr, nullptr,
-            layer.ffn_down, nullptr, nullptr,
+            layer.ffn_up, nullptr,
+            layer.ffn_gate, nullptr,
+            layer.ffn_down, nullptr,
             nullptr,
             LLM_FFN_SILU, LLM_FFN_PAR, s);
         cb(cur, "ffn_out", s);
@@ -204,7 +204,7 @@ llama_model_hrm_text::graph::graph(const llama_model & model, const llm_graph_pa
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;

@@ -65,7 +65,7 @@ ggml_tensor * llm_build_rwkv7_base::build_rwkv7_time_mix(llm_graph_input_rs * in
 
     ggml_tensor * r = build_lora_mm(layer.time_mix_receptance, xr);
     ggml_tensor * w = ggml_add(
-        ctx0, ggml_mul_mat(ctx0, layer.time_mix_w2, ggml_tanh(ctx0, ggml_mul_mat(ctx0, layer.time_mix_w1, xw))),
+        ctx0, build_lora_mm(layer.time_mix_w2, ggml_tanh(ctx0, build_lora_mm(layer.time_mix_w1, xw))),
         layer.time_mix_w0);
     w = ggml_exp(ctx0, ggml_scale(ctx0, ggml_sigmoid(ctx0, w), -0.606531));
 
@@ -78,16 +78,16 @@ ggml_tensor * llm_build_rwkv7_base::build_rwkv7_time_mix(llm_graph_input_rs * in
         v = ggml_add(ctx0, v,
                      ggml_mul(ctx0, ggml_sub(ctx0, first_layer_value, v),
                               ggml_sigmoid(ctx0, ggml_add(ctx0,
-                                                          ggml_mul_mat(ctx0, layer.time_mix_v2,
-                                                                       ggml_mul_mat(ctx0, layer.time_mix_v1, xv)),
+                                                          build_lora_mm(layer.time_mix_v2,
+                                                                       build_lora_mm(layer.time_mix_v1, xv)),
                                                           layer.time_mix_v0))));
     }
     ggml_tensor * g = nullptr;
     if (layer.time_mix_g1 && layer.time_mix_g2) {
-        g = ggml_mul_mat(ctx0, layer.time_mix_g2, ggml_sigmoid(ctx0, ggml_mul_mat(ctx0, layer.time_mix_g1, xg)));
+        g = build_lora_mm(layer.time_mix_g2, ggml_sigmoid(ctx0, build_lora_mm(layer.time_mix_g1, xg)));
     }
     ggml_tensor * a = ggml_sigmoid(
-        ctx0, ggml_add(ctx0, ggml_mul_mat(ctx0, layer.time_mix_a2, ggml_mul_mat(ctx0, layer.time_mix_a1, xa)),
+        ctx0, ggml_add(ctx0, build_lora_mm(layer.time_mix_a2, build_lora_mm(layer.time_mix_a1, xa)),
                        layer.time_mix_a0));
 
     ggml_tensor * kk = ggml_reshape_3d(ctx0, ggml_mul(ctx0, k, layer.time_mix_k_k), head_size, head_count, n_tokens);

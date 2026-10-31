@@ -2408,6 +2408,10 @@ static enum ggml_status ggml_backend_cann_graph_compute(ggml_backend_t backend, 
  *              otherwise false.
  */
 static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
+    if (ggml_get_src_scale(op, 0)) {
+        return false;
+    }
+
     switch (op->op) {
         case GGML_OP_UNARY:
             switch (ggml_get_unary_op(op)) {

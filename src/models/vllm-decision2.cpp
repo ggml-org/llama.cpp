@@ -163,15 +163,15 @@ ggml_tensor * llama_model_vllm_decision2::graph::build_head(ggml_tensor * hidden
     query   = build_norm(query,   model.query_norm,  model.query_norm_b,  LLM_NORM, -1);
 
     // scaled dot product of the option key and the query
-    ggml_tensor * k = ggml_mul_mat(ctx0, model.key,   options); // [n_embd_h, n_options]
-    ggml_tensor * q = ggml_mul_mat(ctx0, model.query, query);   // [n_embd_h, 1]
+    ggml_tensor * k = build_lora_mm(model.key,   options); // [n_embd_h, n_options]
+    ggml_tensor * q = build_lora_mm(model.query, query);   // [n_embd_h, 1]
     ggml_tensor * bilinear = ggml_sum_rows(ctx0, ggml_mul(ctx0, k, q));
     bilinear = ggml_scale(ctx0, bilinear, 1.0f / sqrtf((float) k->ne[0])); // [1, n_options]
 
-    ggml_tensor * mlp = ggml_add(ctx0, ggml_mul_mat(ctx0, model.option_mlp, options), model.option_mlp_b);
-    mlp = ggml_add(ctx0, mlp, ggml_mul_mat(ctx0, model.query_mlp, query));
+    ggml_tensor * mlp = ggml_add(ctx0, build_lora_mm(model.option_mlp, options), model.option_mlp_b);
+    mlp = ggml_add(ctx0, mlp, build_lora_mm(model.query_mlp, query));
     mlp = ggml_gelu_erf(ctx0, mlp);
-    ggml_tensor * nonlinear = ggml_mul_mat(ctx0, model.scorer_out, mlp); // [1, n_options]
+    ggml_tensor * nonlinear = build_lora_mm(model.scorer_out, mlp); // [1, n_options]
 
     ggml_tensor * scores = ggml_add(ctx0, bilinear, nonlinear);
     cb(scores, "decision_scores", -1);

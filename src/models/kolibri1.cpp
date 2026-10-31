@@ -113,7 +113,7 @@ llama_model_kolibri1::graph::graph(const llama_model & model, const llm_graph_pa
         }
 
         cur = build_attn(inp_attn,
-                layer.wo, NULL, layer.wo_s,
+                layer.wo, NULL,
                 Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
         cb(cur, "attn_out", il);
 
@@ -152,13 +152,13 @@ llama_model_kolibri1::graph::graph(const llama_model & model, const llm_graph_pa
                 (llama_expert_gating_func_type) hparams.expert_gating_func,
                 il,
                 logits,
-                nullptr, nullptr, nullptr, nullptr, selected);
+                nullptr, selected);
         cb(moe_out, "ffn_moe_out", il);
 
         ggml_tensor * shared = build_ffn(cur,
-                layer.ffn_up_shexp,   nullptr, nullptr,
-                layer.ffn_gate_shexp, nullptr, nullptr,
-                layer.ffn_down_shexp, nullptr, nullptr, nullptr,
+                layer.ffn_up_shexp,   nullptr,
+                layer.ffn_gate_shexp, nullptr,
+                layer.ffn_down_shexp, nullptr, nullptr,
                 LLM_FFN_SILU, LLM_FFN_PAR, il);
         cb(shared, "ffn_shexp_out", il);
 
@@ -174,7 +174,7 @@ llama_model_kolibri1::graph::graph(const llama_model & model, const llm_graph_pa
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 }

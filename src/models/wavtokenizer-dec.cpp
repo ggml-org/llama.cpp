@@ -231,9 +231,9 @@ llama_model_wavtokenizer_dec::graph::graph(const llama_model & model, const llm_
                 LLM_NORM, -1);
 
         cur = build_ffn(cur,
-                layer.pw1, layer.pw1_b, NULL,
-                NULL,      NULL,        NULL,
-                layer.pw2, layer.pw2_b, NULL,
+                layer.pw1, layer.pw1_b,
+                NULL,      NULL,
+                layer.pw2, layer.pw2_b,
                 NULL,
                 LLM_FFN_GELU, LLM_FFN_SEQ, il);
 
@@ -253,7 +253,7 @@ llama_model_wavtokenizer_dec::graph::graph(const llama_model & model, const llm_
             LLM_NORM, -1);
 
     // lm_head
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
 
     cur = ggml_add(ctx0, cur, model.output_b);
 
