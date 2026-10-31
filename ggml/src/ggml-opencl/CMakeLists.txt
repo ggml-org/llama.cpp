@@ -70,6 +70,7 @@ set(GGML_OPENCL_KERNELS
     lightning_indexer
     tri
     fill
+    fwht
     clamp
     cpy
     cvt
