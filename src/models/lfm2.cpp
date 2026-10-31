@@ -281,11 +281,11 @@ public:
             }
         };
 
-        GGML_ASSERT(ggml_backend_buffer_is_host(self_kq_mask->buffer));
-        if (self_kq_mask->type == GGML_TYPE_F16) {
-            fill_mask((ggml_fp16_t *) self_kq_mask->data, ggml_fp32_to_fp16(0.0f), ggml_fp32_to_fp16(-INFINITY));
+        GGML_ASSERT(ggml_backend_buffer_is_host(self_attn_mask.raw->buffer));
+        if (self_attn_mask.raw->type == GGML_TYPE_F16) {
+            fill_mask((ggml_fp16_t *) self_attn_mask.raw->data, ggml_fp32_to_fp16(0.0f), ggml_fp32_to_fp16(-INFINITY));
         } else {
-            fill_mask((float *) self_kq_mask->data, 0.0f, -INFINITY);
+            fill_mask((float *) self_attn_mask.raw->data, 0.0f, -INFINITY);
         }
     }
 
@@ -330,9 +330,9 @@ llama_model_lfm2::graph_decision::graph_decision(const llama_model & model, cons
     llm_graph_input_attn_no_cache * inp_attn[2];
     for (bool is_head : {false, true}) {
         auto inp = std::make_unique<llm_graph_input_attn_media>(hparams, cparams, is_head);
-        inp->self_kq_mask = ggml_new_tensor_4d(ctx0, type_mask, n_tokens, n_tokens, 1, 1);
-        ggml_set_input(inp->self_kq_mask);
-        inp->self_kq_mask_cnv = inp->self_kq_mask;
+        inp->self_attn_mask.raw = ggml_new_tensor_4d(ctx0, type_mask, n_tokens, n_tokens, 1, 1);
+        ggml_set_input(inp->self_attn_mask.raw);
+        inp->self_attn_mask.cnv = inp->self_attn_mask.raw;
         inp_attn[is_head] = (llm_graph_input_attn_no_cache *) res->add_input(std::move(inp));
     }
 

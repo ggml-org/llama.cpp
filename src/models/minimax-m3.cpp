@@ -262,7 +262,7 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
     if (msa_enabled) {
         const auto * mctx_msa = static_cast<const llama_kv_cache_msa_context *>(mctx);
 
-        msa_kqm = inp_attn->get_kq_mask();
+        msa_kqm = inp_attn->self_attn_mask.cnv;
         n_kv  = msa_kqm->ne[0];
         n_tps = msa_kqm->ne[1];        // tokens per stream
         ns    = msa_kqm->ne[3];        // streams in this ubatch
