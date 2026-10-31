@@ -657,10 +657,11 @@
 					/>
 				</div>
 
-				<!-- the footer: managing the app around the chats, at the bottom of the
-				     sidebar and of its collapsed strip alike, clear of a phone's home indicator -->
+				<!-- the footer: managing the app around the chats, grouped in an inset surface at
+				     the bottom of the sidebar and of its collapsed strip alike, clear of a phone's
+				     home indicator -->
 				<SidebarNavigationActions
-					class="border-t border-border/30 px-2 pt-2 max-md:pb-[max(0.75rem,env(safe-area-inset-bottom))] md:mb-2"
+					class="inset-group-surface mx-2 mb-2 p-1 max-md:mb-[max(0.5rem,env(safe-area-inset-bottom))]"
 					items={SIDEBAR_FOOTER_ITEMS}
 					onAction={handleSidebarAction}
 				/>
