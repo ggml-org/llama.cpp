@@ -14,7 +14,7 @@
 #include <arm_neon.h>
 #endif
 
-#if defined(__riscv_v_intrinsic)
+#if defined(__riscv_vector) && defined(__riscv_v_intrinsic)
 #include <riscv_vector.h>
 #endif
 
@@ -1306,7 +1306,7 @@ static inline void __lzs_f16cx4_store(ggml_fp16_t * x, float32x4_t v_y) {
 #define GGML_BF16_FMA_HI(acc, x, y) \
     (acc) = GGML_F32x4_FMA((acc), GGML_BF16_TO_F32_HI(x), GGML_BF16_TO_F32_HI(y))
 
-#elif defined(__riscv_v_intrinsic)
+#elif defined(__riscv_vector) && defined(__riscv_v_intrinsic)
 
 // compatible with vlen >= 128
 
