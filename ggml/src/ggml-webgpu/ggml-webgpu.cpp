@@ -203,6 +203,11 @@ struct webgpu_global_context_struct {
     wgpu::Buffer    memset_params_buf;
     webgpu_pipeline memset_pipeline;
 
+    // Packed source data and write descriptors for set_tensor_n
+    wgpu::Buffer    set_tensor_n_src_buf;
+    wgpu::Buffer    set_tensor_n_descs_buf;
+    webgpu_pipeline set_tensor_n_pipeline;
+
     std::string vendor;
 
     // TODO: We should rework the CPU profiling time handling to make it more useful. ref: https://github.com/ggml-org/llama.cpp/pull/22050
@@ -226,6 +231,14 @@ struct webgpu_global_context_struct {
         if (this->memset_params_buf) {
             this->memset_params_buf.Destroy();
             this->memset_params_buf = nullptr;
+        }
+        if (this->set_tensor_n_src_buf) {
+            this->set_tensor_n_src_buf.Destroy();
+            this->set_tensor_n_src_buf = nullptr;
+        }
+        if (this->set_tensor_n_descs_buf) {
+            this->set_tensor_n_descs_buf.Destroy();
+            this->set_tensor_n_descs_buf = nullptr;
         }
 #ifdef GGML_WEBGPU_DEBUG
         if (this->debug_host_buf) {
@@ -3858,6 +3871,112 @@ static void ggml_backend_webgpu_buffer_set_tensor(ggml_backend_buffer_t buffer,
     WEBGPU_CPU_PROFILE_TOTAL_END(set_tensor, buf_ctx->global_ctx);
 }
 
+static void ggml_backend_webgpu_buffer_set_tensor_n(ggml_backend_buffer_t        buffer,
+                                                    struct ggml_tensor * const * tensors,
+                                                    const void * const *         data,
+                                                    const size_t *               offsets,
+                                                    const size_t *               sizes,
+                                                    size_t                       n_tensors) {
+    WEBGPU_CPU_PROFILE_TOTAL_START(set_tensor_n);
+    ggml_backend_webgpu_buffer_context * buf_ctx = (ggml_backend_webgpu_buffer_context *) buffer->context;
+    webgpu_global_context &              ctx     = buf_ctx->global_ctx;
+
+    WEBGPU_LOG_DEBUG("ggml_backend_webgpu_buffer_set_tensor_n(" << buf_ctx->label << ", " << (const void *) tensors
+                                                                << ", " << (const void *) data << ", " << offsets
+                                                                << ", " << sizes << ", " << n_tensors << ")");
+
+    const size_t max_binding_size = ctx->capabilities.limits.maxStorageBufferBindingSize;
+    const size_t max_wg_per_dim   = ctx->capabilities.limits.maxComputeWorkgroupsPerDimension;
+
+    std::lock_guard<std::recursive_mutex> lock(ctx->mutex);
+
+    std::vector<uint8_t>  src;    // we use src to copy the data of many tensors
+    std::vector<uint32_t> descs;  // [dst offset in bytes, src offset in words, size in bytes, unused]
+    wgpu::Buffer          dst_buf;
+
+    auto grow_buffer = [&ctx](wgpu::Buffer & buf, size_t size, const char * label) {
+        if (buf == nullptr || buf.GetSize() < size) {
+            if (buf) {
+                buf.Destroy();
+            }
+            ggml_webgpu_create_buffer(ctx->device, buf, size, wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Storage,
+                                      label);
+        }
+    };
+
+    auto flush_tensors = [&]() {
+        if (descs.empty()) {
+            return;
+        }
+
+        src.resize(ROUNDUP_POW2(src.size(), 4));
+        const size_t descs_size = descs.size() * sizeof(uint32_t);
+        const size_t n_dsts     = descs.size() / 4;
+
+        grow_buffer(ctx->set_tensor_n_src_buf, src.size(), "set_tensor_n_src_buf");
+        grow_buffer(ctx->set_tensor_n_descs_buf, descs_size, "set_tensor_n_descs_buf");
+        ctx->queue.WriteBuffer(ctx->set_tensor_n_src_buf, 0, src.data(), src.size());
+        ctx->queue.WriteBuffer(ctx->set_tensor_n_descs_buf, 0, descs.data(), descs_size);
+
+        std::vector<wgpu::BindGroupEntry> entries = {
+            ggml_webgpu_make_bind_group_entry(0, dst_buf, 0, dst_buf.GetSize()),
+            ggml_webgpu_make_bind_group_entry(1, ctx->set_tensor_n_src_buf, 0, src.size()),
+            ggml_webgpu_make_bind_group_entry(2, ctx->set_tensor_n_descs_buf, 0, descs_size),
+        };
+
+        wgpu::BindGroupDescriptor bind_group_desc;
+        bind_group_desc.layout     = ctx->set_tensor_n_pipeline.pipeline.GetBindGroupLayout(0);
+        bind_group_desc.entryCount = entries.size();
+        bind_group_desc.entries    = entries.data();
+        bind_group_desc.label      = ctx->set_tensor_n_pipeline.name.c_str();
+        wgpu::BindGroup bind_group = ctx->device.CreateBindGroup(&bind_group_desc);
+
+        uint32_t wg_x;
+        uint32_t wg_y;
+        uint32_t total_wg = n_dsts;
+        compute_2d_workgroups(total_wg, max_wg_per_dim, wg_x, wg_y);
+
+        wgpu::CommandEncoder     encoder = ctx->device.CreateCommandEncoder();
+        wgpu::ComputePassEncoder pass    = encoder.BeginComputePass();
+        pass.SetPipeline(ctx->set_tensor_n_pipeline.pipeline);
+        pass.SetBindGroup(0, bind_group);
+        pass.DispatchWorkgroups(wg_x, wg_y, 1);
+        pass.End();
+
+        wgpu::CommandBuffer commands = encoder.Finish();
+        ctx->queue.Submit(1, &commands);
+
+        src.clear();
+        descs.clear();
+    };
+
+    if (n_tensors > 0) {
+        dst_buf = ggml_webgpu_tensor_buf(tensors[0]);
+    }
+
+    for (size_t i = 0; i < n_tensors; i++) {
+        if (sizes[i] == 0) {
+            continue;
+        }
+        wgpu::Buffer buf    = ggml_webgpu_tensor_buf(tensors[i]);
+        size_t       offset = ggml_webgpu_tensor_offset(tensors[i]) + offsets[i];
+        if (!descs.empty() && (dst_buf.Get() != buf.Get() || src.size() + 4 + sizes[i] > max_binding_size ||
+                               (descs.size() + 4) * sizeof(uint32_t) > max_binding_size)) {
+            flush_tensors();
+        }
+        dst_buf = buf;
+
+        // Place the data at the same in-word byte lane as its destination
+        size_t src_offset = ROUNDUP_POW2(src.size(), 4) + offset % 4;
+        src.resize(src_offset + sizes[i]);
+        memcpy(src.data() + src_offset, data[i], sizes[i]);
+        descs.insert(descs.end(), { (uint32_t) offset, (uint32_t) (src_offset / 4), (uint32_t) sizes[i], 0 });
+    }
+    flush_tensors();
+
+    WEBGPU_CPU_PROFILE_TOTAL_END(set_tensor_n, ctx);
+}
+
 static void ggml_backend_webgpu_buffer_get_tensor(ggml_backend_buffer_t buffer,
                                                   const ggml_tensor *   tensor,
                                                   void *                data,
@@ -3918,6 +4037,117 @@ static void ggml_backend_webgpu_buffer_get_tensor(ggml_backend_buffer_t buffer,
     WEBGPU_CPU_PROFILE_TOTAL_END(get_tensor, buf_ctx->global_ctx);
 }
 
+static void ggml_backend_webgpu_buffer_get_tensor_n(ggml_backend_buffer_t              buffer,
+                                                    const struct ggml_tensor * const * tensors,
+                                                    void * const *                     data,
+                                                    const size_t *                     offsets,
+                                                    const size_t *                     sizes,
+                                                    size_t                             n_tensors) {
+    WEBGPU_CPU_PROFILE_TOTAL_START(get_tensor_n);
+    ggml_backend_webgpu_buffer_context * buf_ctx = (ggml_backend_webgpu_buffer_context *) buffer->context;
+    WEBGPU_LOG_DEBUG("ggml_backend_webgpu_buffer_get_tensor_n(" << buf_ctx->label << ", " << (const void *) tensors
+                                                                << ", " << (const void *) data << ", " << offsets
+                                                                << ", " << sizes << ", " << n_tensors << ")");
+    webgpu_global_context global_ctx = buf_ctx->global_ctx;
+    wgpu::Device          device     = global_ctx->device;
+
+    typedef struct {
+        size_t staging_size;
+        size_t align_offset;
+        size_t local_offset;
+    } tensor_desc;
+
+    std::vector<tensor_desc> t_descs;
+    std::vector<std::pair<size_t, size_t>>
+        staging_chunk_descs;  // pair (boundary id, sum of the tensor size to the bounary id)
+    t_descs.reserve(n_tensors);
+
+    size_t sum_tensor_size = 0;
+    for (size_t i = 0; i < n_tensors; i++) {
+        const ggml_tensor * tensor = tensors[i];
+        tensor_desc         td;
+
+        td.align_offset = ggml_webgpu_tensor_offset(tensor) + offsets[i];
+
+        td.local_offset = td.align_offset % 4;
+        if (td.local_offset != 0) {
+            // If offset is not a multiple of 4, we need to round it down to the previous
+            // multiple of 4
+            td.align_offset -= td.local_offset;
+        }
+
+        td.staging_size = sizes[i] + td.local_offset;
+        if (td.staging_size % 4 != 0) {
+            // If size is not a multiple of 4, we need to round it up to the next
+            // multiple of 4
+            td.staging_size += 4 - (td.staging_size % 4);
+        }
+
+        t_descs.push_back(td);
+
+        if (sum_tensor_size + td.staging_size > global_ctx->capabilities.limits.maxBufferSize) {
+            if (i == 0) {
+                GGML_ABORT("it is not expected that one tensor size exceed the one wgpu::Buffer limit size.");
+            }
+            staging_chunk_descs.push_back({ i - 1, sum_tensor_size });
+            sum_tensor_size = td.staging_size;
+        } else {
+            sum_tensor_size += td.staging_size;
+        }
+    }
+    staging_chunk_descs.push_back({ n_tensors - 1, sum_tensor_size });
+
+    std::lock_guard<std::recursive_mutex> lock(global_ctx->mutex);
+
+    size_t tsi = 0;
+    for (auto & [tei, sum_chunk_size] : staging_chunk_descs) {
+        if (global_ctx->get_tensor_staging_buf == nullptr ||
+            global_ctx->get_tensor_staging_buf.GetSize() < sum_chunk_size) {
+            // Create a new staging buffer if it doesn't exist or is too small
+            if (global_ctx->get_tensor_staging_buf) {
+                global_ctx->get_tensor_staging_buf.Destroy();
+            }
+            ggml_webgpu_create_buffer(device, global_ctx->get_tensor_staging_buf, sum_chunk_size,
+                                      wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead,
+                                      "get_tensor_staging_buf");
+        }
+
+        wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
+
+        // Copy the data of the each tensor from the buffer to the staging buffer
+        size_t i_offset = 0;
+        for (size_t i = tsi; i <= tei; i++) {
+            encoder.CopyBufferToBuffer(ggml_webgpu_tensor_buf(tensors[i]), t_descs[i].align_offset,
+                                       global_ctx->get_tensor_staging_buf, i_offset, t_descs[i].staging_size);
+            i_offset += t_descs[i].staging_size;
+        }
+
+        wgpu::CommandBuffer commands = encoder.Finish();
+
+        // Submit the command buffer to the queue
+        global_ctx->queue.Submit(1, &commands);
+
+        // Map the staging buffer to read the data
+        ggml_backend_webgpu_map_buffer(global_ctx, global_ctx->get_tensor_staging_buf, wgpu::MapMode::Read, 0,
+                                       sum_chunk_size);
+        // Must specify size here since the staging buffer might be larger than the tensor size
+        const void * mapped_range = global_ctx->get_tensor_staging_buf.GetConstMappedRange(0, sum_chunk_size);
+
+        i_offset = 0;
+        for (size_t i = tsi; i <= tei; i++) {
+            // Copy the data from the mapped range to the output buffer
+            std::memcpy(data[i], (const void *) ((const char *) mapped_range + i_offset + t_descs[i].local_offset),
+                        sizes[i]);
+            i_offset += t_descs[i].staging_size;
+        }
+
+        tsi = tei + 1;
+        global_ctx->get_tensor_staging_buf.Unmap();
+    }
+
+    WEBGPU_CPU_PROFILE_TOTAL_END(get_tensor_n, buf_ctx->global_ctx);
+}
+
 static void ggml_backend_webgpu_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
     WEBGPU_LOG_DEBUG("ggml_backend_webgpu_buffer_clear(" << buffer << ", " << (uint32_t) value << ")");
     WEBGPU_CPU_PROFILE_TOTAL_START(clear);
@@ -3938,8 +4168,8 @@ static ggml_backend_buffer_i ggml_backend_webgpu_buffer_interface = {
     /* .cpy_tensor      = */ NULL,  // TODO: optional, implement this
     /* .clear           = */ ggml_backend_webgpu_buffer_clear,
     /* .reset           = */ NULL,  // TODO: optional, think it coordinates with
-    /* .set_tensor_n    = */ NULL,
-    /* .get_tensor_n    = */ NULL,
+    /* .set_tensor_n    = */ ggml_backend_webgpu_buffer_set_tensor_n,
+    /* .get_tensor_n    = */ ggml_backend_webgpu_buffer_get_tensor_n,
     /* .cpy_tensor_n    = */ NULL,
 };
 
@@ -4154,6 +4384,13 @@ static void ggml_webgpu_init_memset_pipeline(webgpu_global_context & ctx) {
     ctx->memset_pipeline = ggml_webgpu_create_pipeline(ctx->device, wgsl_memset, "memset", constants);
 }
 
+static void ggml_webgpu_init_scatter_write_pipeline(webgpu_global_context & ctx) {
+    std::vector<wgpu::ConstantEntry> constants(1);
+    constants[0].key           = "wg_size";
+    constants[0].value         = ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
+    ctx->set_tensor_n_pipeline = ggml_webgpu_create_pipeline(ctx->device, wgsl_set_tensor_n, "set_tensor_n", constants);
+}
+
 static void ggml_backend_webgpu_request_adapter(wgpu::Instance & instance, wgpu::Adapter & adapter) {
     wgpu::RequestAdapterOptions options = {};
 
@@ -4297,6 +4534,7 @@ static void create_webgpu_device(ggml_backend_webgpu_reg_context * ctx) {
     GGML_ASSERT(ctx->webgpu_global_ctx->device != nullptr);
 
     ggml_webgpu_init_memset_pipeline(ctx->webgpu_global_ctx);
+    ggml_webgpu_init_scatter_write_pipeline(ctx->webgpu_global_ctx);
     ggml_webgpu_create_buffer(ctx->webgpu_global_ctx->device, ctx->webgpu_global_ctx->memset_params_buf,
                               WEBGPU_PARAMS_BUF_SIZE_BYTES, wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Uniform,
                               "memset_params_buf");
