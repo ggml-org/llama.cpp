@@ -3513,6 +3513,27 @@ size_t ggml_metal_op_flash_attn_ext_extra_idx(const ggml_tensor * op) {
     return GGML_PAD(sizeof(int32_t)*(size_t) n_kv_max_padded*ne31*ne32*ne33, 16);
 }
 
+// GQA-bundled fa_vec decode switches, read once:
+//   GGML_METAL_FA_VEC_GQA=1           enable
+//   GGML_METAL_FA_VEC_GQA_MAXNSG=2..8 cap on query heads per threadgroup (default 8)
+//   GGML_METAL_FA_VEC_GQA_MULTI=1     also for multi-token steps (speculative/MTP verify, parallel slots)
+struct gqa_ctl_t { bool on; int32_t cap; bool multi; };
+
+static gqa_ctl_t gqa_ctl_from_env() {
+    auto ev = [](const char * k) { const char * v = getenv(k); return (v && v[0]) ? v : nullptr; };
+    gqa_ctl_t c = { false, 8, false };
+    const char * on = ev("GGML_METAL_FA_VEC_GQA");
+    c.on = on && on[0] == '1' && on[1] == 0;
+    if (const char * v = ev("GGML_METAL_FA_VEC_GQA_MAXNSG")) { c.cap = std::max(2, std::min(8, atoi(v))); }
+    if (const char * v = ev("GGML_METAL_FA_VEC_GQA_MULTI")) { c.multi = v[0] == '1'; }
+    return c;
+}
+
+static gqa_ctl_t gqa_ctl_get() {
+    static const gqa_ctl_t c = gqa_ctl_from_env();
+    return c;
+}
+
 int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
     ggml_tensor * op = ctx->node(idx);
 
@@ -4105,6 +4126,29 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
             nqptg = cfg.Q;  // = 1
         }
 
+        // gqa-bundled decode (opt-in, GGML_METAL_FA_VEC_GQA=1): one threadgroup
+        // per KV head, the NSG simdgroups are the query heads of the group and
+        // share one KV sweep, so the KV cache is read once per KV head instead
+        // of once per query head
+        bool use_gqa = false;
+        if (!use_sparse && ne02 > ne12 && ne02 % ne12 == 0) {
+            const gqa_ctl_t ctl = gqa_ctl_get();
+            const int32_t g = ne02 / ne12;
+            // multi: allow several query rows per step (spec/MTP verify, parallel slots)
+            if (ctl.on && (ctl.multi || (nqptg == 1 && ne01 == 1)) && g >= 2) {
+                // largest divisor of g <= cap that fits threadgroup memory; a group larger
+                // than that is split over g/nsg threadgroups of the same KV head
+                for (int32_t d = std::min<int32_t>(g, ctl.cap); d >= 2; --d) {
+                    if (g % d == 0 && fa_vec_smem(d, nqptg) <= props_dev->max_theadgroup_memory_size) {
+                        nsg = d;
+                        nwg = 32;
+                        use_gqa = true;
+                        break;
+                    }
+                }
+            }
+        }
+
         const int32_t ns10 = nb11_attn/nb10_attn;
         const int32_t ns20 = nb21_attn/nb20_attn;
 
@@ -4144,7 +4188,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
             /*.n_kv_max_padded =*/ n_kv_max_padded,
         };
 
-        auto pipeline = ggml_metal_library_get_pipeline_flash_attn_ext_vec(lib, op, has_mask, has_sinks, has_bias, has_scap, has_kvpad, use_sparse, nqptg, cfg.NE, nsg, nwg, use_kv_f16, ns10, ns20);
+        auto pipeline = ggml_metal_library_get_pipeline_flash_attn_ext_vec(lib, op, has_mask, has_sinks, has_bias, has_scap, has_kvpad, use_sparse, nqptg, cfg.NE, nsg, nwg, use_kv_f16, ns10, ns20, use_gqa);
 
         GGML_ASSERT(nsg*32 <= ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
 
@@ -4168,7 +4212,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
 
             ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
 
-            ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + nqptg - 1)/nqptg, (ne02 + nhptg - 1)/nhptg, ne03*nwg, 32, nsg, 1);
+            ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + nqptg - 1)/nqptg, use_gqa ? ne02/nsg : (ne02 + nhptg - 1)/nhptg, ne03*nwg, 32, nsg, 1);
         } else {
             // sanity checks
             assert(ggml_metal_op_flash_attn_ext_extra_tmp(op) != 0);
@@ -4181,7 +4225,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
             ggml_metal_encoder_set_buffer(enc, bid_tmp, 7);
 
             ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
-            ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + nqptg - 1)/nqptg, (ne02 + nhptg - 1)/nhptg, ne03*nwg, 32, nsg, 1);
+            ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + nqptg - 1)/nqptg, use_gqa ? ne02/nsg : (ne02 + nhptg - 1)/nhptg, ne03*nwg, 32, nsg, 1);
 
             // sync the 2 kernels
             ggml_metal_op_concurrency_reset(ctx);
