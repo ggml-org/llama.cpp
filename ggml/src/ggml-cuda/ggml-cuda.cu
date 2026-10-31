@@ -2239,7 +2239,7 @@ static bool ggml_cuda_try_fuse_swiglu_mmq(ggml_backend_cuda_context & ctx, const
             ggml_cuda_mul_mat_takes(ctx, mm->src[0], glu, mm) != GGML_CUDA_MUL_MAT_KERNEL_MMQ) {
         return false;
     }
-    ggml_cuda_mul_mat_q(ctx, mm->src[0], glu, nullptr, mm, glu);
+    ggml_cuda_mul_mat_q(ctx, mm->src[0], glu, nullptr, mm, nullptr, glu);
     return true;
 }
 

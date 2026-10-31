@@ -589,17 +589,6 @@ void llm_graph_input_attn_kv::set_input(const llama_ubatch * ubatch) {
     if (self_kq_mask && self_kq_mask->buffer) {
         mctx->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn);
     }
-<<<<<<< HEAD
-=======
-
-    if (self_k_rot && self_k_rot->buffer) {
-        mctx->set_input_k_rot(self_k_rot);
-    }
-
-    if (self_v_rot && self_v_rot->buffer) {
-        mctx->set_input_v_rot(self_v_rot);
-    }
-
     // unallocated when unused (gathers, nothing streams)
     if (self_kv_pages && self_kv_pages->buffer) {
         mctx->set_input_kv_pages(self_kv_pages);
@@ -615,7 +604,6 @@ static bool can_reuse_kv_stream(const llm_graph_input_attn_kv * inp, const llama
     return !stream || (inp->kv_synced == stream->synced() &&
             (inp->kv_layout == stream->layout() || inp->self_k_idxs->ne[0] <= llama_kv_stream::decode_max_tokens ||
              stream->paged_prefill()));
->>>>>>> origin/feature/adaptive-kv-stream-rocm
 }
 
 bool llm_graph_input_attn_kv::can_reuse(const llm_graph_params & params) {
@@ -1281,37 +1269,7 @@ void llm_graph_input_mem_hybrid_iswa::set_input(const llama_ubatch * ubatch) {
         attn_ctx->get_swa()->set_input_kq_mask(inp_attn->self_kq_mask_swa, ubatch, cparams.causal_attn);
     }
 
-<<<<<<< HEAD
-    const int64_t n_rs = mctx->get_recr()->get_n_rs();
-
-    if (inp_rs->s_copy) {
-        GGML_ASSERT(ggml_backend_buffer_is_host(inp_rs->s_copy->buffer));
-        int32_t * data = (int32_t *) inp_rs->s_copy->data;
-
-        // assuming copy destinations ALWAYS happen ONLY on the cells between head and head+n
-        for (uint32_t i = 0; i < n_rs; ++i) {
-            data[i] = mctx->get_recr()->s_copy(i);
-        }
-    }
-=======
-    if (inp_attn->self_k_rot) {
-        attn_ctx->get_base()->set_input_k_rot(inp_attn->self_k_rot);
-    }
-
-    if (inp_attn->self_v_rot) {
-        attn_ctx->get_base()->set_input_v_rot(inp_attn->self_v_rot);
-    }
-
-    if (inp_attn->self_k_rot_swa) {
-        attn_ctx->get_swa()->set_input_k_rot(inp_attn->self_k_rot_swa);
-    }
-
-    if (inp_attn->self_v_rot_swa) {
-        attn_ctx->get_swa()->set_input_v_rot(inp_attn->self_v_rot_swa);
-    }
-
     inp_rs->set_input_rs(mctx->get_recr());
->>>>>>> origin/feature/adaptive-kv-stream-rocm
 }
 
 bool llm_graph_input_mem_hybrid_iswa::can_reuse(const llm_graph_params & params) {
@@ -3305,10 +3263,10 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, 0, kq_scale, il);
     cb(cur, "kqv_out", il);
 
-<<<<<<< HEAD
     if (inp->self_v_rot[il]) {
         cur = llama_mul_mat_hadamard(ctx0, cur, inp->self_v_rot[il]);
-=======
+    }
+
     // KV streaming: the attention reads the pool through the layer's page table, and waits for the streamed pages
     // note: build_attn_mha already expanded the node, so new sources have to be added to the graph explicitly
     if (inp->self_kv_pages) {
@@ -3329,11 +3287,6 @@ ggml_tensor * llm_graph_context::build_attn(
             ggml_flash_attn_ext_set_sync(fa.tensor, inp->self_kv_tag, kv_attn.ready, kv_attn.consumed);
             ggml_build_forward_expand(gf, inp->self_kv_tag);
         }
-    }
-
-    if (inp->self_v_rot) {
-        cur = llama_mul_mat_hadamard(ctx0, cur, inp->self_v_rot);
->>>>>>> origin/feature/adaptive-kv-stream-rocm
     }
 
     if (wo) {

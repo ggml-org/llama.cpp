@@ -854,11 +854,11 @@ void llama_context::sched_reserve(bool quiet) {
     // prefill buffers before a larger batch
     if (phase_decode) {
         const uint32_t n_tokens_dec = std::min(n_tokens, cparams.n_tokens_decode);
-        if (!graph_reserve(n_tokens_dec, n_seqs, n_tokens_dec, mctx.get(), model.hparams.no_alloc)) {
+        if (!graph_reserve(n_tokens_dec, n_seqs, n_tokens_dec, mctx.get(), model.no_alloc())) {
             throw std::runtime_error("failed to allocate compute decode buffers");
         }
         for (size_t i = 0; i < backend_ptrs.size(); ++i) {
-            if (!model.hparams.no_alloc) {
+            if (!model.no_alloc()) {
                 backend_buf_exp_size[i] = ggml_backend_sched_get_buffer_size(sched.get(), backend_ptrs[i]);
             }
             if (backend_buf_exp_size[i] > 1) {

@@ -163,12 +163,9 @@ static int ggml_cuda_mmq_get_J_best(
 
 void ggml_cuda_mul_mat_q(
         ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst,
-<<<<<<< HEAD
-        const ggml_cuda_mm_fusion_args_host * fusion) {
-=======
-        const ggml_tensor * swiglu) {
+        const ggml_cuda_mm_fusion_args_host * fusion, const ggml_tensor * swiglu) {
+    GGML_ASSERT(!fusion || !swiglu);
     GGML_ASSERT(!swiglu || (!ids && src1->ne[2] == 1 && src1->ne[3] == 1));
->>>>>>> origin/feature/adaptive-kv-stream-rocm
     GGML_ASSERT(        src1->type == GGML_TYPE_F32);
     GGML_ASSERT(        dst->type  == GGML_TYPE_F32);
     GGML_ASSERT(!ids || ids->type  == GGML_TYPE_I32); // Optional, used for batched GGML_MUL_MAT_ID.

@@ -92,11 +92,7 @@ static __device__ __forceinline__ float op_expm1(float x) {
 }
 
 static __device__ __forceinline__ float op_softplus(float x) {
-<<<<<<< HEAD
-    return (x > 20.0f) ? x : log1pf(expf(x));
-=======
     return ggml_cuda_op_softplus_single(x);
->>>>>>> origin/feature/adaptive-kv-stream-rocm
 }
 
 static __device__ __forceinline__ float op_elu(float x) {

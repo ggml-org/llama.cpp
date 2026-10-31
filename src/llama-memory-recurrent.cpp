@@ -26,12 +26,8 @@ llama_memory_recurrent::llama_memory_recurrent(
                  uint32_t   mem_size,
                  uint32_t   n_seq_max,
                  uint32_t   n_rs_seq,
-<<<<<<< HEAD
-    const layer_filter_cb & filter) : hparams(model.hparams), n_seq_max(n_seq_max), ctxs_bufs(no_alloc) {
-=======
     const layer_filter_cb & filter,
-                 uint32_t   n_rs_rec) : hparams(model.hparams), n_seq_max(n_seq_max) {
->>>>>>> origin/feature/adaptive-kv-stream-rocm
+                 uint32_t   n_rs_rec) : hparams(model.hparams), n_seq_max(n_seq_max), ctxs_bufs(no_alloc) {
     const int32_t n_layer = hparams.n_layer();
 
     // ReplaySSM records the updates of the delta-net layers, of one sequence

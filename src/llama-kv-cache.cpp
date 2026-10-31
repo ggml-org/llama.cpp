@@ -80,13 +80,9 @@ llama_kv_cache::llama_kv_cache(
     const layer_filter_cb & filter,
     const  layer_reuse_cb & reuse,
     const  layer_share_cb & share,
-<<<<<<< HEAD
-               const char * name_tag) :
-=======
              const char *   name_tag,
                  size_t   stream_resident_size,
                  size_t   stream_resident_size_decode) :
->>>>>>> origin/feature/adaptive-kv-stream-rocm
     model(model), hparams(hparams), v_trans(v_trans),
     n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_swa(n_swa),
     attn_rot_bufs(no_alloc), swa_type(swa_type), ctxs_bufs(no_alloc),
@@ -342,7 +338,7 @@ llama_kv_cache::llama_kv_cache(
         }
         ggml_backend_dev_t dev = ggml_backend_buft_get_device(ggml_backend_buffer_get_type(layers[0].k->buffer));
         stream = std::make_unique<llama_kv_stream>(sl, n_slots, n_slots_decode, kv_size, dev, hparams.no_alloc);
->>>>>>> origin/feature/adaptive-kv-stream-rocm
+
     }
 
     {
@@ -812,16 +808,7 @@ llama_pos llama_kv_cache::seq_pos_max(llama_seq_id seq_id) const {
 }
 
 std::map<ggml_backend_buffer_type_t, size_t> llama_kv_cache::memory_breakdown() const {
-<<<<<<< HEAD
     auto ret = ctxs_bufs.memory_breakdown();
-=======
-    std::map<ggml_backend_buffer_type_t, size_t> ret;
-    for (const auto & [ctx, buf] : ctxs_bufs) {
-        if (!buf) {
-            continue; // a KV stream pool that could not be allocated
-        }
-        ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(buf.get());
->>>>>>> origin/feature/adaptive-kv-stream-rocm
 
     for (const auto & [buft, size] : attn_rot_bufs.memory_breakdown()) {
         ret[buft] += size;
