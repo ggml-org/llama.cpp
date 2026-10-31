@@ -7419,7 +7419,16 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
                 if (!is_memcpy && (!cpy_type_ok(src0_type) || !cpy_type_ok(src1_type))) {
                     return false;
                 }
-
+                // I16/I32 cross-type conversions only exist for F32<->I32; the rest have no kernels
+                const bool involves_i16_i32 = (src0_type == GGML_TYPE_I16 || src0_type == GGML_TYPE_I32) ||
+                                              (src1_type == GGML_TYPE_I16 || src1_type == GGML_TYPE_I32);
+                if (involves_i16_i32 && src0_type != src1_type &&
+                    !((src0_type == GGML_TYPE_F32 && src1_type ==
+GGML_TYPE_I32) ||
+                      (src0_type == GGML_TYPE_I32 && src1_type ==
+GGML_TYPE_F32))) {
+                    return false;
+                }
                 if (src0_type == GGML_TYPE_F16) {
                     if (src1_type == GGML_TYPE_Q2_K ||
                         src1_type == GGML_TYPE_Q3_K ||
