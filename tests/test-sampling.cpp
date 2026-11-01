@@ -1,4 +1,6 @@
 #include "ggml.h"
+#include "ggml-alloc.h"
+#include "ggml-backend.h"
 #include "llama.h"
 
 #ifdef NDEBUG
@@ -8,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -89,6 +92,107 @@ static void test_dist_singleton_rng() {
 
     llama_sampler_free(singleton);
     llama_sampler_free(control);
+}
+
+static std::vector<float> apply_logit_bias(const std::vector<float> & logits, const std::vector<llama_logit_bias> & bias, bool backend) {
+    auto * sampler = llama_sampler_init_logit_bias(logits.size(), bias.size(), bias.data());
+    std::vector<float> result(logits.size());
+
+    if (backend) {
+        auto * device = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
+        GGML_ASSERT(device);
+        GGML_ASSERT(sampler->iface->backend_init(sampler, ggml_backend_get_default_buffer_type(device), 1));
+
+        ggml_init_params params = { 128 * ggml_tensor_overhead() + ggml_graph_overhead(), nullptr, true };
+        auto * ctx = ggml_init(params);
+        GGML_ASSERT(ctx);
+        auto * graph = ggml_new_graph(ctx);
+        auto * input = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, logits.size());
+        llama_sampler_data data = { input, nullptr, nullptr, nullptr };
+        sampler->iface->backend_apply(sampler, ctx, graph, &data);
+        ggml_build_forward_expand(graph, data.logits);
+
+        auto * buffer = ggml_backend_alloc_ctx_tensors(ctx, device);
+        GGML_ASSERT(buffer);
+        ggml_backend_tensor_set(input, logits.data(), 0, logits.size() * sizeof(float));
+        if (sampler->iface->backend_set_input) {
+            sampler->iface->backend_set_input(sampler);
+        }
+        GGML_ASSERT(ggml_backend_graph_compute(device, graph) == GGML_STATUS_SUCCESS);
+        ggml_backend_tensor_get(data.logits, result.data(), 0, result.size() * sizeof(float));
+
+        llama_sampler_free(sampler);
+        ggml_backend_buffer_free(buffer);
+        ggml_free(ctx);
+        ggml_backend_free(device);
+    } else {
+        std::vector<llama_token_data> cur;
+        for (size_t i = 0; i < logits.size(); ++i) {
+            cur.push_back({ (llama_token) i, logits[i], 0.0f });
+        }
+        llama_token_data_array cur_p = { cur.data(), cur.size(), -1, false };
+        llama_sampler_apply(sampler, &cur_p);
+        for (size_t i = 0; i < cur.size(); ++i) {
+            result[i] = cur[i].logit;
+        }
+        llama_sampler_free(sampler);
+    }
+
+    return result;
+}
+
+static void test_logit_bias() {
+    const float delta = std::ldexp(1.0f, -19);
+    const std::vector<float> logits = { 17.0f, 17.0f - 2 * delta, -INFINITY };
+    const std::vector<llama_logit_bias> bias = { { 0, 15.0f - delta }, { 1, 15.0f + 2 * delta } };
+    auto * greedy = llama_sampler_init_greedy();
+    const auto cpu = apply_logit_bias(logits, bias, false);
+
+    for (bool backend : { false, true }) {
+        // Raw FP32 bias addition changes the winner when these logits are shifted by +1.
+        const auto reference = apply_logit_bias(logits, bias, backend);
+        GGML_ASSERT(std::memcmp(reference.data(), cpu.data(), cpu.size() * sizeof(float)) == 0);
+        GGML_ASSERT(sample_dist(greedy, reference) == 1);
+        for (float shift : { 1.0f, -32.0f, -16.0f, -1.0f, 0.0f, 16.0f }) {
+            const std::vector<float> shifted = { logits[0] + shift, logits[1] + shift, -INFINITY };
+            const auto result = apply_logit_bias(shifted, bias, backend);
+            GGML_ASSERT(sample_dist(greedy, result) == 1);
+            GGML_ASSERT(std::memcmp(result.data(), reference.data(), result.size() * sizeof(float)) == 0);
+        }
+
+        // Zero biases and token masks do not change the scale used by later penalties.
+        GGML_ASSERT(apply_logit_bias(logits, {}, backend) == logits);
+        GGML_ASSERT(apply_logit_bias(logits, { { 0, 0.0f } }, backend) == logits);
+        GGML_ASSERT(apply_logit_bias(logits, { { 0, -INFINITY } }, backend) == std::vector<float>({ -INFINITY, logits[1], -INFINITY }));
+
+        const auto masked = apply_logit_bias(logits, { { 0, -INFINITY }, { 1, 1.0f } }, backend);
+        GGML_ASSERT(masked == std::vector<float>({ -INFINITY, 1.0f - 2 * delta, -INFINITY }));
+        const auto negative = apply_logit_bias(logits, { { 0, -1.0f } }, backend);
+        GGML_ASSERT(negative == std::vector<float>({ -1.0f, -2 * delta, -INFINITY }));
+
+        const auto all_masked = apply_logit_bias({ -INFINITY, -INFINITY }, { { 0, 1.0f } }, backend);
+        GGML_ASSERT(all_masked == std::vector<float>({ -INFINITY, -INFINITY }));
+        GGML_ASSERT(apply_logit_bias({ 17.0f }, { { 0, 2.0f } }, backend) == std::vector<float>({ 2.0f }));
+
+        const auto zeros = apply_logit_bias({ 0.0f, -0.0f, -1.0f }, { { 2, 1.0f } }, backend);
+        for (float logit : zeros) {
+            GGML_ASSERT(logit == 0.0f && !std::signbit(logit));
+        }
+    }
+
+    // A filtered or shuffled candidate array still uses token IDs for bias lookup.
+    std::vector<llama_token_data> cur = { { 1, logits[1], 0.0f }, { 0, logits[0], 0.0f } };
+    llama_token_data_array cur_p = { cur.data(), cur.size(), -1, false };
+    auto * sampler = llama_sampler_init_logit_bias(3, bias.size(), bias.data());
+    auto * clone = llama_sampler_clone(sampler);
+    llama_sampler_free(sampler);
+    llama_sampler_apply(clone, &cur_p);
+    llama_sampler_apply(greedy, &cur_p);
+    GGML_ASSERT(cur[cur_p.selected].id == 1);
+    llama_token_data_array empty = { nullptr, 0, -1, false };
+    llama_sampler_apply(clone, &empty);
+    llama_sampler_free(clone);
+    llama_sampler_free(greedy);
 }
 
 static void test_temp(const std::vector<float> & probs, const std::vector<float> & probs_expected, float temp) {
@@ -337,6 +441,9 @@ static void test_perf() {
 
 int main(void) {
     ggml_time_init();
+    ggml_backend_load_all();
+
+    test_logit_bias();
 
     test_dist_singleton_rng();
 

@@ -3917,6 +3917,7 @@ struct llama_sampler_logit_bias : public llama_sampler_backend {
     const int32_t n_vocab;
 
     const std::vector<llama_logit_bias> logit_bias;
+    const bool center_logits;
 
     std::vector<llama_logit_bias> to_search;
 
@@ -3934,6 +3935,19 @@ static void llama_sampler_logit_bias_apply(struct llama_sampler * smpl, llama_to
 
     if (ctx->logit_bias.empty()) {
         return;
+    }
+
+    // Center before bias rounding; adding zero also normalizes signed zeros.
+    if (ctx->center_logits) {
+        float max_logit = -FLT_MAX;
+        for (size_t i = 0; i < cur_p->size; ++i) {
+            max_logit = std::max(max_logit, cur_p->data[i].logit);
+        }
+        // Keep infinite masks intact, including when all candidates are masked.
+        max_logit = std::min(max_logit, FLT_MAX);
+        for (size_t i = 0; i < cur_p->size; ++i) {
+            cur_p->data[i].logit = (cur_p->data[i].logit - max_logit) + 0.0f;
+        }
     }
 
     ctx->to_search.clear();
@@ -4004,6 +4018,16 @@ static void llama_sampler_logit_bias_backend_apply(
     cur = ggml_set_rows(ctx, cur, sctx->inp_logit_bias, sctx->inp_logit_idxs);
     cur = ggml_reshape_1d(ctx, cur, ggml_nelements(cur));
 
+    if (sctx->center_logits) {
+        auto * logits = ggml_reshape_1d(ctx, data->logits, ggml_nelements(data->logits));
+        auto * max_idx = ggml_argmax(ctx, logits);
+        auto * rows = ggml_reshape_2d(ctx, logits, 1, logits->ne[0]);
+        auto * max_logit = ggml_get_rows(ctx, rows, max_idx);
+        max_logit = ggml_clamp(ctx, max_logit, -FLT_MAX, FLT_MAX);
+        data->logits = ggml_sub(ctx, data->logits, max_logit);
+        data->logits = ggml_add(ctx, data->logits, ggml_fill(ctx, max_logit, 0.0f));
+    }
+
     data->logits = ggml_add(ctx, data->logits, cur);
 }
 
@@ -4041,18 +4065,14 @@ static bool llama_sampler_logit_bias_backend_init(
         struct llama_sampler       * smpl,
         ggml_backend_buffer_type_t   buft,
         uint32_t                     n_outputs_max_per_seq) {
-    GGML_UNUSED(buft);
     GGML_UNUSED(n_outputs_max_per_seq);
 
     auto * sctx = (llama_sampler_logit_bias *) smpl->ctx;
 
-    sctx->init(true);
+    const bool res = llama_sampler_backend_support(smpl, buft);
+    sctx->init(res);
 
-    if (sctx->logit_bias.empty()) {
-        return true;
-    }
-
-    return true;
+    return res;
 }
 
 static struct llama_sampler_i llama_sampler_logit_bias_i = {
@@ -4080,12 +4100,22 @@ struct llama_sampler * llama_sampler_init_logit_bias(
         return llama_sampler_init_empty("?logit-bias");
     }
 
+    bool center_logits = false;
+    for (int32_t i = 0; i < n_logit_bias; ++i) {
+        const auto & lb = logit_bias[i];
+        if (lb.token >= 0 && lb.token < n_vocab && std::isfinite(lb.bias) && lb.bias != 0.0f) {
+            center_logits = true;
+            break;
+        }
+    }
+
     return llama_sampler_init(
         /* .iface = */ &llama_sampler_logit_bias_i,
         /* .ctx   = */ new llama_sampler_logit_bias {
             ("logit-bias"),
             /* .n_vocab        = */ n_vocab,
             /* .logit_bias     = */ std::vector<llama_logit_bias>(logit_bias, logit_bias + n_logit_bias),
+            /* .center_logits  = */ center_logits,
             /* .to_search      = */ {},
             /* .inp_logit_bias = */ nullptr,
             /* .inp_logit_idxs = */ nullptr,
