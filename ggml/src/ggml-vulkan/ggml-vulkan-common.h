@@ -86,6 +86,7 @@ void ggml_vk_cmd_label_begin(vk::CommandBuffer buf, const char * name);
 void ggml_vk_ctx_end(vk_context& ctx);
 void ggml_vk_ctx_begin(vk_device& device, vk_context& subctx);
 vk_context ggml_vk_get_compute_ctx(ggml_backend_vk_context * ctx);
+vk::Semaphore ggml_vk_create_binary_semaphore(ggml_backend_vk_context * ctx);
 vk_context ggml_vk_get_transfer_ctx(ggml_backend_vk_context * ctx);
 bool ggml_vk_submit_transfer_ctx(ggml_backend_vk_context * ctx);
 size_t ggml_vk_align_size(size_t width, size_t align);
@@ -233,7 +234,15 @@ size_t ggml_backend_vk_buffer_type_get_alignment(ggml_backend_buffer_type_t buft
 size_t ggml_backend_vk_buffer_type_get_max_size(ggml_backend_buffer_type_t buft);
 size_t ggml_backend_vk_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor);
 void ggml_backend_vk_free(ggml_backend_t backend);
+ggml_backend_buffer_t ggml_backend_vk_device_buffer_from_host_ptr(ggml_backend_dev_t dev, void * ptr, size_t size, size_t max_tensor_size);
 ggml_backend_reg_t ggml_backend_vk_reg();
+
+// comm
+#if !defined(_WIN32)
+void * ggml_backend_vk_comm_init(ggml_backend_t * backends, size_t n_backends);
+void ggml_backend_vk_comm_free(void * comm_ctx);
+bool ggml_backend_vk_comm_allreduce_tensor(void * comm_ctx, ggml_tensor ** tensors);
+#endif
 
 // debug
 int64_t ggml_vk_get_op_batch_size(const ggml_tensor * op);
