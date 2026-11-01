@@ -1231,6 +1231,7 @@ class ggml_webgpu_shader_lib {
     std::unordered_map<int, webgpu_pipeline> argsort_pipelines;        // key is order
     std::unordered_map<int, webgpu_pipeline> argsort_merge_pipelines;  // key is order
     std::unordered_map<int, webgpu_pipeline> cumsum_pipelines;         // key is fixed, no variants yet
+    std::unordered_map<int, webgpu_pipeline> arange_pipelines;         // key is fixed, no variants yet
     std::unordered_map<ggml_webgpu_row_norm_pipeline_key, webgpu_pipeline, ggml_webgpu_row_norm_pipeline_key_hash>
         row_norm_pipelines;                                            // op/inplace
 
@@ -1939,6 +1940,24 @@ class ggml_webgpu_shader_lib {
         webgpu_pipeline pipeline       = ggml_webgpu_create_pipeline(device, processed, variant);
         gated_delta_net_pipelines[key] = pipeline;
         return gated_delta_net_pipelines[key];
+    }
+
+    webgpu_pipeline get_arange_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        auto it = arange_pipelines.find(1);
+        if (it != arange_pipelines.end()) {
+            return it->second;
+        }
+
+        std::vector<std::string> defines;
+        defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+
+        auto processed           = preprocessor.preprocess(wgsl_arange, defines);
+        auto decisions           = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+        decisions->wg_size       = context.max_wg_size;
+        webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, "arange");
+        pipeline.context         = decisions;
+        arange_pipelines[1]      = pipeline;
+        return arange_pipelines[1];
     }
 
     webgpu_pipeline get_pad_pipeline(const ggml_webgpu_shader_lib_context & context) {
