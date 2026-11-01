@@ -582,15 +582,17 @@
 					role="button"
 					tabindex="0"
 				>
+					<!-- the chat form's add-button key whenever the sidebar shows, open or peeking;
+					     no fill while it is hidden; hover and focus never change the fill -->
 					<ActionIcon
 						ariaLabel={!uiStore.isSidebarExpanded
 							? 'Expand navigation'
 							: isLogoToggle
 								? 'Collapse navigation'
 								: 'Go to start'}
-						class="{uiStore.isSidebarExpanded
-							? 'bg-muted! md:bg-foreground/5!'
-							: 'bg-transparent!'} md:size-9 size-10 rounded-full md:hover:bg-foreground/10! pointer-events-auto"
+						class="pointer-events-auto size-10 rounded-full! md:size-9 {isStripHidden
+							? 'bg-transparent! hover:bg-transparent!'
+							: 'matte-key bg-background! hover:bg-background! dark:bg-muted-foreground/15! dark:hover:bg-muted-foreground/15!'}"
 						href={uiStore.isSidebarExpanded && !isLogoToggle ? ROUTES.START : undefined}
 						icon={isLogoToggle && logoHovered
 							? uiStore.isSidebarExpanded
