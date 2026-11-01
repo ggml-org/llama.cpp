@@ -3689,6 +3689,24 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_reconstruction()
             .run();
 
+        // Qwen may emit an optional argument before a required one
+        tst.test(
+               "<tool_call>\n"
+               "<function=special_function_with_opt>\n"
+               "<parameter=arg2>\n"
+               "2\n"
+               "</parameter>\n"
+               "<parameter=arg1>\n"
+               "1\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({ special_function_tool_with_optional_param })
+            .expect_tool_calls({
+                { "special_function_with_opt", R"({"arg2": 2, "arg1": 1})", {} },
+            })
+            .run();
+
         // Test with code content (multiline)
         tst.test(
                "<tool_call>\n"
