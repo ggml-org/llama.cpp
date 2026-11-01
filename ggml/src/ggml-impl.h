@@ -206,7 +206,6 @@ void ggml_hash_set_reset(struct ggml_hash_set * hash_set);
 
 // returns true if key is in the hash set
 static bool ggml_hash_contains(const struct ggml_hash_set * hash_set, struct ggml_tensor * key);
-
 // returns GGML_HASHSET_FULL if table is full, otherwise the current index of the key or where it should be inserted
 static size_t ggml_hash_find(const struct ggml_hash_set * hash_set, const struct ggml_tensor * key);
 

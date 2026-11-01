@@ -549,7 +549,8 @@ extern "C" {
         GGML_GLU_OP_REGLU,
         GGML_GLU_OP_GEGLU,
         GGML_GLU_OP_SWIGLU,
-
+        GGML_GLU_OP_SWIGLU_CLAMP,
+        GGML_GLU_OP_SWIGLU_OAI,
         GGML_GLU_OP_COUNT,
     };
 
@@ -688,6 +689,7 @@ extern "C" {
     GGML_API int  ggml_n_dims       (const struct ggml_tensor * tensor); // returns 1 for scalars
 
     // returns whether the tensor elements can be iterated over with a flattened index (no gaps, no permutation)
+    GGML_API bool ggml_is_contiguous_strided_1(const struct ggml_tensor* tensor);
     GGML_API bool ggml_is_contiguous  (const struct ggml_tensor * tensor);
     GGML_API bool ggml_is_contiguous_0(const struct ggml_tensor * tensor); // same as ggml_is_contiguous()
     GGML_API bool ggml_is_contiguous_1(const struct ggml_tensor * tensor); // contiguous for dims >= 1

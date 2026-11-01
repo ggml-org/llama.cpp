@@ -382,6 +382,15 @@ struct test_case {
         return 0;
     }
 
+    virtual bool eval_backend_only() {
+        return false;
+    }
+
+    virtual bool validate_output(ggml_tensor * out) {
+        GGML_UNUSED(out);
+        return false;
+    }
+
     virtual bool run_whole_graph() { return false; }
 
     ggml_cgraph * gf = nullptr;
@@ -458,12 +467,20 @@ struct test_case {
             return true;
         }
 
+        const bool backend_only = eval_backend_only();
+        if (backend_only && ggml_backend_dev_type(ggml_backend_get_device(backend1)) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+            printf("not supported [%s]\n", ggml_backend_name(backend1));
+            ggml_free(ctx);
+            return true;
+        }
+
         printf("  %s(%s): ", op_desc(out).c_str(), vars().c_str());
         fflush(stdout);
 
         // check if the backends support the ops
         bool supported = true;
-        for (ggml_backend_t backend : {backend1, backend2}) {
+        for (int i = 0; i < (backend_only ? 1 : 2); ++i) {
+            ggml_backend_t backend = i == 0 ? backend1 : backend2;
             for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
                 if (!ggml_backend_supports_op(backend, t)) {
                     printf("not supported [%s] ", ggml_backend_name(backend));
@@ -500,6 +517,23 @@ struct test_case {
 
         // randomize tensors
         initialize_tensors(ctx);
+
+        if (backend_only) {
+            const ggml_status status = ggml_backend_graph_compute(backend1, gf);
+            if (status != GGML_STATUS_SUCCESS) {
+                fprintf(stderr, "%s: ggml_backend_graph_compute failed. status=%s\n",
+                        __func__, ggml_status_to_string(status));
+                ggml_backend_buffer_free(buf);
+                ggml_free(ctx);
+                return false;
+            }
+
+            const bool ok = validate_output(out);
+            ggml_backend_buffer_free(buf);
+            ggml_free(ctx);
+            printf(ok ? "\033[1;32mOK\033[0m\n" : "\033[1;31mFAIL\033[0m\n");
+            return ok;
+        }
 
         // compare
         struct callback_userdata {
@@ -1150,6 +1184,89 @@ struct test_glu : public test_case {
             // test extended range of values to check for NaNs in GELU
             init_tensor_uniform(t, -150.f, 150.f);
         }
+    }
+};
+
+struct test_swiglu_clamp : public test_case {
+    const ggml_type type;
+    const std::array<int64_t, 4> ne;
+    int v; // view (1 : non-contiguous a)
+    bool swapped;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "SWIGLU_CLAMP";
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR4(type, ne, v, swapped);
+    }
+
+    test_swiglu_clamp(ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne = {128, 2, 2, 2},
+            int v = 0,
+            bool swapped = false)
+        : type(type), ne(ne), v(v), swapped(swapped) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a;
+        if (v & 1) {
+            auto ne_a = ne; ne_a[0] *= 3;
+            a = ggml_new_tensor(ctx, type, 4, ne_a.data());
+            ggml_set_name(a, "a");
+
+            a = ggml_view_4d(ctx, a, ne[0], ne[1], ne[2], ne[3], a->nb[1], a->nb[2], a->nb[3], 0);
+            ggml_set_name(a, "view_of_a");
+        } else {
+            a = ggml_new_tensor(ctx, type, 4, ne.data());
+            ggml_set_name(a, "a");
+        }
+
+        ggml_tensor * out = ggml_glu(ctx, a, GGML_GLU_OP_SWIGLU_CLAMP, swapped);
+        const float alpha = 1.702f;
+        const float limit = 7.0f;
+        memcpy(&out->op_params[2], &alpha, sizeof(alpha));
+        memcpy(&out->op_params[3], &limit, sizeof(limit));
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            init_tensor_uniform(t, -150.f, 150.f);
+        }
+    }
+
+    bool eval_backend_only() override {
+        return true;
+    }
+
+    bool validate_output(ggml_tensor * out) override {
+        const std::vector<float> input = tensor_to_float(out->src[0]);
+        const std::vector<float> actual = tensor_to_float(out);
+        const int64_t ne0 = out->ne[0];
+        const int64_t row_size = out->src[0]->ne[0];
+        float limit;
+        memcpy(&limit, &out->op_params[3], sizeof(limit));
+        std::vector<float> expected(actual.size());
+
+        for (size_t i = 0; i < actual.size(); ++i) {
+            const int64_t row = i / ne0;
+            const int64_t col = i % ne0;
+            const int64_t row_offset = row * row_size;
+            const float gate = std::min(input[row_offset + (swapped ? ne0 : 0) + col], limit);
+            const float up = std::max(std::min(input[row_offset + (swapped ? 0 : ne0) + col], limit), -limit);
+            expected[i] = gate / (1.0f + expf(-gate)) * up;
+        }
+
+        const double err = nmse(expected.data(), actual.data(), actual.size());
+        const double max_err = type == GGML_TYPE_F16 ? 1e-6 : max_nmse_err();
+        if (err > max_err) {
+            printf("NMSE = %.9f > %.9f ", err, max_err);
+            return false;
+        }
+        return true;
     }
 };
 
@@ -1849,6 +1966,8 @@ struct test_scale : public test_case {
         return out;
     }
 };
+
+
 
 // GGML_OP_SILU_BACK
 struct test_silu_back : public test_case {
@@ -4198,7 +4317,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // glu ops
     for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
         for (int v : {0, 1}) {
-            for (int op = 0; op < GGML_GLU_OP_COUNT; op++) {
+            for (int op = GGML_GLU_OP_REGLU; op <= GGML_GLU_OP_SWIGLU; op++) {
                 for (bool swapped : {false, true}) {
                     test_cases.emplace_back(new test_glu((ggml_glu_op) op, type, { 128, 2, 2, 2 }, v, swapped));
                     test_cases.emplace_back(new test_glu((ggml_glu_op) op, type, { 5, 7, 11, 13 }, v, swapped));
@@ -4206,6 +4325,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
                 test_cases.emplace_back(new test_glu_split((ggml_glu_op) op, type, { 128, 2, 2, 2 }, v));
                 test_cases.emplace_back(new test_glu_split((ggml_glu_op) op, type, { 5, 7, 11, 13 }, v));
+            }
+        }
+    }
+
+    for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
+        for (int v : {0, 1}) {
+            for (bool swapped : {false, true}) {
+                test_cases.emplace_back(new test_swiglu_clamp(type, {128, 2, 2, 2}, v, swapped));
+                test_cases.emplace_back(new test_swiglu_clamp(type, {5, 7, 11, 13}, v, swapped));
             }
         }
     }

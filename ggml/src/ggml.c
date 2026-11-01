@@ -1115,9 +1115,11 @@ static const char * GGML_GLU_OP_NAME[GGML_GLU_OP_COUNT] = {
     "REGLU",
     "GEGLU",
     "SWIGLU",
+    "SWIGLU_CLAMP",
+    "SWIGLU_OAI"
 };
 
-static_assert(GGML_GLU_OP_COUNT == 3, "GGML_GLU_OP_COUNT != 3");
+static_assert(GGML_GLU_OP_COUNT == 5, "GGML_GLU_OP_COUNT != 3");
 
 
 static_assert(sizeof(struct ggml_object)%GGML_MEM_ALIGN == 0, "ggml_object size must be a multiple of GGML_MEM_ALIGN");
@@ -1326,9 +1328,13 @@ static bool ggml_is_contiguous_n(const struct ggml_tensor * tensor, int n) {
         if (tensor->ne[i] != 1) {
             if (i > n) {
                 if (tensor->nb[i] != next_nb) {
+
                     return false;
+
                 }
+
                 next_nb *= tensor->ne[i];
+
             } else {
                 // this dimension does not need to be contiguous
                 next_nb = tensor->ne[i]*tensor->nb[i];
@@ -1337,6 +1343,8 @@ static bool ggml_is_contiguous_n(const struct ggml_tensor * tensor, int n) {
     }
     return true;
 }
+
+
 
 bool ggml_is_contiguous(const struct ggml_tensor * tensor) {
     return ggml_is_contiguous_0(tensor);
@@ -1352,6 +1360,36 @@ bool ggml_is_contiguous_1(const struct ggml_tensor * tensor) {
 
 bool ggml_is_contiguous_2(const struct ggml_tensor * tensor) {
     return ggml_is_contiguous_n(tensor, 2);
+}
+
+static bool ggml_is_contiguous_strided_n(const struct ggml_tensor* tensor, size_t n){
+
+    size_t next_nb = ggml_type_size(tensor->type) * tensor->ne[0];
+     for (int i = 1; i < GGML_MAX_DIMS; i++) {
+
+        
+
+        if (tensor->ne[i] != 1) {
+            if (i > n) {
+                if (tensor->nb[i] != next_nb) {
+
+                    return false;
+
+                }
+
+                next_nb *= tensor->ne[i];
+
+            } else {
+                // this dimension does not need to be contiguous
+                next_nb = tensor->ne[i]*tensor->nb[i];
+            }
+        }
+    }
+    return true;
+}
+
+static bool ggml_is_contiguous_strided_1(const struct ggml_tensor* tensor){
+    return ggml_is_contiguous_strided_n(tensor, 1);
 }
 
 bool ggml_is_contiguously_allocated(const struct ggml_tensor * tensor) {
