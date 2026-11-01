@@ -194,7 +194,7 @@
      space under the last section, offers the same actions as the Recent heading -->
 <ContextMenuActions bind:open={listMenuOpen} actions={recentActions} disabled={isSelectionMode}>
 	<!-- a phone spaces its sections a little wider than the rows inside them -->
-	<div class="flex flex-1 flex-col gap-6 md:gap-4">
+	<div class="flex flex-1 flex-col gap-7 md:gap-4">
 		{#each sections as section (section.id)}
 			{@const isDragged = section.id === sidebarDragStore.sectionId}
 
@@ -304,7 +304,7 @@
 		{/snippet}
 
 		<CollapsibleRegion open={uiStore.isSidebarSectionOpen(SIDEBAR_SECTION_IDS.PINNED)}>
-			<ul class="flex w-full min-w-0 flex-col gap-4 md:gap-0.5 {className}">
+			<ul class="flex w-full min-w-0 flex-col md:gap-0.5 {className}">
 				{#each previewOf(SIDEBAR_SECTION_IDS.PINNED, pinnedConversations) as { conversation, depth } (conversation.id)}
 					<li transition:slide={{ duration: SIDEBAR_ROW_SLIDE_MS }} class="group/item relative p-0">
 						{@render conversationItem(conversation, depth)}
@@ -319,7 +319,7 @@
 
 {#snippet recentSection()}
 	<SidebarNavigationDropZone
-		class="flex flex-col gap-4 md:gap-0 whitespace-nowrap {className}"
+		class="flex flex-col whitespace-nowrap {className}"
 		holds={(convId) => isUngrouped(convId)}
 		onDrop={handleDropRecent}
 		sectionId={SIDEBAR_SECTION_IDS.RECENT}
@@ -355,7 +355,7 @@
 		{/snippet}
 
 		<CollapsibleRegion open={uiStore.isSidebarSectionOpen(SIDEBAR_SECTION_IDS.RECENT)}>
-			<ul class="flex w-full min-w-0 flex-col gap-4 md:gap-0.5">
+			<ul class="flex w-full min-w-0 flex-col md:gap-0.5">
 				{#each previewOf(SIDEBAR_SECTION_IDS.RECENT, unpinnedConversations) as { conversation, depth } (conversation.id)}
 					<li transition:slide={{ duration: SIDEBAR_ROW_SLIDE_MS }} class="group/item relative p-0">
 						{@render conversationItem(conversation, depth)}

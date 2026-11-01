@@ -36,13 +36,13 @@
      section still reads as one -->
 <!-- dragging the title moves the whole section among the others -->
 <div
-	class="group/heading flex h-8 min-w-0 shrink-0 items-center gap-0.5 pr-1 text-[13px] font-semibold text-foreground {highlighted
+	class="group/heading flex h-8 min-w-0 shrink-0 items-center gap-0.5 pr-1 text-[13px] font-semibold text-foreground max-md:h-9 max-md:text-[15px] max-md:font-medium max-md:text-muted-foreground {highlighted
 		? 'text-foreground'
 		: ''} {className}"
 >
 	<button
 		aria-expanded={open}
-		class="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-1 rounded-md pl-2 text-left transition-colors hover:text-foreground"
+		class="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-1 rounded-md pl-2 text-left max-md:pl-3.5 transition-colors hover:text-foreground"
 		onclick={onToggle}
 		onpointerdown={(event) => sidebarDragStore.pressSection(event, dragId)}
 		type="button"

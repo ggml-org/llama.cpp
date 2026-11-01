@@ -19,6 +19,7 @@
 	} from '$lib/components/app';
 	import {
 		ROUTES,
+		SIDEBAR_ACTIONS_ITEMS,
 		SIDEBAR_COLLAPSE_WIDTH,
 		SIDEBAR_COLLAPSED_WIDTH,
 		SIDEBAR_CONTENT_FADE_MS,
@@ -628,12 +629,14 @@
 			<div
 				in:fade={{ duration: SIDEBAR_CONTENT_FADE_MS }}
 				out:fade={{ duration: SIDEBAR_CONTENT_FADE_MS }}
-				class="mt-2 flex min-h-0 flex-1 flex-col gap-4 md:gap-1 md:transition-opacity md:duration-150 md:ease-out {isStripHidden
+				class="mt-2 flex min-h-0 flex-1 flex-col gap-7 max-md:mt-6 md:gap-1 md:transition-opacity md:duration-150 md:ease-out {isStripHidden
 					? 'md:opacity-0 md:invisible'
 					: ''}"
 			>
+				<!-- a phone has no footer: its items join these -->
 				<SidebarNavigationActions
 					class="px-2 md:my-3"
+					items={isOnMobile ? [...SIDEBAR_ACTIONS_ITEMS, ...SIDEBAR_FOOTER_ITEMS] : undefined}
 					onAction={handleSidebarAction}
 					onNavigate={() => {
 						if (deviceStore.isMobile) {
@@ -642,7 +645,9 @@
 					}}
 				/>
 
-				<div class="flex min-h-0 flex-1 flex-col overflow-y-auto opacity-(--sidebar-fade)">
+				<div
+					class="flex min-h-0 flex-1 flex-col overflow-y-auto opacity-(--sidebar-fade) max-md:pb-safe-2"
+				>
 					<SidebarNavigationConversationList
 						{allSelectedArePinned}
 						allVisibleSelected={visibleSelectionStats.visibleCount > 0 &&
@@ -673,13 +678,15 @@
 				</div>
 
 				<!-- the footer: managing the app around the chats, grouped in an inset surface at
-				     the bottom of the sidebar and of its collapsed strip alike, clear of a phone's
-				     home indicator -->
-				<SidebarNavigationActions
-					class="inset-group-surface mx-2 mb-2 p-1 max-md:mb-[max(0.5rem,env(safe-area-inset-bottom))]"
-					items={SIDEBAR_FOOTER_ITEMS}
-					onAction={handleSidebarAction}
-				/>
+				     the bottom of the sidebar and of its collapsed strip alike (a phone lists its
+				     items with the actions above) -->
+				{#if !isOnMobile}
+					<SidebarNavigationActions
+						class="inset-group-surface mx-2 mb-2 p-1"
+						items={SIDEBAR_FOOTER_ITEMS}
+						onAction={handleSidebarAction}
+					/>
+				{/if}
 			</div>
 		</div>
 

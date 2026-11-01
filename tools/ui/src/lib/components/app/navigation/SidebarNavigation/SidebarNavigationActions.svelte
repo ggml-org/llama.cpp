@@ -89,10 +89,11 @@
 </script>
 
 {#snippet itemIcon(IconComponent: Component)}
-	<IconComponent class={ICON_CLASS_DEFAULT} />
+	<IconComponent class="{ICON_CLASS_DEFAULT} max-md:size-5.5" />
 {/snippet}
 
-<div class="{className} flex flex-col gap-5 md:gap-1 mt-2 md:mt-0">
+<!-- a phone sizes its rows for a thumb, flush one under the other like a list's -->
+<div class="{className} flex flex-col md:gap-1">
 	{#each actions as item, i (item.tooltip)}
 		{@const isActive = isItemActive(item)}
 		{@const itemOnClick = itemClickHandler(item)}
@@ -105,7 +106,7 @@
 		{#if showIcons}
 			<div transition:fade={itemTransition}>
 				<Button
-					class="w-full min-w-9 justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100 {isActive
+					class="w-full min-w-9 justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100 max-md:h-12 max-md:rounded-2xl max-md:px-3 max-md:text-[17px] {isActive
 						? 'bg-accent text-accent-foreground'
 						: ''}"
 					href={item.route}
@@ -118,7 +119,7 @@
 					size="default"
 					variant="ghost"
 				>
-					<span class="flex min-w-0 items-center px-0.5 gap-2">
+					<span class="flex min-w-0 items-center gap-2 px-0.5 max-md:gap-3.5">
 						{@render itemIcon(item.icon)}
 
 						{#if showIcons}
