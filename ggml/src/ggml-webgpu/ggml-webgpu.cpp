@@ -4694,7 +4694,7 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
             {
                 const int32_t num_groups = ggml_get_op_params_i32(op, 0);
                 const float   eps        = ggml_get_op_params_f32(op, 1);
-                supports_op              = src0->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
+                supports_op = src0->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
                               ggml_are_same_shape(src0, op) && !ggml_is_empty(src0) && num_groups > 0 &&
                               num_groups <= src0->ne[2] && std::isfinite(eps) && eps >= 0.0f &&
                               (uint64_t) num_groups * src0->ne[3] <=
@@ -5013,7 +5013,7 @@ ggml_backend_reg_t ggml_backend_webgpu_reg() {
         ggml_backend_webgpu_request_adapter(ctx->webgpu_global_ctx->instance, adapter);
     }
 
-    // WebGPU backend requires f16 support. Native Dawn also requires implicit device synchronization.
+    // WebGPU backend requires f16 support and, on native, implicit device synchronization.
     if (adapter != nullptr && adapter.HasFeature(wgpu::FeatureName::ShaderF16)
 #if !defined(__EMSCRIPTEN__) && !defined(__wasi__)
         && adapter.HasFeature(wgpu::FeatureName::ImplicitDeviceSynchronization)
