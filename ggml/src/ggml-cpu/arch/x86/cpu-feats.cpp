@@ -6,6 +6,13 @@
 #include <intrin.h>
 #endif
 
+// On Darwin/macOS, AVX-512 context save is lazy: XCR0 bits 5-7 are not set
+// until the process first executes an AVX-512 instruction, even on capable
+// hardware.  We query the OS via sysctl instead of reading XCR0 directly.
+#if defined(__APPLE__)
+#include <sys/sysctl.h>
+#endif
+
 #include <cstring>
 #include <vector>
 #include <bitset>
@@ -18,7 +25,8 @@ struct cpuid_x86 {
     bool PCLMULQDQ(void) { return f_1_ecx[1]; }
     bool MONITOR(void) { return f_1_ecx[3]; }
     bool SSSE3(void) { return f_1_ecx[9]; }
-    bool FMA(void) { return f_1_ecx[12]; }
+    // FMA, F16C, AVX, AVX2, AVX_VNNI use YMM registers — require OS YMM save.
+    bool FMA(void)      { return f_1_ecx[12] && os_saves_ymm(); }
     bool CMPXCHG16B(void) { return f_1_ecx[13]; }
     bool SSE41(void) { return f_1_ecx[19]; }
     bool SSE42(void) { return f_1_ecx[20]; }
@@ -27,8 +35,8 @@ struct cpuid_x86 {
     bool AES(void) { return f_1_ecx[25]; }
     bool XSAVE(void) { return f_1_ecx[26]; }
     bool OSXSAVE(void) { return f_1_ecx[27]; }
-    bool AVX(void) { return f_1_ecx[28]; }
-    bool F16C(void) { return f_1_ecx[29]; }
+    bool AVX(void)      { return f_1_ecx[28] && os_saves_ymm(); }
+    bool F16C(void)     { return f_1_ecx[29] && os_saves_ymm(); }
     bool RDRAND(void) { return f_1_ecx[30]; }
 
     bool MSR(void) { return f_1_edx[5]; }
@@ -44,20 +52,21 @@ struct cpuid_x86 {
     bool FSGSBASE(void) { return f_7_ebx[0]; }
     bool BMI1(void) { return f_7_ebx[3]; }
     bool HLE(void) { return is_intel && f_7_ebx[4]; }
-    bool AVX2(void) { return f_7_ebx[5]; }
+    bool AVX2(void)     { return f_7_ebx[5] && os_saves_ymm(); }
     bool BMI2(void) { return f_7_ebx[8]; }
     bool ERMS(void) { return f_7_ebx[9]; }
     bool INVPCID(void) { return f_7_ebx[10]; }
     bool RTM(void) { return is_intel && f_7_ebx[11]; }
-    bool AVX512F(void) { return f_7_ebx[16]; }
-    bool AVX512DQ(void) { return f_7_ebx[17]; }
+    // All AVX-512 variants use ZMM registers — require OS ZMM save.
+    bool AVX512F(void)  { return f_7_ebx[16] && os_saves_zmm(); }
+    bool AVX512DQ(void) { return f_7_ebx[17] && os_saves_zmm(); }
     bool RDSEED(void) { return f_7_ebx[18]; }
     bool ADX(void) { return f_7_ebx[19]; }
-    bool AVX512PF(void) { return f_7_ebx[26]; }
-    bool AVX512ER(void) { return f_7_ebx[27]; }
-    bool AVX512CD(void) { return f_7_ebx[28]; }
-    bool AVX512BW(void) { return f_7_ebx[30]; }
-    bool AVX512VL(void) { return f_7_ebx[31]; }
+    bool AVX512PF(void) { return f_7_ebx[26] && os_saves_zmm(); }
+    bool AVX512ER(void) { return f_7_ebx[27] && os_saves_zmm(); }
+    bool AVX512CD(void) { return f_7_ebx[28] && os_saves_zmm(); }
+    bool AVX512BW(void) { return f_7_ebx[30] && os_saves_zmm(); }
+    bool AVX512VL(void) { return f_7_ebx[31] && os_saves_zmm(); }
 
     bool SHA(void) { return f_7_ebx[29]; }
 
@@ -76,16 +85,18 @@ struct cpuid_x86 {
     bool _3DNOWEXT(void) { return is_amd && f_81_edx[30]; }
     bool _3DNOW(void) { return is_amd && f_81_edx[31]; }
 
-    bool AVX512_VBMI(void) { return f_7_ecx[1]; }
-    bool AVX512_VNNI(void) { return f_7_ecx[11]; }
-    bool AVX512_FP16(void) { return f_7_edx[23]; }
-    bool AVX512_BF16(void) { return f_7_1_eax[5]; }
-    bool AVX_VNNI(void) { return f_7_1_eax[4]; }
+    bool AVX512_VBMI(void) { return f_7_ecx[1]  && os_saves_zmm(); }
+    bool AVX512_VNNI(void) { return f_7_ecx[11] && os_saves_zmm(); }
+    bool AVX512_FP16(void) { return f_7_edx[23] && os_saves_zmm(); }
+    bool AVX512_BF16(void) { return f_7_1_eax[5] && os_saves_zmm(); }
+    // AVX_VNNI uses VEX-encoded YMM instructions — require OS YMM save.
+    bool AVX_VNNI(void) { return f_7_1_eax[4] && os_saves_ymm(); }
 
-    bool AMX_TILE(void) { return f_7_edx[24]; }
-    bool AMX_INT8(void) { return f_7_edx[25]; }
-    bool AMX_FP16(void) { return f_7_1_eax[21]; }
-    bool AMX_BF16(void) { return f_7_edx[22]; }
+    // AMX requires OS AMX tile state save (XCR0 bits 17 and 18).
+    bool AMX_TILE(void) { return f_7_edx[24] && os_saves_amx(); }
+    bool AMX_INT8(void) { return f_7_edx[25] && os_saves_amx(); }
+    bool AMX_FP16(void) { return f_7_1_eax[21] && os_saves_amx(); }
+    bool AMX_BF16(void) { return f_7_edx[22] && os_saves_amx(); }
 
 #ifdef _MSC_VER
     static void cpuid(int cpu_info[4], int eax) {
@@ -94,6 +105,7 @@ struct cpuid_x86 {
     static void cpuidex(int cpu_info[4], int eax, int ecx) {
         __cpuidex(cpu_info, eax, ecx);
     }
+    static uint64_t xgetbv(uint32_t xcr) { return _xgetbv(xcr); }
 #else
     static void cpuid(int cpu_info[4], int eax) {
         __asm__ __volatile__(
@@ -107,7 +119,47 @@ struct cpuid_x86 {
             : "=a"(cpu_info[0]), "=b"(cpu_info[1]), "=c"(cpu_info[2]), "=d"(cpu_info[3])
             : "a"(eax), "c"(ecx));
     }
+    static uint64_t xgetbv(uint32_t xcr) {
+        uint32_t lo, hi;
+        __asm__ __volatile__("xgetbv" : "=a"(lo), "=d"(hi) : "c"(xcr));
+        return (static_cast<uint64_t>(hi) << 32u) | lo;
+    }
 #endif
+
+    // Returns true when the OS saves YMM registers (required for AVX/AVX2/FMA/F16C/AVX_VNNI).
+    // Checks CPUID.1:ECX[27] (OSXSAVE) then XCR0[2:1] == 0b11 (SSE + YMM state).
+    bool os_saves_ymm(void) {
+        if (!f_1_ecx[27]) { return false; }   // OSXSAVE bit not set
+        return (xgetbv(0u) & 0x6u) == 0x6u;   // XCR0 bits 1 (SSE) and 2 (YMM) both set
+    }
+
+    // Returns true when the OS saves ZMM registers (required for all AVX-512 variants).
+    //
+    // On Darwin/macOS, AVX-512 context save is lazy: XCR0 bits 5-7 remain clear
+    // until the process first executes an AVX-512 instruction, even on fully
+    // capable hardware.  Reading XCR0 therefore gives a false negative before
+    // the first AVX-512 use.  We query hw.optional.avx512f via sysctl instead,
+    // which reflects true hardware capability regardless of lazy-enable state.
+    // See: https://github.com/google/cpu_features/blob/main/src/impl_x86_macos.c
+    bool os_saves_zmm(void) {
+        if (!os_saves_ymm()) { return false; }
+#if defined(__APPLE__)
+        int val = 0;
+        size_t len = sizeof(val);
+        return sysctlbyname("hw.optional.avx512f", &val, &len, nullptr, 0) == 0 && val != 0;
+#else
+        return (xgetbv(0u) & 0xE0u) == 0xE0u; // XCR0 bits 5 (opmask), 6 (ZMM hi256), 7 (ZMM hi16)
+#endif
+    }
+
+    // Returns true when the OS saves AMX tile state (required for AMX-* instructions).
+    // Checks os_saves_zmm() then XCR0[18:17] == 0b11 (XTILECFG + XTILEDATA).
+    // Note: Intel AMX is not available on macOS hardware; os_saves_zmm() will
+    // return false on macOS, making this check safe on all platforms.
+    bool os_saves_amx(void) {
+        if (!os_saves_zmm()) { return false; }
+        return (xgetbv(0u) & 0x60000u) == 0x60000u; // XCR0 bits 17 and 18
+    }
 
     cpuid_x86() {
         std::array<int, 4> cpui;
@@ -261,8 +313,6 @@ void test_x86_is() {
 #endif
 
 static int ggml_backend_cpu_x86_score() {
-    // FIXME: this does not check for OS support
-
     int score = 1;
     cpuid_x86 is;
 
