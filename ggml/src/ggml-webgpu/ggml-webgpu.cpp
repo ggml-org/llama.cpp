@@ -4714,7 +4714,7 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                     if (supports_op) {
                         num_elements *= src0->ne[i];
                     }
-                    if (ggml_webgpu_tensor_equal(src0, op)) {
+                    if (src0->buffer != nullptr && ggml_webgpu_tensor_equal(src0, op)) {
                         supports_op = supports_op && src0->nb[i] == op->nb[i];
                     }
                 }
