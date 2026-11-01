@@ -939,13 +939,24 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
 
     // KV cache injection
     ASSERT_EMBD_OR_TOKEN(ubatch);
-    if (ubatch.embd) {
+    if (ubatch.embd || ubatch.embd_row) {
         auto inp = std::make_unique<llm_graph_input_embd>(n_embd_inp);
 
-        inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd_inp, n_tokens);
-        ggml_set_input(inp->embd);
+        ggml_tensor * inp_target = nullptr;
+        if (ubatch.embd_row) {
+            // features are rows of the target's layer input device buffer
+            GGML_ASSERT(layer_inp_src != nullptr && layer_inp_src->ne[0] == n_embd_inp);
 
-        ggml_tensor * inp_target = inp->embd;
+            inp->embd_rows = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
+            ggml_set_input(inp->embd_rows);
+
+            inp_target = ggml_get_rows(ctx0, layer_inp_src, inp->embd_rows);
+        } else {
+            inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd_inp, n_tokens);
+            ggml_set_input(inp->embd);
+
+            inp_target = inp->embd;
+        }
         cb(inp_target, "inp_target_features", -1);
 
         res->add_input(std::move(inp));

@@ -2275,6 +2275,16 @@ int32_t common_batch::add_embd(llama_embd embd, const llama_pos * pos, llama_seq
     return size() - 1;
 }
 
+int32_t common_batch::add_embd_row(int32_t row, const llama_pos * pos, llama_seq_id seq_id, bool output) {
+    token t = { LLAMA_TOKEN_NULL, { 0, 0, 0, 0 }, seq_id, output, { nullptr, 0, 0 }, { nullptr, 0, 0 }, {} };
+    t.embd_row = row;
+    for (int32_t j = 0; j < n_pos; ++j) {
+        t.pos[j] = pos[j];
+    }
+    tokens.push_back(t);
+    return size() - 1;
+}
+
 llama_batch_ext * common_batch::get_sub_batch(int32_t off, int32_t n) {
     GGML_ASSERT(batch && "common_batch was not initialized with a context");
     GGML_ASSERT(off >= 0 && n >= 0 && off + n <= size());
@@ -2295,6 +2305,12 @@ llama_batch_ext * common_batch::get_sub_batch(int32_t off, int32_t n) {
             if (t.embd.data && !llama_batch_ext_set_embd_token(res, idx, t.embd)) {
                 GGML_ABORT("%s: failed to set the embedding of token %d at index %d\n", __func__, t.id, i);
             }
+        } else if (t.embd_row >= 0) {
+            idx = llama_batch_ext_add_embd_row(res, t.seq_id, t.embd_row);
+            if (idx < 0) {
+                GGML_ABORT("%s: failed to add embd row %d at index %d (error %d, n = %d)\n", __func__, t.embd_row, i, idx, n);
+            }
+            llama_batch_ext_set_pos(res, idx, t.pos.data());
         } else {
             idx = llama_batch_ext_add_embd(res, t.seq_id, t.embd);
             if (idx < 0) {
