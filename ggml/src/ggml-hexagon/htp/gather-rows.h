@@ -162,6 +162,38 @@ static inline bool htp_gather_rows_solve_layout(
     return true;
 }
 
+struct htp_gather_transpose_params {
+    uint32_t elem_size;
+    uint32_t ne_a;
+    uint32_t ne_b;
+    uint32_t ne2;
+    uint32_t ne3;
+    uint32_t nb_a_src;
+    uint32_t nb_b_dst;
+    uint32_t nb2_src;
+    uint32_t nb3_src;
+    uint32_t nb2_dst;
+    uint32_t nb3_dst;
+    uint32_t tile_a;
+    uint32_t tile_b;
+};
+
+static inline void htp_gather_transpose_layout_build(const struct htp_gather_transpose_params * tp,
+                                                     struct htp_gather_rows_params *            gp,
+                                                     struct htp_gather_rows_vtcm_layout *       layout) {
+    const uint32_t lane = tp->elem_size % 4 == 0 ? 4 : 2;
+    const uint32_t ne   = tp->elem_size / lane;
+    const uint32_t g    = hex_gcd_u32(ne, 128 / lane);
+    gp->na = gp->ne      = ne;
+    gp->nb               = 0;
+    gp->rg               = (128 / lane) / g;
+    gp->vg               = ne / g;
+    gp->region_size      = (tp->tile_a - 1) * tp->tile_b * tp->elem_size + tp->elem_size - 1;
+    const uint32_t pitch = hex_round_up(tp->tile_a * tp->elem_size, 128);
+    htp_gather_rows_vtcm_layout_build(layout, gp->vg, tp->tile_a * tp->tile_b * tp->elem_size, tp->tile_b, pitch / lane,
+                                      lane);
+}
+
 #ifdef __cplusplus
 struct ggml_tensor;
 static inline bool htp_gather_rows_tensor_outer_contiguous(const struct ggml_tensor * t) {
@@ -177,6 +209,10 @@ static inline bool htp_gather_rows_tensor_outer_contiguous(const struct ggml_ten
 #else
 struct htp_ops_context;
 struct htp_tensor;
+
+int htp_gather_transpose(struct htp_ops_context *                   octx,
+                         const struct htp_gather_transpose_params * kparams,
+                         uint32_t                                   n_threads);
 
 int htp_gather_rows(
     struct htp_ops_context * octx,

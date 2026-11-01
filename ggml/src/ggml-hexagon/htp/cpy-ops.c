@@ -459,6 +459,9 @@ int op_cpy(struct htp_ops_context * octx) {
         case HTP_COPY_KERNEL_RESHAPE:
             status = cpy_reshape(octx, kparams);
             break;
+        case HTP_COPY_KERNEL_TRANSPOSE:
+            status = htp_gather_transpose(octx, &kparams->u.transpose, kparams->n_threads);
+            break;
         case HTP_COPY_KERNEL_GATHER_ROWS:
             status = htp_gather_rows(octx, octx->src[0], NULL, &kparams->u.gather, kparams->n_threads);
             break;

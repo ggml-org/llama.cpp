@@ -401,3 +401,130 @@ int htp_gather_rows(
     work_queue_run(octx->ctx->work_queue, worker_func, &task, octx->n_threads);
     return HTP_STATUS_OK;
 }
+
+struct gather_transpose_task {
+    struct htp_ops_context *                   octx;
+    const struct htp_gather_transpose_params * kparams;
+    uint32_t                                   tile_start;
+    uint32_t                                   tiles;
+    uint32_t                                   tiles_per_thread;
+};
+
+struct gather_transpose_tile {
+    dma_addr_t src;
+    dma_addr_t dst;
+    uint32_t   na;
+    uint32_t   nb;
+};
+
+static struct gather_transpose_tile gather_transpose_tile_at(const struct gather_transpose_task * task, uint32_t tile) {
+    const struct htp_gather_transpose_params * tp  = task->kparams;
+    const uint32_t                             n_a = (tp->ne_a + tp->tile_a - 1) / tp->tile_a;
+    const uint32_t                             n_b = (tp->ne_b + tp->tile_b - 1) / tp->tile_b;
+    const uint32_t                             a   = tile % n_a * tp->tile_a;
+    tile /= n_a;
+    const uint32_t b = tile % n_b * tp->tile_b;
+    tile /= n_b;
+    const uint32_t               i2 = tile % tp->ne2;
+    const uint32_t               i3 = tile / tp->ne2;
+    struct gather_transpose_tile pos;
+    pos.src = task->octx->src[0]->data + (dma_addr_t) a * tp->nb_a_src + (dma_addr_t) b * tp->elem_size +
+              (dma_addr_t) i2 * tp->nb2_src + (dma_addr_t) i3 * tp->nb3_src;
+    pos.dst = task->octx->dst->data + (dma_addr_t) a * tp->elem_size + (dma_addr_t) b * tp->nb_b_dst +
+              (dma_addr_t) i2 * tp->nb2_dst + (dma_addr_t) i3 * tp->nb3_dst;
+    pos.na  = MIN(tp->tile_a, tp->ne_a - a);
+    pos.nb  = MIN(tp->tile_b, tp->ne_b - b);
+    return pos;
+}
+
+static void gather_transpose_thread(unsigned int nth, unsigned int ith, void * data) {
+    (void) nth;
+    const struct gather_transpose_task *       task   = (const struct gather_transpose_task *) data;
+    const struct htp_gather_transpose_params * tp     = task->kparams;
+    const uint32_t                             offset = MIN(ith * task->tiles_per_thread, task->tiles);
+    const uint32_t                             beg    = task->tile_start + offset;
+    const uint32_t end = task->tile_start + MIN(offset + task->tiles_per_thread, task->tiles);
+    if (beg == end) {
+        return;
+    }
+
+    struct htp_gather_rows_params      gp = { 0 };
+    struct htp_gather_rows_vtcm_layout layout;
+    htp_gather_transpose_layout_build(tp, &gp, &layout);
+    const uint32_t    lane      = tp->elem_size % 4 == 0 ? 4 : 2;
+    const uint32_t    in_pitch  = tp->tile_b * tp->elem_size;
+    const uint32_t    out_pitch = hex_round_up(tp->tile_a * tp->elem_size, 128);
+    uint8_t *         base      = VTCM_LAYOUT_PTR(uint8_t, task->octx->ctx->vtcm_base, ith * layout.total_per_thread);
+    HVX_Vector *      tab       = VTCM_LAYOUT_PTR(HVX_Vector, base, layout.off_tab);
+    HVX_Vector *      inc       = VTCM_LAYOUT_PTR(HVX_Vector, base, layout.off_inc);
+    HVX_Vector *      cur       = VTCM_LAYOUT_PTR(HVX_Vector, base, layout.off_cur);
+    uint8_t *         region[2] = { base + layout.off_region0, base + layout.off_region1 };
+    uint8_t *         out[2]    = { base + layout.off_out0, base + layout.off_out1 };
+    struct htp_tensor a         = { 0 };
+    a.nb[1]                     = in_pitch;
+    gather_rows_compute_fn_t compute;
+    if (lane == 2) {
+        gather_rows_init_tables_f16(tab, inc, &gp, &a, NULL);
+        compute = gp.vg == 1 ? gather_rows_compute_f16_vg1 : gather_rows_compute_f16_vgn;
+    } else {
+        gather_rows_init_tables_f32(tab, inc, &gp, &a, NULL);
+        compute = gp.vg == 1 ? gather_rows_compute_f32_vg1 : gather_rows_compute_f32_vgn;
+    }
+
+    dma_queue *               q  = task->octx->ctx->dma[ith];
+    struct htp_thread_trace * tr = &task->octx->ctx->trace[ith];
+    for (uint32_t k = 0; k < 2 && beg + k < end; k++) {
+        const struct gather_transpose_tile pos = gather_transpose_tile_at(task, beg + k);
+        dma_queue_push(q, dma_make_data(pos.dst, out[k]), 0, 0, 0, 0);
+        dma_queue_push(q, dma_make_data(region[k], pos.src), in_pitch, tp->nb_a_src, pos.nb * tp->elem_size, pos.na);
+    }
+    for (uint32_t t = beg; t < end; t++) {
+        const uint32_t                     buf = (t - beg) & 1;
+        const struct gather_transpose_tile pos = gather_transpose_tile_at(task, t);
+        dma_queue_pop(q);
+        dma_queue_pop(q);
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) t);
+        const uint32_t nvec = (pos.na * tp->elem_size + 127) / 128;
+        for (uint32_t j = 0; j < pos.nb; j++) {
+            compute(out[buf] + j * out_pitch, region[buf] + j * tp->elem_size, nvec, &gp, tab, inc, cur);
+        }
+        hvx_gather_sync(out[buf]);
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) t);
+        dma_queue_push(q, dma_make_data(pos.dst, out[buf]), tp->nb_b_dst, out_pitch, pos.na * tp->elem_size, pos.nb);
+        if (t + 2 < end) {
+            const struct gather_transpose_tile next = gather_transpose_tile_at(task, t + 2);
+            dma_queue_push(q, dma_make_data(region[buf], next.src), in_pitch, tp->nb_a_src, next.nb * tp->elem_size,
+                           next.na);
+        }
+    }
+    dma_queue_flush(q);
+}
+
+int htp_gather_transpose(struct htp_ops_context *                   octx,
+                         const struct htp_gather_transpose_params * tp,
+                         uint32_t                                   n_threads) {
+    if (!htp_ops_context_set_n_threads(octx, n_threads)) {
+        return HTP_STATUS_INVAL_PARAMS;
+    }
+    struct htp_gather_rows_params      gp = { 0 };
+    struct htp_gather_rows_vtcm_layout layout;
+    htp_gather_transpose_layout_build(tp, &gp, &layout);
+    if (layout.total_per_thread * n_threads > octx->ctx->vtcm_size) {
+        return HTP_STATUS_VTCM_TOO_SMALL;
+    }
+    const uint32_t total =
+        ((tp->ne_a + tp->tile_a - 1) / tp->tile_a) * ((tp->ne_b + tp->tile_b - 1) / tp->tile_b) * tp->ne2 * tp->ne3;
+    // Different DSPs must not write parts of the same cache line.
+    const bool aligned = (octx->dst->data & 127) == 0 && ((tp->ne_a * tp->elem_size) & 127) == 0 &&
+                         (tp->nb_b_dst & 127) == 0 && (tp->nb2_dst & 127) == 0 && (tp->nb3_dst & 127) == 0;
+    const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(
+        total, aligned ? 1 : 0, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
+    struct gather_transpose_task task;
+    task.octx             = octx;
+    task.kparams          = tp;
+    task.tile_start       = range.start;
+    task.tiles            = range.count;
+    task.tiles_per_thread = (range.count + n_threads - 1) / n_threads;
+    work_queue_run(octx->ctx->work_queue, gather_transpose_thread, &task, n_threads);
+    return HTP_STATUS_OK;
+}
