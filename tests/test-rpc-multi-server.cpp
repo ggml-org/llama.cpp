@@ -4,6 +4,45 @@
 #include "ggml-rpc.h"
 #include "ggml.h"
 
+#include <algorithm>
+#include <vector>
+
+static void test_uploads(ggml_backend_t backend) {
+    ggml_init_params params = {ggml_tensor_overhead(), nullptr, true};
+    ggml_context * ctx = ggml_init(params);
+    GGML_ASSERT(ctx != nullptr);
+    const size_t count = 4 * 1024 * 1024 + 3;
+    ggml_tensor * tensor = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, count);
+    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    GGML_ASSERT(buffer != nullptr);
+    ggml_backend_buffer_set_usage(buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+    std::vector<float> input(count), output(count);
+    for (size_t i = 0; i < count; i++) {
+        input[i] = float(i % 113);
+    }
+    const auto expected = input;
+    ggml_backend_tensor_set(tensor, input.data(), 0, input.size() * sizeof(float));
+    std::fill(input.begin(), input.end(), -1.0f);
+    ggml_backend_tensor_get(tensor, output.data(), 0, output.size() * sizeof(float));
+    GGML_ASSERT(output == expected);
+
+    ggml_backend_event_t event = ggml_backend_event_new(ggml_backend_get_device(backend));
+    GGML_ASSERT(event != nullptr);
+    for (const size_t length : {count, size_t(17), count - 3, count - 3}) {
+        const size_t offset = length == count ? 0 : 1;
+        input = expected;
+        ggml_backend_tensor_set_async(backend, tensor, input.data(), offset * sizeof(float), length * sizeof(float));
+        ggml_backend_event_record(event, backend);
+        ggml_backend_event_synchronize(event);
+        std::fill(input.begin(), input.end(), -2.0f);
+        ggml_backend_tensor_get(tensor, output.data(), offset * sizeof(float), length * sizeof(float));
+        GGML_ASSERT(std::equal(output.begin(), output.begin() + length, expected.begin()));
+    }
+    ggml_backend_event_free(event);
+    ggml_backend_buffer_free(buffer);
+    ggml_free(ctx);
+}
+
 int main(int argc, char ** argv) {
     GGML_ASSERT(argc == 3);
     ggml_backend_load_all();
@@ -63,6 +102,8 @@ int main(int argc, char ** argv) {
     GGML_ASSERT(ggml_backend_buft_get_alloc_size(buft, strided) >= ggml_nbytes(strided));
 
     ggml_free(ctx);
+    test_uploads(backend_a);
+    test_uploads(backend_b);
     ggml_backend_free(backend_b);
     ggml_backend_free(backend_a);
     return 0;

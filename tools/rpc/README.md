@@ -95,6 +95,12 @@ $ bin/ggml-rpc-server -c
 
 By default, the cache is stored in the `$HOME/.cache/llama.cpp/rpc` directory and can be controlled via the `LLAMA_CACHE` environment variable.
 
+The client uses the HELLO response to determine whether each server has caching enabled. Weight uploads use XXH3-128 cache keys only for servers with caching enabled; other servers receive the data without hashing or cache probes. Client and server must use matching protocol versions. Existing FNV cache files are not reused or removed automatically. New cache files have the `xxh3_128-` prefix.
+
+Model loading overlaps reads with uploads using two 64 MiB staging buffers per RPC device. Independent RPC devices allocate and load their weights concurrently. Streamed reads use aligned direct I/O when available (`O_DIRECT` on Linux or `FILE_FLAG_NO_BUFFERING` on Windows), with buffered reads as a fallback. Windows uses overlapped reads with independent offsets so device loads can proceed in parallel. CPU tensors can still use mmap. Tensor validation and tensor-parallel buffers retain the existing loading path.
+
+Large tensors are sent in chunks, so cache keys describe individual chunks rather than necessarily entire tensors. To measure uncached startup, launch the servers without `-c` and evict the model files from the OS page cache before each run.
+
 ### RDMA transport
 
 The RPC backend can use RDMA instead of TCP for lower latency and higher throughput. The transport is negotiated during the initial handshake -- no changes to command-line usage are required, and the connection falls back to TCP unless both peers can use RDMA.
