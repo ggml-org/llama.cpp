@@ -788,6 +788,13 @@ using llm_graph_cb = std::function<void(const llama_ubatch & ubatch, ggml_tensor
 
 class llm_graph_result;
 
+// reduced draft LM head, see llama_context_params::vocab_subset (tensors owned by llama_context)
+struct llama_vocab_subset {
+    std::map<const ggml_tensor *, ggml_tensor *> heads; // head -> copy of its listed rows, in the type of the head
+
+    ggml_tensor * ids = nullptr; // I32 listed and end-of-generation ids, sorted
+};
+
 struct llm_graph_params {
     llm_arch arch = LLM_ARCH_UNKNOWN;
 
@@ -833,6 +840,8 @@ struct llm_graph_params {
     llm_graph_cb cb;
 
     llm_graph_result * res;
+
+    const llama_vocab_subset * vsub = nullptr;
 
     // return true if the "other" params would result in a graph with the same topology as with the current params
     //   having the same topology allows us to reuse the graph in some cases
@@ -1074,6 +1083,8 @@ struct llm_graph_context {
     const llm_graph_cb & cb_func;
 
     llm_graph_result * res;
+
+    const llama_vocab_subset * vsub;
 
     ggml_context * ctx0 = nullptr;
     ggml_cgraph  * gf   = nullptr;

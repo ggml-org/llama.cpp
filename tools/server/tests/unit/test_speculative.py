@@ -65,6 +65,37 @@ def test_with_and_without_draft():
     assert res.body["tokens"] == tokens_no_draft
 
 
+def test_draft_vocab(tmp_path):
+    # the draft computes only the listed ids, the target output stays the same
+    global server
+    request = {
+        "prompt": "I believe the meaning of life is",
+        "temperature": 0.0,
+        "top_k": 1,
+        "n_predict": 32,
+        "return_tokens": True,
+    }
+
+    server.model_draft = None  # disable draft model
+    server.spec_type = None
+    server.start()
+    res = server.make_request("POST", "/completion", data=request)
+    assert res.status_code == 200
+    tokens_no_draft = res.body["tokens"]
+    server.stop()
+
+    vocab_file = tmp_path / "draft_vocab.json"
+    vocab_file.write_text(json.dumps(list(range(8000))))
+
+    create_server()
+    server.spec_draft_vocab = str(vocab_file)
+    server.start()
+    res = server.make_request("POST", "/completion", data=request)
+    assert res.status_code == 200
+    assert res.body["timings"]["draft_n"] > 0
+    assert res.body["tokens"] == tokens_no_draft
+
+
 def test_different_draft_min_draft_max():
     global server
     test_values = [

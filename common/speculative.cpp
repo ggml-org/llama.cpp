@@ -20,6 +20,7 @@
 #include <iomanip>
 #include <map>
 #include <random>
+#include <sstream>
 #include <cinttypes>
 
 #define SPC_DBG(fmt, ...) LOG_DBG("spec %12.*s: " fmt, 12, __func__, __VA_ARGS__)
@@ -2701,6 +2702,38 @@ struct common_speculative_init_result::impl {
     llama_context_ptr context;
 };
 
+// token ids of --spec-draft-vocab: a JSON array of integers or one id per line, range checks are done by the context
+static bool common_speculative_load_vocab(const std::string & path, std::vector<llama_token> & ids, std::string & err) {
+    std::ifstream f(path);
+    if (!f) {
+        err = "cannot open the file";
+        return false;
+    }
+    std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    for (char & c : text) {
+        if (c == '[' || c == ']' || c == ',') {
+            c = ' ';
+        }
+    }
+
+    std::istringstream ss(text);
+    std::string tok;
+    while (ss >> tok) {
+        char * end = nullptr;
+        const long v = std::strtol(tok.c_str(), &end, 10);
+        if (end == tok.c_str() || *end != '\0' || v < 0 || v > INT32_MAX) {
+            err = "'" + tok + "' is not a token id";
+            return false;
+        }
+        ids.push_back((llama_token) v);
+    }
+    if (ids.empty()) {
+        err = "the list is empty";
+        return false;
+    }
+    return true;
+}
+
 common_speculative_init_result::common_speculative_init_result(
     common_params & params,
       llama_model * model_tgt,
@@ -2725,6 +2758,18 @@ common_speculative_init_result::common_speculative_init_result(
     //       the extra memory for small models is likely negligible?
     cparams.n_rs_seq  = 0;
     cparams.ctx_other = ctx_tgt;
+
+    // ids for --spec-draft-vocab, only read while the draft context is created
+    std::vector<llama_token> vocab_ids;
+    if (!params.speculative.draft.vocab_file.empty()) {
+        std::string err;
+        if (!common_speculative_load_vocab(params.speculative.draft.vocab_file, vocab_ids, err)) {
+            LOG_ERR("%s: --spec-draft-vocab '%s': %s\n", __func__, params.speculative.draft.vocab_file.c_str(), err.c_str());
+            return;
+        }
+        cparams.vocab_subset   = vocab_ids.data();
+        cparams.n_vocab_subset = vocab_ids.size();
+    }
 
     std::string model_path;
     if (has_draft) {

@@ -334,6 +334,8 @@ struct common_params_speculative_draft {
     float p_split = 0.1f; // speculative decoding split probability
     float p_min   = 0.0f; // minimum speculative decoding probability (greedy)
 
+    std::string vocab_file; // token ids the draft LM head computes, see --spec-draft-vocab (empty = full LM head)
+
     bool backend_sampling = true; // offload draft sampling to the backend (default: on)
 
     bool probabilistic = false; // sample the draft and verify by rejection, instead of argmax and match

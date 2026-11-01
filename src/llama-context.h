@@ -282,6 +282,8 @@ private:
     // ggml_backend_sched realloc callback, counts and traces the graph reallocations of this context
     static void sched_graph_realloc(ggml_backend_sched_t sched, ggml_cgraph * gf, bool backend_ids_changed, bool graph_size_changed, void * user_data);
 
+    void vsub_init(const llama_token * list, size_t n_list);
+
     // disable auto fused ops (Flash Attention, Gated Delta Net) whose op lands on a device
     // that differs from the layer it belongs to (usually due to missing backend support)
     void resolve_fused_ops(const llama_memory_context_i * mctx, uint32_t n_seqs);
@@ -419,6 +421,11 @@ private:
 
     // host buffer for the model output (logits and embeddings)
     ggml_backend_buffer_ptr buf_output;
+
+    // reduced draft LM head, nullptr = full LM head
+    std::unique_ptr<llama_vocab_subset>  vsub;
+    std::vector<ggml_context_ptr>        vsub_ctxs;
+    std::vector<ggml_backend_buffer_ptr> vsub_bufs;
 
     // keep copies of the per-sequence memory on the device
     std::map<llama_seq_id, llama_memory_buffers> mem_storage;
