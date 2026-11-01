@@ -34,6 +34,7 @@
 		ToolSource
 	} from '$lib/enums';
 	import { useChatFormPickers } from '$lib/hooks/use-chat-form-pickers.svelte';
+	import { useKeyboardInset } from '$lib/hooks/use-keyboard-inset.svelte';
 	import {
 		chatStore,
 		conversationsStore,
@@ -153,6 +154,9 @@
 	let isWorkingDirectoryInAddMenu = $derived(
 		showWorkingDirectory && deviceStore.isMobile && !conversationsStore.activeConversation
 	);
+
+	// the phone sheet fills the screen, so its actions would sit under an iOS keyboard
+	useKeyboardInset(() => isExpanded && deviceStore.isMobile);
 
 	const pickers = useChatFormPickers({
 		canCompact: () => chatStore.canCompact(conversationsStore.activeMessages),
@@ -987,10 +991,11 @@
 			// fill is opaque (what the translucent one looks like over the page), so the
 			// Safari toolbar strip below can match it and it needs no backdrop blur, the
 			// costliest thing to repaint, and its actions keep the gap the collapsed form
-			// keeps from the screen's bottom (more in an installed app)
+			// keeps from the screen's bottom (more in an installed app), or ride 0.5rem above
+			// the keyboard while one is up (see useKeyboardInset; unset, the second term is 0)
 			(isExpanded || isBlurHeld) && 'max-md:backdrop-blur-none',
 			isExpanded && [
-				'max-md:min-h-dvh max-md:rounded-none max-md:pb-[var(--chat-form-bottom-position,0px)]',
+				'max-md:min-h-dvh max-md:rounded-none max-md:pb-[max(var(--chat-form-bottom-position,0px),calc(var(--keyboard-inset,-0.5rem)+0.5rem))]',
 				// it reaches the screen's top: its text and collapse button start below the status
 				// bar, which an installed app draws over the page
 				'max-md:pt-safe',
