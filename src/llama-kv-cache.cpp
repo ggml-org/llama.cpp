@@ -1349,6 +1349,31 @@ uint32_t llama_kv_cache::get_n_kv_slices(const llama_ubatch & ubatch) {
     return 0;
 }
 
+std::vector<llama_pos> llama_kv_cache::get_kv_rows_p_min(const llama_ubatch & ubatch, uint32_t n_slices) const {
+    std::vector<llama_pos> res;
+
+    // the cells below these positions are masked by the SWA for all tokens of the slice
+    // only for SWA types that mask more cells as the token position grows
+    if (n_swa == 0 || (swa_type != LLAMA_SWA_TYPE_STANDARD && swa_type != LLAMA_SWA_TYPE_CHUNKED)) {
+        return res;
+    }
+
+    const uint32_t n_tps = ubatch.n_tokens/n_slices;
+
+    res.resize(n_slices);
+
+    for (uint32_t s = 0; s < n_slices; ++s) {
+        llama_pos p = ubatch.pos[s*n_tps];
+        for (uint32_t i = 1; i < n_tps; ++i) {
+            p = std::min(p, ubatch.pos[s*n_tps + i]);
+        }
+
+        res[s] = swa_type == LLAMA_SWA_TYPE_STANDARD ? p - (llama_pos) n_swa + 1 : (p/(llama_pos) n_swa)*(llama_pos) n_swa;
+    }
+
+    return res;
+}
+
 uint32_t llama_kv_cache::get_n_kv_rows(const llama_ubatch & ubatch) const {
     if (n_stream != 1) {
         return 0;
@@ -1366,8 +1391,17 @@ uint32_t llama_kv_cache::get_n_kv_rows(const llama_ubatch & ubatch) const {
 
     uint32_t n_max = 0;
 
-    for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) {
-        n_max = std::max(n_max, cells.seq_n_cells(ubatch.seq_id_unq[s]));
+    const auto p_min = get_kv_rows_p_min(ubatch, n_slices);
+    if (p_min.empty()) {
+        for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) {
+            n_max = std::max(n_max, cells.seq_n_cells(ubatch.seq_id_unq[s]));
+        }
+    } else {
+        const uint32_t n_tps = ubatch.n_tokens/n_slices;
+
+        for (uint32_t s = 0; s < n_slices; ++s) {
+            n_max = std::max(n_max, cells.seq_n_cells(ubatch.seq_id[s*n_tps][0], p_min[s]));
+        }
     }
 
     // pad like n_kv so that the graph can be reused
@@ -1859,8 +1893,7 @@ void llama_kv_cache::set_input_attn_mask(const llm_attn_mask & attn_mask, const 
             seq_ids[s] = ubatch->seq_id[s*n_tps][0];
         }
 
-        // TODO: profile and optimize if necessary
-        cells.get_seq_cells(seq_ids, data, n_rows);
+        cells.get_seq_cells(seq_ids, get_kv_rows_p_min(*ubatch, n_slices), data, n_rows);
     }
 
     // the mask is left unallocated when the graph only stores K/V without attending

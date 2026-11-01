@@ -200,6 +200,9 @@ public:
     // padded length of the longest cell list of the slices; 0 if the ubatch cannot split
     uint32_t get_n_kv_rows(const llama_ubatch & ubatch) const;
 
+    // per slice: the min position of the cells that are not masked by the SWA (empty if all cells are kept)
+    std::vector<llama_pos> get_kv_rows_p_min(const llama_ubatch & ubatch, uint32_t n_slices) const;
+
     // get views of the current state of the cache
     ggml_tensor * get_k(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
     ggml_tensor * get_v(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
