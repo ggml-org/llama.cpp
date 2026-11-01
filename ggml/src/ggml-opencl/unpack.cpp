@@ -142,6 +142,216 @@ void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, const g
         return;
     }
 
+    if (tensor->type == GGML_TYPE_IQ3_S) {
+        if (tensor->view_src) {
+            offset += tensor->view_offs;
+            tensor = tensor->view_src;
+        }
+        ggml_tensor_extra_cl_iq3_s * extra = (ggml_tensor_extra_cl_iq3_s *)tensor->extra;
+
+        const size_t blck = (size_t)ggml_blck_size(tensor->type);
+
+        ggml_cl_buffer buf_unpacked;
+        buf_unpacked.allocate(backend_ctx->context, ggml_nbytes(tensor));
+
+        const size_t n_blk = (size_t)ggml_nelements(tensor) / blck;
+        cl_ulong nb_arg = (cl_ulong)n_blk;
+
+        cl_mem qs = extra->qs, sg = extra->sg, qh = extra->qh, sc = extra->sc, d = extra->d;
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+        ggml_cl_buffer buf_qs, buf_sg, buf_qh, buf_sc, buf_d;
+        if (extra->noshuffle) {
+            buf_qs.allocate(context, extra->size_qs);
+            buf_sg.allocate(context, extra->size_sg);
+            buf_qh.allocate(context, extra->size_qh);
+            buf_sc.allocate(context, extra->size_sc);
+            buf_d.allocate(context, extra->size_d);
+
+            qs = buf_qs.buffer;
+            sg = buf_sg.buffer;
+            qh = buf_qh.buffer;
+            sc = buf_sc.buffer;
+            d = buf_d.buffer;
+
+            const int m = tensor->ne[1];
+            const int k = tensor->ne[0];
+            transpose_2d_as_8b(backend_ctx, extra->qs, qs, extra->size_qs, m, k/4, true, true);
+            transpose_2d_as_8b(backend_ctx, extra->sg, sg, extra->size_sg, m, k/8, true, true);
+            transpose_2d_as_8b(backend_ctx, extra->qh, qh, extra->size_qh, m, k/32, true, true);
+            transpose_2d_as_8b(backend_ctx, extra->sc, sc, extra->size_sc, m, k/64, true, true);
+            transpose_2d_as_16b(backend_ctx, extra->d, d, extra->size_d, m, k/256, true, true);
+        }
+#endif
+
+        cl_kernel kernel = backend_ctx->repack.kernel_restore_block_iq3_s;
+        CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),    &qs));
+        CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),    &sg));
+        CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),    &qh));
+        CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_mem),    &sc));
+        CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),    &d));
+        CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_mem),    &buf_unpacked.buffer));
+        CL_CHECK(clSetKernelArg(kernel,  6, sizeof(cl_ulong),  &nb_arg));
+
+        size_t gws[] = { (n_blk + 63) / 64 * 64 };
+        size_t lws[] = { 64 };
+        cl_event evt;
+        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 1, NULL, gws, lws, 0, NULL, &evt));
+        CL_CHECK(clWaitForEvents(1, &evt));
+        CL_CHECK(clReleaseEvent(evt));
+        CL_CHECK(clEnqueueReadBuffer(queue, buf_unpacked.buffer, CL_TRUE, offset, size, data, 0, NULL, NULL));
+        return;
+    }
+
+    if (tensor->type == GGML_TYPE_IQ3_XXS) {
+        if (tensor->view_src) {
+            offset += tensor->view_offs;
+            tensor = tensor->view_src;
+        }
+        ggml_tensor_extra_cl_iq3_xxs * extra = (ggml_tensor_extra_cl_iq3_xxs *)tensor->extra;
+
+        const size_t blck = (size_t)ggml_blck_size(tensor->type);
+
+        ggml_cl_buffer buf_unpacked;
+        buf_unpacked.allocate(backend_ctx->context, ggml_nbytes(tensor));
+
+        const size_t n_blk = (size_t)ggml_nelements(tensor) / blck;
+        cl_ulong nb_arg = (cl_ulong)n_blk;
+
+        cl_mem qs = extra->qs, sas = extra->sas, d = extra->d;
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+        ggml_cl_buffer buf_qs, buf_sas, buf_d;
+        if (extra->noshuffle) {
+            buf_qs.allocate(context, extra->size_qs);
+            buf_sas.allocate(context, extra->size_sas);
+            buf_d.allocate(context, extra->size_d);
+
+            qs = buf_qs.buffer;
+            sas = buf_sas.buffer;
+            d = buf_d.buffer;
+
+            const int m = tensor->ne[1];
+            const int k = tensor->ne[0];
+            transpose_2d_as_8b(backend_ctx, extra->qs, qs, extra->size_qs, m, k/4, true, true);
+            transpose_2d_as_32b(backend_ctx, extra->sas, sas, extra->size_sas, m, k/32, true, true);
+            transpose_2d_as_16b(backend_ctx, extra->d, d, extra->size_d, m, k/256, true, true);
+        }
+#endif
+
+        cl_kernel kernel = backend_ctx->repack.kernel_restore_block_iq3_xxs;
+        CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),    &qs));
+        CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),    &sas));
+        CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),    &d));
+        CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_mem),    &buf_unpacked.buffer));
+        CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_ulong),  &nb_arg));
+
+        size_t gws[] = { (n_blk + 63) / 64 * 64 };
+        size_t lws[] = { 64 };
+        cl_event evt;
+        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 1, NULL, gws, lws, 0, NULL, &evt));
+        CL_CHECK(clWaitForEvents(1, &evt));
+        CL_CHECK(clReleaseEvent(evt));
+        CL_CHECK(clEnqueueReadBuffer(queue, buf_unpacked.buffer, CL_TRUE, offset, size, data, 0, NULL, NULL));
+        return;
+    }
+
+    if (tensor->type == GGML_TYPE_IQ1_M) {
+        if (tensor->view_src) {
+            offset += tensor->view_offs;
+            tensor = tensor->view_src;
+        }
+        ggml_tensor_extra_cl_iq1_m * extra = (ggml_tensor_extra_cl_iq1_m *)tensor->extra;
+
+        const size_t blck = (size_t)ggml_blck_size(tensor->type);
+
+        ggml_cl_buffer buf_unpacked;
+        buf_unpacked.allocate(backend_ctx->context, ggml_nbytes(tensor));
+
+        const size_t n_blk = (size_t)ggml_nelements(tensor) / blck;
+        cl_ulong nb_arg = (cl_ulong)n_blk;
+
+        cl_mem qs = extra->qs, qh = extra->qh, sc = extra->sc;
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+        ggml_cl_buffer buf_qs, buf_qh, buf_sc;
+        if (extra->noshuffle) {
+            buf_qs.allocate(context, extra->size_qs);
+            qs = buf_qs.buffer;
+            buf_qh.allocate(context, extra->size_qh);
+            qh = buf_qh.buffer;
+            buf_sc.allocate(context, extra->size_sc);
+            sc = buf_sc.buffer;
+            const int m = tensor->ne[1];
+            const int k = tensor->ne[0];
+            transpose_2d_as_8b(backend_ctx, extra->qs, qs, extra->size_qs, m, k/8, true, true);
+            transpose_2d_as_8b(backend_ctx, extra->qh, qh, extra->size_qh, m, k/16, true, true);
+            transpose_2d_as_16b(backend_ctx, extra->sc, sc, extra->size_sc, m, k/64, true, true);
+        }
+#endif
+        cl_kernel kernel = backend_ctx->repack.kernel_restore_block_iq1_m;
+        CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),    &qs));
+        CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),    &qh));
+        CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),    &sc));
+        CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_mem),    &buf_unpacked.buffer));
+        CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_ulong),  &nb_arg));
+
+        size_t gws[] = { (n_blk + 63) / 64 * 64 };
+        size_t lws[] = { 64 };
+        cl_event evt;
+        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 1, NULL, gws, lws, 0, NULL, &evt));
+        CL_CHECK(clWaitForEvents(1, &evt));
+        CL_CHECK(clReleaseEvent(evt));
+        CL_CHECK(clEnqueueReadBuffer(queue, buf_unpacked.buffer, CL_TRUE, offset, size, data, 0, NULL, NULL));
+        return;
+    }
+
+    if (tensor->type == GGML_TYPE_IQ1_S) {
+        if (tensor->view_src) {
+            offset += tensor->view_offs;
+            tensor = tensor->view_src;
+        }
+        ggml_tensor_extra_cl_iq1_s * extra = (ggml_tensor_extra_cl_iq1_s *)tensor->extra;
+
+        const size_t blck = (size_t)ggml_blck_size(tensor->type);
+
+        ggml_cl_buffer buf_unpacked;
+        buf_unpacked.allocate(backend_ctx->context, ggml_nbytes(tensor));
+
+        const size_t n_blk = (size_t)ggml_nelements(tensor) / blck;
+        cl_ulong nb_arg = (cl_ulong)n_blk;
+
+        cl_mem qs = extra->qs, qh = extra->qh, d = extra->d;
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+        ggml_cl_buffer buf_qs, buf_qh, buf_d;
+        if (extra->noshuffle) {
+            buf_qs.allocate(context, extra->size_qs);
+            qs = buf_qs.buffer;
+            buf_qh.allocate(context, extra->size_qh);
+            qh = buf_qh.buffer;
+            buf_d.allocate(context, extra->size_d);
+            d = buf_d.buffer;
+            const int m = tensor->ne[1];
+            const int k = tensor->ne[0];
+            transpose_2d_as_8b(backend_ctx, extra->qs, qs, extra->size_qs, m, k/8, true, true);
+            transpose_2d_as_16b(backend_ctx, extra->qh, qh, extra->size_qh, m, k/32, true, true);
+            transpose_2d_as_16b(backend_ctx, extra->d, d, extra->size_d, m, k/(int)blck, true, true);
+        }
+#endif
+        cl_kernel kernel = backend_ctx->repack.kernel_restore_block_iq1_s;
+        CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),    &qs));
+        CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),    &qh));
+        CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),    &d));
+        CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_mem),    &buf_unpacked.buffer));
+        CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_ulong),  &nb_arg));
+
+        size_t gws[] = { (n_blk + 63) / 64 * 64 };
+        size_t lws[] = { 64 };
+        cl_event evt;
+        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 1, NULL, gws, lws, 0, NULL, &evt));
+        CL_CHECK(clWaitForEvents(1, &evt));
+        CL_CHECK(clReleaseEvent(evt));
+        CL_CHECK(clEnqueueReadBuffer(queue, buf_unpacked.buffer, CL_TRUE, offset, size, data, 0, NULL, NULL));
+        return;
+    }
+
     if (tensor->type == GGML_TYPE_IQ2_S) {
         if (tensor->view_src) {
             offset += tensor->view_offs;
