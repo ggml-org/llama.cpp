@@ -3,6 +3,7 @@
 #include "ggml-cpp.h"
 
 #include <climits>
+#include <new>
 
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 struct ggml_cuda_batch_get_descriptor {
@@ -137,16 +138,19 @@ bool ggml_cuda_get_tensor_n(int device,
     }
     // Reads selected for gather; zero means all reads use DMA.
     size_t n_reads_gather = mapping.device && n_reads_small >= min_batch_reads ? n_reads_small : 0;
-    // Allocate per-call descriptor storage on the GPU and in pinned CPU memory; both buffers are freed on scope exit.
+    // Keep descriptor storage alive until the final stream synchronization.
     const size_t bytes = n_reads_gather * sizeof(ggml_cuda_batch_get_descriptor);
     ggml_backend_buffer_ptr descriptors(n_reads_gather ? ggml_backend_buft_alloc_buffer(ggml_backend_cuda_buffer_type(device), bytes) : nullptr);
-    const auto host_type = ggml_backend_cuda_host_buffer_type();
-    ggml_backend_buffer_ptr host_descriptors(descriptors ? ggml_backend_buft_alloc_buffer(host_type, bytes) : nullptr);
-    if (!host_descriptors || ggml_backend_buffer_get_type(host_descriptors.get()) != host_type) {
+    if (!descriptors) {
+        n_reads_gather = 0;
+    }
+    std::vector<ggml_cuda_batch_get_descriptor> copies;
+    try {
+        copies.resize(n_reads_gather);
+    } catch (const std::bad_alloc &) {
         n_reads_gather = 0;
     }
     if (n_reads_gather) {
-        auto * copies = static_cast<ggml_cuda_batch_get_descriptor *>(ggml_backend_buffer_get_base(host_descriptors.get()));
         auto * device_copies = static_cast<ggml_cuda_batch_get_descriptor *>(ggml_backend_buffer_get_base(descriptors.get()));
         size_t count = 0;
         // Fill one descriptor for each small, non-empty read.
@@ -162,7 +166,7 @@ bool ggml_cuda_get_tensor_n(int device,
         const size_t blocks_per_copy = std::min<size_t>(UINT16_MAX, std::max<size_t>(1, (nsm + n_reads_gather - 1) / n_reads_gather));
         const dim3 blocks((unsigned int) n_reads_gather, (unsigned int) blocks_per_copy);
         // Upload descriptors, then launch the kernel to copy payload bytes into mapped CPU memory.
-        CUDA_CHECK(cudaMemcpyAsync(device_copies, copies, bytes, cudaMemcpyHostToDevice, cudaStreamPerThread));
+        CUDA_CHECK(cudaMemcpyAsync(device_copies, copies.data(), bytes, cudaMemcpyHostToDevice, cudaStreamPerThread));
         ggml_cuda_batch_get_kernel<<<blocks, threads, 0, cudaStreamPerThread>>>(device_copies, count);
         CUDA_CHECK(cudaGetLastError());
     }
