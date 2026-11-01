@@ -1008,6 +1008,170 @@ struct ggml_cuda_type_traits<GGML_TYPE_Q2_0> {
 };
 
 template<>
+struct ggml_cuda_type_traits<GGML_TYPE_TQ1_0> {
+    static constexpr int qk = QK_K;
+    static constexpr int qr = QR_TQ1_0;
+    static constexpr int qi = QI_TQ1_0; // 8 chunks of 32 elements per block
+    static constexpr int bs = sizeof(block_tq1_0);
+};
+
+// TQ1_0: QK_K = 256 ternary weights per block, 5 ternary digits per byte, ONE fp16 scale.
+//
+// The on-disk layout (block_tq1_0 = uint8_t qs[48], uint8_t qh[4], ggml_half d) is the one defined
+// by dequantize_row_tq1_0 / ggml_vec_dot_tq1_0_q8_K in ggml-cpu/quants.c. It is transposed with
+// respect to the element order (there the digit n is the outer loop, the byte the inner one):
+//   elements   0..159: e = 32*n + m     -> qs[m]      (m = 0..31), digit n = 0..4
+//   elements 160..239: e = 160 + 16*n+m -> qs[32 + m] (m = 0..15), digit n = 0..4
+//   elements 240..255: e = 240 + 4*n+j  -> qh[j]      (j = 0.. 3), digit n = 0..3
+//
+// The reference digit is ((uint8_t) (byte * 3^n) * 3) >> 8. Ternary weights need no multiply at
+// all: with y = (byte * 3^n) mod 256 the digit is exactly (y >= 86) + (y >= 171), i.e.
+//   y >= 171 -> weight +1, 86 <= y <= 170 -> weight 0, y < 86 -> weight -1.
+// y itself is a chain of shifts and adds (byte * 81 <= 20655 < 2^31, so reducing modulo 256 once
+// at the end is enough). The AVX2 kernel in ggml-cpu/arch/x86/quants.c reaches the same two
+// thresholds by other means. Callers therefore only add or subtract the already quantized
+// activation, skip it when the weight is 0, and apply the scales once per 32-element chunk.
+//
+// Returns the ternary symbol in {-1, 0, +1} of element e (0..255) of the block.
+static __device__ __forceinline__ int ggml_cuda_tq1_0_symbol(const block_tq1_0 * x, const int e) {
+    int b;
+    int n;
+
+    if (e < 160) {
+        b = x->qs[e % 32];
+        n = e / 32;
+    } else if (e < 240) {
+        b = x->qs[32 + (e - 160) % 16];
+        n = (e - 160) / 16;
+    } else {
+        b = x->qh[(e - 240) % 4];
+        n = (e - 240) / 4; // 0..3
+    }
+
+    int y = b;                          // y = b * 3^n, shifts and adds only
+    y = (n > 0) ? y + (y << 1) : y;     // *3
+    y = (n > 1) ? y + (y << 1) : y;     // *9
+    y = (n > 2) ? y + (y << 1) : y;     // *27
+    y = (n > 3) ? y + (y << 1) : y;     // *81
+    y &= 0xFF;                          // == (b * 3^n) mod 256, b * 81 <= 20655 < 2^31
+
+    if (y >= 171) {
+        return 1;                       // digit 2
+    }
+    if (y < 86) {
+        return -1;                      // digit 0
+    }
+    return 0;                           // digit 1
+}
+
+// SWAR form of the extraction above: four ternary symbols packed as int8 bytes in one word.
+//
+// Two source bytes are kept in each 16-bit lane, so b * 3^n <= 255*81 = 20655 never carries into
+// the neighbouring lane and the digit of every byte comes out with one multiply, one mask and one
+// shift: digit = ((b * 3^n mod 256) * 3) >> 8. p3n must be 3^n with n <= 4. About 4 instructions
+// per element instead of ~12 for the scalar form, and nothing here depends on the weight values,
+// so a warp never diverges. dp4a then consumes the packed symbols directly.
+static __device__ __forceinline__ int ggml_cuda_tq1_0_symbols4(const int b4, const int p3n) {
+    const int wlo = ((b4     ) & 0x00FF00FF) * p3n;   // 16-bit lanes: bytes 0 and 2 of b4
+    const int whi = ((b4 >> 8) & 0x00FF00FF) * p3n;   // 16-bit lanes: bytes 1 and 3
+
+    const int dlo = (((wlo & 0x00FF00FF) * 3) >> 8) & 0x00FF00FF;   // digits of bytes 0, 2
+    const int dhi = (((whi & 0x00FF00FF) * 3) >> 8) & 0x00FF00FF;   // digits of bytes 1, 3
+
+    // [digit0, digit1, digit2, digit3] as bytes, then the -1 bias for all four at once
+#if defined(GGML_USE_HIP)
+    // HIP has __vsub4 (ggml-cuda/vendors/hip.h) but no __byte_perm, so spell the 0x6240
+    // selector out with shifts and masks: byte0 = dlo.b0, byte1 = dhi.b0, byte2 = dlo.b2,
+    // byte3 = dhi.b2. Same result, two extra ALU ops, and only on the AMD path.
+    const int merged = (dlo & 0x000000FF) | ((dhi & 0x000000FF) << 8)
+                     | (dlo & 0x00FF0000) | ((dhi & 0x00FF0000) << 8);
+    return __vsub4(merged, 0x01010101);
+#else
+    return __vsub4(__byte_perm(dlo, dhi, 0x6240), 0x01010101);
+#endif // defined(GGML_USE_HIP)
+}
+
+// Raw ternary digits 0..2 (no -1 bias) of the four bytes of b4 at trit position n, one digit per
+// byte. Identical SWAR chain to ggml_cuda_tq1_0_symbols4 minus the final __vsub4: the planar GEMV
+// kernels (mmvq-tq-pt.cuh) keep the digits unsigned and subtract the exact integer sum of the
+// activations once per 32 elements, which saves one ALU op per four weights and keeps every dp4a
+// operand non-negative on the weight side.
+static __device__ __forceinline__ int ggml_cuda_tq1_0_digits4(const int b4, const int p3n) {
+    const int wlo = ((b4     ) & 0x00FF00FF) * p3n;   // 16-bit lanes: bytes 0 and 2 of b4
+    const int whi = ((b4 >> 8) & 0x00FF00FF) * p3n;   // 16-bit lanes: bytes 1 and 3
+
+    const int dlo = (((wlo & 0x00FF00FF) * 3) >> 8) & 0x00FF00FF;   // digits of bytes 0, 2
+    const int dhi = (((whi & 0x00FF00FF) * 3) >> 8) & 0x00FF00FF;   // digits of bytes 1, 3
+
+#if defined(GGML_USE_HIP)
+    const int merged = (dlo & 0x000000FF) | ((dhi & 0x000000FF) << 8)
+                     | (dlo & 0x00FF0000) | ((dhi & 0x00FF0000) << 8);
+    return merged;
+#else
+    return __byte_perm(dlo, dhi, 0x6240);
+#endif // defined(GGML_USE_HIP)
+}
+
+// 3^n for the five trit positions of one TQ1_0 byte. Select chain: n is uniform per call but is
+// not known at compile time (it comes from iqs), and a branch here would diverge the warp.
+static __device__ __forceinline__ int ggml_cuda_tq1_0_pow3(const int n) {
+    return (n > 1) ? ((n > 2) ? ((n > 3) ? 81 : 27) : 9) : ((n > 0) ? 3 : 1);
+}
+
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_TQ2_0> {
+    static constexpr int qk = QK_K;
+    static constexpr int qr = QR_TQ2_0;
+    static constexpr int qi = QI_TQ2_0; // 8 chunks of 32 elements per block
+    static constexpr int bs = sizeof(block_tq2_0);
+};
+
+// TQ2_0: QK_K = 256 weights per block, 2 bits each, ONE fp16 scale.
+// block_tq2_0 = uint8_t qs[64] + ggml_half d = 66 bytes.
+//
+// The element -> (byte, bit pair) map below is the one both CPU codecs agree on:
+// dequantize_row_tq2_0 (ggml-quants.c) walks j = 0,32 / l = 0..3 / m = 0..31 and reads
+// qs[j + m] at shift 2*l, and ggml_vec_dot_tq2_0_q8_K_generic (ggml-cpu/quants.c) walks the very
+// same nest. Writing e = 128*c + 32*l + m with c in {0,1}, l = 0..3, m = 0..31:
+//     byte = qs[32*c + m],  digit = (byte >> 2*l) & 3,  weight = digit - 1
+// So each 32-byte half of qs carries one value of c, and inside a half the 32 consecutive bytes
+// are the 32 consecutive m of ONE bit-pair position l. Compared with TQ1_0 that removes every
+// split/transpose case: a 32-element chunk of a row is 32 contiguous bytes at one single shift,
+// and a MMQ tile row is filled by 16 threads that each own 16 contiguous bytes at one shift.
+//
+// All four levels stay exact. quantize_row_tq2_0_ref rounds |x/d| <= 1 into {-1, 0, 1} and then
+// masks with & 3, so a freshly quantized tensor never holds a 3; a requantized or hand-built one
+// can, and there the weight is +2. Every kernel below works on digit - 1 rather than on a ternary
+// assumption, so a digit of 3 comes out as +2 exactly like the CPU does.
+static __device__ __forceinline__ int ggml_cuda_tq2_0_digit(const block_tq2_0 * x, const int e) {
+    const int c = e >> 7;          // which 32-byte half of qs
+    const int l = (e >> 5) & 3;    // bit pair inside the byte
+    const int m = e & 31;          // byte inside the half
+    return (x->qs[32*c + m] >> (2*l)) & 3;
+}
+
+// Weight of element e (0..255) of the block, in {-1, 0, +1, +2}. The only multiply left is the one
+// by the block scale, which the caller applies once per block.
+static __device__ __forceinline__ int ggml_cuda_tq2_0_symbol(const block_tq2_0 * x, const int e) {
+    return ggml_cuda_tq2_0_digit(x, e) - 1;
+}
+
+// Raw digits 0..3 of the four bytes of one weight word, as four int8 bytes in one word. shift is
+// 2*l with l = 0..3: the bits the shift drags in from the neighbouring byte are exactly the ones
+// the mask drops, so this is correct for every l, including the top byte of the word (zeros shift
+// in there). Two integer ops for four weights.
+static __device__ __forceinline__ int ggml_cuda_tq2_0_digits4(const int w4, const int shift) {
+    return (w4 >> shift) & 0x03030303;
+}
+
+// Same, biased to the weights digit - 1 ({-1, 0, +1, +2} as int8 bytes). Same shape as the q4_0
+// MMQ tile loader (__vsub4((qs >> 0) & 0x0F0F0F0F, 0x08080808)), so no new idiom: __vsub4 is a
+// per-byte subtract with wrap-around, digits are 0..3, and no lane can borrow from its neighbour.
+static __device__ __forceinline__ int ggml_cuda_tq2_0_symbols4(const int w4, const int shift) {
+    return __vsub4(ggml_cuda_tq2_0_digits4(w4, shift), 0x01010101);
+}
+
+template<>
 struct ggml_cuda_type_traits<GGML_TYPE_Q4_0> {
     static constexpr int qk = QK4_0;
     static constexpr int qr = QR4_0;

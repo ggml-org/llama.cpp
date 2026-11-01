@@ -1,4 +1,5 @@
 #include "mmvq.cuh"
+#include "mmvq-tq-pt.cuh"
 #include "quantize.cuh"
 #include "unary.cuh"
 #include "vecdotq.cuh"
@@ -41,6 +42,16 @@ static constexpr __device__ vec_dot_q_cuda_t get_vec_dot_q_cuda(ggml_type type) 
     switch (type) {
         case GGML_TYPE_Q1_0:    return vec_dot_q1_0_q8_1;
         case GGML_TYPE_Q2_0:    return vec_dot_q2_0_q8_1;
+#ifdef GGML_CUDA_TQ1_0_NOMUL
+        case GGML_TYPE_TQ1_0:   return vec_dot_tq1_0_q8_1_nomul;
+#else
+        case GGML_TYPE_TQ1_0:   return vec_dot_tq1_0_q8_1;
+#endif
+#ifdef GGML_CUDA_TQ2_0_NOMUL
+        case GGML_TYPE_TQ2_0:   return vec_dot_tq2_0_q8_1_nomul;
+#else
+        case GGML_TYPE_TQ2_0:   return vec_dot_tq2_0_q8_1;
+#endif
         case GGML_TYPE_Q4_0:    return vec_dot_q4_0_q8_1;
         case GGML_TYPE_Q4_1:    return vec_dot_q4_1_q8_1;
         case GGML_TYPE_Q5_0:    return vec_dot_q5_0_q8_1;
@@ -70,6 +81,8 @@ static constexpr __host__ __device__ int get_vdr_mmvq(ggml_type type) {
     switch (type) {
         case GGML_TYPE_Q1_0:    return VDR_Q1_0_Q8_1_MMVQ;
         case GGML_TYPE_Q2_0:    return VDR_Q2_0_Q8_1_MMVQ;
+        case GGML_TYPE_TQ1_0:   return VDR_TQ1_0_Q8_1_MMVQ;
+        case GGML_TYPE_TQ2_0:   return VDR_TQ2_0_Q8_1_MMVQ;
         case GGML_TYPE_Q4_0:    return VDR_Q4_0_Q8_1_MMVQ;
         case GGML_TYPE_Q4_1:    return VDR_Q4_1_Q8_1_MMVQ;
         case GGML_TYPE_Q5_0:    return VDR_Q5_0_Q8_1_MMVQ;
@@ -283,6 +296,13 @@ static constexpr __host__ __device__ int get_mmvq_mmid_max_batch_rdna4(ggml_type
 
 // Host function: returns the max batch size for the current arch+type at runtime.
 int get_mmvq_mmid_max_batch(ggml_type type, int cc) {
+    // TQ1_0 and TQ2_0 take the arch default (MMVQ_MAX_BATCH_SIZE) like every other type that has
+    // a mul_mat_vec_q kernel: the fused MUL_MAT_ID path is type-generic and only needs vec_dot
+    // plus vdr, both of which they provide. Do NOT special-case them to -1: that forces every
+    // MoE layer into the ids-to-host + cudaStreamSynchronize fallback (host loop over all
+    // experts, one launch per active expert) and, because one such node is enough, disables
+    // CUDA graph capture for the whole graph.
+    // Batches above MMVQ_MAX_BATCH_SIZE go to the MMQ kernel (mmq-instance-tq1_0/tq2_0.cu).
     // NVIDIA: P100, Volta, Ada Lovelace, and Blackwell always use MMVQ for MUL_MAT_ID.
     if (GGML_CUDA_CC_IS_NVIDIA(cc)) {
         if (cc == GGML_CUDA_CC_PASCAL || cc == GGML_CUDA_CC_VOLTA || cc >= GGML_CUDA_CC_ADA_LOVELACE) {
@@ -1315,6 +1335,18 @@ static void mul_mat_vec_q_switch_type(
                  nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
                  nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride, stream);
             break;
+        case GGML_TYPE_TQ1_0:
+            mul_mat_vec_q_switch_ncols_dst<GGML_TYPE_TQ1_0>
+                (vx, vy, ids, fusion, dst, ncols_x, nrows_x, ncols_dst, stride_row_x, stride_col_y, stride_col_dst,
+                 nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride, stream);
+            break;
+        case GGML_TYPE_TQ2_0:
+            mul_mat_vec_q_switch_ncols_dst<GGML_TYPE_TQ2_0>
+                (vx, vy, ids, fusion, dst, ncols_x, nrows_x, ncols_dst, stride_row_x, stride_col_y, stride_col_dst,
+                 nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride, stream);
+            break;
         case GGML_TYPE_Q2_0:
             mul_mat_vec_q_switch_ncols_dst<GGML_TYPE_Q2_0>
                 (vx, vy, ids, fusion, dst, ncols_x, nrows_x, ncols_dst, stride_row_x, stride_col_y, stride_col_dst,
@@ -1550,11 +1582,34 @@ void ggml_cuda_mul_mat_vec_q(
 
     const int64_t ne10_padded = GGML_PAD(ne10, MATRIX_ROW_PADDING);
     ggml_cuda_pool_alloc<char> src1_q8_1(ctx.pool(), ne13*ne12 * ne11*ne10_padded * sizeof(block_q8_1)/QK8_1);
+
+    // Ternary GEMV: planar-transposed activations (mmvq-tq-pt.cuh). The PT column is byte for byte
+    // the same size as the AoS one, so the allocation below and every stride further down are shared.
+    //
+    // The activation layout is baked in right here, before quantization, so every host-side
+    // invariant the PT launchers rely on has to be decided here as well. A shape the PT path does
+    // not describe falls back to AoS instead of aborting at run time.
+    const bool has_fusion_local = fusion_local.gate != nullptr || fusion_local.x_bias != nullptr ||
+                                  fusion_local.gate_bias != nullptr || fusion_local.x_scale != nullptr ||
+                                  fusion_local.gate_scale != nullptr || fusion_local.shared_up != nullptr;
+    const int64_t pt_nchannels_dst = ids ? ne1 : ne2;
+    const int64_t pt_ncols_dst     = ids ? ne2 : ne1;
+    // MUL_MAT_ID walks the channel dimension through ids, so the ratio is only meaningful without ids.
+    const bool pt_channels_ok = ids || (ne02 >= 1 && pt_nchannels_dst % ne02 == 0 && pt_nchannels_dst >= ne02);
+    const bool pt_samples_ok  = ne03 >= 1 && ne3 % ne03 == 0 && ne3 >= ne03;
+    const bool pt_slots_ok    = pt_ncols_dst >= 1 && pt_ncols_dst <= TQ_PT_MAX_SLOTS;
+    const bool use_tq_pt = pt_channels_ok && pt_samples_ok && pt_slots_ok && mul_mat_vec_tq_pt_supported(
+        src0->type, ne00, has_fusion_local, ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size);
+
     {
         const int64_t s11 = src1->nb[1] / ts_src1;
         const int64_t s12 = src1->nb[2] / ts_src1;
         const int64_t s13 = src1->nb[3] / ts_src1;
-        quantize_row_q8_1_cuda(src1_d, nullptr, src1_q8_1.get(), src0->type, ne10, s11, s12, s13, ne10_padded, ne11, ne12, ne13, stream);
+        if (use_tq_pt) {
+            quantize_row_q8_1_pt_cuda(src1_d, src1_q8_1.get(), src0->type, ne10, s11, s12, s13, ne10_padded, ne11, ne12, ne13, stream);
+        } else {
+            quantize_row_q8_1_cuda(src1_d, nullptr, src1_q8_1.get(), src0->type, ne10, s11, s12, s13, ne10_padded, ne11, ne12, ne13, stream);
+        }
     }
 
     const int64_t s01 = src0->nb[1] / ts_src0;
@@ -1578,6 +1633,16 @@ void ggml_cuda_mul_mat_vec_q(
     const int64_t stride_channel_y   = ids ? s11  : s12;
 
     const int64_t ids_stride = ids ? ids->nb[1] / ggml_type_size(ids->type) : 0;
+
+    if (use_tq_pt) {
+        mul_mat_vec_tq_pt(
+            src0->data, src0->type, src1_q8_1.get(), ids_d, dst_d, ne00,
+            ne01,              ncols_dst,     s01, stride_col_y,     stride_col_dst,
+            ne02, nchannels_y, nchannels_dst, s02, stride_channel_y, stride_channel_dst,
+            ne03,              ne3,           s03, s13,              s3,               ids_stride,
+            (int) (ne10_padded / TQ_PT_QK), stream);
+        return;
+    }
 
     mul_mat_vec_q_switch_type(
         src0->data, src0->type, src1_q8_1.get(), ids_d, fusion_local, dst_d, ne00,
