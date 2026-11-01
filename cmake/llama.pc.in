@@ -6,5 +6,6 @@ includedir=@CMAKE_INSTALL_FULL_INCLUDEDIR@
 Name: llama
 Description: Port of Facebook's LLaMA model in C/C++
 Version: @LLAMA_VERSION@
-Libs: -L${libdir} -lggml -lggml-base -lllama
+Requires: @GGML_REQUIRES@
+Libs: -L${libdir} -lllama @LLAMA_MTMD_LIB@ @LLAMA_COMMON_LIB@
 Cflags: -I${includedir}

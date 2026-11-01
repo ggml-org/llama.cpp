@@ -120,6 +120,7 @@ set_target_properties(mtmd
     PROPERTIES
     PRIVATE_HEADER debug/mtmd-debug.h)
 
+set(LLAMA_MTMD_LIB "-lmtmd")
 install(TARGETS mtmd LIBRARY PUBLIC_HEADER)
 
 if (NOT MSVC)
