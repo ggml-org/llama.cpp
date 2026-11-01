@@ -401,6 +401,6 @@ npm run test
 npm run build
 ```
 
-After `public/index.html` has been generated, rebuild `llama-server` as described in the [build](#build) section to include the updated UI.
+After `public/index.html` has been generated, rebuild `llama-server` as described in the [build](../../docs/build.md) section to include the updated UI.
 
 **Note:** The Vite dev server automatically proxies API requests to `http://localhost:9931`. Make sure `llama-server` is running on that port during development.
