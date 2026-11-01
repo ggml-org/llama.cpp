@@ -63,7 +63,8 @@ static int service_run(std::vector<std::string> args, bool detached) {
         if (freopen(log.c_str(), "a", stdout) == nullptr || freopen(log.c_str(), "a", stderr) == nullptr) {
             return 1;
         }
-        setvbuf(stdout, nullptr, _IOLBF, 0);
+        // the log is read while the service runs, and MSVC has no line buffering
+        setvbuf(stdout, nullptr, _IONBF, 0);
         setvbuf(stderr, nullptr, _IONBF, 0);
     }
 
