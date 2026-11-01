@@ -46,12 +46,18 @@ env:
 
 jobs:
   cpu-x64-high-perf:
-    runs-on: [self-hosted, Linux, X64, CPU]
+    runs-on: hf-jobs-cpu-upgrade:ubuntu26_04
 
     steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential cmake libssl-dev time unzip wget python3 python3-venv python3-dev
 
       - name: Test
         id: ggml-ci
