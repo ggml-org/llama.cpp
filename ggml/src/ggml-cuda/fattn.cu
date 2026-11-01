@@ -734,8 +734,14 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
                 }
             }
         } else {
-            if (Q->ne[1] <= 2) {
-                return BEST_FATTN_KERNEL_VEC;
+            // Native-quantized K/V (both q8_0, or f16 K with q8_0 V) can go to the tile kernel, which
+            // dequantizes in-kernel; keep the upstream VEC path when GQA reuse does not apply.
+            const bool native_q8_0   = ggml_cuda_fattn_kv_native_q8_0(K, V);
+            const bool native_v_q8_0 = ggml_cuda_fattn_kv_native_v_q8_0(K, V);
+            if (!((native_q8_0 || native_v_q8_0) && gqa_opt_applies)) {
+                if (Q->ne[1] <= 2) {
+                    return BEST_FATTN_KERNEL_VEC;
+                }
             }
         }
     }
@@ -758,7 +764,11 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
     bool need_f16_V = false;
 
     switch (kernel) {
-        case BEST_FATTN_KERNEL_TILE:
+        case BEST_FATTN_KERNEL_TILE: {
+            // The tile kernel dequantizes q8_0 K/V in-kernel, so no f16 scratch is needed then.
+            need_f16_K = !ggml_cuda_fattn_kv_native_q8_0(K, V);
+            need_f16_V = !ggml_cuda_fattn_kv_native_v_q8_0(K, V);
+        } break;
         case BEST_FATTN_KERNEL_MMA_F16:
             need_f16_K = true;
             need_f16_V = true;
