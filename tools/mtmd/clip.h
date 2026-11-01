@@ -139,6 +139,8 @@ struct clip_gen_state * clip_gen_state_init(struct clip_ctx * ctx, uint32_t seed
 void                    clip_gen_state_free(struct clip_gen_state * state);
 void                    clip_gen_state_reset(struct clip_gen_state * state);
 
+const std::map<std::string, std::vector<float>> & clip_gen_get_voices(const struct clip_ctx * ctx);
+
 bool clip_is_llava(const struct clip_ctx * ctx);
 // note for contributor: this clip_is_(model) pattern is deprecated
 //                       do NOT add new functions like this

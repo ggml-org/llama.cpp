@@ -430,7 +430,7 @@ private:
 
     // runs the reference wav through the speaker encoder, returns one x-vector embedding row
     bool encode_speaker(mtmd_bitmap * bitmap, std::vector<float> & out) {
-        if (!mtmd_support_audio(mctx)) {
+        if (!mtmd_bitmap_is_voice(bitmap) && !mtmd_support_audio(mctx)) {
             LOG_ERR("mtmd_helper_gen_audio: mmproj has no speaker/audio encoder\n");
             return false;
         }
@@ -998,7 +998,7 @@ private:
 
     // runs the reference wav through the mimi encoder, returns one row per 12.5Hz frame
     bool encode_speaker(mtmd_bitmap * bitmap, std::vector<float> & out) {
-        if (!mtmd_support_audio(mctx)) {
+        if (!mtmd_bitmap_is_voice(bitmap) && !mtmd_support_audio(mctx)) {
             LOG_ERR("mtmd_helper_gen_audio: mmproj has no voice encoder\n");
             return false;
         }
@@ -1298,7 +1298,8 @@ public:
         reset();
         seq_id = inp->seq_id;
 
-        if (inp->speaker_ref) {
+        // a voice is named in the prompt instead
+        if (inp->speaker_ref && !mtmd_bitmap_is_voice(inp->speaker_ref)) {
             LOG_WRN("mtmd_helper_gen_audio: the model has no voice conditioning, the speaker file is ignored\n");
         }
 

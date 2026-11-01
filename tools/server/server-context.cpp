@@ -5225,6 +5225,13 @@ server_context_meta server_context::get_meta() const {
 
     const char * ftype_name = llama_ftype_name(llama_model_ftype(impl->model_tgt));
 
+    std::vector<std::string> tts_voices;
+    if (impl->mctx) {
+        for (int32_t i = 0; i < mtmd_gen_audio_get_info(impl->mctx).n_voices; i++) {
+            tts_voices.push_back(mtmd_gen_audio_voice_name(impl->mctx, i));
+        }
+    }
+
     return server_context_meta {
         /* build_info              */ std::string(llama_build_info()),
         /* model_name              */ impl->model_name,
@@ -5239,6 +5246,7 @@ server_context_meta server_context::get_meta() const {
         /* has_cap_chat            */ impl->has_cap_chat(),
         /* has_cap_tts             */ impl->has_cap_tts(),
         /* has_audio_stream        */ impl->mtmd_cap.audio_stream,
+        /* tts_voices              */ std::move(tts_voices),
         /* json_ui_settings        */ impl->json_ui_settings,
         /* slot_n_ctx              */ impl->n_ctx_slot(),
         /* pooling_type            */ llama_pooling_type(impl->ctx_tgt),
@@ -5696,6 +5704,9 @@ static json get_res_props(const server_context_meta & meta, const common_params 
 
     if (!params.server_connect_code.empty()) {
         props["connect_code"] = params.server_connect_code;
+    }
+    if (!meta.tts_voices.empty()) {
+        props["voices"] = meta.tts_voices;
     }
     if (params.use_jinja) {
         if (!tmpl_tools.empty()) {
@@ -6475,9 +6486,17 @@ void server_routes::init_routes() {
         const std::string lang       = json_value(body, "lang", std::string());
         const std::string voice      = json_value(body, "voice", std::string());
         const std::string tts_prompt = common_chat_get_tts_prompt(meta->chat_params.tmpls.get(), prompt, lang, voice);
+        // a model with predefined voices only speaks with one of them
+        mtmd::bitmap_ptr voice_ref;
+        if (!voice.empty() && info.n_voices > 0) {
+            voice_ref.reset(mtmd_gen_audio_get_voice(ctx_server.mctx, voice.c_str()));
+            if (!voice_ref) {
+                res->error(format_error_response("unknown voice \"" + voice + "\", see \"voices\" in GET /props", ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            }
+        }
         task.tts_inp.set_prompt(tts_prompt.empty() ? prompt : tts_prompt);
         task.tts_inp.set_lang(lang);
-        task.tts_inp.set_voice(voice);
         task.tts_inp.data.stream    = stream;
         task.tts_inp.data.out_type  = response_format == "pcm"
             ? MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM
@@ -6516,12 +6535,27 @@ void server_routes::init_routes() {
         }
 
         if (speaker_ref_len > 0) {
+            if (voice_ref) {
+                res->error(format_error_response("\"voice\" and \"speaker_ref\" cannot be used together", ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            }
+            if (!mtmd_support_audio(ctx_server.mctx)) {
+                res->error(format_error_response("this model has no voice encoder, \"speaker_ref\" cannot be used", ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            }
             auto wrapper = mtmd_helper_bitmap_init_from_buf(ctx_server.mctx, speaker_ref_data, speaker_ref_len, false, ctx_server.init_opt);
             if (!wrapper.bitmap) {
                 res->error(format_error_response("failed to decode \"speaker_ref\"", ERROR_TYPE_INVALID_REQUEST));
                 return res;
             }
             task.tts_inp.set_speaker_ref(mtmd::bitmap_ptr(wrapper.bitmap));
+        } else if (voice_ref) {
+            task.tts_inp.set_speaker_ref(std::move(voice_ref));
+        } else if (info.n_voices > 0) {
+            // without a voice prompt the model produces near silence: the first voice is the default
+            const char * first = mtmd_gen_audio_voice_name(ctx_server.mctx, 0);
+            SRV_WRN("no voice given, speaking with \"%s\"\n", first);
+            task.tts_inp.set_speaker_ref(mtmd::bitmap_ptr(mtmd_gen_audio_get_voice(ctx_server.mctx, first)));
         } else {
             SRV_WRN("%s", "no speaker reference provided, the model may behave randomly\n");
         }
