@@ -188,7 +188,7 @@ export { default as SidebarNavigationActions } from './SidebarNavigation/Sidebar
  * Pure-presentational rendering of the search-mode subtree: "Search results"
  * header, the matching items rendered through {@link SidebarNavigationConversationItem},
  * and contextual empty-state messages. Used as the body of the mobile `/search`
- * route; desktop search goes through {@link DialogSearch}.
+ * route; the sidebar's search opens {@link DialogSearch}.
  *
  * The caller is expected to provide an already-filtered list via
  * `filteredConversations` and a `searchQuery` for the empty-state messages.

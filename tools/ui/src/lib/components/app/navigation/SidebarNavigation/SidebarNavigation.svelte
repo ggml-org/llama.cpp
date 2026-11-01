@@ -147,15 +147,9 @@
 	let currentChatId = $derived(page.params.id);
 	let searchOpen = $state(false);
 
-	// a phone shows the search page instead of the spotlight overlay
+	// a phone shows the search as a full-height sheet, once the sidebar has stepped aside
 	function openSearch() {
-		if (deviceStore.isMobile) {
-			afterMobileClose(() => void goto(ROUTES.SEARCH));
-
-			return;
-		}
-
-		searchOpen = true;
+		afterMobileClose(() => (searchOpen = true));
 	}
 
 	let isSelectionMode = $state(false);
