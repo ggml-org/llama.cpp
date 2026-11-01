@@ -521,27 +521,29 @@ llama_model_qwen35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
     inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd_inp(), n_tokens);
     ggml_set_input(inp->embd);
 
-    // TODO: make static using `ggml_build_forward_select()`
-    //       see llm_graph_context::build_inp_embd() for reference
-    ggml_tensor * tok_embd;
     ASSERT_EMBD_OR_TOKEN(ubatch);
-    if (ubatch.token) {
-        ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens : model.tok_embd;
+    ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens : model.tok_embd;
 
-        tok_embd = ggml_get_rows(ctx0, tok_embd_w, inp->tokens);
+    ggml_tensor * tok_embd = ggml_get_rows(ctx0, tok_embd_w, inp->tokens);
+    ggml_build_forward_order(gf, tok_embd);
 
-        // a Hadamard-latent table stores rotated rows; restore the primal basis
-        if (hdmd) {
-            if (const auto it = hdmd->inv.find(tok_embd_w); it != hdmd->inv.end()) {
-                tok_embd = llama_mul_mat_hadamard(ctx0, tok_embd, it->second.rot);
-                if (it->second.signs) {
-                    tok_embd = ggml_mul(ctx0, tok_embd, it->second.signs);
-                }
+    // a Hadamard-latent table stores rotated rows; restore the primal basis
+    if (hdmd) {
+        if (const auto it = hdmd->inv.find(tok_embd_w); it != hdmd->inv.end()) {
+            tok_embd = llama_mul_mat_hadamard(ctx0, tok_embd, it->second.rot);
+            if (it->second.signs) {
+                tok_embd = ggml_mul(ctx0, tok_embd, it->second.signs);
             }
         }
-    } else {
-        tok_embd = inp->embd;
     }
+
+    ggml_tensor * embd = inp->embd;
+    if (tok_embd_w->buffer && !ggml_backend_buffer_is_host(tok_embd_w->buffer)) {
+        embd = ggml_dup(ctx0, embd);
+    }
+
+    ggml_tensor * inps[] = { tok_embd, embd };
+    tok_embd = ggml_build_forward_select(gf, inps, 2, ubatch.token ? 0 : 1);
     cb(tok_embd, "mtp_tok_embd", il);
 
     inp->h = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, n_tokens);
