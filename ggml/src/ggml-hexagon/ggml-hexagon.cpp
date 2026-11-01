@@ -90,7 +90,7 @@ size_t opt_vmem       = HTP_OP_MAX_VMEM_DEFAULT;  // max available va space for 
 int    opt_etm        = 0;
 int    opt_verbose    = 0;
 int    opt_profile    = 0; // profiling mode (0-disabled, 1-basic, 2-pmu)
-bool   opt_hostbuf    = false;
+bool   opt_hostbuf    = true;
 bool   opt_dma64      = false;
 int    opt_power_mode = HTP_POWER_MODE_BURST; // DCVS/HMX power profile requested at session start
 
@@ -874,7 +874,7 @@ static ggml_backend_buffer_t ggml_backend_hexagon_buffer_type_alloc_buffer(
             ggml_backend_buffer_type_t buffer_type, size_t size) {
     auto dev_ctx = static_cast<ggml_backend_hexagon_buffer_type_context *>(buffer_type->context)->dev_ctx;
     auto sess    = dev_ctx->session();
-    if (sess && sess->max_vmem && size > sess->max_vmem) {
+    if (size > sess->max_vmem) {
         GGML_LOG_ERROR("ggml-hex: %s buffer size %zu exceeds max_vmem %zu\n",
                        dev_ctx->c_name(), size, sess->max_vmem);
         return nullptr;
@@ -892,7 +892,7 @@ static ggml_backend_buffer_t ggml_backend_hexagon_host_buffer_type_alloc_buffer(
             ggml_backend_buffer_type_t buffer_type, size_t size) {
     auto dev_ctx = static_cast<ggml_backend_hexagon_buffer_type_context *>(buffer_type->context)->dev_ctx;
     auto sess    = dev_ctx->session();
-    if (sess && sess->max_vmem && size > sess->max_vmem) {
+    if (size > sess->max_vmem) {
         GGML_LOG_ERROR("ggml-hex: %s host buffer size %zu exceeds max_vmem %zu\n",
                        dev_ctx->c_name(), size, sess->max_vmem);
         return nullptr;
@@ -2999,7 +2999,15 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
     if (ggml_op_is_empty(op->op) || ggml_is_empty(op)) {
         supp = true;
     } else {
-        supp = htp_kparams_check(sess, op);
+        supp = ggml_backend_hexagon_buffer_type_get_alloc_size(&dev_ctx->buffer_type, op) <= sess->max_vmem;
+        for (int i = 0; supp && i < GGML_MAX_SRC; i++) {
+            if (op->src[i] && ggml_backend_hexagon_buffer_type_get_alloc_size(&dev_ctx->buffer_type, op->src[i]) > sess->max_vmem) {
+                supp = false;
+            }
+        }
+        if (supp) {
+            supp = htp_kparams_check(sess, op);
+        }
     }
 
     ggml_hexagon_dump_op_supp(sess->c_name(), op, supp);
