@@ -253,17 +253,22 @@ struct ggml_webgpu_get_rows_pipeline_key_hash {
 /** Group Norm **/
 
 struct ggml_webgpu_group_norm_pipeline_key {
-    bool inplace;
-    uint32_t wg_size;
+    ggml_type src_type;
+    ggml_type dst_type;
+    bool      inplace;
+    uint32_t  wg_size;
 
     bool operator==(const ggml_webgpu_group_norm_pipeline_key & other) const {
-        return inplace == other.inplace && wg_size == other.wg_size;
+        return src_type == other.src_type && dst_type == other.dst_type && inplace == other.inplace &&
+               wg_size == other.wg_size;
     }
 };
 
 struct ggml_webgpu_group_norm_pipeline_key_hash {
     size_t operator()(const ggml_webgpu_group_norm_pipeline_key & key) const {
         size_t seed = 0;
+        ggml_webgpu_hash_combine(seed, key.src_type);
+        ggml_webgpu_hash_combine(seed, key.dst_type);
         ggml_webgpu_hash_combine(seed, key.inplace);
         ggml_webgpu_hash_combine(seed, key.wg_size);
         return seed;
@@ -1352,7 +1357,11 @@ class ggml_webgpu_shader_lib {
     }
 
     webgpu_pipeline get_group_norm_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        GGML_ASSERT(context.src0->type == GGML_TYPE_F32 || context.src0->type == GGML_TYPE_F16);
+        GGML_ASSERT(context.dst->type == GGML_TYPE_F32 || context.dst->type == GGML_TYPE_F16);
         const ggml_webgpu_group_norm_pipeline_key key = {
+            context.src0->type,
+            context.dst->type,
             ggml_webgpu_tensor_equal(context.src0, context.dst),
             std::min(context.max_wg_size, 128u),
         };
@@ -1361,18 +1370,24 @@ class ggml_webgpu_shader_lib {
             return it->second;
         }
 
-        std::vector<std::string> defines = { "WG_SIZE=" + std::to_string(key.wg_size) };
-        std::string variant = "group_norm_f32";
+        std::vector<std::string> defines = {
+            "WG_SIZE=" + std::to_string(key.wg_size),
+            key.src_type == GGML_TYPE_F16 ? "SRC_F16" : "SRC_F32",
+            key.dst_type == GGML_TYPE_F16 ? "DST_F16" : "DST_F32",
+        };
+        std::string variant =
+            std::string("group_norm_src_") + ggml_type_name(key.src_type) + "_dst_" + ggml_type_name(key.dst_type);
         if (key.inplace) {
+            GGML_ASSERT(key.src_type == key.dst_type);
             defines.push_back("INPLACE");
             variant += "_inplace";
         }
-        auto processed = preprocessor.preprocess(wgsl_group_norm, defines);
-        auto decisions = std::make_shared<ggml_webgpu_generic_shader_decisions>();
-        decisions->wg_size = key.wg_size;
-        decisions->inplace = key.inplace;
-        auto pipeline = ggml_webgpu_create_pipeline(device, processed, variant);
-        pipeline.context = decisions;
+        auto processed            = preprocessor.preprocess(wgsl_group_norm, defines);
+        auto decisions            = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+        decisions->wg_size        = key.wg_size;
+        decisions->inplace        = key.inplace;
+        auto pipeline             = ggml_webgpu_create_pipeline(device, processed, variant);
+        pipeline.context          = decisions;
         group_norm_pipelines[key] = pipeline;
         return pipeline;
     }

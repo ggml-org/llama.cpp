@@ -17,6 +17,7 @@
 #include <webgpu/webgpu_cpp.h>
 
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #ifdef GGML_WEBGPU_GPU_PROFILE
@@ -2707,32 +2708,34 @@ static std::optional<webgpu_encoded_op> ggml_webgpu_rms_norm_mul(webgpu_context 
 }
 
 static webgpu_encoded_op ggml_webgpu_group_norm(webgpu_context & ctx, ggml_tensor * src, ggml_tensor * dst) {
-    const uint32_t num_groups = (uint32_t) ggml_get_op_params_i32(dst, 0);
-    std::vector<uint32_t> params = {
+    const size_t          src_type_size = ggml_type_size(src->type);
+    const size_t          dst_type_size = ggml_type_size(dst->type);
+    const uint32_t        num_groups    = (uint32_t) ggml_get_op_params_i32(dst, 0);
+    std::vector<uint32_t> params        = {
         (uint32_t) src->ne[0],
         (uint32_t) src->ne[1],
         (uint32_t) src->ne[2],
         (uint32_t) src->ne[3],
         num_groups,
         ggml_webgpu_u32_from_f32(ggml_get_op_params_f32(dst, 1)),
-        (uint32_t) (src->nb[1] / sizeof(float)),
-        (uint32_t) (src->nb[0] / sizeof(float)),
-        (uint32_t) (src->nb[2] / sizeof(float)),
-        (uint32_t) (src->nb[3] / sizeof(float)),
-        (uint32_t) (dst->nb[1] / sizeof(float)),
-        (uint32_t) (dst->nb[0] / sizeof(float)),
-        (uint32_t) (dst->nb[2] / sizeof(float)),
-        (uint32_t) (dst->nb[3] / sizeof(float)),
-        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src) / sizeof(float)),
-        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst) / sizeof(float)),
+        (uint32_t) (src->nb[1] / src_type_size),
+        (uint32_t) (src->nb[0] / src_type_size),
+        (uint32_t) (src->nb[2] / src_type_size),
+        (uint32_t) (src->nb[3] / src_type_size),
+        (uint32_t) (dst->nb[1] / dst_type_size),
+        (uint32_t) (dst->nb[0] / dst_type_size),
+        (uint32_t) (dst->nb[2] / dst_type_size),
+        (uint32_t) (dst->nb[3] / dst_type_size),
+        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src) / src_type_size),
+        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst) / dst_type_size),
     };
 
     ggml_webgpu_shader_lib_context shader_lib_ctx = {};
-    shader_lib_ctx.src0 = src;
-    shader_lib_ctx.dst = dst;
+    shader_lib_ctx.src0                           = src;
+    shader_lib_ctx.dst                            = dst;
     shader_lib_ctx.max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
-    webgpu_pipeline pipeline = ctx->shader_lib->get_group_norm_pipeline(shader_lib_ctx);
-    auto * decisions = static_cast<ggml_webgpu_generic_shader_decisions *>(pipeline.context.get());
+    webgpu_pipeline pipeline   = ctx->shader_lib->get_group_norm_pipeline(shader_lib_ctx);
+    auto *          decisions  = static_cast<ggml_webgpu_generic_shader_decisions *>(pipeline.context.get());
 
     std::vector<wgpu::BindGroupEntry> entries = { ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src) };
     if (!decisions->inplace) {
@@ -4687,22 +4690,36 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                 supports_op = max_kv_tile > 0;
                 break;
             }
-        case GGML_OP_GROUP_NORM: {
-            const int32_t num_groups = ggml_get_op_params_i32(op, 0);
-            const float eps = ggml_get_op_params_f32(op, 1);
-            supports_op = src0->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
-                          ggml_are_same_shape(src0, op) && !ggml_is_empty(src0) && num_groups > 0 &&
-                          num_groups <= src0->ne[2] && eps >= 0.0f &&
-                          (uint64_t) num_groups * src0->ne[3] <=
-                              ctx->webgpu_global_ctx->capabilities.limits.maxComputeWorkgroupsPerDimension;
-            for (int i = 0; i < GGML_MAX_DIMS && supports_op; ++i) {
-                supports_op = src0->nb[i] % sizeof(float) == 0 && op->nb[i] % sizeof(float) == 0;
-                if (ggml_webgpu_tensor_equal(src0, op)) {
-                    supports_op = supports_op && src0->nb[i] == op->nb[i];
+        case GGML_OP_GROUP_NORM:
+            {
+                const int32_t num_groups = ggml_get_op_params_i32(op, 0);
+                const float   eps        = ggml_get_op_params_f32(op, 1);
+                supports_op              = src0->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
+                              ggml_are_same_shape(src0, op) && !ggml_is_empty(src0) && num_groups > 0 &&
+                              num_groups <= src0->ne[2] && std::isfinite(eps) && eps >= 0.0f &&
+                              (uint64_t) num_groups * src0->ne[3] <=
+                                  ctx->webgpu_global_ctx->capabilities.limits.maxComputeWorkgroupsPerDimension;
+                if (!supports_op) {
+                    break;
                 }
+                const size_t   src_type_size = ggml_type_size(src0->type);
+                const size_t   dst_type_size = ggml_type_size(op->type);
+                const uint64_t max_elements  = UINT32_MAX / std::max(src_type_size, dst_type_size);
+                uint64_t       num_elements  = 1;
+                supports_op = src0->view_offs % src_type_size == 0 && op->view_offs % dst_type_size == 0;
+                for (int i = 0; i < GGML_MAX_DIMS && supports_op; ++i) {
+                    supports_op = src0->ne[i] > 0 && (uint64_t) src0->ne[i] <= max_elements / num_elements &&
+                                  src0->nb[i] % src_type_size == 0 && op->nb[i] % dst_type_size == 0 &&
+                                  src0->nb[i] / src_type_size <= UINT32_MAX && op->nb[i] / dst_type_size <= UINT32_MAX;
+                    if (supports_op) {
+                        num_elements *= src0->ne[i];
+                    }
+                    if (ggml_webgpu_tensor_equal(src0, op)) {
+                        supports_op = supports_op && src0->nb[i] == op->nb[i];
+                    }
+                }
+                break;
             }
-            break;
-        }
         case GGML_OP_RMS_NORM:
         case GGML_OP_NORM:
         case GGML_OP_L2_NORM:

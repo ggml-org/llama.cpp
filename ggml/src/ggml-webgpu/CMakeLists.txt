@@ -67,32 +67,7 @@ if(EMSCRIPTEN)
     endif()
 else()
     find_package(Dawn REQUIRED)
-    set(GGML_WEBGPU_WEBKIT_FRAMEWORK "" CACHE PATH "Path to a built WebKit WebGPU.framework")
-    if (GGML_WEBGPU_WEBKIT_FRAMEWORK)
-        get_filename_component(WEBKIT_PRODUCTS_DIR "${GGML_WEBGPU_WEBKIT_FRAMEWORK}" DIRECTORY)
-        add_library(ggml-webgpu-webkit-shim STATIC
-            webkit-shim/webgpu-dawn.cpp
-            webkit-shim/webgpu-webkit.cpp
-        )
-        set_source_files_properties(webkit-shim/webgpu-webkit.cpp PROPERTIES COMPILE_OPTIONS "-Wno-missing-prototypes")
-        target_compile_features(ggml-webgpu-webkit-shim PRIVATE cxx_std_23)
-        target_include_directories(ggml-webgpu-webkit-shim SYSTEM BEFORE PRIVATE
-            "${GGML_WEBGPU_WEBKIT_FRAMEWORK}/PrivateHeaders"
-            "${WEBKIT_PRODUCTS_DIR}/usr/local/include"
-        )
-        target_link_libraries(ggml-webgpu-webkit-shim PRIVATE
-            dawn::dawn_public_config
-            "${GGML_WEBGPU_WEBKIT_FRAMEWORK}/WebGPU"
-            "${WEBKIT_PRODUCTS_DIR}/JavaScriptCore.framework/JavaScriptCore"
-        )
-        set_property(TARGET ggml-webgpu-webkit-shim PROPERTY NO_SYSTEM_FROM_IMPORTED TRUE)
-        set_property(TARGET ggml-webgpu PROPERTY NO_SYSTEM_FROM_IMPORTED TRUE)
-        target_compile_definitions(ggml-webgpu PRIVATE GGML_WEBGPU_WEBKIT=1)
-        target_link_libraries(ggml-webgpu PRIVATE dawn::dawn_public_config)
-        set(DawnWebGPU_TARGET ggml-webgpu-webkit-shim)
-    else()
-        set(DawnWebGPU_TARGET dawn::webgpu_dawn)
-    endif()
+    set(DawnWebGPU_TARGET dawn::webgpu_dawn)
 endif()
 
 if (GGML_WEBGPU_DEBUG)
