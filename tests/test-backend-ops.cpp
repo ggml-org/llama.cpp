@@ -12414,6 +12414,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                                 }
                                 test_cases.emplace_back(new test_mul_mat_vec_fusion(type, glu_op, 1, 32, 256,
                                     use_id, 16, 8, b, with_bias, with_gate, with_lane_scale));
+                                test_cases.emplace_back(new test_mul_mat_vec_fusion(type, glu_op, 1, 2050, 2048,
+                                    use_id, 4, 2, b, with_bias, with_gate, with_lane_scale, {1, 1}));
                                 test_cases.emplace_back(new test_mul_mat_vec_fusion(type, glu_op, 1, 32, 256,
                                     use_id, 16, 8, b, with_bias, with_gate, with_lane_scale, {1, 1}));
                                 // multi-token batches (spec decoding)
