@@ -2045,6 +2045,66 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         }
     }
 
+    // MTP draft with a trimmed output head: keep the first K rows (lowest token ids, roughly the most frequent).
+    // Created before the no_alloc return so that memory fitting accounts for it.
+    const char * trim_env = getenv("LLAMA_MTP_DRAFT_VOCAB");
+    if (trim_env && arch == LLM_ARCH_QWEN35 && hparams.n_layer_nextn > 0 && layers.size() > hparams.n_layer()) {
+        const auto &  nextn  = layers[hparams.n_layer()].nextn;
+        ggml_tensor * head   = nextn.shared_head_head ? nextn.shared_head_head : output;
+        const int64_t n_keep = atoll(trim_env);
+        if (head && head->buffer && !(nextn.shared_head_head && nextn.shared_head_head_s) && !output_s && n_keep > 0 &&
+            n_keep < head->ne[1]) {
+            const int64_t n_vocab_head = head->ne[1];
+
+            ggml_init_params ip = { 2 * ggml_tensor_overhead(), nullptr, true };
+            ggml_context_ptr ctx_trim(ggml_init(ip));
+            // optional requantization of the kept rows (LLAMA_MTP_DRAFT_TYPE, e.g. q4_K), the head type otherwise
+            ggml_type trim_type = head->type;
+            if (const char * type_env = getenv("LLAMA_MTP_DRAFT_TYPE")) {
+                for (int t = 0; t < GGML_TYPE_COUNT; ++t) {
+                    std::string have = ggml_type_name((ggml_type) t);
+                    std::string want = type_env;
+                    for (auto & ch : have) {
+                        ch = (char) std::tolower((unsigned char) ch);
+                    }
+                    for (auto & ch : want) {
+                        ch = (char) std::tolower((unsigned char) ch);
+                    }
+                    if (have == want && ggml_get_type_traits((ggml_type) t)->from_float_ref) {
+                        trim_type = (ggml_type) t;
+                    }
+                }
+            }
+            ggml_tensor *    trim = ggml_new_tensor_2d(ctx_trim.get(), trim_type, head->ne[0], n_keep);
+            ggml_tensor *    mask = ggml_new_tensor_1d(ctx_trim.get(), GGML_TYPE_F32, n_vocab_head);
+            ggml_set_name(trim, "mtp_head_trim");
+            ggml_set_name(mask, "mtp_head_trim_mask");
+
+            ggml_backend_buffer_type_t buft_trim = ggml_backend_buffer_get_type(head->buffer);
+            ggml_backend_buffer_t      buf;
+            if (ml.no_alloc) {
+                buf = ggml_backend_buft_alloc_buffer(buft_trim,
+                                                     /*size =*/0);  // dummy buffer, sized by memory_breakdown()
+                trim->buffer = buf;
+                mask->buffer = buf;
+            } else {
+                buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx_trim.get(), buft_trim);
+            }
+            if (buf) {
+                ggml_backend_buffer_set_usage(buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+                mtp_head_trim      = trim;
+                mtp_head_trim_mask = mask;
+
+                std::vector<ggml_backend_buffer_ptr> bufs;
+                bufs.emplace_back(buf);
+                pimpl->ctxs_bufs.emplace_back(std::move(ctx_trim), std::move(bufs));
+                LLAMA_LOG_INFO("%s: MTP draft head trimmed to %lld of %lld tokens\n", __func__, (long long) n_keep,
+                               (long long) n_vocab_head);
+            }
+        }
+    }
+
     if (ml.no_alloc) {
         return true;
     }
@@ -2071,6 +2131,41 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     }
 
     load_tensors_hadamard();
+
+    if (mtp_head_trim) {
+        // rows are contiguous and the head is still in its original layout here, so the first K rows are a byte prefix
+        const auto &  nextn = layers[hparams.n_layer()].nextn;
+        ggml_tensor * head  = nextn.shared_head_head ? nextn.shared_head_head : output;
+
+        if (mtp_head_trim->type == head->type) {
+            std::vector<uint8_t> rows(ggml_nbytes(mtp_head_trim));
+            ggml_backend_tensor_get(head, rows.data(), 0, rows.size());
+            ggml_backend_tensor_set(mtp_head_trim, rows.data(), 0, rows.size());
+        } else {
+            // dequantize the kept rows and quantize them to the requested type
+            const auto * src_traits = ggml_get_type_traits(head->type);
+            const auto * dst_traits = ggml_get_type_traits(mtp_head_trim->type);
+            GGML_ASSERT(src_traits->to_float && dst_traits->from_float_ref);
+            const int64_t        n_embd_head  = head->ne[0];
+            const size_t         src_row_size = ggml_row_size(head->type, n_embd_head);
+            const size_t         dst_row_size = ggml_row_size(mtp_head_trim->type, n_embd_head);
+            std::vector<uint8_t> src_row(src_row_size);
+            std::vector<uint8_t> dst_rows(ggml_nbytes(mtp_head_trim));
+            std::vector<float>   f32(n_embd_head);
+            for (int64_t r = 0; r < mtp_head_trim->ne[1]; ++r) {
+                ggml_backend_tensor_get(head, src_row.data(), r * src_row_size, src_row_size);
+                src_traits->to_float(src_row.data(), f32.data(), n_embd_head);
+                dst_traits->from_float_ref(f32.data(), dst_rows.data() + r * dst_row_size, n_embd_head);
+            }
+            ggml_backend_tensor_set(mtp_head_trim, dst_rows.data(), 0, dst_rows.size());
+            LLAMA_LOG_INFO("%s: MTP draft head requantized from %s to %s\n", __func__, ggml_type_name(head->type),
+                           ggml_type_name(mtp_head_trim->type));
+        }
+
+        std::vector<float> m(mtp_head_trim_mask->ne[0], -INFINITY);
+        std::fill(m.begin(), m.begin() + mtp_head_trim->ne[1], 0.0f);
+        ggml_backend_tensor_set(mtp_head_trim_mask, m.data(), 0, m.size() * sizeof(float));
+    }
 
     return true;
 }
