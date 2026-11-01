@@ -9,6 +9,14 @@
 #include <string>
 #include <vector>
 
+static bool invalid_shape(const std::vector<int> & values) {
+    return values.empty() || *std::min_element(values.begin(), values.end()) <= 0;
+}
+
+static int64_t required_kv(bool is_pp_shared, bool kv_unified, int pp, int tg, int pl) {
+    return is_pp_shared ? (kv_unified ? pp : int64_t(pl)*pp) + int64_t(pl)*tg : int64_t(pl)*(int64_t(pp) + tg);
+}
+
 static void print_usage(int, char ** argv) {
     LOG("\nexample usage:\n");
     LOG("\n    %s -m model.gguf -c 2048 -b 2048 -ub 512 -npp 128,256,512 -ntg 128,256 -npl 1,2,4,8,16,32 [-pps]\n", argv[0]);
@@ -36,6 +44,12 @@ int llama_batched_bench(int argc, char ** argv) {
     std::vector<int> n_tg = params.n_tg;
     std::vector<int> n_pl = params.n_pl;
 
+    const bool kvu_cache_warm = params.batched_bench_kvu_cache_warm && params.kv_unified;
+    if (invalid_shape(n_pp) || invalid_shape(n_tg) || invalid_shape(n_pl)) {
+        LOG_ERR("benchmark needs positive PP, TG, and parallel prompt counts\n");
+        return 1;
+    }
+
     // init LLM
 
     llama_backend_init();
@@ -55,7 +69,17 @@ int llama_batched_bench(int argc, char ** argv) {
     llama_context_params ctx_params = common_context_params_to_llama(params);
 
     // ensure enough sequences are available
-    ctx_params.n_seq_max = n_pl.empty() ? 1 : *std::max_element(n_pl.begin(), n_pl.end());
+    const int max_pl = *std::max_element(n_pl.begin(), n_pl.end());
+    ctx_params.n_seq_max = max_pl;
+    if (kvu_cache_warm && size_t(max_pl) < llama_max_parallel_sequences()) {
+        const int64_t n_ctx = ctx_params.n_ctx ? ctx_params.n_ctx : llama_model_n_ctx_train(model);
+        const int64_t n_ctx_padded = (n_ctx + 255)/256*256;
+        const int min_pp = *std::min_element(n_pp.begin(), n_pp.end());
+        const int min_tg = *std::min_element(n_tg.begin(), n_tg.end());
+        if (required_kv(is_pp_shared, params.kv_unified, min_pp, min_tg, max_pl) < n_ctx_padded) {
+            ++ctx_params.n_seq_max;
+        }
+    }
 
     llama_context * ctx = llama_init_from_model(model, ctx_params);
 
@@ -114,6 +138,9 @@ int llama_batched_bench(int argc, char ** argv) {
     if (!params.batched_bench_output_jsonl) {
         LOG("\n");
         LOG("%s: n_kv_max = %d, n_batch = %d, n_ubatch = %d, flash_attn = %d, is_pp_shared = %d, is_tg_separate = %d, n_gpu_layers = %d, n_threads = %u, n_threads_batch = %u\n", __func__, n_kv_max, params.n_batch, params.n_ubatch, int(params.flash_attn_type), is_pp_shared, is_tg_separate, params.n_gpu_layers, ctx_params.n_threads, ctx_params.n_threads_batch);
+        if (kvu_cache_warm) {
+            LOG("KV cache warming is enabled when a sequence slot is available\n");
+        }
         LOG("\n");
         LOG("|%6s | %6s | %4s | %6s | %8s | %8s | %8s | %8s | %8s | %8s |\n", "PP", "TG", "B", "N_KV", "T_PP s", "S_PP t/s", "T_TG s", "S_TG t/s", "T s", "S t/s");
         LOG("|%6s-|-%6s-|-%4s-|-%6s-|-%8s-|-%8s-|-%8s-|-%8s-|-%8s-|-%8s-|\n", "------", "------", "----", "------", "--------", "--------", "--------", "--------", "--------", "--------");
@@ -126,21 +153,39 @@ int llama_batched_bench(int argc, char ** argv) {
                 const int tg = n_tg[i_tg];
                 const int pl = n_pl[i_pl];
 
-                const int n_ctx_req = is_pp_shared ? (params.kv_unified ? pp : pl*pp) + pl*tg : pl*(pp + tg);
-
-                if (n_ctx_req > n_kv_max) {
+                const int64_t n_ctx_req_64 = required_kv(is_pp_shared, params.kv_unified, pp, tg, pl);
+                if (n_ctx_req_64 > n_kv_max) {
                     continue;
+                }
+                const int32_t n_ctx_req = int32_t(n_ctx_req_64);
+                const int32_t n_idle = kvu_cache_warm && pl < int(ctx_params.n_seq_max) ? n_kv_max - n_ctx_req : 0;
+                if (kvu_cache_warm && n_idle == 0 && n_ctx_req < n_kv_max) {
+                    LOG_WRN("cache warming skipped: no free sequence slot\n");
+                }
+
+                llama_memory_clear(mem, false);
+
+                if (n_idle > 0) {
+                    LOG_DBG("warming up...\n");
+                    batch.clear();
+                    for (int i = 0; i < n_idle; ++i) {
+                        batch.add(get_token_rand(), i, pl, i == n_idle - 1);
+                    }
+                    if (!decode_helper(ctx, batch, ctx_params.n_batch, false)) {
+                        LOG_ERR("failed to fill idle KV cache\n");
+                        llama_free(ctx);
+                        llama_model_free(model);
+                        return 1;
+                    }
+                    llama_synchronize(ctx);
                 }
 
                 batch.clear();
-
                 for (int j = 0; j < (is_pp_shared ? 1 : pl); ++j) {
                     for (int i = 0; i < pp; ++i) {
                         batch.add(get_token_rand(), i, j, i == pp - 1);
                     }
                 }
-
-                llama_memory_clear(mem, false);
 
                 const auto t_pp_start = ggml_time_us();
 
@@ -214,7 +259,7 @@ int llama_batched_bench(int argc, char ** argv) {
 
                 const auto t_tg_end = ggml_time_us();
 
-                const int32_t n_kv = n_ctx_req;
+                const int32_t n_kv = n_ctx_req + n_idle;
 
                 const float t_pp = (t_pp_end - t_pp_start) / 1000000.0f;
                 const float t_tg = (t_tg_end - t_tg_start) / 1000000.0f;
@@ -224,12 +269,12 @@ int llama_batched_bench(int argc, char ** argv) {
                 const float speed_tg = pl*tg / t_tg;
                 const float speed    = ((is_pp_shared ? pp : pl*pp) + pl*tg) / t;
 
-                if(params.batched_bench_output_jsonl) {
+                if (params.batched_bench_output_jsonl) {
                     LOG(
                         "{\"n_kv_max\": %d, \"n_batch\": %d, \"n_ubatch\": %d, \"flash_attn\": %d, \"is_pp_shared\": %d, \"n_gpu_layers\": %d, \"n_threads\": %u, \"n_threads_batch\": %u, "
-                        "\"pp\": %d, \"tg\": %d, \"pl\": %d, \"n_kv\": %d, \"t_pp\": %f, \"speed_pp\": %f, \"t_tg\": %f, \"speed_tg\": %f, \"t\": %f, \"speed\": %f}\n",
+                        "\"pp\": %d, \"tg\": %d, \"pl\": %d, \"idle_tokens\": %d, \"n_kv\": %d, \"t_pp\": %f, \"speed_pp\": %f, \"t_tg\": %f, \"speed_tg\": %f, \"t\": %f, \"speed\": %f}\n",
                         n_kv_max, params.n_batch, params.n_ubatch, int(params.flash_attn_type), params.is_pp_shared, params.n_gpu_layers, ctx_params.n_threads, ctx_params.n_threads_batch,
-                        pp, tg, pl, n_kv, t_pp, speed_pp, t_tg, speed_tg, t, speed
+                        pp, tg, pl, n_idle, n_kv, t_pp, speed_pp, t_tg, speed_tg, t, speed
                     );
                 } else {
                     LOG("|%6d | %6d | %4d | %6d | %8.3f | %8.2f | %8.3f | %8.2f | %8.3f | %8.2f |\n", pp, tg, pl, n_kv, t_pp, speed_pp, t_tg, speed_tg, t, speed);
