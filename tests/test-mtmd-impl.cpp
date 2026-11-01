@@ -41,6 +41,25 @@ struct test_registry {
     static const test_registry test_registry_ ## name(#name, &name);  \
     static void name(testing & t)
 
+//
+// clip_hparams
+//
+
+MAKE_TEST(test_feature_layer_range) {
+    clip_hparams hparams;
+    hparams.n_layer = 2;
+
+    t.assert_true("negative feature layer", !hparams.is_feature_layer_in_range(-1, PROJECTOR_TYPE_MINICPMV));
+    t.assert_true("input feature layer", hparams.is_feature_layer_in_range(0, PROJECTOR_TYPE_MINICPMV));
+    t.assert_true("internal feature layer", hparams.is_feature_layer_in_range(1, PROJECTOR_TYPE_MINICPMV));
+    t.assert_true("output feature layer", hparams.is_feature_layer_in_range(2, PROJECTOR_TYPE_MINICPMV));
+    t.assert_true("feature layer too large", !hparams.is_feature_layer_in_range(3, PROJECTOR_TYPE_MINICPMV));
+
+    t.assert_true("Granite4 internal feature layer",
+                  hparams.is_feature_layer_in_range(1, PROJECTOR_TYPE_GRANITE4_VISION));
+    t.assert_true("Granite4 feature layer at n_layer",
+                  !hparams.is_feature_layer_in_range(2, PROJECTOR_TYPE_GRANITE4_VISION));
+}
 
 //
 // mtmd_image

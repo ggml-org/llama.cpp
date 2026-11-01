@@ -1517,11 +1517,13 @@ struct clip_model_loader {
 
             // Load the vision/audio feature layer indices if they are explicitly provided
             // NOTE: gguf conversions should standardize the values of the vision feature layer to be non-negative, since we use -1 to mark values as unset here.
-            get_arr_int(string_format(KEY_FEATURE_LAYERS, prefix), hparams.feature_layers, false);
-            for (const auto & v : hparams.feature_layers) {
-                if (v > (int) hparams.n_layer) {
-                    throw std::runtime_error(string_format("%s: feature layer index %d is out of range (n_layer: %d)",
-                                                           __func__, v, hparams.n_layer));
+            const std::string feature_layers_key = string_format(KEY_FEATURE_LAYERS, prefix);
+            get_arr_int(feature_layers_key, hparams.feature_layers, false);
+            for (const auto & feature_layer : hparams.feature_layers) {
+                if (!hparams.is_feature_layer_in_range(feature_layer, model.proj_type)) {
+                    throw std::runtime_error(string_format("%s: feature layer index %d in '%s' is out of range [0, %d]",
+                                                           __func__, feature_layer, feature_layers_key.c_str(),
+                                                           hparams.feature_layer_max_index(model.proj_type)));
                 }
             }
 
