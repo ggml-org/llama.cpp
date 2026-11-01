@@ -38,8 +38,4 @@ class CloverMoeModel(_LinearAttentionVReorderBase):
         if name.endswith(".A_log") or (name.endswith("norm.weight") and not name.endswith("linear_attn.norm.weight")):
             data_torch = data_torch.float()
 
-        for new_name, tensor in super().modify_tensors(data_torch, name, bid):
-            if name.endswith(".A_log"):
-                # The suffix distinguishes folded decay weights from the old raw A_log tensors.
-                new_name += ".weight"
-            yield new_name, tensor
+        yield from super().modify_tensors(data_torch, name, bid)

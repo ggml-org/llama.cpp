@@ -92,7 +92,7 @@ void llama_model_clover_moe::load_arch_tensors(llama_model_loader &) {
             layer.wqkv_gate  = create_tensor(tn(LLM_TENSOR_ATTN_GATE,    "weight", il), { n_embd, value_dim }, 0);
             layer.ssm_conv1d = create_tensor(tn(LLM_TENSOR_SSM_CONV1D,   "weight", il), { hparams.ssm_d_conv, conv_dim }, 0);
             layer.ssm_dt     = create_tensor(tn(LLM_TENSOR_SSM_DT,       "bias",   il), { hparams.ssm_dt_rank }, 0);
-            layer.ssm_a      = create_tensor(tn(LLM_TENSOR_SSM_A_NOSCAN, "weight", il), { hparams.ssm_dt_rank }, 0);
+            layer.ssm_a      = create_tensor(tn(LLM_TENSOR_SSM_A_NOSCAN,           il), { hparams.ssm_dt_rank }, 0);
             layer.ssm_beta   = create_tensor(tn(LLM_TENSOR_SSM_BETA,     "weight", il), { n_embd, n_v_heads }, 0);
             layer.ssm_alpha  = create_tensor(tn(LLM_TENSOR_SSM_ALPHA,    "weight", il), { n_embd, n_v_heads }, 0);
             layer.ssm_norm   = create_tensor(tn(LLM_TENSOR_SSM_NORM,     "weight", il), { head_v_dim }, 0);
