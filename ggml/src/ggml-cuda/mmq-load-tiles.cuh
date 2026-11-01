@@ -4,6 +4,13 @@
 
 #include "mmq.cuh"
 
+static __device__ __forceinline__ void ggml_cuda_mmq_store_affine_metadata(
+        half2 * dst, const int stride, const int row, const int block, const half2 value) {
+    // Preserve the original half bits, separating eight scales and offsets.
+    ((half *) dst)[2*row*stride + block] = value.x;
+    ((half *) dst)[2*row*stride + block + 8] = value.y;
+}
+
 template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_load_tiles_q1_0(
         const char * __restrict__ x, const char * __restrict__ x_gate, int * __restrict__ x_tile, const int kbx0, const int i_max, const int stride) {
     GGML_UNUSED(x_gate);
@@ -331,7 +338,11 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
         const block_q4_1 * bxi = (const block_q4_1 *) x + kbx0 + i*stride + kbxd;
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
-        x_dm[i*sram_stride                     + kbxd] = bxi->dm;
+        if constexpr (ggml_cuda_mmq_use_min_mma<type, J, fallback>()) {
+            ggml_cuda_mmq_store_affine_metadata(x_dm, sram_stride, i, kbxd, bxi->dm);
+        } else {
+            x_dm[i*sram_stride + kbxd] = bxi->dm;
+        }
 #else
         x_dm[i*(MMQ_TILE_NE_K/QI4_1) + i/QI4_1 + kbxd] = bxi->dm;
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
@@ -493,7 +504,11 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
         const block_q5_1 * bxi = (const block_q5_1 *) x + kbx0 + i*stride + kbxd;
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
-        x_dm[i*sram_stride                     + kbxd] = bxi->dm;
+        if constexpr (ggml_cuda_mmq_use_min_mma<type, J, fallback>()) {
+            ggml_cuda_mmq_store_affine_metadata(x_dm, sram_stride, i, kbxd, bxi->dm);
+        } else {
+            x_dm[i*sram_stride + kbxd] = bxi->dm;
+        }
 #else
         x_dm[i*(MMQ_TILE_NE_K/QI5_1) + i/QI5_1 + kbxd] = bxi->dm;
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
@@ -622,7 +637,12 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 #endif // FAST_FP16_AVAILABLE
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
-        x_dm[i*sram_stride         + kqsx] = x_dm_ik;
+        if constexpr (ggml_cuda_mmq_use_q2_min_mma<type, J, fallback>()) {
+            ((half *) x_dm)[2*i*sram_stride + kqsx] = x_dm_ik.x;
+            ((half *) x_dm)[2*i*sram_stride + 16 + kqsx] = x_dm_ik.y;
+        } else {
+            x_dm[i*sram_stride + kqsx] = x_dm_ik;
+        }
 #else
         x_dm[i*(MMQ_TILE_NE_K + 1) + kqsx] = x_dm_ik;
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
@@ -817,7 +837,19 @@ template <ggml_type type, int J, bool fallback, bool has_fusion> static __device
 
     #pragma unroll
             for (int l = 0; l < int(sizeof(int)); ++l) {
-                x_dm[i*sram_stride + sizeof(int)*ksc + l] = dm*make_half2(sc8[l], m8[l]);
+                if constexpr (!ggml_cuda_mmq_use_min_mma<type, J, fallback>()) {
+                    x_dm[i*sram_stride + sizeof(int)*ksc + l] = dm*make_half2(sc8[l], m8[l]);
+                }
+            }
+            if constexpr (ggml_cuda_mmq_use_min_mma<type, J, fallback>()) {
+                const half2 dm0 = dm*make_half2(sc8[0], m8[0]);
+                const half2 dm1 = dm*make_half2(sc8[1], m8[1]);
+                const half2 dm2 = dm*make_half2(sc8[2], m8[2]);
+                const half2 dm3 = dm*make_half2(sc8[3], m8[3]);
+                x_dm[i*sram_stride + 2*ksc + 0] = __halves2half2(dm0.x, dm1.x);
+                x_dm[i*sram_stride + 2*ksc + 1] = __halves2half2(dm2.x, dm3.x);
+                x_dm[i*sram_stride + 2*ksc + 4] = __halves2half2(dm0.y, dm1.y);
+                x_dm[i*sram_stride + 2*ksc + 5] = __halves2half2(dm2.y, dm3.y);
             }
         }
     }
@@ -940,7 +972,20 @@ template <ggml_type type, int J, bool fallback, bool has_fusion> static __device
 
 #pragma unroll
             for (int l = 0; l < int(sizeof(int)); ++l) {
-                x_dm[i*sram_stride + sizeof(int)*ksc + l] = dm*make_half2(sc8[l], m8[l]);
+                if constexpr (!ggml_cuda_mmq_use_min_mma<type, J, fallback>()) {
+                    x_dm[i*sram_stride + sizeof(int)*ksc + l] = dm*make_half2(sc8[l], m8[l]);
+                }
+            }
+            if constexpr (ggml_cuda_mmq_use_min_mma<type, J, fallback>()) {
+                const half2 dm0 = dm*make_half2(sc8[0], m8[0]);
+                const half2 dm1 = dm*make_half2(sc8[1], m8[1]);
+                const half2 dm2 = dm*make_half2(sc8[2], m8[2]);
+                const half2 dm3 = dm*make_half2(sc8[3], m8[3]);
+                // Keep the original half values; pack scales and minima separately for ldmatrix.
+                x_dm[i*sram_stride + 2*ksc + 0] = __halves2half2(dm0.x, dm1.x);
+                x_dm[i*sram_stride + 2*ksc + 1] = __halves2half2(dm2.x, dm3.x);
+                x_dm[i*sram_stride + 2*ksc + 4] = __halves2half2(dm0.y, dm1.y);
+                x_dm[i*sram_stride + 2*ksc + 5] = __halves2half2(dm2.y, dm3.y);
             }
         }
     }
@@ -1126,7 +1171,11 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
         const float  delta = -1.0f + IQ1S_DELTA - (qh & 0x8000) * (2.0f*IQ1S_DELTA/0x8000);
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
-        x_ds[i*sram_stride             + kqsx] = make_half2(d1q, d1q*delta);
+        if constexpr (ggml_cuda_mmq_use_min_mma<type, J, fallback>()) {
+            ggml_cuda_mmq_store_affine_metadata(x_ds, sram_stride, i, kqsx, make_half2(d1q, d1q*delta));
+        } else {
+            x_ds[i*sram_stride + kqsx] = make_half2(d1q, d1q*delta);
+        }
 #else
         x_ds[i*(MMQ_TILE_NE_K/4) + i/4 + kqsx] = make_half2(d1q, d1q*delta);
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
