@@ -1033,7 +1033,10 @@ void ggml_opt_fit(
     params.outputs         = outputs;
     params.opt_period      = opt_period;
     params.get_opt_pars    = get_opt_pars;
-    params.get_opt_pars_ud = &epoch;
+
+    // pass a ggml_opt_optimizer_params as userdata so callbacks that read it (e.g. ggml_opt_get_constant_optimizer_params) stay in bounds
+    ggml_opt_optimizer_params opt_pars = ggml_opt_get_default_optimizer_params(nullptr);
+    params.get_opt_pars_ud = &opt_pars;
     params.optimizer       = optimizer;
     ggml_opt_context_t opt_ctx = ggml_opt_init(params);
 

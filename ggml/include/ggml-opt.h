@@ -244,7 +244,7 @@ extern "C" {
             ggml_opt_dataset_t              dataset,        // dataset with data and optionally also labels
             enum ggml_opt_loss_type         loss_type,      // loss to minimize
             enum ggml_opt_optimizer_type    optimizer,      // sgd or adamw
-            ggml_opt_get_optimizer_params   get_opt_pars,   // callback to get optimizer params, userdata is pointer to epoch (of type int64_t)
+            ggml_opt_get_optimizer_params   get_opt_pars,   // callback to get optimizer params, userdata is a pointer to ggml_opt_optimizer_params
             int64_t                         nepoch,         // how many times the dataset should be iterated over
             int64_t                         nbatch_logical, // datapoints optimizer step, must be a multiple of ndata_batch in inputs/outputs
             float                           val_split,      // fraction of the dataset to use for validation, must be in [0.0f, 1.0f)
