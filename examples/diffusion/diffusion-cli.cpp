@@ -96,7 +96,7 @@ static std::string format_input_text(const std::string & prompt, const std::stri
 
     auto result = common_chat_templates_apply(chat_templates.get(), inputs);
 
-    return result.prompt;
+    return result.prompt.str();
 }
 
 int main(int argc, char ** argv) {

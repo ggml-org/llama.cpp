@@ -504,9 +504,8 @@ void launch_mul_mat_vec_f_cuda(
                  channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst,
                  sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst, block_dims, block_nums, nbytes_shared, ids_stride, stream);
         } break;
-        default: {
+        default:
             GGML_ABORT("fatal error");
-        } break;
     }
 }
 
@@ -603,7 +602,6 @@ static void mul_mat_vec_f_cuda_switch_ncols_dst(
             break;
         default:
             GGML_ABORT("fatal error");
-            break;
     }
 }
 
@@ -846,7 +844,7 @@ bool ggml_cuda_should_use_mmvf(enum ggml_type type, int cc, int warp_size, const
                     return ne11 <= MMVF_MAX_BATCH_SIZE;
                 }
                 if (fp16_mma_hardware_available(cc)) {
-                    if (GGML_CUDA_CC_IS_RDNA3(cc)) {
+                    if (GGML_CUDA_CC_IS_RDNA3(cc) || GGML_CUDA_CC_IS_RDNA4_M(cc)) {
                         return ne11 <= 3;
                     }
                     if (GGML_CUDA_CC_IS_RDNA4(cc)) {

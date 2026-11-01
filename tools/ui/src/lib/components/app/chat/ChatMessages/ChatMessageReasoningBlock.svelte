@@ -155,7 +155,6 @@
 	.reasoning-content.is-streaming {
 		max-height: 28rem;
 		overflow-y: auto;
-		overscroll-behavior: contain;
 		scrollbar-gutter: stable;
 		padding-right: 0.25rem;
 	}

@@ -2,6 +2,7 @@
 
 #include "llama-ext.h"
 
+#include <algorithm>
 #include <cmath>
 
 void llama_model_clef::load_arch_hparams(llama_model_loader & ml) {
@@ -320,13 +321,14 @@ public:
     using llm_graph_input_attn_no_cache::llm_graph_input_attn_no_cache;
 
     void set_input(const llama_ubatch * ubatch) override {
+        const int64_t n_kv     = self_kq_mask->ne[0];
         const int64_t n_tokens = ubatch->n_tokens;
 
         const auto fill_mask = [&](auto * data, auto zero, auto ninf) {
             for (int64_t i1 = 0; i1 < n_tokens; ++i1) {
-                for (int64_t i0 = 0; i0 < n_tokens; ++i0) {
+                for (int64_t i0 = 0; i0 < n_kv; ++i0) {
                     const bool visible = i0 <= i1 && ubatch->seq_id[i0][0] == ubatch->seq_id[i1][0];
-                    data[i1 * n_tokens + i0] = visible ? zero : ninf;
+                    data[i1 * n_kv + i0] = visible ? zero : ninf;
                 }
             }
         };
@@ -346,7 +348,7 @@ llm_graph_input_attn_no_cache * llama_model_clef::graph::build_attn_inp_causal()
 
     const auto type_mask = cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
 
-    inp->self_kq_mask = ggml_new_tensor_4d(ctx0, type_mask, n_tokens, n_tokens, 1, 1);
+    inp->self_kq_mask = ggml_new_tensor_4d(ctx0, type_mask, GGML_PAD(n_tokens, 256), n_tokens, 1, 1);
     ggml_set_input(inp->self_kq_mask);
     cb(inp->self_kq_mask, "self_kq_mask", -1);
 

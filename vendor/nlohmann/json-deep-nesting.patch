@@ -1,0 +1,1184 @@
+Backport of the nlohmann/json fixes for the stack overflow on deeply nested values
+(https://github.com/nlohmann/json/issues/5387) onto v3.12.0. Copying, dump() and
+comparing a value nested deep enough would crash with SIGSEGV.
+
+Applied by scripts/sync_vendor.py after downloading json.hpp.
+
+TODO: remove this patch once nlohmann/json releases a version newer than 3.12.0
+
+Contents, from the upstream develop branch:
+- copy:    56b3ee566 (#5389), 67435c9c7 (#5721)
+- dump():  d6e521af6 (the "Bound the descent of dump()" commit of #5285), ported to the
+           v3.12.0 serializer, which does not have the write buffer of #5285
+- compare: 02dd3e67f (#5390)
+
+--- a/vendor/nlohmann/json.hpp
++++ b/vendor/nlohmann/json.hpp
+@@ -18,14 +18,14 @@
+ #ifndef INCLUDE_NLOHMANN_JSON_HPP_
+ #define INCLUDE_NLOHMANN_JSON_HPP_
+ 
+-#include <algorithm> // all_of, find, for_each
++#include <algorithm> // all_of, find, for_each, none_of
+ #include <cstddef> // nullptr_t, ptrdiff_t, size_t
+ #include <functional> // hash, less
+ #include <initializer_list> // initializer_list
+ #ifndef JSON_NO_IO
+     #include <iosfwd> // istream, ostream
+ #endif  // JSON_NO_IO
+-#include <iterator> // random_access_iterator_tag
++#include <iterator> // make_move_iterator, random_access_iterator_tag
+ #include <memory> // unique_ptr
+ #include <string> // string, stoi, to_string
+ #include <utility> // declval, forward, move, pair, swap
+@@ -2524,6 +2524,15 @@
+     #define JSON_NO_UNIQUE_ADDRESS
+ #endif
+ 
++// Clang targeting MinGW does not survive the thread_local storage the copy
++// constructor uses to bound its descent: every test that copies a value
++// segfaults with clang 11.0.1 and clang 18.1.8, while the same tests pass with
++// GCC targeting MinGW and with every other toolchain the library is tested on.
++// Copying works the same way without the counter, only more slowly.
++#if !defined(JSON_NO_THREAD_LOCAL) && defined(__clang__) && defined(__MINGW32__)
++    #define JSON_NO_THREAD_LOCAL 1
++#endif
++
+ // disable documentation warnings on clang
+ #if defined(__clang__)
+     #pragma clang diagnostic push
+@@ -17615,6 +17624,7 @@
+ #include <iomanip> // setfill, setw
+ #include <type_traits> // is_same
+ #include <utility> // move
++#include <vector> // vector
+ 
+ // #include <nlohmann/detail/conversions/to_chars.hpp>
+ //     __ _____ _____ _____
+@@ -18809,7 +18819,8 @@
+     This function is called by the public member function dump and organizes
+     the serialization internally. The indentation level is propagated as
+     additional parameter. In case of arrays and objects, the function is
+-    called recursively.
++    called recursively, up to @ref dump_depth_limit levels deep; anything
++    nested deeper is written by @ref dump_iteratively without the call stack.
+ 
+     - strings and object keys are escaped using `escape_string()`
+     - integer numbers are converted implicitly via `operator<<`
+@@ -18824,17 +18835,27 @@
+     of ASCII characters only.
+     @param[in] indent_step       the indent level
+     @param[in] current_indent    the current indent level (only used internally)
++    @param[in] depth             the current nesting level (only used internally)
++
++    @sa https://github.com/nlohmann/json/issues/5387
+     */
+     void dump(const BasicJsonType& val,
+               const bool pretty_print,
+               const bool ensure_ascii,
+               const unsigned int indent_step,
+-              const unsigned int current_indent = 0)
++              const unsigned int current_indent = 0,
++              const std::size_t depth = 0)
+     {
+         switch (val.m_data.m_type)
+         {
+             case value_t::object:
+             {
++                if (JSON_HEDLEY_UNLIKELY(depth >= dump_depth_limit()))
++                {
++                    dump_iteratively(val, pretty_print, ensure_ascii, indent_step, current_indent);
++                    return;
++                }
++
+                 if (val.m_data.m_value.object->empty())
+                 {
+                     o->write_characters("{}", 2);
+@@ -18860,7 +18881,7 @@
+                         o->write_character('\"');
+                         dump_escaped(i->first, ensure_ascii);
+                         o->write_characters("\": ", 3);
+-                        dump(i->second, true, ensure_ascii, indent_step, new_indent);
++                        dump(i->second, true, ensure_ascii, indent_step, new_indent, depth + 1);
+                         o->write_characters(",\n", 2);
+                     }
+ 
+@@ -18871,7 +18892,7 @@
+                     o->write_character('\"');
+                     dump_escaped(i->first, ensure_ascii);
+                     o->write_characters("\": ", 3);
+-                    dump(i->second, true, ensure_ascii, indent_step, new_indent);
++                    dump(i->second, true, ensure_ascii, indent_step, new_indent, depth + 1);
+ 
+                     o->write_character('\n');
+                     o->write_characters(indent_string.c_str(), current_indent);
+@@ -18888,7 +18909,7 @@
+                         o->write_character('\"');
+                         dump_escaped(i->first, ensure_ascii);
+                         o->write_characters("\":", 2);
+-                        dump(i->second, false, ensure_ascii, indent_step, current_indent);
++                        dump(i->second, false, ensure_ascii, indent_step, current_indent, depth + 1);
+                         o->write_character(',');
+                     }
+ 
+@@ -18898,7 +18919,7 @@
+                     o->write_character('\"');
+                     dump_escaped(i->first, ensure_ascii);
+                     o->write_characters("\":", 2);
+-                    dump(i->second, false, ensure_ascii, indent_step, current_indent);
++                    dump(i->second, false, ensure_ascii, indent_step, current_indent, depth + 1);
+ 
+                     o->write_character('}');
+                 }
+@@ -18908,6 +18929,12 @@
+ 
+             case value_t::array:
+             {
++                if (JSON_HEDLEY_UNLIKELY(depth >= dump_depth_limit()))
++                {
++                    dump_iteratively(val, pretty_print, ensure_ascii, indent_step, current_indent);
++                    return;
++                }
++
+                 if (val.m_data.m_value.array->empty())
+                 {
+                     o->write_characters("[]", 2);
+@@ -18930,14 +18957,14 @@
+                             i != val.m_data.m_value.array->cend() - 1; ++i)
+                     {
+                         o->write_characters(indent_string.c_str(), new_indent);
+-                        dump(*i, true, ensure_ascii, indent_step, new_indent);
++                        dump(*i, true, ensure_ascii, indent_step, new_indent, depth + 1);
+                         o->write_characters(",\n", 2);
+                     }
+ 
+                     // last element
+                     JSON_ASSERT(!val.m_data.m_value.array->empty());
+                     o->write_characters(indent_string.c_str(), new_indent);
+-                    dump(val.m_data.m_value.array->back(), true, ensure_ascii, indent_step, new_indent);
++                    dump(val.m_data.m_value.array->back(), true, ensure_ascii, indent_step, new_indent, depth + 1);
+ 
+                     o->write_character('\n');
+                     o->write_characters(indent_string.c_str(), current_indent);
+@@ -18951,13 +18978,13 @@
+                     for (auto i = val.m_data.m_value.array->cbegin();
+                             i != val.m_data.m_value.array->cend() - 1; ++i)
+                     {
+-                        dump(*i, false, ensure_ascii, indent_step, current_indent);
++                        dump(*i, false, ensure_ascii, indent_step, current_indent, depth + 1);
+                         o->write_character(',');
+                     }
+ 
+                     // last element
+                     JSON_ASSERT(!val.m_data.m_value.array->empty());
+-                    dump(val.m_data.m_value.array->back(), false, ensure_ascii, indent_step, current_indent);
++                    dump(val.m_data.m_value.array->back(), false, ensure_ascii, indent_step, current_indent, depth + 1);
+ 
+                     o->write_character(']');
+                 }
+@@ -19091,9 +19118,233 @@
+ 
+             default:            // LCOV_EXCL_LINE
+                 JSON_ASSERT(false); // NOLINT(cert-dcl03-c,hicpp-static-assert,misc-static-assert) LCOV_EXCL_LINE
++        }
++    }
++
++  private:
++    /// the number of levels @ref dump descends into before it hands over to
++    /// @ref dump_iteratively
++    static constexpr std::size_t dump_depth_limit()
++    {
++        return 128;
++    }
++
++    /// @brief a container that has been opened but not closed yet
++    struct dump_frame
++    {
++        dump_frame(const BasicJsonType* value_, const unsigned int current_indent_,
++                   const unsigned int child_indent_) noexcept
++            : value(value_)
++            , current_indent(current_indent_)
++            , child_indent(child_indent_)
++        {}
++
++        /// the object or array being serialized
++        const BasicJsonType* value;
++        /// the element to serialize next; which of the two is live follows from
++        /// the type of @a value
++        typename BasicJsonType::object_t::const_iterator object_it{};
++        typename BasicJsonType::array_t::const_iterator array_it{};
++        /// the indentation of the container itself, used by its closing bracket
++        unsigned int current_indent;
++        /// the indentation of the container's elements
++        unsigned int child_indent;
++    };
++
++    /*!
++    @brief write out @a val and everything below it without the call stack
++
++    Emits the same bytes as @ref dump, keeping the containers it has entered on
++    an explicit stack instead of descending into them. Only reached for values
++    nested deeper than @ref dump_depth_limit.
++    */
++    void dump_iteratively(const BasicJsonType& val,
++                          const bool pretty_print,
++                          const bool ensure_ascii,
++                          const unsigned int indent_step,
++                          const unsigned int current_indent)
++    {
++        // Scalars, empty containers and binary values are written by dump_value
++        // alone, so nothing is allocated for them: only a container with
++        // elements is ever pushed.
++        std::vector<dump_frame> stack;
++
++        dump_value(val, pretty_print, ensure_ascii, indent_step, current_indent, stack);
++
++        while (!stack.empty())
++        {
++            dump_frame& frame = stack.back();
++
++            if (frame.value->m_data.m_type == value_t::object)
++            {
++                const auto* object = frame.value->m_data.m_value.object;
++
++                if (frame.object_it == object->cend())
++                {
++                    if (pretty_print)
++                    {
++                        o->write_character('\n');
++                        o->write_characters(indent_string.c_str(), frame.current_indent);
++                    }
++
++                    o->write_character('}');
++                    stack.pop_back();
++                    continue;
++                }
++
++                // the separator goes in front of every element but the first,
++                // which puts exactly one between each pair and none at the end
++                if (frame.object_it != object->cbegin())
++                {
++                    if (pretty_print)
++                    {
++                        o->write_characters(",\n", 2);
++                    }
++                    else
++                    {
++                        o->write_character(',');
++                    }
++                }
++
++                if (pretty_print)
++                {
++                    o->write_characters(indent_string.c_str(), frame.child_indent);
++                }
++
++                o->write_character('\"');
++                dump_escaped(frame.object_it->first, ensure_ascii);
++
++                if (pretty_print)
++                {
++                    o->write_characters("\": ", 3);
++                }
++                else
++                {
++                    o->write_characters("\":", 2);
++                }
++
++                const BasicJsonType& element = frame.object_it->second;
++                ++frame.object_it;
++
++                // read everything needed from the frame before this: entering a
++                // container pushes another one and can move them all
++                const unsigned int element_indent = frame.child_indent;
++                dump_value(element, pretty_print, ensure_ascii, indent_step, element_indent, stack);
++            }
++            else
++            {
++                const auto* array = frame.value->m_data.m_value.array;
++
++                if (frame.array_it == array->cend())
++                {
++                    if (pretty_print)
++                    {
++                        o->write_character('\n');
++                        o->write_characters(indent_string.c_str(), frame.current_indent);
++                    }
++
++                    o->write_character(']');
++                    stack.pop_back();
++                    continue;
++                }
++
++                if (frame.array_it != array->cbegin())
++                {
++                    if (pretty_print)
++                    {
++                        o->write_characters(",\n", 2);
++                    }
++                    else
++                    {
++                        o->write_character(',');
++                    }
++                }
++
++                if (pretty_print)
++                {
++                    o->write_characters(indent_string.c_str(), frame.child_indent);
++                }
++
++                const BasicJsonType& element = *frame.array_it;
++                ++frame.array_it;
++
++                // see above
++                const unsigned int element_indent = frame.child_indent;
++                dump_value(element, pretty_print, ensure_ascii, indent_step, element_indent, stack);
++            }
+         }
+     }
+ 
++    /*!
++    @brief serialize the value @a val, but not the elements of a container
++
++    An object or array with elements is opened and pushed onto @a stack for
++    @ref dump_iteratively to walk; everything else - including a binary value,
++    which looks like an object but has no elements to descend into - is written
++    out here in full by @ref dump.
++    */
++    void dump_value(const BasicJsonType& val,
++                    const bool pretty_print,
++                    const bool ensure_ascii,
++                    const unsigned int indent_step,
++                    const unsigned int current_indent,
++                    std::vector<dump_frame>& stack)
++    {
++        if (val.m_data.m_type == value_t::object && !val.m_data.m_value.object->empty())
++        {
++            unsigned int child_indent = current_indent;
++
++            if (pretty_print)
++            {
++                o->write_characters("{\n", 2);
++
++                // variable to hold indentation for the elements
++                child_indent = current_indent + indent_step;
++                if (JSON_HEDLEY_UNLIKELY(indent_string.size() < child_indent))
++                {
++                    indent_string.resize(indent_string.size() * 2, ' ');
++                }
++            }
++            else
++            {
++                o->write_character('{');
++            }
++
++            stack.emplace_back(&val, current_indent, child_indent);
++            stack.back().object_it = val.m_data.m_value.object->cbegin();
++            return;
++        }
++
++        if (val.m_data.m_type == value_t::array && !val.m_data.m_value.array->empty())
++        {
++            unsigned int child_indent = current_indent;
++
++            if (pretty_print)
++            {
++                o->write_characters("[\n", 2);
++
++                // variable to hold indentation for the elements
++                child_indent = current_indent + indent_step;
++                if (JSON_HEDLEY_UNLIKELY(indent_string.size() < child_indent))
++                {
++                    indent_string.resize(indent_string.size() * 2, ' ');
++                }
++            }
++            else
++            {
++                o->write_character('[');
++            }
++
++            stack.emplace_back(&val, current_indent, child_indent);
++            stack.back().array_it = val.m_data.m_value.array->cbegin();
++            return;
++        }
++
++        // a scalar, a binary value or an empty container: dump writes it
++        // without descending
++        dump(val, pretty_print, ensure_ascii, indent_step, current_indent);
++    }
++
+   JSON_PRIVATE_UNLESS_TESTED:
+     /*!
+     @brief dump escaped string
+@@ -20803,8 +21054,625 @@
+         static_cast<void>(old_capacity);
+ #endif
+         return j;
++    }
++
++#ifndef JSON_NO_THREAD_LOCAL
++    /// the number of levels an operation descends into before it finishes the
++    /// value below it without the call stack
++    static constexpr std::uint8_t nesting_depth_limit()
++    {
++        return 128;
++    }
++
++    /*!
++    @brief how many levels the operation going on in this thread has descended into
++
++    Copying a value and comparing two values share this count. The library never
++    nests one inside the other - copying a value does not compare one, and
++    comparing two values does not copy them - and where user code nests them
++    anyway, sharing the count only ends a descent sooner than it had to, which
++    costs a little speed and is never wrong.
++
++    A byte is enough: the count never exceeds the limit by more than the single
++    level that notices the limit has been reached.
++    */
++    static std::uint8_t& nesting_depth() noexcept
++    {
++        static thread_local std::uint8_t depth = 0; // NOLINT(misc-use-internal-linkage)
++        return depth;
++    }
++#endif
++
++    /*!
++    @brief whether a descent must stop here and finish without the call stack
++
++    @a may_descend says whether the operator descends at all; it is a constant
++    at every call site, and is passed rather than tested by the caller so that
++    the test does not become a constant condition there, which MSVC reports as
++    C4127.
++
++    The comparison operators use this rather than @ref nesting_depth_guard::okay,
++    because they are written as a macro and a macro cannot use the preprocessor
++    the way the guard's constructor does; @ref copy_structured, which can, asks
++    the guard instead and never calls this.
++    */
++    static bool nesting_depth_exhausted(bool may_descend = true) noexcept
++    {
++#ifdef JSON_NO_THREAD_LOCAL
++        // without a count of its own per thread, a descent cannot be bounded
++        // without racing another one, so none is made
++        static_cast<void>(may_descend);
++        return true;
++#else
++        return !may_descend || nesting_depth() >= nesting_depth_limit();
++#endif
++    }
++
++    /*!
++    @brief counts one level of a bounded descent for as long as it runs, and
++           reports whether the descent was still within the limit when it began
++
++    Looks the count up and tests it against the limit itself, rather than
++    leaving that to the caller: either way it is reached exactly once, so
++    there is nothing to be gained by making the caller do it.
++
++    Does nothing and is never @ref okay without thread-local storage, where no
++    descent can be bounded at all: a caller that only descends while this says
++    it may always ends up finishing without the call stack, exactly as if every
++    value were nested past the limit.
++    */
++    class nesting_depth_guard
++    {
++      public:
++        nesting_depth_guard() noexcept
++#ifdef JSON_NO_THREAD_LOCAL
++            : m_okay(false)
++#else
++            : m_okay(nesting_depth() < nesting_depth_limit())
++#endif
++        {
++#ifndef JSON_NO_THREAD_LOCAL
++            ++nesting_depth();
++#endif
++        }
++
++        ~nesting_depth_guard()
++        {
++#ifndef JSON_NO_THREAD_LOCAL
++            --nesting_depth();
++#endif
++        }
++
++        nesting_depth_guard(const nesting_depth_guard&) = delete;
++        nesting_depth_guard& operator=(const nesting_depth_guard&) = delete;
++        nesting_depth_guard(nesting_depth_guard&&) = delete;
++        nesting_depth_guard& operator=(nesting_depth_guard&&) = delete;
++
++        bool okay() const noexcept
++        {
++            return m_okay;
++        }
++
++      private:
++        bool m_okay;
++    };
++
++    /// an entry of the iterative deep copy's worklist: a structured value and
++    /// the value that is to become its copy
++    using copy_worklist_t = std::vector<std::pair<const basic_json*, basic_json*>>;
++
++    /// scratch space to build the key skeleton of an object copy in one go
++    using copy_scratch_t = std::vector<std::pair<typename object_t::key_type, basic_json>>;
++
++    /// @brief copy everything of @a src into @a dst but its type and value
++    static void copy_metadata(const basic_json& src, basic_json& dst)
++    {
++        // a custom base class is only required to be copy-constructible and
++        // move-assignable, so the copy has to go through a temporary
++        static_cast<json_base_class_t&>(dst) = json_base_class_t(static_cast<const json_base_class_t&>(src));
++
++#if JSON_DIAGNOSTIC_POSITIONS
++        dst.start_position = src.start_position;
++        dst.end_position = src.end_position;
++#endif
+     }
+ 
++    /*!
++    @brief copy the value of @a src into @a dst, which must not be structured
++
++    Objects and arrays are left alone: creating those is the one thing the copy
++    constructor and @ref copy_shallow do differently from one another, and it is
++    the reason copying a value can descend at all.
++    */
++    /// @note inlined on purpose: both callers have already told an object or an
++    ///       array apart from the rest, and letting the compiler fold that test
++    ///       into this switch is worth a few percent when copying a value made
++    ///       mostly of numbers
++    JSON_HEDLEY_ALWAYS_INLINE
++    static void copy_leaf_value(const basic_json& src, basic_json& dst)
++    {
++        switch (src.m_data.m_type)
++        {
++            case value_t::string:
++            {
++                dst.m_data.m_value = *src.m_data.m_value.string;
++                break;
++            }
++
++            case value_t::binary:
++            {
++                dst.m_data.m_value = *src.m_data.m_value.binary;
++                break;
++            }
++
++            case value_t::boolean:
++            {
++                dst.m_data.m_value = src.m_data.m_value.boolean;
++                break;
++            }
++
++            case value_t::number_integer:
++            {
++                dst.m_data.m_value = src.m_data.m_value.number_integer;
++                break;
++            }
++
++            case value_t::number_unsigned:
++            {
++                dst.m_data.m_value = src.m_data.m_value.number_unsigned;
++                break;
++            }
++
++            case value_t::number_float:
++            {
++                dst.m_data.m_value = src.m_data.m_value.number_float;
++                break;
++            }
++
++            case value_t::object:
++            case value_t::array:
++            case value_t::null:
++            case value_t::discarded:
++            default:
++                break;
++        }
++    }
++
++    /*!
++    @brief copy everything of @a src into the null value @a dst but the children
++
++    Objects and arrays are not copied here; they are appended to @a worklist to
++    be created later by @ref copy_iteratively. Until that happens, @a dst remains
++    a null value, so that a partially built copy can be destroyed at any point
++    without ever violating the class invariants.
++    */
++    static void copy_shallow(const basic_json& src, basic_json& dst, copy_worklist_t& worklist)
++    {
++        copy_metadata(src, dst);
++
++        if (src.m_data.m_type == value_t::object || src.m_data.m_type == value_t::array)
++        {
++            // defer: dst stays a null value until its container exists
++            worklist.emplace_back(&src, &dst);
++            return;
++        }
++
++        copy_leaf_value(src, dst);
++
++        // only now that the value exists may the type be set: had the creation
++        // of the value thrown, dst would have been left as a valid null value
++        dst.m_data.m_type = src.m_data.m_type;
++    }
++
++    /// @brief create the copy of the array @a src in @a dst
++    /// @note structured elements are appended to @a worklist instead
++    static void copy_array_level(const basic_json& src, basic_json& dst, copy_worklist_t& worklist)
++    {
++        const array_t& src_array = *src.m_data.m_value.array;
++
++        // create all elements up front: growing the array afterwards could
++        // invalidate the pointers that are handed to the worklist; resize()
++        // rather than the fill constructor, because not every array type
++        // provides the latter (e.g., ones without a matching allocator-aware
++        // fill constructor)
++        dst.m_data.m_value.array = create<array_t>();
++        dst.m_data.m_value.array->resize(src_array.size());
++
++        auto dst_it = dst.m_data.m_value.array->begin();
++        for (auto src_it = src_array.cbegin(); src_it != src_array.cend(); ++src_it, ++dst_it)
++        {
++            copy_shallow(*src_it, *dst_it, worklist);
++        }
++    }
++
++    /// @brief create the copy of the object @a src in @a dst
++    /// @note structured values are appended to @a worklist instead
++    static void copy_object_level(const basic_json& src, basic_json& dst,
++                                  copy_worklist_t& worklist, copy_scratch_t& scratch)
++    {
++        const object_t& src_object = *src.m_data.m_value.object;
++
++        // build the complete key skeleton and hand it to the object's range
++        // constructor: adding the keys one by one would be quadratic for object
++        // types that are backed by a vector, such as nlohmann::ordered_map
++        scratch.clear();
++        scratch.reserve(src_object.size());
++        for (const auto& element : src_object)
++        {
++            scratch.emplace_back(element.first, basic_json());
++        }
++
++        dst.m_data.m_value.object = create<object_t>(std::make_move_iterator(scratch.begin()),
++                                    std::make_move_iterator(scratch.end()));
++        scratch.clear();
++
++        // pair every value of the copy with its counterpart in the original;
++        // both are enumerated in the same order for every object type with a
++        // deterministic order, so the lookup is only needed for exotic ones
++        auto src_it = src_object.cbegin();
++        for (auto& element : *dst.m_data.m_value.object)
++        {
++            if (JSON_HEDLEY_LIKELY(src_it != src_object.cend() && src_it->first == element.first))
++            {
++                copy_shallow(src_it->second, element.second, worklist);
++                ++src_it;
++            }
++            else
++            {
++                const auto found = src_object.find(element.first);
++                JSON_ASSERT(found != src_object.cend());
++                copy_shallow(found->second, element.second, worklist);
++            }
++        }
++    }
++
++    /*!
++    @brief deep-copy the object or array @a src into this value without recursing
++
++    The values whose copy has not been created yet are kept on an explicit
++    worklist rather than on the call stack. This is only reached for values
++    nested deeper than @ref nesting_depth_limit levels, which is why it copies
++    every container by hand instead of letting the container do it: the fast
++    ways of doing so would descend into the elements and defeat the purpose.
++    */
++    void copy_iteratively(const basic_json& src)
++    {
++        copy_worklist_t worklist;
++        copy_scratch_t scratch;
++
++        const basic_json* src_value = &src;
++        basic_json* dst_value = this;
++
++        for (;;)
++        {
++            if (src_value->m_data.m_type == value_t::array)
++            {
++                copy_array_level(*src_value, *dst_value, worklist);
++            }
++            else
++            {
++                copy_object_level(*src_value, *dst_value, worklist, scratch);
++            }
++
++            // the container is complete and will not be modified again
++            dst_value->set_parents();
++
++            if (worklist.empty())
++            {
++                break;
++            }
++
++            const auto& next = worklist.back();
++            src_value = next.first;
++            dst_value = next.second;
++            worklist.pop_back();
++
++            // the value stops being a null value exactly here
++            dst_value->m_data.m_type = src_value->m_data.m_type;
++        }
++    }
++
++    /*!
++    @brief copy one level of the object or array @a src into this value
++
++    The container copies its own elements, which is the fastest way to fill it.
++    Every element that is structured itself comes back to @ref copy_structured.
++    */
++    void copy_level(const basic_json& src)
++    {
++        if (m_data.m_type == value_t::object)
++        {
++            m_data.m_value = *src.m_data.m_value.object;
++        }
++        else
++        {
++            m_data.m_value = *src.m_data.m_value.array;
++        }
++
++        set_parents();
++    }
++
++    /*!
++    @brief deep-copy the object or array @a src into this value
++
++    Copying a container copies its elements, so a value nested deeply enough
++    used to exhaust the call stack. The descent is bounded here: the first
++    @ref nesting_depth_limit levels are copied by the containers themselves, just
++    as they always were, and anything below that is copied without the call
++    stack by @ref copy_iteratively. Copying a value can therefore no longer
++    exhaust the stack, however deeply it is nested, just like destroying one
++    cannot since #1436.
++
++    Nothing has to be scanned or built by hand to reach that: a value that is
++    not nested deeper than the limit - all but a vanishing minority - is copied
++    exactly as it was before, and this whole detour costs it one counter.
++
++    @sa https://github.com/nlohmann/json/issues/5387
++    */
++    void copy_structured(const basic_json& src)
++    {
++        const nesting_depth_guard guard;
++
++        if (JSON_HEDLEY_LIKELY(guard.okay()))
++        {
++            copy_level(src);
++            return;
++        }
++
++        // Finish this value without descending any further. It is completed
++        // before this returns, so a copy made by a custom base class - or by
++        // anything else that runs while a copy is going on - is unaffected by
++        // the copy it is nested in.
++        copy_iteratively(src);
++    }
++
++
++    /// the result of comparing two values, including values that cannot be
++    /// ordered at all, such as a discarded value or a NaN
++    enum class compare_result { less, equal, greater, unordered };
++
++#if JSON_HAS_THREE_WAY_COMPARISON
++    /// @brief the ordering that @a result stands for
++    static std::partial_ordering to_partial_ordering(compare_result result) noexcept // *NOPAD*
++    {
++        switch (result)
++        {
++            case compare_result::less:
++                return std::partial_ordering::less;
++            case compare_result::greater:
++                return std::partial_ordering::greater;
++            case compare_result::equal:
++                return std::partial_ordering::equivalent;
++            case compare_result::unordered:
++            default:
++                return std::partial_ordering::unordered;
++        }
++    }
++#endif
++
++    /*!
++    @brief compare two values that are not both an array or both an object
++
++    Such a pair is compared by the operators themselves, which cannot descend
++    into it and therefore cannot recurse.
++
++    That holds for a pair whose types differ as much as for a pair of leaves: an
++    array and an object are told apart by their types alone, because an operator
++    only ever descends into two values of the same type. So `==` reports them as
++    unequal without looking inside either, and an ordering falls back to the
++    order of the types - an object sorts before an array - exactly as it does
++    for a value that is not nested deeply enough to get here.
++    */
++    template<bool Ordered>
++    static compare_result compare_leaves(const_reference lhs, const_reference rhs) noexcept
++    {
++        if (lhs == rhs)
++        {
++            return compare_result::equal;
++        }
++
++        return order_leaves(lhs, rhs, std::integral_constant<bool, Ordered> {});
++    }
++
++    /*!
++    @brief compare two object keys
++
++    An object compares its entries as pairs of a key and a value, so its keys
++    are compared exactly as std::pair compares them: with < where the objects
++    are being ordered, and with == where they are only checked for equality.
++    Note that this is not the object's own comparator, which for a vector-backed
++    object type such as nlohmann::ordered_map tells equality rather than order.
++    */
++    static compare_result compare_keys(const typename object_t::key_type& lhs,
++                                       const typename object_t::key_type& rhs,
++                                       std::true_type /*ordered*/)
++    {
++        if (lhs < rhs)
++        {
++            return compare_result::less;
++        }
++
++        if (rhs < lhs)
++        {
++            return compare_result::greater;
++        }
++
++        return compare_result::equal;
++    }
++
++    /// @brief check two object keys for equality
++    static compare_result compare_keys(const typename object_t::key_type& lhs,
++                                       const typename object_t::key_type& rhs,
++                                       std::false_type /*ordered*/)
++    {
++        return lhs == rhs ? compare_result::equal : compare_result::unordered;
++    }
++
++    /// @brief tell apart two values that are not equal
++    /// @note only instantiated where the values are being ordered, as a key or
++    ///       string type is not required to be ordered to be compared for equality
++    static compare_result order_leaves(const_reference lhs, const_reference rhs, std::true_type /*ordered*/) noexcept
++    {
++        if (lhs < rhs)
++        {
++            return compare_result::less;
++        }
++
++        if (rhs < lhs)
++        {
++            return compare_result::greater;
++        }
++
++        return compare_result::unordered;
++    }
++
++    /// @brief report two values as not equal without ordering them
++    static compare_result order_leaves(const_reference /*lhs*/, const_reference /*rhs*/, std::false_type /*ordered*/) noexcept
++    {
++        return compare_result::unordered;
++    }
++
++    /*!
++    @brief compare @a lhs and @a rhs without descending into them
++
++    Reached once a comparison has descended @ref nesting_depth_limit levels, so
++    that comparing values cannot exhaust the call stack however deeply they are
++    nested. The two values are walked in lockstep on an explicit stack and
++    compared lexicographically, element by element in the order the containers
++    enumerate them - which is how the container types this library ships compare
++    themselves: a std::map enumerates its entries in key order, and
++    nlohmann::ordered_map in insertion order. An object type that enumerates its
++    entries in an unspecified order, such as std::unordered_map, compares them
++    pairwise instead; the difference could only ever show below the bound.
++
++    Note that the stack this walks with is allocated, while the comparison
++    operators are noexcept and the container comparison this replaces allocated
++    nothing. Failing that allocation therefore ends the process rather than
++    throwing. It only arises for values nested past the bound, and only when
++    memory has run out - where the same comparison used to exhaust the call
++    stack instead - but it is a way to fail that the operators did not have.
++    */
++    template<bool Ordered>
++    static compare_result compare_iteratively(const_reference lhs, const_reference rhs,
++            const bool unordered_compares_equal) noexcept
++    {
++        /// a pair of containers being compared in lockstep
++        struct frame
++        {
++            const basic_json* lhs_value{nullptr};
++            const basic_json* rhs_value{nullptr};
++            typename array_t::const_iterator lhs_array_it{};
++            typename array_t::const_iterator rhs_array_it{};
++            typename object_t::const_iterator lhs_object_it{};
++            typename object_t::const_iterator rhs_object_it{};
++        };
++
++        std::vector<frame> stack;
++        const basic_json* left = &lhs;
++        const basic_json* right = &rhs;
++
++        for (;;)
++        {
++            const auto type = left->m_data.m_type;
++
++            if (type == right->m_data.m_type && (type == value_t::array || type == value_t::object))
++            {
++                // descend: the elements decide, and are compared further down
++                stack.emplace_back();
++                frame& pushed = stack.back();
++                pushed.lhs_value = left;
++                pushed.rhs_value = right;
++
++                if (type == value_t::array)
++                {
++                    pushed.lhs_array_it = left->m_data.m_value.array->cbegin();
++                    pushed.rhs_array_it = right->m_data.m_value.array->cbegin();
++                }
++                else
++                {
++                    pushed.lhs_object_it = left->m_data.m_value.object->cbegin();
++                    pushed.rhs_object_it = right->m_data.m_value.object->cbegin();
++                }
++            }
++            else
++            {
++                const compare_result result = compare_leaves<Ordered>(*left, *right);
++
++                // Values that cannot be ordered - a NaN, say - end an ordered
++                // comparison for std::lexicographical_compare_three_way, but
++                // std::lexicographical_compare treats them as equivalent and
++                // carries on with the next element. Both are reproduced here,
++                // so that a value nested too deeply to descend into compares
++                // exactly as one that is not.
++                if (result != compare_result::equal &&
++                        !(unordered_compares_equal && result == compare_result::unordered))
++                {
++                    return result;
++                }
++            }
++
++            // walk back up past the containers that are exhausted, then take the
++            // next pair of elements from the innermost one that is not
++            for (;;)
++            {
++                if (stack.empty())
++                {
++                    return compare_result::equal;
++                }
++
++                frame& current = stack.back();
++                const bool is_object = current.lhs_value->m_data.m_type == value_t::object;
++
++                const bool lhs_done = is_object
++                                      ? current.lhs_object_it == current.lhs_value->m_data.m_value.object->cend()
++                                      : current.lhs_array_it == current.lhs_value->m_data.m_value.array->cend();
++                const bool rhs_done = is_object
++                                      ? current.rhs_object_it == current.rhs_value->m_data.m_value.object->cend()
++                                      : current.rhs_array_it == current.rhs_value->m_data.m_value.array->cend();
++
++                if (lhs_done || rhs_done)
++                {
++                    // whichever ran out first holds the smaller container; if
++                    // both did, they are equal and the container above decides
++                    if (lhs_done != rhs_done)
++                    {
++                        return lhs_done ? compare_result::less : compare_result::greater;
++                    }
++
++                    stack.pop_back();
++                    continue;
++                }
++
++                if (is_object)
++                {
++                    // an entry is a key and a value, and the key decides first
++                    const compare_result key_result =
++                        compare_keys(current.lhs_object_it->first, current.rhs_object_it->first,
++                                     std::integral_constant<bool, Ordered> {});
++
++                    if (key_result != compare_result::equal)
++                    {
++                        return key_result;
++                    }
++
++                    left = &(current.lhs_object_it->second);
++                    right = &(current.rhs_object_it->second);
++                    ++current.lhs_object_it;
++                    ++current.rhs_object_it;
++                }
++                else
++                {
++                    left = &(*current.lhs_array_it);
++                    right = &(*current.rhs_array_it);
++                    ++current.lhs_array_it;
++                    ++current.rhs_array_it;
++                }
++
++                break;
++            }
++        }
++    }
++
+   public:
+     //////////////////////////
+     // JSON parser callback //
+@@ -21175,60 +22043,15 @@
+         // check of passed value is valid
+         other.assert_invariant();
+ 
+-        switch (m_data.m_type)
++        if (m_data.m_type == value_t::object || m_data.m_type == value_t::array)
+         {
+-            case value_t::object:
+-            {
+-                m_data.m_value = *other.m_data.m_value.object;
+-                break;
+-            }
+-
+-            case value_t::array:
+-            {
+-                m_data.m_value = *other.m_data.m_value.array;
+-                break;
+-            }
+-
+-            case value_t::string:
+-            {
+-                m_data.m_value = *other.m_data.m_value.string;
+-                break;
+-            }
+-
+-            case value_t::boolean:
+-            {
+-                m_data.m_value = other.m_data.m_value.boolean;
+-                break;
+-            }
+-
+-            case value_t::number_integer:
+-            {
+-                m_data.m_value = other.m_data.m_value.number_integer;
+-                break;
+-            }
+-
+-            case value_t::number_unsigned:
+-            {
+-                m_data.m_value = other.m_data.m_value.number_unsigned;
+-                break;
+-            }
+-
+-            case value_t::number_float:
+-            {
+-                m_data.m_value = other.m_data.m_value.number_float;
+-                break;
+-            }
+-
+-            case value_t::binary:
+-            {
+-                m_data.m_value = *other.m_data.m_value.binary;
+-                break;
+-            }
+-
+-            case value_t::null:
+-            case value_t::discarded:
+-            default:
+-                break;
++            // copying the container directly would call this constructor again
++            // for every element, once per nesting level
++            copy_structured(other);
++        }
++        else
++        {
++            copy_leaf_value(other, *this);
+         }
+ 
+         set_parents();
+@@ -23619,7 +24442,7 @@
+ 
+     // note parentheses around operands are necessary; see
+     // https://github.com/nlohmann/json/issues/1530
+-#define JSON_IMPLEMENT_OPERATOR(op, null_result, unordered_result, default_result)                       \
++#define JSON_IMPLEMENT_OPERATOR(op, null_result, unordered_result, default_result, deep_result, may_descend) \
+     const auto lhs_type = lhs.type();                                                                    \
+     const auto rhs_type = rhs.type();                                                                    \
+     \
+@@ -23628,11 +24451,25 @@
+         switch (lhs_type)                                                                                \
+         {                                                                                                \
+             case value_t::array:                                                                         \
++            {                                                                                            \
++                if (JSON_HEDLEY_UNLIKELY(nesting_depth_exhausted(may_descend)))                        \
++                {                                                                                        \
++                    return (deep_result);                                                                \
++                }                                                                                        \
++                const nesting_depth_guard guard;                                                         \
+                 return (*lhs.m_data.m_value.array) op (*rhs.m_data.m_value.array);                                     \
+-                \
++            }                                                                                            \
++            \
+             case value_t::object:                                                                        \
++            {                                                                                            \
++                if (JSON_HEDLEY_UNLIKELY(nesting_depth_exhausted(may_descend)))                        \
++                {                                                                                        \
++                    return (deep_result);                                                                \
++                }                                                                                        \
++                const nesting_depth_guard guard;                                                         \
+                 return (*lhs.m_data.m_value.object) op (*rhs.m_data.m_value.object);                                   \
+-                \
++            }                                                                                            \
++            \
+             case value_t::null:                                                                          \
+                 return (null_result);                                                                    \
+                 \
+@@ -23728,7 +24565,8 @@
+ #pragma GCC diagnostic ignored "-Wfloat-equal"
+ #endif
+         const_reference lhs = *this;
+-        JSON_IMPLEMENT_OPERATOR( ==, true, false, false)
++        JSON_IMPLEMENT_OPERATOR( ==, true, false, false,
++                                 compare_iteratively<false>(lhs, rhs, false) == compare_result::equal, true)
+ #ifdef __GNUC__
+ #pragma GCC diagnostic pop
+ #endif
+@@ -23764,7 +24602,8 @@
+         JSON_IMPLEMENT_OPERATOR(<=>, // *NOPAD*
+                                 std::partial_ordering::equivalent,
+                                 std::partial_ordering::unordered,
+-                                lhs_type <=> rhs_type) // *NOPAD*
++                                lhs_type <=> rhs_type, // *NOPAD*
++                                to_partial_ordering(compare_iteratively<true>(lhs, rhs, false)), true)
+     }
+ 
+     /// @brief comparison: 3-way
+@@ -23831,7 +24670,8 @@
+ #pragma GCC diagnostic push
+ #pragma GCC diagnostic ignored "-Wfloat-equal"
+ #endif
+-        JSON_IMPLEMENT_OPERATOR( ==, true, false, false)
++        JSON_IMPLEMENT_OPERATOR( ==, true, false, false,
++                                 compare_iteratively<false>(lhs, rhs, false) == compare_result::equal, true)
+ #ifdef __GNUC__
+ #pragma GCC diagnostic pop
+ #endif
+@@ -23891,7 +24731,8 @@
+         // default_result is used if we cannot compare values. In that case,
+         // we compare types. Note we have to call the operator explicitly,
+         // because MSVC has problems otherwise.
+-        JSON_IMPLEMENT_OPERATOR( <, false, false, operator<(lhs_type, rhs_type))
++        JSON_IMPLEMENT_OPERATOR( <, false, false, operator<(lhs_type, rhs_type),
++                                 compare_iteratively<true>(lhs, rhs, true) == compare_result::less, false)
+     }
+ 
+     /// @brief comparison: less than

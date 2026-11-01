@@ -35,7 +35,7 @@ permissions:
 env:
   GH_TOKEN: ${{ github.token }}
   BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
-  CMAKE_ARGS: "-DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON"
+  CMAKE_ARGS: "-DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DLLAMA_CONNECT=ON"
 
 # note: run this workflow one at a time for better cache reuse
 concurrency:
@@ -180,6 +180,8 @@ jobs:
             os: ubuntu-24.04-arm
           - build: 's390x'
             os: ubuntu-24.04-s390x
+          - build: '26.04-s390x'
+            os: ubuntu-26.04-s390x
 
     runs-on: ${{ matrix.os }}
 
@@ -200,7 +202,7 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential libssl-dev
+          sudo apt-get install -y build-essential libssl-dev
 
       - name: Toolchain workaround (GCC 14)
         if: ${{ contains(matrix.os, 'ubuntu-24.04') }}
@@ -210,7 +212,7 @@ jobs:
           echo "CXX=g++-14" >> "$GITHUB_ENV"
 
       - name: ccache
-        if: ${{ matrix.build != 's390x' }}
+        if: ${{ !contains(matrix.os, 's390x') }}
         uses: ggml-org/ccache-action@v1.2.24
         with:
           key: release-${{ matrix.os }}-cpu
@@ -242,7 +244,7 @@ jobs:
           archive: false
 
       - name: ccache-clear
-        if: ${{ matrix.build != 's390x' }}
+        if: ${{ !contains(matrix.os, 's390x') }}
         uses: ./.github/actions/ccache-clear
         with:
           key: release-${{ matrix.os }}-cpu
@@ -547,7 +549,7 @@ jobs:
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-latest
-    container: 'ghcr.io/snapdragon-toolchain/arm64-android:v0.7'
+    container: 'ghcr.io/snapdragon-toolchain/arm64-android:v0.8'
 
     defaults:
       run:
@@ -600,7 +602,7 @@ jobs:
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-latest
-    container: 'ghcr.io/snapdragon-toolchain/arm64-linux:v0.7'
+    container: 'ghcr.io/snapdragon-toolchain/arm64-linux:v0.8'
 
     defaults:
       run:
@@ -654,19 +656,12 @@ jobs:
 
     runs-on: ubuntu-24.04
 
-    outputs:
-      openvino_version: ${{ steps.openvino_version.outputs.value }}
-
     env:
-      # Sync versions in build-openvino.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
+      # Sync versions in build-openvino.yml, ci-self-hosted-openvino.yml, release.yml, release-publish.yml, build-cache.yml, .devops/openvino.Dockerfile, docs/backend/OPENVINO.md
       OPENVINO_VERSION_MAJOR: "2026.4.1"
       OPENVINO_VERSION_FULL: "2026.4.1.22982.07f9c262b05"
 
     steps:
-      - name: Set OpenVINO version output
-        id: openvino_version
-        run: echo "value=${{ env.OPENVINO_VERSION_MAJOR }}" >> $GITHUB_OUTPUT
-
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
@@ -721,6 +716,9 @@ jobs:
             -DGGML_OPENVINO=ON \
             -DCMAKE_INSTALL_RPATH='$ORIGIN' \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_CPU_ALL_VARIANTS=ON \
             ${{ env.CMAKE_ARGS }}
           cmake --build build/ReleaseOV --config Release --parallel
 
@@ -759,37 +757,25 @@ jobs:
         with:
           key: release-ubuntu-24.04-openvino-release-no-preset-v1
 
+  # note: builds only the ggml-openvino backend - llama-server and the CPU backend are injected from the
+  #       windows-cpu zip during the release "Merge artifacts" step
   windows-openvino:
-    needs: [check-release, ui-build]
+    needs: [check-release]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: windows-2022
 
-    outputs:
-      openvino_version: ${{ steps.openvino_version.outputs.value }}
-
     env:
-      # Sync versions in build-openvino.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
+      # Sync versions in build-openvino.yml, ci-self-hosted-openvino.yml, release.yml, release-publish.yml, build-cache.yml, .devops/openvino.Dockerfile, docs/backend/OPENVINO.md
       OPENVINO_VERSION_MAJOR: "2026.4.1"
       OPENVINO_VERSION_FULL: "2026.4.1.22982.07f9c262b05"
 
     steps:
-      - name: Set OpenVINO version output
-        id: openvino_version
-        shell: bash
-        run: echo "value=${{ env.OPENVINO_VERSION_MAJOR }}" >> $GITHUB_OUTPUT
-
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
         with:
             fetch-depth: 0
-
-      - name: Download UI build
-        uses: actions/download-artifact@v8
-        with:
-          name: llama-ui.zip
-          path: tools/ui/dist
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
@@ -838,11 +824,13 @@ jobs:
             -A x64 ^
             -DCMAKE_BUILD_TYPE=Release ^
             -DGGML_OPENVINO=ON ^
+            -DGGML_BACKEND_DL=ON ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_CPU=OFF ^
             -DLLAMA_BUILD_BORINGSSL=ON ^
-            -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake ^
-            ${{ env.CMAKE_ARGS }}
+            -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake
 
-          cmake --build build\ReleaseOV --config Release -- /m
+          cmake --build build\ReleaseOV --config Release --target ggml-openvino -- /m
 
       - name: Pack artifacts
         id: pack_artifacts
@@ -870,12 +858,12 @@ jobs:
           Copy-Item -Path (Join-Path $OPENVINO_ROOT 'docs\licensing\*') -Destination $licensingDest -Recurse -Force
 
           Copy-Item LICENSE $dest
-          7z a -snl llama-${{ needs.check-release.outputs.tag_name }}-bin-win-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.zip $dest\*
+          7z a -snl llama-bin-win-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.zip $dest\*
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
-          path: llama-${{ needs.check-release.outputs.tag_name }}-bin-win-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.zip
+          path: llama-bin-win-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.zip
           archive: false
 
       - name: ccache-clear
@@ -981,6 +969,11 @@ jobs:
           key: windows-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
           evict-old-files: 1d
           max-size: "1G"
+
+      - name: Tune ccache for ROCm
+        run: |
+          # since ROCm 10.1, clang -E output has no GPU code, so the preprocessor fallback can reuse objects with old GPU code
+          ccache --set-config=depend_mode=true
 
       # - name: Cache ROCm Installation
       #   id: cache-rocm
@@ -1314,8 +1307,11 @@ jobs:
         shell: bash
 
     env:
-      WINDOWS_BASEKIT_URL: https://registrationcenter-download.intel.com/akdlm/IRC_NAS/0cb67a0d-67f6-410b-868b-f4a0a17ff0cf/intel-oneapi-toolkit-2026.1.1.32_offline.exe
-      WINDOWS_DPCPP_MKL: intel.oneapi.win.cpp-dpcpp-common:intel.oneapi.win.mkl.devel:intel.oneapi.win.dnnl:intel.oneapi.win.tbb.devel
+      WINDOWS_DLE_URL: https://registrationcenter-download.intel.com/akdlm/IRC_NAS/a51104eb-6f4a-4a0e-9dae-1b81b0c81ae1/intel-deep-learning-essentials-2026.1.4.16_offline.exe
+      WINDOWS_ONEDNN_URL: https://registrationcenter-download.intel.com/akdlm/IRC_NAS/34e28083-d04b-46a3-826c-8c1d00bf1e1c/intel-onednn-2026.0.2.47_offline.exe
+      WINDOWS_DPCPP_MKL: intel.oneapi.win.cpp-dpcpp-common:intel.oneapi.win.mkl.devel:intel.oneapi.win.tbb.devel
+      WINDOWS_DNNL: intel.oneapi.win.dnnl
+
       LEVEL_ZERO_SDK_URL: https://github.com/oneapi-src/level-zero/releases/download/v1.33.1/level-zero-win-sdk-1.33.1.zip
       ONEAPI_ROOT: "C:/Program Files (x86)/Intel/oneAPI"
       ONEAPI_INSTALLER_VERSION: "2026.1"
@@ -1328,7 +1324,8 @@ jobs:
       - name: Download & Install oneAPI
         shell: bash
         run: |
-          scripts/install-oneapi.bat $WINDOWS_BASEKIT_URL $WINDOWS_DPCPP_MKL
+          scripts/install-oneapi.bat $WINDOWS_DLE_URL $WINDOWS_DPCPP_MKL
+          scripts/install-oneapi.bat $WINDOWS_ONEDNN_URL $WINDOWS_DNNL
 
       - name: Install Level Zero SDK
         shell: pwsh
@@ -1439,8 +1436,15 @@ jobs:
         shell: bash
         run: |
           cd /tmp
-          wget https://registrationcenter-download.intel.com/akdlm/IRC_NAS/5996e26b-f48a-42b1-8db0-b002ad0bd8d7/intel-oneapi-toolkit-2026.1.1.33_offline.sh -O intel-oneapi-toolkit_offline.sh
-          sudo bash intel-oneapi-toolkit_offline.sh -s -a --silent --eula accept
+          echo "Download oneAPI Deep Learning Essentials installation package"
+          wget https://registrationcenter-download.intel.com/akdlm/IRC_NAS/b5c100a7-8052-4e88-90e2-63d9916a998b/intel-deep-learning-essentials-2026.1.4.17_offline.sh -O intel-deep-learning-essentials_offline.sh
+          echo "Install oneAPI Deep Learning Essentials components"
+          sudo bash intel-deep-learning-essentials_offline.sh -s -a --silent --eula accept
+
+          echo "Download oneDNN installation package"
+          wget https://registrationcenter-download.intel.com/akdlm/IRC_NAS/94c3dbac-0852-45be-a57d-21c204cada3e/intel-onednn-2026.0.2.46_offline.sh -O intel-onednn_offline.sh
+          echo "Install oneDNN components"
+          sudo bash intel-onednn_offline.sh -s -a --silent --eula accept
 
       - name: Install Level Zero SDK
         shell: bash
@@ -1455,6 +1459,12 @@ jobs:
         with:
           name: llama-ui.zip
           path: tools/ui/dist
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
@@ -1474,8 +1484,8 @@ jobs:
             -DCMAKE_CXX_COMPILER=icpx \
             -DCMAKE_INSTALL_RPATH='$ORIGIN' \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
-            -DLLAMA_OPENSSL=OFF \
             -DGGML_NATIVE=OFF \
+            -DLLAMA_CONNECT=ON \
             -DGGML_SYCL_F16=${{ matrix.fp16 }}
           time cmake --build build --config Release -j $(nproc)
 
@@ -1542,6 +1552,8 @@ jobs:
           # builds hit.
           ccache --set-config=compiler_check=content
           ccache --set-config=sloppiness=time_macros,include_file_mtime,include_file_ctime
+          # since ROCm 10.1, clang -E output has no GPU code, so the preprocessor fallback can reuse objects with old GPU code
+          ccache --set-config=depend_mode=true
 
       - name: Dependencies
         id: depends
@@ -1615,6 +1627,60 @@ jobs:
         uses: ./.github/actions/ccache-clear
         with:
           key: release-ubuntu-24.04-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
+
+  ubuntu-26-zdnn:
+    needs: [check-release, ui-build]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
+
+    runs-on: ubuntu-26.04-s390x
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Download UI build
+        uses: actions/download-artifact@v8
+        with:
+          name: llama-ui.zip
+          path: tools/ui/dist
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libssl-dev libzdnn-dev
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake -B build \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_VXE=ON \
+            -DGGML_ZDNN=ON \
+            -DCMAKE_C_FLAGS="-march=arch15" \
+            -DCMAKE_CXX_FLAGS="-march=arch15" \
+            -DLLAMA_FATAL_WARNINGS=ON \
+            ${{ env.CMAKE_ARGS }}
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        run: |
+          cp LICENSE ./build/bin/
+          tar -czvf llama-${{ needs.check-release.outputs.tag_name }}-bin-ubuntu-zdnn-s390x.tar.gz --transform "s,^\.,llama-${{ needs.check-release.outputs.tag_name }}," -C ./build/bin .
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          path: llama-${{ needs.check-release.outputs.tag_name }}-bin-ubuntu-zdnn-s390x.tar.gz
+          archive: false
 
   ios-xcode:
     needs: [check-release]

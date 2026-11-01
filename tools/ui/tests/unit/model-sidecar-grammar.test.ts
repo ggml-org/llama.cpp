@@ -4,7 +4,7 @@ import { ModelsService } from '$lib/services/models.service';
 import { sidecarFromTag } from '$lib/utils';
 import { describe, expect, it } from 'vitest';
 
-const { buildDownloadTag, isSidecarEntry } = ModelsService;
+const { buildDownloadTag } = ModelsService;
 const { extractQuantMeta } = HuggingFaceService;
 
 // the sidecar filename grammar mirrors the server (common/download.cpp):
@@ -112,18 +112,6 @@ describe('buildDownloadTag', () => {
 
 	it('returns the repo id untouched without a tag', () => {
 		expect(buildDownloadTag('org/repo', null, null)).toBe('org/repo');
-	});
-});
-
-describe('isSidecarEntry', () => {
-	it('detects sidecar entries by their tag', () => {
-		expect(isSidecarEntry('org/repo:Q4_0-mtp')).toBe(true);
-		expect(isSidecarEntry('org/repo:mmproj')).toBe(true);
-	});
-
-	it('leaves plain model entries loadable', () => {
-		expect(isSidecarEntry('org/repo:Q4_0')).toBe(false);
-		expect(isSidecarEntry('org/repo')).toBe(false);
 	});
 });
 

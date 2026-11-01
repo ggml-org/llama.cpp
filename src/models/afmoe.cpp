@@ -278,6 +278,4 @@ llama_model_afmoe::graph::graph(const llama_model & model, const llm_graph_param
     cur = build_lora_mm(model.output, cur, model.output_s);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }

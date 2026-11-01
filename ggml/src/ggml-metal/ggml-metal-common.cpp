@@ -43,9 +43,10 @@ bool ggml_metal_op_mul_mat_use_mm(const struct ggml_tensor * op, bool has_simdgr
 
 bool ggml_metal_op_mul_mat_id_use_mm(const struct ggml_tensor * op, bool has_simdgroup_mm) {
     const int64_t ne00 = op->src[0]->ne[0];
+    const int64_t ne02 = op->src[0]->ne[2];
     const int64_t ne21 = op->src[2]->ne[1];
 
-    return has_simdgroup_mm && ne00 >= 64 && ne21 >= 32;
+    return has_simdgroup_mm && ne00 >= 64 && ne02 <= 1024 && ne21 >= 32;
 }
 
 // the most src1 rows of the few-row MMA kernels
@@ -80,6 +81,22 @@ static bool ggml_metal_mul_mv_mma_type_supported(enum ggml_type type) {
         case GGML_TYPE_Q4_K:
         case GGML_TYPE_Q5_K:
         case GGML_TYPE_Q6_K:
+        case GGML_TYPE_BF16:
+        case GGML_TYPE_Q1_0:
+        case GGML_TYPE_Q2_0:
+        case GGML_TYPE_MXFP4:
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_IQ2_XXS:
+        case GGML_TYPE_IQ2_XS:
+        case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ3_XXS:
+        case GGML_TYPE_IQ3_S:
+        case GGML_TYPE_IQ1_S:
+        case GGML_TYPE_IQ1_M:
+        case GGML_TYPE_IQ4_NL:
+        case GGML_TYPE_IQ4_XS:
+        case GGML_TYPE_TQ2_0:
             return true;
         default:
             return false;
@@ -105,10 +122,18 @@ static int64_t ggml_metal_mul_mv_mma_rows_min(enum ggml_type type) {
     switch (type) {
         case GGML_TYPE_F32:
             return 6;
+        case GGML_TYPE_TQ2_0:
+            return 5;
+        case GGML_TYPE_BF16:
+            return 4;
         case GGML_TYPE_F16:
+        case GGML_TYPE_Q2_0:
         case GGML_TYPE_Q4_K:
         case GGML_TYPE_Q5_0:
         case GGML_TYPE_Q5_1:
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_IQ4_NL:
+        case GGML_TYPE_MXFP4:
             return 3;
         default:
             return 2;

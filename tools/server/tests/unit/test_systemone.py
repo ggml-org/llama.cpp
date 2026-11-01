@@ -158,6 +158,70 @@ def test_systemone_shared_prompt():
     assert abs(res.body["answers"]["angry"]["noul"] - res_single.body["answers"]["angry"]["noul"]) < 0.01
 
 
+@pytest.mark.parametrize("cache_ram", [None, 100])
+def test_systemone_prompt_cache(cache_ram, tmp_path):
+    global server
+    server.n_slots = 1
+    server.cache_ram = cache_ram
+    server.debug = True
+    server.log_path = str(tmp_path / "server.log")
+    server.start()
+
+    # the third request comes back to the state of the first one
+    for state in ["Ticket A: " + TEST_STATE, "Ticket B: " + TEST_STATE * 2, "Ticket A: " + TEST_STATE]:
+        res = server.make_request("POST", "/v1/systemone", data={
+            "state": state,
+            "questions": TEST_QUESTIONS,
+        })
+        assert res.status_code == 200
+
+    server.stop()
+
+    with open(server.log_path) as f:
+        log = f.read()
+    # the prompt cache is opt-in for decision models, and restores their states once enabled
+    assert ("__TEST_TAG_CACHE_IDLE_SLOTS_ENABLED__" in log) == (cache_ram is not None)
+    assert ("found better prompt" in log) == (cache_ram is not None)
+
+
+def test_systemone_prompt_cache_child_slots(tmp_path):
+    global server
+    server = ServerPreset.tinyopenjev()
+    server.n_slots = len(TEST_QUESTIONS)
+    server.cache_ram = 100
+    server.debug = True
+    server.log_path = str(tmp_path / "server.log")
+    server.start()
+
+    states = [
+        "My parcel shows delivered but it never arrived at my door.",
+        "The app crashes every time I open the settings page.",
+        "Please close my account and delete all my personal data.",
+    ]
+    angry = {"angry": TEST_QUESTIONS["angry"]}
+
+    def decide(state, questions):
+        res = server.make_request("POST", "/v1/systemone", data={"state": state, "questions": questions})
+        assert res.status_code == 200
+
+    # one state per slot, then a request whose child tasks take every slot
+    for state in states:
+        decide(state, angry)
+    decide(TEST_STATE, TEST_QUESTIONS)
+
+    with open(server.log_path) as f:
+        n_restored = f.read().count("found better prompt with f_keep = 1.000")
+
+    # every overwritten state comes back whole from the prompt cache
+    for state in states:
+        decide(state, angry)
+
+    server.stop()
+
+    with open(server.log_path) as f:
+        assert f.read().count("found better prompt with f_keep = 1.000") == n_restored + len(states)
+
+
 def test_systemone_images():
     global server
     server = ServerPreset.tinyopenjev()

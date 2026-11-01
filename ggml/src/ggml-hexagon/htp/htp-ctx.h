@@ -3,6 +3,7 @@
 
 #include "dma-queue.h"
 #include "hmx-queue.h"
+#include "htp-dcache.h"
 #include "htp-ops.h"
 #include "hex-profile.h"
 #include "work-queue.h"
@@ -11,15 +12,16 @@
 #include <assert.h>
 #include <dspqueue.h>
 #include <stdatomic.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <string.h>
 
 #ifndef HTP_MAX_NTHREADS
 #define HTP_MAX_NTHREADS 10
 #endif
 
-#define HTP_MAX_MMAPS        64
-#define HTP_MAX_DIRTY_RANGES 64
+#define HTP_MAX_MMAPS 64
 
 // Memory mapping
 struct htp_mmap {
@@ -27,11 +29,6 @@ struct htp_mmap {
     uint64_t base;
     uint32_t fd;
     uint32_t flags;
-};
-
-struct htp_dirty_range {
-    uint32_t start;
-    uint32_t end;
 };
 
 // Scratchpad state
@@ -71,14 +68,18 @@ struct htp_ops_context {
     // TODO convert these to an array
     struct htp_spad src0_spad;
     struct htp_spad src1_spad;
-    struct htp_spad src2_spad;
-    struct htp_spad src3_spad;
     struct htp_spad dst_spad;
 
     uint32_t              flags;
     uint32_t              n_threads;
     struct fastdiv_values n_threads_div;
     int                   status;
+
+    // Must stay last: not cleared by htp_ops_context_reset(), ops init the caches they use
+    union {
+        dma_cache_dm dma_cache_dm[HTP_MAX_NTHREADS];
+        dma_cache_fa dma_cache_fa[HTP_MAX_NTHREADS];
+    } __attribute__((aligned(128)));
 };
 
 // Main context for htp DSP backend
@@ -123,6 +124,13 @@ struct htp_context {
     size_t                 footprint;
 };
 
+static inline void htp_ops_context_reset(struct htp_ops_context * octx, struct htp_context * ctx) {
+    memset(octx, 0, offsetof(struct htp_ops_context, dma_cache_dm));
+    octx->ctx           = ctx;
+    octx->n_threads     = ctx->n_threads;
+    octx->n_threads_div = ctx->n_threads_div;
+}
+
 static inline bool htp_ops_context_set_n_threads(struct htp_ops_context * octx, uint32_t n_threads) {
     if (n_threads == 0 || n_threads > octx->ctx->n_threads) {
         return false;
@@ -153,7 +161,7 @@ int op_unary(struct htp_ops_context * octx);
 int op_sum(struct htp_ops_context * octx);
 int op_sum_rows(struct htp_ops_context * octx);
 int op_argmax(struct htp_ops_context * octx);
-int op_activations(struct htp_ops_context * octx);
+int op_glu(struct htp_ops_context * octx);
 int op_softmax(struct htp_ops_context * octx);
 int op_add_id(struct htp_ops_context * octx);
 int op_rope(struct htp_ops_context * octx);
@@ -173,9 +181,13 @@ int op_solve_tri(struct htp_ops_context * octx);
 int op_gated_delta_net(struct htp_ops_context * octx);
 int op_pad(struct htp_ops_context * octx);
 int op_im2col(struct htp_ops_context * octx);
+int op_im2col_3d(struct htp_ops_context * octx);
+int op_conv_2d(struct htp_ops_context * octx);
+int op_conv_2d_dw(struct htp_ops_context * octx);
 int op_pool_2d(struct htp_ops_context * octx);
 int op_pool_1d(struct htp_ops_context * octx);
 int op_allreduce(struct htp_ops_context * octx);
 int op_roll(struct htp_ops_context * octx);
+int op_upscale(struct htp_ops_context * octx);
 
 #endif /* HTP_CTX_H */

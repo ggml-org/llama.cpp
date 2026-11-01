@@ -920,7 +920,7 @@ static void * ggml_backend_cann_buffer_get_base(ggml_backend_buffer_t buffer) {
  * @param dst Pointer to the destination buffer where transformed data will be
  * stored.
  */
-static void ggml_backend_cann_transform_q4_0(ggml_tensor * tensor, const void * src, void * dst) {
+static void ggml_backend_cann_transform_q4_0(const ggml_tensor * tensor, const void * src, void * dst) {
     int64_t n_elems     = ggml_nelements(tensor);
     int64_t groups      = n_elems / QK4_0;
     size_t  quant_bytes = n_elems * sizeof(uint8_t) / 2;
@@ -1014,7 +1014,7 @@ static void ggml_backend_cann_transform_back_q4_0(const ggml_tensor * tensor, vo
  * @param dst Pointer to the destination buffer where transformed data will be
  * stored.
  */
-static void ggml_backend_cann_transform_q8_0(ggml_tensor * tensor, const void * src, void * dst) {
+static void ggml_backend_cann_transform_q8_0(const ggml_tensor * tensor, const void * src, void * dst) {
     int64_t n_elems     = ggml_nelements(tensor);
     int64_t groups      = n_elems / QK8_0;
     size_t  quant_bytes = n_elems * sizeof(uint8_t);
@@ -1075,7 +1075,7 @@ static void ggml_backend_cann_transform_back_q8_0(const ggml_tensor * tensor, co
  * @param dst Pointer to the destination buffer where transformed data will be
  * stored.
  */
-static void ggml_backend_cann_transform(ggml_tensor * tensor, const void * src, void * dst) {
+static void ggml_backend_cann_transform(const ggml_tensor * tensor, const void * src, void * dst) {
     switch (tensor->type) {
         case GGML_TYPE_Q4_0:
             ggml_backend_cann_transform_q4_0(tensor, src, dst);
@@ -1478,6 +1478,9 @@ static const ggml_backend_buffer_i ggml_backend_cann_buffer_interface = {
     /* .cpy_tensor      = */ ggml_backend_cann_buffer_cpy_tensor,
     /* .clear           = */ ggml_backend_cann_buffer_clear,
     /* .reset           = */ NULL,
+    /* .set_tensor_n    = */ NULL,
+    /* .get_tensor_n    = */ NULL,
+    /* .cpy_tensor_n    = */ NULL,
 };
 
 /**
@@ -2455,9 +2458,10 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
 #ifdef ASCEND_310P
                         // Q4 && Q8 per group is not support on 310p device
                         return false;
-#endif
+#else
                         // only support contiguous for quantized types.
                         return ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1]);
+#endif
                     default:
                         return false;
                 }
@@ -2472,9 +2476,10 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
 #ifdef ASCEND_310P
                     // Q4 && Q8 per group is not support on 310p device
                     return false;
-#endif
+#else
                     // only support contiguous for quantized types.
                     return ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1]);
+#endif
                 default:
                     return false;
             }
@@ -2641,7 +2646,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
 #ifdef ASCEND_310P
                 // Ger is not supported on 310p device
                 return false;
-#endif
+#else
                 switch (op->src[0]->type) {
                     case GGML_TYPE_F16:
                     case GGML_TYPE_F32:
@@ -2649,6 +2654,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
                     default:
                         return false;
                 }
+#endif
             }
         case GGML_OP_CONV_TRANSPOSE_1D:
             return true;
@@ -2667,7 +2673,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
 #ifdef ASCEND_310P
                 // FA not support on 310p device
                 return false;
-#endif
+#else
                 // derived from [ggml-cuda.cu]
                 if (op->src[1]->type != GGML_TYPE_F16 || op->src[2]->type != GGML_TYPE_F16) {
                     return false;
@@ -2693,6 +2699,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
                     return false;
                 }
                 return true;
+#endif
             }
         case GGML_OP_SSM_CONV:
             return true;

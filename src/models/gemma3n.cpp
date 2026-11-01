@@ -7,6 +7,11 @@ void llama_model_gemma3n::load_arch_hparams(llama_model_loader & ml) {
     hparams.n_layer_kv_from_start = 20;
     hparams.f_attention_scale     = 1.0f;
 
+    // shared layers read the KV of the last layer with own KV and the same SWA type
+    for (uint32_t il = hparams.n_layer_kv_from_start; il < hparams.n_layer_all; il++) {
+        hparams.kv_source_impl[il] = hparams.n_layer_kv_from_start - (hparams.is_swa(il) ? 2 : 1);
+    }
+
     ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA,          hparams.rope_freq_base_train_swa, false);
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa);
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
@@ -25,13 +30,13 @@ void llama_model_gemma3n::load_arch_tensors(llama_model_loader &) {
     const int64_t laurel_rank  = hparams.laurel_rank;
     const int64_t n_embd_altup = hparams.n_embd_altup;
 
+    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
+
     output = create_tensor(tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
     // if output is NULL, init from the input tok embed
     if (output == NULL) {
         output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
     }
-
-    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
     altup_proj        = create_tensor(tn(LLM_TENSOR_ALTUP_PROJ,        "weight"), {n_embd, n_embd, n_altup - 1}, 0);
     altup_unembd_proj = create_tensor(tn(LLM_TENSOR_ALTUP_UNEMBD_PROJ, "weight"), {n_embd, n_embd, n_altup - 1}, 0);
@@ -309,8 +314,6 @@ llama_model_gemma3n::graph::graph(const llama_model & model, const llm_graph_par
     }
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }
 
 ggml_tensor * llama_model_gemma3n::graph::calc_magnitude(ggml_tensor * x) {

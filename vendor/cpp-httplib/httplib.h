@@ -8,13 +8,21 @@
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.59.0"
-#define CPPHTTPLIB_VERSION_NUM "0x003b00"
+#define CPPHTTPLIB_VERSION "0.64.0"
+#define CPPHTTPLIB_VERSION_NUM "0x004000"
 
 #ifdef _WIN32
 #if defined(_WIN32_WINNT) && _WIN32_WINNT < 0x0A00
 #error                                                                         \
     "cpp-httplib doesn't support Windows 8 or lower. Please use Windows 10 or later."
+#endif
+#endif
+
+#if defined(__SANITIZE_THREAD__)
+#define CPPHTTPLIB_THREAD_SANITIZER
+#elif defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define CPPHTTPLIB_THREAD_SANITIZER
 #endif
 #endif
 
@@ -122,12 +130,26 @@
 #define CPPHTTPLIB_REDIRECT_MAX_COUNT 20
 #endif
 
+#ifndef CPPHTTPLIB_INTERIM_RESPONSE_MAX_COUNT
+#define CPPHTTPLIB_INTERIM_RESPONSE_MAX_COUNT 100
+#endif
+
 #ifndef CPPHTTPLIB_MULTIPART_FORM_DATA_FILE_MAX_COUNT
 #define CPPHTTPLIB_MULTIPART_FORM_DATA_FILE_MAX_COUNT 1024
 #endif
 
 #ifndef CPPHTTPLIB_PAYLOAD_MAX_LENGTH
 #define CPPHTTPLIB_PAYLOAD_MAX_LENGTH (100 * 1024 * 1024) // 100MB
+#endif
+
+// How much of an unread request body the server skips to reuse the connection,
+// 0 for no limit
+#ifndef CPPHTTPLIB_UNREAD_PAYLOAD_MAX_LENGTH
+#define CPPHTTPLIB_UNREAD_PAYLOAD_MAX_LENGTH (256 * 1024) // 256KB
+#endif
+
+#ifndef CPPHTTPLIB_SSE_MAX_EVENT_LENGTH
+#define CPPHTTPLIB_SSE_MAX_EVENT_LENGTH (16 * 1024 * 1024) // 16MB
 #endif
 
 #ifndef CPPHTTPLIB_FORM_URL_ENCODED_PAYLOAD_MAX_LENGTH
@@ -210,6 +232,16 @@
 #ifndef CPPHTTPLIB_MAX_LINE_LENGTH
 #define CPPHTTPLIB_MAX_LINE_LENGTH 32768
 #endif
+
+// These bound the parsing of every request, so 0 cannot lift them.
+static_assert(CPPHTTPLIB_REQUEST_URI_MAX_LENGTH > 0,
+              "CPPHTTPLIB_REQUEST_URI_MAX_LENGTH must be positive");
+static_assert(CPPHTTPLIB_HEADER_MAX_LENGTH > 0,
+              "CPPHTTPLIB_HEADER_MAX_LENGTH must be positive");
+static_assert(CPPHTTPLIB_HEADER_MAX_COUNT > 0,
+              "CPPHTTPLIB_HEADER_MAX_COUNT must be positive");
+static_assert(CPPHTTPLIB_MAX_LINE_LENGTH > 0,
+              "CPPHTTPLIB_MAX_LINE_LENGTH must be positive");
 
 #ifndef CPPHTTPLIB_WEBSOCKET_MAX_PAYLOAD_LENGTH
 #define CPPHTTPLIB_WEBSOCKET_MAX_PAYLOAD_LENGTH 16777216
@@ -340,7 +372,6 @@ using socklen_t = int;
 #include <netinet/tcp.h>
 #include <poll.h>
 #include <pthread.h>
-#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -451,6 +482,7 @@ using socket_t = int;
 
 #include <openssl/err.h>
 #include <openssl/evp.h>
+#include <openssl/rand.h>
 #include <openssl/ssl.h>
 #include <openssl/x509v3.h>
 
@@ -581,6 +613,10 @@ namespace ws {
 class WebSocket;
 } // namespace ws
 
+namespace sse {
+class SSEClient;
+} // namespace sse
+
 namespace detail {
 
 /*
@@ -660,6 +696,15 @@ inline bool equal(const std::string &a, const std::string &b) {
          });
 }
 
+// For a literal, without building a std::string from it.
+template <size_t N>
+inline bool equal(const std::string &a, const char (&b)[N]) {
+  return a.size() == N - 1 &&
+         std::equal(a.begin(), a.end(), b, [](char ca, char cb) {
+           return to_lower(ca) == to_lower(cb);
+         });
+}
+
 struct equal_to {
   bool operator()(const std::string &a, const std::string &b) const {
     return equal(a, b);
@@ -668,17 +713,13 @@ struct equal_to {
 
 struct hash {
   size_t operator()(const std::string &key) const {
-    return hash_core(key.data(), key.size(), 0);
-  }
-
-  size_t hash_core(const char *s, size_t l, size_t h) const {
-    return (l == 0) ? h
-                    : hash_core(s + 1, l - 1,
-                                // Unsets the 6 high bits of h, therefore no
-                                // overflow happens
-                                (((std::numeric_limits<size_t>::max)() >> 6) &
-                                 h * 33) ^
-                                    static_cast<unsigned char>(to_lower(*s)));
+    size_t h = 0;
+    for (auto c : key) {
+      // Unsets the 6 high bits of h, therefore no overflow happens
+      h = (((std::numeric_limits<size_t>::max)() >> 6) & h * 33) ^
+          static_cast<unsigned char>(to_lower(c));
+    }
+    return h;
   }
 };
 
@@ -736,6 +777,7 @@ inline from_chars_result<T> from_chars(const char *first, const char *last,
   }
   if (p == last) { return {first, std::errc::invalid_argument}; }
 
+  auto radix = static_cast<T>(base);
   T result = 0;
   for (; p != last; ++p) {
     char c = *p;
@@ -751,10 +793,11 @@ inline from_chars_result<T> from_chars(const char *first, const char *last,
     }
 
     if (digit < 0 || digit >= base) { break; }
-    if (result > ((std::numeric_limits<T>::max)() - digit) / base) {
+    auto d = static_cast<T>(digit);
+    if (result > ((std::numeric_limits<T>::max)() - d) / radix) {
       return {p, std::errc::result_out_of_range};
     }
-    result = result * base + digit;
+    result = result * radix + d;
   }
 
   if (p == first || (negative && p == first + 1)) {
@@ -881,6 +924,12 @@ inline bool parse_url(const std::string &url, UrlComponents &uc) {
   auto has_authority = has_authority_prefix || (!url.empty() && url[0] != '/' &&
                                                 url[0] != '?' && url[0] != '#');
   if (has_authority) {
+    // userinfo is not supported, and a backslash that some parsers take for
+    // '/' would leave them seeing another host than this one.
+    if (url.find_first_of("@\\", pos) < url.find_first_of("/?#", pos)) {
+      return false;
+    }
+
     if (pos < url.size() && url[pos] == '[') {
       auto close = url.find(']', pos);
       if (close == std::string::npos) { return false; }
@@ -946,6 +995,30 @@ inline bool parse_url(const std::string &url, UrlComponents &uc) {
   return true;
 }
 
+// Removes "." and ".." segments from a path that starts with '/' (RFC 3986
+// section 5.2.4).
+inline std::string remove_dot_segments(const std::string &path) {
+  std::string out;
+  size_t i = 0;
+  while (i < path.size()) {
+    auto next = (std::min)(path.find('/', i + 1), path.size());
+    auto segment = path.substr(i + 1, next - i - 1);
+    auto is_last = next == path.size();
+    if (segment == "." || segment == "..") {
+      if (segment == "..") {
+        out.erase((std::min)(out.rfind('/'), out.size()));
+      }
+      if (is_last) { out += '/'; }
+    } else {
+      out += '/';
+      out += segment;
+    }
+    i = next;
+  }
+  if (out.empty()) { out = "/"; }
+  return out;
+}
+
 // Resolves a relative-path or query-only Location value against the path of
 // the request being redirected (RFC 3986 section 5.2). Absolute URIs and
 // references starting with '/' are returned unchanged.
@@ -966,26 +1039,8 @@ inline std::string resolve_relative_location(const std::string &location,
 
   // Remove "." and ".." segments from the merged path.
   auto path_end = (std::min)(merged.find_first_of("?#"), merged.size());
-  std::string path;
-  size_t i = 0;
-  while (i < path_end) {
-    auto next = (std::min)(merged.find('/', i + 1), path_end);
-    auto segment = merged.substr(i + 1, next - i - 1);
-    auto is_last = next == path_end;
-    if (segment == "." || segment == "..") {
-      if (segment == "..") {
-        path.erase((std::min)(path.rfind('/'), path.size()));
-      }
-      if (is_last) { path += '/'; }
-    } else {
-      path += '/';
-      path += segment;
-    }
-    i = next;
-  }
-  if (path.empty()) { path = "/"; }
-
-  return path + merged.substr(path_end);
+  return remove_dot_segments(merged.substr(0, path_end)) +
+         merged.substr(path_end);
 }
 
 } // namespace detail
@@ -1141,8 +1196,7 @@ private:
     pointer operator->() const { return data_ + idx_; }
 
     iterator_t &operator++() {
-      // Saturating, so that advancing past the last entry of a key (which
-      // get_multimap_value() does when asked for an out-of-range id) stays at
+      // Saturating, so that advancing past the last entry of a key stays at
       // end() instead of running off the container.
       if (idx_ >= size_) { return *this; }
       ++idx_;
@@ -1804,6 +1858,7 @@ struct Request {
   bool is_multipart_form_data() const;
 
   // private members...
+  bool body_read_started_ = false;
   bool body_consumed_ = false;
   bool expect_100_continue_pending_ = false;
   size_t redirect_count_ = CPPHTTPLIB_REDIRECT_MAX_COUNT;
@@ -1971,6 +2026,16 @@ public:
   virtual void set_read_timeout(time_t sec, time_t usec = 0) {
     (void)sec;
     (void)usec;
+  }
+
+  // Bounds the reads from now on to `msec` in total, on top of the timeout of
+  // each one. 0 lifts the bound.
+  virtual void set_max_timeout(time_t msec) { (void)msec; }
+
+  // Lets a wait for data end early once `interrupted` returns true, so that
+  // another thread can stop a blocked read on every platform.
+  virtual void set_read_interrupt(std::function<bool()> interrupted) {
+    (void)interrupted;
   }
 
   // Bytes already pulled off the socket and sitting in this stream's own
@@ -2304,6 +2369,8 @@ public:
 
   Server &set_payload_max_length(size_t length);
 
+  Server &set_compress(bool on);
+
   Server &set_static_file_compression(bool on);
   Server &set_static_file_compression_min_length(size_t length);
   Server &set_static_file_compression_max_length(size_t length);
@@ -2339,10 +2406,11 @@ protected:
   // Runs the per-connection serving loop and stops an exception thrown by a
   // user callback from escaping the worker thread.
   //
-  // process_request() wraps only routing() in a try/catch. Content providers,
-  // the post-routing, error, logging and expect-100 handlers and WebSocket
-  // handlers all run outside it, and the task queue calls the job without a
-  // catch, so an exception from any of those would terminate the process.
+  // process_request() wraps only routing() and the hooks before a WebSocket
+  // upgrade in a try/catch. Content providers, the post-routing, error,
+  // logging and expect-100 handlers and WebSocket handlers all run outside
+  // it, and the task queue calls the job without a catch, so an exception
+  // from any of those would terminate the process.
   //
   // No 500 is possible here: by the time a content provider runs, the status
   // line and headers are already on the wire. Report it through the error
@@ -2378,6 +2446,7 @@ protected:
   time_t idle_interval_sec_ = CPPHTTPLIB_IDLE_INTERVAL_SECOND;
   time_t idle_interval_usec_ = CPPHTTPLIB_IDLE_INTERVAL_USECOND;
   size_t payload_max_length_ = CPPHTTPLIB_PAYLOAD_MAX_LENGTH;
+  bool compress_ = true;
   bool static_file_compression_ = false;
   size_t static_file_compression_min_length_ =
       CPPHTTPLIB_STATIC_FILE_COMPRESSION_MIN_LENGTH;
@@ -2426,7 +2495,11 @@ private:
   int bind_internal(const std::string &host, int port, int socket_flags);
   bool listen_internal();
 
-  bool routing(Request &req, Response &res, Stream &strm);
+  bool routing(Request &req, Response &res, Stream &strm,
+               bool skip_pre_routing);
+#ifndef CPPHTTPLIB_NO_EXCEPTIONS
+  bool handle_exception(Request &req, Response &res);
+#endif
   bool handle_file_request(Request &req, Response &res);
   bool check_if_not_modified(const Request &req, Response &res,
                              const std::string &etag, time_t mtime) const;
@@ -2725,6 +2798,7 @@ public:
 
   private:
     friend class ClientImpl;
+    friend class sse::SSEClient;
 
     ssize_t read_with_decompression(char *buf, size_t len);
 
@@ -2853,7 +2927,12 @@ public:
   size_t is_socket_open() const;
   socket_t socket() const;
 
+  [[deprecated("Use set_direct_hostname_addr_map() instead.")]]
   void set_hostname_addr_map(std::map<std::string, std::string> addr_map);
+  void
+  set_direct_hostname_addr_map(std::map<std::string, std::string> addr_map);
+  void
+  set_tunnel_hostname_addr_map(std::map<std::string, std::string> addr_map);
 
   void set_default_headers(Headers headers);
 
@@ -2942,13 +3021,21 @@ protected:
   void close_socket(Socket &socket);
   void disconnect(bool gracefully);
 
+  // Under socket_mutex_: whether the connection kept alive can take another
+  // request. One the peer has closed, or one set up under TLS settings changed
+  // since, is closed instead.
+  bool socket_reusable();
+
+  // TLS settings apply as a connection is set up, so a change makes the
+  // connection kept alive unfit for the next request.
+  void tls_settings_changed() { tls_settings_version_++; }
+
+  std::string make_request_target(const Request &req) const;
   bool process_request(Stream &strm, Request &req, Response &res,
                        bool close_connection, Error &error);
 
   bool write_content_with_provider(Stream &strm, const Request &req,
                                    Error &error) const;
-
-  void copy_settings(const ClientImpl &rhs);
 
   void output_log(const Request &req, const Response &res) const;
   void output_error_log(const Error &err, const Request *req) const;
@@ -2961,15 +3048,24 @@ protected:
   Socket socket_;
   mutable std::mutex socket_mutex_;
   std::recursive_mutex request_mutex_;
+  // How many send() calls are running on this client, guarded by
+  // request_mutex_
+  size_t send_depth_ = 0;
 
   // These are all protected under socket_mutex
   size_t socket_requests_in_flight_ = 0;
   std::thread::id socket_requests_are_from_thread_ = std::thread::id();
   bool socket_should_be_closed_when_request_is_done_ = false;
+  size_t socket_tls_settings_version_ = 0;
+
+  std::atomic<size_t> tls_settings_version_{0};
 
   // Hostname to connection target map. The value is an IP literal or another
   // hostname; only the connection target changes, never the identity.
   std::map<std::string, std::string> addr_map_;
+
+  // Hostname to CONNECT target map, used only through a proxy.
+  std::map<std::string, std::string> tunnel_addr_map_;
 
   // Default headers
   Headers default_headers_;
@@ -3072,6 +3168,9 @@ private:
   virtual bool is_ssl() const;
 
   void transfer_socket_ownership_to_handle(StreamHandle &handle);
+  StreamHandle open_stream_(Request &req);
+  void add_credential_headers(Request &req);
+  std::string proxy_target_prefix() const;
 
 #ifdef CPPHTTPLIB_SSL_ENABLED
 public:
@@ -3100,6 +3199,24 @@ protected:
   uint64_t last_backend_error_ = 0;
 #endif
 };
+
+namespace detail {
+
+// Stands in for a client that Client could not make from its arguments, so a
+// request fails rather than going through a null pointer.
+class InvalidClientImpl final : public ClientImpl {
+public:
+  InvalidClientImpl() : ClientImpl(std::string(), 0) {}
+  bool is_valid() const override { return false; }
+
+private:
+  bool create_and_connect_socket(Socket &, Error &error) override {
+    error = Error::Connection;
+    return false;
+  }
+};
+
+} // namespace detail
 
 class Client {
 public:
@@ -3239,7 +3356,12 @@ public:
   size_t is_socket_open() const;
   socket_t socket() const;
 
+  [[deprecated("Use set_direct_hostname_addr_map() instead.")]]
   void set_hostname_addr_map(std::map<std::string, std::string> addr_map);
+  void
+  set_direct_hostname_addr_map(std::map<std::string, std::string> addr_map);
+  void
+  set_tunnel_hostname_addr_map(std::map<std::string, std::string> addr_map);
 
   void set_default_headers(Headers headers);
 
@@ -3365,7 +3487,14 @@ private:
   bool process_and_close_socket(socket_t sock) override;
 
   tls::ctx_t ctx_ = nullptr;
+  // update_certs_pem() replaces the certificates and CAs that handshakes read
+  // from ctx_, so it waits for the handshakes in progress, which their timeout
+  // bounds, and new ones wait while it is pending so that they cannot keep it
+  // waiting.
   std::mutex ctx_mutex_;
+  std::condition_variable ctx_cv_;
+  size_t handshakes_in_progress_ = 0;
+  size_t updates_pending_ = 0;
 
   int last_ssl_error_ = 0;
 };
@@ -3442,16 +3571,21 @@ private:
 
   // Tracks whether a custom CA store was applied via set_ca_cert_store(),
   // since the store handle itself is owned by ctx_ and leaves no other trace.
-  // Used to keep custom CA configuration exclusive with system CA loading.
   bool ca_cert_store_set_ = false;
+
+  // Set by set_ca_cert_store() and load_ca_cert_store() even when they bring
+  // no certificate, so that a CA that failed to come through fails
+  // verification instead of letting the system CAs in.
+  bool custom_ca_loaded_ = false;
 
   std::function<SSLVerifierResponse(tls::session_t)> session_verifier_;
 
+  // Like ca_cert_store_set_, keeps what ctx_ cannot report back: the verifier
+  // set_server_certificate_verifier() installed there.
+  tls::VerifyCallback server_certificate_verifier_;
+
 #ifdef CPPHTTPLIB_WINDOWS_AUTOMATIC_ROOT_CERTIFICATES_UPDATE
   bool enable_windows_cert_verification_ = true;
-  // Like ca_cert_store_set_, tracks what ctx_ cannot report back: whether
-  // set_server_certificate_verifier() installed a verifier.
-  bool server_certificate_verifier_set_ = false;
 #endif
 
   friend class ClientImpl;
@@ -3477,13 +3611,20 @@ inline bool is_numeric(const std::string &str) {
   return !str.empty() && std::all_of(str.cbegin(), str.cend(), is_ascii_digit);
 }
 
+// std::ranges::next(first, n, last) for C++11
+template <typename It> inline It bounded_next(It first, size_t n, It last) {
+  for (; n > 0 && first != last; --n) {
+    ++first;
+  }
+  return first;
+}
+
 inline size_t get_header_value_u64(const Headers &headers,
                                    const std::string &key, size_t def,
                                    size_t id, bool &is_invalid_value) {
   is_invalid_value = false;
   auto rng = headers.equal_range(key);
-  auto it = rng.first;
-  std::advance(it, static_cast<ssize_t>(id));
+  auto it = bounded_next(rng.first, id, rng.second);
   if (it != rng.second) {
     if (is_numeric(it->second)) {
       // Parse at size_t width so an out-of-range Content-Length is reported
@@ -3565,7 +3706,7 @@ inline void ClientImpl::set_max_timeout(
     const std::chrono::duration<Rep, Period> &duration) {
   auto msec =
       std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
-  set_max_timeout(msec);
+  set_max_timeout(static_cast<time_t>(msec));
 }
 
 template <class Rep, class Period>
@@ -3674,6 +3815,8 @@ std::string make_host_and_port_string(const std::string &host, int port,
 template <typename T>
 bool check_and_write_headers(Stream &strm, Headers &headers, T header_writer,
                              Error &error);
+
+bool write_data(Stream &strm, const char *d, size_t l);
 
 std::string trim_copy(const std::string &s);
 
@@ -3922,6 +4065,7 @@ struct ChunkedDecoder {
   char line_buf[64];
   size_t last_chunk_total = 0;
   size_t last_chunk_offset = 0;
+  size_t overhead = 0;
 
   explicit ChunkedDecoder(Stream &s);
 
@@ -3931,6 +4075,8 @@ struct ChunkedDecoder {
   bool parse_trailers_into(Headers &dest, const Headers &src_headers);
 };
 
+// A regular file opened to be served: mapped on Windows, read with pread()
+// elsewhere.
 class mmap {
 public:
   mmap(const char *path);
@@ -3941,18 +4087,20 @@ public:
 
   bool is_open() const;
   size_t size() const;
-  const char *data() const;
+  // Copies up to len bytes from offset into buf and returns how many: fewer,
+  // down to 0, if the file has shrunk since it was opened.
+  size_t read(size_t offset, char *buf, size_t len) const;
 
 private:
 #if defined(_WIN32)
   HANDLE hFile_ = NULL;
   HANDLE hMapping_ = NULL;
+  void *addr_ = nullptr;
+  bool is_open_empty_file = false;
 #else
   int fd_ = -1;
 #endif
   size_t size_ = 0;
-  void *addr_ = nullptr;
-  bool is_open_empty_file = false;
 };
 
 // NOTE: https://www.rfc-editor.org/rfc/rfc9110#section-5
@@ -3968,6 +4116,7 @@ bool is_field_content(const std::string &s);
 bool is_field_value(const std::string &s);
 bool is_field_valid(const std::string &name, const std::string &value);
 bool is_request_target(const std::string &s);
+bool is_host(const std::string &s);
 
 } // namespace fields
 } // namespace detail
@@ -3996,8 +4145,10 @@ struct MbedTlsContext {
   mbedtls_x509_crt own_cert;
   mbedtls_pk_context own_key;
   bool is_server = false;
+  // Peer certificate required (set_verify_client()); a client defaults to true
   bool verify_client = false;
-  bool has_verify_callback = false;
+  // Set by tls::set_verify_callback().
+  VerifyCallback verify_callback;
 
   MbedTlsContext();
   ~MbedTlsContext();
@@ -4020,8 +4171,10 @@ namespace impl {
 struct WolfSSLContext {
   WOLFSSL_CTX *ctx = nullptr;
   bool is_server = false;
+  // Peer certificate required (set_verify_client()); a client defaults to true
   bool verify_client = false;
-  bool has_verify_callback = false;
+  // Replaced under verify_callback_mutex()
+  std::shared_ptr<VerifyCallback> verify_callback;
   std::string ca_pem_data_; // accumulated PEM for get_ca_names/get_ca_certs
 
   WolfSSLContext();
@@ -4364,7 +4517,7 @@ public:
 
   // State accessors
   bool is_connected() const;
-  const std::string &last_event_id() const;
+  std::string last_event_id() const;
 
   // Blocking start - runs event loop with auto-reconnect
   void start();
@@ -4377,7 +4530,7 @@ public:
 
 private:
   bool parse_sse_line(const std::string &line, SSEMessage &msg, int &retry_ms,
-                      bool &has_data);
+                      bool &has_data, bool &has_id);
   void run_event_loop();
   void dispatch_event(const SSEMessage &msg);
   bool should_reconnect(int count) const;
@@ -4402,7 +4555,9 @@ private:
   // State
   std::atomic<bool> running_{false};
   std::atomic<bool> connected_{false};
+  // Written by the event loop, which start_async() runs on its own thread
   std::string last_event_id_;
+  mutable std::mutex last_event_id_mutex_;
 
   // Async support
   std::thread async_thread_;
@@ -4411,6 +4566,8 @@ private:
 } // namespace sse
 
 namespace ws {
+
+class WebSocketClient;
 
 enum class Opcode : uint8_t {
   Continuation = 0x0,
@@ -4444,7 +4601,8 @@ enum ReadResult : int { Fail = 0, Text = 1, Binary = 2, Timeout = 3 };
 // Result of WebSocketClient::connect(). Truthy only when the WebSocket
 // upgrade handshake fully succeeded. On failure error() identifies the
 // failing layer; status()/headers() expose the server's upgrade response
-// when one was received (status() is -1 otherwise).
+// when one was received (status() is -1 otherwise), or the proxy's reply to
+// CONNECT when error() is ProxyConnection.
 class Result {
 public:
   Result() = default;
@@ -4513,7 +4671,7 @@ public:
 
 private:
   friend class httplib::Server;
-  friend class WebSocketClient;
+  friend class httplib::ws::WebSocketClient;
 
   WebSocket(
       Stream &strm, const Request &req, bool is_server,
@@ -4546,6 +4704,8 @@ private:
   int max_missed_pongs_;
   int unacked_pings_ = 0;
   std::atomic<bool> closed_{false};
+  // Set when the peer stopped answering pings, to end a read() waiting on it
+  std::atomic<bool> pong_timed_out_{false};
   // Set once the caller has bounded read() through set_read_timeout(). Until
   // then the timeout in effect is the compile-time default, and elapsing it
   // is a failure that closes the connection, not a Timeout.
@@ -4601,7 +4761,21 @@ public:
   set_connection_timeout(const std::chrono::duration<Rep, Period> &duration);
 
   void set_interface(const std::string &intf);
+  [[deprecated("Use set_direct_hostname_addr_map() instead.")]]
   void set_hostname_addr_map(std::map<std::string, std::string> addr_map);
+  void
+  set_direct_hostname_addr_map(std::map<std::string, std::string> addr_map);
+  void
+  set_tunnel_hostname_addr_map(std::map<std::string, std::string> addr_map);
+
+  void set_basic_auth(const std::string &username, const std::string &password);
+  void set_bearer_token_auth(const std::string &token);
+
+  void set_proxy(const std::string &host, int port);
+  void set_proxy_basic_auth(const std::string &username,
+                            const std::string &password);
+  void set_proxy_bearer_token_auth(const std::string &token);
+  void set_no_proxy(const std::vector<std::string> &patterns);
 
 #ifdef CPPHTTPLIB_SSL_ENABLED
   struct PemMemory {
@@ -4621,13 +4795,23 @@ public:
   void enable_server_certificate_verification(bool enabled);
   void enable_server_hostname_verification(bool enabled);
   void enable_system_ca(bool enabled);
+  void set_server_certificate_verifier(tls::VerifyCallback verifier);
+  void set_session_verifier(
+      std::function<SSLVerifierResponse(tls::session_t)> verifier);
+  void set_proxy_digest_auth(const std::string &username,
+                             const std::string &password);
 #endif
 
 private:
   void shutdown_and_close();
+  std::pair<time_t, time_t> handshake_timeout() const;
   bool create_stream(std::unique_ptr<Stream> &strm, Error &error,
                      int &ssl_error, uint64_t &ssl_backend_error);
   void prepare_default_headers(Request &req);
+  bool is_proxy_enabled() const;
+  bool create_and_connect_socket(Error &error);
+  bool send_proxy_connect(Request &req, Response &proxy_res, Error &error);
+  bool connect_with_proxy(Response &proxy_res, Error &error);
 
   std::string host_;
   int port_;
@@ -4657,17 +4841,37 @@ private:
   // hostname; only the connection target changes, never the identity.
   std::map<std::string, std::string> addr_map_;
 
+  // Hostname to CONNECT target map, used only through a proxy.
+  std::map<std::string, std::string> tunnel_addr_map_;
+
+  std::string basic_auth_username_;
+  std::string basic_auth_password_;
+  std::string bearer_token_auth_token_;
+
+  std::string proxy_host_;
+  int proxy_port_ = -1;
+  std::string proxy_basic_auth_username_;
+  std::string proxy_basic_auth_password_;
+  std::string proxy_bearer_token_auth_token_;
+  std::vector<detail::NoProxyEntry> no_proxy_entries_;
+
 #ifdef CPPHTTPLIB_SSL_ENABLED
   bool is_ssl_ = false;
   tls::ctx_t tls_ctx_ = nullptr;
   tls::session_t tls_session_ = nullptr;
   std::string ca_cert_file_path_;
   std::string ca_cert_dir_path_;
+  // Set by set_ca_cert_store() and load_ca_cert_store() even when they bring
+  // no certificate, so that a CA that failed to come through fails
+  // verification instead of letting the system CAs in.
   bool custom_ca_loaded_ = false;
   bool certs_loaded_ = false;
   SystemCAMode system_ca_mode_ = SystemCAMode::Auto;
   bool server_certificate_verification_ = true;
   bool server_hostname_verification_ = true;
+  std::function<SSLVerifierResponse(tls::session_t)> session_verifier_;
+  std::string proxy_digest_auth_username_;
+  std::string proxy_digest_auth_password_;
 #endif
 };
 

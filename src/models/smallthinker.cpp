@@ -179,8 +179,6 @@ llama_model_smallthinker::graph<iswa>::graph(const llama_model & model, const ll
     cur = build_lora_mm(model.output, cur, model.output_s);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }
 
 // Explicit template instantiations

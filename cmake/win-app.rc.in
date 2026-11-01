@@ -1,0 +1,3 @@
+// generated from cmake/win-app.rc.in - do not edit
+// RT_MANIFEST (24), ID 1: the application manifest shared by all llama.cpp executables
+1 24 "@LLAMA_WIN_APP_MANIFEST@"

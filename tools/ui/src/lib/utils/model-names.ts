@@ -67,3 +67,19 @@ export function orgOf(repoId: string | null | undefined): string {
 
 	return repoId.split(MODEL_ID.ORG_SEPARATOR)[0] || repoId;
 }
+
+/**
+ * Repo of a quantized model id (`ggml-org/Qwen3-8B-GGUF:Q4_K_M` ->
+ * `ggml-org/Qwen3-8B-GGUF`), the id itself when it carries no quant tag.
+ */
+export function repoOf(modelId: string): string {
+	return modelId.split(MODEL_ID.QUANTIZATION_SEPARATOR)[0] || modelId;
+}
+
+/**
+ * Name of a repo id past its org (`ggml-org/Qwen3-8B-GGUF` -> `Qwen3-8B-GGUF`),
+ * the input itself when it carries no org separator.
+ */
+export function nameOf(repoId: string): string {
+	return repoId.split(MODEL_ID.ORG_SEPARATOR).pop() || repoId;
+}

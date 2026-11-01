@@ -76,7 +76,7 @@ static inline void quantize_f16_f16_kernel(
 #define HVX_OP_MUL_F32(a, b) Q6_Vsf_vmpy_VsfVsf(a, b)
 #endif
 
-static inline void vec_dot_f32_f32_aa_1x1(const uint32_t n, float * restrict s, const void * restrict vx, const void * restrict vy) {
+static inline void flat_vec_dot_f32_f32_aa_1x1(const uint32_t n, float * restrict s, const void * restrict vx, const void * restrict vy) {
     const HVX_Vector * restrict x = (const HVX_Vector *) vx;
     const HVX_Vector * restrict y = (const HVX_Vector *) vy;
 
@@ -104,7 +104,7 @@ static inline void vec_dot_f32_f32_aa_1x1(const uint32_t n, float * restrict s, 
     *s = hvx_vec_get_f32(hvx_vec_reduce_sum_f32(rsum));
 }
 
-static inline void vec_dot_f32_f32_aa_2x1(const uint32_t n, float * restrict s0,
+static inline void flat_vec_dot_f32_f32_aa_2x1(const uint32_t n, float * restrict s0,
                                 const void * restrict vx0, const void * restrict vx1,
                                 const void * restrict vy0) {
     const HVX_Vector * restrict x0 = (const HVX_Vector *) vx0;
@@ -143,7 +143,7 @@ static inline void vec_dot_f32_f32_aa_2x1(const uint32_t n, float * restrict s0,
     hvx_vec_store_u(s0, 8, rsum);
 }
 
-static inline void vec_dot_f32_f32_aa_2x2(const uint32_t n, float * restrict s0, float * restrict s1,
+static inline void flat_vec_dot_f32_f32_aa_2x2(const uint32_t n, float * restrict s0, float * restrict s1,
                                 const void * restrict vx0, const void * restrict vx1,
                                 const void * restrict vy0, const void * restrict vy1) {
     const HVX_Vector * restrict x0 = (const HVX_Vector *) vx0;
@@ -196,10 +196,203 @@ static inline void vec_dot_f32_f32_aa_2x2(const uint32_t n, float * restrict s0,
     hvx_vec_store_u(s1, 8, r0_r1_c1_sum);
 }
 
+static inline void flat_vec_dot_bf16_f32_aa_1x1(const uint32_t n, float * restrict s, const void * restrict vx, const void * restrict vy) {
+    const HVX_Vector * restrict x = (const HVX_Vector *) vx;
+    const HVX_Vector * restrict y = (const HVX_Vector *) vy;
+
+    uint32_t nvec = n / 64;
+    uint32_t rem  = n % 64;
+
+    HVX_Vector rsum0 = Q6_V_vzero();
+    HVX_Vector rsum1 = Q6_V_vzero();
+
+    uint32_t i = 0;
+    #pragma unroll(2)
+    for (i = 0; i < nvec; i++) {
+        HVX_Vector v_bf16 = x[i];
+        HVX_VectorPair p = Q6_Ww_vunpack_Vh(v_bf16);
+        HVX_Vector w0_f32 = Q6_Vw_vasl_VwR(Q6_V_lo_W(p), 16);
+        HVX_Vector w1_f32 = Q6_Vw_vasl_VwR(Q6_V_hi_W(p), 16);
+
+        rsum0 = HVX_OP_ADD_F32(rsum0, HVX_OP_MUL_F32(w0_f32, y[2 * i + 0]));
+        rsum1 = HVX_OP_ADD_F32(rsum1, HVX_OP_MUL_F32(w1_f32, y[2 * i + 1]));
+    }
+
+    if (rem) {
+        HVX_VectorPred bmask = Q6_Q_vsetq2_R(rem * 2);
+        HVX_Vector v_bf16 = Q6_V_vand_QV(bmask, x[i]);
+        HVX_VectorPair p = Q6_Ww_vunpack_Vh(v_bf16);
+        HVX_Vector w0_f32 = Q6_Vw_vasl_VwR(Q6_V_lo_W(p), 16);
+        HVX_Vector w1_f32 = Q6_Vw_vasl_VwR(Q6_V_hi_W(p), 16);
+
+        if (rem <= 32) {
+            HVX_VectorPred a_mask = Q6_Q_vsetq2_R(rem * 4);
+            HVX_Vector y0 = Q6_V_vand_QV(a_mask, y[2 * i + 0]);
+            rsum0 = HVX_OP_ADD_F32(rsum0, HVX_OP_MUL_F32(w0_f32, y0));
+        } else {
+            HVX_Vector y0 = y[2 * i + 0];
+            rsum0 = HVX_OP_ADD_F32(rsum0, HVX_OP_MUL_F32(w0_f32, y0));
+
+            HVX_VectorPred a_mask = Q6_Q_vsetq2_R((rem - 32) * 4);
+            HVX_Vector y1 = Q6_V_vand_QV(a_mask, y[2 * i + 1]);
+            rsum1 = HVX_OP_ADD_F32(rsum1, HVX_OP_MUL_F32(w1_f32, y1));
+        }
+    }
+
+    HVX_Vector rsum = HVX_OP_ADD_F32(rsum0, rsum1);
+    *s = hvx_vec_get_f32(hvx_vec_reduce_sum_f32(rsum));
+}
+
+static inline void flat_vec_dot_bf16_f32_aa_2x1(const uint32_t n, float * restrict s0,
+                                const void * restrict vx0, const void * restrict vx1,
+                                const void * restrict vy0) {
+    const HVX_Vector * restrict x0 = (const HVX_Vector *) vx0;
+    const HVX_Vector * restrict x1 = (const HVX_Vector *) vx1;
+    const HVX_Vector * restrict y  = (const HVX_Vector *) vy0;
+
+    uint32_t nvec = n / 64;
+    uint32_t rem  = n % 64;
+
+    HVX_Vector rsum0 = Q6_V_vzero();
+    HVX_Vector rsum1 = Q6_V_vzero();
+
+    uint32_t i = 0;
+    #pragma unroll(2)
+    for (i = 0; i < nvec; i++) {
+        HVX_VectorPair p0 = Q6_Ww_vunpack_Vh(x0[i]);
+        HVX_VectorPair p1 = Q6_Ww_vunpack_Vh(x1[i]);
+        HVX_Vector w00_f32 = Q6_Vw_vasl_VwR(Q6_V_lo_W(p0), 16);
+        HVX_Vector w01_f32 = Q6_Vw_vasl_VwR(Q6_V_hi_W(p0), 16);
+        HVX_Vector w10_f32 = Q6_Vw_vasl_VwR(Q6_V_lo_W(p1), 16);
+        HVX_Vector w11_f32 = Q6_Vw_vasl_VwR(Q6_V_hi_W(p1), 16);
+
+        HVX_Vector y0 = y[2 * i + 0];
+        HVX_Vector y1 = y[2 * i + 1];
+
+        rsum0 = HVX_OP_ADD_F32(rsum0, HVX_OP_MUL_F32(w00_f32, y0));
+        rsum1 = HVX_OP_ADD_F32(rsum1, HVX_OP_MUL_F32(w10_f32, y0));
+        rsum0 = HVX_OP_ADD_F32(rsum0, HVX_OP_MUL_F32(w01_f32, y1));
+        rsum1 = HVX_OP_ADD_F32(rsum1, HVX_OP_MUL_F32(w11_f32, y1));
+    }
+
+    if (rem) {
+        HVX_VectorPred bmask = Q6_Q_vsetq2_R(rem * 2);
+        HVX_VectorPair p0 = Q6_Ww_vunpack_Vh(Q6_V_vand_QV(bmask, x0[i]));
+        HVX_VectorPair p1 = Q6_Ww_vunpack_Vh(Q6_V_vand_QV(bmask, x1[i]));
+        HVX_Vector w00_f32 = Q6_Vw_vasl_VwR(Q6_V_lo_W(p0), 16);
+        HVX_Vector w01_f32 = Q6_Vw_vasl_VwR(Q6_V_hi_W(p0), 16);
+        HVX_Vector w10_f32 = Q6_Vw_vasl_VwR(Q6_V_lo_W(p1), 16);
+        HVX_Vector w11_f32 = Q6_Vw_vasl_VwR(Q6_V_hi_W(p1), 16);
+
+        if (rem <= 32) {
+            HVX_VectorPred a_mask = Q6_Q_vsetq2_R(rem * 4);
+            HVX_Vector y0 = Q6_V_vand_QV(a_mask, y[2 * i + 0]);
+            rsum0 = HVX_OP_ADD_F32(rsum0, HVX_OP_MUL_F32(w00_f32, y0));
+            rsum1 = HVX_OP_ADD_F32(rsum1, HVX_OP_MUL_F32(w10_f32, y0));
+        } else {
+            HVX_Vector y0 = y[2 * i + 0];
+            rsum0 = HVX_OP_ADD_F32(rsum0, HVX_OP_MUL_F32(w00_f32, y0));
+            rsum1 = HVX_OP_ADD_F32(rsum1, HVX_OP_MUL_F32(w10_f32, y0));
+
+            HVX_VectorPred a_mask = Q6_Q_vsetq2_R((rem - 32) * 4);
+            HVX_Vector y1 = Q6_V_vand_QV(a_mask, y[2 * i + 1]);
+            rsum0 = HVX_OP_ADD_F32(rsum0, HVX_OP_MUL_F32(w01_f32, y1));
+            rsum1 = HVX_OP_ADD_F32(rsum1, HVX_OP_MUL_F32(w11_f32, y1));
+        }
+    }
+
+    HVX_Vector rsum = hvx_vec_reduce_sum_f32x2(rsum0, rsum1);
+    hvx_vec_store_u(s0, 8, rsum);
+}
+
+static inline void flat_vec_dot_bf16_f32_aa_2x2(const uint32_t n, float * restrict s0, float * restrict s1,
+                                const void * restrict vx0, const void * restrict vx1,
+                                const void * restrict vy0, const void * restrict vy1) {
+    const HVX_Vector * restrict x0 = (const HVX_Vector *) vx0;
+    const HVX_Vector * restrict x1 = (const HVX_Vector *) vx1;
+    const HVX_Vector * restrict y0 = (const HVX_Vector *) vy0;
+    const HVX_Vector * restrict y1 = (const HVX_Vector *) vy1;
+
+    uint32_t nvec = n / 64;
+    uint32_t rem  = n % 64;
+
+    HVX_Vector r0_c0_sum = Q6_V_vzero();
+    HVX_Vector r0_c1_sum = Q6_V_vzero();
+    HVX_Vector r1_c0_sum = Q6_V_vzero();
+    HVX_Vector r1_c1_sum = Q6_V_vzero();
+
+    uint32_t i = 0;
+    #pragma unroll(2)
+    for (i = 0; i < nvec; i++) {
+        HVX_VectorPair p0 = Q6_Ww_vunpack_Vh(x0[i]);
+        HVX_VectorPair p1 = Q6_Ww_vunpack_Vh(x1[i]);
+        HVX_Vector w00_f32 = Q6_Vw_vasl_VwR(Q6_V_lo_W(p0), 16);
+        HVX_Vector w01_f32 = Q6_Vw_vasl_VwR(Q6_V_hi_W(p0), 16);
+        HVX_Vector w10_f32 = Q6_Vw_vasl_VwR(Q6_V_lo_W(p1), 16);
+        HVX_Vector w11_f32 = Q6_Vw_vasl_VwR(Q6_V_hi_W(p1), 16);
+
+        HVX_Vector c0_0 = y0[2 * i + 0];
+        HVX_Vector c0_1 = y0[2 * i + 1];
+        HVX_Vector c1_0 = y1[2 * i + 0];
+        HVX_Vector c1_1 = y1[2 * i + 1];
+
+        r0_c0_sum = HVX_OP_ADD_F32(r0_c0_sum, HVX_OP_MUL_F32(w00_f32, c0_0));
+        r0_c1_sum = HVX_OP_ADD_F32(r0_c1_sum, HVX_OP_MUL_F32(w00_f32, c1_0));
+        r1_c0_sum = HVX_OP_ADD_F32(r1_c0_sum, HVX_OP_MUL_F32(w10_f32, c0_0));
+        r1_c1_sum = HVX_OP_ADD_F32(r1_c1_sum, HVX_OP_MUL_F32(w10_f32, c1_0));
+
+        r0_c0_sum = HVX_OP_ADD_F32(r0_c0_sum, HVX_OP_MUL_F32(w01_f32, c0_1));
+        r0_c1_sum = HVX_OP_ADD_F32(r0_c1_sum, HVX_OP_MUL_F32(w01_f32, c1_1));
+        r1_c0_sum = HVX_OP_ADD_F32(r1_c0_sum, HVX_OP_MUL_F32(w11_f32, c0_1));
+        r1_c1_sum = HVX_OP_ADD_F32(r1_c1_sum, HVX_OP_MUL_F32(w11_f32, c1_1));
+    }
+
+    if (rem) {
+        HVX_VectorPred bmask = Q6_Q_vsetq2_R(rem * 2);
+        HVX_VectorPair p0 = Q6_Ww_vunpack_Vh(Q6_V_vand_QV(bmask, x0[i]));
+        HVX_VectorPair p1 = Q6_Ww_vunpack_Vh(Q6_V_vand_QV(bmask, x1[i]));
+        HVX_Vector w00_f32 = Q6_Vw_vasl_VwR(Q6_V_lo_W(p0), 16);
+        HVX_Vector w01_f32 = Q6_Vw_vasl_VwR(Q6_V_hi_W(p0), 16);
+        HVX_Vector w10_f32 = Q6_Vw_vasl_VwR(Q6_V_lo_W(p1), 16);
+        HVX_Vector w11_f32 = Q6_Vw_vasl_VwR(Q6_V_hi_W(p1), 16);
+
+        if (rem <= 32) {
+            HVX_VectorPred a_mask = Q6_Q_vsetq2_R(rem * 4);
+            HVX_Vector c0_0 = Q6_V_vand_QV(a_mask, y0[2 * i + 0]);
+            HVX_Vector c1_0 = Q6_V_vand_QV(a_mask, y1[2 * i + 0]);
+            r0_c0_sum = HVX_OP_ADD_F32(r0_c0_sum, HVX_OP_MUL_F32(w00_f32, c0_0));
+            r0_c1_sum = HVX_OP_ADD_F32(r0_c1_sum, HVX_OP_MUL_F32(w00_f32, c1_0));
+            r1_c0_sum = HVX_OP_ADD_F32(r1_c0_sum, HVX_OP_MUL_F32(w10_f32, c0_0));
+            r1_c1_sum = HVX_OP_ADD_F32(r1_c1_sum, HVX_OP_MUL_F32(w10_f32, c1_0));
+        } else {
+            HVX_Vector c0_0 = y0[2 * i + 0];
+            HVX_Vector c1_0 = y1[2 * i + 0];
+            r0_c0_sum = HVX_OP_ADD_F32(r0_c0_sum, HVX_OP_MUL_F32(w00_f32, c0_0));
+            r0_c1_sum = HVX_OP_ADD_F32(r0_c1_sum, HVX_OP_MUL_F32(w00_f32, c1_0));
+            r1_c0_sum = HVX_OP_ADD_F32(r1_c0_sum, HVX_OP_MUL_F32(w10_f32, c0_0));
+            r1_c1_sum = HVX_OP_ADD_F32(r1_c1_sum, HVX_OP_MUL_F32(w10_f32, c1_0));
+
+            HVX_VectorPred a_mask = Q6_Q_vsetq2_R((rem - 32) * 4);
+            HVX_Vector c0_1 = Q6_V_vand_QV(a_mask, y0[2 * i + 1]);
+            HVX_Vector c1_1 = Q6_V_vand_QV(a_mask, y1[2 * i + 1]);
+            r0_c0_sum = HVX_OP_ADD_F32(r0_c0_sum, HVX_OP_MUL_F32(w01_f32, c0_1));
+            r0_c1_sum = HVX_OP_ADD_F32(r0_c1_sum, HVX_OP_MUL_F32(w01_f32, c1_1));
+            r1_c0_sum = HVX_OP_ADD_F32(r1_c0_sum, HVX_OP_MUL_F32(w11_f32, c0_1));
+            r1_c1_sum = HVX_OP_ADD_F32(r1_c1_sum, HVX_OP_MUL_F32(w11_f32, c1_1));
+        }
+    }
+
+    HVX_Vector r0_r1_c0_sum = hvx_vec_reduce_sum_f32x2(r0_c0_sum, r1_c0_sum);
+    HVX_Vector r0_r1_c1_sum = hvx_vec_reduce_sum_f32x2(r0_c1_sum, r1_c1_sum);
+
+    hvx_vec_store_u(s0, 8, r0_r1_c0_sum);
+    hvx_vec_store_u(s1, 8, r0_r1_c1_sum);
+}
+
 #undef HVX_OP_ADD_F32
 #undef HVX_OP_MUL_F32
 
-static inline void vec_dot_f16_f16_aa_1x1(const uint32_t n, float * restrict s, const void * restrict vx, const void * restrict vy) {
+static inline void flat_vec_dot_f16_f16_aa_1x1(const uint32_t n, float * restrict s, const void * restrict vx, const void * restrict vy) {
     const HVX_Vector * restrict x = (const HVX_Vector *) vx;
     const HVX_Vector * restrict y = (const HVX_Vector *) vy;
 
@@ -226,7 +419,7 @@ static inline void vec_dot_f16_f16_aa_1x1(const uint32_t n, float * restrict s, 
     hvx_vec_store_u(s, 4, hvx_vec_reduce_sum_f32(rsum));
 }
 
-static inline void vec_dot_f16_f16_aa_2x1(const uint32_t n, float * restrict s0,
+static inline void flat_vec_dot_f16_f16_aa_2x1(const uint32_t n, float * restrict s0,
                                 const void * restrict vx0, const void * restrict vx1,
                                 const void * restrict vy0) {
     const HVX_Vector * restrict x0 = (const HVX_Vector *) vx0;
@@ -263,7 +456,7 @@ static inline void vec_dot_f16_f16_aa_2x1(const uint32_t n, float * restrict s0,
     hvx_vec_store_u(s0, 8, rsum);
 }
 
-static inline void vec_dot_f16_f16_aa_2x2(const uint32_t n, float * restrict s0, float * restrict s1,
+static inline void flat_vec_dot_f16_f16_aa_2x2(const uint32_t n, float * restrict s0, float * restrict s1,
                                 const void * restrict vx0, const void * restrict vx1,
                                 const void * restrict vy0, const void * restrict vy1) {
     const HVX_Vector * restrict x0 = (const HVX_Vector *) vx0;

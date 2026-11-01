@@ -8,14 +8,6 @@
 #include <stdexcept>
 #include <string>
 
-static float dsv4_rope_attn_factor(float freq_scale, float ext_factor) {
-    if (ext_factor == 0.0f) {
-        return 1.0f;
-    }
-
-    return 1.0f / (1.0f + 0.1f*logf(1.0f/freq_scale));
-}
-
 void llama_model_deepseek4::load_arch_hparams(llama_model_loader & ml) {
     if (hparams.n_layer_nextn > 0) {
         const uint32_t n_layer_main = hparams.n_layer_all - hparams.n_layer_nextn;
@@ -93,9 +85,9 @@ void llama_model_deepseek4::load_arch_tensors(llama_model_loader & ml) {
     const int64_t hc_dim      = hc_mult * n_embd;
     const int64_t hc_mix_dim  = (2 + hc_mult) * hc_mult;
 
-    const bool mtp_only = (n_layer_nextn > 0) && (ml.get_weight("blk.0.attn_norm.weight") == nullptr);
-    const int trunk_flags = mtp_only    ? TENSOR_NOT_REQUIRED : 0;
-    const int mtp_flags   = ml.load_mtp ? 0 : TENSOR_SKIP;
+    const auto nf = nextn_flags(ml);
+    const int trunk_flags = nf.trunk;
+    const int mtp_flags   = nf.mtp;
 
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
@@ -350,13 +342,23 @@ ggml_tensor * llama_model_deepseek4::graph::build_hc_sinkhorn(
     return comb;
 }
 
-ggml_tensor * llama_model_deepseek4::graph::build_hc_pre(
+llama_model_deepseek4::graph::hc_pre
+llama_model_deepseek4::graph::build_hc_pre(
         ggml_tensor * x,
         ggml_tensor * hc_fn,
         ggml_tensor * hc_scale,
         ggml_tensor * hc_base,
-        ggml_tensor ** post,
-        ggml_tensor ** comb,
+        int il) const {
+    hc_mixes mixes = build_hc_mixes(x, hc_fn, hc_scale, hc_base, il);
+    return { build_hc_pre(x, mixes.pre, il), mixes.post, mixes.comb };
+}
+
+llama_model_deepseek4::graph::hc_mixes
+llama_model_deepseek4::graph::build_hc_mixes(
+        ggml_tensor * x,
+        ggml_tensor * hc_fn,
+        ggml_tensor * hc_scale,
+        ggml_tensor * hc_base,
         int il) const {
     const int64_t hc         = hparams.dsv4_hc_mult;
     const int64_t hc_dim     = hc*n_embd;
@@ -383,29 +385,29 @@ ggml_tensor * llama_model_deepseek4::graph::build_hc_pre(
     pre = ggml_scale_bias(ctx0, pre, 1.0f, hparams.dsv4_hc_eps);
     cb(pre, "hc_pre", il);
 
-    *post = dsv4_view_2d(ctx0, mixes, hc, nt, hc);
-    *post = dsv4_hc_affine(ctx0, *post, scale_post, base_post);
-    *post = ggml_sigmoid(ctx0, *post);
-    *post = ggml_scale(ctx0, *post, 2.0f);
-    cb(*post, "hc_post", il);
+    ggml_tensor * post = dsv4_view_2d(ctx0, mixes, hc, nt, hc);
+    post = dsv4_hc_affine(ctx0, post, scale_post, base_post);
+    post = ggml_sigmoid(ctx0, post);
+    post = ggml_scale(ctx0, post, 2.0f);
+    cb(post, "hc_post", il);
 
+    ggml_tensor * comb = nullptr;
     if (cparams.fused_dsv4_hc_comb) {
-        *comb = ggml_dsv4_hc_comb(ctx0, mixes, hc_scale, hc_base, hparams.dsv4_hc_eps,
+        comb = ggml_dsv4_hc_comb(ctx0, mixes, hc_scale, hc_base, hparams.dsv4_hc_eps,
                 (int32_t) hparams.dsv4_hc_sinkhorn_iters);
-        res->add_fused_node({LLM_FUSED_OP_DSV4_HC_COMB, *comb, il});
+        res->add_fused_node({LLM_FUSED_OP_DSV4_HC_COMB, comb, il});
     } else {
         ggml_tensor * scale_comb = dsv4_view_1d(ctx0, hc_scale, 1, 2);
         ggml_tensor * base_comb  = dsv4_view_1d(ctx0, hc_base, hc*hc, 2*hc);
 
-        *comb = dsv4_view_2d(ctx0, mixes, hc*hc, nt, 2*hc);
-        *comb = dsv4_hc_affine(ctx0, *comb, scale_comb, base_comb);
-        *comb = ggml_reshape_3d(ctx0, *comb, hc, hc, nt);
-        *comb = build_hc_sinkhorn(*comb, il);
+        comb = dsv4_view_2d(ctx0, mixes, hc*hc, nt, 2*hc);
+        comb = dsv4_hc_affine(ctx0, comb, scale_comb, base_comb);
+        comb = ggml_reshape_3d(ctx0, comb, hc, hc, nt);
+        comb = build_hc_sinkhorn(comb, il);
     }
-    cb(*comb, "hc_comb", il);
+    cb(comb, "hc_comb", il);
 
-    ggml_tensor * result = build_hc_pre(x, pre, il);
-    return result;
+    return { pre, post, comb };
 }
 
 ggml_tensor * llama_model_deepseek4::graph::build_hc_post(
@@ -603,7 +605,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_lid_top_k(
     const int64_t nt                       = cur->ne[1];
 
     GGML_ASSERT(inp_lid.kq_mask);
-    GGML_ASSERT(inp_lid.k_rot);
+    GGML_ASSERT(inp_lid.k_rot[il]);
     GGML_ASSERT(n_embd_indexer_head >= n_embd_indexer_head_rope);
 
     ggml_tensor * indexer_q = build_lora_mm(layer.indexer_attn_q_b, qr);
@@ -616,7 +618,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_lid_top_k(
     indexer_q = ggml_rope_set_offset(indexer_q, n_embd_indexer_head_nope);
     cb(indexer_q, "lid_q_rope", il);
 
-    indexer_q = llama_mul_mat_hadamard(ctx0, indexer_q, inp_lid.k_rot);
+    indexer_q = llama_mul_mat_hadamard(ctx0, indexer_q, inp_lid.k_rot[il]);
     cb(indexer_q, "lid_q_rot", il);
 
     ggml_tensor * indexer_weights = build_lora_mm(layer.indexer_proj, cur);
@@ -683,6 +685,13 @@ ggml_tensor * llama_model_deepseek4::graph::build_top_k_mask(
     GGML_ASSERT(kq_mask);
     GGML_ASSERT(top_k);
 
+    if (cparams.fused_top_k_mask) {
+        ggml_tensor * kq_mask_top_k = build_fused_top_k_mask(kq_mask, top_k, il);
+        cb(kq_mask_top_k, name, il);
+
+        return kq_mask_top_k;
+    }
+
     ggml_tensor * kq_mask_all = ggml_fill(ctx0, kq_mask, -INFINITY);
     kq_mask_all = ggml_view_4d(ctx0, kq_mask_all, 1, kq_mask_all->ne[0], kq_mask_all->ne[1], kq_mask_all->ne[3],
             kq_mask_all->nb[0], kq_mask_all->nb[1], kq_mask_all->nb[2], 0);
@@ -721,7 +730,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_csa_lid_attention(
 
     ggml_tensor * top_k = build_lid_top_k(model, inp_dsv4, qr, cur, inp_pos, il);
 
-    ggml_tensor * k_rot = inp_attn->self_k_rot;
+    ggml_tensor * k_rot = inp_attn->self_k_rot[il];
     if (k_rot) {
         q  = llama_mul_mat_hadamard(ctx0, q, k_rot);
         kv = llama_mul_mat_hadamard(ctx0, kv, k_rot);
@@ -777,7 +786,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_hca_attention(
     const auto & inp_hca = inp_dsv4->get_hca();
     GGML_ASSERT(inp_hca.kq_mask);
 
-    ggml_tensor * k_rot = inp_attn->self_k_rot;
+    ggml_tensor * k_rot = inp_attn->self_k_rot[il];
     if (k_rot) {
         q  = llama_mul_mat_hadamard(ctx0, q, k_rot);
         kv = llama_mul_mat_hadamard(ctx0, kv, k_rot);
@@ -830,7 +839,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_raw_attention(
         int il) const {
     GGML_ASSERT(hparams.is_swa(il));
 
-    ggml_tensor * k_rot = inp_attn->self_k_rot;
+    ggml_tensor * k_rot = inp_attn->self_k_rot[il];
 
     if (k_rot) {
         q  = llama_mul_mat_hadamard(ctx0, q, k_rot);
@@ -993,8 +1002,8 @@ ggml_tensor * llama_model_deepseek4::graph::build_attention_impl(
                 "csa_state_compress",
                 il);
 
-        if (inp_dsv4->get_csa().k_rot) {
-            kv_comp_csa_state = llama_mul_mat_hadamard(ctx0, kv_comp_csa_state, inp_dsv4->get_csa().k_rot);
+        if (inp_dsv4->get_csa().k_rot[il]) {
+            kv_comp_csa_state = llama_mul_mat_hadamard(ctx0, kv_comp_csa_state, inp_dsv4->get_csa().k_rot[il]);
             cb(kv_comp_csa_state, "csa_state_compress_rot", il);
         }
 
@@ -1062,8 +1071,8 @@ ggml_tensor * llama_model_deepseek4::graph::build_attention_impl(
                 "lid_state_compress",
                 il);
 
-        if (inp_dsv4->get_lid().k_rot) {
-            kv_comp_lid_state = llama_mul_mat_hadamard(ctx0, kv_comp_lid_state, inp_dsv4->get_lid().k_rot);
+        if (inp_dsv4->get_lid().k_rot[il]) {
+            kv_comp_lid_state = llama_mul_mat_hadamard(ctx0, kv_comp_lid_state, inp_dsv4->get_lid().k_rot[il]);
             cb(kv_comp_lid_state, "lid_state_compress_rot", il);
         }
 
@@ -1122,8 +1131,8 @@ ggml_tensor * llama_model_deepseek4::graph::build_attention_impl(
                 "hca_state_compress",
                 il);
 
-        if (inp_dsv4->get_hca().k_rot) {
-            kv_comp_hca = llama_mul_mat_hadamard(ctx0, kv_comp_hca, inp_dsv4->get_hca().k_rot);
+        if (inp_dsv4->get_hca().k_rot[il]) {
+            kv_comp_hca = llama_mul_mat_hadamard(ctx0, kv_comp_hca, inp_dsv4->get_hca().k_rot[il]);
             cb(kv_comp_hca, "hca_state_compress_rot", il);
         }
 
@@ -1188,7 +1197,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_attention_impl(
     } else if (ratio == DSV4_CSA_RATIO &&
             inp_dsv4->get_csa().kq_mask &&
             inp_dsv4->get_lid().kq_mask &&
-            inp_dsv4->get_lid().k_rot) {
+            inp_dsv4->get_lid().k_rot[il]) {
         out = build_csa_lid_attention(model, inp_dsv4, inp_attn, q, kv, qr, cur, inp_pos, layer.attn_sinks,
                 1.0f/sqrtf(float(n_embd_head)), il);
     } else if (ratio == DSV4_HCA_RATIO &&
@@ -1243,14 +1252,12 @@ llama_model_deepseek4::graph::graph(const llama_model & model, const llm_graph_p
         }
 
         ggml_tensor * residual = inpL;
-        ggml_tensor * post = nullptr;
-        ggml_tensor * comb = nullptr;
-
-        cur = build_hc_pre(inpL,
+        const hc_pre attn_hc = build_hc_pre(inpL,
                 model.layers[il].hc_attn_fn,
                 model.layers[il].hc_attn_scale,
                 model.layers[il].hc_attn_base,
-                &post, &comb, il);
+                il);
+        cur = attn_hc.cur;
         cb(cur, "hc_attn_pre", il);
 
         cur = build_norm(cur, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, il);
@@ -1258,20 +1265,21 @@ llama_model_deepseek4::graph::graph(const llama_model & model, const llm_graph_p
 
         cur = build_attention(model, inp_dsv4, cur, inp_pos, il);
 
-        inpL = build_hc_post(cur, residual, post, comb, il);
+        inpL = build_hc_post(cur, residual, attn_hc.post, attn_hc.comb, il);
         cb(inpL, "hc_attn_post", il);
 
         residual = inpL;
-        cur = build_hc_pre(inpL,
+        const hc_pre ffn_hc = build_hc_pre(inpL,
                 model.layers[il].hc_ffn_fn,
                 model.layers[il].hc_ffn_scale,
                 model.layers[il].hc_ffn_base,
-                &post, &comb, il);
+                il);
+        cur = ffn_hc.cur;
         cb(cur, "hc_ffn_pre", il);
 
         ggml_build_forward_expand(gf, residual);
-        ggml_build_forward_expand(gf, post);
-        ggml_build_forward_expand(gf, comb);
+        ggml_build_forward_expand(gf, ffn_hc.post);
+        ggml_build_forward_expand(gf, ffn_hc.comb);
 
         cur = build_norm(cur, model.layers[il].ffn_norm, nullptr, LLM_NORM_RMS, il);
         cb(cur, "ffn_norm", il);
@@ -1321,7 +1329,7 @@ llama_model_deepseek4::graph::graph(const llama_model & model, const llm_graph_p
         cur = ggml_add(ctx0, moe_out, ffn_shexp);
         cb(cur, "ffn_out", il);
 
-        inpL = build_hc_post(cur, residual, post, comb, il);
+        inpL = build_hc_post(cur, residual, ffn_hc.post, ffn_hc.comb, il);
         inpL = build_cvec(inpL, il);
         cb(inpL, "l_last", il);
     }
@@ -1353,8 +1361,6 @@ llama_model_deepseek4::graph::graph(const llama_model & model, const llm_graph_p
     cur = ggml_mul_mat(ctx0, model.output, cur);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }
 
 
@@ -1366,7 +1372,6 @@ llama_model_deepseek4::graph_mtp::graph_mtp(const llama_model & model, const llm
             cparams.nextn_layer_offset < (int) hparams.n_layer_nextn &&
             "nextn_layer_offset out of range [0, n_layer_nextn)");
     ASSERT_EMBD_OR_TOKEN(ubatch);
-    GGML_ASSERT(ubatch.token && "DEEPSEEK4 MTP requires token input");
 
     const int64_t hc = hparams.dsv4_hc_mult;
     GGML_ASSERT(hparams.n_embd_out() == (uint32_t) (n_embd*hc) && "DEEPSEEK4 MTP hidden width mismatch");
@@ -1378,20 +1383,26 @@ llama_model_deepseek4::graph_mtp::graph_mtp(const llama_model & model, const llm
     GGML_ASSERT(layer.nextn.enorm   && "MTP block missing nextn.enorm");
     GGML_ASSERT(layer.nextn.hnorm   && "MTP block missing nextn.hnorm");
 
-    auto inp = std::make_unique<llm_graph_input_embd_h>(hparams.n_embd_out());
+    auto inp = std::make_unique<llm_graph_input_embd_h>(hparams.n_embd_inp(), hparams.n_embd_out());
 
     inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
     ggml_set_input(inp->tokens);
 
-    inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd_out(), n_tokens);
+    inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd_inp(), n_tokens);
     ggml_set_input(inp->embd);
 
     inp->h = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd_out(), n_tokens);
     ggml_set_input(inp->h);
     ggml_set_name(inp->h, "mtp_h_input");
 
-    ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens : model.tok_embd;
-    ggml_tensor * tok_embd = ggml_get_rows(ctx0, tok_embd_w, inp->tokens);
+    ggml_tensor * tok_embd;
+    if (ubatch.token) {
+        ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens : model.tok_embd;
+
+        tok_embd = ggml_get_rows(ctx0, tok_embd_w, inp->tokens);
+    } else {
+        tok_embd = inp->embd;
+    }
     cb(tok_embd, "mtp_tok_embd", il);
 
     ggml_tensor * h_state = ggml_reshape_3d(ctx0, inp->h, n_embd, hc, n_tokens);
@@ -1418,14 +1429,12 @@ llama_model_deepseek4::graph_mtp::graph_mtp(const llama_model & model, const llm
     cb(inpL, "mtp_eh_proj", il);
 
     ggml_tensor * residual = inpL;
-    ggml_tensor * post = nullptr;
-    ggml_tensor * comb = nullptr;
-
-    ggml_tensor * cur = build_hc_pre(inpL,
+    hc_pre attn_hc = build_hc_pre(inpL,
             layer.hc_attn_fn,
             layer.hc_attn_scale,
             layer.hc_attn_base,
-            &post, &comb, il);
+            il);
+    ggml_tensor * cur = attn_hc.cur;
     cb(cur, "mtp_hc_attn_pre", il);
 
     cur = build_norm(cur, layer.attn_norm, nullptr, LLM_NORM_RMS, il);
@@ -1433,15 +1442,16 @@ llama_model_deepseek4::graph_mtp::graph_mtp(const llama_model & model, const llm
 
     cur = build_attention(model, inp_attn, cur, inp_pos, il);
 
-    inpL = build_hc_post(cur, residual, post, comb, il);
+    inpL = build_hc_post(cur, residual, attn_hc.post, attn_hc.comb, il);
     cb(inpL, "mtp_hc_attn_post", il);
 
     residual = inpL;
-    cur = build_hc_pre(inpL,
+    hc_pre ffn_hc = build_hc_pre(inpL,
             layer.hc_ffn_fn,
             layer.hc_ffn_scale,
             layer.hc_ffn_base,
-            &post, &comb, il);
+            il);
+    cur = ffn_hc.cur;
     cb(cur, "mtp_hc_ffn_pre", il);
 
     cur = build_norm(cur, layer.ffn_norm, nullptr, LLM_NORM_RMS, il);
@@ -1471,7 +1481,7 @@ llama_model_deepseek4::graph_mtp::graph_mtp(const llama_model & model, const llm
     cur = ggml_add(ctx0, moe_out, ffn_shexp);
     cb(cur, "mtp_ffn_out", il);
 
-    inpL = build_hc_post(cur, residual, post, comb, il);
+    inpL = build_hc_post(cur, residual, ffn_hc.post, ffn_hc.comb, il);
     inpL = build_cvec(inpL, il);
     cb(inpL, "mtp_l_out", il);
 
@@ -1497,5 +1507,4 @@ llama_model_deepseek4::graph_mtp::graph_mtp(const llama_model & model, const llm
     cb(cur, "result_output", -1);
 
     res->t_logits = cur;
-    ggml_build_forward_expand(gf, cur);
 }

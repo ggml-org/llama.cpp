@@ -75,6 +75,7 @@ static void inject_test_response_marker() {
 
 struct mtmd_cli_context {
     mtmd::context_ptr ctx_vision;
+    mtmd_helper_cap   mtmd_cap = {};
     common_init_result_ptr llama_init;
 
     llama_model       * model;
@@ -89,8 +90,6 @@ struct mtmd_cli_context {
 
     mtmd_helper_init_opt init_opt = mtmd_helper_init_opt_default();
     std::string video_ffmpeg_bin_dir;
-
-    mtmd::batch_ptr mbatch;
 
     // chat template
     common_chat_templates_ptr tmpls;
@@ -120,7 +119,9 @@ struct mtmd_cli_context {
 
         init_vision_context(params);
 
-        if (!mtmd_helper_model_can_chat(lctx, ctx_vision.get())) {
+        mtmd_cap = mtmd_helper_get_capabilities(model, ctx_vision.get());
+        // a realtime transcription model has no chat, it streams the audio below
+        if (!mtmd_cap.chat && !mtmd_cap.audio_stream) {
             LOG_ERR("Model does not support chat mode\n");
             LOG_ERR("Hint: for TTS models, please use llama-tts\n");
             exit(1);
@@ -257,6 +258,99 @@ static int generate_response(mtmd_cli_context & ctx, int n_predict) {
     return 0;
 }
 
+// feed an audio file to a realtime model chunk by chunk, printing the transcript as it is produced
+static int run_audio_stream(mtmd_cli_context & ctx, const std::string & fname, int n_predict) {
+    auto res = mtmd_helper_bitmap_init_from_file(ctx.ctx_vision.get(), fname.c_str(), false, ctx.init_opt);
+    if (!res.bitmap) {
+        return 1; // error is already printed by libmtmd
+    }
+    mtmd::bitmap bmp(res.bitmap);
+    if (!mtmd_bitmap_is_audio(bmp.ptr.get())) {
+        LOG_ERR("%s: %s is not an audio file\n", __func__, fname.c_str());
+        return 1;
+    }
+    const float * samples   = (const float *) bmp.data();
+    const size_t  n_samples = bmp.n_bytes() / sizeof(float);
+    const int     rate      = mtmd_get_audio_sample_rate(ctx.ctx_vision.get());
+
+    const auto sparams = mtmd_audio_stream_params_default();
+    mtmd::audio_stream_ptr stream(mtmd_audio_stream_init(ctx.ctx_vision.get(), sparams));
+    if (!stream) {
+        return 1;
+    }
+
+    const size_t n_chunk = (size_t) rate * sparams.step_ms / 1000;
+    const int    n_embd  = llama_model_n_embd_inp(ctx.model);
+
+    LOG("Transcribing %.1f s of audio, fed in chunks of %d ms\n\n", (double) n_samples / rate, sparams.step_ms);
+
+    size_t      n_fed  = 0;
+    int         n_gen  = 0;
+    llama_token tok    = LLAMA_TOKEN_NULL;
+    const int64_t t_start = ggml_time_us();
+    int64_t       t_enc   = 0; // time spent in the stream (mel + encoder)
+    int64_t       t_dec   = 0; // time spent in the decoder
+    while (!g_is_interrupted) {
+        const int64_t t0 = ggml_time_us();
+        const int32_t n = mtmd_audio_stream_step(stream.get(), tok);
+        t_enc += ggml_time_us() - t0;
+        if (n < 0) {
+            if (n == -2) {
+                LOG_ERR("%s: stream error\n", __func__);
+                return 1;
+            }
+            break; // end of stream
+        }
+        if (n == 0) {
+            if (n_fed < n_samples) {
+                const size_t cnt = std::min(n_chunk, n_samples - n_fed);
+                mtmd_audio_stream_push(stream.get(), samples + n_fed, cnt);
+                n_fed += cnt;
+            } else if (mtmd_audio_stream_flush(stream.get(), true) != 0) {
+                break; // already ended
+            }
+            continue;
+        }
+
+        const int64_t t1 = ggml_time_us();
+        const float * rows = mtmd_audio_stream_get_output_embd(stream.get());
+        ctx.batch.clear();
+        for (int32_t i = 0; i < n; i++) {
+            const llama_pos pos[GGML_MROPE_SECTIONS] = { ctx.n_past, ctx.n_past, ctx.n_past, 0 };
+            ctx.n_past++;
+            ctx.batch.add_embd({ rows + (size_t) i * n_embd, 1, (size_t) n_embd }, pos, 0, i == n - 1);
+        }
+        if (llama_process(ctx.lctx, LLAMA_PROCESS_TYPE_DECODE, ctx.batch.get())) {
+            LOG_ERR("%s: failed to decode\n", __func__);
+            return 1;
+        }
+
+        tok = common_sampler_sample(ctx.smpl, ctx.lctx, -1);
+        common_sampler_accept(ctx.smpl, tok, true);
+        t_dec += ggml_time_us() - t1;
+        if (llama_vocab_is_eog(ctx.vocab, tok)) {
+            break;
+        }
+        // the model emits pad and word-boundary tokens between words
+        if (!llama_vocab_is_control(ctx.vocab, tok)) {
+            LOG("%s", common_token_to_piece(ctx.lctx, tok).c_str());
+            fflush(stdout);
+        }
+        if (++n_gen >= n_predict) {
+            break;
+        }
+    }
+
+    const double t_total = (ggml_time_us() - t_start) / 1e6;
+    LOG("\n\n%s: %d tokens, %.2f s audio in %.2f s (%.2fx realtime)\n", __func__,
+        n_gen, (double) n_samples / rate, t_total, (double) n_samples / rate / t_total);
+    LOG("%s: encoder %.2f s, decoder %.2f s, %.1f ms per 80 ms step\n", __func__,
+        t_enc / 1e6, t_dec / 1e6, (t_enc + t_dec) / 1e3 / std::max(n_gen, 1));
+    llama_perf_context_print(ctx.lctx);
+
+    return 0;
+}
+
 static std::string chat_add_and_format(mtmd_cli_context & ctx, common_chat_msg & new_msg) {
     LOG_DBG("chat_add_and_format: new_msg.role='%s', new_msg.content='%s'\n",
         new_msg.role.c_str(), new_msg.content.c_str());
@@ -313,6 +407,8 @@ static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg) {
     }
 
     mtmd::input_chunks chunks(mtmd_input_chunks_init());
+    // mbatch must not outlive the chunks it references
+    mtmd::batch_ptr mbatch;
     int32_t res = mtmd_tokenize_from_parts(ctx.ctx_vision.get(),
                         chunks.ptr.get(), // output
                         parts_ptr.data(),
@@ -351,8 +447,8 @@ static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg) {
         } else {
             // media chunk: try to get embd from existing batch, or create a new batch
             float * embd = nullptr;
-            if (ctx.mbatch) {
-                embd = mtmd_batch_get_output_embd(ctx.mbatch.get(), chunk);
+            if (mbatch) {
+                embd = mtmd_batch_get_output_embd(mbatch.get(), chunk);
 
                 if (embd) {
                     LOG_DBG("found embd for media chunk %zu in existing batch\n", i);
@@ -363,8 +459,8 @@ static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg) {
 
             if (!embd) {
                 // create and encode a new batch with as many media chunks as possible
-                ctx.mbatch.reset(mtmd_batch_init(ctx.ctx_vision.get()));
-                res = mtmd_batch_add_chunk(ctx.mbatch.get(), chunk);
+                mbatch.reset(mtmd_batch_init(ctx.ctx_vision.get()));
+                res = mtmd_batch_add_chunk(mbatch.get(), chunk);
                 GGML_ASSERT(res == 0); // first chunk must always succeed
 
                 int n_added = 1;
@@ -375,7 +471,7 @@ static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg) {
                     if (next_type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
                         break; // text chunk splits the batch
                     }
-                    res = mtmd_batch_add_chunk(ctx.mbatch.get(), next_chunk);
+                    res = mtmd_batch_add_chunk(mbatch.get(), next_chunk);
                     if (res != 0) {
                         break; // batch full or incompatible
                     }
@@ -384,14 +480,14 @@ static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg) {
 
                 int64_t time_start = ggml_time_ms();
                 LOG_INF("encoding mtmd batch, n_chunks = %d (done = %zu, total = %zu)\n", n_added, i, n_chunks);
-                res = mtmd_batch_encode(ctx.mbatch.get());
+                res = mtmd_batch_encode(mbatch.get());
                 if (res != 0) {
                     LOG_ERR("Failed to encode mtmd batch, res = %d\n", res);
                     return 1;
                 }
                 LOG_INF("mtmd batch encoding done in %d ms\n", (int)(ggml_time_ms() - time_start));
 
-                embd = mtmd_batch_get_output_embd(ctx.mbatch.get(), chunk);
+                embd = mtmd_batch_get_output_embd(mbatch.get(), chunk);
             }
 
             GGML_ASSERT(embd != nullptr);
@@ -472,6 +568,17 @@ int main(int argc, char ** argv) {
 
     if (g_is_interrupted) return 130;
 
+    // realtime transcription models (no chat) transcribe while they listen, the others answer after the audio
+    const bool transcribes = ctx.mtmd_cap.audio_stream && !ctx.mtmd_cap.chat;
+
+    if (transcribes) {
+        if (params.image.size() != 1) {
+            LOG_ERR("This model transcribes audio in realtime, pass exactly one --audio file\n");
+            return 1;
+        }
+        return run_audio_stream(ctx, params.image[0], n_predict);
+    }
+
     auto eval_system_prompt_if_present = [&] {
         if (params.system_prompt.empty()) {
             return 0;
@@ -523,7 +630,7 @@ int main(int argc, char ** argv) {
         if (mtmd_support_audio(ctx.ctx_vision.get())) {
             LOG("\n   /audio <path>    load an audio");
         }
-        if (mtmd_helper_support_video(ctx.ctx_vision.get())) {
+        if (ctx.mtmd_cap.video) {
             LOG("\n   /video <path>    load a video");
         }
         LOG("\n   /clear           clear the chat history");

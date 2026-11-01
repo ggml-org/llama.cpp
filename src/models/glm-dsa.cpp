@@ -75,19 +75,9 @@ void llama_model_glm_dsa::load_arch_tensors(llama_model_loader & ml) {
     LLAMA_LOAD_LOCALS;
     const int64_t n_expert_shared = hparams.n_expert_shared;
 
-    // MTP-only: the GGUF carries only the NextN/MTP block(s) (user split target/draft).
-    const bool mtp_only = (hparams.n_layer_nextn > 0) && (ml.get_weight("blk.0.attn_norm.weight") == nullptr);
-    // Trunk-only: the GGUF declares MTP layers in metadata but the actual MTP
-    // tensors live in a separate file (or were stripped at conversion). Mark
-    // MTP tensors NOT_REQUIRED so the trunk loads cleanly.
-    const std::string mtp_probe = "blk." + std::to_string(n_layer) + ".nextn.eh_proj.weight";
-    const bool trunk_only = (hparams.n_layer_nextn > 0) && (ml.get_weight(mtp_probe.c_str()) == nullptr);
-    const int trunk_flags = mtp_only   ? TENSOR_NOT_REQUIRED : 0;
-    int mtp_flags         = trunk_only ? TENSOR_NOT_REQUIRED : 0;
-
-    if (!ml.load_mtp) {
-        mtp_flags |= TENSOR_SKIP;
-    }
+    const auto nf = nextn_flags(ml);
+    const int trunk_flags = nf.trunk;
+    const int mtp_flags   = nf.mtp;
 
     const bool is_mla = hparams.is_mla();
     if (!is_mla) {
@@ -287,9 +277,9 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par
                 cb(indexer_k, "indexer_k", il);
 
                 // perform Hadamard transform on indexer q and k
-                indexer_q = ggml_mul_mat(ctx0, inp_attn_dsa->self_k_rot_lid, indexer_q);
+                indexer_q = ggml_mul_mat(ctx0, inp_attn_dsa->self_k_rot_lid[il], indexer_q);
                 cb(indexer_q, "indexer_q", il);
-                indexer_k = ggml_mul_mat(ctx0, inp_attn_dsa->self_k_rot_lid, indexer_k);
+                indexer_k = ggml_mul_mat(ctx0, inp_attn_dsa->self_k_rot_lid[il], indexer_k);
                 cb(indexer_k, "indexer_k", il);
 
                 // store indexer keys to KV cache
@@ -525,8 +515,6 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }
 
 // LLM_GRAPH_TYPE_DECODER_MTP draft head for GLM-5.2 (GLM_DSA).
@@ -570,7 +558,7 @@ llama_model_glm_dsa::graph_mtp::graph_mtp(const llama_model & model, const llm_g
     const float kq_scale = 1.0f * mscale * mscale / sqrtf(float(n_embd_head_k));
 
     // TODO: extract in a common llm_graph_context::build_inp_embd_h()
-    auto inp = std::make_unique<llm_graph_input_embd_h>(hparams.n_embd);
+    auto inp = std::make_unique<llm_graph_input_embd_h>(hparams.n_embd_inp(), hparams.n_embd);
 
     inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
     ggml_set_input(inp->tokens);
@@ -766,5 +754,4 @@ llama_model_glm_dsa::graph_mtp::graph_mtp(const llama_model & model, const llm_g
     cb(cur, "result_output", -1);
 
     res->t_logits = cur;
-    ggml_build_forward_expand(gf, cur);
 }

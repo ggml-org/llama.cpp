@@ -5,7 +5,7 @@ import os
 import sys
 import subprocess
 
-HTTPLIB_VERSION = "refs/tags/v0.59.0"
+HTTPLIB_VERSION = "refs/tags/v0.64.0"
 
 # used by examples/gguf-hash, these repos have no release tag, so we pin a commit
 XXHASH_COMMIT      = "9f465f1ea932d6ad9a26cd77496311ffa544cd68"
@@ -21,7 +21,7 @@ vendor = {
 
     # not using latest tag to avoid this issue: https://github.com/ggml-org/llama.cpp/pull/17179#discussion_r2515877926
     # "https://github.com/mackron/miniaudio/raw/refs/tags/0.11.24/miniaudio.h": "vendor/miniaudio/miniaudio.h",
-    "https://github.com/mackron/miniaudio/raw/9634bedb5b5a2ca38c1ee7108a9358a4e233f14d/miniaudio.h": "vendor/miniaudio/miniaudio.h",
+    "https://github.com/mackron/miniaudio/raw/877ea4a7c2601c7b0f2a44e83dfac42e6470fea6/miniaudio.h": "vendor/miniaudio/miniaudio.h",
 
     f"https://raw.githubusercontent.com/yhirose/cpp-httplib/{HTTPLIB_VERSION}/httplib.h": "httplib.h",
     f"https://raw.githubusercontent.com/yhirose/cpp-httplib/{HTTPLIB_VERSION}/split.py":  "split.py",
@@ -101,6 +101,13 @@ patches = {
     )],
 }
 
+# local changes too large for the replacements above, kept as diffs and applied with git apply
+patch_files = [
+    # backport of the fix for the stack overflow on deeply nested values (nlohmann/json#5387)
+    # TODO: remove once nlohmann/json releases a version newer than 3.12.0
+    "vendor/nlohmann/json-deep-nesting.patch",
+]
+
 for url, filename in vendor.items():
     print(f"downloading {url} to {filename}") # noqa: NP100
     urllib.request.urlretrieve(url, filename)
@@ -116,6 +123,14 @@ for filename, replacements in patches.items():
         content = content.replace(old, new)
     with open(filename, "w", encoding="utf-8", newline="") as f:
         f.write(content)
+
+for patch_file in patch_files:
+    print(f"applying {patch_file}") # noqa: NP100
+    try:
+        subprocess.check_call(["git", "apply", patch_file])
+    except subprocess.CalledProcessError:
+        print(f"Error: cannot apply {patch_file}, upstream code has changed") # noqa: NP100
+        sys.exit(1)
 
 print("Splitting httplib.h...") # noqa: NP100
 try:
