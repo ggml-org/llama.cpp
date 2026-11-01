@@ -6551,6 +6551,11 @@ void server_routes::init_routes() {
             task.tts_inp.set_speaker_ref(mtmd::bitmap_ptr(wrapper.bitmap));
         } else if (voice_ref) {
             task.tts_inp.set_speaker_ref(std::move(voice_ref));
+        } else if (info.n_voices > 0) {
+            // without a voice prompt the model produces near silence: the first voice is the default
+            const char * first = mtmd_gen_audio_voice_name(ctx_server.mctx, 0);
+            SRV_WRN("no voice given, speaking with \"%s\"\n", first);
+            task.tts_inp.set_speaker_ref(mtmd::bitmap_ptr(mtmd_gen_audio_get_voice(ctx_server.mctx, first)));
         } else {
             SRV_WRN("%s", "no speaker reference provided, the model may behave randomly\n");
         }

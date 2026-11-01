@@ -52,7 +52,7 @@ llama-tts -m pocket-tts.gguf \
     --output out.wav
 ```
 
-The weights [without voice cloning](https://huggingface.co/kyutai/pocket-tts-without-voice-cloning) ship a set of predefined voices (`embeddings/*.safetensors`) next to each language; the converter stores them in the mmproj, as the voice prompt embeddings, and leaves out the zeroed voice encoder. With such a model `--tts-speaker-file` is rejected and a voice is selected with `--tts-voice`:
+The weights [without voice cloning](https://huggingface.co/kyutai/pocket-tts-without-voice-cloning) ship a set of predefined voices (`embeddings/*.safetensors`) next to each language; the converter stores them in the mmproj, as the voice prompt embeddings, and leaves out the zeroed voice encoder. With such a model `--tts-speaker-file` is rejected and a voice is selected with `--tts-voice` (the first one when it is not given):
 
 ```sh
 llama-tts -m pocket-tts.gguf \

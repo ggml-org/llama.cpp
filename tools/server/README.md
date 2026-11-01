@@ -857,7 +857,7 @@ Returns raw audio bytes (`audio/wav` by default) rather than JSON. For more info
 
 `lang`: Language code for the utterance (model-dependent, e.g. `en`, `zh`). Optional.
 
-`voice`: Voice for the utterance, one of the `voices` listed by `GET /props` (model-dependent, e.g. `female` or `male` for LFM3-Audio). Optional. A model with predefined voices rejects any other name, and a predefined voice cannot be combined with `speaker_ref`.
+`voice`: Voice for the utterance, one of the `voices` listed by `GET /props` (model-dependent, e.g. `female` or `male` for LFM3-Audio). Optional: a model with predefined voices speaks with the first of them when neither `voice` nor `speaker_ref` is given. It rejects any other name, and a predefined voice cannot be combined with `speaker_ref`.
 
 `speaker_ref_b64`: Base64-encoded reference audio to clone the speaker's voice. Optional. Alternatively, upload the reference audio as a `speaker_ref` file field via `multipart/form-data` (see example below) - if both are provided, the uploaded file takes precedence. Rejected when the model has no voice encoder (e.g. Pocket TTS without voice cloning).
 
