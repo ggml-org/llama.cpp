@@ -1712,6 +1712,15 @@ class GGUFWriter:
     def add_audio_projector_head_count(self, value: int) -> None:
         self.add_uint32(Keys.ClipAudio.Projector.HEAD_COUNT, value)
 
+    def add_audio_rope_dims(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.ROPE_DIMS, value)
+
+    def add_audio_spk_block_count(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.Speaker.BLOCK_COUNT, value)
+
+    def add_audio_spk_head_count(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.Speaker.HEAD_COUNT, value)
+
     # audio generation (mmproj)
 
     def add_clip_gen_audio_projector_type(self, value: str) -> None:

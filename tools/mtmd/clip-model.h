@@ -165,6 +165,12 @@ struct clip_hparams {
     std::vector<float> mel_filters;
     std::vector<float> window;
 
+    // nemotron transcribe
+    int32_t audio_rope_dims = 0;
+    int32_t spk_n_embd      = 0;
+    int32_t spk_n_layer     = 0;
+    int32_t spk_n_head      = 0;
+
     // mimo-audio-tokenizer: residual vector quantizer
     int32_t rvq_num_quantizers = 0;
     std::vector<int32_t> rvq_codebook_size; // per-quantizer bin count (ragged, e.g. 1024/1024/256/128x17)
@@ -292,6 +298,8 @@ struct clip_layer {
 
     ggml_tensor * k_norm = nullptr;
     ggml_tensor * q_norm = nullptr;
+    ggml_tensor * k_norm_b = nullptr;
+    ggml_tensor * q_norm_b = nullptr;
 
     // lfm3: per-head sigmoid gate on the attention output
     ggml_tensor * attn_gate_w = nullptr;
@@ -922,6 +930,28 @@ struct clip_model {
     int32_t n_sam_layers = 12; // used by deepseek-ocr sam encoder
 
     std::vector<clip_layer> sam_layers;
+
+    // nemotron transcribe: speaker expert, Sortformer head, fusion
+    std::vector<clip_layer> spk_layers;
+    ggml_tensor * spk_inp_proj_w     = nullptr;
+    ggml_tensor * spk_pre_ln_w       = nullptr;
+    ggml_tensor * spk_pre_ln_b       = nullptr;
+    ggml_tensor * spk_post_ln_w      = nullptr;
+    ggml_tensor * spk_post_ln_b      = nullptr;
+    ggml_tensor * spk_head_proj_w    = nullptr;
+    ggml_tensor * spk_head_proj_b    = nullptr;
+    ggml_tensor * spk_head_up_w      = nullptr;
+    ggml_tensor * spk_head_up_b      = nullptr;
+    ggml_tensor * spk_head_fc1_w     = nullptr;
+    ggml_tensor * spk_head_fc1_b     = nullptr;
+    ggml_tensor * spk_head_fc2_w     = nullptr;
+    ggml_tensor * spk_head_fc2_b     = nullptr;
+    ggml_tensor * fusion_asr_norm_w  = nullptr;
+    ggml_tensor * fusion_asr_norm_b  = nullptr;
+    ggml_tensor * fusion_spk_norm_w  = nullptr;
+    ggml_tensor * fusion_spk_norm_b  = nullptr;
+    ggml_tensor * fusion_spk_kernel  = nullptr;
+    std::vector<float> spk_sil_emb;
 
     // deepseek-ocr-2
     ggml_tensor * resample_query_768 = nullptr;

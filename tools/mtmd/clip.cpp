@@ -405,13 +405,13 @@ ggml_tensor * clip_graph::build_vit(
 
                 if (layer.q_norm) {
                     GGML_ASSERT(layer.q_norm->ne[0] == Qcur->ne[0]);
-                    Qcur = build_norm(Qcur, layer.q_norm, NULL, norm_t, eps, il);
+                    Qcur = build_norm(Qcur, layer.q_norm, layer.q_norm_b, norm_t, eps, il);
                     cb(Qcur, "Qcur_norm", il);
                 }
 
                 if (layer.k_norm) {
                     GGML_ASSERT(layer.k_norm->ne[0] == Kcur->ne[0]);
-                    Kcur = build_norm(Kcur, layer.k_norm, NULL, norm_t, eps, il);
+                    Kcur = build_norm(Kcur, layer.k_norm, layer.k_norm_b, norm_t, eps, il);
                     cb(Kcur, "Kcur_norm", il);
                 }
 
@@ -437,11 +437,11 @@ ggml_tensor * clip_graph::build_vit(
 
                 if (!norm_per_head) {
                     if (layer.q_norm) {
-                        Qcur = build_norm(Qcur, layer.q_norm, NULL, norm_t, eps, il);
+                        Qcur = build_norm(Qcur, layer.q_norm, layer.q_norm_b, norm_t, eps, il);
                         cb(Qcur, "Qcur_norm", il);
                     }
                     if (layer.k_norm) {
-                        Kcur = build_norm(Kcur, layer.k_norm, NULL, norm_t, eps, il);
+                        Kcur = build_norm(Kcur, layer.k_norm, layer.k_norm_b, norm_t, eps, il);
                         cb(Kcur, "Kcur_norm", il);
                     }
                 }
@@ -452,11 +452,11 @@ ggml_tensor * clip_graph::build_vit(
 
                 if (norm_per_head) {
                     if (layer.q_norm) {
-                        Qcur = build_norm(Qcur, layer.q_norm, NULL, norm_t, eps, il);
+                        Qcur = build_norm(Qcur, layer.q_norm, layer.q_norm_b, norm_t, eps, il);
                         cb(Qcur, "Qcur_norm_per_head", il);
                     }
                     if (layer.k_norm) {
-                        Kcur = build_norm(Kcur, layer.k_norm, NULL, norm_t, eps, il);
+                        Kcur = build_norm(Kcur, layer.k_norm, layer.k_norm_b, norm_t, eps, il);
                         cb(Kcur, "Kcur_norm_per_head", il);
                     }
                 }
@@ -1242,6 +1242,10 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const 
             {
                 builder = std::make_unique<clip_graph_parakeet>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_NEMOTRON_TRANSCRIBE:
+            {
+                builder = std::make_unique<clip_graph_nemotron_transcribe>(ctx, img, params ? params->enc_state : nullptr);
+            } break;
         case PROJECTOR_TYPE_GRANITE4_VISION:
             {
                 builder = std::make_unique<clip_graph_granite4_vision>(ctx, img);
@@ -1622,6 +1626,27 @@ struct clip_model_loader {
                         hparams.audio_n_fft        = 512;
                         hparams.audio_window_len   = 400;
                         hparams.audio_hop_len      = 160;
+                    } break;
+                case PROJECTOR_TYPE_NEMOTRON_TRANSCRIBE:
+                    {
+                        get_u32(KEY_AUDIO_SUBSMPL_FACTOR, hparams.subsampling_factor);
+                        get_u32(KEY_A_ROPE_DIMS,          hparams.audio_rope_dims);
+                        get_u32(KEY_A_SPK_N_BLOCK,        hparams.spk_n_layer);
+                        get_u32(KEY_A_SPK_N_HEAD,         hparams.spk_n_head);
+                        if (hparams.subsampling_factor != 8) {
+                            throw std::runtime_error(string_format("%s: unsupported subsampling factor %d\n", __func__, hparams.subsampling_factor));
+                        }
+                        if (hparams.spk_n_layer <= 0 || hparams.spk_n_layer > (int) gguf_get_n_tensors(ctx_gguf.get())) {
+                            throw std::runtime_error(string_format("%s: invalid speaker block count %d\n", __func__, hparams.spk_n_layer));
+                        }
+                        hparams.audio_chunk_len    = 0;
+                        hparams.audio_sample_rate  = 16000;
+                        hparams.audio_n_fft        = 512;
+                        hparams.audio_window_len   = 400;
+                        hparams.audio_hop_len      = 160;
+                        // one full window
+                        using nt = clip_graph_nemotron_transcribe;
+                        hparams.warmup_audio_size = (nt::window_left + nt::window_core + nt::window_right) * hparams.subsampling_factor;
                     } break;
                 case PROJECTOR_TYPE_IDEFICS3:
                     {
@@ -4049,6 +4074,87 @@ struct clip_model_loader {
                     model.mm_model_mlp_2_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 1, "weight"));
                     model.mm_model_mlp_3_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 3, "weight"));
                 } break;
+            case PROJECTOR_TYPE_NEMOTRON_TRANSCRIBE:
+                {
+                    hparams.mel_filters = get_vector(TN_MEL_FILTERS);
+                    hparams.window      = get_vector(TN_WINDOW);
+
+                    // ASR expert: blocks, pre_ln and post_ln come from the generic loader
+                    model.inp_proj_w = get_tensor(string_format(TN_INP_PROJ, "weight"));
+                    for (int il = 0; il < hparams.n_layer; ++il) {
+                        auto & layer = model.layers[il];
+                        layer.q_norm_b = get_tensor(string_format(TN_ATTN_Q_NORM, prefix, il, "bias"));
+                        layer.k_norm_b = get_tensor(string_format(TN_ATTN_K_NORM, prefix, il, "bias"));
+                    }
+
+                    // speaker expert
+                    const char * sp = "a.spk";
+                    model.spk_inp_proj_w   = get_tensor(string_format(TN_A_SPK_INP_PROJ, "weight"));
+                    model.spk_pre_ln_w     = get_tensor(string_format(TN_LN_PRE,  sp, "weight"));
+                    model.spk_pre_ln_b     = get_tensor(string_format(TN_LN_PRE,  sp, "bias"));
+                    model.spk_post_ln_w    = get_tensor(string_format(TN_LN_POST, sp, "weight"));
+                    model.spk_post_ln_b    = get_tensor(string_format(TN_LN_POST, sp, "bias"));
+                    model.spk_layers.resize(hparams.spk_n_layer);
+                    for (int il = 0; il < hparams.spk_n_layer; ++il) {
+                        auto & layer = model.spk_layers[il];
+                        layer.ln_1_w    = get_tensor(string_format(TN_LN_1,        sp, il, "weight"));
+                        layer.ln_1_b    = get_tensor(string_format(TN_LN_1,        sp, il, "bias"));
+                        layer.qkv_w     = get_tensor(string_format(TN_ATTN_QKV,    sp, il, "weight"));
+                        layer.o_w       = get_tensor(string_format(TN_ATTN_OUTPUT, sp, il, "weight"));
+                        layer.o_b       = get_tensor(string_format(TN_ATTN_OUTPUT, sp, il, "bias"));
+                        layer.ln_2_w    = get_tensor(string_format(TN_LN_2,        sp, il, "weight"));
+                        layer.ln_2_b    = get_tensor(string_format(TN_LN_2,        sp, il, "bias"));
+                        layer.ff_up_w   = get_tensor(string_format(TN_FFN_UP,      sp, il, "weight"));
+                        layer.ff_up_b   = get_tensor(string_format(TN_FFN_UP,      sp, il, "bias"));
+                        layer.ff_down_w = get_tensor(string_format(TN_FFN_DOWN,    sp, il, "weight"));
+                        layer.ff_down_b = get_tensor(string_format(TN_FFN_DOWN,    sp, il, "bias"));
+                    }
+
+                    // Sortformer head, fusion
+                    model.spk_head_proj_w   = get_tensor(string_format(TN_A_SPK_HEAD, "proj",     "weight"));
+                    model.spk_head_proj_b   = get_tensor(string_format(TN_A_SPK_HEAD, "proj",     "bias"));
+                    model.spk_head_up_w     = get_tensor(string_format(TN_A_SPK_HEAD, "upsample", "weight"));
+                    model.spk_head_up_b     = get_tensor(string_format(TN_A_SPK_HEAD, "upsample", "bias"));
+                    model.spk_head_fc1_w    = get_tensor(string_format(TN_A_SPK_HEAD, "fc1",      "weight"));
+                    model.spk_head_fc1_b    = get_tensor(string_format(TN_A_SPK_HEAD, "fc1",      "bias"));
+                    model.spk_head_fc2_w    = get_tensor(string_format(TN_A_SPK_HEAD, "fc2",      "weight"));
+                    model.spk_head_fc2_b    = get_tensor(string_format(TN_A_SPK_HEAD, "fc2",      "bias"));
+                    model.fusion_asr_norm_w = get_tensor(string_format(TN_A_FUSION_NORM, "asr_norm", "weight"));
+                    model.fusion_asr_norm_b = get_tensor(string_format(TN_A_FUSION_NORM, "asr_norm", "bias"));
+                    model.fusion_spk_norm_w = get_tensor(string_format(TN_A_FUSION_NORM, "spk_norm", "weight"));
+                    model.fusion_spk_norm_b = get_tensor(string_format(TN_A_FUSION_NORM, "spk_norm", "bias"));
+                    model.fusion_spk_kernel = get_tensor(TN_A_FUSION_KERNEL);
+
+                    model.spk_sil_emb = get_vector(TN_A_SPK_SIL_EMB);
+
+                    // the head layouts and the widths the graph and the speaker state use must match the tensors
+                    hparams.spk_n_embd = model.spk_inp_proj_w->ne[1];
+                    const int64_t d_head     = hparams.n_head     > 0 ? hparams.n_embd     / hparams.n_head     : 0;
+                    const int64_t d_head_spk = hparams.spk_n_head > 0 ? hparams.spk_n_embd / hparams.spk_n_head : 0;
+                    const int64_t n_spk      = model.spk_head_fc2_w->ne[1];
+                    // the graph splits each fused QKV into three views of the layer width
+                    bool qkv_ok = true;
+                    for (const auto & layer : model.layers) {
+                        qkv_ok = qkv_ok && layer.qkv_w && layer.qkv_w->ne[0] == hparams.n_embd && layer.qkv_w->ne[1] == 3 * hparams.n_embd;
+                    }
+                    for (const auto & layer : model.spk_layers) {
+                        qkv_ok = qkv_ok && layer.qkv_w->ne[0] == hparams.spk_n_embd && layer.qkv_w->ne[1] == 3 * hparams.spk_n_embd;
+                    }
+                    if (!qkv_ok || model.inp_proj_w->ne[1] != hparams.n_embd || d_head <= 0 || d_head * hparams.n_head != hparams.n_embd ||
+                            (hparams.n_embd_head > 0 && hparams.n_embd_head != d_head) ||
+                            hparams.audio_rope_dims <= 0 || hparams.audio_rope_dims % 2 != 0 || hparams.audio_rope_dims > d_head ||
+                            d_head_spk <= 0 || d_head_spk % 2 != 0 || d_head_spk * hparams.spk_n_head != hparams.spk_n_embd ||
+                            (int64_t) model.spk_sil_emb.size() != hparams.spk_n_embd || n_spk <= 0 ||
+                            model.fusion_spk_kernel->ne[0] != n_spk || model.fusion_spk_kernel->ne[1] != hparams.n_embd ||
+                            hparams.mel_filters.size() != (size_t) hparams.n_mel_bins * (hparams.audio_n_fft / 2 + 1) ||
+                            hparams.window.size() != (size_t) hparams.audio_window_len) {
+                        throw std::runtime_error(string_format("%s: hparams do not match the tensor shapes\n", __func__));
+                    }
+
+                    // projection to the text model
+                    model.mm_fc_w = get_tensor(string_format(TN_MM_AUDIO_FC, "weight"));
+                    model.mm_fc_b = get_tensor(string_format(TN_MM_AUDIO_FC, "bias"));
+                } break;
             case PROJECTOR_TYPE_GRANITE_SPEECH:
                 {
                     model.inp_proj_w     = get_tensor(string_format(TN_INP_PROJ,    "weight"));
@@ -4989,6 +5095,7 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
                 }
                 n_patches = n;
             } break;
+        case PROJECTOR_TYPE_NEMOTRON_TRANSCRIBE:
         case PROJECTOR_TYPE_PARAKEET:
             {
                 n_patches = (img->nx() + (params.subsampling_factor - 1)) / params.subsampling_factor;
@@ -5076,6 +5183,9 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
     params.n_threads = n_threads;
     params.out_embd = &out_batch_embd;
 
+    if (ctx->proj_type() == PROJECTOR_TYPE_NEMOTRON_TRANSCRIBE) {
+        return clip_graph_nemotron_transcribe::encode_windows(ctx, ctx->model, &params);
+    }
     return clip_encode(ctx, &params);
 }
 
@@ -6565,6 +6675,20 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
 
                 set_lfm3a_window_inputs(base, n_pos, hparams.attn_window_size);
             } break;
+        case PROJECTOR_TYPE_NEMOTRON_TRANSCRIBE:
+            {
+                GGML_ASSERT(imgs.entries.size() == 1);
+                std::vector<int32_t> positions(ggml_nelements(get_inp_tensor("positions")));
+                for (size_t i = 0; i < positions.size(); i++) {
+                    positions[i] = (int32_t) i;
+                }
+                set_input_i32("positions", positions);
+                GGML_ASSERT(params->enc_state != nullptr);
+                set_input_f32("inp_norm", params->enc_state->mel_norm);
+                if (ggml_graph_get_tensor(gf, "spk_prev") != nullptr) {
+                    set_input_f32("spk_prev", params->enc_state->spk_prev);
+                }
+            } break;
         case PROJECTOR_TYPE_PARAKEET:
             {
                 GGML_ASSERT(imgs.entries.size() == 1);
@@ -6871,6 +6995,15 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
             GGML_ASSERT(t != nullptr);
             copy_gen_state_out(t, slots[i++]);
         }
+    } else if (params->enc_state != nullptr && model.proj_type == PROJECTOR_TYPE_NEMOTRON_TRANSCRIBE) {
+        clip_enc_state * st = params->enc_state;
+        ggml_tensor * chunk = ggml_graph_get_tensor(gf, "spk_chunk");
+        ggml_tensor * preds = ggml_graph_get_tensor(gf, "spk_preds");
+        GGML_ASSERT(chunk != nullptr && preds != nullptr);
+        st->spk_chunk.resize(ggml_nelements(chunk));
+        st->spk_preds.resize(ggml_nelements(preds));
+        ggml_backend_tensor_get(chunk, st->spk_chunk.data(), 0, ggml_nbytes(chunk));
+        ggml_backend_tensor_get(preds, st->spk_preds.data(), 0, ggml_nbytes(preds));
     } else if (params->enc_state != nullptr) {
         clip_enc_state * st = params->enc_state;
         ggml_tensor * tail = ggml_graph_get_tensor(gf, "out_stem_tail");
@@ -7029,6 +7162,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_LLAMA4:
             return ctx->model.mm_model_proj->ne[1];
         case PROJECTOR_TYPE_QWEN2A:
+        case PROJECTOR_TYPE_NEMOTRON_TRANSCRIBE:
             return ctx->model.mm_fc_w->ne[1];
         case PROJECTOR_TYPE_QWEN3A:
             return ctx->model.mm_2_w->ne[1];
