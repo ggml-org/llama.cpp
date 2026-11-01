@@ -116,6 +116,10 @@ OutputVector translate_gated_delta_net(const NodeContext & context) {
     auto beta = context.get_input(4);
     auto state = context.get_input(5);
 
+    g = lift_to_rank(g, 4);
+    beta = lift_to_rank(beta, 4);
+    v = lift_to_rank(v, 4);
+
     Output<Node> raw_q, raw_k;
     float q_eps = 1e-6f, k_eps = 1e-6f;
     const bool fuse_qk_l2norm = ggml_openvino_is_gpu() &&
@@ -135,10 +139,8 @@ OutputVector translate_gated_delta_net(const NodeContext & context) {
     }
 
     if (context.get_view_input_size(2)) {
-        // Same as l2_norm case 1
-        v = std::make_shared<ov::op::v0::Squeeze>(v, ov::op::v0::Constant::create(ov::element::i64, {1}, {0}));
         auto v_shape = context.get_input_shape(2).to_shape();
-        std::vector<int64_t> reshape_pattern = {0, 0, (int64_t) v_shape[2], (int64_t) v_shape[3]};
+        std::vector<int64_t> reshape_pattern = {0, -1, (int64_t) v_shape[2], (int64_t) v_shape[3]};
         v = std::make_shared<ov::op::v1::Reshape>(
             v, ov::op::v0::Constant::create(ov::element::i64, {4}, reshape_pattern), true);
     }
@@ -176,6 +178,16 @@ OutputVector translate_gated_delta_net(const NodeContext & context) {
     // std::cout << "GatedDeltaNet input shapes: q=" << q.get_partial_shape() << ", k=" << k.get_partial_shape()
     //           << ", v=" << v.get_partial_shape() << ", g=" << g.get_partial_shape()
     //           << ", beta=" << beta.get_partial_shape() << ", state=" << state.get_partial_shape() << std::endl;
+
+    {
+        const auto & q_ps = q.get_partial_shape();
+        const auto & v_ps = v.get_partial_shape();
+        FRONT_END_OP_CONVERSION_CHECK(
+            q_ps.rank().is_static() && v_ps.rank().is_static() && q_ps.rank().get_length() == 4 &&
+                v_ps.rank().get_length() == 4 && q_ps[0].is_static() && v_ps[0].is_static() && q_ps[0] == v_ps[0],
+            "GATED_DELTA_NET requires a consistent static batch dim on q/v (got q=" + q_ps.to_string() +
+                ", v=" + v_ps.to_string() + "); the stateful dynamic-shape path is not supported yet");
+    }
 
     auto gdn = std::make_shared<ov::op::internal::GatedDeltaNet>(q, k, v, state, g, beta, fuse_qk_l2norm, q_eps, k_eps);
     auto attn_4d = gdn->output(0);
