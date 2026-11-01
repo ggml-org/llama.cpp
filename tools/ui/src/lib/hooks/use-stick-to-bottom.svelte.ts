@@ -94,6 +94,20 @@ export class StickToBottom {
 		this.container = undefined;
 	}
 
+	/**
+	 * Also follows `element`'s growth right after a press. The grace keeps a block
+	 * the reader expands from dragging the viewport, but the chat form expanding on
+	 * their click must carry the conversation along frame by frame, not leave it
+	 * behind and catch up in one jump once the grace ends. Returns the cleanup.
+	 */
+	followGrowthOf(element: HTMLElement): () => void {
+		const observer = new ResizeObserver(() => this.follow(true));
+
+		observer.observe(element);
+
+		return () => observer.disconnect();
+	}
+
 	/** Reader scrolls are the only thing that re-arms or stops following. */
 	handleScroll(): void {
 		this.measure();
@@ -122,12 +136,13 @@ export class StickToBottom {
 		return el.scrollHeight - el.clientHeight - el.scrollTop;
 	}
 
-	private follow(): void {
+	private follow(ignoreGrace = false): void {
 		const el = this.container;
 
 		if (!el) return;
 
-		const pressedRecently = performance.now() - this.pressedAt < INTERACTION_GRACE_MS;
+		const pressedRecently =
+			!ignoreGrace && performance.now() - this.pressedAt < INTERACTION_GRACE_MS;
 		const atBottom = this.distanceFromBottom(el) <= AT_BOTTOM_PX;
 
 		// with native anchoring the pin already held the bottom; write only when
