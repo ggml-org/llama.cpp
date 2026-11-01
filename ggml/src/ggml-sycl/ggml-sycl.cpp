@@ -146,6 +146,8 @@ int g_ggml_sycl_use_level_zero_api = 0;
 int g_ggml_sycl_enable_flash_attention = 1;
 int g_ggml_sycl_dev2dev_memcpy = DEV2DEV_MEMCPY_SYCL;
 int g_ggml_sycl_usm_system = 0;
+int g_ggml_sycl_allow_vram_overcommit = 0;
+static std::atomic<size_t> g_ggml_sycl_buffer_bytes[GGML_SYCL_MAX_DEVICES] = {};
 int g_ggml_sycl_enable_host_pinned_mem = 1;
 int g_ggml_sycl_host_pinned_mem_2g = 0;
 int g_ggml_sycl_upload_staging_slots = 4;
@@ -475,6 +477,7 @@ static void ggml_check_sycl() try {
 #endif
 
         g_ggml_sycl_usm_system = ggml_sycl_get_env("GGML_SYCL_USM_SYSTEM", 0);
+        g_ggml_sycl_allow_vram_overcommit = ggml_sycl_get_env("GGML_SYCL_ALLOW_VRAM_OVERCOMMIT", 0);
         g_ggml_sycl_enable_host_pinned_mem =
             ggml_sycl_get_env("GGML_SYCL_ENABLE_HOST_PINNED_MEM", 1);
 
@@ -733,6 +736,7 @@ struct ggml_backend_sycl_buffer_context {
     std::vector<ggml_tensor_extra_gpu *> tensor_extras;
     host_staging staging;
     bool is_usm_system;
+    size_t device_bytes = 0; // counted in g_ggml_sycl_buffer_bytes[device]
 
     ggml_backend_sycl_buffer_context(int device, void * dev_ptr, queue_ptr stream, bool is_usm_system) :
         device(device), dev_ptr(dev_ptr), stream(stream), is_usm_system(is_usm_system) {
@@ -764,6 +768,7 @@ struct ggml_backend_sycl_buffer_context {
             else
                 SYCL_CHECK(CHECK_TRY_ERROR(ggml_sycl_free_device(dev_ptr, *stream)));
         }
+        g_ggml_sycl_buffer_bytes[device] -= device_bytes;
 
         //release extra used by tensors
         for (ggml_tensor_extra_gpu * extra : tensor_extras) {
@@ -1252,6 +1257,19 @@ ggml_backend_sycl_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft,
             return nullptr;
         }
     } else {
+        // The Level Zero GPU driver only checks each allocation against max_mem_alloc_size, not the
+        // device memory already allocated. On BMG it also defers backing, so allocations that
+        // together exceed VRAM succeed and are evicted to system RAM on first GPU access, where
+        // they are not charged to this process and can exhaust host memory.
+        // Refuse them here, like the Vulkan backend's out-of-device-memory error.
+        const size_t allocated = g_ggml_sycl_buffer_bytes[buft_ctx->device];
+        const size_t total     = dpct::get_device(buft_ctx->device).get_info<sycl::info::device::global_mem_size>();
+        if (!g_ggml_sycl_allow_vram_overcommit && allocated + size > total) {
+            GGML_LOG_ERROR("%s: SYCL%d: allocating %zu MiB would exceed device memory "
+                           "(%zu MiB already allocated, %zu MiB total), set GGML_SYCL_ALLOW_VRAM_OVERCOMMIT=1 to allow\n",
+                           __func__, buft_ctx->device, size >> 20, allocated >> 20, total >> 20);
+            return nullptr;
+        }
         SYCL_CHECK(CHECK_TRY_ERROR(dev_ptr = (void *)ggml_sycl_malloc_device(size, *stream, GGML_SYCL_MEM_BUFFER)));
         if (!dev_ptr) {
           GGML_LOG_ERROR("%s: can't allocate %zu Bytes of memory on device\n", __func__, size);
@@ -1259,6 +1277,10 @@ ggml_backend_sycl_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft,
         }
     }
     ggml_backend_sycl_buffer_context * ctx = new  ggml_backend_sycl_buffer_context(buft_ctx->device, dev_ptr, buft_ctx->stream, use_usm_system);
+    if (!use_usm_system) {
+        ctx->device_bytes = size;
+        g_ggml_sycl_buffer_bytes[buft_ctx->device] += size;
+    }
     return ggml_backend_buffer_init(buft, ggml_backend_sycl_buffer_interface, ctx, size);
 }
 catch (sycl::exception const &exc) {
