@@ -68,7 +68,7 @@ def _rope_pairs(x: Tensor, n_head: int, rope_theta: float) -> Tensor:
     n_pos, n_embd = x.shape
     head_dim = n_embd // n_head
     angle = torch.arange(n_pos, dtype=x.dtype)[:, None, None] * \
-        rope_theta ** (-torch.arange(0, head_dim, 2, dtype=x.dtype) / head_dim)
+        torch.pow(rope_theta, -torch.arange(0, head_dim, 2, dtype=x.dtype) / head_dim)
     x = x.view(n_pos, n_head, head_dim // 2, 2)
     return torch.stack([x[..., 0] * angle.cos() - x[..., 1] * angle.sin(),
                         x[..., 0] * angle.sin() + x[..., 1] * angle.cos()], -1).reshape(n_pos, n_embd)
@@ -389,8 +389,8 @@ class PocketTTSMmprojModel(MmprojModel):
             yield (name, data_torch)
             return
 
-        if not self.has_audio_encoder and (name.startswith("mimi.encoder") or name.startswith("mimi.downsample.") or
-                                           name == "flow_lm.speaker_proj_weight"):
+        if not self.has_audio_encoder and (name.startswith(("mimi.encoder", "mimi.downsample."))
+                                           or name == "flow_lm.speaker_proj_weight"):
             return  # voice-prompt encoder
 
         if name in ("flow_lm.bos_emb", "flow_lm.bos_before_voice", "flow_lm.conditioner.embed.weight"):
