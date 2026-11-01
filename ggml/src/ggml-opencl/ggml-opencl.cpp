@@ -10866,8 +10866,8 @@ static ggml_status ggml_backend_opencl_graph_compute(ggml_backend_t backend, ggm
 // The optimized gemm and gemv kernels are used for large matrices without batch.
 // tensor is the quantized weights matrix.
 inline bool use_adreno_kernels(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
-    int64_t threshold_ne0 = 512;
-    int64_t threshold_ne1 = 512;
+    int64_t threshold_ne0 = 128;
+    int64_t threshold_ne1 = 128;
     if (!backend_ctx->adreno_cl_compiler_version.newer_than_or_same(E031, 38, 11, 0) &&
          backend_ctx->adreno_cl_compiler_version.type != DX) {
         threshold_ne0 = 128;
