@@ -9048,6 +9048,71 @@ struct test_tri : public test_case {
     }
 };
 
+// ggml_tri where the values that have to be discarded are not finite: they must come back as a plain
+// zero. A backend that scales by the comparison instead of selecting turns them into NaN.
+struct test_tri_special : public test_case {
+    const ggml_type              type;
+    const std::array<int64_t, 4> ne;
+    const ggml_tri_type          tri_type;
+
+    std::string vars() override { return VARS_TO_STR3(type, ne, tri_type); }
+
+    test_tri_special(ggml_tri_type tri_type, ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne = { 16, 16, 2, 2 })
+        : type(type), ne(ne), tri_type(tri_type) {
+            GGML_ASSERT(type == GGML_TYPE_F32);
+            GGML_ASSERT(ne[0] == ne[1]);
+        }
+
+    bool keeps(int64_t i, int64_t r) const {
+        switch (tri_type) {
+            case GGML_TRI_TYPE_LOWER:      return i <  r;
+            case GGML_TRI_TYPE_LOWER_DIAG: return i <= r;
+            case GGML_TRI_TYPE_UPPER:      return i >  r;
+            case GGML_TRI_TYPE_UPPER_DIAG: return i >= r;
+        }
+        return false;
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor_4d(ctx, type, ne[0], ne[1], ne[2], ne[3]);
+        ggml_set_param(a);
+        ggml_set_name(a, "a");
+
+        ggml_tensor * out = ggml_tri(ctx, a, tri_type);
+
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        // only the discarded cells get the awkward values: the kept ones stay finite. No NaN here --
+        // the harness rejects a NaN on either side, inputs included
+        static const float discarded[] = { 0.0f, -0.0f, 1.0f, -1.0f, INFINITY, -INFINITY };
+
+        int64_t k = 0;
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->type != type || t->ne[0] != ne[0] || t->ne[1] != ne[1]) {
+                init_tensor_uniform(t, -1.0f, 1.0f);
+                continue;
+            }
+            std::vector<float> data(ggml_nelements(t));
+            for (int64_t i3 = 0; i3 < t->ne[3]; ++i3) {
+                for (int64_t i2 = 0; i2 < t->ne[2]; ++i2) {
+                    for (int64_t i1 = 0; i1 < t->ne[1]; ++i1) {
+                        for (int64_t i0 = 0; i0 < t->ne[0]; ++i0) {
+                            const int64_t off = ((i3*t->ne[2] + i2)*t->ne[1] + i1)*t->ne[0] + i0;
+                            data[off] = keeps(i0, i1) ? 1.0f : discarded[k++ % (int64_t) (sizeof(discarded)/sizeof(discarded[0]))];
+                        }
+                    }
+                }
+            }
+            ggml_backend_tensor_set(t, data.data(), 0, data.size()*sizeof(float));
+        }
+    }
+};
+
 // GGML_OP_FILL
 struct test_fill : public test_case {
     const ggml_type              type;
@@ -12114,6 +12179,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_LOWER_DIAG));
     test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_UPPER));
     test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_UPPER_DIAG));
+    test_cases.emplace_back(new test_tri_special(GGML_TRI_TYPE_LOWER));
+    test_cases.emplace_back(new test_tri_special(GGML_TRI_TYPE_LOWER_DIAG));
+    test_cases.emplace_back(new test_tri_special(GGML_TRI_TYPE_UPPER));
+    test_cases.emplace_back(new test_tri_special(GGML_TRI_TYPE_UPPER_DIAG));
 
     test_cases.emplace_back(new test_fill(0.0f));
     test_cases.emplace_back(new test_fill(2.0f, GGML_TYPE_F32, { 303, 207, 11, 3 }));
