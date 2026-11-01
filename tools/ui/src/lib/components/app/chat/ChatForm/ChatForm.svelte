@@ -986,6 +986,9 @@
 			(isExpanded || isBlurHeld) && 'max-md:backdrop-blur-none',
 			isExpanded && [
 				'max-md:min-h-dvh max-md:rounded-none max-md:pb-[var(--chat-form-bottom-position,0px)]',
+				// the sheet fills the screen: no rim and no inner ring around it, so focusing the
+				// editor draws no outline along the screen's edges
+				'max-md:[--glass-edge-side:transparent] max-md:[--glass-edge-mid:transparent] max-md:[--glass-edge-side-focus:transparent] max-md:[--glass-edge-mid-focus:transparent] max-md:[--glass-highlight:transparent]',
 				// no visible border (and so no focus outline): the sheet meets the screen's
 				// edges. Transparent rather than removed, so nothing inside shifts by its width
 				'max-md:border-transparent max-md:focus-within:border-transparent max-md:dark:border-transparent max-md:dark:focus-within:border-transparent',
