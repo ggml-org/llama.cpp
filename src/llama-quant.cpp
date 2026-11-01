@@ -787,33 +787,30 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, const llama_mod
 
     ggml_type new_type = default_type;
 
-    // get more optimal quantization type based on the tensor shape, layer, etc.
-    if (ggml_is_quantized(default_type)) {
-        // if the user provided tensor types - use those
-        bool manual = false;
-        if (!qs.tensor_type_patterns.empty()) {
-            const std::string tensor_name(tensor->name);
-            for (const auto & [pattern, qtype] : qs.tensor_type_patterns) {
-                if (std::regex_search(tensor_name, pattern)) {
-                    if (qtype != new_type) {
-                        LLAMA_LOG_WARN("%s: %-36s - applying manual override: %s -> %s\n",
-                                       __func__, tensor_name.c_str(), ggml_type_name(new_type), ggml_type_name(qtype));
-                        new_type = qtype;
-                    }
-                    manual = true;
-                    break;
+    // if the user provided tensor types - use those, also when the target type is not quantized (F32, F16, BF16)
+    bool manual = false;
+    if (!qs.tensor_type_patterns.empty()) {
+        const std::string tensor_name(tensor->name);
+        for (const auto & [pattern, qtype] : qs.tensor_type_patterns) {
+            if (std::regex_search(tensor_name, pattern)) {
+                if (qtype != new_type) {
+                    LLAMA_LOG_WARN("%s: %-36s - applying manual override: %s -> %s\n",
+                                   __func__, tensor_name.c_str(), ggml_type_name(new_type), ggml_type_name(qtype));
+                    new_type = qtype;
                 }
+                manual = true;
+                break;
             }
         }
-
-        // if not manual - use the standard logic for choosing the quantization type based on the selected mixture
-        if (!manual && !params->pure) {
-            new_type = llama_tensor_get_type_impl(qs, new_type, tensor, params->ftype, tm.category);
-        }
-
-        // incompatible tensor shapes are handled here - fallback to a compatible type
-        new_type = tensor_type_fallback(qs, tensor, new_type);
     }
+
+    // if not manual - use the standard logic for choosing the quantization type based on the selected mixture
+    if (!manual && !params->pure && ggml_is_quantized(default_type)) {
+        new_type = llama_tensor_get_type_impl(qs, new_type, tensor, params->ftype, tm.category);
+    }
+
+    // incompatible tensor shapes are handled here - fallback to a compatible type
+    new_type = tensor_type_fallback(qs, tensor, new_type);
 
     return new_type;
 }
