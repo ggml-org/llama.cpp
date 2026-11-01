@@ -172,8 +172,12 @@ class common_chat_schema_builder {
                 }
             } else if (additional.is_object()) {
                 node->additional_properties = build_node(additional, path + "/additionalProperties");
+            } else if (additional.is_array()) {
+                // draft 4/6 allow an array of schemas, any one matching is enough
+                node->additional_properties = std::make_unique<common_chat_schema_any>();
             } else {
-                fail(path, "additionalProperties must be a boolean or a schema");
+                // draft 7+ ignore non-schema values here
+                node->additional_properties = std::make_unique<common_chat_schema_any>();
             }
         } else if (!schema.contains("properties")) {
             // {"type": "object"} on its own accepts any object
