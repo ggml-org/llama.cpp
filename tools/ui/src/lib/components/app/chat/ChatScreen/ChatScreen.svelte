@@ -43,6 +43,7 @@
 	} from '$lib/stores';
 	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
 	import { tick, untrack } from 'svelte';
+	import { fade } from 'svelte/transition';
 
 	let { showCenteredEmpty = false } = $props();
 
@@ -299,20 +300,26 @@
 		ondrop={dragAndDrop.dragHandlers.drop}
 		role="main"
 	>
-		<!-- a phone pins the gauge to the top right, across from the menu toggle -->
-		{#if deviceStore.isMobile && showContextGauge.current}
-			<ChatFormContextGauge
-				class="sidebar-reveal-pin-top fixed top-(--corner-control-top) right-4 z-20 size-10 rounded-full bg-muted/60 border border-border/20 shadow-sm backdrop-blur-sm"
-				corner
-			/>
+		<!-- a phone pins the gauge to the top right, across from the menu toggle; like the toggle,
+		     it steps aside while the expanded chat form covers the screen and its collapse key -->
+		{#if deviceStore.isMobile && showContextGauge.current && !uiStore.isComposerExpanded}
+			<div transition:fade={{ duration: 150 }}>
+				<ChatFormContextGauge
+					class="sidebar-reveal-pin-top fixed top-(--corner-control-top) right-4 z-20 size-10 rounded-full bg-muted/60 border border-border/20 shadow-sm backdrop-blur-sm"
+					corner
+				/>
+			</div>
 		{/if}
 
 		<!-- a phone's chat shows its title and working directory between the corner keys; a new
-		     chat has neither yet, and offers the directory in the + menu instead -->
-		{#if deviceStore.isMobile && page.params.id}
-			<ChatScreenMobileHeader
-				onWorkingDirectoryClick={() => chatScreenForm?.openWorkingDirectoryPicker()}
-			/>
+		     chat has neither yet, and offers the directory in the + menu instead. Like the keys,
+		     it steps aside while the expanded chat form covers the screen -->
+		{#if deviceStore.isMobile && page.params.id && !uiStore.isComposerExpanded}
+			<div transition:fade={{ duration: 150 }}>
+				<ChatScreenMobileHeader
+					onWorkingDirectoryClick={() => chatScreenForm?.openWorkingDirectoryPicker()}
+				/>
+			</div>
 		{/if}
 
 		{#if !isEmpty}
