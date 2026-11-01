@@ -1315,6 +1315,8 @@ struct test_case {
     virtual bool run_whole_graph() { return false; }
     virtual std::vector<ggml_tensor *> fusion_test_nodes() { return {}; }
     virtual bool use_weight_context() { return false; }
+    // runs on the tested backend before the comparison, e.g. to set up its graph reuse
+    virtual void prime_backend(ggml_backend_t backend) { GGML_UNUSED(backend); }
 
     ggml_cgraph * gf = nullptr;
     ggml_cgraph * gb = nullptr;
@@ -1579,6 +1581,8 @@ struct test_case {
 
             GGML_UNUSED(index);
         };
+
+        prime_backend(backend1);
 
         std::vector<ggml_tensor *> fused_nodes_to_verify = fusion_test_nodes();
         if (fused_nodes_to_verify.size() == 0 && run_whole_graph()) {
@@ -5597,6 +5601,83 @@ struct test_mul_mat_w4a8 : public test_mul_mat {
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
         return "MUL_MAT_W4A8";
+    }
+};
+
+// GGML_OP_MUL_MAT after a graph with the same first node but another number of rows,
+// so that a backend that reuses graphs (CUDA graphs) updates the previous graph
+struct test_mul_mat_graph_reuse : public test_case {
+    const int64_t m_prev;
+    const int64_t m;
+    const int64_t n;
+    const int64_t k;
+
+    ggml_tensor * out_prev = nullptr;
+    ggml_tensor * out      = nullptr;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MUL_MAT_GRAPH_REUSE";
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR4(m_prev, m, n, k);
+    }
+
+    double max_nmse_err() override {
+        return 5e-4;
+    }
+
+    bool run_whole_graph() override {
+        return true;
+    }
+
+    test_mul_mat_graph_reuse(int64_t m_prev = 1200, int64_t m = 1040, int64_t n = 1024, int64_t k = 768)
+        : m_prev(m_prev), m(m), n(n), k(k) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a_prev = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, k, m_prev);
+        ggml_set_name(a_prev, "a_prev");
+
+        ggml_tensor * a = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, k, m);
+        ggml_set_name(a, "a");
+
+        ggml_tensor * b = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, n);
+        ggml_set_name(b, "b");
+
+        // first node of both graphs
+        ggml_tensor * b_scaled = ggml_scale(ctx, b, 1.0f);
+        ggml_set_name(b_scaled, "b_scaled");
+
+        out_prev = ggml_mul_mat(ctx, a_prev, b_scaled);
+        ggml_set_name(out_prev, "out_prev");
+
+        out = ggml_mul_mat(ctx, a, b_scaled);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void prime_backend(ggml_backend_t backend) override {
+        ggml_init_params params = {
+            /* .mem_size = */ ggml_graph_overhead(),
+            /* .mem_base = */ NULL,
+            /* .no_alloc = */ true,
+        };
+        ggml_context_ptr ctx(ggml_init(params));
+
+        // the tested graph with out_prev in place of out, which is not in gf, so mark it to be computed
+        out_prev->flags |= GGML_TENSOR_FLAG_COMPUTE;
+        ggml_cgraph * gf_prev = ggml_new_graph(ctx.get());
+        for (int i = 0; i < ggml_graph_n_nodes(gf); i++) {
+            ggml_tensor * node = ggml_graph_node(gf, i);
+            ggml_graph_add_node(gf_prev, node == out ? out_prev : node);
+        }
+
+        // twice so that the backend reuses the graph, then once with the new shape before the tested run
+        ggml_backend_graph_compute(backend, gf_prev);
+        ggml_backend_graph_compute(backend, gf_prev);
+        ggml_backend_graph_compute(backend, gf);
     }
 };
 
@@ -11472,6 +11553,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 64, 32,  80, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F16, 64, 32, 588, {1, 1}, {1, 1})); // 14*14*3, e.g. conv_2d im2col
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F16, 64, 32,  80, {4, 1}, {1, 1}));
+
+    // cuBLAS on sm90 picks GEMM kernels with other thread block cluster dims for these row counts
+    test_cases.emplace_back(new test_mul_mat_graph_reuse(1200, 1040, 1024, 768));
+    test_cases.emplace_back(new test_mul_mat_graph_reuse(1040, 1200, 1024, 768));
 
 #if 0
     // test the mat-mat path for Metal

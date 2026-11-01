@@ -1271,6 +1271,23 @@ struct ggml_tensor_extra_gpu {
 #define USE_CUDA_GRAPH
 #endif
 
+#ifdef USE_CUDA_GRAPH
+// cudaGraphExecUpdate keeps stale kernel cluster dims (cuBLAS sm90), re-instantiate when they change
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11080
+#define USE_CUDA_GRAPH_CLUSTER_CHECK
+#endif
+
+struct ggml_cuda_graph_instance {
+    cudaGraphExec_t handle = nullptr;
+#ifdef USE_CUDA_GRAPH_CLUSTER_CHECK
+    // (node, x, y, z) of the clustered kernel nodes
+    std::vector<uint32_t> clusters;
+#endif
+
+    operator cudaGraphExec_t() const { return handle; }
+};
+#endif // USE_CUDA_GRAPH
+
 struct ggml_cuda_graph {
 #ifdef USE_CUDA_GRAPH
     ~ggml_cuda_graph() {
@@ -1279,7 +1296,7 @@ struct ggml_cuda_graph {
         }
     }
     // the ggml graph is captured as a series of CUDA graphs, so the GPU can run one chunk while the next is enqueued
-    std::vector<cudaGraphExec_t> instances;
+    std::vector<ggml_cuda_graph_instance> instances;
     size_t num_nodes = 0;
     std::vector<cudaGraphNode_t> nodes;
     bool disable_due_to_gpu_arch = false;
