@@ -9115,6 +9115,11 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
     GGML_ASSERT(k->type == v->type);
     const ggml_type kv_type = k->type;
 
+    // q8_0 tiles are dequantised through the same routine the reference path uses
+    // for V, so the tile build adds no numeric error of its own (NULL for f16/f32).
+    const ggml_to_float_t kv_to_float = ggml_get_type_traits(kv_type)->to_float;
+    GGML_ASSERT(kv_type != GGML_TYPE_Q8_0 || kv_to_float != nullptr);
+
 
     // broadcast factors
     const int64_t rk2 = neq2/nek2;
@@ -9246,6 +9251,14 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
                     for (int64_t dk = 0; dk < DK; dk++) {
                         K_f32[dk * KV_TILE_SZ + tk] = GGML_CPU_FP16_TO_FP32(k_f16[dk]);
                     }
+                } else if (kv_type == GGML_TYPE_Q8_0) {
+                    // K_f32 is transposed, so dequantise the row into the V32 scratch
+                    // (idle until the V build loop below) and scatter it per dk.
+                    GGML_ASSERT(DK <= KV_TILE_SZ*DV);
+                    kv_to_float(k_data, V32, DK);
+                    for (int64_t dk = 0; dk < DK; dk++) {
+                        K_f32[dk * KV_TILE_SZ + tk] = V32[dk];
+                    }
                 } else {
                     const float * k_f32_src = (const float *)k_data;
                     for (int64_t dk = 0; dk < DK; dk++) {
@@ -9308,6 +9321,8 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
                 const char * v_data = (const char *)v->data + (ic + tk)*nbv1 + iv2*nbv2 + iv3*nbv3;
                 if (kv_type == GGML_TYPE_F16) {
                     ggml_cpu_fp16_to_fp32((const ggml_fp16_t *)v_data, V32 + tk * DV, DV);
+                } else if (kv_type == GGML_TYPE_Q8_0) {
+                    kv_to_float(v_data, V32 + tk * DV, DV);
                 } else {
                     memcpy(V32 + tk * DV, v_data, DV * sizeof(float));
                 }
@@ -9478,6 +9493,9 @@ static void ggml_compute_forward_flash_attn_ext_f16(
     const bool use_ref = params->use_ref;
 
     const bool kv_is_f32_or_f16 = (k->type == GGML_TYPE_F32 || k->type == GGML_TYPE_F16);
+    // The tiled kernel reads the stock layout only, so a quantised cache can use it
+    // once its loaders dequantise a tile; the decode split-kv path (below) does not.
+    const bool kv_tiled_ok = kv_is_f32_or_f16 || (k->type == GGML_TYPE_Q8_0 && v->type == GGML_TYPE_Q8_0);
     const bool use_split_kv_path = !use_ref && (neq1 == 1 && neq3 == 1) && kv_is_f32_or_f16 && (k->type == v->type) && q->type == GGML_TYPE_F32 && nek1 >= 512;
 
     if (use_split_kv_path) {
@@ -9537,7 +9555,7 @@ static void ggml_compute_forward_flash_attn_ext_f16(
         static constexpr int64_t Q_TILE_SZ  = ggml_fa_tile_config::Q;
         bool use_tiled = !use_ref &&
                                (q->type == GGML_TYPE_F32 &&
-                                kv_is_f32_or_f16 &&
+                                kv_tiled_ok &&
                                 k->type == v->type &&
                                 neq1 >= Q_TILE_SZ);
 #if defined(GGML_SIMD) && !defined(__x86_64__) && !defined(_M_X64)
