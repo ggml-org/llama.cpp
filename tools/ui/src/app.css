@@ -291,9 +291,12 @@
 
 	/* The same fade under the installed app's status bar on a phone: solid behind the bar,
 	   fading out below it, so the page scrolls away under it instead of into it. Without a
-	   top inset, in the browser, it has no height. */
+	   top inset, in the browser, it has no height. It fades out as the page slides aside for
+	   the sidebar, step for step with it: the slid page is a rounded card, and a fade pinned
+	   to the screen's top would stick out past its corners. */
 	.status-bar-fade {
 		height: calc(var(--safe-area-top) * 1.75);
+		opacity: calc(1 - var(--sidebar-reveal-progress, 0));
 		background: linear-gradient(
 			to bottom,
 			var(--background) calc(100% / 1.75),
