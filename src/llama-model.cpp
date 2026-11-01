@@ -3382,6 +3382,8 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
 ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
     std::unique_ptr<llm_graph_context> llm = build_arch_graph(params);
 
+    llm->build_outputs_f32();
+
     // add on pooling layer
     llm->build_pooling(cls, cls_b, cls_out, cls_out_b, cls_norm);
 
