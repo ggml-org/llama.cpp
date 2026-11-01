@@ -118,6 +118,7 @@ int g_ggml_sycl_xmx_glu_max_cols = GGML_SYCL_XMX_GLU_MAX_COLS;
 int g_ggml_sycl_prioritize_dmmv = 0;
 int g_ggml_sycl_xmx_gather_types = GGML_SYCL_XMX_GATHER_TYPES_DEFAULT;
 int g_ggml_sycl_xmx_gather_shapes = GGML_SYCL_XMX_GATHER_SHAPES_DEFAULT;
+int g_ggml_sycl_mmid_sched = GGML_SYCL_MMID_SCHED_DEVICE;
 int g_ggml_sycl_dynamic_precision = GGML_SYCL_DYNAMIC_PRECISION_DEFAULT;
 int g_ggml_sycl_dynamic_required_precision = GGML_SYCL_DYNAMIC_PRECISION_F32;
 static const char * ggml_sycl_dynamic_precision_names[] = { "F16", "BF16", "TF32", "F32" };
@@ -450,6 +451,7 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_prioritize_dmmv = ggml_sycl_get_env("GGML_SYCL_PRIORITIZE_DMMV", 0);
         g_ggml_sycl_graph_eviction_timeout = ggml_sycl_get_env("GGML_SYCL_GRAPH_EVICTION_TIMEOUT", 10);
         g_ggml_sycl_xmx_gather_types = ggml_sycl_get_env("GGML_SYCL_XMX_GATHER_TYPES", GGML_SYCL_XMX_GATHER_TYPES_DEFAULT);
+        g_ggml_sycl_mmid_sched = ggml_sycl_get_env("GGML_SYCL_MMID_SCHED", GGML_SYCL_MMID_SCHED_DEVICE) & 3;
         g_ggml_sycl_xmx_gather_shapes = ggml_sycl_get_env("GGML_SYCL_XMX_GATHER_SHAPES", GGML_SYCL_XMX_GATHER_SHAPES_DEFAULT);
         g_ggml_sycl_dynamic_precision =
             ggml_sycl_get_env_precision("GGML_SYCL_DYNAMIC_PRECISION", GGML_SYCL_DYNAMIC_PRECISION_DEFAULT);
@@ -573,6 +575,7 @@ static void ggml_check_sycl() try {
 
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_OPT: %d\n", g_ggml_sycl_enable_optimize);
         GGML_LOG_INFO("  GGML_SYCL_XMX_GATHER_TYPES: %d\n", g_ggml_sycl_xmx_gather_types);
+        GGML_LOG_INFO("  GGML_SYCL_MMID_SCHED: %d\n", g_ggml_sycl_mmid_sched);
         GGML_LOG_INFO("  GGML_SYCL_XMX_GATHER_SHAPES: %d\n", g_ggml_sycl_xmx_gather_shapes);
         GGML_LOG_INFO("  GGML_SYCL_DYNAMIC_PRECISION: %s\n",
                       ggml_sycl_dynamic_precision_names[g_ggml_sycl_dynamic_precision]);
@@ -809,7 +812,9 @@ ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer_t buffer,
         return GGML_STATUS_SUCCESS;
     }
 
-    if (g_ggml_sycl_enable_optimize) {
+    // a compute buffer copy of a host weight (e.g. -ncmoe experts offloaded for prompt processing) is
+    // refilled in the normal layout before every run, so reordering it is wasted work
+    if (g_ggml_sycl_enable_optimize && ggml_backend_buffer_get_usage(buffer) != GGML_BACKEND_BUFFER_USAGE_COMPUTE) {
         // set reorder extra buffer based on supported type
         switch (tensor->type) {
             case GGML_TYPE_Q4_0:
@@ -4471,36 +4476,6 @@ static bool ggml_sycl_supports_dmmv(enum ggml_type type) {
     }
 }
 
-static bool ggml_sycl_supports_mmvq_id(enum ggml_type type) {
-    switch (type) {
-        case GGML_TYPE_Q4_0:
-        case GGML_TYPE_Q4_1:
-        case GGML_TYPE_Q5_0:
-        case GGML_TYPE_Q5_1:
-        case GGML_TYPE_Q8_0:
-        case GGML_TYPE_Q2_0:
-        case GGML_TYPE_Q2_K:
-        case GGML_TYPE_Q3_K:
-        case GGML_TYPE_Q4_K:
-        case GGML_TYPE_Q5_K:
-        case GGML_TYPE_Q6_K:
-        case GGML_TYPE_MXFP4:
-        case GGML_TYPE_NVFP4:
-        case GGML_TYPE_IQ2_XXS:
-        case GGML_TYPE_IQ2_XS:
-        case GGML_TYPE_IQ2_S:
-        case GGML_TYPE_IQ3_XXS:
-        case GGML_TYPE_IQ3_S:
-        case GGML_TYPE_IQ1_S:
-        case GGML_TYPE_IQ1_M:
-        case GGML_TYPE_IQ4_NL:
-        case GGML_TYPE_IQ4_XS:
-            return true;
-        default:
-            return false;
-    }
-}
-
 // Helper functions to unify device memory allocation for both async and sync paths
 static inline void * sycl_ext_malloc_device(dpct::queue_ptr stream, size_t size) {
     bool use_async = g_ggml_sycl_use_async_mem_op;
@@ -5638,26 +5613,30 @@ __dpct_inline__ static void k_zero_dst_rows(
     }
 }
 
-// returns true when ggml_sycl_mul_mat_id takes the fallback path that requires stream synchronization
-static bool ggml_sycl_mul_mat_id_needs_sync(const ggml_tensor * dst) {
-    const ggml_tensor * src0 = dst->src[0];
-    const ggml_tensor * src1 = dst->src[1];
-    const ggml_tensor * ids  = dst->src[2];
-
+static bool ggml_sycl_mul_mat_id_mmvq_shape_ok(
+    const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, const ggml_tensor * dst) {
     const int64_t ne10 = src1->ne[0];
     const int64_t ne11 = src1->ne[1];
     const int64_t ne12 = src1->ne[2];
 
-    if (ne12 != 1) return true;
-    if (src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) return true;
-    if (ne10 != src0->ne[0] || ne10 % QK8_1 != 0) return true;
-    if (!ggml_is_contiguous(src1)) return true;
+    if (ne12 != 1) return false;
+    if (src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) return false;
+    if (ne10 != src0->ne[0] || ne10 % QK8_1 != 0) return false;
+    if (!ggml_is_contiguous(src1)) return false;
 
     const int64_t n_ids_per_group = ids->ne[0];
-    if (ids->ne[1] != 1) return true;
-    if (ne11 != 1 && ne11 != n_ids_per_group) return true;
+    if (ids->type != GGML_TYPE_I32 || ids->nb[0] != sizeof(int32_t)) return false;
+    if (ids->ne[1] != 1) return false;
+    if (ne11 != 1 && ne11 != n_ids_per_group) return false;
 
-    return !ggml_sycl_supports_mmvq_id(src0->type);
+    return true;
+}
+
+// returns true when ggml_sycl_mul_mat_id takes the fused MMVQ path
+static bool ggml_sycl_mul_mat_id_mmvq_ok(const ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];
+    return ggml_sycl_mul_mat_id_mmvq_shape_ok(src0, dst->src[1], dst->src[2], dst) &&
+           ggml_sycl_mul_mat_vec_q_id_supports_type(src0->type);
 }
 
 // Fused MoE TG fast path. Returns false to fall back to the per-expert loop below.
@@ -5665,13 +5644,11 @@ static bool ggml_sycl_mul_mat_id_mmvq_fused(
     ggml_backend_sycl_context & ctx, const ggml_tensor * src0,
     const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst)
 {
-    if (ggml_sycl_mul_mat_id_needs_sync(dst)) return false;
+    if (!ggml_sycl_mul_mat_id_mmvq_ok(dst)) return false;
 
     const int64_t ne10 = src1->ne[0];
     const int64_t ne11 = src1->ne[1];
-
     const int64_t n_ids_per_group = ids->ne[0];
-
     const queue_ptr stream           = ctx.stream();
     const int       src1_padded_cols = GGML_PAD((int) ne10, MATRIX_ROW_PADDING);
     const int       n_experts_used   = (int) n_ids_per_group;
@@ -5769,6 +5746,16 @@ static void mmid_counting_sort_rows(
     routed_row_src.resize(expert_row_offsets[n_as]);
 }
 
+static bool ggml_sycl_mul_mat_id_grouped_shape_ok(const ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+    const ggml_tensor * ids = dst->src[2];
+    return (g_ggml_sycl_mmid_sched & GGML_SYCL_MMID_SCHED_DEVICE) && src1->ne[2] != 1 && ggml_is_contiguous(src0) &&
+           ids->type == GGML_TYPE_I32 && ids->nb[0] == sizeof(int32_t) &&
+           src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
+           src1->nb[1] == sizeof(float)*src1->ne[0] && dst->nb[1] == sizeof(float)*dst->ne[0];
+}
+
 static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
                                  ggml_tensor *dst) try {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/3);
@@ -5789,11 +5776,44 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
             return;
         }
     }
-    GGML_ASSERT(ggml_sycl_mul_mat_id_needs_sync(dst));
+    GGML_ASSERT(!ggml_sycl_mul_mat_id_mmvq_ok(dst));
 
     // The per-expert loop below reads the experts in whatever layout they have: reorder MXFP4 here as well, so prompt processing does not depend on a single-token decode having run first.
     if (src0->type == GGML_TYPE_MXFP4) {
         opt_for_reorder_id(&ctx, src0);
+    }
+
+    if (ggml_sycl_mul_mat_id_grouped_shape_ok(dst)) {
+        if (g_ggml_sycl_dynamic_precision != GGML_SYCL_DYNAMIC_PRECISION_F32 &&
+            ggml_sycl_xmx_gather_type_enabled(src0->type)) {
+            opt_for_reorder_id(&ctx, src0);
+        }
+        const bool reordered = src0->extra && ((const ggml_tensor_extra_gpu *) src0->extra)->optimized_feature.reorder;
+        const ggml_sycl_gg_rows src1_rows = { (char *) src1->data, nullptr, ne11, nb11, nb12 };
+        const ggml_sycl_gg_rows dst_rows = { (char *) dst->data, nullptr, ne1, nb1, nb2 };
+        if (ggml_sycl_grouped_dequant_gemm_device(src0->type, reordered, src0->data, nb02, src1_rows,
+                ggml_sycl_src1_prec(dst), dst_rows, (const int32_t *) ids->data, ids->nb[1], n_as, n_ids,
+                ids->ne[1], ne01, ne10, ctx.pool(), stream)) {
+            // the device schedule drops skipped slots (id == -1), so their dst rows are zeroed here
+            const char * ids_data = (const char *) ids->data;
+            const size_t ids_nb1  = ids->nb[1];
+            char *       dst_data = (char *) dst->data;
+            const int    nth      = (int) std::min<int64_t>(ne0, 256);
+            stream->parallel_for(
+                sycl::nd_range<2>(sycl::range<2>(ids->ne[1], n_ids * nth), sycl::range<2>(1, nth)),
+                [=](sycl::nd_item<2> item) {
+                    const int64_t iid1 = item.get_group(0);
+                    const int64_t id   = item.get_group(1);
+                    if (*(const int32_t *) (ids_data + iid1*ids_nb1 + id*sizeof(int32_t)) != -1) {
+                        return;
+                    }
+                    float * row = (float *) (dst_data + id*nb1 + iid1*nb2);
+                    for (int64_t j = item.get_local_id(1); j < ne0; j += nth) {
+                        row[j] = 0.0f;
+                    }
+                });
+            return;
+        }
     }
 
     std::vector<char> ids_host(ggml_nbytes(ids));
@@ -6901,12 +6921,61 @@ static bool mul_mat_uses_onednn(int device, ggml_tensor * dst) {
 #endif
 }
 
+// returns true when ggml_sycl_mul_mat_id takes the fallback path that requires stream synchronization:
+// neither the fused MMVQ path nor the device-scheduled grouped GEMM (GGML_SYCL_MMID_SCHED) handles dst
+static bool ggml_sycl_mul_mat_id_needs_sync(ggml_backend_sycl_context * ctx, const ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+    const ggml_tensor * ids = dst->src[2];
+    if (!src0 || !src1 || !ids || ggml_backend_buffer_is_sycl_split(src0->buffer)) {
+        return true;
+    }
+    const bool reordered = src0->extra && ((const ggml_tensor_extra_gpu *) src0->extra)->optimized_feature.reorder;
+    if (ggml_sycl_mul_mat_id_mmvq_shape_ok(src0, src1, ids, dst)) {
+        return reordered ? !ggml_sycl_mul_mat_vec_q_id_reorder_supports_type(src0->type) :
+                           !ggml_sycl_mul_mat_vec_q_id_supports_type(src0->type);
+    }
+    return !ggml_sycl_mul_mat_id_grouped_shape_ok(dst) ||
+           !ggml_sycl_grouped_dequant_gemm_device_supported(src0->type, reordered, ggml_sycl_src1_prec(dst),
+               src0->ne[2], ids->ne[0], ids->ne[1], src0->ne[1], src0->ne[0], ctx->stream());
+}
+
+// mirrors the paths in ggml_sycl_mul_mat_id() that call opt_for_reorder_id()
+static bool mul_mat_id_reorders_src0(const ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];
+    if (ggml_sycl_mul_mat_id_mmvq_ok(dst) || src0->type == GGML_TYPE_MXFP4) {
+        return true;
+    }
+    return ggml_sycl_mul_mat_id_grouped_shape_ok(dst) &&
+           g_ggml_sycl_dynamic_precision != GGML_SYCL_DYNAMIC_PRECISION_F32 &&
+           ggml_sycl_xmx_gather_type_enabled(src0->type);
+}
+
+static bool node_is_device_local(ggml_backend_buffer_type_t device_buft, const ggml_tensor * node) {
+    if (!node->buffer || node->buffer->buft != device_buft) {
+        return false;
+    }
+    for (int j = 0; j < GGML_MAX_SRC; ++j) {
+        const ggml_tensor * src = node->src[j];
+        if (!src || !src->buffer) {
+            continue;
+        }
+        if (ggml_backend_buffer_is_sycl_split(src->buffer) ||
+            (ggml_backend_buffer_is_sycl(src->buffer) && src->buffer->buft != device_buft)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool check_graph_compatibility(ggml_backend_sycl_context * ctx, ggml_cgraph * cgraph) {
     if (ggml_sycl_info().active_device_count > 1) {
         // A sycl_ex::command_graph object can only be created for a single device
         GGML_LOG_DEBUG("%s: disabling SYCL graphs due to multiple devices\n", __func__);
         return false;
     }
+
+    const ggml_backend_buffer_type_t device_buft = ggml_backend_sycl_buffer_type(ctx->device);
 
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_tensor * node = cgraph->nodes[i];
@@ -6918,6 +6987,18 @@ static bool check_graph_compatibility(ggml_backend_sycl_context * ctx, ggml_cgra
 
         const ggml_op node_op = node->op;
 
+        if (!node_is_device_local(device_buft, node)) {
+            GGML_LOG_DEBUG("%s: disabling SYCL graphs due to node %s not being device local\n", __func__,
+                           ggml_op_name(node_op));
+            return false;
+        }
+
+        // Reorder expert weights before recording, so the reorder state that
+        // ggml_sycl_mul_mat_id_needs_sync() sees is the one the recorded graph runs with.
+        if (node_op == GGML_OP_MUL_MAT_ID && mul_mat_id_reorders_src0(node)) {
+            opt_for_reorder_id(ctx, node->src[0]);
+        }
+
         switch (node_op) {
             default:
                 break;
@@ -6925,7 +7006,7 @@ static bool check_graph_compatibility(ggml_backend_sycl_context * ctx, ggml_cgra
                 // The ggml_sycl_mul_mat_id() fallback path does a blocking host wait on the sycl
                 // queue after submitting a memcpy operation, but wait() can't be called on a queue
                 // that is recording to a graph.
-                if (ggml_sycl_mul_mat_id_needs_sync(node)) {
+                if (ggml_sycl_mul_mat_id_needs_sync(ctx, node)) {
                     GGML_LOG_DEBUG("%s: disabling SYCL graphs due to host wait in %s\n", __func__,
                                    ggml_op_name(node_op));
                     return false;
@@ -6965,6 +7046,13 @@ static bool check_graph_compatibility(ggml_backend_sycl_context * ctx, ggml_cgra
                 }
 #endif
                 break;
+            case GGML_OP_OUT_PROD:
+            case GGML_OP_CONV_3D:
+            case GGML_OP_SOLVE_TRI:
+                // these call oneMKL and wait on the host
+                GGML_LOG_DEBUG("%s: disabling SYCL graphs due to unsupported node type %s\n", __func__,
+                               ggml_op_name(node_op));
+                return false;
         }
     }
     return true;
