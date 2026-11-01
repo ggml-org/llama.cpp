@@ -112,8 +112,7 @@ int main(int argc, char ** argv) {
         speaker_bitmap.reset(wrapper.bitmap);
     }
 
-    // a model with predefined voices speaks with one of them, the first unless --tts-voice names one;
-    // a model without predefined voices only names the voice in the prompt
+    // a model with predefined voices needs one, the first by default; other models name the voice in the prompt
     if (mtmd_gen_audio_get_info(mctx.get()).n_voices > 0 && (!params.tts_voice.empty() || !speaker_bitmap)) {
         if (speaker_bitmap) {
             LOG_ERR("--tts-voice and --tts-speaker-file cannot be used together\n");

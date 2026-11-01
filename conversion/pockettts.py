@@ -47,7 +47,7 @@ def _tensor_shapes(dir_model: Path) -> dict[str, tuple[int, ...]]:
 
 
 def _has_voice_encoder(dir_model: Path) -> bool:
-    # the checkpoints without voice cloning ship the mimi encoder zeroed out
+    # without voice cloning, the mimi encoder weights are all zero
     part_names = ModelBase.get_model_part_names(dir_model, "model", ".safetensors")
     with gguf.utility.SafetensorsLocal(dir_model / part_names[0]) as part:
         nonzero = {bool(part[name].mmap_bytes().any()) for name in part.keys() if name.startswith("mimi.encoder")}
@@ -64,7 +64,7 @@ def _load_safetensors(path: Path, prefixes: tuple[str, ...]) -> dict[str, Tensor
 
 
 def _rope_pairs(x: Tensor, n_head: int, rope_theta: float) -> Tensor:
-    # rotary embedding over adjacent pairs (ggml NORM mode), x: [n_pos, n_embd]
+    # ggml NORM mode rope, x: [n_pos, n_embd]
     n_pos, n_embd = x.shape
     head_dim = n_embd // n_head
     angle = torch.arange(n_pos, dtype=x.dtype)[:, None, None] * \
@@ -75,13 +75,8 @@ def _rope_pairs(x: Tensor, n_head: int, rope_theta: float) -> Tensor:
 
 
 def _voice_prompt_embd(weights: dict[str, Tensor], kv: list[Tensor], n_head: int, rope_theta: float) -> tuple[Tensor, float]:
-    # a voice prompt is bos_before_voice, then one frame speaker_proj @ latent per 80 ms of audio, the voice state
-    # only keeps the keys and values of every layer, kv[il] is [k/v, pos, n_embd]:
-    # - layer 0: v = Wv @ norm1(x) gives norm1(x), so each frame up to its scale (its mean is lost, no norm sees it)
-    # - layer 1: the values set the scale of each frame, found by a 1-D search
-    # returns the frames without the leading bos_before_voice, which is added in front of any voice prompt, and the
-    # distance of the state the backbone gives for them from the given one: the largest, over layers, median relative
-    # error of the keys and values
+    # the voice state only has K/V of each layer (kv[il] is [k/v, pos, n_embd]): layer 0 V gives each frame up to its scale, layer 1 V gives the scale
+    # returns the frames without bos_before_voice, and the max relative K/V error when the frames are prompted again
     w = {name: t.double() for name, t in weights.items()}
     kv = [t.double() for t in kv]
     k0, v0, v1 = kv[0][0], kv[0][1], kv[1][1]
@@ -111,16 +106,15 @@ def _voice_prompt_embd(weights: dict[str, Tensor], kv: list[Tensor], n_head: int
     h = torch.linalg.solve(wv, v0.T).T                   # norm1(x)
     z = (h - p(0, "norm1.bias")) / p(0, "norm1.weight")  # (x - mean(x)) / std(x)
 
-    # z[i] = (speaker_proj @ latent - mean) / std, the latent direction is the fit on [speaker_proj, 1]
+    # fit z on [speaker_proj, 1] to get the latent direction back
     proj = w["flow_lm.speaker_proj_weight"]
     fit = torch.linalg.lstsq(torch.cat([proj, torch.ones(n_embd, 1, dtype=proj.dtype)], 1), z[1:].T).solution
     frames = (proj @ fit[:-1]).T
 
-    # layer 0 attention output from the stored keys and values
     a0 = attn(0, h, k0, v0)[1:]
     wv1 = p(1, "self_attn.in_proj.weight").chunk(3)[2]
 
-    def err(scale: Tensor) -> Tensor:  # relative error on the layer 1 values, per frame
+    def err(scale: Tensor) -> Tensor:  # per frame relative error of layer 1 V
         x = scale[:, None] * frames + a0
         x = x + ffn(0, x)
         return (norm(x, 1, "norm1") @ wv1.T - v1[1:]).norm(dim=1) / v1[1:].norm(dim=1)
@@ -134,7 +128,7 @@ def _voice_prompt_embd(weights: dict[str, Tensor], kv: list[Tensor], n_head: int
         lo, hi = torch.where(left, lo, m1), torch.where(left, m2, hi)
     frames = (lo + hi)[:, None] / 2 * frames
 
-    # prompt the backbone again and compare its state with the given one, layer by layer
+    # prompt the frames again and compare K/V with the shipped state
     x = torch.cat([w["flow_lm.bos_before_voice"].reshape(1, n_embd), frames])
     drift = 0.0
     for il, (k_ref, v_ref) in enumerate(kv):
@@ -299,7 +293,6 @@ class PocketTTSMmprojModel(MmprojModel):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # without voice cloning the voice-prompt encoder is left out, a reference wav is then rejected
         self.has_audio_encoder = _has_voice_encoder(self.dir_model)
 
     def set_gguf_parameters(self):
@@ -338,15 +331,13 @@ class PocketTTSMmprojModel(MmprojModel):
         # conv1d/conv1d_dw kernels must be F16, ggml_conv_1d(_dw) has no BF16 path
         if ".seanet." in new_name or new_name in ("a.downsample.conv.weight", "a.gen.wav.upsample.weight"):
             return gguf.GGMLQuantizationType.F16
-        # voices are read on the host as prompt embeddings
+        # voices are read on the host
         if new_name.startswith("voice."):
             return gguf.GGMLQuantizationType.F32
         return False
 
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
-        # predefined voices shipped next to the weights, embeddings/<name>.safetensors: the backbone keys and
-        # values after the voice prompt, see get_state_for_audio_prompt() in the reference
-        # they are turned back into the prompt embeddings, which go in where an encoded speaker reference would
+        # embeddings/<name>.safetensors hold the K/V state after the voice prompt (see get_state_for_audio_prompt() in the reference), turn it back into prompt embeddings
         paths = sorted((self.dir_model / "embeddings").glob("*.safetensors"))
         if not paths:
             return
@@ -361,7 +352,7 @@ class PocketTTSMmprojModel(MmprojModel):
                 if any(prefix + k not in state for k in ("cache", "offset")):
                     break
                 n_pos = int(state[prefix + "offset"].item())
-                # older packs have no pad entry, their states are not padded
+                # older packs have no pad entry
                 if prefix + "pad" in state and int(state[prefix + "pad"].item()) != 0:
                     break
                 kv.append(state[prefix + "cache"][:, 0, :n_pos].flatten(2))  # [k/v, pos, n_embd]
@@ -371,8 +362,7 @@ class PocketTTSMmprojModel(MmprojModel):
                 continue
             embd, drift = _voice_prompt_embd(weights, kv, self.global_config["num_attention_heads"],
                                              self.global_config["rope_theta"])
-            # the shipped state is not always the one these weights give for the prompt; the reference loads it as
-            # is and it still sounds like the same voice, so a voice is kept up to 50% of error, warned above 5%
+            # some packs ship a state made with other weights, the reference still uses it: keep up to 50% error, warn above 5%
             if drift > 0.5:
                 logger.warning(f"voice {path.stem}: skipped, its state does not belong to these weights (error {drift:.1e})")
                 continue

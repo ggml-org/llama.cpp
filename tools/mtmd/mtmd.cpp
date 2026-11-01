@@ -204,9 +204,7 @@ struct mtmd_bitmap {
         auto * bitmap = new mtmd_bitmap(nullptr, n_embd, n_rows);
         bitmap->is_voice = true;
         bitmap->id = name;
-        if (rows) {
-            bitmap->data.assign((const unsigned char *) rows, (const unsigned char *) (rows + (size_t) n_embd * n_rows));
-        }
+        bitmap->data.assign((const unsigned char *) rows, (const unsigned char *) (rows + (size_t) n_embd * n_rows));
         return bitmap;
     }
 
@@ -674,7 +672,7 @@ struct mtmd_context {
         ctx_v = res.ctx_v;
         ctx_a = res.ctx_a;
         ctx_gen_a = res.ctx_gen_a;
-        // an audio generation mmproj may have no encoder: soprano has none, pocket-tts without voice cloning drops it
+        // soprano and pocket-tts without voice cloning have no encoder
         if (!ctx_v && !ctx_a && !ctx_gen_a) {
             throw std::runtime_error(string_format("Failed to load CLIP model from %s\n", mmproj_fname));
         }
@@ -1886,7 +1884,6 @@ struct mtmd_tokenizer {
         return 0;
     }
 
-    // a piece of a soundtrack goes in without the audio markers, it lies inside the span of its video
     int32_t add_voice(const mtmd_bitmap & bitmap) {
         if (bitmap.ny == 0) {
             LOG_ERR("%s: error: voice \"%s\" holds no embeddings\n", __func__, bitmap.id.c_str());
@@ -1911,6 +1908,7 @@ struct mtmd_tokenizer {
         return 0;
     }
 
+    // a piece of a soundtrack goes in without the audio markers, it lies inside the span of its video
     int32_t add_soundtrack_piece(soundtrack & st, const mtmd_bitmap & bitmap) {
         if (!st.track) {
             std::vector<float> samples;
@@ -2273,9 +2271,6 @@ float * mtmd_get_output_embd(mtmd_context * ctx) {
 // audio generation
 //
 
-// must match the "tts" chat template, see conversion/lfm3.py
-static const char * lfm3a_voices[] = { "female", "male" };
-
 mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
     mtmd_gen_audio_info info{};
     info.model_variant = "";
@@ -2284,7 +2279,7 @@ mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
         return info;
     }
     info.model_variant = clip_get_hparams(ctx->ctx_gen_a)->gen_model_variant.c_str();
-    info.n_voices      = clip_gen_n_voices(ctx->ctx_gen_a);
+    info.n_voices      = (int32_t) clip_gen_get_voices(ctx->ctx_gen_a).size();
     switch (clip_get_projector_type(ctx->ctx_gen_a)) {
         case PROJECTOR_TYPE_QWEN3TTS_GEN:
             info.type = MTMD_GEN_AUDIO_TYPE_QWEN3TTS;
@@ -2301,7 +2296,6 @@ mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
         case PROJECTOR_TYPE_LFM3A_GEN:
             info.type = MTMD_GEN_AUDIO_TYPE_LFM3A;
             info.sample_rate = 24000;
-            info.n_voices = (int32_t) std::size(lfm3a_voices);
             break;
         default:
             info.type = MTMD_GEN_AUDIO_TYPE_NONE;
@@ -2314,31 +2308,21 @@ const char * mtmd_gen_audio_voice_name(const mtmd_context * ctx, int32_t idx) {
     if (!ctx->ctx_gen_a || idx < 0) {
         return nullptr;
     }
-    if (clip_get_projector_type(ctx->ctx_gen_a) == PROJECTOR_TYPE_LFM3A_GEN) {
-        return idx < (int32_t) std::size(lfm3a_voices) ? lfm3a_voices[idx] : nullptr;
-    }
-    return clip_gen_voice_name(ctx->ctx_gen_a, idx);
+    const auto & voices = clip_gen_get_voices(ctx->ctx_gen_a);
+    return idx < (int32_t) voices.size() ? std::next(voices.begin(), idx)->first.c_str() : nullptr;
 }
 
 mtmd_bitmap * mtmd_gen_audio_get_voice(const mtmd_context * ctx, const char * name) {
     if (!ctx->ctx_gen_a || !name) {
         return nullptr;
     }
-    if (clip_get_projector_type(ctx->ctx_gen_a) == PROJECTOR_TYPE_LFM3A_GEN) {
-        for (const char * voice : lfm3a_voices) {
-            if (strcmp(voice, name) == 0) {
-                return mtmd_bitmap::init_voice(name, nullptr, 0, 0);
-            }
-        }
+    const auto & voices = clip_gen_get_voices(ctx->ctx_gen_a);
+    const auto it = voices.find(name);
+    if (it == voices.end()) {
         return nullptr;
     }
-    const float * embd   = nullptr;
-    int32_t       n_embd = 0;
-    const int32_t n_rows = clip_gen_get_voice(ctx->ctx_gen_a, name, &embd, &n_embd);
-    if (n_rows == 0) {
-        return nullptr;
-    }
-    return mtmd_bitmap::init_voice(name, embd, (uint32_t) n_embd, (uint32_t) n_rows);
+    const uint32_t n_embd = clip_n_mmproj_embd(ctx->ctx_gen_a);
+    return mtmd_bitmap::init_voice(name, it->second.data(), n_embd, it->second.size() / n_embd);
 }
 
 mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {

@@ -3502,7 +3502,6 @@ struct clip_model_loader {
                         layer.ls_2_w    = get_tensor(string_format(TN_LS_2,        p, il, "weight"));
                     }
 
-                    // predefined voices are only read on the host, as the prompt prefix
                     for (int64_t i = 0; i < gguf_get_n_tensors(ctx_gguf.get()); ++i) {
                         const char * name = gguf_get_tensor_name(ctx_gguf.get(), i);
                         if (strncmp(name, "voice.", 6) != 0) {
@@ -3525,6 +3524,10 @@ struct clip_model_loader {
                 } break;
             case PROJECTOR_TYPE_LFM3A_GEN:
                 {
+                    // must match the "tts" chat template, see conversion/lfm3.py
+                    // note for contributor: this is one-off fix, do not repeat this for future models
+                    model.gen_voices = { {"female", {}}, {"male", {}} };
+
                     // depthformer, the generic loop above loaded the a.gen.code.blk.* tensors
                     for (int il = 0; il < hparams.n_layer; ++il) {
                         model.layers[il].attn_gate_w = get_tensor(string_format(TN_ATTN_GATE, prefix, il, "weight"));
@@ -5162,25 +5165,8 @@ void clip_gen_state_reset(clip_gen_state * state) {
     }
 }
 
-int32_t clip_gen_n_voices(const clip_ctx * ctx) {
-    return (int32_t) ctx->model.gen_voices.size();
-}
-
-const char * clip_gen_voice_name(const clip_ctx * ctx, int32_t idx) {
-    if (idx < 0 || idx >= (int32_t) ctx->model.gen_voices.size()) {
-        return nullptr;
-    }
-    return std::next(ctx->model.gen_voices.begin(), idx)->first.c_str();
-}
-
-int32_t clip_gen_get_voice(const clip_ctx * ctx, const char * name, const float ** embd, int32_t * n_embd) {
-    const auto it = ctx->model.gen_voices.find(name);
-    if (it == ctx->model.gen_voices.end()) {
-        return 0;
-    }
-    *embd   = it->second.data();
-    *n_embd = (int32_t) ctx->model.gen_input_lin_w->ne[1];
-    return (int32_t) (it->second.size() / *n_embd);
+const std::map<std::string, std::vector<float>> & clip_gen_get_voices(const clip_ctx * ctx) {
+    return ctx->model.gen_voices;
 }
 
 clip_enc_state * clip_enc_state_init(clip_ctx * ctx, int32_t n_frames_max) {
