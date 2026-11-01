@@ -22,6 +22,17 @@ There are 2 modes of operation:
 ./llama-batched-bench -m ./models/llama-7b/ggml-model-q8_0.gguf -c 2048 -b 512 -ub 512 -ngl 999 -npp 128,256,512 -ntg 128,256 -npl 1,2,4,8,16,32
 ```
 
+## Unified KV cache warming
+
+With unified KV (`-kvu`), the benchmark warms the cache before each measurement by loading one unrelated idle sequence into the cells left after reserving space for timed PP and TG. The idle sequence stays in the cache during the timed run. Warming requires a free sequence ID; if none is available, the benchmark skips it for that case. The benchmark clears the cache before each case, loads the idle tokens, synchronizes, and starts the PP timer. Idle tokens are excluded from PP and TG throughput. Use `--no-kvu-cache-warm` to measure with an empty cache. Split KV (`-no-kvu`) already implies an empty cache.
+
+```bash
+# One active sequence; the idle sequence fills the rest of the KV cache
+./llama-batched-bench -m model.gguf -c 131072 -b 2048 -ub 512 -npp 30720 -npl 1 -ntg 512 -kvu -fa on -ngl 99
+```
+
+The timed work in this example needs `30720 + 512 = 31232` KV cells, so the idle sequence fills the other `99840` cells. Every JSONL result includes `idle_tokens`; it is `0` when warming is off or skipped. The idle and active sequences use distinct IDs. Their KV cells are loaded in contiguous ranges.
+
 ## Sample results
 
 - `PP` - prompt tokens per batch

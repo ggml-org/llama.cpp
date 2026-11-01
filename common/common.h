@@ -715,6 +715,7 @@ struct common_params {
     // batched-bench params
     bool is_pp_shared   = false;
     bool is_tg_separate = false;
+    bool batched_bench_kvu_cache_warm = true;
 
     std::vector<int32_t> n_pp;
     std::vector<int32_t> n_tg;
