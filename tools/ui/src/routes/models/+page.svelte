@@ -24,7 +24,7 @@
 </svelte:head>
 
 <div
-	class="mx-auto flex h-[100dvh] w-full max-w-7xl flex-col gap-6 px-4 pt-safe-12 md:px-8 md:pt-6"
+	class="mx-auto flex h-[100dvh] w-full max-w-7xl flex-col gap-6 px-4 pt-(--page-top) md:px-8 md:pt-6"
 >
 	<div class="flex items-start gap-4">
 		<div class="flex min-w-0 flex-col gap-1">

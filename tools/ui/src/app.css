@@ -72,6 +72,8 @@
 	--safe-area-bottom: env(safe-area-inset-bottom, 0px);
 	/* where the phone's corner controls (menu toggle, context gauge, sidebar logo) sit */
 	--corner-control-top: calc(1rem + var(--safe-area-top));
+	/* where a phone page's title starts: a row below the corner controls */
+	--page-top: calc(var(--corner-control-top) + 3.75rem);
 	/* expanded desktop sidebar width, overridden once the user drags its edge */
 	--sidebar-width: 18rem;
 	/* phone sidebar width, which the page slides aside to reveal */
