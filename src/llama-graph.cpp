@@ -1571,7 +1571,7 @@ ggml_tensor * llm_graph_context::build_lora_mm(
     ggml_tensor * res = ggml_mul_mat(ctx0, w, cur_mm);
 
     if (prec_policy) {
-        prec_policy->apply(res);
+        prec_policy->apply(res, w);
     }
 
     if (w->type == GGML_TYPE_NVFP4) {
@@ -1654,7 +1654,7 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
         ggml_mul_mat_id(ctx0, moe_cache->get_experts(w), cur_mm, slots);
 
     if (prec_policy) {
-        prec_policy->apply(res);
+        prec_policy->apply(res, w);
     }
 
     if (w->type == GGML_TYPE_NVFP4) {
