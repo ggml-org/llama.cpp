@@ -342,6 +342,8 @@ struct llama_file::impl {
             skip   -= chunk_skip;
             done   += n;
         }
+
+        seek(offset + len, SEEK_SET);
     }
 
     void read_raw(void * ptr, size_t len) {
@@ -583,6 +585,8 @@ struct llama_file::impl {
             skip    = 0;
             done   += n;
         }
+
+        seek(offset + len, SEEK_SET);
     }
 
     void read_raw(void * ptr, size_t len) {

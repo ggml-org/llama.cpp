@@ -23,7 +23,11 @@ static constexpr size_t test_file_size = LLAMA_FILE_IO_CHUNK_SIZE + 3*1024*1024 
 static constexpr size_t test_io_size   = 1024*1024;
 
 static uint8_t test_byte(size_t offset) {
-    return static_cast<uint8_t>((offset * 131u) ^ (offset >> 11));
+    // Mix high offset bits into each byte to detect repeated chunks.
+    uint64_t value = offset;
+    value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    value = (value ^ (value >> 27)) * 0x94d049bb133111ebULL;
+    return static_cast<uint8_t>(value ^ (value >> 31));
 }
 
 static bool matches(const void * data, size_t offset, size_t size) {
@@ -34,6 +38,15 @@ static bool matches(const void * data, size_t offset, size_t size) {
         }
     }
     return true;
+}
+
+static void check_test_pattern(testing & t) {
+    uint8_t buffer[256];
+    for (size_t i = 0; i < sizeof(buffer); ++i) {
+        buffer[i] = test_byte(i);
+    }
+    t.assert_true("reject data repeated after 512 KiB", !matches(buffer, 512 * 1024, sizeof(buffer)));
+    t.assert_true("reject data repeated after a direct I/O chunk", !matches(buffer, LLAMA_DIRECT_IO_BUFFER_SIZE, sizeof(buffer)));
 }
 
 struct temporary_file {
@@ -97,6 +110,11 @@ static void write_test_file(const std::filesystem::path & path) {
 
 static void check_file(testing & t, const std::filesystem::path & path, bool use_direct_io) {
     llama_file file(path.string().c_str(), "rb", use_direct_io);
+    if (use_direct_io && !file.has_direct_io()) {
+        t.skip("direct I/O is unavailable for the test file");
+        return;
+    }
+    t.assert_equal("requested I/O mode", use_direct_io, file.has_direct_io());
     t.assert_equal(test_file_size, file.size());
     t.assert_true("read alignment is nonzero", file.read_alignment() != 0);
 
@@ -114,20 +132,20 @@ static void check_file(testing & t, const std::filesystem::path & path, bool use
     for (const auto & range : ranges) {
         std::vector<uint8_t> buffer(range.second);
         file.seek(range.first, SEEK_SET);
-        const bool direct_io = file.has_direct_io();
         file.read_raw(buffer.data(), buffer.size());
+        t.assert_equal("I/O mode after read", use_direct_io, file.has_direct_io());
         t.assert_true("read expected bytes", matches(buffer.data(), range.first, buffer.size()));
-        if (!direct_io) {
-            t.assert_equal(range.first + range.second, file.tell());
-        }
+        t.assert_equal(range.first + range.second, file.tell());
     }
 
-    std::vector<uint8_t> buffer(test_io_size);
+    std::vector<uint8_t> buffer(test_io_size - 1);
+    file.seek(0, SEEK_SET);
     for (size_t offset = 0; offset < test_file_size; offset += buffer.size()) {
         const size_t size = std::min(buffer.size(), test_file_size - offset);
-        file.seek(offset, SEEK_SET);
         file.read_raw(buffer.data(), size);
-        t.assert_true("scan expected bytes", matches(buffer.data(), offset, size));
+        t.assert_equal("I/O mode after sequential read", use_direct_io, file.has_direct_io());
+        t.assert_true("sequential read expected bytes", matches(buffer.data(), offset, size));
+        t.assert_equal(offset + size, file.tell());
     }
 
     const size_t unsafe_size = ((LLAMA_FILE_IO_CHUNK_SIZE + 3 * alignment - 1) / alignment) * alignment;
@@ -137,15 +155,46 @@ static void check_file(testing & t, const std::filesystem::path & path, bool use
         const size_t offset = 7 * alignment;
         file.seek(offset, SEEK_SET);
         file.read_raw_unsafe(buffer_aligned.data, unsafe_size);
+        t.assert_equal("I/O mode after unsafe read", use_direct_io, file.has_direct_io());
         t.assert_true("unsafe read expected bytes", matches(buffer_aligned.data, offset, unsafe_size));
         t.assert_equal(offset + unsafe_size, file.tell());
 
         const size_t final_offset = (test_file_size - 1) & ~(alignment - 1);
         file.seek(final_offset, SEEK_SET);
         file.read_raw_unsafe(buffer_aligned.data, alignment);
+        t.assert_equal("I/O mode after unsafe EOF read", use_direct_io, file.has_direct_io());
         t.assert_true("unsafe EOF read expected bytes", matches(buffer_aligned.data, final_offset, test_file_size - final_offset));
         t.assert_equal(test_file_size, file.tell());
     }
+}
+
+static void check_direct_io_fallback(testing & t, const std::filesystem::path & path) {
+    llama_file file(path.string().c_str(), "rb", true);
+    if (!file.has_direct_io()) {
+        t.skip("direct I/O is unavailable for the test file");
+        return;
+    }
+    t.assert_true("direct I/O is enabled before fallback", file.has_direct_io());
+
+    const size_t alignment = file.read_alignment();
+    aligned_buffer buffer(alignment, alignment + 1);
+    if (!t.assert_true("allocate aligned buffer", buffer.data != nullptr)) {
+        return;
+    }
+    auto * unaligned = static_cast<uint8_t *>(buffer.data) + 1;
+    const size_t offset = 7 * alignment;
+    file.seek(offset, SEEK_SET);
+    file.read_raw_unsafe(unaligned, alignment);
+
+    t.assert_true("unaligned read disables direct I/O", !file.has_direct_io());
+    t.assert_equal(size_t(1), file.read_alignment());
+    t.assert_true("fallback read expected bytes", matches(unaligned, offset, alignment));
+    t.assert_equal(offset + alignment, file.tell());
+
+    file.read_raw(unaligned, alignment);
+    t.assert_true("subsequent read stays buffered", !file.has_direct_io());
+    t.assert_true("subsequent read expected bytes", matches(unaligned, offset + alignment, alignment));
+    t.assert_equal(offset + 2 * alignment, file.tell());
 }
 
 static void check_mmap(testing & t, const std::filesystem::path & path) {
@@ -168,10 +217,12 @@ static void check_mmap(testing & t, const std::filesystem::path & path) {
 int main() {
     testing t;
     temporary_file test_file;
+    t.test("test_pattern", [&] (testing & t) { check_test_pattern(t); });
     t.test("write_test_file", [&] (testing &) { write_test_file(test_file.path); });
 
     t.test("llama_file.buffered", [&] (testing & t) { check_file(t, test_file.path, false); });
     t.test("llama_file.direct", [&] (testing & t) { check_file(t, test_file.path, true); });
+    t.test("llama_file.direct_fallback", [&] (testing & t) { check_direct_io_fallback(t, test_file.path); });
     t.test("llama_mmap", [&] (testing & t) { check_mmap(t, test_file.path); });
     return t.summary();
 }
