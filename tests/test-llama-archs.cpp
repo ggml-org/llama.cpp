@@ -646,7 +646,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ms.add_kv(LLM_KV_EXPERT_LATENT_LENGTH,       n_ff);
         ms.add_kv(LLM_KV_INTERLEAVE_MOE_LAYER_STEP,  uint32_t(2));
         // with more experts than a ubatch uses, the copy of the used experts in host memory skips some of them
-        ms.add_kv(LLM_KV_EXPERT_COUNT,               uint32_t(host_experts_test(arch) ? 64 : 2));
+        ms.add_kv(LLM_KV_EXPERT_COUNT,               uint32_t(host_experts_test(arch) ? 64 : arch == LLM_ARCH_CLOVER_MOE ? 4 : 2));
         ms.add_kv(LLM_KV_EXPERT_USED_COUNT,          uint32_t(2));
         ms.add_kv(LLM_KV_EXPERT_SHARED_COUNT,        uint32_t(1));
 
@@ -696,7 +696,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     ms.add_kv(LLM_KV_XIELU_ALPHA_P,             1.0f);
     ms.add_kv(LLM_KV_XIELU_BETA,                1.0f);
     ms.add_kv(LLM_KV_XIELU_EPS,                 1.0e-7f);
-    ms.add_kv(LLM_KV_SSM_INNER_SIZE,            arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN4EXP ? 256 : 2*n_embd);
+    ms.add_kv(LLM_KV_SSM_INNER_SIZE,            arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_CLOVER_MOE ? 256 : 2*n_embd);
     ms.add_kv(LLM_KV_SSM_CONV_KERNEL,           uint32_t(4));
     ms.add_kv(LLM_KV_SSM_STATE_SIZE,            uint32_t(128));
     ms.add_kv(LLM_KV_SSM_TIME_STEP_RANK,        n_head);
@@ -923,6 +923,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_QWEN3NEXT:
         case LLM_ARCH_QWEN3VLMOE:
         case LLM_ARCH_QWEN35MOE:
+        case LLM_ARCH_CLOVER_MOE:
         case LLM_ARCH_QWEN4EXP:
         case LLM_ARCH_PHIMOE:
         case LLM_ARCH_DBRX:
@@ -1235,6 +1236,24 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
         }
         if (arch == LLM_ARCH_EAGLE3 || arch == LLM_ARCH_DFLASH || arch == LLM_ARCH_GEMMA4_ASSISTANT) {
             continue;
+        }
+
+        if (arch == LLM_ARCH_CLOVER_MOE) {
+            gguf_context_ptr invalid_ctx = get_gguf_ctx(arch, true);
+            kv_writer(arch, invalid_ctx.get()).add_kv(LLM_KV_ATTENTION_VALUE_LENGTH, uint32_t(64));
+            llama_model_ptr invalid_model;
+            ud.verbosity = LOG_LEVEL_OUTPUT;
+            try {
+                invalid_model = get_model(invalid_ctx.get(), nullptr, seed, stdev, {});
+            } catch (const std::runtime_error &) {
+            }
+            ud.verbosity = verbosity;
+            n_tests++;
+            if (invalid_model) {
+                LOG_ERR("Clover accepted unequal key and value head sizes\n");
+                n_failed++;
+                all_ok = false;
+            }
         }
 
         const bool encode = arch == LLM_ARCH_T5 || arch == LLM_ARCH_DREAM || arch == LLM_ARCH_LLADA || arch == LLM_ARCH_LLADA_MOE || arch == LLM_ARCH_RND1;
