@@ -2373,8 +2373,8 @@ struct clip_model_loader {
                         // NOTE: feature_layers loaded in common path as optional
                         get_arr_int(KEY_PROJ_SPATIAL_OFFSETS, hparams.proj_spatial_offsets);
                         if (hparams.feature_layers.size() != hparams.proj_spatial_offsets.size()) {
-                            throw std::runtime_error(string_format("%s: feature_layers.size() %d != proj_spatial_offsets.size() %d",
-                                                                   hparams.feature_layers.size(), hparams.proj_spatial_offsets.size()));
+                            throw std::runtime_error(string_format("%s: feature_layers.size() %zu != proj_spatial_offsets.size() %zu",
+                                                                   __func__, hparams.feature_layers.size(), hparams.proj_spatial_offsets.size()));
                         }
 
                         get_u32(KEY_PROJ_SAMPLE_QUERY_SIDE,  hparams.downsample_query_side);
@@ -4136,7 +4136,7 @@ struct clip_model_loader {
                     // Load separate layerwise and spatial projector tensors
                     const auto projector_count = hparams.feature_layers.size();
                     model.qf_proj_blocks.resize(projector_count);
-                    for (size_t bid = 0; bid < projector_count; ++bid) {
+                    for (int bid = 0; bid < (int) projector_count; ++bid) {
                         auto & b = model.qf_proj_blocks[bid];
 
                         // non-layerwise tensors
