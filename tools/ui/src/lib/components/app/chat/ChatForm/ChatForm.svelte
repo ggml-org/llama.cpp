@@ -292,7 +292,7 @@
 	let sheetBottomAtOpen = 0;
 	let wasExpanded = false;
 
-	type SheetRects = { actions: DOMRect; card: DOMRect; cwd: DOMRect | null };
+	type SheetRects = { actions: DOMRect; card: DOMRect; cwd: DOMRect | null; padTop: number };
 	type SheetFrame = { actions: Keyframe; card: Keyframe; cwd: Keyframe };
 
 	function animatesSheet(): boolean {
@@ -311,7 +311,8 @@
 			? {
 					actions: actionsEl.getBoundingClientRect(),
 					card: cardEl.getBoundingClientRect(),
-					cwd: cwdEl?.getBoundingClientRect() ?? null
+					cwd: cwdEl?.getBoundingClientRect() ?? null,
+					padTop: parseFloat(getComputedStyle(cardEl).paddingTop) || 0
 				}
 			: null;
 	}
@@ -324,9 +325,11 @@
 	};
 
 	/**
-	 * The laid-out sheet drawn as the collapsed card at `to`: moved up or down, its sides
-	 * and bottom clipped to that card's edges (its content already sits where the card's
-	 * does, see the sheet's insets), its actions and chip held at their collapsed places.
+	 * The laid-out sheet drawn as the collapsed card at `to`: moved up or down, its edges
+	 * clipped to that card's (its content already sits where the card's does, see the
+	 * sheet's insets), its actions and chip held at their collapsed places. Any top padding
+	 * the sheet has on top of the card's (the status bar's, see pt-safe) is clipped off and
+	 * the sheet raised by it, so its content lands on the card's, not that far below.
 	 *
 	 * Everything moves by relative offsets, not transforms, so it all runs on the main
 	 * thread, on the clip's clock: WebKit hands transforms to its compositor even within
@@ -336,11 +339,12 @@
 	 */
 	function frameAt(to: SheetRects): SheetFrame {
 		const from = measure()!;
-		const dy = to.card.top - from.card.top;
+		const rise = Math.max(0, from.padTop - to.padTop);
+		const dy = to.card.top - from.card.top - rise;
 		const clip = [
-			0,
+			rise,
 			from.card.right - to.card.right,
-			from.card.height - to.card.height,
+			from.card.height - rise - to.card.height,
 			to.card.left - from.card.left
 		].map((px) => `${Math.max(0, px)}px`);
 
@@ -538,7 +542,8 @@
 		const target: SheetRects = {
 			actions: moved(collapsedRects.actions)!,
 			card: moved(collapsedRects.card)!,
-			cwd: moved(collapsedRects.cwd)
+			cwd: moved(collapsedRects.cwd),
+			padTop: collapsedRects.padTop
 		};
 
 		isSheetMoving = true;
@@ -986,6 +991,9 @@
 			(isExpanded || isBlurHeld) && 'max-md:backdrop-blur-none',
 			isExpanded && [
 				'max-md:min-h-dvh max-md:rounded-none max-md:pb-[var(--chat-form-bottom-position,0px)]',
+				// it reaches the screen's top: its text and collapse button start below the status
+				// bar, which an installed app draws over the page
+				'max-md:pt-safe',
 				// the sheet fills the screen: no rim and no inner ring around it, so focusing the
 				// editor draws no outline along the screen's edges
 				'max-md:[--glass-edge-side:transparent] max-md:[--glass-edge-mid:transparent] max-md:[--glass-edge-side-focus:transparent] max-md:[--glass-edge-mid-focus:transparent] max-md:[--glass-highlight:transparent]',
@@ -1007,6 +1015,8 @@
 						// on the phone sheet, where the collapsed card's button is (see the
 						// sheet's content inset below)
 						isExpanded && 'max-md:right-[calc(0.625rem+var(--chat-form-side-inset,0.5rem))]',
+						// and below the status bar, which the sheet's padding does not move it past
+						isExpanded && 'max-md:top-safe-2.5',
 						!isExpanded &&
 							'opacity-0 group-hover/chat-form:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100'
 					]}
