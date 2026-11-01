@@ -306,6 +306,30 @@
 		);
 	}
 
+	/* iOS Safari colours the screen's top, above the page, from a solid fixed element at the
+	   page's top edge (theme-color no longer), and shows the page through it otherwise. The
+	   fade above is a gradient, which it does not take, so this strip under it carries the
+	   page's colour there, as the installed app has */
+	.status-bar-edge {
+		height: 0.75rem;
+		opacity: calc(1 - var(--sidebar-reveal-progress, 0));
+		background-color: var(--background);
+	}
+
+	/* The same fade at the bottom of a phone's screen: solid behind the home indicator and
+	   fading out above it, so the page ends softly at the screen's edge and under the chat
+	   form instead of running out under it. It fades out with the slide as the top one does */
+	.screen-bottom-fade {
+		height: calc(var(--safe-area-bottom) + 3rem);
+		opacity: calc(1 - var(--sidebar-reveal-progress, 0));
+		background: linear-gradient(
+			to top,
+			var(--background) var(--safe-area-bottom),
+			color-mix(in srgb, var(--background) 60%, transparent) calc(var(--safe-area-bottom) + 1.5rem),
+			transparent 100%
+		);
+	}
+
 	/* The sidebar's "Show more" row, stuck to its bottom: an opaque copy of the
 	   panel's translucent muted tint, and a fade above it, like the one under
 	   the tab bar, so the rows scrolling beneath end softly */

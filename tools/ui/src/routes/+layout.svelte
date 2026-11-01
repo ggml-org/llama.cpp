@@ -355,6 +355,19 @@
 					aria-hidden="true"
 					class="status-bar-fade sidebar-reveal-pin-top pointer-events-none fixed inset-x-0 top-0 z-20"
 				></div>
+
+				{#if deviceStore.isIOSSafari}
+					<div
+						aria-hidden="true"
+						class="status-bar-edge sidebar-reveal-pin-top pointer-events-none fixed inset-x-0 top-0 z-20"
+					></div>
+				{/if}
+
+				<!-- over the content, under the chat form (see its wrapper in ChatScreen) -->
+				<div
+					aria-hidden="true"
+					class="screen-bottom-fade sidebar-reveal-pin-bottom pointer-events-none fixed inset-x-0 bottom-0 z-[5]"
+				></div>
 			{/if}
 
 			<!-- the phone sidebar sits under the page, so its toggle rides on the page -->

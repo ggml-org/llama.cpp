@@ -279,7 +279,7 @@
 				// a fade, see moveForm. Its height in the page is the same in both
 				// (the padding stays, the desktop greeting floats above the form),
 				// so the messages never shift while it moves
-				'pointer-events-none md:sticky fixed mt-auto',
+				'pointer-events-none md:sticky fixed mt-auto max-md:z-10',
 				// a phone holds it in place on screen while the page is slid aside
 				deviceStore.isMobile && 'sidebar-reveal-pin-bottom',
 				deviceStore.isStandalone
