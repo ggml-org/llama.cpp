@@ -349,6 +349,14 @@
 			onpointermove={sidebarReveal.handlePointerMove}
 			onpointerup={sidebarReveal.handlePointerUp}
 		>
+			<!-- the installed app's status bar sits over the page: what scrolls under it fades out -->
+			{#if deviceStore.isMobile}
+				<div
+					aria-hidden="true"
+					class="status-bar-fade sidebar-reveal-pin-top pointer-events-none fixed inset-x-0 top-0 z-20"
+				></div>
+			{/if}
+
 			<!-- the phone sidebar sits under the page, so its toggle rides on the page -->
 			{#if deviceStore.isMobile && !page.url.hash.includes(ROUTES.SEARCH)}
 				<ActionIcon

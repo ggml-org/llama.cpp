@@ -287,6 +287,19 @@
 		);
 	}
 
+	/* The same fade under the installed app's status bar on a phone: solid behind the bar,
+	   fading out below it, so the page scrolls away under it instead of into it. Without a
+	   top inset, in the browser, it has no height. */
+	.status-bar-fade {
+		height: calc(var(--safe-area-top) * 1.75);
+		background: linear-gradient(
+			to bottom,
+			var(--background) calc(100% / 1.75),
+			color-mix(in srgb, var(--background) 60%, transparent) 80%,
+			transparent 100%
+		);
+	}
+
 	/* The sidebar's "Show more" row, stuck to its bottom: an opaque copy of the
 	   panel's translucent muted tint, and a fade above it, like the one under
 	   the tab bar, so the rows scrolling beneath end softly */
