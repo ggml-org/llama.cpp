@@ -1797,6 +1797,10 @@ bool rpc_server::set_tensor_2d(const std::vector<uint8_t> & input) {
 
     // sanitize tensor->data
     {
+        if (n_copies > 1 && stride < size) {
+            LOG_ERROR("[%s] invalid stride %" PRIu64 " < size %" PRIu64 " for n_copies %" PRIu64 "\n", __func__, stride, size, n_copies);
+            return false;
+        }
         if (stride != 0 && n_copies - 1 > (UINT64_MAX - size) / stride) {
             return false;
         }
@@ -1987,6 +1991,10 @@ bool rpc_server::get_tensor_2d(const rpc_msg_get_tensor_2d_req & request, std::v
         if (request.n_copies == 0 || request.size == 0 || request.size > UINT64_MAX / request.n_copies) {
             return false;
         }
+        if (request.n_copies > 1 && request.stride < request.size) {
+            LOG_ERROR("[%s] invalid stride %" PRIu64 " < size %" PRIu64 " for n_copies %" PRIu64 "\n", __func__, request.stride, request.size, request.n_copies);
+            return false;
+        }
         if (request.stride != 0 && request.n_copies - 1 > (UINT64_MAX - request.size) / request.stride) {
             return false;
         }
@@ -2007,7 +2015,13 @@ bool rpc_server::get_tensor_2d(const rpc_msg_get_tensor_2d_req & request, std::v
         }
     }
 
-    response.resize(request.size * request.n_copies, 0);
+    const uint64_t response_size = request.size * request.n_copies;
+    try {
+        response.resize(response_size, 0);
+    } catch (const std::exception & e) {
+        LOG_ERROR("[%s] Failed to allocate response buffer of size %" PRIu64 ": %s\n", __func__, response_size, e.what());
+        return false;
+    }
     ggml_backend_tensor_get_2d(tensor, response.data(), request.offset, request.size, request.n_copies, request.stride, request.size);
     return true;
 }
