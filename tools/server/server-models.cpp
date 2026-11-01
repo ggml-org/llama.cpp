@@ -187,6 +187,9 @@ private:
     void on_line(child_t & c, server_subproc_stream stream, const std::string & line) {
         if (stream == SERVER_SUBPROC_STDERR) {
             LOG("[%5d] %s", c.port, line.c_str()); // forward log
+            if (c.role != SERVER_ROLE_MEASURE) {
+                models.on_child_log(c.name, line);
+            }
         } else if (string_starts_with(line, CMD_CHILD_TO_ROUTER_STATE)) {
             LOG_DBG("[%5d] %s", c.port, line.c_str()); // prevent spamming the log
             models.handle_child_state(c.name, line);
@@ -265,18 +268,26 @@ private:
 // delete). distinct from params.timeout_read/write which only applies to the generation proxy
 static constexpr int STREAM_LOOKUP_TIMEOUT_MS = 250;
 
+// the options the router owns, a child never gets them from a preset or a spawn request
+static const char * ROUTER_RESERVED_ARGS[] = {
+    "LLAMA_ARG_SSL_KEY_FILE",
+    "LLAMA_ARG_SSL_CERT_FILE",
+    "LLAMA_API_KEY",
+    "LLAMA_ARG_API_KEY_FILE",
+    "LLAMA_ARG_MODELS_DIR",
+    "LLAMA_ARG_MODELS_MAX",
+    "LLAMA_ARG_MODELS_MEMORY_MARGIN",
+    "LLAMA_ARG_MODELS_PRESET",
+    "LLAMA_ARG_MODELS_AUTOLOAD",
+    "LLAMA_ARG_CONNECT",
+    "LLAMA_ARG_CONNECT_CODE",
+    "LLAMA_ARG_SERVICE_SOCK",
+};
+
 static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
-    preset.unset_option("LLAMA_ARG_SSL_KEY_FILE");
-    preset.unset_option("LLAMA_ARG_SSL_CERT_FILE");
-    preset.unset_option("LLAMA_API_KEY");
-    preset.unset_option("LLAMA_ARG_API_KEY_FILE");
-    preset.unset_option("LLAMA_ARG_MODELS_DIR");
-    preset.unset_option("LLAMA_ARG_MODELS_MAX");
-    preset.unset_option("LLAMA_ARG_MODELS_MEMORY_MARGIN");
-    preset.unset_option("LLAMA_ARG_MODELS_PRESET");
-    preset.unset_option("LLAMA_ARG_MODELS_AUTOLOAD");
-    preset.unset_option("LLAMA_ARG_CONNECT");
-    preset.unset_option("LLAMA_ARG_CONNECT_CODE");
+    for (const char * key : ROUTER_RESERVED_ARGS) {
+        preset.unset_option(key);
+    }
     if (unset_model_args) {
         preset.unset_option("LLAMA_ARG_MODEL");
         preset.unset_option("LLAMA_ARG_MMPROJ");
@@ -426,6 +437,28 @@ void server_models::instance_t::request_exit() const {
     request_child_exit(*subproc);
 }
 
+// aliases and tags from the --alias and --tags options of the preset (comma-separated)
+static void parse_aliases_tags(server_model_meta & meta) {
+    std::string alias_str;
+    if (meta.preset.get_option("LLAMA_ARG_ALIAS", alias_str) && !alias_str.empty()) {
+        for (auto & alias : string_split<std::string>(alias_str, ',')) {
+            alias = string_strip(alias);
+            if (!alias.empty()) {
+                meta.aliases.insert(alias);
+            }
+        }
+    }
+    std::string tags_str;
+    if (meta.preset.get_option("LLAMA_ARG_TAGS", tags_str) && !tags_str.empty()) {
+        for (auto & tag : string_split<std::string>(tags_str, ',')) {
+            tag = string_strip(tag);
+            if (!tag.empty()) {
+                meta.tags.insert(tag);
+            }
+        }
+    }
+}
+
 void server_models::add_model(server_model_meta && meta) {
     if (mapping.find(meta.name) != mapping.end()) {
         throw std::runtime_error(string_format("model '%s' appears multiple times", meta.name.c_str()));
@@ -439,27 +472,7 @@ void server_models::add_model(server_model_meta && meta) {
         }
     }
 
-    // parse aliases from preset's --alias option (comma-separated)
-    std::string alias_str;
-    if (meta.preset.get_option("LLAMA_ARG_ALIAS", alias_str) && !alias_str.empty()) {
-        for (auto & alias : string_split<std::string>(alias_str, ',')) {
-            alias = string_strip(alias);
-            if (!alias.empty()) {
-                meta.aliases.insert(alias);
-            }
-        }
-    }
-
-    // parse tags from preset's --tags option (comma-separated)
-    std::string tags_str;
-    if (meta.preset.get_option("LLAMA_ARG_TAGS", tags_str) && !tags_str.empty()) {
-        for (auto & tag : string_split<std::string>(tags_str, ',')) {
-            tag = string_strip(tag);
-            if (!tag.empty()) {
-                meta.tags.insert(tag);
-            }
-        }
-    }
+    parse_aliases_tags(meta);
 
     // validate aliases do not conflict with existing names or aliases
     for (const auto & alias : meta.aliases) {
@@ -929,7 +942,7 @@ void server_models::load_models() {
         // find running models whose source was removed or whose preset changed
         std::vector<std::string> to_unload;
         for (const auto & [name, inst] : mapping) {
-            if (!inst.meta.is_running()) continue;
+            if (!inst.meta.is_running() || inst.meta.is_pinned()) continue;
             auto it = final_presets.find(name);
             if (it == final_presets.end()) {
                 to_unload.push_back(name); // removed from source
@@ -962,6 +975,8 @@ void server_models::load_models() {
             } else if (it->second.meta.status == SERVER_MODEL_STATUS_DOWNLOADED) {
                 // download finished, safe to erase
                 it = mapping.erase(it);
+            } else if (it->second.meta.is_pinned() && it->second.meta.is_running()) {
+                ++it; // started by a spawn request, not from a source
             } else if (final_presets.find(it->first) == final_presets.end()) {
                 SRV_INF("(reload) removing model name=%s (no longer in source)\n", it->first.c_str());
                 it = mapping.erase(it);
@@ -981,6 +996,14 @@ void server_models::load_models() {
                 inst.meta.memory = {};
             }
             inst.meta.preset = it->second;
+            if (inst.meta.is_pinned()) {
+                // a spawned model that exited and is in a source now, for ex. the -hf it downloaded
+                inst.meta.source = get_source(name);
+                inst.meta.spawn_cwd.clear();
+                inst.meta.spawn_env.clear();
+                inst.meta.spawn_seq = 0;
+                inst.shadow.reset();
+            }
 
             // re-parse aliases, then validate against other models
             std::set<std::string> new_aliases;
@@ -1232,6 +1255,10 @@ void server_models::load(const std::string & name, const load_options & opts) {
 
         std::vector<std::string> child_args = inst.meta.args; // copy
         std::vector<std::string> child_env  = base_env; // copy
+        for (const auto & kv : inst.meta.spawn_env) {
+            const size_t eq = kv.find('=');
+            set_child_env(child_env, kv.substr(0, eq), eq == std::string::npos ? "" : kv.substr(eq + 1));
+        }
         child_env.push_back(std::string(SERVER_ENV_ROUTER_PORT) + "=" + std::to_string(base_params.port));
 
         if (opts.role == SERVER_ROLE_DOWNLOAD) {
@@ -1265,9 +1292,16 @@ void server_models::load(const std::string & name, const load_options & opts) {
 
         // the child writes its commands to stdout and its logs to stderr
         int options = subprocess_option_no_window;
-        if (!inst.subproc->sproc.create(child_args, options, child_env)) {
+        const char * cwd = inst.meta.spawn_cwd.empty() ? nullptr : inst.meta.spawn_cwd.c_str();
+        if (!inst.subproc->sproc.create(child_args, options, child_env, cwd)) {
             throw std::runtime_error("failed to spawn server instance");
         }
+    }
+
+    inst.log = std::make_shared<server_log_ring>();
+    {
+        std::lock_guard<std::mutex> lk_logs(logs_mutex);
+        log_rings[name] = inst.log;
     }
 
     // remember the download: the partial files carry a content hash, not the name
@@ -1278,9 +1312,12 @@ void server_models::load(const std::string & name, const load_options & opts) {
     // old process should have exited already, but just in case, we clean it up here
     {
         auto it = mapping.find(name);
-        if (it != mapping.end() && it->second.subproc && it->second.subproc->is_alive()) {
-            SRV_WRN("old process for model name=%s is still alive, this is unexpected\n", name.c_str());
-            it->second.subproc->terminate(); // force kill
+        if (it != mapping.end()) {
+            if (it->second.subproc && it->second.subproc->is_alive()) {
+                SRV_WRN("old process for model name=%s is still alive, this is unexpected\n", name.c_str());
+                it->second.subproc->terminate(); // force kill
+            }
+            inst.shadow = std::move(it->second.shadow);
         }
     }
 
@@ -1323,6 +1360,17 @@ void server_models::on_child_exit(const std::string & name, const std::shared_pt
             stopping_models.erase(name);
             return; // entry erased, or a newer instance took the name
         }
+        auto & inst = it->second;
+        if (inst.log) {
+            inst.log->close();
+        }
+        // the name goes back to the entry the spawned model shadowed, before the status is broadcast
+        if (role == SERVER_ROLE_INSTANCE && inst.shadow.has_value()) {
+            SRV_INF("spawned model name=%s exited, restoring the %s entry\n",
+                name.c_str(), server_model_source_to_string(inst.shadow->source).c_str());
+            inst.meta = std::move(*inst.shadow);
+            inst.shadow.reset();
+        }
     }
     if (role == SERVER_ROLE_DOWNLOAD) {
         // instance will be cleaned up on next load_models() call
@@ -1334,6 +1382,178 @@ void server_models::on_child_exit(const std::string & name, const std::shared_pt
             SERVER_MODEL_STATUS_UNLOADED,
             exit_code
         });
+    }
+}
+
+//
+// service API: spawn
+//
+
+// the environment a spawn request may set: the variables of the arg table, except the ones the router owns
+static bool is_spawn_env_allowed(const common_preset_context & ctx, const std::string & key) {
+    for (const char * reserved : ROUTER_RESERVED_ARGS) {
+        if (key == reserved) {
+            return false;
+        }
+    }
+    if (key == "LLAMA_CACHE") {
+        return true;
+    }
+    for (const auto & opt : ctx.ctx_params.options) {
+        if (opt.env != nullptr && key == opt.env) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::string server_models::spawn(const spawn_options & opts) {
+    // parse the args the way the child will
+    std::vector<std::string> args = { "llama-server" };
+    args.insert(args.end(), opts.args.begin(), opts.args.end());
+    std::vector<char *> argv;
+    for (auto & a : args) {
+        argv.push_back(a.data());
+    }
+    common_preset preset;
+    try {
+        preset = ctx_preset.load_from_args((int) argv.size(), argv.data());
+    } catch (const std::exception & e) {
+        throw std::invalid_argument(e.what());
+    }
+    unset_reserved_args(preset, false);
+
+    // a relative model path is relative to the cwd of the request
+    if (!opts.cwd.empty()) {
+        for (const char * key : { "LLAMA_ARG_MODEL", "LLAMA_ARG_MMPROJ", "LLAMA_ARG_SPEC_DRAFT_MODEL" }) {
+            std::string val;
+            if (preset.get_option(key, val) && !val.empty() && std::filesystem::u8path(val).is_relative()) {
+                preset.set_option(ctx_preset, key, fs_path_to_utf8(std::filesystem::u8path(opts.cwd) / std::filesystem::u8path(val)));
+            }
+        }
+    }
+
+    std::string name = opts.name;
+    if (name.empty()) {
+        common_params p;
+        preset.apply_to_params(p, { "LLAMA_ARG_MODEL", "LLAMA_ARG_MODEL_URL", "LLAMA_ARG_HF_REPO", "LLAMA_ARG_DOCKER_REPO" });
+        name = p.model.get_name();
+        if (p.model.hf_repo.empty() && p.model.docker_repo.empty() && !p.model.path.empty()) {
+            name = fs_path_to_utf8(std::filesystem::u8path(p.model.path).stem());
+        }
+        if (name.empty()) {
+            throw std::invalid_argument("no model specified, use -m or -hf");
+        }
+    }
+
+    // the request args win over the router args
+    common_preset full = base_preset;
+    full.merge(preset);
+    full.name = name;
+
+    std::vector<std::string> env;
+    for (const auto & [key, value] : opts.env) {
+        if (is_spawn_env_allowed(ctx_preset, key)) {
+            env.push_back(key + "=" + value);
+        } else {
+            SRV_WRN("spawn of model name=%s: ignoring environment variable %s\n", name.c_str(), key.c_str());
+        }
+    }
+
+    std::unique_lock<std::mutex> lk(mutex);
+    cv.wait(lk, [this]() { return !is_reloading; });
+
+    auto busy = [](const server_model_meta & m) {
+        return m.is_running() || m.status == SERVER_MODEL_STATUS_DOWNLOADING;
+    };
+    auto it = mapping.find(name);
+    if (it != mapping.end() && busy(it->second.meta)) {
+        if (!opts.replace) {
+            throw std::invalid_argument("model '" + name + "' is already running");
+        }
+        SRV_INF("spawn of model name=%s replaces the running instance\n", name.c_str());
+        lk.unlock();
+        unload(name);
+        lk.lock();
+        wait(lk, name, [&](const server_model_meta & m) { return !busy(m); });
+        it = mapping.find(name);
+    }
+
+    // a spawned model that took the name of a listed one gives it back when it exits
+    std::optional<server_model_meta> shadow;
+    if (it != mapping.end()) {
+        shadow = it->second.meta.is_pinned() ? it->second.shadow : std::optional<server_model_meta>(it->second.meta);
+    }
+
+    server_model_meta meta;
+    meta.source       = SERVER_MODEL_SOURCE_SPAWNED;
+    meta.preset       = full;
+    meta.name         = name;
+    meta.status       = SERVER_MODEL_STATUS_UNLOADED;
+    meta.stop_timeout = DEFAULT_STOP_TIMEOUT;
+    meta.spawn_cwd    = opts.cwd;
+    meta.spawn_env    = env;
+    meta.spawn_seq    = ++spawn_counter;
+    parse_aliases_tags(meta);
+    for (const auto & alias : meta.aliases) {
+        for (const auto & [key, inst] : mapping) {
+            if (key != name && (key == alias || inst.meta.aliases.count(alias))) {
+                throw std::invalid_argument("alias '" + alias + "' conflicts with model '" + key + "'");
+            }
+        }
+    }
+    meta.update_args(ctx_preset, bin_path);
+    meta.update_caps(base_params);
+
+    instance_t inst;
+    inst.subproc = std::make_shared<server_subproc>();
+    inst.meta    = std::move(meta);
+    inst.shadow  = std::move(shadow);
+    mapping[name] = std::move(inst);
+    lk.unlock();
+
+    notify_sse("models_reload", "*");
+    try {
+        load(name);
+    } catch (...) {
+        // nothing started: give the name back
+        std::lock_guard<std::mutex> lk_err(mutex);
+        auto it_err = mapping.find(name);
+        if (it_err != mapping.end() && it_err->second.meta.is_pinned() && !it_err->second.meta.is_running()) {
+            if (it_err->second.shadow.has_value()) {
+                it_err->second.meta = std::move(*it_err->second.shadow);
+                it_err->second.shadow.reset();
+            } else {
+                mapping.erase(it_err);
+            }
+        }
+        throw;
+    }
+    return name;
+}
+
+std::string server_models::get_default_model() {
+    std::lock_guard<std::mutex> lk(mutex);
+    std::string best;
+    uint64_t best_seq = 0;
+    for (const auto & [name, inst] : mapping) {
+        if (inst.meta.is_pinned() && inst.meta.is_running() && inst.meta.spawn_seq >= best_seq) {
+            best     = name;
+            best_seq = inst.meta.spawn_seq;
+        }
+    }
+    return best;
+}
+
+std::shared_ptr<server_log_ring> server_models::get_log_ring(const std::string & name) {
+    std::lock_guard<std::mutex> lk(logs_mutex);
+    auto it = log_rings.find(name);
+    return it == log_rings.end() ? nullptr : it->second;
+}
+
+void server_models::on_child_log(const std::string & name, const std::string & line) {
+    if (auto ring = get_log_ring(name)) {
+        ring->push(line);
     }
 }
 
@@ -1651,6 +1871,9 @@ bool server_models::ensure_model_ready(const std::string & name, const std::func
                 // if a model was evicted for us, the free slot goes to the next waiter
                 throw std::runtime_error("request cancelled while waiting for model name=" + name);
             }
+            if (queued && status == SERVER_MODEL_STATUS_UNLOADED && sched->starved(lk, name)) {
+                throw std::runtime_error("model limit reached, the running models were started by the service and are never unloaded");
+            }
 
             // our turn: our model is at the head, and a slot really did free up
             if (status == SERVER_MODEL_STATUS_UNLOADED && sched->try_claim(lk, name)) {
@@ -1947,6 +2170,9 @@ static void res_err(std::unique_ptr<server_http_res> & res, const json & error_d
 }
 
 static bool router_validate_model(std::string & name, server_models & models, bool models_autoload, std::unique_ptr<server_http_res> & res) {
+    if (name.empty()) {
+        name = models.get_default_model();
+    }
     if (name.empty()) {
         res_err(res, format_error_response("model name is missing from the request", ERROR_TYPE_INVALID_REQUEST));
         return false;

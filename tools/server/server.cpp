@@ -2,6 +2,7 @@
 #include "server-context.h"
 #include "server-http.h"
 #include "server-models.h"
+#include "server-service.h"
 #include "server-cors-proxy.h"
 #include "server-stream.h"
 #include "server-tools.h"
@@ -526,29 +527,44 @@ static int server_run_router(common_params & params, int argc, char ** argv, con
     routes.get_props                   = models_routes->get_router_props;
     routes.get_models                  = models_routes->get_router_models;
 
-    ctx_http.post("/models",               ex_wrapper(models_routes->post_router_models));
-    ctx_http.post("/models/load",          ex_wrapper(models_routes->post_router_models_load));
-    ctx_http.post("/models/unload",        ex_wrapper(models_routes->post_router_models_unload));
-    ctx_http.get ("/models/sse",           ex_wrapper(models_routes->get_router_models_sse));
-    ctx_http.del ("/models",               ex_wrapper(models_routes->del_router_models));
+    auto register_router_routes = [&](server_http_context & ctx) {
+        ctx.post("/models",               ex_wrapper(models_routes->post_router_models));
+        ctx.post("/models/load",          ex_wrapper(models_routes->post_router_models_load));
+        ctx.post("/models/unload",        ex_wrapper(models_routes->post_router_models_unload));
+        ctx.get ("/models/sse",           ex_wrapper(models_routes->get_router_models_sse));
+        ctx.del ("/models",               ex_wrapper(models_routes->del_router_models));
 
-    server_register_routes(ctx_http, routes);
-    server_register_stream_routes(ctx_http,
-        models_routes->router_stream_get,
-        models_routes->router_streams_lookup,
-        models_routes->router_stream_delete);
+        server_register_routes(ctx, routes);
+        server_register_stream_routes(ctx,
+            models_routes->router_stream_get,
+            models_routes->router_streams_lookup,
+            models_routes->router_stream_delete);
+    };
+    register_router_routes(ctx_http);
 
     if (!server_setup_features(ctx_http, params, mcp_mgr, tools, SERVER_ROLE_ROUTER)) {
         return 1;
     }
 
-    auto clean_up = [&models_routes, &mcp_mgr]() {
+    // the service socket: the router API without an API key, plus the service routes
+    std::optional<server_service> service;
+    if (!params.service_sock.empty()) {
+        service.emplace();
+        if (!service->init(params, *models_routes, register_router_routes, ex_wrapper, []() { llama_server_terminate(); })) {
+            return 1;
+        }
+    }
+
+    auto clean_up = [&]() {
         SRV_INF("%s: cleaning up before exit...\n", __func__);
         // stop the session GC first, it finalizes live sessions and wakes pending readers
         server_stream_session_manager_stop();
         if (models_routes.has_value()) {
             models_routes->stopping.store(true); // maybe redundant, but just to be safe
             models_routes->models.unload_all();
+        }
+        if (service.has_value()) {
+            service->shutdown();
         }
         mcp_mgr.shutdown();
         llama_backend_free();
@@ -559,6 +575,11 @@ static int server_run_router(common_params & params, int argc, char ** argv, con
         SRV_ERR("%s", "exiting due to HTTP server error\n");
         return 1;
     }
+    // the socket answers before /health does, so a client that saw the port up can use it
+    if (service.has_value() && !service->start()) {
+        clean_up();
+        return 1;
+    }
     ctx_http.is_ready.store(true);
 
     shutdown_handler = [&](int) {
@@ -567,6 +588,9 @@ static int server_run_router(common_params & params, int argc, char ** argv, con
             models_routes->stopping.store(true);
         }
         mcp_mgr.shutdown();
+        if (service.has_value()) {
+            service->stop();
+        }
         ctx_http.stop();
     };
 
@@ -595,6 +619,18 @@ static int server_run_router(common_params & params, int argc, char ** argv, con
     if (!params.models_preset_hf.empty()) {
         SRV_WRN(      "NOTE: using preset.ini from HF repo '%s'\n", params.models_preset_hf.c_str());
         SRV_WRN("%s", "      please only use presets that you can trust! Unknown presets may be unsafe\n");
+    }
+
+    if (service.has_value()) {
+        try {
+            service->write_lock(ctx_http.port, argc, argv);
+        } catch (const std::exception & e) {
+            SRV_ERR("failed to write the service lock file: %s\n", e.what());
+            ctx_http.stop();
+            ctx_http.join();
+            clean_up();
+            return 1;
+        }
     }
 
     ctx_http.join(); // keep the main thread alive

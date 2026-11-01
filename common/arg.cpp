@@ -3655,6 +3655,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MODELS_MEMORY_MARGIN"));
     add_opt(common_arg(
+        {"--service-sock"}, "PATH",
+        "for router server, UNIX socket (ending in .sock) of the service API used by 'llama service' (default: disabled)",
+        [](common_params & params, const std::string & value) {
+            if (!string_ends_with(value, ".sock")) {
+                throw std::invalid_argument("--service-sock path must end with .sock");
+            }
+            params.service_sock = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_SERVICE_SOCK"));
+    add_opt(common_arg(
         {"--models-autoload"},
         {"--no-models-autoload"},
         string_format("for router server, whether to automatically load models (default: %s)", params.models_autoload ? "enabled" : "disabled"),
