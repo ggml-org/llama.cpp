@@ -62,6 +62,14 @@ class TestMetadataMethod(unittest.TestCase):
         self.assertEqual(gguf.Metadata.get_model_id_components("Qwen2-57B-A14B-Instruct"),
                          ('Qwen2-57B-A14B-Instruct', None, 'Qwen2', 'Instruct', None, '57B-A14B'))
 
+        # mmproj exports use the parent model id, but total_params is the projector size.
+        # Preserve the parent model size label instead of treating it as finetune text.
+        self.assertEqual(gguf.Metadata.get_model_id_components("google/gemma-4-26B-A4B-it", 576 * 10**6, preserve_model_size_label=True),
+                         ('gemma-4-26B-A4B-it', 'google', 'gemma-4', 'it', None, '26B-A4B'))
+
+        self.assertEqual(gguf.Metadata.get_model_id_components("google/gemma-4-31B-it", 576 * 10**6, preserve_model_size_label=True),
+                         ('gemma-4-31B-it', 'google', 'gemma-4', 'it', None, '31B'))
+
         # Check that it can handle a real model id with no version code
         # Note that 4k in this string is non standard and microsoft were referring to context length rather than weight count
         self.assertEqual(gguf.Metadata.get_model_id_components("microsoft/Phi-3-mini-4k-instruct", 4 * 10**9),
