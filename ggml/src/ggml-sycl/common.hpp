@@ -239,6 +239,53 @@ typedef sycl::float2 dfloat2;
 // most columns the fused gate and up XMX kernel is built for, GGML_SYCL_XMX_GLU_MAX_COLS can only lower this limit
 #define GGML_SYCL_XMX_GLU_MAX_COLS 16
 
+// block-quantized types the SYCL kernels implement (dequantize, set_rows, cpy)
+static inline bool ggml_sycl_is_quantized_type(ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_Q1_0:
+        case GGML_TYPE_Q2_0:
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_1:
+        case GGML_TYPE_Q5_0:
+        case GGML_TYPE_Q5_1:
+        case GGML_TYPE_Q8_0:
+        case GGML_TYPE_MXFP4:
+        case GGML_TYPE_NVFP4:
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q6_K:
+        case GGML_TYPE_IQ2_XXS:
+        case GGML_TYPE_IQ2_XS:
+        case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ3_XXS:
+        case GGML_TYPE_IQ3_S:
+        case GGML_TYPE_IQ1_S:
+        case GGML_TYPE_IQ1_M:
+        case GGML_TYPE_IQ4_NL:
+        case GGML_TYPE_IQ4_XS:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// float and quantized types the SYCL kernels can convert from and to; supports_op accepts only these,
+// so a type newly added to ggml stays unsupported until the backend implements it
+static inline bool ggml_sycl_supports_type(ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_F32:
+        case GGML_TYPE_F16:
+#ifdef GGML_SYCL_HAS_BF16
+        case GGML_TYPE_BF16:
+#endif
+            return true;
+        default:
+            return ggml_sycl_is_quantized_type(type);
+    }
+}
+
 static inline bool ggml_sycl_xmx_supports_type(ggml_type type) {
     switch (type) {
         case GGML_TYPE_Q2_K:
