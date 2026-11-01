@@ -371,9 +371,8 @@ class PocketTTSMmprojModel(MmprojModel):
                 continue
             embd, drift = _voice_prompt_embd(weights, kv, self.global_config["num_attention_heads"],
                                              self.global_config["rope_theta"])
-            # the shipped state is not always the one these weights give for the prompt: it is exact within the
-            # rounding of the bf16 weights for most packs, 2% for english_2026-04 and 20% for french, which the
-            # reference loads as is and which still sounds like the same voice
+            # the shipped state is not always the one these weights give for the prompt; the reference loads it as
+            # is and it still sounds like the same voice, so a voice is kept up to 50% of error, warned above 5%
             if drift > 0.5:
                 logger.warning(f"voice {path.stem}: skipped, its state does not belong to these weights (error {drift:.1e})")
                 continue

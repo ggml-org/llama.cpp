@@ -139,10 +139,11 @@ struct clip_gen_state * clip_gen_state_init(struct clip_ctx * ctx, uint32_t seed
 void                    clip_gen_state_free(struct clip_gen_state * state);
 void                    clip_gen_state_reset(struct clip_gen_state * state);
 
-// predefined voice of an audio generation model: the backbone input embeddings of its voice prompt
-// returns the number of rows of n_embd floats, 0 if there is no voice with this name
+// predefined voices of an audio generation model: the backbone input embeddings of their voice prompts
 int32_t      clip_gen_n_voices  (const struct clip_ctx * ctx);
+// name of the idx-th voice, NULL when idx is out of range
 const char * clip_gen_voice_name (const struct clip_ctx * ctx, int32_t idx);
+// returns the number of rows of n_embd floats, 0 if there is no voice with this name
 int32_t      clip_gen_get_voice  (const struct clip_ctx * ctx, const char * name, const float ** embd, int32_t * n_embd);
 
 bool clip_is_llava(const struct clip_ctx * ctx);
