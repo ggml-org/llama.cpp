@@ -199,6 +199,9 @@ void llama_model_saver::add_kv_from_model() {
     if (hparams.n_embd_out_impl > 0) {
         add_kv(LLM_KV_EMBEDDING_LENGTH_OUT,          hparams.n_embd_out_impl);
     }
+    if (hparams.n_embd_per_layer > 0) {
+        add_kv(LLM_KV_EMBEDDING_LENGTH_PER_LAYER,    hparams.n_embd_per_layer);
+    }
     add_kv(LLM_KV_BLOCK_COUNT,                       hparams.n_layer_all);
     add_kv(LLM_KV_LEADING_DENSE_BLOCK_COUNT,         hparams.n_layer_dense_lead);
     add_kv(LLM_KV_FEED_FORWARD_LENGTH,               hparams.n_ff_arr, true);
@@ -307,10 +310,14 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_ATTENTION_INDEXER_KPOOL_SELECT_TAIL, hparams.indexer_kpool_select_tail);
     add_kv(LLM_KV_ATTENTION_INDEXER_LOCAL_BLOCKS,    hparams.indexer_local_blocks);
     add_kv(LLM_KV_ATTENTION_INDEXER_TYPES,           hparams.is_indexer_full_impl, true);
-    for (uint32_t il = 0; il < hparams.n_layer(); ++il) {
-        if (hparams.kv_source(il) != il) {
-            add_kv(LLM_KV_ATTENTION_KV_SOURCE_MAP, hparams.kv_source_impl, true);
-            break;
+    if (hparams.n_layer_kv_from_start >= 0) {
+        add_kv(LLM_KV_ATTENTION_SHARED_KV_LAYERS,    uint32_t(hparams.n_layer_all - hparams.n_layer_kv_from_start));
+    } else {
+        for (uint32_t il = 0; il < hparams.n_layer(); ++il) {
+            if (hparams.kv_source(il) != il) {
+                add_kv(LLM_KV_ATTENTION_KV_SOURCE_MAP, hparams.kv_source_impl, true);
+                break;
+            }
         }
     }
     add_kv(LLM_KV_ATTENTION_RECURRENT_LAYERS,        hparams.is_recr_impl, true);
@@ -518,6 +525,8 @@ void llama_model_saver::add_tensors_from_model() {
     add_tensor(model->hc_head_base);
     add_tensor(model->hc_head_scale);
     add_tensor(model->per_layer_tok_embd);
+    add_tensor(model->per_layer_model_proj);
+    add_tensor(model->per_layer_proj_norm);
     add_tensor(model->value_embd);
     add_tensor(model->hc_head_norm);
     add_tensor(model->hc_head_down);
