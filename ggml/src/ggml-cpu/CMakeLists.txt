@@ -726,6 +726,14 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
   if (CMAKE_C_COMPILER_ID STREQUAL "IntelLLVM" OR CMAKE_CXX_COMPILER_ID STREQUAL "IntelLLVM")
       # The compiler automatically enables "-ffast-math" which can cause NaNs in tests due to "-fassociative-math"
       target_compile_options(${GGML_CPU_NAME} PRIVATE "$<$<OR:$<COMPILE_LANG_AND_ID:C,IntelLLVM>,$<COMPILE_LANG_AND_ID:CXX,IntelLLVM>>:$<$<BOOL:${WIN32}>:/clang:>-fno-associative-math>")
+      # Batch-invariance: the x86 4-row activation quantizer (arch/x86/repack.cpp)
+      # must compute d with true IEEE division, matching the per-row reference
+      # quantizer. icx reciprocal-math rewrites 127/maxScalar into 127*(1/max),
+      # leaving d 1 ulp off in ~10-25% of superblocks and breaking bitwise
+      # batched==sequential equality for repacked Q4_K. -fno-associative-math
+      # does not disable this; -fno-reciprocal-math does. Scoped to this TU only.
+      set_source_files_properties(ggml-cpu/arch/x86/repack.cpp PROPERTIES
+          COMPILE_OPTIONS "$<$<COMPILE_LANG_AND_ID:CXX,IntelLLVM>:-fno-reciprocal-math>")
   endif()
 
 endfunction()
