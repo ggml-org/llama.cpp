@@ -309,7 +309,9 @@
 	/* iOS Safari colours the screen's top, above the page, from a solid fixed element at the
 	   page's top edge (theme-color no longer), and shows the page through it otherwise. The
 	   fade above is a gradient, which it does not take, so this strip under it carries the
-	   page's colour there, as the installed app has */
+	   page's colour there, as the installed app has. Safari finds it by hit-testing the top
+	   edge, so it takes taps (pointer-events: none would hide it) and is thicker than the
+	   10px Safari ignores; what it covers sits under the fade's solid part anyway */
 	.status-bar-edge {
 		height: 0.75rem;
 		opacity: calc(1 - var(--sidebar-reveal-progress, 0));

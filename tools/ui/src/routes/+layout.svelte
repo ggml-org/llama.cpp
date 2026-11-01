@@ -359,7 +359,7 @@
 				{#if deviceStore.isIOSSafari}
 					<div
 						aria-hidden="true"
-						class="status-bar-edge sidebar-reveal-pin-top pointer-events-none fixed inset-x-0 top-0 z-20"
+						class="status-bar-edge sidebar-reveal-pin-top fixed inset-x-0 top-0 z-20"
 					></div>
 				{/if}
 
