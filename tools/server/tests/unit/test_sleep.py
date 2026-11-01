@@ -1,4 +1,6 @@
 import pytest
+import socket
+import tempfile
 import time
 from utils import *
 
@@ -164,3 +166,52 @@ def test_server_sleep_token_counting_wake():
     assert res.status_code == 200
     assert res.body["input_tokens"] > 0
     assert is_sleeping(server) == False
+
+
+@pytest.fixture
+def rpc_servers():
+    server_bin = os.environ.get("LLAMA_SERVER_BIN_PATH", "../../../build/bin/llama-server")
+    rpc_bin = os.path.join(os.path.dirname(server_bin), "ggml-rpc-server")
+    if not os.path.exists(rpc_bin):
+        pytest.skip("needs ggml-rpc-server, build with -DGGML_RPC=ON")
+    socks = [socket.socket() for _ in range(2)]
+    for sock in socks:
+        sock.bind(("127.0.0.1", 0))
+    ports = [sock.getsockname()[1] for sock in socks]
+    for sock in socks:
+        sock.close()
+    procs = [subprocess.Popen([rpc_bin, "--port", str(port)]) for port in ports]
+    for port in ports:
+        start = time.time()
+        while True:
+            try:
+                socket.create_connection(("127.0.0.1", port), timeout=1).close()
+                break
+            except OSError:
+                if time.time() - start > 10:
+                    raise
+                time.sleep(0.1)
+    yield ",".join(f"127.0.0.1:{port}" for port in ports)
+    for proc in procs:
+        proc.terminate()
+        proc.wait()
+
+
+def test_server_sleep_fit_again(rpc_servers):
+    global server
+    server.rpc_servers = rpc_servers
+    server.fit_target = "100000000,0"
+    server.sleep_idle_seconds = 1
+    fd, server.log_path = tempfile.mkstemp(suffix=".log")
+    os.close(fd)
+    server.start()
+
+    wait_for_sleep(server)
+    res = server.make_request("POST", "/completion", data={
+        "n_predict": 1,
+        "prompt": "Hello",
+    })
+    assert res.status_code == 200
+
+    with open(server.log_path) as f:
+        assert "failed to fit params" not in f.read()
