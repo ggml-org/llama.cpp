@@ -1211,15 +1211,13 @@ kernel void kernel_convert_block_q5_k_trans4_ns(
     dst_d [dst_blk_offset] = b->d;
     dst_dm[dst_blk_offset] = b->dm;
 
+    // Gather each bit plane as a uint: the E17 compiler (Adreno 850) packs it wrong when
+    // it is built from four uchars.
     for (int k = 0; k < 8; k++) {
-        uchar b0 = 0, b1 = 0, b2 = 0, b3 = 0;
-        for (int bit = 0; bit < 8; bit++) {
-            b0 |= (uchar)(((b->qh[bit]      >> k) & 1) << bit);
-            b1 |= (uchar)(((b->qh[8  + bit] >> k) & 1) << bit);
-            b2 |= (uchar)(((b->qh[16 + bit] >> k) & 1) << bit);
-            b3 |= (uchar)(((b->qh[24 + bit] >> k) & 1) << bit);
+        uint packed = 0;
+        for (int j = 0; j < 32; j++) {
+            packed |= (((uint)b->qh[j] >> k) & 1u) << j;
         }
-        uint packed = (uint)b0 | ((uint)b1 << 8) | ((uint)b2 << 16) | ((uint)b3 << 24);
         dst_qh[i01 + (i00 * 8 + k) * ne01 + i02 * ne00_blk * 8 * ne01] = packed;
     }
 
@@ -1282,19 +1280,16 @@ kernel void kernel_restore_block_q5_k_trans4_ns(
     b->d  = src_d[src_blk_offset];
     b->dm = src_dm[src_blk_offset];
 
-    for (int j = 0; j < 32; j++) b->qh[j] = 0;
+    uint pk[8];
     for (int k = 0; k < 8; k++) {
-        uint packed = src_qh[i01 + (i00 * 8 + k) * ne01 + i02 * ne00_blk * 8 * ne01];
-        uchar b0 = (uchar)(packed & 0xFF);
-        uchar b1 = (uchar)((packed >> 8) & 0xFF);
-        uchar b2 = (uchar)((packed >> 16) & 0xFF);
-        uchar b3 = (uchar)((packed >> 24) & 0xFF);
-        for (int bit = 0; bit < 8; bit++) {
-            b->qh[bit]      |= (uchar)(((b0 >> bit) & 1) << k);
-            b->qh[8  + bit] |= (uchar)(((b1 >> bit) & 1) << k);
-            b->qh[16 + bit] |= (uchar)(((b2 >> bit) & 1) << k);
-            b->qh[24 + bit] |= (uchar)(((b3 >> bit) & 1) << k);
+        pk[k] = src_qh[i01 + (i00 * 8 + k) * ne01 + i02 * ne00_blk * 8 * ne01];
+    }
+    for (int j = 0; j < 32; j++) {
+        uint v = 0;
+        for (int k = 0; k < 8; k++) {
+            v |= ((pk[k] >> j) & 1u) << k;
         }
+        b->qh[j] = (uchar)v;
     }
 
     __global uchar * s_src = src_s + (i02 * ne01 + i01) * ne00_blk * K_SCALE_SIZE + i00 * K_SCALE_SIZE;
