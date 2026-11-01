@@ -148,6 +148,10 @@ if (CUDAToolkit_FOUND)
         add_compile_definitions(GGML_CUDA_TQ1_0_NOMUL)
     endif()
 
+    if (GGML_CUDA_TQ2_0_NOMUL)
+        add_compile_definitions(GGML_CUDA_TQ2_0_NOMUL)
+    endif()
+
     if (GGML_CUDA_NO_VMM)
         add_compile_definitions(GGML_CUDA_NO_VMM)
     endif()

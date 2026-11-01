@@ -118,6 +118,12 @@ static __device__ __forceinline__ uint32_t unpack_ksigns(const uint8_t v) {
 // 8 ints (32 bytes) per 32-element chunk, consumed by the regular q8_0 vec_dot (dp4a or mma).
 #define VDR_TQ1_0_Q8_1_MMQ  8
 
+// TQ2_0: same shape as TQ1_0 (QK_K = 256 elements per block, 8 chunks of 32 elements).
+#define VDR_TQ2_0_Q8_1_MMVQ 1
+// MMQ expands the digits to signed bytes in the tile loader, so the tile row has the Q8_0 shape:
+// 8 ints (32 bytes) per 32-element chunk, consumed by the regular q8_0 vec_dot (dp4a or mma).
+#define VDR_TQ2_0_Q8_1_MMQ  8
+
 #define VDR_Q4_0_Q8_1_MMVQ 2
 #define VDR_Q4_0_Q8_1_MMQ  4
 
@@ -899,6 +905,82 @@ static __device__ __forceinline__ float vec_dot_tq1_0_q8_1_nomul(
         const int pos = (-s) >> 31;     // all ones where the weight is +1
 
         sumi += (a & pos) - (a & neg);  // +a, -a or nothing: add/subtract/skip, no branch
+    }
+
+    const float d  = bq->d;
+    const float d8 = __low2float(bq8_1_chunk->ds);
+
+    return d * d8 * sumi;
+}
+
+// One 32-element chunk (iqs = 0..7) of a tq2_0 block against one block_q8_1 of activations.
+//
+// With e = 128*c + 32*l + m (see ggml_cuda_tq2_0_digit in common.cuh) the chunk iqs covers
+// c = iqs/4, l = iqs%4 and all 32 values of m, i.e. the 32 CONTIGUOUS bytes
+// qs[32*(iqs/4) .. 32*(iqs/4)+31] at one single bit-pair position. Eight 4-byte words, one shift,
+// one mask, one dp4a each: nothing is dequantized to float, the accumulator stays an integer for
+// the whole chunk and the two scales are multiplied once, at the end of the chunk.
+//
+// Weight words are read with get_int_b2, never get_int_b4: block_tq2_0 is 66 bytes, so odd
+// numbered blocks are only 2-byte aligned and a 4-byte load would fault (same reason as
+// block_tq1_0 at 54 bytes). block_q8_1 is 36 bytes with qs at offset 4, so the activation words
+// are 4-byte aligned and do use get_int_b4.
+static __device__ __forceinline__ float vec_dot_tq2_0_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_tq2_0 * bq = (const block_tq2_0 *) vbq + kbx;
+
+    const block_q8_1 * bq8_1_chunk = bq8_1 + iqs;
+
+    const int shift = 2*(iqs & 3);   // bit pair position l of the whole chunk
+    const int woff  = 8*(iqs >> 2);  // get_int_b2 word index of the first of the 8 words
+
+    int sumi = 0;
+
+#pragma unroll
+    for (int j = 0; j < 8; ++j) {
+        const int s4 = ggml_cuda_tq2_0_symbols4(get_int_b2(bq->qs, woff + j), shift);
+        sumi = ggml_cuda_dp4a(s4, get_int_b4(bq8_1_chunk->qs, j), sumi);
+    }
+
+    const float d  = bq->d;
+    const float d8 = __low2float(bq8_1_chunk->ds);
+
+    return d * d8 * sumi;
+}
+
+// Strict variant, selected with -DGGML_CUDA_TQ2_0_NOMUL=ON: no integer multiply anywhere in the
+// dot product, not even dp4a. The weight of one element is digit - 1 = 2*b1 + b0 - 1 with
+// (b1, b0) the two stored bits, so its contribution is (b1 ? 2a : 0) + (b0 ? a : 0) - a: two
+// masked adds, one shift and one subtract per element. The trailing -a is what keeps digit 3
+// (weight +2) correct, so this is exact for all four levels too. Branchless on purpose - a
+// per-element if/else diverges the warp on every non-zero weight, which on a real model costs more
+// than the multiplies it saves.
+static __device__ __forceinline__ float vec_dot_tq2_0_q8_1_nomul(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_tq2_0 * bq = (const block_tq2_0 *) vbq + kbx;
+
+    const block_q8_1 * bq8_1_chunk = bq8_1 + iqs;
+
+    const int shift = 2*(iqs & 3);
+    const int woff  = 8*(iqs >> 2);
+
+    int sumi = 0;
+
+#pragma unroll
+    for (int j = 0; j < 8; ++j) {
+        const int w4 = get_int_b2(bq->qs, woff + j) >> shift;
+
+#pragma unroll
+        for (int t = 0; t < 4; ++t) {
+            const int dig = (w4 >> (8*t)) & 3;
+            const int a   = bq8_1_chunk->qs[4*j + t];
+            const int m1  = -(dig & 1);        // all ones where the low bit is set  -> +a
+            const int m2  = -((dig >> 1) & 1); // all ones where the high bit is set -> +2a
+
+            sumi += ((a & m2) << 1) + (a & m1) - a;
+        }
     }
 
     const float d  = bq->d;

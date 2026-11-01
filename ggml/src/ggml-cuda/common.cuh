@@ -1119,6 +1119,59 @@ static __device__ __forceinline__ int ggml_cuda_tq1_0_pow3(const int n) {
 }
 
 template<>
+struct ggml_cuda_type_traits<GGML_TYPE_TQ2_0> {
+    static constexpr int qk = QK_K;
+    static constexpr int qr = QR_TQ2_0;
+    static constexpr int qi = QI_TQ2_0; // 8 chunks of 32 elements per block
+    static constexpr int bs = sizeof(block_tq2_0);
+};
+
+// TQ2_0: QK_K = 256 weights per block, 2 bits each, ONE fp16 scale.
+// block_tq2_0 = uint8_t qs[64] + ggml_half d = 66 bytes.
+//
+// The element -> (byte, bit pair) map below is the one both CPU codecs agree on:
+// dequantize_row_tq2_0 (ggml-quants.c) walks j = 0,32 / l = 0..3 / m = 0..31 and reads
+// qs[j + m] at shift 2*l, and ggml_vec_dot_tq2_0_q8_K_generic (ggml-cpu/quants.c) walks the very
+// same nest. Writing e = 128*c + 32*l + m with c in {0,1}, l = 0..3, m = 0..31:
+//     byte = qs[32*c + m],  digit = (byte >> 2*l) & 3,  weight = digit - 1
+// So each 32-byte half of qs carries one value of c, and inside a half the 32 consecutive bytes
+// are the 32 consecutive m of ONE bit-pair position l. Compared with TQ1_0 that removes every
+// split/transpose case: a 32-element chunk of a row is 32 contiguous bytes at one single shift,
+// and a MMQ tile row is filled by 16 threads that each own 16 contiguous bytes at one shift.
+//
+// All four levels stay exact. quantize_row_tq2_0_ref rounds |x/d| <= 1 into {-1, 0, 1} and then
+// masks with & 3, so a freshly quantized tensor never holds a 3; a requantized or hand-built one
+// can, and there the weight is +2. Every kernel below works on digit - 1 rather than on a ternary
+// assumption, so a digit of 3 comes out as +2 exactly like the CPU does.
+static __device__ __forceinline__ int ggml_cuda_tq2_0_digit(const block_tq2_0 * x, const int e) {
+    const int c = e >> 7;          // which 32-byte half of qs
+    const int l = (e >> 5) & 3;    // bit pair inside the byte
+    const int m = e & 31;          // byte inside the half
+    return (x->qs[32*c + m] >> (2*l)) & 3;
+}
+
+// Weight of element e (0..255) of the block, in {-1, 0, +1, +2}. The only multiply left is the one
+// by the block scale, which the caller applies once per block.
+static __device__ __forceinline__ int ggml_cuda_tq2_0_symbol(const block_tq2_0 * x, const int e) {
+    return ggml_cuda_tq2_0_digit(x, e) - 1;
+}
+
+// Raw digits 0..3 of the four bytes of one weight word, as four int8 bytes in one word. shift is
+// 2*l with l = 0..3: the bits the shift drags in from the neighbouring byte are exactly the ones
+// the mask drops, so this is correct for every l, including the top byte of the word (zeros shift
+// in there). Two integer ops for four weights.
+static __device__ __forceinline__ int ggml_cuda_tq2_0_digits4(const int w4, const int shift) {
+    return (w4 >> shift) & 0x03030303;
+}
+
+// Same, biased to the weights digit - 1 ({-1, 0, +1, +2} as int8 bytes). Same shape as the q4_0
+// MMQ tile loader (__vsub4((qs >> 0) & 0x0F0F0F0F, 0x08080808)), so no new idiom: __vsub4 is a
+// per-byte subtract with wrap-around, digits are 0..3, and no lane can borrow from its neighbour.
+static __device__ __forceinline__ int ggml_cuda_tq2_0_symbols4(const int w4, const int shift) {
+    return __vsub4(ggml_cuda_tq2_0_digits4(w4, shift), 0x01010101);
+}
+
+template<>
 struct ggml_cuda_type_traits<GGML_TYPE_Q4_0> {
     static constexpr int qk = QK4_0;
     static constexpr int qr = QR4_0;

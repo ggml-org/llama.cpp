@@ -31,6 +31,9 @@ static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, con
         case GGML_TYPE_TQ1_0:
             mul_mat_q_case<GGML_TYPE_TQ1_0, GGML_PREC_Q8>(ctx, args, stream);
             break;
+        case GGML_TYPE_TQ2_0:
+            mul_mat_q_case<GGML_TYPE_TQ2_0, GGML_PREC_Q8>(ctx, args, stream);
+            break;
 // -----------------------------------------------------------------------
         case GGML_TYPE_Q2_K:
             mul_mat_q_case<GGML_TYPE_Q2_K, GGML_PREC_Q8>(ctx, args, stream);
@@ -418,6 +421,7 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
             mmq_supported = true;
             break;
         case GGML_TYPE_TQ1_0:
+        case GGML_TYPE_TQ2_0:
             // Ternary MMQ is wired up for NVIDIA only: the tile configs exist for
             // pascal-older/pascal-dp4a/ampere (Pascal, Volta, Turing, Ampere, Ada, Hopper,
             // Blackwell -- Blackwell falls back to the ampere config), but not for the AMD ones.

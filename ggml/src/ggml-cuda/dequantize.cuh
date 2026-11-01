@@ -60,6 +60,21 @@ static __device__ __forceinline__ void dequantize_tq1_0(const void * vx, const i
     v.y = ggml_cuda_tq1_0_symbol(x + ib, iqs + 1) * d;
 }
 
+// tq2_0: 2 bits per element, QK_K = 256 elements per block, ONE fp16 scale. The layout and the
+// digit extraction live in ggml_cuda_tq2_0_digit (common.cuh); the only multiply here is by the
+// block scale.
+//
+// Same qr == 1 contract as dequantize_tq1_0: iqs = (i00 % qk)/qr IS the element index (i00 is even)
+// and the caller stores v.x into element iqs and v.y into element iqs + 1.
+static __device__ __forceinline__ void dequantize_tq2_0(const void * vx, const int64_t ib, const int iqs, float2 & v) {
+    const block_tq2_0 * x = (const block_tq2_0 *) vx;
+
+    const float d = x[ib].d;
+
+    v.x = ggml_cuda_tq2_0_symbol(x + ib, iqs + 0) * d;
+    v.y = ggml_cuda_tq2_0_symbol(x + ib, iqs + 1) * d;
+}
+
 static __device__ __forceinline__ void dequantize_q4_0(const void * vx, const int64_t ib, const int iqs, float2 & v){
     const block_q4_0 * x = (const block_q4_0 *) vx;
 
