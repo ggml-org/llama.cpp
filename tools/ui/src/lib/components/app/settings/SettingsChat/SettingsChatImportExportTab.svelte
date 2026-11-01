@@ -1,6 +1,6 @@
 <script lang="ts">
 	import SettingsChatImportExportSection from './SettingsChatImportExportSection.svelte';
-	import { Download, Trash2, Upload } from '@lucide/svelte';
+	import { Download, HardDrive, Server, Trash2, Upload } from '@lucide/svelte';
 	import {
 		DialogConfirmation,
 		DialogConversationSelection,
@@ -8,11 +8,49 @@
 	} from '$lib/components/app';
 	import SettingsGroup from '$lib/components/app/settings/SettingsGroup.svelte';
 	import { ConversationSelectionMode, FileExtensionText, HtmlInputType } from '$lib/enums';
-	import { ConversationTransferService } from '$lib/services';
-	import { conversationsStore, settingsStore } from '$lib/stores';
+	import { ConversationTransferService, StorageModeService } from '$lib/services';
+	import { STORAGE_ADAPTERS } from '$lib/storage-adapters';
+	import { conversationsStore, serverStore, settingsStore } from '$lib/stores';
+	import type { StorageAdapterDefinition } from '$lib/types';
 	import { createMessageCountMap } from '$lib/utils';
 	import { fade } from 'svelte/transition';
 	import { toast } from 'svelte-sonner';
+
+	// storage location, applied by reloading the app
+	const activeStorage = StorageModeService.activeAdapter;
+	let offeredStorage = $derived(
+		STORAGE_ADAPTERS.filter((adapter) => adapter.isAvailable(serverStore.props))
+	);
+	/** Adapter the dialog switches to, null for this browser */
+	let storageTarget = $state<StorageAdapterDefinition | null>(null);
+	let showStorageDialog = $state(false);
+	let isSwitchingStorage = $state(false);
+
+	function openStorageDialog(target: StorageAdapterDefinition | null) {
+		storageTarget = target;
+		showStorageDialog = true;
+	}
+
+	async function handleStorageConfirm() {
+		if (isSwitchingStorage) return;
+
+		isSwitchingStorage = true;
+
+		try {
+			if (storageTarget) {
+				await StorageModeService.switchTo(storageTarget);
+			} else {
+				StorageModeService.switchToBrowser();
+			}
+
+			location.reload();
+		} catch (err) {
+			console.error('Switching storage failed:', err);
+			toast.error('Failed to switch storage, nothing was changed');
+			isSwitchingStorage = false;
+			showStorageDialog = false;
+		}
+	}
 
 	let exportedConversations = $state<DatabaseConversation[]>([]);
 	let importedConversations = $state<DatabaseConversation[]>([]);
@@ -258,6 +296,30 @@
 </script>
 
 <div in:fade={{ duration: 150 }} class="space-y-12">
+	{#if activeStorage}
+		<SettingsGroup title="Storage">
+			<SettingsChatImportExportSection
+				IconComponent={HardDrive}
+				buttonText="Store in this browser"
+				description="Conversations and settings are stored on {activeStorage.name}. Switching back uses the data this browser had before; what is on {activeStorage.name} stays there."
+				onclick={() => openStorageDialog(null)}
+				title="Stored on {activeStorage.name}"
+			/>
+		</SettingsGroup>
+	{:else if offeredStorage.length > 0}
+		<SettingsGroup title="Storage">
+			{#each offeredStorage as adapter (adapter.id)}
+				<SettingsChatImportExportSection
+					IconComponent={Server}
+					buttonText="Store on {adapter.name}"
+					description="Conversations and settings are stored in this browser only. {adapter.description}"
+					onclick={() => openStorageDialog(adapter)}
+					title="Stored in this browser"
+				/>
+			{/each}
+		</SettingsGroup>
+	{/if}
+
 	<SettingsGroup title="Conversations">
 		<SettingsChatImportExportSection
 			IconComponent={Download}
@@ -333,6 +395,23 @@
 	mode={ConversationSelectionMode.IMPORT}
 	onCancel={() => (showImportDialog = false)}
 	onConfirm={handleImportConfirm}
+/>
+
+<DialogConfirmation
+	bind:open={showStorageDialog}
+	cancelText="Cancel"
+	confirmText={isSwitchingStorage
+		? 'Switching...'
+		: storageTarget
+			? `Copy and use ${storageTarget.name}`
+			: 'Use this browser'}
+	description={storageTarget
+		? `Conversations and settings from this browser are copied to ${storageTarget.name}, keeping anything it already has, then the app reloads using ${storageTarget.name}. Your API key stays in this browser.`
+		: 'The app reloads with the conversations and settings stored in this browser.'}
+	icon={storageTarget ? Server : HardDrive}
+	onCancel={() => (showStorageDialog = false)}
+	onConfirm={handleStorageConfirm}
+	title={storageTarget ? `Store on ${storageTarget.name}` : 'Store in this browser'}
 />
 
 <DialogConfirmation

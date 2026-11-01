@@ -5,6 +5,7 @@
 #include "server-cors-proxy.h"
 #include "server-stream.h"
 #include "server-tools.h"
+#include "server-storage.h"
 
 #include "arg.h"
 #include "build-info.h"
@@ -236,6 +237,7 @@ static bool server_setup_features(
         const common_params & params,
         server_mcp & mcp_mgr,
         server_tools & tools,
+        server_storage & storage,
         server_role_type role_type) {
     // return 403 for disabled features
     server_http_context::handler_t res_403 = [](const server_http_req &) {
@@ -301,6 +303,29 @@ static bool server_setup_features(
     } else {
         ctx_http.get ("/tools",           ex_wrapper(res_403));
         ctx_http.post("/tools",           ex_wrapper(res_403));
+    }
+
+    if (params.ui_storage) {
+        try {
+            storage.setup(params.ui_storage_dir.empty() ? fs_get_data_directory() / "ui" : std::filesystem::u8path(params.ui_storage_dir));
+        } catch (const std::exception & e) {
+            SRV_ERR("UI storage setup failed: %s\n", e.what());
+            return false;
+        }
+        ctx_http.get ("/storage/conversations",     ex_wrapper(storage.handle_list));
+        ctx_http.get ("/storage/conversations/:id", ex_wrapper(storage.handle_get));
+        ctx_http.post("/storage/conversations/:id", ex_wrapper(storage.handle_put));
+        ctx_http.del ("/storage/conversations/:id", ex_wrapper(storage.handle_delete));
+        ctx_http.get ("/storage/settings",          ex_wrapper(storage.handle_get_settings));
+        ctx_http.post("/storage/settings",          ex_wrapper(storage.handle_put_settings));
+        warn_names.push_back("UI storage (experimental)");
+    } else {
+        ctx_http.get ("/storage/conversations",     ex_wrapper(res_403));
+        ctx_http.get ("/storage/conversations/:id", ex_wrapper(res_403));
+        ctx_http.post("/storage/conversations/:id", ex_wrapper(res_403));
+        ctx_http.del ("/storage/conversations/:id", ex_wrapper(res_403));
+        ctx_http.get ("/storage/settings",          ex_wrapper(res_403));
+        ctx_http.post("/storage/settings",          ex_wrapper(res_403));
     }
 
     if (!warn_names.empty()) {
@@ -477,6 +502,7 @@ static int server_run_router(common_params & params, int argc, char ** argv, con
     server_context ctx_server;
     server_routes  routes(params, ctx_server);
     server_tools   tools;
+    server_storage storage;
 
     server_http_context ctx_http;
     if (!ctx_http.init(params)) {
@@ -538,7 +564,7 @@ static int server_run_router(common_params & params, int argc, char ** argv, con
         models_routes->router_streams_lookup,
         models_routes->router_stream_delete);
 
-    if (!server_setup_features(ctx_http, params, mcp_mgr, tools, SERVER_ROLE_ROUTER)) {
+    if (!server_setup_features(ctx_http, params, mcp_mgr, tools, storage, SERVER_ROLE_ROUTER)) {
         return 1;
     }
 
@@ -627,6 +653,7 @@ static int server_run_instance(common_params & params, server_role & role, commo
     server_context ctx_server;
     server_routes  routes(params, ctx_server);
     server_tools   tools;
+    server_storage storage;
 
     server_http_context ctx_http;
     if (!ctx_http.init(params)) {
@@ -640,7 +667,7 @@ static int server_run_instance(common_params & params, server_role & role, commo
         server_stream_make_lookup_handler(),
         server_stream_make_delete_handler());
 
-    if (!server_setup_features(ctx_http, params, mcp_mgr, tools, SERVER_ROLE_INSTANCE)) {
+    if (!server_setup_features(ctx_http, params, mcp_mgr, tools, storage, SERVER_ROLE_INSTANCE)) {
         return 1;
     }
 

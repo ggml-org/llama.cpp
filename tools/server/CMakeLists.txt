@@ -23,6 +23,8 @@ add_library(${TARGET} STATIC
     server-stream.h
     server-tools.cpp
     server-tools.h
+    server-storage.cpp
+    server-storage.h
     server-mcp.cpp
     server-mcp.h
     server-schema.cpp

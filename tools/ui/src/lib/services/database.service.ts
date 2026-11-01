@@ -1,30 +1,24 @@
 /**
- * DatabaseService - IndexedDB persistence for conversations and messages
+ * DatabaseService - persistence for conversations and messages
  *
- * Thin Dexie layer over the conversations/messages tables: CRUD, tree
- * navigation (descendants, reparenting) and cascading deletes. No reactive
+ * Applies the tree rules (branching, forks, reparenting, cascading deletes)
+ * on top of a row-level StorageBackend, IndexedDB by default. No reactive
  * state; consumed by conversationsStore and the chat flows.
  */
 
-import { IDXDB_STORES, IDXDB_TABLES, STORAGE_APP_NAME } from '$lib/constants';
+import { IdbBackend } from './idb-backend';
 import { MessageRole } from '$lib/enums';
-import type { McpServerOverride } from '$lib/types/database';
-import type { ExportedConversation } from '$lib/types/database';
-import { filterByLeafNodeId, findDescendantMessages, uuid } from '$lib/utils';
-import Dexie, { type EntityTable } from 'dexie';
+import type { ExportedConversation, StorageBackend } from '$lib/types/database';
+import {
+	buildForkedConversation,
+	collectForkDescendantIds,
+	findDescendantMessages,
+	groupMessagesByConversation,
+	reparentDirectForks,
+	uuid
+} from '$lib/utils';
 
-class LlamaUiDatabase extends Dexie {
-	[IDXDB_TABLES.conversations]!: EntityTable<DatabaseConversation, string>;
-	[IDXDB_TABLES.messages]!: EntityTable<DatabaseMessage, string>;
-
-	constructor() {
-		super(STORAGE_APP_NAME);
-
-		this.version(1).stores(IDXDB_STORES);
-	}
-}
-
-const db = new LlamaUiDatabase();
+let backend: StorageBackend = new IdbBackend();
 
 export class DatabaseService {
 	/**
@@ -42,45 +36,17 @@ export class DatabaseService {
 
 		const idSet = new Set(cleanIds);
 
-		await db.transaction(
-			'rw',
-			[db[IDXDB_TABLES.conversations], db[IDXDB_TABLES.messages]],
-			async () => {
-				// Pre-load each to-delete conversation so the per-id reparent
-				// walk-up doesn't ping-pong the same ancestry chain.
-				const prefetched = new Map<string, DatabaseConversation>();
+		await backend.transaction(async () => {
+			const conversations = await backend.listConversations();
 
-				let frontier = [...cleanIds];
+			for (const id of cleanIds) {
+				const updates = reparentDirectForks(conversations, id, idSet);
 
-				const requested = new Set<string>(frontier);
-
-				while (frontier.length > 0) {
-					const fetched = await db[IDXDB_TABLES.conversations].bulkGet(frontier);
-
-					frontier = [];
-					for (let i = 0; i < fetched.length; i++) {
-						const conv = fetched[i];
-
-						if (!conv || !conv.id) continue;
-
-						prefetched.set(conv.id, conv);
-						const ancestor = conv.forkedFromConversationId;
-
-						if (ancestor && !prefetched.has(ancestor) && !requested.has(ancestor)) {
-							frontier.push(ancestor);
-							requested.add(ancestor);
-						}
-					}
-				}
-
-				for (const id of cleanIds) {
-					await this.reparentDirectChildren(id, idSet, prefetched);
-				}
-
-				await db[IDXDB_TABLES.conversations].bulkDelete(cleanIds);
-				await db[IDXDB_TABLES.messages].where('convId').anyOf(cleanIds).delete();
+				if (updates.length > 0) await backend.putConversations(updates);
 			}
-		);
+
+			await backend.deleteConversations(cleanIds);
+		});
 	}
 
 	/**
@@ -99,8 +65,8 @@ export class DatabaseService {
 
 		if (cleanIds.length === 0) return result;
 
-		await db.transaction('rw', db[IDXDB_TABLES.conversations], async () => {
-			const convs = await db[IDXDB_TABLES.conversations].bulkGet(cleanIds);
+		await backend.transaction(async () => {
+			const convs = await backend.getConversations(cleanIds);
 			const updates: DatabaseConversation[] = [];
 
 			for (let i = 0; i < cleanIds.length; i++) {
@@ -116,7 +82,7 @@ export class DatabaseService {
 
 			if (updates.length === 0) return;
 
-			await db[IDXDB_TABLES.conversations].bulkPut(updates);
+			await backend.putConversations(updates);
 		});
 
 		return result;
@@ -141,7 +107,7 @@ export class DatabaseService {
 			...fields
 		};
 
-		await db[IDXDB_TABLES.conversations].add(conversation);
+		await backend.addConversation(conversation);
 
 		return conversation;
 	}
@@ -158,41 +124,37 @@ export class DatabaseService {
 		message: Omit<DatabaseMessage, 'id'>,
 		parentId: string | null
 	): Promise<DatabaseMessage> {
-		return await db.transaction(
-			'rw',
-			[db[IDXDB_TABLES.conversations], db[IDXDB_TABLES.messages]],
-			async () => {
-				// Handle null parent (root message case)
-				if (parentId !== null) {
-					const parentMessage = await db[IDXDB_TABLES.messages].get(parentId);
+		return await backend.transaction(async () => {
+			// Handle null parent (root message case)
+			if (parentId !== null) {
+				const parentMessage = await backend.getMessage(parentId);
 
-					if (!parentMessage) {
-						throw new Error(`Parent message ${parentId} not found`);
-					}
+				if (!parentMessage) {
+					throw new Error(`Parent message ${parentId} not found`);
 				}
-
-				const newMessage: DatabaseMessage = {
-					...message,
-					children: [],
-					id: uuid(),
-					parent: parentId,
-					toolCalls: message.toolCalls ?? ''
-				};
-
-				await db[IDXDB_TABLES.messages].add(newMessage);
-
-				// Update parent's children array if parent exists
-				if (parentId !== null) {
-					await this.addChildToParent(parentId, newMessage.id);
-				}
-
-				await this.updateConversation(message.convId, {
-					currNode: newMessage.id
-				});
-
-				return newMessage;
 			}
-		);
+
+			const newMessage: DatabaseMessage = {
+				...message,
+				children: [],
+				id: uuid(),
+				parent: parentId,
+				toolCalls: message.toolCalls ?? ''
+			};
+
+			await backend.addMessages([newMessage]);
+
+			// Update parent's children array if parent exists
+			if (parentId !== null) {
+				await this.addChildToParent(parentId, newMessage.id);
+			}
+
+			await this.updateConversation(message.convId, {
+				currNode: newMessage.id
+			});
+
+			return newMessage;
+		});
 	}
 
 	/**
@@ -215,7 +177,7 @@ export class DatabaseService {
 			type: 'root'
 		};
 
-		await db[IDXDB_TABLES.messages].add(rootMessage);
+		await backend.addMessages([rootMessage]);
 
 		return rootMessage.id;
 	}
@@ -240,8 +202,8 @@ export class DatabaseService {
 			throw new Error('Cannot create system message with empty content');
 		}
 
-		return await db.transaction('rw', db[IDXDB_TABLES.messages], async () => {
-			const parentMessage = await db[IDXDB_TABLES.messages].get(parentId);
+		return await backend.transaction(async () => {
+			const parentMessage = await backend.getMessage(parentId);
 
 			if (!parentMessage) {
 				throw new Error(`Parent message ${parentId} not found`);
@@ -258,7 +220,7 @@ export class DatabaseService {
 				type: MessageRole.SYSTEM
 			};
 
-			await db[IDXDB_TABLES.messages].add(systemMessage);
+			await backend.addMessages([systemMessage]);
 			await this.addChildToParent(parentId, systemMessage.id);
 
 			return systemMessage;
@@ -274,39 +236,19 @@ export class DatabaseService {
 		id: string,
 		options?: { deleteWithForks?: boolean }
 	): Promise<void> {
-		await db.transaction(
-			'rw',
-			[db[IDXDB_TABLES.conversations], db[IDXDB_TABLES.messages]],
-			async () => {
-				if (options?.deleteWithForks) {
-					// Recursively collect all descendant IDs
-					const idsToDelete: string[] = [];
-					const queue = [id];
+		await backend.transaction(async () => {
+			const conversations = await backend.listConversations();
 
-					while (queue.length > 0) {
-						const parentId = queue.pop()!;
-						const children = await db[IDXDB_TABLES.conversations]
-							.filter((c) => c.forkedFromConversationId === parentId)
-							.toArray();
+			if (options?.deleteWithForks) {
+				await backend.deleteConversations(collectForkDescendantIds(conversations, id));
+			} else {
+				const updates = reparentDirectForks(conversations, id);
 
-						for (const child of children) {
-							idsToDelete.push(child.id);
-							queue.push(child.id);
-						}
-					}
-
-					for (const forkId of idsToDelete) {
-						await db[IDXDB_TABLES.conversations].delete(forkId);
-						await db[IDXDB_TABLES.messages].where('convId').equals(forkId).delete();
-					}
-				} else {
-					await this.reparentDirectChildren(id);
-				}
-
-				await db[IDXDB_TABLES.conversations].delete(id);
-				await db[IDXDB_TABLES.messages].where('convId').equals(id).delete();
+				if (updates.length > 0) await backend.putConversations(updates);
 			}
-		);
+
+			await backend.deleteConversations([id]);
+		});
 	}
 
 	/**
@@ -315,14 +257,14 @@ export class DatabaseService {
 	 * @param messageId - ID of the message to delete
 	 */
 	static async deleteMessage(messageId: string): Promise<void> {
-		await db.transaction('rw', db[IDXDB_TABLES.messages], async () => {
-			const message = await db[IDXDB_TABLES.messages].get(messageId);
+		await backend.transaction(async () => {
+			const message = await backend.getMessage(messageId);
 
 			if (!message) return;
 
 			await this.removeChildFromParent(messageId);
 
-			await db[IDXDB_TABLES.messages].delete(messageId);
+			await backend.deleteMessages([messageId]);
 		});
 	}
 
@@ -338,19 +280,16 @@ export class DatabaseService {
 		conversationId: string,
 		messageId: string
 	): Promise<string[]> {
-		return await db.transaction('rw', db[IDXDB_TABLES.messages], async () => {
+		return await backend.transaction(async () => {
 			// Get all messages in the conversation to find descendants
-			const allMessages = await db[IDXDB_TABLES.messages]
-				.where('convId')
-				.equals(conversationId)
-				.toArray();
+			const allMessages = await backend.getMessages([conversationId]);
 			const descendants = findDescendantMessages(allMessages, messageId);
 			const allToDelete = [messageId, ...descendants];
 
 			await this.removeChildFromParent(messageId);
 
 			// Delete all messages in the branch
-			await db[IDXDB_TABLES.messages].bulkDelete(allToDelete);
+			await backend.deleteMessages(allToDelete);
 
 			return allToDelete;
 		});
@@ -370,75 +309,21 @@ export class DatabaseService {
 		atMessageId: string,
 		options: { name: string; includeAttachments: boolean }
 	): Promise<DatabaseConversation> {
-		return await db.transaction(
-			'rw',
-			[db[IDXDB_TABLES.conversations], db[IDXDB_TABLES.messages]],
-			async () => {
-				const sourceConv = await db[IDXDB_TABLES.conversations].get(sourceConvId);
+		return await backend.transaction(async () => {
+			const [sourceConv] = await backend.getConversations([sourceConvId]);
 
-				if (!sourceConv) {
-					throw new Error(`Source conversation ${sourceConvId} not found`);
-				}
-
-				const allMessages = await db[IDXDB_TABLES.messages]
-					.where('convId')
-					.equals(sourceConvId)
-					.toArray();
-				const pathMessages = filterByLeafNodeId(
-					allMessages,
-					atMessageId,
-					true
-				) as DatabaseMessage[];
-
-				if (pathMessages.length === 0) {
-					throw new Error(`Could not resolve message path to ${atMessageId}`);
-				}
-
-				const idMap = new Map<string, string>();
-
-				for (const msg of pathMessages) {
-					idMap.set(msg.id, uuid());
-				}
-
-				const newConvId = uuid();
-				const clonedMessages: DatabaseMessage[] = pathMessages.map((msg) => {
-					const newId = idMap.get(msg.id)!;
-					const newParent = msg.parent ? (idMap.get(msg.parent) ?? null) : null;
-					const newChildren = msg.children
-						.filter((childId: string) => idMap.has(childId))
-						.map((childId: string) => idMap.get(childId)!);
-
-					return {
-						...msg,
-						children: newChildren,
-						convId: newConvId,
-						extra: options.includeAttachments ? msg.extra : undefined,
-						id: newId,
-						parent: newParent
-					};
-				});
-				const lastClonedMessage = clonedMessages[clonedMessages.length - 1];
-				const newConv: DatabaseConversation = {
-					currNode: lastClonedMessage.id,
-					cwd: sourceConv.cwd,
-					forkedFromConversationId: sourceConvId,
-					id: newConvId,
-					lastModified: Date.now(),
-					mcpServerOverrides: sourceConv.mcpServerOverrides
-						? sourceConv.mcpServerOverrides.map((o: McpServerOverride) => ({
-								enabled: o.enabled,
-								serverId: o.serverId
-							}))
-						: undefined,
-					name: options.name
-				};
-
-				await db[IDXDB_TABLES.conversations].add(newConv);
-				await db[IDXDB_TABLES.messages].bulkAdd(clonedMessages);
-
-				return newConv;
+			if (!sourceConv) {
+				throw new Error(`Source conversation ${sourceConvId} not found`);
 			}
-		);
+
+			const allMessages = await backend.getMessages([sourceConvId]);
+			const fork = buildForkedConversation(sourceConv, allMessages, atMessageId, options);
+
+			await backend.addConversation(fork.conv);
+			await backend.addMessages(fork.messages);
+
+			return fork.conv;
+		});
 	}
 
 	/**
@@ -447,7 +332,7 @@ export class DatabaseService {
 	 * @returns Array of conversations
 	 */
 	static async getAllConversations(): Promise<DatabaseConversation[]> {
-		return await db[IDXDB_TABLES.conversations].orderBy('lastModified').reverse().toArray();
+		return await backend.listConversations();
 	}
 
 	/**
@@ -457,7 +342,9 @@ export class DatabaseService {
 	 * @returns The conversation if found, otherwise undefined
 	 */
 	static async getConversation(id: string): Promise<DatabaseConversation | undefined> {
-		return await db[IDXDB_TABLES.conversations].get(id);
+		const [conv] = await backend.getConversations([id]);
+
+		return conv;
 	}
 
 	/**
@@ -467,7 +354,9 @@ export class DatabaseService {
 	 * @returns Array of messages in the conversation
 	 */
 	static async getConversationMessages(convId: string): Promise<DatabaseMessage[]> {
-		return await db[IDXDB_TABLES.messages].where('convId').equals(convId).sortBy('timestamp');
+		const messages = await backend.getMessages([convId]);
+
+		return messages.sort((a, b) => a.timestamp - b.timestamp);
 	}
 
 	/**
@@ -486,28 +375,15 @@ export class DatabaseService {
 		if (cleanIds.length === 0) return result;
 
 		const [convs, allMessages] = await Promise.all([
-			db[IDXDB_TABLES.conversations].bulkGet(cleanIds),
-			db[IDXDB_TABLES.messages].where('convId').anyOf(cleanIds).toArray()
+			backend.getConversations(cleanIds),
+			backend.getMessages(cleanIds)
 		]);
-		const messagesByConv = new Map<string, DatabaseMessage[]>();
+		const messagesByConv = groupMessagesByConversation(allMessages);
 
-		for (const msg of allMessages) {
-			const bucket = messagesByConv.get(msg.convId);
-
-			if (bucket) bucket.push(msg);
-			else messagesByConv.set(msg.convId, [msg]);
-		}
-
-		for (let i = 0; i < cleanIds.length; i++) {
-			const conv = convs[i];
-
+		for (const conv of convs) {
 			if (!conv) continue;
 
-			const messages = (messagesByConv.get(conv.id) ?? []).sort(
-				(a, b) => a.timestamp - b.timestamp
-			);
-
-			result.set(conv.id, { conv, messages });
+			result.set(conv.id, { conv, messages: messagesByConv.get(conv.id) ?? [] });
 		}
 
 		return result;
@@ -526,31 +402,25 @@ export class DatabaseService {
 		const imported: DatabaseConversation[] = [];
 		const skipped: DatabaseConversation[] = [];
 
-		return await db.transaction(
-			'rw',
-			[db[IDXDB_TABLES.conversations], db[IDXDB_TABLES.messages]],
-			async () => {
-				for (const item of data) {
-					const { conv, messages } = item;
-					const existing = await db[IDXDB_TABLES.conversations].get(conv.id);
+		return await backend.transaction(async () => {
+			for (const item of data) {
+				const { conv, messages } = item;
+				const [existing] = await backend.getConversations([conv.id]);
 
-					if (existing) {
-						skipped.push(conv);
+				if (existing) {
+					skipped.push(conv);
 
-						continue;
-					}
-
-					await db[IDXDB_TABLES.conversations].add(conv);
-					for (const msg of messages) {
-						await db[IDXDB_TABLES.messages].put(msg);
-					}
-
-					imported.push(conv);
+					continue;
 				}
 
-				return { imported, skipped };
+				await backend.addConversation(conv);
+				await backend.putMessages(messages);
+
+				imported.push(conv);
 			}
-		);
+
+			return { imported, skipped };
+		});
 	}
 
 	/**
@@ -560,7 +430,7 @@ export class DatabaseService {
 	 * @returns The new pinned status
 	 */
 	static async toggleConversationPin(id: string): Promise<boolean> {
-		const conversation = await db[IDXDB_TABLES.conversations].get(id);
+		const conversation = await this.getConversation(id);
 
 		if (!conversation) {
 			throw new Error(`Conversation ${id} not found`);
@@ -585,7 +455,7 @@ export class DatabaseService {
 		id: string,
 		updates: Partial<Omit<DatabaseConversation, 'id'>>
 	): Promise<void> {
-		await db[IDXDB_TABLES.conversations].update(id, updates);
+		await backend.updateConversation(id, updates);
 	}
 
 	/**
@@ -612,18 +482,26 @@ export class DatabaseService {
 		id: string,
 		updates: Partial<Omit<DatabaseMessage, 'id'>>
 	): Promise<void> {
-		await db[IDXDB_TABLES.messages].update(id, updates);
+		await backend.updateMessage(id, updates);
+	}
+
+	/**
+	 * Switch where conversations are stored. Called once at startup, before any
+	 * conversation is read.
+	 */
+	static useBackend(next: StorageBackend): void {
+		backend = next;
 	}
 
 	/**
 	 * Appends a child id to a parent message's children array.
 	 */
 	private static async addChildToParent(parentId: string, childId: string): Promise<void> {
-		const parent = await db[IDXDB_TABLES.messages].get(parentId);
+		const parent = await backend.getMessage(parentId);
 
 		if (!parent) return;
 
-		await db[IDXDB_TABLES.messages].update(parentId, {
+		await backend.updateMessage(parentId, {
 			children: [...parent.children, childId]
 		});
 	}
@@ -632,74 +510,15 @@ export class DatabaseService {
 	 * Removes a child id from its parent message's children array.
 	 */
 	private static async removeChildFromParent(messageId: string): Promise<void> {
-		const message = await db[IDXDB_TABLES.messages].get(messageId);
+		const message = await backend.getMessage(messageId);
 
 		if (!message?.parent) return;
 
-		const parent = await db[IDXDB_TABLES.messages].get(message.parent);
+		const parent = await backend.getMessage(message.parent);
 
 		if (!parent) return;
 
 		parent.children = parent.children.filter((childId: string) => childId !== messageId);
-		await db[IDXDB_TABLES.messages].put(parent);
-	}
-
-	/**
-	 * Reparents direct children of `parentId` to the nearest surviving
-	 * ancestor (or promotes them to top-level when the immediate parent was
-	 * top-level). Walking skips any ancestor listed in `excludeIds`, since
-	 * those will be deleted in the same batch — leaving a grandchild pointing
-	 * at an `excludeIds` entry would orphan it. Children whose own id is in
-	 * `excludeIds` are dropped from the updates (the bulk-delete pass will
-	 * remove them). `prefetched` may carry a pre-fetched ancestor map to
-	 * avoid repeat reads inside a bulk transaction.
-	 */
-	private static async reparentDirectChildren(
-		parentId: string,
-		excludeIds: ReadonlySet<string> = new Set(),
-		prefetched?: ReadonlyMap<string, DatabaseConversation>
-	): Promise<void> {
-		const conv = prefetched?.get(parentId) ?? (await db[IDXDB_TABLES.conversations].get(parentId));
-
-		if (!conv) return;
-
-		let newParent = conv.forkedFromConversationId;
-
-		const visited = new Set<string>([parentId]);
-
-		while (newParent && excludeIds.has(newParent)) {
-			if (visited.has(newParent)) {
-				newParent = undefined;
-
-				break;
-			}
-
-			visited.add(newParent);
-			const next =
-				prefetched?.get(newParent) ?? (await db[IDXDB_TABLES.conversations].get(newParent));
-
-			if (!next) {
-				newParent = undefined;
-
-				break;
-			}
-
-			newParent = next.forkedFromConversationId;
-		}
-
-		const directChildren = await db[IDXDB_TABLES.conversations]
-			.filter((c) => c.forkedFromConversationId === parentId)
-			.toArray();
-		const updates: DatabaseConversation[] = [];
-
-		for (const child of directChildren) {
-			if (excludeIds.has(child.id)) continue;
-
-			updates.push({ ...child, forkedFromConversationId: newParent });
-		}
-
-		if (updates.length === 0) return;
-
-		await db[IDXDB_TABLES.conversations].bulkPut(updates);
+		await backend.putMessages([parent]);
 	}
 }
