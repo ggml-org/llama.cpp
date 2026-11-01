@@ -66,6 +66,62 @@ def test_lora_per_request():
         assert match_regex(re_test, res.body["content"])
 
 
+def test_lora_global_change_clears_slot_cache():
+    global server
+    server.n_slots = 1
+    server.cache_ram = 0
+    server.start()
+
+    # long enough that stale kv changes the output
+    prompt = "Look in thy glass and tell the face thou viewest, now is the time that face should form another, whose fresh repair if now thou not renewest, thou dost beguile the world, unbless some mother."
+
+    def set_global_lora(scale: float):
+        res = server.make_request("POST", "/lora-adapters", data=[{"id": 0, "scale": scale}])
+        assert res.status_code == 200
+
+    def complete(lora=None, cache_prompt: bool = True) -> dict:
+        data = {
+            "prompt": prompt,
+            "cache_prompt": cache_prompt,
+            "temperature": 0.0,
+            "seed": 42,
+            "n_predict": 16,
+        }
+        if lora is not None:
+            data["lora"] = lora
+        res = server.make_request("POST", "/completion", data=data)
+        assert res.status_code == 200
+        return res.body
+
+    set_global_lora(0.0)
+    expected_zero = complete(cache_prompt=False)["content"]
+    set_global_lora(1.0)
+    expected_one = complete(cache_prompt=False)["content"]
+    assert expected_zero != expected_one
+
+    # the global config changes between two requests that do not set "lora"
+    set_global_lora(0.0)
+    res = complete()
+    assert res["timings"]["cache_n"] == 0
+    assert res["content"] == expected_zero
+    set_global_lora(1.0)
+    res = complete()
+    assert res["timings"]["cache_n"] == 0
+    assert res["content"] == expected_one
+
+    # unchanged config keeps the cache
+    res = complete()
+    assert res["timings"]["cache_n"] > 0
+
+    # a request that sets "lora", followed by one that doesn't
+    res = complete(lora=[{"id": 0, "scale": 0.0}])
+    assert res["timings"]["cache_n"] == 0
+    assert res["content"] == expected_zero
+    res = complete()
+    assert res["timings"]["cache_n"] == 0
+    assert res["content"] == expected_one
+
+
 @pytest.mark.skipif(not is_slow_test_allowed(), reason="skipping slow test")
 def test_with_big_model():
     server = ServerProcess()
