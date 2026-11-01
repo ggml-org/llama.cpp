@@ -168,7 +168,7 @@ static const llm_fused_op_probe llm_fused_op_dsv4_hc_post_probe = {
 static const llm_fused_op_probe llm_fused_op_top_k_mask_probe = {
     /*.op               =*/ LLM_FUSED_OP_TOP_K_MASK,
     /*.name             =*/ "fused top-k mask",
-    /*.n_tokens_per_seq =*/ 1,
+    /*.n_tokens_per_seq =*/ LLAMA_DSV41_GATHER_MAX_TOKENS + 1, // the gather path of deepseek41 builds no mask
 };
 
 llama_context::llama_context(
