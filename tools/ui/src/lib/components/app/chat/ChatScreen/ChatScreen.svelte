@@ -250,6 +250,7 @@
 		{#if deviceStore.isMobile && showContextGauge.current}
 			<ChatFormContextGauge
 				class="sidebar-reveal-pin-top fixed top-(--corner-control-top) right-4 z-20 size-10 rounded-full bg-muted/60 border border-border/20 shadow-sm backdrop-blur-sm"
+				corner
 			/>
 		{/if}
 

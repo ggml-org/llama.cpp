@@ -14,9 +14,11 @@
 	interface Props {
 		/** Sizes and places the trigger, the inline dial size by default. */
 		class?: string;
+		/** Draws the dial as the icon of a phone's corner key, matching the menu key's glyph. */
+		corner?: boolean;
 	}
 
-	let { class: className = 'h-5 w-5 max-md:h-6 max-md:w-6' }: Props = $props();
+	let { class: className = 'h-5 w-5 max-md:h-6 max-md:w-6', corner = false }: Props = $props();
 
 	const gauge = useContextGauge();
 
@@ -64,6 +66,6 @@
 	<ContextGaugeDial
 		level={gauge.colorLevel}
 		percent={gauge.contextPercent}
-		size={deviceStore.isMobile ? 'md' : 'sm'}
+		size={corner ? 'key' : deviceStore.isMobile ? 'md' : 'sm'}
 	/>
 </div>
