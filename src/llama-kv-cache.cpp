@@ -552,11 +552,11 @@ void llama_kv_cache::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, ll
 
     bool is_full = true;
 
-    if (p0 > 0 && p0 + 1 < (int) get_size()) {
+    if (p0 > 0 && (int64_t) p0 + 1 < get_size()) {
         is_full = false;
     }
 
-    if (p1 > 0 && p1 + 1 < (int) get_size()) {
+    if (p1 > 0 && (int64_t) p1 + 1 < get_size()) {
         is_full = false;
     }
 
