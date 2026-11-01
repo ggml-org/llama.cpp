@@ -3,7 +3,6 @@
 	import { goto } from '$app/navigation';
 	import { ActionIcon, KeyboardShortcutInfo } from '$lib/components/app';
 	import * as Dialog from '$lib/components/ui/dialog';
-	import * as Drawer from '$lib/components/ui/drawer';
 	import {
 		ICON_CLASS_DEFAULT,
 		ICON_CLASS_SM,
@@ -188,11 +187,7 @@
 		</div>
 	</div>
 
-	<div
-		class="min-h-0 flex-1 overflow-y-auto p-2 max-md:pb-safe-2"
-		id="search-results"
-		role="listbox"
-	>
+	<div class="min-h-0 flex-1 overflow-y-auto p-2" id="search-results" role="listbox">
 		{#each sections as section, sectionIndex (section.title)}
 			{@const offset = sections
 				.slice(0, sectionIndex)
@@ -262,33 +257,17 @@
 	</div>
 {/snippet}
 
-<!-- a phone opens the same search as a sheet that fills the screen -->
-{#if deviceStore.isMobile}
-	<Drawer.Root onOpenChange={handleOpenChange} {open}>
-		<Drawer.Content
-			class="h-[calc(100dvh-var(--safe-area-top)-0.5rem)] max-h-none! overflow-hidden data-[vaul-drawer-direction=bottom]:mt-0"
-			onOpenAutoFocus={(event) => {
-				event.preventDefault();
-				inputRef?.focus();
-			}}
-		>
-			<Drawer.Title class="sr-only">Search</Drawer.Title>
+<!-- like every dialog, a phone shows it full screen -->
+<Dialog.Root onOpenChange={handleOpenChange} {open}>
+	<Dialog.Content
+		class="top-[12%] flex h-[min(36rem,76dvh)]! w-full max-w-2xl! translate-y-0 flex-col gap-0 overflow-hidden rounded-xl p-0"
+		onOpenAutoFocus={(event) => {
+			event.preventDefault();
+			inputRef?.focus();
+		}}
+	>
+		<Dialog.Title class="sr-only">Search</Dialog.Title>
 
-			{@render search()}
-		</Drawer.Content>
-	</Drawer.Root>
-{:else}
-	<Dialog.Root onOpenChange={handleOpenChange} {open}>
-		<Dialog.Content
-			class="top-[12%] flex h-[min(36rem,76dvh)]! w-full max-w-2xl! translate-y-0 flex-col gap-0 overflow-hidden rounded-xl p-0"
-			onOpenAutoFocus={(event) => {
-				event.preventDefault();
-				inputRef?.focus();
-			}}
-		>
-			<Dialog.Title class="sr-only">Search</Dialog.Title>
-
-			{@render search()}
-		</Dialog.Content>
-	</Dialog.Root>
-{/if}
+		{@render search()}
+	</Dialog.Content>
+</Dialog.Root>
