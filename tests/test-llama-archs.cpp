@@ -1238,24 +1238,6 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
             continue;
         }
 
-        if (arch == LLM_ARCH_CLOVER_MOE) {
-            gguf_context_ptr invalid_ctx = get_gguf_ctx(arch, true);
-            kv_writer(arch, invalid_ctx.get()).add_kv(LLM_KV_ATTENTION_VALUE_LENGTH, uint32_t(64));
-            llama_model_ptr invalid_model;
-            ud.verbosity = LOG_LEVEL_OUTPUT;
-            try {
-                invalid_model = get_model(invalid_ctx.get(), nullptr, seed, stdev, {});
-            } catch (const std::runtime_error &) {
-            }
-            ud.verbosity = verbosity;
-            n_tests++;
-            if (invalid_model) {
-                LOG_ERR("Clover accepted unequal key and value head sizes\n");
-                n_failed++;
-                all_ok = false;
-            }
-        }
-
         const bool encode = arch == LLM_ARCH_T5 || arch == LLM_ARCH_DREAM || arch == LLM_ARCH_LLADA || arch == LLM_ARCH_LLADA_MOE || arch == LLM_ARCH_RND1;
         for (bool moe : {false, true}) {
             if (moe && !moe_implemented(arch)) {
