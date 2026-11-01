@@ -118,16 +118,22 @@ inline void cpy_blck_f32_q2_0(const char * cxi, char * cdsti) {
 }
 
 inline int best_index_mxfp4(const float x, const float e) {
-    int best_index = 0;
-    float best_err = sycl::fabs((float) (kvalues_mxfp4[0] * e - x));
-    for (int i = 1; i < 16; ++i) {
-        const float err = sycl::fabs((float) (kvalues_mxfp4[i] * e - x));
+    constexpr uint8_t order[8] = { 0, 2, 4, 6, 1, 3, 5, 7 };
+
+    int best_index = order[0];
+    const float ax = sycl::fabs(x);
+    float best_err = sycl::fabs((float) (kvalues_mxfp4[best_index] * e - ax));
+
+    // Visit even-mantissa encodings first so exact ties resolve to even.
+    for (int j = 1; j < 8; ++j) {
+        const int i = order[j];
+        const float err = sycl::fabs((float) (kvalues_mxfp4[i] * e - ax));
         if (err < best_err) {
             best_index = i;
             best_err = err;
         }
     }
-    return best_index;
+    return best_index != 0 && x < 0.0f ? best_index | 8 : best_index;
 }
 
 inline int nearest_int_sycl(float x) {
