@@ -353,7 +353,7 @@ void llama_memory_recurrent::seq_add(llama_seq_id seq_id, llama_pos p0, llama_po
         if (tail_id >= 0) {
             auto & cell = cells[tail_id];
             if (cell.has_seq_id(seq_id) && p0 <= cell.pos && cell.pos < p1) {
-                cell.pos += shift;
+                cell.pos = (llama_pos) std::clamp((int64_t) cell.pos + shift, (int64_t) 0, (int64_t) std::numeric_limits<llama_pos>::max());
             }
         }
     }
