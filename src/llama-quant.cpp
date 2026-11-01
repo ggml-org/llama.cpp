@@ -11,6 +11,7 @@
 #include <cinttypes>
 #include <cstdio>
 #include <cstring>
+#include <exception>
 #include <fstream>
 #include <mutex>
 #include <numeric>
