@@ -260,11 +260,11 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         n_ff    = 1024;
         n_layer = 4;
     } else if (arch == LLM_ARCH_DEEPSEEK41) {
-        // window-only, Engram, ratio-2 and ratio-1 sources, top-k reuse and a candidate-masked index layer
+        // window-only, Engram, ratio-2 and ratio-1 sources, top-k reuse and a candidate-masked index layer; 18 layers share the ratio-1 KV source (many views of one KV cache tensor with -sm tensor)
         n_embd  = 512;
         n_head  = 8;
         n_ff    = 1024;
-        n_layer = 6;
+        n_layer = 22;
     } else if (arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_LAGUNA) {
         n_embd = 160; // exercise per-head tensor split granularity with head size 80
     } else if (arch == LLM_ARCH_QWEN3 || arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_AFMOE) {
@@ -574,7 +574,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     if (arch == LLM_ARCH_DEEPSEEK41) {
         ms.add_kv(LLM_KV_ATTENTION_OUTPUT_GROUP_COUNT,          uint32_t(8));
         ms.add_kv(LLM_KV_ATTENTION_OUTPUT_LORA_RANK,            uint32_t(32));
-        ms.add_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS,             std::vector<uint32_t>({0, 0, 2, 2, 1, 1}));
+        ms.add_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS,             std::vector<uint32_t>({0, 0, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}));
         ms.add_kv(LLM_KV_ATTENTION_COMPRESS_ROPE_FREQ_BASE,     160000.0f);
         ms.add_kv(LLM_KV_ATTENTION_KV_SOURCE_LAYERS,            std::vector<uint32_t>({2, 4}));
         ms.add_kv(LLM_KV_ATTENTION_INDEXER_SOURCE_LAYERS,       std::vector<uint32_t>({2, 4, 5}));
