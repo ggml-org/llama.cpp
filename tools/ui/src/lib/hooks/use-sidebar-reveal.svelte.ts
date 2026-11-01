@@ -9,7 +9,7 @@ import {
 	SIDEBAR_REVEAL_SWIPE_PX
 } from '$lib/constants';
 import { deviceStore, uiStore } from '$lib/stores';
-import { remToPx } from '$lib/utils';
+import { hapticTap, remToPx } from '$lib/utils';
 import { untrack } from 'svelte';
 import { quartOut } from 'svelte/easing';
 import { Tween } from 'svelte/motion';
@@ -307,6 +307,9 @@ export function useSidebarReveal() {
 				uiStore.isSidebarExpanded =
 					wasExpanded !== pulled > revealPx() * SIDEBAR_REVEAL_COMMIT_RATIO;
 			}
+
+			// a swipe that opens the sidebar lands with a tap, as the menu key's does
+			if (!wasExpanded && uiStore.isSidebarExpanded) hapticTap();
 		}
 
 		dragOffset = null;

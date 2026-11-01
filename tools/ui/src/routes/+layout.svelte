@@ -35,6 +35,7 @@
 		versionStore
 	} from '$lib/stores';
 	import { initStores } from '$lib/stores/init';
+	import { applySurfaceTheme, hapticTap } from '$lib/utils';
 	import { ModeWatcher } from 'mode-watcher';
 	import { untrack } from 'svelte';
 	import { onMount } from 'svelte';
@@ -50,6 +51,11 @@
 	let innerWidth = $state(browser ? window.innerWidth : 0);
 
 	let chatSidebar: { editActiveConversation?: () => void } | undefined = $state();
+
+	// the light surface theme (Paper or Matte) follows the saved setting
+	$effect(() => {
+		applySurfaceTheme(settingsStore.config[SETTINGS_KEYS.SURFACE_THEME]);
+	});
 
 	let showBuildVersion = $derived(
 		settingsStore.config[SETTINGS_KEYS.SHOW_BUILD_VERSION] as boolean
@@ -120,6 +126,13 @@
 		} else {
 			conversationsStore.openNewChat();
 		}
+	}
+
+	// the phone's menu key: opening the sidebar lands with a haptic tap, as a native drawer does
+	function toggleSidebar() {
+		if (!uiStore.isSidebarExpanded) hapticTap();
+
+		uiStore.isSidebarExpanded = !uiStore.isSidebarExpanded;
 	}
 
 	const sidebarReveal = useSidebarReveal();
@@ -383,7 +396,7 @@
 					class="sidebar-reveal-pin-top fixed top-(--corner-control-top) left-4 z-20 transition-colors h-10 w-10 rounded-full bg-muted/60 border border-border/20 shadow-sm text-accent-foreground"
 					icon={MenuIcon}
 					iconSize="size-6"
-					onclick={() => (uiStore.isSidebarExpanded = !uiStore.isSidebarExpanded)}
+					onclick={toggleSidebar}
 					size="lg"
 				/>
 			{/if}

@@ -176,3 +176,6 @@ export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 		tooltip: 'Settings'
 	}
 ];
+
+/** A light haptic tap's length where the browser vibrates (Android): a click, not a buzz. */
+export const HAPTIC_TAP_MS = 8;

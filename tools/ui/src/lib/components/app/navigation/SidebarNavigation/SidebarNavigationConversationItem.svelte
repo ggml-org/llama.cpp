@@ -36,6 +36,7 @@
 		tabsStore
 	} from '$lib/stores';
 	import type { MenuAction } from '$lib/types';
+	import { hapticTap } from '$lib/utils';
 	import { onMount, tick } from 'svelte';
 
 	interface Props {
@@ -82,6 +83,8 @@
 	});
 
 	async function openHoldMenu() {
+		// the menu opens with a tap of the haptic engine (Android; iOS gives none from a timer)
+		hapticTap();
 		renderActionsDropdown = true;
 		await tick();
 		dropdownOpen = true;
@@ -221,6 +224,8 @@
 		} else if ((event.metaKey || event.ctrlKey) && canOpenInNewTab) {
 			openInNewTab();
 		} else {
+			if (deviceStore.isMobile) hapticTap();
+
 			onSelect?.(conversation.id);
 		}
 	}
