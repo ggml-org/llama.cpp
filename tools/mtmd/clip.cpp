@@ -4131,11 +4131,22 @@ struct clip_model_loader {
                     const int64_t d_head     = hparams.n_head     > 0 ? hparams.n_embd     / hparams.n_head     : 0;
                     const int64_t d_head_spk = hparams.spk_n_head > 0 ? hparams.spk_n_embd / hparams.spk_n_head : 0;
                     const int64_t n_spk      = model.spk_head_fc2_w->ne[1];
-                    if (model.inp_proj_w->ne[1] != hparams.n_embd || d_head <= 0 || d_head * hparams.n_head != hparams.n_embd ||
+                    // the graph splits each fused QKV into three views of the layer width
+                    bool qkv_ok = true;
+                    for (const auto & layer : model.layers) {
+                        qkv_ok = qkv_ok && layer.qkv_w && layer.qkv_w->ne[0] == hparams.n_embd && layer.qkv_w->ne[1] == 3 * hparams.n_embd;
+                    }
+                    for (const auto & layer : model.spk_layers) {
+                        qkv_ok = qkv_ok && layer.qkv_w->ne[0] == hparams.spk_n_embd && layer.qkv_w->ne[1] == 3 * hparams.spk_n_embd;
+                    }
+                    if (!qkv_ok || model.inp_proj_w->ne[1] != hparams.n_embd || d_head <= 0 || d_head * hparams.n_head != hparams.n_embd ||
+                            (hparams.n_embd_head > 0 && hparams.n_embd_head != d_head) ||
                             hparams.audio_rope_dims <= 0 || hparams.audio_rope_dims % 2 != 0 || hparams.audio_rope_dims > d_head ||
                             d_head_spk <= 0 || d_head_spk % 2 != 0 || d_head_spk * hparams.spk_n_head != hparams.spk_n_embd ||
-                            (int64_t) model.spk_sil_emb.size() != hparams.spk_n_embd ||
-                            model.fusion_spk_kernel->ne[0] != n_spk || model.fusion_spk_kernel->ne[1] != hparams.n_embd) {
+                            (int64_t) model.spk_sil_emb.size() != hparams.spk_n_embd || n_spk <= 0 ||
+                            model.fusion_spk_kernel->ne[0] != n_spk || model.fusion_spk_kernel->ne[1] != hparams.n_embd ||
+                            hparams.mel_filters.size() != (size_t) hparams.n_mel_bins * (hparams.audio_n_fft / 2 + 1) ||
+                            hparams.window.size() != (size_t) hparams.audio_window_len) {
                         throw std::runtime_error(string_format("%s: hparams do not match the tensor shapes\n", __func__));
                     }
 
