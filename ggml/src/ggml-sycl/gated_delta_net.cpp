@@ -3,7 +3,9 @@
 #include "common.hpp"
 #include "ggml.h"
 #include "gated_delta_net.hpp"
+#include <algorithm>
 #include <cmath>
+#include <vector>
 
 
 template <int S_v, bool KDA, bool keep_rs_t>
@@ -30,7 +32,9 @@ void gated_delta_net_sycl(const float *     q,
                           const sycl::uint3 rq3_magic,
                           float             scale,
                           int64_t           state_slot_stride,
-                          int               K) {
+                          int               K,
+                          const int32_t *   s_ids,
+                          int64_t           s_row_stride) {
     auto           item_ct1 = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
     const uint32_t h_idx    = item_ct1.get_group(2);
     const uint32_t sequence = item_ct1.get_group(1);
@@ -45,7 +49,7 @@ void gated_delta_net_sycl(const float *     q,
 
     // input state holds s0 only [S_v, S_v, H, n_seqs] — seq stride is D = H * S_v * S_v.
     // output state layout (per-slot D * n_seqs) — same per-(seq,head) offset as before.
-    const int64_t state_in_offset      = sequence * H * S_v * S_v + h_idx * S_v * S_v;
+    const int64_t state_in_offset      = (s_ids ? s_ids[sequence] * s_row_stride : sequence * H * S_v * S_v) + h_idx * S_v * S_v;
     const int64_t state_out_offset     = (sequence * H + h_idx) * S_v * S_v;
     state += state_out_offset;
     curr_state += state_in_offset + col * S_v;
@@ -189,6 +193,8 @@ static void launch_gated_delta_net(const float *   q_d,
                                    float           scale,
                                    int64_t         state_slot_stride,
                                    int             K,
+                                   const int32_t * s_ids,
+                                   int64_t         s_row_stride,
                                    dpct::queue_ptr stream) {
     //TODO: Add chunked kernel for even faster pre-fill
     const int warp_size = ggml_sycl_info().devices[ggml_sycl_get_device()].warp_size;
@@ -208,7 +214,7 @@ static void launch_gated_delta_net(const float *   q_d,
                                      [=](sycl::nd_item<3> /*item_ct1*/) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                                          gated_delta_net_sycl<sv, KDA, keep_rs_t>(q_d, k_d, v_d, g_d, b_d, s_d, dst_d, state_d, H, n_tokens,
                                                                        sq1, sq2, sq3, sv1, sv2, sv3, sb1, sb2,
-                                                                       sb3, neqk1_magic, rq3_magic, scale, state_slot_stride, K);
+                                                                       sb3, neqk1_magic, rq3_magic, scale, state_slot_stride, K, s_ids, s_row_stride);
                                      });
             }
             break;
@@ -219,7 +225,7 @@ static void launch_gated_delta_net(const float *   q_d,
                                      [=](sycl::nd_item<3> /*item_ct1*/) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                                          gated_delta_net_sycl<sv, KDA, keep_rs_t>(q_d, k_d, v_d, g_d, b_d, s_d, dst_d, state_d, H, n_tokens,
                                                                        sq1, sq2, sq3, sv1, sv2, sv3, sb1, sb2,
-                                                                       sb3, neqk1_magic, rq3_magic, scale, state_slot_stride, K);
+                                                                       sb3, neqk1_magic, rq3_magic, scale, state_slot_stride, K, s_ids, s_row_stride);
                                      });
             }
             break;
@@ -230,7 +236,7 @@ static void launch_gated_delta_net(const float *   q_d,
                                         [=](sycl::nd_item<3> /*item_ct1*/) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                                             gated_delta_net_sycl<sv, KDA, keep_rs_t>(
                                                 q_d, k_d, v_d, g_d, b_d, s_d, dst_d, state_d, H, n_tokens, sq1, sq2,
-                                                sq3, sv1, sv2, sv3, sb1, sb2, sb3, neqk1_magic, rq3_magic, scale, state_slot_stride, K);
+                                                sq3, sv1, sv2, sv3, sb1, sb2, sb3, neqk1_magic, rq3_magic, scale, state_slot_stride, K, s_ids, s_row_stride);
                                         });
             }
             break;
@@ -242,7 +248,7 @@ static void launch_gated_delta_net(const float *   q_d,
                                         [=](sycl::nd_item<3> /*item_ct1*/) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                                             gated_delta_net_sycl<sv, KDA, keep_rs_t>(
                                                 q_d, k_d, v_d, g_d, b_d, s_d, dst_d, state_d, H, n_tokens, sq1, sq2,
-                                                sq3, sv1, sv2, sv3, sb1, sb2, sb3, neqk1_magic, rq3_magic, scale, state_slot_stride, K);
+                                                sq3, sv1, sv2, sv3, sb1, sb2, sb3, neqk1_magic, rq3_magic, scale, state_slot_stride, K, s_ids, s_row_stride);
                                         });
             }
             break;
@@ -291,6 +297,15 @@ static void ggml_sycl_op_gated_delta_net_impl(ggml_backend_sycl_context & ctx, g
     const float * s_d   = (const float *) src_state->data;
     float *       dst_d = (float *) dst->data;
 
+    const int32_t * s_ids        = nullptr;
+    int64_t         s_row_stride = 0;
+    if (ctx.gdn_gather.gdn == dst) {
+        s_d          = ctx.gdn_gather.states;
+        s_ids        = ctx.gdn_gather.ids;
+        s_row_stride = ctx.gdn_gather.row_stride;
+        ctx.gdn_gather = {};
+    }
+
     GGML_ASSERT(ggml_is_contiguous_rows(src_q));
     GGML_ASSERT(ggml_is_contiguous_rows(src_k));
     GGML_ASSERT(ggml_is_contiguous_rows(src_v));
@@ -331,21 +346,21 @@ static void ggml_sycl_op_gated_delta_net_impl(ggml_backend_sycl_context & ctx, g
         if (keep_rs) {
             launch_gated_delta_net<true, true>(q_d, k_d, v_d, g_d, b_d, s_d, dst_d, state_d,
                 S_v, H, n_tokens, n_seqs, sq1, sq2, sq3, sv1, sv2, sv3,
-                sb1, sb2, sb3, neqk1, rq3, scale, state_slot_stride, K, stream);
+                sb1, sb2, sb3, neqk1, rq3, scale, state_slot_stride, K, s_ids, s_row_stride, stream);
         } else {
             launch_gated_delta_net<true, false>(q_d, k_d, v_d, g_d, b_d, s_d, dst_d, state_d,
                 S_v, H, n_tokens, n_seqs, sq1, sq2, sq3, sv1, sv2, sv3,
-                sb1, sb2, sb3, neqk1, rq3, scale, state_slot_stride, K, stream);
+                sb1, sb2, sb3, neqk1, rq3, scale, state_slot_stride, K, s_ids, s_row_stride, stream);
         }
     } else {
         if (keep_rs) {
             launch_gated_delta_net<false, true>(q_d, k_d, v_d, g_d, b_d, s_d, dst_d, state_d,
                 S_v, H, n_tokens, n_seqs, sq1, sq2, sq3, sv1, sv2, sv3,
-                sb1, sb2, sb3, neqk1, rq3, scale, state_slot_stride, K, stream);
+                sb1, sb2, sb3, neqk1, rq3, scale, state_slot_stride, K, s_ids, s_row_stride, stream);
         } else {
             launch_gated_delta_net<false, false>(q_d, k_d, v_d, g_d, b_d, s_d, dst_d, state_d,
                 S_v, H, n_tokens, n_seqs, sq1, sq2, sq3, sv1, sv2, sv3,
-                sb1, sb2, sb3, neqk1, rq3, scale, state_slot_stride, K, stream);
+                sb1, sb2, sb3, neqk1, rq3, scale, state_slot_stride, K, s_ids, s_row_stride, stream);
         }
     }
 }
@@ -363,4 +378,104 @@ void ggml_sycl_op_gated_delta_net_fused_cache(ggml_backend_sycl_context & ctx, g
                                               ggml_sycl_gated_delta_net_fused_cache cache) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/6);
     ggml_sycl_op_gated_delta_net_impl(ctx, dst, &cache);
+}
+
+static const ggml_tensor * ggml_sycl_gdn_base(const ggml_tensor * t) {
+    return t->view_src ? t->view_src : t;
+}
+
+ggml_sycl_gdn_state_gathers ggml_sycl_match_gdn_state_gathers(const ggml_cgraph * cgraph) {
+    ggml_sycl_gdn_state_gathers readers;
+    std::unordered_map<const ggml_tensor *, bool> bad;
+    std::vector<const ggml_tensor *> pending;
+    if (!g_ggml_sycl_gdn_state_gather || !g_ggml_sycl_enable_fusion) {
+        return readers;
+    }
+    for (int i = 0; i < cgraph->n_nodes; ++i) {
+        const ggml_tensor * n = cgraph->nodes[i];
+        if (n->op == GGML_OP_GET_ROWS && (n->flags & GGML_TENSOR_FLAG_COMPUTE) &&
+            n->type == GGML_TYPE_F32 && !(n->flags & GGML_TENSOR_FLAG_OUTPUT) &&
+            n->src[0]->type == GGML_TYPE_F32 && n->src[1]->type == GGML_TYPE_I32 &&
+            n->src[0]->nb[0] == sizeof(float) && n->src[0]->nb[1] % sizeof(float) == 0 &&
+            n->src[0]->nb[1] >= ggml_row_size(GGML_TYPE_F32, n->src[0]->ne[0]) &&
+            n->src[0]->ne[2] == 1 && n->src[0]->ne[3] == 1 && ggml_nelements(n->src[1]) == 1 &&
+            n->ne[1] == 1 && n->ne[2] == 1 && n->ne[3] == 1) {
+            readers[n] = nullptr;
+            pending.push_back(n);
+        }
+        const auto output = readers.find(ggml_sycl_gdn_base(n));
+        if ((n->flags & GGML_TENSOR_FLAG_OUTPUT) && output != readers.end()) {
+            bad[output->first] = true;
+        }
+        if (readers.empty() || ggml_sycl_is_view_or_noop(n) || !(n->flags & GGML_TENSOR_FLAG_COMPUTE)) {
+            continue;
+        }
+        // Delaying the gather must not cross a cache or index write.
+        for (const ggml_tensor * gather : pending) {
+            if (n != gather &&
+                (ggml_sycl_gdn_base(n) == ggml_sycl_gdn_base(gather->src[0]) ||
+                 ggml_sycl_gdn_base(n) == ggml_sycl_gdn_base(gather->src[1]))) {
+                bad[gather] = true;
+            }
+        }
+        for (int k = 0; k < GGML_MAX_SRC; ++k) {
+            const ggml_tensor * src = n->src[k];
+            if (src == nullptr) {
+                continue;
+            }
+            const auto it = readers.find(ggml_sycl_gdn_base(src));
+            if (it == readers.end()) {
+                continue;
+            }
+            // A single sequence owns each state column before writing it back.
+            const bool s0 = n->op == GGML_OP_GATED_DELTA_NET && k == 5 && src->view_offs == 0 &&
+                            n->src[2]->ne[3] == 1 && ggml_nelements(src) == ggml_nelements(it->first) &&
+                            ggml_is_contiguous(src);
+            if (!s0 || it->second != nullptr) {
+                bad[it->first] = true;
+            }
+            it->second = n;
+            pending.erase(std::remove(pending.begin(), pending.end(), it->first), pending.end());
+            if (s0) {
+                // An aliased writeback must keep the same state-column alignment.
+                for (int j = i + 1; j < cgraph->n_nodes; ++j) {
+                    const ggml_tensor * next = cgraph->nodes[j];
+                    if (ggml_sycl_is_view_or_noop(next) || !(next->flags & GGML_TENSOR_FLAG_COMPUTE)) {
+                        continue;
+                    }
+                    const ggml_tensor * cache = it->first->src[0];
+                    if (next->op == GGML_OP_CPY && ggml_sycl_gdn_base(next->src[0]) == n &&
+                        ggml_sycl_gdn_base(next->src[1]) == ggml_sycl_gdn_base(cache)) {
+                        const ggml_tensor * dst = next->src[1];
+                        if (cache->nb[1] == 0 || dst->view_offs % cache->nb[1] != cache->view_offs % cache->nb[1] ||
+                            (dst->ne[2] > 1 && dst->nb[2] % cache->nb[1] != 0)) {
+                            bad[it->first] = true;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    for (auto it = readers.begin(); it != readers.end();) {
+        it = (it->second == nullptr || bad.count(it->first)) ? readers.erase(it) : std::next(it);
+    }
+    return readers;
+}
+
+bool ggml_sycl_gdn_state_gather_skip(ggml_backend_sycl_context & ctx, const ggml_tensor * node,
+                                     const ggml_sycl_gdn_state_gathers & gathers) {
+    if (node->op == GGML_OP_GET_ROWS) {
+        return gathers.count(node) != 0;
+    }
+    if (node->op == GGML_OP_GATED_DELTA_NET) {
+        ctx.gdn_gather = {};
+        const auto it = gathers.find(ggml_sycl_gdn_base(node->src[5]));
+        if (it != gathers.end() && it->second == node) {
+            const ggml_tensor * gather = it->first;
+            ctx.gdn_gather = { node, (const float *) gather->src[0]->data, (const int32_t *) gather->src[1]->data,
+                               (int64_t) (gather->src[0]->nb[1] / sizeof(float)) };
+        }
+    }
+    return false;
 }
