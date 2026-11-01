@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable, TYPE_CHECKING
+from typing import Callable, Iterable, TYPE_CHECKING
 
 from .base import ModelBase, gguf
 from .qwen import _LinearAttentionVReorderBase
@@ -26,10 +26,15 @@ class CloverMoeModel(_LinearAttentionVReorderBase):
         super().set_gguf_parameters()
         self.gguf_writer.add_expert_shared_count(self.hparams.get("num_shared_experts", 1))
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, _ = item
         if name.endswith((".conv_right_weight", ".bd_softmax_logit_scale", ".bd_softmax_history_bias", ".bd_softmax_history_c")):
-            return
+            return None
 
+        return super().filter_tensors(item)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name.endswith(".A_log") or (name.endswith("norm.weight") and not name.endswith("linear_attn.norm.weight")):
             data_torch = data_torch.float()
 
