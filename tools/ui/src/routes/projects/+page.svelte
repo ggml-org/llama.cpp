@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Archive, Plus } from '@lucide/svelte';
-	import { ProjectCard } from '$lib/components/app';
+	import { FloatingActionButton, ProjectCard } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import * as Empty from '$lib/components/ui/empty';
 	import { Skeleton } from '$lib/components/ui/skeleton';
@@ -30,7 +30,7 @@
 </svelte:head>
 
 <div
-	class="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 pt-(--page-top) pb-16 md:px-8 md:pt-6"
+	class="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 pt-(--page-top) pb-16 max-md:pb-safe-24 md:px-8 md:pt-6"
 >
 	<div class="flex items-start gap-4">
 		<div class="flex min-w-0 flex-col gap-1">
@@ -41,7 +41,12 @@
 			</p>
 		</div>
 
-		<Button class="ml-auto shrink-0 gap-1.5" onclick={() => uiStore.openProjectDialog()} size="sm">
+		<!-- a phone has the floating key below instead -->
+		<Button
+			class="ml-auto shrink-0 gap-1.5 max-md:hidden"
+			onclick={() => uiStore.openProjectDialog()}
+			size="sm"
+		>
 			<Plus class="h-3.5 w-3.5" />
 
 			New project
@@ -115,3 +120,5 @@
 		</div>
 	{/if}
 </div>
+
+<FloatingActionButton icon={Plus} label="New project" onclick={() => uiStore.openProjectDialog()} />
