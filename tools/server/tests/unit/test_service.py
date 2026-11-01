@@ -20,7 +20,7 @@ def create_server():
     server.config_dir = f"tmp/config-{port}"
 
 
-def _model(model_id: str) -> dict | None:
+def _find(model_id: str) -> dict | None:
     res = server.make_request("GET", "/models")
     assert res.status_code == 200
     for item in res.body["data"]:
@@ -29,11 +29,17 @@ def _model(model_id: str) -> dict | None:
     return None
 
 
+def _model(model_id: str) -> dict:
+    item = _find(model_id)
+    assert item is not None, f"model {model_id} is not listed"
+    return item
+
+
 def _wait_for_status(model_id: str, desired: set[str], timeout: int = 60) -> str:
     deadline = time.time() + timeout
     last = None
     while time.time() < deadline:
-        item = _model(model_id)
+        item = _find(model_id)
         last = item["status"]["value"] if item else "missing"
         if last in desired:
             return last

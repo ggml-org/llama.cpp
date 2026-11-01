@@ -1428,7 +1428,7 @@ std::string server_models::spawn(const spawn_options & opts) {
         for (const char * key : { "LLAMA_ARG_MODEL", "LLAMA_ARG_MMPROJ", "LLAMA_ARG_SPEC_DRAFT_MODEL" }) {
             std::string val;
             if (preset.get_option(key, val) && !val.empty() && std::filesystem::u8path(val).is_relative()) {
-                preset.set_option(ctx_preset, key, fs_path_to_utf8(std::filesystem::u8path(opts.cwd) / std::filesystem::u8path(val)));
+                preset.set_option(ctx_preset, key, (std::filesystem::u8path(opts.cwd) / std::filesystem::u8path(val)).string());
             }
         }
     }
@@ -1439,7 +1439,7 @@ std::string server_models::spawn(const spawn_options & opts) {
         preset.apply_to_params(p, { "LLAMA_ARG_MODEL", "LLAMA_ARG_MODEL_URL", "LLAMA_ARG_HF_REPO", "LLAMA_ARG_DOCKER_REPO" });
         name = p.model.get_name();
         if (p.model.hf_repo.empty() && p.model.docker_repo.empty() && !p.model.path.empty()) {
-            name = fs_path_to_utf8(std::filesystem::u8path(p.model.path).stem());
+            name = std::filesystem::u8path(p.model.path).stem().string();
         }
         if (name.empty()) {
             throw std::invalid_argument("no model specified, use -m or -hf");

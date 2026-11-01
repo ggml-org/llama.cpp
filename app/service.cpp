@@ -58,7 +58,7 @@ static int service_run(std::vector<std::string> args, bool detached) {
 #endif
         std::error_code ec;
         common_create_directories(server_service_dir(), ec);
-        const std::string log = fs_path_to_utf8(server_service_log_path());
+        const std::string log = server_service_log_path().string();
         // the pipes of the process that started the service go away with it
         if (freopen(log.c_str(), "a", stdout) == nullptr || freopen(log.c_str(), "a", stderr) == nullptr) {
             return 1;
@@ -69,7 +69,7 @@ static int service_run(std::vector<std::string> args, bool detached) {
 
     if (!has_arg(args, "--service-sock")) {
         args.push_back("--service-sock");
-        args.push_back(fs_path_to_utf8(server_service_default_sock()));
+        args.push_back(server_service_default_sock().string());
     }
 
     // the router re-invokes this binary as 'llama serve' for its children
@@ -93,7 +93,7 @@ static int service_start(const std::vector<std::string> & args) {
 
     std::string exe;
     try {
-        exe = fs_path_to_utf8(get_server_exec_path());
+        exe = get_server_exec_path().string();
     } catch (const std::exception & e) {
         fprintf(stderr, "error: cannot find the llama binary: %s\n", e.what());
         return 1;
@@ -127,7 +127,7 @@ static int service_start(const std::vector<std::string> & args) {
             break;
         }
     }
-    fprintf(stderr, "error: the service did not start, see %s\n", fs_path_to_utf8(server_service_log_path()).c_str());
+    fprintf(stderr, "error: the service did not start, see %s\n", server_service_log_path().string().c_str());
     return 1;
 }
 
