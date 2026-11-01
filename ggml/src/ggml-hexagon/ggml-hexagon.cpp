@@ -485,6 +485,9 @@ struct ggml_hexagon_shared_buffer {
         if (err != 0) {
             GGML_LOG_ERROR("ggml-hex: %s buffer mapping failed : domain_id %d size %zu fd %d error 0x%08x\n", sess->c_name(),
                     sess->domain_id, size(), fd(), (unsigned) err);
+            if (!this->pinned) {
+                GGML_LOG_ERROR("ggml-hex: %s possibly out of IOVA space, try --no-host\n", sess->c_name());
+            }
             throw std::runtime_error("ggml-hex: fastrpc_mmap failed (see log for details)");
         }
 
