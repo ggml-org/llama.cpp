@@ -2560,6 +2560,8 @@ struct llama_model_minimax_m3 : public llama_model_base {
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
     msa_params msa_p;
+    // a layer runs MSA iff it carries the indexer tensors
+    bool is_msa_layer(int il) const;
     struct graph : public llm_graph_context {
         graph(const llama_model & model, const llm_graph_params & params);
 

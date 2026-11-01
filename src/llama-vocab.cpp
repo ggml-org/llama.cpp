@@ -649,7 +649,33 @@ struct llm_tokenizer_bpe_session {
         }
     }
 
-    virtual void tokenize(const std::string & text, std::vector<llama_token> & output) {
+    // HF tokenizers apply the normalizer (e.g. {"type": "NFC"}) before the pre-tokenizer
+    static std::string normalize_nfc(const std::string & text) {
+        bool ascii = true;
+        for (const unsigned char c : text) {
+            if (c >= 0x80) {
+                ascii = false;
+                break;
+            }
+        }
+        if (ascii) {
+            return text; // ASCII is already in NFC
+        }
+        try {
+            std::string canonical;
+            canonical.reserve(text.size());
+            for (const uint32_t cpt : unicode_cpts_normalize_nfc(unicode_cpts_from_utf8(text))) {
+                canonical += unicode_cpt_to_utf8(cpt);
+            }
+            return canonical;
+        } catch (const std::invalid_argument &) {
+            return text; // malformed UTF-8: keep the input as is
+        }
+    }
+
+    virtual void tokenize(const std::string & raw_text, std::vector<llama_token> & output) {
+        const std::string nfc_text = vocab.get_normalizer_opts().nfc ? normalize_nfc(raw_text) : std::string();
+        const std::string & text = vocab.get_normalizer_opts().nfc ? nfc_text : raw_text;
         auto tok_pre = vocab.get_pre_type();
 
         std::vector<std::string> word_collection;
