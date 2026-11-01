@@ -3271,7 +3271,10 @@ static bool ggml_webgpu_can_fuse_rms_norm_mul(const struct ggml_cgraph * cgraph,
     return true;
 }
 
-static bool ggml_webgpu_can_fuse_gdn_cache(const struct ggml_cgraph * cgraph, int node_idx, int & num_encoded_ops) {
+static bool ggml_webgpu_can_fuse_gdn_cache(const webgpu_global_context & global_ctx,
+                                           const struct ggml_cgraph *    cgraph,
+                                           int                           node_idx,
+                                           int &                         num_encoded_ops) {
     const ggml_tensor * gdn = cgraph->nodes[node_idx];
 
     // the kernel skips the snapshot tail, so the gdn output must not be a graph output
@@ -3324,6 +3327,12 @@ static bool ggml_webgpu_can_fuse_gdn_cache(const struct ggml_cgraph * cgraph, in
     if (cpy_dst->op != GGML_OP_VIEW || cpy_dst->type != GGML_TYPE_F32 || cpy_dst->data == nullptr ||
         !std::equal(expected_ne.begin(), expected_ne.end(), cpy_dst->ne) ||
         cpy_dst->nb[0] != ggml_type_size(GGML_TYPE_F32) || cpy_dst->nb[1] != (size_t) ggml_row_size(GGML_TYPE_F32, D)) {
+        return false;
+    }
+
+    // the input state can be read straight from the cache the kernel writes to; webgpu rejects a
+    // writable binding that overlaps another binding of the same dispatch
+    if (ggml_webgpu_tensor_binding_overlap(global_ctx, gdn->src[5], cpy_dst)) {
         return false;
     }
 
@@ -3471,7 +3480,7 @@ static std::optional<webgpu_encoded_op> ggml_webgpu_encode(webgpu_context ctx,
             return ggml_webgpu_ssm_scan(ctx, src0, src1, src2, node->src[3], node->src[4], node->src[5], node->src[6],
                                         node);
         case GGML_OP_GATED_DELTA_NET:
-            if (ggml_webgpu_can_fuse_gdn_cache(cgraph, node_idx, num_encoded_ops)) {
+            if (ggml_webgpu_can_fuse_gdn_cache(ctx->global_ctx, cgraph, node_idx, num_encoded_ops)) {
                 ggml_tensor * dst_fuse = cgraph->nodes[node_idx + num_encoded_ops - 1]->src[1];
                 return ggml_webgpu_gated_delta_net(ctx, src0, src1, src2, node->src[3], node->src[4], node->src[5],
                                                    node, dst_fuse);
