@@ -472,6 +472,14 @@ struct ggml_opencl_repack_kernels {
     cl_kernel kernel_restore_block_iq2_s;
     cl_kernel kernel_convert_block_q2_0;
     cl_kernel kernel_restore_block_q2_0;
+    cl_kernel kernel_convert_block_iq1_m;
+    cl_kernel kernel_restore_block_iq1_m;
+    cl_kernel kernel_convert_block_iq1_s;
+    cl_kernel kernel_restore_block_iq1_s;
+    cl_kernel kernel_convert_block_iq3_xxs;
+    cl_kernel kernel_restore_block_iq3_xxs;
+    cl_kernel kernel_convert_block_iq3_s;
+    cl_kernel kernel_restore_block_iq3_s;
     cl_kernel kernel_convert_block_q6_K;
     cl_kernel kernel_restore_block_q6_K;
     cl_kernel kernel_convert_block_iq4_nl;
@@ -489,6 +497,8 @@ struct ggml_opencl_repack_kernels {
 
 struct ggml_opencl_mul_mat_kernels {
     cl_kernel kernel_mul_mat_f32_f32;
+    cl_kernel kernel_fwht[2];
+    size_t fwht_workgroup_size[2];
     cl_kernel kernel_mul_mat_f16_f16;
     cl_kernel kernel_mul_mat_f16_f32_1row;
     cl_kernel kernel_mul_mat_f16_f32_mrow;
@@ -534,6 +544,14 @@ struct ggml_opencl_mul_mat_kernels {
     cl_kernel kernel_mul_mv_iq2_xs_f32_flat;
     cl_kernel kernel_mul_mv_iq2_xxs_f32;
     cl_kernel kernel_mul_mv_iq2_xxs_f32_flat;
+    cl_kernel kernel_mul_mv_iq1_m_f32;
+    cl_kernel kernel_mul_mv_iq1_m_f32_flat;
+    cl_kernel kernel_mul_mv_iq1_s_f32;
+    cl_kernel kernel_mul_mv_iq1_s_f32_flat;
+    cl_kernel kernel_mul_mv_iq3_s_f32;
+    cl_kernel kernel_mul_mv_iq3_s_f32_flat;
+    cl_kernel kernel_mul_mv_iq3_xxs_f32;
+    cl_kernel kernel_mul_mv_iq3_xxs_f32_flat;
     cl_kernel kernel_mul_mat_q4_0_f32_1d_8x_flat;
     cl_kernel kernel_mul_mat_q4_0_f32_1d_16x_flat;
     cl_kernel kernel_mul_mv_q4_1_f32;
@@ -565,6 +583,10 @@ struct ggml_opencl_mul_mat_kernels {
     cl_kernel kernel_mul_mm_iq2_s_f32_l4_lm;
     cl_kernel kernel_mul_mm_iq2_xs_f32_l4_lm;
     cl_kernel kernel_mul_mm_iq2_xxs_f32_l4_lm;
+    cl_kernel kernel_mul_mm_iq1_m_f32_l4_lm;
+    cl_kernel kernel_mul_mm_iq1_s_f32_l4_lm;
+    cl_kernel kernel_mul_mm_iq3_s_f32_l4_lm;
+    cl_kernel kernel_mul_mm_iq3_xxs_f32_l4_lm;
     cl_kernel kernel_mul_mm_q4_0_f32_l4_lm;
     cl_kernel kernel_mul_mm_q4_1_f32_l4_lm;
     cl_kernel kernel_mul_mm_q5_0_f32_l4_lm;
@@ -638,6 +660,26 @@ struct ggml_opencl_mul_mat_kernels {
     cl_kernel kernel_gemm_noshuffle_iq2_xxs_q8_1_dp4a = nullptr;
     cl_kernel kernel_gemm_noshuffle_iq2_xxs_q8_1_dp4a_narrow = nullptr;
     int iq2_xxs_mv_nsg = 4;
+    cl_kernel kernel_gemv_noshuffle_iq1_m_f32 = nullptr;
+    cl_kernel kernel_gemm_noshuffle_iq1_m_f32 = nullptr;
+    cl_kernel kernel_gemm_noshuffle_iq1_m_q8_1_dp4a = nullptr;
+    cl_kernel kernel_gemm_noshuffle_iq1_m_q8_1_dp4a_narrow = nullptr;
+    int iq1_m_mv_nsg = 4;
+    cl_kernel kernel_gemv_noshuffle_iq1_s_f32 = nullptr;
+    cl_kernel kernel_gemm_noshuffle_iq1_s_f32 = nullptr;
+    cl_kernel kernel_gemm_noshuffle_iq1_s_q8_1_dp4a = nullptr;
+    cl_kernel kernel_gemm_noshuffle_iq1_s_q8_1_dp4a_narrow = nullptr;
+    int iq1_s_mv_nsg = 4;
+    cl_kernel kernel_gemv_noshuffle_iq3_xxs_f32 = nullptr;
+    cl_kernel kernel_gemm_noshuffle_iq3_xxs_f32 = nullptr;
+    cl_kernel kernel_gemm_noshuffle_iq3_xxs_q8_1_dp4a = nullptr;
+    cl_kernel kernel_gemm_noshuffle_iq3_xxs_q8_1_dp4a_narrow = nullptr;
+    int iq3_xxs_mv_nsg = 4;
+    cl_kernel kernel_gemv_noshuffle_iq3_s_f32 = nullptr;
+    cl_kernel kernel_gemm_noshuffle_iq3_s_f32 = nullptr;
+    cl_kernel kernel_gemm_noshuffle_iq3_s_q8_1_dp4a = nullptr;
+    cl_kernel kernel_gemm_noshuffle_iq3_s_q8_1_dp4a_narrow = nullptr;
+    int iq3_s_mv_nsg = 4;
     cl_kernel kernel_gemv_noshuffle_q4_k_f32;
     cl_kernel kernel_gemv_noshuffle_q4_k_f32_o4;
     cl_kernel kernel_gemv_noshuffle_q4_k_f32_tiled;
@@ -853,6 +895,7 @@ void ggml_cl_upscale(ggml_backend_t backend, const ggml_tensor * src0, ggml_tens
 void ggml_cl_timestep_embedding(ggml_backend_t backend, const ggml_tensor * src0, ggml_tensor * dst);
 void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, const ggml_tensor * k, ggml_tensor * dst);
 void ggml_cl_gated_delta_net(ggml_backend_t backend, ggml_tensor * dst);
+bool ggml_cl_mul_mat_can_use_fwht(const ggml_backend_opencl_context * backend_ctx, const ggml_tensor * op);
 
 // adreno mul_mat
 bool ggml_cl_can_use_adreno_xmem_gemm_f16_f32(const ggml_backend_opencl_context * backend_ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * dst);
@@ -866,6 +909,10 @@ void ggml_cl_mul_mat_q3_k_f32_adreno(ggml_backend_t backend, const ggml_tensor *
 void ggml_cl_mul_mat_iq2_s_f32_adreno(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_cl_mul_mat_iq2_xs_f32_adreno(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_cl_mul_mat_iq2_xxs_f32_adreno(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
+void ggml_cl_mul_mat_iq1_m_f32_adreno(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
+void ggml_cl_mul_mat_iq1_s_f32_adreno(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
+void ggml_cl_mul_mat_iq3_s_f32_adreno(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
+void ggml_cl_mul_mat_iq3_xxs_f32_adreno(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_cl_mul_mat_q4_0_f32_adreno(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_cl_mul_mat_q4_1_f32_adreno(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_cl_mul_mat_q5_0_f32_adreno(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);

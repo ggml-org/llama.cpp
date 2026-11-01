@@ -483,6 +483,7 @@ static ggml_backend_opencl_context * ggml_cl_init(ggml_backend_dev_t dev) {
     backend_ctx->global_mem_size = dev_ctx->global_mem_size;
 
     CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_MAX_MEM_ALLOC_SIZE, sizeof(size_t), &backend_ctx->max_alloc_size, NULL));
+    CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_LOCAL_MEM_SIZE, sizeof(cl_ulong), &backend_ctx->local_mem_size, NULL));
     CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_IMAGE_MAX_BUFFER_SIZE, sizeof(size_t), &backend_ctx->image_max_buffer_size, NULL));
     CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_IMAGE2D_MAX_WIDTH, sizeof(size_t), &backend_ctx->image2d_max_width, NULL));
     CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_IMAGE2D_MAX_HEIGHT, sizeof(size_t), &backend_ctx->image2d_max_height, NULL));
@@ -1355,6 +1356,9 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
         case GGML_OP_GROUP_NORM:
             return ggml_is_contiguous(op->src[0]);
         case GGML_OP_MUL_MAT:
+            if (ggml_cl_mul_mat_can_use_fwht(backend_ctx, op)) {
+                return true;
+            }
             if (op->src[0]->type == GGML_TYPE_F16) {
                 return true;
             } else if (op->src[0]->type == GGML_TYPE_BF16) {
@@ -1387,6 +1391,30 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
             } else if (op->src[0]->type == GGML_TYPE_Q2_0) {
                 const ggml_tensor * weight = op->src[0]->view_src;
                 if (weight && ggml_cl_q2_0_use_noshuffle(backend_ctx, weight)) {
+                    return false;
+                }
+                return op->src[1]->type == GGML_TYPE_F32 && ggml_is_contiguous_rows(op->src[1]);
+            } else if (op->src[0]->type == GGML_TYPE_IQ1_S) {
+                const ggml_tensor * weight = op->src[0]->view_src;
+                if (weight && ggml_cl_iq1_s_use_noshuffle(backend_ctx, weight)) {
+                    return false;
+                }
+                return op->src[1]->type == GGML_TYPE_F32 && ggml_is_contiguous_rows(op->src[1]);
+            } else if (op->src[0]->type == GGML_TYPE_IQ1_M) {
+                const ggml_tensor * weight = op->src[0]->view_src;
+                if (weight && ggml_cl_iq1_m_use_noshuffle(backend_ctx, weight)) {
+                    return false;
+                }
+                return op->src[1]->type == GGML_TYPE_F32 && ggml_is_contiguous_rows(op->src[1]);
+            } else if (op->src[0]->type == GGML_TYPE_IQ3_S) {
+                const ggml_tensor * weight = op->src[0]->view_src;
+                if (weight && ggml_cl_iq3_s_use_noshuffle(backend_ctx, weight)) {
+                    return false;
+                }
+                return op->src[1]->type == GGML_TYPE_F32 && ggml_is_contiguous_rows(op->src[1]);
+            } else if (op->src[0]->type == GGML_TYPE_IQ3_XXS) {
+                const ggml_tensor * weight = op->src[0]->view_src;
+                if (weight && ggml_cl_iq3_xxs_use_noshuffle(backend_ctx, weight)) {
                     return false;
                 }
                 return op->src[1]->type == GGML_TYPE_F32 && ggml_is_contiguous_rows(op->src[1]);
