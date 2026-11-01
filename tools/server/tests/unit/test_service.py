@@ -6,6 +6,9 @@ from utils import *
 
 # the service: a router with a UNIX socket that 'llama serve' spawns models through
 
+# the client side of these tests needs AF_UNIX, which Python does not offer on Windows
+pytestmark = pytest.mark.skipif(os.name == "nt", reason="Python has no AF_UNIX socket on Windows")
+
 server: ServerProcess
 
 MODEL = "ggml-org/test-model-stories260K:F32"
