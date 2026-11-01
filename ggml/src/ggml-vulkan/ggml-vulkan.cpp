@@ -8179,36 +8179,10 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
     const bool f32acc = !ctx->device->fp16 || !ggml_vk_prec_allows_f16acc(ggml_prec_get_acc(dst)) || k->type == GGML_TYPE_BF16;
 
     // dequant K/V once into an f16 scratch, reordered KV layout so FA can read without a stride
-    auto is_dense_kv_cache = [](const ggml_tensor * t) {
-        return t->nb[0] == ggml_type_size(t->type) &&
-               t->nb[2] == ggml_row_size(t->type, t->ne[0]) &&
-               t->nb[1] == t->nb[2] * t->ne[2] &&
-               (t->ne[3] == 1 || t->nb[3] == t->nb[1] * t->ne[1]);
-    };
-    const bool k_quant = k->type != GGML_TYPE_F16 && k->type != GGML_TYPE_BF16 && k->type != GGML_TYPE_F32;
-    const bool v_quant = v->type != GGML_TYPE_F16 && v->type != GGML_TYPE_BF16 && v->type != GGML_TYPE_F32;
-    const bool kv_raw = (k->type == GGML_TYPE_F16 || k->type == GGML_TYPE_BF16) && k->type == v->type;
-    // gated to AMD, except RDNA4, which regressed in benchmarks
-    const bool kv_raw_strided = ctx->device->vendor_id == VK_VENDOR_ID_AMD &&
-                                ctx->device->architecture != vk_device_architecture::AMD_RDNA4 &&
-                                neq1 >= 256 &&
-                                kv_raw &&
-                                (k->nb[1] != (uint64_t)HSK * ggml_type_size(k->type) ||
-                                 v->nb[1] != (uint64_t)HSV * ggml_type_size(v->type)) &&
-                                (HSK % 8) == 0 && (HSV % 8) == 0;
-    const size_t kv_scratch_ts = kv_raw_strided ? ggml_type_size(k->type) : sizeof(ggml_fp16_t);
-    const bool use_dequant_kv = ((k_quant && v_quant) || kv_raw_strided) && neq1 >= 64 &&
-                                is_dense_kv_cache(k) && is_dense_kv_cache(v) &&
-                                (uint64_t)ggml_nelements(k) * kv_scratch_ts <= ctx->device->properties.limits.maxStorageBufferRange &&
-                                (uint64_t)ggml_nelements(v) * kv_scratch_ts <= ctx->device->properties.limits.maxStorageBufferRange &&
-                                (kv_raw_strided ||
-                                 (ctx->device->pipeline_dequant_transpose[k->type] != nullptr &&
-                                  ctx->device->pipeline_dequant_transpose[v->type] != nullptr)) &&
-                                // coopmat2 path does not benefit from the f16 scratch
-                                !ctx->device->coopmat2 &&
-                                // Intel Xe1 regresses, see PR 25494
-                                (ctx->device->vendor_id != VK_VENDOR_ID_INTEL ||
-                                 (ctx->device->coopmat_support && ctx->device->architecture != vk_device_architecture::INTEL_XE1));
+    const vk_fa_dequant_kv dkv = ggml_vk_fa_dequant_kv(ctx->device, q, k, v);
+    const bool   kv_raw_strided = dkv.raw_strided;
+    const size_t kv_scratch_ts  = dkv.scratch_ts;
+    const bool   use_dequant_kv = dkv.use && ggml_vk_scratch_available(ctx, dst);
     const ggml_type k_type_eff = (use_dequant_kv && !kv_raw_strided) ? GGML_TYPE_F16 : k->type;
     const ggml_type v_type_eff = (use_dequant_kv && !kv_raw_strided) ? GGML_TYPE_F16 : v->type;
 
@@ -8486,14 +8460,11 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
     }
 
     if (use_dequant_kv) {
-        const uint64_t k_sz = (uint64_t)ggml_nelements(k) * kv_scratch_ts;
-        const uint64_t v_sz = (uint64_t)ggml_nelements(v) * kv_scratch_ts;
-        if (ctx->prealloc_size_x < k_sz + v_sz) {
-            ctx->prealloc_size_x = k_sz + v_sz;
-            ggml_vk_preallocate_buffers(ctx, subctx);
-        }
-        vk_subbuffer k_dst = vk_subbuffer{ ctx->prealloc_x, 0,    k_sz };
-        vk_subbuffer v_dst = vk_subbuffer{ ctx->prealloc_x, k_sz, v_sz };
+        const uint64_t k_sz  = (uint64_t)ggml_nelements(k) * kv_scratch_ts;
+        const uint64_t v_sz  = (uint64_t)ggml_nelements(v) * kv_scratch_ts;
+        const uint64_t v_off = ggml_vk_scratch_offset(ctx->device, k_sz);
+        vk_subbuffer k_dst = ggml_vk_scratch_subbuffer(ctx, dst, 0,     k_sz);
+        vk_subbuffer v_dst = ggml_vk_scratch_subbuffer(ctx, dst, v_off, v_sz);
         const uint32_t k_nel = (uint32_t)ggml_nelements(k);
         const uint32_t v_nel = (uint32_t)ggml_nelements(v);
         if (kv_raw_strided) {
@@ -8501,9 +8472,6 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
             vk_pipeline cp_v = ggml_vk_get_cpy_pipeline(ctx, v, nullptr, v->type);
             ggml_pipeline_request_descriptor_sets(ctx, cp_k, 1);
             ggml_pipeline_request_descriptor_sets(ctx, cp_v, 1);
-            if (ctx->prealloc_x_need_sync) {
-                ggml_vk_sync_buffers(ctx, subctx);
-            }
             auto make_pc = [](uint32_t hs, uint32_t nh, uint32_t kv, uint32_t nel) {
                 vk_op_unary_push_constants pc{};
                 pc.ne = nel;
@@ -8528,9 +8496,6 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
             vk_pipeline tr_v = ctx->device->pipeline_dequant_transpose[v->type];
             ggml_pipeline_request_descriptor_sets(ctx, tr_k, 1);
             ggml_pipeline_request_descriptor_sets(ctx, tr_v, 1);
-            if (ctx->prealloc_x_need_sync) {
-                ggml_vk_sync_buffers(ctx, subctx);
-            }
             { const std::vector<uint32_t> pc = { (uint32_t)HSK, (uint32_t)nek2, (uint32_t)KV, 0, k_nel };
               ggml_vk_dispatch_pipeline(ctx, subctx, tr_k, { k_buf, k_dst }, pc, { k_nel, 1, 1 }); }
             { const std::vector<uint32_t> pc = { (uint32_t)HSV, (uint32_t)nev2, (uint32_t)KV, 0, v_nel };
@@ -8693,9 +8658,6 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
                                     pc, { workgroups_x, workgroups_y, workgroups_z });
     }
 
-    if (use_dequant_kv) {
-        ctx->prealloc_x_need_sync = true;
-    }
     if (use_mask_opt || use_sparse) {
         ctx->prealloc_y_need_sync = true;
     }
@@ -12407,12 +12369,12 @@ bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph, in
         // Destination nodes are checked against both the written/read lists. Source nodes are only
         // checked against the written list. Two nodes overlap in memory if they come from the same
         // buffer and the tensor or view ranges overlap.
-        auto const &overlaps_unsynced = [&](const ggml_tensor *node, const std::vector<const ggml_tensor *> &unsynced_nodes) -> bool {
+        auto const &overlaps_unsynced = [&](const ggml_tensor *node, bool node_is_write, const std::vector<const ggml_tensor *> &unsynced_nodes, bool other_is_write) -> bool {
             if (unsynced_nodes.size() == 0) {
                 return false;
             }
             auto n_base = vk_tensor_offset(node) + node->view_offs;
-            auto n_size = ggml_nbytes(node);
+            auto n_size = node_is_write ? ggml_vk_tensor_alloc_size(ctx->device, node) : ggml_nbytes(node);
             ggml_backend_vk_buffer_context * a_buf_ctx = (ggml_backend_vk_buffer_context *)node->buffer->context;
             vk_buffer a_buf = a_buf_ctx->dev_buffer;
             for (auto &other : unsynced_nodes) {
@@ -12420,7 +12382,7 @@ bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph, in
                 vk_buffer o_buf = o_buf_ctx->dev_buffer;
                 if (a_buf == o_buf) {
                     auto o_base = vk_tensor_offset(other) + other->view_offs;
-                    auto o_size = ggml_nbytes(other);
+                    auto o_size = other_is_write ? ggml_vk_tensor_alloc_size(ctx->device, other) : ggml_nbytes(other);
 
                     if ((o_base <= n_base && n_base < o_base + o_size) ||
                         (n_base <= o_base && o_base < n_base + n_size)) {
@@ -12437,7 +12399,8 @@ bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph, in
             const ggml_tensor *cur_node = cgraph->nodes[node_idx + i];
             // If the node actually writes to memory, then check if it needs to sync
             if (ctx->fused_ops_write_mask & (1 << i)) {
-                if (overlaps_unsynced(cur_node, ctx->unsynced_nodes_read) || overlaps_unsynced(cur_node, ctx->unsynced_nodes_written)) {
+                if (overlaps_unsynced(cur_node, true, ctx->unsynced_nodes_read, false) ||
+                    overlaps_unsynced(cur_node, true, ctx->unsynced_nodes_written, true)) {
                     need_sync = true;
                     break;
                 }
@@ -12446,7 +12409,7 @@ bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph, in
                 if (!cur_node->src[j]) {
                     continue;
                 }
-                if (overlaps_unsynced(cur_node->src[j], ctx->unsynced_nodes_written)) {
+                if (overlaps_unsynced(cur_node->src[j], false, ctx->unsynced_nodes_written, true)) {
                     need_sync = true;
                     break;
                 }
@@ -13244,9 +13207,8 @@ size_t ggml_backend_vk_buffer_type_get_max_size(ggml_backend_buffer_type_t buft)
 }
 
 size_t ggml_backend_vk_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor) {
-    return ggml_nbytes(tensor);
-
-    UNUSED(buft);
+    ggml_backend_vk_buffer_type_context * ctx = (ggml_backend_vk_buffer_type_context *) buft->context;
+    return ggml_vk_tensor_alloc_size(ctx->device, tensor);
 }
 
 ggml_backend_buffer_type_t ggml_backend_vk_buffer_type(size_t dev_num) {
