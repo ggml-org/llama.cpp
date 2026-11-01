@@ -7525,6 +7525,8 @@ struct test_topk_moe : public test_case {
     const MoeGatingFunc gating_func;
     const float scale_w;
     const int n_expert_groups;
+    ggml_tensor * logits {};
+    ggml_tensor * exp_probs_b {};
     ggml_tensor * weights {};
     ggml_tensor * selected_experts {};
 
@@ -7556,13 +7558,98 @@ struct test_topk_moe : public test_case {
 
     bool run_whole_graph() override { return true; }
 
+    // true when no routing decision of the row is a near tie: the group scores around the n_group_used-th
+    // and the experts of the kept groups around the n_expert_used-th differ by more than a backend rounding
+    bool routing_has_margin(const float * x, const std::vector<float> & bias) const {
+        const int n_expert        = ne[0];
+        const int n_exp_per_group = n_expert / n_expert_groups;
+        const int n_group_used    = n_expert_groups / 2;
+
+        // softmax is evaluated without its normalization, which keeps the order and the relative gaps
+        const double x_max = *std::max_element(x, x + n_expert);
+
+        std::vector<double> sel(n_expert);
+        double              sel_max = 0.0;
+        for (int i = 0; i < n_expert; ++i) {
+            const double p = gating_func == GATING_FUNC_SOFTMAX       ? std::exp(x[i] - x_max) :
+                             gating_func == GATING_FUNC_SIGMOID       ? 1.0 / (1.0 + std::exp(-(double) x[i])) :
+                             gating_func == GATING_FUNC_SQRT_SOFTPLUS ? std::sqrt(std::log1p(std::exp((double) x[i]))) :
+                                                                        x[i];
+            sel[i]  = p + bias[i];
+            sel_max = std::max(sel_max, std::fabs(sel[i]));
+        }
+
+        const double tol = 1e-4 * sel_max;
+
+        // value of rank n in decreasing order, rank 0 being the largest
+        auto rank = [](std::vector<double> v, int n) {
+            std::nth_element(v.begin(), v.begin() + n, v.end(), std::greater<double>());
+            return v[n];
+        };
+
+        std::vector<double> kept = sel;
+        if (n_expert_groups > 1) {
+            std::vector<double> score(n_expert_groups);
+            for (int g = 0; g < n_expert_groups; ++g) {
+                std::vector<double> grp(sel.begin() + g*n_exp_per_group, sel.begin() + (g + 1)*n_exp_per_group);
+                score[g] = rank(grp, 0) + rank(grp, 1);
+            }
+            const double score_min = rank(score, n_group_used - 1);
+            if (score_min - rank(score, n_group_used) <= tol) {
+                return false;
+            }
+            kept.clear();
+            for (int g = 0; g < n_expert_groups; ++g) {
+                if (score[g] >= score_min) {
+                    kept.insert(kept.end(), sel.begin() + g*n_exp_per_group, sel.begin() + (g + 1)*n_exp_per_group);
+                }
+            }
+        }
+
+        return n_expert_used >= (int) kept.size() || rank(kept, n_expert_used - 1) - rank(kept, n_expert_used) > tol;
+    }
+
+    // the logits of each row are drawn again until its routing has a clear margin, so backends whose gating
+    // differs by a few ulps select the same experts
+    void initialize_tensors(ggml_context * ctx) override {
+        std::random_device                    rd;
+        std::default_random_engine            rng(rd());
+        std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+
+        std::vector<float> bias(ne[0], 0.0f);
+        if (exp_probs_b) {
+            for (float & v : bias) {
+                v = dist(rng);
+            }
+            ggml_backend_tensor_set(exp_probs_b, bias.data(), 0, ggml_nbytes(exp_probs_b));
+        }
+
+        std::vector<float> x(ggml_nelements(logits));
+        for (int64_t r = 0; r < ggml_nrows(logits); ++r) {
+            float * row = x.data() + r*ne[0];
+            do {
+                for (int64_t i = 0; i < ne[0]; ++i) {
+                    row[i] = dist(rng);
+                }
+            } while (!routing_has_margin(row, bias));
+        }
+        ggml_backend_tensor_set(logits, x.data(), 0, ggml_nbytes(logits));
+
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            if (t != logits && t != exp_probs_b) {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+
     ggml_tensor * build_graph(ggml_context * ctx) override {
         const int n_expert = ne[0];
         const int n_tokens = ne[1];
         const int n_exp_per_group = n_expert / n_expert_groups;
         const int n_group_used = n_expert_groups / 2;
 
-        ggml_tensor * logits = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
+        logits      = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
+        exp_probs_b = nullptr;
         ggml_tensor * probs            =
             (gating_func == GATING_FUNC_SOFTMAX) ? ggml_soft_max(ctx, logits) :
             (gating_func == GATING_FUNC_SIGMOID) ? ggml_sigmoid(ctx, logits) :
@@ -7571,7 +7658,7 @@ struct test_topk_moe : public test_case {
 
         ggml_tensor * selection_probs = probs;
         if (bias_probs) {
-            ggml_tensor * exp_probs_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ne[0]);
+            exp_probs_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ne[0]);
             ggml_set_name(exp_probs_b, "exp_probs_b");
             selection_probs = ggml_add(ctx, probs, exp_probs_b);
             ggml_set_name(selection_probs, "selection_probs");
