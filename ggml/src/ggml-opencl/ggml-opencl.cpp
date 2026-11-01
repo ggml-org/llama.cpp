@@ -1170,6 +1170,8 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_mul_mv_id_mxfp4_f32_flat;
     cl_kernel kernel_mul_mm_f32_f32_l4_lm;
     cl_kernel kernel_gemv_f32_f32_mc;  // multi-column (small-N) f32 GEMV for spec/MTP verify
+    cl_kernel kernel_gemv_f32_f32_mcr = nullptr; // row-shared small-N f32 GEMV
+    cl_kernel kernel_gemv_f16_f32_mcr = nullptr; // row-shared small-N f16 GEMV
     cl_kernel kernel_mul_mm_f16_f32_l4_lm;
     cl_kernel kernel_mul_mm_f16_f32_l4_lm_n8;
     cl_kernel kernel_mul_mm_q1_0_f32_l4_lm;
@@ -3604,6 +3606,8 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
 
         CL_CHECK((backend_ctx->kernel_mul_mm_f32_f32_l4_lm = clCreateKernel(backend_ctx->program_mul_mm_f32_f32_l4_lm, "kernel_mul_mm_f32_f32_l4_lm", &err), err));
         CL_CHECK((backend_ctx->kernel_gemv_f32_f32_mc = clCreateKernel(backend_ctx->program_mul_mm_f32_f32_l4_lm, "kernel_gemv_f32_f32_mc", &err), err));
+        CL_CHECK((backend_ctx->kernel_gemv_f32_f32_mcr = clCreateKernel(backend_ctx->program_mul_mm_f32_f32_l4_lm, "kernel_gemv_f32_f32_mcr", &err), err));
+        CL_CHECK((backend_ctx->kernel_gemv_f16_f32_mcr = clCreateKernel(backend_ctx->program_mul_mm_f32_f32_l4_lm, "kernel_gemv_f16_f32_mcr", &err), err));
         GGML_LOG_CONT(".");
     }
 
@@ -10861,6 +10865,31 @@ static ggml_status ggml_backend_opencl_graph_compute(ggml_backend_t backend, ggm
     }
 
     return GGML_STATUS_SUCCESS;
+}
+
+// Lanes per row for the row-shared GEMV: the widest power of two leaving each lane >= 4 float4 of K.
+static int ggml_cl_mcr_lpr_log2(int ne00) {
+    int lpr_log2 = 6;
+    while (lpr_log2 > 2 && ((ne00 / 4) >> lpr_log2) < 4) {
+        lpr_log2--;
+    }
+    return lpr_log2;
+}
+
+// A skinny weight gets too few work-groups on the row-shared GEMV.
+static bool ggml_cl_mcr_wide_enough(int ne00, int ne01) {
+    const int rows_per_wg = 64 >> ggml_cl_mcr_lpr_log2(ne00);
+    return ne01 > 512 || (ne01 + rows_per_wg - 1) / rows_per_wg >= 256;
+}
+
+// On by default on X2E/A8X (not E17); GGML_OPENCL_F32_MCR / GGML_OPENCL_F16_MCR = 0/1 override.
+static bool ggml_cl_mcr_on(const ggml_backend_opencl_context * backend_ctx, const char * env_name) {
+    const char * e = getenv(env_name);
+    if (e && *e) {
+        return atoi(e) != 0;
+    }
+    return (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E || backend_ctx->adreno_gen == ADRENO_GPU_GEN::A8X) &&
+           backend_ctx->adreno_cl_compiler_version.type != ADRENO_CL_COMPILER_TYPE::E17;
 }
 
 // The optimized gemm and gemv kernels are used for large matrices without batch.
@@ -30348,6 +30377,34 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 // under-occupied WG at ~2.3% tile utilization. Route to a per-output
                 // (m,n) GEMV (64-thread WG, K-split + __local reduce) instead.
                 // Opt-in GGML_OPENCL_F32_MC=1; 2D contiguous, small N + skinny M only.
+                // Row-shared GEMV: each weight row is read once for all columns.
+                static const bool f32_mcr_on = ggml_cl_mcr_on(backend_ctx, "GGML_OPENCL_F32_MCR");
+                if (f32_mcr_on && backend_ctx->kernel_gemv_f32_f32_mcr != nullptr &&
+                    ne11 >= 2 && ne11 <= 8 && (ne00 % 4 == 0) && ggml_cl_mcr_wide_enough(ne00, ne01) &&
+                    ne02 == 1 && ne03 == 1 && ne12 == 1 && ne13 == 1 &&
+                    ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(dst)) {
+                    cl_kernel kr = backend_ctx->kernel_gemv_f32_f32_mcr;
+                    int lpr_log2 = ggml_cl_mcr_lpr_log2(ne00);
+                    const int rows_per_wg = 64 >> lpr_log2;
+                    int stride_a = ne00, stride_b = ne00, stride_d = ne01;
+                    CL_CHECK(clSetKernelArg(kr,  0, sizeof(cl_mem),   &extra0->data_device));
+                    CL_CHECK(clSetKernelArg(kr,  1, sizeof(cl_ulong), &offset0));
+                    CL_CHECK(clSetKernelArg(kr,  2, sizeof(cl_mem),   &extra1->data_device));
+                    CL_CHECK(clSetKernelArg(kr,  3, sizeof(cl_ulong), &offset1));
+                    CL_CHECK(clSetKernelArg(kr,  4, sizeof(cl_mem),   &extrad->data_device));
+                    CL_CHECK(clSetKernelArg(kr,  5, sizeof(cl_ulong), &offsetd));
+                    CL_CHECK(clSetKernelArg(kr,  6, sizeof(int),      &ne00));
+                    CL_CHECK(clSetKernelArg(kr,  7, sizeof(int),      &ne01));
+                    CL_CHECK(clSetKernelArg(kr,  8, sizeof(int),      &ne11));
+                    CL_CHECK(clSetKernelArg(kr,  9, sizeof(int),      &stride_a));
+                    CL_CHECK(clSetKernelArg(kr, 10, sizeof(int),      &stride_b));
+                    CL_CHECK(clSetKernelArg(kr, 11, sizeof(int),      &stride_d));
+                    CL_CHECK(clSetKernelArg(kr, 12, sizeof(int),      &lpr_log2));
+                    size_t gws[3] = {(size_t)CEIL_DIV(ne01, rows_per_wg) * 64, 1, 1};
+                    size_t lws[3] = {64, 1, 1};
+                    backend_ctx->enqueue_ndrange_kernel(kr, 3, gws, lws, dst);
+                    return;
+                }
                 static const bool f32_mc = (getenv("GGML_OPENCL_F32_MC") != nullptr);
                 if (f32_mc && ne11 >= 2 && ne11 <= 8 && ne01 <= 512 && (ne00 % 4 == 0) &&
                     ne02 == 1 && ne12 == 1 && ne13 == 1 &&
@@ -30444,6 +30501,33 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                     return;
                 }
 #endif
+                static const bool f16_mcr_on = ggml_cl_mcr_on(backend_ctx, "GGML_OPENCL_F16_MCR");
+                if (f16_mcr_on && backend_ctx->kernel_gemv_f16_f32_mcr != nullptr &&
+                    ne11 >= 2 && ne11 <= 8 && (ne00 % 4 == 0) && ggml_cl_mcr_wide_enough(ne00, ne01) &&
+                    ne02 == 1 && ne03 == 1 && ne12 == 1 && ne13 == 1 &&
+                    ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(dst)) {
+                    cl_kernel kr = backend_ctx->kernel_gemv_f16_f32_mcr;
+                    int lpr_log2 = ggml_cl_mcr_lpr_log2(ne00);
+                    const int rows_per_wg = 64 >> lpr_log2;
+                    int stride_a = ne00, stride_b = ne10, stride_d = ne01;
+                    CL_CHECK(clSetKernelArg(kr,  0, sizeof(cl_mem),   &extra0->data_device));
+                    CL_CHECK(clSetKernelArg(kr,  1, sizeof(cl_ulong), &offset0));
+                    CL_CHECK(clSetKernelArg(kr,  2, sizeof(cl_mem),   &extra1->data_device));
+                    CL_CHECK(clSetKernelArg(kr,  3, sizeof(cl_ulong), &offset1));
+                    CL_CHECK(clSetKernelArg(kr,  4, sizeof(cl_mem),   &extrad->data_device));
+                    CL_CHECK(clSetKernelArg(kr,  5, sizeof(cl_ulong), &offsetd));
+                    CL_CHECK(clSetKernelArg(kr,  6, sizeof(int),      &ne00));
+                    CL_CHECK(clSetKernelArg(kr,  7, sizeof(int),      &ne01));
+                    CL_CHECK(clSetKernelArg(kr,  8, sizeof(int),      &ne11));
+                    CL_CHECK(clSetKernelArg(kr,  9, sizeof(int),      &stride_a));
+                    CL_CHECK(clSetKernelArg(kr, 10, sizeof(int),      &stride_b));
+                    CL_CHECK(clSetKernelArg(kr, 11, sizeof(int),      &stride_d));
+                    CL_CHECK(clSetKernelArg(kr, 12, sizeof(int),      &lpr_log2));
+                    size_t gws[3] = {(size_t)CEIL_DIV(ne01, rows_per_wg) * 64, 1, 1};
+                    size_t lws[3] = {64, 1, 1};
+                    backend_ctx->enqueue_ndrange_kernel(kr, 3, gws, lws, dst);
+                    return;
+                }
                 static const char * mm_narrow_n_env = getenv("GGML_OPENCL_MM_NARROW_N");
                 const bool use_narrow_n = (mm_narrow_n_env == nullptr || mm_narrow_n_env[0] != '0') && ne11 >= 2 && ne11 <= 8;
                 kernel = use_narrow_n ? backend_ctx->kernel_mul_mm_f16_f32_l4_lm_n8 : backend_ctx->kernel_mul_mm_f16_f32_l4_lm;
