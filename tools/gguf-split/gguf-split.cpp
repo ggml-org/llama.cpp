@@ -239,6 +239,7 @@ struct split_strategy {
             // Save all metadata in first split only
             if (i_split == 0) {
                 gguf_set_kv(ctx_out, ctx_gguf);
+                gguf_remove_key(ctx_out, GGUF_KEY_GENERAL_ALIGNMENT);
             }
             gguf_set_val_u16(ctx_out, LLM_KV_SPLIT_NO, i_split);
             gguf_set_val_u16(ctx_out, LLM_KV_SPLIT_COUNT, 0); // placeholder
@@ -496,6 +497,7 @@ static void gguf_merge(const split_params & split_params) {
 
             // Set metadata from the first split
             gguf_set_kv(ctx_out, ctx_gguf);
+            gguf_remove_key(ctx_out, GGUF_KEY_GENERAL_ALIGNMENT);
         }
 
         auto n_tensors = gguf_get_n_tensors(ctx_gguf);
