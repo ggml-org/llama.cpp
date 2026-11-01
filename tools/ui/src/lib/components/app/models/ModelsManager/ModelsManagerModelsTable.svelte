@@ -29,9 +29,11 @@
 		ModelsSection
 	} from '$lib/components/app';
 	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
+	import * as Empty from '$lib/components/ui/empty';
 	import {
 		FAMILY_ROW_WINDOW,
 		type ModalityKey,
+		MODEL_ICON,
 		MODEL_ROW_GRID_CLASS,
 		MODEL_ROW_TRAILING_CELL_CLASS,
 		MODEL_ROW_WINDOW,
@@ -207,7 +209,7 @@
 
 {#snippet sortHeader(key: ModelsTableSortKey, label: string)}
 	<button
-		class="inline-flex cursor-pointer items-center gap-1 uppercase transition hover:text-foreground focus:outline-none"
+		class="inline-flex cursor-pointer items-center gap-1 transition-colors hover:text-foreground focus:outline-none"
 		onclick={() => toggleSort(key)}
 		title={sortTitle(key, label)}
 		type="button"
@@ -270,7 +272,7 @@
 	{@const countLabel = `${family.entries.length} model${family.entries.length === 1 ? '' : 's'}`}
 
 	<div
-		class="{MODEL_ROW_GRID_CLASS} relative group cursor-pointer rounded-md px-2 py-1 transition hover:bg-muted/40 max-md:px-3 max-md:py-2.5"
+		class="{MODEL_ROW_GRID_CLASS} relative group cursor-pointer rounded-md px-2 py-1.5 transition hover:bg-muted/40 max-md:px-3 max-md:py-2.5"
 		onclick={toggle}
 		onkeydown={(event) => handleFamilyKeydown(event, toggle)}
 		role="button"
@@ -286,7 +288,7 @@
 
 			<span class="truncate text-sm font-medium">{family.label}</span>
 
-			<span class="text-sm text-muted-foreground">{countLabel}</span>
+			<span class="shrink-0 text-sm whitespace-nowrap text-muted-foreground">{countLabel}</span>
 		</span>
 
 		<!-- the context and status columns stay empty here: the fold control is this
@@ -350,7 +352,7 @@
 	/>
 
 	<div
-		class="{MODEL_ROW_GRID_CLASS} shrink-0 border-y border-border/40 px-2 py-2 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase max-md:px-3"
+		class="{MODEL_ROW_GRID_CLASS} shrink-0 border-b border-border/30 px-2 pb-2 text-xs font-medium text-muted-foreground max-md:px-3 dark:border-border/20"
 	>
 		<span>{@render sortHeader(ModelsTableSortKey.NAME, 'Model')}</span>
 
@@ -363,7 +365,7 @@
 		<span class="text-center max-md:hidden">Actions</span>
 	</div>
 
-	<div class="min-h-0 flex-1 overflow-y-auto">
+	<div class="mt-2 min-h-0 flex-1 overflow-y-auto">
 		{#each sections as group (group.key)}
 			{#if group.items.length > 0}
 				{#snippet groupIcon()}
@@ -388,34 +390,49 @@
 					label={group.label}
 					persistKey={group.key}
 					revealChevronOnHover
-					sectionHeaderClass="m-0 px-2 py-2 text-[13px] font-semibold text-muted-foreground select-none max-md:px-3"
+					sectionHeaderClass="m-0 rounded-lg px-2 py-2 text-[13px] font-semibold text-foreground/85 select-none transition-colors hover:bg-muted max-md:px-3"
 					sticky
-					stickyClass="sticky z-10 bg-muted/90 backdrop-blur-lg"
+					stickyClass="sticky z-10 bg-muted/70 backdrop-blur-lg"
 				>
-					<GroupedList
-						group={familyRow}
-						groupWindow={FAMILY_ROW_WINDOW}
-						groups={group.flat ? null : familyGroups(group)}
-						initialCollapsed={modelsStore.collapsedGroupsUnder(group.key)}
-						item={listItem}
-						items={group.flat ? group.items : []}
-						keyOf={(entry) => entry.key}
-						more={showMore}
-						onCollapsedChange={(key, collapsed) =>
-							modelsStore.setGroupCollapsed(group.key, key, collapsed)}
-						sectionWindow={MODEL_ROW_WINDOW}
-						stickyClass="bg-muted/30 backdrop-blur-lg"
-						stickyStyle={MODELS_TABLE_GROUP_STICKY_OFFSET}
-						weightOf={(entry) => entry.quants.length}
-					/>
+					<!-- a little air before the next section's band -->
+					<div class="pb-3">
+						<GroupedList
+							group={familyRow}
+							groupWindow={FAMILY_ROW_WINDOW}
+							groups={group.flat ? null : familyGroups(group)}
+							initialCollapsed={modelsStore.collapsedGroupsUnder(group.key)}
+							item={listItem}
+							items={group.flat ? group.items : []}
+							keyOf={(entry) => entry.key}
+							more={showMore}
+							onCollapsedChange={(key, collapsed) =>
+								modelsStore.setGroupCollapsed(group.key, key, collapsed)}
+							sectionWindow={MODEL_ROW_WINDOW}
+							stickyClass="rounded-lg bg-muted/25 backdrop-blur-lg"
+							stickyStyle={MODELS_TABLE_GROUP_STICKY_OFFSET}
+							weightOf={(entry) => entry.quants.length}
+						/>
+					</div>
 				</ModelsSection>
 			{/if}
 		{/each}
 
 		{#if isEmpty}
-			<p class="px-4 py-10 text-center text-sm text-muted-foreground">
-				{hasFilters ? 'No models match these filters.' : 'No models found.'}
-			</p>
+			<Empty.Root class="py-16">
+				<Empty.Header>
+					<Empty.Media variant="icon">
+						<MODEL_ICON />
+					</Empty.Media>
+
+					<Empty.Title>{hasFilters ? 'No matching models' : 'No models yet'}</Empty.Title>
+
+					<Empty.Description>
+						{hasFilters
+							? 'Try a different search or clear the filters.'
+							: 'Models the server can run show up here.'}
+					</Empty.Description>
+				</Empty.Header>
+			</Empty.Root>
 		{/if}
 	</div>
 </div>

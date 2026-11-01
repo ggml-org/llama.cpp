@@ -11,6 +11,8 @@ export const SETTINGS_KEYS = {
 	API_KEY: 'apiKey',
 	AUTO_MIC_ON_EMPTY: 'autoMicOnEmpty',
 	BACKEND_SAMPLING: 'backend_sampling',
+	COMPACTION_PRESERVED_STEPS: 'compactionPreservedSteps',
+	COMPACTION_PROMPT: 'compactionPrompt',
 	CONVERSATION_TABS: 'conversationTabs',
 	COPY_TEXT_ATTACHMENTS_AS_PLAIN_TEXT: 'copyTextAttachmentsAsPlainText',
 	CUSTOM_CSS: 'customCss',
@@ -65,6 +67,7 @@ export const SETTINGS_KEYS = {
 	SHOW_RAW_OUTPUT_SWITCH: 'showRawOutputSwitch',
 	SHOW_SYSTEM_MESSAGE: 'showSystemMessage',
 	SHOW_THOUGHT_IN_PROGRESS: 'showThoughtInProgress',
+	SHOW_TOOL_CALL_IN_PROGRESS: 'showToolCallInProgress',
 	SYMBOLIC_MATH_ENABLED: 'symbolicMathEnabled',
 	SYSTEM_MESSAGE: 'systemMessage',
 	// Sampling

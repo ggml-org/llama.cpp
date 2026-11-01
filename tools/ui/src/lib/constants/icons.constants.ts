@@ -11,6 +11,7 @@ import {
 	File as FileIcon,
 	FileText as FileTextIcon,
 	FolderOpen as CwdCommandIcon,
+	FoldVertical as CompactCommandIcon,
 	Image as ImageIcon,
 	Lightbulb as ReasoningIcon,
 	Loader2 as LoadingIcon,
@@ -104,6 +105,7 @@ export const CAPABILITY_FLAG_KEYS: Record<ModelCapability, keyof ModelCapabiliti
 
 /** Icons of the slash-command picker, one per chat-form command. */
 export const CHAT_FORM_COMMAND_ICONS: Record<ChatFormCommandAction, Component> = {
+	[ChatFormCommandAction.COMPACT]: CompactCommandIcon,
 	[ChatFormCommandAction.CWD]: CwdCommandIcon,
 	[ChatFormCommandAction.MODEL]: MODEL_ICON,
 	[ChatFormCommandAction.PROMPT]: PromptCommandIcon

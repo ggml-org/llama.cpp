@@ -2,6 +2,7 @@
 
 #include "llama-ext.h"
 
+#include <algorithm>
 #include <cmath>
 
 void llama_model_clef::load_arch_hparams(llama_model_loader & ml) {

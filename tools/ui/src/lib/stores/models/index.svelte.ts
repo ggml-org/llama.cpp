@@ -15,7 +15,7 @@ import {
 	RECENT_MODEL_LIMIT,
 	RECENT_MODELS_LOCALSTORAGE_KEY
 } from '$lib/constants';
-import { ServerModelStatus } from '$lib/enums';
+import { ReasoningEffort, ServerModelStatus } from '$lib/enums';
 import { HuggingFaceService } from '$lib/services/huggingface.service';
 import { ModelsService } from '$lib/services/models.service';
 // direct imports between stores, not via the barrel, to avoid circular deps
@@ -396,6 +396,13 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			this.selectedModelName = option.model;
 
 			if (options?.recordRecent) this.recordRecentModel(modelId);
+
+			// reasoning levels belong to the model that answered: another model in the chat starts at Default
+			const conversationModel = getConversationModel(conversationsStore.activeMessages);
+
+			if (conversationModel && conversationModel !== option.model) {
+				void conversationsStore.preferences.setReasoningEffort(ReasoningEffort.DEFAULT);
+			}
 		} finally {
 			this.updating = false;
 		}
@@ -578,7 +585,6 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 					const displayNameSource =
 						details?.name && details.name.trim().length > 0 ? details.name : item.id;
 					const modelId = details?.model || item.id;
-					const repo = repoOf(modelId);
 
 					return {
 						aliases: item.aliases ?? [],
@@ -594,7 +600,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 								: undefined),
 						description: details?.description,
 						details: details?.details,
-						draftSidecars: this._status.getDraftSidecars(repo),
+						draftSidecars: this._status.getDraftSidecars(modelId),
 						id: item.id,
 						meta: item.meta ?? null,
 						modalities: this.props.buildArchitectureModalities(item.architecture),
