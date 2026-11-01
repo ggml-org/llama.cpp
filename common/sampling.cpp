@@ -202,6 +202,21 @@ struct common_sampler * common_sampler_init(
     if (!std::isfinite(params.penalty_present)) {
         throw std::invalid_argument("penalty_present must be finite");
     }
+    if (params.mirostat == 1 || params.mirostat == 2) {
+        if (!std::isfinite(params.mirostat_tau) || params.mirostat_tau < 0.0f) {
+            LOG_WRN("%s: invalid mirostat_tau, resetting to 5.0\n", __func__);
+            params.mirostat_tau = 5.0f;
+        }
+        if (!std::isfinite(params.mirostat_eta) || params.mirostat_eta < 0.0f) {
+            LOG_WRN("%s: invalid mirostat_eta, resetting to 0.1\n", __func__);
+            params.mirostat_eta = 0.1f;
+        }
+    }
+    if (params.penalty_last_n < -1) {
+        LOG_WRN("%s: invalid penalty_last_n, disabling penalty\n", __func__);
+        params.penalty_last_n = 0;
+    }
+
     const llama_vocab * vocab = llama_model_get_vocab(model);
     llama_sampler_chain_params lparams = llama_sampler_chain_default_params();
 
