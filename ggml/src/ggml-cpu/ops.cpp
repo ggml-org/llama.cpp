@@ -5840,7 +5840,10 @@ static void ggml_compute_forward_soft_max_f32(
 
     for (int64_t i03 = 0; i03 < ne03; i03++) {
         for (int64_t i02 = 0; i02 < ne02; i02++) {
-            for (int64_t i01 = ith; i01 < ne01; i01 += nth) {
+            // Assign flattened rows round-robin, including heads and sequences.
+            const int64_t row_base = (i03*ne02 + i02)*ne01;
+            const int64_t first_row = (ith + nth - row_base%nth)%nth;
+            for (int64_t i01 = first_row; i01 < ne01; i01 += nth) {
                 const int64_t i11 = i01;
                 const int64_t i12 = i02%ne12;
                 const int64_t i13 = i03%ne13;
