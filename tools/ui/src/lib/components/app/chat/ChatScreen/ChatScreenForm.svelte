@@ -88,8 +88,6 @@
 		uploadedFiles = [];
 		clearDraft();
 
-		chatFormRef?.resetTextareaHeight();
-
 		const success = await onSend?.(messageToSend, filesToSend);
 
 		if (!success) {
