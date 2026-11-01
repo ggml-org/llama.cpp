@@ -908,6 +908,7 @@ struct llama_model {
     const float * tensor_split() const;
 
     uint32_t n_gpu_layers() const;
+    uint32_t n_layer_offload() const;
     llama_split_mode split_mode() const;
     bool no_alloc() const;
 
