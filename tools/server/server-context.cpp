@@ -28,6 +28,7 @@
 #include <cinttypes>
 #include <deque>
 #include <exception>
+#include <iomanip>
 #include <memory>
 #include <filesystem>
 #include <random>
