@@ -85,6 +85,10 @@ llama_tokens common_ngram_simple_draft(
             }
         }
         if (match) {
+            // skip matches without enough trailing tokens to draft from
+            if (cur_len - (j + n_draft_min) < n_draft_min) {
+                continue;
+            }
             match_pos = j;
             break;
         }
