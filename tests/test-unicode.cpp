@@ -1,12 +1,55 @@
 #include "../src/unicode.h"
 
+#include "ggml-cpp.h"
+#include "gguf.h"
+#include "llama-cpp.h"
+
+#include <algorithm>
 #include <cstdio>
 #include <string>
 #include <utility>
 #include <vector>
 
+static bool test_tokenizer_nfc() {
+    // Byte-level tokens for "e", U+00E9, U+0301, and newline.
+    std::vector<const char *> tokens = {
+        "<unk>", "<s>", "</s>", "e", "\xC3\x83", "\xC2\xA9", "\xC3\x8C", "\xC4\xA3", "\xC4\x8A",
+    };
+    gguf_context_ptr metadata(gguf_init_empty());
+    gguf_set_val_str(metadata.get(), "general.architecture", "llama");
+    gguf_set_val_str(metadata.get(), "tokenizer.ggml.model", "gpt2");
+    gguf_set_val_str(metadata.get(), "tokenizer.ggml.pre", "qwen2");
+    gguf_set_arr_str(metadata.get(), "tokenizer.ggml.tokens", tokens.data(), tokens.size());
+    gguf_set_arr_str(metadata.get(), "tokenizer.ggml.merges", nullptr, 0);
+    gguf_set_val_u32(metadata.get(), "tokenizer.ggml.bos_token_id", 1);
+    gguf_set_val_u32(metadata.get(), "tokenizer.ggml.eos_token_id", 2);
+    gguf_set_val_u32(metadata.get(), "tokenizer.ggml.unknown_token_id", 0);
+
+    for (bool nfc : {false, true}) {
+        if (nfc) {
+            gguf_set_val_bool(metadata.get(), "tokenizer.ggml.normalizer.nfc", true);
+        }
+        auto params = llama_model_default_params();
+        params.vocab_only = true;
+        llama_model_ptr model(llama_model_init_from_user(metadata.get(), nullptr, nullptr, params));
+        if (!model) {
+            fprintf(stderr, "failed to create BPE tokenizer for NFC test\n");
+            return false;
+        }
+
+        llama_token result[3];
+        const int32_t count = llama_tokenize(llama_model_get_vocab(model.get()), "e\xCC\x81", 3, result, 3, false, false);
+        const std::vector<llama_token> expected = nfc ? std::vector<llama_token>{4, 5} : std::vector<llama_token>{3, 6, 7};
+        if (count != (int32_t) expected.size() || !std::equal(expected.begin(), expected.end(), result)) {
+            fprintf(stderr, "unexpected BPE tokenization (nfc=%d)\n", nfc);
+            return false;
+        }
+    }
+    return true;
+}
+
 int main() {
-    bool success = true;
+    bool success = test_tokenizer_nfc();
     const std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> normalization = {
         {{}, {}},
         {{0x65, 0x301}, {0xE9}},
@@ -57,7 +100,9 @@ int main() {
         auto expected = test.expected;
         expected.insert(expected.begin(), 'a');
         expected.push_back('b');
-        if (unicode_cpts_from_utf8("a" + test.text + "b") != expected) {
+        const std::string text = "a" + test.text + "b";
+        if (unicode_cpts_from_utf8(text) != expected ||
+            unicode_cpts_from_utf8(text.data() + 1, test.text.size()) != test.expected) {
             fprintf(stderr, "unexpected UTF-8 decoding for bytes:");
             for (const unsigned char byte : test.text) {
                 fprintf(stderr, " %02x", byte);
@@ -65,6 +110,11 @@ int main() {
             fprintf(stderr, "\n");
             success = false;
         }
+    }
+
+    if (unicode_cpts_from_utf8("\xC3\xA9", 1) != std::vector<uint32_t>{0xfffd}) {
+        fprintf(stderr, "UTF-8 decoding crossed the fragment boundary\n");
+        success = false;
     }
 
     const std::vector<std::string> regex_exprs = {
