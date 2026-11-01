@@ -141,19 +141,6 @@ static bool is_valid_repo_id(const std::string & repo_id) {
     return !special && slash == 1;
 }
 
-static bool is_valid_hf_token(const std::string & token) {
-    if (token.length() < 37 || token.length() > 256 ||
-        !string_starts_with(token, "hf_")) {
-        return false;
-    }
-    for (size_t i = 3; i < token.length(); ++i) {
-        if (!is_alphanum(token[i])) {
-            return false;
-        }
-    }
-    return true;
-}
-
 static bool is_valid_commit(const std::string & hash) {
     return is_hex_string(hash, 40);
 }
@@ -190,10 +177,8 @@ static common_json api_get(const std::string & url,
         {"Accept", "application/json"}
     };
 
-    if (is_valid_hf_token(token)) {
+    if (!token.empty()) {
         headers.emplace("Authorization", "Bearer " + token);
-    } else if (!token.empty()) {
-        LOG_WRN("%s: invalid token, authentication disabled\n", __func__);
     }
 
     if (auto res = cli.Get(parts.path, headers)) {
