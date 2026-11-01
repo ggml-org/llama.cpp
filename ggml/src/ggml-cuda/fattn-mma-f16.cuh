@@ -530,6 +530,8 @@ static __device__ __forceinline__ void flash_attn_ext_f16_dequant_tile_q8(
     constexpr int nblk = D2 / 16; // q8_0 blocks per row, 32 values each
     constexpr int row_bytes = nblk * FATTN_MMA_Q8_0_BLOCK_BYTES;
 
+    const half2 bias1152 = __floats2half2_rn(1152.0f, 1152.0f);
+
 #pragma unroll
     for (int u = threadIdx.y*warp_size + threadIdx.x; u < nbatch_fa*nblk; u += nwarps*warp_size) {
         const int i = u / nblk;
@@ -544,8 +546,11 @@ static __device__ __forceinline__ void flash_attn_ext_f16_dequant_tile_q8(
             alignas(16) half vals[8];
 #pragma unroll
             for (int l = 0; l < 4; ++l) {
-                const uint16_t pair = *(const uint16_t *) (b + 2 + (4*q + l)*2);
-                const half2 v = __hmul2(make_half2((int8_t) pair, (int8_t) (pair >> 8)), dd);
+                const uint32_t pair = *(const uint16_t *) (b + 2 + (4*q + l)*2);
+                // s8 -> f16 without I2F: byte as mantissa of 0x6400 (ulp = 1), xor bit 7 (weight 128, the
+                // two's complement sign) -> exact f16(1024 + 128 + v); the subtract of that bias is exact too
+                const uint32_t bits = __byte_perm(pair, 0x64006400u, 0x7150) ^ 0x00800080u;
+                const half2 v = __hmul2(__hsub2(*(const half2 *) &bits, bias1152), dd);
                 vals[2*l + 0] = v.x;
                 vals[2*l + 1] = v.y;
             }
