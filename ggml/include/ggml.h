@@ -433,7 +433,13 @@ extern "C" {
         GGML_TYPE_Q1_0    = 41,
         GGML_TYPE_Q2_0    = 42,
         GGML_TYPE_F8_E4M3 = 43,
-        GGML_TYPE_COUNT   = 44,
+        // reserving 44 and 45 for IQ2_NL and IQ3_NL
+        GGML_TYPE_JQ2_K   = 46,
+        GGML_TYPE_JQ3_K   = 47,
+        GGML_TYPE_JQ4_K   = 48,
+        GGML_TYPE_JQ5_K   = 49,
+        GGML_TYPE_JQ6_K   = 50,
+        GGML_TYPE_COUNT   = 51,
     };
 
     // [TAG_GGML_PREC]
