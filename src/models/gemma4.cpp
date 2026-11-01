@@ -154,8 +154,7 @@ std::unique_ptr<llm_graph_context> llama_model_gemma4::build_arch_graph(const ll
 // get 2D slice view from a 3D tensor, the idx corresponds to the 3rd dim
 static ggml_tensor * gemma4_view_2d_slice(ggml_context * ctx0, ggml_tensor * x, int idx) {
     GGML_ASSERT(idx < (int) x->ne[2]);
-    return ggml_view_2d(ctx0, x, x->ne[0], x->ne[1], ggml_row_size(x->type, x->ne[0]),
-                        idx * x->ne[0] * x->ne[1] * ggml_element_size(x));
+    return ggml_view_2d(ctx0, x, x->ne[0], x->ne[1], x->nb[1], idx * x->nb[2]);
 }
 
 llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_params & params) :
@@ -186,7 +185,8 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     if (model.per_layer_tok_embd) {
-        const float tok_embd_scale = sqrtf((float) n_embd_per_layer);
+        // fold per_layer_input_scale (1/sqrt(2)) from project_per_layer_inputs() into tok_embd_scale
+        const float tok_embd_scale = sqrtf((float) n_embd_per_layer) / sqrtf(2.0f);
 
         inp_per_layer = ggml_scale     (ctx0, inp_per_layer, tok_embd_scale);
         inp_per_layer = ggml_reshape_3d(ctx0, inp_per_layer, n_embd_per_layer, n_layer, inp_per_layer->ne[1]);
@@ -195,7 +195,24 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
         inp_per_layer = project_per_layer_inputs(inpL, inp_per_layer);
     }
 
+    // KV-shared layers do not write to the KV cache, so prune non-output token rows before the first KV-shared layer
+    bool prune_shared = crop_before_nextn(inp_out_ids) && cparams.causal_attn &&
+                        hparams.n_layer_kv_from_start > 0 && hparams.n_layer_kv_from_start < n_layer &&
+                        !cparams.embeddings && (cparams.kv_unified || cparams.n_seq_max == 1);
+    for (int il = (int) hparams.n_layer_kv_from_start; prune_shared && il <= n_layer; ++il) {
+        prune_shared = !cparams.embeddings_layer_inp[il];
+    }
+    int64_t n_rows = n_tokens;
+
     for (int il = 0; il < n_layer; ++il) {
+        if (prune_shared && il == (int) hparams.n_layer_kv_from_start) {
+            inpL                           = ggml_get_rows(ctx0, inpL, inp_out_ids);
+            inp_pos                        = ggml_reshape_1d(ctx0, ggml_get_rows(ctx0, ggml_reshape_2d(ctx0, inp_pos, 1, n_tokens), inp_out_ids), n_outputs);
+            inp_attn->self_kq_mask_cnv     = ggml_cast(ctx0, ggml_get_rows(ctx0, inp_attn->get_kq_mask(),     inp_out_ids), inp_attn->get_kq_mask()->type);
+            inp_attn->self_kq_mask_swa_cnv = ggml_cast(ctx0, ggml_get_rows(ctx0, inp_attn->get_kq_mask_swa(), inp_out_ids), inp_attn->get_kq_mask_swa()->type);
+            n_rows                         = n_outputs;
+        }
+
         const int64_t n_embd_head = hparams.n_embd_head_k(il);
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_v(il));
 
@@ -226,14 +243,14 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
             qkv_fused = build_lora_mm(model.layers[il].wqkv, cur, model.layers[il].wqkv_s);
             cb(qkv_fused, "wqkv", il);
             const int64_t q_dim = n_embd_head * n_head;
-            Qcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv_fused, q_dim, n_tokens, qkv_fused->nb[1], 0));
+            Qcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv_fused, q_dim, n_rows, qkv_fused->nb[1], 0));
         } else {
             Qcur = build_lora_mm(model.layers[il].wq, cur, model.layers[il].wq_s);
         }
         {
             cb(Qcur, "Qcur", il);
 
-            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens);
+            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_rows);
 
             Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, nullptr, LLM_NORM_RMS, il);
             cb(Qcur, "Qcur_normed", il);
@@ -287,9 +304,8 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
                     Qcur, nullptr, nullptr, nullptr, nullptr, nullptr, hparams.f_attention_scale, il);
         }
 
-        // TODO @ngxson : strip unused token right after the last KV layer to speed up prompt processing
         // keep all rows when extracting unmasked nextn embeddings (MTP target needs the hidden state for every token)
-        if (il == n_layer - 1 && crop_before_nextn(inp_out_ids)) {
+        if (!prune_shared && il == n_layer - 1 && crop_before_nextn(inp_out_ids)) {
             cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
             inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
         }
@@ -331,7 +347,7 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
             ggml_tensor * tmp = ggml_rms_norm(ctx0, attn_out, hparams.f_norm_rms_eps);
             tmp = ggml_scale(ctx0, tmp, 1.0f / sqrtf((float) n_embd));
             tmp = ggml_mul(ctx0, tmp, model.layers[il].ffn_gate_inp_s);
-            ggml_tensor * logits = build_lora_mm(model.layers[il].ffn_gate_inp, tmp); // [n_expert, n_tokens]
+            ggml_tensor * logits = build_lora_mm(model.layers[il].ffn_gate_inp, tmp); // [n_expert, n_rows]
             cb(logits, "ffn_moe_logits", il);
 
             cur_moe = build_moe_ffn(cur_moe,
@@ -383,18 +399,17 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
             ggml_tensor * pe_in = cur;
             cb(cur, "pe_in", il);
 
-            cur = build_lora_mm(model.layers[il].per_layer_inp_gate, cur); // [n_embd_per_layer, n_tokens]
+            cur = build_lora_mm(model.layers[il].per_layer_inp_gate, cur); // [n_embd_per_layer, n_rows]
             cur = ggml_gelu(ctx0, cur);
 
             ggml_tensor * inp_this_layer = gemma4_view_2d_slice(ctx0, inp_per_layer, il); // [n_embd_per_layer, n_tokens]
 
-            // TODO @ngxson : improve this
-            if (il == n_layer - 1 && crop_before_nextn(inp_out_ids)) {
+            if ((prune_shared && !hparams.has_kv(il)) || (il == n_layer - 1 && crop_before_nextn(inp_out_ids))) {
                 inp_this_layer = ggml_get_rows(ctx0, inp_this_layer, inp_out_ids);
             }
 
             cur = ggml_mul(ctx0, cur, inp_this_layer);
-            cur = build_lora_mm(model.layers[il].per_layer_proj, cur); // [n_embd, n_tokens]
+            cur = build_lora_mm(model.layers[il].per_layer_proj, cur); // [n_embd, n_rows]
             cur = build_norm(cur, model.layers[il].per_layer_post_norm, nullptr, LLM_NORM_RMS, il);
             cb(cur, "per_layer_embd_out", il);
 
@@ -522,19 +537,22 @@ ggml_tensor * llama_model_gemma4::graph::project_per_layer_inputs(ggml_tensor * 
     const float per_layer_input_scale      = 1.0f / sqrtf(2.0f);
 
     // note: this matrix multiplication will be performed in the input layer (i.e. on the CPU)
+    // fold per_layer_input_scale into proj_norm_w and per_layer_projection_scale into proj_eps
+    ggml_tensor * proj_norm_w = ggml_scale(ctx0, model.per_layer_proj_norm, per_layer_input_scale);
+    ggml_build_forward_expand(gf, proj_norm_w);
+
     ggml_tensor * per_layer_proj;
     per_layer_proj = ggml_mul_mat   (ctx0, model.per_layer_model_proj, inp_batch);
-    per_layer_proj = ggml_scale     (ctx0, per_layer_proj, per_layer_projection_scale);
     per_layer_proj = ggml_reshape_3d(ctx0, per_layer_proj, n_embd_per_layer, n_layer, n_tokens);
 
-    per_layer_proj = build_norm(per_layer_proj, model.per_layer_proj_norm, nullptr, LLM_NORM_RMS, -1);
+    const float proj_eps = hparams.f_norm_rms_eps / (per_layer_projection_scale * per_layer_projection_scale);
+    per_layer_proj = ggml_rms_norm(ctx0, per_layer_proj, proj_eps);
+    per_layer_proj = ggml_mul(ctx0, per_layer_proj, proj_norm_w);
     cb(per_layer_proj, "per_layer_proj", -1);
 
-    inp_per_layer = ggml_add  (ctx0, per_layer_proj, inp_per_layer);
-    inp_per_layer = ggml_scale(ctx0, inp_per_layer, per_layer_input_scale);
+    inp_per_layer = ggml_add(ctx0, per_layer_proj, inp_per_layer);
     cb(inp_per_layer, "inp_per_layer", -1);
 
     // permute to shape: [n_embd_per_layer, n_tokens, n_layer]
-    inp_per_layer = ggml_cont(ctx0, ggml_permute(ctx0, inp_per_layer, 0, 2, 1, 3));
-    return inp_per_layer;
+    return ggml_permute(ctx0, inp_per_layer, 0, 2, 1, 3);
 }
