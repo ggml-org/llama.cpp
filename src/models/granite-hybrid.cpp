@@ -246,9 +246,9 @@ ggml_tensor * llama_model_granite_hybrid::graph::build_layer_ffn(ggml_tensor *  
         cb(cur, "ffn_norm", il);
 
         cur = build_ffn(cur,
-                model.layers[il].ffn_up, model.layers[il].ffn_up_b, NULL,
-                model.layers[il].ffn_gate, model.layers[il].ffn_gate_b, NULL,
-                model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL,
+                model.layers[il].ffn_up, model.layers[il].ffn_up_b, model.layers[il].ffn_up_s,
+                model.layers[il].ffn_gate, model.layers[il].ffn_gate_b, model.layers[il].ffn_gate_s,
+                model.layers[il].ffn_down, model.layers[il].ffn_down_b, model.layers[il].ffn_down_s,
                 NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
         cb(cur, "ffn_out", il);
 
