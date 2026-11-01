@@ -6,7 +6,9 @@
 #include <algorithm>
 #include <bitset>
 #include <cassert>
+#include <cstdint>
 #include <cstring>
+#include <iterator>
 #include <limits>
 #include <set>
 #include <vector>
@@ -16,6 +18,21 @@
 #else
 #    define LLAMA_ATTRIBUTE_NOINLINE
 #endif
+
+#if defined(_MSC_VER)
+#    include <intrin.h>
+#endif
+
+// index of the lowest set bit, x != 0
+static inline int ctz64(uint64_t x) {
+#if defined(_MSC_VER)
+    unsigned long i;
+    _BitScanForward64(&i, x);
+    return (int) i;
+#else
+    return __builtin_ctzll(x);
+#endif
+}
 
 struct llama_kv_cell_ext {
     // 2D spatial positions, typically used for M-RoPE
@@ -58,6 +75,7 @@ public:
 
         for (uint32_t s = 0; s < LLAMA_MAX_SEQ; ++s) {
             seq_pos[s].clear();
+            std::fill(seq_bits[s].begin(), seq_bits[s].end(), 0);
         }
     }
 
@@ -78,6 +96,10 @@ public:
         ext.resize(n);
         shift.resize(n);
         seq.resize(n);
+
+        for (uint32_t s = 0; s < LLAMA_MAX_SEQ; ++s) {
+            seq_bits[s].clear();
+        }
 
         reset();
     }
@@ -383,45 +405,48 @@ public:
         return seq_pos[seq_id].size();
     }
 
-    // get the lists of cells of sequence seq_id
+    // number of cells that contain seq_id at a position >= p_min
+    uint32_t seq_n_cells(llama_seq_id seq_id, llama_pos p_min) const {
+        assert(seq_id >= 0);
+        assert(seq_id < LLAMA_MAX_SEQ);
+
+        const auto & sp = seq_pos[seq_id];
+
+        return std::distance(sp.lower_bound({ p_min, 0 }), sp.end());
+    }
+
+    // get the lists of cells of sequence seq_id, in cell order
     // one list of max `n_per_seq` for each seq_id, padded with -1
+    // if p_min is not empty, only the cells at a position >= p_min[s] go to the list of slice s
     LLAMA_ATTRIBUTE_NOINLINE
-    void get_seq_cells(const std::vector<llama_seq_id> & seq_ids, int32_t * data, int64_t n_per_seq) const {
+    void get_seq_cells(const std::vector<llama_seq_id> & seq_ids, const std::vector<llama_pos> & p_min, int32_t * data, int64_t n_per_seq) const {
         assert(seq_ids.size() >= 1);
+        assert(p_min.empty() || p_min.size() == seq_ids.size());
 
-        const int32_t n_slices = (int32_t) seq_ids.size();
+        const int64_t n_slices = (int64_t) seq_ids.size();
 
-        std::vector<int32_t *> dp(n_slices);
-        std::vector<seq_set_t> ss(n_slices);
-        for (int32_t s = 0; s < n_slices; ++s) {
-            dp[s] = data + s*n_per_seq;
-            ss[s].set(seq_ids[s]);
-        }
-
-        const int32_t i_max = used_max_p1();
-
-        for (int32_t i = 0; i < i_max; ++i) {
-            if (is_empty(i)) {
-                continue;
-            }
-
-            for (int32_t s = 0; s < n_slices; ++s) {
-                if (seq[i] == ss[s]) {
-                    int32_t k = i + 1;
-                    while (k < i_max && seq[k] == ss[s]) {
-                        ++k;
-                    }
-                    for (; i < k; ++i) {
-                        *dp[s]++ = i;
-                    }
-                    --i;
-                    break;
-                }
-            }
-        }
+        const uint32_t n_words = (used_max_p1() + 63)/64;
 
         for (int64_t s = 0; s < n_slices; ++s) {
-            std::fill(dp[s], data + (s+1)*n_per_seq, -1);
+            const auto & bits = seq_bits[seq_ids[s]];
+
+            const uint32_t n_w = std::min<uint32_t>(n_words, bits.size());
+            const llama_pos pm = p_min.empty() ? 0 : p_min[s];
+
+            int32_t * dst = data + s*n_per_seq;
+            int32_t * end = dst + n_per_seq;
+
+            for (uint32_t w = 0; w < n_w; ++w) {
+                for (uint64_t b = bits[w]; b != 0; b &= b - 1) {
+                    const int32_t i = 64*w + ctz64(b);
+                    if (pos[i] >= pm) {
+                        GGML_ASSERT(dst < end);
+                        *dst++ = i;
+                    }
+                }
+            }
+
+            std::fill(dst, end, -1);
         }
     }
 
@@ -588,16 +613,28 @@ private:
     //
     std::set<std::pair<llama_pos, uint32_t>> seq_pos[LLAMA_MAX_SEQ];
 
-    // helper functions for updating `seq_pos`, once cell at a time:
+    // bit i of seq_bits[s] is set if cell i carries sequence s (the transpose of `seq`), used to build the cell lists
+    // allocated on the first cell of the sequence, so the copies made by cp() never allocate it
+    std::vector<uint64_t> seq_bits[LLAMA_MAX_SEQ];
+
+    // helper functions for updating `seq_pos` and `seq_bits`, once cell at a time:
 
     void seq_pos_dec(llama_seq_id s, uint32_t i) {
         const auto n = seq_pos[s].erase({ pos[i], i });
         assert(n == 1);
         GGML_UNUSED(n);
+
+        seq_bits[s][i/64] &= ~(1ull << (i%64));
     }
 
     void seq_pos_inc(llama_seq_id s, uint32_t i) {
         seq_pos[s].insert({ pos[i], i });
+
+        if (seq_bits[s].empty()) {
+            seq_bits[s].assign((pos.size() + 63)/64, 0);
+        }
+
+        seq_bits[s][i/64] |= 1ull << (i%64);
     }
 
     // remove cell i
