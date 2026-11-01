@@ -1682,7 +1682,6 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_MEAN:
         case GGML_OP_SOFT_MAX:
         case GGML_OP_GROUP_NORM:
-        case GGML_OP_L2_NORM:
             return has_simdgroup_reduction && ggml_is_contiguous_rows(op->src[0]);
         case GGML_OP_COUNT_EQUAL:
             return has_simdgroup_reduction &&
@@ -1692,8 +1691,11 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_ARGMAX:
             return has_simdgroup_reduction;
         case GGML_OP_NORM:
+        case GGML_OP_L2_NORM:
+            // src0 rows can be non-contiguous, but the kernels write dst rows contiguously
+            return has_simdgroup_reduction && ggml_is_contiguous_rows(op);
         case GGML_OP_RMS_NORM:
-            return has_simdgroup_reduction && (ggml_is_contiguous_rows(op->src[0]));
+            return has_simdgroup_reduction && ggml_is_contiguous_rows(op->src[0]);
         case GGML_OP_ROPE:
         case GGML_OP_ROPE_BACK:
             return true;

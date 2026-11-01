@@ -1,6 +1,7 @@
 #include "common.h"
 
 constant bool FC_norm_use_scale [[function_constant(FC_NORM + 0)]];
+constant bool FC_norm_nc        [[function_constant(FC_NORM + 1)]]; // src0 rows are not contiguous (nb00 != sizeof(T))
 
 // F == 1 : norm (no fuse)
 // F == 2 : norm + mul
@@ -28,6 +29,8 @@ kernel void kernel_norm_fuse_impl(
 
     device const T * x = (device const T *) (src0 + i03*args.nbf3[0] + i02*args.nbf2[0] + i01*args.nbf1[0]);
 
+    const int64_t s00 = FC_norm_nc ? args.nb00/sizeof(T) : 1;
+
     device const T * f0 = (device const T *) (src1_0 + (i03%args.nef3[1])*args.nbf3[1] + (i02%args.nef2[1])*args.nbf2[1] + (i01%args.nef1[1])*args.nbf1[1]);
     device const T * f1 = (device const T *) (src1_1 + (i03%args.nef3[2])*args.nbf3[2] + (i02%args.nef2[2])*args.nbf2[2] + (i01%args.nef1[2])*args.nbf1[2]);
 
@@ -36,7 +39,7 @@ kernel void kernel_norm_fuse_impl(
     float sumf = 0.0f;
 
     for (int i00 = tpitg.x; i00 < args.ne00_t; i00 += ntg.x) {
-        sumft += x[i00];
+        sumft += x[i00*s00];
     }
     sumf = dot(sumft, T(1.0f));
     sumf = simd_sum(sumf);
@@ -58,7 +61,7 @@ kernel void kernel_norm_fuse_impl(
 
     sumf = 0.0f;
     for (int i00 = tpitg.x; i00 < args.ne00_t; i00 += ntg.x) {
-        y[i00] = x[i00] - mean;
+        y[i00] = x[i00*s00] - mean;
         sumf += dot(y[i00], y[i00]);
     }
     sumf = simd_sum(sumf);
@@ -205,11 +208,13 @@ kernel void kernel_l2_norm_impl(
     device const T0 * x = (device const T0 *) (src0 + i03*args.nb03 + i02*args.nb02 + i01*args.nb01);
     device       T  * y = (device       T  *) (dst  + i03*args.nb3  + i02*args.nb2  + i01*args.nb1);
 
+    const int64_t s00 = FC_norm_nc ? args.nb00/sizeof(T0) : 1;
+
     float sumf = 0.0f;
 
     // parallel sum
     for (int i00 = tpitg.x; i00 < args.ne00; i00 += ntg.x) {
-        sumf += dot(x[i00], x[i00]);
+        sumf += dot(x[i00*s00], x[i00*s00]);
     }
     sumf = simd_sum(sumf);
 
@@ -227,7 +232,7 @@ kernel void kernel_l2_norm_impl(
     const float scale = 1.0f/max(sqrt(sumf), args.eps);
 
     for (int i00 = tpitg.x; i00 < args.ne00; i00 += ntg.x) {
-        y[i00] = x[i00] * scale;
+        y[i00] = x[i00*s00] * scale;
     }
 }
 
