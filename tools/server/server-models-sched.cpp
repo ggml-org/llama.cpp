@@ -93,8 +93,8 @@ std::string server_models_sched::pick_victim(std::unique_lock<std::mutex> & lk) 
     std::string victim;
     int64_t victim_last_used = 0;
     for (const auto & m : models.mapping) {
-        // a busy model is mid-request, one still coming up has no request to finish
-        if (m.second.req_count != 0 || !m.second.meta.is_ready_or_sleep()) {
+        // a busy model is mid-request, one still coming up has no request to finish, a spawned one stays
+        if (m.second.req_count != 0 || !m.second.meta.is_ready_or_sleep() || m.second.meta.is_pinned()) {
             continue;
         }
         // already on its way out, or a queued request wants it
@@ -264,6 +264,16 @@ bool server_models_sched::limits_exceeded(std::unique_lock<std::mutex> & lk, con
         }
     }
     return any_running;
+}
+
+bool server_models_sched::starved(std::unique_lock<std::mutex> & lk, const std::string & name) {
+    check_lock(lk);
+    for (const auto & m : models.mapping) {
+        if (m.second.meta.is_running() && (!m.second.meta.is_pinned() || models.stopping_models.count(m.first))) {
+            return false; // a slot can still free up
+        }
+    }
+    return limits_exceeded(lk, name, /* verbose */ false);
 }
 
 void server_models_sched::make_room(const std::string & name) {

@@ -231,6 +231,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--models-preset PATH` | path to INI file containing model presets for the router server (default: disabled)<br/>(env: LLAMA_ARG_MODELS_PRESET) |
 | `--models-max N` | for router server, maximum number of models to load simultaneously (default: 4, 0 = unlimited)<br/>(env: LLAMA_ARG_MODELS_MAX) |
 | `--models-memory-margin N` | for router server, MiB of device memory to keep free per device, unload LRU models until a new one fits (default: 0, 0 = disabled)<br/>(env: LLAMA_ARG_MODELS_MEMORY_MARGIN) |
+| `--service-sock PATH` | for router server, UNIX socket (ending in .sock) of the service API used by 'llama service' (default: disabled)<br/>(env: LLAMA_ARG_SERVICE_SOCK) |
 | `--models-autoload, --no-models-autoload` | for router server, whether to automatically load models (default: enabled)<br/>(env: LLAMA_ARG_MODELS_AUTOLOAD) |
 | `--jinja, --no-jinja` | whether to use jinja template engine for chat (default: enabled)<br/>(env: LLAMA_ARG_JINJA) |
 | `--reasoning-format FORMAT` | controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:<br/>- none: leaves thoughts unparsed in `message.content`<br/>- deepseek: puts thoughts in `message.reasoning_content`<br/>- deepseek-legacy: keeps `<think>` tags in `message.content` while also populating `message.reasoning_content`<br/>(default: auto)<br/>(env: LLAMA_ARG_THINK) |
@@ -2530,6 +2531,29 @@ Response:
   "success": true
 }
 ```
+
+### Running as a service
+
+The `llama` binary can keep a router running in the background and manage it with `llama service`:
+
+```sh
+llama service start [--port 9931] [--host 127.0.0.1] [--models-max 4] ...
+llama service status
+llama service stop      # stops every model it runs, like a container daemon
+llama service restart   # same options as the last start
+llama service run       # in the foreground, for systemd or launchd
+```
+
+The service is a router that also listens on a UNIX socket, `service.sock` in the user config directory (`~/.config/llama.cpp` on Linux and macOS, `%APPDATA%\llama.cpp` on Windows). The socket serves the whole router API without an API key, plus a few routes only available there:
+
+- `GET /service/status`: pid, address, build and the running models
+- `POST /service/spawn`: start a model with its own arguments, as `llama serve` would. Body: `{"args": ["-hf", "...", "-c", "8192"], "cwd": "...", "env": {...}, "name": "...", "replace": false}`. The arguments win over the ones the service was started with; the router-controlled ones (host, port, API key, SSL, `--models-*`) are dropped. Relative model paths are resolved against `cwd`, and only environment variables known to the argument table (`LLAMA_ARG_*`, `HF_TOKEN`, `LLAMA_CACHE`) are forwarded. A running model of the same name is an error unless `replace` is set.
+- `POST /service/stop`: shut the service down
+- `GET /service/logs?model=NAME&follow=1`: the recent output of a model, streamed while it runs
+
+A spawned model is listed with `"source": "spawned"`. It is never unloaded to make room for another model, and a request without a `model` field goes to the most recently spawned one. When it exits, the cache or preset entry of the same name, if any, is listed again.
+
+Next to the socket, `service.json` records the pid, address and arguments of the running service, and `service.log` keeps its output when started in the background. Any `llama-server` started with `--service-sock PATH` offers the same socket.
 
 ## API errors
 
