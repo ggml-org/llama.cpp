@@ -2102,19 +2102,11 @@ static void ggml_metal_buffer_rset_free(ggml_metal_buffer_t buf) {
 static void * ggml_metal_host_malloc(size_t n) {
     void * data = NULL;
 
-#if TARGET_OS_OSX || TARGET_OS_IOS
     kern_return_t err = vm_allocate((vm_map_t) mach_task_self(), (void *) &data, n, VM_FLAGS_ANYWHERE);
     if (err != KERN_SUCCESS) {
         GGML_LOG_ERROR("%s: error: vm_allocate failed\n", __func__);
         return NULL;
     }
-#else
-    const int result = posix_memalign((void **) &data, sysconf(_SC_PAGESIZE), n);
-    if (result != 0) {
-        GGML_LOG_ERROR("%s: error: posix_memalign failed\n", __func__);
-        return NULL;
-    }
-#endif
 
     return data;
 }
@@ -2296,11 +2288,7 @@ void ggml_metal_buffer_free(ggml_metal_buffer_t buf) {
     }
 
     if (buf->is_shared && buf->owned) {
-#if TARGET_OS_OSX || TARGET_OS_IOS
         vm_deallocate((vm_map_t)mach_task_self(), (vm_address_t)buf->all_data, buf->all_size);
-#else
-        free(buf->all_data);
-#endif
     }
 
     free(buf);

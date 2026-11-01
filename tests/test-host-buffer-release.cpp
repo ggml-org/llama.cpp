@@ -1,6 +1,4 @@
 // ref: https://github.com/ggml-org/llama.cpp/issues/30556
-// only iOS and Mac Catalyst builds fail without the fix, macOS already uses vm_allocate
-// thus, this test is not run by default
 
 #include "ggml-backend.h"
 
