@@ -3347,23 +3347,8 @@ mtmd_memory_usage mtmd_get_memory_usage(const char * mmproj_fname,
         mtmd_log_set(stub_log_callback, nullptr); // suppress logging
         ctx.reset(new mtmd_context(mmproj_fname, nullptr, ctx_params, true));
         mtmd_log_set(saved_log_callback, saved_log_user_data); // restore log callback
-        std::map<ggml_backend_dev_t, size_t> total_mem;
-        auto merge = [&](const struct clip_ctx * c) {
-            for (auto & [dev, size] : clip_get_mem_usage(c)) {
-                total_mem[dev] += size;
-            }
-        };
-        if (ctx->ctx_v) {
-            merge(ctx->ctx_v);
-        }
-        if (ctx->ctx_a) {
-            merge(ctx->ctx_a);
-        }
-        if (ctx->ctx_gen_a) {
-            merge(ctx->ctx_gen_a);
-        }
         mtmd_memory_usage res;
-        res.backend_mem_usage = std::move(total_mem);
+        res.backend_mem_usage = mtmd_get_ctx_memory_usage(ctx.get());
         res.image_max_tokens  = ctx->ctx_v ? clip_get_image_max_tokens(ctx->ctx_v) : -1;
         res.use_non_causal    = ctx->ctx_v ? mtmd_decode_use_non_causal(ctx.get(), nullptr) : false;
         return res;
@@ -4072,4 +4057,23 @@ int64_t mtmd_audio_stream_get_n_rows(const mtmd_audio_stream * s) {
 
 int64_t mtmd_audio_stream_get_n_rows_flushed(const mtmd_audio_stream * s) {
     return s->n_rows_flushed;
+}
+
+std::map<ggml_backend_dev_t, size_t> mtmd_get_ctx_memory_usage(const mtmd_context * ctx) {
+    std::map<ggml_backend_dev_t, size_t> total_mem;
+    auto merge = [&](const struct clip_ctx * c) {
+        for (auto & [dev, size] : clip_get_mem_usage(c)) {
+            total_mem[dev] += size;
+        }
+    };
+    if (ctx->ctx_v) {
+        merge(ctx->ctx_v);
+    }
+    if (ctx->ctx_a) {
+        merge(ctx->ctx_a);
+    }
+    if (ctx->ctx_gen_a) {
+        merge(ctx->ctx_gen_a);
+    }
+    return total_mem;
 }

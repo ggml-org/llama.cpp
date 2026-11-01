@@ -3780,6 +3780,9 @@ llama_memory_breakdown llama_context::memory_breakdown() const {
             ret[buft].context += size;
         }
     }
+    if (buf_output) {
+        ret[ggml_backend_buffer_get_type(buf_output.get())].context += ggml_backend_buffer_get_size(buf_output.get());
+    }
     if (model.no_alloc()) {
         for (size_t i = 0; i < backends.size(); ++i) {
             ggml_backend_t             backend = backends[i].get();
