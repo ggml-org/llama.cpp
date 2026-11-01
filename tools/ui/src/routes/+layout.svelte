@@ -151,6 +151,24 @@
 		return uiStore.isSidebarExpanded ? 'translateX(var(--sidebar-reveal))' : undefined;
 	});
 
+	// The same slide for what moves with the page from outside it, like a page's floating key,
+	// which is portalled to the body so its place on screen never depends on the slid page's box:
+	// the offset, whether a finger drives it (no easing then), and whether the page is aside (no
+	// taps then, as inside it)
+	$effect(() => {
+		const root = document.documentElement;
+		const offset =
+			sidebarReveal.dragOffset !== null
+				? `${sidebarReveal.dragOffset}px`
+				: uiStore.isSidebarExpanded
+					? 'var(--sidebar-reveal)'
+					: '0px';
+
+		root.style.setProperty('--sidebar-reveal-x', deviceStore.isMobile ? offset : '0px');
+		root.toggleAttribute('data-sidebar-reveal-dragging', sidebarReveal.dragOffset !== null);
+		root.toggleAttribute('data-sidebar-revealed', sidebarReveal.isRevealed);
+	});
+
 	// the models page returns to wherever it was reached from, by any kind of navigation
 	afterNavigate(() => uiStore.rememberModelsReturnRoute());
 
