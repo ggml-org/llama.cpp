@@ -1390,10 +1390,14 @@ json oaicompat_chat_params_parse(
                 json_schema = json_value(response_format, "schema", json::object());
             }
         } else if (response_type == "json_schema") {
-            auto schema_wrapper = json_value(response_format, "json_schema", json::object());
-            json_schema = json_value(schema_wrapper, "schema", json::object());
+            if (response_format.contains("json_schema")) {
+                auto schema_wrapper = json_value(response_format, "json_schema", json::object());
+                json_schema = json_value(schema_wrapper, "schema", json::object());
+            } else {
+                json_schema = json_value(response_format, "schema", json::object());
+            }
         } else if (!response_type.empty() && response_type != "text") {
-            throw std::invalid_argument("response_format type must be one of \"text\" or \"json_object\", but got: " + response_type);
+            throw std::invalid_argument("response_format type must be one of \"text\", \"json_object\" or \"json_schema\", but got: " + response_type);
         }
     }
 
