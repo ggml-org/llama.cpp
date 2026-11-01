@@ -331,6 +331,84 @@ template [[host_name("kernel_get_rows_i32")]]  kernel get_rows_f_t kernel_get_ro
 template [[host_name("kernel_get_rows_bf16")]] kernel get_rows_f_t kernel_get_rows_f<bfloat, float>;
 #endif
 
+kernel void kernel_get_rows_back(
+        constant ggml_metal_kargs_get_rows_back & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        threadgroup atomic_uint * shmem [[threadgroup(0)]],
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort  tiitg[[thread_index_in_threadgroup]],
+        ushort3 ntg  [[threads_per_threadgroup]]) {
+    if (args.zero) {
+        const int32_t i0 = tgpig.x*ntg.x + tiitg;
+        if (i0 < args.ne00) {
+            ((device float *) (dst + tgpig.y*args.nb1))[i0] = 0.0f;
+        }
+        return;
+    }
+
+    // only the threadgroup of the first grad row of each index writes the dst row, so no global atomics are needed
+    const int32_t i10 = tgpig.y;
+    const int32_t r   = *((const device int32_t *) (src1 + i10*args.nb10));
+
+    if (r < 0 || r >= args.ne1) {
+        return;
+    }
+
+    // dup: r is found before i10, mask: bit set for each grad row j >= i10 with index r
+    threadgroup atomic_uint * dup  = shmem;
+    threadgroup atomic_uint * mask = shmem + 1;
+
+    if (tiitg == 0) {
+        atomic_store_explicit(dup, 0, memory_order_relaxed);
+    }
+
+    device float * pdst = (device float *) (dst + r*args.nb1);
+
+    for (int32_t c0 = 0; c0 < args.ne10; c0 += 32*args.nw) {
+        const int32_t c1 = min(c0 + 32*args.nw, args.ne10);
+
+        for (int32_t w = tiitg; w < args.nw; w += ntg.x) {
+            atomic_store_explicit(&mask[w], 0, memory_order_relaxed);
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        for (int32_t j = c0 + tiitg; j < c1; j += ntg.x) {
+            if (*((const device int32_t *) (src1 + j*args.nb10)) != r) {
+                continue;
+            }
+            if (j < i10) {
+                atomic_store_explicit(dup, 1, memory_order_relaxed);
+            } else {
+                atomic_fetch_or_explicit(&mask[(j - c0)/32], 1u << ((j - c0)%32), memory_order_relaxed);
+            }
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (atomic_load_explicit(dup, memory_order_relaxed)) {
+            return;
+        }
+
+        // add in the same order as the CPU backend
+        for (int32_t w = 0; w < (c1 - c0 + 31)/32; ++w) {
+            uint bits = atomic_load_explicit(&mask[w], memory_order_relaxed);
+            while (bits) {
+                const int32_t j = c0 + 32*w + ctz(bits);
+                const device float * psrc = (const device float *) (src0 + j*args.nb01);
+                for (int32_t i0 = tiitg; i0 < args.ne00; i0 += ntg.x) {
+                    pdst[i0] += psrc[i0];
+                }
+                bits &= bits - 1;
+            }
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+}
+
 typedef decltype(kernel_get_rows_q<block_q4_0, 2, dequantize_q4_0>) get_rows_q_t;
 
 template [[host_name("kernel_get_rows_q1_0")]]    kernel get_rows_q_t kernel_get_rows_q<block_q1_0,    8, dequantize_q1_0>;
