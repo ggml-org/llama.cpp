@@ -22,8 +22,8 @@ void calc_superblock(const uint a_offset, const uint b_offset, const uint v_im, 
 
         const uint32_t scale_0_4_l = (scale4_u32 << 16) | scale0_u32;
         const uint32_t scale_0_4_h = (scale_0_4_l & 0xC0C0C0C0) >> 2;
-        const vec4 scale_0_4_l_f = vec4(unpack8(scale_0_4_l & 0x3F3F3F3F));
-        const vec4 scale8_f = vec4(unpack8((((scale8_u32 << 12) | scale8_u32) & 0x0F0F0F0F) | scale_0_4_h));
+        const vec4 scale_0_4_l_f = vec4(unpack_u8x4(scale_0_4_l & 0x3F3F3F3F));
+        const vec4 scale8_f = vec4(unpack_u8x4((((scale8_u32 << 12) | scale8_u32) & 0x0F0F0F0F) | scale_0_4_h));
 
         const FLOAT_TYPE sc0 = scale_0_4_l_f.x;
         const FLOAT_TYPE sc1 = scale_0_4_l_f.y;
@@ -54,10 +54,10 @@ void calc_superblock(const uint a_offset, const uint b_offset, const uint v_im, 
         qs64_80_u32_lo4 += qs64_80_lo4_offset16;
         qs64_80_u32_hi4 += qs64_80_hi4_offset16;
 
-        const vec4 qs0_16_lo4 = vec4(unpack8(qs0_16_u32_lo4));
-        const vec4 qs64_80_lo4 = vec4(unpack8(qs64_80_u32_lo4));
-        const vec4 qs0_16_hi4 = vec4(unpack8(qs0_16_u32_hi4));
-        const vec4 qs64_80_hi4 = vec4(unpack8(qs64_80_u32_hi4));
+        const vec4 qs0_16_lo4 = vec4(unpack_u8x4(qs0_16_u32_lo4));
+        const vec4 qs64_80_lo4 = vec4(unpack_u8x4(qs64_80_u32_lo4));
+        const vec4 qs0_16_hi4 = vec4(unpack_u8x4(qs0_16_u32_hi4));
+        const vec4 qs64_80_hi4 = vec4(unpack_u8x4(qs64_80_u32_hi4));
 
         const FLOAT_TYPE q4_0  = qs0_16_lo4.x;
         const FLOAT_TYPE q4_1  = qs0_16_lo4.y;
