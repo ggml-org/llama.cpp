@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { PanelLeftClose, PanelLeftOpen } from '@lucide/svelte';
+	import { PanelLeftClose, PanelLeftOpen, Search } from '@lucide/svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import {
@@ -610,6 +610,19 @@
 						tooltipSide={TooltipSide.RIGHT}
 					/>
 				</div>
+
+				<!-- a phone reaches search from a round key across from the logo, in place of the
+				     Search row among the sidebar's actions -->
+				{#if isOnMobile}
+					<ActionIcon
+						ariaLabel="Search"
+						class="matte-key size-10 rounded-full! bg-background! hover:bg-background! dark:bg-muted-foreground/15! dark:hover:bg-muted-foreground/15!"
+						icon={Search}
+						iconSize="size-4.5"
+						onclick={() => handleSidebarAction(SidebarAction.SEARCH)}
+						size="lg"
+					/>
+				{/if}
 			</div>
 
 			<div

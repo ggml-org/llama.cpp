@@ -29,9 +29,14 @@
 
 	let { class: className, items = SIDEBAR_ACTIONS_ITEMS, onAction, onNavigate }: Props = $props();
 
-	// the models manager stays desktop-only: a phone picks its models in the selector
+	// the models manager stays desktop-only: a phone picks its models in the selector; a phone
+	// reaches search from the round key at the top of the sidebar instead
 	const actions = $derived(
-		items.filter((item) => item.action !== SidebarAction.MANAGE_MODELS || !deviceStore.isMobile)
+		items.filter(
+			(item) =>
+				!deviceStore.isMobile ||
+				(item.action !== SidebarAction.MANAGE_MODELS && item.action !== SidebarAction.SEARCH)
+		)
 	);
 	let initialized = $state(false);
 	let showIcons = $state(false);
