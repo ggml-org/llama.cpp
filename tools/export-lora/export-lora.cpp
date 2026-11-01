@@ -104,6 +104,9 @@ struct file_input {
         auto offset = gguf_get_data_offset(ctx_gguf) + gguf_get_tensor_offset(ctx_gguf, i_tensor_in);
         f_in.seekg(offset);
         f_in.read((char* )buf.data(), len);
+        if (!f_in) {
+            throw std::runtime_error("failed to read data for tensor " + name + ", input file may be truncated");
+        }
     }
 
     ~file_input() {

@@ -18,6 +18,7 @@
 #include <numeric>
 #include <random>
 #include <unordered_map>
+#include <unordered_set>
 #include <stdexcept>
 
 // the ring buffer works similarly to std::deque, but with a fixed capacity
@@ -1085,6 +1086,12 @@ static void llama_sampler_greedy_backend_apply(
 
     struct ggml_tensor * curl = ggml_argmax(ctx, logits);
     ggml_set_name(curl, "greedy_argmax");
+
+    if (data->candidates != nullptr) {
+        struct ggml_tensor * candidates = ggml_reshape_2d(ctx, data->candidates, 1, ggml_nelements(data->candidates));
+        curl = ggml_get_rows(ctx, candidates, curl);
+        ggml_set_name(curl, "greedy_sampled_token");
+    }
 
     data->sampled = curl;
 }
@@ -3327,9 +3334,13 @@ struct llama_sampler_dry {
 };
 
 // Ported from Koboldcpp, original PR: https://github.com/LostRuins/koboldcpp/pull/982 (Original author: pi6am)
-static void get_overlapping_token_sequences(const llama_vocab & vocab, const std::string& str, std::unordered_multimap<llama_token, std::vector<llama_token>>& token_sequences, int max_tail_len = -1) {
-    for (llama_token token_id = 0; token_id < (llama_token) vocab.n_tokens(); token_id++) {
-        std::string word = vocab.detokenize({token_id}, true);
+static void get_overlapping_token_sequences(const llama_vocab & vocab, const std::vector<std::string> & vocab_words, const std::string& str, std::unordered_multimap<llama_token, std::vector<llama_token>>& token_sequences, int max_tail_len = -1) {
+    // the tail tokenization only depends on how many characters of str were matched, so compute each one at most once
+    std::vector<std::vector<llama_token>> tail_cache(str.size() + 1);
+    std::vector<bool> tail_cached(str.size() + 1, false);
+
+    for (llama_token token_id = 0; token_id < (llama_token) vocab_words.size(); token_id++) {
+        const std::string & word = vocab_words[token_id];
         if (word.find(str) != std::string::npos) {
             token_sequences.emplace(token_id, std::vector<llama_token>());
         } else {
@@ -3346,10 +3357,14 @@ static void get_overlapping_token_sequences(const llama_vocab & vocab, const std
                     }
                 }
                 if (match) {
-                    std::vector<llama_token> tokenization = vocab.tokenize(str.substr(i), false, false);
-                    if (max_tail_len >= 0 && tokenization.size() > (size_t)max_tail_len) {
-                        tokenization.resize(max_tail_len);
+                    if (!tail_cached[i]) {
+                        tail_cache[i] = vocab.tokenize(str.substr(i), false, false);
+                        if (max_tail_len >= 0 && tail_cache[i].size() > (size_t)max_tail_len) {
+                            tail_cache[i].resize(max_tail_len);
+                        }
+                        tail_cached[i] = true;
                     }
+                    const std::vector<llama_token> & tokenization = tail_cache[i];
 
                     // Ensure we don't already have a duplicate matching tokenization
                     auto its = token_sequences.equal_range(token_id);
@@ -3650,6 +3665,16 @@ struct llama_sampler * llama_sampler_init_dry(const struct llama_vocab * vocab, 
 
     if (dry_enabled && seq_breakers != nullptr && num_breakers > 0) {
         // Process sequence breakers
+        // each distinct breaker costs a full vocabulary scan: drop duplicates and stop at the cap
+        std::unordered_set<std::string> seen_breakers;
+
+        // detokenize the vocabulary once instead of rescanning it for every breaker
+        std::vector<std::string> vocab_words;
+        vocab_words.reserve(vocab->n_tokens());
+        for (llama_token token_id = 0; token_id < (llama_token) vocab->n_tokens(); ++token_id) {
+            vocab_words.push_back(vocab->detokenize({token_id}, true));
+        }
+
         for (size_t i = 0; i < num_breakers; ++i) {
             if (seq_breakers[i] == nullptr || std::strlen(seq_breakers[i]) == 0) {
                 LLAMA_LOG_WARN("skipping null or empty DRY sequence breaker at index %zu\n", i);
@@ -3657,17 +3682,22 @@ struct llama_sampler * llama_sampler_init_dry(const struct llama_vocab * vocab, 
             }
 
             std::string sequence_break(seq_breakers[i]);
-            if (sequence_break.empty()) {
-                LLAMA_LOG_WARN("skipping empty DRY sequence breaker\n");
-                continue;
-            }
-
             if (sequence_break.size() > MAX_CHAR_LEN) {
                 LLAMA_LOG_WARN("truncating DRY sequence breaker to %d characters\n", MAX_CHAR_LEN);
                 sequence_break.resize(MAX_CHAR_LEN);
             }
 
-            get_overlapping_token_sequences(*vocab, sequence_break, processed_breakers, MAX_SEQ_LEN);
+            if (!seen_breakers.insert(sequence_break).second) {
+                continue;
+            }
+
+            if (seen_breakers.size() > LLAMA_DRY_MAX_SEQ_BREAKERS) {
+                LLAMA_LOG_WARN("ignoring DRY sequence breaker at index %zu: more than %d distinct breakers\n",
+                        i, LLAMA_DRY_MAX_SEQ_BREAKERS);
+                break;
+            }
+
+            get_overlapping_token_sequences(*vocab, vocab_words, sequence_break, processed_breakers, MAX_SEQ_LEN);
         }
     }
 

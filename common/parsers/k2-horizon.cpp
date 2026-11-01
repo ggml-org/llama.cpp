@@ -74,10 +74,10 @@ common_chat_params common_chat_params_init_k2_horizon(const common_chat_template
             data.generation_prompt += THINK_END + msg.render_content();
         }
 
-        data.prompt += data.generation_prompt;
+        data.prompt.append(data.generation_prompt);
     }
 
-    auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+    data.parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto generation_prompt = p.literal(GEN_PREFIX);
 
         auto think_end = p.choice();
@@ -110,14 +110,14 @@ common_chat_params common_chat_params_init_k2_horizon(const common_chat_template
             // The models leave out <ifm|arg_type> even when asked for xml_typed
             auto arg_type = call_format == "xml_typed" ? p.optional(ARG_TYPE + p.until(ARG_TYPE_END) + ARG_TYPE_END + p.space()) : p.eps();
 
-            foreach_function(inputs.tools, [&](const json & tool) {
+            foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
                 const auto & function = tool.at("function");
                 std::string  name     = function.at("name");
 
                 std::vector<common_peg_parser> required_args;
                 std::vector<common_peg_parser> optional_args;
-                foreach_parameter(function, [&](const common_chat_schema_property & param, const common_chat_schema_document_ptr & doc) {
-                    auto rule_name = "tool-" + name + "-arg-" + param.name;
+                foreach_parameter(function, [&](size_t param_index, const common_chat_schema_property & param, const common_chat_schema_document_ptr & doc) {
+                    auto rule_name = "tool-" + std::to_string(tool_index) + "-arg-" + std::to_string(param_index);
                     auto types     = param.schema->value_types();
                     auto arg_value = arg_string;
                     if (!types.has(common_chat_schema::TYPE_STRING)) {
@@ -149,12 +149,12 @@ common_chat_params common_chat_params_init_k2_horizon(const common_chat_template
                     (param.required ? required_args : optional_args).push_back(p.rule(rule_name, arg));
                 });
 
-                auto args = p.permute("tool-" + name + "-args", required_args);
+                auto args = p.permute("tool-" + std::to_string(tool_index) + "-args", required_args);
                 if (!optional_args.empty()) {
                     args = args + p.zero_or_more(p.choice(optional_args));
                 }
 
-                tool_choice |= p.rule("tool-" + name, p.tool(
+                tool_choice |= p.rule("tool-" + std::to_string(tool_index), p.tool(
                     p.tool_open(CALL_START + p.tool_name(p.literal(name)) + "\n") + p.tool_args(args) << p.tool_close(p.literal(CALL_END))));
             });
         }
@@ -174,12 +174,10 @@ common_chat_params common_chat_params_init_k2_horizon(const common_chat_template
         return generation_prompt + (reasoning << content << tool_calls);
     });
 
-    data.parser = parser.save();
-
     if (include_grammar) {
         data.grammar_lazy = !(has_response_format || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED);
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
-            parser.build_grammar(builder, data.grammar_lazy);
+            data.parser.build_grammar(builder, data.grammar_lazy);
         });
 
         if (data.grammar_lazy) {

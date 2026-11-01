@@ -40,6 +40,9 @@ int fa_vec_baseline_ne(int dk, int dv) {
     if (dk == 128 && dv == 128) {
         return 1;
     }
+    if (dk == 128 && dv == 96) {
+        return 4;
+    }
     if (dk == 192 && dv == 192) {
         return 2;
     }

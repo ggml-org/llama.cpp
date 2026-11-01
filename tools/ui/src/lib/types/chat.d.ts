@@ -85,6 +85,21 @@ export interface ChatMessageTimings {
 	prompt_ms?: number;
 	prompt_n?: number;
 	agentic?: ChatMessageAgenticTimings;
+	/**
+	 * Compaction nodes only: the summarization request that wrote the summary,
+	 * kept apart from the prompt timings the post-compaction pre-encode stamps
+	 * for the context gauge (those describe the reduced context, not the work
+	 * the summary cost).
+	 */
+	compaction?: ChatMessageCompactionTimings;
+}
+
+export interface ChatMessageCompactionTimings {
+	cache_n?: number;
+	predicted_ms?: number;
+	predicted_n?: number;
+	prompt_ms?: number;
+	prompt_n?: number;
 }
 
 export interface ChatMessageAgenticTimings {
@@ -214,6 +229,8 @@ export interface FileMentionEntry {
  * MCP server exposes prompts): visible but greyed out and not selectable.
  */
 export interface ChatCommandsOptions {
+	/** Gates `/compact`. */
+	canCompact: () => boolean;
 	/** Gates `/model`. */
 	showModelSelector: boolean;
 	/** Gates `/prompt`. */
@@ -268,6 +285,8 @@ export interface ChatMessageActions {
 		newExtras?: DatabaseMessageExtra[]
 	) => void;
 	regenerateWithBranching: (message: DatabaseMessage, modelOverride?: string) => void;
+	/** Re-runs the summary of an existing compaction node and replaces it. */
+	regenerateCompaction: (message: DatabaseMessage) => void;
 	continueAssistantMessage: (message: DatabaseMessage) => void;
 	forkConversation: (
 		message: DatabaseMessage,
@@ -325,8 +344,8 @@ export type ChatMessageEditContext = ChatMessageEditState &
 
 /**
  * Actions and capability flags for the ChatForm add-menu. Set once in
- * ChatFormActions.svelte and consumed by its deep descendants (the add sheet,
- * dropdown and MCP servers submenu) to avoid relaying them through props.
+ * ChatFormActions.svelte and consumed by its deep descendants (the add sheet
+ * and dropdown) to avoid relaying them through props.
  */
 export interface ChatFormActionsContext {
 	readonly disabled: boolean;
@@ -335,5 +354,4 @@ export interface ChatFormActionsContext {
 	readonly hasVisionModality: boolean;
 	onFileUpload?: () => void;
 	onSystemPromptClick?: () => void;
-	onMcpSettingsClick?: () => void;
 }

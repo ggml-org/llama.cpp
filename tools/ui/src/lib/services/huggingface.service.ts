@@ -1,4 +1,4 @@
-import { PATH_SEPARATOR } from '$lib/constants';
+import { PATH_SEPARATOR, SETTINGS_KEYS } from '$lib/constants';
 import {
 	BYTE,
 	BYTE_LABEL,
@@ -15,6 +15,8 @@ import {
 	HF_BASE_URL,
 	HF_CACHE_DIR_SEPARATOR,
 	HF_CACHE_PATH_REGEX,
+	HF_DECISION_MODEL_TAG,
+	HF_DECISION_PIPELINE_TAG,
 	HF_DEFAULT_LIMIT,
 	HF_FIRST_SHARD,
 	HF_FRONTMATTER_REGEX,
@@ -64,6 +66,7 @@ import {
 } from '$lib/constants';
 import { MODEL_ID, type ModelSidecar } from '$lib/constants';
 import { HfEntryType, HfModelSort, SidecarForm } from '$lib/enums';
+import { settingsStore } from '$lib/stores/settings/index.svelte';
 import type {
 	HfCatalogEntry,
 	HfModelDetailInfo,
@@ -72,6 +75,7 @@ import type {
 	HfModelSibling
 } from '$lib/types/huggingface';
 import { sidecarFromFileToken } from '$lib/utils';
+import { SvelteMap } from 'svelte/reactivity';
 
 /** Fetch failure carrying the HTTP status, so retry logic tests the code instead of the message. */
 class HfHttpStatusError extends Error {
@@ -95,6 +99,13 @@ export class HuggingFaceService {
 		string,
 		Promise<{ org: string; name: string } | null>
 	>();
+
+	// Model details fetched this session, keyed by repo id: the Hub rate limits
+	// aggressively, so each repo costs at most one request per load. Failures stay
+	// uncached so the next mount can retry.
+	private static detailsCache = new SvelteMap<string, HfModelDetailInfo | null>();
+
+	private static detailsPending = new Map<string, Promise<HfModelDetailInfo | null>>();
 
 	/**
 	 * Map of quant token to its average bit-depth in bits-per-weight (bpw).
@@ -135,6 +146,22 @@ export class HuggingFaceService {
 		Q8_0: 8
 	};
 
+	// File trees already fetched, keyed by repo id: the discover view asks for the same
+	// repo from several places.
+	private static treeCache = new Map<string, HfModelSibling[]>();
+
+	private static treePending = new Map<string, Promise<HfModelSibling[]>>();
+
+	/** Details already fetched, for a caller that cannot await (a table sorting its rows). */
+	static cachedDetails(modelId: string): HfModelDetailInfo | null | undefined {
+		// llama.cpp model ids carry the quant tag after a colon
+		const [hfRepoId] = modelId.split(MODEL_ID.QUANTIZATION_SEPARATOR);
+
+		return HuggingFaceService.detailsCache.get(hfRepoId);
+	}
+
+	// GGUF Model Browsing
+
 	/**
 	 * Collapse split GGUF shard sets (`-00001-of-00015.gguf`, ...) to their first
 	 * shard, summing every shard's size so the kept entry reflects the whole
@@ -172,8 +199,6 @@ export class HuggingFaceService {
 
 		return result;
 	}
-
-	// GGUF Model Browsing
 
 	/**
 	 * Extract the GGUF quantization token (e.g. `Q4_K_M`) and any sidecar type
@@ -330,6 +355,8 @@ export class HuggingFaceService {
 		return `${Math.floor(diffDays / DAYS_PER_YEAR)} ${YEARS_AGO_LABEL}`;
 	}
 
+	// Model Details & Files
+
 	/**
 	 * Format a min-max size range with one shared unit, e.g. `19.0-28.6 GB`.
 	 */
@@ -355,8 +382,6 @@ export class HuggingFaceService {
 		return `${fmt(min)}-${fmt(max)} ${unit}`;
 	}
 
-	// Model Details & Files
-
 	/**
 	 * Avatar URL for an author (org or user). 404s when the author does not
 	 * exist, so callers should provide a fallback.
@@ -370,19 +395,23 @@ export class HuggingFaceService {
 	/**
 	 * Resolve the original (non-GGUF) base model `{ org, name }` for a GGUF repo
 	 * from its HF card (`cardData.base_model`). Returns null when the card has no
-	 * base model. Results are cached per repo.
+	 * base model. A resolved repo is cached for the session.
 	 */
 	static getBaseModel(repoId: string): Promise<{ org: string; name: string } | null> {
-		const cached = this.baseModelCache.get(repoId);
+		if (!HuggingFaceService.isEnabled()) return Promise.resolve(null);
+
+		// all quants of one repo share the cached lookup, so key it by the repo id
+		const [hfRepoId] = repoId.split(MODEL_ID.QUANTIZATION_SEPARATOR);
+		const cached = this.baseModelCache.get(hfRepoId);
 
 		if (cached !== undefined) return Promise.resolve(cached);
 
-		const pending = this.baseModelPending.get(repoId);
+		const pending = this.baseModelPending.get(hfRepoId);
 
 		if (pending) return pending;
 
 		const promise = (async () => {
-			const details = await this.getDetails(repoId);
+			const details = await this.getDetails(hfRepoId);
 			const base = this.getBaseModels(details)[0];
 
 			if (!base) return null;
@@ -392,11 +421,15 @@ export class HuggingFaceService {
 			return { name: rest.join(PATH_SEPARATOR), org };
 		})();
 
-		this.baseModelPending.set(repoId, promise);
+		this.baseModelPending.set(hfRepoId, promise);
 
 		promise
-			.then((result) => this.baseModelCache.set(repoId, result))
-			.finally(() => this.baseModelPending.delete(repoId));
+			// a repo with no base model stays uncached: the details behind it are cached
+			// already, so a retry costs nothing and a failed lookup can try again
+			.then((result) => {
+				if (result) this.baseModelCache.set(hfRepoId, result);
+			})
+			.finally(() => this.baseModelPending.delete(hfRepoId));
 
 		return promise;
 	}
@@ -445,33 +478,70 @@ export class HuggingFaceService {
 	}
 
 	static async getCatalog(): Promise<HfCatalogEntry[]> {
+		if (!HuggingFaceService.isEnabled()) return [];
+
 		const response = await fetch(MODELS_DISCOVER_CATALOG_URL);
 
 		if (!response.ok) throw new Error(`Failed to fetch catalog: ${response.status}`);
 
-		return (await response.json()) as HfCatalogEntry[];
+		const entries = (await response.json()) as HfCatalogEntry[];
+
+		return entries.filter((entry) => !entry.decision);
 	}
 
-	static async getDetails(modelId: string): Promise<HfModelDetailInfo | null> {
-		// Do not encode the modelId, it contains slashes for author/name.
-		// `full=true` includes cardData (description, base_model) and safetensors.
-		const url = `${HF_API_MODELS_URL}${PATH_SEPARATOR}${modelId}?${HF_FULL_DETAIL_PARAM}`;
+	static getDetails(modelId: string): Promise<HfModelDetailInfo | null> {
+		if (!HuggingFaceService.isEnabled()) return Promise.resolve(null);
 
-		try {
-			const response = await fetch(url);
+		const cached = HuggingFaceService.detailsCache.get(modelId);
 
-			if (response.status === HF_HTTP_NOT_FOUND) return null;
+		if (cached !== undefined) return Promise.resolve(cached);
 
-			if (!response.ok) throw new Error(`Failed to fetch model details: ${response.status}`);
+		const pending = HuggingFaceService.detailsPending.get(modelId);
 
-			const data = (await response.json()) as HfModelDetailInfo;
+		if (pending) return pending;
 
-			return data;
-		} catch (error) {
-			console.error(`Error fetching details for ${modelId}:`, error);
+		const promise = (async () => {
+			// Do not encode the modelId, it contains slashes for author/name.
+			// `full=true` includes cardData (description, base_model) and safetensors.
+			const url = `${HF_API_MODELS_URL}${PATH_SEPARATOR}${modelId}?${HF_FULL_DETAIL_PARAM}`;
 
-			return null;
-		}
+			try {
+				const response = await fetch(url);
+
+				// a missing model is a definitive answer, cache it
+				if (response.status === HF_HTTP_NOT_FOUND) {
+					HuggingFaceService.detailsCache.set(modelId, null);
+
+					return null;
+				}
+
+				if (!response.ok) throw new Error(`Failed to fetch model details: ${response.status}`);
+
+				// the hub answers with a list of provider entries for one repo; the gguf and
+				// card data sit on the entry that carries them
+				const payload = (await response.json()) as HfModelDetailInfo | HfModelDetailInfo[];
+				const entries = Array.isArray(payload) ? payload : [payload];
+				const data = entries.find((entry) => entry?.gguf ?? entry?.cardData) ?? entries[0];
+
+				if (!data) return null;
+
+				HuggingFaceService.detailsCache.set(modelId, data);
+
+				return data;
+			} catch (error) {
+				// not cached: a rate limited or failed fetch retries on the next mount
+				// instead of hiding the model for the session
+				console.error(`Error fetching details for ${modelId}:`, error);
+
+				return null;
+			} finally {
+				HuggingFaceService.detailsPending.delete(modelId);
+			}
+		})();
+
+		HuggingFaceService.detailsPending.set(modelId, promise);
+
+		return promise;
 	}
 
 	static getModelUrl(modelId: string): string {
@@ -496,6 +566,8 @@ export class HuggingFaceService {
 	 * Fetch the raw README.md for a repo, with the YAML frontmatter stripped.
 	 */
 	static async getReadme(modelId: string): Promise<string | null> {
+		if (!HuggingFaceService.isEnabled()) return null;
+
 		// Do not encode the modelId, it contains slashes for author/name
 		const url = `${HF_BASE_URL}${PATH_SEPARATOR}${modelId}${PATH_SEPARATOR}${HF_RAW_PATH}${PATH_SEPARATOR}${HF_MAIN_BRANCH}${PATH_SEPARATOR}${HF_README_FILENAME}`;
 
@@ -514,24 +586,30 @@ export class HuggingFaceService {
 		}
 	}
 
-	/**
-	 * Get repository file tree to list available GGUF variants. Recursive so
-	 * repos that keep quants in per-quant subdirectories (e.g. `UD-Q4_K_XL/`)
-	 * are included; follows cursor pagination for repos over one page.
-	 */
-	static async getTree(modelId: string): Promise<HfModelSibling[]> {
-		const files: HfModelSibling[] = [];
-		const firstUrl =
-			`${HF_API_MODELS_URL}${PATH_SEPARATOR}${modelId}${PATH_SEPARATOR}${HF_TREE_PATH}` +
-			`${PATH_SEPARATOR}${HF_MAIN_BRANCH}?${HF_RECURSIVE_TREE_PARAM}`;
+	static getTree(modelId: string): Promise<HfModelSibling[]> {
+		if (!HuggingFaceService.isEnabled()) return Promise.resolve([]);
 
-		let url: string | null = firstUrl;
+		const cached = HuggingFaceService.treeCache.get(modelId);
 
-		try {
+		if (cached) return Promise.resolve(cached);
+
+		const pending = HuggingFaceService.treePending.get(modelId);
+
+		if (pending) return pending;
+
+		const promise = (async () => {
+			const files: HfModelSibling[] = [];
+			const firstUrl =
+				`${HF_API_MODELS_URL}${PATH_SEPARATOR}${modelId}${PATH_SEPARATOR}${HF_TREE_PATH}` +
+				`${PATH_SEPARATOR}${HF_MAIN_BRANCH}?${HF_RECURSIVE_TREE_PARAM}`;
+
+			let url: string | null = firstUrl;
+
 			for (let page = 0; url && page < HF_TREE_MAX_PAGES; page++) {
 				const response: Response = await fetch(url);
 
-				if (!response.ok) return files;
+				if (!response.ok)
+					throw new Error(`Failed to fetch tree for ${modelId}: ${response.status}`);
 
 				const data = (await response.json()) as HfModelSibling[];
 
@@ -539,15 +617,57 @@ export class HuggingFaceService {
 
 				url = HuggingFaceService.parseNextPageUrl(response.headers.get(HF_LINK_HEADER));
 			}
-		} catch {
-			// Return whatever was fetched before the failure.
-		}
 
-		return files;
+			HuggingFaceService.treeCache.set(modelId, files);
+
+			return files;
+		})()
+			.catch((error: unknown) => {
+				// not cached: a rate limited or failed fetch should retry on the
+				// next mount; an empty tree makes the store fall back to the
+				// catalog's advertised sizes
+				console.error(`Error fetching tree for ${modelId}:`, error);
+
+				return [] as HfModelSibling[];
+			})
+			.finally(() => HuggingFaceService.treePending.delete(modelId));
+
+		HuggingFaceService.treePending.set(modelId, promise);
+
+		return promise;
 	}
 
 	static async getTrending(limit: number = HF_DEFAULT_LIMIT): Promise<HfModelInfo[]> {
 		return this.search({ limit, sort: HfModelSort.TRENDING_SCORE });
+	}
+
+	/**
+	 * True for decision models: they answer with calibrated probabilities instead
+	 * of generated text, so llama-ui cannot use them and they stay out of every
+	 * list the Hub data layer returns.
+	 */
+	static isDecisionModel(model: Pick<HfModelInfo, 'pipeline_tag' | 'tags'>): boolean {
+		return (
+			model.tags.includes(HF_DECISION_MODEL_TAG) || model.pipeline_tag === HF_DECISION_PIPELINE_TAG
+		);
+	}
+
+	/**
+	 * True when the UI may read from the Hugging Face Hub API: model display data
+	 * (avatars, context length, chat template) and the Discover Models view. With
+	 * it off, callers only see what the server's /v1/models reports and the org
+	 * avatars stay hidden.
+	 */
+	static isEnabled(): boolean {
+		return settingsStore.config[SETTINGS_KEYS.USE_HUGGING_FACE_HUB] ?? false;
+	}
+
+	/**
+	 * Parameter count a repo reports: a GGUF repo spells it out in its metadata,
+	 * a transformers repo reports it in its SafeTensors index.
+	 */
+	static parameterCount(details?: HfModelDetailInfo | null): number | null {
+		return details?.gguf?.total ?? details?.safetensors?.total ?? null;
 	}
 
 	/**
@@ -629,6 +749,8 @@ export class HuggingFaceService {
 	 * catalog entry; caller-provided `expand` entries are merged in.
 	 */
 	static async search(params: HfModelSearchParams = {}): Promise<HfModelInfo[]> {
+		if (!HuggingFaceService.isEnabled()) return [];
+
 		const { expand, limit = HF_DEFAULT_LIMIT, ...restParams } = params;
 		const url = this.buildUrl({
 			...restParams,
@@ -636,8 +758,9 @@ export class HuggingFaceService {
 			filter: HF_GGUF_FILTER,
 			limit: Math.min(limit, HF_MAX_LIMIT)
 		});
+		const models = await this.fetchWithRetry(url);
 
-		return this.fetchWithRetry(url);
+		return models.filter((model) => !HuggingFaceService.isDecisionModel(model));
 	}
 
 	static async searchByQuery(

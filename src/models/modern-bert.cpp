@@ -17,15 +17,21 @@ void llama_model_modern_bert::load_arch_hparams(llama_model_loader & ml) {
 
     // Some ModernBert derivatives (e.g. IBM Granite Embedding 97m R2) use
     // SiLU/SwiGLU in the FFN instead of the default GELU/GeGLU.
-    hparams.llm_ffn_op = LLM_FFN_GEGLU;
+    hparams.llm_ffn_op = LLM_FFN_GEGLU_ERF;
     std::string hidden_act;
     if (ml.get_key(LLM_KV_HIDDEN_ACT, hidden_act, false)) {
-        hparams.llm_ffn_op = llm_ffn_op_type_from_string(hidden_act, LLM_FFN_GEGLU);
+        hparams.llm_ffn_op = llm_ffn_op_type_from_string(hidden_act, LLM_FFN_GEGLU_ERF);
     }
 
     // GGUFs without a classifier pooling type use mean (gte-reranker-modernbert-base)
     if (hparams.pooling_type_cls == LLAMA_POOLING_TYPE_UNSPECIFIED) {
         hparams.pooling_type_cls = LLAMA_POOLING_TYPE_MEAN;
+    }
+
+    // GGUFs without a classifier activation use gelu, the transformers default
+    std::string act_cls;
+    if (!ml.get_key(LLM_KV_CLASSIFIER_ACTIVATION, act_cls, false)) {
+        hparams.act_cls = GGML_UNARY_OP_GELU_ERF;
     }
 
     ml.get_key(LLM_KV_DECISION_BLOCK_COUNT, hparams.n_layer_decision, false);

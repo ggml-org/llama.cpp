@@ -25,15 +25,16 @@ output from a model that emits arguments as JSON.
 auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
     // Build a choice of all available tools
     auto tool_choice = p.choice();
-    for (const auto & tool : tools) {
+    for (size_t i = 0; i < tools.size(); i++) {
+        const auto & tool = tools[i];
         const auto & function = tool.at("function");
         std::string name = function.at("name");
         const auto   schema = common_chat_tool_parameters(function);
 
         auto tool_name = p.json_member("name", "\"" + p.literal(name) + "\"");
-        auto tool_args = p.json_member("arguments", p.schema(p.json(), "tool-" + name + "-schema", schema));
+        auto tool_args = p.json_member("arguments", p.schema(p.json(), "tool-" + std::to_string(i) + "-schema", schema));
 
-        tool_choice |= p.rule("tool-" + name, "{" << tool_name << "," << tool_args << "}");
+        tool_choice |= p.rule("tool-" + std::to_string(i), "{" << tool_name << "," << tool_args << "}");
     }
 
     // Define the tool call structure: <tool_call>[{tool}]</tool_call>

@@ -206,6 +206,4 @@ llama_model_bailingmoe2::graph::graph(const llama_model & model, const llm_graph
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }

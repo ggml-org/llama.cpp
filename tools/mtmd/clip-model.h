@@ -29,11 +29,14 @@ enum patch_merge_type {
     PATCH_MERGE_SPATIAL_UNPAD,
 };
 
-// all algos are Pillow-compatible (matching PIL.Image.resize output)
+// the low bits select the algo, Pillow-compatible (matching PIL.Image.resize output)
+// RESIZE_ALGO_FLAG_TORCH matches torchvision's antialiased resize of uint8 images on the CPU (int16 weights), bilinear and bicubic only
 enum resize_algo {
     RESIZE_ALGO_BILINEAR,
     RESIZE_ALGO_BICUBIC,
     RESIZE_ALGO_LANCZOS,
+
+    RESIZE_ALGO_FLAG_TORCH = 1 << 8,
 };
 
 // Padding style for img_tool::resize
@@ -65,13 +68,17 @@ struct clip_hparams {
     int32_t image_max_pixels = -1;
     resize_algo image_resize_algo = RESIZE_ALGO_BICUBIC;
     pad_style image_resize_pad = PAD_CEIL; // padding style when resizing
+    bool image_round_half_even = false;    // smart_resize rounds .5 to even, like Python round() in the HF processor
+    bool image_floor_before_align = false;
     std::array<uint8_t, 3> image_pad_color = {0, 0, 0};
 
     // (preprocessor) for llava-uhd style models
     std::vector<clip_image_size> image_res_candidates;
     int32_t preproc_min_tiles = 0;
     int32_t preproc_max_tiles = 0;
-    int32_t preproc_tile_size = 0; // local tile size (deepseek-ocr)
+    int32_t max_slice_nums = 9; // llava-uhd slice cap; per-model, carried in the GGUF
+    int32_t preproc_tile_size = 0; // local tile size (deepseek-ocr, lfm2)
+    float preproc_max_pixels_tolerance = 1.0f;
     resize_algo image_resize_algo_rf = RESIZE_ALGO_BICUBIC;
     resize_algo image_resize_algo_ov = RESIZE_ALGO_BICUBIC;
     pad_style image_pad_rf = PAD_CEIL;  // padding style for the refined image (e.g. llava-1.6)
@@ -133,6 +140,20 @@ struct clip_hparams {
     int32_t audio_proj_downsample_rate = 0;
     int32_t audio_proj_head_count      = 0;
 
+    // audio pyramid (muse-spark): widths, folded samples and blocks per stage
+    std::vector<int32_t> audio_hidden_sizes;
+    std::vector<int32_t> audio_patch_sizes;
+    std::vector<int32_t> audio_depths;
+
+    int32_t audio_samples_per_token() const {
+        int64_t n = 1;
+        for (int32_t p : audio_patch_sizes) {
+            n *= p;
+            GGML_ASSERT(n >= 1 && n <= (1 << 20));
+        }
+        return (int32_t) n;
+    }
+
     // audio-to-mel preprocessor params
     int32_t audio_chunk_len   = -1; // in seconds
     int32_t audio_sample_rate = -1;
@@ -154,6 +175,12 @@ struct clip_hparams {
     // name of the weight variant, some pipelines tune themselves on it
     std::string gen_model_variant;
 
+    // sampling defaults of the generated audio: greedy, no top-k, no repetition penalty
+    float   gen_temp           = 0.0f;
+    int32_t gen_top_k          = 0;
+    float   gen_penalty_repeat = 1.0f;
+    int32_t gen_penalty_last_n = 0;
+
     // pocket-tts
     static constexpr int32_t pockettts_max_spk_seconds = 30;
     int32_t seanet_n_stage    = 0;
@@ -174,6 +201,7 @@ struct clip_hparams {
     int32_t wav_dac_n_block      = 0;
     int32_t wav_dac_n_res        = 0;
     int32_t wav_tfm_swa          = 0; // pre_transformer's KV cache size, in frames
+    int32_t wav_frame_stack      = 0; // lfm3a codec: decoder positions per frame
 
     // mimo-v2.5: LLM-side connector (input_local_transformer)
     int32_t audio_local_n_layer = 0;
@@ -188,6 +216,11 @@ struct clip_hparams {
     // custom value provided by user, can be undefined if not set
     int32_t custom_image_min_tokens = -1;
     int32_t custom_image_max_tokens = -1;
+
+    void set_image_resize_algo(resize_algo algo, bool torch = false) {
+        GGML_ASSERT(!(torch && algo == RESIZE_ALGO_LANCZOS) && "torchvision has no lanczos");
+        image_resize_algo = static_cast<resize_algo>(torch ? algo | RESIZE_ALGO_FLAG_TORCH : algo);
+    }
 
     void set_limit_image_tokens(int n_tokens_min, int n_tokens_max) {
         const int patch_area = patch_size * patch_size * n_merge * n_merge;
@@ -260,6 +293,9 @@ struct clip_layer {
     ggml_tensor * k_norm = nullptr;
     ggml_tensor * q_norm = nullptr;
 
+    // lfm3: per-head sigmoid gate on the attention output
+    ggml_tensor * attn_gate_w = nullptr;
+
     ggml_tensor * attn_post_norm_w = nullptr;
 
     ggml_tensor * ff_up_w = nullptr;
@@ -282,6 +318,10 @@ struct clip_layer {
 
     ggml_tensor * ff_post_norm_w = nullptr;
 
+    // depthwise causal conv block (muse-spark audio), conv_norm_w is declared below
+    ggml_tensor * conv_w = nullptr;
+    ggml_tensor * conv_b = nullptr;
+
     // layer scale (no bias)
     ggml_tensor * ls_1_w   = nullptr;
     ggml_tensor * ls_2_w   = nullptr;
@@ -294,6 +334,11 @@ struct clip_layer {
     ggml_tensor * deepstack_fc1_b = nullptr;
     ggml_tensor * deepstack_fc2_w = nullptr;
     ggml_tensor * deepstack_fc2_b = nullptr;
+
+    // lfm3vl conv layers
+    ggml_tensor * conv2d_in_proj_w  = nullptr;
+    ggml_tensor * conv2d_spatial_w  = nullptr; // may be nullptr
+    ggml_tensor * conv2d_out_proj_w = nullptr;
 
     // sam rel_pos
     ggml_tensor * rel_pos_w = nullptr;
@@ -531,6 +576,7 @@ struct clip_code2wav {
     // quantizer: RVQ codebook decode
     ggml_tensor * quant_first_in_w  = nullptr; // semantic RVQ, in_proj (1x1 conv, loaded as 2D)
     ggml_tensor * quant_first_out_w = nullptr;
+    ggml_tensor * quant_first_out_b = nullptr;
     ggml_tensor * quant_first_cb_w  = nullptr; // codebook (1 layer)
     ggml_tensor * quant_rest_in_w   = nullptr; // acoustic RVQ
     ggml_tensor * quant_rest_out_w  = nullptr;
@@ -557,6 +603,18 @@ struct clip_code2wav {
     ggml_tensor * dac_post_conv_b      = nullptr;
 };
 
+struct clip_vocos {
+    ggml_tensor * input_w        = nullptr;
+    ggml_tensor * input_b        = nullptr;
+    ggml_tensor * norm_w         = nullptr;
+    ggml_tensor * norm_b         = nullptr;
+    ggml_tensor * output_norm_w  = nullptr;
+    ggml_tensor * output_norm_b  = nullptr;
+    ggml_tensor * output_w       = nullptr;
+    ggml_tensor * output_b       = nullptr;
+    std::vector<clip_code2wav::upsample_block> blocks;
+};
+
 struct clip_model {
     clip_modality modality = CLIP_MODALITY_VISION;
     projector_type proj_type = PROJECTOR_TYPE_MLP;
@@ -565,7 +623,7 @@ struct clip_model {
     // embeddings
     ggml_tensor * class_embedding = nullptr;
     ggml_tensor * patch_embeddings_0 = nullptr;
-    ggml_tensor * patch_embeddings_1 = nullptr;  // second Conv2D kernel when we decouple Conv3D along temporal dimension (Qwen2VL)
+    ggml_tensor * patch_embeddings_1 = nullptr;  // additional patch kernel; interpretation is model-specific (Qwen2VL, Nemotron Omni)
     ggml_tensor * patch_bias = nullptr;
     ggml_tensor * position_embeddings = nullptr;
     ggml_tensor * norm_embd_w = nullptr;
@@ -583,6 +641,14 @@ struct clip_model {
     ggml_tensor * pre_ln_b = nullptr;
 
     std::vector<clip_layer> layers;
+
+    // one patch embedder per audio pyramid stage (muse-spark)
+    struct audio_patch {
+        ggml_tensor * proj_w = nullptr;
+        ggml_tensor * proj_b = nullptr;
+        ggml_tensor * norm_w = nullptr;
+    };
+    std::vector<audio_patch> a_patches;
 
     int32_t n_deepstack_layers = 0; // used by Qwen3-VL, calculated from clip_layer
 
@@ -614,6 +680,7 @@ struct clip_model {
 
     ggml_tensor * image_newline = nullptr;
     ggml_tensor * view_seperator = nullptr;
+    ggml_tensor * tok_embd_sep = nullptr; // [n_embd_text, n_sep] rows of the text model tok_embd (MiniCPM-V 4.7)
 
 
     // Yi type models with mlp+normalization projection
@@ -623,6 +690,10 @@ struct clip_model {
     ggml_tensor * mm_3_b = nullptr;
     ggml_tensor * mm_4_w = nullptr;
     ggml_tensor * mm_4_b = nullptr;
+    ggml_tensor * mm_5_w = nullptr;
+    ggml_tensor * mm_5_b = nullptr;
+    ggml_tensor * mm_6_w = nullptr;
+    ggml_tensor * mm_6_b = nullptr;
 
     // GLMV-Edge projection
     ggml_tensor * mm_model_adapter_conv_w = nullptr;
@@ -731,6 +802,9 @@ struct clip_model {
     ggml_tensor * yasa_vision_pos_embed = nullptr;
     std::vector<yasa2_stage> yasa_stages;
 
+    // lfm3vl
+    ggml_tensor * lfm3vl_embedding_norm_w = nullptr;
+
     // pixtral, glm4v
     ggml_tensor * token_embd_img_break = nullptr;
 
@@ -789,6 +863,10 @@ struct clip_model {
     ggml_tensor * gen_code_out_embd_w = nullptr; // codebook-0 embedding, fed back into the talker
     ggml_tensor * gen_code_norm_w     = nullptr; // final norm
 
+    // lfm3a depthformer (MaskGIT)
+    ggml_tensor * gen_code_head_norm_w = nullptr; // per-codebook norm before the tied head, merged 2D
+    ggml_tensor * gen_code_mask_embd   = nullptr;
+
     // qwen3tts code2wav: RVQ codes -> raw PCM
     clip_code2wav c2w;
 
@@ -809,6 +887,9 @@ struct clip_model {
     ggml_tensor * gen_quant_out_w = nullptr; // latent -> decoder dim
     ggml_tensor * gen_upsample_w  = nullptr; // depthwise convtr, frame rate -> encoder frame rate
     std::vector<clip_layer> gen_tfm_layers; // mimi decoder_transformer
+
+    // soprano: Vocos decoder, hidden states -> STFT coefficients
+    clip_vocos vocos;
 
     // cogvlm
     ggml_tensor * mm_post_fc_norm_w = nullptr;

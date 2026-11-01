@@ -27,6 +27,7 @@ MANAGED_ENV_NAMES = (
     "GGML_HEXAGON_OPPOLL",
     "GGML_HEXAGON_OPFILTER",
     "GGML_HEXAGON_OPFUSION",
+    "GGML_HEXAGON_RT_REPACK",
     "GGML_HEXAGON_VMEM",
     "GGML_HEXAGON_MBUF",
     "GGML_HEXAGON_MM_SELECT",
@@ -48,27 +49,46 @@ MANAGED_ENV_NAMES = (
     "GGML_OPENCL_ADRENO_XMEM_GEMM",
     "GGML_OPENCL_ADRENO_USE_LARGE_BUFFER",
     "GGML_SCHED_DEBUG",
+    "ADSP_LIBRARY_PATH",
+    "CDSP_LIBRARY_PATH",
+    "CDSP1_LIBRARY_PATH",
+    "CDSP2_LIBRARY_PATH",
+    "CDSP3_LIBRARY_PATH",
     "MTMD_BACKEND_DEVICE",
     "D",
     "DEVICE",
 )
 
 
+DSP_LIBRARY_ENV_NAMES = (
+    "ADSP_LIBRARY_PATH",
+    "CDSP_LIBRARY_PATH",
+    "CDSP1_LIBRARY_PATH",
+    "CDSP2_LIBRARY_PATH",
+    "CDSP3_LIBRARY_PATH",
+)
+
+
 def parse_target(target_str):
     if not target_str:
-        return None, None
-    if target_str.startswith("adb") or target_str.startswith("android"):
-        parts = target_str.split(":", 1)
-        serial = parts[1] if len(parts) > 1 else None
-        return "android", serial
-    elif target_str.startswith("lnx") or target_str.startswith("linux") or target_str.startswith("ubuntu"):
-        parts = target_str.split(":", 1)
-        host = parts[1] if len(parts) > 1 else None
-        return "linux", host
+        return None, None, None
+
+    parts = target_str.split(":")
+    target_name = parts[0]
+
+    if target_name in ("adb", "android"):
+        serial = ":".join(parts[1:]) if len(parts) > 1 else None
+        return "android", serial, "adb"
+    elif target_name in ("lnx", "linux", "ubuntu"):
+        if len(parts) > 1 and parts[1] == "adb":
+            serial = ":".join(parts[2:]) if len(parts) > 2 else None
+            return "linux", serial, "adb"
+        host = ":".join(parts[1:]) if len(parts) > 1 else None
+        return "linux", host, "ssh"
     elif target_str in ("wos", "windows"):
-        return "windows", None
+        return "windows", None, None
     else:
-        return None, None
+        return None, None, None
 
 
 def shlex_join(args_list):
@@ -76,6 +96,41 @@ def shlex_join(args_list):
         return shlex.join(args_list)
     import pipes
     return " ".join(pipes.quote(x) for x in args_list)
+
+
+def default_target_dir(target_type, target_transport, home_dir):
+    if target_type == "android":
+        return "/data/local/tmp/llama.cpp"
+    if target_type == "linux":
+        if home_dir:
+            return home_dir.rstrip("/") + "/llama.cpp"
+        if target_transport == "adb":
+            return "/home/llama.cpp"
+        return "~/llama.cpp"
+    return "~/llama.cpp"
+
+
+def library_env_parts(lib_dir):
+    env_parts = [f"LD_LIBRARY_PATH={lib_dir}"]
+    for name in DSP_LIBRARY_ENV_NAMES:
+        env_parts.append(f"{name}={lib_dir}")
+    return env_parts
+
+
+def adb_root(adb_base):
+    root_cmd = adb_base + ["root"]
+    logger.info(f"+ {' '.join(root_cmd)}")
+    res = subprocess.run(root_cmd)
+    if res.returncode != 0:
+        logger.error("ADB root failed.")
+        sys.exit(res.returncode)
+
+    wait_cmd = adb_base + ["wait-for-device"]
+    logger.info(f"+ {' '.join(wait_cmd)}")
+    res = subprocess.run(wait_cmd)
+    if res.returncode != 0:
+        logger.error("ADB wait-for-device failed.")
+        sys.exit(res.returncode)
 
 
 def split_device_list(devices):
@@ -143,8 +198,9 @@ def main():
     parser = argparse.ArgumentParser(
         description="Unified runner for llama.cpp tools on Snapdragon (natively, via ADB, or via SSH)."
     )
-    parser.add_argument("--target", help="Execution target (e.g. android[:serial]/adb[:serial], linux:[user@]host/lnx:[user@]host/ubuntu:[user@]host, windows/wos) (default: local run)")
-    parser.add_argument("--target-dir", help="Target directory on the device (default: /data/local/tmp/llama.cpp for Android, ~/llama.cpp for Linux)")
+    parser.add_argument("--target", help="Execution target (e.g. android[:serial]/adb[:serial], ubuntu:adb[:serial], linux:[user@]host/lnx:[user@]host/ubuntu:[user@]host, windows/wos) (default: local run)")
+    parser.add_argument("--target-dir", help="Target directory on the device (default: /data/local/tmp/llama.cpp for Android, ~/llama.cpp for Linux, /home/llama.cpp for Linux via ADB)")
+    parser.add_argument("--home-dir", help="Home directory for Linux targets when deriving the default target directory")
     parser.add_argument("--install-dir", help="Install directory name (defaults to pkg-TARGET or pkg-TARGET-dbg prefix based on target)")
     parser.add_argument("--debug", action="store_true", help="Use debug build (defaults to pkg-TARGET-dbg folder)")
     parser.add_argument("--devices", "--device", "-d", help="Select execution devices (split into NPU and OpenCL GPUs automatically, default: HTP0)")
@@ -152,12 +208,14 @@ def main():
     parser.add_argument("--profile", help="Profiling flag (enables Hexagon profiling and OpenCL autotuning)")
     parser.add_argument("--sched-debug", action="store_true", help="Enable GGML/llama.cpp scheduler debug output (GGML_SCHED_DEBUG=2)")
     parser.add_argument("--mtmd-device", help="Specify the backend device ID for Multi-Threaded Multi-Device setup (MTMD_BACKEND_DEVICE)")
+    parser.add_argument("--no-embd-offload", action="store_true", help="Keep token embeddings and output projection on CPU (-ot token_embd.weight=CPU,output.weight=CPU)")
 
     # Hexagon specific parameters
     parser.add_argument("--hex-verbose", help="Enable verbose logging (GGML_HEXAGON_VERBOSE)")
     parser.add_argument("--hex-profile", help="Enable NPU/Hexagon profiling and performance metrics print (GGML_HEXAGON_PROFILE)")
     parser.add_argument("--hex-nhvx", help="Number of HVX units to use (GGML_HEXAGON_NHVX)")
     parser.add_argument("--hex-nhmx", help="Number of HMX units to use. 0 disables HMX power-up (GGML_HEXAGON_NHMX)")
+    parser.add_argument("--hex-power-mode", help="HTP DCVS/HMX power mode: low_power_saver, power_saver, high_power_saver, low_balanced, balanced, high_performance, sustained_high_performance, burst (GGML_HEXAGON_POWER_MODE)")
     parser.add_argument("--hex-hostbuf", help="Enable host buffers (GGML_HEXAGON_HOSTBUF)")
     parser.add_argument("--hex-dma64", nargs="?", const="1", help="Enable (1) or disable (0) 64-bit DMA for model weights (GGML_HEXAGON_DMA64)")
     parser.add_argument("--hex-opbatch", help="Maximum number of operations to batch into a single HTP execution (GGML_HEXAGON_OPBATCH)")
@@ -165,8 +223,9 @@ def main():
     parser.add_argument("--hex-oppoll", default="1", help="Enable (1) or Disable (0) polling for NPU opbatch completion (GGML_HEXAGON_OPPOLL) (default: 1)")
     parser.add_argument("--hex-opfilter", help="Regex pattern to filter/select which operators are offloaded to NPU (GGML_HEXAGON_OPFILTER)")
     parser.add_argument("--hex-opfusion", help="NPU graph node fusion optimization level (0: disabled, 1: enabled) (GGML_HEXAGON_OPFUSION)")
+    parser.add_argument("--hex-rt-repack", help="Runtime weight repacking mode (0: disabled, 1: quantized only, 2: always) (GGML_HEXAGON_RT_REPACK)")
     parser.add_argument("--hex-vmem", help="Maximum NPU VMEM size limit in MB to allocate (GGML_HEXAGON_VMEM)")
-    parser.add_argument("--hex-mbuf", help="Maximum host buffer size limit in MB to allocate (GGML_HEXAGON_MBUF)")
+    parser.add_argument("--hex-mbuf", help="Host buffer size limits in MB (supports K/M/G suffix): <dyn>[,<static>[,<total>]] (default: 512,1024,0) (GGML_HEXAGON_MBUF)")
     parser.add_argument("--hex-mm-select", help="Select MUL_MAT and MUL_MAT_ID kernel (GGML_HEXAGON_MM_SELECT) 2:HMX,1:HVX,0:disable")
     parser.add_argument("--hex-fa-select", help="Select Flash Attention kernel (GGML_HEXAGON_FA_SELECT) 2:HMX,1:HVX,0:disable")
     parser.add_argument("--hex-fa-head-split", help="Enable (1) or disable (0) head-parallel flash_attn partitioning (GGML_HEXAGON_FA_HEAD_SPLIT)")
@@ -197,11 +256,12 @@ def main():
 
     target_type = None
     target_val = None
+    target_transport = None
     target_prefix = None
     if args.target:
-        target_type, target_val = parse_target(args.target)
+        target_type, target_val, target_transport = parse_target(args.target)
         if not target_type:
-            logger.error(f"Error: Invalid target format '{args.target}'. Must be android[:serial]/adb[:serial], linux:[user@]host/lnx:[user@]host/ubuntu:[user@]host, or windows/wos.")
+            logger.error(f"Error: Invalid target format '{args.target}'. Must be android[:serial]/adb[:serial], ubuntu:adb[:serial], linux:[user@]host/lnx:[user@]host/ubuntu:[user@]host, or windows/wos.")
             sys.exit(1)
         target_prefix = args.target.split(":", 1)[0]
 
@@ -301,6 +361,7 @@ def main():
     # Other Hexagon environment variables
     set_env("GGML_HEXAGON_NHVX", args.hex_nhvx)
     set_env("GGML_HEXAGON_NHMX", args.hex_nhmx)
+    set_env("GGML_HEXAGON_POWER_MODE", args.hex_power_mode)
     set_env("GGML_HEXAGON_HOSTBUF", args.hex_hostbuf)
     set_env("GGML_HEXAGON_DMA64", args.hex_dma64)
     set_env("GGML_HEXAGON_OPBATCH", args.hex_opbatch)
@@ -308,6 +369,7 @@ def main():
     set_env("GGML_HEXAGON_OPPOLL", args.hex_oppoll)
     set_env("GGML_HEXAGON_OPFILTER", args.hex_opfilter)
     set_env("GGML_HEXAGON_OPFUSION", args.hex_opfusion)
+    set_env("GGML_HEXAGON_RT_REPACK", args.hex_rt_repack)
     set_env("GGML_HEXAGON_VMEM", args.hex_vmem)
     set_env("GGML_HEXAGON_MBUF", args.hex_mbuf)
     set_env("GGML_HEXAGON_MM_SELECT", args.hex_mm_select)
@@ -422,22 +484,26 @@ def main():
     if basename in ("llama-cli", "llama-completion", "llama-server", "llama-bench"):
         if "-t" not in cmd_args and "--threads" not in cmd_args:
             cmd_args += ["-t", "6"]
+        if getattr(args, "no_embd_offload", False):
+            if not any("token_embd" in arg or "output.weight" in arg for arg in cmd_args):
+                cmd_args += ["-ot", r"^(token_embd|output)\.weight$=CPU"]
 
     # Resolve target directory on device
     target_dir = args.target_dir
     if not target_dir:
-        target_dir = "/data/local/tmp/llama.cpp" if target_type == "android" else "~/llama.cpp"
+        target_dir = default_target_dir(target_type, target_transport, args.home_dir)
 
-    if target_type == "android":
-        # Run via ADB
+    if target_transport == "adb":
         adb_base = ["adb"]
         if target_val: # serial
             adb_base += ["-s", target_val]
 
-        env_parts = [
-            "LD_LIBRARY_PATH=./lib",
-            "ADSP_LIBRARY_PATH=./lib"
-        ]
+        if target_type == "linux":
+            adb_root(adb_base)
+
+        env_parts = library_env_parts("./lib")
+        if target_type == "linux":
+            env_parts.insert(0, f"HOME={args.home_dir or '/home'}")
         for k, v in env_vars.items():
             env_parts.append(f"{k}={v}")
         env_str = " ".join(env_parts)
@@ -457,10 +523,7 @@ def main():
             sys.exit(1)
 
         # Linux remote run via SSH
-        env_parts = [
-            "LD_LIBRARY_PATH=./lib",
-            "ADSP_LIBRARY_PATH=./lib"
-        ]
+        env_parts = library_env_parts("./lib")
         for k, v in env_vars.items():
             env_parts.append(f"{k}={v}")
         env_str = " ".join(env_parts)
@@ -481,7 +544,6 @@ def main():
         # Run locally
         local_env = os.environ.copy()
         lib_dir = os.path.normpath(os.path.join(package_path, "lib"))
-        local_env["ADSP_LIBRARY_PATH"] = lib_dir
         if platform.system() == "Windows":
             local_env["PATH"] = lib_dir + os.path.pathsep + local_env.get("PATH", "")
         else:
@@ -489,6 +551,8 @@ def main():
 
         for k in MANAGED_ENV_NAMES:
             local_env.pop(k, None)
+        for name in DSP_LIBRARY_ENV_NAMES:
+            local_env[name] = lib_dir
         for k, v in env_vars.items():
             local_env[k] = v
 

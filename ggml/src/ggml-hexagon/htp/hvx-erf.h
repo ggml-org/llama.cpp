@@ -12,7 +12,7 @@ static __attribute__((noinline)) HVX_Vector hvx_vec_erf_f32(HVX_Vector x) {
     HVX_Vector t = hvx_vec_inverse_f32(hvx_vec_add_f32_f32(
         hvx_vec_splat_f32(1.0f), hvx_vec_mul_f32_f32(hvx_vec_splat_f32(0.3275911f), ax)));
 
-    HVX_Vector poly = hvx_vec_mul_f32_f32(hvx_vec_splat_f32(1.061405429f), t);
+    HVX_Vector poly = hvx_vec_splat_f32(1.061405429f);
     poly = hvx_vec_add_f32_f32(hvx_vec_splat_f32(-1.453152027f), hvx_vec_mul_f32_f32(poly, t));
     poly = hvx_vec_add_f32_f32(hvx_vec_splat_f32(1.421413741f), hvx_vec_mul_f32_f32(poly, t));
     poly = hvx_vec_add_f32_f32(hvx_vec_splat_f32(-0.284496736f), hvx_vec_mul_f32_f32(poly, t));
@@ -27,6 +27,7 @@ static __attribute__((noinline)) HVX_Vector hvx_vec_erf_f32(HVX_Vector x) {
     return result;
 }
 
+// GELU_ERF uses the erf definition.
 static inline HVX_Vector hvx_vec_gelu_erf_f32(HVX_Vector x) {
     const HVX_Vector scale = hvx_vec_splat_f32(0.7071067811865475f);
     const HVX_Vector half  = hvx_vec_splat_f32(0.5f);

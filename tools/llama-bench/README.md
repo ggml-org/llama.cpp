@@ -35,7 +35,7 @@ options:
   --progress                                print test progress indicators
   --no-warmup                               skip warmup runs before benchmarking
   -fitt, --fit-target <MiB>                 fit model to device memory with this margin per device in MiB (default: off)
-  -fitc, --fit-ctx <n>                      minimum ctx size for --fit-target (default: 4096)
+  -fitc, --fit-ctx <n>                      minimum ctx size for --fit-target (default: 0)
   -rpc, --rpc <rpc_servers>                 register RPC devices (comma separated)
 
 test parameters:

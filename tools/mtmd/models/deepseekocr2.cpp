@@ -41,9 +41,7 @@ ggml_cgraph * clip_graph_deepseekocr2::build() {
         auto seq_len = inp->ne[1];
 
         // qwen2 encoder attention mask
-        ggml_tensor * attn_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, seq_len, seq_len);
-        ggml_set_name(attn_mask, "qwen2_attn_mask");
-        ggml_set_input(attn_mask);
+        ggml_tensor * attn_mask = build_inp_attn_mask(seq_len, seq_len);
 
         ggml_tensor * inp_pos = ggml_cast(ctx0, ggml_arange(ctx0, 0, seq_len, 1), GGML_TYPE_I32);
 
