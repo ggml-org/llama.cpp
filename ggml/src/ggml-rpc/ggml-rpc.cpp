@@ -2189,6 +2189,10 @@ bool rpc_server::graph_compute(const std::vector<uint8_t> & input) {
         if (graph->nodes[i] != nullptr) {
             LOG_DBG3("[%s] node %u: id=%" PRId64 ", %s\n", __func__, i, id, rpc_log_format_tensor(graph->nodes[i]).c_str());
             const size_t hash_pos = ggml_hash_insert(&graph->visited_hash_set, graph->nodes[i]);
+            if (hash_pos == GGML_HASHSET_ALREADY_EXISTS) {
+                LOG_ERROR("[%s] malformed graph: duplicate node %u (id=%" PRId64 ")\n", __func__, i, id);
+                return false;
+            }
             graph->use_counts[hash_pos] = tensor_ptrs.at(id)->use_count;
         }
     }
