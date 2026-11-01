@@ -7240,6 +7240,8 @@ static void ggml_compute_forward_col2im_1d_impl(
     const int32_t OC = ((const int32_t *)(dst->op_params))[1];
     const int32_t p0 = ((const int32_t *)(dst->op_params))[2];
 
+    GGML_ASSERT(OC > 0 && OC <= dst->ne[1]);
+
     const int64_t K_OC = src->ne[0];
     const int64_t T_in = src->ne[1];
     const int64_t K    = K_OC / OC;
