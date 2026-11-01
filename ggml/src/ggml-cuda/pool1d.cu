@@ -49,6 +49,24 @@ static __global__ void pool1d_nchw_kernel(
     o_ptr[cur_ow] = res;
 }
 
+// one warp per row for a max over the whole row (e.g. MoE amax rescaling); max is order-independent
+static __global__ void pool1d_row_max_kernel(const int iw, const int nr, const float * src, float * dst) {
+    const int row  = blockIdx.x * (blockDim.x / WARP_SIZE) + threadIdx.x / WARP_SIZE;
+    const int lane = threadIdx.x % WARP_SIZE;
+    if (row >= nr) {
+        return;
+    }
+    const float * x = src + (int64_t) row * iw;
+    float res = -FLT_MAX;
+    for (int i = lane; i < iw; i += WARP_SIZE) {
+        res = fmaxf(res, __ldg(x + i));
+    }
+    res = warp_reduce_max(res);
+    if (lane == 0) {
+        dst[row] = res;
+    }
+}
+
 static void pool1d_nchw_kernel_f32_f32_cuda(
         const int iw, const int ow,
         const int kw, const int sw, const int pw,
@@ -80,6 +98,14 @@ void ggml_cuda_op_pool1d(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int64_t nr = ggml_nrows(src0);
 
     const int parallel_elements = (int)(nr * OW);
+
+    static const bool lab_slow = getenv("GGML_CUDA_POOL1D_SLOW") != nullptr; // lab A/B switch
+    if (!lab_slow && op == GGML_OP_POOL_MAX && OW == 1 && p0 == 0 && k0 >= IW && ggml_is_contiguous(src0)) {
+        const int rows_per_block = 256 / WARP_SIZE;
+        const int num_blocks = (int)((nr + rows_per_block - 1) / rows_per_block);
+        pool1d_row_max_kernel<<<num_blocks, 256, 0, stream>>>((int) IW, (int) nr, src0_d, dst_d);
+        return;
+    }
 
     pool1d_nchw_kernel_f32_f32_cuda(IW, OW, k0, s0, p0, parallel_elements, src0_d, dst_d, op, stream);
 }
