@@ -3912,6 +3912,17 @@ bool llamafile_sgemm(const struct ggml_compute_params * params, int64_t m, int64
         return false;
 #endif
 
+    // Batch-invariance: F32/BF16 weights use the vec_dot path at every batch
+    // width, matching the single-token (n=1) summation order. tinyBLAS keeps
+    // one FP accumulator per output while vec_dot keeps four plus a pairwise
+    // reduce, so a batched tinyBLAS row diverges from the sequential vec_dot
+    // row by ~1e-4, enough to flip near-ties (MTP 2-row verify ord-1 was
+    // +0.25 with sgemm, 0.0 via vec_dot). Q8_0 is unaffected (0 diffs measured
+    // tinyBLAS-vs-vec_dot at every N) and stays on tinyBLAS, as does F16.
+    // Atype (not Ctype: Ctype is always F32 here) selects the weights' type.
+    if (Atype == GGML_TYPE_F32 || Atype == GGML_TYPE_BF16)
+        return false;
+
     if (Ctype != GGML_TYPE_F32)
         return false;
 
