@@ -5062,15 +5062,9 @@ private:
         });
     }
 
-    // context size of a single slot, capped by --kv-unified-per-slot and by the training context of the model
     int n_ctx_slot() const {
         int res = llama_n_ctx_seq(ctx_tgt);
-
-        if (params_base.kv_unified_per_slot > 0) {
-            res = std::min(res, params_base.kv_unified_per_slot);
-        }
-
-        return std::min(res, llama_model_n_ctx_train(model_tgt));
+        return res;
     }
 
     server_response_reader get_response_reader() {
