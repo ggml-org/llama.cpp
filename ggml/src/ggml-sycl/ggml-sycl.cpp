@@ -6075,6 +6075,7 @@ static void ggml_sycl_set_main_device(const int main_device) try {
     }
     check_allow_gpu_index(main_device);
     dpct::select_device(main_device);
+    g_sycl_current_device_id = main_device;  // keep the ggml-sycl device cache in sync
 
     if (g_ggml_sycl_debug) {
         dpct::device_info prop;
