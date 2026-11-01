@@ -24,6 +24,13 @@ beam                ,0   ,any     ,MUL+ADD                     ,      6
 beam                ,0   ,any     ,RMS_NORM+MUL                ,     25
 bloom               ,0   ,any     ,NORM+MUL+ADD                ,      6
 chatglm             ,0   ,any     ,RMS_NORM+MUL                ,      5
+clover_moe          ,1   ,any     ,ADD+ADD                     ,      2
+clover_moe          ,1   ,any     ,GATED_DELTA_NET+CPY         ,      1
+clover_moe          ,1   ,any     ,MUL+ADD                     ,      4
+clover_moe          ,1   ,any     ,RMS_NORM+MUL                ,      8
+clover_moe          ,1   ,any     ,RMS_NORM+SCALE              ,      2
+clover_moe          ,1   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
+clover_moe          ,1   ,any     ,SSM_CONV+UNARY              ,      1
 codeshell           ,0   ,any     ,NORM+MUL+ADD                ,      5
 cogvlm              ,0   ,any     ,RMS_NORM+MUL                ,      5
 cohere2             ,0   ,any     ,ADD+ADD                     ,      2
