@@ -193,12 +193,17 @@ FLOAT_TYPEV4 faGatherVVector(const decodeBufFA_V bl_in, const uint32_t blockCoor
 #endif
 
 // Add gathered mask to S (slope==1 since sparse requires max_bias==0). col = slot in block jblk.
+#if defined(ACC_TYPE_MAX)
+#define ACC_TYPE_NEG (-ACC_TYPE_MAX)
+#else
+#define ACC_TYPE_NEG ACC_TYPE(NEG_FLT_MAX_OVER_2)
+#endif
+
 ACC_TYPE faAddSparseMask(const uint32_t row, const uint32_t col, const ACC_TYPE elem, const uint32_t jblk) {
-    const float NEG = uintBitsToFloat(0xFEFFFFFF);
     const uint32_t kvslot = jblk * Bc + col;
-    if (kvslot >= p.split_kv) { return ACC_TYPE(NEG); }
+    if (kvslot >= p.split_kv) { return ACC_TYPE_NEG; }
     const int r = data_sparse[sparse_base + kvslot];
-    return r < 0 ? ACC_TYPE(NEG) : elem + ACC_TYPE(data_mf16[g_m_off_elem + row * m_stride + uint(r)]);
+    return r < 0 ? ACC_TYPE_NEG : elem + ACC_TYPE(data_mf16[g_m_off_elem + row * m_stride + uint(r)]);
 }
 
 ACC_TYPE maxReduce(const in ACC_TYPE x, const in ACC_TYPE y) {
@@ -319,8 +324,6 @@ void main() {
 
     coopmat<ACC_TYPE, gl_ScopeWorkgroup, Br, Bc, gl_MatrixUseAccumulator> L, M;
 
-    // Use -FLT_MAX/2 rather than -inf to reduce the possibility of NaNs, e.g. when computing Mold-M.
-    const float NEG_FLT_MAX_OVER_2 = uintBitsToFloat(0xFEFFFFFF);
 
     L = coopmat<ACC_TYPE, gl_ScopeWorkgroup, Br, Bc, gl_MatrixUseAccumulator>(0);
 #if defined(ACC_TYPE_MAX)
@@ -443,7 +446,7 @@ void main() {
             uint R = ((i + 1) * Br >  N) ?  (N % Br) : Br;
             uint C = ((j + 1) * Bc > KV) ? (KV % Bc) : Bc;
 
-            coopMatPerElementNV(S, S, replacePadding, ACC_TYPE(NEG_FLT_MAX_OVER_2), R, C);
+            coopMatPerElementNV(S, S, replacePadding, ACC_TYPE_NEG, R, C);
         }
 
         coopmat<ACC_TYPE, gl_ScopeWorkgroup, Br, Bc, gl_MatrixUseAccumulator> rowmax, P, rowsum, eM;
