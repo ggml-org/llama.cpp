@@ -374,6 +374,22 @@
 
 		<!-- frames the slid page as a rounded card; its corners are masked in the sidebar tint -->
 		{#if deviceStore.isMobile}
+			<!-- a soft shadow cast on the sidebar beside the slid page, so the two read apart; it
+			     lies over the sidebar, under the page's masked corners, and comes and goes with them -->
+			<div
+				style:transform={revealTransform}
+				aria-hidden="true"
+				class={[
+					'pointer-events-none fixed inset-0 z-[15] rounded-[2.5rem]',
+					'shadow-[-0.5rem_0_2rem_-0.25rem_rgb(0_0_0/0.12)] dark:shadow-[-0.5rem_0_2rem_-0.25rem_rgb(0_0_0/0.45)]',
+					sidebarReveal.dragOffset === null &&
+						'transition-[transform,opacity] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]',
+					isRevealed
+						? 'opacity-100'
+						: 'opacity-0 [transition-delay:0ms,150ms] [transition-duration:300ms,150ms]'
+				]}
+			></div>
+
 			<div
 				style:transform={revealTransform}
 				aria-hidden="true"
