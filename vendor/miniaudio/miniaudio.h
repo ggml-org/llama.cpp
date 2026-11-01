@@ -1,6 +1,6 @@
 /*
 Audio playback and capture library. Choice of public domain or MIT-0. See license statements at the end of this file.
-miniaudio - v0.11.25 - 2026-03-04
+miniaudio - v0.11.26 - 2026-10-31
 
 David Reid - mackron@gmail.com
 
@@ -3747,7 +3747,7 @@ extern "C" {
 
 #define MA_VERSION_MAJOR    0
 #define MA_VERSION_MINOR    11
-#define MA_VERSION_REVISION 25
+#define MA_VERSION_REVISION 26
 #define MA_VERSION_STRING   MA_XSTRINGIFY(MA_VERSION_MAJOR) "." MA_XSTRINGIFY(MA_VERSION_MINOR) "." MA_XSTRINGIFY(MA_VERSION_REVISION)
 
 #if defined(_MSC_VER) && !defined(__clang__)
@@ -3764,7 +3764,7 @@ extern "C" {
 #endif
 
 
-#if defined(__LP64__) || defined(_WIN64) || (defined(__x86_64__) && !defined(__ILP32__)) || defined(_M_X64) || defined(__ia64) || defined(_M_IA64) || defined(__aarch64__) || defined(_M_ARM64) || defined(__powerpc64__) || defined(__ppc64__)
+#if defined(__LP64__) || defined(_WIN64) || (defined(__x86_64__) && !defined(__ILP32__)) || defined(_M_X64) || defined(__ia64) || defined(_M_IA64) || defined(__aarch64__) || defined(_M_ARM64) || defined(_M_ARM64EC) || defined(__powerpc64__) || defined(__ppc64__)
     #define MA_SIZEOF_PTR   8
 #else
     #define MA_SIZEOF_PTR   4
@@ -8017,11 +8017,14 @@ struct ma_device
             /*AAudioStream**/ ma_ptr pStreamCapture;
             ma_mutex rerouteLock;
             ma_atomic_bool32 isTearingDown;
+            MA_ATOMIC(4, ma_uint32) pendingReroutes;    /* Reroute jobs posted and not yet finished. Must be used atomically. ma_device_uninit() waits for this to reach zero. */
             ma_aaudio_usage usage;
             ma_aaudio_content_type contentType;
             ma_aaudio_input_preset inputPreset;
             ma_aaudio_allowed_capture_policy allowedCapturePolicy;
             ma_bool32 noAutoStartAfterReroute;
+            ma_bool32 enableCompatibilityWorkarounds;
+            ma_bool32 allowSetBufferCapacity;
         } aaudio;
 #endif
 #ifdef MA_SUPPORT_OPENSL
@@ -9974,7 +9977,19 @@ typedef struct
 } ma_decoding_backend_vtable;
 
 
-typedef ma_result (* ma_decoder_read_proc)(ma_decoder* pDecoder, void* pBufferOut, size_t bytesToRead, size_t* pBytesRead);         /* Returns the number of bytes read. */
+/*
+The read callback should return MA_SUCCESS if more than zero bytes were successfully read. If zero
+bytes can be read because it reached the end of the file, return MA_AT_END. If any other error
+occurs just return any other error code (it's fine to just generically return MA_ERROR).
+
+Return the actual number of bytes read in `pBytesRead`. Important note: if the number of bytes
+actually read is less than the number of bytes requested (bytesToRead), miniaudio will treat it as
+if the end of the file has been reached and it will stop decoding. This becomes relevant for things
+like streaming data sources, such as internet streams. If you haven't yet received `bytesToRead`
+from the network, you need to have your callback wait for it and then only return when the full
+number of bytes can be output, or when you've reached the genuine end of the stream.
+*/
+typedef ma_result (* ma_decoder_read_proc)(ma_decoder* pDecoder, void* pBufferOut, size_t bytesToRead, size_t* pBytesRead);
 typedef ma_result (* ma_decoder_seek_proc)(ma_decoder* pDecoder, ma_int64 byteOffset, ma_seek_origin origin);
 typedef ma_result (* ma_decoder_tell_proc)(ma_decoder* pDecoder, ma_int64* pCursor);
 
@@ -11176,6 +11191,7 @@ typedef struct
     ma_panner panner;
     ma_gainer volumeGainer;                             /* This will only be used if volumeSmoothTimeInPCMFrames is > 0. */
     ma_atomic_float volume;                             /* Defaults to 1. */
+    float oldVolume;                                    /* The volume last applied by the mixing thread. */
     MA_ATOMIC(4, float) pitch;
     float oldPitch;                                     /* For determining whether or not the resampler needs to be updated to reflect the new pitch. The resampler will be updated on the mixing thread. */
     float oldDopplerPitch;                              /* For determining whether or not the resampler needs to be updated to take a new doppler pitch into account. */
@@ -11644,16 +11660,28 @@ IMPLEMENTATION
 #if defined(__arm__) || defined(_M_ARM)
 #define MA_ARM32
 #endif
-#if defined(__arm64) || defined(__arm64__) || defined(__aarch64__) || defined(_M_ARM64)
+#if defined(__arm64) || defined(__arm64__) || defined(__aarch64__) || defined(_M_ARM64) || defined(_M_ARM64EC)
 #define MA_ARM64
 #endif
 
-#if defined(__x86_64__) || defined(_M_X64)
+#if defined(__riscv)
+    #if defined(__riscv_xlen)
+        #if __riscv_xlen == 64
+            #define MA_RISCV64
+        #elif __riscv_xlen == 32
+            #define MA_RISCV32
+        #endif
+    #endif
+#endif
+
+#if defined(__x86_64__) || (defined(_M_X64) && !defined(_M_ARM64EC))
 #define MA_X64
 #elif defined(__i386) || defined(_M_IX86)
 #define MA_X86
 #elif defined(MA_ARM32) || defined(MA_ARM64)
 #define MA_ARM
+#elif defined(MA_RISCV32) || defined(MA_RISCV64)
+#define MA_RISCV
 #endif
 
 /* Intrinsics Support */
@@ -11703,7 +11731,7 @@ IMPLEMENTATION
 #endif
 
 #if defined(MA_ARM)
-    #if !defined(MA_NO_NEON) && (defined(__ARM_NEON) || defined(__aarch64__) || defined(_M_ARM64))
+    #if !defined(MA_NO_NEON) && (defined(__ARM_NEON) || defined(__aarch64__) || defined(_M_ARM64) || defined(_M_ARM64EC))
         #define MA_SUPPORT_NEON
         #include <arm_neon.h>
     #endif
@@ -12154,10 +12182,10 @@ static MA_INLINE void ma_restore_denormals(unsigned int prevState)
 }
 
 
-#ifdef MA_ANDROID
+#if defined(MA_ANDROID) && (defined(MA_HAS_AAUDIO) || defined(MA_HAS_OPENSL))
 #include <sys/system_properties.h>
 
-int ma_android_sdk_version()
+static int ma_android_sdk_version(void)
 {
     char sdkVersion[PROP_VALUE_MAX + 1] = {0, };
     if (__system_property_get("ro.build.version.sdk", sdkVersion)) {
@@ -13314,14 +13342,14 @@ _wfopen() isn't always available in all compilation environments.
 
     * Windows only.
     * MSVC seems to support it universally as far back as VC6 from what I can tell (haven't checked further back).
-    * MinGW-64 (both 32- and 64-bit) seems to support it.
+    * MinGW-64 (both 32- and 64-bit) seems to support it, except when compiling with `-mcrtdll=crtdll`.
     * MinGW wraps it in !defined(__STRICT_ANSI__).
     * OpenWatcom wraps it in !defined(_NO_EXT_KEYS).
 
 This can be reviewed as compatibility issues arise. The preference is to use _wfopen_s() and _wfopen() as opposed to the wcsrtombs()
 fallback, so if you notice your compiler not detecting this properly I'm happy to look at adding support.
 */
-#if defined(_WIN32) && !defined(MA_XBOX_NXDK)
+#if defined(_WIN32) && !defined(MA_XBOX_NXDK) && !defined(__CRTDLL__)
     #if defined(_MSC_VER) || defined(__MINGW64__) || (!defined(__STRICT_ANSI__) && !defined(_NO_EXT_KEYS))
         #define MA_HAS_WFOPEN
     #endif
@@ -14226,7 +14254,8 @@ typedef int ma_atomic_memory_order;
     !defined(MA_ATOMIC_LEGACY_MSVC_ASM) && \
     !defined(MA_ATOMIC_MODERN_GCC) && \
     !defined(MA_ATOMIC_LEGACY_GCC) && \
-    !defined(MA_ATOMIC_LEGACY_GCC_ASM)
+    !defined(MA_ATOMIC_LEGACY_GCC_ASM) && \
+    !defined(MA_ATOMIC_CHIBICC)
     #if defined(_MSC_VER) || defined(__WATCOMC__) || defined(__DMC__) || defined(__BORLANDC__)
         #if (defined(_MSC_VER) && _MSC_VER > 1600)
             #define MA_ATOMIC_MODERN_MSVC
@@ -14239,12 +14268,12 @@ typedef int ma_atomic_memory_order;
         #endif
     #elif (defined(__GNUC__) && (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 7))) || defined(__clang__)
         #define MA_ATOMIC_MODERN_GCC
+    #elif (defined(__GNUC__) && (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 1)))
+        #define MA_ATOMIC_LEGACY_GCC
+    #elif defined(__chibicc__)
+        #define MA_ATOMIC_CHIBICC
     #else
-        #if defined(__GNUC__) && (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 1))
-            #define MA_ATOMIC_LEGACY_GCC
-        #else
-            #define MA_ATOMIC_LEGACY_GCC_ASM
-        #endif
+        #define MA_ATOMIC_LEGACY_GCC_ASM
     #endif
 #endif
 #if defined(MA_ATOMIC_MODERN_MSVC) || defined(MA_ATOMIC_LEGACY_MSVC)
@@ -14556,8 +14585,26 @@ typedef int ma_atomic_memory_order;
         #endif
     }
 #endif
-#define ma_atomic_flag_test_and_set(dst) ma_atomic_flag_test_and_set_explicit(dst, ma_atomic_memory_order_acquire)
-#define ma_atomic_flag_clear(dst)        ma_atomic_flag_clear_explicit(dst, ma_atomic_memory_order_release)
+#if defined(MA_ATOMIC_CHIBICC)
+    #define ma_atomic_memory_order_relaxed                   0
+    #define ma_atomic_memory_order_consume                   1
+    #define ma_atomic_memory_order_acquire                   2
+    #define ma_atomic_memory_order_release                   3
+    #define ma_atomic_memory_order_acq_rel                   4
+    #define ma_atomic_memory_order_seq_cst                   5
+    typedef ma_uint32 ma_atomic_flag;
+    #define ma_atomic_flag_test_and_set_explicit(dst, order) __builtin_atomic_exchange(dst, 1)
+    #define ma_atomic_flag_clear_explicit(dst, order)        __builtin_atomic_exchange(dst, 0)
+    static MA_INLINE ma_atomic_flag ma_atomic_flag_load_explicit(volatile const ma_atomic_flag* dst, ma_atomic_memory_order order)
+    {
+        ma_atomic_flag expected;
+        expected = 0;
+        __builtin_compare_and_swap(dst, &expected, 0);
+        return expected;
+    }
+#endif
+#define ma_atomic_flag_test_and_set(dst) ma_atomic_flag_test_and_set_explicit(dst, ma_atomic_memory_order_seq_cst)
+#define ma_atomic_flag_clear(dst)        ma_atomic_flag_clear_explicit(dst, ma_atomic_memory_order_seq_cst)
 typedef ma_atomic_flag ma_atomic_spinlock;
 static MA_INLINE void ma_atomic_spinlock_lock(volatile ma_atomic_spinlock* pSpinlock)
 {
@@ -14790,7 +14837,7 @@ ma_atomic_spinlock ma_atomic_global_lock;
             MA_ATOMIC_COMPARE_AND_SWAP_LOCK(32, dst, expected, replacement);
         }
     #endif
-    #if defined(MA_ATOMIC_IS_LOCK_FREE_32)
+    #if defined(MA_ATOMIC_IS_LOCK_FREE_64)
         #define ma_atomic_compare_and_swap_64(dst, expected, replacement) (ma_uint64)_InterlockedCompareExchange64((volatile ma_int64*)dst, (ma_int64)replacement, (ma_int64)expected)
     #else
         static MA_INLINE ma_uint64 __stdcall ma_atomic_compare_and_swap_64(volatile ma_uint64* dst, ma_uint64 expected, ma_uint64 replacement)
@@ -14863,7 +14910,7 @@ ma_atomic_spinlock ma_atomic_global_lock;
     }
     static MA_INLINE ma_uint64 ma_atomic_load_explicit_64(volatile const ma_uint64* ptr, ma_atomic_memory_order order)
     {
-        #if defined(MA_ATOMIC_IS_LOCK_FREE_32)
+        #if defined(MA_ATOMIC_IS_LOCK_FREE_64)
         {
             #if defined(MA_ARM)
             {
@@ -15068,19 +15115,19 @@ ma_atomic_spinlock ma_atomic_global_lock;
     }
     static MA_INLINE ma_uint8 __stdcall ma_atomic_fetch_sub_explicit_8(volatile ma_uint8* dst, ma_uint8 src, ma_atomic_memory_order order)
     {
-        return ma_atomic_fetch_add_explicit_8(dst, (ma_uint8)(-(ma_int8)src), order);
+        return ma_atomic_fetch_add_explicit_8(dst, (ma_uint8)(0 - src), order);
     }
     static MA_INLINE ma_uint16 __stdcall ma_atomic_fetch_sub_explicit_16(volatile ma_uint16* dst, ma_uint16 src, ma_atomic_memory_order order)
     {
-        return ma_atomic_fetch_add_explicit_16(dst, (ma_uint16)(-(ma_int16)src), order);
+        return ma_atomic_fetch_add_explicit_16(dst, (ma_uint16)(0 - src), order);
     }
     static MA_INLINE ma_uint32 __stdcall ma_atomic_fetch_sub_explicit_32(volatile ma_uint32* dst, ma_uint32 src, ma_atomic_memory_order order)
     {
-        return ma_atomic_fetch_add_explicit_32(dst, (ma_uint32)(-(ma_int32)src), order);
+        return ma_atomic_fetch_add_explicit_32(dst, (ma_uint32)(0 - src), order);
     }
     static MA_INLINE ma_uint64 __stdcall ma_atomic_fetch_sub_explicit_64(volatile ma_uint64* dst, ma_uint64 src, ma_atomic_memory_order order)
     {
-        return ma_atomic_fetch_add_explicit_64(dst, (ma_uint64)(-(ma_int64)src), order);
+        return ma_atomic_fetch_add_explicit_64(dst, (ma_uint64)(0 - src), order);
     }
     static MA_INLINE ma_uint8 __stdcall ma_atomic_fetch_and_explicit_8(volatile ma_uint8* dst, ma_uint8 src, ma_atomic_memory_order order)
     {
@@ -15683,7 +15730,7 @@ ma_atomic_spinlock ma_atomic_global_lock;
         }
         #else
         {
-            MA_ATOMIC_FETCH_ADD_LOCK(8, dst, (ma_uint8)(-(ma_int8)src), order);
+            MA_ATOMIC_FETCH_ADD_LOCK(8, dst, (ma_uint8)(0 - src), order);
         }
         #endif
     }
@@ -15704,7 +15751,7 @@ ma_atomic_spinlock ma_atomic_global_lock;
         }
         #else
         {
-            MA_ATOMIC_FETCH_ADD_LOCK(16, dst, (ma_uint16)(-(ma_int16)src), order);
+            MA_ATOMIC_FETCH_ADD_LOCK(16, dst, (ma_uint16)(0 - src), order);
         }
         #endif
     }
@@ -15725,13 +15772,13 @@ ma_atomic_spinlock ma_atomic_global_lock;
         }
         #else
         {
-            MA_ATOMIC_FETCH_ADD_LOCK(32, dst, (ma_uint32)(-(ma_int32)src), order);
+            MA_ATOMIC_FETCH_ADD_LOCK(32, dst, (ma_uint32)(0 - src), order);
         }
         #endif
     }
     static MA_INLINE ma_uint64 __stdcall ma_atomic_fetch_sub_explicit_64(volatile ma_uint64* dst, ma_uint64 src, ma_atomic_memory_order order)
     {
-        MA_ATOMIC_FETCH_ADD_CAS(64, dst, (ma_uint64)(-(ma_int64)src), order);
+        MA_ATOMIC_FETCH_ADD_CAS(64, dst, (ma_uint64)(0 - src), order);
     }
     static MA_INLINE ma_uint8 __stdcall ma_atomic_fetch_and_explicit_8(volatile ma_uint8* dst, ma_uint8 src, ma_atomic_memory_order order)
     {
@@ -15788,7 +15835,7 @@ ma_atomic_spinlock ma_atomic_global_lock;
             lock add dword ptr [esp], 0
         }
     }
-    #define ma_atomic_signal_fence(order) __asm {}; (void)order
+    #define ma_atomic_signal_fence(order) do { __asm {}; (void)order; } while (0)
 #endif
 #if defined(MA_ATOMIC_MODERN_GCC)
     #define MA_ATOMIC_HAS_NATIVE_COMPARE_EXCHANGE
@@ -16097,7 +16144,7 @@ ma_atomic_spinlock ma_atomic_global_lock;
             }
             #else
             {
-                MA_ATOMIC_FETCH_ADD_LOCK(8, dst, (ma_uint8)(-(ma_int8)src), order);
+                MA_ATOMIC_FETCH_ADD_LOCK(8, dst, (ma_uint8)(0 - src), order);
             }
             #endif
         }
@@ -16110,7 +16157,7 @@ ma_atomic_spinlock ma_atomic_global_lock;
             }
             #else
             {
-                MA_ATOMIC_FETCH_ADD_LOCK(16, dst, (ma_uint16)(-(ma_int16)src), order);
+                MA_ATOMIC_FETCH_ADD_LOCK(16, dst, (ma_uint16)(0 - src), order);
             }
             #endif
         }
@@ -16123,7 +16170,7 @@ ma_atomic_spinlock ma_atomic_global_lock;
             }
             #else
             {
-                MA_ATOMIC_FETCH_ADD_LOCK(32, dst, (ma_uint32)(-(ma_int32)src), order);
+                MA_ATOMIC_FETCH_ADD_LOCK(32, dst, (ma_uint32)(0 - src), order);
             }
             #endif
         }
@@ -16136,7 +16183,7 @@ ma_atomic_spinlock ma_atomic_global_lock;
             }
             #else
             {
-                MA_ATOMIC_FETCH_ADD_LOCK(64, dst, (ma_uint64)(-(ma_int64)src), order);
+                MA_ATOMIC_FETCH_ADD_LOCK(64, dst, (ma_uint64)(0 - src), order);
             }
             #endif
         }
@@ -16647,10 +16694,12 @@ ma_atomic_spinlock ma_atomic_global_lock;
                             : "r"(src)
                         );
                     } else {
+                        ma_uint8 tmp = src;
                         __asm__ __volatile__ (
-                            "xchgb %1, %0"
-                            : "=m"(*dst)
-                            : "r"(src)
+                            "xchgb %0, %1"
+                            : "+r"(tmp),
+                              "+m"(*dst)
+                            :
                             : "memory"
                         );
                     }
@@ -16680,10 +16729,12 @@ ma_atomic_spinlock ma_atomic_global_lock;
                             : "r"(src)
                         );
                     } else {
+                        ma_uint16 tmp = src;
                         __asm__ __volatile__ (
-                            "xchgw %1, %0"
-                            : "=m"(*dst)
-                            : "r"(src)
+                            "xchgw %0, %1"
+                            : "+r"(tmp),
+                              "+m"(*dst)
+                            :
                             : "memory"
                         );
                     }
@@ -16713,10 +16764,12 @@ ma_atomic_spinlock ma_atomic_global_lock;
                             : "r"(src)
                         );
                     } else {
+                        ma_uint32 tmp = src;
                         __asm__ __volatile__ (
-                            "xchgl %1, %0"
-                            : "=m"(*dst)
-                            : "r"(src)
+                            "xchgl %0, %1"
+                            : "+r"(tmp),
+                              "+m"(*dst)
+                            :
                             : "memory"
                         );
                     }
@@ -16746,10 +16799,12 @@ ma_atomic_spinlock ma_atomic_global_lock;
                             : "r"(src)
                         );
                     } else {
+                        ma_uint64 tmp = src;
                         __asm__ __volatile__ (
-                            "xchgq %1, %0"
-                            : "=m"(*dst)
-                            : "r"(src)
+                            "xchgq %0, %1"
+                            : "+r"(tmp),
+                              "+m"(*dst)
+                            :
                             : "memory"
                         );
                     }
@@ -16864,19 +16919,19 @@ ma_atomic_spinlock ma_atomic_global_lock;
         }
         static MA_INLINE ma_uint8 ma_atomic_fetch_sub_explicit_8(volatile ma_uint8* dst, ma_uint8 src, ma_atomic_memory_order order)
         {
-            return ma_atomic_fetch_add_explicit_8(dst, (ma_uint8)(-(ma_int8)src), order);
+            return ma_atomic_fetch_add_explicit_8(dst, (ma_uint8)(0 - src), order);
         }
         static MA_INLINE ma_uint16 ma_atomic_fetch_sub_explicit_16(volatile ma_uint16* dst, ma_uint16 src, ma_atomic_memory_order order)
         {
-            return ma_atomic_fetch_add_explicit_16(dst, (ma_uint16)(-(ma_int16)src), order);
+            return ma_atomic_fetch_add_explicit_16(dst, (ma_uint16)(0 - src), order);
         }
         static MA_INLINE ma_uint32 ma_atomic_fetch_sub_explicit_32(volatile ma_uint32* dst, ma_uint32 src, ma_atomic_memory_order order)
         {
-            return ma_atomic_fetch_add_explicit_32(dst, (ma_uint32)(-(ma_int32)src), order);
+            return ma_atomic_fetch_add_explicit_32(dst, (ma_uint32)(0 - src), order);
         }
         static MA_INLINE ma_uint64 ma_atomic_fetch_sub_explicit_64(volatile ma_uint64* dst, ma_uint64 src, ma_atomic_memory_order order)
         {
-            return ma_atomic_fetch_add_explicit_64(dst, (ma_uint64)(-(ma_int64)src), order);
+            return ma_atomic_fetch_add_explicit_64(dst, (ma_uint64)(0 - src), order);
         }
         static MA_INLINE ma_uint8 ma_atomic_fetch_and_explicit_8(volatile ma_uint8* dst, ma_uint8 src, ma_atomic_memory_order order)
         {
@@ -16929,6 +16984,89 @@ ma_atomic_spinlock ma_atomic_global_lock;
     #else
         #error Unsupported compiler.
     #endif
+#endif
+#if defined(MA_ATOMIC_CHIBICC)
+    #define MA_ATOMIC_HAS_NATIVE_COMPARE_EXCHANGE
+    static void ma_atomic_thread_fence(ma_atomic_memory_order order)
+    {
+        static ma_uint32 dummy;
+        __builtin_atomic_exchange(&dummy, 0);
+        (void)dummy;
+    }
+    #define ma_atomic_signal_fence(order)                           ma_atomic_thread_fence(order)
+    #define ma_atomic_is_lock_free_8(ptr)                           1
+    #define ma_atomic_is_lock_free_16(ptr)                          1
+    #define ma_atomic_is_lock_free_32(ptr)                          1
+    #define ma_atomic_is_lock_free_64(ptr)                          1
+    #define ma_atomic_store_explicit_8( dst, src, order)            __builtin_atomic_exchange(dst, src)
+    #define ma_atomic_store_explicit_16(dst, src, order)            __builtin_atomic_exchange(dst, src)
+    #define ma_atomic_store_explicit_32(dst, src, order)            __builtin_atomic_exchange(dst, src)
+    #define ma_atomic_store_explicit_64(dst, src, order)            __builtin_atomic_exchange(dst, src)
+    #define MA_ATOMIC_CHIBICC_LOAD(sizeInBits) \
+        static MA_INLINE ma_uint##sizeInBits ma_atomic_load_explicit_##sizeInBits(volatile const ma_uint##sizeInBits* dst, ma_atomic_memory_order order) \
+        { \
+            ma_uint##sizeInBits expected = 0; \
+            __builtin_compare_and_swap((volatile ma_uint##sizeInBits*)dst, &expected, 0); \
+            (void)order; \
+            return expected; \
+        }
+    MA_ATOMIC_CHIBICC_LOAD(8)
+    MA_ATOMIC_CHIBICC_LOAD(16)
+    MA_ATOMIC_CHIBICC_LOAD(32)
+    MA_ATOMIC_CHIBICC_LOAD(64)
+    #define ma_atomic_exchange_explicit_8( dst, src, order)         __builtin_atomic_exchange(dst, src)
+    #define ma_atomic_exchange_explicit_16(dst, src, order)         __builtin_atomic_exchange(dst, src)
+    #define ma_atomic_exchange_explicit_32(dst, src, order)         __builtin_atomic_exchange(dst, src)
+    #define ma_atomic_exchange_explicit_64(dst, src, order)         __builtin_atomic_exchange(dst, src)
+    #define ma_atomic_compare_exchange_strong_explicit_8( dst, expected, replacement, successOrder, failureOrder)   __builtin_compare_and_swap(dst, expected, replacement)
+    #define ma_atomic_compare_exchange_strong_explicit_16(dst, expected, replacement, successOrder, failureOrder)   __builtin_compare_and_swap(dst, expected, replacement)
+    #define ma_atomic_compare_exchange_strong_explicit_32(dst, expected, replacement, successOrder, failureOrder)   __builtin_compare_and_swap(dst, expected, replacement)
+    #define ma_atomic_compare_exchange_strong_explicit_64(dst, expected, replacement, successOrder, failureOrder)   __builtin_compare_and_swap(dst, expected, replacement)
+    #define ma_atomic_compare_exchange_weak_explicit_8( dst, expected, replacement, successOrder, failureOrder)     __builtin_compare_and_swap(dst, expected, replacement)
+    #define ma_atomic_compare_exchange_weak_explicit_16(dst, expected, replacement, successOrder, failureOrder)     __builtin_compare_and_swap(dst, expected, replacement)
+    #define ma_atomic_compare_exchange_weak_explicit_32(dst, expected, replacement, successOrder, failureOrder)     __builtin_compare_and_swap(dst, expected, replacement)
+    #define ma_atomic_compare_exchange_weak_explicit_64(dst, expected, replacement, successOrder, failureOrder)     __builtin_compare_and_swap(dst, expected, replacement)
+    static MA_INLINE ma_uint8  ma_atomic_compare_and_swap_8 (volatile ma_uint8*  dst, ma_uint8  expected, ma_uint8  replacement) { __builtin_compare_and_swap(dst, &expected, replacement); return expected; }
+    static MA_INLINE ma_uint16 ma_atomic_compare_and_swap_16(volatile ma_uint16* dst, ma_uint16 expected, ma_uint16 replacement) { __builtin_compare_and_swap(dst, &expected, replacement); return expected; }
+    static MA_INLINE ma_uint32 ma_atomic_compare_and_swap_32(volatile ma_uint32* dst, ma_uint32 expected, ma_uint32 replacement) { __builtin_compare_and_swap(dst, &expected, replacement); return expected; }
+    static MA_INLINE ma_uint64 ma_atomic_compare_and_swap_64(volatile ma_uint64* dst, ma_uint64 expected, ma_uint64 replacement) { __builtin_compare_and_swap(dst, &expected, replacement); return expected; }
+    #define MA_ATOMIC_CHIBICC_FETCH_OP(sizeInBits, opName, opInst) \
+        static MA_INLINE ma_uint##sizeInBits ma_atomic_fetch_##opName##_explicit_##sizeInBits(volatile ma_uint##sizeInBits* dst, ma_uint##sizeInBits src, ma_atomic_memory_order order) \
+        { \
+            ma_uint##sizeInBits oldValue; \
+            ma_uint##sizeInBits newValue; \
+            do { \
+                oldValue = ma_atomic_load_explicit_##sizeInBits(dst, ma_atomic_memory_order_relaxed); \
+                newValue = oldValue opInst src; \
+            } while (ma_atomic_compare_and_swap_##sizeInBits(dst, oldValue, newValue) != oldValue); \
+            (void)order; \
+            return oldValue; \
+        }
+    #define MA_ATOMIC_CHIBICC_FETCH_ADD(sizeInBits) MA_ATOMIC_CHIBICC_FETCH_OP(sizeInBits, add, +)
+    MA_ATOMIC_CHIBICC_FETCH_ADD(8)
+    MA_ATOMIC_CHIBICC_FETCH_ADD(16)
+    MA_ATOMIC_CHIBICC_FETCH_ADD(32)
+    MA_ATOMIC_CHIBICC_FETCH_ADD(64)
+    #define MA_ATOMIC_CHIBICC_FETCH_SUB(sizeInBits) MA_ATOMIC_CHIBICC_FETCH_OP(sizeInBits, sub, -)
+    MA_ATOMIC_CHIBICC_FETCH_SUB(8)
+    MA_ATOMIC_CHIBICC_FETCH_SUB(16)
+    MA_ATOMIC_CHIBICC_FETCH_SUB(32)
+    MA_ATOMIC_CHIBICC_FETCH_SUB(64)
+    #define MA_ATOMIC_CHIBICC_FETCH_OR(sizeInBits) MA_ATOMIC_CHIBICC_FETCH_OP(sizeInBits, or, |)
+    MA_ATOMIC_CHIBICC_FETCH_OR(8)
+    MA_ATOMIC_CHIBICC_FETCH_OR(16)
+    MA_ATOMIC_CHIBICC_FETCH_OR(32)
+    MA_ATOMIC_CHIBICC_FETCH_OR(64)
+    #define MA_ATOMIC_CHIBICC_FETCH_XOR(sizeInBits) MA_ATOMIC_CHIBICC_FETCH_OP(sizeInBits, xor, ^)
+    MA_ATOMIC_CHIBICC_FETCH_XOR(8)
+    MA_ATOMIC_CHIBICC_FETCH_XOR(16)
+    MA_ATOMIC_CHIBICC_FETCH_XOR(32)
+    MA_ATOMIC_CHIBICC_FETCH_XOR(64)
+    #define MA_ATOMIC_CHIBICC_FETCH_AND(sizeInBits) MA_ATOMIC_CHIBICC_FETCH_OP(sizeInBits, and, &)
+    MA_ATOMIC_CHIBICC_FETCH_AND(8)
+    MA_ATOMIC_CHIBICC_FETCH_AND(16)
+    MA_ATOMIC_CHIBICC_FETCH_AND(32)
+    MA_ATOMIC_CHIBICC_FETCH_AND(64)
 #endif
 #if !defined(MA_ATOMIC_HAS_NATIVE_COMPARE_EXCHANGE)
     static MA_INLINE ma_bool32 ma_atomic_compare_exchange_strong_explicit_8(volatile ma_uint8* dst, ma_uint8* expected, ma_uint8 replacement, ma_atomic_memory_order successOrder, ma_atomic_memory_order failureOrder)
@@ -16989,71 +17127,71 @@ ma_atomic_spinlock ma_atomic_global_lock;
     #define ma_atomic_compare_exchange_weak_explicit_64(dst, expected, replacement, successOrder, failureOrder) ma_atomic_compare_exchange_strong_explicit_64(dst, expected, replacement, successOrder, failureOrder)
 #endif
 #if defined(MA_64BIT)
-    static MA_INLINE ma_bool32 ma_atomic_is_lock_free_ptr(volatile void** ptr)
+    static MA_INLINE ma_bool32 ma_atomic_is_lock_free_ptr(void* const volatile* ptr)
     {
         return ma_atomic_is_lock_free_64((volatile ma_uint64*)ptr);
     }
-    static MA_INLINE void* ma_atomic_load_explicit_ptr(volatile void** ptr, ma_atomic_memory_order order)
+    static MA_INLINE void* ma_atomic_load_explicit_ptr(void* const volatile* ptr, ma_atomic_memory_order order)
     {
         return (void*)ma_atomic_load_explicit_64((volatile ma_uint64*)ptr, order);
     }
-    static MA_INLINE void ma_atomic_store_explicit_ptr(volatile void** dst, void* src, ma_atomic_memory_order order)
+    static MA_INLINE void ma_atomic_store_explicit_ptr(void* volatile* dst, void* src, ma_atomic_memory_order order)
     {
         ma_atomic_store_explicit_64((volatile ma_uint64*)dst, (ma_uint64)src, order);
     }
-    static MA_INLINE void* ma_atomic_exchange_explicit_ptr(volatile void** dst, void* src, ma_atomic_memory_order order)
+    static MA_INLINE void* ma_atomic_exchange_explicit_ptr(void* volatile* dst, void* src, ma_atomic_memory_order order)
     {
         return (void*)ma_atomic_exchange_explicit_64((volatile ma_uint64*)dst, (ma_uint64)src, order);
     }
-    static MA_INLINE ma_bool32 ma_atomic_compare_exchange_strong_explicit_ptr(volatile void** dst, void** expected, void* replacement, ma_atomic_memory_order successOrder, ma_atomic_memory_order failureOrder)
+    static MA_INLINE ma_bool32 ma_atomic_compare_exchange_strong_explicit_ptr(void* volatile* dst, void** expected, void* replacement, ma_atomic_memory_order successOrder, ma_atomic_memory_order failureOrder)
     {
         return ma_atomic_compare_exchange_strong_explicit_64((volatile ma_uint64*)dst, (ma_uint64*)expected, (ma_uint64)replacement, successOrder, failureOrder);
     }
-    static MA_INLINE ma_bool32 ma_atomic_compare_exchange_weak_explicit_ptr(volatile void** dst, void** expected, void* replacement, ma_atomic_memory_order successOrder, ma_atomic_memory_order failureOrder)
+    static MA_INLINE ma_bool32 ma_atomic_compare_exchange_weak_explicit_ptr(void* volatile* dst, void** expected, void* replacement, ma_atomic_memory_order successOrder, ma_atomic_memory_order failureOrder)
     {
         return ma_atomic_compare_exchange_weak_explicit_64((volatile ma_uint64*)dst, (ma_uint64*)expected, (ma_uint64)replacement, successOrder, failureOrder);
     }
-    static MA_INLINE void* ma_atomic_compare_and_swap_ptr(volatile void** dst, void* expected, void* replacement)
+    static MA_INLINE void* ma_atomic_compare_and_swap_ptr(void* volatile* dst, void* expected, void* replacement)
     {
         return (void*)ma_atomic_compare_and_swap_64((volatile ma_uint64*)dst, (ma_uint64)expected, (ma_uint64)replacement);
     }
 #elif defined(MA_32BIT)
-    static MA_INLINE ma_bool32 ma_atomic_is_lock_free_ptr(volatile void** ptr)
+    static MA_INLINE ma_bool32 ma_atomic_is_lock_free_ptr(void* const volatile* ptr)
     {
         return ma_atomic_is_lock_free_32((volatile ma_uint32*)ptr);
     }
-    static MA_INLINE void* ma_atomic_load_explicit_ptr(volatile void** ptr, ma_atomic_memory_order order)
+    static MA_INLINE void* ma_atomic_load_explicit_ptr(void* const volatile* ptr, ma_atomic_memory_order order)
     {
         return (void*)ma_atomic_load_explicit_32((volatile ma_uint32*)ptr, order);
     }
-    static MA_INLINE void ma_atomic_store_explicit_ptr(volatile void** dst, void* src, ma_atomic_memory_order order)
+    static MA_INLINE void ma_atomic_store_explicit_ptr(void* volatile* dst, void* src, ma_atomic_memory_order order)
     {
         ma_atomic_store_explicit_32((volatile ma_uint32*)dst, (ma_uint32)src, order);
     }
-    static MA_INLINE void* ma_atomic_exchange_explicit_ptr(volatile void** dst, void* src, ma_atomic_memory_order order)
+    static MA_INLINE void* ma_atomic_exchange_explicit_ptr(void* volatile* dst, void* src, ma_atomic_memory_order order)
     {
         return (void*)ma_atomic_exchange_explicit_32((volatile ma_uint32*)dst, (ma_uint32)src, order);
     }
-    static MA_INLINE ma_bool32 ma_atomic_compare_exchange_strong_explicit_ptr(volatile void** dst, void** expected, void* replacement, ma_atomic_memory_order successOrder, ma_atomic_memory_order failureOrder)
+    static MA_INLINE ma_bool32 ma_atomic_compare_exchange_strong_explicit_ptr(void* volatile* dst, void** expected, void* replacement, ma_atomic_memory_order successOrder, ma_atomic_memory_order failureOrder)
     {
         return ma_atomic_compare_exchange_strong_explicit_32((volatile ma_uint32*)dst, (ma_uint32*)expected, (ma_uint32)replacement, successOrder, failureOrder);
     }
-    static MA_INLINE ma_bool32 ma_atomic_compare_exchange_weak_explicit_ptr(volatile void** dst, void** expected, void* replacement, ma_atomic_memory_order successOrder, ma_atomic_memory_order failureOrder)
+    static MA_INLINE ma_bool32 ma_atomic_compare_exchange_weak_explicit_ptr(void* volatile* dst, void** expected, void* replacement, ma_atomic_memory_order successOrder, ma_atomic_memory_order failureOrder)
     {
         return ma_atomic_compare_exchange_weak_explicit_32((volatile ma_uint32*)dst, (ma_uint32*)expected, (ma_uint32)replacement, successOrder, failureOrder);
     }
-    static MA_INLINE void* ma_atomic_compare_and_swap_ptr(volatile void** dst, void* expected, void* replacement)
+    static MA_INLINE void* ma_atomic_compare_and_swap_ptr(void* volatile* dst, void* expected, void* replacement)
     {
         return (void*)ma_atomic_compare_and_swap_32((volatile ma_uint32*)dst, (ma_uint32)expected, (ma_uint32)replacement);
     }
 #else
     #error Unsupported architecture.
 #endif
-#define ma_atomic_store_ptr(dst, src)                                       ma_atomic_store_explicit_ptr((volatile void**)dst, (void*)src, ma_atomic_memory_order_seq_cst)
-#define ma_atomic_load_ptr(ptr)                                             ma_atomic_load_explicit_ptr((volatile void**)ptr, ma_atomic_memory_order_seq_cst)
-#define ma_atomic_exchange_ptr(dst, src)                                    ma_atomic_exchange_explicit_ptr((volatile void**)dst, (void*)src, ma_atomic_memory_order_seq_cst)
-#define ma_atomic_compare_exchange_strong_ptr(dst, expected, replacement)   ma_atomic_compare_exchange_strong_explicit_ptr((volatile void**)dst, (void**)expected, (void*)replacement, ma_atomic_memory_order_seq_cst, ma_atomic_memory_order_seq_cst)
-#define ma_atomic_compare_exchange_weak_ptr(dst, expected, replacement)     ma_atomic_compare_exchange_weak_explicit_ptr((volatile void**)dst, (void**)expected, (void*)replacement, ma_atomic_memory_order_seq_cst, ma_atomic_memory_order_seq_cst)
+#define ma_atomic_store_ptr(dst, src)                                       ma_atomic_store_explicit_ptr((void* volatile*)dst, (void*)src, ma_atomic_memory_order_seq_cst)
+#define ma_atomic_load_ptr(ptr)                                             ma_atomic_load_explicit_ptr((void* const volatile*)ptr, ma_atomic_memory_order_seq_cst)
+#define ma_atomic_exchange_ptr(dst, src)                                    ma_atomic_exchange_explicit_ptr((void* volatile*)dst, (void*)src, ma_atomic_memory_order_seq_cst)
+#define ma_atomic_compare_exchange_strong_ptr(dst, expected, replacement)   ma_atomic_compare_exchange_strong_explicit_ptr((void* volatile*)dst, (void**)expected, (void*)replacement, ma_atomic_memory_order_seq_cst, ma_atomic_memory_order_seq_cst)
+#define ma_atomic_compare_exchange_weak_ptr(dst, expected, replacement)     ma_atomic_compare_exchange_weak_explicit_ptr((void* volatile*)dst, (void**)expected, (void*)replacement, ma_atomic_memory_order_seq_cst, ma_atomic_memory_order_seq_cst)
 #define ma_atomic_store_8( dst, src)                                    ma_atomic_store_explicit_8( dst, src, ma_atomic_memory_order_seq_cst)
 #define ma_atomic_store_16(dst, src)                                    ma_atomic_store_explicit_16(dst, src, ma_atomic_memory_order_seq_cst)
 #define ma_atomic_store_32(dst, src)                                    ma_atomic_store_explicit_32(dst, src, ma_atomic_memory_order_seq_cst)
@@ -17188,8 +17326,6 @@ typedef union
     ma_uint64 i;
     double f;
 } ma_atomic_if64;
-#define ma_atomic_clear_explicit_f32(ptr, order)                        ma_atomic_clear_explicit_32((ma_uint32*)ptr, order)
-#define ma_atomic_clear_explicit_f64(ptr, order)                        ma_atomic_clear_explicit_64((ma_uint64*)ptr, order)
 static MA_INLINE void ma_atomic_store_explicit_f32(volatile float* dst, float src, ma_atomic_memory_order order)
 {
     ma_atomic_if32 x;
@@ -17256,86 +17392,44 @@ static MA_INLINE ma_bool32 ma_atomic_compare_exchange_weak_explicit_f64(volatile
 }
 static MA_INLINE float ma_atomic_fetch_add_explicit_f32(volatile float* dst, float src, ma_atomic_memory_order order)
 {
-    ma_atomic_if32 r;
-    ma_atomic_if32 x;
-    x.f = src;
-    r.i = ma_atomic_fetch_add_explicit_32((volatile ma_uint32*)dst, x.i, order);
-    return r.f;
+    float oldValue;
+    float newValue;
+    oldValue = ma_atomic_load_explicit_f32(dst, ma_atomic_memory_order_relaxed);
+    do {
+        newValue = oldValue + src;
+    } while (!ma_atomic_compare_exchange_weak_explicit_f32(dst, &oldValue, newValue, order, ma_atomic_memory_order_relaxed));
+    return oldValue;
 }
 static MA_INLINE double ma_atomic_fetch_add_explicit_f64(volatile double* dst, double src, ma_atomic_memory_order order)
 {
-    ma_atomic_if64 r;
-    ma_atomic_if64 x;
-    x.f = src;
-    r.i = ma_atomic_fetch_add_explicit_64((volatile ma_uint64*)dst, x.i, order);
-    return r.f;
+    double oldValue;
+    double newValue;
+    oldValue = ma_atomic_load_explicit_f64(dst, ma_atomic_memory_order_relaxed);
+    do {
+        newValue = oldValue + src;
+    } while (!ma_atomic_compare_exchange_weak_explicit_f64(dst, &oldValue, newValue, order, ma_atomic_memory_order_relaxed));
+    return oldValue;
 }
 static MA_INLINE float ma_atomic_fetch_sub_explicit_f32(volatile float* dst, float src, ma_atomic_memory_order order)
 {
-    ma_atomic_if32 r;
-    ma_atomic_if32 x;
-    x.f = src;
-    r.i = ma_atomic_fetch_sub_explicit_32((volatile ma_uint32*)dst, x.i, order);
-    return r.f;
+    float oldValue;
+    float newValue;
+    oldValue = ma_atomic_load_explicit_f32(dst, ma_atomic_memory_order_relaxed);
+    do {
+        newValue = oldValue - src;
+    } while (!ma_atomic_compare_exchange_weak_explicit_f32(dst, &oldValue, newValue, order, ma_atomic_memory_order_relaxed));
+    return oldValue;
 }
 static MA_INLINE double ma_atomic_fetch_sub_explicit_f64(volatile double* dst, double src, ma_atomic_memory_order order)
 {
-    ma_atomic_if64 r;
-    ma_atomic_if64 x;
-    x.f = src;
-    r.i = ma_atomic_fetch_sub_explicit_64((volatile ma_uint64*)dst, x.i, order);
-    return r.f;
+    double oldValue;
+    double newValue;
+    oldValue = ma_atomic_load_explicit_f64(dst, ma_atomic_memory_order_relaxed);
+    do {
+        newValue = oldValue - src;
+    } while (!ma_atomic_compare_exchange_weak_explicit_f64(dst, &oldValue, newValue, order, ma_atomic_memory_order_relaxed));
+    return oldValue;
 }
-static MA_INLINE float ma_atomic_fetch_or_explicit_f32(volatile float* dst, float src, ma_atomic_memory_order order)
-{
-    ma_atomic_if32 r;
-    ma_atomic_if32 x;
-    x.f = src;
-    r.i = ma_atomic_fetch_or_explicit_32((volatile ma_uint32*)dst, x.i, order);
-    return r.f;
-}
-static MA_INLINE double ma_atomic_fetch_or_explicit_f64(volatile double* dst, double src, ma_atomic_memory_order order)
-{
-    ma_atomic_if64 r;
-    ma_atomic_if64 x;
-    x.f = src;
-    r.i = ma_atomic_fetch_or_explicit_64((volatile ma_uint64*)dst, x.i, order);
-    return r.f;
-}
-static MA_INLINE float ma_atomic_fetch_xor_explicit_f32(volatile float* dst, float src, ma_atomic_memory_order order)
-{
-    ma_atomic_if32 r;
-    ma_atomic_if32 x;
-    x.f = src;
-    r.i = ma_atomic_fetch_xor_explicit_32((volatile ma_uint32*)dst, x.i, order);
-    return r.f;
-}
-static MA_INLINE double ma_atomic_fetch_xor_explicit_f64(volatile double* dst, double src, ma_atomic_memory_order order)
-{
-    ma_atomic_if64 r;
-    ma_atomic_if64 x;
-    x.f = src;
-    r.i = ma_atomic_fetch_xor_explicit_64((volatile ma_uint64*)dst, x.i, order);
-    return r.f;
-}
-static MA_INLINE float ma_atomic_fetch_and_explicit_f32(volatile float* dst, float src, ma_atomic_memory_order order)
-{
-    ma_atomic_if32 r;
-    ma_atomic_if32 x;
-    x.f = src;
-    r.i = ma_atomic_fetch_and_explicit_32((volatile ma_uint32*)dst, x.i, order);
-    return r.f;
-}
-static MA_INLINE double ma_atomic_fetch_and_explicit_f64(volatile double* dst, double src, ma_atomic_memory_order order)
-{
-    ma_atomic_if64 r;
-    ma_atomic_if64 x;
-    x.f = src;
-    r.i = ma_atomic_fetch_and_explicit_64((volatile ma_uint64*)dst, x.i, order);
-    return r.f;
-}
-#define ma_atomic_clear_f32(ptr)                                        (float )ma_atomic_clear_explicit_f32(ptr, ma_atomic_memory_order_seq_cst)
-#define ma_atomic_clear_f64(ptr)                                        (double)ma_atomic_clear_explicit_f64(ptr, ma_atomic_memory_order_seq_cst)
 #define ma_atomic_store_f32(dst, src)                                   ma_atomic_store_explicit_f32(dst, src, ma_atomic_memory_order_seq_cst)
 #define ma_atomic_store_f64(dst, src)                                   ma_atomic_store_explicit_f64(dst, src, ma_atomic_memory_order_seq_cst)
 #define ma_atomic_load_f32(ptr)                                         (float )ma_atomic_load_explicit_f32(ptr, ma_atomic_memory_order_seq_cst)
@@ -17350,12 +17444,6 @@ static MA_INLINE double ma_atomic_fetch_and_explicit_f64(volatile double* dst, d
 #define ma_atomic_fetch_add_f64(dst, src)                               ma_atomic_fetch_add_explicit_f64(dst, src, ma_atomic_memory_order_seq_cst)
 #define ma_atomic_fetch_sub_f32(dst, src)                               ma_atomic_fetch_sub_explicit_f32(dst, src, ma_atomic_memory_order_seq_cst)
 #define ma_atomic_fetch_sub_f64(dst, src)                               ma_atomic_fetch_sub_explicit_f64(dst, src, ma_atomic_memory_order_seq_cst)
-#define ma_atomic_fetch_or_f32(dst, src)                                ma_atomic_fetch_or_explicit_f32(dst, src, ma_atomic_memory_order_seq_cst)
-#define ma_atomic_fetch_or_f64(dst, src)                                ma_atomic_fetch_or_explicit_f64(dst, src, ma_atomic_memory_order_seq_cst)
-#define ma_atomic_fetch_xor_f32(dst, src)                               ma_atomic_fetch_xor_explicit_f32(dst, src, ma_atomic_memory_order_seq_cst)
-#define ma_atomic_fetch_xor_f64(dst, src)                               ma_atomic_fetch_xor_explicit_f64(dst, src, ma_atomic_memory_order_seq_cst)
-#define ma_atomic_fetch_and_f32(dst, src)                               ma_atomic_fetch_and_explicit_f32(dst, src, ma_atomic_memory_order_seq_cst)
-#define ma_atomic_fetch_and_f64(dst, src)                               ma_atomic_fetch_and_explicit_f64(dst, src, ma_atomic_memory_order_seq_cst)
 static MA_INLINE float ma_atomic_compare_and_swap_f32(volatile float* dst, float expected, float replacement)
 {
     ma_atomic_if32 r;
@@ -17407,18 +17495,6 @@ static MA_INLINE double ma_atomic_compare_and_swap_f64(volatile double* dst, dou
     static MA_INLINE ma_##type ma_atomic_##type##_fetch_sub(ma_atomic_##type* x, ma_##type y) \
     { \
         return (ma_##type)ma_atomic_fetch_sub_##c89TypeExtension(&x->value, y); \
-    } \
-    static MA_INLINE ma_##type ma_atomic_##type##_fetch_or(ma_atomic_##type* x, ma_##type y) \
-    { \
-        return (ma_##type)ma_atomic_fetch_or_##c89TypeExtension(&x->value, y); \
-    } \
-    static MA_INLINE ma_##type ma_atomic_##type##_fetch_xor(ma_atomic_##type* x, ma_##type y) \
-    { \
-        return (ma_##type)ma_atomic_fetch_xor_##c89TypeExtension(&x->value, y); \
-    } \
-    static MA_INLINE ma_##type ma_atomic_##type##_fetch_and(ma_atomic_##type* x, ma_##type y) \
-    { \
-        return (ma_##type)ma_atomic_fetch_and_##c89TypeExtension(&x->value, y); \
     } \
     static MA_INLINE ma_##type ma_atomic_##type##_compare_and_swap(ma_atomic_##type* x, ma_##type expected, ma_##type desired) \
     { \
@@ -18763,7 +18839,7 @@ MA_API ma_result ma_slot_allocator_alloc(ma_slot_allocator* pAllocator, ma_uint6
                 bitOffset = ma_ffs_32(~oldBitfield);
                 MA_ASSERT(bitOffset < 32);
 
-                newBitfield = oldBitfield | (1 << bitOffset);
+                newBitfield = oldBitfield | (1U << bitOffset);
 
                 if (ma_atomic_compare_and_swap_32(&pAllocator->pGroups[iGroup].bitfield, oldBitfield, newBitfield) == oldBitfield) {
                     ma_uint32 slotIndex;
@@ -18824,12 +18900,12 @@ MA_API ma_result ma_slot_allocator_free(ma_slot_allocator* pAllocator, ma_uint64
         ma_uint32 newBitfield;
 
         oldBitfield = ma_atomic_load_32(&pAllocator->pGroups[iGroup].bitfield);  /* <-- This copy must happen. The compiler must not optimize this away. */
-        newBitfield = oldBitfield & ~(1 << iBit);
+        newBitfield = oldBitfield & ~(1U << iBit);
 
         /* Debugging for checking for double-frees. */
         #if defined(MA_DEBUG_OUTPUT)
         {
-            if ((oldBitfield & (1 << iBit)) == 0) {
+            if ((oldBitfield & (1U << iBit)) == 0) {
                 MA_ASSERT(MA_FALSE);    /* Double free detected.*/
             }
         }
@@ -20221,7 +20297,7 @@ static void ma_device__on_notification_stopped(ma_device* pDevice)
 }
 
 /* Not all platforms support reroute notifications. */
-#if !defined(MA_EMSCRIPTEN)
+#if !defined(MA_EMSCRIPTEN) && !defined(MA_BSD)
 static void ma_device__on_notification_rerouted(ma_device* pDevice)
 {
     ma_device__on_notification(ma_device_notification_init(pDevice, ma_device_notification_type_rerouted));
@@ -20794,6 +20870,7 @@ static ma_result ma_device_audio_thread__default_read_write(ma_device* pDevice)
                     for (;;) {
                         ma_uint8  capturedClientData[MA_DATA_CONVERTER_STACK_BUFFER_SIZE];
                         ma_uint8  playbackClientData[MA_DATA_CONVERTER_STACK_BUFFER_SIZE];
+                        ma_uint64 playbackClientFramesProcessed = 0;
                         ma_uint32 capturedClientDataCapInFrames = sizeof(capturedClientData) / ma_get_bytes_per_frame(pDevice->capture.format,  pDevice->capture.channels);
                         ma_uint32 playbackClientDataCapInFrames = sizeof(playbackClientData) / ma_get_bytes_per_frame(pDevice->playback.format, pDevice->playback.channels);
                         ma_uint64 capturedClientFramesToProcessThisIteration = ma_min(capturedClientDataCapInFrames, playbackClientDataCapInFrames);
@@ -20823,7 +20900,7 @@ static ma_result ma_device_audio_thread__default_read_write(ma_device* pDevice)
                         for (;;) {
                             ma_uint64 convertedClientFrameCount = capturedClientFramesToProcessThisIteration;
                             ma_uint64 convertedDeviceFrameCount = playbackDeviceDataCapInFrames;
-                            result = ma_data_converter_process_pcm_frames(&pDevice->playback.converter, playbackClientData, &convertedClientFrameCount, playbackDeviceData, &convertedDeviceFrameCount);
+                            result = ma_data_converter_process_pcm_frames(&pDevice->playback.converter, ma_offset_pcm_frames_ptr(playbackClientData, playbackClientFramesProcessed, pDevice->playback.format, pDevice->playback.channels), &convertedClientFrameCount, playbackDeviceData, &convertedDeviceFrameCount);
                             if (result != MA_SUCCESS) {
                                 break;
                             }
@@ -20834,7 +20911,8 @@ static ma_result ma_device_audio_thread__default_read_write(ma_device* pDevice)
                                 break;
                             }
 
-                            capturedClientFramesToProcessThisIteration -= (ma_uint32)convertedClientFrameCount;  /* Safe cast. */
+                            playbackClientFramesProcessed += convertedClientFrameCount;
+                            capturedClientFramesToProcessThisIteration -= convertedClientFrameCount;
                             if (capturedClientFramesToProcessThisIteration == 0) {
                                 break;
                             }
@@ -30967,7 +31045,6 @@ static ma_result ma_result_from_pulse(int result)
     }
 }
 
-#if 0
 static ma_pa_sample_format_t ma_format_to_pulse(ma_format format)
 {
     if (ma_is_little_endian()) {
@@ -30994,7 +31071,6 @@ static ma_pa_sample_format_t ma_format_to_pulse(ma_format format)
         default: return MA_PA_SAMPLE_INVALID;
     }
 }
-#endif
 
 static ma_format ma_format_from_pulse(ma_pa_sample_format_t format)
 {
@@ -31345,28 +31421,52 @@ static void ma_device_source_name_callback(ma_pa_context* pPulseContext, const m
 }
 #endif
 
-static ma_result ma_context_get_sink_info__pulse(ma_context* pContext, const char* pDeviceName, ma_pa_sink_info* pSinkInfo)
+static ma_result ma_context_get_sink_info__pulse(ma_context* pContext, ma_ptr pMainLoop, ma_ptr pPulseContext, const char* pDeviceName, ma_pa_sink_info* pSinkInfo)
 {
     ma_pa_operation* pOP;
+    ma_result result;
 
-    pOP = ((ma_pa_context_get_sink_info_by_name_proc)pContext->pulse.pa_context_get_sink_info_by_name)((ma_pa_context*)pContext->pulse.pPulseContext, pDeviceName, ma_device_sink_info_callback, pSinkInfo);
+    MA_ZERO_OBJECT(pSinkInfo);
+
+    pOP = ((ma_pa_context_get_sink_info_by_name_proc)pContext->pulse.pa_context_get_sink_info_by_name)((ma_pa_context*)pPulseContext, pDeviceName, ma_device_sink_info_callback, pSinkInfo);
     if (pOP == NULL) {
         return MA_ERROR;
     }
 
-    return ma_wait_for_operation_and_unref__pulse(pContext, pContext->pulse.pMainLoop, pOP);
+    result = ma_wait_for_operation_and_unref__pulse(pContext, pMainLoop, pOP);
+    if (result != MA_SUCCESS) {
+        return result;
+    }
+
+    if (pSinkInfo->sample_spec.channels == 0) {
+        return MA_NO_DEVICE;
+    }
+
+    return MA_SUCCESS;
 }
 
-static ma_result ma_context_get_source_info__pulse(ma_context* pContext, const char* pDeviceName, ma_pa_source_info* pSourceInfo)
+static ma_result ma_context_get_source_info__pulse(ma_context* pContext, ma_ptr pMainLoop, ma_ptr pPulseContext, const char* pDeviceName, ma_pa_source_info* pSourceInfo)
 {
     ma_pa_operation* pOP;
+    ma_result result;
 
-    pOP = ((ma_pa_context_get_source_info_by_name_proc)pContext->pulse.pa_context_get_source_info_by_name)((ma_pa_context*)pContext->pulse.pPulseContext, pDeviceName, ma_device_source_info_callback, pSourceInfo);
+    MA_ZERO_OBJECT(pSourceInfo);
+    
+    pOP = ((ma_pa_context_get_source_info_by_name_proc)pContext->pulse.pa_context_get_source_info_by_name)((ma_pa_context*)pPulseContext, pDeviceName, ma_device_source_info_callback, pSourceInfo);
     if (pOP == NULL) {
         return MA_ERROR;
     }
 
-    return ma_wait_for_operation_and_unref__pulse(pContext, pContext->pulse.pMainLoop, pOP);
+    result = ma_wait_for_operation_and_unref__pulse(pContext, pMainLoop, pOP);
+    if (result != MA_SUCCESS) {
+        return result;
+    }
+
+    if (pSourceInfo->sample_spec.channels == 0) {
+        return MA_NO_DEVICE;
+    }
+
+    return MA_SUCCESS;
 }
 
 static ma_result ma_context_get_default_device_index__pulse(ma_context* pContext, ma_device_type deviceType, ma_uint32* pIndex)
@@ -31382,7 +31482,7 @@ static ma_result ma_context_get_default_device_index__pulse(ma_context* pContext
 
     if (deviceType == ma_device_type_playback) {
         ma_pa_sink_info sinkInfo;
-        result = ma_context_get_sink_info__pulse(pContext, NULL, &sinkInfo);
+        result = ma_context_get_sink_info__pulse(pContext, pContext->pulse.pMainLoop, pContext->pulse.pPulseContext, NULL, &sinkInfo);
         if (result != MA_SUCCESS) {
             return result;
         }
@@ -31394,7 +31494,7 @@ static ma_result ma_context_get_default_device_index__pulse(ma_context* pContext
 
     if (deviceType == ma_device_type_capture) {
         ma_pa_source_info sourceInfo;
-        result = ma_context_get_source_info__pulse(pContext, NULL, &sourceInfo);
+        result = ma_context_get_source_info__pulse(pContext, pContext->pulse.pMainLoop, pContext->pulse.pPulseContext, NULL, &sourceInfo);
         if (result != MA_SUCCESS) {
             return result;
         }
@@ -31555,6 +31655,11 @@ static void ma_context_get_device_info_sink_callback__pulse(ma_pa_context* pPuls
         return;
     }
 
+    /* An error reply (e.g. the device no longer exists) passes a NULL pInfo. */
+    if (pInfo == NULL) {
+        return;
+    }
+
     MA_ASSERT(pData != NULL);
     pData->foundDevice = MA_TRUE;
 
@@ -31589,6 +31694,11 @@ static void ma_context_get_device_info_source_callback__pulse(ma_pa_context* pPu
     ma_context_get_device_info_callback_data__pulse* pData = (ma_context_get_device_info_callback_data__pulse*)pUserData;
 
     if (endOfList > 0) {
+        return;
+    }
+
+    /* An error reply (e.g. the device no longer exists) passes a NULL pInfo. */
+    if (pInfo == NULL) {
         return;
     }
 
@@ -31878,7 +31988,7 @@ static void ma_device_on_write__pulse(ma_pa_stream* pStream, size_t byteCount, v
         }
 
         result = ma_device_write_to_stream__pulse(pDevice, pStream, &framesProcessedThisIteration);
-        if (result != MA_SUCCESS) {
+        if (result != MA_SUCCESS || framesProcessedThisIteration == 0) {
             break;
         }
 
@@ -32018,7 +32128,7 @@ static ma_result ma_device_init__pulse(ma_device* pDevice, const ma_device_confi
     }
 
     if (pConfig->deviceType == ma_device_type_capture || pConfig->deviceType == ma_device_type_duplex) {
-        result = ma_context_get_source_info__pulse(pDevice->pContext, devCapture, &sourceInfo);
+        result = ma_context_get_source_info__pulse(pDevice->pContext, pDevice->pulse.pMainLoop, pDevice->pulse.pPulseContext, devCapture, &sourceInfo);
         if (result != MA_SUCCESS) {
             ma_log_post(ma_device_get_log(pDevice), MA_LOG_LEVEL_ERROR, "[PulseAudio] Failed to retrieve source info for capture device.");
             goto on_error0;
@@ -32026,6 +32136,9 @@ static ma_result ma_device_init__pulse(ma_device* pDevice, const ma_device_confi
 
         ss   = sourceInfo.sample_spec;
         cmap = sourceInfo.channel_map;
+
+        /* Use the requested format if we have one. */
+        ss.format = ma_format_to_pulse(pDescriptorCapture->format);
 
         /* Use the requested channel count if we have one. */
         if (pDescriptorCapture->channels != 0) {
@@ -32052,7 +32165,7 @@ static ma_result ma_device_init__pulse(ma_device* pDevice, const ma_device_confi
             } else {
                 ss.format = MA_PA_SAMPLE_FLOAT32BE;
             }
-            streamFlags |= MA_PA_STREAM_FIX_FORMAT;
+            /*streamFlags |= MA_PA_STREAM_FIX_FORMAT;*/ /* Using PA_STREAM_FIX_FORMAT will make it so PulseAudio can possibly pick S24_32 which is not supported by miniaudio and will thus result in an error later on. By excluding it, PulseAudio should always pick F32. */
             ma_log_postf(ma_device_get_log(pDevice), MA_LOG_LEVEL_INFO, "[PulseAudio] sample_spec.format not supported by miniaudio. Defaulting to PA_SAMPLE_FLOAT32.\n");
         }
         if (ss.rate == 0) {
@@ -32175,7 +32288,7 @@ static ma_result ma_device_init__pulse(ma_device* pDevice, const ma_device_confi
     }
 
     if (pConfig->deviceType == ma_device_type_playback || pConfig->deviceType == ma_device_type_duplex) {
-        result = ma_context_get_sink_info__pulse(pDevice->pContext, devPlayback, &sinkInfo);
+        result = ma_context_get_sink_info__pulse(pDevice->pContext, pDevice->pulse.pMainLoop, pDevice->pulse.pPulseContext, devPlayback, &sinkInfo);
         if (result != MA_SUCCESS) {
             ma_log_post(ma_device_get_log(pDevice), MA_LOG_LEVEL_ERROR, "[PulseAudio] Failed to retrieve sink info for playback device.\n");
             goto on_error2;
@@ -32183,6 +32296,9 @@ static ma_result ma_device_init__pulse(ma_device* pDevice, const ma_device_confi
 
         ss   = sinkInfo.sample_spec;
         cmap = sinkInfo.channel_map;
+
+        /* Use the requested format if we have one. */
+        ss.format = ma_format_to_pulse(pDescriptorPlayback->format);
 
         /* Use the requested channel count if we have one. */
         if (pDescriptorPlayback->channels != 0) {
@@ -32210,7 +32326,7 @@ static ma_result ma_device_init__pulse(ma_device* pDevice, const ma_device_confi
             } else {
                 ss.format = MA_PA_SAMPLE_FLOAT32BE;
             }
-            streamFlags |= MA_PA_STREAM_FIX_FORMAT;
+            /*streamFlags |= MA_PA_STREAM_FIX_FORMAT;*/ /* Using PA_STREAM_FIX_FORMAT will make it so PulseAudio can possibly pick S24_32 which is not supported by miniaudio and will thus result in an error later on. By excluding it, PulseAudio should always pick F32. */
             ma_log_postf(ma_device_get_log(pDevice), MA_LOG_LEVEL_INFO, "[PulseAudio] sample_spec.format not supported by miniaudio. Defaulting to PA_SAMPLE_FLOAT32.\n");
         }
         if (ss.rate == 0) {
@@ -32375,6 +32491,16 @@ on_error1:
         ((ma_pa_stream_unref_proc)pDevice->pContext->pulse.pa_stream_unref)((ma_pa_stream*)pDevice->pulse.pStreamCapture);
     }
 on_error0:
+    /* Release the device's context and main loop, in the same order as ma_device_uninit__pulse(). */
+    if (pDevice->pulse.pPulseContext != NULL) {
+        ((ma_pa_context_disconnect_proc)pDevice->pContext->pulse.pa_context_disconnect)((ma_pa_context*)pDevice->pulse.pPulseContext);
+        ((ma_pa_context_unref_proc)pDevice->pContext->pulse.pa_context_unref)((ma_pa_context*)pDevice->pulse.pPulseContext);
+        pDevice->pulse.pPulseContext = NULL;
+    }
+    if (pDevice->pulse.pMainLoop != NULL) {
+        ((ma_pa_mainloop_free_proc)pDevice->pContext->pulse.pa_mainloop_free)((ma_pa_mainloop*)pDevice->pulse.pMainLoop);
+        pDevice->pulse.pMainLoop = NULL;
+    }
     return result;
 }
 
@@ -32441,12 +32567,19 @@ static ma_result ma_device_start__pulse(ma_device* pDevice)
     }
 
     if (pDevice->type == ma_device_type_playback || pDevice->type == ma_device_type_duplex) {
+        ma_uint64 framesProcessed;
+
         /*
-        We need to fill some data before uncorking. Not doing this will result in the write callback
-        never getting fired. We're not going to abort if writing fails because I still want the device
-        to get uncorked.
+        Fill all available blocks before uncorking. pa_stream_begin_write() can return less than the
+        writable size, leaving an outstanding request that may not trigger another write callback.
+        Always try to uncork, even if writing fails.
         */
-        ma_device_write_to_stream__pulse(pDevice, (ma_pa_stream*)(pDevice->pulse.pStreamPlayback), NULL);   /* No need to check the result here. Always want to fall through an uncork.*/
+        for (;;) {
+            result = ma_device_write_to_stream__pulse(pDevice, (ma_pa_stream*)(pDevice->pulse.pStreamPlayback), &framesProcessed);
+            if (result != MA_SUCCESS || framesProcessed == 0) {
+                break;
+            }
+        }
 
         result = ma_device__cork_stream__pulse(pDevice, ma_device_type_playback, 0);
         if (result != MA_SUCCESS) {
@@ -33810,7 +33943,7 @@ static ma_result ma_get_channel_map_from_AudioChannelLayout(AudioChannelLayout* 
         UInt32 iBit;
         AudioChannelBitmap bitmap = pChannelLayout->mChannelBitmap;
         for (iBit = 0; iBit < 32 && iChannel < channelMapCap; ++iBit) {
-            AudioChannelBitmap bit = bitmap & (1 << iBit);
+            AudioChannelBitmap bit = bitmap & (1U << iBit);
             if (bit != 0) {
                 pChannelMap[iChannel++] = ma_channel_from_AudioChannelBit(bit);
             }
@@ -37994,10 +38127,6 @@ static ma_result ma_device_init_fd__audio4(ma_device* pDevice, const ma_device_c
         "/dev/audio",
         "/dev/audio0"
     };
-    const char* pDefaultDeviceCtlNames[] = {
-        "/dev/audioctl",
-        "/dev/audioctl0"
-    };
     int fd;
     int fdFlags = 0;
     size_t iDefaultDevice = (size_t)-1;
@@ -38050,6 +38179,10 @@ static ma_result ma_device_init_fd__audio4(ma_device* pDevice, const ma_device_c
 
     #if !defined(MA_AUDIO4_USE_NEW_API)    /* Old API */
     {
+        const char* pDefaultDeviceCtlNames[] = {
+            "/dev/audioctl",
+            "/dev/audioctl0"
+        };
         audio_info_t fdInfo;
         int fdInfoResult = -1;
 
@@ -39315,9 +39448,17 @@ static void ma_stream_error_callback__aaudio(ma_AAudioStream* pStream, void* pUs
     When we get an error, we'll assume that the stream is in an erroneous state and needs to be restarted. From the documentation,
     we cannot do this from the error callback. Therefore we are going to use an event thread for the AAudio backend to do this
     cleanly and safely.
+
+    The job is counted before isTearingDown is checked. ma_device_uninit__aaudio() sets isTearingDown and
+    then waits for the count to drain, so either it sees this job and waits for it, or we see the flag here
+    and post nothing. Without this a job still queued when the device is uninitialized would lock the
+    destroyed rerouteLock.
     */
+    ma_atomic_fetch_add_32(&pDevice->aaudio.pendingReroutes, 1);
+
     if (ma_atomic_bool32_get(&pDevice->aaudio.isTearingDown)) {
         ma_log_postf(ma_device_get_log(pDevice), MA_LOG_LEVEL_INFO, "[AAudio] Device Disconnected. Tearing down device.\n");
+        ma_atomic_fetch_sub_32(&pDevice->aaudio.pendingReroutes, 1);
     }
     else {
         job = ma_job_init(MA_JOB_TYPE_DEVICE_AAUDIO_REROUTE);
@@ -39332,6 +39473,7 @@ static void ma_stream_error_callback__aaudio(ma_AAudioStream* pStream, void* pUs
         result = ma_device_job_thread_post(&pDevice->pContext->aaudio.jobThread, &job);
         if (result != MA_SUCCESS) {
             ma_log_postf(ma_device_get_log(pDevice), MA_LOG_LEVEL_INFO, "[AAudio] Device Disconnected. Failed to post job for rerouting.\n");
+            ma_atomic_fetch_sub_32(&pDevice->aaudio.pendingReroutes, 1);
             return;
         }
     }
@@ -39673,6 +39815,15 @@ static ma_result ma_device_uninit__aaudio(ma_device* pDevice)
     */
     ma_atomic_bool32_set(&pDevice->aaudio.isTearingDown, MA_TRUE);
 
+    /*
+    A reroute job can still be queued on the job thread, or be waiting for rerouteLock. It dereferences the
+    device and locks rerouteLock, so it must finish before the lock is destroyed below. With isTearingDown
+    set it returns without reinitializing anything, and no new job can be posted.
+    */
+    while (ma_atomic_load_32(&pDevice->aaudio.pendingReroutes) > 0) {
+        ma_sleep(1);
+    }
+
     /* Wait for any rerouting to finish before attempting to close the streams. */
     ma_mutex_lock(&pDevice->aaudio.rerouteLock);
     {
@@ -39743,11 +39894,13 @@ static ma_result ma_device_init_streams__aaudio(ma_device* pDevice, const ma_dev
         return MA_DEVICE_TYPE_NOT_SUPPORTED;
     }
 
-    pDevice->aaudio.usage                   = pConfig->aaudio.usage;
-    pDevice->aaudio.contentType             = pConfig->aaudio.contentType;
-    pDevice->aaudio.inputPreset             = pConfig->aaudio.inputPreset;
-    pDevice->aaudio.allowedCapturePolicy    = pConfig->aaudio.allowedCapturePolicy;
-    pDevice->aaudio.noAutoStartAfterReroute = pConfig->aaudio.noAutoStartAfterReroute;
+    pDevice->aaudio.usage                          = pConfig->aaudio.usage;
+    pDevice->aaudio.contentType                    = pConfig->aaudio.contentType;
+    pDevice->aaudio.inputPreset                    = pConfig->aaudio.inputPreset;
+    pDevice->aaudio.allowedCapturePolicy           = pConfig->aaudio.allowedCapturePolicy;
+    pDevice->aaudio.noAutoStartAfterReroute        = pConfig->aaudio.noAutoStartAfterReroute;
+    pDevice->aaudio.enableCompatibilityWorkarounds = pConfig->aaudio.enableCompatibilityWorkarounds;
+    pDevice->aaudio.allowSetBufferCapacity         = pConfig->aaudio.allowSetBufferCapacity;
 
     if (pConfig->deviceType == ma_device_type_capture || pConfig->deviceType == ma_device_type_duplex) {
         result = ma_device_init_by_type__aaudio(pDevice, pConfig, ma_device_type_capture, pDescriptorCapture, (ma_AAudioStream**)&pDevice->aaudio.pStreamCapture);
@@ -39950,18 +40103,21 @@ static ma_result ma_device_reinit__aaudio(ma_device* pDevice, ma_device_type dev
         deviceConfig.capture.format                 = pDevice->capture.format;
         deviceConfig.capture.channels               = pDevice->capture.channels;
         deviceConfig.sampleRate                     = pDevice->sampleRate;
-        deviceConfig.aaudio.usage                   = pDevice->aaudio.usage;
-        deviceConfig.aaudio.contentType             = pDevice->aaudio.contentType;
-        deviceConfig.aaudio.inputPreset             = pDevice->aaudio.inputPreset;
-        deviceConfig.aaudio.allowedCapturePolicy    = pDevice->aaudio.allowedCapturePolicy;
-        deviceConfig.aaudio.noAutoStartAfterReroute = pDevice->aaudio.noAutoStartAfterReroute;
-        deviceConfig.periods                        = 1;
+        deviceConfig.aaudio.usage                          = pDevice->aaudio.usage;
+        deviceConfig.aaudio.contentType                    = pDevice->aaudio.contentType;
+        deviceConfig.aaudio.inputPreset                    = pDevice->aaudio.inputPreset;
+        deviceConfig.aaudio.allowedCapturePolicy           = pDevice->aaudio.allowedCapturePolicy;
+        deviceConfig.aaudio.noAutoStartAfterReroute        = pDevice->aaudio.noAutoStartAfterReroute;
+        deviceConfig.aaudio.enableCompatibilityWorkarounds = pDevice->aaudio.enableCompatibilityWorkarounds;
+        deviceConfig.aaudio.allowSetBufferCapacity         = pDevice->aaudio.allowSetBufferCapacity;
 
         /* Try to get an accurate period size. */
         if (deviceType == ma_device_type_playback || deviceType == ma_device_type_duplex) {
             deviceConfig.periodSizeInFrames = pDevice->playback.internalPeriodSizeInFrames;
+            deviceConfig.periods            = pDevice->playback.internalPeriods;
         } else {
             deviceConfig.periodSizeInFrames = pDevice->capture.internalPeriodSizeInFrames;
+            deviceConfig.periods            = pDevice->capture.internalPeriods;
         }
 
         if (deviceType == ma_device_type_capture || deviceType == ma_device_type_duplex || deviceType == ma_device_type_loopback) {
@@ -40211,6 +40367,9 @@ static ma_result ma_job_process__device__aaudio_reroute(ma_job* pJob)
         }
     }
     ma_mutex_unlock(&pDevice->aaudio.rerouteLock);
+
+    /* Must be the last access to pDevice: once the count reaches zero ma_device_uninit() may proceed. */
+    ma_atomic_fetch_sub_32(&pDevice->aaudio.pendingReroutes, 1);
 
     return result;
 }
@@ -41234,7 +41393,7 @@ static ma_result ma_device_drain__opensl(ma_device* pDevice, ma_device_type devi
 
     MA_ASSERT(deviceType == ma_device_type_capture || deviceType == ma_device_type_playback);
 
-    if (pDevice->type == ma_device_type_capture) {
+    if (deviceType == ma_device_type_capture) {
         pBufferQueue = (SLAndroidSimpleBufferQueueItf)pDevice->opensl.pBufferQueueCapture;
         pDevice->opensl.isDrainingCapture  = MA_TRUE;
     } else {
@@ -41243,9 +41402,15 @@ static ma_result ma_device_drain__opensl(ma_device* pDevice, ma_device_type devi
     }
 
     for (;;) {
+        SLresult resultSL;
         SLAndroidSimpleBufferQueueState state;
 
-        MA_OPENSL_BUFFERQUEUE(pBufferQueue)->GetState(pBufferQueue, &state);
+        resultSL = MA_OPENSL_BUFFERQUEUE(pBufferQueue)->GetState(pBufferQueue, &state);
+        if (resultSL != SL_RESULT_SUCCESS) {
+            ma_log_post(ma_device_get_log(pDevice), MA_LOG_LEVEL_WARNING, "[OpenSL] Failed to retrieve the state of the buffer queue while draining. Skipping drain.");
+            break;
+        }
+
         if (state.count == 0) {
             break;
         }
@@ -41253,7 +41418,7 @@ static ma_result ma_device_drain__opensl(ma_device* pDevice, ma_device_type devi
         ma_sleep(10);
     }
 
-    if (pDevice->type == ma_device_type_capture) {
+    if (deviceType == ma_device_type_capture) {
         pDevice->opensl.isDrainingCapture  = MA_FALSE;
     } else {
         pDevice->opensl.isDrainingPlayback = MA_FALSE;
@@ -41495,6 +41660,17 @@ Web Audio Backend
 #ifdef MA_HAS_WEBAUDIO
 #include <emscripten/emscripten.h>
 
+/* Emscripten's inline JavaScript syntax uses extensions to standard C and C++. */
+#if defined(__clang__)
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wdollar-in-identifier-extension"
+    #if __has_warning("-Wvariadic-macro-arguments-omitted")
+        #pragma clang diagnostic ignored "-Wvariadic-macro-arguments-omitted"
+    #else
+        #pragma clang diagnostic ignored "-Wgnu-zero-variadic-macro-arguments"
+    #endif
+#endif
+
 #ifndef MA_EMSCRIPTEN_MAJOR
     #if defined(__EMSCRIPTEN_MAJOR__)
         #define MA_EMSCRIPTEN_MAJOR __EMSCRIPTEN_MAJOR__
@@ -41541,7 +41717,7 @@ Web Audio Backend
 #define MA_WEBAUDIO_LATENCY_HINT_PLAYBACK       "playback"
 #endif
 
-static ma_bool32 ma_is_capture_supported__webaudio()
+static ma_bool32 ma_is_capture_supported__webaudio(void)
 {
     return EM_ASM_INT({
         return (navigator.mediaDevices !== undefined && navigator.mediaDevices.getUserMedia !== undefined);
@@ -41670,7 +41846,6 @@ static ma_result ma_device_uninit__webaudio(ma_device* pDevice)
 
         emscripten_destroy_web_audio_node(pDevice->webaudio.audioWorklet);
         emscripten_destroy_audio_context(pDevice->webaudio.audioContext);
-        ma_free(pDevice->webaudio.pStackBuffer, &pDevice->pContext->allocationCallbacks);
     }
     #else
     {
@@ -41982,7 +42157,11 @@ static void ma_audio_worklet_thread_initialized__webaudio(EMSCRIPTEN_WEBAUDIO_T 
     MA_ASSERT(pParameters != NULL);
 
     if (success == EM_FALSE) {
-        pParameters->pDevice->webaudio.initResult = MA_ERROR;
+        ma_device* pDevice;
+
+        pDevice = pParameters->pDevice;
+        ma_free(pParameters, &pDevice->pContext->allocationCallbacks);
+        pDevice->webaudio.initResult = MA_ERROR;
         return;
     }
 
@@ -42015,6 +42194,7 @@ static ma_result ma_device_init__webaudio(ma_device* pDevice, const ma_device_co
         ma_audio_worklet_thread_initialized_data* pInitParameters;
         void* pStackBuffer;
 
+        MA_ZERO_OBJECT(&audioContextAttributes);
         if (pConfig->performanceProfile == ma_performance_profile_conservative) {
             audioContextAttributes.latencyHint = MA_WEBAUDIO_LATENCY_HINT_PLAYBACK;
         } else {
@@ -42055,7 +42235,7 @@ static ma_result ma_device_init__webaudio(ma_device* pDevice, const ma_device_co
         /* Our thread initialization parameters need to be allocated on the heap so they don't go out of scope. */
         pInitParameters = (ma_audio_worklet_thread_initialized_data*)ma_malloc(sizeof(*pInitParameters), &pDevice->pContext->allocationCallbacks);
         if (pInitParameters == NULL) {
-            ma_free(pStackBuffer, &pDevice->pContext->allocationCallbacks);
+            ma_aligned_free(pStackBuffer, &pDevice->pContext->allocationCallbacks);
             emscripten_destroy_audio_context(pDevice->webaudio.audioContext);
             return MA_OUT_OF_MEMORY;
         }
@@ -42071,13 +42251,16 @@ static ma_result ma_device_init__webaudio(ma_device* pDevice, const ma_device_co
         */
         pDevice->webaudio.initResult = MA_BUSY;
         {
+            /*
+            Web Audio teardown does not wait for all stack users to stop. Retain this allocation after
+            handing it to Emscripten, including when initialization fails.
+            */
             emscripten_start_wasm_audio_worklet_thread_async(pDevice->webaudio.audioContext, pStackBuffer, MA_AUDIO_WORKLETS_THREAD_STACK_SIZE, ma_audio_worklet_thread_initialized__webaudio, pInitParameters);
         }
         while (pDevice->webaudio.initResult == MA_BUSY) { emscripten_sleep(1); }    /* We must wait for initialization to complete. We're just spinning here. The emscripten_sleep() call is why we need to build with `-sASYNCIFY`. */
 
         /* Initialization is now complete. Descriptors were updated when the worklet was initialized. */
         if (pDevice->webaudio.initResult != MA_SUCCESS) {
-            ma_free(pStackBuffer, &pDevice->pContext->allocationCallbacks);
             emscripten_destroy_audio_context(pDevice->webaudio.audioContext);
             return pDevice->webaudio.initResult;
         }
@@ -42089,7 +42272,7 @@ static ma_result ma_device_init__webaudio(ma_device* pDevice, const ma_device_co
                 state:    1, /* 1 = ma_device_state_stopped */
                 pDevice: $1
             });
-        }, pDevice->webaudio.audioContext, pDevice);
+        }, pDevice->webaudio.audioContext, (ma_uintptr)pDevice);
 
         return MA_SUCCESS;
     }
@@ -42169,8 +42352,8 @@ static ma_result ma_device_init__webaudio(ma_device* pDevice, const ma_device_co
 
             /* The node processing callback. */
             device.scriptNode.onaudioprocess = function(e) {
-                if (device.intermediaryBufferView == null || device.intermediaryBufferView.length == 0) {
-                    device.intermediaryBufferView = new Float32Array(HEAPF32.buffer, pIntermediaryBuffer, bufferSize * channels);
+                if (device.intermediaryBufferView == null || device.intermediaryBufferView.length == 0 || device.intermediaryBufferView.buffer !== HEAPF32.buffer) {
+                    device.intermediaryBufferView = new Float32Array(HEAPF32.buffer, Number(pIntermediaryBuffer), bufferSize * channels);
                 }
 
                 /* Do the capture side first. */
@@ -42227,7 +42410,7 @@ static ma_result ma_device_init__webaudio(ma_device* pDevice, const ma_device_co
             device.pDevice = pDevice;
 
             return window.miniaudio.track_device(device);
-        }, pConfig->deviceType, channels, sampleRate, periodSizeInFrames, pDevice->webaudio.pIntermediaryBuffer, pDevice);
+        }, pConfig->deviceType, channels, sampleRate, periodSizeInFrames, (ma_uintptr)pDevice->webaudio.pIntermediaryBuffer, (ma_uintptr)pDevice);
 
         if (deviceIndex < 0) {
             return MA_FAILED_TO_OPEN_BACKEND_DEVICE;
@@ -42447,6 +42630,9 @@ static ma_result ma_context_init__webaudio(ma_context* pContext, const ma_contex
 
     return MA_SUCCESS;
 }
+#if defined(__clang__)
+    #pragma clang diagnostic pop
+#endif
 #endif  /* MA_HAS_WEBAUDIO */
 
 
@@ -47690,7 +47876,6 @@ static MA_INLINE void ma_lpf1_process_pcm_frame_f32(ma_lpf1* pLPF, float* pY, co
     ma_uint32 c;
     const ma_uint32 channels = pLPF->channels;
     const float a = pLPF->a.f32;
-    const float b = 1 - a;
 
     MA_ASSUME(channels > 0);
     for (c = 0; c < channels; c += 1) {
@@ -47698,9 +47883,9 @@ static MA_INLINE void ma_lpf1_process_pcm_frame_f32(ma_lpf1* pLPF, float* pY, co
         float x  = pX[c];
         float y;
 
-        y = b*x + a*r1;
+        y = x + a*(r1 - x);
 
-        pY[c]           = y;
+        pY[c]            = y;
         pLPF->pR1[c].f32 = y;
     }
 }
@@ -48562,8 +48747,7 @@ static MA_INLINE void ma_hpf1_process_pcm_frame_f32(ma_hpf1* pHPF, float* pY, co
 {
     ma_uint32 c;
     const ma_uint32 channels = pHPF->channels;
-    const float a = 1 - pHPF->a.f32;
-    const float b = 1 - a;
+    const float b = pHPF->a.f32;
 
     MA_ASSUME(channels > 0);
     for (c = 0; c < channels; c += 1) {
@@ -48571,7 +48755,7 @@ static MA_INLINE void ma_hpf1_process_pcm_frame_f32(ma_hpf1* pHPF, float* pY, co
         float x  = pX[c];
         float y;
 
-        y = b*x - a*r1;
+        y = b*(x + r1) - r1;
 
         pY[c]            = y;
         pHPF->pR1[c].f32 = y;
@@ -50708,7 +50892,7 @@ static /*__attribute__((noinline))*/ ma_result ma_gainer_process_pcm_frames_inte
     if (pGainer->t >= pGainer->config.smoothTimeInFrames) {
         interpolatedFrameCount = 0;
     } else {
-        interpolatedFrameCount = pGainer->t - pGainer->config.smoothTimeInFrames;
+        interpolatedFrameCount = pGainer->config.smoothTimeInFrames - pGainer->t;
         if (interpolatedFrameCount > frameCount) {
             interpolatedFrameCount = frameCount;
         }
@@ -50755,10 +50939,16 @@ static /*__attribute__((noinline))*/ ma_result ma_gainer_process_pcm_frames_inte
                         __m128 runningGainDelta0 = _mm_set_ps(pRunningGainDelta[1], pRunningGainDelta[0], pRunningGainDelta[1], pRunningGainDelta[0]);
                         __m128 runningGain0      = _mm_set_ps(pRunningGain[1] + pRunningGainDelta[1], pRunningGain[0] + pRunningGainDelta[0], pRunningGain[1], pRunningGain[0]);
 
+                        /* Each iteration processes two frames. */
+                        runningGainDelta0 = _mm_add_ps(runningGainDelta0, runningGainDelta0);
+
                         for (; iFrame < unrolledLoopCount; iFrame += 1) {
                             _mm_storeu_ps(&pFramesOutF32[iFrame*4 + 0], _mm_mul_ps(_mm_loadu_ps(&pFramesInF32[iFrame*4 + 0]), runningGain0));
                             runningGain0 = _mm_add_ps(runningGain0, runningGainDelta0);
                         }
+
+                        /* Keep the next frame's gains for the scalar remainder. */
+                        _mm_storeu_ps(pRunningGain, runningGain0);
 
                         iFrame = unrolledLoopCount << 1;
                     } else
@@ -50786,10 +50976,10 @@ static /*__attribute__((noinline))*/ ma_result ma_gainer_process_pcm_frames_inte
                             pFramesOutF32[iFrame*4 + 3] = pFramesInF32[iFrame*4 + 3] * pRunningGain[3];
 
                             /* Move the running gain forward towards the new gain. */
-                            pRunningGain[0] += pRunningGainDelta[0];
-                            pRunningGain[1] += pRunningGainDelta[1];
-                            pRunningGain[2] += pRunningGainDelta[2];
-                            pRunningGain[3] += pRunningGainDelta[3];
+                            pRunningGain[0] += pRunningGainDelta[0] * 2;
+                            pRunningGain[1] += pRunningGainDelta[1] * 2;
+                            pRunningGain[2] += pRunningGainDelta[2] * 2;
+                            pRunningGain[3] += pRunningGainDelta[3] * 2;
                         }
 
                         iFrame = unrolledLoopCount << 1;
@@ -50824,6 +51014,11 @@ static /*__attribute__((noinline))*/ ma_result ma_gainer_process_pcm_frames_inte
                         __m128 runningGain1      = _mm_set_ps(pRunningGain[1] + pRunningGainDelta[1], pRunningGain[0] + pRunningGainDelta[0], pRunningGain[5],                        pRunningGain[4]);
                         __m128 runningGain2      = _mm_set_ps(pRunningGain[5] + pRunningGainDelta[5], pRunningGain[4] + pRunningGainDelta[4], pRunningGain[3] + pRunningGainDelta[3], pRunningGain[2] + pRunningGainDelta[2]);
 
+                        /* Each iteration processes two frames. */
+                        runningGainDelta0 = _mm_add_ps(runningGainDelta0, runningGainDelta0);
+                        runningGainDelta1 = _mm_add_ps(runningGainDelta1, runningGainDelta1);
+                        runningGainDelta2 = _mm_add_ps(runningGainDelta2, runningGainDelta2);
+
                         for (; iFrame < unrolledLoopCount; iFrame += 1) {
                             _mm_storeu_ps(&pFramesOutF32[iFrame*12 + 0], _mm_mul_ps(_mm_loadu_ps(&pFramesInF32[iFrame*12 + 0]), runningGain0));
                             _mm_storeu_ps(&pFramesOutF32[iFrame*12 + 4], _mm_mul_ps(_mm_loadu_ps(&pFramesInF32[iFrame*12 + 4]), runningGain1));
@@ -50833,6 +51028,10 @@ static /*__attribute__((noinline))*/ ma_result ma_gainer_process_pcm_frames_inte
                             runningGain1 = _mm_add_ps(runningGain1, runningGainDelta1);
                             runningGain2 = _mm_add_ps(runningGain2, runningGainDelta2);
                         }
+
+                        /* Keep the next frame's gains for the scalar remainder. */
+                        _mm_storeu_ps(&pRunningGain[0], runningGain0);
+                        _mm_storeu_ps(&pRunningGain[4], runningGain1);
 
                         iFrame = unrolledLoopCount << 1;
                     } else
@@ -50899,8 +51098,8 @@ static /*__attribute__((noinline))*/ ma_result ma_gainer_process_pcm_frames_inte
                 }
             }
 
-            pFramesOut = ma_offset_ptr(pFramesOut, interpolatedFrameCount * sizeof(float));
-            pFramesIn  = ma_offset_ptr(pFramesIn,  interpolatedFrameCount * sizeof(float));
+            pFramesOut = ma_offset_ptr(pFramesOut, interpolatedFrameCount * pGainer->config.channels * sizeof(float));
+            pFramesIn  = ma_offset_ptr(pFramesIn,  interpolatedFrameCount * pGainer->config.channels * sizeof(float));
         }
 
         frameCount -= interpolatedFrameCount;
@@ -57031,7 +57230,7 @@ MA_API ma_result ma_data_converter_get_input_channel_map(const ma_data_converter
     }
 
     if (pConverter->hasChannelConverter) {
-        ma_channel_converter_get_output_channel_map(&pConverter->channelConverter, pChannelMap, channelMapCap);
+        ma_channel_converter_get_input_channel_map(&pConverter->channelConverter, pChannelMap, channelMapCap);
     } else {
         ma_channel_map_init_standard(ma_standard_channel_map_default, pChannelMap, channelMapCap, pConverter->channelsOut);
     }
@@ -57046,7 +57245,7 @@ MA_API ma_result ma_data_converter_get_output_channel_map(const ma_data_converte
     }
 
     if (pConverter->hasChannelConverter) {
-        ma_channel_converter_get_input_channel_map(&pConverter->channelConverter, pChannelMap, channelMapCap);
+        ma_channel_converter_get_output_channel_map(&pConverter->channelConverter, pChannelMap, channelMapCap);
     } else {
         ma_channel_map_init_standard(ma_standard_channel_map_default, pChannelMap, channelMapCap, pConverter->channelsIn);
     }
@@ -58905,7 +59104,7 @@ MA_API ma_result ma_duplex_rb_init(ma_format captureFormat, ma_uint32 captureCha
     }
 
     /* Seek forward a bit so we have a bit of a buffer in case of desyncs. */
-    ma_pcm_rb_seek_write((ma_pcm_rb*)pRB, captureInternalPeriodSizeInFrames * 2);
+    ma_pcm_rb_seek_write((ma_pcm_rb*)pRB, (ma_uint32)ma_calculate_frame_count_after_resampling(sampleRate, captureInternalSampleRate, captureInternalPeriodSizeInFrames * 2));
 
     return MA_SUCCESS;
 }
@@ -61944,7 +62143,7 @@ extern "C" {
 #define MA_DR_WAV_XSTRINGIFY(x)     MA_DR_WAV_STRINGIFY(x)
 #define MA_DR_WAV_VERSION_MAJOR     0
 #define MA_DR_WAV_VERSION_MINOR     14
-#define MA_DR_WAV_VERSION_REVISION  5
+#define MA_DR_WAV_VERSION_REVISION  6
 #define MA_DR_WAV_VERSION_STRING    MA_DR_WAV_XSTRINGIFY(MA_DR_WAV_VERSION_MAJOR) "." MA_DR_WAV_XSTRINGIFY(MA_DR_WAV_VERSION_MINOR) "." MA_DR_WAV_XSTRINGIFY(MA_DR_WAV_VERSION_REVISION)
 #include <stddef.h>
 #define MA_DR_WAVE_FORMAT_PCM          0x1
@@ -61952,6 +62151,7 @@ extern "C" {
 #define MA_DR_WAVE_FORMAT_IEEE_FLOAT   0x3
 #define MA_DR_WAVE_FORMAT_ALAW         0x6
 #define MA_DR_WAVE_FORMAT_MULAW        0x7
+#define MA_DR_WAVE_FORMAT_DTS          0x8
 #define MA_DR_WAVE_FORMAT_DVI_ADPCM    0x11
 #define MA_DR_WAVE_FORMAT_EXTENSIBLE   0xFFFE
 #define MA_DR_WAV_SEQUENTIAL            0x00000001
@@ -62379,7 +62579,7 @@ extern "C" {
 #define MA_DR_FLAC_XSTRINGIFY(x)     MA_DR_FLAC_STRINGIFY(x)
 #define MA_DR_FLAC_VERSION_MAJOR     0
 #define MA_DR_FLAC_VERSION_MINOR     13
-#define MA_DR_FLAC_VERSION_REVISION  3
+#define MA_DR_FLAC_VERSION_REVISION  4
 #define MA_DR_FLAC_VERSION_STRING    MA_DR_FLAC_XSTRINGIFY(MA_DR_FLAC_VERSION_MAJOR) "." MA_DR_FLAC_XSTRINGIFY(MA_DR_FLAC_VERSION_MINOR) "." MA_DR_FLAC_XSTRINGIFY(MA_DR_FLAC_VERSION_REVISION)
 #include <stddef.h>
 #if defined(_MSC_VER) && _MSC_VER >= 1700
@@ -62546,12 +62746,17 @@ typedef struct
     ma_dr_flac_cache_t crc16Cache;
     ma_uint32 crc16CacheIgnoredBytes;
 } ma_dr_flac_bs;
+typedef union
+{
+    ma_int32* pS32;
+    ma_int64* pS64;
+} ma_dr_flac_samples;
 typedef struct
 {
     ma_uint8 subframeType;
     ma_uint8 wastedBitsPerSample;
     ma_uint8 lpcOrder;
-    ma_int32* pSamplesS32;
+    ma_dr_flac_samples samples;
 } ma_dr_flac_subframe;
 typedef struct
 {
@@ -62585,7 +62790,9 @@ typedef struct
     ma_uint64 currentPCMFrame;
     ma_uint64 firstFLACFramePosInBytes;
     ma_dr_flac__memory_stream memoryStream;
-    ma_int32* pDecodedSamples;
+    ma_dr_flac_samples decodedSamples;
+    void* pDecodedSamplesAllocation;
+    ma_uint16 decodedSamplesCapacityInPCMFrames;
     ma_dr_flac_seekpoint* pSeekpoints;
     void* _oggbs;
     ma_bool32 _noSeekTableSeek    : 1;
@@ -62679,7 +62886,7 @@ extern "C" {
 #define MA_DR_MP3_XSTRINGIFY(x)     MA_DR_MP3_STRINGIFY(x)
 #define MA_DR_MP3_VERSION_MAJOR     0
 #define MA_DR_MP3_VERSION_MINOR     7
-#define MA_DR_MP3_VERSION_REVISION  3
+#define MA_DR_MP3_VERSION_REVISION  4
 #define MA_DR_MP3_VERSION_STRING    MA_DR_MP3_XSTRINGIFY(MA_DR_MP3_VERSION_MAJOR) "." MA_DR_MP3_XSTRINGIFY(MA_DR_MP3_VERSION_MINOR) "." MA_DR_MP3_XSTRINGIFY(MA_DR_MP3_VERSION_REVISION)
 #include <stddef.h>
 #define MA_DR_MP3_MAX_PCM_FRAMES_PER_MP3_FRAME  1152
@@ -62691,7 +62898,11 @@ MA_API const char* ma_dr_mp3_version_string(void);
 #define MA_DR_MP3_MAX_L3_FRAME_PAYLOAD_BYTES  MA_DR_MP3_MAX_FREE_FORMAT_FRAME_SIZE
 typedef struct
 {
-    int frame_bytes, channels, sample_rate, layer, bitrate_kbps;
+    int frame_bytes;
+    int channels;
+    int sample_rate;
+    int layer;
+    int bitrate_kbps;
 } ma_dr_mp3dec_frame_info;
 typedef struct
 {
@@ -62784,6 +62995,7 @@ typedef struct
     ma_uint32 seekPointCount;
     ma_uint32 delayInPCMFrames;
     ma_uint32 paddingInPCMFrames;
+    ma_uint32 mp3FramesSkipped;
     ma_uint64 totalPCMFrameCount;
     ma_bool32 isVBR;
     ma_bool32 isCBR;
@@ -62852,6 +63064,10 @@ static ma_result ma_decoder_read_bytes(ma_decoder* pDecoder, void* pBufferOut, s
 static ma_result ma_decoder_seek_bytes(ma_decoder* pDecoder, ma_int64 byteOffset, ma_seek_origin origin)
 {
     MA_ASSERT(pDecoder != NULL);
+
+    if (pDecoder->onSeek == NULL) {
+        return MA_NOT_IMPLEMENTED;
+    }
 
     return pDecoder->onSeek(pDecoder, byteOffset, origin);
 }
@@ -70911,21 +71127,26 @@ static ma_result ma_resource_manager_data_buffer_node_acquire(ma_resource_manage
     }
 
 done:
-    /* If we failed to initialize the data buffer we need to free it. */
-    if (result != MA_SUCCESS) {
-        if (nodeAlreadyExists == MA_FALSE) {
-            ma_resource_manager_data_buffer_node_remove(pResourceManager, pDataBufferNode);
-            ma_free(pDataBufferNode, &pResourceManager->config.allocationCallbacks);
-        }
-    }
+    {
+        ma_bool32 isDataOwnedByResourceManager = pDataBufferNode->isDataOwnedByResourceManager;
 
-    /*
-    The init notification needs to be uninitialized. This will be used if the node does not already
-    exist, and we've specified ASYNC | WAIT_INIT.
-    */
-    if (nodeAlreadyExists == MA_FALSE && pDataBufferNode->isDataOwnedByResourceManager && (flags & MA_RESOURCE_MANAGER_DATA_SOURCE_FLAG_ASYNC) != 0) {
-        if ((flags & MA_RESOURCE_MANAGER_DATA_SOURCE_FLAG_WAIT_INIT) != 0) {
-            ma_resource_manager_inline_notification_uninit(&initNotification);
+        /* If we failed to initialize the data buffer we need to free it. */
+        if (result != MA_SUCCESS) {
+            if (nodeAlreadyExists == MA_FALSE) {
+                ma_resource_manager_data_buffer_node_remove(pResourceManager, pDataBufferNode);
+                ma_free(pDataBufferNode, &pResourceManager->config.allocationCallbacks);
+                pDataBufferNode = NULL;
+            }
+        }
+
+        /*
+        The init notification needs to be uninitialized. This will be used if the node does not already
+        exist, and we've specified ASYNC | WAIT_INIT.
+        */
+        if (nodeAlreadyExists == MA_FALSE && isDataOwnedByResourceManager && (flags & MA_RESOURCE_MANAGER_DATA_SOURCE_FLAG_ASYNC) != 0) {
+            if ((flags & MA_RESOURCE_MANAGER_DATA_SOURCE_FLAG_WAIT_INIT) != 0) {
+                ma_resource_manager_inline_notification_uninit(&initNotification);
+            }
         }
     }
 
@@ -71028,7 +71249,20 @@ stage2:
                 /* Threading is enabled. The job queue will deal with the rest of the cleanup from here. */
             }
         } else {
-            /* The sound isn't loading so we can just free the node here. */
+            /*
+            The node isn't loading, so it can be freed synchronously here. But first wait for any
+            in-flight job to fully retire. A decoded-paged node reports MA_SUCCESS as soon as it is
+            playable, while page_data_buffer_node jobs keep decoding the remaining pages and only
+            increment the execution pointer at their tail. Freeing the node the instant we observe a
+            non-BUSY result therefore races the tail of such a job, which then reads/writes freed
+            memory. Wait for the execution pointer to catch up to the execution counter so no job is
+            still referencing the node, exactly as the asynchronous free path relies on for ordering.
+            (Mirrors the data-buffer fix in ma_resource_manager_data_buffer_uninit.)
+            */
+            while (ma_atomic_load_32(&pDataBufferNode->executionPointer) != ma_atomic_load_32(&pDataBufferNode->executionCounter)) {
+                ma_yield();
+            }
+
             ma_resource_manager_data_buffer_node_free(pResourceManager, pDataBufferNode);
         }
     }
@@ -71239,6 +71473,13 @@ static ma_result ma_resource_manager_data_buffer_init_ex_internal(ma_resource_ma
                     if (result == MA_BUSY) {
                         result  = MA_SUCCESS;
                     }
+
+                    /* The load job signals initialization before its final access to the data buffer. */
+                    if (result != MA_SUCCESS) {
+                        while (ma_atomic_load_32(&pDataBuffer->executionPointer) != ma_atomic_load_32(&pDataBuffer->executionCounter)) {
+                            ma_yield();
+                        }
+                    }
                 }
             }
 
@@ -71334,7 +71575,19 @@ MA_API ma_result ma_resource_manager_data_buffer_uninit(ma_resource_manager_data
     }
 
     if (ma_resource_manager_data_buffer_result(pDataBuffer) == MA_SUCCESS) {
-        /* The data buffer can be deleted synchronously. */
+        /*
+        The data buffer can be deleted synchronously. Before doing so we must wait for any
+        in-flight load job to fully retire. The load job publishes its result code (which is what
+        makes us take this branch) a few instructions before it finishes referencing pDataBuffer
+        and increments the execution pointer. Tearing the buffer down the instant we observe
+        MA_SUCCESS therefore races the tail of the load job, which then reads and writes freed
+        memory. Wait for the execution pointer to catch up to the execution counter so that no job
+        is still referencing the buffer, exactly as the asynchronous path relies on for ordering.
+        */
+        while (ma_atomic_load_32(&pDataBuffer->executionPointer) != ma_atomic_load_32(&pDataBuffer->executionCounter)) {
+            ma_yield();
+        }
+
         return ma_resource_manager_data_buffer_uninit_internal(pDataBuffer);
     } else {
         /*
@@ -71369,6 +71622,11 @@ MA_API ma_result ma_resource_manager_data_buffer_uninit(ma_resource_manager_data
         }
 
         ma_resource_manager_inline_notification_wait_and_uninit(&notification);
+
+        /* The free job signals completion before its final access to the data buffer. */
+        while (ma_atomic_load_32(&pDataBuffer->executionPointer) != ma_atomic_load_32(&pDataBuffer->executionCounter)) {
+            ma_yield();
+        }
     }
 
     return result;
@@ -71964,6 +72222,11 @@ MA_API ma_result ma_resource_manager_data_stream_init_ex(ma_resource_manager* pR
         if we're not waiting because it will most likely be in a busy state.
         */
         if (pDataStream->result != MA_SUCCESS) {
+            /* Wait for the load job's final access before the caller can free the data stream. */
+            while (ma_atomic_load_32(&pDataStream->executionPointer) != ma_atomic_load_32(&pDataStream->executionCounter)) {
+                ma_yield();
+            }
+
             return pDataStream->result;
         }
 
@@ -74453,11 +74716,11 @@ static ma_result ma_node_translate_bus_counts(const ma_node_config* pConfig, ma_
 
     /* Some special rules for passthrough nodes. */
     if ((pConfig->vtable->flags & MA_NODE_FLAG_PASSTHROUGH) != 0) {
-        if ((pConfig->vtable->inputBusCount != 0 && pConfig->vtable->inputBusCount != 1) || pConfig->vtable->outputBusCount != 1) {
+        if ((inputBusCount != 0 && inputBusCount != 1) || outputBusCount != 1) {
             return MA_INVALID_ARGS; /* Passthrough nodes must have exactly 1 output bus and either 0 or 1 input bus. */
         }
 
-        if (pConfig->pInputChannels[0] != pConfig->pOutputChannels[0]) {
+        if (inputBusCount > 0 && pConfig->pInputChannels[0] != pConfig->pOutputChannels[0]) {
             return MA_INVALID_ARGS; /* Passthrough nodes must have the same number of channels between input and output nodes. */
         }
     }
@@ -75183,7 +75446,7 @@ static ma_result ma_node_read_pcm_frames(ma_node* pNode, ma_uint32 outputBusInde
             ppFramesOut[0] = pFramesOut;
             ppFramesIn[0] = ppFramesOut[0];
 
-            result = ma_node_input_bus_read_pcm_frames(pNodeBase, &pNodeBase->pInputBuses[0], ppFramesIn[0], frameCount, &totalFramesRead, globalTime);
+            result = ma_node_input_bus_read_pcm_frames(pNodeBase, &pNodeBase->pInputBuses[0], ppFramesIn[0], frameCount, &totalFramesRead, globalTime + timeOffsetBeg);
             if (result == MA_SUCCESS) {
                 /* Even though it's a passthrough, we still need to fire the callback. */
                 frameCountIn  = totalFramesRead;
@@ -75271,7 +75534,7 @@ static ma_result ma_node_read_pcm_frames(ma_node* pNode, ma_uint32 outputBusInde
                             ppFramesIn[iInputBus] = ma_node_get_cached_input_ptr(pNode, iInputBus);
 
                             /* Once we've determined our destination pointer we can read. Note that we must inspect the number of frames read and fill any leftovers with silence for safety. */
-                            result = ma_node_input_bus_read_pcm_frames(pNodeBase, &pNodeBase->pInputBuses[iInputBus], ppFramesIn[iInputBus], framesToProcessIn, &framesRead, globalTime);
+                            result = ma_node_input_bus_read_pcm_frames(pNodeBase, &pNodeBase->pInputBuses[iInputBus], ppFramesIn[iInputBus], framesToProcessIn, &framesRead, globalTime + timeOffsetBeg);
                             if (result != MA_SUCCESS) {
                                 /* It doesn't really matter if we fail because we'll just fill with silence. */
                                 framesRead = 0; /* Just for safety, but I don't think it's really needed. */
@@ -76638,15 +76901,6 @@ static ma_result ma_engine_node_set_volume(ma_engine_node* pEngineNode, float vo
 
     ma_atomic_float_set(&pEngineNode->volume, volume);
 
-    /* If we're not smoothing we should bypass the volume gainer entirely. */
-    if (pEngineNode->volumeSmoothTimeInPCMFrames == 0) {
-        /* We should always have an active spatializer because it can be enabled and disabled dynamically. We can just use that for holding our volume. */
-        ma_spatializer_set_master_volume(&pEngineNode->spatializer, volume);
-    } else {
-        /* We're using volume smoothing, so apply the master volume to the gainer. */
-        ma_gainer_set_gain(&pEngineNode->volumeGainer, volume);
-    }
-
     return MA_SUCCESS;
 }
 
@@ -76681,6 +76935,7 @@ static void ma_engine_node_process_pcm_frames__general(ma_engine_node* pEngineNo
     ma_bool32 isSpatializationEnabled;
     ma_bool32 isPanningEnabled;
     ma_bool32 isVolumeSmoothingEnabled;
+    float volume;
 
     frameCountIn  = *pFrameCountIn;
     frameCountOut = *pFrameCountOut;
@@ -76716,6 +76971,18 @@ static void ma_engine_node_process_pcm_frames__general(ma_engine_node* pEngineNo
     isSpatializationEnabled  = ma_engine_node_is_spatialization_enabled(pEngineNode);
     isPanningEnabled         = pEngineNode->panner.pan != 0 && channelsOut != 1;
     isVolumeSmoothingEnabled = pEngineNode->volumeSmoothTimeInPCMFrames > 0;
+
+    /* Apply volume changes on the mixing thread so gainer state is not shared with the setter. */
+    volume = ma_atomic_float_get(&pEngineNode->volume);
+    if (volume != pEngineNode->oldVolume) {
+        if (isVolumeSmoothingEnabled) {
+            ma_gainer_set_gain(&pEngineNode->volumeGainer, volume);
+        } else {
+            ma_spatializer_set_master_volume(&pEngineNode->spatializer, volume);
+        }
+
+        pEngineNode->oldVolume = volume;
+    }
 
     /* Keep going while we've still got data available for processing. */
     while (totalFramesProcessedOut < frameCountOut) {
@@ -76830,9 +77097,6 @@ static void ma_engine_node_process_pcm_frames__general(ma_engine_node* pEngineNo
             ma_spatializer_process_pcm_frames(&pEngineNode->spatializer, &pEngineNode->pEngine->listeners[iListener], pRunningFramesOut, pWorkingBuffer, framesJustProcessedOut);
         } else {
             /* No spatialization, but we still need to do channel conversion and master volume. */
-            float volume;
-            ma_engine_node_get_volume(pEngineNode, &volume);    /* Should never fail. */
-
             if (channelsIn == channelsOut) {
                 /* No channel conversion required. Just copy straight to the output buffer. */
                 if (isVolumeSmoothingEnabled) {
@@ -76992,6 +77256,15 @@ static void ma_engine_node_process_pcm_frames__sound(ma_node* pNode, const float
                     }
 
                     framesJustRead = totalFramesConverted;
+
+                    /*
+                    When the last iteration of the loop above returns MA_AT_END, we can be in a situation where `result` is MA_AT_END and
+                    framesJustRead is >0. This is never valid in miniaudio so we need to normalize this (MA_AT_END should only be used
+                    when the number of frames read is exactly 0, everywhere in miniaudio).
+                    */
+                    if (result == MA_AT_END && framesJustRead > 0) {
+                        result = MA_SUCCESS;
+                    }
                 }
 
                 MA_ASSERT(framesJustRead <= pSound->processingCacheCap);
@@ -77234,6 +77507,7 @@ MA_API ma_result ma_engine_node_init_preallocated(const ma_engine_node_config* p
     pEngineNode->volumeSmoothTimeInPCMFrames = pConfig->volumeSmoothTimeInPCMFrames;
     pEngineNode->monoExpansionMode           = pConfig->monoExpansionMode;
     ma_atomic_float_set(&pEngineNode->volume, 1);
+    pEngineNode->oldVolume                   = 1;
     pEngineNode->pitch                       = 1;
     pEngineNode->oldPitch                    = 1;
     pEngineNode->oldDopplerPitch             = 1;
@@ -80181,7 +80455,16 @@ static MA_INLINE void ma_dr_wav__bswap_samples(void* pSamples, ma_uint64 sampleC
         } break;
         default:
         {
-            MA_DR_WAV_ASSERT(MA_FALSE);
+            ma_uint64 iSample;
+            for (iSample = 0; iSample < sampleCount; iSample += 1) {
+                ma_uint8* pSample = (ma_uint8*)pSamples + (iSample * bytesPerSample);
+                ma_uint32 iByte;
+                for (iByte = 0; iByte < bytesPerSample / 2; iByte += 1) {
+                    ma_uint8 temp = pSample[iByte];
+                    pSample[iByte] = pSample[bytesPerSample - iByte - 1];
+                    pSample[bytesPerSample - iByte - 1] = temp;
+                }
+            }
         } break;
     }
 }
@@ -80225,7 +80508,7 @@ MA_PRIVATE MA_INLINE ma_uint32 ma_dr_wav_bytes_to_u32_ex(const ma_uint8* data, m
         return ma_dr_wav_bytes_to_u32_le(data);
     }
 }
-MA_PRIVATE ma_int64 ma_dr_wav_aiff_extented_to_s64(const ma_uint8* data)
+MA_PRIVATE ma_int64 ma_dr_wav_aiff_extended_to_s64(const ma_uint8* data)
 {
     ma_uint32 exponent = ((ma_uint32)data[0] << 8) | data[1];
     ma_uint64 hi = ((ma_uint64)data[2] << 24) | ((ma_uint64)data[3] << 16) | ((ma_uint64)data[4] <<  8) | ((ma_uint64)data[5] <<  0);
@@ -80239,7 +80522,7 @@ MA_PRIVATE ma_int64 ma_dr_wav_aiff_extented_to_s64(const ma_uint8* data)
         return sign ? MA_DR_WAV_INT64_MIN : MA_DR_WAV_INT64_MAX;
     }
     exponent -= 16383;
-    if (exponent > 63) {
+    if (exponent >= 63) {
         return sign ? MA_DR_WAV_INT64_MIN : MA_DR_WAV_INT64_MAX;
     } else if (exponent < 1) {
         return 0;
@@ -80337,6 +80620,14 @@ MA_PRIVATE unsigned int ma_dr_wav__chunk_padding_size_w64(ma_uint64 chunkSize)
 {
     return (unsigned int)(chunkSize % 8);
 }
+MA_PRIVATE unsigned int ma_dr_wav_calculate_padding_size(ma_dr_wav_container container, ma_uint64 chunkSize)
+{
+    if (container == ma_dr_wav_container_riff || container == ma_dr_wav_container_rf64) {
+        return ma_dr_wav__chunk_padding_size_riff(chunkSize);
+    } else {
+        return ma_dr_wav__chunk_padding_size_w64(chunkSize);
+    }
+}
 MA_PRIVATE ma_uint64 ma_dr_wav_read_pcm_frames_s16__msadpcm(ma_dr_wav* pWav, ma_uint64 samplesToRead, ma_int16* pBufferOut);
 MA_PRIVATE ma_uint64 ma_dr_wav_read_pcm_frames_s16__ima(ma_dr_wav* pWav, ma_uint64 samplesToRead, ma_int16* pBufferOut);
 MA_PRIVATE ma_bool32 ma_dr_wav_init_write__internal(ma_dr_wav* pWav, const ma_dr_wav_data_format* pFormat, ma_uint64 totalSampleCount);
@@ -80361,7 +80652,12 @@ MA_PRIVATE ma_result ma_dr_wav__read_chunk_header(ma_dr_wav_read_proc onRead, vo
         if (onRead(pUserData, sizeInBytes, 8) != 8) {
             return MA_INVALID_FILE;
         }
-        pHeaderOut->sizeInBytes = ma_dr_wav_bytes_to_u64(sizeInBytes) - 24;
+        pHeaderOut->sizeInBytes = ma_dr_wav_bytes_to_u64(sizeInBytes);
+        if (pHeaderOut->sizeInBytes >= 24) {
+            pHeaderOut->sizeInBytes -= 24;
+        } else {
+            return MA_INVALID_FILE;
+        }
         pHeaderOut->paddingSize = ma_dr_wav__chunk_padding_size_w64(pHeaderOut->sizeInBytes);
         *pRunningBytesReadOut += 24;
     } else {
@@ -80486,16 +80782,23 @@ MA_PRIVATE ma_uint8* ma_dr_wav__metadata_get_memory(ma_dr_wav__metadata_parser* 
     pParser->pDataCursor += size;
     return pResult;
 }
-MA_PRIVATE void ma_dr_wav__metadata_request_extra_memory_for_stage_2(ma_dr_wav__metadata_parser* pParser, size_t bytes, size_t align)
+MA_PRIVATE void ma_dr_wav__metadata_request_extra_memory_for_stage_2(ma_dr_wav__metadata_parser* pParser, ma_uint64 bytes, size_t align)
 {
-    size_t extra = bytes + (align ? (align - 1) : 0);
-    pParser->extraCapacity += extra;
+    pParser->extraCapacity += bytes;
+    if (align > 0) {
+        pParser->extraCapacity += align - 1;
+    }
 }
 MA_PRIVATE ma_result ma_dr_wav__metadata_alloc(ma_dr_wav__metadata_parser* pParser, ma_allocation_callbacks* pAllocationCallbacks)
 {
     if (pParser->extraCapacity != 0 || pParser->metadataCount != 0) {
+        size_t capacity;
+        capacity = ma_dr_wav__metadata_memory_capacity(pParser);
+        if (capacity == 0) {
+            return MA_OUT_OF_MEMORY;
+        }
         pAllocationCallbacks->onFree(pParser->pData, pAllocationCallbacks->pUserData);
-        pParser->pData = (ma_uint8*)pAllocationCallbacks->onMalloc(ma_dr_wav__metadata_memory_capacity(pParser), pAllocationCallbacks->pUserData);
+        pParser->pData = (ma_uint8*)pAllocationCallbacks->onMalloc(capacity, pAllocationCallbacks->pUserData);
         pParser->pDataCursor = pParser->pData;
         if (pParser->pData == NULL) {
             return MA_OUT_OF_MEMORY;
@@ -80505,6 +80808,17 @@ MA_PRIVATE ma_result ma_dr_wav__metadata_alloc(ma_dr_wav__metadata_parser* pPars
     }
     return MA_SUCCESS;
 }
+MA_PRIVATE ma_dr_wav_metadata* ma_dr_wav__metadata_get_next_object(ma_dr_wav__metadata_parser* pParser)
+{
+    ma_dr_wav_metadata* pMetadata;
+    MA_DR_WAV_ASSERT(pParser->stage == ma_dr_wav__metadata_parser_stage_read);
+    if (pParser->metadataCursor >= pParser->metadataCount) {
+        return NULL;
+    }
+    pMetadata = &pParser->pMetadata[pParser->metadataCursor];
+    MA_DR_WAV_ZERO_OBJECT(pMetadata);
+    return pMetadata;
+}
 MA_PRIVATE size_t ma_dr_wav__metadata_parser_read(ma_dr_wav__metadata_parser* pParser, void* pBufferOut, size_t bytesToRead, ma_uint64* pCursor)
 {
     if (pCursor != NULL) {
@@ -80513,24 +80827,46 @@ MA_PRIVATE size_t ma_dr_wav__metadata_parser_read(ma_dr_wav__metadata_parser* pP
         return pParser->onRead(pParser->pReadSeekUserData, pBufferOut, bytesToRead);
     }
 }
-MA_PRIVATE ma_uint64 ma_dr_wav__read_smpl_to_metadata_obj(ma_dr_wav__metadata_parser* pParser, const ma_dr_wav_chunk_header* pChunkHeader, ma_dr_wav_metadata* pMetadata)
+MA_PRIVATE ma_bool32 ma_dr_wav__metadata_validate_smpl_chunk(const ma_dr_wav_chunk_header* pChunkHeader, ma_uint32 loopCount, ma_uint32 samplerSpecificDataSizeInBytes, ma_uint64* pTrailingDataSizeInBytes)
+{
+    ma_uint64 remainingDataSizeInBytes;
+    MA_DR_WAV_ASSERT(pChunkHeader != NULL);
+    if (pChunkHeader->sizeInBytes < MA_DR_WAV_SMPL_BYTES) {
+        return MA_FALSE;
+    }
+    remainingDataSizeInBytes = pChunkHeader->sizeInBytes - MA_DR_WAV_SMPL_BYTES;
+    if ((ma_uint64)loopCount > remainingDataSizeInBytes / MA_DR_WAV_SMPL_LOOP_BYTES) {
+        return MA_FALSE;
+    }
+    remainingDataSizeInBytes -= (ma_uint64)loopCount * MA_DR_WAV_SMPL_LOOP_BYTES;
+    if ((ma_uint64)samplerSpecificDataSizeInBytes > remainingDataSizeInBytes) {
+        return MA_FALSE;
+    }
+    if (pTrailingDataSizeInBytes != NULL) {
+        *pTrailingDataSizeInBytes = remainingDataSizeInBytes - samplerSpecificDataSizeInBytes;
+    }
+    return MA_TRUE;
+}
+MA_PRIVATE ma_uint64 ma_dr_wav__read_smpl_to_metadata_obj(ma_dr_wav__metadata_parser* pParser, const ma_dr_wav_chunk_header* pChunkHeader, ma_dr_wav_metadata* pMetadata, ma_result* pResult)
 {
     ma_uint8 smplHeaderData[MA_DR_WAV_SMPL_BYTES];
     ma_uint64 totalBytesRead = 0;
     size_t bytesJustRead;
+    *pResult = MA_INVALID_DATA;
     if (pMetadata == NULL) {
         return 0;
     }
     bytesJustRead = ma_dr_wav__metadata_parser_read(pParser, smplHeaderData, sizeof(smplHeaderData), &totalBytesRead);
     MA_DR_WAV_ASSERT(pParser->stage == ma_dr_wav__metadata_parser_stage_read);
     MA_DR_WAV_ASSERT(pChunkHeader != NULL);
-    if (pMetadata != NULL && bytesJustRead == sizeof(smplHeaderData)) {
+    if (bytesJustRead == sizeof(smplHeaderData)) {
         ma_uint32 iSampleLoop;
         ma_uint32 loopCount;
-        ma_uint32 calculatedLoopCount;
+        ma_uint32 samplerSpecificDataSizeInBytes;
+        ma_uint64 trailingDataSizeInBytes;
         loopCount = ma_dr_wav_bytes_to_u32(smplHeaderData + 28);
-        calculatedLoopCount = (pChunkHeader->sizeInBytes - MA_DR_WAV_SMPL_BYTES) / MA_DR_WAV_SMPL_LOOP_BYTES;
-        if (loopCount != calculatedLoopCount) {
+        samplerSpecificDataSizeInBytes = ma_dr_wav_bytes_to_u32(smplHeaderData + 32);
+        if (!ma_dr_wav__metadata_validate_smpl_chunk(pChunkHeader, loopCount, samplerSpecificDataSizeInBytes, &trailingDataSizeInBytes)) {
             return totalBytesRead;
         }
         pMetadata->type                                     = ma_dr_wav_metadata_type_smpl;
@@ -80541,40 +80877,47 @@ MA_PRIVATE ma_uint64 ma_dr_wav__read_smpl_to_metadata_obj(ma_dr_wav__metadata_pa
         pMetadata->data.smpl.midiPitchFraction              = ma_dr_wav_bytes_to_u32(smplHeaderData + 16);
         pMetadata->data.smpl.smpteFormat                    = ma_dr_wav_bytes_to_u32(smplHeaderData + 20);
         pMetadata->data.smpl.smpteOffset                    = ma_dr_wav_bytes_to_u32(smplHeaderData + 24);
-        pMetadata->data.smpl.sampleLoopCount                = ma_dr_wav_bytes_to_u32(smplHeaderData + 28);
-        pMetadata->data.smpl.samplerSpecificDataSizeInBytes = ma_dr_wav_bytes_to_u32(smplHeaderData + 32);
-        if (pMetadata->data.smpl.sampleLoopCount == calculatedLoopCount) {
-            pMetadata->data.smpl.pLoops = (ma_dr_wav_smpl_loop*)ma_dr_wav__metadata_get_memory(pParser, sizeof(ma_dr_wav_smpl_loop) * pMetadata->data.smpl.sampleLoopCount, MA_DR_WAV_METADATA_ALIGNMENT);
-            for (iSampleLoop = 0; iSampleLoop < pMetadata->data.smpl.sampleLoopCount; ++iSampleLoop) {
-                ma_uint8 smplLoopData[MA_DR_WAV_SMPL_LOOP_BYTES];
-                bytesJustRead = ma_dr_wav__metadata_parser_read(pParser, smplLoopData, sizeof(smplLoopData), &totalBytesRead);
-                if (bytesJustRead == sizeof(smplLoopData)) {
-                    pMetadata->data.smpl.pLoops[iSampleLoop].cuePointId        = ma_dr_wav_bytes_to_u32(smplLoopData + 0);
-                    pMetadata->data.smpl.pLoops[iSampleLoop].type              = ma_dr_wav_bytes_to_u32(smplLoopData + 4);
-                    pMetadata->data.smpl.pLoops[iSampleLoop].firstSampleOffset = ma_dr_wav_bytes_to_u32(smplLoopData + 8);
-                    pMetadata->data.smpl.pLoops[iSampleLoop].lastSampleOffset  = ma_dr_wav_bytes_to_u32(smplLoopData + 12);
-                    pMetadata->data.smpl.pLoops[iSampleLoop].sampleFraction    = ma_dr_wav_bytes_to_u32(smplLoopData + 16);
-                    pMetadata->data.smpl.pLoops[iSampleLoop].playCount         = ma_dr_wav_bytes_to_u32(smplLoopData + 20);
-                } else {
-                    break;
-                }
+        pMetadata->data.smpl.sampleLoopCount                = loopCount;
+        pMetadata->data.smpl.samplerSpecificDataSizeInBytes = samplerSpecificDataSizeInBytes;
+        pMetadata->data.smpl.pLoops = (ma_dr_wav_smpl_loop*)ma_dr_wav__metadata_get_memory(pParser, sizeof(ma_dr_wav_smpl_loop) * pMetadata->data.smpl.sampleLoopCount, MA_DR_WAV_METADATA_ALIGNMENT);
+        for (iSampleLoop = 0; iSampleLoop < pMetadata->data.smpl.sampleLoopCount; ++iSampleLoop) {
+            ma_uint8 smplLoopData[MA_DR_WAV_SMPL_LOOP_BYTES];
+            bytesJustRead = ma_dr_wav__metadata_parser_read(pParser, smplLoopData, sizeof(smplLoopData), &totalBytesRead);
+            if (bytesJustRead == sizeof(smplLoopData)) {
+                pMetadata->data.smpl.pLoops[iSampleLoop].cuePointId        = ma_dr_wav_bytes_to_u32(smplLoopData + 0);
+                pMetadata->data.smpl.pLoops[iSampleLoop].type              = ma_dr_wav_bytes_to_u32(smplLoopData + 4);
+                pMetadata->data.smpl.pLoops[iSampleLoop].firstSampleOffset = ma_dr_wav_bytes_to_u32(smplLoopData + 8);
+                pMetadata->data.smpl.pLoops[iSampleLoop].lastSampleOffset  = ma_dr_wav_bytes_to_u32(smplLoopData + 12);
+                pMetadata->data.smpl.pLoops[iSampleLoop].sampleFraction    = ma_dr_wav_bytes_to_u32(smplLoopData + 16);
+                pMetadata->data.smpl.pLoops[iSampleLoop].playCount         = ma_dr_wav_bytes_to_u32(smplLoopData + 20);
+            } else {
+                return totalBytesRead;
             }
-            if (pMetadata->data.smpl.samplerSpecificDataSizeInBytes > 0) {
-                pMetadata->data.smpl.pSamplerSpecificData = ma_dr_wav__metadata_get_memory(pParser, pMetadata->data.smpl.samplerSpecificDataSizeInBytes, 1);
-                MA_DR_WAV_ASSERT(pMetadata->data.smpl.pSamplerSpecificData != NULL);
-                ma_dr_wav__metadata_parser_read(pParser, pMetadata->data.smpl.pSamplerSpecificData, pMetadata->data.smpl.samplerSpecificDataSizeInBytes, &totalBytesRead);
-            }
-        } else {
-            MA_DR_WAV_ZERO_OBJECT(&pMetadata->data.smpl);
         }
+        if (pMetadata->data.smpl.samplerSpecificDataSizeInBytes > 0) {
+            pMetadata->data.smpl.pSamplerSpecificData = ma_dr_wav__metadata_get_memory(pParser, pMetadata->data.smpl.samplerSpecificDataSizeInBytes, 1);
+            MA_DR_WAV_ASSERT(pMetadata->data.smpl.pSamplerSpecificData != NULL);
+            bytesJustRead = ma_dr_wav__metadata_parser_read(pParser, pMetadata->data.smpl.pSamplerSpecificData, pMetadata->data.smpl.samplerSpecificDataSizeInBytes, &totalBytesRead);
+            if (bytesJustRead != pMetadata->data.smpl.samplerSpecificDataSizeInBytes) {
+                return totalBytesRead;
+            }
+        }
+        if (trailingDataSizeInBytes > 0) {
+            if (!ma_dr_wav__seek_forward(pParser->onSeek, trailingDataSizeInBytes, pParser->pReadSeekUserData)) {
+                return totalBytesRead;
+            }
+            totalBytesRead += trailingDataSizeInBytes;
+        }
+        *pResult = MA_SUCCESS;
     }
     return totalBytesRead;
 }
-MA_PRIVATE ma_uint64 ma_dr_wav__read_cue_to_metadata_obj(ma_dr_wav__metadata_parser* pParser, const ma_dr_wav_chunk_header* pChunkHeader, ma_dr_wav_metadata* pMetadata)
+MA_PRIVATE ma_uint64 ma_dr_wav__read_cue_to_metadata_obj(ma_dr_wav__metadata_parser* pParser, const ma_dr_wav_chunk_header* pChunkHeader, ma_dr_wav_metadata* pMetadata, ma_result* pResult)
 {
     ma_uint8 cueHeaderSectionData[MA_DR_WAV_CUE_BYTES];
     ma_uint64 totalBytesRead = 0;
     size_t bytesJustRead;
+    *pResult = MA_INVALID_DATA;
     if (pMetadata == NULL) {
         return 0;
     }
@@ -80602,10 +80945,11 @@ MA_PRIVATE ma_uint64 ma_dr_wav__read_cue_to_metadata_obj(ma_dr_wav__metadata_par
                         pMetadata->data.cue.pCuePoints[iCuePoint].blockStart        = ma_dr_wav_bytes_to_u32(cuePointData + 16);
                         pMetadata->data.cue.pCuePoints[iCuePoint].sampleOffset      = ma_dr_wav_bytes_to_u32(cuePointData + 20);
                     } else {
-                        break;
+                        return totalBytesRead;
                     }
                 }
             }
+            *pResult = MA_SUCCESS;
         }
     }
     return totalBytesRead;
@@ -80771,7 +81115,11 @@ MA_PRIVATE ma_result ma_dr_wav_buffer_reader_read_u32(ma_dr_wav_buffer_reader* p
 MA_PRIVATE ma_uint64 ma_dr_wav__read_bext_to_metadata_obj(ma_dr_wav__metadata_parser* pParser, ma_dr_wav_metadata* pMetadata, ma_uint64 chunkSize)
 {
     ma_uint8 bextData[MA_DR_WAV_BEXT_BYTES];
-    size_t bytesRead = ma_dr_wav__metadata_parser_read(pParser, bextData, sizeof(bextData), NULL);
+    size_t bytesRead;
+    if (pMetadata == NULL) {
+        return 0;
+    }
+    bytesRead = ma_dr_wav__metadata_parser_read(pParser, bextData, sizeof(bextData), NULL);
     MA_DR_WAV_ASSERT(pParser->stage == ma_dr_wav__metadata_parser_stage_read);
     if (bytesRead == sizeof(bextData)) {
         ma_dr_wav_buffer_reader reader;
@@ -80804,8 +81152,9 @@ MA_PRIVATE ma_uint64 ma_dr_wav__read_bext_to_metadata_obj(ma_dr_wav__metadata_pa
             if (extraBytes > 0) {
                 pMetadata->data.bext.pCodingHistory = (char*)ma_dr_wav__metadata_get_memory(pParser, extraBytes + 1, 1);
                 MA_DR_WAV_ASSERT(pMetadata->data.bext.pCodingHistory != NULL);
-                bytesRead += ma_dr_wav__metadata_parser_read(pParser, pMetadata->data.bext.pCodingHistory, extraBytes, NULL);
-                pMetadata->data.bext.codingHistorySize = (ma_uint32)ma_dr_wav__strlen(pMetadata->data.bext.pCodingHistory);
+                pMetadata->data.bext.codingHistorySize = (ma_uint32)ma_dr_wav__metadata_parser_read(pParser, pMetadata->data.bext.pCodingHistory, extraBytes, NULL);
+                pMetadata->data.bext.pCodingHistory[pMetadata->data.bext.codingHistorySize] = '\0';
+                bytesRead += pMetadata->data.bext.codingHistorySize;
             } else {
                 pMetadata->data.bext.pCodingHistory    = NULL;
                 pMetadata->data.bext.codingHistorySize = 0;
@@ -80814,26 +81163,41 @@ MA_PRIVATE ma_uint64 ma_dr_wav__read_bext_to_metadata_obj(ma_dr_wav__metadata_pa
     }
     return bytesRead;
 }
+MA_PRIVATE size_t ma_dr_wav__metadata_read_string(ma_dr_wav__metadata_parser* pParser, ma_uint32 stringSize, char** ppString, ma_uint32* pStringLength)
+{
+    size_t bytesRead;
+    ma_uint32 stringLength;
+    char* pString;
+    *ppString = NULL;
+    *pStringLength = 0;
+    if (stringSize == 0) {
+        return 0;
+    }
+    pString = (char*)ma_dr_wav__metadata_get_memory(pParser, (size_t)stringSize + 1, 1);
+    bytesRead = ma_dr_wav__metadata_parser_read(pParser, pString, stringSize, NULL);
+    pString[bytesRead] = '\0';
+    stringLength = (ma_uint32)bytesRead;
+    if (bytesRead > 0 && pString[bytesRead - 1] == '\0') {
+        stringLength -= 1;
+    }
+    *ppString = pString;
+    *pStringLength = stringLength;
+    return bytesRead;
+}
 MA_PRIVATE ma_uint64 ma_dr_wav__read_list_label_or_note_to_metadata_obj(ma_dr_wav__metadata_parser* pParser, ma_dr_wav_metadata* pMetadata, ma_uint64 chunkSize, ma_dr_wav_metadata_type type)
 {
     ma_uint8 cueIDBuffer[MA_DR_WAV_LIST_LABEL_OR_NOTE_BYTES];
     ma_uint64 totalBytesRead = 0;
-    size_t bytesJustRead = ma_dr_wav__metadata_parser_read(pParser, cueIDBuffer, sizeof(cueIDBuffer), &totalBytesRead);
+    size_t bytesJustRead;
+    if (pMetadata == NULL) {
+        return 0;
+    }
+    bytesJustRead = ma_dr_wav__metadata_parser_read(pParser, cueIDBuffer, sizeof(cueIDBuffer), &totalBytesRead);
     MA_DR_WAV_ASSERT(pParser->stage == ma_dr_wav__metadata_parser_stage_read);
     if (bytesJustRead == sizeof(cueIDBuffer)) {
-        ma_uint32 sizeIncludingNullTerminator;
         pMetadata->type = type;
         pMetadata->data.labelOrNote.cuePointId = ma_dr_wav_bytes_to_u32(cueIDBuffer);
-        sizeIncludingNullTerminator = (ma_uint32)chunkSize - MA_DR_WAV_LIST_LABEL_OR_NOTE_BYTES;
-        if (sizeIncludingNullTerminator > 0) {
-            pMetadata->data.labelOrNote.stringLength = sizeIncludingNullTerminator - 1;
-            pMetadata->data.labelOrNote.pString      = (char*)ma_dr_wav__metadata_get_memory(pParser, sizeIncludingNullTerminator, 1);
-            MA_DR_WAV_ASSERT(pMetadata->data.labelOrNote.pString != NULL);
-            ma_dr_wav__metadata_parser_read(pParser, pMetadata->data.labelOrNote.pString, sizeIncludingNullTerminator, &totalBytesRead);
-        } else {
-            pMetadata->data.labelOrNote.stringLength = 0;
-            pMetadata->data.labelOrNote.pString      = NULL;
-        }
+        totalBytesRead += ma_dr_wav__metadata_read_string(pParser, ((ma_uint32)chunkSize - MA_DR_WAV_LIST_LABEL_OR_NOTE_BYTES), &pMetadata->data.labelOrNote.pString, &pMetadata->data.labelOrNote.stringLength);
     }
     return totalBytesRead;
 }
@@ -80841,10 +81205,13 @@ MA_PRIVATE ma_uint64 ma_dr_wav__read_list_labelled_cue_region_to_metadata_obj(ma
 {
     ma_uint8 buffer[MA_DR_WAV_LIST_LABELLED_TEXT_BYTES];
     ma_uint64 totalBytesRead = 0;
-    size_t bytesJustRead = ma_dr_wav__metadata_parser_read(pParser, buffer, sizeof(buffer), &totalBytesRead);
+    size_t bytesJustRead;
+    if (pMetadata == NULL) {
+        return 0;
+    }
+    bytesJustRead = ma_dr_wav__metadata_parser_read(pParser, buffer, sizeof(buffer), &totalBytesRead);
     MA_DR_WAV_ASSERT(pParser->stage == ma_dr_wav__metadata_parser_stage_read);
     if (bytesJustRead == sizeof(buffer)) {
-        ma_uint32 sizeIncludingNullTerminator;
         pMetadata->type                                = ma_dr_wav_metadata_type_list_labelled_cue_region;
         pMetadata->data.labelledCueRegion.cuePointId   = ma_dr_wav_bytes_to_u32(buffer + 0);
         pMetadata->data.labelledCueRegion.sampleLength = ma_dr_wav_bytes_to_u32(buffer + 4);
@@ -80856,41 +81223,25 @@ MA_PRIVATE ma_uint64 ma_dr_wav__read_list_labelled_cue_region_to_metadata_obj(ma
         pMetadata->data.labelledCueRegion.language     = ma_dr_wav_bytes_to_u16(buffer + 14);
         pMetadata->data.labelledCueRegion.dialect      = ma_dr_wav_bytes_to_u16(buffer + 16);
         pMetadata->data.labelledCueRegion.codePage     = ma_dr_wav_bytes_to_u16(buffer + 18);
-        sizeIncludingNullTerminator = (ma_uint32)chunkSize - MA_DR_WAV_LIST_LABELLED_TEXT_BYTES;
-        if (sizeIncludingNullTerminator > 0) {
-            pMetadata->data.labelledCueRegion.stringLength = sizeIncludingNullTerminator - 1;
-            pMetadata->data.labelledCueRegion.pString      = (char*)ma_dr_wav__metadata_get_memory(pParser, sizeIncludingNullTerminator, 1);
-            MA_DR_WAV_ASSERT(pMetadata->data.labelledCueRegion.pString != NULL);
-            ma_dr_wav__metadata_parser_read(pParser, pMetadata->data.labelledCueRegion.pString, sizeIncludingNullTerminator, &totalBytesRead);
-        } else {
-            pMetadata->data.labelledCueRegion.stringLength = 0;
-            pMetadata->data.labelledCueRegion.pString      = NULL;
-        }
+        totalBytesRead += ma_dr_wav__metadata_read_string(pParser, ((ma_uint32)chunkSize - MA_DR_WAV_LIST_LABELLED_TEXT_BYTES), &pMetadata->data.labelledCueRegion.pString, &pMetadata->data.labelledCueRegion.stringLength);
     }
     return totalBytesRead;
 }
 MA_PRIVATE ma_uint64 ma_dr_wav__metadata_process_info_text_chunk(ma_dr_wav__metadata_parser* pParser, ma_uint64 chunkSize, ma_dr_wav_metadata_type type)
 {
     ma_uint64 bytesRead = 0;
-    ma_uint32 stringSizeWithNullTerminator = (ma_uint32)chunkSize;
     if (pParser->stage == ma_dr_wav__metadata_parser_stage_count) {
         pParser->metadataCount += 1;
-        ma_dr_wav__metadata_request_extra_memory_for_stage_2(pParser, stringSizeWithNullTerminator, 1);
+        ma_dr_wav__metadata_request_extra_memory_for_stage_2(pParser, chunkSize + 1, 1);
     } else {
-        ma_dr_wav_metadata* pMetadata = &pParser->pMetadata[pParser->metadataCursor];
+        ma_dr_wav_metadata* pMetadata;
+        pMetadata = ma_dr_wav__metadata_get_next_object(pParser);
+        if (pMetadata == NULL) {
+            return 0;
+        }
         pMetadata->type = type;
-        if (stringSizeWithNullTerminator > 0) {
-            pMetadata->data.infoText.stringLength = stringSizeWithNullTerminator - 1;
-            pMetadata->data.infoText.pString = (char*)ma_dr_wav__metadata_get_memory(pParser, stringSizeWithNullTerminator, 1);
-            MA_DR_WAV_ASSERT(pMetadata->data.infoText.pString != NULL);
-            bytesRead = ma_dr_wav__metadata_parser_read(pParser, pMetadata->data.infoText.pString, (size_t)stringSizeWithNullTerminator, NULL);
-            if (bytesRead == chunkSize) {
-                pParser->metadataCursor += 1;
-            } else {
-            }
-        } else {
-            pMetadata->data.infoText.stringLength = 0;
-            pMetadata->data.infoText.pString      = NULL;
+        bytesRead = ma_dr_wav__metadata_read_string(pParser, (ma_uint32)chunkSize, &pMetadata->data.infoText.pString, &pMetadata->data.infoText.stringLength);
+        if (bytesRead == chunkSize) {
             pParser->metadataCursor += 1;
         }
     }
@@ -80909,7 +81260,11 @@ MA_PRIVATE ma_uint64 ma_dr_wav__metadata_process_unknown_chunk(ma_dr_wav__metada
         pParser->metadataCount += 1;
         ma_dr_wav__metadata_request_extra_memory_for_stage_2(pParser, (size_t)chunkSize, 1);
     } else {
-        ma_dr_wav_metadata* pMetadata = &pParser->pMetadata[pParser->metadataCursor];
+        ma_dr_wav_metadata* pMetadata;
+        pMetadata = ma_dr_wav__metadata_get_next_object(pParser);
+        if (pMetadata == NULL) {
+            return 0;
+        }
         pMetadata->type                         = ma_dr_wav_metadata_type_unknown;
         pMetadata->data.unknown.chunkLocation   = location;
         pMetadata->data.unknown.id[0]           = pChunkId[0];
@@ -80947,22 +81302,21 @@ MA_PRIVATE ma_uint64 ma_dr_wav__metadata_process_chunk(ma_dr_wav__metadata_parse
                 bytesJustRead = ma_dr_wav__metadata_parser_read(pParser, buffer, sizeof(buffer), &bytesRead);
                 if (bytesJustRead == sizeof(buffer)) {
                     ma_uint32 loopCount = ma_dr_wav_bytes_to_u32(buffer);
-                    ma_uint64 calculatedLoopCount;
-                    calculatedLoopCount = (pChunkHeader->sizeInBytes - MA_DR_WAV_SMPL_BYTES) / MA_DR_WAV_SMPL_LOOP_BYTES;
-                    if (calculatedLoopCount == loopCount) {
-                        bytesJustRead = ma_dr_wav__metadata_parser_read(pParser, buffer, sizeof(buffer), &bytesRead);
-                        if (bytesJustRead == sizeof(buffer)) {
-                            ma_uint32 samplerSpecificDataSizeInBytes = ma_dr_wav_bytes_to_u32(buffer);
+                    bytesJustRead = ma_dr_wav__metadata_parser_read(pParser, buffer, sizeof(buffer), &bytesRead);
+                    if (bytesJustRead == sizeof(buffer)) {
+                        ma_uint32 samplerSpecificDataSizeInBytes = ma_dr_wav_bytes_to_u32(buffer);
+                        if (ma_dr_wav__metadata_validate_smpl_chunk(pChunkHeader, loopCount, samplerSpecificDataSizeInBytes, NULL)) {
                             pParser->metadataCount += 1;
                             ma_dr_wav__metadata_request_extra_memory_for_stage_2(pParser, sizeof(ma_dr_wav_smpl_loop) * loopCount, MA_DR_WAV_METADATA_ALIGNMENT);
                             ma_dr_wav__metadata_request_extra_memory_for_stage_2(pParser, samplerSpecificDataSizeInBytes, 1);
+                        } else {
                         }
-                    } else {
                     }
                 }
             } else {
-                bytesRead = ma_dr_wav__read_smpl_to_metadata_obj(pParser, pChunkHeader, &pParser->pMetadata[pParser->metadataCursor]);
-                if (bytesRead == pChunkHeader->sizeInBytes) {
+                ma_result result;
+                bytesRead = ma_dr_wav__read_smpl_to_metadata_obj(pParser, pChunkHeader, ma_dr_wav__metadata_get_next_object(pParser), &result);
+                if (result == MA_SUCCESS && bytesRead == pChunkHeader->sizeInBytes) {
                     pParser->metadataCursor += 1;
                 } else {
                 }
@@ -80974,7 +81328,7 @@ MA_PRIVATE ma_uint64 ma_dr_wav__metadata_process_chunk(ma_dr_wav__metadata_parse
             if (pParser->stage == ma_dr_wav__metadata_parser_stage_count) {
                 pParser->metadataCount += 1;
             } else {
-                bytesRead = ma_dr_wav__read_inst_to_metadata_obj(pParser, &pParser->pMetadata[pParser->metadataCursor]);
+                bytesRead = ma_dr_wav__read_inst_to_metadata_obj(pParser, ma_dr_wav__metadata_get_next_object(pParser));
                 if (bytesRead == pChunkHeader->sizeInBytes) {
                     pParser->metadataCursor += 1;
                 } else {
@@ -80987,7 +81341,7 @@ MA_PRIVATE ma_uint64 ma_dr_wav__metadata_process_chunk(ma_dr_wav__metadata_parse
             if (pParser->stage == ma_dr_wav__metadata_parser_stage_count) {
                 pParser->metadataCount += 1;
             } else {
-                bytesRead = ma_dr_wav__read_acid_to_metadata_obj(pParser, &pParser->pMetadata[pParser->metadataCursor]);
+                bytesRead = ma_dr_wav__read_acid_to_metadata_obj(pParser, ma_dr_wav__metadata_get_next_object(pParser));
                 if (bytesRead == pChunkHeader->sizeInBytes) {
                     pParser->metadataCursor += 1;
                 } else {
@@ -81003,8 +81357,9 @@ MA_PRIVATE ma_uint64 ma_dr_wav__metadata_process_chunk(ma_dr_wav__metadata_parse
                 cueCount = (size_t)(pChunkHeader->sizeInBytes - MA_DR_WAV_CUE_BYTES) / MA_DR_WAV_CUE_POINT_BYTES;
                 ma_dr_wav__metadata_request_extra_memory_for_stage_2(pParser, sizeof(ma_dr_wav_cue_point) * cueCount, MA_DR_WAV_METADATA_ALIGNMENT);
             } else {
-                bytesRead = ma_dr_wav__read_cue_to_metadata_obj(pParser, pChunkHeader, &pParser->pMetadata[pParser->metadataCursor]);
-                if (bytesRead == pChunkHeader->sizeInBytes) {
+                ma_result result;
+                bytesRead = ma_dr_wav__read_cue_to_metadata_obj(pParser, pChunkHeader, ma_dr_wav__metadata_get_next_object(pParser), &result);
+                if (result == MA_SUCCESS && bytesRead == pChunkHeader->sizeInBytes) {
                     pParser->metadataCursor += 1;
                 } else {
                 }
@@ -81039,7 +81394,7 @@ MA_PRIVATE ma_uint64 ma_dr_wav__metadata_process_chunk(ma_dr_wav__metadata_parse
                 ma_dr_wav__metadata_request_extra_memory_for_stage_2(pParser, allocSizeNeeded, 1);
                 pParser->metadataCount += 1;
             } else {
-                bytesRead = ma_dr_wav__read_bext_to_metadata_obj(pParser, &pParser->pMetadata[pParser->metadataCursor], pChunkHeader->sizeInBytes);
+                bytesRead = ma_dr_wav__read_bext_to_metadata_obj(pParser, ma_dr_wav__metadata_get_next_object(pParser), pChunkHeader->sizeInBytes);
                 if (bytesRead == pChunkHeader->sizeInBytes) {
                     pParser->metadataCursor += 1;
                 } else {
@@ -81072,12 +81427,11 @@ MA_PRIVATE ma_uint64 ma_dr_wav__metadata_process_chunk(ma_dr_wav__metadata_parse
             subchunkDataSize = ma_dr_wav_bytes_to_u32(subchunkSizeBuffer);
             if (ma_dr_wav__chunk_matches(allowedMetadataTypes, subchunkId, ma_dr_wav_metadata_type_list_label, "labl") || ma_dr_wav__chunk_matches(allowedMetadataTypes, subchunkId, ma_dr_wav_metadata_type_list_note, "note")) {
                 if (subchunkDataSize >= MA_DR_WAV_LIST_LABEL_OR_NOTE_BYTES) {
-                    ma_uint64 stringSizeWithNullTerm = subchunkDataSize - MA_DR_WAV_LIST_LABEL_OR_NOTE_BYTES;
                     if (pParser->stage == ma_dr_wav__metadata_parser_stage_count) {
                         pParser->metadataCount += 1;
-                        ma_dr_wav__metadata_request_extra_memory_for_stage_2(pParser, (size_t)stringSizeWithNullTerm, 1);
+                        ma_dr_wav__metadata_request_extra_memory_for_stage_2(pParser, (subchunkDataSize - MA_DR_WAV_LIST_LABEL_OR_NOTE_BYTES) + 1, 1);
                     } else {
-                        subchunkBytesRead = ma_dr_wav__read_list_label_or_note_to_metadata_obj(pParser, &pParser->pMetadata[pParser->metadataCursor], subchunkDataSize, ma_dr_wav_fourcc_equal(subchunkId, "labl") ? ma_dr_wav_metadata_type_list_label : ma_dr_wav_metadata_type_list_note);
+                        subchunkBytesRead = ma_dr_wav__read_list_label_or_note_to_metadata_obj(pParser, ma_dr_wav__metadata_get_next_object(pParser), subchunkDataSize, ma_dr_wav_fourcc_equal(subchunkId, "labl") ? ma_dr_wav_metadata_type_list_label : ma_dr_wav_metadata_type_list_note);
                         if (subchunkBytesRead == subchunkDataSize) {
                             pParser->metadataCursor += 1;
                         } else {
@@ -81087,12 +81441,11 @@ MA_PRIVATE ma_uint64 ma_dr_wav__metadata_process_chunk(ma_dr_wav__metadata_parse
                 }
             } else if (ma_dr_wav__chunk_matches(allowedMetadataTypes, subchunkId, ma_dr_wav_metadata_type_list_labelled_cue_region, "ltxt")) {
                 if (subchunkDataSize >= MA_DR_WAV_LIST_LABELLED_TEXT_BYTES) {
-                    ma_uint64 stringSizeWithNullTerminator = subchunkDataSize - MA_DR_WAV_LIST_LABELLED_TEXT_BYTES;
                     if (pParser->stage == ma_dr_wav__metadata_parser_stage_count) {
                         pParser->metadataCount += 1;
-                        ma_dr_wav__metadata_request_extra_memory_for_stage_2(pParser, (size_t)stringSizeWithNullTerminator, 1);
+                        ma_dr_wav__metadata_request_extra_memory_for_stage_2(pParser, (subchunkDataSize - MA_DR_WAV_LIST_LABELLED_TEXT_BYTES) + 1, 1);
                     } else {
-                        subchunkBytesRead = ma_dr_wav__read_list_labelled_cue_region_to_metadata_obj(pParser, &pParser->pMetadata[pParser->metadataCursor], subchunkDataSize);
+                        subchunkBytesRead = ma_dr_wav__read_list_labelled_cue_region_to_metadata_obj(pParser, ma_dr_wav__metadata_get_next_object(pParser), subchunkDataSize);
                         if (subchunkBytesRead == subchunkDataSize) {
                             pParser->metadataCursor += 1;
                         } else {
@@ -81211,8 +81564,19 @@ MA_PRIVATE ma_bool32 ma_dr_wav_init__internal(ma_dr_wav* pWav, ma_dr_wav_chunk_p
     ma_bool8 foundChunk_data = MA_FALSE;
     ma_bool8 isAIFCFormType = MA_FALSE;
     ma_uint64 aiffFrameCount = 0;
+    ma_int64 fileSize = 0;
+    ma_bool32 hasKnownFileSize = MA_FALSE;
     cursor = 0;
     sequential = (flags & MA_DR_WAV_SEQUENTIAL) != 0;
+    isProcessingMetadata = !sequential && ((flags & MA_DR_WAV_WITH_METADATA) != 0);
+    if (isProcessingMetadata && pWav->onTell != NULL && pWav->onSeek != NULL) {
+        if (pWav->onSeek(pWav->pUserData, 0, MA_DR_WAV_SEEK_END)) {
+            if (pWav->onTell(pWav->pUserData, &fileSize)) {
+                hasKnownFileSize = MA_TRUE;
+            }
+            pWav->onSeek(pWav->pUserData, 0, MA_DR_WAV_SEEK_SET);
+        }
+    }
     MA_DR_WAV_ZERO_OBJECT(&fmt);
     if (ma_dr_wav__on_read(pWav->onRead, pWav->pUserData, riff, sizeof(riff), &cursor) != sizeof(riff)) {
         return MA_FALSE;
@@ -81332,7 +81696,6 @@ MA_PRIVATE ma_bool32 ma_dr_wav_init__internal(ma_dr_wav* pWav, ma_dr_wav_chunk_p
         cursor += bytesRemainingInChunk;
     }
     metadataStartPos = cursor;
-    isProcessingMetadata = !sequential && ((flags & MA_DR_WAV_WITH_METADATA) != 0);
     if (pWav->container != ma_dr_wav_container_riff && pWav->container != ma_dr_wav_container_rf64) {
         isProcessingMetadata = MA_FALSE;
     }
@@ -81362,6 +81725,9 @@ MA_PRIVATE ma_bool32 ma_dr_wav_init__internal(ma_dr_wav* pWav, ma_dr_wav_chunk_p
         if (((pWav->container == ma_dr_wav_container_riff || pWav->container == ma_dr_wav_container_rifx || pWav->container == ma_dr_wav_container_rf64) && ma_dr_wav_fourcc_equal(header.id.fourcc, "fmt ")) ||
             ((pWav->container == ma_dr_wav_container_w64) && ma_dr_wav_guid_equal(header.id.guid, ma_dr_wavGUID_W64_FMT))) {
             ma_uint8 fmtData[16];
+            if (header.sizeInBytes < sizeof(fmtData)) {
+                return MA_FALSE;
+            }
             foundChunk_fmt = MA_TRUE;
             if (pWav->onRead(pWav->pUserData, fmtData, sizeof(fmtData)) != sizeof(fmtData)) {
                 return MA_FALSE;
@@ -81380,6 +81746,7 @@ MA_PRIVATE ma_bool32 ma_dr_wav_init__internal(ma_dr_wav* pWav, ma_dr_wav_chunk_p
             if (header.sizeInBytes > 16) {
                 ma_uint8 fmt_cbSize[2];
                 int bytesReadSoFar = 0;
+                ma_uint64 leftoverBytes;
                 if (pWav->onRead(pWav->pUserData, fmt_cbSize, sizeof(fmt_cbSize)) != sizeof(fmt_cbSize)) {
                     return MA_FALSE;
                 }
@@ -81408,10 +81775,14 @@ MA_PRIVATE ma_bool32 ma_dr_wav_init__internal(ma_dr_wav* pWav, ma_dr_wav_chunk_p
                     cursor += fmt.extendedSize;
                     bytesReadSoFar += fmt.extendedSize;
                 }
-                if (pWav->onSeek(pWav->pUserData, (int)(header.sizeInBytes - bytesReadSoFar), MA_DR_WAV_SEEK_CUR) == MA_FALSE) {
+                leftoverBytes = header.sizeInBytes - bytesReadSoFar;
+                if (leftoverBytes > 0x7FFFFFFF) {
                     return MA_FALSE;
                 }
-                cursor += (header.sizeInBytes - bytesReadSoFar);
+                if (pWav->onSeek(pWav->pUserData, (int)leftoverBytes, MA_DR_WAV_SEEK_CUR) == MA_FALSE) {
+                    return MA_FALSE;
+                }
+                cursor += leftoverBytes;
             }
             if (header.paddingSize > 0) {
                 if (ma_dr_wav__seek_forward(pWav->onSeek, header.paddingSize, pWav->pUserData) == MA_FALSE) {
@@ -81443,16 +81814,18 @@ MA_PRIVATE ma_bool32 ma_dr_wav_init__internal(ma_dr_wav* pWav, ma_dr_wav_chunk_p
             ((pWav->container == ma_dr_wav_container_w64) && ma_dr_wav_guid_equal(header.id.guid, ma_dr_wavGUID_W64_FACT))) {
             if (pWav->container == ma_dr_wav_container_riff || pWav->container == ma_dr_wav_container_rifx) {
                 ma_uint8 sampleCount[4];
+                if (chunkSize < 4) {
+                    return MA_FALSE;
+                }
                 if (ma_dr_wav__on_read(pWav->onRead, pWav->pUserData, &sampleCount, 4, &cursor) != 4) {
                     return MA_FALSE;
                 }
                 chunkSize -= 4;
-                if (pWav->translatedFormatTag == MA_DR_WAVE_FORMAT_ADPCM) {
-                    sampleCountFromFactChunk = ma_dr_wav_bytes_to_u32_ex(sampleCount, pWav->container);
-                } else {
-                    sampleCountFromFactChunk = 0;
-                }
+                sampleCountFromFactChunk = ma_dr_wav_bytes_to_u32_ex(sampleCount, pWav->container);
             } else if (pWav->container == ma_dr_wav_container_w64) {
+                if (chunkSize < 8) {
+                    return MA_FALSE;
+                }
                 if (ma_dr_wav__on_read(pWav->onRead, pWav->pUserData, &sampleCountFromFactChunk, 8, &cursor) != 8) {
                     return MA_FALSE;
                 }
@@ -81492,7 +81865,7 @@ MA_PRIVATE ma_bool32 ma_dr_wav_init__internal(ma_dr_wav* pWav, ma_dr_wav_chunk_p
             channels         = ma_dr_wav_bytes_to_u16_ex     (commData + 0, pWav->container);
             frameCount       = ma_dr_wav_bytes_to_u32_ex     (commData + 2, pWav->container);
             sampleSizeInBits = ma_dr_wav_bytes_to_u16_ex     (commData + 6, pWav->container);
-            sampleRate       = ma_dr_wav_aiff_extented_to_s64(commData + 8);
+            sampleRate       = ma_dr_wav_aiff_extended_to_s64(commData + 8);
             if (sampleRate < 0 || sampleRate > 0xFFFFFFFF) {
                 return MA_FALSE;
             }
@@ -81530,19 +81903,15 @@ MA_PRIVATE ma_bool32 ma_dr_wav_init__internal(ma_dr_wav* pWav, ma_dr_wav_chunk_p
             fmt.formatTag      = compressionFormat;
             fmt.channels       = channels;
             fmt.sampleRate     = (ma_uint32)sampleRate;
-            fmt.bitsPerSample  = sampleSizeInBits;
-            fmt.blockAlign     = (ma_uint16)(fmt.channels * fmt.bitsPerSample / 8);
+            fmt.bitsPerSample  = (sampleSizeInBits + 7) & ~7;
+            fmt.blockAlign     = (ma_uint16)((ma_uint32)fmt.channels * fmt.bitsPerSample / 8);
             fmt.avgBytesPerSec = fmt.blockAlign * fmt.sampleRate;
-            if (fmt.blockAlign == 0 && compressionFormat == MA_DR_WAVE_FORMAT_DVI_ADPCM) {
-                fmt.blockAlign = 34 * fmt.channels;
-            }
             if (compressionFormat == MA_DR_WAVE_FORMAT_ALAW || compressionFormat == MA_DR_WAVE_FORMAT_MULAW) {
                 if (fmt.bitsPerSample > 8) {
                     fmt.bitsPerSample = 8;
                     fmt.blockAlign = fmt.channels;
                 }
             }
-            fmt.bitsPerSample += (fmt.bitsPerSample & 7);
             if (isAIFCFormType) {
                 if (ma_dr_wav__seek_forward(pWav->onSeek, (chunkSize - commDataBytesToRead), pWav->pUserData) == MA_FALSE) {
                     return MA_FALSE;
@@ -81587,6 +81956,9 @@ MA_PRIVATE ma_bool32 ma_dr_wav_init__internal(ma_dr_wav* pWav, ma_dr_wav_chunk_p
             }
         }
         if (isProcessingMetadata) {
+            if (hasKnownFileSize && header.sizeInBytes > (ma_uint64)fileSize) {
+                return MA_FALSE;
+            }
             ma_dr_wav__metadata_process_chunk(&metadataParser, &header, ma_dr_wav_metadata_type_all_including_unknown);
             if (ma_dr_wav__seek_from_start(pWav->onSeek, cursor, pWav->pUserData) == MA_FALSE) {
                 break;
@@ -81611,6 +81983,9 @@ MA_PRIVATE ma_bool32 ma_dr_wav_init__internal(ma_dr_wav* pWav, ma_dr_wav_chunk_p
     if (translatedFormatTag == MA_DR_WAVE_FORMAT_EXTENSIBLE) {
         translatedFormatTag = ma_dr_wav_bytes_to_u16_ex(fmt.subFormat + 0, pWav->container);
     }
+    if ((pWav->container == ma_dr_wav_container_riff || pWav->container == ma_dr_wav_container_rifx) && translatedFormatTag != MA_DR_WAVE_FORMAT_ADPCM) {
+        sampleCountFromFactChunk = 0;
+    }
     if (!sequential) {
         if (!ma_dr_wav__seek_from_start(pWav->onSeek, pWav->dataChunkDataPos, pWav->pUserData)) {
             return MA_FALSE;
@@ -81634,13 +82009,16 @@ MA_PRIVATE ma_bool32 ma_dr_wav_init__internal(ma_dr_wav* pWav, ma_dr_wav_chunk_p
                 break;
             }
             metadataBytesRead = ma_dr_wav__metadata_process_chunk(&metadataParser, &header, ma_dr_wav_metadata_type_all_including_unknown);
+            if (metadataParser.metadataCursor == metadataParser.metadataCount) {
+                break;
+            }
             if (ma_dr_wav__seek_forward(pWav->onSeek, (header.sizeInBytes + header.paddingSize) - metadataBytesRead, pWav->pUserData) == MA_FALSE) {
                 ma_dr_wav_free(metadataParser.pMetadata, &pWav->allocationCallbacks);
                 return MA_FALSE;
             }
         }
         pWav->pMetadata     = metadataParser.pMetadata;
-        pWav->metadataCount = metadataParser.metadataCount;
+        pWav->metadataCount = (ma_uint32)metadataParser.metadataCursor;
     }
     if (pWav->onTell != NULL && pWav->onSeek != NULL) {
         if (pWav->onSeek(pWav->pUserData, 0, MA_DR_WAV_SEEK_END) == MA_TRUE) {
@@ -81699,6 +82077,10 @@ MA_PRIVATE ma_bool32 ma_dr_wav_init__internal(ma_dr_wav* pWav, ma_dr_wav_chunk_p
                 blockCount += 1;
             }
             totalBlockHeaderSizeInBytes = blockCount * (6*fmt.channels);
+            if (totalBlockHeaderSizeInBytes >= dataChunkSize) {
+                ma_dr_wav_free(pWav->pMetadata, &pWav->allocationCallbacks);
+                return MA_FALSE;
+            }
             pWav->totalPCMFrameCount = ((dataChunkSize - totalBlockHeaderSizeInBytes) * 2) / fmt.channels;
         }
         if (pWav->translatedFormatTag == MA_DR_WAVE_FORMAT_DVI_ADPCM) {
@@ -81708,6 +82090,10 @@ MA_PRIVATE ma_bool32 ma_dr_wav_init__internal(ma_dr_wav* pWav, ma_dr_wav_chunk_p
                 blockCount += 1;
             }
             totalBlockHeaderSizeInBytes = blockCount * (4*fmt.channels);
+            if (totalBlockHeaderSizeInBytes >= dataChunkSize) {
+                ma_dr_wav_free(pWav->pMetadata, &pWav->allocationCallbacks);
+                return MA_FALSE;
+            }
             pWav->totalPCMFrameCount = ((dataChunkSize - totalBlockHeaderSizeInBytes) * 2) / fmt.channels;
             pWav->totalPCMFrameCount += blockCount;
         }
@@ -81722,16 +82108,6 @@ MA_PRIVATE ma_bool32 ma_dr_wav_init__internal(ma_dr_wav* pWav, ma_dr_wav_chunk_p
         ma_dr_wav_free(pWav->pMetadata, &pWav->allocationCallbacks);
         return MA_FALSE;
     }
-#ifdef MA_DR_WAV_LIBSNDFILE_COMPAT
-    if (pWav->translatedFormatTag == MA_DR_WAVE_FORMAT_ADPCM) {
-        ma_uint64 blockCount = dataChunkSize / fmt.blockAlign;
-        pWav->totalPCMFrameCount = (((blockCount * (fmt.blockAlign - (6*pWav->channels))) * 2)) / fmt.channels;
-    }
-    if (pWav->translatedFormatTag == MA_DR_WAVE_FORMAT_DVI_ADPCM) {
-        ma_uint64 blockCount = dataChunkSize / fmt.blockAlign;
-        pWav->totalPCMFrameCount = (((blockCount * (fmt.blockAlign - (4*pWav->channels))) * 2) + (blockCount * pWav->channels)) / fmt.channels;
-    }
-#endif
     return MA_TRUE;
 }
 MA_API ma_bool32 ma_dr_wav_init(ma_dr_wav* pWav, ma_dr_wav_read_proc onRead, ma_dr_wav_seek_proc onSeek, ma_dr_wav_tell_proc onTell, void* pUserData, const ma_allocation_callbacks* pAllocationCallbacks)
@@ -82696,6 +83072,49 @@ MA_API ma_bool32 ma_dr_wav_init_memory_write_sequential_pcm_frames(ma_dr_wav* pW
     }
     return ma_dr_wav_init_memory_write_sequential(pWav, ppData, pDataSize, pFormat, totalPCMFrameCount*pFormat->channels, pAllocationCallbacks);
 }
+MA_PRIVATE ma_uint32 ma_dr_wav_write_padding(ma_dr_wav* pWav)
+{
+    ma_uint32 paddingSize = ma_dr_wav_calculate_padding_size(pWav->container, pWav->dataChunkDataSize);
+    if (paddingSize > 0) {
+        ma_uint64 paddingData = 0;
+        ma_dr_wav__write(pWav, &paddingData, paddingSize);
+    }
+    return paddingSize;
+}
+MA_PRIVATE void ma_dr_wav_write_chunk_sizes(ma_dr_wav* pWav)
+{
+    if (pWav->onSeek != NULL && !pWav->isSequentialWrite) {
+        if (pWav->container == ma_dr_wav_container_riff) {
+            if (pWav->onSeek(pWav->pUserData, 4, MA_DR_WAV_SEEK_SET)) {
+                ma_uint32 riffChunkSize = ma_dr_wav__riff_chunk_size_riff(pWav->dataChunkDataSize, pWav->pMetadata, pWav->metadataCount);
+                ma_dr_wav__write_u32ne_to_le(pWav, riffChunkSize);
+            }
+            if (pWav->onSeek(pWav->pUserData, (int)pWav->dataChunkDataPos - 4, MA_DR_WAV_SEEK_SET)) {
+                ma_uint32 dataChunkSize = ma_dr_wav__data_chunk_size_riff(pWav->dataChunkDataSize);
+                ma_dr_wav__write_u32ne_to_le(pWav, dataChunkSize);
+            }
+        } else if (pWav->container == ma_dr_wav_container_w64) {
+            if (pWav->onSeek(pWav->pUserData, 16, MA_DR_WAV_SEEK_SET)) {
+                ma_uint64 riffChunkSize = ma_dr_wav__riff_chunk_size_w64(pWav->dataChunkDataSize);
+                ma_dr_wav__write_u64ne_to_le(pWav, riffChunkSize);
+            }
+            if (pWav->onSeek(pWav->pUserData, (int)pWav->dataChunkDataPos - 8, MA_DR_WAV_SEEK_SET)) {
+                ma_uint64 dataChunkSize = ma_dr_wav__data_chunk_size_w64(pWav->dataChunkDataSize);
+                ma_dr_wav__write_u64ne_to_le(pWav, dataChunkSize);
+            }
+        } else if (pWav->container == ma_dr_wav_container_rf64) {
+            int ds64BodyPos = 12 + 8;
+            if (pWav->onSeek(pWav->pUserData, ds64BodyPos + 0, MA_DR_WAV_SEEK_SET)) {
+                ma_uint64 riffChunkSize = ma_dr_wav__riff_chunk_size_rf64(pWav->dataChunkDataSize, pWav->pMetadata, pWav->metadataCount);
+                ma_dr_wav__write_u64ne_to_le(pWav, riffChunkSize);
+            }
+            if (pWav->onSeek(pWav->pUserData, ds64BodyPos + 8, MA_DR_WAV_SEEK_SET)) {
+                ma_uint64 dataChunkSize = ma_dr_wav__data_chunk_size_rf64(pWav->dataChunkDataSize);
+                ma_dr_wav__write_u64ne_to_le(pWav, dataChunkSize);
+            }
+        }
+    }
+}
 MA_API ma_result ma_dr_wav_uninit(ma_dr_wav* pWav)
 {
     ma_result result = MA_SUCCESS;
@@ -82703,48 +83122,8 @@ MA_API ma_result ma_dr_wav_uninit(ma_dr_wav* pWav)
         return MA_INVALID_ARGS;
     }
     if (pWav->onWrite != NULL) {
-        ma_uint32 paddingSize = 0;
-        if (pWav->container == ma_dr_wav_container_riff || pWav->container == ma_dr_wav_container_rf64) {
-            paddingSize = ma_dr_wav__chunk_padding_size_riff(pWav->dataChunkDataSize);
-        } else {
-            paddingSize = ma_dr_wav__chunk_padding_size_w64(pWav->dataChunkDataSize);
-        }
-        if (paddingSize > 0) {
-            ma_uint64 paddingData = 0;
-            ma_dr_wav__write(pWav, &paddingData, paddingSize);
-        }
-        if (pWav->onSeek && !pWav->isSequentialWrite) {
-            if (pWav->container == ma_dr_wav_container_riff) {
-                if (pWav->onSeek(pWav->pUserData, 4, MA_DR_WAV_SEEK_SET)) {
-                    ma_uint32 riffChunkSize = ma_dr_wav__riff_chunk_size_riff(pWav->dataChunkDataSize, pWav->pMetadata, pWav->metadataCount);
-                    ma_dr_wav__write_u32ne_to_le(pWav, riffChunkSize);
-                }
-                if (pWav->onSeek(pWav->pUserData, (int)pWav->dataChunkDataPos - 4, MA_DR_WAV_SEEK_SET)) {
-                    ma_uint32 dataChunkSize = ma_dr_wav__data_chunk_size_riff(pWav->dataChunkDataSize);
-                    ma_dr_wav__write_u32ne_to_le(pWav, dataChunkSize);
-                }
-            } else if (pWav->container == ma_dr_wav_container_w64) {
-                if (pWav->onSeek(pWav->pUserData, 16, MA_DR_WAV_SEEK_SET)) {
-                    ma_uint64 riffChunkSize = ma_dr_wav__riff_chunk_size_w64(pWav->dataChunkDataSize);
-                    ma_dr_wav__write_u64ne_to_le(pWav, riffChunkSize);
-                }
-                if (pWav->onSeek(pWav->pUserData, (int)pWav->dataChunkDataPos - 8, MA_DR_WAV_SEEK_SET)) {
-                    ma_uint64 dataChunkSize = ma_dr_wav__data_chunk_size_w64(pWav->dataChunkDataSize);
-                    ma_dr_wav__write_u64ne_to_le(pWav, dataChunkSize);
-                }
-            } else if (pWav->container == ma_dr_wav_container_rf64) {
-                int ds64BodyPos = 12 + 8;
-                if (pWav->onSeek(pWav->pUserData, ds64BodyPos + 0, MA_DR_WAV_SEEK_SET)) {
-                    ma_uint64 riffChunkSize = ma_dr_wav__riff_chunk_size_rf64(pWav->dataChunkDataSize, pWav->pMetadata, pWav->metadataCount);
-                    ma_dr_wav__write_u64ne_to_le(pWav, riffChunkSize);
-                }
-                if (pWav->onSeek(pWav->pUserData, ds64BodyPos + 8, MA_DR_WAV_SEEK_SET)) {
-                    ma_uint64 dataChunkSize = ma_dr_wav__data_chunk_size_rf64(pWav->dataChunkDataSize);
-                    ma_dr_wav__write_u64ne_to_le(pWav, dataChunkSize);
-                }
-            }
-        }
         if (pWav->isSequentialWrite) {
+            ma_dr_wav_write_padding(pWav);
             if (pWav->dataChunkDataSize != pWav->dataChunkDataSizeTargetWrite) {
                 result = MA_INVALID_FILE;
             }
@@ -82804,8 +83183,8 @@ MA_API size_t ma_dr_wav_read_raw(ma_dr_wav* pWav, size_t bytesToRead, void* pBuf
             }
         }
     }
-    pWav->readCursorInPCMFrames += bytesRead / bytesPerFrame;
     pWav->bytesRemaining -= bytesRead;
+    pWav->readCursorInPCMFrames = (pWav->dataChunkDataSize - pWav->bytesRemaining) / bytesPerFrame;
     return bytesRead;
 }
 MA_API ma_uint64 ma_dr_wav_read_pcm_frames_le(ma_dr_wav* pWav, ma_uint64 framesToRead, void* pBufferOut)
@@ -82868,7 +83247,7 @@ MA_API ma_uint64 ma_dr_wav_read_pcm_frames(ma_dr_wav* pWav, ma_uint64 framesToRe
     }
     post_process:
     {
-        if (pWav->container == ma_dr_wav_container_aiff && pWav->bitsPerSample == 8 && pWav->aiff.isUnsigned == MA_FALSE) {
+        if (pWav->container == ma_dr_wav_container_aiff && pWav->translatedFormatTag == MA_DR_WAVE_FORMAT_PCM && pWav->bitsPerSample == 8 && pWav->aiff.isUnsigned == MA_FALSE) {
             if (pBufferOut != NULL) {
                 ma_uint64 iSample;
                 for (iSample = 0; iSample < framesRead * pWav->channels; iSample += 1) {
@@ -82943,7 +83322,6 @@ MA_API ma_bool32 ma_dr_wav_seek_to_pcm_frame(ma_dr_wav* pWav, ma_uint64 targetFr
             }
         }
     } else {
-        ma_uint64 totalSizeInBytes;
         ma_uint64 currentBytePos;
         ma_uint64 targetBytePos;
         ma_uint64 offset;
@@ -82952,9 +83330,9 @@ MA_API ma_bool32 ma_dr_wav_seek_to_pcm_frame(ma_dr_wav* pWav, ma_uint64 targetFr
         if (bytesPerFrame == 0) {
             return MA_FALSE;
         }
-        totalSizeInBytes = pWav->totalPCMFrameCount * bytesPerFrame;
-        currentBytePos = totalSizeInBytes - pWav->bytesRemaining;
+        currentBytePos = pWav->dataChunkDataSize - pWav->bytesRemaining;
         targetBytePos  = targetFrameIndex * bytesPerFrame;
+        pWav->readCursorInPCMFrames = currentBytePos / bytesPerFrame;
         if (currentBytePos < targetBytePos) {
             offset = (targetBytePos - currentBytePos);
         } else {
@@ -82968,8 +83346,8 @@ MA_API ma_bool32 ma_dr_wav_seek_to_pcm_frame(ma_dr_wav* pWav, ma_uint64 targetFr
             if (!pWav->onSeek(pWav->pUserData, offset32, MA_DR_WAV_SEEK_CUR)) {
                 return MA_FALSE;
             }
-            pWav->readCursorInPCMFrames += offset32 / bytesPerFrame;
             pWav->bytesRemaining        -= offset32;
+            pWav->readCursorInPCMFrames  = (pWav->dataChunkDataSize - pWav->bytesRemaining) / bytesPerFrame;
             offset                      -= offset32;
         }
     }
@@ -83007,6 +83385,14 @@ MA_API size_t ma_dr_wav_write_raw(ma_dr_wav* pWav, size_t bytesToWrite, const vo
     }
     bytesWritten = pWav->onWrite(pWav->pUserData, pData, bytesToWrite);
     pWav->dataChunkDataSize += bytesWritten;
+    if (!pWav->isSequentialWrite) {
+        ma_uint32 padding;
+        padding = ma_dr_wav_write_padding(pWav);
+        ma_dr_wav_write_chunk_sizes(pWav);
+        if (pWav->onSeek != NULL) {
+            pWav->onSeek(pWav->pUserData, -(int)padding, MA_DR_WAV_SEEK_END);
+        }
+    }
     return bytesWritten;
 }
 MA_API ma_uint64 ma_dr_wav_write_pcm_frames_le(ma_dr_wav* pWav, ma_uint64 framesToWrite, const void* pData)
@@ -83086,6 +83472,16 @@ MA_API ma_uint64 ma_dr_wav_write_pcm_frames(ma_dr_wav* pWav, ma_uint64 framesToW
         return ma_dr_wav_write_pcm_frames_le(pWav, framesToWrite, pData);
     } else {
         return ma_dr_wav_write_pcm_frames_be(pWav, framesToWrite, pData);
+    }
+}
+MA_PRIVATE MA_INLINE ma_int32 ma_dr_wav__msadpcm_calc_sample(ma_int32 prevSample0, ma_int32 prevSample1, ma_int32 coeff1, ma_int32 coeff2, ma_int32 nibble, ma_int32 delta)
+{
+    ma_int32 prediction;
+    prediction = ((prevSample1 * coeff1) + (prevSample0 * coeff2)) >> 8;
+    if (delta > (0x7FFFFFFF - 98304) / 8) {
+        return (ma_int32)ma_dr_wav_clamp(prediction + ((ma_int64)nibble * delta), -32768, 32767);
+    } else {
+        return ma_dr_wav_clamp(prediction + (nibble * delta), -32768, 32767);
     }
 }
 MA_PRIVATE ma_uint64 ma_dr_wav_read_pcm_frames_s16__msadpcm(ma_dr_wav* pWav, ma_uint64 framesToRead, ma_int16* pBufferOut)
@@ -83178,15 +83574,11 @@ MA_PRIVATE ma_uint64 ma_dr_wav_read_pcm_frames_s16__msadpcm(ma_dr_wav* pWav, ma_
                     if (pWav->msadpcm.predictor[0] >= ma_dr_wav_countof(coeff1Table) || pWav->msadpcm.predictor[0] >= ma_dr_wav_countof(coeff2Table)) {
                         return totalFramesRead;
                     }
-                    newSample0  = ((pWav->msadpcm.prevFrames[0][1] * coeff1Table[pWav->msadpcm.predictor[0]]) + (pWav->msadpcm.prevFrames[0][0] * coeff2Table[pWav->msadpcm.predictor[0]])) >> 8;
-                    newSample0 += nibble0 * pWav->msadpcm.delta[0];
-                    newSample0  = ma_dr_wav_clamp(newSample0, -32768, 32767);
+                    newSample0 = ma_dr_wav__msadpcm_calc_sample(pWav->msadpcm.prevFrames[0][0], pWav->msadpcm.prevFrames[0][1], coeff1Table[pWav->msadpcm.predictor[0]], coeff2Table[pWav->msadpcm.predictor[0]], nibble0, pWav->msadpcm.delta[0]);
                     pWav->msadpcm.delta[0] = (ma_int32)ma_dr_wav_clamp(((ma_int64)adaptationTable[((nibbles & 0xF0) >> 4)] * pWav->msadpcm.delta[0]) >> 8, 16, 0x7FFFFFFF);
                     pWav->msadpcm.prevFrames[0][0] = pWav->msadpcm.prevFrames[0][1];
                     pWav->msadpcm.prevFrames[0][1] = newSample0;
-                    newSample1  = ((pWav->msadpcm.prevFrames[0][1] * coeff1Table[pWav->msadpcm.predictor[0]]) + (pWav->msadpcm.prevFrames[0][0] * coeff2Table[pWav->msadpcm.predictor[0]])) >> 8;
-                    newSample1 += nibble1 * pWav->msadpcm.delta[0];
-                    newSample1  = ma_dr_wav_clamp(newSample1, -32768, 32767);
+                    newSample1 = ma_dr_wav__msadpcm_calc_sample(pWav->msadpcm.prevFrames[0][0], pWav->msadpcm.prevFrames[0][1], coeff1Table[pWav->msadpcm.predictor[0]], coeff2Table[pWav->msadpcm.predictor[0]], nibble1, pWav->msadpcm.delta[0]);
                     pWav->msadpcm.delta[0] = (ma_int32)ma_dr_wav_clamp(((ma_int64)adaptationTable[((nibbles & 0x0F) >> 0)] * pWav->msadpcm.delta[0]) >> 8, 16, 0x7FFFFFFF);
                     pWav->msadpcm.prevFrames[0][0] = pWav->msadpcm.prevFrames[0][1];
                     pWav->msadpcm.prevFrames[0][1] = newSample1;
@@ -83199,18 +83591,14 @@ MA_PRIVATE ma_uint64 ma_dr_wav_read_pcm_frames_s16__msadpcm(ma_dr_wav* pWav, ma_
                     if (pWav->msadpcm.predictor[0] >= ma_dr_wav_countof(coeff1Table) || pWav->msadpcm.predictor[0] >= ma_dr_wav_countof(coeff2Table)) {
                         return totalFramesRead;
                     }
-                    newSample0  = ((pWav->msadpcm.prevFrames[0][1] * coeff1Table[pWav->msadpcm.predictor[0]]) + (pWav->msadpcm.prevFrames[0][0] * coeff2Table[pWav->msadpcm.predictor[0]])) >> 8;
-                    newSample0 += nibble0 * pWav->msadpcm.delta[0];
-                    newSample0  = ma_dr_wav_clamp(newSample0, -32768, 32767);
+                    newSample0 = ma_dr_wav__msadpcm_calc_sample(pWav->msadpcm.prevFrames[0][0], pWav->msadpcm.prevFrames[0][1], coeff1Table[pWav->msadpcm.predictor[0]], coeff2Table[pWav->msadpcm.predictor[0]], nibble0, pWav->msadpcm.delta[0]);
                     pWav->msadpcm.delta[0] = (ma_int32)ma_dr_wav_clamp(((ma_int64)adaptationTable[((nibbles & 0xF0) >> 4)] * pWav->msadpcm.delta[0]) >> 8, 16, 0x7FFFFFFF);
                     pWav->msadpcm.prevFrames[0][0] = pWav->msadpcm.prevFrames[0][1];
                     pWav->msadpcm.prevFrames[0][1] = newSample0;
                     if (pWav->msadpcm.predictor[1] >= ma_dr_wav_countof(coeff1Table) || pWav->msadpcm.predictor[1] >= ma_dr_wav_countof(coeff2Table)) {
                         return totalFramesRead;
                     }
-                    newSample1  = ((pWav->msadpcm.prevFrames[1][1] * coeff1Table[pWav->msadpcm.predictor[1]]) + (pWav->msadpcm.prevFrames[1][0] * coeff2Table[pWav->msadpcm.predictor[1]])) >> 8;
-                    newSample1 += nibble1 * pWav->msadpcm.delta[1];
-                    newSample1  = ma_dr_wav_clamp(newSample1, -32768, 32767);
+                    newSample1 = ma_dr_wav__msadpcm_calc_sample(pWav->msadpcm.prevFrames[1][0], pWav->msadpcm.prevFrames[1][1], coeff1Table[pWav->msadpcm.predictor[1]], coeff2Table[pWav->msadpcm.predictor[1]], nibble1, pWav->msadpcm.delta[1]);
                     pWav->msadpcm.delta[1] = (ma_int32)ma_dr_wav_clamp(((ma_int64)adaptationTable[((nibbles & 0x0F) >> 0)] * pWav->msadpcm.delta[1]) >> 8, 16, 0x7FFFFFFF);
                     pWav->msadpcm.prevFrames[1][0] = pWav->msadpcm.prevFrames[1][1];
                     pWav->msadpcm.prevFrames[1][1] = newSample1;
@@ -83422,6 +83810,9 @@ MA_PRIVATE void ma_dr_wav__pcm_to_s16(ma_int16* pOut, const ma_uint8* pIn, size_
             sample |= (ma_uint64)(pIn[j]) << shift;
             shift  += 8;
         }
+        if (!ma_dr_wav__is_little_endian()) {
+            sample = ma_dr_wav__bswap64(sample);
+        }
         pIn += j;
         *pOut++ = (ma_int16)((ma_int64)sample >> 48);
     }
@@ -83547,16 +83938,6 @@ MA_PRIVATE ma_uint64 ma_dr_wav_read_pcm_frames_s16__alaw(ma_dr_wav* pWav, ma_uin
             break;
         }
         ma_dr_wav_alaw_to_s16(pBufferOut, sampleData, (size_t)samplesRead);
-        #ifdef MA_DR_WAV_LIBSNDFILE_COMPAT
-        {
-            if (pWav->container == ma_dr_wav_container_aiff) {
-                ma_uint64 iSample;
-                for (iSample = 0; iSample < samplesRead; iSample += 1) {
-                    pBufferOut[iSample] = -pBufferOut[iSample];
-                }
-            }
-        }
-        #endif
         pBufferOut      += samplesRead;
         framesToRead    -= framesRead;
         totalFramesRead += framesRead;
@@ -83595,21 +83976,23 @@ MA_PRIVATE ma_uint64 ma_dr_wav_read_pcm_frames_s16__mulaw(ma_dr_wav* pWav, ma_ui
             break;
         }
         ma_dr_wav_mulaw_to_s16(pBufferOut, sampleData, (size_t)samplesRead);
-        #ifdef MA_DR_WAV_LIBSNDFILE_COMPAT
-        {
-            if (pWav->container == ma_dr_wav_container_aiff) {
-                ma_uint64 iSample;
-                for (iSample = 0; iSample < samplesRead; iSample += 1) {
-                    pBufferOut[iSample] = -pBufferOut[iSample];
-                }
-            }
-        }
-        #endif
         pBufferOut      += samplesRead;
         framesToRead    -= framesRead;
         totalFramesRead += framesRead;
     }
     return totalFramesRead;
+}
+MA_PRIVATE ma_uint64 ma_dr_wav_seek_forward(ma_dr_wav* pWav, ma_uint64 framesToSeek)
+{
+    MA_DR_WAV_ASSERT(pWav != NULL);
+    MA_DR_WAV_ASSERT(framesToSeek > 0);
+    if (pWav->translatedFormatTag == MA_DR_WAVE_FORMAT_ADPCM) {
+        return ma_dr_wav_read_pcm_frames_s16__msadpcm(pWav, framesToSeek, NULL);
+    }
+    if (pWav->translatedFormatTag == MA_DR_WAVE_FORMAT_DVI_ADPCM) {
+        return ma_dr_wav_read_pcm_frames_s16__ima(pWav, framesToSeek, NULL);
+    }
+    return ma_dr_wav_read_pcm_frames(pWav, framesToSeek, NULL);
 }
 MA_API ma_uint64 ma_dr_wav_read_pcm_frames_s16(ma_dr_wav* pWav, ma_uint64 framesToRead, ma_int16* pBufferOut)
 {
@@ -83617,7 +84000,7 @@ MA_API ma_uint64 ma_dr_wav_read_pcm_frames_s16(ma_dr_wav* pWav, ma_uint64 frames
         return 0;
     }
     if (pBufferOut == NULL) {
-        return ma_dr_wav_read_pcm_frames(pWav, framesToRead, NULL);
+        return ma_dr_wav_seek_forward(pWav, framesToRead);
     }
     if (framesToRead * pWav->channels * sizeof(ma_int16) > MA_SIZE_MAX) {
         framesToRead = MA_SIZE_MAX / sizeof(ma_int16) / pWav->channels;
@@ -83691,30 +84074,34 @@ MA_API void ma_dr_wav_s32_to_s16(ma_int16* pOut, const ma_int32* pIn, size_t sam
 }
 MA_API void ma_dr_wav_f32_to_s16(ma_int16* pOut, const float* pIn, size_t sampleCount)
 {
-    int r;
     size_t i;
     for (i = 0; i < sampleCount; ++i) {
         float x = pIn[i];
-        float c;
-        c = ((x < -1) ? -1 : ((x > 1) ? 1 : x));
-        c = c + 1;
-        r = (int)(c * 32767.5f);
-        r = r - 32768;
-        pOut[i] = (short)r;
+        if (x != x) {
+            pOut[i] = 0;
+        } else if (x <= -1) {
+            pOut[i] = (-32767 - 1);
+        } else if (x >= 1) {
+            pOut[i] = 32767;
+        } else {
+            pOut[i] = (ma_int16)(x * 32768.0f);
+        }
     }
 }
 MA_API void ma_dr_wav_f64_to_s16(ma_int16* pOut, const double* pIn, size_t sampleCount)
 {
-    int r;
     size_t i;
     for (i = 0; i < sampleCount; ++i) {
         double x = pIn[i];
-        double c;
-        c = ((x < -1) ? -1 : ((x > 1) ? 1 : x));
-        c = c + 1;
-        r = (int)(c * 32767.5);
-        r = r - 32768;
-        pOut[i] = (short)r;
+        if (x != x) {
+            pOut[i] = 0;
+        } else if (x <= -1) {
+            pOut[i] = (-32767 - 1);
+        } else if (x >= 1) {
+            pOut[i] = 32767;
+        } else {
+            pOut[i] = (ma_int16)(x * 32768.0);
+        }
     }
 }
 MA_API void ma_dr_wav_alaw_to_s16(ma_int16* pOut, const ma_uint8* pIn, size_t sampleCount)
@@ -83762,6 +84149,9 @@ MA_PRIVATE void ma_dr_wav__pcm_to_f32(float* pOut, const ma_uint8* pIn, size_t s
             MA_DR_WAV_ASSERT(j < 8);
             sample |= (ma_uint64)(pIn[j]) << shift;
             shift  += 8;
+        }
+        if (!ma_dr_wav__is_little_endian()) {
+            sample = ma_dr_wav__bswap64(sample);
         }
         pIn += j;
         *pOut++ = (float)((ma_int64)sample / 9223372036854775807.0);
@@ -83904,16 +84294,6 @@ MA_PRIVATE ma_uint64 ma_dr_wav_read_pcm_frames_f32__alaw(ma_dr_wav* pWav, ma_uin
             break;
         }
         ma_dr_wav_alaw_to_f32(pBufferOut, sampleData, (size_t)samplesRead);
-        #ifdef MA_DR_WAV_LIBSNDFILE_COMPAT
-        {
-            if (pWav->container == ma_dr_wav_container_aiff) {
-                ma_uint64 iSample;
-                for (iSample = 0; iSample < samplesRead; iSample += 1) {
-                    pBufferOut[iSample] = -pBufferOut[iSample];
-                }
-            }
-        }
-        #endif
         pBufferOut      += samplesRead;
         framesToRead    -= framesRead;
         totalFramesRead += framesRead;
@@ -83949,16 +84329,6 @@ MA_PRIVATE ma_uint64 ma_dr_wav_read_pcm_frames_f32__mulaw(ma_dr_wav* pWav, ma_ui
             break;
         }
         ma_dr_wav_mulaw_to_f32(pBufferOut, sampleData, (size_t)samplesRead);
-        #ifdef MA_DR_WAV_LIBSNDFILE_COMPAT
-        {
-            if (pWav->container == ma_dr_wav_container_aiff) {
-                ma_uint64 iSample;
-                for (iSample = 0; iSample < samplesRead; iSample += 1) {
-                    pBufferOut[iSample] = -pBufferOut[iSample];
-                }
-            }
-        }
-        #endif
         pBufferOut      += samplesRead;
         framesToRead    -= framesRead;
         totalFramesRead += framesRead;
@@ -83971,7 +84341,7 @@ MA_API ma_uint64 ma_dr_wav_read_pcm_frames_f32(ma_dr_wav* pWav, ma_uint64 frames
         return 0;
     }
     if (pBufferOut == NULL) {
-        return ma_dr_wav_read_pcm_frames(pWav, framesToRead, NULL);
+        return ma_dr_wav_seek_forward(pWav, framesToRead);
     }
     if (framesToRead * pWav->channels * sizeof(float) > MA_SIZE_MAX) {
         framesToRead = MA_SIZE_MAX / sizeof(float) / pWav->channels;
@@ -84015,18 +84385,9 @@ MA_API void ma_dr_wav_u8_to_f32(float* pOut, const ma_uint8* pIn, size_t sampleC
     if (pOut == NULL || pIn == NULL) {
         return;
     }
-#ifdef MA_DR_WAV_LIBSNDFILE_COMPAT
     for (i = 0; i < sampleCount; ++i) {
-        *pOut++ = (pIn[i] / 256.0f) * 2 - 1;
+        *pOut++ = ((int)pIn[i] - 128) * 0.0078125f;
     }
-#else
-    for (i = 0; i < sampleCount; ++i) {
-        float x = pIn[i];
-        x = x * 0.00784313725490196078f;
-        x = x - 1;
-        *pOut++ = x;
-    }
-#endif
 }
 MA_API void ma_dr_wav_s16_to_f32(float* pOut, const ma_int16* pIn, size_t sampleCount)
 {
@@ -84126,6 +84487,9 @@ MA_PRIVATE void ma_dr_wav__pcm_to_s32(ma_int32* pOut, const ma_uint8* pIn, size_
             MA_DR_WAV_ASSERT(j < 8);
             sample |= (ma_uint64)(pIn[j]) << shift;
             shift  += 8;
+        }
+        if (!ma_dr_wav__is_little_endian()) {
+            sample = ma_dr_wav__bswap64(sample);
         }
         pIn += j;
         *pOut++ = (ma_int32)((ma_int64)sample >> 32);
@@ -84264,16 +84628,6 @@ MA_PRIVATE ma_uint64 ma_dr_wav_read_pcm_frames_s32__alaw(ma_dr_wav* pWav, ma_uin
             break;
         }
         ma_dr_wav_alaw_to_s32(pBufferOut, sampleData, (size_t)samplesRead);
-        #ifdef MA_DR_WAV_LIBSNDFILE_COMPAT
-        {
-            if (pWav->container == ma_dr_wav_container_aiff) {
-                ma_uint64 iSample;
-                for (iSample = 0; iSample < samplesRead; iSample += 1) {
-                    pBufferOut[iSample] = -pBufferOut[iSample];
-                }
-            }
-        }
-        #endif
         pBufferOut      += samplesRead;
         framesToRead    -= framesRead;
         totalFramesRead += framesRead;
@@ -84309,16 +84663,6 @@ MA_PRIVATE ma_uint64 ma_dr_wav_read_pcm_frames_s32__mulaw(ma_dr_wav* pWav, ma_ui
             break;
         }
         ma_dr_wav_mulaw_to_s32(pBufferOut, sampleData, (size_t)samplesRead);
-        #ifdef MA_DR_WAV_LIBSNDFILE_COMPAT
-        {
-            if (pWav->container == ma_dr_wav_container_aiff) {
-                ma_uint64 iSample;
-                for (iSample = 0; iSample < samplesRead; iSample += 1) {
-                    pBufferOut[iSample] = -pBufferOut[iSample];
-                }
-            }
-        }
-        #endif
         pBufferOut      += samplesRead;
         framesToRead    -= framesRead;
         totalFramesRead += framesRead;
@@ -84331,7 +84675,7 @@ MA_API ma_uint64 ma_dr_wav_read_pcm_frames_s32(ma_dr_wav* pWav, ma_uint64 frames
         return 0;
     }
     if (pBufferOut == NULL) {
-        return ma_dr_wav_read_pcm_frames(pWav, framesToRead, NULL);
+        return ma_dr_wav_seek_forward(pWav, framesToRead);
     }
     if (framesToRead * pWav->channels * sizeof(ma_int32) > MA_SIZE_MAX) {
         framesToRead = MA_SIZE_MAX / sizeof(ma_int32) / pWav->channels;
@@ -84376,7 +84720,7 @@ MA_API void ma_dr_wav_u8_to_s32(ma_int32* pOut, const ma_uint8* pIn, size_t samp
         return;
     }
     for (i = 0; i < sampleCount; ++i) {
-        *pOut++ = ((int)pIn[i] - 128) << 24;
+        *pOut++ = ((int)pIn[i] - 128) * 16777216;
     }
 }
 MA_API void ma_dr_wav_s16_to_s32(ma_int32* pOut, const ma_int16* pIn, size_t sampleCount)
@@ -84386,7 +84730,7 @@ MA_API void ma_dr_wav_s16_to_s32(ma_int32* pOut, const ma_int16* pIn, size_t sam
         return;
     }
     for (i = 0; i < sampleCount; ++i) {
-        *pOut++ = pIn[i] << 16;
+        *pOut++ = (ma_int32)pIn[i] * 65536;
     }
 }
 MA_API void ma_dr_wav_s24_to_s32(ma_int32* pOut, const ma_uint8* pIn, size_t sampleCount)
@@ -84406,21 +84750,33 @@ MA_API void ma_dr_wav_s24_to_s32(ma_int32* pOut, const ma_uint8* pIn, size_t sam
 MA_API void ma_dr_wav_f32_to_s32(ma_int32* pOut, const float* pIn, size_t sampleCount)
 {
     size_t i;
-    if (pOut == NULL || pIn == NULL) {
-        return;
-    }
     for (i = 0; i < sampleCount; ++i) {
-        *pOut++ = (ma_int32)(2147483648.0f * pIn[i]);
+        float x = pIn[i];
+        if (x != x) {
+            pOut[i] = 0;
+        } else if (x <= -1) {
+            pOut[i] = (-2147483647 - 1);
+        } else if (x >= 1) {
+            pOut[i] = 2147483647;
+        } else {
+            pOut[i] = (ma_int32)(x * 2147483648.0f);
+        }
     }
 }
 MA_API void ma_dr_wav_f64_to_s32(ma_int32* pOut, const double* pIn, size_t sampleCount)
 {
     size_t i;
-    if (pOut == NULL || pIn == NULL) {
-        return;
-    }
     for (i = 0; i < sampleCount; ++i) {
-        *pOut++ = (ma_int32)(2147483648.0 * pIn[i]);
+        double x = pIn[i];
+        if (x != x) {
+            pOut[i] = 0;
+        } else if (x <= -1) {
+            pOut[i] = (-2147483647 - 1);
+        } else if (x >= 1) {
+            pOut[i] = 2147483647;
+        } else {
+            pOut[i] = (ma_int32)(x * 2147483648.0);
+        }
     }
 }
 MA_API void ma_dr_wav_alaw_to_s32(ma_int32* pOut, const ma_uint8* pIn, size_t sampleCount)
@@ -84430,7 +84786,7 @@ MA_API void ma_dr_wav_alaw_to_s32(ma_int32* pOut, const ma_uint8* pIn, size_t sa
         return;
     }
     for (i = 0; i < sampleCount; ++i) {
-        *pOut++ = ((ma_int32)ma_dr_wav__alaw_to_s16(pIn[i])) << 16;
+        *pOut++ = (ma_int32)ma_dr_wav__alaw_to_s16(pIn[i]) * 65536;
     }
 }
 MA_API void ma_dr_wav_mulaw_to_s32(ma_int32* pOut, const ma_uint8* pIn, size_t sampleCount)
@@ -84440,7 +84796,7 @@ MA_API void ma_dr_wav_mulaw_to_s32(ma_int32* pOut, const ma_uint8* pIn, size_t s
         return;
     }
     for (i= 0; i < sampleCount; ++i) {
-        *pOut++ = ((ma_int32)ma_dr_wav__mulaw_to_s16(pIn[i])) << 16;
+        *pOut++ = (ma_int32)ma_dr_wav__mulaw_to_s16(pIn[i]) * 65536;
     }
 }
 MA_PRIVATE ma_int16* ma_dr_wav__read_pcm_frames_and_close_s16(ma_dr_wav* pWav, unsigned int* channels, unsigned int* sampleRate, ma_uint64* totalFrameCount)
@@ -85061,6 +85417,7 @@ static MA_INLINE ma_bool32 ma_dr_flac_has_sse41(void)
 #ifndef MA_DR_FLAC_ZERO_OBJECT
 #define MA_DR_FLAC_ZERO_OBJECT(p)               MA_DR_FLAC_ZERO_MEMORY((p), sizeof(*(p)))
 #endif
+#define MA_DR_FLAC_MIN(a, b)                    (((a) < (b)) ? (a) : (b))
 #define MA_DR_FLAC_MAX_SIMD_VECTOR_SIZE                     64
 #define MA_DR_FLAC_SUBFRAME_CONSTANT                        0
 #define MA_DR_FLAC_SUBFRAME_VERBATIM                        1
@@ -85069,14 +85426,15 @@ static MA_INLINE ma_bool32 ma_dr_flac_has_sse41(void)
 #define MA_DR_FLAC_SUBFRAME_RESERVED                        255
 #define MA_DR_FLAC_RESIDUAL_CODING_METHOD_PARTITIONED_RICE  0
 #define MA_DR_FLAC_RESIDUAL_CODING_METHOD_PARTITIONED_RICE2 1
-#define MA_DR_FLAC_CHANNEL_ASSIGNMENT_INDEPENDENT           0
+#define MA_DR_FLAC_CHANNEL_ASSIGNMENT_INDEPENDENT_STEREO    1
 #define MA_DR_FLAC_CHANNEL_ASSIGNMENT_LEFT_SIDE             8
 #define MA_DR_FLAC_CHANNEL_ASSIGNMENT_RIGHT_SIDE            9
 #define MA_DR_FLAC_CHANNEL_ASSIGNMENT_MID_SIDE              10
+#define ma_dr_flac_align(x, a)                              ((((x) + (a) - 1) / (a)) * (a))
 #define MA_DR_FLAC_SEEKPOINT_SIZE_IN_BYTES                  18
 #define MA_DR_FLAC_CUESHEET_TRACK_SIZE_IN_BYTES             36
 #define MA_DR_FLAC_CUESHEET_TRACK_INDEX_SIZE_IN_BYTES       12
-#define ma_dr_flac_align(x, a)                              ((((x) + (a) - 1) / (a)) * (a))
+#define MA_DR_FLAC_CUESHEET_TRACK_PADDED_SIZE_IN_BYTES      ma_dr_flac_align(MA_DR_FLAC_CUESHEET_TRACK_SIZE_IN_BYTES, sizeof(ma_uint64))
 MA_API void ma_dr_flac_version(ma_uint32* pMajor, ma_uint32* pMinor, ma_uint32* pRevision)
 {
     if (pMajor) {
@@ -85680,38 +86038,44 @@ static ma_bool32 ma_dr_flac__read_int32(ma_dr_flac_bs* bs, unsigned int bitCount
     *pResult = (ma_int32)result;
     return MA_TRUE;
 }
-#ifdef MA_64BIT
 static ma_bool32 ma_dr_flac__read_uint64(ma_dr_flac_bs* bs, unsigned int bitCount, ma_uint64* pResultOut)
 {
-    ma_uint32 resultHi;
+    ma_uint32 resultHi = 0;
     ma_uint32 resultLo;
+    MA_DR_FLAC_ASSERT(bs != NULL);
+    MA_DR_FLAC_ASSERT(pResultOut != NULL);
+    MA_DR_FLAC_ASSERT(bitCount > 0);
     MA_DR_FLAC_ASSERT(bitCount <= 64);
-    MA_DR_FLAC_ASSERT(bitCount >  32);
-    if (!ma_dr_flac__read_uint32(bs, bitCount - 32, &resultHi)) {
-        return MA_FALSE;
+    if (bitCount > 32) {
+        if (!ma_dr_flac__read_uint32(bs, bitCount - 32, &resultHi)) {
+            return MA_FALSE;
+        }
+        bitCount = 32;
     }
-    if (!ma_dr_flac__read_uint32(bs, 32, &resultLo)) {
+    if (!ma_dr_flac__read_uint32(bs, bitCount, &resultLo)) {
         return MA_FALSE;
     }
     *pResultOut = (((ma_uint64)resultHi) << 32) | ((ma_uint64)resultLo);
     return MA_TRUE;
 }
-#endif
-#if 0
-static ma_bool32 ma_dr_flac__read_int64(ma_dr_flac_bs* bs, unsigned int bitCount, ma_int64* pResultOut)
+static MA_INLINE ma_bool32 ma_dr_flac__read_int64(ma_dr_flac_bs* bs, unsigned int bitCount, ma_int64* pResultOut)
 {
     ma_uint64 result;
-    ma_uint64 signbit;
+    MA_DR_FLAC_ASSERT(bs != NULL);
+    MA_DR_FLAC_ASSERT(pResultOut != NULL);
+    MA_DR_FLAC_ASSERT(bitCount > 0);
     MA_DR_FLAC_ASSERT(bitCount <= 64);
     if (!ma_dr_flac__read_uint64(bs, bitCount, &result)) {
         return MA_FALSE;
     }
-    signbit = ((result >> (bitCount-1)) & 0x01);
-    result |= (~signbit + 1) << bitCount;
+    if (bitCount < 64) {
+        ma_uint64 signbit;
+        signbit = ((result >> (bitCount-1)) & 0x01);
+        result |= (~signbit + 1) << bitCount;
+    }
     *pResultOut = (ma_int64)result;
     return MA_TRUE;
 }
-#endif
 static ma_bool32 ma_dr_flac__read_uint16(ma_dr_flac_bs* bs, unsigned int bitCount, ma_uint16* pResult)
 {
     ma_uint32 result;
@@ -85825,17 +86189,26 @@ static ma_bool32 ma_dr_flac__find_and_seek_to_next_sync_code(ma_dr_flac_bs* bs)
         if (!ma_dr_flac__read_uint8(bs, 8, &hi)) {
             return MA_FALSE;
         }
-        if (hi == 0xFF) {
+        while (hi == 0xFF) {
             ma_uint8 lo;
+            ma_uint8 trailingBits;
             if (!ma_dr_flac__read_uint8(bs, 6, &lo)) {
                 return MA_FALSE;
             }
             if (lo == 0x3E) {
                 return MA_TRUE;
-            } else {
-                if (!ma_dr_flac__seek_bits(bs, MA_DR_FLAC_CACHE_L1_BITS_REMAINING(bs) & 7)) {
-                    return MA_FALSE;
+            }
+            if (!ma_dr_flac__read_uint8(bs, 2, &trailingBits)) {
+                return MA_FALSE;
+            }
+            hi = (ma_uint8)((lo << 2) | trailingBits);
+            if (hi == 0xFF) {
+                #ifndef MA_DR_FLAC_NO_CRC
+                {
+                    ma_dr_flac__reset_crc16(bs);
+                    bs->crc16 = ma_dr_flac_crc16_byte(0, hi);
                 }
+                #endif
             }
         }
     }
@@ -86035,7 +86408,6 @@ static MA_INLINE ma_bool32 ma_dr_flac__seek_past_next_set_bit(ma_dr_flac_bs* bs,
 static ma_bool32 ma_dr_flac__seek_to_byte(ma_dr_flac_bs* bs, ma_uint64 offsetFromStart)
 {
     MA_DR_FLAC_ASSERT(bs != NULL);
-    MA_DR_FLAC_ASSERT(offsetFromStart > 0);
     if (offsetFromStart > 0x7FFFFFFF) {
         ma_uint64 bytesRemaining = offsetFromStart;
         if (!bs->onSeek(bs->pUserData, 0x7FFFFFFF, MA_DR_FLAC_SEEK_SET)) {
@@ -86130,7 +86502,7 @@ static MA_INLINE ma_bool32 ma_dr_flac__use_64_bit_prediction(ma_uint32 bitsPerSa
 #if defined(__clang__)
 __attribute__((no_sanitize("signed-integer-overflow")))
 #endif
-static MA_INLINE ma_int32 ma_dr_flac__calculate_prediction_32(ma_uint32 order, ma_int32 shift, const ma_int32* coefficients, ma_int32* pDecodedSamples)
+static MA_INLINE ma_int32 ma_dr_flac__calculate_prediction_32_s32(ma_uint32 order, ma_int32 shift, const ma_int32* coefficients, ma_int32* pDecodedSamples)
 {
     ma_int32 prediction = 0;
     MA_DR_FLAC_ASSERT(order <= 32);
@@ -86171,7 +86543,7 @@ static MA_INLINE ma_int32 ma_dr_flac__calculate_prediction_32(ma_uint32 order, m
     }
     return (ma_int32)(prediction >> shift);
 }
-static MA_INLINE ma_int32 ma_dr_flac__calculate_prediction_64(ma_uint32 order, ma_int32 shift, const ma_int32* coefficients, ma_int32* pDecodedSamples)
+static MA_INLINE ma_int32 ma_dr_flac__calculate_prediction_64_s32(ma_uint32 order, ma_int32 shift, const ma_int32* coefficients, ma_int32* pDecodedSamples)
 {
     ma_int64 prediction;
     MA_DR_FLAC_ASSERT(order <= 32);
@@ -86373,9 +86745,9 @@ static ma_bool32 ma_dr_flac__decode_samples_with_residual__rice__reference(ma_dr
             decodedRice =  (decodedRice >> 1);
         }
         if (ma_dr_flac__use_64_bit_prediction(bitsPerSample, lpcOrder, lpcPrecision)) {
-            pSamplesOut[i] = decodedRice + ma_dr_flac__calculate_prediction_64(lpcOrder, lpcShift, coefficients, pSamplesOut + i);
+            pSamplesOut[i] = decodedRice + ma_dr_flac__calculate_prediction_64_s32(lpcOrder, lpcShift, coefficients, pSamplesOut + i);
         } else {
-            pSamplesOut[i] = decodedRice + ma_dr_flac__calculate_prediction_32(lpcOrder, lpcShift, coefficients, pSamplesOut + i);
+            pSamplesOut[i] = decodedRice + ma_dr_flac__calculate_prediction_32_s32(lpcOrder, lpcShift, coefficients, pSamplesOut + i);
         }
     }
     return MA_TRUE;
@@ -86681,10 +87053,10 @@ static ma_bool32 ma_dr_flac__decode_samples_with_residual__rice__scalar(ma_dr_fl
             riceParamPart1  = (riceParamPart1 >> 1) ^ t[riceParamPart1 & 0x01];
             riceParamPart2  = (riceParamPart2 >> 1) ^ t[riceParamPart2 & 0x01];
             riceParamPart3  = (riceParamPart3 >> 1) ^ t[riceParamPart3 & 0x01];
-            pSamplesOut[0] = riceParamPart0 + ma_dr_flac__calculate_prediction_64(lpcOrder, lpcShift, coefficients, pSamplesOut + 0);
-            pSamplesOut[1] = riceParamPart1 + ma_dr_flac__calculate_prediction_64(lpcOrder, lpcShift, coefficients, pSamplesOut + 1);
-            pSamplesOut[2] = riceParamPart2 + ma_dr_flac__calculate_prediction_64(lpcOrder, lpcShift, coefficients, pSamplesOut + 2);
-            pSamplesOut[3] = riceParamPart3 + ma_dr_flac__calculate_prediction_64(lpcOrder, lpcShift, coefficients, pSamplesOut + 3);
+            pSamplesOut[0] = riceParamPart0 + ma_dr_flac__calculate_prediction_64_s32(lpcOrder, lpcShift, coefficients, pSamplesOut + 0);
+            pSamplesOut[1] = riceParamPart1 + ma_dr_flac__calculate_prediction_64_s32(lpcOrder, lpcShift, coefficients, pSamplesOut + 1);
+            pSamplesOut[2] = riceParamPart2 + ma_dr_flac__calculate_prediction_64_s32(lpcOrder, lpcShift, coefficients, pSamplesOut + 2);
+            pSamplesOut[3] = riceParamPart3 + ma_dr_flac__calculate_prediction_64_s32(lpcOrder, lpcShift, coefficients, pSamplesOut + 3);
             pSamplesOut += 4;
         }
     } else {
@@ -86707,10 +87079,10 @@ static ma_bool32 ma_dr_flac__decode_samples_with_residual__rice__scalar(ma_dr_fl
             riceParamPart1  = (riceParamPart1 >> 1) ^ t[riceParamPart1 & 0x01];
             riceParamPart2  = (riceParamPart2 >> 1) ^ t[riceParamPart2 & 0x01];
             riceParamPart3  = (riceParamPart3 >> 1) ^ t[riceParamPart3 & 0x01];
-            pSamplesOut[0] = riceParamPart0 + ma_dr_flac__calculate_prediction_32(lpcOrder, lpcShift, coefficients, pSamplesOut + 0);
-            pSamplesOut[1] = riceParamPart1 + ma_dr_flac__calculate_prediction_32(lpcOrder, lpcShift, coefficients, pSamplesOut + 1);
-            pSamplesOut[2] = riceParamPart2 + ma_dr_flac__calculate_prediction_32(lpcOrder, lpcShift, coefficients, pSamplesOut + 2);
-            pSamplesOut[3] = riceParamPart3 + ma_dr_flac__calculate_prediction_32(lpcOrder, lpcShift, coefficients, pSamplesOut + 3);
+            pSamplesOut[0] = riceParamPart0 + ma_dr_flac__calculate_prediction_32_s32(lpcOrder, lpcShift, coefficients, pSamplesOut + 0);
+            pSamplesOut[1] = riceParamPart1 + ma_dr_flac__calculate_prediction_32_s32(lpcOrder, lpcShift, coefficients, pSamplesOut + 1);
+            pSamplesOut[2] = riceParamPart2 + ma_dr_flac__calculate_prediction_32_s32(lpcOrder, lpcShift, coefficients, pSamplesOut + 2);
+            pSamplesOut[3] = riceParamPart3 + ma_dr_flac__calculate_prediction_32_s32(lpcOrder, lpcShift, coefficients, pSamplesOut + 3);
             pSamplesOut += 4;
         }
     }
@@ -86723,9 +87095,9 @@ static ma_bool32 ma_dr_flac__decode_samples_with_residual__rice__scalar(ma_dr_fl
         riceParamPart0 |= (zeroCountPart0 << riceParam);
         riceParamPart0  = (riceParamPart0 >> 1) ^ t[riceParamPart0 & 0x01];
         if (ma_dr_flac__use_64_bit_prediction(bitsPerSample, lpcOrder, lpcPrecision)) {
-            pSamplesOut[0] = riceParamPart0 + ma_dr_flac__calculate_prediction_64(lpcOrder, lpcShift, coefficients, pSamplesOut + 0);
+            pSamplesOut[0] = riceParamPart0 + ma_dr_flac__calculate_prediction_64_s32(lpcOrder, lpcShift, coefficients, pSamplesOut + 0);
         } else {
-            pSamplesOut[0] = riceParamPart0 + ma_dr_flac__calculate_prediction_32(lpcOrder, lpcShift, coefficients, pSamplesOut + 0);
+            pSamplesOut[0] = riceParamPart0 + ma_dr_flac__calculate_prediction_32_s32(lpcOrder, lpcShift, coefficients, pSamplesOut + 0);
         }
         i += 1;
         pSamplesOut += 1;
@@ -86915,7 +87287,7 @@ static ma_bool32 ma_dr_flac__decode_samples_with_residual__rice__sse41_32(ma_dr_
         riceParamParts0 &= riceParamMask;
         riceParamParts0 |= (zeroCountParts0 << riceParam);
         riceParamParts0  = (riceParamParts0 >> 1) ^ t[riceParamParts0 & 0x01];
-        pDecodedSamples[0] = riceParamParts0 + ma_dr_flac__calculate_prediction_32(order, shift, coefficients, pDecodedSamples);
+        pDecodedSamples[0] = riceParamParts0 + ma_dr_flac__calculate_prediction_32_s32(order, shift, coefficients, pDecodedSamples);
         i += 1;
         pDecodedSamples += 1;
     }
@@ -87064,7 +87436,7 @@ static ma_bool32 ma_dr_flac__decode_samples_with_residual__rice__sse41_64(ma_dr_
         riceParamParts0 &= riceParamMask;
         riceParamParts0 |= (zeroCountParts0 << riceParam);
         riceParamParts0  = (riceParamParts0 >> 1) ^ t[riceParamParts0 & 0x01];
-        pDecodedSamples[0] = riceParamParts0 + ma_dr_flac__calculate_prediction_64(order, shift, coefficients, pDecodedSamples);
+        pDecodedSamples[0] = riceParamParts0 + ma_dr_flac__calculate_prediction_64_s32(order, shift, coefficients, pDecodedSamples);
         i += 1;
         pDecodedSamples += 1;
     }
@@ -87282,7 +87654,7 @@ static ma_bool32 ma_dr_flac__decode_samples_with_residual__rice__neon_32(ma_dr_f
         riceParamParts[0] &= riceParamMask;
         riceParamParts[0] |= (zeroCountParts[0] << riceParam);
         riceParamParts[0]  = (riceParamParts[0] >> 1) ^ t[riceParamParts[0] & 0x01];
-        pDecodedSamples[0] = riceParamParts[0] + ma_dr_flac__calculate_prediction_32(order, shift, coefficients, pDecodedSamples);
+        pDecodedSamples[0] = riceParamParts[0] + ma_dr_flac__calculate_prediction_32_s32(order, shift, coefficients, pDecodedSamples);
         i += 1;
         pDecodedSamples += 1;
     }
@@ -87306,7 +87678,7 @@ static ma_bool32 ma_dr_flac__decode_samples_with_residual__rice__neon_64(ma_dr_f
     int32x4_t riceParam128;
     int64x1_t shift64;
     uint32x4_t one128;
-    int64x2_t prediction128 = { 0 };
+    int64x2_t prediction128;
     uint32x4_t zeroCountPart128;
     uint32x4_t riceParamPart128;
     const ma_uint32 t[2] = {0x00000000, 0xFFFFFFFF};
@@ -87379,7 +87751,7 @@ static ma_bool32 ma_dr_flac__decode_samples_with_residual__rice__neon_64(ma_dr_f
         riceParamPart128 = veorq_u32(vshrq_n_u32(riceParamPart128, 1), vaddq_u32(ma_dr_flac__vnotq_u32(vandq_u32(riceParamPart128, one128)), one128));
         for (i = 0; i < 4; i += 1) {
             int64x1_t prediction64;
-            prediction128 = veorq_s64(prediction128, prediction128);
+            prediction128 = vdupq_n_s64(0);
             switch (order)
             {
             case 12:
@@ -87414,7 +87786,7 @@ static ma_bool32 ma_dr_flac__decode_samples_with_residual__rice__neon_64(ma_dr_f
         riceParamParts[0] &= riceParamMask;
         riceParamParts[0] |= (zeroCountParts[0] << riceParam);
         riceParamParts[0]  = (riceParamParts[0] >> 1) ^ t[riceParamParts[0] & 0x01];
-        pDecodedSamples[0] = riceParamParts[0] + ma_dr_flac__calculate_prediction_64(order, shift, coefficients, pDecodedSamples);
+        pDecodedSamples[0] = riceParamParts[0] + ma_dr_flac__calculate_prediction_64_s32(order, shift, coefficients, pDecodedSamples);
         i += 1;
         pDecodedSamples += 1;
     }
@@ -87483,14 +87855,85 @@ static ma_bool32 ma_dr_flac__decode_samples_with_residual__unencoded(ma_dr_flac_
             pSamplesOut[i] = 0;
         }
         if (ma_dr_flac__use_64_bit_prediction(bitsPerSample, lpcOrder, lpcPrecision)) {
-            pSamplesOut[i] += ma_dr_flac__calculate_prediction_64(lpcOrder, lpcShift, coefficients, pSamplesOut + i);
+            pSamplesOut[i] += ma_dr_flac__calculate_prediction_64_s32(lpcOrder, lpcShift, coefficients, pSamplesOut + i);
         } else {
-            pSamplesOut[i] += ma_dr_flac__calculate_prediction_32(lpcOrder, lpcShift, coefficients, pSamplesOut + i);
+            pSamplesOut[i] += ma_dr_flac__calculate_prediction_32_s32(lpcOrder, lpcShift, coefficients, pSamplesOut + i);
         }
     }
     return MA_TRUE;
 }
-static ma_bool32 ma_dr_flac__decode_samples_with_residual(ma_dr_flac_bs* bs, ma_uint32 bitsPerSample, ma_uint32 blockSize, ma_uint32 lpcOrder, ma_int32 lpcShift, ma_uint32 lpcPrecision, const ma_int32* coefficients, ma_int32* pDecodedSamples)
+static MA_INLINE ma_int64 ma_dr_flac__calculate_prediction_64_s64(ma_uint32 order, ma_int32 shift, const ma_int32* coefficients, const ma_int64* pDecodedSamples)
+{
+    ma_int64 prediction = 0;
+    ma_uint32 i;
+    for (i = 0; i < order; ++i) {
+        prediction += coefficients[i] * pDecodedSamples[-(ma_int32)i - 1];
+    }
+    return prediction >> shift;
+}
+static ma_bool32 ma_dr_flac__decode_samples_with_residual__rice__s64(ma_dr_flac_bs* bs, ma_uint32 bitsPerSample, ma_uint32 count, ma_uint8 riceParam, ma_uint32 lpcOrder, ma_int32 lpcShift, const ma_int32* coefficients, ma_int64* pSamplesOut)
+{
+    ma_uint32 riceParamMask;
+    ma_int64 minSample;
+    ma_int64 maxSample;
+    ma_uint32 i;
+    MA_DR_FLAC_ASSERT(bitsPerSample > 0 && bitsPerSample <= 33);
+    riceParamMask = (1U << riceParam) - 1;
+    minSample = -((ma_int64)1 << (bitsPerSample - 1));
+    maxSample = -(minSample + 1);
+    for (i = 0; i < count; ++i) {
+        ma_uint32 zeroCountPart;
+        ma_uint32 riceParamPart;
+        ma_int32 residual;
+        ma_int64 sample;
+        if (!ma_dr_flac__read_rice_parts_x1(bs, riceParam, &zeroCountPart, &riceParamPart)) {
+            return MA_FALSE;
+        }
+        if (zeroCountPart > (0xFFFFFFFFU >> riceParam)) {
+            return MA_FALSE;
+        }
+        riceParamPart = (zeroCountPart << riceParam) | (riceParamPart & riceParamMask);
+        if (riceParamPart == 0xFFFFFFFFU) {
+            return MA_FALSE;
+        }
+        residual = (ma_int32)(riceParamPart >> 1);
+        if ((riceParamPart & 1) != 0) {
+            residual = -residual - 1;
+        }
+        sample = ma_dr_flac__calculate_prediction_64_s64(lpcOrder, lpcShift, coefficients, pSamplesOut + i) + residual;
+        if (sample < minSample || sample > maxSample) {
+            return MA_FALSE;
+        }
+        pSamplesOut[i] = sample;
+    }
+    return MA_TRUE;
+}
+static ma_bool32 ma_dr_flac__decode_samples_with_residual__unencoded_s64(ma_dr_flac_bs* bs, ma_uint32 bitsPerSample, ma_uint32 count, ma_uint8 unencodedBitsPerSample, ma_uint32 lpcOrder, ma_int32 lpcShift, const ma_int32* coefficients, ma_int64* pSamplesOut)
+{
+    ma_int64 minSample;
+    ma_int64 maxSample;
+    ma_uint32 i;
+    MA_DR_FLAC_ASSERT(bitsPerSample > 0 && bitsPerSample <= 33);
+    MA_DR_FLAC_ASSERT(unencodedBitsPerSample <= 31);
+    minSample = -((ma_int64)1 << (bitsPerSample - 1));
+    maxSample = -(minSample + 1);
+    for (i = 0; i < count; ++i) {
+        ma_int32 residual = 0;
+        ma_int64 sample;
+        if (unencodedBitsPerSample > 0) {
+            if (!ma_dr_flac__read_int32(bs, unencodedBitsPerSample, &residual)) {
+                return MA_FALSE;
+            }
+        }
+        sample = ma_dr_flac__calculate_prediction_64_s64(lpcOrder, lpcShift, coefficients, pSamplesOut + i) + residual;
+        if (sample < minSample || sample > maxSample) {
+            return MA_FALSE;
+        }
+        pSamplesOut[i] = sample;
+    }
+    return MA_TRUE;
+}
+static ma_bool32 ma_dr_flac__decode_samples_with_residual(ma_dr_flac_bs* bs, ma_uint32 bitsPerSample, ma_uint32 blockSize, ma_uint32 lpcOrder, ma_int32 lpcShift, ma_uint32 lpcPrecision, const ma_int32* coefficients, ma_int32* pDecodedSamplesS32, ma_int64* pDecodedSamplesS64)
 {
     ma_uint8 residualMethod;
     ma_uint8 partitionOrder;
@@ -87498,22 +87941,27 @@ static ma_bool32 ma_dr_flac__decode_samples_with_residual(ma_dr_flac_bs* bs, ma_
     ma_uint32 partitionsRemaining;
     MA_DR_FLAC_ASSERT(bs != NULL);
     MA_DR_FLAC_ASSERT(blockSize != 0);
-    MA_DR_FLAC_ASSERT(pDecodedSamples != NULL);
+    MA_DR_FLAC_ASSERT(pDecodedSamplesS32 != NULL || pDecodedSamplesS64 != NULL);
+    MA_DR_FLAC_ASSERT(pDecodedSamplesS32 == NULL || pDecodedSamplesS64 == NULL);
     if (!ma_dr_flac__read_uint8(bs, 2, &residualMethod)) {
         return MA_FALSE;
     }
     if (residualMethod != MA_DR_FLAC_RESIDUAL_CODING_METHOD_PARTITIONED_RICE && residualMethod != MA_DR_FLAC_RESIDUAL_CODING_METHOD_PARTITIONED_RICE2) {
         return MA_FALSE;
     }
-    pDecodedSamples += lpcOrder;
     if (!ma_dr_flac__read_uint8(bs, 4, &partitionOrder)) {
         return MA_FALSE;
     }
-    if (partitionOrder > 8) {
+    if ((blockSize & ((1U << partitionOrder) - 1)) != 0) {
         return MA_FALSE;
     }
     if ((blockSize / (1 << partitionOrder)) < lpcOrder) {
         return MA_FALSE;
+    }
+    if (pDecodedSamplesS32 != NULL) {
+        pDecodedSamplesS32 += lpcOrder;
+    } else {
+        pDecodedSamplesS64 += lpcOrder;
     }
     samplesInPartition = (blockSize / (1 << partitionOrder)) - lpcOrder;
     partitionsRemaining = (1 << partitionOrder);
@@ -87535,19 +87983,35 @@ static ma_bool32 ma_dr_flac__decode_samples_with_residual(ma_dr_flac_bs* bs, ma_
             }
         }
         if (riceParam != 0xFF) {
-            if (!ma_dr_flac__decode_samples_with_residual__rice(bs, bitsPerSample, samplesInPartition, riceParam, lpcOrder, lpcShift, lpcPrecision, coefficients, pDecodedSamples)) {
-                return MA_FALSE;
+            if (pDecodedSamplesS32 != NULL) {
+                if (!ma_dr_flac__decode_samples_with_residual__rice(bs, bitsPerSample, samplesInPartition, riceParam, lpcOrder, lpcShift, lpcPrecision, coefficients, pDecodedSamplesS32)) {
+                    return MA_FALSE;
+                }
+            } else {
+                if (!ma_dr_flac__decode_samples_with_residual__rice__s64(bs, bitsPerSample, samplesInPartition, riceParam, lpcOrder, lpcShift, coefficients, pDecodedSamplesS64)) {
+                    return MA_FALSE;
+                }
             }
         } else {
             ma_uint8 unencodedBitsPerSample = 0;
             if (!ma_dr_flac__read_uint8(bs, 5, &unencodedBitsPerSample)) {
                 return MA_FALSE;
             }
-            if (!ma_dr_flac__decode_samples_with_residual__unencoded(bs, bitsPerSample, samplesInPartition, unencodedBitsPerSample, lpcOrder, lpcShift, lpcPrecision, coefficients, pDecodedSamples)) {
-                return MA_FALSE;
+            if (pDecodedSamplesS32 != NULL) {
+                if (!ma_dr_flac__decode_samples_with_residual__unencoded(bs, bitsPerSample, samplesInPartition, unencodedBitsPerSample, lpcOrder, lpcShift, lpcPrecision, coefficients, pDecodedSamplesS32)) {
+                    return MA_FALSE;
+                }
+            } else {
+                if (!ma_dr_flac__decode_samples_with_residual__unencoded_s64(bs, bitsPerSample, samplesInPartition, unencodedBitsPerSample, lpcOrder, lpcShift, coefficients, pDecodedSamplesS64)) {
+                    return MA_FALSE;
+                }
             }
         }
-        pDecodedSamples += samplesInPartition;
+        if (pDecodedSamplesS32 != NULL) {
+            pDecodedSamplesS32 += samplesInPartition;
+        } else {
+            pDecodedSamplesS64 += samplesInPartition;
+        }
         if (partitionsRemaining == 1) {
             break;
         }
@@ -87575,10 +88039,10 @@ static ma_bool32 ma_dr_flac__read_and_seek_residual(ma_dr_flac_bs* bs, ma_uint32
     if (!ma_dr_flac__read_uint8(bs, 4, &partitionOrder)) {
         return MA_FALSE;
     }
-    if (partitionOrder > 8) {
+    if ((blockSize & ((1U << partitionOrder) - 1)) != 0) {
         return MA_FALSE;
     }
-    if ((blockSize / (1 << partitionOrder)) <= order) {
+    if ((blockSize / (1 << partitionOrder)) < order) {
         return MA_FALSE;
     }
     samplesInPartition = (blockSize / (1 << partitionOrder)) - order;
@@ -87622,31 +88086,51 @@ static ma_bool32 ma_dr_flac__read_and_seek_residual(ma_dr_flac_bs* bs, ma_uint32
     }
     return MA_TRUE;
 }
-static ma_bool32 ma_dr_flac__decode_samples__constant(ma_dr_flac_bs* bs, ma_uint32 blockSize, ma_uint32 subframeBitsPerSample, ma_int32* pDecodedSamples)
+static ma_bool32 ma_dr_flac__decode_samples__constant(ma_dr_flac_bs* bs, ma_uint32 blockSize, ma_uint32 subframeBitsPerSample, ma_int32* pDecodedSamplesS32, ma_int64* pDecodedSamplesS64)
 {
     ma_uint32 i;
-    ma_int32 sample;
-    if (!ma_dr_flac__read_int32(bs, subframeBitsPerSample, &sample)) {
-        return MA_FALSE;
-    }
-    for (i = 0; i < blockSize; ++i) {
-        pDecodedSamples[i] = sample;
-    }
-    return MA_TRUE;
-}
-static ma_bool32 ma_dr_flac__decode_samples__verbatim(ma_dr_flac_bs* bs, ma_uint32 blockSize, ma_uint32 subframeBitsPerSample, ma_int32* pDecodedSamples)
-{
-    ma_uint32 i;
-    for (i = 0; i < blockSize; ++i) {
+    MA_DR_FLAC_ASSERT(pDecodedSamplesS32 != NULL || pDecodedSamplesS64 != NULL);
+    MA_DR_FLAC_ASSERT(pDecodedSamplesS32 == NULL || pDecodedSamplesS64 == NULL);
+    if (pDecodedSamplesS32 != NULL) {
         ma_int32 sample;
         if (!ma_dr_flac__read_int32(bs, subframeBitsPerSample, &sample)) {
             return MA_FALSE;
         }
-        pDecodedSamples[i] = sample;
+        for (i = 0; i < blockSize; ++i) {
+            pDecodedSamplesS32[i] = sample;
+        }
+    } else {
+        ma_int64 sample;
+        if (!ma_dr_flac__read_int64(bs, subframeBitsPerSample, &sample)) {
+            return MA_FALSE;
+        }
+        for (i = 0; i < blockSize; ++i) {
+            pDecodedSamplesS64[i] = sample;
+        }
     }
     return MA_TRUE;
 }
-static ma_bool32 ma_dr_flac__decode_samples__fixed(ma_dr_flac_bs* bs, ma_uint32 blockSize, ma_uint32 subframeBitsPerSample, ma_uint8 lpcOrder, ma_int32* pDecodedSamples)
+static ma_bool32 ma_dr_flac__decode_samples__verbatim(ma_dr_flac_bs* bs, ma_uint32 blockSize, ma_uint32 subframeBitsPerSample, ma_int32* pDecodedSamplesS32, ma_int64* pDecodedSamplesS64)
+{
+    ma_uint32 i;
+    MA_DR_FLAC_ASSERT(pDecodedSamplesS32 != NULL || pDecodedSamplesS64 != NULL);
+    MA_DR_FLAC_ASSERT(pDecodedSamplesS32 == NULL || pDecodedSamplesS64 == NULL);
+    if (pDecodedSamplesS32 != NULL) {
+        for (i = 0; i < blockSize; ++i) {
+            if (!ma_dr_flac__read_int32(bs, subframeBitsPerSample, pDecodedSamplesS32 + i)) {
+                return MA_FALSE;
+            }
+        }
+    } else {
+        for (i = 0; i < blockSize; ++i) {
+            if (!ma_dr_flac__read_int64(bs, subframeBitsPerSample, pDecodedSamplesS64 + i)) {
+                return MA_FALSE;
+            }
+        }
+    }
+    return MA_TRUE;
+}
+static ma_bool32 ma_dr_flac__decode_samples__fixed(ma_dr_flac_bs* bs, ma_uint32 blockSize, ma_uint32 subframeBitsPerSample, ma_uint8 lpcOrder, ma_int32* pDecodedSamplesS32, ma_int64* pDecodedSamplesS64)
 {
     ma_uint32 i;
     static ma_int32 lpcCoefficientsTable[5][4] = {
@@ -87656,30 +88140,46 @@ static ma_bool32 ma_dr_flac__decode_samples__fixed(ma_dr_flac_bs* bs, ma_uint32 
         {3, -3, 1,  0},
         {4, -6, 4, -1}
     };
-    for (i = 0; i < lpcOrder; ++i) {
-        ma_int32 sample;
-        if (!ma_dr_flac__read_int32(bs, subframeBitsPerSample, &sample)) {
-            return MA_FALSE;
+    MA_DR_FLAC_ASSERT(pDecodedSamplesS32 != NULL || pDecodedSamplesS64 != NULL);
+    MA_DR_FLAC_ASSERT(pDecodedSamplesS32 == NULL || pDecodedSamplesS64 == NULL);
+    if (pDecodedSamplesS32 != NULL) {
+        for (i = 0; i < lpcOrder; ++i) {
+            if (!ma_dr_flac__read_int32(bs, subframeBitsPerSample, pDecodedSamplesS32 + i)) {
+                return MA_FALSE;
+            }
         }
-        pDecodedSamples[i] = sample;
+    } else {
+        for (i = 0; i < lpcOrder; ++i) {
+            if (!ma_dr_flac__read_int64(bs, subframeBitsPerSample, pDecodedSamplesS64 + i)) {
+                return MA_FALSE;
+            }
+        }
     }
-    if (!ma_dr_flac__decode_samples_with_residual(bs, subframeBitsPerSample, blockSize, lpcOrder, 0, 4, lpcCoefficientsTable[lpcOrder], pDecodedSamples)) {
+    if (!ma_dr_flac__decode_samples_with_residual(bs, subframeBitsPerSample, blockSize, lpcOrder, 0, 4, lpcCoefficientsTable[lpcOrder], pDecodedSamplesS32, pDecodedSamplesS64)) {
         return MA_FALSE;
     }
     return MA_TRUE;
 }
-static ma_bool32 ma_dr_flac__decode_samples__lpc(ma_dr_flac_bs* bs, ma_uint32 blockSize, ma_uint32 bitsPerSample, ma_uint8 lpcOrder, ma_int32* pDecodedSamples)
+static ma_bool32 ma_dr_flac__decode_samples__lpc(ma_dr_flac_bs* bs, ma_uint32 blockSize, ma_uint32 bitsPerSample, ma_uint8 lpcOrder, ma_int32* pDecodedSamplesS32, ma_int64* pDecodedSamplesS64)
 {
     ma_uint8 i;
     ma_uint8 lpcPrecision;
     ma_int8 lpcShift;
     ma_int32 coefficients[32];
-    for (i = 0; i < lpcOrder; ++i) {
-        ma_int32 sample;
-        if (!ma_dr_flac__read_int32(bs, bitsPerSample, &sample)) {
-            return MA_FALSE;
+    MA_DR_FLAC_ASSERT(pDecodedSamplesS32 != NULL || pDecodedSamplesS64 != NULL);
+    MA_DR_FLAC_ASSERT(pDecodedSamplesS32 == NULL || pDecodedSamplesS64 == NULL);
+    if (pDecodedSamplesS32 != NULL) {
+        for (i = 0; i < lpcOrder; ++i) {
+            if (!ma_dr_flac__read_int32(bs, bitsPerSample, pDecodedSamplesS32 + i)) {
+                return MA_FALSE;
+            }
         }
-        pDecodedSamples[i] = sample;
+    } else {
+        for (i = 0; i < lpcOrder; ++i) {
+            if (!ma_dr_flac__read_int64(bs, bitsPerSample, pDecodedSamplesS64 + i)) {
+                return MA_FALSE;
+            }
+        }
     }
     if (!ma_dr_flac__read_uint8(bs, 4, &lpcPrecision)) {
         return MA_FALSE;
@@ -87700,7 +88200,7 @@ static ma_bool32 ma_dr_flac__decode_samples__lpc(ma_dr_flac_bs* bs, ma_uint32 bl
             return MA_FALSE;
         }
     }
-    if (!ma_dr_flac__decode_samples_with_residual(bs, bitsPerSample, blockSize, lpcOrder, lpcShift, lpcPrecision, coefficients, pDecodedSamples)) {
+    if (!ma_dr_flac__decode_samples_with_residual(bs, bitsPerSample, blockSize, lpcOrder, lpcShift, lpcPrecision, coefficients, pDecodedSamplesS32, pDecodedSamplesS64)) {
         return MA_FALSE;
     }
     return MA_TRUE;
@@ -87708,7 +88208,7 @@ static ma_bool32 ma_dr_flac__decode_samples__lpc(ma_dr_flac_bs* bs, ma_uint32 bl
 static ma_bool32 ma_dr_flac__read_next_flac_frame_header(ma_dr_flac_bs* bs, ma_uint8 streaminfoBitsPerSample, ma_dr_flac_frame_header* header)
 {
     const ma_uint32 sampleRateTable[12]  = {0, 88200, 176400, 192000, 8000, 16000, 22050, 24000, 32000, 44100, 48000, 96000};
-    const ma_uint8 bitsPerSampleTable[8] = {0, 8, 12, (ma_uint8)-1, 16, 20, 24, (ma_uint8)-1};
+    const ma_uint8 bitsPerSampleTable[8] = {0, 8, 12, (ma_uint8)-1, 16, 20, 24, 32};
     MA_DR_FLAC_ASSERT(bs != NULL);
     MA_DR_FLAC_ASSERT(header != NULL);
     for (;;) {
@@ -87755,7 +88255,7 @@ static ma_bool32 ma_dr_flac__read_next_flac_frame_header(ma_dr_flac_bs* bs, ma_u
         if (!ma_dr_flac__read_uint8(bs, 3, &bitsPerSample)) {
             return MA_FALSE;
         }
-        if (bitsPerSample == 3 || bitsPerSample == 7) {
+        if (bitsPerSample == 3) {
             continue;
         }
         crc8 = ma_dr_flac_crc8(crc8, bitsPerSample, 3);
@@ -87844,8 +88344,16 @@ static ma_bool32 ma_dr_flac__read_next_flac_frame_header(ma_dr_flac_bs* bs, ma_u
         if (header->bitsPerSample == 0) {
             header->bitsPerSample = streaminfoBitsPerSample;
         }
-        if (header->bitsPerSample != streaminfoBitsPerSample) {
-            return MA_FALSE;
+        if (streaminfoBitsPerSample != 0) {
+            if (streaminfoBitsPerSample < 32) {
+                if (header->bitsPerSample == 32) {
+                    return MA_FALSE;
+                }
+            } else {
+                if (header->bitsPerSample != 32) {
+                    return MA_FALSE;
+                }
+            }
         }
         if (!ma_dr_flac__read_uint8(bs, 8, &header->crc8)) {
             return MA_FALSE;
@@ -87902,12 +88410,15 @@ static ma_bool32 ma_dr_flac__read_subframe_header(ma_dr_flac_bs* bs, ma_dr_flac_
     }
     return MA_TRUE;
 }
-static ma_bool32 ma_dr_flac__decode_subframe(ma_dr_flac_bs* bs, ma_dr_flac_frame* frame, int subframeIndex, ma_int32* pDecodedSamplesOut)
+static ma_bool32 ma_dr_flac__decode_subframe(ma_dr_flac_bs* bs, ma_dr_flac_frame* frame, int subframeIndex, ma_int32* pDecodedSamplesOutS32, ma_int64* pDecodedSamplesOutS64)
 {
     ma_dr_flac_subframe* pSubframe;
     ma_uint32 subframeBitsPerSample;
+    ma_bool32 decodeResult;
     MA_DR_FLAC_ASSERT(bs != NULL);
     MA_DR_FLAC_ASSERT(frame != NULL);
+    MA_DR_FLAC_ASSERT(pDecodedSamplesOutS32 != NULL || pDecodedSamplesOutS64 != NULL);
+    MA_DR_FLAC_ASSERT(pDecodedSamplesOutS32 == NULL || pDecodedSamplesOutS64 == NULL);
     pSubframe = frame->subframes + subframeIndex;
     if (!ma_dr_flac__read_subframe_header(bs, pSubframe)) {
         return MA_FALSE;
@@ -87918,14 +88429,19 @@ static ma_bool32 ma_dr_flac__decode_subframe(ma_dr_flac_bs* bs, ma_dr_flac_frame
     } else if (frame->header.channelAssignment == MA_DR_FLAC_CHANNEL_ASSIGNMENT_RIGHT_SIDE && subframeIndex == 0) {
         subframeBitsPerSample += 1;
     }
-    if (subframeBitsPerSample > 32) {
-        return MA_FALSE;
-    }
     if (pSubframe->wastedBitsPerSample >= subframeBitsPerSample) {
         return MA_FALSE;
     }
     subframeBitsPerSample -= pSubframe->wastedBitsPerSample;
-    pSubframe->pSamplesS32 = pDecodedSamplesOut;
+    if (pDecodedSamplesOutS32 != NULL) {
+        if (subframeBitsPerSample > 32) {
+            return MA_FALSE;
+        }
+    } else {
+        if (subframeBitsPerSample > 33) {
+            return MA_FALSE;
+        }
+    }
     if (frame->header.blockSizeInPCMFrames < pSubframe->lpcOrder) {
         return MA_FALSE;
     }
@@ -87933,21 +88449,29 @@ static ma_bool32 ma_dr_flac__decode_subframe(ma_dr_flac_bs* bs, ma_dr_flac_frame
     {
         case MA_DR_FLAC_SUBFRAME_CONSTANT:
         {
-            ma_dr_flac__decode_samples__constant(bs, frame->header.blockSizeInPCMFrames, subframeBitsPerSample, pSubframe->pSamplesS32);
+            decodeResult = ma_dr_flac__decode_samples__constant(bs, frame->header.blockSizeInPCMFrames, subframeBitsPerSample, pDecodedSamplesOutS32, pDecodedSamplesOutS64);
         } break;
         case MA_DR_FLAC_SUBFRAME_VERBATIM:
         {
-            ma_dr_flac__decode_samples__verbatim(bs, frame->header.blockSizeInPCMFrames, subframeBitsPerSample, pSubframe->pSamplesS32);
+            decodeResult = ma_dr_flac__decode_samples__verbatim(bs, frame->header.blockSizeInPCMFrames, subframeBitsPerSample, pDecodedSamplesOutS32, pDecodedSamplesOutS64);
         } break;
         case MA_DR_FLAC_SUBFRAME_FIXED:
         {
-            ma_dr_flac__decode_samples__fixed(bs, frame->header.blockSizeInPCMFrames, subframeBitsPerSample, pSubframe->lpcOrder, pSubframe->pSamplesS32);
+            decodeResult = ma_dr_flac__decode_samples__fixed(bs, frame->header.blockSizeInPCMFrames, subframeBitsPerSample, pSubframe->lpcOrder, pDecodedSamplesOutS32, pDecodedSamplesOutS64);
         } break;
         case MA_DR_FLAC_SUBFRAME_LPC:
         {
-            ma_dr_flac__decode_samples__lpc(bs, frame->header.blockSizeInPCMFrames, subframeBitsPerSample, pSubframe->lpcOrder, pSubframe->pSamplesS32);
+            decodeResult = ma_dr_flac__decode_samples__lpc(bs, frame->header.blockSizeInPCMFrames, subframeBitsPerSample, pSubframe->lpcOrder, pDecodedSamplesOutS32, pDecodedSamplesOutS64);
         } break;
-        default: return MA_FALSE;
+        default: decodeResult = MA_FALSE;
+    }
+    if (!decodeResult) {
+        return MA_FALSE;
+    }
+    if (pDecodedSamplesOutS32 != NULL) {
+        pSubframe->samples.pS32 = pDecodedSamplesOutS32;
+    } else {
+        pSubframe->samples.pS64 = pDecodedSamplesOutS64;
     }
     return MA_TRUE;
 }
@@ -87971,7 +88495,7 @@ static ma_bool32 ma_dr_flac__seek_subframe(ma_dr_flac_bs* bs, ma_dr_flac_frame* 
         return MA_FALSE;
     }
     subframeBitsPerSample -= pSubframe->wastedBitsPerSample;
-    pSubframe->pSamplesS32 = NULL;
+    MA_DR_FLAC_ZERO_MEMORY(&pSubframe->samples, sizeof(pSubframe->samples));
     switch (pSubframe->subframeType)
     {
         case MA_DR_FLAC_SUBFRAME_CONSTANT:
@@ -88029,6 +88553,7 @@ static MA_INLINE ma_uint8 ma_dr_flac__get_channel_count_from_channel_assignment(
     MA_DR_FLAC_ASSERT(channelAssignment <= 10);
     return lookup[channelAssignment];
 }
+static ma_bool32 ma_dr_flac__resize_decoded_samples(ma_dr_flac* pFlac, ma_uint16 blockSizeInPCMFrames);
 static ma_result ma_dr_flac__decode_flac_frame(ma_dr_flac* pFlac)
 {
     int channelCount;
@@ -88038,17 +88563,28 @@ static ma_result ma_dr_flac__decode_flac_frame(ma_dr_flac* pFlac)
 #ifndef MA_DR_FLAC_NO_CRC
     ma_uint16 actualCRC16;
 #endif
+    pFlac->currentFLACFrame.pcmFramesRemaining = 0;
     MA_DR_FLAC_ZERO_MEMORY(pFlac->currentFLACFrame.subframes, sizeof(pFlac->currentFLACFrame.subframes));
-    if (pFlac->currentFLACFrame.header.blockSizeInPCMFrames > pFlac->maxBlockSizeInPCMFrames) {
-        return MA_ERROR;
-    }
     channelCount = ma_dr_flac__get_channel_count_from_channel_assignment(pFlac->currentFLACFrame.header.channelAssignment);
     if (channelCount != (int)pFlac->channels) {
         return MA_ERROR;
     }
-    for (i = 0; i < channelCount; ++i) {
-        if (!ma_dr_flac__decode_subframe(&pFlac->bs, &pFlac->currentFLACFrame, i, pFlac->pDecodedSamples + (pFlac->currentFLACFrame.header.blockSizeInPCMFrames * i))) {
-            return MA_ERROR;
+    if (pFlac->currentFLACFrame.header.blockSizeInPCMFrames > pFlac->decodedSamplesCapacityInPCMFrames) {
+        if (!ma_dr_flac__resize_decoded_samples(pFlac, pFlac->currentFLACFrame.header.blockSizeInPCMFrames)) {
+            return MA_OUT_OF_MEMORY;
+        }
+    }
+    if (pFlac->bitsPerSample != 32) {
+        for (i = 0; i < channelCount; ++i) {
+            if (!ma_dr_flac__decode_subframe(&pFlac->bs, &pFlac->currentFLACFrame, i, pFlac->decodedSamples.pS32 + (pFlac->currentFLACFrame.header.blockSizeInPCMFrames * i), NULL)) {
+                return MA_ERROR;
+            }
+        }
+    } else {
+        for (i = 0; i < channelCount; ++i) {
+            if (!ma_dr_flac__decode_subframe(&pFlac->bs, &pFlac->currentFLACFrame, i, NULL, pFlac->decodedSamples.pS64 + (pFlac->currentFLACFrame.header.blockSizeInPCMFrames * i))) {
+                return MA_ERROR;
+            }
         }
     }
     paddingSizeInBits = (ma_uint8)(MA_DR_FLAC_CACHE_L1_BITS_REMAINING(&pFlac->bs) & 7);
@@ -88074,33 +88610,42 @@ static ma_result ma_dr_flac__decode_flac_frame(ma_dr_flac* pFlac)
 }
 static ma_result ma_dr_flac__seek_flac_frame(ma_dr_flac* pFlac)
 {
+    ma_result result;
     int channelCount;
     int i;
     ma_uint16 desiredCRC16;
 #ifndef MA_DR_FLAC_NO_CRC
     ma_uint16 actualCRC16;
 #endif
+    pFlac->currentFLACFrame.pcmFramesRemaining = 0;
     channelCount = ma_dr_flac__get_channel_count_from_channel_assignment(pFlac->currentFLACFrame.header.channelAssignment);
     for (i = 0; i < channelCount; ++i) {
         if (!ma_dr_flac__seek_subframe(&pFlac->bs, &pFlac->currentFLACFrame, i)) {
-            return MA_ERROR;
+            result = MA_ERROR;
+            goto error;
         }
     }
     if (!ma_dr_flac__seek_bits(&pFlac->bs, MA_DR_FLAC_CACHE_L1_BITS_REMAINING(&pFlac->bs) & 7)) {
-        return MA_ERROR;
+        result = MA_ERROR;
+        goto error;
     }
 #ifndef MA_DR_FLAC_NO_CRC
     actualCRC16 = ma_dr_flac__flush_crc16(&pFlac->bs);
 #endif
     if (!ma_dr_flac__read_uint16(&pFlac->bs, 16, &desiredCRC16)) {
-        return MA_AT_END;
+        result = MA_AT_END;
+        goto error;
     }
 #ifndef MA_DR_FLAC_NO_CRC
     if (actualCRC16 != desiredCRC16) {
-        return MA_CRC_MISMATCH;
+        result = MA_CRC_MISMATCH;
+        goto error;
     }
 #endif
     return MA_SUCCESS;
+error:
+    MA_DR_FLAC_ZERO_MEMORY(pFlac->currentFLACFrame.subframes, sizeof(pFlac->currentFLACFrame.subframes));
+    return result;
 }
 static ma_bool32 ma_dr_flac__read_and_decode_next_flac_frame(ma_dr_flac* pFlac)
 {
@@ -88108,10 +88653,12 @@ static ma_bool32 ma_dr_flac__read_and_decode_next_flac_frame(ma_dr_flac* pFlac)
     for (;;) {
         ma_result result;
         if (!ma_dr_flac__read_next_flac_frame_header(&pFlac->bs, pFlac->bitsPerSample, &pFlac->currentFLACFrame.header)) {
+            MA_DR_FLAC_ZERO_MEMORY(pFlac->currentFLACFrame.subframes, sizeof(pFlac->currentFLACFrame.subframes));
             return MA_FALSE;
         }
         result = ma_dr_flac__decode_flac_frame(pFlac);
         if (result != MA_SUCCESS) {
+            MA_DR_FLAC_ZERO_MEMORY(pFlac->currentFLACFrame.subframes, sizeof(pFlac->currentFLACFrame.subframes));
             if (result == MA_CRC_MISMATCH) {
                 continue;
             } else {
@@ -88240,7 +88787,7 @@ static ma_bool32 ma_dr_flac__seek_to_pcm_frame__brute_force(ma_dr_flac* pFlac, m
                 pFlac->currentFLACFrame.pcmFramesRemaining = 0;
                 isMidFrame = MA_FALSE;
             }
-            if (pcmFrameIndex == pFlac->totalPCMFrameCount && runningPCMFrameCount == pFlac->totalPCMFrameCount) {
+            if (runningPCMFrameCount == pcmFrameIndex) {
                 return MA_TRUE;
             }
         }
@@ -88252,6 +88799,23 @@ static ma_bool32 ma_dr_flac__seek_to_pcm_frame__brute_force(ma_dr_flac* pFlac, m
 }
 #if !defined(MA_DR_FLAC_NO_CRC)
 #define MA_DR_FLAC_BINARY_SEARCH_APPROX_COMPRESSION_RATIO 0.6f
+static ma_bool32 ma_dr_flac__read_and_decode_next_flac_frame_for_seek(ma_dr_flac* pFlac)
+{
+    MA_DR_FLAC_ASSERT(pFlac != NULL);
+    for (;;) {
+        ma_result result;
+        if (!ma_dr_flac__read_next_flac_frame_header(&pFlac->bs, pFlac->bitsPerSample, &pFlac->currentFLACFrame.header)) {
+            return MA_FALSE;
+        }
+        result = ma_dr_flac__decode_flac_frame(pFlac);
+        if (result == MA_SUCCESS) {
+            return MA_TRUE;
+        }
+        if (result == MA_AT_END) {
+            return MA_FALSE;
+        }
+    }
+}
 static ma_bool32 ma_dr_flac__seek_to_approximate_flac_frame_to_byte(ma_dr_flac* pFlac, ma_uint64 targetByte, ma_uint64 rangeLo, ma_uint64 rangeHi, ma_uint64* pLastSuccessfulSeekOffset)
 {
     MA_DR_FLAC_ASSERT(pFlac != NULL);
@@ -88260,34 +88824,40 @@ static ma_bool32 ma_dr_flac__seek_to_approximate_flac_frame_to_byte(ma_dr_flac* 
     MA_DR_FLAC_ASSERT(targetByte <= rangeHi);
     *pLastSuccessfulSeekOffset = pFlac->firstFLACFramePosInBytes;
     for (;;) {
-        ma_uint64 lastTargetByte = targetByte;
         if (!ma_dr_flac__seek_to_byte(&pFlac->bs, targetByte)) {
             if (targetByte == 0) {
                 ma_dr_flac__seek_to_first_frame(pFlac);
                 return MA_FALSE;
             }
-            targetByte = rangeLo + ((rangeHi - rangeLo)/2);
             rangeHi = targetByte;
+            if (rangeHi <= rangeLo) {
+                return MA_FALSE;
+            }
+            targetByte = rangeLo + ((rangeHi - rangeLo)/2);
         } else {
             MA_DR_FLAC_ZERO_MEMORY(&pFlac->currentFLACFrame, sizeof(pFlac->currentFLACFrame));
-#if 1
-            if (!ma_dr_flac__read_and_decode_next_flac_frame(pFlac)) {
-                targetByte = rangeLo + ((rangeHi - rangeLo)/2);
-                rangeHi = targetByte;
-            } else {
-                break;
+            #if 1
+            {
+                if (!ma_dr_flac__read_and_decode_next_flac_frame_for_seek(pFlac)) {
+                    rangeHi = targetByte;
+                    if (rangeHi <= rangeLo) {
+                        return MA_FALSE;
+                    }
+                    targetByte = rangeLo + ((rangeHi - rangeLo)/2);
+                } else {
+                    break;
+                }
             }
-#else
-            if (!ma_dr_flac__read_next_flac_frame_header(&pFlac->bs, pFlac->bitsPerSample, &pFlac->currentFLACFrame.header)) {
-                targetByte = rangeLo + ((rangeHi - rangeLo)/2);
-                rangeHi = targetByte;
-            } else {
-                break;
+            #else
+            {
+                if (!ma_dr_flac__read_next_flac_frame_header(&pFlac->bs, pFlac->bitsPerSample, &pFlac->currentFLACFrame.header)) {
+                    targetByte = rangeLo + ((rangeHi - rangeLo)/2);
+                    rangeHi = targetByte;
+                } else {
+                    break;
+                }
             }
-#endif
-        }
-        if(targetByte == lastTargetByte) {
-            return MA_FALSE;
+            #endif
         }
     }
     ma_dr_flac__get_pcm_frame_range_of_current_flac_frame(pFlac, &pFlac->currentPCMFrame, NULL);
@@ -88314,11 +88884,29 @@ static ma_bool32 ma_dr_flac__seek_to_pcm_frame__binary_search_internal(ma_dr_fla
     ma_uint64 lastSuccessfulSeekOffset = (ma_uint64)-1;
     ma_uint64 closestSeekOffsetBeforeTargetPCMFrame = byteRangeLo;
     ma_uint32 seekForwardThreshold = (pFlac->maxBlockSizeInPCMFrames != 0) ? pFlac->maxBlockSizeInPCMFrames*2 : 4096;
-    targetByte = byteRangeLo + (ma_uint64)(((ma_int64)((pcmFrameIndex - pFlac->currentPCMFrame) * pFlac->channels * pFlac->bitsPerSample)/8.0f) * MA_DR_FLAC_BINARY_SEARCH_APPROX_COMPRESSION_RATIO);
-    if (targetByte > byteRangeHi) {
+    if (byteRangeLo > byteRangeHi || pFlac->currentPCMFrame > pcmFrameIndex) {
+        return MA_FALSE;
+    }
+    targetByte = (ma_uint64)(((ma_int64)((pcmFrameIndex - pFlac->currentPCMFrame) * pFlac->channels * pFlac->bitsPerSample)/8.0f) * MA_DR_FLAC_BINARY_SEARCH_APPROX_COMPRESSION_RATIO);
+    if (targetByte > byteRangeHi - byteRangeLo) {
         targetByte = byteRangeHi;
+    } else {
+        targetByte += byteRangeLo;
     }
     for (;;) {
+        ma_uint64 previousByteRangeLo;
+        ma_uint64 previousByteRangeHi;
+        previousByteRangeLo = byteRangeLo;
+        previousByteRangeHi = byteRangeHi;
+        if ((byteRangeHi - byteRangeLo) <= 1) {
+            if (!ma_dr_flac__seek_to_approximate_flac_frame_to_byte(pFlac, closestSeekOffsetBeforeTargetPCMFrame, closestSeekOffsetBeforeTargetPCMFrame, byteRangeHi, &lastSuccessfulSeekOffset)) {
+                break;
+            }
+            if (pFlac->currentPCMFrame <= pcmFrameIndex && ma_dr_flac__decode_flac_frame_and_seek_forward_by_pcm_frames(pFlac, pcmFrameIndex - pFlac->currentPCMFrame)) {
+                return MA_TRUE;
+            }
+            break;
+        }
         if (ma_dr_flac__seek_to_approximate_flac_frame_to_byte(pFlac, targetByte, byteRangeLo, byteRangeHi, &lastSuccessfulSeekOffset)) {
             ma_uint64 newPCMRangeLo;
             ma_uint64 newPCMRangeHi;
@@ -88342,7 +88930,6 @@ static ma_bool32 ma_dr_flac__seek_to_pcm_frame__binary_search_internal(ma_dr_fla
                     break;
                 }
             } else {
-                const float approxCompressionRatio = (ma_int64)(lastSuccessfulSeekOffset - pFlac->firstFLACFramePosInBytes) / ((ma_int64)(pcmRangeLo * pFlac->channels * pFlac->bitsPerSample)/8.0f);
                 if (pcmRangeLo > pcmFrameIndex) {
                     byteRangeHi = lastSuccessfulSeekOffset;
                     if (byteRangeLo > byteRangeHi) {
@@ -88360,11 +88947,12 @@ static ma_bool32 ma_dr_flac__seek_to_pcm_frame__binary_search_internal(ma_dr_fla
                             break;
                         }
                     } else {
+                        const double approxCompressionRatio = (ma_int64)(lastSuccessfulSeekOffset - pFlac->firstFLACFramePosInBytes) / ((ma_int64)(pcmRangeLo * pFlac->channels * pFlac->bitsPerSample)/8.0);
                         byteRangeLo = lastSuccessfulSeekOffset;
                         if (byteRangeHi < byteRangeLo) {
                             byteRangeHi = byteRangeLo;
                         }
-                        targetByte = lastSuccessfulSeekOffset + (ma_uint64)(((ma_int64)((pcmFrameIndex-pcmRangeLo) * pFlac->channels * pFlac->bitsPerSample)/8.0f) * approxCompressionRatio);
+                        targetByte = lastSuccessfulSeekOffset + (ma_uint64)(((ma_int64)((pcmFrameIndex-pcmRangeLo) * pFlac->channels * pFlac->bitsPerSample)/8.0) * approxCompressionRatio);
                         if (targetByte > byteRangeHi) {
                             targetByte = byteRangeHi;
                         }
@@ -88373,6 +88961,18 @@ static ma_bool32 ma_dr_flac__seek_to_pcm_frame__binary_search_internal(ma_dr_fla
                         }
                     }
                 }
+            }
+            if (byteRangeLo == previousByteRangeLo && byteRangeHi == previousByteRangeHi) {
+                if (!ma_dr_flac__seek_to_approximate_flac_frame_to_byte(pFlac, closestSeekOffsetBeforeTargetPCMFrame, closestSeekOffsetBeforeTargetPCMFrame, byteRangeHi, &lastSuccessfulSeekOffset)) {
+                    break;
+                }
+                if (pFlac->currentPCMFrame <= pcmFrameIndex && ma_dr_flac__decode_flac_frame_and_seek_forward_by_pcm_frames(pFlac, pcmFrameIndex - pFlac->currentPCMFrame)) {
+                    return MA_TRUE;
+                }
+                break;
+            }
+            if ((byteRangeHi - byteRangeLo) > 1 && (targetByte <= byteRangeLo || targetByte >= byteRangeHi)) {
+                targetByte = byteRangeLo + ((byteRangeHi - byteRangeLo) / 2);
             }
         } else {
             break;
@@ -88422,6 +89022,9 @@ static ma_bool32 ma_dr_flac__seek_to_pcm_frame__seek_table(ma_dr_flac* pFlac, ma
     if (pFlac->pSeekpoints[iClosestSeekpoint].firstPCMFrame > pFlac->totalPCMFrameCount && pFlac->totalPCMFrameCount > 0) {
         return MA_FALSE;
     }
+    if (pFlac->pSeekpoints[iClosestSeekpoint].flacFrameOffset > (ma_uint64)-1 - pFlac->firstFLACFramePosInBytes) {
+        return MA_FALSE;
+    }
 #if !defined(MA_DR_FLAC_NO_CRC)
     if (pFlac->totalPCMFrameCount > 0) {
         ma_uint64 byteRangeLo;
@@ -88430,16 +89033,26 @@ static ma_bool32 ma_dr_flac__seek_to_pcm_frame__seek_table(ma_dr_flac* pFlac, ma
         byteRangeLo = pFlac->firstFLACFramePosInBytes + pFlac->pSeekpoints[iClosestSeekpoint].flacFrameOffset;
         if (iClosestSeekpoint < pFlac->seekpointCount-1) {
             ma_uint32 iNextSeekpoint = iClosestSeekpoint + 1;
-            if (pFlac->pSeekpoints[iClosestSeekpoint].flacFrameOffset >= pFlac->pSeekpoints[iNextSeekpoint].flacFrameOffset || pFlac->pSeekpoints[iNextSeekpoint].pcmFrameCount == 0) {
-                return MA_FALSE;
-            }
             if (pFlac->pSeekpoints[iNextSeekpoint].firstPCMFrame != (((ma_uint64)0xFFFFFFFF << 32) | 0xFFFFFFFF)) {
+                if (pFlac->pSeekpoints[iClosestSeekpoint].flacFrameOffset >= pFlac->pSeekpoints[iNextSeekpoint].flacFrameOffset || pFlac->pSeekpoints[iNextSeekpoint].pcmFrameCount == 0) {
+                    return MA_FALSE;
+                }
+                if (pFlac->pSeekpoints[iNextSeekpoint].flacFrameOffset > (ma_uint64)-1 - pFlac->firstFLACFramePosInBytes) {
+                    return MA_FALSE;
+                }
                 byteRangeHi = pFlac->firstFLACFramePosInBytes + pFlac->pSeekpoints[iNextSeekpoint].flacFrameOffset - 1;
             }
         }
+        if (byteRangeLo > byteRangeHi) {
+            return MA_FALSE;
+        }
         if (ma_dr_flac__seek_to_byte(&pFlac->bs, pFlac->firstFLACFramePosInBytes + pFlac->pSeekpoints[iClosestSeekpoint].flacFrameOffset)) {
+            MA_DR_FLAC_ZERO_MEMORY(&pFlac->currentFLACFrame, sizeof(pFlac->currentFLACFrame));
             if (ma_dr_flac__read_next_flac_frame_header(&pFlac->bs, pFlac->bitsPerSample, &pFlac->currentFLACFrame.header)) {
                 ma_dr_flac__get_pcm_frame_range_of_current_flac_frame(pFlac, &pFlac->currentPCMFrame, NULL);
+                if (pFlac->currentPCMFrame > pcmFrameIndex) {
+                    return MA_FALSE;
+                }
                 if (ma_dr_flac__seek_to_pcm_frame__binary_search_internal(pFlac, pcmFrameIndex, byteRangeLo, byteRangeHi)) {
                     return MA_TRUE;
                 }
@@ -88504,7 +89117,7 @@ static ma_bool32 ma_dr_flac__seek_to_pcm_frame__seek_table(ma_dr_flac* pFlac, ma
                 pFlac->currentFLACFrame.pcmFramesRemaining = 0;
                 isMidFrame = MA_FALSE;
             }
-            if (pcmFrameIndex == pFlac->totalPCMFrameCount && runningPCMFrameCount == pFlac->totalPCMFrameCount) {
+            if (runningPCMFrameCount == pcmFrameIndex) {
                 return MA_TRUE;
             }
         }
@@ -88543,6 +89156,7 @@ typedef struct
     ma_uint64 totalPCMFrameCount;
     ma_uint16 maxBlockSizeInPCMFrames;
     ma_uint64 runningFilePos;
+    ma_uint64 firstFrameSearchPos;
     ma_bool32 hasStreamInfoBlock;
     ma_bool32 hasMetadataBlocks;
     ma_dr_flac_bs bs;
@@ -88645,7 +89259,7 @@ static void* ma_dr_flac__realloc_from_callbacks(void* p, size_t szNew, size_t sz
             return NULL;
         }
         if (p != NULL) {
-            MA_DR_FLAC_COPY_MEMORY(p2, p, szOld);
+            MA_DR_FLAC_COPY_MEMORY(p2, p, MA_DR_FLAC_MIN(szNew, szOld));
             pAllocationCallbacks->onFree(p, pAllocationCallbacks->pUserData);
         }
         return p2;
@@ -88661,21 +89275,61 @@ static void ma_dr_flac__free_from_callbacks(void* p, const ma_allocation_callbac
         pAllocationCallbacks->onFree(p, pAllocationCallbacks->pUserData);
     }
 }
-static ma_bool32 ma_dr_flac__read_and_decode_metadata(ma_dr_flac_read_proc onRead, ma_dr_flac_seek_proc onSeek, ma_dr_flac_tell_proc onTell, ma_dr_flac_meta_proc onMeta, void* pUserData, void* pUserDataMD, ma_uint64* pFirstFramePos, ma_uint64* pSeektablePos, ma_uint32* pSeekpointCount, ma_allocation_callbacks* pAllocationCallbacks)
+static ma_bool32 ma_dr_flac__resize_decoded_samples(ma_dr_flac* pFlac, ma_uint16 blockSizeInPCMFrames)
 {
-    ma_uint64 runningFilePos = 42;
-    ma_uint64 seektablePos   = 0;
-    ma_uint32 seektableSize  = 0;
-    (void)onTell;
+    size_t sampleSize;
+    size_t allocationSize;
+    void* pAllocation;
+    void* pDecodedSamples;
+    sampleSize = sizeof(ma_int32);
+    if (pFlac->bitsPerSample == 32) {
+        sampleSize = sizeof(ma_int64);
+    }
+    allocationSize = ma_dr_flac_align(blockSizeInPCMFrames * sampleSize, MA_DR_FLAC_MAX_SIMD_VECTOR_SIZE) * pFlac->channels + MA_DR_FLAC_MAX_SIMD_VECTOR_SIZE;
+    pAllocation = ma_dr_flac__malloc_from_callbacks(allocationSize, &pFlac->allocationCallbacks);
+    if (pAllocation == NULL) {
+        return MA_FALSE;
+    }
+    ma_dr_flac__free_from_callbacks(pFlac->pDecodedSamplesAllocation, &pFlac->allocationCallbacks);
+    pFlac->pDecodedSamplesAllocation = pAllocation;
+    pFlac->decodedSamplesCapacityInPCMFrames = blockSizeInPCMFrames;
+    pDecodedSamples = (void*)ma_dr_flac_align((size_t)pAllocation, MA_DR_FLAC_MAX_SIMD_VECTOR_SIZE);
+    if (pFlac->bitsPerSample != 32) {
+        pFlac->decodedSamples.pS32 = (ma_int32*)pDecodedSamples;
+    } else {
+        pFlac->decodedSamples.pS64 = (ma_int64*)pDecodedSamples;
+    }
+    return MA_TRUE;
+}
+static ma_result ma_dr_flac__read_and_decode_metadata(ma_dr_flac_read_proc onRead, ma_dr_flac_seek_proc onSeek, ma_dr_flac_tell_proc onTell, ma_dr_flac_meta_proc onMeta, void* pUserData, void* pUserDataMD, ma_uint64* pFirstFramePos, ma_uint64* pSeektablePos, ma_uint32* pSeekpointCount, ma_allocation_callbacks* pAllocationCallbacks)
+{
+    ma_uint64 runningFilePos   = 42;
+    ma_uint64 seektablePos     = 0;
+    ma_uint32 seektableSize    = 0;
+    ma_int64  fileSize         = 0;
+    ma_bool32 hasKnownFileSize = MA_FALSE;
+    if (onTell != NULL && onSeek != NULL) {
+        if (onSeek(pUserData, 0, MA_DR_FLAC_SEEK_END)) {
+            if (onTell(pUserData, &fileSize)) {
+                hasKnownFileSize = MA_TRUE;
+            }
+            if (!onSeek(pUserData, (int)runningFilePos, MA_DR_FLAC_SEEK_SET)) {
+                return MA_BAD_SEEK;
+            }
+        }
+    }
     for (;;) {
         ma_dr_flac_metadata metadata;
         ma_uint8 isLastBlock = 0;
         ma_uint8 blockType = 0;
         ma_uint32 blockSize;
         if (ma_dr_flac__read_and_decode_block_header(onRead, pUserData, &isLastBlock, &blockType, &blockSize) == MA_FALSE) {
-            return MA_FALSE;
+            return MA_ERROR;
         }
         runningFilePos += 4;
+        if (hasKnownFileSize && (runningFilePos > (ma_uint64)fileSize || blockSize > (ma_uint64)fileSize - runningFilePos)) {
+            return MA_INVALID_DATA;
+        }
         metadata.type = blockType;
         metadata.rawDataSize = 0;
         metadata.rawDataOffset = runningFilePos;
@@ -88685,16 +89339,16 @@ static ma_bool32 ma_dr_flac__read_and_decode_metadata(ma_dr_flac_read_proc onRea
             case MA_DR_FLAC_METADATA_BLOCK_TYPE_APPLICATION:
             {
                 if (blockSize < 4) {
-                    return MA_FALSE;
+                    return MA_INVALID_DATA;
                 }
                 if (onMeta) {
                     void* pRawData = ma_dr_flac__malloc_from_callbacks(blockSize, pAllocationCallbacks);
                     if (pRawData == NULL) {
-                        return MA_FALSE;
+                        return MA_ERROR;
                     }
                     if (onRead(pUserData, pRawData, blockSize) != blockSize) {
                         ma_dr_flac__free_from_callbacks(pRawData, pAllocationCallbacks);
-                        return MA_FALSE;
+                        return MA_ERROR;
                     }
                     metadata.pRawData = pRawData;
                     metadata.rawDataSize = blockSize;
@@ -88707,29 +89361,34 @@ static ma_bool32 ma_dr_flac__read_and_decode_metadata(ma_dr_flac_read_proc onRea
             } break;
             case MA_DR_FLAC_METADATA_BLOCK_TYPE_SEEKTABLE:
             {
+                if ((blockSize % MA_DR_FLAC_SEEKPOINT_SIZE_IN_BYTES) != 0) {
+                    return MA_INVALID_DATA;
+                }
                 seektablePos  = runningFilePos;
                 seektableSize = blockSize;
                 if (onMeta) {
                     ma_uint32 seekpointCount;
                     ma_uint32 iSeekpoint;
                     void* pRawData;
+                    size_t rawDataSize;
                     seekpointCount = blockSize/MA_DR_FLAC_SEEKPOINT_SIZE_IN_BYTES;
-                    pRawData = ma_dr_flac__malloc_from_callbacks(seekpointCount * sizeof(ma_dr_flac_seekpoint), pAllocationCallbacks);
+                    rawDataSize = seekpointCount * sizeof(ma_dr_flac_seekpoint);
+                    pRawData = ma_dr_flac__malloc_from_callbacks(rawDataSize, pAllocationCallbacks);
                     if (pRawData == NULL) {
-                        return MA_FALSE;
+                        return MA_ERROR;
                     }
                     for (iSeekpoint = 0; iSeekpoint < seekpointCount; ++iSeekpoint) {
                         ma_dr_flac_seekpoint* pSeekpoint = (ma_dr_flac_seekpoint*)pRawData + iSeekpoint;
                         if (onRead(pUserData, pSeekpoint, MA_DR_FLAC_SEEKPOINT_SIZE_IN_BYTES) != MA_DR_FLAC_SEEKPOINT_SIZE_IN_BYTES) {
                             ma_dr_flac__free_from_callbacks(pRawData, pAllocationCallbacks);
-                            return MA_FALSE;
+                            return MA_ERROR;
                         }
                         pSeekpoint->firstPCMFrame   = ma_dr_flac__be2host_64(pSeekpoint->firstPCMFrame);
                         pSeekpoint->flacFrameOffset = ma_dr_flac__be2host_64(pSeekpoint->flacFrameOffset);
                         pSeekpoint->pcmFrameCount   = ma_dr_flac__be2host_16(pSeekpoint->pcmFrameCount);
                     }
                     metadata.pRawData = pRawData;
-                    metadata.rawDataSize = blockSize;
+                    metadata.rawDataSize = (ma_uint32)rawDataSize;
                     metadata.data.seektable.seekpointCount = seekpointCount;
                     metadata.data.seektable.pSeekpoints = (const ma_dr_flac_seekpoint*)pRawData;
                     onMeta(pUserDataMD, &metadata);
@@ -88739,7 +89398,13 @@ static ma_bool32 ma_dr_flac__read_and_decode_metadata(ma_dr_flac_read_proc onRea
             case MA_DR_FLAC_METADATA_BLOCK_TYPE_VORBIS_COMMENT:
             {
                 if (blockSize < 8) {
-                    return MA_FALSE;
+                    if (onMeta != NULL && blockSize > 0) {
+                        ma_uint8 unused[8];
+                        if (onRead(pUserData, unused, blockSize) != blockSize) {
+                            return MA_ERROR;
+                        }
+                    }
+                    break;
                 }
                 if (onMeta) {
                     void* pRawData;
@@ -88748,11 +89413,11 @@ static ma_bool32 ma_dr_flac__read_and_decode_metadata(ma_dr_flac_read_proc onRea
                     ma_uint32 i;
                     pRawData = ma_dr_flac__malloc_from_callbacks(blockSize, pAllocationCallbacks);
                     if (pRawData == NULL) {
-                        return MA_FALSE;
+                        return MA_ERROR;
                     }
                     if (onRead(pUserData, pRawData, blockSize) != blockSize) {
                         ma_dr_flac__free_from_callbacks(pRawData, pAllocationCallbacks);
-                        return MA_FALSE;
+                        return MA_ERROR;
                     }
                     metadata.pRawData = pRawData;
                     metadata.rawDataSize = blockSize;
@@ -88760,37 +89425,34 @@ static ma_bool32 ma_dr_flac__read_and_decode_metadata(ma_dr_flac_read_proc onRea
                     pRunningDataEnd = (const char*)pRawData + blockSize;
                     metadata.data.vorbis_comment.vendorLength = ma_dr_flac__le2host_32_ptr_unaligned(pRunningData); pRunningData += 4;
                     if ((pRunningDataEnd - pRunningData) - 4 < (ma_int64)metadata.data.vorbis_comment.vendorLength) {
-                        ma_dr_flac__free_from_callbacks(pRawData, pAllocationCallbacks);
-                        return MA_FALSE;
+                        goto vorbis_comment_done;
                     }
-                    metadata.data.vorbis_comment.vendor       = pRunningData;                                            pRunningData += metadata.data.vorbis_comment.vendorLength;
+                    metadata.data.vorbis_comment.vendor       = pRunningData;                                   pRunningData += metadata.data.vorbis_comment.vendorLength;
                     metadata.data.vorbis_comment.commentCount = ma_dr_flac__le2host_32_ptr_unaligned(pRunningData); pRunningData += 4;
                     if ((pRunningDataEnd - pRunningData) / sizeof(ma_uint32) < metadata.data.vorbis_comment.commentCount) {
-                        ma_dr_flac__free_from_callbacks(pRawData, pAllocationCallbacks);
-                        return MA_FALSE;
+                        goto vorbis_comment_done;
                     }
                     metadata.data.vorbis_comment.pComments    = pRunningData;
                     for (i = 0; i < metadata.data.vorbis_comment.commentCount; ++i) {
                         ma_uint32 commentLength;
                         if (pRunningDataEnd - pRunningData < 4) {
-                            ma_dr_flac__free_from_callbacks(pRawData, pAllocationCallbacks);
-                            return MA_FALSE;
+                            goto vorbis_comment_done;
                         }
                         commentLength = ma_dr_flac__le2host_32_ptr_unaligned(pRunningData); pRunningData += 4;
                         if (pRunningDataEnd - pRunningData < (ma_int64)commentLength) {
-                            ma_dr_flac__free_from_callbacks(pRawData, pAllocationCallbacks);
-                            return MA_FALSE;
+                            goto vorbis_comment_done;
                         }
                         pRunningData += commentLength;
                     }
                     onMeta(pUserDataMD, &metadata);
+                vorbis_comment_done:
                     ma_dr_flac__free_from_callbacks(pRawData, pAllocationCallbacks);
                 }
             } break;
             case MA_DR_FLAC_METADATA_BLOCK_TYPE_CUESHEET:
             {
                 if (blockSize < 396) {
-                    return MA_FALSE;
+                    return MA_INVALID_DATA;
                 }
                 if (onMeta) {
                     void* pRawData;
@@ -88802,11 +89464,11 @@ static ma_bool32 ma_dr_flac__read_and_decode_metadata(ma_dr_flac_read_proc onRea
                     void* pTrackData;
                     pRawData = ma_dr_flac__malloc_from_callbacks(blockSize, pAllocationCallbacks);
                     if (pRawData == NULL) {
-                        return MA_FALSE;
+                        return MA_ERROR;
                     }
                     if (onRead(pUserData, pRawData, blockSize) != blockSize) {
                         ma_dr_flac__free_from_callbacks(pRawData, pAllocationCallbacks);
-                        return MA_FALSE;
+                        return MA_ERROR;
                     }
                     metadata.pRawData = pRawData;
                     metadata.rawDataSize = blockSize;
@@ -88819,13 +89481,13 @@ static ma_bool32 ma_dr_flac__read_and_decode_metadata(ma_dr_flac_read_proc onRea
                     metadata.data.cuesheet.pTrackData        = NULL;
                     {
                         const char* pRunningDataSaved = pRunningData;
-                        bufferSize = metadata.data.cuesheet.trackCount * MA_DR_FLAC_CUESHEET_TRACK_SIZE_IN_BYTES;
+                        bufferSize = metadata.data.cuesheet.trackCount * MA_DR_FLAC_CUESHEET_TRACK_PADDED_SIZE_IN_BYTES;
                         for (iTrack = 0; iTrack < metadata.data.cuesheet.trackCount; ++iTrack) {
                             ma_uint8 indexCount;
                             ma_uint32 indexPointSize;
                             if (pRunningDataEnd - pRunningData < MA_DR_FLAC_CUESHEET_TRACK_SIZE_IN_BYTES) {
                                 ma_dr_flac__free_from_callbacks(pRawData, pAllocationCallbacks);
-                                return MA_FALSE;
+                                return MA_INVALID_DATA;
                             }
                             pRunningData += 35;
                             indexCount = pRunningData[0];
@@ -88834,7 +89496,7 @@ static ma_bool32 ma_dr_flac__read_and_decode_metadata(ma_dr_flac_read_proc onRea
                             indexPointSize = indexCount * MA_DR_FLAC_CUESHEET_TRACK_INDEX_SIZE_IN_BYTES;
                             if (pRunningDataEnd - pRunningData < (ma_int64)indexPointSize) {
                                 ma_dr_flac__free_from_callbacks(pRawData, pAllocationCallbacks);
-                                return MA_FALSE;
+                                return MA_INVALID_DATA;
                             }
                             pRunningData += indexPointSize;
                         }
@@ -88845,7 +89507,7 @@ static ma_bool32 ma_dr_flac__read_and_decode_metadata(ma_dr_flac_read_proc onRea
                         pTrackData = ma_dr_flac__malloc_from_callbacks(bufferSize, pAllocationCallbacks);
                         if (pTrackData == NULL) {
                             ma_dr_flac__free_from_callbacks(pRawData, pAllocationCallbacks);
-                            return MA_FALSE;
+                            return MA_ERROR;
                         }
                         pRunningTrackData = (char*)pTrackData;
                         for (iTrack = 0; iTrack < metadata.data.cuesheet.trackCount; ++iTrack) {
@@ -88855,7 +89517,7 @@ static ma_bool32 ma_dr_flac__read_and_decode_metadata(ma_dr_flac_read_proc onRea
                             pRunningTrackData += MA_DR_FLAC_CUESHEET_TRACK_SIZE_IN_BYTES-1;
                             indexCount = pRunningData[0];
                             pRunningData      += 1;
-                            pRunningTrackData += 1;
+                            pRunningTrackData += 1 + (MA_DR_FLAC_CUESHEET_TRACK_PADDED_SIZE_IN_BYTES - MA_DR_FLAC_CUESHEET_TRACK_SIZE_IN_BYTES);
                             for (iIndex = 0; iIndex < indexCount; ++iIndex) {
                                 ma_dr_flac_cuesheet_track_index* pTrackIndex = (ma_dr_flac_cuesheet_track_index*)pRunningTrackData;
                                 MA_DR_FLAC_COPY_MEMORY(pRunningTrackData, pRunningData, MA_DR_FLAC_CUESHEET_TRACK_INDEX_SIZE_IN_BYTES);
@@ -88866,9 +89528,9 @@ static ma_bool32 ma_dr_flac__read_and_decode_metadata(ma_dr_flac_read_proc onRea
                         }
                         metadata.data.cuesheet.pTrackData = pTrackData;
                     }
+                    onMeta(pUserDataMD, &metadata);
                     ma_dr_flac__free_from_callbacks(pRawData, pAllocationCallbacks);
                     pRawData = NULL;
-                    onMeta(pUserDataMD, &metadata);
                     ma_dr_flac__free_from_callbacks(pTrackData, pAllocationCallbacks);
                     pTrackData = NULL;
                 }
@@ -88876,88 +89538,128 @@ static ma_bool32 ma_dr_flac__read_and_decode_metadata(ma_dr_flac_read_proc onRea
             case MA_DR_FLAC_METADATA_BLOCK_TYPE_PICTURE:
             {
                 if (blockSize < 32) {
-                    return MA_FALSE;
+                    return MA_INVALID_DATA;
                 }
                 if (onMeta) {
-                    ma_bool32 result = MA_TRUE;
+                    ma_result result = MA_SUCCESS;
                     ma_uint32 blockSizeRemaining = blockSize;
                     char* pMime = NULL;
                     char* pDescription = NULL;
                     void* pPictureData = NULL;
-                    if (blockSizeRemaining < 4 || onRead(pUserData, &metadata.data.picture.type, 4) != 4) {
-                        result = MA_FALSE;
+                    if (blockSizeRemaining < 4) {
+                        result = MA_INVALID_DATA;
+                        goto done_flac;
+                    }
+                    if (onRead(pUserData, &metadata.data.picture.type, 4) != 4) {
+                        result = MA_ERROR;
                         goto done_flac;
                     }
                     blockSizeRemaining -= 4;
                     metadata.data.picture.type = ma_dr_flac__be2host_32(metadata.data.picture.type);
-                    if (blockSizeRemaining < 4 || onRead(pUserData, &metadata.data.picture.mimeLength, 4) != 4) {
-                        result = MA_FALSE;
+                    if (blockSizeRemaining < 4) {
+                        result = MA_INVALID_DATA;
+                        goto done_flac;
+                    }
+                    if (onRead(pUserData, &metadata.data.picture.mimeLength, 4) != 4) {
+                        result = MA_ERROR;
                         goto done_flac;
                     }
                     blockSizeRemaining -= 4;
                     metadata.data.picture.mimeLength = ma_dr_flac__be2host_32(metadata.data.picture.mimeLength);
-                    pMime = (char*)ma_dr_flac__malloc_from_callbacks(metadata.data.picture.mimeLength + 1, pAllocationCallbacks);
-                    if (pMime == NULL) {
-                        result = MA_FALSE;
+                    if (blockSizeRemaining < metadata.data.picture.mimeLength) {
+                        result = MA_INVALID_DATA;
                         goto done_flac;
                     }
-                    if (blockSizeRemaining < metadata.data.picture.mimeLength || onRead(pUserData, pMime, metadata.data.picture.mimeLength) != metadata.data.picture.mimeLength) {
-                        result = MA_FALSE;
+                    pMime = (char*)ma_dr_flac__malloc_from_callbacks(metadata.data.picture.mimeLength + 1, pAllocationCallbacks);
+                    if (pMime == NULL) {
+                        result = MA_ERROR;
+                        goto done_flac;
+                    }
+                    if (onRead(pUserData, pMime, metadata.data.picture.mimeLength) != metadata.data.picture.mimeLength) {
+                        result = MA_ERROR;
                         goto done_flac;
                     }
                     blockSizeRemaining -= metadata.data.picture.mimeLength;
                     pMime[metadata.data.picture.mimeLength] = '\0';
                     metadata.data.picture.mime = (const char*)pMime;
-                    if (blockSizeRemaining < 4 || onRead(pUserData, &metadata.data.picture.descriptionLength, 4) != 4) {
-                        result = MA_FALSE;
+                    if (blockSizeRemaining < 4) {
+                        result = MA_INVALID_DATA;
+                        goto done_flac;
+                    }
+                    if (onRead(pUserData, &metadata.data.picture.descriptionLength, 4) != 4) {
+                        result = MA_ERROR;
                         goto done_flac;
                     }
                     blockSizeRemaining -= 4;
                     metadata.data.picture.descriptionLength = ma_dr_flac__be2host_32(metadata.data.picture.descriptionLength);
-                    pDescription = (char*)ma_dr_flac__malloc_from_callbacks(metadata.data.picture.descriptionLength + 1, pAllocationCallbacks);
-                    if (pDescription == NULL) {
-                        result = MA_FALSE;
+                    if (blockSizeRemaining < metadata.data.picture.descriptionLength) {
+                        result = MA_INVALID_DATA;
                         goto done_flac;
                     }
-                    if (blockSizeRemaining < metadata.data.picture.descriptionLength || onRead(pUserData, pDescription, metadata.data.picture.descriptionLength) != metadata.data.picture.descriptionLength) {
-                        result = MA_FALSE;
+                    pDescription = (char*)ma_dr_flac__malloc_from_callbacks(metadata.data.picture.descriptionLength + 1, pAllocationCallbacks);
+                    if (pDescription == NULL) {
+                        result = MA_ERROR;
+                        goto done_flac;
+                    }
+                    if (onRead(pUserData, pDescription, metadata.data.picture.descriptionLength) != metadata.data.picture.descriptionLength) {
+                        result = MA_ERROR;
                         goto done_flac;
                     }
                     blockSizeRemaining -= metadata.data.picture.descriptionLength;
                     pDescription[metadata.data.picture.descriptionLength] = '\0';
                     metadata.data.picture.description = (const char*)pDescription;
-                    if (blockSizeRemaining < 4 || onRead(pUserData, &metadata.data.picture.width, 4) != 4) {
-                        result = MA_FALSE;
+                    if (blockSizeRemaining < 4) {
+                        result = MA_INVALID_DATA;
+                        goto done_flac;
+                    }
+                    if (onRead(pUserData, &metadata.data.picture.width, 4) != 4) {
+                        result = MA_ERROR;
                         goto done_flac;
                     }
                     blockSizeRemaining -= 4;
                     metadata.data.picture.width = ma_dr_flac__be2host_32(metadata.data.picture.width);
-                    if (blockSizeRemaining < 4 || onRead(pUserData, &metadata.data.picture.height, 4) != 4) {
-                        result = MA_FALSE;
+                    if (blockSizeRemaining < 4) {
+                        result = MA_INVALID_DATA;
+                        goto done_flac;
+                    }
+                    if (onRead(pUserData, &metadata.data.picture.height, 4) != 4) {
+                        result = MA_ERROR;
                         goto done_flac;
                     }
                     blockSizeRemaining -= 4;
                     metadata.data.picture.height = ma_dr_flac__be2host_32(metadata.data.picture.height);
-                    if (blockSizeRemaining < 4 || onRead(pUserData, &metadata.data.picture.colorDepth, 4) != 4) {
-                        result = MA_FALSE;
+                    if (blockSizeRemaining < 4) {
+                        result = MA_INVALID_DATA;
+                        goto done_flac;
+                    }
+                    if (onRead(pUserData, &metadata.data.picture.colorDepth, 4) != 4) {
+                        result = MA_ERROR;
                         goto done_flac;
                     }
                     blockSizeRemaining -= 4;
                     metadata.data.picture.colorDepth = ma_dr_flac__be2host_32(metadata.data.picture.colorDepth);
-                    if (blockSizeRemaining < 4 || onRead(pUserData, &metadata.data.picture.indexColorCount, 4) != 4) {
-                        result = MA_FALSE;
+                    if (blockSizeRemaining < 4) {
+                        result = MA_INVALID_DATA;
+                        goto done_flac;
+                    }
+                    if (onRead(pUserData, &metadata.data.picture.indexColorCount, 4) != 4) {
+                        result = MA_ERROR;
                         goto done_flac;
                     }
                     blockSizeRemaining -= 4;
                     metadata.data.picture.indexColorCount = ma_dr_flac__be2host_32(metadata.data.picture.indexColorCount);
-                    if (blockSizeRemaining < 4 || onRead(pUserData, &metadata.data.picture.pictureDataSize, 4) != 4) {
-                        result = MA_FALSE;
+                    if (blockSizeRemaining < 4) {
+                        result = MA_INVALID_DATA;
+                        goto done_flac;
+                    }
+                    if (onRead(pUserData, &metadata.data.picture.pictureDataSize, 4) != 4) {
+                        result = MA_ERROR;
                         goto done_flac;
                     }
                     blockSizeRemaining -= 4;
                     metadata.data.picture.pictureDataSize = ma_dr_flac__be2host_32(metadata.data.picture.pictureDataSize);
                     if (blockSizeRemaining < metadata.data.picture.pictureDataSize) {
-                        result = MA_FALSE;
+                        result = MA_INVALID_DATA;
                         goto done_flac;
                     }
                     metadata.data.picture.pictureDataOffset = runningFilePos + (blockSize - blockSizeRemaining);
@@ -88965,14 +89667,14 @@ static ma_bool32 ma_dr_flac__read_and_decode_metadata(ma_dr_flac_read_proc onRea
                     pPictureData = ma_dr_flac__malloc_from_callbacks(metadata.data.picture.pictureDataSize, pAllocationCallbacks);
                     if (pPictureData != NULL) {
                         if (onRead(pUserData, pPictureData, metadata.data.picture.pictureDataSize) != metadata.data.picture.pictureDataSize) {
-                            result = MA_FALSE;
+                            result = MA_ERROR;
                             goto done_flac;
                         }
                     } else
                 #endif
                     {
                         if (!onSeek(pUserData, metadata.data.picture.pictureDataSize, MA_DR_FLAC_SEEK_CUR)) {
-                            result = MA_FALSE;
+                            result = MA_ERROR;
                             goto done_flac;
                         }
                     }
@@ -88987,8 +89689,8 @@ static ma_bool32 ma_dr_flac__read_and_decode_metadata(ma_dr_flac_read_proc onRea
                     ma_dr_flac__free_from_callbacks(pMime,        pAllocationCallbacks);
                     ma_dr_flac__free_from_callbacks(pDescription, pAllocationCallbacks);
                     ma_dr_flac__free_from_callbacks(pPictureData, pAllocationCallbacks);
-                    if (result != MA_TRUE) {
-                        return MA_FALSE;
+                    if (result != MA_SUCCESS) {
+                        return result;
                     }
                 }
             } break;
@@ -88997,7 +89699,7 @@ static ma_bool32 ma_dr_flac__read_and_decode_metadata(ma_dr_flac_read_proc onRea
                 if (onMeta) {
                     metadata.data.padding.unused = 0;
                     if (!onSeek(pUserData, blockSize, MA_DR_FLAC_SEEK_CUR)) {
-                        isLastBlock = MA_TRUE;
+                        return MA_BAD_SEEK;
                     } else {
                         onMeta(pUserDataMD, &metadata);
                     }
@@ -89005,11 +89707,7 @@ static ma_bool32 ma_dr_flac__read_and_decode_metadata(ma_dr_flac_read_proc onRea
             } break;
             case MA_DR_FLAC_METADATA_BLOCK_TYPE_INVALID:
             {
-                if (onMeta) {
-                    if (!onSeek(pUserData, blockSize, MA_DR_FLAC_SEEK_CUR)) {
-                        isLastBlock = MA_TRUE;
-                    }
-                }
+                return MA_INVALID_DATA;
             } break;
             default:
             {
@@ -89018,11 +89716,11 @@ static ma_bool32 ma_dr_flac__read_and_decode_metadata(ma_dr_flac_read_proc onRea
                     if (pRawData != NULL) {
                         if (onRead(pUserData, pRawData, blockSize) != blockSize) {
                             ma_dr_flac__free_from_callbacks(pRawData, pAllocationCallbacks);
-                            return MA_FALSE;
+                            return MA_ERROR;
                         }
                     } else {
                         if (!onSeek(pUserData, blockSize, MA_DR_FLAC_SEEK_CUR)) {
-                            return MA_FALSE;
+                            return MA_ERROR;
                         }
                     }
                     metadata.pRawData = pRawData;
@@ -89034,7 +89732,7 @@ static ma_bool32 ma_dr_flac__read_and_decode_metadata(ma_dr_flac_read_proc onRea
         }
         if (onMeta == NULL && blockSize > 0) {
             if (!onSeek(pUserData, blockSize, MA_DR_FLAC_SEEK_CUR)) {
-                isLastBlock = MA_TRUE;
+                return MA_BAD_SEEK;
             }
         }
         runningFilePos += blockSize;
@@ -89045,6 +89743,35 @@ static ma_bool32 ma_dr_flac__read_and_decode_metadata(ma_dr_flac_read_proc onRea
     *pSeektablePos   = seektablePos;
     *pSeekpointCount = seektableSize / MA_DR_FLAC_SEEKPOINT_SIZE_IN_BYTES;
     *pFirstFramePos  = runningFilePos;
+    return MA_SUCCESS;
+}
+static ma_bool32 ma_dr_flac__init_private__native_without_streaminfo(ma_dr_flac_init_info* pInit, const ma_uint8* pInitialData, ma_uint64 firstFrameSearchPos)
+{
+    ma_uint32 initialData;
+    pInit->container = ma_dr_flac_container_native;
+    pInit->hasStreamInfoBlock = MA_FALSE;
+    pInit->hasMetadataBlocks = MA_FALSE;
+    pInit->firstFrameSearchPos = firstFrameSearchPos;
+    MA_DR_FLAC_COPY_MEMORY(&initialData, pInitialData, sizeof(initialData));
+    initialData = ma_dr_flac__be2host_32(initialData);
+    pInit->bs.consumedBits = MA_DR_FLAC_CACHE_L1_SIZE_BITS(&pInit->bs) - 32;
+    pInit->bs.cache        = (ma_dr_flac_cache_t)initialData << pInit->bs.consumedBits;
+    #ifndef MA_DR_FLAC_NO_CRC
+    {
+        pInit->bs.crc16Cache = initialData;
+        pInit->bs.crc16CacheIgnoredBytes = pInit->bs.consumedBits / 8;
+    }
+    #endif
+    if (!ma_dr_flac__read_next_flac_frame_header(&pInit->bs, 0, &pInit->firstFrameHeader)) {
+        return MA_FALSE;
+    }
+    if (pInit->firstFrameHeader.bitsPerSample == 0 || pInit->firstFrameHeader.sampleRate == 0) {
+        return MA_FALSE;
+    }
+    pInit->sampleRate              = pInit->firstFrameHeader.sampleRate;
+    pInit->channels                = ma_dr_flac__get_channel_count_from_channel_assignment(pInit->firstFrameHeader.channelAssignment);
+    pInit->bitsPerSample           = pInit->firstFrameHeader.bitsPerSample;
+    pInit->maxBlockSizeInPCMFrames = 65535;
     return MA_TRUE;
 }
 static ma_bool32 ma_dr_flac__init_private__native(ma_dr_flac_init_info* pInit, ma_dr_flac_read_proc onRead, ma_dr_flac_seek_proc onSeek, ma_dr_flac_meta_proc onMeta, void* pUserData, void* pUserDataMD, ma_bool32 relaxed)
@@ -89052,28 +89779,18 @@ static ma_bool32 ma_dr_flac__init_private__native(ma_dr_flac_init_info* pInit, m
     ma_uint8 isLastBlock;
     ma_uint8 blockType;
     ma_uint32 blockSize;
+    ma_uint32 blockHeader;
     (void)onSeek;
     pInit->container = ma_dr_flac_container_native;
-    if (!ma_dr_flac__read_and_decode_block_header(onRead, pUserData, &isLastBlock, &blockType, &blockSize)) {
+    if (onRead(pUserData, &blockHeader, 4) != 4) {
         return MA_FALSE;
     }
+    ma_dr_flac__decode_block_header(blockHeader, &isLastBlock, &blockType, &blockSize);
     if (blockType != MA_DR_FLAC_METADATA_BLOCK_TYPE_STREAMINFO || blockSize != 34) {
         if (!relaxed) {
             return MA_FALSE;
         } else {
-            pInit->hasStreamInfoBlock = MA_FALSE;
-            pInit->hasMetadataBlocks  = MA_FALSE;
-            if (!ma_dr_flac__read_next_flac_frame_header(&pInit->bs, 0, &pInit->firstFrameHeader)) {
-                return MA_FALSE;
-            }
-            if (pInit->firstFrameHeader.bitsPerSample == 0) {
-                return MA_FALSE;
-            }
-            pInit->sampleRate              = pInit->firstFrameHeader.sampleRate;
-            pInit->channels                = ma_dr_flac__get_channel_count_from_channel_assignment(pInit->firstFrameHeader.channelAssignment);
-            pInit->bitsPerSample           = pInit->firstFrameHeader.bitsPerSample;
-            pInit->maxBlockSizeInPCMFrames = 65535;
-            return MA_TRUE;
+            return ma_dr_flac__init_private__native_without_streaminfo(pInit, (const ma_uint8*)&blockHeader, pInit->runningFilePos);
         }
     } else {
         ma_dr_flac_streaminfo streaminfo;
@@ -89522,8 +90239,9 @@ static ma_bool32 ma_dr_flac_ogg__seek_to_pcm_frame(ma_dr_flac* pFlac, ma_uint64 
     ma_dr_flac_oggbs* oggbs = (ma_dr_flac_oggbs*)pFlac->_oggbs;
     ma_uint64 originalBytePos;
     ma_uint64 runningGranulePosition;
-    ma_uint64 runningFrameBytePos;
-    ma_uint64 runningPCMFrameCount;
+    ma_uint64 runningFrameBytePos = 0;
+    ma_uint64 runningPCMFrameCount = 0;
+    ma_bool32 hasFramePage = MA_FALSE;
     MA_DR_FLAC_ASSERT(oggbs != NULL);
     originalBytePos = oggbs->currentBytePos;
     if (!ma_dr_flac__seek_to_byte(&pFlac->bs, pFlac->firstFLACFramePosInBytes)) {
@@ -89536,20 +90254,23 @@ static ma_bool32 ma_dr_flac_ogg__seek_to_pcm_frame(ma_dr_flac* pFlac, ma_uint64 
             ma_dr_flac_oggbs__seek_physical(oggbs, originalBytePos, MA_DR_FLAC_SEEK_SET);
             return MA_FALSE;
         }
-        runningFrameBytePos = oggbs->currentBytePos - ma_dr_flac_ogg__get_page_header_size(&oggbs->currentPageHeader) - oggbs->pageDataSize;
-        if (oggbs->currentPageHeader.granulePosition >= pcmFrameIndex) {
-            break;
-        }
         if ((oggbs->currentPageHeader.headerType & 0x01) == 0) {
             if (oggbs->currentPageHeader.segmentTable[0] >= 2) {
                 ma_uint8 firstBytesInPage[2];
                 firstBytesInPage[0] = oggbs->pageData[0];
                 firstBytesInPage[1] = oggbs->pageData[1];
                 if ((firstBytesInPage[0] == 0xFF) && (firstBytesInPage[1] & 0xFC) == 0xF8) {
-                    runningGranulePosition = oggbs->currentPageHeader.granulePosition;
+                    runningFrameBytePos = oggbs->currentBytePos - ma_dr_flac_ogg__get_page_header_size(&oggbs->currentPageHeader) - oggbs->pageDataSize;
+                    runningPCMFrameCount = runningGranulePosition;
+                    hasFramePage = MA_TRUE;
                 }
-                continue;
             }
+        }
+        if (oggbs->currentPageHeader.granulePosition != (ma_uint64)-1) {
+            if (hasFramePage && oggbs->currentPageHeader.granulePosition >= pcmFrameIndex) {
+                break;
+            }
+            runningGranulePosition = oggbs->currentPageHeader.granulePosition;
         }
     }
     if (!ma_dr_flac_oggbs__seek_physical(oggbs, runningFrameBytePos, MA_DR_FLAC_SEEK_SET)) {
@@ -89558,7 +90279,6 @@ static ma_bool32 ma_dr_flac_ogg__seek_to_pcm_frame(ma_dr_flac* pFlac, ma_uint64 
     if (!ma_dr_flac_oggbs__goto_next_page(oggbs, ma_dr_flac_ogg_recover_on_crc_mismatch)) {
         return MA_FALSE;
     }
-    runningPCMFrameCount = runningGranulePosition;
     for (;;) {
         ma_uint64 firstPCMFrameInFLACFrame = 0;
         ma_uint64 lastPCMFrameInFLACFrame = 0;
@@ -89568,7 +90288,7 @@ static ma_bool32 ma_dr_flac_ogg__seek_to_pcm_frame(ma_dr_flac* pFlac, ma_uint64 
         }
         ma_dr_flac__get_pcm_frame_range_of_current_flac_frame(pFlac, &firstPCMFrameInFLACFrame, &lastPCMFrameInFLACFrame);
         pcmFrameCountInThisFrame = (lastPCMFrameInFLACFrame - firstPCMFrameInFLACFrame) + 1;
-        if (pcmFrameIndex == pFlac->totalPCMFrameCount && (runningPCMFrameCount + pcmFrameCountInThisFrame) == pFlac->totalPCMFrameCount) {
+        if ((runningPCMFrameCount + pcmFrameCountInThisFrame) == pcmFrameIndex) {
             ma_result result = ma_dr_flac__decode_flac_frame(pFlac);
             if (result == MA_SUCCESS) {
                 pFlac->currentPCMFrame = pcmFrameIndex;
@@ -89774,7 +90494,7 @@ static ma_bool32 ma_dr_flac__init_private(ma_dr_flac_init_info* pInit, ma_dr_fla
 #endif
     if (relaxed) {
         if (container == ma_dr_flac_container_native) {
-            return ma_dr_flac__init_private__native(pInit, onRead, onSeek, onMeta, pUserData, pUserDataMD, relaxed);
+            return ma_dr_flac__init_private__native_without_streaminfo(pInit, id, pInit->runningFilePos - 4);
         }
 #ifndef MA_DR_FLAC_NO_OGG
         if (container == ma_dr_flac_container_ogg) {
@@ -89793,6 +90513,7 @@ static void ma_dr_flac__init_from_info(ma_dr_flac* pFlac, const ma_dr_flac_init_
     pFlac->onMeta                  = pInit->onMeta;
     pFlac->pUserDataMD             = pInit->pUserDataMD;
     pFlac->maxBlockSizeInPCMFrames = pInit->maxBlockSizeInPCMFrames;
+    pFlac->decodedSamplesCapacityInPCMFrames = pInit->maxBlockSizeInPCMFrames;
     pFlac->sampleRate              = pInit->sampleRate;
     pFlac->channels                = (ma_uint8)pInit->channels;
     pFlac->bitsPerSample           = (ma_uint8)pInit->bitsPerSample;
@@ -89803,14 +90524,17 @@ static ma_dr_flac* ma_dr_flac_open_with_metadata_private(ma_dr_flac_read_proc on
 {
     ma_dr_flac_init_info init;
     ma_uint32 allocationSize;
+    ma_uint32 decodedSampleSize;
     ma_uint32 wholeSIMDVectorCountPerChannel;
     ma_uint32 decodedSamplesAllocationSize;
+    ma_uint8* pDecodedSamples;
 #ifndef MA_DR_FLAC_NO_OGG
     ma_dr_flac_oggbs* pOggbs = NULL;
 #endif
     ma_uint64 firstFramePos;
     ma_uint64 seektablePos;
     ma_uint32 seekpointCount;
+    ma_bool32 recoverMetadata = MA_FALSE;
     ma_allocation_callbacks allocationCallbacks;
     ma_dr_flac* pFlac;
     ma_dr_flac__init_cpu_caps();
@@ -89829,10 +90553,14 @@ static ma_dr_flac* ma_dr_flac_open_with_metadata_private(ma_dr_flac_read_proc on
         allocationCallbacks.onFree    = ma_dr_flac__free_default;
     }
     allocationSize = sizeof(ma_dr_flac);
-    if ((init.maxBlockSizeInPCMFrames % (MA_DR_FLAC_MAX_SIMD_VECTOR_SIZE / sizeof(ma_int32))) == 0) {
-        wholeSIMDVectorCountPerChannel = (init.maxBlockSizeInPCMFrames / (MA_DR_FLAC_MAX_SIMD_VECTOR_SIZE / sizeof(ma_int32)));
+    decodedSampleSize = sizeof(ma_int32);
+    if (init.bitsPerSample == 32) {
+        decodedSampleSize = sizeof(ma_int64);
+    }
+    if ((init.maxBlockSizeInPCMFrames % (MA_DR_FLAC_MAX_SIMD_VECTOR_SIZE / decodedSampleSize)) == 0) {
+        wholeSIMDVectorCountPerChannel = (init.maxBlockSizeInPCMFrames / (MA_DR_FLAC_MAX_SIMD_VECTOR_SIZE / decodedSampleSize));
     } else {
-        wholeSIMDVectorCountPerChannel = (init.maxBlockSizeInPCMFrames / (MA_DR_FLAC_MAX_SIMD_VECTOR_SIZE / sizeof(ma_int32))) + 1;
+        wholeSIMDVectorCountPerChannel = (init.maxBlockSizeInPCMFrames / (MA_DR_FLAC_MAX_SIMD_VECTOR_SIZE / decodedSampleSize)) + 1;
     }
     decodedSamplesAllocationSize = wholeSIMDVectorCountPerChannel * MA_DR_FLAC_MAX_SIMD_VECTOR_SIZE * init.channels;
     allocationSize += decodedSamplesAllocationSize;
@@ -89857,9 +90585,13 @@ static ma_dr_flac* ma_dr_flac_open_with_metadata_private(ma_dr_flac_read_proc on
     }
 #endif
     firstFramePos  = 42;
+    if (!init.hasStreamInfoBlock) {
+        firstFramePos = init.firstFrameSearchPos;
+    }
     seektablePos   = 0;
     seekpointCount = 0;
     if (init.hasMetadataBlocks) {
+        ma_result metadataResult;
         ma_dr_flac_read_proc onReadOverride = onRead;
         ma_dr_flac_seek_proc onSeekOverride = onSeek;
         ma_dr_flac_tell_proc onTellOverride = onTell;
@@ -89872,7 +90604,21 @@ static ma_dr_flac* ma_dr_flac_open_with_metadata_private(ma_dr_flac_read_proc on
             pUserDataOverride = (void*)pOggbs;
         }
 #endif
-        if (!ma_dr_flac__read_and_decode_metadata(onReadOverride, onSeekOverride, onTellOverride, onMeta, pUserDataOverride, pUserDataMD, &firstFramePos, &seektablePos, &seekpointCount, &allocationCallbacks)) {
+        metadataResult = ma_dr_flac__read_and_decode_metadata(onReadOverride, onSeekOverride, onTellOverride, onMeta, pUserDataOverride, pUserDataMD, &firstFramePos, &seektablePos, &seekpointCount, &allocationCallbacks);
+        if (metadataResult != MA_SUCCESS) {
+            if (metadataResult == MA_INVALID_DATA && init.container == ma_dr_flac_container_native && onSeek != NULL) {
+                firstFramePos   = 42;
+                seektablePos    = 0;
+                seekpointCount  = 0;
+                recoverMetadata = MA_TRUE;
+            } else {
+        #ifndef MA_DR_FLAC_NO_OGG
+                ma_dr_flac__free_from_callbacks(pOggbs, &allocationCallbacks);
+        #endif
+                return NULL;
+            }
+        }
+        if ((0xFFFFFFFF - (seekpointCount * sizeof(ma_dr_flac_seekpoint))) < allocationSize) {
         #ifndef MA_DR_FLAC_NO_OGG
             ma_dr_flac__free_from_callbacks(pOggbs, &allocationCallbacks);
         #endif
@@ -89880,7 +90626,7 @@ static ma_dr_flac* ma_dr_flac_open_with_metadata_private(ma_dr_flac_read_proc on
         }
         allocationSize += seekpointCount * sizeof(ma_dr_flac_seekpoint);
     }
-    pFlac = (ma_dr_flac*)ma_dr_flac__malloc_from_callbacks(allocationSize, &allocationCallbacks);
+    pFlac = (ma_dr_flac*)ma_dr_flac__malloc_from_callbacks((size_t)allocationSize, &allocationCallbacks);
     if (pFlac == NULL) {
     #ifndef MA_DR_FLAC_NO_OGG
         ma_dr_flac__free_from_callbacks(pOggbs, &allocationCallbacks);
@@ -89889,10 +90635,15 @@ static ma_dr_flac* ma_dr_flac_open_with_metadata_private(ma_dr_flac_read_proc on
     }
     ma_dr_flac__init_from_info(pFlac, &init);
     pFlac->allocationCallbacks = allocationCallbacks;
-    pFlac->pDecodedSamples = (ma_int32*)ma_dr_flac_align((size_t)pFlac->pExtraData, MA_DR_FLAC_MAX_SIMD_VECTOR_SIZE);
+    pDecodedSamples = (ma_uint8*)ma_dr_flac_align((size_t)pFlac->pExtraData, MA_DR_FLAC_MAX_SIMD_VECTOR_SIZE);
+    if (init.bitsPerSample != 32) {
+        pFlac->decodedSamples.pS32 = (ma_int32*)pDecodedSamples;
+    } else {
+        pFlac->decodedSamples.pS64 = (ma_int64*)pDecodedSamples;
+    }
 #ifndef MA_DR_FLAC_NO_OGG
     if (init.container == ma_dr_flac_container_ogg) {
-        ma_dr_flac_oggbs* pInternalOggbs = (ma_dr_flac_oggbs*)((ma_uint8*)pFlac->pDecodedSamples + decodedSamplesAllocationSize + (seekpointCount * sizeof(ma_dr_flac_seekpoint)));
+        ma_dr_flac_oggbs* pInternalOggbs = (ma_dr_flac_oggbs*)(pDecodedSamples + decodedSamplesAllocationSize + (seekpointCount * sizeof(ma_dr_flac_seekpoint)));
         MA_DR_FLAC_COPY_MEMORY(pInternalOggbs, pOggbs, sizeof(*pOggbs));
         ma_dr_flac__free_from_callbacks(pOggbs, &allocationCallbacks);
         pOggbs = NULL;
@@ -89915,7 +90666,7 @@ static ma_dr_flac* ma_dr_flac_open_with_metadata_private(ma_dr_flac_read_proc on
     {
         if (seektablePos != 0) {
             pFlac->seekpointCount = seekpointCount;
-            pFlac->pSeekpoints = (ma_dr_flac_seekpoint*)((ma_uint8*)pFlac->pDecodedSamples + decodedSamplesAllocationSize);
+            pFlac->pSeekpoints = (ma_dr_flac_seekpoint*)(pDecodedSamples + decodedSamplesAllocationSize);
             MA_DR_FLAC_ASSERT(pFlac->bs.onSeek != NULL);
             MA_DR_FLAC_ASSERT(pFlac->bs.onRead != NULL);
             if (pFlac->bs.onSeek(pFlac->bs.pUserData, (int)seektablePos, MA_DR_FLAC_SEEK_SET)) {
@@ -89932,6 +90683,7 @@ static ma_dr_flac* ma_dr_flac_open_with_metadata_private(ma_dr_flac_read_proc on
                     }
                 }
                 if (!pFlac->bs.onSeek(pFlac->bs.pUserData, (int)pFlac->firstFLACFramePosInBytes, MA_DR_FLAC_SEEK_SET)) {
+                    ma_dr_flac__free_from_callbacks(pFlac->pDecodedSamplesAllocation, &allocationCallbacks);
                     ma_dr_flac__free_from_callbacks(pFlac, &allocationCallbacks);
                     return NULL;
                 }
@@ -89941,7 +90693,13 @@ static ma_dr_flac* ma_dr_flac_open_with_metadata_private(ma_dr_flac_read_proc on
             }
         }
     }
-    if (!init.hasStreamInfoBlock) {
+    if (recoverMetadata) {
+        if (!ma_dr_flac__seek_to_byte(&pFlac->bs, firstFramePos) || !ma_dr_flac__read_and_decode_next_flac_frame(pFlac)) {
+            ma_dr_flac__free_from_callbacks(pFlac->pDecodedSamplesAllocation, &allocationCallbacks);
+            ma_dr_flac__free_from_callbacks(pFlac, &allocationCallbacks);
+            return NULL;
+        }
+    } else if (!init.hasStreamInfoBlock) {
         pFlac->currentFLACFrame.header = init.firstFrameHeader;
         for (;;) {
             ma_result result = ma_dr_flac__decode_flac_frame(pFlac);
@@ -89950,11 +90708,13 @@ static ma_dr_flac* ma_dr_flac_open_with_metadata_private(ma_dr_flac_read_proc on
             } else {
                 if (result == MA_CRC_MISMATCH) {
                     if (!ma_dr_flac__read_next_flac_frame_header(&pFlac->bs, pFlac->bitsPerSample, &pFlac->currentFLACFrame.header)) {
+                        ma_dr_flac__free_from_callbacks(pFlac->pDecodedSamplesAllocation, &allocationCallbacks);
                         ma_dr_flac__free_from_callbacks(pFlac, &allocationCallbacks);
                         return NULL;
                     }
                     continue;
                 } else {
+                    ma_dr_flac__free_from_callbacks(pFlac->pDecodedSamplesAllocation, &allocationCallbacks);
                     ma_dr_flac__free_from_callbacks(pFlac, &allocationCallbacks);
                     return NULL;
                 }
@@ -90195,6 +90955,7 @@ MA_API void ma_dr_flac_close(ma_dr_flac* pFlac)
     }
 #endif
 #endif
+    ma_dr_flac__free_from_callbacks(pFlac->pDecodedSamplesAllocation, &pFlac->allocationCallbacks);
     ma_dr_flac__free_from_callbacks(pFlac, &pFlac->allocationCallbacks);
 }
 #if 0
@@ -90257,7 +91018,7 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_s32__decode_left_side__sse2(ma_
     const ma_uint32* pInputSamples1U32 = (const ma_uint32*)pInputSamples1;
     ma_uint32 shift0 = unusedBitsPerSample + pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
     ma_uint32 shift1 = unusedBitsPerSample + pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
-    MA_DR_FLAC_ASSERT(pFlac->bitsPerSample <= 24);
+    MA_DR_FLAC_ASSERT(pFlac->currentFLACFrame.header.bitsPerSample <= 24);
     for (i = 0; i < frameCount4; ++i) {
         __m128i left  = _mm_slli_epi32(_mm_loadu_si128((const __m128i*)pInputSamples0 + i), shift0);
         __m128i side  = _mm_slli_epi32(_mm_loadu_si128((const __m128i*)pInputSamples1 + i), shift1);
@@ -90285,7 +91046,7 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_s32__decode_left_side__neon(ma_
     ma_uint32 shift1 = unusedBitsPerSample + pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
     int32x4_t shift0_4;
     int32x4_t shift1_4;
-    MA_DR_FLAC_ASSERT(pFlac->bitsPerSample <= 24);
+    MA_DR_FLAC_ASSERT(pFlac->currentFLACFrame.header.bitsPerSample <= 24);
     shift0_4 = vdupq_n_s32(shift0);
     shift1_4 = vdupq_n_s32(shift1);
     for (i = 0; i < frameCount4; ++i) {
@@ -90306,14 +91067,30 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_s32__decode_left_side__neon(ma_
     }
 }
 #endif
+static MA_INLINE void ma_dr_flac_read_pcm_frames_s32__decode_duplicate_mono(ma_uint64 frameCount, ma_uint32 shift, const ma_int32* pInputSamples, ma_int32* pOutputSamples)
+{
+    ma_uint64 i;
+    const ma_uint32* pInputSamplesU32 = (const ma_uint32*)pInputSamples;
+    MA_DR_FLAC_ASSERT(shift < 32);
+    for (i = 0; i < frameCount; ++i) {
+        ma_int32 sample;
+        sample = (ma_int32)(pInputSamplesU32[i] << shift);
+        pOutputSamples[i*2+0] = sample;
+        pOutputSamples[i*2+1] = sample;
+    }
+}
 static MA_INLINE void ma_dr_flac_read_pcm_frames_s32__decode_left_side(ma_dr_flac* pFlac, ma_uint64 frameCount, ma_uint32 unusedBitsPerSample, const ma_int32* pInputSamples0, const ma_int32* pInputSamples1, ma_int32* pOutputSamples)
 {
+    if (unusedBitsPerSample + pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample == 32) {
+        ma_dr_flac_read_pcm_frames_s32__decode_duplicate_mono(frameCount, unusedBitsPerSample + pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample, pInputSamples0, pOutputSamples);
+        return;
+    }
 #if defined(MA_DR_FLAC_SUPPORT_SSE2)
-    if (ma_dr_flac__gIsSSE2Supported && pFlac->bitsPerSample <= 24) {
+    if (ma_dr_flac__gIsSSE2Supported && pFlac->currentFLACFrame.header.bitsPerSample <= 24) {
         ma_dr_flac_read_pcm_frames_s32__decode_left_side__sse2(pFlac, frameCount, unusedBitsPerSample, pInputSamples0, pInputSamples1, pOutputSamples);
     } else
 #elif defined(MA_DR_FLAC_SUPPORT_NEON)
-    if (ma_dr_flac__gIsNEONSupported && pFlac->bitsPerSample <= 24) {
+    if (ma_dr_flac__gIsNEONSupported && pFlac->currentFLACFrame.header.bitsPerSample <= 24) {
         ma_dr_flac_read_pcm_frames_s32__decode_left_side__neon(pFlac, frameCount, unusedBitsPerSample, pInputSamples0, pInputSamples1, pOutputSamples);
     } else
 #endif
@@ -90385,7 +91162,7 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_s32__decode_right_side__sse2(ma
     const ma_uint32* pInputSamples1U32 = (const ma_uint32*)pInputSamples1;
     ma_uint32 shift0 = unusedBitsPerSample + pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
     ma_uint32 shift1 = unusedBitsPerSample + pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
-    MA_DR_FLAC_ASSERT(pFlac->bitsPerSample <= 24);
+    MA_DR_FLAC_ASSERT(pFlac->currentFLACFrame.header.bitsPerSample <= 24);
     for (i = 0; i < frameCount4; ++i) {
         __m128i side  = _mm_slli_epi32(_mm_loadu_si128((const __m128i*)pInputSamples0 + i), shift0);
         __m128i right = _mm_slli_epi32(_mm_loadu_si128((const __m128i*)pInputSamples1 + i), shift1);
@@ -90413,7 +91190,7 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_s32__decode_right_side__neon(ma
     ma_uint32 shift1 = unusedBitsPerSample + pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
     int32x4_t shift0_4;
     int32x4_t shift1_4;
-    MA_DR_FLAC_ASSERT(pFlac->bitsPerSample <= 24);
+    MA_DR_FLAC_ASSERT(pFlac->currentFLACFrame.header.bitsPerSample <= 24);
     shift0_4 = vdupq_n_s32(shift0);
     shift1_4 = vdupq_n_s32(shift1);
     for (i = 0; i < frameCount4; ++i) {
@@ -90436,12 +91213,16 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_s32__decode_right_side__neon(ma
 #endif
 static MA_INLINE void ma_dr_flac_read_pcm_frames_s32__decode_right_side(ma_dr_flac* pFlac, ma_uint64 frameCount, ma_uint32 unusedBitsPerSample, const ma_int32* pInputSamples0, const ma_int32* pInputSamples1, ma_int32* pOutputSamples)
 {
+    if (unusedBitsPerSample + pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample == 32) {
+        ma_dr_flac_read_pcm_frames_s32__decode_duplicate_mono(frameCount, unusedBitsPerSample + pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample, pInputSamples1, pOutputSamples);
+        return;
+    }
 #if defined(MA_DR_FLAC_SUPPORT_SSE2)
-    if (ma_dr_flac__gIsSSE2Supported && pFlac->bitsPerSample <= 24) {
+    if (ma_dr_flac__gIsSSE2Supported && pFlac->currentFLACFrame.header.bitsPerSample <= 24) {
         ma_dr_flac_read_pcm_frames_s32__decode_right_side__sse2(pFlac, frameCount, unusedBitsPerSample, pInputSamples0, pInputSamples1, pOutputSamples);
     } else
 #elif defined(MA_DR_FLAC_SUPPORT_NEON)
-    if (ma_dr_flac__gIsNEONSupported && pFlac->bitsPerSample <= 24) {
+    if (ma_dr_flac__gIsNEONSupported && pFlac->currentFLACFrame.header.bitsPerSample <= 24) {
         ma_dr_flac_read_pcm_frames_s32__decode_right_side__neon(pFlac, frameCount, unusedBitsPerSample, pInputSamples0, pInputSamples1, pOutputSamples);
     } else
 #endif
@@ -90473,7 +91254,6 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_s32__decode_mid_side__scalar(ma
     const ma_uint32* pInputSamples1U32 = (const ma_uint32*)pInputSamples1;
     ma_int32 shift = unusedBitsPerSample;
     if (shift > 0) {
-        shift -= 1;
         for (i = 0; i < frameCount4; ++i) {
             ma_uint32 temp0L;
             ma_uint32 temp1L;
@@ -90495,14 +91275,14 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_s32__decode_mid_side__scalar(ma
             mid1 = (mid1 << 1) | (side1 & 0x01);
             mid2 = (mid2 << 1) | (side2 & 0x01);
             mid3 = (mid3 << 1) | (side3 & 0x01);
-            temp0L = (mid0 + side0) << shift;
-            temp1L = (mid1 + side1) << shift;
-            temp2L = (mid2 + side2) << shift;
-            temp3L = (mid3 + side3) << shift;
-            temp0R = (mid0 - side0) << shift;
-            temp1R = (mid1 - side1) << shift;
-            temp2R = (mid2 - side2) << shift;
-            temp3R = (mid3 - side3) << shift;
+            temp0L = (mid0 + side0) << (shift - 1);
+            temp1L = (mid1 + side1) << (shift - 1);
+            temp2L = (mid2 + side2) << (shift - 1);
+            temp3L = (mid3 + side3) << (shift - 1);
+            temp0R = (mid0 - side0) << (shift - 1);
+            temp1R = (mid1 - side1) << (shift - 1);
+            temp2R = (mid2 - side2) << (shift - 1);
+            temp3R = (mid3 - side3) << (shift - 1);
             pOutputSamples[i*8+0] = (ma_int32)temp0L;
             pOutputSamples[i*8+1] = (ma_int32)temp0R;
             pOutputSamples[i*8+2] = (ma_int32)temp1L;
@@ -90522,26 +91302,26 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_s32__decode_mid_side__scalar(ma
             ma_uint32 temp1R;
             ma_uint32 temp2R;
             ma_uint32 temp3R;
-            ma_uint32 mid0  = pInputSamples0U32[i*4+0] << pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
-            ma_uint32 mid1  = pInputSamples0U32[i*4+1] << pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
-            ma_uint32 mid2  = pInputSamples0U32[i*4+2] << pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
-            ma_uint32 mid3  = pInputSamples0U32[i*4+3] << pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
-            ma_uint32 side0 = pInputSamples1U32[i*4+0] << pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
-            ma_uint32 side1 = pInputSamples1U32[i*4+1] << pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
-            ma_uint32 side2 = pInputSamples1U32[i*4+2] << pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
-            ma_uint32 side3 = pInputSamples1U32[i*4+3] << pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
+            ma_uint64 mid0  = (ma_uint64)(ma_int64)pInputSamples0[i*4+0] << pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
+            ma_uint64 mid1  = (ma_uint64)(ma_int64)pInputSamples0[i*4+1] << pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
+            ma_uint64 mid2  = (ma_uint64)(ma_int64)pInputSamples0[i*4+2] << pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
+            ma_uint64 mid3  = (ma_uint64)(ma_int64)pInputSamples0[i*4+3] << pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
+            ma_uint64 side0 = (ma_uint64)(ma_int64)pInputSamples1[i*4+0] << pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
+            ma_uint64 side1 = (ma_uint64)(ma_int64)pInputSamples1[i*4+1] << pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
+            ma_uint64 side2 = (ma_uint64)(ma_int64)pInputSamples1[i*4+2] << pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
+            ma_uint64 side3 = (ma_uint64)(ma_int64)pInputSamples1[i*4+3] << pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
             mid0 = (mid0 << 1) | (side0 & 0x01);
             mid1 = (mid1 << 1) | (side1 & 0x01);
             mid2 = (mid2 << 1) | (side2 & 0x01);
             mid3 = (mid3 << 1) | (side3 & 0x01);
-            temp0L = (ma_uint32)((ma_int32)(mid0 + side0) >> 1);
-            temp1L = (ma_uint32)((ma_int32)(mid1 + side1) >> 1);
-            temp2L = (ma_uint32)((ma_int32)(mid2 + side2) >> 1);
-            temp3L = (ma_uint32)((ma_int32)(mid3 + side3) >> 1);
-            temp0R = (ma_uint32)((ma_int32)(mid0 - side0) >> 1);
-            temp1R = (ma_uint32)((ma_int32)(mid1 - side1) >> 1);
-            temp2R = (ma_uint32)((ma_int32)(mid2 - side2) >> 1);
-            temp3R = (ma_uint32)((ma_int32)(mid3 - side3) >> 1);
+            temp0L = (ma_uint32)((ma_int64)(mid0 + side0) >> 1);
+            temp1L = (ma_uint32)((ma_int64)(mid1 + side1) >> 1);
+            temp2L = (ma_uint32)((ma_int64)(mid2 + side2) >> 1);
+            temp3L = (ma_uint32)((ma_int64)(mid3 + side3) >> 1);
+            temp0R = (ma_uint32)((ma_int64)(mid0 - side0) >> 1);
+            temp1R = (ma_uint32)((ma_int64)(mid1 - side1) >> 1);
+            temp2R = (ma_uint32)((ma_int64)(mid2 - side2) >> 1);
+            temp3R = (ma_uint32)((ma_int64)(mid3 - side3) >> 1);
             pOutputSamples[i*8+0] = (ma_int32)temp0L;
             pOutputSamples[i*8+1] = (ma_int32)temp0R;
             pOutputSamples[i*8+2] = (ma_int32)temp1L;
@@ -90552,12 +91332,24 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_s32__decode_mid_side__scalar(ma
             pOutputSamples[i*8+7] = (ma_int32)temp3R;
         }
     }
-    for (i = (frameCount4 << 2); i < frameCount; ++i) {
-        ma_uint32 mid  = pInputSamples0U32[i] << pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
-        ma_uint32 side = pInputSamples1U32[i] << pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
-        mid = (mid << 1) | (side & 0x01);
-        pOutputSamples[i*2+0] = (ma_int32)((ma_uint32)((ma_int32)(mid + side) >> 1) << unusedBitsPerSample);
-        pOutputSamples[i*2+1] = (ma_int32)((ma_uint32)((ma_int32)(mid - side) >> 1) << unusedBitsPerSample);
+    if (shift > 0) {
+        for (i = (frameCount4 << 2); i < frameCount; ++i) {
+            ma_uint32 mid  = pInputSamples0U32[i] << pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
+            ma_uint32 side = pInputSamples1U32[i] << pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
+            mid = (mid << 1) | (side & 0x01);
+            pOutputSamples[i*2+0] = (ma_int32)((ma_uint32)((ma_int32)(mid + side) >> 1) << unusedBitsPerSample);
+            pOutputSamples[i*2+1] = (ma_int32)((ma_uint32)((ma_int32)(mid - side) >> 1) << unusedBitsPerSample);
+        }
+    } else {
+        for (i = (frameCount4 << 2); i < frameCount; ++i) {
+            ma_uint64 mid;
+            ma_uint64 side;
+            mid  = (ma_uint64)(ma_int64)pInputSamples0[i] << pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
+            side = (ma_uint64)(ma_int64)pInputSamples1[i] << pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
+            mid = (mid << 1) | (side & 0x01);
+            pOutputSamples[i*2+0] = (ma_int32)((ma_int64)(mid + side) >> 1);
+            pOutputSamples[i*2+1] = (ma_int32)((ma_int64)(mid - side) >> 1);
+        }
     }
 }
 #if defined(MA_DR_FLAC_SUPPORT_SSE2)
@@ -90568,7 +91360,7 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_s32__decode_mid_side__sse2(ma_d
     const ma_uint32* pInputSamples0U32 = (const ma_uint32*)pInputSamples0;
     const ma_uint32* pInputSamples1U32 = (const ma_uint32*)pInputSamples1;
     ma_int32 shift = unusedBitsPerSample;
-    MA_DR_FLAC_ASSERT(pFlac->bitsPerSample <= 24);
+    MA_DR_FLAC_ASSERT(pFlac->currentFLACFrame.header.bitsPerSample <= 24);
     if (shift == 0) {
         for (i = 0; i < frameCount4; ++i) {
             __m128i mid;
@@ -90626,7 +91418,7 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_s32__decode_mid_side__neon(ma_d
     int32x4_t  wbpsShift0_4;
     int32x4_t  wbpsShift1_4;
     uint32x4_t one4;
-    MA_DR_FLAC_ASSERT(pFlac->bitsPerSample <= 24);
+    MA_DR_FLAC_ASSERT(pFlac->currentFLACFrame.header.bitsPerSample <= 24);
     wbpsShift0_4 = vdupq_n_s32(pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample);
     wbpsShift1_4 = vdupq_n_s32(pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample);
     one4         = vdupq_n_u32(1);
@@ -90679,11 +91471,11 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_s32__decode_mid_side__neon(ma_d
 static MA_INLINE void ma_dr_flac_read_pcm_frames_s32__decode_mid_side(ma_dr_flac* pFlac, ma_uint64 frameCount, ma_uint32 unusedBitsPerSample, const ma_int32* pInputSamples0, const ma_int32* pInputSamples1, ma_int32* pOutputSamples)
 {
 #if defined(MA_DR_FLAC_SUPPORT_SSE2)
-    if (ma_dr_flac__gIsSSE2Supported && pFlac->bitsPerSample <= 24) {
+    if (ma_dr_flac__gIsSSE2Supported && pFlac->currentFLACFrame.header.bitsPerSample <= 24) {
         ma_dr_flac_read_pcm_frames_s32__decode_mid_side__sse2(pFlac, frameCount, unusedBitsPerSample, pInputSamples0, pInputSamples1, pOutputSamples);
     } else
 #elif defined(MA_DR_FLAC_SUPPORT_NEON)
-    if (ma_dr_flac__gIsNEONSupported && pFlac->bitsPerSample <= 24) {
+    if (ma_dr_flac__gIsNEONSupported && pFlac->currentFLACFrame.header.bitsPerSample <= 24) {
         ma_dr_flac_read_pcm_frames_s32__decode_mid_side__neon(pFlac, frameCount, unusedBitsPerSample, pInputSamples0, pInputSamples1, pOutputSamples);
     } else
 #endif
@@ -90783,11 +91575,11 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_s32__decode_independent_stereo_
 static MA_INLINE void ma_dr_flac_read_pcm_frames_s32__decode_independent_stereo(ma_dr_flac* pFlac, ma_uint64 frameCount, ma_uint32 unusedBitsPerSample, const ma_int32* pInputSamples0, const ma_int32* pInputSamples1, ma_int32* pOutputSamples)
 {
 #if defined(MA_DR_FLAC_SUPPORT_SSE2)
-    if (ma_dr_flac__gIsSSE2Supported && pFlac->bitsPerSample <= 24) {
+    if (ma_dr_flac__gIsSSE2Supported && pFlac->currentFLACFrame.header.bitsPerSample <= 24) {
         ma_dr_flac_read_pcm_frames_s32__decode_independent_stereo__sse2(pFlac, frameCount, unusedBitsPerSample, pInputSamples0, pInputSamples1, pOutputSamples);
     } else
 #elif defined(MA_DR_FLAC_SUPPORT_NEON)
-    if (ma_dr_flac__gIsNEONSupported && pFlac->bitsPerSample <= 24) {
+    if (ma_dr_flac__gIsNEONSupported && pFlac->currentFLACFrame.header.bitsPerSample <= 24) {
         ma_dr_flac_read_pcm_frames_s32__decode_independent_stereo__neon(pFlac, frameCount, unusedBitsPerSample, pInputSamples0, pInputSamples1, pOutputSamples);
     } else
 #endif
@@ -90799,10 +91591,181 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_s32__decode_independent_stereo(
 #endif
     }
 }
+static MA_INLINE void ma_dr_flac__decode_stereo_sample_s64(const ma_dr_flac_frame* pFrame, ma_uint64 iPCMFrame, ma_int32* pLeft, ma_int32* pRight)
+{
+    ma_uint64 sample0;
+    ma_uint64 sample1;
+    sample0 = (ma_uint64)pFrame->subframes[0].samples.pS64[iPCMFrame] << pFrame->subframes[0].wastedBitsPerSample;
+    sample1 = (ma_uint64)pFrame->subframes[1].samples.pS64[iPCMFrame] << pFrame->subframes[1].wastedBitsPerSample;
+    switch (pFrame->header.channelAssignment)
+    {
+        case MA_DR_FLAC_CHANNEL_ASSIGNMENT_LEFT_SIDE:
+        {
+            *pLeft  = (ma_int32)sample0;
+            *pRight = (ma_int32)(sample0 - sample1);
+        } break;
+        case MA_DR_FLAC_CHANNEL_ASSIGNMENT_RIGHT_SIDE:
+        {
+            *pLeft  = (ma_int32)(sample0 + sample1);
+            *pRight = (ma_int32)sample1;
+        } break;
+        case MA_DR_FLAC_CHANNEL_ASSIGNMENT_MID_SIDE:
+        {
+            sample0 = (sample0 << 1) | (sample1 & 0x01);
+            *pLeft  = (ma_int32)((ma_int64)(sample0 + sample1) >> 1);
+            *pRight = (ma_int32)((ma_int64)(sample0 - sample1) >> 1);
+        } break;
+        case MA_DR_FLAC_CHANNEL_ASSIGNMENT_INDEPENDENT_STEREO:
+        {
+            *pLeft  = (ma_int32)sample0;
+            *pRight = (ma_int32)sample1;
+        } break;
+        default:
+        {
+            MA_DR_FLAC_ASSERT(!"Invalid stereo channel assignment");
+            *pLeft  = 0;
+            *pRight = 0;
+        } break;
+    }
+}
+static void ma_dr_flac_read_pcm_frames_s32__decode_s64(ma_dr_flac* pFlac, ma_uint64 frameCount, ma_uint64 iFirstPCMFrame, ma_int32* pOutputSamples)
+{
+    ma_uint64 i;
+    MA_DR_FLAC_ASSERT(pFlac->bitsPerSample == 32);
+    if (pFlac->channels == 2) {
+        for (i = 0; i < frameCount; ++i) {
+            ma_int32 left;
+            ma_int32 right;
+            ma_dr_flac__decode_stereo_sample_s64(&pFlac->currentFLACFrame, iFirstPCMFrame + i, &left, &right);
+            pOutputSamples[i*2+0] = left;
+            pOutputSamples[i*2+1] = right;
+        }
+    } else {
+        for (i = 0; i < frameCount; ++i) {
+            unsigned int j;
+            for (j = 0; j < pFlac->channels; ++j) {
+                ma_int32 sample;
+                sample = (ma_int32)((ma_uint64)pFlac->currentFLACFrame.subframes[j].samples.pS64[iFirstPCMFrame + i] << pFlac->currentFLACFrame.subframes[j].wastedBitsPerSample);
+                pOutputSamples[i*pFlac->channels+j] = sample;
+            }
+        }
+    }
+}
+static void ma_dr_flac_read_pcm_frames_s16__decode_s64(ma_dr_flac* pFlac, ma_uint64 frameCount, ma_uint64 iFirstPCMFrame, ma_int16* pOutputSamples)
+{
+    ma_uint64 i;
+    MA_DR_FLAC_ASSERT(pFlac->bitsPerSample == 32);
+    if (pFlac->channels == 2) {
+        for (i = 0; i < frameCount; ++i) {
+            ma_int32 left;
+            ma_int32 right;
+            ma_dr_flac__decode_stereo_sample_s64(&pFlac->currentFLACFrame, iFirstPCMFrame + i, &left, &right);
+            pOutputSamples[i*2+0] = (ma_int16)(left  >> 16);
+            pOutputSamples[i*2+1] = (ma_int16)(right >> 16);
+        }
+    } else {
+        for (i = 0; i < frameCount; ++i) {
+            unsigned int j;
+            for (j = 0; j < pFlac->channels; ++j) {
+                ma_int32 sample;
+                sample = (ma_int32)((ma_uint64)pFlac->currentFLACFrame.subframes[j].samples.pS64[iFirstPCMFrame + i] << pFlac->currentFLACFrame.subframes[j].wastedBitsPerSample);
+                pOutputSamples[i*pFlac->channels+j] = (ma_int16)(sample >> 16);
+            }
+        }
+    }
+}
+static void ma_dr_flac_read_pcm_frames_f32__decode_s64(ma_dr_flac* pFlac, ma_uint64 frameCount, ma_uint64 iFirstPCMFrame, float* pOutputSamples)
+{
+    ma_uint64 i;
+    MA_DR_FLAC_ASSERT(pFlac->bitsPerSample == 32);
+    if (pFlac->channels == 2) {
+        for (i = 0; i < frameCount; ++i) {
+            ma_int32 left;
+            ma_int32 right;
+            ma_dr_flac__decode_stereo_sample_s64(&pFlac->currentFLACFrame, iFirstPCMFrame + i, &left, &right);
+            pOutputSamples[i*2+0] = left  * (1.0f / 2147483648.0f);
+            pOutputSamples[i*2+1] = right * (1.0f / 2147483648.0f);
+        }
+    } else {
+        for (i = 0; i < frameCount; ++i) {
+            unsigned int j;
+            for (j = 0; j < pFlac->channels; ++j) {
+                ma_int32 sample;
+                sample = (ma_int32)((ma_uint64)pFlac->currentFLACFrame.subframes[j].samples.pS64[iFirstPCMFrame + i] << pFlac->currentFLACFrame.subframes[j].wastedBitsPerSample);
+                pOutputSamples[i*pFlac->channels+j] = sample * (1.0f / 2147483648.0f);
+            }
+        }
+    }
+}
+static ma_bool32 ma_dr_flac__is_current_flac_frame_valid(ma_dr_flac* pFlac)
+{
+    ma_uint32 iChannel;
+    ma_uint32 channelCount;
+    if (pFlac->currentFLACFrame.header.blockSizeInPCMFrames > pFlac->decodedSamplesCapacityInPCMFrames || pFlac->currentFLACFrame.pcmFramesRemaining > pFlac->currentFLACFrame.header.blockSizeInPCMFrames) {
+        return MA_FALSE;
+    }
+    channelCount = ma_dr_flac__get_channel_count_from_channel_assignment(pFlac->currentFLACFrame.header.channelAssignment);
+    if (channelCount != pFlac->channels) {
+        return MA_FALSE;
+    }
+    if (pFlac->bitsPerSample == 32) {
+        for (iChannel = 0; iChannel < channelCount; iChannel += 1) {
+            if (pFlac->currentFLACFrame.subframes[iChannel].samples.pS64 == NULL) {
+                return MA_FALSE;
+            }
+        }
+    } else {
+        for (iChannel = 0; iChannel < channelCount; iChannel += 1) {
+            if (pFlac->currentFLACFrame.subframes[iChannel].samples.pS32 == NULL) {
+                return MA_FALSE;
+            }
+        }
+    }
+    return MA_TRUE;
+}
+static MA_INLINE void ma_dr_flac_read_pcm_frames_s32__decode(ma_dr_flac* pFlac, ma_uint64 frameCount, ma_uint64 iFirstPCMFrame, ma_int32* pOutputSamples)
+{
+    unsigned int channelCount;
+    ma_uint32 unusedBitsPerSample;
+    MA_DR_FLAC_ASSERT(pFlac->currentFLACFrame.header.bitsPerSample < 32);
+    channelCount = ma_dr_flac__get_channel_count_from_channel_assignment(pFlac->currentFLACFrame.header.channelAssignment);
+    unusedBitsPerSample = 32 - pFlac->currentFLACFrame.header.bitsPerSample;
+    if (channelCount == 2) {
+        const ma_int32* pDecodedSamples0 = pFlac->currentFLACFrame.subframes[0].samples.pS32 + iFirstPCMFrame;
+        const ma_int32* pDecodedSamples1 = pFlac->currentFLACFrame.subframes[1].samples.pS32 + iFirstPCMFrame;
+        switch (pFlac->currentFLACFrame.header.channelAssignment)
+        {
+            case MA_DR_FLAC_CHANNEL_ASSIGNMENT_LEFT_SIDE:
+            {
+                ma_dr_flac_read_pcm_frames_s32__decode_left_side(pFlac, frameCount, unusedBitsPerSample, pDecodedSamples0, pDecodedSamples1, pOutputSamples);
+            } break;
+            case MA_DR_FLAC_CHANNEL_ASSIGNMENT_RIGHT_SIDE:
+            {
+                ma_dr_flac_read_pcm_frames_s32__decode_right_side(pFlac, frameCount, unusedBitsPerSample, pDecodedSamples0, pDecodedSamples1, pOutputSamples);
+            } break;
+            case MA_DR_FLAC_CHANNEL_ASSIGNMENT_MID_SIDE:
+            {
+                ma_dr_flac_read_pcm_frames_s32__decode_mid_side(pFlac, frameCount, unusedBitsPerSample, pDecodedSamples0, pDecodedSamples1, pOutputSamples);
+            } break;
+            case MA_DR_FLAC_CHANNEL_ASSIGNMENT_INDEPENDENT_STEREO:
+            {
+                ma_dr_flac_read_pcm_frames_s32__decode_independent_stereo(pFlac, frameCount, unusedBitsPerSample, pDecodedSamples0, pDecodedSamples1, pOutputSamples);
+            } break;
+            default: MA_DR_FLAC_ASSERT(!"Invalid stereo channel assignment"); break;
+        }
+    } else {
+        ma_uint64 i;
+        for (i = 0; i < frameCount; ++i) {
+            unsigned int j;
+            for (j = 0; j < channelCount; ++j) {
+                pOutputSamples[(i*channelCount)+j] = (ma_int32)((ma_uint32)(pFlac->currentFLACFrame.subframes[j].samples.pS32[iFirstPCMFrame + i]) << (unusedBitsPerSample + pFlac->currentFLACFrame.subframes[j].wastedBitsPerSample));
+            }
+        }
+    }
+}
 MA_API ma_uint64 ma_dr_flac_read_pcm_frames_s32(ma_dr_flac* pFlac, ma_uint64 framesToRead, ma_int32* pBufferOut)
 {
     ma_uint64 framesRead;
-    ma_uint32 unusedBitsPerSample;
     if (pFlac == NULL || framesToRead == 0) {
         return 0;
     }
@@ -90810,7 +91773,6 @@ MA_API ma_uint64 ma_dr_flac_read_pcm_frames_s32(ma_dr_flac* pFlac, ma_uint64 fra
         return ma_dr_flac__seek_forward_by_pcm_frames(pFlac, framesToRead);
     }
     MA_DR_FLAC_ASSERT(pFlac->bitsPerSample <= 32);
-    unusedBitsPerSample = 32 - pFlac->bitsPerSample;
     framesRead = 0;
     while (framesToRead > 0) {
         if (pFlac->currentFLACFrame.pcmFramesRemaining == 0) {
@@ -90824,42 +91786,15 @@ MA_API ma_uint64 ma_dr_flac_read_pcm_frames_s32(ma_dr_flac* pFlac, ma_uint64 fra
             if (frameCountThisIteration > pFlac->currentFLACFrame.pcmFramesRemaining) {
                 frameCountThisIteration = pFlac->currentFLACFrame.pcmFramesRemaining;
             }
-            if (channelCount == 2) {
-                const ma_int32* pDecodedSamples0 = pFlac->currentFLACFrame.subframes[0].pSamplesS32 + iFirstPCMFrame;
-                const ma_int32* pDecodedSamples1 = pFlac->currentFLACFrame.subframes[1].pSamplesS32 + iFirstPCMFrame;
-                switch (pFlac->currentFLACFrame.header.channelAssignment)
-                {
-                    case MA_DR_FLAC_CHANNEL_ASSIGNMENT_LEFT_SIDE:
-                    {
-                        ma_dr_flac_read_pcm_frames_s32__decode_left_side(pFlac, frameCountThisIteration, unusedBitsPerSample, pDecodedSamples0, pDecodedSamples1, pBufferOut);
-                    } break;
-                    case MA_DR_FLAC_CHANNEL_ASSIGNMENT_RIGHT_SIDE:
-                    {
-                        ma_dr_flac_read_pcm_frames_s32__decode_right_side(pFlac, frameCountThisIteration, unusedBitsPerSample, pDecodedSamples0, pDecodedSamples1, pBufferOut);
-                    } break;
-                    case MA_DR_FLAC_CHANNEL_ASSIGNMENT_MID_SIDE:
-                    {
-                        ma_dr_flac_read_pcm_frames_s32__decode_mid_side(pFlac, frameCountThisIteration, unusedBitsPerSample, pDecodedSamples0, pDecodedSamples1, pBufferOut);
-                    } break;
-                    case MA_DR_FLAC_CHANNEL_ASSIGNMENT_INDEPENDENT:
-                    default:
-                    {
-                        ma_dr_flac_read_pcm_frames_s32__decode_independent_stereo(pFlac, frameCountThisIteration, unusedBitsPerSample, pDecodedSamples0, pDecodedSamples1, pBufferOut);
-                    } break;
-                }
+            if (pFlac->bitsPerSample != 32) {
+                ma_dr_flac_read_pcm_frames_s32__decode(pFlac, frameCountThisIteration, iFirstPCMFrame, pBufferOut);
             } else {
-                ma_uint64 i;
-                for (i = 0; i < frameCountThisIteration; ++i) {
-                    unsigned int j;
-                    for (j = 0; j < channelCount; ++j) {
-                        pBufferOut[(i*channelCount)+j] = (ma_int32)((ma_uint32)(pFlac->currentFLACFrame.subframes[j].pSamplesS32[iFirstPCMFrame + i]) << (unusedBitsPerSample + pFlac->currentFLACFrame.subframes[j].wastedBitsPerSample));
-                    }
-                }
+                ma_dr_flac_read_pcm_frames_s32__decode_s64(pFlac, frameCountThisIteration, iFirstPCMFrame, pBufferOut);
             }
-            framesRead                += frameCountThisIteration;
-            pBufferOut                += frameCountThisIteration * channelCount;
-            framesToRead              -= frameCountThisIteration;
-            pFlac->currentPCMFrame    += frameCountThisIteration;
+            framesRead             += frameCountThisIteration;
+            pBufferOut             += frameCountThisIteration * channelCount;
+            framesToRead           -= frameCountThisIteration;
+            pFlac->currentPCMFrame += frameCountThisIteration;
             pFlac->currentFLACFrame.pcmFramesRemaining -= (ma_uint32)frameCountThisIteration;
         }
     }
@@ -90937,7 +91872,7 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_s16__decode_left_side__sse2(ma_
     const ma_uint32* pInputSamples1U32 = (const ma_uint32*)pInputSamples1;
     ma_uint32 shift0 = unusedBitsPerSample + pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
     ma_uint32 shift1 = unusedBitsPerSample + pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
-    MA_DR_FLAC_ASSERT(pFlac->bitsPerSample <= 24);
+    MA_DR_FLAC_ASSERT(pFlac->currentFLACFrame.header.bitsPerSample <= 24);
     for (i = 0; i < frameCount4; ++i) {
         __m128i left  = _mm_slli_epi32(_mm_loadu_si128((const __m128i*)pInputSamples0 + i), shift0);
         __m128i side  = _mm_slli_epi32(_mm_loadu_si128((const __m128i*)pInputSamples1 + i), shift1);
@@ -90968,7 +91903,7 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_s16__decode_left_side__neon(ma_
     ma_uint32 shift1 = unusedBitsPerSample + pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
     int32x4_t shift0_4;
     int32x4_t shift1_4;
-    MA_DR_FLAC_ASSERT(pFlac->bitsPerSample <= 24);
+    MA_DR_FLAC_ASSERT(pFlac->currentFLACFrame.header.bitsPerSample <= 24);
     shift0_4 = vdupq_n_s32(shift0);
     shift1_4 = vdupq_n_s32(shift1);
     for (i = 0; i < frameCount4; ++i) {
@@ -90993,14 +91928,30 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_s16__decode_left_side__neon(ma_
     }
 }
 #endif
+static MA_INLINE void ma_dr_flac_read_pcm_frames_s16__decode_duplicate_mono(ma_uint64 frameCount, ma_uint32 shift, const ma_int32* pInputSamples, ma_int16* pOutputSamples)
+{
+    ma_uint64 i;
+    const ma_uint32* pInputSamplesU32 = (const ma_uint32*)pInputSamples;
+    MA_DR_FLAC_ASSERT(shift < 32);
+    for (i = 0; i < frameCount; ++i) {
+        ma_int16 sample;
+        sample = (ma_int16)((pInputSamplesU32[i] << shift) >> 16);
+        pOutputSamples[i*2+0] = sample;
+        pOutputSamples[i*2+1] = sample;
+    }
+}
 static MA_INLINE void ma_dr_flac_read_pcm_frames_s16__decode_left_side(ma_dr_flac* pFlac, ma_uint64 frameCount, ma_uint32 unusedBitsPerSample, const ma_int32* pInputSamples0, const ma_int32* pInputSamples1, ma_int16* pOutputSamples)
 {
+    if (unusedBitsPerSample + pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample == 32) {
+        ma_dr_flac_read_pcm_frames_s16__decode_duplicate_mono(frameCount, unusedBitsPerSample + pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample, pInputSamples0, pOutputSamples);
+        return;
+    }
 #if defined(MA_DR_FLAC_SUPPORT_SSE2)
-    if (ma_dr_flac__gIsSSE2Supported && pFlac->bitsPerSample <= 24) {
+    if (ma_dr_flac__gIsSSE2Supported && pFlac->currentFLACFrame.header.bitsPerSample <= 24) {
         ma_dr_flac_read_pcm_frames_s16__decode_left_side__sse2(pFlac, frameCount, unusedBitsPerSample, pInputSamples0, pInputSamples1, pOutputSamples);
     } else
 #elif defined(MA_DR_FLAC_SUPPORT_NEON)
-    if (ma_dr_flac__gIsNEONSupported && pFlac->bitsPerSample <= 24) {
+    if (ma_dr_flac__gIsNEONSupported && pFlac->currentFLACFrame.header.bitsPerSample <= 24) {
         ma_dr_flac_read_pcm_frames_s16__decode_left_side__neon(pFlac, frameCount, unusedBitsPerSample, pInputSamples0, pInputSamples1, pOutputSamples);
     } else
 #endif
@@ -91084,7 +92035,7 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_s16__decode_right_side__sse2(ma
     const ma_uint32* pInputSamples1U32 = (const ma_uint32*)pInputSamples1;
     ma_uint32 shift0 = unusedBitsPerSample + pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
     ma_uint32 shift1 = unusedBitsPerSample + pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
-    MA_DR_FLAC_ASSERT(pFlac->bitsPerSample <= 24);
+    MA_DR_FLAC_ASSERT(pFlac->currentFLACFrame.header.bitsPerSample <= 24);
     for (i = 0; i < frameCount4; ++i) {
         __m128i side  = _mm_slli_epi32(_mm_loadu_si128((const __m128i*)pInputSamples0 + i), shift0);
         __m128i right = _mm_slli_epi32(_mm_loadu_si128((const __m128i*)pInputSamples1 + i), shift1);
@@ -91115,7 +92066,7 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_s16__decode_right_side__neon(ma
     ma_uint32 shift1 = unusedBitsPerSample + pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
     int32x4_t shift0_4;
     int32x4_t shift1_4;
-    MA_DR_FLAC_ASSERT(pFlac->bitsPerSample <= 24);
+    MA_DR_FLAC_ASSERT(pFlac->currentFLACFrame.header.bitsPerSample <= 24);
     shift0_4 = vdupq_n_s32(shift0);
     shift1_4 = vdupq_n_s32(shift1);
     for (i = 0; i < frameCount4; ++i) {
@@ -91142,12 +92093,16 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_s16__decode_right_side__neon(ma
 #endif
 static MA_INLINE void ma_dr_flac_read_pcm_frames_s16__decode_right_side(ma_dr_flac* pFlac, ma_uint64 frameCount, ma_uint32 unusedBitsPerSample, const ma_int32* pInputSamples0, const ma_int32* pInputSamples1, ma_int16* pOutputSamples)
 {
+    if (unusedBitsPerSample + pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample == 32) {
+        ma_dr_flac_read_pcm_frames_s16__decode_duplicate_mono(frameCount, unusedBitsPerSample + pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample, pInputSamples1, pOutputSamples);
+        return;
+    }
 #if defined(MA_DR_FLAC_SUPPORT_SSE2)
-    if (ma_dr_flac__gIsSSE2Supported && pFlac->bitsPerSample <= 24) {
+    if (ma_dr_flac__gIsSSE2Supported && pFlac->currentFLACFrame.header.bitsPerSample <= 24) {
         ma_dr_flac_read_pcm_frames_s16__decode_right_side__sse2(pFlac, frameCount, unusedBitsPerSample, pInputSamples0, pInputSamples1, pOutputSamples);
     } else
 #elif defined(MA_DR_FLAC_SUPPORT_NEON)
-    if (ma_dr_flac__gIsNEONSupported && pFlac->bitsPerSample <= 24) {
+    if (ma_dr_flac__gIsNEONSupported && pFlac->currentFLACFrame.header.bitsPerSample <= 24) {
         ma_dr_flac_read_pcm_frames_s16__decode_right_side__neon(pFlac, frameCount, unusedBitsPerSample, pInputSamples0, pInputSamples1, pOutputSamples);
     } else
 #endif
@@ -91179,7 +92134,6 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_s16__decode_mid_side__scalar(ma
     const ma_uint32* pInputSamples1U32 = (const ma_uint32*)pInputSamples1;
     ma_uint32 shift = unusedBitsPerSample;
     if (shift > 0) {
-        shift -= 1;
         for (i = 0; i < frameCount4; ++i) {
             ma_uint32 temp0L;
             ma_uint32 temp1L;
@@ -91201,14 +92155,14 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_s16__decode_mid_side__scalar(ma
             mid1 = (mid1 << 1) | (side1 & 0x01);
             mid2 = (mid2 << 1) | (side2 & 0x01);
             mid3 = (mid3 << 1) | (side3 & 0x01);
-            temp0L = (mid0 + side0) << shift;
-            temp1L = (mid1 + side1) << shift;
-            temp2L = (mid2 + side2) << shift;
-            temp3L = (mid3 + side3) << shift;
-            temp0R = (mid0 - side0) << shift;
-            temp1R = (mid1 - side1) << shift;
-            temp2R = (mid2 - side2) << shift;
-            temp3R = (mid3 - side3) << shift;
+            temp0L = (mid0 + side0) << (shift - 1);
+            temp1L = (mid1 + side1) << (shift - 1);
+            temp2L = (mid2 + side2) << (shift - 1);
+            temp3L = (mid3 + side3) << (shift - 1);
+            temp0R = (mid0 - side0) << (shift - 1);
+            temp1R = (mid1 - side1) << (shift - 1);
+            temp2R = (mid2 - side2) << (shift - 1);
+            temp3R = (mid3 - side3) << (shift - 1);
             temp0L >>= 16;
             temp1L >>= 16;
             temp2L >>= 16;
@@ -91236,26 +92190,26 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_s16__decode_mid_side__scalar(ma
             ma_uint32 temp1R;
             ma_uint32 temp2R;
             ma_uint32 temp3R;
-            ma_uint32 mid0  = pInputSamples0U32[i*4+0] << pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
-            ma_uint32 mid1  = pInputSamples0U32[i*4+1] << pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
-            ma_uint32 mid2  = pInputSamples0U32[i*4+2] << pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
-            ma_uint32 mid3  = pInputSamples0U32[i*4+3] << pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
-            ma_uint32 side0 = pInputSamples1U32[i*4+0] << pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
-            ma_uint32 side1 = pInputSamples1U32[i*4+1] << pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
-            ma_uint32 side2 = pInputSamples1U32[i*4+2] << pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
-            ma_uint32 side3 = pInputSamples1U32[i*4+3] << pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
+            ma_uint64 mid0  = (ma_uint64)(ma_int64)pInputSamples0[i*4+0] << pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
+            ma_uint64 mid1  = (ma_uint64)(ma_int64)pInputSamples0[i*4+1] << pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
+            ma_uint64 mid2  = (ma_uint64)(ma_int64)pInputSamples0[i*4+2] << pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
+            ma_uint64 mid3  = (ma_uint64)(ma_int64)pInputSamples0[i*4+3] << pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
+            ma_uint64 side0 = (ma_uint64)(ma_int64)pInputSamples1[i*4+0] << pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
+            ma_uint64 side1 = (ma_uint64)(ma_int64)pInputSamples1[i*4+1] << pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
+            ma_uint64 side2 = (ma_uint64)(ma_int64)pInputSamples1[i*4+2] << pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
+            ma_uint64 side3 = (ma_uint64)(ma_int64)pInputSamples1[i*4+3] << pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
             mid0 = (mid0 << 1) | (side0 & 0x01);
             mid1 = (mid1 << 1) | (side1 & 0x01);
             mid2 = (mid2 << 1) | (side2 & 0x01);
             mid3 = (mid3 << 1) | (side3 & 0x01);
-            temp0L = ((ma_int32)(mid0 + side0) >> 1);
-            temp1L = ((ma_int32)(mid1 + side1) >> 1);
-            temp2L = ((ma_int32)(mid2 + side2) >> 1);
-            temp3L = ((ma_int32)(mid3 + side3) >> 1);
-            temp0R = ((ma_int32)(mid0 - side0) >> 1);
-            temp1R = ((ma_int32)(mid1 - side1) >> 1);
-            temp2R = ((ma_int32)(mid2 - side2) >> 1);
-            temp3R = ((ma_int32)(mid3 - side3) >> 1);
+            temp0L = (ma_uint32)((ma_int64)(mid0 + side0) >> 1);
+            temp1L = (ma_uint32)((ma_int64)(mid1 + side1) >> 1);
+            temp2L = (ma_uint32)((ma_int64)(mid2 + side2) >> 1);
+            temp3L = (ma_uint32)((ma_int64)(mid3 + side3) >> 1);
+            temp0R = (ma_uint32)((ma_int64)(mid0 - side0) >> 1);
+            temp1R = (ma_uint32)((ma_int64)(mid1 - side1) >> 1);
+            temp2R = (ma_uint32)((ma_int64)(mid2 - side2) >> 1);
+            temp3R = (ma_uint32)((ma_int64)(mid3 - side3) >> 1);
             temp0L >>= 16;
             temp1L >>= 16;
             temp2L >>= 16;
@@ -91274,12 +92228,24 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_s16__decode_mid_side__scalar(ma
             pOutputSamples[i*8+7] = (ma_int16)temp3R;
         }
     }
-    for (i = (frameCount4 << 2); i < frameCount; ++i) {
-        ma_uint32 mid  = pInputSamples0U32[i] << pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
-        ma_uint32 side = pInputSamples1U32[i] << pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
-        mid = (mid << 1) | (side & 0x01);
-        pOutputSamples[i*2+0] = (ma_int16)(((ma_uint32)((ma_int32)(mid + side) >> 1) << unusedBitsPerSample) >> 16);
-        pOutputSamples[i*2+1] = (ma_int16)(((ma_uint32)((ma_int32)(mid - side) >> 1) << unusedBitsPerSample) >> 16);
+    if (shift > 0) {
+        for (i = (frameCount4 << 2); i < frameCount; ++i) {
+            ma_uint32 mid  = pInputSamples0U32[i] << pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
+            ma_uint32 side = pInputSamples1U32[i] << pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
+            mid = (mid << 1) | (side & 0x01);
+            pOutputSamples[i*2+0] = (ma_int16)(((ma_uint32)((ma_int32)(mid + side) >> 1) << unusedBitsPerSample) >> 16);
+            pOutputSamples[i*2+1] = (ma_int16)(((ma_uint32)((ma_int32)(mid - side) >> 1) << unusedBitsPerSample) >> 16);
+        }
+    } else {
+        for (i = (frameCount4 << 2); i < frameCount; ++i) {
+            ma_uint64 mid;
+            ma_uint64 side;
+            mid  = (ma_uint64)(ma_int64)pInputSamples0[i] << pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
+            side = (ma_uint64)(ma_int64)pInputSamples1[i] << pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
+            mid = (mid << 1) | (side & 0x01);
+            pOutputSamples[i*2+0] = (ma_int16)((ma_int64)(mid + side) >> 17);
+            pOutputSamples[i*2+1] = (ma_int16)((ma_int64)(mid - side) >> 17);
+        }
     }
 }
 #if defined(MA_DR_FLAC_SUPPORT_SSE2)
@@ -91290,7 +92256,7 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_s16__decode_mid_side__sse2(ma_d
     const ma_uint32* pInputSamples0U32 = (const ma_uint32*)pInputSamples0;
     const ma_uint32* pInputSamples1U32 = (const ma_uint32*)pInputSamples1;
     ma_uint32 shift = unusedBitsPerSample;
-    MA_DR_FLAC_ASSERT(pFlac->bitsPerSample <= 24);
+    MA_DR_FLAC_ASSERT(pFlac->currentFLACFrame.header.bitsPerSample <= 24);
     if (shift == 0) {
         for (i = 0; i < frameCount4; ++i) {
             __m128i mid;
@@ -91349,7 +92315,7 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_s16__decode_mid_side__neon(ma_d
     ma_uint32 shift = unusedBitsPerSample;
     int32x4_t wbpsShift0_4;
     int32x4_t wbpsShift1_4;
-    MA_DR_FLAC_ASSERT(pFlac->bitsPerSample <= 24);
+    MA_DR_FLAC_ASSERT(pFlac->currentFLACFrame.header.bitsPerSample <= 24);
     wbpsShift0_4 = vdupq_n_s32(pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample);
     wbpsShift1_4 = vdupq_n_s32(pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample);
     if (shift == 0) {
@@ -91405,11 +92371,11 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_s16__decode_mid_side__neon(ma_d
 static MA_INLINE void ma_dr_flac_read_pcm_frames_s16__decode_mid_side(ma_dr_flac* pFlac, ma_uint64 frameCount, ma_uint32 unusedBitsPerSample, const ma_int32* pInputSamples0, const ma_int32* pInputSamples1, ma_int16* pOutputSamples)
 {
 #if defined(MA_DR_FLAC_SUPPORT_SSE2)
-    if (ma_dr_flac__gIsSSE2Supported && pFlac->bitsPerSample <= 24) {
+    if (ma_dr_flac__gIsSSE2Supported && pFlac->currentFLACFrame.header.bitsPerSample <= 24) {
         ma_dr_flac_read_pcm_frames_s16__decode_mid_side__sse2(pFlac, frameCount, unusedBitsPerSample, pInputSamples0, pInputSamples1, pOutputSamples);
     } else
 #elif defined(MA_DR_FLAC_SUPPORT_NEON)
-    if (ma_dr_flac__gIsNEONSupported && pFlac->bitsPerSample <= 24) {
+    if (ma_dr_flac__gIsNEONSupported && pFlac->currentFLACFrame.header.bitsPerSample <= 24) {
         ma_dr_flac_read_pcm_frames_s16__decode_mid_side__neon(pFlac, frameCount, unusedBitsPerSample, pInputSamples0, pInputSamples1, pOutputSamples);
     } else
 #endif
@@ -91520,11 +92486,11 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_s16__decode_independent_stereo_
 static MA_INLINE void ma_dr_flac_read_pcm_frames_s16__decode_independent_stereo(ma_dr_flac* pFlac, ma_uint64 frameCount, ma_uint32 unusedBitsPerSample, const ma_int32* pInputSamples0, const ma_int32* pInputSamples1, ma_int16* pOutputSamples)
 {
 #if defined(MA_DR_FLAC_SUPPORT_SSE2)
-    if (ma_dr_flac__gIsSSE2Supported && pFlac->bitsPerSample <= 24) {
+    if (ma_dr_flac__gIsSSE2Supported && pFlac->currentFLACFrame.header.bitsPerSample <= 24) {
         ma_dr_flac_read_pcm_frames_s16__decode_independent_stereo__sse2(pFlac, frameCount, unusedBitsPerSample, pInputSamples0, pInputSamples1, pOutputSamples);
     } else
 #elif defined(MA_DR_FLAC_SUPPORT_NEON)
-    if (ma_dr_flac__gIsNEONSupported && pFlac->bitsPerSample <= 24) {
+    if (ma_dr_flac__gIsNEONSupported && pFlac->currentFLACFrame.header.bitsPerSample <= 24) {
         ma_dr_flac_read_pcm_frames_s16__decode_independent_stereo__neon(pFlac, frameCount, unusedBitsPerSample, pInputSamples0, pInputSamples1, pOutputSamples);
     } else
 #endif
@@ -91536,10 +92502,51 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_s16__decode_independent_stereo(
 #endif
     }
 }
+static MA_INLINE void ma_dr_flac_read_pcm_frames_s16__decode(ma_dr_flac* pFlac, ma_uint64 frameCount, ma_uint64 iFirstPCMFrame, ma_int16* pOutputSamples)
+{
+    unsigned int channelCount;
+    ma_uint32 unusedBitsPerSample;
+    MA_DR_FLAC_ASSERT(pFlac->currentFLACFrame.header.bitsPerSample < 32);
+    channelCount = ma_dr_flac__get_channel_count_from_channel_assignment(pFlac->currentFLACFrame.header.channelAssignment);
+    unusedBitsPerSample = 32 - pFlac->currentFLACFrame.header.bitsPerSample;
+    if (channelCount == 2) {
+        const ma_int32* pDecodedSamples0 = pFlac->currentFLACFrame.subframes[0].samples.pS32 + iFirstPCMFrame;
+        const ma_int32* pDecodedSamples1 = pFlac->currentFLACFrame.subframes[1].samples.pS32 + iFirstPCMFrame;
+        switch (pFlac->currentFLACFrame.header.channelAssignment)
+        {
+            case MA_DR_FLAC_CHANNEL_ASSIGNMENT_LEFT_SIDE:
+            {
+                ma_dr_flac_read_pcm_frames_s16__decode_left_side(pFlac, frameCount, unusedBitsPerSample, pDecodedSamples0, pDecodedSamples1, pOutputSamples);
+            } break;
+            case MA_DR_FLAC_CHANNEL_ASSIGNMENT_RIGHT_SIDE:
+            {
+                ma_dr_flac_read_pcm_frames_s16__decode_right_side(pFlac, frameCount, unusedBitsPerSample, pDecodedSamples0, pDecodedSamples1, pOutputSamples);
+            } break;
+            case MA_DR_FLAC_CHANNEL_ASSIGNMENT_MID_SIDE:
+            {
+                ma_dr_flac_read_pcm_frames_s16__decode_mid_side(pFlac, frameCount, unusedBitsPerSample, pDecodedSamples0, pDecodedSamples1, pOutputSamples);
+            } break;
+            case MA_DR_FLAC_CHANNEL_ASSIGNMENT_INDEPENDENT_STEREO:
+            {
+                ma_dr_flac_read_pcm_frames_s16__decode_independent_stereo(pFlac, frameCount, unusedBitsPerSample, pDecodedSamples0, pDecodedSamples1, pOutputSamples);
+            } break;
+            default: MA_DR_FLAC_ASSERT(!"Invalid stereo channel assignment"); break;
+        }
+    } else {
+        ma_uint64 i;
+        for (i = 0; i < frameCount; ++i) {
+            unsigned int j;
+            for (j = 0; j < channelCount; ++j) {
+                ma_int32 sampleS32;
+                sampleS32 = (ma_int32)((ma_uint32)(pFlac->currentFLACFrame.subframes[j].samples.pS32[iFirstPCMFrame + i]) << (unusedBitsPerSample + pFlac->currentFLACFrame.subframes[j].wastedBitsPerSample));
+                pOutputSamples[(i*channelCount)+j] = (ma_int16)(sampleS32 >> 16);
+            }
+        }
+    }
+}
 MA_API ma_uint64 ma_dr_flac_read_pcm_frames_s16(ma_dr_flac* pFlac, ma_uint64 framesToRead, ma_int16* pBufferOut)
 {
     ma_uint64 framesRead;
-    ma_uint32 unusedBitsPerSample;
     if (pFlac == NULL || framesToRead == 0) {
         return 0;
     }
@@ -91547,7 +92554,6 @@ MA_API ma_uint64 ma_dr_flac_read_pcm_frames_s16(ma_dr_flac* pFlac, ma_uint64 fra
         return ma_dr_flac__seek_forward_by_pcm_frames(pFlac, framesToRead);
     }
     MA_DR_FLAC_ASSERT(pFlac->bitsPerSample <= 32);
-    unusedBitsPerSample = 32 - pFlac->bitsPerSample;
     framesRead = 0;
     while (framesToRead > 0) {
         if (pFlac->currentFLACFrame.pcmFramesRemaining == 0) {
@@ -91561,43 +92567,15 @@ MA_API ma_uint64 ma_dr_flac_read_pcm_frames_s16(ma_dr_flac* pFlac, ma_uint64 fra
             if (frameCountThisIteration > pFlac->currentFLACFrame.pcmFramesRemaining) {
                 frameCountThisIteration = pFlac->currentFLACFrame.pcmFramesRemaining;
             }
-            if (channelCount == 2) {
-                const ma_int32* pDecodedSamples0 = pFlac->currentFLACFrame.subframes[0].pSamplesS32 + iFirstPCMFrame;
-                const ma_int32* pDecodedSamples1 = pFlac->currentFLACFrame.subframes[1].pSamplesS32 + iFirstPCMFrame;
-                switch (pFlac->currentFLACFrame.header.channelAssignment)
-                {
-                    case MA_DR_FLAC_CHANNEL_ASSIGNMENT_LEFT_SIDE:
-                    {
-                        ma_dr_flac_read_pcm_frames_s16__decode_left_side(pFlac, frameCountThisIteration, unusedBitsPerSample, pDecodedSamples0, pDecodedSamples1, pBufferOut);
-                    } break;
-                    case MA_DR_FLAC_CHANNEL_ASSIGNMENT_RIGHT_SIDE:
-                    {
-                        ma_dr_flac_read_pcm_frames_s16__decode_right_side(pFlac, frameCountThisIteration, unusedBitsPerSample, pDecodedSamples0, pDecodedSamples1, pBufferOut);
-                    } break;
-                    case MA_DR_FLAC_CHANNEL_ASSIGNMENT_MID_SIDE:
-                    {
-                        ma_dr_flac_read_pcm_frames_s16__decode_mid_side(pFlac, frameCountThisIteration, unusedBitsPerSample, pDecodedSamples0, pDecodedSamples1, pBufferOut);
-                    } break;
-                    case MA_DR_FLAC_CHANNEL_ASSIGNMENT_INDEPENDENT:
-                    default:
-                    {
-                        ma_dr_flac_read_pcm_frames_s16__decode_independent_stereo(pFlac, frameCountThisIteration, unusedBitsPerSample, pDecodedSamples0, pDecodedSamples1, pBufferOut);
-                    } break;
-                }
+            if (pFlac->bitsPerSample != 32) {
+                ma_dr_flac_read_pcm_frames_s16__decode(pFlac, frameCountThisIteration, iFirstPCMFrame, pBufferOut);
             } else {
-                ma_uint64 i;
-                for (i = 0; i < frameCountThisIteration; ++i) {
-                    unsigned int j;
-                    for (j = 0; j < channelCount; ++j) {
-                        ma_int32 sampleS32 = (ma_int32)((ma_uint32)(pFlac->currentFLACFrame.subframes[j].pSamplesS32[iFirstPCMFrame + i]) << (unusedBitsPerSample + pFlac->currentFLACFrame.subframes[j].wastedBitsPerSample));
-                        pBufferOut[(i*channelCount)+j] = (ma_int16)(sampleS32 >> 16);
-                    }
-                }
+                ma_dr_flac_read_pcm_frames_s16__decode_s64(pFlac, frameCountThisIteration, iFirstPCMFrame, pBufferOut);
             }
-            framesRead                += frameCountThisIteration;
-            pBufferOut                += frameCountThisIteration * channelCount;
-            framesToRead              -= frameCountThisIteration;
-            pFlac->currentPCMFrame    += frameCountThisIteration;
+            framesRead             += frameCountThisIteration;
+            pBufferOut             += frameCountThisIteration * channelCount;
+            framesToRead           -= frameCountThisIteration;
+            pFlac->currentPCMFrame += frameCountThisIteration;
             pFlac->currentFLACFrame.pcmFramesRemaining -= (ma_uint32)frameCountThisIteration;
         }
     }
@@ -91665,7 +92643,7 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_f32__decode_left_side__sse2(ma_
     ma_uint32 shift0 = (unusedBitsPerSample + pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample) - 8;
     ma_uint32 shift1 = (unusedBitsPerSample + pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample) - 8;
     __m128 factor;
-    MA_DR_FLAC_ASSERT(pFlac->bitsPerSample <= 24);
+    MA_DR_FLAC_ASSERT(pFlac->currentFLACFrame.header.bitsPerSample <= 24);
     factor = _mm_set1_ps(1.0f / 8388608.0f);
     for (i = 0; i < frameCount4; ++i) {
         __m128i left  = _mm_slli_epi32(_mm_loadu_si128((const __m128i*)pInputSamples0 + i), shift0);
@@ -91697,7 +92675,7 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_f32__decode_left_side__neon(ma_
     float32x4_t factor4;
     int32x4_t shift0_4;
     int32x4_t shift1_4;
-    MA_DR_FLAC_ASSERT(pFlac->bitsPerSample <= 24);
+    MA_DR_FLAC_ASSERT(pFlac->currentFLACFrame.header.bitsPerSample <= 24);
     factor4  = vdupq_n_f32(1.0f / 8388608.0f);
     shift0_4 = vdupq_n_s32(shift0);
     shift1_4 = vdupq_n_s32(shift1);
@@ -91723,14 +92701,32 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_f32__decode_left_side__neon(ma_
     }
 }
 #endif
+static MA_INLINE void ma_dr_flac_read_pcm_frames_f32__decode_duplicate_mono(ma_uint64 frameCount, ma_uint32 shift, const ma_int32* pInputSamples, float* pOutputSamples)
+{
+    ma_uint64 i;
+    const ma_uint32* pInputSamplesU32 = (const ma_uint32*)pInputSamples;
+    float factor;
+    MA_DR_FLAC_ASSERT(shift < 32);
+    factor = 1 / 2147483648.0f;
+    for (i = 0; i < frameCount; ++i) {
+        float sample;
+        sample = (ma_int32)(pInputSamplesU32[i] << shift) * factor;
+        pOutputSamples[i*2+0] = sample;
+        pOutputSamples[i*2+1] = sample;
+    }
+}
 static MA_INLINE void ma_dr_flac_read_pcm_frames_f32__decode_left_side(ma_dr_flac* pFlac, ma_uint64 frameCount, ma_uint32 unusedBitsPerSample, const ma_int32* pInputSamples0, const ma_int32* pInputSamples1, float* pOutputSamples)
 {
+    if (unusedBitsPerSample + pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample == 32) {
+        ma_dr_flac_read_pcm_frames_f32__decode_duplicate_mono(frameCount, unusedBitsPerSample + pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample, pInputSamples0, pOutputSamples);
+        return;
+    }
 #if defined(MA_DR_FLAC_SUPPORT_SSE2)
-    if (ma_dr_flac__gIsSSE2Supported && pFlac->bitsPerSample <= 24) {
+    if (ma_dr_flac__gIsSSE2Supported && pFlac->currentFLACFrame.header.bitsPerSample <= 24) {
         ma_dr_flac_read_pcm_frames_f32__decode_left_side__sse2(pFlac, frameCount, unusedBitsPerSample, pInputSamples0, pInputSamples1, pOutputSamples);
     } else
 #elif defined(MA_DR_FLAC_SUPPORT_NEON)
-    if (ma_dr_flac__gIsNEONSupported && pFlac->bitsPerSample <= 24) {
+    if (ma_dr_flac__gIsNEONSupported && pFlac->currentFLACFrame.header.bitsPerSample <= 24) {
         ma_dr_flac_read_pcm_frames_f32__decode_left_side__neon(pFlac, frameCount, unusedBitsPerSample, pInputSamples0, pInputSamples1, pOutputSamples);
     } else
 #endif
@@ -91804,7 +92800,7 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_f32__decode_right_side__sse2(ma
     ma_uint32 shift0 = (unusedBitsPerSample + pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample) - 8;
     ma_uint32 shift1 = (unusedBitsPerSample + pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample) - 8;
     __m128 factor;
-    MA_DR_FLAC_ASSERT(pFlac->bitsPerSample <= 24);
+    MA_DR_FLAC_ASSERT(pFlac->currentFLACFrame.header.bitsPerSample <= 24);
     factor = _mm_set1_ps(1.0f / 8388608.0f);
     for (i = 0; i < frameCount4; ++i) {
         __m128i side  = _mm_slli_epi32(_mm_loadu_si128((const __m128i*)pInputSamples0 + i), shift0);
@@ -91836,7 +92832,7 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_f32__decode_right_side__neon(ma
     float32x4_t factor4;
     int32x4_t shift0_4;
     int32x4_t shift1_4;
-    MA_DR_FLAC_ASSERT(pFlac->bitsPerSample <= 24);
+    MA_DR_FLAC_ASSERT(pFlac->currentFLACFrame.header.bitsPerSample <= 24);
     factor4  = vdupq_n_f32(1.0f / 8388608.0f);
     shift0_4 = vdupq_n_s32(shift0);
     shift1_4 = vdupq_n_s32(shift1);
@@ -91864,12 +92860,16 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_f32__decode_right_side__neon(ma
 #endif
 static MA_INLINE void ma_dr_flac_read_pcm_frames_f32__decode_right_side(ma_dr_flac* pFlac, ma_uint64 frameCount, ma_uint32 unusedBitsPerSample, const ma_int32* pInputSamples0, const ma_int32* pInputSamples1, float* pOutputSamples)
 {
+    if (unusedBitsPerSample + pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample == 32) {
+        ma_dr_flac_read_pcm_frames_f32__decode_duplicate_mono(frameCount, unusedBitsPerSample + pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample, pInputSamples1, pOutputSamples);
+        return;
+    }
 #if defined(MA_DR_FLAC_SUPPORT_SSE2)
-    if (ma_dr_flac__gIsSSE2Supported && pFlac->bitsPerSample <= 24) {
+    if (ma_dr_flac__gIsSSE2Supported && pFlac->currentFLACFrame.header.bitsPerSample <= 24) {
         ma_dr_flac_read_pcm_frames_f32__decode_right_side__sse2(pFlac, frameCount, unusedBitsPerSample, pInputSamples0, pInputSamples1, pOutputSamples);
     } else
 #elif defined(MA_DR_FLAC_SUPPORT_NEON)
-    if (ma_dr_flac__gIsNEONSupported && pFlac->bitsPerSample <= 24) {
+    if (ma_dr_flac__gIsNEONSupported && pFlac->currentFLACFrame.header.bitsPerSample <= 24) {
         ma_dr_flac_read_pcm_frames_f32__decode_right_side__neon(pFlac, frameCount, unusedBitsPerSample, pInputSamples0, pInputSamples1, pOutputSamples);
     } else
 #endif
@@ -91902,7 +92902,6 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_f32__decode_mid_side__scalar(ma
     ma_uint32 shift = unusedBitsPerSample;
     float factor = 1 / 2147483648.0;
     if (shift > 0) {
-        shift -= 1;
         for (i = 0; i < frameCount4; ++i) {
             ma_uint32 temp0L;
             ma_uint32 temp1L;
@@ -91924,14 +92923,14 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_f32__decode_mid_side__scalar(ma
             mid1 = (mid1 << 1) | (side1 & 0x01);
             mid2 = (mid2 << 1) | (side2 & 0x01);
             mid3 = (mid3 << 1) | (side3 & 0x01);
-            temp0L = (mid0 + side0) << shift;
-            temp1L = (mid1 + side1) << shift;
-            temp2L = (mid2 + side2) << shift;
-            temp3L = (mid3 + side3) << shift;
-            temp0R = (mid0 - side0) << shift;
-            temp1R = (mid1 - side1) << shift;
-            temp2R = (mid2 - side2) << shift;
-            temp3R = (mid3 - side3) << shift;
+            temp0L = (mid0 + side0) << (shift - 1);
+            temp1L = (mid1 + side1) << (shift - 1);
+            temp2L = (mid2 + side2) << (shift - 1);
+            temp3L = (mid3 + side3) << (shift - 1);
+            temp0R = (mid0 - side0) << (shift - 1);
+            temp1R = (mid1 - side1) << (shift - 1);
+            temp2R = (mid2 - side2) << (shift - 1);
+            temp3R = (mid3 - side3) << (shift - 1);
             pOutputSamples[i*8+0] = (ma_int32)temp0L * factor;
             pOutputSamples[i*8+1] = (ma_int32)temp0R * factor;
             pOutputSamples[i*8+2] = (ma_int32)temp1L * factor;
@@ -91951,26 +92950,26 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_f32__decode_mid_side__scalar(ma
             ma_uint32 temp1R;
             ma_uint32 temp2R;
             ma_uint32 temp3R;
-            ma_uint32 mid0  = pInputSamples0U32[i*4+0] << pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
-            ma_uint32 mid1  = pInputSamples0U32[i*4+1] << pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
-            ma_uint32 mid2  = pInputSamples0U32[i*4+2] << pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
-            ma_uint32 mid3  = pInputSamples0U32[i*4+3] << pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
-            ma_uint32 side0 = pInputSamples1U32[i*4+0] << pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
-            ma_uint32 side1 = pInputSamples1U32[i*4+1] << pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
-            ma_uint32 side2 = pInputSamples1U32[i*4+2] << pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
-            ma_uint32 side3 = pInputSamples1U32[i*4+3] << pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
+            ma_uint64 mid0  = (ma_uint64)(ma_int64)pInputSamples0[i*4+0] << pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
+            ma_uint64 mid1  = (ma_uint64)(ma_int64)pInputSamples0[i*4+1] << pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
+            ma_uint64 mid2  = (ma_uint64)(ma_int64)pInputSamples0[i*4+2] << pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
+            ma_uint64 mid3  = (ma_uint64)(ma_int64)pInputSamples0[i*4+3] << pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
+            ma_uint64 side0 = (ma_uint64)(ma_int64)pInputSamples1[i*4+0] << pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
+            ma_uint64 side1 = (ma_uint64)(ma_int64)pInputSamples1[i*4+1] << pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
+            ma_uint64 side2 = (ma_uint64)(ma_int64)pInputSamples1[i*4+2] << pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
+            ma_uint64 side3 = (ma_uint64)(ma_int64)pInputSamples1[i*4+3] << pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
             mid0 = (mid0 << 1) | (side0 & 0x01);
             mid1 = (mid1 << 1) | (side1 & 0x01);
             mid2 = (mid2 << 1) | (side2 & 0x01);
             mid3 = (mid3 << 1) | (side3 & 0x01);
-            temp0L = (ma_uint32)((ma_int32)(mid0 + side0) >> 1);
-            temp1L = (ma_uint32)((ma_int32)(mid1 + side1) >> 1);
-            temp2L = (ma_uint32)((ma_int32)(mid2 + side2) >> 1);
-            temp3L = (ma_uint32)((ma_int32)(mid3 + side3) >> 1);
-            temp0R = (ma_uint32)((ma_int32)(mid0 - side0) >> 1);
-            temp1R = (ma_uint32)((ma_int32)(mid1 - side1) >> 1);
-            temp2R = (ma_uint32)((ma_int32)(mid2 - side2) >> 1);
-            temp3R = (ma_uint32)((ma_int32)(mid3 - side3) >> 1);
+            temp0L = (ma_uint32)((ma_int64)(mid0 + side0) >> 1);
+            temp1L = (ma_uint32)((ma_int64)(mid1 + side1) >> 1);
+            temp2L = (ma_uint32)((ma_int64)(mid2 + side2) >> 1);
+            temp3L = (ma_uint32)((ma_int64)(mid3 + side3) >> 1);
+            temp0R = (ma_uint32)((ma_int64)(mid0 - side0) >> 1);
+            temp1R = (ma_uint32)((ma_int64)(mid1 - side1) >> 1);
+            temp2R = (ma_uint32)((ma_int64)(mid2 - side2) >> 1);
+            temp3R = (ma_uint32)((ma_int64)(mid3 - side3) >> 1);
             pOutputSamples[i*8+0] = (ma_int32)temp0L * factor;
             pOutputSamples[i*8+1] = (ma_int32)temp0R * factor;
             pOutputSamples[i*8+2] = (ma_int32)temp1L * factor;
@@ -91981,12 +92980,24 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_f32__decode_mid_side__scalar(ma
             pOutputSamples[i*8+7] = (ma_int32)temp3R * factor;
         }
     }
-    for (i = (frameCount4 << 2); i < frameCount; ++i) {
-        ma_uint32 mid  = pInputSamples0U32[i] << pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
-        ma_uint32 side = pInputSamples1U32[i] << pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
-        mid = (mid << 1) | (side & 0x01);
-        pOutputSamples[i*2+0] = (ma_int32)((ma_uint32)((ma_int32)(mid + side) >> 1) << unusedBitsPerSample) * factor;
-        pOutputSamples[i*2+1] = (ma_int32)((ma_uint32)((ma_int32)(mid - side) >> 1) << unusedBitsPerSample) * factor;
+    if (shift > 0) {
+        for (i = (frameCount4 << 2); i < frameCount; ++i) {
+            ma_uint32 mid  = pInputSamples0U32[i] << pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
+            ma_uint32 side = pInputSamples1U32[i] << pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
+            mid = (mid << 1) | (side & 0x01);
+            pOutputSamples[i*2+0] = (ma_int32)((ma_uint32)((ma_int32)(mid + side) >> 1) << unusedBitsPerSample) * factor;
+            pOutputSamples[i*2+1] = (ma_int32)((ma_uint32)((ma_int32)(mid - side) >> 1) << unusedBitsPerSample) * factor;
+        }
+    } else {
+        for (i = (frameCount4 << 2); i < frameCount; ++i) {
+            ma_uint64 mid;
+            ma_uint64 side;
+            mid  = (ma_uint64)(ma_int64)pInputSamples0[i] << pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample;
+            side = (ma_uint64)(ma_int64)pInputSamples1[i] << pFlac->currentFLACFrame.subframes[1].wastedBitsPerSample;
+            mid = (mid << 1) | (side & 0x01);
+            pOutputSamples[i*2+0] = (ma_int32)((ma_int64)(mid + side) >> 1) * factor;
+            pOutputSamples[i*2+1] = (ma_int32)((ma_int64)(mid - side) >> 1) * factor;
+        }
     }
 }
 #if defined(MA_DR_FLAC_SUPPORT_SSE2)
@@ -91999,7 +93010,7 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_f32__decode_mid_side__sse2(ma_d
     ma_uint32 shift = unusedBitsPerSample - 8;
     float factor;
     __m128 factor128;
-    MA_DR_FLAC_ASSERT(pFlac->bitsPerSample <= 24);
+    MA_DR_FLAC_ASSERT(pFlac->currentFLACFrame.header.bitsPerSample <= 24);
     factor = 1.0f / 8388608.0f;
     factor128 = _mm_set1_ps(factor);
     if (shift == 0) {
@@ -92069,7 +93080,7 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_f32__decode_mid_side__neon(ma_d
     int32x4_t shift4;
     int32x4_t wbps0_4;
     int32x4_t wbps1_4;
-    MA_DR_FLAC_ASSERT(pFlac->bitsPerSample <= 24);
+    MA_DR_FLAC_ASSERT(pFlac->currentFLACFrame.header.bitsPerSample <= 24);
     factor  = 1.0f / 8388608.0f;
     factor4 = vdupq_n_f32(factor);
     wbps0_4 = vdupq_n_s32(pFlac->currentFLACFrame.subframes[0].wastedBitsPerSample);
@@ -92128,11 +93139,11 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_f32__decode_mid_side__neon(ma_d
 static MA_INLINE void ma_dr_flac_read_pcm_frames_f32__decode_mid_side(ma_dr_flac* pFlac, ma_uint64 frameCount, ma_uint32 unusedBitsPerSample, const ma_int32* pInputSamples0, const ma_int32* pInputSamples1, float* pOutputSamples)
 {
 #if defined(MA_DR_FLAC_SUPPORT_SSE2)
-    if (ma_dr_flac__gIsSSE2Supported && pFlac->bitsPerSample <= 24) {
+    if (ma_dr_flac__gIsSSE2Supported && pFlac->currentFLACFrame.header.bitsPerSample <= 24) {
         ma_dr_flac_read_pcm_frames_f32__decode_mid_side__sse2(pFlac, frameCount, unusedBitsPerSample, pInputSamples0, pInputSamples1, pOutputSamples);
     } else
 #elif defined(MA_DR_FLAC_SUPPORT_NEON)
-    if (ma_dr_flac__gIsNEONSupported && pFlac->bitsPerSample <= 24) {
+    if (ma_dr_flac__gIsNEONSupported && pFlac->currentFLACFrame.header.bitsPerSample <= 24) {
         ma_dr_flac_read_pcm_frames_f32__decode_mid_side__neon(pFlac, frameCount, unusedBitsPerSample, pInputSamples0, pInputSamples1, pOutputSamples);
     } else
 #endif
@@ -92247,11 +93258,11 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_f32__decode_independent_stereo_
 static MA_INLINE void ma_dr_flac_read_pcm_frames_f32__decode_independent_stereo(ma_dr_flac* pFlac, ma_uint64 frameCount, ma_uint32 unusedBitsPerSample, const ma_int32* pInputSamples0, const ma_int32* pInputSamples1, float* pOutputSamples)
 {
 #if defined(MA_DR_FLAC_SUPPORT_SSE2)
-    if (ma_dr_flac__gIsSSE2Supported && pFlac->bitsPerSample <= 24) {
+    if (ma_dr_flac__gIsSSE2Supported && pFlac->currentFLACFrame.header.bitsPerSample <= 24) {
         ma_dr_flac_read_pcm_frames_f32__decode_independent_stereo__sse2(pFlac, frameCount, unusedBitsPerSample, pInputSamples0, pInputSamples1, pOutputSamples);
     } else
 #elif defined(MA_DR_FLAC_SUPPORT_NEON)
-    if (ma_dr_flac__gIsNEONSupported && pFlac->bitsPerSample <= 24) {
+    if (ma_dr_flac__gIsNEONSupported && pFlac->currentFLACFrame.header.bitsPerSample <= 24) {
         ma_dr_flac_read_pcm_frames_f32__decode_independent_stereo__neon(pFlac, frameCount, unusedBitsPerSample, pInputSamples0, pInputSamples1, pOutputSamples);
     } else
 #endif
@@ -92263,10 +93274,51 @@ static MA_INLINE void ma_dr_flac_read_pcm_frames_f32__decode_independent_stereo(
 #endif
     }
 }
+static MA_INLINE void ma_dr_flac_read_pcm_frames_f32__decode(ma_dr_flac* pFlac, ma_uint64 frameCount, ma_uint64 iFirstPCMFrame, float* pOutputSamples)
+{
+    unsigned int channelCount;
+    ma_uint32 unusedBitsPerSample;
+    MA_DR_FLAC_ASSERT(pFlac->currentFLACFrame.header.bitsPerSample < 32);
+    channelCount = ma_dr_flac__get_channel_count_from_channel_assignment(pFlac->currentFLACFrame.header.channelAssignment);
+    unusedBitsPerSample = 32 - pFlac->currentFLACFrame.header.bitsPerSample;
+    if (channelCount == 2) {
+        const ma_int32* pDecodedSamples0 = pFlac->currentFLACFrame.subframes[0].samples.pS32 + iFirstPCMFrame;
+        const ma_int32* pDecodedSamples1 = pFlac->currentFLACFrame.subframes[1].samples.pS32 + iFirstPCMFrame;
+        switch (pFlac->currentFLACFrame.header.channelAssignment)
+        {
+            case MA_DR_FLAC_CHANNEL_ASSIGNMENT_LEFT_SIDE:
+            {
+                ma_dr_flac_read_pcm_frames_f32__decode_left_side(pFlac, frameCount, unusedBitsPerSample, pDecodedSamples0, pDecodedSamples1, pOutputSamples);
+            } break;
+            case MA_DR_FLAC_CHANNEL_ASSIGNMENT_RIGHT_SIDE:
+            {
+                ma_dr_flac_read_pcm_frames_f32__decode_right_side(pFlac, frameCount, unusedBitsPerSample, pDecodedSamples0, pDecodedSamples1, pOutputSamples);
+            } break;
+            case MA_DR_FLAC_CHANNEL_ASSIGNMENT_MID_SIDE:
+            {
+                ma_dr_flac_read_pcm_frames_f32__decode_mid_side(pFlac, frameCount, unusedBitsPerSample, pDecodedSamples0, pDecodedSamples1, pOutputSamples);
+            } break;
+            case MA_DR_FLAC_CHANNEL_ASSIGNMENT_INDEPENDENT_STEREO:
+            {
+                ma_dr_flac_read_pcm_frames_f32__decode_independent_stereo(pFlac, frameCount, unusedBitsPerSample, pDecodedSamples0, pDecodedSamples1, pOutputSamples);
+            } break;
+            default: MA_DR_FLAC_ASSERT(!"Invalid stereo channel assignment"); break;
+        }
+    } else {
+        ma_uint64 i;
+        for (i = 0; i < frameCount; ++i) {
+            unsigned int j;
+            for (j = 0; j < channelCount; ++j) {
+                ma_int32 sampleS32;
+                sampleS32 = (ma_int32)((ma_uint32)(pFlac->currentFLACFrame.subframes[j].samples.pS32[iFirstPCMFrame + i]) << (unusedBitsPerSample + pFlac->currentFLACFrame.subframes[j].wastedBitsPerSample));
+                pOutputSamples[(i*channelCount)+j] = (float)(sampleS32 / 2147483648.0);
+            }
+        }
+    }
+}
 MA_API ma_uint64 ma_dr_flac_read_pcm_frames_f32(ma_dr_flac* pFlac, ma_uint64 framesToRead, float* pBufferOut)
 {
     ma_uint64 framesRead;
-    ma_uint32 unusedBitsPerSample;
     if (pFlac == NULL || framesToRead == 0) {
         return 0;
     }
@@ -92274,7 +93326,6 @@ MA_API ma_uint64 ma_dr_flac_read_pcm_frames_f32(ma_dr_flac* pFlac, ma_uint64 fra
         return ma_dr_flac__seek_forward_by_pcm_frames(pFlac, framesToRead);
     }
     MA_DR_FLAC_ASSERT(pFlac->bitsPerSample <= 32);
-    unusedBitsPerSample = 32 - pFlac->bitsPerSample;
     framesRead = 0;
     while (framesToRead > 0) {
         if (pFlac->currentFLACFrame.pcmFramesRemaining == 0) {
@@ -92288,43 +93339,15 @@ MA_API ma_uint64 ma_dr_flac_read_pcm_frames_f32(ma_dr_flac* pFlac, ma_uint64 fra
             if (frameCountThisIteration > pFlac->currentFLACFrame.pcmFramesRemaining) {
                 frameCountThisIteration = pFlac->currentFLACFrame.pcmFramesRemaining;
             }
-            if (channelCount == 2) {
-                const ma_int32* pDecodedSamples0 = pFlac->currentFLACFrame.subframes[0].pSamplesS32 + iFirstPCMFrame;
-                const ma_int32* pDecodedSamples1 = pFlac->currentFLACFrame.subframes[1].pSamplesS32 + iFirstPCMFrame;
-                switch (pFlac->currentFLACFrame.header.channelAssignment)
-                {
-                    case MA_DR_FLAC_CHANNEL_ASSIGNMENT_LEFT_SIDE:
-                    {
-                        ma_dr_flac_read_pcm_frames_f32__decode_left_side(pFlac, frameCountThisIteration, unusedBitsPerSample, pDecodedSamples0, pDecodedSamples1, pBufferOut);
-                    } break;
-                    case MA_DR_FLAC_CHANNEL_ASSIGNMENT_RIGHT_SIDE:
-                    {
-                        ma_dr_flac_read_pcm_frames_f32__decode_right_side(pFlac, frameCountThisIteration, unusedBitsPerSample, pDecodedSamples0, pDecodedSamples1, pBufferOut);
-                    } break;
-                    case MA_DR_FLAC_CHANNEL_ASSIGNMENT_MID_SIDE:
-                    {
-                        ma_dr_flac_read_pcm_frames_f32__decode_mid_side(pFlac, frameCountThisIteration, unusedBitsPerSample, pDecodedSamples0, pDecodedSamples1, pBufferOut);
-                    } break;
-                    case MA_DR_FLAC_CHANNEL_ASSIGNMENT_INDEPENDENT:
-                    default:
-                    {
-                        ma_dr_flac_read_pcm_frames_f32__decode_independent_stereo(pFlac, frameCountThisIteration, unusedBitsPerSample, pDecodedSamples0, pDecodedSamples1, pBufferOut);
-                    } break;
-                }
+            if (pFlac->bitsPerSample != 32) {
+                ma_dr_flac_read_pcm_frames_f32__decode(pFlac, frameCountThisIteration, iFirstPCMFrame, pBufferOut);
             } else {
-                ma_uint64 i;
-                for (i = 0; i < frameCountThisIteration; ++i) {
-                    unsigned int j;
-                    for (j = 0; j < channelCount; ++j) {
-                        ma_int32 sampleS32 = (ma_int32)((ma_uint32)(pFlac->currentFLACFrame.subframes[j].pSamplesS32[iFirstPCMFrame + i]) << (unusedBitsPerSample + pFlac->currentFLACFrame.subframes[j].wastedBitsPerSample));
-                        pBufferOut[(i*channelCount)+j] = (float)(sampleS32 / 2147483648.0);
-                    }
-                }
+                ma_dr_flac_read_pcm_frames_f32__decode_s64(pFlac, frameCountThisIteration, iFirstPCMFrame, pBufferOut);
             }
-            framesRead                += frameCountThisIteration;
-            pBufferOut                += frameCountThisIteration * channelCount;
-            framesToRead              -= frameCountThisIteration;
-            pFlac->currentPCMFrame    += frameCountThisIteration;
+            framesRead             += frameCountThisIteration;
+            pBufferOut             += frameCountThisIteration * channelCount;
+            framesToRead           -= frameCountThisIteration;
+            pFlac->currentPCMFrame += frameCountThisIteration;
             pFlac->currentFLACFrame.pcmFramesRemaining -= (unsigned int)frameCountThisIteration;
         }
     }
@@ -92338,33 +93361,32 @@ MA_API ma_bool32 ma_dr_flac_seek_to_pcm_frame(ma_dr_flac* pFlac, ma_uint64 pcmFr
     if (pFlac->currentPCMFrame == pcmFrameIndex) {
         return MA_TRUE;
     }
-    if (pFlac->firstFLACFramePosInBytes == 0) {
-        return MA_FALSE;
-    }
     if (pcmFrameIndex == 0) {
         pFlac->currentPCMFrame = 0;
         return ma_dr_flac__seek_to_first_frame(pFlac);
     } else {
         ma_bool32 wasSuccessful = MA_FALSE;
         ma_uint64 originalPCMFrame = pFlac->currentPCMFrame;
-        if (pcmFrameIndex > pFlac->totalPCMFrameCount) {
+        if (pFlac->totalPCMFrameCount != 0 && pcmFrameIndex > pFlac->totalPCMFrameCount) {
             pcmFrameIndex = pFlac->totalPCMFrameCount;
         }
-        if (pcmFrameIndex > pFlac->currentPCMFrame) {
-            ma_uint32 offset = (ma_uint32)(pcmFrameIndex - pFlac->currentPCMFrame);
-            if (pFlac->currentFLACFrame.pcmFramesRemaining >  offset) {
-                pFlac->currentFLACFrame.pcmFramesRemaining -= offset;
-                pFlac->currentPCMFrame = pcmFrameIndex;
-                return MA_TRUE;
-            }
-        } else {
-            ma_uint32 offsetAbs = (ma_uint32)(pFlac->currentPCMFrame - pcmFrameIndex);
-            ma_uint32 currentFLACFramePCMFrameCount = pFlac->currentFLACFrame.header.blockSizeInPCMFrames;
-            ma_uint32 currentFLACFramePCMFramesConsumed = currentFLACFramePCMFrameCount - pFlac->currentFLACFrame.pcmFramesRemaining;
-            if (currentFLACFramePCMFramesConsumed > offsetAbs) {
-                pFlac->currentFLACFrame.pcmFramesRemaining += offsetAbs;
-                pFlac->currentPCMFrame = pcmFrameIndex;
-                return MA_TRUE;
+        if (ma_dr_flac__is_current_flac_frame_valid(pFlac)) {
+            if (pcmFrameIndex > pFlac->currentPCMFrame) {
+                ma_uint64 offset = pcmFrameIndex - pFlac->currentPCMFrame;
+                if (pFlac->currentFLACFrame.pcmFramesRemaining > offset) {
+                    pFlac->currentFLACFrame.pcmFramesRemaining -= (ma_uint32)offset;
+                    pFlac->currentPCMFrame = pcmFrameIndex;
+                    return MA_TRUE;
+                }
+            } else {
+                ma_uint64 offsetAbs = pFlac->currentPCMFrame - pcmFrameIndex;
+                ma_uint32 currentFLACFramePCMFrameCount = pFlac->currentFLACFrame.header.blockSizeInPCMFrames;
+                ma_uint32 currentFLACFramePCMFramesConsumed = currentFLACFramePCMFrameCount - pFlac->currentFLACFrame.pcmFramesRemaining;
+                if (currentFLACFramePCMFramesConsumed > offsetAbs) {
+                    pFlac->currentFLACFrame.pcmFramesRemaining += (ma_uint32)offsetAbs;
+                    pFlac->currentPCMFrame = pcmFrameIndex;
+                    return MA_TRUE;
+                }
             }
         }
 #ifndef MA_DR_FLAC_NO_OGG
@@ -92390,8 +93412,9 @@ MA_API ma_bool32 ma_dr_flac_seek_to_pcm_frame(ma_dr_flac* pFlac, ma_uint64 pcmFr
         if (wasSuccessful) {
             pFlac->currentPCMFrame = pcmFrameIndex;
         } else {
-            if (ma_dr_flac_seek_to_pcm_frame(pFlac, originalPCMFrame) == MA_FALSE) {
-                ma_dr_flac_seek_to_pcm_frame(pFlac, 0);
+            ma_dr_flac__seek_to_first_frame(pFlac);
+            if (originalPCMFrame != 0 && ma_dr_flac_seek_to_pcm_frame(pFlac, originalPCMFrame) == MA_FALSE) {
+                ma_dr_flac__seek_to_first_frame(pFlac);
             }
         }
         return wasSuccessful;
@@ -92677,7 +93700,7 @@ MA_API ma_bool32 ma_dr_flac_next_cuesheet_track(ma_dr_flac_cuesheet_track_iterat
     MA_DR_FLAC_COPY_MEMORY(cuesheetTrack.ISRC, pRunningData, sizeof(cuesheetTrack.ISRC));     pRunningData += 12;
     cuesheetTrack.isAudio      = (pRunningData[0] & 0x80) != 0;
     cuesheetTrack.preEmphasis  = (pRunningData[0] & 0x40) != 0;                           pRunningData += 14;
-    cuesheetTrack.indexCount   = pRunningData[0];                                         pRunningData += 1;
+    cuesheetTrack.indexCount   = pRunningData[0];                                         pRunningData += 1 + (MA_DR_FLAC_CUESHEET_TRACK_PADDED_SIZE_IN_BYTES - MA_DR_FLAC_CUESHEET_TRACK_SIZE_IN_BYTES);
     cuesheetTrack.pIndexPoints = (const ma_dr_flac_cuesheet_track_index*)pRunningData;        pRunningData += cuesheetTrack.indexCount * sizeof(ma_dr_flac_cuesheet_track_index);
     pIter->pRunningData = pRunningData;
     pIter->countRemaining -= 1;
@@ -92753,7 +93776,10 @@ MA_API const char* ma_dr_mp3_version_string(void)
 #define MA_DR_MP3_MIN(a, b)           ((a) > (b) ? (b) : (a))
 #define MA_DR_MP3_MAX(a, b)           ((a) < (b) ? (b) : (a))
 #if !defined(MA_DR_MP3_NO_SIMD)
-#if !defined(MA_DR_MP3_ONLY_SIMD) && (defined(_M_X64) || defined(__x86_64__) || defined(__aarch64__) || defined(_M_ARM64) || defined(_M_ARM64EC))
+#if !defined(MA_DR_MP3_ONLY_SIMD) && ((defined(_MSC_VER) && _MSC_VER >= 1400) && defined(_M_X64)) || ((defined(__i386) || defined(_M_IX86) || defined(__i386__) || defined(__x86_64__)) && ((defined(_M_IX86_FP) && _M_IX86_FP == 2) || defined(__SSE2__)))
+#define MA_DR_MP3_ONLY_SIMD
+#endif
+#if !defined(MA_DR_MP3_ONLY_SIMD) && (defined(__ARM_NEON) || defined(__aarch64__) || defined(_M_ARM64) || defined(_M_ARM64EC))
 #define MA_DR_MP3_ONLY_SIMD
 #endif
 #if ((defined(_MSC_VER) && _MSC_VER >= 1400) && defined(_M_X64)) || ((defined(__i386) || defined(_M_IX86) || defined(__i386__) || defined(__x86_64__)) && ((defined(_M_IX86_FP) && _M_IX86_FP == 2) || defined(__SSE2__)))
@@ -94270,6 +95296,7 @@ MA_API int ma_dr_mp3dec_decode_frame(ma_dr_mp3dec *dec, const ma_uint8 *mp3, int
     int i = 0, igr, frame_size = 0, success = 1;
     const ma_uint8 *hdr;
     ma_dr_mp3_bs bs_frame[1];
+    info->layer = 0;
     if (mp3_bytes > 4 && dec->header[0] == 0xff && ma_dr_mp3_hdr_compare(dec->header, mp3))
     {
         frame_size = ma_dr_mp3_hdr_frame_bytes(mp3, dec->free_format_bytes) + ma_dr_mp3_hdr_padding(mp3);
@@ -94406,7 +95433,7 @@ MA_API void ma_dr_mp3dec_f32_to_s16(const float *in, ma_int16 *out, size_t num_s
     }
 }
 #ifndef MA_DR_MP3_SEEK_LEADING_MP3_FRAMES
-#define MA_DR_MP3_SEEK_LEADING_MP3_FRAMES   2
+#define MA_DR_MP3_SEEK_LEADING_MP3_FRAMES   16
 #endif
 #define MA_DR_MP3_MIN_DATA_CHUNK_SIZE   16384
 #ifndef MA_DR_MP3_DATA_CHUNK_SIZE
@@ -94671,6 +95698,8 @@ static ma_uint32 ma_dr_mp3_decode_next_frame_ex__callbacks(ma_dr_mp3* pMP3, ma_d
                 return 0;
             }
             pMP3->dataSize += bytesRead;
+        } else if (info.layer != 0) {
+            pMP3->mp3FramesSkipped += 1;
         }
     };
     return pcmFramesRead;
@@ -94700,6 +95729,9 @@ static ma_uint32 ma_dr_mp3_decode_next_frame_ex__memory(ma_dr_mp3* pMP3, ma_dr_m
             }
             break;
         } else if (info.frame_bytes > 0) {
+            if (info.layer != 0) {
+                pMP3->mp3FramesSkipped += 1;
+            }
             pMP3->memory.currentReadPos += (size_t)info.frame_bytes;
             pMP3->streamCursor          += (size_t)info.frame_bytes;
         } else {
@@ -94712,6 +95744,7 @@ static ma_uint32 ma_dr_mp3_decode_next_frame_ex__memory(ma_dr_mp3* pMP3, ma_dr_m
 }
 static ma_uint32 ma_dr_mp3_decode_next_frame_ex(ma_dr_mp3* pMP3, ma_dr_mp3d_sample_t* pPCMFrames, ma_dr_mp3dec_frame_info* pMP3FrameInfo, const ma_uint8** ppMP3FrameData)
 {
+    pMP3->mp3FramesSkipped = 0;
     if (pMP3->memory.pData != NULL && pMP3->memory.dataSize > 0) {
         return ma_dr_mp3_decode_next_frame_ex__memory(pMP3, pPCMFrames, pMP3FrameInfo, ppMP3FrameData);
     } else {
@@ -94884,6 +95917,14 @@ static ma_bool32 ma_dr_mp3_init_internal(ma_dr_mp3* pMP3, ma_dr_mp3_read_proc on
                         return MA_FALSE;
                     }
                 } else {
+                    pMP3->pData = (ma_uint8*)ma_dr_mp3__malloc_from_callbacks(MA_DR_MP3_DATA_CHUNK_SIZE, &pMP3->allocationCallbacks);
+                    if (pMP3->pData == NULL) {
+                        return MA_FALSE;
+                    }
+                    pMP3->dataCapacity = MA_DR_MP3_DATA_CHUNK_SIZE;
+                    MA_DR_MP3_COPY_MEMORY(pMP3->pData, header, sizeof(header));
+                    pMP3->dataSize = sizeof(header);
+                    pMP3->streamCursor = sizeof(header);
                 }
             }
         } else {
@@ -94908,8 +95949,19 @@ static ma_bool32 ma_dr_mp3_init_internal(ma_dr_mp3* pMP3, ma_dr_mp3_read_proc on
                 ma_bool32 isInfo = MA_FALSE;
                 const ma_uint8* pTagData;
                 const ma_uint8* pTagDataBeg;
+                const void* pDataBufferEnd = NULL;
+                size_t frameBytes;
                 pTagDataBeg = pFirstFrameData + MA_DR_MP3_HDR_SIZE + (bs.pos/8);
                 pTagData    = pTagDataBeg;
+                if (pMP3->memory.pData != NULL && pMP3->memory.dataSize > 0) {
+                    pDataBufferEnd = pMP3->memory.pData + pMP3->memory.dataSize;
+                } else {
+                    pDataBufferEnd = pMP3->pData + pMP3->dataCapacity;
+                }
+                frameBytes = MA_DR_MP3_MIN((size_t)firstFrameInfo.frame_bytes, (size_t)((ma_uint8*)pDataBufferEnd - pFirstFrameData));
+                if (frameBytes < (size_t)(pTagData - pFirstFrameData) + 8) {
+                    goto done_xing_info;
+                }
                 isXing = (pTagData[0] == 'X' && pTagData[1] == 'i' && pTagData[2] == 'n' && pTagData[3] == 'g');
                 isInfo = (pTagData[0] == 'I' && pTagData[1] == 'n' && pTagData[2] == 'f' && pTagData[3] == 'o');
                 if (isXing || isInfo) {
@@ -94917,33 +95969,49 @@ static ma_bool32 ma_dr_mp3_init_internal(ma_dr_mp3* pMP3, ma_dr_mp3_read_proc on
                     ma_uint32 flags = pTagData[7];
                     pTagData += 8;
                     if (flags & 0x01) {
+                        if (frameBytes < (size_t)(pTagData - pFirstFrameData) + 4) {
+                            goto done_xing_info;
+                        }
                         detectedMP3FrameCount = (ma_uint32)pTagData[0] << 24 | (ma_uint32)pTagData[1] << 16 | (ma_uint32)pTagData[2] << 8 | (ma_uint32)pTagData[3];
                         pTagData += 4;
                     }
                     if (flags & 0x02) {
+                        if (frameBytes < (size_t)(pTagData - pFirstFrameData) + 4) {
+                            goto done_xing_info;
+                        }
                         bytes  = (ma_uint32)pTagData[0] << 24 | (ma_uint32)pTagData[1] << 16 | (ma_uint32)pTagData[2] << 8 | (ma_uint32)pTagData[3];
                         (void)bytes;
                         pTagData += 4;
                     }
                     if (flags & 0x04) {
+                        if (frameBytes < (size_t)(pTagData - pFirstFrameData) + 100) {
+                            goto done_xing_info;
+                        }
                         pTagData += 100;
                     }
                     if (flags & 0x08) {
+                        if (frameBytes < (size_t)(pTagData - pFirstFrameData) + 4) {
+                            goto done_xing_info;
+                        }
                         pTagData += 4;
                     }
+                    if (frameBytes < (size_t)(pTagData - pFirstFrameData) + 1) {
+                        goto done_xing_info;
+                    }
                     if (pTagData[0]) {
-                        pTagData += 21;
-                        if (pTagData - pFirstFrameData + 14 < firstFrameInfo.frame_bytes) {
-                            int delayInPCMFrames;
-                            int paddingInPCMFrames;
-                            delayInPCMFrames   = (( (ma_uint32)pTagData[0]        << 4) | ((ma_uint32)pTagData[1] >> 4)) + (528 + 1);
-                            paddingInPCMFrames = ((((ma_uint32)pTagData[1] & 0xF) << 8) | ((ma_uint32)pTagData[2]     )) - (528 + 1);
-                            if (paddingInPCMFrames < 0) {
-                                paddingInPCMFrames = 0;
-                            }
-                            pMP3->delayInPCMFrames   = (ma_uint32)delayInPCMFrames;
-                            pMP3->paddingInPCMFrames = (ma_uint32)paddingInPCMFrames;
+                        int delayInPCMFrames;
+                        int paddingInPCMFrames;
+                        if (frameBytes < (size_t)(pTagData - pFirstFrameData) + 36) {
+                            goto done_xing_info;
                         }
+                        pTagData += 21;
+                        delayInPCMFrames   = (( (ma_uint32)pTagData[0]        << 4) | ((ma_uint32)pTagData[1] >> 4)) + (528 + 1);
+                        paddingInPCMFrames = ((((ma_uint32)pTagData[1] & 0xF) << 8) | ((ma_uint32)pTagData[2]     )) - (528 + 1);
+                        if (paddingInPCMFrames < 0) {
+                            paddingInPCMFrames = 0;
+                        }
+                        pMP3->delayInPCMFrames   = (ma_uint32)delayInPCMFrames;
+                        pMP3->paddingInPCMFrames = (ma_uint32)paddingInPCMFrames;
                     }
                     if (isXing) {
                         pMP3->isVBR = MA_TRUE;
@@ -94959,9 +96027,9 @@ static ma_bool32 ma_dr_mp3_init_internal(ma_dr_mp3* pMP3, ma_dr_mp3_read_proc on
                     }
                     pMP3->pcmFramesRemainingInMP3Frame = 0;
                     pMP3->streamStartOffset += (ma_uint32)(firstFrameInfo.frame_bytes);
-                    pMP3->streamCursor = pMP3->streamStartOffset;
                     ma_dr_mp3dec_init(&pMP3->decoder);
                 }
+                done_xing_info:;
             } else {
             }
         }
@@ -94971,7 +96039,7 @@ static ma_bool32 ma_dr_mp3_init_internal(ma_dr_mp3* pMP3, ma_dr_mp3_read_proc on
         return MA_FALSE;
     }
     if (detectedMP3FrameCount != 0xFFFFFFFF) {
-        pMP3->totalPCMFrameCount = detectedMP3FrameCount * firstFramePCMFrameCount;
+        pMP3->totalPCMFrameCount = (ma_uint64)detectedMP3FrameCount * firstFramePCMFrameCount;
     }
     pMP3->channels   = pMP3->mp3FrameChannels;
     pMP3->sampleRate = pMP3->mp3FrameSampleRate;
@@ -95271,7 +96339,7 @@ MA_API ma_uint64 ma_dr_mp3_read_pcm_frames_f32(ma_dr_mp3* pMP3, ma_uint64 frames
     return ma_dr_mp3_read_pcm_frames_raw(pMP3, framesToRead, pBufferOut);
 #else
     {
-        ma_int16 pTempS16[8192];
+        ma_int16 pTempS16[1152*2];
         ma_uint64 totalPCMFramesRead = 0;
         while (totalPCMFramesRead < framesToRead) {
             ma_uint64 framesJustRead;
@@ -95300,7 +96368,7 @@ MA_API ma_uint64 ma_dr_mp3_read_pcm_frames_s16(ma_dr_mp3* pMP3, ma_uint64 frames
     return ma_dr_mp3_read_pcm_frames_raw(pMP3, framesToRead, pBufferOut);
 #else
     {
-        float pTempF32[4096];
+        float pTempF32[1152*2];
         ma_uint64 totalPCMFramesRead = 0;
         while (totalPCMFramesRead < framesToRead) {
             ma_uint64 framesJustRead;
@@ -95340,6 +96408,13 @@ static ma_bool32 ma_dr_mp3_seek_to_start_of_stream(ma_dr_mp3* pMP3)
     ma_dr_mp3_reset(pMP3);
     return MA_TRUE;
 }
+static ma_uint64 ma_dr_mp3_get_cursor_in_pcm_frames(const ma_dr_mp3* pMP3)
+{
+    if (pMP3->currentPCMFrame > pMP3->delayInPCMFrames) {
+        return pMP3->currentPCMFrame - pMP3->delayInPCMFrames;
+    }
+    return 0;
+}
 static ma_bool32 ma_dr_mp3_seek_forward_by_pcm_frames__brute_force(ma_dr_mp3* pMP3, ma_uint64 frameOffset)
 {
     ma_uint64 framesRead;
@@ -95355,17 +96430,20 @@ static ma_bool32 ma_dr_mp3_seek_forward_by_pcm_frames__brute_force(ma_dr_mp3* pM
 }
 static ma_bool32 ma_dr_mp3_seek_to_pcm_frame__brute_force(ma_dr_mp3* pMP3, ma_uint64 frameIndex)
 {
+    ma_uint64 cursor;
     MA_DR_MP3_ASSERT(pMP3 != NULL);
-    if (frameIndex == pMP3->currentPCMFrame) {
+    cursor = ma_dr_mp3_get_cursor_in_pcm_frames(pMP3);
+    if (frameIndex == cursor) {
         return MA_TRUE;
     }
-    if (frameIndex < pMP3->currentPCMFrame) {
+    if (frameIndex < cursor) {
         if (!ma_dr_mp3_seek_to_start_of_stream(pMP3)) {
             return MA_FALSE;
         }
+        cursor = 0;
     }
-    MA_DR_MP3_ASSERT(frameIndex >= pMP3->currentPCMFrame);
-    return ma_dr_mp3_seek_forward_by_pcm_frames__brute_force(pMP3, (frameIndex - pMP3->currentPCMFrame));
+    MA_DR_MP3_ASSERT(frameIndex >= cursor);
+    return ma_dr_mp3_seek_forward_by_pcm_frames__brute_force(pMP3, (frameIndex - cursor));
 }
 static ma_bool32 ma_dr_mp3_find_closest_seek_point(ma_dr_mp3* pMP3, ma_uint64 frameIndex, ma_uint32* pSeekPointIndex)
 {
@@ -95387,15 +96465,22 @@ static ma_bool32 ma_dr_mp3_seek_to_pcm_frame__seek_table(ma_dr_mp3* pMP3, ma_uin
 {
     ma_dr_mp3_seek_point seekPoint;
     ma_uint32 priorSeekPointIndex;
-    ma_uint16 iMP3Frame;
+    ma_uint32 iMP3Frame;
+    ma_uint32 mp3FramesDecoded;
+    ma_uint64 internalFrameIndex;
     ma_uint64 leftoverFrames;
     MA_DR_MP3_ASSERT(pMP3 != NULL);
     MA_DR_MP3_ASSERT(pMP3->pSeekPoints != NULL);
     MA_DR_MP3_ASSERT(pMP3->seekPointCount > 0);
-    if (ma_dr_mp3_find_closest_seek_point(pMP3, frameIndex, &priorSeekPointIndex)) {
+    if (frameIndex > MA_UINT64_MAX - pMP3->delayInPCMFrames) {
+        internalFrameIndex = MA_UINT64_MAX;
+    } else {
+        internalFrameIndex = frameIndex + pMP3->delayInPCMFrames;
+    }
+    if (ma_dr_mp3_find_closest_seek_point(pMP3, internalFrameIndex, &priorSeekPointIndex)) {
         seekPoint = pMP3->pSeekPoints[priorSeekPointIndex];
     } else {
-        seekPoint.seekPosInBytes     = 0;
+        seekPoint.seekPosInBytes     = pMP3->streamStartOffset;
         seekPoint.pcmFrameIndex      = 0;
         seekPoint.mp3FramesToDiscard = 0;
         seekPoint.pcmFramesToDiscard = 0;
@@ -95404,20 +96489,29 @@ static ma_bool32 ma_dr_mp3_seek_to_pcm_frame__seek_table(ma_dr_mp3* pMP3, ma_uin
         return MA_FALSE;
     }
     ma_dr_mp3_reset(pMP3);
-    for (iMP3Frame = 0; iMP3Frame < seekPoint.mp3FramesToDiscard; ++iMP3Frame) {
-        ma_uint32 pcmFramesRead;
-        ma_dr_mp3d_sample_t* pPCMFrames;
-        pPCMFrames = NULL;
-        if (iMP3Frame == seekPoint.mp3FramesToDiscard-1) {
-            pPCMFrames = (ma_dr_mp3d_sample_t*)pMP3->pcmFrames;
+    iMP3Frame = 0;
+    mp3FramesDecoded = 0;
+    while (iMP3Frame < seekPoint.mp3FramesToDiscard) {
+        if (ma_dr_mp3_decode_next_frame_ex(pMP3, (ma_dr_mp3d_sample_t*)pMP3->pcmFrames, NULL, NULL) == 0) {
+            break;
         }
-        pcmFramesRead = ma_dr_mp3_decode_next_frame_ex(pMP3, pPCMFrames, NULL, NULL);
-        if (pcmFramesRead == 0) {
-            return MA_FALSE;
+        iMP3Frame += 1 + pMP3->mp3FramesSkipped;
+        if (pMP3->mp3FramesSkipped == 0) {
+            mp3FramesDecoded += 1;
+        } else {
+            mp3FramesDecoded = 1;
         }
     }
+    pMP3->pcmFramesConsumedInMP3Frame  = 0;
+    pMP3->pcmFramesRemainingInMP3Frame = 0;
+    if (iMP3Frame != seekPoint.mp3FramesToDiscard || (mp3FramesDecoded < 2 && seekPoint.seekPosInBytes != pMP3->streamStartOffset)) {
+        if (!ma_dr_mp3_seek_to_start_of_stream(pMP3)) {
+            return MA_FALSE;
+        }
+        return ma_dr_mp3_seek_forward_by_pcm_frames__brute_force(pMP3, frameIndex);
+    }
     pMP3->currentPCMFrame = seekPoint.pcmFrameIndex - seekPoint.pcmFramesToDiscard;
-    leftoverFrames = frameIndex - pMP3->currentPCMFrame;
+    leftoverFrames = frameIndex - ma_dr_mp3_get_cursor_in_pcm_frames(pMP3);
     return ma_dr_mp3_seek_forward_by_pcm_frames__brute_force(pMP3, leftoverFrames);
 }
 MA_API ma_bool32 ma_dr_mp3_seek_to_pcm_frame(ma_dr_mp3* pMP3, ma_uint64 frameIndex)
@@ -95445,7 +96539,7 @@ MA_API ma_bool32 ma_dr_mp3_get_mp3_and_pcm_frame_count(ma_dr_mp3* pMP3, ma_uint6
     if (pMP3->onSeek == NULL) {
         return MA_FALSE;
     }
-    currentPCMFrame = pMP3->currentPCMFrame;
+    currentPCMFrame = ma_dr_mp3_get_cursor_in_pcm_frames(pMP3);
     if (!ma_dr_mp3_seek_to_start_of_stream(pMP3)) {
         return MA_FALSE;
     }
@@ -95522,6 +96616,7 @@ typedef struct
 {
     ma_uint64 bytePos;
     ma_uint64 pcmFrameIndex;
+    ma_uint64 mp3FrameIndex;
 } ma_dr_mp3__seeking_mp3_frame_info;
 MA_API ma_bool32 ma_dr_mp3_calculate_seek_points(ma_dr_mp3* pMP3, ma_uint32* pSeekPointCount, ma_dr_mp3_seek_point* pSeekPoints)
 {
@@ -95536,23 +96631,24 @@ MA_API ma_bool32 ma_dr_mp3_calculate_seek_points(ma_dr_mp3* pMP3, ma_uint32* pSe
     if (seekPointCount == 0) {
         return MA_FALSE;
     }
-    currentPCMFrame = pMP3->currentPCMFrame;
+    currentPCMFrame = ma_dr_mp3_get_cursor_in_pcm_frames(pMP3);
     if (!ma_dr_mp3_get_mp3_and_pcm_frame_count(pMP3, &totalMP3FrameCount, &totalPCMFrameCount)) {
         return MA_FALSE;
     }
     if (totalMP3FrameCount < MA_DR_MP3_SEEK_LEADING_MP3_FRAMES+1) {
         seekPointCount = 1;
-        pSeekPoints[0].seekPosInBytes     = 0;
+        pSeekPoints[0].seekPosInBytes     = pMP3->streamStartOffset;
         pSeekPoints[0].pcmFrameIndex      = 0;
         pSeekPoints[0].mp3FramesToDiscard = 0;
         pSeekPoints[0].pcmFramesToDiscard = 0;
     } else {
         ma_uint64 pcmFramesBetweenSeekPoints;
         ma_dr_mp3__seeking_mp3_frame_info mp3FrameInfo[MA_DR_MP3_SEEK_LEADING_MP3_FRAMES+1];
+        ma_uint32 mp3FrameInfoCount = 0;
         ma_uint64 runningPCMFrameCount = 0;
         float runningPCMFrameCountFractionalPart = 0;
+        ma_uint64 runningMP3FrameCount = 0;
         ma_uint64 nextTargetPCMFrame;
-        ma_uint32 iMP3Frame;
         ma_uint32 iSeekPoint;
         if (seekPointCount > totalMP3FrameCount-1) {
             seekPointCount = (ma_uint32)totalMP3FrameCount-1;
@@ -95561,46 +96657,35 @@ MA_API ma_bool32 ma_dr_mp3_calculate_seek_points(ma_dr_mp3* pMP3, ma_uint32* pSe
         if (!ma_dr_mp3_seek_to_start_of_stream(pMP3)) {
             return MA_FALSE;
         }
-        for (iMP3Frame = 0; iMP3Frame < MA_DR_MP3_SEEK_LEADING_MP3_FRAMES+1; ++iMP3Frame) {
-            ma_uint32 pcmFramesInCurrentMP3FrameIn;
-            MA_DR_MP3_ASSERT(pMP3->streamCursor >= pMP3->dataSize);
-            mp3FrameInfo[iMP3Frame].bytePos       = pMP3->streamCursor - pMP3->dataSize;
-            mp3FrameInfo[iMP3Frame].pcmFrameIndex = runningPCMFrameCount;
-            pcmFramesInCurrentMP3FrameIn = ma_dr_mp3_decode_next_frame_ex(pMP3, NULL, NULL, NULL);
-            if (pcmFramesInCurrentMP3FrameIn == 0) {
-                return MA_FALSE;
-            }
-            ma_dr_mp3__accumulate_running_pcm_frame_count(pMP3, pcmFramesInCurrentMP3FrameIn, &runningPCMFrameCount, &runningPCMFrameCountFractionalPart);
-        }
         nextTargetPCMFrame = 0;
         for (iSeekPoint = 0; iSeekPoint < seekPointCount; ++iSeekPoint) {
             nextTargetPCMFrame += pcmFramesBetweenSeekPoints;
-            for (;;) {
-                if (nextTargetPCMFrame < runningPCMFrameCount) {
-                    pSeekPoints[iSeekPoint].seekPosInBytes     = mp3FrameInfo[0].bytePos;
-                    pSeekPoints[iSeekPoint].pcmFrameIndex      = nextTargetPCMFrame;
-                    pSeekPoints[iSeekPoint].mp3FramesToDiscard = MA_DR_MP3_SEEK_LEADING_MP3_FRAMES;
-                    pSeekPoints[iSeekPoint].pcmFramesToDiscard = (ma_uint16)(nextTargetPCMFrame - mp3FrameInfo[MA_DR_MP3_SEEK_LEADING_MP3_FRAMES-1].pcmFrameIndex);
-                    break;
-                } else {
+            while (mp3FrameInfoCount == 0 || nextTargetPCMFrame >= runningPCMFrameCount) {
+                ma_uint32 pcmFramesInCurrentMP3FrameIn;
+                if (mp3FrameInfoCount == MA_DR_MP3_COUNTOF(mp3FrameInfo)) {
                     size_t i;
-                    ma_uint32 pcmFramesInCurrentMP3FrameIn;
                     for (i = 0; i < MA_DR_MP3_COUNTOF(mp3FrameInfo)-1; ++i) {
                         mp3FrameInfo[i] = mp3FrameInfo[i+1];
                     }
-                    mp3FrameInfo[MA_DR_MP3_COUNTOF(mp3FrameInfo)-1].bytePos       = pMP3->streamCursor - pMP3->dataSize;
-                    mp3FrameInfo[MA_DR_MP3_COUNTOF(mp3FrameInfo)-1].pcmFrameIndex = runningPCMFrameCount;
-                    pcmFramesInCurrentMP3FrameIn = ma_dr_mp3_decode_next_frame_ex(pMP3, NULL, NULL, NULL);
-                    if (pcmFramesInCurrentMP3FrameIn == 0) {
-                        pSeekPoints[iSeekPoint].seekPosInBytes     = mp3FrameInfo[0].bytePos;
-                        pSeekPoints[iSeekPoint].pcmFrameIndex      = nextTargetPCMFrame;
-                        pSeekPoints[iSeekPoint].mp3FramesToDiscard = MA_DR_MP3_SEEK_LEADING_MP3_FRAMES;
-                        pSeekPoints[iSeekPoint].pcmFramesToDiscard = (ma_uint16)(nextTargetPCMFrame - mp3FrameInfo[MA_DR_MP3_SEEK_LEADING_MP3_FRAMES-1].pcmFrameIndex);
-                        break;
-                    }
-                    ma_dr_mp3__accumulate_running_pcm_frame_count(pMP3, pcmFramesInCurrentMP3FrameIn, &runningPCMFrameCount, &runningPCMFrameCountFractionalPart);
+                    mp3FrameInfoCount -= 1;
                 }
+                MA_DR_MP3_ASSERT(pMP3->streamCursor >= pMP3->dataSize);
+                mp3FrameInfo[mp3FrameInfoCount].bytePos       = pMP3->streamCursor - pMP3->dataSize;
+                mp3FrameInfo[mp3FrameInfoCount].pcmFrameIndex = runningPCMFrameCount;
+                mp3FrameInfo[mp3FrameInfoCount].mp3FrameIndex = runningMP3FrameCount;
+                pcmFramesInCurrentMP3FrameIn = ma_dr_mp3_decode_next_frame_ex(pMP3, NULL, NULL, NULL);
+                if (pcmFramesInCurrentMP3FrameIn == 0) {
+                    break;
+                }
+                mp3FrameInfoCount    += 1;
+                runningMP3FrameCount += 1 + pMP3->mp3FramesSkipped;
+                ma_dr_mp3__accumulate_running_pcm_frame_count(pMP3, pcmFramesInCurrentMP3FrameIn, &runningPCMFrameCount, &runningPCMFrameCountFractionalPart);
             }
+            MA_DR_MP3_ASSERT(mp3FrameInfoCount > 0);
+            pSeekPoints[iSeekPoint].seekPosInBytes     = mp3FrameInfo[0].bytePos;
+            pSeekPoints[iSeekPoint].pcmFrameIndex      = nextTargetPCMFrame;
+            pSeekPoints[iSeekPoint].mp3FramesToDiscard = (ma_uint16)(mp3FrameInfo[mp3FrameInfoCount-1].mp3FrameIndex - mp3FrameInfo[0].mp3FrameIndex);
+            pSeekPoints[iSeekPoint].pcmFramesToDiscard = (ma_uint16)(nextTargetPCMFrame - mp3FrameInfo[mp3FrameInfoCount-1].pcmFrameIndex);
         }
         if (!ma_dr_mp3_seek_to_start_of_stream(pMP3)) {
             return MA_FALSE;
@@ -95631,7 +96716,7 @@ static float* ma_dr_mp3__full_read_and_close_f32(ma_dr_mp3* pMP3, ma_dr_mp3_conf
     ma_uint64 totalFramesRead = 0;
     ma_uint64 framesCapacity = 0;
     float* pFrames = NULL;
-    float temp[4096];
+    float temp[1152*2];
     MA_DR_MP3_ASSERT(pMP3 != NULL);
     for (;;) {
         ma_uint64 framesToReadRightNow = MA_DR_MP3_COUNTOF(temp) / pMP3->channels;
@@ -95684,7 +96769,7 @@ static ma_int16* ma_dr_mp3__full_read_and_close_s16(ma_dr_mp3* pMP3, ma_dr_mp3_c
     ma_uint64 totalFramesRead = 0;
     ma_uint64 framesCapacity = 0;
     ma_int16* pFrames = NULL;
-    ma_int16 temp[4096];
+    ma_int16 temp[1152*2];
     MA_DR_MP3_ASSERT(pMP3 != NULL);
     for (;;) {
         ma_uint64 framesToReadRightNow = MA_DR_MP3_COUNTOF(temp) / pMP3->channels;
