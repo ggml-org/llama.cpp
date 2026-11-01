@@ -289,18 +289,19 @@
 		);
 	}
 
-	/* The same fade under the installed app's status bar on a phone: solid behind the bar,
-	   fading out below it, so the page scrolls away under it instead of into it. Without a
-	   top inset, in the browser, it has no height. It fades out as the page slides aside for
-	   the sidebar, step for step with it: the slid page is a rounded card, and a fade pinned
-	   to the screen's top would stick out past its corners. */
+	/* The same fade at the top of a phone's screen: solid behind the status bar and the row of
+	   corner controls under it (the menu key, the chat's header), fading out below them, so the
+	   page scrolls away under them instead of into them. It fades out as the page slides aside
+	   for the sidebar, step for step with it: the slid page is a rounded card, and a fade
+	   pinned to the screen's top would stick out past its corners. */
 	.status-bar-fade {
-		height: calc(var(--safe-area-top) * 1.75);
+		/* down to where a page's content starts (--page-top), solid past the corner row */
+		height: var(--page-top);
 		opacity: calc(1 - var(--sidebar-reveal-progress, 0));
 		background: linear-gradient(
 			to bottom,
-			var(--background) calc(100% / 1.75),
-			color-mix(in srgb, var(--background) 60%, transparent) 80%,
+			var(--background) calc(100% - 1rem),
+			color-mix(in srgb, var(--background) 60%, transparent) calc(100% - 0.5rem),
 			transparent 100%
 		);
 	}

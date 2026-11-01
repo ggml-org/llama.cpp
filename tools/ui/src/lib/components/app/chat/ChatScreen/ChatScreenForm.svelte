@@ -106,6 +106,10 @@
 		onFileRemove?.(fileId);
 	}
 
+	export function openWorkingDirectoryPicker() {
+		chatFormRef?.openWorkingDirectoryPicker();
+	}
+
 	// Auto-focus must not steal focus already claimed elsewhere (e.g. the system
 	// message editor opened just before a navigation)
 	function focusFormUnlessCaptured() {

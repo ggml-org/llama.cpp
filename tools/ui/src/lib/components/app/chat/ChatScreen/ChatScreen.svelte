@@ -2,6 +2,7 @@
 	import ChatScreenActionScrollDown from './ChatScreenActionScrollDown.svelte';
 	import ChatScreenDialogsAndAlerts from './ChatScreenDialogsAndAlerts.svelte';
 	import ChatScreenGreeting from './ChatScreenGreeting.svelte';
+	import ChatScreenMobileHeader from './ChatScreenMobileHeader.svelte';
 	import { disableScrollHandling, onNavigate } from '$app/navigation';
 	import { page } from '$app/state';
 	import {
@@ -51,6 +52,7 @@
 	let isFormCentered = $state(untrack(() => isEmpty));
 	let isFormMoving = false;
 	let formWrapper: HTMLElement | undefined = $state();
+	let chatScreenForm: ChatScreenForm | undefined = $state();
 	let activeErrorDialog = $derived(chatStore.errorDialogState);
 	let isServerLoading = $derived(serverStore.loading);
 	let hasPropsError = $derived(!!serverStore.error);
@@ -237,7 +239,7 @@
 {:else}
 	<div
 		style:--chat-form-bottom-position={chatFormBottomPosition}
-		class="chat-screen flex grow flex-col min-h-[calc(100dvh-1rem)] md:min-h-[calc(100dvh-var(--chat-tabs-offset,0px))] px-4 md:py-0 pt-safe-12 pb-48 md:pb-4"
+		class="chat-screen flex grow flex-col min-h-[calc(100dvh-1rem)] md:min-h-[calc(100dvh-var(--chat-tabs-offset,0px))] px-4 md:py-0 pt-(--page-top) pb-48 md:pb-4"
 		ondragenter={dragAndDrop.dragHandlers.dragenter}
 		ondragleave={dragAndDrop.dragHandlers.dragleave}
 		ondragover={dragAndDrop.dragHandlers.dragover}
@@ -248,6 +250,14 @@
 		{#if deviceStore.isMobile && showContextGauge.current}
 			<ChatFormContextGauge
 				class="sidebar-reveal-pin-top fixed top-(--corner-control-top) right-4 z-20 size-10 rounded-full bg-muted/60 border border-border/20 shadow-sm backdrop-blur-sm"
+			/>
+		{/if}
+
+		<!-- a phone's chat shows its title and working directory between the corner keys; a new
+		     chat has neither yet, and offers the directory in the + menu instead -->
+		{#if deviceStore.isMobile && page.params.id}
+			<ChatScreenMobileHeader
+				onWorkingDirectoryClick={() => chatScreenForm?.openWorkingDirectoryPicker()}
 			/>
 		{/if}
 
@@ -298,6 +308,7 @@
 			</div>
 
 			<ChatScreenForm
+				bind:this={chatScreenForm}
 				bind:uploadedFiles={fileUpload.uploadedFiles}
 				class="pointer-events-auto conversation-chat-form"
 				disabled={hasPropsError || chatStore.isEditing()}

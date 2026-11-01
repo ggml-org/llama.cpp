@@ -29,6 +29,7 @@
 	import {
 		chatStore,
 		conversationsStore,
+		deviceStore,
 		mcpStore,
 		modelsStore,
 		serverStore,
@@ -141,6 +142,14 @@
 
 	let cwd = $derived(
 		conversationsStore.activeConversation?.cwd ?? conversationsStore.preferences.pendingCwd
+	);
+
+	let showWorkingDirectory = $derived(conversationsStore.preferences.hasEnabledCwdTools());
+	// A phone has no chip for the working directory under the form: a chat shows it in its
+	// header (see ChatScreenMobileHeader), and a new chat, which has no header yet, offers it in
+	// the + menu
+	let isWorkingDirectoryInAddMenu = $derived(
+		showWorkingDirectory && deviceStore.isMobile && !conversationsStore.activeConversation
 	);
 
 	const pickers = useChatFormPickers({
@@ -258,6 +267,10 @@
 
 	export function resetTextareaHeight() {
 		inputRef?.resetHeight();
+	}
+
+	export function openWorkingDirectoryPicker() {
+		pickers.handleWorkingDirectoryOpen();
 	}
 
 	export function openModelSelector() {
@@ -642,6 +655,9 @@
 				onMicClick={handleMicClick}
 				{onStop}
 				onSystemPromptClick={() => onSystemPromptClick?.({ files: uploadedFiles, message: value })}
+				onWorkingDirectoryClick={isWorkingDirectoryInAddMenu
+					? pickers.handleWorkingDirectoryOpen
+					: undefined}
 				{showAddButton}
 				{showModelSelector}
 				{uploadedFiles}
@@ -651,7 +667,8 @@
 
 	<ContextGaugePopup />
 
-	{#if conversationsStore.preferences.hasEnabledCwdTools()}
+	{#if showWorkingDirectory}
+		<!-- a phone opens the picker from elsewhere (see isWorkingDirectoryInAddMenu): no chip here -->
 		<ChatFormCurrentWorkingDirectory
 			bind:query={pickers.workingDirectoryQuery}
 			customAnchor={mentionAnchor}
@@ -661,6 +678,7 @@
 			onChange={handleWorkingDirectoryChange}
 			onClose={pickers.handleWorkingDirectoryClose}
 			onOpen={pickers.handleWorkingDirectoryOpen}
+			showChip={!deviceStore.isMobile}
 		/>
 	{/if}
 </form>

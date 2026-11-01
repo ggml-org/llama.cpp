@@ -32,6 +32,7 @@
 		onMicClick?: () => void;
 		onStop?: () => void;
 		onSystemPromptClick?: () => void;
+		onWorkingDirectoryClick?: () => void;
 	}
 
 	let {
@@ -45,6 +46,7 @@
 		onMicClick,
 		onStop,
 		onSystemPromptClick,
+		onWorkingDirectoryClick,
 		showAddButton = true,
 		showModelSelector = true,
 		uploadedFiles = []
@@ -105,6 +107,9 @@
 		},
 		get onSystemPromptClick() {
 			return onSystemPromptClick;
+		},
+		get onWorkingDirectoryClick() {
+			return onWorkingDirectoryClick;
 		}
 	});
 </script>
