@@ -320,6 +320,14 @@
 		background-color: var(--background);
 	}
 
+	/* The bottom edge's counterpart, which Safari takes for its bottom toolbar the same way:
+	   without it, it finds the chat form there and takes the form's colour */
+	.screen-bottom-edge {
+		height: 0.75rem;
+		opacity: calc(1 - var(--sidebar-reveal-progress, 0));
+		background-color: var(--background);
+	}
+
 	/* The same fade at the bottom of a phone's screen: solid behind the home indicator and
 	   fading out above it, so the page ends softly at the screen's edge and under the chat
 	   form instead of running out under it. It fades out with the slide as the top one does */

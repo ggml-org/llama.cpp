@@ -361,6 +361,12 @@
 						aria-hidden="true"
 						class="status-bar-edge sidebar-reveal-pin-top fixed inset-x-0 top-0 z-20"
 					></div>
+
+					<!-- under the chat form, which keeps its taps where the two overlap -->
+					<div
+						aria-hidden="true"
+						class="screen-bottom-edge sidebar-reveal-pin-bottom fixed inset-x-0 bottom-0 z-[6]"
+					></div>
 				{/if}
 
 				<!-- over the content, under the chat form (see its wrapper in ChatScreen) -->
