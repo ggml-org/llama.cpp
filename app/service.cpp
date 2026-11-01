@@ -86,7 +86,7 @@ static int service_run(std::vector<std::string> args, bool detached) {
 
 static int service_start(const std::vector<std::string> & args) {
     auto lock = server_service_lock::read();
-    if (lock.has_value() && lock->alive()) {
+    if (lock.has_value() && server_service_running()) {
         printf("service is already running (pid %d) at http://%s:%d\n", lock->pid, lock->host.c_str(), lock->port);
         return 0;
     }
@@ -112,7 +112,7 @@ static int service_start(const std::vector<std::string> & args) {
     for (int i = 0; i < 300; i++) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         lock = server_service_lock::read();
-        if (lock.has_value() && lock->alive()) {
+        if (lock.has_value() && server_service_running()) {
             try {
                 auto res = server_service_request(lock->sock, "GET", "/service/status");
                 if (res.status == 200) {
@@ -133,7 +133,7 @@ static int service_start(const std::vector<std::string> & args) {
 
 static int service_stop() {
     auto lock = server_service_lock::read();
-    if (!lock.has_value() || !lock->alive()) {
+    if (!lock.has_value() || !server_service_running()) {
         printf("service is not running\n");
         server_service_lock::remove(/* force */ true);
         return 0;
@@ -145,10 +145,10 @@ static int service_stop() {
         fprintf(stderr, "warning: %s\n", e.what());
     }
 
-    for (int i = 0; i < 300 && lock->alive(); i++) {
+    for (int i = 0; i < 300 && server_service_running(); i++) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
-    if (lock->alive()) {
+    if (server_service_running()) {
         fprintf(stderr, "service did not stop in time, killing pid %d\n", lock->pid);
         server_service_pid_kill(lock->pid);
     }
@@ -159,7 +159,7 @@ static int service_stop() {
 
 static int service_status() {
     auto lock = server_service_lock::read();
-    if (!lock.has_value() || !lock->alive()) {
+    if (!lock.has_value() || !server_service_running()) {
         printf("service is not running\n");
         return 1;
     }

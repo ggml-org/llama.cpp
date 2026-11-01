@@ -55,6 +55,10 @@ def _spawn(args: list[str], **kwargs) -> ServerResponse:
     })
 
 
+def _lock_path() -> str:
+    return os.path.join(server.config_dir, "llama.cpp", "service.json")
+
+
 def test_service_status_and_lock():
     global server
     server.start()
@@ -65,7 +69,7 @@ def test_service_status_and_lock():
     assert res.body["build"].startswith("b")
     assert res.body["running"] == []
 
-    with open(os.path.join(server.config_dir, "llama.cpp", "service.json")) as f:
+    with open(_lock_path()) as f:
         lock = json.load(f)
     assert lock["pid"] == server.process.pid
     assert lock["port"] == server.server_port
@@ -75,6 +79,36 @@ def test_service_status_and_lock():
     # the service routes are not on the TCP port
     res = server.make_request("GET", "/service/status")
     assert res.status_code == 404
+
+
+def test_service_second_router_is_refused():
+    global server
+    server.start()
+    # a second router on the same config dir must not take over the socket, even when it
+    # finds no service.json, as in the window between the first one's bind and its lock write
+    os.remove(_lock_path())
+    other = ServerPreset.router()
+    other.server_port = server.server_port + 1
+    other.service_sock = server.service_sock
+    other.config_dir = server.config_dir
+    with pytest.raises(RuntimeError):
+        other.start()
+    other.stop()
+    res = server.make_sock_request("GET", "/service/status")
+    assert res.status_code == 200
+    assert res.body["pid"] == server.process.pid
+
+
+def test_service_starts_over_stale_lock():
+    global server
+    # a crashed service left its service.json, and its pid now belongs to another process
+    os.makedirs(os.path.dirname(_lock_path()), exist_ok=True)
+    with open(_lock_path(), "w") as f:
+        json.dump({"pid": os.getpid(), "host": "127.0.0.1", "port": 1, "sock": server.service_sock, "build": "b0", "args": []}, f)
+    server.start()
+    res = server.make_sock_request("GET", "/service/status")
+    assert res.status_code == 200
+    assert res.body["pid"] == server.process.pid
 
 
 def test_service_socket_serves_router_api():
@@ -249,5 +283,5 @@ def test_service_stop():
     assert res.status_code == 200
     server.process.wait(timeout=30)
     assert server.process.returncode == 0
-    assert not os.path.exists(os.path.join(server.config_dir, "llama.cpp", "service.json"))
+    assert not os.path.exists(_lock_path())
     assert not os.path.exists(server.service_sock)

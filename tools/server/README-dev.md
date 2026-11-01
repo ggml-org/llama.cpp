@@ -303,7 +303,7 @@ The service is the router with a second `server_http_context` bound to a UNIX so
 
 Each child's stderr lines go through `server_models::on_child_log()` into a `server_log_ring` (one per instance, 2000 lines), which `GET /service/logs` drains.
 
-`llama service start` spawns `llama service run --detached` with `common_subproc` and waits for the lock file. The detached process calls `setsid()` (POSIX) and redirects its stdio to `service.log` before running `llama_server()`; on Windows `subprocess_option_no_window` keeps it off the console. The lock file `service.json` (pid, host, port, sock, build, args) is written once the listeners are up and removed by `clean_up()`; `llama service stop` posts `/service/stop`, waits for the pid to go away and kills it after 30 s.
+`llama service start` spawns `llama service run --detached` with `common_subproc` and waits for the lock file. The detached process calls `setsid()` (POSIX) and redirects its stdio to `service.log` before running `llama_server()`; on Windows `subprocess_option_no_window` keeps it off the console. `service.lock` is held with `common_file_lock` for the life of the process: it decides which process is the service before anything binds, and the OS releases it when the process dies, so a crash or a reused pid never blocks the next start. The lock file `service.json` (pid, host, port, sock, build, args) only describes the running service: it is written once the listeners are up and removed by `clean_up()`; `llama service stop` posts `/service/stop`, waits for `service.lock` to be released and kills the pid after 30 s.
 
 ### Sleep mode
 

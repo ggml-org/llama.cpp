@@ -8,7 +8,6 @@
 
 #include <cpp-httplib/httplib.h>
 
-#include <cerrno>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -30,6 +29,10 @@ std::filesystem::path server_service_lock_path() {
     return server_service_dir() / "service.json";
 }
 
+std::filesystem::path server_service_mutex_path() {
+    return server_service_dir() / "service.lock";
+}
+
 std::filesystem::path server_service_default_sock() {
     return server_service_dir() / "service.sock";
 }
@@ -46,22 +49,9 @@ int server_service_current_pid() {
 #endif
 }
 
-bool server_service_pid_alive(int pid) {
-    if (pid <= 0) {
-        return false;
-    }
-#if defined(_WIN32)
-    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD) pid);
-    if (h == nullptr) {
-        return false;
-    }
-    DWORD code = 0;
-    const bool alive = GetExitCodeProcess(h, &code) && code == STILL_ACTIVE;
-    CloseHandle(h);
-    return alive;
-#else
-    return kill((pid_t) pid, 0) == 0 || errno == EPERM;
-#endif
+bool server_service_running() {
+    common_file_lock probe(server_service_mutex_path().string());
+    return !probe.acquire([]() { return false; });
 }
 
 void server_service_pid_kill(int pid) {
@@ -126,10 +116,6 @@ void server_service_lock::remove(bool force) {
     std::filesystem::remove(server_service_lock_path(), ec);
 }
 
-bool server_service_lock::alive() const {
-    return server_service_pid_alive(pid);
-}
-
 server_service_response server_service_request(const std::string & sock, const std::string & method, const std::string & path, const std::string & body) {
     httplib::Client cli(sock);
     cli.set_address_family(AF_UNIX);
@@ -174,9 +160,11 @@ bool server_service::init(const common_params & params,
     sock = params.service_sock;
     host = params.hostnames.empty() ? "" : params.hostnames[0];
 
-    auto lock = server_service_lock::read();
-    if (lock.has_value() && lock->alive() && lock->pid != server_service_current_pid()) {
-        SRV_ERR("a service is already running with pid %d\n", lock->pid);
+    // the mutex makes this process the only service of the config directory before anything binds
+    mutex = std::make_unique<common_file_lock>(server_service_mutex_path().string());
+    if (!mutex->acquire([]() { return false; })) {
+        auto lock = server_service_lock::read();
+        SRV_ERR("a service is already running with pid %d\n", lock.has_value() ? lock->pid : 0);
         return false;
     }
     std::error_code ec;

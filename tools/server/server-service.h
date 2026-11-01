@@ -1,23 +1,27 @@
 #pragma once
 
 #include "common.h"
+#include "file-lock.h"
 #include "server-http.h"
 
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
 // the service: a router that also listens on a UNIX socket for 'llama service' and 'llama serve'.
 // the socket carries the whole router API without an API key, plus the routes below. the lock
-// file next to it says which process runs the service and how to reach it
+// file next to it says which process runs the service and how to reach it; the mutex file is
+// locked by the running service for its whole life, the OS releases it when the process dies
 
 struct server_models_routes;
 
 // under the user config directory
 std::filesystem::path server_service_dir();
 std::filesystem::path server_service_lock_path();
+std::filesystem::path server_service_mutex_path();
 std::filesystem::path server_service_default_sock();
 std::filesystem::path server_service_log_path();
 
@@ -34,12 +38,12 @@ struct server_service_lock {
     void write() const;
     // only when the lock names this process, or force is set
     static void remove(bool force = false);
-
-    bool alive() const;
 };
 
+// true while a process holds the service mutex
+bool server_service_running();
+
 int  server_service_current_pid();
-bool server_service_pid_alive(int pid);
 void server_service_pid_kill(int pid);
 
 // a request over the service socket; throws when the socket is unreachable
@@ -68,6 +72,7 @@ struct server_service {
 
 private:
     common_params params_service; // the listener keeps a reference to it
+    std::unique_ptr<common_file_lock> mutex; // held until the process exits
     std::string host; // of the TCP listener, for the lock file
     std::string sock;
     std::optional<server_http_context> ctx;
