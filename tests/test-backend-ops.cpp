@@ -12346,6 +12346,88 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {4, 1},  4096, 512, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {12, 1}, 4096, 512, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
 
+    // quantized and asymmetric KV cases: power-of-two and non-power-of-two GQA, odd batch sizes, ALiBi, sinks, and softcap
+    {
+        struct fa_quant_case {
+            int hsk, hsv, nh, gqa, kv, nb;
+            bool mask, sinks;
+            float max_bias, softcap;
+            ggml_type tk, tv;
+        };
+        const fa_quant_case quant_cases[] = {
+            {  64,  64, 4,  6, 256,  1, true,  false, 0.0f,  0.0f, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0 },
+            {  64,  64, 4,  6, 256,  2, true,  false, 0.0f,  0.0f, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0 },
+            {  64,  64, 4,  8, 160,  4, true,  true,  0.0f,  0.0f, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0 },
+            { 128, 128, 4,  3, 256,  1, true,  false, 0.0f,  0.0f, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0 },
+            { 128, 128, 4,  3, 192,  4, true,  true,  0.0f,  0.0f, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0 },
+            { 128, 128, 4,  5, 256,  4, true,  false, 0.0f,  0.0f, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0 },
+            { 128, 128, 4,  5, 256,  5, true,  false, 0.0f,  0.0f, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0 },
+            { 128, 128, 4,  5, 256,  6, true,  false, 0.0f,  0.0f, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0 },
+            { 128, 128, 4,  6, 256,  1, true,  false, 0.0f,  0.0f, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0 },
+            { 128, 128, 4,  6, 256,  2, true,  false, 0.0f,  0.0f, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0 },
+            { 128, 128, 4,  6, 300,  4, true,  true,  0.0f,  0.0f, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0 },
+            { 128, 128, 4,  6, 256,  5, true,  false, 0.0f,  0.0f, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0 },
+            { 128, 128, 4,  6, 256,  8, true,  false, 0.0f,  0.0f, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0 },
+            { 128, 128, 4,  6, 256, 16, true,  false, 0.0f,  0.0f, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0 },
+            { 128, 128, 4,  6, 256, 24, true,  false, 0.0f,  0.0f, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0 },
+            { 128, 128, 4,  7, 256,  3, true,  false, 0.0f,  0.0f, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0 },
+            { 128, 128, 4, 12, 256,  3, true,  false, 0.0f,  0.0f, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0 },
+            { 128, 128, 4,  8, 256,  4, true,  false, 0.0f,  0.0f, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0 },
+            { 128, 128, 4,  8, 256,  8, true,  true,  0.0f,  0.0f, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0 },
+            { 128, 128, 4,  8, 256,  4, true,  false, 0.0f, 30.0f, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0 },
+            { 128, 128, 4,  8, 256, 24, true,  false, 0.0f, 30.0f, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0 },
+            { 128, 128, 4, 4, 256,  1, true,  false, 8.0f,  0.0f, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0 },
+            { 128, 128, 4, 4, 256,  4, true,  false, 8.0f,  0.0f, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0 },
+            { 128, 128, 4, 3, 256,  5, true,  false, 0.0f,  0.0f, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0 },
+            { 128, 128, 4, 4, 256,  3, true,  false, 0.0f,  0.0f, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0 },
+            { 128, 128, 4, 4, 256,  5, true,  false, 0.0f,  0.0f, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0 },
+            { 256, 256, 2, 6, 256,  5, true,  false, 0.0f,  0.0f, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0 },
+            { 256, 256, 2, 4, 256,  7, true,  false, 0.0f,  0.0f, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0 },
+            { 256, 256, 2, 6, 256,  9, true,  false, 0.0f,  0.0f, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0 },
+            { 256, 256, 2, 8, 256, 17, true,  false, 0.0f,  0.0f, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0 },
+            { 128, 128, 4, 8, 256,  1, true,  false, 0.0f,  0.0f, GGML_TYPE_BF16, GGML_TYPE_BF16 },
+            { 256, 256, 2, 6, 256,  4, true,  false, 0.0f,  0.0f, GGML_TYPE_BF16, GGML_TYPE_BF16 },
+            { 256, 256, 2, 6, 256,  1, true,  false, 0.0f,  0.0f, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0 },
+            { 256, 256, 2, 6, 256,  4, true,  true,  0.0f,  0.0f, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0 },
+            { 256, 256, 2, 6, 160,  8, true,  false, 0.0f,  0.0f, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0 },
+            { 256, 256, 2, 6, 256, 16, true,  false, 0.0f,  0.0f, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0 },
+            { 256, 256, 2, 8, 256,  1, true,  false, 0.0f,  0.0f, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0 },
+            { 256, 256, 2, 8, 256,  4, true,  false, 0.0f,  0.0f, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0 },
+            { 256, 256, 2, 8, 256,  8, true,  true,  0.0f,  0.0f, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0 },
+            { 256, 256, 2, 8, 256, 24, true,  false, 0.0f,  0.0f, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0 },
+            { 128, 128, 4, 8, 256,  1, true,  false, 0.0f,  0.0f, GGML_TYPE_F16,  GGML_TYPE_Q8_0 },
+            { 256, 256, 2, 6, 256,  4, true,  false, 0.0f,  0.0f, GGML_TYPE_F16,  GGML_TYPE_Q8_0 },
+            { 256, 256, 2, 8, 256,  4, true,  false, 0.0f,  0.0f, GGML_TYPE_Q8_0, GGML_TYPE_F16  },
+            { 256, 256, 2, 8, 256,  4, true,  false, 0.0f,  0.0f, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0 },
+            { 256, 256, 2, 8, 256,  4, true,  false, 0.0f,  0.0f, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0 },
+            { 128, 128, 4, 6, 256,  4, true,  false, 0.0f,  0.0f, GGML_TYPE_F16,  GGML_TYPE_Q4_0 },
+            { 128, 128, 4, 6, 256,  4, true,  false, 0.0f,  0.0f, GGML_TYPE_Q4_0, GGML_TYPE_F16  },
+            { 128, 128, 4, 4, 256,  4, true,  false, 0.0f,  0.0f, GGML_TYPE_Q4_1, GGML_TYPE_Q4_1 },
+            { 128, 128, 4, 4, 256,  4, true,  false, 0.0f,  0.0f, GGML_TYPE_Q5_0, GGML_TYPE_Q5_0 },
+            { 128, 128, 4, 4, 256,  4, true,  false, 0.0f,  0.0f, GGML_TYPE_Q5_1, GGML_TYPE_Q5_1 },
+            { 512, 512, 2, 4, 256,  4, true,  false, 0.0f,  0.0f, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0 },
+            { 576, 512, 2, 4, 256,  4, true,  false, 0.0f,  0.0f, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0 },
+        };
+        for (const auto & c : quant_cases) {
+            test_cases.emplace_back(new test_flash_attn_ext(
+                c.hsk, c.hsv, c.nh, { c.gqa, 1 }, c.kv, c.nb, c.mask, c.sinks,
+                c.max_bias, c.softcap, GGML_PREC_F32, c.tk, c.tv));
+        }
+        test_cases.emplace_back(new test_flash_attn_ext(
+            128, 128, 4, { 6, 1 }, 256, 4, true, false, 0.0f, 0.0f, GGML_PREC_F32,
+            GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, { 0, 2, 1, 3 }));
+        // non-power-of-two GQA f16 cases
+        for (int hs : { 64, 128, 256 }) {
+            for (int nr2 : { 3, 5, 6, 7 }) {
+                for (int nb : { 16, 64 }) {
+                    test_cases.emplace_back(new test_flash_attn_ext(
+                        hs, hs, 4, { nr2, 1 }, 256, nb, true, false, 0.0f, 0.0f, GGML_PREC_F32,
+                        GGML_TYPE_F16, GGML_TYPE_F16));
+                }
+            }
+        }
+    }
+
     // dense-allocated (non-view) quant K/V at batch >= 64, in cache and native layouts
     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 4, {1, 1}, 512, 75, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, {0, 2, 1, 3}, false));
     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 4, {4, 1}, 512, 75, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, {0, 2, 1, 3}, false));

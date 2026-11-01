@@ -394,14 +394,23 @@ static __device__ __forceinline__ void dequantize_V_f16(const void * __restrict_
 
 template <typename T, int ne>
 static __device__ __forceinline__ void dequantize_V_bf16(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
-    static_assert(std::is_same_v<T, float>, "BF16 V dequantization only supports float output");
     static_assert(ne % 2 == 0, "bad ne");
     __align__(16) nv_bfloat162 tmp[ne/2];
     ggml_cuda_memcpy_1<ne*sizeof(nv_bfloat16)>(tmp, (const nv_bfloat16 *) vx + i0);
-    float2 * dst_f2 = (float2 *) dst;
+    if constexpr (std::is_same_v<T, half>) {
+        half2 * dst_h2 = (half2 *) dst;
 #pragma unroll
-    for (int l = 0; l < ne/2; ++l) {
-        dst_f2[l] = ggml_cuda_cast<float2>(tmp[l]);
+        for (int l = 0; l < ne/2; ++l) {
+            dst_h2[l] = __float22half2_rn(ggml_cuda_cast<float2>(tmp[l]));
+        }
+    } else if constexpr (std::is_same_v<T, float>) {
+        float2 * dst_f2 = (float2 *) dst;
+#pragma unroll
+        for (int l = 0; l < ne/2; ++l) {
+            dst_f2[l] = ggml_cuda_cast<float2>(tmp[l]);
+        }
+    } else {
+        static_assert(std::is_same_v<T, void>, "unsupported type");
     }
 }
 
@@ -659,7 +668,7 @@ constexpr __device__ dequantize_V_t get_dequantize_V() {
     } else if constexpr (type_V == GGML_TYPE_Q8_0) {
         return dequantize_V_q8_0<T, ne>;
     } else if constexpr (type_V == GGML_TYPE_BF16) {
-        return dequantize_V_bf16<float, ne>;
+        return dequantize_V_bf16<T, ne>;
     } else {
         static_assert(type_V == -1, "bad type");
         return nullptr;
@@ -981,7 +990,7 @@ template <int DV, int ncols1, int ncols2>
 void launch_fattn(
     ggml_backend_cuda_context & ctx, ggml_tensor * dst, fattn_kernel_t fattn_kernel, const int nwarps, const size_t nbytes_shared,
     const int nbatch_fa, const bool need_f16_K, const bool need_f16_V, const bool stream_k, const bool use_sparse,
-    const int warp_size = WARP_SIZE, const bool async_kv_preload = false
+    const int warp_size = WARP_SIZE, const bool async_kv_preload = false, const bool fold_gqa = false
 ) {
     constexpr int ncols = ncols1 * ncols2;
 
@@ -1092,8 +1101,10 @@ void launch_fattn(
         }
     }
 
-    const int ntiles_x     = ((Q->ne[1] + ncols1 - 1) / ncols1);
+    GGML_ASSERT(!stream_k || !fold_gqa);
     const int gqa_ratio    = Q->ne[2] / K->ne[2];
+    const int ncols1_eff   = (fold_gqa && ncols2 > gqa_ratio) ? (ncols / gqa_ratio) : ncols1;
+    const int ntiles_x     = ((Q->ne[1] + ncols1_eff - 1) / ncols1_eff);
     const int ntiles_z_gqa = ((gqa_ratio + ncols2 - 1) / ncols2);
     const int ntiles_dst   = ntiles_x * ntiles_z_gqa * K->ne[2] * Q->ne[3];
 
@@ -1114,7 +1125,7 @@ void launch_fattn(
     // Optional optimization where the mask is scanned to determine whether part of the calculation can be skipped.
     // Only worth the overhead if there is at lease one FATTN_KQ_STRIDE x FATTN_KQ_STRIDE square to be skipped or
     //     multiple sequences of possibly different lengths.
-    const bool scan_mask = !use_sparse && mask && K->ne[1] % FATTN_KQ_STRIDE == 0 && (Q->ne[1] >= 1024 || Q->ne[3] > 1);
+    const bool scan_mask = !use_sparse && ncols1_eff == ncols1 && mask && K->ne[1] % FATTN_KQ_STRIDE == 0 && (Q->ne[1] >= 1024 || Q->ne[3] > 1);
     if (scan_mask) {
         const int64_t s31 = mask->nb[1] / sizeof(half2);
         const int64_t s33 = mask->nb[3] / sizeof(half2);
