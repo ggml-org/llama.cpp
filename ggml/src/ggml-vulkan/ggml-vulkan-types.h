@@ -1115,6 +1115,21 @@ struct vk_staging_memset {
     size_t n;
 };
 
+struct vk_buffer_region {
+    vk_buffer buf;
+    size_t offset;
+    void * host;
+    size_t size;
+};
+
+struct vk_buffer_copy_region {
+    vk_buffer dst;
+    size_t dst_offset;
+    vk_buffer src;
+    size_t src_offset;
+    size_t size;
+};
+
 struct vk_context_struct {
     vk_submission * s;
     std::vector<vk_sequence> seqs;
