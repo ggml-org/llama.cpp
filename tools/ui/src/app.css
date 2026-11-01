@@ -295,13 +295,15 @@
 	   for the sidebar, step for step with it: the slid page is a rounded card, and a fade
 	   pinned to the screen's top would stick out past its corners. */
 	.status-bar-fade {
-		/* down to where a page's content starts (--page-top), solid past the corner row */
+		/* down to where a page's content starts (--page-top): solid to the middle of the corner
+		   row, then a long, even fade over its lower half and on to the content */
 		height: var(--page-top);
 		opacity: calc(1 - var(--sidebar-reveal-progress, 0));
 		background: linear-gradient(
 			to bottom,
-			var(--background) calc(100% - 1rem),
-			color-mix(in srgb, var(--background) 60%, transparent) calc(100% - 0.5rem),
+			var(--background) calc(var(--corner-control-top) + 1.25rem),
+			color-mix(in srgb, var(--background) 55%, transparent)
+				calc(var(--corner-control-top) + 2.5rem),
 			transparent 100%
 		);
 	}

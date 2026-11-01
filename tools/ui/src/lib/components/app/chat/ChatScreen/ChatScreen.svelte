@@ -62,9 +62,9 @@
 
 		if (deviceStore.isStandalone) return '1.5rem';
 
-		if (deviceStore.isIOSSafari) return '0.25rem';
+		if (deviceStore.isIOSSafari) return '0.5rem';
 
-		return '0.5rem';
+		return '0.75rem';
 	});
 
 	// The page is the scroller: it follows new content while the reader sits at
@@ -285,8 +285,8 @@
 				deviceStore.isStandalone
 					? 'bottom-6 right-4 left-4'
 					: deviceStore.isIOSSafari
-						? 'bottom-1 left-2 right-2'
-						: 'bottom-2 right-2 left-2',
+						? 'bottom-2 left-2 right-2'
+						: 'bottom-3 right-2 left-2',
 				'md:bottom-4',
 				isFormCentered
 					? 'md:translate-y-[calc(-50dvh+7rem)] 2xl:translate-y-[calc(-50dvh+4rem)]'
