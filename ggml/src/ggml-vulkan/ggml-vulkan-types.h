@@ -1225,6 +1225,10 @@ struct ggml_backend_vk_context {
 
     vk_device device;
 
+    // Workaround for drivers moving VRAM contents off the GPU when idle
+    std::promise<void> keepalive_stop;
+    std::thread keepalive_thread;
+
     size_t semaphore_idx, event_idx;
     ggml_vk_garbage_collector gc;
     size_t prealloc_size_x, prealloc_size_y, prealloc_size_split_k, prealloc_size_add_rms_partials, prealloc_size_add_rms_partials_offset;
