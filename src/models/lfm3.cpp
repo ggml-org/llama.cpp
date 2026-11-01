@@ -125,7 +125,7 @@ llama_model_lfm3::graph<decision>::graph(const llama_model & model, const llm_gr
                           freq_base_l, freq_scale_l, ext_factor, attn_factor, beta_fast, beta_slow);
 
         ggml_tensor * attn_out = build_attn(inp_attn,
-                NULL, NULL, NULL,
+                NULL, NULL,
                 q, k, v, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
         cb(attn_out, "attn_out", il);
 
@@ -138,7 +138,7 @@ llama_model_lfm3::graph<decision>::graph(const llama_model & model, const llm_gr
         attn_3d = ggml_mul(ctx0, attn_3d, gate_3d);
         attn_out = ggml_reshape_2d(ctx0, attn_3d, n_embd_head * n_head_il, n_tokens);
 
-        ggml_tensor * out = build_lora_mm(model.layers[il].wo, attn_out, model.layers[il].wo_s);
+        ggml_tensor * out = build_lora_mm(model.layers[il].wo, attn_out);
         cb(out, "model.layers.{}.self_attn.out_proj", il);
 
         return out;
@@ -207,7 +207,7 @@ llama_model_lfm3::graph<decision>::graph(const llama_model & model, const llm_gr
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
     cb(cur, "result_output", -1);
 
     res->t_logits = cur;

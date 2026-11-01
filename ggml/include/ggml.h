@@ -780,6 +780,7 @@ extern "C" {
     GGML_API size_t  ggml_element_size(const struct ggml_tensor * tensor);
 
     GGML_API bool    ggml_is_quantized(enum ggml_type type);
+    GGML_API bool    ggml_needs_scale(enum ggml_type type);
 
     // TODO: temporary until model loading of ggml examples is refactored
     GGML_API enum ggml_type ggml_ftype_to_ggml_type(enum ggml_ftype ftype);
@@ -1500,6 +1501,15 @@ extern "C" {
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
+    // scale_activations is an optional F32 quantization companion with ne[0] == 1 that broadcasts over b.
+    // Divide activations by the scale before quantization, then multiply the matmul result by the scale.
+    GGML_API struct ggml_tensor * ggml_mul_mat_ext(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            struct ggml_tensor  * scale_weight,
+            struct ggml_tensor  * scale_activations);
+
     // change the precision of a matrix multiplication
     // set to GGML_PREC_F32 for higher precision (useful for phi-2)
     GGML_DEPRECATED(GGML_API void ggml_mul_mat_set_prec(
@@ -1524,6 +1534,15 @@ extern "C" {
             struct ggml_tensor  * as,
             struct ggml_tensor  * b,
             struct ggml_tensor  * ids);
+
+    // scale_activations follows ggml_mul_mat_ext, but broadcasts over the result: [1, ids->ne[0], b->ne[2], 1].
+    GGML_API struct ggml_tensor * ggml_mul_mat_id_ext(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * as,
+            struct ggml_tensor  * b,
+            struct ggml_tensor  * ids,
+            struct ggml_tensor  * scale_weight,
+            struct ggml_tensor  * scale_activations);
 
     // A: m columns, n rows,
     // B: p columns, n rows,
@@ -3021,7 +3040,8 @@ extern "C" {
         int64_t                  blck_size;
         int64_t                  blck_size_interleave; // interleave elements in blocks
         size_t                   type_size;
-        bool                     is_quantized;
+        bool                     is_quantized; // whether it's a block-quantized data-type
+        bool                     needs_scale; // whether the quantization type needs a scale factor for valid dequantization
         ggml_to_float_t          to_float;
         ggml_from_float_t        from_float_ref;
     };

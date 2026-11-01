@@ -1985,7 +1985,7 @@ ggml_tensor * llama_kv_cache::build_rope_shift(
                                 : hparams.rope_type;
     ggml_tensor * tmp;
 
-    if (ggml_is_quantized(cur->type) || cur->type == GGML_TYPE_F8_E4M3) {
+    if (ggml_is_quantized(cur->type) || ggml_needs_scale(cur->type)) {
         // dequantize to f32 -> RoPE -> quantize back
         tmp = ggml_cast(ctx, cur, GGML_TYPE_F32);
 

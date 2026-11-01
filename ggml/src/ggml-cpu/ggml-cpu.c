@@ -1261,6 +1261,38 @@ static void ggml_compute_forward_mul_mat_one_chunk(
     }
 }
 
+// apply the weight scale (src[2]) carried by ggml_mul_mat_ext, broadcast over dst
+static void ggml_compute_forward_mul_mat_scale(
+        const struct ggml_compute_params * params,
+              struct ggml_tensor * dst) {
+    const struct ggml_tensor * scale = dst->src[2];
+    if (!scale) {
+        return;
+    }
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int64_t ne0 = dst->ne[0], ne1 = dst->ne[1], ne2 = dst->ne[2], ne3 = dst->ne[3];
+    const size_t  nb1 = dst->nb[1], nb2 = dst->nb[2], nb3 = dst->nb[3];
+
+    ggml_barrier(params->threadpool);
+
+    const char * sd = (const char *) scale->data;
+    const int64_t sne0 = scale->ne[0], sne1 = scale->ne[1], sne2 = scale->ne[2], sne3 = scale->ne[3];
+    const int64_t nr = ne1 * ne2 * ne3;
+    for (int64_t ir = ith; ir < nr; ir += nth) {
+        const int64_t i1 = ir % ne1;
+        const int64_t i2 = (ir / ne1) % ne2;
+        const int64_t i3 = ir / (ne1 * ne2);
+        float * dp = (float *) ((char *) dst->data + i1*nb1 + i2*nb2 + i3*nb3);
+        const size_t so = (i1 % sne1)*scale->nb[1] + (i2 % sne2)*scale->nb[2] + (i3 % sne3)*scale->nb[3];
+        for (int64_t i0 = 0; i0 < ne0; i0++) {
+            dp[i0] *= *(const float *) (sd + (i0 % sne0)*scale->nb[0] + so);
+        }
+    }
+}
+
 void ggml_compute_forward_mul_mat(
         const struct ggml_compute_params * params,
               struct ggml_tensor * dst) {
@@ -1276,6 +1308,7 @@ void ggml_compute_forward_mul_mat(
 
     // If tiled is supported, it will execute the full op here and we return
     if (ggml_compute_forward_mul_mat_tiled(params, dst)) {
+        ggml_compute_forward_mul_mat_scale(params, dst);
         return;
     }
 
@@ -1329,6 +1362,7 @@ void ggml_compute_forward_mul_mat(
                                      src1->type,
                                      dst->type))
                     goto UseGgmlGemm1;
+        ggml_compute_forward_mul_mat_scale(params, dst);
         return;
     }
 UseGgmlGemm1:;
@@ -1411,6 +1445,7 @@ UseGgmlGemm1:;
                                      vec_dot_type,
                                      dst->type))
                     goto UseGgmlGemm2;
+        ggml_compute_forward_mul_mat_scale(params, dst);
         return;
     }
 UseGgmlGemm2:;
@@ -1478,6 +1513,8 @@ UseGgmlGemm2:;
 
         current_chunk = atomic_fetch_add_explicit(&params->threadpool->current_chunk, 1, memory_order_relaxed);
     }
+
+    ggml_compute_forward_mul_mat_scale(params, dst);
 }
 
 // ggml_compute_forward_mul_mat_id
@@ -1745,6 +1782,35 @@ static void ggml_compute_forward_mul_mat_id(
             }
 
             current_chunk = atomic_fetch_add_explicit(current_chunk_ctr, 1, memory_order_relaxed);
+        }
+    }
+
+    // apply the weight scale (src[3]) carried by ggml_mul_mat_id_ext: per-tensor [1],
+    // per-expert [n_expert] or per-channel-per-expert [n_out, n_expert], indexed via ids
+    const struct ggml_tensor * scale = dst->src[3];
+    if (scale) {
+        ggml_barrier(params->threadpool);
+
+        const char * sd = (const char *) scale->data;
+        const bool per_ch_exp = scale->ne[0] == ne0 && scale->ne[1] == ne02;
+        const bool per_expert = ggml_nelements(scale) == ne02;
+        const int64_t nr = ne1 * ne2;
+        for (int64_t ir = ith; ir < nr; ir += nth) {
+            const int64_t i1 = ir % ne1;
+            const int64_t i2 = ir / ne1;
+            const int32_t expert = *(const int32_t *) ((const char *) ids->data + i1*ids->nb[0] + i2*ids->nb[1]);
+            float * dp = (float *) ((char *) dst->data + i1*nb1 + i2*nb2);
+            if (per_ch_exp) {
+                const char * sp = sd + expert*scale->nb[1];
+                for (int64_t i0 = 0; i0 < ne0; i0++) {
+                    dp[i0] *= *(const float *) (sp + i0*scale->nb[0]);
+                }
+            } else {
+                const float s = *(const float *) (sd + (per_expert ? expert*scale->nb[0] : 0));
+                for (int64_t i0 = 0; i0 < ne0; i0++) {
+                    dp[i0] *= s;
+                }
+            }
         }
     }
 }
@@ -2885,7 +2951,7 @@ struct ggml_cplan ggml_graph_plan(
                 case GGML_OP_ADD_ID:
                 case GGML_OP_ADD1:
                     {
-                        if (ggml_is_quantized(node->src[0]->type) || node->src[0]->type == GGML_TYPE_F8_E4M3) {
+                        if (ggml_is_quantized(node->src[0]->type) || ggml_needs_scale(node->src[0]->type)) {
                             cur = ggml_type_size(GGML_TYPE_F32) * node->src[0]->ne[0] * n_tasks;
                         }
                     } break;
@@ -2933,7 +2999,7 @@ struct ggml_cplan ggml_graph_plan(
                     } break;
                 case GGML_OP_OUT_PROD:
                     {
-                        if (ggml_is_quantized(node->src[0]->type) || node->src[0]->type == GGML_TYPE_F8_E4M3 ||
+                        if (ggml_is_quantized(node->src[0]->type) || ggml_needs_scale(node->src[0]->type) ||
                             node->src[0]->type == GGML_TYPE_F16) {
                             cur = ggml_type_size(GGML_TYPE_F32) * node->src[0]->ne[0] * n_tasks;
                         }

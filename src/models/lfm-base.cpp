@@ -117,9 +117,9 @@ ggml_tensor * llm_build_lfm_base::build_lfm_dense_ffn(const llama_model & model,
     GGML_ASSERT(!model.layers[il].ffn_gate_b);
     GGML_ASSERT(!model.layers[il].ffn_down_b);
     return build_ffn(cur,
-        model.layers[il].ffn_up,   NULL, NULL,
-        model.layers[il].ffn_gate, NULL, NULL,
-        model.layers[il].ffn_down, NULL, NULL,
+        model.layers[il].ffn_up,   NULL,
+        model.layers[il].ffn_gate, NULL,
+        model.layers[il].ffn_down, NULL,
         NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
 }
 

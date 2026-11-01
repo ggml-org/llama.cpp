@@ -11401,6 +11401,10 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
         return false;
     }
 
+    if (ggml_get_src_scale(op, 0)) {
+        return false;
+    }
+
     switch (op->op) {
         case GGML_OP_NONE:
             return true;

@@ -162,9 +162,9 @@ llama_model_plamo2::graph::graph(const llama_model & model, const llm_graph_para
 
         // feed-forward network
         cur = build_ffn(cur,
-                model.layers[il].ffn_up, NULL, NULL,
-                NULL, NULL, NULL,
-                model.layers[il].ffn_down, NULL, NULL,
+                model.layers[il].ffn_up, NULL,
+                NULL, NULL,
+                model.layers[il].ffn_down, NULL,
                 NULL, LLM_FFN_SWIGLU, LLM_FFN_SEQ, il);
         cb(cur, "ffn_out", il);
 
@@ -189,7 +189,7 @@ llama_model_plamo2::graph::graph(const llama_model & model, const llm_graph_para
     res->t_embd = cur;
 
     // lm_head
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
     cb(cur, "result_output", -1);
 
     // Explicitly mark as output tensor to ensure proper backend assignment
@@ -244,7 +244,7 @@ ggml_tensor * llama_model_plamo2::graph::build_plamo2_attn_layer(llm_graph_input
                              ext_factor, attn_factor, beta_fast, beta_slow);
 
         cur = build_attn(inp,
-            model.layers[il].wo, NULL, model.layers[il].wo_s,
+            model.layers[il].wo, NULL,
             Qcur, Kcur, Vcur, NULL, NULL, NULL, 1.0f / sqrtf(float(n_embd_head_v)), il);
     }
 

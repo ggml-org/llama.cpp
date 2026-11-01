@@ -56,7 +56,7 @@ ggml_tensor * llm_build_rwkv6_base::build_rwkv6_time_mix(llm_graph_input_rs * in
 
     ggml_tensor * xxx = ggml_add(ctx0, ggml_mul(ctx0, sx, layer.time_mix_lerp_x), cur);
 
-    xxx = ggml_reshape_4d(ctx0, ggml_tanh(ctx0, ggml_mul_mat(ctx0, layer.time_mix_w1, xxx)),
+    xxx = ggml_reshape_4d(ctx0, ggml_tanh(ctx0, build_lora_mm(layer.time_mix_w1, xxx)),
                           layer.time_mix_w1->ne[1] / 5, 1, 5, n_tokens);
 
     xxx = ggml_cont(ctx0, ggml_permute(ctx0, xxx, 0, 1, 3, 2));
@@ -120,7 +120,7 @@ ggml_tensor * llm_build_rwkv6_base::build_rwkv6_time_mix(llm_graph_input_rs * in
     r = ggml_reshape_3d(ctx0, r, head_size, n_head, n_tokens);
 
     ggml_tensor * w =
-        ggml_mul_mat(ctx0, layer.time_mix_decay_w2, ggml_tanh(ctx0, ggml_mul_mat(ctx0, layer.time_mix_decay_w1, xw)));
+        build_lora_mm(layer.time_mix_decay_w2, ggml_tanh(ctx0, build_lora_mm(layer.time_mix_decay_w1, xw)));
 
     w = ggml_add(ctx0, w, layer.time_mix_decay);
     w = ggml_exp(ctx0, ggml_neg(ctx0, ggml_exp(ctx0, w)));

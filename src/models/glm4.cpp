@@ -129,7 +129,7 @@ llama_model_glm4::graph::graph(const llama_model & model, const llm_graph_params
             cb(Vcur, "Vcur", il);
 
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, NULL, model.layers[il].wo_s,
+                    model.layers[il].wo, NULL,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
         }
         if (il == n_layer - 1 && inp_out_ids) {
@@ -152,9 +152,9 @@ llama_model_glm4::graph::graph(const llama_model & model, const llm_graph_params
 
             // MLP
             cur = build_ffn(cur,
-                    model.layers[il].ffn_up, NULL, NULL,
-                    NULL, NULL, NULL,
-                    model.layers[il].ffn_down, NULL, NULL,
+                    model.layers[il].ffn_up, NULL,
+                    NULL, NULL,
+                    model.layers[il].ffn_down, NULL,
                     NULL, LLM_FFN_SWIGLU, LLM_FFN_SEQ, il);
             cb(cur, "ffn_out", il);
 
@@ -177,7 +177,7 @@ llama_model_glm4::graph::graph(const llama_model & model, const llm_graph_params
     res->t_embd = cur;
 
     // Output projection
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;

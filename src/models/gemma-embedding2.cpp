@@ -111,9 +111,9 @@ llama_model_gemma_embedding2::graph::graph(const llama_model & model, const llm_
 
         // self-attention
         {
-            ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur, model.layers[il].wq_s);
-            ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur, model.layers[il].wk_s);
-            ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur, model.layers[il].wv_s);
+            ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
+            ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
+            ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);
             cb(Vcur, "Vcur", il);
@@ -137,7 +137,7 @@ llama_model_gemma_embedding2::graph::graph(const llama_model & model, const llm_
             cb(Kcur, "Kcur_pos", il);
 
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, nullptr, model.layers[il].wo_s,
+                    model.layers[il].wo, nullptr,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, hparams.f_attention_scale, il);
         }
 
@@ -157,9 +157,9 @@ llama_model_gemma_embedding2::graph::graph(const llama_model & model, const llm_
         cb(cur, "ffn_norm", il);
 
         cur = build_ffn(cur,
-                model.layers[il].ffn_up,   nullptr, model.layers[il].ffn_up_s,
-                model.layers[il].ffn_gate, nullptr, model.layers[il].ffn_gate_s,
-                model.layers[il].ffn_down, nullptr, model.layers[il].ffn_down_s,
+                model.layers[il].ffn_up,   nullptr,
+                model.layers[il].ffn_gate, nullptr,
+                model.layers[il].ffn_down, nullptr,
                 nullptr,
                 LLM_FFN_GELU, LLM_FFN_PAR, il);
         cb(cur, "ffn_out", il);
@@ -207,7 +207,7 @@ llama_model_gemma_embedding2::graph::graph(const llama_model & model, const llm_
     cb(cur, "result_norm", -1);
 
     // projecting per token is equivalent to projecting after mean pooling
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
     cb(cur, "result_embd", -1);
     res->t_embd = cur;
 }
@@ -219,7 +219,7 @@ llama_model_gemma_embedding2::graph::graph(const llama_model & model, const llm_
 ggml_tensor * llama_model_gemma_embedding2::graph::build_inp_per_layer(ggml_tensor * inpL) {
     const int64_t n_embd_per_layer = hparams.n_embd_per_layer;
 
-    ggml_tensor * cur = ggml_mul_mat(ctx0, model.per_layer_model_proj, inpL); // [n_embd_per_layer * n_layer, n_tokens]
+    ggml_tensor * cur = build_lora_mm(model.per_layer_model_proj, inpL); // [n_embd_per_layer * n_layer, n_tokens]
     cur = ggml_scale(ctx0, cur, 1.0f / sqrtf((float) n_embd));
     cur = ggml_reshape_3d(ctx0, cur, n_embd_per_layer, n_layer, n_tokens);
 

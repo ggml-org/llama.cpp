@@ -147,7 +147,7 @@ llama_model_t5::graph<false>::graph(const llama_model & model, const llm_graph_p
             ggml_tensor * kq_b = build_pos_bias(pos_bucket_dec, attn_rel_b);
 
             cur = build_attn(inp_attn_self,
-                    model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
+                    model.layers[il].wo, model.layers[il].wo_b,
                     Qcur, Kcur, Vcur, kq_b, nullptr, nullptr, 1.0f, il);
             cb(cur, "kqv_out", il);
         }
@@ -178,7 +178,7 @@ llama_model_t5::graph<false>::graph(const llama_model & model, const llm_graph_p
             Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_outputs_enc);
 
             cur = build_attn(inp_attn_cross,
-                    model.layers[il].wo_cross, nullptr, nullptr,
+                    model.layers[il].wo_cross, nullptr,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f, il);
             cb(cur, "kqv_out", il);
 
@@ -224,9 +224,9 @@ llama_model_t5::graph<false>::graph(const llama_model & model, const llm_graph_p
 
             // T5 uses relu, flan-T5 uses gelu-gated
             cur = build_ffn(cur,
-                    model.layers[il].ffn_up,   NULL, NULL,
-                    model.layers[il].ffn_gate, NULL, NULL,
-                    model.layers[il].ffn_down, NULL, NULL,
+                    model.layers[il].ffn_up,   NULL,
+                    model.layers[il].ffn_gate, NULL,
+                    model.layers[il].ffn_down, NULL,
                     NULL,
                     model.layers[il].ffn_gate ? LLM_FFN_GELU : LLM_FFN_RELU,
                     model.layers[il].ffn_gate ? LLM_FFN_PAR : LLM_FFN_SEQ,
@@ -253,7 +253,7 @@ llama_model_t5::graph<false>::graph(const llama_model & model, const llm_graph_p
     res->t_embd = cur;
 
     // lm_head
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;
@@ -304,7 +304,7 @@ llama_model_t5::graph<true>::graph(const llama_model & model, const llm_graph_pa
             ggml_tensor * kq_b = build_pos_bias(pos_bucket_enc, attn_rel_b);
 
             cur = build_attn(inp_attn,
-                    model.layers[il].wo_enc, nullptr, nullptr,
+                    model.layers[il].wo_enc, nullptr,
                     Qcur, Kcur, Vcur, kq_b, nullptr, nullptr, 1.0f, il);
             cb(cur, "kqv_out", il);
         }
@@ -324,9 +324,9 @@ llama_model_t5::graph<true>::graph(const llama_model & model, const llm_graph_pa
 
             // T5 uses relu, flan-T5 uses gelu-gated
             cur = build_ffn(cur,
-                    model.layers[il].ffn_up_enc,   NULL, NULL,
-                    model.layers[il].ffn_gate_enc, NULL, NULL,
-                    model.layers[il].ffn_down_enc, NULL, NULL,
+                    model.layers[il].ffn_up_enc,   NULL,
+                    model.layers[il].ffn_gate_enc, NULL,
+                    model.layers[il].ffn_down_enc, NULL,
                     NULL,
                     model.layers[il].ffn_gate_enc ? LLM_FFN_GELU : LLM_FFN_RELU,
                     model.layers[il].ffn_gate_enc ? LLM_FFN_PAR  : LLM_FFN_SEQ,

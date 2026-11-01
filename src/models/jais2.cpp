@@ -100,7 +100,7 @@ llama_model_jais2::graph::graph(const llama_model & model, const llm_graph_param
             cb(Kcur, "Kcur_rope", il);
 
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
+                    model.layers[il].wo, model.layers[il].wo_b,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
         }
 
@@ -123,9 +123,9 @@ llama_model_jais2::graph::graph(const llama_model & model, const llm_graph_param
         // FFN with relu2 activation (ReLU squared) - no gate projection
         // up -> relu2 -> down
         cur = build_ffn(cur,
-                model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   NULL,
-                NULL, NULL, NULL,  // no gate
-                model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL,
+                model.layers[il].ffn_up,   model.layers[il].ffn_up_b,
+                NULL, NULL,  // no gate
+                model.layers[il].ffn_down, model.layers[il].ffn_down_b,
                 NULL,
                 LLM_FFN_RELU_SQR, LLM_FFN_SEQ, il);
         cb(cur, "ffn_out", il);
@@ -146,7 +146,7 @@ llama_model_jais2::graph::graph(const llama_model & model, const llm_graph_param
     res->t_embd = cur;
 
     // Output projection
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
     cb(cur, "result_output", -1);
 
     res->t_logits = cur;

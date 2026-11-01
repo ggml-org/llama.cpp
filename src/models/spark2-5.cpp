@@ -90,7 +90,7 @@ llama_model_spark2_5::graph::graph(const llama_model & model, const llm_graph_pa
         cb(Kcur, "Kcur_rope", il);
 
         cur = build_attn(inp_attn,
-                nullptr, nullptr, nullptr,
+                nullptr, nullptr,
                 Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
         cb(cur, "attn_out", il);
 
@@ -105,7 +105,7 @@ llama_model_spark2_5::graph::graph(const llama_model & model, const llm_graph_pa
         cur = ggml_reshape_2d(ctx0, cur, n_embd_head * n_head_i, n_tokens_i);
         cb(cur, "attn_gated", il);
 
-        cur = build_lora_mm(model.layers[il].wo, cur, model.layers[il].wo_s);
+        cur = build_lora_mm(model.layers[il].wo, cur);
         cb(cur, "attn_out_proj", il);
 
         if (il == n_layer - 1 && inp_out_ids) {
@@ -120,9 +120,9 @@ llama_model_spark2_5::graph::graph(const llama_model & model, const llm_graph_pa
         cb(cur, "ffn_norm", il);
 
         cur = build_ffn(cur,
-                model.layers[il].ffn_up, nullptr, nullptr,
-                model.layers[il].ffn_gate, nullptr, nullptr,
-                model.layers[il].ffn_down, nullptr, nullptr,
+                model.layers[il].ffn_up, nullptr,
+                model.layers[il].ffn_gate, nullptr,
+                model.layers[il].ffn_down, nullptr,
                 nullptr,
                 LLM_FFN_GELU, LLM_FFN_PAR, il);
         cb(cur, "ffn_out", il);

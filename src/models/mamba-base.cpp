@@ -44,7 +44,7 @@ ggml_tensor * llm_build_mamba_base::build_mamba_layer(llm_graph_input_rs * inp,
     cur = ggml_reshape_3d(ctx0, cur, cur->ne[0], n_seq_tokens, n_seqs);
 
     // {n_embd, 2*d_inner} @ {n_embd, n_seq_tokens, n_seqs} => {2*d_inner, n_seq_tokens, n_seqs}
-    ggml_tensor * xz = build_lora_mm(layer.ssm_in, cur, layer.ssm_in_s);
+    ggml_tensor * xz = build_lora_mm(layer.ssm_in, cur);
     // split the above in two
     // => {d_inner, n_seq_tokens, n_seqs}
     ggml_tensor * x  = ggml_view_3d(ctx0, xz, d_inner, xz->ne[1], xz->ne[2], xz->nb[1], xz->nb[2], 0);
@@ -141,7 +141,7 @@ ggml_tensor * llm_build_mamba_base::build_mamba_layer(llm_graph_input_rs * inp,
         y = ggml_swiglu_split(ctx0, ggml_cont(ctx0, z), y);
 
         // {d_inner, n_embd} @ {d_inner, n_seq_tokens, n_seqs} => {n_embd, n_seq_tokens, n_seqs}
-        cur = build_lora_mm(layer.ssm_out, y, layer.ssm_out_s);
+        cur = build_lora_mm(layer.ssm_out, y);
     }
 
     // {n_embd, n_seq_tokens, n_seqs} => {n_embd, n_tokens}
@@ -189,7 +189,7 @@ ggml_tensor * llm_build_mamba_base::build_mamba2_layer(llm_graph_input_rs * inp,
     // Keep the projection 2D: with a {n_embd, 1, n_seqs} batch the CUDA backend
     // dispatches a column-batched GEMV for what is a large dense GEMM.
     // {n_embd, d_in_proj} @ {n_embd, n_tokens} => {d_in_proj, n_tokens}
-    ggml_tensor * zxBCdt = build_lora_mm(model.layers[il].ssm_in, cur, model.layers[il].ssm_in_s);
+    ggml_tensor * zxBCdt = build_lora_mm(model.layers[il].ssm_in, cur);
     // {d_in_proj, n_tokens} => {d_in_proj, n_seq_tokens, n_seqs}
     zxBCdt = ggml_reshape_3d(ctx0, zxBCdt, zxBCdt->ne[0], n_seq_tokens, n_seqs);
 
@@ -296,7 +296,7 @@ ggml_tensor * llm_build_mamba_base::build_mamba2_layer(llm_graph_input_rs * inp,
         y = ggml_reshape_2d(ctx0, y, d_inner, n_seq_tokens * n_seqs);
 
         // {d_inner, n_embd} @ {d_inner, n_tokens} => {n_embd, n_tokens}
-        cur = build_lora_mm(model.layers[il].ssm_out, y, model.layers[il].ssm_out_s);
+        cur = build_lora_mm(model.layers[il].ssm_out, y);
     }
 
     cb(cur, "mamba_out", il);

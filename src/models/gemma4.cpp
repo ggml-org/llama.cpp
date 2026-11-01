@@ -114,7 +114,7 @@ void llama_model_gemma4::load_arch_tensors(llama_model_loader &) {
         layer.ffn_post_norm = create_tensor(tn(LLM_TENSOR_FFN_POST_NORM, "weight", i), {n_embd}, 0);
 
         // MoE router
-        layer.ffn_gate_inp = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert}, TENSOR_NOT_REQUIRED);
+        layer.ffn_gate_inp = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert}, TENSOR_NOT_REQUIRED | TENSOR_NO_SCALE);
         bool has_expert = layer.ffn_gate_inp != nullptr;
 
         // norm
@@ -223,12 +223,12 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
         ggml_tensor * qkv_fused = nullptr;
         ggml_tensor * Qcur;
         if (model.layers[il].wqkv) {
-            qkv_fused = build_lora_mm(model.layers[il].wqkv, cur, model.layers[il].wqkv_s);
+            qkv_fused = build_lora_mm(model.layers[il].wqkv, cur);
             cb(qkv_fused, "wqkv", il);
             const int64_t q_dim = n_embd_head * n_head;
             Qcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv_fused, q_dim, n_tokens, qkv_fused->nb[1], 0));
         } else {
-            Qcur = build_lora_mm(model.layers[il].wq, cur, model.layers[il].wq_s);
+            Qcur = build_lora_mm(model.layers[il].wq, cur);
         }
         {
             cb(Qcur, "Qcur", il);
@@ -255,9 +255,9 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
                 Kcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv_fused, k_dim, n_tokens, qkv_fused->nb[1], q_dim * esize));
                 Vcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv_fused, v_dim, n_tokens, qkv_fused->nb[1], (q_dim + k_dim) * esize));
             } else {
-                Kcur = build_lora_mm(model.layers[il].wk, cur, model.layers[il].wk_s);
+                Kcur = build_lora_mm(model.layers[il].wk, cur);
                 Vcur = model.layers[il].wv
-                       ? build_lora_mm(model.layers[il].wv, cur, model.layers[il].wv_s)
+                       ? build_lora_mm(model.layers[il].wv, cur)
                        : Kcur; // if v_proj is not present, use Kcur as Vcur
             }
             cb(Kcur, "Kcur", il);
@@ -278,12 +278,12 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
             cb(Kcur, "Kcur_pos", il);
 
             cur = build_attn(inp_attn, model.layers[il].wo,
-                    nullptr, model.layers[il].wo_s, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr,
+                    nullptr, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr,
                     hparams.f_attention_scale, il);
         } else {
             // reuse KV cache of earlier layers
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, nullptr, model.layers[il].wo_s,
+                    model.layers[il].wo, nullptr,
                     Qcur, nullptr, nullptr, nullptr, nullptr, nullptr, hparams.f_attention_scale, il);
         }
 
@@ -311,9 +311,9 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
             cb(cur_mlp, "ffn_norm_1", il);
 
             cur_mlp = build_ffn(cur_mlp,
-                    model.layers[il].ffn_up,   nullptr, model.layers[il].ffn_up_s,
-                    model.layers[il].ffn_gate, nullptr, model.layers[il].ffn_gate_s,
-                    model.layers[il].ffn_down, nullptr, model.layers[il].ffn_down_s,
+                    model.layers[il].ffn_up,   nullptr,
+                    model.layers[il].ffn_gate, nullptr,
+                    model.layers[il].ffn_down, nullptr,
                     nullptr,
                     LLM_FFN_GELU, LLM_FFN_PAR, il);
             cur_mlp = build_norm(cur_mlp,
@@ -345,10 +345,7 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
                     1.0f,
                     LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
                     il, logits,
-                    model.layers[il].ffn_gate_up_exps,
-                    model.layers[il].ffn_up_exps_s,
-                    model.layers[il].ffn_gate_exps_s,
-                    model.layers[il].ffn_down_exps_s);
+                    model.layers[il].ffn_gate_up_exps);
             cur_moe = build_norm(cur_moe,
                     model.layers[il].ffn_post_norm_2, nullptr,
                     LLM_NORM_RMS, il);
@@ -363,9 +360,9 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
             cb(cur, "ffn_norm", il);
 
             cur = build_ffn(cur,
-                    model.layers[il].ffn_up,   nullptr, model.layers[il].ffn_up_s,
-                    model.layers[il].ffn_gate, nullptr, model.layers[il].ffn_gate_s,
-                    model.layers[il].ffn_down, nullptr, model.layers[il].ffn_down_s,
+                    model.layers[il].ffn_up,   nullptr,
+                    model.layers[il].ffn_gate, nullptr,
+                    model.layers[il].ffn_down, nullptr,
                     nullptr,
                     LLM_FFN_GELU, LLM_FFN_PAR, il);
             cb(cur, "ffn_out", il);
@@ -435,7 +432,7 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
     res->t_embd = cur;
 
     // lm_head
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
 
     if (hparams.f_final_logit_softcapping) {
         cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_final_logit_softcapping);
@@ -523,7 +520,7 @@ ggml_tensor * llama_model_gemma4::graph::project_per_layer_inputs(ggml_tensor * 
 
     // note: this matrix multiplication will be performed in the input layer (i.e. on the CPU)
     ggml_tensor * per_layer_proj;
-    per_layer_proj = ggml_mul_mat   (ctx0, model.per_layer_model_proj, inp_batch);
+    per_layer_proj = build_lora_mm(model.per_layer_model_proj, inp_batch);
     per_layer_proj = ggml_scale     (ctx0, per_layer_proj, per_layer_projection_scale);
     per_layer_proj = ggml_reshape_3d(ctx0, per_layer_proj, n_embd_per_layer, n_layer, n_tokens);
 

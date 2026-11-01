@@ -237,9 +237,15 @@ if (GGML_CPU AND (NOT WIN32 OR NOT BUILD_SHARED_LIBS))
     set_tests_properties(test-generate-fp8-models PROPERTIES FIXTURES_SETUP fp8-models)
     llama_test(test-fp8 NAME test-fp8-requantize LABEL "main behavior backend"
         ARGS --models "${FP8_MODEL_DIR}")
+    set(FP8_KV_MODEL_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-models-fp8-kv")
+    file(MAKE_DIRECTORY "${FP8_KV_MODEL_DIR}")
+    llama_test(test-llama-archs NAME test-generate-fp8-kv-models LABEL "main behavior backend"
+        ARGS -a "^(llama|gemma3)$" -s 1 -o "${FP8_KV_MODEL_DIR}")
+    set_tests_properties(test-generate-fp8-kv-models PROPERTIES FIXTURES_SETUP fp8-kv-models)
     llama_test(test-fp8 NAME test-fp8-kv LABEL "main behavior backend"
-        ARGS --models "${FP8_MODEL_DIR}" --kv)
-    set_tests_properties(test-fp8-requantize test-fp8-kv PROPERTIES FIXTURES_REQUIRED fp8-models)
+        ARGS --models "${FP8_KV_MODEL_DIR}" --kv)
+    set_tests_properties(test-fp8-requantize PROPERTIES FIXTURES_REQUIRED fp8-models)
+    set_tests_properties(test-fp8-kv PROPERTIES FIXTURES_REQUIRED fp8-kv-models)
 endif()
 
 set(MODEL_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-models/")

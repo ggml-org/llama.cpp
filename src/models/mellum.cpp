@@ -177,7 +177,7 @@ llama_model_mellum::graph<iswa>::graph(const llama_model & model, const llm_grap
             cb(Vcur, "Vcur", il);
 
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
+                    model.layers[il].wo, model.layers[il].wo_b,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
         }
         if (il == n_layer - 1 && crop_before_nextn(inp_out_ids)) {
@@ -205,10 +205,7 @@ llama_model_mellum::graph<iswa>::graph(const llama_model & model, const llm_grap
                     hparams.expert_weights_scale,
                     (llama_expert_gating_func_type) hparams.expert_gating_func,
                     il,
-                    nullptr, nullptr,
-                    model.layers[il].ffn_up_exps_s,
-                    model.layers[il].ffn_gate_exps_s,
-                    model.layers[il].ffn_down_exps_s);
+                    nullptr, nullptr);
         cb(moe_out, "ffn_moe_out", il);
         cur = moe_out;
 
@@ -239,7 +236,7 @@ llama_model_mellum::graph<iswa>::graph(const llama_model & model, const llm_grap
     res->t_embd = cur;
 
     // lm_head
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;
@@ -311,7 +308,7 @@ llama_model_mellum::graph_mtp<iswa>::graph_mtp(const llama_model & model, const 
     ggml_tensor * concat = ggml_concat(ctx0, e_norm, h_norm, 0);
     cb(concat, "mtp_concat", il);
 
-    ggml_tensor * cur = build_lora_mm(layer.nextn.eh_proj, concat, layer.nextn.eh_proj_s);
+    ggml_tensor * cur = build_lora_mm(layer.nextn.eh_proj, concat);
     cb(cur, "mtp_eh_proj", il);
 
     ggml_tensor * inpSA = cur;
@@ -355,7 +352,7 @@ llama_model_mellum::graph_mtp<iswa>::graph_mtp(const llama_model & model, const 
         cb(Vcur, "mtp_Vcur", il);
 
         cur = build_attn(inp_attn,
-                layer.wo, layer.wo_b, layer.wo_s,
+                layer.wo, layer.wo_b,
                 Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
         cb(cur, "mtp_attn_out", il);
     }
@@ -377,10 +374,7 @@ llama_model_mellum::graph_mtp<iswa>::graph_mtp(const llama_model & model, const 
             hparams.expert_weights_scale,
             (llama_expert_gating_func_type) hparams.expert_gating_func,
             il,
-            nullptr, nullptr,
-            layer.ffn_up_exps_s,
-            layer.ffn_gate_exps_s,
-            layer.ffn_down_exps_s);
+            nullptr, nullptr);
     cb(cur, "mtp_ffn_moe_out", il);
 
     cur = ggml_add(ctx0, cur, ffn_inp);
@@ -394,7 +388,7 @@ llama_model_mellum::graph_mtp<iswa>::graph_mtp(const llama_model & model, const 
     cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     cb(cur, "mtp_shared_head_norm", -1);
 
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;

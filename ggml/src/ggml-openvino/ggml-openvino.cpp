@@ -1897,6 +1897,10 @@ static ggml_openvino_op_support ggml_backend_openvino_device_supports_op_impl(gg
 }
 
 static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
+    if (ggml_get_src_scale(op, 0)) {
+        return false;
+    }
+
     auto res = ggml_backend_openvino_device_supports_op_impl(dev, op);
     if (!res.is_supported) {
         static const bool log_unsupported = ggml_openvino_getenv_int("GGML_OPENVINO_LOG_UNSUPPORTED_OPS") != 0;

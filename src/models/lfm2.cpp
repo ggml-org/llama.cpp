@@ -176,7 +176,7 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
                           attn_factor, beta_fast, beta_slow);
 
         cur = build_attn(inp_attn,
-                model.layers[il].wo, NULL, model.layers[il].wo_s,
+                model.layers[il].wo, NULL,
                 q, k, v, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
 
         cb(cur, "model.layers.{}.self_attn.out_proj", il);
@@ -240,7 +240,7 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
     res->t_embd = cur;
 
     if (!cparams.embeddings) {
-        cur = build_lora_mm(model.output, cur, model.output_s);
+        cur = build_lora_mm(model.output, cur);
         cb(cur, "result_output", -1);
 
         res->t_logits = cur;
@@ -391,7 +391,7 @@ llama_model_lfm2::graph_decision::graph_decision(const llama_model & model, cons
                               attn_factor, beta_fast, beta_slow);
 
             cur = build_attn(inp_attn[0],
-                    layer.wo, NULL, layer.wo_s,
+                    layer.wo, NULL,
                     q, k, v, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
             cb(cur, "model.layers.{}.self_attn.out_proj", il);
         }
@@ -400,9 +400,9 @@ llama_model_lfm2::graph_decision::graph_decision(const llama_model & model, cons
 
         ggml_tensor * ffn_out = build_norm(cur, layer.ffn_norm, NULL, LLM_NORM_RMS, il);
         ffn_out = build_ffn(ffn_out,
-                layer.ffn_up,   NULL, NULL,
-                layer.ffn_gate, NULL, NULL,
-                layer.ffn_down, NULL, NULL,
+                layer.ffn_up,   NULL,
+                layer.ffn_gate, NULL,
+                layer.ffn_down, NULL,
                 NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
 
         cur = ggml_add(ctx0, cur, ffn_out);
@@ -444,7 +444,7 @@ ggml_tensor * llama_model_lfm2::graph_decision::build_decision_head(
             auto [Qcur, Kcur, Vcur] = build_qkv(layer, cur, n_embd_head, hparams.n_head(il), hparams.n_head_kv(il), il);
 
             cur = build_attn(inp_attn,
-                        layer.wo, layer.wo_b, layer.wo_s,
+                        layer.wo, layer.wo_b,
                         Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             cb(cur, "kqv_out", il);
 
@@ -460,9 +460,9 @@ ggml_tensor * llama_model_lfm2::graph_decision::build_decision_head(
             cb(cur, "ffn_norm", il);
 
             cur = build_ffn(cur,
-                    layer.ffn_up,   layer.ffn_up_b,   NULL,
-                    NULL,           NULL,             NULL,
-                    layer.ffn_down, layer.ffn_down_b, NULL,
+                    layer.ffn_up,   layer.ffn_up_b,
+                    NULL,           NULL,
+                    layer.ffn_down, layer.ffn_down_b,
                     NULL,
                     LLM_FFN_RELU,
                     LLM_FFN_SEQ, il);

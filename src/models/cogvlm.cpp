@@ -79,20 +79,18 @@ llama_model_cogvlm::graph::graph(const llama_model & model, const llm_graph_para
 
     for (int il = 0; il < n_layer; ++il) {
         // get either the text or image weight tensors
-        ggml_tensor *wqkv, *wo, *wo_s;
+        ggml_tensor *wqkv, *wo;
         ggml_tensor *ffn_gate, *ffn_down, *ffn_up;
 
         if (is_text) {
             wqkv     = model.layers[il].wqkv;
             wo       = model.layers[il].wo;
-            wo_s     = model.layers[il].wo_s;
             ffn_gate = model.layers[il].ffn_gate;
             ffn_down = model.layers[il].ffn_down;
             ffn_up   = model.layers[il].ffn_up;
         } else {
             wqkv     = model.layers[il].visexp_attn_wqkv;
             wo       = model.layers[il].visexp_attn_wo;
-            wo_s     = nullptr;
             ffn_gate = model.layers[il].visexp_ffn_gate;
             ffn_down = model.layers[il].visexp_ffn_down;
             ffn_up   = model.layers[il].visexp_ffn_up;
@@ -117,7 +115,7 @@ llama_model_cogvlm::graph::graph(const llama_model & model, const llm_graph_para
             Kcur = ggml_rope(ctx0, Kcur, inp_pos, n_embd_head, rope_type);
 
             cur = build_attn(inp_attn,
-                wo, nullptr, wo_s,
+                wo, nullptr,
                 Qcur, Kcur, Vcur,
                 nullptr, nullptr, nullptr,
                 kq_scale, il);
@@ -131,9 +129,9 @@ llama_model_cogvlm::graph::graph(const llama_model & model, const llm_graph_para
         cb(cur, "ffn_norm", il);
 
         cur = build_ffn(cur,
-                ffn_up, NULL, NULL,
-                ffn_gate, NULL, NULL,
-                ffn_down, NULL, NULL,
+                ffn_up, NULL,
+                ffn_gate, NULL,
+                ffn_down, NULL,
                 NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
 
         cur = ggml_add(ctx0, cur, ffn_inp);
@@ -152,7 +150,7 @@ llama_model_cogvlm::graph::graph(const llama_model & model, const llm_graph_para
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 }

@@ -422,7 +422,7 @@ llama_model_mistral_large4::graph::graph(const llama_model & model, const llm_gr
 
             // note: MLA with the absorption optimization converts into MQA (ie: GQA with 1 group)
             cur = build_attn(inp_attn_dsa,
-                    layer.wo, NULL, layer.wo_s,
+                    layer.wo, NULL,
                     Qcur, Kcur, Vcur, nullptr, nullptr, layer.wv_b, top_k, kq_scale, il);
         }
 
@@ -439,9 +439,9 @@ llama_model_mistral_large4::graph::graph(const llama_model & model, const llm_gr
 
         if ((uint32_t) il < hparams.n_layer_dense_lead) {
             cur = build_ffn(cur,
-                layer.ffn_up,   NULL, layer.ffn_up_s,
-                layer.ffn_gate, NULL, layer.ffn_gate_s,
-                layer.ffn_down, NULL, layer.ffn_down_s,
+                layer.ffn_up,   NULL,
+                layer.ffn_gate, NULL,
+                layer.ffn_down, NULL,
                 NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
             cb(cur, "ffn_out", il);
         } else {
@@ -457,16 +457,13 @@ llama_model_mistral_large4::graph::graph(const llama_model & model, const llm_gr
                 (llama_expert_gating_func_type) hparams.expert_gating_func,
                 il,
                 nullptr,
-                layer.ffn_gate_up_exps,
-                layer.ffn_up_exps_s,
-                layer.ffn_gate_exps_s,
-                layer.ffn_down_exps_s);
+                layer.ffn_gate_up_exps);
             cb(moe_out, "ffn_moe_out", il);
 
             ggml_tensor * ffn_shexp = build_ffn(cur,
-                layer.ffn_up_shexp,   NULL, layer.ffn_up_shexp_s,
-                layer.ffn_gate_shexp, NULL, layer.ffn_gate_shexp_s,
-                layer.ffn_down_shexp, NULL, layer.ffn_down_shexp_s,
+                layer.ffn_up_shexp,   NULL,
+                layer.ffn_gate_shexp, NULL,
+                layer.ffn_down_shexp, NULL,
                 NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
             cb(ffn_shexp, "ffn_shexp", il);
 
