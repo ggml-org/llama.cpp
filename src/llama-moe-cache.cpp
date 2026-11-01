@@ -754,9 +754,10 @@ struct llama_moe_cache::impl {
         stash.clear();
         size_t stash_size = 0;
         if (has_cpu) {
+            ggml_backend_buffer_type_t buft_dev = ggml_backend_dev_buffer_type(ggml_backend_get_device(backend));
             for (const ggml_tensor * t : it_cpu->second.inputs) {
                 const ggml_tensor * base = base_of(t);
-                if (base->buffer == nullptr || ggml_backend_buffer_is_host(base->buffer) || t->data == nullptr) {
+                if (base->buffer == nullptr || ggml_backend_buffer_is_host(base->buffer) || ggml_backend_buffer_get_type(base->buffer) != buft_dev || t->data == nullptr) {
                     continue;
                 }
                 bool in_split = false;

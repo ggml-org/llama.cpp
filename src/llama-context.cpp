@@ -2833,9 +2833,6 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
         }
 
         st.ids = ids;
-    } else {
-        // without events the scheduler calls this before it synchronizes the backend, which may still be using dst
-        ggml_backend_synchronize(backend);
     }
 
     // group consecutive experts and copy them together
