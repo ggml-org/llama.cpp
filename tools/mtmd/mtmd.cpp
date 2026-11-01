@@ -19,6 +19,7 @@
 #endif
 
 #include <algorithm>
+#include <cctype>
 #include <cerrno>
 #include <cmath>
 #include <cstdio>
@@ -2316,13 +2317,17 @@ mtmd_bitmap * mtmd_gen_audio_get_voice(const mtmd_context * ctx, const char * na
     if (!ctx->ctx_gen_a || !name) {
         return nullptr;
     }
+    // the name is matched case-insensitively, as the lfm3a "tts" chat template lowers it
     const auto & voices = clip_gen_get_voices(ctx->ctx_gen_a);
-    const auto it = voices.find(name);
+    const auto it = std::find_if(voices.begin(), voices.end(), [name](const auto & voice) {
+        return std::equal(voice.first.begin(), voice.first.end(), name, name + strlen(name),
+                          [](unsigned char a, unsigned char b) { return std::tolower(a) == std::tolower(b); });
+    });
     if (it == voices.end()) {
         return nullptr;
     }
     const uint32_t n_embd = clip_n_mmproj_embd(ctx->ctx_gen_a);
-    return mtmd_bitmap::init_voice(name, it->second.data(), n_embd, it->second.size() / n_embd);
+    return mtmd_bitmap::init_voice(it->first, it->second.data(), n_embd, it->second.size() / n_embd);
 }
 
 mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
