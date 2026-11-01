@@ -87,6 +87,7 @@ class ServerProcess:
     server_embeddings: bool | None = False
     server_reranking: bool | None = False
     server_metrics: bool | None = False
+    prefill_budget_busy: int | None = None
     kv_unified: bool | None = False
     swa_full: bool | None = False
     server_slots: bool | None = False
@@ -209,6 +210,8 @@ class ServerProcess:
             server_args.append("--embedding")
         if self.server_reranking:
             server_args.append("--reranking")
+        if self.prefill_budget_busy:
+            server_args.extend(["--prefill-budget-busy", self.prefill_budget_busy])
         if self.server_metrics:
             server_args.append("--metrics")
         if self.kv_unified:

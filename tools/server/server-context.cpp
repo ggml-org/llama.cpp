@@ -315,6 +315,11 @@ struct server_slot {
     int32_t n_keep  = 0;
     int32_t i_batch = -1;
 
+    // --prefill-budget-busy: prompt tokens still to process, this step's share, steps pending without any
+    int32_t fair_left    = 0;
+    int32_t fair_quota   = 0;
+    int32_t fair_starved = 0;
+
     // effective generation limit for the current task, -1 means unlimited
     int32_t n_predict_max = -1;
 
@@ -2097,6 +2102,14 @@ private:
 
         slot.task = std::make_unique<const server_task>(std::move(task));
 
+        // --prefill-budget-busy: the prompt tokens not covered by the cache, at least 1
+        {
+            const bool reuse = slot.can_split() && slot.task->params.cache_prompt &&
+                slot.task->type != SERVER_TASK_TYPE_EMBEDDING && slot.task->type != SERVER_TASK_TYPE_RERANK;
+            slot.fair_left    = std::max<int32_t>(1, slot.task->n_tokens() - (reuse ? (int32_t) slot.prompt.tokens.get_common_prefix(slot.task->tokens) : 0));
+            slot.fair_starved = 0;
+        }
+
         if (slot.task->type == SERVER_TASK_TYPE_TTS) {
             slot.state = SLOT_STATE_PROCESSING_PROMPT;
         } else {
@@ -3836,6 +3849,11 @@ private:
         std::vector<server_slot *> generating;
         std::vector<server_slot *> drafting;
 
+        int32_t n_generating = 0;
+        for (const auto & slot : slots) {
+            n_generating += slot.state == SLOT_STATE_GENERATING;
+        }
+
         // determine which slots are generating and drafting
         iterate(slots, [&](server_slot & slot) {
             if (slot.state != SLOT_STATE_GENERATING || slot.task->type == SERVER_TASK_TYPE_TTS || slot.task->type == SERVER_TASK_TYPE_REALTIME) {
@@ -3979,8 +3997,49 @@ private:
         if (params_base.cont_batching || batch.size() == 0) {
             bool add_ok = true; // false means the batch is full, skip remaining slots
 
-            iterate(slots, [&](server_slot & slot) {
-                if (!add_ok || batch.size() >= n_batch) {
+            // --prefill-budget-busy N: pending prompts go shortest first and share the step's prompt tokens; while a slot
+            // generates there are at most N of them, so a long prompt does not stall the generating slots (#29175)
+            const bool fair = params_base.prefill_budget_busy > 0;
+
+            std::vector<server_slot *> pending;
+            for (auto & slot : slots) {
+                if (slot.state == SLOT_STATE_PROCESSING_PROMPT || slot.state == SLOT_STATE_STARTED) {
+                    if (slot.state == SLOT_STATE_PROCESSING_PROMPT) {
+                        slot.fair_left = slot.task->n_tokens() - slot.prompt.n_tokens();
+                    }
+                    slot.fair_starved++;
+                    pending.push_back(&slot);
+                } else if (!fair) {
+                    pending.push_back(&slot);
+                }
+            }
+
+            int32_t n_batch_prompt = n_batch;
+
+            if (fair && !pending.empty()) {
+                // a prompt that got no tokens for 8 steps goes first once, so a long one is never starved
+                std::stable_sort(pending.begin(), pending.end(), [](const server_slot * a, const server_slot * b) {
+                    const bool sa = a->fair_starved > 8;
+                    const bool sb = b->fair_starved > 8;
+                    return sa != sb ? sa : a->fair_left < b->fair_left;
+                });
+
+                if (n_generating > 0) {
+                    n_batch_prompt = std::min(n_batch, batch.size() + params_base.prefill_budget_busy);
+                    metrics.n_prefill_budget_steps++;
+                }
+
+                int32_t left = std::max<int32_t>(0, n_batch_prompt - batch.size());
+                for (auto * slot : pending) {
+                    slot->fair_quota = std::min(left, slot->fair_left);
+                    left -= slot->fair_quota;
+                }
+            }
+
+            iterate(pending, [&](server_slot & slot) {
+                // a prompt that cannot be split (embeddings/rerank without LAST pooling) keeps the whole-or-wait rule
+                const int32_t n_batch_slot = fair && slot.can_split() ? std::min(n_batch_prompt, batch.size() + slot.fair_quota) : n_batch;
+                if (!add_ok || batch.size() >= n_batch_slot) {
                     return; // batch is full, skip remaining slots
                 }
 
@@ -4461,7 +4520,7 @@ private:
                     const int32_t n_decision_first = slot.task->type == SERVER_TASK_TYPE_DECISION ? slot.task->decision.pos_first() : -1;
 
                     // add prompt tokens for processing in the current batch
-                    while (slot.prompt.n_tokens() < slot.task->n_tokens() && batch.size() < n_batch) {
+                    while (slot.prompt.n_tokens() < slot.task->n_tokens() && batch.size() < n_batch_slot) {
                         // get next token to process
                         llama_token cur_tok = input_tokens[slot.prompt.n_tokens()];
                         if (cur_tok == LLAMA_TOKEN_NULL) {
@@ -4533,6 +4592,10 @@ private:
 
                     // the number of tokens added to the batch for the current slot
                     const auto n_tokens_cur = batch.size() - n_tokens_prev;
+
+                    if (n_tokens_cur > 0) {
+                        slot.fair_starved = 0;
+                    }
 
                     const auto n_tokens_start = slot.prompt.n_tokens() - n_tokens_cur;
 
