@@ -86,6 +86,22 @@ void ggml_compute_forward_top_k(const struct ggml_compute_params * params, struc
 void ggml_compute_forward_leaky_relu(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_tri(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_fill(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+// QK overwrites its output; AV adds to its output. A false return leaves the output unchanged.
+// Prepared Q stays in scratch until the next prepare_q call for this worker.
+struct ggml_flash_attn_tile_kernel {
+    size_t work_size;   // Usable backend scratch bytes per worker.
+    size_t thread_size; // Reserved backend scratch stride, including padding; at least work_size.
+    bool (*prepare_q)(const float * q, size_t rows, size_t dk, size_t dv, void * scratch, size_t scratch_bytes);
+    bool (*qk)(float * dst, const float * k, size_t rows, size_t columns, size_t dk, void * scratch, size_t scratch_bytes);
+    bool (*av)(float * dst, const float * weights, const float * v, size_t rows, size_t dv, size_t columns, void * scratch, size_t scratch_bytes);
+};
+
+// Total attention scratch before the graph planner adds cache-line padding.
+size_t ggml_flash_attn_ext_work_size(const struct ggml_tensor * dst, int n_threads, size_t thread_size);
+void ggml_compute_forward_flash_attn_ext_with_kernel(const struct ggml_compute_params * params,
+                                                    struct ggml_tensor * dst,
+                                                    const struct ggml_flash_attn_tile_kernel * kernel);
+
 void ggml_compute_forward_flash_attn_ext(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_flash_attn_back(
         const struct ggml_compute_params * params,
