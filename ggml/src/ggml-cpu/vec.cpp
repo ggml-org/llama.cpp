@@ -84,7 +84,7 @@ void ggml_vec_dot_f32(int n, float * GGML_RESTRICT s, size_t bs, const float * G
         }
         // reduce sum1,sum2 to sum1
         GGML_F32_VEC_REDUCE(sumf, sum1, sum2, sum3, sum4, sum5, sum6, sum7, sum8);
-    #elif defined(__riscv_v_intrinsic)
+    #elif defined(__riscv_vector) && defined(__riscv_v_intrinsic)
         int vl = __riscv_vsetvlmax_e32m8();
         vfloat32m1_t vs = __riscv_vfmv_v_f_f32m1(0.0f, 1);
         vfloat32m8_t vsum;
@@ -195,7 +195,7 @@ void ggml_vec_dot_bf16(int n, float * GGML_RESTRICT s, size_t bs, ggml_bf16_t * 
     sumf += (ggml_float)_mm_cvtss_f32(g);
 
 #undef LOAD
-#elif defined(__riscv_v_intrinsic) && defined(__riscv_zvfbfwma)
+#elif defined(__riscv_vector) && defined(__riscv_v_intrinsic) && defined(__riscv_zvfbfwma)
     size_t vl = __riscv_vsetvlmax_e32m4();
 
     // initialize accumulators to all zeroes
@@ -318,7 +318,7 @@ void ggml_vec_dot_f16(int n, float * GGML_RESTRICT s, size_t bs, ggml_fp16_t * G
         sum1_hi = svadd_f32_m(DEFAULT_PG32, sum1_hi, sum3_hi);
 
         sumf = ggml_sve_sum_f32x2(sum1_lo, sum1_hi);
-    #elif defined(__riscv_v_intrinsic)
+    #elif defined(__riscv_vector) && defined(__riscv_v_intrinsic)
         #if defined(__riscv_zvfh)
             int vl = __riscv_vsetvlmax_e32m2();
             vfloat32m1_t vs = __riscv_vfmv_v_f_f32m1(0.0f, 1);
@@ -405,7 +405,7 @@ void ggml_vec_silu_f32(const int n, float * y, const float * x) {
     for (; i + 3 < n; i += 4) {
         vec_xst(ggml_v_silu(vec_xl(0, x + i)), 0, y + i);
     }
-#elif defined(__riscv_v_intrinsic)
+#elif defined(__riscv_vector) && defined(__riscv_v_intrinsic)
     for (int vl; i < n; i += vl) {
         vl = __riscv_vsetvl_e32m2(n - i);
         vfloat32m2_t vx = __riscv_vle32_v_f32m2(&x[i], vl);
@@ -446,7 +446,7 @@ void ggml_vec_swiglu_f32(const int n, float * y, const float * x, const float * 
     for (; i + 3 < n; i += 4) {
         vec_xst(vec_mul(ggml_v_silu(vec_xl(0, x + i)), vec_xl(0, g + i)), 0, y + i);
     }
-#elif defined(__riscv_v_intrinsic)
+#elif defined(__riscv_vector) && defined(__riscv_v_intrinsic)
     for (int vl; i < n; i += vl) {
         vl = __riscv_vsetvl_e32m2(n - i);
         vfloat32m2_t vx = __riscv_vle32_v_f32m2(&x[i], vl);
@@ -490,7 +490,7 @@ void ggml_vec_gelu_quick_f32(const int n, float * y, const float * x) {
     for (; i + 3 < n; i += 4) {
         vec_xst(ggml_v_gelu_quick(vec_xl(0, x + i)), 0, y + i);
     }
-#elif defined(__riscv_v_intrinsic)
+#elif defined(__riscv_vector) && defined(__riscv_v_intrinsic)
     for (int vl; i < n; i += vl) {
         vl = __riscv_vsetvl_e32m2(n - i);
         vfloat32m2_t vx = __riscv_vle32_v_f32m2(&x[i], vl);
@@ -531,7 +531,7 @@ void ggml_vec_geglu_quick_f32(const int n, float * y, const float * x, const flo
     for (; i + 3 < n; i += 4) {
         vec_xst(vec_mul(ggml_v_gelu_quick(vec_xl(0, x + i)), vec_xl(0, g + i)), 0, y + i);
     }
-#elif defined(__riscv_v_intrinsic)
+#elif defined(__riscv_vector) && defined(__riscv_v_intrinsic)
     for (int vl; i < n; i += vl) {
         vl = __riscv_vsetvl_e32m2(n - i);
         vfloat32m2_t vx = __riscv_vle32_v_f32m2(&x[i], vl);
@@ -602,7 +602,7 @@ ggml_float ggml_vec_cvar_f32(const int n, float * y, const float * x, const floa
         val = vec_mul(val, val);
         sum += (ggml_float)vec_hsum_f32x4(val);
     }
-#elif defined(__riscv_v_intrinsic)
+#elif defined(__riscv_vector) && defined(__riscv_v_intrinsic)
     vfloat64m1_t vsum = __riscv_vfmv_v_f_f64m1(0, 1);
     for (int vl; i < n; i += vl) {
         vl = __riscv_vsetvl_e32m2(n - i);
@@ -681,7 +681,7 @@ ggml_float ggml_vec_soft_max_f32(const int n, float * y, const float * x, float 
         vec_xst(v_val, 0, y + i);
         sum += (ggml_float)vec_hsum_f32x4(v_val);
     }
-#elif defined(__riscv_v_intrinsic)
+#elif defined(__riscv_vector) && defined(__riscv_v_intrinsic)
     vfloat64m1_t vsum = __riscv_vfmv_v_f_f64m1(0, 1);
     for (int avl; i < n; i += avl) {
         avl = __riscv_vsetvl_e32m2(n - i);
