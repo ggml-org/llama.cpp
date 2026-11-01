@@ -335,6 +335,7 @@ struct server_slot {
 
     std::string stopping_word;
 
+    std::vector<float> last_hidden_state;
     // state
     slot_state state = SLOT_STATE_IDLE;
 
@@ -440,6 +441,7 @@ struct server_slot {
         generated_tokens.clear();
         generated_token_probs.clear();
         json_schema = json();
+        last_hidden_state.clear();
 
         task_prev = std::move(task);
         task.reset();
@@ -2424,6 +2426,7 @@ private:
         res->stats           = slot.stats;
         res->prompt          = slot.task->tokens.detokenize(ctx_tgt, true);
         res->response_fields = std::move(slot.task->params.response_fields);
+        res->last_hidden_state = std::move(slot.last_hidden_state);
 
         res->truncated             = slot.truncated;
         res->n_decoded             = slot.stats.n_gen;
@@ -4686,6 +4689,14 @@ private:
             has_output |= batch.tokens[i].output;
         }
 
+        bool need_embeddings = params_base.embedding;
+        for (const auto & slot : slots) {
+            if (slot.task && slot.task->params.return_last_hidden_state) {
+                need_embeddings = true;
+                break;
+            }
+        }
+        llama_set_embeddings(ctx_tgt, need_embeddings);
         // yield to the queue, so we can still handle metrics tasks while decoding
         // note: the sync is done here too, so that the wait is also covered by the yield
         int ret = 0;
@@ -4851,6 +4862,14 @@ private:
                     return;
                 }
 
+
+                if (slot.task->params.return_last_hidden_state) {
+                    const float * embd = llama_get_embeddings_ith(slot.ctx_tgt, slot.i_batch - off);
+                    if (embd != nullptr) {
+                        const int32_t n_embd = llama_model_n_embd_out(model_tgt);
+                        slot.last_hidden_state.assign(embd, embd + n_embd);
+                    }
+                }
                 GGML_ASSERT(slot.task->need_sampling());
 
                 // prompt evaluated for next-token prediction
