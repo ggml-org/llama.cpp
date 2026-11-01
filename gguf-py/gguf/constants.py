@@ -6527,6 +6527,12 @@ class GGMLQuantizationType(IntEnum):
     Q1_0    = 41
     Q2_0    = 42
     F8_E4M3 = 43
+    # Reserving 44 and 45 for IQ2_NL and IQ3_NL
+    JQ2_K   = 46
+    JQ3_K   = 47
+    JQ4_K   = 48
+    JQ5_K   = 49
+    JQ6_K   = 50
 
 
 class ExpertGatingFuncType(IntEnum):
@@ -6584,6 +6590,12 @@ class LlamaFileType(IntEnum):
     MOSTLY_Q1_0          = 40  # except 1d tensors
     MOSTLY_Q2_0          = 41  # except 1d tensors
     MOSTLY_F8_E4M3       = 42  # except 1d tensors
+    # Reserving 43 and 44 for IQ2_NL and IQ3_NL
+    MOSTLY_JQ2_K         = 45  # except 1d tensors
+    MOSTLY_JQ3_K         = 46  # except 1d tensors
+    MOSTLY_JQ4_K         = 47  # except 1d tensors
+    MOSTLY_JQ5_K         = 48  # except 1d tensors
+    MOSTLY_JQ6_K         = 49  # except 1d tensors
 
     GUESSED              = 1024  # not specified in the model file
 
@@ -6756,6 +6768,11 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.Q1_0:    (128, 2 + 16),
     GGMLQuantizationType.Q2_0:    (64, 2 + 16),
     GGMLQuantizationType.F8_E4M3: (1, 1),
+    GGMLQuantizationType.JQ2_K:   (256, 2 + 2 + QK_K // 32 + QK_K // 4),
+    GGMLQuantizationType.JQ3_K:   (256, 2 + 2 + 2 + QK_K // 32 + QK_K // 4 + QK_K // 8),
+    GGMLQuantizationType.JQ4_K:   (256, 2 + 2 + QK_K // 64 + QK_K // 32 + QK_K // 2),
+    GGMLQuantizationType.JQ5_K:   (256, 2 + 2 + QK_K // 64 + QK_K // 32 + QK_K // 2 + QK_K // 8),
+    GGMLQuantizationType.JQ6_K:   (256, 2 + 2 + QK_K // 16 + QK_K // 2 + QK_K // 4),
 }
 
 
