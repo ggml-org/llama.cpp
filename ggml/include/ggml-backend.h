@@ -211,6 +211,18 @@ extern "C" {
 
     // Context management and operations for faster communication between backends, used for tensor parallelism (meta backend)
     typedef void * (*ggml_backend_comm_init_t)(ggml_backend_t * backends, size_t n_backends);
+
+    // Builds the communicator for the case where each rank is a separate process, so a process
+    // owns one backend of the communicator rather than all of them.
+    //
+    // The caller provides bootstrap_callback, which moves bytes between the ranks before the
+    // communicator exists. Each rank passes size bytes in send_buf, and recv_buf receives
+    // world_size * size bytes in rank order. The backend decides what to exchange and how many
+    // times to call it, and every rank must make the same calls in the same order.
+    // comm_init_rank blocks until all world_size ranks have joined.
+    typedef bool   (*ggml_backend_comm_bootstrap_callback)(void * user_data, const void * send_buf, void * recv_buf, size_t size);
+    typedef void * (*ggml_backend_comm_init_rank_t)(ggml_backend_t backend, int rank, int world_size, ggml_backend_comm_bootstrap_callback bootstrap_callback, void * bootstrap_callback_data);
+
     typedef void   (*ggml_backend_comm_free_t)(void * comm_ctx);
     typedef bool   (*ggml_backend_comm_allreduce_tensor_t)(void * comm_ctx, struct ggml_tensor ** tensors);
 
