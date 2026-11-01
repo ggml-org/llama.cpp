@@ -1143,11 +1143,10 @@ size_t llama_batch_ext_select_n_embd_inp(llama_context_type ctx_type, llm_arch a
     return hparams.n_embd_inp();
 }
 
-size_t llama_batch_ext_select_n_embd_state(llama_context_type ctx_type, const llama_hparams & hparams) {
-    if (ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
+size_t llama_batch_ext_select_n_embd_state(llama_context_type ctx_type, llm_arch arch, const llama_hparams & hparams) {
+    if (ctx_type == LLAMA_CONTEXT_TYPE_MTP || arch == LLM_ARCH_GEMMA4_ASSISTANT) {
         return hparams.n_embd_out();
     }
-    // TODO: this probably should become a function of `llm_arch`
     if (hparams.lilicorr_candidate_topk > 0) {
         return hparams.n_embd_inp();
     }
@@ -1158,7 +1157,7 @@ llama_batch_ext::llama_batch_ext(llama_context * ctx) :
         n_tokens_max(llama_n_batch(ctx)),
         n_embd_inp(llama_batch_ext_select_n_embd_inp(ctx->get_cparams().ctx_type, llama_get_model(ctx)->arch, llama_get_model(ctx)->hparams)),
         n_embd_inp_enc(llama_get_model(ctx)->hparams.n_embd_inp_enc()),
-        n_embd_state(llama_batch_ext_select_n_embd_state(ctx->get_cparams().ctx_type, llama_get_model(ctx)->hparams)),
+        n_embd_state(llama_batch_ext_select_n_embd_state(ctx->get_cparams().ctx_type, llama_get_model(ctx)->arch, llama_get_model(ctx)->hparams)),
         n_seq_max(llama_n_seq_max(ctx)),
         mem(llama_get_memory(ctx)),
         n_vocab(llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(ctx)))),
@@ -1391,6 +1390,10 @@ bool llama_batch_ext_set_embd_token(llama_batch_ext * batch, int32_t idx, llama_
 
 bool llama_batch_ext_set_embd_state(llama_batch_ext * batch, int32_t idx, llama_embd embd) {
     return batch->set_token_state(idx, embd);
+}
+
+size_t llama_batch_ext_get_n_embd_state(const llama_batch_ext * batch) {
+    return batch ? batch->n_embd_state : 0;
 }
 
 bool llama_batch_ext_set_output_embd(llama_batch_ext * batch, int32_t idx, bool value) {
