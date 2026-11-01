@@ -2114,6 +2114,9 @@ class TextModel(ModelBase):
         if chkhsh == "0fe1cf6eda062318a1af7270f3331a85c539a01778ff948e24388e949c5282f4":
             # ref: https://huggingface.co/evilfreelancer/ruGPT3XL
             res = "gpt-2"
+        if chkhsh == "df1bc34a6366466bcb36a9a1b1cc0afdb08cfe21c9250602c930f159085390a9":
+            # ref: https://huggingface.co/Lernex/Metis-1.6-Logos
+            res = "gpt-2"
         if chkhsh == "9e454714343b69b99b71795c1d27a68c2a1d15dab111f4d353109f966af29da7":
             # ref: https://huggingface.co/LiquidAI/LFM2.5-8B-A1B
             res = "lfm2"

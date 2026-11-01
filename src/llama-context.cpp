@@ -2536,6 +2536,7 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
         res = std::max<uint32_t>(n_tokens * 80, 64u * model.n_tensors());
     } else if (model.arch == LLM_ARCH_QWEN3NEXT ||
         model.arch == LLM_ARCH_KIMI_LINEAR ||
+        model.arch == LLM_ARCH_METIS16 ||
         model.arch == LLM_ARCH_BAILINGMOE3 ||
         model.arch == LLM_ARCH_QWEN35 ||
         model.arch == LLM_ARCH_QWEN35MOE ||
