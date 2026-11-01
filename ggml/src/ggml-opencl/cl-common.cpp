@@ -380,6 +380,78 @@ bool ggml_cl_q3_k_use_noshuffle(const ggml_backend_opencl_context * backend_ctx,
 #endif
 }
 
+bool ggml_cl_iq3_s_use_noshuffle(const ggml_backend_opencl_context * backend_ctx, const ggml_tensor * tensor) {
+#if defined(GGML_OPENCL_SOA_Q) && defined(GGML_OPENCL_USE_ADRENO_KERNELS)
+    if (const char * env = getenv("GGML_OPENCL_IQ3_S_NOSHUFFLE")) {
+        if (env[0] == '0') {
+            return false;
+        }
+    }
+    return tensor->type == GGML_TYPE_IQ3_S &&
+           backend_ctx->gpu_family == ADRENO &&
+           ggml_is_contiguous(tensor) && !tensor->view_src &&
+           use_adreno_kernels(backend_ctx, tensor);
+#else
+    GGML_UNUSED(backend_ctx);
+    GGML_UNUSED(tensor);
+    return false;
+#endif
+}
+
+bool ggml_cl_iq3_xxs_use_noshuffle(const ggml_backend_opencl_context * backend_ctx, const ggml_tensor * tensor) {
+#if defined(GGML_OPENCL_SOA_Q) && defined(GGML_OPENCL_USE_ADRENO_KERNELS)
+    if (const char * env = getenv("GGML_OPENCL_IQ3_XXS_NOSHUFFLE")) {
+        if (env[0] == '0') {
+            return false;
+        }
+    }
+    return tensor->type == GGML_TYPE_IQ3_XXS &&
+           backend_ctx->gpu_family == ADRENO &&
+           ggml_is_contiguous(tensor) && !tensor->view_src &&
+           use_adreno_kernels(backend_ctx, tensor);
+#else
+    GGML_UNUSED(backend_ctx);
+    GGML_UNUSED(tensor);
+    return false;
+#endif
+}
+
+bool ggml_cl_iq1_m_use_noshuffle(const ggml_backend_opencl_context * backend_ctx, const ggml_tensor * tensor) {
+#if defined(GGML_OPENCL_SOA_Q) && defined(GGML_OPENCL_USE_ADRENO_KERNELS)
+    if (const char * env = getenv("GGML_OPENCL_IQ1_M_NOSHUFFLE")) {
+        if (env[0] == '0') {
+            return false;
+        }
+    }
+    return tensor->type == GGML_TYPE_IQ1_M &&
+           backend_ctx->gpu_family == ADRENO &&
+           ggml_is_contiguous(tensor) && !tensor->view_src &&
+           use_adreno_kernels(backend_ctx, tensor);
+#else
+    GGML_UNUSED(backend_ctx);
+    GGML_UNUSED(tensor);
+    return false;
+#endif
+}
+
+bool ggml_cl_iq1_s_use_noshuffle(const ggml_backend_opencl_context * backend_ctx, const ggml_tensor * tensor) {
+#if defined(GGML_OPENCL_SOA_Q) && defined(GGML_OPENCL_USE_ADRENO_KERNELS)
+    if (const char * env = getenv("GGML_OPENCL_IQ1_S_NOSHUFFLE")) {
+        if (env[0] == '0') {
+            return false;
+        }
+    }
+    return tensor->type == GGML_TYPE_IQ1_S &&
+           backend_ctx->gpu_family == ADRENO &&
+           ggml_is_contiguous(tensor) && !tensor->view_src &&
+           use_adreno_kernels(backend_ctx, tensor);
+#else
+    GGML_UNUSED(backend_ctx);
+    GGML_UNUSED(tensor);
+    return false;
+#endif
+}
+
 bool ggml_cl_q2_0_use_noshuffle(const ggml_backend_opencl_context * backend_ctx, const ggml_tensor * tensor) {
 #if defined(GGML_OPENCL_SOA_Q) && defined(GGML_OPENCL_USE_ADRENO_KERNELS)
     if (const char * env = getenv("GGML_OPENCL_Q2_0_NOSHUFFLE")) {
