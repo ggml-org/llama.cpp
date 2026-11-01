@@ -3653,6 +3653,7 @@ static struct llama_sampler_i llama_sampler_dry_i = {
 
 struct llama_sampler * llama_sampler_init_dry(const struct llama_vocab * vocab, float dry_multiplier, float dry_base, int32_t dry_allowed_length, int32_t dry_penalty_last_n, const char** seq_breakers, size_t num_breakers) {
     dry_penalty_last_n = std::max(dry_penalty_last_n, 0);
+    dry_allowed_length  = std::max(dry_allowed_length,  0);
     std::unordered_multimap<llama_token, std::vector<llama_token>> processed_breakers;
     const int MAX_CHAR_LEN = 40;
     const int MAX_SEQ_LEN = 20;
