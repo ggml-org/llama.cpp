@@ -374,13 +374,15 @@
 
 		<!-- frames the slid page as a rounded card; its corners are masked in the sidebar tint -->
 		{#if deviceStore.isMobile}
-			<!-- a soft shadow cast on the sidebar beside the slid page, so the two read apart; it
-			     lies over the sidebar, under the page's masked corners, and comes and goes with them -->
+			<!-- a soft shadow cast on the sidebar beside the slid page, so the two read apart. It lies
+			     above the frame below: the frame paints a band of the sidebar's tint around the page
+			     to round its corners, which would cut the shadow's inner part off at a hard edge. An
+			     outer shadow paints only outside its own rounded shape, so the page stays clear -->
 			<div
 				style:transform={revealTransform}
 				aria-hidden="true"
 				class={[
-					'pointer-events-none fixed inset-0 z-[15] rounded-[2.5rem]',
+					'pointer-events-none fixed inset-0 z-[25] rounded-[2.5rem]',
 					'shadow-[-0.5rem_0_2rem_-0.25rem_rgb(0_0_0/0.12)] dark:shadow-[-0.5rem_0_2rem_-0.25rem_rgb(0_0_0/0.45)]',
 					sidebarReveal.dragOffset === null &&
 						'transition-[transform,opacity] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]',
