@@ -360,6 +360,8 @@ struct vk_queue {
 };
 
 static constexpr uint32_t mul_mat_vec_max_cols = 8;
+// Q8_0 x q8_1 MMVQ also covers 9..16 columns, with the shader variant that loads A once for all columns
+static constexpr uint32_t mul_mat_vec_q8_0_max_cols = 16;
 
 static constexpr uint32_t p021_max_gqa_ratio = 8;
 
@@ -798,6 +800,8 @@ struct vk_device_struct {
 
     vk_pipeline pipeline_dequant_mul_mat_vec_q8_1_f32[DMMV_WG_SIZE_COUNT][GGML_TYPE_COUNT][mul_mat_vec_max_cols];
     vk_pipeline pipeline_dequant_mul_mat_vec_id_q8_1_f32[DMMV_WG_SIZE_COUNT][GGML_TYPE_COUNT];
+    // Q8_0 x q8_1 for mul_mat_vec_max_cols+1 .. mul_mat_vec_q8_0_max_cols columns
+    vk_pipeline pipeline_dequant_mul_mat_vec_q8_0_q8_1_f32_wide[DMMV_WG_SIZE_COUNT][mul_mat_vec_q8_0_max_cols - mul_mat_vec_max_cols];
 
     vk_pipeline pipeline_mul_mat_vec_p021_f16_f32[p021_max_gqa_ratio];
     vk_pipeline pipeline_mul_mat_vec_nc_f16_f32;

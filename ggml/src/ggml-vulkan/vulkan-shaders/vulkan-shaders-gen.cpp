@@ -819,6 +819,13 @@ void process_shaders() {
             string_to_spv("mul_mat_vec_" + tname + "_q8_1_f32_subgroup", "mul_mat_vecq.comp", merge_maps(base_dict, {{data_a_key, "1"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}, {"FLOAT_TYPEV2", "vec2"}, {"ACC_TYPE", "float"}, {"USE_SUBGROUP_ADD", "1"}}));
             string_to_spv("mul_mat_vec_" + tname + "_q8_1_f32_subgroup_no_shmem", "mul_mat_vecq.comp", merge_maps(base_dict, {{data_a_key, "1"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}, {"FLOAT_TYPEV2", "vec2"}, {"ACC_TYPE", "float"}, {"USE_SUBGROUP_ADD_NO_SHMEM", "1"}}));
 
+            // Q8_0 for more than 8 columns: load A once and reuse it for every column
+            if (tname == "q8_0") {
+                string_to_spv("mul_mat_vec_" + tname + "_q8_1_f32_wide", "mul_mat_vecq.comp", merge_maps(base_dict, {{data_a_key, "1"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}, {"FLOAT_TYPEV2", "vec2"}, {"ACC_TYPE", "float"}, {"MMVQ_REUSE_A", "1"}}));
+                string_to_spv("mul_mat_vec_" + tname + "_q8_1_f32_wide_subgroup", "mul_mat_vecq.comp", merge_maps(base_dict, {{data_a_key, "1"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}, {"FLOAT_TYPEV2", "vec2"}, {"ACC_TYPE", "float"}, {"MMVQ_REUSE_A", "1"}, {"USE_SUBGROUP_ADD", "1"}}));
+                string_to_spv("mul_mat_vec_" + tname + "_q8_1_f32_wide_subgroup_no_shmem", "mul_mat_vecq.comp", merge_maps(base_dict, {{data_a_key, "1"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}, {"FLOAT_TYPEV2", "vec2"}, {"ACC_TYPE", "float"}, {"MMVQ_REUSE_A", "1"}, {"USE_SUBGROUP_ADD_NO_SHMEM", "1"}}));
+            }
+
             string_to_spv("mul_mat_vec_id_" + tname + "_q8_1_f32", "mul_mat_vecq.comp", merge_maps(base_dict, {{"MUL_MAT_ID", "1"}, {data_a_key, "1"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}, {"FLOAT_TYPEV2", "vec2"}, {"ACC_TYPE", "float"}}));
             string_to_spv("mul_mat_vec_id_" + tname + "_q8_1_f32_subgroup", "mul_mat_vecq.comp", merge_maps(base_dict, {{"MUL_MAT_ID", "1"}, {data_a_key, "1"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}, {"FLOAT_TYPEV2", "vec2"}, {"ACC_TYPE", "float"}, {"USE_SUBGROUP_ADD", "1"}}));
             string_to_spv("mul_mat_vec_id_" + tname + "_q8_1_f32_subgroup_no_shmem", "mul_mat_vecq.comp", merge_maps(base_dict, {{"MUL_MAT_ID", "1"}, {data_a_key, "1"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}, {"FLOAT_TYPEV2", "vec2"}, {"ACC_TYPE", "float"}, {"USE_SUBGROUP_ADD_NO_SHMEM", "1"}}));
@@ -1351,6 +1358,15 @@ void write_output_files() {
         if (basename(input_filepath) == "mul_mat_vec.comp") {
             src << "const void * arr_dmmv_"   << tname << "_" << btype << "_f32_data[3] = {mul_mat_vec_" << tname << "_" << btype << "_f32_data, mul_mat_vec_" << tname << "_" << btype << "_f32_subgroup_data, mul_mat_vec_" << tname << "_" << btype << "_f32_subgroup_no_shmem_data};\n";
             src << "const uint64_t arr_dmmv_" << tname << "_" << btype << "_f32_len[3] =  {mul_mat_vec_" << tname << "_" << btype << "_f32_len,  mul_mat_vec_" << tname << "_" << btype << "_f32_subgroup_len, mul_mat_vec_"  << tname << "_" << btype << "_f32_subgroup_no_shmem_len};\n";
+        }
+
+        if (btype == "q8_1" && tname == "q8_0") {
+            hdr << "extern const void * arr_dmmv_q8_0_q8_1_f32_wide_data[3];\n";
+            hdr << "extern const uint64_t arr_dmmv_q8_0_q8_1_f32_wide_len[3];\n";
+            if (basename(input_filepath) == "mul_mat_vec.comp") {
+                src << "const void * arr_dmmv_q8_0_q8_1_f32_wide_data[3] = {mul_mat_vec_q8_0_q8_1_f32_wide_data, mul_mat_vec_q8_0_q8_1_f32_wide_subgroup_data, mul_mat_vec_q8_0_q8_1_f32_wide_subgroup_no_shmem_data};\n";
+                src << "const uint64_t arr_dmmv_q8_0_q8_1_f32_wide_len[3] =  {mul_mat_vec_q8_0_q8_1_f32_wide_len,  mul_mat_vec_q8_0_q8_1_f32_wide_subgroup_len, mul_mat_vec_q8_0_q8_1_f32_wide_subgroup_no_shmem_len};\n";
+            }
         }
 
         if (btype == "f16") {
