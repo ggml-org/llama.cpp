@@ -17,6 +17,7 @@
 #include "htp/get-rows-ops.h"
 #include "htp/glu-ops.h"
 #include "htp/im2col-ops.h"
+#include "htp/lightning-indexer-ops.h"
 #include "htp/matmul-ops.h"
 #include "htp/pad-ops.h"
 #include "htp/pool-ops.h"

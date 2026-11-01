@@ -10,6 +10,7 @@
 #include "htp/gated-delta-net-ops.h"
 #include "htp/get-rows-ops.h"
 #include "htp/glu-ops.h"
+#include "htp/lightning-indexer-ops.h"
 #include "htp/matmul-ops.h"
 #include "htp/pad-ops.h"
 #include "htp/repeat-ops.h"
@@ -185,6 +186,12 @@ static std::string format_kernel_params(const htp_opnode & node) {
         const char * path = (kparams->kernel_type == HTP_GDN_KERNEL_HMX_CHUNKED) ? "hmx-chunked" : "hvx-recurrent";
         snprintf(str, max_size, "%s-%s vtcm %u", path, kparams->kda ? "kda" : "scalar",
                  (unsigned int) kparams->vtcm_size);
+    } else if (node.opcode == HTP_OP_LIGHTNING_INDEXER) {
+        const auto * kparams = node.kparams<htp_lid_kernel_params>();
+        snprintf(str, max_size, "%s tok %u bc %u nth %u vtcm %u",
+                 kparams->kernel_type == HTP_LID_KERNEL_HMX ? "hmx" : "hvx",
+                 (unsigned int) kparams->n_tokens_tile, (unsigned int) kparams->kv_block,
+                 (unsigned int) kparams->n_threads, (unsigned int) kparams->vtcm_size);
     } else if (node.opcode == HTP_OP_MUL || node.opcode == HTP_OP_ADD || node.opcode == HTP_OP_ADD_ID ||
                node.opcode == HTP_OP_SUB || node.opcode == HTP_OP_DIV) {
         const auto * kparams = node.kparams<htp_binary_kernel_params>();

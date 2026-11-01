@@ -61,6 +61,7 @@ htp_op_code htp_op_remap(const struct ggml_tensor * t) {
         case GGML_OP_CONV_2D_DW:      return HTP_OP_CONV_2D_DW;
         case GGML_OP_ROLL:            return HTP_OP_ROLL;
         case GGML_OP_UPSCALE:         return HTP_OP_UPSCALE;
+        case GGML_OP_LIGHTNING_INDEXER: return HTP_OP_LIGHTNING_INDEXER;
 
         case GGML_OP_UNARY:
             switch (ggml_get_unary_op(t)) {
@@ -4009,6 +4010,129 @@ static bool htp_kparams_solve_conv2d_dw(
     return true;
 }
 
+static bool htp_kparams_solve_lightning_indexer(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * op,
+    struct htp_lid_kernel_params * kparams
+) {
+    const struct ggml_tensor * q = op->src[0];
+    const struct ggml_tensor * k = op->src[1];
+
+    if (k->type != GGML_TYPE_F32 && k->type != GGML_TYPE_F16 && k->type != GGML_TYPE_Q8_0 && k->type != GGML_TYPE_Q4_0) {
+        return false;
+    }
+
+    if (q->ne[0] % 32 != 0 ||
+        !ggml_is_contiguous_rows(q) || !ggml_is_contiguous_rows(k) ||
+        !ggml_is_contiguous_rows(op->src[2]) || !ggml_is_contiguous_rows(op->src[3]) ||
+        !ggml_is_contiguous_rows(op)) {
+        return false;
+    }
+
+    const uint32_t n_kv_blocks = (k->ne[2] + HTP_LID_KV_BLOCK - 1) / HTP_LID_KV_BLOCK;
+    if (n_kv_blocks == 0 || q->ne[2] == 0) {
+        return false;
+    }
+
+    const uint32_t D          = q->ne[0];
+    const uint32_t n_head     = q->ne[1];
+    const uint32_t n_tokens   = q->ne[2];
+    const size_t   k_row_size = ggml_row_size(k->type, D);
+
+    kparams->k_row_size = (uint32_t) k_row_size;
+    kparams->div_n_head = init_fastdiv_values(n_head);
+    kparams->div_m_ne3  = init_fastdiv_values((uint32_t) op->src[3]->ne[3]);
+
+    if (htp_session_n_hmx(sess) > 0 && D % HMX_FP16_TILE_N_COLS == 0) {
+        const uint32_t n_threads = htp_session_n_threads(sess);
+        const uint32_t n_stream  = q->ne[3];
+        const uint32_t n_dot     = D / HMX_FP16_TILE_N_COLS;
+
+        auto vtcm_usage = [&](uint32_t n_tok, uint32_t kv_block, uint32_t n_qsets) {
+            return htp_lid_hmx_compute_vtcm_usage(D, n_head, n_tok, kv_block, n_qsets, n_threads, k_row_size);
+        };
+
+        uint32_t n_tok = (std::min)(n_tokens, (uint32_t) HTP_LID_HMX_TOKENS_MAX);
+        while (n_tok > 32 && vtcm_usage(n_tok, 64, 1) > htp_session_vtcm_size(sess)) {
+            n_tok /= 2;
+        }
+
+        uint32_t n_qsets = n_tok == n_tokens ? (std::min)(n_stream, (uint32_t) HTP_LID_HMX_MAX_QSETS) : 1;
+        while (n_qsets > 1 && vtcm_usage(n_tok, 64, n_qsets) > htp_session_vtcm_size(sess)) {
+            n_qsets /= 2;
+        }
+
+        uint32_t n_qbuf = 1;
+        if (n_qsets == 1 && n_head >= 16 && n_stream * ((n_tokens + n_tok - 1) / n_tok) > 1) {
+            uint32_t nt2 = n_tok;
+            while (nt2 > 32 && vtcm_usage(nt2, 64, 2) > htp_session_vtcm_size(sess)) {
+                nt2 /= 2;
+            }
+            const size_t q_bytes = (size_t) nt2 * n_head * D * sizeof(float);
+            const size_t k_bytes = (size_t) k->ne[2] * ggml_row_size(k->type, D);
+            if (vtcm_usage(nt2, 64, 2) <= htp_session_vtcm_size(sess) && q_bytes >= k_bytes) {
+                n_tok  = nt2;
+                n_qbuf = 2;
+            }
+        }
+
+        const uint32_t n_ch   = (n_tok * n_head + 31) / 32;
+        const uint32_t kv_seg = hex_round_up(k->ne[2], 64);
+        const uint32_t n_rows = n_qsets * kv_seg;
+        const uint32_t bc_max = n_rows <= 512 ? n_rows : (std::max)(256u, n_rows / 4);
+        uint32_t kv_block = 64;
+        while (kv_block < HTP_LID_HMX_KV_BLOCK_MAX && kv_block < bc_max && (kv_block / 32) * n_ch * (n_dot + 1) < 256 &&
+               vtcm_usage(n_tok, kv_block * 2, n_qsets * n_qbuf) <= htp_session_vtcm_size(sess)) {
+            kv_block *= 2;
+        }
+
+        const size_t vtcm_size = vtcm_usage(n_tok, kv_block, n_qsets * n_qbuf);
+        if (vtcm_size <= htp_session_vtcm_size(sess)) {
+            const uint32_t n_tt = (n_tokens + n_tok - 1) / n_tok;
+            kparams->kernel_type       = HTP_LID_KERNEL_HMX;
+            kparams->n_threads         = n_threads;
+            kparams->n_tokens_tile     = n_tok;
+            kparams->n_kv_blocks       = (n_rows + kv_block - 1) / kv_block;
+            kparams->blocks_per_thread = 0;
+            kparams->kv_block          = kv_block;
+            kparams->n_qsets           = n_qsets;
+            kparams->n_qbuf            = n_qbuf;
+            kparams->kv_seg            = kv_seg;
+            kparams->n_tt              = n_tt;
+            kparams->vtcm_size         = (uint32_t) vtcm_size;
+            kparams->div_kv_seg        = init_fastdiv_values(kv_seg);
+            kparams->div_n_tt          = init_fastdiv_values(n_tt);
+            kparams->div_n_ch          = init_fastdiv_values(n_ch);
+            return true;
+        }
+    }
+
+    const uint32_t n_threads = (std::min)(htp_session_n_threads(sess), n_kv_blocks);
+    uint32_t n_tok = (std::min)((uint32_t) q->ne[2], (uint32_t) HTP_LID_TOKENS_MAX);
+    while (n_tok > 1 && htp_lid_compute_vtcm_usage(D, n_head, n_tok, n_threads, k_row_size) > htp_session_vtcm_size(sess)) {
+        n_tok /= 2;
+    }
+
+    const size_t vtcm_size = htp_lid_compute_vtcm_usage(D, n_head, n_tok, n_threads, k_row_size);
+    if (vtcm_size > htp_session_vtcm_size(sess)) {
+        return false;
+    }
+
+    kparams->kernel_type       = HTP_LID_KERNEL_HVX;
+    kparams->n_threads         = n_threads;
+    kparams->n_tokens_tile     = n_tok;
+    kparams->n_kv_blocks       = n_kv_blocks;
+    kparams->blocks_per_thread = (n_kv_blocks + n_threads - 1) / n_threads;
+    kparams->kv_block          = HTP_LID_KV_BLOCK;
+    kparams->n_qsets           = 1;
+    kparams->n_qbuf            = 1;
+    kparams->kv_seg            = 0;
+    kparams->n_tt              = 0;
+    kparams->vtcm_size         = (uint32_t) vtcm_size;
+
+    return true;
+}
+
 template <auto SolveFn>
 static inline bool htp_kparams_invoke(
     const struct ggml_hexagon_session * sess,
@@ -4252,6 +4376,9 @@ bool htp_kparams_solve(
 
         case HTP_OP_ROLL:
             return htp_kparams_invoke<htp_kparams_solve_roll>(sess, op, kparams);
+
+        case HTP_OP_LIGHTNING_INDEXER:
+            return htp_kparams_invoke<htp_kparams_solve_lightning_indexer>(sess, op, kparams);
 
         case HTP_OP_DIAG:
             return htp_kparams_invoke<htp_kparams_solve_diag>(sess, op, kparams);
