@@ -673,6 +673,11 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
             ms.add_kv(LLM_KV_ATTENTION_VALUE_EXPERT_COUNT,      uint32_t(2));
             ms.add_kv(LLM_KV_ATTENTION_VALUE_EXPERT_USED_COUNT, uint32_t(2));
         }
+        if (host_experts_test(arch)) {
+            const int8_t prec_a4 = 0;
+            ms.add_kv(LLM_KV_GENERAL_TENSOR_EXTRA_NAME, std::vector<std::string>{"blk.1.ffn_down_exps.weight"});
+            gguf_set_arr_data(ms.gguf_ctx, llama_arch_kv_name(arch, LLM_KV_GENERAL_TENSOR_EXTRA_PREC_A4).c_str(), GGUF_TYPE_BOOL, &prec_a4, 1);
+        }
     }
 
     if (arch == LLM_ARCH_BEAM) {
@@ -1331,6 +1336,19 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                                 status_nmse = "\033[1;31mFAIL\033[0m (toggle)";
                             }
                             test_ok = false;
+                        }
+
+                        // the precision hint of the weight also reaches the experts read from the MoE cache
+                        if (moe && host_experts_test(arch)) {
+                            ggml_cgraph * gf = llama_graph_reserve(lctx_dev, 1, 1, 1);
+                            GGML_ASSERT(gf != nullptr);
+                            const ggml_tensor * down = ggml_graph_get_tensor(gf, "ffn_moe_down-1");
+                            if (down == nullptr || ggml_prec_get_src(down, 1) != GGML_PREC_Q8) {
+                                if (test_ok) {
+                                    status_nmse = "\033[1;31mFAIL\033[0m (prec)";
+                                }
+                                test_ok = false;
+                            }
                         }
                     }
 
