@@ -1,8 +1,38 @@
 @import 'tailwindcss';
 @source '.';
+/* stories may use classes the app does not, so tailwind scans them too */
+@source '../tests/stories';
 @plugin '@tailwindcss/forms';
 @plugin '@tailwindcss/typography';
 @import 'tw-animate-css';
+@import './lib/styles/tokens/primitives.css';
+@import './lib/styles/tokens/semantic.css';
+@import './lib/styles/tokens/components.css';
+@import './lib/styles/surfaces.css';
+@import './lib/styles/safe-area.css';
+
+/* Llama Sans, the sans of the Llama type family (OFL, see lib/assets/fonts/OFL.txt): one variable font for every
+   weight from 400 to 700 and every optical size from 16 to 40. The browser sets the optical size from font-size
+   (font-optical-sizing: auto), so text up to 16px is spaced and kerned for interfaces, 40px and up tight for
+   headlines, with a blend in between. Its line box is centred on the cap height, so labels sit in the middle of
+   buttons and chips. */
+@font-face {
+	font-family: 'Llama Sans';
+	src: url('./lib/assets/fonts/LlamaSans.woff2') format('woff2');
+	font-weight: 400 700;
+	font-style: normal;
+	font-display: swap;
+}
+
+/* Llama Mono, the family's monospace (OFL, same file), for code, commands and numbers in columns: every character in
+   one 600-unit cell, its coding ligatures included, from 400 to 700. */
+@font-face {
+	font-family: 'Llama Mono';
+	src: url('./lib/assets/fonts/LlamaMono.woff2') format('woff2');
+	font-weight: 400 700;
+	font-style: normal;
+	font-display: swap;
+}
 
 @custom-variant dark (&:is(.dark *));
 
@@ -35,46 +65,15 @@
 
 :root {
 	--radius: 0.625rem;
-	/* the page runs under the status bar (viewport-fit=cover); what is pinned
-	   to the top of the screen pads itself clear by this */
+	/* the page runs under the status bar and over the home indicator
+	   (viewport-fit=cover); what is pinned to a screen edge keeps clear of them
+	   with the pt-safe / pb-safe utilities (see lib/styles/safe-area.css) */
 	--safe-area-top: env(safe-area-inset-top, 0px);
+	--safe-area-bottom: env(safe-area-inset-bottom, 0px);
 	/* where the phone's corner controls (menu toggle, context gauge, sidebar logo) sit */
 	--corner-control-top: calc(1rem + var(--safe-area-top));
 	/* expanded desktop sidebar width, overridden once the user drags its edge */
 	--sidebar-width: 18rem;
-	--background: oklch(1 0 0);
-	--foreground: oklch(0.145 0 0);
-	--card: oklch(1 0 0);
-	--card-foreground: oklch(0.145 0 0);
-	--popover: oklch(1 0 0);
-	--popover-foreground: oklch(0.145 0 0);
-	--primary: oklch(0.205 0 0);
-	--primary-foreground: oklch(0.985 0 0);
-	--secondary: oklch(0.95 0 0);
-	--secondary-foreground: oklch(0.205 0 0);
-	--muted: oklch(0.97 0 0);
-	--muted-foreground: oklch(0.556 0 0);
-	--accent: oklch(0.95 0 0);
-	--accent-foreground: oklch(0.205 0 0);
-	--destructive: oklch(0.577 0.245 27.325);
-	--border: oklch(0.875 0 0);
-	--input: oklch(0.92 0 0);
-	--ring: oklch(0.708 0 0);
-	--chart-1: oklch(0.646 0.222 41.116);
-	--chart-2: oklch(0.6 0.118 184.704);
-	--chart-3: oklch(0.398 0.07 227.392);
-	--chart-4: oklch(0.828 0.189 84.429);
-	--chart-5: oklch(0.769 0.188 70.08);
-	--sidebar: oklch(0.985 0 0);
-	--sidebar-foreground: oklch(0.145 0 0);
-	--sidebar-primary: oklch(0.205 0 0);
-	--sidebar-primary-foreground: oklch(0.985 0 0);
-	--sidebar-accent: oklch(0.97 0 0);
-	--sidebar-accent-foreground: oklch(0.205 0 0);
-	--sidebar-border: oklch(0.922 0 0);
-	--sidebar-ring: oklch(0.708 0 0);
-	--code-background: oklch(0.985 0 0);
-	--code-foreground: oklch(0.145 0 0);
 	/* phone sidebar width, which the page slides aside to reveal */
 	--sidebar-reveal: min(80dvw, 20rem);
 	/* the desktop sidebar's muted/60 over the page, made opaque so the slid page's corners can match it */
@@ -90,14 +89,39 @@
 		var(--background)
 	);
 	--font-mono:
-		ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas,
-		'Liberation Mono', Menlo, monospace;
+		'Llama Mono', ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono',
+		Consolas, 'Liberation Mono', Menlo, monospace;
 	--layer-popover: 1000000;
 
 	--chat-form-area-height: 8rem;
 	--chat-form-area-offset: 2rem;
 	--chat-form-padding-top: 6rem;
 	--max-message-height: max(24rem, min(80dvh, calc(100dvh - var(--chat-form-area-height) - 12rem)));
+
+	/*
+	 * shadcn names, kept so the vendored components and their classes keep working.
+	 * They alias semantic tokens; new code uses the semantic names directly.
+	 */
+	--background: var(--surface-page);
+	--foreground: var(--fg-default);
+	--card: var(--surface-raised);
+	--card-foreground: var(--fg-default);
+	--popover: var(--surface-raised);
+	--popover-foreground: var(--fg-default);
+	--primary: var(--action-primary);
+	--primary-foreground: var(--fg-on-action);
+	--secondary: var(--surface-emphasis);
+	--secondary-foreground: var(--fg-default);
+	--muted: var(--surface-muted);
+	--muted-foreground: var(--fg-muted);
+	--accent: var(--surface-selected);
+	--accent-foreground: var(--fg-default);
+	--destructive: var(--fg-danger);
+	--border: var(--line-default);
+	--input: var(--line-field);
+	--ring: var(--line-focus);
+	--code-background: var(--surface-code);
+	--code-foreground: var(--fg-code);
 }
 
 /* iOS 26 gives an installed app with viewport-fit=cover and a translucent status bar a
@@ -123,43 +147,10 @@
 	}
 }
 
-.dark {
-	--background: oklch(0.16 0 0);
-	--foreground: oklch(0.985 0 0);
-	--card: oklch(0.205 0 0);
-	--card-foreground: oklch(0.985 0 0);
-	--popover: oklch(0.205 0 0);
-	--popover-foreground: oklch(0.985 0 0);
-	--primary: oklch(0.922 0 0);
-	--primary-foreground: oklch(0.205 0 0);
-	--secondary: oklch(0.29 0 0);
-	--secondary-foreground: oklch(0.985 0 0);
-	--muted: oklch(0.269 0 0);
-	--muted-foreground: oklch(0.708 0 0);
-	--accent: oklch(0.269 0 0);
-	--accent-foreground: oklch(0.985 0 0);
-	--destructive: oklch(0.704 0.191 22.216);
-	--border: oklch(1 0 0 / 30%);
-	--input: oklch(1 0 0 / 30%);
-	--ring: oklch(0.556 0 0);
-	--chart-1: oklch(0.488 0.243 264.376);
-	--chart-2: oklch(0.696 0.17 162.48);
-	--chart-3: oklch(0.769 0.188 70.08);
-	--chart-4: oklch(0.627 0.265 303.9);
-	--chart-5: oklch(0.645 0.246 16.439);
-	--sidebar: oklch(0.2 0 0);
-	--sidebar-foreground: oklch(0.985 0 0);
-	--sidebar-primary: oklch(0.488 0.243 264.376);
-	--sidebar-primary-foreground: oklch(0.985 0 0);
-	--sidebar-accent: oklch(0.269 0 0);
-	--sidebar-accent-foreground: oklch(0.985 0 0);
-	--sidebar-border: oklch(1 0 0 / 10%);
-	--sidebar-ring: oklch(0.556 0 0);
-	--code-background: oklch(0.225 0 0);
-	--code-foreground: oklch(0.875 0 0);
-}
-
 @theme inline {
+	/* the sans everywhere, headings included (their size sets the optical size): Llama Sans, then the system stack
+	   while it loads or if it can't */
+	--font-sans: 'Llama Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
 	--radius-sm: calc(var(--radius) - 4px);
 	--radius-md: calc(var(--radius) - 2px);
 	--radius-lg: var(--radius);
@@ -182,19 +173,6 @@
 	--color-border: var(--border);
 	--color-input: var(--input);
 	--color-ring: var(--ring);
-	--color-chart-1: var(--chart-1);
-	--color-chart-2: var(--chart-2);
-	--color-chart-3: var(--chart-3);
-	--color-chart-4: var(--chart-4);
-	--color-chart-5: var(--chart-5);
-	--color-sidebar: var(--sidebar);
-	--color-sidebar-foreground: var(--sidebar-foreground);
-	--color-sidebar-primary: var(--sidebar-primary);
-	--color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-	--color-sidebar-accent: var(--sidebar-accent);
-	--color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-	--color-sidebar-border: var(--sidebar-border);
-	--color-sidebar-ring: var(--sidebar-ring);
 }
 
 @layer base {
@@ -256,7 +234,7 @@
 	}
 
 	*:hover {
-		scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+		scrollbar-color: color-mix(in oklch, var(--fg-muted) 30%, transparent) transparent;
 	}
 
 	*::-webkit-scrollbar {
@@ -275,11 +253,11 @@
 	}
 
 	*:hover::-webkit-scrollbar-thumb {
-		background: hsl(var(--muted-foreground) / 0.3);
+		background: color-mix(in oklch, var(--fg-muted) 30%, transparent);
 	}
 
 	*::-webkit-scrollbar-thumb:hover {
-		background: hsl(var(--muted-foreground) / 0.5);
+		background: color-mix(in oklch, var(--fg-muted) 50%, transparent);
 	}
 
 	:where(code, pre, kbd, samp) {
