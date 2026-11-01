@@ -89,6 +89,24 @@ function syncThemeColor(progress: number) {
 }
 
 /**
+ * How much of the page the screen shows, in CSS px. The installed iOS app draws over the whole
+ * screen even while it reports a viewport short of the status bar, which it does for a page
+ * shorter than the screen (see app.css), as a locked page is: its bars are pinned against the
+ * screen, not that viewport. iOS keeps screen sizes in portrait, so the shorter side is the
+ * height in landscape.
+ */
+function visibleHeight(): number {
+	if (!deviceStore.isIOSDevice || !deviceStore.isStandalone) return window.innerHeight;
+
+	const isLandscape = window.matchMedia('(orientation: landscape)').matches;
+	const screenHeight = isLandscape
+		? Math.min(screen.width, screen.height)
+		: Math.max(screen.width, screen.height);
+
+	return Math.max(window.innerHeight, screenHeight);
+}
+
+/**
  * Phone sidebar reveal: a horizontal drag on the page slides it aside to uncover the sidebar.
  * A drag from the left edge opens it, as does a longer rightward swipe from anywhere else, which
  * stays clear of the browser's own edge swipe for back and forward. A drag or tap on the page
@@ -133,21 +151,32 @@ export function useSidebarReveal() {
 
 	// The slid page's transform makes it the box its fixed bars are placed in, rather than the
 	// screen, which leaves them at the far ends of a scrolled page. The scroll is locked while it
-	// is slid, so they are shifted back by how far the page was scrolled at its two ends.
+	// is slid, so they are shifted back by how far the page reaches past the screen at its two
+	// ends. Measured again when the viewport changes, as the installed iOS app shortens it once a
+	// short page is locked
 	$effect(() => {
 		const root = document.documentElement;
 
-		if (isRevealed) {
-			const scrollBottom = root.scrollHeight - window.scrollY - window.innerHeight;
+		if (!isRevealed) {
+			root.style.removeProperty('--sidebar-reveal-pin-top');
+			root.style.removeProperty('--sidebar-reveal-pin-bottom');
+			root.style.overflow = '';
+
+			return;
+		}
+
+		const pin = () => {
+			const scrollBottom = root.scrollHeight - window.scrollY - visibleHeight();
 
 			root.style.setProperty('--sidebar-reveal-pin-top', `${window.scrollY}px`);
 			root.style.setProperty('--sidebar-reveal-pin-bottom', `${Math.max(0, scrollBottom)}px`);
-		} else {
-			root.style.removeProperty('--sidebar-reveal-pin-top');
-			root.style.removeProperty('--sidebar-reveal-pin-bottom');
-		}
+		};
 
-		root.style.overflow = isRevealed ? 'hidden' : '';
+		pin();
+		root.style.overflow = 'hidden';
+		window.addEventListener('resize', pin);
+
+		return () => window.removeEventListener('resize', pin);
 	});
 
 	// A pointer cannot stop a scroll, and a browser that has started one ignores any later
