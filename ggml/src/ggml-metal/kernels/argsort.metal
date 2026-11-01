@@ -3,6 +3,7 @@
 constant bool FC_topk_moe_with_norm [[function_constant(FC_TOPK_MOE + 0)]];
 constant int  FC_topk_moe_n_expert  [[function_constant(FC_TOPK_MOE + 1)]];
 constant int  FC_topk_moe_top_k     [[function_constant(FC_TOPK_MOE + 2)]];
+constant bool FC_topk_moe_sigmoid   [[function_constant(FC_TOPK_MOE + 3)]]; // sigmoid gating, top-k over sigmoid + bias
 
 constant int  FC_moe_reduce_n_expert_used [[function_constant(FC_MOE_REDUCE + 0)]];
 
@@ -349,6 +350,7 @@ kernel void kernel_topk_moe_f32(
         device const char * src0,
         device       float * weights,
         device      int32_t * ids,
+        device const float * bias,
         uint3   tgpig[[threadgroup_position_in_grid]],
         ushort  tiisg[[thread_index_in_simdgroup]]) {
     const int row = (int) tgpig.x;
@@ -377,60 +379,83 @@ kernel void kernel_topk_moe_f32(
         wt[i / 32] = isnan(v) ? -FLT_MAX : v;
     }
 
-    // softmax over the expert logits
-    float max_val = -INFINITY;
-    FOR_UNROLL (int i = 0; i < n_per_lane; ++i) {
-        max_val = max(max_val, wt[i]);
-    }
-    max_val = simd_max(max_val);
+    // sel: the score the top-k ranks; wt: the routing weight that is gathered (they differ only for sigmoid + bias)
+    float sel[32];
 
-    float sum_val = 0.0f;
-    FOR_UNROLL (int i = 0; i < n_per_lane; ++i) {
-        wt[i] = exp(wt[i] - max_val);
-        sum_val += wt[i];
-    }
-    sum_val = simd_sum(sum_val);
+    if (FC_topk_moe_sigmoid) {
+        FOR_UNROLL (int i = 0; i < 32; ++i) {
+            const int expert = lane + i * 32;
+            if (i < n_per_lane && expert < n_expert) {
+                wt[i]  = 1.0f / (1.0f + exp(-wt[i]));
+                sel[i] = wt[i] + bias[expert];
+            } else {
+                sel[i] = -INFINITY;
+            }
+        }
+    } else {
+        // softmax over the expert logits
+        float max_val = -INFINITY;
+        FOR_UNROLL (int i = 0; i < n_per_lane; ++i) {
+            max_val = max(max_val, wt[i]);
+        }
+        max_val = simd_max(max_val);
 
-    const float inv_sum = 1.0f / sum_val;
-    FOR_UNROLL (int i = 0; i < n_per_lane; ++i) {
-        wt[i] *= inv_sum;
+        float sum_val = 0.0f;
+        FOR_UNROLL (int i = 0; i < n_per_lane; ++i) {
+            wt[i] = exp(wt[i] - max_val);
+            sum_val += wt[i];
+        }
+        sum_val = simd_sum(sum_val);
+
+        const float inv_sum = 1.0f / sum_val;
+        FOR_UNROLL (int i = 0; i < n_per_lane; ++i) {
+            wt[i] *= inv_sum;
+        }
+
+        FOR_UNROLL (int i = 0; i < 32; ++i) {
+            sel[i] = wt[i];
+        }
     }
 
     float wt_sum = 0.0f;
 
     for (int k = 0; k < top_k; ++k) {
         float best_val = -INFINITY;
+        float best_wt  = 0.0f;
         int   best_expert = -1;
 
         FOR_UNROLL (int i = 0; i < n_per_lane; ++i) {
             const int expert = lane + i * 32;
-            if (expert < n_expert && (wt[i] > best_val || (wt[i] == best_val && expert < best_expert))) {
-                best_val    = wt[i];
+            if (expert < n_expert && (sel[i] > best_val || (sel[i] == best_val && expert < best_expert))) {
+                best_val    = sel[i];
+                best_wt     = wt[i];
                 best_expert = expert;
             }
         }
 
         FOR_UNROLL (int mask = 16; mask > 0; mask >>= 1) {
             const float val    = simd_shuffle_xor(best_val, mask);
+            const float w      = simd_shuffle_xor(best_wt, mask);
             const int   expert = simd_shuffle_xor(best_expert, mask);
             if (val > best_val || (val == best_val && expert < best_expert)) {
                 best_val    = val;
+                best_wt     = w;
                 best_expert = expert;
             }
         }
 
         if ((best_expert & 31) == lane) {
-            wt[best_expert / 32] = -INFINITY;
+            sel[best_expert / 32] = -INFINITY;
         }
 
         if ((k & 31) == lane) {
-            output_weights[k / 32] = best_val;
+            output_weights[k / 32] = best_wt;
         }
 
         if ((best_expert & 31) == lane) {
             ids_row[k] = best_expert;
             if (FC_topk_moe_with_norm) {
-                wt_sum += best_val;
+                wt_sum += best_wt;
             }
         }
     }
