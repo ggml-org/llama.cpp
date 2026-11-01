@@ -1315,7 +1315,22 @@ struct ggml_backend_opencl_context {
         }
 #else
         GGML_UNUSED(tensor);
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, work_dim, NULL, global_work_size, local_work_size, 0, NULL, NULL));
+        const cl_int err_enq = clEnqueueNDRangeKernel(queue, kernel, work_dim, NULL, global_work_size, local_work_size, 0, NULL, NULL);
+        if (err_enq != CL_SUCCESS) {
+            char kname[128];
+            kname[0] = '\0';
+            clGetKernelInfo(kernel, CL_KERNEL_FUNCTION_NAME, sizeof(kname) - 1, kname, nullptr);
+            kname[sizeof(kname) - 1] = '\0';
+            const size_t g0 = (work_dim > 0 && global_work_size) ? global_work_size[0] : 0;
+            const size_t g1 = (work_dim > 1 && global_work_size) ? global_work_size[1] : 0;
+            const size_t g2 = (work_dim > 2 && global_work_size) ? global_work_size[2] : 0;
+            const size_t l0 = (work_dim > 0 && local_work_size) ? local_work_size[0] : 0;
+            const size_t l1 = (work_dim > 1 && local_work_size) ? local_work_size[1] : 0;
+            const size_t l2 = (work_dim > 2 && local_work_size) ? local_work_size[2] : 0;
+            GGML_LOG_ERROR("ggml_opencl: clEnqueueNDRangeKernel(%s) global={%zu %zu %zu} local={%zu %zu %zu} error %d at %s:%d\n",
+                kname[0] ? kname : "?", g0, g1, g2, l0, l1, l2, (int) err_enq, __FILE__, __LINE__);
+            GGML_ASSERT(0);
+        }
 #endif
     }
 
@@ -1405,6 +1420,9 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_gemv_noshuffle_q6_K_f32_tiled;      // tiled-wide layout (opt-in)
     cl_kernel kernel_gemv_noshuffle_q6_K_f32_tiled_mc3;  // tiled multi-column (N=3) verify lm_head
     cl_kernel kernel_gemm_noshuffle_q6_K_f32_tiled;      // batched (N>1) over the tiled layout
+    cl_kernel kernel_gemm_noshuffle_q6_K_f32_tiled_nt2 = nullptr; // same source, -DNTILES=2
+    cl_kernel kernel_gemm_noshuffle_q6_K_f32_tiled_nt1 = nullptr; // same source, -DNTILES=1
+    int q6k_tiled_gemm_ntiles = 4;
     cl_kernel kernel_convert_block_q6_k_tiled_ns;        // tiled-wide convert (opt-in)
     cl_kernel kernel_gemv_noshuffle_q6_K_f32_mc3;        // multi-column (N=3) verify GEMV
     cl_kernel kernel_gemm_noshuffle_q6_K_f32;
@@ -7249,6 +7267,58 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
         CL_CHECK((backend_ctx->kernel_gemm_noshuffle_q6_K_f32_tiled =
             clCreateKernel(prog, "kernel_gemm_noshuffle_q6_K_f32_tiled", &err), err));
         CL_CHECK(clReleaseProgram(prog));
+
+        // Adreno 830 rejects NTILES=4 (local {64,4,1} = 256 threads) with
+        // CL_INVALID_WORK_GROUP_SIZE. Batched prompt decode takes this wide tiled GEMM.
+        // NTILES is compile-time, so the smaller launches are separate programs.
+        backend_ctx->kernel_gemm_noshuffle_q6_K_f32_tiled_nt2 = nullptr;
+        backend_ctx->kernel_gemm_noshuffle_q6_K_f32_tiled_nt1 = nullptr;
+        backend_ctx->q6k_tiled_gemm_ntiles = 4;
+        if (backend_ctx->adreno_gen == ADRENO_GPU_GEN::A8X) {
+            const auto build_ntiles = [&](int ntiles) -> cl_kernel {
+                const std::string opts = compile_opts + " -DNTILES=" + std::to_string(ntiles);
+                cl_program variant = build_program_from_source(
+                    backend_ctx, kernel_src.c_str(), opts);
+                if (variant == nullptr) {
+                    return nullptr;
+                }
+                cl_int variant_err = CL_SUCCESS;
+                cl_kernel variant_kernel = clCreateKernel(variant, "kernel_gemm_noshuffle_q6_K_f32_tiled", &variant_err);
+                CL_CHECK(clReleaseProgram(variant));
+                if (variant_err != CL_SUCCESS) {
+                    if (variant_kernel) {
+                        clReleaseKernel(variant_kernel);
+                    }
+                    return nullptr;
+                }
+                return variant_kernel;
+            };
+            backend_ctx->kernel_gemm_noshuffle_q6_K_f32_tiled_nt2 = build_ntiles(2);
+            backend_ctx->kernel_gemm_noshuffle_q6_K_f32_tiled_nt1 = build_ntiles(1);
+
+            int chosen = 0;
+            size_t max2 = 0;
+            if (backend_ctx->kernel_gemm_noshuffle_q6_K_f32_tiled_nt2 != nullptr) {
+                max2 = backend_ctx->get_kernel_workgroup_size(backend_ctx->kernel_gemm_noshuffle_q6_K_f32_tiled_nt2);
+                if (max2 >= 128) {
+                    chosen = 2;
+                }
+            }
+            size_t max1 = 0;
+            if (chosen == 0 && backend_ctx->kernel_gemm_noshuffle_q6_K_f32_tiled_nt1 != nullptr) {
+                max1 = backend_ctx->get_kernel_workgroup_size(backend_ctx->kernel_gemm_noshuffle_q6_K_f32_tiled_nt1);
+                if (max1 >= 64) {
+                    chosen = 1;
+                }
+            }
+            backend_ctx->q6k_tiled_gemm_ntiles = chosen;
+            if (chosen == 0) {
+                GGML_LOG_ERROR("ggml_opencl: q6_K tiled GEMM has no legal A8X work-group (nt2 max=%zu nt1 max=%zu)\n", max2, max1);
+            } else {
+                GGML_LOG_WARN("ggml_opencl: q6_K tiled GEMM NTILES=4 local {64,4,1} is not a legal A8X launch; selected NTILES=%d (nt2 max=%zu)\n",
+                              chosen, max2);
+            }
+        }
         GGML_LOG_CONT(".");
     }
 
@@ -27263,7 +27333,19 @@ static void ggml_cl_mul_mat_q6_K_f32_adreno(ggml_backend_t backend, const ggml_t
             img_desc.buffer = b_sub_buf_t;
             CL_CHECK((b_img_t = clCreateImage(context, CL_MEM_READ_ONLY, &img_fmt, &img_desc, NULL, &err), err));
 
+            const int ntiles = backend_ctx->q6k_tiled_gemm_ntiles;
             cl_kernel kt = backend_ctx->kernel_gemm_noshuffle_q6_K_f32_tiled;
+            if (ntiles == 2) {
+                kt = backend_ctx->kernel_gemm_noshuffle_q6_K_f32_tiled_nt2;
+            } else if (ntiles == 1) {
+                kt = backend_ctx->kernel_gemm_noshuffle_q6_K_f32_tiled_nt1;
+            }
+            if (kt == nullptr || ntiles < 1) {
+                GGML_LOG_ERROR("ggml_opencl: q6_K tiled GEMM has no launch for ne01=%d ne1=%d ntiles=%d\n", ne01, ne1, ntiles);
+                CL_CHECK(clReleaseMemObject(b_img_t));
+                CL_CHECK(clReleaseMemObject(b_sub_buf_t));
+                GGML_ASSERT(0);
+            }
             CL_CHECK(clSetKernelArg(kt, 0, sizeof(cl_mem),   &extra0_q6_K->ql));
             CL_CHECK(clSetKernelArg(kt, 1, sizeof(cl_mem),   &extra0_q6_K->qh));
             CL_CHECK(clSetKernelArg(kt, 2, sizeof(cl_mem),   &extra0_q6_K->s));
@@ -27275,12 +27357,11 @@ static void ggml_cl_mul_mat_q6_K_f32_adreno(ggml_backend_t backend, const ggml_t
             CL_CHECK(clSetKernelArg(kt, 8, sizeof(int),      &ne01));
             CL_CHECK(clSetKernelArg(kt, 9, sizeof(int),      &ne1));
 
-            // Must match the kernel: NTILES=4 64-row tiles per work-group (256 rows),
-            // BN=8 output columns per work-group.
+            // Local size is the compiled NTILES. BN is 16 in the kernel.
             const int BN_T  = 16;
-            const int WROWS = 4 * 64; // NTILES * TILE_ROWS
-            size_t local_work_size[3]  = {64, 4, 1};
-            size_t global_work_size[3] = {(size_t)CEIL_DIV(ne01, WROWS) * 64, 4, (size_t)CEIL_DIV(ne1, BN_T)};
+            const int WROWS = ntiles * 64;
+            size_t local_work_size[3]  = {64, (size_t) ntiles, 1};
+            size_t global_work_size[3] = {(size_t)CEIL_DIV(ne01, WROWS) * 64, (size_t) ntiles, (size_t)CEIL_DIV(ne1, BN_T)};
             backend_ctx->enqueue_ndrange_kernel(kt, 3, global_work_size, local_work_size, dst);
 
             CL_CHECK(clReleaseMemObject(b_img_t));
@@ -27380,7 +27461,22 @@ static void ggml_cl_mul_mat_q6_K_f32_adreno(ggml_backend_t backend, const ggml_t
         const bool is_output_w_dp4a = strncmp(src0->name, "output", 6) == 0 ||
                                       strncmp(src0->name, "token_embd", 10) == 0;
 
-        if (q6k_dense_dp4a_on && !is_output_w_dp4a && ne1 > 8 && (ne00 % 32 == 0) && (ne01 % 64 == 0)) {
+        // Adreno 830 (A8X) aborts in clEnqueueNDRangeKernel on the noshuffle GEMM
+        // below. That kernel requires a full subgroup and is launched at
+        // local {2, 128, 1} (256 threads), and the grid is not rounded to that
+        // local size.
+        const bool a8x = backend_ctx->adreno_gen == ADRENO_GPU_GEN::A8X;
+        const bool dp4a_aligned = (ne00 % 32 == 0) && (ne01 % 64 == 0);
+        const bool a8x_skip_full_sg_gemm = a8x && q6k_dense_dp4a_on && dp4a_aligned;
+        if (a8x_skip_full_sg_gemm && (is_output_w_dp4a || ne1 <= 8)) {
+            static bool logged = false;
+            if (!logged) {
+                logged = true;
+                GGML_LOG_WARN("ggml_opencl: q6_K noshuffle GEMM local {2,128,1} is not a legal A8X launch; falling back to dp4a\n");
+            }
+        }
+        if (q6k_dense_dp4a_on && dp4a_aligned &&
+            (a8x_skip_full_sg_gemm || (!is_output_w_dp4a && ne1 > 8))) {
             const int M = ne01, N = ne1, K = ne00;
             const size_t n_blocks = (size_t)N * (K / 32);
             backend_ctx->prealloc_moe_qa.allocate(context, (size_t)N * K * sizeof(cl_char));
@@ -27469,7 +27565,19 @@ static void ggml_cl_mul_mat_q6_K_f32_adreno(ggml_backend_t backend, const ggml_t
         CL_CHECK(clSetKernelArg(kernel, 3, sizeof(int),    &width_B));
         CL_CHECK(clSetKernelArg(kernel, 4, sizeof(int),    &padded_height_B));
 
-        size_t local_size_t[2] = { 1, 16 };
+        // The transpose kernel uses only global ids. local {1, 16} is illegal
+        // when the padded height is not a multiple of 16.
+        int local_y = 16;
+        while (local_y > 1 && (padded_height_B % local_y) != 0) {
+            local_y >>= 1;
+        }
+        if (local_y > 1 && (padded_height_B % local_y) != 0) {
+            local_y = 1;
+        }
+        if (padded_height_B > 0 && (padded_height_B % local_y) != 0) {
+            local_y = 1;
+        }
+        size_t local_size_t[2] = { 1, (size_t)local_y };
         size_t global_size_t[2] = { (size_t)width_B, (size_t)padded_height_B };
         backend_ctx->enqueue_ndrange_kernel(kernel, 2, global_size_t, local_size_t, dst);
 
@@ -27516,11 +27624,35 @@ static void ggml_cl_mul_mat_q6_K_f32_adreno(ggml_backend_t backend, const ggml_t
             local_work_size[1] = 8;               // COK_NSG
             local_work_size[2] = 1;
         } else {
-            global_work_size[0] = (size_t)CEIL_DIV(ne1, 8);
-            global_work_size[1] = (size_t)CEIL_DIV(ne01, 4);
+            // Full-subgroup kernel. {2, 128, 1} is 256 threads and does not divide
+            // every grid. On A8X one full subgroup (128) is the launch that matches
+            // the required subgroup; keep {2, 128} elsewhere when the grid divides.
+            const size_t g0 = (size_t)CEIL_DIV(ne1, 8);
+            const size_t g1 = (size_t)CEIL_DIV(ne01, 4);
+            size_t l0 = 2;
+            size_t l1 = 128;
+            const bool a8x_gemm = backend_ctx->adreno_gen == ADRENO_GPU_GEN::A8X;
+            const bool geom_bad = g0 == 0 || g1 == 0 || (g0 % l0) != 0 || (g1 % l1) != 0;
+            if (a8x_gemm || geom_bad) {
+                const size_t bmax = g1 < 128 ? g1 : 128;
+                for (size_t b = bmax; b > 0; --b) {
+                    if ((g1 % b) != 0 || (128 % b) != 0) {
+                        continue;
+                    }
+                    const size_t a = 128 / b;
+                    if (a == 0 || (g0 % a) != 0) {
+                        continue;
+                    }
+                    l0 = a;
+                    l1 = b;
+                    break;
+                }
+            }
+            global_work_size[0] = g0;
+            global_work_size[1] = g1;
             global_work_size[2] = 1;
-            local_work_size[0] = 2;
-            local_work_size[1] = 128;
+            local_work_size[0] = l0;
+            local_work_size[1] = l1;
             local_work_size[2] = 1;
         }
         backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
