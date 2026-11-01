@@ -4645,6 +4645,10 @@ size_t llama_state_seq_set_data_ext(llama_context * ctx, const uint8_t * src, si
 size_t llama_state_seq_save_file(llama_context * ctx, const char * filepath, llama_seq_id seq_id, const llama_token * tokens, size_t n_token_count) {
     ctx->synchronize();
 
+    if (seq_id < 0 || (uint32_t) seq_id >= llama_n_seq_max(ctx)) {
+        return 0;
+    }
+
     try {
         return ctx->state_seq_save_file(seq_id, filepath, tokens, n_token_count);
     } catch (const std::exception & err) {
@@ -4655,6 +4659,10 @@ size_t llama_state_seq_save_file(llama_context * ctx, const char * filepath, lla
 
 size_t llama_state_seq_load_file(llama_context * ctx, const char * filepath, llama_seq_id dest_seq_id, llama_token * tokens_out, size_t n_token_capacity, size_t * n_token_count_out) {
     ctx->synchronize();
+
+    if (dest_seq_id < 0 || (uint32_t) dest_seq_id >= llama_n_seq_max(ctx)) {
+        return 0;
+    }
 
     try {
         return ctx->state_seq_load_file(dest_seq_id, filepath, tokens_out, n_token_capacity, n_token_count_out);
