@@ -39,6 +39,7 @@
 #include "ggml-cuda/opt-step-sgd.cuh"
 #include "ggml-cuda/out-prod.cuh"
 #include "ggml-cuda/pad.cuh"
+#include "ggml-cuda/penalties.cuh"
 #include "ggml-cuda/pool2d.cuh"
 #include "ggml-cuda/pool1d.cuh"
 #include "ggml-cuda/quantize.cuh"
@@ -3027,6 +3028,80 @@ static bool ggml_cuda_should_fuse_rope_set_rows(const ggml_tensor * rope,
     return true;
 }
 
+// sampling penalties, as built by llama_sampler_penalties_backend_apply():
+// x = get_rows(rows, ids), pos = step(x), coefs = cont(inp)
+// set_rows(rows, x*(pos*coefs[0] + (1 - pos)*coefs[1]) - coefs[2], ids)
+static constexpr ggml_op ggml_cuda_penalties_ops[] = {
+    GGML_OP_GET_ROWS, GGML_OP_UNARY, GGML_OP_CONT,
+    GGML_OP_VIEW, GGML_OP_MUL, GGML_OP_SCALE, GGML_OP_VIEW, GGML_OP_MUL, GGML_OP_ADD,
+    GGML_OP_MUL, GGML_OP_VIEW, GGML_OP_SUB, GGML_OP_SET_ROWS,
+};
+
+static bool ggml_cuda_should_fuse_penalties(const ggml_cgraph * cgraph, int i) {
+    constexpr int n_ops = sizeof(ggml_cuda_penalties_ops)/sizeof(ggml_cuda_penalties_ops[0]);
+    const int out = i + n_ops - 1;
+
+    if (!ggml_can_fuse_subgraph(cgraph, i, n_ops, ggml_cuda_penalties_ops, &out, 1)) {
+        return false;
+    }
+
+    const ggml_tensor * const * nodes = cgraph->nodes + i;
+
+    const ggml_tensor * x        = nodes[0];
+    const ggml_tensor * pos      = nodes[1];
+    const ggml_tensor * coefs    = nodes[2];
+    const ggml_tensor * neg      = nodes[5];
+    const ggml_tensor * scale    = nodes[8];
+    const ggml_tensor * scaled   = nodes[9];
+    const ggml_tensor * sub      = nodes[11];
+    const ggml_tensor * set_rows = nodes[12];
+
+    const ggml_tensor * rows = x->src[0];
+    const ggml_tensor * ids  = x->src[1];
+    const int64_t       n    = ids->ne[0];
+
+    if (rows->type != GGML_TYPE_F32 || rows->ne[0] != 1 || rows->nb[0] != sizeof(float) ||
+        ids->type != GGML_TYPE_I32 || !ggml_is_contiguous(ids) || ggml_nelements(ids) != n ||
+        x->ne[0] != 1 || x->ne[1] != n || x->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    if (ggml_get_unary_op(pos) != GGML_UNARY_OP_STEP || pos->src[0] != x) {
+        return false;
+    }
+
+    const ggml_tensor * inp = coefs->src[0];
+    if (inp->type != GGML_TYPE_F32 || !ggml_is_contiguous(inp) || inp->ne[0] != n || inp->ne[1] != 3 ||
+        ggml_nelements(inp) != 3*n) {
+        return false;
+    }
+
+    // row k of the coefs, viewed as [1, n]
+    const auto is_coef = [&](const ggml_tensor * t, int k) {
+        return t->op == GGML_OP_VIEW && t->view_src == coefs && t->view_offs == k*n*sizeof(float) &&
+               t->ne[0] == 1 && t->ne[1] == n && t->nb[1] == sizeof(float);
+    };
+    const auto is_mul = [](const ggml_tensor * t, const ggml_tensor * a, const ggml_tensor * b) {
+        return t->op == GGML_OP_MUL && t->src[0] == a && t->src[1] == b;
+    };
+
+    if (neg->src[0] != pos || ggml_get_op_params_f32(neg, 0) != -1.0f || ggml_get_op_params_f32(neg, 1) != 1.0f) {
+        return false;
+    }
+
+    if (!is_mul(nodes[4], pos, nodes[3]) || !is_coef(nodes[3], 0) ||
+        !is_mul(nodes[7], neg, nodes[6]) || !is_coef(nodes[6], 1) ||
+        scale->src[0] != nodes[4] || scale->src[1] != nodes[7] ||
+        !is_mul(scaled, x, scale) ||
+        sub->src[0] != scaled || sub->src[1] != nodes[10] || !is_coef(nodes[10], 2)) {
+        return false;
+    }
+
+    // set_rows srcs: updates, ids, destination
+    return set_rows->src[0] == sub && set_rows->src[1] == ids && set_rows->src[2] == rows &&
+           set_rows->type == GGML_TYPE_F32;
+}
+
 static bool ggml_cuda_should_fuse_rms_norm_mul_rope(const ggml_tensor * rms_norm,
                                                     const ggml_tensor * mul,
                                                     const ggml_tensor * rope) {
@@ -4093,6 +4168,15 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
 
         ggml_cuda_op_rope_fused(*cuda_ctx, rope, set_rows);
         return 2;
+    }
+
+    if (node->op == GGML_OP_GET_ROWS && ggml_cuda_should_fuse_penalties(cgraph, i)) {
+        const ggml_tensor * ids   = node->src[1];
+        const ggml_tensor * coefs = cgraph->nodes[i + 2]->src[0];
+        ggml_tensor *       dst   = cgraph->nodes[i + 12];
+
+        ggml_cuda_op_penalties_fused(*cuda_ctx, ids, coefs, dst);
+        return 12;
     }
 
     // Snake activation: y = x + sin(a*x)^2 * inv_b
