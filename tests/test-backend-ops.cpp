@@ -2447,13 +2447,15 @@ struct test_get_rows : public test_case {
     const bool v; // view src1
     const bool vs0; // view src0
     const int offset_cols; // // column offset of the view src0
+    const bool repeat_rows;
+    const bool transpose_rows;
 
     std::string vars() override {
-        return VARS_TO_STR9(type, n, m, r, be1, be2, v, vs0, offset_cols);
+        return VARS_TO_STR11(type, n, m, r, be1, be2, v, vs0, offset_cols, repeat_rows, transpose_rows);
     }
 
-    test_get_rows(ggml_type type = GGML_TYPE_F32, int n = 10, int m = 5, int r = 3, int be1 = 1, int be2 = 1, bool v = false, bool vs0 = false, int offset_cols = 0)
-        : type(type), n(n), m(m), r(r), be1(be1), be2(be2), v(v), vs0(vs0), offset_cols(offset_cols) {}
+    test_get_rows(ggml_type type = GGML_TYPE_F32, int n = 10, int m = 5, int r = 3, int be1 = 1, int be2 = 1, bool v = false, bool vs0 = false, int offset_cols = 0, bool repeat_rows = false, bool transpose_rows = false)
+        : type(type), n(n), m(m), r(r), be1(be1), be2(be2), v(v), vs0(vs0), offset_cols(offset_cols), repeat_rows(repeat_rows), transpose_rows(transpose_rows) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * in;
@@ -2472,8 +2474,13 @@ struct test_get_rows : public test_case {
             ggml_set_name(in, "in");
         }
 
-        ggml_tensor * rows = ggml_new_tensor_3d(ctx, GGML_TYPE_I32, v ? r + 1 : r, be1, be2);
+        GGML_ASSERT(!transpose_rows || !v);
+        ggml_tensor * rows = transpose_rows ? ggml_new_tensor_3d(ctx, GGML_TYPE_I32, be1, r, be2) :
+                ggml_new_tensor_3d(ctx, GGML_TYPE_I32, v ? r + 1 : r, be1, be2);
         ggml_set_name(rows, "rows");
+        if (transpose_rows) {
+            rows = ggml_permute(ctx, rows, 1, 0, 2, 3);
+        }
         if (v) {
             rows = ggml_view_3d(ctx, rows, r/2, be1, be2, rows->nb[1], rows->nb[2], rows->nb[0]);
             ggml_set_name(rows, "view_of_rows");
@@ -2500,7 +2507,7 @@ struct test_get_rows : public test_case {
                 // rows
                 std::vector<int> data(ggml_nelements(t));
                 for (size_t i = 0; i < data.size(); i++) {
-                    data[i] = rand() % m;
+                    data[i] = repeat_rows ? (i % 2 == 0 ? 0 : m - 1) : rand() % m;
                 }
                 ggml_backend_tensor_set(t, data.data(), 0, data.size() * sizeof(int));
             } else {
@@ -10205,6 +10212,24 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
 
     test_cases.emplace_back(new test_get_rows(GGML_TYPE_F32, 1, 8, 2, 1, 1, false));
+    for (int n : {32, 64, 160, 256, 288}) {
+        for (int b : {1, 3}) {
+            for (bool vs0 : {false, true}) {
+                for (bool transpose_rows : {false, true}) {
+                    test_cases.emplace_back(new test_get_rows(GGML_TYPE_IQ4_NL, n, 5, 8, b, 2,
+                            false, vs0, 0, true, transpose_rows));
+                }
+            }
+        }
+    }
+    for (ggml_type type : {GGML_TYPE_Q4_0, GGML_TYPE_Q8_0}) {
+        for (int n : {288, 544, 1056}) {
+            for (bool vs0 : {false, true}) {
+                test_cases.emplace_back(new test_get_rows(type, n, 5, 8, 3, 2,
+                        false, vs0, 0, true));
+            }
+        }
+    }
     for (ggml_type type : {GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K,
                           GGML_TYPE_IQ3_XXS, GGML_TYPE_IQ3_S}) {
         test_cases.emplace_back(new test_get_rows_after_mul_mat(type));
