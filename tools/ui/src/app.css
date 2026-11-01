@@ -45,8 +45,11 @@
 	--safe-area-bottom: env(safe-area-inset-bottom, 0px);
 	/* where the phone's corner controls (menu toggle, context gauge, sidebar logo) sit */
 	--corner-control-top: calc(1rem + var(--safe-area-top));
-	/* where the phone's bottom corner actions (a page's floating key) sit */
-	--corner-control-bottom: calc(1rem + var(--safe-area-bottom));
+	/* where the phone's bottom corner actions (a page's floating key) sit: as far in from
+	   the side as up from the bottom, which keeps a 56px key about concentric with an
+	   iPhone's rounded screen corner */
+	--corner-control-side: 1.75rem;
+	--corner-control-bottom: calc(var(--corner-control-side) + var(--safe-area-bottom));
 	/* where a phone page's title starts: a row below the corner controls */
 	--page-top: calc(var(--corner-control-top) + 3.75rem);
 	/* expanded desktop sidebar width, overridden once the user drags its edge */
@@ -135,9 +138,9 @@
 	/* the installed app's status bar already sets them apart from the screen's edge */
 	:root {
 		--corner-control-top: calc(0.25rem + var(--safe-area-top));
-		/* the home indicator is a short bar in the middle, so the corners below its inset
-		   are free: a corner action lines up with the chat form's bottom edge instead */
-		--corner-control-bottom: 1.5rem;
+		/* the home indicator is a short bar in the middle, so the corners beside it are
+		   free: a corner action ignores its inset and keeps the same gap as from the side */
+		--corner-control-bottom: var(--corner-control-side);
 	}
 
 	html {

@@ -14,11 +14,11 @@
 </script>
 
 <!-- a phone's main action of a page: a round key in the bottom-right corner, within reach of
-     the thumb and level with the chat form (see --corner-control-bottom); held in place while
+     the thumb (see --corner-control-bottom and --corner-control-side); held in place while
      the page slides aside -->
 <Button
 	aria-label={label}
-	class="sidebar-reveal-pin-bottom fixed right-4 bottom-(--corner-control-bottom) z-20 size-14 rounded-full shadow-lg md:hidden {className}"
+	class="sidebar-reveal-pin-bottom fixed right-(--corner-control-side) bottom-(--corner-control-bottom) z-20 size-14 rounded-full shadow-lg md:hidden {className}"
 	{onclick}
 >
 	<Icon class="size-6" />
