@@ -33,6 +33,10 @@ options = AppiumOptions()
 options.set_capability("automationName", "UiAutomator2")
 options.set_capability("platformName", "Android")
 options.set_capability("deviceName", os.getenv("ANDROID_DEVICE_VERSION"))
+# Installing Appium's helper APKs over QDC's adb tunnel is slower than the 60s
+# default, so widen the adb timeouts.
+options.set_capability("appium:adbExecTimeout", 300000)
+options.set_capability("appium:androidInstallTimeout", 300000)
 
 # ---------------------------------------------------------------------------
 # Shell / process helpers
