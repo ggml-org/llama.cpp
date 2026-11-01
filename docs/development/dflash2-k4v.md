@@ -64,6 +64,8 @@ Two qualified scheduling fixes are included:
 
 ## Measured performance
 
+The later [nine-band main/current Open-SWE comparison](dflash2-k4v-swe.md) covers 45 configurations with independently maximum-fit arenas. It keeps branch-only changes separate from the incremental effect of K4V; the fixed-arena studies below remain separate cohorts.
+
 The following are separate fixed-1-GiB, ordinary baseline/candidate experiments on natural NVIDIA Open-SWE prefixes. Each has one fresh pair per mode/prompt, alternating order, unchanged IQ4_XS target/Q4 sidecar/Q8K-Q4V/bub256/UVM-off and normal graphs. Each pair matches generated IDs, request/source counters and physical decode layout. They are not repeated statistical trials.
 
 | Optimization | Prompt tokens | DFlash7 decode change | DFlash7 + K4V decode change |

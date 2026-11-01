@@ -4,7 +4,7 @@ Quantized Qwen3.8-27B and Gemma 4 31B weights can fit on a 16 GB GPU, but that l
 
 Adaptive KV Streaming V2 manages that movement explicitly. It keeps the complete encoded full-attention KV history in system RAM, retains part of it in VRAM, and prefetches the rest through a shared ring buffer as attention needs it. The same GPU space is reused across layers, allowing full attention to cover history beyond what fits in VRAM without discarding earlier tokens. Attention still runs on the GPU; UVM is optional.
 
-To make long-context generation faster, V2 also shares memory between prefill, decode and drafting, plus vision on both targets. Qwen's embedded MTP streams an auxiliary history; Gemma's separate MTP assistant borrows target KV without creating another history. DFlash2 provides another Qwen option, with different memory costs and acceptance rates.
+To make long-context generation faster, V2 also shares memory between prefill, decode and drafting, plus vision on both targets. Qwen's embedded MTP streams an auxiliary history; Gemma's separate MTP assistant borrows target KV without creating another history. DFlash2 provides another Qwen option. Its optional CPU K4V map looks for continuations in token history before falling back to neural prediction; the target still verifies every proposal. Benefits depend on acceptance and target work, not lookup hits alone.
 
 On an RTX 5070 Ti with IQ4_XS weights and Q8_0 K / Q4_0 V, stock llama.cpp with UVM measured 2.5 tok/s at 128 Ki, while V2 target-only measured 26.1 tok/s. MTP=3 increased that to 59.7 tok/s at the same context and still delivered 22.3 tok/s at the model's native 262,144-position capacity. Stock was slightly faster at short contexts; streaming's benefit becomes clear as the cache puts pressure on VRAM.
 
@@ -32,12 +32,13 @@ The reference targets are Unsloth Qwen3.8-27B `UD-IQ4_XS` and Gemma 4 31B `Q3_K_
 | --- | --- | --- | --- | --- |
 | Qwen3.8-27B, target-only | Up to 262,144 positions | None | None | Matching F16 mmproj supported |
 | Qwen3.8-27B, embedded MTP | Up to 262,144 positions | 1-3 predictions; target verification through TG4 | Full history, streamed as an auxiliary KV layer | Supported with the matching mmproj and shared arena |
-| Qwen3.8-27B + IncoAI DFlash2 sidecar, optionally CPU K4V | Up to 262,144 positions | 1-7 proposals per source; target verification through TG8 | Bounded 2,048-position draft window; K4V map/history in RAM | Not supported with the vision arena |
+| Qwen3.8-27B + matching IncoAI DFlash2 sidecar | Up to 262,144 positions | 1-7 neural proposals; target verification through TG8 | Bounded 2,048-position draft window plus execution headroom | Not supported with the vision arena |
+| Qwen3.8-27B + DFlash2 + CPU K4V | Same target capacity; fit this configuration separately | Independently 1-7 neural/copied proposals; target verification up to max(F,M)+1 rows | Same bounded draft KV; token-history map in RAM | Text only; no simultaneous MTP |
 | Gemma 4 31B, target-only | 8-120 Ki target-only sweep; metadata capacity 262144 | None | Ten full-attention histories streamed; fifty bounded SWA histories resident | Matching local Q8 projector with Q3_K_S; scoped below |
 | Gemma 4 31B + matching MTP assistant | 8-120 Ki text sweep, all lengths 1-3; MTP3-only through 256 Ki | 1-3 predictions; target verification TG1-TG4 | Read-only target KV; no assistant KV append/catch-up | Matching local Q8 projector with Q3_K_S; lengths 1-3, scoped below |
 | Other Gemma variants, Muse Glimmer and other architectures | Not qualified here | Not qualified | Need model topology, admission and numerical qualification | Not qualified |
 
-TG1 means one query token in an attention invocation; TG4/TG8 mean four/eight queries. These are not request-concurrency settings. Context capacity includes the prompt, image positions, generated tokens and speculative headroom; it is not a promise of a 262,144-token prompt followed by additional generation.
+TG1 means one query token in an attention invocation; TG4/TG8 mean four/eight queries. These are not request-concurrency settings. F and M denote the neural and copied-token proposal maxima. Context capacity includes the prompt, image positions, generated tokens and speculative headroom; it is not a promise of a 262,144-token prompt followed by additional generation.
 
 Qwen embedded MTP needs a target GGUF containing its MTP tensors; its architecture is represented by `qwen35` in the source/GGUF metadata. Gemma requires the separate matching assistant, passed with `--model-draft`; its roughly 475.81 MiB of GPU weights remain **outside the arena**. DFlash2 requires its own matching Qwen sidecar, not an arbitrary draft model and not a Gemma pairing. See the pinned [Gemma artifacts](benchmarks/data/gemma4-31b-artifacts.json) and [Qwen DFlash2 artifacts](benchmarks/data/dflash2-qwen27b-artifacts.json).
 
@@ -65,7 +66,7 @@ These three reference pairs have model-level controls for both targets; changing
 
 The common readers also admit all 64 ordered pairs from `f32`, `f16`, `bf16`, `q8_0`, `q5_0`, `q5_1`, `q4_0` and `q4_1`, subject to compiled kernels, geometry and memory admission. All-pair operator qualification is not an all-pair full-model or image benchmark. `iq4_nl` is not admitted by the current stock CUDA Flash Attention reader.
 
-Adaptive MTP and DFlash inherit the target's K/V formats. **Do not pass draft-cache overrides**, even identical values: `--spec-draft-type-k/v` and their aliases are rejected for adaptive execution. Native non-streaming drafting retains independent cache settings.
+Adaptive MTP and DFlash, including DFlash+K4V, inherit the target's K/V formats. K4V is a token-history lookup, not another cache precision or GPU KV history. **Do not pass draft-cache overrides**, even identical values: `--spec-draft-type-k/v` and their aliases are rejected for adaptive execution. Native non-streaming drafting retains independent cache settings.
 
 F32 describes storage, not fully FP32 attention: the CUDA reader follows stock attention's FP16 input rounding. Cache-format speed measurements are not model-quality measurements.
 
@@ -73,7 +74,7 @@ F32 describes storage, not fully FP32 attention: the CUDA reader follows stock a
 
 | Platform / backend | Implemented or tested here | What this does not establish |
 | --- | --- | --- |
-| Linux + CUDA, RTX 5070 Ti / SM120 | Qwen text/MTP/DFlash2/vision and Gemma text/shared-KV MTP/image phase arena, cache/recovery and scoped numerical/performance checks | Other cards, drivers and workloads can have different memory limits; other Gemma modalities/variants are not qualified |
+| Linux + CUDA, RTX 5070 Ti / SM120 | Qwen text/MTP/DFlash2/K4V/vision and Gemma text/shared-KV MTP/image phase arena, cache/recovery and scoped numerical/performance checks | Other cards, drivers and workloads can have different memory limits; other Gemma modalities/variants are not qualified |
 | CUDA SM61/SM70/SM75/SM86 | Gemma D512 affected-unit functional compilation: 19 logical units, 72 actual device images; changed prefill adapters rechecked | Not a full legacy server link or physical Pascal/Volta/Turing/Ampere runtime/performance test |
 | Other CUDA targets, including SM89 | Earlier Qwen selected-target/forward-JIT evidence is recorded separately | Forward-JIT on the 5070 Ti does not reproduce older-card resource/performance limits |
 | Windows + CUDA | The CUDA path and DLL export fixes are in the source | The recorded Linux matrix is not Windows/MSVC qualification |
@@ -87,6 +88,7 @@ For SM61/SM70 builds, use a toolkit that still compiles those targets, such as C
 | Setting | Current behavior |
 | --- | --- |
 | Requests / GPUs | One serial request, one CUDA GPU; no parallel slots or multi-GPU split |
+| DFlash+K4V | Matching Qwen pair, one serial text request, F/M 1-7; no mixed vision or MTP admission |
 | Attention | Flash Attention and GPU KV offload required |
 | Batch / microbatch | 256/256 is the full text-matrix reference; other settings need their own fit test and backend admission |
 | Vision | Qwen with matching F16 projector; Gemma 4 31B Q3_K_S with matching local Q8 projector and optional matching shared-KV MTP1-3. Image/text only, no LoRA/embeddings/DFlash |
@@ -100,7 +102,7 @@ The arena bounds its participating allocations, **not total process memory**. Mo
 
 ### Build
 
-Build this fork rather than an upstream release binary. From a checkout of the Gemma-enabled `feature/gemma4-adaptive-kv-stream` branch/revision (the older V2 branch alone does not include these Gemma changes):
+Build the V2 fork from the checked-out source rather than using an upstream release binary. Build the server and use the benchmark tools from the same revision:
 
 ```sh
 cmake -S . -B build-v2 -DGGML_CUDA=ON -DGGML_CUDA_FA_QUANTS=all -DCMAKE_BUILD_TYPE=Release
@@ -198,6 +200,8 @@ Omit `--validate-selected` for short-probe sizing alone; then the report does no
 
 The finder removes inherited `LLAMA_ARG_*`, UVM and graph/rollback debug overrides. Unsupported kernels, incomplete responses, device faults and other non-OOM failures stop the search. Different images, prompt shapes, concurrent GPU users or driver allocations can change fit; there is no universal OOM guarantee. Even one full native-context validation can take several minutes.
 
+For text-only DFlash+K4V, use `--spec-mode dflash-k4v`, the matching sidecar and explicit N/M/min-hits. The [mixed launch example](#launch-examples) sizes that exact mode. Do not reuse a fitted MTP arena; the DFlash weights remain loaded for fallback. Full sizing and route-proof details are in the [K4V guide](docs/development/dflash2-k4v.md#run-it).
+
 ### Launch examples
 
 These examples use Bash. On Windows, adapt the argument grouping and executable path to your shell; the recorded qualification was on Linux. Substitute your own model paths and the arena found for **each** configuration.
@@ -243,19 +247,29 @@ KV_COMMON=(--model "$KV_MODEL" --ctx-size 262144 --parallel 1
   --spec-type draft-dflash --spec-draft-n-max 7 --spec-draft-n-min 0 --spec-draft-p-min 0
 ```
 
-**DFlash2 + K4V:** the CPU history map supplies a proposal when useful, otherwise DFlash predicts. Fit this mode separately; the 1,500 MiB below is only an example. Explicit K4V M=7 is required because its native default is larger. Use the same target, matching sidecar and inherited cache types:
+**DFlash2 + K4V:** fit the mixed text configuration separately. This matches the 262,144-position context and 256/256 batching in `KV_COMMON`; the finder starts and stops its own server. N12/M7/H1 is the explicit SWE measurement setting, not a universal tuning recommendation.
 
 ```bash
-"$KV_SERVER" "${KV_COMMON[@]}" --shared-device-memory-mib 1500 \
+python3 benchmarks/find-max-arena.py \
+  --server "$KV_SERVER" --model "$KV_MODEL" --model-draft "$KV_DFLASH" \
+  --context-size 262144 --cache-type-k q8_0 --cache-type-v q4_0 \
+  --spec-mode dflash-k4v --draft-length 7 \
+  --ngram-n 12 --ngram-m 7 --ngram-min-hits 1 \
+  --batch-size 256 --ubatch-size 256 --decode-tokens 256 \
+  --probe-mode preflight --validate-selected \
+  --output benchmarks/results/fit-qwen-dflash-k4v
+
+KV_K4V_ARENA=$(python3 -c 'import json; print(json.load(open("benchmarks/results/fit-qwen-dflash-k4v/result.json"))["arena_mib"])')
+"$KV_SERVER" "${KV_COMMON[@]}" --shared-device-memory-mib "$KV_K4V_ARENA" \
   --cache-type-k q8_0 --cache-type-v q4_0 --no-mmproj \
   --model-draft "$KV_DFLASH" --spec-draft-ngl 999 \
   --spec-type ngram-map-k4v,draft-dflash --spec-draft-n-max 7 \
   --spec-draft-n-min 0 --spec-draft-p-min 0 \
   --spec-ngram-map-k4v-size-n 12 --spec-ngram-map-k4v-size-m 7 \
-  --spec-ngram-map-k4v-min-hits 2
+  --spec-ngram-map-k4v-min-hits 1 --offline --no-context-shift
 ```
 
-K4V remains opt-in; fewer draft forwards do not guarantee faster generation. The [K7 support report](docs/development/dflash2-k4v.md) covers mixed-mode arena sizing, reset/rollback behavior, the two qualified scheduling optimizations and measured limits. The unfinished K15 extension is preserved separately.
+N is the lookup-key length, M is the copied continuation maximum, and H is the minimum-hit setting. The neural maximum F and copied maximum M are independent. Set M explicitly: the native default 48 is outside the qualified 1-7 streaming range. K4V remains opt-in; target verification and DFlash feature maintenance still run. See the [support report](docs/development/dflash2-k4v.md) for reset behavior, measurements and limits.
 
 **Gemma target-only and separate shared-KV MTP:** use different fitted budgets for each mode. These 8 Ki sizes are measured examples on the reference card, not portable defaults.
 
@@ -331,6 +345,7 @@ Only run one of these commands at a time. `--kv-stream-arena-mib` is an alias fo
 | Native/streamed attention unavailable for K/V or query width | Compiled FA pairs, GPU family, tensor geometry and supported model; a larger arena cannot add a missing kernel |
 | Shared arena quota insufficient | The admitted execution needs more arena space; use the reported minimum when available |
 | Device allocation OOM | Weights, arena, driver/executables and other applications must fit together; reduce the arena and rerun the full workload |
+| Mixed K4V configuration rejected | Check the matching Qwen/DFlash pair, F/M 1-7, sufficient microbatch capacity and inherited target cache types; native M=48 and other adaptive combinations are outside this scope |
 | Draft-cache override rejected | Remove draft K/V flags and their environment equivalents; adaptive drafting inherits target formats |
 | Gemma bounded-cache / combined quota rejected | Leave full-SWA disabled and use the required persistent-local plus graph/attention minimum; a quote is not a guarantee against external driver OOM |
 | Arena finder port unavailable | Select a free `--port`; live listeners are never contacted. Completed POSIX probe sockets can be reused without mistaking them for another service |
@@ -345,6 +360,14 @@ The introduction shows the context-scaling charts. The [detailed performance rep
 The IQ4_XS/Q8-Q4 reference sweep covers target-only, MTP3 and DFlash2 draft lengths 3 and 7 through 256 Ki, with 32 points per mode. A separate stock-UVM baseline ends at 128 Ki: target-only decode there is 26.15 tok/s streamed versus 2.48 tok/s stock+UVM. This earlier sweep is not a rerun with the newer prefill optimizations.
 
 [Four-mode data](media/adaptive-kv-four-mode-comparison.csv) · [Stock-UVM data](media/stock-uvm-iq4-throughput.csv) · [Three-format comparison](docs/development/adaptive-kv-performance.md#full-context-comparison-kv-formats-and-drafting-modes)
+
+### DFlash2 + K4V on natural SWE histories
+
+The completed nine-band NVIDIA Open-SWE comparison measures an earlier V2 baseline against the implementation with flexible target prefetch and recurrent-restore overlap, at MTP3 and DFlash7, plus optional K4V: 45 supported configurations from about 8 to 256 Ki of real history. DFlash7 decode improved 2.0-6.2% over that baseline and MTP3 improved 0.6-2.6%, with exact same-mode outputs, draft counts, arenas and decode layouts. Prefill differences stayed within 0.16%. The detailed report identifies the exact measured revisions.
+
+![Natural SWE histories: baseline and optimized MTP3/DFlash7, plus optimized DFlash7+K4V prefill and decode](media/dflash2-k4v-swe-throughput.png)
+
+K4V's additional benefit is workload dependent: the 32 Ki equal-output case improved 3.22% over DFlash7 with the scheduling fixes, while most others changed little. The 192 Ki mixed response differs and is excluded from matched-work gains. Each configuration retains one natural completion with a 2,048-output cap at its full-workload maximum-fit arena; actual prompt/capacity and output counts vary. These are not repeated statistics or agent task-success scores, and the older article/prose chart above remains a separate cohort. [Methods and full results](docs/development/dflash2-k4v-swe.md) - [CSV](benchmarks/data/dflash2-k4v-swe-branches.csv) - [Profile and hashes](benchmarks/data/dflash2-k4v-swe-branches.json).
 
 ### Gemma 4 measurements
 
@@ -445,6 +468,7 @@ flowchart LR
 | Compute workspace | Leased by the active target/draft phase |
 | Gemma bounded SWA | Persistent fixed suffix inside the parent, preserved across prefill/decode/draft handoffs |
 | Quantized wide-prefill preparation stage | Fixed 8/16 MiB for the reference full-layer geometries, inside prefill scratch; reused across layers/chunks and reclaimed for decode |
+| K4V index, keys/statistics and token-history references | Host RAM, outside the GPU arena; about 1 MiB for the index plus dynamic vectors/history and allocator overhead |
 | Resident KV + ring | Uses the phase's remaining admitted KV grant |
 | Vision weights + encoder workspace | Temporary separate grants inside the parent, returned after encoding |
 | Complete full-attention KV history | Pinned host RAM, not the device arena |
@@ -541,25 +565,32 @@ Full-cache reads use progressive waves when a whole source cannot fit. Immutable
 
 Target verification is the only KV writer. Acceptance, correction hidden rows, local-window rollback, cancellation and saved-state restoration follow the stock driver and are tested against matching native execution. A rewind beyond available local history rejects transactionally rather than pretending the missing window was recomputed. Next-consumer hints follow actual source/role identity; borrowed reads do not train/reset the target feedback tuner, and target diagnostics do not substitute assistant transfer counts. Further Gemma decode optimization is deferred; the evaluated G5c async prototype was removed because its measured gain was negligible.
 
-### 5. DFlash2: a separate bounded Qwen drafter
+### 5. DFlash2 with optional CPU K4V
 
 DFlash2 is not another full-history auxiliary target layer. The tested sidecar has five attention layers with a bounded sliding window, consumes target features, and produces a candidate block for verification. Its bounded cache and compute workspace participate in phase ownership, while its GPU weights still reduce the space available to target KV.
 
 ```mermaid
 flowchart LR
-    T["Target execution"] --> F["Bounded recent target features"]
-    F --> D["DFlash2 windowed drafter"]
-    D --> B["Candidate block"]
+    H["Committed token history"] --> K{"Usable K4V continuation?"}
+    K -->|Hit| B["Candidate tokens"]
+    K -->|Miss or empty| D["DFlash2 prediction"]
+    F["Retained target features"] --> D
+    D --> B
     B --> V["Target verification through TG8"]
-    V --> A{"Accepted prefix"}
-    A -->|Keep| T
-    A -->|Rejection| R["Restore selected recurrent state; repair suffix"]
-    R --> T
+    V --> I["Maintain DFlash feature history"]
+    I --> A{"Accepted prefix"}
+    A -->|Full| C["Commit output and trim provisional suffix"]
+    A -->|Partial| R["Select recurrent rollback"]
+    R --> C
+    C --> H
+    C --> F
 ```
 
 The Q8/Q4 draft cache is about 18.3 MiB at ubatch 256, rather than a second 262K-position GPU KV history. Its roughly 1,080 MiB of GPU weights remain outside the arena. Depth-seven target rollback uses about 43.6 MiB of bounded device staging inside the shared parent. Both the cache and workspace depend on the admitted configuration, including K/V formats and batching.
 
-Two staging slots and completion dependencies allow recurrent state publication to overlap subsequent work without overwriting an in-flight source. The common ownership layer also coordinates target-feature publication, draft execution, verification and rejection recovery. A high draft length is not automatically faster: target KV grant, transfer volume, draft compute and acceptance all matter. See [DFlash2 design/qualification](DFLASH2_ADAPTIVE_KV_ROADMAP.md).
+K4V stores token continuations in RAM and skips only the neural prediction on a usable hit; it does not replace target KV or unload the sidecar. It can track up to four alternative continuations per key and selects one proposal for verification. K4V is unrelated to Q4 cache precision. The map rebuilds at generation boundaries.
+
+Two staging slots and completion dependencies allow recurrent state publication to overlap subsequent work without overwriting an in-flight source. The common ownership layer also coordinates target-feature publication, draft execution, verification and rejection recovery. The qualified scheduling fixes allow compatible target-prefetch adoption across verification widths and overlap selected recurrent restore with draft computation after input uploads. Completion fences remain required before target reuse and state/lifetime operations. Details and qualification are in the [K7 guide](docs/development/dflash2-k4v.md). A high draft length is not automatically faster: target KV grant, transfer volume, draft compute and acceptance all matter. See [DFlash2 design/qualification](DFLASH2_ADAPTIVE_KV_ROADMAP.md).
 
 Gemma's shared-cache assistant above is not a DFlash pairing. Other Gemma variants and Muse Glimmer still need their own model/topology/admission qualification; generic memory APIs alone do not admit them.
 
@@ -592,6 +623,7 @@ flowchart TD
 | KV metadata | [ggml-kv-stream.h](ggml/src/ggml-kv-stream.h), [policy](src/llama-kv-stream-policy.h) | Encoded layout, validated spans and placement decisions |
 | Backend execution | [copy ops](ggml/src/ggml-kv-stream-copy.h), [attention ops](ggml/src/ggml-kv-stream-device.h), [buffer-local hooks](ggml/src/ggml-backend-execution.h) | Backend-specific movement and execution within common ownership rules |
 | MTP / DFlash consumers | [complete-layer lease](src/llama-kv-stream-layer-lease.h), [bounded KV](src/llama-memory-bounded-kv.h) | Full-history auxiliary leases versus bounded-window drafter storage |
+| Mixed speculative routing | [CPU map](common/ngram-map.cpp), [dispatcher](common/speculative.cpp) | K4V-before-DFlash proposals, independent verification limits, feature continuity and supplying-source feedback |
 | Gemma split caches | [iSWA cache](src/llama-kv-cache-iswa.h), [native cache](src/llama-kv-cache.h) | Stream the full group, quote/bind persistent local storage, reject unavailable rollback windows |
 | Read-only consumers | [cache read bindings](src/llama-memory-phase.h), [session](src/llama-kv-stream-session.h) | Retained semantic/physical source bindings and progressive attention without append |
 
@@ -716,7 +748,7 @@ Use the existing MTMD session path to measure, lend and return temporary vision 
 
 Use TDD for exact-fit/one-byte-short bounds, alignment/overflow, nested lifetimes, reset isolation, held leases, failed transitions, stale graphs, pending copies, cancellation and recovery. Then qualify actual backend execution and matched native/streamed numerical behavior, followed by long-context performance. Host memory tests alone do not prove GPU execution or race freedom.
 
-See [memory infrastructure](DEVICE_MEMORY_INFRASTRUCTURE.md), [consumer roadmap and qualification](DEVICE_MEMORY_CONSUMERS_ROADMAP.md), [MTP roadmap](MTP_ADAPTIVE_KV_ROADMAP.md), [DFlash roadmap](DFLASH2_ADAPTIVE_KV_ROADMAP.md) and [KV-format qualification](KV_QUANTIZATION_ROADMAP.md) for the detailed contracts and ledgers. The CUDA [copy adapter](ggml/src/ggml-cuda/kv-stream-copy.cu) and [attention adapter](ggml/src/ggml-cuda/fattn.cu) are concrete porting references, not portable kernels.
+See [memory infrastructure](DEVICE_MEMORY_INFRASTRUCTURE.md), [consumer roadmap and qualification](DEVICE_MEMORY_CONSUMERS_ROADMAP.md), [MTP roadmap](MTP_ADAPTIVE_KV_ROADMAP.md), [DFlash roadmap](DFLASH2_ADAPTIVE_KV_ROADMAP.md), [mixed DFlash/K4V roadmap](DFLASH2_K4V_ADAPTIVE_KV_ROADMAP.md), and [KV-format qualification](KV_QUANTIZATION_ROADMAP.md) for the detailed contracts and ledgers. The CUDA [copy adapter](ggml/src/ggml-cuda/kv-stream-copy.cu) and [attention adapter](ggml/src/ggml-cuda/fattn.cu) are concrete porting references, not portable kernels.
 
 ---
 

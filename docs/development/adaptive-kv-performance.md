@@ -14,6 +14,10 @@ Most sweep points are single retained measurements, not repeated statistical est
 
 The completed [bounded K7 support report](dflash2-k4v.md#measured-performance) separates two matched fixed-arena optimization studies from the older context curves. Flexible target prefetch improved the selected long DFlash7/mixed sample by 3.40%; restore overlap, over that fixed baseline, improved the selected 8K/64K samples by about 5.1-5.4%. These are separate single-pair cohorts, not additive gains or a rerun of the introductory sweep. Whole-call lookup studies and a separate six-context maximum-arena Open-SWE sample are indexed in [NK7 data](../../benchmarks/data/dflash2-k4v-nk7.json). K4V itself has no demonstrated broad natural-workload gain and remains opt-in.
 
+### Natural Open-SWE branch comparison
+
+The [nine-band main/current comparison](dflash2-k4v-swe.md) records 45 supported MTP3, DFlash7 and mixed K4V configurations from about 8 to 256 Ki of natural history. Same-mode branch decode changes are +0.6-2.6% for MTP3 and +2.0-6.2% for DFlash7, with prefill within 0.16%. Additional K4V gains are workload dependent; the unequal 192 Ki response is excluded from matched-work gains. This is a separate maximum-fit cohort, not a replacement for the article sweeps or the fixed-arena studies above.
+
 ### Stock UVM without KV streaming
 
 The introduction adds a measured stock baseline using the same IQ4_XS weights, Q8_0 K / Q4_0 V and article corpus as the four-mode V2 sweep. Stock is pristine upstream revision `10a60cf303566e10d6a7a2774c17d2085503d87b`, the upstream base used by this V2 implementation. UVM is enabled for stock; there is no adaptive KV pool, phase arena, MTP, DFlash or host-rollback override. This is not the older Q3-weight measurement.
