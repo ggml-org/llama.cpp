@@ -1570,6 +1570,16 @@ struct ggml_backend_cuda_context {
     ggml_cuda_pool & pool() {
         return pool(device);
     }
+
+    // q8_1 copy of q8_1_cache_src, written by an op for the mat-vecs that read the tensor later in the same graph evaluation
+    // it must be the only pool allocation held across ops, as the VMM pool frees in reverse order of allocation
+    const ggml_tensor * q8_1_cache_src = nullptr;
+    std::unique_ptr<ggml_cuda_pool_alloc<char>> q8_1_cache;
+
+    void q8_1_cache_reset() {
+        q8_1_cache_src = nullptr;
+        q8_1_cache.reset();
+    }
 };
 
 struct ggml_cuda_mm_fusion_args_host {
