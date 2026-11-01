@@ -1,4 +1,6 @@
 #include "quantize.cuh"
+#include "mmvq-tq-pt.cuh"
+
 #include <cstdint>
 
 #if defined(BLACKWELL_MMA_AVAILABLE)
@@ -568,6 +570,82 @@ void quantize_row_q8_1_cuda(
     const dim3 block_size(CUDA_QUANTIZE_BLOCK_SIZE, 1, 1);
     const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(num_blocks, block_size, 0, stream);
     ggml_cuda_kernel_launch(quantize_q8_1, launch_params, x, vy, ne00, s01, s02, s03, ne0, ne1, ne2_fastdiv);
+    GGML_UNUSED(type_src0);
+}
+
+// Planar-transposed q8_1 writer, see mmvq-tq-pt.cuh for the layout. Same grid, same one thread
+// per element and the same 32-lane reductions as quantize_q8_1, so a column quantized here holds
+// exactly the same quants and scales as the AoS version - only the byte order differs, plus the
+// second half of ds, which stores the exact integer sum of the 32 quants instead of the float sum
+// of the inputs (the PT dot needs the integer to undo the missing -1 bias). Packed by
+// tq_pt_pack_ds in mmvq-tq-pt.cuh.
+__launch_bounds__(CUDA_QUANTIZE_BLOCK_SIZE, 1)
+static __global__ void quantize_q8_1_pt(
+        const float * x_ptr, void * vy_ptr,
+        const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
+        const int64_t ne0, const uint32_t ne1, const uint3 ne2) {
+    ggml_cuda_pdl_lc();
+    const float * GGML_CUDA_RESTRICT x  = x_ptr;
+    char        * GGML_CUDA_RESTRICT vy = (char *) vy_ptr;
+    const int64_t i0 = (int64_t)blockDim.x*blockIdx.x + threadIdx.x;
+
+    if (i0 >= ne0) {
+        return;
+    }
+
+    const int64_t i3 = fastdiv(blockIdx.z, ne2);
+    const int64_t i2 = blockIdx.z - i3*ne2.z;
+    const int64_t i1 = blockIdx.y;
+
+    // element index inside the padded activation tensor, identical to quantize_q8_1
+    const int64_t i_cont = ((i3*ne2.z + i2) * ne1 + i1) * ne0 + i0;
+
+    ggml_cuda_pdl_sync();
+    const float xi = i0 < ne00 ? x[i3*s03 + i2*s02 + i1*s01 + i0] : 0.0f;
+    float amax = fabsf(xi);
+
+    amax = warp_reduce_max<QK8_1>(amax);
+
+    const float  d = amax / 127.0f;
+    const int8_t q = amax == 0.0f ? 0 : (int8_t) roundf(xi / d);
+
+    // Exact integer sum of the 32 quants of this sub-block. A float accumulator is exact here
+    // (|sum| <= 32*127) and the reduction must happen BEFORE the early return below: all 32 lanes
+    // of the warp have to reach the shuffle.
+    const float sumq = warp_reduce_sum<QK8_1>((float) q);
+
+    const int64_t col  = i_cont / ne0;
+    const int64_t e    = i_cont % ne0;
+    const int64_t nblk = ne0 / TQ_PT_QK;
+    const int64_t kb   = e / TQ_PT_QK;
+    const int64_t er   = e % TQ_PT_QK;
+
+    int8_t * ycol = (int8_t *) vy + col*tq_pt_col_bytes(ne0);
+
+    ycol[((er/16)*nblk + kb)*16 + er%16] = q;
+
+    if (er % QK8_1 != 0) {
+        return;
+    }
+
+    half2 * ds = (half2 *) (ycol + (size_t) nblk*TQ_PT_PLANES*16 + (size_t) kb*TQ_PT_SUB*4);
+    ds[er/QK8_1] = tq_pt_pack_ds(d, (int) sumq);
+}
+
+void quantize_row_q8_1_pt_cuda(
+        const float * x, void * vy, const ggml_type type_src0,
+        const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
+        const int64_t ne0, const int64_t ne1, const int64_t ne2, const int64_t ne3, cudaStream_t stream) {
+    GGML_ASSERT(ne0 % TQ_PT_QK == 0);
+    GGML_ASSERT(ne00 <= ne0);
+
+    const uint3 ne2_fastdiv = init_fastdiv_values(ne2);
+
+    const int64_t block_num_x = (ne0 + CUDA_QUANTIZE_BLOCK_SIZE - 1) / CUDA_QUANTIZE_BLOCK_SIZE;
+    const dim3 num_blocks(block_num_x, ne1, ne2*ne3);
+    const dim3 block_size(CUDA_QUANTIZE_BLOCK_SIZE, 1, 1);
+    const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(num_blocks, block_size, 0, stream);
+    ggml_cuda_kernel_launch(quantize_q8_1_pt, launch_params, x, vy, ne00, s01, s02, s03, ne0, (uint32_t) ne1, ne2_fastdiv);
     GGML_UNUSED(type_src0);
 }
 

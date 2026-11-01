@@ -21,6 +21,13 @@ void quantize_row_q8_1_cuda(
         ggml_type type_src0, int64_t ne00, int64_t s01, int64_t s02, int64_t s03,
         int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3, cudaStream_t stream);
 
+
+// Planar-transposed q8_1 (see mmvq-tq-pt.cuh): same quants and scales as quantize_row_q8_1_cuda,
+// byte planes instead of AoS blocks, and the exact integer sub-block sum in the high half of ds.
+void quantize_row_q8_1_pt_cuda(
+        const float * x, void * vy, ggml_type type_src0, int64_t ne00, int64_t s01, int64_t s02, int64_t s03,
+        int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3, cudaStream_t stream);
+
 void quantize_mmq_q8_1_cuda(
         const float * x, const int32_t * ids, void * vy,
         ggml_type type_src0, int64_t ne00, int64_t s01, int64_t s02, int64_t s03,
