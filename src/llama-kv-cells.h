@@ -3,12 +3,19 @@
 #include "llama.h"
 #include "llama-cparams.h"
 
+#include <algorithm>
 #include <bitset>
 #include <cassert>
 #include <cstring>
 #include <limits>
 #include <set>
 #include <vector>
+
+#if defined(__GNUC__)
+#    define LLAMA_ATTRIBUTE_NOINLINE __attribute__((noinline))
+#else
+#    define LLAMA_ATTRIBUTE_NOINLINE
+#endif
 
 struct llama_kv_cell_ext {
     // 2D spatial positions, typically used for M-RoPE
@@ -366,6 +373,56 @@ public:
         }
 
         return -1;
+    }
+
+    // number of cells that contain seq_id
+    uint32_t seq_n_cells(llama_seq_id seq_id) const {
+        assert(seq_id >= 0);
+        assert(seq_id < LLAMA_MAX_SEQ);
+
+        return seq_pos[seq_id].size();
+    }
+
+    // get the lists of cells of sequence seq_id
+    // one list of max `n_per_seq` for each seq_id, padded with -1
+    LLAMA_ATTRIBUTE_NOINLINE
+    void get_seq_cells(const std::vector<llama_seq_id> & seq_ids, int32_t * data, int64_t n_per_seq) const {
+        assert(seq_ids.size() >= 1);
+
+        const int32_t n_slices = (int32_t) seq_ids.size();
+
+        std::vector<int32_t *> dp(n_slices);
+        std::vector<seq_set_t> ss(n_slices);
+        for (int32_t s = 0; s < n_slices; ++s) {
+            dp[s] = data + s*n_per_seq;
+            ss[s].set(seq_ids[s]);
+        }
+
+        const int32_t i_max = used_max_p1();
+
+        for (int32_t i = 0; i < i_max; ++i) {
+            if (is_empty(i)) {
+                continue;
+            }
+
+            for (int32_t s = 0; s < n_slices; ++s) {
+                if (seq[i] == ss[s]) {
+                    int32_t k = i + 1;
+                    while (k < i_max && seq[k] == ss[s]) {
+                        ++k;
+                    }
+                    for (; i < k; ++i) {
+                        *dp[s]++ = i;
+                    }
+                    --i;
+                    break;
+                }
+            }
+        }
+
+        for (int64_t s = 0; s < n_slices; ++s) {
+            std::fill(dp[s], data + (s+1)*n_per_seq, -1);
+        }
     }
 
     // the minimum position of sequence seq_id currently present in any of the cells
