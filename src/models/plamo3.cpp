@@ -2,6 +2,7 @@
 
 void llama_model_plamo3::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+    ml.get_key(LLM_KV_ROPE_SCALING_YARN_TRUNCATE, hparams.yarn_truncate, false);
     const bool found_swa = ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
     if (found_swa && hparams.n_swa > 0) {
         hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
@@ -131,9 +132,11 @@ llama_model_plamo3::graph<iswa>::graph(const llama_model & model, const llm_grap
         Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr,
                 n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
                 ext_factor, attn_factor, beta_fast, beta_slow);
+        ggml_rope_set_truncate(Qcur, hparams.yarn_truncate);
         Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr,
                 n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
                 ext_factor, attn_factor, beta_fast, beta_slow);
+        ggml_rope_set_truncate(Kcur, hparams.yarn_truncate);
 
         const float attn_scale = 1.0f / sqrtf(float(head_dim_q));
 
