@@ -1555,6 +1555,7 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         if (n_matching != 1) {
             throw std::invalid_argument("tool_choice.function.name must match exactly one tool");
         }
+        params.parallel_tool_calls = false;
     }
 
     if (params.tools.is_array()) {
