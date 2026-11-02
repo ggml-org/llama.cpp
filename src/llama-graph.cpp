@@ -74,6 +74,12 @@ void llm_graph_input_embd::set_input(const llama_ubatch * ubatch) {
         ggml_backend_tensor_set(tokens, ubatch->token, 0, n_tokens*ggml_element_size(tokens));
     }
 
+    if (ubatch->embd_row && embd_rows) {
+        const int64_t n_tokens = ubatch->n_tokens;
+
+        ggml_backend_tensor_set(embd_rows, ubatch->embd_row, 0, n_tokens*ggml_element_size(embd_rows));
+    }
+
     if (ubatch->embd && embd && !ubatch->is_mixed()) {
         GGML_ASSERT(n_embd == embd->ne[0]);
 
@@ -133,6 +139,7 @@ bool llm_graph_input_embd::can_reuse(const llm_graph_params & params) {
     res &= (!mixed_tokens) || mixed_tokens->ne[0] == llm_graph_n_tok_rows(params.ubatch);
     res &= (!mixed_embd)   || mixed_embd->ne[1]   == params.ubatch.n_tokens;
     res &= (!scale_rows) || scale_rows->ne[1] == params.ubatch.n_tokens;
+    res &= (!params.ubatch.embd_row) || (embd_rows && embd_rows->ne[0] == params.ubatch.n_tokens);
 
     return res;
 }
@@ -166,6 +173,22 @@ bool llm_graph_input_embd_h::can_reuse(const llm_graph_params & params) {
     res &= (!params.ubatch.embd_state) || (h      && h->ne[1]      == params.ubatch.n_tokens);
 
     return res;
+}
+
+void llm_graph_input_batch_idxs::set_input(const llama_ubatch * ubatch) {
+    const int64_t n_tokens = ubatch->n_tokens;
+
+    GGML_ASSERT(ubatch->data && ubatch->data->batch_idxs.size() == (size_t) n_tokens);
+    GGML_ASSERT(ggml_backend_buffer_is_host(idxs->buffer));
+
+    int64_t * data = (int64_t *) idxs->data;
+    for (int64_t i = 0; i < n_tokens; ++i) {
+        data[i] = ubatch->data->batch_idxs[i];
+    }
+}
+
+bool llm_graph_input_batch_idxs::can_reuse(const llm_graph_params & params) {
+    return idxs->ne[0] == params.ubatch.n_tokens;
 }
 
 void llm_graph_input_pos::set_input(const llama_ubatch * ubatch) {
@@ -1382,7 +1405,7 @@ void llm_graph_result::set_outputs(const llm_graph_params & params) {
     }
     {
         const auto & embeddings_layer_inp = params.cparams.embeddings_layer_inp;
-        for (size_t il = 0; il < embeddings_layer_inp.size(); ++il) {
+        for (size_t il = 0; il < embeddings_layer_inp.size() && !params.cparams.embeddings_layer_inp_dev; ++il) {
             if (embeddings_layer_inp[il]) {
                 GGML_ASSERT(t_layer_inp[il] != nullptr && "layer input tensor is null");
                 ggml_set_output(t_layer_inp[il]);
@@ -1509,6 +1532,8 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     moe_cache        (params.moe_cache),
     prec_policy      (params.prec_policy),
     hdmd             (params.hdmd),
+    layer_inp_dev    (params.layer_inp_dev),
+    layer_inp_src    (params.layer_inp_src),
     samplers         (params.samplers),
     cb_func          (params.cb),
     res              (params.res),
@@ -4157,6 +4182,36 @@ void llm_graph_context::build_logits() const {
     if (res->t_logits != nullptr) {
         ggml_build_forward_expand(gf, res->t_logits);
     }
+}
+
+void llm_graph_context::build_layer_inp_dev() const {
+    if (!cparams.embeddings_layer_inp_dev || layer_inp_dev == nullptr) {
+        return;
+    }
+
+    auto inp = std::make_unique<llm_graph_input_batch_idxs>();
+
+    inp->idxs = ggml_new_tensor_1d(ctx0, GGML_TYPE_I64, n_tokens);
+    ggml_set_input(inp->idxs);
+
+    // row layout: [layer_0 | layer_1 | ...] in ascending layer id order
+    int64_t col = 0;
+    for (size_t il = 0; il < cparams.embeddings_layer_inp.size(); ++il) {
+        if (!cparams.embeddings_layer_inp[il]) {
+            continue;
+        }
+
+        ggml_tensor * src = res->t_layer_inp[il];
+        GGML_ASSERT(src != nullptr && "layer input tensor is null");
+        GGML_ASSERT(src->ne[0] == n_embd);
+
+        ggml_tensor * dst = ggml_view_2d(ctx0, layer_inp_dev, n_embd, layer_inp_dev->ne[1], layer_inp_dev->nb[1], col*n_embd*ggml_element_size(layer_inp_dev));
+        ggml_build_forward_expand(gf, ggml_set_rows(ctx0, dst, ggml_reshape_2d(ctx0, src, n_embd, n_tokens), inp->idxs));
+        col++;
+    }
+    GGML_ASSERT(col*n_embd == layer_inp_dev->ne[0]);
+
+    res->add_input(std::move(inp));
 }
 
 void llm_graph_context::build_sampling() const {

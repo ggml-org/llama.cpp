@@ -434,6 +434,23 @@ llama_model_dflash::graph<true>::graph(const llama_model & model, const llm_grap
     ggml_build_forward_expand(gf, cur);
 }
 
+// target features of an injection batch: host embd rows, or rows of the target's layer input device buffer
+static ggml_tensor * build_inp_target_features(llm_graph_context & g, llm_graph_input_embd & inp, int64_t n_embd_inp) {
+    if (g.ubatch.embd_row) {
+        GGML_ASSERT(g.layer_inp_src != nullptr && g.layer_inp_src->ne[0] == n_embd_inp);
+
+        inp.embd_rows = ggml_new_tensor_1d(g.ctx0, GGML_TYPE_I32, g.n_tokens);
+        ggml_set_input(inp.embd_rows);
+
+        return ggml_get_rows(g.ctx0, g.layer_inp_src, inp.embd_rows);
+    }
+
+    inp.embd = ggml_new_tensor_2d(g.ctx0, GGML_TYPE_F32, n_embd_inp, g.n_tokens);
+    ggml_set_input(inp.embd);
+
+    return inp.embd;
+}
+
 // DSpark (DFlash + Markov & Confidence head): Markov bias on the draft logits, chained per block position
 static void build_dspark_markov_head(llm_graph_context & g, const llama_model & model, ggml_tensor * tokens, ggml_tensor * hidden = nullptr) {
     ggml_context * ctx0 = g.ctx0;
@@ -939,13 +956,10 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
 
     // KV cache injection
     ASSERT_EMBD_OR_TOKEN(ubatch);
-    if (ubatch.embd) {
+    if (ubatch.embd || ubatch.embd_row) {
         auto inp = std::make_unique<llm_graph_input_embd>(n_embd_inp);
 
-        inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd_inp, n_tokens);
-        ggml_set_input(inp->embd);
-
-        ggml_tensor * inp_target = inp->embd;
+        ggml_tensor * inp_target = build_inp_target_features(*this, *inp, n_embd_inp);
         cb(inp_target, "inp_target_features", -1);
 
         res->add_input(std::move(inp));
@@ -1219,13 +1233,10 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_
 
     // KV cache injection: fused target features from the encoder
     ASSERT_EMBD_OR_TOKEN(ubatch);
-    if (ubatch.embd) {
+    if (ubatch.embd || ubatch.embd_row) {
         auto inp = std::make_unique<llm_graph_input_embd>(n_embd_inp);
 
-        inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd_inp, n_tokens);
-        ggml_set_input(inp->embd);
-
-        ggml_tensor * inp_target = inp->embd;
+        ggml_tensor * inp_target = build_inp_target_features(*this, *inp, n_embd_inp);
         cb(inp_target, "inp_target_features", -1);
 
         res->add_input(std::move(inp));
@@ -1417,13 +1428,10 @@ llama_model_dflash::graph_dsv41::graph_dsv41(const llama_model & model, const ll
     };
 
     ASSERT_EMBD_OR_TOKEN(ubatch);
-    if (ubatch.embd) {
+    if (ubatch.embd || ubatch.embd_row) {
         auto inp = std::make_unique<llm_graph_input_embd>(n_embd_inp);
 
-        inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd_inp, n_tokens);
-        ggml_set_input(inp->embd);
-
-        ggml_tensor * inp_target = inp->embd;
+        ggml_tensor * inp_target = build_inp_target_features(*this, *inp, n_embd_inp);
         cb(inp_target, "inp_target_features", -1);
 
         res->add_input(std::move(inp));
@@ -1667,13 +1675,10 @@ llama_model_dflash::graph_mistral_large4::graph_mistral_large4(const llama_model
     };
 
     ASSERT_EMBD_OR_TOKEN(ubatch);
-    if (ubatch.embd) {
+    if (ubatch.embd || ubatch.embd_row) {
         auto inp = std::make_unique<llm_graph_input_embd>(n_embd_inp);
 
-        inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd_inp, n_tokens);
-        ggml_set_input(inp->embd);
-
-        ggml_tensor * inp_target = inp->embd;
+        ggml_tensor * inp_target = build_inp_target_features(*this, *inp, n_embd_inp);
         cb(inp_target, "inp_target_features", -1);
 
         res->add_input(std::move(inp));
