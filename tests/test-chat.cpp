@@ -2773,6 +2773,23 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect(message_assist_call_thoughts)
             .run();
 
+        // Object arguments may list their keys in any order
+        tst.test(
+               "<tool_call>\n"
+               "<function=imaginary_number>\n"
+               "<parameter=number>\n"
+               "{ \"imaginary\": 2.71, \"real\": 3.14 }\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>\n")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ imaginary_number_tool })
+            .expect_tool_calls({
+                { "imaginary_number", R"({ "number" : {"imaginary":2.71,"real":3.14 } })", {} }
+            })
+            .run();
+
         tst.test(
                "<tool_call>\n"
                "<function=special_function>\n"

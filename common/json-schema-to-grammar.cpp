@@ -993,7 +993,6 @@ public:
                     if (prop_names.insert(prop.name).second) {
                         properties.emplace_back(prop.name, prop.schema.get());
                     } else if (is_required && required.find(prop.name) == required.end()) {
-                        // a required component's schema wins over one from an optional anyOf alternative
                         for (auto & p : properties) {
                             if (p.first == prop.name) {
                                 p.second = prop.schema.get();
