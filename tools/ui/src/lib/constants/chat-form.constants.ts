@@ -24,13 +24,15 @@ export const CHAT_FORM_BOTTOM_OFFSET = {
  * lands, instead of sliding across the column. The exit uses a gentler curve
  * so the form stays visible while it travels; the entry settles quickly.
  */
-export const CHAT_FORM_MOVE_OUT_MS = 140;
+export const CHAT_FORM_MOVE_OUT_MS = 100;
 export const CHAT_FORM_MOVE_IN_MS = 180;
 // opening a chat moves the form to the bottom: quicker, so the chat is
 // there right away
-export const CHAT_FORM_MOVE_TO_BOTTOM_OUT_MS = 80;
-export const CHAT_FORM_MOVE_TO_BOTTOM_IN_MS = 120;
-export const CHAT_FORM_MOVE_SHIFT_PX = 16;
+export const CHAT_FORM_MOVE_TO_BOTTOM_OUT_MS = 90;
+export const CHAT_FORM_MOVE_TO_BOTTOM_IN_MS = 160;
+export const CHAT_FORM_MOVE_SHIFT_PX = 10;
+/** Share of the exit by which the form is gone: it vanishes just before the end of its drift. */
+export const CHAT_FORM_MOVE_OUT_FADE_END = 0.8;
 export const CHAT_FORM_MOVE_OUT_EASING = 'cubic-bezier(0.33, 1, 0.68, 1)';
 export const CHAT_FORM_MOVE_IN_EASING = 'cubic-bezier(0.23, 1, 0.32, 1)';
 

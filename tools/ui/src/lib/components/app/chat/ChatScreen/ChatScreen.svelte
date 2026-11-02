@@ -19,6 +19,7 @@
 		CHAT_FORM_MOVE_IN_EASING,
 		CHAT_FORM_MOVE_IN_MS,
 		CHAT_FORM_MOVE_OUT_EASING,
+		CHAT_FORM_MOVE_OUT_FADE_END,
 		CHAT_FORM_MOVE_OUT_MS,
 		CHAT_FORM_MOVE_SHIFT_PX,
 		CHAT_FORM_MOVE_TO_BOTTOM_IN_MS,
@@ -224,7 +225,15 @@
 			const shown = { opacity: 1, transform: 'translateY(0)' };
 			// `transform` moves the form on top of the offset that centers it
 			const leave = formWrapper.animate(
-				[shown, { opacity: 0, transform: `translateY(${shift}px)` }],
+				[
+					shown,
+					{
+						offset: CHAT_FORM_MOVE_OUT_FADE_END,
+						opacity: 0,
+						transform: `translateY(${shift * CHAT_FORM_MOVE_OUT_FADE_END}px)`
+					},
+					{ opacity: 0, transform: `translateY(${shift}px)` }
+				],
 				{
 					duration: toCenter ? CHAT_FORM_MOVE_OUT_MS : CHAT_FORM_MOVE_TO_BOTTOM_OUT_MS,
 					easing: CHAT_FORM_MOVE_OUT_EASING,
@@ -236,6 +245,10 @@
 
 			isFormCentered = toCenter;
 			await tick();
+			// lays the new position out now, while the bottom transition is off: once the move
+			// ends it comes back on in the same task, and the browser would slide the form
+			// from where it last drew it
+			formWrapper?.getBoundingClientRect();
 
 			// cancelled in the same frame the entry starts, so it never flashes
 			leave.cancel();
