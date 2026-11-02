@@ -5380,6 +5380,178 @@ static bool graph_mul_mat_hi_prec_act(ggml_cgraph * gf, ggml_op op) {
     return false;
 }
 
+// RWKV7 output preparation: per-head norm, affine transform, RKV correction,
+// and optional gate. CUDA fuses this graph without adding a public ggml op.
+struct test_rwkv7_output : public test_case {
+    const int64_t head_count;
+    const int64_t head_size;
+    const int64_t n_tokens;
+    const bool    gate;
+    const bool    broadcast_affine;
+    const bool    internal_norm_weight;
+
+    test_rwkv7_output(int64_t head_count,
+                      int64_t head_size,
+                      int64_t n_tokens,
+                      bool    gate,
+                      bool    broadcast_affine     = false,
+                      bool    internal_norm_weight = false) :
+        head_count(head_count),
+        head_size(head_size),
+        n_tokens(n_tokens),
+        gate(gate),
+        broadcast_affine(broadcast_affine),
+        internal_norm_weight(internal_norm_weight) {
+        GGML_ASSERT(!broadcast_affine || (n_tokens % 2 == 0 && head_count * head_size % 2 == 0));
+        GGML_ASSERT(!internal_norm_weight || (head_count == 1 && n_tokens == 1));
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR6(head_count, head_size, n_tokens, gate, broadcast_affine, internal_norm_weight);
+    }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "RWKV7_OUTPUT";
+    }
+
+    bool run_whole_graph() override { return true; }
+    bool use_weight_context() override { return true; }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        GGML_ASSERT(!use_weight_context());
+        return build_graph(ctx, nullptr);
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx, ggml_context * ctx_weights) override {
+        GGML_ASSERT(ctx_weights != nullptr);
+
+        const int64_t C   = head_count * head_size;
+        ggml_tensor * x   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size, head_count, n_tokens);
+        ggml_tensor * k   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size, head_count, n_tokens);
+        ggml_tensor * r   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size, head_count, n_tokens);
+        ggml_tensor * r_k = ggml_new_tensor_1d(ctx_weights, GGML_TYPE_F32, C);
+        ggml_tensor * v   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size, head_count, n_tokens);
+
+        ggml_tensor * cur         = ggml_norm(ctx, x, 64e-5f);
+        ggml_tensor * norm_weight = internal_norm_weight ?
+                                        cur :
+                                        (broadcast_affine ? ggml_new_tensor_2d(ctx_weights, GGML_TYPE_F32, C / 2, 2) :
+                                                            ggml_new_tensor_1d(ctx_weights, GGML_TYPE_F32, C));
+        ggml_tensor * norm_bias   = broadcast_affine ? ggml_new_tensor_2d(ctx_weights, GGML_TYPE_F32, C / 2, 2) :
+                                                       ggml_new_tensor_1d(ctx_weights, GGML_TYPE_F32, C);
+        cur                       = ggml_reshape_2d(ctx, cur, C, n_tokens);
+        cur                       = ggml_add(ctx, ggml_mul(ctx, cur, norm_weight), norm_bias);
+
+        ggml_tensor * rk =
+            ggml_sum_rows(ctx, ggml_mul(ctx, ggml_mul(ctx, k, r), ggml_reshape_2d(ctx, r_k, head_size, head_count)));
+        cur = ggml_add(ctx, cur, ggml_reshape_2d(ctx, ggml_mul(ctx, v, rk), C, n_tokens));
+
+        if (gate) {
+            ggml_tensor * g = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, C, n_tokens);
+            cur             = ggml_mul(ctx, cur, g);
+        }
+        return cur;
+    }
+};
+
+// GGML_OP_RWKV_WKV7 followed by the recurrent-state cache copy used by RWKV7 models.
+struct test_rwkv_wkv7_cache : public test_case {
+    const int64_t head_size;
+    const int64_t n_seq_tokens;
+    const bool wrong_state_offset;
+    const bool shared_state_view;
+    const bool fused_prep;
+    const bool fused_k_weight;
+    const bool shared_wkv_tail;
+    const bool overlapping_state_cache;
+    const bool shared_kk_reshape;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "RWKV_WKV7_CACHE";
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR9(
+            head_size, n_seq_tokens, wrong_state_offset, shared_state_view, fused_prep, fused_k_weight,
+            shared_wkv_tail, overlapping_state_cache, shared_kk_reshape);
+    }
+
+    test_rwkv_wkv7_cache(
+            int64_t head_size, int64_t n_seq_tokens,
+            bool wrong_state_offset = false, bool shared_state_view = false,
+            bool fused_prep = false, bool fused_k_weight = false,
+            bool shared_wkv_tail = false, bool overlapping_state_cache = false,
+            bool shared_kk_reshape = false)
+        : head_size(head_size), n_seq_tokens(n_seq_tokens),
+          wrong_state_offset(wrong_state_offset), shared_state_view(shared_state_view),
+          fused_prep(fused_prep), fused_k_weight(fused_k_weight), shared_wkv_tail(shared_wkv_tail),
+          overlapping_state_cache(overlapping_state_cache), shared_kk_reshape(shared_kk_reshape) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        constexpr int64_t head_count = 2;
+        constexpr int64_t n_seqs = 1;
+        const int64_t n_tokens = n_seq_tokens * n_seqs;
+        const int64_t n_embd = head_size * head_count;
+        const int64_t state_elems = n_embd * head_size * n_seqs;
+
+        ggml_tensor * r = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size, head_count, n_tokens);
+        ggml_tensor * w = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size, head_count, n_tokens);
+        ggml_tensor * k = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size, head_count, n_tokens);
+        ggml_tensor * v = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size, head_count, n_tokens);
+        ggml_tensor * a;
+        ggml_tensor * b;
+        ggml_tensor * kk_reshape = nullptr;
+        if (fused_prep) {
+            ggml_tensor * kk_input = k;
+            if (fused_k_weight) {
+                kk_input = ggml_reshape_2d(ctx, kk_input, n_embd, n_tokens);
+                kk_input = ggml_reshape_3d(
+                    ctx, ggml_mul(ctx, kk_input, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_embd)),
+                    head_size, head_count, n_tokens);
+                kk_reshape = kk_input;
+            }
+            ggml_tensor * kk = ggml_l2_norm(ctx, kk_input, 1e-7F);
+            ggml_tensor * gate = ggml_reshape_3d(
+                ctx, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, head_size * head_count, n_tokens),
+                head_size, head_count, n_tokens);
+            a = ggml_neg(ctx, kk);
+            b = ggml_mul(ctx, kk, gate);
+        } else {
+            a = ggml_l2_norm(
+                ctx, ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size, head_count, n_tokens), 1e-7F);
+            b = ggml_l2_norm(
+                ctx, ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size, head_count, n_tokens), 1e-7F);
+        }
+        ggml_tensor * state_storage = ggml_new_tensor_1d(
+            ctx, GGML_TYPE_F32, state_elems + (overlapping_state_cache ? 1 : 0));
+        ggml_tensor * s = overlapping_state_cache ?
+            ggml_view_2d(ctx, state_storage, state_elems, n_seqs, state_elems * sizeof(float), 0) : state_storage;
+
+        ggml_tensor * wkv = ggml_rwkv_wkv7(ctx, r, w, k, v, a, b, s);
+        const size_t state_offset = wrong_state_offset ? 0 : n_embd * n_tokens * sizeof(float);
+        ggml_tensor * state_view = ggml_view_1d(ctx, wkv, state_elems, state_offset);
+
+        ggml_tensor * cache = overlapping_state_cache ? state_storage :
+            ggml_new_tensor_1d(ctx, GGML_TYPE_F32, state_elems);
+        ggml_tensor * cache_view = ggml_view_1d(
+            ctx, cache, state_elems, overlapping_state_cache ? sizeof(float) : 0);
+        ggml_tensor * cpy = ggml_cpy(ctx, state_view, cache_view);
+        if (shared_state_view) {
+            return ggml_add(ctx, cpy, state_view);
+        }
+        if (shared_wkv_tail) {
+            return ggml_add(ctx, cpy, ggml_view_1d(ctx, wkv, state_elems, state_offset));
+        }
+        if (shared_kk_reshape) {
+            GGML_ASSERT(kk_reshape != nullptr);
+            return ggml_add(ctx, cpy, ggml_sum(ctx, kk_reshape));
+        }
+        return cpy;
+    }
+};
+
 // GGML_OP_MUL_MAT
 struct test_mul_mat : public test_case {
     const ggml_type type_a;
@@ -11115,6 +11287,45 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_rwkv_wkv7(GGML_TYPE_F32, 32, 64, 32, 1));
     test_cases.emplace_back(new test_rwkv_wkv7(GGML_TYPE_F32, 32, 64, 32, 4));
     test_cases.emplace_back(new test_rwkv_wkv7(GGML_TYPE_F32, 32, 64, 128, 4));
+    // Exercise the warp-row CUDA path across both supported head sizes and
+    // decode, short chunk, and long prefill sequence lengths.
+    for (const int64_t head_size : { 64, 128 }) {
+        for (const int64_t n_seq_tokens : { 1, 4, 128, 512 }) {
+            test_cases.emplace_back(new test_rwkv_wkv7(GGML_TYPE_F32, 2, head_size, n_seq_tokens, 1));
+        }
+        test_cases.emplace_back(new test_rwkv_wkv7(GGML_TYPE_F32, 2, head_size, 1, 8));
+        for (const int64_t n_seq_tokens : { 1, 4, 128 }) {
+            test_cases.emplace_back(new test_rwkv_wkv7_cache(head_size, n_seq_tokens));
+            test_cases.emplace_back(new test_rwkv_wkv7_cache(head_size, n_seq_tokens, false, false, true));
+            if (head_size == 64) {
+                test_cases.emplace_back(new test_rwkv_wkv7_cache(
+                    head_size, n_seq_tokens, false, false, true, true));
+            }
+        }
+    }
+    // Same graph shape, but the state view is not the WKV tail or has another consumer.
+    // Both cases must reject the cache-write fusion and execute the original graph.
+    test_cases.emplace_back(new test_rwkv_wkv7_cache(64, 1, true, false));
+    test_cases.emplace_back(new test_rwkv_wkv7_cache(64, 1, false, true));
+    test_cases.emplace_back(new test_rwkv_wkv7_cache(
+        64, 1, false, false, false, false, /* shared_wkv_tail= */ true));
+    test_cases.emplace_back(new test_rwkv_wkv7_cache(
+        64, 1, false, false, false, false, false, /* overlapping_state_cache= */ true));
+    test_cases.emplace_back(new test_rwkv_wkv7_cache(
+        64, 1, false, false, true, true, false, false, /* shared_kk_reshape= */ true));
+
+    for (int64_t head_size : { 64, 128 }) {
+        for (int64_t n_tokens : { 1, 4 }) {
+            for (bool gate : { false, true }) {
+                test_cases.emplace_back(new test_rwkv7_output(8, head_size, n_tokens, gate));
+            }
+        }
+    }
+    // These graphs have the same op sequence and element counts as RWKV7 output
+    // preparation, but their inputs do not satisfy the fused kernel contract.
+    // CUDA must reject the fusion and execute the original graph.
+    test_cases.emplace_back(new test_rwkv7_output(8, 64, 4, false, true, false));
+    test_cases.emplace_back(new test_rwkv7_output(1, 64, 1, false, false, true));
 
     test_cases.emplace_back(new test_gla(GGML_TYPE_F32, 32, 64, 1, 1));
     test_cases.emplace_back(new test_gla(GGML_TYPE_F32, 32, 64, 32, 1));
