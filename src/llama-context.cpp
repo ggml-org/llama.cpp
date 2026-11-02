@@ -1393,9 +1393,8 @@ void llama_context::set_embeddings_layer_inp_dev(bool value) {
 }
 
 bool llama_context::supports_embd_row() const {
-    // only the generic DFlash decoder graph reads the device buffer
-    const auto & hp = model.hparams;
-    if (model.arch != LLM_ARCH_DFLASH || hp.n_lora_kv > 0 || hp.dsv4_hc_mult > 0) {
+    // the DFlash/DSpark decoder graphs read the device buffer
+    if (model.arch != LLM_ARCH_DFLASH) {
         return false;
     }
 
@@ -1966,7 +1965,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
 
     const bool has_embd_row = !batch_inp.tokens.empty() && batch_inp.tokens[0].embd_row >= 0;
     if (has_embd_row && !supports_embd_row()) {
-        LLAMA_LOG_ERROR("%s: this context cannot read embd rows (needs a DFlash decoder and a layer input device buffer in ctx_other)\n", __func__);
+        LLAMA_LOG_ERROR("%s: this context cannot read embd rows (needs a DFlash/DSpark decoder and a layer input device buffer in ctx_other)\n", __func__);
         return -1;
     }
 
