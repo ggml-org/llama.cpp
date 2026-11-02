@@ -3289,79 +3289,81 @@ static int iq2_find_best_neighbour(const uint16_t * GGML_RESTRICT neighbours, co
     return grid_index;
 }
 
-// same result as iq2_find_best_neighbour: d2 = s*(s*B - A) + const, and A, B do not depend on the scale s, so cache them per pattern u
-// take the cached winner only if all other neighbours are worse by more than the float rounding bound 2^-18*S + 2^-100*S1, else run the exact search
-#define IQ2_NB_CACHE_SIZE 512
+// same result as iq2_find_best_neighbour: score = s*(s*quad_coef - lin_coef) + const, and the coefs do not depend on the scale s, so cache them per pattern
+// take the cached winner only if all other neighbours are worse by more than the float rounding bound of the exact search, else run the exact search
+#define IQ2_NEIGHBOUR_CACHE_MAX 512
 
 typedef struct {
-    int u;      // pattern whose A, B are cached
-    int jbest;  // last winner for u
-    double sw, swx, swx2, w1, x1, x2;
-    double wxq[8][8], wqq[8][8]; // 2*w*x*q and w*q*q per element, indexed by the grid value q
-    double A[IQ2_NB_CACHE_SIZE];
-    double B[IQ2_NB_CACHE_SIZE];
-} iq2_nb_cache;
+    int pattern;   // pattern whose coefs are cached, -1 if none
+    int last_best; // last winner for this pattern
+    // sums for the rounding bound: |w|, |w|*|x|, |w|*x^2, and the same with 1 + |w|
+    double sum_w, sum_wx, sum_wxx, sum_w1, sum_w1x, sum_w1xx;
+    double lin_term[8][8], quad_term[8][8]; // 2*w*x*q and w*q*q per element, indexed by the grid level q
+    double lin_coef[IQ2_NEIGHBOUR_CACHE_MAX];
+    double quad_coef[IQ2_NEIGHBOUR_CACHE_MAX];
+} iq2_neighbour_cache;
 
-static void iq2_nb_cache_init(iq2_nb_cache * c, const float * GGML_RESTRICT xval, const float * GGML_RESTRICT weight) {
-    c->u = -1;
-    c->sw = c->swx = c->swx2 = c->w1 = c->x1 = c->x2 = 0;
+static void iq2_neighbour_cache_init(iq2_neighbour_cache * cache, const float * GGML_RESTRICT xval, const float * GGML_RESTRICT weight) {
+    cache->pattern = -1;
+    cache->sum_w = cache->sum_wx = cache->sum_wxx = cache->sum_w1 = cache->sum_w1x = cache->sum_w1xx = 0;
     for (int i = 0; i < 8; ++i) {
-        const double w = weight[i], x = xval[i], aw = fabs(w), ax = fabs(x);
-        c->sw += aw;     c->swx += aw*ax;      c->swx2 += aw*ax*ax;
-        c->w1 += 1 + aw; c->x1 += (1 + aw)*ax; c->x2 += (1 + aw)*ax*ax;
+        const double w = weight[i], x = xval[i], abs_w = fabs(w), abs_x = fabs(x);
+        cache->sum_w  += abs_w;     cache->sum_wx  += abs_w*abs_x;       cache->sum_wxx  += abs_w*abs_x*abs_x;
+        cache->sum_w1 += 1 + abs_w; cache->sum_w1x += (1 + abs_w)*abs_x; cache->sum_w1xx += (1 + abs_w)*abs_x*abs_x;
         for (int q = 1; q < 8; q += 2) {
-            c->wxq[i][q] = 2*w*x*q;
-            c->wqq[i][q] = w*q*q;
+            cache->lin_term[i][q]  = 2*w*x*q;
+            cache->quad_term[i][q] = w*q*q;
         }
     }
 }
 
-static int iq2_count_le(const double * GGML_RESTRICT g, int n, double lim) {
+static int iq2_count_at_most(const double * GGML_RESTRICT values, int n, double limit) {
     int count = 0;
-    for (int j = 0; j < n; ++j) count += g[j] <= lim;
+    for (int j = 0; j < n; ++j) count += values[j] <= limit;
     return count;
 }
 
-static int iq2_find_best_neighbour_cached(iq2_nb_cache * c, int u, const uint16_t * GGML_RESTRICT neighbours, const uint64_t * GGML_RESTRICT grid,
+static int iq2_find_best_neighbour_cached(iq2_neighbour_cache * cache, int pattern, const uint16_t * GGML_RESTRICT neighbours, const uint64_t * GGML_RESTRICT grid,
         const float * GGML_RESTRICT xval, const float * GGML_RESTRICT weight, float scale, int8_t * GGML_RESTRICT L) {
     const int num_neighbors = neighbours[0];
-    const double s  = scale;
-    const double a  = 7*s;
-    const double S  = a*a*c->sw + 2*a*c->swx + c->swx2;
-    const double S1 = (1 + a)*(1 + a)*c->w1 + 2*(1 + a)*c->x1 + c->x2;
-    const double tol = (0x1p-18*S + 0x1p-100*S1)/s;
-    if (num_neighbors <= 0 || num_neighbors > IQ2_NB_CACHE_SIZE || !(s > 0 && S < 0x1p100 && S1 < 0x1p100 && tol > 0)) {
+    const double scale_d = scale;
+    const double max_level = 7*scale_d;
+    // size of the numbers in the exact search, its rounding error is a multiple of 2^-24*size (+ size_subnormal for underflow)
+    const double size           = max_level*max_level*cache->sum_w + 2*max_level*cache->sum_wx + cache->sum_wxx;
+    const double size_subnormal = (1 + max_level)*(1 + max_level)*cache->sum_w1 + 2*(1 + max_level)*cache->sum_w1x + cache->sum_w1xx;
+    const double tolerance = (0x1p-18*size + 0x1p-100*size_subnormal)/scale_d;
+    if (num_neighbors <= 0 || num_neighbors > IQ2_NEIGHBOUR_CACHE_MAX || !(scale_d > 0 && size < 0x1p100 && size_subnormal < 0x1p100 && tolerance > 0)) {
         return iq2_find_best_neighbour(neighbours, grid, xval, weight, scale, L);
     }
-    if (c->u != u) {
+    if (cache->pattern != pattern) {
         for (int j = 0; j < num_neighbors; ++j) {
-            const int8_t * pg = (const int8_t *)(grid + neighbours[j+1]);
-            double A = 0, B = 0;
+            const int8_t * levels = (const int8_t *)(grid + neighbours[j+1]);
+            double lin = 0, quad = 0;
             for (int i = 0; i < 8; ++i) {
-                A += c->wxq[i][pg[i]];
-                B += c->wqq[i][pg[i]];
+                lin  += cache->lin_term[i][levels[i]];
+                quad += cache->quad_term[i][levels[i]];
             }
-            c->A[j] = A; c->B[j] = B;
+            cache->lin_coef[j] = lin; cache->quad_coef[j] = quad;
         }
-        c->u = u;
-        c->jbest = 0;
+        cache->pattern = pattern;
+        cache->last_best = 0;
     }
-    double g[IQ2_NB_CACHE_SIZE];
-    for (int j = 0; j < num_neighbors; ++j) g[j] = s*c->B[j] - c->A[j];
-    // the winner must be the only neighbour within tol, try the previous winner for this u first
-    int jbest = c->jbest;
-    if (iq2_count_le(g, num_neighbors, g[jbest] + tol) != 1) {
+    double score[IQ2_NEIGHBOUR_CACHE_MAX];
+    for (int j = 0; j < num_neighbors; ++j) score[j] = scale_d*cache->quad_coef[j] - cache->lin_coef[j];
+    // the winner must be the only neighbour within tolerance, try the previous winner for this pattern first
+    int best = cache->last_best;
+    if (iq2_count_at_most(score, num_neighbors, score[best] + tolerance) != 1) {
         for (int j = 0; j < num_neighbors; ++j) {
-            if (g[j] < g[jbest]) jbest = j;
+            if (score[j] < score[best]) best = j;
         }
-        if (iq2_count_le(g, num_neighbors, g[jbest] + tol) != 1) {
+        if (iq2_count_at_most(score, num_neighbors, score[best] + tolerance) != 1) {
             return iq2_find_best_neighbour(neighbours, grid, xval, weight, scale, L);
         }
-        c->jbest = jbest;
+        cache->last_best = best;
     }
-    const int grid_index = neighbours[jbest+1];
-    const int8_t * pg = (const int8_t *)(grid + grid_index);
-    for (int i = 0; i < 8; ++i) L[i] = (pg[i] - 1)/2;
+    const int grid_index = neighbours[best+1];
+    const int8_t * levels = (const int8_t *)(grid + grid_index);
+    for (int i = 0; i < 8; ++i) L[i] = (levels[i] - 1)/2;
     return grid_index;
 }
 
@@ -3393,8 +3395,8 @@ static void quantize_row_iq2_xxs_impl(const float * GGML_RESTRICT x, void * GGML
     float  waux[32];
     uint8_t block_signs[4];
     uint32_t q2[2*(QK_K/32)];
-    iq2_nb_cache nb_cache[4];
-    int8_t Lprev[32];
+    iq2_neighbour_cache neighbour_cache[4];
+    int8_t Laux_prev[32];
 
     for (int ibl = 0; ibl < nbl; ++ibl) {
 
@@ -3450,7 +3452,7 @@ static void quantize_row_iq2_xxs_impl(const float * GGML_RESTRICT x, void * GGML
                 continue;
             }
             float best = 0;
-            for (int k = 0; k < 4; ++k) iq2_nb_cache_init(&nb_cache[k], xval + 8*k, waux + 8*k);
+            for (int k = 0; k < 4; ++k) iq2_neighbour_cache_init(&neighbour_cache[k], xval + 8*k, waux + 8*k);
             for (int is = -6; is <= 6; ++is) {
                 float id = (2*kMaxQ-1+is*0.1f)/eff_max;
                 float this_scale = 1/id;
@@ -3464,14 +3466,14 @@ static void quantize_row_iq2_xxs_impl(const float * GGML_RESTRICT x, void * GGML
                     int grid_index = kmap_q2xs[u];
                     if (grid_index < 0) {
                         const uint16_t * neighbours = kneighbors_q2xs - kmap_q2xs[u] - 1;
-                        grid_index = iq2_find_best_neighbour_cached(&nb_cache[k], u, neighbours, kgrid_q2xs, xval + 8*k, waux + 8*k, this_scale, Laux + 8*k);
+                        grid_index = iq2_find_best_neighbour_cached(&neighbour_cache[k], u, neighbours, kgrid_q2xs, xval + 8*k, waux + 8*k, this_scale, Laux + 8*k);
                     }
                 }
                 // same candidate as for the previous scale: it cannot change the result
-                if (is > -6 && memcmp(Laux, Lprev, 32) == 0) {
+                if (is > -6 && memcmp(Laux, Laux_prev, 32) == 0) {
                     continue;
                 }
-                memcpy(Lprev, Laux, 32);
+                memcpy(Laux_prev, Laux, 32);
                 float sumqx = 0, sumq2 = 0;
                 for (int i = 0; i < 32; ++i) {
                     float w = weight[i];
@@ -3496,7 +3498,7 @@ static void quantize_row_iq2_xxs_impl(const float * GGML_RESTRICT x, void * GGML
                     int grid_index = kmap_q2xs[u];
                     if (grid_index < 0) {
                         const uint16_t * neighbours = kneighbors_q2xs - kmap_q2xs[u] - 1;
-                        grid_index = iq2_find_best_neighbour_cached(&nb_cache[k], u, neighbours, kgrid_q2xs, xval + 8*k, waux + 8*k, scale, L + 8*k);
+                        grid_index = iq2_find_best_neighbour_cached(&neighbour_cache[k], u, neighbours, kgrid_q2xs, xval + 8*k, waux + 8*k, scale, L + 8*k);
                     }
                     const int8_t * pg = (const int8_t *)(kgrid_q2xs + grid_index);
                     for (int i = 0; i < 8; ++i) L[8*k+i] = (pg[i] - 1)/2;
@@ -3581,9 +3583,9 @@ static void quantize_row_iq2_xs_impl(const float * GGML_RESTRICT x, void * GGML_
     bool   is_on_grid_aux[2];
     uint8_t block_signs[2];
     uint16_t q2[2*(QK_K/16)];
-    iq2_nb_cache nb_cache[2];
-    int8_t Lprev[16];
-    bool   on_grid_prev[2];
+    iq2_neighbour_cache neighbour_cache[2];
+    int8_t Laux_prev[16];
+    bool   is_on_grid_prev[2];
 
     for (int ibl = 0; ibl < nbl; ++ibl) {
 
@@ -3635,7 +3637,7 @@ static void quantize_row_iq2_xs_impl(const float * GGML_RESTRICT x, void * GGML_
             float best = 0;
             float scale = max/(2*kMaxQ-1);
             is_on_grid[0] = is_on_grid[1] = true;
-            for (int k = 0; k < 2; ++k) iq2_nb_cache_init(&nb_cache[k], xval + 8*k, waux + 8*k);
+            for (int k = 0; k < 2; ++k) iq2_neighbour_cache_init(&neighbour_cache[k], xval + 8*k, waux + 8*k);
             for (int is = -9; is <= 9; ++is) {
                 float id = (2*kMaxQ-1+is*0.1f)/max;
                 float this_scale = 1/id;
@@ -3651,15 +3653,15 @@ static void quantize_row_iq2_xs_impl(const float * GGML_RESTRICT x, void * GGML_
                     if (grid_index < 0) {
                         is_on_grid_aux[k] = false;
                         const uint16_t * neighbours = kneighbors_q2xs - kmap_q2xs[u] - 1;
-                        grid_index = iq2_find_best_neighbour_cached(&nb_cache[k], u, neighbours, kgrid_q2xs, xval + 8*k, waux + 8*k, this_scale, Laux + 8*k);
+                        grid_index = iq2_find_best_neighbour_cached(&neighbour_cache[k], u, neighbours, kgrid_q2xs, xval + 8*k, waux + 8*k, this_scale, Laux + 8*k);
                     }
                 }
                 // same candidate as for the previous scale: it cannot change the result
-                if (is > -9 && memcmp(Laux, Lprev, 16) == 0 && is_on_grid_aux[0] == on_grid_prev[0] && is_on_grid_aux[1] == on_grid_prev[1]) {
+                if (is > -9 && memcmp(Laux, Laux_prev, 16) == 0 && is_on_grid_aux[0] == is_on_grid_prev[0] && is_on_grid_aux[1] == is_on_grid_prev[1]) {
                     continue;
                 }
-                memcpy(Lprev, Laux, 16);
-                on_grid_prev[0] = is_on_grid_aux[0]; on_grid_prev[1] = is_on_grid_aux[1];
+                memcpy(Laux_prev, Laux, 16);
+                is_on_grid_prev[0] = is_on_grid_aux[0]; is_on_grid_prev[1] = is_on_grid_aux[1];
                 float sumqx = 0, sumq2 = 0;
                 for (int i = 0; i < 16; ++i) {
                     float w = weight[i];
@@ -3689,7 +3691,7 @@ static void quantize_row_iq2_xs_impl(const float * GGML_RESTRICT x, void * GGML_
                     int grid_index = kmap_q2xs[u];
                     if (grid_index < 0) {
                         const uint16_t * neighbours = kneighbors_q2xs - kmap_q2xs[u] - 1;
-                        grid_index = iq2_find_best_neighbour_cached(&nb_cache[k], u, neighbours, kgrid_q2xs, xval + 8*k, waux + 8*k, scale, L + 8*k);
+                        grid_index = iq2_find_best_neighbour_cached(&neighbour_cache[k], u, neighbours, kgrid_q2xs, xval + 8*k, waux + 8*k, scale, L + 8*k);
                     }
                 }
                 float sumqx = 0, sumq2 = 0;
@@ -5231,9 +5233,9 @@ static void quantize_row_iq2_s_impl(const float * GGML_RESTRICT x, void * GGML_R
     bool   is_on_grid[2];
     bool   is_on_grid_aux[2];
     uint8_t block_signs[2];
-    iq2_nb_cache nb_cache[2];
-    int8_t Lprev[16];
-    bool   on_grid_prev[2];
+    iq2_neighbour_cache neighbour_cache[2];
+    int8_t Laux_prev[16];
+    bool   is_on_grid_prev[2];
 
     for (int ibl = 0; ibl < nbl; ++ibl) {
 
@@ -5276,7 +5278,7 @@ static void quantize_row_iq2_s_impl(const float * GGML_RESTRICT x, void * GGML_R
             float best = 0;
             float scale = max/(2*kMaxQ-1);
             is_on_grid[0] = is_on_grid[1] = true;
-            for (int k = 0; k < 2; ++k) iq2_nb_cache_init(&nb_cache[k], xval + 8*k, waux + 8*k);
+            for (int k = 0; k < 2; ++k) iq2_neighbour_cache_init(&neighbour_cache[k], xval + 8*k, waux + 8*k);
             for (int is = -9; is <= 9; ++is) {
                 float id = (2*kMaxQ-1+is*0.1f)/max;
                 float this_scale = 1/id;
@@ -5292,15 +5294,15 @@ static void quantize_row_iq2_s_impl(const float * GGML_RESTRICT x, void * GGML_R
                     if (grid_index < 0) {
                         is_on_grid_aux[k] = false;
                         const uint16_t * neighbours = kneighbors_q2xs - kmap_q2xs[u] - 1;
-                        grid_index = iq2_find_best_neighbour_cached(&nb_cache[k], u, neighbours, kgrid_q2xs, xval + 8*k, waux + 8*k, this_scale, Laux + 8*k);
+                        grid_index = iq2_find_best_neighbour_cached(&neighbour_cache[k], u, neighbours, kgrid_q2xs, xval + 8*k, waux + 8*k, this_scale, Laux + 8*k);
                     }
                 }
                 // same candidate as for the previous scale: it cannot change the result
-                if (is > -9 && memcmp(Laux, Lprev, 16) == 0 && is_on_grid_aux[0] == on_grid_prev[0] && is_on_grid_aux[1] == on_grid_prev[1]) {
+                if (is > -9 && memcmp(Laux, Laux_prev, 16) == 0 && is_on_grid_aux[0] == is_on_grid_prev[0] && is_on_grid_aux[1] == is_on_grid_prev[1]) {
                     continue;
                 }
-                memcpy(Lprev, Laux, 16);
-                on_grid_prev[0] = is_on_grid_aux[0]; on_grid_prev[1] = is_on_grid_aux[1];
+                memcpy(Laux_prev, Laux, 16);
+                is_on_grid_prev[0] = is_on_grid_aux[0]; is_on_grid_prev[1] = is_on_grid_aux[1];
                 float sumqx = 0, sumq2 = 0;
                 for (int i = 0; i < 16; ++i) {
                     float w = weight[i];
@@ -5330,7 +5332,7 @@ static void quantize_row_iq2_s_impl(const float * GGML_RESTRICT x, void * GGML_R
                     int grid_index = kmap_q2xs[u];
                     if (grid_index < 0) {
                         const uint16_t * neighbours = kneighbors_q2xs - kmap_q2xs[u] - 1;
-                        grid_index = iq2_find_best_neighbour_cached(&nb_cache[k], u, neighbours, kgrid_q2xs, xval + 8*k, waux + 8*k, scale, L + 8*k);
+                        grid_index = iq2_find_best_neighbour_cached(&neighbour_cache[k], u, neighbours, kgrid_q2xs, xval + 8*k, waux + 8*k, scale, L + 8*k);
                     }
                 }
                 float sumqx = 0, sumq2 = 0;
