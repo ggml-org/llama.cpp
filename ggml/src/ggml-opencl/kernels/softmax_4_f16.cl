@@ -178,7 +178,11 @@ kernel void kernel_fa_decompose_soft_max_4_f16(
     }
     float lmax = fmax(fmax(lmax4.s0, lmax4.s1), fmax(lmax4.s2, lmax4.s3));
 
-    const float max = sub_group_reduce_max(lmax);
+    float max = sub_group_reduce_max(lmax);
+    // Avoid -inf - (-inf) for fully masked rows.
+    if (max == -INFINITY) {
+        max = 0.0f;
+    }
 
     // parallel sum
     float4 lsum4 = 0.0f;
