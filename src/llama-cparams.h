@@ -65,6 +65,8 @@ struct llama_cparams {
     enum llama_rope_scaling_type rope_scaling_type;
     enum llama_pooling_type pooling_type;
 
+    enum ggml_type act_type; // data type of the compute graph activations
+
     ggml_backend_sched_eval_callback cb_eval;
     void * cb_eval_user_data;
 

@@ -902,6 +902,7 @@ struct llm_graph_params {
             cparams.embeddings_nextn        == other.cparams.embeddings_nextn        &&
             cparams.embeddings_nextn_masked == other.cparams.embeddings_nextn_masked &&
             cparams.causal_attn             == other.cparams.causal_attn             &&
+            cparams.act_type                == other.cparams.act_type                &&
             arch  == other.arch  &&
             gtype == other.gtype &&
             cvec  == other.cvec  &&
@@ -1057,6 +1058,12 @@ struct llm_graph_context {
 
     ggml_backend_sched_t sched;
 
+    // result type of the attention output and FFN down projections, i.e. of what
+    // is added to the residual stream; GGML_TYPE_COUNT = cparams.act_type. A graph
+    // whose residual stream does not fit F16 (Gemma 3) sets F32 here and keeps
+    // the residual in F32 while the rest of each block uses act_type.
+    ggml_type type_res = GGML_TYPE_COUNT;
+
     ggml_backend_t backend_cpu; // TODO: needed by build_attn_mha, figure out a way to remove?
 
     const llama_adapter_cvec     * cvec;
@@ -1107,10 +1114,12 @@ struct llm_graph_context {
               ggml_tensor * cur) const;
 
     // do mat_mul, while optionally apply lora and per-tensor scale
+    // the result is stored as type, or as cparams.act_type for GGML_TYPE_COUNT
     ggml_tensor * build_lora_mm(
               ggml_tensor * w,
               ggml_tensor * cur,
-              ggml_tensor * w_s = nullptr) const;
+              ggml_tensor * w_s  = nullptr,
+                ggml_type   type = GGML_TYPE_COUNT) const;
 
     // do mat_mul_id, while optionally apply lora and per-expert scale
     // if slots is set, the experts are read from the MoE cache at these slots (see build_moe_cache_slots)
@@ -1243,6 +1252,9 @@ struct llm_graph_context {
     ggml_tensor * build_inp_pos() const;
     ggml_tensor * build_inp_attn_scale() const;
     ggml_tensor * build_inp_out_ids() const;
+
+    // the rows of cur selected by inp_out_ids, in cur's type
+    ggml_tensor * build_out_rows(ggml_tensor * cur, ggml_tensor * inp_out_ids) const;
     ggml_tensor * build_inp_mean() const;
     ggml_tensor * build_inp_cls() const;
 
@@ -1442,6 +1454,9 @@ struct llm_graph_context {
     llm_graph_input_mem_hybrid_k * build_inp_mem_hybrid_k() const;
 
     llm_graph_input_mem_hybrid_iswa * build_inp_mem_hybrid_iswa() const;
+
+    // the outputs that are read back as float are cast to F32 when cparams.act_type is not F32
+    void build_outputs_f32() const;
 
     //
     // pooling

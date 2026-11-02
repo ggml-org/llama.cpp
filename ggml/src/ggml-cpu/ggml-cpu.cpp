@@ -421,6 +421,21 @@ static ggml_backend_buffer_t ggml_backend_cpu_device_buffer_from_host_ptr(ggml_b
     GGML_UNUSED(max_tensor_size);
 }
 
+// type combinations implemented by binary_op in binary-ops.cpp
+static bool ggml_backend_cpu_binary_op_types_supported(const struct ggml_tensor * op) {
+    const ggml_type t0 = op->src[0]->type;
+    const ggml_type t1 = op->src[1]->type;
+    const ggml_type td = op->type;
+
+    if (t0 == t1 && t1 == td) {
+        return t0 == GGML_TYPE_F32 || t0 == GGML_TYPE_F16 || t0 == GGML_TYPE_BF16;
+    }
+    if (t1 == GGML_TYPE_F32 && (t0 == GGML_TYPE_F16 || t0 == GGML_TYPE_BF16)) {
+        return td == t0 || td == GGML_TYPE_F32;
+    }
+    return false;
+}
+
 static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * src1 = op->src[1];
@@ -434,14 +449,23 @@ static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const st
     for (int i = 0; i < 4; i++) {
         if (op->src[i] && op->src[i]->buffer &&
             ggml_backend_cpu_is_extra_buffer_type(op->src[i]->buffer->buft)) {
+            // the extra buffer type kernels produce F32 results only
+            if ((op->op == GGML_OP_MUL_MAT || op->op == GGML_OP_MUL_MAT_ID || op->op == GGML_OP_GET_ROWS) &&
+                op->type != GGML_TYPE_F32) {
+                return false;
+            }
             auto * buf_extra = (ggml::cpu::extra_buffer_type *) op->src[i]->buffer->buft->context;
             return buf_extra->supports_op(dev, op);
         }
     }
 
     switch (op->op) {
-        case GGML_OP_CPY:
         case GGML_OP_SET_ROWS:
+            if (src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) {
+                return false;
+            }
+            [[fallthrough]];
+        case GGML_OP_CPY:
             return
                 op->type != GGML_TYPE_IQ3_XXS &&
                 op->type != GGML_TYPE_IQ3_S   &&
@@ -451,6 +475,13 @@ static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const st
                 op->type != GGML_TYPE_IQ1_S   &&
                 op->type != GGML_TYPE_IQ1_M; // missing type_traits.from_float
         case GGML_OP_MUL_MAT:
+            if (op->type == GGML_TYPE_F16) {
+                // the F16-result kernel takes F32 or vec_dot_type activations
+                return src1->type == GGML_TYPE_F32 || src1->type == ggml_get_type_traits_cpu(src0->type)->vec_dot_type;
+            }
+            if (op->type != GGML_TYPE_F32) {
+                return false;
+            }
             if (ggml_get_op_params_i32(op, 1) == GGML_HINT_SRC0_IS_HADAMARD &&
                 src0->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32) {
                 return src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16;
@@ -459,6 +490,33 @@ static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const st
             return src1->type == GGML_TYPE_F32 ||
                    src1->type == ggml_get_type_traits_cpu(src0->type)->vec_dot_type ||
                    (src1->type == GGML_TYPE_BF16 && ggml_get_type_traits_cpu(src0->type)->vec_dot_type == GGML_TYPE_F32);
+        case GGML_OP_MUL_MAT_ID:
+            return (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) &&
+                (src1->type == GGML_TYPE_F32 || src1->type == ggml_get_type_traits_cpu(src0->type)->vec_dot_type);
+        case GGML_OP_GET_ROWS:
+            return op->type != GGML_TYPE_F16 || src0->type != GGML_TYPE_I32;
+        case GGML_OP_FLASH_ATTN_EXT:
+            return (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16) &&
+                (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16);
+        case GGML_OP_ADD:
+            return ggml_is_quantized(src0->type) || ggml_backend_cpu_binary_op_types_supported(op);
+        case GGML_OP_SUB:
+        case GGML_OP_MUL:
+        case GGML_OP_DIV:
+            return ggml_backend_cpu_binary_op_types_supported(op);
+        case GGML_OP_RMS_NORM:
+        case GGML_OP_SCALE:
+            return (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16) && op->type == src0->type;
+        case GGML_OP_SUM_ROWS:
+            return (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16) && op->type == src0->type;
+        case GGML_OP_NORM:
+        case GGML_OP_PAD:
+        case GGML_OP_SOFT_MAX:
+        case GGML_OP_ADD_ID:
+            return src0->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;
+        case GGML_OP_ARGSORT:
+        case GGML_OP_TOP_K:
+            return src0->type == GGML_TYPE_F32;
         case GGML_OP_SOFT_MAX_BACK: {
             if (op->src[0]->type != GGML_TYPE_F32 || op->src[1]->type != GGML_TYPE_F32) {
                 return false;

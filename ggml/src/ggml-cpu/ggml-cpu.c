@@ -1243,7 +1243,7 @@ static void ggml_compute_forward_mul_mat_one_chunk(
                     (src1_cont || src1->type != vec_dot_type
                         ? (i11 + i12 * ne11 + i13 * ne12 * ne11) * row_size
                         : (i11 * nb11 + i12 * nb12 + i13 * nb13));
-                float * dst_col = (float*)((char*)dst->data + (i1 * nb1 + i2 * nb2 + i3 * nb3));
+                char * dst_col = (char*)dst->data + (i1 * nb1 + i2 * nb2 + i3 * nb3);
 
                 //for (int64_t ir0 = iir0; ir0 < iir0 + blck_0 && ir0 < ir0_end; ++ir0) {
                 //    vec_dot(ne00, &dst_col[ir0], src0_row + ir0*nb01, src1_col);
@@ -1253,8 +1253,13 @@ static void ggml_compute_forward_mul_mat_one_chunk(
                     vec_dot(ne00, &tmp[ir0 - iir0], (num_rows_per_vec_dot > 1 ? 16 : 0), src0_row + ir0 * nb01, (num_rows_per_vec_dot > 1 ? nb01 : 0), src1_col, (num_rows_per_vec_dot > 1 ? src1_col_stride : 0), num_rows_per_vec_dot);
                 }
 
+                const int64_t n_out = MIN(iir0 + blck_0, ir0_end) - iir0;
                 for (int cn = 0; cn < num_rows_per_vec_dot; ++cn) {
-                    memcpy(&dst_col[iir0 + cn * nb1 / nb0], tmp + (cn * 16), (MIN(iir0 + blck_0, ir0_end) - iir0) * sizeof(float));
+                    if (dst->type == GGML_TYPE_F16) {
+                        ggml_cpu_fp32_to_fp16(tmp + (cn * 16), (ggml_fp16_t *) (dst_col + cn * nb1) + iir0, n_out);
+                    } else {
+                        memcpy((float *) (dst_col + cn * nb1) + iir0, tmp + (cn * 16), n_out * sizeof(float));
+                    }
                 }
             }
         }
@@ -1269,7 +1274,7 @@ void ggml_compute_forward_mul_mat(
     const struct ggml_tensor * src1 = dst->src[1];
 
     const int32_t hint = ggml_get_op_params_i32(dst, 1);
-    if (hint == GGML_HINT_SRC0_IS_HADAMARD && !params->use_ref) {
+    if (hint == GGML_HINT_SRC0_IS_HADAMARD && !params->use_ref && dst->type == GGML_TYPE_F32) {
         ggml_compute_forward_fwht(params, dst);
         return;
     }
@@ -1298,7 +1303,8 @@ void ggml_compute_forward_mul_mat(
     GGML_ASSERT(nb10 == ggml_type_size(src1->type));
 
     // dst cannot be transposed or permuted
-    GGML_ASSERT(nb0 == sizeof(float));
+    GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16);
+    GGML_ASSERT(nb0 == ggml_type_size(dst->type));
     GGML_ASSERT(nb0 <= nb1);
     GGML_ASSERT(nb1 <= nb2);
     GGML_ASSERT(nb2 <= nb3);
@@ -1540,13 +1546,18 @@ static void ggml_compute_forward_mul_mat_id_one_chunk(
                     ? (i11      + i12*ne11)*row_size
                     : (i11*nb11 + i12*nb12));
 
-                float * dst_col = (float *) ((char *) dst->data + (i1*nb1 + i2*nb2));
+                char * dst_col = (char *) dst->data + (i1*nb1 + i2*nb2);
 
                 for (int64_t ir0 = iir0; ir0 < iir0 + blck_0 && ir0 < ir0_end; ++ir0) {
                     vec_dot(ne00, &tmp[ir0 - iir0], 0, src0_cur + ir0*nb01, 0, src1_col, 0, 1);
                 }
 
-                memcpy(&dst_col[iir0], tmp, (MIN(iir0 + blck_0, ir0_end) - iir0)*sizeof(float));
+                const int64_t n_out = MIN(iir0 + blck_0, ir0_end) - iir0;
+                if (dst->type == GGML_TYPE_F16) {
+                    ggml_cpu_fp32_to_fp16(tmp, (ggml_fp16_t *) dst_col + iir0, n_out);
+                } else {
+                    memcpy((float *) dst_col + iir0, tmp, n_out*sizeof(float));
+                }
             }
         }
     }
@@ -1585,7 +1596,8 @@ static void ggml_compute_forward_mul_mat_id(
     GGML_ASSERT(nb10 == ggml_type_size(src1->type));
 
     // dst cannot be transposed or permuted
-    GGML_ASSERT(nb0 == sizeof(float));
+    GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16);
+    GGML_ASSERT(nb0 == ggml_type_size(dst->type));
     GGML_ASSERT(nb0 <= nb1);
     GGML_ASSERT(nb1 <= nb2);
     GGML_ASSERT(nb2 <= nb3);

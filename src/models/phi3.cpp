@@ -128,8 +128,8 @@ llama_model_phi3::graph<iswa>::graph(const llama_model & model, const llm_graph_
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f, il);
         }
         if (il == n_layer - 1 && inp_out_ids) {
-            cur      = ggml_get_rows(ctx0, cur,      inp_out_ids);
-            residual = ggml_get_rows(ctx0, residual, inp_out_ids);
+            cur      = build_out_rows(cur,      inp_out_ids);
+            residual = build_out_rows(residual, inp_out_ids);
         }
         cur = ggml_add(ctx0, cur, residual);
         residual = cur;
@@ -179,7 +179,7 @@ llama_model_phi3::graph<iswa>::graph(const llama_model & model, const llm_graph_
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur, model.output_s, GGML_TYPE_F32);
 
     if (model.output_b != nullptr) {
         cb(cur, "result_output_no_bias", -1);
