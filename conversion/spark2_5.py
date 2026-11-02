@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -13,6 +13,12 @@ from .base import ModelBase, TextModel, gguf
 @ModelBase.example("XHToken/Spark-X2.5-1.7B")
 class Spark2_5Model(TextModel):
     model_arch = gguf.MODEL_ARCH.SPARK2_5
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        if item[0].startswith("draft_model."):
+            return None
+        return super().filter_tensors(item)
 
     def set_gguf_parameters(self) -> None:
         super().set_gguf_parameters()
