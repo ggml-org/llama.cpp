@@ -44,9 +44,15 @@ jobs:
 
       - name: Python venv
         id: venv
+        # uv-managed Python ships its headers; aiperf needs them to build crick on arm64
         run: |
-          python3 -m venv "$NIGHTLY_HOME/venv"
-          "$NIGHTLY_HOME/venv/bin/pip" install -q -r "$BENCH_DIR/requirements.txt"
+          if [ ! -x "$NIGHTLY_HOME/uv-venv/bin/uv" ]; then
+            python3 -m venv "$NIGHTLY_HOME/uv-venv"
+            "$NIGHTLY_HOME/uv-venv/bin/pip" install -q uv
+          fi
+          UV="$NIGHTLY_HOME/uv-venv/bin/uv"
+          "$UV" venv -q --allow-existing --python 3.12 --managed-python "$NIGHTLY_HOME/venv"
+          VIRTUAL_ENV="$NIGHTLY_HOME/venv" "$UV" pip install -q -r "$BENCH_DIR/requirements.txt"
 
       - name: Prefetch build, models and data
         id: prefetch

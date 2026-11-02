@@ -73,11 +73,6 @@ def model_path(home: Path, item: dict[str, Any]) -> Path:
     return repo_dir(home, "models", item["repo"], item["revision"]) / item["file"]
 
 
-def tokenizer_path(home: Path, model: dict[str, Any]) -> Path:
-    tok = model["tokenizer"]
-    return repo_dir(home, "tokenizers", tok["repo"], tok["revision"])
-
-
 def wikitext_path(home: Path) -> Path:
     return home / "data" / "wikitext-2-raw" / "wiki.test.raw"
 
@@ -171,8 +166,8 @@ def prefetch(cfg: dict[str, Any], home: Path, tag: str | None, models: list[str]
                 hf_hub_download(repo_id=item["repo"], filename=item["file"], revision=item["revision"], local_dir=dest.parent)
         if model.get("tokenizer"):
             tok = model["tokenizer"]
-            snapshot_download(repo_id=tok["repo"], revision=tok["revision"], local_dir=tokenizer_path(home, model),
-                              allow_patterns=["*.json", "*.jinja", "*.txt", "*.model"])
+            # AIPerf loads offline tokenizers only from the HF cache by repo id, not from a local dir
+            snapshot_download(repo_id=tok["repo"], revision=tok["revision"], allow_patterns=["*.json", "*.jinja", "*.txt", "*.model"])
 
     suites = {s for name in models for s in cfg["models"][name]["suites"]}
     if "speedbench" in suites:
@@ -490,7 +485,8 @@ def aiperf_bin() -> str:
 
 def aiperf_base(ctx: Context, model: dict[str, Any], run_dir: Path, goodput_ttft_ms: int, timeout_s: int) -> list[str]:
     return [aiperf_bin(), "profile", "--model", "bench", "--url", ctx.url, "--endpoint-type", "chat", "--streaming",
-            "--tokenizer", str(tokenizer_path(ctx.home, model)), "--use-server-token-count", "--random-seed", "42",
+            "--tokenizer", model["tokenizer"]["repo"], "--tokenizer-revision", model["tokenizer"]["revision"],
+            "--use-server-token-count", "--random-seed", "42",
             "--goodput", f"time_to_first_token:{goodput_ttft_ms}", "--request-timeout-seconds", str(timeout_s),
             "--artifact-dir", str(run_dir / "aiperf"), "--ui-type", "none"]
 

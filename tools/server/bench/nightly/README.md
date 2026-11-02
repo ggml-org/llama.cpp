@@ -23,15 +23,16 @@ The agentic traces are Mooncake JSONL (`timestamp`, `input_length`, `output_leng
 ## Box setup
 
 - NVIDIA driver only. The binaries come from the release tarballs, no CUDA toolkit or compiler is needed.
-- `python3` (3.10+) with `venv`, plus `tar`, `unzip` and `curl` or `wget`.
-- A writable `NIGHTLY_HOME` (default `/opt/llama-nightly`) with about 40 GiB free. Layout: `builds/<tag>/`, `models/`, `tokenizers/`, `data/`, `results/<date>_<tag>/`, `venv/`.
+- `python3` with `venv`, plus `tar`, `unzip` and `curl` or `wget`. The bench venv uses a uv-managed Python 3.12, because AIPerf builds `crick` from source on arm64 and the system Python often has no headers (`python3-dev`).
+- A writable `NIGHTLY_HOME` (default `/opt/llama-nightly`) with about 40 GiB free. Layout: `builds/<tag>/`, `models/`, `data/`, `results/<date>_<tag>/`, `venv/`. Tokenizers and SPEED-Bench go to the default Hugging Face cache.
 - A self-hosted runner with the labels `self-hosted, Linux, ARM64, spark-nightly-bench`, used by nothing else (a concurrent job corrupts the numbers).
 
 ## Run by hand
 
 ```bash
-python3 -m venv /opt/llama-nightly/venv
-/opt/llama-nightly/venv/bin/pip install -r tools/server/bench/nightly/requirements.txt
+python3 -m venv /opt/llama-nightly/uv-venv && /opt/llama-nightly/uv-venv/bin/pip install uv
+/opt/llama-nightly/uv-venv/bin/uv venv --python 3.12 --managed-python /opt/llama-nightly/venv
+VIRTUAL_ENV=/opt/llama-nightly/venv /opt/llama-nightly/uv-venv/bin/uv pip install -r tools/server/bench/nightly/requirements.txt
 /opt/llama-nightly/venv/bin/python tools/server/bench/nightly/nightly.py prefetch --home /opt/llama-nightly
 HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 /opt/llama-nightly/venv/bin/python tools/server/bench/nightly/nightly.py run --home /opt/llama-nightly --suites engine --models M3
 ```
