@@ -759,14 +759,14 @@ ggml_tensor * llama_model_deepseek4::graph::build_csa_lid_attention(
     ggml_tensor * k_all = ggml_concat(ctx0, raw_k, csa_k, 2);
     cb(k_all, "csa_k_all", il);
 
-    ggml_tensor * raw_mask = inp_attn->get_kq_mask();
+    ggml_tensor * raw_mask = inp_attn->self_attn_mask.cnv;
     ggml_tensor * csa_mask = build_top_k_mask(inp_csa.kq_mask, top_k, "csa_top_k_mask", il);
 
     ggml_tensor * kq_mask = ggml_concat(ctx0, raw_mask, csa_mask, 0);
     cb(kq_mask, "csa_lid_kq_mask", il);
 
     const int64_t n_kv_max = std::min<int64_t>(raw_mask->ne[0], hparams.n_swa) + top_k->ne[0];
-    ggml_tensor * out = build_attn_mha(q, k_all, k_all, nullptr, kq_mask, sinks, nullptr, n_kv_max, kq_scale, il);
+    ggml_tensor * out = build_attn_mha(q, k_all, k_all, nullptr, kq_mask, nullptr, sinks, nullptr, n_kv_max, kq_scale, il);
     if (k_rot) {
         out = llama_mul_mat_hadamard(ctx0, out, k_rot);
     }
@@ -815,13 +815,13 @@ ggml_tensor * llama_model_deepseek4::graph::build_hca_attention(
     ggml_tensor * k_all = ggml_concat(ctx0, raw_k, hca_k, 2);
     cb(k_all, "hca_k_all", il);
 
-    ggml_tensor * raw_mask = inp_attn->get_kq_mask();
+    ggml_tensor * raw_mask = inp_attn->self_attn_mask.cnv;
     ggml_tensor * hca_mask = inp_hca.kq_mask;
 
     ggml_tensor * kq_mask = ggml_concat(ctx0, raw_mask, hca_mask, 0);
     cb(kq_mask, "hca_kq_mask", il);
 
-    ggml_tensor * out = build_attn_mha(q, k_all, k_all, nullptr, kq_mask, sinks, nullptr, 0, kq_scale, il);
+    ggml_tensor * out = build_attn_mha(q, k_all, k_all, nullptr, kq_mask, nullptr, sinks, nullptr, 0, kq_scale, il);
     if (k_rot) {
         out = llama_mul_mat_hadamard(ctx0, out, k_rot);
     }
@@ -853,11 +853,11 @@ ggml_tensor * llama_model_deepseek4::graph::build_raw_attention(
 
     ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, kv, inp_attn->get_k_idxs(), il));
 
-    ggml_tensor * kq_mask = inp_attn->get_kq_mask();
+    ggml_tensor * kq_mask = inp_attn->self_attn_mask.cnv;
 
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
 
-    ggml_tensor * out = build_attn_mha(q, k, k, nullptr, kq_mask, sinks, nullptr, 0, kq_scale, il);
+    ggml_tensor * out = build_attn_mha(q, k, k, nullptr, kq_mask, nullptr, sinks, nullptr, 0, kq_scale, il);
     if (k_rot) {
         out = llama_mul_mat_hadamard(ctx0, out, k_rot);
     }
@@ -1237,7 +1237,7 @@ llama_model_deepseek4::graph::graph(const llama_model & model, const llm_graph_p
     ggml_tensor * inp_out_ids = build_inp_out_ids();
     llm_graph_input_dsv4 * inp_dsv4 = build_inp_dsv4();
     llm_graph_input_dsv4_raw * inp_attn = inp_dsv4->get_raw();
-    ggml_build_forward_expand(gf, inp_attn->self_kq_mask);
+    ggml_build_forward_expand(gf, inp_attn->self_attn_mask.raw);
 
     const int64_t hc = hparams.dsv4_hc_mult;
     ggml_tensor * inpL = ggml_reshape_3d(ctx0, inp, n_embd, 1, n_tokens);

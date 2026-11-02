@@ -256,7 +256,7 @@ llama_model_dots3note::graph::graph(const llama_model & model, const llm_graph_p
 
                 ggml_tensor * indexer_score = nullptr;
                 if (cparams.fused_lid) {
-                    indexer_score = ggml_lightning_indexer(ctx0, indexer_q, indexer_k, indexer_weights, inp_attn->get_dsa()->get_kq_mask_lid());
+                    indexer_score = ggml_lightning_indexer(ctx0, indexer_q, indexer_k, indexer_weights, inp_attn->get_dsa()->self_attn_mask_lid.cnv);
                     cb(indexer_score, "indexer_score", il);
                     res->add_fused_node({LLM_FUSED_OP_LIGHTNING_INDEXER, indexer_score, il});
                 } else {
@@ -286,7 +286,7 @@ llama_model_dots3note::graph::graph(const llama_model & model, const llm_graph_p
                     indexer_score = ggml_cont(ctx0, ggml_permute(ctx0, indexer_score, 2, 1, 0, 3));
                     cb(indexer_score, "indexer_score", il);
 
-                    ggml_tensor * indexer_kq_mask = inp_attn->get_dsa()->get_kq_mask_lid();
+                    ggml_tensor * indexer_kq_mask = inp_attn->get_dsa()->self_attn_mask_lid.cnv;
                     indexer_score = ggml_add(ctx0, indexer_score, indexer_kq_mask);
                     cb(indexer_score, "indexer_score", il);
                 }
