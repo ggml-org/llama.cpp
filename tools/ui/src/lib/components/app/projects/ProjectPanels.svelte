@@ -2,7 +2,7 @@
 	import ProjectContext from './ProjectContext.svelte';
 	import ProjectInstructions from './ProjectInstructions.svelte';
 	import * as Card from '$lib/components/ui/card';
-	import { FileMentionEntryType, ProjectContextKind } from '$lib/enums';
+	import { ProjectContextKind } from '$lib/enums';
 	import { useChatScreenActiveModel } from '$lib/hooks/use-chat-screen-active-model.svelte';
 	import { projectsStore } from '$lib/stores';
 	import type { FileMentionEntry, Project, ProjectContextItem } from '$lib/types';
@@ -44,19 +44,9 @@
 		);
 	}
 
-	/** A file or MCP resource picked with `@` is kept as a reference. */
+	/** A file picked with `@` is kept as a reference. */
 	async function handleAddReference(entry: FileMentionEntry) {
-		await addContextItems([
-			{
-				kind:
-					entry.type === FileMentionEntryType.MCP_RESOURCE
-						? ProjectContextKind.MCP_RESOURCE
-						: ProjectContextKind.FILE,
-				name: entry.name,
-				path: entry.path,
-				serverName: entry.serverName
-			}
-		]);
+		await addContextItems([{ kind: ProjectContextKind.FILE, name: entry.name, path: entry.path }]);
 	}
 </script>
 

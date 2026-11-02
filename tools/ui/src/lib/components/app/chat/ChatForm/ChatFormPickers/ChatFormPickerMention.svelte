@@ -22,12 +22,16 @@
 	 * Floating file/folder mention picker. The chat input is the search
 	 * surface: `query` (typed after `@`) drives a `file_glob_search` tool
 	 * call scoped to `scopePath`. The parent owns the "dismissed token,
-	 * don't re-open until it changes" snapshot.
+	 * don't re-open until it changes" snapshot. A host without an `@` token,
+	 * like a project's context, shows the list's own search field and binds
+	 * `query` instead.
 	 */
 	interface Props {
 		class?: string;
 		isOpen: boolean;
 		query: string;
+		/** Renders the list's own search field, for hosts without an `@` token. */
+		showSearchInput?: boolean;
 		customAnchor?: HTMLElement | null;
 		scopePath?: string | null;
 		onClose: () => void;
@@ -43,8 +47,9 @@
 		onClose,
 		onOpened,
 		onSelect,
-		query,
-		scopePath = null
+		query = $bindable(''),
+		scopePath = null,
+		showSearchInput = false
 	}: Props = $props();
 
 	const nav = usePickerNavigation({
@@ -229,14 +234,16 @@
 		sideOffset={12}
 	>
 		<ChatFormPickerList
+			bind:searchQuery={query}
 			{emptyMessage}
 			isLoading={search.isSearching}
 			itemKey={(entry) => entry.type + ':' + entry.path}
 			items={displayedItems}
+			onSearchClose={onClose}
 			scrollTrigger={nav.scrollTrigger}
-			searchQuery={query ?? ''}
+			searchPlaceholder="Search files"
 			selectedIndex={nav.hoveredIndex}
-			showSearchInput={false}
+			{showSearchInput}
 		>
 			{#snippet item(entry, index, isSelected)}
 				<ChatFormPickerListItem

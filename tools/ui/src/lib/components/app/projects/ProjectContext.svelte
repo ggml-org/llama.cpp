@@ -4,7 +4,7 @@
 	import { ActionIcon, ChatFormPickerMention, DropdownMenuActions } from '$lib/components/app';
 	import * as Empty from '$lib/components/ui/empty';
 	import { ICON_CLASS_DEFAULT, SECTION_ACTION_CLASS } from '$lib/constants';
-	import { MentionPickerSource, ProjectContextKind } from '$lib/enums';
+	import { ProjectContextKind } from '$lib/enums';
 	import type { FileMentionEntry, ProjectContextItem } from '$lib/types';
 	import { formatFileSize } from '$lib/utils';
 
@@ -19,7 +19,6 @@
 
 	let fileInput = $state<HTMLInputElement | null>(null);
 	let pickerAnchor = $state<HTMLDivElement | null>(null);
-	let pickerSource = $state<MentionPickerSource>(MentionPickerSource.FILES);
 	let isPickerOpen = $state(false);
 	let pickerQuery = $state('');
 
@@ -32,18 +31,12 @@
 		{
 			icon: FileIcon,
 			label: 'Reference files',
-			onclick: () => openPicker(MentionPickerSource.FILES),
-			separator: true
-		},
-		{
-			icon: Server,
-			label: 'MCP resources',
-			onclick: () => openPicker(MentionPickerSource.MCP_RESOURCES)
+			onclick: () => openPicker()
 		}
+		// MCP resources join here once the mention picker lists them
 	]);
 
-	function openPicker(source: MentionPickerSource) {
-		pickerSource = source;
+	function openPicker() {
 		pickerQuery = '';
 		isPickerOpen = true;
 	}
@@ -143,5 +136,4 @@
 	onClose={() => (isPickerOpen = false)}
 	onSelect={handleReferenceSelect}
 	showSearchInput
-	source={pickerSource}
 />

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { File as FileIcon, Paperclip, Plus, Server, X } from '@lucide/svelte';
 	import { ActionIcon, ChatFormPickerMention, DropdownMenuActions } from '$lib/components/app';
-	import { FileMentionEntryType, MentionPickerSource, ProjectContextKind } from '$lib/enums';
+	import { ProjectContextKind } from '$lib/enums';
 	import { useChatScreenActiveModel } from '$lib/hooks/use-chat-screen-active-model.svelte';
 	import type { FileMentionEntry, ProjectContextItem } from '$lib/types';
 	import { formatFileSize, uuid } from '$lib/utils';
@@ -17,7 +17,6 @@
 
 	let fileInput = $state<HTMLInputElement | null>(null);
 	let pickerAnchor = $state<HTMLDivElement | null>(null);
-	let pickerSource = $state<MentionPickerSource>(MentionPickerSource.FILES);
 	let isPickerOpen = $state(false);
 	let pickerQuery = $state('');
 
@@ -26,18 +25,12 @@
 		{
 			icon: FileIcon,
 			label: 'Reference files',
-			onclick: () => openPicker(MentionPickerSource.FILES),
-			separator: true
-		},
-		{
-			icon: Server,
-			label: 'MCP resources',
-			onclick: () => openPicker(MentionPickerSource.MCP_RESOURCES)
+			onclick: () => openPicker()
 		}
+		// MCP resources join here once the mention picker lists them
 	];
 
-	function openPicker(source: MentionPickerSource) {
-		pickerSource = source;
+	function openPicker() {
 		pickerQuery = '';
 		isPickerOpen = true;
 	}
@@ -69,22 +62,13 @@
 		];
 	}
 
-	/** A file or MCP resource picked from the server is kept as a reference. */
+	/** A file picked from the server is kept as a reference. */
 	function handleReferenceSelect(entry: FileMentionEntry) {
 		isPickerOpen = false;
 
 		items = [
 			...items,
-			{
-				id: uuid(),
-				kind:
-					entry.type === FileMentionEntryType.MCP_RESOURCE
-						? ProjectContextKind.MCP_RESOURCE
-						: ProjectContextKind.FILE,
-				name: entry.name,
-				path: entry.path,
-				serverName: entry.serverName
-			}
+			{ id: uuid(), kind: ProjectContextKind.FILE, name: entry.name, path: entry.path }
 		];
 	}
 
@@ -159,5 +143,4 @@
 	onClose={() => (isPickerOpen = false)}
 	onSelect={handleReferenceSelect}
 	showSearchInput
-	source={pickerSource}
 />
