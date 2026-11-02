@@ -488,7 +488,7 @@ SYCL backend depends on:
 
 a. Install the toolkit
 
-It's recommended to install the **Intel® oneAPI Toolkit**. The [Linux](#linux) section has the details and the list of verified releases.
+It's recommended to install the [Intel® oneAPI Toolkit](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit.html). 
 Alternatively, users can install **Intel® Deep Learning Essentials** + **oneDNN** to provide the necessary libraries with lesser size.
 
 Please follow the instructions for downloading and installing the Toolkit for Windows, and preferably keep the default installation values unchanged, notably the installation path *(`C:\Program Files (x86)\Intel\oneAPI` by default)*.
