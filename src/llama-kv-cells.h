@@ -415,11 +415,11 @@ public:
         return std::distance(sp.lower_bound({ p_min, 0 }), sp.end());
     }
 
-    // get the lists of cells of sequence seq_id, in cell order
-    // one list of max `n_per_seq` for each seq_id, padded with -1
+    // get the lists of the cells that contain any of the sequences seq_ids[s] of slice s, in cell order
+    // one list of max `n_per_seq` for each slice, padded with -1
     // if p_min is not empty, only the cells at a position >= p_min[s] go to the list of slice s
     LLAMA_ATTRIBUTE_NOINLINE
-    void get_seq_cells(const std::vector<llama_seq_id> & seq_ids, const std::vector<llama_pos> & p_min, int32_t * data, int64_t n_per_seq) const {
+    void get_seq_cells(const std::vector<std::vector<llama_seq_id>> & seq_ids, const std::vector<llama_pos> & p_min, int32_t * data, int64_t n_per_seq) const {
         assert(seq_ids.size() >= 1);
         assert(p_min.empty() || p_min.size() == seq_ids.size());
 
@@ -428,16 +428,21 @@ public:
         const uint32_t n_words = (used_max_p1() + 63)/64;
 
         for (int64_t s = 0; s < n_slices; ++s) {
-            const auto & bits = seq_bits[seq_ids[s]];
-
-            const uint32_t n_w = std::min<uint32_t>(n_words, bits.size());
             const llama_pos pm = p_min.empty() ? 0 : p_min[s];
 
             int32_t * dst = data + s*n_per_seq;
             int32_t * end = dst + n_per_seq;
 
-            for (uint32_t w = 0; w < n_w; ++w) {
-                for (uint64_t b = bits[w]; b != 0; b &= b - 1) {
+            for (uint32_t w = 0; w < n_words; ++w) {
+                uint64_t word = 0;
+                for (const llama_seq_id seq_id : seq_ids[s]) {
+                    const auto & bits = seq_bits[seq_id];
+                    if (w < bits.size()) {
+                        word |= bits[w];
+                    }
+                }
+
+                for (uint64_t b = word; b != 0; b &= b - 1) {
                     const int32_t i = 64*w + ctz64(b);
                     if (pos[i] >= pm) {
                         GGML_ASSERT(dst < end);
