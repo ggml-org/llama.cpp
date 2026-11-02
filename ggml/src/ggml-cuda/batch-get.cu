@@ -146,7 +146,7 @@ bool ggml_cuda_get_tensor_n(int device,
     // Reads selected for gather; zero means all reads use DMA.
     size_t n_reads_gather = mapping.device && n_reads_small >= min_batch_reads ? n_reads_small : 0;
     // Keep descriptor storage alive until the final stream synchronization.
-    constexpr size_t max_batch_descriptors = 64 * 1024;
+    constexpr size_t max_batch_descriptors = 128 * 1024;
     const size_t bytes = std::min(n_reads_gather, max_batch_descriptors) * sizeof(ggml_cuda_batch_get_descriptor);
     ggml_backend_buffer_ptr descriptors(n_reads_gather ? ggml_backend_buft_alloc_buffer(ggml_backend_cuda_buffer_type(device), bytes) : nullptr);
     if (!descriptors) {
@@ -160,17 +160,6 @@ bool ggml_cuda_get_tensor_n(int device,
     if (n_reads_gather) {
         auto * copies = static_cast<ggml_cuda_batch_get_descriptor *>(ggml_backend_buffer_get_base(host_descriptors.get()));
         auto * device_copies = static_cast<ggml_cuda_batch_get_descriptor *>(ggml_backend_buffer_get_base(descriptors.get()));
-        cudaEvent_t upload_done = nullptr;
-        if (n_reads_gather > max_batch_descriptors) {
-            const cudaError_t err = cudaEventCreateWithFlags(&upload_done, cudaEventDisableTiming);
-            if (err == cudaErrorMemoryAllocation) {
-                (void) cudaGetLastError();
-                upload_done = nullptr;
-                n_reads_gather = 0;
-            } else {
-                CUDA_CHECK(err);
-            }
-        }
         const int threads = 256;
         const size_t nsm = ggml_cuda_info().devices[device].nsm;
         size_t i = 0;
@@ -188,19 +177,12 @@ bool ggml_cuda_get_tensor_n(int device,
             const dim3 blocks((unsigned int) n_batch, (unsigned int) blocks_per_copy);
             // Stream ordering keeps each kernel ahead of the next descriptor overwrite.
             CUDA_CHECK(cudaMemcpyAsync(device_copies, copies, n_batch * sizeof(copies[0]), cudaMemcpyHostToDevice, cudaStreamPerThread));
-            const bool has_next = first + n_batch < n_reads_gather;
-            if (has_next) {
-                CUDA_CHECK(cudaEventRecord(upload_done, cudaStreamPerThread));
-            }
             ggml_cuda_batch_get_kernel<<<blocks, threads, 0, cudaStreamPerThread>>>(device_copies, n_batch);
             CUDA_CHECK(cudaGetLastError());
-            if (has_next) {
-                // The CPU can refill descriptors once the upload finishes, while the kernel runs.
-                CUDA_CHECK(cudaEventSynchronize(upload_done));
+            if (first + n_batch < n_reads_gather) {
+                // Wait before refilling the pinned host descriptor buffer.
+                CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
             }
-        }
-        if (upload_done) {
-            CUDA_CHECK(cudaEventDestroy(upload_done));
         }
     }
     // Keep the destination pinned for DMA too; overlapping destinations already declined above.
