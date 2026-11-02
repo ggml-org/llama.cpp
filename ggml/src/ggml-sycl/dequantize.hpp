@@ -1387,6 +1387,8 @@ static void dequantize_block_q6_K(const void * __restrict__ vx, dst_t * __restri
 #endif
 }
 
+// Each thread writes m consecutive elements of each of the four output runs, so each run is one vector store.
+// m divides 16 and il0 is a multiple of m, so a chunk never crosses a scale boundary.
 template <typename dst_t>
 static void dequantize_block_q6_K_reorder(const void * __restrict__ vx, dst_t * __restrict__ yy, const int64_t ib,
                                           const sycl::nd_item<3> & item_ct1, int64_t n_blocks) {
@@ -1420,6 +1422,60 @@ static void dequantize_block_q6_K_reorder(const void * __restrict__ vx, dst_t * 
         v[j] = *d * sc0 * ((int8_t) (((ql4[j] >> shift) & 0xF) | ((((qh4[j] >> qb) & 3)) << 4)) - 32);
     }
     *reinterpret_cast<sycl::vec<dst_t, 4> *>(yy + 128 * ip + eh0) = v;
+}
+
+// get_rows uses the scalar kernel above and the convert path uses this one, because their launch geometries differ.
+template <typename dst_t, int m>
+static void dequantize_block_q6_K_reorder_wide(const void * __restrict__ vx, dst_t * __restrict__ yy,
+                                               const sycl::nd_item<1> & item_ct1, int64_t n_blocks) {
+    constexpr int per_ip = 32 / m;
+
+    const int64_t c = item_ct1.get_global_id(0);
+    if (c >= n_blocks * 2 * per_ip) {
+        return;
+    }
+
+    const int64_t ib  = c / (2 * per_ip);
+    const int64_t rem = c - ib * (2 * per_ip);
+    const int64_t ip  = rem / per_ip;             // ip is 0 or 1
+    const int64_t il  = (rem - ip * per_ip) * m;  // 0...32, a multiple of m
+    const int64_t is  = 8 * ip + il / 16;
+
+    const uint8_t *   base_ptr           = static_cast<const uint8_t *>(vx);
+    const auto        ql_offset          = ib * (QK_K / 2);
+    const auto        qh_offset          = (QK_K / 2) * n_blocks + (QK_K / 4) * ib;
+    const auto        base_scales_offset = (QK_K / 2) * n_blocks + (QK_K / 4) * n_blocks + (QK_K / 16) * ib;
+    const auto        base_d_offset      = ((QK_K / 2) + (QK_K / 4) + (QK_K / 16)) * n_blocks;
+    const uint8_t *   ql_ptr             = base_ptr + ql_offset;
+    const uint8_t *   qh_ptr             = base_ptr + qh_offset;
+    const uint8_t *   scales_ptr         = base_ptr + base_scales_offset;
+    const ggml_half * d                  = (const ggml_half *) (base_ptr + base_d_offset) + ib;
+
+    dst_t * y = yy + ib * QK_K + 128 * ip + il;
+
+    const uint8_t * ql_lo = ql_ptr + 64 * ip + il;
+    const uint8_t * ql_hi = ql_lo + 32;
+    const uint8_t * qh_p  = qh_ptr + 32 * ip + il;
+    const int8_t *  sc    = reinterpret_cast<const int8_t *>(scales_ptr + is);
+
+    const sycl::vec<uint8_t, m> l0 = *reinterpret_cast<const sycl::vec<uint8_t, m> *>(ql_lo);
+    const sycl::vec<uint8_t, m> l1 = *reinterpret_cast<const sycl::vec<uint8_t, m> *>(ql_hi);
+    const sycl::vec<uint8_t, m> hq = *reinterpret_cast<const sycl::vec<uint8_t, m> *>(qh_p);
+
+    // Same expressions and types as the scalar kernel, so the result is bit-exact.
+    // Do not hoist *d * sc[k] into a float: that changes the rounding of the half product.
+    sycl::vec<dst_t, m> o0, o1, o2, o3;
+#pragma unroll
+    for (int l = 0; l < m; ++l) {
+        o0[l] = *d * sc[0] * ((int8_t) ((l0[l] & 0xF) | (((hq[l] >> 0) & 3) << 4)) - 32);
+        o1[l] = *d * sc[2] * ((int8_t) ((l1[l] & 0xF) | (((hq[l] >> 2) & 3) << 4)) - 32);
+        o2[l] = *d * sc[4] * ((int8_t) ((l0[l] >> 4)  | (((hq[l] >> 4) & 3) << 4)) - 32);
+        o3[l] = *d * sc[6] * ((int8_t) ((l1[l] >> 4)  | (((hq[l] >> 6) & 3) << 4)) - 32);
+    }
+    *reinterpret_cast<sycl::vec<dst_t, m> *>(y +  0) = o0;
+    *reinterpret_cast<sycl::vec<dst_t, m> *>(y + 32) = o1;
+    *reinterpret_cast<sycl::vec<dst_t, m> *>(y + 64) = o2;
+    *reinterpret_cast<sycl::vec<dst_t, m> *>(y + 96) = o3;
 }
 
 template<typename dst_t>

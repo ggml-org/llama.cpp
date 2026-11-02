@@ -11196,6 +11196,17 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 8192, 512, 5120, {128, 1}, {1, 1}));
 #endif
 
+    // Narrow-output mat-vec cases for the split-K path (k >= 2048 so a row has waves to split).
+    // m=1 and m=47 do not divide rows-per-group, so idle subgroups must still reach the barrier.
+    for (int n : { 2, 5 }) {
+        for (int m : { 1, 47, 48, 1024 }) {
+            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, m, n, 5120, {1, 1}, {1, 1}));
+        }
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32,   48, n, 2048, {1, 1}, {1, 1}));
+        // control: too many rows to split
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 5120, n, 5120, {1, 1}, {1, 1}));
+    }
+
     for (ggml_type type_a : all_types) {
         for (int i = 1; i < 10; ++i) {
             test_cases.emplace_back(new test_mul_mat(type_a,    GGML_TYPE_F32, 16,  i, 1*256, { 1,  1}, {1, 1}));
@@ -12810,6 +12821,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
 
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F32, 16416, 1, 128, {8,  1}, {4, 1}, {0, 2, 1, 3}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F32, 128, 1, 16416, {8,  1}, {4, 1}, {0, 1, 2, 3}, 2*16416));
+
+    // q4_K mat-vec K x M sweep at n=2 and n=4, to find shapes where the reorder kernel slows down.
+    for (int n : { 2, 4 }) {
+        for (int k : { 4096, 5120, 6144, 7168, 8192, 10240, 12288, 17408 }) {
+            for (int m : { 4096, 5120, 6144, 7168, 8192, 10240, 12288, 17408 }) {
+                test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, m, n, k, {1, 1}, {1, 1}));
+            }
+        }
+    }
 
     // FWHT tests
     test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F32, 128, 1, 128));

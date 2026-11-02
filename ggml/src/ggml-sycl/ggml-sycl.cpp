@@ -3363,6 +3363,9 @@ inline void ggml_sycl_op_mul_mat_sycl(
                                                  " : converting src0 to fp32");
             const to_fp32_sycl_t to_fp32_sycl = ggml_get_to_fp32_sycl(src0->type, dst);
             GGML_ASSERT(to_fp32_sycl != nullptr);
+            // the reorder kernels find the scales from the element count, so they need the whole tensor
+            GGML_ASSERT(row_diff == src0->ne[1] || !src0->extra ||
+                        !((ggml_tensor_extra_gpu *) src0->extra)->optimized_feature.reorder);
             src0_ddq_as_f32.alloc(row_diff*ne00);
             to_fp32_sycl(src0_dd_i, src0_ddq_as_f32.get(), row_diff*ne00, stream);
         }
