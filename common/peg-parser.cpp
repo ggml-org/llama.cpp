@@ -1158,20 +1158,13 @@ common_peg_parser common_peg_parser_builder::chars(const std::string & classes, 
     return wrap(arena_.add_parser(common_peg_chars_parser{classes, ranges, negated, min, max}));
 }
 
-common_peg_parser common_peg_parser_builder::schema(const common_peg_parser & p, const std::string & name, common_chat_schema_document_ptr doc, const common_chat_schema & node, bool raw) {
-    return wrap(arena_.add_parser(common_peg_schema_parser{p.id(), name, std::move(doc), &node, raw}));
+common_peg_parser common_peg_parser_builder::schema(const common_peg_parser & p, const std::string & name, common_chat_schema_document_ptr doc, const common_chat_schema & node, bool raw, bool unordered) {
+    return wrap(arena_.add_parser(common_peg_schema_parser{p.id(), name, std::move(doc), &node, raw, unordered}));
 }
 
-common_peg_parser common_peg_parser_builder::schema(const common_peg_parser & p, const std::string & name, const common_json & schema, bool raw) {
+common_peg_parser common_peg_parser_builder::schema(const common_peg_parser & p, const std::string & name, const common_json & schema, bool raw, bool unordered) {
     auto doc = std::make_shared<const common_chat_schema_document>(common_chat_schema_from_json(schema));
-    return this->schema(p, name, doc, *doc->root, raw);
-}
-
-common_peg_parser common_peg_parser_builder::unordered_schema(const common_peg_parser & p) {
-    if (auto * s = std::get_if<common_peg_schema_parser>(&arena_.get(p.id()))) {
-        s->unordered = true;
-    }
-    return p;
+    return this->schema(p, name, doc, *doc->root, raw, unordered);
 }
 
 common_peg_parser common_peg_parser_builder::rule(const std::string & name, const common_peg_parser & p, bool trigger) {
