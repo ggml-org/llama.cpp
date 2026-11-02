@@ -517,12 +517,15 @@
 				openDialog(() => uiStore.openModelsManager());
 
 				break;
+			// dialogs on a desktop or tablet; on a phone, pages of their own
 			case SidebarAction.MCP:
-				openDialog(() => (mcpDialogOpen = true));
+				if (isOnMobile) afterMobileClose(() => void goto(ROUTES.MCP_SERVERS));
+				else openDialog(() => (mcpDialogOpen = true));
 
 				break;
 			case SidebarAction.SETTINGS:
-				openDialog(() => (settingsDialogOpen = true));
+				if (isOnMobile) afterMobileClose(() => void goto(ROUTES.SETTINGS));
+				else openDialog(() => (settingsDialogOpen = true));
 
 				break;
 		}
