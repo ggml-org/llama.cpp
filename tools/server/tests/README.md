@@ -71,7 +71,8 @@ The acceptance floors use one-sided regression checks: improvements do not fail.
 DGX Spark calibration runs produced MTP `0.7155 / 3.1230`, DFlash `0.1867 / 2.2754`, DSpark
 `0.2878 / 2.9766`, EAGLE-3 `0.3047 / 1.9095`, DFlash2 `0.5480 / 4.7414`, and LiLiCorr
 `0.6699 / 5.6444` for acceptance rate and length. The enforced floors subtract three percentage
-points and 0.2 accepted tokens per verification step. Each floor passed its final DGX Spark check.
+points and 0.2 accepted tokens per verification step. The committed six-method suite passed on
+DGX Spark in 41.12 seconds.
 
 DFlash's token-acceptance rate is lower because the denominator counts every token proposed in each
 seven-token draft block. It accepted 213 of 1,141 proposed tokens over 167 verification steps,
