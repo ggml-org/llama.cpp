@@ -523,11 +523,12 @@ def tune(cmd, out, max_mib):
             os.remove(os.path.join(out, f))
     open(command, "w").write(shlex.join(cmd))
 
+    load_mode = next((cmd[i + 1] for i, a in reversed(list(enumerate(cmd[:-1]))) if a in ("-lm", "--load-mode")), os.environ.get("LLAMA_ARG_LOAD_MODE", "auto"))
     warmed = []
 
     def warm():
         # read an mmap'd model once, so that no run reads it from disk
-        if not warmed and not any(a in cmd for a in ("--no-mmap", "-lm", "--load-mode")):
+        if not warmed and load_mode in ("auto", "mmap", "mmap+mlock"):
             for p in model_files(model):
                 with open(p, "rb") as f:
                     while f.read(64 << 20):

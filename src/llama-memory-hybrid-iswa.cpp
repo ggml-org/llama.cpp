@@ -18,7 +18,6 @@ llama_memory_hybrid_iswa::llama_memory_hybrid_iswa(
                      bool   swa_full,
                  uint32_t   kv_size,
                  uint32_t   n_ubatch,
-                 uint32_t   n_pad,
                             /* recurrent */
                 ggml_type   type_r,
                 ggml_type   type_s,
@@ -44,7 +43,6 @@ llama_memory_hybrid_iswa::llama_memory_hybrid_iswa(
         kv_size,
         n_seq_max,
         n_ubatch,
-        n_pad,
         nullptr,
         filter_attn == nullptr ?
             [&](int32_t il) { return !hparams.is_recr(il); }

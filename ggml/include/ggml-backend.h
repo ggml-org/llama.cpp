@@ -70,7 +70,8 @@ extern "C" {
     GGML_API void                           ggml_backend_buffer_reset         (ggml_backend_buffer_t buffer);
 
     // tensor copy between different backends
-    GGML_API void ggml_backend_tensor_copy(const struct ggml_tensor * src, struct ggml_tensor * dst);
+    GGML_API void ggml_backend_tensor_copy  (const struct ggml_tensor * src, struct ggml_tensor * dst);
+    GGML_API void ggml_backend_tensor_copy_n(const struct ggml_tensor * const * srcs, struct ggml_tensor * const * dsts, size_t n_tensors);
 
     //
     // Backend (stream)
@@ -95,6 +96,8 @@ extern "C" {
     GGML_API void ggml_backend_tensor_get   (const struct ggml_tensor * tensor,       void * data, size_t offset, size_t size);
     GGML_API void ggml_backend_tensor_set_2d(      struct ggml_tensor * tensor, const void * data, size_t offset, size_t size, size_t n_copies, size_t stride_tensor, size_t stride_data);
     GGML_API void ggml_backend_tensor_get_2d(const struct ggml_tensor * tensor,       void * data, size_t offset, size_t size, size_t n_copies, size_t stride_tensor, size_t stride_data);
+    GGML_API void ggml_backend_tensor_set_n (      struct ggml_tensor * const * tensors, const void * data, const size_t * offsets, const size_t * sizes, const size_t * data_offsets, size_t n_tensors);
+    GGML_API void ggml_backend_tensor_get_n (const struct ggml_tensor * const * tensors,       void * data, const size_t * offsets, const size_t * sizes, const size_t * data_offsets, size_t n_tensors);
     GGML_API void ggml_backend_tensor_memset(      struct ggml_tensor * tensor,     uint8_t value, size_t offset, size_t size);
 
     GGML_API void ggml_backend_synchronize(ggml_backend_t backend);
@@ -319,8 +322,7 @@ extern "C" {
 
     // Callback while copying the inputs of a split, except the user inputs
     // if the user returns false the scheduler copies the input itself, if it returns true the input must be in `dst` when the split runs
-    // the copies must be ordered after the work queued on `backend`, it may still be using `dst`
-    // async copies of some backends run on another queue, a wait on an event recorded on `backend` orders them
+    // the callback is called after `backend` is synchronized, or with multiple copies after it waits on the event of `dst`
     // the input weights in host buffers are copied after all other inputs of the split
     // `src` is the tensor in the previous split
     // `dst` is the copy of `src` in the split

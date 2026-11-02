@@ -600,6 +600,14 @@ struct llama_layer {
     struct ggml_tensor * indexer_proj     = nullptr;
     struct ggml_tensor * indexer_attn_k   = nullptr;
     struct ggml_tensor * indexer_attn_q_b = nullptr; // note: for lora a/b, not bias
+    struct ggml_tensor * indexer_q_norm   = nullptr;
+    struct ggml_tensor * indexer_q_norm_b = nullptr;
+
+    // SSMax: per-head query scale s * log(pos + 1) + b
+    struct ggml_tensor * attn_ssmax_s    = nullptr;
+    struct ggml_tensor * attn_ssmax_b    = nullptr;
+    struct ggml_tensor * indexer_ssmax_s = nullptr;
+    struct ggml_tensor * indexer_ssmax_b = nullptr;
 
     // glm5-next k-pool indexer
     struct ggml_tensor * indexer_kpool_gate = nullptr;
@@ -637,6 +645,15 @@ struct llama_layer {
 
     // gemma4 layer output scale, reused for talkie embedding skip scale
     struct ggml_tensor * out_scale = nullptr;
+
+    // limite
+    struct ggml_tensor * attn_ve_gate     = nullptr;
+    struct ggml_tensor * attn_xsa_alpha   = nullptr;
+    struct ggml_tensor * attn_resid_scale = nullptr;
+    struct ggml_tensor * ffn_resid_scale  = nullptr;
+    struct ggml_tensor * mudd_down        = nullptr;
+    struct ggml_tensor * mudd_up          = nullptr;
+    struct ggml_tensor * mudd_up_b        = nullptr;
 
     struct llama_layer_posnet posnet;
 
@@ -783,6 +800,9 @@ struct llama_model {
     struct ggml_tensor * altup_unembd_proj    = nullptr;
     struct ggml_tensor * per_layer_tok_embd   = nullptr;
 
+    // limite value embeddings
+    struct ggml_tensor * value_embd = nullptr;
+
     struct ggml_tensor * hc_head_norm = nullptr;
     struct ggml_tensor * hc_head_down = nullptr;
     struct ggml_tensor * hc_head_up   = nullptr;
@@ -801,6 +821,9 @@ struct llama_model {
     struct ggml_tensor * dspark_markov_w2_s = nullptr;
     struct ggml_tensor * dspark_conf_proj   = nullptr;
     struct ggml_tensor * dspark_conf_proj_b = nullptr;
+    struct ggml_tensor * dspark_joint_proj   = nullptr; // rnn markov head
+    struct ggml_tensor * dspark_joint_proj_b = nullptr;
+    struct ggml_tensor * dspark_mask_embd    = nullptr; // per-slot mask embeddings
 
     struct ggml_tensor * dflash_selector_prev   = nullptr;
     struct ggml_tensor * dflash_selector_next   = nullptr;

@@ -638,6 +638,9 @@ static const ggml_backend_buffer_i ggml_backend_openvino_buffer_interface = {
     /* .cpy_tensor      = */ ggml_backend_openvino_buffer_cpy_tensor,
     /* .clear           = */ ggml_backend_openvino_buffer_clear,
     /* .reset           = */ NULL,
+    /* .set_tensor_n    = */ NULL,
+    /* .get_tensor_n    = */ NULL,
+    /* .cpy_tensor_n    = */ NULL,
 };
 
 // Buffer type interface functions
@@ -1445,6 +1448,10 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
     case GGML_OP_SCALE: {
         if (op->type == GGML_TYPE_BF16) {
             return {false, "SCALE with BF16 type is not supported"};
+        }
+        // The result is copied back densely, so an in-place SCALE on a strided view would be written wrongly.
+        if (op->view_src != nullptr && !ggml_is_contiguous(op)) {
+            return {false, "SCALE in place on a non-contiguous view is not supported"};
         }
         break;
     }

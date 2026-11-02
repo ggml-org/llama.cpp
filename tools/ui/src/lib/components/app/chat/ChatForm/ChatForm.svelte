@@ -144,6 +144,7 @@
 	);
 
 	const pickers = useChatFormPickers({
+		canCompact: () => chatStore.canCompact(conversationsStore.activeMessages),
 		focusInput: refocusInput,
 		getCaretOffset: () => inputRef?.getCaretOffset(),
 		getCwd: () => cwd,
@@ -163,6 +164,7 @@
 				.getServers()
 				.some((s) => s.enabled && prefs.isServerToolsEnabled(s.id) && s.url.trim());
 		},
+		onCompact: () => chatStore.compactConversation(),
 		openModelSelector: () => chatFormActionsRef?.openModelSelector(),
 		setCaretOffset: (offset) => inputRef?.setCaretOffset(offset),
 		setValue: (v) => {

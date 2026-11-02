@@ -99,6 +99,7 @@ export {
 	formatJsonPretty,
 	formatTime,
 	formatPerformanceTime,
+	formatRelativeTime,
 	formatAttachmentText
 } from './formatters';
 
@@ -355,6 +356,13 @@ export { getToolUi } from './tool-ui';
 // Chat command picker
 
 export { getChatCommands } from './chat-commands';
+export {
+	canCompactMessages,
+	compactionCut,
+	compactionTokensBefore,
+	lastContextBearingMessage,
+	sliceAtLastCompaction
+} from './compaction';
 
 // Sandbox tool definition
 // SANDBOX_TOOL_DEFINITION is deprecated; kept for backward compatibility.
