@@ -5,10 +5,12 @@
 	interface Props {
 		/** Transparent but still in place, e.g. behind the expanded chat form. */
 		faded?: boolean;
+		/** Shown at once, without the entry: a phone's form never moves, so there is none to wait for. */
+		instant?: boolean;
 		isEmpty: boolean;
 	}
 
-	let { faded = false, isEmpty = false }: Props = $props();
+	let { faded = false, instant = false, isEmpty = false }: Props = $props();
 
 	let hasEntered = $state(false);
 
@@ -31,7 +33,7 @@
 
 	let enterClass = $derived([
 		'transition-opacity duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]',
-		!hasEntered && 'opacity-0'
+		!hasEntered && !instant && 'opacity-0'
 	]);
 </script>
 

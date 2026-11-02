@@ -37,6 +37,7 @@
 	import { RouterService } from '$lib/services/router.service';
 	import { chatStore, conversationsStore, deviceStore, settingsStore, uiStore } from '$lib/stores';
 	import { buildConversationTree, remToPx } from '$lib/utils';
+	import { tick } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { fade } from 'svelte/transition';
 
@@ -301,7 +302,7 @@
 	}
 
 	function selectConversation(id: string) {
-		afterMobileClose(() => void goto(RouterService.chat(id)));
+		navigateBehind(() => goto(RouterService.chat(id)));
 	}
 
 	async function handleEditConversation(id: string) {
@@ -368,8 +369,25 @@
 	}
 
 	/**
-	 * A phone slides its open sidebar shut first, and only then follows a tap in it, so the page
-	 * it goes to or the dialog it opens appears once the sidebar is out of the way. Anything else
+	 * A phone opens the page a tap in its sidebar goes to while the current one is still aside,
+	 * and slides the sidebar shut once that page has rendered, so it is ready, settled, as it
+	 * slides back. Anything else navigates at once.
+	 */
+	function navigateBehind(go: () => Promise<unknown>): void {
+		if (!deviceStore.isMobile || !uiStore.isSidebarExpanded) {
+			void go();
+
+			return;
+		}
+
+		void go()
+			.then(tick)
+			.finally(() => requestAnimationFrame(() => (uiStore.isSidebarExpanded = false)));
+	}
+
+	/**
+	 * A phone slides its open sidebar shut first, and only then opens what a tap in it asks for,
+	 * so a dialog or the search screen appears once the sidebar is out of the way. Anything else
 	 * acts at once.
 	 */
 	function afterMobileClose(run: () => void): void {
@@ -506,7 +524,7 @@
 	function handleSidebarAction(action: SidebarAction): void {
 		switch (action) {
 			case SidebarAction.NEW_CHAT:
-				afterMobileClose(() => void conversationsStore.openNewChat({ inNewTab: true }));
+				navigateBehind(() => conversationsStore.openNewChat({ inNewTab: true }));
 
 				break;
 			case SidebarAction.SEARCH:
@@ -519,12 +537,12 @@
 				break;
 			// dialogs on a desktop or tablet; on a phone, pages of their own
 			case SidebarAction.MCP:
-				if (isOnMobile) afterMobileClose(() => void goto(ROUTES.MCP_SERVERS));
+				if (isOnMobile) navigateBehind(() => goto(ROUTES.MCP_SERVERS));
 				else openDialog(() => (mcpDialogOpen = true));
 
 				break;
 			case SidebarAction.SETTINGS:
-				if (isOnMobile) afterMobileClose(() => void goto(ROUTES.SETTINGS));
+				if (isOnMobile) navigateBehind(() => goto(ROUTES.SETTINGS));
 				else openDialog(() => (settingsDialogOpen = true));
 
 				break;
@@ -641,11 +659,7 @@
 					class="px-2 md:my-3"
 					items={isOnMobile ? [...SIDEBAR_ACTIONS_ITEMS, ...SIDEBAR_FOOTER_ITEMS] : undefined}
 					onAction={handleSidebarAction}
-					onNavigate={() => {
-						if (deviceStore.isMobile) {
-							uiStore.isSidebarExpanded = false;
-						}
-					}}
+					onNavigate={navigateBehind}
 				/>
 
 				<div

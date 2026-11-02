@@ -358,6 +358,7 @@
 			onpointerdown={sidebarReveal.handlePointerDown}
 			onpointermove={sidebarReveal.handlePointerMove}
 			onpointerup={sidebarReveal.handlePointerUp}
+			ontransitionend={sidebarReveal.handleTransitionEnd}
 		>
 			<!-- the installed app's status bar sits over the page: what scrolls under it fades out;
 			     the expanded chat form keeps clear of the bar itself -->

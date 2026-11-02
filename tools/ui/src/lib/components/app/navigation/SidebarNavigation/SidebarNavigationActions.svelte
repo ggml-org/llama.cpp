@@ -23,8 +23,8 @@
 		/** The items to show: the sidebar's top actions unless given, e.g. its footer's. */
 		items?: DesktopIconStripItem[];
 		onAction?: (action: SidebarAction) => void;
-		/** Called before following a route item, so a phone can collapse the sidebar. */
-		onNavigate?: () => void;
+		/** Follows a route item, so a phone can open its page behind the sidebar and then close it. */
+		onNavigate?: (go: () => Promise<unknown>) => void;
 	}
 
 	let { class: className, items = SIDEBAR_ACTIONS_ITEMS, onAction, onNavigate }: Props = $props();
@@ -58,10 +58,7 @@
 		}
 
 		if (route) {
-			return () => {
-				onNavigate?.();
-				goto(route);
-			};
+			return () => (onNavigate ? onNavigate(() => goto(route)) : void goto(route));
 		}
 
 		return undefined;

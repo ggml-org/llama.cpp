@@ -189,10 +189,18 @@
 	 * where it is, drifting toward where it goes, and fades
 	 * back in from the other side once it is there. Reduced motion keeps only
 	 * the fade. Re-reads `isEmpty` after each move, so a flip back mid-move
-	 * ends where the screen is.
+	 * ends where the screen is. A phone keeps the form at the bottom either way, so there it
+	 * only switches, at once.
 	 */
 	async function moveForm() {
 		if (isFormMoving) return;
+
+		if (deviceStore.isMobile) {
+			isFormCentered = isEmpty;
+			isFormHeldAtBottom = false;
+
+			return;
+		}
 
 		isFormMoving = true;
 
@@ -350,7 +358,11 @@
 					'transition-[left,right,bottom] duration-400 ease-[var(--chat-form-resize-ease,cubic-bezier(0.3,1.12,0.5,1))] max-md:transition-none motion-reduce:transition-none'
 			]}
 		>
-			<ChatScreenGreeting faded={uiStore.isComposerExpanded} isEmpty={isFormLifted} />
+			<ChatScreenGreeting
+				faded={uiStore.isComposerExpanded}
+				instant={deviceStore.isMobile}
+				isEmpty={isFormLifted}
+			/>
 
 			<ChatScreenServerError />
 
