@@ -212,7 +212,7 @@ struct moe_cache_lru {
     // a zero slot is used at most once per token, a miss that does not get one is cached instead
     // returns false if the ids select more distinct experts than there are slots
     template <typename F>
-    bool plan(int32_t il, const int32_t * ids, size_t n_ids, int32_t n_used, int32_t n_zero, F && n_cpu, bool admit, uint64_t & rng,
+    bool plan(int32_t il, const int32_t * ids, size_t n_ids, int32_t n_used, int32_t n_zero, F && n_cpu, bool admit,
             std::vector<fill> & fills, std::vector<fill> & cpu, size_t & n_hit) {
         fills.clear();
         cpu.clear();
@@ -250,11 +250,15 @@ struct moe_cache_lru {
             }
         }
 
-        // the misses left to the CPU are picked at random, so that every expert can enter the cache
+        // the misses with the lowest CRF are left to the CPU, a miss that keeps being used gains CRF and enters the cache
+        // all misses are used at the same clock, so their CRF compare without decay
         const size_t n_c = std::min(n_cpu(misses.size()), misses.size());
-        for (size_t i = 0; i < n_c; ++i) {
-            rng = rng*6364136223846793005ull + 1442695040888963407ull;
-            std::swap(misses[i], misses[i + (rng >> 33) % (misses.size() - i)]);
+        if (n_c > 0) {
+            std::sort(misses.begin(), misses.end(), [&](int32_t a, int32_t b) {
+                const float crf_a = crf[make_key(il, a)];
+                const float crf_b = crf[make_key(il, b)];
+                return crf_a != crf_b ? crf_a < crf_b : a < b;
+            });
         }
         token_zero.assign(n_tokens, 0);
         size_t n_keep = n_c;
@@ -410,7 +414,6 @@ struct llama_moe_cache::impl {
     float    cpu_share = 0.0f;
     uint32_t cpu_share_q = 0; // cpu_share in 1/65536, integer so that a simulator can reproduce the rounding
     int32_t  n_zero    = 0; // zero slots per group
-    uint64_t rng       = 0x853c49e6748fea9bull;
     bool     admit     = false; // cpu_share < 0 (auto): a miss goes to the CPU if its CRF is not higher than the decayed CRF of its victim
 
     // the CPU part of the layer of a slot lookup
@@ -888,7 +891,7 @@ struct llama_moe_cache::impl {
             return (size_t) (acc >> 16);
         };
         size_t n_hit = 0;
-        if (!g.lru.plan(il, ids.data(), ids.size(), it_cpu != cpu_parts.end() ? it_cpu->second.n_used : n_expert_used, n_zero, n_cpu, has_cpu && admit, rng, fills, cpu, n_hit)) {
+        if (!g.lru.plan(il, ids.data(), ids.size(), it_cpu != cpu_parts.end() ? it_cpu->second.n_used : n_expert_used, n_zero, n_cpu, has_cpu && admit, fills, cpu, n_hit)) {
             GGML_ABORT("the MoE cache is too small for the experts selected in layer %d", il);
         }
         if (has_cpu) {
