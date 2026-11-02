@@ -199,7 +199,8 @@ class Context:
         self.commands: list[list[str]] = []
         self.first_server = True
 
-    def run(self, cmd: list[str], log_path: Path, timeout_s: float, stdout_path: Path | None = None) -> None:
+    def run(self, cmd: list[str], log_path: Path, timeout_s: float, stdout_path: Path | None = None,
+            env: dict[str, str] | None = None) -> None:
         self.commands.append(cmd)
         if self.dry_run:
             raise DryRun()
@@ -207,7 +208,7 @@ class Context:
         with open(log_path, "ab") as logf:
             out = open(stdout_path, "wb") if stdout_path else logf
             try:
-                proc = subprocess.Popen(cmd, stdout=out, stderr=logf, start_new_session=True)
+                proc = subprocess.Popen(cmd, stdout=out, stderr=logf, start_new_session=True, env=env)
                 try:
                     rc = proc.wait(timeout=timeout_s)
                 except subprocess.TimeoutExpired:
@@ -449,7 +450,9 @@ def suite_speedbench(ctx: Context, records: list[dict[str, Any]], name: str, mod
                 cmd = [sys.executable, str(SPEED_BENCH), "--url", ctx.url, "--bench", scfg["bench"], "--limit", str(scfg["limit"]),
                        "--osl", str(scfg["osl"]), "--concurrency", str(c), "--extra-inputs", json.dumps(scfg["extra_inputs"]),
                        "--output", str(out)]
-                ctx.run(cmd, run_dir / "speedbench.log", scfg["timeout_s"])
+                # offline, datasets only lists the 'default' config and speed_bench.py rejects --bench; it loads before timing starts
+                env = {k: v for k, v in os.environ.items() if k not in ("HF_HUB_OFFLINE", "HF_DATASETS_OFFLINE")}
+                ctx.run(cmd, run_dir / "speedbench.log", scfg["timeout_s"], env=env)
                 data = json.loads(out.read_text())
                 metrics: dict[str, float] = {"failed_samples": data["failed_samples"]}
                 for row in data["summary"]:
