@@ -288,6 +288,23 @@ public:
 
     virtual std::set<std::string> get_model_output_names() const override { return m_model_output_names; }
 
+    virtual std::set<std::string> get_cache_output_names() const override {
+        std::set<std::string> names;
+        for (const auto & name : m_model_output_names) {
+            const ggml_tensor * tensor = m_model_outputs.at(name);
+            if (is_kvcache(tensor, nullptr) || is_recurrent_cache(tensor)) {
+                names.insert(name);
+            }
+        }
+        return names;
+    }
+
+    virtual bool is_kv_only_outputs() const override { return m_kv_only_outputs; }
+
+    // Convert the model with only the cache writes as outputs (GGML_OPENVINO_KV_ONLY_PREFILL); the conversion pipeline
+    // then drops everything that only feeds the other outputs, see pass::KeepCacheResults.
+    void set_kv_only_outputs(bool kv_only) { m_kv_only_outputs = kv_only; }
+
     const std::map<std::string, ggml_tensor *> & get_model_outputs() const { return m_model_outputs; }
 
     virtual int get_ctx_size() const { return m_model_params.ctx; }
@@ -776,6 +793,7 @@ private:
     std::set<std::string> m_model_output_names;
     // The output set the compiled model was built from, for has_same_graph_io().
     std::set<std::string> m_built_output_names;
+    bool m_kv_only_outputs = false;
     std::vector<NodeInfo> m_node_info_list;
     std::map<ggml_tensor *, int> m_node_dynamic_dims;
     std::set<const ggml_tensor *> m_kvcache_4d;

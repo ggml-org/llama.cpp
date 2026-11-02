@@ -156,6 +156,12 @@ bool ggml_openvino_npu_fast_mask_enabled();
 bool ggml_openvino_npu_hfa_prefill_enabled();
 bool ggml_openvino_npu_decode_unfold_enabled();
 bool ggml_openvino_npu_parallel_compile_enabled();
+// Static path (NPU, or any device with GGML_OPENVINO_FORCE_STATIC): prefill only the KV-writing part of the model
+// and compute the logits with one decode step. Pays off for models whose tail layers share earlier layers' KV
+// (Gemma 3n/4 E-series), where it skips those layers for prompt tokens. On by default (it only applies to graphs
+// with KV-shared attention, at most one output token per batch, and no HFA prefill or decode KV windows);
+// GGML_OPENVINO_KV_ONLY_PREFILL=0 turns it off.
+bool ggml_openvino_kv_only_prefill_enabled();
 
 // GGML_OPENVINO_NPU_BLOB_PREBUILD (default 1): static NPU graphs attend a KV window of 1024*2^k rows (clamped to ctx)
 // instead of the whole ctx, with one decode model per window, all built/imported with the prefill/decode pair;

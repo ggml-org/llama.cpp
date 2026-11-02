@@ -111,6 +111,11 @@ public:
     virtual const std::map<std::string, ModelExtraInputInfo> & get_model_extra_inputs() const = 0;
     virtual const std::map<std::string, std::shared_ptr<ov::Node>> & get_model_weights() const = 0;
     virtual std::set<std::string> get_model_output_names() const = 0;
+    // KV-only prefill (GGML_OPENVINO_KV_ONLY_PREFILL): the model keeps only the cache outputs, see
+    // pass::KeepCacheResults.
+    virtual bool is_kv_only_outputs() const { return false; }
+    // The outputs that write a KV or recurrent cache.
+    virtual std::set<std::string> get_cache_output_names() const { return {}; }
 
     virtual int32_t * get_rope_params() const = 0;
 

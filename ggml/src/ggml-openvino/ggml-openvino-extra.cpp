@@ -198,6 +198,7 @@ constexpr env_var env_vars[] = {
     {"GGML_OPENVINO_SELF_CONTAINED_BLOB", env_type::BOOL},
     {"GGML_OPENVINO_SELF_CONTAINED_MMAP", env_type::BOOL},
     {"GGML_OPENVINO_NPU_SHARED_BANK", env_type::BOOL},
+    {"GGML_OPENVINO_KV_ONLY_PREFILL", env_type::BOOL},
     {"GGML_OPENVINO_NPU_WEIGHTLESS_BANK", env_type::BOOL},
     // Build the precise (but O(n_nodes)) graph cache key. Needed by op tests.
     {"GGML_OPENVINO_FULL_GRAPH_KEY", env_type::BOOL},
@@ -700,6 +701,11 @@ bool ggml_openvino_npu_kv_on_demand_enabled() {
 bool ggml_openvino_npu_kv_head_major_enabled() {
     return ggml_openvino_npu_kv_on_demand_enabled() && ggml_openvino_npu_decode_bucket() > 0 &&
            ggml_openvino_kv_slice_enabled();
+}
+
+bool ggml_openvino_kv_only_prefill_enabled() {
+    // On by default; it only takes effect for graphs with KV-shared layers.
+    return ggml_openvino_getenv_int("GGML_OPENVINO_KV_ONLY_PREFILL", 1) != 0;
 }
 
 bool ggml_openvino_npu_raw_weight_cache_enabled() {
