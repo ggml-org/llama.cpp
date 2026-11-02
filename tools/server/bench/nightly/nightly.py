@@ -151,7 +151,7 @@ def fetch_build(cfg: dict[str, Any], home: Path, tag: str | None) -> dict[str, A
 
 
 def prefetch(cfg: dict[str, Any], home: Path, tag: str | None, models: list[str]) -> None:
-    from huggingface_hub import hf_hub_download, snapshot_download
+    from huggingface_hub import HfApi, hf_hub_download
 
     info = fetch_build(cfg, home, tag)
     write_json(home / "selected_build.json", info)
@@ -166,8 +166,12 @@ def prefetch(cfg: dict[str, Any], home: Path, tag: str | None, models: list[str]
                 hf_hub_download(repo_id=item["repo"], filename=item["file"], revision=item["revision"], local_dir=dest.parent)
         if model.get("tokenizer"):
             tok = model["tokenizer"]
-            # partial snapshot (no weights): enough for AIPerf online, which reads the cache first
-            snapshot_download(repo_id=tok["repo"], revision=tok["revision"], allow_patterns=["*.json", "*.jinja", "*.txt", "*.model"])
+            # tokenizer files only, one by one: snapshot_download caches the repo file list, and then AIPerf's
+            # offline decode workers reject the snapshot because the weights are missing
+            siblings = HfApi().model_info(tok["repo"], revision=tok["revision"]).siblings or []
+            for f in (s.rfilename for s in siblings):
+                if "/" not in f and f.endswith((".json", ".jinja", ".txt", ".model")):
+                    hf_hub_download(repo_id=tok["repo"], filename=f, revision=tok["revision"])
 
     suites = {s for name in models for s in cfg["models"][name]["suites"]}
     if "speedbench" in suites:
