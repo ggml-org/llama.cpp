@@ -11,81 +11,81 @@ from utils import ServerProcess, download_file
 # Needs real models and a GPU. Use SPEC_METHODS=compact, nightly, all, or a comma-separated method list.
 
 HF = "https://huggingface.co"
-
-MODEL_REVISIONS = {
-    "unsloth/Qwen3.5-4B-MTP-GGUF": "86835bf9949e4d14d6860f7910b1340ad4f271a9",
-    "Qwen/Qwen3-4B-GGUF": "bc640142c66e1fdd12af0bd68f40445458f3869b",
-    "Anbeeld/Qwen3-4B-DFlash-b16-GGUF": "5cbf9d2073be26ca6ce6ecaf1ec71731e818af11",
-    "Anbeeld/Qwen3-4B-DSpark-GGUF": "5bee8a38ff98cb5f6ac275dbfaeb9e1e9208c86b",
-    "unsloth/Qwen3.8-27B-GGUF": "4ca720788d1e01f1bff70c033e0d0028fd02e502",
-    "z-lab/Qwen3.8-27B-DFlash2-GGUF": "2d9571f8ce46e151f61c6499c99dee6079e1d610",
-    "nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-GGUF": "e0fecb69cb3e5e4c5e8a056fa2aec98c78e91246",
-    "nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-LiLiCorr-GGUF": "182d2987939e12f458298b5d5f6ef98912f4ad6c",
-}
+MODEL_REPO = "ggml-org/spec-for-testing-GGUF"
+MODEL_REVISION = "a0736c8e98d3fe580352dacffa3fbd5e9c22a437"
 
 
 @dataclass(frozen=True)
 class SpecCase:
     name: str
     spec_type: str
-    target: str  # <repo>/<file>
-    draft: str | None  # <repo>/<file>, None when the heads are part of the target (MTP)
+    target: str
+    draft: str | None  # None when the heads are part of the target (MTP)
     n_max: int
     min_accept_rate: float
     min_accept_len: float
 
 
 CASES = [
-    # Compact floors are the minimum of three identical CUDA calibration runs minus
+    # Floors are the minimum of three identical DGX Spark calibration runs minus
     # three acceptance-rate percentage points and 0.2 accepted tokens per step.
     SpecCase(
         name="mtp",
         spec_type="draft-mtp",
-        target="unsloth/Qwen3.5-4B-MTP-GGUF/Qwen3.5-4B-Q4_K_M.gguf",
+        target="Qwen3.5-4B-MTP-Q4_K_M.gguf",
         draft=None,
         n_max=3,
-        min_accept_rate=0.6975,
-        min_accept_len=2.9583,
+        min_accept_rate=0.6855,
+        min_accept_len=2.9230,
     ),
     SpecCase(
         name="dflash",
         spec_type="draft-dflash",
-        target="Qwen/Qwen3-4B-GGUF/Qwen3-4B-Q4_K_M.gguf",
-        draft="Anbeeld/Qwen3-4B-DFlash-b16-GGUF/Qwen3-4B-DFlash-b16-Q4_K_M.gguf",
+        target="Qwen3-4B-Q4_K_M.gguf",
+        draft="dflash-Qwen3-4B-Q4_K_M.gguf",
         n_max=7,
-        min_accept_rate=0.1829,
-        min_accept_len=2.2516,
+        min_accept_rate=0.1567,
+        min_accept_len=2.0754,
     ),
     SpecCase(
         name="dspark",
         spec_type="draft-dspark",
-        target="Qwen/Qwen3-4B-GGUF/Qwen3-4B-Q4_K_M.gguf",
-        draft="Anbeeld/Qwen3-4B-DSpark-GGUF/Qwen3-4B-DSpark-Q4_K_M.gguf",
+        target="Qwen3-4B-Q4_K_M.gguf",
+        draft="dspark-Qwen3-4B-Q4_K_M.gguf",
         n_max=7,
-        min_accept_rate=0.3154,
-        min_accept_len=3.1421,
+        min_accept_rate=0.2578,
+        min_accept_len=2.7766,
+    ),
+    SpecCase(
+        name="eagle3",
+        spec_type="draft-eagle3",
+        target="Qwen3-4B-Q4_K_M.gguf",
+        draft="eagle3-Qwen3-4B-Q8_0.gguf",
+        n_max=7,
+        min_accept_rate=0.0878,
+        min_accept_len=1.6057,
     ),
     SpecCase(
         name="dflash2",
         spec_type="draft-dflash",
-        target="unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q4_K_M.gguf",
-        draft="z-lab/Qwen3.8-27B-DFlash2-GGUF/Qwen3.8-27B-DFlash2-Q8_0.gguf",
+        target="Qwen3.8-27B-Q4_K_M.gguf",
+        draft="dflash2-Qwen3.8-27B-Q8_0.gguf",
         n_max=7,
-        min_accept_rate=0.4,
-        min_accept_len=3.5,
+        min_accept_rate=0.5180,
+        min_accept_len=4.5414,
     ),
     SpecCase(
         name="lilicorr",
         spec_type="draft-dflash",
-        target="nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-GGUF/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB.gguf",
-        draft="nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-LiLiCorr-GGUF/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-LiLiCorr.gguf",
+        target="NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB.gguf",
+        draft="lilicorr-NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-NVFP4.gguf",
         n_max=7,
-        min_accept_rate=0.55,
-        min_accept_len=4.5,
+        min_accept_rate=0.6399,
+        min_accept_len=5.4444,
     ),
 ]
 
-COMPACT_METHODS = {"mtp", "dflash", "dspark"}
+COMPACT_METHODS = {"mtp", "dflash", "dspark", "eagle3"}
 NIGHTLY_METHODS = {"dflash2", "lilicorr"}
 
 PROMPTS = [
@@ -97,16 +97,13 @@ PROMPTS = [
 N_PREDICT = 128
 
 
-def model_path(spec: str) -> str:
-    """download <repo>/<file> from Hugging Face (once) and return the local path"""
-    repo = "/".join(spec.split("/")[:2])
-    file = "/".join(spec.split("/")[2:])
-    revision = MODEL_REVISIONS[repo]
+def model_path(file: str) -> str:
+    """Download a pinned GGUF from the consolidated test repository."""
     model_dir = os.environ.get("SPEC_MODEL_DIR", "./tmp")
     os.makedirs(model_dir, exist_ok=True)
-    filename = f"{repo.replace('/', '__')}__{revision[:12]}__{file.split('/')[-1]}"
     return download_file(
-        f"{HF}/{repo}/resolve/{revision}/{file}", os.path.join(model_dir, filename)
+        f"{HF}/{MODEL_REPO}/resolve/{MODEL_REVISION}/{file}",
+        os.path.join(model_dir, file),
     )
 
 

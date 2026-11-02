@@ -40,40 +40,39 @@ SLOW_TESTS=1 ./tests.sh
 ```
 
 The speculative-decoding method tests are opt-in and marked `heavy`. The compact suite covers MTP,
-DFlash, and DSpark with four pinned Q4_K_M files totaling 6,340,168,416 bytes (5.905 GiB):
+DFlash, DSpark, and EAGLE-3 with five pinned files totaling 6,732,962,400 bytes (6.271 GiB):
 
 ```shell
 SPEC_METHODS=compact SPEC_MODEL_DIR=/path/to/model-cache PYTEST_WORKERS=1 ./tests.sh -s -v unit/test_spec_methods.py
 ```
 
-- MTP: `unsloth/Qwen3.5-4B-MTP-GGUF/Qwen3.5-4B-Q4_K_M.gguf` at
-  `86835bf9949e4d14d6860f7910b1340ad4f271a9`, Apache-2.0, 2,834,975,040 bytes.
-- Shared DFlash/DSpark target: `Qwen/Qwen3-4B-GGUF/Qwen3-4B-Q4_K_M.gguf` at
-  `bc640142c66e1fdd12af0bd68f40445458f3869b`, Apache-2.0, 2,497,280,256 bytes.
-- DFlash draft: `Anbeeld/Qwen3-4B-DFlash-b16-GGUF/Qwen3-4B-DFlash-b16-Q4_K_M.gguf`
-  at `5cbf9d2073be26ca6ce6ecaf1ec71731e818af11`, MIT metadata, 322,542,144 bytes.
-- DSpark draft: `Anbeeld/Qwen3-4B-DSpark-GGUF/Qwen3-4B-DSpark-Q4_K_M.gguf` at
-  `5bee8a38ff98cb5f6ac275dbfaeb9e1e9208c86b`, no license declared by the checkpoint
-  repository, 685,370,976 bytes.
+- MTP target: `Qwen3.5-4B-MTP-Q4_K_M.gguf`, 3,118,325,632 bytes.
+- Shared DFlash/DSpark/EAGLE-3 target: `Qwen3-4B-Q4_K_M.gguf`, 2,497,280,896 bytes.
+- DFlash draft: `dflash-Qwen3-4B-Q4_K_M.gguf`, 308,349,536 bytes.
+- DSpark draft: `dspark-Qwen3-4B-Q4_K_M.gguf`, 570,900,704 bytes.
+- EAGLE-3 draft: `eagle3-Qwen3-4B-Q8_0.gguf`, 238,105,632 bytes.
 
-All repositories are pinned to revisions in `unit/test_spec_methods.py`. Review the DSpark checkpoint
-license before enabling it in a production CI environment.
+All files come from `ggml-org/spec-for-testing-GGUF`, pinned to revision
+`a0736c8e98d3fe580352dacffa3fbd5e9c22a437` in `unit/test_spec_methods.py`.
+The consolidated repository retains the licenses of its source models; review its model card and
+the source model cards before use.
 
 Use `SPEC_METHODS=nightly` for DFlash2 and LiLiCorr, or a comma-separated subset such as
-`SPEC_METHODS=mtp,dflash`. The nightly pair requires about 37.8 GiB and remains separate because no
+`SPEC_METHODS=mtp,dflash`. The nightly pair requires 41.422 GiB and remains separate because no
 verified compact DFlash2 GGUF or compact LiLiCorr checkpoint is available. `SPEC_METHODS=all` runs both
-tiers and downloads about 43.7 GiB.
+tiers and downloads about 47.693 GiB.
 
 The `Server (speculative decoding)` workflow runs only by explicit manual dispatch on the dedicated
 DGX Spark runner. It does not use the GitHub Actions cache. Set the `SPEC_METHOD_MODEL_DIR` repository
 variable to the runner's persistent model directory when its mount path is confirmed. Heavyweight
 DFlash2 and LiLiCorr measurements belong in the internal nightly performance/quality runs.
 
-The compact acceptance floors use one-sided regression checks: improvements do not fail. Three
-identical CUDA calibration runs produced MTP `0.7275 / 3.1583`, DFlash `0.2129 / 2.4516`, and DSpark
-`0.3454 / 3.3421` for acceptance rate and length. The enforced floors subtract three percentage
-points and 0.2 accepted tokens per verification step. Confirm the calibration on DGX Spark before
-making the workflow a required check.
+The acceptance floors use one-sided regression checks: improvements do not fail. Three identical
+DGX Spark calibration runs produced MTP `0.7155 / 3.1230`, DFlash `0.1867 / 2.2754`, DSpark
+`0.2878 / 2.9766`, EAGLE-3 `0.1178 / 1.8057`, DFlash2 `0.5480 / 4.7414`, and LiLiCorr
+`0.6699 / 5.6444` for acceptance rate and length. The enforced floors subtract three percentage
+points and 0.2 accepted tokens per verification step. The final six-method suite passed on DGX Spark
+in 43.12 seconds.
 
 To run with stdout/stderr display in real time (verbose output, but useful for debugging):
 
