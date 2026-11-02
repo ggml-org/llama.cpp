@@ -67,6 +67,19 @@ describe('tabsStore route sync', () => {
 		expect(tabs.openTabs).toEqual(['a', 'b']);
 	});
 
+	it('opens a new chat in a tab of its own instead of replacing a chat', () => {
+		const tabs = freshStore();
+		const projectNewChat = projectNewChatTabId('p');
+
+		tabs.syncWithRoute('a');
+		tabs.syncWithRoute(NEW_CHAT_TAB_ID);
+		expect(tabs.openTabs).toEqual(['a', NEW_CHAT_TAB_ID]);
+
+		tabs.syncWithRoute('b');
+		tabs.syncWithRoute(projectNewChat);
+		expect(tabs.openTabs).toEqual(['a', 'b', projectNewChat]);
+	});
+
 	it('opens a tab for each chat left from a project home, which has none', () => {
 		const tabs = freshStore();
 

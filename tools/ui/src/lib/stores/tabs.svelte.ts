@@ -10,7 +10,8 @@
  *
  * Tabs open like in a browser: a plain navigation shows the new target in
  * the current tab, and only `openInNewTab()` adds a tab. A project home is
- * never a tab, so a chat opened from it gets a tab of its own.
+ * never a tab, so a chat opened from it gets a tab of its own, and a new chat
+ * never replaces a chat, so it opens in a tab of its own too.
  *
  * **Architecture & Relationships:**
  * - **conversationsStore**: owns conversation data; calls `removeTabs()` /
@@ -185,7 +186,7 @@ export class TabsStore {
 	 * Sync the tab strip with the route. Called from the chat layout on every
 	 * navigation. A target already open activates its tab; otherwise the tab
 	 * of the previous route now shows it, and only a navigation from a page
-	 * without a tab adds one.
+	 * without a tab, or to a new chat from a chat, adds one.
 	 * @param target - Conversation id, `NEW_CHAT_TAB_ID` or `PROJECT_HOME_TAB_ID`
 	 */
 	syncWithRoute(target: string): void {
@@ -206,7 +207,10 @@ export class TabsStore {
 			// the project home has no tab; leaving it opens one
 			if (target === PROJECT_HOME_TAB_ID || this.openTabs.includes(target)) return;
 
-			const idx = previous ? this.openTabs.indexOf(previous) : -1;
+			// a new chat never takes the place of a chat: it opens in a tab of its own
+			const isNewChat = target === NEW_CHAT_TAB_ID || !!projectOfNewChatTab(target);
+			const keepsPrevious = isNewChat && !!previous && this.isChatTab(previous);
+			const idx = previous && !keepsPrevious ? this.openTabs.indexOf(previous) : -1;
 
 			this.openTabs =
 				idx === -1
@@ -214,6 +218,11 @@ export class TabsStore {
 					: this.openTabs.map((id, i) => (i === idx ? target : id));
 			this.save();
 		});
+	}
+
+	/** Whether a tab shows a conversation, rather than a new-chat screen or a project home */
+	private isChatTab(id: string): boolean {
+		return id !== NEW_CHAT_TAB_ID && id !== PROJECT_HOME_TAB_ID && !projectOfNewChatTab(id);
 	}
 
 	private load(): string[] {
