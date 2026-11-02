@@ -107,8 +107,12 @@ class common_chat_peg_builder : public common_peg_parser_builder {
     common_peg_parser tool_arg_json_value(const common_peg_parser & p) { return tag(TOOL_ARG_VALUE, p); }
 
 
-    // Matches every parser exactly once, in any order.
-    common_peg_parser permute(const std::string & rule_prefix, const std::vector<common_peg_parser> & parsers);
+    // Matches every parser in any order; bits set in required_mask must appear once,
+    // others at most once. When separator is provided, it is inserted between elements.
+    common_peg_parser permute(const std::string &                    rule_prefix,
+                              const std::vector<common_peg_parser> & parsers,
+                              uint32_t                               required_mask = ~0u,
+                              std::optional<common_peg_parser>       separator     = std::nullopt);
 
     // Return a parser that parses the prefix of a string, up to a given delimiter.
     common_peg_parser prefix(const std::string & s, const std::string & delimiter = {});
