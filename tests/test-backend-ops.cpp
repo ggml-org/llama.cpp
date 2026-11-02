@@ -12238,6 +12238,36 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // Long-context Q4_0 GQA decode with per-head slopes and sinks, and shared masks.
+    for (int64_t nr2 : {2, 6}) {
+        for (bool mask : {false, true}) {
+            for (bool sinks : {false, true}) {
+                for (float max_bias : {0.0f, 8.0f}) {
+                    if (!mask && max_bias != 0.0f) {
+                        continue;
+                    }
+                    for (float logit_softcap : {0.0f, 10.0f}) {
+                        test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {nr2, 1}, 32768, 1, mask, sinks, max_bias, logit_softcap, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0));
+                    }
+                }
+            }
+        }
+    }
+    for (int64_t kv : {32512, 33024}) {
+        test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {6, 1}, kv, 1, true, true, 8.0f, 10.0f, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0));
+    }
+    for (int64_t nr2 : {1, 3}) {
+        test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {nr2, 1}, 32768, 1, true, true, 8.0f, 10.0f, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0));
+    }
+    for (int64_t nb : {2, 3}) {
+        test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {6, 1}, 32768, nb, true, true, 8.0f, 10.0f, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0));
+    }
+    test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {6, 2}, 32768, 1, true, true, 8.0f, 10.0f, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0));
+    test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {6, 1}, 32768, 1, true, true, 8.0f, 10.0f, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0, {0, 2, 1, 3}));
+    test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {6, 1}, 32768, 1, true, true, 8.0f, 10.0f, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0, {0, 1, 2, 3}, false));
+    test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {6, 1}, 32768, 1, true, true, 8.0f, 10.0f, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0, {0, 1, 2, 3}, true, true));
+    test_cases.emplace_back(new test_flash_attn_ext_large_logits(256, 256, 2, {6, 1}, 32768, 1, true, true, 8.0f, 10.0f, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0));
+
     // asymmetric head_dim (hsk != hsv) with one or both sides not 64-aligned
     test_cases.emplace_back(new test_flash_attn_ext(72, 64, 4, {1, 1}, 256, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext(64, 72, 4, {1, 1}, 256, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
@@ -12906,6 +12936,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
 
     // Qwen3-VL-8B https://github.com/ggml-org/llama.cpp/issues/17012
     test_cases.emplace_back(new test_flash_attn_ext(72, 72, 16, {1, 1}, 5776, 5776, false, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+
+    for (int64_t kv : {512, 32768, 65536, 131072, 262144}) {
+        test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, kv, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0));
+    }
 
     // Sparse flash attention (n_kv_max hint) decode across KV depths.
     // Shapes: 576/512 DeepSeek MLA, 512/512 DeepSeek-V4/GLM-5.2, 256/256 gqa12 Qwen QSA.
