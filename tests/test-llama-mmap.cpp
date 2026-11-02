@@ -188,13 +188,15 @@ static void check_direct_io_fallback(testing & t, const std::filesystem::path & 
 
 #ifdef _WIN32
     t.assert_true("unaligned read disables direct I/O", !file.has_direct_io());
-#endif
     t.assert_equal(size_t(1), file.read_alignment());
+#endif
     t.assert_true("fallback read expected bytes", matches(unaligned, offset, alignment));
     t.assert_equal(offset + alignment, file.tell());
 
     file.read_raw(unaligned, alignment);
+#ifdef _WIN32
     t.assert_true("subsequent read stays buffered", !file.has_direct_io());
+#endif
     t.assert_true("subsequent read expected bytes", matches(unaligned, offset + alignment, alignment));
     t.assert_equal(offset + 2 * alignment, file.tell());
 }
