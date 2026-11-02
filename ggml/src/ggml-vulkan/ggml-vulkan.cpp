@@ -15497,7 +15497,11 @@ static ggml_backend_buffer_type_t ggml_backend_vk_device_get_buffer_type(ggml_ba
 }
 
 static ggml_backend_buffer_type_t ggml_backend_vk_device_get_host_buffer_type(ggml_backend_dev_t dev) {
-    UNUSED(dev);
+    ggml_backend_vk_device_context * ctx = (ggml_backend_vk_device_context *)dev->context;
+    ggml_vk_instance_init();
+    if (ctx->is_integrated_gpu && !vk_instance.multi_device) {
+        return nullptr;
+    }
     return ggml_backend_vk_host_buffer_type();
 }
 
@@ -15509,6 +15513,7 @@ static enum ggml_backend_dev_type ggml_backend_vk_device_get_type(ggml_backend_d
 
 static void ggml_backend_vk_device_get_props(ggml_backend_dev_t dev, struct ggml_backend_dev_props * props) {
     ggml_backend_vk_device_context * ctx = (ggml_backend_vk_device_context *)dev->context;
+    ggml_vk_instance_init();
 
     props->name        = ggml_backend_vk_device_get_name(dev);
     props->description = ggml_backend_vk_device_get_description(dev);
@@ -15517,7 +15522,7 @@ static void ggml_backend_vk_device_get_props(ggml_backend_dev_t dev, struct ggml
     ggml_backend_vk_device_get_memory(dev, &props->memory_free, &props->memory_total);
     props->caps = {
         /* .async                 = */ true,
-        /* .host_buffer           = */ true,
+        /* .host_buffer           = */ !ctx->is_integrated_gpu || vk_instance.multi_device,
         /* .buffer_from_host_ptr  = */ false,
         /* .events                = */ true,
         /* .mmap_support          = */ !ctx->is_integrated_gpu,
