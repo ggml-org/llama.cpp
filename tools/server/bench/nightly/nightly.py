@@ -743,6 +743,11 @@ def run(cfg: dict[str, Any], home: Path, suites: list[str], models: list[str], d
         "models": {n: {k: cfg["models"][n][k] for k in ("repo", "revision", "file")} for n in models},
         "records": [],
     }
+    # a re-run on the same night keeps the records of the suites and models it does not run
+    if (out_dir / "night.json").exists():
+        old = json.loads((out_dir / "night.json").read_text())
+        manifest["records"] = [r for r in old.get("records", []) if r["suite"] not in suites or r["model"] not in models]
+        manifest["models"] = {**old.get("models", {}), **manifest["models"]}
     ctx = Context(cfg, home, build, out_dir, dry_run)
     started = time.monotonic()
     for suite in suites:
