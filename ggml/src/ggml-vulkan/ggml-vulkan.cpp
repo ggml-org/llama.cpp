@@ -8264,6 +8264,7 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
                             (gqa_ratio > 1 || (tuning_params.path == FA_SCALAR && N == 1));
 
     const uint32_t q_stride = (uint32_t)(nbq1 / ggml_type_size(q->type));
+    const uint32_t q_stride_eff = gqa_ratio > 1 ? (uint32_t)(nbq2 / ggml_type_size(q->type)) : q_stride;
     uint32_t k_stride = (uint32_t)(nbk1 / ggml_type_size(k->type));
     uint32_t v_stride = (uint32_t)(nbv1 / ggml_type_size(v->type));
 
@@ -8291,7 +8292,7 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
                              k_type_eff != GGML_TYPE_F16 && k_type_eff != GGML_TYPE_BF16;
     const bool cm2_decode_v = tuning_params.path == FA_COOPMAT2 &&
                              v_type_eff != GGML_TYPE_F16 && v_type_eff != GGML_TYPE_BF16;
-    bool aligned = (KV % alignment) == 0 && (q_stride & 7) == 0 &&
+    bool aligned = (KV % alignment) == 0 && (q_stride_eff & 7) == 0 &&
                    (cm2_decode_k || (k_stride & 7) == 0) && (cm2_decode_v || (v_stride & 7) == 0);
 
     // Need to use the coopmat2 variant that clamps loads when HSK/HSV aren't sufficiently aligned.
