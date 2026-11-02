@@ -649,6 +649,14 @@ QUANTIZE_IMPL(quantize_f16_f16_tiled,      "quantize-f16-f16_tiled",      quanti
 QUANTIZE_IMPL(quantize_f32_f32,            "quantize-f32-f32",            quantize_f32_f32_kernel,            mmctx->vtcm_act_stride)
 QUANTIZE_IMPL(quantize_f32_f16,            "quantize-f32-f16",            quantize_f32_f16_kernel,            mmctx->vtcm_act_stride)
 QUANTIZE_IMPL(quantize_f16_f16,            "quantize-f16-f16",            quantize_f16_f16_kernel,            mmctx->vtcm_act_stride)
+QUANTIZE_IMPL(quantize_f32_q8_0_tiled, "quantize-f32-q8_0_tiled", quantize_f32_q8_0_tiled_kernel, htp_mm_q8_0_tiled_row_size(ne0))
+QUANTIZE_IMPL(quantize_f32_q8_1_tiled, "quantize-f32-q8_1_tiled", quantize_f32_q8_1_tiled_kernel, htp_mm_q8_1_tiled_row_size(ne0))
+QUANTIZE_IMPL(quantize_f32_q8_0_flat,  "quantize-f32-q8_0_flat",  quantize_f32_q8_0_flat_kernel,  htp_mm_q8_0_flat_row_size(ne0))
+QUANTIZE_IMPL(quantize_f32_q8_1_flat,  "quantize-f32-q8_1_flat",  quantize_f32_q8_1_flat_kernel,  htp_mm_q8_1_flat_row_size(ne0))
+QUANTIZE_IMPL(quantize_f32_q8_k_flat,  "quantize-f32-q8_k_flat",  quantize_f32_q8_k_flat_kernel,  htp_mm_q8_k_flat_row_size(ne0))
+QUANTIZE_IMPL(quantize_f32_f32_flat,   "quantize-f32-f32",        quantize_f32_f32_flat_kernel,   mmctx->vtcm_src1_stride)
+QUANTIZE_IMPL(quantize_f32_f16_flat,   "quantize-f32-f16",        quantize_f32_f16_flat_kernel,   mmctx->vtcm_src1_stride)
+QUANTIZE_IMPL(quantize_f16_f16_flat,   "quantize-f16-f16",        quantize_f16_f16_flat_kernel,   mmctx->vtcm_src1_stride)
 
 static void quantize_f32_q8_0_tiled_block(unsigned int nth, unsigned int ith, void * data) {
     (void) nth;
@@ -1810,6 +1818,27 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
             act_row_size           = kparams->act_row_size;
             break;
 
+        case HTP_MM_KERNEL_HVX_QK_DDR: {
+            n_quant_tasks   = MIN(src1_nrows, octx->n_threads);
+            quant_task_func = quantize_f32_q8_k_flat;
+            src1_row_size   = htp_mm_q8_k_flat_row_size(ne10);
+
+            if (src0->type == HTP_TYPE_Q4_K) {
+                mmctx->type        = "q4_k-q8_k";
+                mmctx->vec_dot_1x1 = flat_vec_dot_q4_k_q8_k_1x1;
+                mmctx->vec_dot_2x1 = flat_vec_dot_q4_k_q8_k_2x1;
+                mmctx->vec_dot_2x2 = flat_vec_dot_q4_k_q8_k_2x2;
+            } else if (src0->type == HTP_TYPE_Q6_K) {
+                mmctx->type        = "q6_k-q8_k";
+                mmctx->vec_dot_1x1 = flat_vec_dot_q6_k_q8_k_1x1;
+                mmctx->vec_dot_2x1 = flat_vec_dot_q6_k_q8_k_2x1;
+                mmctx->vec_dot_2x2 = flat_vec_dot_q6_k_q8_k_2x2;
+            } else {
+                return HTP_STATUS_NO_SUPPORT;
+            }
+            break;
+        }
+
         case HTP_MM_KERNEL_HVX_QUANT_BLOCK:
         case HTP_MM_KERNEL_HVX_QUANT_ROW:
         default: {
@@ -1855,6 +1884,9 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
         kparams->kernel_type == HTP_MM_KERNEL_HVX_QUANT_ROW ||
         kparams->kernel_type == HTP_MM_KERNEL_HVX_QUANT_BLOCK) {
         mmctx->vtcm_act_size_per_thread = L.act_bytes;
+        kparams->kernel_type == HTP_MM_KERNEL_HVX_QUANT_BLOCK ||
+        kparams->kernel_type == HTP_MM_KERNEL_HVX_QK_DDR) {
+        mmctx->vtcm_src1_size_per_thread = L.src1_bytes;
     } else {
         mmctx->vtcm_act_size_per_thread = fastdiv(L.act_bytes, &octx->n_threads_div);
     }
