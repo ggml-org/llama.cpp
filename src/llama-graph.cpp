@@ -2368,8 +2368,10 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     const std::array<ggml_tensor *, 4> exps = { up_exps, gate_exps, down_exps, gate_up_exps };
     if (slots != nullptr) {
         ggml_tensor * sel = lookup->src[1];
-        if (moe_cache->cpu_share() > 0.0f && !weight_before_ffn && loras->empty() &&
-            std::none_of(exps.begin(), exps.end(), [&](ggml_tensor * w) { return w != nullptr && hdmd != nullptr && hdmd->rot.count(w) > 0; })) {
+        // the CPU part does not support weights before the FFN, LoRAs or rotated experts
+        const bool can_cpu_share = !weight_before_ffn && loras->empty() &&
+            std::none_of(exps.begin(), exps.end(), [&](ggml_tensor * w) { return w != nullptr && hdmd != nullptr && hdmd->rot.count(w) > 0; });
+        if (moe_cache->cpu_share() > 0.0f && can_cpu_share) {
             cpu_ids = ggml_get_rows(ctx0, moe_cache->get_cpu_map(il), sel); // [1, n_expert_used*n_tokens]
             cpu_ids = ggml_reshape_2d(ctx0, cpu_ids, n_expert_used, n_tokens);
             sel2d   = ggml_reshape_2d(ctx0, sel, n_expert_used, n_tokens);
