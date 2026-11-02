@@ -205,7 +205,8 @@ bool ggml_openvino_weight_buffers_released();
 std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor * tensor, bool no_requant = false);
 
 // True if an asymmetric weight keeps an exact f16 zero point instead of a rounded integer one.
-// Always true for 3D MoE expert weights. Other weights need GGML_OPENVINO_EXACT_ZERO_POINT.
+// Always true for MoE expert weights (llama.cpp's *_exps / *_chexps tensors). Other weights need
+// GGML_OPENVINO_EXACT_ZERO_POINT.
 bool ggml_openvino_use_exact_zero_point(const ggml_tensor * tensor);
 
 // =====================================================

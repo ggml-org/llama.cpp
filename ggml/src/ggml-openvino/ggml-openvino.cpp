@@ -1391,6 +1391,16 @@ static bool is_supported_flash_attn_pattern(const ggml_tensor * op) {
             if (src->src[0] == nullptr) {
                 return false;
             }
+            // MLA: Q = PERMUTE -> CONCAT(q_nope_absorbed, q_pe); V = PERMUTE -> VIEW -> VIEW -> K cache
+            // (V is the first kv_lora_rank values of each K cache row)
+            if (i == 0 && src->src[0]->op == GGML_OP_CONCAT) {
+                continue;
+            }
+            if (i == 2 && src->src[0]->op == GGML_OP_VIEW && src->src[0]->src[0] != nullptr &&
+                src->src[0]->src[0]->op == GGML_OP_VIEW && src->src[0]->src[0]->src[0] != nullptr &&
+                src->src[0]->src[0]->src[0]->view_src == nullptr) {
+                continue;
+            }
             if (src->src[0]->op != GGML_OP_VIEW && src->src[0]->op != GGML_OP_RESHAPE) {
                 return false;
             }
@@ -1794,6 +1804,14 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
             op->src[0]->buffer == nullptr) {
             return {false, "MUL_MAT with unbound Q4_1/Q4_K src[0] on GPU is not supported"};
         }
+        // The GPU plugin fails to compile a MatMul with batched quantized weights (one matrix per batch, e.g. MLA's
+        // attn_k_b) when shapes are static: wrong results or "ProgramBuilder build failed". Dynamic shapes work. Op
+        // tests (unbound weights, see above) and the static pipeline compile with static shapes. Remove once the GPU
+        // plugin is fixed.
+        if (ggml_openvino_is_gpu() && ggml_is_quantized(op->src[0]->type) && op->src[0]->ne[2] > 1 &&
+            (op->src[0]->buffer == nullptr || ggml_openvino_getenv_int("GGML_OPENVINO_FORCE_STATIC"))) {
+            return {false, "MUL_MAT with batched quantized src[0] and static shapes on GPU is not supported"};
+        }
         if (op->src[0]->ne[3] != op->src[1]->ne[3] && op->src[0]->ne[3] != 1 && op->src[1]->ne[3] != 1) {
             return {false, "MUL_MAT with incompatible broadcast on ne[3]: src0->ne[3]=" + std::to_string(op->src[0]->ne[3]) +
                            ", src1->ne[3]=" + std::to_string(op->src[1]->ne[3])};
@@ -2094,7 +2112,11 @@ static ggml_openvino_op_support ggml_backend_openvino_device_supports_op_impl(gg
         }
         const bool is_supported_3d_moe_expert =
             op->op == GGML_OP_MUL_MAT_ID && i == 0 && (src->type == GGML_TYPE_MXFP4 || src->ne[3] == 1);
-        if (ggml_is_quantized(src->type) && src->ne[2] != 1 && !is_supported_3d_moe_expert) {
+        // one weight matrix per activation batch, e.g. MLA's per-head attn_k_b / attn_v_b (a batched MatMul)
+        const bool is_supported_3d_batched_weight = op->op == GGML_OP_MUL_MAT && i == 0 && src->ne[3] == 1 &&
+                                                    op->src[1]->ne[2] == src->ne[2] && op->src[1]->ne[3] == 1;
+        if (ggml_is_quantized(src->type) && src->ne[2] != 1 && !is_supported_3d_moe_expert &&
+            !is_supported_3d_batched_weight) {
             return {false, "3D quantized tensor for src[" + std::to_string(i) + "] is not supported"};
         }
     }

@@ -937,6 +937,45 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
                 }
             }
 
+            // A view that reads the first cells of a single-sequence cache [1, 1, cells, row] with each cell one whole
+            // row, e.g. MLA's K view [1, n_kv, 1 (n_head_kv), 576]. With the cache input sliced to the cells in use,
+            // this is a reshape that keeps the cell axis dynamic.
+            if (same_rank && relative_offset == 0 && view_ggml_shape.size() >= 2 && view_ov_shape.rank().is_static() &&
+                view_ov_shape.rank().get_length() == static_cast<int64_t>(view_ggml_shape.size()) &&
+                current.get_partial_shape().rank().is_static() &&
+                current.get_partial_shape().rank().get_length() == static_cast<int64_t>(view_ggml_shape.size())) {
+                const size_t ndims = view_ggml_shape.size();
+                const size_t row_stride = view_src_stride[ndims - 2];
+                bool src_rows = view_src_stride[ndims - 1] == view_stride[ndims - 1];
+                for (size_t i = 0; i + 2 < ndims && src_rows; ++i) {
+                    src_rows = view_src_ggml_shape[i] == 1;
+                }
+                int cell_axis = -1;
+                for (size_t i = 0; i < ndims && src_rows; ++i) {
+                    if (view_stride[i] == row_stride && view_ov_shape[i].is_dynamic()) {
+                        cell_axis = static_cast<int>(i);
+                    }
+                }
+                bool one_row_per_cell = cell_axis >= 0;
+                size_t inner_bytes = view_stride[ndims - 1];
+                for (size_t i = 0; i < ndims && one_row_per_cell; ++i) {
+                    if (static_cast<int>(i) < cell_axis) {
+                        one_row_per_cell = view_ggml_shape[i] == 1;
+                    } else if (static_cast<int>(i) > cell_axis) {
+                        inner_bytes *= view_ggml_shape[i];
+                    }
+                }
+                if (one_row_per_cell && inner_bytes == row_stride) {
+                    auto reshape_pattern = build_reshape_pattern(view_ov_shape, view_ggml_shape);
+                    auto reshaped = std::make_shared<ov::op::v1::Reshape>(
+                        current,
+                        ov::op::v0::Constant::create(ov::element::i64, {reshape_pattern.size()}, reshape_pattern),
+                        false);
+                    reshaped->set_friendly_name(view_name);
+                    return reshaped;
+                }
+            }
+
             size_t view_elems = 1;
             size_t src_elems = 1;
             if (same_rank) {

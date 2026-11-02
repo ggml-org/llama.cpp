@@ -2713,18 +2713,28 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
             // identifies the dynamic dim even when two dims share the same size.
             m_node_dynamic_dims[node] = -1;
             if (m_node_dynamic_dims[node->src[0]] != -1) {
-                if (node->src[0]->op == GGML_OP_NONE) {
-                    m_node_dynamic_dims[node] = m_node_dynamic_dims[node->src[0]];
-                    break;
-                }
                 auto dynamic_dim_idx = m_node_dynamic_dims[node->src[0]];
                 auto dynamic_dim_value = node->src[0]->ne[dynamic_dim_idx];
                 auto dynamic_dim_stride =
                     node->src[0]->nb[dynamic_dim_idx] / ggml_type_size(node->src[0]->type) * ggml_type_size(node->type);
+                if (node->src[0]->op == GGML_OP_NONE) {
+                    // A view of a KV cache covers fewer cells than the cache holds, so only the stride identifies the
+                    // dim: [n_embd, kv_size] viewed as [head_dim, n_head_kv, n_kv] moves the cells from dim 1 to 2.
+                    m_node_dynamic_dims[node] = dynamic_dim_idx;
+                    for (int i = 0; i < GGML_MAX_DIMS; i++) {
+                        if (node->nb[i] == dynamic_dim_stride && node->ne[i] != 1) {
+                            m_node_dynamic_dims[node] = i;
+                            break;
+                        }
+                    }
+                    break;
+                }
+                // A size-1 dim may carry any stride (MLA's k_pe = ggml_view_3d(.., ne1 = 1, ..) gives it the row
+                // stride), so among the dims with the source's stride take the outermost one of the same size.
                 for (int i = 0; i < GGML_MAX_DIMS; i++) {
-                    if (node->nb[i] == dynamic_dim_stride) {
+                    if (node->nb[i] == dynamic_dim_stride &&
+                        (m_node_dynamic_dims[node] == -1 || node->ne[i] == dynamic_dim_value)) {
                         m_node_dynamic_dims[node] = i;
-                        break;
                     }
                 }
                 if (m_node_dynamic_dims[node] != -1 && dynamic_dim_value != node->ne[m_node_dynamic_dims[node]]) {

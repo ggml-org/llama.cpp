@@ -1056,7 +1056,7 @@ std::shared_ptr<ov::Node> extract_quantized_weights(const ggml_tensor * tensor,
                                                     ov::Tensor & scales,
                                                     ov::Tensor & zp,
                                                     // Use an exact f16 zero point (vs. a rounded integer one); always
-                                                    // used for for_gather_matmul (3D MoE expert) weights regardless of
+                                                    // used for MoE expert weights regardless of
                                                     // this flag, and also settable explicitly for test-backend-ops.
                                                     bool use_bias = false) {
     // Create a temporary tensor for extraction functions that read from tensor->data
