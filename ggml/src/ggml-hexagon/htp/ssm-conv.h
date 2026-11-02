@@ -54,11 +54,12 @@ static inline void htp_ssm_conv_vtcm_layout_build(
         L->src0_bytes_per_thread         = 2 * src0_tile_raw_bytes + src0_T_bytes;
         L->dst_bytes_per_thread          = 2 * hex_round_up((size_t) d_inner_tile * sizeof(float), 128);
     } else {
-        const uint32_t ncs          = d_conv - 1 + n_t;
-        const size_t   src0_block_T = hex_round_up((size_t) ncs * 32 * sizeof(float), 128);
-        const size_t   src0_tile_raw = hex_round_up((size_t) d_inner_tile * ncs * sizeof(float), 128);
-        L->src0_bytes_per_thread    = 2 * src0_tile_raw + src0_block_T;
-        L->dst_bytes_per_thread     = 2 * hex_round_up((size_t) d_inner_tile * n_t * sizeof(float), 128);
+        const uint32_t ncs              = d_conv - 1 + n_t;
+        const size_t   raw_stride_bytes = ncs * sizeof(float) + sizeof(float);
+        const size_t   src0_block_T     = hex_round_up((size_t) ncs * 32 * sizeof(float), 128);
+        const size_t   src0_tile_raw    = hex_round_up((size_t) d_inner_tile * raw_stride_bytes, 128);
+        L->src0_bytes_per_thread        = 2 * src0_tile_raw + src0_block_T;
+        L->dst_bytes_per_thread         = 2 * hex_round_up((size_t) d_inner_tile * n_t * sizeof(float), 128);
     }
 
     L->src0_bytes = L->src0_bytes_per_thread * n_threads;

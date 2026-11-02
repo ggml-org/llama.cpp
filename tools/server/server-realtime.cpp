@@ -1,4 +1,5 @@
 #include "server-realtime.h"
+#include "server-chat.h"
 #include "server-common.h"
 #include "server-context.h"
 #include "server-task.h"
@@ -14,7 +15,9 @@
 #include <climits>
 #include <cmath>
 #include <cstring>
+#include <map>
 #include <mutex>
+#include <optional>
 #include <thread>
 
 //
@@ -69,6 +72,39 @@ bool parse_max_output_tokens(const json & j, int32_t & n) {
     return true;
 }
 
+// realtime tools have the format of the Responses API
+bool parse_tools(const json & j, std::vector<common_chat_tool> & tools, std::string & err) {
+    try {
+        tools = common_chat_tools_parse_oaicompat(server_chat_convert_responses_tools(j));
+    } catch (const std::exception & e) {
+        err = std::string("tools: ") + e.what();
+        return false;
+    }
+    return true;
+}
+
+bool parse_tool_choice(const json & j, common_chat_tool_choice & choice, std::string & err) {
+    if (!j.is_string()) {
+        err = "tool_choice must be \"auto\", \"none\" or \"required\"";
+        return false;
+    }
+    try {
+        choice = common_chat_tool_choice_parse_oaicompat(j.get<std::string>());
+    } catch (const std::exception & e) {
+        err = e.what();
+        return false;
+    }
+    return true;
+}
+
+const char * tool_choice_str(common_chat_tool_choice choice) {
+    switch (choice) {
+        case COMMON_CHAT_TOOL_CHOICE_NONE:     return "none";
+        case COMMON_CHAT_TOOL_CHOICE_REQUIRED: return "required";
+        default:                               return "auto";
+    }
+}
+
 json output_modalities_json(mtmd_helper_gen_audio_out_mode mode) {
     switch (mode) {
         case MTMD_HELPER_GEN_AUDIO_OUT_TEXT:  return json::array({"text"});
@@ -93,18 +129,25 @@ struct realtime_conversation {
     int                            input_rate        = 16000;
     int                            output_rate       = 24000;
 
+    // tools, in the system turn
+    json                          tools_json  = json::array(); // as the client sent them
+    std::vector<common_chat_tool> tools;
+    common_chat_tool_choice       tool_choice = COMMON_CHAT_TOOL_CHOICE_AUTO;
+
     // the text around a turn, from the chat template
     std::string first_header; // system prompt + first user header
     std::string user_header;
     std::string user_footer;
     std::string assistant_header;
     std::string assistant_footer;
-
+    std::string tool_header;  // around a tool result
+    std::string tool_footer;
 
     // conversation state, owned by the reader thread
     bool        started   = false; // something went into the slot, the session config is fixed
     bool        turn_open = false; // a user turn is being filled
     bool        has_audio = false; // the open turn has audio not committed yet
+    bool        tool_results = false; // tool results went in after the last response, the next one answers them
     int         n_turns   = 0;
     std::string next_header;       // text that goes in before the next user turn
 
@@ -119,6 +162,10 @@ struct realtime_conversation {
     int         idx_text  = -1;
     int         idx_audio = -1;
     json        parts     = json::array();
+    json        output    = json::array(); // items of the response
+    int         idx_message = -1;          // output index of the message, added with its first delta
+    std::map<size_t, int> call_items;      // tool call -> output index
+    std::optional<task_result_state> parse; // the tool call parser, with tools
 
     std::atomic<bool> closed{false};
 
@@ -163,6 +210,8 @@ struct realtime_conversation {
             {"instructions",      instructions},
             {"output_modalities", output_modalities_json(out_mode)},
             {"max_output_tokens", max_output_tokens < 0 ? json("inf") : json(max_output_tokens)},
+            {"tools",             tools_json},
+            {"tool_choice",       tool_choice_str(tool_choice)},
             {"audio",             audio},
         };
     }
@@ -187,19 +236,34 @@ struct realtime_conversation {
         return res && res->success;
     }
 
+    // sampling of a response: the server defaults, with the tool call grammar of chat
+    common_params_sampling response_sampling(const common_chat_session * chat) const {
+        common_params_sampling sampling = deps.sampling;
+        if (chat) {
+            chat->apply_sampling(sampling);
+        }
+        return sampling;
+    }
+
     //
     // chat template
     //
 
-    std::string render(const std::vector<common_chat_msg> & messages, bool add_generation_prompt = false) const {
+    common_chat_templates_inputs chat_inputs(const std::vector<common_chat_msg> & messages, bool add_generation_prompt) const {
         const auto & chat = deps.meta.chat_params;
         common_chat_templates_inputs inputs;
         inputs.messages              = messages;
         inputs.add_generation_prompt = add_generation_prompt;
         inputs.use_jinja             = chat.use_jinja;
         inputs.enable_thinking       = false;
+        inputs.reasoning_format      = chat.reasoning_format;
         inputs.chat_template_kwargs  = chat.chat_template_kwargs;
-        return common_chat_templates_apply(chat.tmpls.get(), inputs).prompt.str();
+        inputs.tools                 = tools;
+        return inputs;
+    }
+
+    std::string render(const std::vector<common_chat_msg> & messages, bool add_generation_prompt = false) const {
+        return common_chat_templates_apply(deps.meta.chat_params.tmpls.get(), chat_inputs(messages, add_generation_prompt)).prompt.str();
     }
 
     // the text around a user and an assistant turn, from placeholder messages
@@ -239,6 +303,23 @@ struct realtime_conversation {
         assistant_header = g.substr(a.size());
         assistant_footer = c.substr(pc + reply.size());
         user_header      = d.substr(c.size(), pd - c.size());
+
+        // a tool result follows the assistant turn that called the tool
+        if (!tools.empty()) {
+            const std::string result = "@@RESULT@@";
+            common_chat_msg call = msg("assistant", "");
+            call.tool_calls.push_back({tools[0].name, "{}", "call_0"});
+            common_chat_msg res = msg("tool", result);
+            res.tool_call_id = "call_0";
+            const std::string e  = with({msg("user", user), call});
+            const std::string f  = with({msg("user", user), call, res});
+            const size_t      pf = f.find(result, e.size());
+            if (pf == std::string::npos || f.compare(0, e.size(), e) != 0) {
+                return false;
+            }
+            tool_header = f.substr(e.size(), pf - e.size());
+            tool_footer = f.substr(pf + result.size());
+        }
         return true;
     }
 
@@ -318,6 +399,7 @@ struct realtime_conversation {
         server_control_response response;
         response.n_predict = max_output_tokens;
         response.out_mode  = MTMD_HELPER_GEN_AUDIO_OUT_TEXT;
+        response.sampling  = response_sampling(nullptr);
         if (!control(SERVER_CONTROL_ACTION_RESPONSE_CREATE, user_footer + assistant_header, {}, response)) {
             return;
         }
@@ -332,8 +414,12 @@ struct realtime_conversation {
             return;
         }
         const json item = ev.value("item", json::object());
+        if (json_value(item, "type", std::string()) == "function_call_output") {
+            on_tool_output(item);
+            return;
+        }
         if (json_value(item, "type", std::string()) != "message" || json_value(item, "role", std::string()) != "user") {
-            send_error("conversation.item.create: only user messages are supported");
+            send_error("conversation.item.create: only user messages and function call outputs are supported");
             return;
         }
         std::string text;
@@ -357,12 +443,34 @@ struct realtime_conversation {
         send_event({{"type", "conversation.item.done"},  {"previous_item_id", prev}, {"item", out}});
     }
 
+    // the result of a tool call of the last response, the next response answers it
+    void on_tool_output(const json & item) {
+        if (tools.empty() || n_turns == 0 || turn_open) {
+            send_error("conversation.item.create: a function call output must follow the response that called it");
+            return;
+        }
+        const std::string output = json_value(item, "output", std::string());
+        if (!control(SERVER_CONTROL_ACTION_TEXT_APPEND, next_header + tool_header + output + tool_footer)) {
+            return;
+        }
+        next_header.clear();
+        tool_results = true;
+
+        std::lock_guard<std::mutex> lock(mutex);
+        const json prev = last_item_id.empty() ? json(nullptr) : json(last_item_id);
+        last_item_id = item.contains("id") && item["id"].is_string() ? item["id"].get<std::string>() : "item_" + random_string();
+        const json out = {{"id", last_item_id}, {"object", "realtime.item"}, {"type", "function_call_output"},
+                          {"call_id", json_value(item, "call_id", std::string())}, {"output", output}, {"status", "completed"}};
+        send_event({{"type", "conversation.item.added"}, {"previous_item_id", prev}, {"item", out}});
+        send_event({{"type", "conversation.item.done"},  {"previous_item_id", prev}, {"item", out}});
+    }
+
     void on_response_create(const json & ev) {
         if (type == "transcription") {
             send_error("response.create: not supported in a transcription session");
             return;
         }
-        if (!turn_open) {
+        if (!turn_open && !tool_results) {
             send_error("response.create: commit audio or create a message first", "conversation_empty");
             return;
         }
@@ -388,8 +496,17 @@ struct realtime_conversation {
             return;
         }
 
-        // the gen-audio pipeline opens the response in the asked mode
-        const std::string prompt = user_footer + assistant_header;
+        common_chat_tool_choice choice = tool_choice;
+        if (resp.contains("tool_choice")) {
+            std::string err;
+            if (!parse_tool_choice(resp["tool_choice"], choice, err)) {
+                send_error("response.create: " + err);
+                return;
+            }
+        }
+
+        // the gen-audio pipeline opens the response in the asked mode, after tool results the assistant turn opens right away
+        const std::string prompt = (turn_open ? user_footer : "") + assistant_header;
         server_control_response response;
         response.n_predict = max_output_tokens;
         if (resp.contains("max_output_tokens") && !parse_max_output_tokens(resp["max_output_tokens"], response.n_predict)) {
@@ -398,26 +515,49 @@ struct realtime_conversation {
         }
         response.out_mode = mode;
 
+        // with tools, the output goes through the tool call parser of the chat template and its grammar
+        std::optional<common_chat_session> chat;
+        if (!tools.empty()) {
+            common_chat_msg user;
+            user.role    = "user";
+            user.content = "@@USER@@";
+            common_chat_templates_inputs inputs = chat_inputs({user}, true);
+            inputs.tool_choice         = choice;
+            inputs.parallel_tool_calls = true;
+            try {
+                chat.emplace(deps.meta.chat_params.tmpls.get(), deps.vocab, inputs);
+            } catch (const std::exception & e) {
+                send_error(std::string("response.create: ") + e.what(), "server_error");
+                return;
+            }
+        }
+        response.sampling = response_sampling(chat ? &*chat : nullptr);
+
         {
             std::lock_guard<std::mutex> lock(mutex);
             response_id      = "resp_" + random_string();
             response_item_id = "item_" + random_string();
             response_text.clear();
-            parts     = json::array();
-            idx_text  = -1;
-            idx_audio = -1;
+            parts       = json::array();
+            idx_text    = -1;
+            idx_audio   = -1;
+            output      = json::array();
+            idx_message = -1;
+            call_items.clear();
+            parse.reset();
+            if (chat) {
+                parse.emplace(std::move(*chat));
+            }
             send_event({{"type", "response.created"}, {"response", {{"id", response_id}, {"object", "realtime.response"},
                         {"status", "in_progress"}, {"output_modalities", output_modalities_json(mode)}, {"output", json::array()}}}});
-            send_event({{"type", "response.output_item.added"}, {"response_id", response_id}, {"output_index", 0},
-                        {"item", {{"id", response_item_id}, {"object", "realtime.item"}, {"type", "message"}, {"role", "assistant"},
-                                  {"status", "in_progress"}, {"content", json::array()}}}});
         }
         if (!control(SERVER_CONTROL_ACTION_RESPONSE_CREATE, prompt, {}, response)) {
             return;
         }
         // the response ends the turn, its tokens are in the slot; the footer goes in before the next turn
-        next_header = assistant_footer;
-        turn_open   = false;
+        next_header  = assistant_footer;
+        turn_open    = false;
+        tool_results = false;
         n_turns++;
     }
 
@@ -445,6 +585,24 @@ struct realtime_conversation {
         if (session.contains("output_modalities")) {
             std::string err;
             if (!parse_output_modalities(session["output_modalities"], out_mode, err)) {
+                send_error("session.update: " + err);
+                return;
+            }
+        }
+        if (session.contains("tools")) {
+            std::string err;
+            if (started) {
+                send_error("session.update: tools cannot change after the first audio or message");
+            } else if (!parse_tools(session["tools"], tools, err)) {
+                send_error("session.update: " + err);
+                return;
+            } else {
+                tools_json = session["tools"];
+            }
+        }
+        if (session.contains("tool_choice")) {
+            std::string err;
+            if (!parse_tool_choice(session["tool_choice"], tool_choice, err)) {
                 send_error("session.update: " + err);
                 return;
             }
@@ -522,13 +680,56 @@ struct realtime_conversation {
         return base64::encode(bytes);
     }
 
-    // a part of the response is opened on its first delta, in order of appearance
+    // the message item of the response is added with its first delta
+    void open_message() {
+        if (idx_message >= 0) {
+            return;
+        }
+        idx_message = (int) output.size();
+        output.push_back({{"id", response_item_id}, {"object", "realtime.item"}, {"type", "message"}, {"role", "assistant"},
+                          {"status", "in_progress"}, {"content", json::array()}});
+        send_event({{"type", "response.output_item.added"}, {"response_id", response_id}, {"output_index", idx_message},
+                    {"item", output[idx_message]}});
+    }
+
+    // a part of the message is opened on its first delta, in order of appearance
     int open_part(const char * part_type) {
+        open_message();
         json part = std::string(part_type) == "output_text" ? json{{"type", part_type}, {"text", ""}} : json{{"type", part_type}, {"transcript", ""}};
         parts.push_back(part);
         send_event({{"type", "response.content_part.added"}, {"response_id", response_id}, {"item_id", response_item_id},
-                    {"output_index", 0}, {"content_index", parts.size() - 1}, {"part", part}});
+                    {"output_index", idx_message}, {"content_index", parts.size() - 1}, {"part", part}});
         return (int) parts.size() - 1;
+    }
+
+    void on_text(const std::string & text) {
+        if (idx_text < 0) {
+            idx_text = open_part("output_text");
+        }
+        response_text += text;
+        send_event({{"type", "response.output_text.delta"}, {"response_id", response_id}, {"item_id", response_item_id},
+                    {"output_index", idx_message}, {"content_index", idx_text}, {"delta", text}});
+    }
+
+    // a tool call is an output item of its own: its name comes first, then its arguments
+    void on_tool_call(const common_chat_msg_diff & diff) {
+        auto it = call_items.find(diff.tool_call_index);
+        if (it == call_items.end()) {
+            const int idx = (int) output.size();
+            it = call_items.emplace(diff.tool_call_index, idx).first;
+            output.push_back({{"id", "item_" + random_string()}, {"object", "realtime.item"}, {"type", "function_call"},
+                              {"status", "in_progress"}, {"name", diff.tool_call_delta.name},
+                              {"call_id", diff.tool_call_delta.id}, {"arguments", ""}});
+            send_event({{"type", "response.output_item.added"}, {"response_id", response_id}, {"output_index", idx},
+                        {"item", output[idx]}});
+        }
+        if (diff.tool_call_delta.arguments.empty()) {
+            return;
+        }
+        json & item = output[it->second];
+        item["arguments"] = item["arguments"].get<std::string>() + diff.tool_call_delta.arguments;
+        send_event({{"type", "response.function_call_arguments.delta"}, {"response_id", response_id}, {"item_id", item["id"]},
+                    {"output_index", it->second}, {"call_id", item["call_id"]}, {"delta", diff.tool_call_delta.arguments}});
     }
 
     void on_result(const server_task_result_realtime & res) {
@@ -547,55 +748,69 @@ struct realtime_conversation {
             return;
         }
 
-        const json base = {{"response_id", response_id}, {"item_id", response_item_id}, {"output_index", 0}};
-        if (!res.text.empty()) {
-            if (idx_text < 0) {
-                idx_text = open_part("output_text");
+        // with tools, the text goes through the parser: content and tool calls
+        std::vector<common_chat_msg_diff> diffs;
+        if (parse) {
+            if (!res.text.empty() || res.response_done) {
+                parse->update_chat_msg(common_chat_input(res.text), !res.response_done, diffs, true);
             }
-            response_text += res.text;
-            json ev = base;
-            ev["type"]          = "response.output_text.delta";
-            ev["content_index"] = idx_text;
-            ev["delta"]         = res.text;
-            send_event(ev);
+        } else if (!res.text.empty()) {
+            diffs.emplace_back();
+            diffs.back().content_delta = res.text;
+        }
+        for (const auto & diff : diffs) {
+            if (!diff.content_delta.empty()) {
+                on_text(diff.content_delta);
+            }
+            if (diff.tool_call_index != std::string::npos) {
+                on_tool_call(diff);
+            }
         }
         if (!res.audio.empty()) {
             if (idx_audio < 0) {
                 idx_audio = open_part("output_audio");
             }
-            json ev = base;
-            ev["type"]          = "response.output_audio.delta";
-            ev["content_index"] = idx_audio;
-            ev["delta"]         = encode_pcm16(res.audio);
-            send_event(ev);
+            send_event({{"type", "response.output_audio.delta"}, {"response_id", response_id}, {"item_id", response_item_id},
+                        {"output_index", idx_message}, {"content_index", idx_audio}, {"delta", encode_pcm16(res.audio)}});
         }
         if (!res.response_done) {
             return;
         }
 
         const std::string status = res.cancelled ? "cancelled" : "completed";
-        for (size_t i = 0; i < parts.size(); i++) {
-            json ev = base;
-            ev["content_index"] = i;
-            if ((int) i == idx_text) {
-                parts[i]["text"] = response_text;
-                ev["type"]       = "response.output_text.done";
-                ev["text"]       = response_text;
-            } else {
-                ev["type"] = "response.output_audio.done";
+        if (idx_message >= 0) {
+            const json base = {{"response_id", response_id}, {"item_id", response_item_id}, {"output_index", idx_message}};
+            for (size_t i = 0; i < parts.size(); i++) {
+                json ev = base;
+                ev["content_index"] = i;
+                if ((int) i == idx_text) {
+                    parts[i]["text"] = response_text;
+                    ev["type"]       = "response.output_text.done";
+                    ev["text"]       = response_text;
+                } else {
+                    ev["type"] = "response.output_audio.done";
+                }
+                send_event(ev);
+                ev.erase("text");
+                ev["type"] = "response.content_part.done";
+                ev["part"] = parts[i];
+                send_event(ev);
             }
-            send_event(ev);
-            ev.erase("text");
-            ev["type"] = "response.content_part.done";
-            ev["part"] = parts[i];
-            send_event(ev);
+            output[idx_message]["content"] = parts;
         }
-        const json item = {{"id", response_item_id}, {"object", "realtime.item"}, {"type", "message"}, {"role", "assistant"},
-                           {"status", status}, {"content", parts}};
-        send_event({{"type", "response.output_item.done"}, {"response_id", response_id}, {"output_index", 0}, {"item", item}});
+        for (const auto & [index, idx] : call_items) {
+            json & item = output[idx];
+            send_event({{"type", "response.function_call_arguments.done"}, {"response_id", response_id}, {"item_id", item["id"]},
+                        {"output_index", idx}, {"call_id", item["call_id"]}, {"name", item["name"]}, {"arguments", item["arguments"]}});
+        }
+        for (size_t i = 0; i < output.size(); i++) {
+            output[i]["status"] = status;
+            send_event({{"type", "response.output_item.done"}, {"response_id", response_id}, {"output_index", i}, {"item", output[i]}});
+            last_item_id = output[i]["id"];
+        }
         send_event({{"type", "response.done"}, {"response", {{"id", response_id}, {"object", "realtime.response"}, {"status", status},
-                    {"output", json::array({item})}, {"usage", {{"output_tokens", res.n_decoded}}}}}});
-        last_item_id = response_item_id;
+                    {"output", output}, {"usage", {{"output_tokens", res.n_decoded}}}}}});
+        parse.reset();
     }
 
     //
@@ -776,7 +991,7 @@ void server_realtime_slot::sample_next() {
 }
 
 bool server_realtime_slot::response_start(const server_realtime_op & op) {
-    auto sparams = sampling;
+    auto sparams = op.response.sampling;
     n_predict = op.response.n_predict;
     n_decoded = 0;
     cancelled = false;
@@ -816,10 +1031,17 @@ bool server_realtime_slot::response_start(const server_realtime_op & op) {
         }
     }
     smpl.reset(common_sampler_init(model, sparams));
+    preserved = sparams.preserved_tokens;
     // the logits of the last decode are this slot's only until another slot decodes
     sample_next();
     responding = true;
     return true;
+}
+
+// control tokens stay out of the text, except the preserved ones the client parses (tool calls)
+std::string server_realtime_slot::piece(llama_token tok) const {
+    const bool p = preserved.count(tok) > 0;
+    return p || !llama_vocab_is_control(vocab, tok) ? common_token_to_piece(vocab, tok, p) : "";
 }
 
 // one text token or audio frame of the response being generated
@@ -833,8 +1055,8 @@ bool server_realtime_slot::response_step() {
         if (gen.step_gen(sampled, h_state.data(), &h_next, &stop) != 0) {
             return fail("response generation failed");
         }
-        if (sampled != LLAMA_TOKEN_NULL && !stop && !llama_vocab_is_control(vocab, sampled)) {
-            text = common_token_to_piece(vocab, sampled, false);
+        if (sampled != LLAMA_TOKEN_NULL && !stop) {
+            text = piece(sampled);
         }
         if (h_next) {
             h_state.assign(h_next, h_next + llama_model_n_embd(model));
@@ -842,9 +1064,7 @@ bool server_realtime_slot::response_step() {
     } else {
         stop = llama_vocab_is_eog(vocab, sampled);
         if (!stop) {
-            if (!llama_vocab_is_control(vocab, sampled)) {
-                text = common_token_to_piece(vocab, sampled, false);
-            }
+            text = piece(sampled);
             if (!decode(&sampled, nullptr, 1, true)) {
                 return false;
             }

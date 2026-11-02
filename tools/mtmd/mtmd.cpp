@@ -25,11 +25,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <climits>
+#include <map>
 #include <type_traits>
 #include <vector>
 
 // remember to bump this if the serialization format changes
-#define MTMD_SERIALIZATION_VERSION 3
+#define MTMD_SERIALIZATION_VERSION 4
 
 // oldest compat version that can be loaded
 #define MTMD_SERIALIZATION_VERSION_MIN 2
@@ -174,6 +175,7 @@ struct mtmd_bitmap {
     std::string id; // optional user-defined id, for ex: can be set to image hash, useful for KV cache tracking
     bool is_audio = false; // true if the bitmap is audio
     bool mergeable = false; // [QWEN_VIDEO] set only on frames of the same video
+    bool is_video  = false; // see mtmd_bitmap_set_is_video()
 
     // lazy-loaded bitmap
     mtmd_bitmap_lazy_callback lazy_callback = nullptr;
@@ -207,6 +209,10 @@ struct mtmd_bitmap {
 
     size_t n_bytes() const {
         return data.size();
+    }
+
+    bool is_video_frame() const {
+        return mergeable && is_video;
     }
 
     bool can_merge_with(const mtmd_bitmap & other) const {
@@ -326,14 +332,26 @@ struct mtmd_image_tokens {
 };
 using mtmd_image_tokens_ptr = std::unique_ptr<mtmd_image_tokens>;
 
+// an audio track split across chunks (e.g. the soundtrack of a video): it is encoded once, as one clip, and every
+// chunk takes its rows of it
+struct mtmd_audio_track {
+    clip_image_f32_batch batch_f32; // the mel of the whole track
+    uint32_t n_tokens = 0;
+    std::vector<float> embd;        // filled by the first encode
+};
+
 struct mtmd_audio_tokens {
     uint32_t n_tokens = 0; // number of tokens
     clip_image_f32_batch batch_f32; // preprocessed image patches
     std::string id; // optional user-defined ID, useful for KV cache tracking
 
+    // a slice of a track: the rows [row_begin, row_begin + n_tokens) of it, batch_f32 is unused
+    std::shared_ptr<mtmd_audio_track> track;
+    uint32_t row_begin = 0;
+
     // true if one of entries in batch_f32 is a placeholder
     bool is_placeholder() const {
-        for (const auto & entry : batch_f32.entries) {
+        for (const auto & entry : (track ? track->batch_f32 : batch_f32).entries) {
             if (entry.is_placeholder()) {
                 return true;
             }
@@ -345,7 +363,9 @@ struct mtmd_audio_tokens {
         return mtmd_audio_tokens{
             n_tokens,
             batch_f32.clone(),
-            id
+            id,
+            track,
+            row_begin,
         };
     }
 
@@ -354,11 +374,25 @@ struct mtmd_audio_tokens {
         ser.write(n_tokens);
         ser.write(id);
         batch_f32.serialize(ser);
+        // a slice keeps its own copy of the track
+        ser.write(track != nullptr);
+        if (track) {
+            ser.write(row_begin);
+            ser.write(track->n_tokens);
+            track->batch_f32.serialize(ser);
+        }
     }
     void deserialize(mtmd_serialization & ser) {
         n_tokens = ser.read<uint32_t>();
         id = ser.read<std::string>();
         batch_f32.deserialize(ser);
+        track.reset();
+        if (ser.version >= 4 && ser.read<bool>()) {
+            row_begin = ser.read<uint32_t>();
+            track = std::make_shared<mtmd_audio_track>();
+            track->n_tokens = ser.read<uint32_t>();
+            track->batch_f32.deserialize(ser);
+        }
     }
 };
 using mtmd_audio_tokens_ptr = std::unique_ptr<mtmd_audio_tokens>;
@@ -538,6 +572,8 @@ struct mtmd_context {
     std::string img_end;
     std::string aud_beg;
     std::string aud_end;
+    std::string vid_beg; // wraps a whole video (lazy bitmap with is_video)
+    std::string vid_end;
 
     // for llava-uhd style models, we need special tokens in-between slices
     // minicpmv calls them "slices", llama 4 calls them "tiles"
@@ -777,6 +813,8 @@ struct mtmd_context {
                     // <|vision_start|> ... (image embeddings) ... <|vision_end|>
                     img_beg = "<|vision_start|>";
                     img_end = "<|vision_end|>";
+                    vid_beg = img_beg;
+                    vid_end = img_end;
                     image_preproc = std::make_unique<mtmd_image_preprocessor_lfm3vl>(ctx_v);
                 } break;
             case PROJECTOR_TYPE_YOUTUVL:
@@ -1158,6 +1196,11 @@ struct mtmd_context {
         return ctx_a ? clip_get_projector_type(ctx_a) : PROJECTOR_TYPE_UNKNOWN;
     }
 
+    // [LFM3_OMNI] the audio of a video is its soundtrack, see MTMD_VIDEO_TEMPLATE_LFM3_OMNI
+    bool video_has_soundtrack() const {
+        return proj_type_v() == PROJECTOR_TYPE_LFM3VL && proj_type_a() == PROJECTOR_TYPE_LFM3A;
+    }
+
     int64_t n_embd_out() const {
         if (ctx_v) {
             return clip_n_mmproj_embd(ctx_v);
@@ -1256,6 +1299,16 @@ struct mtmd_tokenizer {
     std::vector<mtmd::bitmap> bm_from_lazy; // TODO @ngxson : refactor, free bm_from_lazy progressively
     std::vector<const char *> text_from_lazy;
 
+    // [LFM3_OMNI] the audio pieces of a video are joined back and encoded as one clip, each piece takes its rows
+    struct soundtrack {
+        std::vector<const mtmd_bitmap *> pieces;
+        std::shared_ptr<mtmd_audio_track> track; // built on the first piece
+        size_t   n_samples  = 0; // samples of the pieces added so far
+        uint32_t n_assigned = 0; // rows of the pieces added so far
+    };
+    std::vector<soundtrack> soundtracks;
+    std::map<const mtmd_bitmap *, size_t> soundtrack_of; // piece -> index in soundtracks
+
     mtmd_input_chunks cur;
     uint32_t n_images_added = 0; // 0-based index assigned to the next image chunk
 
@@ -1329,6 +1382,11 @@ struct mtmd_tokenizer {
         for (auto & p : parts) {
             if (p.bitmap != nullptr && p.bitmap->lazy_callback) {
                 LOG_DBG("%s: expanding lazy bitmap\n", __func__);
+                const bool is_video = p.bitmap->is_video;
+                if (is_video && !ctx->vid_beg.empty()) {
+                    expanded.push_back({ctx->vid_beg, nullptr, true});
+                }
+                soundtrack st;
                 for (size_t i = 0;; i++) {
                     char * out_str = nullptr;
                     mtmd_bitmap * out_bm = nullptr;
@@ -1344,6 +1402,9 @@ struct mtmd_tokenizer {
                         if (out_bm) {
                             auto & ptr = bm_from_lazy.emplace_back(out_bm); // remember to free it later
                             expanded.push_back({"", ptr.ptr.get()});
+                            if (is_video && out_bm->is_audio && ctx->video_has_soundtrack()) {
+                                st.pieces.push_back(out_bm);
+                            }
                             LOG_DBG("%s: lazy callback returned bitmap with dimensions %d x %d\n", __func__, out_bm->nx, out_bm->ny);
                         } else if (out_str) {
                             auto & ptr = text_from_lazy.emplace_back(out_str); // remember to free it later
@@ -1352,11 +1413,20 @@ struct mtmd_tokenizer {
                         }
                     } else if (res == -1) {
                         // EOF: lazy part removes itself (not added to expanded)
+                        if (is_video && !ctx->vid_end.empty()) {
+                            expanded.push_back({ctx->vid_end, nullptr, true});
+                        }
                         break;
                     } else if (res == -2) {
                         // error
                         throw std::runtime_error(string_format("lazy callback returned error"));
                     }
+                }
+                if (!st.pieces.empty()) {
+                    for (const auto * piece : st.pieces) {
+                        soundtrack_of[piece] = soundtracks.size();
+                    }
+                    soundtracks.push_back(std::move(st));
                 }
             } else {
                 expanded.push_back(std::move(p));
@@ -1501,7 +1571,9 @@ struct mtmd_tokenizer {
                 img_u8.cpy_buf(bmp->get_ro_buf());
 
                 // preprocess image
-                mtmd_image_preproc_out tmp_preproc_out = ctx->image_preproc->preprocess(img_u8);
+                mtmd_image_preproc_out tmp_preproc_out = bmp->is_video_frame()
+                    ? ctx->image_preproc->preprocess_video_frame(img_u8)
+                    : ctx->image_preproc->preprocess(img_u8);
 
                 // move entries and grid dimensions to the "global" preproc_out
                 for (auto & entry : tmp_preproc_out.entries) {
@@ -1667,7 +1739,7 @@ struct mtmd_tokenizer {
 
                 clip_image_f32_batch batch_f32;
                 batch_f32.is_audio = false;
-                batch_f32.is_video = bitmaps[0]->mergeable;
+                batch_f32.is_video = bitmaps[0]->is_video_frame();
                 batch_f32.entries = std::move(preproc_out.entries);
                 // do NOT use preproc_out from this point on, it's moved
 
@@ -1703,6 +1775,10 @@ struct mtmd_tokenizer {
             if (!ctx->ctx_a) {
                 LOG_ERR("%s: error: model does not support audio input\n", __func__);
                 return 2;
+            }
+
+            if (auto it = soundtrack_of.find(bitmap); it != soundtrack_of.end()) {
+                return add_soundtrack_piece(soundtracks[it->second], *bitmap);
             }
 
             if (bitmap->nx == 0) {
@@ -1790,6 +1866,58 @@ struct mtmd_tokenizer {
             }
         }
 
+        return 0;
+    }
+
+    // a piece of a soundtrack goes in without the audio markers, it lies inside the span of its video
+    int32_t add_soundtrack_piece(soundtrack & st, const mtmd_bitmap & bitmap) {
+        if (!st.track) {
+            std::vector<float> samples;
+            for (const auto * piece : st.pieces) {
+                if (piece->is_placeholder()) {
+                    samples.resize(samples.size() + piece->nx, 0.0f);
+                } else {
+                    const float * data = (const float *) piece->get_ro_buf().data();
+                    samples.insert(samples.end(), data, data + piece->nx);
+                }
+            }
+            std::vector<mtmd_audio_mel> mels;
+            if (!ctx->audio_preproc || !ctx->audio_preproc->preprocess(samples.data(), samples.size(), mels) || mels.size() != 1) {
+                LOG_ERR("%s: unable to preprocess the soundtrack\n", __func__);
+                return 2;
+            }
+            clip_image_f32 mel_f32;
+            mel_f32.set_size({(int) mels[0].n_len, (int) mels[0].n_mel}, mels[0].data.empty(), /* is_audio */ true);
+            mel_f32.cpy_buf(mels[0].data);
+            st.track = std::make_shared<mtmd_audio_track>();
+            st.track->n_tokens = clip_n_output_tokens(ctx->ctx_a, &mel_f32);
+            st.track->batch_f32.is_audio = true;
+            st.track->batch_f32.entries.push_back(std::move(mel_f32));
+        }
+
+        // rows of [begin, end): round(sample / samples per row), the last piece takes the rest of the track
+        const double samples_per_row = 8.0 * clip_get_hparams(ctx->ctx_a)->audio_hop_len; // one row per 8 mel frames
+        const uint32_t n_tokens = st.track->n_tokens;
+        st.n_samples += bitmap.nx;
+        const uint32_t begin = st.n_assigned;
+        const uint32_t end   = &bitmap == st.pieces.back() ? n_tokens
+                             : std::clamp((uint32_t) std::nearbyint(st.n_samples / samples_per_row), begin, n_tokens);
+        st.n_assigned = end;
+        if (end == begin) {
+            return 0;
+        }
+
+        mtmd_audio_tokens_ptr audio_tokens(new mtmd_audio_tokens);
+        audio_tokens->n_tokens  = end - begin;
+        audio_tokens->track     = st.track;
+        audio_tokens->row_begin = begin;
+        audio_tokens->id        = bitmap.id;
+        cur.entries.emplace_back(mtmd_input_chunk{
+            MTMD_INPUT_CHUNK_TYPE_AUDIO,
+            {}, // text tokens
+            nullptr, // image tokens
+            std::move(audio_tokens),
+        });
         return 0;
     }
 
@@ -2049,6 +2177,20 @@ static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk
             return 1;
         }
         int n_mmproj_embd = ctx->n_embd_out();
+        const auto & track = chunk->tokens_audio->track;
+        if (track) {
+            if (track->embd.empty()) {
+                track->embd.resize((size_t) track->n_tokens * n_mmproj_embd);
+                if (!clip_image_batch_encode(ctx->ctx_a, ctx->n_threads, &track->batch_f32, track->embd)) {
+                    track->embd.clear();
+                    return 1;
+                }
+            }
+            const size_t off = (size_t) chunk->tokens_audio->row_begin * n_mmproj_embd;
+            out_embd.assign(track->embd.begin() + off,
+                            track->embd.begin() + off + (size_t) chunk->tokens_audio->n_tokens * n_mmproj_embd);
+            return 0;
+        }
         out_embd.resize((size_t)chunk->tokens_audio->n_tokens * n_mmproj_embd);
         bool ok = clip_image_batch_encode(
             ctx->ctx_a,
@@ -2579,6 +2721,36 @@ int mtmd_get_audio_sample_rate(const mtmd_context * ctx) {
     return clip_get_hparams(ctx->ctx_a)->audio_sample_rate;
 }
 
+mtmd_video_config mtmd_get_video_config(const mtmd_context * ctx,
+                                        int32_t src_width, int32_t src_height,
+                                        int32_t src_n_frames, float src_fps) {
+    mtmd_video_config cfg{MTMD_VIDEO_TEMPLATE_DEFAULT, 0.0f, 0, 0, 0};
+    if (!ctx->ctx_v || clip_get_projector_type(ctx->ctx_v) != PROJECTOR_TYPE_LFM3VL) {
+        return cfg;
+    }
+
+    // matches Lfm3VlVideoProcessor: 2 fps sampling with a [4, 768] frame clamp
+    // LFM3-Omni samples at most 384 frames and hears the soundtrack
+    const bool omni = ctx->video_has_soundtrack();
+    cfg.tmpl = omni ? MTMD_VIDEO_TEMPLATE_LFM3_OMNI : MTMD_VIDEO_TEMPLATE_LFM3;
+    cfg.fps  = 2.0f;
+    if (src_n_frames <= 0 || src_fps <= 0.0f) {
+        return cfg;
+    }
+
+    int32_t n = (int32_t)((double) src_n_frames / src_fps * cfg.fps);
+    n = std::clamp(n, 4, omni ? 384 : 768);
+    n = std::min(n, src_n_frames);
+    cfg.n_frames = n;
+
+    clip_image_size size;
+    if (ctx->image_preproc && ctx->image_preproc->get_video_frame_size(n, src_width, src_height, size)) {
+        cfg.frame_width  = size.width;
+        cfg.frame_height = size.height;
+    }
+    return cfg;
+}
+
 const char * mtmd_get_marker(const mtmd_context * ctx) {
     return ctx->media_marker.c_str();
 }
@@ -2646,6 +2818,10 @@ void mtmd_bitmap_set_id(mtmd_bitmap * bitmap, const char * id) {
 
 void mtmd_bitmap_set_mergeable(mtmd_bitmap * bitmap, bool mergeable) {
     bitmap->mergeable = mergeable;
+}
+
+void mtmd_bitmap_set_is_video(mtmd_bitmap * bitmap, bool is_video) {
+    bitmap->is_video = is_video;
 }
 
 mtmd_bitmap * mtmd_bitmap_init_lazy(const mtmd_context * ctx,

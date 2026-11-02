@@ -12,10 +12,12 @@ import {
 	FAVORITE_MODELS_LOCALSTORAGE_KEY,
 	HIDDEN_MODELS_LOCALSTORAGE_KEY,
 	MODEL_GROUP_OPEN_LOCALSTORAGE_KEY,
+	MODEL_REMOVE_BLOCKED_FALLBACK,
+	MODEL_REMOVE_BLOCKED_REASONS,
 	RECENT_MODEL_LIMIT,
 	RECENT_MODELS_LOCALSTORAGE_KEY
 } from '$lib/constants';
-import { ServerModelStatus } from '$lib/enums';
+import { ReasoningEffort, ServerModelSource, ServerModelStatus } from '$lib/enums';
 import { HuggingFaceService } from '$lib/services/huggingface.service';
 import { ModelsService } from '$lib/services/models.service';
 // direct imports between stores, not via the barrel, to avoid circular deps
@@ -23,6 +25,7 @@ import { conversationsStore } from '$lib/stores/conversations/index.svelte';
 import { type ModelPropsHost, ModelPropsManager } from '$lib/stores/models/props.svelte';
 import { type ModelStatusHost, ModelStatusManager } from '$lib/stores/models/status.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
+import type { ApiModelDataEntry } from '$lib/types';
 import type { ParsedModelId } from '$lib/types/models';
 import { getConversationModel } from '$lib/utils/conversation-utils';
 import { repoOf } from '$lib/utils/model-names';
@@ -205,12 +208,22 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	 * Prioritizes:
 	 * 1. Model from active conversation's last assistant response (if loaded)
 	 * 2. Model from active conversation's last assistant response (if not loaded)
-	 * 3. First loaded model (not from active conversation)
-	 * 4. A favorite model
-	 * 5. First available model
+	 * 3. A model that is loading
+	 * 4. First loaded model (not from active conversation)
+	 * 5. A favorite model
+	 * 6. First available model
+	 *
+	 * A chat without a model of its own also trades an idle selection for a
+	 * model that is loading.
 	 */
 	async ensureFirstModelSelected(): Promise<void> {
-		if (this.selectedModelName) return;
+		if (this.selectedModelName) {
+			const loadingModel = this.getLoadingModelToPreselect();
+
+			if (loadingModel) await this.selectModelById(loadingModel.id);
+
+			return;
+		}
 
 		const availableModels = this.getVisibleModels();
 
@@ -231,6 +244,15 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 
 				return;
 			}
+		}
+
+		// a model that is loading is the one the user is waiting for
+		const loadingModel = availableModels.find((m) => this.isModelLoading(m.model));
+
+		if (loadingModel) {
+			await this.selectModelById(loadingModel.id);
+
+			return;
 		}
 
 		// Try a loaded model first
@@ -322,6 +344,20 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	}
 
 	/**
+	 * The loading model a chat without a model of its own should switch to: none
+	 * while the current selection is loaded or loading itself.
+	 */
+	getLoadingModelToPreselect(): ModelOption | null {
+		if (this.getModelFromLastAssistantResponse()) return null;
+
+		const selected = this.selectedModelName;
+
+		if (selected && (this.isModelLoaded(selected) || this.isModelLoading(selected))) return null;
+
+		return this.getVisibleModels().find((m) => this.isModelLoading(m.model)) ?? null;
+	}
+
+	/**
 	 * Gets the model name from the last assistant message in the active conversation.
 	 * Used by both the chat page and settings page to maintain model consistency.
 	 */
@@ -343,6 +379,16 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		const model = this.routerModels.find((m) => m.id === modelId);
 
 		return (model?.status?.value as ServerModelStatus) ?? null;
+	}
+
+	/**
+	 * Models the selector lists: not flagged out of the UI (ui === false) and not
+	 * hidden by the user, so an automatic pick never lands on one it doesn't show.
+	 */
+	getVisibleModels(): ModelOption[] {
+		return this.models.filter(
+			(option) => this.props.getModelProps(option.model)?.ui !== false && !this.isHidden(option.id)
+		);
 	}
 
 	hasModel(modelName: string): boolean {
@@ -367,9 +413,35 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		return status === ServerModelStatus.LOADED || status === ServerModelStatus.SLEEPING;
 	}
 
+	/** Loading on the server, or a load this client started that has not finished yet. */
+	isModelLoading(modelId: string): boolean {
+		// an unload raises the same in-progress flag, but the model stays loaded until it ends
+		return (
+			this.getModelStatus(modelId) === ServerModelStatus.LOADING ||
+			(this._status.isOperationInProgress(modelId) && !this.isModelLoaded(modelId))
+		);
+	}
+
 	/** Loaded, or sleeping, and not mid-operation: what a row shows as running. */
 	isModelRunning(modelId: string): boolean {
 		return this.isModelLoaded(modelId) && !this._status.isOperationInProgress(modelId);
+	}
+
+	/**
+	 * Why the router would refuse to delete a model from disk, or null when it can.
+	 * Only a model from the HF cache is removable; a server that does not report
+	 * `can_remove` is let through and answers for itself.
+	 */
+	removeBlockedReason(modelId: string): string | null {
+		const model = this.routerModels.find((m) => m.id === modelId);
+
+		if (!model || model.can_remove !== false) return null;
+
+		if (model.source && model.source !== ServerModelSource.CACHE) {
+			return MODEL_REMOVE_BLOCKED_REASONS[model.source];
+		}
+
+		return MODEL_REMOVE_BLOCKED_FALLBACK;
 	}
 
 	/**
@@ -396,6 +468,13 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			this.selectedModelName = option.model;
 
 			if (options?.recordRecent) this.recordRecentModel(modelId);
+
+			// reasoning levels belong to the model that answered: another model in the chat starts at Default
+			const conversationModel = getConversationModel(conversationsStore.activeMessages);
+
+			if (conversationModel && conversationModel !== option.model) {
+				void conversationsStore.preferences.setReasoningEffort(ReasoningEffort.DEFAULT);
+			}
 		} finally {
 			this.updating = false;
 		}
@@ -415,13 +494,24 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	}
 
 	/**
-	 * Auto-selects the model from the last assistant response if available and loaded.
+	 * Auto-selects the model from the last assistant response if available and loaded,
+	 * or a loading model when the conversation has no model yet.
 	 * Returns true if a model was selected, false otherwise.
 	 */
 	async selectModelFromLastAssistantResponse(): Promise<boolean> {
 		const lastModel = this.getModelFromLastAssistantResponse();
 
-		if (!lastModel || this.selectedModelName === lastModel) return false;
+		if (!lastModel) {
+			const loadingModel = this.getLoadingModelToPreselect();
+
+			if (!loadingModel) return false;
+
+			await this.selectModelById(loadingModel.id);
+
+			return true;
+		}
+
+		if (this.selectedModelName === lastModel) return false;
 
 		const matchingModel = this.models.find((option) => option.model === lastModel);
 
@@ -605,18 +695,11 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 				})
 		);
 	}
-
 	/** Fetch models in MODEL mode (single model, standard OpenAI-compatible). */
 	private async fetchModelModeInternal(): Promise<ModelOption[]> {
 		const response = await ModelsService.list();
 
 		return this.buildModelOptions(response);
-	}
-	/**
-	 * Filter to models visible in the UI (ui !== false).
-	 */
-	private getVisibleModels(): ModelOption[] {
-		return this.models.filter((option) => this.props.getModelProps(option.model)?.ui !== false);
 	}
 
 	private loadFavoritesFromStorage(): Set<string> {

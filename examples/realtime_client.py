@@ -15,6 +15,10 @@ Without --instructions, a forced mode comes with the system prompt of the LFM3-A
 
     python examples/realtime_client.py --output-modalities text,audio --out answer.wav question.wav
 
+Tool calls: --tools gives the conversation a demo tool, the client runs its calls and sends the results back:
+
+    python examples/realtime_client.py --tools --text "Set the volume to 30."
+
 Text turns go in with --text, transcription sessions transcribe each file:
 
     python examples/realtime_client.py --text "What is the capital of France?"
@@ -31,6 +35,7 @@ Requirements: pip install "openai[realtime]" numpy
 import argparse
 import asyncio
 import base64
+import json
 import time
 import wave
 
@@ -43,6 +48,26 @@ MODE_INSTRUCTIONS = {
     "audio": {"text,audio": "Respond with interleaved text and audio."},
     "omni":  {"text": "Respond in text.", "text,audio": "Respond in interleaved text and audio."},
 }
+# and with tools: calls, or an answer in interleaved text and speech
+TOOLS_INSTRUCTIONS = "Respond with function calls, and interleaved text and audio.\n\nList of tools:"
+
+# the demo tool of --tools
+DEMO_TOOLS = [{
+    "type": "function",
+    "name": "set_volume",
+    "description": "Set the device speaker volume.",
+    "parameters": {
+        "type": "object",
+        "properties": {"volume": {"type": "integer", "description": "Volume from 0 to 100."}},
+        "required": ["volume"],
+    },
+}]
+
+
+def run_tool(name, arguments):
+    if name == "set_volume":
+        return {"volume": json.loads(arguments)["volume"]}
+    return {"error": f"unknown tool {name}"}
 
 
 def read_wav(path, rate):
@@ -86,7 +111,9 @@ async def main(args):
         if args.type == "realtime":
             instructions = args.instructions
             if instructions is None:
-                instructions = MODE_INSTRUCTIONS[card].get(args.output_modalities)
+                instructions = TOOLS_INSTRUCTIONS if args.tools else MODE_INSTRUCTIONS[card].get(args.output_modalities)
+            if args.tools:
+                session["tools"] = DEMO_TOOLS
             if instructions is not None:
                 session["instructions"] = instructions
             if args.output_modalities:
@@ -136,7 +163,18 @@ async def main(args):
                 elif ev.type == "response.output_audio.delta":
                     t_first = t_first or time.perf_counter()
                     audio.append(np.frombuffer(base64.b64decode(ev.delta), dtype=np.int16))
-                elif ev.type in ("response.done", "conversation.item.input_audio_transcription.completed"):
+                elif ev.type == "response.done":
+                    # the calls of the response are run, their results go back and the model answers them
+                    calls = [o for o in ev.model_dump()["response"]["output"] if o["type"] == "function_call"]
+                    for call in calls:
+                        result = json.dumps(run_tool(call["name"], call["arguments"]))
+                        print(f"\n[call {call['name']}({call['arguments']}) -> {result}]", flush=True)
+                        await conn.conversation.item.create(item={
+                            "type": "function_call_output", "call_id": call["call_id"], "output": result})
+                    if not calls:
+                        break
+                    await conn.response.create()
+                elif ev.type == "conversation.item.input_audio_transcription.completed":
                     break
                 elif ev.type == "error":
                     print("\nerror:", ev.error.message)
@@ -161,6 +199,7 @@ if __name__ == "__main__":
     p.add_argument("--text", action="append", default=[], help="a user turn as text, after the audio turns, repeatable")
     p.add_argument("--type", choices=["realtime", "transcription"], default="realtime", help="session type")
     p.add_argument("--instructions", help="system prompt of the conversation")
+    p.add_argument("--tools", action="store_true", help="give the conversation a demo tool (set_volume), its calls are run")
     p.add_argument("--output-modalities", choices=["text", "audio", "text,audio"], help="default: the model picks")
     p.add_argument("--language", help="transcription language, e.g. en")
     p.add_argument("--chunk-ms", type=int, default=100, help="audio chunk size")

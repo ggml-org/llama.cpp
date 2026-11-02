@@ -10,6 +10,7 @@
 #include "sampling.h"
 
 #include <deque>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -83,12 +84,14 @@ private:
     mtmd_helper::gen_audio gen;      // set if the model generates audio
     std::vector<float>     h_state;  // hidden state that the gen-audio pipeline steps from
     common_sampler_ptr     smpl;
+    std::set<llama_token>  preserved; // special tokens of the response that go out as text (tool calls)
 
     bool fail(const std::string & msg, enum error_type type = ERROR_TYPE_SERVER);
     void send_result(std::string text, std::vector<float> audio, bool response_done = false);
     bool decode(const llama_token * tokens, const float * rows, int32_t n, bool logits_last);
     bool audio_rows();
     void sample_next();
+    std::string piece(llama_token tok) const;
     bool response_start(const server_realtime_op & op);
     bool response_step();
 };

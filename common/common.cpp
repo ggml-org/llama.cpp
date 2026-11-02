@@ -219,6 +219,23 @@ int32_t common_cpu_get_num_math() {
             }
         }
     }
+#elif defined(__riscv) && defined(__linux__)
+    std::ifstream cpuinfo("/proc/cpuinfo");
+    std::string line;
+    int32_t n_a100 = 0;
+    while (std::getline(cpuinfo, line)) {
+        std::istringstream fields(line);
+        std::string key;
+        std::string separator;
+        uint64_t marchid;
+        if (fields >> key >> separator >> std::hex >> marchid &&
+            key == "marchid" && separator == ":" && marchid == UINT64_C(0x8000000041000002)) {
+            ++n_a100;
+        }
+    }
+    if (n_a100 > 0) {
+        return n_a100;
+    }
 #elif defined(__powerpc64__) || defined(__powerpc__)
     int32_t smt_factor = 1;
     int phy_cpus = common_cpu_get_num_physical_cores();
@@ -917,12 +934,6 @@ std::string wstring_to_utf8(const std::wstring & str) {
 }
 #endif
 
-// returns the path as a UTF-8 string, preserving its separators
-std::string fs_path_to_utf8(const std::filesystem::path & path) {
-    const auto value = path.u8string();
-    return std::string(value.begin(), value.end());
-}
-
 void fs_write_atomic(const std::filesystem::path & path, const std::string & data) {
     // a random suffix gives every writer its own temporary file, across processes and containers
     std::random_device rd;
@@ -946,7 +957,7 @@ void fs_write_atomic(const std::filesystem::path & path, const std::string & dat
 
     if (file.fail() || ec) {
         std::filesystem::remove(path_tmp, ec);
-        throw std::runtime_error("failed to write file: " + fs_path_to_utf8(path));
+        throw std::runtime_error("failed to write file: " + path.string());
     }
 }
 
@@ -1040,7 +1051,7 @@ std::filesystem::path fs_get_cache_file(const std::string & filename) {
     std::error_code ec;
     common_create_directories(cache_directory, ec);
     if (ec) {
-        throw std::runtime_error("failed to create cache directory: " + fs_path_to_utf8(cache_directory));
+        throw std::runtime_error("failed to create cache directory: " + cache_directory.string());
     }
     return cache_directory / std::filesystem::u8path(filename);
 }
@@ -1473,7 +1484,7 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
         if (params.control_vector_layer_start <= 0) params.control_vector_layer_start = 1;
         if (params.control_vector_layer_end   <= 0) params.control_vector_layer_end   = llama_model_n_layer(model);
 
-        const auto cvec = common_control_vector_load(params.control_vectors);
+        const auto cvec = common_control_vector_load(params.control_vectors, llama_model_n_layer(model));
         if (cvec.n_embd == -1) {
             return res;
         }
@@ -1995,7 +2006,7 @@ float common_embd_similarity_cos(const float * embd1, const float * embd2, int n
 // Control vector utils
 //
 
-static common_control_vector_data common_control_vector_load_one(const common_control_vector_load_info & load_info) {
+static common_control_vector_data common_control_vector_load_one(const common_control_vector_load_info & load_info, int32_t n_layer) {
     common_control_vector_data result = { -1, {} };
 
     ggml_context * ctx = nullptr;
@@ -2036,6 +2047,10 @@ static common_control_vector_data common_control_vector_load_one(const common_co
             COM_ERR("invalid (zero) direction tensor layer index in %s\n", load_info.fname.c_str());
             result.n_embd = -1;
             break;
+        } else if (layer_idx > n_layer) {
+            COM_ERR("direction tensor layer index %d exceeds the model layer count %d in %s\n", layer_idx, n_layer, load_info.fname.c_str());
+            result.n_embd = -1;
+            break;
         }
 
         struct ggml_tensor * tensor = ggml_get_tensor(ctx, name.c_str());
@@ -2059,10 +2074,10 @@ static common_control_vector_data common_control_vector_load_one(const common_co
         }
 
         // extend if necessary - do not store data for layer 0 (it's not used)
-        result.data.resize(std::max(result.data.size(), static_cast<size_t>(result.n_embd * layer_idx)), 0.0f);
+        result.data.resize(std::max(result.data.size(), (size_t) result.n_embd * layer_idx), 0.0f);
 
         const float * src = (const float *) tensor->data;
-        float * dst = result.data.data() + result.n_embd * (layer_idx - 1);  // layer 1 at [0]
+        float * dst = result.data.data() + (size_t) result.n_embd * (layer_idx - 1);  // layer 1 at [0]
         for (int j = 0; j < result.n_embd; j++) {
             dst[j] += src[j] * load_info.strength;  // allows multiple directions for same layer in same file
         }
@@ -2080,11 +2095,11 @@ static common_control_vector_data common_control_vector_load_one(const common_co
     return result;
 }
 
-common_control_vector_data common_control_vector_load(const std::vector<common_control_vector_load_info> & load_infos) {
+common_control_vector_data common_control_vector_load(const std::vector<common_control_vector_load_info> & load_infos, int32_t n_layer) {
     common_control_vector_data result = { -1, {} };
 
     for (const auto & info : load_infos) {
-        auto cur = common_control_vector_load_one(info);
+        auto cur = common_control_vector_load_one(info, n_layer);
 
         if (cur.n_embd == -1) {
             result.n_embd = -1;
