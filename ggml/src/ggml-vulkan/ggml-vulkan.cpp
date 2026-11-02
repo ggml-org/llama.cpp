@@ -3174,7 +3174,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     ggml_vk_create_pipeline(device, device->pipeline_flash_attn_split_k_reduce, "fa_split_k_reduce", fa_split_k_reduce_len, fa_split_k_reduce_data, "main", 3, sizeof(vk_op_flash_attn_split_k_reduce_push_constants), {1, device->subgroup_size, 1}, {device->subgroup_size}, 1, true);
 
 #if defined(VK_KHR_cooperative_matrix) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
-    if (device->vendor_id == VK_VENDOR_ID_INTEL && (device->architecture == INTEL_XE2 || (device->architecture == INTEL_XE1 && device->coopmat_support && device->uma))) {
+    if (device->vendor_id == VK_VENDOR_ID_INTEL && device->coopmat_support && (device->architecture == INTEL_XE2 || (device->architecture == INTEL_XE1 && device->uma))) {
         auto upper_power_of_2 = [&](uint32_t in) {
             GGML_ASSERT(in != 0);
             if (in <= 1) return 1u;
@@ -3196,8 +3196,8 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             const uint32_t split_p_chunk = 32;
             auto HdQk = it.first;
             auto& pipelines = it.second;
-            uint32_t head_dim_qk = std::get<0>(HdQk);
-            uint32_t head_dim_pv = std::get<1>(HdQk);
+            uint32_t HSK = std::get<0>(HdQk);
+            uint32_t HSV = std::get<1>(HdQk);
             uint32_t gqa_ratio = std::get<2>(HdQk);
             uint32_t q_len = std::get<3>(HdQk);
             const uint32_t out_dim_per_wg = gqa_ratio > 16 ? 8 : 16;
@@ -3209,8 +3209,8 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             uint32_t split_p_per_warp = 16;
             uint32_t group_sz_ph2 = (split_p_per_iter_ph2 / split_p_per_warp) * xe_native_sub_group_size;
             uint32_t out_per_wg_ph2 = std::min(std::max(16u / aligned_gqa_ratio, 1u), q_len);
-            ggml_vk_create_pipeline(device, pipelines.first, "xe_fa_decode_ph1", fa_decode_ph1_cm1_len, fa_decode_ph1_cm1_data, "main", 5, sizeof(vk_fa_xe_opt_push_constants), { 1, 32, 1 }, { group_sz_ph1, gqa_ratio, head_dim_qk, xe_native_sub_group_size, split_p_chunk, out_per_wg_ph1 }, 1, false, true, xe_native_sub_group_size);
-            ggml_vk_create_pipeline(device, pipelines.second, "xe_fa_decode_ph2", fa_decode_ph2_cm1_len, fa_decode_ph2_cm1_data, "main", 5, sizeof(vk_fa_xe_opt_push_constants), { 1, 1, 1 }, { group_sz_ph2, gqa_ratio, head_dim_pv, out_per_wg_ph2, xe_native_sub_group_size, split_p_per_iter_ph2, split_p_chunk, out_dim_per_wg }, 1, false, true, xe_native_sub_group_size);
+            ggml_vk_create_pipeline(device, pipelines.first, "xe_fa_decode_ph1", fa_decode_ph1_cm1_len, fa_decode_ph1_cm1_data, "main", 5, sizeof(vk_xe_fa_push_constants), { 1, 32, 1 }, { group_sz_ph1, gqa_ratio, HSK, xe_native_sub_group_size, split_p_chunk, out_per_wg_ph1 }, 1, false, true, xe_native_sub_group_size);
+            ggml_vk_create_pipeline(device, pipelines.second, "xe_fa_decode_ph2", fa_decode_ph2_cm1_len, fa_decode_ph2_cm1_data, "main", 5, sizeof(vk_xe_fa_push_constants), { 1, 1, 1 }, { group_sz_ph2, gqa_ratio, HSV, out_per_wg_ph2, xe_native_sub_group_size, split_p_per_iter_ph2, split_p_chunk, out_dim_per_wg }, 1, false, true, xe_native_sub_group_size);
         }
 
         for (auto& it : device->pipeline_xe_fa_prefill) {
@@ -3225,37 +3225,43 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
                 matrix_shape_mnk = { 8u, 8u, 16u };
                 break;
             case 16:
-                matrix_shape_mnk = { 16u, 8u, 16u };
+                matrix_shape_mnk = { 8u, 16u, 16u };
                 break;
             case 32:
             default:
                 matrix_shape_mnk = { 16u, 16u, 16u };
                 break;
             }
-            uint32_t head_dim_qk = std::get<0>(pipeline_state);
-            uint32_t head_dim_pv = std::get<1>(pipeline_state);
+            uint32_t HSK = std::get<0>(pipeline_state);
+            uint32_t HSV = std::get<1>(pipeline_state);
             uint32_t gqa_ratio = std::get<2>(pipeline_state);
-            uint32_t mask_dim = std::get<3>(pipeline_state);
-            GGML_ASSERT(head_dim_pv % matrix_shape_mnk[1] == 0);
+            uint32_t kv_len = std::get<3>(pipeline_state);
+            GGML_ASSERT(HSV % matrix_shape_mnk[0] == 0);
             uint32_t group_sz = sg_per_gw * xe_native_sub_group_size;
-            uint32_t out_row_per_wg = 256;
-            uint32_t output_div = head_dim_qk > 256 ? 8 : head_dim_qk > 192 ? 4 : head_dim_qk > 96 ? 2 : 1;
-            uint32_t p_per_iter = head_dim_qk > 256 ? 16 : 32;
-            uint32_t q_in_reg = head_dim_qk > 512 ? head_dim_qk - 384 : std::min(128u, head_dim_qk);
-            out_row_per_wg = out_row_per_wg / output_div;
-            uint32_t out_dim_per_warp = head_dim_pv / matrix_shape_mnk[1];
+            uint32_t wg_row = 256;
+            uint32_t output_div = HSK > 256 ? 8 : HSK > 160 ? 4 : HSK > 96 ? 2 : 1;
+            uint32_t p_per_iter = HSK > 256 ? 16 : 32;
+            uint32_t q_in_reg = HSK > 512 ? HSK - 384 : std::min(128u, HSK);
+            wg_row = wg_row / output_div;
+            uint32_t sg_col = HSV / matrix_shape_mnk[0];
             uint32_t slm_size = 64 * 1024;
             uint32_t acc_count = 1;
             uint32_t pipeline_flag = 0;
+            uint32_t gqa_fold = 16;
+            uint32_t max_fold_rows = xe_native_sub_group_size <= 16 ? 16 : 8;
 
-            if (mask_dim % p_per_iter != 0) {
+            while (gqa_fold > 1 && (gqa_ratio % gqa_fold != 0 || gqa_fold * output_div > max_fold_rows)) {
+                gqa_fold = gqa_fold / 2;
+            }
+
+            if (kv_len % p_per_iter != 0) {
                 pipeline_flag |= 1 << 0x0;
             }
 
-            out_dim_per_warp = (out_dim_per_warp + output_div - 1) / output_div;
-            out_dim_per_warp = out_dim_per_warp * matrix_shape_mnk[1];
-            acc_count = matrix_shape_mnk[1] == 8 ? (out_dim_per_warp % 16 == 0 ? 2 : 1) : 1;
-            ggml_vk_create_pipeline(device, pipelines, "xe_fa_prefill", fa_prefill_cm1_len, fa_prefill_cm1_data, "main", 6, sizeof(vk_fa_xe_opt_push_constants), { 1, out_row_per_wg, 1 }, { group_sz, head_dim_qk, head_dim_pv, gqa_ratio, out_row_per_wg, p_per_iter, matrix_shape_mnk[0], q_in_reg, out_dim_per_warp, slm_size, acc_count, pipeline_flag, xe_native_sub_group_size, matrix_shape_mnk[1] }, 1, false, true, xe_native_sub_group_size);
+            sg_col = (sg_col + output_div - 1) / output_div;
+            sg_col = sg_col * matrix_shape_mnk[0];
+            acc_count = matrix_shape_mnk[0] == 8 ? (sg_col % 16 == 0 ? 2 : 1) : 1;
+            ggml_vk_create_pipeline(device, pipelines, "xe_fa_prefill", fa_prefill_cm1_len, fa_prefill_cm1_data, "main", 6, sizeof(vk_xe_fa_push_constants), { gqa_fold, wg_row / gqa_fold, 1 }, { group_sz, wg_row, sg_col, HSK, HSV, gqa_ratio, p_per_iter, matrix_shape_mnk[0], matrix_shape_mnk[1], q_in_reg, slm_size, acc_count, pipeline_flag, xe_native_sub_group_size, gqa_fold }, 1, false, true, xe_native_sub_group_size);
         }
     }
 #endif
@@ -8281,12 +8287,13 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
     bool xe_fa_opt = false;
     bool fa_copy_qstate = false;
     bool xe_fa_use_2phases = false;
-    bool xe_fa_supported_platform =
-        ctx->device.get()->coopmat_support &&
-        ((ctx->device.get()->architecture == INTEL_XE2 && ctx->device.get()->properties.deviceID != 0xFD80 && ctx->device.get()->properties.deviceID != 0xFD81) ||
-         (ctx->device.get()->architecture == INTEL_XE1 && ctx->device.get()->uma));
-    bool xe_fa_supported_usage = neq0 % 32 == 0 && nev0 % 16 == 0 && q->nb[1] > q->nb[2] && k->nb[1] > k->nb[2] && v->nb[1] > v->nb[2] && mask != nullptr && !use_sparse && max_bias == 0.0f && logit_softcap == 0.0f;
-    bool xe_fa_supported_dtype = q->type == GGML_TYPE_F32 && k->type == GGML_TYPE_F16 && v->type == GGML_TYPE_F16 && (mask != nullptr && mask->type == GGML_TYPE_F16);
+    bool xe_fa_supported_platform = ctx->device.get()->coopmat_support &&
+                                    ((ctx->device.get()->architecture == INTEL_XE2 && ctx->device.get()->properties.deviceID != 0xFD80 && ctx->device.get()->properties.deviceID != 0xFD81) ||
+                                     (ctx->device.get()->architecture == INTEL_XE1 && ctx->device.get()->uma));
+    bool xe_fa_supported_usage = neq0 % 32 == 0 && nev0 % 16 == 0 && q->nb[1] > q->nb[2] && k->nb[1] > k->nb[2] && v->nb[1] > v->nb[2] &&
+                                 mask != nullptr && !use_sparse && max_bias == 0.0f && logit_softcap == 0.0f;
+    bool xe_fa_supported_dtype = q->type == GGML_TYPE_F32 && k->type == GGML_TYPE_F16 && v->type == GGML_TYPE_F16 &&
+                                 mask != nullptr && mask->type == GGML_TYPE_F16;
     xe_fa_opt = xe_fa_supported_platform && xe_fa_supported_usage && xe_fa_supported_dtype;
     std::pair<vk_pipeline, vk_pipeline> xe_fa_pipeline_dual_phases = { nullptr , nullptr };
     vk_pipeline xe_fa_pipeline = nullptr;
@@ -8305,13 +8312,13 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
 
         if (xe_fa_opt) {
             if (neq1 > 8) {
-                xe_fa_use_2phases = false;
                 auto& xe_fa_pipelines = ctx->device->pipeline_xe_fa_prefill;
                 auto it = xe_fa_pipelines.find({ (uint32_t)neq0, uint32_t(nev0), (uint32_t)qk_ratio, (uint32_t)nem0 });
                 if (it != xe_fa_pipelines.end()) {
                     xe_fa_pipeline = it->second;
                 } else {
-                    xe_fa_pipelines[{ (uint32_t)neq0, uint32_t(nev0), (uint32_t)qk_ratio, (uint32_t)nem0 }] = xe_fa_pipeline = std::make_shared<vk_pipeline_struct>();
+                    xe_fa_pipelines[{ (uint32_t)neq0, uint32_t(nev0), (uint32_t)qk_ratio, (uint32_t)nem0 }] = xe_fa_pipeline =
+                        std::make_shared<vk_pipeline_struct>();
                 }
             } else {
                 const uint32_t split_p_size = 32;
@@ -8322,7 +8329,8 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
                 if (it != pipelines.end()) {
                     xe_fa_pipeline_dual_phases = it->second;
                 } else {
-                    pipelines[{(uint32_t)neq0, (uint32_t)nev0, qk_ratio, (uint32_t)neq1}] = xe_fa_pipeline_dual_phases = std::make_pair(std::make_shared<vk_pipeline_struct>(), std::make_shared<vk_pipeline_struct>());
+                    pipelines[{(uint32_t)neq0, (uint32_t)nev0, qk_ratio, (uint32_t)neq1}] = xe_fa_pipeline_dual_phases =
+                        std::make_pair(std::make_shared<vk_pipeline_struct>(), std::make_shared<vk_pipeline_struct>());
                 }
 
                 size_p = neq1 * neq2 * p_dim * neq3 * sizeof(ggml_fp16_t);
@@ -8565,6 +8573,7 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
             return ret + 1;
         };
 
+        uint32_t head_stride_q = uint32_t(nbq2 / ggml_type_size(q->type));
         uint32_t head_stride_k = uint32_t(nbk2 / ggml_type_size(k->type));
         uint32_t head_stride_v = uint32_t(nbv2 / ggml_type_size(v->type));
         uint32_t batch_stride_q = uint32_t(nbq3 / ggml_type_size(q->type));
@@ -8573,13 +8582,16 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
         uint32_t batch_stride_m = mask ? uint32_t(mask->nb[3] / ggml_type_size(mask->type)) : 0u;
         uint32_t batch_stride_o = uint32_t(nb3 / ggml_type_size(dst->type));
 
+        vk_xe_fa_push_constants pc_xe_fa = { (uint32_t)neq1, (uint32_t)neq2, (uint32_t)nek1, (uint32_t)nek2,
+                                             q_stride, head_stride_q, k_stride, head_stride_k, v_stride, head_stride_v,
+                                             batch_stride_q, batch_stride_k, batch_stride_v, batch_stride_m, batch_stride_o,
+                                             qk_ratio, (sinks != nullptr) ? 2u : 0u, scale };
+
         if (xe_fa_use_2phases) {
             auto to_fp16_vk_0 = ggml_vk_get_to_fp16(ctx, q->type);
             const uint32_t out_dim_per_wg = qk_ratio > 16 ? 8 : 16;
             size_t x_ne = ggml_nelements(q);
             size_t temp_buf_offset = 0;
-            vk_fa_xe_opt_push_constants pc_decode = { (uint32_t)nek1, (uint32_t)neq1, (uint32_t)neq2, (uint32_t)nek2, qk_ratio, 1, (sinks != nullptr) ? 1u : 0u, (uint32_t)k_stride, head_stride_k, (uint32_t)v_stride, head_stride_v,
-                batch_stride_q, batch_stride_k, batch_stride_v, batch_stride_m, batch_stride_o, scale };
             vk_subbuffer q_temp_buf = fa_copy_qstate ? ggml_vk_subbuffer(ctx, ctx->prealloc_x, temp_buf_offset) : q_buf;
             temp_buf_offset += fa_copy_qstate ? x_ne * sizeof(ggml_fp16_t) : 0;
             vk_subbuffer p_temp_buf = ggml_vk_subbuffer(ctx, ctx->prealloc_x, temp_buf_offset);
@@ -8604,22 +8616,20 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
             ggml_pipeline_request_descriptor_sets(ctx, xe_fa_pipeline_dual_phases.first, 1);
             ggml_vk_dispatch_pipeline(ctx, subctx, xe_fa_pipeline_dual_phases.first,
                 { q_temp_buf, k_buf, mask_buf, p_temp_buf, max_temp_buf },
-                pc_decode, { (uint32_t)ph1_wg, (uint32_t)nek1, (uint32_t)neq3 });
+                pc_xe_fa, { (uint32_t)ph1_wg, (uint32_t)nek1, (uint32_t)neq3 });
 
             ggml_vk_sync_buffers(ctx, subctx);
             ggml_pipeline_request_descriptor_sets(ctx, xe_fa_pipeline_dual_phases.second, 1);
             ggml_vk_dispatch_pipeline(ctx, subctx, xe_fa_pipeline_dual_phases.second,
                 { p_temp_buf, v_buf, max_temp_buf, sinks_buf, dst_buf },
-                pc_decode, { (uint32_t)ph2_wg, (uint32_t)nev2, (uint32_t)neq3 });
+                pc_xe_fa, { (uint32_t)ph2_wg, (uint32_t)nev2, (uint32_t)neq3 });
 
             ctx->prealloc_x_need_sync = true;
         } else {
-            vk_fa_xe_opt_push_constants pc_prefill = { (uint32_t)nek1, (uint32_t)neq1, (uint32_t)neq2, (uint32_t)nek2, qk_ratio, 1, (sinks != nullptr) ? 1u : 0u, (uint32_t)k_stride, head_stride_k, (uint32_t)v_stride, head_stride_v,
-                batch_stride_q, batch_stride_k, batch_stride_v, batch_stride_m, batch_stride_o, scale };
             ggml_pipeline_request_descriptor_sets(ctx, xe_fa_pipeline, 1);
             ggml_vk_dispatch_pipeline(ctx, subctx, xe_fa_pipeline,
                 { q_buf, k_buf, v_buf, mask_buf, sinks_buf, dst_buf },
-                pc_prefill, { (uint32_t)neq2, (uint32_t)neq1, (uint32_t)neq3 });
+                pc_xe_fa, { (uint32_t)neq2, (uint32_t)neq1, (uint32_t)neq3 });
         }
     } else if (split_k > 1) {
         ggml_pipeline_request_descriptor_sets(ctx, ctx->device->pipeline_flash_attn_split_k_reduce, 1);
