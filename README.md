@@ -79,7 +79,7 @@ The `llama.cpp` project is build on top of the [ggml](https://github.com/ggml-or
 | --- | --- |
 | [BLAS](docs/build.md#blas-build) | All |
 | [BLIS](docs/backend/BLIS.md) | All |
-| [CANN](docs/build.md#cann) | Ascend NPU |
+| [CANN](docs/build.md#cann) | Huawei Ascend NPU |
 | [CUDA](docs/build.md#cuda) | Nvidia GPU |
 | [HIP](docs/build.md#hip) | AMD GPU |
 | [Hexagon](docs/backend/snapdragon/README.md) | Snapdragon |
