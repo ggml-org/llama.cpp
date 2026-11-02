@@ -101,7 +101,7 @@ Records every `scripts/docs/*.demo.ts` from the storage target and uploads `vide
 
 ## Writing a demo
 
-Scripts get `test` and `expect` from `helpers.ts` without importing them. `demo.click`, `demo.hover` and `demo.type` glide a visible cursor to the target before acting, with timing varied like a person's (seeded per demo, so re-takes match); `demo.scroll` turns the mouse wheel over a target; `demo.caption` shows a caption at the top of the frame. Use `test.use({ settings, startPath })` to seed other settings or start on another route.
+Scripts get `test` and `expect` from `helpers.ts` without importing them. `demo.click`, `demo.hover` and `demo.type` glide a visible cursor to the target before acting, with timing varied like a person's (seeded per demo, so re-takes match); `demo.scroll` turns the mouse wheel over a target; `demo.zoom` pinches in on a control or a point to show a detail too small to read in the frame, holds, and pinches back out (with the fingertips drawn on a touch device); `demo.caption` shows a caption at the top of the frame. Use `test.use({ settings, startPath })` to seed other settings or start on another route.
 
 ## Conversations
 

@@ -1,16 +1,19 @@
 import { demoMcpServerSettings } from './fixtures/demo-config.ts';
 import { generateTrace } from './fixtures/traces.ts';
 import { ScreencastRecorder } from './recorder.ts';
-import { type Locator, type Page, test as base } from '@playwright/test';
+import { type CDPSession, type Locator, type Page, test as base } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 
 const VIDEOS_DIR = resolve(import.meta.dirname, 'videos');
+/** How far below the viewport's top a pinch has to start for Chromium to zoom at all. */
+const ZOOM_TOP_INSET_PX = 64;
 
 /**
  * Draws a fake cursor and click ripples, since recorded videos don't include
- * the OS pointer. Runs in the page via addInitScript.
+ * the OS pointer, and a fingertip per touch, so a pinch shows as two fingers.
+ * Runs in the page via addInitScript.
  */
 function installCursorOverlay(): void {
 	const mount = () => {
@@ -29,6 +32,9 @@ function installCursorOverlay(): void {
 				max-width: 80%; padding: 10px 18px; border-radius: 10px; background: rgba(17, 17, 17, 0.88);
 				color: #fff; font: 500 18px/1.4 system-ui, sans-serif; text-align: center; }
 			#demo-caption.visible { opacity: 1; transform: translate(-50%, 0); }
+			.demo-finger { position: fixed; z-index: 2147483646; pointer-events: none; width: 40px; height: 40px;
+				margin: -20px 0 0 -20px; border-radius: 50%; background: rgba(59, 130, 246, 0.3);
+				border: 2px solid rgba(59, 130, 246, 0.55); transition: opacity 200ms ease; }
 		`;
 		document.head.appendChild(style);
 
@@ -64,6 +70,28 @@ function installCursorOverlay(): void {
 			true
 		);
 		document.addEventListener('mouseup', () => cursor.classList.remove('down'), true);
+
+		const fingers: HTMLDivElement[] = [];
+		const placeFingers = (e: TouchEvent) => {
+			Array.from(e.touches).forEach((touch, i) => {
+				const finger = (fingers[i] ??= Object.assign(document.createElement('div'), {
+					className: 'demo-finger'
+				}));
+
+				finger.style.left = `${touch.clientX}px`;
+				finger.style.top = `${touch.clientY}px`;
+				finger.style.opacity = '1';
+				document.documentElement.appendChild(finger);
+			});
+			fingers.slice(e.touches.length).forEach((finger) => (finger.style.opacity = '0'));
+		};
+
+		for (const type of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) {
+			document.addEventListener(type, placeFingers as EventListener, {
+				capture: true,
+				passive: true
+			});
+		}
 	};
 
 	if (document.readyState === 'loading') {
@@ -105,6 +133,7 @@ const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 
  * vary a little.
  */
 export class Demo {
+	private cdp: CDPSession | undefined;
 	private readonly page: Page;
 	private readonly random: () => number;
 	private x = 0;
@@ -223,8 +252,91 @@ export class Demo {
 		await this.pause(ms);
 	}
 
+	/**
+	 * Pinches in on `target`, a control or a point in the viewport, holds about `ms`, and pinches
+	 * back out to 1x: a two-finger zoom onto a detail too small to read in the frame. On a touch
+	 * device the fingertips show.
+	 */
+	async zoom(target: Locator | { x: number; y: number }, scale = 2.5, ms = 1400): Promise<void> {
+		const point = 'x' in target ? target : await this.center(target);
+		// a pinch anchored in the viewport's top band does not zoom at all
+		const at = { x: point.x, y: Math.max(point.y, ZOOM_TOP_INSET_PX) };
+		const viewport = this.page.viewportSize() ?? { height: 0, width: 0 };
+		const middle = { x: viewport.width / 2, y: viewport.height / 2 };
+
+		await this.pinch(at, scale, 1400);
+
+		// One near the bottom edge overshoots its ratio, and a pinch there again misses too. A small
+		// pinch from the middle evens it out, drawing the detail toward the middle, so it stays in view
+		const reached = await this.pageScale();
+
+		if (Math.abs(reached / scale - 1) > 0.03) await this.pinch(middle, scale / reached, 1400);
+
+		await this.liftFingers();
+		await this.pause(ms);
+
+		// back to exactly 1x, which the next gesture needs, in one quick pinch from the middle of
+		// the viewport, and another for what is left when one lands short
+		for (let tries = 0; ; tries++) {
+			const current = await this.pageScale();
+
+			if (current <= 1.001) break;
+
+			if (tries === 4) throw new Error(`demo: zoom stuck at ${current.toFixed(3)}x`);
+
+			await this.pinch(middle, 1 / current, 1800);
+		}
+
+		await this.liftFingers();
+		await this.pause(200);
+	}
+
 	private between(min: number, max: number): number {
 		return min + (max - min) * this.random();
+	}
+
+	private async center(target: Locator): Promise<{ x: number; y: number }> {
+		const box = await target.boundingBox();
+
+		if (!box) throw new Error(`demo: ${target} has no bounding box`);
+
+		return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+	}
+
+	/** A pinch that reaches the screen's edge can end without its last touchend reaching the page. */
+	private async liftFingers(): Promise<void> {
+		await this.page.evaluate(() =>
+			document
+				.querySelectorAll<HTMLElement>('.demo-finger')
+				.forEach((finger) => (finger.style.opacity = '0'))
+		);
+	}
+
+	private pageScale(): Promise<number> {
+		return this.page.evaluate(() => window.visualViewport?.scale ?? 1);
+	}
+
+	/**
+	 * A two-finger pinch by `factor` around `at`, in viewport pixels. While zoomed in, the gesture
+	 * reads its position in page-scale units, so it is divided by the scale the page is at.
+	 */
+	private async pinch(at: { x: number; y: number }, factor: number, speed: number): Promise<void> {
+		const cdp = await this.session();
+		const current = await this.pageScale();
+
+		await cdp.send('Input.synthesizePinchGesture', {
+			gestureSourceType: 'touch',
+			relativeSpeed: speed,
+			scaleFactor: factor,
+			x: at.x / current,
+			y: at.y / current
+		});
+	}
+
+	private async session(): Promise<CDPSession> {
+		this.cdp ??= await this.page.context().newCDPSession(this.page);
+
+		return this.cdp;
 	}
 }
 
