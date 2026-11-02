@@ -191,6 +191,22 @@ static const uint8_t __attribute__((aligned(VLEN))) kvalues_mxfp4_lut[] = {
     0,    0, 0,    0, 0,    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  0, 0, 0, 0,    0, 0,    0, 0,    0,
 };
 
+#include "iq2xxs-tables.h"
+
+// VTCM copy of htp_iq2xxs_lut for the current op (set by hvx_mm_iq2xxs_lut_init)
+static const uint8_t * iq2xxs_vtcm_lut;
+
+static inline void hvx_mm_iq2xxs_lut_init(uint8_t * restrict base, const struct htp_mm_hvx_vtcm_layout * restrict L) {
+    if (L->lut_bytes == 0) {
+        return;
+    }
+    uint8_t * restrict lut = base + L->off_lut;
+    for (uint32_t i = 0; i < HTP_IQ2XXS_LUT_BYTES / VLEN; i++) {
+        hvx_vmem(lut + i * VLEN) = hvx_vmem(htp_iq2xxs_lut + i * VLEN);
+    }
+    iq2xxs_vtcm_lut = lut;
+}
+
 #define htp_matmul_tensors_preamble                                 \
     const struct htp_tensor * restrict src0 = octx->src[0];         \
     const struct htp_tensor * restrict src1 = octx->src[1];         \
@@ -1700,6 +1716,11 @@ static int hvx_mm_init_tiled_vec_dot(struct htp_mm_context * mmctx, enum htp_dat
             mmctx->vec_dot_32x1 = tiled_vec_dot_iq4nl_32x1;
             mmctx->vec_dot_32x2 = tiled_vec_dot_iq4nl_32x2;
             return 0;
+        case HTP_TYPE_IQ2_XXS:
+            mmctx->type         = "iq2xxs_tiled-f32";
+            mmctx->vec_dot_32x1 = tiled_vec_dot_iq2xxs_32x1;
+            mmctx->vec_dot_32x2 = tiled_vec_dot_iq2xxs_32x2;
+            return 0;
         case HTP_TYPE_MXFP4:
             mmctx->type         = "mxfp4_tiled-f32";
             mmctx->vec_dot_32x1 = tiled_vec_dot_mxfp4_32x1;
@@ -1889,6 +1910,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
     mmctx->vtcm_bias     = VTCM_LAYOUT_PTR(uint8_t, base, L.off_bias);
     mmctx->vtcm_dst      = VTCM_LAYOUT_PTR(uint8_t, base, L.off_dst);
     mmctx->vtcm_act_raw  = VTCM_LAYOUT_PTR(uint8_t, base, L.off_act_raw);
+    hvx_mm_iq2xxs_lut_init(base, &L);
 
     mmctx->vtcm_src0_stride = src0_row_size_padded;
     mmctx->vtcm_act_stride  = act_row_size;
@@ -3894,6 +3916,7 @@ static int hvx_mm_matmul_id(
     mmctx->vtcm_bias     = NULL;
     mmctx->vtcm_dst      = VTCM_LAYOUT_PTR(uint8_t, base, L.off_dst);
     mmctx->vtcm_act_raw  = VTCM_LAYOUT_PTR(uint8_t, base, L.off_act_raw);
+    hvx_mm_iq2xxs_lut_init(base, &L);
 
     mmctx->vtcm_src0_stride    = src0_row_size_padded;
     mmctx->vtcm_act_stride     = act_row_size;
@@ -4052,6 +4075,7 @@ static int hvx_mm_matmul_id_nx(
     mmctx->vtcm_act      = VTCM_LAYOUT_PTR(uint8_t, base, L.off_act);
     mmctx->vtcm_dst      = VTCM_LAYOUT_PTR(uint8_t, base, L.off_dst);
     mmctx->vtcm_act_raw  = VTCM_LAYOUT_PTR(uint8_t, base, L.off_act_raw);
+    hvx_mm_iq2xxs_lut_init(base, &L);
 
     mmctx->vtcm_src0_stride    = 0;
     mmctx->vtcm_act_stride     = act_row_size;
@@ -4537,6 +4561,7 @@ static int op_matmul_nx_impl(struct htp_ops_context * octx) {
     mmctx->vtcm_act      = VTCM_LAYOUT_PTR(uint8_t, base, L.off_act);
     mmctx->vtcm_dst      = VTCM_LAYOUT_PTR(uint8_t, base, L.off_dst);
     mmctx->vtcm_act_raw  = VTCM_LAYOUT_PTR(uint8_t, base, L.off_act_raw);
+    hvx_mm_iq2xxs_lut_init(base, &L);
 
     mmctx->vtcm_src0_stride    = 0;
     mmctx->vtcm_act_stride     = act_row_size;

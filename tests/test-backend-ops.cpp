@@ -12122,6 +12122,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                              GGML_TYPE_IQ3_S, GGML_TYPE_IQ1_S, GGML_TYPE_IQ1_M, GGML_TYPE_IQ4_XS}) {
         test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 16, 10, 256, {1, 1}, {1, 1}));
     }
+
+    // Nemotron IQ2_XXS decode (n = 1) and prefill (n > 1) shapes: {k, m}
+    for (auto [k, m] : std::initializer_list<std::pair<int, int>>{{4096, 5376}, {1024, 2560}, {2560, 1024}}) {
+        for (int n : {1, 8, 512}) {
+            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_IQ2_XXS, GGML_TYPE_F32, m, n, k, {1, 1}, {1, 1}));
+        }
+    }
 #else
     // m = a rows
     // n = b rows

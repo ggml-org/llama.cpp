@@ -290,6 +290,7 @@ struct htp_mm_hvx_vtcm_layout {
     size_t off_bias;          // vtcm_bias (bias / fused add only)
     size_t off_dst;           // vtcm_dst (output scratch)
     size_t off_act_raw;       // vtcm_act_raw (raw activation DMA staging)
+    size_t off_lut;           // vtcm_lut (IQ2_XXS grid + sign tables)
 
     // Cached sizes
     size_t src0_bytes;
@@ -297,6 +298,7 @@ struct htp_mm_hvx_vtcm_layout {
     size_t bias_bytes;
     size_t dst_bytes;
     size_t act_raw_bytes;
+    size_t lut_bytes;
 
     size_t total_bytes;
 };
@@ -438,6 +440,7 @@ static inline void htp_mm_hvx_vtcm_layout_build(
     size_t bias_sz    = bias_row_size > 0 ? htp_mm_round_up(bias_row_size, 128) : 0;
     size_t dst_sz     = 0;
     size_t act_raw_sz = 0;
+    const size_t lut_sz = (wtype == HTP_TYPE_IQ2_XXS) ? HTP_IQ2XXS_LUT_BYTES : 0;
 
     if (is_fused_nx) {
         uint32_t aligned_tile_size = htp_tensor_get_tile_padded_size(wtype);
@@ -517,6 +520,7 @@ static inline void htp_mm_hvx_vtcm_layout_build(
     size_t off_group_a = 0;
     VTCM_LAYOUT_ALLOC(off_group_a, off_act, act_sz);
     VTCM_LAYOUT_ALLOC_OPTIONAL(off_group_a, off_bias, bias_sz, bias_sz > 0);
+    VTCM_LAYOUT_ALLOC_OPTIONAL(off_group_a, off_lut, lut_sz, lut_sz > 0);
 
     // Group B: Compute-only buffers (starts at off_group_a)
     size_t off_group_b = off_group_a;
@@ -534,6 +538,7 @@ static inline void htp_mm_hvx_vtcm_layout_build(
     L->bias_bytes    = bias_sz;
     L->dst_bytes     = dst_sz;
     L->act_raw_bytes = act_raw_sz;
+    L->lut_bytes     = lut_sz;
     L->total_bytes   = off_group_a + hex_smax(group_b_size, group_c_size);
 }
 

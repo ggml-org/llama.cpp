@@ -24,6 +24,10 @@
 #define HTP_TENSOR_TILE_SIZE_MXFP4  544
 #define HTP_TENSOR_TILE_SIZE_NVFP4  576
 #define HTP_TENSOR_TILE_SIZE_IQ2_XXS 264
+#define HTP_TENSOR_TILE_SCRATCH_IQ2_XXS 256
+#define HTP_IQ2XXS_GRID_BYTES           2048  // 256 entries x 8 magnitudes
+#define HTP_IQ2XXS_SIGN_BYTES           1024  // 128 entries x 8 byte masks (0xff = negate)
+#define HTP_IQ2XXS_LUT_BYTES            (HTP_IQ2XXS_GRID_BYTES + HTP_IQ2XXS_SIGN_BYTES)
 #define HTP_TENSOR_TILE_SIZE_Q4_K   640
 #define HTP_TENSOR_TILE_SIZE_Q5_K   768
 #define HTP_TENSOR_TILE_SIZE_Q6_K   896
@@ -174,7 +178,9 @@ static inline uint32_t htp_tensor_get_tile_k(int type) {
 }
 
 static inline uint32_t htp_tensor_get_tile_padded_size(int type) {
-    return (htp_tensor_get_tile_size(type) + 127u) & ~127u;
+    // IQ2_XXS: the last 256 B of the padded tile are the vgather scratch of its vec-dot
+    const uint32_t scratch = (type == HTP_TYPE_IQ2_XXS) ? HTP_TENSOR_TILE_SCRATCH_IQ2_XXS : 0u;
+    return (htp_tensor_get_tile_size(type) + scratch + 127u) & ~127u;
 }
 
 static inline bool htp_tensor_is_tiled(const struct htp_tensor * t) {

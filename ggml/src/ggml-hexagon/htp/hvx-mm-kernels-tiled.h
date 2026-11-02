@@ -1850,6 +1850,168 @@ static void tiled_vec_dot_iq4nl_32x2(const uint32_t n, float * restrict s0, floa
     }
 }
 
+#define IQ2XXS_GROUPS          4           // 8-element grid entries per tile row
+#define IQ2XXS_TILES_PER_SB    8           // 256 / 32
+#define IQ2XXS_ENTRY_SHIFT     3           // log2(8 B per grid entry)
+#define IQ2XXS_WORD_BYTES      4
+#define IQ2XXS_IDX_BITS        8
+#define IQ2XXS_IDX_MASK        0xFF
+#define IQ2XXS_SIGN_BITS       7
+#define IQ2XXS_SIGN_MASK       0x7F
+#define IQ2XXS_PARITY_SHIFT    7
+#define IQ2XXS_SCALE_SHIFT     28
+#define IQ2XXS_D_SLICE_OFF     256         // 4 fp16 d of the tile, after the 32 rows x 8 B
+#define IQ2XXS_D_SCALE         0.125f      // db = d * (2 * scale + 1) / 8
+#define IQ2XXS_D_SLICE_BYTES   8
+#define IQ2XXS_SIGN_PRED_LO    0x08040201  // sign bit of bytes 0..3 of an 8-element group
+#define IQ2XXS_SIGN_PRED_HI    0x80402010  // sign bit of bytes 4..7
+
+// IQ2_XXS: 8 int8 weight words (k = 4g..4g+3 per row lane) and the odd group scale (2 * scale + 1) of a 32x32 tile
+static inline void iq2xxs_decode_tile(const uint8_t * restrict tile, HVX_Vector * restrict v_w, HVX_Vector * restrict v_ls) {
+    HVX_Vector * restrict v_scr = (HVX_Vector *) (tile + htp_tensor_get_tile_padded_size(HTP_TYPE_IQ2_XXS) - HTP_TENSOR_TILE_SCRATCH_IQ2_XXS);
+
+    const HVX_Vector v_zero     = Q6_V_vzero();
+    const HVX_Vector v_one      = Q6_V_vsplat_R(1);
+    const HVX_Vector v_idx_mask = Q6_V_vsplat_R(IQ2XXS_IDX_MASK);
+    const HVX_Vector v_sgn_mask = Q6_V_vsplat_R(IQ2XXS_SIGN_MASK);
+    const HVX_Vector v_word_off = Q6_V_vsplat_R(IQ2XXS_WORD_BYTES);
+
+    // lo: 4 grid indices per row, hi: 4 sign indices + scale per row
+    HVX_VectorPair p     = Q6_W_vdeal_VVR(hvx_vmem(tile + VLEN), hvx_vmem(tile), -IQ2XXS_WORD_BYTES);
+    HVX_Vector     v_idx = Q6_V_lo_W(p);
+    HVX_Vector     v_sgn = Q6_V_hi_W(p);
+
+    #pragma unroll
+    for (int l = 0; l < IQ2XXS_GROUPS; l++) {
+        HVX_Vector v_off0 = Q6_Vw_vasl_VwR(Q6_V_vand_VV(Q6_Vuw_vlsr_VuwR(v_idx, IQ2XXS_IDX_BITS * l), v_idx_mask), IQ2XXS_ENTRY_SHIFT);
+        HVX_Vector v_off1 = Q6_Vw_vadd_VwVw(v_off0, v_word_off);
+        Q6_vgather_ARMVw(&v_scr[0], (size_t) iq2xxs_vtcm_lut, HTP_IQ2XXS_GRID_BYTES - 1, v_off0);
+        Q6_vgather_ARMVw(&v_scr[1], (size_t) iq2xxs_vtcm_lut, HTP_IQ2XXS_GRID_BYTES - 1, v_off1);
+
+        // 7 stored sign bits + even-parity bit
+        HVX_Vector v_s7 = Q6_V_vand_VV(Q6_Vuw_vlsr_VuwR(v_sgn, IQ2XXS_SIGN_BITS * l), v_sgn_mask);
+        HVX_Vector v_t  = Q6_V_vxor_VV(v_s7, Q6_Vuw_vlsr_VuwR(v_s7, 4));
+        v_t = Q6_V_vxor_VV(v_t, Q6_Vuw_vlsr_VuwR(v_t, 2));
+        v_t = Q6_V_vxor_VV(v_t, Q6_Vuw_vlsr_VuwR(v_t, 1));
+        HVX_Vector v_s   = Q6_V_vor_VV(v_s7, Q6_Vw_vasl_VwR(Q6_V_vand_VV(v_t, v_one), IQ2XXS_PARITY_SHIFT));
+        HVX_Vector v_s16 = Q6_V_vor_VV(v_s, Q6_Vw_vasl_VwR(v_s, 8));
+        HVX_Vector v_rep = Q6_V_vor_VV(v_s16, Q6_Vw_vasl_VwR(v_s16, 16));
+        HVX_VectorPred q_lo = Q6_Q_vand_VR(v_rep, IQ2XXS_SIGN_PRED_LO);
+        HVX_VectorPred q_hi = Q6_Q_vand_VR(v_rep, IQ2XXS_SIGN_PRED_HI);
+
+        hvx_gather_sync(&v_scr[1]);
+        HVX_Vector v_g0 = v_scr[0];
+        HVX_Vector v_g1 = v_scr[1];
+
+        v_w[2 * l + 0] = Q6_V_vmux_QVV(q_lo, Q6_Vb_vsub_VbVb(v_zero, v_g0), v_g0);
+        v_w[2 * l + 1] = Q6_V_vmux_QVV(q_hi, Q6_Vb_vsub_VbVb(v_zero, v_g1), v_g1);
+    }
+
+    *v_ls = Q6_Vw_vadd_VwVw(Q6_Vw_vasl_VwR(Q6_Vuw_vlsr_VuwR(v_sgn, IQ2XXS_SCALE_SHIFT), 1), v_one);
+}
+
+// IQ2_XXS: fp32 d / 8 of the 32 rows of a super-block (8 tiles) in lanes 0..31
+static inline HVX_Vector iq2xxs_load_d(const uint8_t * restrict sb) {
+    const uint32_t padded = htp_tensor_get_tile_padded_size(HTP_TYPE_IQ2_XXS);
+    HVX_Vector v_dd = Q6_V_vzero();
+
+    #pragma unroll
+    for (int j = 0; j < IQ2XXS_TILES_PER_SB; j++) {
+        HVX_Vector v = hvx_vmem(sb + j * padded + IQ2XXS_D_SLICE_OFF);
+        v_dd = Q6_V_vmux_QVV(Q6_Q_vsetq_R(IQ2XXS_D_SLICE_BYTES * j), v_dd,
+                             Q6_V_vror_VR(v, (VLEN - IQ2XXS_D_SLICE_BYTES * j) & (VLEN - 1)));
+    }
+
+    // db = d * (0.5 + scale) * 0.25 = d * (2 * scale + 1) / 8
+    return hvx_vec_mul_f32_f32(Q6_V_lo_W(hvx_vec_f16_to_f32(v_dd)), hvx_vec_splat_f32(IQ2XXS_D_SCALE));
+}
+
+static void tiled_vec_dot_iq2xxs_32x1(const uint32_t n, float * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows, const float * restrict sz) {
+    const uint8_t * restrict tile_ptr = vx;
+    const uint8_t * restrict y_q = vy;
+    const uint32_t padded = htp_tensor_get_tile_padded_size(HTP_TYPE_IQ2_XXS);
+
+    HVX_Vector v_sum_float = Q6_V_vzero();
+
+    uint32_t n_k_tiles = n / 32;
+    for (uint32_t kb = 0; kb < n_k_tiles; kb += IQ2XXS_TILES_PER_SB) {
+        HVX_Vector v_d = iq2xxs_load_d(tile_ptr + kb * padded);
+
+        for (uint32_t kt = kb; kt < kb + IQ2XXS_TILES_PER_SB; kt++) {
+            const HVX_Vector * restrict v_act = (const HVX_Vector *) (y_q + kt * 1152);
+
+            HVX_Vector v_w[8], v_ls;
+            iq2xxs_decode_tile(tile_ptr + kt * padded, v_w, &v_ls);
+
+            HVX_Vector v_sum = Q6_V_vzero();
+            #pragma unroll
+            for (int g = 0; g < 8; g++) {
+                v_sum = Q6_Vw_vrmpyacc_VwVbVb(v_sum, v_w[g], v_act[g]);
+            }
+
+            HVX_Vector v_da = hvx_vec_mul_f32_f32(v_d, Q6_V_lo_W(hvx_vec_f16_to_f32(v_act[8])));
+            HVX_Vector v_t  = hvx_vec_mul_f32_f32(Q6_Vsf_equals_Vw(v_sum), Q6_Vsf_equals_Vw(v_ls));
+            v_sum_float = hvx_vec_add_f32_f32(v_sum_float, hvx_vec_mul_f32_f32(v_t, v_da));
+        }
+    }
+
+    if (sz) {
+        hvx_vec_store_u(s, valid_rows * sizeof(float), hvx_vec_add_f32_f32(v_sum_float, hvx_vmemu(sz)));
+    } else {
+        hvx_vec_store_u(s, valid_rows * sizeof(float), v_sum_float);
+    }
+}
+
+static void tiled_vec_dot_iq2xxs_32x2(const uint32_t n, float * restrict s0, float * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows, const float * restrict sz0, const float * restrict sz1) {
+    const uint8_t * restrict tile_ptr = vx;
+    const uint8_t * restrict y0_q = vy0;
+    const uint8_t * restrict y1_q = vy1;
+    const uint32_t padded = htp_tensor_get_tile_padded_size(HTP_TYPE_IQ2_XXS);
+
+    HVX_Vector v_sum_float_c0 = Q6_V_vzero();
+    HVX_Vector v_sum_float_c1 = Q6_V_vzero();
+
+    uint32_t n_k_tiles = n / 32;
+    for (uint32_t kb = 0; kb < n_k_tiles; kb += IQ2XXS_TILES_PER_SB) {
+        HVX_Vector v_d = iq2xxs_load_d(tile_ptr + kb * padded);
+
+        for (uint32_t kt = kb; kt < kb + IQ2XXS_TILES_PER_SB; kt++) {
+            const HVX_Vector * restrict v_act0 = (const HVX_Vector *) (y0_q + kt * 1152);
+            const HVX_Vector * restrict v_act1 = (const HVX_Vector *) (y1_q + kt * 1152);
+
+            HVX_Vector v_w[8], v_ls;
+            iq2xxs_decode_tile(tile_ptr + kt * padded, v_w, &v_ls);
+
+            HVX_Vector v_sum0 = Q6_V_vzero();
+            HVX_Vector v_sum1 = Q6_V_vzero();
+            #pragma unroll
+            for (int g = 0; g < 8; g++) {
+                v_sum0 = Q6_Vw_vrmpyacc_VwVbVb(v_sum0, v_w[g], v_act0[g]);
+                v_sum1 = Q6_Vw_vrmpyacc_VwVbVb(v_sum1, v_w[g], v_act1[g]);
+            }
+
+            HVX_Vector v_ls_sf = Q6_Vsf_equals_Vw(v_ls);
+            HVX_Vector v_da0   = hvx_vec_mul_f32_f32(v_d, Q6_V_lo_W(hvx_vec_f16_to_f32(v_act0[8])));
+            HVX_Vector v_da1   = hvx_vec_mul_f32_f32(v_d, Q6_V_lo_W(hvx_vec_f16_to_f32(v_act1[8])));
+            HVX_Vector v_t0    = hvx_vec_mul_f32_f32(Q6_Vsf_equals_Vw(v_sum0), v_ls_sf);
+            HVX_Vector v_t1    = hvx_vec_mul_f32_f32(Q6_Vsf_equals_Vw(v_sum1), v_ls_sf);
+            v_sum_float_c0 = hvx_vec_add_f32_f32(v_sum_float_c0, hvx_vec_mul_f32_f32(v_t0, v_da0));
+            v_sum_float_c1 = hvx_vec_add_f32_f32(v_sum_float_c1, hvx_vec_mul_f32_f32(v_t1, v_da1));
+        }
+    }
+
+    if (sz0) {
+        hvx_vec_store_u(s0, valid_rows * sizeof(float), hvx_vec_add_f32_f32(v_sum_float_c0, hvx_vmemu(sz0)));
+    } else {
+        hvx_vec_store_u(s0, valid_rows * sizeof(float), v_sum_float_c0);
+    }
+    if (sz1) {
+        hvx_vec_store_u(s1, valid_rows * sizeof(float), hvx_vec_add_f32_f32(v_sum_float_c1, hvx_vmemu(sz1)));
+    } else {
+        hvx_vec_store_u(s1, valid_rows * sizeof(float), v_sum_float_c1);
+    }
+}
+
 static void tiled_vec_dot_mxfp4_32x1(const uint32_t n, float * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows, const float * restrict sz) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y_q = vy;
