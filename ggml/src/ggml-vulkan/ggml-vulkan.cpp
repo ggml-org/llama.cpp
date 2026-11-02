@@ -7381,11 +7381,7 @@ void ggml_vk_top_k_mask(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_
     const vk_subbuffer e_buf = extra  ? ggml_vk_tensor_subbuffer(ctx, extra,  true) : k_buf;
     const vk_subbuffer d_buf = ggml_vk_tensor_subbuffer(ctx, dst,   true);
 
-    const auto offset = [&](const ggml_tensor * t) -> uint32_t {
-        return t ? get_misalign_bytes(ctx, t) / ggml_type_size(t->type) : 0;
-    };
-
-    const vk_op_top_k_mask_push_constants pc = {
+    vk_op_top_k_mask_push_constants pc = {
         (uint32_t)mask->ne[0],
         (uint32_t)top_k->ne[0],
         (uint32_t)(blocks ? blocks->ne[1] : score ? score->ne[0] : mask->ne[0]),
@@ -7397,8 +7393,9 @@ void ggml_vk_top_k_mask(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_
         (uint32_t)mask->ne[1], (uint32_t)mask->ne[2], (uint32_t)mask->ne[3],
         ggml_vk_nb_elem(mask, 1), ggml_vk_nb_elem(mask, 2), ggml_vk_nb_elem(mask, 3),
         ggml_vk_nb_elem(dst,  1), ggml_vk_nb_elem(dst,  2), ggml_vk_nb_elem(dst,  3),
-        offset(mask), offset(top_k), offset(score), offset(blocks), offset(extra), offset(dst),
+        0, 0, 0, 0, 0, 0,
     };
+    init_pushconst_tensor_offsets(ctx, pc, mask, top_k, score, blocks, dst);
 
     ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { m_buf, k_buf, s_buf, b_buf, e_buf, d_buf }, pc,
         { (uint32_t)dst->ne[1], (uint32_t)dst->ne[2], (uint32_t)dst->ne[3] });
@@ -16163,15 +16160,9 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     return false;
                 }
 
-                // the shader indexes mask and dst by element stride, and the other inputs by row
-                const size_t ts = ggml_type_size(op->type);
-                if (op->nb[0] != ts || mask->nb[0] != ts) {
+                // the shader expects contiguous rows in mask and dst, and contiguous tensors in the other inputs
+                if (!ggml_is_contiguous_rows(op) || !ggml_is_contiguous_rows(mask)) {
                     return false;
-                }
-                for (int i = 1; i < GGML_MAX_DIMS; ++i) {
-                    if (op->nb[i] % ts != 0 || mask->nb[i] % ts != 0) {
-                        return false;
-                    }
                 }
                 for (int i = 1; i <= 4; ++i) {
                     if (op->src[i] && !ggml_is_contiguous(op->src[i])) {

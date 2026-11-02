@@ -1,6 +1,7 @@
 #version 450
 
 #extension GL_EXT_shader_16bit_storage : require
+#extension GL_KHR_memory_scope_semantics : enable
 
 // One workgroup per row: fill the row with -inf, then copy the mask cells of the live picks and the extra cells.
 // The op only moves bits, so f16 needs no float16 arithmetic and the score check does not depend on float controls.
@@ -38,7 +39,8 @@ layout(binding = 1, std430) readonly buffer K { int data_k[]; };
 layout(binding = 2, std430) readonly buffer S { uint data_s[]; };
 layout(binding = 3, std430) readonly buffer B { int data_b[]; };
 layout(binding = 4, std430) readonly buffer E { int data_e[]; };
-layout(binding = 5, std430) writeonly buffer D { MASK_TYPE data_d[]; };
+// coherent: the fill and the copy of a cell can come from different invocations
+layout(binding = 5, std430) coherent writeonly buffer D { MASK_TYPE data_d[]; };
 
 void keep(const int c, const uint m_row, const uint d_row) {
     if (c >= 0 && uint(c) < n_kv) {
@@ -66,8 +68,7 @@ void main() {
         data_d[d_row + i] = MASK_TYPE(ninf);
     }
 
-    memoryBarrierBuffer();
-    barrier();
+    controlBarrier(gl_ScopeWorkgroup, gl_ScopeWorkgroup, gl_StorageSemanticsBuffer, gl_SemanticsAcquireRelease);
 
     // one invocation per pick or extra cell; cells kept twice get the same value
     for (uint i = tid; i < n_top + n_extra; i += BLOCK_SIZE) {

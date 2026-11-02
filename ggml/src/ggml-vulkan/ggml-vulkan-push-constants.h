@@ -992,6 +992,18 @@ template <> inline void init_pushconst_tensor_offsets(ggml_backend_vk_context * 
     p.d_offset = get_misalign_bytes(ctx, dst)  / ggml_type_size(dst->type);
 }
 
+// the fifth source, extra, comes from dst
+template <> inline void init_pushconst_tensor_offsets(ggml_backend_vk_context * ctx, vk_op_top_k_mask_push_constants &p, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * src2, const ggml_tensor * src3, ggml_tensor * dst) {
+    const ggml_tensor * extra = dst->src[4];
+
+    p.m_offset = get_misalign_bytes(ctx, src0) / ggml_type_size(src0->type);
+    p.k_offset = get_misalign_bytes(ctx, src1) / ggml_type_size(src1->type);
+    p.s_offset = src2  ? get_misalign_bytes(ctx, src2)  / ggml_type_size(src2->type)  : 0;
+    p.b_offset = src3  ? get_misalign_bytes(ctx, src3)  / ggml_type_size(src3->type)  : 0;
+    p.e_offset = extra ? get_misalign_bytes(ctx, extra) / ggml_type_size(extra->type) : 0;
+    p.d_offset = get_misalign_bytes(ctx, dst) / ggml_type_size(dst->type);
+}
+
 template <typename T> size_t push_constant_size(const T &t) {
     static_assert(std::is_class<T>::value, "T must be a struct/class");
     GGML_UNUSED(t);
