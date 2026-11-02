@@ -21,7 +21,7 @@ static __global__ void ggml_cuda_batch_get_kernel(const ggml_cuda_batch_get_desc
     const size_t first = (size_t) blockIdx.y * blockDim.x + threadIdx.x;
     const size_t stride = (size_t) gridDim.y * blockDim.x;
     const auto copy = copies[index];
-    // Use 16-, 4-, or 2-byte copies when both pointers meet that alignment; threads copy separate chunks.
+    // Use 16-, 8-, 4-, or 2-byte copies when both pointers meet that alignment; threads copy separate chunks.
     const uintptr_t alignment = (uintptr_t) copy.src | (uintptr_t) copy.dst;
     size_t tail = 0;
     if (alignment % 16 == 0) {
@@ -29,6 +29,11 @@ static __global__ void ggml_cuda_batch_get_kernel(const ggml_cuda_batch_get_desc
             ggml_cuda_memcpy_1<16>(copy.dst + 16*i, copy.src + 16*i);
         }
         tail = copy.size / 16 * 16;
+    } else if (alignment % 8 == 0) {
+        for (size_t i = first; i < copy.size / 8; i += stride) {
+            ggml_cuda_memcpy_1<8>(copy.dst + 8*i, copy.src + 8*i);
+        }
+        tail = copy.size / 8 * 8;
     } else if (alignment % 4 == 0) {
         for (size_t i = first; i < copy.size / 4; i += stride) {
             ggml_cuda_memcpy_1<4>(copy.dst + 4*i, copy.src + 4*i);
@@ -51,8 +56,11 @@ struct ggml_cuda_batch_get_mapping {
     unsigned char * device = nullptr;
 
     ggml_cuda_batch_get_mapping(void * host, size_t size) {
-        if (cudaHostRegister(host, size, cudaHostRegisterMapped | cudaHostRegisterPortable) != cudaSuccess) {
+        const cudaError_t err = cudaHostRegister(host, size, cudaHostRegisterMapped | cudaHostRegisterPortable);
+        if (err != cudaSuccess) {
             (void) cudaGetLastError();
+            GGML_LOG_DEBUG("%s: failed to register %.2f MiB of pinned memory: %s\n", __func__,
+                           size / 1024.0 / 1024.0, cudaGetErrorString(err));
             return;
         }
         this->host = host;
