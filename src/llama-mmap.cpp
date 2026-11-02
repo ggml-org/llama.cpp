@@ -439,7 +439,6 @@ struct llama_file::impl {
         }
         return false;
     }
-
 #endif
 
     void init_fp(const char * mode) {
