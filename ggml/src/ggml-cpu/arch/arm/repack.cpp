@@ -1171,6 +1171,7 @@ void ggml_gemv_q5_K_8x8_q8_K(int                        n,
                 // qh holds the high bit for every quant. Cols 0-3 live in one 32-byte vector,
                 // cols 4-7 in the next. Subblock sb consumes high-bit pair (2*sb, 2*sb+1).
                 const uint8_t * qh_base = q5_ptr[b].qh;
+                svint32_t isum = svdup_n_s32(0), bias = svdup_n_s32(0);
 
                 for (int sb = 0; sb < QK_K / 64; sb++) {
                     const svuint8_t qh_mask_lo = svdup_n_u8((uint8_t) (1u << (2 * sb)));
@@ -1245,17 +1246,16 @@ void ggml_gemv_q5_K_8x8_q8_K(int                        n,
                     const svint32_t acc_hi = svadd_s32_x(pg8, svuzp1_s32(acc_hi_0123, acc_hi_4567),
                                                               svuzp2_s32(acc_hi_0123, acc_hi_4567));
 
-                    // acc += sb_scale * (scales_lo*acc_lo + scales_hi*acc_hi): fold the two per-column
-                    // int32 products before a single float convert + fused-multiply-add.
-                    svint32_t isum = svmul_s32_x(pg8, scales_lo, acc_lo);
-                    isum           = svmla_s32_x(pg8, isum, scales_hi, acc_hi);
-                    acc_f32        = svmla_f32_x(pg8, acc_f32, sb_scale, svcvt_f32_s32_x(pg8, isum));
-
-                    // Bias correction: (bsum_lo * mins_lo + bsum_hi * mins_hi) * sb_min
-                    svint32_t bias = svmul_s32_x(pg8, svdup_n_s32(bsums_arr[2 * sb + 0]), mins_lo);
-                    bias           = svmla_s32_x(pg8, bias, svdup_n_s32(bsums_arr[2 * sb + 1]), mins_hi);
-                    acc_f32        = svmls_f32_x(pg8, acc_f32, sb_min, svcvt_f32_s32_x(pg8, bias));
+                    // isum += scales_lo*acc_lo + scales_hi*acc_hi, bias += bsum_lo*mins_lo + bsum_hi*mins_hi.
+                    // Both stay int32 across the four sub-blocks (exact, as in the generic path) and are
+                    // converted and applied to the float accumulator once per block below.
+                    isum = svmla_s32_x(pg8, isum, scales_lo, acc_lo);
+                    isum = svmla_s32_x(pg8, isum, scales_hi, acc_hi);
+                    bias = svmla_s32_x(pg8, bias, svdup_n_s32(bsums_arr[2 * sb + 0]), mins_lo);
+                    bias = svmla_s32_x(pg8, bias, svdup_n_s32(bsums_arr[2 * sb + 1]), mins_hi);
                 }  // for sb
+                acc_f32 = svmla_f32_x(pg8, acc_f32, sb_scale, svcvt_f32_s32_x(pg8, isum));
+                acc_f32 = svmls_f32_x(pg8, acc_f32, sb_min, svcvt_f32_s32_x(pg8, bias));
             }  // for b
 
             svst1_f32(pg8, s + x * ncols_interleaved, acc_f32);
