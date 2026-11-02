@@ -89,8 +89,7 @@ static __global__ void quantize_q8_1(
     const float  d = amax / 127.0f;
     const int8_t q = amax == 0.0f ? 0 : roundf(xi / d);
 
-    float sum = float(q);
-    sum = warp_reduce_sum<QK8_1>(sum);
+    const int sum = warp_reduce_sum<QK8_1>((int) q);
 
     y[ib].qs[iqs] = q;
 
