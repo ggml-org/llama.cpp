@@ -63,7 +63,8 @@ static std::vector<llama_device_memory_data> common_get_device_memory_data_impl(
         uint32_t & hp_ngl,
         uint32_t & hp_n_ctx_train,
         uint32_t & hp_n_expert,
-        ggml_log_level log_level) {
+        ggml_log_level log_level,
+        uint32_t * hp_ngl_skip = nullptr) {
     common_fit_log_scope log_scope(log_level);
 
     llama_model_params mparams_copy = *mparams;
@@ -151,6 +152,10 @@ static std::vector<llama_device_memory_data> common_get_device_memory_data_impl(
     hp_ngl         = llama_model_n_layer(model);
     if (mparams->load_mtp) {
         hp_ngl    += llama_model_n_layer_nextn(model);
+    }
+    if (hp_ngl_skip != nullptr) {
+        // without MTP the NextN layers hold no weights but the model loader still counts them for n_gpu_layers
+        *hp_ngl_skip = mparams->load_mtp ? 0 : llama_model_n_layer_nextn(model);
     }
     hp_n_ctx_train = llama_model_n_ctx_train(model);
     hp_n_expert    = llama_model_n_expert(model);
@@ -270,6 +275,7 @@ static void common_params_fit_impl(
 
     std::vector<ggml_backend_dev_t> devs;
     uint32_t hp_ngl = 0; // hparams.n_gpu_layers
+    uint32_t hp_nsk = 0; // number of skipped NextN layers, counted by the model loader but not by hp_ngl
     uint32_t hp_nct = 0; // hparams.n_ctx_train
     uint32_t hp_nex = 0; // hparams.n_expert
 
@@ -342,7 +348,7 @@ static void common_params_fit_impl(
     // step 1: get data for default parameters and check whether any changes are necessary in the first place
 
     LOG_TRC("%s: getting device memory data for initial parameters:\n", __func__);
-    dmds_t dmds_full = common_get_device_memory_data_impl(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
+    dmds_t dmds_full = common_get_device_memory_data_impl(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level, &hp_nsk);
 
     // saturate instead of overflowing, this also preserves the UINT32_MAX sentinel of n_ctx_min:
     const uint32_t n_ctx_max       = (uint32_t) std::min<uint64_t>(uint64_t(hp_nct)    * n_streams, UINT32_MAX);
@@ -639,6 +645,19 @@ static void common_params_fit_impl(
         }
         assert(uint32_t(mparams.n_gpu_layers) <= hp_ngl + 1);
         uint32_t il0 = hp_ngl + 1 - mparams.n_gpu_layers; // start index for tensor buft overrides
+
+        // the skipped NextN layers come right before the output layer, put them on the same device as the output layer
+        // so that the layers assigned by the model loader match the layers above
+        if (hp_nsk > 0 && mparams.n_gpu_layers > 0) {
+            mparams.n_gpu_layers += hp_nsk;
+            if (nd > 1) {
+                size_t id_last = nd - 1;
+                while (ngl_per_device[id_last].n_layer == 0) {
+                    id_last--;
+                }
+                tensor_split[id_last] += hp_nsk;
+            }
+        }
 
         mparams.tensor_split = tensor_split;
 
