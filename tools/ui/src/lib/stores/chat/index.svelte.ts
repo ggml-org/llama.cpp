@@ -12,6 +12,7 @@
 import {
 	COMPACTION,
 	CWD_CLEARED_TEXT,
+	REASONING_EFFORT_TOKENS,
 	SYSTEM_MESSAGE_PLACEHOLDER,
 	TITLE_GENERATION
 } from '$lib/constants';
@@ -82,8 +83,6 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 	// message flows: edit, regenerate, continue, delete
 	private flows = new ChatMessageFlows(this);
 	private isEditModeActive = $state(false);
-	private pendingDraftFiles = $state<ChatUploadedFile[]>([]);
-	private pendingDraftMessage = $state<string>('');
 	/** Reactive: queued pending messages for non-agentic streaming */
 	private pendingMessages = new SvelteMap<
 		string,
@@ -171,11 +170,11 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 
 		return message;
 	}
-	async addSystemPrompt(): Promise<void> {
+	async addSystemPrompt(draft?: { message: string; files: ChatUploadedFile[] }): Promise<void> {
 		let activeConv = conversationsStore.activeConversation;
 
 		if (!activeConv) {
-			await conversationsStore.createConversation();
+			await conversationsStore.createConversation(undefined, draft);
 			activeConv = conversationsStore.activeConversation;
 		}
 
@@ -341,17 +340,6 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		if (pending) await this.sendMessage(pending.content, pending.extras);
 	}
 
-	consumePendingDraft(): { message: string; files: ChatUploadedFile[] } | null {
-		if (!this.pendingDraftMessage && this.pendingDraftFiles.length === 0) return null;
-
-		const d = { files: [...this.pendingDraftFiles], message: this.pendingDraftMessage };
-
-		this.pendingDraftMessage = '';
-		this.pendingDraftFiles = [];
-
-		return d;
-	}
-
 	consumePendingMessage(
 		convId: string
 	): { content: string; extras?: DatabaseMessageExtra[] } | null {
@@ -455,13 +443,23 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 
 		if (currentConfig.excludeReasoningFromContext) apiOptions.excludeReasoningFromContext = true;
 
-		// an explicit reasoning choice overrides the server default, DEFAULT sends nothing
-		const effort = conversationsStore.preferences.getReasoningEffort();
+		// an explicit reasoning choice overrides the server default, DEFAULT sends nothing:
+		// a level the chat template honors goes as is, the others as a token budget
+		const modelId = modelsStore.selectedModelName ?? '';
+		const effort = modelsStore.props.resolveReasoningEffort(
+			modelId,
+			conversationsStore.preferences.getReasoningEffort()
+		);
+		const budgetTokens = REASONING_EFFORT_TOKENS[effort];
 
 		if (effort !== ReasoningEffort.DEFAULT) {
 			apiOptions.enableThinking = effort !== ReasoningEffort.OFF;
+		}
 
-			if (effort !== ReasoningEffort.OFF) apiOptions.reasoningEffort = effort;
+		if (modelsStore.props.getReasoningEfforts(modelId).includes(effort)) {
+			apiOptions.reasoningEffort = effort;
+		} else if (budgetTokens >= 0) {
+			apiOptions.thinkingBudgetTokens = budgetTokens;
 		}
 
 		if (hasValue(currentConfig.temperature))
@@ -562,10 +560,6 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 
 	getResumeModel(convId: string): string | null {
 		return this.streams.getResumeModel(convId);
-	}
-
-	hasPendingDraft(): boolean {
-		return Boolean(this.pendingDraftMessage) || this.pendingDraftFiles.length > 0;
 	}
 
 	hasPendingMessage(convId: string): boolean {
@@ -724,11 +718,6 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 
 			return false;
 		}
-	}
-
-	savePendingDraft(message: string, files: ChatUploadedFile[]): void {
-		this.pendingDraftMessage = message;
-		this.pendingDraftFiles = [...files];
 	}
 
 	async sendMessage(content: string, extras?: DatabaseMessageExtra[]): Promise<void> {
@@ -940,7 +929,15 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 			effectiveModel = modelOverride || modelsStore.selectedModelName || conversationModel;
 		}
 
+		// a router serves the props the request options read once the model is loaded, so the
+		// request waits for the load, and a stop during the wait aborts it
+		const abortController = this.getOrCreateAbortController(assistantMessage.convId);
+
 		if (serverStore.isRouterMode && effectiveModel) {
+			await modelsStore.status.ensureLoaded(effectiveModel);
+
+			if (abortController.signal.aborted) return;
+
 			if (!modelsStore.props.getModelProps(effectiveModel))
 				await modelsStore.props.fetchModelProps(effectiveModel);
 		}
@@ -1016,7 +1013,6 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		};
 
 		this.processing.setActiveConversation(convId);
-		const abortController = this.getOrCreateAbortController(convId);
 		const streamCallbacks: ChatStreamCallbacks = {
 			createAssistantMessage: async () => {
 				// Reset streaming state for new message

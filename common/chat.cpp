@@ -190,10 +190,17 @@ json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
         } else {
             auto & parts = jmsg["content"] = json::array();
             for (const auto & part : content_parts) {
-                parts.push_back({
-                    {"type", part.type},
-                    {"text", part.text},
-                });
+                if (part.type == "tool_reference") {
+                    parts.push_back({
+                        {"type", part.type},
+                        {"name", part.name},
+                    });
+                } else {
+                    parts.push_back({
+                        {"type", part.type},
+                        {"text", part.text},
+                    });
+                }
             }
         }
     } else {
@@ -309,6 +316,7 @@ struct common_chat_templates {
     bool has_explicit_template;  // Model had builtin template or template overridden was specified.
     std::unique_ptr<common_chat_template> template_default;  // always set (defaults to chatml)
     std::unique_ptr<common_chat_template> template_tool_use;
+    std::unique_ptr<common_chat_template> template_tts;  // the prompt of a text to speak
 };
 
 common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::string & tool_choice) {
@@ -370,12 +378,16 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
                             throw std::invalid_argument("Missing content part type: " + part.dump());
                         }
                         const auto & type = part.at("type");
-                        if (type != "text" && type != "media_marker") {
-                            throw std::invalid_argument("Unsupported content part type: " + type.dump());
-                        }
                         common_chat_msg_content_part msg_part;
                         msg_part.type = type;
-                        msg_part.text = part.at("text");
+                        if (type == "text" || type == "media_marker") {
+                            msg_part.text = part.at("text");
+                        } else if (type == "tool_reference") {
+                            // names a request tool, the template renders its definition
+                            msg_part.name = part.at("name");
+                        } else {
+                            throw std::invalid_argument("Unsupported content part type: " + type.dump());
+                        }
                         msg.content_parts.push_back(msg_part);
                     }
                 } else if (!content.is_null()) {
@@ -610,13 +622,17 @@ json common_chat_tools_to_json_oaicompat(const std::vector<common_chat_tool> & t
 
     auto result = json::array();
     for (const auto & tool : tools) {
+        json function {
+            { "name",        tool.name },
+            { "description", tool.description },
+            { "parameters",  json::parse(tool.parameters) },
+        };
+        if (tool.defer_loading) {
+            function["defer_loading"] = true;
+        }
         result.push_back({
             { "type",     "function" },
-            { "function", {
-                { "name", tool.name },
-                { "description", tool.description },
-                { "parameters", json::parse(tool.parameters) },
-            }},
+            { "function", function },
         });
     }
     return result;
@@ -653,10 +669,19 @@ std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const json & too
                 }
 
                 const auto & function = tool.at("function");
+
+                // "defer_loading" sits on the function, or on the tool next to "type"; the function wins
+                const json & defer = function.contains("defer_loading") ? function.at("defer_loading")
+                                                                        : tool.value("defer_loading", json(false));
+                if (!defer.is_boolean()) {
+                    throw std::invalid_argument("Expected 'defer_loading' to be a boolean, got " + defer.dump());
+                }
+
                 result.push_back({
                     /* .name = */ function.at("name"),
                     /* .description = */ function.value("description", ""),
                     /* .parameters = */ function.value("parameters", json::object()).dump(),
+                    /* .defer_loading = */ defer.get<bool>(),
                 });
             }
         }
@@ -779,17 +804,68 @@ bool common_chat_templates_was_explicit(const struct common_chat_templates * tmp
     return tmpls->has_explicit_template;
 }
 
-common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates * chat_templates) {
+// renders a task template (e.g. "tts") with the given variables
+static std::string common_chat_template_render(const common_chat_template & tmpl, const json & vars) {
+    jinja::context ctx(tmpl.source());
+    jinja::global_from_json(ctx, vars, false);
+    ctx.set_val("bos_token", jinja::mk_val<jinja::value_string>(tmpl.bos_token()));
+    ctx.set_val("eos_token", jinja::mk_val<jinja::value_string>(tmpl.eos_token()));
+    jinja::runtime runtime(ctx);
+    return jinja::runtime::gather_string_parts(runtime.execute(tmpl.prog))->as_string().str();
+}
+
+// LFM3 format detection: template renders deferred tools inside <additional_tools>...</additional_tools>
+static bool is_lfm3_template(const std::string & src) {
+    return src.find("<additional_tools>") != std::string::npos;
+}
+
+// LFM3-Audio: a known language code maps to its name, no language lets the model detect it
+static std::string lfm3_asr_system_prompt(const std::string & language) {
+    static const std::map<std::string, std::string> names = {
+        { "ar", "Arabic" }, { "da", "Danish" }, { "de", "German" }, { "el", "Greek" }, { "en", "English" },
+        { "es", "Spanish" }, { "fi", "Finnish" }, { "fr", "French" }, { "he", "Hebrew" }, { "it", "Italian" },
+        { "ja", "Japanese" }, { "ko", "Korean" }, { "nl", "Dutch" }, { "pl", "Polish" }, { "pt", "Portuguese" },
+        { "sv", "Swedish" }, { "tr", "Turkish" }, { "zh", "Chinese" },
+    };
+    if (language.empty()) {
+        return "Perform ASR.";
+    }
+    std::string code = language;
+    std::transform(code.begin(), code.end(), code.begin(), [](unsigned char c) { return (char) std::tolower(c); });
+    const auto it = names.find(code);
+    return "Perform ASR in " + (it != names.end() ? it->second : language) + ".";
+}
+
+common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates * chat_templates, const std::string & language) {
     common_chat_prompt_preset asr_preset;
     asr_preset.system = "";
     asr_preset.user   = "Transcribe audio to text";
 
-    if (chat_templates && chat_templates->template_default && is_lfm2_template(chat_templates->template_default->source())) {
-        asr_preset.system = "Perform ASR.";
-        asr_preset.user   = "";
+    if (chat_templates && chat_templates->template_default) {
+        const std::string src = chat_templates->template_default->source();
+        if (is_lfm2_template(src)) {
+            asr_preset.system = "Perform ASR.";
+            asr_preset.user   = "";
+        } else if (is_lfm3_template(src)) {
+            asr_preset.system = lfm3_asr_system_prompt(language);
+            asr_preset.user   = "";
+            asr_preset.has_language = true;
+        }
     }
 
     return asr_preset;
+}
+
+std::string common_chat_get_tts_prompt(const common_chat_templates * chat_templates, const std::string & text,
+                                       const std::string & language, const std::string & voice) {
+    if (!chat_templates || !chat_templates->template_tts) {
+        return "";
+    }
+    return common_chat_template_render(*chat_templates->template_tts, {
+        {"messages", json::array({{{"role", "user"}, {"content", text}}})},
+        {"language", language},
+        {"voice",    voice},
+    });
 }
 
 std::string common_chat_templates_source(const struct common_chat_templates * tmpls, const std::string & variant) {
@@ -900,6 +976,16 @@ common_chat_templates_ptr common_chat_templates_init(const struct llama_model * 
             tmpls->template_tool_use = std::make_unique<common_chat_template>(template_tool_use_src, token_bos, token_eos);
         } catch (const std::exception & e) {
             LOG_ERR("%s: failed to parse tool use chat template (ignoring it): %s\n", __func__, e.what());
+        }
+    }
+    // task templates of the model, kept with a chat template override
+    if (model) {
+        if (const char * src = llama_model_chat_template(model, "tts")) {
+            try {
+                tmpls->template_tts = std::make_unique<common_chat_template>(src, token_bos, token_eos);
+            } catch (const std::exception & e) {
+                LOG_ERR("%s: failed to parse the tts chat template (ignoring it): %s\n", __func__, e.what());
+            }
         }
     }
     return tmpls;
@@ -1717,6 +1803,9 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
     //LOG_DBG("Parsing PEG input with format %s: %s\n", common_chat_format_name(params.format), effective_input.text.c_str());
 
     common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_LENIENT;
+    if (!is_partial) {
+        flags |= COMMON_PEG_PARSE_FLAG_COMPLETE;
+    }
     if (params.debug) {
         flags |= COMMON_PEG_PARSE_FLAG_DEBUG;
     }
@@ -1854,12 +1943,13 @@ const common_chat_msg & common_chat_session::finish(const common_chat_input & ch
     return result;
 }
 
-std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_templates * chat_templates) {
+common_json common_chat_templates_get_caps(const common_chat_templates * chat_templates) {
     GGML_ASSERT(chat_templates != nullptr);
     GGML_ASSERT(chat_templates->template_default != nullptr);
-    if (chat_templates->template_tool_use != nullptr) {
-        // take the more expressive template when available
-        return chat_templates->template_tool_use->caps.to_map();
-    }
-    return chat_templates->template_default->caps.to_map();
+    // take the more expressive template when available
+    const auto & caps = chat_templates->template_tool_use != nullptr ? chat_templates->template_tool_use->caps
+                                                                      : chat_templates->template_default->caps;
+    common_json result = caps.to_map();
+    result["reasoning_effort_levels"] = caps.reasoning_effort_levels;
+    return result;
 }

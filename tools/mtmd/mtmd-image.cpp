@@ -823,17 +823,26 @@ mtmd_image_preproc_out mtmd_image_preprocessor_dyn_size::preprocess(const clip_i
 //
 
 // rounds before the pixel checks (an edge may round to 0) and computes in double, as transformers does
-clip_image_size mtmd_image_preprocessor_lfm3vl::smart_resize(int width, int height, int factor, int64_t min_pixels, int64_t max_pixels) {
-    const double h = height;
-    const double w = width;
+clip_image_size mtmd_image_preprocessor_lfm3vl::smart_resize(int width, int height, int factor, int64_t min_pixels, int64_t max_pixels,
+                                                             int n_frames, int temporal_factor) {
+    double h = height;
+    double w = width;
+    // the video variant first upscales edges below factor
+    if (temporal_factor > 1 && (h < factor || w < factor)) {
+        const double scale = std::max(factor / h, factor / w);
+        h = static_cast<int>(h * scale);
+        w = static_cast<int>(w * scale);
+    }
+
+    const int64_t t_bar = static_cast<int64_t>(std::nearbyint(static_cast<double>(n_frames) / temporal_factor)) * temporal_factor;
     int h_bar = static_cast<int>(std::nearbyint(h / factor)) * factor;
     int w_bar = static_cast<int>(std::nearbyint(w / factor)) * factor;
-    if (static_cast<int64_t>(h_bar) * w_bar > max_pixels) {
-        const double beta = std::sqrt(h * w / max_pixels);
+    if (t_bar * h_bar * w_bar > max_pixels) {
+        const double beta = std::sqrt(n_frames * h * w / max_pixels);
         h_bar = static_cast<int>(std::floor(h / beta / factor)) * factor;
         w_bar = static_cast<int>(std::floor(w / beta / factor)) * factor;
-    } else if (static_cast<int64_t>(h_bar) * w_bar < min_pixels) {
-        const double beta = std::sqrt(min_pixels / (h * w));
+    } else if (t_bar * h_bar * w_bar < min_pixels) {
+        const double beta = std::sqrt(min_pixels / (n_frames * h * w));
         h_bar = static_cast<int>(std::ceil(h * beta / factor)) * factor;
         w_bar = static_cast<int>(std::ceil(w * beta / factor)) * factor;
     }
@@ -844,6 +853,32 @@ clip_image_size mtmd_image_preprocessor_lfm3vl::smart_resize(int width, int heig
 clip_image_size mtmd_image_preprocessor_lfm3vl::target_size(const clip_image_size & original_size) const {
     return smart_resize(original_size.width, original_size.height, hparams.patch_size * hparams.n_merge,
                         hparams.image_min_pixels, hparams.image_max_pixels);
+}
+
+bool mtmd_image_preprocessor_lfm3vl::get_video_frame_size(int n_frames, int width, int height, clip_image_size & out) const {
+    // Lfm3VlVideoProcessor size: shortest_edge 4096, longest_edge 25165824, temporal_patch_size 2
+    out = smart_resize(width, height, hparams.patch_size * hparams.n_merge, 4096, 25165824, n_frames, 2);
+    return true;
+}
+
+mtmd_image_preproc_out mtmd_image_preprocessor_lfm3vl::preprocess_video_frame(const clip_image_u8 & img) const {
+    const int f = hparams.patch_size * hparams.n_merge;
+    const auto size = img.get_size();
+    return resize_to(img, {
+        std::max(f, static_cast<int>(std::nearbyint(static_cast<double>(size.width)  / f)) * f),
+        std::max(f, static_cast<int>(std::nearbyint(static_cast<double>(size.height) / f)) * f),
+    });
+}
+
+mtmd_image_preproc_out mtmd_image_preprocessor_lfm3vl::resize_to(const clip_image_u8 & img, const clip_image_size & size) const {
+    clip_image_u8 resized_image;
+    img_tool::resize(img, resized_image, size,
+                        hparams.image_resize_algo,
+                        hparams.image_resize_pad,
+                        hparams.image_pad_color);
+    mtmd_image_preproc_out output;
+    output.append(hparams, resized_image, true);
+    return output;
 }
 
 //

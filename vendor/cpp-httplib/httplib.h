@@ -8,8 +8,8 @@
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.62.0"
-#define CPPHTTPLIB_VERSION_NUM "0x003e00"
+#define CPPHTTPLIB_VERSION "0.64.0"
+#define CPPHTTPLIB_VERSION_NUM "0x004000"
 
 #ifdef _WIN32
 #if defined(_WIN32_WINNT) && _WIN32_WINNT < 0x0A00
@@ -140,6 +140,12 @@
 
 #ifndef CPPHTTPLIB_PAYLOAD_MAX_LENGTH
 #define CPPHTTPLIB_PAYLOAD_MAX_LENGTH (100 * 1024 * 1024) // 100MB
+#endif
+
+// How much of an unread request body the server skips to reuse the connection,
+// 0 for no limit
+#ifndef CPPHTTPLIB_UNREAD_PAYLOAD_MAX_LENGTH
+#define CPPHTTPLIB_UNREAD_PAYLOAD_MAX_LENGTH (256 * 1024) // 256KB
 #endif
 
 #ifndef CPPHTTPLIB_SSE_MAX_EVENT_LENGTH
@@ -989,6 +995,30 @@ inline bool parse_url(const std::string &url, UrlComponents &uc) {
   return true;
 }
 
+// Removes "." and ".." segments from a path that starts with '/' (RFC 3986
+// section 5.2.4).
+inline std::string remove_dot_segments(const std::string &path) {
+  std::string out;
+  size_t i = 0;
+  while (i < path.size()) {
+    auto next = (std::min)(path.find('/', i + 1), path.size());
+    auto segment = path.substr(i + 1, next - i - 1);
+    auto is_last = next == path.size();
+    if (segment == "." || segment == "..") {
+      if (segment == "..") {
+        out.erase((std::min)(out.rfind('/'), out.size()));
+      }
+      if (is_last) { out += '/'; }
+    } else {
+      out += '/';
+      out += segment;
+    }
+    i = next;
+  }
+  if (out.empty()) { out = "/"; }
+  return out;
+}
+
 // Resolves a relative-path or query-only Location value against the path of
 // the request being redirected (RFC 3986 section 5.2). Absolute URIs and
 // references starting with '/' are returned unchanged.
@@ -1009,26 +1039,8 @@ inline std::string resolve_relative_location(const std::string &location,
 
   // Remove "." and ".." segments from the merged path.
   auto path_end = (std::min)(merged.find_first_of("?#"), merged.size());
-  std::string path;
-  size_t i = 0;
-  while (i < path_end) {
-    auto next = (std::min)(merged.find('/', i + 1), path_end);
-    auto segment = merged.substr(i + 1, next - i - 1);
-    auto is_last = next == path_end;
-    if (segment == "." || segment == "..") {
-      if (segment == "..") {
-        path.erase((std::min)(path.rfind('/'), path.size()));
-      }
-      if (is_last) { path += '/'; }
-    } else {
-      path += '/';
-      path += segment;
-    }
-    i = next;
-  }
-  if (path.empty()) { path = "/"; }
-
-  return path + merged.substr(path_end);
+  return remove_dot_segments(merged.substr(0, path_end)) +
+         merged.substr(path_end);
 }
 
 } // namespace detail
@@ -2357,6 +2369,8 @@ public:
 
   Server &set_payload_max_length(size_t length);
 
+  Server &set_compress(bool on);
+
   Server &set_static_file_compression(bool on);
   Server &set_static_file_compression_min_length(size_t length);
   Server &set_static_file_compression_max_length(size_t length);
@@ -2392,10 +2406,11 @@ protected:
   // Runs the per-connection serving loop and stops an exception thrown by a
   // user callback from escaping the worker thread.
   //
-  // process_request() wraps only routing() in a try/catch. Content providers,
-  // the post-routing, error, logging and expect-100 handlers and WebSocket
-  // handlers all run outside it, and the task queue calls the job without a
-  // catch, so an exception from any of those would terminate the process.
+  // process_request() wraps only routing() and the hooks before a WebSocket
+  // upgrade in a try/catch. Content providers, the post-routing, error,
+  // logging and expect-100 handlers and WebSocket handlers all run outside
+  // it, and the task queue calls the job without a catch, so an exception
+  // from any of those would terminate the process.
   //
   // No 500 is possible here: by the time a content provider runs, the status
   // line and headers are already on the wire. Report it through the error
@@ -2431,6 +2446,7 @@ protected:
   time_t idle_interval_sec_ = CPPHTTPLIB_IDLE_INTERVAL_SECOND;
   time_t idle_interval_usec_ = CPPHTTPLIB_IDLE_INTERVAL_USECOND;
   size_t payload_max_length_ = CPPHTTPLIB_PAYLOAD_MAX_LENGTH;
+  bool compress_ = true;
   bool static_file_compression_ = false;
   size_t static_file_compression_min_length_ =
       CPPHTTPLIB_STATIC_FILE_COMPRESSION_MIN_LENGTH;
@@ -2481,6 +2497,9 @@ private:
 
   bool routing(Request &req, Response &res, Stream &strm,
                bool skip_pre_routing);
+#ifndef CPPHTTPLIB_NO_EXCEPTIONS
+  bool handle_exception(Request &req, Response &res);
+#endif
   bool handle_file_request(Request &req, Response &res);
   bool check_if_not_modified(const Request &req, Response &res,
                              const std::string &etag, time_t mtime) const;
@@ -2908,7 +2927,12 @@ public:
   size_t is_socket_open() const;
   socket_t socket() const;
 
+  [[deprecated("Use set_direct_hostname_addr_map() instead.")]]
   void set_hostname_addr_map(std::map<std::string, std::string> addr_map);
+  void
+  set_direct_hostname_addr_map(std::map<std::string, std::string> addr_map);
+  void
+  set_tunnel_hostname_addr_map(std::map<std::string, std::string> addr_map);
 
   void set_default_headers(Headers headers);
 
@@ -2997,6 +3021,15 @@ protected:
   void close_socket(Socket &socket);
   void disconnect(bool gracefully);
 
+  // Under socket_mutex_: whether the connection kept alive can take another
+  // request. One the peer has closed, or one set up under TLS settings changed
+  // since, is closed instead.
+  bool socket_reusable();
+
+  // TLS settings apply as a connection is set up, so a change makes the
+  // connection kept alive unfit for the next request.
+  void tls_settings_changed() { tls_settings_version_++; }
+
   std::string make_request_target(const Request &req) const;
   bool process_request(Stream &strm, Request &req, Response &res,
                        bool close_connection, Error &error);
@@ -3023,10 +3056,16 @@ protected:
   size_t socket_requests_in_flight_ = 0;
   std::thread::id socket_requests_are_from_thread_ = std::thread::id();
   bool socket_should_be_closed_when_request_is_done_ = false;
+  size_t socket_tls_settings_version_ = 0;
+
+  std::atomic<size_t> tls_settings_version_{0};
 
   // Hostname to connection target map. The value is an IP literal or another
   // hostname; only the connection target changes, never the identity.
   std::map<std::string, std::string> addr_map_;
+
+  // Hostname to CONNECT target map, used only through a proxy.
+  std::map<std::string, std::string> tunnel_addr_map_;
 
   // Default headers
   Headers default_headers_;
@@ -3317,7 +3356,12 @@ public:
   size_t is_socket_open() const;
   socket_t socket() const;
 
+  [[deprecated("Use set_direct_hostname_addr_map() instead.")]]
   void set_hostname_addr_map(std::map<std::string, std::string> addr_map);
+  void
+  set_direct_hostname_addr_map(std::map<std::string, std::string> addr_map);
+  void
+  set_tunnel_hostname_addr_map(std::map<std::string, std::string> addr_map);
 
   void set_default_headers(Headers headers);
 
@@ -3527,8 +3571,12 @@ private:
 
   // Tracks whether a custom CA store was applied via set_ca_cert_store(),
   // since the store handle itself is owned by ctx_ and leaves no other trace.
-  // Used to keep custom CA configuration exclusive with system CA loading.
   bool ca_cert_store_set_ = false;
+
+  // Set by set_ca_cert_store() and load_ca_cert_store() even when they bring
+  // no certificate, so that a CA that failed to come through fails
+  // verification instead of letting the system CAs in.
+  bool custom_ca_loaded_ = false;
 
   std::function<SSLVerifierResponse(tls::session_t)> session_verifier_;
 
@@ -3767,6 +3815,8 @@ std::string make_host_and_port_string(const std::string &host, int port,
 template <typename T>
 bool check_and_write_headers(Stream &strm, Headers &headers, T header_writer,
                              Error &error);
+
+bool write_data(Stream &strm, const char *d, size_t l);
 
 std::string trim_copy(const std::string &s);
 
@@ -4015,6 +4065,7 @@ struct ChunkedDecoder {
   char line_buf[64];
   size_t last_chunk_total = 0;
   size_t last_chunk_offset = 0;
+  size_t overhead = 0;
 
   explicit ChunkedDecoder(Stream &s);
 
@@ -4466,7 +4517,7 @@ public:
 
   // State accessors
   bool is_connected() const;
-  const std::string &last_event_id() const;
+  std::string last_event_id() const;
 
   // Blocking start - runs event loop with auto-reconnect
   void start();
@@ -4504,7 +4555,9 @@ private:
   // State
   std::atomic<bool> running_{false};
   std::atomic<bool> connected_{false};
+  // Written by the event loop, which start_async() runs on its own thread
   std::string last_event_id_;
+  mutable std::mutex last_event_id_mutex_;
 
   // Async support
   std::thread async_thread_;
@@ -4708,7 +4761,15 @@ public:
   set_connection_timeout(const std::chrono::duration<Rep, Period> &duration);
 
   void set_interface(const std::string &intf);
+  [[deprecated("Use set_direct_hostname_addr_map() instead.")]]
   void set_hostname_addr_map(std::map<std::string, std::string> addr_map);
+  void
+  set_direct_hostname_addr_map(std::map<std::string, std::string> addr_map);
+  void
+  set_tunnel_hostname_addr_map(std::map<std::string, std::string> addr_map);
+
+  void set_basic_auth(const std::string &username, const std::string &password);
+  void set_bearer_token_auth(const std::string &token);
 
   void set_proxy(const std::string &host, int port);
   void set_proxy_basic_auth(const std::string &username,
@@ -4780,6 +4841,13 @@ private:
   // hostname; only the connection target changes, never the identity.
   std::map<std::string, std::string> addr_map_;
 
+  // Hostname to CONNECT target map, used only through a proxy.
+  std::map<std::string, std::string> tunnel_addr_map_;
+
+  std::string basic_auth_username_;
+  std::string basic_auth_password_;
+  std::string bearer_token_auth_token_;
+
   std::string proxy_host_;
   int proxy_port_ = -1;
   std::string proxy_basic_auth_username_;
@@ -4793,6 +4861,9 @@ private:
   tls::session_t tls_session_ = nullptr;
   std::string ca_cert_file_path_;
   std::string ca_cert_dir_path_;
+  // Set by set_ca_cert_store() and load_ca_cert_store() even when they bring
+  // no certificate, so that a CA that failed to come through fails
+  // verification instead of letting the system CAs in.
   bool custom_ca_loaded_ = false;
   bool certs_loaded_ = false;
   SystemCAMode system_ca_mode_ = SystemCAMode::Auto;

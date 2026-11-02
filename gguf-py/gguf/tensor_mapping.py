@@ -2554,12 +2554,14 @@ class TensorNameMap:
             "audio_encoder.dots_encoder.speech_encoder.layer_norm", # dots3note
             "audio_tower.ln_post", # qwen2omni
             "encoder.layer_norm", # mimo-audio-tokenizer
+            "encoder.lfm.lfm.embedding_norm", # lfm3a
         ),
 
         MODEL_TENSOR.A_ENC_ATTN_Q: (
             "audio_tower.layers.{bid}.self_attn.q_proj", # ultravox
             "audio_encoder.dots_encoder.speech_encoder.layers.{bid}.self_attn.q_proj", # dots3note
             "conformer.layers.{bid}.self_attn.linear_q", # lfm2
+            "encoder.lfm.lfm.layers.{bid}.self_attn.q_proj", # lfm3a
             "conformer.layers.{bid}.attention.attn.q_proj", # gemma3n
             "conformer.layers.{bid}.self_attn.q_proj", # gemma4
             "sound_encoder.encoder.layers.{bid}.self_attn.q_proj", # parakeet
@@ -2571,6 +2573,7 @@ class TensorNameMap:
             "audio_tower.layers.{bid}.self_attn.k_proj", # ultravox
             "audio_encoder.dots_encoder.speech_encoder.layers.{bid}.self_attn.k_proj", # dots3note
             "conformer.layers.{bid}.self_attn.linear_k", # lfm2
+            "encoder.lfm.lfm.layers.{bid}.self_attn.k_proj", # lfm3a
             "conformer.layers.{bid}.attention.attn.k_proj", # gemma3n
             "conformer.layers.{bid}.self_attn.k_proj", # gemma4
             "sound_encoder.encoder.layers.{bid}.self_attn.k_proj", # parakeet
@@ -2582,11 +2585,20 @@ class TensorNameMap:
             "audio_tower.layers.{bid}.self_attn.v_proj", # ultravox
             "audio_encoder.dots_encoder.speech_encoder.layers.{bid}.self_attn.v_proj", # dots3note
             "conformer.layers.{bid}.self_attn.linear_v", # lfm2
+            "encoder.lfm.lfm.layers.{bid}.self_attn.v_proj", # lfm3a
             "conformer.layers.{bid}.attention.attn.v_proj", # gemma3n
             "conformer.layers.{bid}.self_attn.v_proj", # gemma4
             "sound_encoder.encoder.layers.{bid}.self_attn.v_proj", # parakeet
             "encoder.layers.{bid}.attn.to_v", # granite_speech (split from to_kv)
             "encoder.layers.{bid}.self_attn.v_proj", # mimo-audio-tokenizer
+        ),
+
+        MODEL_TENSOR.A_ENC_ATTN_Q_NORM: (
+            "encoder.lfm.lfm.layers.{bid}.self_attn.q_layernorm", # lfm3a
+        ),
+
+        MODEL_TENSOR.A_ENC_ATTN_K_NORM: (
+            "encoder.lfm.lfm.layers.{bid}.self_attn.k_layernorm", # lfm3a
         ),
 
         MODEL_TENSOR.A_ENC_ATTN_K_REL: (
@@ -2614,6 +2626,7 @@ class TensorNameMap:
             "audio_tower.layers.{bid}.self_attn_layer_norm", # ultravox
             "audio_encoder.dots_encoder.speech_encoder.layers.{bid}.self_attn_layer_norm", # dots3note
             "conformer.layers.{bid}.norm_self_att", # lfm2
+            "encoder.lfm.lfm.layers.{bid}.operator_norm", # lfm3a
             "conformer.layers.{bid}.attention.pre_attn_norm", # gemma3n
             "sound_encoder.encoder.layers.{bid}.norm_self_att", # parakeet
             "encoder.layers.{bid}.attn.pre_norm", # granite_speech
@@ -2625,6 +2638,7 @@ class TensorNameMap:
             "audio_tower.layers.{bid}.self_attn.o_proj", # voxtral realtime
             "audio_encoder.dots_encoder.speech_encoder.layers.{bid}.self_attn.out_proj", # dots3note
             "conformer.layers.{bid}.self_attn.linear_out", # lfm2
+            "encoder.lfm.lfm.layers.{bid}.self_attn.out_proj", # lfm3a
             "conformer.layers.{bid}.attention.post", # gemma3n
             "conformer.layers.{bid}.self_attn.post", # gemma4
             "sound_encoder.encoder.layers.{bid}.self_attn.o_proj", # parakeet
@@ -2636,6 +2650,7 @@ class TensorNameMap:
             "audio_tower.layers.{bid}.final_layer_norm", # ultravox
             "audio_encoder.dots_encoder.speech_encoder.layers.{bid}.final_layer_norm", # dots3note
             "conformer.layers.{bid}.norm_out", # lfm2
+            "encoder.lfm.lfm.layers.{bid}.ffn_norm", # lfm3a
             "conformer.layers.{bid}.attention.post_norm", # gemma3n
             "sound_encoder.encoder.layers.{bid}.norm_out", # parakeet
             "encoder.layers.{bid}.post_norm", # granite_speech
@@ -2664,6 +2679,7 @@ class TensorNameMap:
             "audio_tower.layers.{bid}.fc1", # ultravox
             "audio_tower.layers.{bid}.mlp.up_proj", # voxtral realtime
             "conformer.layers.{bid}.feed_forward1.linear1", # lfm2
+            "encoder.lfm.lfm.layers.{bid}.feed_forward.w3", # lfm3a
             "conformer.layers.{bid}.ffw_layer_start.ffw_layer_1", # gemma3n
             "conformer.layers.{bid}.feed_forward1.ffw_layer_1", # gemma4
             "sound_encoder.encoder.layers.{bid}.feed_forward1.linear1", # parakeet
@@ -2673,6 +2689,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.A_ENC_FFN_GATE: (
             "audio_encoder.dots_encoder.speech_encoder.layers.{bid}.fc1_gate", # dots3note (split from fc1 in conversion code)
+            "encoder.lfm.lfm.layers.{bid}.feed_forward.w1", # lfm3a
             "audio_tower.layers.{bid}.mlp.gate_proj", # voxtral realtime
         ),
 
@@ -2681,6 +2698,7 @@ class TensorNameMap:
             "audio_tower.layers.{bid}.fc2", # ultravox
             "audio_tower.layers.{bid}.mlp.down_proj", # voxtral realtime
             "conformer.layers.{bid}.feed_forward1.linear2", # lfm2
+            "encoder.lfm.lfm.layers.{bid}.feed_forward.w2", # lfm3a
             "conformer.layers.{bid}.ffw_layer_start.ffw_layer_2", # gemma3n
             "conformer.layers.{bid}.feed_forward1.ffw_layer_2", # gemma4
             "sound_encoder.encoder.layers.{bid}.feed_forward1.linear2", # parakeet
@@ -2764,6 +2782,7 @@ class TensorNameMap:
             "audio.multi_modal_projector.linear_{bid}", # ultravox, meralion
             "audio_encoder.audio_adapter.proj.{bid}", # dots3note (proj.1, proj.3)
             "audio_adapter.model.{bid}", # lfm2
+            "mlp.model.{bid}", # lfm3a
             "audio_tower.proj{bid}", # qwen3omni
             "sound_projection.linear{bid}", # parakeet (linear1, linear2)
         ),
@@ -2823,6 +2842,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.A_ENC_CONV_DW: (
             "conformer.layers.{bid}.conv.depthwise_conv", # lfm2
+            "encoder.lfm.lfm.layers.{bid}.conv.conv", # lfm3a
             "conformer.layers.{bid}.lconv1d.depthwise_conv1d", # gemma3n
             "sound_encoder.encoder.layers.{bid}.conv.depthwise_conv", # parakeet
             "encoder.layers.{bid}.conv.depth_conv.conv", # granite_speech
@@ -2845,6 +2865,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.A_ENC_CONV_PW1: (
             "conformer.layers.{bid}.conv.pointwise_conv1", # lfm2
+            "encoder.lfm.lfm.layers.{bid}.conv.in_proj", # lfm3a
             "conformer.layers.{bid}.lconv1d.linear_start", # gemma3n
             "sound_encoder.encoder.layers.{bid}.conv.pointwise_conv1", # parakeet
             "encoder.layers.{bid}.conv.up_conv", # granite_speech
@@ -2853,6 +2874,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.A_ENC_CONV_PW2: (
             "conformer.layers.{bid}.conv.pointwise_conv2", # lfm2
+            "encoder.lfm.lfm.layers.{bid}.conv.out_proj", # lfm3a
             "conformer.layers.{bid}.lconv1d.linear_end", # gemma3n
             "sound_encoder.encoder.layers.{bid}.conv.pointwise_conv2", # parakeet
             "encoder.layers.{bid}.conv.down_conv", # granite_speech
