@@ -22,6 +22,8 @@ Options:
                             - layer (default): split layers and KV across GPUs
                             - row: split rows across GPUs
   -ngl,--n-gpu-layers <value>  Max. number of layers to store in VRAM (default: -1)
+    --cache-ram <MiB>    RAM prompt cache size (default: 0 for tensor mode, server default otherwise).
+                                            Use -1 for unlimited caching.
   -lv,--log-verbosity <value>  Set the verbosity threshold. Messages with a higher verbosity will be
                                ignored. Values:
                                 - 0: generic output
@@ -44,6 +46,7 @@ CONTEXT=4096
 GGML_SYCL_DEVICE=-1
 SYCL_DEVICES="SYCL0"
 SPLIT_MODE=layer
+CACHE_RAM=""
 LOG_VERBOSE=3
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -80,6 +83,11 @@ while [[ $# -gt 0 ]]; do
         -ngl|--n-gpu-layers)
             NGL=$2
             # Shift twice to consume both the option flag and its value
+            shift
+            shift
+            ;;
+        --cache-ram)
+            CACHE_RAM="$2"
             shift
             shift
             ;;
@@ -124,7 +132,15 @@ else
     GPUS_SETTING="-sm ${SPLIT_MODE}"
 fi
 
-echo "run cmd: ZES_ENABLE_SYSMAN=1 ${BIN_FILE} -m ${MODEL_FILE} -ngl ${NGL} -s ${SEED} -c ${CONTEXT} ${GPUS_SETTING} -lv ${LOG_VERBOSE} --device ${SYCL_DEVICES} --load-mode auto --host 0.0.0.0 --port 8000"
-ZES_ENABLE_SYSMAN=1 ${BIN_FILE} -m ${MODEL_FILE} -ngl ${NGL} -s ${SEED} -c ${CONTEXT} ${GPUS_SETTING} -lv ${LOG_VERBOSE} --device ${SYCL_DEVICES} --load-mode auto --host 0.0.0.0 --port 8000
+CACHE_ARGS=()
+if [[ -z "$CACHE_RAM" && "$SPLIT_MODE" == tensor ]]; then
+    CACHE_RAM=0
+fi
+if [[ -n "$CACHE_RAM" ]]; then
+    CACHE_ARGS=(--cache-ram "$CACHE_RAM")
+fi
+
+echo "run cmd: ZES_ENABLE_SYSMAN=1 ${BIN_FILE} -m ${MODEL_FILE} -ngl ${NGL} -s ${SEED} -c ${CONTEXT} ${GPUS_SETTING} -lv ${LOG_VERBOSE} --device ${SYCL_DEVICES} --load-mode auto ${CACHE_ARGS[*]} --host 0.0.0.0 --port 8000"
+ZES_ENABLE_SYSMAN=1 ${BIN_FILE} -m ${MODEL_FILE} -ngl ${NGL} -s ${SEED} -c ${CONTEXT} ${GPUS_SETTING} -lv ${LOG_VERBOSE} --device ${SYCL_DEVICES} --load-mode auto "${CACHE_ARGS[@]}" --host 0.0.0.0 --port 8000
 
 

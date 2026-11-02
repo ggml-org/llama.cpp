@@ -12,6 +12,7 @@ set "GPUS_SETTING="
 set "MODEL_FILE=..\models\Qwen3.5-4B-Q4_0.gguf"
 set "NGL=99"
 set "CONTEXT=4096"
+set "CACHE_RAM="
 set "GGML_SYCL_DEVICE=-1"
 set "SYCL_DEVICES=SYCL0"
 set "SPLIT_MODE=layer"
@@ -114,6 +115,14 @@ if /I "%~1"=="--n-gpu-layers" (
   goto parse_args
 )
 
+if /I "%~1"=="--cache-ram" (
+  if "%~2"=="" goto missing_value
+  set "CACHE_RAM=%~2"
+  shift
+  shift
+  goto parse_args
+)
+
 if /I "%~1"=="-lv" (
   if "%~2"=="" goto missing_value
   set "LOG_VERBOSE=%~2"
@@ -155,6 +164,7 @@ echo                             - none: use one GPU only
 echo                             - layer (default): split layers and KV across GPUs
 echo                             - row: split rows across GPUs
 echo   -ngl,--n-gpu-layers ^<value^>  Max. number of layers to store in VRAM (default: -1)
+echo       --cache-ram ^<MiB^>        RAM prompt cache size. Use -1 for unlimited caching.
 echo   -lv,--log-verbosity ^<value^>  Set the verbosity threshold. Messages with a higher verbosity will be
 echo                                ignored. Values:
 echo                                 - 0: generic output
@@ -165,6 +175,10 @@ echo                                 - 4: debug
 exit /b 0
 
 :after_args
+
+if not defined CACHE_RAM if /I "%SPLIT_MODE%"=="tensor" set "CACHE_RAM=0"
+set "CACHE_ARGS="
+if defined CACHE_RAM set "CACHE_ARGS=--cache-ram %CACHE_RAM%"
 
 REM In Windows CMD, source is not available; call oneAPI setvars if present.
 if exist "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" (
@@ -188,9 +202,9 @@ if not "%GGML_SYCL_DEVICE%"=="-1" (
   set "GPUS_SETTING=-sm %SPLIT_MODE%"
 )
 
-echo run cmd: ZES_ENABLE_SYSMAN=1 %BIN_FILE% -m "%MODEL_FILE%" -ngl %NGL% -s %SEED% -c %CONTEXT% %GPUS_SETTING% -lv %LOG_VERBOSE% --device %SYCL_DEVICES% --load-mode auto --host 0.0.0.0 --port 8000
+echo run cmd: ZES_ENABLE_SYSMAN=1 %BIN_FILE% -m "%MODEL_FILE%" -ngl %NGL% -s %SEED% -c %CONTEXT% %GPUS_SETTING% -lv %LOG_VERBOSE% --device %SYCL_DEVICES% --load-mode auto %CACHE_ARGS% --host 0.0.0.0 --port 8000
 set "ZES_ENABLE_SYSMAN=1"
-%BIN_FILE% -m "%MODEL_FILE%" -ngl %NGL% -s %SEED% -c %CONTEXT% %GPUS_SETTING% -lv %LOG_VERBOSE% --device "%SYCL_DEVICES%" --load-mode auto --host 0.0.0.0 --port 8000
+%BIN_FILE% -m "%MODEL_FILE%" -ngl %NGL% -s %SEED% -c %CONTEXT% %GPUS_SETTING% -lv %LOG_VERBOSE% --device "%SYCL_DEVICES%" --load-mode auto %CACHE_ARGS% --host 0.0.0.0 --port 8000
 
 endlocal
 
