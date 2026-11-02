@@ -523,7 +523,7 @@ static __device__ __forceinline__ void ggml_cuda_mmq_write_back_mma(
     // Fused NVFP4: load the weight scales once, 1 without scales.
     constexpr bool fused_nvfp4 = has_fusion && type == GGML_TYPE_NVFP4;
     const float scale_up   = fused_nvfp4 && x_scale ? *x_scale    : 1.0f;
-    const float scale_gate = fused_nvfp4 && x_scale ? *gate_scale : 1.0f;
+    const float scale_gate = fused_nvfp4 && gate_scale ? *gate_scale : 1.0f;
 
 #pragma unroll
     for (int j0 = 0; j0 < J; j0 += ntx*tile_C::J) {
