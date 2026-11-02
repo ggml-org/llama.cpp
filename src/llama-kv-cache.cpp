@@ -1349,31 +1349,6 @@ uint32_t llama_kv_cache::get_n_kv_slices(const llama_ubatch & ubatch) {
     return 0;
 }
 
-std::vector<llama_pos> llama_kv_cache::get_kv_rows_p_min(const llama_ubatch & ubatch, uint32_t n_slices) const {
-    std::vector<llama_pos> res;
-
-    // the cells below these positions are masked by the SWA for all tokens of the slice
-    // only for SWA types that mask more cells as the token position grows
-    if (n_swa == 0 || (swa_type != LLAMA_SWA_TYPE_STANDARD && swa_type != LLAMA_SWA_TYPE_CHUNKED)) {
-        return res;
-    }
-
-    const uint32_t n_tps = ubatch.n_tokens/n_slices;
-
-    res.resize(n_slices);
-
-    for (uint32_t s = 0; s < n_slices; ++s) {
-        llama_pos p = ubatch.pos[s*n_tps];
-        for (uint32_t i = 1; i < n_tps; ++i) {
-            p = std::min(p, ubatch.pos[s*n_tps + i]);
-        }
-
-        res[s] = swa_type == LLAMA_SWA_TYPE_STANDARD ? p - (llama_pos) n_swa + 1 : (p/(llama_pos) n_swa)*(llama_pos) n_swa;
-    }
-
-    return res;
-}
-
 uint32_t llama_kv_cache::get_n_kv_rows(const llama_ubatch & ubatch) const {
     if (n_stream != 1) {
         return 0;
@@ -1406,6 +1381,31 @@ uint32_t llama_kv_cache::get_n_kv_rows(const llama_ubatch & ubatch) const {
 
     // pad like n_kv so that the graph can be reused
     return std::min(GGML_PAD(n_max, n_pad_cur), get_size());
+}
+
+std::vector<llama_pos> llama_kv_cache::get_kv_rows_p_min(const llama_ubatch & ubatch, uint32_t n_slices) const {
+    std::vector<llama_pos> res;
+
+    // the cells below these positions are masked by the SWA for all tokens of the slice
+    // only for SWA types that mask more cells as the token position grows
+    if (n_swa == 0 || (swa_type != LLAMA_SWA_TYPE_STANDARD && swa_type != LLAMA_SWA_TYPE_CHUNKED)) {
+        return res;
+    }
+
+    const uint32_t n_tps = ubatch.n_tokens/n_slices;
+
+    res.resize(n_slices);
+
+    for (uint32_t s = 0; s < n_slices; ++s) {
+        llama_pos p = ubatch.pos[s*n_tps];
+        for (uint32_t i = 1; i < n_tps; ++i) {
+            p = std::min(p, ubatch.pos[s*n_tps + i]);
+        }
+
+        res[s] = swa_type == LLAMA_SWA_TYPE_STANDARD ? p - (llama_pos) n_swa + 1 : (p/(llama_pos) n_swa)*(llama_pos) n_swa;
+    }
+
+    return res;
 }
 
 ggml_tensor * llama_kv_cache::get_k(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const {
