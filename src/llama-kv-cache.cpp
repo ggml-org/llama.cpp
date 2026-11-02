@@ -1096,8 +1096,8 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
                 return -1;
             };
 
-            auto stride_search = [&](uint32_t cur, uint32_t limit) -> int64_t {
-                while (cur + w <= limit && cur + w <= size && w > 0) {
+            auto stride_search = [&](uint32_t cur, uint32_t max_start) -> int64_t {
+                while (cur <= max_start && cur + w <= size && w > 0) {
                     const int64_t bad_idx = check_window(cur);
                     if (bad_idx < 0) {
                         return (int64_t)cur;
@@ -1111,14 +1111,18 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
             uint32_t head_norm = (head_cur < size) ? head_cur : 0;
 
             if (head_norm + w > size) {
-                slot_start = stride_search(0, size);
+                // Window cannot fit between head_norm and size; search from beginning
+                if (size >= w) {
+                    slot_start = stride_search(0, size - w);
+                }
             } else {
                 // Phase 1: Search from head_norm to buffer end
-                slot_start = stride_search(head_norm, size);
-                // Phase 2: Wrap to 0 and search up to head_norm
-                if (slot_start < 0 && head_norm > 0) {
-                    const uint32_t limit = std::min(head_norm, size);
-                    slot_start = stride_search(0, limit);
+                slot_start = stride_search(head_norm, size - w);
+                // Phase 2: Wrap to 0 and search slots starting before head_norm.
+                // Slots starting before head_norm are permitted to cross head_norm as long as cur + w <= size.
+                if (slot_start < 0 && head_norm > 0 && size >= w) {
+                    const uint32_t max_start = std::min(head_norm - 1, size - w);
+                    slot_start = stride_search(0, max_start);
                 }
             }
 
