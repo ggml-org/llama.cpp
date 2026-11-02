@@ -685,7 +685,6 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
         if (!ns.empty()) {
             output_item["namespace"] = ns;
         }
-        (void) item_output_index;
         server_sent_events.push_back(json {
             {"event", "response.output_item.done"},
             {"data", json {

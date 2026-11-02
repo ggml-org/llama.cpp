@@ -40,7 +40,8 @@ json server_chat_convert_responses_tools(const json & tools) {
         }
         if (!ns.empty()) {
             if (!fn_tool.contains("name") || !fn_tool.at("name").is_string()) {
-                throw std::invalid_argument("namespaced tool requires 'name'");
+                SRV_WRN("namespaced tool in namespace '%s' missing 'name' skipped\n", ns.c_str());
+                return;
             }
             fn_tool["name"] = server_chat_responses_tool_name(ns, fn_tool.at("name").get<std::string>());
         }
@@ -56,11 +57,11 @@ json server_chat_convert_responses_tools(const json & tools) {
             add_tool(std::move(resp_tool), "");
         } else if (type == "namespace") {
             const std::string ns = json_value(resp_tool, "name", std::string());
-            if (ns.empty()) {
-                throw std::invalid_argument("'namespace' tool requires 'name'");
-            }
-            if (!resp_tool.contains("tools") || !resp_tool.at("tools").is_array()) {
-                throw std::invalid_argument("'namespace' tool requires 'tools' array");
+            if (ns.empty() || !resp_tool.contains("tools") || !resp_tool.at("tools").is_array()) {
+                // Namespace without a name or tools array carries no functions;
+                // skip it like other non-function Responses tools.
+                SRV_WRN("unsupported Responses tool type 'namespace' (namespace '%s') without 'name' or 'tools' array skipped\n", ns.c_str());
+                continue;
             }
             for (json inner_tool : resp_tool.at("tools")) {
                 const std::string inner_type = json_value(inner_tool, "type", std::string());
