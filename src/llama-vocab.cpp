@@ -567,6 +567,7 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                 };
                 byte_encode = false;
                 break;
+            case LLAMA_VOCAB_PRE_TYPE_KAIL:
             case LLAMA_VOCAB_PRE_TYPE_MINICPM5:
                 regex_exprs = {
                     // original regex from tokenizer.json (openbmb/MiniCPM5-1B)
@@ -2769,6 +2770,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             } else if (
                 tokenizer_pre == "soprano") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_SOPRANO;
+            } else if (
+                tokenizer_pre == "kail") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_KAIL;
+                ignore_merges = true;
             } else {
                 throw std::runtime_error(format("unknown pre-tokenizer type: '%s'", tokenizer_pre.c_str()));
             }

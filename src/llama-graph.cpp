@@ -1979,7 +1979,8 @@ ggml_tensor * llm_graph_context::build_ffn(
          ggml_tensor * act_scales,
      llm_ffn_op_type   type_op,
    llm_ffn_gate_type   type_gate,
-                 int   il) const {
+                 int   il,
+         ggml_tensor * gate_scale) const {
     const llm_arch arch = model.arch;
 
     // NVFP4 support is currently restricted to
@@ -2052,7 +2053,7 @@ ggml_tensor * llm_graph_context::build_ffn(
 
     switch (type_op) {
         case LLM_FFN_SILU:
-            if (gate && type_gate == LLM_FFN_PAR) {
+            if (gate && type_gate == LLM_FFN_PAR && gate_scale == nullptr) {
                 if (il >= 0) {
                     const float limit = hparams.swiglu_clamp_shexp[il];
                     constexpr float eps = 1e-6f;
@@ -2159,6 +2160,11 @@ ggml_tensor * llm_graph_context::build_ffn(
             GGML_ABORT("not yet supported");
         default:
             GGML_ABORT("fatal error");
+    }
+
+    if (gate_scale) {
+        cur = ggml_mul(ctx0, cur, gate_scale);
+        cb(cur, "ffn_gate_scale", il);
     }
 
     if (gate && type_gate == LLM_FFN_PAR) {
