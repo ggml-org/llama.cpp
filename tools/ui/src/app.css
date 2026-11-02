@@ -291,14 +291,12 @@
 
 	/* The same fade at the top of a phone's screen: solid behind the status bar and the row of
 	   corner controls under it (the menu key, the chat's header), fading out below them, so the
-	   page scrolls away under them instead of into them. It fades out as the page slides aside
-	   for the sidebar, step for step with it: the slid page is a rounded card, and a fade
-	   pinned to the screen's top would stick out past its corners. */
+	   page scrolls away under them instead of into them. It rides on the page as it slides aside
+	   for the sidebar and stays as it is: the rounded frame over the slid page clips it. */
 	.status-bar-fade {
 		/* down to where a page's content starts (--page-top): solid to the middle of the corner
 		   row, then a long, even fade over its lower half and on to the content */
 		height: var(--page-top);
-		opacity: calc(1 - var(--sidebar-reveal-progress, 0));
 		background: linear-gradient(
 			to bottom,
 			var(--background) calc(var(--corner-control-top) + 1.25rem),
@@ -316,7 +314,6 @@
 	   10px Safari ignores; what it covers sits under the fade's solid part anyway */
 	.status-bar-edge {
 		height: 0.75rem;
-		opacity: calc(1 - var(--sidebar-reveal-progress, 0));
 		background-color: var(--background);
 	}
 
@@ -324,16 +321,14 @@
 	   without it, it finds the chat form there and takes the form's colour */
 	.screen-bottom-edge {
 		height: 0.75rem;
-		opacity: calc(1 - var(--sidebar-reveal-progress, 0));
 		background-color: var(--background);
 	}
 
 	/* The same fade at the bottom of a phone's screen: solid behind the home indicator and
 	   fading out above it, so the page ends softly at the screen's edge and under the chat
-	   form instead of running out under it. It fades out with the slide as the top one does */
+	   form instead of running out under it. It stays through the slide as the top one does */
 	.screen-bottom-fade {
 		height: calc(var(--safe-area-bottom) + 3rem);
-		opacity: calc(1 - var(--sidebar-reveal-progress, 0));
 		background: linear-gradient(
 			to top,
 			var(--background) var(--safe-area-bottom),
