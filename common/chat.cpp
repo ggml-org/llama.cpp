@@ -314,6 +314,7 @@ struct common_chat_templates {
     bool add_bos;
     bool add_eos;
     bool has_explicit_template;  // Model had builtin template or template overridden was specified.
+    common_peg_tokens specials;
     std::unique_ptr<common_chat_template> template_default;  // always set (defaults to chatml)
     std::unique_ptr<common_chat_template> template_tool_use;
     std::unique_ptr<common_chat_template> template_tts;  // the prompt of a text to speak
@@ -939,6 +940,7 @@ common_chat_templates_ptr common_chat_templates_init(const struct llama_model * 
     std::string token_eos = eos_token_override;
     bool        add_bos   = false;
     bool        add_eos   = false;
+    common_peg_tokens specials;
     if (model) {
         const auto * vocab     = llama_model_get_vocab(model);
         const auto   get_token = [&](llama_token token, const char * name, const char * jinja_variable_name) {
@@ -958,11 +960,13 @@ common_chat_templates_ptr common_chat_templates_init(const struct llama_model * 
         token_eos = get_token(llama_vocab_eos(vocab), "EOS", "eos_token");
         add_bos   = llama_vocab_get_add_bos(vocab);
         add_eos   = llama_vocab_get_add_eos(vocab);
+        specials  = common_peg_tokens(vocab);
     }
     common_chat_templates_ptr tmpls(new common_chat_templates());
     tmpls->has_explicit_template = has_explicit_template;
     tmpls->add_bos               = add_bos;
     tmpls->add_eos               = add_eos;
+    tmpls->specials              = std::move(specials);
     try {
         tmpls->template_default = std::make_unique<common_chat_template>(default_template_src, token_bos, token_eos);
     } catch (const std::exception & e) {
@@ -1491,6 +1495,7 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
     params.add_generation_prompt = inputs.add_generation_prompt;
     params.add_bos               = tmpls->add_bos;
     params.add_eos               = tmpls->add_eos;
+    params.specials              = tmpls->specials;
 
     params.continue_final_message = inputs.continue_final_message;
     if (params.continue_final_message != COMMON_CHAT_CONTINUATION_NONE) {
@@ -1761,19 +1766,33 @@ void common_chat_input::prepend(const common_chat_input & prefix) {
 }
 
 common_chat_input common_chat_input_tokenize(const llama_vocab * vocab, const std::string & text) {
-    common_chat_input input;
-    auto tokens = common_tokenize(vocab, text, false, true);
-    for (size_t i = 0; i < tokens.size(); i++) {
-        std::string piece = common_token_to_piece(vocab, tokens[i], true);
-        if (i == 0 && std::isspace(piece[0]) && !std::isspace(text[0])) {
-            // Some tokenizers will add a space before the first special token, need to exclude
-            continue;
+    common_chat_input input(text);
+
+    auto text_has = [&](size_t pos, const std::string & str) {
+        return text.compare(pos, str.size(), str) == 0;
+    };
+
+    size_t pos = 0;
+    for (const auto token : common_tokenize(vocab, text, false, true)) {
+        const std::string piece = common_token_to_piece(vocab, token, true);
+        // some tokenizers add a space before the piece that the text does not have
+        const std::string trimmed = string_starts_with(piece, " ") ? piece.substr(1) : piece;
+
+        // some tokenizers remove the whitespace next to a special token, skip it
+        size_t at = pos;
+        while (at < text.size() && std::isspace((unsigned char) text[at]) && !text_has(at, piece) && !text_has(at, trimmed)) {
+            at++;
         }
-        input.append(piece, tokens[i]);
-    }
-    if (input.text != text) {
-        // the pieces do not give back the same text, keep the text without tokens
-        return common_chat_input(text);
+
+        const std::string & found = text_has(at, piece) ? piece : trimmed;
+        if (!text_has(at, found)) {
+            // the token is not in the text, keep the text without tokens
+            return common_chat_input(text);
+        }
+        if (!found.empty()) {
+            input.tokens[at] = token;
+        }
+        pos = at + found.size();
     }
     return input;
 }
