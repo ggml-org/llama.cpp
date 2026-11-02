@@ -1353,6 +1353,40 @@ uint32_t llama_kv_cache::get_n_kv_slices(const llama_ubatch & ubatch) {
     return 1;
 }
 
+// per slice: the sequences whose cells form the list of the slice and the min position of the cells that are not masked by the SWA
+static std::vector<llama_kv_rows_slice> get_kv_rows_slices(const llama_ubatch & ubatch, uint32_t n_slices, uint32_t n_swa, llama_swa_type swa_type) {
+    std::vector<llama_kv_rows_slice> res(n_slices);
+
+    if (n_slices == 1) {
+        res[0].seq_ids.assign(ubatch.seq_id_unq, ubatch.seq_id_unq + ubatch.n_seqs_unq);
+    } else {
+        const uint32_t n_tps = ubatch.n_tokens/n_slices;
+
+        for (uint32_t s = 0; s < n_slices; ++s) {
+            res[s].seq_ids = { ubatch.seq_id[s*n_tps][0] };
+        }
+    }
+
+    // the cells below these positions are masked by the SWA for all tokens of the slice
+    // only for SWA types that mask more cells as the token position grows
+    if (n_swa == 0 || (swa_type != LLAMA_SWA_TYPE_STANDARD && swa_type != LLAMA_SWA_TYPE_CHUNKED)) {
+        return res;
+    }
+
+    const uint32_t n_tps = ubatch.n_tokens/n_slices;
+
+    for (uint32_t s = 0; s < n_slices; ++s) {
+        llama_pos p = ubatch.pos[s*n_tps];
+        for (uint32_t i = 1; i < n_tps; ++i) {
+            p = std::min(p, ubatch.pos[s*n_tps + i]);
+        }
+
+        res[s].p_min = swa_type == LLAMA_SWA_TYPE_STANDARD ? p - (llama_pos) n_swa + 1 : (p/(llama_pos) n_swa)*(llama_pos) n_swa;
+    }
+
+    return res;
+}
+
 uint32_t llama_kv_cache::get_n_kv_rows(const llama_ubatch & ubatch) const {
     if (n_stream != 1) {
         return 0;
@@ -1366,14 +1400,13 @@ uint32_t llama_kv_cache::get_n_kv_rows(const llama_ubatch & ubatch) const {
 
     uint32_t n_max = 0;
 
-    const auto seq_ids = get_kv_rows_seq_ids(ubatch, n_slices);
-    const auto p_min   = get_kv_rows_p_min(ubatch, n_slices);
+    const auto slices = get_kv_rows_slices(ubatch, n_slices, n_swa, swa_type);
 
     for (uint32_t s = 0; s < n_slices; ++s) {
         // a cell shared by several sequences of the slice is counted once per sequence, an upper bound is enough
         uint32_t n = 0;
-        for (const llama_seq_id seq_id : seq_ids[s]) {
-            n += p_min.empty() ? cells.seq_n_cells(seq_id) : cells.seq_n_cells(seq_id, p_min[s]);
+        for (const llama_seq_id seq_id : slices[s].seq_ids) {
+            n += slices[s].p_min < 0 ? cells.seq_n_cells(seq_id) : cells.seq_n_cells(seq_id, slices[s].p_min);
         }
 
         n_max = std::max(n_max, std::min(n, cells.used_max_p1()));
@@ -1381,47 +1414,6 @@ uint32_t llama_kv_cache::get_n_kv_rows(const llama_ubatch & ubatch) const {
 
     // pad like n_kv so that the graph can be reused
     return std::min(GGML_PAD(n_max, n_pad_cur), get_size());
-}
-
-std::vector<std::vector<llama_seq_id>> llama_kv_cache::get_kv_rows_seq_ids(const llama_ubatch & ubatch, uint32_t n_slices) {
-    std::vector<std::vector<llama_seq_id>> res(n_slices);
-
-    if (n_slices == 1) {
-        res[0].assign(ubatch.seq_id_unq, ubatch.seq_id_unq + ubatch.n_seqs_unq);
-    } else {
-        const uint32_t n_tps = ubatch.n_tokens/n_slices;
-
-        for (uint32_t s = 0; s < n_slices; ++s) {
-            res[s] = { ubatch.seq_id[s*n_tps][0] };
-        }
-    }
-
-    return res;
-}
-
-std::vector<llama_pos> llama_kv_cache::get_kv_rows_p_min(const llama_ubatch & ubatch, uint32_t n_slices) const {
-    std::vector<llama_pos> res;
-
-    // the cells below these positions are masked by the SWA for all tokens of the slice
-    // only for SWA types that mask more cells as the token position grows
-    if (n_swa == 0 || (swa_type != LLAMA_SWA_TYPE_STANDARD && swa_type != LLAMA_SWA_TYPE_CHUNKED)) {
-        return res;
-    }
-
-    const uint32_t n_tps = ubatch.n_tokens/n_slices;
-
-    res.resize(n_slices);
-
-    for (uint32_t s = 0; s < n_slices; ++s) {
-        llama_pos p = ubatch.pos[s*n_tps];
-        for (uint32_t i = 1; i < n_tps; ++i) {
-            p = std::min(p, ubatch.pos[s*n_tps + i]);
-        }
-
-        res[s] = swa_type == LLAMA_SWA_TYPE_STANDARD ? p - (llama_pos) n_swa + 1 : (p/(llama_pos) n_swa)*(llama_pos) n_swa;
-    }
-
-    return res;
 }
 
 ggml_tensor * llama_kv_cache::get_k(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const {
@@ -1902,7 +1894,7 @@ void llama_kv_cache::set_input_attn_mask(const llm_attn_mask & attn_mask, const 
         const auto & cells = v_cells[0];
         int32_t * data = (int32_t *) attn_mask.rows->data;
 
-        cells.get_seq_cells(get_kv_rows_seq_ids(*ubatch, n_slices), get_kv_rows_p_min(*ubatch, n_slices), data, n_rows);
+        cells.get_seq_cells(get_kv_rows_slices(*ubatch, n_slices, n_swa, swa_type), data, n_rows);
     }
 
     // the mask is left unallocated when the graph only stores K/V without attending

@@ -201,15 +201,6 @@ public:
     // padded length of the longest cell list of the slices; 0 if kv_rows are not used (multiple streams)
     uint32_t get_n_kv_rows(const llama_ubatch & ubatch) const;
 
-private:
-    // per slice: the sequences whose cells form the list of the slice
-    static std::vector<std::vector<llama_seq_id>> get_kv_rows_seq_ids(const llama_ubatch & ubatch, uint32_t n_slices);
-
-    // per slice: the min position of the cells that are not masked by the SWA (empty if all cells are kept)
-    std::vector<llama_pos> get_kv_rows_p_min(const llama_ubatch & ubatch, uint32_t n_slices) const;
-
-public:
-
     // get views of the current state of the cache
     ggml_tensor * get_k(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
     ggml_tensor * get_v(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;

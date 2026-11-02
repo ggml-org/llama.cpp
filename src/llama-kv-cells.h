@@ -55,6 +55,14 @@ struct llama_kv_cell_ext {
     }
 };
 
+// the data of one slice of a ubatch, used to build the cell rows of the kv_rows attention (see ggml_flash_attn_ext_rows)
+struct llama_kv_rows_slice {
+    std::vector<llama_seq_id> seq_ids; // the sequences whose cells form the list of the slice
+
+    // min position of the cells that are not masked by the SWA (-1 if all cells are kept)
+    llama_pos p_min = -1;
+};
+
 // meta information about KV cells that can be part of multiple sequences at the same time
 // TODO: add unit tests
 class llama_kv_cells {
@@ -415,27 +423,26 @@ public:
         return std::distance(sp.lower_bound({ p_min, 0 }), sp.end());
     }
 
-    // get the lists of the cells that contain any of the sequences seq_ids[s] of slice s, in cell order
+    // get the lists of the cells that contain any of the sequences of each slice, in cell order
     // one list of max `n_per_seq` for each slice, padded with -1
-    // if p_min is not empty, only the cells at a position >= p_min[s] go to the list of slice s
+    // the cells of slice s at a position below slices[s].p_min are skipped
     LLAMA_ATTRIBUTE_NOINLINE
-    void get_seq_cells(const std::vector<std::vector<llama_seq_id>> & seq_ids, const std::vector<llama_pos> & p_min, int32_t * data, int64_t n_per_seq) const {
-        assert(seq_ids.size() >= 1);
-        assert(p_min.empty() || p_min.size() == seq_ids.size());
+    void get_seq_cells(const std::vector<llama_kv_rows_slice> & slices, int32_t * data, int64_t n_per_seq) const {
+        assert(slices.size() >= 1);
 
-        const int64_t n_slices = (int64_t) seq_ids.size();
+        const int64_t n_slices = (int64_t) slices.size();
 
         const uint32_t n_words = (used_max_p1() + 63)/64;
 
         for (int64_t s = 0; s < n_slices; ++s) {
-            const llama_pos pm = p_min.empty() ? 0 : p_min[s];
+            const llama_pos pm = slices[s].p_min;
 
             int32_t * dst = data + s*n_per_seq;
             int32_t * end = dst + n_per_seq;
 
             for (uint32_t w = 0; w < n_words; ++w) {
                 uint64_t word = 0;
-                for (const llama_seq_id seq_id : seq_ids[s]) {
+                for (const llama_seq_id seq_id : slices[s].seq_ids) {
                     const auto & bits = seq_bits[seq_id];
                     if (w < bits.size()) {
                         word |= bits[w];
