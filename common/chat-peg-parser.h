@@ -1,6 +1,7 @@
 #pragma once
 
 #include "chat.h"
+#include "json-schema-to-grammar.h"
 #include "peg-parser.h"
 
 #include <map>
@@ -54,8 +55,6 @@ class common_chat_peg_minimax_m3_mapper : public common_chat_peg_mapper {
 
 struct content_structure;
 struct tool_call_structure;
-
-constexpr size_t COMMON_CHAT_MAX_PERMUTE = 6;
 
 class common_chat_peg_builder : public common_peg_parser_builder {
   public:

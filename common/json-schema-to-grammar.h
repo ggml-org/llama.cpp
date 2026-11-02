@@ -3,8 +3,11 @@
 #include "json-schema.h"
 #include "json.h"
 
+#include <cstddef>
 #include <functional>
 #include <string>
+
+constexpr size_t COMMON_CHAT_MAX_PERMUTE = 6;
 
 std::string json_schema_to_grammar(const common_json & schema, bool force_gbnf = false);
 std::string json_schema_to_grammar(const common_chat_schema_document & schema);
