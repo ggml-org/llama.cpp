@@ -372,7 +372,7 @@ struct llama_file::impl {
     void write_raw(const void * ptr, size_t len) const {
         size_t bytes_written = 0;
         while (bytes_written < len) {
-            size_t chunk_size = std::min<size_t>(len - bytes_written, LLAMA_FILE_IO_CHUNK_SIZE);
+            size_t chunk_size = std::min<size_t>(len - bytes_written, LLAMA_DIRECT_IO_BUFFER_SIZE);
             DWORD chunk_written = 0;
             BOOL result = WriteFile(fp_win32, reinterpret_cast<char const*>(ptr) + bytes_written, chunk_size, &chunk_written, NULL);
             if (!result) {

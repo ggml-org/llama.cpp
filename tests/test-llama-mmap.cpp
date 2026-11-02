@@ -19,7 +19,7 @@
 #include <malloc.h>
 #endif
 
-static constexpr size_t test_file_size = LLAMA_FILE_IO_CHUNK_SIZE + 3*1024*1024 + 1;
+static constexpr size_t test_file_size = LLAMA_DIRECT_IO_BUFFER_SIZE + 3*1024*1024 + 1;
 static constexpr size_t test_io_size   = 1024*1024;
 
 static uint8_t test_byte(size_t offset) {
@@ -123,7 +123,7 @@ static void check_file(testing & t, const std::filesystem::path & path, bool use
         { 0, 1 },
         { 1, 31 },
         { alignment - 1, alignment + 3 },
-        { LLAMA_FILE_IO_CHUNK_SIZE - 11, 27 },
+        { LLAMA_DIRECT_IO_BUFFER_SIZE - 11, 27 },
         { test_file_size - 31, 31 },
         { 1, LLAMA_DIRECT_IO_BUFFER_SIZE + 31 },
         { 1, test_file_size - 1 },
@@ -148,7 +148,7 @@ static void check_file(testing & t, const std::filesystem::path & path, bool use
         t.assert_equal(offset + size, file.tell());
     }
 
-    const size_t unsafe_size = ((LLAMA_FILE_IO_CHUNK_SIZE + 3 * alignment - 1) / alignment) * alignment;
+    const size_t unsafe_size = ((LLAMA_DIRECT_IO_BUFFER_SIZE + 3 * alignment - 1) / alignment) * alignment;
     aligned_buffer buffer_aligned(alignment, unsafe_size);
     t.assert_true("allocate aligned buffer", buffer_aligned.data != nullptr);
     if (buffer_aligned.data != nullptr) {
@@ -213,7 +213,7 @@ static void check_mmap(testing & t, const std::filesystem::path & path) {
     t.assert_true("mapping has an address", data != nullptr);
     if (data != nullptr) {
         t.assert_true("first byte", matches(data, 0, 1));
-        t.assert_true("chunk boundary", matches(data + LLAMA_FILE_IO_CHUNK_SIZE - 11, LLAMA_FILE_IO_CHUNK_SIZE - 11, 27));
+        t.assert_true("chunk boundary", matches(data + LLAMA_DIRECT_IO_BUFFER_SIZE - 11, LLAMA_DIRECT_IO_BUFFER_SIZE - 11, 27));
         t.assert_true("last bytes", matches(data + test_file_size - 31, test_file_size - 31, 31));
     }
 }
