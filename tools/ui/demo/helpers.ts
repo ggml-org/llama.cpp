@@ -7,6 +7,8 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 
 const VIDEOS_DIR = resolve(import.meta.dirname, 'videos');
+/** How long a demo waits for the app to be ready before it starts recording. */
+const APP_READY_TIMEOUT_MS = 90000;
 /** How far below the viewport's top a pinch has to start for Chromium to zoom at all. */
 const ZOOM_TOP_INSET_PX = 64;
 
@@ -418,7 +420,11 @@ export const test = base.extend<DemoOptions & { demo: Demo }>({
 		// a hash route after the import doesn't reload, which the conversations list needs
 		if (traces.length > 0) await page.reload();
 
-		await page.getByRole('textbox', { name: 'Type a message...' }).waitFor();
+		// a fresh checkout's dev server optimizes its dependencies on the first load and reloads the
+		// page, which can take well past an action's timeout; the recording has not started yet
+		await page
+			.getByRole('textbox', { name: 'Type a message...' })
+			.waitFor({ timeout: APP_READY_TIMEOUT_MS });
 
 		const viewport = page.viewportSize();
 
