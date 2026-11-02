@@ -15,7 +15,7 @@ void main() {
 
     // workgroup x walks rows (src1's contiguous dim1) so consecutive workgroups stream src1, y walks dst columns
     const uint row0 = gl_WorkGroupID.x * TILE_DIM;
-    const uint col0 = gl_WorkGroupID.y * TILE_DIM;
+    const uint col0 = (gl_WorkGroupID.z * gl_NumWorkGroups.y + gl_WorkGroupID.y) * TILE_DIM;
 
     const uint i1 = row0 + tid_x;
     [[unroll]] for (uint j = 0; j < TILE_DIM; j += gl_WorkGroupSize.y) {
