@@ -193,14 +193,18 @@ public:
     uint32_t get_n_kv(const slot_info & sinfo) const;
 
     // attention over the cells of each sequence of the ubatch instead of the whole cache (see ggml_flash_attn_ext_rows)
-    // the ubatch splits into n_slices groups of tokens with one sequence each, 0 if it cannot (kv_rows not used)
+    // the ubatch splits into n_slices groups of tokens with one sequence each
+    // if it cannot (f.ex. interleaved or coupled sequences), it is a single slice over the cells of all its sequences
     // TODO: allow slices with coupled sequences
     static uint32_t get_n_kv_slices(const llama_ubatch & ubatch);
 
-    // padded length of the longest cell list of the slices; 0 if the ubatch cannot split
+    // padded length of the longest cell list of the slices; 0 if kv_rows are not used (multiple streams)
     uint32_t get_n_kv_rows(const llama_ubatch & ubatch) const;
 
 private:
+    // per slice: the sequences whose cells form the list of the slice
+    static std::vector<std::vector<llama_seq_id>> get_kv_rows_seq_ids(const llama_ubatch & ubatch, uint32_t n_slices);
+
     // per slice: the min position of the cells that are not masked by the SWA (empty if all cells are kept)
     std::vector<llama_pos> get_kv_rows_p_min(const llama_ubatch & ubatch, uint32_t n_slices) const;
 

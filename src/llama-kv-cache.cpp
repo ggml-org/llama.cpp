@@ -1334,19 +1334,23 @@ uint32_t llama_kv_cache::get_n_kv_slices(const llama_ubatch & ubatch) {
         return ubatch.n_seqs;
     }
 
-    // one token per sequence
-    if (ubatch.n_tokens == ubatch.n_seqs_unq) {
-        for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
-            if (ubatch.n_seq_id[i] != 1) {
-                return 0;
-            }
+    // runs of equal length with a single sequence each, f.ex. one token per sequence or the drafts of several slots
+    // there are n_seqs_unq runs, so each run has a different sequence
+    if (ubatch.n_tokens % ubatch.n_seqs_unq == 0) {
+        const uint32_t n_tps = ubatch.n_tokens/ubatch.n_seqs_unq;
+
+        bool is_runs = true;
+        for (uint32_t i = 0; i < ubatch.n_tokens && is_runs; ++i) {
+            is_runs = ubatch.n_seq_id[i] == 1 && ubatch.seq_id[i][0] == ubatch.seq_id[i - i%n_tps][0];
         }
 
-        return ubatch.n_tokens;
+        if (is_runs) {
+            return ubatch.n_seqs_unq;
+        }
     }
 
-    // cannot split into per-sequence slices - kv_rows are not supported for this batch
-    return 0;
+    // cannot split into per-sequence slices - a single slice over the cells of all the sequences of the ubatch
+    return 1;
 }
 
 uint32_t llama_kv_cache::get_n_kv_rows(const llama_ubatch & ubatch) const {
@@ -1355,10 +1359,6 @@ uint32_t llama_kv_cache::get_n_kv_rows(const llama_ubatch & ubatch) const {
     }
 
     const uint32_t n_slices = get_n_kv_slices(ubatch);
-    if (n_slices == 0) {
-        // cannot split into per-sequence slices - kv_rows are not used
-        return 0;
-    }
 
     const auto & cells = v_cells[0];
 
@@ -1366,21 +1366,37 @@ uint32_t llama_kv_cache::get_n_kv_rows(const llama_ubatch & ubatch) const {
 
     uint32_t n_max = 0;
 
-    const auto p_min = get_kv_rows_p_min(ubatch, n_slices);
-    if (p_min.empty()) {
-        for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) {
-            n_max = std::max(n_max, cells.seq_n_cells(ubatch.seq_id_unq[s]));
-        }
-    } else {
-        const uint32_t n_tps = ubatch.n_tokens/n_slices;
+    const auto seq_ids = get_kv_rows_seq_ids(ubatch, n_slices);
+    const auto p_min   = get_kv_rows_p_min(ubatch, n_slices);
 
-        for (uint32_t s = 0; s < n_slices; ++s) {
-            n_max = std::max(n_max, cells.seq_n_cells(ubatch.seq_id[s*n_tps][0], p_min[s]));
+    for (uint32_t s = 0; s < n_slices; ++s) {
+        // a cell shared by several sequences of the slice is counted once per sequence, an upper bound is enough
+        uint32_t n = 0;
+        for (const llama_seq_id seq_id : seq_ids[s]) {
+            n += p_min.empty() ? cells.seq_n_cells(seq_id) : cells.seq_n_cells(seq_id, p_min[s]);
         }
+
+        n_max = std::max(n_max, std::min(n, cells.used_max_p1()));
     }
 
     // pad like n_kv so that the graph can be reused
     return std::min(GGML_PAD(n_max, n_pad_cur), get_size());
+}
+
+std::vector<std::vector<llama_seq_id>> llama_kv_cache::get_kv_rows_seq_ids(const llama_ubatch & ubatch, uint32_t n_slices) {
+    std::vector<std::vector<llama_seq_id>> res(n_slices);
+
+    if (n_slices == 1) {
+        res[0].assign(ubatch.seq_id_unq, ubatch.seq_id_unq + ubatch.n_seqs_unq);
+    } else {
+        const uint32_t n_tps = ubatch.n_tokens/n_slices;
+
+        for (uint32_t s = 0; s < n_slices; ++s) {
+            res[s] = { ubatch.seq_id[s*n_tps][0] };
+        }
+    }
+
+    return res;
 }
 
 std::vector<llama_pos> llama_kv_cache::get_kv_rows_p_min(const llama_ubatch & ubatch, uint32_t n_slices) const {
@@ -1882,18 +1898,11 @@ void llama_kv_cache::set_input_attn_mask(const llm_attn_mask & attn_mask, const 
 
         const int64_t n_rows   = attn_mask.rows->ne[0];
         const int64_t n_slices = attn_mask.rows->ne[1];
-        const int64_t n_tps    = ubatch->n_tokens/n_slices;
 
         const auto & cells = v_cells[0];
         int32_t * data = (int32_t *) attn_mask.rows->data;
 
-        // seq id of each slice
-        std::vector<llama_seq_id> seq_ids(n_slices);
-        for (int64_t s = 0; s < n_slices; ++s) {
-            seq_ids[s] = ubatch->seq_id[s*n_tps][0];
-        }
-
-        cells.get_seq_cells(seq_ids, get_kv_rows_p_min(*ubatch, n_slices), data, n_rows);
+        cells.get_seq_cells(get_kv_rows_seq_ids(*ubatch, n_slices), get_kv_rows_p_min(*ubatch, n_slices), data, n_rows);
     }
 
     // the mask is left unallocated when the graph only stores K/V without attending
