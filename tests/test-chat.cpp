@@ -6852,7 +6852,34 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .tools({ special_function_tool })
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .expect(message_assist_call)
-            .expect_rules({ "tool-0" })
+            .expect_rules({ "tool-0", "tool-call-0" })
+            .run();
+
+        // Parallel calls, one message per call
+        tst.test(" to=special_function<|message|>" + call_markup + "<|eom|>"
+                 "<|start|>assistant to=special_function_with_opt<|message|>"
+                 "<atem:function_calls>\n"
+                 "<atem:invoke name=\"special_function_with_opt\">\n"
+                 "<atem:parameter name=\"arg1\">1</atem:parameter>\n"
+                 "<atem:parameter name=\"arg2\">2</atem:parameter>\n"
+                 "</atem:invoke>\n"
+                 "</atem:function_calls>")
+            .tools({ special_function_tool, special_function_tool_with_optional_param })
+            .parallel_tool_calls(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", {} },
+                { "special_function_with_opt", R"({"arg1": 1, "arg2": 2})", {} },
+            })
+            .run();
+
+        // Required tool choice after a reasoning message
+        tst.test(" to=self<|message|>I'm\nthinking<|eom|>"
+                 "<|start|>assistant to=special_function<|message|>" + call_markup)
+            .tools({ special_function_tool })
+            .tool_choice(COMMON_CHAT_TOOL_CHOICE_REQUIRED)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist_call_thoughts)
             .run();
 
         // "Inform then act": the model answers the user and calls a tool in ONE generation,
