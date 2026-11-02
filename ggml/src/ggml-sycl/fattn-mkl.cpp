@@ -160,7 +160,7 @@ static void mkl_fa_online_softmax_chunk(
                 int64_t m_stride = 0;
                 if (mask_data) {
                     int m_head = (mask_n_heads > 1)
-                        ? (kvh_head + gqa_group) : 0;
+                        ? (kvh_head + gqa_group) % mask_n_heads : 0;
                     mask_h   = mask_data + (int64_t)m_head * mask_head_stride;
                     m_stride = mask_row_stride;
                 }
@@ -537,7 +537,7 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
 
         const sycl::half * mask_batch = nullptr;
         if (mask) {
-            int m_batch = (mask->ne[3] > 1) ? ib : 0;
+            int m_batch = ib % (int)mask->ne[3];
             mask_batch = (const sycl::half *)mask->data
                 + m_batch * (mask->nb[3] / 2);  // 2 = actual fp16 device size
         }
