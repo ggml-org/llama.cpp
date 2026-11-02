@@ -267,7 +267,11 @@ class Server:
             time.sleep(1)
         log(" ".join(self.cmd))
         self.logf = open(self.log_path, "ab")
-        self.proc = subprocess.Popen(self.cmd, stdout=self.logf, stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            self.proc = subprocess.Popen(self.cmd, stdout=self.logf, stderr=subprocess.STDOUT, start_new_session=True)
+        except OSError as exc:
+            self.logf.close()
+            raise BenchError(f"cannot start llama-server: {exc}") from exc
         deadline = time.monotonic() + float(self.ctx.cfg["server"]["health_timeout_s"])
         while time.monotonic() < deadline:
             if self.proc.poll() is not None:
