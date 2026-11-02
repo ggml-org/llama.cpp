@@ -412,9 +412,10 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 
 	/** Loading on the server, or a load this client started that has not finished yet. */
 	isModelLoading(modelId: string): boolean {
+		// an unload raises the same in-progress flag, but the model stays loaded until it ends
 		return (
 			this.getModelStatus(modelId) === ServerModelStatus.LOADING ||
-			this._status.isOperationInProgress(modelId)
+			(this._status.isOperationInProgress(modelId) && !this.isModelLoaded(modelId))
 		);
 	}
 
