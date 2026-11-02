@@ -237,13 +237,31 @@ common_peg_parser common_chat_peg_builder::tag_with_safe_content(const std::stri
 }
 
 common_peg_parser common_chat_peg_builder::permute(const std::string &                    rule_prefix,
-                                                   const std::vector<common_peg_parser> & parsers) {
+                                                   const std::vector<common_peg_parser> & parsers,
+                                                   uint32_t                               required_mask,
+                                                   std::optional<common_peg_parser>       separator) {
     if (parsers.empty()) {
         return eps();
     }
 
-    if (parsers.size() == 1 || parsers.size() > COMMON_CHAT_MAX_PERMUTE) {
-        return sequence(parsers);
+    if (parsers.size() > COMMON_CHAT_MAX_PERMUTE) {
+        std::vector<common_peg_parser> seq;
+        seq.reserve(parsers.size());
+        for (size_t i = 0; i < parsers.size(); i++) {
+            if (!separator.has_value() || i == 0) {
+                seq.push_back(parsers[i]);
+            } else {
+                seq.push_back(*separator + parsers[i]);
+            }
+        }
+        return sequence(seq);
+    }
+
+    const uint32_t full_mask = (1u << parsers.size()) - 1;
+    required_mask &= full_mask;
+
+    if (parsers.size() == 1) {
+        return (required_mask & 1u) ? parsers[0] : optional(parsers[0]);
     }
 
     std::map<uint32_t, common_peg_parser>      rules;
@@ -263,14 +281,19 @@ common_peg_parser common_chat_peg_builder::permute(const std::string &          
         for (size_t i = 0; i < parsers.size(); i++) {
             const uint32_t bit = 1u << i;
             if (remaining & bit) {
-                alternatives |= parsers[i] + remaining_of(remaining & ~bit);
+                auto step = (separator.has_value() && remaining != full_mask) ? (*separator + parsers[i]) : parsers[i];
+                alternatives |= step + remaining_of(remaining & ~bit);
             }
         }
 
-        return rules.emplace(remaining, rule(rule_prefix + "-" + std::to_string(remaining), alternatives)).first->second;
+        auto res = rule(rule_prefix + "-" + std::to_string(remaining), alternatives);
+        if ((remaining & required_mask) == 0) {
+            res = optional(res);
+        }
+        return rules.emplace(remaining, res).first->second;
     };
 
-    return remaining_of((1u << parsers.size()) - 1);
+    return remaining_of(full_mask);
 }
 
 std::string & common_chat_peg_mapper::args_target() {

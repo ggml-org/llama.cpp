@@ -1070,6 +1070,32 @@ static void test_permute(testing & t) {
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )""", gbnf_of(parser));
     });
+
+    t.test("mixed required and optional with separator", [&](testing & t) {
+        // a (bit 0) and c (bit 2) required (mask 0b101 = 5), b (bit 1) optional
+        auto parser = build_chat_peg_parser([](common_chat_peg_builder & p) {
+            return p.permute("abc", { p.literal("a"), p.literal("b"), p.literal("c") }, 0b101u, p.literal(",")) + p.end();
+        });
+
+        for (const std::string input : { "a,c", "c,a", "a,b,c", "a,c,b", "b,a,c", "b,c,a", "c,a,b", "c,b,a" }) {
+            t.assert_true("accepts " + input, accepts(parser, input));
+        }
+        for (const std::string input : { "", "a", "b", "c", "a,b", "b,c", "a,a,c", "a,b,b,c" }) {
+            t.assert_true("rejects " + input, !accepts(parser, input));
+        }
+
+        assert_gbnf_equal(t, R"""(
+            abc-1 ::= "," "a"
+            abc-2 ::= "," "b"
+            abc-3 ::= "," "a" abc-2? | "," "b" abc-1
+            abc-4 ::= "," "c"
+            abc-5 ::= "," "a" abc-4 | "," "c" abc-1
+            abc-6 ::= "," "b" abc-4 | "," "c" abc-2?
+            abc-7 ::= "a" abc-6 | "b" abc-5 | "c" abc-3
+            root ::= abc-7
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )""", gbnf_of(parser));
+    });
 }
 
 static void test_invalid_utf8(testing & t) {
