@@ -61,9 +61,9 @@ CASES = [
         spec_type="draft-eagle3",
         target="Qwen3-4B-Q4_K_M.gguf",
         draft="eagle3-Qwen3-4B-Q8_0.gguf",
-        n_max=7,
-        min_accept_rate=0.0878,
-        min_accept_len=1.6057,
+        n_max=3,
+        min_accept_rate=0.2747,
+        min_accept_len=1.7095,
     ),
     SpecCase(
         name="dflash2",

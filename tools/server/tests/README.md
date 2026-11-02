@@ -40,17 +40,17 @@ SLOW_TESTS=1 ./tests.sh
 ```
 
 The speculative-decoding method tests are opt-in and marked `heavy`. The compact suite covers MTP,
-DFlash, DSpark, and EAGLE-3 with five pinned files totaling 6,732,962,400 bytes (6.271 GiB):
+DFlash, DSpark, and EAGLE-3 with five pinned files totaling 6.271 GiB:
 
 ```shell
 SPEC_METHODS=compact SPEC_MODEL_DIR=/path/to/model-cache PYTEST_WORKERS=1 ./tests.sh -s -v unit/test_spec_methods.py
 ```
 
-- MTP target: `Qwen3.5-4B-MTP-Q4_K_M.gguf`, 3,118,325,632 bytes.
-- Shared DFlash/DSpark/EAGLE-3 target: `Qwen3-4B-Q4_K_M.gguf`, 2,497,280,896 bytes.
-- DFlash draft: `dflash-Qwen3-4B-Q4_K_M.gguf`, 308,349,536 bytes.
-- DSpark draft: `dspark-Qwen3-4B-Q4_K_M.gguf`, 570,900,704 bytes.
-- EAGLE-3 draft: `eagle3-Qwen3-4B-Q8_0.gguf`, 238,105,632 bytes.
+- MTP target: `Qwen3.5-4B-MTP-Q4_K_M.gguf`, 2.904 GiB.
+- Shared DFlash/DSpark/EAGLE-3 target: `Qwen3-4B-Q4_K_M.gguf`, 2.326 GiB.
+- DFlash draft: `dflash-Qwen3-4B-Q4_K_M.gguf`, 294.065 MiB.
+- DSpark draft: `dspark-Qwen3-4B-Q4_K_M.gguf`, 544.453 MiB.
+- EAGLE-3 draft: `eagle3-Qwen3-4B-Q8_0.gguf`, 227.075 MiB.
 
 All files come from `ggml-org/spec-for-testing-GGUF`, pinned to revision
 `a0736c8e98d3fe580352dacffa3fbd5e9c22a437` in `unit/test_spec_methods.py`.
@@ -69,10 +69,14 @@ DFlash2 and LiLiCorr measurements belong in the internal nightly performance/qua
 
 The acceptance floors use one-sided regression checks: improvements do not fail. Three identical
 DGX Spark calibration runs produced MTP `0.7155 / 3.1230`, DFlash `0.1867 / 2.2754`, DSpark
-`0.2878 / 2.9766`, EAGLE-3 `0.1178 / 1.8057`, DFlash2 `0.5480 / 4.7414`, and LiLiCorr
+`0.2878 / 2.9766`, EAGLE-3 `0.3047 / 1.9095`, DFlash2 `0.5480 / 4.7414`, and LiLiCorr
 `0.6699 / 5.6444` for acceptance rate and length. The enforced floors subtract three percentage
-points and 0.2 accepted tokens per verification step. The final six-method suite passed on DGX Spark
-in 43.12 seconds.
+points and 0.2 accepted tokens per verification step. Each floor passed its final DGX Spark check.
+
+DFlash's token-acceptance rate is lower because the denominator counts every token proposed in each
+seven-token draft block. It accepted 213 of 1,141 proposed tokens over 167 verification steps,
+equivalent to 1.275 accepted draft tokens per step and a mean acceptance length of 2.2754. The floor
+is intended to detect regressions from that deterministic baseline, not to define a quality target.
 
 To run with stdout/stderr display in real time (verbose output, but useful for debugging):
 
