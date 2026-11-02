@@ -1592,8 +1592,11 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         // The GPU plugin can fuse broadcast DIV into the preceding FFN GEMM path
         // and produce infs for per-channel scale vectors. Keep those DIVs on CPU
         // until the fused GPU kernel is reliable. (falied case llama-arch-test mpt)
+        // Only a weight divisor is such a scale; at one token an activation divisor has the same shape
+        // (qwen2moe's shared-expert sigmoid, silu(x) / x).
         if (ggml_openvino_is_gpu() && op->src[1]->ne[0] == op->ne[0] &&
-            op->src[1]->ne[1] == 1 && op->src[1]->ne[2] == 1 && op->src[1]->ne[3] == 1) {
+            op->src[1]->ne[1] == 1 && op->src[1]->ne[2] == 1 && op->src[1]->ne[3] == 1 &&
+            op->src[1]->buffer != nullptr && op->src[1]->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
             return {false, "DIV per-channel scale broadcast is not supported on GPU"};
         }
         break;
