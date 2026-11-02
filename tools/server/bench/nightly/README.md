@@ -34,7 +34,7 @@ python3 -m venv /opt/llama-nightly/uv-venv && /opt/llama-nightly/uv-venv/bin/pip
 /opt/llama-nightly/uv-venv/bin/uv venv --python 3.12 --managed-python /opt/llama-nightly/venv
 VIRTUAL_ENV=/opt/llama-nightly/venv /opt/llama-nightly/uv-venv/bin/uv pip install -r tools/server/bench/nightly/requirements.txt
 /opt/llama-nightly/venv/bin/python tools/server/bench/nightly/nightly.py prefetch --home /opt/llama-nightly
-HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 /opt/llama-nightly/venv/bin/python tools/server/bench/nightly/nightly.py run --home /opt/llama-nightly --suites engine --models M3
+/opt/llama-nightly/venv/bin/python tools/server/bench/nightly/nightly.py run --home /opt/llama-nightly --suites engine --models M3
 ```
 
 `--dry-run` prints every server and client command without starting anything. `--tag bNNNN` (prefetch) pins a release.

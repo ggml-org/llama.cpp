@@ -65,9 +65,8 @@ jobs:
 
       - name: Run suites
         id: run
+        # not HF offline: speed_bench.py needs the dataset config list and AIPerf rejects a partial tokenizer snapshot offline
         env:
-          HF_HUB_OFFLINE: 1
-          HF_DATASETS_OFFLINE: 1
           SUITES: ${{ inputs.suites }}
           MODELS: ${{ inputs.models }}
           NIGHTLY_WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
