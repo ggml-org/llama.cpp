@@ -1,0 +1,6 @@
+aiperf==0.13.0
+datasets
+huggingface_hub
+pyyaml
+requests
+tqdm

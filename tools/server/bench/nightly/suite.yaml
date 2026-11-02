@@ -1,0 +1,93 @@
+# Nightly llama.cpp perf benchmark on DGX Spark.
+# First cut: M3 (dense target) and M5 (decision model) only.
+
+build:
+  repo: ggml-org/llama.cpp
+  assets:
+    - llama-{tag}-bin-ubuntu-cuda-13.4-arm64.tar.gz
+    - cudart-llama-{tag}-bin-ubuntu-cuda-13.4-arm64.tar.gz
+  keep: 3
+
+server:
+  port: 18080
+  health_timeout_s: 600
+  cooldown_s: 60
+  args: [-ngl, "999", -fa, "on", --jinja, --metrics, --alias, bench]
+
+models:
+  M3:
+    repo: unsloth/Qwen3.8-27B-GGUF
+    revision: 4ca720788d1e01f1bff70c033e0d0028fd02e502
+    file: Qwen3.8-27B-UD-Q4_K_M.gguf
+    tokenizer:
+      repo: Qwen/Qwen3.8-27B
+      revision: 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0
+    extras:
+      dflash:
+        repo: incoai/Qwen3.8-27B-DFlash2-GGUF
+        revision: 144eb06583b4fb0b6e54bc814b16a206a240f4d2
+        file: Qwen3.8-27B-DFlash2-Q4_K_M.gguf
+    # flags from the RTX Spark recipes; {name} is replaced by the path of extras.<name>
+    spec:
+      mtp: [--spec-type, draft-mtp, --spec-draft-n-max, "3", --spec-draft-backend-sampling]
+      dflash: [-md, "{dflash}", --spec-type, draft-dflash, --spec-draft-n-max, "7", --spec-draft-backend-sampling]
+    suites: [engine, speedbench, serving, agentic, quality]
+
+  M5:
+    repo: ggml-org/Laya-GGUF
+    revision: 845f314dd047fc2444a5289a4d50c1e1d59e27e1
+    file: Laya-Q8_0.gguf
+    suites: [decision]
+
+suites:
+  engine:
+    args: [-p, "2048", -n, "128", -d, "0,8192,32768", -r, "5", -fa, "1", -ub, "2048"]
+    timeout_s: 2400
+
+  speedbench:
+    bench: qualitative
+    limit: 4
+    osl: 256
+    ctx_per_slot: 16384
+    spec: [none, mtp, dflash]
+    concurrency: [1, 4]
+    extra_inputs: {temperature: 1.0, top_p: 0.95, top_k: 20, seed: 42}
+    timeout_s: 1800
+
+  serving:
+    shapes:
+      - {isl: 2048, depth: 0}
+      - {isl: 8192, depth: 0}
+      - {isl: 2048, depth: 32768}
+    osl: 256
+    concurrency: [1, 4, 8]
+    requests: {1: 16, 4: 16, 8: 32}
+    warmup: 2
+    goodput_ttft_ms: 2000
+    timeout_s: 1800
+
+  # Mooncake trace replay at the original timestamps (AIPerf --fixed-schedule)
+  agentic:
+    traces:
+      - traces/T01_mooncake_trace.jsonl
+      - traces/T02_mooncake_trace.jsonl
+    # some turns ask for 35k output tokens; cap them so one night stays in budget
+    max_output_tokens: 256
+    block_size: 512
+    slots: 2
+    goodput_ttft_ms: 10000
+    timeout_s: 3600
+
+  quality:
+    ctx: 512
+    chunks: 10
+    timeout_s: 900
+
+  decision:
+    # Laya evaluates the whole prompt in one batch: -ub must hold the longest prompt
+    args: [-ngl, "999", -np, "16", -ub, "8192", -b, "8192", -c, "65536", --metrics]
+    state_tokens: [64, 512, 2048]
+    concurrency: [1, 4, 16]
+    warmup: 8
+    requests: 64
+    timeout_s: 900

@@ -1,0 +1,77 @@
+name: Bench nightly (DGX Spark)
+
+on:
+  schedule:
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to test, e.g. b12034 (default: newest with arm64 CUDA assets)'
+        required: false
+        type: string
+      suites:
+        description: 'Comma-separated suites: engine,speedbench,serving,agentic,quality,decision (default: all)'
+        required: false
+        type: string
+      models:
+        description: 'Comma-separated models from suite.yaml, e.g. M3,M5 (default: all)'
+        required: false
+        type: string
+
+# never on pull requests: the runner is a shared, persistent box
+permissions:
+  contents: read
+
+concurrency:
+  group: bench-nightly-spark
+  cancel-in-progress: false
+
+jobs:
+  bench:
+    # the schedule stays off until the repo variable SPARK_BENCH_NIGHTLY is 'true'
+    if: github.event_name == 'workflow_dispatch' || vars.SPARK_BENCH_NIGHTLY == 'true'
+    runs-on: [self-hosted, Linux, ARM64, spark-nightly-bench]
+    timeout-minutes: 330
+
+    env:
+      NIGHTLY_HOME: ${{ vars.SPARK_BENCH_HOME || '/opt/llama-nightly' }}
+      BENCH_DIR: tools/server/bench/nightly
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Python venv
+        id: venv
+        run: |
+          python3 -m venv "$NIGHTLY_HOME/venv"
+          "$NIGHTLY_HOME/venv/bin/pip" install -q -r "$BENCH_DIR/requirements.txt"
+
+      - name: Prefetch build, models and data
+        id: prefetch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          MODELS: ${{ inputs.models }}
+        run: |
+          "$NIGHTLY_HOME/venv/bin/python" "$BENCH_DIR/nightly.py" prefetch ${TAG:+--tag "$TAG"} ${MODELS:+--models "$MODELS"}
+
+      - name: Run suites
+        id: run
+        env:
+          HF_HUB_OFFLINE: 1
+          HF_DATASETS_OFFLINE: 1
+          SUITES: ${{ inputs.suites }}
+          MODELS: ${{ inputs.models }}
+          NIGHTLY_WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          "$NIGHTLY_HOME/venv/bin/python" "$BENCH_DIR/nightly.py" run ${SUITES:+--suites "$SUITES"} ${MODELS:+--models "$MODELS"} --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload results
+        if: ${{ always() && steps.run.outputs.night_dir != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: bench-nightly-${{ steps.run.outputs.night_id }}
+          path: ${{ steps.run.outputs.night_dir }}
+          retention-days: 30
