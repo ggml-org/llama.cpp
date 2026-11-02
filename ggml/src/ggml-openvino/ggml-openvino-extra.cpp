@@ -771,7 +771,10 @@ std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor *
 }
 
 bool ggml_openvino_use_exact_zero_point(const ggml_tensor * tensor) {
-    return tensor->ne[2] > 1 || ggml_openvino_getenv_int("GGML_OPENVINO_EXACT_ZERO_POINT") > 0;
+    // Other 3D weights, such as MLA's per-head attn_k_b / attn_v_b, feed a batched MatMul, where the GPU plugin fails
+    // on u4 weights with an f16 zero point (CL_OUT_OF_RESOURCES), so the opt-in covers 2D weights only.
+    const bool is_moe_expert = tensor->ne[2] > 1 && strstr(tensor->name, "exps") != nullptr;
+    return is_moe_expert || (tensor->ne[2] == 1 && ggml_openvino_getenv_int("GGML_OPENVINO_EXACT_ZERO_POINT") > 0);
 }
 
 // =====================================================
