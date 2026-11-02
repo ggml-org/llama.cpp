@@ -1,4 +1,4 @@
-ARG ONEAPI_VERSION=2026.1.1-devel-ubuntu24.04
+ARG ONEAPI_VERSION=2026.2.0-devel-ubuntu24.04
 ARG BUILD_DATE=N/A
 ARG APP_VERSION=N/A
 ARG APP_REVISION=N/A
@@ -22,20 +22,20 @@ RUN LLAMA_BUILD_NUMBER="$APP_VERSION" npm run build
 FROM docker.io/intel/deep-learning-essentials:$ONEAPI_VERSION AS build
 
 RUN echo "Download oneDNN installation package" && \
-    wget https://registrationcenter-download.intel.com/akdlm/IRC_NAS/94c3dbac-0852-45be-a57d-21c204cada3e/intel-onednn-2026.0.2.46_offline.sh -O intel-onednn_offline.sh && \
+    wget https://registrationcenter-download.intel.com/akdlm/IRC_NAS/46452a4a-7b7f-49f2-be4c-602a900180bb/intel-onednn-2026.1.0.625_offline.sh -O intel-onednn_offline.sh && \
     echo "Install oneDNN components" && \
     bash intel-onednn_offline.sh -s -a --silent --eula accept
 
 ARG GGML_SYCL_F16=ON
-ARG LEVEL_ZERO_VERSION=1.28.2
+ARG LEVEL_ZERO_VERSION=1.34.0
 ARG LEVEL_ZERO_UBUNTU_VERSION=u24.04
 RUN apt-get update && \
     apt-get install -y git libssl-dev wget ca-certificates && \
     cd /tmp && \
-    wget -q "https://github.com/oneapi-src/level-zero/releases/download/v${LEVEL_ZERO_VERSION}/level-zero_${LEVEL_ZERO_VERSION}%2B${LEVEL_ZERO_UBUNTU_VERSION}_amd64.deb" -O level-zero.deb && \
-    wget -q "https://github.com/oneapi-src/level-zero/releases/download/v${LEVEL_ZERO_VERSION}/level-zero-devel_${LEVEL_ZERO_VERSION}%2B${LEVEL_ZERO_UBUNTU_VERSION}_amd64.deb" -O level-zero-devel.deb && \
-    apt-get -o Dpkg::Options::="--force-overwrite" install -y ./level-zero.deb ./level-zero-devel.deb && \
-    rm -f /tmp/level-zero.deb /tmp/level-zero-devel.deb
+    wget -q "https://github.com/oneapi-src/level-zero/releases/download/v${LEVEL_ZERO_VERSION}/libze1_${LEVEL_ZERO_VERSION}%2B${LEVEL_ZERO_UBUNTU_VERSION}_amd64.deb" -O libze1.deb && \
+    wget -q "https://github.com/oneapi-src/level-zero/releases/download/v${LEVEL_ZERO_VERSION}/libze-dev_${LEVEL_ZERO_VERSION}%2B${LEVEL_ZERO_UBUNTU_VERSION}_amd64.deb" -O libze-dev.deb && \
+    apt-get -o Dpkg::Options::="--force-overwrite" install -y ./libze1.deb ./libze-dev.deb && \
+    rm -f /tmp/libze1.deb /tmp/libze-dev.deb
 
 WORKDIR /app
 
