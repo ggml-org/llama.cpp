@@ -500,10 +500,11 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
         const int64_t n  = conv_input->ne[0] - conv_states->ne[0]; // n_seq_tokens
         const int64_t Kw = std::min(n + 1, K);                     // windows that exist in this ubatch
 
-        // {Kw-1, ..., 0} as I32, built once per graph: a descending argsort of an ascending range
-        if (rs_slot_rev == nullptr) {
-            rs_slot_rev = ggml_argsort(ctx0, ggml_arange(ctx0, 0.0f, (float) Kw, 1.0f), GGML_SORT_ORDER_DESC);
-            cb(rs_slot_rev, "rs_slot_rev", -1);
+        // {Kw-1, ..., 0}, filled on the host and shared by every layer of the graph
+        if (inp->s_slot_rev == nullptr) {
+            inp->s_slot_rev = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, Kw);
+            ggml_set_input(inp->s_slot_rev);
+            ggml_set_name(inp->s_slot_rev, "rs_s_slot_rev");
         }
 
         // window w starts at column n - (Kw - 1) + w (ascending time) and is rollback slot Kw - 1 - w
@@ -523,7 +524,7 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
                 conv_states_all->nb[1],
                 kv_head * row_size);
 
-        ggml_build_forward_expand(gf, ggml_set_rows(ctx0, slots, windows, rs_slot_rev));
+        ggml_build_forward_expand(gf, ggml_set_rows(ctx0, slots, windows, inp->s_slot_rev));
     }
 
     return conv_input;
