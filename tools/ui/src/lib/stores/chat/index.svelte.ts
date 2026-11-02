@@ -337,7 +337,7 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 
 		const pending = this.consumePendingMessage(convId);
 
-		if (pending) await this.sendMessage(pending.content, pending.extras);
+		if (pending) await this.sendQueuedMessage(convId, pending);
 	}
 
 	consumePendingMessage(
@@ -414,6 +414,20 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		newExtras?: DatabaseMessageExtra[]
 	): Promise<void> {
 		return this.flows.editUserMessagePreserveResponses(messageId, newContent, newExtras);
+	}
+
+	/**
+	 * Send the message left queued for `convId` once that conversation is
+	 * active and idle (e.g. after navigating back to it).
+	 */
+	async flushPendingMessage(convId: string): Promise<void> {
+		if (conversationsStore.activeConversation?.id !== convId) return;
+
+		if (this.isChatLoadingInternal(convId) || agenticStore.isRunning(convId)) return;
+
+		const pending = this.consumePendingMessage(convId);
+
+		if (pending) await this.sendMessage(pending.content, pending.extras);
 	}
 
 	getAddFilesHandler(): ((files: File[]) => void) | null {
@@ -1141,7 +1155,7 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 					const pending = this.consumePendingMessage(convId);
 
 					if (pending) {
-						this.sendMessage(pending.content, pending.extras);
+						void this.sendQueuedMessage(convId, pending);
 					}
 
 					return;
@@ -1268,7 +1282,7 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 				const pending = agenticStore.consumePendingSteeringMessage(convId);
 
 				if (pending) {
-					await this.sendMessage(pending.content, pending.extras);
+					await this.sendQueuedMessage(convId, pending);
 				}
 
 				return;
@@ -1333,7 +1347,7 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 					const pending = this.consumePendingMessage(convId);
 
 					if (pending) {
-						await this.sendMessage(pending.content, pending.extras);
+						await this.sendQueuedMessage(convId, pending);
 					}
 				},
 				onCompletionId: streamCallbacks.onCompletionId,
@@ -1553,6 +1567,24 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 			lastMessage.toolCalls = '';
 			console.error('Failed to save partial response:', error);
 		}
+	}
+
+	/**
+	 * Re-send a message queued while `convId` was busy. sendMessage targets the
+	 * active conversation, so if the user navigated away the message stays
+	 * queued on its own conversation until flushPendingMessage picks it up.
+	 */
+	private async sendQueuedMessage(
+		convId: string,
+		msg: { content: string; extras?: DatabaseMessageExtra[] }
+	): Promise<void> {
+		if (conversationsStore.activeConversation?.id !== convId) {
+			this.pendingMessages.set(convId, msg);
+
+			return;
+		}
+
+		await this.sendMessage(msg.content, msg.extras);
 	}
 
 	/**
