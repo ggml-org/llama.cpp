@@ -313,7 +313,7 @@ static value apply_filter(context & ctx, const statement_ptr & filter, value inp
     if (is_stmt<identifier>(filter)) {
         auto filter_id = cast_stmt<identifier>(filter)->val;
         JJ_DEBUG("Applying filter '%s' to %s", filter_id.c_str(), input->type().c_str());
-        return apply_filter(ctx, filter_id, input, func_args(ctx));
+        return apply_filter_by_name(ctx, filter_id, input, func_args(ctx));
 
     } else if (is_stmt<call_expression>(filter)) {
         auto call = cast_stmt<call_expression>(filter);
@@ -328,7 +328,7 @@ static value apply_filter(context & ctx, const statement_ptr & filter, value inp
             args.push_back(arg_expr->execute(ctx));
         }
 
-        return apply_filter(ctx, filter_id, input, args);
+        return apply_filter_by_name(ctx, filter_id, input, args);
 
     } else {
         throw std::runtime_error("Invalid filter expression");

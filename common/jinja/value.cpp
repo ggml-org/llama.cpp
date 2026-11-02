@@ -72,6 +72,17 @@ const std::vector<value> & func_args::get_args() const {
     return args;
 }
 
+void func_args::ensure_kwargs(std::initializer_list<const char *> names) const {
+    for (const auto & arg : args) {
+        if (is_val<value_kwarg>(arg)) {
+            auto * kwarg = cast_val<value_kwarg>(arg);
+            if (std::find(names.begin(), names.end(), kwarg->key) == names.end()) {
+                throw raised_exception("Function '" + func_name + "' got an unexpected keyword argument '" + kwarg->key + "'");
+            }
+        }
+    }
+}
+
 /**
  * Function that mimics Python's array slicing.
  */
@@ -134,6 +145,14 @@ static value empty_value_fn(const func_args &) {
         return mk_val<T>();
     }
 }
+
+template<typename T>
+static value empty_value_no_args_fn(const func_args & args) {
+    args.ensure_kwargs();
+    args.ensure_count(1, 1);
+    return empty_value_fn<T>(args);
+}
+
 template<typename T>
 static value test_type_fn(const func_args & args) {
     args.ensure_count(1);
@@ -612,7 +631,7 @@ value try_builtin_func(context & ctx, const std::string & name, value & input, b
     throw std::runtime_error("Unknown (built-in) filter '" + name + "' for type " + input->type());
 }
 
-value apply_filter(context & ctx, std::string filter_id, value input, const func_args & args) {
+value apply_filter_by_name(context & ctx, std::string filter_id, value input, const func_args & args) {
     if (filter_id == "count") {
         filter_id = "length";
     } else if (filter_id == "d") {
@@ -713,16 +732,22 @@ const func_builtins & value_string_t::get_builtins() const {
     static const func_builtins builtins = {
         {"default", default_value},
         {"upper", [](const func_args & args) -> value {
+            args.ensure_kwargs();
+            args.ensure_count(1, 1);
             args.ensure_vals<value_string>();
             jinja::string str = args.get_pos(0)->as_string().uppercase();
             return mk_val<value_string>(str);
         }},
         {"lower", [](const func_args & args) -> value {
+            args.ensure_kwargs();
+            args.ensure_count(1, 1);
             args.ensure_vals<value_string>();
             jinja::string str = args.get_pos(0)->as_string().lowercase();
             return mk_val<value_string>(str);
         }},
         {"strip", [](const func_args & args) -> value {
+            args.ensure_kwargs({"chars"});
+            args.ensure_count(1, 2);
             value val_input = args.get_pos(0);
             if (!is_val<value_string>(val_input)) {
                 throw raised_exception("strip() first argument must be a string");
@@ -753,11 +778,15 @@ const func_builtins & value_string_t::get_builtins() const {
             }
         }},
         {"title", [](const func_args & args) -> value {
+            args.ensure_kwargs();
+            args.ensure_count(1, 1);
             args.ensure_vals<value_string>();
             jinja::string str = args.get_pos(0)->as_string().titlecase();
             return mk_val<value_string>(str);
         }},
         {"capitalize", [](const func_args & args) -> value {
+            args.ensure_kwargs();
+            args.ensure_count(1, 1);
             args.ensure_vals<value_string>();
             jinja::string str = args.get_pos(0)->as_string().capitalize();
             return mk_val<value_string>(str);
@@ -1131,6 +1160,7 @@ const func_builtins & value_array_t::get_builtins() const {
         {"reject", select_or_reject<true, false>},
         {"sum", array_sum_not_implemented},
         {"join", [](const func_args & args) -> value {
+            args.ensure_kwargs({"d", "attribute"});
             args.ensure_count(1, 3);
             if (!is_val<value_array>(args.get_pos(0))) {
                 throw raised_exception("join() first argument must be an array");
@@ -1186,9 +1216,9 @@ const func_builtins & value_array_t::get_builtins() const {
                 const std::string filter_id = filter->as_string().str();
                 auto arr = val->as_array();
                 for (const auto & item : arr) {
-                    out->push_back(apply_filter(args.ctx, filter_id, item, filter_args));
+                    out->push_back(apply_filter_by_name(args.ctx, filter_id, item, filter_args));
                 }
-                return is_val<value_tuple>(val) ? mk_val<value_tuple>(std::move(out->as_array())) : out;
+                return is_val<value_tuple>(val) ? mk_val<value_tuple>(out->as_array()) : out;
             }
             value attribute = args.get_kwarg_or_pos("attribute", 1);
             value default_val = args.get_kwarg("default", mk_val<value_undefined>());
@@ -1198,7 +1228,7 @@ const func_builtins & value_array_t::get_builtins() const {
                 value attr_val = get_attribute(item, attribute, default_val);
                 out->push_back(attr_val);
             }
-            return is_val<value_tuple>(val) ? mk_val<value_tuple>(std::move(out->as_array())) : out;
+            return is_val<value_tuple>(val) ? mk_val<value_tuple>(out->as_array()) : out;
         }},
         {"append", [](const func_args & args) -> value {
             args.ensure_count(2);
@@ -1471,14 +1501,18 @@ const func_builtins & value_none_t::get_builtins() const {
 const func_builtins & value_undefined_t::get_builtins() const {
     static const func_builtins builtins = {
         {"default", default_value},
-        {"capitalize", empty_value_fn<value_string>},
+        {"capitalize", empty_value_no_args_fn<value_string>},
         {"first", empty_value_fn<value_undefined>},
         {"items", empty_value_fn<value_array>},
-        {"join", empty_value_fn<value_string>},
+        {"join", [](const func_args & args) -> value {
+            args.ensure_kwargs({"d", "attribute"});
+            args.ensure_count(1, 3);
+            return empty_value_fn<value_string>(args);
+        }},
         {"last", empty_value_fn<value_undefined>},
         {"length", empty_value_fn<value_int>},
         {"list", empty_value_fn<value_array>},
-        {"lower", empty_value_fn<value_string>},
+        {"lower", empty_value_no_args_fn<value_string>},
         {"map", empty_value_fn<value_array>},
         {"max", empty_value_fn<value_undefined>},
         {"min", empty_value_fn<value_undefined>},
@@ -1491,12 +1525,16 @@ const func_builtins & value_undefined_t::get_builtins() const {
         {"selectattr", empty_value_fn<value_array>},
         {"sort", empty_value_fn<value_array>},
         {"string", empty_value_fn<value_string>},
-        {"strip", empty_value_fn<value_string>},
+        {"strip", [](const func_args & args) -> value {
+            args.ensure_kwargs({"chars"});
+            args.ensure_count(1, 2);
+            return empty_value_fn<value_string>(args);
+        }},
         {"sum", empty_value_fn<value_int>},
-        {"title", empty_value_fn<value_string>},
+        {"title", empty_value_no_args_fn<value_string>},
         {"truncate", empty_value_fn<value_string>},
         {"unique", empty_value_fn<value_array>},
-        {"upper", empty_value_fn<value_string>},
+        {"upper", empty_value_no_args_fn<value_string>},
         {"wordcount", empty_value_fn<value_int>},
     };
     return builtins;

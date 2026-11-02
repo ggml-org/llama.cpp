@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <initializer_list>
 #include <map>
 #include <memory>
 #include <set>
@@ -177,7 +178,7 @@ protected:
 
 const func_builtins & global_builtins();
 value try_builtin_func(context & ctx, const std::string & name, value & input, bool undef_on_missing = false);
-value apply_filter(context & ctx, std::string filter_id, value input, const func_args & args);
+value apply_filter_by_name(context & ctx, std::string filter_id, value input, const func_args & args);
 
 std::string value_to_json(const value & val, int indent = -1, const std::string_view item_sep = ", ", const std::string_view key_sep = ": ");
 
@@ -660,6 +661,7 @@ public:
     size_t count() const { return args.size(); }
     void push_back(const value & val);
     void push_front(const value & val);
+    void ensure_kwargs(std::initializer_list<const char *> names = {}) const;
     void ensure_count(size_t min, size_t max = 999) const {
         size_t n = args.size();
         if (n < min || n > max) {
