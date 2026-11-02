@@ -129,7 +129,8 @@ common_peg_arena autoparser::build_parser(const generation_params & inputs, cons
         } else {
             parser = content.build_parser(ctx);
         }
-        const std::string reasoning_start = trim_whitespace(reasoning.start);
+        const std::string reasoning_start = !inputs.tool_choice_function.empty() && !inputs.enable_thinking ?
+            std::string() : trim_whitespace(reasoning.start);
         return pure_content ? p.prefix(generation_prompt, reasoning_start) + parser : p.prefix(generation_prompt, reasoning_start) << parser;
     });
 }
@@ -176,6 +177,20 @@ common_peg_parser analyze_content::build_optional_wrapped(parser_build_context &
     return p.eps();
 }
 
+static json select_named_tool(const generation_params & inputs) {
+    if (inputs.tool_choice_function.empty()) {
+        return json();
+    }
+    json tools = json::array();
+    for (const auto & tool : inputs.tools) {
+        if (tool.at("function").at("name") == inputs.tool_choice_function) {
+            tools.push_back(tool);
+            break;
+        }
+    }
+    return tools;
+}
+
 common_peg_parser analyze_tools::build_parser(parser_build_context & ctx) const {
     switch (format.mode) {
         case tool_format::JSON_NATIVE:
@@ -195,6 +210,8 @@ common_peg_parser analyze_tools::build_parser(parser_build_context & ctx) const 
 common_peg_parser analyze_tools::build_tool_parser_json_native(parser_build_context & ctx) const {
     auto &       p           = ctx.p;
     const auto & inputs      = ctx.inputs;
+    const auto named_tools   = select_named_tool(inputs);
+    const auto & tools       = named_tools.is_null() ? inputs.tools : named_tools;
 
     // Build effective field names with dot notation if function_field is set
     std::string name_field = format.name_field;
@@ -209,15 +226,20 @@ common_peg_parser analyze_tools::build_tool_parser_json_native(parser_build_cont
     auto tools_parser = p.eps();
     if (format.section_start.empty() && !format.per_call_start.empty()) {
         auto single_tool_parser = p.standard_json_tools(
-            format.per_call_start, format.per_call_end, inputs.tools, inputs.parallel_tool_calls,
+            format.per_call_start, format.per_call_end, tools, inputs.parallel_tool_calls,
             inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED, name_field, args_field, format.tools_array_wrapped,
             format.fun_name_is_key, format.id_field, format.gen_id_field, format.parameter_order, format.openai_wrapper_trigger);
-        tools_parser = p.trigger_rule("tool-calls", p.one_or_more(single_tool_parser + p.space()));
+        tools_parser = p.trigger_rule("tool-calls", inputs.tool_choice_function.empty() ?
+            p.one_or_more(single_tool_parser + p.space()) : single_tool_parser + p.space());
     } else {
         tools_parser = p.standard_json_tools(
-            format.section_start, format.section_end, inputs.tools, inputs.parallel_tool_calls,
+            format.section_start, format.section_end, tools, inputs.parallel_tool_calls,
             inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED, name_field, args_field, format.tools_array_wrapped,
             format.fun_name_is_key, format.id_field, format.gen_id_field, format.parameter_order, format.openai_wrapper_trigger);
+    }
+
+    if (!inputs.tool_choice_function.empty()) {
+        return ctx.reasoning_parser + tools_parser + p.end();
     }
 
     // Handle content wrappers if present
@@ -287,10 +309,12 @@ common_peg_parser analyze_tools::build_func_parser(common_chat_peg_builder & p, 
 common_peg_parser analyze_tools::build_tool_parser_tag_json(parser_build_context & ctx) const {
     auto &       p           = ctx.p;
     const auto & inputs      = ctx.inputs;
+    const auto named_tools   = select_named_tool(inputs);
+    const auto & tools       = named_tools.is_null() ? inputs.tools : named_tools;
 
     common_peg_parser tool_choice = p.choice();
 
-    foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
+    foreach_function(tools, [&](size_t tool_index, const json & tool) {
         const auto & func   = tool.at("function");
         std::string  name   = func.at("name");
         const auto   schema = common_chat_tool_parameters(func);
@@ -351,6 +375,9 @@ common_peg_parser analyze_tools::build_tool_parser_tag_json(parser_build_context
     }
 
     std::string trigger_marker       = !format.section_start.empty() ? format.section_start : format.per_call_start;
+    if (!inputs.tool_choice_function.empty()) {
+        return ctx.reasoning_parser + tool_calls + p.end();
+    }
     auto        content_before_tools = trigger_marker.empty() ? p.eps() : p.until(trigger_marker);
     return ctx.reasoning_parser + p.optional(p.content(content_before_tools)) + tool_calls + p.end();
 }
@@ -358,12 +385,14 @@ common_peg_parser analyze_tools::build_tool_parser_tag_json(parser_build_context
 common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_context & ctx) const {
     auto &       p           = ctx.p;
     const auto & inputs      = ctx.inputs;
+    const auto named_tools   = select_named_tool(inputs);
+    const auto & tools       = named_tools.is_null() ? inputs.tools : named_tools;
 
     auto until_suffix = p.rule("until-suffix", p.until(arguments.value_suffix));
 
     common_peg_parser tool_choice = p.choice();
 
-    foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
+    foreach_function(tools, [&](size_t tool_index, const json & tool) {
         const auto & func = tool.at("function");
         std::string  name = func.at("name");
 
@@ -470,6 +499,9 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
     }
 
     std::string trigger_marker       = !format.section_start.empty() ? format.section_start : format.per_call_start;
+    if (!inputs.tool_choice_function.empty()) {
+        return ctx.reasoning_parser + tool_calls + p.end();
+    }
     auto        content_before_tools = trigger_marker.empty() ? p.eps() : p.until(trigger_marker);
     return ctx.reasoning_parser + p.optional(p.content(content_before_tools)) + tool_calls + p.end();
 }

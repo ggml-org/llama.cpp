@@ -319,7 +319,7 @@ struct common_chat_templates {
     std::unique_ptr<common_chat_template> template_tts;  // the prompt of a text to speak
 };
 
-common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::string & tool_choice) {
+common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const common_json & tool_choice, std::string * tool_choice_function) {
     if (tool_choice == "auto") {
         return COMMON_CHAT_TOOL_CHOICE_AUTO;
     }
@@ -329,7 +329,11 @@ common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::strin
     if (tool_choice == "required") {
         return COMMON_CHAT_TOOL_CHOICE_REQUIRED;
     }
-    throw std::invalid_argument("Invalid tool_choice: " + tool_choice);
+    if (tool_choice.contains("function") && tool_choice.at("function").is_object() && tool_choice.at("function").contains("name")) {
+        *tool_choice_function = tool_choice.at("function").at("name");
+        return COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+    }
+    throw std::invalid_argument("Invalid tool_choice: " + tool_choice.dump());
 }
 
 bool common_chat_templates_support_enable_thinking(const common_chat_templates * chat_templates) {
@@ -1543,6 +1547,15 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
     }
 
     params.parallel_tool_calls = inputs.parallel_tool_calls;
+    params.tool_choice_function = inputs.tool_choice_function;
+    if (!params.tool_choice_function.empty()) {
+        const auto n_matching = std::count_if(params.tools.begin(), params.tools.end(), [&](const json & tool) {
+            return tool.at("function").at("name") == inputs.tool_choice_function;
+        });
+        if (n_matching != 1) {
+            throw std::invalid_argument("tool_choice.function.name must match exactly one tool");
+        }
+    }
 
     if (params.tools.is_array()) {
         if (params.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE && !params.grammar.empty()) {
