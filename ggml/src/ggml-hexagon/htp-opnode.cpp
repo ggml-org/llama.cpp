@@ -230,7 +230,6 @@ static std::string format_kernel_params(const htp_opnode & node) {
         const char * ktype_str = "?";
         switch (kparams->kernel_type) {
             case HTP_TOP_K_MASK_KERNEL_ROWS:  ktype_str = "rows"; break;
-            case HTP_TOP_K_MASK_KERNEL_COLS:  ktype_str = "cols"; break;
             case HTP_TOP_K_MASK_KERNEL_PICKS: ktype_str = "picks"; break;
         }
         snprintf(str, max_size, "%s nth %d tile %u x%u vtcm %u", ktype_str, (int) kparams->n_threads, (unsigned int) kparams->tile_cols, (unsigned int) kparams->n_col_tiles, (unsigned int) kparams->vtcm_size);
