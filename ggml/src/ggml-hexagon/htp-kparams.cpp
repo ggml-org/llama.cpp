@@ -2660,6 +2660,129 @@ static bool htp_kparams_solve_concat(
     return false;
 }
 
+// Permuted copy with strided dim 0 (e.g. channel-first <-> channel-last)
+static bool htp_kparams_solve_cpy_transpose(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * src0,
+    const struct ggml_tensor * dst,
+    uint32_t type_size,
+    struct htp_copy_kernel_params * kparams) {
+
+    // View contiguous dst with src shape to support CPY with reshape
+    const bool dst_cont = ggml_is_contiguous(dst);
+    if (!dst_cont && !ggml_are_same_shape(src0, dst)) {
+        return false;
+    }
+
+    // Drop size-1 dims and merge dims adjacent in both tensors
+    size_t ne[GGML_MAX_DIMS];
+    size_t nbs[GGML_MAX_DIMS];
+    size_t nbd[GGML_MAX_DIMS];
+    size_t dst_stride = type_size;
+    int    n          = 0;
+    for (int d = 0; d < GGML_MAX_DIMS; d++) {
+        const size_t sd = dst_cont ? dst_stride : dst->nb[d];
+        dst_stride *= (size_t) src0->ne[d];
+        if (src0->ne[d] == 1) {
+            continue;
+        }
+        if (n > 0 && src0->nb[d] == nbs[n - 1] * ne[n - 1] && sd == nbd[n - 1] * ne[n - 1]) {
+            ne[n - 1] *= (size_t) src0->ne[d];
+            continue;
+        }
+        ne[n]  = (size_t) src0->ne[d];
+        nbs[n] = src0->nb[d];
+        nbd[n] = sd;
+        n++;
+    }
+
+    // Fold leading dense dim into element block
+    size_t es = type_size;
+    for (int i = 0; i < n; i++) {
+        if (nbs[i] == type_size && nbd[i] == type_size) {
+            es *= ne[i];
+            for (int j = i; j + 1 < n; j++) {
+                ne[j]  = ne[j + 1];
+                nbs[j] = nbs[j + 1];
+                nbd[j] = nbd[j + 1];
+            }
+            n--;
+            break;
+        }
+    }
+    if (es > 128 || (es & (es - 1)) != 0) {
+        return false;
+    }
+
+    // Transpose axes: dim a dense in dst, dim k dense in src
+    int a = -1;
+    int k = -1;
+    for (int i = 0; i < n; i++) {
+        if (a < 0 && nbd[i] == es) {
+            a = i;
+        }
+        if (k < 0 && nbs[i] == es) {
+            k = i;
+        }
+    }
+    if (a < 0 || k < 0 || a == k) {
+        return false;
+    }
+
+    struct htp_copy_transpose_params tp = {};
+    tp.elem_size = (uint8_t) es;
+    tp.ne[0]     = (uint32_t) ne[a];
+    tp.ne[1]     = (uint32_t) ne[k];
+    tp.ne[2]     = 1;
+    tp.src_nb[0] = (uint32_t) nbs[a];
+    tp.dst_nb[0] = (uint32_t) nbd[k];
+    tp.packed    = nbd[k] == ne[a] * es && ne[a] * es < 128 && 128 % (ne[a] * es) == 0;
+
+    size_t ne3 = 1;
+    int    m   = 0;
+    for (int i = 0; i < n; i++) {
+        if (i == a || i == k) {
+            continue;
+        }
+        if (m == 0) {
+            tp.ne[2] = (uint32_t) ne[i];
+        } else {
+            ne3 = ne[i];
+        }
+        tp.src_nb[1 + m] = (uint32_t) nbs[i];
+        tp.dst_nb[1 + m] = (uint32_t) nbd[i];
+        m++;
+    }
+
+    const uint32_t n_threads = htp_session_n_threads(sess);
+    const size_t   vtcm_size = htp_session_vtcm_size(sess);
+    uint64_t       vtcm      = 0;
+    for (uint32_t blk_bytes = HTP_COPY_TRANSPOSE_BLK_BYTES; ; blk_bytes /= 2) {
+        if (!htp_copy_transpose_layout_build(&tp, blk_bytes)) {
+            return false;
+        }
+        vtcm = (uint64_t) n_threads * 2 * (tp.in_buf_size + tp.out_buf_size);
+        if (vtcm <= vtcm_size) {
+            break;
+        }
+    }
+
+    const uint64_t total_tiles = (uint64_t) tp.n0b * tp.nkb * tp.ne[2] * ne3;
+    if (total_tiles > UINT32_MAX) {
+        return false;
+    }
+    tp.total_tiles = (uint32_t) total_tiles;
+    tp.div_nkb     = init_fastdiv_values(tp.nkb);
+    tp.div_n0b     = init_fastdiv_values(tp.n0b);
+    tp.div_ne2     = init_fastdiv_values(tp.ne[2]);
+
+    kparams->kernel_type = HTP_COPY_KERNEL_TRANSPOSE;
+    kparams->n_threads   = (uint8_t) n_threads;
+    kparams->vtcm_size   = (uint32_t) vtcm;
+    kparams->u.transpose = tp;
+    return true;
+}
+
 static bool htp_kparams_solve_cpy(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op,
@@ -2755,6 +2878,10 @@ static bool htp_kparams_solve_cpy(
                 kparams->vtcm_size   = kparams->u.gather.slice * n_threads;
                 return true;
             }
+        }
+
+        if (htp_kparams_solve_cpy_transpose(sess, src0, dst, src_type_size, kparams)) {
+            return true;
         }
 
         if (sameshape) {
