@@ -63,6 +63,7 @@ enum mtmd_video_template {
     MTMD_VIDEO_TEMPLATE_DEFAULT,   // "Video:" prefix, then a "[XmY.YYs]" timestamp every N ms
     MTMD_VIDEO_TEMPLATE_LFM3,      // "<X.X seconds>" before every group of 2 frames
     MTMD_VIDEO_TEMPLATE_LFM3_OMNI, // same as LFM3, then the soundtrack of each group, as an audio bitmap after its frames
+    MTMD_VIDEO_TEMPLATE_QWEN3VL,   // "<X.X seconds>" before every group of 2 frames, no markers around the whole video
 };
 
 // opaque types
