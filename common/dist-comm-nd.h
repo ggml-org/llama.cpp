@@ -60,6 +60,14 @@ bool dist_nd_recv(dist_nd_conn * c, void * data, size_t size, std::string & err)
 bool dist_nd_exchange_pair(dist_nd_conn * a, dist_nd_conn * b, const void * hdr, size_t hdr_size,
                            const void * payload, size_t size, void * hdr_from_a, void * from_a,
                            void * hdr_from_b, void * from_b, std::string & err);
+// The 4-rank full mesh's large exchange: dist_nd_exchange_pair over n distinct connections at once
+// (1 to 4). One message (hdr, then payload) leaves on every connection while one message of the same
+// sizes arrives from each, into hdr_from[i] / from[i] for connection i, interleaving 256 KiB chunks
+// across all of them. Same rules as the pair: LLAMA_DIST_TP_RDMA_MULTICHUNK, send buffers must not
+// overlap receive buffers, and in full-duplex mode the sends are left to dist_nd_send_drain.
+bool dist_nd_exchange_n(dist_nd_conn * const * conns, int n, const void * hdr, size_t hdr_size,
+                        const void * payload, size_t size, void * const * hdr_from, void * const * from,
+                        std::string & err);
 // Wait for sends posted but not yet retired. Only needed in full-duplex mode, where dist_nd_send2
 // returns as soon as the chunk is posted rather than when it has completed.
 bool dist_nd_send_drain(dist_nd_conn * c, std::string & err);

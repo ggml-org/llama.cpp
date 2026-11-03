@@ -788,10 +788,30 @@ static ggml_backend_meta_split_state llama_meta_device_get_split_state_impl(
         }
 
         // FFN
+        // LLAMA_DIST_TP_FFN_GRANULARITY=g (32, 64, 128 or 256; default 128): the FFN split unit is
+        // lcm(block size, g), the same for weights and biases. 128 keeps whole 128-wide blocks per rank;
+        // a smaller g evens out a width that is not a multiple of 128 x ranks (gpt-oss-120b, 2880 wide:
+        // 3 ranks 896/1024/960 at 128, 960 each at 32; 4 ranks 640/768/640/832 at 128, 704/736/704/736
+        // at 32). Read once; every rank reads the same value.
+        static const int64_t ffn_granularity = [] {
+            const char * v = std::getenv("LLAMA_DIST_TP_FFN_GRANULARITY");
+            int64_t g = 128;
+            if (v != nullptr && v[0] != '\0') {
+                const int64_t n = std::atoll(v);
+                if (n == 32 || n == 64 || n == 128 || n == 256) {
+                    g = n;
+                    LLAMA_LOG_INFO("dist-tp: FFN split unit lcm(block size, %lld) (LLAMA_DIST_TP_FFN_GRANULARITY)\n", (long long) g);
+                } else {
+                    LLAMA_LOG_WARN("dist-tp: LLAMA_DIST_TP_FFN_GRANULARITY=%s is not 32, 64, 128 or 256; using 128\n", v);
+                }
+            }
+            return g;
+        }();
+
         if (std::regex_match(tensor_name, pattern_ffn_up_weight) || std::regex_match(tensor_name, pattern_ffn_up_bias) ||
                 std::regex_match(tensor_name, pattern_ffn_gate_weight) || std::regex_match(tensor_name, pattern_ffn_gate_bias) ||
                 std::regex_match(tensor_name, pattern_ffn_gate_up_weight) || std::regex_match(tensor_name, pattern_ffn_down_weight)) {
-            const int64_t blck_size_perf = std::lcm(blck_size, 128);
+            const int64_t blck_size_perf = std::lcm(blck_size, ffn_granularity);
             GGML_ASSERT(segments.size() == 1);
             return {blck_size_perf};
         }

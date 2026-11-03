@@ -482,6 +482,20 @@ struct dist_comm_socket_context::impl {
     int32_t              mesh_next_src     = -1;
     std::vector<uint8_t> mesh_from_next;              // handed back by the second ring step
 
+    // 4-rank full mesh (LLAMA_DIST_TP_MESH=1 with LLAMA_DIST_TP_MESH_DIAG_HOSTS), see exchange_mesh4().
+    // The diagonal joins this rank and rank + 2 over its own socket and ND connection. mesh4_pending
+    // counts the ring steps still to be served from the last exchange: 2 after it, then 1, then 0.
+    socket_t             diag_fd            = DIST_CCL_INVALID_SOCKET;
+    dist_nd_conn *       nd_diag            = nullptr;
+    bool                 mesh4              = false;
+    bool                 mesh4_large        = false;   // LLAMA_DIST_TP_MESH4_LARGE, see exchange_mesh4()
+    int                  mesh4_pending      = 0;
+    size_t               mesh4_pending_size = 0;
+    const void *         mesh4_pending_ptr  = nullptr; // where the step before left its payload
+    int32_t              mesh4_expect_src   = -1;      // and the rank that payload came from
+    int32_t              mesh_diag_src      = -1;
+    std::vector<uint8_t> mesh_from_diag;               // handed back by the second ring step
+
     ~impl() {
         // at world_size 2 both pointers are the same object, so freeing twice would be a
         // double free
@@ -496,8 +510,13 @@ struct dist_comm_socket_context::impl {
             dist_nd_free(nd_recv);
             nd_recv = nullptr;
         }
+        if (nd_diag != nullptr) {
+            dist_nd_free(nd_diag);
+            nd_diag = nullptr;
+        }
         close_fd(ring_in_fd);
         close_fd(ring_out_fd);
+        close_fd(diag_fd);
         close_fd(listen_fd);
     }
 
@@ -925,15 +944,369 @@ struct dist_comm_socket_context::impl {
         return true;
     }
 
+    // LLAMA_DIST_TP_MESH_DIAG_HOSTS: at world_size 4, entry r (entries separated by ',' or '/') is the
+    // address rank r dials for its diagonal peer r + 2, on the cable between the two. The higher rank of
+    // each diagonal dials, so only entries 2 and 3 are used; 0 and 1 are placeholders such as '-'. Every
+    // rank reads the same value and decides the same way: a value without entries 2 and 3 keeps the ring.
+    static std::vector<std::string> mesh_diag_hosts() {
+        std::vector<std::string> out;
+        const char * v = std::getenv("LLAMA_DIST_TP_MESH_DIAG_HOSTS");
+        if (v == nullptr || v[0] == '\0') {
+            return out;
+        }
+        std::string cur;
+        for (const char * p = v;; ++p) {
+            if (*p == ',' || *p == '/' || *p == '\0') {
+                out.push_back(cur);
+                cur.clear();
+                if (*p == '\0') {
+                    break;
+                }
+            } else if (*p != ' ') {
+                cur += *p;
+            }
+        }
+        if (out.size() < 4 || out[2].empty() || out[2] == "-" || out[3].empty() || out[3] == "-") {
+            out.clear();
+        }
+        return out;
+    }
+
+    bool want_mesh4() const {
+        return cfg.world_size == 4 && dist_transport_env_true("LLAMA_DIST_TP_MESH", false) && !mesh_diag_hosts().empty();
+    }
+
+    // establish_ring() for the 4-rank mesh: the ring edges as usual plus the two diagonals, 0-2 and 1-3.
+    // Every rank dials next and, on ranks 2 and 3, its diagonal, and names itself on each socket at
+    // once; then it accepts prev and, on ranks 0 and 1, the diagonal, telling them apart by the rank
+    // each one names. No rank reads before it has written everything it dials, so the order in which
+    // the connections arrive does not matter.
+    bool establish_ring_mesh4(const std::string & next_host, int next_port, std::string & err) {
+        const int  prev      = (cfg.rank + 3) % 4;
+        const int  diag      = (cfg.rank + 2) % 4;
+        const bool dial_diag = cfg.rank > diag;
+        const int32_t me = cfg.rank;
+
+        ring_out_fd = connect_with_retry(next_host, next_port, err);
+        if (ring_out_fd == DIST_CCL_INVALID_SOCKET) {
+            return false;
+        }
+        if (!write_msg(ring_out_fd, &me, sizeof(me), err)) {
+            return false;
+        }
+        if (dial_diag) {
+            const std::string host = mesh_diag_hosts()[cfg.rank];
+            const int         port = members[diag].port;
+            std::fprintf(stderr, "dist-tp: diagonal %d->%d dials %s:%d (LLAMA_DIST_TP_MESH_DIAG_HOSTS)\n",
+                         cfg.rank, diag, host.c_str(), port);
+            std::fflush(stderr);
+            diag_fd = connect_with_retry(host, port, err);
+            if (diag_fd == DIST_CCL_INVALID_SOCKET) {
+                err = "diagonal " + std::to_string(cfg.rank) + "->" + std::to_string(diag) + ": " + err;
+                return false;
+            }
+            if (!write_msg(diag_fd, &me, sizeof(me), err)) {
+                return false;
+            }
+        }
+
+        for (int left = dial_diag ? 1 : 2; left > 0; --left) {
+            std::string peer_host;
+            socket_t fd = accept_socket(listen_fd, peer_host, err);
+            if (fd == DIST_CCL_INVALID_SOCKET) {
+                return false;
+            }
+            int32_t r = -1;
+            if (!read_msg(fd, &r, sizeof(r), err)) {
+                close_fd(fd);
+                return false;
+            }
+            if (r == prev && ring_in_fd == DIST_CCL_INVALID_SOCKET) {
+                ring_in_fd = fd;
+            } else if (r == diag && !dial_diag && diag_fd == DIST_CCL_INVALID_SOCKET) {
+                diag_fd = fd;
+            } else {
+                close_fd(fd);
+                err = "ring peer rank mismatch (rank " + std::to_string(r) + " from " + peer_host + ")";
+                return false;
+            }
+        }
+
+        close_fd(listen_fd);
+        return true;
+    }
+
+    // The diagonal's ND connection, after every ring edge: each rank is on exactly one diagonal, and
+    // both of its ends get here once their own ring edges are done (establish_nd_per_edge), so no rank
+    // waits on a peer that is still busy with another edge. The lower rank listens, as on the ring.
+    void establish_nd_diag() {
+        if (diag_fd == DIST_CCL_INVALID_SOCKET) {
+            return;
+        }
+        const int diag = (cfg.rank + 2) % 4;
+        std::string nd_err;
+        nd_diag = dist_nd_establish((uintptr_t) diag_fd, (uintptr_t) diag_fd, cfg.rank < diag,
+                                    nd_err, /* strict_local_addr */ true);
+        if (nd_diag == nullptr) {
+            std::fprintf(stderr,
+                         "dist-tp: NetworkDirect not established on diagonal %d<->%d "
+                         "(rank %d, %s); the diagonal stays on TCP\n",
+                         cfg.rank < diag ? cfg.rank : diag, cfg.rank < diag ? diag : cfg.rank, cfg.rank, nd_err.c_str());
+        }
+    }
+
+    bool mesh4_takes(size_t size) const {
+        return mesh4 && (size <= mesh_max_bytes || mesh4_large);
+    }
+
+    // Full-mesh exchange for world_size 4, opt-in via LLAMA_DIST_TP_MESH=1 with
+    // LLAMA_DIST_TP_MESH_DIAG_HOSTS (one cable between every pair of ranks).
+    //
+    // The ring all-reduce takes world_size - 1 = 3 dependent exchanges per collective. Here every
+    // rank sends its payload to all three peers at once and receives theirs: next and prev over the
+    // two ring edges, each used in both directions as in the 3-rank mesh, and rank + 2 over the
+    // diagonal. A collective costs one round of latency, not three.
+    //
+    // Transparent to the caller, as at world_size 3: the ring's three steps hand over prev's payload,
+    // then diag's, then next's, each step forwarding the buffer the step before it received. The
+    // first call does the whole exchange and returns prev's payload; the second and third return
+    // diag's and next's without touching the wire, after checking that they really forward what the
+    // step before returned. The caller's sum is therefore bit-identical to the ring's.
+    //
+    // Payloads up to mesh_max_bytes post all three sends, then take the three receives. Larger ones
+    // take the ring, or with LLAMA_DIST_TP_MESH4_LARGE (RDMA, multi-chunk, no ND ceiling; every
+    // rank reads the same environment) one three-peer ND exchange that moves all six directions of
+    // this rank's three links at once. There is no TCP path for those: a rank whose ND connections
+    // are not all up fails the collective rather than quietly carrying prefill over TCP.
+    bool exchange_mesh4(uint32_t op, int32_t src_rank, const void * send_data_ptr, size_t size,
+            int32_t & recv_src_rank, void * recv_data_ptr, std::string & err) {
+        if (mesh4_pending > 0) {
+            if (size != mesh4_pending_size || send_data_ptr != mesh4_pending_ptr || src_rank != mesh4_expect_src) {
+                mesh4_pending = 0;
+                err = "mesh exchange: a ring step is not forwarding the step before's payload (4 ranks)";
+                return false;
+            }
+            const bool diag_step = mesh4_pending == 2;
+            std::memcpy(recv_data_ptr, diag_step ? mesh_from_diag.data() : mesh_from_next.data(), size);
+            recv_src_rank     = diag_step ? mesh_diag_src : mesh_next_src;
+            mesh4_pending    -= 1;
+            mesh4_pending_ptr = recv_data_ptr;
+            mesh4_expect_src  = recv_src_rank;
+            return true;
+        }
+
+        const int next = (cfg.rank + 1) % 4;
+        const int prev = (cfg.rank + 3) % 4;
+        const int diag = (cfg.rank + 2) % 4;
+
+        // One rule per connection, evaluated identically at both of its ends.
+        const bool size_ok = nd_max_bytes == 0 || size <= nd_max_bytes;
+        const bool nd_next = nd_send != nullptr && size_ok;
+        const bool nd_prev = nd_recv != nullptr && size_ok;
+        const bool nd_dg   = nd_diag != nullptr && size_ok;
+
+        const op_hdr send_hdr {
+            op,
+            static_cast<uint32_t>(size),
+            src_rank,
+            0,
+        };
+
+        auto send_to = [&](bool use_nd, dist_nd_conn * c, socket_t fd) -> bool {
+            if (use_nd) {
+                if (!dist_nd_send2(c, &send_hdr, sizeof(send_hdr), send_data_ptr, size, err)) {
+                    return false;
+                }
+                stats.bytes_sent += sizeof(send_hdr) + size;
+                return true;
+            }
+            if (!write_msg(fd, &send_hdr, sizeof(send_hdr), err)) {
+                return false;
+            }
+            return size == 0 || write_msg(fd, send_data_ptr, size, err);
+        };
+
+        auto check_hdr = [&](const op_hdr & hdr) -> bool {
+            if (hdr.op != op) {
+                err = "unexpected op code on mesh";
+                return false;
+            }
+            if (hdr.count != size) {
+                err = "unexpected payload size on mesh";
+                return false;
+            }
+            return true;
+        };
+
+        auto recv_from = [&](bool use_nd, dist_nd_conn * c, socket_t fd, void * dst, int32_t & src_out) -> bool {
+            op_hdr hdr {};
+            if (use_nd) {
+                if (!dist_nd_recv(c, &hdr, sizeof(hdr), err)) {
+                    return false;
+                }
+                stats.bytes_recv += sizeof(hdr);
+            } else if (!read_msg(fd, &hdr, sizeof(hdr), err)) {
+                return false;
+            }
+            if (!check_hdr(hdr)) {
+                return false;
+            }
+            if (size > 0) {
+                if (use_nd) {
+                    if (!dist_nd_recv(c, dst, size, err)) {
+                        return false;
+                    }
+                    stats.bytes_recv += size;
+                } else if (!read_msg(fd, dst, size, err)) {
+                    return false;
+                }
+            }
+            src_out = hdr.src_rank;
+            return true;
+        };
+
+        mesh_from_next.resize(size);
+        mesh_from_diag.resize(size);
+
+        bool ok;
+        if (size > mesh_max_bytes) {
+            // LLAMA_DIST_TP_MESH4_LARGE (mesh4_takes): every direction on ND, all three links at once.
+            if (!(nd_next && nd_prev && nd_dg)) {
+                err = "mesh exchange: LLAMA_DIST_TP_MESH4_LARGE needs all three ND connections up";
+                return false;
+            }
+            if (send_data_ptr == recv_data_ptr) {
+                err = "mesh exchange: send and receive buffers alias, which the three-peer exchange cannot allow";
+                return false;
+            }
+            dist_nd_conn * conns[3] = { nd_recv, nd_diag, nd_send };
+            op_hdr hdrs[3] = {};
+            void * hdr_dst[3] = { &hdrs[0], &hdrs[1], &hdrs[2] };
+            void * dst[3]     = { recv_data_ptr, mesh_from_diag.data(), mesh_from_next.data() };
+            ok = dist_nd_exchange_n(conns, 3, &send_hdr, sizeof(send_hdr), send_data_ptr, size, hdr_dst, dst, err);
+            if (ok) {
+                stats.bytes_sent += 3 * (sizeof(send_hdr) + size);
+                stats.bytes_recv += 3 * (sizeof(send_hdr) + size);
+                ok = check_hdr(hdrs[0]) && check_hdr(hdrs[1]) && check_hdr(hdrs[2]);
+            }
+            if (ok) {
+                mesh_prev_src = hdrs[0].src_rank;
+                mesh_diag_src = hdrs[1].src_rank;
+                mesh_next_src = hdrs[2].src_rank;
+                ok = dist_nd_send_drain(nd_send, err) && dist_nd_send_drain(nd_recv, err) &&
+                     dist_nd_send_drain(nd_diag, err);
+            }
+        } else {
+            // All three sends are posted before any receive, so the three links carry this rank's
+            // payload at the same time; under LLAMA_DIST_TP_FULL_DUPLEX an ND send returns once it is
+            // posted, and the drains below retire them before a staging slot can be reused.
+            ok = send_to(nd_next, nd_send, ring_out_fd) &&
+                 send_to(nd_prev, nd_recv, ring_in_fd) &&
+                 send_to(nd_dg, nd_diag, diag_fd) &&
+                 recv_from(nd_prev, nd_recv, ring_in_fd, recv_data_ptr, mesh_prev_src) &&
+                 recv_from(nd_dg, nd_diag, diag_fd, mesh_from_diag.data(), mesh_diag_src) &&
+                 recv_from(nd_next, nd_send, ring_out_fd, mesh_from_next.data(), mesh_next_src);
+            if (ok && nd_next) {
+                ok = dist_nd_send_drain(nd_send, err);
+            }
+            if (ok && nd_prev) {
+                ok = dist_nd_send_drain(nd_recv, err);
+            }
+            if (ok && nd_dg) {
+                ok = dist_nd_send_drain(nd_diag, err);
+            }
+        }
+        if (!ok) {
+            return false;
+        }
+        if (mesh_prev_src != prev || mesh_diag_src != diag || mesh_next_src != next) {
+            err = "mesh exchange: a payload arrived from an unexpected rank (4 ranks)";
+            return false;
+        }
+
+        recv_src_rank      = mesh_prev_src;
+        mesh4_pending      = 2;
+        mesh4_pending_size = size;
+        mesh4_pending_ptr  = recv_data_ptr;
+        mesh4_expect_src   = mesh_prev_src;
+
+        const int64_t ne[GGML_MAX_DIMS] = { (int64_t) size, 1, 1, 1 };
+        const char * endpoint = (nd_next && nd_prev && nd_dg) ? "nd"
+                              : (nd_next || nd_prev || nd_dg) ? "nd/tcp" : "tcp";
+        ggml_trace_rpc(endpoint, cfg.rank, "EXCHANGE_MESH", "dist-tp", ne,
+                       3 * (sizeof(send_hdr) + size), 3 * (sizeof(send_hdr) + size));
+        return true;
+    }
+
+    // select_allreduce() at world_size 4 with the diagonals up (establish_ring_mesh4).
+    void select_allreduce_mesh4() {
+        constexpr size_t cap = 256 * 1024 - sizeof(op_hdr);
+        mesh_max_bytes = 64 * 1024;
+        const char * v = std::getenv("LLAMA_DIST_TP_MESH_MAX_BYTES");
+        if (v != nullptr && v[0] != '\0') {
+            try {
+                const long long n = std::stoll(v);
+                if (n > 0) {
+                    mesh_max_bytes = std::min((size_t) n, cap);
+                }
+            } catch (...) {
+                // keep the default
+            }
+        }
+        for (const char * k : { "LLAMA_DIST_TP_MESH_REVERSE_TCP", "LLAMA_DIST_TP_MESH_RELAY",
+                                "LLAMA_DIST_TP_MESH_LARGE", "LLAMA_DIST_TP_MESH_ND_LARGE" }) {
+            const char * e = std::getenv(k);
+            if (e != nullptr && e[0] != '\0') {
+                std::fprintf(stderr, "dist-tp: %s is ignored at 4 ranks\n", k);
+            }
+        }
+
+        // Every input is the environment, so every rank decides the same way.
+        if (dist_transport_env_true("LLAMA_DIST_TP_MESH4_LARGE", false)) {
+            const char * why = nullptr;
+            if (!dist_transport_env_true("LLAMA_DIST_TP_RDMA", false)) {
+                why = "needs LLAMA_DIST_TP_RDMA";
+            } else if (!dist_transport_env_true("LLAMA_DIST_TP_RDMA_MULTICHUNK", false)) {
+                why = "needs LLAMA_DIST_TP_RDMA_MULTICHUNK";
+            } else if (dist_nd_ceiling_from_env() != 0) {
+                why = "needs LLAMA_DIST_TP_RDMA_MAX_BYTES=0";
+            }
+            if (why != nullptr) {
+                std::fprintf(stderr, "dist-tp: LLAMA_DIST_TP_MESH4_LARGE %s; large payloads keep the ring\n", why);
+            } else {
+                mesh4_large = true;
+            }
+        }
+        mesh4 = true;
+
+        const int next = (cfg.rank + 1) % 4;
+        const int prev = (cfg.rank + 3) % 4;
+        const int diag = (cfg.rank + 2) % 4;
+        std::fprintf(stderr,
+                     "dist-tp all-reduce: full mesh up to %zu B, %s [rank %d/%d] "
+                     "(<->%d %s, <->%d %s, <->%d %s)\n",
+                     mesh_max_bytes, mesh4_large ? "mesh above too (ND, three links at once)" : "ring above",
+                     cfg.rank, cfg.world_size,
+                     next, nd_send != nullptr ? "ND" : "TCP",
+                     prev, nd_recv != nullptr ? "ND" : "TCP",
+                     diag, nd_diag != nullptr ? "ND" : "TCP");
+        std::fflush(stderr);
+    }
+
     // Opt-in full-mesh all-reduce, see exchange_mesh(). Runs after select_transport() so the
     // banner below can say which transports the mesh will use.
     void select_allreduce() {
         if (!dist_transport_env_true("LLAMA_DIST_TP_MESH", false)) {
             return;
         }
+        if (cfg.world_size == 4 && diag_fd != DIST_CCL_INVALID_SOCKET) {
+            select_allreduce_mesh4();
+            return;
+        }
         if (cfg.world_size != 3) {
             std::fprintf(stderr,
-                         "dist-tp: LLAMA_DIST_TP_MESH needs exactly 3 ranks (have %d); keeping the ring\n",
+                         "dist-tp: LLAMA_DIST_TP_MESH needs 3 ranks, or 4 with LLAMA_DIST_TP_MESH_DIAG_HOSTS "
+                         "(have %d); keeping the ring\n",
                          cfg.world_size);
             std::fflush(stderr);
             return;
@@ -1228,6 +1601,10 @@ struct dist_comm_socket_context::impl {
             }
         }
 
+        if (want_mesh4()) {
+            return establish_ring_mesh4(next_host, next_port, err);
+        }
+
         ring_out_fd = connect_with_retry(next_host, next_port, err);
         if (ring_out_fd == DIST_CCL_INVALID_SOCKET) {
             return false;
@@ -1334,6 +1711,7 @@ struct dist_comm_socket_context::impl {
                 }
             } else {
                 establish_nd_per_edge();
+                establish_nd_diag();
             }
         }
 
@@ -1356,8 +1734,15 @@ struct dist_comm_socket_context::impl {
             std::fprintf(stderr, " (->%d %s, %d-> %s)",
                          next, nd_send != nullptr ? "ND" : "TCP",
                          prev, nd_recv != nullptr ? "ND" : "TCP");
+            if (diag_fd != DIST_CCL_INVALID_SOCKET) {
+                std::fprintf(stderr, " (<->%d %s)", (cfg.rank + 2) % cfg.world_size, nd_diag != nullptr ? "ND" : "TCP");
+            }
         }
-        if (any_nd) {
+        if (any_nd && diag_fd != DIST_CCL_INVALID_SOCKET && nd_diag == nullptr) {
+            // the harness reads "all payloads over ND" as proof that nothing rode TCP; a diagonal on
+            // TCP must not print it
+            std::fprintf(stderr, " (diagonal on TCP)");
+        } else if (any_nd) {
             if (nd_max_bytes == 0) {
                 std::fprintf(stderr, " (all payloads over ND)");
             } else {
@@ -1439,7 +1824,11 @@ bool dist_comm_socket_context::exchange_ring_f32(int32_t src_rank, const float *
 
     // A pending mesh step must be served by the mesh whatever its size check would say now.
     const size_t bytes = n * sizeof(float);
-    if (impl_->mesh_pending || impl_->mesh_takes(bytes)) {
+    if (impl_->mesh4) {
+        if (impl_->mesh4_pending > 0 || impl_->mesh4_takes(bytes)) {
+            return impl_->exchange_mesh4(OP_ALLREDUCE_F32, src_rank, send_data, bytes, recv_src_rank, recv_data, err);
+        }
+    } else if (impl_->mesh_pending || impl_->mesh_takes(bytes)) {
         return impl_->exchange_mesh(OP_ALLREDUCE_F32, src_rank, send_data, bytes, recv_src_rank, recv_data, err);
     }
 

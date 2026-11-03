@@ -22,6 +22,11 @@ bool dist_nd_exchange_pair(dist_nd_conn *, dist_nd_conn *, const void *, size_t,
     err = "no ND";
     return false;
 }
+bool dist_nd_exchange_n(dist_nd_conn * const *, int, const void *, size_t, const void *, size_t,
+                        void * const *, void * const *, std::string & err) {
+    err = "no ND";
+    return false;
+}
 bool dist_nd_send_drain(dist_nd_conn *, std::string &) { return true; }
 void dist_nd_free(dist_nd_conn *) {}
 
@@ -1504,6 +1509,121 @@ bool dist_nd_exchange_pair(dist_nd_conn * a, dist_nd_conn * b, const void * hdr,
         a->tx_fill = 0;   // drop any half-staged chunk; the connections are finished either way
         b->tx_fill = 0;
         err = (a->peer_gone || b->peer_gone) ? "peer closed connection" : "NetworkDirect two-peer exchange failed";
+        return false;
+    }
+    return true;
+}
+
+// n-peer exchange for the 4-rank full mesh: dist_nd_exchange_pair's loop over an array of
+// connections. Nothing waits on one connection while another could move.
+bool dist_nd_exchange_n(dist_nd_conn * const * conns, int n, const void * hdr, size_t hdr_size,
+                        const void * payload, size_t size, void * const * hdr_from, void * const * from,
+                        std::string & err) {
+    constexpr int ND_XN_MAX = 4;
+    if (n < 1 || n > ND_XN_MAX) {
+        err = "n-peer exchange takes 1 to 4 ND connections";
+        return false;
+    }
+    for (int i = 0; i < n; ++i) {
+        if (conns[i] == nullptr) {
+            err = "n-peer exchange needs every ND connection up";
+            return false;
+        }
+        for (int j = 0; j < i; ++j) {
+            if (conns[j] == conns[i]) {
+                err = "n-peer exchange needs distinct ND connections";
+                return false;
+            }
+        }
+    }
+    if (!nd_multichunk()) {
+        err = "n-peer exchange needs LLAMA_DIST_TP_RDMA_MULTICHUNK";
+        return false;
+    }
+    const uint8_t * h     = (const uint8_t *)hdr;
+    const uint8_t * p     = (const uint8_t *)payload;
+    const size_t    total = hdr_size + size;
+    size_t tx[ND_XN_MAX] = {};
+    size_t rx[ND_XN_MAX] = {};
+
+    const int64_t tick       = nd_tick_ticks();
+    int64_t       last_check = nd_qpc();
+    uint32_t      idle_steps = 0;
+    bool ok = true;
+    for (;;) {
+        bool moved = false;
+        for (int i = 0; ok && i < n; ++i) {
+            ok = nd_tx_pump(conns[i], h, hdr_size, p, size, tx[i], moved);
+        }
+        for (int i = 0; ok && i < n; ++i) {
+            ok = nd_rx_pump(conns[i], (uint8_t *)hdr_from[i], hdr_size, (uint8_t *)from[i], size, rx[i], moved);
+        }
+        if (!ok) {
+            break;
+        }
+        bool done = true;
+        for (int i = 0; i < n; ++i) {
+            if (tx[i] != total || conns[i]->tx_fill != 0 || rx[i] != total) {
+                done = false;
+            }
+        }
+        if (done) {
+            break;
+        }
+        int stepped = 0;
+        for (int i = 0; i < n; ++i) {
+            const int r = nd_try_step(conns[i]);
+            if (r < 0) {
+                ok = false;
+                break;
+            }
+            stepped += r;
+        }
+        if (!ok) {
+            break;
+        }
+        if (moved) {
+            idle_steps = 0;
+            continue;
+        }
+        if (stepped > 0) {
+            // completions that never let anything move mean a queue is replaying something stale
+            if (++idle_steps > ND_MAX_IDLE_STEPS) {
+                ND_LOG_ERR("n-peer exchange consumed %u completions without moving data\n", idle_steps);
+                ok = false;
+                break;
+            }
+            continue;
+        }
+        YieldProcessor();
+        const int64_t now = nd_qpc();
+        if (now - last_check >= tick) {
+            last_check = now;
+            for (int i = 0; i < n; ++i) {
+                dist_nd_conn * c = conns[i];
+                if (nd_tcp_peer_closed(c->tcp_in) || nd_tcp_peer_closed(c->tcp_out)) {
+                    ND_LOG_DBG("peer dropped the ring socket\n");
+                    c->peer_gone = true;
+                    ok = false;
+                }
+            }
+            if (!ok) {
+                break;
+            }
+        }
+    }
+    if (ok && !nd_full_duplex()) {
+        for (int i = 0; ok && i < n; ++i) {
+            ok = nd_send_drain_local(conns[i]);
+        }
+    }
+    if (!ok) {
+        bool gone = false;
+        for (int i = 0; i < n; ++i) {
+            conns[i]->tx_fill = 0;   // drop any half-staged chunk; the connections are finished either way
+            gone = gone || conns[i]->peer_gone;
+        }
+        err = gone ? "peer closed connection" : "NetworkDirect n-peer exchange failed";
         return false;
     }
     return true;
