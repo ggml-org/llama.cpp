@@ -93,6 +93,9 @@ struct decoder_runtime_ctx {
 
     std::shared_ptr<std::mutex> mutex;
     std::shared_ptr<GgmlOvDecoder> ptr;
+    // Attention sizes the cached prefill model was built with; decode calls overwrite the decoder's.
+    int prefill_attention_size = -1;
+    int prefill_attention_size_swa = -1;
 };
 
 struct ov_compiled_graph {
