@@ -203,7 +203,7 @@ static __global__ __launch_bounds__(256, BLOCKS) void gdn_single(ggml_cuda_gdn_m
                 const float beta = t < valid ? a.beta[goff + (t0 + t) * a.sb2] : 0.f;
 #pragma unroll
                 for (int offset = 1; offset < 32; offset *= 2) {
-                    const float previous = __shfl_up_sync(0xffffffff, g, offset, 32);
+                    const float previous = __shfl_up_sync(GGML_CUDA_FULL_LANE_MASK, g, offset, 32);
                     if (lane >= offset) {
                         g += previous;
                     }
@@ -213,7 +213,7 @@ static __global__ __launch_bounds__(256, BLOCKS) void gdn_single(ggml_cuda_gdn_m
                     s.prefix[t] = g;
                     s.beta[t]   = beta;
                 }
-                carry = __shfl_sync(0xffffffff, g, 31, 32);
+                carry = __shfl_sync(GGML_CUDA_FULL_LANE_MASK, g, 31, 32);
             }
         }
 #pragma unroll
@@ -288,7 +288,7 @@ static __global__ __launch_bounds__(256, BLOCKS) void gdn_single(ggml_cuda_gdn_m
                 x[j]          = col == row ? 1.f : (col < row ? -s.lower[s.lower_index(row, col)] : 0.f);
             }
             for (int pivot = row - 1; pivot > 0; --pivot) {
-                const float xp = __shfl_sync(0xffffffff, x[pivot / 32], pivot % 32, 32);
+                const float xp = __shfl_sync(GGML_CUDA_FULL_LANE_MASK, x[pivot / 32], pivot % 32, 32);
 #pragma unroll
                 for (int j = 0; j < (C + 31) / 32; ++j) {
                     const int col = lane + 32 * j;
