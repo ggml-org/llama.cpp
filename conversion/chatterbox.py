@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import math
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterable
@@ -17,10 +16,8 @@ import torch.nn.functional as F
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import ModelBase, TextModel, MmprojModel, LazyTorchTensor, gguf
+from .base import ModelBase, TextModel, MmprojModel, LazyTorchTensor, gguf, logger
 from .llama import LlamaModel
-
-logger = logging.getLogger("hf-to-gguf")
 
 TURBO_TALKER = "t3_turbo_v1.safetensors"
 MTL_TALKER   = "t3_mtl23ls_v3.safetensors"
