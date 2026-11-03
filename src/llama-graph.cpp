@@ -124,8 +124,6 @@ static llm_attn_mask build_attn_inp_attn_mask(
         ggml_set_name(attn_mask.raw, "attn_inp_kq_mask");
     }
 
-    attn_mask.cnv = attn_mask.raw;
-
     return attn_mask;
 }
 
@@ -3131,16 +3129,11 @@ llm_graph_input_attn_no_cache * llm_graph_context::build_attn_inp_no_cache() con
     ggml_set_input(inp->self_attn_mask.raw);
     cb(inp->self_attn_mask.raw, "self_kq_mask", -1);
 
-    inp->self_attn_mask.cnv = inp->self_attn_mask.raw;
-
     if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
         inp->self_attn_mask_swa.raw = ggml_new_tensor_4d(ctx0, type_mask, n_kv, n_tokens, 1, 1);
         ggml_set_input(inp->self_attn_mask_swa.raw);
-
-        inp->self_attn_mask_swa.cnv = inp->self_attn_mask_swa.raw;
     } else {
         inp->self_attn_mask_swa.raw = nullptr;
-        inp->self_attn_mask_swa.cnv = nullptr;
     }
 
     return (llm_graph_input_attn_no_cache *) res->add_input(std::move(inp));
@@ -3169,7 +3162,7 @@ ggml_tensor * llm_graph_context::build_attn(
 
     const bool is_swa = hparams.is_swa(il);
 
-    const auto & kq_mask = is_swa ? inp->self_attn_mask_swa.cnv : inp->self_attn_mask.cnv;
+    const auto & kq_mask = is_swa ? inp->self_attn_mask_swa.raw : inp->self_attn_mask.raw;
     const auto & kv_rows = is_swa ? inp->self_attn_mask_swa.rows : inp->self_attn_mask.rows;
 
     // [TAG_NO_CACHE_PAD]
@@ -3296,7 +3289,7 @@ ggml_tensor * llm_graph_context::build_attn(
         v = mctx_cur->get_v(ctx0, il);
     }
 
-    const auto & kq_mask = inp->self_attn_mask.cnv;
+    const auto & kq_mask = inp->self_attn_mask.raw;
     const auto & kv_rows = inp->self_attn_mask.rows;
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, sinks, v_mla, 0, kq_scale, il);
@@ -3341,7 +3334,6 @@ static std::unique_ptr<llm_graph_input_attn_k> build_attn_inp_k_impl(
         inp->self_k_idxs = mctx_cur->build_input_k_idxs(ctx0, ubatch);
 
         inp->self_attn_mask.raw = build_attn_inp_kq_mask(ctx0, mctx_cur, ubatch, cparams);
-        inp->self_attn_mask.cnv = inp->self_attn_mask.raw;
     }
 
     return inp;
@@ -3384,7 +3376,7 @@ ggml_tensor * llm_graph_context::build_attn(
         ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
     }
 
-    const auto & kq_mask = inp->self_attn_mask.cnv;
+    const auto & kq_mask = inp->self_attn_mask.raw;
     const auto & kv_rows = inp->self_attn_mask.rows;
 
     ggml_tensor * q = q_cur;
@@ -3465,9 +3457,9 @@ ggml_tensor * llm_graph_context::build_attn(
 
     // top_k indexes the cells, and the indexer mask of the same type is built the same way
     // let's use it, so when no other layer reads the MLA mask is not allocated
-    ggml_tensor * kq_mask = inp->self_attn_mask_mla.cnv;
-    if (inp->self_attn_mask_lid.cnv->type == kq_mask->type) {
-        kq_mask = inp->self_attn_mask_lid.cnv;
+    ggml_tensor * kq_mask = inp->self_attn_mask_mla.raw;
+    if (inp->self_attn_mask_lid.raw->type == kq_mask->type) {
+        kq_mask = inp->self_attn_mask_lid.raw;
     }
 
     ggml_tensor * kq_mask_top_k = nullptr;
@@ -3589,7 +3581,7 @@ ggml_tensor * llm_graph_context::build_attn(
         ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il));
     }
 
-    const auto & kq_mask = is_swa ? inp->self_attn_mask_swa.cnv : inp->self_attn_mask.cnv;
+    const auto & kq_mask = is_swa ? inp->self_attn_mask_swa.raw : inp->self_attn_mask.raw;
     const auto & kv_rows = is_swa ? inp->self_attn_mask_swa.rows : inp->self_attn_mask.rows;
 
     ggml_tensor * q = q_cur;
@@ -3660,7 +3652,7 @@ ggml_tensor * llm_graph_context::build_attn(
         ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
     }
 
-    const auto & kq_mask = is_swa ? inp->self_attn_mask_swa.cnv : inp->self_attn_mask.cnv;
+    const auto & kq_mask = is_swa ? inp->self_attn_mask_swa.raw : inp->self_attn_mask.raw;
     const auto & kv_rows = is_swa ? inp->self_attn_mask_swa.rows : inp->self_attn_mask.rows;
 
     // MLA-style attention: the cached K is used as V
@@ -3697,8 +3689,6 @@ llm_graph_input_attn_cross * llm_graph_context::build_attn_inp_cross() const {
     inp->cross_attn_mask.raw = ggml_new_tensor_4d(ctx0, type_mask, n_enc, n_tokens, 1, 1);
     ggml_set_input(inp->cross_attn_mask.raw);
 
-    inp->cross_attn_mask.cnv = inp->cross_attn_mask.raw;
-
     return (llm_graph_input_attn_cross *) res->add_input(std::move(inp));
 }
 
@@ -3721,7 +3711,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_build_forward_expand(gf, k_cur);
     ggml_build_forward_expand(gf, v_cur);
 
-    const auto & kq_mask = inp->cross_attn_mask.cnv;
+    const auto & kq_mask = inp->cross_attn_mask.raw;
     const auto & kv_rows = inp->cross_attn_mask.rows;
 
     ggml_tensor * q = q_cur;
@@ -3759,7 +3749,6 @@ static std::unique_ptr<llm_graph_input_attn_k_dsa> build_attn_inp_k_dsa_impl(
         inp->self_k_idxs_mla = mctx_cur->get_mla()->build_input_k_idxs(ctx0, ubatch);
 
         inp->self_attn_mask_mla.raw = build_attn_inp_kq_mask(ctx0, mctx_cur->get_mla(), ubatch, cparams);
-        inp->self_attn_mask_mla.cnv = inp->self_attn_mask_mla.raw;
     }
 
     {
@@ -3770,7 +3759,6 @@ static std::unique_ptr<llm_graph_input_attn_k_dsa> build_attn_inp_k_dsa_impl(
         cparams_copy.flash_attn = cparams.fused_lid;
 
         inp->self_attn_mask_lid.raw = build_attn_inp_kq_mask(ctx0, mctx_cur->get_lid(), ubatch, cparams_copy);
-        inp->self_attn_mask_lid.cnv = inp->self_attn_mask_lid.raw;
 
         inp->self_k_rot_lid = mctx_cur->get_lid()->get_k_rot();
     }
@@ -3797,7 +3785,6 @@ llm_graph_input_attn_k_dsa_iswa * llm_graph_context::build_attn_inp_k_dsa_iswa()
     inp_swa->self_k_idxs = mctx_cur->get_swa()->build_input_k_idxs(ctx0, ubatch);
 
     inp_swa->self_attn_mask.raw = build_attn_inp_kq_mask(ctx0, mctx_cur->get_swa(), ubatch, cparams);
-    inp_swa->self_attn_mask.cnv = inp_swa->self_attn_mask.raw;
 
     auto inp = std::make_unique<llm_graph_input_attn_k_dsa_iswa>(std::move(inp_dsa), std::move(inp_swa), mctx_cur);
 
@@ -3819,7 +3806,6 @@ llm_graph_input_attn_kv_msa * llm_graph_context::build_attn_inp_kv_msa(bool msa_
         inp->self_v_idxs = mctx_base->build_input_v_idxs(ctx0, ubatch);
 
         inp->self_attn_mask.raw = build_attn_inp_kq_mask(ctx0, mctx_base, ubatch, cparams);
-        inp->self_attn_mask.cnv = inp->self_attn_mask.raw;
     }
 
     inp->self_k_rot = mctx_base->get_k_rot();
@@ -3874,7 +3860,6 @@ llm_graph_input_attn_k_iswa * llm_graph_context::build_attn_inp_k_iswa() const {
         inp->self_k_idxs = mctx_cur->get_base()->build_input_k_idxs(ctx0, ubatch);
 
         inp->self_attn_mask.raw = build_attn_inp_kq_mask(ctx0, mctx_cur->get_base(), ubatch, cparams);
-        inp->self_attn_mask.cnv = inp->self_attn_mask.raw;
     }
 
     {
@@ -3883,7 +3868,6 @@ llm_graph_input_attn_k_iswa * llm_graph_context::build_attn_inp_k_iswa() const {
         inp->self_k_idxs_swa = mctx_cur->get_swa()->build_input_k_idxs(ctx0, ubatch);
 
         inp->self_attn_mask_swa.raw = build_attn_inp_kq_mask(ctx0, mctx_cur->get_swa(), ubatch, cparams);
-        inp->self_attn_mask_swa.cnv = inp->self_attn_mask_swa.raw;
     }
 
     inp->self_k_rot = mctx_cur->get_base()->get_k_rot();
@@ -3905,7 +3889,6 @@ llm_graph_input_dsv4 * llm_graph_context::build_inp_dsv4() const {
 
     inp_raw->self_k_idxs = raw_ctx->build_input_k_idxs(ctx0, ubatch);
     inp_raw->self_attn_mask.raw = dsv4_build_raw_kq_mask(ctx0, raw_ctx, ubatch, cparams, n_stream);
-    inp_raw->self_attn_mask.cnv = inp_raw->self_attn_mask.raw;
 
     inp_raw->self_k_rot = raw_ctx->get_k_rot();
     auto inp = std::make_unique<llm_graph_input_dsv4>(cparams, std::move(inp_raw), mctx_cur);
@@ -4089,7 +4072,6 @@ llm_graph_input_mem_hybrid_iswa * llm_graph_context::build_inp_mem_hybrid_iswa()
         inp_attn->self_v_idxs = attn_ctx->get_base()->build_input_v_idxs(ctx0, ubatch);
 
         inp_attn->self_attn_mask.raw = build_attn_inp_kq_mask(ctx0, attn_ctx->get_base(), ubatch, cparams);
-        inp_attn->self_attn_mask.cnv = inp_attn->self_attn_mask.raw;
     }
 
     {
@@ -4097,7 +4079,6 @@ llm_graph_input_mem_hybrid_iswa * llm_graph_context::build_inp_mem_hybrid_iswa()
         inp_attn->self_v_idxs_swa = attn_ctx->get_swa()->build_input_v_idxs(ctx0, ubatch);
 
         inp_attn->self_attn_mask_swa.raw = build_attn_inp_kq_mask(ctx0, attn_ctx->get_swa(), ubatch, cparams);
-        inp_attn->self_attn_mask_swa.cnv = inp_attn->self_attn_mask_swa.raw;
     }
 
     inp_attn->self_k_rot = attn_ctx->get_base()->get_k_rot();

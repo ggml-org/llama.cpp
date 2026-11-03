@@ -1683,6 +1683,9 @@ struct args_set_input_attn_mask {
 
     // cell of each mask column per stream, nullptr if the columns are the cells
     const int32_t * rows;
+
+    // every token of a sequence reuses the mask row of the first one (dspark draft blocks)
+    bool block_uniform;
 };
 
 template<typename T, bool causal, bool swa, bool is_2d, bool alibi>
@@ -1709,10 +1712,15 @@ static void set_input_attn_mask_impl(const args_set_input_attn_mask & args, T * 
     llama_pos seq_pos_min[LLAMA_MAX_SEQ];
     std::fill(seq_pos_min, seq_pos_min + LLAMA_MAX_SEQ, INT32_MAX);
 
+    // first token of each sequence, used when the mask rows are shared within a sequence
+    uint32_t seq_first[LLAMA_MAX_SEQ];
+    std::fill(seq_first, seq_first + LLAMA_MAX_SEQ, ubatch->n_tokens);
+
     for (uint32_t i = 0; i < ubatch->n_tokens; ++i) {
         const llama_seq_id seq_id = ubatch->seq_id[i][0];
 
         seq_pos_min[seq_id] = std::min(seq_pos_min[seq_id], ubatch->pos[i]);
+        seq_first[seq_id]   = std::min(seq_first[seq_id],   i);
     }
 
     for (uint32_t s = 0; s < n_stream; ++s) {
@@ -1729,12 +1737,15 @@ static void set_input_attn_mask_impl(const args_set_input_attn_mask & args, T * 
 
             const auto & cells = v_cells.at(seq_to_stream[seq_id]);
 
+            // shared mask rows: every query of the sequence uses the row of its first token
+            const uint32_t iq = args.block_uniform ? seq_first[seq_id] : i;
+
                   llama_pos p0 = -1;
-            const llama_pos p1 = ubatch->pos[i];
+            const llama_pos p1 = ubatch->pos[iq];
 
             // for M-RoPE
-            const llama_pos p1_x = is_2d ? ubatch->pos[i + ubatch->n_tokens*2] : 0;
-            const llama_pos p1_y = is_2d ? ubatch->pos[i + ubatch->n_tokens]   : 0;
+            const llama_pos p1_x = is_2d ? ubatch->pos[iq + ubatch->n_tokens*2] : 0;
+            const llama_pos p1_y = is_2d ? ubatch->pos[iq + ubatch->n_tokens]   : 0;
 
             const uint64_t idst = n_kv*i;
 
@@ -1941,6 +1952,7 @@ void llama_kv_cache::set_input_attn_mask(const llm_attn_mask & attn_mask, const 
             /*.n_stream         =*/ n_stream,
             /*.n_tps            =*/ n_tps,
             /*.rows             =*/ rows,
+            /*.block_uniform    =*/ attn_mask.block_uniform,
         };
 
         if (dst->type == GGML_TYPE_F16) {
