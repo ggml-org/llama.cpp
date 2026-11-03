@@ -525,7 +525,8 @@ def suite_serving(ctx: Context, records: list[dict[str, Any]], name: str, model:
                 cmd += ["--isl", str(isl), "--isl-stddev", "0", "--osl", str(osl), "--osl-stddev", "0",
                         "--extra-inputs", json.dumps({"ignore_eos": True, "min_tokens": osl}),
                         "--concurrency", str(c), "--request-count", str(scfg["requests"][c]),
-                        "--warmup-request-count", str(scfg["warmup"])]
+                        # warmup runs at the same concurrency: one request per slot caches the shared prefix in every slot
+                        "--warmup-request-count", str(max(scfg["warmup"], c))]
                 if depth:
                     cmd += ["--shared-system-prompt-length", str(depth)]
                 ctx.run(cmd, run_dir / "aiperf.log", scfg["timeout_s"])

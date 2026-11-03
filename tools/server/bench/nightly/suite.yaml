@@ -73,7 +73,8 @@ suites:
     # some turns ask for 35k output tokens; cap them so one night stays in budget
     max_output_tokens: 256
     block_size: 512
-    slots: 2
+    # both traces are one agent session (each turn extends the previous), so one slot keeps the prefix cached
+    slots: 1
     timeout_s: 3600
 
   quality:
