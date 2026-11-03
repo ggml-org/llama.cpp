@@ -157,6 +157,8 @@ llama_model_lfm3::graph<decision>::graph(const llama_model & model, const llm_gr
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     for (int il = 0; il < n_layer; ++il) {
+        res->t_layer_inp[il] = cur;
+
         auto * prev_cur = cur;
 
         cur = build_norm(cur, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
