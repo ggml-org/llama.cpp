@@ -1910,8 +1910,8 @@ static inline void iq2xxs_decode_tile(const uint8_t * restrict tile, HVX_Vector 
     *v_ls = Q6_Vw_vadd_VwVw(Q6_Vw_vasl_VwR(Q6_Vuw_vlsr_VuwR(v_sgn, IQ2XXS_SCALE_SHIFT), 1), v_one);
 }
 
-// IQ2_XXS: fp32 d / 8 of the 32 rows of a super-block (8 tiles) in lanes 0..31
-static inline HVX_Vector iq2xxs_load_d(const uint8_t * restrict sb) {
+// IQ2_XXS: fp16 d of the 32 rows of a super-block (8 tiles) in halfword lanes 0..31
+static inline HVX_Vector iq2xxs_gather_d(const uint8_t * restrict sb) {
     const uint32_t padded = htp_tensor_get_tile_padded_size(HTP_TYPE_IQ2_XXS);
     HVX_Vector v_dd = Q6_V_vzero();
 
@@ -1922,8 +1922,13 @@ static inline HVX_Vector iq2xxs_load_d(const uint8_t * restrict sb) {
                              Q6_V_vror_VR(v, (VLEN - IQ2XXS_D_SLICE_BYTES * j) & (VLEN - 1)));
     }
 
+    return v_dd;
+}
+
+// IQ2_XXS: fp32 d / 8 of the 32 rows of a super-block (8 tiles) in lanes 0..31
+static inline HVX_Vector iq2xxs_load_d(const uint8_t * restrict sb) {
     // db = d * (0.5 + scale) * 0.25 = d * (2 * scale + 1) / 8
-    return hvx_vec_mul_f32_f32(Q6_V_lo_W(hvx_vec_f16_to_f32(v_dd)), hvx_vec_splat_f32(IQ2XXS_D_SCALE));
+    return hvx_vec_mul_f32_f32(Q6_V_lo_W(hvx_vec_f16_to_f32(iq2xxs_gather_d(sb))), hvx_vec_splat_f32(IQ2XXS_D_SCALE));
 }
 
 static void tiled_vec_dot_iq2xxs_32x1(const uint32_t n, float * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows, const float * restrict sz) {

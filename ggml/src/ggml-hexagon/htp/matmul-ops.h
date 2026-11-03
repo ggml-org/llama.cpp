@@ -252,9 +252,13 @@ static inline void htp_mm_hmx_get_batched_chunk_costs(
     *size_per_mn_out = sizeof(uint16_t);
 }
 
-static inline size_t htp_mm_hmx_get_2d_overhead(bool pipeline, bool is_matmul_id) {
+static inline size_t htp_mm_hmx_lut_bytes(int wtype) {
+    return (wtype == HTP_TYPE_IQ2_XXS) ? hex_align_up(HTP_IQ2XXS_LUT_BYTES, HTP_MM_HMX_TILE_SIZE) : 0;
+}
+
+static inline size_t htp_mm_hmx_get_2d_overhead(int wtype, bool pipeline, bool is_matmul_id) {
     size_t num_regions = pipeline ? 7 : (is_matmul_id ? 4 : 5);
-    return num_regions * HTP_MM_HMX_TILE_SIZE + 256;
+    return num_regions * HTP_MM_HMX_TILE_SIZE + 256 + htp_mm_hmx_lut_bytes(wtype);
 }
 
 static inline size_t htp_mm_hmx_get_batched_overhead(void) {
@@ -270,6 +274,7 @@ struct htp_mm_hmx_vtcm_layout {
     size_t off_scratch[2];    // dequantization scratch pads
     size_t off_scales;        // HMX scales (256 bytes)
     size_t off_bias;          // bias in VTCM
+    size_t off_lut;           // IQ2_XXS grid + sign tables (2D only)
 
     // Cached sizes of regions for HMX kernel use
     size_t weight_area_bytes;
@@ -279,6 +284,7 @@ struct htp_mm_hmx_vtcm_layout {
     size_t scratch_bytes[2];
     size_t act_head_stride;
     size_t bias_bytes;
+    size_t lut_bytes;
 
     size_t total_bytes;
 };
@@ -317,6 +323,8 @@ static inline void htp_mm_hmx_vtcm_layout_build(
     size_t bias_size
 ) {
     size_t off = 0;
+    L->lut_bytes = 0;
+    L->off_lut   = 0;
 
     if (kernel_type == HTP_MM_KERNEL_HMX_BATCHED) {
         const size_t vec_dot_size     = k * sizeof(uint16_t);
@@ -414,6 +422,9 @@ static inline void htp_mm_hmx_vtcm_layout_build(
         L->bias_bytes        = bias_size;
 
         off = off_group_a + hex_smax(group_b_size, group_c_size);
+
+        L->lut_bytes = htp_mm_hmx_lut_bytes(wtype);
+        VTCM_LAYOUT_ALLOC_OPTIONAL(off, off_lut, L->lut_bytes, L->lut_bytes > 0);
     }
 
     L->total_bytes = off;
@@ -732,7 +743,7 @@ static inline bool htp_mm_hmx_solve_2d_params(
 
     int act_hvx = n_hvx;
     while (act_hvx >= 1) {
-        size_t simple_2d_overhead = htp_mm_hmx_get_2d_overhead(pipeline, is_matmul_id) + (bias_size > 0 ? hex_align_up(bias_size, HTP_MM_HMX_TILE_SIZE) : 0);
+        size_t simple_2d_overhead = htp_mm_hmx_get_2d_overhead(wtype, pipeline, is_matmul_id) + (bias_size > 0 ? hex_align_up(bias_size, HTP_MM_HMX_TILE_SIZE) : 0);
         size_t simple_2d_size_per_n, simple_2d_size_per_m, simple_2d_size_per_mn;
         htp_mm_hmx_get_2d_chunk_costs(wtype, k, pipeline, aligned_tile_size, &simple_2d_size_per_n, &simple_2d_size_per_m, &simple_2d_size_per_mn);
 

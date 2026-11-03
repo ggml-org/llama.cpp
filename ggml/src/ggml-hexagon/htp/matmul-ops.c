@@ -196,15 +196,18 @@ static const uint8_t __attribute__((aligned(VLEN))) kvalues_mxfp4_lut[] = {
 // VTCM copy of htp_iq2xxs_lut for the current op (set by hvx_mm_iq2xxs_lut_init)
 static const uint8_t * iq2xxs_vtcm_lut;
 
-static inline void hvx_mm_iq2xxs_lut_init(uint8_t * restrict base, const struct htp_mm_hvx_vtcm_layout * restrict L) {
-    if (L->lut_bytes == 0) {
-        return;
-    }
-    uint8_t * restrict lut = base + L->off_lut;
+static inline void iq2xxs_lut_copy(uint8_t * restrict lut) {
     for (uint32_t i = 0; i < HTP_IQ2XXS_LUT_BYTES / VLEN; i++) {
         hvx_vmem(lut + i * VLEN) = hvx_vmem(htp_iq2xxs_lut + i * VLEN);
     }
     iq2xxs_vtcm_lut = lut;
+}
+
+static inline void hvx_mm_iq2xxs_lut_init(uint8_t * restrict base, const struct htp_mm_hvx_vtcm_layout * restrict L) {
+    if (L->lut_bytes == 0) {
+        return;
+    }
+    iq2xxs_lut_copy(base + L->off_lut);
 }
 
 #define htp_matmul_tensors_preamble                                 \
@@ -2348,6 +2351,8 @@ static inline tiled_dequant_task_fn_t hmx_get_dequant_worker_fn(int weight_type,
         case HTP_TYPE_Q4_1:
         case HTP_TYPE_Q4_K:   return dequantize_tiled_weight_to_fp16_task_q4_1;
         case HTP_TYPE_MXFP4:  return dequantize_tiled_weight_to_fp16_task_mxfp4;
+        case HTP_TYPE_NVFP4:  return dequantize_tiled_weight_to_fp16_task_nvfp4;
+        case HTP_TYPE_IQ2_XXS: return dequantize_tiled_weight_to_fp16_task_iq2_xxs;
         case HTP_TYPE_Q8_0:   return dequantize_tiled_weight_to_fp16_task_q8_0;
         case HTP_TYPE_Q5_0:   return dequantize_tiled_weight_to_fp16_task_q5_0;
         case HTP_TYPE_Q5_1:
@@ -2715,6 +2720,9 @@ static int hmx_mm_2d_f32(struct htp_context *ctx,
     __fp16  *vtcm_scales     = VTCM_LAYOUT_PTR(__fp16, base, L.off_scales);
 
     hmx_init_column_scales(vtcm_scales, Q6_V_vsplat_R(0x3c00));  // scale: 1.0, bias: 0.0 in FP16
+    if (L.lut_bytes > 0) {
+        iq2xxs_lut_copy(base + L.off_lut);
+    }
 
     const bool has_bias      = (src2_bytes > 0 && src2_addr != 0);
     float   *vtcm_bias       = VTCM_LAYOUT_PTR_OPTIONAL(float, base, L.off_bias, has_bias);
@@ -2984,6 +2992,9 @@ static int hmx_mm_nx_2d_f32(struct htp_ops_context * octx, const struct htp_mm_k
     __fp16  *vtcm_scales     = VTCM_LAYOUT_PTR(__fp16, base, L.off_scales);
 
     hmx_init_column_scales(vtcm_scales, Q6_V_vsplat_R(0x3c00));  // scale: 1.0, bias: 0.0 in FP16
+    if (L.lut_bytes > 0) {
+        iq2xxs_lut_copy(base + L.off_lut);
+    }
 
     int m_start = 0;
     int m_rows  = m;
@@ -3566,7 +3577,7 @@ static int hmx_mm_id_2d_f32(struct htp_context *ctx,
     htp_mm_hmx_get_2d_chunk_costs(weight_type, k, /*pipeline=*/false, aligned_tile_size,
                                   &size_per_n, &size_per_m, &size_per_mn);
 
-    const size_t overhead = htp_mm_hmx_get_2d_overhead(/*pipeline=*/false, /*is_matmul_id=*/true);
+    const size_t overhead = htp_mm_hmx_get_2d_overhead(weight_type, /*pipeline=*/false, /*is_matmul_id=*/true);
     size_t m_chunk_n_rows = 0, n_chunk_n_cols = 0;
     if (htp_mm_hmx_compute_chunks(vtcm_budget, overhead, size_per_n, size_per_m, size_per_mn,
                            m_core_padded, n,
@@ -3588,6 +3599,8 @@ static int hmx_mm_id_2d_f32(struct htp_context *ctx,
     __fp16  *vtcm_output   = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, output_area_size);
     void    *vtcm_scratch0 = vtcm_seq_alloc(&vtcm_ptr, scratch0_size);
     __fp16  *vtcm_scales   = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, 256);
+    const size_t lut_size  = htp_mm_hmx_lut_bytes(weight_type);
+    uint8_t *vtcm_lut      = lut_size ? (uint8_t *) vtcm_seq_alloc(&vtcm_ptr, lut_size) : NULL;
 
     vtcm_used = vtcm_ptr - (uint8_t *) ctx->vtcm_base;
     if (vtcm_used > vtcm_budget) {
@@ -3596,6 +3609,9 @@ static int hmx_mm_id_2d_f32(struct htp_context *ctx,
     }
 
     hmx_init_column_scales(vtcm_scales, Q6_V_vsplat_R(0x3c00));
+    if (lut_size) {
+        iq2xxs_lut_copy(vtcm_lut);
+    }
 
     htp_trace_event_stop(tr, HTP_TRACE_EVT_INIT, 0);
 

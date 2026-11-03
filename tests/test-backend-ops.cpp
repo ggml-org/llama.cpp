@@ -12212,8 +12212,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_mul_mat_scale(GGML_TYPE_NVFP4, m, n, k));
         }
     }
-    // the same, per expert: mul_mat_id followed by the gathered expert scales (large batches need the HMX path)
-    for (int n : {1, 8}) {
+    // the same, per expert: mul_mat_id followed by the gathered expert scales (large batches use the HMX path)
+    for (int n : {1, 8, 512}) {
         test_cases.emplace_back(new test_mul_mat_scale(GGML_TYPE_NVFP4, 1024, n, 4096, 8, 2));
     }
 #else
@@ -13845,6 +13845,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
                 test_cases.emplace_back(new test_mul_mat(type_a, type_b, 4096, bs, 14336, {1,  1}, {1, 1}));
             }
         }
+    }
+
+    // Nemotron NVFP4 and IQ2_XXS prefill: batch sweep across the HVX/HMX switch, {k, m}
+    for (int bs : {4, 5, 8, 16, 32, 64, 128, 256, 512}) {
+        for (auto [k, m] : std::initializer_list<std::pair<int, int>>{{4096, 18560}, {12288, 4096}}) {
+            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_NVFP4, GGML_TYPE_F32, m, bs, k, {1, 1}, {1, 1}));
+        }
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_IQ2_XXS, GGML_TYPE_F32, 5376, bs, 4096, {1, 1}, {1, 1}));
     }
 
     // Q4_K multi-column mat-vec
