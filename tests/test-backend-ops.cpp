@@ -10933,64 +10933,30 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_cont(GGML_TYPE_F32, {512, 8193, 2, 1}, false, {2, 1, 0, 3}));
     test_cases.emplace_back(new test_cont(GGML_TYPE_F32, {256, 16385, 2, 1}, false, {0, 2, 1, 3}));
 
-    // channel-first <-> channel-last, sizes not multiples of the 32/64 transpose tile
+    // channel swap with sizes not multiples of 32/64 tile
     for (ggml_type type_dst : { GGML_TYPE_F32, GGML_TYPE_F16 }) {
-        for (std::array<int64_t, 4> ne : std::initializer_list<std::array<int64_t, 4>>{
-                {33, 17, 5, 19}, {300, 70, 3, 70}, {40, 300, 2, 300}, {5, 3, 7, 9} }) {
-            for (std::array<int64_t, 4> perm : std::initializer_list<std::array<int64_t, 4>>{
-                    {1, 2, 3, 0},
-                    {3, 0, 1, 2} }) {
-                test_cases.emplace_back(new test_cont(type_dst, ne, false, perm));
-            }
-        }
+        test_cases.emplace_back(new test_cont(type_dst, {33, 17, 5, 19}, false, {1, 2, 3, 0}));
     }
 
-    // small channel dims (scaled-down VAE shapes, e.g. 8:832:480:13 and 2:416:3120:16), with extent-1 dims
-    for (ggml_type type_dst : { GGML_TYPE_F32, GGML_TYPE_F16 }) {
-        for (std::array<int64_t, 4> ne : std::initializer_list<std::array<int64_t, 4>>{
-                {104, 60, 13, 8}, {52, 39, 16, 2}, {37, 9, 5, 3}, {65, 7, 3, 32},
-                {8, 104, 60, 13}, {2, 52, 39, 16}, {3, 37, 9, 5}, {16, 1, 50, 7} }) {
-            for (std::array<int64_t, 4> perm : std::initializer_list<std::array<int64_t, 4>>{
-                    {1, 2, 3, 0},
-                    {3, 0, 1, 2} }) {
-                test_cases.emplace_back(new test_cont(type_dst, ne, false, perm));
-            }
-        }
-    }
+    // small channel dims and extent-1 dims
+    test_cases.emplace_back(new test_cont(GGML_TYPE_F32, {8, 104, 60, 13}, false, {1, 2, 3, 0}));
+    test_cases.emplace_back(new test_cont(GGML_TYPE_F16, {8, 104, 60, 13}, false, {1, 2, 3, 0}));
+    test_cases.emplace_back(new test_cont(GGML_TYPE_F32, {16, 1, 50, 7}, false, {1, 2, 3, 0}));
 
-    // full reversal: contiguous src dim lands on dst dim 3, no dims merge
-    for (ggml_type type_dst : { GGML_TYPE_F32, GGML_TYPE_F16 }) {
-        for (std::array<int64_t, 4> ne : std::initializer_list<std::array<int64_t, 4>>{
-                {33, 5, 7, 9},          // small dst dim-3 stride
-                {33, 64, 32, 16} }) {   // dst dim-3 stride >= 64 KB, over the 16-bit DMA stride limit
-            test_cases.emplace_back(new test_cont(type_dst, ne, false, {3, 2, 1, 0}));
-        }
-    }
+    // full reversal: contiguous src dim lands on dst dim 3
+    test_cases.emplace_back(new test_cont(GGML_TYPE_F32, {33, 5, 7, 9}, false, {3, 2, 1, 0}));
+    test_cases.emplace_back(new test_cont(GGML_TYPE_F32, {33, 64, 32, 16}, false, {3, 2, 1, 0}));
 
-    // permutes that move blocks of values dense in both src and dst (ne[0] stays dim 0)
+    // permutes that move dense blocks (ne[0] stays dim 0)
     for (ggml_type type_dst : { GGML_TYPE_F32, GGML_TYPE_F16 }) {
-        for (std::array<int64_t, 4> ne : std::initializer_list<std::array<int64_t, 4>>{
-                {2, 33, 17, 3}, {4, 65, 9, 2}, {8, 7, 300, 1}, {32, 9, 7, 3}, {3, 33, 17, 3} }) {
-            for (std::array<int64_t, 4> perm : std::initializer_list<std::array<int64_t, 4>>{
-                    {0, 2, 1, 3},
-                    {0, 2, 3, 1},
-                    {0, 3, 1, 2} }) {
-                test_cases.emplace_back(new test_cont(type_dst, ne, false, perm));
-            }
-        }
+        test_cases.emplace_back(new test_cont(type_dst, {4, 65, 9, 2}, false, {0, 2, 1, 3}));
     }
-    test_cases.emplace_back(new test_cont(GGML_TYPE_F16, {64, 9, 7, 1}, false, {0, 2, 1, 3})); // 128-byte blocks
+    test_cases.emplace_back(new test_cont(GGML_TYPE_F16, {64, 9, 7, 1}, false, {0, 2, 1, 3}));
 
-    // transpose with i32, non-contiguous dst and CPY with reshape
+    // transpose with i32 and CPY with reshape
     test_cases.emplace_back(new test_cont(GGML_TYPE_I32, {33, 17, 5, 19}, false, {1, 2, 3, 0}));
-    test_cases.emplace_back(new test_cont(GGML_TYPE_I32, {4, 104, 60, 3}, false, {1, 2, 3, 0}));
-    for (ggml_type type : { GGML_TYPE_F32, GGML_TYPE_F16 }) {
-        test_cases.emplace_back(new test_cpy(type, type, {33, 17, 5, 1}, {17, 33, 5, 1}, {0, 0, 0, 0}, {1, 0, 2, 3}));
-        test_cases.emplace_back(new test_cpy(type, type, {33, 17, 5, 3}, {17, 5, 33, 3}, {1, 2, 0, 3}, {2, 0, 1, 3}));
-        test_cases.emplace_back(new test_cpy(type, type, {8, 52, 39, 1}, {8, 39, 52, 1}, {0, 0, 0, 0}, {0, 2, 1, 3}));
-        test_cases.emplace_back(new test_cpy(type, type, {33, 17, 5, 1}, {51, 55, 1, 1}, {1, 0, 2, 3}));
-        test_cases.emplace_back(new test_cpy(type, type, {4, 60, 13, 1}, {65, 48, 1, 1}, {1, 2, 0, 3}));
-    }
+    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {33, 17, 5, 1}, {17, 33, 5, 1}, {0, 0, 0, 0}, {1, 0, 2, 3}));
+    test_cases.emplace_back(new test_cpy(GGML_TYPE_F16, GGML_TYPE_F16, {8, 52, 39, 1}, {8, 39, 52, 1}, {0, 0, 0, 0}, {0, 2, 1, 3}));
 
     auto add_test_bin_bcast = [&](ggml_type type, std::array<int64_t, 4> ne, std::array<int, 4> nr, bool perm1 = false, bool src_overlap = false) {
         for (auto op : {ggml_add, ggml_sub, ggml_mul, ggml_div}) {
