@@ -1619,11 +1619,18 @@ bool GgmlOvDecoder::is_host_gather_rows(const ggml_tensor * node) {
     }
     const ggml_tensor * table = node->src[0];
     const ggml_tensor * ids = node->src[1];
-    // The table must hold raw ggml rows on the host: weights in an OpenVINO buffer are stored in the extracted layout.
+    // The table must hold raw ggml rows in host memory. OpenVINO buffers store weights in the extracted layout, except
+    // in the raw-weight cache modes, where they keep (or, with SELF_CONTAINED_MMAP, wrap) the raw GGUF bytes.
     constexpr size_t min_table_bytes = 64ull * 1024 * 1024;
-    return table != nullptr && ids != nullptr && table->view_src == nullptr && table->buffer != nullptr &&
-           table->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS && ggml_backend_buffer_is_host(table->buffer) &&
-           !ggml_backend_buffer_is_openvino(table->buffer) && ggml_get_type_traits(table->type)->to_float != nullptr &&
+    if (table == nullptr || ids == nullptr || table->view_src != nullptr || table->buffer == nullptr) {
+        return false;
+    }
+    const bool raw_cache = ggml_openvino_npu_raw_weight_cache_enabled() &&
+                           ggml_openvino_getenv_str("GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR") != nullptr;
+    const bool raw_rows = ggml_backend_buffer_is_openvino(table->buffer) ? raw_cache :
+                                                                           ggml_backend_buffer_is_host(table->buffer);
+    return table->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS && raw_rows &&
+           ggml_get_type_traits(table->type)->to_float != nullptr &&
            ggml_nbytes(table) >= min_table_bytes && ids->type == GGML_TYPE_I32 && ids->op == GGML_OP_NONE &&
            ggml_nelements(ids) == ids->ne[0] && node->ne[1] == ids->ne[0];
 }

@@ -2083,14 +2083,15 @@ static void build_static_model(const static_build_args & a,
         for (const auto & input : compiled_model.inputs()) {
             compiled_input_names.insert(input.get_node()->get_friendly_name());
         }
+        // The frontend drops inputs nothing reads: HFA prefill, KV-only prefill (out_ids) and host gather (token
+        // ids) can leave decoder inputs out of the compiled model. Keep the decoder order.
         for (const auto & [name, _] : decoder->get_model_inputs()) {
-            if (!ggml_openvino_npu_hfa_prefill_enabled() || std::string(tag) != "prefill" ||
-                compiled_input_names.count(name) != 0) {
+            if (compiled_input_names.count(name) != 0) {
                 names_in.push_back(name);
             }
         }
         for (const auto & [name, info] : decoder->get_model_extra_inputs()) {
-            if (info.is_parameter) {
+            if (info.is_parameter && compiled_input_names.count(name) != 0) {
                 names_in.push_back(name);
             }
         }
@@ -2765,7 +2766,14 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
                         ggml_openvino_model_cache_write_weights(weights_path, {model_prefill, model_decode});
                 }
                 if (!weights_layout) {
-                    throw std::runtime_error("ggml-openvino: failed to write NPU weights file " + weights_path);
+                    // E.g. a full disk. The models still compile and run; only this pair is left uncached, since its
+                    // blobs would reference a missing weights file.
+                    GGML_LOG_WARN("ggml-openvino: could not write the NPU weights file %s; not caching this graph\n",
+                                  weights_path.c_str());
+                    for (const uint64_t fp : { prefill_fp, decode_fp }) {
+                        std::remove((ggml_openvino_model_cache_manifest_path(model_cache_dir, fp) + ".source.tmp").c_str());
+                    }
+                    prefill_fp = decode_fp = 0;
                 }
             }
             if (parallel_compile) {
