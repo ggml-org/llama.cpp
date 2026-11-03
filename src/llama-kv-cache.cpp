@@ -797,6 +797,17 @@ llama_memory_context_ptr llama_kv_cache::init_update(llama_context * lctx, bool 
 }
 
 llama_kv_cache::slot_info_vec_t llama_kv_cache::prepare(const std::vector<llama_ubatch> & ubatches) {
+    // A single non-SWA ubatch cannot affect a later slot search. find_slot() is
+    // read-only, and without SWA it only selects empty cells, so there is no
+    // temporary cache state to apply and roll back.
+    if (ubatches.size() == 1 && n_swa == 0) {
+        auto sinfo = find_slot(ubatches.front(), false);
+        if (sinfo.empty()) {
+            return {};
+        }
+        return { std::move(sinfo) };
+    }
+
     llama_kv_cache::slot_info_vec_t res;
 
     struct state_t {
