@@ -37,11 +37,11 @@ VIRTUAL_ENV=/opt/llama-nightly/venv /opt/llama-nightly/uv-venv/bin/uv pip instal
 /opt/llama-nightly/venv/bin/python tools/server/bench/nightly/nightly.py run --home /opt/llama-nightly --suites engine --models M3
 ```
 
-`--dry-run` prints every server and client command without starting anything. `--tag bNNNN` (prefetch) pins a release.
+`--dry-run` prints every server and client command without starting anything. `--suites`, `--models` and `--configs` (shell patterns on config names, e.g. `--configs 'mooncake_T02*'`) narrow a run; a re-run on the same day and build replaces only the runs it repeats in that night's `night.json`. `--tag bNNNN` (prefetch) pins a release.
 
 ## Workflow
 
-- `workflow_dispatch` with optional `tag`, `suites` and `models` inputs.
+- `workflow_dispatch` with optional `tag`, `suites`, `models` and `configs` inputs.
 - The 01:00 UTC schedule only runs when the repository variable `SPARK_BENCH_NIGHTLY` is `true`. `SPARK_BENCH_HOME` overrides `NIGHTLY_HOME`.
 - The run step writes a summary table to the job summary, with a compare link to the previous night's commit, and uploads `results/<night>/` as an artifact for 30 days. It fails if any run failed.
 

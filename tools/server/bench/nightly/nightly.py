@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import fnmatch
 import json
 import math
 import os
@@ -185,9 +186,15 @@ def prefetch(cfg: dict[str, Any], home: Path, tag: str | None, models: list[str]
 
 # --- process + server helpers ---
 
+def config_selected(patterns: list[str] | None, config: str) -> bool:
+    return not patterns or any(fnmatch.fnmatchcase(config, p) for p in patterns)
+
+
 class Context:
-    def __init__(self, cfg: dict[str, Any], home: Path, build: dict[str, Any], out_dir: Path, dry_run: bool):
+    def __init__(self, cfg: dict[str, Any], home: Path, build: dict[str, Any], out_dir: Path, dry_run: bool,
+                 configs: list[str] | None = None):
         self.cfg = cfg
+        self.configs = configs
         self.home = home
         self.build = build
         self.bin_dir = Path(build["bin_dir"])
@@ -198,6 +205,9 @@ class Context:
         self.commands: list[list[str]] = []
         self.first_server = True
         self.save: Callable[[], None] = lambda: None
+
+    def selected(self, config: str) -> bool:
+        return config_selected(self.configs, config)
 
     def run(self, cmd: list[str], log_path: Path, timeout_s: float, stdout_path: Path | None = None) -> None:
         self.commands.append(cmd)
@@ -369,6 +379,8 @@ class SysMonitor:
 
 def run_point(ctx: Context, records: list[dict[str, Any]], suite: str, model: str, config: str,
               fn: Callable[[Path], dict[str, float]]) -> None:
+    if not ctx.selected(config):
+        return
     run_dir = ctx.out_dir / suite / model / config
     run_dir.mkdir(parents=True, exist_ok=True)
     rec: dict[str, Any] = {"suite": suite, "model": model, "config": config, "status": "ok", "error": "", "metrics": {}}
@@ -395,6 +407,9 @@ def run_point(ctx: Context, records: list[dict[str, Any]], suite: str, model: st
 def run_group(ctx: Context, records: list[dict[str, Any]], suite: str, model: str, server_args: list[str],
               log_path: Path, points: list[tuple[str, Callable[[Server, Path], dict[str, float]]]]) -> None:
     # one server for several points; if it fails to start or dies, the remaining points fail
+    points = [p for p in points if ctx.selected(p[0])]
+    if not points:
+        return
     log_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         with Server(ctx, server_args, log_path) as server:
@@ -721,7 +736,8 @@ def render_summary(manifest: dict[str, Any], prev: dict[str, Any] | None) -> str
     return "\n".join(lines)
 
 
-def run(cfg: dict[str, Any], home: Path, suites: list[str], models: list[str], dry_run: bool, summary_path: Path | None) -> int:
+def run(cfg: dict[str, Any], home: Path, suites: list[str], models: list[str], dry_run: bool, summary_path: Path | None,
+        configs: list[str] | None = None) -> int:
     selected = home / "selected_build.json"
     if selected.exists():
         build = json.loads(selected.read_text())
@@ -747,12 +763,13 @@ def run(cfg: dict[str, Any], home: Path, suites: list[str], models: list[str], d
         "models": {n: {k: cfg["models"][n][k] for k in ("repo", "revision", "file")} for n in models},
         "records": [],
     }
-    # a re-run on the same night keeps the records of the suites and models it does not run
+    # a re-run on the same night keeps the records of the suites, models and configs it does not run
     if (out_dir / "night.json").exists():
         old = json.loads((out_dir / "night.json").read_text())
-        manifest["records"] = [r for r in old.get("records", []) if r["suite"] not in suites or r["model"] not in models]
+        manifest["records"] = [r for r in old.get("records", [])
+                               if r["suite"] not in suites or r["model"] not in models or not config_selected(configs, r["config"])]
         manifest["models"] = {**old.get("models", {}), **manifest["models"]}
-    ctx = Context(cfg, home, build, out_dir, dry_run)
+    ctx = Context(cfg, home, build, out_dir, dry_run, configs)
     ctx.save = lambda: write_json(out_dir / "night.json", manifest)
     started = time.monotonic()
     for suite in suites:
@@ -791,6 +808,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tag", default=None, help="release tag to test (default: newest with all assets)")
     parser.add_argument("--suites", default=None, help=f"comma-separated subset of {SUITES}")
     parser.add_argument("--models", default=None, help="comma-separated subset of the models in the config")
+    parser.add_argument("--configs", default=None, help="comma-separated shell patterns on config names, e.g. 'mooncake_T02*,depth32768*_c8'")
     parser.add_argument("--dry-run", action="store_true", help="print the commands, start nothing")
     parser.add_argument("--summary", type=Path, default=None, help="append the Markdown summary to this file")
     args = parser.parse_args(argv)
@@ -804,7 +822,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "prefetch":
         prefetch(cfg, args.home, args.tag, models)
         return 0
-    return run(cfg, args.home, suites, models, args.dry_run, args.summary)
+    configs = [c.strip() for c in args.configs.split(",") if c.strip()] if args.configs else None
+    return run(cfg, args.home, suites, models, args.dry_run, args.summary, configs)
 
 
 if __name__ == "__main__":
