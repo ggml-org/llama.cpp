@@ -13,7 +13,7 @@ import argparse
 
 from hashlib import sha256
 from enum import IntEnum, auto
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, PreTrainedTokenizerFast
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger("convert_hf_to_gguf_update")
@@ -219,6 +219,29 @@ def download_file_with_auth(url, token, save_path):
     logger.info(f"File {save_path} downloaded successfully")
 
 
+def add_declared_bos(tokenizer, dir_model, ids: list[int]) -> list[int]:
+    # generic tokenizer.json loading ignores add_bos_token from tokenizer_config.json, but the declared class
+    # (e.g. LlamaTokenizerFast) honors it, and the pre-tokenizer hashes were computed with it
+    if type(tokenizer).__name__ not in ("PreTrainedTokenizerFast", "TokenizersBackend"):
+        return ids
+    cfg_path = pathlib.Path(dir_model) / "tokenizer_config.json"
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8")) if cfg_path.is_file() else {}
+    bos = tokenizer.bos_token_id
+    if cfg.get("tokenizer_class") in (None, "PreTrainedTokenizerFast", "TokenizersBackend") or not cfg.get("add_bos_token") or bos is None or ids[:1] == [bos]:
+        return ids
+    return [bos] + ids
+
+
+def load_tokenizer(name):
+    path = f"models/tokenizers/{name}"
+    if name == "t5":
+        return AutoTokenizer.from_pretrained(path, use_fast=False)
+    # load tokenizer.json as serialized: transformers v5 AutoTokenizer may rebuild it from the declared class
+    if os.path.isfile(f"{path}/tokenizer.json"):
+        return PreTrainedTokenizerFast.from_pretrained(path)
+    return AutoTokenizer.from_pretrained(path)
+
+
 def download_model(model):
     name = model["name"]
     repo = model["repo"]
@@ -316,14 +339,12 @@ for model in [*pre_computed_hashes, *all_models]:
 
         try:
             logger.info(f"Loading tokenizer from {f'models/tokenizers/{name}'}...")
-            if name == "t5":
-                tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}", use_fast=False)
-            else:
-                tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}")
+            tokenizer = load_tokenizer(name)
         except Exception as e:
             raise OSError(f"Error loading tokenizer for model {name}.") from e
 
         chktok = tokenizer.encode(CHK_TXT)  # ty: ignore[unresolved-attribute]
+        chktok = add_declared_bos(tokenizer, f"models/tokenizers/{name}", chktok)
         chkhsh = sha256(str(chktok).encode()).hexdigest()
 
         logger.info(f"model: {name}")
@@ -358,6 +379,7 @@ src_func = f"""
         chktxt = {repr(CHK_TXT)}
 
         chktok = tokenizer.encode(chktxt)
+        chktok = add_declared_bos(tokenizer, self.dir_model, chktok)
         chkhsh = sha256(str(chktok).encode()).hexdigest()
 
         logger.debug(f"chktok: {{chktok}}")
@@ -476,10 +498,7 @@ for model in models:
 
     # create the tokenizer
     try:
-        if name == "t5":
-            tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}", use_fast=False)
-        else:
-            tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}")
+        tokenizer = load_tokenizer(name)
     except (OSError, TypeError) as e:
         logger.error(f"Failed to load tokenizer for model {name}. Error: {e}")
         continue  # Skip this model and continue with the next one in the loop

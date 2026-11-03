@@ -1756,8 +1756,12 @@ class TextModel(ModelBase):
         tokens: list[str] = []
         toktypes: list[int] = []
 
-        from transformers import AutoTokenizer
-        tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+        from transformers import AutoTokenizer, PreTrainedTokenizerFast
+        # load tokenizer.json as serialized: transformers v5 AutoTokenizer may rebuild it from the declared class (e.g. Metaspace on byte-level Llama)
+        if (self.dir_model / "tokenizer.json").is_file():
+            tokenizer = PreTrainedTokenizerFast.from_pretrained(self.dir_model)
+        else:
+            tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
         vocab_size = self.hparams.get("vocab_size", len(tokenizer.vocab))  # ty: ignore[unresolved-attribute]
         assert max(tokenizer.vocab.values()) < vocab_size  # ty: ignore[unresolved-attribute]
 
@@ -1809,6 +1813,7 @@ class TextModel(ModelBase):
         chktxt = '\n \n\n \n\n\n \t \t\t \t\n  \n   \n    \n     \n🚀 (normal) 😶\u200d🌫️ (multiple emojis concatenated) ✅ 🦙🦙 3 33 333 3333 33333 333333 3333333 33333333 3.3 3..3 3...3 កាន់តែពិសេសអាច😁 ?我想在apple工作1314151天～ ------======= нещо на Български \'\'\'\'\'\'```````""""......!!!!!!?????? I\'ve been \'told he\'s there, \'RE you sure? \'M not sure I\'ll make it, \'D you like some tea? We\'Ve a\'lL'
 
         chktok = tokenizer.encode(chktxt)
+        chktok = add_declared_bos(tokenizer, self.dir_model, chktok)
         chkhsh = sha256(str(chktok).encode()).hexdigest()
 
         logger.debug(f"chktok: {chktok}")
@@ -3121,6 +3126,19 @@ else:
     # Older torch builds do not expose F8_E8M0. Keep the raw bytes so callers
     # that know the format can decode them explicitly.
     LazyTorchTensor._dtype_str_map["F8_E8M0"] = torch.uint8
+
+
+def add_declared_bos(tokenizer, dir_model, ids: list[int]) -> list[int]:
+    # generic tokenizer.json loading ignores add_bos_token from tokenizer_config.json, but the declared class
+    # (e.g. LlamaTokenizerFast) honors it, and the pre-tokenizer hashes were computed with it
+    if type(tokenizer).__name__ not in ("PreTrainedTokenizerFast", "TokenizersBackend"):
+        return ids
+    cfg_path = Path(dir_model) / "tokenizer_config.json"
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8")) if cfg_path.is_file() else {}
+    bos = tokenizer.bos_token_id
+    if cfg.get("tokenizer_class") in (None, "PreTrainedTokenizerFast", "TokenizersBackend") or not cfg.get("add_bos_token") or bos is None or ids[:1] == [bos]:
+        return ids
+    return [bos] + ids
 
 
 def jinja_str_or_json(name: str) -> str:
