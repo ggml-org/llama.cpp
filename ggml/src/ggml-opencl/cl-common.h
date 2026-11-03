@@ -826,6 +826,7 @@ struct ggml_backend_opencl_context {
     ggml_opencl_im2col_3d_kernels im2col_3d = {};
     ggml_opencl_argmax_kernels argmax = {};
     ggml_opencl_top_k_kernels top_k = {};
+    ggml_opencl_top_k_mask_kernels top_k_mask = {};
     ggml_opencl_lightning_indexer_kernels lightning_indexer = {};
     ggml_opencl_argsort_kernels argsort = {};
     ggml_opencl_sum_rows_kernels sum_rows = {};
@@ -1792,6 +1793,27 @@ struct ggml_tensor_extra_cl_iq1_m {
     }
 };
 
+struct ggml_tensor_extra_cl_iq4_xs {
+    bool noshuffle = false;
+    cl_mem qs = nullptr;
+    cl_mem sl = nullptr;
+    cl_mem sh = nullptr;
+    cl_mem d = nullptr;
+
+    size_t size_qs = 0, size_sl = 0, size_sh = 0, size_d = 0;
+
+    ~ggml_tensor_extra_cl_iq4_xs() { reset(); }
+
+    void reset() {
+        noshuffle = false;
+        if (qs != nullptr) { CL_CHECK(clReleaseMemObject(qs)); qs = nullptr; }
+        if (sl != nullptr) { CL_CHECK(clReleaseMemObject(sl)); sl = nullptr; }
+        if (sh != nullptr) { CL_CHECK(clReleaseMemObject(sh)); sh = nullptr; }
+        if (d != nullptr) { CL_CHECK(clReleaseMemObject(d)); d = nullptr; }
+        size_qs = size_sl = size_sh = size_d = 0;
+    }
+};
+
 struct ggml_tensor_extra_cl_q6_K {
     // Lower 4 bits of quantized weights.
     cl_mem ql = nullptr;
@@ -1960,6 +1982,9 @@ struct ggml_backend_opencl_buffer_context {
         for (ggml_tensor_extra_cl_iq3_xxs * e : temp_tensor_extras_iq3_xxs) {
             delete e;
         }
+        for (ggml_tensor_extra_cl_iq4_xs * e : temp_tensor_extras_iq4_xs) {
+            delete e;
+        }
         for (ggml_tensor_extra_cl_q6_K * e : temp_tensor_extras_q6_K_in_use) {
             delete e;
         }
@@ -1991,6 +2016,9 @@ struct ggml_backend_opencl_buffer_context {
             delete e;
         }
         for (ggml_tensor_extra_cl_iq3_xxs * e : temp_tensor_extras_iq3_xxs_in_use) {
+            delete e;
+        }
+        for (ggml_tensor_extra_cl_iq4_xs * e : temp_tensor_extras_iq4_xs_in_use) {
             delete e;
         }
         for (ggml_tensor_extra_cl_q5_K * e : temp_tensor_extras_q5_K) {
@@ -2316,6 +2344,21 @@ struct ggml_backend_opencl_buffer_context {
         return extra;
     }
 
+    ggml_tensor_extra_cl_iq4_xs * ggml_opencl_alloc_temp_tensor_extra_iq4_xs() {
+        ggml_tensor_extra_cl_iq4_xs * extra;
+        if (temp_tensor_extras_iq4_xs.empty()) {
+            extra = new ggml_tensor_extra_cl_iq4_xs();
+        } else {
+            extra = temp_tensor_extras_iq4_xs.back();
+            temp_tensor_extras_iq4_xs.pop_back();
+        }
+
+        temp_tensor_extras_iq4_xs_in_use.push_back(extra);
+
+        extra->reset();
+        return extra;
+    }
+
     ggml_tensor_extra_cl_q6_K * ggml_opencl_alloc_temp_tensor_extra_q6_K() {
         ggml_tensor_extra_cl_q6_K * extra;
         if (temp_tensor_extras_q6_K.empty()) {
@@ -2442,6 +2485,11 @@ struct ggml_backend_opencl_buffer_context {
         }
         temp_tensor_extras_iq3_xxs_in_use.clear();
 
+        for (ggml_tensor_extra_cl_iq4_xs * e : temp_tensor_extras_iq4_xs_in_use) {
+            temp_tensor_extras_iq4_xs.push_back(e);
+        }
+        temp_tensor_extras_iq4_xs_in_use.clear();
+
         q8_0_soa_tensors.clear();
         q4_0_soa_tensors.clear();
     }
@@ -2493,6 +2541,8 @@ struct ggml_backend_opencl_buffer_context {
     std::vector<ggml_tensor_extra_cl_iq3_s *> temp_tensor_extras_iq3_s;
     std::vector<ggml_tensor_extra_cl_iq3_s *> temp_tensor_extras_iq3_s_in_use;
     std::vector<ggml_tensor_extra_cl_iq3_xxs *> temp_tensor_extras_iq3_xxs_in_use;
+    std::vector<ggml_tensor_extra_cl_iq4_xs *> temp_tensor_extras_iq4_xs;
+    std::vector<ggml_tensor_extra_cl_iq4_xs *> temp_tensor_extras_iq4_xs_in_use;
     std::vector<ggml_tensor_extra_cl_q6_K *> temp_tensor_extras_q6_K;
     std::vector<ggml_tensor_extra_cl_q6_K *> temp_tensor_extras_q6_K_in_use;
 
@@ -2567,6 +2617,7 @@ bool ggml_cl_iq3_s_use_noshuffle(const ggml_backend_opencl_context * backend_ctx
 bool ggml_cl_iq3_xxs_use_noshuffle(const ggml_backend_opencl_context * backend_ctx, const ggml_tensor * tensor);
 bool ggml_cl_iq1_m_use_noshuffle(const ggml_backend_opencl_context * backend_ctx, const ggml_tensor * tensor);
 bool ggml_cl_iq1_s_use_noshuffle(const ggml_backend_opencl_context * backend_ctx, const ggml_tensor * tensor);
+bool ggml_cl_iq4_xs_use_noshuffle(const ggml_backend_opencl_context * backend_ctx, const ggml_tensor * tensor);
 bool adreno_e17_compiler_quirks(const ggml_backend_opencl_context * backend_ctx);
 bool use_adreno_moe_kernels(const ggml_backend_opencl_context * backend_ctx, const ggml_tensor * tensor);
 bool enable_adreno_trans_weight(const ggml_backend_opencl_context * backend_ctx, const ggml_tensor * tensor);
