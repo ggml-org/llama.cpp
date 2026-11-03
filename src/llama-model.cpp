@@ -388,6 +388,19 @@ static ggml_backend_meta_split_state llama_meta_device_get_split_state_impl(
         const char * env = std::getenv("LLAMA_DIST_TP_ATTN_REBALANCE");
         return env != nullptr && std::atoi(env) != 0;
     }();
+    // LLAMA_DIST_TP_ATTN_HEADS=h0,h1,..: query heads per rank for rebalanced layers instead of equal shares
+    static const std::vector<int64_t> dist_attn_heads = [] {
+        std::vector<int64_t> v;
+        const char * env = std::getenv("LLAMA_DIST_TP_ATTN_HEADS");
+        for (const char * p = env; p != nullptr && *p != '\0'; ) {
+            char * end = nullptr;
+            const long long h = std::strtoll(p, &end, 10);
+            GGML_ASSERT(end != p && "LLAMA_DIST_TP_ATTN_HEADS: expected h0,h1,..");
+            v.push_back((int64_t) h);
+            p = *end == ',' ? end + 1 : end;
+        }
+        return v;
+    }();
     auto attn_rebalance = [&](uint32_t il) -> bool {
         if (!dist_attn_rebalance || ud->dist_tp_world_size <= 1 || ud->n_devices != 1 || il >= hparams.n_layer() ||
                 hparams.is_recr(il) || hparams.n_gqa(il) <= 1 || hparams.n_embd_k_gqa(il) != hparams.n_embd_v_gqa(il) ||
@@ -421,6 +434,19 @@ static ggml_backend_meta_split_state llama_meta_device_get_split_state_impl(
         GGML_ASSERT(qlo % head_dim == 0 && qhi % head_dim == 0);
         qlo /= head_dim;
         qhi /= head_dim;
+        if (!dist_attn_heads.empty()) {
+            GGML_ASSERT((int) dist_attn_heads.size() == ud->dist_tp_world_size && "LLAMA_DIST_TP_ATTN_HEADS: one count per rank");
+            const int64_t gh = attn_rebalance_granularity(il, ggml_blck_size(wo->type)) / head_dim;
+            int64_t lo = 0, sum = 0;
+            for (int r = 0; r < (int) dist_attn_heads.size(); ++r) {
+                GGML_ASSERT(dist_attn_heads[r] > 0 && dist_attn_heads[r] % gh == 0 && "LLAMA_DIST_TP_ATTN_HEADS: granularity");
+                lo  += r < rank ? dist_attn_heads[r] : 0;
+                sum += dist_attn_heads[r];
+            }
+            GGML_ASSERT(sum == (int64_t) hparams.n_head(il) && "LLAMA_DIST_TP_ATTN_HEADS: counts must sum to n_head");
+            qlo = lo;
+            qhi = lo + dist_attn_heads[rank];
+        }
         klo = qlo / n_gqa;
         khi = (qhi + n_gqa - 1) / n_gqa;
         llama_dist_attn_headmap_set(il, (int32_t) (qlo - klo*n_gqa), (int32_t) n_gqa);
@@ -839,9 +865,11 @@ static ggml_backend_meta_split_state llama_meta_device_get_split_state_impl(
                     int64_t qlo = 0, qhi = 0, klo = 0, khi = 0;
                     attn_rebalance_heads(tc.il, qlo, qhi, klo, khi);
                     if (is_q) {
-                        // already split by heads above; the KV bounds and the head map assume exactly these
+                        // the equal split above already is by heads; LLAMA_DIST_TP_ATTN_HEADS moves the bounds
                         const int64_t head_dim = hparams.n_embd_head_k(tc.il);
-                        GGML_ASSERT(low == qlo*head_dim && high == qhi*head_dim);
+                        GGML_ASSERT(dist_attn_heads.size() || (low == qlo*head_dim && high == qhi*head_dim));
+                        low  = qlo*head_dim;
+                        high = qhi*head_dim;
                     } else if (is_sinks) {
                         GGML_ASSERT(ne_s == (int64_t) hparams.n_head(tc.il));
                         low  = qlo;
