@@ -3232,6 +3232,8 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
                 matrix_shape_mnk = { 16u, 16u, 16u };
                 break;
             }
+
+            bool intel_gpu = device->vendor_id == VK_VENDOR_ID_INTEL;
             uint32_t HSK = std::get<0>(pipeline_state);
             uint32_t HSV = std::get<1>(pipeline_state);
             uint32_t gqa_ratio = std::get<2>(pipeline_state);
@@ -3239,12 +3241,12 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             GGML_ASSERT(HSV % matrix_shape_mnk[0] == 0);
             uint32_t group_sz = sg_per_gw * xe_native_sub_group_size;
             uint32_t wg_row = 256;
-            uint32_t output_div = HSK > 256 ? 8 : HSK > 160 ? 4 : HSK > 96 ? 2 : 1;
-            uint32_t p_per_iter = HSK > 256 ? 16 : 32;
+            uint32_t output_div = HSK > 256 ? 8 : HSK > 160 ? 4 : HSK > 64 ? 2 : 1;
+            uint32_t p_per_iter = intel_gpu ? (HSK > 256 ? 16 : 32) : 16;
             uint32_t q_in_reg = HSK > 512 ? HSK - 384 : std::min(128u, HSK);
             wg_row = wg_row / output_div;
             uint32_t sg_col = HSV / matrix_shape_mnk[0];
-            uint32_t slm_size = 64 * 1024;
+            uint32_t slm_size = 48 * 1024;
             uint32_t acc_count = 1;
             uint32_t pipeline_flag = 0;
             uint32_t gqa_fold = 16;
@@ -3256,6 +3258,10 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 
             if (kv_len % p_per_iter != 0) {
                 pipeline_flag |= 1 << 0x0;
+            }
+
+            if (intel_gpu) {
+                pipeline_flag |= 1 << 0x2;
             }
 
             sg_col = (sg_col + output_div - 1) / output_div;
