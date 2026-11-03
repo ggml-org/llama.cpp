@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <cerrno>
 #include <algorithm>
+#include <mutex>
 
 #ifdef __has_include
     #if __has_include(<unistd.h>)
@@ -67,8 +68,11 @@ static std::string llama_format_win_err(DWORD err) {
 // llama_file
 
 struct llama_file::impl {
+    std::mutex read_mutex;
 #if defined(_WIN32)
     HANDLE fp_win32;
+    HANDLE read_handle = INVALID_HANDLE_VALUE;
+    size_t read_at_alignment = 1;
     std::string GetErrorMessageWin32(DWORD error_code) const {
         std::string ret;
         LPSTR lpMsgBuf = NULL;
@@ -176,6 +180,9 @@ struct llama_file::impl {
     }
 
     ~impl() {
+        if (read_handle != INVALID_HANDLE_VALUE) {
+            CloseHandle(read_handle);
+        }
         if (fp && owns_fp) {
             std::fclose(fp);
         }
@@ -388,6 +395,9 @@ struct llama_file::impl {
     }
 
     ~impl() {
+        if (read_fd != -1) {
+            close(read_fd);
+        }
         if (fd != -1) {
             close(fd);
         } else if (owns_fp) {
@@ -395,6 +405,8 @@ struct llama_file::impl {
         }
     }
     int fd = -1;
+    int read_fd = -1;
+    size_t read_at_alignment = 1;
     std::string fname;
 #endif
 
@@ -439,6 +451,133 @@ int llama_file::file_id() const {
 
 void llama_file::seek(size_t offset, int whence) const { pimpl->seek(offset, whence); }
 void llama_file::read_raw(void * ptr, size_t len) { pimpl->read_raw(ptr, len); }
+
+void llama_file::prepare_read_at() {
+#if defined(_WIN32) && _WIN32_WINNT >= 0x0602
+    if (pimpl->read_handle != INVALID_HANDLE_VALUE) {
+        return;
+    }
+    FILE_STORAGE_INFO storage {};
+    if (!GetFileInformationByHandleEx(pimpl->fp_win32, FileStorageInfo, &storage, sizeof(storage)) ||
+            storage.LogicalBytesPerSector == 0) {
+        return;
+    }
+    size_t alignment = 1;
+    for (const auto sector : {storage.LogicalBytesPerSector, storage.PhysicalBytesPerSectorForAtomicity,
+            storage.PhysicalBytesPerSectorForPerformance, storage.FileSystemEffectivePhysicalBytesPerSectorForAtomicity}) {
+        if ((sector & (sector - 1)) != 0 || sector > LLAMA_DIRECT_IO_BUFFER_SIZE) {
+            return;
+        }
+        alignment = std::max(alignment, (size_t) sector);
+    }
+    // Reopen the same file object so path replacement cannot change the weights.
+    HANDLE handle = ReOpenFile(pimpl->fp_win32, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                              FILE_FLAG_NO_BUFFERING | FILE_FLAG_OVERLAPPED);
+    if (handle != INVALID_HANDLE_VALUE) {
+        pimpl->read_handle = handle;
+        pimpl->read_at_alignment = alignment;
+    }
+#elif defined(__linux__)
+    if (pimpl->has_direct_io() || pimpl->read_fd != -1) {
+        return;
+    }
+    const int fd = open(pimpl->fname.c_str(), O_RDONLY | O_DIRECT);
+    if (fd == -1) {
+        return;
+    }
+    struct stat original {}, direct {};
+    if (fstat(file_id(), &original) != 0 || fstat(fd, &direct) != 0 ||
+            original.st_dev != direct.st_dev || original.st_ino != direct.st_ino ||
+            direct.st_blksize <= 0 || (direct.st_blksize & (direct.st_blksize - 1)) != 0) {
+        close(fd);
+        return;
+    }
+    pimpl->read_fd = fd;
+    pimpl->read_at_alignment = direct.st_blksize;
+#endif
+}
+
+size_t llama_file::read_alignment_at() const {
+#ifdef _WIN32
+    return pimpl->read_at_alignment;
+#else
+    return pimpl->read_fd == -1 ? read_alignment() : pimpl->read_at_alignment;
+#endif
+}
+
+void llama_file::read_raw_at(void * ptr, size_t len, size_t offset) {
+    const size_t alignment = read_alignment_at();
+    if (offset > size() || (len > size() - offset && len - (size() - offset) >= alignment)) {
+        throw std::runtime_error("read exceeds file size");
+    }
+#ifdef _WIN32
+    const size_t required = std::min(len, size() - offset);
+    size_t done = 0;
+    if (pimpl->read_handle != INVALID_HANDLE_VALUE && required != 0) {
+        // Each reader needs its own event when sharing an overlapped file handle.
+        std::unique_ptr<void, decltype(&CloseHandle)> event(CreateEventW(nullptr, TRUE, FALSE, nullptr), &CloseHandle);
+        if (!event) {
+            throw std::runtime_error(format("CreateEventW failed: %s", llama_format_win_err(GetLastError()).c_str()));
+        }
+        while (done < required) {
+            const DWORD count = (DWORD) std::min<size_t>(len - done, LLAMA_DIRECT_IO_BUFFER_SIZE);
+            const uint64_t position = offset + done;
+            OVERLAPPED overlapped {};
+            overlapped.Offset = (DWORD) position;
+            overlapped.OffsetHigh = (DWORD) (position >> 32);
+            overlapped.hEvent = event.get();
+            DWORD error = ERROR_SUCCESS;
+            if (!ReadFile(pimpl->read_handle, (char *) ptr + done, count, nullptr, &overlapped)) {
+                error = GetLastError();
+            }
+            DWORD n = 0;
+            if (error == ERROR_SUCCESS || error == ERROR_IO_PENDING) {
+                error = GetOverlappedResult(pimpl->read_handle, &overlapped, &n, TRUE) ? ERROR_SUCCESS : GetLastError();
+            }
+            if (error == ERROR_INVALID_PARAMETER || error == ERROR_NOT_SUPPORTED || error == ERROR_INVALID_FUNCTION) {
+                break;
+            }
+            if (error != ERROR_SUCCESS) {
+                throw std::runtime_error(format("read error: %s", llama_format_win_err(error).c_str()));
+            }
+            if (n < std::min<size_t>(count, required - done)) {
+                throw std::runtime_error("unexpectedly reached end of file");
+            }
+            done += n;
+        }
+    }
+    if (done >= required) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(pimpl->read_mutex);
+    pimpl->seek(offset + done, SEEK_SET);
+    pimpl->read_raw((char *) ptr + done, required - done);
+#else
+    int fd = pimpl->read_fd == -1 ? file_id() : pimpl->read_fd;
+    const size_t required = std::min(len, size() - offset);
+    size_t done = 0;
+    while (done < required) {
+        const size_t count = std::min<size_t>(len - done, 64*1024*1024);
+        const ssize_t n = pread(fd, (char *) ptr + done, count, offset + done);
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            // Some file systems accept O_DIRECT but reject reads with it.
+            if (errno == EINVAL && fd == pimpl->read_fd) {
+                fd = file_id();
+                continue;
+            }
+            throw std::runtime_error(format("read error: %s", strerror(errno)));
+        }
+        if (n == 0) {
+            throw std::runtime_error("unexpectedly reached end of file");
+        }
+        done += n;
+    }
+#endif
+}
+
 #ifdef _WIN32
 void llama_file::read_raw_unsafe(void * ptr, size_t len) { pimpl->read_raw(ptr, len); }
 #else

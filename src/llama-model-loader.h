@@ -9,6 +9,7 @@
 
 #include "ggml-cpp.h"
 
+#include <atomic>
 #include <cstddef>
 #include <cstring>
 #include <map>
@@ -134,7 +135,7 @@ struct llama_model_loader {
     std::string arch_name;
     LLM_KV      llm_kv    = LLM_KV(LLM_ARCH_UNKNOWN);
 
-    size_t size_done = 0;
+    std::atomic_size_t size_done = 0;
     size_t size_data = 0;
     std::vector<std::pair<size_t, size_t>> mmaps_used;
 
@@ -258,13 +259,18 @@ struct llama_model_loader {
     // with mmap, returns a pointer into the mapping, otherwise reads into buf and returns buf
     const void * load_data_range(const llama_tensor_weight & w, size_t offs, size_t size, void * buf) const;
 
+    bool can_stream(ggml_backend_buffer_type_t buft) const;
+
     // Returns false if cancelled by progress_callback
     bool load_all_data(
             struct ggml_context * ctx,
             std::vector<ggml_backend_buffer_t> & bufs,
             llama_mlocks * lmlocks,
             llama_progress_callback progress_callback,
-            void * progress_callback_user_data);
+            void * progress_callback_user_data,
+            bool stream_from_file = false);
+
+    bool finish_loading(llama_progress_callback progress_callback, void * progress_callback_user_data);
 
     std::string ftype_name() const;
 
