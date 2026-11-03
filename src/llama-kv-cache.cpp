@@ -1413,7 +1413,8 @@ uint32_t llama_kv_cache::get_n_kv_rows(const llama_ubatch & ubatch) const {
     }
 
     // pad like n_kv so that the graph can be reused
-    return std::min(GGML_PAD(n_max, n_pad_cur), get_size());
+    // never 0, it means that kv_rows are not used (f.ex. the sequences have no cells yet in a cache that shares the cells of another one)
+    return std::min(std::max(n_pad_cur, GGML_PAD(n_max, n_pad_cur)), get_size());
 }
 
 ggml_tensor * llama_kv_cache::get_k(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const {
