@@ -65,7 +65,7 @@ suites:
     warmup: 2
     timeout_s: 1800
 
-  # Mooncake trace replay at the original timestamps (AIPerf --fixed-schedule)
+  # Mooncake trace replay, one turn after the other (timestamps are ignored)
   agentic:
     traces:
       - traces/T01_mooncake_trace.jsonl

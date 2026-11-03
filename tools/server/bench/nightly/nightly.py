@@ -553,8 +553,10 @@ def suite_agentic(ctx: Context, records: list[dict[str, Any]], name: str, model:
             capped = run_dir / "trace.jsonl"
             capped.write_text("".join(json.dumps(r) + "\n" for r in rows))
             cmd = aiperf_base(ctx, model, run_dir, scfg["timeout_s"])
-            cmd += ["--input-file", str(capped), "--custom-dataset-type", "mooncake_trace", "--fixed-schedule",
-                    "--fixed-schedule-auto-offset", "--isl-block-size", str(scfg["block_size"]),
+            # one turn after the other, in file order: the Spark is slower than the traced system, so replaying
+            # at the original timestamps measures queueing instead of the turns
+            cmd += ["--input-file", str(capped), "--custom-dataset-type", "mooncake_trace", "--no-fixed-schedule",
+                    "--concurrency", "1", "--request-count", str(len(rows)), "--isl-block-size", str(scfg["block_size"]),
                     "--extra-inputs", json.dumps({"ignore_eos": True})]
             before = server.metrics()
             ctx.run(cmd, run_dir / "aiperf.log", scfg["timeout_s"])
