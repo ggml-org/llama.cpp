@@ -198,7 +198,7 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
     // KV-shared layers do not write to the KV cache, so prune non-output token rows before the first KV-shared layer
     bool prune_shared = crop_before_nextn(inp_out_ids) && cparams.causal_attn &&
                         hparams.n_layer_kv_from_start > 0 && hparams.n_layer_kv_from_start < n_layer &&
-                        !cparams.embeddings && (cparams.kv_unified || cparams.n_seq_max == 1);
+                        !cparams.embeddings && cparams.n_seq_max == 1;
     for (int il = (int) hparams.n_layer_kv_from_start; prune_shared && il <= n_layer; ++il) {
         prune_shared = !cparams.embeddings_layer_inp[il];
     }
@@ -208,8 +208,8 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
         if (prune_shared && il == (int) hparams.n_layer_kv_from_start) {
             inpL                           = ggml_get_rows(ctx0, inpL, inp_out_ids);
             inp_pos                        = ggml_reshape_1d(ctx0, ggml_get_rows(ctx0, ggml_reshape_2d(ctx0, inp_pos, 1, n_tokens), inp_out_ids), n_outputs);
-            inp_attn->self_kq_mask_cnv     = ggml_cast(ctx0, ggml_get_rows(ctx0, inp_attn->get_kq_mask(),     inp_out_ids), inp_attn->get_kq_mask()->type);
-            inp_attn->self_kq_mask_swa_cnv = ggml_cast(ctx0, ggml_get_rows(ctx0, inp_attn->get_kq_mask_swa(), inp_out_ids), inp_attn->get_kq_mask_swa()->type);
+            inp_attn->self_attn_mask.cnv     = ggml_cast(ctx0, ggml_get_rows(ctx0, inp_attn->self_attn_mask.cnv,     inp_out_ids), inp_attn->self_attn_mask.cnv->type);
+            inp_attn->self_attn_mask_swa.cnv = ggml_cast(ctx0, ggml_get_rows(ctx0, inp_attn->self_attn_mask_swa.cnv, inp_out_ids), inp_attn->self_attn_mask_swa.cnv->type);
             n_rows                         = n_outputs;
         }
 
