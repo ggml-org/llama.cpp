@@ -12,6 +12,7 @@ import {
 	FAVORITE_MODELS_LOCALSTORAGE_KEY,
 	HIDDEN_MODELS_LOCALSTORAGE_KEY,
 	MODEL_GROUP_OPEN_LOCALSTORAGE_KEY,
+	MODEL_ID,
 	MODEL_REMOVE_BLOCKED_FALLBACK,
 	MODEL_REMOVE_BLOCKED_REASONS,
 	RECENT_MODEL_LIMIT,
@@ -29,6 +30,7 @@ import type { ApiModelDataEntry } from '$lib/types';
 import type { ParsedModelId } from '$lib/types/models';
 import { getConversationModel } from '$lib/utils/conversation-utils';
 import { repoOf } from '$lib/utils/model-names';
+import { isAuxSidecar } from '$lib/utils/sidecars';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
 
@@ -653,9 +655,29 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 
 		return (
 			entries
-				// a models dir can still name an entry after a projector file, which is
-				// no loadable model
-				.filter(({ parsed }) => !parsed.sidecar)
+				// a models dir can still name an entry after a projector file or
+				// standalone draft, which is no loadable model
+				.filter(({ parsed }) => {
+					if (parsed.sidecar && isAuxSidecar(parsed.sidecar)) {
+						return false;
+					}
+
+					if (parsed.modelName === null) {
+						return false;
+					}
+
+					const filename = parsed.raw.split(/\\|\//).pop() ?? parsed.raw;
+
+					if (MODEL_ID.SIDECAR_PREFIX_REGEX.test(filename)) {
+						return false;
+					}
+
+					if (/-draft(\..+)?$/i.test(filename)) {
+						return false;
+					}
+
+					return true;
+				})
 				// in-flight and unfinished downloads are not usable models yet; the
 				// selector tracks them in its "Download in progress" section instead
 				.filter(
