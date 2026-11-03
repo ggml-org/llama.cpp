@@ -1,23 +1,7 @@
-# Chatterbox (ResembleAI) conversion: turbo and multilingual v3 variants.
-#
-# Checkpoint layout is the official repo layout (raw safetensors, no HF weights):
-# - turbo (ResembleAI/chatterbox-turbo): t3_turbo_v1.safetensors (GPT-2 medium talker),
-#   s3gen_meanflow.safetensors, ve.safetensors, conds.pt, GPT-2 BPE tokenizer files
-# - multilingual v3 (ResembleAI/chatterbox): t3_mtl23ls_v3.safetensors (Llama 520M talker),
-#   s3gen_v3.safetensors, ve.safetensors, conds.pt, mtl_tokenizer.json
-# The variant is detected by which talker file is present. The checkpoints ship no
-# config.json, the hparams below come from the reference code (llama_configs.py, t3_config.py).
-#
-# Talker: the transformer input embeddings (wte / embed_tokens) are dead in the
-# reference (inputs_embeds everywhere); the live tables are text_emb and speech_emb,
-# fused here into one [text | speech] vocab. Text tokens keep their ids, speech token i
-# becomes <|speech_i|> at text_vocab + i. The speech start/stop tokens map to bos/eos.
-#
-# Mmproj: the whole s3gen sidecar (flow encoder, CFM estimator, HiFT vocoder, CAMPPlus
-# speaker encoder, S3 tokenizer), the voice encoder, the talker conditioning encoder,
-# the learned position tables, the conds.pt voice as the predefined voice "default",
-# and the talker speech embedding table so that reference speech tokens can be turned
-# into talker-space embeddings without a lookup on the text model side.
+# Chatterbox (ResembleAI) turbo and multilingual v3, from the raw checkpoints of the official repos
+# the checkpoints ship no config.json, the variant is detected from the talker file and the hparams come from the reference code
+# talker: text_emb and speech_emb are fused into one [text | speech] vocab, speech token i is <|speech_i|>
+# mmproj: the s3gen sidecar, the voice and conditioning encoders, the position and speech tables, and the conds.pt voice
 
 from __future__ import annotations
 
@@ -47,9 +31,7 @@ MTL_S3GEN    = "s3gen_v3.safetensors"
 SPEECH_BOS = 6561
 SPEECH_EOS = 6562
 
-# reference sampling defaults (tts_turbo.py generate / mtl tts.py); samplers
-# absent from the reference carry their explicit disable value, so that the
-# common defaults never leak in when tools apply these as model defaults
+# sampling defaults of the reference, samplers it does not use are disabled so the common defaults do not apply
 TURBO_SAMPLING = {"top_k": 1000, "min_p": 0.0,  "top_p": 0.95, "temp": 0.8, "penalty_repeat": 1.2}
 MTL_SAMPLING   = {"top_k": 0,    "min_p": 0.05, "top_p": 1.0,  "temp": 0.8, "penalty_repeat": 1.2}
 # the reference repetition penalty covers the whole generated history
@@ -127,8 +109,7 @@ class ChatterboxTalkerModel(TextModel):
         talker = TURBO_TALKER if self.is_turbo else MTL_TALKER
 
         def rename(name: str) -> str | None:
-            # transformer input embeddings are dead in the reference (inputs_embeds
-            # everywhere); the conditioning encoder and position tables go to the mmproj
+            # the reference feeds inputs_embeds, the transformer input embeddings are unused
             if name in ("tfmr.wte.weight", "tfmr.embed_tokens.weight"):
                 return None
             if name.startswith(("cond_enc.", "text_pos_emb.", "speech_pos_emb.")):
@@ -172,21 +153,12 @@ class ChatterboxTalkerModel(TextModel):
         self.gguf_writer.add_add_bos_token(False)
         self.gguf_writer.add_add_eos_token(False)
 
-        # the reference samples the speech head only: suppress the text zone
-        # so the sampling chain can never pick a text token
+        # the reference samples the speech head only
         self.gguf_writer.add_suppress_tokens(list(range(n_text)))
 
     def _set_vocab_mtl(self):
-        # custom multilingual BPE (mtl_tokenizer.json), extended with the speech
-        # tokens. the reference tokenizer is char-level (raw unicode chars in
-        # the vocab), while the gpt2 tokenizer of llama.cpp is byte-level: the
-        # vocab and merges are re-encoded through the gpt2 byte-to-unicode map,
-        # and synthetic merges rebuild each multi-byte char from its bytes so
-        # that the byte-level closure reproduces the char-level tokenization.
-        # the reference also lowercases and NFKD-normalizes its input; this
-        # port keeps composed characters (they live in the vocab with merges)
-        # and folds case in the embedding table instead, so the raw prompt
-        # needs no runtime text preprocessing at all
+        # the reference BPE is char-level, it is re-encoded to byte-level with extra merges that rebuild each multi-byte char
+        # its lowercasing is folded into the embedding table, so the prompt needs no text preprocessing
         with open(self.dir_model / "mtl_tokenizer.json", "r", encoding="utf-8") as f:
             tok = json.load(f)
 
@@ -201,8 +173,7 @@ class ChatterboxTalkerModel(TextModel):
         char_merges: list[str] = []
         for t, i in tok["model"]["vocab"].items():
             if t == " ":
-                # the raw space char is a dead token (the reference substitutes
-                # [SPACE] before encoding), its slot stays unused
+                # the reference substitutes [SPACE] before encoding, the raw space token is never used
                 continue
             tokens[i] = enc(t)
             toktypes[i] = int(gguf.TokenType.NORMAL)
@@ -214,9 +185,7 @@ class ChatterboxTalkerModel(TextModel):
             tokens[entry["id"]] = entry["content"]
             toktypes[entry["id"]] = int(gguf.TokenType.CONTROL)
 
-        # the reference replaces ' ' with the [SPACE] token before encoding:
-        # that substitution is baked into the vocab by giving the [SPACE] slot
-        # the byte-level space as content, so raw spaces tokenize to it directly
+        # raw spaces tokenize to [SPACE] directly
         space_id = tok["model"]["vocab"]["[SPACE]"]
         tokens[space_id] = enc(" ")
         toktypes[space_id] = int(gguf.TokenType.NORMAL)
@@ -225,8 +194,7 @@ class ChatterboxTalkerModel(TextModel):
         tokens += self._speech_token_names(n_speech)
         toktypes += [int(gguf.TokenType.CONTROL)] * n_speech
 
-        # char-building merges rank first: chars are atomic in the reference,
-        # they must form before any of its merges apply
+        # chars are atomic in the reference, they must form before any of its merges
         merges = char_merges
         for m in tok["model"].get("merges", []):
             a, b = m if isinstance(m, list) else m.split(" ")
@@ -235,9 +203,7 @@ class ChatterboxTalkerModel(TextModel):
         self._write_vocab(tokens, toktypes, merges, "default", n_text)
 
     def _mtl_case_fold_pairs(self) -> list[tuple[int, int]]:
-        # single-char uppercase vocab entries whose lowercase form is also a
-        # single-char vocab entry, as (upper_id, lower_id) pairs. covers every
-        # script in the vocab (latin, latin-1 accented, cyrillic, greek, ...)
+        # (upper_id, lower_id) of the single-char vocab entries, for every script in the vocab
         with open(self.dir_model / "mtl_tokenizer.json", "r", encoding="utf-8") as f:
             vocab = json.load(f)["model"]["vocab"]
         pairs: list[tuple[int, int]] = []
@@ -303,9 +269,7 @@ class ChatterboxTalkerModel(TextModel):
         # fused [text | speech] vocab: embeddings and output head
         if name == "text_emb.weight":
             if not self.is_turbo:
-                # case folding baked into the embedding table: uppercase rows
-                # are replaced by their lowercase rows (the reference lowercases
-                # before encoding, so the uppercase rows are never trained)
+                # the reference lowercases its input, the uppercase rows take the lowercase ones
                 fold = list(range(data_torch.shape[0]))
                 for upper, lower in self._mtl_case_fold_pairs():
                     fold[upper] = lower
@@ -326,8 +290,7 @@ class ChatterboxTalkerModel(TextModel):
             yield from self._maybe_emit_fused()
             return
         if name == "speech_head.bias":
-            # the gpt2 arch has no output bias tensor; the constant speech logit
-            # bias is dropped, matching the validated behavior of this port
+            # TODO: the gpt2 arch has no output bias, the speech head bias is dropped
             return
 
         assert name.startswith("tfmr.")
@@ -392,8 +355,6 @@ class ChatterboxMmprojModel(MmprojModel):
             return "a.ve." + name
 
         def rename_talker(name: str) -> str | None:
-            # conditioning encoder, learned position tables and the speech
-            # embedding table live on the mmproj side
             if name.startswith("cond_enc."):
                 return "a.cenc." + name[len("cond_enc."):]
             if name == "text_pos_emb.emb.weight":
@@ -412,8 +373,7 @@ class ChatterboxMmprojModel(MmprojModel):
     def set_gguf_parameters(self):
         self.gguf_writer.add_file_type(self.ftype)
 
-        # speaker encoder (CAMPPlus, chatterbox_spkenc projector); the DSP front-end
-        # hparams are fixed by the projector type on the C++ side
+        # speaker encoder, the front-end hparams are hard-coded in clip.cpp
         self.gguf_writer.add_clip_has_audio_encoder(True)
         self.gguf_writer.add_clip_audio_projector_type(gguf.VisionProjectorType.CHATTERBOX_SPKENC)
         self.gguf_writer.add_audio_projection_dim(80)
@@ -458,13 +418,10 @@ class ChatterboxMmprojModel(MmprojModel):
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         del name, bid
-        # tensors read raw on the host (voice encoder, conditioning encoder,
-        # voices, position tables, source module) must stay F32
+        # tensors read on the host stay F32
         if new_name.startswith(("a.ve.", "a.cenc.", "voice.", "a.gen.t3.", "a.gen.hift.m_source.")):
             return gguf.GGMLQuantizationType.F32
-        # conv kernels of the graphs (ggml_conv_1d/_2d/_dw and the transposed
-        # convs of the vocoder) have no BF16 kernels; F16 is the graph-side
-        # storage type for everything large, F32 for the rest
+        # the conv ops have no BF16 kernels
         if n_dims >= 2 and new_name.endswith((".weight", ".weight_v")):
             return gguf.GGMLQuantizationType.F16
         return gguf.GGMLQuantizationType.F32
@@ -483,8 +440,7 @@ class ChatterboxMmprojModel(MmprojModel):
                 dtype = LazyTorchTensor._dtype_str_map[data.dtype]
                 return torch.from_numpy(data.mmap_bytes()).view(dtype).reshape(data.shape).clone()
 
-        # the conds.pt voice as the predefined voice "default": voice.default holds the talker conditioning rows,
-        # the ref_* tensors the flow decoder reference (speech tokens, prompt mel, raw campplus x-vector)
+        # the conds.pt voice: voice.default holds the talker conditioning rows, voice.default.ref_* the flow decoder reference
         # 1D tensors are written as F32, the speech ids stay exact
         yield ("voice.default.ref_tokens", genc["prompt_token"][0].float())
         yield ("voice.default.ref_feat", genc["prompt_feat"][0].float())
@@ -501,9 +457,7 @@ class ChatterboxMmprojModel(MmprojModel):
             yield ("voice.default", torch.cat([spkr_row[None], speech_emb[cond_tokens]], dim=0))
             return
 
-        # multilingual talker conditioning: [spkr, perceiver x32, emotion]
-        # block precomputed by running the reference perceiver over the embedded
-        # default cond speech tokens (flash attention path of AttentionBlock2)
+        # multilingual talker conditioning [spkr, perceiver x32, emotion], from the reference perceiver over the cond speech tokens
         with torch.no_grad():
             speech_pos = talker_tensor("speech_pos_emb.emb.weight").float()
             pse = speech_emb[cond_tokens] + speech_pos[: cond_tokens.shape[0]]

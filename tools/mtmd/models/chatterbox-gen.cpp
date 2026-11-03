@@ -1,8 +1,6 @@
 #include "models.h"
 
-// Chatterbox generation graphs: flow encoder, cfm estimator, s3 tokenizer
-// and hift vocoder. Weights come from the nested model.cbx structs; the
-// speaker encoder lives in chatterbox-spkenc.cpp.
+// Chatterbox generation graphs: flow encoder, cfm estimator, s3 tokenizer and hift vocoder
 
 // x [C, T]: y = W x + b with torch Linear weights stored as [in, out]
 ggml_tensor * clip_graph_chatterbox_base::cbx_linear(ggml_tensor * w, ggml_tensor * b, ggml_tensor * x) const {
@@ -13,8 +11,7 @@ ggml_tensor * clip_graph_chatterbox_base::cbx_linear(ggml_tensor * w, ggml_tenso
     return y;
 }
 
-// x [C, T] -> conv1d over time -> [OC, T_out]; kernel [K, IC, OC], explicit
-// host-side asymmetric padding is applied by the caller through pad_l/pad_r
+// conv1d over time with asymmetric zero padding: x [C, T] -> [OC, T_out], kernel [K, IC, OC]
 ggml_tensor * clip_graph_chatterbox_base::cbx_conv1d(ggml_tensor * k, ggml_tensor * b, ggml_tensor * x,
                                                      int stride, int pad_l, int pad_r) const {
     ggml_tensor * xt = ggml_cont(ctx0, ggml_transpose(ctx0, x)); // [T, C]
@@ -48,10 +45,8 @@ ggml_tensor * clip_graph_chatterbox_base::cbx_conv1d_dil(ggml_tensor * k, ggml_t
     return y;
 }
 
-// Transformer-XL relative shift: bd [2T-1, T, H] -> [T, T, H] where
-// out[j, i, h] = bd[(T-1) - i + j, i, h] (ggml ne0 is the fastest dim).
-// Same buffer walk as the espnet rel_shift: left-pad one column, reinterpret
-// rows/cols, drop the first row, reinterpret back, keep the first T columns.
+// Transformer-XL relative shift: bd [2T-1, T, H] -> [T, T, H] with out[j, i, h] = bd[(T-1) - i + j, i, h]
+// same buffer walk as the espnet rel_shift: pad one column, drop the first row, keep the first T columns
 static ggml_tensor * cbx_rel_shift(ggml_context * ctx0, ggml_tensor * bd, int T) {
     const int H = (int) bd->ne[2];
     ggml_tensor * z = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, T, H);
@@ -161,8 +156,7 @@ ggml_tensor * clip_graph_chatterbox::tfm_block(const clip_chatterbox::tfm_block 
     return ggml_add(ctx0, x, cur);
 }
 
-// one estimator evaluation; x_noise [80, T], mu [80, T], spks [80],
-// cond [80, T], temb [1024]
+// one estimator evaluation; x_noise, mu, cond [80, T], spks [80], temb [1024]
 ggml_tensor * clip_graph_chatterbox::estimator(ggml_tensor * x_noise, ggml_tensor * mu, ggml_tensor * spks,
                                                ggml_tensor * cond, ggml_tensor * temb, int T) {
     const auto & c = model.cbx;
@@ -172,8 +166,6 @@ ggml_tensor * clip_graph_chatterbox::estimator(ggml_tensor * x_noise, ggml_tenso
     ggml_tensor * spks_b = ggml_repeat(ctx0, ggml_reshape_2d(ctx0, spks, 80, 1), ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 80, T));
     x = ggml_concat(ctx0, x, spks_b, 0);                                   // [240, T]
     x = ggml_concat(ctx0, x, cond, 0);                                     // [320, T]
-    // conv layout is [C, T] with channels contiguous per step; conv helpers
-    // transpose internally, the pack above must land on the channel dim
     x = ggml_cont(ctx0, x);
 
     // down
@@ -206,11 +198,7 @@ ggml_tensor * clip_graph_chatterbox::estimator(ggml_tensor * x_noise, ggml_tenso
     return x;
 }
 
-// s3 tokenizer encoder: whisper style log-mel [T, 128] in, two stride 2
-// convs to token rate, 6 pre-norm attention blocks with neox rope on q/k and
-// an fsmn memory over the value projection, then the fsq down projection.
-// output is the post-tanh 8-dim code [8, T / 4], rounded to base 3 tokens on
-// the host.
+// s3 tokenizer encoder: log-mel [T, 128] -> fsq code [8, T / 4], rounded to base 3 tokens on the host
 ggml_cgraph * clip_graph_chatterbox::build_s3tok(int T) {
     const auto & c = model.cbx;
     const int n_head = 20;
@@ -239,8 +227,7 @@ ggml_cgraph * clip_graph_chatterbox::build_s3tok(int T) {
         ggml_tensor * k = ggml_mul_mat(ctx0, blk.attn_k_w, cur);
         ggml_tensor * v = cbx_linear(blk.attn_v_w, blk.attn_v_b, cur);
 
-        // fsmn memory: depthwise conv k31 over time on the value projection,
-        // residual, added to the projected attention context
+        // fsmn memory: depthwise conv over time on v plus residual, added to the attention output
         ggml_tensor * fsm = ggml_cont(ctx0, ggml_transpose(ctx0, v)); // [T2, 1280]
         {
             ggml_tensor * w = blk.fsmn_w;
@@ -363,9 +350,8 @@ ggml_cgraph * clip_graph_chatterbox::build() {
     ggml_tensor * mu = cbx_linear(c.encoder_proj_w, c.encoder_proj_b, x); // [80, T2]
     cb(mu, "flow_mu", -1);
 
-    // cfm solver, unrolled in the graph. meanflow (distilled): 2 euler steps
-    // over t = 0 -> 0.5 -> 1, no cfg, time embeds mix t and r. classic: 10
-    // euler steps on the cosine schedule with cfg 0.7, time embeds on t only.
+    // cfm solver unrolled in the graph: meanflow takes 2 euler steps without cfg, its time embeds mix t and r
+    // the classic solver takes 10 euler steps on the cosine schedule with cfg 0.7
     const bool meanflow = c.time_embed_mixer_w != nullptr;
     const int n_steps = meanflow ? 2 : 10;
 

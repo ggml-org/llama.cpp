@@ -125,9 +125,7 @@ struct clip_encode_params {
     float   temp = 0.0f;                      // sampling temperature, noise scale for flow-matching decoders
     bool * out_is_eos = nullptr;
 
-    // TOKENIZE: out_code_embd receives the speech embedding rows of the
-    // produced codes (kept apart from out_embd, which is reserved for graphs
-    // whose last node is the embedding tensor)
+    // TOKENIZE: speech embedding rows of the produced codes
     std::vector<float> * out_code_embd = nullptr;
 
     // GEN_WAV
@@ -162,8 +160,7 @@ struct clip_gen_state * clip_gen_state_init(struct clip_ctx * ctx, uint32_t seed
 void                    clip_gen_state_free(struct clip_gen_state * state);
 void                    clip_gen_state_reset(struct clip_gen_state * state);
 
-// read a chatterbox tensor by source name, converted to F32. returns the
-// element count, 0 if not found. out may be null to only query the size.
+// read a chatterbox tensor by name as F32, returns the element count (0 if not found), out may be null to query the size
 size_t clip_cbx_read_tensor(struct clip_ctx * ctx, const char * name, float * out, size_t n_max);
 
 // a predefined voice: backbone rows, plus the gen-side reference when the gen stack needs one

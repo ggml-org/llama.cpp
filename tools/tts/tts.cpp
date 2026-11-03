@@ -69,9 +69,8 @@ int main(int argc, char ** argv) {
     // always enable embd, so that we can pass hidden states to the audio generation helper
     params.embedding = true;
 
-    // provision the cfg pair sequences for pipelines that decode one: each
-    // slot i pairs with the uncond sequence n_parallel + i, and the unified
-    // kv cache shares the window across sequences instead of splitting it
+    // for chatterbox multilingual: its cfg pairs slot i with sequence n_parallel + i in a unified kv cache
+    // TODO: this applies to every model, find a better way for a pipeline to request extra sequences
     params.n_parallel *= 2;
     params.kv_unified  = true;
 

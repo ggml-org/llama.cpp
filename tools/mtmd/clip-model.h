@@ -663,8 +663,7 @@ struct clip_chatterbox {
         ggml_tensor * ff_out_b = nullptr;
     };
 
-    // one estimator stage: resnet, transformer stack, boundary causal conv
-    // (the boundary conv stays null on mid stages)
+    // one estimator stage: resnet, transformer stack, boundary causal conv (null on mid stages)
     struct est_stage {
         resnet res;
         std::vector<tfm_block> tfm;
@@ -731,8 +730,7 @@ struct clip_chatterbox {
         ggml_tensor * b    = nullptr;
     };
 
-    // fcm residual 2d block of the speaker encoder
-    // (shortcut stays null on the stride 1 blocks)
+    // fcm residual 2d block of the speaker encoder, the shortcut is null on stride 1 blocks
     struct spk_res2d {
         ggml_tensor * conv1_w = nullptr;
         bn bn1;
@@ -1120,13 +1118,10 @@ struct clip_model {
     ggml_tensor * gen_upsample_w  = nullptr; // depthwise convtr, frame rate -> encoder frame rate
     std::vector<clip_layer> gen_tfm_layers; // mimi decoder_transformer
 
-    // chatterbox flow encoder, cfm estimator, hift vocoder, s3 tokenizer
-    // and CAMPPlus speaker encoder
+    // chatterbox flow encoder, cfm estimator, hift vocoder, s3 tokenizer and CAMPPlus speaker encoder
     clip_chatterbox cbx;
 
-    // chatterbox host-read side data (embedding tables, filterbanks,
-    // voice/conditioning encoders run on the host),
-    // accessed by name through clip_cbx_read_tensor
+    // chatterbox tensors read on the host, see clip_cbx_read_tensor()
     std::map<std::string, ggml_tensor *> cbx_tensors;
     // predefined voices, no rows if the voice is named in the prompt (lfm3a)
     std::map<std::string, clip_gen_voice> gen_voices;

@@ -1858,10 +1858,7 @@ struct mtmd_tokenizer {
                 }
             }
 
-            // the chatterbox reference encoder consumes the five DSP entries
-            // of one clip as a single chunk; its token count is the number of
-            // talker conditioning rows the clip encodes to (fixed on the
-            // multilingual variant, spkr row plus the t3 token grid on turbo)
+            // one chunk for the five entries of a chatterbox clip, one token per talker conditioning row
             if (clip_get_projector_type(ctx->ctx_a) == PROJECTOR_TYPE_CHATTERBOX_SPKENC) {
                 GGML_ASSERT(mel_spec_chunks.size() == 5);
                 const size_t n_tokens = cbx_is_mtl(ctx->ctx_a) ? 34 : 1 + (size_t) mel_spec_chunks[2].n_len / 4;
@@ -2236,8 +2233,6 @@ static int32_t mtmd_encode_impl(mtmd_context * ctx, const mtmd_image_tokens * im
     return ok ? 0 : 1;
 }
 
-// defined with the reference chain below; encodes a chatterbox reference
-// chunk into talker conditioning rows and the typed decoder reference outputs
 static int32_t cbx_ref_encode(mtmd_context * ctx, const mtmd_audio_tokens * audio_tokens, std::vector<float> & out_embd);
 
 static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk * chunk, std::vector<float> & out_embd) {
@@ -2378,8 +2373,7 @@ size_t mtmd_gen_audio_read_tensor(mtmd_context * ctx, const char * name, float *
     return clip_cbx_read_tensor(ctx->ctx_gen_a, name, out, n_max);
 }
 
-// raw 192-dim campplus x-vector of the reference clip: the precomputed fbank
-// entry through the CAMPPlus graph of the speaker encoding context
+// raw 192-dim CAMPPlus x-vector of the fbank entry
 static bool cbx_ref_xvec(mtmd_context * ctx, const clip_image_f32 & fbank, std::vector<float> & xvec) {
     clip_image_f32 mel_img;
     mel_img.set_size(fbank.get_size(), false, true);
@@ -2395,9 +2389,7 @@ static bool cbx_ref_xvec(mtmd_context * ctx, const clip_image_f32 & fbank, std::
     return true;
 }
 
-// s3 speech tokens of a precomputed reference log-mel entry; rows, when
-// requested, receives the speech embedding rows of the codes (with the
-// learned speech positions added on the multilingual variant)
+// s3 speech tokens of a log-mel entry, rows optionally receives their speech embedding rows
 static int32_t cbx_ref_tokenize(mtmd_context * ctx, const clip_image_f32 & mel,
                             std::vector<int32_t> & codes, std::vector<float> * rows) {
     clip_image_f32 mel_img;
@@ -2430,9 +2422,7 @@ static int32_t cbx_ref_tokenize(mtmd_context * ctx, const clip_image_f32 & mel,
     return 0;
 }
 
-// talker conditioning rows of a reference clip: voice encoder chain and
-// speaker projection row; the multilingual variant appends its perceiver
-// output over the reference speech embedding rows and the emotion row
+// talker conditioning rows: the speaker row, then on mtl the perceiver block and the emotion row
 static int32_t cbx_ref_cond(mtmd_context * ctx, const clip_image_f32 & ve_mel,
                         const std::vector<float> & pse, std::vector<float> & out_rows) {
     clip_ctx * ctx_clip = ctx->ctx_a;
@@ -2445,10 +2435,7 @@ static int32_t cbx_ref_cond(mtmd_context * ctx, const clip_image_f32 & ve_mel,
         return clip_cbx_read_tensor(ctx_clip, name, v.data(), n) == n;
     };
 
-    // voice encoder reference chain (embeds_from_wavs) over the precomputed
-    // power mel entry, already on the 160-frame partial grid: 3-layer lstm
-    // per partial, projected/relu/normalized embeddings averaged into the
-    // utterance embedding
+    // voice encoder (embeds_from_wavs): 3-layer lstm per 160-frame partial, the normalized partial embeddings are averaged
     const std::vector<float> & mel = ve_mel.get_ro_buf();
     const int n_mel     = 40;
     const int n_partial = 160;
@@ -2554,9 +2541,7 @@ static int32_t cbx_ref_cond(mtmd_context * ctx, const clip_image_f32 & ve_mel,
         rows[(size_t) o] = (float) acc;
     }
 
-    // multilingual variant: [spkr, perceiver x32, emotion] block, the
-    // perceiver runs its shared attention block as cross then self
-    // attention over the reference speech embedding rows
+    // the perceiver runs its shared attention block as cross then self attention
     std::vector<float> query;
     if (read_t("a.cenc.perceiver.pre_attention_query", query)) {
         if (pse.empty()) {
@@ -2669,11 +2654,7 @@ static int32_t cbx_ref_cond(mtmd_context * ctx, const clip_image_f32 & ve_mel,
     return 0;
 }
 
-// encodes the five DSP entries of a chatterbox reference chunk (fbank, s3
-// log-mels at the flow and t3 caps, s3gen prompt features, voice encoder
-// mel): the primary output is the talker conditioning rows in the backbone
-// embedding space, the flow decoder reference (codes, mel-rate features,
-// speaker vector) lands in the typed side outputs
+// talker conditioning rows go to out_embd, the flow decoder reference to ctx->gen_ref
 static int32_t cbx_ref_encode(mtmd_context * ctx, const mtmd_audio_tokens * audio_tokens, std::vector<float> & out_embd) {
     if (!ctx->ctx_gen_a) {
         LOG_ERR("%s: reference encoding needs the audio generation context\n", __func__);
@@ -2701,8 +2682,7 @@ static int32_t cbx_ref_encode(mtmd_context * ctx, const mtmd_audio_tokens * audi
         return 1;
     }
 
-    // conditioning rows: [spkr] then, multilingual, the perceiver block over
-    // the reference rows, or, turbo, the raw reference rows
+    // [spkr, perceiver block] on mtl, [spkr, reference speech rows] on turbo
     const bool mtl = cbx_is_mtl(ctx->ctx_a);
     std::vector<float> pse;
     if (mtl) {

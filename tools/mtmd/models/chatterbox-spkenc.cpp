@@ -1,12 +1,10 @@
 #include "models.h"
 
-// Chatterbox speaker encoder: CAMPPlus x-vector on kaldi fbank features,
-// output raw. Mirrors s3gen/xvector.py.
+// Chatterbox speaker encoder: CAMPPlus x-vector on kaldi fbank features, see s3gen/xvector.py
 
 static constexpr float bn_eps = 1e-5f;
 
-// per-channel batchnorm on x [C, T]; scale = w / sqrt(var + eps), shift folds
-// the running mean. w/b stay null on the affine=False variant
+// per-channel batchnorm on x [C, T], w/b are null on the affine=False variant
 ggml_tensor * clip_graph_chatterbox_spkenc::bn1d(const clip_chatterbox::bn & n, ggml_tensor * x) {
     ggml_tensor * sd = ggml_sqrt(ctx0, ggml_scale_bias(ctx0, n.var, 1.0f, bn_eps));
     if (!n.w) {
@@ -145,8 +143,7 @@ ggml_cgraph * clip_graph_chatterbox_spkenc::build() {
                                             ggml_cont(ctx0, ggml_transpose(ctx0, sd)), 0); // [1024, 1]
     cb(stats, "spk_stats_pool", -1);
 
-    // dense 1024 -> 192, batchnorm without affine, into the raw x-vector:
-    // normalization and the s3gen speaker affine belong to the code2wav graph
+    // the x-vector stays raw, the gen graph normalizes it
     ggml_tensor * dw = ggml_reshape_2d(ctx0, c.spk_dense_w, 1024, 192);
     ggml_tensor * emb = ggml_mul_mat(ctx0, dw, stats);                           // [192, 1]
     emb = bn1d(c.spk_dense_bn, emb);

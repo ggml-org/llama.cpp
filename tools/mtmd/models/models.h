@@ -190,8 +190,7 @@ struct clip_graph_conformer : clip_graph {
     ggml_cgraph * build() override;
 };
 
-// linear/conv builders shared between the chatterbox gen and spkenc graphs
-// (defined in chatterbox-gen.cpp)
+// builders shared by the chatterbox gen and spkenc graphs, defined in chatterbox-gen.cpp
 struct clip_graph_chatterbox_base : clip_graph {
     using clip_graph::clip_graph;
 

@@ -1037,9 +1037,7 @@ static bool mtmd_audio_s3tok_log_mel(const mtmd_audio_cache & cache, const float
     return true;
 }
 
-// rational 3/2 upsampler: every output sample sits at source position
-// 2 n / 3, interpolated by a hann windowed sinc cut just under the source
-// nyquist. edges are zero extended.
+// 16 kHz -> 24 kHz upsampler: hann windowed sinc cut just under the source nyquist
 static void mtmd_audio_upsample_3_2(const float * samples, size_t n_samples, std::vector<float> & out) {
     const int    W  = 16;    // sinc half width in source samples
     const double fc = 0.495; // cutoff, normalized to the source rate
@@ -1089,8 +1087,7 @@ static bool mtmd_audio_matcha_log_mel(const mtmd_audio_cache & cache, const floa
     return true;
 }
 
-// librosa.effects.trim replica, rms windows 2048/512 centered with zero
-// padding, non-silent where the window sits less than top_db under the peak
+// librosa.effects.trim: non-silent where the rms window is within top_db of the peak
 static void mtmd_audio_trim_silence(const float * samples, size_t n_samples, float top_db,
                              size_t & start, size_t & end) {
     const int win = 2048;
@@ -1241,13 +1238,6 @@ static float mtmd_audio_lufs(const float * samples, size_t n_samples, int sample
 //
 // mtmd_audio_preprocessor_chatterbox_ref
 //
-// Mirrors torchaudio.compliance.kaldi.fbank(wav, num_mel_bins=80) at 16 kHz as
-// used by the CAMPPlus x-vector front-end (s3gen/xvector.py extract_feature):
-//   snip_edges framing 400/160, per-frame dc removal, preemphasis 0.97, povey
-//   window, 512-point power spectrum, kaldi mel banks (low 20 Hz, high
-//   nyquist, nyquist fft bin excluded), log with float-eps floor, then the
-//   reference's own cepstral mean subtraction over time.
-//
 
 void mtmd_audio_preprocessor_chatterbox_ref::initialize() {
     // kaldi fbank: povey window, kaldi mel banks over the 512-point spectrum, the nyquist bin left out
@@ -1325,7 +1315,7 @@ bool mtmd_audio_preprocessor_chatterbox_ref::preprocess(const float *           
         }
     }
 
-    // entry 0: CAMPPlus kaldi fbank, per-channel mean subtracted over time
+    // entry 0: torchaudio kaldi.fbank of CAMPPlus (snip edges, dc removal, preemphasis 0.97), mean subtracted over time
     {
         const int frame_len = 400;
         const int hop       = 160;
@@ -1381,8 +1371,7 @@ bool mtmd_audio_preprocessor_chatterbox_ref::preprocess(const float *           
         output.push_back(std::move(out));
     }
 
-    // entries 1 and 2: s3 tokenizer log-mels at the flow and t3 caps, each
-    // clip padded to whole 40 ms tokens so the mel stays twice the token grid
+    // entries 1 and 2: s3 tokenizer log-mels at the flow and t3 caps, padded to whole 40 ms tokens
     auto s3tok_entry = [&](size_t cap) -> bool {
         std::vector<float> clip(pcm.begin(), pcm.begin() + std::min(pcm.size(), cap));
         clip.resize((clip.size() + 639) / 640 * 640, 0.0f);
@@ -1405,8 +1394,7 @@ bool mtmd_audio_preprocessor_chatterbox_ref::preprocess(const float *           
         return false;
     }
 
-    // entry 3: s3gen prompt features, the flow-capped clip upsampled to the
-    // 24 kHz decoder rate then through the matcha log-mel
+    // entry 3: s3gen prompt features of the flow-capped clip at 24 kHz
     {
         std::vector<float> clip(pcm.begin(), pcm.begin() + std::min(pcm.size(), gen_cap));
         clip.resize((clip.size() + 639) / 640 * 640, 0.0f);
@@ -1425,8 +1413,7 @@ bool mtmd_audio_preprocessor_chatterbox_ref::preprocess(const float *           
         output.push_back(std::move(out));
     }
 
-    // entry 4: voice encoder power mel of the silence-trimmed clip, padded
-    // (or trimmed) to the 160-frame partial grid at the reference 1.3 rate
+    // entry 4: voice encoder mel of the silence-trimmed clip, padded to the 160-frame partial grid (rate 1.3)
     {
         size_t t0 = 0, t1 = 0;
         mtmd_audio_trim_silence(pcm.data(), pcm.size(), 20.0f, t0, t1);

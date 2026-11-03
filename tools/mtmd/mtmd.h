@@ -477,8 +477,7 @@ struct mtmd_gen_audio_info {
 
 MTMD_API struct mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx);
 
-// read a named conditioning tensor from the gen audio model, converted to F32.
-// returns the element count, 0 if not found. out may be null to query the size.
+// read a named tensor of the gen audio model as F32, returns the element count (0 if not found), out may be null to query the size
 MTMD_API size_t mtmd_gen_audio_read_tensor(mtmd_context * ctx, const char * name, float * out, size_t n_max);
 // name of the idx-th predefined voice, nullptr when idx is out of range
 MTMD_API const char * mtmd_gen_audio_voice_name(const mtmd_context * ctx, int32_t idx);

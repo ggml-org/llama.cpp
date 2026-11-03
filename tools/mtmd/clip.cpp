@@ -2179,8 +2179,7 @@ struct clip_model_loader {
                     } break;
                 case PROJECTOR_TYPE_CHATTERBOX_SPKENC:
                     {
-                        // CAMPPlus x-vector; kaldi fbank front-end (povey
-                        // window, 25 ms / 10 ms framing, 512-point spectrum)
+                        // kaldi fbank front-end of CAMPPlus: 25 ms / 10 ms framing, 512-point spectrum
                         hparams.audio_sample_rate = 16000;
                         hparams.audio_n_fft       = 512;
                         hparams.audio_window_len  = 400;
@@ -3906,8 +3905,7 @@ struct clip_model_loader {
                     c.s3tok_down_w = get_tensor("a.s3tok.quantizer._codebook.project_down.weight");
                     c.s3tok_down_b = get_tensor("a.s3tok.quantizer._codebook.project_down.bias");
 
-                    // host-read side data, accessed by name through
-                    // clip_cbx_read_tensor: embedding tables, source module
+                    // read on the host: embedding tables, source module
                     for (ggml_tensor * t = ggml_get_first_tensor(ctx_meta.get()); t; t = ggml_get_next_tensor(ctx_meta.get(), t)) {
                         const std::string name = t->name;
                         if (name.rfind("a.gen.code.", 0) == 0 || name.rfind("a.gen.t3.", 0) == 0 ||
@@ -4030,9 +4028,7 @@ struct clip_model_loader {
                     c.spk_dense_w = get_tensor("a.spk.xvector.dense.linear.weight");
                     load_bn("a.spk.xvector.dense.nonlinear.batchnorm", c.spk_dense_bn);
 
-                    // host-read side data, accessed by name through
-                    // clip_cbx_read_tensor: voice encoder lstm, conditioning
-                    // encoder
+                    // read on the host: voice encoder lstm, conditioning encoder
                     for (ggml_tensor * t = ggml_get_first_tensor(ctx_meta.get()); t; t = ggml_get_next_tensor(ctx_meta.get(), t)) {
                         const std::string name = t->name;
                         if (name.rfind("a.ve.", 0) == 0 || name.rfind("a.cenc.", 0) == 0) {
@@ -4993,8 +4989,7 @@ struct clip_init_result clip_init(const char * fname, struct clip_context_params
             }
             loader.load_tensors(*ctx_gen_audio);
             if (ctx_gen_audio->model.proj_type == PROJECTOR_TYPE_CHATTERBOX) {
-                // the classic cfm solver unrolls up to 10 steps x 2 cfg
-                // estimator evaluations in one graph
+                // the classic cfm solver unrolls up to 10 steps x 2 cfg estimator evaluations in one graph
                 ctx_gen_audio->max_nodes = 65536;
                 ctx_gen_audio->sched.reset(
                     ggml_backend_sched_new(ctx_gen_audio->backend_ptrs.data(), ctx_gen_audio->backend_buft.data(),
@@ -5412,8 +5407,7 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
             } break;
         case PROJECTOR_TYPE_CHATTERBOX_SPKENC:
             {
-                // statistics pooling collapses the whole clip into a single
-                // speaker embedding vector, regardless of its length
+                // statistics pooling gives one speaker embedding, whatever the clip length is
                 n_patches = 1;
             } break;
         case PROJECTOR_TYPE_QWEN3TTS_GEN:
@@ -6668,8 +6662,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                 set_input_f32("inp_prompt_feat", params->ref->feat);
                 set_input_f32("inp_xvec", params->ref->spk);
 
-                // espnet relative positional encoding, entry k holds the
-                // sinusoid of relative position (T-1) - k
+                // espnet relative positional encoding, entry k holds the sinusoid of relative position (T-1) - k
                 auto fill_pos = [&](const char * name, int T) {
                     const int d = 512;
                     std::vector<float> pos((size_t) (2 * T - 1) * d);
@@ -6686,9 +6679,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                 fill_pos("inp_pos1", T1);
                 fill_pos("inp_pos2", T2);
 
-                // meanflow inputs: gaussian noise and the sinusoidal time
-                // embeddings of the solver span points, same schedule as the
-                // graph builder (matcha layout: sines then cosines, scale 1000)
+                // noise and the time embeddings of the solver span points, matcha layout (sines then cosines, scale 1000)
                 std::vector<float> noise((size_t) 80 * T2);
                 std::normal_distribution<float> nd(0.0f, 1.0f);
                 for (auto & f : noise) f = nd(params->gen_state->rng);
@@ -6736,8 +6727,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
             } break;
         case PROJECTOR_TYPE_CHATTERBOX_SPKENC:
             {
-                // ceil-mode correction of the cam seg pooling: pooled sums are divided
-                // by the full segment length, the last partial segment gets rescaled
+                // the ceil-mode seg pooling divides by the full segment length, rescale the last partial segment
                 const int T1 = (imgs.entries[0].nx() - 1) / 2 + 1;
                 const int S  = (T1 + 99) / 100;
                 std::vector<float> segfix((size_t) S, 1.0f);
@@ -7352,10 +7342,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
             (*params->out_codes)[(size_t) t] = code;
         }
 
-        // embedding rows of the produced codes, gathered from the talker
-        // speech table shipped in the mmproj; the multilingual variant adds
-        // its learned speech positions so the rows feed the conditioning
-        // perceiver directly
+        // speech table rows of the codes, the multilingual variant adds its learned positions as its perceiver expects
         if (params->out_code_embd) {
             const auto & tensors = ctx->model.cbx_tensors;
             auto tab_it = tensors.find("a.gen.code.out_embd.weight");
@@ -7405,16 +7392,14 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
         std::vector<float> mel_data(ggml_nelements(mel));
         ggml_backend_tensor_get(mel, mel_data.data(), 0, ggml_nbytes(mel));
 
-        // hift bridge: f0 -> harmonic source -> source stft on the host,
-        // then the vocoder graph, then the istft
+        // hift: f0 -> harmonic source -> source stft on the host, then the vocoder graph and the istft
         ggml_tensor * f0_t = ggml_graph_get_tensor(gf, "out_f0");
         GGML_ASSERT(f0_t != nullptr);
         const int n_mel_out = (int) ggml_nelements(f0_t);
         std::vector<float> f0(n_mel_out);
         ggml_backend_tensor_get(f0_t, f0.data(), 0, ggml_nbytes(f0_t));
 
-        // source: f0 upsampled x480 nearest, 9 harmonics, cumulative phase,
-        // uv gating and noise as in SineGen, merged by l_linear + tanh
+        // SineGen: f0 upsampled x480, 9 harmonics with cumulative phase, uv gating and noise, merged by l_linear + tanh
         const int ups_total = 480;
         const double sr = 24000.0;
         const int64_t n_wav = (int64_t) n_mel_out * ups_total;
@@ -7522,8 +7507,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
             out_audio[(size_t) i] = (float) fmax(-0.99, fmin(0.99, v));
         }
 
-        // the reference silences the first 20 ms and fades the next 20 ms in
-        // to hide the onset artifact of the flow prompt boundary (trim_fade)
+        // trim_fade of the reference: silence 20 ms then fade in 20 ms, hides the artifact of the prompt boundary
         const size_t n_trim = 24000 / 50;
         for (size_t i = 0; i < 2 * n_trim && i < out_audio.size(); i++) {
             const double g = i < n_trim ? 0.0

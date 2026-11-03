@@ -124,8 +124,7 @@ protected:
         return true;
     }
 
-    // encodes a speaker reference clip through the standard audio path:
-    // bitmap to chunks to chunk encode, out receives the encoder embeddings
+    // encodes a speaker clip or a voice, out receives the encoder embeddings
     bool encode_speaker(mtmd_bitmap * bitmap, std::vector<float> & out) {
         if (!mtmd_bitmap_is_voice(bitmap) && !mtmd_support_audio(mctx)) {
             LOG_ERR("mtmd_helper_gen_audio: mmproj has no speaker/audio encoder\n");
@@ -1738,8 +1737,7 @@ public:
             }
         }
 
-        // a speaker clip or a predefined voice: the encode gives the talker conditioning rows,
-        // set_ref keeps the flow decoder reference in the gen state
+        // the encode gives the talker conditioning rows, set_ref keeps the flow decoder reference
         if (!inp->speaker_ref) {
             LOG_ERR("mtmd_helper_gen_audio: chatterbox requires a speaker reference or a voice\n");
             return 1;
