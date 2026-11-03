@@ -866,7 +866,8 @@ static void dequantize_tiled_weight_to_fp16_task_iq2_xxs(
         const tiled_dequantize_state_t *state,
         uint32_t start_tile, uint32_t end_tile) {
 
-    HVX_Vector v_d8 = Q6_V_vzero();
+    HVX_Vector v_d = Q6_V_vzero();
+    const HVX_Vector v_eighth = Q6_Vh_vsplat_R(IQ2XXS_D_SCALE_F16);
 
     for (uint32_t t = start_tile; t < end_tile; t++) {
         const uint8_t * tile = state->src + t * state->aligned_tile_size;
@@ -874,15 +875,14 @@ static void dequantize_tiled_weight_to_fp16_task_iq2_xxs(
 
         // rows hold all k tiles and n_k_tiles is a multiple of 8, so t % 8 is the tile within its super-block
         if (t == start_tile || (t & (IQ2XXS_TILES_PER_SB - 1)) == 0) {
-            HVX_Vector v_d = iq2xxs_gather_d(tile - (t & (IQ2XXS_TILES_PER_SB - 1)) * state->aligned_tile_size);
-            v_d8 = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_d, Q6_Vh_vsplat_R(IQ2XXS_D_SCALE_F16)));
+            v_d = iq2xxs_gather_d(tile - (t & (IQ2XXS_TILES_PER_SB - 1)) * state->aligned_tile_size);
         }
 
         HVX_Vector v_w[2 * IQ2XXS_GROUPS], v_ls;
         iq2xxs_decode_tile(tile, v_w, &v_ls);
 
         HVX_Vector v_ls_h  = Q6_Vhf_equals_Vh(Q6_Vh_vpacke_VwVw(v_ls, v_ls));
-        HVX_Vector v_sc    = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_d8, v_ls_h));
+        HVX_Vector v_sc    = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_d, v_ls_h));
         HVX_Vector v_scale = Q6_V_lo_W(Q6_W_vshuff_VVR(v_sc, v_sc, -2));
 
         #pragma unroll
@@ -890,10 +890,11 @@ static void dequantize_tiled_weight_to_fp16_task_iq2_xxs(
             HVX_VectorPair vp16 = Q6_Wh_vunpack_Vb(v_w[g]);
             HVX_VectorPair vp_k = Q6_W_vdeal_VVR(Q6_V_hi_W(vp16), Q6_V_lo_W(vp16), -4);
 
-            hvx_vmem(dst_ptr + (2 * g + 0) * 64) =
-                Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(Q6_Vhf_equals_Vh(Q6_V_lo_W(vp_k)), v_scale));
-            hvx_vmem(dst_ptr + (2 * g + 1) * 64) =
-                Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(Q6_Vhf_equals_Vh(Q6_V_hi_W(vp_k)), v_scale));
+            // d / 8 is subnormal in fp16 for real weights, so apply the 1/8 after the multiply by d * ls
+            HVX_Vector v_lo = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(Q6_Vhf_equals_Vh(Q6_V_lo_W(vp_k)), v_scale));
+            HVX_Vector v_hi = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(Q6_Vhf_equals_Vh(Q6_V_hi_W(vp_k)), v_scale));
+            hvx_vmem(dst_ptr + (2 * g + 0) * 64) = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_lo, v_eighth));
+            hvx_vmem(dst_ptr + (2 * g + 1) * 64) = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_hi, v_eighth));
         }
     }
 }
