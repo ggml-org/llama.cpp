@@ -6364,6 +6364,7 @@ static void ggml_compute_forward_rope_flt(
 
     if (mrope_used) {
         GGML_ASSERT(sections[0] > 0 || sections[1] > 0 || sections[2] > 0);
+        GGML_ASSERT(4*ne2 <= src1->ne[0]);
     }
 
     if (is_vision) {
