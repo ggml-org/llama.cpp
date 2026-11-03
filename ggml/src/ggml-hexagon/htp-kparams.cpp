@@ -4143,21 +4143,106 @@ static bool htp_kparams_solve_conv2d_dw(
     return true;
 }
 
-static bool htp_kparams_solve_dsv4_hc_pre(
+static bool htp_dsv4_hc_pre_can_collapse(
+    const struct ggml_tensor * x,
+    const struct ggml_tensor * weights,
+    const struct ggml_tensor * dst
+) {
+    if (!x || !weights || !dst) {
+        return false;
+    }
+    if (x->type != GGML_TYPE_F32 || weights->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (x->nb[0] != sizeof(float) || weights->nb[0] != sizeof(float) || dst->nb[0] != sizeof(float)) {
+        return false;
+    }
+    if (x->ne[1] != 4 || dst->ne[0] != x->ne[0]) {
+        return false;
+    }
+
+    const bool gated = ggml_get_op_params_i32(dst, 1) != 0;
+    const int64_t x_tokens = x->ne[2] * x->ne[3];
+    const int64_t d_tokens = dst->ne[1] * dst->ne[2] * dst->ne[3];
+    const int64_t w_tokens = gated ? (weights->ne[2] * weights->ne[3]) : (weights->ne[1] * weights->ne[2] * weights->ne[3]);
+
+    if (x_tokens != d_tokens || x_tokens != w_tokens) {
+        return false;
+    }
+
+    if (x->ne[3] == 1 && dst->ne[2] == 1 && dst->ne[3] == 1 &&
+        (gated ? (weights->ne[3] == 1) : (weights->ne[2] == 1 && weights->ne[3] == 1))) {
+        return false;
+    }
+
+    if (x->ne[3] > 1 && x->nb[3] != x->ne[2] * x->nb[2]) return false;
+
+    if (dst->ne[2] > 1 && dst->nb[2] != dst->ne[1] * dst->nb[1]) return false;
+    if (dst->ne[3] > 1 && dst->nb[3] != dst->ne[2] * dst->nb[2]) return false;
+
+    if (gated) {
+        if (weights->ne[3] > 1 && weights->nb[3] != weights->ne[2] * weights->nb[2]) return false;
+    } else {
+        if (weights->ne[2] > 1 && weights->nb[2] != weights->ne[1] * weights->nb[1]) return false;
+        if (weights->ne[3] > 1 && weights->nb[3] != weights->ne[2] * weights->nb[2]) return false;
+    }
+
+    return true;
+}
+
+static void htp_dsv4_hc_pre_collapse_tensors(
+    const struct ggml_tensor * x,
+    const struct ggml_tensor * weights,
+    const struct ggml_tensor * dst,
+    struct ggml_tensor * x_c,
+    struct ggml_tensor * w_c,
+    struct ggml_tensor * d_c
+) {
+    const int64_t n_tokens = x->ne[2] * x->ne[3];
+    const bool gated = ggml_get_op_params_i32(dst, 1) != 0;
+
+    *x_c = *x;
+    x_c->ne[2] = n_tokens;
+    x_c->ne[3] = 1;
+    x_c->nb[3] = x_c->ne[2] * x_c->nb[2];
+
+    *d_c = *dst;
+    d_c->ne[1] = n_tokens;
+    d_c->ne[2] = 1;
+    d_c->ne[3] = 1;
+    d_c->nb[2] = d_c->ne[1] * d_c->nb[1];
+    d_c->nb[3] = d_c->nb[2];
+
+    *w_c = *weights;
+    if (gated) {
+        w_c->ne[2] = n_tokens;
+        w_c->ne[3] = 1;
+        w_c->nb[3] = w_c->ne[2] * w_c->nb[2];
+    } else {
+        w_c->ne[1] = n_tokens;
+        w_c->ne[2] = 1;
+        w_c->ne[3] = 1;
+        w_c->nb[2] = w_c->ne[1] * w_c->nb[1];
+        w_c->nb[3] = w_c->nb[2];
+    }
+}
+
+static bool htp_kparams_solve_dsv4_hc_pre_impl(
     const struct ggml_hexagon_session * sess,
-    const struct ggml_tensor * op,
+    const struct ggml_tensor * x,
+    const struct ggml_tensor * weights,
+    const struct ggml_tensor * dst,
     struct htp_dsv4_hc_pre_kernel_params * kparams
 ) {
     memset(kparams, 0, sizeof(*kparams));
 
-    const struct ggml_tensor * x       = op->src[0];
-    const struct ggml_tensor * weights = op->src[1];
-    const struct ggml_tensor * dst     = op;
-
     if (x->type != GGML_TYPE_F32 || weights->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
         return false;
     }
-    if (x->ne[1] == 0 || x->ne[3] != 1) {
+    if (x->ne[1] != 4 || x->ne[3] != 1) {
+        return false;
+    }
+    if (x->ne[0] % HTP_DSV4_HC_CHUNK_ELEMS != 0) {
         return false;
     }
     if (dst->ne[0] != x->ne[0] || dst->ne[1] != x->ne[2] || dst->ne[2] != 1 || dst->ne[3] != 1) {
@@ -4170,7 +4255,7 @@ static bool htp_kparams_solve_dsv4_hc_pre(
         return false;
     }
 
-    const bool gated = ggml_get_op_params_i32(op, 1) != 0;
+    const bool gated = ggml_get_op_params_i32(dst, 1) != 0;
     if (gated) {
         if (weights->ne[0] != x->ne[0] || weights->ne[1] != x->ne[1] || weights->ne[2] != x->ne[2] || weights->ne[3] != 1) {
             return false;
@@ -4182,13 +4267,7 @@ static bool htp_kparams_solve_dsv4_hc_pre(
     }
 
     const uint32_t n_tokens = (uint32_t) x->ne[2];
-    const bool     n_hc4    = x->ne[1] == 4;
-
-    if (gated) {
-        kparams->kernel_type = n_hc4 ? HTP_DSV4_HC_PRE_KERNEL_GATED : HTP_DSV4_HC_PRE_KERNEL_GATED_GENERIC;
-    } else {
-        kparams->kernel_type = n_hc4 ? HTP_DSV4_HC_PRE_KERNEL_PLAIN : HTP_DSV4_HC_PRE_KERNEL_PLAIN_GENERIC;
-    }
+    kparams->kernel_type    = gated ? HTP_DSV4_HC_PRE_KERNEL_GATED : HTP_DSV4_HC_PRE_KERNEL_PLAIN;
 
     kparams->n_chunks   = ((uint32_t) x->ne[0] + HTP_DSV4_HC_CHUNK_ELEMS - 1) / HTP_DSV4_HC_CHUNK_ELEMS;
     kparams->total_jobs = n_tokens * kparams->n_chunks;
@@ -4198,17 +4277,24 @@ static bool htp_kparams_solve_dsv4_hc_pre(
     kparams->n_threads       = (std::min)(htp_session_n_threads(sess), kparams->total_jobs);
     kparams->jobs_per_thread = (kparams->total_jobs + kparams->n_threads - 1) / kparams->n_threads;
 
-    kparams->dma_block_chunks = (std::min)((uint32_t) HTP_DSV4_HC_DMA_CHUNKS, kparams->n_chunks);
-    kparams->dma_row_stride   = kparams->dma_block_chunks * 128;
-    kparams->dma_buffer_size  = HTP_DSV4_HC_PRE_DMA_ROWS * kparams->dma_row_stride;
-    kparams->dma_vtcm_size    = 2 * kparams->dma_buffer_size * kparams->n_threads;
+    const size_t vtcm_budget = htp_session_vtcm_size(sess);
+    const uint32_t n_rows    = gated ? HTP_DSV4_HC_PRE_GATED_ROWS : HTP_DSV4_HC_PRE_PLAIN_ROWS;
+    uint32_t block_chunks    = (std::min)((uint32_t) HTP_DSV4_HC_MAX_CHUNKS, kparams->n_chunks);
+    while (block_chunks > 16) {
+        const uint32_t stride = block_chunks * 128;
+        const uint32_t buf_sz = n_rows * stride;
+        if (2 * buf_sz * kparams->n_threads <= vtcm_budget) {
+            break;
+        }
+        block_chunks /= 2;
+    }
 
-    if (gated && n_hc4 &&
-        n_tokens > 1 &&
-        x->ne[0] % HTP_DSV4_HC_CHUNK_ELEMS == 0 &&
-        kparams->jobs_per_thread >= 2*kparams->dma_block_chunks &&
-        kparams->dma_vtcm_size <= htp_session_vtcm_size(sess)) {
-        kparams->kernel_type = HTP_DSV4_HC_PRE_KERNEL_GATED_DMA;
+    kparams->dma_block_chunks = block_chunks;
+    kparams->dma_row_stride   = block_chunks * 128;
+    kparams->dma_buffer_size  = n_rows * kparams->dma_row_stride;
+    kparams->vtcm_size        = 2 * kparams->dma_buffer_size * kparams->n_threads;
+    if (kparams->vtcm_size > vtcm_budget) {
+        return false;
     }
 
     kparams->div_n_chunks  = init_fastdiv_values(kparams->n_chunks);
@@ -4217,18 +4303,137 @@ static bool htp_kparams_solve_dsv4_hc_pre(
     return true;
 }
 
-static bool htp_kparams_solve_dsv4_hc_post(
+static inline bool htp_kparams_solve_dsv4_hc_pre(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op,
+    struct htp_dsv4_hc_pre_kernel_params * kparams
+) {
+    if (htp_dsv4_hc_pre_can_collapse(op->src[0], op->src[1], op)) {
+        struct ggml_tensor x_c, w_c, d_c;
+        htp_dsv4_hc_pre_collapse_tensors(op->src[0], op->src[1], op, &x_c, &w_c, &d_c);
+        return htp_kparams_solve_dsv4_hc_pre_impl(sess, &x_c, &w_c, &d_c, kparams);
+    }
+    return htp_kparams_solve_dsv4_hc_pre_impl(sess, op->src[0], op->src[1], op, kparams);
+}
+
+static bool htp_dsv4_hc_post_can_collapse(
+    const struct ggml_tensor * x,
+    const struct ggml_tensor * residual,
+    const struct ggml_tensor * post,
+    const struct ggml_tensor * comb,
+    const struct ggml_tensor * dst
+) {
+    if (!x || !residual || !post || !dst) {
+        return false;
+    }
+    if (x->type != GGML_TYPE_F32 || residual->type != GGML_TYPE_F32 || post->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (comb && comb->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (x->nb[0] != sizeof(float) || residual->nb[0] != sizeof(float) || post->nb[0] != sizeof(float) || dst->nb[0] != sizeof(float)) {
+        return false;
+    }
+    if (comb && comb->nb[0] != sizeof(float)) {
+        return false;
+    }
+    if (residual->ne[0] != x->ne[0] || residual->ne[1] != 4 || dst->ne[0] != x->ne[0] || dst->ne[1] != 4 || post->ne[0] != 4) {
+        return false;
+    }
+    if (comb && (comb->ne[0] != 4 || comb->ne[1] != 4)) {
+        return false;
+    }
+
+    const int64_t x_tokens = x->ne[1] * x->ne[2] * x->ne[3];
+    const int64_t r_tokens = residual->ne[2] * residual->ne[3];
+    const int64_t p_tokens = post->ne[1] * post->ne[2] * post->ne[3];
+    const int64_t d_tokens = dst->ne[2] * dst->ne[3];
+    if (x_tokens != r_tokens || x_tokens != p_tokens || x_tokens != d_tokens) {
+        return false;
+    }
+    if (comb && (comb->ne[2] * comb->ne[3] != x_tokens)) {
+        return false;
+    }
+
+    if (x->ne[2] == 1 && x->ne[3] == 1 &&
+        residual->ne[3] == 1 &&
+        post->ne[2] == 1 && post->ne[3] == 1 &&
+        dst->ne[3] == 1 &&
+        (!comb || comb->ne[3] == 1)) {
+        return false;
+    }
+
+    if (x->ne[2] > 1 && x->nb[2] != x->ne[1] * x->nb[1]) return false;
+    if (x->ne[3] > 1 && x->nb[3] != x->ne[2] * x->nb[2]) return false;
+
+    if (residual->ne[3] > 1 && residual->nb[3] != residual->ne[2] * residual->nb[2]) return false;
+    if (dst->ne[3] > 1 && dst->nb[3] != dst->ne[2] * dst->nb[2]) return false;
+
+    if (post->ne[2] > 1 && post->nb[2] != post->ne[1] * post->nb[1]) return false;
+    if (post->ne[3] > 1 && post->nb[3] != post->ne[2] * post->nb[2]) return false;
+
+    if (comb && comb->ne[3] > 1 && comb->nb[3] != comb->ne[2] * comb->nb[2]) return false;
+
+    return true;
+}
+
+static void htp_dsv4_hc_post_collapse_tensors(
+    const struct ggml_tensor * x,
+    const struct ggml_tensor * residual,
+    const struct ggml_tensor * post,
+    const struct ggml_tensor * comb,
+    const struct ggml_tensor * dst,
+    struct ggml_tensor * x_c,
+    struct ggml_tensor * r_c,
+    struct ggml_tensor * p_c,
+    struct ggml_tensor * c_c,
+    struct ggml_tensor * d_c
+) {
+    const int64_t n_tokens = x->ne[1] * x->ne[2] * x->ne[3];
+
+    *x_c = *x;
+    x_c->ne[1] = n_tokens;
+    x_c->ne[2] = 1;
+    x_c->ne[3] = 1;
+    x_c->nb[2] = x_c->ne[1] * x_c->nb[1];
+    x_c->nb[3] = x_c->nb[2];
+
+    *r_c = *residual;
+    r_c->ne[2] = n_tokens;
+    r_c->ne[3] = 1;
+    r_c->nb[3] = r_c->ne[2] * r_c->nb[2];
+
+    *d_c = *dst;
+    d_c->ne[2] = n_tokens;
+    d_c->ne[3] = 1;
+    d_c->nb[3] = d_c->ne[2] * d_c->nb[2];
+
+    *p_c = *post;
+    p_c->ne[1] = n_tokens;
+    p_c->ne[2] = 1;
+    p_c->ne[3] = 1;
+    p_c->nb[2] = p_c->ne[1] * p_c->nb[1];
+    p_c->nb[3] = p_c->nb[2];
+
+    if (comb && c_c) {
+        *c_c = *comb;
+        c_c->ne[2] = n_tokens;
+        c_c->ne[3] = 1;
+        c_c->nb[3] = c_c->ne[2] * c_c->nb[2];
+    }
+}
+
+static bool htp_kparams_solve_dsv4_hc_post_impl(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * x,
+    const struct ggml_tensor * residual,
+    const struct ggml_tensor * post,
+    const struct ggml_tensor * comb,
+    const struct ggml_tensor * dst,
     struct htp_dsv4_hc_post_kernel_params * kparams
 ) {
     memset(kparams, 0, sizeof(*kparams));
-
-    const struct ggml_tensor * x        = op->src[0];
-    const struct ggml_tensor * residual = op->src[1];
-    const struct ggml_tensor * post     = op->src[2];
-    const struct ggml_tensor * comb     = op->src[3];
-    const struct ggml_tensor * dst      = op;
 
     if (x->type != GGML_TYPE_F32 || residual->type != GGML_TYPE_F32 || post->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
         return false;
@@ -4236,44 +4441,82 @@ static bool htp_kparams_solve_dsv4_hc_post(
     if (comb && comb->type != GGML_TYPE_F32) {
         return false;
     }
-    if (residual->ne[1] != 4 || x->ne[2] != 1 || x->ne[3] != 1) {
+    if (x->ne[2] != 1 || x->ne[3] != 1) {
         return false;
     }
-    if (x->nb[0] != sizeof(float) || residual->nb[0] != sizeof(float) || dst->nb[0] != sizeof(float)) {
+    if (x->ne[0] % HTP_DSV4_HC_CHUNK_ELEMS != 0) {
         return false;
     }
-    if (ggml_is_permuted(x) || ggml_is_permuted(residual) || ggml_is_permuted(dst)) {
+    if (residual->ne[0] != x->ne[0] || residual->ne[1] != 4 || residual->ne[2] != x->ne[1] || residual->ne[3] != 1) {
+        return false;
+    }
+    if (post->ne[0] != 4 || post->ne[1] != x->ne[1] || post->ne[2] != 1 || post->ne[3] != 1) {
+        return false;
+    }
+    if (comb && (comb->ne[0] != 4 || comb->ne[1] != 4 || comb->ne[2] != x->ne[1] || comb->ne[3] != 1)) {
+        return false;
+    }
+    if (dst->ne[0] != x->ne[0] || dst->ne[1] != 4 || dst->ne[2] != x->ne[1] || dst->ne[3] != 1) {
+        return false;
+    }
+    if (x->nb[0] != sizeof(float) || residual->nb[0] != sizeof(float) || post->nb[0] != sizeof(float) || dst->nb[0] != sizeof(float)) {
+        return false;
+    }
+    if (comb && comb->nb[0] != sizeof(float)) {
+        return false;
+    }
+    if (ggml_is_permuted(x) || ggml_is_permuted(residual) || ggml_is_permuted(post) || ggml_is_permuted(dst) || (comb && ggml_is_permuted(comb))) {
         return false;
     }
 
     const uint32_t n_tokens = (uint32_t) x->ne[1];
 
-    kparams->has_comb   = comb != nullptr;
-    kparams->n_chunks   = ((uint32_t) x->ne[0] + HTP_DSV4_HC_CHUNK_ELEMS - 1) / HTP_DSV4_HC_CHUNK_ELEMS;
-    kparams->total_jobs = n_tokens * kparams->n_chunks;
+    kparams->has_comb    = comb != nullptr;
+    kparams->kernel_type = kparams->has_comb ? HTP_DSV4_HC_POST_KERNEL_COMB : HTP_DSV4_HC_POST_KERNEL_IDENTITY;
+    kparams->n_chunks    = ((uint32_t) x->ne[0] + HTP_DSV4_HC_CHUNK_ELEMS - 1) / HTP_DSV4_HC_CHUNK_ELEMS;
+    kparams->total_jobs  = n_tokens * kparams->n_chunks;
     if (kparams->total_jobs == 0) {
         return true;
     }
     kparams->n_threads       = (std::min)(htp_session_n_threads(sess), kparams->total_jobs);
     kparams->jobs_per_thread = (kparams->total_jobs + kparams->n_threads - 1) / kparams->n_threads;
 
-    kparams->dma_block_chunks = (std::min)((uint32_t) HTP_DSV4_HC_DMA_CHUNKS, kparams->n_chunks);
-    kparams->dma_row_stride   = kparams->dma_block_chunks * 128;
-    kparams->dma_buffer_size  = HTP_DSV4_HC_POST_DMA_ROWS*kparams->dma_row_stride;
-    kparams->dma_vtcm_size    = 2*kparams->dma_buffer_size*kparams->n_threads;
+    const size_t vtcm_budget = htp_session_vtcm_size(sess);
+    uint32_t block_chunks    = (std::min)((uint32_t) HTP_DSV4_HC_MAX_CHUNKS, kparams->n_chunks);
+    while (block_chunks > 16) {
+        const uint32_t stride = block_chunks * 128;
+        const uint32_t buf_sz = HTP_DSV4_HC_POST_ROWS * stride;
+        if (2 * buf_sz * kparams->n_threads <= vtcm_budget) {
+            break;
+        }
+        block_chunks /= 2;
+    }
 
-    // decode uses l2 prefetch: per-thread data is too small to hide the dma latency
-    if (n_tokens > 1 &&
-        x->ne[0] % HTP_DSV4_HC_CHUNK_ELEMS == 0 &&
-        kparams->jobs_per_thread >= 2*kparams->dma_block_chunks &&
-        kparams->dma_vtcm_size <= htp_session_vtcm_size(sess)) {
-        kparams->kernel_type = HTP_DSV4_HC_POST_KERNEL_DMA;
+    kparams->dma_block_chunks = block_chunks;
+    kparams->dma_row_stride   = block_chunks * 128;
+    kparams->dma_buffer_size  = HTP_DSV4_HC_POST_ROWS * kparams->dma_row_stride;
+    kparams->vtcm_size        = 2 * kparams->dma_buffer_size * kparams->n_threads;
+    if (kparams->vtcm_size > vtcm_budget) {
+        return false;
     }
 
     kparams->div_n_chunks  = init_fastdiv_values(kparams->n_chunks);
     kparams->div_n_threads = init_fastdiv_values(kparams->n_threads);
 
     return true;
+}
+
+static inline bool htp_kparams_solve_dsv4_hc_post(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * op,
+    struct htp_dsv4_hc_post_kernel_params * kparams
+) {
+    if (htp_dsv4_hc_post_can_collapse(op->src[0], op->src[1], op->src[2], op->src[3], op)) {
+        struct ggml_tensor x_c, r_c, p_c, c_c, d_c;
+        htp_dsv4_hc_post_collapse_tensors(op->src[0], op->src[1], op->src[2], op->src[3], op, &x_c, &r_c, &p_c, op->src[3] ? &c_c : nullptr, &d_c);
+        return htp_kparams_solve_dsv4_hc_post_impl(sess, &x_c, &r_c, &p_c, op->src[3] ? &c_c : nullptr, &d_c, kparams);
+    }
+    return htp_kparams_solve_dsv4_hc_post_impl(sess, op->src[0], op->src[1], op->src[2], op->src[3], op, kparams);
 }
 
 template <auto SolveFn>
@@ -4387,6 +4630,48 @@ void htp_opnode_collapse(const struct ggml_hexagon_session * sess, htp_opnode & 
         }
         return;
     }
+
+    if (node.opcode == HTP_OP_DSV4_HC_PRE) {
+        if (node.inputs.size() < 2 || !node.inputs[0] || !node.inputs[1] || node.outputs.empty() || !node.outputs[0]) {
+            return;
+        }
+        const struct ggml_tensor * x       = node.inputs[0];
+        const struct ggml_tensor * weights = node.inputs[1];
+        const struct ggml_tensor * dst     = node.outputs[0];
+
+        if (htp_dsv4_hc_pre_can_collapse(x, weights, dst)) {
+            struct ggml_tensor x_c, w_c, d_c;
+            htp_dsv4_hc_pre_collapse_tensors(x, weights, dst, &x_c, &w_c, &d_c);
+            node.inputs[0]  = node.add_dummy(x_c);
+            node.inputs[1]  = node.add_dummy(w_c);
+            node.outputs[0] = node.add_dummy(d_c);
+        }
+        return;
+    }
+
+    if (node.opcode == HTP_OP_DSV4_HC_POST) {
+        if (node.inputs.size() < 3 || !node.inputs[0] || !node.inputs[1] || !node.inputs[2] || node.outputs.empty() || !node.outputs[0]) {
+            return;
+        }
+        const struct ggml_tensor * x        = node.inputs[0];
+        const struct ggml_tensor * residual = node.inputs[1];
+        const struct ggml_tensor * post     = node.inputs[2];
+        const struct ggml_tensor * comb     = node.inputs.size() > 3 ? node.inputs[3] : nullptr;
+        const struct ggml_tensor * dst      = node.outputs[0];
+
+        if (htp_dsv4_hc_post_can_collapse(x, residual, post, comb, dst)) {
+            struct ggml_tensor x_c, r_c, p_c, c_c, d_c;
+            htp_dsv4_hc_post_collapse_tensors(x, residual, post, comb, dst, &x_c, &r_c, &p_c, comb ? &c_c : nullptr, &d_c);
+            node.inputs[0]  = node.add_dummy(x_c);
+            node.inputs[1]  = node.add_dummy(r_c);
+            node.inputs[2]  = node.add_dummy(p_c);
+            if (comb) {
+                node.inputs[3] = node.add_dummy(c_c);
+            }
+            node.outputs[0] = node.add_dummy(d_c);
+        }
+        return;
+    }
 }
 
 bool htp_kparams_solve(
@@ -4418,6 +4703,14 @@ bool htp_kparams_solve(
     }
     if (node.opcode == HTP_OP_UPSCALE) {
         return htp_kparams_solve_upscale(sess, src0, dst, node.kparams<htp_upscale_kernel_params>());
+    }
+    if (node.opcode == HTP_OP_DSV4_HC_PRE) {
+        return htp_kparams_solve_dsv4_hc_pre_impl(sess, src0, src1, dst, node.kparams<htp_dsv4_hc_pre_kernel_params>());
+    }
+    if (node.opcode == HTP_OP_DSV4_HC_POST) {
+        const ggml_tensor * src2 = node.inputs.size() > 2 ? node.inputs[2] : nullptr;
+        const ggml_tensor * src3 = node.inputs.size() > 3 ? node.inputs[3] : nullptr;
+        return htp_kparams_solve_dsv4_hc_post_impl(sess, src0, src1, src2, src3, dst, node.kparams<htp_dsv4_hc_post_kernel_params>());
     }
 
     return htp_kparams_solve(sess, node.node, node.kernel_params);
