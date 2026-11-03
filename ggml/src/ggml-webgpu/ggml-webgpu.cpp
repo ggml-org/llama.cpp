@@ -669,43 +669,54 @@ static void ggml_backend_webgpu_buffer_memset(webgpu_global_context & ctx,
                                               size_t                  size) {
     std::lock_guard<std::recursive_mutex> lock(ctx->mutex);
 
-    const size_t          align_offset = offset & ~(ctx->capabilities.limits.minStorageBufferOffsetAlignment - 1);
-    const size_t          bind_size    = ROUNDUP_POW2(size + (offset - align_offset), WEBGPU_STORAGE_BUF_BINDING_MULT);
-    std::vector<uint32_t> params       = { (uint32_t) (offset - align_offset), (uint32_t) size, value };
-    std::vector<wgpu::BindGroupEntry> entries = { ggml_webgpu_make_bind_group_entry(0, buf, align_offset, bind_size) };
-    size_t                            max_wg_size = ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
-    uint32_t                          wg_x;
-    uint32_t                          wg_y;
-    uint32_t                          n_values = CEIL_DIV(size + (offset - align_offset), sizeof(uint32_t));
-    uint32_t                          total_wg = CEIL_DIV(n_values, max_wg_size);
-    compute_2d_workgroups(total_wg, ctx->capabilities.limits.maxComputeWorkgroupsPerDimension, wg_x, wg_y);
+    const size_t max_bind_size = ctx->capabilities.limits.maxStorageBufferBindingSize;
+    const size_t max_wg_size   = ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
 
-    ctx->queue.WriteBuffer(ctx->memset_params_buf, 0, params.data(), params.size() * sizeof(uint32_t));
+    while (size > 0) {
+        const size_t align_offset = offset & ~(ctx->capabilities.limits.minStorageBufferOffsetAlignment - 1);
+        const size_t lead         = offset - align_offset;
+        const size_t chunk_size   = std::min(size, max_bind_size - lead);
+        const size_t bind_size    = ROUNDUP_POW2(chunk_size + lead, WEBGPU_STORAGE_BUF_BINDING_MULT);
 
-    wgpu::BindGroupEntry params_entry = {};
-    params_entry.binding              = 1;
-    params_entry.buffer               = ctx->memset_params_buf;
-    params_entry.offset               = 0;
-    params_entry.size                 = WEBGPU_PARAMS_BUF_SIZE_BYTES;
-    entries.push_back(params_entry);
+        std::vector<uint32_t>             params  = { (uint32_t) lead, (uint32_t) chunk_size, value };
+        std::vector<wgpu::BindGroupEntry> entries = { ggml_webgpu_make_bind_group_entry(0, buf, align_offset,
+                                                                                        bind_size) };
+        uint32_t                          wg_x;
+        uint32_t                          wg_y;
+        uint32_t                          n_values = CEIL_DIV(chunk_size + lead, sizeof(uint32_t));
+        uint32_t                          total_wg = CEIL_DIV(n_values, max_wg_size);
+        compute_2d_workgroups(total_wg, ctx->capabilities.limits.maxComputeWorkgroupsPerDimension, wg_x, wg_y);
 
-    wgpu::BindGroupDescriptor bind_group_desc;
-    bind_group_desc.layout     = ctx->memset_pipeline.pipeline.GetBindGroupLayout(0);
-    bind_group_desc.entryCount = entries.size();
-    bind_group_desc.entries    = entries.data();
-    bind_group_desc.label      = ctx->memset_pipeline.name.c_str();
-    wgpu::BindGroup bind_group = ctx->device.CreateBindGroup(&bind_group_desc);
+        ctx->queue.WriteBuffer(ctx->memset_params_buf, 0, params.data(), params.size() * sizeof(uint32_t));
 
-    wgpu::CommandEncoder     encoder = ctx->device.CreateCommandEncoder();
-    wgpu::ComputePassEncoder pass    = encoder.BeginComputePass();
-    pass.SetPipeline(ctx->memset_pipeline.pipeline);
-    pass.SetBindGroup(0, bind_group);
-    pass.DispatchWorkgroups(wg_x, wg_y, 1);
-    pass.End();
+        wgpu::BindGroupEntry params_entry = {};
+        params_entry.binding              = 1;
+        params_entry.buffer               = ctx->memset_params_buf;
+        params_entry.offset               = 0;
+        params_entry.size                 = WEBGPU_PARAMS_BUF_SIZE_BYTES;
+        entries.push_back(params_entry);
 
-    wgpu::CommandBuffer              command  = encoder.Finish();
-    std::vector<wgpu::CommandBuffer> commands = { command };
-    ctx->queue.Submit(commands.size(), commands.data());
+        wgpu::BindGroupDescriptor bind_group_desc;
+        bind_group_desc.layout     = ctx->memset_pipeline.pipeline.GetBindGroupLayout(0);
+        bind_group_desc.entryCount = entries.size();
+        bind_group_desc.entries    = entries.data();
+        bind_group_desc.label      = ctx->memset_pipeline.name.c_str();
+        wgpu::BindGroup bind_group = ctx->device.CreateBindGroup(&bind_group_desc);
+
+        wgpu::CommandEncoder     encoder = ctx->device.CreateCommandEncoder();
+        wgpu::ComputePassEncoder pass    = encoder.BeginComputePass();
+        pass.SetPipeline(ctx->memset_pipeline.pipeline);
+        pass.SetBindGroup(0, bind_group);
+        pass.DispatchWorkgroups(wg_x, wg_y, 1);
+        pass.End();
+
+        wgpu::CommandBuffer              command  = encoder.Finish();
+        std::vector<wgpu::CommandBuffer> commands = { command };
+        ctx->queue.Submit(commands.size(), commands.data());
+
+        offset += chunk_size;
+        size -= chunk_size;
+    }
 }
 
 /** End WebGPU Actions */
@@ -3925,12 +3936,7 @@ static void ggml_backend_webgpu_buffer_clear(ggml_backend_buffer_t buffer, uint8
     WEBGPU_LOG_DEBUG("ggml_backend_webgpu_buffer_clear(" << buffer << ", " << (uint32_t) value << ")");
     WEBGPU_CPU_PROFILE_TOTAL_START(clear);
     ggml_backend_webgpu_buffer_context * buf_ctx = (ggml_backend_webgpu_buffer_context *) buffer->context;
-    size_t max_bind_size                         = buf_ctx->global_ctx->capabilities.limits.maxStorageBufferBindingSize;
-    for (size_t i = 0; i * max_bind_size < buffer->size; i++) {
-        const size_t offset = i * max_bind_size;
-        ggml_backend_webgpu_buffer_memset(buf_ctx->global_ctx, buf_ctx->buffer, value, offset,
-                                          std::min(max_bind_size, buffer->size - offset));
-    }
+    ggml_backend_webgpu_buffer_memset(buf_ctx->global_ctx, buf_ctx->buffer, value, 0, buffer->size);
     WEBGPU_CPU_PROFILE_TOTAL_END(clear, buf_ctx->global_ctx);
 }
 
