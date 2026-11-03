@@ -111,6 +111,15 @@ struct nd_msg_hdr {
 
 static constexpr size_t ND_SLOT = ND_PAYLOAD + sizeof(nd_msg_hdr);
 
+// LLAMA_DIST_TP_RDMA_FIXED_SLOT=1 (opt-in): for providers that need page-aligned buffers and the
+// same length on both sides of every transfer. A slot is then exactly 256 KiB with the header
+// inside it (262,128 B of payload), every buffer, slot and registration is page aligned, and every
+// send - data, ack and bye alike - is one whole slot into a receive posted at one whole slot. The
+// header still carries the real length. Unset, the layout and lengths are the ones above.
+static constexpr size_t ND_FIXED_SLOT = 256 * 1024;
+static constexpr size_t ND_PAGE       = 4096;
+static_assert(ND_FIXED_SLOT % ND_PAGE == 0, "fixed slot must be a whole number of pages");
+
 // out-of-band negotiation record, exchanged over the TCP ring sockets
 struct nd_hello {
     uint32_t magic;
@@ -143,6 +152,19 @@ static bool nd_multichunk() {
         const bool r = v && v[0] != '\0' && v[0] != '0';
         if (r) {
             std::fprintf(stderr, "[dist-tp][nd] multi-chunk messages: a blocked sender keeps receiving\n");
+        }
+        return r;
+    }();
+    return on;
+}
+
+static bool nd_fixed_slot() {
+    static const bool on = []() {
+        const char * v = std::getenv("LLAMA_DIST_TP_RDMA_FIXED_SLOT");
+        const bool r = v && v[0] != '\0' && v[0] != '0';
+        if (r) {
+            std::fprintf(stderr, "[dist-tp][nd] fixed slots: every send and receive is one page-aligned %zu B slot\n",
+                         ND_FIXED_SLOT);
         }
         return r;
     }();
@@ -236,22 +258,33 @@ struct dist_nd_conn {
     size_t   rx_spill_off = 0;
     int      ack_inflight = 0;   // acks posted from the dedicated slot and not yet retired
 
+    // slot layout, fixed at setup: the defaults above, or whole 256 KiB slots (nd_fixed_slot)
+    bool   fixed    = false;
+    size_t slot_sz  = ND_SLOT;
+    size_t pay_max  = ND_PAYLOAD;          // payload bytes one chunk carries behind its header
+    size_t ack_sz   = ND_ACK_SLOT_BYTES;   // the dedicated ack slot after the tx ring
+
+    // bytes a send of len puts on the wire: a whole slot in fixed mode, else exactly len
+    ULONG wire_len(size_t len) const {
+        return (ULONG)(fixed ? slot_sz : len);
+    }
+
     uint8_t * tx_slot(int i) const {
-        return tx_buf + (size_t)i * ND_SLOT;
+        return tx_buf + (size_t)i * slot_sz;
     }
 
     uint8_t * rx_slot(int i) const {
-        return rx_buf + (size_t)i * ND_SLOT;
+        return rx_buf + (size_t)i * slot_sz;
     }
 
     uint8_t * ack_slot() const {
-        return tx_buf + (size_t)ND_TX_DEPTH * ND_SLOT;
+        return tx_buf + (size_t)ND_TX_DEPTH * slot_sz;
     }
 
     bool post_rx(int i) {
         ND2_SGE sge = {};
         sge.Buffer            = rx_slot(i);
-        sge.BufferLength      = (ULONG)ND_SLOT;
+        sge.BufferLength      = (ULONG)slot_sz;
         sge.MemoryRegionToken = rx_token;
         return SUCCEEDED(qp->Receive(nd_ctx_recv(i), &sge, 1));
     }
@@ -398,16 +431,29 @@ static bool nd_setup(std::unique_ptr<dist_nd_conn> & conn, const struct sockaddr
                (unsigned long)info.MaxTransferLength, (size_t)info.MaxRegistrationSize,
                (unsigned long)info.MaxReceiveQueueDepth, (unsigned long)info.MaxInitiatorQueueDepth,
                (unsigned long)info.MaxCompletionQueueDepth);
-    if (info.MaxTransferLength < ND_SLOT || info.MaxReceiveQueueDepth < ND_RX_DEPTH) {
+    if (nd_fixed_slot()) {
+        c->fixed   = true;
+        c->slot_sz = ND_FIXED_SLOT;
+        c->pay_max = ND_FIXED_SLOT - sizeof(nd_msg_hdr);
+        c->ack_sz  = ND_FIXED_SLOT;
+    }
+    if (info.MaxTransferLength < c->slot_sz || info.MaxReceiveQueueDepth < ND_RX_DEPTH) {
         ND_LOG_ERR("adapter limits too small (transfer=%lu, rq=%lu)\n",
                    (unsigned long)info.MaxTransferLength, (unsigned long)info.MaxReceiveQueueDepth);
         return false;
     }
 
-    c->tx_buf = (uint8_t *)_aligned_malloc(ND_SLOT * ND_TX_DEPTH + ND_ACK_SLOT_BYTES, 4096);
-    c->rx_buf = (uint8_t *)_aligned_malloc(ND_SLOT * ND_RX_DEPTH, 4096);
+    const size_t tx_bytes = c->slot_sz * ND_TX_DEPTH + c->ack_sz;
+    const size_t rx_bytes = c->slot_sz * ND_RX_DEPTH;
+    c->tx_buf = (uint8_t *)_aligned_malloc(tx_bytes, ND_PAGE);
+    c->rx_buf = (uint8_t *)_aligned_malloc(rx_bytes, ND_PAGE);
     if (!c->tx_buf || !c->rx_buf) {
         return false;
+    }
+    if (c->fixed) {
+        // whole slots go on the wire, so never send whatever the allocator left behind
+        memset(c->tx_buf, 0, tx_bytes);
+        memset(c->rx_buf, 0, rx_bytes);
     }
 
     hr = c->adapter->CreateMemoryRegion(IID_IND2MemoryRegion, c->file, (void **)&c->tx_mr);
@@ -418,12 +464,12 @@ static bool nd_setup(std::unique_ptr<dist_nd_conn> & conn, const struct sockaddr
     if (FAILED(hr)) {
         return false;
     }
-    hr = c->tx_mr->Register(c->tx_buf, ND_SLOT * ND_TX_DEPTH + ND_ACK_SLOT_BYTES, ND_MR_FLAG_ALLOW_LOCAL_WRITE, &c->ov.ov);
+    hr = c->tx_mr->Register(c->tx_buf, tx_bytes, ND_MR_FLAG_ALLOW_LOCAL_WRITE, &c->ov.ov);
     if (!nd_done(hr, c->tx_mr, &c->ov.ov)) {
         ND_LOG_DBG("tx Register failed: 0x%08lx\n", (unsigned long)hr);
         return false;
     }
-    hr = c->rx_mr->Register(c->rx_buf, ND_SLOT * ND_RX_DEPTH, ND_MR_FLAG_ALLOW_LOCAL_WRITE, &c->ov.ov);
+    hr = c->rx_mr->Register(c->rx_buf, rx_bytes, ND_MR_FLAG_ALLOW_LOCAL_WRITE, &c->ov.ov);
     if (!nd_done(hr, c->rx_mr, &c->ov.ov)) {
         ND_LOG_DBG("rx Register failed: 0x%08lx\n", (unsigned long)hr);
         return false;
@@ -459,7 +505,7 @@ static bool nd_setup(std::unique_ptr<dist_nd_conn> & conn, const struct sockaddr
             return false;
         }
     }
-    ND_LOG_DBG("posted %d receives of %zu B each\n", ND_RX_DEPTH, ND_SLOT);
+    ND_LOG_DBG("posted %d receives of %zu B each\n", ND_RX_DEPTH, c->slot_sz);
 
     conn = std::move(c);
     return true;
@@ -769,7 +815,7 @@ static bool nd_route(dist_nd_conn * c, const ND2_RESULT & res) {
         c->ack_pending++;
         return c->post_rx(slot);
     }
-    if (hdr.type != ND_MSG_DATA || hdr.len == 0 || hdr.len > ND_PAYLOAD) {
+    if (hdr.type != ND_MSG_DATA || hdr.len == 0 || hdr.len > c->pay_max) {
         ND_LOG_ERR("bad message (type=%u len=%u)\n", hdr.type, hdr.len);
         return false;
     }
@@ -828,7 +874,7 @@ static bool nd_tx_slot_ready(dist_nd_conn * c) {
 static bool nd_post_send(dist_nd_conn * c, int slot, size_t len) {
     ND2_SGE sge = {};
     sge.Buffer            = c->tx_slot(slot);
-    sge.BufferLength      = (ULONG)len;
+    sge.BufferLength      = c->wire_len(len);
     sge.MemoryRegionToken = c->tx_token;
 
     if (FAILED(c->qp->Send(ND_CTX_SEND, &sge, 1, 0))) {
@@ -914,7 +960,7 @@ static bool nd_post_ack_direct(dist_nd_conn * c) {
     memcpy(c->ack_slot(), &hdr, sizeof(hdr));
     ND2_SGE sge = {};
     sge.Buffer            = c->ack_slot();
-    sge.BufferLength      = (ULONG)sizeof(hdr);
+    sge.BufferLength      = c->wire_len(sizeof(hdr));
     sge.MemoryRegionToken = c->tx_token;
     if (FAILED(c->qp->Send(ND_CTX_ACK, &sge, 1, 0))) {
         ND_LOG_ERR("ack post failed\n");
@@ -1045,14 +1091,14 @@ static bool nd_send_raw(dist_nd_conn * c, const void * data, size_t size) {
     const uint8_t * src = (const uint8_t *)data;
     size_t rem = size;
     while (rem > 0) {
-        if (c->tx_fill == ND_PAYLOAD && !nd_flush(c)) {
+        if (c->tx_fill == c->pay_max && !nd_flush(c)) {
             return false;
         }
         // Starting a fresh chunk: the slot must not still be on the wire before we write it.
         if (c->tx_fill == 0 && !nd_tx_slot_ready(c)) {
             return false;
         }
-        const size_t take = std::min(rem, ND_PAYLOAD - c->tx_fill);
+        const size_t take = std::min(rem, c->pay_max - c->tx_fill);
         memcpy(c->tx_slot(c->tx_slot_cur) + sizeof(nd_msg_hdr) + c->tx_fill, src, take);
         c->tx_fill += take;
         src += take;
@@ -1339,7 +1385,7 @@ static bool nd_tx_pump(dist_nd_conn * c, const uint8_t * hdr, size_t hdr_size,
     const size_t total = hdr_size + size;
     for (;;) {
         // a full chunk, or the last bytes of the message, leaves as soon as the window allows
-        if (c->tx_fill == ND_PAYLOAD || (pos == total && c->tx_fill > 0)) {
+        if (c->tx_fill == c->pay_max || (pos == total && c->tx_fill > 0)) {
             if (c->tx_since_ack >= ND_WINDOW && c->ack_pending == 0) {
                 return true;
             }
@@ -1356,7 +1402,7 @@ static bool nd_tx_pump(dist_nd_conn * c, const uint8_t * hdr, size_t hdr_size,
         if (c->tx_fill == 0 && c->tx_inflight >= ND_TX_DEPTH) {
             return true;
         }
-        size_t take = ND_PAYLOAD - c->tx_fill;
+        size_t take = c->pay_max - c->tx_fill;
         const uint8_t * src;
         if (pos < hdr_size) {
             take = std::min(take, hdr_size - pos);
