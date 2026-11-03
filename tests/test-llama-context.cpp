@@ -409,6 +409,10 @@ int main(int argc, char ** argv) {
 
     const int32_t n_threads = std::max<int32_t>(1, n_hw_2 / n_pool);
 
+    // every context of the sweep runs on its share of the cores
+    params.cpuparams.n_threads       = n_threads;
+    params.cpuparams_batch.n_threads = n_threads;
+
     // a column is as wide as its case name, but never narrower than the widest verdict
     const size_t verdict_width = std::max({ test_status_width(test_status::PASS),
                                             test_status_width(test_status::FAIL),

@@ -701,6 +701,7 @@ struct common_params {
     std::string models_dir    = "";     // directory containing models for the router server
     std::string models_preset = "";     // directory containing model presets for the router server
     int models_max = 4;                 // maximum number of models to load simultaneously
+    int models_memory_margin = 0;       // MiB of device memory to keep free when loading models (0 = no memory accounting)
     bool models_autoload = true;        // automatically load models when requested via the router server
     std::string models_preset_hf = "";  // show a warning about remote presets on router loaded (if not empty)
 
@@ -771,6 +772,7 @@ struct common_params {
 
     // TTS params
     std::string tts_lang = "";
+    std::string tts_voice = "";
     std::string tts_speaker_file = "";
 
     bool is_gen_docs = false; // whether we are running inside llama-gen-docs
@@ -908,9 +910,6 @@ std::wstring utf8_to_wstring(const std::string & str);
 std::string  wstring_to_utf8(const std::wstring & str);
 #endif
 
-// returns the path as a UTF-8 string, preserving its separators
-std::string fs_path_to_utf8(const std::filesystem::path & path);
-
 //
 // Environment utils
 //
@@ -978,6 +977,9 @@ enum common_decision_type {
     COMMON_DECISION_TYPE_LFM2_D1_OMNI, // same as laya, other prompt layout
     COMMON_DECISION_TYPE_GRANITE_SWITCH, // same as openjev, run by the decision aLoRA of granite switch
     COMMON_DECISION_TYPE_H2O_LIGHTNING, // same as openjev, the labels are read after an answer prefill
+    COMMON_DECISION_TYPE_MINICPM_OCR_JEV, // one score per class, the pooled embeddings output of the last token
+    COMMON_DECISION_TYPE_LFM3_D1,       // same as lfm2-d1, non-causal, label codes A..Z then AA, AB..
+    COMMON_DECISION_TYPE_LFM3_D1_OMNI,  // same as lfm3-d1
     COMMON_DECISION_TYPE_UNKNOWN, // a decision model of a type that is not supported
 };
 
@@ -1016,6 +1018,9 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
 
 struct llama_model_params   common_model_params_to_llama  (      common_params & params);
 struct llama_context_params common_context_params_to_llama(const common_params & params);
+
+// apply --fit to mparams and cparams, no-op if params.fit_params is false
+void common_fit_apply(common_params & params, struct llama_model_params & mparams, struct llama_context_params & cparams);
 
 // clear LoRA adapters from context, then apply new list of adapters
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora);
@@ -1091,6 +1096,7 @@ struct common_batch {
         llama_embd   state; // non-owning view of the data passed to set_embd_state(), data == NULL if none
         std::vector<llama_seq_id> seq_ids_extra; // see add_seq()
         int32_t      decision_order = 0; // see llama_batch_ext_set_decision_order()
+        int32_t      embd_row = -1; // see add_embd_row(), -1 if none
     };
 
     std::vector<token> tokens; // mirror of the entries, tokens[i] describes batch index i
@@ -1132,6 +1138,10 @@ struct common_batch {
     // add an embedding-only entry (no token id)
     // pos points to n_pos positions
     int32_t add_embd(llama_embd embd, const llama_pos * pos, llama_seq_id seq_id, bool output);
+
+    // add an entry whose embedding is row `row` of the layer input device buffer of the context's ctx_other
+    // pos points to n_pos positions
+    int32_t add_embd_row(int32_t row, const llama_pos * pos, llama_seq_id seq_id, bool output);
 
     int32_t size() const { return (int32_t) tokens.size(); }
 };
@@ -1229,8 +1239,9 @@ struct common_control_vector_load_info {
 };
 
 // Load control vectors, scale each by strength, and add them together.
+// Direction layer indices must be in [1, n_layer].
 // On error, returns {-1, empty}
-common_control_vector_data common_control_vector_load(const std::vector<common_control_vector_load_info> & load_infos);
+common_control_vector_data common_control_vector_load(const std::vector<common_control_vector_load_info> & load_infos, int32_t n_layer);
 
 //
 // Split utils

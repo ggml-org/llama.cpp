@@ -5,10 +5,35 @@
 // try as much as possible to not include this header in the rest of the codebase
 
 #include "llama.h"
+#include "llama-arch.h"
 
 #include <cstdint>
 #include <map>
+#include <string>
 #include <vector>
+
+//
+// llama architecture queries
+//
+
+// all the LLM architectures known to the library
+LLAMA_API std::vector<llm_arch> llama_arch_all();
+
+// the canonical name of an architecture (e.g. "llama"), or "unknown"
+LLAMA_API const char * llama_arch_name(llm_arch arch);
+
+// the architecture with the given canonical name, or LLM_ARCH_UNKNOWN
+LLAMA_API llm_arch llama_arch_from_string(const std::string & name);
+
+// the arch-resolved GGUF key of a KV id, e.g. LLM_KV_CONTEXT_LENGTH -> "llama.context_length"
+LLAMA_API std::string llama_arch_kv_name(llm_arch arch, llm_kv key);
+
+LLAMA_API bool llama_arch_supports_sm_tensor(llm_arch arch);
+
+LLAMA_API bool llama_arch_supports_mixed_batch(llm_arch arch);
+
+// FIXME temporary function for better error messages
+LLAMA_API bool llama_arch_supports_save(llm_arch arch);
 
 // Reserve a new compute graph. It is valid until the next call to llama_graph_reserve.
 LLAMA_API struct ggml_cgraph * llama_graph_reserve(
@@ -138,6 +163,19 @@ LLAMA_API void llama_set_embeddings_layer_inp(struct llama_context * ctx, uint32
 // mirrors:
 // LLAMA_API float * llama_get_embeddings(struct llama_context * ctx);
 LLAMA_API float * llama_get_embeddings_layer_inp(struct llama_context * ctx, uint32_t lid);
+
+// Write the enabled layer inputs to a device buffer [n_layer_inp*n_embd, n_batch] instead of host memory.
+// Row r holds the token at batch index r, layers in ascending layer id order.
+LLAMA_API void llama_set_embeddings_layer_inp_dev(struct llama_context * ctx, bool value);
+
+// Whether decode accepts entries added with llama_batch_ext_add_embd_row()
+// (needs a DFlash/DSpark decoder context whose ctx_other has a layer input device buffer).
+LLAMA_API bool llama_supports_embd_row(const struct llama_context * ctx);
+
+// Add an entry whose embedding is row `row` of the layer input device buffer of ctx_other.
+// All entries of the batch must be of this kind. Positions are set with llama_batch_ext_set_pos(), n_pos_per_embd of them.
+// Returns the batch index (>= 0), or the llama_batch_ext_add() error codes.
+LLAMA_API int32_t llama_batch_ext_add_embd_row(struct llama_batch_ext * batch, llama_seq_id seq_id, int32_t row);
 
 LLAMA_API llama_context * llama_get_ctx_other(struct llama_context * ctx);
 

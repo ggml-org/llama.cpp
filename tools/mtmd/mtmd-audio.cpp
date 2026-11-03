@@ -1056,6 +1056,61 @@ bool mtmd_audio_preprocessor_d1omni::preprocess(const float *                 sa
 }
 
 //
+// mtmd_audio_preprocessor_lfm3a
+//
+
+void mtmd_audio_preprocessor_lfm3a::initialize() {
+    cache.fill_sin_cos_table(hparams.audio_n_fft);
+    cache.fill_hann_window(hparams.audio_window_len, true);
+    cache.fill_mel_filterbank_matrix(hparams.n_mel_bins, hparams.audio_n_fft, hparams.audio_sample_rate);
+}
+
+bool mtmd_audio_preprocessor_lfm3a::preprocess(const float *                 samples,
+                                               size_t                        n_samples,
+                                               std::vector<mtmd_audio_mel> & output) const {
+    if (n_samples == 0) {
+        return false;
+    }
+
+    const size_t win = hparams.audio_window_len;
+    const size_t hop = hparams.audio_hop_len;
+
+    // pad on the right so that no sample is dropped by the last frame
+    size_t n_padded = win;
+    if (n_samples > win) {
+        n_padded = n_samples + (hop - (n_samples - win) % hop) % hop;
+    }
+    std::vector<float> padded(samples, samples + n_samples);
+    padded.resize(n_padded, 0.0f);
+
+    filter_params params;
+    params.n_mel            = hparams.n_mel_bins;
+    params.n_fft_bins       = 1 + (hparams.audio_n_fft / 2);
+    params.hann_window_size = hparams.audio_window_len;
+    params.hop_length       = hparams.audio_hop_len;
+    params.sample_rate      = hparams.audio_sample_rate;
+    params.no_padding       = true;
+    params.mel_floor        = 1e-12f; // log10 floor of -12
+
+    GGML_ASSERT(!cache.sin_vals.empty());
+    GGML_ASSERT(!cache.cos_vals.empty());
+    GGML_ASSERT(!cache.filters.data.empty());
+
+    mtmd_audio_mel out;
+    bool ok = log_mel_spectrogram(padded.data(), (int) padded.size(), 4, params, cache, out);
+    if (!ok) {
+        return false;
+    }
+
+    for (auto & v : out.data) {
+        v = (v + 4.0f) / 4.0f;
+    }
+
+    output.push_back(std::move(out));
+    return true;
+}
+
+//
 // mtmd_audio_preprocessor_granite_speech
 //
 

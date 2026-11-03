@@ -58,6 +58,9 @@ add_library(mtmd
             models/sensenova-u1.cpp
             models/minimax-m3.cpp
             models/qwen3vl.cpp
+            models/lfm3vl.cpp
+            models/lfm3a.cpp
+            models/lfm3a-gen.cpp
             models/ling3vl.cpp
             models/mimovl.cpp
             models/qwen3a.cpp

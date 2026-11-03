@@ -4,6 +4,7 @@
 #include "gguf.h"
 
 #include "llama-arch.h"
+#include "llama-ext.h"
 #include "llama.h"
 #include "llama-hparams.h"
 #include "llama-model.h"
@@ -13,34 +14,13 @@
 #include <string>
 #include <unordered_set>
 
-bool llama_model_saver_supports_arch(llm_arch arch) {
-    switch (arch) {
-        case LLM_ARCH_SENSENOVA_U1:
-        case LLM_ARCH_GEMMA3N:
-        case LLM_ARCH_BITNET:
-        case LLM_ARCH_T5:
-        case LLM_ARCH_APERTUS:
-        case LLM_ARCH_STEP35:
-        case LLM_ARCH_CLEF: // the head tensors are not saved
-        case LLM_ARCH_VLLM_DECISION2:
-            return false;
-        default:
-            return true;
-    }
-}
-
 llama_model_saver::llama_model_saver(const struct llama_model * model) :
-        gguf_ctx(gguf_init_empty()), gguf_ctx_owned(true), model(model), llm_kv(model->arch) {
-    GGML_ASSERT(llama_model_saver_supports_arch(model->arch));
+        gguf_ctx(gguf_init_empty()), model(model), llm_kv(model->arch) {
+    GGML_ASSERT(llama_arch_supports_save(model->arch));
 }
-
-llama_model_saver::llama_model_saver(enum llm_arch arch, struct gguf_context * gguf_ctx) :
-        gguf_ctx(gguf_ctx == nullptr ? gguf_init_empty() : gguf_ctx), gguf_ctx_owned(gguf_ctx == nullptr), model(nullptr), llm_kv(arch) {}
 
 llama_model_saver::~llama_model_saver() {
-    if (gguf_ctx_owned) {
-        gguf_free(gguf_ctx);
-    }
+    gguf_free(gguf_ctx);
 }
 
 void llama_model_saver::add_kv(const enum llm_kv key, const uint32_t value) {
@@ -118,11 +98,6 @@ void llama_model_saver::add_kv(const enum llm_kv key, const Container & value, c
         GGML_ABORT("fatal error");
     }
 }
-// instantiate for external usage:
-template void llama_model_saver::add_kv<std::vector<uint32_t>>(const enum llm_kv, const std::vector<uint32_t> &, const bool);
-template void llama_model_saver::add_kv<std::vector<float>>(const enum llm_kv, const std::vector<float> &, const bool);
-template void llama_model_saver::add_kv<std::vector<uint64_t>>(const enum llm_kv, const std::vector<uint64_t> &, const bool);
-template void llama_model_saver::add_kv<std::vector<int32_t>>(const enum llm_kv, const std::vector<int32_t> &, const bool);
 
 void llama_model_saver::add_kv(const enum llm_kv key, const std::vector<std::string> & value) {
     std::vector<const char *> tmp(value.size());
@@ -224,6 +199,9 @@ void llama_model_saver::add_kv_from_model() {
     if (hparams.n_embd_out_impl > 0) {
         add_kv(LLM_KV_EMBEDDING_LENGTH_OUT,          hparams.n_embd_out_impl);
     }
+    if (hparams.n_embd_per_layer > 0) {
+        add_kv(LLM_KV_EMBEDDING_LENGTH_PER_LAYER,    hparams.n_embd_per_layer);
+    }
     add_kv(LLM_KV_BLOCK_COUNT,                       hparams.n_layer_all);
     add_kv(LLM_KV_LEADING_DENSE_BLOCK_COUNT,         hparams.n_layer_dense_lead);
     add_kv(LLM_KV_FEED_FORWARD_LENGTH,               hparams.n_ff_arr, true);
@@ -269,6 +247,16 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_HRM_H_CYCLES,                      hparams.n_hrm_h_cycles);
     add_kv(LLM_KV_HRM_L_CYCLES,                      hparams.n_hrm_l_cycles);
     add_kv(LLM_KV_HRM_PREFIX_LM,                     hparams.hrm_prefix_lm);
+    if (hparams.final_logit_sigmoid_capping[0] != 0.0f) {
+        add_kv(LLM_KV_FINAL_LOGIT_SIGMOID_CAPPING, std::vector<float>(
+                hparams.final_logit_sigmoid_capping.begin(), hparams.final_logit_sigmoid_capping.end()));
+    }
+    add_kv(LLM_KV_MUDD_FEED_FORWARD_LENGTH,          hparams.n_mudd_ff);
+    add_kv(LLM_KV_MUDD_TAP_COUNT,                    hparams.n_mudd_taps);
+    if (hparams.n_mudd_taps > 0) {
+        add_kv(LLM_KV_MUDD_TAP_INDICES, std::vector<int32_t>(
+                hparams.mudd_tap_idx.begin(), hparams.mudd_tap_idx.begin() + hparams.n_layer()*hparams.n_mudd_taps));
+    }
     add_kv(LLM_KV_TOKEN_SHIFT_COUNT,                 hparams.token_shift_count);
     add_kv(LLM_KV_INTERLEAVE_MOE_LAYER_STEP,         hparams.n_moe_layer_step);
     // add_kv(LLM_KV_FULL_ATTENTION_INTERVAL,           ???); // saved as LLM_KV_ATTENTION_RECURRENT_LAYERS instead
@@ -302,6 +290,7 @@ void llama_model_saver::add_kv_from_model() {
                 hparams.is_swa_impl.begin(), hparams.is_swa_impl.begin() + hparams.n_layer_all));
     }
     add_kv(LLM_KV_ATTENTION_SCALE,                   hparams.f_attention_scale);
+    add_kv(LLM_KV_ATTENTION_XSA_EPS,                 hparams.f_xsa_eps);
     add_kv(LLM_KV_ATTENTION_OUTPUT_SCALE,            hparams.f_attn_out_scale);
     add_kv(LLM_KV_ATTENTION_VALUE_SCALE,             hparams.f_attn_value_scale);
     add_kv(LLM_KV_ATTENTION_TEMPERATURE_LENGTH,      hparams.attn_temp_length);
@@ -321,6 +310,16 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_ATTENTION_INDEXER_KPOOL_SELECT_TAIL, hparams.indexer_kpool_select_tail);
     add_kv(LLM_KV_ATTENTION_INDEXER_LOCAL_BLOCKS,    hparams.indexer_local_blocks);
     add_kv(LLM_KV_ATTENTION_INDEXER_TYPES,           hparams.is_indexer_full_impl, true);
+    if (hparams.n_layer_kv_from_start >= 0) {
+        add_kv(LLM_KV_ATTENTION_SHARED_KV_LAYERS,    uint32_t(hparams.n_layer_all - hparams.n_layer_kv_from_start));
+    } else {
+        for (uint32_t il = 0; il < hparams.n_layer(); ++il) {
+            if (hparams.kv_source(il) != il) {
+                add_kv(LLM_KV_ATTENTION_KV_SOURCE_MAP, hparams.kv_source_impl, true);
+                break;
+            }
+        }
+    }
     add_kv(LLM_KV_ATTENTION_RECURRENT_LAYERS,        hparams.is_recr_impl, true);
     add_kv(LLM_KV_ATTENTION_OUTPUT_GROUP_COUNT,      hparams.dsv4_o_group_count);
     add_kv(LLM_KV_ATTENTION_OUTPUT_LORA_RANK,        hparams.dsv4_o_lora_rank);
@@ -526,6 +525,9 @@ void llama_model_saver::add_tensors_from_model() {
     add_tensor(model->hc_head_base);
     add_tensor(model->hc_head_scale);
     add_tensor(model->per_layer_tok_embd);
+    add_tensor(model->per_layer_model_proj);
+    add_tensor(model->per_layer_proj_norm);
+    add_tensor(model->value_embd);
     add_tensor(model->hc_head_norm);
     add_tensor(model->hc_head_down);
     add_tensor(model->hc_head_up);
@@ -547,8 +549,4 @@ void llama_model_saver::add_tensors_from_model() {
 
 void llama_model_saver::save(const std::string & path_model) {
     gguf_write_to_file(gguf_ctx, path_model.c_str(), false);
-}
-
-void llama_model_saver::save(FILE * file) {
-    gguf_write_to_file_ptr(gguf_ctx, file, false);
 }
