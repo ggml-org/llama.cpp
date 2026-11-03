@@ -57,14 +57,18 @@ jobs:
         id: checkout
         uses: actions/checkout@v6
 
-      # - name: ccache
-      #   uses: ggml-org/ccache-action@v1.2.24
-      #   if: ${{ matrix.sanitizer != 'UNDEFINED' }}
-      #   with:
-      #     key: ctest-${{ matrix.sanitizer }}-ubuntu-24.04
-      #     variant: ccache
-      #     evict-old-files: 1d
-      #     save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
+        with:
+          restore: false
+          save: false
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        with:
+          key: ctest-sanitizer-${{ matrix.sanitizer }}
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
 
       - name: Build
         id: cmake_build
@@ -88,6 +92,18 @@ jobs:
             -DGGML_OPENMP=OFF
 
           cmake --build build --config RelWithDebInfo -j $(nproc)
+
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: ctest-sanitizer-${{ matrix.sanitizer }}
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true
 
       - name: Test
         id: cmake_test
