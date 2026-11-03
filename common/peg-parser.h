@@ -520,7 +520,6 @@ class common_peg_parser_builder {
     common_peg_parser marker();
 
     // Wraps a parser with the schema its GBNF is generated from, a node of the document that owns it
-    // If unordered=true, the GBNF accepts object properties in any order.
     common_peg_parser schema(const common_peg_parser & p, const std::string & name, common_chat_schema_document_ptr doc, const common_chat_schema & node, bool raw = false, bool unordered = false);
 
     // Parses the JSON schema into a document of its own
