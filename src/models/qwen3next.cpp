@@ -31,10 +31,6 @@ void llama_model_qwen3next::load_arch_hparams(llama_model_loader & ml) {
 void llama_model_qwen3next::load_arch_tensors(llama_model_loader & ml) {
     LLAMA_LOAD_LOCALS;
 
-    if (n_expert == 0) {
-        throw std::runtime_error(arch_name() + " model cannot have zero experts");
-    }
-
     const auto nf = nextn_flags(ml);
     const int trunk_flags = nf.trunk;
     const int mtp_flags   = nf.mtp;
@@ -50,7 +46,7 @@ void llama_model_qwen3next::load_arch_tensors(llama_model_loader & ml) {
         output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, TENSOR_DUPLICATED);
     }
 
-    const int64_t n_ff_exp = hparams.n_ff_exp() ? hparams.n_ff_exp() : n_ff / n_expert_used;
+    const int64_t n_ff_exp = n_expert > 0 ? (hparams.n_ff_exp() ? hparams.n_ff_exp() : (n_expert_used > 0 ? n_ff / n_expert_used : n_ff)) : 0;
 
     // Calculate dimensions from hyperparameters
     const int64_t head_k_dim = hparams.ssm_d_state;
@@ -94,15 +90,23 @@ void llama_model_qwen3next::load_arch_tensors(llama_model_loader & ml) {
             layer.ssm_out        = create_tensor(tn(LLM_TENSOR_SSM_OUT,        "weight", il), { value_dim, n_embd }, flags);
         }
 
-        layer.ffn_gate_inp  = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,  "weight", il), { n_embd, n_expert }, flags);
-        layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", il), { n_ff_exp, n_embd, n_expert }, flags);
-        create_tensor_gate_up_exps(layer, il, n_embd, n_ff_exp, n_expert, flags);
+        if (n_expert > 0) {
+            layer.ffn_gate_inp  = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,  "weight", il), { n_embd, n_expert }, flags);
+            layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", il), { n_ff_exp, n_embd, n_expert }, flags);
+            create_tensor_gate_up_exps(layer, il, n_embd, n_ff_exp, n_expert, flags);
 
-        // Shared experts
-        layer.ffn_gate_inp_shexp = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP_SHEXP, "weight", il), { n_embd }, flags);
-        layer.ffn_gate_shexp     = create_tensor(tn(LLM_TENSOR_FFN_GATE_SHEXP,     "weight", il), { n_embd, n_ff_shexp }, flags);
-        layer.ffn_up_shexp       = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,       "weight", il), { n_embd, n_ff_shexp }, flags);
-        layer.ffn_down_shexp     = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP,     "weight", il), { n_ff_shexp, n_embd }, flags);
+            // Shared experts
+            if (hparams.n_ff_shexp > 0) {
+                layer.ffn_gate_inp_shexp = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP_SHEXP, "weight", il), { n_embd }, flags);
+                layer.ffn_gate_shexp     = create_tensor(tn(LLM_TENSOR_FFN_GATE_SHEXP,     "weight", il), { n_embd, n_ff_shexp }, flags);
+                layer.ffn_up_shexp       = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,       "weight", il), { n_embd, n_ff_shexp }, flags);
+                layer.ffn_down_shexp     = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP,     "weight", il), { n_ff_shexp, n_embd }, flags);
+            }
+        } else {
+            layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", il), { n_embd, hparams.n_ff(il) }, flags);
+            layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", il), { hparams.n_ff(il), n_embd }, flags);
+            layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", il), { n_embd, hparams.n_ff(il) }, flags);
+        }
     };
 
     auto load_block_mtp = [&](int il) {
@@ -603,7 +607,7 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_ffn(ggml_tensor * cur, c
             cur = moe_out;
         }
     } else {
-        // Dense FFN branch (not currently used I believe)
+        // Dense FFN branch
         cur = build_ffn(cur,
             model.layers[il].ffn_up, NULL, NULL,
             model.layers[il].ffn_gate, NULL, NULL,

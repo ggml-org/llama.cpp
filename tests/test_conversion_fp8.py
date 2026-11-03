@@ -219,6 +219,24 @@ class TestFP8Conversion(unittest.TestCase):
                         np.testing.assert_array_equal(data, weight.float().squeeze().numpy() * (0.25 if scaled else 1.))
                         self.assertNotIn(target.removesuffix("weight") + "scale", result)
 
+    def test_qwen3next_dense_mlp_tensors(self):
+        for name, target, shape in (
+            ("model.layers.0.mlp.gate_proj.weight", "blk.0.ffn_gate.weight", (8, 4)),
+            ("model.layers.0.mlp.down_proj.weight", "blk.0.ffn_down.weight", (4, 8)),
+            ("model.layers.0.mlp.up_proj.weight", "blk.0.ffn_up.weight", (8, 4)),
+        ):
+            with self.subTest(name=name):
+                weight = torch.ones(shape, dtype=torch.float32)
+                result = self.convert(
+                    Qwen3NextModel,
+                    {name: weight},
+                    check_lazy=True,
+                    hparams_override={"num_experts": 0, "num_local_experts": 0, "mtp_num_hidden_layers": 1},
+                )
+                dtype, data = result[target]
+                self.assertEqual(dtype, gguf.GGMLQuantizationType.F16)
+                np.testing.assert_array_equal(data, weight.numpy().astype(np.float16))
+
     def test_fp8_norm_transform(self):
         for shape in ((4,), (2, 2)):
             with self.subTest(shape=shape):

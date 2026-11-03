@@ -913,7 +913,6 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_GROK:
         case LLM_ARCH_QWEN2MOE:
         case LLM_ARCH_QWEN3MOE:
-        case LLM_ARCH_QWEN3NEXT:
         case LLM_ARCH_QWEN3VLMOE:
         case LLM_ARCH_QWEN35MOE:
         case LLM_ARCH_CLOVER_MOE:
@@ -983,6 +982,7 @@ static bool moe_implemented(const llm_arch arch) {
         case LLM_ARCH_MISTRAL3:
         case LLM_ARCH_LLAMA_EMBED:
         case LLM_ARCH_K2_HORIZON:
+        case LLM_ARCH_QWEN3NEXT:
             return true;
         default:
             return false;
