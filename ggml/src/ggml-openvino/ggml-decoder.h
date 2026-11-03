@@ -589,6 +589,21 @@ public:
                node->src[1]->op == GGML_OP_VIEW && node->src[1]->view_src == node->view_src;
     }
 
+    // SET_ROWS into a KV cache, directly or through the [1, n] reshape of the transposed V cache with `-fa off`.
+    // Other SET_ROWS write rows of a compute tensor, e.g. the MoE expert-group mask
+    inline static bool is_kvcache_write(const ggml_tensor * node) {
+        const ggml_tensor * dst = node->src[2];
+        return dst != nullptr && is_kvcache(dst->view_src != nullptr ? dst->view_src : dst, nullptr);
+    }
+
+    // GET_ROWS batched over ggml dims 2 and 3, e.g. the MoE expert-group scores
+    // ggml_get_rows(ggml_reshape_4d(groups, 1, n_exp_per_group, n_groups, n_tokens), top_groups)
+    inline static bool is_get_rows_batched_4d(const ggml_tensor * node) {
+        return node->op == GGML_OP_GET_ROWS && !ggml_is_quantized(node->src[0]->type) &&
+               node->src[1]->ne[1] == node->src[0]->ne[2] && node->src[1]->ne[2] == node->src[0]->ne[3] &&
+               node->src[1]->ne[3] == 1;
+    }
+
     static bool is_kv_idx(const ggml_tensor * tensor, const ggml_tensor * op) {
         return op->op == GGML_OP_SET_ROWS && op->src[1] == tensor;
     }
