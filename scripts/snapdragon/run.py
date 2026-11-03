@@ -177,11 +177,17 @@ def device_arg_from_devices(devices):
 
 
 def normalize_cmd_device_args(cmd_args):
+    exec_name = os.path.basename(cmd_args[0]) if cmd_args else ""
+    if exec_name.endswith(".exe"):
+        exec_name = exec_name[:-4]
+
     for i, arg in enumerate(cmd_args):
         if arg == "--device" and i + 1 < len(cmd_args):
             cmd_args[i + 1] = device_arg_from_devices(cmd_args[i + 1])
         elif arg.startswith("--device="):
             cmd_args[i] = "--device=" + device_arg_from_devices(arg.split("=", 1)[1])
+        elif exec_name in ("test-backend-ops", "test-llama-archs") and arg in ("-b", "--backend") and i + 1 < len(cmd_args):
+            cmd_args[i + 1] = device_arg_from_devices(cmd_args[i + 1])
 
 
 def main():
@@ -299,6 +305,10 @@ def main():
             env_vars[env_name] = str(opt_val)
 
     # Resolve and filter devices (HTP vs OpenCL)
+    exec_name = os.path.basename(cmd_args[0]) if cmd_args else ""
+    if exec_name.endswith(".exe"):
+        exec_name = exec_name[:-4]
+
     device_in_cmd = None
     for i, arg in enumerate(cmd_args):
         if arg == "--device" and i + 1 < len(cmd_args):
@@ -306,6 +316,9 @@ def main():
             break
         elif arg.startswith("--device="):
             device_in_cmd = arg.split("=", 1)[1]
+            break
+        elif exec_name in ("test-backend-ops", "test-llama-archs") and arg in ("-b", "--backend") and i + 1 < len(cmd_args):
+            device_in_cmd = cmd_args[i + 1]
             break
 
     if args.devices is not None:
@@ -402,7 +415,7 @@ def main():
 
     # Resolve executable path
     executable = cmd_args[0]
-    known_binaries = ["llama-cli", "llama-bench", "llama-completion", "llama-mtmd-cli", "test-backend-ops"]
+    known_binaries = ["llama-cli", "llama-bench", "llama-completion", "llama-mtmd-cli", "test-backend-ops", "test-llama-archs"]
     if executable in known_binaries:
         if target_type in ("android", "linux"):
             resolved_exec = f"./bin/{executable}"
@@ -419,22 +432,23 @@ def main():
         basename = basename[:-4]
 
     device_val = None
-    if basename == "test-backend-ops":
-        for i in range(len(cmd_args)):
-            if cmd_args[i] in ("-p", "--params") and i + 1 < len(cmd_args):
-                val = cmd_args[i + 1]
-                new_val = ""
-                for j, char in enumerate(val):
-                    if char in ('[', ']'):
-                        if j > 0 and val[j - 1] == '\\':
-                            new_val += char
+    if basename in ("test-backend-ops", "test-llama-archs"):
+        if basename == "test-backend-ops":
+            for i in range(len(cmd_args)):
+                if cmd_args[i] in ("-p", "--params") and i + 1 < len(cmd_args):
+                    val = cmd_args[i + 1]
+                    new_val = ""
+                    for j, char in enumerate(val):
+                        if char in ('[', ']'):
+                            if j > 0 and val[j - 1] == '\\':
+                                new_val += char
+                            else:
+                                new_val += '\\' + char
                         else:
-                            new_val += '\\' + char
-                    else:
-                        new_val += char
-                cmd_args[i + 1] = new_val
+                            new_val += char
+                    cmd_args[i + 1] = new_val
 
-        has_b = any(arg == "-b" for arg in cmd_args)
+        has_b = any(arg in ("-b", "--backend") for arg in cmd_args)
         if not has_b:
             if args.devices:
                 device_val = device_arg_from_devices(args.devices)
@@ -462,9 +476,13 @@ def main():
         or args.hex_profile is not None
         or args.hex_optrace is not None
     )
-    if verbose_trigger and basename in ("llama-cli", "llama-completion", "llama-bench", "llama-server", "llama-mtmd-cli"):
-        if "-v" not in cmd_args and "--verbose" not in cmd_args:
-            cmd_args.append("-v")
+    if verbose_trigger:
+        if basename == "test-llama-archs":
+            if "-v" not in cmd_args:
+                cmd_args += ["-v", "5"]
+        elif basename in ("llama-cli", "llama-completion", "llama-bench", "llama-server", "llama-mtmd-cli"):
+            if "-v" not in cmd_args and "--verbose" not in cmd_args:
+                cmd_args.append("-v")
 
     # Inject defaults for llama-cli, llama-completion, and llama-server if not overridden by the user
     if basename in ("llama-cli", "llama-completion", "llama-server"):
