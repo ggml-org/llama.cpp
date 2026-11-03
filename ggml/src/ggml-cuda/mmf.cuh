@@ -361,6 +361,10 @@ static __global__ void mul_mat_f_ids(
     const int expert_end   = ts.col_high;
     const int ncols_expert = expert_end - expert_start;
 
+    if (ncols_expert == 0) {
+        return;
+    }
+
     GGML_UNUSED(channel_ratio);
 
     const int channel_x   = expert_idx;
