@@ -4273,8 +4273,6 @@ static void create_webgpu_device(ggml_backend_webgpu_reg_context * ctx) {
 
 #if !defined(__EMSCRIPTEN__) && !defined(__wasi__)
     required_features.push_back(wgpu::FeatureName::ImplicitDeviceSynchronization);
-#endif
-#ifndef __EMSCRIPTEN__
     if (ctx->webgpu_global_ctx->capabilities.supports_subgroup_matrix) {
         required_features.push_back(wgpu::FeatureName::ChromiumExperimentalSubgroupMatrix);
     }
