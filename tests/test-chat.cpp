@@ -6937,6 +6937,10 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         // Basic content only - final channel
         tst.test("<|channel|>final<|message|>Hello, world!\nWhat's up?").expect(message_assist).run();
 
+        // Final channel with a constraint type, with and without <|constrain|> (#31520)
+        tst.test("<|channel|>final code<|message|>Hello, world!\nWhat's up?").expect(message_assist).run();
+        tst.test("<|channel|>final <|constrain|>json<|message|>Hello, world!\nWhat's up?").expect(message_assist).run();
+
         // Basic content only - commentary channel
         tst.test("<|channel|>commentary<|message|>Hello, world!\nWhat's up?").expect(message_assist).run();
 
