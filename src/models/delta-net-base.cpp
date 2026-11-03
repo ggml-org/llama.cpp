@@ -450,11 +450,6 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
         int64_t              conv_kernel_size,
         int64_t              conv_channels,
         int                  il) {
-    const auto * mctx_cur = inp->mctx;
-
-    const auto kv_head  = mctx_cur->get_head();
-    const auto mem_size = mctx_cur->get_size();
-
     const int64_t n_seqs = ubatch.n_seqs;
 
     ggml_tensor * conv_states = build_rs(inp, conv_states_all, hparams.n_embd_r(), n_seqs);
@@ -469,62 +464,7 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
     ggml_tensor * conv_input = ggml_concat(ctx0, conv_states, qkv_mixed, 0);
     cb(conv_input, "conv_input", il);
 
-    const int64_t row_count = (conv_kernel_size - 1) * conv_channels;
-
-    const size_t row_size  = ggml_row_size(conv_states_all->type, row_count);
-
-    if (cparams.n_rs_seq == 0) {
-        const int64_t s_idx  = conv_input->ne[0] - conv_states->ne[0];
-        const int64_t s_slot = 0;
-
-        ggml_tensor * conv_state_last =
-            ggml_view_3d(ctx0, conv_input,
-                    conv_kernel_size - 1, conv_channels, n_seqs,
-                    conv_input->nb[1], conv_input->nb[2],
-                    ggml_row_size(conv_input->type, s_idx));
-        cb(conv_state_last, "conv_state_last", il);
-
-        ggml_tensor * conv_state_update =
-            ggml_view_2d(ctx0, conv_states_all,
-                    row_count, n_seqs, conv_states_all->nb[1],
-                    (s_slot * mem_size + kv_head) * row_size);
-        cb(conv_state_update, "conv_state_update", il);
-
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, conv_state_last, conv_state_update));
-    } else {
-        // [TAG_RECURRENT_ROLLBACK_SPLITS]
-        // this logic assumes that the last (n_rs_seq + 1) tokens of a sequence in a batch are inside
-        //   the same ubatch, which `split_equal()` guarantees via its n_keep_tail argument
-
-        const int64_t K  = (int64_t) cparams.n_rs_seq + 1;
-        const int64_t n  = conv_input->ne[0] - conv_states->ne[0]; // n_seq_tokens
-        const int64_t Kw = std::min(n + 1, K);                     // windows that exist in this ubatch
-
-        // {Kw-1, ..., 0}, filled on the host and shared by every layer of the graph
-        if (inp->s_slot_rev == nullptr) {
-            inp->s_slot_rev = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, Kw);
-            ggml_set_input(inp->s_slot_rev);
-            ggml_set_name(inp->s_slot_rev, "rs_s_slot_rev");
-        }
-
-        // window w starts at column n - (Kw - 1) + w (ascending time) and is rollback slot Kw - 1 - w
-        // slots reaching back past this ubatch are left unwritten, like the ssm snapshots in build_recurrent_attn
-        // consecutive windows start one element apart, so they overlap
-        ggml_tensor * windows = ggml_view_4d(ctx0, conv_input,
-                conv_kernel_size - 1, Kw, conv_channels, n_seqs,
-                ggml_element_size(conv_input), conv_input->nb[1], conv_input->nb[2],
-                ggml_row_size(conv_input->type, n - (Kw - 1)));
-
-        // [d-1, slot, channel, seq] view of the cells of this ubatch
-        ggml_tensor * slots = ggml_view_4d(ctx0, conv_states_all,
-                conv_kernel_size - 1, K, conv_channels, n_seqs,
-                (size_t) mem_size * row_size,
-                ggml_row_size(conv_states_all->type, conv_kernel_size - 1),
-                conv_states_all->nb[1],
-                kv_head * row_size);
-
-        ggml_build_forward_expand(gf, ggml_set_rows(ctx0, slots, windows, inp->s_slot_rev));
-    }
+    build_conv_state_store(inp, conv_states_all, conv_input, conv_kernel_size - 1, 0);
 
     return conv_input;
 }
