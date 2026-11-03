@@ -69,7 +69,7 @@
 #define VECTOR_REGISTERS 16
 #endif
 
-#if defined(__riscv_v_intrinsic)
+#if defined(__riscv_vector) && defined(__riscv_v_intrinsic)
 #define LMUL 4
 #endif
 
@@ -180,7 +180,7 @@ inline float32x4_t madd(float32x4_t a, float32x4_t b, float32x4_t c) {
 }
 #endif
 
-#if defined(__riscv_v_intrinsic)
+#if defined(__riscv_vector) && defined(__riscv_v_intrinsic)
 template <> inline vfloat32m1_t madd(vfloat32m1_t a, vfloat32m1_t b, vfloat32m1_t c) {
     return __riscv_vfmacc_vv_f32m1(c, a, b, __riscv_vsetvlmax_e32m1());
 }
@@ -277,7 +277,7 @@ inline float hsum(__m512 x) {
 }
 #endif // __AVX512F__
 
-#if defined(__riscv_v_intrinsic)
+#if defined(__riscv_vector) && defined(__riscv_v_intrinsic)
 inline float hsum(vfloat32m1_t x) {
     return __riscv_vfmv_f_s_f32m1_f32(
         __riscv_vfredusum_vs_f32m1_f32m1(x, __riscv_vfmv_v_f_f32m1(0, 1), __riscv_vsetvlmax_e32m1()));
@@ -458,7 +458,7 @@ template <> inline __m512bh load_partial(const ggml_bf16_t *p, int n) {
 #endif
 #endif
 
-#if defined(__riscv_v_intrinsic)
+#if defined(__riscv_vector) && defined(__riscv_v_intrinsic)
 template <> inline vfloat32m1_t load(const float *p) {
     return __riscv_vle32_v_f32m1(p, __riscv_vsetvlmax_e32m1());
 }
@@ -503,7 +503,7 @@ template <> inline vbfloat16m4_t load(const ggml_bf16_t *p) {
 }
 #endif
 
-#if defined(__riscv_v_intrinsic)
+#if defined(__riscv_vector) && defined(__riscv_v_intrinsic)
 template <typename T> T set_zero();
 
 template <> inline vfloat32m1_t set_zero() {
@@ -520,7 +520,7 @@ template <> inline vfloat32m8_t set_zero() {
 }
 #endif
 
-#if defined(__riscv_v_intrinsic)
+#if defined(__riscv_vector) && defined(__riscv_v_intrinsic)
 template <typename T> size_t vlmax() {
     if constexpr (std::is_same_v<T, vfloat32m1_t>) { return  __riscv_vsetvlmax_e32m1(); }
     else if constexpr (std::is_same_v<T, vfloat32m2_t>) { return  __riscv_vsetvlmax_e32m2(); }
@@ -732,7 +732,7 @@ class tinyBLAS {
     const int64_t ldc;
 };
 
-#if defined(__riscv_v_intrinsic)
+#if defined(__riscv_vector) && defined(__riscv_v_intrinsic)
 template <typename D, typename V, typename TA, typename TB, typename TC>
 class tinyBLAS_RVV {
   public:
@@ -3958,7 +3958,7 @@ bool llamafile_sgemm(const struct ggml_compute_params * params, int64_t m, int64
             params->ith, params->nth};
         tb.matmul(m, n);
         return true;
-#elif defined(__riscv_v_intrinsic)
+#elif defined(__riscv_vector) && defined(__riscv_v_intrinsic)
     #if LMUL == 1
         tinyBLAS_RVV<vfloat32m1_t, vfloat32m1_t, float, float, float> tb{ params,
             k, (const float *)A, lda,

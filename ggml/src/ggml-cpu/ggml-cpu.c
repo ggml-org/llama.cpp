@@ -746,7 +746,7 @@ static void ggml_init_arm_arch_features(void) {}
 #endif
 #endif // __ARM_ARCH
 
-#if defined(__riscv) && defined(__riscv_v_intrinsic)
+#if defined(__riscv_vector) && defined(__riscv_v_intrinsic)
 #include <riscv_vector.h>
 static void ggml_init_riscv_arch_features(void) {
     ggml_riscv_arch_features.rvv_vlen = __riscv_vlenb();
@@ -3556,7 +3556,7 @@ void ggml_cpu_fp16_to_fp32(const ggml_fp16_t * x, float * y, int64_t n) {
         _mm_storeu_ps(y + i, y_vec);
     }
 
-#elif defined(__riscv_v_intrinsic) && defined(__riscv_zvfhmin)
+#elif defined(__riscv_vector) && defined(__riscv_v_intrinsic) && defined(__riscv_zvfhmin)
     // calculate step size
     const int epr = __riscv_vsetvlmax_e16m2();
     const int step = epr * 2;
@@ -3626,7 +3626,7 @@ void ggml_cpu_bf16_to_fp32(const ggml_bf16_t * x, float * y, int64_t n) {
                                         (const __m128i *)(x + i))),
                                 16)));
     }
-#elif defined(__riscv_v_intrinsic) && defined(__riscv_zvfbfmin)
+#elif defined(__riscv_vector) && defined(__riscv_v_intrinsic) && defined(__riscv_zvfbfmin)
     // calculate step size
     const int epr = __riscv_vsetvlmax_e16m2();
     const int step = epr * 2;
@@ -3746,7 +3746,7 @@ int ggml_cpu_has_arm_fma(void) {
 }
 
 int ggml_cpu_has_riscv_v(void) {
-#if defined(__riscv_v_intrinsic)
+#if defined(__riscv_vector) && defined(__riscv_v_intrinsic)
     return 1;
 #else
     return 0;
@@ -3754,7 +3754,7 @@ int ggml_cpu_has_riscv_v(void) {
 }
 
 int ggml_cpu_get_rvv_vlen(void) {
-#if defined(__riscv) && defined(__riscv_v_intrinsic)
+#if defined(__riscv_vector) && defined(__riscv_v_intrinsic)
     return ggml_riscv_arch_features.rvv_vlen;
 #else
     return 0;

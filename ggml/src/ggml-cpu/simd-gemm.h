@@ -5,7 +5,7 @@
 #include "simd-mappings.h"
 
 // TODO: add support for sizeless vector types
-#if defined(GGML_SIMD) && !defined(__ARM_FEATURE_SVE) && !defined(__riscv_v_intrinsic)
+#if defined(GGML_SIMD) && !defined(__ARM_FEATURE_SVE) && !(defined(__riscv_vector) && defined(__riscv_v_intrinsic))
 
 // TODO: untested on avx512
 // These are in units of GGML_F32_EPR
@@ -149,7 +149,7 @@ static void simd_gemm(
         C += N;
     }
 }
-#elif defined(GGML_SIMD) && defined(__riscv_v_intrinsic)
+#elif defined(GGML_SIMD) && defined(__riscv_vector) && defined(__riscv_v_intrinsic)
 // RM accumulators + 1 B vector = RM + 1 <= 8  =>  RM <= 7
 // Microkernel: C[RM x vl] += A[RM x K] * B[K x N]
 template <int RM>
