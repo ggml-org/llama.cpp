@@ -56,8 +56,10 @@ deepseek32          ,0   ,any     ,NORM+MUL+ADD                ,      2
 deepseek32          ,0   ,any     ,RMS_NORM+MUL                ,      9
 deepseek4           ,0   ,any     ,MUL+ADD                     ,      8
 deepseek4           ,0   ,any     ,RMS_NORM+MUL                ,     20
+deepseek4           ,0   ,any     ,UNARY+SQRT+ADD+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      4
 deepseek41          ,0   ,any     ,MUL+ADD                     ,     12
 deepseek41          ,0   ,any     ,RMS_NORM+MUL                ,     29
+deepseek41          ,0   ,any     ,UNARY+SQRT+ADD+ARGSORT+GET_ROWS+SUM_ROWS+SCALE+DIV,      6
 dots1               ,0   ,any     ,ADD+ADD                     ,      1
 dots1               ,0   ,any     ,MUL+ADD                     ,      2
 dots1               ,0   ,any     ,RMS_NORM+MUL                ,      9

@@ -821,6 +821,15 @@ int ggml_metal_op_acc(ggml_metal_op_t ctx, int idx) {
 int ggml_metal_op_unary(ggml_metal_op_t ctx, int idx) {
     ggml_tensor * op = ctx->node(idx);
 
+    // the sqrt(softplus) TOPK_MOE fusion is anchored at the softplus node (DeepSeek-V4/V4.1)
+    if (op->op == GGML_OP_UNARY && ggml_get_unary_op(op) == GGML_UNARY_OP_SOFTPLUS && ctx->use_fusion()) {
+        int n = 1;
+        const ggml_metal_fusion * fusion = ctx->can_fuse(idx, GGML_METAL_FUSION_FULL, &n);
+        if (fusion && ggml_metal_fusion_get_id(fusion) == GGML_METAL_FUSION_TOPK_MOE) {
+            return ggml_metal_op_topk_moe(ctx, idx);
+        }
+    }
+
     ggml_metal_library_t lib = ctx->lib;
     ggml_metal_encoder_t enc = ctx->enc;
 
@@ -6023,23 +6032,37 @@ int ggml_metal_op_topk_moe(ggml_metal_op_t ctx, int idx) {
         return 1;
     }
 
-    ggml_tensor * softmax  = ctx->node(idx);
-    ggml_tensor * logits   = softmax->src[0];
-    ggml_tensor * get_rows = ctx->node(idx + 2);
-    ggml_tensor * ids      = get_rows->src[1];
-    ggml_tensor * weights  = ctx->node(idx + n_fuse - 1);
+    ggml_tensor * first  = ctx->node(idx);
+    ggml_tensor * logits = first->src[0];
+
+    // the sp chains start at the softplus node and rank biased scores (DeepSeek-V4/V4.1)
+    const bool with_sp = first->op == GGML_OP_UNARY;
+
+    ggml_tensor * get_rows  = nullptr;
+    ggml_tensor * sum_rows  = nullptr;
+    ggml_tensor * prob_bias = nullptr;
+    int sum_rows_pos = -1;
+    for (int j = 0; j < n_fuse; ++j) {
+        ggml_tensor * node = ctx->node(idx + j);
+        if (node->op == GGML_OP_GET_ROWS) { get_rows = node; }
+        if (node->op == GGML_OP_ADD)      { prob_bias = node->src[1]; }
+        if (node->op == GGML_OP_SUM_ROWS) { sum_rows = node; sum_rows_pos = j; }
+    }
+
+    ggml_tensor * ids     = get_rows->src[1];
+    ggml_tensor * weights = ctx->node(idx + n_fuse - 1);
+
+    const bool with_norm  = sum_rows != nullptr;
+    const bool with_scale = weights->op == GGML_OP_SCALE;
 
     const int64_t n_expert      = logits->ne[0];
     const int64_t n_tokens      = logits->ne[1];
     const int64_t n_expert_used = ids->ne[0];
 
-    const bool with_norm  = n_fuse >= 6;
-    const bool with_scale = n_fuse == 4 || n_fuse == 7;
-
     float clamp = -INFINITY;
     float bias  = 0.0f;
     if (with_norm) {
-        ggml_tensor * denom_node = ctx->node(idx + 4);
+        ggml_tensor * denom_node = ctx->node(idx + sum_rows_pos + 1);
         if (denom_node->op == GGML_OP_SCALE) {
             // the sum adjustment is a bias (DeepSeek-V4.1), the scale factor is checked to be 1.0
             bias = ggml_get_op_params_f32(denom_node, 1);
@@ -6050,8 +6073,7 @@ int ggml_metal_op_topk_moe(ggml_metal_op_t ctx, int idx) {
 
     float scale = 1.0f;
     if (with_scale) {
-        ggml_tensor * scale_node = ctx->node(idx + n_fuse - 1);
-        scale = ggml_get_op_params_f32(scale_node, 0);
+        scale = ggml_get_op_params_f32(weights, 0);
     }
 
     ggml_metal_kargs_topk_moe args = {
@@ -6063,20 +6085,22 @@ int ggml_metal_op_topk_moe(ggml_metal_op_t ctx, int idx) {
         /*.scale =*/ scale,
     };
 
-    auto pipeline = ggml_metal_library_get_pipeline_topk_moe(lib, (int32_t) n_expert, (int32_t) n_expert_used, with_norm);
+    auto pipeline = ggml_metal_library_get_pipeline_topk_moe(lib, (int32_t) n_expert, (int32_t) n_expert_used,
+            with_norm, with_sp, prob_bias != nullptr);
 
     ggml_metal_encoder_set_pipeline(enc, pipeline);
     ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(logits),  1);
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(weights), 2);
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(ids),     3);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(prob_bias ? prob_bias : logits), 4);
 
     ggml_metal_encoder_dispatch_threadgroups(enc, (uint32_t) n_tokens, 1, 1, 32, 1, 1);
 
     ctx->count_fusions(fusion);
 
     if (ggml_metal_fusion_info_debug(ctx->finfo) > 1) {
-        GGML_LOG_DEBUG("%s: fuse: SOFT_MAX + ARGSORT + GET_ROWS\n", __func__);
+        GGML_LOG_DEBUG("%s: fuse: %s + ARGSORT + GET_ROWS\n", __func__, with_sp ? "SOFTPLUS + SQRT" : "SOFT_MAX");
     }
 
     return n_fuse;
