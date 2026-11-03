@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Button, type ButtonSize, type ButtonVariant } from '$lib/components/ui/button';
 	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { cn } from '$lib/components/ui/utils';
 	import { TooltipSide } from '$lib/enums';
 	import type { Component } from 'svelte';
 
@@ -44,7 +45,11 @@
 	<Button
 		{...props}
 		aria-label={ariaLabel || tooltip}
-		class="h-6 w-6 p-0 {className} flex hover:bg-transparent data-[state=open]:bg-transparent!"
+		class={cn(
+			'flex h-6 w-6 p-0 hover:bg-transparent data-[state=open]:bg-transparent!',
+			disabled && 'disabled:opacity-40',
+			className
+		)}
 		{disabled}
 		{href}
 		onclick={(e: MouseEvent) => {
@@ -66,12 +71,15 @@
 
 {#if showTooltip}
 	<Tooltip.Root>
-		<Tooltip.Trigger>
+		<Tooltip.Trigger class={disabled ? 'cursor-not-allowed' : undefined}>
 			<!-- prevent another nested button element -->
 			{#snippet child({ props })}
 				{#if disabled}
 					<!-- disabled buttons have pointer-events:none; wrap in a span so the tooltip hover surface stays alive -->
-					<span {...props}>
+					<span
+						{...props}
+						class={cn(props.class as string | undefined, 'inline-flex cursor-not-allowed')}
+					>
 						{@render button({})}
 					</span>
 				{:else}
@@ -84,6 +92,10 @@
 			<p>{tooltip}</p>
 		</Tooltip.Content>
 	</Tooltip.Root>
+{:else if disabled}
+	<span class="inline-flex cursor-not-allowed" title={tooltipAsTitle ? tooltip : undefined}>
+		{@render button({ href })}
+	</span>
 {:else}
 	{@render button({ href })}
 {/if}

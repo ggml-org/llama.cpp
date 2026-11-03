@@ -85,8 +85,13 @@
 {/if}
 
 <style>
-	a,
-	button {
+	a:not([aria-disabled='true']),
+	button:not(:disabled) {
 		cursor: pointer;
+	}
+
+	a[aria-disabled='true'],
+	button:disabled {
+		cursor: not-allowed;
 	}
 </style>
