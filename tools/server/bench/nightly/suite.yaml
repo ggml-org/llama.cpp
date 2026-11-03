@@ -11,6 +11,7 @@ build:
 server:
   port: 18080
   health_timeout_s: 600
+  # idle wait before every llama-server, llama-bench and llama-perplexity start, the first one included
   cooldown_s: 60
   args: [-ngl, "999", -fa, "on", --jinja, --metrics, --alias, bench]
 

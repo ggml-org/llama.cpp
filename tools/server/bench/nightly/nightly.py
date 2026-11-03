@@ -203,11 +203,15 @@ class Context:
         self.port = int(cfg["server"]["port"])
         self.url = f"http://127.0.0.1:{self.port}"
         self.commands: list[list[str]] = []
-        self.first_server = True
         self.save: Callable[[], None] = lambda: None
 
     def selected(self, config: str) -> bool:
         return config_selected(self.configs, config)
+
+    def cooldown(self) -> None:
+        # before every measured start, also the first one: prefetch or the previous run leaves the box warm
+        if not self.dry_run:
+            time.sleep(float(self.cfg["server"]["cooldown_s"]))
 
     def run(self, cmd: list[str], log_path: Path, timeout_s: float, stdout_path: Path | None = None) -> None:
         self.commands.append(cmd)
@@ -267,9 +271,7 @@ class Server:
         self.ctx.commands.append(self.cmd)
         if self.ctx.dry_run:
             return self
-        if not self.ctx.first_server:
-            time.sleep(float(self.ctx.cfg["server"]["cooldown_s"]))
-        self.ctx.first_server = False
+        self.ctx.cooldown()
         deadline = time.monotonic() + 60
         while not port_free(self.ctx.port):
             if time.monotonic() > deadline:
@@ -444,6 +446,7 @@ def suite_engine(ctx: Context, records: list[dict[str, Any]], name: str, model: 
     def fn(run_dir: Path) -> dict[str, float]:
         out = run_dir / "llama-bench.json"
         cmd = [str(ctx.bin_dir / "llama-bench"), "-m", str(model_path(ctx.home, model)), "-o", "json", *scfg["args"]]
+        ctx.cooldown()
         ctx.run(cmd, run_dir / "llama-bench.log", scfg["timeout_s"], stdout_path=out)
         metrics: dict[str, float] = {}
         for row in json.loads(out.read_text()):
@@ -596,6 +599,7 @@ def suite_quality(ctx: Context, records: list[dict[str, Any]], name: str, model:
         log_path = run_dir / "perplexity.log"
         cmd = [str(ctx.bin_dir / "llama-perplexity"), "-m", str(model_path(ctx.home, model)), "-f", str(wikitext_path(ctx.home)),
                "-c", str(scfg["ctx"]), "--chunks", str(scfg["chunks"]), "-ngl", "999", "-fa", "on"]
+        ctx.cooldown()
         ctx.run(cmd, log_path, scfg["timeout_s"])
         m = re.search(r"Final estimate: PPL = ([0-9.]+)", log_path.read_text(errors="replace"))
         if not m:
