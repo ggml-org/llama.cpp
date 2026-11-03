@@ -47,6 +47,7 @@ add_library(mtmd
             models/kimik25.cpp
             models/nemotron-v2-vl.cpp
             models/nemotron-omni.cpp
+            models/nemotron-transcribe.cpp
             models/muse-glimmer.cpp
             models/muse-spark-audio.cpp
             models/llama4.cpp
