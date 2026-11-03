@@ -12131,9 +12131,9 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                 if (q->ne[1] == 1) {
                     const char * decode_env = getenv("GGML_OPENCL_FA_DK512_DECODE");
                     const int64_t gqa = k->ne[2] > 0 ? q->ne[2] / k->ne[2] : 0;
-                    // GQA 16 decodes on the X2E MQ kernel (see mq_decode_x2e in ggml_cl_flash_attn)
+                    // GQA 2 and 16 decode on the X2E MQ kernels (see mq_decode_x2e in ggml_cl_flash_attn)
                     const bool gqa_ok = gqa == 4 || gqa == 8 ||
-                                        (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E && gqa == 16);
+                                        (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E && (gqa == 2 || gqa == 16));
                     if ((decode_env && decode_env[0] == '0') ||
                         backend_ctx->gpu_family != ADRENO || k->ne[2] <= 0 ||
                         !gqa_ok || q->ne[2] % k->ne[2] != 0 ||
@@ -22583,10 +22583,10 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
     const int mq_gqa = n_head_kv > 0 ? n_head / n_head_kv : 0;
     const std::tuple<int, int, int> mq_decode_key = {d_head_q, d_head_v, mq_gqa};
     // X2E also takes GQA 2 and 6 at head size 256 (gemma-4 SWA layers, Qwen3.5-27B),
-    // and GQA 16 at 512 and 128 (gemma-4-12b global layers, muse-glimmer)
+    // GQA 16 at 512 and 128 (gemma-4-12b global layers, muse-glimmer) and GQA 2 at 512 (gemma-4-E4B MTP drafter)
     const bool mq_decode_x2e = backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E &&
                                ((d_head_q == 256 && (mq_gqa == 2 || mq_gqa == 6)) ||
-                                (d_head_q == 512 && mq_gqa == 16) ||
+                                (d_head_q == 512 && (mq_gqa == 2 || mq_gqa == 16)) ||
                                 (d_head_q == 128 && mq_gqa == 16 && backend_ctx->has_subgroup_shuffle));
     const bool mq_decode_shape = backend_ctx->gpu_family == ADRENO && is_mixed && n_q == 1 &&
                                  d_head_q == d_head_v && n_head_kv > 0 && n_head % n_head_kv == 0 &&
