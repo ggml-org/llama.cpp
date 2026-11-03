@@ -12216,6 +12216,22 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (int n : {1, 8, 512}) {
         test_cases.emplace_back(new test_mul_mat_scale(GGML_TYPE_NVFP4, 1024, n, 4096, 8, 2));
     }
+
+    // Nemotron IQ2_XXS experts: up (k = 1024, m = 2048) and down (k = 2048, m = 1024), 9 of 240 experts per token
+    for (int n : {1, 8, 512}) {
+        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_IQ2_XXS, GGML_TYPE_F32, 240, 9, false, 2048, n, 1024));
+        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_IQ2_XXS, GGML_TYPE_F32, 240, 9, false, 1024, n, 2048));
+    }
+
+    // weights HTP must decline (strided rows, row view, rows not a multiple of the 32-row tile): CPU fallback, no crash
+    for (ggml_type type_a : {GGML_TYPE_NVFP4, GGML_TYPE_IQ2_XXS}) {
+        for (int n : {1, 8, 512}) {
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 1024, n, 4096, {1, 1}, {1, 1}, {0, 1, 2, 3}, 8192));
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 1024, n, 4096, {1, 1}, {1, 1}, {0, 1, 2, 3}, 0, 1, false, 2048));
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 1000, n, 4096, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 8, 2, false, 1000, n, 4096));
+        }
+    }
 #else
     // m = a rows
     // n = b rows
