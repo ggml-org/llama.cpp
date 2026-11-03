@@ -1483,7 +1483,9 @@ void GgmlOvDecoder::add_extra_inputs() {
             const auto combined_dim = static_cast<size_t>(kv_tensor->ne[0]);
             GGML_ASSERT(n_heads_kv > 0 && combined_dim % n_heads_kv == 0);
             const auto head_size = combined_dim / n_heads_kv;
-            m_model_extra_inputs["ggml_hfa_past_" + kv_name] = {
+            // flash_attn_ext looks the past input up by layer, so drop the graph-ordinal suffix ("#l12").
+            const std::string cache_name = kv_name.substr(0, kv_name.find('#'));
+            m_model_extra_inputs["ggml_hfa_past_" + cache_name] = {
                 get_ov_type(kv_tensor), ov::Shape{1, n_heads_kv, past_capacity, head_size}, 0, true, {}, -1};
         }
         m_model_extra_inputs["ggml_hfa_mask"] = {
