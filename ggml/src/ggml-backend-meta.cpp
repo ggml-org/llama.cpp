@@ -2168,6 +2168,50 @@ static void ggml_backend_meta_get_tensor_async(ggml_backend_t backend, const ggm
             return;
         }
 
+        // One row split on axis 0 (the logits of a decode step): every rank owns a disjoint slice
+        // [low, high) of the row, so the ring only has to carry the slices, not the whole row with
+        // zeros around them. Each step carries one rank's slice (padded to the longest) and the
+        // receiver writes it at that rank's offset: a third of the bytes at world size 3 and no
+        // sums. The ring steps and the forwarding (send buffer = the previous step's receive
+        // buffer, which the mesh exchange checks) are the same as below. Every rank evaluates the
+        // same condition on the same shape, so all ranks take the same path.
+        // LLAMA_DIST_TP_LOGITS_SHARD=0 restores the whole-vector merge.
+        static const bool shard_merge = [] {
+            const char * s = getenv("LLAMA_DIST_TP_LOGITS_SHARD");
+            return s == nullptr || atoi(s) != 0;
+        }();
+        if (shard_merge && split_state.axis == GGML_BACKEND_SPLIT_AXIS_0 && t->type == GGML_TYPE_F32 &&
+                ggml_nrows(t) == 1 && host_size == n * sizeof(float)) {
+            std::vector<int64_t> lo(dist_world_size), hi(dist_world_size);
+            int64_t maxlen = 0;
+            for (int r = 0; r < dist_world_size; ++r) {
+                ggml_meta_dist_split_bounds(t->ne[0], 1, r, dist_world_size, &lo[r], &hi[r]);
+                maxlen = std::max(maxlen, hi[r] - lo[r]);
+            }
+            // The slice this rank copied in is its simple tensor, placed at lo[dist_rank].
+            GGML_ASSERT(ggml_backend_meta_buffer_simple_tensor(t, 0)->ne[0] == hi[dist_rank] - lo[dist_rank]);
+            float * out = (float *) host_data;
+            thread_local std::vector<float> scur;
+            thread_local std::vector<float> srecv;
+            scur.assign((size_t) maxlen, 0.0f);
+            srecv.resize((size_t) maxlen);
+            std::memcpy(scur.data(), out + lo[dist_rank], (size_t) (hi[dist_rank] - lo[dist_rank]) * sizeof(float));
+            int32_t cur_src = dist_rank;
+            for (int step = 0; step < dist_world_size - 1; ++step) {
+                int32_t recv_src = -1;
+                if (!backend_ctx->dist_comm_allreduce(backend_ctx->dist_comm_ctx, scur.data(), (size_t) maxlen, cur_src, srecv.data(), &recv_src)) {
+                    return;
+                }
+                GGML_ASSERT(recv_src >= 0 && recv_src < dist_world_size && recv_src != dist_rank);
+                std::memcpy(out + lo[recv_src], srecv.data(), (size_t) (hi[recv_src] - lo[recv_src]) * sizeof(float));
+                if (step + 1 < dist_world_size - 1) {
+                    scur.swap(srecv);
+                    cur_src = recv_src;
+                }
+            }
+            return;
+        }
+
         // Reuse thread-local scratch buffers to avoid large per-call allocations.
         thread_local std::vector<float> cur;
         thread_local std::vector<float> recv;
