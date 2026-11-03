@@ -1,3 +1,14 @@
+#if HC_VEC == 4
+typedef float4 hc_float;
+#define HC_LOAD(p) vload4(0, (global const float *) (p))
+#define HC_STORE(v, p) vstore4(v, 0, (global float *) (p))
+#else
+typedef float hc_float;
+#define HC_LOAD(p) (*(global const float *) (p))
+#define HC_STORE(v, p) (*(global float *) (p) = (v))
+#endif
+
+#if HC_VEC == 1
 kernel void kernel_dsv4_hc_pre(
         global const char * x,
         ulong offset_x,
@@ -36,6 +47,7 @@ kernel void kernel_dsv4_hc_pre(
     }
     ((global float *) (dst + offset_dst))[i + t*n_embd] = scale * sum;
 }
+#endif
 
 kernel void kernel_dsv4_hc_post(
         global const char * x,
@@ -63,27 +75,27 @@ kernel void kernel_dsv4_hc_post(
         long n_embd,
         long n_hc
 ) {
-    const size_t i = get_global_id(0);
+    const size_t i = get_global_id(0) * HC_VEC;
     const size_t h = get_global_id(1);
     const size_t t = get_global_id(2);
     if (i >= n_embd) {
         return;
     }
 
-    const float xv = *(global const float *) (x + offset_x + i*nbx0 + t*nbx1);
+    const hc_float xv = HC_LOAD(x + offset_x + i*nbx0 + t*nbx1);
     const float pv = *(global const float *) (post + offset_p + h*nbp0 + t*nbp1);
     residual += offset_r + i*nbr0 + t*nbr2;
 
-    float sum = xv * pv;
+    hc_float sum = xv * pv;
     if (comb) {
         comb += offset_c + h*nbc0 + t*nbc2;
         for (long s = 0; s < n_hc; ++s) {
-            const float rv = *(global const float *) (residual + s*nbr1);
+            const hc_float rv = HC_LOAD(residual + s*nbr1);
             const float cv = *(global const float *) (comb + s*nbc1);
             sum += rv * cv;
         }
     } else {
-        sum += *(global const float *) (residual + h*nbr1);
+        sum += HC_LOAD(residual + h*nbr1);
     }
-    ((global float *) (dst + offset_dst))[i + (h + t*n_hc)*n_embd] = sum;
+    HC_STORE(sum, dst + offset_dst + (i + (h + t*n_hc)*n_embd)*sizeof(float));
 }

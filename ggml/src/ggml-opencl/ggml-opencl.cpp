@@ -1101,7 +1101,9 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_argsort_f32_i32;
     cl_kernel kernel_sum_rows_f32, kernel_sum_rows_f32_4;
     cl_kernel kernel_dsv4_hc_pre = nullptr;
-    cl_kernel kernel_dsv4_hc_post = nullptr;
+    cl_kernel kernel_dsv4_hc_post[2] = {};
+    size_t local_dsv4_hc_pre = 0;
+    size_t local_dsv4_hc_post[2] = {};
     cl_kernel kernel_cumsum_blk, kernel_cumsum_add;
     cl_kernel kernel_repeat_f32;
     cl_kernel kernel_pad;
@@ -1464,8 +1466,10 @@ struct ggml_backend_opencl_context {
         if (kernel_dsv4_hc_pre) {
             CL_CHECK(clReleaseKernel(kernel_dsv4_hc_pre));
         }
-        if (kernel_dsv4_hc_post) {
-            CL_CHECK(clReleaseKernel(kernel_dsv4_hc_post));
+        for (int i = 0; i < 2; ++i) {
+            if (kernel_dsv4_hc_post[i]) {
+                CL_CHECK(clReleaseKernel(kernel_dsv4_hc_post[i]));
+            }
         }
         if (iq1_s_grid_image) {
             CL_CHECK(clReleaseMemObject(iq1_s_grid_image));
@@ -4229,10 +4233,16 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
 #else
         const std::string kernel_src = read_file("dsv4_hc.cl");
 #endif
-        cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
-        CL_CHECK((backend_ctx->kernel_dsv4_hc_pre  = clCreateKernel(prog, "kernel_dsv4_hc_pre",  &err), err));
-        CL_CHECK((backend_ctx->kernel_dsv4_hc_post = clCreateKernel(prog, "kernel_dsv4_hc_post", &err), err));
-        CL_CHECK(clReleaseProgram(prog));
+        for (int i = 0; i < 2; ++i) {
+            cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts + (i == 0 ? " -DHC_VEC=1" : " -DHC_VEC=4"));
+            if (i == 0) {
+                CL_CHECK((backend_ctx->kernel_dsv4_hc_pre = clCreateKernel(prog, "kernel_dsv4_hc_pre", &err), err));
+                backend_ctx->local_dsv4_hc_pre = MIN((size_t) 64, backend_ctx->get_kernel_workgroup_size(backend_ctx->kernel_dsv4_hc_pre));
+            }
+            CL_CHECK((backend_ctx->kernel_dsv4_hc_post[i] = clCreateKernel(prog, "kernel_dsv4_hc_post", &err), err));
+            backend_ctx->local_dsv4_hc_post[i] = MIN((size_t) 64, backend_ctx->get_kernel_workgroup_size(backend_ctx->kernel_dsv4_hc_post[i]));
+            CL_CHECK(clReleaseProgram(prog));
+        }
         GGML_LOG_CONT(".");
     }
 
@@ -18280,7 +18290,7 @@ static void ggml_cl_add(ggml_backend_t backend, const ggml_tensor * src0, const 
 
     cl_kernel kernel;
 
-    const bool bcast_row = ggml_nelements(src1) == ne10 && ggml_is_contiguous(src1) && ne00 % 4 == 0 && ne10 % 4 == 0;
+    const bool bcast_row = ggml_is_contiguous(src0) && ggml_nelements(src1) == ne10 && ggml_is_contiguous(src1) && ne00 % 4 == 0 && ne10 % 4 == 0;
 
     if (bcast_row) {
         GGML_ASSERT(ggml_is_contiguous(src0));
@@ -37824,7 +37834,8 @@ static void ggml_cl_argsort(ggml_backend_t backend, const ggml_tensor * src0, co
 static void ggml_cl_dsv4_hc(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     auto * backend_ctx = (ggml_backend_opencl_context *) backend->context;
     const bool pre = dst->op == GGML_OP_DSV4_HC_PRE;
-    cl_kernel kernel = pre ? backend_ctx->kernel_dsv4_hc_pre : backend_ctx->kernel_dsv4_hc_post;
+    const bool vec = !pre && src0->ne[0] % 4 == 0 && src0->nb[0] == sizeof(float) && src1->nb[0] == sizeof(float);
+    cl_kernel kernel = pre ? backend_ctx->kernel_dsv4_hc_pre : backend_ctx->kernel_dsv4_hc_post[vec];
 
     cl_uint arg = 0;
     for (int i = 0; i < (pre ? 2 : 4); ++i) {
@@ -37855,8 +37866,9 @@ static void ggml_cl_dsv4_hc(ggml_backend_t backend, const ggml_tensor * src0, co
         CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(cl_int), &gated));
     }
 
-    size_t local_work_size[] = { MIN((size_t) 64, backend_ctx->get_kernel_workgroup_size(kernel)), 1, 1 };
-    size_t global_work_size[] = { CEIL_DIV((size_t) n_embd, local_work_size[0]) * local_work_size[0], (size_t) dst->ne[1], (size_t) dst->ne[2] };
+    const size_t n_work = (size_t) n_embd / (vec ? 4 : 1);
+    size_t local_work_size[] = { pre ? backend_ctx->local_dsv4_hc_pre : backend_ctx->local_dsv4_hc_post[vec], 1, 1 };
+    size_t global_work_size[] = { CEIL_DIV(n_work, local_work_size[0]) * local_work_size[0], (size_t) dst->ne[1], (size_t) dst->ne[2] };
     backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 }
 
