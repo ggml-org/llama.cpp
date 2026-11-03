@@ -272,17 +272,6 @@ public:
         return it->second;
     }
 
-    ov::Tensor get_or_create_hfa_past_tensor(const std::string & name,
-                                             const ov::element::Type & type,
-                                             const ov::Shape & shape) {
-        auto it = m_hfa_past_tensors.find(name);
-        if (it == m_hfa_past_tensors.end() || it->second.get_element_type() != type ||
-            it->second.get_shape() != shape) {
-            it = m_hfa_past_tensors.insert_or_assign(name, ov::Tensor(type, shape)).first;
-        }
-        return it->second;
-    }
-
     virtual int get_op_case(int node_idx) const override { return m_node_info_list[node_idx].node_op_case; }
 
     virtual const std::map<std::string, ov::frontend::ggml::ModelInputInfo> & get_model_inputs() const override {
@@ -682,7 +671,6 @@ private:
 
     std::map<std::string, ov::frontend::ggml::ModelInputInfo> m_model_inputs;
     std::map<std::string, ov::frontend::ggml::ModelExtraInputInfo> m_model_extra_inputs;
-    std::map<std::string, ov::Tensor> m_hfa_past_tensors;
     std::map<std::string, std::shared_ptr<ov::Node>> m_model_weights;
     std::map<std::string, ggml_tensor *> m_model_outputs;
     std::set<std::string> m_model_output_names;

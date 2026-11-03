@@ -1486,7 +1486,7 @@ void GgmlOvDecoder::add_extra_inputs() {
             // flash_attn_ext looks the past input up by layer, so drop the graph-ordinal suffix ("#l12").
             const std::string cache_name = kv_name.substr(0, kv_name.find('#'));
             m_model_extra_inputs["ggml_hfa_past_" + cache_name] = {
-                get_ov_type(kv_tensor), ov::Shape{1, n_heads_kv, past_capacity, head_size}, 0, true, {}, -1};
+                get_ov_type(kv_tensor), ov::Shape{1, past_capacity, n_heads_kv, head_size}, 0, true, {}, -1};
         }
         m_model_extra_inputs["ggml_hfa_mask"] = {
             ov::element::f16, ov::Shape{1, 1, chunk_size, past_capacity + chunk_size}, 0, true, {}, -1};
