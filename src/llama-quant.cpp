@@ -126,7 +126,9 @@ static tensor_category tensor_get_category(const std::string & tensor_name) {
         return tensor_category::TOKEN_EMBD;
     }
     // attn_qkv_gate is [attn_qkv | attn_gate] in one weight, the qkv rows decide its type
-    if (tensor_name.find("attn_qkv.weight") != std::string::npos || tensor_name.find("attn_qkv_gate.weight") != std::string::npos) {
+    if (tensor_name.find("attn_qkv.weight") != std::string::npos ||
+        tensor_name.find("attn_qkv_gate.weight") != std::string::npos ||
+        tensor_name.find("attn_qkv_rot.weight") != std::string::npos) {
         return tensor_category::ATTENTION_QKV;
     }
     if (tensor_name.find("attn_kv_b.weight") != std::string::npos) {
@@ -141,7 +143,9 @@ static tensor_category tensor_get_category(const std::string & tensor_name) {
     if (tensor_name.find("attn_q.weight") != std::string::npos) {
         return tensor_category::ATTENTION_Q;
     }
-    if (tensor_name.find("attn_output.weight") != std::string::npos) {
+    if (tensor_name.find("attn_output.weight") != std::string::npos ||
+        tensor_name.find("attn_output_rot.weight") != std::string::npos ||
+        tensor_name.find("attn_out_rot.weight") != std::string::npos) {
         return tensor_category::ATTENTION_OUTPUT;
     }
     if (tensor_name.find("ffn_up") != std::string::npos) {
@@ -382,6 +386,15 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     // the decision head of vllm-decision2 is small and computed in F32
     if (arch == LLM_ARCH_VLLM_DECISION2) {
         quantize &= name.compare(0, 9, "decision.") != 0;
+    }
+
+    // GRT: quantize 2D/3D .weight tensors (LLM_TENSOR_TOKEN_EMBD, LLM_TENSOR_OUTPUT,
+    // LLM_TENSOR_ATTN_QKV_ROT, LLM_TENSOR_ATTN_OUT_ROT, LLM_TENSOR_MIXER_ROT);
+    // keep .bias (base rotation angles) and .scale (per-element scales and folded FFN
+    // coefficients) in FP32.
+    if (arch == LLM_ARCH_GRT) {
+        quantize &= name.find(".bias")  == std::string::npos;
+        quantize &= name.find(".scale") == std::string::npos;
     }
 
     // do not quantize RWKV's small yet 2D weights
@@ -1202,6 +1215,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
     size_t total_size_org = 0;
     size_t total_size_new = 0;
+    size_t n_tensors_converted = 0;
 
     std::vector<std::thread> workers;
     workers.reserve(nthread);
@@ -1288,6 +1302,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         if (params->dry_run) {
             // the --dry-run option calculates the final quantization size without quantizing
             if (quantize) {
+                ++n_tensors_converted;
                 new_size = ggml_nrows(tensor) * ggml_row_size(new_type, tensor->ne[0]);
                 LLAMA_LOG_INFO("size = %8.2f MiB -> %8.2f MiB (%s)\n",
                                tensor_size/1024.0/1024.0,
@@ -1416,6 +1431,10 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             // unmap the tensor to free memory
             if (ml.use_mmap) { ml.unmap_weight(weight); }
 
+            if (quantize) {
+                ++n_tensors_converted;
+            }
+
         } // no --dry-run
     } // main loop
 
@@ -1425,6 +1444,15 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
     LLAMA_LOG_INFO("%s: model size  = %8.2f MiB (%.2f BPW)\n", __func__, total_size_org/1024.0/1024.0, total_size_org*8.0/ml.n_elements);
     LLAMA_LOG_INFO("%s: quant size  = %8.2f MiB (%.2f BPW)\n", __func__, total_size_new/1024.0/1024.0, total_size_new*8.0/ml.n_elements);
+    LLAMA_LOG_INFO("%s: quantized %zu / %d tensors\n", __func__, n_tensors_converted, ml.n_tensors);
+
+    if (!params->dry_run && !params->only_copy && n_tensors_converted == 0) {
+        throw std::runtime_error(format(
+            "quantization converted 0 tensors: the output would be a byte-identical "
+            "copy of the input at %.2f BPW. Nothing in this model was eligible for "
+            "the requested type.",
+            total_size_new*8.0/ml.n_elements));
+    }
 
     if (!params->imatrix && params->dry_run && will_require_imatrix) {
         LLAMA_LOG_WARN("%s: WARNING: dry run completed successfully, but actually completing this quantization will require an imatrix!\n",

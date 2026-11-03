@@ -120,6 +120,7 @@ class TensorNameMap:
             "final_norm",                              # modern-bert
             "model.norm",                              # cogvlm
             "model.embedding_norm",                    # lfm3
+            "model.final_norm",                        # grt
         ),
 
         # Rope frequencies
@@ -225,6 +226,7 @@ class TensorNameMap:
         # Attention norm
         MODEL_TENSOR.ATTN_NORM: (
             "model.lilicorr.layers.{bid}.attn_norm",                # lilicorr
+            "model.blocks.{bid}.norm1",                             # grt
             "gpt_neox.layers.{bid}.input_layernorm",                # gptneox
             "transformer.h.{bid}.ln_1",                             # gpt2 gpt-j refact qwen jais exaone
             "transformer.blocks.{bid}.norm_1",                      # mpt
@@ -418,6 +420,7 @@ class TensorNameMap:
             "layers.{bid}.post_attention_layernorm",             # embeddinggemma
             "model.layers.{bid}.post_self_attn_layernorm",       # glm-4-0414
             "model.layers.{bid}.post_attn_norm",                 # kolibri1
+            "model.blocks.{bid}.post_norm_attn",                 # grt
             "model.layers.layers.{bid}.post_mixer_norm.weight",  # plamo2
             "model.layers.{bid}.post_operator_norm",             # lfm3
         ),
@@ -450,6 +453,7 @@ class TensorNameMap:
         # Feed-forward norm
         MODEL_TENSOR.FFN_NORM: (
             "model.lilicorr.layers.{bid}.mlp_norm",                          # lilicorr
+            "model.blocks.{bid}.norm_ffn",                                   # grt
             "model.lilicorr.feature_mlp.{bid}.norm",                         # lilicorr
             "gpt_neox.layers.{bid}.post_attention_layernorm",                # gptneox
             "transformer.h.{bid}.ln_2",                                      # gpt2 refact qwen jais exaone
@@ -503,6 +507,7 @@ class TensorNameMap:
             "layers.{bid}.post_feedforward_layernorm",        # embeddinggemma
             "model.layers.{bid}.post_mlp_layernorm",          # glm-4-0414
             "model.layers.{bid}.post_ffn_norm",               # kolibri1
+            "model.blocks.{bid}.post_norm_ffn",               # grt
             "model.layers.layers.{bid}.post_mlp_norm.weight", # plamo2
             "model.layers.{bid}.feed_forward.up_proj",
             "model.layers.{bid}.post_moe_norm",               # grok-2
@@ -823,6 +828,7 @@ class TensorNameMap:
             "encoder.layer.{bid}.mlp.layernorm",            # jina-bert-v2
             "encoder.layer.{bid}.layer_norm_2",             # jina-v2-code
             "model.layers.{bid}.final_layernorm",           # bailingmoe2
+            "model.blocks.{bid}.res_norm_block",            # grt
         ),
 
         MODEL_TENSOR.LAYER_OUT_SCALE: (
@@ -3028,6 +3034,10 @@ class TensorNameMap:
 
         MODEL_TENSOR.ATTN_V_EXP: (
             "model.layers.{bid}.self_attn.v_experts",  # k2-horizon
+        ),
+
+        MODEL_TENSOR.MIXER_NORM: (
+            "model.blocks.{bid}.norm_mixer",  # grt
         ),
     }
 

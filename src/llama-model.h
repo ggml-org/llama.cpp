@@ -655,6 +655,20 @@ struct llama_layer {
     struct ggml_tensor * mudd_up          = nullptr;
     struct ggml_tensor * mudd_up_b        = nullptr;
 
+    // grt rotation chains
+    struct ggml_tensor * wqkv_rot       = nullptr;
+    struct ggml_tensor * wqkv_rot_b     = nullptr;
+    struct ggml_tensor * wqkv_rot_s     = nullptr;
+    struct ggml_tensor * wo_rot         = nullptr;
+    struct ggml_tensor * wo_rot_b       = nullptr;
+    struct ggml_tensor * wo_rot_s       = nullptr;
+    struct ggml_tensor * mixer_norm     = nullptr;
+    struct ggml_tensor * mixer_rot      = nullptr;
+    struct ggml_tensor * mixer_rot_b    = nullptr;
+    struct ggml_tensor * mixer_rot_s    = nullptr;
+    struct ggml_tensor * ffn_up_rot_s   = nullptr;
+    struct ggml_tensor * ffn_down_rot_s = nullptr;
+
     struct llama_layer_posnet posnet;
 
     struct llama_layer_convnext convnext;

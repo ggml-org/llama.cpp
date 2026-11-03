@@ -114,6 +114,8 @@ class Keys:
         BLOCK_COUNT                       = "{arch}.block_count"
         LEADING_DENSE_BLOCK_COUNT         = "{arch}.leading_dense_block_count"
         FEED_FORWARD_LENGTH               = "{arch}.feed_forward_length"
+        FEED_FORWARD_ROTATION_COUNT       = "{arch}.feed_forward_rotation_count"
+        MIXER_ROTATION_COUNT              = "{arch}.mixer_rotation_count"
         EXPERT_FEED_FORWARD_LENGTH        = "{arch}.expert_feed_forward_length"
         EXPERT_SHARED_FEED_FORWARD_LENGTH = "{arch}.expert_shared_feed_forward_length"
         EXPERT_CHUNK_FEED_FORWARD_LENGTH  = "{arch}.expert_chunk_feed_forward_length"
@@ -230,6 +232,7 @@ class Keys:
         VALUE_EXPERT_COUNT           = "{arch}.attention.value_expert_count"
         VALUE_EXPERT_USED_COUNT      = "{arch}.attention.value_expert_used_count"
         XSA_EPS                      = "{arch}.attention.xsa_epsilon"
+        ROTATION_COUNT               = "{arch}.attention.rotation_count"
 
         class Indexer:
             HEAD_COUNT = "{arch}.attention.indexer.head_count"
@@ -742,6 +745,7 @@ class MODEL_ARCH(IntEnum):
     K2HORIZON        = auto()
     KOLIBRI1         = auto()
     LIMITE           = auto()
+    GRT              = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -1052,6 +1056,12 @@ class MODEL_TENSOR(IntEnum):
     INDEXER_KPOOL_APE    = auto()
     ATTN_V_GATE          = auto() # k2-horizon MoVA router
     ATTN_V_EXP           = auto() # k2-horizon MoVA value experts
+    ATTN_QKV_ROT         = auto() # grt rotation chains
+    ATTN_OUT_ROT         = auto()
+    MIXER_NORM           = auto()
+    MIXER_ROT            = auto()
+    FFN_UP_ROT           = auto()
+    FFN_DOWN_ROT         = auto()
     # vision
     V_MMPROJ             = auto()
     V_MMPROJ_FC          = auto()
@@ -1602,6 +1612,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.K2HORIZON:        "k2-horizon",
     MODEL_ARCH.KOLIBRI1:         "kolibri1",
     MODEL_ARCH.LIMITE:           "limite",
+    MODEL_ARCH.GRT:              "grt",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
@@ -2282,6 +2293,12 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.D2T:                       "d2t",
     MODEL_TENSOR.ATTN_V_GATE:               "blk.{bid}.attn_v_gate",
     MODEL_TENSOR.ATTN_V_EXP:                "blk.{bid}.attn_v_exps",
+    MODEL_TENSOR.ATTN_QKV_ROT:              "blk.{bid}.attn_qkv_rot",
+    MODEL_TENSOR.ATTN_OUT_ROT:              "blk.{bid}.attn_output_rot",
+    MODEL_TENSOR.MIXER_NORM:                "blk.{bid}.mixer_norm",
+    MODEL_TENSOR.MIXER_ROT:                 "blk.{bid}.mixer_rot",
+    MODEL_TENSOR.FFN_UP_ROT:                "blk.{bid}.ffn_up_rot",
+    MODEL_TENSOR.FFN_DOWN_ROT:              "blk.{bid}.ffn_down_rot",
 }
 
 MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
@@ -6411,6 +6428,23 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_UP,
         MODEL_TENSOR.MUDD_DOWN,
         MODEL_TENSOR.MUDD_UP,
+    ],
+    MODEL_ARCH.GRT: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.ROPE_FREQS,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_QKV_ROT,
+        MODEL_TENSOR.ATTN_OUT_ROT,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.MIXER_NORM,
+        MODEL_TENSOR.MIXER_ROT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_UP_ROT,
+        MODEL_TENSOR.FFN_DOWN_ROT,
+        MODEL_TENSOR.FFN_POST_NORM,
+        MODEL_TENSOR.LAYER_OUT_NORM,
     ],
 }
 
