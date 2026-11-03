@@ -10533,6 +10533,8 @@ static void ggml_compute_forward_get_rel_pos_f16(
 
     GGML_TENSOR_UNARY_OP_LOCALS
 
+    GGML_ASSERT((ne1 + ne2 - 1) * ne00 <= ggml_nelements(src0));
+
     const int64_t w = ne1;
 
     ggml_fp16_t * src0_data = (ggml_fp16_t *) src0->data;
