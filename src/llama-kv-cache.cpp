@@ -1699,8 +1699,93 @@ struct args_set_input_attn_mask {
     bool block_uniform;
 };
 
+// Fast path for a single sequence stored in position order.
+template<typename T, bool causal, bool is_2d = false>
+static bool set_input_attn_mask_ordered(const args_set_input_attn_mask & args, T * data) {
+    const auto & ubatch = *args.ubatch;
+    if (args.rows || args.block_uniform || args.n_stream != 1 ||
+            ubatch.n_tokens == 0 || args.n_tps != ubatch.n_tokens) {
+        return false;
+    }
+
+    if (ubatch.n_seq_id[0] != 1) {
+        return false;
+    }
+    const llama_seq_id seq_id = ubatch.seq_id[0][0];
+    if (seq_id < 0 || (size_t) seq_id >= args.seq_to_stream.size()) {
+        return false;
+    }
+    for (uint32_t i = 1; i < ubatch.n_tokens; ++i) {
+        if (ubatch.n_seq_id[i] != 1 || ubatch.seq_id[i][0] != seq_id) {
+            return false;
+        }
+    }
+
+    const uint32_t stream_id = args.seq_to_stream[seq_id];
+    if (stream_id >= args.v_cells.size()) {
+        return false;
+    }
+    const auto & cells = args.v_cells[stream_id];
+    if (args.n_kv < 0 || (size_t) args.n_kv > cells.size()) {
+        return false;
+    }
+
+    std::vector<llama_pos> positions;
+    positions.reserve(args.n_kv);
+    bool empty_tail = false;
+    for (int64_t j = 0; j < args.n_kv; ++j) {
+        if (cells.is_empty(j)) {
+            empty_tail = true;
+            continue;
+        }
+        if (empty_tail || !cells.seq_has(j, seq_id)) {
+            return false;
+        }
+
+        const llama_pos pos = cells.pos_get(j);
+        if (!positions.empty() && pos < positions.back()) {
+            return false;
+        }
+        positions.push_back(pos);
+    }
+
+    // Use the general path when M-RoPE hides a cell with the same temporal position.
+    if constexpr (causal && is_2d) {
+        for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+            const llama_pos pos = ubatch.pos[i];
+            auto it = std::lower_bound(positions.begin(), positions.end(), pos);
+            for (; it != positions.end() && *it == pos; ++it) {
+                const size_t cell = it - positions.begin();
+                const auto & ext = cells.ext_get(cell);
+                if (ext.is_2d_gt(ubatch.pos[i + 2*ubatch.n_tokens],
+                                 ubatch.pos[i +   ubatch.n_tokens])) {
+                    return false;
+                }
+            }
+        }
+    }
+
+    const T mask_keep = llama_cast<T>(0.0f);
+    const T mask_drop = llama_cast<T>(-INFINITY);
+    for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+        const size_t boundary = causal
+            ? std::upper_bound(positions.begin(), positions.end(), ubatch.pos[i]) - positions.begin()
+            : positions.size();
+        T * row = data + args.n_kv*i;
+        std::fill(row, row + boundary, mask_keep);
+        std::fill(row + boundary, row + args.n_kv, mask_drop);
+    }
+    return true;
+}
+
 template<typename T, bool causal, bool swa, bool is_2d, bool alibi>
 static void set_input_attn_mask_impl(const args_set_input_attn_mask & args, T * data) {
+    if constexpr (!swa && !alibi) {
+        if (set_input_attn_mask_ordered<T, causal, is_2d>(args, data)) {
+            return;
+        }
+    }
+
   //const auto & hparams = args.hparams;
     const auto & ubatch  = args.ubatch;
 
