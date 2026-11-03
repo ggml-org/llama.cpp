@@ -1522,6 +1522,34 @@ struct llama_model_dflash : public llama_model_base {
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
+    enum variant_type {
+        VARIANT_DFLASH,
+        VARIANT_DFLASH2,
+        VARIANT_DSPARK,
+        VARIANT_LILICORR,
+    };
+
+    enum backbone_type {
+        BACKBONE_BASE,
+        BACKBONE_DSV4,
+        BACKBONE_DSV41,
+        BACKBONE_MISTRAL_LARGE4,
+    };
+
+    variant_type  variant  = VARIANT_DFLASH;
+    backbone_type backbone = BACKBONE_BASE;
+
+    void load_hparams_lilicorr(llama_model_loader & ml);
+    void load_hparams_dsv4(llama_model_loader & ml);
+    void load_hparams_mistral_large4(llama_model_loader & ml);
+    void load_tensors_dflash2();
+    void load_tensors_dflash2_conv();
+    void load_tensors_dspark(int64_t n_vocab_draft);
+    void load_tensors_lilicorr();
+    void load_tensors_layers_base();
+    void load_tensors_layers_dsv4();
+    void load_tensors_layers_mistral_large4();
+
     template <bool is_enc>
     struct graph : public llm_graph_context {
         graph(const llm_graph_params & params);

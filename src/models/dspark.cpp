@@ -4,6 +4,178 @@
 #include "llama-kv-cache.h"
 #include "llama-kv-cache-iswa.h"
 
+// DeepSeek-V4 DSpark backbone: stages are full DSV4 blocks, uniform sliding window (the draft KV ring)
+void llama_model_dflash::load_hparams_dsv4(llama_model_loader & ml) {
+    ml.get_key(LLM_KV_ATTENTION_Q_LORA_RANK,                hparams.n_lora_q);
+    ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,             hparams.n_swa);
+    ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,    hparams.n_ff_exp_arr, hparams.n_layer_all);
+    ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,                  hparams.n_expert_shared);
+    ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,                 hparams.expert_weights_scale);
+    ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,                  hparams.expert_weights_norm);
+    ml.get_key(LLM_KV_EXPERT_GATING_FUNC,                   hparams.expert_gating_func);
+    ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_EXP,              hparams.swiglu_clamp_exp, hparams.n_layer_all);
+    if (!ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_SHEXP,       hparams.swiglu_clamp_shexp, hparams.n_layer_all, 0)) {
+        hparams.swiglu_clamp_shexp = hparams.swiglu_clamp_exp;
+    }
+    ml.get_key(LLM_KV_ATTENTION_OUTPUT_GROUP_COUNT,         hparams.dsv4_o_group_count);
+    ml.get_key(LLM_KV_ATTENTION_OUTPUT_LORA_RANK,           hparams.dsv4_o_lora_rank);
+    ml.get_key(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, hparams.dsv4_hc_sinkhorn_iters);
+    ml.get_key(LLM_KV_HYPER_CONNECTION_EPSILON,             hparams.dsv4_hc_eps);
+    ml.get_arr(LLM_KV_ATTENTION_COMPRESS_RATIOS,            hparams.dsv4_compress_ratios, false);
+    ml.get_key(LLM_KV_HYPER_CONNECTION_SINGLE_PASS,         hparams.dsv4_hc_single_pass, false);
+
+    GGML_ASSERT(hparams.dsv4_o_group_count > 0); // avoid div by zero
+
+    if (hparams.expert_gating_func != LLAMA_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS) {
+        throw std::runtime_error("DSpark DSV4 draft expects sqrtsoftplus MoE scoring");
+    }
+    for (uint32_t il = 0; il < hparams.n_layer_all; ++il) {
+        if (hparams.dsv4_compress_ratios[il] != 0) {
+            throw std::runtime_error("DSpark DSV4 draft expects uncompressed attention on all stages");
+        }
+    }
+
+    GGML_ASSERT(hparams.n_swa > 0);
+    if (hparams.dsv4_hc_single_pass) {
+        // DeepSeek-V4.1 DSpark: block queries see the main-KV ring plus the block via the mask row of the
+        // first query, so that row's SWA window must reach window_size positions before the anchor
+        hparams.n_swa += 1;
+    }
+    hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
+    hparams.set_swa_pattern(0);
+    for (uint32_t il = 0; il < hparams.n_layer_all; ++il) {
+        hparams.is_swa_impl[il] = true;
+    }
+    hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
+    hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
+}
+
+// Mistral Large 4 DSpark: dense MLA stages, one sliding window, plain YaRN
+void llama_model_dflash::load_hparams_mistral_large4(llama_model_loader & ml) {
+    ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH_MLA,   hparams.n_embd_head_k_mla_impl);
+    ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH_MLA, hparams.n_embd_head_v_mla_impl);
+    ml.get_key(LLM_KV_ROPE_SCALING_YARN_LOG_MUL,  hparams.rope_yarn_log_mul, false);
+    ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,   hparams.n_swa);
+
+    if (hparams.n_swa == 0) {
+        throw std::runtime_error("DSpark Mistral Large 4 draft expects a sliding window");
+    }
+    if (hparams.n_embd_head_k_full != hparams.n_lora_kv + hparams.n_rot()) {
+        throw std::runtime_error("DSpark Mistral Large 4 draft expects key_length == kv_lora_rank + rope dim");
+    }
+
+    // same as DSV4.1 DSpark: block uses the window of the anchor
+    hparams.n_swa += 1;
+    hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
+    hparams.set_swa_pattern(0);
+    for (uint32_t il = 0; il < hparams.n_layer_all; ++il) {
+        hparams.is_swa_impl[il] = true;
+    }
+    hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
+    hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
+}
+
+// DSpark = DFlash + a semi-autoregressive Markov head and Confidence head
+void llama_model_dflash::load_tensors_dspark(int64_t n_vocab_draft) {
+    LLAMA_LOAD_LOCALS;
+
+    const int64_t dspark_markov_rank = ml->get_tensor_meta("markov_w1.weight")->ne[0];
+
+    dspark_markov_w1   = create_tensor(tn(LLM_TENSOR_DSPARK_MARKOV_W1, "weight"), { dspark_markov_rank, n_vocab }, 0);
+    dspark_markov_w2   = create_tensor(tn(LLM_TENSOR_DSPARK_MARKOV_W2, "weight"), { dspark_markov_rank, n_vocab_draft }, 0);
+    dspark_markov_w2_s = create_tensor(tn(LLM_TENSOR_DSPARK_MARKOV_W2, "scale"),  { 1 }, TENSOR_NOT_REQUIRED);
+
+    dspark_conf_proj   = create_tensor(tn(LLM_TENSOR_DSPARK_CONF_PROJ, "weight"), { n_embd + dspark_markov_rank, 1 }, TENSOR_NOT_REQUIRED);
+    dspark_conf_proj_b = create_tensor(tn(LLM_TENSOR_DSPARK_CONF_PROJ, "bias"),   { 1 },             TENSOR_NOT_REQUIRED);
+
+    dspark_joint_proj   = create_tensor(tn(LLM_TENSOR_DSPARK_JOINT_PROJ, "weight"), { n_embd + 2*dspark_markov_rank, 3*dspark_markov_rank }, TENSOR_NOT_REQUIRED);
+    dspark_joint_proj_b = create_tensor(tn(LLM_TENSOR_DSPARK_JOINT_PROJ, "bias"),   { 3*dspark_markov_rank }, dspark_joint_proj ? 0 : TENSOR_NOT_REQUIRED);
+
+    LLAMA_LOG_INFO("%s: DFlash with DSpark markov head (rank = %lld)\n", __func__, (long long) dspark_markov_rank);
+}
+
+void llama_model_dflash::load_tensors_layers_dsv4() {
+    LLAMA_LOAD_LOCALS;
+
+    const int64_t q_lora_rank     = hparams.n_lora_q;
+    const int64_t n_ff_exp        = hparams.n_ff_exp();
+    const int64_t n_expert_shared = hparams.n_expert_shared;
+    const int64_t n_embd_head     = hparams.n_embd_head_k();
+    const int64_t o_groups        = hparams.dsv4_o_group_count;
+    const int64_t o_lora_rank     = hparams.dsv4_o_lora_rank;
+    const int64_t hc_mult         = hparams.dsv4_hc_mult;
+    const int64_t hc_dim          = hc_mult * n_embd;
+    const int64_t hc_mix_dim      = (2 + hc_mult) * hc_mult;
+
+    // single-pass mHC: collapse with the last FFN pre-mix, no hc_head
+    if (!hparams.dsv4_hc_single_pass) {
+        hc_head_fn    = create_tensor(tn(LLM_TENSOR_HC_HEAD_FN,    "weight"), {hc_dim, hc_mult}, 0);
+        hc_head_base  = create_tensor(tn(LLM_TENSOR_HC_HEAD_BASE,  "weight"), {hc_mult}, 0);
+        hc_head_scale = create_tensor(tn(LLM_TENSOR_HC_HEAD_SCALE, "weight"), {1}, 0);
+    }
+
+    for (int i = 0; i < n_layer; ++i) {
+        auto & layer = layers[i];
+
+        layer.attn_norm     = create_tensor(tn(LLM_TENSOR_ATTN_NORM,     "weight", i), {n_embd}, 0);
+        layer.attn_sinks    = create_tensor(tn(LLM_TENSOR_ATTN_SINKS,    "weight", i), {n_head}, 0);
+        layer.wq_a          = create_tensor(tn(LLM_TENSOR_ATTN_Q_A,      "weight", i), {n_embd, q_lora_rank}, 0);
+        layer.attn_q_a_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_A_NORM, "weight", i), {q_lora_rank}, 0);
+        layer.wq_b          = create_tensor(tn(LLM_TENSOR_ATTN_Q_B,      "weight", i), {q_lora_rank, n_head * n_embd_head}, 0);
+        layer.wkv           = create_tensor(tn(LLM_TENSOR_ATTN_KV,       "weight", i), {n_embd, n_embd_head}, 0);
+        layer.attn_kv_norm  = create_tensor(tn(LLM_TENSOR_ATTN_KV_NORM,  "weight", i), {n_embd_head}, 0);
+        layer.wo_a          = create_tensor(tn(LLM_TENSOR_ATTN_OUT_A,    "weight", i), {n_head * n_embd_head / o_groups, o_lora_rank, o_groups}, TENSOR_ALLOW_RESHAPE);
+        layer.wo_b          = create_tensor(tn(LLM_TENSOR_ATTN_OUT_B,    "weight", i), {o_groups * o_lora_rank, n_embd}, 0);
+
+        layer.hc_attn_fn    = create_tensor(tn(LLM_TENSOR_HC_ATTN_FN,    "weight", i), {hc_dim, hc_mix_dim}, 0);
+        layer.hc_attn_base  = create_tensor(tn(LLM_TENSOR_HC_ATTN_BASE,  "weight", i), {hc_mix_dim}, 0);
+        layer.hc_attn_scale = create_tensor(tn(LLM_TENSOR_HC_ATTN_SCALE, "weight", i), {3}, 0);
+        layer.hc_ffn_fn     = create_tensor(tn(LLM_TENSOR_HC_FFN_FN,     "weight", i), {hc_dim, hc_mix_dim}, 0);
+        layer.hc_ffn_base   = create_tensor(tn(LLM_TENSOR_HC_FFN_BASE,   "weight", i), {hc_mix_dim}, 0);
+        layer.hc_ffn_scale  = create_tensor(tn(LLM_TENSOR_HC_FFN_SCALE,  "weight", i), {3}, 0);
+
+        layer.ffn_gate_inp    = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,    "weight", i), {n_embd, n_expert}, 0);
+        layer.ffn_exp_probs_b = create_tensor(tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias",   i), {n_expert}, 0);
+        layer.ffn_norm        = create_tensor(tn(LLM_TENSOR_FFN_NORM,        "weight", i), {n_embd}, 0);
+
+        layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd,   n_ff_exp, n_expert}, 0);
+        layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp, n_embd,   n_expert}, 0);
+        layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {n_embd,   n_ff_exp, n_expert}, 0);
+
+        layer.ffn_gate_shexp = create_tensor(tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd,                     n_ff_exp * n_expert_shared}, 0);
+        layer.ffn_down_shexp = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {n_ff_exp * n_expert_shared, n_embd                    }, 0);
+        layer.ffn_up_shexp   = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd,                     n_ff_exp * n_expert_shared}, 0);
+    }
+}
+
+void llama_model_dflash::load_tensors_layers_mistral_large4() {
+    LLAMA_LOAD_LOCALS;
+
+    const int64_t kv_lora_rank      = hparams.n_lora_kv;
+    const int64_t n_embd_head_k_mla = hparams.n_embd_head_k_mla();
+    const int64_t n_embd_head_v_mla = hparams.n_embd_head_v_mla();
+    const int64_t n_embd_head_nope  = n_embd_head_k_mla - n_rot;
+
+    dspark_mask_embd = create_tensor(tn(LLM_TENSOR_DSPARK_MASK_EMBD, "weight"), { n_embd, hparams.dflash_block_size - 1 }, 0);
+
+    for (int i = 0; i < n_layer; ++i) {
+        auto & layer = layers[i];
+
+        layer.attn_norm      = create_tensor(tn(LLM_TENSOR_ATTN_NORM,      "weight", i), { n_embd }, 0);
+        layer.wq             = create_tensor(tn(LLM_TENSOR_ATTN_Q,         "weight", i), { n_embd, n_head * n_embd_head_k_mla }, 0);
+        layer.wkv_a_mqa      = create_tensor(tn(LLM_TENSOR_ATTN_KV_A_MQA,  "weight", i), { n_embd, kv_lora_rank + n_rot }, 0);
+        layer.attn_kv_a_norm = create_tensor(tn(LLM_TENSOR_ATTN_KV_A_NORM, "weight", i), { kv_lora_rank }, 0);
+        layer.wk_b           = create_tensor(tn(LLM_TENSOR_ATTN_K_B,       "weight", i), { n_embd_head_nope, kv_lora_rank, n_head }, 0);
+        layer.wv_b           = create_tensor(tn(LLM_TENSOR_ATTN_V_B,       "weight", i), { kv_lora_rank, n_embd_head_v_mla, n_head }, 0);
+        layer.wo             = create_tensor(tn(LLM_TENSOR_ATTN_OUT,       "weight", i), { n_head * n_embd_head_v_mla, n_embd }, 0);
+
+        layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), { n_embd }, 0);
+        layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), { n_embd, n_ff }, 0);
+        layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), { n_ff, n_embd }, 0);
+        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), { n_embd, n_ff }, 0);
+    }
+}
+
 // DSpark (DFlash + Markov & Confidence head): Markov bias on the draft logits, chained per block position
 void llama_model_dflash::build_dspark_markov_head(llm_graph_context & g, const llama_model & model, ggml_tensor * tokens, ggml_tensor * hidden) {
     ggml_context * ctx0 = g.ctx0;
