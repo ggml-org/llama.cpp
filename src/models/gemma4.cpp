@@ -182,6 +182,9 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
     // TODO: is causal == true correct? might need some changes
     auto * inp_attn = build_attn_inp_kv_iswa();
 
+    auto inp_attn_full  = *inp_attn;
+    auto inp_attn_prune = *inp_attn;
+
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     if (model.per_layer_tok_embd) {
@@ -202,15 +205,23 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
     for (int il = (int) hparams.n_layer_kv_from_start; prune_shared && il <= n_layer; ++il) {
         prune_shared = !cparams.embeddings_layer_inp[il];
     }
+
     int64_t n_rows = n_tokens;
 
     for (int il = 0; il < n_layer; ++il) {
         if (prune_shared && il == (int) hparams.n_layer_kv_from_start) {
-            inpL                           = ggml_get_rows(ctx0, inpL, inp_out_ids);
-            inp_pos                        = ggml_reshape_1d(ctx0, ggml_get_rows(ctx0, ggml_reshape_2d(ctx0, inp_pos, 1, n_tokens), inp_out_ids), n_outputs);
-            inp_attn->self_attn_mask.cnv     = ggml_cast(ctx0, ggml_get_rows(ctx0, inp_attn->self_attn_mask.cnv,     inp_out_ids), inp_attn->self_attn_mask.cnv->type);
-            inp_attn->self_attn_mask_swa.cnv = ggml_cast(ctx0, ggml_get_rows(ctx0, inp_attn->self_attn_mask_swa.cnv, inp_out_ids), inp_attn->self_attn_mask_swa.cnv->type);
-            n_rows                         = n_outputs;
+            inpL    = ggml_get_rows(ctx0, inpL, inp_out_ids);
+            inp_pos = ggml_reshape_1d(ctx0, ggml_get_rows(ctx0, ggml_reshape_2d(ctx0, inp_pos, 1, n_tokens), inp_out_ids), n_outputs);
+
+            inp_attn_prune.self_attn_mask.raw     = ggml_get_rows(ctx0, inp_attn_full.self_attn_mask.raw,     inp_out_ids);
+            inp_attn_prune.self_attn_mask_swa.raw = ggml_get_rows(ctx0, inp_attn_full.self_attn_mask_swa.raw, inp_out_ids);
+
+            inp_attn_prune.self_attn_mask.raw     = ggml_cast(ctx0, inp_attn_prune.self_attn_mask.raw,     GGML_TYPE_F16);
+            inp_attn_prune.self_attn_mask_swa.raw = ggml_cast(ctx0, inp_attn_prune.self_attn_mask_swa.raw, GGML_TYPE_F16);
+
+            n_rows = n_outputs;
+
+            inp_attn = &inp_attn_prune;
         }
 
         const int64_t n_embd_head = hparams.n_embd_head_k(il);
