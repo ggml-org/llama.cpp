@@ -1407,8 +1407,7 @@ private:
             }
 
             if (params_base.n_cache_reuse) {
-                params_base.n_cache_reuse = 0;
-                SRV_WRN("%s\n", "cache_reuse is not supported by multimodal, it will be disabled");
+                SRV_INF("%s\n", "cache_reuse with multimodal: enabled for prompts without media");
             }
         }
 
@@ -4122,25 +4121,24 @@ private:
 
                                 const auto n_cache_reuse = slot.task->params.n_cache_reuse;
 
-                                const bool can_cache_reuse =
-                                    llama_memory_can_shift(llama_get_memory(ctx_tgt)) &&
-                                    !slot.prompt.tokens.has_mtmd;
+                                const bool can_shift = llama_memory_can_shift(llama_get_memory(ctx_tgt));
+
+                                // media chunks cannot be shifted: reuse only when neither prompt has media
+                                const bool has_media = slot.prompt.tokens.has_media() || input_tokens.has_media();
+
+                                const bool can_cache_reuse = can_shift && !has_media;
 
                                 if (!can_cache_reuse && n_cache_reuse > 0) {
-                                    SLT_WRN(slot, "cache reuse is not supported - ignoring n_cache_reuse = %d\n", n_cache_reuse);
+                                    SLT_WRN(slot, "cache reuse is not supported%s - ignoring n_cache_reuse = %d\n",
+                                            has_media ? " for prompts with media" : "", n_cache_reuse);
                                 }
 
                                 // reuse chunks from the cached prompt by shifting their KV cache in the new position
                                 if (can_cache_reuse && n_cache_reuse > 0) {
-                                    GGML_ASSERT(!slot.prompt.tokens.has_mtmd);
+                                    GGML_ASSERT(!slot.prompt.tokens.has_media());
 
                                     size_t head_c = n_past; // cache
                                     size_t head_p = n_past; // current prompt
-
-                                    if (mctx) {
-                                        // we should never reach this
-                                        GGML_ABORT("not supported by multimodal");
-                                    }
 
                                     SLT_DBG(slot, "trying to reuse chunks with size > %d, n_past = %d\n", n_cache_reuse, n_past);
 
@@ -4150,7 +4148,8 @@ private:
                                         size_t n_match = 0;
                                         while (head_c + n_match < slot.prompt.tokens.size() &&
                                                head_p + n_match < input_tokens.size()       &&
-                                               slot.prompt.tokens[head_c + n_match] == input_tokens[head_p + n_match]) {
+                                               slot.prompt.tokens[head_c + n_match] == input_tokens[head_p + n_match] &&
+                                               input_tokens[head_p + n_match] != LLAMA_TOKEN_NULL) {
                                             n_match++;
                                         }
 
