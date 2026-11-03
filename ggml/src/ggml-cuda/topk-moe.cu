@@ -80,11 +80,11 @@ __device__ void sqrt_softplus_warp_inplace(float (&vals)[experts_per_thread], co
     }
 }
 
-#if !defined(GGML_USE_HIP) || HIP_VERSION >= 60300000
 // Set -inf for experts outside the top n_group_used groups. Group score is the sum of its top-2 experts (DeepSeek V3).
 template <int n_experts, int experts_per_thread>
 __device__ void group_mask_warp_inplace(float (&vals)[experts_per_thread], const int n_groups, const int n_group_used, const int lane) {
     const int n_per_group = n_experts / n_groups;
+    constexpr ggml_cuda_lane_mask_t thread_mask = 0xffffffff;
 
     float score = -INFINITY; // lane g holds the score of group g
     for (int g = 0; g < n_groups; g++) {
@@ -99,8 +99,8 @@ __device__ void group_mask_warp_inplace(float (&vals)[experts_per_thread], const
         }
 #pragma unroll
         for (int offset = WARP_SIZE / 2; offset > 0; offset >>= 1) {
-            const float o1 = __shfl_xor_sync(0xFFFFFFFF, top1, offset, WARP_SIZE);
-            const float o2 = __shfl_xor_sync(0xFFFFFFFF, top2, offset, WARP_SIZE);
+            const float o1 = __shfl_xor_sync(thread_mask, top1, offset, WARP_SIZE);
+            const float o2 = __shfl_xor_sync(thread_mask, top2, offset, WARP_SIZE);
             top2 = fmaxf(fminf(top1, o1), fmaxf(top2, o2));
             top1 = fmaxf(top1, o1);
         }
@@ -112,10 +112,10 @@ __device__ void group_mask_warp_inplace(float (&vals)[experts_per_thread], const
     // rank of each group, lower index wins ties
     int rank = 0;
     for (int g = 0; g < n_groups; g++) {
-        const float other = __shfl_sync(0xFFFFFFFF, score, g, WARP_SIZE);
+        const float other = __shfl_sync(thread_mask, score, g, WARP_SIZE);
         rank += other > score || (other == score && g < lane);
     }
-    const auto keep = __ballot_sync(0xFFFFFFFFULL, lane < n_groups && rank < n_group_used);
+    const auto keep = __ballot_sync(thread_mask, lane < n_groups && rank < n_group_used);
 
 #pragma unroll
     for (int i = 0; i < experts_per_thread; i++) {
@@ -125,7 +125,6 @@ __device__ void group_mask_warp_inplace(float (&vals)[experts_per_thread], const
         }
     }
 }
-#endif // !defined(GGML_USE_HIP) || HIP_VERSION >= 60300000
 
 /*
     This kernel does the following:
@@ -162,6 +161,7 @@ __global__ void topk_moe_cuda(const float *         logits,
     ids += n_experts * row;
 
     constexpr int experts_per_thread = (n_experts > WARP_SIZE) ? n_experts / WARP_SIZE : 1;
+    constexpr ggml_cuda_lane_mask_t thread_mask = 0xffffffff;
 
     float wt[experts_per_thread];
 
@@ -220,7 +220,6 @@ __global__ void topk_moe_cuda(const float *         logits,
         }
     }
 
-#if !defined(GGML_USE_HIP) || HIP_VERSION >= 60300000
     // without bias, masking wt is safe: the matcher ensures the kept groups hold all used experts
     if (config.n_groups > 0) {
         if constexpr (has_bias) {
@@ -229,7 +228,6 @@ __global__ void topk_moe_cuda(const float *         logits,
             group_mask_warp_inplace<n_experts>(wt, config.n_groups, config.n_group_used, threadIdx.x);
         }
     }
-#endif // !defined(GGML_USE_HIP) || HIP_VERSION >= 60300000
 
     //at this point, each thread holds either a portion of the softmax distribution
     //or the raw logits. We do the argmax reduce over n_expert_used, each time marking
@@ -264,9 +262,9 @@ __global__ void topk_moe_cuda(const float *         logits,
 
 #pragma unroll
             for (int mask = WARP_SIZE / 2; mask > 0; mask /= 2) {
-                const float val    = __shfl_xor_sync(0xFFFFFFFF, max_val, mask, WARP_SIZE);
-                const float val_s  = __shfl_xor_sync(0xFFFFFFFF, max_val_s, mask, WARP_SIZE);
-                const int   expert = __shfl_xor_sync(0xFFFFFFFF, max_expert, mask, WARP_SIZE);
+                const float val    = __shfl_xor_sync(thread_mask, max_val, mask, WARP_SIZE);
+                const float val_s  = __shfl_xor_sync(thread_mask, max_val_s, mask, WARP_SIZE);
+                const int   expert = __shfl_xor_sync(thread_mask, max_expert, mask, WARP_SIZE);
                 if (val_s > max_val_s || (val_s == max_val_s && expert < max_expert)) {
                     max_val    = val;
                     max_val_s  = val_s;
@@ -289,8 +287,8 @@ __global__ void topk_moe_cuda(const float *         logits,
 
 #pragma unroll
             for (int mask = WARP_SIZE / 2; mask > 0; mask /= 2) {
-                const float val    = __shfl_xor_sync(0xFFFFFFFF, max_val, mask, WARP_SIZE);
-                const int   expert = __shfl_xor_sync(0xFFFFFFFF, max_expert, mask, WARP_SIZE);
+                const float val    = __shfl_xor_sync(thread_mask, max_val, mask, WARP_SIZE);
+                const int   expert = __shfl_xor_sync(thread_mask, max_expert, mask, WARP_SIZE);
                 if (val > max_val || (val == max_val && expert < max_expert)) {
                     max_val    = val;
                     max_expert = expert;
@@ -356,10 +354,6 @@ static void launch_topk_moe_cuda(ggml_backend_cuda_context & ctx,
     dim3         block_dims(WARP_SIZE, rows_per_block, 1);
     cudaStream_t stream = ctx.stream();
     const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(grid_dims, block_dims, 0, stream);
-
-#if defined(GGML_USE_HIP) && HIP_VERSION < 60300000
-    GGML_ASSERT(config.n_groups == 0 && "expert groups fusion is not supported on this HIP version");
-#endif
 
     switch (n_expert) {
         case 1:
