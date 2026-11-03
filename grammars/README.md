@@ -144,7 +144,7 @@ You can use GBNF grammars:
 
 - In [llama-server](../tools/server):
     - For any completion endpoints, passed as the `json_schema` body field
-    - For the `/chat/completions` endpoint, passed inside the `response_format` body field (e.g. `{"type", "json_object", "schema": {"items": {}}}` or `{ type: "json_schema", json_schema: {"schema": ...} }`)
+    - For the `/chat/completions` endpoint, passed inside the `response_format` body field (e.g. `{"type": "json_object", "schema": {"items": {}}}` or `{ type: "json_schema", json_schema: {"schema": ...} }`)
 - In [llama-cli](../tools/cli) and [llama-completion](../tools/completion), passed as the `--json` / `-j` flag
 
 > [!NOTE]
