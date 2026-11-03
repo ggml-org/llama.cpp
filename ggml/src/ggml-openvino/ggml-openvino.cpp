@@ -144,7 +144,10 @@ struct ggml_backend_openvino_buffer_context {
                                      ggml_openvino_getenv_int("GGML_OPENVINO_SELF_CONTAINED_BLOB") &&
                                      ggml_openvino_getenv_int("GGML_OPENVINO_SELF_CONTAINED_MMAP") &&
                                      ggml_openvino_getenv_str("GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR");
-            const size_t lazy_host_threshold = (size_t) 1024 * 1024 * 1024;  // 1 GiB
+            // 2 GiB keeps a large-context KV cache (~1 GiB at ctx 8K) on L0 while the bigger prefill
+            // compute buffer still goes lazy.
+            const size_t lazy_host_threshold =
+                (size_t) ggml_openvino_getenv_int("GGML_OPENVINO_LAZY_HOST_THRESHOLD_MB", 2048) * 1024 * 1024;
             const bool lazy_host_alloc = strict_mmap && size >= lazy_host_threshold;
             // Prefer importable Level Zero host memory on NPU: the plugin imports it without an
             // extra host-to-device copy each infer.
