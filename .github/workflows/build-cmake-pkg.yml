@@ -11,9 +11,8 @@ jobs:
   linux:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
+      - name: Clone
+        uses: actions/checkout@v6
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
