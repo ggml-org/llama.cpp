@@ -737,8 +737,17 @@ ov::Tensor get_ov_input_tensor_static_prefill(const std::shared_ptr<GgmlOvDecode
         return input_tensor;
     }
     if (param_name.rfind("ggml_hfa_past_", 0) == 0) {
-        const std::string kv_name = param_name.substr(strlen("ggml_hfa_past_"));
-        const auto * kv_tensor = ggml_decoder->get_input_ggml_tensor(kv_name);
+        const std::string cache_name = param_name.substr(strlen("ggml_hfa_past_"));
+        const ggml_tensor * kv_tensor = nullptr;
+        for (const auto & [name, _] : ggml_decoder->get_model_inputs()) {
+            if (name.substr(0, name.find('#')) == cache_name) {
+                kv_tensor = ggml_decoder->get_input_ggml_tensor(name);
+                break;
+            }
+        }
+        if (kv_tensor == nullptr) {
+            throw std::runtime_error("HFA past KV source not found for " + param_name);
+        }
         const auto & info = ggml_decoder->get_model_extra_inputs().at(param_name);
         ov::Tensor input_tensor = ggml_decoder->get_or_create_hfa_past_tensor(param_name, info.type, info.shape);
         if (chunk_index == 0) {
