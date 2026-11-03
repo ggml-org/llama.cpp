@@ -65,3 +65,4 @@ NOTE: conversion scripts are located under `tools/mtmd/legacy-models`
 - [MiniCPM-o 4.0](../../docs/multimodal/minicpmo4.0.md)
 - [MiniCPM-V 4.5](../../docs/multimodal/minicpmv4.5.md)
 - [IBM Granite Vision](../../docs/multimodal/granitevision.md)
+- [HYV3Speech](../../docs/multimodal/hyv3-speech.md)

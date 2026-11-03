@@ -1166,6 +1166,15 @@ struct mtmd_context {
                     aud_end = "<|audio_comp_end|>";
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_dots3note>(ctx_a);
                 } break;
+            case PROJECTOR_TYPE_HYV3_SPEECH:
+                {
+                    // the segment is wrapped in two reserved tokens of the LLM
+                    // vocab; the embeddings replace the placeholder in between
+                    aud_beg       = "<｜hy_place▁holder▁no▁6｜>";  // hy_place<LOW_LINE>holder<LOW_LINE>no<LOW_LINE>6
+                    aud_end       = "<｜hy_place▁holder▁no▁8｜>";  // hy_place<LOW_LINE>holder<LOW_LINE>no<LOW_LINE>8
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_hyv3_speech>(ctx_a);
+                }
+                break;
             case PROJECTOR_TYPE_MIMO_AUDIO:
                 {
                     aud_beg = "<|mimo_audio_start|>";
@@ -1271,6 +1280,19 @@ mtmd_context * mtmd_init_from_file(const char * mmproj_fname,
     } catch (const std::exception & e) {
         LOG_ERR("%s: error: %s\n", __func__, e.what());
         return nullptr;
+    }
+}
+
+bool mtmd_has_projector(const char * fname) {
+    if (!fname) {
+        return false;
+    }
+    try {
+        clip_cap cap = clip_get_cap(fname);
+        return cap.has_vision || cap.has_audio;
+    } catch (const std::exception & e) {
+        // not a GGUF, or a GGUF without a projector - no packaged projector either way
+        return false;
     }
 }
 
@@ -3571,6 +3593,14 @@ bool mtmd_support_audio_stream(const mtmd_context * ctx) {
     }
     const projector_type proj = clip_get_projector_type(ctx->ctx_a);
     return proj == PROJECTOR_TYPE_VOXTRAL_RT || proj == PROJECTOR_TYPE_LFM3A;
+}
+
+enum mtmd_audio_stream_mode mtmd_audio_stream_mode(const mtmd_context * ctx) {
+    if (ctx->ctx_a && clip_get_projector_type(ctx->ctx_a) == PROJECTOR_TYPE_HYV3_SPEECH) {
+        // turn-based feeding is up to the caller, which has to generate between turns
+        return MTMD_AUDIO_STREAM_TURN;
+    }
+    return mtmd_support_audio_stream(ctx) ? MTMD_AUDIO_STREAM_REALTIME : MTMD_AUDIO_STREAM_NONE;
 }
 
 mtmd_audio_stream_params mtmd_audio_stream_params_default(void) {

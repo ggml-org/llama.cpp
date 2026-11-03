@@ -751,6 +751,130 @@ bool mtmd_audio_preprocessor_qwen3a::preprocess(const float *                 sa
 }
 
 //
+// mtmd_audio_preprocessor_hyv3_speech
+//
+// Matches WhisperFeatureExtractor called once per segment (center=True, log10 +
+// (max-8)/4). Segments follow the training schedule: 1600 ms first, then 800 ms.
+// Each segment is emitted as its own mel so the encoder sees exactly what the
+// reference sees (the encoder re-chunks on the 100-frame grid internally).
+//
+
+void mtmd_audio_preprocessor_hyv3_speech::initialize() {
+    cache.fill_sin_cos_table(hparams.audio_n_fft);
+    cache.fill_hann_window(hparams.audio_window_len, true);
+    cache.fill_mel_filterbank_matrix(hparams.n_mel_bins, hparams.audio_n_fft, hparams.audio_sample_rate);
+}
+
+bool mtmd_audio_preprocessor_hyv3_speech::preprocess(const float *                 samples,
+                                                     size_t                        n_samples,
+                                                     std::vector<mtmd_audio_mel> & output) const {
+    if (n_samples == 0) {
+        return false;
+    }
+
+    GGML_ASSERT(!cache.sin_vals.empty());
+    GGML_ASSERT(!cache.cos_vals.empty());
+    GGML_ASSERT(!cache.filters.data.empty());
+
+    filter_params params;
+    params.n_mel            = hparams.n_mel_bins;
+    params.n_fft_bins       = 1 + (hparams.audio_n_fft / 2);
+    params.hann_window_size = hparams.audio_window_len;
+    params.hop_length       = hparams.audio_hop_len;
+    params.sample_rate      = hparams.audio_sample_rate;
+    params.no_padding       = true;  // reflection padding is applied per segment below
+    params.use_natural_log  = false;
+    params.norm_per_feature = false;
+    params.mel_floor        = 1e-10f;              // WhisperFeatureExtractor clamps at 1e-10, not FLT_MIN
+
+    const int    pad   = hparams.audio_n_fft / 2;  // center=True padding
+    const int    hop   = hparams.audio_hop_len;
+    const size_t sr    = (size_t) hparams.audio_sample_rate;
+    const size_t first = sr * 1600 / 1000;
+    const size_t step  = sr * 800 / 1000;
+
+    size_t start    = 0;
+    bool   is_first = true;
+
+    while (start < n_samples) {
+        const size_t  want    = is_first ? first : step;
+        const size_t  n_chunk = std::min(want, n_samples - start);
+        const float * chunk   = samples + start;
+
+        // torch pads the waveform up to a whole number of hops before the STFT
+        const int64_t n_frames = (int64_t) ((n_chunk + hop - 1) / hop);
+        if (n_frames == 0) {
+            break;
+        }
+
+        // WhisperFeatureExtractor is called with padding="max_length" and
+        // max_length = n_frames * hop, so the reference zero-pads the waveform
+        // up to a whole number of hops *before* the reflection padding. Without
+        // this the last frame of a chunk whose length is not a hop multiple
+        // reads reflected samples where the reference reads zeros.
+        const int64_t      n_seg = n_frames * (int64_t) hop;
+        std::vector<float> seg(n_seg, 0.0f);
+        std::copy(chunk, chunk + n_chunk, seg.begin());
+
+        std::vector<float> padded(n_seg + 2 * pad, 0.0f);
+        for (int i = 0; i < pad; i++) {
+            const int src = pad - i;
+            padded[i]     = (src < (int) n_seg) ? seg[src] : 0.0f;
+        }
+        std::copy(seg.begin(), seg.end(), padded.begin() + pad);
+        for (int i = 0; i < pad; i++) {
+            const int src           = (int) n_seg - 2 - i;
+            padded[n_seg + pad + i] = (src >= 0) ? seg[src] : 0.0f;
+        }
+
+        mtmd_audio_mel mel_full;
+        if (!log_mel_spectrogram(padded.data(), (int) padded.size(), 4, params, cache, mel_full)) {
+            return false;
+        }
+
+        // Whisper-style normalization: clamp to (max - 8), scale to [-1, 1].
+        // The reference drops the trailing frame before taking the max
+        // (log_spec[:, :-1]), so frames past n_frames must not contribute.
+        {
+            double        mmax  = -1e20;
+            const int64_t n_max = std::min(n_frames, mel_full.n_len);
+            for (int64_t m = 0; m < mel_full.n_mel; m++) {
+                const float * row = mel_full.data.data() + (size_t) m * mel_full.n_len;
+                for (int64_t i = 0; i < n_max; i++) {
+                    if (row[i] > mmax) {
+                        mmax = row[i];
+                    }
+                }
+            }
+            mmax -= 8.0;
+            for (float & v : mel_full.data) {
+                v = (std::max((double) v, mmax) + 4.0) / 4.0;
+            }
+        }
+
+        // the reference drops the trailing frame (log_spec[:, :-1])
+        const int64_t n_copy = std::min(n_frames, mel_full.n_len);
+
+        mtmd_audio_mel out;
+        out.n_mel     = mel_full.n_mel;
+        out.n_len     = n_copy;
+        out.n_len_org = n_copy;
+        out.data.assign((size_t) out.n_mel * (size_t) out.n_len, 0.0f);
+        for (int64_t m = 0; m < out.n_mel; m++) {
+            std::copy(mel_full.data.begin() + (size_t) m * mel_full.n_len,
+                      mel_full.data.begin() + (size_t) m * mel_full.n_len + n_copy,
+                      out.data.begin() + (size_t) m * out.n_len);
+        }
+        output.push_back(std::move(out));
+
+        start += n_chunk;
+        is_first = false;
+    }
+
+    return !output.empty();
+}
+
+//
 // mtmd_audio_preprocessor_dots3note
 //
 // Matches Dots3NoteFeatureExtractor: the waveform is split into 60s chunks and each chunk gets
