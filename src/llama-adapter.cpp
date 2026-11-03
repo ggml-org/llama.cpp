@@ -11,7 +11,7 @@
 #include <sstream>
 #include <stdexcept>
 
-// vec
+// vec.
 
 ggml_tensor * llama_adapter_cvec::tensor_for(int il) const {
     if (il < 0 || il < layer_start || il > layer_end || (size_t) il >= tensors.size()) {
