@@ -34,6 +34,7 @@
 #include "work-queue.h"
 #include "hex-profile.h"
 #include "allreduce-ops.h"
+#include "dsv4-hc-ops.h"
 #include "htp-fence.h"
 
 #define HMX_QUEUE_CAPACITY     128
@@ -1039,6 +1040,12 @@ static int execute_op(struct htp_ops_context * octx) {
 
         case HTP_OP_POOL_1D:
             return op_pool_1d(octx);
+
+        case HTP_OP_DSV4_HC_PRE:
+            return op_dsv4_hc_pre(octx);
+
+        case HTP_OP_DSV4_HC_POST:
+            return op_dsv4_hc_post(octx);
 
         case HTP_OP_CONCAT:
             return op_concat(octx);
