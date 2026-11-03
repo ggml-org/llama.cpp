@@ -180,7 +180,7 @@ static uint64_t ggml_openvino_model_cache_extra_cfg(bool stateful, bool recurren
     extra_cfg = extra_cfg * 131 + (manual_gqa_enabled ? 1u : 0u);
     extra_cfg = extra_cfg * 131 + (ggml_openvino_getenv_int("GGML_OPENVINO_PROFILING") >= 2 ? 1u : 0u);
     extra_cfg = extra_cfg * 131 + (ggml_openvino_shape_from_mask_enabled() ? 1u : 0u);
-    extra_cfg = extra_cfg * 131 + (ggml_openvino_npu_hfa_prefill_enabled() ? 3u : 0u);  // HFA input ABI v3.
+    extra_cfg = extra_cfg * 131 + (ggml_openvino_npu_hfa_prefill_enabled() ? 4u : 0u);  // HFA input ABI v4.
     if (ggml_openvino_is_npu()) {
         extra_cfg = extra_cfg * 131 + static_cast<uint64_t>(ggml_openvino_get_npu_requant_type());
     }
@@ -749,31 +749,25 @@ ov::Tensor get_ov_input_tensor_static_prefill(const std::shared_ptr<GgmlOvDecode
             throw std::runtime_error("HFA past KV source not found for " + param_name);
         }
         const auto & info = ggml_decoder->get_model_extra_inputs().at(param_name);
-        ov::Tensor input_tensor = ggml_decoder->get_or_create_hfa_past_tensor(param_name, info.type, info.shape);
-        if (chunk_index == 0) {
-            std::memset(input_tensor.data(), 0, input_tensor.get_byte_size());
-        }
-
-        const size_t n_heads_kv = info.shape[1];
-        const size_t past_capacity = info.shape[2];
-        const size_t head_size = info.shape[3];
-        const size_t row_begin = chunk_index == 0 ? 0 : std::min(static_cast<size_t>(chunk_index - 1) * chunk_size,
-                                                                 past_capacity);
-        const size_t row_end = std::min(static_cast<size_t>(chunk_index) * chunk_size, past_capacity);
-        if (static_cast<size_t>(kv_tensor->ne[0]) != n_heads_kv * head_size ||
-            row_end > static_cast<size_t>(kv_tensor->ne[1])) {
+        const size_t past_capacity = info.shape[1];
+        const size_t row_bytes = info.shape[2] * info.shape[3] * ggml_type_size(kv_tensor->type);
+        if (static_cast<size_t>(kv_tensor->ne[0]) != info.shape[2] * info.shape[3] || kv_tensor->nb[1] != row_bytes) {
             throw std::runtime_error("HFA past KV source shape is incompatible with " + param_name);
         }
-        const size_t head_bytes = head_size * ggml_type_size(kv_tensor->type);
-        const auto * src = static_cast<const uint8_t *>(kv_tensor->data);
-        auto * dst = static_cast<uint8_t *>(input_tensor.data());
-        for (size_t row = row_begin; row < row_end; ++row) {
-            for (size_t head = 0; head < n_heads_kv; ++head) {
-                std::memcpy(dst + (head * past_capacity + row) * head_bytes,
-                            src + (row * n_heads_kv + head) * head_bytes, head_bytes);
-            }
+        if (past_capacity <= static_cast<size_t>(kv_tensor->ne[1])) {
+            // Zero-copy: the first past_capacity cache rows; HFA only reads the rows of the explicit history.
+            return ov::Tensor(info.type, info.shape, kv_tensor->data);
         }
-        return input_tensor;
+        // Single-chunk prompt in a cache shorter than one chunk: history is empty, share one zero tensor.
+        static std::mutex zeros_mutex;
+        static std::map<std::string, ov::Tensor> zeros;
+        std::lock_guard<std::mutex> lock(zeros_mutex);
+        auto & zero = zeros[info.type.get_type_name() + info.shape.to_string()];
+        if (!zero) {
+            zero = ov::Tensor(info.type, info.shape);
+            std::memset(zero.data(), 0, zero.get_byte_size());
+        }
+        return zero;
     }
     if (param_name == "ggml_hfa_mask") {
         const auto & info = ggml_decoder->get_model_extra_inputs().at(param_name);
