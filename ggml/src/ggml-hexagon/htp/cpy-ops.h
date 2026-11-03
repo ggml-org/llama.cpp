@@ -205,7 +205,9 @@ static inline bool htp_copy_transpose_layout_build(struct htp_copy_transpose_par
     tp->blkk         = blkk;
     tp->n0b          = (ne0 + blk0 - 1) / blk0;
     tp->nkb          = (nek + blkk - 1) / blkk;
-    tp->in_stride    = blkk * es;
+    // Pad row pitch by 1 element so gather lanes land on distinct VTCM banks
+    const uint32_t pad = (es == 2) ? 2 : 4;
+    tp->in_stride    = blkk * es + pad;
     tp->out_stride   = blk0 * es;
     // The packed gather of the last vector reads up to one vector past the staged rows.
     tp->in_buf_size  = hex_round_up(blk0 * tp->in_stride + (tp->packed ? 128 : 0), 128);
