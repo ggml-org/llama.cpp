@@ -855,7 +855,11 @@ struct realtime_conversation {
         std::thread reader([this]() {
             std::string msg;
             while (conn.read(msg) != 0) {
-                handle(msg);
+                try {
+                    handle(msg);
+                } catch (const std::exception & e) {
+                    send_error(e.what(), "server_error");
+                }
             }
             closed = true;
             conn.close();
@@ -871,7 +875,12 @@ struct realtime_conversation {
                 break;
             }
             if (auto * res = dynamic_cast<server_task_result_realtime *>(result.get())) {
-                on_result(*res);
+                try {
+                    on_result(*res);
+                } catch (const std::exception & e) {
+                    send_error(e.what(), "server_error");
+                    break;
+                }
             }
         }
 
