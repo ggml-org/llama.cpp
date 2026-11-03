@@ -3,7 +3,7 @@
 	import { SyntaxHighlightedCode } from '$lib/components/app';
 	import * as Alert from '$lib/components/ui/alert';
 	import { Button } from '$lib/components/ui/button';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { ICON_CLASS_DEFAULT, PDF_AS_IMAGES_LEGACY_CONTENT_REGEX } from '$lib/constants';
 	import { AttachmentType, MimeTypeApplication, PdfViewMode } from '$lib/enums';
 	import type { ChatAttachmentDisplayItem } from '$lib/types';
 	import { getLanguageFromFilename } from '$lib/utils';
@@ -23,21 +23,21 @@
 	let pdfViewMode = $state<PdfViewMode>(PdfViewMode.PAGES);
 	let pdfImages = $state<string[]>([]);
 	let pdfImagesLoading = $state(false);
+	// a failure stays on screen: the effect does not retry while an error is set
 	let pdfImagesError = $state<string | null>(null);
-	// id of the item whose conversion failed, so the effect does not retry it forever
-	let pdfImagesFailedId = $state<string | null>(null);
 	let pdfText = $state<string | null>(null);
 	let pdfTextLoading = $state(false);
 	let pdfTextError = $state<string | null>(null);
-	// id of the item whose text extraction failed, so the effect does not retry it forever
-	let pdfTextFailedId = $state<string | null>(null);
 
 	let language = $derived(getLanguageFromFilename(displayName));
 
-	// PDFs sent as images store a placeholder in `content`, so their text must be extracted again
+	// older PDFs sent as images stored a placeholder in `content`, so their text is extracted again
 	let hasStoredText = $derived(
 		currentItem?.attachment?.type === AttachmentType.PDF
-			? !currentItem.attachment.processedAsImages
+			? !(
+					currentItem.attachment.processedAsImages &&
+					PDF_AS_IMAGES_LEGACY_CONTENT_REGEX.test(currentItem.attachment.content)
+				)
 			: !!displayTextContent
 	);
 
@@ -48,7 +48,11 @@
 			return currentItem.uploadedFile.file;
 		}
 
-		if (currentItem?.attachment && 'base64Data' in currentItem.attachment) {
+		if (
+			currentItem?.attachment &&
+			'base64Data' in currentItem.attachment &&
+			currentItem.attachment.base64Data
+		) {
 			const byteArray = Uint8Array.from(atob(currentItem.attachment.base64Data), (char) =>
 				char.charCodeAt(0)
 			);
@@ -71,12 +75,9 @@
 			return;
 		}
 
-		if (pdfImagesFailedId === currentItem.id) return;
-
-		const itemId = currentItem.id;
+		if (pdfImagesError) return;
 
 		pdfImagesLoading = true;
-		pdfImagesError = null;
 
 		try {
 			const file = getPdfFile();
@@ -88,7 +89,6 @@
 			pdfImages = await convertPDFToImage(file);
 		} catch (error) {
 			pdfImagesError = error instanceof Error ? error.message : 'Failed to load PDF images';
-			pdfImagesFailedId = itemId;
 		} finally {
 			pdfImagesLoading = false;
 		}
@@ -103,12 +103,9 @@
 			return;
 		}
 
-		if (pdfTextFailedId === currentItem.id) return;
-
-		const itemId = currentItem.id;
+		if (pdfTextError) return;
 
 		pdfTextLoading = true;
-		pdfTextError = null;
 
 		try {
 			const file = getPdfFile();
@@ -120,7 +117,6 @@
 			pdfText = await convertPDFToText(file);
 		} catch (error) {
 			pdfTextError = error instanceof Error ? error.message : 'Failed to extract PDF text';
-			pdfTextFailedId = itemId;
 		} finally {
 			pdfTextLoading = false;
 		}
@@ -194,58 +190,20 @@
 
 {#if pdfViewMode === PdfViewMode.TEXT}
 	{#if pdfTextLoading}
-		<div class="flex flex-1 items-center justify-center p-8">
-			<div class="text-center">
-				<div
-					class="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-white border-t-transparent"
-				></div>
-
-				<p class="text-white/70">Extracting PDF text...</p>
-			</div>
-		</div>
+		{@render loadingStatus('Extracting PDF text...')}
 	{:else if pdfTextError}
-		<div class="flex flex-1 items-center justify-center p-8">
-			<div class="text-center">
-				<FileText class="mx-auto mb-4 h-16 w-16 text-white/50" />
-
-				<p class="mb-4 text-white/70">Failed to extract PDF text</p>
-
-				<p class="text-sm text-white/50">{pdfTextError}</p>
-			</div>
-		</div>
+		{@render status('Failed to extract PDF text', pdfTextError)}
 	{:else if pdfText}
 		<div class="px-4 pb-4">
 			<SyntaxHighlightedCode class="max-w-4xl" code={pdfText} {language} maxHeight="none" />
 		</div>
 	{:else}
-		<div class="flex flex-1 items-center justify-center p-8">
-			<div class="text-center">
-				<FileText class="mx-auto mb-4 h-16 w-16 text-white/50" />
-
-				<p class="text-white/70">No text found in this PDF</p>
-			</div>
-		</div>
+		{@render status('No text found in this PDF')}
 	{/if}
 {:else if pdfImagesLoading}
-	<div class="flex flex-1 items-center justify-center p-8">
-		<div class="text-center">
-			<div
-				class="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-white border-t-transparent"
-			></div>
-
-			<p class="text-white/70">Converting PDF to images...</p>
-		</div>
-	</div>
+	{@render loadingStatus('Converting PDF to images...')}
 {:else if pdfImagesError}
-	<div class="flex flex-1 items-center justify-center p-8">
-		<div class="text-center">
-			<FileText class="mx-auto mb-4 h-16 w-16 text-white/50" />
-
-			<p class="mb-4 text-white/70">Failed to load PDF images</p>
-
-			<p class="text-sm text-white/50">{pdfImagesError}</p>
-		</div>
-	</div>
+	{@render status('Failed to load PDF images', pdfImagesError)}
 {:else if pdfImages.length > 0}
 	{#each pdfImages as image, index (index)}
 		<p class="mb-2 text-sm text-white/50">Page {index + 1}</p>
@@ -255,11 +213,31 @@
 		<div class="h-4"></div>
 	{/each}
 {:else}
+	{@render status('No PDF pages available')}
+{/if}
+
+{#snippet loadingStatus(message: string)}
+	<div class="flex flex-1 items-center justify-center p-8">
+		<div class="text-center">
+			<div
+				class="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-white border-t-transparent"
+			></div>
+
+			<p class="text-white/70">{message}</p>
+		</div>
+	</div>
+{/snippet}
+
+{#snippet status(message: string, detail?: string)}
 	<div class="flex flex-1 items-center justify-center p-8">
 		<div class="text-center">
 			<FileText class="mx-auto mb-4 h-16 w-16 text-white/50" />
 
-			<p class="text-white/70">No PDF pages available</p>
+			<p class={['text-white/70', detail && 'mb-4']}>{message}</p>
+
+			{#if detail}
+				<p class="text-sm text-white/50">{detail}</p>
+			{/if}
 		</div>
 	</div>
-{/if}
+{/snippet}
