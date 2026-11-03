@@ -2802,7 +2802,7 @@ mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
             // https://github.com/kyutai-labs/pocket-tts/blob/main/pocket_tts/default_parameters.py
             inp.top_k = 50;
             inp.top_p = 1.0f;
-            inp.temp  = 0.7f;
+            inp.temp  = 0.3f;
             break;
         case PROJECTOR_TYPE_SOPRANO:
             inp.type = MTMD_GEN_PROCESS_TYPE_GEN_WAV;

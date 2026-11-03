@@ -248,6 +248,7 @@ struct mtmd_helper_gen_audio_inp {
 
     int32_t  top_k;
     float    top_p;
+    float    temp; // audio frame temperature (pocket-tts: flow noise scale), < 0 = model default, 0 = deterministic
     uint32_t seed; // UINT32_MAX for random (default: random)
 
     enum mtmd_helper_gen_audio_outtype out_type;
