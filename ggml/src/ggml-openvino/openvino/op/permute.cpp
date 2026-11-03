@@ -1,6 +1,7 @@
 #include "../node_context.h"
 #include "../op_table.h"
 #include "../utils.h"
+#include "ggml-openvino/ggml-openvino-extra.h"
 
 #include <climits>
 #include <cstdint>
@@ -183,6 +184,17 @@ OutputVector translate_permute(const NodeContext & context) {
         // 4. permute (skip for `-fa off`)
         auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
         auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
+
+        if ((op_case == 3 || op_case == 4) && context.is_static() && ggml_openvino_npu_kv_head_major_enabled() &&
+            cache_shape.rank().get_length() == 4 && cache_shape[1].is_static() &&
+            cache_shape[1].get_length() == n_heads && n_heads > 1) {
+            // Head-major cache [1, heads, rows, head_size] is already in attention layout: only cut the window.
+            // A transposed V cache [1, heads, head_size, rows] is cut on axis 3 and stays transposed.
+            const bool v_transposed = context.get_input_names()[0].find("cache_v_l") != std::string::npos;
+            auto axis = ov::op::v0::Constant::create(ov::element::i64, {1}, {v_transposed ? 3 : 2});
+            res = std::make_shared<ov::op::v8::Slice>(src, zero, attention_size, one, axis);
+            return rename_outputs_with_suffix({res}, context.get_name());
+        }
 
         if ((op_case == 3 || op_case == 4) && n_seq == 1 && perm_values == std::vector<int64_t>{0, 2, 1, 3}) {
             // one sequence: slice the cache [1, 1, ctx, n_heads * head_size] on its context axis, then split the
