@@ -100,7 +100,7 @@ static __global__ void pool2d_nchw_kernel_warp(
 
 #pragma unroll
     for (int offset = WARP_SIZE/2; offset > 0; offset >>= 1) {
-        const To other = __shfl_xor_sync(0xFFFFFFFF, res, offset, WARP_SIZE);
+        const To other = __shfl_xor_sync(GGML_CUDA_FULL_LANE_MASK, res, offset, WARP_SIZE);
         res = (op == GGML_OP_POOL_MAX) ? max(res, other) : res + other;
     }
 
