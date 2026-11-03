@@ -131,19 +131,32 @@ static inline void htp_ops_context_reset(struct htp_ops_context * octx, struct h
     octx->n_threads_div = ctx->n_threads_div;
 }
 
-static inline bool htp_ops_context_set_n_threads(struct htp_ops_context * octx, uint32_t n_threads) {
+static inline bool htp_ops_context_set_n_threads_div(
+        struct htp_ops_context * octx,
+        uint32_t n_threads,
+        struct fastdiv_values n_threads_div) {
     if (n_threads == 0 || n_threads > octx->ctx->n_threads) {
         return false;
     }
 
-    if (n_threads != octx->n_threads) {
-        octx->n_threads = n_threads;
-        octx->n_threads_div = n_threads == octx->ctx->n_threads
-            ? octx->ctx->n_threads_div
-            : init_fastdiv_values(n_threads);
-    }
+    octx->n_threads     = n_threads;
+    octx->n_threads_div = n_threads_div;
 
     return true;
+}
+
+static inline bool htp_ops_context_set_n_threads(struct htp_ops_context * octx, uint32_t n_threads) {
+    if (n_threads == 0 || n_threads > octx->ctx->n_threads) {
+        return false;
+    }
+    if (n_threads == octx->n_threads) {
+        return true;
+    }
+
+    const struct fastdiv_values n_threads_div = n_threads == octx->ctx->n_threads
+        ? octx->ctx->n_threads_div
+        : init_fastdiv_values(n_threads);
+    return htp_ops_context_set_n_threads_div(octx, n_threads, n_threads_div);
 }
 
 static inline void htp_ops_context_set_status(struct htp_ops_context * octx, int status) {
