@@ -7558,65 +7558,23 @@ struct test_topk_moe : public test_case {
 
     bool run_whole_graph() override { return true; }
 
-    // true when no routing decision of the row is a near tie: the group scores around the n_group_used-th
-    // and the experts of the kept groups around the n_expert_used-th differ by more than a backend rounding
-    bool routing_has_margin(const float * x, const std::vector<float> & bias) const {
-        const int n_expert        = ne[0];
-        const int n_exp_per_group = n_expert / n_expert_groups;
-        const int n_group_used    = n_expert_groups / 2;
-
-        // softmax is evaluated without its normalization, which keeps the order and the relative gaps
-        const double x_max = *std::max_element(x, x + n_expert);
-
-        std::vector<double> sel(n_expert);
-        double              sel_max = 0.0;
-        for (int i = 0; i < n_expert; ++i) {
-            const double p = gating_func == GATING_FUNC_SOFTMAX       ? std::exp(x[i] - x_max) :
-                             gating_func == GATING_FUNC_SIGMOID       ? 1.0 / (1.0 + std::exp(-(double) x[i])) :
-                             gating_func == GATING_FUNC_SQRT_SOFTPLUS ? std::sqrt(std::log1p(std::exp((double) x[i]))) :
-                                                                        x[i];
-            sel[i]  = p + bias[i];
-            sel_max = std::max(sel_max, std::fabs(sel[i]));
-        }
-
-        const double tol = 1e-4 * sel_max;
-
-        // value of rank n in decreasing order, rank 0 being the largest
-        auto rank = [](std::vector<double> v, int n) {
-            std::nth_element(v.begin(), v.begin() + n, v.end(), std::greater<double>());
-            return v[n];
-        };
-
-        std::vector<double> kept = sel;
-        if (n_expert_groups > 1) {
-            std::vector<double> score(n_expert_groups);
-            for (int g = 0; g < n_expert_groups; ++g) {
-                std::vector<double> grp(sel.begin() + g*n_exp_per_group, sel.begin() + (g + 1)*n_exp_per_group);
-                score[g] = rank(grp, 0) + rank(grp, 1);
-            }
-            const double score_min = rank(score, n_group_used - 1);
-            if (score_min - rank(score, n_group_used) <= tol) {
-                return false;
-            }
-            kept.clear();
-            for (int g = 0; g < n_expert_groups; ++g) {
-                if (score[g] >= score_min) {
-                    kept.insert(kept.end(), sel.begin() + g*n_exp_per_group, sel.begin() + (g + 1)*n_exp_per_group);
-                }
-            }
-        }
-
-        return n_expert_used >= (int) kept.size() || rank(kept, n_expert_used - 1) - rank(kept, n_expert_used) > tol;
-    }
-
-    // the logits of each row are drawn again until its routing has a clear margin, so backends whose gating
-    // differs by a few ulps select the same experts
+    // the selection scores (probs plus bias) of a row are a random permutation of a grid, and the experts of
+    // the n_group_used best groups move up by half a step, so every expert and group decision is one step
+    // apart; the logits are the inverse of the gating function at these scores
     void initialize_tensors(ggml_context * ctx) override {
-        std::random_device                    rd;
-        std::default_random_engine            rng(rd());
-        std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+        const int  n_expert        = ne[0];
+        const int  n_exp_per_group = n_expert / n_expert_groups;
+        const int  n_group_used    = n_expert_groups / 2;
+        const bool softmax         = gating_func == GATING_FUNC_SOFTMAX;
 
-        std::vector<float> bias(ne[0], 0.0f);
+        // softmax probs sum to one, so its grid step and bias scale with 1/n_expert
+        const double step = softmax ? 1.0 / ((double) n_expert * n_expert) : 0.5 / n_expert;
+        const double bmax = softmax ? 0.125 / n_expert : 0.2;
+
+        std::default_random_engine             rng(std::random_device{}());
+        std::uniform_real_distribution<double> dist(-bmax, bmax);
+
+        std::vector<float> bias(n_expert, 0.0f);
         if (exp_probs_b) {
             for (float & v : bias) {
                 v = dist(rng);
@@ -7624,19 +7582,69 @@ struct test_topk_moe : public test_case {
             ggml_backend_tensor_set(exp_probs_b, bias.data(), 0, ggml_nbytes(exp_probs_b));
         }
 
-        std::vector<float> x(ggml_nelements(logits));
+        std::vector<int> perm(n_expert);
+        for (int i = 0; i < n_expert; ++i) {
+            perm[i] = i;
+        }
+
+        std::vector<double> rank(n_expert);
+        std::vector<int>    score(n_expert_groups);
+        std::vector<int>    order(n_expert_groups);
+        std::vector<float>  x(ggml_nelements(logits));
         for (int64_t r = 0; r < ggml_nrows(logits); ++r) {
-            float * row = x.data() + r*ne[0];
-            do {
-                for (int64_t i = 0; i < ne[0]; ++i) {
-                    row[i] = dist(rng);
+            std::shuffle(perm.begin(), perm.end(), rng);
+            for (int i = 0; i < n_expert; ++i) {
+                rank[i] = perm[i];
+            }
+
+            if (n_expert_groups > 1) {
+                for (int g = 0; g < n_expert_groups; ++g) {
+                    const int * grp = perm.data() + g*n_exp_per_group;
+                    int         r0  = -1;
+                    int         r1  = -1;
+                    for (int i = 0; i < n_exp_per_group; ++i) {
+                        if (grp[i] > r0) {
+                            r1 = r0;
+                            r0 = grp[i];
+                        } else if (grp[i] > r1) {
+                            r1 = grp[i];
+                        }
+                    }
+                    score[g] = r0 + r1;
+                    order[g] = g;
                 }
-            } while (!routing_has_margin(row, bias));
+                std::sort(order.begin(), order.end(), [&](int a, int b) { return score[a] > score[b]; });
+                for (int k = 0; k < n_group_used; ++k) {
+                    for (int i = 0; i < n_exp_per_group; ++i) {
+                        rank[order[k]*n_exp_per_group + i] += 0.5;
+                    }
+                }
+            }
+
+            // probs = scores - bias, with softmax probs shifted to sum to one
+            double c = 0.25;
+            if (softmax) {
+                double sum = 0.0;
+                for (int i = 0; i < n_expert; ++i) {
+                    sum += rank[i]*step - bias[i];
+                }
+                c = (1.0 - sum) / n_expert;
+            }
+
+            float * row = x.data() + r*n_expert;
+            for (int i = 0; i < n_expert; ++i) {
+                const double p = c + rank[i]*step - bias[i];
+                row[i] = gating_func == GATING_FUNC_SOFTMAX       ? std::log(p) :
+                         gating_func == GATING_FUNC_SIGMOID       ? std::log(p / (1.0 - p)) :
+                         gating_func == GATING_FUNC_SQRT_SOFTPLUS ? std::log(std::expm1(p*p)) :
+                                                                    p;
+            }
         }
         ggml_backend_tensor_set(logits, x.data(), 0, ggml_nbytes(logits));
 
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
-            if (t != logits && t != exp_probs_b) {
+            const ggml_tensor * src = t->view_src ? t->view_src : t;
+            if (src != logits && src != exp_probs_b) {
                 init_tensor_uniform(t);
             }
         }
