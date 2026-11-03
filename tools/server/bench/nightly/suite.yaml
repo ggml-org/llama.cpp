@@ -63,7 +63,6 @@ suites:
     concurrency: [1, 4, 8]
     requests: {1: 16, 4: 16, 8: 32}
     warmup: 2
-    goodput_ttft_ms: 2000
     timeout_s: 1800
 
   # Mooncake trace replay at the original timestamps (AIPerf --fixed-schedule)
@@ -75,7 +74,6 @@ suites:
     max_output_tokens: 256
     block_size: 512
     slots: 2
-    goodput_ttft_ms: 10000
     timeout_s: 3600
 
   quality:

@@ -475,7 +475,6 @@ AIPERF_METRICS = [
     ("out_tps_per_user", "output_token_throughput_per_user", "avg"),
     ("out_tps_total", "output_token_throughput", "avg"),
     ("req_per_s", "request_throughput", "avg"),
-    ("goodput", "goodput", "avg"),
 ]
 
 
@@ -484,11 +483,10 @@ def aiperf_bin() -> str:
     return str(local) if local.exists() else "aiperf"
 
 
-def aiperf_base(ctx: Context, model: dict[str, Any], run_dir: Path, goodput_ttft_ms: int, timeout_s: int) -> list[str]:
+def aiperf_base(ctx: Context, model: dict[str, Any], run_dir: Path, timeout_s: int) -> list[str]:
     return [aiperf_bin(), "profile", "--model", "bench", "--url", ctx.url, "--endpoint-type", "chat", "--streaming",
             "--tokenizer", model["tokenizer"]["repo"], "--tokenizer-revision", model["tokenizer"]["revision"],
-            "--use-server-token-count", "--random-seed", "42",
-            "--goodput", f"time_to_first_token:{goodput_ttft_ms}", "--request-timeout-seconds", str(timeout_s),
+            "--use-server-token-count", "--random-seed", "42", "--request-timeout-seconds", str(timeout_s),
             "--artifact-dir", str(run_dir / "aiperf"), "--ui-type", "none"]
 
 
@@ -523,7 +521,7 @@ def suite_serving(ctx: Context, records: list[dict[str, Any]], name: str, model:
             isl, depth = shape["isl"], shape["depth"]
 
             def fn(server: Server, run_dir: Path, isl=isl, depth=depth, c=c) -> dict[str, float]:
-                cmd = aiperf_base(ctx, model, run_dir, scfg["goodput_ttft_ms"], scfg["timeout_s"])
+                cmd = aiperf_base(ctx, model, run_dir, scfg["timeout_s"])
                 cmd += ["--isl", str(isl), "--isl-stddev", "0", "--osl", str(osl), "--osl-stddev", "0",
                         "--extra-inputs", json.dumps({"ignore_eos": True, "min_tokens": osl}),
                         "--concurrency", str(c), "--request-count", str(scfg["requests"][c]),
@@ -550,7 +548,7 @@ def suite_agentic(ctx: Context, records: list[dict[str, Any]], name: str, model:
         def fn(server: Server, run_dir: Path, rows=rows) -> dict[str, float]:
             capped = run_dir / "trace.jsonl"
             capped.write_text("".join(json.dumps(r) + "\n" for r in rows))
-            cmd = aiperf_base(ctx, model, run_dir, scfg["goodput_ttft_ms"], scfg["timeout_s"])
+            cmd = aiperf_base(ctx, model, run_dir, scfg["timeout_s"])
             cmd += ["--input-file", str(capped), "--custom-dataset-type", "mooncake_trace", "--fixed-schedule",
                     "--fixed-schedule-auto-offset", "--isl-block-size", str(scfg["block_size"]),
                     "--extra-inputs", json.dumps({"ignore_eos": True})]
@@ -670,7 +668,7 @@ SUITE_FNS = {
 HEADLINE = {
     "engine": ["pp2048_d0_tps", "tg128_d0_tps", "pp2048_d32768_tps", "tg128_d32768_tps"],
     "speedbench": ["overall.pred_tps", "overall.latency_s", "overall.accept_rate"],
-    "serving": ["ttft_p50_ms", "ttft_p99_ms", "itl_p50_ms", "out_tps_total", "goodput"],
+    "serving": ["ttft_p50_ms", "ttft_p99_ms", "itl_p50_ms", "out_tps_total"],
     "agentic": ["ttft_p50_ms", "ttft_p99_ms", "itl_p50_ms", "out_tps_total", "prefix_reuse"],
     "quality": ["ppl"],
     "decision": ["latency_p50_ms", "latency_p99_ms", "decisions_per_s"],

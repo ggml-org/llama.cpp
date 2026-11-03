@@ -13,7 +13,7 @@ This first cut covers two models:
 | --- | --- | --- |
 | engine | `llama-bench` | pp2048 / tg128 tokens/s at depth 0, 8k, 32k |
 | speedbench | [speed_bench.py](../speed-bench/speed_bench.py) | per-category decode speed, latency, draft acceptance for spec none / MTP / DFlash2 at concurrency 1 and 4 |
-| serving | AIPerf | TTFT and ITL p50/p99, throughput, goodput over input length, depth and concurrency |
+| serving | AIPerf | TTFT and ITL p50/p99, throughput over input length, depth and concurrency |
 | agentic | AIPerf `mooncake_trace` | the same latency metrics plus prefix-cache reuse, replaying [traces/](traces) at their original timestamps |
 | quality | `llama-perplexity` | Wikitext-2 perplexity (10 x 512 chunks) |
 | decision | `/v1/systemone` | client latency p50/p99 and decisions/s over state length 64-2048 and concurrency 1-16 |
