@@ -141,6 +141,33 @@ bool ggml_openvino_npu_parallel_compile_enabled();
 // whole ctx; one decode model per window. Returns the base size, 0 = off.
 int ggml_openvino_npu_decode_bucket();
 
+// On-demand NPU KV cache (GGML_OPENVINO_NPU_KV_ON_DEMAND): the ggml KV buffer stays non-resident and the
+// NPU binds per-tensor L0 storage that grows (base*2^k rows, base = decode bucket or 1024) with the rows in use.
+bool ggml_openvino_npu_kv_on_demand_enabled();
+// On-demand KV with DECODE_BUCKET and KV_SLICE: K storage is [heads][rows][head_size] and V storage is
+// [heads][head_size][rows] (head-major with heads * head_size channels); every static graph binds the whole storage
+// as [1, heads, rows, head_size] / [1, heads, head_size, rows], and attention uses V^T.
+bool ggml_openvino_npu_kv_head_major_enabled();
+void ggml_openvino_kv_storage_register(void * data, size_t row_bytes, size_t rows);
+void ggml_openvino_kv_storage_unregister(const void * base, size_t size);
+// Storage address backing ggml address `ptr` with at least `bytes` valid (grown if needed);
+// nullptr if `ptr` is not inside an on-demand KV tensor.
+void * ggml_openvino_kv_storage(const void * ptr, size_t bytes);
+// Grows the storage of the on-demand KV tensor at `data` to at least `rows` rows (head-major when heads > 0);
+// true if existing storage moved.
+bool ggml_openvino_kv_storage_reserve(const void * data, size_t rows, size_t heads = 0);
+// Rows currently backed by storage for the on-demand KV tensor at `data` (0 if none).
+size_t ggml_openvino_kv_storage_capacity(const void * data);
+enum ggml_openvino_kv_copy_op { GGML_OPENVINO_KV_READ, GGML_OPENVINO_KV_WRITE, GGML_OPENVINO_KV_FILL };
+// Host access by ggml address in the ggml row layout (FILL uses *host as the byte value); false if not on-demand KV.
+bool ggml_openvino_kv_storage_copy(const void * ptr, void * host, size_t size, ggml_openvino_kv_copy_op op);
+// Writes rows [dst_row, dst_row + n) of head-major storage of the KV tensor at `data` from `src`, laid out as
+// [heads][src_stride] entries of (row_bytes / heads) bytes, starting at entry src_col of every head.
+// False if `data` is not head-major on-demand KV.
+bool ggml_openvino_kv_storage_write_rows(const void * data, const void * src, size_t src_stride, size_t src_col,
+                                         size_t dst_row, size_t n);
+void ggml_openvino_kv_storage_clear(const void * base, size_t size, uint8_t value);
+
 // Check if running on a GPU (GPU, GPU.0, GPU.1, ...)
 bool ggml_openvino_is_gpu();
 

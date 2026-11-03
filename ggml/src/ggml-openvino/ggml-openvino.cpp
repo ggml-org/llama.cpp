@@ -84,6 +84,10 @@ struct ggml_backend_openvino_buffer_context {
     // Set for a model buffer that directly wraps the loader's GGUF mmap.
     bool external_memory = false;
 
+    // KV buffer whose tensors are backed by on-demand L0 storage (GGML_OPENVINO_NPU_KV_ON_DEMAND); its own
+    // memory is never touched, so it stays demand-zero and non-resident.
+    bool kv_on_demand = false;
+
     // Wrapping of the buffer
     std::shared_ptr<ov::Tensor> ov_buffer;
 
@@ -109,7 +113,7 @@ struct ggml_backend_openvino_buffer_context {
         ov_buffer = std::make_shared<ov::Tensor>(ov::element::u8, ov::Shape{size}, data);
     }
 
-    ggml_backend_openvino_buffer_context(int device, size_t size, bool is_remote = false) :
+    ggml_backend_openvino_buffer_context(int device, size_t size, bool is_remote = false, bool lazy = false) :
         device(device),
         name(std::string(GGML_OPENVINO_NAME) + std::to_string(device)),
         id([]() {
@@ -148,7 +152,7 @@ struct ggml_backend_openvino_buffer_context {
             // compute buffer still goes lazy.
             const size_t lazy_host_threshold =
                 (size_t) ggml_openvino_getenv_int("GGML_OPENVINO_LAZY_HOST_THRESHOLD_MB", 2048) * 1024 * 1024;
-            const bool lazy_host_alloc = strict_mmap && size >= lazy_host_threshold;
+            const bool lazy_host_alloc = lazy || (strict_mmap && size >= lazy_host_threshold);
             // Prefer importable Level Zero host memory on NPU: the plugin imports it without an
             // extra host-to-device copy each infer.
             if (!lazy_host_alloc && ggml_openvino_is_npu() && ggml_openvino_npu_l0_host_tensors_enabled() &&
@@ -262,6 +266,9 @@ struct ggml_backend_openvino_buffer_context {
             delete pair.second;
         }
         tensor_extras.clear();
+        if (kv_on_demand) {
+            ggml_openvino_kv_storage_unregister(data, size);
+        }
 #ifdef _WIN32
         if (spill_mapping != nullptr) {
             VirtualFree(spill_mapping, 0, MEM_RELEASE);
@@ -399,6 +406,26 @@ static enum ggml_status ggml_backend_openvino_buffer_init_tensor(ggml_backend_bu
         tensor->data = (char *) ctx->data + ((char *) tensor->data - (char *) data_prev);
     }
 
+    // On-demand NPU KV: swap the eagerly committed buffer for demand-zero memory at its first KV tensor
+    // and register every KV tensor; the NPU binds grown L0 storage instead.
+    const bool is_kv_tensor = strncmp(tensor->name, "cache_k_l", 9) == 0 || strncmp(tensor->name, "cache_v_l", 9) == 0;
+    if (is_kv_tensor && tensor->view_src == nullptr && !ctx->is_remote && ggml_openvino_npu_kv_on_demand_enabled() &&
+        tensor->ne[2] == 1 && tensor->ne[3] == 1 && tensor->nb[1] == ggml_row_size(tensor->type, tensor->ne[0])) {
+        if (!ctx->kv_on_demand && ctx->tensor_extras.empty() && tensor->data == ctx->data) {
+            auto device = ctx->device;
+            auto size = ctx->size;
+            auto * data_prev = ctx->data;
+            delete ctx;
+            ctx = new ggml_backend_openvino_buffer_context(device, size, false, true);
+            ctx->kv_on_demand = true;
+            buffer->context = ctx;
+            tensor->data = (char *) ctx->data + ((char *) tensor->data - (char *) data_prev);
+        }
+        if (ctx->kv_on_demand) {
+            ggml_openvino_kv_storage_register(tensor->data, tensor->nb[1], tensor->ne[1]);
+        }
+    }
+
     // Views share the extra from view_src
     if (tensor->view_src != nullptr) {
         GGML_ASSERT(tensor->view_src->buffer->buft == buffer->buft);
@@ -470,7 +497,10 @@ static void ggml_backend_openvino_buffer_memset_tensor(ggml_backend_buffer_t buf
             GGML_LOG_ERROR("%s: clEnqueueMemFillINTEL not available for GPU buffer\n", __func__);
         }
     } else {
-        memset((char *) tensor->data + offset, value, size);
+        if (!ctx->kv_on_demand ||
+            !ggml_openvino_kv_storage_copy((char *) tensor->data + offset, &value, size, GGML_OPENVINO_KV_FILL)) {
+            memset((char *) tensor->data + offset, value, size);
+        }
     }
 }
 
@@ -605,7 +635,9 @@ static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer
             } else {
                 GGML_LOG_ERROR("%s: clEnqueueMemcpyINTEL not available for GPU buffer\n", __func__);
             }
-        } else {
+        } else if (!ctx->kv_on_demand || !ggml_openvino_kv_storage_copy((char *) tensor->data + offset,
+                                                                        const_cast<void *>(data), size,
+                                                                        GGML_OPENVINO_KV_WRITE)) {
             memcpy((char *) tensor->data + offset, data, size);
         }
 
@@ -653,7 +685,8 @@ static void ggml_backend_openvino_buffer_get_tensor(ggml_backend_buffer_t buffer
         } else {
             GGML_LOG_ERROR("%s: clEnqueueMemcpyINTEL not available for GPU buffer\n", __func__);
         }
-    } else {
+    } else if (!ctx->kv_on_demand ||
+               !ggml_openvino_kv_storage_copy((const char *) tensor->data + offset, data, size, GGML_OPENVINO_KV_READ)) {
         memcpy(data, (const char *) tensor->data + offset, size);
     }
 }
@@ -703,7 +736,17 @@ static bool ggml_backend_openvino_buffer_cpy_tensor(ggml_backend_buffer_t buffer
 
     // Host buffer - can copy from any host buffer
     if (ggml_backend_buffer_is_host(src->buffer)) {
-        memcpy(dst->data, src->data, ggml_nbytes(src));
+        const size_t n = ggml_nbytes(src);
+        std::vector<uint8_t> staged;
+        const void * from = src->data;
+        if (ggml_openvino_kv_storage_copy(src->data, nullptr, 0, GGML_OPENVINO_KV_READ)) {
+            staged.resize(n);
+            ggml_openvino_kv_storage_copy(src->data, staged.data(), n, GGML_OPENVINO_KV_READ);
+            from = staged.data();
+        }
+        if (!ggml_openvino_kv_storage_copy(dst->data, const_cast<void *>(from), n, GGML_OPENVINO_KV_WRITE)) {
+            memcpy(dst->data, from, n);
+        }
         return true;
     }
     return false;
@@ -725,6 +768,8 @@ static void ggml_backend_openvino_buffer_clear(ggml_backend_buffer_t buffer, uin
         } else {
             GGML_LOG_WARN("%s: clEnqueueMemFillINTEL not available for GPU buffer clear\n", __func__);
         }
+    } else if (ctx->kv_on_demand) {
+        ggml_openvino_kv_storage_clear(ctx->data, ctx->size, value);
     } else {
         memset(ctx->data, value, ctx->size);
     }

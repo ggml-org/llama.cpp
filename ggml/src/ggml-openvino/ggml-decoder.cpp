@@ -1350,6 +1350,14 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op,
                 const int attention_size = m_compute_params.attention_size;
                 input_shape[2] = attention_size;
             }
+            if (layer.has_value() && !is_swa_layer(*layer) && ggml_openvino_npu_kv_head_major_enabled()) {
+                GGML_ASSERT(input_shape[1].get_length() == 1);
+                const int64_t heads = get_n_heads_kv_for_tensor(input);
+                const int64_t head_size = input_shape[3].get_length() / heads;
+                input_shape = name.rfind("cache_v_l", 0) == 0 ?
+                                  ov::PartialShape{1, heads, head_size, input_shape[2]} :
+                                  ov::PartialShape{1, heads, input_shape[2], head_size};
+            }
         }
         if ((is_stateful() && !is_flat_kv) || is_kvcache_4d(input)) {
             // Convert stateless KV cache layout [1, 1, seq, n_heads_kv * head_size]
@@ -1477,7 +1485,10 @@ void GgmlOvDecoder::add_extra_inputs() {
         const auto chunk_size = static_cast<size_t>(m_prefill_chunk_size);
         const auto input_len = static_cast<size_t>(m_compute_params.input_len);
         const auto num_chunks = (input_len + chunk_size - 1) / chunk_size;
-        const auto past_capacity = std::max(chunk_size, (num_chunks - 1) * chunk_size);
+        // Head-major KV: the past is the whole cache storage [1, heads, attention_size, head_size].
+        const bool head_major = ggml_openvino_npu_kv_head_major_enabled();
+        const auto past_capacity = head_major ? static_cast<size_t>(m_compute_params.attention_size) :
+                                                std::max(chunk_size, (num_chunks - 1) * chunk_size);
         for (const auto & [kv_name, kv_tensor] : m_inputs) {
             if (kv_name.rfind("cache_k_l", 0) != 0 && kv_name.rfind("cache_v_l", 0) != 0) {
                 continue;
@@ -1488,8 +1499,13 @@ void GgmlOvDecoder::add_extra_inputs() {
             const auto head_size = combined_dim / n_heads_kv;
             // flash_attn_ext looks the past input up by layer, so drop the graph-ordinal suffix ("#l12").
             const std::string cache_name = kv_name.substr(0, kv_name.find('#'));
+            const bool v_transposed = head_major && kv_name.rfind("cache_v_l", 0) == 0;
             m_model_extra_inputs["ggml_hfa_past_" + cache_name] = {
-                get_ov_type(kv_tensor), ov::Shape{1, past_capacity, n_heads_kv, head_size}, 0, true, {}, -1};
+                get_ov_type(kv_tensor),
+                v_transposed ? ov::Shape{1, n_heads_kv, head_size, past_capacity} :
+                head_major   ? ov::Shape{1, n_heads_kv, past_capacity, head_size} :
+                               ov::Shape{1, past_capacity, n_heads_kv, head_size},
+                0, true, {}, -1};
         }
         m_model_extra_inputs["ggml_hfa_mask"] = {
             ov::element::f16, ov::Shape{1, 1, chunk_size, past_capacity + chunk_size}, 0, true, {}, -1};

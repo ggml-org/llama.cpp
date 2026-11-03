@@ -276,7 +276,7 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
     // Default path: explicit Broadcast → SDPA. Kept as the fallback because
     // (a) it goes through the GPU plugin's micro-SDPA fast path (FlashAttention
     // tiles via DPAS), and (b) the manual path above is still being validated.
-    auto tile_kv = [&](int64_t n_heads, int64_t n_heads_kv, int64_t hs, ov::Output<Node> kv) {
+    auto tile_kv = [&](int64_t n_heads, int64_t n_heads_kv, int64_t hs, ov::Output<Node> kv, bool transposed = false) {
         int64_t f = n_heads / n_heads_kv;
         if (f > 1 && n_heads_kv > 1) {
             ov::Output<ov::Node> kv_broadcast_shape;
@@ -287,8 +287,9 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
 
             kv_broadcast_shape = ov::op::v0::Constant::create(ov::element::i64, {5},
                                                               {(int64_t) 1, (int64_t) 1, f, (int64_t) 1, (int64_t) 1});
-            new_kv_shape =
-                ov::op::v0::Constant::create(ov::element::i64, {4}, {(int64_t) 0, n_heads, (int64_t) -1, hs});
+            new_kv_shape = ov::op::v0::Constant::create(
+                ov::element::i64, {4},
+                transposed ? std::vector<int64_t>{0, n_heads, hs, -1} : std::vector<int64_t>{0, n_heads, -1, hs});
             //    ov::element::i64, {5}, {(int64_t) 1, (int64_t) 1, factor, (int64_t) 1, (int64_t) 1});
             //new_kv_shape =
             //    ov::op::v0::Constant::create(ov::element::i64, {4}, {(int64_t) 0, num_heads, (int64_t) -1, head_size});
@@ -300,6 +301,10 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
         return kv;
     };
 
+    // Transposed V cache [1, heads, head_size, rows] (GenAI's NPUW_LLM_OPTIMIZE_V_TENSORS layout).
+    const bool v_transposed = ggml_openvino_npu_kv_head_major_enabled() && context.is_static() &&
+                              context.get_input_names()[2].find("cache_v_l") != std::string::npos;
+
     // the HFA prefill path has no sinks
     const bool use_hfa_gate =
         ggml_openvino_npu_hfa_prefill_enabled() && context.is_static() && context.is_prefill() && has_mask && !has_sink;
@@ -310,24 +315,40 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
         auto hfa_mask = context.get_input("ggml_hfa_mask");
         auto present_k_updates = find_scatter_updates(k_cache);
         auto present_v_updates = find_scatter_updates(v_cache);
+        if (!present_v_updates && v_transposed) {
+            // Transposed V prefill outputs the chunk rows themselves (see set_rows); the window Slice wraps them.
+            ov::Output<ov::Node> rows = v_cache;
+            while (auto slice = ov::as_type_ptr<ov::op::v8::Slice>(rows.get_node_shared_ptr())) {
+                rows = slice->input_value(0);
+            }
+            present_v_updates = rows;
+        }
         OPENVINO_ASSERT(present_k_updates.has_value() && present_v_updates.has_value(),
                         "HFA prefill requires ScatterUpdate-backed K/V cache inputs");
-        auto present_k = reshape_present_kv(*present_k_updates, num_heads_kv, head_size);
-        auto present_v = reshape_present_kv(*present_v_updates, num_heads_kv, head_size);
-        // Past K/V come in ggml cache layout [1, past, heads, head_size]; NPUW HFA reads tiles from it directly.
-        auto to_bhsd = ov::op::v0::Constant::create(ov::element::i64, {4}, {0, 2, 1, 3});
-        k = std::make_shared<ov::op::v0::Concat>(
-            ov::OutputVector{std::make_shared<ov::op::v1::Transpose>(past_k, to_bhsd), present_k}, 2);
-        v = std::make_shared<ov::op::v0::Concat>(
-            ov::OutputVector{std::make_shared<ov::op::v1::Transpose>(past_v, to_bhsd), present_v}, 2);
+        if (ggml_openvino_npu_kv_head_major_enabled()) {
+            // Head-major cache: past and the new rows are already [1, heads, rows, head_size]
+            // (V: [1, heads, head_size, rows] when transposed).
+            k = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{past_k, *present_k_updates}, 2);
+            v = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{past_v, *present_v_updates},
+                                                     v_transposed ? 3 : 2);
+        } else {
+            auto present_k = reshape_present_kv(*present_k_updates, num_heads_kv, head_size);
+            auto present_v = reshape_present_kv(*present_v_updates, num_heads_kv, head_size);
+            // Past K/V come in ggml cache layout [1, past, heads, head_size]; NPUW HFA reads tiles from it directly.
+            auto to_bhsd = ov::op::v0::Constant::create(ov::element::i64, {4}, {0, 2, 1, 3});
+            k = std::make_shared<ov::op::v0::Concat>(
+                ov::OutputVector{std::make_shared<ov::op::v1::Transpose>(past_k, to_bhsd), present_k}, 2);
+            v = std::make_shared<ov::op::v0::Concat>(
+                ov::OutputVector{std::make_shared<ov::op::v1::Transpose>(past_v, to_bhsd), present_v}, 2);
+        }
         k = tile_kv(num_heads, num_heads_kv, head_size, k);
-        v = tile_kv(num_heads, num_heads_kv, head_size, v);
+        v = tile_kv(num_heads, num_heads_kv, head_size, v, v_transposed);
 
         auto q_scaled = std::make_shared<ov::op::v1::Multiply>(q, scale_node);
         auto scores = std::make_shared<ov::op::v0::MatMul>(q_scaled, k, false, true);
         auto masked_scores = std::make_shared<ov::op::v1::Add>(scores, hfa_mask);
         auto probs = std::make_shared<ov::op::v8::Softmax>(masked_scores, -1);
-        auto attended = std::make_shared<ov::op::v0::MatMul>(probs, v);
+        auto attended = std::make_shared<ov::op::v0::MatMul>(probs, v, false, v_transposed);
         auto transposed = std::make_shared<ov::op::v1::Transpose>(
             attended, ov::op::v0::Constant::create(ov::element::i64, {4}, {0, 2, 1, 3}));
         auto output_shape = ov::op::v0::Constant::create(
@@ -345,7 +366,22 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
     //k = tile_kv(q_shape[1], k_shape[1], q_shape[3], k);
     //v = tile_kv(q_shape[1], k_shape[1], q_shape[3], v);
     k = tile_kv(num_heads, num_heads_kv, head_size, k);
-    v = tile_kv(num_heads, num_heads_kv, head_size, v);
+    v = tile_kv(num_heads, num_heads_kv, head_size, v, v_transposed);
+
+    if (v_transposed) {
+        // SDPA has no transposed-V form: decompose it as GenAI does, with MatMul(probs, V^T, transpose_b).
+        auto q_scaled = std::make_shared<ov::op::v1::Multiply>(q, scale_node);
+        ov::Output<ov::Node> scores = std::make_shared<ov::op::v0::MatMul>(q_scaled, k, false, true);
+        if (has_mask) {
+            scores = std::make_shared<ov::op::v1::Add>(scores, mask);
+        }
+        auto probs = std::make_shared<ov::op::v8::Softmax>(scores, -1);
+        auto attended = std::make_shared<ov::op::v0::MatMul>(probs, v, false, true);
+        res = std::make_shared<ov::op::v1::Transpose>(
+            attended, ov::op::v0::Constant::create(ov::element::i64, {4}, {0, 2, 1, 3}));
+        res = std::make_shared<ov::op::v0::Convert>(res, ov::element::f32);
+        return rename_outputs_with_suffix({res}, context.get_name());
+    }
 
     // With n_seq_active read from the mask shape, the GPU plugin knows Q's head size and uses its fused SDPA kernel.
     // That kernel works on blocks of keys: a block fully masked with -inf for a row gives exp(-inf - -inf) = NaN,
