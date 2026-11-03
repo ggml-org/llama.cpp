@@ -27,7 +27,8 @@ on:
       '**/.cmake',
       'ggml/src/*',
       'ggml/src/ggml-cpu/**',
-      'ggml/src/ggml-cuda/**'
+      'ggml/src/ggml-cuda/**',
+      'ggml/src/ggml-hip/**'
     ]
 
 cache-mode: none
@@ -93,12 +94,54 @@ jobs:
           save: true
 
   gpu-rocm:
-    runs-on: [self-hosted, Linux, AMD]
+    runs-on: [self-hosted, Linux, X64, strix-halo, devlab-dispatch]
+    timeout-minutes: 120
+
+    env:
+      ROCM_VERSION: "10.0.0"
 
     steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
+
+      - name: Verify GPU device
+        run: |
+          ls /dev/kfd /dev/dri/renderD* || { echo "ERROR: no amdgpu compute device"; exit 1; }
+
+      # same TheRock wheels as the ubuntu-24-rocm release build, so the runner does not need a ROCm install
+      - name: Setup TheRock with Wheels
+        run: |
+          python3 -m venv "$RUNNER_TEMP/rocm"
+          "$RUNNER_TEMP/rocm/bin/python" -m pip install --index-url https://stable.repo.amd.com/rocm/whl-next/ "rocm[libraries,devel]==${ROCM_VERSION}"
+          ROCM_PATH=$("$RUNNER_TEMP/rocm/bin/rocm-sdk" path --root)
+          {
+            echo "ROCM_PATH=$ROCM_PATH"
+            echo "HIP_PATH=$ROCM_PATH"
+            echo "CMAKE_PREFIX_PATH=$("$RUNNER_TEMP/rocm/bin/rocm-sdk" path --cmake)"
+            echo "LD_LIBRARY_PATH=$ROCM_PATH/lib:${LD_LIBRARY_PATH:-}"
+          } >> "$GITHUB_ENV"
+          "$RUNNER_TEMP/rocm/bin/rocm-sdk" path --bin >> "$GITHUB_PATH"
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
+        with:
+          restore: false
+          save: false
+
+      # ROCm is installed again on each run, so hash the compiler content, not its mtime
+      - name: Tune ccache for reinstalled ROCm toolchain
+        run: |
+          ccache --set-config=compiler_check=content
+          ccache --set-config=sloppiness=time_macros,include_file_mtime,include_file_ctime
+          ccache --set-config=depend_mode=true
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        with:
+          key: self-hosted-gpu-rocm-gfx1151
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
 
       - name: Test
         id: ggml-ci
@@ -111,6 +154,18 @@ jobs:
         run: |
           rocminfo
           GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS=gfx1151 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: self-hosted-gpu-rocm-gfx1151
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true
 
   # TODO: provision AMD GPU machine
   # amd-rocm:
