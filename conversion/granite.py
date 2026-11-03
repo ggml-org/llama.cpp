@@ -126,9 +126,8 @@ class GraniteSWAModel(GraniteModel):
             # 0 means NoPE
             swa_thetas = {t for t, s in zip(layer_rope_theta, is_swa) if s and t}
             full_thetas = {t for t, s in zip(layer_rope_theta, is_swa) if not s and t}
-            # GGUF holds one theta per attention type (rope_freq_base, rope_freq_base_swa), written by
-            # the base class from rope_parameters. Mixed values within a type need that path extended
-            # (the "sliding_attention" handling and add_rope_freq_base_swa in conversion/base.py).
+            # GGUF stores one theta per attention type (rope_freq_base, rope_freq_base_swa). To allow mixed values
+            # within a type, extend the "sliding_attention" / add_rope_freq_base_swa handling in conversion/base.py.
             if len(swa_thetas) > 1 or len(full_thetas) > 1:
                 raise ValueError(
                     f"granite_swa: layer_rope_theta varies within an attention type, which is not supported "
