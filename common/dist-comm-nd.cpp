@@ -120,6 +120,15 @@ static constexpr size_t ND_FIXED_SLOT = 256 * 1024;
 static constexpr size_t ND_PAGE       = 4096;
 static_assert(ND_FIXED_SLOT % ND_PAGE == 0, "fixed slot must be a whole number of pages");
 
+// LLAMA_DIST_TP_RDMA_SMALL_LANE=<bytes> (opt-in, a whole number of pages below 256 KiB; implies the
+// fixed slots above): a second connection on every edge whose slots are that size. A message
+// (header and payload) that fits in one of its slots goes there, everything else on the 256 KiB
+// connection. Each connection keeps its own flow control and acks, and both share one completion
+// queue. Data chunks carry one sequence number across the two, and the receiver takes them in that
+// order, so the byte stream is the same whichever connection a chunk rode. On a provider that
+// moves whole slots, a decode message of a few KiB then costs a few KiB on the wire, not 256 KiB.
+static constexpr uintptr_t ND_CTX_LANE1 = 1024;   // request contexts of the small connection start here
+
 // out-of-band negotiation record, exchanged over the TCP ring sockets
 struct nd_hello {
     uint32_t magic;
@@ -171,6 +180,33 @@ static bool nd_fixed_slot() {
     return on;
 }
 
+// slot size of the small connection, 0 when there is none
+static size_t nd_small_lane() {
+    static const size_t sz = []() -> size_t {
+        const char * v = std::getenv("LLAMA_DIST_TP_RDMA_SMALL_LANE");
+        if (!v || v[0] == '\0' || v[0] == '0') {
+            return 0;
+        }
+        const long long b = std::strtoll(v, nullptr, 10);
+        if (b < (long long)ND_PAGE || b >= (long long)ND_FIXED_SLOT || b % (long long)ND_PAGE != 0) {
+            std::fprintf(stderr, "[dist-tp][nd] LLAMA_DIST_TP_RDMA_SMALL_LANE=%s ignored: needs a whole number of "
+                                 "%zu B pages below %zu B\n", v, ND_PAGE, ND_FIXED_SLOT);
+            return 0;
+        }
+        std::fprintf(stderr, "[dist-tp][nd] small connection: messages up to %zu B ride a second connection with "
+                             "%lld B slots, the rest %zu B slots\n",
+                     (size_t)b - sizeof(nd_msg_hdr), b, ND_FIXED_SLOT);
+        return (size_t)b;
+    }();
+    return sz;
+}
+
+// the negotiation version: a peer with a different small connection setting must not connect
+static uint32_t nd_hello_ver() {
+    const size_t s = nd_small_lane();
+    return s ? (uint32_t)(0x100u | (s / ND_PAGE)) : ND_HELLO_VER;
+}
+
 #define ND_LOG_ERR(...) std::fprintf(stderr, "[dist-tp][nd] " __VA_ARGS__)
 #define ND_LOG_DBG(...) do { if (nd_debug()) std::fprintf(stderr, "[dist-tp][nd] " __VA_ARGS__); } while (0)
 
@@ -200,6 +236,7 @@ struct nd_rx_item {
     int      slot;
     uint32_t len;
     uint32_t off;
+    uint32_t seq;   // the chunk header's sequence number
 };
 
 struct nd_addr_buf { char s[32]; };
@@ -264,6 +301,16 @@ struct dist_nd_conn {
     size_t pay_max  = ND_PAYLOAD;          // payload bytes one chunk carries behind its header
     size_t ack_sz   = ND_ACK_SLOT_BYTES;   // the dedicated ack slot after the tx ring
 
+    // Small connection (nd_small_lane): root is the connection the caller holds and sm its small
+    // twin. The twin shares root's adapter, overlapped file and completion queue, so every poll goes
+    // through root, and its request contexts start at ND_CTX_LANE1 so root can route them.
+    dist_nd_conn * root     = this;
+    dist_nd_conn * sm       = nullptr;
+    bool           shared   = false;   // adapter, file and cq belong to root
+    uintptr_t      ctx_base = 0;
+    uint32_t       tx_dseq  = 0;       // root only, with sm: next data sequence number out, over both
+    uint32_t       rx_dseq  = 0;       // root only, with sm: next data sequence number in
+
     // bytes a send of len puts on the wire: a whole slot in fixed mode, else exactly len
     ULONG wire_len(size_t len) const {
         return (ULONG)(fixed ? slot_sz : len);
@@ -286,7 +333,7 @@ struct dist_nd_conn {
         sge.Buffer            = rx_slot(i);
         sge.BufferLength      = (ULONG)slot_sz;
         sge.MemoryRegionToken = rx_token;
-        return SUCCEEDED(qp->Receive(nd_ctx_recv(i), &sge, 1));
+        return SUCCEEDED(qp->Receive((void *)(ctx_base + (uintptr_t)nd_ctx_recv(i)), &sge, 1));
     }
 
     ~dist_nd_conn() {
@@ -299,6 +346,8 @@ struct dist_nd_conn {
             }
             notify_armed = false;
         }
+        delete sm;   // the twin goes first: it uses this connection's adapter and completion queue
+        sm = nullptr;
         if (connector) {
             HRESULT hr = connector->Disconnect(&ov.ov);
             if (hr == ND_PENDING) {
@@ -316,11 +365,11 @@ struct dist_nd_conn {
             if (hr == ND_PENDING) { rx_mr->GetOverlappedResult(&ov.ov, TRUE); }
             rx_mr->Release();
         }
-        if (cq)        { cq->Release(); }
+        if (cq && !shared) { cq->Release(); }
         if (listener)  { listener->Release(); }
         if (connector) { connector->Release(); }
-        if (adapter)   { adapter->Release(); }
-        if (file && file != INVALID_HANDLE_VALUE) {
+        if (adapter && !shared) { adapter->Release(); }
+        if (file && file != INVALID_HANDLE_VALUE && !shared) {
             CloseHandle(file);
         }
         _aligned_free(tx_buf);
@@ -431,7 +480,7 @@ static bool nd_setup(std::unique_ptr<dist_nd_conn> & conn, const struct sockaddr
                (unsigned long)info.MaxTransferLength, (size_t)info.MaxRegistrationSize,
                (unsigned long)info.MaxReceiveQueueDepth, (unsigned long)info.MaxInitiatorQueueDepth,
                (unsigned long)info.MaxCompletionQueueDepth);
-    if (nd_fixed_slot()) {
+    if (nd_fixed_slot() || nd_small_lane() != 0) {
         c->fixed   = true;
         c->slot_sz = ND_FIXED_SLOT;
         c->pay_max = ND_FIXED_SLOT - sizeof(nd_msg_hdr);
@@ -477,7 +526,9 @@ static bool nd_setup(std::unique_ptr<dist_nd_conn> & conn, const struct sockaddr
     c->tx_token = c->tx_mr->GetLocalToken();
     c->rx_token = c->rx_mr->GetLocalToken();
 
-    const ULONG cq_depth = std::min<ULONG>(info.MaxCompletionQueueDepth, 2 * ND_RX_DEPTH + 8);
+    // with a small connection the queue also takes its completions (nd_add_small_lane)
+    const ULONG cq_depth = std::min<ULONG>(info.MaxCompletionQueueDepth,
+                                           nd_small_lane() ? 4 * ND_RX_DEPTH + 16 : 2 * ND_RX_DEPTH + 8);
     hr = c->adapter->CreateCompletionQueue(IID_IND2CompletionQueue, c->file, cq_depth, 0, 0, (void **)&c->cq);
     if (FAILED(hr)) {
         ND_LOG_DBG("CreateCompletionQueue(depth=%lu) failed: 0x%08lx\n", (unsigned long)cq_depth, (unsigned long)hr);
@@ -508,6 +559,91 @@ static bool nd_setup(std::unique_ptr<dist_nd_conn> & conn, const struct sockaddr
     ND_LOG_DBG("posted %d receives of %zu B each\n", ND_RX_DEPTH, c->slot_sz);
 
     conn = std::move(c);
+    return true;
+}
+
+// Adds the small connection to c (nd_small_lane) before c listens or dials: its own page-aligned
+// buffers, registrations, queue pair and connector, on c's adapter, file and completion queue.
+static bool nd_add_small_lane(dist_nd_conn * c) {
+    const size_t sz = nd_small_lane();
+    auto s = std::make_unique<dist_nd_conn>();
+    if (sz == 0 || !s->ov.init() || !s->ov_listen.init() || !s->ov_cq.init()) {
+        return false;
+    }
+    s->shared   = true;
+    s->root     = c;
+    s->ctx_base = ND_CTX_LANE1;
+    s->adapter  = c->adapter;
+    s->file     = c->file;
+    s->cq       = c->cq;
+    s->local    = c->local;
+    s->tcp_out  = c->tcp_out;
+    s->tcp_in   = c->tcp_in;
+    s->fixed    = true;
+    s->slot_sz  = sz;
+    s->pay_max  = sz - sizeof(nd_msg_hdr);
+    s->ack_sz   = sz;
+
+    ND2_ADAPTER_INFO info = {};
+    info.InfoVersion = ND_VERSION_2;
+    ULONG cb_info = sizeof(info);
+    HRESULT hr = c->adapter->Query(&info, &cb_info);
+    if (FAILED(hr)) {
+        ND_LOG_ERR("small connection: adapter Query failed: 0x%08lx\n", (unsigned long)hr);
+        return false;
+    }
+    const size_t tx_bytes = s->slot_sz * ND_TX_DEPTH + s->ack_sz;
+    const size_t rx_bytes = s->slot_sz * ND_RX_DEPTH;
+    s->tx_buf = (uint8_t *)_aligned_malloc(tx_bytes, ND_PAGE);
+    s->rx_buf = (uint8_t *)_aligned_malloc(rx_bytes, ND_PAGE);
+    if (!s->tx_buf || !s->rx_buf) {
+        return false;
+    }
+    memset(s->tx_buf, 0, tx_bytes);
+    memset(s->rx_buf, 0, rx_bytes);
+
+    hr = c->adapter->CreateMemoryRegion(IID_IND2MemoryRegion, c->file, (void **)&s->tx_mr);
+    if (FAILED(hr)) {
+        return false;
+    }
+    hr = c->adapter->CreateMemoryRegion(IID_IND2MemoryRegion, c->file, (void **)&s->rx_mr);
+    if (FAILED(hr)) {
+        return false;
+    }
+    hr = s->tx_mr->Register(s->tx_buf, tx_bytes, ND_MR_FLAG_ALLOW_LOCAL_WRITE, &s->ov.ov);
+    if (!nd_done(hr, s->tx_mr, &s->ov.ov)) {
+        ND_LOG_ERR("small connection: tx Register failed: 0x%08lx\n", (unsigned long)hr);
+        return false;
+    }
+    hr = s->rx_mr->Register(s->rx_buf, rx_bytes, ND_MR_FLAG_ALLOW_LOCAL_WRITE, &s->ov.ov);
+    if (!nd_done(hr, s->rx_mr, &s->ov.ov)) {
+        ND_LOG_ERR("small connection: rx Register failed: 0x%08lx\n", (unsigned long)hr);
+        return false;
+    }
+    s->tx_token = s->tx_mr->GetLocalToken();
+    s->rx_token = s->rx_mr->GetLocalToken();
+
+    const ULONG iq_depth = std::min<ULONG>(info.MaxInitiatorQueueDepth, ND_RX_DEPTH);
+    hr = c->adapter->CreateQueuePair(IID_IND2QueuePair, c->cq, c->cq, nullptr,
+                                     ND_RX_DEPTH, iq_depth, 1, 1, 0, (void **)&s->qp);
+    if (FAILED(hr)) {
+        ND_LOG_ERR("small connection: CreateQueuePair on the shared completion queue failed: 0x%08lx\n",
+                   (unsigned long)hr);
+        return false;
+    }
+    hr = c->adapter->CreateConnector(IID_IND2Connector, c->file, (void **)&s->connector);
+    if (FAILED(hr)) {
+        ND_LOG_ERR("small connection: CreateConnector failed: 0x%08lx\n", (unsigned long)hr);
+        return false;
+    }
+    for (int i = 0; i < ND_RX_DEPTH; i++) {
+        if (!s->post_rx(i)) {
+            ND_LOG_ERR("small connection: initial Receive post failed at slot %d\n", i);
+            return false;
+        }
+    }
+    ND_LOG_DBG("small connection: posted %d receives of %zu B each\n", ND_RX_DEPTH, s->slot_sz);
+    c->sm = s.release();
     return true;
 }
 
@@ -601,11 +737,13 @@ static bool nd_listen(dist_nd_conn * c) {
     return true;
 }
 
-static bool nd_accept(dist_nd_conn * c) {
+// Takes the next connection request on c's listener into on (c itself, or then its small twin:
+// the peer dials the two in that order).
+static bool nd_accept(dist_nd_conn * c, dist_nd_conn * on) {
     ND_LOG_DBG("waiting for a connection request (timeout %ds)\n", ND_CONNECT_TIMEOUT_S);
     // GetConnectionRequest blocks, so bound the wait in case the peer never dials in
-    auto pending = std::async(std::launch::async, [c]() {
-        return c->listener->GetConnectionRequest(c->connector, &c->ov_listen.ov);
+    auto pending = std::async(std::launch::async, [c, on]() {
+        return c->listener->GetConnectionRequest(on->connector, &c->ov_listen.ov);
     });
     if (pending.wait_for(std::chrono::seconds(ND_CONNECT_TIMEOUT_S)) != std::future_status::ready) {
         c->listener->CancelOverlappedRequests();
@@ -620,44 +758,22 @@ static bool nd_accept(dist_nd_conn * c) {
     }
     struct sockaddr_in peer = {};
     ULONG cb_peer = sizeof(peer);
-    if (SUCCEEDED(c->connector->GetPeerAddress((struct sockaddr *)&peer, &cb_peer))) {
+    if (SUCCEEDED(on->connector->GetPeerAddress((struct sockaddr *)&peer, &cb_peer))) {
         ND_LOG_DBG("connection request from %s\n", nd_addr_str(peer).s);
-        c->peer = peer;
+        on->peer = peer;
     }
-    hr = c->connector->Accept(c->qp, 0, 0, nullptr, 0, &c->ov.ov);
-    if (!nd_done(hr, c->connector, &c->ov.ov)) {
+    hr = on->connector->Accept(on->qp, 0, 0, nullptr, 0, &on->ov.ov);
+    if (!nd_done(hr, on->connector, &on->ov.ov)) {
         ND_LOG_DBG("Accept failed: 0x%08lx\n", (unsigned long)hr);
         return false;
     }
-    c->connected = true;
+    on->connected = true;
     return true;
 }
 
-static bool nd_connect(std::unique_ptr<dist_nd_conn> & conn, const struct sockaddr_in & peer_addr) {
-    // the NIC that reaches the peer's RDMA address may not be the one carrying the ring socket
-    struct sockaddr_in resolved = {};
-    SIZE_T cb_resolved = sizeof(resolved);
-    HRESULT hr = NdResolveAddress((const struct sockaddr *)&peer_addr, sizeof(peer_addr),
-                                  (struct sockaddr *)&resolved, &cb_resolved);
-    if (SUCCEEDED(hr) && resolved.sin_family == AF_INET &&
-        resolved.sin_addr.s_addr != conn->local.sin_addr.s_addr) {
-        resolved.sin_port = 0;
-        ND_LOG_DBG("peer %s is reached via %s, reopening the adapter\n",
-                   nd_addr_str(peer_addr).s, nd_addr_str(resolved).s);
-        const SOCKET keep_out = conn->tcp_out;
-        const SOCKET keep_in  = conn->tcp_in;
-        conn.reset();
-        if (!nd_setup(conn, resolved)) {
-            return false;
-        }
-        conn->tcp_out = keep_out;
-        conn->tcp_in  = keep_in;
-    }
-
-    dist_nd_conn * c = conn.get();
-    c->peer = peer_addr;
-
-    hr = c->connector->Bind((const struct sockaddr *)&c->local, sizeof(c->local));
+// Bind, Connect and CompleteConnect for c's queue pair towards c->peer.
+static bool nd_dial(dist_nd_conn * c) {
+    HRESULT hr = c->connector->Bind((const struct sockaddr *)&c->local, sizeof(c->local));
     if (FAILED(hr)) {
         ND_LOG_DBG("connector Bind failed: 0x%08lx\n", (unsigned long)hr);
         return false;
@@ -690,6 +806,48 @@ static bool nd_connect(std::unique_ptr<dist_nd_conn> & conn, const struct sockad
     return true;
 }
 
+static bool nd_connect(std::unique_ptr<dist_nd_conn> & conn, const struct sockaddr_in & peer_addr) {
+    // the NIC that reaches the peer's RDMA address may not be the one carrying the ring socket
+    struct sockaddr_in resolved = {};
+    SIZE_T cb_resolved = sizeof(resolved);
+    HRESULT hr = NdResolveAddress((const struct sockaddr *)&peer_addr, sizeof(peer_addr),
+                                  (struct sockaddr *)&resolved, &cb_resolved);
+    if (SUCCEEDED(hr) && resolved.sin_family == AF_INET &&
+        resolved.sin_addr.s_addr != conn->local.sin_addr.s_addr) {
+        resolved.sin_port = 0;
+        ND_LOG_DBG("peer %s is reached via %s, reopening the adapter\n",
+                   nd_addr_str(peer_addr).s, nd_addr_str(resolved).s);
+        const SOCKET keep_out = conn->tcp_out;
+        const SOCKET keep_in  = conn->tcp_in;
+        conn.reset();
+        if (!nd_setup(conn, resolved)) {
+            return false;
+        }
+        conn->tcp_out = keep_out;
+        conn->tcp_in  = keep_in;
+    }
+
+    dist_nd_conn * c = conn.get();
+    c->peer = peer_addr;
+    // the small twin goes on the adapter finally chosen above, before either connection dials
+    if (nd_small_lane() && !c->sm && !nd_add_small_lane(c)) {
+        ND_LOG_ERR("small connection setup failed\n");
+        return false;
+    }
+    if (!nd_dial(c)) {
+        return false;
+    }
+    if (c->sm) {
+        // the listener takes requests in order, so the second one it accepts is this one
+        c->sm->peer = peer_addr;
+        if (!nd_dial(c->sm)) {
+            ND_LOG_ERR("small connection connect failed\n");
+            return false;
+        }
+    }
+    return true;
+}
+
 // ---------------------------------------------------------------------------------------
 // data path
 // ---------------------------------------------------------------------------------------
@@ -698,12 +856,17 @@ static bool nd_completion_ok(const ND2_RESULT * res) {
     if (FAILED(res->Status)) {
         // the provider reports every error event as a failed send, so the request
         // context is the only reliable way to tell what actually failed
-        const int slot = nd_ctx_slot(res->RequestContext);
-        ND_LOG_ERR("completion failed: status=0x%08lx type=%d on %s (bytes=%lu)\n",
+        void * ctx = res->RequestContext;
+        const bool lane1 = (uintptr_t)ctx >= ND_CTX_LANE1;
+        if (lane1) {
+            ctx = (void *)((uintptr_t)ctx - ND_CTX_LANE1);
+        }
+        const int slot = nd_ctx_slot(ctx);
+        ND_LOG_ERR("completion failed: status=0x%08lx type=%d on %s%s (bytes=%lu)\n",
                    (unsigned long)res->Status, (int)res->RequestType,
-                   (res->RequestContext == ND_CTX_SEND || res->RequestContext == ND_CTX_ACK) ? "send" :
+                   (ctx == ND_CTX_SEND || ctx == ND_CTX_ACK) ? "send" :
                    (slot >= 0 && slot < ND_RX_DEPTH) ? "recv" : "unknown request",
-                   (unsigned long)res->BytesTransferred);
+                   lane1 ? " of the small connection" : "", (unsigned long)res->BytesTransferred);
         if (slot >= 0 && slot < ND_RX_DEPTH) {
             ND_LOG_ERR("  failing recv slot %d of %d\n", slot, ND_RX_DEPTH);
         }
@@ -729,6 +892,7 @@ static int64_t nd_tick_ticks() {
 }
 
 static bool nd_poll(dist_nd_conn * c, ND2_RESULT * res) {
+    c = c->root;   // a small twin's completions land on its root's queue
     uint32_t ready_no_result = 0;
     for (uint64_t s = 0; ; s++) {
         if (c->cq->GetResults(res, 1) == 1) {
@@ -782,20 +946,26 @@ static bool nd_poll(dist_nd_conn * c, ND2_RESULT * res) {
     }
 }
 
-// routes one completion to the send, ack or data path
+// routes one completion to the send, ack or data path, of c or of its small twin
 static bool nd_route(dist_nd_conn * c, const ND2_RESULT & res) {
-    if (res.RequestContext == ND_CTX_ACK) {
+    c = c->root;
+    void * ctx = res.RequestContext;
+    if (c->sm && (uintptr_t)ctx >= ND_CTX_LANE1) {
+        ctx = (void *)((uintptr_t)ctx - ND_CTX_LANE1);
+        c   = c->sm;
+    }
+    if (ctx == ND_CTX_ACK) {
         c->ack_inflight--;   // the dedicated ack slot is free again
         return true;
     }
-    if (res.RequestContext == ND_CTX_SEND) {
+    if (ctx == ND_CTX_SEND) {
         c->send_done++;
         if (c->tx_inflight > 0) {
             c->tx_inflight--;   // the slot that send occupied is free to stage into again
         }
         return true;
     }
-    const int slot = nd_ctx_slot(res.RequestContext);
+    const int slot = nd_ctx_slot(ctx);
     if (slot < 0 || slot >= ND_RX_DEPTH) {
         ND_LOG_ERR("completion with unknown context\n");
         return false;
@@ -808,7 +978,8 @@ static bool nd_route(dist_nd_conn * c, const ND2_RESULT & res) {
     }
     if (hdr.type == ND_MSG_BYE) {
         ND_LOG_DBG("peer closed the connection\n");
-        c->peer_gone = true;
+        c->peer_gone       = true;
+        c->root->peer_gone = true;
         return false;
     }
     if (hdr.type == ND_MSG_ACK) {
@@ -819,12 +990,13 @@ static bool nd_route(dist_nd_conn * c, const ND2_RESULT & res) {
         ND_LOG_ERR("bad message (type=%u len=%u)\n", hdr.type, hdr.len);
         return false;
     }
-    c->rx_ready.push_back({ slot, hdr.len, 0 });
+    c->rx_ready.push_back({ slot, hdr.len, 0, hdr.seq });
     return true;
 }
 
 // consumes exactly one completion, waiting for it
 static bool nd_step(dist_nd_conn * c) {
+    c = c->root;
     ND2_RESULT res = {};
     if (!nd_poll(c, &res)) {
         return false;
@@ -834,6 +1006,7 @@ static bool nd_step(dist_nd_conn * c) {
 
 // Consumes one completion if one is ready: 1 consumed, 0 none ready, -1 failed.
 static int nd_try_step(dist_nd_conn * c) {
+    c = c->root;
     ND2_RESULT res = {};
     if (c->cq->GetResults(&res, 1) != 1) {
         return 0;
@@ -877,7 +1050,7 @@ static bool nd_post_send(dist_nd_conn * c, int slot, size_t len) {
     sge.BufferLength      = c->wire_len(len);
     sge.MemoryRegionToken = c->tx_token;
 
-    if (FAILED(c->qp->Send(ND_CTX_SEND, &sge, 1, 0))) {
+    if (FAILED(c->qp->Send((void *)(c->ctx_base + (uintptr_t)ND_CTX_SEND), &sge, 1, 0))) {
         ND_LOG_ERR("Send post failed\n");
         return false;
     }
@@ -962,7 +1135,7 @@ static bool nd_post_ack_direct(dist_nd_conn * c) {
     sge.Buffer            = c->ack_slot();
     sge.BufferLength      = c->wire_len(sizeof(hdr));
     sge.MemoryRegionToken = c->tx_token;
-    if (FAILED(c->qp->Send(ND_CTX_ACK, &sge, 1, 0))) {
+    if (FAILED(c->qp->Send((void *)(c->ctx_base + (uintptr_t)ND_CTX_ACK), &sge, 1, 0))) {
         ND_LOG_ERR("ack post failed\n");
         return false;
     }
@@ -970,25 +1143,72 @@ static bool nd_post_ack_direct(dist_nd_conn * c) {
     return true;
 }
 
-// Moves every chunk that has arrived into rx_spill, reposts its receive and acks as nd_recv_raw
-// would have. rx_ready only ever holds bytes that come after rx_spill, so order is kept.
-static bool nd_spill_rx(dist_nd_conn * c) {
-    while (!c->rx_ready.empty()) {
-        const nd_rx_item it = c->rx_ready.front();
-        c->rx_ready.pop_front();
-        const uint8_t * p = c->rx_slot(it.slot) + sizeof(nd_msg_hdr) + it.off;
-        c->rx_spill.insert(c->rx_spill.end(), p, p + (it.len - it.off));
-        if (!c->post_rx(it.slot)) {
-            return false;
+// Which connection holds the next chunk to read, for c's byte stream (c a root): *out is c or its
+// small twin, or nullptr while that chunk has not arrived. Without a twin it is c whenever anything
+// is queued. With one, chunks are read in data sequence order; each connection delivers its own in
+// the order they were posted, so the next chunk can only be at the front of one of the two rings,
+// and two fronts that both miss it mean the stream is broken (false).
+static bool nd_rx_lane(dist_nd_conn * c, dist_nd_conn ** out) {
+    *out = nullptr;
+    if (!c->sm) {
+        if (!c->rx_ready.empty()) {
+            *out = c;
         }
-        if (++c->rx_since_ack >= ND_WINDOW) {
-            c->rx_since_ack = 0;
-            if (!nd_post_ack_direct(c)) {
-                return false;
-            }
+        return true;
+    }
+    for (dist_nd_conn * l : { c, c->sm }) {
+        if (!l->rx_ready.empty() && l->rx_ready.front().seq == c->rx_dseq) {
+            *out = l;
+            return true;
         }
     }
+    if (!c->rx_ready.empty() && !c->sm->rx_ready.empty()) {
+        ND_LOG_ERR("data sequence lost: expected %u, fronts %u and %u (small)\n",
+                   c->rx_dseq, c->rx_ready.front().seq, c->sm->rx_ready.front().seq);
+        return false;
+    }
     return true;
+}
+
+// The chunk at the front of l's ring (l is c or its twin) has been read to its end: repost its
+// receive and ack once per window as before, directly from the ack slot (multi-chunk paths) or
+// through the tx ring (nd_recv_raw).
+static bool nd_rx_retire(dist_nd_conn * c, dist_nd_conn * l, bool direct_ack) {
+    const int slot = l->rx_ready.front().slot;
+    l->rx_ready.pop_front();
+    if (c->sm) {
+        c->rx_dseq++;
+    }
+    if (!l->post_rx(slot)) {
+        return false;
+    }
+    if (++l->rx_since_ack >= ND_WINDOW) {
+        l->rx_since_ack = 0;
+        return direct_ack ? nd_post_ack_direct(l) : nd_send_ack(l);
+    }
+    return true;
+}
+
+// Moves every chunk that has arrived into rx_spill, reposts its receive and acks as nd_recv_raw
+// would have. rx_ready only ever holds bytes that come after rx_spill, so order is kept. With a
+// small twin, chunks move in data sequence order and stop at the first one still missing.
+static bool nd_spill_rx(dist_nd_conn * c) {
+    c = c->root;
+    for (;;) {
+        dist_nd_conn * l = nullptr;
+        if (!nd_rx_lane(c, &l)) {
+            return false;
+        }
+        if (l == nullptr) {
+            return true;
+        }
+        const nd_rx_item it = l->rx_ready.front();
+        const uint8_t * p = l->rx_slot(it.slot) + sizeof(nd_msg_hdr) + it.off;
+        c->rx_spill.insert(c->rx_spill.end(), p, p + (it.len - it.off));
+        if (!nd_rx_retire(c, l, true)) {
+            return false;
+        }
+    }
 }
 
 // Waits for an ack on c while draining every connection's receive side. With one connection
@@ -1000,8 +1220,9 @@ static bool nd_wait_ack_progressing(dist_nd_conn * c) {
         std::lock_guard<std::mutex> lk(g_nd_conns_mu);
         all = g_nd_conns;
     }
-    if (std::find(all.begin(), all.end(), c) == all.end()) {
-        all.push_back(c);
+    // the list holds roots; c may be a small twin, whose completions and spill go through its root
+    if (std::find(all.begin(), all.end(), c->root) == all.end()) {
+        all.push_back(c->root);
     }
     const int64_t tick = nd_tick_ticks();
     int64_t last_check = nd_qpc();
@@ -1038,8 +1259,9 @@ static bool nd_wait_ack_progressing(dist_nd_conn * c) {
             for (dist_nd_conn * o : all) {
                 if (nd_tcp_peer_closed(o->tcp_in) || nd_tcp_peer_closed(o->tcp_out)) {
                     ND_LOG_DBG("peer dropped the ring socket\n");
-                    o->peer_gone = true;
-                    c->peer_gone = true;
+                    o->peer_gone       = true;
+                    c->peer_gone       = true;
+                    c->root->peer_gone = true;
                     return false;
                 }
             }
@@ -1055,7 +1277,9 @@ static bool nd_post_staged(dist_nd_conn * c) {
         c->tx_since_ack = 0;
     }
     const int slot = c->tx_slot_cur;
-    const nd_msg_hdr hdr = { ND_MSG_MAGIC, ND_MSG_DATA, (uint32_t)c->tx_fill, c->tx_seq++ };
+    // with a small twin the data sequence runs over both connections, and the receiver reads by it
+    const uint32_t seq = c->root->sm ? c->root->tx_dseq++ : c->tx_seq++;
+    const nd_msg_hdr hdr = { ND_MSG_MAGIC, ND_MSG_DATA, (uint32_t)c->tx_fill, seq };
     memcpy(c->tx_slot(slot), &hdr, sizeof(hdr));
     const size_t len = sizeof(hdr) + c->tx_fill;
     c->tx_fill = 0;
@@ -1112,7 +1336,7 @@ static bool nd_send_raw(dist_nd_conn * c, const void * data, size_t size) {
 
 static bool nd_recv_raw(dist_nd_conn * c, void * data, size_t size) {
     // a staged send has to reach the peer before we block waiting for its reply
-    if (!nd_flush(c)) {
+    if (!nd_flush(c) || (c->sm && !nd_flush(c->sm))) {
         return false;
     }
     uint8_t * dst = (uint8_t *)data;
@@ -1132,7 +1356,14 @@ static bool nd_recv_raw(dist_nd_conn * c, void * data, size_t size) {
             continue;
         }
         uint32_t idle_steps = 0;
-        while (c->rx_ready.empty()) {
+        dist_nd_conn * l = nullptr;
+        for (;;) {
+            if (!nd_rx_lane(c, &l)) {
+                return false;
+            }
+            if (l != nullptr) {
+                break;
+            }
             if (!nd_step(c)) {
                 return false;
             }
@@ -1143,27 +1374,36 @@ static bool nd_recv_raw(dist_nd_conn * c, void * data, size_t size) {
                 return false;
             }
         }
-        nd_rx_item & it = c->rx_ready.front();
+        nd_rx_item & it = l->rx_ready.front();
         const size_t take = std::min((size_t)(it.len - it.off), rem);
-        memcpy(dst, c->rx_slot(it.slot) + sizeof(nd_msg_hdr) + it.off, take);
+        memcpy(dst, l->rx_slot(it.slot) + sizeof(nd_msg_hdr) + it.off, take);
         dst += take;
         rem -= take;
         it.off += (uint32_t)take;
-        if (it.off == it.len) {
-            const int slot = it.slot;
-            c->rx_ready.pop_front();
-            if (!c->post_rx(slot)) {
-                return false;
-            }
-            if (++c->rx_since_ack >= ND_WINDOW) {
-                c->rx_since_ack = 0;
-                if (!nd_send_ack(c)) {
-                    return false;
-                }
-            }
+        if (it.off == it.len && !nd_rx_retire(c, l, false)) {
+            return false;
         }
     }
     return true;
+}
+
+// The connection a message of total bytes (header and payload) goes out on: c's small twin when
+// the whole message fits in one of its chunks, else c.
+static dist_nd_conn * nd_tx_lane(dist_nd_conn * c, size_t total) {
+    return (c->sm && total <= c->sm->pay_max) ? c->sm : c;
+}
+
+// every posted send of c and of its twin retired
+static bool nd_drain_all(dist_nd_conn * c) {
+    return nd_send_drain_local(c) && (!c->sm || nd_send_drain_local(c->sm));
+}
+
+// drop any half-staged chunk, of c and of its twin; the connection is finished either way
+static void nd_drop_staged(dist_nd_conn * c) {
+    c->tx_fill = 0;
+    if (c->sm) {
+        c->sm->tx_fill = 0;
+    }
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1226,13 +1466,18 @@ dist_nd_conn * dist_nd_establish(uintptr_t tcp_out_raw, uintptr_t tcp_in_raw, bo
     // Rank 0 listens and advertises, rank 1 dials in. Rank 0 owns the final decision so the two
     // ranks can never disagree about which transport is live.
     if (listen_side) {
+        if (local_ok && nd_small_lane() && !nd_add_small_lane(conn.get())) {
+            conn.reset();
+            local_ok = false;
+            err = "NetworkDirect small connection setup failed";
+        }
         if (local_ok && !nd_listen(conn.get())) {
             conn.reset();
             local_ok = false;
             err = "NetworkDirect listener setup failed";
         }
 
-        nd_hello out = { ND_HELLO_MAGIC, ND_HELLO_VER, local_ok ? (uint32_t)addr.sin_addr.s_addr : 0u,
+        nd_hello out = { ND_HELLO_MAGIC, nd_hello_ver(), local_ok ? (uint32_t)addr.sin_addr.s_addr : 0u,
                          local_ok ? 1u : 0u };
         if (!tcp_write_all(tcp_out, &out, sizeof(out))) {
             err = "failed to advertise the NetworkDirect address to the peer";
@@ -1241,10 +1486,15 @@ dist_nd_conn * dist_nd_establish(uintptr_t tcp_out_raw, uintptr_t tcp_in_raw, bo
 
         if (local_ok) {
             ND_LOG_DBG("advertised %s, accepting\n", nd_addr_str(addr).s);
-            if (!nd_accept(conn.get())) {
+            if (!nd_accept(conn.get(), conn.get())) {
                 conn.reset();
                 local_ok = false;
                 err = "NetworkDirect accept failed";
+            } else if (conn->sm && !nd_accept(conn.get(), conn->sm)) {
+                // the peer dials its small connection right after the first one completes
+                conn.reset();
+                local_ok = false;
+                err = "NetworkDirect accept of the small connection failed";
             }
         }
 
@@ -1253,7 +1503,7 @@ dist_nd_conn * dist_nd_establish(uintptr_t tcp_out_raw, uintptr_t tcp_in_raw, bo
             err = "failed to read the peer's NetworkDirect result";
             return nullptr;
         }
-        if (in.magic != ND_HELLO_MAGIC || in.version != ND_HELLO_VER) {
+        if (in.magic != ND_HELLO_MAGIC || in.version != nd_hello_ver()) {
             err = "peer does not speak this NetworkDirect negotiation (different build?)";
             return nullptr;
         }
@@ -1275,7 +1525,7 @@ dist_nd_conn * dist_nd_establish(uintptr_t tcp_out_raw, uintptr_t tcp_in_raw, bo
             err = "failed to read the peer's NetworkDirect address";
             return nullptr;
         }
-        if (in.magic != ND_HELLO_MAGIC || in.version != ND_HELLO_VER) {
+        if (in.magic != ND_HELLO_MAGIC || in.version != nd_hello_ver()) {
             err = "peer does not speak this NetworkDirect negotiation (different build?)";
             return nullptr;
         }
@@ -1296,7 +1546,7 @@ dist_nd_conn * dist_nd_establish(uintptr_t tcp_out_raw, uintptr_t tcp_in_raw, bo
             }
         }
 
-        const nd_hello out = { ND_HELLO_MAGIC, ND_HELLO_VER, 0u, local_ok ? 1u : 0u };
+        const nd_hello out = { ND_HELLO_MAGIC, nd_hello_ver(), 0u, local_ok ? 1u : 0u };
         if (!tcp_write_all(tcp_out, &out, sizeof(out))) {
             err = "failed to report the NetworkDirect result to the peer";
             return nullptr;
@@ -1322,24 +1572,26 @@ dist_nd_conn * dist_nd_establish(uintptr_t tcp_out_raw, uintptr_t tcp_in_raw, bo
 
 bool dist_nd_send2(dist_nd_conn * c, const void * hdr, size_t hdr_size,
                    const void * payload, size_t payload_size, std::string & err) {
+    // the whole message goes out on one connection: the small twin when it fits in one of its chunks
+    dist_nd_conn * l = nd_tx_lane(c, hdr_size + payload_size);
     // cork across both writes so the header and its payload leave in one chunk
-    c->corked++;
-    bool ok = nd_send_raw(c, hdr, hdr_size);
+    l->corked++;
+    bool ok = nd_send_raw(l, hdr, hdr_size);
     if (ok && payload_size > 0) {
-        ok = nd_send_raw(c, payload, payload_size);
+        ok = nd_send_raw(l, payload, payload_size);
     }
-    c->corked--;
+    l->corked--;
     if (ok) {
-        ok = nd_flush(c);
+        ok = nd_flush(l);
     }
     // Default retires the send before returning, identical to the previous behaviour. Full-duplex
     // mode drains after the matching receive instead, which is the whole point: both directions
     // are then on the wire at once.
     if (ok && !nd_full_duplex()) {
-        ok = nd_send_drain_local(c);
+        ok = nd_send_drain_local(l);
     }
     if (!ok) {
-        c->tx_fill = 0;   // drop the half-staged chunk; the connection is finished either way
+        nd_drop_staged(c);
         err = c->peer_gone ? "peer closed connection" : "NetworkDirect send failed";
         return false;
     }
@@ -1350,7 +1602,7 @@ bool dist_nd_send_drain(dist_nd_conn * c, std::string & err) {
     if (!c) {
         return true;
     }
-    if (!nd_send_drain_local(c)) {
+    if (!nd_drain_all(c)) {
         err = c->peer_gone ? "peer closed connection" : "NetworkDirect send drain failed";
         return false;
     }
@@ -1383,6 +1635,7 @@ bool dist_nd_recv(dist_nd_conn * c, void * data, size_t size, std::string & err)
 static bool nd_tx_pump(dist_nd_conn * c, const uint8_t * hdr, size_t hdr_size,
                        const uint8_t * payload, size_t size, size_t & pos, bool & moved) {
     const size_t total = hdr_size + size;
+    c = nd_tx_lane(c, total);   // the connection this whole message goes out on
     for (;;) {
         // a full chunk, or the last bytes of the message, leaves as soon as the window allows
         if (c->tx_fill == c->pay_max || (pos == total && c->tx_fill > 0)) {
@@ -1451,24 +1704,21 @@ static bool nd_rx_pump(dist_nd_conn * c, uint8_t * hdr, size_t hdr_size,
         }
         moved = true;
     }
-    while (pos < total && c->rx_spill.empty() && !c->rx_ready.empty()) {
-        nd_rx_item & it = c->rx_ready.front();
+    while (pos < total && c->rx_spill.empty()) {
+        dist_nd_conn * l = nullptr;
+        if (!nd_rx_lane(c, &l)) {
+            return false;
+        }
+        if (l == nullptr) {
+            break;
+        }
+        nd_rx_item & it = l->rx_ready.front();
         const size_t take = std::min((size_t)(it.len - it.off), total - pos);
-        put(c->rx_slot(it.slot) + sizeof(nd_msg_hdr) + it.off, take);
+        put(l->rx_slot(it.slot) + sizeof(nd_msg_hdr) + it.off, take);
         it.off += (uint32_t)take;
         moved = true;
-        if (it.off == it.len) {
-            const int slot = it.slot;
-            c->rx_ready.pop_front();
-            if (!c->post_rx(slot)) {
-                return false;
-            }
-            if (++c->rx_since_ack >= ND_WINDOW) {
-                c->rx_since_ack = 0;
-                if (!nd_post_ack_direct(c)) {
-                    return false;
-                }
-            }
+        if (it.off == it.len && !nd_rx_retire(c, l, true)) {
+            return false;
         }
     }
     return true;
@@ -1503,8 +1753,8 @@ bool dist_nd_exchange_pair(dist_nd_conn * a, dist_nd_conn * b, const void * hdr,
         if (!ok) {
             break;
         }
-        if (tx_a == total && tx_b == total && a->tx_fill == 0 && b->tx_fill == 0 &&
-            rx_a == total && rx_b == total) {
+        if (tx_a == total && tx_b == total && nd_tx_lane(a, total)->tx_fill == 0 &&
+            nd_tx_lane(b, total)->tx_fill == 0 && rx_a == total && rx_b == total) {
             break;
         }
         int stepped = 0;
@@ -1549,11 +1799,11 @@ bool dist_nd_exchange_pair(dist_nd_conn * a, dist_nd_conn * b, const void * hdr,
         }
     }
     if (ok && !nd_full_duplex()) {
-        ok = nd_send_drain_local(a) && nd_send_drain_local(b);
+        ok = nd_drain_all(a) && nd_drain_all(b);
     }
     if (!ok) {
-        a->tx_fill = 0;   // drop any half-staged chunk; the connections are finished either way
-        b->tx_fill = 0;
+        nd_drop_staged(a);   // drop any half-staged chunk; the connections are finished either way
+        nd_drop_staged(b);
         err = (a->peer_gone || b->peer_gone) ? "peer closed connection" : "NetworkDirect two-peer exchange failed";
         return false;
     }
@@ -1609,7 +1859,7 @@ bool dist_nd_exchange_n(dist_nd_conn * const * conns, int n, const void * hdr, s
         }
         bool done = true;
         for (int i = 0; i < n; ++i) {
-            if (tx[i] != total || conns[i]->tx_fill != 0 || rx[i] != total) {
+            if (tx[i] != total || nd_tx_lane(conns[i], total)->tx_fill != 0 || rx[i] != total) {
                 done = false;
             }
         }
@@ -1660,13 +1910,13 @@ bool dist_nd_exchange_n(dist_nd_conn * const * conns, int n, const void * hdr, s
     }
     if (ok && !nd_full_duplex()) {
         for (int i = 0; ok && i < n; ++i) {
-            ok = nd_send_drain_local(conns[i]);
+            ok = nd_drain_all(conns[i]);
         }
     }
     if (!ok) {
         bool gone = false;
         for (int i = 0; i < n; ++i) {
-            conns[i]->tx_fill = 0;   // drop any half-staged chunk; the connections are finished either way
+            nd_drop_staged(conns[i]);   // drop any half-staged chunk; the connections are finished either way
             gone = gone || conns[i]->peer_gone;
         }
         err = gone ? "peer closed connection" : "NetworkDirect n-peer exchange failed";
@@ -1682,10 +1932,10 @@ void dist_nd_free(dist_nd_conn * c) {
     nd_unregister(c);
     if (c->connected && !c->peer_gone) {
         // Retire outstanding sends around the bye, so teardown never frees a staging slot that
-        // still has a transfer against it.
-        (void) nd_send_drain_local(c);
+        // still has a transfer against it. The bye goes on c; the peer polls both connections.
+        (void) nd_drain_all(c);
         (void) nd_send_bye(c);
-        (void) nd_send_drain_local(c);
+        (void) nd_drain_all(c);
     }
     delete c;
 }
