@@ -1806,9 +1806,8 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
         old_m_params = ggml_decoder->get_model_params();
         cache_hit = old_m_params.can_reuse_statically(m_params);
         if (cache_hit && is_prefill && ggml_openvino_kv_slice_enabled()) {
-            const auto old_c_params = ggml_decoder->get_compute_params();
-            cache_hit = old_c_params.attention_size == c_params.attention_size &&
-                        old_c_params.attention_size_swa == c_params.attention_size_swa;
+            cache_hit = entry->prefill_attention_size == c_params.attention_size &&
+                        entry->prefill_attention_size_swa == c_params.attention_size_swa;
         }
     }
 
@@ -1870,6 +1869,8 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
                                       std::make_shared<ov::InferRequest>(compiled.decode.create_infer_request());
             ggml_decoder = local_decoder;
             entry->ptr = ggml_decoder;
+            entry->prefill_attention_size = c_params.attention_size;
+            entry->prefill_attention_size_swa = c_params.attention_size_swa;
             infer_request = is_prefill ? prefill_request : decode_request;
             ov_input_names_local = is_prefill ? compiled.prefill_input_names : compiled.input_names;
             ov_output_names_local = is_prefill ? compiled.prefill_output_names : compiled.output_names;
@@ -2251,6 +2252,8 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
             ov_input_names_local = is_prefill ? names_in_prefill : names_in_decode;
             ov_output_names_local = is_prefill ? names_out_prefill : names_out_decode;
             entry->ptr = ggml_decoder;
+            entry->prefill_attention_size = c_params.attention_size;
+            entry->prefill_attention_size_swa = c_params.attention_size_swa;
 
             if (!shared_key.empty()) {
                 shared_cache->graphs.emplace(
