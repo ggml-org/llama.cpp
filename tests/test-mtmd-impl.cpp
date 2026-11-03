@@ -1,11 +1,13 @@
 #include "testing.h"
 
 #include "mtmd-audio.h"
+#include "mtmd-helper.h"
 #include "mtmd-image.h"
 #include "mtmd-internal.h"
 
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -87,6 +89,33 @@ MAKE_TEST(test_image_preprocessor_dyn_size) {
 
         const clip_image_size actual = mtmd_image_preprocessor_dyn_size::get_target_size(hparams, input);
         const std::string name = std::to_string(input.width) + "x" + std::to_string(input.height);
+        t.assert_equal(name + " width", expected.width, actual.width);
+        t.assert_equal(name + " height", expected.height, actual.height);
+    }
+}
+
+MAKE_TEST(test_image_preprocessor_qwen3vl_video) {
+    clip_hparams hparams;
+    hparams.patch_size = 16;
+    hparams.n_merge = 2;
+    const mtmd_image_preprocessor_qwen3vl preproc(hparams);
+
+    // { n_frames, frame size, expected size from Qwen3VLVideoProcessor smart_resize }
+    const std::vector<std::tuple<int, clip_image_size, clip_image_size>> cases = {
+        {  20, {  720,  358 }, {  704,  352 } }, // 720 / 32 = 22.5 rounds half to even
+        { 768, { 1920, 1080 }, {  224,  128 } }, // over the longest_edge budget
+        {   4, {   16,   40 }, {   32,   64 } }, // edge below the factor is upscaled first
+        {   2, {   32,   32 }, {   64,   64 } }, // under the shortest_edge budget
+        {   5, { 2760, 1552 }, { 2752, 1536 } }, // 5 / 2 = 2.5 rounds half to even
+        {   4, {  250, 6000 }, {  256, 6016 } },
+    };
+
+    for (const auto & [n_frames, input, expected] : cases) {
+        clip_image_size actual;
+        const std::string name = std::to_string(n_frames) + " frames of " + std::to_string(input.width) + "x" + std::to_string(input.height);
+        if (!t.assert_true(name + " has a frame size", preproc.get_video_frame_size(n_frames, input.width, input.height, actual))) {
+            continue;
+        }
         t.assert_equal(name + " width", expected.width, actual.width);
         t.assert_equal(name + " height", expected.height, actual.height);
     }
@@ -302,6 +331,130 @@ MAKE_TEST(test_temporal_merge_grouping) {
 }
 
 //
+// mtmd_helper video
+//
+
+MAKE_TEST(test_video_config) {
+    clip_hparams hparams;
+    hparams.patch_size = 16;
+    hparams.n_merge = 2;
+    const mtmd_image_preprocessor_qwen3vl preproc(hparams);
+
+    // { template, n_frames and fps of the source, expected fps, n_frames and frame size }
+    // the 1920x1080 sizes are from Qwen3VLVideoProcessor smart_resize
+    const std::vector<std::tuple<mtmd_video_template, int32_t, float, float, int32_t, clip_image_size>> cases = {
+        { MTMD_VIDEO_TEMPLATE_QWEN3VL,   36000, 30.0f, 2.0f, 768, { 224, 128 } },
+        { MTMD_VIDEO_TEMPLATE_LFM3,      36000, 30.0f, 2.0f, 768, { 224, 128 } },
+        { MTMD_VIDEO_TEMPLATE_LFM3_OMNI, 36000, 30.0f, 2.0f, 384, { 320, 192 } },
+        { MTMD_VIDEO_TEMPLATE_QWEN3VL,      -1, 30.0f, 2.0f,   0, {   0,   0 } }, // frame count unknown
+        { MTMD_VIDEO_TEMPLATE_DEFAULT,   36000, 30.0f, 0.0f,   0, {   0,   0 } },
+    };
+
+    for (const auto & [tmpl, n_frames, fps, expected_fps, expected_n_frames, expected_size] : cases) {
+        const mtmd_video_config cfg = mtmd_video_config_init(tmpl, &preproc, 1920, 1080, n_frames, fps);
+        const std::string name = "template " + std::to_string(tmpl) + " with " + std::to_string(n_frames) + " frames";
+        t.assert_equal(name + " template", (int) tmpl, (int) cfg.tmpl);
+        t.assert_equal(name + " fps", expected_fps, cfg.fps);
+        t.assert_equal(name + " n_frames", expected_n_frames, cfg.n_frames);
+        t.assert_equal(name + " frame size", image_size_to_str(expected_size), image_size_to_str({ cfg.frame_width, cfg.frame_height }));
+    }
+}
+
+// n_frames source frames, each one starts with its index
+struct test_video_source : mtmd_helper_video_seq {
+    int32_t n_frames;
+    int32_t n_read = 0;
+
+    test_video_source(int32_t n_frames) : n_frames(n_frames) {}
+
+    bool read_raw_frame() override {
+        if (n_read >= n_frames) {
+            return false;
+        }
+        frame_buf[0] = static_cast<uint8_t>(n_read & 255);
+        frame_buf[1] = static_cast<uint8_t>(n_read >> 8);
+        n_read++;
+        return true;
+    }
+};
+
+// text as is, a frame as [source index], an audio bitmap as {n_samples}
+static std::string video_sequence_to_str(testing & t, mtmd_helper_video_seq & video) {
+    std::string out;
+    mtmd_bitmap * bitmap;
+    char * text;
+    int32_t ret;
+    while ((ret = video.read_next(&bitmap, &text)) == 0) {
+        if (text) {
+            out += text;
+            free(text);
+        } else if (mtmd_bitmap_is_audio(bitmap)) {
+            out += "{" + std::to_string(mtmd_bitmap_get_n_bytes(bitmap) / sizeof(float)) + "}";
+            mtmd_bitmap_free(bitmap);
+        } else {
+            const unsigned char * data = mtmd_bitmap_get_data(bitmap);
+            out += "[" + std::to_string(data[0] | data[1] << 8) + "]";
+            mtmd_bitmap_free(bitmap);
+        }
+    }
+    t.assert_equal("end of stream", -1, ret);
+    return out;
+}
+
+MAKE_TEST(test_video_sequence_qwen3vl) {
+    clip_hparams hparams;
+    hparams.patch_size = 16;
+    hparams.n_merge = 2;
+    const mtmd_image_preprocessor_qwen3vl preproc(hparams);
+
+    // { source video, expected frame size and sequence from Qwen3VLProcessor (transformers 4.57.1) }
+    const std::vector<std::tuple<mtmd_helper_video_src, clip_image_size, std::string>> cases = {
+        { {  720, 358, 24.0f, 240 }, { 704, 352 },
+            "<0.3 seconds>[0][13]<1.3 seconds>[25][38]<2.4 seconds>[50][63]<3.4 seconds>[75][88]<4.5 seconds>[101][113]"
+            "<5.5 seconds>[126][138]<6.6 seconds>[151][164]<7.6 seconds>[176][189]<8.6 seconds>[201][214]<9.7 seconds>[226][239]" },
+        // odd frame count: the last group repeats its last frame
+        { {  640, 480, 10.0f,  35 }, { 640, 480 },
+            "<0.3 seconds>[0][6]<1.4 seconds>[11][17]<2.5 seconds>[23][28]<3.4 seconds>[34]" },
+        // fewer frames than the minimum of 4
+        { {  320, 240, 30.0f,   3 }, { 320, 256 },
+            "<0.0 seconds>[0][1]<0.1 seconds>[2]" },
+        { { 1280, 720, 30000.0f / 1001.0f, 300 }, { 1280, 704 },
+            "<0.3 seconds>[0][16]<1.3 seconds>[31][47]<2.4 seconds>[63][79]<3.4 seconds>[94][110]<4.5 seconds>[126][142]"
+            "<5.5 seconds>[157][173]<6.6 seconds>[189][205]<7.6 seconds>[220][236]<8.7 seconds>[252][268]<9.7 seconds>[283][299]" },
+    };
+
+    for (const auto & [src, expected_size, expected] : cases) {
+        const std::string name = std::to_string(src.n_frames) + " frames of " + std::to_string(src.width) + "x" + std::to_string(src.height);
+        const mtmd_video_config cfg = mtmd_video_config_init(MTMD_VIDEO_TEMPLATE_QWEN3VL, &preproc, src.width, src.height, src.n_frames, src.fps);
+        test_video_source video(src.n_frames);
+        video.configure(cfg, src, 0.0f);
+        video.src_alive = true;
+        t.assert_equal(name + " frame size", image_size_to_str(expected_size), image_size_to_str({ (int) video.info.width, (int) video.info.height }));
+        t.assert_equal(name + " sequence", expected, video_sequence_to_str(t, video));
+    }
+}
+
+// the soundtrack of each group comes after its frames
+MAKE_TEST(test_video_sequence_lfm3_omni) {
+    clip_hparams hparams;
+    hparams.patch_size = 16;
+    hparams.n_merge = 2;
+    const mtmd_image_preprocessor_lfm3vl preproc(hparams);
+
+    const mtmd_helper_video_src src = { 64, 64, 2.0f, 9 };
+    const mtmd_video_config cfg = mtmd_video_config_init(MTMD_VIDEO_TEMPLATE_LFM3_OMNI, &preproc, src.width, src.height, src.n_frames, src.fps);
+    test_video_source video(src.n_frames);
+    video.configure(cfg, src, 0.0f);
+    video.src_alive  = true;
+    video.audio_rate = 100;
+    video.soundtrack.assign(450, 0.0f);
+
+    t.assert_equal("sequence",
+        std::string("<0.2 seconds>[0][1]{100}<1.2 seconds>[2][3]{100}<2.2 seconds>[4][5]{100}<3.2 seconds>[6][7]{100}<4.0 seconds>[8]{50}"),
+        video_sequence_to_str(t, video));
+}
+
+//
 // mtmd_audio
 //
 
@@ -356,6 +509,13 @@ MAKE_TEST(test_audio_preprocessor_conformer) {
 int main(int argc, char ** argv) {
     testing t(std::cout);
     t.verbose = true;
+
+    // the video helper logs every frame at debug level
+    mtmd_helper_log_set([](ggml_log_level level, const char * text, void *) {
+        if (level != GGML_LOG_LEVEL_DEBUG) {
+            fputs(text, stderr);
+        }
+    }, nullptr);
 
     // usage: test-mtmd-impl [filter_regex]
     for (int i = 1; i < argc; i++) {

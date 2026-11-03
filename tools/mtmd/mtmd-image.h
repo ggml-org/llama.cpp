@@ -137,15 +137,15 @@ struct mtmd_image_preprocessor_fixed_size : mtmd_image_preprocessor {
 // this is used by models with native support for dynamic image size, for example: Qwen-VL, Pixtral, Kimi-VL, etc
 struct mtmd_image_preprocessor_dyn_size : mtmd_image_preprocessor {
     mtmd_image_preprocessor_dyn_size(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
+    mtmd_image_preprocessor_dyn_size(const clip_hparams & hparams) : mtmd_image_preprocessor(hparams) {}
     static clip_image_size get_target_size(const clip_hparams & hparams, const clip_image_size & original_size);
     mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
     virtual clip_image_size target_size(const clip_image_size & original_size) const { return get_target_size(hparams, original_size); }
 };
 
-// LFM3-VL, same as dyn_size but sized exactly as the transformers Qwen2-VL smart_resize
-struct mtmd_image_preprocessor_lfm3vl : mtmd_image_preprocessor_dyn_size {
-    mtmd_image_preprocessor_lfm3vl(const clip_ctx * ctx) : mtmd_image_preprocessor_dyn_size(ctx) {}
-    clip_image_size target_size(const clip_image_size & original_size) const override;
+// Qwen3-VL, same as dyn_size for images, video frames are sized as Qwen3VLVideoProcessor
+struct mtmd_image_preprocessor_qwen3vl : mtmd_image_preprocessor_dyn_size {
+    using mtmd_image_preprocessor_dyn_size::mtmd_image_preprocessor_dyn_size;
     // the video helper sizes the frames (get_video_frame_size), they are only snapped to the grid
     mtmd_image_preproc_out preprocess_video_frame(const clip_image_u8 & img) const override;
     bool get_video_frame_size(int n_frames, int width, int height, clip_image_size & out) const override;
@@ -154,6 +154,12 @@ struct mtmd_image_preprocessor_lfm3vl : mtmd_image_preprocessor_dyn_size {
     // with temporal_factor > 1 it is the Qwen3-VL video variant over n_frames
     static clip_image_size smart_resize(int width, int height, int factor, int64_t min_pixels, int64_t max_pixels,
                                         int n_frames = 1, int temporal_factor = 1);
+};
+
+// LFM3-VL, same as qwen3vl but images are sized exactly as the transformers Qwen2-VL smart_resize
+struct mtmd_image_preprocessor_lfm3vl : mtmd_image_preprocessor_qwen3vl {
+    using mtmd_image_preprocessor_qwen3vl::mtmd_image_preprocessor_qwen3vl;
+    clip_image_size target_size(const clip_image_size & original_size) const override;
 };
 
 // GLM 5.3 flash, similar to dyn_size, but each edge is aligned up to patch_size*n_merge, and max budget is met by a search over the height with the width scaled proportionally
