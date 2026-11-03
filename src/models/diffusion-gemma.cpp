@@ -457,11 +457,9 @@ llama_model_diffusion_gemma::graph::graph(const llama_model & model, const llm_g
         auto uptr = std::make_unique<llm_graph_input_attn_diffusion_decode>(hparams, cparams, P, C);
         uptr->self_attn_mask.raw = ggml_new_tensor_4d(ctx0, type_mask, n_kv, C, 1, 1);
         ggml_set_input(uptr->self_attn_mask.raw);
-        uptr->self_attn_mask.cnv = uptr->self_attn_mask.raw;
         if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
             uptr->self_attn_mask_swa.raw = ggml_new_tensor_4d(ctx0, type_mask, n_kv, C, 1, 1);
             ggml_set_input(uptr->self_attn_mask_swa.raw);
-            uptr->self_attn_mask_swa.cnv = uptr->self_attn_mask_swa.raw;
         }
         inp_attn = (llm_graph_input_attn_no_cache *) res->add_input(std::move(uptr));
     } else if (is_prefill) {
@@ -469,22 +467,18 @@ llama_model_diffusion_gemma::graph::graph(const llama_model & model, const llm_g
         auto uptr = std::make_unique<llm_graph_input_attn_diffusion_prefill>(hparams, cparams, prefill_off, n_tokens);
         uptr->self_attn_mask.raw = ggml_new_tensor_4d(ctx0, type_mask, n_kv, n_tokens, 1, 1);
         ggml_set_input(uptr->self_attn_mask.raw);
-        uptr->self_attn_mask.cnv = uptr->self_attn_mask.raw;
         if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
             uptr->self_attn_mask_swa.raw = ggml_new_tensor_4d(ctx0, type_mask, n_kv, n_tokens, 1, 1);
             ggml_set_input(uptr->self_attn_mask_swa.raw);
-            uptr->self_attn_mask_swa.cnv = uptr->self_attn_mask_swa.raw;
         }
         inp_attn = (llm_graph_input_attn_no_cache *) res->add_input(std::move(uptr));
     } else {
         auto uptr = std::make_unique<llm_graph_input_attn_diffusion>(hparams, cparams, P);
         uptr->self_attn_mask.raw = ggml_new_tensor_4d(ctx0, type_mask, n_tokens, n_tokens, 1, 1);
         ggml_set_input(uptr->self_attn_mask.raw);
-        uptr->self_attn_mask.cnv = uptr->self_attn_mask.raw;
         if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
             uptr->self_attn_mask_swa.raw = ggml_new_tensor_4d(ctx0, type_mask, n_tokens, n_tokens, 1, 1);
             ggml_set_input(uptr->self_attn_mask_swa.raw);
-            uptr->self_attn_mask_swa.cnv = uptr->self_attn_mask_swa.raw;
         }
         inp_attn = (llm_graph_input_attn_no_cache *) res->add_input(std::move(uptr));
     }
