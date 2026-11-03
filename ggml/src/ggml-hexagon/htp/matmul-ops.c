@@ -1726,6 +1726,11 @@ static int hvx_mm_init_tiled_vec_dot(struct htp_mm_context * mmctx, enum htp_dat
             mmctx->vec_dot_32x1 = tiled_vec_dot_mxfp4_32x1;
             mmctx->vec_dot_32x2 = tiled_vec_dot_mxfp4_32x2;
             return 0;
+        case HTP_TYPE_NVFP4:
+            mmctx->type         = "nvfp4_tiled-f32";
+            mmctx->vec_dot_32x1 = tiled_vec_dot_nvfp4_32x1;
+            mmctx->vec_dot_32x2 = tiled_vec_dot_nvfp4_32x2;
+            return 0;
         case HTP_TYPE_Q1_0:
             mmctx->type         = "q1_0_tiled-f32";
             mmctx->vec_dot_32x1 = tiled_vec_dot_q1_0_32x1;

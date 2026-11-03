@@ -12129,6 +12129,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_mul_mat(GGML_TYPE_IQ2_XXS, GGML_TYPE_F32, m, n, k, {1, 1}, {1, 1}));
         }
     }
+
+    // Nemotron NVFP4 Mamba and draft-model shapes: {k, m}
+    for (auto [k, m] : std::initializer_list<std::pair<int, int>>{{4096, 18560}, {8192, 4096}, {24576, 4096}, {4096, 12288}, {12288, 4096}}) {
+        for (int n : {1, 8, 512}) {
+            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_NVFP4, GGML_TYPE_F32, m, n, k, {1, 1}, {1, 1}));
+        }
+    }
 #else
     // m = a rows
     // n = b rows
