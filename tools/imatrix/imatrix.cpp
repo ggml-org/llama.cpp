@@ -1389,7 +1389,7 @@ bool nextn_collector::decode(llama_context * ctx_trunk, const common_batch & bat
     batch.clear();
     if (!pending_h.empty()) {
         const int32_t idx = batch.add(batch_trunk.tokens[0].id, batch_trunk.tokens[0].pos[0], 0, own_lm_head);
-        batch.set_embd(idx, { pending_h.data(), 1, (size_t) n_embd });
+        batch.set_embd_state(idx, { pending_h.data(), 1, (size_t) n_embd });
     }
 
     const float * h_last = nullptr;
@@ -1404,7 +1404,7 @@ bool nextn_collector::decode(llama_context * ctx_trunk, const common_batch & bat
         if (i == n_last) { h_last = h; break; }
 
         const int32_t idx = batch.add(batch_trunk.tokens[i + 1].id, batch_trunk.tokens[i + 1].pos[0], 0, own_lm_head);
-        batch.set_embd(idx, { h, 1, (size_t) n_embd });
+        batch.set_embd_state(idx, { h, 1, (size_t) n_embd });
     }
 
     if (batch.size() > 0) {

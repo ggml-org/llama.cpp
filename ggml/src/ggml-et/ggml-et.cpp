@@ -373,6 +373,9 @@ static const struct ggml_backend_buffer_i ggml_backend_et_buffer_i = {
     /* .cpy_tensor      = */ ggml_backend_et_buffer_cpy_tensor,
     /* .clear           = */ ggml_backend_et_buffer_clear,
     /* .reset           = */ NULL,
+    /* .set_tensor_n    = */ NULL,
+    /* .get_tensor_n    = */ NULL,
+    /* .cpy_tensor_n    = */ NULL,
 };
 
 static const char * ggml_backend_et_buffer_type_get_name(ggml_backend_buffer_type_t buft) {
@@ -1270,7 +1273,7 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_FLASH_ATTN_EXT:
             if (op->type == GGML_TYPE_F32 && op->src[0] && op->src[0]->type == GGML_TYPE_F32 && op->src[1] &&
                 (op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_F16) && op->src[2] &&
-                (op->src[2]->type == GGML_TYPE_F32 || op->src[2]->type == GGML_TYPE_F16) && op->src[4] == nullptr &&
+                (op->src[2]->type == GGML_TYPE_F32 || op->src[2]->type == GGML_TYPE_F16) && op->src[4] == nullptr && op->src[5] == nullptr &&
                 ggml_is_contiguous_rows(op) && ggml_is_contiguous_rows(op->src[0])) {
                 float max_bias      = 0.0f;
                 float logit_softcap = 0.0f;

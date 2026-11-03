@@ -63,19 +63,19 @@ public:
             }
         };
 
-        GGML_ASSERT(self_kq_mask && ggml_backend_buffer_is_host(self_kq_mask->buffer));
-        if (self_kq_mask->type == GGML_TYPE_F16) {
-            fill((ggml_fp16_t *) self_kq_mask->data, false);
+        GGML_ASSERT(self_attn_mask.raw && ggml_backend_buffer_is_host(self_attn_mask.raw->buffer));
+        if (self_attn_mask.raw->type == GGML_TYPE_F16) {
+            fill((ggml_fp16_t *) self_attn_mask.raw->data, false);
         } else {
-            fill((float *) self_kq_mask->data, false);
+            fill((float *) self_attn_mask.raw->data, false);
         }
 
-        if (self_kq_mask_swa) {
-            GGML_ASSERT(ggml_backend_buffer_is_host(self_kq_mask_swa->buffer));
-            if (self_kq_mask_swa->type == GGML_TYPE_F16) {
-                fill((ggml_fp16_t *) self_kq_mask_swa->data, true);
+        if (self_attn_mask_swa.raw) {
+            GGML_ASSERT(ggml_backend_buffer_is_host(self_attn_mask_swa.raw->buffer));
+            if (self_attn_mask_swa.raw->type == GGML_TYPE_F16) {
+                fill((ggml_fp16_t *) self_attn_mask_swa.raw->data, true);
             } else {
-                fill((float *) self_kq_mask_swa->data, true);
+                fill((float *) self_attn_mask_swa.raw->data, true);
             }
         }
     }
@@ -141,18 +141,18 @@ public:
             }
         };
 
-        GGML_ASSERT(self_kq_mask && ggml_backend_buffer_is_host(self_kq_mask->buffer));
-        if (self_kq_mask->type == GGML_TYPE_F16) {
-            fill((ggml_fp16_t *) self_kq_mask->data, false);
+        GGML_ASSERT(self_attn_mask.raw && ggml_backend_buffer_is_host(self_attn_mask.raw->buffer));
+        if (self_attn_mask.raw->type == GGML_TYPE_F16) {
+            fill((ggml_fp16_t *) self_attn_mask.raw->data, false);
         } else {
-            fill((float *) self_kq_mask->data, false);
+            fill((float *) self_attn_mask.raw->data, false);
         }
-        if (self_kq_mask_swa) {
-            GGML_ASSERT(ggml_backend_buffer_is_host(self_kq_mask_swa->buffer));
-            if (self_kq_mask_swa->type == GGML_TYPE_F16) {
-                fill((ggml_fp16_t *) self_kq_mask_swa->data, true);
+        if (self_attn_mask_swa.raw) {
+            GGML_ASSERT(ggml_backend_buffer_is_host(self_attn_mask_swa.raw->buffer));
+            if (self_attn_mask_swa.raw->type == GGML_TYPE_F16) {
+                fill((ggml_fp16_t *) self_attn_mask_swa.raw->data, true);
             } else {
-                fill((float *) self_kq_mask_swa->data, true);
+                fill((float *) self_attn_mask_swa.raw->data, true);
             }
         }
     }
@@ -189,18 +189,18 @@ public:
             }
         };
 
-        GGML_ASSERT(self_kq_mask && ggml_backend_buffer_is_host(self_kq_mask->buffer));
-        if (self_kq_mask->type == GGML_TYPE_F16) {
-            fill((ggml_fp16_t *) self_kq_mask->data, false);
+        GGML_ASSERT(self_attn_mask.raw && ggml_backend_buffer_is_host(self_attn_mask.raw->buffer));
+        if (self_attn_mask.raw->type == GGML_TYPE_F16) {
+            fill((ggml_fp16_t *) self_attn_mask.raw->data, false);
         } else {
-            fill((float *) self_kq_mask->data, false);
+            fill((float *) self_attn_mask.raw->data, false);
         }
-        if (self_kq_mask_swa) {
-            GGML_ASSERT(ggml_backend_buffer_is_host(self_kq_mask_swa->buffer));
-            if (self_kq_mask_swa->type == GGML_TYPE_F16) {
-                fill((ggml_fp16_t *) self_kq_mask_swa->data, true);
+        if (self_attn_mask_swa.raw) {
+            GGML_ASSERT(ggml_backend_buffer_is_host(self_attn_mask_swa.raw->buffer));
+            if (self_attn_mask_swa.raw->type == GGML_TYPE_F16) {
+                fill((ggml_fp16_t *) self_attn_mask_swa.raw->data, true);
             } else {
-                fill((float *) self_kq_mask_swa->data, true);
+                fill((float *) self_attn_mask_swa.raw->data, true);
             }
         }
     }
@@ -455,36 +455,36 @@ llama_model_diffusion_gemma::graph::graph(const llama_model & model, const llm_g
     if (is_decode) {
         const int64_t n_kv = P + C;
         auto uptr = std::make_unique<llm_graph_input_attn_diffusion_decode>(hparams, cparams, P, C);
-        uptr->self_kq_mask = ggml_new_tensor_4d(ctx0, type_mask, n_kv, C, 1, 1);
-        ggml_set_input(uptr->self_kq_mask);
-        uptr->self_kq_mask_cnv = uptr->self_kq_mask;
+        uptr->self_attn_mask.raw = ggml_new_tensor_4d(ctx0, type_mask, n_kv, C, 1, 1);
+        ggml_set_input(uptr->self_attn_mask.raw);
+        uptr->self_attn_mask.cnv = uptr->self_attn_mask.raw;
         if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
-            uptr->self_kq_mask_swa = ggml_new_tensor_4d(ctx0, type_mask, n_kv, C, 1, 1);
-            ggml_set_input(uptr->self_kq_mask_swa);
-            uptr->self_kq_mask_swa_cnv = uptr->self_kq_mask_swa;
+            uptr->self_attn_mask_swa.raw = ggml_new_tensor_4d(ctx0, type_mask, n_kv, C, 1, 1);
+            ggml_set_input(uptr->self_attn_mask_swa.raw);
+            uptr->self_attn_mask_swa.cnv = uptr->self_attn_mask_swa.raw;
         }
         inp_attn = (llm_graph_input_attn_no_cache *) res->add_input(std::move(uptr));
     } else if (is_prefill) {
         const int64_t n_kv = prefill_off + n_tokens;
         auto uptr = std::make_unique<llm_graph_input_attn_diffusion_prefill>(hparams, cparams, prefill_off, n_tokens);
-        uptr->self_kq_mask = ggml_new_tensor_4d(ctx0, type_mask, n_kv, n_tokens, 1, 1);
-        ggml_set_input(uptr->self_kq_mask);
-        uptr->self_kq_mask_cnv = uptr->self_kq_mask;
+        uptr->self_attn_mask.raw = ggml_new_tensor_4d(ctx0, type_mask, n_kv, n_tokens, 1, 1);
+        ggml_set_input(uptr->self_attn_mask.raw);
+        uptr->self_attn_mask.cnv = uptr->self_attn_mask.raw;
         if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
-            uptr->self_kq_mask_swa = ggml_new_tensor_4d(ctx0, type_mask, n_kv, n_tokens, 1, 1);
-            ggml_set_input(uptr->self_kq_mask_swa);
-            uptr->self_kq_mask_swa_cnv = uptr->self_kq_mask_swa;
+            uptr->self_attn_mask_swa.raw = ggml_new_tensor_4d(ctx0, type_mask, n_kv, n_tokens, 1, 1);
+            ggml_set_input(uptr->self_attn_mask_swa.raw);
+            uptr->self_attn_mask_swa.cnv = uptr->self_attn_mask_swa.raw;
         }
         inp_attn = (llm_graph_input_attn_no_cache *) res->add_input(std::move(uptr));
     } else {
         auto uptr = std::make_unique<llm_graph_input_attn_diffusion>(hparams, cparams, P);
-        uptr->self_kq_mask = ggml_new_tensor_4d(ctx0, type_mask, n_tokens, n_tokens, 1, 1);
-        ggml_set_input(uptr->self_kq_mask);
-        uptr->self_kq_mask_cnv = uptr->self_kq_mask;
+        uptr->self_attn_mask.raw = ggml_new_tensor_4d(ctx0, type_mask, n_tokens, n_tokens, 1, 1);
+        ggml_set_input(uptr->self_attn_mask.raw);
+        uptr->self_attn_mask.cnv = uptr->self_attn_mask.raw;
         if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
-            uptr->self_kq_mask_swa = ggml_new_tensor_4d(ctx0, type_mask, n_tokens, n_tokens, 1, 1);
-            ggml_set_input(uptr->self_kq_mask_swa);
-            uptr->self_kq_mask_swa_cnv = uptr->self_kq_mask_swa;
+            uptr->self_attn_mask_swa.raw = ggml_new_tensor_4d(ctx0, type_mask, n_tokens, n_tokens, 1, 1);
+            ggml_set_input(uptr->self_attn_mask_swa.raw);
+            uptr->self_attn_mask_swa.cnv = uptr->self_attn_mask_swa.raw;
         }
         inp_attn = (llm_graph_input_attn_no_cache *) res->add_input(std::move(uptr));
     }

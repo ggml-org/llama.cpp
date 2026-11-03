@@ -381,6 +381,8 @@ extern "C" {
     GGML_API void        ggml_fp32_to_bf16_row_ref(const float *, ggml_bf16_t *, int64_t);
     GGML_API void        ggml_fp32_to_bf16_row(const float *, ggml_bf16_t *, int64_t);
 
+    typedef struct { uint8_t bits; } ggml_fp8_e4m3_t;
+
     struct ggml_object;
     struct ggml_context;
     struct ggml_cgraph;
@@ -430,7 +432,8 @@ extern "C" {
         GGML_TYPE_NVFP4   = 40, // NVFP4 (4 blocks, E4M3 scale)
         GGML_TYPE_Q1_0    = 41,
         GGML_TYPE_Q2_0    = 42,
-        GGML_TYPE_COUNT   = 43,
+        GGML_TYPE_F8_E4M3 = 43,
+        GGML_TYPE_COUNT   = 44,
     };
 
     // [TAG_GGML_PREC]
@@ -486,6 +489,7 @@ extern "C" {
         GGML_FTYPE_MOSTLY_NVFP4   = 26, // except 1d tensors
         GGML_FTYPE_MOSTLY_Q1_0    = 27, // except 1d tensors
         GGML_FTYPE_MOSTLY_Q2_0    = 28, // except 1d tensors
+        GGML_FTYPE_MOSTLY_F8_E4M3 = 29, // except 1d tensors
     };
 
     // available tensor operations:
@@ -2508,6 +2512,24 @@ extern "C" {
             struct ggml_tensor  * k,
             struct ggml_tensor  * v,
             struct ggml_tensor  * mask,
+            float                 scale,
+            float                 max_bias,
+            float                 logit_softcap);
+
+    // same as ggml_flash_attn_ext, but each q slice attends to its own list of K/V rows
+    // q:       [n_embd_k, n_batch, n_head,    ne3]
+    // k:       [n_embd_k, n_rows,  n_head_kv, 1  ] shared by all q slices
+    // v:       [n_embd_v, n_rows,  n_head_kv, 1  ]
+    // mask:    [n_kv,     n_batch, ne32,      ne3]
+    // kv_rows: [n_kv,     ne3] I32, mask column i of slice i3 uses row kv_rows[i, i3] of k and v
+    // negative rows are padding, their mask entries must be -inf
+    GGML_API struct ggml_tensor * ggml_flash_attn_ext_rows(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * q,
+            struct ggml_tensor  * k,
+            struct ggml_tensor  * v,
+            struct ggml_tensor  * mask,
+            struct ggml_tensor  * kv_rows,
             float                 scale,
             float                 max_bias,
             float                 logit_softcap);

@@ -43,6 +43,14 @@ static inline float f32_to_f32(float x) {
     return x;
 }
 
+static inline float f8_e4m3_to_f32(ggml_fp8_e4m3_t x) {
+    return ggml_f8_e4m3_to_fp32(x.bits);
+}
+
+static inline ggml_fp8_e4m3_t f32_to_f8_e4m3(float x) {
+    return { ggml_fp32_to_f8_e4m3(x) };
+}
+
 // TODO - merge this into the traits table, after using row-based conversions
 template <class T>
 struct type_conversion_table;
@@ -63,6 +71,12 @@ template <>
 struct type_conversion_table<ggml_bf16_t> {
     static constexpr float (*to_f32)(ggml_bf16_t) = bf16_to_f32;
     static constexpr ggml_bf16_t (*from_f32)(float) = f32_to_bf16;
+};
+
+template <>
+struct type_conversion_table<ggml_fp8_e4m3_t> {
+    static constexpr float (*to_f32)(ggml_fp8_e4m3_t) = f8_e4m3_to_f32;
+    static constexpr ggml_fp8_e4m3_t (*from_f32)(float) = f32_to_f8_e4m3;
 };
 
 template <>

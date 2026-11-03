@@ -219,6 +219,10 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_att
         int32_t ns10,
         int32_t ns20);
 
+struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_rows(
+        ggml_metal_library_t lib,
+        const struct ggml_tensor * op);
+
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_vec_idx(
         ggml_metal_library_t lib,
         const struct ggml_tensor * op);
@@ -232,6 +236,7 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_att
         bool    has_scap,
         bool    has_kvpad,
         bool    has_sparse,
+        bool    has_rows,
         int32_t nqpsg,
         int32_t ne,
         int32_t nsg,
@@ -362,7 +367,10 @@ bool   ggml_metal_buffer_is_shared(ggml_metal_buffer_t buf);
 void   ggml_metal_buffer_memset_tensor(ggml_metal_buffer_t buf, struct ggml_tensor * tensor, uint8_t value, size_t offset, size_t size);
 void   ggml_metal_buffer_set_tensor   (ggml_metal_buffer_t buf, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size);
 void   ggml_metal_buffer_get_tensor   (ggml_metal_buffer_t buf, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size);
+void   ggml_metal_buffer_set_tensor_n (ggml_metal_buffer_t buf, struct ggml_tensor * const * tensors, const void * const * data, const size_t * offsets, const size_t * sizes, size_t n_tensors);
+void   ggml_metal_buffer_get_tensor_n (ggml_metal_buffer_t buf, const struct ggml_tensor * const * tensors,       void * const * data, const size_t * offsets, const size_t * sizes, size_t n_tensors);
 bool   ggml_metal_buffer_cpy_tensor   (ggml_metal_buffer_t buf, const struct ggml_tensor * src, struct ggml_tensor * dst);
+bool   ggml_metal_buffer_cpy_tensor_n (ggml_metal_buffer_t buf, const struct ggml_tensor * const * srcs, struct ggml_tensor * const * dsts, size_t n_tensors);
 void   ggml_metal_buffer_clear        (ggml_metal_buffer_t buf, uint8_t value);
 
 // finds the Metal buffer that contains the tensor data on the GPU device

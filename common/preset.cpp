@@ -171,12 +171,12 @@ static std::map<std::string, std::map<std::string, std::string>> parse_ini_from_
     std::map<std::string, std::map<std::string, std::string>> parsed;
 
     if (!std::filesystem::exists(path)) {
-        throw std::runtime_error("preset file does not exist: " + fs_path_to_utf8(path));
+        throw std::runtime_error("preset file does not exist: " + path.string());
     }
 
     std::ifstream file(path);
     if (!file.good()) {
-        throw std::runtime_error("failed to open server preset file: " + fs_path_to_utf8(path));
+        throw std::runtime_error("failed to open server preset file: " + path.string());
     }
 
     std::string contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
@@ -225,7 +225,7 @@ static std::map<std::string, std::map<std::string, std::string>> parse_ini_from_
     common_peg_parse_context ctx(contents);
     const auto result = parser.parse(ctx);
     if (!result.success()) {
-        throw std::runtime_error("failed to parse server config file: " + fs_path_to_utf8(path));
+        throw std::runtime_error("failed to parse server config file: " + path.string());
     }
 
     std::string current_section = COMMON_PRESET_DEFAULT_NAME;
@@ -323,7 +323,7 @@ common_presets common_preset_context::load_from_ini(const std::filesystem::path 
                 }
                 LOG_DBG("accepted option: %s = %s\n", key.c_str(), preset.options[opt].c_str());
             } else if (ignore_unknown_keys) {
-                LOG_WRN("ignoring option '%s' from %s: not supported by this program\n", key.c_str(), fs_path_to_utf8(path).c_str());
+                LOG_WRN("ignoring option '%s' from %s: not supported by this program\n", key.c_str(), path.string().c_str());
             } else {
                 throw std::runtime_error(string_format(
                     "option '%s' not recognized in preset '%s'",
@@ -401,7 +401,7 @@ common_presets common_preset_context::load_from_models_dir(const std::string & m
             if (!entry.is_regular_file(ec)) {
                 continue;
             }
-            const std::string fname = fs_path_to_utf8(entry.path().filename());
+            const std::string fname = entry.path().filename().string();
             if (!string_ends_with(fname, ".gguf")) {
                 continue;
             }
@@ -422,9 +422,9 @@ common_presets common_preset_context::load_from_models_dir(const std::string & m
         if (!path.empty()) {
             models.push_back({
                 /* name        */ name,
-                /* path        */ fs_path_to_utf8(path),
-                /* path_mmproj */ fs_path_to_utf8(mmproj_file), // can be empty
-                /* path_draft  */ fs_path_to_utf8(draft_file)    // can be empty
+                /* path        */ path.string(),
+                /* path_mmproj */ mmproj_file.string(), // can be empty
+                /* path_draft  */ draft_file.string()   // can be empty
             });
         }
     };
@@ -432,13 +432,13 @@ common_presets common_preset_context::load_from_models_dir(const std::string & m
     for (const auto & entry : std::filesystem::directory_iterator(dir)) {
         std::error_code ec;
         if (entry.is_directory(ec)) {
-            scan_subdir(entry.path(), fs_path_to_utf8(entry.path().filename()));
+            scan_subdir(entry.path(), entry.path().filename().string());
             continue;
         }
         if (!entry.is_regular_file(ec)) {
             continue;
         }
-        const std::string fname = fs_path_to_utf8(entry.path().filename());
+        const std::string fname = entry.path().filename().string();
         if (!string_ends_with(fname, ".gguf")) {
             continue;
         }
@@ -450,7 +450,7 @@ common_presets common_preset_context::load_from_models_dir(const std::string & m
         string_replace_all(name, ".gguf", "");
         models.push_back({
             /* name        */ name,
-            /* path        */ fs_path_to_utf8(entry.path()),
+            /* path        */ entry.path().string(),
             /* path_mmproj */ "",
             /* path_draft  */ ""
         });

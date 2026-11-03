@@ -638,6 +638,9 @@ static const ggml_backend_buffer_i ggml_backend_openvino_buffer_interface = {
     /* .cpy_tensor      = */ ggml_backend_openvino_buffer_cpy_tensor,
     /* .clear           = */ ggml_backend_openvino_buffer_clear,
     /* .reset           = */ NULL,
+    /* .set_tensor_n    = */ NULL,
+    /* .get_tensor_n    = */ NULL,
+    /* .cpy_tensor_n    = */ NULL,
 };
 
 // Buffer type interface functions
@@ -1515,6 +1518,11 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         // affecting non-gemma3n models such as Llama-3.2.
         if (fabsf(scale - 1.0f) < 1e-6f && is_gemma3n_flash_attn_pattern(op)) {
             return {false, "FLASH_ATTN_EXT gemma3n pattern on GPU is not supported"};
+        }
+
+        // K/V row lists (ggml_flash_attn_ext_rows) are not supported
+        if (op->src[5] != nullptr) {
+            return {false, "FLASH_ATTN_EXT with K/V row lists is not supported"};
         }
 
         if (op->src[4] != nullptr) {

@@ -150,6 +150,7 @@ option(LLAMA_LLGUIDANCE "llama-common: include LLGuidance library for structured
 # Required for relocatable CMake package
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/build-info.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/common.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/win-app.cmake)
 
 if (NOT DEFINED LLAMA_BUILD_NUMBER)
     set(LLAMA_BUILD_NUMBER        ${BUILD_NUMBER})
@@ -268,6 +269,8 @@ option(LLAMA_BUILD_MTMD "llama: build tools/mtmd library standalone" OFF)
 if (LLAMA_BUILD_MTMD AND NOT (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TOOLS))
     add_subdirectory(tools/mtmd)
 endif()
+
+llama_apply_app_manifests()
 
 #
 # install

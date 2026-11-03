@@ -16,6 +16,7 @@
 #include <cstring>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <random>
 #include <regex>
 #include <stdexcept>
@@ -242,10 +243,9 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         n_head = 4;
         n_layer = 4; // dense and MoE layers, each with local and full attention
     } else if (arch == LLM_ARCH_GEMMA4) {
-        n_embd = 128;
-        n_head = 2;
-        n_ff   = 192;
-        n_layer = 5; // need at least 5 for swa_pattern (every 5th is full_attention)
+        // TODO: expand coverage to both GQA and MQA (see https://github.com/ggml-org/llama.cpp/pull/31401#pullrequestreview-5710165130)
+        n_head = 4;
+        n_layer = 10; // last 5 layers reuse KV, both SWA and full attention
     } else if (arch == LLM_ARCH_GEMMA3N) {
         n_embd = 64;
         n_head = 1;
@@ -281,10 +281,14 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
             || arch == LLM_ARCH_KIMI_K3
             || arch == LLM_ARCH_GLM5_NEXT
             || arch == LLM_ARCH_MISTRAL4
+            || arch == LLM_ARCH_MISTRAL_LARGE4
             || arch == LLM_ARCH_HY_V4) {
         n_embd = 128;
         n_head = 1;
         n_ff   = 192;
+        if (arch == LLM_ARCH_MISTRAL_LARGE4) {
+            n_layer = 4; // cover NoPE, shared indexer and KV sharing layers
+        }
     } else if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
         n_layer = 3;
     } else if (arch == LLM_ARCH_CHAMELEON) {
@@ -300,7 +304,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     if (arch == LLM_ARCH_QWEN3) {
         n_head_kv = 1; // MQA coverage
     } else if (arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_MUSE_SPARK || arch == LLM_ARCH_AFMOE || arch == LLM_ARCH_MAION_CODER ||
-            arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_LIMITE) {
+            arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_LIMITE || arch == LLM_ARCH_GEMMA4) {
         n_head_kv = 2; // GQA coverage
     }
     if (arch == LLM_ARCH_BEAM) {
@@ -376,7 +380,8 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
             || arch == LLM_ARCH_KIMI_K3
             || arch == LLM_ARCH_GLM5_NEXT
             || arch == LLM_ARCH_HY_V4
-            || arch == LLM_ARCH_MISTRAL4) {
+            || arch == LLM_ARCH_MISTRAL4
+            || arch == LLM_ARCH_MISTRAL_LARGE4) {
         // GLM5 next MLA is nope only, the cache row is the compressed latent alone.
         ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH,       arch == LLM_ARCH_GLM5_NEXT ? uint32_t(512) : uint32_t(576));
         ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH,     uint32_t(512));
@@ -418,24 +423,22 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
 
     if (arch == LLM_ARCH_MAION_CODER) {
         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, std::vector<uint32_t>{1, 1, 0, 0});
-    } else if (arch == LLM_ARCH_BEAM) {
-        std::vector<uint32_t> pattern;
-        pattern.reserve(n_layer);
-        for (uint32_t il = 0; il < n_layer; il++) {
-            pattern.push_back(il % 2);
-        }
-        ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, pattern);
     } else if (arch == LLM_ARCH_GEMMA4) {
         ms.add_kv(LLM_KV_EMBEDDING_LENGTH_PER_LAYER,      n_embd/2);
-        ms.add_kv(LLM_KV_ATTENTION_SHARED_KV_LAYERS,      uint32_t(0));
+        ms.add_kv(LLM_KV_ATTENTION_SHARED_KV_LAYERS,      uint32_t(5));
         ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH_SWA,        n_embd_head);
         ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH_SWA,      n_embd_head);
         ms.add_kv(LLM_KV_ROPE_FREQ_BASE_SWA,              10000.0f);
         // SWA pattern: every 5th layer is full attention (matches E2B layer_types)
-        ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, uint32_t(5));
+        std::vector<uint32_t> pattern;
+        pattern.reserve(n_layer);
+        for (uint32_t il = 0; il < n_layer; il++) {
+            pattern.push_back((il + 1) % 5 != 0);
+        }
+        ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, pattern);
     } else if (arch == LLM_ARCH_COHERE2MOE || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_SPARK2_5 ||
             arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_MUSE_SPARK || arch == LLM_ARCH_GRANITE_SWA || arch == LLM_ARCH_DOTS3NOTE ||
-            arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_MAPLE || arch == LLM_ARCH_FLINT) {
+            arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_MAPLE || arch == LLM_ARCH_FLINT || arch == LLM_ARCH_BEAM) {
         std::vector<uint32_t> pattern;
         pattern.reserve(n_layer);
         for (uint32_t il = 0; il < n_layer; il++) {
@@ -539,6 +542,14 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ms.add_kv(LLM_KV_ATTENTION_INDEXER_TYPES, indexer_types);
     }
 
+    if (arch == LLM_ARCH_MISTRAL_LARGE4) {
+        // layer 3 reads the KV cache of layer 2, both are NoPE
+        ms.add_kv(LLM_KV_ATTENTION_ROPE_PATTERN,     std::vector<uint32_t>({1, 1, 0, 0}));
+        ms.add_kv(LLM_KV_ATTENTION_INDEXER_TYPES,    std::vector<uint32_t>({1, 0, 1, 1}));
+        ms.add_kv(LLM_KV_ATTENTION_KV_SOURCE_MAP,    std::vector<uint32_t>({0, 1, 2, 2}));
+        ms.add_kv(LLM_KV_FINAL_LOGIT_SOFTCAPPING,    30.0f);
+    }
+
     if (arch == LLM_ARCH_DEEPSEEK4) {
         ms.add_kv(LLM_KV_ATTENTION_OUTPUT_GROUP_COUNT,          uint32_t(8));
         ms.add_kv(LLM_KV_ATTENTION_OUTPUT_LORA_RANK,            uint32_t(32));
@@ -628,7 +639,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ms.add_kv(LLM_KV_EXPERT_LATENT_LENGTH,       n_ff);
         ms.add_kv(LLM_KV_INTERLEAVE_MOE_LAYER_STEP,  uint32_t(2));
         // with more experts than a ubatch uses, the copy of the used experts in host memory skips some of them
-        ms.add_kv(LLM_KV_EXPERT_COUNT,               uint32_t(host_experts_test(arch) ? 64 : 2));
+        ms.add_kv(LLM_KV_EXPERT_COUNT,               uint32_t(host_experts_test(arch) ? 64 : arch == LLM_ARCH_CLOVER_MOE ? 4 : 2));
         ms.add_kv(LLM_KV_EXPERT_USED_COUNT,          uint32_t(2));
         ms.add_kv(LLM_KV_EXPERT_SHARED_COUNT,        uint32_t(1));
 
@@ -678,7 +689,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     ms.add_kv(LLM_KV_XIELU_ALPHA_P,             1.0f);
     ms.add_kv(LLM_KV_XIELU_BETA,                1.0f);
     ms.add_kv(LLM_KV_XIELU_EPS,                 1.0e-7f);
-    ms.add_kv(LLM_KV_SSM_INNER_SIZE,            arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN4EXP ? 256 : 2*n_embd);
+    ms.add_kv(LLM_KV_SSM_INNER_SIZE,            arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_CLOVER_MOE ? 256 : 2*n_embd);
     ms.add_kv(LLM_KV_SSM_CONV_KERNEL,           uint32_t(4));
     ms.add_kv(LLM_KV_SSM_STATE_SIZE,            uint32_t(128));
     ms.add_kv(LLM_KV_SSM_TIME_STEP_RANK,        n_head);
@@ -924,6 +935,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_QWEN3NEXT:
         case LLM_ARCH_QWEN3VLMOE:
         case LLM_ARCH_QWEN35MOE:
+        case LLM_ARCH_CLOVER_MOE:
         case LLM_ARCH_QWEN4EXP:
         case LLM_ARCH_PHIMOE:
         case LLM_ARCH_DBRX:
@@ -966,6 +978,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_GLM5_NEXT:
         case LLM_ARCH_STEP35:
         case LLM_ARCH_MISTRAL4:
+        case LLM_ARCH_MISTRAL_LARGE4:
         case LLM_ARCH_MELLUM:
         case LLM_ARCH_LAGUNA:
         case LLM_ARCH_MAPLE:
@@ -1005,9 +1018,6 @@ static bool arch_supported(const llm_arch arch) {
     }
     if (arch == LLM_ARCH_WAVTOKENIZER_DEC) {
         return false; // FIXME CUDA backend crashes.
-    }
-    if (arch == LLM_ARCH_GEMMA4 || arch == LLM_ARCH_GEMMA4_ASSISTANT) {
-        return false; // FIXME @ngxson
     }
     if (arch == LLM_ARCH_GRANITE_SWITCH) {
         return false; // FIXME adapter fixture
@@ -1080,10 +1090,7 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
         if (!arch_matches(arch_filter, arch)) {
             continue;
         }
-        if (arch == LLM_ARCH_GEMMA4 || arch == LLM_ARCH_GEMMA4_ASSISTANT) {
-            continue; // FIXME: ISWA KV cache initialization needs more fixture params
-        }
-        if (arch == LLM_ARCH_EAGLE3 || arch == LLM_ARCH_DFLASH) {
+        if (arch == LLM_ARCH_EAGLE3 || arch == LLM_ARCH_DFLASH || arch == LLM_ARCH_GEMMA4_ASSISTANT) {
             continue;
         }
         for (bool moe : {false, true}) {
@@ -1240,10 +1247,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
         if (!arch_matches(arch_filter, arch)) {
             continue;
         }
-        if (arch == LLM_ARCH_GEMMA4 || arch == LLM_ARCH_GEMMA4_ASSISTANT) {
-            continue; // FIXME: ISWA KV cache initialization needs more fixture params
-        }
-        if (arch == LLM_ARCH_EAGLE3 || arch == LLM_ARCH_DFLASH) {
+        if (arch == LLM_ARCH_EAGLE3 || arch == LLM_ARCH_DFLASH || arch == LLM_ARCH_GEMMA4_ASSISTANT) {
             continue;
         }
 
