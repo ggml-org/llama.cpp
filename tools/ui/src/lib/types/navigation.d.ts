@@ -1,5 +1,5 @@
-import type { MenuKind, SidebarAction } from '$lib/enums';
-import type { Component, Snippet } from 'svelte';
+import type { SidebarAction } from '$lib/enums';
+import type { Component } from 'svelte';
 
 /**
  * A single clickable action in the desktop sidebar icon strip.
@@ -24,11 +24,6 @@ export interface MenuAction {
 	icon: Component;
 	label: string;
 	onclick: (event: Event) => void;
-	/**
-	 * Flyout rendered in place of the row in a desktop menu, through the kit of
-	 * the menu it is in; the phone drawer keeps `onclick`.
-	 */
-	submenu?: Snippet<[{ close: () => void; kind: MenuKind }]>;
 	variant?: 'default' | 'destructive';
 	disabled?: boolean;
 	/** Shown on hover, e.g. why a disabled action is not available. */

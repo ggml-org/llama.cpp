@@ -51,7 +51,10 @@
 	// Selected text, links, media, code and fields keep the browser's menu: the
 	// right-click stops here, before the context menu trigger around it sees it.
 	function keepNativeMenu(event: MouseEvent) {
-		const hasSelection = Boolean(window.getSelection()?.toString().trim());
+		const selection = window.getSelection();
+		// only a selection inside this message counts, not one left elsewhere on the page
+		const hasSelection =
+			!!selection?.toString().trim() && selection.containsNode(event.currentTarget as Node, true);
 		const target = event.target instanceof Element ? event.target : null;
 
 		if (hasSelection || target?.closest(NATIVE_CONTEXT_MENU_SELECTOR)) {

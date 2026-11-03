@@ -32,8 +32,6 @@
 		onClose?: () => void;
 		/** Fired when the chip is clicked so the host can open the picker. */
 		onOpen?: () => void;
-		/** Renders the chip trigger; off when the host anchors its own trigger. */
-		showChip?: boolean;
 	}
 
 	let {
@@ -45,8 +43,7 @@
 		onChange,
 		onClose,
 		onOpen,
-		query = $bindable(''),
-		showChip = true
+		query = $bindable('')
 	}: Props = $props();
 
 	// File System Access API is opt-in (Chrome / Edge / Opera): the popover
@@ -300,25 +297,23 @@
 	const showTooltip = $derived(innerWidth > DEFAULT_MOBILE_BREAKPOINT);
 </script>
 
-{#if showChip}
-	<button
-		class={[
-			'justify-self-start flex min-w-0 w-auto items-center gap-1 mt-1.5 py-1 px-2 backdrop-blur-2xl rounded-md',
-			className
-		]}
+<button
+	class={[
+		'justify-self-start flex min-w-0 w-auto items-center gap-1 mt-1.5 py-1 px-2 backdrop-blur-2xl rounded-md',
+		className
+	]}
+	{disabled}
+	onclick={onOpen}
+	type="button"
+>
+	<ChatFormCurrentWorkingDirectoryChip
+		{directory}
 		{disabled}
-		onclick={onOpen}
-		type="button"
-	>
-		<ChatFormCurrentWorkingDirectoryChip
-			{directory}
-			{disabled}
-			{homeBase}
-			onClear={handleDismiss}
-			{showTooltip}
-		/>
-	</button>
-{/if}
+		{homeBase}
+		onClear={handleDismiss}
+		{showTooltip}
+	/>
+</button>
 
 <Popover.Root onOpenChange={handleOpenChange} open={isOpen}>
 	<Popover.Trigger

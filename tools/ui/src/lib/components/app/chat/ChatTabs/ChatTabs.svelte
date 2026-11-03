@@ -8,6 +8,7 @@
 		CHAT_TABS_MAX_WIDTH,
 		NEW_CHAT_LABEL,
 		NEW_CHAT_TAB_ID,
+		SHORTCUT_CLOSE_TAB,
 		UI_DATA_ATTRS,
 		UNNAMED_CHAT_LABEL
 	} from '$lib/constants';
@@ -71,7 +72,7 @@
 				onclick: () => handleClose(id),
 				separator: isLoading,
 				// the shortcut closes the active tab only
-				shortcut: id === activeId ? ['shift', 'cmd', 'x'] : undefined
+				shortcut: id === activeId ? SHORTCUT_CLOSE_TAB : undefined
 			},
 			{
 				disabled: others.length === 0,

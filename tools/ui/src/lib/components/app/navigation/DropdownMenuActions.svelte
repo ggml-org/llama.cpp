@@ -126,7 +126,7 @@
 		</Tooltip.Root>
 
 		<DropdownMenu.Content {align} class="z-[999999] w-48">
-			<MenuActionsList {actions} kind={MenuKind.DROPDOWN} onClose={() => (open = false)} />
+			<MenuActionsList {actions} kind={MenuKind.DROPDOWN} />
 		</DropdownMenu.Content>
 	</DropdownMenu.Root>
 {/if}

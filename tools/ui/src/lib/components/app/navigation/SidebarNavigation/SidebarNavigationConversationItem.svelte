@@ -96,7 +96,8 @@
 		openInNewTab();
 	}
 
-	// the "more actions" dropdown and the right-click menu offer the same actions
+	// the "more actions" dropdown and the right-click menu offer the same actions; the
+	// shortcuts act on the active conversation, so only its row shows them
 	let actions = $derived<MenuAction[]>([
 		...(canOpenInNewTab
 			? [
@@ -123,7 +124,7 @@
 			icon: Pencil,
 			label: 'Edit',
 			onclick: handleEdit,
-			shortcut: SHORTCUT_EDIT_CONVERSATION
+			shortcut: isActive ? SHORTCUT_EDIT_CONVERSATION : undefined
 		},
 		{
 			icon: Download,
@@ -132,7 +133,7 @@
 				e.stopPropagation();
 				conversationsStore.downloadConversation(conversation.id);
 			},
-			shortcut: SHORTCUT_EXPORT_CONVERSATION
+			shortcut: isActive ? SHORTCUT_EXPORT_CONVERSATION : undefined
 		},
 		{
 			icon: ListChecks,
@@ -144,7 +145,7 @@
 			label: 'Delete',
 			onclick: handleDelete,
 			separator: true,
-			shortcut: SHORTCUT_DELETE_CONVERSATION,
+			shortcut: isActive ? SHORTCUT_DELETE_CONVERSATION : undefined,
 			variant: 'destructive'
 		}
 	]);
