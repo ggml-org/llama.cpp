@@ -55,6 +55,7 @@
 #include <aclnnop/aclnn_index_fill_tensor.h>
 #include <aclnnop/aclnn_index_select.h>
 #include <aclnnop/aclnn_layer_norm.h>
+#include <aclnnop/aclnn_isneginf.h>
 #include <aclnnop/aclnn_log.h>
 #include <aclnnop/aclnn_matmul.h>
 #include <aclnnop/aclnn_max_pool.h>
@@ -4017,6 +4018,8 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context & ctx, ggml_tensor * dst
         // Step 3: create the PSEShift tensor if needed
         //         this tensor is considered as mask (f16) in the llama.cpp
         acl_tensor_ptr       bcast_pse_tensor;
+        acl_tensor_ptr       attention_mask;
+        ggml_cann_pool_alloc mask_allocator(ctx.pool());
         ggml_cann_pool_alloc bcast_pse_allocator(ctx.pool());
         if (src3 != nullptr) {
             // Construct the truncated pse tensor (common for prefill/decode)
@@ -4031,6 +4034,22 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context & ctx, ggml_tensor * dst
             acl_tensor_ptr acl_mask_f16_trunc_tensor = ggml_cann_create_tensor(
                 src3->data, ACL_FLOAT16, sizeof(uint16_t), trunc_pse_ne, trunc_pse_nb, GGML_MAX_DIMS);
 
+            // Fully masked tiles need the attention mask path; -Inf PSE alone can produce NaNs.
+            size_t mask_nb[GGML_MAX_DIMS] = { sizeof(uint8_t) };
+            size_t mask_elements = 1;
+            for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+                GGML_ASSERT(trunc_pse_ne[i] > 0 && uint64_t(trunc_pse_ne[i]) <= SIZE_MAX / faElemSize / mask_elements);
+                mask_elements *= trunc_pse_ne[i];
+                if (i > 0) {
+                    mask_nb[i] = mask_nb[i - 1] * trunc_pse_ne[i - 1];
+                }
+            }
+            attention_mask = ggml_cann_create_tensor(mask_allocator.alloc(mask_elements),
+                ACL_BOOL, sizeof(uint8_t), trunc_pse_ne, mask_nb, GGML_MAX_DIMS);
+            GGML_CANN_CALL_ACLNN_OP(ctx, IsNegInf, acl_mask_f16_trunc_tensor.get(), attention_mask.get());
+            float zero = 0.0f;
+            acl_scalar_ptr zero_scalar = ggml_cann_create_scalar(&zero, ACL_FLOAT);
+
             int64_t bcast_pse_ne[GGML_MAX_DIMS];
             size_t  bcast_pse_nb[GGML_MAX_DIMS];
             bcast_pse_ne[0] = src3->ne[0];  // D
@@ -4038,24 +4057,33 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context & ctx, ggml_tensor * dst
             bcast_pse_ne[2] = src0->ne[2];  // N (num_heads)
             bcast_pse_ne[3] = src3->ne[3];  // B
             if (maxBias == 0.0f) {
-                // When maxBias == 0.0f, use nb = 0 reduce once repeat (Qwen2)
-                // Construct the bcast tensor (simulate repeat on the head dimension using stride=0)
+                size_t pse_nb[GGML_MAX_DIMS];
+                for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+                    pse_nb[i] = mask_nb[i] * faElemSize;
+                }
+                void * pse_buffer = bcast_pse_allocator.alloc(mask_elements * faElemSize);
+                acl_tensor_ptr finite_pse = ggml_cann_create_tensor(pse_buffer, faDataType, faElemSize,
+                    trunc_pse_ne, pse_nb, GGML_MAX_DIMS);
+                GGML_CANN_CALL_ACLNN_OP(ctx, InplaceCopy, finite_pse.get(), acl_mask_f16_trunc_tensor.get());
+                GGML_CANN_CALL_ACLNN_OP(ctx, InplaceMaskedFillScalar, finite_pse.get(), attention_mask.get(), zero_scalar.get());
+
+                // Share the finite bias across query heads.
                 bcast_pse_nb[0] = sizeof(uint16_t);
                 bcast_pse_nb[1] = bcast_pse_nb[0] * bcast_pse_ne[0];
                 bcast_pse_nb[2] = 0;  // <---- the head dimension shares the same data
-                bcast_pse_nb[3] = src3->nb[3];
+                bcast_pse_nb[3] = pse_nb[3];
 
-                bcast_pse_tensor = ggml_cann_create_tensor(src3->data, ACL_FLOAT16, sizeof(uint16_t), bcast_pse_ne,
+                bcast_pse_tensor = ggml_cann_create_tensor(pse_buffer, ACL_FLOAT16, sizeof(uint16_t), bcast_pse_ne,
                                                            bcast_pse_nb, GGML_MAX_DIMS);
 
             } else {
+                GGML_ASSERT(uint64_t(src0->ne[2]) <= SIZE_MAX / faElemSize / mask_elements);
                 bcast_pse_nb[0] = sizeof(uint16_t);
                 for (int i = 1; i < GGML_MAX_DIMS; i++) {
                     bcast_pse_nb[i] = bcast_pse_nb[i - 1] * bcast_pse_ne[i - 1];
                 }
 
-                void * bcast_pse_buffer =
-                    bcast_pse_allocator.alloc(ggml_nelements(src3) * src0->ne[2] * sizeof(uint16_t));
+                void * bcast_pse_buffer = bcast_pse_allocator.alloc(mask_elements * src0->ne[2] * faElemSize);
 
                 bcast_pse_tensor = ggml_cann_create_tensor(bcast_pse_buffer, ACL_FLOAT16, sizeof(uint16_t),
                                                            bcast_pse_ne, bcast_pse_nb, GGML_MAX_DIMS);
@@ -4080,6 +4108,7 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context & ctx, ggml_tensor * dst
                 acl_tensor_ptr slope_tensor = ggml_cann_create_tensor(slope_buffer, ACL_FLOAT16, sizeof(uint16_t),
                                                                       slope_ne, slope_nb, GGML_MAX_DIMS);
                 GGML_CANN_CALL_ACLNN_OP(ctx, InplaceMul, bcast_pse_tensor.get(), slope_tensor.get());
+                GGML_CANN_CALL_ACLNN_OP(ctx, InplaceMaskedFillScalar, bcast_pse_tensor.get(), attention_mask.get(), zero_scalar.get());
             }
         }
 
@@ -4090,8 +4119,8 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context & ctx, ggml_tensor * dst
         int64_t numHeads           = src0->ne[2];  // N
         int64_t numKeyValueHeads   = src1->ne[2];
         // double  scaleValue = 1 / sqrt(src0->ne[0]); // 1/sqrt(d)
-        int64_t preTokens          = 65535;
-        int64_t nextTokens         = 65535;
+        int64_t preTokens          = INT32_MAX;
+        int64_t nextTokens         = INT32_MAX;
         char    layout[5]          = { 'B', 'S', 'N', 'D', 0 };
         int64_t sparseMode         = 0;
         int64_t innerPrecise       = (src0->ne[1] == 1) ? 0 : 2;
@@ -4122,7 +4151,7 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context & ctx, ggml_tensor * dst
 
         GGML_CANN_CALL_ACLNN_OP(ctx, FusedInferAttentionScoreV2, acl_q_tensor.get(), acl_k_tensor_list.get(),
                                 acl_v_tensor_list.get(),               // q, k, v
-                                bcast_pse_tensor.get(), nullptr,       // pse, mask
+                                bcast_pse_tensor.get(), attention_mask.get(), // finite pse, exclusions
                                 nullptr, nullptr,                      // actSeqLen, actSeqLenkv
                                 nullptr, nullptr,                      // deqScale1, quantScale1
                                 nullptr, nullptr, nullptr,             // deqScale2, quantScale2, quantOffset2
