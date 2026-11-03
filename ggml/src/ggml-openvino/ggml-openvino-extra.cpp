@@ -125,6 +125,7 @@ void ggml_openvino_device_config::init() {
         "GGML_OPENVINO_NPU_REQUANT_POLICY",
         // Integer values (use ggml_openvino_getenv_int)
         "GGML_OPENVINO_PREFILL_CHUNK_SIZE",
+        "GGML_OPENVINO_LAZY_HOST_THRESHOLD_MB",
         // Boolean toggles (treated as int flags via ggml_openvino_getenv_int)
         "GGML_OPENVINO_STATEFUL_EXECUTION",
         "GGML_OPENVINO_PROFILING",
