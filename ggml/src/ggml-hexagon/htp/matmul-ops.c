@@ -72,6 +72,10 @@ static bool htp_matmul_has_extended_weight(const struct htp_ops_context * octx, 
     return false;
 }
 
+static bool htp_ranges_disjoint(uint64_t a, uint32_t a_size, uint64_t b, uint32_t b_size) {
+    return a >= b ? a - b >= b_size : b - a >= a_size;
+}
+
 struct htp_mm_context {
     const char * type;
     struct htp_ops_context * octx;
@@ -386,6 +390,26 @@ static void hvx_mv_2d_tiled(unsigned int nth, unsigned int ith, void * data) {
     uint32_t ct_start = src0_start_row / 32;
     uint32_t ct_end   = (src0_end_row + 31) / 32;
 
+    // Keep partial slices on the temporary path; sz loads a full 128-byte vector.
+    const bool dst_weight_disjoint = htp_ranges_disjoint(
+        dst->data, dst->size, src0->data, src0->size);
+    const bool residual_alias_safe = !src2 || src2->data == dst->data ||
+        htp_ranges_disjoint(dst->data, dst->size, src2->data, src2->size);
+    const bool direct_store =
+        (src0->type == HTP_TYPE_Q4_0 || src0->type == HTP_TYPE_Q8_0) &&
+        mmctx->act_nrows == 1 && dst->type == HTP_TYPE_F32 && nb0 == sizeof(float) &&
+        !htp_tensor_is_extended(dst) && src0_end_row <= ne0 &&
+        (src0_start_row % 32) == 0 && (src0_end_row % 32) == 0 &&
+        dst->size / sizeof(float) >= ne0 && hex_is_aligned(dst_col, 128) &&
+        dst_weight_disjoint && dma_queue_empty(dma_q) &&
+        dma_queue_capacity(dma_q) > n_prefetch + 1 &&
+        (!src2 ||
+         (src2->type == HTP_TYPE_F32 && src2->nb[0] == sizeof(float) && ne20 == ne0 &&
+          ne21 == 1 && ne22 == 1 && ne23 == 1 && src2->size / sizeof(float) >= ne0 &&
+          src2->nb[1] / sizeof(float) >= ne0 && hex_is_aligned(mmctx->vtcm_bias, 128) &&
+          residual_alias_safe));
+    volatile dma_descriptor_2d * residual_desc = NULL;
+
     uint32_t push_ct = ct_start;
     if (src0_start_row < src0_end_row) {
         if (src2) {
@@ -393,6 +417,9 @@ static void hvx_mv_2d_tiled(unsigned int nth, unsigned int ith, void * data) {
             const dma_addr_t src2_addr = src2->data + src0_start_row * sizeof(float);
             int slice_size = (int)MIN(src0_end_row, ne0) - (int)src0_start_row;
             if (slice_size > 0) {
+                if (direct_store) {
+                    residual_desc = &dma_q->ring0->desc[dma_q->ring0->push_idx];
+                }
                 dma_queue_push(dma_q, dma_make_data(vtcm_bias_ptr, src2_addr),
                                slice_size * sizeof(float), slice_size * sizeof(float), slice_size * sizeof(float), 1);
                 dma_queue_pop_nowait(dma_q);
@@ -410,13 +437,21 @@ static void hvx_mv_2d_tiled(unsigned int nth, unsigned int ith, void * data) {
 
     for (uint32_t ct = ct_start; ct < ct_end; ct++) {
         const uint8_t * w_tile = (void *) dma_queue_pop(dma_q).dst;
+        if (residual_desc) {
+            // pop_nowait does not wait for the residual descriptor.
+            while (!residual_desc->done) {
+                dmpoll();
+            }
+            residual_desc = NULL;
+        }
 
-        float * dst_ptr = &tmp[ct * 32 - src0_start_row];
+        float * dst_ptr = direct_store ? &dst_col[ct * 32] : &tmp[ct * 32 - src0_start_row];
+        const float * residual_ptr = direct_store && src2 ? (const float *) mmctx->vtcm_bias + ct * 32 : NULL;
         int valid_rows = (int)ne0 - (int)(ct * 32);
         valid_rows = MIN(32, MAX(0, valid_rows));
 
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ct);
-        mmctx->vec_dot_32x1(ne10, dst_ptr, w_tile, act_col, valid_rows, NULL);
+        mmctx->vec_dot_32x1(ne10, dst_ptr, w_tile, act_col, valid_rows, residual_ptr);
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ct);
 
         if (push_ct < ct_end) {
@@ -424,6 +459,10 @@ static void hvx_mv_2d_tiled(unsigned int nth, unsigned int ith, void * data) {
                            aligned_tile_size, tile_size, tile_size, n_k_tiles_w);
             push_ct++;
         }
+    }
+
+    if (direct_store) {
+        return;
     }
 
     int copy_cnt = (int)MIN(src0_end_row, ne0) - (int)src0_start_row;

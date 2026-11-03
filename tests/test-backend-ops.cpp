@@ -11378,6 +11378,22 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 32, 509, 2112, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 32, 509, 2112, {1, 1}, {1, 1}));
 
+    // Single-token quantized matmul: full tiles, tail rows, and output aliases.
+    for (ggml_type type : {GGML_TYPE_Q4_0, GGML_TYPE_Q8_0}) {
+        for (auto [m, k] : std::vector<std::pair<int64_t, int64_t>>{
+                 {32, 256}, {33, 256}, {65, 256}, {6144, 5120}, {17408, 512}}) {
+            test_cases.emplace_back(
+                new test_mul_mat(type, GGML_TYPE_F32, m, 1, k, {1, 1}, {1, 1}));
+            for (mul_mat_add_mode mode : {MUL_MAT_ADD_MM_RES, MUL_MAT_ADD_RES_MM,
+                                          MUL_MAT_ADD_RES_INPLACE, MUL_MAT_ADD_MM_MM}) {
+                test_cases.emplace_back(new test_mul_mat_add(type, m, 1, k, mode));
+            }
+        }
+        for (int64_t k : {96, 2048}) {
+            test_cases.emplace_back(new test_mul_mat_add(type, k, 1, k, MUL_MAT_ADD_B_INPLACE));
+        }
+    }
+
     // few src1 rows (speculative verify): odd m, a single K block, long K, every tile width, broadcast batches
     for (int64_t n : {2, 3, 5, 8, 9, 13, 16}) {
         for (auto [m, k] : std::vector<std::pair<int64_t, int64_t>>{{40, 32}, {100, 96}, {1000, 5120}, {3000, 1024}, {6144, 5120}, {17408, 512}}) {
@@ -12589,6 +12605,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                     false, 16, 8, false, false, true, false, { 1, 1 }));
             }
         }
+    }
+
+    for (auto [n, k] : std::vector<std::pair<int64_t, int64_t>>{{65, 256}, {6144, 5120}}) {
+        test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q4_0, GGML_GLU_OP_SWIGLU, 1, n, k,
+            false, 1, 1, false, true, false, false, {1, 1}));
     }
 
     for (int64_t k : {96, 896, 1024, 2880}) {
