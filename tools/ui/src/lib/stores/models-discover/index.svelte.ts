@@ -186,8 +186,14 @@ class ModelsDiscoverStore {
 	 * ahead of third-party quants of `Qwen/Qwen3-8B`); the hub's order holds otherwise.
 	 */
 	private baseOrgFirst(models: HfModelInfo[]): HfModelInfo[] {
-		const isBaseOrg = (model: HfModelInfo) =>
-			HuggingFaceService.getBaseModels(model).some((base) => orgOf(base) === orgOf(model.id));
+		// org names are case-insensitive on the hub, and base_model tags are not always canonical
+		const isBaseOrg = (model: HfModelInfo) => {
+			const org = orgOf(model.id).toLowerCase();
+
+			return HuggingFaceService.getBaseModels(model).some(
+				(base) => orgOf(base).toLowerCase() === org
+			);
+		};
 
 		return [...models.filter(isBaseOrg), ...models.filter((model) => !isBaseOrg(model))];
 	}
