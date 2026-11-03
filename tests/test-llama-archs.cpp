@@ -488,6 +488,10 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         if (arch == LLM_ARCH_FLINT) {
             ms.add_kv(LLM_KV_ATTENTION_ROPE_PATTERN, pattern);
         }
+        if (arch == LLM_ARCH_GRANITE_SWA) {
+            // differs from the default base (10000) so the per-layer theta path is exercised
+            ms.add_kv(LLM_KV_ROPE_FREQ_BASE_SWA, 500.0f);
+        }
     } else if (arch == LLM_ARCH_LFM3) {
         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, std::vector<uint32_t>({0, 0, 1}));
         ms.add_kv(LLM_KV_ROPE_FREQ_BASE_SWA,               10000.0f);
