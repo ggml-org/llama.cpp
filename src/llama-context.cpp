@@ -3090,7 +3090,6 @@ public:
         for (const auto & winfo : winfos) {
             auto * buft = ggml_backend_buffer_get_type(winfo.tensor->buffer);
 
-            // number of elements, not blocks: a quantized type stores ggml_blck_size() elements per ggml_type_size() bytes
             GGML_ASSERT(winfo.size % ggml_type_size(winfo.tensor->type) == 0);
             const int64_t n = winfo.size/ggml_type_size(winfo.tensor->type)*ggml_blck_size(winfo.tensor->type);
 
@@ -3223,7 +3222,6 @@ public:
         for (const auto & rinfo : rinfos) {
             auto * buft = ggml_backend_buffer_get_type(rinfo.tensor->buffer);
 
-            // number of elements, not blocks: a quantized type stores ggml_blck_size() elements per ggml_type_size() bytes
             GGML_ASSERT(rinfo.size % ggml_type_size(rinfo.tensor->type) == 0);
             const int64_t n = rinfo.size/ggml_type_size(rinfo.tensor->type)*ggml_blck_size(rinfo.tensor->type);
 
@@ -3292,7 +3290,6 @@ public:
 
                 const size_t n_copy = std::min(src_size - src_off, dst_size - dst_off);
 
-                // number of elements, not blocks (see above)
                 GGML_ASSERT(n_copy % ggml_type_size(src_t->type) == 0);
                 const int64_t n_el = (int64_t) (n_copy / ggml_type_size(src_t->type) * ggml_blck_size(src_t->type));
 
