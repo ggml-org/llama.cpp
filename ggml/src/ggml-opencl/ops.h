@@ -218,6 +218,11 @@ struct ggml_opencl_top_k_kernels {
     cl_kernel kernel_top_k_merge_f32;
 };
 
+struct ggml_opencl_top_k_mask_kernels {
+    cl_kernel kernel_top_k_mask[2];
+    cl_kernel kernel_top_k_mask_fill[2];
+};
+
 struct ggml_opencl_lightning_indexer_kernels {
     cl_kernel kernel_lightning_indexer;
 };
@@ -480,6 +485,10 @@ struct ggml_opencl_repack_kernels {
     cl_kernel kernel_restore_block_iq3_xxs;
     cl_kernel kernel_convert_block_iq3_s;
     cl_kernel kernel_restore_block_iq3_s;
+    cl_kernel kernel_convert_block_iq4_xs;
+    cl_kernel kernel_restore_block_iq4_xs;
+    cl_kernel kernel_convert_block_iq4_xs_noshuffle;
+    cl_kernel kernel_restore_block_iq4_xs_noshuffle;
     cl_kernel kernel_convert_block_q6_K;
     cl_kernel kernel_restore_block_q6_K;
     cl_kernel kernel_convert_block_iq4_nl;
@@ -552,6 +561,8 @@ struct ggml_opencl_mul_mat_kernels {
     cl_kernel kernel_mul_mv_iq3_s_f32_flat;
     cl_kernel kernel_mul_mv_iq3_xxs_f32;
     cl_kernel kernel_mul_mv_iq3_xxs_f32_flat;
+    cl_kernel kernel_mul_mv_iq4_xs_f32;
+    cl_kernel kernel_mul_mv_iq4_xs_f32_flat;
     cl_kernel kernel_mul_mat_q4_0_f32_1d_8x_flat;
     cl_kernel kernel_mul_mat_q4_0_f32_1d_16x_flat;
     cl_kernel kernel_mul_mv_q4_1_f32;
@@ -587,6 +598,7 @@ struct ggml_opencl_mul_mat_kernels {
     cl_kernel kernel_mul_mm_iq1_s_f32_l4_lm;
     cl_kernel kernel_mul_mm_iq3_s_f32_l4_lm;
     cl_kernel kernel_mul_mm_iq3_xxs_f32_l4_lm;
+    cl_kernel kernel_mul_mm_iq4_xs_f32_l4_lm;
     cl_kernel kernel_mul_mm_q4_0_f32_l4_lm;
     cl_kernel kernel_mul_mm_q4_1_f32_l4_lm;
     cl_kernel kernel_mul_mm_q5_0_f32_l4_lm;
@@ -680,6 +692,11 @@ struct ggml_opencl_mul_mat_kernels {
     cl_kernel kernel_gemm_noshuffle_iq3_s_q8_1_dp4a = nullptr;
     cl_kernel kernel_gemm_noshuffle_iq3_s_q8_1_dp4a_narrow = nullptr;
     int iq3_s_mv_nsg = 4;
+    cl_kernel kernel_gemv_noshuffle_iq4_xs_f32 = nullptr;
+    cl_kernel kernel_gemm_noshuffle_iq4_xs_f32 = nullptr;
+    cl_kernel kernel_gemm_noshuffle_iq4_xs_q8_1_dp4a = nullptr;
+    cl_kernel kernel_gemm_noshuffle_iq4_xs_q8_1_dp4a_narrow = nullptr;
+    int iq4_xs_mv_nsg = 8;
     cl_kernel kernel_gemv_noshuffle_q4_k_f32;
     cl_kernel kernel_gemv_noshuffle_q4_k_f32_o4;
     cl_kernel kernel_gemv_noshuffle_q4_k_f32_tiled;
@@ -886,6 +903,7 @@ void ggml_cl_im2col_3d(ggml_backend_t backend, const ggml_tensor * src0, const g
 void ggml_cl_argmax(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_cl_lightning_indexer(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_cl_top_k(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
+void ggml_cl_top_k_mask(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_cl_argsort(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_cl_sum_rows(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_cl_cumsum(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
@@ -913,6 +931,7 @@ void ggml_cl_mul_mat_iq1_m_f32_adreno(ggml_backend_t backend, const ggml_tensor 
 void ggml_cl_mul_mat_iq1_s_f32_adreno(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_cl_mul_mat_iq3_s_f32_adreno(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_cl_mul_mat_iq3_xxs_f32_adreno(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
+void ggml_cl_mul_mat_iq4_xs_f32_adreno(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_cl_mul_mat_q4_0_f32_adreno(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_cl_mul_mat_q4_1_f32_adreno(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_cl_mul_mat_q5_0_f32_adreno(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
@@ -997,6 +1016,7 @@ void ggml_cl_load_kernels_im2col_3d(ggml_backend_opencl_context * backend_ctx);
 void ggml_cl_load_kernels_argmax(ggml_backend_opencl_context * backend_ctx);
 void ggml_cl_load_kernels_lightning_indexer(ggml_backend_opencl_context * backend_ctx);
 void ggml_cl_load_kernels_top_k(ggml_backend_opencl_context * backend_ctx);
+void ggml_cl_load_kernels_top_k_mask(ggml_backend_opencl_context * backend_ctx);
 void ggml_cl_load_kernels_argsort(ggml_backend_opencl_context * backend_ctx);
 void ggml_cl_load_kernels_sum_rows(ggml_backend_opencl_context * backend_ctx);
 void ggml_cl_load_kernels_cumsum(ggml_backend_opencl_context * backend_ctx);

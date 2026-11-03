@@ -416,6 +416,24 @@ bool ggml_cl_iq3_xxs_use_noshuffle(const ggml_backend_opencl_context * backend_c
 #endif
 }
 
+bool ggml_cl_iq4_xs_use_noshuffle(const ggml_backend_opencl_context * backend_ctx, const ggml_tensor * tensor) {
+#if defined(GGML_OPENCL_SOA_Q) && defined(GGML_OPENCL_USE_ADRENO_KERNELS)
+    if (const char * env = getenv("GGML_OPENCL_IQ4_XS_NOSHUFFLE")) {
+        if (env[0] == '0') {
+            return false;
+        }
+    }
+    return tensor->type == GGML_TYPE_IQ4_XS &&
+           backend_ctx->gpu_family == ADRENO &&
+           ggml_is_contiguous(tensor) && !tensor->view_src &&
+           use_adreno_kernels(backend_ctx, tensor);
+#else
+    GGML_UNUSED(backend_ctx);
+    GGML_UNUSED(tensor);
+    return false;
+#endif
+}
+
 bool ggml_cl_iq1_m_use_noshuffle(const ggml_backend_opencl_context * backend_ctx, const ggml_tensor * tensor) {
 #if defined(GGML_OPENCL_SOA_Q) && defined(GGML_OPENCL_USE_ADRENO_KERNELS)
     if (const char * env = getenv("GGML_OPENCL_IQ1_M_NOSHUFFLE")) {
@@ -840,6 +858,7 @@ void load_cl_kernels(ggml_backend_opencl_context * backend_ctx) {
     ggml_cl_load_kernels_gated_delta_net(backend_ctx);
     ggml_cl_load_kernels_lightning_indexer(backend_ctx);
     ggml_cl_load_kernels_top_k(backend_ctx);
+    ggml_cl_load_kernels_top_k_mask(backend_ctx);
     ggml_cl_load_kernels_mul_mat_id(backend_ctx);
     ggml_cl_load_kernels_mul_mat_adreno(backend_ctx);
     ggml_cl_load_kernels_unary_ext(backend_ctx);

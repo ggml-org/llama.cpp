@@ -1418,6 +1418,12 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                     return false;
                 }
                 return op->src[1]->type == GGML_TYPE_F32 && ggml_is_contiguous_rows(op->src[1]);
+            } else if (op->src[0]->type == GGML_TYPE_IQ4_XS) {
+                const ggml_tensor * weight = op->src[0]->view_src;
+                if (weight && ggml_cl_iq4_xs_use_noshuffle(backend_ctx, weight)) {
+                    return false;
+                }
+                return op->src[1]->type == GGML_TYPE_F32 && ggml_is_contiguous_rows(op->src[1]);
             } else if (op->src[0]->type == GGML_TYPE_Q3_K) {
                 const ggml_tensor * weight = op->src[0]->view_src;
                 if (weight && ggml_cl_q3_k_use_noshuffle(backend_ctx, weight)) {
@@ -1540,6 +1546,14 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                    op->src[2]->nb[0] == sizeof(float) && op->src[3]->nb[0] == sizeof(ggml_fp16_t);
         case GGML_OP_TOP_K:
             return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_I32;
+        case GGML_OP_TOP_K_MASK:
+            return (op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_F32) &&
+                op->src[0]->type == op->type &&
+                op->src[0]->nb[0] == ggml_type_size(op->type) && op->nb[0] == ggml_type_size(op->type) &&
+                op->src[1]->type == GGML_TYPE_I32 &&
+                (!op->src[2] || op->src[2]->type == GGML_TYPE_F32) &&
+                (!op->src[3] || op->src[3]->type == GGML_TYPE_I32) &&
+                (!op->src[4] || op->src[4]->type == GGML_TYPE_I32);
         case GGML_OP_ARGSORT: {
             ggml_cl_load_kernels_argsort(backend_ctx);
 
@@ -1559,6 +1573,10 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
         case GGML_OP_MEAN:
             return op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_FLASH_ATTN_EXT: {
+            // K/V row lists (ggml_flash_attn_ext_rows) are not supported
+            if (op->src[5] != nullptr) {
+                return false;
+            }
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
             if (use_fa_bin_kernels_prefill(backend_ctx, op->src[0], op->src[1], op->src[2])) {
                 return true;
@@ -2675,6 +2693,9 @@ bool ggml_cl_compute_forward(ggml_backend_t backend, struct ggml_tensor * tensor
             break;
         case GGML_OP_TOP_K:
             func = ggml_cl_top_k;
+            break;
+        case GGML_OP_TOP_K_MASK:
+            func = ggml_cl_top_k_mask;
             break;
         case GGML_OP_ARGSORT:
             if (!any_on_device) {
