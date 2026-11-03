@@ -2,6 +2,7 @@
  * Records demo videos for pull requests and docs.
  *
  *   node demo/cli.ts pr <number>   record the ```ts demo block from a PR description, a video per test
+ *                                  (--trust <sha> to record someone else's PR at that head commit)
  *   node demo/cli.ts docs          record every docs/*.demo.ts script in DEMO_STORAGE
  *   node demo/cli.ts traces        write the built-in traces, and push them to DEMO_TRACES_DATASET
  *
@@ -234,15 +235,31 @@ function withDemoSection(body: string, section: string): string {
 		: body.slice(0, anchor) + block + body.slice(anchor);
 }
 
-async function recordPr(number: string): Promise<void> {
+async function recordPr(number: string, trustedSha?: string): Promise<void> {
 	const pr = JSON.parse(
-		run('gh', ['pr', 'view', number, '--repo', REPO, '--json', 'body,headRefOid'])
-	) as { body: string; headRefOid: string };
+		run('gh', ['pr', 'view', number, '--repo', REPO, '--json', 'author,body,headRefOid'])
+	) as { author: { login: string }; body: string; headRefOid: string };
 	const source = DEMO_BLOCK.exec(pr.body)?.[1];
 
 	if (!source) throw new Error(`PR #${number} has no \`\`\`ts demo block in its description`);
 
 	const sha = pr.headRefOid;
+
+	// the PR's code and demo script run on this machine, with the gh and hf logins,
+	// so someone else's PR only runs at a head commit you've read and passed to --trust
+	if (pr.author.login !== run('gh', ['api', 'user', '--jq', '.login'])) {
+		if (!trustedSha) {
+			throw new Error(
+				`PR #${number} is by ${pr.author.login}, and recording it runs its code here: ` +
+					`read its diff and demo block, then run again with --trust ${sha.slice(0, 10)}`
+			);
+		}
+
+		if (trustedSha.length < 7 || !sha.startsWith(trustedSha)) {
+			throw new Error(`PR #${number} head is ${sha.slice(0, 10)}, not the trusted ${trustedSha}`);
+		}
+	}
+
 	const worktree = join(tmpdir(), `llama-ui-demo-pr-${number}`);
 
 	run('git', ['fetch', '--no-tags', `https://github.com/${REPO}.git`, `pull/${number}/head`]);
@@ -379,15 +396,16 @@ function writeTraces(): void {
 	);
 }
 
-const [command, arg] = process.argv.slice(2);
+const [command, arg, ...flags] = process.argv.slice(2);
+const trustIndex = flags.indexOf('--trust');
 
 if (command === 'pr' && arg) {
-	await recordPr(arg);
+	await recordPr(arg, trustIndex === -1 ? undefined : flags[trustIndex + 1]);
 } else if (command === 'docs') {
 	await recordDocs();
 } else if (command === 'traces') {
 	writeTraces();
 } else {
-	console.error('usage: node demo/cli.ts pr <number> | docs | traces');
+	console.error('usage: node demo/cli.ts pr <number> [--trust <sha>] | docs | traces');
 	process.exit(1);
 }

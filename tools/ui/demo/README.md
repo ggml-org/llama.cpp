@@ -22,7 +22,7 @@ demo/
 | Tool                                                 | Used for                                                                                                                                                                                                          |
 | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Node 22.18+                                          | runs `demo/cli.ts` directly (TypeScript type stripping)                                                                                                                                                           |
-| `npx playwright install chromium`                    | the browser demos record in                                                                                                                                                                                       |
+| `npx playwright install chromium`                    | the browser demos record in, with its sandbox on                                                                                                                                                                  |
 | `ffmpeg`                                             | mp4 encoding and the GIF preview                                                                                                                                                                                  |
 | `gh`, logged in                                      | reads the PR description and writes the `## Demo` section, so you need edit rights on the PR                                                                                                                      |
 | `hf`, logged in with a write token (`hf auth login`) | uploads to the bucket and the traces dataset                                                                                                                                                                      |
@@ -88,6 +88,8 @@ Then run:
 ```bash
 npm run demo:pr -- 31303
 ```
+
+A PR by someone else runs its code and demo script on your machine, with your `gh` and `hf` logins, so `demo:pr` refuses it until you've read its diff and demo block and pass the head commit you read: `npm run demo:pr -- 31303 --trust <sha>`. If the PR gets new commits, it refuses again.
 
 It checks out the PR head in a temporary worktree, records the script against it, uploads `videos/pr/<number>/<sha>.{mp4,gif,demo.ts}` and adds or updates a `## Demo` section in the PR description with the preview linking to the video.
 

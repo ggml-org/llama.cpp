@@ -54,8 +54,10 @@ export default defineConfig({
 		actionTimeout: 10000,
 		baseURL: `http://localhost:${UI_PORT}`,
 		colorScheme: process.env.DEMO_COLOR_SCHEME === 'dark' ? 'dark' : 'light',
-		// headless Chromium screencasts at 1x unless the scale is forced at launch
-		launchOptions: { args: [`--force-device-scale-factor=${SCALE}`] },
+		// headless Chromium screencasts at 1x unless the scale is forced at launch; the sandbox
+		// is on since a PR demo runs that PR's code (Playwright turns it off by default). Not the
+		// installed Chrome: its headless mode screencasts a window that ignores the viewport
+		launchOptions: { args: [`--force-device-scale-factor=${SCALE}`], chromiumSandbox: true },
 		// recorded through the screencast in recorder.ts, at the device pixel ratio
 		video: 'off',
 		viewport: VIEWPORT
