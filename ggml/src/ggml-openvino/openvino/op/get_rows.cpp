@@ -64,6 +64,30 @@ OutputVector translate_get_rows(const NodeContext & context) {
         indices = process_view_input_new(context, 1);
     }
 
+    if (op_case == 5) {
+        // data [b3, b2, rows, row_size], indices [b3, b2, k]: one gather per (b3, b2) batch. The leading dims reach
+        // here in either layout (stateful models merge b3 into b2), so restore them from the static inner dims
+        const auto data_shape = context.get_input_shape(0);
+        const auto indices_shape = context.get_input_shape(1);
+        data = std::make_shared<ov::op::v1::Reshape>(
+            data,
+            ov::op::v0::Constant::create(ov::element::i64, {4},
+                                         {(int64_t) -1, data_shape[1].get_length(), data_shape[2].get_length(),
+                                          data_shape[3].get_length()}),
+            false);
+        indices = std::make_shared<ov::op::v1::Reshape>(
+            indices,
+            ov::op::v0::Constant::create(ov::element::i64, {3},
+                                         {(int64_t) -1, indices_shape[2].get_length(), indices_shape[3].get_length()}),
+            false);
+        auto axis = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{}, {2});
+        res = std::make_shared<ov::op::v8::Gather>(data, indices, axis, 2);
+        if (res.get_element_type() != context.get_output_type()) {
+            res = std::make_shared<ov::op::v0::Convert>(res, context.get_output_type());
+        }
+        return rename_outputs_with_suffix({res}, context.get_name());
+    }
+
     // data[1,b,x,y] ind[1,1,b,x'] test-backend-ops case
     // data[x,y] ind[1,1,1,x'] normal case
     // Drop the leading dims down to [b,x']. Stateful models drop one rank, so a hardcoded

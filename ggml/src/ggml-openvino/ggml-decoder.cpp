@@ -433,6 +433,23 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
         } else if (name.find("state_predelta") == 0) {
             op_case = 8;
         }
+        const auto it = m_node_dynamic_dims.find(const_cast<ggml_tensor *>(node));
+        const int dynamic_dim = it != m_node_dynamic_dims.end() ? it->second : -1;
+        // op_case 5 flattens to [x, n_tokens]; a deeper dynamic dim means the size match above held only because
+        // there is one token, e.g. the last-layer expert groups with a single output row. op_case 3 ([n] -> [1, n])
+        // matches the same way, e.g. the last-layer expert probabilities [n_expert, 1] -> [1, n_expert, 1]
+        if (op_case == 1 || op_case == 2 || op_case == 3 || (op_case == 5 && dynamic_dim > 1)) {
+            // The rules above read the token dim off a 2D source. With a deeper source, e.g. the MoE expert groups
+            // [n_exp_per_group, n_groups, n_tokens], the tracked dynamic dim is the reliable one:
+            // op_case 2 marks ggml dim 1, op_case 1 dim 2, op_case 8 dim 3
+            if (dynamic_dim == 1) {
+                op_case = 2;
+            } else if (dynamic_dim == 2) {
+                op_case = 1;
+            } else if (dynamic_dim == 3) {
+                op_case = 8;
+            }
+        }
         if (op_case == 1 && m_is_stateful) {
             // Recurrent convolution and GDN gates retain their rank-4 layout.
             // The gathered states may come through a view of the one gather of all states (see build_rs).
@@ -509,6 +526,8 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
         if (node->src[2] != nullptr && node->src[2]->op == GGML_OP_RESHAPE && node->src[2]->ne[0] == 1 &&
             is_kvcache(node->src[2]->src[0], nullptr)) {
             op_case = 1;
+        } else if (!is_kvcache_write(node)) {
+            op_case = 2;
         }
         break;
     }
@@ -528,6 +547,12 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
             is_recurrent_cache(node->src[0]->src[0])) {
             if (node->src[1]->op == GGML_OP_VIEW) {
                 op_case = node->src[1]->view_offs == 0 ? 1 : 2;
+            }
+        } else if (is_get_rows_batched_4d(node)) {
+            // with one token the batch dims look like a 3D gather; the tracked token dim tells them apart
+            const auto it = m_node_dynamic_dims.find(const_cast<ggml_tensor *>(node));
+            if (node->ne[3] > 1 || (it != m_node_dynamic_dims.end() && it->second == 3)) {
+                op_case = 5;
             }
         }
         break;
@@ -2659,6 +2684,9 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
                 auto dynamic_dim_idx = m_node_dynamic_dims[node->src[1]];
                 if (dynamic_dim_idx == 0) {
                     m_node_dynamic_dims[node] = 1;
+                } else if (dynamic_dim_idx == 2 && node->ne[3] == node->src[1]->ne[2]) {
+                    // indices [k, ne11, ne12] -> result [ne00, k, ne11, ne12]
+                    m_node_dynamic_dims[node] = 3;
                 } else {
                     auto dynamic_dim_stride = node->src[1]->nb[dynamic_dim_idx] / ggml_type_size(node->src[1]->type) *
                                               ggml_type_size(node->src[0]->type);
@@ -2920,10 +2948,13 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
             m_node_dynamic_dims[node] = m_node_dynamic_dims[node->src[1]];
             break;
         case GGML_OP_CPY:
-        case GGML_OP_SET_ROWS:
         case GGML_OP_SUM:
         case GGML_OP_MEAN:
             m_node_dynamic_dims[node] = -1;
+            break;
+        case GGML_OP_SET_ROWS:
+            // a cache write returns the cache; other rows writes keep the shape of their destination
+            m_node_dynamic_dims[node] = is_kvcache_write(node) ? -1 : m_node_dynamic_dims[node->src[2]];
             break;
         case GGML_OP_IM2COL: {
             m_node_dynamic_dims[node] = -1;

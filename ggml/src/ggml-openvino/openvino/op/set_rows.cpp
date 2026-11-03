@@ -6,6 +6,7 @@
 #include <cassert>
 #include <cstdint>
 #include <memory>
+#include <numeric>
 #include <openvino/core/node.hpp>
 #include <openvino/core/node_output.hpp>
 #include <openvino/core/type.hpp>
@@ -22,6 +23,7 @@
 #include <openvino/op/slice.hpp>
 #include <openvino/op/squeeze.hpp>
 #include <openvino/op/transpose.hpp>
+#include <openvino/op/unsqueeze.hpp>
 #include <vector>
 
 namespace ov {
@@ -51,7 +53,9 @@ OutputVector translate_set_rows(const NodeContext & context) {
 
     auto axes = ov::op::v0::Constant::create(ov::element::i64, ov::Shape{}, {2});
 
-    if (context.is_static() && !context.is_stateful() && !multidim_indices &&
+    const bool is_cache_write = context.get_op_case() != 2;
+
+    if (is_cache_write && context.is_static() && !context.is_stateful() && !multidim_indices &&
         ggml_openvino_npu_kv_head_major_enabled()) {
         // Head-major cache [1, heads, rows, head_size]: write the new rows along axis 2 without reshaping the cache.
         ov::Output<Node> cache = context.get_input(2);
@@ -90,7 +94,7 @@ OutputVector translate_set_rows(const NodeContext & context) {
 
     auto dst = process_view_input_new(context, 2);
     Output<Node> res;
-    if (context.is_stateful()) {
+    if (is_cache_write && context.is_stateful()) {
         int concat_axis = 1;
         if (context.get_op_case() == 1) {
             // `-fa off` writes V transposed through a [1, n] reshape of the cache. The state keeps V token-major
@@ -104,7 +108,7 @@ OutputVector translate_set_rows(const NodeContext & context) {
         data = std::make_shared<ov::op::v1::Reshape>(
             data, ov::op::v0::Constant::create(ov::element::i64, {4}, {(int64_t) 1, (int64_t) -1, dim2, dim3}), false);
         res = std::make_shared<ov::op::v0::Concat>(OutputVector{dst, data}, concat_axis);
-    } else if (is_kvcache_4d_shape(dst.get_partial_shape())) {
+    } else if (is_cache_write && is_kvcache_4d_shape(dst.get_partial_shape())) {
         // cache [1, ctx, n_heads_kv, head_size]: write whole tokens on axis 1. This is the pattern of the GPU
         // plugin's StatelessKVFusion (1-D axis, read with VariadicSplit, see permute), which writes the new rows in
         // place instead of copying the whole cache first
@@ -120,17 +124,35 @@ OutputVector translate_set_rows(const NodeContext & context) {
         res = std::make_shared<ov::op::v3::ScatterUpdate>(dst, ind_squeezed, data_tokens,
                                                           ov::op::v0::Constant::create(ov::element::i64, {1}, {1}));
         return rename_outputs_with_suffix({res}, context.get_name());
-    } else if (multidim_indices) {
+    } else if (multidim_indices || !is_cache_write) {
+        // updates [.., n_rows, row_size] with one index per row; stateful models may drop the leading 1 of the
+        // updates but not of the destination
+        const auto dst_rank = dst.get_partial_shape().rank();
+        const auto data_rank = data.get_partial_shape().rank();
+        FRONT_END_OP_CONVERSION_CHECK(dst_rank.is_static() && data_rank.is_static() &&
+                                          data_rank.get_length() <= dst_rank.get_length(),
+                                      "SET_ROWS with per-row indices: updates ", data.get_partial_shape(),
+                                      " do not fit the destination ", dst.get_partial_shape());
+        if (data_rank.get_length() < dst_rank.get_length()) {
+            std::vector<int64_t> lead_axes(dst_rank.get_length() - data_rank.get_length());
+            std::iota(lead_axes.begin(), lead_axes.end(), 0);
+            data = std::make_shared<ov::op::v0::Unsqueeze>(
+                data, ov::op::v0::Constant::create(ov::element::i64, {lead_axes.size()}, lead_axes));
+        }
         auto updates_shape = std::make_shared<ov::op::v3::ShapeOf>(data, ov::element::i64);
 
         auto indices_rank3 = std::make_shared<ov::op::v0::Squeeze>(
             indices, ov::op::v0::Constant::create(ov::element::i64, {1}, {0}));
         auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
-        auto indices_rank4_shape = std::make_shared<ov::op::v0::Concat>(OutputVector{get_dimensions(updates_shape, {0, 1, 2}), one}, 0);
-        auto indices_rank4 = std::make_shared<ov::op::v1::Reshape>(indices_rank3, indices_rank4_shape, false);
-        auto broadcasted_indices = std::make_shared<ov::op::v3::Broadcast>(indices_rank4, updates_shape);
+        std::vector<int> row_dims(dst_rank.get_length() - 1);
+        std::iota(row_dims.begin(), row_dims.end(), 0);
+        auto indices_rows_shape =
+            std::make_shared<ov::op::v0::Concat>(OutputVector{get_dimensions(updates_shape, row_dims), one}, 0);
+        auto indices_rows = std::make_shared<ov::op::v1::Reshape>(indices_rank3, indices_rows_shape, false);
+        auto broadcasted_indices = std::make_shared<ov::op::v3::Broadcast>(indices_rows, updates_shape);
+        auto rows_axis = ov::op::v0::Constant::create(ov::element::i64, ov::Shape{}, {-2});
 
-        res = std::make_shared<ov::op::v3::ScatterElementsUpdate>(dst, broadcasted_indices, data, axes);
+        res = std::make_shared<ov::op::v3::ScatterElementsUpdate>(dst, broadcasted_indices, data, rows_axis);
     } else {
         auto row_size = context.get_input_shape(2)[3].get_length();
         auto ind_squeezed = std::make_shared<ov::op::v0::Squeeze>(
@@ -159,7 +181,7 @@ OutputVector translate_set_rows(const NodeContext & context) {
     }
 
     auto dst_reshape = ov::as_type_ptr<ov::op::v1::Reshape>(dst.get_node_shared_ptr());
-    if (!multidim_indices && dst_reshape) {
+    if (!multidim_indices && is_cache_write && dst_reshape) {
         // Fix the case of multiple sequences, reshape back to original shape [1, n_seq, ctx_per_seq, emb]
         // ctx_per_seq is not fixed due to llama-bench compatibility
         auto dst_shape_partial = dst_reshape->get_input_partial_shape(0);
