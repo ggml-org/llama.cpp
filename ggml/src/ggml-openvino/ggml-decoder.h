@@ -305,6 +305,15 @@ public:
     // then drops everything that only feeds the other outputs, see pass::KeepCacheResults.
     void set_kv_only_outputs(bool kv_only) { m_kv_only_outputs = kv_only; }
 
+    // GET_ROWS of a large host-resident weight table by graph-input ids (GGML_OPENVINO_NPU_HOST_GATHER): its rows
+    // are gathered on the host and fed through the "ggml_host_rows_<node>" input instead of an OV Gather.
+    static bool is_host_gather_rows(const ggml_tensor * node);
+    static constexpr const char * host_rows_prefix = "ggml_host_rows_";
+    const ggml_tensor * get_host_gather_rows(const std::string & input_name) const {
+        auto it = m_host_gather_rows.find(input_name);
+        return it == m_host_gather_rows.end() ? nullptr : it->second;
+    }
+
     const std::map<std::string, ggml_tensor *> & get_model_outputs() const { return m_model_outputs; }
 
     virtual int get_ctx_size() const { return m_model_params.ctx; }
@@ -794,6 +803,7 @@ private:
     // The output set the compiled model was built from, for has_same_graph_io().
     std::set<std::string> m_built_output_names;
     bool m_kv_only_outputs = false;
+    std::map<std::string, const ggml_tensor *> m_host_gather_rows;
     std::vector<NodeInfo> m_node_info_list;
     std::map<ggml_tensor *, int> m_node_dynamic_dims;
     std::set<const ggml_tensor *> m_kvcache_4d;

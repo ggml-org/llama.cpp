@@ -231,6 +231,7 @@ static uint64_t ggml_openvino_model_cache_extra_cfg(bool stateful, bool recurren
     extra_cfg = extra_cfg * 131 + (ggml_openvino_getenv_int("GGML_OPENVINO_PROFILING") >= 2 ? 1u : 0u);
     extra_cfg = extra_cfg * 131 + (ggml_openvino_shape_from_mask_enabled() ? 1u : 0u);
     extra_cfg = extra_cfg * 131 + (ggml_openvino_npu_hfa_prefill_enabled() ? 4u : 0u);  // HFA input ABI v4.
+    extra_cfg = extra_cfg * 131 + (ggml_openvino_npu_host_gather_enabled() ? 1u : 0u);
     if (ggml_openvino_is_npu()) {
         extra_cfg = extra_cfg * 131 + static_cast<uint64_t>(ggml_openvino_get_npu_requant_type());
     }
@@ -789,12 +790,31 @@ ov::Tensor get_ov_input_tensor(const std::shared_ptr<GgmlOvDecoder> & ggml_decod
     return input_tensor;
 }
 
+// Rows |first|..|first + count| of a host-gathered table (GGML_OPENVINO_NPU_HOST_GATHER), dequantized from the raw
+// ggml table into a [1, 1, padded, row] f32 tensor. Padded rows repeat the last valid row; their outputs are unused.
+static ov::Tensor make_host_rows_tensor(const ggml_tensor * node, size_t first, size_t count, size_t padded) {
+    const ggml_tensor * table = node->src[0];
+    const auto * ids = static_cast<const int32_t *>(node->src[1]->data);
+    const size_t row = table->ne[0];
+    const auto to_float = ggml_get_type_traits(table->type)->to_float;
+    ov::Tensor rows(ov::element::f32, ov::Shape{1, 1, padded, row});
+    auto * dst = rows.data<float>();
+    for (size_t i = 0; i < padded; i++) {
+        const int64_t id = ids[first + std::min(i, count - 1)];
+        to_float(static_cast<const char *>(table->data) + id * table->nb[1], dst + i * row, static_cast<int64_t>(row));
+    }
+    return rows;
+}
+
 // Input of the static decode model for token |row| of the graph: row 0 of a decode graph, or a row of a prefill graph
 // whose outputs a KV-only prefill computes with the decode model (the decoder is then in decode mode, so that the KV
 // cache and the masks bind at full context).
 ov::Tensor get_ov_input_tensor_static_decode(const std::shared_ptr<GgmlOvDecoder> & ggml_decoder,
                                              const std::string & param_name,
                                              int64_t row = 0) {
+    if (const auto * node = ggml_decoder->get_host_gather_rows(param_name)) {
+        return make_host_rows_tensor(node, row, 1, 1);
+    }
     // NPU decoding stage
     if (ggml_decoder->get_model_extra_inputs().count(param_name)) {
         return get_ov_input_tensor(ggml_decoder, param_name);
@@ -923,6 +943,9 @@ ov::Tensor get_ov_input_tensor_static_prefill(const std::shared_ptr<GgmlOvDecode
             }
         }
         return input_tensor;
+    }
+    if (const auto * node = ggml_decoder->get_host_gather_rows(param_name)) {
+        return make_host_rows_tensor(node, chunk_index * chunk_size, chunk_valid_size, chunk_size);
     }
     if (chunk_index > 0 && param_name == "cache_rs_reset_len") {
         // The recurrent-state clear belongs to the start of the sequence. Re-applying it on every

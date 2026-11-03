@@ -1613,8 +1613,38 @@ bool GgmlOvDecoder::is_s_copy_leaf(const ggml_tensor * tensor) const {
     return false;
 }
 
+bool GgmlOvDecoder::is_host_gather_rows(const ggml_tensor * node) {
+    if (!ggml_openvino_npu_host_gather_enabled() || node == nullptr || node->op != GGML_OP_GET_ROWS) {
+        return false;
+    }
+    const ggml_tensor * table = node->src[0];
+    const ggml_tensor * ids = node->src[1];
+    // The table must hold raw ggml rows on the host: weights in an OpenVINO buffer are stored in the extracted layout.
+    constexpr size_t min_table_bytes = 64ull * 1024 * 1024;
+    return table != nullptr && ids != nullptr && table->view_src == nullptr && table->buffer != nullptr &&
+           table->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS && ggml_backend_buffer_is_host(table->buffer) &&
+           !ggml_backend_buffer_is_openvino(table->buffer) && ggml_get_type_traits(table->type)->to_float != nullptr &&
+           ggml_nbytes(table) >= min_table_bytes && ids->type == GGML_TYPE_I32 && ids->op == GGML_OP_NONE &&
+           ggml_nelements(ids) == ids->ne[0] && node->ne[1] == ids->ne[0];
+}
+
 void GgmlOvDecoder::add_extra_inputs() {
     m_model_extra_inputs.clear();
+    m_host_gather_rows.clear();
+    if (m_is_static) {
+        for (const auto & info : m_node_info_list) {
+            if (is_host_gather_rows(info.node)) {
+                const std::string name = std::string(host_rows_prefix) + info.node_name;
+                m_host_gather_rows[name] = info.node;
+                m_model_extra_inputs[name] = {ov::element::f32,
+                                              ov::Shape{1, 1, (size_t) get_static_n_tokens(), (size_t) info.node->ne[0]},
+                                              0,
+                                              true,
+                                              {},
+                                              -1};
+            }
+        }
+    }
 
     // Extra inputs:
     // 1. `attention_size`, used in FLASH_ATTN where the shape of the matmul's are 256 aligned,
@@ -2143,6 +2173,10 @@ std::map<std::string, std::shared_ptr<ov::Node>> GgmlOvDecoder::create_weight_no
                 continue;
             }
 
+            // A table whose rows are gathered on the host needs no OV weight for that use.
+            if (i == 0 && is_host_gather_rows(node)) {
+                continue;
+            }
             // A view over a weight is served by the base tensor's Constant.
             ggml_tensor * base = src->view_src ? src->view_src : src;
             std::string src_name = get_tensor_ov_name(cgraph, base);

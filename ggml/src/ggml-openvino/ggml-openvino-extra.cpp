@@ -200,6 +200,7 @@ constexpr env_var env_vars[] = {
     {"GGML_OPENVINO_NPU_SHARED_BANK", env_type::BOOL},
     {"GGML_OPENVINO_KV_ONLY_PREFILL", env_type::BOOL},
     {"GGML_OPENVINO_NPU_WEIGHTLESS_BANK", env_type::BOOL},
+    {"GGML_OPENVINO_NPU_HOST_GATHER", env_type::BOOL},
     // Build the precise (but O(n_nodes)) graph cache key. Needed by op tests.
     {"GGML_OPENVINO_FULL_GRAPH_KEY", env_type::BOOL},
 };
@@ -701,6 +702,10 @@ bool ggml_openvino_npu_kv_on_demand_enabled() {
 bool ggml_openvino_npu_kv_head_major_enabled() {
     return ggml_openvino_npu_kv_on_demand_enabled() && ggml_openvino_npu_decode_bucket() > 0 &&
            ggml_openvino_kv_slice_enabled();
+}
+
+bool ggml_openvino_npu_host_gather_enabled() {
+    return ggml_openvino_is_npu() && ggml_openvino_getenv_int("GGML_OPENVINO_NPU_HOST_GATHER") != 0;
 }
 
 bool ggml_openvino_kv_only_prefill_enabled() {

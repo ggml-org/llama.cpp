@@ -162,6 +162,10 @@ bool ggml_openvino_npu_parallel_compile_enabled();
 // with KV-shared attention, at most one output token per batch, and no HFA prefill or decode KV windows);
 // GGML_OPENVINO_KV_ONLY_PREFILL=0 turns it off.
 bool ggml_openvino_kv_only_prefill_enabled();
+// Gather the rows of large embedding tables on the host and feed them to the static graph as an input, instead of
+// binding the whole table to the NPU (NPUW lifts it to a function input, and gathering from an input that large
+// costs about as much as streaming the table).
+bool ggml_openvino_npu_host_gather_enabled();
 
 // GGML_OPENVINO_NPU_BLOB_PREBUILD (default 1): static NPU graphs attend a KV window of 1024*2^k rows (clamped to ctx)
 // instead of the whole ctx, with one decode model per window, all built/imported with the prefill/decode pair;
