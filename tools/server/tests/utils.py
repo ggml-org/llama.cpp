@@ -117,6 +117,7 @@ class ServerProcess:
     media_path: str | None = None
     sleep_idle_seconds: int | None = None
     cache_ram: int | None = None
+    n_cache_reuse: int | None = None
     override_kv: str | None = None
     no_cache_idle_slots: bool = False
     log_path: str | None = None
@@ -293,6 +294,8 @@ class ServerProcess:
             server_args.extend(["--sleep-idle-seconds", self.sleep_idle_seconds])
         if self.cache_ram is not None:
             server_args.extend(["--cache-ram", self.cache_ram])
+        if self.n_cache_reuse:
+            server_args.extend(["--cache-reuse", self.n_cache_reuse])
         if self.override_kv:
             server_args.extend(["--override-kv", self.override_kv])
         if self.no_cache_idle_slots:
@@ -689,6 +692,21 @@ class ServerPreset:
         server.n_batch = 512
         server.n_slots = 2
         server.n_predict = 4
+        server.seed = 42
+        return server
+
+    @staticmethod
+    def tinylfm2() -> ServerProcess:
+        # hybrid (recurrent + attention) memory: context checkpoints, and the KV cache can be shifted
+        server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
+        server.model_hf_file = None
+        server.model_hf_repo = "ggml-org/LFM2-test-ci-80M"
+        server.model_alias = "tinylfm2"
+        server.n_ctx = 4096
+        server.n_batch = 512
+        server.n_slots = 1
+        server.n_predict = 16
         server.seed = 42
         return server
 

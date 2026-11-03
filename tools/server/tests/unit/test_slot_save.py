@@ -711,6 +711,36 @@ def test_checkpoint_after_one_token_divergence(swa_server):
     assert cached["content"] == fresh["content"]
 
 
+# cache reuse shifts the tail of the cached prompt over a deleted chunk - the checkpoints there were created from the
+# deleted tokens and must not be restored
+def test_cache_reuse_does_not_restore_shifted_checkpoint():
+    server = ServerPreset.tinylfm2()
+    server.n_ubatch = 32 # end-of-prompt checkpoints at n - 36 and n - 4
+    server.n_cache_reuse = 8
+    server.temperature = 0.0
+    server.start()
+
+    words = ["budget", "hiring", "roadmap", "risk", "vendor", "launch", "audit", "review"] * 6
+    res = server.make_request("POST", "/tokenize", data={
+        "content": " ".join(f"Item {i}: the {w} report was filed on day {i % 7} by team {i % 5}." for i, w in enumerate(words)),
+    })
+    assert res.status_code == 200
+    a = res.body["tokens"]
+    m = len(a) // 2
+    b = a[:m] + a[m + 16:] # the checkpoint of a at n - 36 is now inside the shifted tail
+
+    def complete(prompt, cache_prompt):
+        res = server.make_request("POST", "/completion", data={
+            "prompt": prompt,
+            "cache_prompt": cache_prompt,
+        })
+        assert res.status_code == 200
+        return res.body["content"]
+
+    complete(a, True)
+    assert complete(b, True) == complete(b, False)
+
+
 # checkpoint appendix: magic(4) version(4) count(4), then per checkpoint
 # n_tokens(8) pos_min(4) pos_max(4) and three blobs (target, draft, speculative), each size(8) + data
 def parse_ckpt_appendix(data):
