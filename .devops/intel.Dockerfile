@@ -79,6 +79,9 @@ LABEL org.opencontainers.image.created=$BUILD_DATE \
       org.opencontainers.image.url=$IMAGE_URL \
       org.opencontainers.image.source=$IMAGE_SOURCE
 
+# the oneAPI Toolkit 2026.2 runtime image does not ship oneDNN, copy the one installed in the build stage
+COPY --from=build /opt/intel/oneapi/dnnl /opt/intel/oneapi/dnnl
+
 #Following versions are for multiple GPUs, since 26.x has known issue:
 #   https://github.com/ggml-org/llama.cpp/issues/21747,
 #   https://github.com/intel/compute-runtime/issues/921.
