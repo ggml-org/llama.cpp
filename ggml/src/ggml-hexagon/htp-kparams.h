@@ -11,6 +11,7 @@
 #include "htp/cpy-ops.h"
 #include "htp/cumsum-ops.h"
 #include "htp/diag-ops.h"
+#include "htp/dsv4-hc-ops.h"
 #include "htp/fill-ops.h"
 #include "htp/flash-attn-ops.h"
 #include "htp/gated-delta-net-ops.h"
@@ -28,6 +29,7 @@
 #include "htp/solve-tri-ops.h"
 #include "htp/ssm-conv.h"
 #include "htp/sum-rows-ops.h"
+#include "htp/top-k-mask-ops.h"
 #include "htp/unary-ops.h"
 #include "htp/upscale-ops.h"
 

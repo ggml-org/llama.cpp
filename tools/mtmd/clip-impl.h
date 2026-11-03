@@ -113,6 +113,11 @@
 #define KEY_GEN_AUDIO_PENALTY_LAST_N "clip.gen.audio.sampling.penalty_last_n"
 #define KEY_AUDIO_SUBSMPL_FACTOR   "clip.audio.subsampling_factor"
 
+// nemotron transcribe
+#define KEY_A_ROPE_DIMS            "clip.audio.rope_dims"
+#define KEY_A_SPK_N_BLOCK          "clip.audio.spk.block_count"
+#define KEY_A_SPK_N_HEAD           "clip.audio.spk.head_count"
+
 //
 // tensor name constants
 //
@@ -476,6 +481,13 @@
 #define TN_CONV_NORM_MEAN        "%s.blk.%d.conv_norm_mean"
 #define TN_CONV_NORM_VAR         "%s.blk.%d.conv_norm_var"
 
+// nemotron transcribe
+#define TN_A_SPK_INP_PROJ        "a.spk.input_projection.%s"
+#define TN_A_SPK_HEAD            "a.spk.head.%s.%s" // proj, upsample, fc1, fc2
+#define TN_A_SPK_SIL_EMB         "a.spk.head.sil_emb"
+#define TN_A_FUSION_NORM         "a.fusion.%s.%s"   // asr_norm, spk_norm
+#define TN_A_FUSION_KERNEL       "a.fusion.spk_kernel"
+
 // align x to upper multiple of n
 #define CLIP_ALIGN(x, n) ((((x) + (n) - 1) / (n)) * (n))
 
@@ -494,6 +506,11 @@ struct clip_enc_state {
 
     // lfm3a: same order as list_lfm3a_state_slots(), F32 [ne0, ne1], updated in place
     std::vector<ggml_tensor *> slots;
+
+    // nemotron transcribe: the window's normalized log-mel, cache and FIFO rows in; its speaker rows and predictions out
+    std::vector<float> mel_norm;
+    std::vector<float> spk_prev;
+    std::vector<float> spk_chunk, spk_preds;
 };
 
 // per-sequence state of audio generation, see clip_gen_state_init()
@@ -574,6 +591,7 @@ enum projector_type {
     PROJECTOR_TYPE_MINICPMV4_7,
     PROJECTOR_TYPE_MINICPM_OCR_1_0,
     PROJECTOR_TYPE_GRANITE_SPEECH,
+    PROJECTOR_TYPE_NEMOTRON_TRANSCRIBE,
     PROJECTOR_TYPE_MIMOVL,
     PROJECTOR_TYPE_MINIMAX_M3,
     PROJECTOR_TYPE_GRANITE4_VISION,
@@ -589,6 +607,8 @@ enum projector_type {
     PROJECTOR_TYPE_SENSENOVA_U1,
     PROJECTOR_TYPE_COHERE2V,
     PROJECTOR_TYPE_MUSE_SPARK_AUDIO,
+    PROJECTOR_TYPE_CHATTERBOX,
+    PROJECTOR_TYPE_CHATTERBOX_SPKENC,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -655,6 +675,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_MINICPMV4_7,       "minicpmv4_7"},
     { PROJECTOR_TYPE_MINICPM_OCR_1_0,   "minicpm_ocr_1_0"},
     { PROJECTOR_TYPE_GRANITE_SPEECH,    "granite_speech"},
+    { PROJECTOR_TYPE_NEMOTRON_TRANSCRIBE, "nemotron_transcribe"},
     { PROJECTOR_TYPE_MIMOVL,            "mimovl"},
     { PROJECTOR_TYPE_MINIMAX_M3,        "minimax_m3"},
     { PROJECTOR_TYPE_GRANITE4_VISION,   "granite4_vision"},
@@ -671,6 +692,8 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_SENSENOVA_U1,      "sensenova_u1"},
     { PROJECTOR_TYPE_COHERE2V,          "cohere2v"},
     { PROJECTOR_TYPE_MUSE_SPARK_AUDIO,  "muse-spark-audio"},
+    { PROJECTOR_TYPE_CHATTERBOX,        "chatterbox"},
+    { PROJECTOR_TYPE_CHATTERBOX_SPKENC, "chatterbox_spkenc"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {
