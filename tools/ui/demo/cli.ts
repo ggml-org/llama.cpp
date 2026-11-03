@@ -1,7 +1,7 @@
 /**
  * Records demo videos for pull requests and docs.
  *
- *   node demo/cli.ts pr <number>   record the ```ts demo block from a PR description
+ *   node demo/cli.ts pr <number>   record the ```ts demo block from a PR description, a video per test
  *   node demo/cli.ts docs          record every docs/*.demo.ts script in DEMO_STORAGE
  *   node demo/cli.ts traces        write the built-in traces, and push them to DEMO_TRACES_DATASET
  *
@@ -18,6 +18,7 @@ import {
 	readdirSync,
 	readFileSync,
 	rmSync,
+	statSync,
 	symlinkSync,
 	writeFileSync
 } from 'node:fs';
@@ -34,6 +35,8 @@ const DEMO_BLOCK = /```(?:ts|typescript)[ \t]+demo[ \t]*\r?\n([\s\S]*?)```/;
 const HELPERS_IMPORT = /^import\s[^;]*from\s+['"][^'"]*helpers(?:\.ts)?['"];?\s*$/gm;
 const SECTION_START = '<!-- demo:start -->';
 const SECTION_END = '<!-- demo:end -->';
+/** GitHub's image proxy refuses larger images, so a bigger preview shows as a broken image. */
+const PREVIEW_MAX_BYTES = 5 * 1024 * 1024;
 const envFile = join(UI_DIR, '.env');
 
 if (existsSync(envFile)) process.loadEnvFile(envFile);
@@ -77,9 +80,18 @@ async function freePort(): Promise<number> {
 	});
 }
 
-/** Records the given scripts; returns the mp4 path of each one. */
-async function record(scripts: string[], uiDir = UI_DIR): Promise<string[]> {
+/** A video recorded from one `test()` of a script. */
+interface Video {
+	mp4: string;
+	title: string;
+}
+
+/** Records the given scripts; returns a video for each of their tests, in order. */
+async function record(scripts: string[], uiDir = UI_DIR): Promise<Video[]> {
 	const port = await freePort();
+	const manifests = scripts.map((s) => join(VIDEOS_DIR, `${basename(s, '.demo.ts')}.videos.jsonl`));
+
+	for (const manifest of manifests) rmSync(manifest, { force: true });
 
 	execFileSync(
 		'npx',
@@ -96,28 +108,38 @@ async function record(scripts: string[], uiDir = UI_DIR): Promise<string[]> {
 		}
 	);
 
-	return scripts.map((s) => join(VIDEOS_DIR, `${basename(s, '.demo.ts')}.mp4`));
+	// helpers.ts lists each video it encodes in the script's manifest
+	return manifests.flatMap((manifest) =>
+		readFileSync(manifest, 'utf8')
+			.trim()
+			.split('\n')
+			.map((line) => JSON.parse(line) as Video)
+	);
 }
 
-/** Animated GIF preview that GitHub renders inline. */
+/**
+ * Animated GIF preview that GitHub renders inline, its longer side DEMO_PREVIEW_WIDTH (so a
+ * phone's portrait video is that tall), shrunk until it fits under PREVIEW_MAX_BYTES.
+ */
 function makePreview(mp4: string): string {
 	const gif = mp4.replace(/\.mp4$/, '.gif');
-	const width = process.env.DEMO_PREVIEW_WIDTH ?? '800';
 
-	execFileSync('ffmpeg', [
-		'-y',
-		'-loglevel',
-		'error',
-		'-i',
-		mp4,
-		'-vf',
-		`fps=10,scale=${width}:-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle`,
-		'-loop',
-		'0',
-		gif
-	]);
+	for (let side = Number(process.env.DEMO_PREVIEW_WIDTH ?? 800); ; side = Math.round(side * 0.8)) {
+		execFileSync('ffmpeg', [
+			'-y',
+			'-loglevel',
+			'error',
+			'-i',
+			mp4,
+			'-vf',
+			`fps=10,scale='if(gt(iw,ih),${side},-2)':'if(gt(iw,ih),-2,${side})':flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle`,
+			'-loop',
+			'0',
+			gif
+		]);
 
-	return gif;
+		if (statSync(gif).size <= PREVIEW_MAX_BYTES || side < 320) return gif;
+	}
 }
 
 function upload(storage: DemoStorage, files: Record<string, string>): void {
@@ -138,12 +160,30 @@ function versionedUrl(key: string, file: string): null | string {
 	return url && `${url}?v=${version}`;
 }
 
-function demoSection(gifUrl: string, mp4Url: string, sha: string): string {
+/**
+ * One preview, or a table with a column per video, headed by its test's title, when the
+ * script has several tests.
+ */
+function demoSection(links: { gif: string; mp4: string; title: string }[], sha: string): string {
+	const preview = ({ gif, mp4, title }: (typeof links)[number]) =>
+		`[![${title.replace(/[[\]|]/g, '')}](${gif})](${mp4})`;
+	const cell = (text: string) => text.replace(/\|/g, '\\|');
+	const body =
+		links.length === 1
+			? [preview({ ...links[0], title: 'Demo' })]
+			: [
+					`| ${links.map((l) => cell(l.title)).join(' | ')} |`,
+					`|${links.map(() => '---').join('|')}|`,
+					`| ${links.map(preview).join(' | ')} |`
+				];
+	const note =
+		links.length === 1 ? 'the preview for the full video' : 'a preview for its full video';
+
 	return [
 		SECTION_START,
-		`[![Demo](${gifUrl})](${mp4Url})`,
+		...body,
 		'',
-		`Recorded at ${sha.slice(0, 10)}; click the preview for the full video.`,
+		`Recorded at ${sha.slice(0, 10)}; click ${note}.`,
 		SECTION_END
 	].join('\n');
 }
@@ -191,11 +231,13 @@ async function recordPr(number: string): Promise<void> {
 	const script = writeDemoScript(name, source);
 
 	try {
-		const [mp4] = await record([script], join(worktree, 'tools/ui'));
-		const gif = makePreview(mp4);
+		const videos = (await record([script], join(worktree, 'tools/ui'))).map((video) => ({
+			...video,
+			gif: makePreview(video.mp4)
+		}));
 		const storage = getDemoStorage();
 
-		console.log(`\nvideo:   ${mp4}\npreview: ${gif}`);
+		for (const { gif, mp4 } of videos) console.log(`\nvideo:   ${mp4}\npreview: ${gif}`);
 
 		if (!storage) {
 			console.log('DEMO_STORAGE is not set: drag the mp4 into the PR description.');
@@ -204,25 +246,29 @@ async function recordPr(number: string): Promise<void> {
 		}
 
 		const prefix = `videos/pr/${number}/${sha.slice(0, 10)}`;
+		// a script with several tests gets <sha>-1.mp4, <sha>-2.mp4 and so on
+		const keys = videos.map((_, i) => (videos.length === 1 ? prefix : `${prefix}-${i + 1}`));
 
-		upload(storage, {
-			[`${prefix}.demo.ts`]: script,
-			[`${prefix}.gif`]: gif,
-			[`${prefix}.mp4`]: mp4
+		upload(storage, { [`${prefix}.demo.ts`]: script });
+		videos.forEach(({ gif, mp4 }, i) => {
+			upload(storage, { [`${keys[i]}.gif`]: gif, [`${keys[i]}.mp4`]: mp4 });
 		});
 
-		const gifUrl = versionedUrl(`${prefix}.gif`, gif);
-		const mp4Url = versionedUrl(`${prefix}.mp4`, mp4);
-
-		if (!gifUrl || !mp4Url) {
+		if (!getPublicUrl(prefix)) {
 			console.log('DEMO_STORAGE_PUBLIC_URL is not set: not linking the video in the PR.');
 
 			return;
 		}
 
+		const links = videos.map(({ gif, mp4, title }, i) => ({
+			gif: versionedUrl(`${keys[i]}.gif`, gif) ?? '',
+			mp4: versionedUrl(`${keys[i]}.mp4`, mp4) ?? '',
+			title
+		}));
+
 		execFileSync('gh', ['pr', 'edit', number, '--repo', REPO, '--body-file', '-'], {
 			cwd: UI_DIR,
-			input: withDemoSection(pr.body, demoSection(gifUrl, mp4Url, sha)),
+			input: withDemoSection(pr.body, demoSection(links, sha)),
 			stdio: ['pipe', 'inherit', 'inherit']
 		});
 		console.log(`linked the demo in https://github.com/${REPO}/pull/${number}`);
@@ -254,7 +300,7 @@ async function recordDocs(): Promise<void> {
 	try {
 		const videos = await record(scripts);
 
-		for (const mp4 of videos) {
+		for (const { mp4 } of videos) {
 			const name = basename(mp4, '.mp4');
 
 			upload(storage, {

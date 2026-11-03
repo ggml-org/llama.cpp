@@ -26,7 +26,7 @@ jobs:
           # markers, or a preview linking to a demo video uploaded for this PR
           has_demo=false
           if { grep -qF '<!-- demo:start -->' <<< "$BODY" && grep -qF '<!-- demo:end -->' <<< "$BODY"; } ||
-            grep -qE "/resolve/videos/pr/$PR_NUMBER/[0-9a-f]{10}\.mp4" <<< "$BODY"; then
+            grep -qE "/resolve/videos/pr/$PR_NUMBER/[0-9a-f]{10}(-[0-9]+)?\.mp4" <<< "$BODY"; then
             has_demo=true
           fi
 

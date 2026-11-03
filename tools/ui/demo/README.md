@@ -89,13 +89,25 @@ Then run:
 npm run demo:pr -- 31303
 ```
 
-It checks out the PR head in a temporary worktree, records the script against it, uploads `videos/pr/<number>/<sha>.{mp4,gif,demo.ts}` and adds or updates a `## Demo` section in the PR description with the preview linking to the video. GitHub has no API for attachments, so for an inline player drag `demo/videos/pr-<number>.mp4` into the description instead.
+It checks out the PR head in a temporary worktree, records the script against it, uploads `videos/pr/<number>/<sha>.{mp4,gif,demo.ts}` and adds or updates a `## Demo` section in the PR description with the preview linking to the video.
+
+A large PR can show its changes in several shorter videos: each `test()` in the block is recorded as its own video (`<sha>-1.mp4`, `<sha>-2.mp4`, ...), and the `## Demo` section shows their previews side by side in a table, each column headed by its test's title. Helpers and `test.use` at the top of the block are shared by all of them.
+
+````ts
+test('Header and safe areas', async ({ demo, page }) => {
+	// ...
+});
+
+test('Sidebar gestures', async ({ demo, page }) => {
+	// ...
+});
+``` GitHub has no API for attachments, so for an inline player drag `demo/videos/pr-<number>.mp4` into the description instead.
 
 ## Recording docs
 
 ```bash
 npm run demo:docs
-```
+````
 
 Records every `scripts/docs/*.demo.ts` from the storage target and uploads `videos/docs/<name>.{mp4,gif}`.
 

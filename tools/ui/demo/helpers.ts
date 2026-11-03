@@ -3,7 +3,7 @@ import { generateTrace } from './fixtures/traces.ts';
 import { ScreencastRecorder } from './recorder.ts';
 import { type CDPSession, type Locator, type Page, test as base } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 
 const VIDEOS_DIR = resolve(import.meta.dirname, 'videos');
@@ -377,10 +377,22 @@ function loadTrace(name: string, dir: string): string {
 /** Imports conversations through Settings > Import/Export, like a user would. */
 async function importTraces(page: Page, file: string): Promise<void> {
 	// the expanded sidebar adds the shortcut to the name
-	await page
-		.getByRole('button', { name: /^Settings(\s|$)/ })
-		.first()
-		.click();
+	const settings = page.getByRole('button', { name: /^Settings(\s|$)/ }).first();
+	const reachable = await settings.click({ timeout: 3000, trial: true }).then(
+		() => true,
+		() => false
+	);
+
+	// on a phone the sidebar sits under the page until the page's menu key slides it aside (the
+	// sidebar's own expand button stays covered)
+	if (!reachable) {
+		await page
+			.locator('xpath=//button[@aria-label="Expand navigation"][not(ancestor::aside)]')
+			.first()
+			.click();
+	}
+
+	await settings.click();
 
 	const dialog = page.getByRole('dialog');
 
@@ -412,6 +424,9 @@ export const test = base.extend<DemoOptions & { demo: Demo }>({
 			mkdirSync(dir, { recursive: true });
 			writeFileSync(file, traces.map((name) => loadTrace(name, dir)).join('\n'));
 			await page.goto('/');
+			await page
+				.getByRole('textbox', { name: 'Type a message...' })
+				.waitFor({ timeout: APP_READY_TIMEOUT_MS });
 			await importTraces(page, file);
 		}
 
@@ -448,6 +463,11 @@ export const test = base.extend<DemoOptions & { demo: Demo }>({
 
 		mkdirSync(VIDEOS_DIR, { recursive: true });
 		recorder.encode(mp4);
+		// the CLI reads which videos a script made, in order, with their titles
+		appendFileSync(
+			resolve(VIDEOS_DIR, `${file}.videos.jsonl`),
+			`${JSON.stringify({ mp4, title: testInfo.title })}\n`
+		);
 		console.log(`demo video: ${mp4}`);
 	},
 
