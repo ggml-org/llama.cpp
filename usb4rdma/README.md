@@ -312,6 +312,13 @@ and the opt-in ones it only clears, with `-ExtraEnv 'NAME=value;NAME=value'`. Fo
 | `LLAMA_DIST_TP_MESH_REVERSE_TCP=r,...` | with the mesh: send the reverse direction of the listed ranks' edges over TCP |
 | `LLAMA_DIST_TP_MESH_LARGE=1` | with the mesh: also mesh payloads above the ND limit, over TCP |
 | `LLAMA_DIST_TP_MESH_ND_LARGE=1` | **experimental, not yet benchmarked.** With the mesh: payloads above `LLAMA_DIST_TP_MESH_MAX_BYTES` (the prompt) also go through the mesh, on ND over both links at once, instead of the ring. Needs `LLAMA_DIST_TP_RDMA=1`, `LLAMA_DIST_TP_RDMA_MULTICHUNK=1` and `LLAMA_DIST_TP_RDMA_MAX_BYTES=0`, and no relay, reverse-TCP or `MESH_LARGE`; otherwise it prints why and the ring is kept. When on, the all-reduce line says `mesh above too (ND, both links at once)`. These payloads have no TCP fallback: a rank whose ND connection is down fails the collective. Same sum order as the ring |
+| `LLAMA_DIST_TP_MESH=1` at 4 ranks | with a cable between every pair of ranks: the two diagonals (rank 0 - rank 2, rank 1 - rank 3) get their own connection, and every all-reduce up to `LLAMA_DIST_TP_MESH_MAX_BYTES` goes to all three peers at once. `LLAMA_DIST_TP_MESH_DIAG_HOSTS=-,-,<h2>,<h3>` names the address rank 2 dials (rank 0's end of the 0-2 cable) and rank 3 dials (rank 1's end of the 1-3 cable); entries 0 and 1 are not used. `LLAMA_DIST_TP_MESH4_LARGE=1` (with `LLAMA_DIST_TP_RDMA_MULTICHUNK=1` and `LLAMA_DIST_TP_RDMA_MAX_BYTES=0`) also sends larger payloads over all three links at once. Same sum order as the ring. The transport line shows the diagonal and only says `all payloads over ND` when it is on ND too |
+| `LLAMA_DIST_TP_RDMA_FIXED_SLOT=1` | for ND providers that need page-aligned buffers and the same length on both ends of every transfer (a provider that refuses `Register` or completes receives with an error on the default layout): every slot is exactly 256 KiB with the header inside, and every send, acks included, is one whole slot into a receive of one whole slot. Prints `[dist-tp][nd] fixed slots: ...`. Same value on every rank |
+| `LLAMA_DIST_TP_RDMA_SMALL_LANE=<bytes>` | with fixed slots (it turns them on): a second ND connection on every cable whose slots are this size, a whole number of 4096 B pages below 256 KiB. A message that fits one small slot (16 B header + payload) takes it, everything else the 256 KiB one, so a decode all-reduce no longer moves a whole 256 KiB slot. Pick the smallest page multiple that holds a decode payload: `n_embd x 2 + 16` bytes with `LLAMA_DIST_TP_WIRE_F16=1`, `n_embd x 4 + 16` without (n_embd 2880 with f16: 8192; 4096 with f16: 12288). Prints `[dist-tp][nd] small connection: ...`. Ranks with different values refuse to connect |
+| `LLAMA_DIST_TP_WIRE_F16=1` | the boundary all-reduce carries f16 on the wire, half the bytes: each payload is scaled by a power of two so its largest value fits, and the sums stay f32. The output can differ slightly from an f32 run. Same value on every rank |
+| `LLAMA_DIST_TP_ATTN_REBALANCE=1` | split attention by query heads instead of whole KV groups, so a model whose KV head count does not divide by the rank count still gets an even share; each rank keeps the KV heads its query heads use. `LLAMA_DIST_TP_ATTN_HEADS=h0,h1,..` sets the query heads per rank instead (positive multiples of the query granularity that sum to the head count). Same value on every rank |
+| `LLAMA_DIST_TP_LOGITS_SHARD=0` | by default the logits read-back passes each rank's slice of the row around the ring; 0 merges the whole zero-padded row instead |
+| `LLAMA_DIST_TP_FFN_GRANULARITY=32/64/128/256` | the FFN split unit (default 128). A smaller value evens out FFN widths that are not a multiple of 128 x ranks, e.g. 2880 on 3 ranks |
 | `LLAMA_DIST_TP_SPLIT_RECURRENT=1` | Qwen3.5 and Qwen3.5-MoE: split the gated DeltaNet (recurrent) layers across the ranks. Unset, they run whole on every rank, which is always the case for Qwen3-Next. Use the same value on every rank |
 | `LLAMA_DIST_TP_RECORD_AHEAD=1` | with one GPU per rank (`--device Vulkan0`): a helper thread records the next piece of the graph while the all-reduce runs, and prints `dist-tp record-ahead on`. Needs the Vulkan backend's deferred submit; any other backend prints that the switch is ignored. `LLAMA_DIST_TP_RECORD_AHEAD_SPIN_US` (default 2000) sets how long the helper polls for work before it sleeps |
 | `LLAMA_DISTPROF=1` | print one `[distprof]` cost line per graph (GPU wait, time in the collective, bytes) |
@@ -324,7 +331,8 @@ address>:<port>` on every rank.
 on the Intel devices the Vulkan backend classifies as Xe2 that have integer dot products and 16-lane
 subgroups, and switches that are off unless set. The settings used with the 3-node mesh above are
 `GGML_VK_FENCE_POLL_PAUSES=20 GGML_VK_DEFER_GATE=1 GGML_VK_FWHT=1 GGML_VK_ADD_RMS_FUSION=1`, with
-`LLAMA_DIST_TP_RECORD_AHEAD=1`.
+`LLAMA_DIST_TP_RECORD_AHEAD=1`. Add `GGML_VK_EARLY_RECORD=2` and `LLAMA_DIST_TP_WIRE_F16=1` to them for
+decode, and `LLAMA_DIST_TP_ATTN_REBALANCE=1` for models whose KV heads do not divide by the rank count.
 
 | Variable | Effect |
 |---|---|
@@ -334,6 +342,8 @@ subgroups, and switches that are off unless set. The settings used with the 3-no
 | `GGML_VK_FENCE_POLL_PAUSES=N` | check the GPU fence every N CPU pause instructions while waiting (default 1000) |
 | `GGML_VK_FWHT=1` | run the Hadamard transform (`MUL_MAT_HADAMARD`) as the subgroup kernel on Intel too; `2` the shared-memory kernel, `0` neither; unset keeps llama.cpp's choice, which leaves Intel out. Compare the output against a run without it on a new GPU or driver |
 | `GGML_VK_ADD_RMS_FUSION=1` | fuse the residual add and the RMS norm that follows it on Intel too (llama.cpp leaves it off there); `0` turns it off everywhere |
+| `GGML_VK_EARLY_RECORD=2` | with `LLAMA_DIST_TP_RECORD_AHEAD=1` and `GGML_VK_DEFER_GATE=1`: at each all-reduce the read of its input goes to the GPU with the fence without waiting, and the next piece is recorded and submitted behind its gate while the GPU still runs this one. `2` polls the read-back data, `1` waits on the fence |
+| `GGML_VK_DONE_EVENT=1/2`, `GGML_VK_POLL_OUT=1`, `GGML_VK_KEEPALIVE=1` | experimental, off by default, not part of the settings above: return from a synchronize at an event in its own submit, or once the read-back data is seen in host memory, instead of at the fence; keep the GPU waiting on an event between record-ahead pieces instead of idle |
 | `GGML_VK_GRAPH_PROF=N` | diagnostic: every N synchronizes, print a `[vkgprof]` line with where the time from the first graph computed after a synchronize to the end of the next synchronize went (CPU recording before the GPU had work, GPU busy, GPU idle) |
 
 ## 7. Scripts
@@ -358,6 +368,10 @@ subgroups, and switches that are off unless set. The settings used with the 3-no
 - **Network profiles can revert to Public after a boot** and block the rendezvous. prep sets Private.
 - **A leg can pass small pings but drop full-size frames.** A run then fails at its first exchange.
   prep pings every leg at 1472 bytes with Don't Fragment and reboots the sender if needed.
+- **Some ND provider builds need page-aligned, fixed-length transfers.** On those, `ndping` and every
+  run fail at `IND2MemoryRegion::Register` (0xC00000EF) or at the first receive. Set
+  `LLAMA_DIST_TP_RDMA_SMALL_LANE` (section 6) on every rank: it turns on the fixed 256 KiB slots
+  the provider needs and adds the small connection that keeps decode messages small.
 - **An OS update can replace the USB4/RDMA driver.** Every run then goes over TCP. Record the
   known-good hashes in `DriverSha256` and run `verify_binaries.ps1`.
 - **One large model load per boot.** On integrated GPUs a second load of a large model in the same
