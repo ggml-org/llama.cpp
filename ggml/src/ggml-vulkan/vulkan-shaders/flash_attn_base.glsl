@@ -74,6 +74,8 @@ layout (push_constant) uniform parameter {
 
 #define SINK_ENABLE_BIT (1<<24)
 #define N_LOG2_MASK 0xFFFF
+// dist-tp attention rebalance: KV head of query head h is (h + q_off) / G, q_off in bits 0..7 and G in bits 8..15
+#define HEADMAP_ENABLE_BIT (1<<25)
 
 layout (binding = 4) readonly buffer S {float data_s[];};
 
@@ -238,6 +240,11 @@ void init_indices()
     // v indices
     iv3 = iq3 / rv3;
     iv2 = iq2 / rv2;
+
+    if ((p.mask_n_head_log2 & HEADMAP_ENABLE_BIT) != 0) {
+        ik2 = (iq2 + (p.mask_n_head_log2 & 0xFF)) / ((p.mask_n_head_log2 >> 8) & 0xFF);
+        iv2 = ik2;
+    }
 
     // nb?1 are already divided by the type size and are in units of elements.
     // When using grouped query attention, Q is indexed by iq2, so the stride

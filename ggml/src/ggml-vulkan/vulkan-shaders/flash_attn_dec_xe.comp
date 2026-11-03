@@ -115,7 +115,9 @@ void main() {
     const uint chunk = gl_WorkGroupID.x;
     const uint ik2   = gl_WorkGroupID.y;            // KV head
     const uint iq3   = gl_WorkGroupID.z;
-    const uint iq2   = ik2 * G;                     // its first query head
+    // its first query head; with the attention rebalance head map (q_off in mask_n_head_log2, 0 otherwise) the 16
+    // heads can start before 0 or run past neq2: those load zero Q and store nothing
+    const int  iq2   = int(ik2 * G) - int(p.mask_n_head_log2);
     const uint ik3   = iq3 / (p.neq3 / p.nek3);
     const uint iv3   = iq3 / (p.neq3 / p.nev3);
 
@@ -149,11 +151,13 @@ void main() {
     if (tid < G * D / 32) {
         const uint h = tid / (D / 32);
         const uint b = tid % (D / 32);
-        const uint qb = ((iq2 + h) * p.nb02 + iq3 * p.nb03) / 16 + b * 8;
+        const int  hq = iq2 + int(h);
+        const bool hv = hq >= 0 && hq < int(p.neq2);
+        const uint qb = (uint(max(hq, 0)) * p.nb02 + iq3 * p.nb03) / 16 + b * 8;
         vec4 x[8];
         float amax = 0.0;
         [[unroll]] for (uint i = 0; i < 8; ++i) {
-            x[i] = data_qv4[qb + i] * p.scale;
+            x[i] = hv ? data_qv4[qb + i] * p.scale : vec4(0.0);
             const vec4 a = abs(x[i]);
             amax = max(amax, max(max(a.x, a.y), max(a.z, a.w)));
         }
@@ -329,7 +333,10 @@ void main() {
         // split-k partials, laid out as fa_split_k_reduce reads them
         const uint ob = (D * p.ne1 * (chunk + p.k_num * p.ne2 * iq3)) / 4;
         [[unroll]] for (uint h = 0; h < G; ++h) {
-            data_ov4[ob + (iq2 + h) * (D / 4) + g] = o[h];
+            const int hq = iq2 + int(h);
+            if (hq >= 0 && hq < int(p.neq2)) {
+                data_ov4[ob + uint(hq) * (D / 4) + g] = o[h];
+            }
         }
         if (l < G) {
             // lanes 0..15 of subgroup 0 hold head l's max; the sums are in reds
@@ -338,8 +345,11 @@ void main() {
                 ls += reds[k * G + l];
             }
             const uint lm = D * p.ne1 * p.ne2 * p.ne3 * p.k_num + p.ne1 * 2 * (chunk + p.k_num * p.ne2 * iq3);
-            data_o[lm + iq2 + l] = ls;
-            data_o[lm + p.ne1 + iq2 + l] = mx;
+            const int hq = iq2 + int(l);
+            if (hq >= 0 && hq < int(p.neq2)) {
+                data_o[lm + uint(hq)] = ls;
+                data_o[lm + p.ne1 + uint(hq)] = mx;
+            }
         }
     }
 }

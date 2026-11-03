@@ -339,6 +339,30 @@ llama_model * llama_model_create(llama_model_loader & ml, const llama_model_para
     return llama_model_create(arch, params);
 }
 
+#include <atomic>
+
+// dist-tp attention rebalance (LLAMA_DIST_TP_ATTN_REBALANCE=1) head map, one entry per layer:
+// 0 = layer not rebalanced, else 1 + q_off + (n_gqa << 16). Filled while the split states are computed (model load).
+static std::atomic<int32_t> g_dist_attn_headmap[4096];
+
+static void llama_dist_attn_headmap_set(uint32_t il, int32_t q_off, int32_t n_gqa) {
+    GGML_ASSERT(il < 4096 && q_off >= 0 && q_off < 256 && n_gqa > 0 && n_gqa < 256);
+    g_dist_attn_headmap[il].store(1 + q_off + (n_gqa << 16));
+}
+
+bool llama_dist_attn_headmap(int il, int32_t * q_off, int32_t * n_gqa) {
+    if (il < 0 || il >= 4096) {
+        return false;
+    }
+    const int32_t v = g_dist_attn_headmap[il].load();
+    if (v == 0) {
+        return false;
+    }
+    *q_off = (v - 1) & 0xFFFF;
+    *n_gqa = (v - 1) >> 16;
+    return true;
+}
+
 static ggml_backend_meta_split_state llama_meta_device_get_split_state_impl(
         const struct ggml_tensor * tensor,
         const llama_meta_device_get_split_state_userdata * ud,
@@ -354,6 +378,59 @@ static ggml_backend_meta_split_state llama_meta_device_get_split_state_impl(
         const char * env = std::getenv("LLAMA_DIST_TP_SPLIT_RECURRENT");
         return env != nullptr && std::atoi(env) != 0;
     }();
+
+    // dist-tp attention rebalance (LLAMA_DIST_TP_ATTN_REBALANCE=1): split the query heads of an attention layer at
+    // head granularity instead of whole KV groups (Qwen3-235B, 4 KV heads on 3 ranks: 16/16/32 query heads by
+    // default, 20/22/22 with this) and give each rank every KV head its query heads use. The KV shards overlap
+    // between ranks (a shared KV head is projected and cached on both); the FA op carries the head map
+    // (llama_dist_attn_headmap, set in llm_graph_context::build_attn_mha). Needs flash attention.
+    static const bool dist_attn_rebalance = [] {
+        const char * env = std::getenv("LLAMA_DIST_TP_ATTN_REBALANCE");
+        return env != nullptr && std::atoi(env) != 0;
+    }();
+    auto attn_rebalance = [&](uint32_t il) -> bool {
+        if (!dist_attn_rebalance || ud->dist_tp_world_size <= 1 || ud->n_devices != 1 || il >= hparams.n_layer() ||
+                hparams.is_recr(il) || hparams.n_gqa(il) <= 1 || hparams.n_embd_k_gqa(il) != hparams.n_embd_v_gqa(il) ||
+                ud->model->arch == LLM_ARCH_QWEN3NEXT || ud->model->arch == LLM_ARCH_QWEN35 || ud->model->arch == LLM_ARCH_QWEN35MOE) {
+            return false;
+        }
+        const std::string prefix = "blk." + std::to_string(il) + ".";
+        const ggml_tensor * q_norm = ud->model->get_tensor((prefix + "attn_q_norm.weight").c_str());
+        return ud->model->get_tensor((prefix + "attn_q.weight").c_str())      != nullptr &&
+               ud->model->get_tensor((prefix + "attn_output.weight").c_str()) != nullptr &&
+               (q_norm == nullptr || q_norm->ne[1] == 1);
+    };
+    // query granularity of a rebalanced layer in elements, from the block size of attn_output as for the default split
+    auto attn_rebalance_granularity = [&](uint32_t il, int64_t blck_size) -> int64_t {
+        const int64_t head_dim = hparams.n_embd_head_k(il);
+        int64_t blck_size_perf = blck_size;
+        while (blck_size_perf < 128 && blck_size_perf*(int64_t) ud->n_devices < (int64_t) hparams.n_gqa(il)*head_dim) {
+            blck_size_perf *= 2;
+        }
+        return std::lcm(head_dim, blck_size_perf);
+    };
+    // this rank's query heads [qlo, qhi) and KV heads [klo, khi) of a rebalanced layer; records the head map
+    auto attn_rebalance_heads = [&](uint32_t il, int64_t & qlo, int64_t & qhi, int64_t & klo, int64_t & khi) {
+        const ggml_tensor * wo = ud->model->get_tensor(("blk." + std::to_string(il) + ".attn_output.weight").c_str());
+        GGML_ASSERT(wo != nullptr);
+        const int64_t head_dim = hparams.n_embd_head_k(il);
+        const int64_t n_gqa    = hparams.n_gqa(il);
+        const int     rank     = std::max(0, std::min(ud->dist_tp_rank, ud->dist_tp_world_size - 1));
+        ggml_backend_meta_dist_split_bounds(head_dim*hparams.n_head(il), attn_rebalance_granularity(il, ggml_blck_size(wo->type)),
+            rank, ud->dist_tp_world_size, &qlo, &qhi);
+        GGML_ASSERT(qlo % head_dim == 0 && qhi % head_dim == 0);
+        qlo /= head_dim;
+        qhi /= head_dim;
+        klo = qlo / n_gqa;
+        khi = (qhi + n_gqa - 1) / n_gqa;
+        llama_dist_attn_headmap_set(il, (int32_t) (qlo - klo*n_gqa), (int32_t) n_gqa);
+        static std::atomic<bool> logged{false};
+        if (!logged.exchange(true)) {
+            LLAMA_LOG_INFO("llama_meta_device_get_split_state: dist-tp attention rebalance: rank %d of %d, layer %u: "
+                "query heads %lld..%lld, KV heads %lld..%lld, q_off %lld\n", rank, ud->dist_tp_world_size, il,
+                (long long) qlo, (long long) qhi - 1, (long long) klo, (long long) khi - 1, (long long) (qlo - klo*n_gqa));
+        }
+    };
 
     const std::regex pattern_q_weight        ("blk\\.\\d*\\.attn_q.weight");
     const std::regex pattern_kv_weight       ("blk\\.\\d*\\.attn_(k|v).weight");
@@ -657,7 +734,7 @@ static ggml_backend_meta_split_state llama_meta_device_get_split_state_impl(
                 return {std::lcm(n_embd_q, blck_size_perf)/n_embd_q * n_gqa};
             }
 
-            const int64_t granularity_q = std::lcm(n_embd_q, blck_size_perf);
+            const int64_t granularity_q = attn_rebalance(il) ? attn_rebalance_granularity(il, blck_size) : std::lcm(n_embd_q, blck_size_perf);
             if (std::regex_match(tensor_name, pattern_q_weight) || std::regex_match(tensor_name, pattern_q_bias)) {
                 GGML_ASSERT(segments.size() == 1);
                 // some models have Q gate tensors, for those cases the granularity needs to be doubled:
@@ -749,6 +826,32 @@ static ggml_backend_meta_split_state llama_meta_device_get_split_state_impl(
                 }
                 if (high < low) {
                     high = low;
+                }
+            }
+
+            if (nr_s == 1 && attn_rebalance(tc.il)) {
+                const bool is_q     = std::regex_match(tensor_name, pattern_q_weight) || std::regex_match(tensor_name, pattern_q_bias) ||
+                                      std::regex_match(tensor_name, pattern_attn_out_weight);
+                const bool is_kv    = std::regex_match(tensor_name, pattern_kv_weight) || std::regex_match(tensor_name, pattern_kv_bias) ||
+                                      std::regex_match(tensor_name, pattern_kv_cache);
+                const bool is_sinks = std::regex_match(tensor_name, pattern_attn_sinks);
+                if (is_q || is_kv || is_sinks) {
+                    int64_t qlo = 0, qhi = 0, klo = 0, khi = 0;
+                    attn_rebalance_heads(tc.il, qlo, qhi, klo, khi);
+                    if (is_q) {
+                        // already split by heads above; the KV bounds and the head map assume exactly these
+                        const int64_t head_dim = hparams.n_embd_head_k(tc.il);
+                        GGML_ASSERT(low == qlo*head_dim && high == qhi*head_dim);
+                    } else if (is_sinks) {
+                        GGML_ASSERT(ne_s == (int64_t) hparams.n_head(tc.il));
+                        low  = qlo;
+                        high = qhi;
+                    } else {
+                        const int64_t n_head_kv = hparams.n_head_kv(tc.il);
+                        GGML_ASSERT(ne_s % n_head_kv == 0);
+                        low  = klo * (ne_s / n_head_kv);
+                        high = khi * (ne_s / n_head_kv);
+                    }
                 }
             }
 

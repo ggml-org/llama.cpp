@@ -87,6 +87,10 @@ static void ggml_meta_dist_split_bounds(int64_t n, int64_t granularity, int rank
     *high = hi;
 }
 
+void ggml_backend_meta_dist_split_bounds(int64_t n, int64_t granularity, int rank, int world_size, int64_t * low, int64_t * high) {
+    ggml_meta_dist_split_bounds(n, granularity, rank, world_size, low, high);
+}
+
 struct ggml_backend_meta_buffer_context;
 static bool ggml_meta_dist_shard_enabled(const struct ggml_backend_meta_buffer_context * buf_ctx);
 
@@ -1139,6 +1143,11 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
 
             for (size_t i = 0; i < GGML_MAX_SRC; i++) {
                 if (tensor->src[i] == nullptr || src_ss[i].axis < 0 || src_ss[i].axis >= GGML_MAX_DIMS) {
+                    continue;
+                }
+                // dist-tp attention rebalance (LLAMA_DIST_TP_ATTN_REBALANCE): K and V hold every KV head the
+                // rank's query heads use, so their share differs from Q's; the output follows Q
+                if (i > 0 && tensor->op == GGML_OP_FLASH_ATTN_EXT && tensor->op_params[4] == 0x48454144) {
                     continue;
                 }
                 if (first_src_split_by_axis) {

@@ -2439,6 +2439,18 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         ggml_flash_attn_ext_add_sinks(cur, sinks);
         ggml_flash_attn_ext_set_prec (cur, GGML_PREC_F32);
 
+        // dist-tp attention rebalance: which local KV head each local query head uses (op_params 4..6,
+        // 0x48454144 marks the map; read by the meta backend and the Vulkan FA)
+        {
+            int32_t hm_off = 0;
+            int32_t hm_gqa = 0;
+            if (llama_dist_attn_headmap(il, &hm_off, &hm_gqa)) {
+                cur->op_params[4] = 0x48454144;
+                cur->op_params[5] = hm_off;
+                cur->op_params[6] = hm_gqa;
+            }
+        }
+
         if (v_mla) {
 #if 0
             // v_mla can be applied as a matrix-vector multiplication with broadcasting across dimension 3 == n_tokens.
@@ -2458,6 +2470,14 @@ ggml_tensor * llm_graph_context::build_attn_mha(
 
         cur = ggml_reshape_2d(ctx0, cur, cur->ne[0]*cur->ne[1], cur->ne[2]*cur->ne[3]);
     } else {
+        {
+            int32_t hm_off = 0;
+            int32_t hm_gqa = 0;
+            if (llama_dist_attn_headmap(il, &hm_off, &hm_gqa)) {
+                GGML_ABORT("LLAMA_DIST_TP_ATTN_REBALANCE needs flash attention (-fa on)");
+            }
+        }
+
         ggml_tensor * kq = ggml_mul_mat(ctx0, k, q);
         cb(kq, "kq", il);
 

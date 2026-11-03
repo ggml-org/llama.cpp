@@ -10602,6 +10602,9 @@ static void ggml_vk_flash_attn_dec_xe(ggml_backend_vk_context * ctx, vk_context&
     float scale;
     memcpy(&scale, (const float *) dst->op_params + 0, sizeof(float));
 
+    // dist-tp attention rebalance: KV head ik2 serves local query heads ik2*16 - q_off .. +15 (see ggml_vk_flash_attn)
+    const uint32_t q_off = dst->op_params[4] == 0x48454144 ? (uint32_t) dst->op_params[5] : 0;
+
     const uint64_t split_k_size = (HSV * ne1 * sizeof(float) + ne1 * sizeof(float) * 2) * k_num * ne2 * ne3;
     if (split_k_size > ctx->device->properties.limits.maxStorageBufferRange) {
         GGML_ABORT("Requested preallocation size is too large");
@@ -10632,7 +10635,7 @@ static void ggml_vk_flash_attn_dec_xe(ggml_backend_vk_context * ctx, vk_context&
                                               (uint32_t) (k->nb[1] / ggml_type_size(k->type)), (uint32_t) k->nb[2], (uint32_t) k->nb[3],
                                               (uint32_t) (v->nb[1] / ggml_type_size(v->type)), (uint32_t) v->nb[2], (uint32_t) v->nb[3],
                                               scale, 0.0f, 0.0f,
-                                              0, 0.0f, 0.0f,
+                                              q_off, 0.0f, 0.0f,
                                               16, CH, k_num };
 
     if (ctx->prealloc_split_k_need_sync) {
@@ -10703,10 +10706,21 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     assert(dst->type == GGML_TYPE_F32);
     assert(q->type == GGML_TYPE_F32);
 
+    // dist-tp attention rebalance (LLAMA_DIST_TP_ATTN_REBALANCE, set in llama-graph build_attn_mha): local query head
+    // h uses local KV head (h + hm_off) / hm_g instead of h / (neq2 / nek2)
+    const bool     hm     = dst->op_params[4] == 0x48454144;
+    const uint32_t hm_off = hm ? (uint32_t) dst->op_params[5] : 0;
+    const uint32_t hm_g   = hm ? (uint32_t) dst->op_params[6] : 0;
+    if (hm) {
+        GGML_ASSERT(hm_g > 0 && hm_g < 256 && hm_off < 256);
+        GGML_ASSERT(nek2 == nev2 && (int64_t) hm_g * nek2 >= (int64_t) hm_off + neq2);
+        GGML_ASSERT(((const float *) dst->op_params)[1] == 0.0f);
+    }
+
 #if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
     if (ctx->device->fa_dec_xe && N == 1 && HSK == 128 && HSV == 128 &&
         k->type == GGML_TYPE_Q8_0 && v->type == GGML_TYPE_Q8_0 &&
-        nek2 == nev2 && neq2 == 16 * nek2 && nek3 == nev3 && neq3 % nek3 == 0 &&
+        nek2 == nev2 && (hm ? hm_g == 16 : neq2 == 16 * nek2) && nek3 == nev3 && neq3 % nek3 == 0 &&
         (!mask || (nem2 == 1 && nem3 == 1)) &&
         ((const float *) dst->op_params)[1] == 0.0f && ((const float *) dst->op_params)[2] == 0.0f &&
         nbq2 % 16 == 0 && nbq3 % 16 == 0 &&
@@ -10729,7 +10743,7 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     vk_fa_tuning_params tuning_params = get_fa_tuning_params(ctx->device, HSK, HSV, 512, KV, k->type, v->type, f32acc);
     const uint32_t max_gqa = std::min(std::max(tuning_params.block_rows, ctx->device->fa_gqa_rows), 32u);
 
-    if (N <= 8 && qk_ratio > 1 && qk_ratio <= max_gqa &&
+    if (!hm && N <= 8 && qk_ratio > 1 && qk_ratio <= max_gqa &&
         qk_ratio * nek2 == neq2 && nek2 == nev2 && nem2 <= 1) {
         // grouped query attention - make the N dimension equal to gqa_ratio, reduce
         // workgroups proportionally in y dimension. The shader will detect gqa_ratio > 1
@@ -10889,7 +10903,7 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     vk_subbuffer sinks_buf = sinks ? ggml_vk_tensor_subbuffer(ctx, sinks) : q_buf;
     vk_subbuffer mask_opt_buf = use_mask_opt ? ggml_vk_subbuffer(ctx, ctx->prealloc_y, 0) : q_buf;
 
-    uint32_t mask_n_head_log2 = ((sinks != nullptr) << 24) | n_head_log2;
+    uint32_t mask_n_head_log2 = ((sinks != nullptr) << 24) | (hm ? ((1u << 25) | (hm_g << 8) | hm_off) : n_head_log2);
 
     if (use_mask_opt)
     {

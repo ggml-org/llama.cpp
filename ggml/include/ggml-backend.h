@@ -415,6 +415,10 @@ extern "C" {
     GGML_API void ggml_backend_meta_set_dist_allreduce(void * comm_ctx, ggml_backend_meta_dist_allreduce_tensor_t allreduce);
     GGML_API void ggml_backend_meta_get_dist_allreduce(void ** comm_ctx, ggml_backend_meta_dist_allreduce_tensor_t * allreduce);
 
+    // the slice [*low, *high) of an axis of n elements that dist-TP rank `rank` of `world_size` holds: an equal
+    // share cut at multiples of `granularity`, the last rank taking the rest. the meta backend splits the same way.
+    GGML_API void ggml_backend_meta_dist_split_bounds(int64_t n, int64_t granularity, int rank, int world_size, int64_t * low, int64_t * high);
+
     //
     // Utils
     //

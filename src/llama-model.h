@@ -551,6 +551,10 @@ struct llama_meta_device_get_split_state_userdata {
 struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const struct ggml_tensor * tensor, void * userdata);
 bool llama_meta_device_get_tensor_shard_view(const struct ggml_tensor * tensor, void * userdata, struct llama_tensor_shard_view * out);
 
+// dist-tp attention rebalance (LLAMA_DIST_TP_ATTN_REBALANCE=1, llama-model.cpp): in layer il, local query head h of this
+// rank uses local KV head (h + *q_off) / *n_gqa. false when the layer is split by whole KV groups (the default).
+bool llama_dist_attn_headmap(int il, int32_t * q_off, int32_t * n_gqa);
+
 struct llama_model {
     llm_type type = LLM_TYPE_UNKNOWN;
     llm_arch arch = LLM_ARCH_UNKNOWN;
