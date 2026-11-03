@@ -90,8 +90,6 @@ class GraniteSWAModel(GraniteModel):
 
     def set_gguf_parameters(self):
         """GraniteSWA uses Granite parameters plus sliding window configuration."""
-        super().set_gguf_parameters()
-
         # Add sliding_window from config
         sliding_window = self.hparams.get("sliding_window", 128)
         self.gguf_writer.add_sliding_window(sliding_window)
@@ -119,6 +117,24 @@ class GraniteSWAModel(GraniteModel):
             self.gguf_writer.add_rope_pattern(rope_pattern)
             logger.info("gguf: (granite_swa) rope_pattern = %d RoPE layers / %d total",
                         sum(rope_pattern), len(rope_pattern))
+
+        if layer_rope_theta := self.hparams.get("layer_rope_theta"):
+            if len(layer_rope_theta) != len(is_swa):
+                raise ValueError(f"granite_swa: layer_rope_theta has {len(layer_rope_theta)} entries, layer_types has {len(is_swa)}")
+            # 0 means NoPE
+            swa_thetas = {t for t, s in zip(layer_rope_theta, is_swa) if s and t}
+            full_thetas = {t for t, s in zip(layer_rope_theta, is_swa) if not s and t}
+            if len(swa_thetas) > 1 or len(full_thetas) > 1:
+                raise ValueError(f"granite_swa: unsupported layer_rope_theta, sliding {sorted(swa_thetas)}, full {sorted(full_thetas)}")
+            # Keep super() last: the base class writes rope_freq_base and rope_freq_base_swa from rope_parameters
+            if full_thetas:
+                self.rope_parameters.get("full_attention", self.rope_parameters)["rope_theta"] = full_thetas.pop()
+            if swa_thetas:
+                self.rope_parameters.setdefault("sliding_attention", {})["rope_theta"] = swa_thetas.pop()
+            if not all(layer_rope_theta) and not no_rope_layers:
+                self.gguf_writer.add_rope_pattern([bool(t) for t in layer_rope_theta])
+
+        super().set_gguf_parameters()
 
 
 @ModelBase.register("GraniteMoeSWAForCausalLM")

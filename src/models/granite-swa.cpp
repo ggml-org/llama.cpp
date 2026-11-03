@@ -18,6 +18,10 @@ void llama_model_granite_swa::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa);
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
 
+    hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
+    hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
+    ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
+
     // Granite4 Vision uses array deepstack_mapping
     ml.get_arr(LLM_KV_DEEPSTACK_MAPPING, hparams.deepstack_mapping_arr, false);
 
@@ -112,16 +116,6 @@ void llama_model_granite_swa::load_arch_tensors(llama_model_loader &) {
             }
         }
     }
-}
-
-llama_rope_params llama_model_granite_swa::get_rope_params(const llama_cparams & cparams, int il) const {
-    auto res = llama_model::get_rope_params(cparams, il);
-
-    // the SWA layers use the global base and scale
-    res.freq_base  = cparams.rope_freq_base;
-    res.freq_scale = cparams.rope_freq_scale;
-
-    return res;
 }
 
 std::unique_ptr<llm_graph_context> llama_model_granite_swa::build_arch_graph(const llm_graph_params & params) const {
