@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from torch import Tensor
 
 from .base import ModelBase, TextModel, MmprojModel, LazyTorchTensor, gguf
+from .llama import LlamaModel
 
 logger = logging.getLogger("hf-to-gguf")
 
@@ -55,33 +56,6 @@ MTL_SAMPLING   = {"top_k": 0,    "min_p": 0.05, "top_p": 1.0,  "temp": 0.8, "pen
 PENALTY_LAST_N = -1
 
 
-def _s3tok_mel_filters() -> Tensor:
-    # slaney-normalized mel filterbank of the s3 tokenizer front end (librosa
-    # defaults: sr 16000, n_fft 400, 128 bands); not every checkpoint ships
-    # it, so it is synthesized here for both variants
-    sr, n_fft, n_mels = 16000, 400, 128
-
-    def hz_to_mel(f: Tensor) -> Tensor:
-        lin = f / (200.0 / 3.0)
-        logstep = math.log(6.4) / 27.0
-        return torch.where(f >= 1000.0, 15.0 + torch.log(f.clamp(min=1000.0) / 1000.0) / logstep, lin)
-
-    def mel_to_hz(m: Tensor) -> Tensor:
-        logstep = math.log(6.4) / 27.0
-        return torch.where(m >= 15.0, 1000.0 * torch.exp(logstep * (m - 15.0)), m * (200.0 / 3.0))
-
-    fftfreqs = torch.arange(n_fft // 2 + 1, dtype=torch.float64) * (sr / n_fft)
-    bounds = hz_to_mel(torch.tensor([0.0, sr / 2.0], dtype=torch.float64))
-    mel_f = mel_to_hz(torch.linspace(bounds[0], bounds[1], n_mels + 2, dtype=torch.float64))
-    fdiff = mel_f.diff()
-    ramps = mel_f[:, None] - fftfreqs[None, :]
-    lower = -ramps[:n_mels] / fdiff[:n_mels, None]
-    upper = ramps[2:] / fdiff[1:, None]
-    weights = torch.minimum(lower, upper).clamp(min=0.0)
-    weights *= (2.0 / (mel_f[2:] - mel_f[:n_mels]))[:, None]
-    return weights.float()
-
-
 def _is_turbo(dir_model: Path) -> bool:
     if (dir_model / TURBO_TALKER).is_file():
         return True
@@ -92,7 +66,7 @@ def _is_turbo(dir_model: Path) -> bool:
 
 # talker hparams of the reference (GPT2_MEDIUM_CONFIG / LLAMA_520M_CONFIG_DICT, T3Config)
 TURBO_TEXT_CONFIG = {
-    "n_layer": 24, "n_embd": 1024, "n_head": 16, "n_ctx": 8196, "layer_norm_epsilon": 1e-05,
+    "n_layer": 24, "n_embd": 1024, "n_inner": 4096, "n_head": 16, "n_ctx": 8196, "layer_norm_epsilon": 1e-05,
     "vocab_size": 50276, "speech_vocab_size": 6563,
 }
 MTL_TEXT_CONFIG = {
@@ -184,6 +158,9 @@ class ChatterboxTalkerModel(TextModel):
         with open(self.dir_model / "merges.txt", "r", encoding="utf-8") as f:
             merges = [line.rstrip("\n") for line in f if line.strip() and not line.startswith("#version")]
 
+        self._write_vocab(tokens, toktypes, merges, tokpre, n_text)
+
+    def _write_vocab(self, tokens: list[str], toktypes: list[int], merges: list[str], tokpre: str, n_text: int):
         self.gguf_writer.add_tokenizer_model("gpt2")
         self.gguf_writer.add_tokenizer_pre(tokpre)
         self.gguf_writer.add_token_list(tokens)
@@ -255,20 +232,7 @@ class ChatterboxTalkerModel(TextModel):
             a, b = m if isinstance(m, list) else m.split(" ")
             merges.append(enc(a) + " " + enc(b))
 
-        self.gguf_writer.add_tokenizer_model("gpt2")
-        self.gguf_writer.add_tokenizer_pre("default")
-        self.gguf_writer.add_token_list(tokens)
-        self.gguf_writer.add_token_types(toktypes)
-        self.gguf_writer.add_token_merges(merges)
-
-        self.gguf_writer.add_bos_token_id(n_text + SPEECH_BOS)
-        self.gguf_writer.add_eos_token_id(n_text + SPEECH_EOS)
-        self.gguf_writer.add_add_bos_token(False)
-        self.gguf_writer.add_add_eos_token(False)
-
-        # the reference samples the speech head only: suppress the text zone
-        # so the sampling chain can never pick a text token
-        self.gguf_writer.add_suppress_tokens(list(range(n_text)))
+        self._write_vocab(tokens, toktypes, merges, "default", n_text)
 
     def _mtl_case_fold_pairs(self) -> list[tuple[int, int]]:
         # single-char uppercase vocab entries whose lowercase form is also a
@@ -286,24 +250,7 @@ class ChatterboxTalkerModel(TextModel):
         return pairs
 
     def set_gguf_parameters(self):
-        if self.is_turbo:
-            self.gguf_writer.add_block_count(self.hparams["n_layer"])
-            self.gguf_writer.add_context_length(self.hparams["n_ctx"])
-            self.gguf_writer.add_embedding_length(self.hparams["n_embd"])
-            self.gguf_writer.add_feed_forward_length(4 * self.hparams["n_embd"])
-            self.gguf_writer.add_head_count(self.hparams["n_head"])
-            self.gguf_writer.add_layer_norm_eps(self.hparams["layer_norm_epsilon"])
-        else:
-            self.gguf_writer.add_block_count(self.hparams["num_hidden_layers"])
-            self.gguf_writer.add_context_length(self.hparams["max_position_embeddings"])
-            self.gguf_writer.add_embedding_length(self.hparams["hidden_size"])
-            self.gguf_writer.add_feed_forward_length(self.hparams["intermediate_size"])
-            self.gguf_writer.add_head_count(self.hparams["num_attention_heads"])
-            self.gguf_writer.add_head_count_kv(self.hparams["num_key_value_heads"])
-            self.gguf_writer.add_rope_freq_base(self.hparams["rope_theta"])
-            self.gguf_writer.add_rope_dimension_count(self.hparams["head_dim"])
-            self.gguf_writer.add_layer_norm_rms_eps(self.hparams["rms_norm_eps"])
-        self.gguf_writer.add_file_type(self.ftype)
+        super().set_gguf_parameters()
 
         sampling = TURBO_SAMPLING if self.is_turbo else MTL_SAMPLING
         self.gguf_writer.add_sampling_top_k(sampling["top_k"])
@@ -335,13 +282,6 @@ class ChatterboxTalkerModel(TextModel):
                 smooth = (rp["original_max_position_embeddings"] / wavelen - rp["low_freq_factor"]) / (rp["high_freq_factor"] - rp["low_freq_factor"])
                 rope_factors.append(1 / ((1 - smooth) / factor + smooth))
         yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FREQS), torch.tensor(rope_factors, dtype=torch.float32))
-
-    @staticmethod
-    def permute(weights: Tensor, n_head: int) -> Tensor:
-        # HF half-split rope layout to the interleaved layout of the llama arch
-        return (weights.reshape(n_head, 2, weights.shape[0] // n_head // 2, *weights.shape[1:])
-                .swapaxes(1, 2)
-                .reshape(weights.shape))
 
     def _maybe_emit_fused(self) -> Iterable[tuple[str, Tensor]]:
         if self._text_embd is not None and self._speech_embd is not None:
@@ -401,9 +341,9 @@ class ChatterboxTalkerModel(TextModel):
             return
 
         if name.endswith("q_proj.weight"):
-            data_torch = self.permute(data_torch, self.hparams["num_attention_heads"])
+            data_torch = LlamaModel.permute(data_torch, self.hparams["num_attention_heads"], None)
         if name.endswith("k_proj.weight"):
-            data_torch = self.permute(data_torch, self.hparams["num_key_value_heads"])
+            data_torch = LlamaModel.permute(data_torch, self.hparams["num_attention_heads"], self.hparams["num_key_value_heads"])
         yield (self.map_tensor_name("model." + name), data_torch)
 
 
@@ -429,8 +369,7 @@ class ChatterboxMmprojModel(MmprojModel):
             # batchnorm bookkeeping, unused in inference (and over the gguf name length cap)
             if name.endswith("num_batches_tracked"):
                 return None
-            # dsp buffers; the mel filterbank is synthesized in
-            # generate_extra_tensors, the window is rebuilt at runtime
+            # dsp buffers, rebuilt by the preprocessor
             if name in ("tokenizer.window", "tokenizer._mel_filters"):
                 return None
             for src, dst in (
@@ -495,11 +434,6 @@ class ChatterboxMmprojModel(MmprojModel):
         self.gguf_writer.add_gen_audio_head_count(8)
         self.gguf_writer.add_gen_audio_attention_layernorm_eps(1e-5)
 
-        self.gguf_writer.add_uint32("chatterbox.n_mels", 80)
-        self.gguf_writer.add_uint32("chatterbox.sample_rate", 24000)
-        self.gguf_writer.add_uint32("chatterbox.speech_vocab", self.global_config["text_config"]["speech_vocab_size"])
-        self.gguf_writer.add_uint32("chatterbox.meanflow", 1 if self.is_turbo else 0)
-
     def _fuse_weight_norm(self, name: str, data_torch: Tensor) -> tuple[str, Tensor] | None:
         # torch weight_norm parametrization: weight = g * v / |v| over dims 1..n
         base = name.split(".parametrizations.weight.original")[0]
@@ -525,9 +459,8 @@ class ChatterboxMmprojModel(MmprojModel):
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         del name, bid
         # tensors read raw on the host (voice encoder, conditioning encoder,
-        # voices, position tables, mel filterbank, source module) must stay
-        # F32: the reader handles F32/F16/I32 only
-        if new_name.startswith(("a.ve.", "a.cenc.", "voice.", "a.gen.t3.", "a.gen.hift.m_source.")) or new_name == "a.s3tok.mel_filters":
+        # voices, position tables, source module) must stay F32
+        if new_name.startswith(("a.ve.", "a.cenc.", "voice.", "a.gen.t3.", "a.gen.hift.m_source.")):
             return gguf.GGMLQuantizationType.F32
         # conv kernels of the graphs (ggml_conv_1d/_2d/_dw and the transposed
         # convs of the vocoder) have no BF16 kernels; F16 is the graph-side
@@ -549,8 +482,6 @@ class ChatterboxMmprojModel(MmprojModel):
                 data = parts[name]
                 dtype = LazyTorchTensor._dtype_str_map[data.dtype]
                 return torch.from_numpy(data.mmap_bytes()).view(dtype).reshape(data.shape).clone()
-
-        yield ("a.s3tok.mel_filters", _s3tok_mel_filters())
 
         # the conds.pt voice as the predefined voice "default": voice.default holds the talker conditioning rows,
         # the ref_* tensors the flow decoder reference (speech tokens, prompt mel, raw campplus x-vector)

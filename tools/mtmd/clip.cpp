@@ -1210,9 +1210,9 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const 
                 int n_tokens = params && params->codes ? (int) params->codes->size() : 0;
                 int n_prompt_mel = 0;
                 if (n_tokens > 0) {
-                    GGML_ASSERT(params->ref_tokens && params->ref_feat);
-                    n_tokens += (int) params->ref_tokens->size();
-                    n_prompt_mel = (int) (params->ref_feat->size() / 80);
+                    GGML_ASSERT(params->ref);
+                    n_tokens += (int) params->ref->tokens.size();
+                    n_prompt_mel = (int) (params->ref->feat.size() / 80);
                 }
                 const int vnm = params ? params->vocode_n_mel  : 0;
                 const int vns = params ? params->vocode_n_stft : 0;
@@ -2250,8 +2250,8 @@ struct clip_model_loader {
                     } break;
                 case PROJECTOR_TYPE_CHATTERBOX:
                     {
-                        // s3gen output rate; the s3 tokenizer mel front-end runs at 16 kHz
-                        get_u32("chatterbox.sample_rate", hparams.audio_sample_rate);
+                        // s3gen output rate
+                        hparams.audio_sample_rate = 24000;
                     } break;
                 case PROJECTOR_TYPE_SOPRANO:
                     {
@@ -3907,12 +3907,11 @@ struct clip_model_loader {
                     c.s3tok_down_b = get_tensor("a.s3tok.quantizer._codebook.project_down.bias");
 
                     // host-read side data, accessed by name through
-                    // clip_cbx_read_tensor: embedding tables, source module, filterbank
+                    // clip_cbx_read_tensor: embedding tables, source module
                     for (ggml_tensor * t = ggml_get_first_tensor(ctx_meta.get()); t; t = ggml_get_next_tensor(ctx_meta.get(), t)) {
                         const std::string name = t->name;
-                        if (name.rfind("a.gen.code.", 0) == 0 ||
-                            name.rfind("a.gen.t3.", 0) == 0   || name.rfind("a.gen.hift.m_source.", 0) == 0 ||
-                            name == "a.s3tok.mel_filters") {
+                        if (name.rfind("a.gen.code.", 0) == 0 || name.rfind("a.gen.t3.", 0) == 0 ||
+                            name.rfind("a.gen.hift.m_source.", 0) == 0) {
                             model.cbx_tensors[name] = get_tensor(name);
                         }
                     }
@@ -3942,12 +3941,12 @@ struct clip_model_loader {
                             dst = ids.data();
                             ok  = t->type == GGML_TYPE_F32;
                         } else if (take(".ref_feat")) {
-                            auto & v = model.gen_voices[voice].ref_feat;
+                            auto & v = model.gen_voices[voice].ref.feat;
                             v.resize(ggml_nelements(t));
                             dst = v.data();
                             ok  = t->type == GGML_TYPE_F32 && t->ne[0] == 80;
                         } else if (take(".ref_spk")) {
-                            auto & v = model.gen_voices[voice].ref_spk;
+                            auto & v = model.gen_voices[voice].ref.spk;
                             v.resize(ggml_nelements(t));
                             dst = v.data();
                             ok  = t->type == GGML_TYPE_F32 && t->ne[0] == 192;
@@ -3965,11 +3964,11 @@ struct clip_model_loader {
                             throw std::runtime_error(string_format("%s: failed to read %s\n", __func__, name.c_str()));
                         }
                         if (!ids.empty()) {
-                            model.gen_voices[voice].ref_tokens.assign(ids.begin(), ids.end());
+                            model.gen_voices[voice].ref.tokens.assign(ids.begin(), ids.end());
                         }
                     }
                     for (const auto & [voice, v] : model.gen_voices) {
-                        if (v.rows.empty() || v.ref_tokens.empty() || v.ref_feat.size() != 2 * 80 * v.ref_tokens.size() || v.ref_spk.empty()) {
+                        if (v.rows.empty() || v.ref.tokens.empty() || v.ref.feat.size() != 2 * 80 * v.ref.tokens.size() || v.ref.spk.empty()) {
                             throw std::runtime_error(string_format("%s: incomplete voice %s\n", __func__, voice.c_str()));
                         }
                     }
@@ -5640,10 +5639,6 @@ size_t clip_cbx_read_tensor(struct clip_ctx * ctx, const char * name, float * ou
         std::vector<ggml_fp16_t> tmp(n);
         ggml_backend_tensor_get(t, tmp.data(), 0, n * sizeof(ggml_fp16_t));
         for (size_t i = 0; i < n; i++) out[i] = ggml_fp16_to_fp32(tmp[i]);
-    } else if (t->type == GGML_TYPE_I32) {
-        std::vector<int32_t> tmp(n);
-        ggml_backend_tensor_get(t, tmp.data(), 0, n * sizeof(int32_t));
-        for (size_t i = 0; i < n; i++) out[i] = (float) tmp[i];
     } else {
         return 0;
     }
@@ -5651,7 +5646,6 @@ size_t clip_cbx_read_tensor(struct clip_ctx * ctx, const char * name, float * ou
 }
 
 bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
-
     const clip_image_f32_batch & imgs = *params->imgs;
     int n_batch_cur = imgs.entries.size();
 
@@ -6661,9 +6655,9 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                     break;
                 }
                 const int n_gen = (int) params->codes->size();
-                GGML_ASSERT(params->ref_tokens && params->ref_feat && params->ref_spk);
-                const int n_prompt = (int) params->ref_tokens->size();
-                std::vector<int32_t> tokens = *params->ref_tokens;
+                GGML_ASSERT(params->ref);
+                const int n_prompt = (int) params->ref->tokens.size();
+                std::vector<int32_t> tokens = params->ref->tokens;
                 tokens.resize((size_t) n_prompt + n_gen);
                 memcpy(tokens.data() + n_prompt, params->codes->data(), (size_t) n_gen * sizeof(int32_t));
                 const int T1 = n_prompt + n_gen;
@@ -6671,8 +6665,8 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                 set_input_i32("inp_tokens", tokens);
 
                 // mel-rate reference conditioning of the voice
-                set_input_f32("inp_prompt_feat", *params->ref_feat);
-                set_input_f32("inp_xvec", *params->ref_spk);
+                set_input_f32("inp_prompt_feat", params->ref->feat);
+                set_input_f32("inp_xvec", params->ref->spk);
 
                 // espnet relative positional encoding, entry k holds the
                 // sinusoid of relative position (T-1) - k
@@ -6742,10 +6736,8 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
             } break;
         case PROJECTOR_TYPE_CHATTERBOX_SPKENC:
             {
-                // batchnorm epsilon and the ceil-mode correction of the cam
-                // seg pooling: pooled sums are divided by the full segment
-                // length, the last partial segment gets rescaled
-                set_input_f32("inp_eps", {1e-5f});
+                // ceil-mode correction of the cam seg pooling: pooled sums are divided
+                // by the full segment length, the last partial segment gets rescaled
                 const int T1 = (imgs.entries[0].nx() - 1) / 2 + 1;
                 const int S  = (T1 + 99) / 100;
                 std::vector<float> segfix((size_t) S, 1.0f);
@@ -7804,13 +7796,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             // talker width, carried by the speech table
             return ctx->model.cbx_tensors.at("a.gen.code.out_embd.weight")->ne[0];
         case PROJECTOR_TYPE_CHATTERBOX_SPKENC:
-            {
-                // the encoder emits talker conditioning rows in the backbone
-                // embedding space, whose dim the speaker projection carries
-                auto it = ctx->model.cbx_tensors.find("a.cenc.spkr_enc.weight");
-                GGML_ASSERT(it != ctx->model.cbx_tensors.end());
-                return it->second->ne[1];
-            }
+            // talker conditioning rows, the speaker projection carries their width
+            return ctx->model.cbx_tensors.at("a.cenc.spkr_enc.weight")->ne[1];
         case PROJECTOR_TYPE_SOPRANO:
             return ctx->model.hparams.projection_dim;
         case PROJECTOR_TYPE_PARAKEET:

@@ -42,10 +42,10 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "BloomModel": "bloom",
     "CamembertModel": "bert",
     "ChameleonForCausalLM": "chameleon",
-    "ChatterboxModel": "chatterbox",
     "ChameleonForConditionalGeneration": "chameleon",
     "ChatGLMForConditionalGeneration": "chatglm",
     "ChatGLMModel": "chatglm",
+    "ChatterboxModel": "chatterbox",
     "ClefModel": "clef",
     "CloverMoeModelLM": "clover",
     "CodeShellForCausalLM": "codeshell",
@@ -328,8 +328,8 @@ TEXT_MODEL_MAP: dict[str, str] = {
 
 
 MMPROJ_MODEL_MAP: dict[str, str] = {
-    "ChatterboxModel": "chatterbox",
     "AudioFlamingo3ForConditionalGeneration": "ultravox",
+    "ChatterboxModel": "chatterbox",
     "ClefModel": "clef",
     "CogVLMForCausalLM": "cogvlm",
     "Cohere2VisionForConditionalGeneration": "command_r",

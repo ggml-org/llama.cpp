@@ -182,16 +182,16 @@ struct mtmd_audio_preprocessor_pockettts : mtmd_audio_preprocessor {
 // the turbo variant loudness-normalizes the clip to -27 LUFS first and caps
 // the t3 clip at 15 s instead of 6 s
 struct mtmd_audio_preprocessor_chatterbox_ref : mtmd_audio_preprocessor {
-    mtmd_audio_preprocessor_chatterbox_ref(const clip_ctx * ctx, bool is_mtl, std::vector<float> s3tok_filters)
-        : mtmd_audio_preprocessor(ctx), is_mtl(is_mtl), s3tok_filters(std::move(s3tok_filters)) {}
+    mtmd_audio_preprocessor_chatterbox_ref(const clip_ctx * ctx, bool is_mtl) : mtmd_audio_preprocessor(ctx), is_mtl(is_mtl) {}
     void initialize() override;
     bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const override;
 
   private:
-    bool               is_mtl;
-    std::vector<float> s3tok_filters; // s3 tokenizer filterbank [n_mel x (400 / 2 + 1)], from the mmproj
-    std::vector<float> window;        // povey window of the fbank front-end, frame_length points
-    std::vector<float> filters;       // kaldi mel filterbank of the fbank front-end, n_mel x (n_fft / 2) dense
+    bool             is_mtl;
+    mtmd_audio_cache fbank_cache;  // entry 0, the window slot holds the povey window
+    mtmd_audio_cache s3tok_cache;  // entries 1 and 2
+    mtmd_audio_cache matcha_cache; // entry 3
+    mtmd_audio_cache ve_cache;     // entry 4
 };
 
 struct mtmd_audio_preprocessor_parakeet : mtmd_audio_preprocessor {

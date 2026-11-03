@@ -13,13 +13,6 @@ ggml_tensor * clip_graph_chatterbox_base::cbx_linear(ggml_tensor * w, ggml_tenso
     return y;
 }
 
-static ggml_tensor * cbx_layer_norm(ggml_context * ctx0, ggml_tensor * w, ggml_tensor * b, ggml_tensor * x, float eps) {
-    x = ggml_norm(ctx0, x, eps);
-    x = ggml_mul(ctx0, x, w);
-    x = ggml_add(ctx0, x, b);
-    return x;
-}
-
 // x [C, T] -> conv1d over time -> [OC, T_out]; kernel [K, IC, OC], explicit
 // host-side asymmetric padding is applied by the caller through pad_l/pad_r
 ggml_tensor * clip_graph_chatterbox_base::cbx_conv1d(ggml_tensor * k, ggml_tensor * b, ggml_tensor * x,
@@ -80,7 +73,7 @@ ggml_tensor * clip_graph_chatterbox::enc_layer(const clip_chatterbox::enc_layer 
     const float scale = 1.0f / sqrtf((float) d_head);
 
     ggml_tensor * res = x;
-    ggml_tensor * cur = cbx_layer_norm(ctx0, l.norm_mha_w, l.norm_mha_b, x, 1e-5f);
+    ggml_tensor * cur = build_norm(x, l.norm_mha_w, l.norm_mha_b, NORM_TYPE_NORMAL, 1e-5f, -1);
 
     ggml_tensor * q = cbx_linear(l.attn_q_w, l.attn_q_b, cur);
     ggml_tensor * k = cbx_linear(l.attn_k_w, l.attn_k_b, cur);
@@ -119,14 +112,13 @@ ggml_tensor * clip_graph_chatterbox::enc_layer(const clip_chatterbox::enc_layer 
     x = ggml_add(ctx0, res, o);
 
     res = x;
-    cur = cbx_layer_norm(ctx0, l.norm_ff_w, l.norm_ff_b, x, 1e-5f);
+    cur = build_norm(x, l.norm_ff_w, l.norm_ff_b, NORM_TYPE_NORMAL, 1e-5f, -1);
     cur = cbx_linear(l.ffn_1_w, l.ffn_1_b, cur);
     cur = ggml_silu(ctx0, cur); // swish
     cur = cbx_linear(l.ffn_2_w, l.ffn_2_b, cur);
     x = ggml_add(ctx0, res, cur);
     return x;
 }
-
 
 // mish = x * tanh(softplus(x))
 static ggml_tensor * cbx_mish(ggml_context * ctx0, ggml_tensor * x) {
@@ -136,7 +128,7 @@ static ggml_tensor * cbx_mish(ggml_context * ctx0, ggml_tensor * x) {
 // causal block: conv k3 left-padded, layer norm over channels, mish; x [C, T]
 ggml_tensor * clip_graph_chatterbox::causal_block(const clip_chatterbox::causal_block & b, ggml_tensor * x) {
     x = cbx_conv1d(b.conv_w, b.conv_b, x, 1, (int) b.conv_w->ne[0] - 1, 0);
-    x = cbx_layer_norm(ctx0, b.norm_w, b.norm_b, x, 1e-5f);
+    x = build_norm(x, b.norm_w, b.norm_b, NORM_TYPE_NORMAL, 1e-5f, -1);
     return cbx_mish(ctx0, x);
 }
 
@@ -156,28 +148,17 @@ ggml_tensor * clip_graph_chatterbox::tfm_block(const clip_chatterbox::tfm_block 
     const int d_head = 64;
     const int T = (int) x->ne[1];
 
-    ggml_tensor * res = x;
-    ggml_tensor * cur = cbx_layer_norm(ctx0, b.norm1_w, b.norm1_b, x, 1e-5f);
-    ggml_tensor * q = ggml_mul_mat(ctx0, b.attn_q_w, cur);
-    ggml_tensor * k = ggml_mul_mat(ctx0, b.attn_k_w, cur);
-    ggml_tensor * v = ggml_mul_mat(ctx0, b.attn_v_w, cur);
-    q = ggml_cont(ctx0, ggml_permute(ctx0, ggml_reshape_3d(ctx0, q, d_head, n_head, T), 0, 2, 1, 3)); // [64, T, 8]
-    k = ggml_cont(ctx0, ggml_permute(ctx0, ggml_reshape_3d(ctx0, k, d_head, n_head, T), 0, 2, 1, 3));
-    v = ggml_cont(ctx0, ggml_permute(ctx0, ggml_reshape_3d(ctx0, v, d_head, n_head, T), 0, 2, 1, 3));
-    ggml_tensor * scores = ggml_scale(ctx0, ggml_mul_mat(ctx0, k, q), 1.0f / sqrtf((float) d_head));
-    ggml_tensor * probs = ggml_soft_max(ctx0, scores);
-    ggml_tensor * o = ggml_mul_mat(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, v)), probs); // [64, T, 8]
-    o = ggml_cont(ctx0, ggml_permute(ctx0, o, 0, 2, 1, 3));
-    o = ggml_reshape_2d(ctx0, o, n_head * d_head, T);
-    o = cbx_linear(b.attn_out_w, b.attn_out_b, o);
-    x = ggml_add(ctx0, res, o);
+    ggml_tensor * cur = build_norm(x, b.norm1_w, b.norm1_b, NORM_TYPE_NORMAL, 1e-5f, -1);
+    ggml_tensor * q = ggml_reshape_3d(ctx0, ggml_mul_mat(ctx0, b.attn_q_w, cur), d_head, n_head, T);
+    ggml_tensor * k = ggml_reshape_3d(ctx0, ggml_mul_mat(ctx0, b.attn_k_w, cur), d_head, n_head, T);
+    ggml_tensor * v = ggml_reshape_3d(ctx0, ggml_mul_mat(ctx0, b.attn_v_w, cur), d_head, n_head, T);
+    x = ggml_add(ctx0, x, build_attn(b.attn_out_w, b.attn_out_b, q, k, v, nullptr, 1.0f / sqrtf((float) d_head), -1));
 
-    res = x;
-    cur = cbx_layer_norm(ctx0, b.norm3_w, b.norm3_b, x, 1e-5f);
+    cur = build_norm(x, b.norm3_w, b.norm3_b, NORM_TYPE_NORMAL, 1e-5f, -1);
     cur = cbx_linear(b.ff_in_w, b.ff_in_b, cur);
     cur = ggml_gelu_erf(ctx0, cur);
     cur = cbx_linear(b.ff_out_w, b.ff_out_b, cur);
-    return ggml_add(ctx0, res, cur);
+    return ggml_add(ctx0, x, cur);
 }
 
 // one estimator evaluation; x_noise [80, T], mu [80, T], spks [80],
@@ -253,7 +234,7 @@ ggml_cgraph * clip_graph_chatterbox::build_s3tok(int T) {
 
     for (const auto & blk : c.s3tok_blocks) {
         ggml_tensor * res = x;
-        ggml_tensor * cur = cbx_layer_norm(ctx0, blk.attn_ln_w, blk.attn_ln_b, x, 1e-5f);
+        ggml_tensor * cur = build_norm(x, blk.attn_ln_w, blk.attn_ln_b, NORM_TYPE_NORMAL, 1e-5f, -1);
         ggml_tensor * q = cbx_linear(blk.attn_q_w, blk.attn_q_b, cur);
         ggml_tensor * k = ggml_mul_mat(ctx0, blk.attn_k_w, cur);
         ggml_tensor * v = cbx_linear(blk.attn_v_w, blk.attn_v_b, cur);
@@ -270,21 +251,14 @@ ggml_cgraph * clip_graph_chatterbox::build_s3tok(int T) {
 
         q = ggml_reshape_3d(ctx0, q, d_head, n_head, T2);
         k = ggml_reshape_3d(ctx0, k, d_head, n_head, T2);
+        v = ggml_reshape_3d(ctx0, v, d_head, n_head, T2);
         q = ggml_rope_ext(ctx0, q, pos, nullptr, d_head, GGML_ROPE_TYPE_NEOX, 0, 10000.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
         k = ggml_rope_ext(ctx0, k, pos, nullptr, d_head, GGML_ROPE_TYPE_NEOX, 0, 10000.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
-        q = ggml_cont(ctx0, ggml_permute(ctx0, q, 0, 2, 1, 3)); // [64, T2, 20]
-        k = ggml_cont(ctx0, ggml_permute(ctx0, k, 0, 2, 1, 3));
-        v = ggml_cont(ctx0, ggml_permute(ctx0, ggml_reshape_3d(ctx0, v, d_head, n_head, T2), 0, 2, 1, 3));
-        ggml_tensor * scores = ggml_scale(ctx0, ggml_mul_mat(ctx0, k, q), 1.0f / sqrtf((float) d_head));
-        ggml_tensor * probs = ggml_soft_max(ctx0, scores);
-        ggml_tensor * o = ggml_mul_mat(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, v)), probs); // [64, T2, 20]
-        o = ggml_cont(ctx0, ggml_permute(ctx0, o, 0, 2, 1, 3));
-        o = ggml_reshape_2d(ctx0, o, n_head * d_head, T2);
-        o = cbx_linear(blk.attn_out_w, blk.attn_out_b, o);
+        ggml_tensor * o = build_attn(blk.attn_out_w, blk.attn_out_b, q, k, v, nullptr, 1.0f / sqrtf((float) d_head), -1);
         x = ggml_add(ctx0, res, ggml_add(ctx0, o, fsm));
 
         res = x;
-        cur = cbx_layer_norm(ctx0, blk.mlp_ln_w, blk.mlp_ln_b, x, 1e-5f);
+        cur = build_norm(x, blk.mlp_ln_w, blk.mlp_ln_b, NORM_TYPE_NORMAL, 1e-5f, -1);
         cur = cbx_linear(blk.mlp_in_w, blk.mlp_in_b, cur);
         cur = ggml_gelu_erf(ctx0, cur);
         cur = cbx_linear(blk.mlp_out_w, blk.mlp_out_b, cur);
@@ -341,7 +315,7 @@ ggml_cgraph * clip_graph_chatterbox::build() {
 
     // embed: linear + layer norm, then the espnet xscale
     x = cbx_linear(c.embed_linear_w, c.embed_linear_b, x);
-    x = cbx_layer_norm(ctx0, c.embed_norm_w, c.embed_norm_b, x, 1e-5f);
+    x = build_norm(x, c.embed_norm_w, c.embed_norm_b, NORM_TYPE_NORMAL, 1e-5f, -1);
     x = ggml_scale(ctx0, x, sqrtf(512.0f));
     cb(x, "fenc_embd", -1);
 
@@ -375,7 +349,7 @@ ggml_cgraph * clip_graph_chatterbox::build() {
 
     // up embed: linear + layer norm + xscale
     x = cbx_linear(c.up_embed_linear_w, c.up_embed_linear_b, x);
-    x = cbx_layer_norm(ctx0, c.up_embed_norm_w, c.up_embed_norm_b, x, 1e-5f);
+    x = build_norm(x, c.up_embed_norm_w, c.up_embed_norm_b, NORM_TYPE_NORMAL, 1e-5f, -1);
     x = ggml_scale(ctx0, x, sqrtf(512.0f));
 
     for (size_t i = 0; i < c.up_enc.size(); i++) {
@@ -383,7 +357,7 @@ ggml_cgraph * clip_graph_chatterbox::build() {
         cb(x, "fenc_up_enc", (int) i);
     }
 
-    x = cbx_layer_norm(ctx0, c.after_norm_w, c.after_norm_b, x, 1e-5f);
+    x = build_norm(x, c.after_norm_w, c.after_norm_b, NORM_TYPE_NORMAL, 1e-5f, -1);
 
     // encoder projection to the mel channel count
     ggml_tensor * mu = cbx_linear(c.encoder_proj_w, c.encoder_proj_b, x); // [80, T2]
@@ -427,17 +401,14 @@ ggml_cgraph * clip_graph_chatterbox::build() {
         return ggml_mul_mat(ctx0, c.time_embed_mixer_w, e);                                       // [1024, 1]
     };
 
-    // mel-rate conditions: prompt features then zeros, and the 80-dim
-    // speaker vector; both are fed by the host from either the reference
-    // clip or the precomputed defaults
+    // mel-rate conditions of the voice: prompt features then zeros, and the speaker vector
     ggml_tensor * pf = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 80, n_prompt_mel);
     ggml_set_name(pf, "inp_prompt_feat");
     ggml_set_input(pf);
     ggml_tensor * zc = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 80, T2 - n_prompt_mel);
     zc = ggml_scale(ctx0, zc, 0.0f);
     ggml_tensor * cond = ggml_concat(ctx0, pf, zc, 1); // [80, T2]
-    // raw 192-dim campplus x-vector from the speaker encoder or the
-    // precomputed default, normalized then through the flow speaker affine
+    // raw 192-dim campplus x-vector, normalized then through the flow speaker affine
     ggml_tensor * xvec = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 192);
     ggml_set_name(xvec, "inp_xvec");
     ggml_set_input(xvec);

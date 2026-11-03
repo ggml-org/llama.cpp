@@ -100,6 +100,14 @@ enum clip_gen_process_type {
     CLIP_GEN_PROCESS_TTS_VOCODE, // internal: mel + source stft to istft input
     CLIP_GEN_PROCESS_TOKENIZE,   // raw PCM audio to semantic speech tokens
 };
+
+// gen-side voice reference (chatterbox): speech tokens, mel-rate features and the speaker vector
+struct clip_gen_ref {
+    std::vector<int32_t> tokens;
+    std::vector<float>   feat;
+    std::vector<float>   spk;
+};
+
 struct clip_encode_params {
     int n_threads = 1;
     const clip_image_f32_batch * imgs = nullptr;
@@ -126,13 +134,7 @@ struct clip_encode_params {
     const std::vector<int32_t> * codes = nullptr;     // this frame's 16 RVQ codes
     const std::vector<float> *   feats = nullptr;     // continuous counterpart of codes
     std::vector<float> * out_audio = nullptr;         // decoded PCM samples, F32
-    // TOKENIZE input
-    const float * pcm_in = nullptr;
-    size_t        n_pcm  = 0;
-    // TTS reference conditioning: speech tokens, mel-rate features and the speaker vector of the voice
-    const std::vector<int32_t> * ref_tokens = nullptr;
-    const std::vector<float> *   ref_feat   = nullptr;
-    const std::vector<float> *   ref_spk    = nullptr;
+    const clip_gen_ref * ref = nullptr; // TTS reference conditioning of the voice
     // TTS_VOCODE internal stage inputs
     const std::vector<float> * mel_in   = nullptr;
     const std::vector<float> * sstft_in = nullptr;
@@ -163,12 +165,11 @@ void                    clip_gen_state_reset(struct clip_gen_state * state);
 // read a chatterbox tensor by source name, converted to F32. returns the
 // element count, 0 if not found. out may be null to only query the size.
 size_t clip_cbx_read_tensor(struct clip_ctx * ctx, const char * name, float * out, size_t n_max);
-// a predefined voice: backbone rows, plus the gen-side reference when the gen stack needs one (chatterbox)
+
+// a predefined voice: backbone rows, plus the gen-side reference when the gen stack needs one
 struct clip_gen_voice {
-    std::vector<float>   rows;
-    std::vector<int32_t> ref_tokens;
-    std::vector<float>   ref_feat;
-    std::vector<float>   ref_spk;
+    std::vector<float> rows;
+    clip_gen_ref       ref;
 };
 
 const std::map<std::string, clip_gen_voice> & clip_gen_get_voices(const struct clip_ctx * ctx);

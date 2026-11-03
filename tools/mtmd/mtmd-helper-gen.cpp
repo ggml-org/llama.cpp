@@ -2013,10 +2013,6 @@ private:
             return false;
         }
 
-        // start_text_token and stop_text_token of the reference, only the multilingual prompt uses them
-        text_start = 255;
-        text_stop  = 0;
-
         const uint32_t n_tok_embd = llama_model_get_tok_embd(model, nullptr);
         if (n_tok_embd != (uint32_t) llama_vocab_n_tokens(vocab) * (uint32_t) n_embd) {
             LOG_ERR("mtmd_helper_gen_audio: unexpected token embedding size\n");
@@ -2049,8 +2045,9 @@ private:
     std::vector<float> text_pos;
     std::vector<float> speech_pos;
     llama_token speech_base = LLAMA_TOKEN_NULL;
-    llama_token text_start  = LLAMA_TOKEN_NULL;
-    llama_token text_stop   = LLAMA_TOKEN_NULL;
+    // start_text_token and stop_text_token of the reference, only the multilingual prompt uses them
+    static constexpr llama_token text_start = 255;
+    static constexpr llama_token text_stop  = 0;
 
     // per-generation state, cleared by reset()
     llama_seq_id seq_id     = 0;

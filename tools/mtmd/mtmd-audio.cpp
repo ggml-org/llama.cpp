@@ -971,65 +971,65 @@ bool mtmd_audio_preprocessor_qwen3tts_spk::preprocess(const float *             
     return true;
 }
 
-// whisper style log-mel of the chatterbox s3 tokenizer (s3tokenizer.py)
-static bool mtmd_audio_s3tok_log_mel(const float * samples, size_t n_samples,
-                              const float * filters, int n_mel,
-                              std::vector<float> & out, int & n_frames) {
-    const int n_fft  = 400;
-    const int hop    = 160;
+// windowed frame of a centered, reflect padded signal: dst[i] = x[start + i] * win[i], zeros past the window
+static void mtmd_audio_reflect_frame(const float * x, int n, int start, const std::vector<float> & win, std::vector<float> & dst) {
+    std::fill(dst.begin(), dst.end(), 0.0f);
+    for (int i = 0; i < (int) win.size(); i++) {
+        int idx = start + i;
+        if (idx < 0) {
+            idx = -idx;
+        }
+        if (idx >= n) {
+            idx = 2 * n - 2 - idx;
+        }
+        dst[(size_t) i] = x[idx] * win[(size_t) i];
+    }
+}
+
+// mel energies of the frame in fft_in: power (or magnitude) spectrum through cache.filters
+static void mtmd_audio_mel_energies(const mtmd_audio_cache & cache, std::vector<float> & fft_in, std::vector<float> & fft_out,
+                                    bool magnitude, std::vector<double> & mel) {
+    const int n_fft  = (int) cache.filters.n_fft;
     const int n_bins = n_fft / 2 + 1;
-    const int half   = n_fft / 2;
-    const int n      = (int) n_samples;
+    fft(cache, fft_in.data(), n_fft, fft_out.data());
+    for (int k = 0; k < n_bins; k++) {
+        const float p = fft_out[2 * k + 0] * fft_out[2 * k + 0] + fft_out[2 * k + 1] * fft_out[2 * k + 1];
+        fft_out[k] = magnitude ? sqrtf(p + 1e-9f) : p;
+    }
+    mel.assign(cache.filters.n_mel, 0.0);
+    for (int64_t m = 0; m < cache.filters.n_mel; m++) {
+        const float * w = cache.filters.data.data() + (size_t) m * n_bins;
+        for (int k = 0; k < n_bins; k++) {
+            mel[(size_t) m] += w[k] * fft_out[k];
+        }
+    }
+}
+
+// whisper style log-mel of the chatterbox s3 tokenizer (s3tokenizer.py), mel major
+static bool mtmd_audio_s3tok_log_mel(const mtmd_audio_cache & cache, const float * samples, size_t n_samples,
+                                     std::vector<float> & out, int & n_frames) {
+    const int n_fft = 400;
+    const int hop   = 160;
+    const int n_mel = (int) cache.filters.n_mel;
+    const int n     = (int) n_samples;
 
     n_frames = n / hop;
     if (n_frames <= 0) {
         return false;
     }
 
-    std::vector<double> window(n_fft);
-    for (int i = 0; i < n_fft; i++) {
-        window[(size_t) i] = 0.5 * (1.0 - cos(2.0 * M_PI * i / n_fft));
-    }
-
-    std::vector<double> mel((size_t) n_mel * n_frames, 0.0);
-    std::vector<double> frame(n_fft);
-    std::vector<double> power(n_bins);
+    std::vector<float>  fft_in((size_t) n_fft * 2), fft_out((size_t) n_fft * 8);
+    std::vector<double> e;
+    std::vector<double> mel((size_t) n_mel * n_frames);
     for (int fr = 0; fr < n_frames; fr++) {
-        for (int i = 0; i < n_fft; i++) {
-            int idx = fr * hop - half + i;
-            if (idx < 0) {
-                idx = -idx;
-            }
-            if (idx >= n) {
-                idx = 2 * n - 2 - idx;
-            }
-            frame[(size_t) i] = samples[idx] * window[(size_t) i];
-        }
-
-        for (int k = 0; k < n_bins; k++) {
-            double re = 0.0, im = 0.0;
-            for (int i = 0; i < n_fft; i++) {
-                const double a = 2.0 * M_PI * k * i / n_fft;
-                re += frame[(size_t) i] * cos(a);
-                im -= frame[(size_t) i] * sin(a);
-            }
-            power[(size_t) k] = re * re + im * im;
-        }
-
+        mtmd_audio_reflect_frame(samples, n, fr * hop - n_fft / 2, cache.hann_window, fft_in);
+        mtmd_audio_mel_energies(cache, fft_in, fft_out, false, e);
         for (int m = 0; m < n_mel; m++) {
-            double e = 0.0;
-            const float * w = filters + (size_t) m * n_bins;
-            for (int k = 0; k < n_bins; k++) {
-                e += w[k] * power[(size_t) k];
-            }
-            mel[(size_t) m * n_frames + fr] = log10(std::max(e, 1e-10));
+            mel[(size_t) m * n_frames + fr] = log10(std::max(e[(size_t) m], 1e-10));
         }
     }
 
-    double mx = mel[0];
-    for (const double v : mel) {
-        mx = std::max(mx, v);
-    }
+    const double mx = *std::max_element(mel.begin(), mel.end());
     out.resize(mel.size());
     for (size_t i = 0; i < mel.size(); i++) {
         out[i] = (float) ((std::max(mel[i], mx - 8.0) + 4.0) / 4.0);
@@ -1062,55 +1062,28 @@ static void mtmd_audio_upsample_3_2(const float * samples, size_t n_samples, std
     }
 }
 
-// matcha style log-mel of the s3gen prompt features (s3gen/utils/mel.py)
-static bool mtmd_audio_matcha_log_mel(const float * samples, size_t n_samples,
-                               std::vector<float> & out, int & n_frames) {
-    const int n_fft  = 1920;
-    const int hop    = 480;
-    const int n_bins = n_fft / 2 + 1;
-    const int pad    = (n_fft - hop) / 2;
-    const int n_mel  = 80;
-    const int n      = (int) n_samples;
+// matcha style log-mel of the s3gen prompt features (s3gen/utils/mel.py), frame major
+static bool mtmd_audio_matcha_log_mel(const mtmd_audio_cache & cache, const float * samples, size_t n_samples,
+                                      std::vector<float> & out, int & n_frames) {
+    const int n_fft = 1920;
+    const int hop   = 480;
+    const int pad   = (n_fft - hop) / 2;
+    const int n_mel = 80;
+    const int n     = (int) n_samples;
 
     n_frames = 1 + (n + 2 * pad - n_fft) / hop;
     if (n <= pad || n_frames <= 0) {
         return false;
     }
 
-    mtmd_audio_cache cache;
-    cache.fill_sin_cos_table(n_fft);
-    cache.fill_hann_window(n_fft, true);
-    cache.fill_mel_filterbank_matrix(n_mel, n_fft, 24000, 0.0f, 8000.0f);
-
-    std::vector<float> fft_in((size_t) n_fft * 2, 0.0f);
-    std::vector<float> fft_out((size_t) n_fft * 8);
-    std::vector<float> mag(n_bins);
+    std::vector<float>  fft_in((size_t) n_fft * 2), fft_out((size_t) n_fft * 8);
+    std::vector<double> e;
     out.resize((size_t) n_mel * n_frames);
     for (int fr = 0; fr < n_frames; fr++) {
-        for (int i = 0; i < n_fft; i++) {
-            int idx = fr * hop - pad + i;
-            if (idx < 0) {
-                idx = -idx;
-            }
-            if (idx >= n) {
-                idx = 2 * n - 2 - idx;
-            }
-            fft_in[(size_t) i] = samples[idx] * cache.hann_window[(size_t) i];
-        }
-        fft(cache, fft_in.data(), n_fft, fft_out.data());
-
-        for (int k = 0; k < n_bins; k++) {
-            const float re = fft_out[2 * k + 0];
-            const float im = fft_out[2 * k + 1];
-            mag[(size_t) k] = sqrtf(re * re + im * im + 1e-9f);
-        }
+        mtmd_audio_reflect_frame(samples, n, fr * hop - pad, cache.hann_window, fft_in);
+        mtmd_audio_mel_energies(cache, fft_in, fft_out, true, e);
         for (int m = 0; m < n_mel; m++) {
-            float e = 0.0f;
-            const float * w = cache.filters.data.data() + (size_t) m * n_bins;
-            for (int k = 0; k < n_bins; k++) {
-                e += w[k] * mag[(size_t) k];
-            }
-            out[(size_t) fr * n_mel + m] = logf(std::max(e, 1e-5f));
+            out[(size_t) fr * n_mel + m] = logf(std::max((float) e[(size_t) m], 1e-5f));
         }
     }
     return true;
@@ -1157,60 +1130,27 @@ static void mtmd_audio_trim_silence(const float * samples, size_t n_samples, flo
     end   = std::min((size_t) (last + 1) * hop, n_samples);
 }
 
-// power mel of the voice encoder front-end: centered reflect padded frames,
-// hann 400 periodic, hop 160, squared magnitude, slaney mel 40 bins, no log
-static bool mtmd_audio_ve_mel(const float * samples, size_t n_samples,
-                       std::vector<float> & out, int & n_frames) {
-    const int n_fft  = 400;
-    const int hop    = 160;
-    const int n_bins = n_fft / 2 + 1;
-    const int half   = n_fft / 2;
-    const int n_mel  = 40;
-    const int n      = (int) n_samples;
+// power mel of the voice encoder front-end, frame major, no log
+static bool mtmd_audio_ve_mel(const mtmd_audio_cache & cache, const float * samples, size_t n_samples,
+                              std::vector<float> & out, int & n_frames) {
+    const int n_fft = 400;
+    const int hop   = 160;
+    const int n_mel = 40;
+    const int n     = (int) n_samples;
 
     n_frames = 1 + n / hop;
     if (n < 2) {
         return false;
     }
 
-    mtmd_audio_cache cache;
-    cache.fill_mel_filterbank_matrix(n_mel, n_fft, 16000, 0.0f, 8000.0f);
-
-    std::vector<double> window(n_fft);
-    for (int i = 0; i < n_fft; i++) {
-        window[(size_t) i] = 0.5 * (1.0 - cos(2.0 * M_PI * i / n_fft));
-    }
-
-    std::vector<double> frame(n_fft);
-    std::vector<double> power(n_bins);
+    std::vector<float>  fft_in((size_t) n_fft * 2), fft_out((size_t) n_fft * 8);
+    std::vector<double> e;
     out.resize((size_t) n_mel * n_frames);
     for (int fr = 0; fr < n_frames; fr++) {
-        for (int i = 0; i < n_fft; i++) {
-            int idx = fr * hop - half + i;
-            if (idx < 0) {
-                idx = -idx;
-            }
-            if (idx >= n) {
-                idx = 2 * n - 2 - idx;
-            }
-            frame[(size_t) i] = samples[idx] * window[(size_t) i];
-        }
-        for (int k = 0; k < n_bins; k++) {
-            double re = 0.0, im = 0.0;
-            for (int i = 0; i < n_fft; i++) {
-                const double a = 2.0 * M_PI * k * i / n_fft;
-                re += frame[(size_t) i] * cos(a);
-                im -= frame[(size_t) i] * sin(a);
-            }
-            power[(size_t) k] = re * re + im * im;
-        }
+        mtmd_audio_reflect_frame(samples, n, fr * hop - n_fft / 2, cache.hann_window, fft_in);
+        mtmd_audio_mel_energies(cache, fft_in, fft_out, false, e);
         for (int m = 0; m < n_mel; m++) {
-            double e = 0.0;
-            const float * w = cache.filters.data.data() + (size_t) m * n_bins;
-            for (int k = 0; k < n_bins; k++) {
-                e += w[k] * power[(size_t) k];
-            }
-            out[(size_t) fr * n_mel + m] = (float) e;
+            out[(size_t) fr * n_mel + m] = (float) e[(size_t) m];
         }
     }
     return true;
@@ -1310,37 +1250,59 @@ static float mtmd_audio_lufs(const float * samples, size_t n_samples, int sample
 //
 
 void mtmd_audio_preprocessor_chatterbox_ref::initialize() {
-    const int frame_len = 400;
-    const int n_fft     = 512;
-    const int n_bins    = n_fft / 2;
-    const int n_mel     = hparams.n_mel_bins;
-    const double sr     = (double) hparams.audio_sample_rate;
+    // kaldi fbank: povey window, kaldi mel banks over the 512-point spectrum, the nyquist bin left out
+    {
+        const int frame_len = 400;
+        const int n_fft     = 512;
+        const int n_bins    = n_fft / 2 + 1;
+        const int n_mel     = hparams.n_mel_bins;
+        const double sr     = (double) hparams.audio_sample_rate;
 
-    window.resize(frame_len);
-    for (int i = 0; i < frame_len; i++) {
-        window[(size_t) i] = (float) pow(0.5 - 0.5 * cos(2.0 * M_PI * i / (frame_len - 1)), 0.85);
-    }
+        fbank_cache.fill_sin_cos_table(n_fft);
+        fbank_cache.hann_window.resize(frame_len);
+        for (int i = 0; i < frame_len; i++) {
+            fbank_cache.hann_window[(size_t) i] = (float) pow(0.5 - 0.5 * cos(2.0 * M_PI * i / (frame_len - 1)), 0.85);
+        }
 
-    auto mel = [](double f) { return 1127.0 * log(1.0 + f / 700.0); };
-    const double mel_lo = mel(20.0);
-    const double mel_hi = mel(sr / 2.0);
-    const double delta  = (mel_hi - mel_lo) / (n_mel + 1);
-    const double bin_hz = sr / n_fft;
+        auto mel = [](double f) { return 1127.0 * log(1.0 + f / 700.0); };
+        const double mel_lo = mel(20.0);
+        const double mel_hi = mel(sr / 2.0);
+        const double delta  = (mel_hi - mel_lo) / (n_mel + 1);
+        const double bin_hz = sr / n_fft;
 
-    filters.assign((size_t) n_mel * n_bins, 0.0f);
-    for (int m = 0; m < n_mel; m++) {
-        const double left   = mel_lo + m * delta;
-        const double center = left + delta;
-        const double right  = center + delta;
-        for (int i = 0; i < n_bins; i++) {
-            const double f = mel(bin_hz * i);
-            if (f > left && f < right) {
-                const double w = f <= center ? (f - left) / (center - left)
-                                             : (right - f) / (right - center);
-                filters[(size_t) m * n_bins + i] = (float) w;
+        auto & filters = fbank_cache.filters;
+        filters.n_mel = n_mel;
+        filters.n_fft = n_fft;
+        filters.data.assign((size_t) n_mel * n_bins, 0.0f);
+        for (int m = 0; m < n_mel; m++) {
+            const double left   = mel_lo + m * delta;
+            const double center = left + delta;
+            const double right  = center + delta;
+            for (int i = 0; i < n_bins - 1; i++) {
+                const double f = mel(bin_hz * i);
+                if (f > left && f < right) {
+                    const double w = f <= center ? (f - left) / (center - left)
+                                                 : (right - f) / (right - center);
+                    filters.data[(size_t) m * n_bins + i] = (float) w;
+                }
             }
         }
     }
+
+    // s3 tokenizer: librosa slaney mel, 128 bands
+    s3tok_cache.fill_sin_cos_table(400);
+    s3tok_cache.fill_hann_window(400, true);
+    s3tok_cache.fill_mel_filterbank_matrix(128, 400, 16000);
+
+    // voice encoder: slaney mel, 40 bands up to 8 kHz
+    ve_cache.fill_sin_cos_table(400);
+    ve_cache.fill_hann_window(400, true);
+    ve_cache.fill_mel_filterbank_matrix(40, 400, 16000, 0.0f, 8000.0f);
+
+    // s3gen prompt features at the 24 kHz decoder rate
+    matcha_cache.fill_sin_cos_table(1920);
+    matcha_cache.fill_hann_window(1920, true);
+    matcha_cache.fill_mel_filterbank_matrix(80, 1920, 24000, 0.0f, 8000.0f);
 }
 
 bool mtmd_audio_preprocessor_chatterbox_ref::preprocess(const float *                 samples,
@@ -1368,7 +1330,6 @@ bool mtmd_audio_preprocessor_chatterbox_ref::preprocess(const float *           
         const int frame_len = 400;
         const int hop       = 160;
         const int n_fft     = 512;
-        const int n_bins    = n_fft / 2;
         const int n_mel     = hparams.n_mel_bins;
 
         if ((int) pcm.size() < frame_len) {
@@ -1376,17 +1337,15 @@ bool mtmd_audio_preprocessor_chatterbox_ref::preprocess(const float *           
         }
         const int n_frames = 1 + ((int) pcm.size() - frame_len) / hop;
 
-        GGML_ASSERT(!window.empty());
-        GGML_ASSERT(!filters.empty());
-
         mtmd_audio_mel out;
         out.n_len     = n_frames;
         out.n_len_org = n_frames;
         out.n_mel     = n_mel;
         out.data.assign((size_t) n_mel * n_frames, 0.0f);
 
-        std::vector<double> frame(n_fft);
-        std::vector<double> power(n_bins);
+        const std::vector<float> & win = fbank_cache.hann_window;
+        std::vector<float>  fft_in((size_t) n_fft * 2), fft_out((size_t) n_fft * 8);
+        std::vector<double> e;
         for (int fr = 0; fr < n_frames; fr++) {
             const float * x = pcm.data() + (size_t) fr * hop;
 
@@ -1396,29 +1355,14 @@ bool mtmd_audio_preprocessor_chatterbox_ref::preprocess(const float *           
             }
             mean /= frame_len;
 
-            frame[0] = (x[0] - mean) * (1.0 - 0.97) * window[0];
+            std::fill(fft_in.begin(), fft_in.end(), 0.0f);
+            fft_in[0] = (float) ((x[0] - mean) * (1.0 - 0.97) * win[0]);
             for (int i = 1; i < frame_len; i++) {
-                frame[(size_t) i] = ((x[i] - mean) - 0.97 * (x[i - 1] - mean)) * window[(size_t) i];
+                fft_in[(size_t) i] = (float) (((x[i] - mean) - 0.97 * (x[i - 1] - mean)) * win[(size_t) i]);
             }
-            std::fill(frame.begin() + frame_len, frame.end(), 0.0);
-
-            for (int k = 0; k < n_bins; k++) {
-                double re = 0.0, im = 0.0;
-                for (int i = 0; i < frame_len; i++) {
-                    const double a = 2.0 * M_PI * k * i / n_fft;
-                    re += frame[(size_t) i] * cos(a);
-                    im -= frame[(size_t) i] * sin(a);
-                }
-                power[(size_t) k] = re * re + im * im;
-            }
-
+            mtmd_audio_mel_energies(fbank_cache, fft_in, fft_out, false, e);
             for (int m = 0; m < n_mel; m++) {
-                double e = 0.0;
-                const float * w = filters.data() + (size_t) m * n_bins;
-                for (int k = 0; k < n_bins; k++) {
-                    e += w[k] * power[(size_t) k];
-                }
-                out.data[(size_t) m * n_frames + fr] = (float) log(std::max(e, (double) FLT_EPSILON));
+                out.data[(size_t) m * n_frames + fr] = (float) log(std::max(e[(size_t) m], (double) FLT_EPSILON));
             }
         }
 
@@ -1439,26 +1383,25 @@ bool mtmd_audio_preprocessor_chatterbox_ref::preprocess(const float *           
 
     // entries 1 and 2: s3 tokenizer log-mels at the flow and t3 caps, each
     // clip padded to whole 40 ms tokens so the mel stays twice the token grid
-    const int n_mel_s3 = (int) (s3tok_filters.size() / (400 / 2 + 1));
     auto s3tok_entry = [&](size_t cap) -> bool {
         std::vector<float> clip(pcm.begin(), pcm.begin() + std::min(pcm.size(), cap));
         clip.resize((clip.size() + 639) / 640 * 640, 0.0f);
         std::vector<float> mel;
         int n_frames = 0;
-        if (!mtmd_audio_s3tok_log_mel(clip.data(), clip.size(), s3tok_filters.data(), n_mel_s3, mel, n_frames)) {
+        if (!mtmd_audio_s3tok_log_mel(s3tok_cache, clip.data(), clip.size(), mel, n_frames)) {
             return false;
         }
         mtmd_audio_mel out;
         out.n_len     = n_frames;
         out.n_len_org = n_frames;
-        out.n_mel     = n_mel_s3;
+        out.n_mel     = s3tok_cache.filters.n_mel;
         out.data      = std::move(mel);
         output.push_back(std::move(out));
         return true;
     };
     const size_t gen_cap = (size_t) 10 * sr;
     const size_t t3_cap  = (size_t) (is_mtl ? 6 : 15) * sr;
-    if (n_mel_s3 == 0 || !s3tok_entry(gen_cap) || !s3tok_entry(t3_cap)) {
+    if (!s3tok_entry(gen_cap) || !s3tok_entry(t3_cap)) {
         return false;
     }
 
@@ -1471,7 +1414,7 @@ bool mtmd_audio_preprocessor_chatterbox_ref::preprocess(const float *           
         mtmd_audio_upsample_3_2(clip.data(), clip.size(), pcm24);
         std::vector<float> feat;
         int n_frames = 0;
-        if (!mtmd_audio_matcha_log_mel(pcm24.data(), pcm24.size(), feat, n_frames)) {
+        if (!mtmd_audio_matcha_log_mel(matcha_cache, pcm24.data(), pcm24.size(), feat, n_frames)) {
             return false;
         }
         mtmd_audio_mel out;
@@ -1492,7 +1435,7 @@ bool mtmd_audio_preprocessor_chatterbox_ref::preprocess(const float *           
         }
         std::vector<float> mel;
         int n_frames = 0;
-        if (!mtmd_audio_ve_mel(pcm.data() + t0, t1 - t0, mel, n_frames)) {
+        if (!mtmd_audio_ve_mel(ve_cache, pcm.data() + t0, t1 - t0, mel, n_frames)) {
             return false;
         }
         const int n_mel     = 40;

@@ -208,11 +208,10 @@ struct clip_graph_chatterbox_spkenc : clip_graph_chatterbox_base {
     ggml_cgraph * build() override;
 
   private:
-    ggml_tensor * bn1d(const clip_chatterbox::bn & n, ggml_tensor * x, ggml_tensor * eps);
-    ggml_tensor * bn2d_relu(const clip_chatterbox::bn & n, ggml_tensor * x, ggml_tensor * eps);
-    ggml_tensor * res2d(const clip_chatterbox::spk_res2d & r, ggml_tensor * x, int stride, ggml_tensor * eps);
-    ggml_tensor * cam_layer(const clip_chatterbox::spk_cam_layer & l, ggml_tensor * x,
-                            int dil, ggml_tensor * eps, ggml_tensor * segfix);
+    ggml_tensor * bn1d(const clip_chatterbox::bn & n, ggml_tensor * x);
+    ggml_tensor * bn2d_relu(const clip_chatterbox::bn & n, ggml_tensor * x);
+    ggml_tensor * res2d(const clip_chatterbox::spk_res2d & r, ggml_tensor * x, int stride);
+    ggml_tensor * cam_layer(const clip_chatterbox::spk_cam_layer & l, ggml_tensor * x, int dil, ggml_tensor * segfix);
 };
 
 struct clip_graph_chatterbox : clip_graph_chatterbox_base {

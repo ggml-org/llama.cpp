@@ -363,7 +363,6 @@ MTMD_API int32_t mtmd_encode_chunk(mtmd_context * ctx,
 MTMD_API float * mtmd_get_output_embd(mtmd_context * ctx);
 
 
-
 // batch encoding API
 // chunks are not owned by the batch, they will not be freed by mtmd_batch_free()
 // batch is valid for a given context, cannot be shared across contexts
