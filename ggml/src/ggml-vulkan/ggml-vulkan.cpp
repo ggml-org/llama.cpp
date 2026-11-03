@@ -16805,7 +16805,13 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         ggml_vk_preallocate_buffers(ctx, nullptr);
         compute_ctx = ggml_vk_get_compute_ctx(ctx);
         // initialize partial sums to zero.
-        ggml_vk_buffer_memset_async(compute_ctx, ctx->prealloc_add_rms_partials, 0, 0, ctx->prealloc_size_add_rms_partials);
+        if (ctx->device->early_record) {
+            // GGML_VK_EARLY_RECORD: on the GPU, behind this window's gate. The host memset (UMA) runs when this
+            // window is submitted, which may be while the previous window still uses the partial sums.
+            compute_ctx->s->buffer->buf.fillBuffer(ctx->prealloc_add_rms_partials->buffer, 0, ctx->prealloc_size_add_rms_partials, 0);
+        } else {
+            ggml_vk_buffer_memset_async(compute_ctx, ctx->prealloc_add_rms_partials, 0, 0, ctx->prealloc_size_add_rms_partials);
+        }
         ggml_vk_sync_buffers(ctx, compute_ctx);
     }
 
