@@ -19,10 +19,12 @@ if TYPE_CHECKING:
 from .base import ModelBase, TextModel, MmprojModel, LazyTorchTensor, gguf, logger
 from .llama import LlamaModel
 
-TURBO_TALKER = "t3_turbo_v1.safetensors"
-MTL_TALKER   = "t3_mtl23ls_v3.safetensors"
-TURBO_S3GEN  = "s3gen_meanflow.safetensors"
-MTL_S3GEN    = "s3gen_v3.safetensors"
+# checkpoint file prefixes, the files are "<prefix>.safetensors"
+TURBO_TALKER = "t3_turbo_v1"
+MTL_TALKER   = "t3_mtl23ls_v3"
+TURBO_S3GEN  = "s3gen_meanflow"
+MTL_S3GEN    = "s3gen_v3"
+VE           = "ve"
 
 # relative speech ids shared by both variants (start/stop_speech_token in the reference)
 SPEECH_BOS = 6561
@@ -37,10 +39,14 @@ MTL_SAMPLING   = {"min_p": 0.05, "top_p": 1.0,  "temp": 0.8, "penalty_repeat": 1
 PENALTY_LAST_N = -1
 
 
+def _has_file(dir_model: Path, prefix: str) -> bool:
+    return (dir_model / f"{prefix}.safetensors").is_file()
+
+
 def _is_turbo(dir_model: Path) -> bool:
-    if (dir_model / TURBO_TALKER).is_file():
+    if _has_file(dir_model, TURBO_TALKER):
         return True
-    if (dir_model / MTL_TALKER).is_file():
+    if _has_file(dir_model, MTL_TALKER):
         return False
     raise FileNotFoundError(f"no chatterbox talker checkpoint in {dir_model}")
 
@@ -60,8 +66,7 @@ MTL_TEXT_CONFIG = {
 
 
 def _is_chatterbox_checkpoint(dir_model: Path) -> bool:
-    return (dir_model / "ve.safetensors").is_file() and \
-        ((dir_model / TURBO_TALKER).is_file() or (dir_model / MTL_TALKER).is_file())
+    return _has_file(dir_model, VE) and (_has_file(dir_model, TURBO_TALKER) or _has_file(dir_model, MTL_TALKER))
 
 
 @ModelBase.register_hparams_loader(_is_chatterbox_checkpoint)
@@ -71,23 +76,6 @@ def _load_chatterbox_hparams(dir_model: Path) -> dict[str, Any]:
     text_config = dict(TURBO_TEXT_CONFIG if turbo else MTL_TEXT_CONFIG)
     # the mmproj tensors are named explicitly, they do not go through the block tensor map
     return {"architectures": ["ChatterboxModel"], "text_config": text_config, "audio_config": {"num_hidden_layers": 0}}
-
-
-def _index_safetensors(path: Path, lazy: bool, rename: Callable[[str], str | None]) -> dict[str, Callable[[], Tensor]]:
-    tensors: dict[str, Callable[[], Tensor]] = {}
-    with gguf.utility.SafetensorsLocal(path) as model_part:
-        for name in model_part.keys():
-            new_name = rename(name)
-            if new_name is None:
-                continue
-            data: gguf.utility.LocalTensor = model_part[name]
-            if lazy:
-                data_gen = lambda data=data: LazyTorchTensor.from_local_tensor(data)  # noqa: E731
-            else:
-                dtype = LazyTorchTensor._dtype_str_map[data.dtype]
-                data_gen = lambda data=data, dtype=dtype: torch.from_numpy(data.mmap_bytes()).view(dtype).reshape(data.shape)  # noqa: E731
-            tensors[new_name] = data_gen
-    return tensors
 
 
 @ModelBase.register("ChatterboxModel")
@@ -105,17 +93,17 @@ class ChatterboxTalkerModel(TextModel):
         self._speech_head: Tensor | None = None
 
     def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
-        talker = TURBO_TALKER if self.is_turbo else MTL_TALKER
+        return self.index_local_tensors(TURBO_TALKER if self.is_turbo else MTL_TALKER)
 
-        def rename(name: str) -> str | None:
-            # the reference feeds inputs_embeds, the transformer input embeddings are unused
-            if name in ("tfmr.wte.weight", "tfmr.embed_tokens.weight"):
-                return None
-            if name.startswith(("cond_enc.", "text_pos_emb.", "speech_pos_emb.")):
-                return None
-            return name
-
-        return _index_safetensors(self.dir_model / talker, self.lazy, rename)
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, _ = item
+        # the reference feeds inputs_embeds, the transformer input embeddings are unused
+        if name in ("tfmr.wte.weight", "tfmr.embed_tokens.weight"):
+            return None
+        if name.startswith(("cond_enc.", "text_pos_emb.", "speech_pos_emb.")):
+            return None
+        return super().filter_tensors(item)
 
     def set_vocab(self):
         if self.is_turbo:
@@ -325,50 +313,42 @@ class ChatterboxMmprojModel(MmprojModel):
         return self.global_config.get("audio_config")
 
     def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
-        talker = TURBO_TALKER if self.is_turbo else MTL_TALKER
-        s3gen = TURBO_S3GEN if self.is_turbo else MTL_S3GEN
-
-        def rename_s3gen(name: str) -> str | None:
-            # batchnorm bookkeeping, unused in inference (and over the gguf name length cap)
-            if name.endswith("num_batches_tracked"):
-                return None
-            # dsp buffers, rebuilt by the preprocessor
-            if name in ("tokenizer.window", "tokenizer._mel_filters"):
-                return None
-            for src, dst in (
-                ("flow.encoder.",           "a.gen.fenc."),
-                ("flow.decoder.estimator.", "a.gen.est."),
-                ("mel2wav.",                "a.gen.hift."),
-                ("speaker_encoder.",        "a.spk."),
-                ("tokenizer.",              "a.s3tok."),
-            ):
-                if name.startswith(src):
-                    return dst + name[len(src):]
-            if name.startswith("flow."):
-                # input_embedding, encoder_proj, spk_embed_affine_layer
-                return "a.gen." + name
-            return None
-
-        def rename_ve(name: str) -> str | None:
-            if name.startswith("similarity_"):
-                return None
-            return "a.ve." + name
-
-        def rename_talker(name: str) -> str | None:
-            if name.startswith("cond_enc."):
-                return "a.cenc." + name[len("cond_enc."):]
-            if name == "text_pos_emb.emb.weight":
-                return "a.gen.t3.text_pos_emb"
-            if name == "speech_pos_emb.emb.weight":
-                return "a.gen.t3.speech_pos_emb"
-            if name == "speech_emb.weight":
-                return self.format_tensor_name(gguf.MODEL_TENSOR.A_GEN_CODE_OUT_EMBD)
-            return None
-
-        tensors = _index_safetensors(self.dir_model / s3gen, self.lazy, rename_s3gen)
-        tensors.update(_index_safetensors(self.dir_model / "ve.safetensors", self.lazy, rename_ve))
-        tensors.update(_index_safetensors(self.dir_model / talker, self.lazy, rename_talker))
+        tensors: dict[str, Callable[[], Tensor]] = {}
+        for prefix in (TURBO_S3GEN if self.is_turbo else MTL_S3GEN, VE, TURBO_TALKER if self.is_turbo else MTL_TALKER):
+            tensors.update(self.index_local_tensors(prefix))
         return tensors
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        # the s3gen, ve and talker checkpoints have disjoint top-level names
+        name, gen = item
+        new_name: str | None = None
+        # batchnorm bookkeeping (over the gguf name length cap) and the tokenizer dsp buffers are unused
+        if name.endswith("num_batches_tracked") or name in ("tokenizer.window", "tokenizer._mel_filters"):
+            return None
+        for src, dst in (
+            ("flow.encoder.",           "a.gen.fenc."),
+            ("flow.decoder.estimator.", "a.gen.est."),
+            ("mel2wav.",                "a.gen.hift."),
+            ("speaker_encoder.",        "a.spk."),
+            ("tokenizer.",              "a.s3tok."),
+            ("flow.",                   "a.gen.flow."),  # input_embedding, encoder_proj, spk_embed_affine_layer
+            ("lstm.",                   "a.ve.lstm."),
+            ("proj.",                   "a.ve.proj."),
+            ("cond_enc.",               "a.cenc."),
+        ):
+            if name.startswith(src):
+                new_name = dst + name[len(src):]
+                break
+        if name == "text_pos_emb.emb.weight":
+            new_name = "a.gen.t3.text_pos_emb"
+        elif name == "speech_pos_emb.emb.weight":
+            new_name = "a.gen.t3.speech_pos_emb"
+        elif name == "speech_emb.weight":
+            new_name = gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.A_GEN_CODE_OUT_EMBD] + ".weight"
+        if new_name is None:
+            return None
+        return super().filter_tensors((new_name, gen))
 
     def set_gguf_parameters(self):
         self.gguf_writer.add_file_type(self.ftype)
@@ -427,7 +407,6 @@ class ChatterboxMmprojModel(MmprojModel):
         return gguf.GGMLQuantizationType.F32
 
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
-        talker = TURBO_TALKER if self.is_turbo else MTL_TALKER
         conds = torch.load(self.dir_model / "conds.pt", map_location="cpu", weights_only=True)
         t3c = conds["t3"] if isinstance(conds, dict) else conds.t3
         genc = conds["gen"] if isinstance(conds, dict) else conds.gen
@@ -435,10 +414,7 @@ class ChatterboxMmprojModel(MmprojModel):
         genc = vars(genc) if not isinstance(genc, dict) else genc
 
         def talker_tensor(name: str) -> Tensor:
-            with gguf.utility.SafetensorsLocal(self.dir_model / talker) as parts:
-                data = parts[name]
-                dtype = LazyTorchTensor._dtype_str_map[data.dtype]
-                return torch.from_numpy(data.mmap_bytes()).view(dtype).reshape(data.shape).clone()
+            return LazyTorchTensor.to_eager(self.model_tensors[name]())
 
         # the conds.pt voice: voice.default holds the talker conditioning rows, voice.default.ref_* the flow decoder reference
         # 1D tensors are written as F32, the speech ids stay exact
@@ -446,10 +422,10 @@ class ChatterboxMmprojModel(MmprojModel):
         yield ("voice.default.ref_feat", genc["prompt_feat"][0].float())
         yield ("voice.default.ref_spk", genc["embedding"][0].float())
 
-        spkr_w = talker_tensor("cond_enc.spkr_enc.weight").float()
-        spkr_b = talker_tensor("cond_enc.spkr_enc.bias").float()
+        spkr_w = talker_tensor("a.cenc.spkr_enc.weight").float()
+        spkr_b = talker_tensor("a.cenc.spkr_enc.bias").float()
         spkr_row = spkr_w @ t3c["speaker_emb"][0].float() + spkr_b
-        speech_emb = talker_tensor("speech_emb.weight").float()
+        speech_emb = talker_tensor(self.format_tensor_name(gguf.MODEL_TENSOR.A_GEN_CODE_OUT_EMBD)).float()
         cond_tokens = t3c["cond_prompt_speech_tokens"][0]
 
         if self.is_turbo:
@@ -459,20 +435,20 @@ class ChatterboxMmprojModel(MmprojModel):
 
         # multilingual talker conditioning [spkr, perceiver x32, emotion], from the reference perceiver over the cond speech tokens
         with torch.no_grad():
-            speech_pos = talker_tensor("speech_pos_emb.emb.weight").float()
+            speech_pos = talker_tensor("a.gen.t3.speech_pos_emb").float()
             pse = speech_emb[cond_tokens] + speech_pos[: cond_tokens.shape[0]]
 
-            ln_w = talker_tensor("cond_enc.perceiver.attn.norm.weight").float()
-            ln_b = talker_tensor("cond_enc.perceiver.attn.norm.bias").float()
-            wq = talker_tensor("cond_enc.perceiver.attn.to_q.weight").float()
-            bq = talker_tensor("cond_enc.perceiver.attn.to_q.bias").float()
-            wk = talker_tensor("cond_enc.perceiver.attn.to_k.weight").float()
-            bk = talker_tensor("cond_enc.perceiver.attn.to_k.bias").float()
-            wv = talker_tensor("cond_enc.perceiver.attn.to_v.weight").float()
-            bv = talker_tensor("cond_enc.perceiver.attn.to_v.bias").float()
-            wo = talker_tensor("cond_enc.perceiver.attn.proj_out.weight").float()
-            bo = talker_tensor("cond_enc.perceiver.attn.proj_out.bias").float()
-            query = talker_tensor("cond_enc.perceiver.pre_attention_query")[0].float()
+            ln_w = talker_tensor("a.cenc.perceiver.attn.norm.weight").float()
+            ln_b = talker_tensor("a.cenc.perceiver.attn.norm.bias").float()
+            wq = talker_tensor("a.cenc.perceiver.attn.to_q.weight").float()
+            bq = talker_tensor("a.cenc.perceiver.attn.to_q.bias").float()
+            wk = talker_tensor("a.cenc.perceiver.attn.to_k.weight").float()
+            bk = talker_tensor("a.cenc.perceiver.attn.to_k.bias").float()
+            wv = talker_tensor("a.cenc.perceiver.attn.to_v.weight").float()
+            bv = talker_tensor("a.cenc.perceiver.attn.to_v.bias").float()
+            wo = talker_tensor("a.cenc.perceiver.attn.proj_out.weight").float()
+            bo = talker_tensor("a.cenc.perceiver.attn.proj_out.bias").float()
+            query = talker_tensor("a.cenc.perceiver.pre_attention_query")[0].float()
 
             n_head = 4
             n_e = query.shape[1]
@@ -490,6 +466,6 @@ class ChatterboxMmprojModel(MmprojModel):
             pre = attn_block(query, pse)
             p32 = attn_block(pre, pre)
 
-            emo = talker_tensor("cond_enc.emotion_adv_fc.weight").float()
+            emo = talker_tensor("a.cenc.emotion_adv_fc.weight").float()
             emo_row = emo[:, 0] * t3c["emotion_adv"].reshape(-1)[0]
             yield ("voice.default", torch.cat([spkr_row[None], p32, emo_row[None]], dim=0))
