@@ -1,6 +1,6 @@
 /** Labels of the models manager table sections. */
 
-import { ModelsTableGroupKind } from '$lib/enums';
+import { ModelsTableGroupKind, ServerModelSource } from '$lib/enums';
 
 export const MODELS_TABLE_GROUP_LABELS: Record<ModelsTableGroupKind, string> = {
 	[ModelsTableGroupKind.DOWNLOADING]: 'Downloading',
@@ -16,3 +16,21 @@ export const MODELS_TABLE_GROUP_LABELS: Record<ModelsTableGroupKind, string> = {
  * so the two stacked sticky rows do not show a gap or overlap by a pixel.
  */
 export const MODELS_TABLE_GROUP_STICKY_OFFSET = 'top: calc(2.25rem - 1px)';
+
+/**
+ * Why a model cannot be deleted from disk, by where the router found it. Only a
+ * model from the HF cache is the router's own to remove.
+ */
+export const MODEL_REMOVE_BLOCKED_REASONS: Record<
+	Exclude<ServerModelSource, ServerModelSource.CACHE>,
+	string
+> = {
+	[ServerModelSource.MODELS_DIR]:
+		'Found in --models-dir: delete the file from that folder to remove it.',
+	[ServerModelSource.PRESET]:
+		'Defined in a --models-preset file: remove its section from the preset to delete it.'
+};
+
+/** Fallback when the router refuses removal without saying where the model came from. */
+export const MODEL_REMOVE_BLOCKED_FALLBACK =
+	'The server does not allow deleting this model: it is not from the Hugging Face cache.';

@@ -7,6 +7,11 @@ void llama_model_gemma3n::load_arch_hparams(llama_model_loader & ml) {
     hparams.n_layer_kv_from_start = 20;
     hparams.f_attention_scale     = 1.0f;
 
+    // shared layers read the KV of the last layer with own KV and the same SWA type
+    for (uint32_t il = hparams.n_layer_kv_from_start; il < hparams.n_layer_all; il++) {
+        hparams.kv_source_impl[il] = hparams.n_layer_kv_from_start - (hparams.is_swa(il) ? 2 : 1);
+    }
+
     ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA,          hparams.rope_freq_base_train_swa, false);
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa);
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
