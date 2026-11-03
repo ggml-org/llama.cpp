@@ -64,7 +64,7 @@ RUN mkdir -p /app/full \
     && cp requirements.txt /app/full \
     && cp .devops/tools.sh /app/full/tools.sh
 
-FROM docker.io/intel/oneapi-toolkit:$ONEAPI_VERSION AS base
+FROM docker.io/intel/deep-learning-essentials:$ONEAPI_VERSION AS base
 
 ARG BUILD_DATE=N/A
 ARG APP_VERSION=N/A
@@ -78,6 +78,11 @@ LABEL org.opencontainers.image.created=$BUILD_DATE \
       org.opencontainers.image.description="LLM inference in C/C++" \
       org.opencontainers.image.url=$IMAGE_URL \
       org.opencontainers.image.source=$IMAGE_SOURCE
+
+RUN echo "Download oneDNN installation package" && \
+    wget https://registrationcenter-download.intel.com/akdlm/IRC_NAS/94c3dbac-0852-45be-a57d-21c204cada3e/intel-onednn-2026.0.2.46_offline.sh -O intel-onednn_offline.sh && \
+    echo "Install oneDNN components" && \
+    bash intel-onednn_offline.sh -s -a --silent --eula accept
 
 #Following versions are for multiple GPUs, since 26.x has known issue:
 #   https://github.com/ggml-org/llama.cpp/issues/21747,
