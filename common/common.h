@@ -338,6 +338,8 @@ struct common_params_speculative_draft {
 
     bool probabilistic = false; // sample the draft and verify by rejection, instead of argmax and match
 
+    bool warmup = true; // warm up the target context after the speculative init changes its graph (MTP)
+
     common_params_model mparams;
 
     llama_context * ctx_tgt = nullptr;
@@ -1015,6 +1017,10 @@ private:
 using common_init_result_ptr = std::unique_ptr<common_init_result>;
 
 common_init_result_ptr common_init_from_params(common_params & params, bool model_only = false);
+
+// run an empty decode so the first request does not pay for the reserve and buffer mapping
+// call again after a change that alters the graph shape (e.g. enabling nextn extraction)
+void common_warmup(llama_context * lctx, uint32_t n_batch);
 
 struct llama_model_params   common_model_params_to_llama  (      common_params & params);
 struct llama_context_params common_context_params_to_llama(const common_params & params);

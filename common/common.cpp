@@ -1454,6 +1454,49 @@ static void common_batch_set_zero_state(common_batch & batch, const llama_model 
     }
 }
 
+void common_warmup(llama_context * lctx, uint32_t n_batch) {
+    const llama_model * model = llama_get_model(lctx);
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+
+    COM_TRC("%s", "warming up the model with an empty run - please wait ... (--no-warmup to disable)\n");
+
+    std::vector<llama_token> tmp;
+    llama_token bos = llama_vocab_bos(vocab);
+    llama_token eos = llama_vocab_eos(vocab);
+
+    // some models (e.g. T5) don't have a BOS token
+    if (bos != LLAMA_TOKEN_NULL) {
+        tmp.push_back(bos);
+    }
+    if (eos != LLAMA_TOKEN_NULL) {
+        tmp.push_back(eos);
+    }
+    if (tmp.empty()) {
+        tmp.push_back(0);
+    }
+
+    if (llama_model_has_encoder(model)) {
+        common_batch batch = common_batch_get_one(lctx, tmp);
+        llama_process(lctx, LLAMA_PROCESS_TYPE_ENCODE, batch.get());
+        llama_token decoder_start_token_id = llama_model_decoder_start_token(model);
+        if (decoder_start_token_id == LLAMA_TOKEN_NULL) {
+            decoder_start_token_id = bos;
+        }
+        tmp.clear();
+        tmp.push_back(decoder_start_token_id);
+    }
+    if (llama_model_has_decoder(model)) {
+        tmp.resize(std::min(tmp.size(), (size_t) n_batch));
+        common_batch batch = common_batch_get_one(lctx, tmp);
+        std::vector<float> zeros;
+        common_batch_set_zero_state(batch, model, zeros);
+        llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get());
+    }
+    llama_memory_clear(llama_get_memory(lctx), true);
+    llama_synchronize(lctx);
+    llama_perf_context_reset(lctx);
+}
+
 common_init_result_ptr common_init_from_params(common_params & params, bool model_only) {
     common_init_result_ptr res(new common_init_result(params, model_only));
 
@@ -1530,43 +1573,7 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
     }
 
     if (params.warmup) {
-        COM_TRC("%s", "warming up the model with an empty run - please wait ... (--no-warmup to disable)\n");
-
-        std::vector<llama_token> tmp;
-        llama_token bos = llama_vocab_bos(vocab);
-        llama_token eos = llama_vocab_eos(vocab);
-
-        // some models (e.g. T5) don't have a BOS token
-        if (bos != LLAMA_TOKEN_NULL) {
-            tmp.push_back(bos);
-        }
-        if (eos != LLAMA_TOKEN_NULL) {
-            tmp.push_back(eos);
-        }
-        if (tmp.empty()) {
-            tmp.push_back(0);
-        }
-
-        if (llama_model_has_encoder(model)) {
-            common_batch batch = common_batch_get_one(lctx, tmp);
-            llama_process(lctx, LLAMA_PROCESS_TYPE_ENCODE, batch.get());
-            llama_token decoder_start_token_id = llama_model_decoder_start_token(model);
-            if (decoder_start_token_id == LLAMA_TOKEN_NULL) {
-                decoder_start_token_id = bos;
-            }
-            tmp.clear();
-            tmp.push_back(decoder_start_token_id);
-        }
-        if (llama_model_has_decoder(model)) {
-            tmp.resize(std::min(tmp.size(), (size_t) params.n_batch));
-            common_batch batch = common_batch_get_one(lctx, tmp);
-            std::vector<float> zeros;
-            common_batch_set_zero_state(batch, model, zeros);
-            llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get());
-        }
-        llama_memory_clear(llama_get_memory(lctx), true);
-        llama_synchronize(lctx);
-        llama_perf_context_reset(lctx);
+        common_warmup(lctx, params.n_batch);
 
         // reset samplers to reset RNG state after warmup to the seeded state
         res->reset_samplers();
