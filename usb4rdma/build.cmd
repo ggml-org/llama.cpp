@@ -16,6 +16,11 @@ setlocal EnableExtensions
 set "ND_REPO=https://github.com/microsoft/NetworkDirect"
 set "ND_COMMIT=043f1bf05e41343cc88dda619ddd86aee60a02fe"
 
+rem llama-server embeds a prebuilt web UI that CMake downloads by build number (b<commit count>).
+rem Every commit on top of the base changes that number, and a newer UI does not fit this tree, so
+rem the UI is pinned to the one this tree was checked with. Set HF_UI_VERSION first to override.
+if not defined HF_UI_VERSION set "HF_UI_VERSION=b9874"
+
 rem The source is the repository this script is in: the folder above usb4rdma\.
 for %%i in ("%~dp0..") do set "SRC=%%~fi"
 if not exist "%SRC%\CMakeLists.txt" (echo ERROR: %SRC% is not the root of this repository& goto :fail)
