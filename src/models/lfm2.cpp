@@ -399,9 +399,9 @@ llama_model_lfm2::graph_decision::graph_decision(const llama_model & model, cons
 
         ggml_tensor * ffn_out = build_norm(cur, layer.ffn_norm, NULL, LLM_NORM_RMS, il);
         ffn_out = build_ffn(ffn_out,
-                layer.ffn_up,   NULL, NULL,
-                layer.ffn_gate, NULL, NULL,
-                layer.ffn_down, NULL, NULL,
+                layer.ffn_up,   NULL, layer.ffn_up_s,
+                layer.ffn_gate, NULL, layer.ffn_gate_s,
+                layer.ffn_down, NULL, layer.ffn_down_s,
                 NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
 
         cur = ggml_add(ctx0, cur, ffn_out);
