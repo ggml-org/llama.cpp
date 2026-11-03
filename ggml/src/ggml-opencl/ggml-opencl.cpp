@@ -10819,7 +10819,8 @@ static void ggml_cl_mul_mat_q4_k_glu_fused(ggml_backend_t backend, ggml_tensor *
     // byte-identical to the per-op path. Keep the maxwg query as a further floor
     // for any driver that reports < 512.
     size_t maxwg = backend_ctx->get_kernel_workgroup_size(kernel);
-    size_t nsg_y = 8;
+    // X2E: 4 is faster than 8 on every q4_K FFN shape measured there
+    size_t nsg_y = backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E ? 4 : 8;
     while (nsg_y > 1 && 64 * nsg_y > maxwg) { nsg_y >>= 1; }
     size_t local_work_size[3]  = { 64, nsg_y, 1 };
     size_t global_work_size[3] = { (size_t)CEIL_DIV(M / 2, 64) * 64, nsg_y, 1 };
