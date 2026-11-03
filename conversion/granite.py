@@ -119,13 +119,21 @@ class GraniteSWAModel(GraniteModel):
                         sum(rope_pattern), len(rope_pattern))
 
         if layer_rope_theta := self.hparams.get("layer_rope_theta"):
+            if not isinstance(layer_rope_theta, list):
+                raise ValueError(f"granite_swa: layer_rope_theta must be a list, got {type(layer_rope_theta).__name__}")
             if len(layer_rope_theta) != len(is_swa):
                 raise ValueError(f"granite_swa: layer_rope_theta has {len(layer_rope_theta)} entries, layer_types has {len(is_swa)}")
             # 0 means NoPE
             swa_thetas = {t for t, s in zip(layer_rope_theta, is_swa) if s and t}
             full_thetas = {t for t, s in zip(layer_rope_theta, is_swa) if not s and t}
+            # GGUF holds one theta per attention type (rope_freq_base, rope_freq_base_swa), written by
+            # the base class from rope_parameters. Mixed values within a type need that path extended
+            # (the "sliding_attention" handling and add_rope_freq_base_swa in conversion/base.py).
             if len(swa_thetas) > 1 or len(full_thetas) > 1:
-                raise ValueError(f"granite_swa: unsupported layer_rope_theta, sliding {sorted(swa_thetas)}, full {sorted(full_thetas)}")
+                raise ValueError(
+                    f"granite_swa: layer_rope_theta varies within an attention type, which is not supported "
+                    f"(sliding {sorted(swa_thetas)}, full {sorted(full_thetas)})"
+                )
             # Keep super() last: the base class writes rope_freq_base and rope_freq_base_swa from rope_parameters
             if full_thetas:
                 self.rope_parameters.get("full_attention", self.rope_parameters)["rope_theta"] = full_thetas.pop()
