@@ -197,6 +197,7 @@ class Context:
         self.url = f"http://127.0.0.1:{self.port}"
         self.commands: list[list[str]] = []
         self.first_server = True
+        self.save: Callable[[], None] = lambda: None
 
     def run(self, cmd: list[str], log_path: Path, timeout_s: float, stdout_path: Path | None = None) -> None:
         self.commands.append(cmd)
@@ -388,6 +389,7 @@ def run_point(ctx: Context, records: list[dict[str, Any]], suite: str, model: st
     rec["artifact_dir"] = str(run_dir.relative_to(ctx.out_dir))
     log(f"{suite}/{model}/{config}: {rec['status']} {rec['error'][:300]}")
     records.append(rec)
+    ctx.save()
 
 
 def run_group(ctx: Context, records: list[dict[str, Any]], suite: str, model: str, server_args: list[str],
@@ -491,10 +493,11 @@ def aiperf_base(ctx: Context, model: dict[str, Any], run_dir: Path, timeout_s: i
 
 
 def aiperf_metrics(run_dir: Path) -> dict[str, float]:
-    files = sorted(run_dir.rglob("profile_export_aiperf.json"))
-    if not files:
+    # top level holds the profiling phase; phases/warmup/ has its own copy
+    path = run_dir / "aiperf" / "profile_export_aiperf.json"
+    if not path.exists():
         raise BenchError("aiperf wrote no profile_export_aiperf.json")
-    profile = json.loads(files[0].read_text())
+    profile = json.loads(path.read_text())
     metrics: dict[str, float] = {}
     for name, tag, stat in AIPERF_METRICS:
         value = (profile.get(tag) or {}).get(stat)
@@ -748,6 +751,7 @@ def run(cfg: dict[str, Any], home: Path, suites: list[str], models: list[str], d
         manifest["records"] = [r for r in old.get("records", []) if r["suite"] not in suites or r["model"] not in models]
         manifest["models"] = {**old.get("models", {}), **manifest["models"]}
     ctx = Context(cfg, home, build, out_dir, dry_run)
+    ctx.save = lambda: write_json(out_dir / "night.json", manifest)
     started = time.monotonic()
     for suite in suites:
         for name in models:
@@ -755,7 +759,6 @@ def run(cfg: dict[str, Any], home: Path, suites: list[str], models: list[str], d
             if suite in model["suites"]:
                 log(f"suite {suite} on {name}")
                 SUITE_FNS[suite](ctx, manifest["records"], name, model)
-                write_json(out_dir / "night.json", manifest)
     manifest["duration_s"] = round(time.monotonic() - started, 1)
     write_json(out_dir / "night.json", manifest)
 
