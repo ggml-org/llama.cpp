@@ -74,9 +74,41 @@ llama-server -m Qwen3-4B.gguf -md Qwen3-4B-DFlash.gguf \
 
 `--spec-draft-n-max` is clamped to the draft model's trained block size.
 
+DFlash2, DSpark and LiliCorr drafts are DFlash drafts with a head on the block. `draft-dflash` also
+runs DFlash2 and LiliCorr drafts, recognized from their metadata; DSpark drafts run as DSpark only with
+`draft-dspark`. `draft-dflash2` and `draft-lilicorr` must match the draft model, and `draft-dspark`
+rejects DFlash2 and LiliCorr drafts; on a mismatch, speculative decoding is not initialized.
+Without `--spec-type`, the type is detected from the draft model.
+
 See:
 
 - #22105
+
+### DFlash2 (`draft-dflash2`)
+
+DFlash2 adds a local convolution to the DFlash layers and a _candidate selector_ on the block. The
+selector keeps the top-k candidates of each block position and scores each of them after each
+candidate of the previous position. The draft then follows the best-scoring path through the block
+instead of taking the argmax of every position on its own.
+
+DFlash2 drafts convert like DFlash drafts, with `--target-model-dir`:
+
+```bash
+python convert_hf_to_gguf.py <dflash2-draft-dir> \
+    --target-model-dir <target-model-dir> --outtype bf16 --outfile DFlash2.gguf
+
+llama-server -m target.gguf -md DFlash2.gguf \
+    --spec-type draft-dflash2 --spec-draft-n-max 7 -fa on --jinja
+```
+
+`--spec-draft-p-min P` truncates the draft at the first step whose selector probability falls below `P`.
+
+With `--spec-draft-sampling probabilistic`, the draft samples the path at the request's temperature
+and the target verifies it by rejection sampling.
+
+See:
+
+- #27816, #30663
 
 ### DSpark (`draft-dspark`)
 
@@ -114,6 +146,27 @@ convert the same way.
 See:
 
 - #25173
+
+### LiliCorr (`draft-lilicorr`)
+
+LiliCorr puts a _candidate scorer_ on the DFlash block: a small transformer over the top-k candidates
+of each block position, conditioned on the target's hidden state at the last position, scores the
+paths through the block like the DFlash2 selector. The draft follows the best-scoring path.
+
+LiliCorr drafts (`LiLiCorrDraftModel`) convert with `--target-model-dir`:
+
+```bash
+python convert_hf_to_gguf.py <lilicorr-draft-dir> \
+    --target-model-dir <target-model-dir> --outtype bf16 --outfile LiliCorr.gguf
+
+llama-server -m target.gguf -md LiliCorr.gguf --spec-type draft-lilicorr -fa on --jinja
+```
+
+`--spec-draft-p-min P` truncates the draft at the first step whose scorer probability falls below `P`.
+
+See:
+
+- #30506
 
 ### n-gram Cache (`ngram-cache`)
 
@@ -225,7 +278,7 @@ Use exactly one of these options:
 ### General Speculative Parameters
 
 ```
---spec-type [none|draft-simple|draft-eagle3|draft-dflash|draft-dspark|draft-mtp|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod]
+--spec-type [none|draft-simple|draft-eagle3|draft-dflash|draft-dflash2|draft-dspark|draft-lilicorr|draft-mtp|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod]
                                         comma-separated list of types of speculative decoding to use
                                         (default: none)
                                         (env: LLAMA_ARG_SPEC_TYPE)
@@ -368,8 +421,10 @@ Specifies a comma-separated list of speculative decoding types to use.
 | `none` | No speculative decoding (default) |
 | `draft-simple` | Use a simple draft model for speculation |
 | `draft-eagle3` | Use an EAGLE-3 draft model that reads the target's hidden states |
-| `draft-dflash` | Use a DFlash block-diffusion draft model that emits a block per step |
+| `draft-dflash` | Use a DFlash block-diffusion draft model that emits a block per step (also DFlash2 and LiliCorr drafts, resolved from the model) |
+| `draft-dflash2` | Use a DFlash2 draft model (DFlash + local convolution + candidate selector) |
 | `draft-dspark` | Use a DSpark draft model (DFlash backbone + semi-autoregressive Markov head) |
+| `draft-lilicorr` | Use a LiliCorr draft model (DFlash + candidate scorer conditioned on the target's hidden state) |
 | `draft-mtp` | Use Multi Token Prediction (MTP) heads from the main model |
 | `ngram-cache` | Use n-gram cache lookup |
 | `ngram-simple` | Use simple n-gram pattern matching |
