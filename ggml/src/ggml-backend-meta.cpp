@@ -23,6 +23,80 @@
 #include <utility>
 #include <vector>
 
+#if defined(__x86_64__) || defined(_M_X64)
+#include <immintrin.h>
+#if defined(__clang__) || defined(__GNUC__)
+#define DIST_WIRE_F16C __attribute__((target("avx,f16c")))
+#else
+#define DIST_WIRE_F16C
+#endif
+#endif
+
+// LLAMA_DIST_TP_WIRE_F16 helpers. pack: y = f16(x * 2^-e) with e chosen so the largest |x| lands below 2^15
+// (scaling by a power of two is exact; e = 0 unless some |x| >= 32768); returns e. unpack: y = f32(x) * 2^e.
+// x86-64 uses F16C (every CPU since 2012), elsewhere the scalar conversions.
+#if defined(__x86_64__) || defined(_M_X64)
+DIST_WIRE_F16C static int32_t dist_wire_f16_pack(const float * x, ggml_fp16_t * y, size_t n) {
+    const __m256 absmask = _mm256_castsi256_ps(_mm256_set1_epi32(0x7fffffff));
+    __m256 vmax = _mm256_setzero_ps();
+    size_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+        vmax = _mm256_max_ps(vmax, _mm256_and_ps(_mm256_loadu_ps(x + i), absmask));
+    }
+    float m8[8];
+    _mm256_storeu_ps(m8, vmax);
+    float amax = 0.0f;
+    for (int k = 0; k < 8; ++k) {
+        amax = std::max(amax, m8[k]);
+    }
+    for (size_t j = i; j < n; ++j) {
+        amax = std::max(amax, std::fabs(x[j]));
+    }
+    const int32_t e = (std::isfinite(amax) && amax >= 32768.0f) ? (int32_t) std::ilogb(amax) - 14 : 0;
+    const float sc = std::ldexp(1.0f, -e);
+    const __m256 vs = _mm256_set1_ps(sc);
+    for (i = 0; i + 8 <= n; i += 8) {
+        _mm_storeu_si128((__m128i *) (y + i), _mm256_cvtps_ph(_mm256_mul_ps(_mm256_loadu_ps(x + i), vs), _MM_FROUND_TO_NEAREST_INT));
+    }
+    for (; i < n; ++i) {
+        y[i] = GGML_FP32_TO_FP16(x[i] * sc);
+    }
+    return e;
+}
+
+DIST_WIRE_F16C static void dist_wire_f16_unpack(const ggml_fp16_t * x, int32_t e, float * y, size_t n) {
+    const float sc = std::ldexp(1.0f, e);
+    const __m256 vs = _mm256_set1_ps(sc);
+    size_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+        _mm256_storeu_ps(y + i, _mm256_mul_ps(_mm256_cvtph_ps(_mm_loadu_si128((const __m128i *) (x + i))), vs));
+    }
+    for (; i < n; ++i) {
+        y[i] = GGML_FP16_TO_FP32(x[i]) * sc;
+    }
+}
+#else
+static int32_t dist_wire_f16_pack(const float * x, ggml_fp16_t * y, size_t n) {
+    float amax = 0.0f;
+    for (size_t i = 0; i < n; ++i) {
+        amax = std::max(amax, std::fabs(x[i]));
+    }
+    const int32_t e = (std::isfinite(amax) && amax >= 32768.0f) ? (int32_t) std::ilogb(amax) - 14 : 0;
+    const float sc = std::ldexp(1.0f, -e);
+    for (size_t i = 0; i < n; ++i) {
+        y[i] = GGML_FP32_TO_FP16(x[i] * sc);
+    }
+    return e;
+}
+
+static void dist_wire_f16_unpack(const ggml_fp16_t * x, int32_t e, float * y, size_t n) {
+    const float sc = std::ldexp(1.0f, e);
+    for (size_t i = 0; i < n; ++i) {
+        y[i] = GGML_FP16_TO_FP32(x[i]) * sc;
+    }
+}
+#endif
+
 struct ggml_backend_meta_device;
 struct ggml_backend_meta_buffer_type;
 struct ggml_backend_meta_buffer;
@@ -2965,15 +3039,39 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                 // Host-side ring all-reduce: accumulate into `cur`, forward via `send`.
                 // Avoids the per-boundary GPU ADD kernel submission + node_tmp upload,
                 // which on a high submit-latency backend (Vulkan iGPU) dominates decode.
+                // LLAMA_DIST_TP_WIRE_F16=1: f16 on the wire. n halves (scaled by 2^-e, see dist_wire_f16_pack) and e in
+                // the last two travel as n/2 + 1 floats; the exchange only moves bytes. This rank's own share takes the
+                // same rounding, so every rank sums the same values; the sums stay f32. Every rank sees the same n,
+                // so all ranks take the same path.
+                static const bool dist_wire_f16 = [] {
+                    const char * s = getenv("LLAMA_DIST_TP_WIRE_F16");
+                    const bool on = s != nullptr && atoi(s) != 0;
+                    if (on) {
+                        fprintf(stderr, "dist-tp: boundary all-reduce carries f16 on the wire (LLAMA_DIST_TP_WIRE_F16)\n");
+                    }
+                    return on;
+                }();
+                const bool   wire16 = dist_wire_f16 && n % 2 == 0;
+                const size_t nw     = wire16 ? n / 2 + 1 : n;
                 thread_local std::vector<float> send;
-                send.resize(n);
-                std::memcpy(send.data(), cur.data(), n * sizeof(float));
+                thread_local std::vector<float> recvw;
+                send.resize(nw);
+                if (wire16) {
+                    recvw.resize(nw);
+                    ggml_fp16_t * s16 = (ggml_fp16_t *) send.data();
+                    const int32_t e = dist_wire_f16_pack(cur.data(), s16, n);
+                    std::memcpy(s16 + n, &e, sizeof(e));
+                    dist_wire_f16_unpack(s16, e, cur.data(), n);
+                } else {
+                    std::memcpy(send.data(), cur.data(), n * sizeof(float));
+                }
+                std::vector<float> & rbuf = wire16 ? recvw : recv;
                 int32_t cur_src = dist_rank;
 
                 for (int step = 0; step < dist_world_size - 1; ++step) {
                     int32_t recv_src = -1;
                     const int64_t dp_n0 = distprof ? ggml_time_us() : 0;
-                    if (!backend_ctx->dist_comm_allreduce(backend_ctx->dist_comm_ctx, send.data(), n, cur_src, recv.data(), &recv_src)) {
+                    if (!backend_ctx->dist_comm_allreduce(backend_ctx->dist_comm_ctx, send.data(), nw, cur_src, rbuf.data(), &recv_src)) {
                         if (ahead_wait) {
                             backend_ctx->ahead->wait();
                         }
@@ -2982,13 +3080,19 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                     const int64_t dp_s0 = distprof ? ggml_time_us() : 0;
                     if (distprof) { dp_t_net += dp_s0 - dp_n0; }
 
+                    if (wire16) {
+                        const ggml_fp16_t * r16 = (const ggml_fp16_t *) rbuf.data();
+                        int32_t re = 0;
+                        std::memcpy(&re, r16 + n, sizeof(re));
+                        dist_wire_f16_unpack(r16, re, recv.data(), n);
+                    }
                     for (size_t k = 0; k < n; ++k) {
                         cur[k] += recv[k];
                     }
 
                     // Only refresh the outbound payload when another ring step follows.
                     if (step + 1 < dist_world_size - 1) {
-                        send.swap(recv);
+                        send.swap(rbuf);
                         cur_src = recv_src;
                     }
                     if (distprof) { dp_t_setadd += ggml_time_us() - dp_s0; }
