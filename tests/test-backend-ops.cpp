@@ -8140,6 +8140,81 @@ struct test_mul_mat_add : public test_case {
     }
 };
 
+// mul_mat followed by the per-tensor scale (NVFP4 weights), which backends may fuse into the mat-mul
+struct test_mul_mat_scale : public test_case {
+    const ggml_type type_a;
+    const int64_t m;
+    const int64_t n;
+    const int64_t k;
+    const int n_mats; // 0: plain mul_mat with a one-element scale, else mul_mat_id with a per-expert scale
+    const int n_used;
+
+    test_mul_mat_scale(ggml_type type_a, int64_t m, int64_t n, int64_t k, int n_mats = 0, int n_used = 2)
+        : type_a(type_a), m(m), n(n), k(k), n_mats(n_mats), n_used(n_used) {
+        GGML_ASSERT(n_mats == 0 || n_used <= n_mats);
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR6(type_a, m, n, k, n_mats, n_used);
+    }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return n_mats == 0 ? "MUL_MAT_SCALE" : "MUL_MAT_ID_SCALE";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    double max_nmse_err() override {
+        return 5e-4;
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * out = nullptr;
+        if (n_mats == 0) {
+            ggml_tensor * a = ggml_new_tensor_2d(ctx, type_a,        k, m);
+            ggml_tensor * b = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, n);
+            ggml_tensor * s = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
+
+            ggml_tensor * mm = ggml_mul_mat(ctx, a, b);
+            ggml_prec_set_acc(mm, GGML_PREC_BF16);
+            out = ggml_mul(ctx, mm, s);
+        } else {
+            ggml_tensor * as  = ggml_new_tensor_3d(ctx, type_a,        k, m, n_mats);
+            ggml_tensor * ids = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_mats, n);
+            ggml_set_name(ids, "ids");
+            ids = ggml_view_2d(ctx, ids, n_used, n, ids->nb[1], 0);
+            ggml_tensor * b   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, k, n_used, n);
+            ggml_tensor * w_s = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_mats);
+
+            ggml_tensor * mm = ggml_mul_mat_id(ctx, as, b, ids);
+            ggml_prec_set_acc(mm, GGML_PREC_BF16);
+
+            ggml_tensor * s = ggml_reshape_3d(ctx, w_s, 1, n_mats, 1);
+            s = ggml_repeat_4d(ctx, s, 1, n_mats, n, 1);
+            s = ggml_get_rows(ctx, s, ids);
+            out = ggml_mul(ctx, mm, s);
+        }
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        if (n_mats == 0) {
+            test_case::initialize_tensors(ctx);
+        } else {
+            init_mul_mat_id_tensors(ctx, n_mats, false);
+        }
+    }
+
+    void reinit_perf_iter(ggml_context * ctx) override {
+        if (n_mats != 0) {
+            init_mul_mat_id_ids(ctx, n_mats, false);
+        }
+    }
+};
+
 struct test_mul_mat_fusion : public test_case {
     const ggml_type type;
     const ggml_glu_op glu_op;
@@ -12134,7 +12209,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (auto [k, m] : std::initializer_list<std::pair<int, int>>{{4096, 18560}, {8192, 4096}, {24576, 4096}, {4096, 12288}, {12288, 4096}}) {
         for (int n : {1, 8, 512}) {
             test_cases.emplace_back(new test_mul_mat(GGML_TYPE_NVFP4, GGML_TYPE_F32, m, n, k, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat_scale(GGML_TYPE_NVFP4, m, n, k));
         }
+    }
+    // the same, per expert: mul_mat_id followed by the gathered expert scales (large batches need the HMX path)
+    for (int n : {1, 8}) {
+        test_cases.emplace_back(new test_mul_mat_scale(GGML_TYPE_NVFP4, 1024, n, 4096, 8, 2));
     }
 #else
     // m = a rows
