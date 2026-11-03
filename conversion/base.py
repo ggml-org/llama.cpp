@@ -1424,9 +1424,10 @@ class ModelBase:
             for layer_name, entry in quant_layers.items():
                 if not isinstance(entry, dict):
                     continue
-                if titem := self.filter_tensors((layer_name, lambda: torch.empty(0))):
-                    assert titem[0] in modules, f"quantized_layers entry {layer_name!r} is not in the model tensors"
-                    self._nvfp4_layer_algo[titem[0]] = entry.get("quant_algo")
+                if titem := self.filter_tensors((layer_name + ".weight", lambda: torch.empty(0))):
+                    module_name = titem[0].removesuffix(".weight")
+                    assert module_name in modules, f"quantized_layers entry {layer_name!r} is not in the model tensors"
+                    self._nvfp4_layer_algo[module_name] = entry.get("quant_algo")
 
         # NVFP4 weights are repacked and written directly to gguf_writer.
         # This must run before dequant_model so NVFP4 tensors are removed
