@@ -46,7 +46,7 @@ env:
 
 jobs:
   cpu-x64-high-perf:
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: [self-hosted, Linux, X64, CPU]
 
     steps:
       - name: Clone
@@ -56,7 +56,7 @@ jobs:
       - name: Test
         id: ggml-ci
         run: |
-          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ~/results/llama.cpp/$RUNNER_NAME ~/mnt/llama.cpp
 
   cpu-arm64-high-perf-graviton4:
     runs-on: ah-ubuntu_24_04-c8g_8x

@@ -30,7 +30,7 @@ struct ggml_compute_params {
 };
 
 
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) && !defined(__clang__)
 
 #define m512bh(p) p
 #define m512i(p) p

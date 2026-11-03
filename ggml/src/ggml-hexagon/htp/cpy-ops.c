@@ -32,6 +32,7 @@ struct htp_copy_context {
     uint32_t nelem;
     uint32_t elem_per_thread;
 
+    struct htp_copy_convert_vtcm_layout layout;
     uint8_t * vtcm_src0;
     uint8_t * vtcm_dst;
 };
@@ -176,13 +177,14 @@ static void cpy_thread_##NAME##_sameshape(unsigned int nth, unsigned int ith, vo
     struct htp_thread_trace * tr = &octx->ctx->trace[ith];                                   \
                                                                                              \
     const struct htp_copy_convert_params * cvt = &ct->kparams->u.convert;                    \
-    const uint32_t src0_buf_size = cvt->src0_buf_size;                                       \
-    const uint32_t dst_buf_size  = cvt->dst_buf_size;                                        \
-    const uint32_t src0_row_stride = cvt->src0_row_stride;                                   \
-    const uint32_t dst_row_stride  = cvt->dst_row_stride;                                    \
-    const uint32_t blk_rows        = cvt->blk_rows;                                          \
-    uint8_t * vtcm_src0_base = ct->vtcm_src0 + ith * cvt->spad0_size_per_thread;             \
-    uint8_t * vtcm_dst_base  = ct->vtcm_dst  + ith * cvt->spad1_size_per_thread;             \
+    const struct htp_copy_convert_vtcm_layout * L = &ct->layout;                             \
+    const uint32_t src0_buf_size   = L->src0_buf_size;                                       \
+    const uint32_t dst_buf_size    = L->dst_buf_size;                                        \
+    const uint32_t src0_row_stride = L->src0_row_stride;                                     \
+    const uint32_t dst_row_stride  = L->dst_row_stride;                                      \
+    const uint32_t blk_rows        = L->blk_rows;                                            \
+    uint8_t * vtcm_src0_base = ct->vtcm_src0 + ith * L->spad0_size_per_thread;               \
+    uint8_t * vtcm_dst_base  = ct->vtcm_dst  + ith * L->spad1_size_per_thread;               \
     const uint32_t src0_row_size = ne00 * ct->kparams->src0_type_size;                       \
     const uint32_t dst_row_size  = ne00 * ct->kparams->dst_type_size;                        \
                                                                                              \
@@ -254,16 +256,15 @@ static int cpy_scalar(struct htp_ops_context * octx, const struct htp_copy_kerne
     }
 
     dma_queue * dma_q = octx->ctx->dma[0];
-    dma_addr_t s_vtcm = (dma_addr_t)(uintptr_t) octx->ctx->vtcm_base;
-    dma_addr_t d_vtcm = s_vtcm + VLEN;
+    uint8_t * s_ptr = VTCM_LAYOUT_PTR(uint8_t, octx->ctx->vtcm_base, 0);
+    uint8_t * d_ptr = VTCM_LAYOUT_PTR(uint8_t, octx->ctx->vtcm_base, VLEN);
+    dma_addr_t s_vtcm = (dma_addr_t)(uintptr_t) s_ptr;
+    dma_addr_t d_vtcm = (dma_addr_t)(uintptr_t) d_ptr;
     const uint32_t s_size = kparams->src0_type_size;
     const uint32_t d_size = kparams->dst_type_size;
 
     dma_queue_push(dma_q, dma_make_data(s_vtcm, src0->data), s_size, s_size, s_size, 1);
     dma_queue_pop(dma_q);
-
-    uint8_t * s_ptr = (uint8_t *) octx->ctx->vtcm_base;
-    uint8_t * d_ptr = s_ptr + VLEN;
 
     const HVX_Vector v_src = hvx_vmem(s_ptr);
     HVX_Vector v_dst;
@@ -366,6 +367,8 @@ static int cpy_sameshape_convert(struct htp_ops_context * octx, const struct htp
     const struct htp_copy_convert_params * cvt = &kparams->u.convert;
 
     struct htp_copy_context ct;
+    htp_copy_convert_vtcm_layout_build(&ct.layout, src0->ne[0], kparams->src0_type_size, kparams->dst_type_size, cvt->blk_rows, n_threads);
+
     ct.octx                  = octx;
     ct.kparams               = kparams;
     ct.row_start             = row_start;
@@ -373,8 +376,8 @@ static int cpy_sameshape_convert(struct htp_ops_context * octx, const struct htp
     ct.src0_nrows_per_thread = fastdiv(nrows + n_threads - 1, &octx->n_threads_div);
 
     uint8_t * vtcm_base = (uint8_t *) octx->ctx->vtcm_base;
-    ct.vtcm_src0 = vtcm_base;
-    ct.vtcm_dst  = vtcm_base + (size_t) n_threads * cvt->spad0_size_per_thread;
+    ct.vtcm_src0 = VTCM_LAYOUT_PTR(uint8_t, vtcm_base, ct.layout.off_src0);
+    ct.vtcm_dst  = VTCM_LAYOUT_PTR(uint8_t, vtcm_base, ct.layout.off_dst);
 
     work_queue_func_t copy_fun = NULL;
     if (dst->type == HTP_TYPE_F16 && src0->type == HTP_TYPE_F32) {

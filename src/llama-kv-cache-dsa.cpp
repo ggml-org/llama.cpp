@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <numeric>
 
 //
 // llama_kv_cache_dsa
@@ -13,6 +14,7 @@
 
 llama_kv_cache_dsa::llama_kv_cache_dsa(
         const llama_model & model,
+                     bool   no_alloc,
                 ggml_type   type_k,
                 ggml_type   type_v,
                      bool   v_trans,
@@ -20,7 +22,6 @@ llama_kv_cache_dsa::llama_kv_cache_dsa(
                      bool   unified,
                  uint32_t   kv_size,
                  uint32_t   n_seq_max,
-                 uint32_t   n_pad,
                  uint32_t   n_swa,
            llama_swa_type   swa_type,
     const layer_filter_cb & filter_mla,
@@ -31,8 +32,8 @@ llama_kv_cache_dsa::llama_kv_cache_dsa(
     LLAMA_LOG_INFO("%s: creating main KV cache, size = %u cells\n", __func__, kv_size);
 
     kv_mla = std::make_unique<llama_kv_cache>(
-            model, model.hparams, type_k, type_v,
-            v_trans, offload, unified, kv_size, n_seq_max, n_pad,
+            model, no_alloc, model.hparams, type_k, type_v,
+            v_trans, offload, unified, kv_size, n_seq_max,
             n_swa, swa_type, nullptr, filter_mla, reuse, nullptr);
 
     // we use llama_kv_cache for caching indexer keys
@@ -45,12 +46,15 @@ llama_kv_cache_dsa::llama_kv_cache_dsa(
     hparams_lid.n_embd_head_k_full = model.hparams.indexer_head_size;
     hparams_lid.rope_type          = LLAMA_ROPE_TYPE_NEOX;
 
+    // KV sharing applies to the MLA cache only, each indexer owns its keys
+    std::iota(hparams_lid.kv_source_impl.begin(), hparams_lid.kv_source_impl.end(), 0);
+
     LLAMA_LOG_INFO("%s: creating indexer KV cache, size = %u cells\n", __func__, kv_size);
 
     kv_lid = std::make_unique<llama_kv_cache>(
-            model, hparams_lid, type_k, type_v,
-            v_trans, offload, unified, kv_size, n_seq_max, n_pad,
-            n_swa, swa_type, nullptr, filter_lid, reuse, nullptr);
+            model, no_alloc, hparams_lid, type_k, type_v,
+            v_trans, offload, unified, kv_size, n_seq_max,
+            n_swa, swa_type, nullptr, filter_lid, nullptr, nullptr);
 }
 
 void llama_kv_cache_dsa::clear(bool data) {

@@ -32,6 +32,7 @@ static inline size_t htp_allreduce_vtcm_buffer_count(
 }
 
 struct htp_allreduce_kernel_params {
+    uint8_t kernel_type;
     int32_t rank;
     int32_t n_ranks;
     int32_t n_threads;
@@ -39,7 +40,6 @@ struct htp_allreduce_kernel_params {
     int32_t elems_per_thread;     // 1D: nelem_per_thread, 2D: nrows_per_thread
     int32_t vtcm_size_per_thread;
     int32_t vtcm_size;
-    int32_t kernel_type;
     int32_t ne0;
     int32_t ne1;
     int32_t row_size_aligned;
@@ -49,6 +49,12 @@ struct htp_allreduce_kernel_params {
     int32_t is_row_bcast;
     int32_t mode;                 // enum htp_allreduce_mode: FULL or SHARDED_FANOUT
 };
+
+#if defined(__cplusplus)
+static_assert(sizeof(struct htp_allreduce_kernel_params) <= 128, "htp_allreduce_kernel_params is too large for kernel_params blob");
+#else
+_Static_assert(sizeof(struct htp_allreduce_kernel_params) <= 128, "htp_allreduce_kernel_params is too large for kernel_params blob");
+#endif
 
 #ifdef __cplusplus
 }

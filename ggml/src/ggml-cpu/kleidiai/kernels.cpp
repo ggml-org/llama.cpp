@@ -201,85 +201,117 @@ static struct kai_matmul_uker_config q4_k_matmul_config() {
     return config;
 }
 
-template<struct kai_matmul_uker_api (*GetApi)(void)>
-static size_t q4_k_get_m_step() {
-    const struct kai_matmul_uker_api api = GetApi();
-    const struct kai_matmul_uker_config config = q4_k_matmul_config();
-    return api.get_step(&config).m;
+static struct kai_matmul_uker_config default_matmul_config() {
+    return {};
 }
 
-template<struct kai_matmul_uker_api (*GetApi)(void)>
-static size_t q4_k_get_n_step() {
-    const struct kai_matmul_uker_api api = GetApi();
-    const struct kai_matmul_uker_config config = q4_k_matmul_config();
-    return api.get_step(&config).n;
-}
+template<
+        struct kai_matmul_uker_api (*GetApi)(void),
+        struct kai_matmul_uker_config (*GetConfig)(void),
+        size_t MR, size_t NR, size_t KR, size_t SR>
+struct matmul_uker_adapter {
+    static size_t get_m_step() {
+        const struct kai_matmul_uker_api api = GetApi();
+        const struct kai_matmul_uker_config config = GetConfig();
+        return api.get_step(&config).m;
+    }
 
-template<size_t Value>
-static size_t q4_k_get_constant() {
-    return Value;
-}
+    static size_t get_n_step() {
+        const struct kai_matmul_uker_api api = GetApi();
+        const struct kai_matmul_uker_config config = GetConfig();
+        return api.get_step(&config).n;
+    }
 
-template<struct kai_matmul_uker_api (*GetApi)(void)>
-static size_t q4_k_get_dst_offset(size_t m_idx, size_t n_idx, size_t dst_stride) {
-    const struct kai_matmul_uker_api api = GetApi();
-    const struct kai_matmul_uker_config config = q4_k_matmul_config();
-    const struct kai_matmul_uker_dst_dim_args index = { m_idx, n_idx };
-    const struct kai_matmul_uker_dst_stride_args stride = { dst_stride };
-    return api.get_dst_offset(&config, &index, &stride);
-}
+    static size_t get_mr() {
+        if constexpr (MR == 0) {
+            return get_m_step();
+        }
+        return MR;
+    }
 
-template<struct kai_matmul_uker_api (*GetApi)(void)>
-static size_t q4_k_get_lhs_packed_offset(size_t m_idx, size_t k, size_t bl) {
-    GGML_ASSERT(bl == KLEIDIAI_Q4_K_BLOCK_LENGTH);
+    static size_t get_nr() {
+        if constexpr (NR == 0) {
+            return get_n_step();
+        }
+        return NR;
+    }
 
-    const struct kai_matmul_uker_api api = GetApi();
-    const struct kai_matmul_uker_config config = q4_k_matmul_config();
-    const struct kai_matmul_uker_lhs_dim_args shape = { m_idx, k };
-    const struct kai_matmul_uker_lhs_dim_args index = { m_idx, 0 };
-    const struct kai_matmul_uker_lhs_stride_args stride = api.get_lhs_stride(&config, &shape);
-    return api.get_lhs_offset(&config, &index, &stride);
-}
+    static size_t get_kr() {
+        return KR;
+    }
 
-template<struct kai_matmul_uker_api (*GetApi)(void)>
-static size_t q4_k_get_rhs_packed_offset(size_t n_idx, size_t k, size_t bl) {
-    GGML_ASSERT(bl == KLEIDIAI_Q4_K_BLOCK_LENGTH);
+    static size_t get_sr() {
+        return SR;
+    }
 
-    const struct kai_matmul_uker_api api = GetApi();
-    const struct kai_matmul_uker_config config = q4_k_matmul_config();
-    const struct kai_matmul_uker_rhs_dim_args shape = { n_idx, k };
-    const struct kai_matmul_uker_rhs_dim_args index = { n_idx, 0 };
-    const struct kai_matmul_uker_rhs_stride_args stride = api.get_rhs_stride(&config, &shape);
-    return api.get_rhs_offset(&config, &index, &stride);
-}
+    static size_t get_dst_offset(size_t m_idx, size_t n_idx, size_t dst_stride) {
+        const struct kai_matmul_uker_api api = GetApi();
+        const struct kai_matmul_uker_config config = GetConfig();
+        const struct kai_matmul_uker_dst_dim_args index = { m_idx, n_idx };
+        const struct kai_matmul_uker_dst_stride_args stride = { dst_stride };
+        return api.get_dst_offset(&config, &index, &stride);
+    }
 
-template<struct kai_matmul_uker_api (*GetApi)(void)>
-static void q4_k_run_matmul(
-        size_t m, size_t n, size_t k, size_t bl,
-        const void * lhs_packed, const void * rhs_packed,
-        void * dst, size_t dst_stride_row, size_t dst_stride_col,
-        float clamp_min, float clamp_max) {
-    GGML_ASSERT(bl == KLEIDIAI_Q4_K_BLOCK_LENGTH);
-    GGML_ASSERT(dst_stride_col == sizeof(float));
+    static size_t get_lhs_packed_offset(size_t m_idx, size_t k, size_t bl) {
+        const struct kai_matmul_uker_api api = GetApi();
+        const struct kai_matmul_uker_config config = GetConfig();
+        GGML_ASSERT(bl == config.format.bl);
+        const struct kai_matmul_uker_lhs_dim_args shape = { m_idx, k };
+        const struct kai_matmul_uker_lhs_dim_args index = { m_idx, 0 };
+        const struct kai_matmul_uker_lhs_stride_args stride = api.get_lhs_stride(&config, &shape);
+        return api.get_lhs_offset(&config, &index, &stride);
+    }
 
-    const struct kai_matmul_uker_api api = GetApi();
-    const struct kai_matmul_uker_config config = q4_k_matmul_config();
-    const struct kai_matmul_uker_lhs_dim_args lhs_shape = { m, k };
-    const struct kai_matmul_uker_rhs_dim_args rhs_shape = { n, k };
+    static size_t get_rhs_packed_offset(size_t n_idx, size_t k, size_t bl) {
+        const struct kai_matmul_uker_api api = GetApi();
+        const struct kai_matmul_uker_config config = GetConfig();
+        GGML_ASSERT(bl == config.format.bl);
+        const struct kai_matmul_uker_rhs_dim_args shape = { n_idx, k };
+        const struct kai_matmul_uker_rhs_dim_args index = { n_idx, 0 };
+        const struct kai_matmul_uker_rhs_stride_args stride = api.get_rhs_stride(&config, &shape);
+        return api.get_rhs_offset(&config, &index, &stride);
+    }
 
-    struct kai_matmul_uker_args args = {};
-    args.flags = KAI_MATMUL_UKER_FLAGS_ARGS_CLAMP;
-    args.shape = { m, n, k };
-    args.operand.lhs.ptr = lhs_packed;
-    args.operand.lhs.stride = api.get_lhs_stride(&config, &lhs_shape);
-    args.operand.rhs.ptr = rhs_packed;
-    args.operand.rhs.stride = api.get_rhs_stride(&config, &rhs_shape);
-    args.operand.dst.ptr = dst;
-    args.operand.dst.stride.m = dst_stride_row;
-    args.activation.clamp.min_ptr = &clamp_min;
-    args.activation.clamp.max_ptr = &clamp_max;
-    api.run(&config, &args);
-}
+    static void run(
+            size_t m, size_t n, size_t k, size_t bl,
+            const void * lhs_packed, const void * rhs_packed,
+            void * dst, size_t dst_stride_row, size_t dst_stride_col,
+            float clamp_min, float clamp_max) {
+        const struct kai_matmul_uker_api api = GetApi();
+        const struct kai_matmul_uker_config config = GetConfig();
+        GGML_ASSERT(bl == config.format.bl);
+        GGML_ASSERT(dst_stride_col == sizeof(float));
+        const struct kai_matmul_uker_lhs_dim_args lhs_shape = { m, k };
+        const struct kai_matmul_uker_rhs_dim_args rhs_shape = { n, k };
+
+        struct kai_matmul_uker_args args = {};
+        args.flags = KAI_MATMUL_UKER_FLAGS_ARGS_CLAMP;
+        args.shape = { m, n, k };
+        args.operand.lhs.ptr = lhs_packed;
+        args.operand.lhs.stride = api.get_lhs_stride(&config, &lhs_shape);
+        args.operand.rhs.ptr = rhs_packed;
+        args.operand.rhs.stride = api.get_rhs_stride(&config, &rhs_shape);
+        args.operand.dst.ptr = dst;
+        args.operand.dst.stride.m = dst_stride_row;
+        args.activation.clamp.min_ptr = &clamp_min;
+        args.activation.clamp.max_ptr = &clamp_max;
+        api.run(&config, &args);
+    }
+};
+
+using q4_k_gemm_adapter = matmul_uker_adapter<
+    kai_matmul_clamp_f32_f16p4vsx2_qai4c32p16vsx4s1s0sf16_4vsx16vs_sme2_mopa,
+    q4_k_matmul_config, 0, 0, 4, 2>;
+using q4_k_gemv_adapter = matmul_uker_adapter<
+    kai_matmul_clamp_f32_qsi8d32p1x4_qai4c32p16vsx4s1s0sf16_1x16vs_sme2_dot,
+    q4_k_matmul_config, 0, 0, 4, 2>;
+// GEMM and GEMV share the RHS layout only at SVE256 (NR=8, KR=8, SR=1).
+using sve_q8_gemm_adapter = matmul_uker_adapter<
+    kai_matmul_clamp_f32_qai8dxp4x8sf32_qsi8cxp4vsx8sf32bf32_16x4vs_sve_i8mm,
+    default_matmul_config, 4, 0, 8, 1>;
+using sve_q8_gemv_adapter = matmul_uker_adapter<
+    kai_matmul_clamp_f32_qai8dxp1x8_qsi8cxp8x8_1x8_sve_dot,
+    default_matmul_config, 1, 8, 8, 1>;
 
 static struct kai_matmul_pack_lhs_uker_config q4_k_lhs_pack_config() {
     struct kai_matmul_pack_lhs_uker_config config = {};
@@ -628,7 +660,7 @@ static ggml_kleidiai_kernels gemm_gemv_kernels[] = {
             /* .packed_size_ex        = */ &rhs_ps_fn5<kai_get_rhs_packed_size_rhs_pack_nxk_qsi4c32pscalef16_qsu4c32s16s0>,
             /* .pack_func_ex          = */ &rhs_pack_fn12<kai_run_rhs_pack_nxk_qsi4c32pscalef16_qsu4c32s16s0>,
         },
-        /* .required_cpu       = */ CPU_FEATURE_SVE | CPU_FEATURE_I8MM | CPU_FEATURE_DOTPROD,
+        /* .required_cpu       = */ CPU_FEATURE_SVE | CPU_FEATURE_SVEI8MM | CPU_FEATURE_DOTPROD,
         /* .lhs_type           = */ GGML_TYPE_F32,
         /* .rhs_type           = */ GGML_TYPE_Q4_0,
         /* .op_type            = */ GGML_TYPE_F32,
@@ -737,16 +769,16 @@ static ggml_kleidiai_kernels gemm_gemv_kernels_q4_k[] = {
     {
         /* SME2 GEMM */
         {
-            /* .get_m_step            = */ &q4_k_get_m_step<kai_matmul_clamp_f32_f16p4vsx2_qai4c32p16vsx4s1s0sf16_4vsx16vs_sme2_mopa>,
-            /* .get_n_step            = */ &q4_k_get_n_step<kai_matmul_clamp_f32_f16p4vsx2_qai4c32p16vsx4s1s0sf16_4vsx16vs_sme2_mopa>,
-            /* .get_mr                = */ &q4_k_get_m_step<kai_matmul_clamp_f32_f16p4vsx2_qai4c32p16vsx4s1s0sf16_4vsx16vs_sme2_mopa>,
-            /* .get_nr                = */ &q4_k_get_n_step<kai_matmul_clamp_f32_f16p4vsx2_qai4c32p16vsx4s1s0sf16_4vsx16vs_sme2_mopa>,
-            /* .get_kr                = */ &q4_k_get_constant<4>,
-            /* .get_sr                = */ &q4_k_get_constant<2>,
-            /* .get_dst_offset        = */ &q4_k_get_dst_offset<kai_matmul_clamp_f32_f16p4vsx2_qai4c32p16vsx4s1s0sf16_4vsx16vs_sme2_mopa>,
-            /* .get_lhs_offset_ex     = */ &q4_k_get_lhs_packed_offset<kai_matmul_clamp_f32_f16p4vsx2_qai4c32p16vsx4s1s0sf16_4vsx16vs_sme2_mopa>,
-            /* .get_rhs_packed_offset_ex = */ &q4_k_get_rhs_packed_offset<kai_matmul_clamp_f32_f16p4vsx2_qai4c32p16vsx4s1s0sf16_4vsx16vs_sme2_mopa>,
-            /* .run_kernel_ex         = */ &q4_k_run_matmul<kai_matmul_clamp_f32_f16p4vsx2_qai4c32p16vsx4s1s0sf16_4vsx16vs_sme2_mopa>,
+            /* .get_m_step            = */ q4_k_gemm_adapter::get_m_step,
+            /* .get_n_step            = */ q4_k_gemm_adapter::get_n_step,
+            /* .get_mr                = */ q4_k_gemm_adapter::get_mr,
+            /* .get_nr                = */ q4_k_gemm_adapter::get_nr,
+            /* .get_kr                = */ q4_k_gemm_adapter::get_kr,
+            /* .get_sr                = */ q4_k_gemm_adapter::get_sr,
+            /* .get_dst_offset        = */ q4_k_gemm_adapter::get_dst_offset,
+            /* .get_lhs_offset_ex     = */ q4_k_gemm_adapter::get_lhs_packed_offset,
+            /* .get_rhs_packed_offset_ex = */ q4_k_gemm_adapter::get_rhs_packed_offset,
+            /* .run_kernel_ex         = */ q4_k_gemm_adapter::run,
         },
         {
             /* .get_offset            = */ kai_get_lhs_offset_lhs_pack_f16pmrx2_f32_neon,
@@ -756,16 +788,16 @@ static ggml_kleidiai_kernels gemm_gemv_kernels_q4_k[] = {
         },
         /* SME2 GEMV */
         {
-            /* .get_m_step            = */ &q4_k_get_m_step<kai_matmul_clamp_f32_qsi8d32p1x4_qai4c32p16vsx4s1s0sf16_1x16vs_sme2_dot>,
-            /* .get_n_step            = */ &q4_k_get_n_step<kai_matmul_clamp_f32_qsi8d32p1x4_qai4c32p16vsx4s1s0sf16_1x16vs_sme2_dot>,
-            /* .get_mr                = */ &q4_k_get_m_step<kai_matmul_clamp_f32_qsi8d32p1x4_qai4c32p16vsx4s1s0sf16_1x16vs_sme2_dot>,
-            /* .get_nr                = */ &q4_k_get_n_step<kai_matmul_clamp_f32_qsi8d32p1x4_qai4c32p16vsx4s1s0sf16_1x16vs_sme2_dot>,
-            /* .get_kr                = */ &q4_k_get_constant<4>,
-            /* .get_sr                = */ &q4_k_get_constant<2>,
-            /* .get_dst_offset        = */ &q4_k_get_dst_offset<kai_matmul_clamp_f32_qsi8d32p1x4_qai4c32p16vsx4s1s0sf16_1x16vs_sme2_dot>,
-            /* .get_lhs_offset_ex     = */ &q4_k_get_lhs_packed_offset<kai_matmul_clamp_f32_qsi8d32p1x4_qai4c32p16vsx4s1s0sf16_1x16vs_sme2_dot>,
-            /* .get_rhs_packed_offset_ex = */ &q4_k_get_rhs_packed_offset<kai_matmul_clamp_f32_qsi8d32p1x4_qai4c32p16vsx4s1s0sf16_1x16vs_sme2_dot>,
-            /* .run_kernel_ex         = */ &q4_k_run_matmul<kai_matmul_clamp_f32_qsi8d32p1x4_qai4c32p16vsx4s1s0sf16_1x16vs_sme2_dot>,
+            /* .get_m_step            = */ q4_k_gemv_adapter::get_m_step,
+            /* .get_n_step            = */ q4_k_gemv_adapter::get_n_step,
+            /* .get_mr                = */ q4_k_gemv_adapter::get_mr,
+            /* .get_nr                = */ q4_k_gemv_adapter::get_nr,
+            /* .get_kr                = */ q4_k_gemv_adapter::get_kr,
+            /* .get_sr                = */ q4_k_gemv_adapter::get_sr,
+            /* .get_dst_offset        = */ q4_k_gemv_adapter::get_dst_offset,
+            /* .get_lhs_offset_ex     = */ q4_k_gemv_adapter::get_lhs_packed_offset,
+            /* .get_rhs_packed_offset_ex = */ q4_k_gemv_adapter::get_rhs_packed_offset,
+            /* .run_kernel_ex         = */ q4_k_gemv_adapter::run,
         },
         {
             /* .get_offset            = */ q4_k_lhs_get_offset,
@@ -879,6 +911,54 @@ static ggml_kleidiai_kernels gemm_gemv_kernels_q8[] = {
             /* .pack_func_ex          = */ &rhs_pack_scale_fn12<kai_run_rhs_pack_nxk_qsi8cxp_qsi8cx_neon>,
         },
         /* .required_cpu       = */ CPU_FEATURE_SME,
+        /* .lhs_type           = */ GGML_TYPE_F32,
+        /* .rhs_type           = */ GGML_TYPE_Q8_0,
+        /* .op_type            = */ GGML_TYPE_F32,
+    },
+    {
+        /* SVE I8MM GEMM */
+        {
+            /* .get_m_step            = */ sve_q8_gemm_adapter::get_m_step,
+            /* .get_n_step            = */ sve_q8_gemm_adapter::get_n_step,
+            /* .get_mr                = */ sve_q8_gemm_adapter::get_mr,
+            /* .get_nr                = */ sve_q8_gemm_adapter::get_nr,
+            /* .get_kr                = */ sve_q8_gemm_adapter::get_kr,
+            /* .get_sr                = */ sve_q8_gemm_adapter::get_sr,
+            /* .get_dst_offset        = */ sve_q8_gemm_adapter::get_dst_offset,
+            /* .get_lhs_offset_ex     = */ sve_q8_gemm_adapter::get_lhs_packed_offset,
+            /* .get_rhs_packed_offset_ex = */ sve_q8_gemm_adapter::get_rhs_packed_offset,
+            /* .run_kernel_ex         = */ sve_q8_gemm_adapter::run,
+        },
+        /* .gemm_lhs_info = */ {
+            /* .get_offset            = */ kai_get_lhs_offset_lhs_quant_pack_qai8dxp_f32,
+            /* .get_packed_offset_ex  = */ &lhs_offs_fn5<kai_get_lhs_packed_offset_lhs_quant_pack_qai8dxp_f32>,
+            /* .packed_size_ex        = */ &lhs_ps_fn5<kai_get_lhs_packed_size_lhs_quant_pack_qai8dxp_f32>,
+            /* .pack_func_ex          = */ &lhs_pack_float_fn9_no_bl<kai_run_lhs_quant_pack_qai8dxp_f32>,
+        },
+        /* SVE DOT GEMV */
+        {
+            /* .get_m_step            = */ sve_q8_gemv_adapter::get_m_step,
+            /* .get_n_step            = */ sve_q8_gemv_adapter::get_n_step,
+            /* .get_mr                = */ sve_q8_gemv_adapter::get_mr,
+            /* .get_nr                = */ sve_q8_gemv_adapter::get_nr,
+            /* .get_kr                = */ sve_q8_gemv_adapter::get_kr,
+            /* .get_sr                = */ sve_q8_gemv_adapter::get_sr,
+            /* .get_dst_offset        = */ sve_q8_gemv_adapter::get_dst_offset,
+            /* .get_lhs_offset_ex     = */ sve_q8_gemv_adapter::get_lhs_packed_offset,
+            /* .get_rhs_packed_offset_ex = */ sve_q8_gemv_adapter::get_rhs_packed_offset,
+            /* .run_kernel_ex         = */ sve_q8_gemv_adapter::run,
+        },
+        /* .gemv_lhs_info = */ {
+            /* .get_offset            = */ kai_get_lhs_offset_lhs_quant_pack_qai8dxp_f32,
+            /* .get_packed_offset_ex  = */ &lhs_offs_fn5<kai_get_lhs_packed_offset_lhs_quant_pack_qai8dxp_f32>,
+            /* .packed_size_ex        = */ &lhs_ps_fn5<kai_get_lhs_packed_size_lhs_quant_pack_qai8dxp_f32>,
+            /* .pack_func_ex          = */ &lhs_pack_float_fn9_no_bl<kai_run_lhs_quant_pack_qai8dxp_f32>,
+        },
+        /* .rhs_info = */ {
+            /* .packed_size_ex        = */ &rhs_ps_fn5<kai_get_rhs_packed_size_rhs_pack_nxk_qsi8cxp_qsi8cx_neon>,
+            /* .pack_func_ex          = */ &rhs_pack_scale_fn12<kai_run_rhs_pack_nxk_qsi8cxp_qsi8cx_neon>,
+        },
+        /* .required_cpu       = */ CPU_FEATURE_SVE | CPU_FEATURE_SVEI8MM | CPU_FEATURE_DOTPROD,
         /* .lhs_type           = */ GGML_TYPE_F32,
         /* .rhs_type           = */ GGML_TYPE_Q8_0,
         /* .op_type            = */ GGML_TYPE_F32,

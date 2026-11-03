@@ -14,6 +14,9 @@
 // the mapping is precomputed on CPU as the "layout_idx" input (see set_input in clip.cpp)
 //
 // ref: inference/vision.py and inference/image_processor.py in the HF repo
+//
+// DeepSeek-V4.1-Flash (deepseek41v) shares the encoder and aligner; its block is plain reading order
+//   [START] ([IMAGE]*n_llm_w [NEWLINE])*n_llm_h [END], no lead pads, no pad row, no IMAGE_PAD tensor
 
 ggml_cgraph * clip_graph_deepseek4v::build() {
     const int n_merge = hparams.n_merge;
@@ -52,7 +55,10 @@ ggml_cgraph * clip_graph_deepseek4v::build() {
             cur = ggml_pad(ctx0, cur, pad_x, pad_y, 0, 0);
         }
 
-        ggml_tensor * kernel = ggml_view_3d(ctx0, cur, n_merge, n_merge, cur->ne[2], 0, 0, 0);
+        // contiguous kernel view: CUDA rejects a zero-stride one and im2col falls back to CPU
+        const size_t esz = ggml_element_size(cur);
+        ggml_tensor * kernel = ggml_view_3d(ctx0, cur, n_merge, n_merge, cur->ne[2],
+                                            n_merge*esz, n_merge*n_merge*esz, 0);
         cur = ggml_im2col(ctx0, kernel, cur, n_merge, n_merge, 0, 0, 1, 1, true, inp->type);
         cur = ggml_reshape_2d(ctx0, cur, cur->ne[0], cur->ne[1] * cur->ne[2]);
 
@@ -73,19 +79,23 @@ ggml_cgraph * clip_graph_deepseek4v::build() {
         const int64_t n_grid     = cur->ne[1]; // n_llm_w * n_llm_h
 
         // rows n_grid + 0..3, keep in sync with the index computation in set_input
+        const bool is_v41 = proj_type == PROJECTOR_TYPE_DEEPSEEK41V;
         ggml_tensor * sentinels[] = {
             model.token_embd_img_start,
             model.token_embd_img_end,
             model.image_newline,
-            model.token_embd_img_pad,
+            is_v41 ? nullptr : model.token_embd_img_pad,
         };
         for (ggml_tensor * tok : sentinels) {
-            cur = ggml_concat(ctx0, cur, ggml_reshape_2d(ctx0, tok, n_embd_out, 1), 1);
+            if (tok) {
+                cur = ggml_concat(ctx0, cur, ggml_reshape_2d(ctx0, tok, n_embd_out, 1), 1);
+            }
         }
 
         const int n_llm_w = CLIP_ALIGN(n_patches_x, n_merge) / n_merge;
         const int n_llm_h = CLIP_ALIGN(n_patches_y, n_merge) / n_merge;
-        const int n_out   = dsv4_get_block_layout(n_llm_w, n_llm_h, img.lead_pad).n_out;
+        const int n_out   = is_v41 ? dsv41_n_block_tokens(n_llm_w, n_llm_h)
+                                   : dsv4_get_block_layout(n_llm_w, n_llm_h, img.lead_pad).n_out;
         GGML_ASSERT(n_grid == n_llm_w * n_llm_h);
 
         ggml_tensor * layout_idx = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_out);

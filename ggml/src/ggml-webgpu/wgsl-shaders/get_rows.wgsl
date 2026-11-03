@@ -51,6 +51,20 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
 }
 #endif
 
+#ifdef Q2_0
+fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
+    let block_byte_base = (src_base + offset) * 18u;
+    let d = load_f16_as_f32_at_src(block_byte_base);
+    for (var j = 0u; j < 4u; j++) {
+        let q_packed = load_u32_at_src(block_byte_base + 2u + j * 4u);
+        for (var k = 0u; k < 16u; k++) {
+            let q = (q_packed >> (2u * k)) & 3u;
+            dst[dst_base + offset * 64u + j * 16u + k] = (f32(q) - 1.0) * d;
+        }
+    }
+}
+#endif
+
 #ifdef Q4_0
 fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
     let block_byte_base = (src_base + offset) * 18; // Block stride: 18 bytes

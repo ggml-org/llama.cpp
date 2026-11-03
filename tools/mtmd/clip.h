@@ -165,6 +165,7 @@ void                    clip_gen_state_reset(struct clip_gen_state * state);
 // read a chatterbox tensor by source name, converted to F32. returns the
 // element count, 0 if not found. out may be null to only query the size.
 size_t clip_cbx_read_tensor(struct clip_ctx * ctx, const char * name, float * out, size_t n_max);
+const std::map<std::string, std::vector<float>> & clip_gen_get_voices(const struct clip_ctx * ctx);
 
 bool clip_is_llava(const struct clip_ctx * ctx);
 // note for contributor: this clip_is_(model) pattern is deprecated

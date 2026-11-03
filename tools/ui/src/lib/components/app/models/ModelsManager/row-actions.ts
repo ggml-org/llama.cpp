@@ -13,13 +13,18 @@ export function modelRowActions(
 	/** Download state, when the row stands for a tracked download. */
 	download?: ModelRowDownloadState | null
 ) {
-	const viewInDiscover = {
-		icon: Compass,
-		label: 'See in Discover',
-		// the details pane is keyed by repo, not by `<repo>:<quant>`
-		onclick: () => uiStore.openModelsDiscover(repoOf(option.model)),
-		separator: true
-	};
+	// the details pane is keyed by repo, not by `<repo>:<quant>`; the entry exists only
+	// while Discover is on
+	const viewInDiscover = uiStore.isDiscoverEnabled
+		? [
+				{
+					icon: Compass,
+					label: 'See in Discover',
+					onclick: () => uiStore.openModelsDiscover(repoOf(option.model)),
+					separator: true
+				}
+			]
+		: [];
 
 	// a tracked download is paused, resumed or dropped: it is not loaded, hidden or
 	// drafted. An in-flight row cancels, which stops the download and removes the
@@ -40,9 +45,12 @@ export function modelRowActions(
 				separator: true,
 				variant: 'destructive' as const
 			},
-			viewInDiscover
+			...viewInDiscover
 		];
 	}
+
+	// a model the router did not take from its HF cache is not its own to delete
+	const removeBlockedReason = modelsStore.removeBlockedReason(option.model);
 
 	return [
 		{
@@ -51,10 +59,12 @@ export function modelRowActions(
 			onclick: () => modelsStore.toggleFavorite(option.model)
 		},
 		{
+			disabled: removeBlockedReason !== null,
 			icon: Trash2,
 			label: 'Delete from disk',
 			onclick: () => onDelete(option),
 			separator: true,
+			tooltip: removeBlockedReason ?? undefined,
 			variant: 'destructive' as const
 		},
 		{
@@ -63,6 +73,6 @@ export function modelRowActions(
 			onclick: () => modelsStore.toggleHidden(option.id),
 			separator: true
 		},
-		viewInDiscover
+		...viewInDiscover
 	];
 }

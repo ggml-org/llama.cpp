@@ -28,7 +28,7 @@ add_library(${HTP_LIB} SHARED
     unary-ops.c
     sum-rows-ops.c
     softmax-ops.c
-    act-ops.c
+    glu-ops.c
     rope-ops.c
     set-rows-ops.c
     get-rows-ops.c
@@ -44,8 +44,10 @@ add_library(${HTP_LIB} SHARED
     pad-ops.c
     argsort-ops.c
     im2col-ops.c
+    conv2d-ops.c
     roll-ops.c
     pool-ops.c
+    upscale-ops.c
     allreduce-ops.c
 )
 

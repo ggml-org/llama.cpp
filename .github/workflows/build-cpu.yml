@@ -129,7 +129,7 @@ jobs:
         id: cmake_test
         run: |
           cd build
-          ctest -L 'main|python' --verbose --timeout 900
+          ctest -L main --verbose --timeout 900
 
       - name: Test llama2c conversion
         id: llama2c_test

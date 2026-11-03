@@ -319,8 +319,10 @@ static void init_kleidiai_context(void) {
 
         size_t detected_smcus = 0;
 
+        // The fixed-width SVE kernels require 32-byte vectors, including the Q8 shared RHS layout.
         ctx.features  = (runtime_feat.has_dotprod  ? CPU_FEATURE_DOTPROD : CPU_FEATURE_NONE) |
                         (runtime_feat.has_i8mm     ? CPU_FEATURE_I8MM    : CPU_FEATURE_NONE) |
+                        (runtime_feat.has_svei8mm  ? CPU_FEATURE_SVEI8MM : CPU_FEATURE_NONE) |
                         (runtime_feat.has_fp16     ? CPU_FEATURE_FP16    : CPU_FEATURE_NONE) |
                         (runtime_feat.sve_cnt == QK8_0 ? CPU_FEATURE_SVE : CPU_FEATURE_NONE);
 
@@ -1616,6 +1618,11 @@ public:
             const size_t kr = kernel->get_kr();
             const size_t sr = kernel->get_sr();
             const ggml_type rhs_type = kernels->rhs_type;
+            if (rhs_type == GGML_TYPE_Q8_0 && (kernels->required_cpu & CPU_FEATURE_SVE)) {
+                GGML_ASSERT(nr == kernels->gemv.get_nr());
+                GGML_ASSERT(kr == kernels->gemv.get_kr());
+                GGML_ASSERT(sr == kernels->gemv.get_sr());
+            }
             const size_t block_len = rhs_type == GGML_TYPE_Q8_0 ? QK8_0 :
                                      rhs_type == GGML_TYPE_Q4_0 ? QK4_0 :
                                      rhs_type == GGML_TYPE_Q4_K ? GGML_KLEIDIAI_Q4_K_BL :

@@ -68,6 +68,14 @@ static inline HVX_Vector hvx_vec_tanh_f32(HVX_Vector x) {
     return Q6_Vsf_equals_Vqf32(res);
 }
 
+static inline HVX_Vector hvx_vec_silu_f32(HVX_Vector x) {
+    HVX_Vector one     = hvx_vec_splat_f32(1.0f);
+    HVX_Vector max_exp = hvx_vec_splat_f32(87.f);
+    HVX_Vector min_exp = hvx_vec_splat_f32(-87.f);
+    HVX_Vector sig     = hvx_vec_fast_sigmoid_f32_guard(x, one, max_exp, min_exp);
+    return Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(x, sig));
+}
+
 #define hvx_sigmoid_loop_body(dst_type, src_type, vec_store)                                  \
     do {                                                                                      \
         dst_type * restrict vdst = (dst_type *) dst;                                          \

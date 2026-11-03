@@ -37,6 +37,13 @@ static bool ggml_sycl_should_fuse_mul_mat_glu(const ggml_tensor * gate, const gg
     const bool reorder_pair = wu->type == GGML_TYPE_Q4_K && wg->type == GGML_TYPE_Q4_K;
     const bool plain_pair   = (wu->type == GGML_TYPE_Q5_K || wu->type == GGML_TYPE_IQ4_XS) &&
                             (wg->type == GGML_TYPE_Q5_K || wg->type == GGML_TYPE_IQ4_XS);
+#ifdef GGML_SYCL_MMVQ_HAS_XMX
+    // same-type pairs of the types of the XMX kernels, which also take a few more columns
+    // (the XMX kernels walk whole QK_K super-blocks, so they need rows of a multiple of QK_K)
+    const bool xmx_pair = wu->type == wg->type && ggml_sycl_xmx_supports_type(wu->type) && wu->ne[0] % QK_K == 0;
+#else
+    const bool xmx_pair = false;
+#endif // GGML_SYCL_MMVQ_HAS_XMX
     // the ESIMD kernel covers same-type q2_K..q6_K and q8_0, single column only (as unfused DMMV)
 #ifdef GGML_SYCL_DMMV_HAS_ESIMD
     const bool esimd_pair   = g_ggml_sycl_enable_esimd && wu->type == wg->type && act->ne[1] == 1 &&
@@ -47,7 +54,7 @@ static bool ggml_sycl_should_fuse_mul_mat_glu(const ggml_tensor * gate, const gg
 #endif
     // q8_0 rows are walked in 32-wide blocks, so they only need to be a multiple of QK8_0
     const int64_t row_align = esimd_pair && wu->type == GGML_TYPE_Q8_0 ? QK8_0 : QK_K;
-    if ((!reorder_pair && !plain_pair && !esimd_pair) || wu->ne[0] % row_align != 0) {
+    if ((!reorder_pair && !plain_pair && !xmx_pair && !esimd_pair) || wu->ne[0] % row_align != 0) {
         return false;
     }
 
@@ -67,7 +74,8 @@ static bool ggml_sycl_should_fuse_mul_mat_glu(const ggml_tensor * gate, const gg
         return false;
     }
     // mat-vec only: one column per decoded token, up to the batch the reorder kernels cover
-    if (act->ne[1] > MMVQ_MAX_BATCH_SIZE) {
+    const int max_cols = xmx_pair ? std::max(MMVQ_MAX_BATCH_SIZE, g_ggml_sycl_xmx_glu_max_cols) : MMVQ_MAX_BATCH_SIZE;
+    if (act->ne[1] > max_cols) {
         return false;
     }
 

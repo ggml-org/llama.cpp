@@ -3,6 +3,7 @@
 #include "server-common.h"
 #include "server-task.h"
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <string>
@@ -58,6 +59,10 @@ struct server_decision_context {
         return type == COMMON_DECISION_TYPE_CLEF;
     }
 
+    bool is_lfm3_d1() const {
+        return type == COMMON_DECISION_TYPE_LFM3_D1 || type == COMMON_DECISION_TYPE_LFM3_D1_OMNI;
+    }
+
     // true if the prompt of the model has a place for images
     bool can_use_images() const {
         switch (type) {
@@ -68,10 +73,19 @@ struct server_decision_context {
             case COMMON_DECISION_TYPE_LFM2_D1:
             case COMMON_DECISION_TYPE_LFM2_D1_OMNI:
             case COMMON_DECISION_TYPE_H2O_LIGHTNING:
+            case COMMON_DECISION_TYPE_MINICPM_OCR_JEV:
+            case COMMON_DECISION_TYPE_LFM3_D1:
+            case COMMON_DECISION_TYPE_LFM3_D1_OMNI:
                 return true;
             default:
                 return false;
         }
+    }
+
+    // false for a decision-only model, it serves no text generation
+    bool can_generate() const {
+        const auto out = server_model_output_modalities(type, true, false);
+        return std::find(out.begin(), out.end(), "text") != out.end();
     }
 
     // throw std::invalid_argument on bad input
@@ -156,6 +170,10 @@ private:
     json render_h2o(const json & state, const server_decision_question & question) const;
     std::string h2o_cut_state(const std::string & text) const;
     std::string h2o_quote(const std::string & text) const;
+    // the texts of the tokens with these attributes, quoted_spellings and quoted_first
+    void init_quoted_spellings(uint32_t attrs, size_t min_size);
+    // LFM3_D1: a zero-width space after the first character of each special token text (d1 prompt.py: plain)
+    std::string d1_break(const std::string & text) const;
     void fill_task_laya(llama_tokens & tokens, const server_decision_question & question, server_task & task) const;
     void fill_task_d1omni(
             const json & state,
