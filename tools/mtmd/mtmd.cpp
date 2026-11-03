@@ -2298,6 +2298,10 @@ mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
             info.type = MTMD_GEN_AUDIO_TYPE_LFM3A;
             info.sample_rate = 24000;
             break;
+        case PROJECTOR_TYPE_DRAMA3_GEN:
+            info.type = MTMD_GEN_AUDIO_TYPE_DRAMA3;
+            info.sample_rate = 44100;
+            break;
         default:
             info.type = MTMD_GEN_AUDIO_TYPE_NONE;
             break;
@@ -2352,6 +2356,12 @@ mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
             break;
         case PROJECTOR_TYPE_SOPRANO:
             inp.type = MTMD_GEN_PROCESS_TYPE_GEN_WAV;
+            break;
+        case PROJECTOR_TYPE_DRAMA3_GEN:
+            // codebook heads, see Sampling of fishaudio_drama3_generation.cpp (sglang-omni)
+            inp.top_k = 30;
+            inp.top_p = 0.9f;
+            inp.temp  = 1.0f;
             break;
         case PROJECTOR_TYPE_LFM3A_GEN:
             {

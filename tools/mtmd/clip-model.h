@@ -603,6 +603,15 @@ struct clip_code2wav {
     ggml_tensor * dac_post_conv_b      = nullptr;
 };
 
+// drama3 codebook tower layer: mixes a code embedding into the hidden state around a generic block
+struct clip_drama3_layer {
+    ggml_tensor * enorm_w    = nullptr;
+    ggml_tensor * hnorm_w    = nullptr;
+    ggml_tensor * eh_proj_w  = nullptr; // [code embd; hidden] -> hidden
+    ggml_tensor * embd_w     = nullptr; // code embedding table
+    ggml_tensor * out_norm_w = nullptr;
+};
+
 struct clip_vocos {
     ggml_tensor * input_w        = nullptr;
     ggml_tensor * input_b        = nullptr;
@@ -869,6 +878,7 @@ struct clip_model {
 
     // qwen3tts code2wav: RVQ codes -> raw PCM
     clip_code2wav c2w;
+    std::vector<clip_drama3_layer> drama3_layers;
 
     // pocket-tts: SEANet stack, shared by the encoder (speaker path) and the decoder (gen path)
     clip_seanet seanet;
