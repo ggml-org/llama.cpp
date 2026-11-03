@@ -243,10 +243,16 @@ std::pair<ggml_tensor *, ggml_tensor *> llama_model_qwen35::graph::build_qkvz(
     const int64_t n_seq_tokens = ubatch.n_seq_tokens;
 
     ggml_tensor * qkv_mixed = build_lora_mm(model.layers[il].wqkv, input, model.layers[il].wqkv_s);
+    ggml_tensor * z         = build_lora_mm(model.layers[il].wqkv_gate, input, model.layers[il].wqkv_gate_s);
+
+    // Force these two matmuls (same input `input`, same src0 ne[0]) to land adjacently in
+    // the compute graph's node list so the HTP backend's try_fuse_mul_mat_nx adjacency check
+    // can fuse them into one MUL_MAT_NX dispatch.
+    ggml_build_forward_expand(gf, qkv_mixed);
+    ggml_build_forward_expand(gf, z);
+
     qkv_mixed = ggml_reshape_3d(ctx0, qkv_mixed, qkv_mixed->ne[0], n_seq_tokens, n_seqs);
     cb(qkv_mixed, "linear_attn_qkv_mixed", il);
-
-    ggml_tensor * z = build_lora_mm(model.layers[il].wqkv_gate, input, model.layers[il].wqkv_gate_s);
     cb(z, "z", il);
 
     return { qkv_mixed, z };
@@ -258,9 +264,12 @@ ggml_tensor * llama_model_qwen35::graph::build_norm_gated(
         ggml_tensor * gate,
         int           layer) {
     ggml_tensor * normalized = build_norm(input, weights, nullptr, LLM_NORM_RMS, layer);
-    ggml_tensor * gated_silu = ggml_silu(ctx0, gate);
 
-    return ggml_mul(ctx0, normalized, gated_silu);
+    // silu(gate) * normalized, as one HTP GLU_SWIGLU dispatch instead of a separate
+    // UNARY(SILU) + MUL pair -- ggml_swiglu_split(a, b) computes dst = silu(a) * b
+    // (verified against ggml_vec_swiglu_f32's CPU reference), matching this function's
+    // own silu(gate)*normalized formula exactly with gate -> a, normalized -> b.
+    return ggml_swiglu_split(ctx0, gate, normalized);
 }
 
 ggml_tensor * llama_model_qwen35::graph::build_layer_attn(
@@ -306,6 +315,19 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn(
     cb(gate, "gate_reshaped", il);
 
     Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+
+    // Force both norms into the graph before either RoPE call: the default postorder DFS
+    // (from the final attn output backward) fully resolves Qcur (norm through RoPE) before
+    // ever visiting Kcur's subgraph, since Qcur is build_attn's first operand -- this makes
+    // Qcur's RoPE and Kcur's RoPE land far apart in the dispatch order (Kcur's own norm sits
+    // between them), each recomputing an identical MRoPE theta_cache from the same inp_pos.
+    // Expanding both norms explicitly here, before either RoPE call exists, forces them into
+    // cgraph->nodes[] first; the subsequent RoPE calls' only remaining unvisited parent is
+    // each other's RoPE node itself, so they land back-to-back in the final postorder walk.
+    // No-op today (no try_fuse_rope_nx matcher exists yet to exploit the adjacency); this
+    // hint is the prerequisite step for a future ROPE_NX fusion.
+    ggml_build_forward_expand(gf, Qcur);
+    ggml_build_forward_expand(gf, Kcur);
 
     // Apply MRoPE
     Qcur = ggml_rope_multi(
@@ -394,17 +416,29 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
     const int64_t conv_kernel_size = conv_kernel->ne[0];
     const int64_t conv_channels    = d_inner + 2 * hparams.ssm_n_group * hparams.ssm_d_state;
 
-    ggml_tensor * conv_input = build_conv_state(inp, conv_states_all, qkv_mixed, conv_kernel_size, conv_channels, il);
-
-    ggml_tensor * state = build_rs(inp, ssm_states_all, hparams.n_embd_s(), n_seqs);
-    state = ggml_reshape_4d(ctx0, state, head_v_dim, head_v_dim, num_v_heads, n_seqs);
-    cb(state, "state_predelta", il);
+    std::vector<ggml_tensor *> conv_state_cpys;
+    ggml_tensor * conv_input = build_conv_state(inp, conv_states_all, qkv_mixed, conv_kernel_size, conv_channels, il, &conv_state_cpys);
 
     ggml_tensor * conv_output_proper = ggml_ssm_conv(ctx0, conv_input, conv_kernel);
     cb(conv_output_proper, "conv_output_raw", il);
 
     ggml_tensor * conv_output_silu = ggml_silu(ctx0, conv_output_proper);
     cb(conv_output_silu, "conv_output_silu", il);
+
+    // Force CONCAT+SSM_CONV+SILU to land adjacently in the HTP backend's dispatch order
+    // (see build_conv_state's deferred_state_cpys comment): this DFS-expand visits CONCAT's
+    // full dependency chain and SSM_CONV+SILU in one sweep, before build_rs's own ssm_state
+    // SCALE/GET_ROWS pair (unrelated to this chain, previously interposed between CONCAT
+    // and SSM_CONV here) and the conv-state-update CPY(s) get their turn below.
+    ggml_build_forward_expand(gf, conv_output_silu);
+
+    ggml_tensor * state = build_rs_fast(inp, ssm_states_all, hparams.n_embd_s(), n_seqs);
+    state = ggml_reshape_4d(ctx0, state, head_v_dim, head_v_dim, num_v_heads, n_seqs);
+    cb(state, "state_predelta", il);
+
+    for (ggml_tensor * cpy : conv_state_cpys) {
+        ggml_build_forward_expand(gf, cpy);
+    }
 
     ggml_tensor * conv_qkv_mix = conv_output_silu;
 

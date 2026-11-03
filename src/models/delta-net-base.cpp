@@ -449,7 +449,8 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
         ggml_tensor *        qkv_mixed,
         int64_t              conv_kernel_size,
         int64_t              conv_channels,
-        int                  il) {
+        int                  il,
+        std::vector<ggml_tensor *> * deferred_state_cpys) {
     const auto * mctx_cur = inp->mctx;
 
     const auto kv_head  = mctx_cur->get_head();
@@ -457,12 +458,13 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
 
     const int64_t n_seqs = ubatch.n_seqs;
 
-    ggml_tensor * conv_states = build_rs(inp, conv_states_all, hparams.n_embd_r(), n_seqs);
+    ggml_tensor * conv_states = build_rs_fast(inp, conv_states_all, hparams.n_embd_r(), n_seqs);
     cb(conv_states, "conv_states", il);
 
     conv_states = ggml_reshape_3d(ctx0, conv_states, conv_kernel_size - 1, conv_channels, n_seqs);
     cb(conv_states, "conv_states_reshaped", il);
 
+    ggml_tensor * qkv_mixed_orig = qkv_mixed; // channel-major: [conv_channels, n_seq_tokens, n_seqs]
     qkv_mixed = ggml_transpose(ctx0, qkv_mixed);
     cb(qkv_mixed, "qkv_mixed_transposed", il);
 
@@ -473,15 +475,60 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
 
     const size_t row_size  = ggml_row_size(conv_states_all->type, row_count);
 
+    // The state-update CPY(s) below only depend on `conv_input`'s tail, never on
+    // ggml_ssm_conv's output -- deferring their ggml_build_forward_expand() call to after
+    // the caller emits ggml_ssm_conv (+ SILU) lets the HTP backend's op-batch dispatch
+    // order visit CONCAT immediately before SSM_CONV (instead of interposing this CPY plus
+    // the unrelated delta-net ssm-state SCALE/GET_ROWS pair between them, both of which are
+    // triggered by this same function's own build_rs() call for conv_states above and by
+    // the caller's separate build_rs() call for ssm_states below). That adjacency is
+    // required for a CONCAT+SSM_CONV(+SILU) HTP fusion (skips writing conv_input to DDR and
+    // reading it straight back in SSM_CONV). Callers that pass nullptr keep the old
+    // immediate-expand behavior.
+    auto emit_or_defer = [&](ggml_tensor * cpy) {
+        if (deferred_state_cpys) {
+            deferred_state_cpys->push_back(cpy);
+        } else {
+            ggml_build_forward_expand(gf, cpy);
+        }
+    };
+
+    // Whenever the tail window [s_idx, s_idx + conv_states->ne[0]) lies entirely inside
+    // qkv_mixed's span of conv_input (true whenever n_tokens >= conv_kernel_size - 1, i.e.
+    // every prefill call), the state-update CPY can read straight from `qkv_mixed`
+    // (transposed) instead of from `conv_input`, since that tail is byte-identical to
+    // qkv_mixed's own last (conv_kernel_size - 1) columns -- CONCAT only rearranges data,
+    // it never combines conv_states and qkv_mixed's bytes into new values. This makes
+    // `conv_input` end up with exactly one real consumer (SSM_CONV), which is what a
+    // CONCAT+SSM_CONV fusion needs to safely elide materializing it at all. When the
+    // window instead straddles the conv_states/qkv_mixed boundary (small n_tokens close to
+    // decode), fall back to reading from conv_input like before -- correct either way, just
+    // not fuseable in that case.
+
     if (cparams.n_rs_seq == 0) {
         const int64_t s_idx  = conv_input->ne[0] - conv_states->ne[0];
         const int64_t s_slot = 0;
 
-        ggml_tensor * conv_state_last =
-            ggml_view_3d(ctx0, conv_input,
+        ggml_tensor * conv_state_last;
+        if (s_idx >= conv_states->ne[0]) {
+            // Build the [K-1, conv_channels, n_seqs] tail view from the pre-transpose,
+            // genuinely-contiguous-in-channels qkv_mixed_orig (nb[0] == type_size there),
+            // then transpose it -- NOT ggml_view_3d directly on the already-transposed
+            // `qkv_mixed`, which would silently force nb[0] back to type_size even though
+            // that tensor's real axis-0 stride is conv_channels*type_size, corrupting the
+            // read.
+            const int64_t qkv_idx = s_idx - conv_states->ne[0];
+            ggml_tensor * tail_pretrans = ggml_view_3d(ctx0, qkv_mixed_orig,
+                    conv_channels, conv_kernel_size - 1, n_seqs,
+                    qkv_mixed_orig->nb[1], qkv_mixed_orig->nb[2],
+                    qkv_idx * qkv_mixed_orig->nb[1]);
+            conv_state_last = ggml_transpose(ctx0, tail_pretrans);
+        } else {
+            conv_state_last = ggml_view_3d(ctx0, conv_input,
                     conv_kernel_size - 1, conv_channels, n_seqs,
                     conv_input->nb[1], conv_input->nb[2],
                     ggml_row_size(conv_input->type, s_idx));
+        }
         cb(conv_state_last, "conv_state_last", il);
 
         ggml_tensor * conv_state_update =
@@ -490,7 +537,7 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
                     (s_slot * mem_size + kv_head) * row_size);
         cb(conv_state_update, "conv_state_update", il);
 
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, conv_state_last, conv_state_update));
+        emit_or_defer(ggml_cpy(ctx0, conv_state_last, conv_state_update));
     } else {
         // [TAG_RECURRENT_ROLLBACK_SPLITS]
         // this logic assumes that the last (n_rs_seq + 1) tokens of a sequence in a batch are inside
@@ -502,11 +549,19 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
             const int64_t s_idx  = std::max<int64_t>(0, conv_input->ne[0] - conv_states->ne[0] - K + t);
             const int64_t s_slot = K - t;
 
-            ggml_tensor * conv_state_last =
-                ggml_view_3d(ctx0, conv_input,
+            ggml_tensor * conv_state_last;
+            if (s_idx >= conv_states->ne[0]) {
+                const int64_t qkv_idx = s_idx - conv_states->ne[0];
+                conv_state_last = ggml_view_3d(ctx0, qkv_mixed,
+                        conv_kernel_size - 1, conv_channels, n_seqs,
+                        qkv_mixed->nb[1], qkv_mixed->nb[2],
+                        ggml_row_size(qkv_mixed->type, qkv_idx));
+            } else {
+                conv_state_last = ggml_view_3d(ctx0, conv_input,
                         conv_kernel_size - 1, conv_channels, n_seqs,
                         conv_input->nb[1], conv_input->nb[2],
                         ggml_row_size(conv_input->type, s_idx));
+            }
 
             ggml_tensor * conv_state_update =
                 ggml_view_2d(ctx0,
@@ -514,7 +569,7 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
                         conv_states_all->nb[1],
                         (s_slot * mem_size + kv_head) * row_size);
 
-            ggml_build_forward_expand(gf, ggml_cpy(ctx0, conv_state_last, conv_state_update));
+            emit_or_defer(ggml_cpy(ctx0, conv_state_last, conv_state_update));
         }
     }
 
@@ -600,4 +655,54 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
     ggml_build_forward_expand(gf, ggml_cpy(ctx0, src, dst));
 
     return output;
+}
+
+ggml_tensor * llm_build_delta_net_base::build_rs_fast(
+        llm_graph_input_rs * inp,
+        ggml_tensor *        s,
+                int32_t      state_size,
+                int32_t      n_seqs) const {
+    const auto * mctx_cur = inp->mctx;
+
+    // Safe only for a single continuing sequence with no pending rollback snapshot and
+    // no pending zero-init (get_rs_z() < 0 means no cell needs clearing this step) --
+    // checked fresh on every graph build (this function runs once per token/ubatch, not
+    // once per model load), so a fresh sequence's first step or an active rollback
+    // request always falls through to the always-correct build_rs() path below with zero
+    // behavior change. s_copy(0) == get_head() is the exact condition under which the row
+    // build_rs would gather is the sequence's own persistent cache slot, i.e. the gather
+    // is a no-op copy of already-resident data.
+    if (n_seqs == 1 && mctx_cur->get_rs_z() < 0 && mctx_cur->s_copy(0) == (int32_t) mctx_cur->get_head()) {
+        // Mirror build_rs()'s "copy extra states" maintenance step -- required for
+        // correctness whenever this ubatch's n_seqs is smaller than the cache's currently
+        // active span (n_rs), e.g. other sequences sharing the same cache in a
+        // multi-sequence deployment. Degenerates to a real but zero-size op when
+        // n_rs == n_seqs (single-sequence decode), which is exactly why it must never be
+        // skipped unconditionally: skipping it removes the last remaining consumer of the
+        // shared s_copy input tensor once every recurrent-cache read at every GDN layer
+        // takes this fast path simultaneously, and the backend allocator then leaves
+        // s_copy unbuffered.
+        const uint32_t n_rs = mctx_cur->get_n_rs();
+        if (n_rs > (uint32_t) n_seqs) {
+            ggml_tensor * states_extra = ggml_get_rows(ctx0, s, inp->s_copy_extra);
+            ggml_build_forward_expand(gf,
+                    ggml_cpy(ctx0, states_extra,
+                        ggml_view_2d(ctx0, s, state_size, n_rs - n_seqs, s->nb[1],
+                            (size_t) (mctx_cur->get_head() + n_seqs) * s->nb[1])));
+        } else {
+            // n_rs == n_seqs: no real extra-state span exists, but s_copy_extra (a real
+            // [0]-sized view of the shared s_copy tensor) must still be referenced by a
+            // real graph node so the backend allocator keeps s_copy buffered. A 0-sized
+            // GET_ROWS is cheaper and simpler than a 0-sized CPY chain, and correct for
+            // the same reason build_rs()'s own zero-size-op comment already established
+            // for a different node (rs_zero < 0 SCALE skip): a genuinely empty op is fine
+            // to build, but omitting the reference entirely is not.
+            ggml_build_forward_expand(gf, ggml_get_rows(ctx0, s, inp->s_copy_extra));
+        }
+
+        return ggml_view_2d(ctx0, s, state_size, 1, s->nb[1],
+                (size_t) mctx_cur->get_head() * s->nb[1]);
+    }
+
+    return build_rs(inp, s, state_size, n_seqs);
 }
