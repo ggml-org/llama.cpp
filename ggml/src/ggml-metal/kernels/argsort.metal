@@ -3,7 +3,8 @@
 constant bool FC_topk_moe_with_norm [[function_constant(FC_TOPK_MOE + 0)]];
 constant int  FC_topk_moe_n_expert  [[function_constant(FC_TOPK_MOE + 1)]];
 constant int  FC_topk_moe_top_k     [[function_constant(FC_TOPK_MOE + 2)]];
-constant bool FC_topk_moe_sp        [[function_constant(FC_TOPK_MOE + 3)]];
+// expert scoring: 0 = softmax, 1 = sqrt(softplus), 2 = sigmoid
+constant int  FC_topk_moe_gating    [[function_constant(FC_TOPK_MOE + 3)]];
 constant bool FC_topk_moe_pbias     [[function_constant(FC_TOPK_MOE + 4)]];
 
 constant int  FC_moe_reduce_n_expert_used [[function_constant(FC_MOE_REDUCE + 0)]];
@@ -380,11 +381,16 @@ kernel void kernel_topk_moe_f32(
         wt[i / 32] = isnan(v) ? -FLT_MAX : v;
     }
 
-    if (FC_topk_moe_sp) {
+    if (FC_topk_moe_gating == 1) {
         // sqrt(softplus) scores (DeepSeek-V4): the routing weights are the raw scores
         FOR_UNROLL (int i = 0; i < n_per_lane; ++i) {
             const float v = wt[i];
             wt[i] = sqrt(v > 20.0f ? v : log(1.0f + exp(v)));
+        }
+    } else if (FC_topk_moe_gating == 2) {
+        // sigmoid scores: the routing weights are the raw scores
+        FOR_UNROLL (int i = 0; i < n_per_lane; ++i) {
+            wt[i] = 1.0f / (1.0f + exp(-wt[i]));
         }
     } else {
         // softmax over the expert logits

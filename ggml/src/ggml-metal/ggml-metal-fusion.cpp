@@ -345,9 +345,10 @@ static bool ggml_metal_fusion_check_snake(
 
 #define GGML_METAL_TOPK_MOE_MAX_EXPERTS 1024
 
-// SOFT_MAX or UNARY(softplus) + SQRT + ARGSORT + GET_ROWS (plus optional norm/scale)
-// for MoE routing. This is a multi-output elision chain: the fused kernel writes both
-// the selected expert ids and the gathered/normalized routing weights.
+// SOFT_MAX or UNARY(sigmoid) or UNARY(softplus) + SQRT + ARGSORT + GET_ROWS (plus
+// optional norm/scale) for MoE routing. This is a multi-output elision chain: the
+// fused kernel writes both the selected expert ids and the gathered/normalized
+// routing weights.
 static const std::vector<ggml_op> ops_topk_moe = {
     GGML_OP_SOFT_MAX, GGML_OP_RESHAPE, GGML_OP_ARGSORT, GGML_OP_VIEW, GGML_OP_GET_ROWS
 };
@@ -393,6 +394,30 @@ static const std::vector<ggml_op> ops_topk_moe_sp_norm_bias = {
 };
 static const std::vector<ggml_op> ops_topk_moe_sp_norm_scale_bias = {
     GGML_OP_UNARY, GGML_OP_SQRT, GGML_OP_RESHAPE, GGML_OP_ADD, GGML_OP_ARGSORT, GGML_OP_VIEW, GGML_OP_GET_ROWS,
+    GGML_OP_RESHAPE, GGML_OP_SUM_ROWS, GGML_OP_SCALE, GGML_OP_DIV, GGML_OP_RESHAPE, GGML_OP_SCALE
+};
+// sigmoid scoring with an expert selection bias; the unbiased scores are the routing
+// weights (GLM, DeepSeek-V2/V3.2, ...)
+static const std::vector<ggml_op> ops_topk_moe_sig = {
+    GGML_OP_UNARY, GGML_OP_RESHAPE, GGML_OP_ADD, GGML_OP_ARGSORT, GGML_OP_VIEW, GGML_OP_GET_ROWS
+};
+static const std::vector<ggml_op> ops_topk_moe_sig_scale = {
+    GGML_OP_UNARY, GGML_OP_RESHAPE, GGML_OP_ADD, GGML_OP_ARGSORT, GGML_OP_VIEW, GGML_OP_GET_ROWS, GGML_OP_SCALE
+};
+static const std::vector<ggml_op> ops_topk_moe_sig_norm = {
+    GGML_OP_UNARY, GGML_OP_RESHAPE, GGML_OP_ADD, GGML_OP_ARGSORT, GGML_OP_VIEW, GGML_OP_GET_ROWS,
+    GGML_OP_RESHAPE, GGML_OP_SUM_ROWS, GGML_OP_CLAMP, GGML_OP_DIV, GGML_OP_RESHAPE
+};
+static const std::vector<ggml_op> ops_topk_moe_sig_norm_scale = {
+    GGML_OP_UNARY, GGML_OP_RESHAPE, GGML_OP_ADD, GGML_OP_ARGSORT, GGML_OP_VIEW, GGML_OP_GET_ROWS,
+    GGML_OP_RESHAPE, GGML_OP_SUM_ROWS, GGML_OP_CLAMP, GGML_OP_DIV, GGML_OP_RESHAPE, GGML_OP_SCALE
+};
+static const std::vector<ggml_op> ops_topk_moe_sig_norm_bias = {
+    GGML_OP_UNARY, GGML_OP_RESHAPE, GGML_OP_ADD, GGML_OP_ARGSORT, GGML_OP_VIEW, GGML_OP_GET_ROWS,
+    GGML_OP_RESHAPE, GGML_OP_SUM_ROWS, GGML_OP_SCALE, GGML_OP_DIV, GGML_OP_RESHAPE
+};
+static const std::vector<ggml_op> ops_topk_moe_sig_norm_scale_bias = {
+    GGML_OP_UNARY, GGML_OP_RESHAPE, GGML_OP_ADD, GGML_OP_ARGSORT, GGML_OP_VIEW, GGML_OP_GET_ROWS,
     GGML_OP_RESHAPE, GGML_OP_SUM_ROWS, GGML_OP_SCALE, GGML_OP_DIV, GGML_OP_RESHAPE, GGML_OP_SCALE
 };
 
@@ -451,31 +476,38 @@ static bool ggml_metal_fusion_check_topk_moe(
     const ggml_tensor * first = gf->nodes[raw_start];
     const ggml_tensor * out   = gf->nodes[raw_end];
 
-    // the sp chains start at the softplus node and rank biased scores (DeepSeek-V4/V4.1)
-    const bool with_sp = first->op == GGML_OP_UNARY;
+    // the unary chains start at the sigmoid or the softplus node and rank biased scores
+    const bool with_unary = first->op == GGML_OP_UNARY;
+    const bool with_sp    = with_unary && ggml_get_unary_op(first) == GGML_UNARY_OP_SOFTPLUS;
+    const bool with_sig   = with_unary && ggml_get_unary_op(first) == GGML_UNARY_OP_SIGMOID;
 
-    const ggml_tensor * probs;          // softmax output or sqrt(softplus) output
-    const ggml_tensor * scores;         // the node the argsort ranks (adds the bias for sp)
+    if (with_unary && !with_sp && !with_sig) {
+        return false;
+    }
+
+    const ggml_tensor * probs;          // the scoring output
+    const ggml_tensor * scores;         // the node the argsort ranks (adds the bias for the unary chains)
     const ggml_tensor * probs_reshaped;
     const ggml_tensor * argsort;
     const ggml_tensor * ids;
     const ggml_tensor * get_rows;
-    const ggml_tensor * logits;
+    const ggml_tensor * logits = first->src[0];
     int ids_off;
 
-    if (with_sp) {
-        const ggml_tensor * softplus = gf->nodes[raw_start + 0];
-        probs          = gf->nodes[raw_start + 1];
-        probs_reshaped = gf->nodes[raw_start + 2];
-        scores         = gf->nodes[raw_start + 3];
-        argsort        = gf->nodes[raw_start + 4];
-        ids            = gf->nodes[raw_start + 5];
-        get_rows       = gf->nodes[raw_start + 6];
-        logits         = softplus->src[0];
-        ids_off        = 5;
+    if (with_unary) {
+        // the softplus chains add a SQRT node, the sigmoid chains start at the sigmoid node
+        const int base = with_sp ? 1 : 0;
 
-        if (ggml_get_unary_op(softplus) != GGML_UNARY_OP_SOFTPLUS || probs->op != GGML_OP_SQRT ||
-            probs->src[0] != softplus || scores->op != GGML_OP_ADD || scores->src[0] != probs) {
+        probs          = gf->nodes[raw_start + base + 0];
+        probs_reshaped = gf->nodes[raw_start + base + 1];
+        scores         = gf->nodes[raw_start + base + 2];
+        argsort        = gf->nodes[raw_start + base + 3];
+        ids            = gf->nodes[raw_start + base + 4];
+        get_rows       = gf->nodes[raw_start + base + 5];
+        ids_off        = base + 4;
+
+        if (scores->op != GGML_OP_ADD || scores->src[0] != probs ||
+            (with_sp && (probs->op != GGML_OP_SQRT || probs->src[0] != first))) {
             return false;
         }
 
@@ -492,7 +524,6 @@ static bool ggml_metal_fusion_check_topk_moe(
         argsort        = gf->nodes[raw_start + 2];
         ids            = gf->nodes[raw_start + 3];
         get_rows       = gf->nodes[raw_start + 4];
-        logits         = first->src[0];
         ids_off        = 3;
 
         // the fused kernel implements plain softmax only
@@ -539,7 +570,7 @@ static bool ggml_metal_fusion_check_topk_moe(
     }
 
     if (with_norm) {
-        const int norm_off = with_sp ? 7 : 5;
+        const int norm_off = with_unary ? 6 + (with_sp ? 1 : 0) : 5;
 
         const ggml_tensor * weights_reshaped = gf->nodes[raw_start + norm_off + 0];
         const ggml_tensor * sum_rows         = gf->nodes[raw_start + norm_off + 1];
@@ -868,6 +899,12 @@ static const std::vector<ggml_metal_fusion> ggml_metal_fusions = {
     { GGML_METAL_FUSION_TOPK_MOE,       ops_topk_moe_sp_norm_scale, {3},    true,  ggml_metal_fusion_check_topk_moe },
     { GGML_METAL_FUSION_TOPK_MOE,       ops_topk_moe_sp_norm_bias,  {3},    true,  ggml_metal_fusion_check_topk_moe },
     { GGML_METAL_FUSION_TOPK_MOE,       ops_topk_moe_sp_norm_scale_bias, {3}, true, ggml_metal_fusion_check_topk_moe },
+    { GGML_METAL_FUSION_TOPK_MOE,       ops_topk_moe_sig,           {2},    true,  ggml_metal_fusion_check_topk_moe },
+    { GGML_METAL_FUSION_TOPK_MOE,       ops_topk_moe_sig_scale,     {2},    true,  ggml_metal_fusion_check_topk_moe },
+    { GGML_METAL_FUSION_TOPK_MOE,       ops_topk_moe_sig_norm,      {2},    true,  ggml_metal_fusion_check_topk_moe },
+    { GGML_METAL_FUSION_TOPK_MOE,       ops_topk_moe_sig_norm_scale, {2},   true,  ggml_metal_fusion_check_topk_moe },
+    { GGML_METAL_FUSION_TOPK_MOE,       ops_topk_moe_sig_norm_bias, {2},    true,  ggml_metal_fusion_check_topk_moe },
+    { GGML_METAL_FUSION_TOPK_MOE,       ops_topk_moe_sig_norm_scale_bias, {2}, true, ggml_metal_fusion_check_topk_moe },
     { GGML_METAL_FUSION_MOE_REDUCE,     ops_moe_reduce_2,           {},     true,  ggml_metal_fusion_check_moe_reduce },
     { GGML_METAL_FUSION_MOE_REDUCE,     ops_moe_reduce_3,           {},     true,  ggml_metal_fusion_check_moe_reduce },
     { GGML_METAL_FUSION_MOE_REDUCE,     ops_moe_reduce_4,           {},     true,  ggml_metal_fusion_check_moe_reduce },

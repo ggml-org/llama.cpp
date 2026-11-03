@@ -821,8 +821,9 @@ int ggml_metal_op_acc(ggml_metal_op_t ctx, int idx) {
 int ggml_metal_op_unary(ggml_metal_op_t ctx, int idx) {
     ggml_tensor * op = ctx->node(idx);
 
-    // the sqrt(softplus) TOPK_MOE fusion is anchored at the softplus node (DeepSeek-V4/V4.1)
-    if (op->op == GGML_OP_UNARY && ggml_get_unary_op(op) == GGML_UNARY_OP_SOFTPLUS && ctx->use_fusion()) {
+    // the sigmoid and sqrt(softplus) TOPK_MOE fusions anchor at the gating unary node
+    if (op->op == GGML_OP_UNARY && ctx->use_fusion() &&
+        (ggml_get_unary_op(op) == GGML_UNARY_OP_SOFTPLUS || ggml_get_unary_op(op) == GGML_UNARY_OP_SIGMOID)) {
         int n = 1;
         const ggml_metal_fusion * fusion = ctx->can_fuse(idx, GGML_METAL_FUSION_FULL, &n);
         if (fusion && ggml_metal_fusion_get_id(fusion) == GGML_METAL_FUSION_TOPK_MOE) {
@@ -6035,8 +6036,9 @@ int ggml_metal_op_topk_moe(ggml_metal_op_t ctx, int idx) {
     ggml_tensor * first  = ctx->node(idx);
     ggml_tensor * logits = first->src[0];
 
-    // the sp chains start at the softplus node and rank biased scores (DeepSeek-V4/V4.1)
-    const bool with_sp = first->op == GGML_OP_UNARY;
+    // the unary chains score with sigmoid or sqrt(softplus) and rank biased scores
+    const bool with_unary = first->op == GGML_OP_UNARY;
+    const int  gating     = !with_unary ? 0 : ggml_get_unary_op(first) == GGML_UNARY_OP_SOFTPLUS ? 1 : 2;
 
     ggml_tensor * get_rows  = nullptr;
     ggml_tensor * sum_rows  = nullptr;
@@ -6086,7 +6088,7 @@ int ggml_metal_op_topk_moe(ggml_metal_op_t ctx, int idx) {
     };
 
     auto pipeline = ggml_metal_library_get_pipeline_topk_moe(lib, (int32_t) n_expert, (int32_t) n_expert_used,
-            with_norm, with_sp, prob_bias != nullptr);
+            with_norm, gating, prob_bias != nullptr);
 
     ggml_metal_encoder_set_pipeline(enc, pipeline);
     ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
@@ -6100,7 +6102,8 @@ int ggml_metal_op_topk_moe(ggml_metal_op_t ctx, int idx) {
     ctx->count_fusions(fusion);
 
     if (ggml_metal_fusion_info_debug(ctx->finfo) > 1) {
-        GGML_LOG_DEBUG("%s: fuse: %s + ARGSORT + GET_ROWS\n", __func__, with_sp ? "SOFTPLUS + SQRT" : "SOFT_MAX");
+        GGML_LOG_DEBUG("%s: fuse: %s + ARGSORT + GET_ROWS\n", __func__,
+                gating == 1 ? "SOFTPLUS + SQRT" : gating == 2 ? "SIGMOID" : "SOFT_MAX");
     }
 
     return n_fuse;
