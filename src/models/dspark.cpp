@@ -177,7 +177,7 @@ void llama_model_dflash::load_tensors_layers_mistral_large4() {
 }
 
 // DSpark (DFlash + Markov & Confidence head): Markov bias on the draft logits, chained per block position
-void llama_model_dflash::build_dspark_markov_head(llm_graph_context & g, const llama_model & model, ggml_tensor * tokens, ggml_tensor * hidden) {
+static void build_dspark_markov_head(llm_graph_context & g, const llama_model & model, ggml_tensor * tokens, ggml_tensor * hidden = nullptr) {
     ggml_context * ctx0 = g.ctx0;
     auto         & res  = g.res;
 
@@ -320,7 +320,23 @@ void llama_model_dflash::build_dspark_markov_head(llm_graph_context & g, const l
     ggml_build_forward_expand(g.gf, out);
 }
 
-// DSV4 DSpark decoder, dual-mode by batch type (see the DFlash decoder above):
+llama_model_dflash::graph_dspark::graph_dspark(const llm_graph_params & params) : graph_base(params) {
+    ASSERT_EMBD_OR_TOKEN(ubatch);
+    if (ubatch.embd || ubatch.embd_row) {
+        build_inject();
+        return;
+    }
+
+    ggml_tensor * inp_tokens = build_inp_tokens();
+    ggml_tensor * cur        = build_layers(inp_tokens);
+
+    build_logits(cur);
+
+    // bias the draft logits with the Markov head
+    build_dspark_markov_head(*this, model, inp_tokens);
+}
+
+// DSV4 DSpark decoder, dual-mode by batch type (see graph_base):
 //   * embd batch  -> project main_x through each stage's wkv and inject K into the ring cache
 //   * token batch -> noise block through 3 full DSV4 stages (hc + MLA + MoE), markov + confidence heads
 llama_model_dflash::graph_dsv4::graph_dsv4(const llm_graph_params & params) :

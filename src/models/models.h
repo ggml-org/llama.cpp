@@ -1557,6 +1557,42 @@ struct llama_model_dflash : public llama_model_base {
         ggml_tensor * build_inp_embd_enc() const;
     };
 
+    // inputs and stages shared by the decoder graphs of the heads
+    struct graph_base : public llm_graph_context {
+        int64_t n_embd_head;
+        bool    use_iswa;
+        int     sections[4];
+
+        ggml_tensor * inp_pos;
+
+        llm_graph_input_attn_kv      * inp_attn      = nullptr;
+        llm_graph_input_attn_kv_iswa * inp_attn_iswa = nullptr;
+
+        graph_base(const llm_graph_params & params);
+
+        ggml_tensor * build_inject();
+        ggml_tensor * build_inp_tokens();
+        ggml_tensor * build_layers(ggml_tensor * inp_tokens);
+        ggml_tensor * build_logits(ggml_tensor * cur);
+        ggml_tensor * build_rope(ggml_tensor * cur, ggml_tensor * pos);
+    };
+
+    struct graph_dflash : public graph_base {
+        graph_dflash(const llm_graph_params & params);
+    };
+
+    struct graph_dflash2 : public graph_base {
+        graph_dflash2(const llm_graph_params & params);
+    };
+
+    struct graph_dspark : public graph_base {
+        graph_dspark(const llm_graph_params & params);
+    };
+
+    struct graph_lilicorr : public graph_base {
+        graph_lilicorr(const llm_graph_params & params);
+    };
+
     struct graph_dsv4 : public llama_model_deepseek4::graph {
         graph_dsv4(const llm_graph_params & params);
     };
@@ -1575,7 +1611,9 @@ struct llama_model_dflash : public llama_model_base {
     static ggml_tensor * build_inject_inp(llm_graph_context & g, const llama_model & model);
     static ggml_tensor * get_tok_embd(const llm_graph_context & g, const llama_model & model);
     static std::pair<ggml_tensor *, ggml_tensor *> get_lm_head(const llm_graph_context & g, const llama_model & model);
-    static void          build_dspark_markov_head(llm_graph_context & g, const llama_model & model, ggml_tensor * tokens, ggml_tensor * hidden = nullptr);
+
+    // DFlash2 local conv, run by the base layers of DFlash2 and LiliCorr drafts
+    static ggml_tensor * build_dflash2_conv(llm_graph_context & g, ggml_tensor * hidden, ggml_tensor * dynamic, ggml_tensor * base, int side);
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
