@@ -8879,6 +8879,11 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
     GGML_ASSERT(nb1 <= nb2);
     GGML_ASSERT(nb2 <= nb3);
 
+    // mask row width must cover the K columns this chunk reads
+    if (mask) {
+        GGML_ASSERT(ic_end <= mask->ne[0]);
+    }
+
     // broadcast factors
     const int64_t rk2 = neq2/nek2;
     const int64_t rk3 = neq3/nek3;
