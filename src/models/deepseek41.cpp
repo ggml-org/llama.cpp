@@ -642,7 +642,7 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
         ggml_build_forward_expand(gf, inp_attn->mctx->cpy_k(ctx0, kv, inp_attn->get_k_idxs(), il));
 
         ggml_tensor * raw_k    = inp_attn->mctx->get_k(ctx0, il);
-        ggml_tensor * raw_mask = inp_attn->self_attn_mask.cnv;
+        ggml_tensor * raw_mask = inp_attn->self_attn_mask.raw;
 
         const int32_t topk_src = hparams.dsv41_topk_src[il];
         const int64_t k_sel    = top_k->ne[0];

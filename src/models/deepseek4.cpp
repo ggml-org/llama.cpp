@@ -759,7 +759,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_csa_lid_attention(
     ggml_tensor * k_all = ggml_concat(ctx0, raw_k, csa_k, 2);
     cb(k_all, "csa_k_all", il);
 
-    ggml_tensor * raw_mask = inp_attn->self_attn_mask.cnv;
+    ggml_tensor * raw_mask = inp_attn->self_attn_mask.raw;
     ggml_tensor * csa_mask = build_top_k_mask(inp_csa.kq_mask, top_k, "csa_top_k_mask", il);
 
     ggml_tensor * kq_mask = ggml_concat(ctx0, raw_mask, csa_mask, 0);
@@ -815,7 +815,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_hca_attention(
     ggml_tensor * k_all = ggml_concat(ctx0, raw_k, hca_k, 2);
     cb(k_all, "hca_k_all", il);
 
-    ggml_tensor * raw_mask = inp_attn->self_attn_mask.cnv;
+    ggml_tensor * raw_mask = inp_attn->self_attn_mask.raw;
     ggml_tensor * hca_mask = inp_hca.kq_mask;
 
     ggml_tensor * kq_mask = ggml_concat(ctx0, raw_mask, hca_mask, 0);
@@ -853,7 +853,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_raw_attention(
 
     ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, kv, inp_attn->get_k_idxs(), il));
 
-    ggml_tensor * kq_mask = inp_attn->self_attn_mask.cnv;
+    ggml_tensor * kq_mask = inp_attn->self_attn_mask.raw;
 
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
 

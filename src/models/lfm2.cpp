@@ -332,7 +332,6 @@ llama_model_lfm2::graph_decision::graph_decision(const llama_model & model, cons
         auto inp = std::make_unique<llm_graph_input_attn_media>(hparams, cparams, is_head);
         inp->self_attn_mask.raw = ggml_new_tensor_4d(ctx0, type_mask, n_tokens, n_tokens, 1, 1);
         ggml_set_input(inp->self_attn_mask.raw);
-        inp->self_attn_mask.cnv = inp->self_attn_mask.raw;
         inp_attn[is_head] = (llm_graph_input_attn_no_cache *) res->add_input(std::move(inp));
     }
 

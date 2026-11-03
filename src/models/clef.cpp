@@ -352,8 +352,6 @@ llm_graph_input_attn_no_cache * llama_model_clef::graph::build_attn_inp_causal()
     ggml_set_input(inp->self_attn_mask.raw);
     cb(inp->self_attn_mask.raw, "self_kq_mask", -1);
 
-    inp->self_attn_mask.cnv = inp->self_attn_mask.raw;
-
     return (llm_graph_input_attn_no_cache *) res->add_input(std::move(inp));
 }
 
