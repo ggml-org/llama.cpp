@@ -1892,7 +1892,7 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
             svbool_t pg16_8 = svwhilelt_b16(0, 8);
             svbool_t pg8_32 = svptrue_b8();
             
-            // 1x8 tile corresponding to one q8_K row = 2 x 4 for NEON
+            // 1x8 tile corresponding to one q8_K row
             svfloat32_t  acc_f32_0;
             const block_q8_K * GGML_RESTRICT q8_ptr = (const block_q8_K *) vy;
 
@@ -1928,33 +1928,36 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                             const int8_t * q8_base_l = q8_ptr[b].qs + half * 128 + sb * 16;
                             const int8_t * q8_base_h = q8_base_l + 64;
 
-                            // Load and duplicate q8 values (each register covers two interleaved columns of q6)  
-                            svint8_t q8_l_0 = svreinterpret_s8_s64(svdup_n_s64(*(const int64_t *)(q8_base_l + 0 * 8)));
-                            svint8_t q8_h_0 = svreinterpret_s8_s64(svdup_n_s64(*(const int64_t *)(q8_base_h + 0 * 8)));
-                            svint8_t q8_l_1 = svreinterpret_s8_s64(svdup_n_s64(*(const int64_t *)(q8_base_l + 1 * 8)));
-                            svint8_t q8_h_1 = svreinterpret_s8_s64(svdup_n_s64(*(const int64_t *)(q8_base_h + 1 * 8)));
+                            // Load and duplicate q8 values (each register covers four interleaved columns of q6)
+                            int64_t q8_bits_l_0;
+                            memcpy(&q8_bits_l_0, q8_base_l + 0 * 8, sizeof(q8_bits_l_0));
+                            const svint8_t q8_l_0 = svreinterpret_s8_s64(svdup_n_s64(q8_bits_l_0));
+                            int64_t q8_bits_h_0;
+                            memcpy(&q8_bits_h_0, q8_base_h + 0 * 8, sizeof(q8_bits_h_0));
+                            const svint8_t q8_h_0 = svreinterpret_s8_s64(svdup_n_s64(q8_bits_h_0));
+                            int64_t q8_bits_l_1;
+                            memcpy(&q8_bits_l_1, q8_base_l + 1 * 8, sizeof(q8_bits_l_1));
+                            const svint8_t q8_l_1 = svreinterpret_s8_s64(svdup_n_s64(q8_bits_l_1));
+                            int64_t q8_bits_h_1;
+                            memcpy(&q8_bits_h_1, q8_base_h + 1 * 8, sizeof(q8_bits_h_1));
+                            const svint8_t q8_h_1 = svreinterpret_s8_s64(svdup_n_s64(q8_bits_h_1));
 
                             const int ql_off_base = sb * QK_K / 2;
                             const int qh_off_base = ql_off_base & 255;  // wraps after 256 bytes
 
-                            // Load 4 vectors at once (64 bytes each for ql_0, ql_1, qh_0, qh_1)
                             const uint8_t *ptr = ql_base + ql_off_base;
-                            
                             svuint8_t q6_ql_0_01 = svld1_u8(pg8_32, ptr);
                             svuint8_t q6_ql_0_23 = svld1_u8(pg8_32, ptr + 32);
 
                             ptr = ql_base + ql_off_base + 64;
-
                             svuint8_t q6_ql_1_01 = svld1_u8(pg8_32, ptr);
                             svuint8_t q6_ql_1_23 = svld1_u8(pg8_32, ptr + 32);
                             
                             ptr = qh_base + qh_off_base;
-
                             svuint8_t q6_qh_0_01 = svld1_u8(pg8_32, ptr);
                             svuint8_t q6_qh_0_23 = svld1_u8(pg8_32, ptr + 32);
 
                             ptr = qh_base + qh_off_base + 64;
-                           
                             svuint8_t q6_qh_1_01 = svld1_u8(pg8_32, ptr);
                             svuint8_t q6_qh_1_23 = svld1_u8(pg8_32, ptr + 32);
                             
@@ -1988,7 +1991,6 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                             sb_acc_h = svdot_s32(sb_acc_h, q6_h0, q8_h_0);
                             sb_acc_h = svdot_s32(sb_acc_h, q6_h1, q8_h_1);
 
-                            // Pairwise add to get per-column sums: [col0, col1]
                             svint32_t sum_l_01 = pairwise_add_8xi32_sve1(sb_acc_l);
                             svint32_t sum_h_01 = pairwise_add_8xi32_sve1(sb_acc_h);
 
