@@ -1613,6 +1613,8 @@ static void ggml_compute_forward_argmax_f32(
     const int64_t ne00 = src0->ne[0];
     const int64_t ne01 = src0->ne[1];
 
+    GGML_ASSERT(ne01 <= dst->ne[0]);
+
     const size_t nb01 = src0->nb[1];
     const size_t nb0 = dst->nb[0];
 
