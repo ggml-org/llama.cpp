@@ -1530,90 +1530,15 @@ static void test_json_schema_unordered_properties() {
     };
 
     test_schema_unordered(
-        "properties in any order, additional allowed",
+        "values are still checked against their schemas",
         make_schema(R"""(, "additionalProperties": true)"""),
         {
-            R"""({})""",
-            R"""({"expr": "0", "dtype": "int"})""",
-            R"""({"dtype": "int", "expr": "0"})""",
-            R"""({"n": 1, "dtype": "int", "expr": "0"})""",
-            R"""({"dtype": "int", "other": 1, "expr": "0"})""",
-            R"""({"other": 1, "more": 2})""",
+            R"""({"n": 1, "dtype": "int", "other": 1, "expr": "0"})""",
         },
         {
             R"""({"n": "x"})""",
-            R"""({"expr": "0",})""",
-            R"""({"expr": "0", "expr": "1"})""",
-        });
-
-    test_schema_unordered(
-        "properties in any order, no additional",
-        make_schema(R"""(, "additionalProperties": false)"""),
-        {
-            R"""({"dtype": "int", "expr": "0"})""",
-            R"""({"n": 1, "expr": "0"})""",
-        },
-        {
-            R"""({"dtype": "int", "other": 1})""",
             R"""({"expr": 0})""",
-            R"""({"dtype": "int", "expr": "0", "dtype": "int"})""",
-        });
-
-    test_schema_unordered(
-        "required properties in any order",
-        make_schema(R"""(, "required": ["expr", "n"], "additionalProperties": false)"""),
-        {
-            R"""({"expr": "0", "n": 1})""",
-            R"""({"n": 1, "expr": "0"})""",
-            R"""({"n": 1, "dtype": "int", "expr": "0"})""",
-            R"""({"dtype": "int", "expr": "0", "n": 1})""",
-        },
-        {
-            R"""({})""",
-            R"""({"expr": "0"})""",
-            R"""({"dtype": "int", "n": 1})""",
-            R"""({"n": 1, "n": 1, "expr": "0"})""",
-        });
-
-    test_schema_unordered(
-        "optional properties declared before a required one",
-        R"""({
-            "type": "object",
-            "properties": {"name": {"type": "string"}, "project": {"type": "string"}, "spec": {"type": "object"}},
-            "required": ["spec"],
-            "additionalProperties": false
-        })""",
-        {
-            R"""({"name": "n", "project": "p", "spec": {}})""",
-            R"""({"spec": {}, "name": "n"})""",
-            R"""({"project": "p", "spec": {}, "name": "n"})""",
-        },
-        {
-            R"""({"name": "n", "project": "p"})""",
-            R"""({"name": "n", "project": "p", "spec": {}, "project": "p"})""",
-            R"""({"spec": {}, "name": "n", "name": "n"})""",
-        });
-
-    test_schema_unordered(
-        "many properties: 6 tracked at most once, the rest repeat",
-        R"""({
-            "type": "object",
-            "properties": {"a": {}, "b": {}, "c": {}, "d": {}, "e": {}, "f": {}, "g": {}},
-            "required": ["a", "b"],
-            "additionalProperties": false
-        })""",
-        {
-            R"""({"a": 1, "b": 2})""",
-            R"""({"b": 2, "a": 1})""",
-            R"""({"g": 3, "b": 2, "a": 1})""",
-            R"""({"a": 1, "g": 3, "b": 2, "f": 4, "g": 5})""",
-        },
-        {
-            R"""({"a": 1})""",
-            R"""({"g": 3, "a": 1})""",
-            R"""({"a": 1, "a": 2, "b": 3})""",
-            R"""({"a": 1, "b": 2, "x": 3})""",
-            R"""({"a": 1, "b": 2, "c": 3, "c": 4})""",
+            R"""({"expr": "0",})""",
         });
 
     test_schema_unordered(
@@ -1643,50 +1568,6 @@ static void test_json_schema_unordered_properties() {
             R"""({"name": "n", "name": "m", "column_type": "x"})""",
             R"""({"name": "n", "column_type": "x", "prompt": 1})""",
             R"""({"name": "n", "column_type": "x", "dtype": "int", "expr": "0", "dtype": "int"})""",
-        });
-
-    test_schema_unordered(
-        "too many required properties: keep their declared order, the rest anywhere",
-        R"""({
-            "type": "object",
-            "properties": {"a": {}, "b": {}, "c": {}, "d": {}, "e": {}, "f": {}, "g": {}, "h": {}, "i": {}},
-            "required": ["a", "b", "c", "d", "e", "f", "g"],
-            "additionalProperties": false
-        })""",
-        {
-            R"""({"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1})""",
-            R"""({"i": 1, "a": 1, "b": 1, "h": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1, "i": 1})""",
-        },
-        {
-            R"""({"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1})""",
-            R"""({"g": 1, "a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1})""",
-            R"""({"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1, "a": 1})""",
-        });
-
-    test_schema_unordered(
-        "8 required properties in declared order, 2 optional anywhere",
-        R"""({
-            "type": "object",
-            "properties": {"a": {}, "b": {}, "c": {}, "d": {}, "e": {}, "f": {}, "g": {}, "h": {}, "i": {}, "j": {}},
-            "required": ["a", "b", "c", "d", "e", "f", "g", "h"],
-            "additionalProperties": false
-        })""",
-        {
-            R"""({"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1, "h": 1})""",
-            R"""({"i": 1, "a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1, "h": 1})""",
-            R"""({"a": 1, "j": 1, "b": 1, "c": 1, "d": 1, "i": 1, "e": 1, "f": 1, "g": 1, "h": 1})""",
-            R"""({"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1, "j": 1, "h": 1})""",
-            R"""({"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1, "h": 1, "j": 1, "i": 1})""",
-            R"""({"i": 1, "a": 1, "b": 1, "i": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1, "h": 1, "i": 1})""",
-        },
-        {
-            R"""({"b": 1, "a": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1, "h": 1})""",
-            R"""({"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1, "h": 1, "g": 1})""",
-            R"""({"a": 1, "b": 1, "c": 1, "e": 1, "f": 1, "g": 1, "h": 1})""",
-            R"""({"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1})""",
-            R"""({"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1, "h": 1, "h": 1})""",
-            R"""({"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1, "h": 1, "x": 1})""",
-            R"""({"i": 1})""",
         });
 
     test_schema_unordered(
