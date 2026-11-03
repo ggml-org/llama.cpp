@@ -137,6 +137,10 @@ bool ggml_openvino_npu_hfa_prefill_enabled();
 bool ggml_openvino_npu_decode_unfold_enabled();
 bool ggml_openvino_npu_parallel_compile_enabled();
 
+// Static NPU decode attends a KV window rounded up to base*2^k (clamped to ctx) instead of the
+// whole ctx; one decode model per window. Returns the base size, 0 = off.
+int ggml_openvino_npu_decode_bucket();
+
 // Check if running on a GPU (GPU, GPU.0, GPU.1, ...)
 bool ggml_openvino_is_gpu();
 
