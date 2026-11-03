@@ -261,7 +261,7 @@
 #define TN_A_GEN_CODE_MASK_EMBD "a.gen.code.mask_embd"
 #define TN_ATTN_GATE            "%s.blk.%d.attn_gate.%s"
 
-// drama3 codebook tower, the blocks use the generic layer names with prefix "a.gen.code"
+// drama3 tower, the rest of the block uses the generic names with prefix "a.gen.code"
 #define TN_A_GEN_CODE_ENORM        "a.gen.code.blk.%d.enorm.%s"
 #define TN_A_GEN_CODE_HNORM        "a.gen.code.blk.%d.hnorm.%s"
 #define TN_A_GEN_CODE_EH_PROJ      "a.gen.code.blk.%d.eh_proj.%s"

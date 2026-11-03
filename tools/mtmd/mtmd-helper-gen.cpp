@@ -2077,9 +2077,8 @@ private:
     bool   wav_header_sent = false;
 };
 
-// Drama 3: the backbone samples each frame's main token (end of speech or a semantic code), the codebook tower
-// samples the other codes and gives the next backbone input, the Fish DAC decodes the frames to 44.1 kHz PCM
-// the tower attends over the whole sequence, so it also runs over every prompt row
+// Drama 3: backbone samples the main token of each frame, codebook tower samples the other codes, Fish DAC makes the PCM
+// the tower attends over the whole sequence, so it also runs on every prompt row
 class drama3_gen_audio_pipeline : public mtmd_gen_audio_pipeline {
 public:
     using mtmd_gen_audio_pipeline::mtmd_gen_audio_pipeline;
@@ -2117,7 +2116,7 @@ public:
             return 1;
         }
 
-        // reference-bracket-v1 prompt without references, each segment is tokenized on its own as in the reference
+        // reference-bracket-v1 prompt without references, tokenize each segment alone as the reference does
         std::string text(inp->prompt, inp->prompt_len);
         if (text.rfind("<|speaker:", 0) != 0) {
             text = "<|speaker:0|> " + text;
@@ -2148,14 +2147,14 @@ public:
         return init_gen_state(inp->seed) ? 0 : 1;
     }
 
-    // every prompt row goes through the tower to fill its KV, teacher-forced with the next row (never speech here)
+    // run the tower on every prompt row to fill its KV
     int32_t step_prompt(int32_t n_batch) override {
         GGML_ASSERT(n_batch > 0);
         const int n_prompt = (int) prompt_tokens.size();
         if (prompt_pos >= n_prompt) {
             return 0;
         }
-        // all rows output their hidden state, keep the batches small since each also outputs logits
+        // small batches: every row also outputs logits
         const int n = std::min({ n_batch, n_prompt - prompt_pos, 64 });
         llama_batch batch = llama_batch_init(n, 0, 1);
         for (int i = 0; i < n; i++) {
@@ -2175,7 +2174,7 @@ public:
         for (int i = 0; i < n; i++) {
             const float * h = llama_get_embeddings_ith(lctx, i);
             if (prompt_pos + i == n_prompt - 1) {
-                h_state_buf.assign(h, h + n_embd); // the first frame is sampled from the last prompt row
+                h_state_buf.assign(h, h + n_embd); // first frame comes from the last prompt row
                 break;
             }
             if (!run_tower(-1, h)) {
@@ -2187,7 +2186,7 @@ public:
         return n_prompt - prompt_pos;
     }
 
-    // the main token is sampled here from the backbone logits, the caller's token is not used
+    // sample the main token here, ignore the token of the caller
     int32_t step_gen(llama_token sampled, const float * h_state_in, const float ** h_state_out, bool * out_stop) override {
         GGML_UNUSED(sampled);
         GGML_UNUSED(h_state_in);
@@ -2210,7 +2209,7 @@ public:
         }
         codes_buf.insert(codes_buf.end(), frame.begin(), frame.end());
 
-        // the backbone uses the interleaved mrope, all sections are equal for a text/speech stream
+        // text/speech stream: all mrope sections use the same position
         const bool mrope = llama_model_rope_type(model) == LLAMA_ROPE_TYPE_MROPE ||
                            llama_model_rope_type(model) == LLAMA_ROPE_TYPE_IMROPE;
         decode_embd_batch batch(next_embd, 1, mrope ? 4 : 1, n_embd);
@@ -2260,7 +2259,7 @@ public:
             return 0;
         }
 
-        // streaming: only the audio produced since the previous call
+        // streaming: only the audio since the previous call
         const size_t n_new = audio_pcm.size() - pcm_sent;
         if (out_n_samples) {
             *out_n_samples = (int64_t) n_new;
@@ -2288,14 +2287,13 @@ public:
     }
 
 private:
-    // repetition-aware sampling of the reference: a semantic draw that repeats one of the last
-    // ras_window main tokens is replaced by a second draw at fixed settings
+    // repetition-aware sampling: if a semantic draw repeats one of the last ras_window main tokens, draw again with fixed settings
     static constexpr size_t ras_window = 16;
     static constexpr size_t n_cb       = 10;
-    // frames per codec call when streaming, 0.33 s
+    // frames per codec call when streaming (0.33 s)
     static constexpr size_t stream_frames = 7;
 
-    // top-p keeps the token that crosses it, as in the reference
+    // top-p keeps the token that crosses the threshold, as the reference does
     llama_token draw(const std::vector<float> & cand_logits, float temp, int32_t top_k, float top_p) {
         std::vector<std::pair<float, int>> cand(cand_logits.size());
         for (size_t i = 0; i < cand.size(); i++) {
@@ -2335,7 +2333,7 @@ private:
         return cand[n_keep - 1].second;
     }
 
-    // candidates: end of speech, then semantic codes 1.. (code 0 is not speech, the reference never samples it)
+    // candidates: eos, then semantic codes 1.. (the reference never samples code 0)
     llama_token sample_main(const float * logits) {
         std::vector<float> cand(n_cb_vocab);
         cand[0] = logits[eos];
@@ -2350,8 +2348,8 @@ private:
         return first;
     }
 
-    // one tower row: code0 < 0 for a prompt row, else the main code of the next frame
-    // returns the next backbone input, and the next frame's codes in frame
+    // code0 < 0 for a prompt row, else the main code of the next frame
+    // returns the next backbone input, the codes of the next frame go to frame
     const float * run_tower(int32_t code0, const float * h) {
         mtmd_gen_inp inp = mtmd_gen_inp_default(mctx);
         inp.type    = MTMD_GEN_PROCESS_TYPE_GEN_CODE;
@@ -2370,7 +2368,7 @@ private:
         return out.embd;
     }
 
-    // the codec keeps its state across calls, so the frames can be decoded in pieces
+    // the codec is stateful, so frames can be decoded in pieces
     bool decode_wav() {
         const size_t n_frames = codes_buf.size() / n_cb;
         while (n_decoded < n_frames) {
@@ -2390,7 +2388,7 @@ private:
         return true;
     }
 
-    static constexpr int n_cb_vocab = 4096; // semantic band, checked by the converter
+    static constexpr int n_cb_vocab = 4096; // <|semantic:0..4095|>
 
     llama_token sem_begin = LLAMA_TOKEN_NULL;
     llama_token eos       = LLAMA_TOKEN_NULL;
@@ -2401,9 +2399,9 @@ private:
     int prompt_pos = 0;
 
     std::mt19937 rng;
-    std::vector<int32_t>     frame;     // codes of the last frame, the input of the next tower row
-    std::vector<llama_token> hist;      // last main tokens, for the repetition-aware draw
-    std::vector<int32_t>     codes_buf; // frame-major codes of every frame
+    std::vector<int32_t>     frame;     // codes of the last frame, input of the next tower row
+    std::vector<llama_token> hist;      // last main tokens, for repetition-aware sampling
+    std::vector<int32_t>     codes_buf; // frame-major
     size_t n_decoded = 0;               // frames already through the codec
 
     std::vector<float>   audio_pcm;

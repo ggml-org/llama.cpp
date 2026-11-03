@@ -3,7 +3,7 @@
 #include <cmath>
 #include <string>
 
-// tower: partial interleaved RoPE over the first 64 channels of each head
+// tower RoPE: interleaved, first 64 dims of each head
 static constexpr int   DRAMA3_N_ROT      = 64;
 static constexpr float DRAMA3_ROPE_THETA = 1e7f;
 
@@ -51,7 +51,7 @@ ggml_tensor * clip_graph_drama3_gen::tower_layer(ggml_tensor * x, int il, ggml_t
     q = ggml_rope_ext(ctx0, q, inp_pos, nullptr, DRAMA3_N_ROT, GGML_ROPE_TYPE_NORMAL, 0, DRAMA3_ROPE_THETA, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
     k = ggml_rope_ext(ctx0, k, inp_pos, nullptr, DRAMA3_N_ROT, GGML_ROPE_TYPE_NORMAL, 0, DRAMA3_ROPE_THETA, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
 
-    // this row's K/V goes into the slot, attention reads the cached rows plus this one
+    // write K/V of this row to the slot, attention uses the cached rows + this row
     ggml_tensor * k_new = ggml_reshape_2d(ctx0, k, n_kv, 1);
     ggml_build_forward_expand(gf, ggml_cpy(ctx0, k_new, ggml_view_2d(ctx0, k_slot, n_kv, 1, k_slot->nb[1], (size_t) pos * k_slot->nb[1])));
     ggml_build_forward_expand(gf, ggml_cpy(ctx0, v,     ggml_view_2d(ctx0, v_slot, n_kv, 1, v_slot->nb[1], (size_t) pos * v_slot->nb[1])));
@@ -79,8 +79,7 @@ ggml_tensor * clip_graph_drama3_gen::tower_layer(ggml_tensor * x, int il, ggml_t
     return cur;
 }
 
-// one row: the backbone hidden state and the next frame's main code -> the other codes of that frame,
-// and the backbone input of the next row
+// one row: backbone hidden + next main code -> other codes of that frame + next backbone input
 ggml_cgraph * clip_graph_drama3_gen::build_tower() {
     const int     n_layer   = (int) model.layers.size();
     const int     n_heads   = (int) model.gen_code_head_w->ne[2]; // one per residual codebook
@@ -97,7 +96,7 @@ ggml_cgraph * clip_graph_drama3_gen::build_tower() {
         pos = (int) pos_f;
         slots = gen_state->slots;
     } else {
-        // reserving the compute buffers, the slots are stand-ins
+        // buffer reserve: no gen state, use stand-in slots
         for (const auto & slot : slot_list) {
             ggml_tensor * t = nullptr;
             if (slot.in_place) {
@@ -117,7 +116,7 @@ ggml_cgraph * clip_graph_drama3_gen::build_tower() {
     ggml_set_name(inp_code0, "inp_code0");
     ggml_set_input(inp_code0);
 
-    // codes 2.. of the input frame, as rows of the merged codebook table
+    // codes 2.. of the input frame, as row ids of the merged codebook table
     ggml_tensor * inp_extra = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_cb - 2);
     ggml_set_name(inp_extra, "inp_extra");
     ggml_set_input(inp_extra);
@@ -183,7 +182,7 @@ ggml_cgraph * clip_graph_drama3_gen::build_tower() {
     return gf;
 }
 
-// a batch of frames -> PCM, the code2wav blocks of qwen3tts without pre_conv and the transformer projections
+// frames -> PCM, qwen3tts code2wav blocks without pre_conv and tfm projections
 ggml_cgraph * clip_graph_drama3_gen::build_codec() {
     const auto & c2w = model.c2w;
     const int64_t n_cb = model.gen_code_embd_w->ne[2];
@@ -201,7 +200,7 @@ ggml_cgraph * clip_graph_drama3_gen::build_codec() {
         dec.state_in[slot.name] = t;
     }
 
-    // quantizer: each codebook's entries already went through its out_proj at conversion
+    // out_proj is folded into the codebook tables at conversion
     auto group_ids = [&](int g) {
         return ggml_view_1d(ctx0, inp_codes, n_frames, (size_t) g * inp_codes->nb[1]);
     };

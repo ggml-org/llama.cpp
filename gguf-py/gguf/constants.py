@@ -1295,8 +1295,8 @@ class MODEL_TENSOR(IntEnum):
     A_GEN_CODE_ATTN_GATE   = auto() # lfm3a: per-head sigmoid gate on the attention output
     A_GEN_CODE_HEAD_NORM   = auto() # lfm3a: per-codebook norm before the output head, merged 2D [n_codebooks, dim]
     A_GEN_CODE_MASK_EMBD   = auto() # lfm3a: MaskGIT mask embedding
-    A_GEN_CODE_ENORM       = auto() # drama3: per-layer norm of the injected code embedding
-    A_GEN_CODE_HNORM       = auto() # drama3: per-layer norm of the incoming hidden state
+    A_GEN_CODE_ENORM       = auto() # drama3: per-layer norm of the code embedding
+    A_GEN_CODE_HNORM       = auto() # drama3: per-layer norm of the input hidden state
     A_GEN_CODE_EH_PROJ     = auto() # drama3: per-layer [code embd; hidden] -> hidden projection
     A_GEN_CODE_BLK_EMBD    = auto() # drama3: per-layer code embedding table
     A_GEN_CODE_BLK_OUT_NORM = auto() # drama3: per-layer output norm

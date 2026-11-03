@@ -2268,7 +2268,7 @@ struct clip_model_loader {
                     } break;
                 case PROJECTOR_TYPE_DRAMA3_GEN:
                     {
-                        // Fish DAC decoder of codec.pth: post_module transformer, 2x2 upsample, DAC at 44.1 kHz
+                        // Fish DAC decoder, codec.pth has no config
                         hparams.audio_sample_rate    = 44100;
                         hparams.wav_tfm_n_layer      = 8;
                         hparams.wav_tfm_n_embd       = 1024;
@@ -2810,7 +2810,7 @@ struct clip_model_loader {
             }
         }
 
-        // qwen3tts / drama3 code2wav: RVQ codes -> raw PCM, drama3 has no quantizer projections, pre_conv nor transformer projections
+        // code2wav: RVQ codes -> raw PCM, drama3 has no quant/pre_conv/tfm projections
         auto load_code2wav = [&](bool with_proj) {
             auto & c2w = model.c2w;
 
@@ -3771,7 +3771,7 @@ struct clip_model_loader {
                 } break;
             case PROJECTOR_TYPE_DRAMA3_GEN:
                 {
-                    // codebook tower, the generic loop above loaded the a.gen.code.blk.* blocks
+                    // generic a.gen.code.blk.* tensors are loaded by the loop above
                     model.drama3_layers.resize(hparams.n_layer);
                     for (int il = 0; il < hparams.n_layer; ++il) {
                         auto & tl = model.drama3_layers[il];
@@ -6964,7 +6964,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                 const int64_t n_cb      = model.gen_code_embd_w->ne[2];
                 const int64_t n_vocab   = model.gen_code_embd_w->ne[1];
                 if (params->gen_process == CLIP_GEN_PROCESS_GEN_WAV) {
-                    // frame-major to group-major, the residual codebooks of the codec are smaller than the tower vocab
+                    // frame-major to group-major, clamp: codec residual codebooks are smaller than the tower vocab
                     GGML_ASSERT(params->codes != nullptr && params->codes->size() % n_cb == 0);
                     const int64_t n_frames = (int64_t) params->codes->size() / n_cb;
                     const int64_t n_first  = model.c2w.quant_first_cb_w->ne[1];
@@ -6979,8 +6979,8 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                     set_input_i32("inp_codes", codes);
                     set_gen_state_in();
                 } else {
-                    // code0 < 0: the next row is not speech (a text row of the prompt), the tower only fills its KV
-                    // codes: the input frame's codes when it is a speech frame, none for a text row
+                    // code0 < 0: next row is text (prompt), the tower only fills its KV
+                    // codes: input frame codes for a speech row, empty for a text row
                     const bool next_speech = params->code0 >= 0;
                     const bool cur_speech  = params->codes && (int64_t) params->codes->size() == n_cb;
                     if (params->code0 >= n_vocab) {
@@ -7811,7 +7811,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
             clip_graph_soprano::decode_spectrum(model, spectrum, out_audio);
         }
 
-        // drop the tail audio that comes from the code-0 rear padding, drama3 decodes exactly the frames it is given
+        // drop the tail audio that comes from the code-0 rear padding, drama3 has no padding
         if (model.proj_type != PROJECTOR_TYPE_DRAMA3_GEN) {
             const int64_t n_codes    = params->codes ? model.gen_code_head_w->ne[2] + 1 : 0;
             const int64_t n_frames_w = hparams.wav_tfm_swa;

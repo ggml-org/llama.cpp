@@ -2781,7 +2781,7 @@ mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
             inp.type = MTMD_GEN_PROCESS_TYPE_GEN_WAV;
             break;
         case PROJECTOR_TYPE_DRAMA3_GEN:
-            // codebook heads, see Sampling of fishaudio_drama3_generation.cpp (sglang-omni)
+            // codebook heads, same as the reference (sglang-omni fishaudio_drama3)
             inp.top_k = 30;
             inp.top_p = 0.9f;
             inp.temp  = 1.0f;

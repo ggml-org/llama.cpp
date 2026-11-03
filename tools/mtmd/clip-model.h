@@ -841,12 +841,12 @@ struct clip_chatterbox {
     ggml_tensor * spk_affine_b = nullptr;
 };
 
-// drama3 codebook tower layer: mixes a code embedding into the hidden state around a generic block
+// drama3 tower: extra tensors around the generic block
 struct clip_drama3_layer {
     ggml_tensor * enorm_w    = nullptr;
     ggml_tensor * hnorm_w    = nullptr;
     ggml_tensor * eh_proj_w  = nullptr; // [code embd; hidden] -> hidden
-    ggml_tensor * embd_w     = nullptr; // code embedding table
+    ggml_tensor * embd_w     = nullptr;
     ggml_tensor * out_norm_w = nullptr;
 };
 

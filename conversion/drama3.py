@@ -10,10 +10,9 @@ if TYPE_CHECKING:
 from .base import ModelBase, MmprojModel, gguf
 from .qwen import Qwen3_5MoeTextModel
 
-# Fish Audio Drama 3 (FishOmniModel):
-# - text model: the Qwen3.5-MoE backbone, sampling the main token of each frame (end of speech or <|semantic:N|>)
-# - mmproj: the codebook tower (13 layers, each with its own causal attention over the whole sequence),
-#   the embeddings fed back to the backbone and the Fish DAC decoder of codec.pth (44.1 kHz)
+# Fish Audio Drama 3 (FishOmniModel)
+# text model: Qwen3.5-MoE backbone, samples the main token of each frame
+# mmproj: codebook tower and Fish DAC decoder (codec.pth)
 
 _TOWER_SHARED = "audio_decoder_mtp_shared.layers."
 _TOWER_RESIDUAL = "audio_decoder_mtp.layers."
@@ -24,16 +23,6 @@ _TOWER_RESIDUAL = "audio_decoder_mtp.layers."
 class Drama3TextModel(Qwen3_5MoeTextModel):
     model_arch = gguf.MODEL_ARCH.QWEN35MOE
     no_mtp = True  # the checkpoint has no MTP head
-
-    def __init__(self, dir_model, *args, **kwargs):
-        hparams = kwargs.pop("hparams", None)
-        if hparams is None:
-            hparams = ModelBase.load_hparams(dir_model, self.is_mistral_format)
-        # the routed experts are block FP8 with weight_scale_inv, the same layout as quant_method "fp8"
-        quant = hparams.get("quantization_config")
-        if quant is not None and quant.get("quant_method") == "bsgemm-moe":
-            quant["quant_method"] = "fp8"
-        super().__init__(dir_model, *args, hparams=hparams, **kwargs)
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
@@ -88,7 +77,7 @@ class Drama3MmprojModel(MmprojModel):
         self.gguf_writer.add_gen_audio_head_count(cfg["n_head"])
         self.gguf_writer.add_gen_audio_head_count_kv(cfg["n_local_heads"])
         self.gguf_writer.add_gen_audio_attention_layernorm_eps(cfg["norm_eps"])
-        # the rest of the tower and the codec hparams are hardcoded in clip.cpp
+        # other tower and codec hparams are hardcoded in clip.cpp
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
@@ -105,7 +94,7 @@ class Drama3MmprojModel(MmprojModel):
             or (".dac.blk." in new_name and (new_name.endswith(".conv1.weight") or new_name.endswith(".conv2.weight")))
         ):
             return gguf.GGMLQuantizationType.F16
-        # ConvTranspose1d kernels and the folded codebook tables stay F32
+        # keep ConvTranspose1d kernels and folded codebook tables in F32
         if new_name.endswith(".conv.weight") and (".up.blk." in new_name or ".dac.blk." in new_name):
             return gguf.GGMLQuantizationType.F32
         if new_name.startswith("a.gen.wav.quant."):
@@ -121,7 +110,7 @@ class Drama3MmprojModel(MmprojModel):
             return
 
         if name == "model.language_model.embed_tokens.weight":
-            # the semantic band of the backbone embeddings, the main token of a speech frame
+            # semantic band of the backbone embeddings
             begin = self.global_config["semantic_start_token_id"]
             yield (self.format_tensor_name(T.A_GEN_CODE_OUT_EMBD), data_torch[begin:begin + cfg["vocab_size"]])
             return
@@ -163,10 +152,7 @@ class Drama3MmprojModel(MmprojModel):
         raise ValueError(f"unexpected tensor {name}")
 
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
-        yield from self._generate_codec_tensors()
-
-    def _generate_codec_tensors(self) -> Iterable[tuple[str, Tensor]]:
-        # decoder half of the Fish DAC in codec.pth, the encoder is only needed for voice cloning
+        # only the DAC decoder, the encoder is for voice cloning (not supported yet)
         sd = torch.load(self.dir_model / "codec.pth", map_location="cpu", mmap=True, weights_only=True)
         sd = sd.get("state_dict", sd)
         T = gguf.MODEL_TENSOR
@@ -175,7 +161,7 @@ class Drama3MmprojModel(MmprojModel):
             return sd[name].float()
 
         def conv(prefix: str) -> Tensor:
-            # weight norm over all but the first axis
+            # fold weight norm
             if prefix + ".conv.weight" in sd:
                 return get(prefix + ".conv.weight")
             g = get(prefix + ".conv.parametrizations.weight.original0")
@@ -183,7 +169,7 @@ class Drama3MmprojModel(MmprojModel):
             return g * v / v.norm(dim=(1, 2), keepdim=True)
 
         def quant_table(prefix: str) -> Tensor:
-            # codebook entries through out_proj, so decoding is a row lookup
+            # fold out_proj into the codebook, so decoding is a row lookup
             g = get(prefix + ".out_proj.weight_g")
             v = get(prefix + ".out_proj.weight_v")
             w = (g * v / v.norm(dim=(1, 2), keepdim=True)).squeeze(-1)
@@ -199,7 +185,7 @@ class Drama3MmprojModel(MmprojModel):
         yield (self.format_tensor_name(T.A_GEN_WAV_QUANT_REST_CB),
                torch.stack([quant_table(f"{q}quantizer.quantizers.{i}") for i in range(n_rest)]))
 
-        # post_module transformer: interleaved RoPE, q/k rows are permuted so NEOX RoPE computes the same attention
+        # post_module uses interleaved RoPE, permute q/k rows so NEOX RoPE gives the same result
         tfm = q + "post_module."
         n_head, d_head = 16, 64
         order = torch.cat([torch.arange(0, d_head, 2), torch.arange(1, d_head, 2)])
@@ -224,7 +210,7 @@ class Drama3MmprojModel(MmprojModel):
             yield (self.format_tensor_name(T.A_GEN_WAV_TFM_FFN_SCALE, il), get(p + "ffn_layer_scale.gamma"))
         yield (self.format_tensor_name(T.A_GEN_WAV_TFM_OUTPUT_NORM), get(tfm + "norm.weight"))
 
-        # 2x upsample blocks: ConvTranspose1d + ConvNeXt
+        # upsample: 2x (ConvTranspose1d + ConvNeXt)
         for il in range(2):
             p = f"{q}upsample.{il}."
             yield (self.format_tensor_name(T.A_GEN_WAV_UP_CONV, il, suffix=".weight"), conv(p + "0"))
@@ -236,7 +222,7 @@ class Drama3MmprojModel(MmprojModel):
                 yield (self.format_tensor_name(tensor, il, suffix=".bias"), get(f"{p}1.{key}.bias"))
             yield (self.format_tensor_name(T.A_GEN_WAV_UP_GAMMA, il, suffix=""), get(p + "1.gamma"))
 
-        # DAC decoder: entry conv, 4 blocks (Snake -> ConvTranspose1d -> 3 residual units), Snake, post conv
+        # DAC: entry conv, 4x (Snake, ConvTranspose1d, 3 residual units), Snake, post conv
         d = "decoder.model."
         yield (self.format_tensor_name(T.A_GEN_WAV_DAC_ENTRY, suffix=".weight"), conv(d + "0"))
         yield (self.format_tensor_name(T.A_GEN_WAV_DAC_ENTRY, suffix=".bias"), get(d + "0.conv.bias"))
