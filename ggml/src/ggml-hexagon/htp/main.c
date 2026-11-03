@@ -1008,6 +1008,9 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_CUMSUM:
             return op_cumsum(octx);
 
+        case HTP_OP_TOP_K_MASK:
+            return op_top_k_mask(octx);
+
         case HTP_OP_FILL:
             return op_fill(octx);
 
