@@ -161,6 +161,12 @@ static const std::vector<std::string> twins = {
     "model-Q4_XS.gguf",
 };
 
+// an underscore separates the quant like a dash, as in step3p5_flash_Q4_K_S.gguf
+static const std::vector<std::string> underscore = {
+    "model_Q4_K_S.gguf",
+    "model_Q8_0.gguf",
+};
+
 // every speculative sidecar type at the same quant
 static const std::vector<std::string> quad = {
     "model-Q8_0.gguf",
@@ -278,7 +284,6 @@ static const plan_case plan_cases[] = {
      "TheDrummer_Model-24B-v4.1-Q8_0.gguf", {"TheDrummer_Model-24B-v4.1-Q8_0.gguf"},
      "", "", "", "", ""},
 
-    // every sidecar type resolves at the tag
     // the tag picks the file carrying it as a full token, never a longer one
     {"twins f16 tag", twins, "test/repo:F16", "", false, false,
      "model-F16.gguf", {"model-F16.gguf"},
@@ -296,6 +301,16 @@ static const plan_case plan_cases[] = {
      "model-IQ4_XS.gguf", {"model-IQ4_XS.gguf"},
      "", "", "", "", ""},
 
+    // the token boundary accepts an underscore, for the tag and the default lookup
+    {"underscore tag", underscore, "test/repo:Q4_K_S", "", false, false,
+     "model_Q4_K_S.gguf", {"model_Q4_K_S.gguf"},
+     "", "", "", "", ""},
+
+    {"underscore default", underscore, "test/repo", "", false, false,
+     "model_Q8_0.gguf", {"model_Q8_0.gguf"},
+     "", "", "", "", ""},
+
+    // every sidecar type resolves at the tag
     {"quad exact tag", quad, "test/repo:Q8_0", "", true, false,
      "model-Q8_0.gguf", {"model-Q8_0.gguf"},
      "", "mtp-model-Q8_0.gguf", "dflash-model-Q8_0.gguf", "eagle3-model-Q8_0.gguf", "dspark-model-Q8_0.gguf"},
