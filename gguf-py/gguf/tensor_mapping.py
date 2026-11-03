@@ -2532,6 +2532,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.A_ENC_INP_PROJ: (
             "conformer.subsample_conv_projection.input_proj_linear", # gemma4
+            "perception.encoder.asr_encoder.pre_encode.proj", # nemotron-transcribe (feature stacking)
             "encoder.input_linear",
         ),
 
@@ -2546,13 +2547,16 @@ class TensorNameMap:
             "speaker_encoder.mfa.conv", # qwen3tts speaker encoder: multi-layer feature aggregation
         ),
 
-        MODEL_TENSOR.A_PRE_NORM: (),
+        MODEL_TENSOR.A_PRE_NORM: (
+            "perception.encoder.asr_encoder.embed_norm", # nemotron-transcribe
+        ),
 
         MODEL_TENSOR.A_POST_NORM: (
             "audio_tower.layer_norm", # ultravox
             "audio_tower.norm", # voxtral realtime
             "audio_encoder.dots_encoder.speech_encoder.layer_norm", # dots3note
             "audio_tower.ln_post", # qwen2omni
+            "perception.encoder.asr_encoder.final_norm", # nemotron-transcribe
             "encoder.layer_norm", # mimo-audio-tokenizer
             "encoder.lfm.lfm.embedding_norm", # lfm3a
         ),
@@ -2595,10 +2599,12 @@ class TensorNameMap:
 
         MODEL_TENSOR.A_ENC_ATTN_Q_NORM: (
             "encoder.lfm.lfm.layers.{bid}.self_attn.q_layernorm", # lfm3a
+            "perception.encoder.asr_encoder.layers.{bid}.attn.q_norm", # nemotron-transcribe
         ),
 
         MODEL_TENSOR.A_ENC_ATTN_K_NORM: (
             "encoder.lfm.lfm.layers.{bid}.self_attn.k_layernorm", # lfm3a
+            "perception.encoder.asr_encoder.layers.{bid}.attn.k_norm", # nemotron-transcribe
         ),
 
         MODEL_TENSOR.A_ENC_ATTN_K_REL: (
@@ -2629,6 +2635,7 @@ class TensorNameMap:
             "encoder.lfm.lfm.layers.{bid}.operator_norm", # lfm3a
             "conformer.layers.{bid}.attention.pre_attn_norm", # gemma3n
             "sound_encoder.encoder.layers.{bid}.norm_self_att", # parakeet
+            "perception.encoder.asr_encoder.layers.{bid}.norm1", # nemotron-transcribe
             "encoder.layers.{bid}.attn.pre_norm", # granite_speech
             "encoder.layers.{bid}.self_attn_layer_norm", # mimo-audio-tokenizer
         ),
@@ -2642,6 +2649,7 @@ class TensorNameMap:
             "conformer.layers.{bid}.attention.post", # gemma3n
             "conformer.layers.{bid}.self_attn.post", # gemma4
             "sound_encoder.encoder.layers.{bid}.self_attn.o_proj", # parakeet
+            "perception.encoder.asr_encoder.layers.{bid}.attn.out_proj", # nemotron-transcribe
             "encoder.layers.{bid}.attn.to_out", # granite_speech
             "encoder.layers.{bid}.self_attn.out_proj", # mimo-audio-tokenizer
         ),
@@ -2653,6 +2661,7 @@ class TensorNameMap:
             "encoder.lfm.lfm.layers.{bid}.ffn_norm", # lfm3a
             "conformer.layers.{bid}.attention.post_norm", # gemma3n
             "sound_encoder.encoder.layers.{bid}.norm_out", # parakeet
+            "perception.encoder.asr_encoder.layers.{bid}.norm2", # nemotron-transcribe
             "encoder.layers.{bid}.post_norm", # granite_speech
             "encoder.layers.{bid}.final_layer_norm", # mimo-audio-tokenizer
         ),
@@ -2683,6 +2692,7 @@ class TensorNameMap:
             "conformer.layers.{bid}.ffw_layer_start.ffw_layer_1", # gemma3n
             "conformer.layers.{bid}.feed_forward1.ffw_layer_1", # gemma4
             "sound_encoder.encoder.layers.{bid}.feed_forward1.linear1", # parakeet
+            "perception.encoder.asr_encoder.layers.{bid}.ffn.net.0", # nemotron-transcribe
             "encoder.layers.{bid}.ff1.up_proj", # granite_speech
             "encoder.layers.{bid}.fc1", # mimo-audio-tokenizer
         ),
@@ -2702,6 +2712,7 @@ class TensorNameMap:
             "conformer.layers.{bid}.ffw_layer_start.ffw_layer_2", # gemma3n
             "conformer.layers.{bid}.feed_forward1.ffw_layer_2", # gemma4
             "sound_encoder.encoder.layers.{bid}.feed_forward1.linear2", # parakeet
+            "perception.encoder.asr_encoder.layers.{bid}.ffn.net.3", # nemotron-transcribe
             "encoder.layers.{bid}.ff1.down_proj", # granite_speech
             "encoder.layers.{bid}.fc2", # mimo-audio-tokenizer
         ),
@@ -2792,6 +2803,7 @@ class TensorNameMap:
             "audio_tower.proj", # qwen2omni
             "model.audio_tower.output_proj", # gemma4
             "speaker_encoder.fc", # qwen3tts speaker encoder: final speaker embedding projection
+            "perception.proj", # nemotron-transcribe
         ),
 
         MODEL_TENSOR.A_MM_NORM_PRE: (
@@ -2914,11 +2926,84 @@ class TensorNameMap:
 
         MODEL_TENSOR.A_ENC_MEL_FILTERS: (
             "sound_encoder.encoder.feature_extractor.featurizer.fb", # parakeet
+            "perception.preprocessor.featurizer.fb", # nemotron-transcribe
         ),
 
         MODEL_TENSOR.A_ENC_WINDOW: (
             "sound_encoder.encoder.feature_extractor.featurizer.window", # parakeet
+            "perception.preprocessor.featurizer.window", # nemotron-transcribe
         ),
+
+        MODEL_TENSOR.A_ENC_ATTN_QKV: (
+            "perception.encoder.asr_encoder.layers.{bid}.attn.w_qkv", # nemotron-transcribe
+        ),
+
+        MODEL_TENSOR.A_SPK_INP_PROJ: (
+            "perception.encoder.diarization_model.encoder.pre_encode.proj", # nemotron-transcribe
+        ),
+
+        MODEL_TENSOR.A_SPK_PRE_NORM: (
+            "perception.encoder.diarization_model.encoder.embed_norm", # nemotron-transcribe
+        ),
+
+        MODEL_TENSOR.A_SPK_POST_NORM: (
+            "perception.encoder.diarization_model.encoder.final_norm", # nemotron-transcribe
+        ),
+
+        MODEL_TENSOR.A_SPK_ATTN_NORM: (
+            "perception.encoder.diarization_model.encoder.layers.{bid}.norm1", # nemotron-transcribe
+        ),
+
+        MODEL_TENSOR.A_SPK_ATTN_QKV: (
+            "perception.encoder.diarization_model.encoder.layers.{bid}.attn.w_qkv", # nemotron-transcribe
+        ),
+
+        MODEL_TENSOR.A_SPK_ATTN_OUT: (
+            "perception.encoder.diarization_model.encoder.layers.{bid}.attn.out_proj", # nemotron-transcribe
+        ),
+
+        MODEL_TENSOR.A_SPK_FFN_NORM: (
+            "perception.encoder.diarization_model.encoder.layers.{bid}.norm2", # nemotron-transcribe
+        ),
+
+        MODEL_TENSOR.A_SPK_FFN_UP: (
+            "perception.encoder.diarization_model.encoder.layers.{bid}.ffn.net.0", # nemotron-transcribe
+        ),
+
+        MODEL_TENSOR.A_SPK_FFN_DOWN: (
+            "perception.encoder.diarization_model.encoder.layers.{bid}.ffn.net.3", # nemotron-transcribe
+        ),
+
+        MODEL_TENSOR.A_SPK_HEAD_PROJ: (
+            "perception.encoder.diarization_model.sortformer_modules.encoder_proj", # nemotron-transcribe
+        ),
+
+        MODEL_TENSOR.A_SPK_HEAD_UPSAMPLE: (
+            "perception.encoder.diarization_model.sortformer_modules.subpixel_upsample", # nemotron-transcribe
+        ),
+
+        MODEL_TENSOR.A_SPK_HEAD_FC1: (
+            "perception.encoder.diarization_model.sortformer_modules.first_hidden_to_hidden", # nemotron-transcribe
+        ),
+
+        MODEL_TENSOR.A_SPK_HEAD_FC2: (
+            "perception.encoder.diarization_model.sortformer_modules.single_hidden_to_spks", # nemotron-transcribe
+        ),
+
+        MODEL_TENSOR.A_SPK_SIL_EMB: (
+            "perception.encoder.diarization_model.sortformer_modules.learnable_sil_emb", # nemotron-transcribe
+        ),
+
+        MODEL_TENSOR.A_FUSION_ASR_NORM: (
+            "perception.encoder.asr_norm", # nemotron-transcribe
+        ),
+
+        MODEL_TENSOR.A_FUSION_SPK_NORM: (
+            "perception.encoder.diar_norm", # nemotron-transcribe
+        ),
+
+        # generated in conversion code (nemotron-transcribe)
+        MODEL_TENSOR.A_FUSION_SPK_KERNEL: (),
 
         MODEL_TENSOR.A_MM_EMBEDDING: (
             "model.embed_audio.embedding", # gemma3n

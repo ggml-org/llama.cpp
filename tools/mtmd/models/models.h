@@ -30,6 +30,22 @@ struct clip_graph_gemma4uv : clip_graph {
     ggml_cgraph * build() override;
 };
 
+struct clip_graph_nemotron_transcribe : clip_graph {
+    const clip_enc_state * state; // nullptr during warmup
+    clip_graph_nemotron_transcribe(clip_ctx * ctx, const clip_image_f32 & img, const clip_enc_state * state)
+        : clip_graph(ctx, img), state(state) {}
+    ggml_cgraph * build() override;
+    ggml_tensor * build_spk_encoder(ggml_tensor * cur, ggml_tensor * pos);
+
+    // one recording: encodes its windows in turn, carrying the speaker state between them
+    static bool encode_windows(clip_ctx * ctx, const clip_model & model, clip_encode_params * params);
+
+    // NeMo ParallelExpertEncoder online defaults, in output frames: 40 s windows with 4 s of context on each side
+    static constexpr int window_core  = 500;
+    static constexpr int window_left  = 50;
+    static constexpr int window_right = 50;
+};
+
 struct clip_graph_pixtral : clip_graph {
     clip_graph_pixtral(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
