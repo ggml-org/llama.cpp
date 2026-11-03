@@ -4,6 +4,7 @@
 #include "unicode.h"
 
 #include <algorithm>
+#include <cctype>
 #include <limits>
 #include <map>
 #include <regex>
@@ -355,9 +356,9 @@ static size_t gbnf_escape_length(const std::string & pattern, size_t pos) {
 class common_chat_schema_converter {
 private:
     friend std::string build_grammar(const std::function<void(const common_grammar_builder &)> & cb, const common_grammar_options & options);
-    bool _dotall;
+    common_grammar_options _options;
     std::map<std::string, std::string> _rules;
-    std::unordered_set<std::string> _refs_being_resolved;
+    std::map<std::string, std::string> _ref_rule_names;
     std::vector<std::string> _errors;
     std::vector<std::string> _warnings;
     int _depth = 0;
@@ -449,7 +450,7 @@ private:
 
             auto get_dot = [&]() {
                 std::string rule;
-                if (_dotall) {
+                if (_options.dotall) {
                     rule = "[\\U00000000-\\U0010FFFF]";
                 } else {
                     rule = "[^\\x0A\\x0D]";
@@ -655,15 +656,42 @@ private:
     }
 
     /*
-        Returns a rule that matches a JSON string that is none of the provided strings
+        Matches an object key other than the declared property names
 
-        not_strings({"a"})
+        additional_key_rule({"a"})
             -> ["] ( [a] char+ | [^"a] char* )? ["]
-        not_strings({"and", "also"})
+        additional_key_rule({"and", "also"})
             -> ["] ( [a] ([l] ([s] ([o] char+ | [^"o] char*) | [^"s] char*) | [n] ([d] char+ | [^"d] char*) | [^"ln] char*) | [^"a] char* )? ["]
     */
-    std::string _not_strings(const std::vector<std::string> & strings) {
-        common_trie trie(strings);
+    std::string _build_additional_key_rule(const std::vector<std::string> & excluded_names, const std::string & rule_prefix) {
+        common_trie trie(excluded_names);
+
+        if (_options.bare_keys) {
+            std::vector<std::string> node_rules(trie.nodes.size());
+            for (size_t i = trie.nodes.size(); i-- > 0;) {
+                const auto & node = trie.nodes[i];
+                std::vector<std::string> alternatives;
+                if (i != 0 && node.pattern < 0) {
+                    alternatives.push_back("\"\"");
+                }
+                std::string excluded = ":}";
+                if (i == 0) {
+                    // Leading whitespace is consumed before the key is parsed.
+                    excluded += R"( \t\n\r\x0B\x0C)";
+                }
+                for (const auto & child : node.children) {
+                    const auto ch = common_unicode_cpt_to_utf8(child.first);
+                    alternatives.push_back(format_literal(ch) + " " + node_rules[child.second]);
+                    if (ch == "\\" || ch == "[" || ch == "]" || ch == "-") {
+                        excluded += "\\";
+                    }
+                    excluded += ch;
+                }
+                alternatives.push_back("[^" + excluded + "] [^:}]*");
+                node_rules[i] = _add_rule(rule_prefix + "-" + std::to_string(i), string_join(alternatives, " | "));
+            }
+            return node_rules[0];
+        }
 
         std::string char_rule = _add_primitive("char", PRIMITIVE_RULES.at("char"));
         std::ostringstream out;
@@ -708,19 +736,73 @@ private:
     }
 
     std::string _resolve_ref(const common_chat_schema_ref & schema) {
-        auto it = schema.ref.find('#');
-        std::string ref_fragment = it != std::string::npos ? schema.ref.substr(it + 1) : schema.ref;
-        std::string ref_name = "ref" + gbnf_format_rule_name(ref_fragment);
-        if (_rules.find(ref_name) == _rules.end() && _refs_being_resolved.find(schema.ref) == _refs_being_resolved.end()) {
-            if (!schema.target) {
-                _errors.push_back("Unresolved $ref " + schema.ref);
-                return "";
-            }
-            _refs_being_resolved.insert(schema.ref);
-            ref_name = visit(*schema.target, ref_name);
-            _refs_being_resolved.erase(schema.ref);
+        const auto cached = _ref_rule_names.find(schema.ref);
+        if (cached != _ref_rule_names.end()) {
+            return cached->second;
         }
+        if (!schema.target) {
+            _errors.push_back("Unresolved $ref " + schema.ref);
+            return "";
+        }
+        const auto fragment = schema.ref.find('#');
+        std::string ref_name = "ref" + gbnf_format_rule_name(fragment != std::string::npos ? schema.ref.substr(fragment + 1) : schema.ref);
+        while (_rules.count(ref_name)) {
+            ref_name += "-r";
+        }
+        // Reserve the alias before visiting the target so recursive references can use it.
+        _rules.emplace(ref_name, "");
+        _ref_rule_names.emplace(schema.ref, ref_name);
+        const auto target_rule = visit(*schema.target, ref_name + "-value");
+        _rules.at(ref_name) = target_rule;
         return ref_name;
+    }
+
+    std::string _format_key(const std::string & key) const {
+        if (!_options.bare_keys) {
+            return format_literal(json(key).dump());
+        }
+        if (key.empty() || key.find('\0') != std::string::npos || std::isspace(static_cast<unsigned char>(key.front())) || key.find_first_of(":}\n\r") != std::string::npos) {
+            throw std::invalid_argument("Unsupported bare object property name");
+        }
+        return format_literal(key);
+    }
+
+    std::string _build_unordered_object_rule(const std::vector<std::string> & members, size_t n_required, const std::string & additional_rule, const std::string & rule_prefix) {
+        const size_t n_states = size_t(1) << members.size();
+        const size_t required_mask = (size_t(1) << n_required) - 1;
+        // Each bit marks a declared property that has not been emitted.
+        std::vector<std::string> state_rules(n_states);
+        for (size_t remaining = 0; remaining < n_states; ++remaining) {
+            auto name = gbnf_format_rule_name(rule_prefix) + "unordered-" + std::to_string(remaining);
+            while (_rules.count(name)) {
+                name += "-";
+            }
+            _rules.emplace(name, "");
+            state_rules[remaining] = name;
+        }
+        for (size_t remaining = 0; remaining < n_states; ++remaining) {
+            std::vector<std::string> alternatives;
+            for (size_t i = 0; i < members.size(); ++i) {
+                const size_t bit = size_t(1) << i;
+                if (!(remaining & bit)) {
+                    continue;
+                }
+                const size_t next = remaining & ~bit;
+                std::string member = members[i];
+                if (next || !additional_rule.empty()) {
+                    const auto tail = "\",\" space " + state_rules[next];
+                    member += " " + (next & required_mask ? tail : "(" + tail + ")?");
+                }
+                alternatives.push_back(member);
+            }
+            if (!additional_rule.empty()) {
+                const auto tail = "\",\" space " + state_rules[remaining];
+                alternatives.push_back(additional_rule + " " + (remaining & required_mask ? tail : "(" + tail + ")?"));
+            }
+            _rules.at(state_rules[remaining]) = alternatives.empty() ? "\"\"" : string_join(alternatives, " | ");
+        }
+        const auto & body = state_rules.back();
+        return "\"{\" space " + (n_required ? body : "(" + body + ")?") + " space \"}\"";
     }
 
     std::string _build_object_rule(
@@ -729,87 +811,84 @@ private:
         const std::string & name,
         const common_chat_schema * additional_properties)
     {
-        std::vector<std::string> required_props;
-        std::vector<std::string> optional_props;
-        std::unordered_map<std::string, std::string> prop_kv_rule_names;
+        const auto rule_prefix = name + (name.empty() ? "" : "-");
+        std::vector<std::string> required_members;
+        std::vector<std::pair<std::string, std::string>> optional_members;
         std::vector<std::string> prop_names;
+        // A space before ':' changes a bare key.
+        const auto separator = _options.bare_keys ? "\":\" space " : " space \":\" space ";
         for (const auto & kv : properties) {
             const auto &prop_name = kv.first;
             const auto &prop_schema = kv.second;
 
-            std::string prop_rule_name = visit(*prop_schema, name + (name.empty() ? "" : "-") + prop_name);
-            prop_kv_rule_names[prop_name] = _add_rule(
-                name + (name.empty() ? "" : "-") + prop_name + "-kv",
-                format_literal(json(prop_name).dump()) + " space \":\" space " + prop_rule_name
+            std::string prop_rule_name = visit(*prop_schema, rule_prefix + prop_name);
+            const auto kv_rule = _add_rule(
+                rule_prefix + prop_name + "-kv",
+                _format_key(prop_name) + separator + prop_rule_name
             );
             if (required.find(prop_name) != required.end()) {
-                required_props.push_back(prop_name);
+                required_members.push_back(kv_rule);
             } else {
-                optional_props.push_back(prop_name);
+                optional_members.emplace_back(prop_name, kv_rule);
             }
             prop_names.push_back(prop_name);
         }
         if (additional_properties) {
-            std::string sub_name = name + (name.empty() ? "" : "-") + "additional";
+            std::string sub_name = rule_prefix + "additional";
             std::string value_rule =
-                additional_properties->kind() != common_chat_schema::KIND_ANY ? visit(*additional_properties, sub_name + "-value")
+                additional_properties->kind() != common_chat_schema::KIND_ANY || !_options.value_rule_name.empty() ? visit(*additional_properties, sub_name + "-value")
                 : _add_primitive("value", PRIMITIVE_RULES.at("value"));
 
             auto key_rule =
-                prop_names.empty() ? _add_primitive("string", PRIMITIVE_RULES.at("string"))
-                : _add_rule(sub_name + "-k", _not_strings(prop_names));
+                prop_names.empty() ? (_options.bare_keys ? _add_rule(sub_name + "-k", R"([^:} \t\n\r\x0B\x0C] [^:}]*)") : _add_primitive("string", PRIMITIVE_RULES.at("string")))
+                : _add_rule(sub_name + "-k", _build_additional_key_rule(prop_names, sub_name + "-k"));
             std::string kv_rule = _add_rule(sub_name + "-kv", key_rule + " \":\" space " + value_rule);
-            prop_kv_rule_names["*"] = kv_rule;
-            optional_props.push_back("*");
+            optional_members.emplace_back("additional", kv_rule);
         }
 
-        if (required_props.empty() && optional_props.empty()) {
+        if (required_members.empty() && optional_members.empty()) {
             return "\"{\" space \"}\"";
         }
 
-        std::string rule = "\"{\" space ";
-        for (size_t i = 0; i < required_props.size(); i++) {
-            if (i > 0) {
-                rule += " \",\" space ";
+        if (_options.unordered_properties && properties.size() <= COMMON_GRAMMAR_MAX_UNORDERED_PROPERTIES) {
+            std::unordered_set<std::string> seen_props;
+            for (const auto & prop_name : prop_names) {
+                if (!seen_props.insert(prop_name).second) {
+                    throw std::invalid_argument("Overlapping allOf property \"" + prop_name + "\" is unsupported in unordered mode at " + (name.empty() ? "root" : name));
+                }
             }
-            rule += prop_kv_rule_names[required_props[i]];
+            auto members = required_members;
+            std::string additional_rule;
+            for (size_t i = 0; i < optional_members.size(); ++i) {
+                if (additional_properties && i + 1 == optional_members.size()) {
+                    additional_rule = optional_members[i].second;
+                } else {
+                    members.push_back(optional_members[i].second);
+                }
+            }
+            return _build_unordered_object_rule(members, required_members.size(), additional_rule, rule_prefix);
         }
 
-        if (!optional_props.empty()) {
+        std::string rule = "\"{\" space " + string_join(required_members, " \",\" space ");
+
+        if (!optional_members.empty()) {
             rule += " (";
-            if (!required_props.empty()) {
+            if (!required_members.empty()) {
                 rule += " \",\" space ( ";
             }
 
-            std::function<std::string(const std::vector<std::string> &, bool)> get_recursive_refs = [&](const std::vector<std::string> & ks, bool first_is_optional) {
-                std::string res;
-                if (ks.empty()) {
-                    return res;
-                }
-                const std::string& k = ks[0];
-                std::string kv_rule_name = prop_kv_rule_names[k];
-                std::string comma_ref = "( \",\" space " + kv_rule_name + " )";
-                if (first_is_optional) {
-                    res = comma_ref + (k == "*" ? "*" : "?");
-                } else {
-                    res = kv_rule_name + (k == "*" ? " " + comma_ref + "*" : "");
-                }
-                if (ks.size() > 1) {
-                    res += " " + _add_rule(
-                        name + (name.empty() ? "" : "-") + k + "-rest",
-                        get_recursive_refs(std::vector<std::string>(ks.begin() + 1, ks.end()), true)
-                    );
-                }
-                return res;
-            };
-
-            for (size_t i = 0; i < optional_props.size(); i++) {
-                if (i > 0) {
-                    rule += " | ";
-                }
-                rule += get_recursive_refs(std::vector<std::string>(optional_props.begin() + i, optional_props.end()), false);
+            std::vector<std::string> alternatives(optional_members.size());
+            std::string tail_rule;
+            for (size_t i = optional_members.size(); i-- > 0;) {
+                const auto & member = optional_members[i];
+                const bool repeated = additional_properties && i + 1 == optional_members.size();
+                const auto comma_member = "( \",\" space " + member.second + " )";
+                const auto rest_ref = i + 1 < optional_members.size() ? " " + _add_rule(rule_prefix + member.first + "-rest", tail_rule) : "";
+                alternatives[i] = member.second + (repeated ? " " + comma_member + "*" : "") + rest_ref;
+                tail_rule = comma_member + (repeated ? "*" : "?") + rest_ref;
             }
-            if (!required_props.empty()) {
+            rule += string_join(alternatives, " | ");
+            if (!required_members.empty()) {
                 rule += " )";
             }
             rule += " )?";
@@ -840,15 +919,32 @@ private:
     }
 
 public:
-    explicit common_chat_schema_converter(bool dotall) : _dotall(dotall) {
-        _rules["space"] = SPACE_RULE;
+    explicit common_chat_schema_converter(const common_grammar_options & options = {}) : _options(options) {
+        _add_rule("space", SPACE_RULE);
     }
 
     std::string add_schema(const std::string & name, const common_chat_schema & schema) {
+        // References are local to each schema document; emitted rules remain shared.
+        _ref_rule_names.clear();
         return visit(schema, name);
     }
 
-    static std::string _generate_constant_rule(const json & value) {
+    std::string _generate_constant_rule(const json & value) {
+        if (!_options.string_delimiter.empty()) {
+            if (value.is_string()) {
+                const auto text = value.get<std::string>();
+                if (text.find('\0') != std::string::npos) {
+                    throw std::invalid_argument("String constant contains NUL");
+                }
+                if (text.find(_options.string_delimiter) != std::string::npos) {
+                    throw std::invalid_argument("String constant contains the configured string delimiter");
+                }
+                return format_literal(_options.string_delimiter + text + _options.string_delimiter);
+            }
+            if (value.is_object() || value.is_array()) {
+                throw std::invalid_argument("Object and array constants are unsupported with a custom string delimiter");
+            }
+        }
         return format_literal(value.dump());
     }
 
@@ -928,7 +1024,7 @@ public:
             }
             case common_chat_schema::KIND_OBJECT: {
                 const auto & obj = as<common_chat_schema_object>(schema);
-                if (obj.properties.empty() && obj.additional_properties && obj.additional_properties->kind() == common_chat_schema::KIND_ANY) {
+                if (!_options.bare_keys && _options.value_rule_name.empty() && obj.properties.empty() && obj.additional_properties && obj.additional_properties->kind() == common_chat_schema::KIND_ANY) {
                     return _add_rule(rule_name, _add_primitive("object", PRIMITIVE_RULES.at("object")));
                 }
                 std::vector<std::pair<std::string, const common_chat_schema *>> properties;
@@ -955,7 +1051,7 @@ public:
             }
             case common_chat_schema::KIND_ARRAY: {
                 const auto & arr = as<common_chat_schema_array>(schema);
-                if (arr.items->kind() == common_chat_schema::KIND_ANY && arr.min_items == 0 && arr.max_items < 0) {
+                if (_options.value_rule_name.empty() && arr.items->kind() == common_chat_schema::KIND_ANY && arr.min_items == 0 && arr.max_items < 0) {
                     return _visit_primitive(rule_name, "array");
                 }
                 std::string item_rule_name = visit(*arr.items, sub_name + "item");
@@ -963,6 +1059,9 @@ public:
                 return _add_rule(rule_name, "\"[\" space " + build_repetition(item_rule_name, arr.min_items, max_items, "\",\" space") + " space \"]\"");
             }
             case common_chat_schema::KIND_STRING: {
+                if (!_options.string_rule_name.empty()) {
+                    return _add_rule(rule_name, _options.string_rule_name);
+                }
                 const auto & str = as<common_chat_schema_string>(schema);
                 if (!str.pattern.empty()) {
                     return _visit_pattern(str.pattern, rule_name);
@@ -999,7 +1098,7 @@ public:
             case common_chat_schema::KIND_NULL:
                 return _visit_primitive(rule_name, "null");
             case common_chat_schema::KIND_ANY:
-                return _add_rule(rule_name, _add_primitive("value", PRIMITIVE_RULES.at("value")));
+                return _add_rule(rule_name, _options.value_rule_name.empty() ? _add_primitive("value", PRIMITIVE_RULES.at("value")) : _options.value_rule_name);
         }
         return "";
     }
@@ -1038,14 +1137,14 @@ std::string json_schema_to_grammar(const common_json & schema, bool force_gbnf) 
 }
 
 std::string json_schema_to_grammar(const common_chat_schema_document & schema) {
-    common_chat_schema_converter converter(false);
+    common_chat_schema_converter converter;
     converter.visit(*schema.root, "");
     converter.check_errors();
     return converter.format_grammar();
 }
 
 std::string build_grammar(const std::function<void(const common_grammar_builder &)> & cb, const common_grammar_options & options) {
-    common_chat_schema_converter converter(options.dotall);
+    common_chat_schema_converter converter(options);
     common_grammar_builder builder {
         /* .add_rule = */ [&](const std::string & name, const std::string & rule) {
             return converter._add_rule(name, rule);
