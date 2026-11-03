@@ -32,8 +32,10 @@ SPEECH_BOS = 6561
 SPEECH_EOS = 6562
 
 # sampling defaults of the reference, samplers it does not use are disabled so the common defaults do not apply
-TURBO_SAMPLING = {"top_k": 1000, "min_p": 0.0,  "top_p": 0.95, "temp": 0.8, "penalty_repeat": 1.2}
-MTL_SAMPLING   = {"top_k": 0,    "min_p": 0.05, "top_p": 1.0,  "temp": 0.8, "penalty_repeat": 1.2}
+TURBO_TOP_K = 1000
+MTL_TOP_K   = 0
+TURBO_SAMPLING = {"min_p": 0.0,  "top_p": 0.95, "temp": 0.8, "penalty_repeat": 1.2}
+MTL_SAMPLING   = {"min_p": 0.05, "top_p": 1.0,  "temp": 0.8, "penalty_repeat": 1.2}
 # the reference repetition penalty covers the whole generated history
 PENALTY_LAST_N = -1
 
@@ -219,7 +221,7 @@ class ChatterboxTalkerModel(TextModel):
         super().set_gguf_parameters()
 
         sampling = TURBO_SAMPLING if self.is_turbo else MTL_SAMPLING
-        self.gguf_writer.add_sampling_top_k(sampling["top_k"])
+        self.gguf_writer.add_sampling_top_k(TURBO_TOP_K if self.is_turbo else MTL_TOP_K)
         self.gguf_writer.add_sampling_min_p(sampling["min_p"])
         self.gguf_writer.add_sampling_top_p(sampling["top_p"])
         self.gguf_writer.add_sampling_temp(sampling["temp"])
@@ -290,7 +292,8 @@ class ChatterboxTalkerModel(TextModel):
             yield from self._maybe_emit_fused()
             return
         if name == "speech_head.bias":
-            # TODO: the gpt2 arch has no output bias, the speech head bias is dropped
+            # the text head has no bias, its zone is suppressed at sampling anyway
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.OUTPUT, suffix=".bias"), F.pad(data_torch, (self.hparams["vocab_size"], 0)))
             return
 
         assert name.startswith("tfmr.")

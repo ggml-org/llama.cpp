@@ -1,3 +1,4 @@
+#define _USE_MATH_DEFINES // for M_PI
 #include "models.h"
 
 // Chatterbox generation graphs: flow encoder, cfm estimator, s3 tokenizer and hift vocoder

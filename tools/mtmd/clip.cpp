@@ -1,3 +1,4 @@
+#define _USE_MATH_DEFINES // for M_PI
 #include "clip.h"
 #include "clip-impl.h"
 #include "clip-model.h"
@@ -6654,6 +6655,13 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                 std::vector<int32_t> tokens = params->ref->tokens;
                 tokens.resize((size_t) n_prompt + n_gen);
                 memcpy(tokens.data() + n_prompt, params->codes->data(), (size_t) n_gen * sizeof(int32_t));
+                const int64_t n_codes = model.cbx.input_embedding_w->ne[1];
+                for (int32_t t : tokens) {
+                    if (t < 0 || t >= n_codes) {
+                        LOG_ERR("%s: speech token out of range (%d, codebook size %lld)\n", __func__, t, (long long) n_codes);
+                        return false;
+                    }
+                }
                 const int T1 = n_prompt + n_gen;
                 const int T2 = 2 * T1;
                 set_input_i32("inp_tokens", tokens);
@@ -7348,16 +7356,24 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
             auto tab_it = tensors.find("a.gen.code.out_embd.weight");
             GGML_ASSERT(tab_it != tensors.end());
             ggml_tensor * tab = tab_it->second;
-            GGML_ASSERT(tab->type == GGML_TYPE_F16 || tab->type == GGML_TYPE_F32);
             const int n_e = (int) tab->ne[0];
             auto pos_it = tensors.find("a.gen.t3.speech_pos_emb");
             ggml_tensor * pos = pos_it == tensors.end() ? nullptr : pos_it->second;
+            if ((tab->type != GGML_TYPE_F16 && tab->type != GGML_TYPE_F32) ||
+                (pos && (pos->type != GGML_TYPE_F32 || pos->ne[0] != n_e || pos->ne[1] < n_tok))) {
+                LOG_ERR("%s: unexpected speech table or positions\n", __func__);
+                return false;
+            }
 
             params->out_code_embd->resize((size_t) n_tok * n_e);
             std::vector<ggml_fp16_t> h16(n_e);
             std::vector<float> pr(n_e);
             for (int t = 0; t < n_tok; t++) {
                 float * dst = params->out_code_embd->data() + (size_t) t * n_e;
+                if ((*params->out_codes)[(size_t) t] >= tab->ne[1]) {
+                    LOG_ERR("%s: speech code beyond the speech table\n", __func__);
+                    return false;
+                }
                 const size_t r = (size_t) (*params->out_codes)[(size_t) t] * n_e;
                 if (tab->type == GGML_TYPE_F16) {
                     ggml_backend_tensor_get(tab, h16.data(), r * sizeof(ggml_fp16_t), (size_t) n_e * sizeof(ggml_fp16_t));
@@ -7405,8 +7421,11 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
         const int64_t n_wav = (int64_t) n_mel_out * ups_total;
         std::vector<float> lw(9);
         float lb = 0.0f;
-        GGML_ASSERT(clip_cbx_read_tensor(ctx, "a.gen.hift.m_source.l_linear.weight", lw.data(), lw.size()) == 9);
-        clip_cbx_read_tensor(ctx, "a.gen.hift.m_source.l_linear.bias", &lb, 1);
+        if (clip_cbx_read_tensor(ctx, "a.gen.hift.m_source.l_linear.weight", lw.data(), lw.size()) != 9 ||
+            clip_cbx_read_tensor(ctx, "a.gen.hift.m_source.l_linear.bias", &lb, 1) != 1) {
+            LOG_ERR("%s: unexpected hift source module\n", __func__);
+            return false;
+        }
 
         std::mt19937 & srng = params->gen_state->rng;
         std::uniform_real_distribution<double> ud(-M_PI, M_PI);

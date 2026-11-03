@@ -1736,6 +1736,11 @@ public:
                 return 1;
             }
         }
+        llama_memory_t mem = llama_get_memory(lctx);
+        if (!llama_memory_seq_rm(mem, seq_id, 0, -1) || (mtl && !llama_memory_seq_rm(mem, seq_uncond, 0, -1))) {
+            LOG_ERR("mtmd_helper_gen_audio: cannot reset chatterbox sequences\n");
+            return 1;
+        }
 
         // the encode gives the talker conditioning rows, set_ref keeps the flow decoder reference
         if (!inp->speaker_ref) {
@@ -1780,6 +1785,10 @@ public:
             // only the multilingual prompt wraps the text in start/stop tokens
             ids.insert(ids.begin(), text_start);
             ids.push_back(text_stop);
+            if (ids.size() > text_pos.size() / (size_t) n_e) {
+                LOG_ERR("mtmd_helper_gen_audio: prompt too long (%zu tokens, max %zu)\n", ids.size(), text_pos.size() / (size_t) n_e);
+                return 1;
+            }
         }
         const size_t text0 = prompt_embd_buf.size() / (size_t) n_e;
         for (size_t i = 0; i < ids.size(); i++) {
@@ -1853,13 +1862,13 @@ public:
 
     int32_t step_gen(llama_token sampled, const float * h_state_in, const float ** h_state_out, bool * out_stop) override {
         GGML_UNUSED(h_state_in);
-        if (sampled == LLAMA_TOKEN_NULL) {
+        if (sampled < 0 || sampled >= llama_vocab_n_tokens(vocab)) {
             LOG_ERR("mtmd_helper_gen_audio: chatterbox requires a token sampled from the backbone\n");
             return 1;
         }
 
-        // the speech stop token is the backbone eos
-        if (llama_vocab_is_eog(vocab, sampled)) {
+        // the speech stop token is the backbone eos, the multilingual speech positions end the stream too
+        if (llama_vocab_is_eog(vocab, sampled) || (mtl && (size_t) ar_idx >= speech_pos.size() / (size_t) n_embd)) {
             *out_stop    = true;
             *h_state_out = nullptr;
             return 0;

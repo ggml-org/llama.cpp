@@ -176,7 +176,7 @@ struct mtmd_bitmap {
     std::string id; // optional user-defined id, for ex: can be set to image hash, useful for KV cache tracking
     bool is_audio = false; // true if the bitmap is audio
     bool is_voice = false;
-    const clip_gen_voice * voice = nullptr; // the predefined voice, owned by the context
+    std::shared_ptr<const clip_gen_ref> gen_ref; // gen-side reference of a predefined voice, if any
     bool mergeable = false; // [QWEN_VIDEO] set only on frames of the same video
     bool is_video  = false; // see mtmd_bitmap_set_is_video()
 
@@ -207,7 +207,9 @@ struct mtmd_bitmap {
         const uint32_t n_rows = voice.rows.size() / n_embd;
         auto * bitmap = new mtmd_bitmap(nullptr, n_embd, n_rows);
         bitmap->is_voice = true;
-        bitmap->voice = &voice;
+        if (!voice.ref.tokens.empty()) {
+            bitmap->gen_ref = std::make_shared<const clip_gen_ref>(voice.ref);
+        }
         bitmap->id = name;
         bitmap->data.assign((const unsigned char *) rows, (const unsigned char *) (rows + (size_t) n_embd * n_rows));
         return bitmap;
@@ -352,7 +354,7 @@ struct mtmd_audio_track {
     clip_image_f32_batch batch_f32; // the mel of the whole track
     uint32_t n_tokens = 0;
     std::vector<float> embd;        // filled by the first encode
-    const clip_gen_voice * voice = nullptr; // set for a predefined voice
+    std::shared_ptr<const clip_gen_ref> gen_ref; // gen-side reference of a predefined voice, if any
 };
 
 struct mtmd_audio_tokens {
@@ -1861,7 +1863,9 @@ struct mtmd_tokenizer {
             // one chunk for the five entries of a chatterbox clip, one token per talker conditioning row
             if (clip_get_projector_type(ctx->ctx_a) == PROJECTOR_TYPE_CHATTERBOX_SPKENC) {
                 GGML_ASSERT(mel_spec_chunks.size() == 5);
-                const size_t n_tokens = cbx_is_mtl(ctx->ctx_a) ? 34 : 1 + (size_t) mel_spec_chunks[2].n_len / 4;
+                // mtl: spkr, perceiver query rows, emotion; turbo: spkr, t3 speech tokens
+                const size_t n_query  = clip_cbx_read_tensor(ctx->ctx_a, "a.cenc.perceiver.pre_attention_query", nullptr, 0) / ctx->n_embd_out();
+                const size_t n_tokens = cbx_is_mtl(ctx->ctx_a) ? 2 + n_query : 1 + (size_t) mel_spec_chunks[2].n_len / 4;
 
                 clip_image_f32_batch batch_f32;
                 batch_f32.is_audio = true;
@@ -1941,7 +1945,7 @@ struct mtmd_tokenizer {
         track->n_tokens = bitmap.ny;
         const auto & buf = bitmap.get_ro_buf();
         track->embd.assign((const float *) buf.data(), (const float *) (buf.data() + buf.size()));
-        track->voice = bitmap.voice;
+        track->gen_ref = bitmap.gen_ref;
 
         mtmd_audio_tokens_ptr audio_tokens(new mtmd_audio_tokens);
         audio_tokens->n_tokens = bitmap.ny;
@@ -2236,6 +2240,7 @@ static int32_t mtmd_encode_impl(mtmd_context * ctx, const mtmd_image_tokens * im
 static int32_t cbx_ref_encode(mtmd_context * ctx, const mtmd_audio_tokens * audio_tokens, std::vector<float> & out_embd);
 
 static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk * chunk, std::vector<float> & out_embd) {
+    ctx->gen_ref = {}; // see mtmd_gen_state_set_ref()
     if (chunk->type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
         LOG_WRN("mtmd_encode_chunk has no effect for text chunks\n");
         return 0;
@@ -2280,8 +2285,8 @@ static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk
             const size_t off = (size_t) chunk->tokens_audio->row_begin * n_mmproj_embd;
             out_embd.assign(track->embd.begin() + off,
                             track->embd.begin() + off + (size_t) chunk->tokens_audio->n_tokens * n_mmproj_embd);
-            if (track->voice) {
-                ctx->gen_ref = track->voice->ref;
+            if (track->gen_ref) {
+                ctx->gen_ref = *track->gen_ref;
             }
             return 0;
         }
@@ -2303,7 +2308,6 @@ static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk
 
 int32_t mtmd_encode_chunk(mtmd_context * ctx, const mtmd_input_chunk * chunk) {
     // this is the non-batching version
-    ctx->gen_ref = {};
     try {
         return mtmd_encode_chunk_impl(ctx, chunk, ctx->out_embd);
     } catch (const std::exception & e) {
@@ -2426,9 +2430,10 @@ static int32_t cbx_ref_tokenize(mtmd_context * ctx, const clip_image_f32 & mel,
 static int32_t cbx_ref_cond(mtmd_context * ctx, const clip_image_f32 & ve_mel,
                         const std::vector<float> & pse, std::vector<float> & out_rows) {
     clip_ctx * ctx_clip = ctx->ctx_a;
-    auto read_t = [&](const char * name, std::vector<float> & v) -> bool {
+    // n_expect 0 accepts any non-empty size
+    auto read_t = [&](const char * name, std::vector<float> & v, size_t n_expect) -> bool {
         const size_t n = clip_cbx_read_tensor(ctx_clip, name, nullptr, 0);
-        if (n == 0) {
+        if (n == 0 || (n_expect > 0 && n != n_expect)) {
             return false;
         }
         v.resize(n);
@@ -2439,27 +2444,32 @@ static int32_t cbx_ref_cond(mtmd_context * ctx, const clip_image_f32 & ve_mel,
     const std::vector<float> & mel = ve_mel.get_ro_buf();
     const int n_mel     = 40;
     const int n_partial = 160;
+    const int n_h       = 256;
     const int step      = (int) lround((16000.0 / 1.3) / n_partial); // reference rate 1.3
-    const int n_wins    = (ve_mel.nx() - n_partial) / step + 1;
+    if (ve_mel.nx() < n_partial || mel.size() < (size_t) ve_mel.nx() * n_mel) {
+        LOG_ERR("%s: voice encoder mel too short\n", __func__);
+        return 1;
+    }
+    const int n_wins = (ve_mel.nx() - n_partial) / step + 1;
 
     std::vector<float> w_ih[3], w_hh[3], b_ih[3], b_hh[3];
     std::vector<float> w_proj, b_proj;
     for (int l = 0; l < 3; l++) {
         const std::string s = std::to_string(l);
-        if (!read_t(("a.ve.lstm.weight_ih_l" + s).c_str(), w_ih[l]) ||
-            !read_t(("a.ve.lstm.weight_hh_l" + s).c_str(), w_hh[l]) ||
-            !read_t(("a.ve.lstm.bias_ih_l" + s).c_str(), b_ih[l]) ||
-            !read_t(("a.ve.lstm.bias_hh_l" + s).c_str(), b_hh[l])) {
+        const size_t n_in = l == 0 ? n_mel : n_h;
+        if (!read_t(("a.ve.lstm.weight_ih_l" + s).c_str(), w_ih[l], 4 * n_h * n_in) ||
+            !read_t(("a.ve.lstm.weight_hh_l" + s).c_str(), w_hh[l], 4 * n_h * n_h) ||
+            !read_t(("a.ve.lstm.bias_ih_l" + s).c_str(), b_ih[l], 4 * n_h) ||
+            !read_t(("a.ve.lstm.bias_hh_l" + s).c_str(), b_hh[l], 4 * n_h)) {
             LOG_ERR("%s: model has no voice encoder\n", __func__);
             return 1;
         }
     }
-    if (!read_t("a.ve.proj.weight", w_proj) || !read_t("a.ve.proj.bias", b_proj)) {
+    if (!read_t("a.ve.proj.weight", w_proj, n_h * n_h) || !read_t("a.ve.proj.bias", b_proj, n_h)) {
         LOG_ERR("%s: model has no voice encoder projection\n", __func__);
         return 1;
     }
 
-    const int n_h = 256;
     std::vector<float> ve(n_h, 0.0f);
     std::vector<float> h((size_t) 3 * n_h), c((size_t) 3 * n_h), x(n_h), g((size_t) 4 * n_h);
     for (int p = 0; p < n_wins; p++) {
@@ -2525,12 +2535,12 @@ static int32_t cbx_ref_cond(mtmd_context * ctx, const clip_image_f32 & ve_mel,
     }
 
     // speaker projection row
+    const int n_e = (int) ctx->n_embd_out();
     std::vector<float> w_spkr, b_spkr;
-    if (!read_t("a.cenc.spkr_enc.weight", w_spkr) || !read_t("a.cenc.spkr_enc.bias", b_spkr)) {
+    if (!read_t("a.cenc.spkr_enc.weight", w_spkr, (size_t) n_e * n_h) || !read_t("a.cenc.spkr_enc.bias", b_spkr, n_e)) {
         LOG_ERR("%s: model has no speaker conditioning projection\n", __func__);
         return 1;
     }
-    const int n_e = (int) b_spkr.size();
     std::vector<float> rows((size_t) n_e);
     for (int o = 0; o < n_e; o++) {
         double acc = b_spkr[(size_t) o];
@@ -2543,22 +2553,23 @@ static int32_t cbx_ref_cond(mtmd_context * ctx, const clip_image_f32 & ve_mel,
 
     // the perceiver runs its shared attention block as cross then self attention
     std::vector<float> query;
-    if (read_t("a.cenc.perceiver.pre_attention_query", query)) {
-        if (pse.empty()) {
+    if (read_t("a.cenc.perceiver.pre_attention_query", query, 0)) {
+        const int    n_head = 4;
+        const size_t n_ee   = (size_t) n_e * n_e;
+        if (pse.empty() || pse.size() % n_e != 0 || query.size() % n_e != 0 || n_e % n_head != 0) {
             LOG_ERR("%s: reference speech embeddings required for the perceiver\n", __func__);
             return 1;
         }
         std::vector<float> ln_w, ln_b, wq, bq, wk, bk, wv, bv, wo, bo, emo;
-        if (!read_t("a.cenc.perceiver.attn.norm.weight", ln_w) || !read_t("a.cenc.perceiver.attn.norm.bias", ln_b) ||
-            !read_t("a.cenc.perceiver.attn.to_q.weight", wq) || !read_t("a.cenc.perceiver.attn.to_q.bias", bq) ||
-            !read_t("a.cenc.perceiver.attn.to_k.weight", wk) || !read_t("a.cenc.perceiver.attn.to_k.bias", bk) ||
-            !read_t("a.cenc.perceiver.attn.to_v.weight", wv) || !read_t("a.cenc.perceiver.attn.to_v.bias", bv) ||
-            !read_t("a.cenc.perceiver.attn.proj_out.weight", wo) || !read_t("a.cenc.perceiver.attn.proj_out.bias", bo) ||
-            !read_t("a.cenc.emotion_adv_fc.weight", emo)) {
+        if (!read_t("a.cenc.perceiver.attn.norm.weight", ln_w, n_e) || !read_t("a.cenc.perceiver.attn.norm.bias", ln_b, n_e) ||
+            !read_t("a.cenc.perceiver.attn.to_q.weight", wq, n_ee) || !read_t("a.cenc.perceiver.attn.to_q.bias", bq, n_e) ||
+            !read_t("a.cenc.perceiver.attn.to_k.weight", wk, n_ee) || !read_t("a.cenc.perceiver.attn.to_k.bias", bk, n_e) ||
+            !read_t("a.cenc.perceiver.attn.to_v.weight", wv, n_ee) || !read_t("a.cenc.perceiver.attn.to_v.bias", bv, n_e) ||
+            !read_t("a.cenc.perceiver.attn.proj_out.weight", wo, n_ee) || !read_t("a.cenc.perceiver.attn.proj_out.bias", bo, n_e) ||
+            !read_t("a.cenc.emotion_adv_fc.weight", emo, n_e)) {
             LOG_ERR("%s: model has an incomplete perceiver\n", __func__);
             return 1;
         }
-        const int n_head = 4;
         const int d_head = n_e / n_head;
 
         auto layer_norm = [&](const float * in, float * out) {
@@ -2695,7 +2706,10 @@ static int32_t cbx_ref_encode(mtmd_context * ctx, const mtmd_audio_tokens * audi
     if (!mtl) {
         rows.insert(rows.end(), t3_rows.begin(), t3_rows.end());
     }
-    GGML_ASSERT(rows.size() == (size_t) audio_tokens->n_tokens * (size_t) ctx->n_embd_out());
+    if (rows.size() != (size_t) audio_tokens->n_tokens * (size_t) ctx->n_embd_out()) {
+        LOG_ERR("%s: unexpected number of conditioning rows\n", __func__);
+        return 1;
+    }
 
     ctx->gen_ref.tokens = std::move(flow_codes);
     ctx->gen_ref.feat.assign(entries[3].get_ro_buf().begin(), entries[3].get_ro_buf().begin() + n_feat);
