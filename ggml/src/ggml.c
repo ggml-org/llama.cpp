@@ -3853,6 +3853,9 @@ static struct ggml_tensor * ggml_view_impl(
         const int64_t       * ne,
         const size_t        * nb,
         size_t                offset) {
+    // a strided view counts its strides from elements that are contiguous along dim 0 of its source
+    GGML_ASSERT(nb == NULL || a->nb[0] == ggml_type_size(a->type));
+
     struct ggml_tensor * result = ggml_new_tensor_impl(ctx, a->type, n_dims, ne, nb, a, offset);
     ggml_format_name(result, "%s (view)", a->name);
 
