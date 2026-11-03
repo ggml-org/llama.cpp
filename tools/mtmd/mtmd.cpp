@@ -805,9 +805,15 @@ struct mtmd_context {
                         image_preproc = std::make_unique<mtmd_image_preprocessor_minicpmv>(ctx_v);
                     }
                 } break;
+            case PROJECTOR_TYPE_QWEN3VL:
+                {
+                    // <|vision_start|> ... (image embeddings) ... <|vision_end|>
+                    img_beg = "<|vision_start|>";
+                    img_end = "<|vision_end|>";
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_qwen3vl>(ctx_v);
+                } break;
             case PROJECTOR_TYPE_QWEN2VL:
             case PROJECTOR_TYPE_QWEN25VL:
-            case PROJECTOR_TYPE_QWEN3VL:
             case PROJECTOR_TYPE_LING3VL:
             case PROJECTOR_TYPE_MIMOVL:
                 {
@@ -3259,34 +3265,49 @@ int mtmd_get_audio_sample_rate(const mtmd_context * ctx) {
     return clip_get_hparams(ctx->ctx_a)->audio_sample_rate;
 }
 
-mtmd_video_config mtmd_get_video_config(const mtmd_context * ctx,
-                                        int32_t src_width, int32_t src_height,
-                                        int32_t src_n_frames, float src_fps) {
-    mtmd_video_config cfg{MTMD_VIDEO_TEMPLATE_DEFAULT, 0.0f, 0, 0, 0};
-    if (!ctx->ctx_v || clip_get_projector_type(ctx->ctx_v) != PROJECTOR_TYPE_LFM3VL) {
+mtmd_video_config mtmd_video_config_init(mtmd_video_template tmpl, const mtmd_image_preprocessor * preproc,
+                                         int32_t src_width, int32_t src_height,
+                                         int32_t src_n_frames, float src_fps) {
+    mtmd_video_config cfg{tmpl, 0.0f, 0, 0, 0};
+    if (tmpl == MTMD_VIDEO_TEMPLATE_DEFAULT) {
         return cfg;
     }
 
-    // matches Lfm3VlVideoProcessor: 2 fps sampling with a [4, 768] frame clamp
+    // matches Qwen3VLVideoProcessor and Lfm3VlVideoProcessor: 2 fps sampling with a [4, 768] frame clamp
     // LFM3-Omni samples at most 384 frames and hears the soundtrack
-    const bool omni = ctx->video_has_soundtrack();
-    cfg.tmpl = omni ? MTMD_VIDEO_TEMPLATE_LFM3_OMNI : MTMD_VIDEO_TEMPLATE_LFM3;
-    cfg.fps  = 2.0f;
+    cfg.fps = 2.0f;
     if (src_n_frames <= 0 || src_fps <= 0.0f) {
         return cfg;
     }
 
     int32_t n = (int32_t)((double) src_n_frames / src_fps * cfg.fps);
-    n = std::clamp(n, 4, omni ? 384 : 768);
+    n = std::clamp(n, 4, tmpl == MTMD_VIDEO_TEMPLATE_LFM3_OMNI ? 384 : 768);
     n = std::min(n, src_n_frames);
     cfg.n_frames = n;
 
     clip_image_size size;
-    if (ctx->image_preproc && ctx->image_preproc->get_video_frame_size(n, src_width, src_height, size)) {
+    if (preproc && preproc->get_video_frame_size(n, src_width, src_height, size)) {
         cfg.frame_width  = size.width;
         cfg.frame_height = size.height;
     }
     return cfg;
+}
+
+mtmd_video_config mtmd_get_video_config(const mtmd_context * ctx,
+                                        int32_t src_width, int32_t src_height,
+                                        int32_t src_n_frames, float src_fps) {
+    mtmd_video_template tmpl = MTMD_VIDEO_TEMPLATE_DEFAULT;
+    switch (ctx->ctx_v ? clip_get_projector_type(ctx->ctx_v) : PROJECTOR_TYPE_UNKNOWN) {
+        case PROJECTOR_TYPE_LFM3VL:
+            tmpl = ctx->video_has_soundtrack() ? MTMD_VIDEO_TEMPLATE_LFM3_OMNI : MTMD_VIDEO_TEMPLATE_LFM3;
+            break;
+        case PROJECTOR_TYPE_QWEN3VL:
+            tmpl = MTMD_VIDEO_TEMPLATE_QWEN3VL;
+            break;
+        default:
+            break;
+    }
+    return mtmd_video_config_init(tmpl, ctx->image_preproc.get(), src_width, src_height, src_n_frames, src_fps);
 }
 
 const char * mtmd_get_marker(const mtmd_context * ctx) {
