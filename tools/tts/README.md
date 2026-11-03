@@ -127,7 +127,8 @@ python convert_hf_to_gguf.py path/to/lfm3-audio --mmproj --outfile mmproj-lfm3-a
 Two variants are supported: [Chatterbox Turbo](https://huggingface.co/ResembleAI/chatterbox-turbo) (English) and [Chatterbox Multilingual V3](https://huggingface.co/ResembleAI/chatterbox) (23 languages).
 
 Available params:
-- `--tts-speaker-file` should point to a speaker reference audio file (wav, mp3). Optional, the default voice of the model is used without it
+- `--tts-speaker-file` should point to a speaker reference audio file (wav, mp3). Optional, the predefined voice is used without it
+- `--tts-voice` can be `default`, the voice shipped with the model (`conds.pt`)
 - `--tts-lang` sets the language of the multilingual variant, for example `fr` (default: none). It is not used by Turbo
 
 Example usage:

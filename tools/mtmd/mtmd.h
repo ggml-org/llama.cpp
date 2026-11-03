@@ -548,7 +548,7 @@ MTMD_API void             mtmd_gen_state_free(mtmd_gen_state * state);
 // clear the decoder state (cold start), keep the RNG stream
 MTMD_API void             mtmd_gen_state_reset(mtmd_gen_state * state);
 
-// copy the gen-side reference data of the last mtmd_encode_chunk() call into the state (voice cloning)
+// copy the gen-side reference data of the last mtmd_encode_chunk() call into the state (speaker clip or predefined voice)
 // returns non-zero if the last encode produced no such data
 MTMD_API int32_t          mtmd_gen_state_set_ref(mtmd_context * ctx, mtmd_gen_state * state);
 

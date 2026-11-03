@@ -15,7 +15,7 @@
 #
 # Mmproj: the whole s3gen sidecar (flow encoder, CFM estimator, HiFT vocoder, CAMPPlus
 # speaker encoder, S3 tokenizer), the voice encoder, the talker conditioning encoder,
-# the learned position tables, precomputed default-voice conditioning from conds.pt,
+# the learned position tables, the conds.pt voice as the predefined voice "default",
 # and the talker speech embedding table so that reference speech tokens can be turned
 # into talker-space embeddings without a lookup on the text model side.
 
@@ -525,9 +525,9 @@ class ChatterboxMmprojModel(MmprojModel):
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         del name, bid
         # tensors read raw on the host (voice encoder, conditioning encoder,
-        # precomputed conditioning, position tables, mel filterbank, source
-        # module) must stay F32: the reader handles F32/F16/I32 only
-        if new_name.startswith(("a.ve.", "a.cenc.", "a.gen.cond.", "a.gen.t3.", "a.gen.hift.m_source.")) or new_name == "a.s3tok.mel_filters":
+        # voices, position tables, mel filterbank, source module) must stay
+        # F32: the reader handles F32/F16/I32 only
+        if new_name.startswith(("a.ve.", "a.cenc.", "voice.", "a.gen.t3.", "a.gen.hift.m_source.")) or new_name == "a.s3tok.mel_filters":
             return gguf.GGMLQuantizationType.F32
         # conv kernels of the graphs (ggml_conv_1d/_2d/_dw and the transposed
         # convs of the vocoder) have no BF16 kernels; F16 is the graph-side
@@ -552,31 +552,29 @@ class ChatterboxMmprojModel(MmprojModel):
 
         yield ("a.s3tok.mel_filters", _s3tok_mel_filters())
 
-        # default voice: precomputed s3gen conditioning from conds.pt
-        yield ("a.gen.cond.gen_prompt_token", genc["prompt_token"][0].to(torch.int32))
-        yield ("a.gen.cond.gen_prompt_feat", genc["prompt_feat"][0].float())
-        # raw 192-dim campplus x-vector of the default voice: normalization
-        # and the flow speaker affine run inside the code2wav graph
-        yield ("a.gen.cond.gen_embedding", genc["embedding"][0].float())
+        # the conds.pt voice as the predefined voice "default": voice.default holds the talker conditioning rows,
+        # the ref_* tensors the flow decoder reference (speech tokens, prompt mel, raw campplus x-vector)
+        # 1D tensors are written as F32, the speech ids stay exact
+        yield ("voice.default.ref_tokens", genc["prompt_token"][0].float())
+        yield ("voice.default.ref_feat", genc["prompt_feat"][0].float())
+        yield ("voice.default.ref_spk", genc["embedding"][0].float())
 
         spkr_w = talker_tensor("cond_enc.spkr_enc.weight").float()
         spkr_b = talker_tensor("cond_enc.spkr_enc.bias").float()
         spkr_row = spkr_w @ t3c["speaker_emb"][0].float() + spkr_b
+        speech_emb = talker_tensor("speech_emb.weight").float()
+        cond_tokens = t3c["cond_prompt_speech_tokens"][0]
 
         if self.is_turbo:
-            # default talker conditioning: projected speaker row + speech token ids,
-            # resolved through the speech embedding table at inference time
-            yield ("a.gen.cond.spkr_default", spkr_row)
-            yield ("a.gen.cond.prompt_speech_tokens", t3c["cond_prompt_speech_tokens"][0].to(torch.int32))
+            # turbo talker conditioning: [spkr, speech rows of the cond tokens]
+            yield ("voice.default", torch.cat([spkr_row[None], speech_emb[cond_tokens]], dim=0))
             return
 
-        # multilingual default talker conditioning: [spkr, perceiver x32, emotion]
+        # multilingual talker conditioning: [spkr, perceiver x32, emotion]
         # block precomputed by running the reference perceiver over the embedded
         # default cond speech tokens (flash attention path of AttentionBlock2)
         with torch.no_grad():
-            speech_emb = talker_tensor("speech_emb.weight").float()
             speech_pos = talker_tensor("speech_pos_emb.emb.weight").float()
-            cond_tokens = t3c["cond_prompt_speech_tokens"][0]
             pse = speech_emb[cond_tokens] + speech_pos[: cond_tokens.shape[0]]
 
             ln_w = talker_tensor("cond_enc.perceiver.attn.norm.weight").float()
@@ -609,4 +607,4 @@ class ChatterboxMmprojModel(MmprojModel):
 
             emo = talker_tensor("cond_enc.emotion_adv_fc.weight").float()
             emo_row = emo[:, 0] * t3c["emotion_adv"].reshape(-1)[0]
-            yield ("a.gen.cond.t3_cond", torch.cat([spkr_row[None], p32, emo_row[None]], dim=0))
+            yield ("voice.default", torch.cat([spkr_row[None], p32, emo_row[None]], dim=0))

@@ -1727,7 +1727,6 @@ public:
             return 1;
         }
 
-        const bool mtl = !t3_cond.empty();
         if (mtl) {
             // the uncond sequence lives half a seq space away from the cond one
             const int32_t n_seq_max = (int32_t) llama_n_seq_max(lctx);
@@ -1739,14 +1738,16 @@ public:
             }
         }
 
-        // the encode gives the talker conditioning rows, set_ref keeps the flow decoder reference in the gen state
-        std::vector<float> ref_cond;
-        if (inp->speaker_ref) {
-            if (!encode_speaker(inp->speaker_ref, ref_cond) ||
-                mtmd_gen_state_set_ref(mctx, gen_state.get()) != 0) {
-                LOG_ERR("mtmd_helper_gen_audio: speaker reference encoding failed\n");
-                return 1;
-            }
+        // a speaker clip or a predefined voice: the encode gives the talker conditioning rows,
+        // set_ref keeps the flow decoder reference in the gen state
+        if (!inp->speaker_ref) {
+            LOG_ERR("mtmd_helper_gen_audio: chatterbox requires a speaker reference or a voice\n");
+            return 1;
+        }
+        if (!encode_speaker(inp->speaker_ref, prompt_embd_buf) ||
+            mtmd_gen_state_set_ref(mctx, gen_state.get()) != 0) {
+            LOG_ERR("mtmd_helper_gen_audio: speaker reference encoding failed\n");
+            return 1;
         }
 
         const int n_e = n_embd;
@@ -1760,16 +1761,7 @@ public:
             }
         };
 
-        // prompt rows: [conditioning, text, speech bos], the conditioning is the precomputed default voice when not cloning
-        if (!ref_cond.empty()) {
-            prompt_embd_buf = ref_cond;
-        } else if (mtl) {
-            prompt_embd_buf = t3_cond;
-        } else {
-            push_row(cond_spkr.data());
-            prompt_embd_buf.insert(prompt_embd_buf.end(), cond_speech_rows.begin(), cond_speech_rows.end());
-        }
-
+        // prompt rows: [conditioning, text, speech bos]
         // no text preprocessing here, the [SPACE] substitution and the case folding are baked in at conversion
         std::string txt(inp->prompt, inp->prompt_len);
         if (mtl && inp->lang && inp->lang[0]) {
@@ -1823,7 +1815,6 @@ public:
 
     int32_t step_prompt(int32_t n_batch) override {
         GGML_ASSERT(n_batch > 0);
-        const bool mtl = !t3_cond.empty();
         // the uncond prompt follows the cond one on mtl
         const int n_total = mtl ? 2 * n_prompt : n_prompt;
         if (prompt_pos >= n_total) {
@@ -1883,7 +1874,6 @@ public:
 
         std::vector<float> e(tok_embd.begin() + (size_t) sampled * n_embd,
                              tok_embd.begin() + (size_t) (sampled + 1) * n_embd);
-        const bool mtl = !t3_cond.empty();
         if (mtl) {
             // the multilingual backbone takes the token row plus the learned speech position
             const float * p = speech_pos.data() + (size_t) ar_idx * n_embd;
@@ -1994,7 +1984,7 @@ private:
         if (decoded || codes_buf.empty()) {
             return true;
         }
-        if (t3_cond.empty()) {
+        if (!mtl) {
             // turbo appends a short silence tail before vocoding
             codes_buf.insert(codes_buf.end(), 3, 4299);
         }
@@ -2045,47 +2035,17 @@ private:
             return true;
         };
 
-        // multilingual: precomputed [spkr, perceiver, emotion] conditioning block and the learned position tables
-        if (mtmd_gen_audio_read_tensor(mctx, "a.gen.cond.t3_cond", nullptr, 0) > 0) {
-            if (!read_table("a.gen.cond.t3_cond", t3_cond) ||
-                !read_table("a.gen.t3.text_pos_emb", text_pos) ||
-                !read_table("a.gen.t3.speech_pos_emb", speech_pos)) {
-                return false;
-            }
-            if (t3_cond.size() % (size_t) n_embd != 0) {
-                LOG_ERR("mtmd_helper_gen_audio: unexpected a.gen.cond.t3_cond size\n");
-                return false;
-            }
-            return true;
-        }
-
-        // turbo: precomputed speaker row, plus the default speech ids looked up in the mmproj speech table
-        std::vector<float> cond_ids, table;
-        if (!read_table("a.gen.cond.spkr_default", cond_spkr) ||
-            !read_table("a.gen.cond.prompt_speech_tokens", cond_ids) ||
-            !read_table("a.gen.code.out_embd.weight", table)) {
+        // multilingual: the learned position tables
+        mtl = mtmd_gen_audio_read_tensor(mctx, "a.gen.t3.text_pos_emb", nullptr, 0) > 0;
+        if (mtl && (!read_table("a.gen.t3.text_pos_emb", text_pos) || !read_table("a.gen.t3.speech_pos_emb", speech_pos))) {
             return false;
-        }
-        if (cond_spkr.size() != (size_t) n_embd || table.size() % (size_t) n_embd != 0) {
-            LOG_ERR("mtmd_helper_gen_audio: unexpected default conditioning size\n");
-            return false;
-        }
-        const size_t n_rows = table.size() / (size_t) n_embd;
-        cond_speech_rows.resize(cond_ids.size() * (size_t) n_embd);
-        for (size_t i = 0; i < cond_ids.size(); i++) {
-            const size_t r = (size_t) cond_ids[i];
-            GGML_ASSERT(r < n_rows);
-            memcpy(cond_speech_rows.data() + i * (size_t) n_embd, table.data() + r * (size_t) n_embd,
-                   (size_t) n_embd * sizeof(float));
         }
         return true;
     }
 
     // vocab and mmproj data fixed across the whole session, read once
     std::vector<float> tok_embd;
-    std::vector<float> cond_spkr;
-    std::vector<float> cond_speech_rows; // default conditioning ids resolved through the mmproj speech table
-    std::vector<float> t3_cond;
+    bool mtl = false;
     std::vector<float> text_pos;
     std::vector<float> speech_pos;
     llama_token speech_base = LLAMA_TOKEN_NULL;

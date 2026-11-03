@@ -1124,12 +1124,12 @@ struct clip_model {
     // and CAMPPlus speaker encoder
     clip_chatterbox cbx;
 
-    // chatterbox host-read side data (conditioning defaults, embedding
-    // tables, filterbanks, voice/conditioning encoders run on the host),
+    // chatterbox host-read side data (embedding tables, filterbanks,
+    // voice/conditioning encoders run on the host),
     // accessed by name through clip_cbx_read_tensor
     std::map<std::string, ggml_tensor *> cbx_tensors;
     // predefined voices, no rows if the voice is named in the prompt (lfm3a)
-    std::map<std::string, std::vector<float>> gen_voices;
+    std::map<std::string, clip_gen_voice> gen_voices;
 
     // soprano: Vocos decoder, hidden states -> STFT coefficients
     clip_vocos vocos;

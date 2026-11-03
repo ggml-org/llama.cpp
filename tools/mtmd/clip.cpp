@@ -1210,20 +1210,9 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const 
                 int n_tokens = params && params->codes ? (int) params->codes->size() : 0;
                 int n_prompt_mel = 0;
                 if (n_tokens > 0) {
-                    if (params->ref_tokens) {
-                        n_tokens += (int) params->ref_tokens->size();
-                    } else {
-                        auto it = ctx->model.cbx_tensors.find("a.gen.cond.gen_prompt_token");
-                        GGML_ASSERT(it != ctx->model.cbx_tensors.end());
-                        n_tokens += (int) it->second->ne[0];
-                    }
-                    if (params->ref_feat) {
-                        n_prompt_mel = (int) (params->ref_feat->size() / 80);
-                    } else {
-                        auto it = ctx->model.cbx_tensors.find("a.gen.cond.gen_prompt_feat");
-                        GGML_ASSERT(it != ctx->model.cbx_tensors.end());
-                        n_prompt_mel = (int) it->second->ne[1];
-                    }
+                    GGML_ASSERT(params->ref_tokens && params->ref_feat);
+                    n_tokens += (int) params->ref_tokens->size();
+                    n_prompt_mel = (int) (params->ref_feat->size() / 80);
                 }
                 const int vnm = params ? params->vocode_n_mel  : 0;
                 const int vns = params ? params->vocode_n_stft : 0;
@@ -3557,7 +3546,7 @@ struct clip_model_loader {
                         if (t->type != GGML_TYPE_F32 || ggml_n_dims(t) > 2 || t->ne[0] != model.gen_input_lin_w->ne[1]) {
                             throw std::runtime_error(string_format("%s: invalid voice tensor %s\n", __func__, name));
                         }
-                        auto & embd = model.gen_voices[name + 6];
+                        auto & embd = model.gen_voices[name + 6].rows;
                         embd.resize(ggml_nelements(t));
                         fin.seekg(tensor_offset.at(name), std::ios::beg);
                         if (!fin.read(reinterpret_cast<char *>(embd.data()), ggml_nbytes(t))) {
@@ -3918,14 +3907,70 @@ struct clip_model_loader {
                     c.s3tok_down_b = get_tensor("a.s3tok.quantizer._codebook.project_down.bias");
 
                     // host-read side data, accessed by name through
-                    // clip_cbx_read_tensor: conditioning defaults, embedding
-                    // tables, source module, filterbank
+                    // clip_cbx_read_tensor: embedding tables, source module, filterbank
                     for (ggml_tensor * t = ggml_get_first_tensor(ctx_meta.get()); t; t = ggml_get_next_tensor(ctx_meta.get(), t)) {
                         const std::string name = t->name;
-                        if (name.rfind("a.gen.cond.", 0) == 0 || name.rfind("a.gen.code.", 0) == 0 ||
+                        if (name.rfind("a.gen.code.", 0) == 0 ||
                             name.rfind("a.gen.t3.", 0) == 0   || name.rfind("a.gen.hift.m_source.", 0) == 0 ||
                             name == "a.s3tok.mel_filters") {
                             model.cbx_tensors[name] = get_tensor(name);
+                        }
+                    }
+
+                    // voice.<name> holds the talker rows, voice.<name>.ref_* the flow decoder reference
+                    const int64_t n_embd_talker = model.cbx_tensors.at("a.gen.code.out_embd.weight")->ne[0];
+                    for (int64_t i = 0; i < gguf_get_n_tensors(ctx_gguf.get()); ++i) {
+                        const std::string name = gguf_get_tensor_name(ctx_gguf.get(), i);
+                        if (name.rfind("voice.", 0) != 0) {
+                            continue;
+                        }
+                        const ggml_tensor * t = ggml_get_tensor(ctx_meta.get(), name.c_str());
+                        std::string voice = name.substr(6);
+                        std::vector<float> ids; // the converter stores 1D tensors as F32, ids are exact
+                        void * dst = nullptr;
+                        bool ok = false;
+                        auto take = [&](const char * suffix) {
+                            const size_t n = strlen(suffix);
+                            if (voice.size() > n && voice.compare(voice.size() - n, n, suffix) == 0) {
+                                voice.resize(voice.size() - n);
+                                return true;
+                            }
+                            return false;
+                        };
+                        if (take(".ref_tokens")) {
+                            ids.resize(ggml_nelements(t));
+                            dst = ids.data();
+                            ok  = t->type == GGML_TYPE_F32;
+                        } else if (take(".ref_feat")) {
+                            auto & v = model.gen_voices[voice].ref_feat;
+                            v.resize(ggml_nelements(t));
+                            dst = v.data();
+                            ok  = t->type == GGML_TYPE_F32 && t->ne[0] == 80;
+                        } else if (take(".ref_spk")) {
+                            auto & v = model.gen_voices[voice].ref_spk;
+                            v.resize(ggml_nelements(t));
+                            dst = v.data();
+                            ok  = t->type == GGML_TYPE_F32 && t->ne[0] == 192;
+                        } else {
+                            auto & v = model.gen_voices[voice].rows;
+                            v.resize(ggml_nelements(t));
+                            dst = v.data();
+                            ok  = t->type == GGML_TYPE_F32 && ggml_n_dims(t) <= 2 && t->ne[0] == n_embd_talker;
+                        }
+                        if (!ok) {
+                            throw std::runtime_error(string_format("%s: invalid voice tensor %s\n", __func__, name.c_str()));
+                        }
+                        fin.seekg(tensor_offset.at(name), std::ios::beg);
+                        if (!fin.read(reinterpret_cast<char *>(dst), ggml_nbytes(t))) {
+                            throw std::runtime_error(string_format("%s: failed to read %s\n", __func__, name.c_str()));
+                        }
+                        if (!ids.empty()) {
+                            model.gen_voices[voice].ref_tokens.assign(ids.begin(), ids.end());
+                        }
+                    }
+                    for (const auto & [voice, v] : model.gen_voices) {
+                        if (v.rows.empty() || v.ref_tokens.empty() || v.ref_feat.size() != 2 * 80 * v.ref_tokens.size() || v.ref_spk.empty()) {
+                            throw std::runtime_error(string_format("%s: incomplete voice %s\n", __func__, voice.c_str()));
                         }
                     }
                 } break;
@@ -5497,7 +5542,7 @@ void clip_gen_state_reset(clip_gen_state * state) {
     }
 }
 
-const std::map<std::string, std::vector<float>> & clip_gen_get_voices(const clip_ctx * ctx) {
+const std::map<std::string, clip_gen_voice> & clip_gen_get_voices(const clip_ctx * ctx) {
     return ctx->model.gen_voices;
 }
 
@@ -6616,46 +6661,18 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                     break;
                 }
                 const int n_gen = (int) params->codes->size();
-                int n_prompt = 0;
-                std::vector<int32_t> tokens;
-                if (params->ref_tokens) {
-                    n_prompt = (int) params->ref_tokens->size();
-                    tokens = *params->ref_tokens;
-                    tokens.resize((size_t) n_prompt + n_gen);
-                } else {
-                    // precomputed prompt ids, stored as floats and converted
-                    // through the typed accessor like the other sidecar data
-                    n_prompt = (int) clip_cbx_read_tensor(ctx, "a.gen.cond.gen_prompt_token", nullptr, 0);
-                    tokens.resize((size_t) n_prompt + n_gen);
-                    std::vector<float> ids((size_t) n_prompt);
-                    clip_cbx_read_tensor(ctx, "a.gen.cond.gen_prompt_token", ids.data(), ids.size());
-                    for (int i = 0; i < n_prompt; i++) {
-                        tokens[(size_t) i] = (int32_t) ids[(size_t) i];
-                    }
-                }
+                GGML_ASSERT(params->ref_tokens && params->ref_feat && params->ref_spk);
+                const int n_prompt = (int) params->ref_tokens->size();
+                std::vector<int32_t> tokens = *params->ref_tokens;
+                tokens.resize((size_t) n_prompt + n_gen);
                 memcpy(tokens.data() + n_prompt, params->codes->data(), (size_t) n_gen * sizeof(int32_t));
                 const int T1 = n_prompt + n_gen;
                 const int T2 = 2 * T1;
                 set_input_i32("inp_tokens", tokens);
 
-                // mel-rate reference conditioning, from the clip or the
-                // precomputed defaults shipped in the mmproj
-                if (params->ref_feat) {
-                    set_input_f32("inp_prompt_feat", *params->ref_feat);
-                } else {
-                    ggml_tensor * pf = model.cbx_tensors.at("a.gen.cond.gen_prompt_feat");
-                    std::vector<float> feat(ggml_nelements(pf));
-                    ggml_backend_tensor_get(pf, feat.data(), 0, ggml_nbytes(pf));
-                    set_input_f32("inp_prompt_feat", feat);
-                }
-                if (params->ref_spk) {
-                    set_input_f32("inp_xvec", *params->ref_spk);
-                } else {
-                    ggml_tensor * sp = model.cbx_tensors.at("a.gen.cond.gen_embedding");
-                    std::vector<float> spk(ggml_nelements(sp));
-                    ggml_backend_tensor_get(sp, spk.data(), 0, ggml_nbytes(sp));
-                    set_input_f32("inp_xvec", spk);
-                }
+                // mel-rate reference conditioning of the voice
+                set_input_f32("inp_prompt_feat", *params->ref_feat);
+                set_input_f32("inp_xvec", *params->ref_spk);
 
                 // espnet relative positional encoding, entry k holds the
                 // sinusoid of relative position (T-1) - k
@@ -7784,9 +7801,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_POCKETTTS_GEN:
             return ctx->model.gen_input_lin_w->ne[1];
         case PROJECTOR_TYPE_CHATTERBOX:
-            // gen-only stack, no input projection into the backbone; the mel
-            // channel count stands in for the interface dimension
-            return 80;
+            // talker width, carried by the speech table
+            return ctx->model.cbx_tensors.at("a.gen.code.out_embd.weight")->ne[0];
         case PROJECTOR_TYPE_CHATTERBOX_SPKENC:
             {
                 // the encoder emits talker conditioning rows in the backbone

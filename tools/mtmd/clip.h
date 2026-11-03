@@ -129,9 +129,7 @@ struct clip_encode_params {
     // TOKENIZE input
     const float * pcm_in = nullptr;
     size_t        n_pcm  = 0;
-    // TTS reference conditioning overriding the precomputed cond.gen_*
-    // defaults: speech tokens, mel-rate features and the 80-dim speaker
-    // vector of the reference clip (null means default)
+    // TTS reference conditioning: speech tokens, mel-rate features and the speaker vector of the voice
     const std::vector<int32_t> * ref_tokens = nullptr;
     const std::vector<float> *   ref_feat   = nullptr;
     const std::vector<float> *   ref_spk    = nullptr;
@@ -165,7 +163,15 @@ void                    clip_gen_state_reset(struct clip_gen_state * state);
 // read a chatterbox tensor by source name, converted to F32. returns the
 // element count, 0 if not found. out may be null to only query the size.
 size_t clip_cbx_read_tensor(struct clip_ctx * ctx, const char * name, float * out, size_t n_max);
-const std::map<std::string, std::vector<float>> & clip_gen_get_voices(const struct clip_ctx * ctx);
+// a predefined voice: backbone rows, plus the gen-side reference when the gen stack needs one (chatterbox)
+struct clip_gen_voice {
+    std::vector<float>   rows;
+    std::vector<int32_t> ref_tokens;
+    std::vector<float>   ref_feat;
+    std::vector<float>   ref_spk;
+};
+
+const std::map<std::string, clip_gen_voice> & clip_gen_get_voices(const struct clip_ctx * ctx);
 
 bool clip_is_llava(const struct clip_ctx * ctx);
 // note for contributor: this clip_is_(model) pattern is deprecated

@@ -176,6 +176,7 @@ struct mtmd_bitmap {
     std::string id; // optional user-defined id, for ex: can be set to image hash, useful for KV cache tracking
     bool is_audio = false; // true if the bitmap is audio
     bool is_voice = false;
+    const clip_gen_voice * voice = nullptr; // the predefined voice, owned by the context
     bool mergeable = false; // [QWEN_VIDEO] set only on frames of the same video
     bool is_video  = false; // see mtmd_bitmap_set_is_video()
 
@@ -201,9 +202,12 @@ struct mtmd_bitmap {
         }
     }
 
-    static mtmd_bitmap * init_voice(const std::string & name, const float * rows, uint32_t n_embd, uint32_t n_rows) {
+    static mtmd_bitmap * init_voice(const std::string & name, const clip_gen_voice & voice, uint32_t n_embd) {
+        const float *  rows   = voice.rows.data();
+        const uint32_t n_rows = voice.rows.size() / n_embd;
         auto * bitmap = new mtmd_bitmap(nullptr, n_embd, n_rows);
         bitmap->is_voice = true;
+        bitmap->voice = &voice;
         bitmap->id = name;
         bitmap->data.assign((const unsigned char *) rows, (const unsigned char *) (rows + (size_t) n_embd * n_rows));
         return bitmap;
@@ -352,6 +356,7 @@ struct mtmd_audio_track {
     clip_image_f32_batch batch_f32; // the mel of the whole track
     uint32_t n_tokens = 0;
     std::vector<float> embd;        // filled by the first encode
+    const clip_gen_voice * voice = nullptr; // set for a predefined voice
 };
 
 struct mtmd_audio_tokens {
@@ -708,8 +713,7 @@ struct mtmd_context {
                 "hint: you may be using wrong mmproj\n",
                 n_embd_text, n_embd_clip));
         }
-        if (ctx_gen_a && clip_get_projector_type(ctx_gen_a) != PROJECTOR_TYPE_CHATTERBOX) {
-            // the chatterbox gen mmproj emits mel channels, not text embeddings
+        if (ctx_gen_a) {
             int n_embd_gen = clip_n_mmproj_embd(ctx_gen_a);
             if (n_embd_text > 0 && n_embd_text != n_embd_gen) {
                 throw std::runtime_error(string_format(
@@ -1958,6 +1962,7 @@ struct mtmd_tokenizer {
         track->n_tokens = bitmap.ny;
         const auto & buf = bitmap.get_ro_buf();
         track->embd.assign((const float *) buf.data(), (const float *) (buf.data() + buf.size()));
+        track->voice = bitmap.voice;
 
         mtmd_audio_tokens_ptr audio_tokens(new mtmd_audio_tokens);
         audio_tokens->n_tokens = bitmap.ny;
@@ -2298,6 +2303,11 @@ static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk
             const size_t off = (size_t) chunk->tokens_audio->row_begin * n_mmproj_embd;
             out_embd.assign(track->embd.begin() + off,
                             track->embd.begin() + off + (size_t) chunk->tokens_audio->n_tokens * n_mmproj_embd);
+            if (track->voice) {
+                ctx->gen_ref_tokens = track->voice->ref_tokens;
+                ctx->gen_ref_feat   = track->voice->ref_feat;
+                ctx->gen_ref_spk    = track->voice->ref_spk;
+            }
             return 0;
         }
         if (clip_get_projector_type(ctx->ctx_a) == PROJECTOR_TYPE_CHATTERBOX_SPKENC) {
@@ -2766,8 +2776,7 @@ mtmd_bitmap * mtmd_gen_audio_get_voice(const mtmd_context * ctx, const char * na
     if (it == voices.end()) {
         return nullptr;
     }
-    const uint32_t n_embd = clip_n_mmproj_embd(ctx->ctx_gen_a);
-    return mtmd_bitmap::init_voice(it->first, it->second.data(), n_embd, it->second.size() / n_embd);
+    return mtmd_bitmap::init_voice(it->first, it->second, clip_n_mmproj_embd(ctx->ctx_gen_a));
 }
 
 mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
@@ -2818,7 +2827,7 @@ struct mtmd_gen_state {
     std::vector<float>   out_embd;  // next-step hidden state fed back to backbone (GEN_CODE)
     std::vector<float>   out_audio; // decoded PCM samples for the current frame (GEN_WAV)
 
-    // voice cloning reference for GEN_WAV, empty selects the default voice of the model (chatterbox)
+    // voice reference for GEN_WAV, from a speaker clip or a predefined voice (chatterbox)
     std::vector<int32_t> ref_tokens;
     std::vector<float>   ref_feat;
     std::vector<float>   ref_spk;
@@ -3029,10 +3038,11 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, mtmd_gen_state * 
             LOG_ERR("%s: codes required for gen_wav\n", __func__);
             return 1;
         }
+        if (state->ref_tokens.empty()) {
+            LOG_ERR("%s: gen_wav needs a voice reference, see mtmd_gen_state_set_ref()\n", __func__);
+            return 1;
+        }
         std::vector<int32_t> in_codes(inp->codes, inp->codes + inp->n_codes);
-
-        // an empty reference selects the precomputed default voice of the model
-        const bool has_ref = !state->ref_tokens.empty();
 
         // the batch entry is unused, present to satisfy the encode interface
         clip_image_f32 dummy;
@@ -3048,9 +3058,9 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, mtmd_gen_state * 
         params.gen_process = CLIP_GEN_PROCESS_TTS;
         params.codes       = &in_codes;
         params.out_audio   = &state->out_audio;
-        params.ref_tokens  = has_ref ? &state->ref_tokens : nullptr;
-        params.ref_feat    = has_ref ? &state->ref_feat   : nullptr;
-        params.ref_spk     = has_ref ? &state->ref_spk    : nullptr;
+        params.ref_tokens  = &state->ref_tokens;
+        params.ref_feat    = &state->ref_feat;
+        params.ref_spk     = &state->ref_spk;
         params.gen_state   = state->clip_state;
 
         if (!clip_encode(ctx_clip, &params)) {
