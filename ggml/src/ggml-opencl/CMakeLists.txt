@@ -71,6 +71,7 @@ ggml_add_backend_library(${TARGET_NAME}
                          ops/argmax.cpp
                          ops/lightning_indexer.cpp
                          ops/top_k.cpp
+                         ops/top_k_mask.cpp
                          ops/argsort.cpp
                          ops/sum_rows.cpp
                          ops/cumsum.cpp
