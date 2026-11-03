@@ -169,49 +169,58 @@ static inline void cpy_cursor_advance(struct cpy_row_cursor * c, uint32_t n, uin
 struct cpy_tile_cursor {
     uint32_t ibk;
     uint32_t ib0;
-    uint32_t ip;
-    uint32_t iq;
+    uint32_t i2;
+    uint32_t i3;
 };
 
-static inline void cpy_tile_cursor_advance(struct cpy_tile_cursor * c, const struct htp_copy_transpose_params * tp, uint32_t ne_p) {
+static inline void cpy_tile_cursor_advance(struct cpy_tile_cursor * c, const struct htp_copy_transpose_params * tp) {
     if (++c->ibk == tp->nkb) {
         c->ibk = 0;
         if (++c->ib0 == tp->n0b) {
             c->ib0 = 0;
-            if (++c->ip == ne_p) {
-                c->ip = 0;
-                c->iq++;
+            if (++c->i2 == tp->ne[2]) {
+                c->i2 = 0;
+                c->i3++;
             }
         }
     }
 }
 
-// Lane l of a packed tile vector is dst element (ik, i0) = (l / ne0, l % ne0) relative
-// to the vector's first dim-k index.
-static inline HVX_Vector cpy_transpose_packed_offsets(uint32_t ne0, uint32_t in_stride, uint32_t ts) {
-    if (ts == 4) {
+// Lane l reads lane (l & (m - 1)) of element e = l >> log2_m. Element e is at dim-0 index
+// (e & (r - 1)) and dim-1 index (e >> log2_r) relative to the gather base.
+static inline HVX_Vector cpy_transpose_offsets(const struct htp_copy_transpose_params * tp) {
+    const uint32_t r_mask = (1u << tp->log2_r) - 1;
+    if (tp->elem_size != 2) {
+        const uint32_t m_mask = (1u << tp->log2_m) - 1;
         int32_t offsets[32] __attribute__((aligned(128)));
         for (uint32_t l = 0; l < 32; l++) {
-            offsets[l] = (l % ne0) * in_stride + (l / ne0) * ts;
+            const uint32_t e = l >> tp->log2_m;
+            offsets[l] = (e & r_mask) * tp->in_stride + (e >> tp->log2_r) * tp->elem_size + (l & m_mask) * 4;
         }
         return *(HVX_Vector *) offsets;
     }
     int16_t offsets[64] __attribute__((aligned(128)));
     for (uint32_t l = 0; l < 64; l++) {
-        offsets[l] = (l % ne0) * in_stride + (l / ne0) * ts;
+        offsets[l] = (l & r_mask) * tp->in_stride + (l >> tp->log2_r) * 2;
     }
     return *(HVX_Vector *) offsets;
 }
 
-// Each tile stages blk0 strided src rows (blkk contiguous elements each) in VTCM,
-// vgather-transposes them and writes blkk contiguous dst rows. The DMA ring completes
-// in order, so draining all but the newest entry retires both the current src tile and
-// the dst write that last used this transposed buffer.
+static inline void cpy_transpose_push_in(dma_queue * q, const struct htp_copy_transpose_params * tp, dma_addr_t src,
+                                         const struct cpy_tile_cursor * c, uint8_t * buf) {
+    const uint32_t a0  = c->ib0 * tp->blk0;
+    const uint32_t ak  = c->ibk * tp->blkk;
+    const uint32_t off = a0 * tp->src_nb[0] + ak * tp->elem_size + c->i2 * tp->src_nb[1] + c->i3 * tp->src_nb[2];
+    dma_queue_push(q, dma_make_data(buf, src + off), tp->in_stride, tp->src_nb[0],
+                   MIN(tp->blkk, tp->ne[1] - ak) * tp->elem_size, MIN(tp->blk0, tp->ne[0] - a0));
+}
+
+// Each tile stages blk0 strided src rows (blkk dense elements each) in VTCM, vgather-transposes
+// them and writes blkk dst rows. The DMA ring completes in order, so draining all but the newest
+// entry retires both the current src tile and the dst write that last used this transposed buffer.
 static void cpy_thread_transpose(unsigned int nth, unsigned int ith, void * data) {
     struct htp_copy_context * ct = (struct htp_copy_context *) data;
     struct htp_ops_context * octx = ct->octx;
-    const struct htp_tensor * src0 = octx->src[0];
-    const struct htp_tensor * dst  = octx->dst;
     const struct htp_copy_transpose_params * tp = &ct->kparams->u.transpose;
 
     const uint32_t t0 = ct->tile_start + ith * ct->tiles_per_thread;
@@ -221,23 +230,21 @@ static void cpy_thread_transpose(unsigned int nth, unsigned int ith, void * data
     }
 
     dma_queue * dma_q = octx->ctx->dma[ith];
+    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
 
-    const uint32_t ts    = ct->kparams->src0_type_size;
-    const uint32_t lanes = 128 / ts;
-    const uint32_t k = tp->dim_k, p = tp->dim_p, q = tp->dim_q;
-    const uint32_t ne0 = tp->ne[0], nek = tp->ne[k], ne_p = tp->ne[p];
+    const dma_addr_t src = octx->src[0]->data;
+    const dma_addr_t dst = octx->dst->data;
 
-    uint32_t dnb[4];
-    dnb[0] = ts;
-    for (int d = 1; d < 4; d++) {
-        dnb[d] = dnb[d - 1] * tp->ne[d - 1];
-    }
+    const uint32_t es         = tp->elem_size;
+    const uint32_t ne0        = tp->ne[0];
+    const uint32_t nek        = tp->ne[1];
+    const uint32_t in_stride  = tp->in_stride;
+    const uint32_t out_stride = tp->out_stride;
 
-    const HVX_Vector offsets = tp->packed ? cpy_transpose_packed_offsets(ne0, tp->in_stride, ts) :
-                               ts == 4    ? hvx_vec_gather_offsets_w(tp->in_stride) :
-                                            hvx_vec_gather_offsets_h(tp->in_stride);
-    const uint32_t packed_mu   = (ne0 - 1) * tp->in_stride + 128;
-    const uint32_t packed_step = (lanes / ne0) * ts;
+    const HVX_Vector offsets   = cpy_transpose_offsets(tp);
+    const uint32_t packed_mu   = (ne0 - 1) * in_stride + 127;
+    const uint32_t packed_step = 128 >> tp->log2_r;
+    const uint32_t epv         = 1u << tp->log2_r;
 
     uint8_t * in_buf[2];
     uint8_t * out_buf[2];
@@ -248,25 +255,17 @@ static void cpy_thread_transpose(unsigned int nth, unsigned int ith, void * data
 
     struct cpy_tile_cursor cur;
     {
-        uint32_t rest = t0;
-        cur.ibk = rest % tp->nkb; rest /= tp->nkb;
-        cur.ib0 = rest % tp->n0b; rest /= tp->n0b;
-        cur.ip  = rest % ne_p;
-        cur.iq  = rest / ne_p;
+        const uint32_t q0 = fastdiv(t0, &tp->div_nkb);
+        const uint32_t q1 = fastdiv(q0, &tp->div_n0b);
+        cur.ibk = t0 - q0 * tp->nkb;
+        cur.ib0 = q0 - q1 * tp->n0b;
+        cur.i3  = fastdiv(q1, &tp->div_ne2);
+        cur.i2  = q1 - cur.i3 * tp->ne[2];
     }
 
     struct cpy_tile_cursor nxt = cur;
 
-    #define CPY_TILE_PUSH_IN(C, BUF)                                                                        \
-        do {                                                                                                \
-            const uint32_t a0_ = (C).ib0 * tp->blk0, ak_ = (C).ibk * tp->blkk;                              \
-            const dma_addr_t sa_ = src0->data + a0_ * tp->nb[0] + ak_ * ts +                                \
-                                   (C).ip * tp->nb[p] + (C).iq * tp->nb[q];                                 \
-            dma_queue_push(dma_q, dma_make_data((BUF), sa_), tp->in_stride, tp->nb[0],                      \
-                           MIN(tp->blkk, nek - ak_) * ts, MIN(tp->blk0, ne0 - a0_));                        \
-        } while (0)
-
-    CPY_TILE_PUSH_IN(cur, in_buf[0]);
+    cpy_transpose_push_in(dma_q, tp, src, &cur, in_buf[0]);
 
     for (uint32_t t = t0, i = 0; t < t1; t++, i++) {
         while (dma_queue_depth(dma_q) > (i > 0 ? 1u : 0u)) {
@@ -282,13 +281,14 @@ static void cpy_thread_transpose(unsigned int nth, unsigned int ith, void * data
         const uint32_t nk = MIN(tp->blkk, nek - ak);
 
         if (t + 1 < t1) {
-            cpy_tile_cursor_advance(&nxt, tp, ne_p);
-            CPY_TILE_PUSH_IN(nxt, in_buf[(i + 1) & 1]);
+            cpy_tile_cursor_advance(&nxt, tp);
+            cpy_transpose_push_in(dma_q, tp, src, &nxt, in_buf[(i + 1) & 1]);
         }
 
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) t);
         if (tp->packed) {
-            const uint32_t nvec = (nk * ne0 + lanes - 1) / lanes;
-            if (ts == 4) {
+            const uint32_t nvec = (nk * ne0 * es + 127) >> 7;
+            if (es != 2) {
                 #pragma unroll(4)
                 for (uint32_t v = 0; v < nvec; v++) {
                     Q6_vgather_ARMVw((HVX_Vector *) (out + v * 128), (size_t) (in + v * packed_step), packed_mu, offsets);
@@ -300,33 +300,37 @@ static void cpy_thread_transpose(unsigned int nth, unsigned int ith, void * data
                 }
             }
         } else {
-            for (uint32_t rb = 0; rb < n0; rb += lanes) {
-                const uint32_t nl = MIN(lanes, n0 - rb);
-                for (uint32_t cb = 0; cb < nk; cb += lanes) {
-                    const uint32_t nr = MIN(lanes, nk - cb);
-                    uint8_t *       d = out + cb * tp->out_stride + rb * ts;
-                    const uint8_t * s = in + rb * tp->in_stride + cb * ts;
-                    if (ts == 4) {
-                        hvx_transpose_32x32_w_gather(d, tp->out_stride, s, tp->in_stride, offsets, nr, nl);
-                    } else {
-                        hvx_transpose_64x64_h_gather(d, tp->out_stride, s, tp->in_stride, offsets, nr, nl);
+            // one vector holds epv dim-0 elements of one dim-1 row
+            for (uint32_t rb = 0; rb < n0; rb += epv) {
+                const uint32_t  mu = (MIN(epv, n0 - rb) - 1) * in_stride + es - 1;
+                uint8_t *       d  = out + rb * es;
+                const uint8_t * s  = in + rb * in_stride;
+                if (es != 2) {
+                    #pragma unroll(4)
+                    for (uint32_t ik = 0; ik < nk; ik++) {
+                        Q6_vgather_ARMVw((HVX_Vector *) (d + ik * out_stride), (size_t) (s + ik * es), mu, offsets);
+                    }
+                } else {
+                    #pragma unroll(4)
+                    for (uint32_t ik = 0; ik < nk; ik++) {
+                        Q6_vgather_ARMVh((HVX_Vector *) (d + ik * out_stride), (size_t) (s + ik * 2), mu, offsets);
                     }
                 }
             }
         }
         hvx_gather_sync(out);
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) t);
 
-        const dma_addr_t da = dst->data + a0 * ts + ak * dnb[k] + cur.ip * dnb[p] + cur.iq * dnb[q];
+        const uint32_t doff = a0 * es + ak * tp->dst_nb[0] + cur.i2 * tp->dst_nb[1] + cur.i3 * tp->dst_nb[2];
         if (tp->packed) {
-            dma_queue_push(dma_q, dma_make_data(da, out), nk * ne0 * ts, nk * ne0 * ts, nk * ne0 * ts, 1);
+            const uint32_t n = nk * ne0 * es;
+            dma_queue_push(dma_q, dma_make_data(dst + doff, out), n, n, n, 1);
         } else {
-            dma_queue_push(dma_q, dma_make_data(da, out), dnb[k], tp->out_stride, n0 * ts, nk);
+            dma_queue_push(dma_q, dma_make_data(dst + doff, out), tp->dst_nb[0], out_stride, n0 * es, nk);
         }
 
         cur = nxt;
     }
-
-    #undef CPY_TILE_PUSH_IN
 
     dma_queue_flush(dma_q);
 }

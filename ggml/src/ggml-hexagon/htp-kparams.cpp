@@ -2669,82 +2669,118 @@ static bool htp_kparams_solve_cpy_transpose(
     uint32_t type_size,
     struct htp_copy_kernel_params * kparams) {
 
-    if (src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) {
-        return false;
-    }
-    if (!ggml_is_contiguous(dst) || !ggml_are_same_shape(src0, dst)) {
+    // contiguous dst takes the elements in src order, so view it with src shape (covers CPY with reshape)
+    const bool dst_cont = ggml_is_contiguous(dst);
+    if (!dst_cont && !ggml_are_same_shape(src0, dst)) {
         return false;
     }
 
-    struct htp_copy_transpose_params & tp = kparams->u.transpose;
-
-    int n = 0;
+    // drop extent-1 dims and merge dims that are adjacent in both src and dst
+    size_t ne[GGML_MAX_DIMS];
+    size_t nbs[GGML_MAX_DIMS];
+    size_t nbd[GGML_MAX_DIMS];
+    size_t dst_stride = type_size;
+    int    n          = 0;
     for (int d = 0; d < GGML_MAX_DIMS; d++) {
+        const size_t sd = dst_cont ? dst_stride : dst->nb[d];
+        dst_stride *= (size_t) src0->ne[d];
         if (src0->ne[d] == 1) {
             continue;
         }
-        if (n > 0 && src0->nb[d] == (size_t) tp.nb[n - 1] * tp.ne[n - 1]) {
-            tp.ne[n - 1] *= (uint32_t) src0->ne[d];
+        if (n > 0 && src0->nb[d] == nbs[n - 1] * ne[n - 1] && sd == nbd[n - 1] * ne[n - 1]) {
+            ne[n - 1] *= (size_t) src0->ne[d];
             continue;
         }
-        tp.ne[n] = (uint32_t) src0->ne[d];
-        tp.nb[n] = (uint32_t) src0->nb[d];
+        ne[n]  = (size_t) src0->ne[d];
+        nbs[n] = src0->nb[d];
+        nbd[n] = sd;
         n++;
     }
-    if (n < 2 || tp.nb[0] == type_size) {
-        return false;
-    }
 
-    int dim_k = -1;
-    for (int d = 1; d < n; d++) {
-        if (tp.nb[d] == type_size) {
-            dim_k = d;
+    // a dim dense in both src and dst becomes one element
+    size_t es = type_size;
+    for (int i = 0; i < n; i++) {
+        if (nbs[i] == type_size && nbd[i] == type_size) {
+            es *= ne[i];
+            for (int j = i; j + 1 < n; j++) {
+                ne[j]  = ne[j + 1];
+                nbs[j] = nbs[j + 1];
+                nbd[j] = nbd[j + 1];
+            }
+            n--;
             break;
         }
     }
-    if (dim_k < 0) {
+    if (es > 128 || (es & (es - 1)) != 0) {
         return false;
     }
-    for (int d = n; d < 4; d++) {
-        tp.ne[d] = 1;
-        tp.nb[d] = tp.nb[d - 1] * tp.ne[d - 1];
+
+    // dim a is dense in dst, dim k is dense in src
+    int a = -1;
+    int k = -1;
+    for (int i = 0; i < n; i++) {
+        if (a < 0 && nbd[i] == es) {
+            a = i;
+        }
+        if (k < 0 && nbs[i] == es) {
+            k = i;
+        }
+    }
+    if (a < 0 || k < 0 || a == k) {
+        return false;
     }
 
-    tp.dim_k = (uint8_t) dim_k;
-    tp.dim_p = 0;
-    tp.dim_q = 0;
-    for (int d = 1; d < 4; d++) {
-        if (d == dim_k) {
+    struct htp_copy_transpose_params tp = {};
+    tp.elem_size = (uint8_t) es;
+    tp.ne[0]     = (uint32_t) ne[a];
+    tp.ne[1]     = (uint32_t) ne[k];
+    tp.ne[2]     = 1;
+    tp.src_nb[0] = (uint32_t) nbs[a];
+    tp.dst_nb[0] = (uint32_t) nbd[k];
+    tp.packed    = nbd[k] == ne[a] * es && ne[a] * es < 128 && 128 % (ne[a] * es) == 0;
+
+    size_t ne3 = 1;
+    int    m   = 0;
+    for (int i = 0; i < n; i++) {
+        if (i == a || i == k) {
             continue;
         }
-        if (tp.dim_p == 0) {
-            tp.dim_p = (uint8_t) d;
+        if (m == 0) {
+            tp.ne[2] = (uint32_t) ne[i];
         } else {
-            tp.dim_q = (uint8_t) d;
+            ne3 = ne[i];
         }
+        tp.src_nb[1 + m] = (uint32_t) nbs[i];
+        tp.dst_nb[1 + m] = (uint32_t) nbd[i];
+        m++;
     }
 
-    const uint32_t n_threads = htp_session_n_threads(sess) > 0 ? htp_session_n_threads(sess) : 4;
+    const uint32_t n_threads = htp_session_n_threads(sess);
     const size_t   vtcm_size = htp_session_vtcm_size(sess);
+    uint64_t       vtcm      = 0;
     for (uint32_t blk_bytes = HTP_COPY_TRANSPOSE_BLK_BYTES; ; blk_bytes /= 2) {
-        if (!htp_copy_transpose_layout_build(&tp, tp.ne[0], tp.ne[dim_k], type_size, blk_bytes, dim_k == 1)) {
+        if (!htp_copy_transpose_layout_build(&tp, blk_bytes)) {
             return false;
         }
-        const uint64_t vtcm = (uint64_t) n_threads * 2 * (tp.in_buf_size + tp.out_buf_size);
-        if (vtcm_size == 0 || vtcm <= vtcm_size) {
-            kparams->vtcm_size = (uint32_t) vtcm;
+        vtcm = (uint64_t) n_threads * 2 * (tp.in_buf_size + tp.out_buf_size);
+        if (vtcm <= vtcm_size) {
             break;
         }
     }
 
-    const uint64_t total_tiles = (uint64_t) tp.n0b * tp.nkb * tp.ne[tp.dim_p] * tp.ne[tp.dim_q];
+    const uint64_t total_tiles = (uint64_t) tp.n0b * tp.nkb * tp.ne[2] * ne3;
     if (total_tiles > UINT32_MAX) {
         return false;
     }
     tp.total_tiles = (uint32_t) total_tiles;
+    tp.div_nkb     = init_fastdiv_values(tp.nkb);
+    tp.div_n0b     = init_fastdiv_values(tp.n0b);
+    tp.div_ne2     = init_fastdiv_values(tp.ne[2]);
 
     kparams->kernel_type = HTP_COPY_KERNEL_TRANSPOSE;
     kparams->n_threads   = (uint8_t) n_threads;
+    kparams->vtcm_size   = (uint32_t) vtcm;
+    kparams->u.transpose = tp;
     return true;
 }
 
