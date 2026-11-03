@@ -2660,8 +2660,7 @@ static bool htp_kparams_solve_concat(
     return false;
 }
 
-// Permuted copy where dst dim 0 is strided in src but another src dim is contiguous,
-// e.g. channel-first <-> channel-last. RESHAPE would issue one DMA per element here.
+// Permuted copy with strided dim 0 (e.g. channel-first <-> channel-last)
 static bool htp_kparams_solve_cpy_transpose(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * src0,
@@ -2669,13 +2668,13 @@ static bool htp_kparams_solve_cpy_transpose(
     uint32_t type_size,
     struct htp_copy_kernel_params * kparams) {
 
-    // contiguous dst takes the elements in src order, so view it with src shape (covers CPY with reshape)
+    // View contiguous dst with src shape to support CPY with reshape
     const bool dst_cont = ggml_is_contiguous(dst);
     if (!dst_cont && !ggml_are_same_shape(src0, dst)) {
         return false;
     }
 
-    // drop extent-1 dims and merge dims that are adjacent in both src and dst
+    // Drop size-1 dims and merge dims adjacent in both tensors
     size_t ne[GGML_MAX_DIMS];
     size_t nbs[GGML_MAX_DIMS];
     size_t nbd[GGML_MAX_DIMS];
@@ -2697,7 +2696,7 @@ static bool htp_kparams_solve_cpy_transpose(
         n++;
     }
 
-    // a dim dense in both src and dst becomes one element
+    // Fold leading dense dim into element block
     size_t es = type_size;
     for (int i = 0; i < n; i++) {
         if (nbs[i] == type_size && nbd[i] == type_size) {
@@ -2715,7 +2714,7 @@ static bool htp_kparams_solve_cpy_transpose(
         return false;
     }
 
-    // dim a is dense in dst, dim k is dense in src
+    // Transpose axes: dim a dense in dst, dim k dense in src
     int a = -1;
     int k = -1;
     for (int i = 0; i < n; i++) {

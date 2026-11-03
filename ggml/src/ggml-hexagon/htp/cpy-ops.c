@@ -186,8 +186,7 @@ static inline void cpy_tile_cursor_advance(struct cpy_tile_cursor * c, const str
     }
 }
 
-// Lane l reads lane (l & (m - 1)) of element e = l >> log2_m. Element e is at dim-0 index
-// (e & (r - 1)) and dim-1 index (e >> log2_r) relative to the gather base.
+// Gather offsets for element e = l >> log2_m at (e % r, e / r)
 static inline HVX_Vector cpy_transpose_offsets(const struct htp_copy_transpose_params * tp) {
     const uint32_t r_mask = (1u << tp->log2_r) - 1;
     if (tp->elem_size != 2) {
@@ -215,9 +214,7 @@ static inline void cpy_transpose_push_in(dma_queue * q, const struct htp_copy_tr
                    MIN(tp->blkk, tp->ne[1] - ak) * tp->elem_size, MIN(tp->blk0, tp->ne[0] - a0));
 }
 
-// Each tile stages blk0 strided src rows (blkk dense elements each) in VTCM, vgather-transposes
-// them and writes blkk dst rows. The DMA ring completes in order, so draining all but the newest
-// entry retires both the current src tile and the dst write that last used this transposed buffer.
+// Pipelined tile worker: DMA in -> vgather transpose -> DMA out
 static void cpy_thread_transpose(unsigned int nth, unsigned int ith, void * data) {
     struct htp_copy_context * ct = (struct htp_copy_context *) data;
     struct htp_ops_context * octx = ct->octx;
@@ -300,7 +297,6 @@ static void cpy_thread_transpose(unsigned int nth, unsigned int ith, void * data
                 }
             }
         } else {
-            // one vector holds epv dim-0 elements of one dim-1 row
             for (uint32_t rb = 0; rb < n0; rb += epv) {
                 const uint32_t  mu = (MIN(epv, n0 - rb) - 1) * in_stride + es - 1;
                 uint8_t *       d  = out + rb * es;
