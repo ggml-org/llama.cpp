@@ -329,27 +329,37 @@ static void top_k_scan(const float * vals, uint32_t n, uint32_t k, float * out_v
         if (hvx_reduce_max_f32((const uint8_t *) (vals + off), bn) <= thr) {
             continue;
         }
-        for (uint32_t i = 0; i < bn; i++) {
-            const float v = vals[off + i];
-            if (!(v > thr)) continue;
-            uint32_t pos = cnt < k ? cnt++ : k - 1;
-            while (pos > 0 && best_v[pos - 1] < v) {
-                best_v[pos] = best_v[pos - 1];
-                best_i[pos] = best_i[pos - 1];
-                pos--;
+        for (uint32_t vi = 0; vi < bn; vi += 32) {
+            const uint32_t vn = MIN(32, bn - vi);
+            HVX_VectorAlias v_local;
+            v_local.v = hvx_vmem(vals + off + vi);
+            for (uint32_t i = 0; i < vn; i++) {
+                const float v = v_local.fp32[i];
+                if (!(v > thr)) continue;
+                uint32_t pos = cnt < k ? cnt++ : k - 1;
+                while (pos > 0 && best_v[pos - 1] < v) {
+                    best_v[pos] = best_v[pos - 1];
+                    best_i[pos] = best_i[pos - 1];
+                    pos--;
+                }
+                best_v[pos] = v;
+                best_i[pos] = (int32_t) (off + vi + i);
+                if (cnt == k) thr = best_v[k - 1];
             }
-            best_v[pos] = v;
-            best_i[pos] = (int32_t) (off + i);
-            if (cnt == k) thr = best_v[k - 1];
         }
     }
 
     // fewer than k values above -INF: take -INF or NaN elements, then pad with index 0
-    for (uint32_t i = 0; i < n && cnt < k; i++) {
-        if (!(vals[i] > -INFINITY)) {
-            best_v[cnt] = -INFINITY;
-            best_i[cnt] = (int32_t) i;
-            cnt++;
+    for (uint32_t off = 0; off < n && cnt < k; off += 32) {
+        const uint32_t vn = MIN(32, n - off);
+        HVX_VectorAlias v_local;
+        v_local.v = hvx_vmem(vals + off);
+        for (uint32_t j = 0; j < vn && cnt < k; j++) {
+            if (!(v_local.fp32[j] > -INFINITY)) {
+                best_v[cnt] = -INFINITY;
+                best_i[cnt] = (int32_t) (off + j);
+                cnt++;
+            }
         }
     }
     for (; cnt < k; cnt++) {
