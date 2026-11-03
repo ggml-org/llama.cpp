@@ -186,7 +186,7 @@ llama_model_dflash::graph<true>::graph(const llm_graph_params & params) : llm_gr
 }
 
 // target features of an injection batch: host embd rows, or rows of the target's layer input device buffer
-ggml_tensor * llama_model_dflash::build_inp_target_features(llm_graph_context & g, llm_graph_input_embd & inp, int64_t n_embd_inp) {
+static ggml_tensor * build_inp_target_features(llm_graph_context & g, llm_graph_input_embd & inp, int64_t n_embd_inp) {
     if (g.ubatch.embd_row) {
         GGML_ASSERT(g.layer_inp_src != nullptr && g.layer_inp_src->ne[0] == n_embd_inp);
 
@@ -200,6 +200,45 @@ ggml_tensor * llama_model_dflash::build_inp_target_features(llm_graph_context & 
     ggml_set_input(inp.embd);
 
     return inp.embd;
+}
+
+// injection batch: the target features fused through the encoder
+ggml_tensor * llama_model_dflash::build_inject_inp(llm_graph_context & g, const llama_model & model) {
+    const int64_t n_embd_inp = g.hparams.n_embd_inp_enc();
+
+    auto inp = std::make_unique<llm_graph_input_embd>(n_embd_inp);
+
+    ggml_tensor * inp_target = build_inp_target_features(g, *inp, n_embd_inp);
+    g.cb(inp_target, "inp_target_features", -1);
+
+    g.res->add_input(std::move(inp));
+
+    ggml_tensor * inp_g = g.build_lora_mm(model.fc, inp_target, model.fc_s);
+    return g.build_norm(inp_g, model.output_norm_enc, nullptr, LLM_NORM_RMS, -1);
+}
+
+// tok_embd from the target model (shared via ctx_other) when the draft has none
+ggml_tensor * llama_model_dflash::get_tok_embd(const llm_graph_context & g, const llama_model & model) {
+    if (model.tok_embd) {
+        return model.tok_embd;
+    }
+    GGML_ASSERT(g.cparams.ctx_other != nullptr);
+    const auto * model_other = llama_get_model(g.cparams.ctx_other);
+
+    GGML_ASSERT(model_other->tok_embd != nullptr && "DFlash draft requires the target model's token embeddings");
+    return model_other->tok_embd;
+}
+
+// lm_head and its scale from the target model (shared via ctx_other) when the draft has none
+std::pair<ggml_tensor *, ggml_tensor *> llama_model_dflash::get_lm_head(const llm_graph_context & g, const llama_model & model) {
+    if (model.output) {
+        return { model.output, model.output_s };
+    }
+    GGML_ASSERT(g.cparams.ctx_other != nullptr);
+    const auto * model_other = llama_get_model(g.cparams.ctx_other);
+
+    GGML_ASSERT(model_other->output != nullptr && "DFlash draft requires the target model's output projection");
+    return { model_other->output, model_other->output_s };
 }
 
 static ggml_tensor * build_dflash2_conv(
@@ -527,7 +566,6 @@ static void build_lilicorr_scores(llm_graph_context & g, const llama_model & mod
 //   * token batch -> noise-block diffusion: attend over [committed, MASK...] to generate draft tokens
 template <>
 llama_model_dflash::graph<false>::graph(const llm_graph_params & params) : llm_graph_context(params) {
-    const int64_t n_embd_inp = hparams.n_embd_inp_enc();
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
@@ -564,16 +602,7 @@ llama_model_dflash::graph<false>::graph(const llm_graph_params & params) : llm_g
     // KV cache injection
     ASSERT_EMBD_OR_TOKEN(ubatch);
     if (ubatch.embd || ubatch.embd_row) {
-        auto inp = std::make_unique<llm_graph_input_embd>(n_embd_inp);
-
-        ggml_tensor * inp_target = build_inp_target_features(*this, *inp, n_embd_inp);
-        cb(inp_target, "inp_target_features", -1);
-
-        res->add_input(std::move(inp));
-
-        // fuse the target features through the encoder
-        ggml_tensor * inp_g = build_lora_mm(model.fc, inp_target, model.fc_s);
-        inp_g = build_norm(inp_g, model.output_norm_enc, NULL, LLM_NORM_RMS, -1);
+        ggml_tensor * inp_g = build_inject_inp(*this, model);
         cb(inp_g, "inp_g_embeddings", -1);
 
         for (int il = 0; il < n_layer; ++il) {
@@ -634,15 +663,7 @@ llama_model_dflash::graph<false>::graph(const llm_graph_params & params) : llm_g
         return;
     }
 
-    // tok_embd from the target model (shared via ctx_other)
-    auto * tok_embd = model.tok_embd;
-    if (tok_embd == nullptr) {
-        GGML_ASSERT(cparams.ctx_other != nullptr);
-        const auto * model_other = llama_get_model(cparams.ctx_other);
-
-        GGML_ASSERT(model_other->tok_embd != nullptr && "DFlash decoder requires the target model's token embeddings");
-        tok_embd = model_other->tok_embd;
-    }
+    ggml_tensor * tok_embd = get_tok_embd(*this, model);
 
     ggml_tensor * inp_tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
     ggml_set_input(inp_tokens);
@@ -768,17 +789,7 @@ llama_model_dflash::graph<false>::graph(const llm_graph_params & params) : llm_g
 
     res->t_embd = cur;
 
-    // lm_head from the target model (shared via ctx_other)
-    auto * output   = model.output;
-    auto * output_s = model.output_s;
-    if (output == nullptr) {
-        GGML_ASSERT(cparams.ctx_other != nullptr);
-        const auto * model_other = llama_get_model(cparams.ctx_other);
-        GGML_ASSERT(model_other->output != nullptr && "DFlash decoder requires the target model's output projection");
-        output   = model_other->output;
-        output_s = model_other->output_s;
-    }
-
+    const auto [output, output_s] = get_lm_head(*this, model);
     cur = build_lora_mm(output, cur, output_s);
 
     // DFlash2 feeds these logits to the selector, so they need the target's output

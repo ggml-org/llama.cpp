@@ -325,7 +325,6 @@ void llama_model_dflash::build_dspark_markov_head(llm_graph_context & g, const l
 //   * token batch -> noise block through 3 full DSV4 stages (hc + MLA + MoE), markov + confidence heads
 llama_model_dflash::graph_dsv4::graph_dsv4(const llm_graph_params & params) :
     llama_model_deepseek4::graph(params, no_build{}) {
-    const int64_t n_embd_inp       = hparams.n_embd_inp_enc();
     const int64_t n_embd_head      = hparams.n_embd_head_k();
     const int64_t n_embd_head_rope = hparams.n_rot();
     const int64_t n_embd_head_nope = n_embd_head - n_embd_head_rope;
@@ -337,16 +336,7 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llm_graph_params & params) :
     // KV cache injection: fused target features from the encoder
     ASSERT_EMBD_OR_TOKEN(ubatch);
     if (ubatch.embd || ubatch.embd_row) {
-        auto inp = std::make_unique<llm_graph_input_embd>(n_embd_inp);
-
-        ggml_tensor * inp_target = build_inp_target_features(*this, *inp, n_embd_inp);
-        cb(inp_target, "inp_target_features", -1);
-
-        res->add_input(std::move(inp));
-
-        // fuse the target features through the encoder
-        ggml_tensor * inp_g = build_lora_mm(model.fc, inp_target, model.fc_s);
-        inp_g = build_norm(inp_g, model.output_norm_enc, nullptr, LLM_NORM_RMS, -1);
+        ggml_tensor * inp_g = build_inject_inp(*this, model);
         cb(inp_g, "inp_g_embeddings", -1);
 
         for (int il = 0; il < n_layer; ++il) {
@@ -375,15 +365,7 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llm_graph_params & params) :
         return;
     }
 
-    // tok_embd from the target model (shared via ctx_other)
-    auto * tok_embd = model.tok_embd;
-    if (tok_embd == nullptr) {
-        GGML_ASSERT(cparams.ctx_other != nullptr);
-        const auto * model_other = llama_get_model(cparams.ctx_other);
-
-        GGML_ASSERT(model_other->tok_embd != nullptr && "DSpark decoder requires the target model's token embeddings");
-        tok_embd = model_other->tok_embd;
-    }
+    ggml_tensor * tok_embd = get_tok_embd(*this, model);
 
     auto inp = std::make_unique<llm_graph_input_embd>(n_embd);
 
@@ -470,17 +452,7 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llm_graph_params & params) :
     cur = build_norm(cur, model.output_norm, nullptr, LLM_NORM_RMS, -1);
     cb(cur, "result_norm", -1);
 
-    // lm_head from the target model (shared via ctx_other)
-    auto * output   = model.output;
-    auto * output_s = model.output_s;
-    if (output == nullptr) {
-        GGML_ASSERT(cparams.ctx_other != nullptr);
-        const auto * model_other = llama_get_model(cparams.ctx_other);
-        GGML_ASSERT(model_other->output != nullptr && "DSpark decoder requires the target model's output projection");
-        output   = model_other->output;
-        output_s = model_other->output_s;
-    }
-
+    const auto [output, output_s] = get_lm_head(*this, model);
     cur = build_lora_mm(output, cur, output_s);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
@@ -497,7 +469,6 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llm_graph_params & params) :
 
 llama_model_dflash::graph_dsv41::graph_dsv41(const llm_graph_params & params) :
     llama_model_deepseek41::graph(params, no_build{}) {
-    const int64_t n_embd_inp       = hparams.n_embd_inp_enc();
     const int64_t n_embd_head      = hparams.n_embd_head_k();
     const int64_t n_embd_head_rope = hparams.n_rot();
     const int64_t n_embd_head_nope = n_embd_head - n_embd_head_rope;
@@ -517,15 +488,7 @@ llama_model_dflash::graph_dsv41::graph_dsv41(const llm_graph_params & params) :
 
     ASSERT_EMBD_OR_TOKEN(ubatch);
     if (ubatch.embd || ubatch.embd_row) {
-        auto inp = std::make_unique<llm_graph_input_embd>(n_embd_inp);
-
-        ggml_tensor * inp_target = build_inp_target_features(*this, *inp, n_embd_inp);
-        cb(inp_target, "inp_target_features", -1);
-
-        res->add_input(std::move(inp));
-
-        ggml_tensor * inp_g = build_lora_mm(model.fc, inp_target, model.fc_s);
-        inp_g = build_norm(inp_g, model.output_norm_enc, nullptr, LLM_NORM_RMS, -1);
+        ggml_tensor * inp_g = build_inject_inp(*this, model);
         cb(inp_g, "main_x", -1);
 
         for (int il = 0; il < n_layer; ++il) {
@@ -549,13 +512,7 @@ llama_model_dflash::graph_dsv41::graph_dsv41(const llm_graph_params & params) :
         return;
     }
 
-    auto * tok_embd = model.tok_embd;
-    if (tok_embd == nullptr) {
-        GGML_ASSERT(cparams.ctx_other != nullptr);
-        const auto * model_other = llama_get_model(cparams.ctx_other);
-        GGML_ASSERT(model_other->tok_embd != nullptr && "DSpark decoder requires the target model's token embeddings");
-        tok_embd = model_other->tok_embd;
-    }
+    ggml_tensor * tok_embd = get_tok_embd(*this, model);
 
     auto inp = std::make_unique<llm_graph_input_embd>(n_embd);
 
@@ -700,16 +657,7 @@ llama_model_dflash::graph_dsv41::graph_dsv41(const llm_graph_params & params) :
     cur = build_norm(cur, model.output_norm, nullptr, LLM_NORM_RMS, -1);
     cb(cur, "result_norm", -1);
 
-    auto * output   = model.output;
-    auto * output_s = model.output_s;
-    if (output == nullptr) {
-        GGML_ASSERT(cparams.ctx_other != nullptr);
-        const auto * model_other = llama_get_model(cparams.ctx_other);
-        GGML_ASSERT(model_other->output != nullptr && "DSpark decoder requires the target model's output projection");
-        output   = model_other->output;
-        output_s = model_other->output_s;
-    }
-
+    const auto [output, output_s] = get_lm_head(*this, model);
     cur = build_lora_mm(output, cur, output_s);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
@@ -723,7 +671,6 @@ llama_model_dflash::graph_dsv41::graph_dsv41(const llm_graph_params & params) :
 // - embd batch: write latent K of target_norm(fc(features)) to the cache, no attn norm
 // - token batch: decode [anchor, mask_1, ...] block, non-causal
 llama_model_dflash::graph_mistral_large4::graph_mistral_large4(const llm_graph_params & params) : llm_graph_context(params) {
-    const int64_t n_embd_inp        = hparams.n_embd_inp_enc();
     const int64_t kv_lora_rank      = hparams.n_lora_kv;
     const int64_t n_embd_head_k_mla = hparams.n_embd_head_k_mla();
     const int64_t n_embd_head_v_mla = hparams.n_embd_head_v_mla();
@@ -765,15 +712,7 @@ llama_model_dflash::graph_mistral_large4::graph_mistral_large4(const llm_graph_p
 
     ASSERT_EMBD_OR_TOKEN(ubatch);
     if (ubatch.embd || ubatch.embd_row) {
-        auto inp = std::make_unique<llm_graph_input_embd>(n_embd_inp);
-
-        ggml_tensor * inp_target = build_inp_target_features(*this, *inp, n_embd_inp);
-        cb(inp_target, "inp_target_features", -1);
-
-        res->add_input(std::move(inp));
-
-        ggml_tensor * inp_g = build_lora_mm(model.fc, inp_target, model.fc_s);
-        inp_g = build_norm(inp_g, model.output_norm_enc, nullptr, LLM_NORM_RMS, -1);
+        ggml_tensor * inp_g = build_inject_inp(*this, model);
         cb(inp_g, "main_x", -1);
 
         for (int il = 0; il < n_layer; ++il) {
@@ -792,13 +731,7 @@ llama_model_dflash::graph_mistral_large4::graph_mistral_large4(const llm_graph_p
         return;
     }
 
-    auto * tok_embd = model.tok_embd;
-    if (tok_embd == nullptr) {
-        GGML_ASSERT(cparams.ctx_other != nullptr);
-        const auto * model_other = llama_get_model(cparams.ctx_other);
-        GGML_ASSERT(model_other->tok_embd != nullptr && "DSpark decoder requires the target model's token embeddings");
-        tok_embd = model_other->tok_embd;
-    }
+    ggml_tensor * tok_embd = get_tok_embd(*this, model);
 
     auto inp = std::make_unique<llm_graph_input_embd>(n_embd);
 
@@ -906,16 +839,7 @@ llama_model_dflash::graph_mistral_large4::graph_mistral_large4(const llm_graph_p
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    auto * output   = model.output;
-    auto * output_s = model.output_s;
-    if (output == nullptr) {
-        GGML_ASSERT(cparams.ctx_other != nullptr);
-        const auto * model_other = llama_get_model(cparams.ctx_other);
-        GGML_ASSERT(model_other->output != nullptr && "DSpark decoder requires the target model's output projection");
-        output   = model_other->output;
-        output_s = model_other->output_s;
-    }
-
+    const auto [output, output_s] = get_lm_head(*this, model);
     ggml_tensor * logits = build_lora_mm(output, cur, output_s);
 
     // softcap does not apply to the markov bias

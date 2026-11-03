@@ -1571,8 +1571,10 @@ struct llama_model_dflash : public llama_model_base {
         graph_mistral_large4(const llm_graph_params & params);
     };
 
-    // graph helpers shared by dflash.cpp and dspark.cpp
-    static ggml_tensor * build_inp_target_features(llm_graph_context & g, llm_graph_input_embd & inp, int64_t n_embd_inp);
+    // graph helpers shared by the backbones
+    static ggml_tensor * build_inject_inp(llm_graph_context & g, const llama_model & model);
+    static ggml_tensor * get_tok_embd(const llm_graph_context & g, const llama_model & model);
+    static std::pair<ggml_tensor *, ggml_tensor *> get_lm_head(const llm_graph_context & g, const llama_model & model);
     static void          build_dspark_markov_head(llm_graph_context & g, const llama_model & model, ggml_tensor * tokens, ggml_tensor * hidden = nullptr);
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
