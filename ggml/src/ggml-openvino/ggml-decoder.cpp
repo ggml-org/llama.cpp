@@ -2041,8 +2041,7 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor * tensor
     // for `naive` (test/naive path) since use_bias changes the produced node.
     // Self-contained decode-window models are built after the pair; reusing the node keeps e.g. the
     // token_embd vocab on the pair's NPUW bank uid instead of embedding and importing a second copy.
-    const bool keep_for_windows = ggml_openvino_getenv_int("GGML_OPENVINO_SELF_CONTAINED_BLOB") != 0 &&
-                                  ggml_openvino_npu_decode_bucket() > 0;
+    const bool keep_for_windows = ggml_openvino_npu_raw_weight_cache_enabled() && ggml_openvino_npu_decode_bucket() > 0;
     const bool cacheable_nonov = (ggml_openvino_reduce_compile_mem_enabled() || keep_for_windows) && !is_ov_buffer &&
                                  !naive && tensor->data != nullptr;
     if (cacheable_nonov) {
@@ -2071,7 +2070,7 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor * tensor
     if (ggml_is_quantized(tensor->type)) {
         auto use_bias = naive;
         if (is_ov_buffer) {
-            const bool preserve_raw = ggml_openvino_getenv_int("GGML_OPENVINO_SELF_CONTAINED_BLOB") != 0;
+            const bool preserve_raw = ggml_openvino_npu_raw_weight_cache_enabled();
             if (preserve_raw) {
                 // A later context must fingerprint the same raw GGUF bytes before importing its
                 // self-contained blob, so keep the model buffer immutable in this mode.

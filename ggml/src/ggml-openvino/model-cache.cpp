@@ -4,6 +4,7 @@
 #include "ggml-backend.h"
 #include "ggml-impl.h"
 #include "ggml-openvino-extra.h"
+#include "openvino/rt_info/weightless_caching_attributes.hpp"
 
 #include <cerrno>
 #include <algorithm>
@@ -13,10 +14,13 @@
 #include <iomanip>
 #include <limits>
 #include <sstream>
+#include <openvino/core/model.hpp>
 #include <openvino/core/version.hpp>
+#include <openvino/op/constant.hpp>
 #include <string>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <unordered_map>
 #include <vector>
 
 #if defined(_WIN32)
@@ -493,4 +497,137 @@ bool ggml_openvino_model_cache_verify_manifest(const std::string & path,
     }
     f >> std::ws;
     return f.eof();
+}
+
+std::string ggml_openvino_model_cache_weights_path(const std::string & dir, uint64_t fp_a, uint64_t fp_b) {
+    return dir + "/" + hex64(fp_a) + "-" + hex64(fp_b) + ".weights.bin";
+}
+
+std::shared_ptr<ggml_openvino_weights_layout> ggml_openvino_model_cache_write_weights(
+    const std::string & path,
+    const std::vector<std::shared_ptr<ov::Model>> & models) {
+    struct region {
+        const void * data;
+        size_t size;
+        size_t offset;
+    };
+    constexpr size_t alignment = 64;
+    auto layout = std::make_shared<ggml_openvino_weights_layout>();
+    layout->path = path;
+    std::vector<region> regions;
+    std::unordered_map<const void *, size_t> region_of;
+    for (const auto & model : models) {
+        if (!model) {
+            continue;
+        }
+        for (const auto & node : model->get_ordered_ops()) {
+            auto cnst = ov::as_type_ptr<ov::op::v0::Constant>(node);
+            if (!cnst || cnst->get_rt_info().count(ov::WeightlessCacheAttribute::get_type_info_static()) == 0 ||
+                cnst->get_data_ptr() == nullptr || cnst->get_byte_size() == 0) {
+                continue;
+            }
+            layout->constants.push_back(cnst);
+            auto [it, inserted] = region_of.emplace(cnst->get_data_ptr(), regions.size());
+            if (inserted) {
+                regions.push_back({ cnst->get_data_ptr(), cnst->get_byte_size(), 0 });
+            } else {
+                regions[it->second].size = std::max(regions[it->second].size, cnst->get_byte_size());
+            }
+        }
+    }
+
+    size_t total = 0;
+    for (auto & r : regions) {
+        r.offset = total;
+        total = (total + r.size + alignment - 1) / alignment * alignment;
+        layout->regions[r.data] = { r.offset, r.size };
+    }
+    for (const auto & cnst : layout->constants) {
+        cnst->get_rt_info()[ov::WeightlessCacheAttribute::get_type_info_static()] = ov::WeightlessCacheAttribute(
+            cnst->get_byte_size(), layout->regions.at(cnst->get_data_ptr()).first, cnst->get_element_type());
+    }
+
+    // Publish the data file first and its size record last, so a valid record always describes a complete file.
+    const std::string data_tmp = path + ".tmp";
+    const std::string meta_path = path + ".meta";
+    const std::string meta_tmp = meta_path + ".tmp";
+    {
+        std::ofstream f(data_tmp, std::ios::binary | std::ios::trunc);
+        if (!f.is_open()) {
+            return nullptr;
+        }
+        static const char zeros[alignment] = {};
+        size_t pos = 0;
+        for (const auto & r : regions) {
+            f.write(zeros, static_cast<std::streamsize>(r.offset - pos));
+            f.write(static_cast<const char *>(r.data), static_cast<std::streamsize>(r.size));
+            pos = r.offset + r.size;
+        }
+        f.write(zeros, static_cast<std::streamsize>(total - pos));
+        f.close();
+        if (!f.good()) {
+            std::remove(data_tmp.c_str());
+            return nullptr;
+        }
+    }
+    {
+        std::ofstream f(meta_tmp, std::ios::trunc);
+        f << "size " << total << "\nregions " << regions.size() << "\n";
+        f.close();
+        if (!f.good()) {
+            std::remove(data_tmp.c_str());
+            std::remove(meta_tmp.c_str());
+            return nullptr;
+        }
+    }
+    // std::rename does not replace an existing file on Windows.
+    ggml_openvino_model_cache_remove_weights(path);
+    if (std::rename(data_tmp.c_str(), path.c_str()) != 0 || std::rename(meta_tmp.c_str(), meta_path.c_str()) != 0) {
+        std::remove(data_tmp.c_str());
+        std::remove(meta_tmp.c_str());
+        return nullptr;
+    }
+    GGML_LOG_INFO("ggml-openvino: model cache WROTE %s (%zu regions, %.1f MiB)\n", path.c_str(), regions.size(),
+                  total / 1024.0 / 1024.0);
+    return layout;
+}
+
+size_t ggml_openvino_model_cache_retag_weights(const std::shared_ptr<ov::Model> & model,
+                                               const ggml_openvino_weights_layout & layout) {
+    size_t resolved = 0;
+    for (const auto & node : model->get_ordered_ops()) {
+        auto cnst = ov::as_type_ptr<ov::op::v0::Constant>(node);
+        if (!cnst) {
+            continue;
+        }
+        auto & rt_info = cnst->get_rt_info();
+        auto attr = rt_info.find(ov::WeightlessCacheAttribute::get_type_info_static());
+        if (attr == rt_info.end()) {
+            continue;
+        }
+        auto it = layout.regions.find(cnst->get_data_ptr());
+        if (it != layout.regions.end() && cnst->get_byte_size() <= it->second.second) {
+            attr->second = ov::WeightlessCacheAttribute(cnst->get_byte_size(), it->second.first, cnst->get_element_type());
+            ++resolved;
+        } else {
+            rt_info.erase(attr);
+        }
+    }
+    return resolved;
+}
+
+bool ggml_openvino_model_cache_weights_valid(const std::string & path) {
+    std::ifstream meta(path + ".meta");
+    std::string key;
+    uint64_t size = 0;
+    if (!(meta >> key >> size) || key != "size") {
+        return false;
+    }
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    return f.is_open() && static_cast<uint64_t>(f.tellg()) == size;
+}
+
+void ggml_openvino_model_cache_remove_weights(const std::string & path) {
+    std::remove((path + ".meta").c_str());
+    std::remove(path.c_str());
 }

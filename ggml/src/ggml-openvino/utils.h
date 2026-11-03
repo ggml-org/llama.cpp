@@ -1,6 +1,7 @@
 #include "ggml-decoder.h"
 #include "ggml-impl.h"
 #include "ggml-openvino-extra.h"
+#include "model-cache.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -117,6 +118,11 @@ struct ov_compiled_graph {
     uint64_t cache_base_extra = 0;
     bool self_contained = false;
     bool decode_unfold = false;
+    // GGML_OPENVINO_NPU_WEIGHTLESS_BANK: the pair's weights file, and its layout when the pair was compiled in
+    // this process (window models then resolve the shared weights through the same file).
+    bool weightless_bank = false;
+    std::string weights_path;
+    std::shared_ptr<ggml_openvino_weights_layout> weights_layout;
 };
 
 // Only compilation and cache publication use this mutex. Requests, decoders and

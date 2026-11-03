@@ -145,7 +145,7 @@ struct ggml_backend_openvino_buffer_context {
             // demand-zero pages instead (no L0, no memset) so they stay non-resident. KV and small
             // I/O buffers keep the L0 host tensor for zero-copy import (decode throughput).
             const bool strict_mmap = device_name == "NPU" &&
-                                     ggml_openvino_getenv_int("GGML_OPENVINO_SELF_CONTAINED_BLOB") &&
+                                     ggml_openvino_npu_raw_weight_cache_enabled() &&
                                      ggml_openvino_getenv_int("GGML_OPENVINO_SELF_CONTAINED_MMAP") &&
                                      ggml_openvino_getenv_str("GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR");
             // 2 GiB keeps a large-context KV cache (~1 GiB at ctx 8K) on L0 while the bigger prefill
@@ -384,7 +384,7 @@ static bool is_stateful_enabled() {
 }
 
 static bool is_self_contained_mmap_enabled() {
-    return ggml_openvino_is_npu() && ggml_openvino_getenv_int("GGML_OPENVINO_SELF_CONTAINED_BLOB") &&
+    return ggml_openvino_is_npu() && ggml_openvino_npu_raw_weight_cache_enabled() &&
            ggml_openvino_getenv_int("GGML_OPENVINO_SELF_CONTAINED_MMAP") &&
            ggml_openvino_getenv_str("GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR");
 }
@@ -559,7 +559,7 @@ static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer
     bool is_supported_weight_shape = is_2d || (tensor->ne[3] == 1 && ggml_is_quantized(tensor->type));
 
     if (is_weight_buffer && is_full_tensor_set && is_supported_weight_shape) {
-        if (ggml_openvino_is_npu() && ggml_openvino_getenv_int("GGML_OPENVINO_SELF_CONTAINED_BLOB") &&
+        if (ggml_openvino_is_npu() && ggml_openvino_npu_raw_weight_cache_enabled() &&
             ggml_openvino_getenv_str("GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR")) {
             // Keep raw bytes for cache fingerprint validation and compile fallback; the imported
             // self-contained blob supplies the runtime weights, so eager requant is unnecessary.
