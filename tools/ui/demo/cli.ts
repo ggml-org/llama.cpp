@@ -160,22 +160,51 @@ function versionedUrl(key: string, file: string): null | string {
 	return url && `${url}?v=${version}`;
 }
 
+/** Whether a video is taller than wide, like a phone's. */
+function isPortrait(mp4: string): boolean {
+	const [width, height] = run('ffprobe', [
+		'-v',
+		'error',
+		'-select_streams',
+		'v:0',
+		'-show_entries',
+		'stream=width,height',
+		'-of',
+		'csv=p=0',
+		mp4
+	])
+		.split(',')
+		.map(Number);
+
+	return height > width;
+}
+
 /**
- * One preview, or a table with a column per video, headed by its test's title, when the
- * script has several tests.
+ * One preview, or a table of them when the script has several tests, each headed by its
+ * test's title: up to four portrait videos to a row, or two landscape ones, so each stays
+ * large enough to read.
  */
-function demoSection(links: { gif: string; mp4: string; title: string }[], sha: string): string {
+function demoSection(
+	links: { gif: string; mp4: string; title: string }[],
+	sha: string,
+	columns: number
+): string {
 	const preview = ({ gif, mp4, title }: (typeof links)[number]) =>
 		`[![${title.replace(/[[\]|]/g, '')}](${gif})](${mp4})`;
 	const cell = (text: string) => text.replace(/\|/g, '\\|');
+	const rows = Array.from({ length: Math.ceil(links.length / columns) }, (_, i) =>
+		links.slice(i * columns, (i + 1) * columns)
+	);
+	const pad = (cells: string[]) => [...cells, ...Array(columns - cells.length).fill(' ')];
 	const body =
 		links.length === 1
 			? [preview({ ...links[0], title: 'Demo' })]
-			: [
-					`| ${links.map((l) => cell(l.title)).join(' | ')} |`,
-					`|${links.map(() => '---').join('|')}|`,
-					`| ${links.map(preview).join(' | ')} |`
-				];
+			: rows.flatMap((row, i) => [
+					// a table has one header row, so later rows title their videos in bold
+					`| ${pad(row.map((l) => (i === 0 ? cell(l.title) : `**${cell(l.title)}**`))).join(' | ')} |`,
+					...(i === 0 ? [`|${Array(columns).fill('---').join('|')}|`] : []),
+					`| ${pad(row.map(preview)).join(' | ')} |`
+				]);
 	const note =
 		links.length === 1 ? 'the preview for the full video' : 'a preview for its full video';
 
@@ -268,7 +297,10 @@ async function recordPr(number: string): Promise<void> {
 
 		execFileSync('gh', ['pr', 'edit', number, '--repo', REPO, '--body-file', '-'], {
 			cwd: UI_DIR,
-			input: withDemoSection(pr.body, demoSection(links, sha)),
+			input: withDemoSection(
+				pr.body,
+				demoSection(links, sha, Math.min(links.length, isPortrait(videos[0].mp4) ? 4 : 2))
+			),
 			stdio: ['pipe', 'inherit', 'inherit']
 		});
 		console.log(`linked the demo in https://github.com/${REPO}/pull/${number}`);

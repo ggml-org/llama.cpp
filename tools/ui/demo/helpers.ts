@@ -378,18 +378,22 @@ function loadTrace(name: string, dir: string): string {
 async function importTraces(page: Page, file: string): Promise<void> {
 	// the expanded sidebar adds the shortcut to the name
 	const settings = page.getByRole('button', { name: /^Settings(\s|$)/ }).first();
-	const reachable = await settings.click({ timeout: 3000, trial: true }).then(
-		() => true,
-		() => false
-	);
+	const reachable = (target: Locator) =>
+		target.click({ timeout: 2000, trial: true }).then(
+			() => true,
+			() => false
+		);
+	// a collapsed sidebar can sit under the page: on a phone the page's menu key slides it aside,
+	// on a desktop its logo expands it
+	const keys = [
+		page.locator('xpath=//button[@aria-label="Expand navigation"][not(ancestor::aside)]'),
+		page.locator('aside button[aria-label="Expand navigation"]')
+	];
 
-	// on a phone the sidebar sits under the page until the page's menu key slides it aside (the
-	// sidebar's own expand button stays covered)
-	if (!reachable) {
-		await page
-			.locator('xpath=//button[@aria-label="Expand navigation"][not(ancestor::aside)]')
-			.first()
-			.click();
+	for (const key of keys) {
+		if (await reachable(settings)) break;
+
+		if ((await key.count()) > 0 && (await reachable(key.first()))) await key.first().click();
 	}
 
 	await settings.click();
@@ -404,6 +408,14 @@ async function importTraces(page: Page, file: string): Promise<void> {
 	await (await chooser).setFiles(file);
 	await page.getByRole('button', { name: /^Import \(\d+\)$/ }).click();
 	await page.getByRole('heading', { name: /^Imported \d+ conversation/ }).waitFor();
+
+	// the app remembers the sidebar the import expanded; a demo starts with it collapsed, as on a
+	// first visit
+	await page.evaluate(() => {
+		for (const key of Object.keys(localStorage)) {
+			if (key.endsWith('.sidebarExpanded')) localStorage.removeItem(key);
+		}
+	});
 }
 
 export const test = base.extend<DemoOptions & { demo: Demo }>({
