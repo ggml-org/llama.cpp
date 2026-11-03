@@ -1030,6 +1030,9 @@ ggml_backend_buffer_t ggml_backend_dev_buffer_from_host_ptr(ggml_backend_dev_t d
 
 bool ggml_backend_dev_supports_op(ggml_backend_dev_t device, const struct ggml_tensor * op) {
     GGML_ASSERT(device);
+    if (op->op == GGML_OP_NONE) {
+        return true;
+    }
     return device->iface.supports_op(device, op);
 }
 
