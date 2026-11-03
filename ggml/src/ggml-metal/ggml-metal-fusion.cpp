@@ -362,6 +362,15 @@ static const std::vector<ggml_op> ops_topk_moe_norm_scale = {
     GGML_OP_SOFT_MAX, GGML_OP_RESHAPE, GGML_OP_ARGSORT, GGML_OP_VIEW, GGML_OP_GET_ROWS,
     GGML_OP_RESHAPE, GGML_OP_SUM_ROWS, GGML_OP_CLAMP, GGML_OP_DIV, GGML_OP_RESHAPE, GGML_OP_SCALE
 };
+// the sum is adjusted with an additive bias instead of a lower clamp (DeepSeek-V4.1)
+static const std::vector<ggml_op> ops_topk_moe_norm_bias = {
+    GGML_OP_SOFT_MAX, GGML_OP_RESHAPE, GGML_OP_ARGSORT, GGML_OP_VIEW, GGML_OP_GET_ROWS,
+    GGML_OP_RESHAPE, GGML_OP_SUM_ROWS, GGML_OP_SCALE, GGML_OP_DIV, GGML_OP_RESHAPE
+};
+static const std::vector<ggml_op> ops_topk_moe_norm_scale_bias = {
+    GGML_OP_SOFT_MAX, GGML_OP_RESHAPE, GGML_OP_ARGSORT, GGML_OP_VIEW, GGML_OP_GET_ROWS,
+    GGML_OP_RESHAPE, GGML_OP_SUM_ROWS, GGML_OP_SCALE, GGML_OP_DIV, GGML_OP_RESHAPE, GGML_OP_SCALE
+};
 
 static bool ggml_metal_fusion_check_topk_moe(
         const ggml_metal_fusion       * fusion,
@@ -463,13 +472,18 @@ static bool ggml_metal_fusion_check_topk_moe(
     if (with_norm) {
         const ggml_tensor * weights_reshaped = gf->nodes[raw_start + 5];
         const ggml_tensor * sum_rows         = gf->nodes[raw_start + 6];
-        const ggml_tensor * clamp            = gf->nodes[raw_start + 7];
+        const ggml_tensor * denom            = gf->nodes[raw_start + 7];
         const ggml_tensor * div              = gf->nodes[raw_start + 8];
         const ggml_tensor * out_reshaped     = gf->nodes[raw_start + 9];
 
         if (weights_reshaped->src[0] != get_rows || sum_rows->src[0] != weights_reshaped ||
-            clamp->src[0] != sum_rows || div->src[0] != weights_reshaped || div->src[1] != clamp ||
+            denom->src[0] != sum_rows || div->src[0] != weights_reshaped || div->src[1] != denom ||
             out_reshaped->src[0] != div) {
+            return false;
+        }
+
+        // the kernel applies the sum adjustment as a lower clamp or an additive bias, never a scale
+        if (denom->op == GGML_OP_SCALE && ggml_get_op_params_f32(denom, 0) != 1.0f) {
             return false;
         }
 
@@ -781,6 +795,8 @@ static const std::vector<ggml_metal_fusion> ggml_metal_fusions = {
     { GGML_METAL_FUSION_TOPK_MOE,       ops_topk_moe_scale,         {1},    true,  ggml_metal_fusion_check_topk_moe },
     { GGML_METAL_FUSION_TOPK_MOE,       ops_topk_moe_norm,          {1},    true,  ggml_metal_fusion_check_topk_moe },
     { GGML_METAL_FUSION_TOPK_MOE,       ops_topk_moe_norm_scale,    {1},    true,  ggml_metal_fusion_check_topk_moe },
+    { GGML_METAL_FUSION_TOPK_MOE,       ops_topk_moe_norm_bias,     {1},    true,  ggml_metal_fusion_check_topk_moe },
+    { GGML_METAL_FUSION_TOPK_MOE,       ops_topk_moe_norm_scale_bias, {1},  true,  ggml_metal_fusion_check_topk_moe },
     { GGML_METAL_FUSION_MOE_REDUCE,     ops_moe_reduce_2,           {},     true,  ggml_metal_fusion_check_moe_reduce },
     { GGML_METAL_FUSION_MOE_REDUCE,     ops_moe_reduce_3,           {},     true,  ggml_metal_fusion_check_moe_reduce },
     { GGML_METAL_FUSION_MOE_REDUCE,     ops_moe_reduce_4,           {},     true,  ggml_metal_fusion_check_moe_reduce },

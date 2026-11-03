@@ -7527,6 +7527,7 @@ struct test_topk_moe : public test_case {
     const int n_expert_groups;
     ggml_tensor * logits {};
     ggml_tensor * exp_probs_b {};
+    const bool norm_bias;
     ggml_tensor * weights {};
     ggml_tensor * selected_experts {};
 
@@ -7536,20 +7537,23 @@ struct test_topk_moe : public test_case {
                   bool                   bias_probs      = false,
                   MoeGatingFunc          gating_func     = GATING_FUNC_SOFTMAX,
                   float                  scale_w         = 0.0f,
-                  int                    n_expert_groups = 1) :
+                  int                    n_expert_groups = 1,
+                  bool                   norm_bias       = false) :
         ne(ne),
         n_expert_used(n_expert_used),
         with_norm(with_norm),
         bias_probs(bias_probs),
         gating_func(gating_func),
         scale_w(scale_w),
-        n_expert_groups(n_expert_groups) {
+        n_expert_groups(n_expert_groups),
+        norm_bias(norm_bias) {
         GGML_ASSERT(n_expert_used <= ne[0]);
         GGML_ASSERT(ne[0] % n_expert_groups == 0);
         GGML_ASSERT(n_expert_used <= ne[0] / n_expert_groups);
+        GGML_ASSERT(!norm_bias || with_norm);
     }
 
-    std::string vars() override { return VARS_TO_STR7(ne, n_expert_used, with_norm, bias_probs, gating_func, scale_w, n_expert_groups); }
+    std::string vars() override { return VARS_TO_STR8(ne, n_expert_used, with_norm, norm_bias, bias_probs, gating_func, scale_w, n_expert_groups); }
 
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
@@ -7707,7 +7711,11 @@ struct test_topk_moe : public test_case {
             ggml_tensor * weights_sum = ggml_sum_rows(ctx, weights); // [1, n_tokens]
             ggml_set_name(weights_sum, "weights_sum");
 
-            weights_sum = ggml_clamp(ctx, weights_sum, 6.103515625e-5, INFINITY);
+            if (norm_bias) {
+                weights_sum = ggml_scale_bias(ctx, weights_sum, 1.0f, 1e-20f);
+            } else {
+                weights_sum = ggml_clamp(ctx, weights_sum, 6.103515625e-5, INFINITY);
+            }
             weights = ggml_div(ctx, weights, weights_sum); // [n_expert_used, n_tokens]
             weights = ggml_reshape_3d(ctx, weights, 1, n_expert_used, n_tokens);
         }
@@ -12805,6 +12813,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                     test_cases.emplace_back(new test_topk_moe({512, 3, 1, 1}, 8, with_norm, bias_probs, gate, scale_w, 4));
                 }
             }
+        }
+    }
+
+    // the sum is adjusted with an additive bias instead of a lower clamp (DeepSeek-V4.1)
+    for (bool bias_probs : {false, true}) {
+        for (float scale_w : {0.0f, 2.0f}) {
+            test_cases.emplace_back(new test_topk_moe({8, 22, 1, 1}, 4, true, bias_probs, GATING_FUNC_SOFTMAX, scale_w, 1, true));
+            test_cases.emplace_back(new test_topk_moe({384,  1, 1, 1}, 6, true, bias_probs, GATING_FUNC_SOFTMAX, scale_w, 1, true));
         }
     }
 

@@ -6037,9 +6037,15 @@ int ggml_metal_op_topk_moe(ggml_metal_op_t ctx, int idx) {
     const bool with_scale = n_fuse == 4 || n_fuse == 7;
 
     float clamp = -INFINITY;
+    float bias  = 0.0f;
     if (with_norm) {
-        ggml_tensor * clamp_node = ctx->node(idx + 4);
-        clamp = ggml_get_op_params_f32(clamp_node, 0);
+        ggml_tensor * denom_node = ctx->node(idx + 4);
+        if (denom_node->op == GGML_OP_SCALE) {
+            // the sum adjustment is a bias (DeepSeek-V4.1), the scale factor is checked to be 1.0
+            bias = ggml_get_op_params_f32(denom_node, 1);
+        } else {
+            clamp = ggml_get_op_params_f32(denom_node, 0);
+        }
     }
 
     float scale = 1.0f;
@@ -6053,6 +6059,7 @@ int ggml_metal_op_topk_moe(ggml_metal_op_t ctx, int idx) {
         /*.nb01      =*/ logits->nb[1],
         /*.nb1_ids   =*/ ids->nb[1],
         /*.clamp =*/ clamp,
+        /*.bias  =*/ bias,
         /*.scale =*/ scale,
     };
 
