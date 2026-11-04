@@ -399,25 +399,6 @@ bool dist_transport_env_true(const char * key, bool def) {
     return s == "1" || s == "true" || s == "yes" || s == "on";
 }
 
-// LLAMA_DIST_TP_RDMA_MAX_BYTES: the largest payload that rides ND. Default one ND chunk; 0 means
-// no ceiling. Read from the environment alone so that every rank gets the same value whether or
-// not its own ND connections came up.
-size_t dist_nd_ceiling_from_env() {
-    size_t bytes = 256 * 1024;
-    const char * v = std::getenv("LLAMA_DIST_TP_RDMA_MAX_BYTES");
-    if (v != nullptr && v[0] != '\0') {
-        try {
-            const long long n = std::stoll(v);
-            if (n >= 0) {
-                bytes = (size_t) n;
-            }
-        } catch (...) {
-            // keep the default
-        }
-    }
-    return bytes;
-}
-
 } // namespace
 
 struct dist_comm_socket_context::impl {
@@ -441,12 +422,6 @@ struct dist_comm_socket_context::impl {
     dist_nd_conn * nd_send  = nullptr;   // outbound half, towards next
     dist_nd_conn * nd_recv  = nullptr;   // inbound half, from prev
     bool           nd_shared = false;    // nd_send and nd_recv are the same object; free once
-    // Payload ceiling for the ND path, in bytes; 0 means no ceiling. ND sends block on each
-    // chunk's completion before staging the next, so a payload that spans many chunks (prefill,
-    // ~20 MB here) serialises badly and is measurably faster on TCP, while the small per-token
-    // decode exchanges are pure latency and much faster on ND. Both ranks see the same size, so
-    // both take the same branch and the two transports never disagree.
-    size_t nd_max_bytes = 0;
 
     // Full-mesh all-reduce state, see exchange_mesh(). mesh_max_bytes 0 means the mesh is off.
     size_t               mesh_max_bytes    = 0;
@@ -527,14 +502,11 @@ struct dist_comm_socket_context::impl {
         };
         op_hdr recv_hdr {};
 
-        // Decided per edge, not per rank. The peer on the outbound edge evaluates exactly this
-        // expression for the same edge with the same sizes, so the two ends never disagree about
-        // which transport is carrying a given message. From world_size 3 up the two edges are
-        // different links and may legitimately differ: one on ND, the other on TCP.
-        const bool use_nd_send = nd_send != nullptr &&
-                                 (nd_max_bytes == 0 || send_size <= nd_max_bytes);
-        const bool use_nd_recv = nd_recv != nullptr &&
-                                 (nd_max_bytes == 0 || recv_size <= nd_max_bytes);
+        // Decided per edge, not per rank: an edge is on ND when its connection came up, which both
+        // of its ends agreed on at setup. From world_size 3 up the two edges are different links
+        // and may legitimately differ: one on ND, the other on TCP.
+        const bool use_nd_send = nd_send != nullptr;
+        const bool use_nd_recv = nd_recv != nullptr;
 
         auto send_payload = [&]() -> bool {
             if (use_nd_send) {
@@ -585,29 +557,16 @@ struct dist_comm_socket_context::impl {
             return true;
         };
 
-        // Full-duplex exchange, opt-in via LLAMA_DIST_TP_FULL_DUPLEX=1.
-        //
-        // A small collective cost several times its wire time, and decode runs one collective per
-        // subgraph boundary for every token. Both halves of
-        // the cause were structural. dist_nd_send2 blocked until its own send completion arrived
-        // because there was a single tx staging buffer, and the parity order below then made
-        // rank 1 wait for the entire inbound payload before it could begin sending. On a
-        // full-duplex link that is two serial transfers where one would do.
-        //
-        // With the tx ring, dist_nd_send2 returns once the chunk is posted, so posting first and
-        // draining after the receive puts both directions on the wire together. The drain is what
-        // makes it safe: a staging slot is never reused until its transfer has retired.
+        // Full-duplex exchange. A decode collective is almost pure latency, and decode runs one per
+        // subgraph boundary for every token. dist_nd_send2 returns once the chunk is posted, so
+        // posting first and draining after the receive puts both directions on the wire together,
+        // one transfer's time where send-then-receive would take two.
         //
         // Taken only when this edge's send is actually on ND. A TCP send blocks in the socket
         // buffer and gains nothing, and a mixed edge (ND one way, TCP the other, which happens
         // from world_size 3 up) keeps the ordering it was reasoned about with.
-        static const bool full_duplex = []() {
-            const char * v = getenv("LLAMA_DIST_TP_FULL_DUPLEX");
-            return v && v[0] != '\0' && v[0] != '0';
-        }();
-
         bool ok;
-        if (full_duplex && use_nd_send) {
+        if (use_nd_send) {
             ok = send_payload() && recv_payload() && dist_nd_send_drain(nd_send, err);
         } else {
             // Rank parity avoids blocking send/send for large payloads.
@@ -631,9 +590,9 @@ struct dist_comm_socket_context::impl {
 
         if (ok) {
             // Recorded so the trace report accounts for the bytes this collective actually put
-            // on the wire, tagged with the transport that carried them. Payloads above
-            // nd_max_bytes fall back to TCP even in an RDMA run, so the endpoint is read from
-            // use_nd rather than from whether ND is configured.
+            // on the wire, tagged with the transport that carried them. An edge whose ND
+            // connection did not come up stays on TCP even in an RDMA run, so the endpoint is
+            // read from use_nd rather than from whether ND is configured.
             const int64_t ne[GGML_MAX_DIMS] = { (int64_t) send_size, 1, 1, 1 };
             // the two halves can ride different transports once the ring spans more than two
             // hosts, so a mixed step is reported as such rather than being rounded to one label
@@ -691,10 +650,8 @@ struct dist_comm_socket_context::impl {
         }
 
         // Each ND connection carries both directions of its edge, under the ring's per-edge rule.
-        // Both ends of an edge evaluate the same rule, so they never disagree about the transport.
-        const bool size_ok = nd_max_bytes == 0 || size <= nd_max_bytes;
-        const bool nd_next = nd_send != nullptr && size_ok;
-        const bool nd_prev = nd_recv != nullptr && size_ok;
+        const bool nd_next = nd_send != nullptr;
+        const bool nd_prev = nd_recv != nullptr;
 
         const op_hdr send_hdr {
             op,
@@ -752,8 +709,8 @@ struct dist_comm_socket_context::impl {
         mesh_from_next.resize(size);
 
         // Both sends are posted before either receive, so the two links carry this rank's payload
-        // at the same time. Under LLAMA_DIST_TP_FULL_DUPLEX an ND send returns once it is posted,
-        // and the drains below retire both before a staging slot can be reused.
+        // at the same time. An ND send returns once it is posted, and the drains below retire
+        // both.
         bool ok = send_to(nd_next, nd_send, ring_out_fd) &&
                   send_to(nd_prev, nd_recv, ring_in_fd) &&
                   recv_from(nd_prev, nd_recv, ring_in_fd, recv_data_ptr, mesh_prev_src) &&
@@ -932,11 +889,10 @@ struct dist_comm_socket_context::impl {
         const int prev = (cfg.rank + 3) % 4;
         const int diag = (cfg.rank + 2) % 4;
 
-        // One rule per connection, evaluated identically at both of its ends.
-        const bool size_ok = nd_max_bytes == 0 || size <= nd_max_bytes;
-        const bool nd_next = nd_send != nullptr && size_ok;
-        const bool nd_prev = nd_recv != nullptr && size_ok;
-        const bool nd_dg   = nd_diag != nullptr && size_ok;
+        // One rule per connection, the same at both of its ends: ND when the connection came up.
+        const bool nd_next = nd_send != nullptr;
+        const bool nd_prev = nd_recv != nullptr;
+        const bool nd_dg   = nd_diag != nullptr;
 
         const op_hdr send_hdr {
             op,
@@ -1002,8 +958,8 @@ struct dist_comm_socket_context::impl {
         mesh_from_diag.resize(size);
 
         // All three sends are posted before any receive, so the three links carry this rank's
-        // payload at the same time; under LLAMA_DIST_TP_FULL_DUPLEX an ND send returns once it is
-        // posted, and the drains below retire them before a staging slot can be reused.
+        // payload at the same time. An ND send returns once it is posted, and the drains below
+        // retire them.
         bool ok = send_to(nd_next, nd_send, ring_out_fd) &&
                   send_to(nd_prev, nd_recv, ring_in_fd) &&
                   send_to(nd_dg, nd_diag, diag_fd) &&
@@ -1376,11 +1332,6 @@ struct dist_comm_socket_context::impl {
             }
         }
 
-        if (nd_send != nullptr || nd_recv != nullptr) {
-            // default: one ND chunk per exchange; larger payloads stay on TCP. 0 = no ceiling.
-            nd_max_bytes = dist_nd_ceiling_from_env();
-        }
-
         // The harness greps for this exact prefix to prove which transport a benchmark actually
         // used, so the leading "dist-tp transport: " and the "[rank i/N]" field must stay put.
         const bool any_nd = nd_send != nullptr || nd_recv != nullptr;
@@ -1404,11 +1355,7 @@ struct dist_comm_socket_context::impl {
             // TCP must not print it
             std::fprintf(stderr, " (diagonal on TCP)");
         } else if (any_nd) {
-            if (nd_max_bytes == 0) {
-                std::fprintf(stderr, " (all payloads over ND)");
-            } else {
-                std::fprintf(stderr, " (ND up to %zu B, TCP above)", nd_max_bytes);
-            }
+            std::fprintf(stderr, " (all payloads over ND)");
         }
         std::fprintf(stderr, "\n");
         std::fflush(stderr);

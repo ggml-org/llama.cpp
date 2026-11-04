@@ -177,7 +177,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\prep_fabric.ps1 -Ran
 Two nodes over RDMA:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_disttp.ps1 -Transport rdma -RankNodes A,B -ExtraArgs '-ub 16'
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_disttp.ps1 -Transport rdma -RankNodes A,B
 ```
 
 Three nodes, ring all-reduce. Each all-reduce goes round the ring, every rank sending only to the
@@ -185,14 +185,14 @@ next (rank r to r+1, the last rank back to rank 0), so each cable carries data i
 Order `-RankNodes` so that every direction the ring uses passed the test in section 3.5:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_disttp.ps1 -Transport rdma -RankNodes A,B,C -ExtraArgs '-ub 16'
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_disttp.ps1 -Transport rdma -RankNodes A,B,C
 ```
 
 Three nodes, full-mesh all-reduce. Each all-reduce up to `LLAMA_DIST_TP_MESH_MAX_BYTES` goes to
 both peers at once, so the mesh uses both directions of every cable:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_disttp.ps1 -Transport rdma -RankNodes A,B,C -Mesh -ExtraArgs '-ub 16'
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_disttp.ps1 -Transport rdma -RankNodes A,B,C -Mesh
 ```
 
 The run must report `ranks with a mesh direction on TCP: 0 of 3`.
@@ -200,28 +200,15 @@ The run must report `ranks with a mesh direction on TCP: 0 of 3`.
 `-Transport tcp` runs the same thing over TCP on the same cables, and `-Transport none -RankNodes A`
 runs a single node.
 
-**Keep the prompt on RDMA.** One all-reduce carries `ubatch x n_embd x 4` bytes. By default
-NetworkDirect carries payloads up to 262144 bytes (one ND chunk) and larger ones go over TCP, so
-with the default ubatch the prompt goes over TCP and only decode uses RDMA. Either:
-
-- add `-RdmaMultiChunk` (sets `LLAMA_DIST_TP_RDMA_MULTICHUNK=1` and `LLAMA_DIST_TP_RDMA_MAX_BYTES=0`):
-  a message may then span any number of ND chunks, so every payload goes over RDMA at the default
-  ubatch, or
-- keep every prompt all-reduce within one chunk with
-
-      -ub N    with    N = floor(262144 / (4 x n_embd))
-
-  `n_embd` is printed in the model load log (`print_info: n_embd = ...`): 2880 gives 22, 4096
-  gives 16, 5120 gives 12, 8192 gives 8. A smaller ubatch processes the prompt in more, smaller GPU
-  batches.
-
-The run prints the largest payload it saw against the ND limit (`none` with `-RdmaMultiChunk`).
+Every payload goes over RDMA, the prompt included: a message may span any number of 256 KiB ND
+chunks, and a rank waiting at its ND send window keeps receiving, so two ranks sending to each other
+cannot deadlock.
 
 Three nodes, full mesh, every payload on RDMA, with the Vulkan settings for Intel integrated GPUs
 from section 6 passed through `-ExtraEnv`:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_disttp.ps1 -Transport rdma -RankNodes A,B,C -Mesh -RdmaMultiChunk -ExtraArgs '-fa on -ctk q8_0 -ctv q8_0' -ExtraEnv 'LLAMA_DIST_TP_RECORD_AHEAD=1;GGML_VK_FENCE_POLL_PAUSES=20;GGML_VK_DEFER_GATE=1'
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_disttp.ps1 -Transport rdma -RankNodes A,B,C -Mesh -ExtraArgs '-fa on -ctk q8_0 -ctv q8_0' -ExtraEnv 'LLAMA_DIST_TP_RECORD_AHEAD=1'
 ```
 
 Each run writes every rank's log to `scripts\logs\` and appends a JSON line to
@@ -231,7 +218,7 @@ variable). That is how to watch tokens stream; detached ranks buffer their outpu
 
 ### Three nodes by hand: direct mesh, all on RDMA
 
-The same run as the `-Mesh -RdmaMultiChunk` example above, without the scripts. "Direct" means no
+The same run as the last `-Mesh` example above, without the scripts. "Direct" means no
 relay: every rank sends straight to both peers over the two cables it has. Example cabling, one /24
 per cable:
 
@@ -253,10 +240,7 @@ On each node, in `cmd.exe` (not PowerShell) in the binary folder:
 
 ```bat
 set LLAMA_DIST_TP_RDMA=1
-set LLAMA_DIST_TP_FULL_DUPLEX=1
 set LLAMA_DIST_TP_MESH=1
-set LLAMA_DIST_TP_RDMA_MULTICHUNK=1
-set LLAMA_DIST_TP_RDMA_MAX_BYTES=0
 set LLAMA_DIST_TP_RING_NEXT_HOST=<rank r+1's address on the cable to it>
 set LLAMA_DIST_TP_RECORD_AHEAD=1
 set GGML_VK_FENCE_POLL_PAUSES=20
@@ -282,9 +266,8 @@ checks every rank's log, but know what it checks:
 2. No rank logs `NetworkDirect not established on ring edge`, `falling back to TCP`,
    `no usable NetworkDirect` or `staying on TCP`. `nd_edges_up` equals `nd_edges_expected`.
 3. Every `ring edge i->j dials <ip>` is a USB4 address.
-4. No payload exceeded the ND limit (see `-RdmaMultiChunk` and `-ub` above).
-5. No rank logs `WARN skipping required allreduce`.
-6. The generated text is the same as a single-node run of the same model, prompt and seed (the
+4. No rank logs `WARN skipping required allreduce`.
+5. The generated text is the same as a single-node run of the same model, prompt and seed (the
    `out_sha256` field). Not every model architecture splits correctly in tensor-parallel mode, so
    compare against a single node before trusting a new model.
 
@@ -297,13 +280,10 @@ and the opt-in ones it only clears, with `-ExtraEnv 'NAME=value;NAME=value'`. Fo
 |---|---|
 | `LLAMA_DIST_TP_RDMA=1` | use NetworkDirect for the ring edges; TCP remains for the rendezvous |
 | `LLAMA_DIST_TP_RING_NEXT_HOST=<ip>` | the address this rank dials for its ring-next peer: the far end of the USB4 cable to rank+1 |
-| `LLAMA_DIST_TP_RDMA_MAX_BYTES` | largest payload sent over ND, default 262144 (one ND chunk); larger ones go over TCP. 0 = no ceiling. Above 262144, or 0, only with `LLAMA_DIST_TP_RDMA_MULTICHUNK=1`: without it multi-chunk ND transfers can deadlock |
-| `LLAMA_DIST_TP_RDMA_MULTICHUNK=1` | a message may span any number of ND chunks: a sender blocked at its ND window keeps receiving, so two ranks sending to each other cannot deadlock. With `LLAMA_DIST_TP_RDMA_MAX_BYTES=0` every payload, the prompt included, goes over ND. The first time a sender waits at its window it prints `[dist-tp][nd] multi-chunk messages: a blocked sender keeps receiving` (`-RdmaMultiChunk`) |
 | `LLAMA_DIST_TP_RDMA_ADDR=<ip>` | the local ND address, when it must differ from the ring socket's |
 | `LLAMA_DIST_TP_RDMA_DEBUG=1` | log each ND listener, connection request, connect and teardown |
-| `LLAMA_DIST_TP_FULL_DUPLEX=1` | post each step's send before waiting on its receive |
-| `LLAMA_DIST_TP_MESH=1` | 3 ranks: full-mesh all-reduce for payloads up to `LLAMA_DIST_TP_MESH_MAX_BYTES` (default 65536), the ring above. Same sum order as the ring |
-| `LLAMA_DIST_TP_MESH=1` at 4 ranks | with a cable between every pair of ranks: the two diagonals (rank 0 - rank 2, rank 1 - rank 3) get their own connection, and every all-reduce up to `LLAMA_DIST_TP_MESH_MAX_BYTES` goes to all three peers at once. `LLAMA_DIST_TP_MESH_DIAG_HOSTS=-,-,<h2>,<h3>` names the address rank 2 dials (rank 0's end of the 0-2 cable) and rank 3 dials (rank 1's end of the 1-3 cable); entries 0 and 1 are not used. Same sum order as the ring. The transport line shows the diagonal and only says `all payloads over ND` when it is on ND too |
+| `LLAMA_DIST_TP_MESH=1` | 3 ranks: full-mesh all-reduce for payloads up to 64 KiB, the ring above. Same sum order as the ring |
+| `LLAMA_DIST_TP_MESH=1` at 4 ranks | with a cable between every pair of ranks: the two diagonals (rank 0 - rank 2, rank 1 - rank 3) get their own connection, and every all-reduce up to 64 KiB goes to all three peers at once. `LLAMA_DIST_TP_MESH_DIAG_HOSTS=-,-,<h2>,<h3>` names the address rank 2 dials (rank 0's end of the 0-2 cable) and rank 3 dials (rank 1's end of the 1-3 cable); entries 0 and 1 are not used. Same sum order as the ring. The transport line shows the diagonal and only says `all payloads over ND` when it is on ND too |
 | `LLAMA_DIST_TP_RDMA_FIXED_SLOT=1` | for ND providers that need page-aligned buffers and the same length on both ends of every transfer (a provider that refuses `Register` or completes receives with an error on the default layout): every slot is exactly 256 KiB with the header inside, and every send, acks included, is one whole slot into a receive of one whole slot. Prints `[dist-tp][nd] fixed slots: ...`. Same value on every rank |
 | `LLAMA_DIST_TP_RDMA_SMALL_LANE=<bytes>` | with fixed slots (it turns them on): a second ND connection on every cable whose slots are this size, a whole number of 4096 B pages below 256 KiB. A message that fits one small slot (16 B header + payload) takes it, everything else the 256 KiB one, so a decode all-reduce no longer moves a whole 256 KiB slot. Pick the smallest page multiple that holds a decode payload: `n_embd x 2 + 16` bytes with `LLAMA_DIST_TP_WIRE_F16=1`, `n_embd x 4 + 16` without (n_embd 2880 with f16: 8192; 4096 with f16: 12288). Prints `[dist-tp][nd] small connection: ...`. Ranks with different values refuse to connect |
 | `LLAMA_DIST_TP_WIRE_F16=1` | the boundary all-reduce carries f16 on the wire, half the bytes: each payload is scaled by a power of two so its largest value fits, and the sums stay f32. The output can differ slightly from an f32 run. Same value on every rank |
@@ -343,7 +323,7 @@ driver they also keep two kernels that llama.cpp leaves off on Intel: the subgro
 | `nodes.ps1.template` | the site configuration; copy to `nodes.ps1` |
 | `prep_fabric.ps1` | reboot each node and prove it rebooted, MTU 1500 and Private profile on the USB4 legs, re-address `Readdress` nodes, prove every edge connects and carries full-size frames |
 | `verify_binaries.ps1` | same `llama-cli`, DLLs, model and prompt on every node; reports or checks the loaded USB4/RDMA driver images |
-| `run_disttp.ps1` | one run at 1..N ranks over RDMA or TCP (`-Mesh`, `-RdmaMultiChunk`, `-ExtraEnv` for further switches); analyses every rank's log |
+| `run_disttp.ps1` | one run at 1..N ranks over RDMA or TCP (`-Mesh`, `-ExtraEnv` for further switches); analyses every rank's log |
 | `distprof.ps1` | log analysis, dot-sourced by `run_disttp.ps1` |
 | `nd_pair.ps1` | NetworkDirect test between two nodes in one direction |
 | `nd_all_directions.ps1` | `nd_pair.ps1` for both directions of every cable |

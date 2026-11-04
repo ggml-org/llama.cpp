@@ -61,10 +61,9 @@ void dist_nd_free(dist_nd_conn *) {}
 //
 // The receiver acks only while it consumes, inside nd_recv_raw. When both ends of a link send a
 // message longer than the window before either receives (full duplex, or the edge an odd ring
-// cannot 2-colour), both block at the window for an ack neither will send. That is why payloads
-// above one chunk stayed on TCP. LLAMA_DIST_TP_RDMA_MULTICHUNK=1 lets a sender blocked at the
-// window keep taking chunks off every connection's receive ring into a side buffer and acking
-// them, so a message may span any number of 256 KiB chunks (see nd_wait_ack_progressing).
+// cannot 2-colour), both block at the window for an ack neither will send. So a sender blocked at
+// the window keeps taking chunks off every connection's receive ring into a side buffer and acking
+// them, and a message may span any number of 256 KiB chunks (see nd_wait_ack_progressing).
 // ---------------------------------------------------------------------------------------
 
 static constexpr uint32_t ND_MSG_MAGIC   = 0x4E444D31; // 'NDM1'
@@ -131,7 +130,7 @@ struct nd_hello {
 static inline void * nd_ctx_recv(int slot) { return (void *)(uintptr_t)(slot + 1); }
 static inline int    nd_ctx_slot(void * ctx) { return (int)(uintptr_t)ctx - 1; }
 static void * const  ND_CTX_SEND = (void *)(uintptr_t)(ND_RX_DEPTH + 2);
-// an ack posted from the dedicated ack slot (multi-chunk mode), retired outside the tx ring
+// an ack sent from the dedicated ack slot while waiting at the window, retired outside the tx ring
 static void * const  ND_CTX_ACK  = (void *)(uintptr_t)(ND_RX_DEPTH + 3);
 // the dedicated ack slot sits after the tx ring in the same registered buffer
 static constexpr size_t ND_ACK_SLOT_BYTES = 64;
@@ -140,19 +139,6 @@ static bool nd_debug() {
     static const bool on = []() {
         const char * v = std::getenv("LLAMA_DIST_TP_RDMA_DEBUG");
         return v && v[0] != '\0' && v[0] != '0';
-    }();
-    return on;
-}
-
-// Opt-in, LLAMA_DIST_TP_RDMA_MULTICHUNK=1: see the flow-control note above. Unset, nothing changes.
-static bool nd_multichunk() {
-    static const bool on = []() {
-        const char * v = std::getenv("LLAMA_DIST_TP_RDMA_MULTICHUNK");
-        const bool r = v && v[0] != '\0' && v[0] != '0';
-        if (r) {
-            std::fprintf(stderr, "[dist-tp][nd] multi-chunk messages: a blocked sender keeps receiving\n");
-        }
-        return r;
     }();
     return on;
 }
@@ -1009,16 +995,6 @@ static int nd_try_step(dist_nd_conn * c) {
 
 static bool nd_flush(dist_nd_conn * c);
 
-// Opt-in. Unset, every send still retires before dist_nd_send2 returns, which is exactly what the
-// committed known-good build does.
-static bool nd_full_duplex() {
-    static const bool on = []() {
-        const char * v = std::getenv("LLAMA_DIST_TP_FULL_DUPLEX");
-        return v && v[0] != '\0' && v[0] != '0';
-    }();
-    return on;
-}
-
 // The slot about to be staged into must not still be on the wire. Sends are posted round-robin and
 // retire in order, so while fewer than ND_TX_DEPTH are outstanding the current slot is the free
 // one; that invariant is why this is the only place a staging write can block.
@@ -1091,7 +1067,7 @@ static bool nd_send_bye(dist_nd_conn * c) {
 }
 
 // ---------------------------------------------------------------------------------------
-// multi-chunk messages (opt-in, LLAMA_DIST_TP_RDMA_MULTICHUNK)
+// multi-chunk messages
 // ---------------------------------------------------------------------------------------
 
 // Every live connection of this process. A rank blocked at one edge's window must keep the other
@@ -1285,18 +1261,8 @@ static bool nd_flush(dist_nd_conn * c) {
     if (c->tx_fill == 0) {
         return true;
     }
-    if (c->tx_since_ack >= ND_WINDOW) {
-        if (nd_multichunk()) {
-            if (!nd_wait_ack_progressing(c)) {
-                return false;
-            }
-        } else {
-            while (c->ack_pending == 0) {
-                if (!nd_step(c)) {
-                    return false;
-                }
-            }
-        }
+    if (c->tx_since_ack >= ND_WINDOW && !nd_wait_ack_progressing(c)) {
+        return false;
     }
     return nd_post_staged(c);
 }
@@ -1574,12 +1540,8 @@ bool dist_nd_send2(dist_nd_conn * c, const void * hdr, size_t hdr_size,
     if (ok) {
         ok = nd_flush(l);
     }
-    // Default retires the send before returning, identical to the previous behaviour. Full-duplex
-    // mode drains after the matching receive instead, which is the whole point: both directions
-    // are then on the wire at once.
-    if (ok && !nd_full_duplex()) {
-        ok = nd_send_drain_local(l);
-    }
+    // The send retires in dist_nd_send_drain, which the caller runs after the matching receive,
+    // so both directions are on the wire at once.
     if (!ok) {
         nd_drop_staged(c);
         err = c->peer_gone ? "peer closed connection" : "NetworkDirect send failed";

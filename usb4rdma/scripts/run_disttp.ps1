@@ -16,7 +16,7 @@
 # Examples:
 #   .\run_disttp.ps1 -Transport rdma                       # $CLUSTER_RINGS[2]
 #   .\run_disttp.ps1 -Transport rdma -RankNodes A,B,C -Mesh
-#   .\run_disttp.ps1 -Transport rdma -RankNodes A,B,C -Mesh -RdmaMultiChunk -ExtraEnv 'LLAMA_DIST_TP_RECORD_AHEAD=1'
+#   .\run_disttp.ps1 -Transport rdma -RankNodes A,B,C -Mesh -ExtraEnv 'LLAMA_DIST_TP_RECORD_AHEAD=1'
 #   .\run_disttp.ps1 -Transport tcp  -RankNodes A,B
 #   .\run_disttp.ps1 -Transport none -RankNodes A          # single node baseline
 param(
@@ -30,11 +30,8 @@ param(
   [int]$Ctx = 2048,
   [int]$Threads = 0,
   [int]$Ngl = 99,
-  # Appended verbatim to llama-cli on every rank. Two uses matter for RDMA:
-  #  - '-ub N' with N = floor(262144 / (4 x n_embd)) keeps every prompt all-reduce within the ND
-  #    ceiling, so the prompt goes over RDMA too, not only decode. Larger ubatches send the prompt
-  #    collectives over TCP. The run reports the largest payload it saw.
-  #  - '-fa on -ctk q8_0 -ctv q8_0' for long context.
+  # Appended verbatim to llama-cli on every rank, e.g. '-fa on -ctk q8_0 -ctv q8_0' for long
+  # context.
   [string]$ExtraArgs = '',
   [string]$Device = '',
   # Leave empty to derive it. The master MUST be rank 0's own address: rank 0 binds and listens on
@@ -44,20 +41,6 @@ param(
   # Give up if no transport line has appeared within this long. The rendezvous either completes in
   # well under a minute or never completes.
   [int]$RendezvousTimeoutSec = 900,
-  # LLAMA_DIST_TP_FULL_DUPLEX=1 is set by default: each step's send is posted before waiting on the
-  # matching receive, so a rank's outbound and inbound edges are on the wire at once. -NoFullDuplex
-  # leaves the variable unset.
-  [switch]$NoFullDuplex,
-  # LLAMA_DIST_TP_RDMA_MAX_BYTES, the largest payload sent over ND; larger ones go over TCP.
-  # -1 (default) leaves it unset, which keeps the build's ceiling of 262144 (256 KiB), or sets 0
-  # (no ceiling) with -RdmaMultiChunk. Values above 262144 need -RdmaMultiChunk: without it
-  # multi-chunk ND transfers can deadlock.
-  [int64]$RdmaMaxBytes = -1,
-  # LLAMA_DIST_TP_RDMA_MULTICHUNK=1: a message longer than one ND chunk stays on RDMA, because a
-  # sender blocked at its ND window keeps receiving. Unless -RdmaMaxBytes is given it also sets
-  # LLAMA_DIST_TP_RDMA_MAX_BYTES=0, so every payload, the prompt included, goes over RDMA and no
-  # -ub is needed.
-  [switch]$RdmaMultiChunk,
   # LLAMA_DIST_TP_RDMA_DEBUG=1 on every rank: the ND layer logs each edge's local address, listener,
   # connection request, connect and teardown. For diagnosing an edge, not for timing.
   [switch]$RdmaDebug,
@@ -100,7 +83,6 @@ if($world -gt 1 -and $Transport -eq 'none'){ throw "a multi-rank run needs -Tran
 $RUN = $CLUSTER_CFG.RunDir
 function RunDirFor([string]$n){ if($CLUSTER_CFG.RunDirByNode -and $CLUSTER_CFG.RunDirByNode[$n]){ $CLUSTER_CFG.RunDirByNode[$n] } else { $RUN } }
 if($Mesh -and $world -ne 3){ throw "-Mesh needs exactly 3 ranks (have $world)" }
-if($RdmaMaxBytes -gt 262144 -and -not $RdmaMultiChunk){ throw "-RdmaMaxBytes above 262144 needs -RdmaMultiChunk (without it multi-chunk ND transfers can deadlock)" }
 # Not $extraEnv: PowerShell variable names ignore case, so that would be the parameter itself.
 $envExtra = @($ExtraEnv -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 foreach($kv in $envExtra){
@@ -120,7 +102,6 @@ if(-not $Master -and $world -gt 1){ $Master = (Node-RendezvousIp $nodeList[0]) +
 Write-Host "==== $Tag :: world=$world nodes=$($nodeList -join ',') transport=$Transport ===="
 Write-Host "  model  : $(Split-Path $Model -Leaf)"
 Write-Host "  fixed  : -n $NPred -c $Ctx -ngl $Ngl -t $Threads --device $Device --temp 0 --seed 1234 $ExtraArgs"
-if($RdmaMultiChunk){ Write-Host "  ND     : multi-chunk messages, LLAMA_DIST_TP_RDMA_MAX_BYTES=$(if($RdmaMaxBytes -ge 0){$RdmaMaxBytes}else{0})" }
 if($envExtra.Count){ Write-Host "  env    : $($envExtra -join ' ')" }
 if($world -gt 1){
   for($i=0; $i -lt $world; $i++){ Write-Host ("  rank{0} {1} -> {2}" -f $i, $nodeList[$i], $next[$i]) }
@@ -142,9 +123,6 @@ function RankEnv([int]$rank){
   if($world -le 1){ return @() }
   @(
     "LLAMA_DIST_TP_RDMA=$(if($Transport -eq 'rdma'){1})"
-    "LLAMA_DIST_TP_FULL_DUPLEX=$(if(-not $NoFullDuplex){1})"
-    "LLAMA_DIST_TP_RDMA_MAX_BYTES=$(if($RdmaMaxBytes -ge 0){$RdmaMaxBytes}elseif($RdmaMultiChunk){0})"
-    "LLAMA_DIST_TP_RDMA_MULTICHUNK=$(if($RdmaMultiChunk){1})"
     # A name whitelist for collectives; setting it can silently drop required all-reduces.
     'LLAMA_DIST_TP_COLLECT_PREFIXES='
     "LLAMA_DIST_TP_RING_NEXT_HOST=$($next[$rank])"
@@ -334,7 +312,7 @@ if($Transport -eq 'rdma'){
   }
   if($prof){
     Write-Host ("  largest all-reduce payload: {0} B, ND ceiling: {1}" -f $prof.max_coll_bytes, $(if($null -eq $an.nd_max_bytes){'unknown'}elseif($an.nd_max_bytes -eq 0){'none'}else{"$($an.nd_max_bytes) B"}))
-    if($overCeiling){ Write-Host "  *** payloads above the ND ceiling went over TCP (the prompt, usually); pass -RdmaMultiChunk, or -ExtraArgs '-ub N', N = floor(262144 / (4 x n_embd)) ***" }
+    if($overCeiling){ Write-Host "  *** payloads above the ND ceiling went over TCP (the prompt, usually); this binary predates multi-chunk ND messages ***" }
   }
 }
 if($an.foreign_rank_logs.Count){ Write-Host ("  *** rank(s) {0}: the log dials a different ring-next than this run set; it is from another run ***" -f ($an.foreign_rank_logs -join ', ')) }
@@ -377,8 +355,8 @@ $rec = [ordered]@{
   max_coll_bytes=$(if($prof){$prof.max_coll_bytes}else{$null}); over_nd_ceiling=$overCeiling
   status=$an.status; end_reason=$endReason; build=$(if($an.builds.Count){$an.builds[0]}else{$null})
   model=(Split-Path $Model -Leaf); prompt=(Split-Path $Prompt -Leaf); n_predict=$NPred; ctx=$Ctx; extra_args=$ExtraArgs
-  threads=$Threads; ngl=$Ngl; full_duplex=(-not $NoFullDuplex); mesh=[bool]$Mesh
-  rdma_multichunk=[bool]$RdmaMultiChunk; extra_env=($envExtra -join ';')
+  threads=$Threads; ngl=$Ngl; mesh=[bool]$Mesh
+  extra_env=($envExtra -join ';')
   mesh_up=$(if($Mesh){ @($raw.Values | Where-Object { "$_" -match 'dist-tp all-reduce: full mesh' }).Count }else{ $null })
   mesh_tcp_ranks=$meshTcp; device=$Device; master=$(if($world -gt 1){$Master}else{$null})
   prefill_tps=$an.prefill_tps; decode_tps=$an.decode_tps
