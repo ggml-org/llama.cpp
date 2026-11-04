@@ -4709,14 +4709,101 @@ static inline bool htp_kparams_solve_dsv4_hc_post(
     return htp_kparams_solve_dsv4_hc_post_impl(sess, op->src[0], op->src[1], op->src[2], op->src[3], op, kparams);
 }
 
-static bool htp_kparams_solve_lightning_indexer(
+static bool htp_lightning_indexer_can_collapse(
+    const struct ggml_tensor * q,
+    const struct ggml_tensor * k,
+    const struct ggml_tensor * w,
+    const struct ggml_tensor * m,
+    const struct ggml_tensor * dst
+) {
+    if (!q || !k || !w || !m || !dst) {
+        return false;
+    }
+
+    // 2D K normalization: ne[1] is n_kv, ne[2] is 1
+    const bool can_collapse_k = (k->ne[1] > 1 && k->ne[2] == 1);
+
+    // Stream-to-token collapse across q, w, dst (and m)
+    bool can_collapse_stream = false;
+    if (q->ne[3] > 1 && k->ne[3] == 1) {
+        const bool q_ok = (q->nb[3] == (size_t) q->ne[2] * q->nb[2]);
+        const bool dst_ok = (dst->ne[3] == q->ne[3] && dst->ne[2] == 1 && dst->ne[1] == q->ne[2] &&
+                             dst->nb[3] == (size_t) dst->ne[1] * dst->nb[1]);
+        const bool w_ok = (w->ne[3] == q->ne[3] && w->ne[2] == 1 && w->ne[1] == q->ne[2] &&
+                           w->nb[3] == (size_t) w->ne[1] * w->nb[1]) ||
+                          (w->ne[3] == 1 && w->ne[1] == q->ne[2] * q->ne[3]);
+        const bool m_ok = (m->ne[3] == q->ne[3] && m->ne[2] == 1 && m->ne[1] == q->ne[2] &&
+                           m->nb[3] == (size_t) m->ne[1] * m->nb[1]) ||
+                          (m->ne[3] == 1 && m->ne[1] == q->ne[2] * q->ne[3]);
+        can_collapse_stream = q_ok && dst_ok && w_ok && m_ok;
+    }
+
+    return can_collapse_k || can_collapse_stream;
+}
+
+static void htp_lightning_indexer_collapse_tensors(
+    const struct ggml_tensor * q,
+    const struct ggml_tensor * k,
+    const struct ggml_tensor * w,
+    const struct ggml_tensor * m,
+    const struct ggml_tensor * dst,
+    struct ggml_tensor * q_c,
+    struct ggml_tensor * k_c,
+    struct ggml_tensor * w_c,
+    struct ggml_tensor * m_c,
+    struct ggml_tensor * dst_c
+) {
+    *q_c   = *q;
+    *k_c   = *k;
+    *w_c   = *w;
+    *m_c   = *m;
+    *dst_c = *dst;
+
+    if (k->ne[1] > 1 && k->ne[2] == 1) {
+        k_c->ne[2] = k->ne[1];
+        k_c->ne[1] = 1;
+        k_c->nb[1] = k->nb[1];
+        k_c->nb[2] = k->nb[1];
+        k_c->nb[3] = k->nb[2];
+    }
+
+    if (q->ne[3] > 1 && k->ne[3] == 1) {
+        const int64_t n_tokens_collapsed = (int64_t) q->ne[2] * q->ne[3];
+
+        q_c->ne[2] = n_tokens_collapsed;
+        q_c->ne[3] = 1;
+        q_c->nb[3] = (size_t) q_c->ne[2] * q_c->nb[2];
+
+        if (w->ne[3] == q->ne[3]) {
+            w_c->ne[1] = n_tokens_collapsed;
+            w_c->ne[3] = 1;
+            w_c->nb[2] = (size_t) w_c->ne[1] * w_c->nb[1];
+            w_c->nb[3] = w_c->nb[2];
+        }
+
+        dst_c->ne[1] = n_tokens_collapsed;
+        dst_c->ne[3] = 1;
+        dst_c->nb[2] = (size_t) dst_c->ne[1] * dst_c->nb[1];
+        dst_c->nb[3] = dst_c->nb[2];
+
+        if (m->ne[3] == q->ne[3] && m->ne[1] == q->ne[2]) {
+            m_c->ne[1] = n_tokens_collapsed;
+            m_c->ne[3] = 1;
+            m_c->nb[2] = (size_t) m_c->ne[1] * m_c->nb[1];
+            m_c->nb[3] = m_c->nb[2];
+        }
+    }
+}
+
+static bool htp_kparams_solve_lightning_indexer_impl(
     const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * q,
+    const struct ggml_tensor * k,
+    const struct ggml_tensor * w,
+    const struct ggml_tensor * m,
     const struct ggml_tensor * op,
     struct htp_lid_kernel_params * kparams
 ) {
-    const struct ggml_tensor * q = op->src[0];
-    const struct ggml_tensor * k = op->src[1];
-
     if (opt_li_select < 1) {
         return false;
     }
@@ -4727,7 +4814,7 @@ static bool htp_kparams_solve_lightning_indexer(
 
     if (q->ne[0] % 32 != 0 ||
         !ggml_is_contiguous_rows(q) || !ggml_is_contiguous_rows(k) ||
-        !ggml_is_contiguous_rows(op->src[2]) || !ggml_is_contiguous_rows(op->src[3]) ||
+        !ggml_is_contiguous_rows(w) || !ggml_is_contiguous_rows(m) ||
         !ggml_is_contiguous_rows(op)) {
         return false;
     }
@@ -4744,7 +4831,7 @@ static bool htp_kparams_solve_lightning_indexer(
 
     kparams->k_row_size = (uint32_t) k_row_size;
     kparams->div_n_head = init_fastdiv_values(n_head);
-    kparams->div_m_ne3  = init_fastdiv_values((uint32_t) op->src[3]->ne[3]);
+    kparams->div_m_ne3  = init_fastdiv_values((uint32_t) m->ne[3]);
 
     if (opt_li_select >= 2 && htp_session_n_hmx(sess) > 0 && D % HMX_FP16_TILE_N_COLS == 0) {
         const uint32_t n_threads = htp_session_n_threads(sess);
@@ -4834,6 +4921,20 @@ static bool htp_kparams_solve_lightning_indexer(
     kparams->vtcm_size         = (uint32_t) vtcm_size;
 
     return true;
+}
+
+static bool htp_kparams_solve_lightning_indexer(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * op,
+    struct htp_lid_kernel_params * kparams
+) {
+    if (htp_lightning_indexer_can_collapse(op->src[0], op->src[1], op->src[2], op->src[3], op)) {
+        struct ggml_tensor q_c, k_c, w_c, m_c, d_c;
+        htp_lightning_indexer_collapse_tensors(op->src[0], op->src[1], op->src[2], op->src[3], op,
+                                               &q_c, &k_c, &w_c, &m_c, &d_c);
+        return htp_kparams_solve_lightning_indexer_impl(sess, &q_c, &k_c, &w_c, &m_c, &d_c, kparams);
+    }
+    return htp_kparams_solve_lightning_indexer_impl(sess, op->src[0], op->src[1], op->src[2], op->src[3], op, kparams);
 }
 template <auto SolveFn>
 static inline bool htp_kparams_invoke(
@@ -4988,6 +5089,28 @@ void htp_opnode_collapse(const struct ggml_hexagon_session * sess, htp_opnode & 
         }
         return;
     }
+
+    if (node.opcode == HTP_OP_LIGHTNING_INDEXER) {
+        if (node.inputs.size() < 4 || !node.inputs[0] || !node.inputs[1] || !node.inputs[2] || !node.inputs[3] || node.outputs.empty() || !node.outputs[0]) {
+            return;
+        }
+        const struct ggml_tensor * q   = node.inputs[0];
+        const struct ggml_tensor * k   = node.inputs[1];
+        const struct ggml_tensor * w   = node.inputs[2];
+        const struct ggml_tensor * m   = node.inputs[3];
+        const struct ggml_tensor * dst = node.outputs[0];
+
+        if (htp_lightning_indexer_can_collapse(q, k, w, m, dst)) {
+            struct ggml_tensor q_c, k_c, w_c, m_c, d_c;
+            htp_lightning_indexer_collapse_tensors(q, k, w, m, dst, &q_c, &k_c, &w_c, &m_c, &d_c);
+            node.inputs[0]  = node.add_dummy(q_c);
+            node.inputs[1]  = node.add_dummy(k_c);
+            node.inputs[2]  = node.add_dummy(w_c);
+            node.inputs[3]  = node.add_dummy(m_c);
+            node.outputs[0] = node.add_dummy(d_c);
+        }
+        return;
+    }
 }
 
 bool htp_kparams_solve(
@@ -5027,6 +5150,11 @@ bool htp_kparams_solve(
         const ggml_tensor * src2 = node.inputs.size() > 2 ? node.inputs[2] : nullptr;
         const ggml_tensor * src3 = node.inputs.size() > 3 ? node.inputs[3] : nullptr;
         return htp_kparams_solve_dsv4_hc_post_impl(sess, src0, src1, src2, src3, dst, node.kparams<htp_dsv4_hc_post_kernel_params>());
+    }
+    if (node.opcode == HTP_OP_LIGHTNING_INDEXER) {
+        const ggml_tensor * src2 = node.inputs.size() > 2 ? node.inputs[2] : nullptr;
+        const ggml_tensor * src3 = node.inputs.size() > 3 ? node.inputs[3] : nullptr;
+        return htp_kparams_solve_lightning_indexer_impl(sess, src0, src1, src2, src3, dst, node.kparams<htp_lid_kernel_params>());
     }
 
     return htp_kparams_solve(sess, node.node, node.kernel_params);
