@@ -2060,6 +2060,126 @@ static void test_multi_output_cpu_suffix(const test_params & params) {
     printf("backend multi-output CPU suffix test PASSED\n");
 }
 
+static bool is_digits(const std::string & s) {
+    return !s.empty() && std::all_of(s.begin(), s.end(), [](unsigned char c) { return c >= '0' && c <= '9'; });
+}
+
+// greedy over the full logits: no token the digits grammar allows scores higher than the sampled one
+static void check_digits_greedy(const test_context & test_ctx, int32_t idx, llama_token token) {
+    const float * logits = llama_get_raw_logits_ith(test_ctx.ctx.get(), idx);
+    GGML_ASSERT(logits != nullptr);
+    for (llama_token t = 0; t < test_ctx.n_vocab; ++t) {
+        if (is_digits(test_ctx.token_to_piece(t, false))) {
+            GGML_ASSERT(logits[t] <= logits[token]);
+        }
+    }
+}
+
+static void test_grammar(const test_params & params) {
+    const llama_seq_id seq_id = 0;
+
+    // digits only, so the backend token mostly does not fit and the CPU resampling runs
+    common_params_sampling sp;
+    sp.temp             = 0.0f;
+    sp.samplers         = {COMMON_SAMPLER_TYPE_TOP_K, COMMON_SAMPLER_TYPE_TEMPERATURE};
+    sp.backend_sampling = true;
+    sp.grammar          = {COMMON_GRAMMAR_TYPE_USER, "root ::= [0-9]+"};
+
+    common_sampler_ptr sampler(common_sampler_init(params.model.get(), sp));
+    GGML_ASSERT(sp.backend_sampling && "a grammar must not disable backend sampling");
+
+    std::vector<llama_sampler_seq_config> configs = {{ seq_id, common_sampler_get(sampler.get()) }};
+    test_context test_ctx(params, configs);
+    auto * ctx = test_ctx.ctx.get();
+
+    GGML_ASSERT(test_ctx.decode({{seq_id, "The year was"}}));
+
+    int n_resampled = 0;
+    for (int step = 0; step < 8; ++step) {
+        const int32_t idx = test_ctx.idx_for_seq(seq_id);
+
+        const llama_token token_backend = llama_get_sampled_token_ith(ctx, idx);
+        GGML_ASSERT(token_backend != LLAMA_TOKEN_NULL);
+
+        const llama_token token = common_sampler_sample(sampler.get(), ctx, idx);
+        printf("step %d: backend token %d '%s', sampled token %d '%s'\n", step,
+                token_backend, test_ctx.token_to_piece(token_backend, false).c_str(),
+                token,         test_ctx.token_to_piece(token,         false).c_str());
+
+        if (llama_vocab_is_eog(test_ctx.vocab, token)) {
+            break;
+        }
+
+        GGML_ASSERT(is_digits(test_ctx.token_to_piece(token, false)));
+
+        if (token != token_backend) {
+            n_resampled++;
+            check_digits_greedy(test_ctx, idx, token);
+        }
+
+        common_sampler_accept(sampler.get(), token, true);
+        GGML_ASSERT(test_ctx.decode_token(token, seq_id));
+    }
+
+    // the prompt does not continue with digits, so at least the first token is resampled
+    GGML_ASSERT(n_resampled > 0);
+
+    printf("backend grammar test PASSED (%d resampled)\n", n_resampled);
+}
+
+static void test_grammar_cpu_suffix(const test_params & params) {
+    const llama_seq_id seq_id = 0;
+
+    // top-k runs on the backend and top-n-sigma (CPU only) after it, so the CPU gets only the top candidate
+    common_params_sampling sp;
+    sp.temp             = 0.0f;
+    sp.top_k            = 1;
+    sp.top_n_sigma      = 1.0f;
+    sp.samplers         = {COMMON_SAMPLER_TYPE_TOP_K, COMMON_SAMPLER_TYPE_TOP_N_SIGMA, COMMON_SAMPLER_TYPE_TEMPERATURE};
+    sp.backend_sampling = true;
+    sp.grammar          = {COMMON_GRAMMAR_TYPE_USER, "root ::= [0-9]+"};
+
+    common_sampler_ptr sampler(common_sampler_init(params.model.get(), sp));
+
+    std::vector<llama_sampler_seq_config> configs = {{ seq_id, common_sampler_get(sampler.get()) }};
+    test_context test_ctx(params, configs);
+    auto * ctx = test_ctx.ctx.get();
+
+    GGML_ASSERT(test_ctx.decode({{seq_id, "The year was"}}));
+
+    for (int step = 0; step < 4; ++step) {
+        const int32_t idx = test_ctx.idx_for_seq(seq_id);
+
+        GGML_ASSERT(llama_get_sampled_token_ith(ctx, idx) == LLAMA_TOKEN_NULL);
+        GGML_ASSERT(llama_get_sampled_candidates_count_ith(ctx, idx) == 1);
+
+        const llama_token candidate = llama_get_sampled_candidates_ith(ctx, idx)[0];
+
+        // even steps take the rejection path, odd steps the grammar-first path
+        const llama_token token = common_sampler_sample(sampler.get(), ctx, idx, step % 2 == 1);
+        printf("step %d: backend candidate %d '%s', sampled token %d '%s'\n", step,
+                candidate, test_ctx.token_to_piece(candidate, false).c_str(),
+                token,     test_ctx.token_to_piece(token,     false).c_str());
+
+        // the prompt does not continue with digits, so the first token must come from outside the candidates
+        if (step == 0) {
+            GGML_ASSERT(!is_digits(test_ctx.token_to_piece(candidate, false)));
+        }
+
+        if (llama_vocab_is_eog(test_ctx.vocab, token)) {
+            break;
+        }
+
+        GGML_ASSERT(is_digits(test_ctx.token_to_piece(token, false)));
+        check_digits_greedy(test_ctx, idx, token);
+
+        common_sampler_accept(sampler.get(), token, true);
+        GGML_ASSERT(test_ctx.decode_token(token, seq_id));
+    }
+
+    printf("backend grammar CPU suffix test PASSED\n");
+}
+
 struct backend_test_case {
     std::string name;
     void (*fn)(const test_params &);
@@ -2092,6 +2212,9 @@ static const backend_test_case BACKEND_TESTS[] = {
     { "test_multi_output_dist_transaction",       test_multi_output_dist_transaction,    true },
     { "test_multi_output_sampling_chain",         test_multi_output_sampling_chain,      true },
     { "test_multi_output_cpu_suffix",             test_multi_output_cpu_suffix,          true },
+    // grammar
+    { "test_grammar",                             test_grammar,                          true },
+    { "test_grammar_cpu_suffix",                  test_grammar_cpu_suffix,               true },
 };
 
 // TODO: add usage, examples
