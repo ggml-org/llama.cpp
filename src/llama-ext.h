@@ -42,6 +42,10 @@ LLAMA_API struct ggml_cgraph * llama_graph_reserve(
         uint32_t n_seqs,
         uint32_t n_outputs);
 
+// Reserve the compute buffers again if a setting changed since the last reserve.
+// With a no_alloc model only the expected sizes in llama_get_memory_breakdown are updated.
+LLAMA_API void llama_sched_reserve(struct llama_context * ctx);
+
 // Get the default ggml_type for a given ftype.
 LLAMA_API ggml_type llama_ftype_get_default_type(llama_ftype ftype);
 
