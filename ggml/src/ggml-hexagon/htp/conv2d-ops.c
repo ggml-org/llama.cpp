@@ -143,8 +143,6 @@ struct htp_conv_geom {
     size_t   x_nb_d, x_nb_c, x_nb_n;   // input strides for d, cin, n
     size_t   y_nb_c, y_nb_n;           // dst strides for cout, n
     size_t   w_nb_co;                  // kernel cout stride
-    struct fastdiv_values div_khr;
-    struct fastdiv_values div_ohr;
 };
 
 // conv_3d tensors are [W, H, D, C * N] with the channel as the inner index of ne[3]
@@ -175,8 +173,6 @@ static void conv_geom_init(struct htp_conv_geom * g, const struct htp_ops_contex
             .w_nb_co = kernel->nb[3],
         };
     }
-    g->div_khr = init_fastdiv_values(g->KHr);
-    g->div_ohr = init_fastdiv_values(g->OHr);
 }
 
 struct htp_conv2d_hmx_context {
@@ -313,11 +309,11 @@ static void conv2d_hmx_stage(const struct htp_ops_context * octx, const struct h
     const int32_t lo  = MAX(0, -iw0);
     const int32_t hi  = MIN(Wb, IW - iw0);
 
-    const uint32_t od = fastdiv(oh, &g->div_ohr);
+    const uint32_t od = fastdiv(oh, &kp->tiled.div_ohr);
     oh -= od * g->OHr;
 
     for (uint32_t kh = 0; kh < KH; kh++) {
-        const int32_t kd   = fastdiv(kh, &g->div_khr);
+        const int32_t kd   = fastdiv(kh, &kp->tiled.div_khr);
         const int32_t id   = (int32_t) od * g->s2 + kd * g->d2 - g->p2;
         const int32_t ih   = (int32_t) oh * s1 + (int32_t) (kh - kd * g->KHr) * d1 - p1;
         float *       rows = stage + (size_t) kh * SR;

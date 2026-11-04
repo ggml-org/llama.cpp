@@ -4130,6 +4130,8 @@ static bool htp_kparams_conv2d_tiled(
     kp->tiled.wk_chunk     = wk;
     kp->tiled.div_ow_tiles = init_fastdiv_values(n_owt);
     kp->tiled.div_oh       = init_fastdiv_values(OH);
+    kp->tiled.div_khr      = init_fastdiv_values(src0->ne[1]);
+    kp->tiled.div_ohr      = init_fastdiv_values(dst->ne[1]);
     return true;
 }
 
