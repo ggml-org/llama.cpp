@@ -220,26 +220,6 @@ llama_model_xing4_0::graph_mtp::graph_mtp(const llama_model & model, const llm_g
 
     GGML_ASSERT(n_embd_head_qk_nope >= 1);
     GGML_ASSERT(hparams.n_lora_q > 0);
-    GGML_ASSERT(layer.wq_a);
-    GGML_ASSERT(layer.attn_q_a_norm);
-    GGML_ASSERT(layer.wq_b);
-    GGML_ASSERT(layer.wkv_a_mqa);
-    GGML_ASSERT(layer.attn_kv_a_norm);
-    GGML_ASSERT(layer.wk_b);
-
-    const bool has_split_exps =
-            layer.ffn_up_exps   != nullptr &&
-            layer.ffn_gate_exps != nullptr;
-
-    const bool has_fused_exps = layer.ffn_gate_up_exps != nullptr;
-
-    GGML_ASSERT(has_split_exps || has_fused_exps);
-    GGML_ASSERT(layer.ffn_norm);
-    GGML_ASSERT(layer.ffn_gate_inp);
-    GGML_ASSERT(layer.ffn_down_exps);
-    GGML_ASSERT(layer.ffn_gate_shexp);
-    GGML_ASSERT(layer.ffn_down_shexp);
-    GGML_ASSERT(layer.ffn_up_shexp);
 
     auto inp = std::make_unique<llm_graph_input_embd_h>(hparams.n_embd_inp(), hparams.n_embd);
 
