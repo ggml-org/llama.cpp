@@ -16,6 +16,7 @@
 	import DisplaySample from './overview/DisplaySample.svelte';
 	import CharGrid from './overview/CharGrid.svelte';
 	import WeightLines from './overview/WeightLines.svelte';
+	import Details from './overview/Details.svelte';
 
 	const { axis, glyphCount, styles } = specimen;
 	const stems = styles.map((s) => s.stem);
@@ -28,6 +29,16 @@
 A neo-grotesk with an even stroke, round bowls and open, angle-cut terminals. Llama Sans comes in two variable fonts that share their outlines, with {glyphCount} glyphs each and the Llama icon built in at U+E000. Mono and Serif will follow.
 
 UI is for interfaces and running text: spaced and kerned like the system fonts at their text sizes, on a line box centred on the cap height, with slightly deeper descenders. Display is for headlines: tighter, with firmer kerning and compact lines.
+
+</Section>
+
+<Section label="Clear glass">
+
+Beatrice Warde compared good type to a crystal goblet: clear enough that you see the wine, not the glass. Llama Sans aims for the same in an interface. Even strokes, calm round bowls and an even rhythm keep it out of the way of labels, messages and long reading alike, so it can carry a whole product without asking for attention.
+
+It isn't featureless, though. A few angled cuts give it just enough character to lead the eye along the line, and they come forward only when you look for them.
+
+<Details />
 
 </Section>
 
@@ -49,7 +60,7 @@ UI is for interfaces and running text: spaced and kerned like the system fonts a
 
 <Section label="Design notes">
 	<Notes>
-		<Note term="Stroke">Near-monoline, with a {stems[0]}-unit stem at 400 rising to {stems.at(-1)} at 700. Joins stay clean, without ink traps.</Note>
+		<Note term="Stroke">Near-monoline, with a {stems[0]}-unit stem at 400 rising to {stems.at(-1)} at 700. Where a bowl, arm or shoulder leaves a stem, the notch cuts a little deeper into the joint, so joins stay open without turning into ink traps.</Note>
 		<Note term="Curves">Bowls are eased toward true circles, fully circular in G, S and s, so rounds read soft and calm without turning geometric.</Note>
 		<Note term="Terminals">Every curved stroke end is trimmed the same short distance and cut almost square to the stroke, which keeps c, e, g, s, 2, 3, 5, 6 and 9 open and consistent.</Note>
 		<Note term="a">Double-story, on a straight stem with a flat foot. The hook runs long and ends in a flat cut; the bowl rises gently into the stem with sharp joints. Toward Bold, a small bracketed foot appears.</Note>
