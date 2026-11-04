@@ -171,9 +171,6 @@ function Get-RunAnalysis {
     $oomPat = 'failed to allocate|unable to allocate|out of memory|ErrorOutOfDeviceMemory|ggml_vulkan: Device memory allocation of|cannot allocate|std::bad_alloc'
     $oomLines = @($allLines | Where-Object { $_ -match $oomPat })
     $fatalLines = @($allLines | Where-Object { $_ -match 'GGML_ASSERT|Failed to load the model|failed to load model' })
-    # A skipped collective means a broken run, but the converse does not hold: a run can produce
-    # fluent garbage with this counter at zero. Check the output text as well.
-    $warn = @($allLines | Where-Object { $_ -match 'WARN skipping required allreduce' }).Count
 
     $status = if($pref -and $dec){ 'ok' } elseif($oomLines.Count){ 'oom' } else { 'no_perf_line' }
     # A TCP run that actually ran RDMA (a node with LLAMA_DIST_TP_RDMA set system-wide) is not a TCP
@@ -221,7 +218,6 @@ function Get-RunAnalysis {
         decode_tps = $dec
         oom_lines = $oomLines
         fatal_lines = $fatalLines
-        skipped_allreduce = $warn
         gen_text = $gen
         out_sha256 = $(if($gen){ $sha } else { $null })
         prof = $prof

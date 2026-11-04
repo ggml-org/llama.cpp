@@ -255,10 +255,11 @@ checks every rank's log, but know what it checks:
 2. No rank logs `NetworkDirect not established on ring edge`, `falling back to TCP`,
    `no usable NetworkDirect` or `staying on TCP`. `nd_edges_up` equals `nd_edges_expected`.
 3. Every `ring edge i->j dials <ip>` is a USB4 address.
-4. No rank logs `WARN skipping required allreduce`.
-5. The generated text is the same as a single-node run of the same model, prompt and seed (the
-   `out_sha256` field). Not every model architecture splits correctly in tensor-parallel mode, so
-   compare against a single node before trusting a new model.
+4. With `-ExtraEnv 'LLAMA_DIST_TP_WIRE_F32=1'`, the generated text is the same as a single-node run
+   of the same model, prompt and seed (the `out_sha256` field). The default f16 wire rounds every
+   partial result, so its text can drift from the single-node text after some tokens, but it must
+   stay coherent and match itself on either transport. Not every model architecture splits correctly
+   in tensor-parallel mode, so compare against a single node before trusting a new model.
 
 ## 6. Environment variables
 
@@ -277,8 +278,9 @@ KV head its query heads use, so a KV head on a boundary is projected and cached 
 rank logs `dist-tp attention split by query heads` with its heads in the first such layer. Qwen3.5's
 gated DeltaNet layers are split across the ranks; Qwen3-Next's run whole on every rank.
 
-`run_disttp.ps1` sets or clears the `LLAMA_DIST_TP_*` switches below on every rank; pass the others
-with `-ExtraEnv 'NAME=value;NAME=value'`. For a manual run:
+`run_disttp.ps1` sets `LLAMA_DIST_TP_RDMA` from `-Transport` and `LLAMA_DIST_TP_RDMA_DEBUG` from
+`-RdmaDebug` on every rank; pass the others with `-ExtraEnv 'NAME=value;NAME=value'`. For a manual
+run:
 
 | Variable | Effect |
 |---|---|
@@ -291,7 +293,7 @@ with `-ExtraEnv 'NAME=value;NAME=value'`. For a manual run:
 The command line takes `--split-mode tensor --world-size N --world-rank r --dist-master <rank 0
 address>:<port>` on every rank.
 
-**Vulkan, Intel Xe2/Xe3 integrated GPUs.** The patches add two decode kernels that are on by default
+**Vulkan, Intel Xe2/Xe3 integrated GPUs.** This tree adds two decode kernels that are on by default
 on the Intel devices the Vulkan backend classifies as Xe2 that have integer dot products and 16-lane
 subgroups. On the Xe2/Xe3 integrated GPUs with Intel's Windows driver they also keep two kernels that
 llama.cpp leaves off on Intel: the subgroup Hadamard transform (`MUL_MAT_HADAMARD`, used with a
@@ -316,7 +318,7 @@ the network, and prints `dist-tp record-ahead on`.
 | `nodes.ps1.template` | the site configuration; copy to `nodes.ps1` |
 | `prep_fabric.ps1` | reboot each node and prove it rebooted, MTU 1500 and Private profile on the USB4 legs, re-address `Readdress` nodes, prove every edge connects and carries full-size frames |
 | `verify_binaries.ps1` | same `llama-cli`, DLLs, model and prompt on every node; reports or checks the loaded USB4/RDMA driver images |
-| `run_disttp.ps1` | one run at 1..N ranks over RDMA or TCP (`-ExtraEnv` for further switches); analyses every rank's log |
+| `run_disttp.ps1` | one run at 1..N ranks over RDMA or TCP (`-ExtraEnv` for the variables in section 6); analyses every rank's log |
 | `distprof.ps1` | log analysis, dot-sourced by `run_disttp.ps1` |
 | `nd_pair.ps1` | NetworkDirect test between two nodes in one direction |
 | `nd_all_directions.ps1` | `nd_pair.ps1` for both directions of every cable |

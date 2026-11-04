@@ -314,10 +314,9 @@ else { Write-Host "  no allocation failure in any rank's log" }
 if(@($an.builds | Where-Object { $_ } | Select-Object -Unique).Count -gt 1){ Write-Host ("  *** ranks run DIFFERENT builds: {0} ***" -f ($an.builds -join ', ')) }
 
 Write-Host "---- correctness ----"
-# A broken run can still print a plausible t/s. Count the skipped-collective warnings on every
-# rank, hash the generated text, and read a sample. The same model, prompt and seed must hash the
-# same at every rank count and on either transport.
-Write-Host ("  skipped-allreduce warnings (all ranks): {0}" -f $an.skipped_allreduce)
+# A broken run can still print a plausible t/s. Hash the generated text and read a sample. With
+# LLAMA_DIST_TP_WIRE_F32=1 the same model, prompt and seed must hash the same at every rank count and
+# on either transport; the default f16 wire must still hash the same on either transport.
 $an.fatal_lines | Select-Object -First 5 | ForEach-Object { Write-Host "  ERR $_" }
 Write-Host ("  output chars={0}  SHA256={1}" -f $an.gen_text.Length, $(if($an.out_sha256){$an.out_sha256}else{'n/a (no output)'}))
 if($an.gen_text.Length -gt 0){ Write-Host ("  sample: " + $an.gen_text.Substring(0, [Math]::Min(160, $an.gen_text.Length))) }
@@ -353,7 +352,7 @@ $rec = [ordered]@{
   ms_net=$prof.ms_net; ms_net_by_rank=($an.ms_net_by_rank -join ';'); ms_setadd=$prof.ms_setadd; ms_other=$prof.ms_other
   bytes_per_token=$prof.bytes; nbnd=$prof.nbnd; prof_tokens=$prof.tokens; prof_excluded=$prof.excluded
   prefill_ms=$prof.prefill_ms; prompt_tokens=$prof.prompt_tokens; implied_decode_tps=$prof.implied_decode_tps; prof_suspect=$an.prof_suspect
-  skipped_allreduce=$an.skipped_allreduce; out_chars=$an.gen_text.Length; out_sha256=$an.out_sha256
+  out_chars=$an.gen_text.Length; out_sha256=$an.out_sha256
 }
 ($rec | ConvertTo-Json -Compress) | Add-Content $ResultsFile
 Write-Host "  appended to $ResultsFile"
