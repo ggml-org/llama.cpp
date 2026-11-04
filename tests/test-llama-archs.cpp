@@ -279,7 +279,6 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
             || arch == LLM_ARCH_KIMI_LINEAR
             || arch == LLM_ARCH_BAILINGMOE3
             || arch == LLM_ARCH_KIMI_K3
-            || arch == LLM_ARCH_GLM5_NEXT
             || arch == LLM_ARCH_MISTRAL4
             || arch == LLM_ARCH_MISTRAL_LARGE4
             || arch == LLM_ARCH_HY_V4) {
@@ -289,8 +288,15 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         if (arch == LLM_ARCH_MISTRAL_LARGE4) {
             n_layer = 4; // cover NoPE, shared indexer and KV sharing layers
         }
+    } else if (arch == LLM_ARCH_GLM5_NEXT) {
+        // several heads so that -sm tensor can split them and the MLA flash attention has GQA > 1
+        n_embd = 128;
+        n_head = 16;
+        n_ff   = 192;
     } else if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
         n_layer = 3;
+    } else if (arch == LLM_ARCH_METIS16) {
+        n_layer = 4; // 2 passes over 2 physical layers, one attention and one Mamba-2
     } else if (arch == LLM_ARCH_CHAMELEON) {
         n_vocab = 10240;
     } else if (arch == LLM_ARCH_QWEN3TTS) {
@@ -357,10 +363,23 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         // GLM5 next KDA heads come from the uniform head count, only head_count_kv is per layer.
         if (arch == LLM_ARCH_GLM5_NEXT) {
             ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head);
+            // the MLA cache holds one latent head
+            for (uint32_t & n : n_head_per_layer) {
+                n = std::min(n, uint32_t(1));
+            }
         } else {
             ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head_per_layer);
         }
         ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, n_head_per_layer);
+    } else if (arch == LLM_ARCH_METIS16) {
+        // the layer types repeat in every pass
+        std::vector<uint32_t> n_head_kv_per_layer;
+        n_head_kv_per_layer.reserve(n_layer);
+        for (uint32_t il = 0; il < n_layer; il++) {
+            n_head_kv_per_layer.push_back(il % 2 == 0 ? n_head_kv : 0);
+        }
+        ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head);
+        ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, n_head_kv_per_layer);
     } else {
         ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head);
         ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, (arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_DEEPSEEK41) ? uint32_t(1) : n_head_kv);
@@ -606,6 +625,17 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
 
     if (arch == LLM_ARCH_MAPLE) {
         ms.add_kv(LLM_KV_SWIGLU_CLAMP_EXP, 7.0f);
+    }
+
+    if (arch == LLM_ARCH_METIS16) {
+        ms.add_kv(LLM_KV_METIS_PASS_COUNT,               uint32_t(2));
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_COUNT,         uint32_t(4));
+        ms.add_kv(LLM_KV_METIS_MEMORY_LENGTH,            uint32_t(64));
+        ms.add_kv(LLM_KV_METIS_ROUTE_LENGTH,             uint32_t(32));
+        ms.add_kv(LLM_KV_ATTENTION_PASS_LORA_RANK,       uint32_t(8));
+        ms.add_kv(LLM_KV_METIS_CONTINUATION_LOGIT_LIMIT, 4.0f);
+        ms.add_kv(LLM_KV_SSM_NORM_EPS,                   1e-5f);
+        ms.add_kv(LLM_KV_MOE_LATENT_SIZE,                n_embd/2);
     }
 
     if (arch == LLM_ARCH_LIMITE) {
@@ -984,6 +1014,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_MAPLE:
         case LLM_ARCH_MUSE_SPARK:
         case LLM_ARCH_KOLIBRI1:
+        case LLM_ARCH_METIS16:
             return true;
         default:
             return false;

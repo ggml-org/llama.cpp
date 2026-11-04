@@ -1277,6 +1277,7 @@ class ModelBase:
         expert_scales: dict[tuple[int, str], list[tuple[int, float]]] = {}
         expert_input_scales: dict[tuple[int, str], list[tuple[int, float]]] = {}
         expert_shapes: dict[tuple[int, str], list[int]] = {}
+        expert_names: dict[tuple[int, str], str] = {}
         n_experts = self.find_hparam(["num_local_experts", "num_experts", "n_routed_experts"], optional=True) or 0
         consumed: list[str] = []
 
@@ -1325,6 +1326,7 @@ class ModelBase:
                     expert_scales[key] = []
                     expert_input_scales[key] = []
                     expert_shapes[key] = shape
+                    expert_names[key] = name
                 expert_blocks[key].append((expert_id, raw.copy()))
                 # Collect per-expert scale2 (scalar per expert)
                 expert_scales[key].append((expert_id, float(scale2.float().sum())))
@@ -1333,13 +1335,13 @@ class ModelBase:
 
                 # Flush when all experts for this (layer, proj) are collected
                 if n_experts > 0 and len(expert_blocks[key]) >= n_experts:
-                    self._flush_nvfp4_experts(key, expert_blocks, expert_scales, expert_input_scales, expert_shapes, bid, proj_type)
+                    self._flush_nvfp4_experts(key, expert_blocks, expert_scales, expert_input_scales, expert_shapes, expert_names, bid, proj_type)
             else:
                 self._repack_nvfp4(name, weight, scale, scale2, input_scale)
 
         # Flush any remaining experts (fallback if n_experts was unknown)
         for bid, proj_type in list(expert_blocks.keys()):
-            self._flush_nvfp4_experts((bid, proj_type), expert_blocks, expert_scales, expert_input_scales, expert_shapes, bid, proj_type)
+            self._flush_nvfp4_experts((bid, proj_type), expert_blocks, expert_scales, expert_input_scales, expert_shapes, expert_names, bid, proj_type)
 
         # Remove consumed tensors so get_tensors/modify_tensors won't see them
         for name in consumed:
@@ -1350,7 +1352,7 @@ class ModelBase:
             if name.endswith((".k_scale", ".v_scale")):
                 del self.model_tensors[name]
 
-    def _flush_nvfp4_experts(self, key, expert_blocks, expert_scales, expert_input_scales, expert_shapes, bid, proj_type):
+    def _flush_nvfp4_experts(self, key, expert_blocks, expert_scales, expert_input_scales, expert_shapes, expert_names, bid, proj_type):
         experts = expert_blocks.pop(key)
         scales = expert_scales.pop(key)
         input_scales = expert_input_scales.pop(key)
@@ -1362,7 +1364,7 @@ class ModelBase:
         new_name = self.map_tensor_name(merged_name)
         logger.info(f"Repacked {new_name} with shape [{len(experts)}, {shape[0]}, {shape[1]}] and quantization NVFP4")
         self.gguf_writer.add_tensor(new_name, merged, raw_dtype=gguf.GGMLQuantizationType.NVFP4)
-        self._tag_prec_a4(merged_name, new_name)
+        self._tag_prec_a4(expert_names.pop(key), new_name)
 
         scales.sort(key=lambda x: x[0])
         self._write_scales_tensor(new_name.replace(".weight", ".scale"), [s[1] for s in scales])
@@ -2113,6 +2115,9 @@ class TextModel(ModelBase):
             res = "jina-v2-de"
         if chkhsh == "0fe1cf6eda062318a1af7270f3331a85c539a01778ff948e24388e949c5282f4":
             # ref: https://huggingface.co/evilfreelancer/ruGPT3XL
+            res = "gpt-2"
+        if chkhsh == "df1bc34a6366466bcb36a9a1b1cc0afdb08cfe21c9250602c930f159085390a9":
+            # ref: https://huggingface.co/Lernex/Metis-1.6-Logos
             res = "gpt-2"
         if chkhsh == "9e454714343b69b99b71795c1d27a68c2a1d15dab111f4d353109f966af29da7":
             # ref: https://huggingface.co/LiquidAI/LFM2.5-8B-A1B
@@ -3384,7 +3389,7 @@ def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> st
     # Kimi-K3's text_config reports "KimiLinearForCausalLM", which is the older
     # Kimi-Linear-48B architecture and cannot load K3 (no attention residuals,
     # latent MoE, situ, ...). Route on the top-level architecture instead.
-    if model_type == ModelType.TEXT and arch in ("NEOChatModel", "StepVLForConditionalGeneration", "Sarashina2VisionForCausalLM", "Exaone4_5_ForConditionalGeneration", "Step3p7ForConditionalGeneration", "KimiK3ForConditionalGeneration"):
+    if model_type == ModelType.TEXT and arch in ("NEOChatModel", "StepVLForConditionalGeneration", "Sarashina2VisionForCausalLM", "Exaone4_5_ForConditionalGeneration", "Step3p7ForConditionalGeneration", "KimiK3ForConditionalGeneration", "Nemotron3_5TranscribeForConditionalGeneration"):
         return arch
 
     # if "architectures" is found in the sub-config, use that instead

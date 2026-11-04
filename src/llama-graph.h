@@ -309,6 +309,9 @@ public:
     ggml_tensor * s_copy_main; // I32 [n_seqs]
     ggml_tensor * s_copy_tail; // I32 [n_rs - 1]
 
+    // I32 [n_slot] = {n_slot - 1, ..., 0}, rollback slot of each conv window, created by the graphs that write them
+    ggml_tensor * s_slot_rev = nullptr;
+
     const llama_memory_recurrent_context * mctx;
 
     // used in view offsets, need to match for valid graph reuse
