@@ -2077,6 +2077,345 @@ private:
     bool   wav_header_sent = false;
 };
 
+// Drama 3: backbone samples the main token of each frame, codebook tower samples the other codes, Fish DAC makes the PCM
+// the tower attends over the whole sequence, so it also runs on every prompt row
+class drama3_gen_audio_pipeline : public mtmd_gen_audio_pipeline {
+public:
+    using mtmd_gen_audio_pipeline::mtmd_gen_audio_pipeline;
+
+    void reset() override {
+        seq_id = 0;
+        pos = 0;
+        prompt_tokens.clear();
+        prompt_pos = 0;
+        frame.clear();
+        hist.clear();
+        codes_buf.clear();
+        n_decoded = 0;
+        gen_state.reset();
+        pcm_sent = 0;
+        wav_header_sent = false;
+        audio_pcm.clear();
+        h_state_buf.clear();
+        out_buf.clear();
+    }
+
+    int32_t set_input(const mtmd_helper_gen_audio_inp * inp) override {
+        reset();
+        seq_id   = inp->seq_id;
+        out_type = inp->out_type;
+        stream   = inp->stream;
+        if (inp->speaker_ref) {
+            LOG_WRN("mtmd_helper_gen_audio: voice cloning is not supported yet, the speaker file is ignored\n");
+        }
+
+        sem_begin = find_special_token(vocab, "<|semantic:0|>");
+        eos       = find_special_token(vocab, "<|im_end|>");
+        if (sem_begin == LLAMA_TOKEN_NULL || eos == LLAMA_TOKEN_NULL) {
+            LOG_ERR("mtmd_helper_gen_audio: missing Drama 3 tokens in vocab\n");
+            return 1;
+        }
+
+        // reference-bracket-v1 prompt without references, tokenize each segment alone as the reference does
+        std::string text(inp->prompt, inp->prompt_len);
+        if (text.rfind("<|speaker:", 0) != 0) {
+            text = "<|speaker:0|> " + text;
+        }
+        const char * segments[] = {
+            "<|im_start|>system\n", "convert the provided text to speech", "<|im_end|>\n",
+            "<|im_start|>user\n", text.c_str(), "<|im_end|>\n", "<|im_start|>assistant\n<|voice|>",
+        };
+        for (const char * seg : segments) {
+            const int32_t len = (int32_t) strlen(seg);
+            std::vector<llama_token> ids(len + 16);
+            const int32_t n = llama_tokenize(vocab, seg, len, ids.data(), (int32_t) ids.size(), false, true);
+            if (n < 0) {
+                LOG_ERR("mtmd_helper_gen_audio: tokenization failed\n");
+                return 1;
+            }
+            prompt_tokens.insert(prompt_tokens.end(), ids.begin(), ids.begin() + n);
+        }
+        if (prompt_tokens.size() >= llama_n_ctx_seq(lctx) || prompt_tokens.size() > n_tower_rows) {
+            LOG_ERR("mtmd_helper_gen_audio: prompt does not fit in the context\n");
+            return 1;
+        }
+        if (!llama_memory_seq_rm(llama_get_memory(lctx), seq_id, 0, -1)) {
+            LOG_ERR("mtmd_helper_gen_audio: cannot reset the sequence\n");
+            return 1;
+        }
+        rng.seed(inp->seed == UINT32_MAX ? std::random_device{}() : inp->seed);
+        return init_gen_state(inp->seed) ? 0 : 1;
+    }
+
+    // run the tower on every prompt row to fill its KV
+    int32_t step_prompt(int32_t n_batch) override {
+        GGML_ASSERT(n_batch > 0);
+        const int n_prompt = (int) prompt_tokens.size();
+        if (prompt_pos >= n_prompt) {
+            return 0;
+        }
+        // small batches: every row also outputs logits
+        const int n = std::min({ n_batch, n_prompt - prompt_pos, 64 });
+        llama_batch batch = llama_batch_init(n, 0, 1);
+        for (int i = 0; i < n; i++) {
+            batch.token   [i]    = prompt_tokens[(size_t) (prompt_pos + i)];
+            batch.pos     [i]    = pos + i;
+            batch.n_seq_id[i]    = 1;
+            batch.seq_id  [i][0] = seq_id;
+            batch.logits  [i]    = 1;
+        }
+        batch.n_tokens = n;
+        const int ret = llama_decode(lctx, batch);
+        llama_batch_free(batch);
+        if (ret != 0) {
+            LOG_ERR("mtmd_helper_gen_audio: prompt decode failed\n");
+            return -1;
+        }
+        for (int i = 0; i < n; i++) {
+            const float * h = llama_get_embeddings_ith(lctx, i);
+            if (prompt_pos + i == n_prompt - 1) {
+                h_state_buf.assign(h, h + n_embd); // first frame comes from the last prompt row
+                break;
+            }
+            if (!run_tower(-1, h)) {
+                return -1;
+            }
+        }
+        pos        += n;
+        prompt_pos += n;
+        return n_prompt - prompt_pos;
+    }
+
+    // sample the main token here, ignore the token of the caller
+    int32_t step_gen(llama_token sampled, const float * h_state_in, const float ** h_state_out, bool * out_stop) override {
+        GGML_UNUSED(sampled);
+        GGML_UNUSED(h_state_in);
+        *h_state_out = nullptr;
+        *out_stop    = false;
+
+        const llama_token main = sample_main(llama_get_logits_ith(lctx, -1));
+        const size_t n_rows = prompt_tokens.size() - 1 + codes_buf.size() / n_cb;
+        if (main == eos || (uint32_t) pos >= llama_n_ctx_seq(lctx) || n_rows >= n_tower_rows) {
+            *out_stop = true;
+            return 0;
+        }
+        hist.push_back(main);
+        if (hist.size() > ras_window) {
+            hist.erase(hist.begin());
+        }
+
+        const float * next_embd = run_tower(main - sem_begin, h_state_buf.data());
+        if (!next_embd) {
+            return 1;
+        }
+        codes_buf.insert(codes_buf.end(), frame.begin(), frame.end());
+
+        // text/speech stream: all mrope sections use the same position
+        const bool mrope = llama_model_rope_type(model) == LLAMA_ROPE_TYPE_MROPE ||
+                           llama_model_rope_type(model) == LLAMA_ROPE_TYPE_IMROPE;
+        decode_embd_batch batch(next_embd, 1, mrope ? 4 : 1, n_embd);
+        if (mrope) {
+            batch.set_position_mrope_1d(pos, seq_id);
+        } else {
+            batch.set_position_normal(pos, seq_id);
+        }
+        batch.logits[0] = 1;
+        if (llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.render(lctx, 0, 1)) != 0) {
+            LOG_ERR("mtmd_helper_gen_audio: decode failed\n");
+            return 1;
+        }
+        pos++;
+        const float * h = llama_get_embeddings_ith(lctx, -1);
+        h_state_buf.assign(h, h + n_embd);
+        *h_state_out = h_state_buf.data();
+
+        if (stream && codes_buf.size() / n_cb - n_decoded >= stream_frames) {
+            return decode_wav() ? 0 : 1;
+        }
+        return 0;
+    }
+
+    int32_t get_output(int32_t * out_sample_rate, const char ** out_data, size_t * out_data_len, int64_t * out_n_samples) override {
+        *out_sample_rate = info.sample_rate;
+
+        if (!stream) {
+            if (flush() != 0) {
+                return 1;
+            }
+            if (out_n_samples) {
+                *out_n_samples = (int64_t) audio_pcm.size();
+            }
+            if (out_type == MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM) {
+                *out_data     = (const char *) audio_pcm.data();
+                *out_data_len = audio_pcm.size() * sizeof(float);
+                return 0;
+            }
+            out_buf.clear();
+            if (!write_wav16(out_buf, audio_pcm, info.sample_rate)) {
+                LOG_ERR("mtmd_helper_gen_audio: output too large for WAV\n");
+                return 1;
+            }
+            *out_data     = out_buf.data();
+            *out_data_len = out_buf.size();
+            return 0;
+        }
+
+        // streaming: only the audio since the previous call
+        const size_t n_new = audio_pcm.size() - pcm_sent;
+        if (out_n_samples) {
+            *out_n_samples = (int64_t) n_new;
+        }
+        if (out_type == MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM) {
+            *out_data     = (const char *) (audio_pcm.data() + pcm_sent);
+            *out_data_len = n_new * sizeof(float);
+            pcm_sent = audio_pcm.size();
+            return 0;
+        }
+        out_buf.clear();
+        if (!wav_header_sent) {
+            write_wav16_header(out_buf, UINT32_MAX, info.sample_rate);
+            wav_header_sent = true;
+        }
+        append_wav16_pcm(out_buf, audio_pcm.data() + pcm_sent, n_new);
+        pcm_sent = audio_pcm.size();
+        *out_data     = out_buf.data();
+        *out_data_len = out_buf.size();
+        return 0;
+    }
+
+    int32_t flush() override {
+        return decode_wav() ? 0 : 1;
+    }
+
+private:
+    // repetition-aware sampling: if a semantic draw repeats one of the last ras_window main tokens, draw again with fixed settings
+    static constexpr size_t ras_window = 16;
+    static constexpr size_t n_cb       = 10;
+    // codebook tower KV rows (clip_graph_drama3_gen::n_pos_max): one per prompt row but the last, one per frame
+    static constexpr size_t n_tower_rows = 4096;
+    // frames per codec call when streaming (0.33 s)
+    static constexpr size_t stream_frames = 7;
+
+    // top-p keeps the token that crosses the threshold, as the reference does
+    llama_token draw(const std::vector<float> & cand_logits, float temp, int32_t top_k, float top_p) {
+        std::vector<std::pair<float, int>> cand(cand_logits.size());
+        for (size_t i = 0; i < cand.size(); i++) {
+            cand[i] = { cand_logits[i] / temp, (int) i };
+        }
+        std::sort(cand.begin(), cand.end(), [](const auto & a, const auto & b) { return a.first > b.first; });
+        const float  lmax = cand[0].first;
+        double       sum  = 0.0;
+        std::vector<double> prob(cand.size());
+        for (size_t i = 0; i < cand.size(); i++) {
+            prob[i] = std::exp((double) (cand[i].first - lmax));
+            sum += prob[i];
+        }
+        size_t n_keep = cand.size();
+        if (top_k > 0) {
+            n_keep = std::min(n_keep, (size_t) top_k);
+        }
+        double cum = 0.0;
+        for (size_t i = 0; i < n_keep; i++) {
+            if (cum > top_p * sum) {
+                n_keep = i;
+                break;
+            }
+            cum += prob[i];
+        }
+        double kept = 0.0;
+        for (size_t i = 0; i < n_keep; i++) {
+            kept += prob[i];
+        }
+        double r = std::uniform_real_distribution<double>(0.0, 1.0)(rng) * kept;
+        for (size_t i = 0; i < n_keep; i++) {
+            r -= prob[i];
+            if (r <= 0.0) {
+                return cand[i].second;
+            }
+        }
+        return cand[n_keep - 1].second;
+    }
+
+    // candidates: eos, then semantic codes 1.. (the reference never samples code 0)
+    llama_token sample_main(const float * logits) {
+        std::vector<float> cand(n_cb_vocab);
+        cand[0] = logits[eos];
+        for (int i = 1; i < n_cb_vocab; i++) {
+            cand[i] = logits[sem_begin + i];
+        }
+        auto to_token = [&](int i) { return i == 0 ? eos : sem_begin + i; };
+        const llama_token first = to_token(draw(cand, 1.0f, 0, 0.9f));
+        if (first != eos && std::find(hist.begin(), hist.end(), first) != hist.end()) {
+            return to_token(draw(cand, 1.0f, 30, 0.95f));
+        }
+        return first;
+    }
+
+    // code0 < 0 for a prompt row, else the main code of the next frame
+    // returns the next backbone input, the codes of the next frame go to frame
+    const float * run_tower(int32_t code0, const float * h) {
+        mtmd_gen_inp inp = mtmd_gen_inp_default(mctx);
+        inp.type    = MTMD_GEN_PROCESS_TYPE_GEN_CODE;
+        inp.code0   = code0;
+        inp.embd    = const_cast<float *>(h);
+        inp.codes   = frame.empty() ? nullptr : frame.data();
+        inp.n_codes = frame.size();
+        mtmd_gen_out out{};
+        if (mtmd_gen_audio_process(mctx, gen_state.get(), &inp, &out) != 0 || (code0 >= 0 && out.n_codes != n_cb)) {
+            LOG_ERR("mtmd_helper_gen_audio: codebook tower failed\n");
+            return nullptr;
+        }
+        if (code0 >= 0) {
+            frame.assign(out.codes, out.codes + out.n_codes);
+        }
+        return out.embd;
+    }
+
+    // the codec is stateful, so frames can be decoded in pieces
+    bool decode_wav() {
+        const size_t n_frames = codes_buf.size() / n_cb;
+        while (n_decoded < n_frames) {
+            const size_t n = std::min(n_frames - n_decoded, (size_t) 64);
+            mtmd_gen_inp inp = mtmd_gen_inp_default(mctx);
+            inp.type    = MTMD_GEN_PROCESS_TYPE_GEN_WAV;
+            inp.codes   = codes_buf.data() + n_decoded * n_cb;
+            inp.n_codes = n * n_cb;
+            mtmd_gen_out out{};
+            if (mtmd_gen_audio_process(mctx, gen_state.get(), &inp, &out) != 0) {
+                LOG_ERR("mtmd_helper_gen_audio: codec decode failed\n");
+                return false;
+            }
+            audio_pcm.insert(audio_pcm.end(), out.audio, out.audio + out.n_samples);
+            n_decoded += n;
+        }
+        return true;
+    }
+
+    static constexpr int n_cb_vocab = 4096; // <|semantic:0..4095|>
+
+    llama_token sem_begin = LLAMA_TOKEN_NULL;
+    llama_token eos       = LLAMA_TOKEN_NULL;
+
+    llama_seq_id seq_id = 0;
+    llama_pos    pos    = 0;
+    std::vector<llama_token> prompt_tokens;
+    int prompt_pos = 0;
+
+    std::mt19937 rng;
+    std::vector<int32_t>     frame;     // codes of the last frame, input of the next tower row
+    std::vector<llama_token> hist;      // last main tokens, for repetition-aware sampling
+    std::vector<int32_t>     codes_buf; // frame-major
+    size_t n_decoded = 0;               // frames already through the codec
+
+    std::vector<float>   audio_pcm;
+    std::vector<float>   h_state_buf;
+    mtmd_helper_gen_audio_outtype out_type = MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV;
+    std::vector<char> out_buf;
+    bool   stream          = false;
+    size_t pcm_sent        = 0; // samples already returned by get_output()
+    bool   wav_header_sent = false;
+};
+
 static std::unique_ptr<mtmd_gen_audio_pipeline> make_pipeline(llama_context * lctx, mtmd_context * mctx) {
     switch (mtmd_gen_audio_get_info(mctx).type) {
         case MTMD_GEN_AUDIO_TYPE_QWEN3TTS:
@@ -2089,6 +2428,8 @@ static std::unique_ptr<mtmd_gen_audio_pipeline> make_pipeline(llama_context * lc
             return std::unique_ptr<mtmd_gen_audio_pipeline>(new lfm3a_gen_audio_pipeline(lctx, mctx));
         case MTMD_GEN_AUDIO_TYPE_CHATTERBOX:
             return std::unique_ptr<mtmd_gen_audio_pipeline>(new chatterbox_gen_audio_pipeline(lctx, mctx));
+        case MTMD_GEN_AUDIO_TYPE_DRAMA3:
+            return std::unique_ptr<mtmd_gen_audio_pipeline>(new drama3_gen_audio_pipeline(lctx, mctx));
         default:
             return nullptr;
     }

@@ -424,6 +424,9 @@ struct clip_graph_qwen3tts_gen : clip_graph {
         ggml_tensor * convnext_block(ggml_tensor * x, const clip_code2wav::upsample_block & blk, const std::string & state_prefix) const;
         ggml_tensor * dac_res_unit(ggml_tensor * x, const clip_code2wav::dac_res & res, int dilation, const std::string & state_name) const;
 
+        // drama3: erf GELU in ConvNeXt, not the tanh approximation
+        bool gelu_erf = false;
+
         // inp_codes [1, n_codes] I32 -> this frame's audio samples [n_samples] F32, clamped to [-1, 1]
         ggml_tensor * decode(ggml_tensor * inp_codes) const;
     };
@@ -487,11 +490,42 @@ struct c2w_state_slot {
     std::string name;
     int64_t     ne0;
     int64_t     ne1;
+    bool        in_place = false; // graph writes the slot directly, no state_in/state_out copy
 };
 std::vector<c2w_state_slot> list_c2w_state_slots(const clip_hparams & hparams, const clip_model & model);
 
+// drama3: tower KV slots, then list_c2w_state_slots()
+std::vector<c2w_state_slot> list_drama3_state_slots(const clip_hparams & hparams, const clip_model & model);
+
 // same, for the streaming mimi decoder (pocket-tts GEN_WAV)
 std::vector<c2w_state_slot> list_pockettts_state_slots(const clip_hparams & hparams, const clip_model & model);
+
+//
+// drama3 generation:
+// GEN_CODE = one codebook tower row, each layer attends over the whole sequence (KV in gen state)
+// GEN_WAV  = Fish DAC decoder, frames -> PCM
+//
+struct clip_graph_drama3_gen : clip_graph {
+    clip_graph_drama3_gen(clip_ctx * ctx, const clip_image_f32 & img, clip_gen_process_type gen_process, clip_gen_state * gen_state,
+                          int n_frames, int top_k, float top_p, float temp)
+        : clip_graph(ctx, img), gen_process(gen_process), gen_state(gen_state), n_frames(n_frames), top_k(top_k), top_p(top_p), temp(temp) {}
+    ggml_cgraph * build() override;
+
+    // tower KV rows, shared by the prompt and the generated frames
+    static constexpr int n_pos_max = 4096;
+
+    clip_gen_process_type gen_process;
+    clip_gen_state * gen_state; // nullptr on buffer reserve
+    int   n_frames;             // GEN_WAV only
+    int   top_k;
+    float top_p;
+    float temp;
+
+    ggml_cgraph * build_tower();
+    ggml_cgraph * build_codec();
+    ggml_tensor * tower_layer(ggml_tensor * x, int il, ggml_tensor * code, ggml_tensor * mask, ggml_tensor * extra,
+                              ggml_tensor * inp_pos, ggml_tensor * k_slot, ggml_tensor * v_slot, int pos);
+};
 
 struct clip_graph_soprano : clip_graph {
     clip_graph_soprano(clip_ctx * ctx, const clip_image_f32 & img, int n_frames) : clip_graph(ctx, img), n_frames(n_frames) {}

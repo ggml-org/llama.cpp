@@ -527,7 +527,7 @@ ggml_tensor * clip_graph_qwen3tts_gen::code2wav::convnext_block(ggml_tensor * x,
 
     ggml_tensor * g = ggml_mul_mat(ctx0, blk.pw1_w, hc);
     g = ggml_add(ctx0, g, blk.pw1_b);
-    g = ggml_gelu(ctx0, g);
+    g = gelu_erf ? ggml_gelu_erf(ctx0, g) : ggml_gelu(ctx0, g);
     g = ggml_mul_mat(ctx0, blk.pw2_w, g);
     g = ggml_add(ctx0, g, blk.pw2_b);
     g = ggml_mul(ctx0, g, blk.gamma);
@@ -617,7 +617,7 @@ std::vector<c2w_state_slot> list_c2w_state_slots(const clip_hparams & hparams, c
     const auto & c2w = model.c2w;
     std::vector<c2w_state_slot> slots;
 
-    if (c2w.pre_conv_w == nullptr) {
+    if (c2w.dac_entry_w == nullptr) {
         return slots; // not a code2wav model, it keeps no state between calls
     }
 
@@ -632,7 +632,9 @@ std::vector<c2w_state_slot> list_c2w_state_slots(const clip_hparams & hparams, c
         slots.push_back({"tfm_v_" + std::to_string(il), kv_ch, prefix});
     }
 
-    slots.push_back({"pre_conv", c2w.pre_conv_w->ne[0] - 1, c2w.pre_conv_w->ne[1]});
+    if (c2w.pre_conv_w) {
+        slots.push_back({"pre_conv", c2w.pre_conv_w->ne[0] - 1, c2w.pre_conv_w->ne[1]});
+    }
 
     for (size_t il = 0; il < c2w.upsample.size(); il++) {
         const auto & up = c2w.upsample[il];
