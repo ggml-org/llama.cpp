@@ -117,9 +117,9 @@ ggml_tensor * llm_build_lfm_base::build_lfm_dense_ffn(const llama_model & model,
     GGML_ASSERT(!model.layers[il].ffn_gate_b);
     GGML_ASSERT(!model.layers[il].ffn_down_b);
     return build_ffn(cur,
-        model.layers[il].ffn_up,   NULL, NULL,
-        model.layers[il].ffn_gate, NULL, NULL,
-        model.layers[il].ffn_down, NULL, NULL,
+        model.layers[il].ffn_up,   NULL, model.layers[il].ffn_up_s,
+        model.layers[il].ffn_gate, NULL, model.layers[il].ffn_gate_s,
+        model.layers[il].ffn_down, NULL, model.layers[il].ffn_down_s,
         NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
 }
 
@@ -136,5 +136,10 @@ ggml_tensor * llm_build_lfm_base::build_lfm_moe_ffn(const llama_model & model,
             LLM_FFN_SILU, true,
             hparams.expert_weights_scale,
             static_cast<llama_expert_gating_func_type>(hparams.expert_gating_func),
-            il);
+            il,
+            nullptr,
+            nullptr,
+            model.layers[il].ffn_up_exps_s,
+            model.layers[il].ffn_gate_exps_s,
+            model.layers[il].ffn_down_exps_s);
 }
