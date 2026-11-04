@@ -4,12 +4,6 @@
 #include "htp-opnode.h"
 #include "htp-repack.h"
 
-struct htp_tensor_extra {
-    std::vector<uint8_t> shadow_buf;
-    size_t               shadow_size { 0 };
-    uint32_t             flags { 0 };
-};
-
 extern int    opt_arch;
 extern size_t opt_ndev;
 extern size_t opt_nhvx;
@@ -46,10 +40,21 @@ extern int    opt_rt_repack;
     if (opt_verbose) GGML_LOG_DEBUG(__VA_ARGS__)
 #endif
 
-static inline bool htp_tensor_is_fuseable(const struct ggml_tensor * t) {
-    if (!t || !t->extra) return false;
-    const auto * extra = (const struct htp_tensor_extra *) t->extra;
-    return (extra->flags & HTP_TENSOR_FUSEABLE) != 0;
+
+static inline uint32_t ggml_hexagon_tensor_get_flags(const struct ggml_tensor * t) {
+    (uint32_t) (uintptr_t) t->extra;
+}
+
+static inline void ggml_hexagon_tensor_set_flags(struct ggml_tensor * t, uint32_t flags) {
+    t->extra = (void *) (uintptr_t) (ggml_hexagon_tensor_get_flags(t) | flags);
+}
+
+static inline void ggml_hexagon_tensor_clear_flags(struct ggml_tensor * t, uint32_t flags) {
+    t->extra = (void *) (uintptr_t) (ggml_hexagon_tensor_get_flags(t) & ~flags);
+}
+
+static inline bool ggml_hexagon_tensor_is_fuseable(const struct ggml_tensor * t) {
+    return (ggml_hexagon_tensor_get_flags(t) & HTP_TENSOR_FUSEABLE) != 0;
 }
 
 static inline bool htp_can_rt_repack(const struct ggml_tensor * t) {
@@ -59,20 +64,26 @@ static inline bool htp_can_rt_repack(const struct ggml_tensor * t) {
     if (t->buffer && ggml_backend_buft_is_host(t->buffer->buft)) {
         return false;
     }
-    return opt_rt_repack > 1 || ggml_is_quantized(t->type);
+    return true;
 }
 
-static inline bool htp_tensor_is_tiled(const struct ggml_tensor * t) {
-    const auto * extra = (const struct htp_tensor_extra *) t->extra;
-    if (extra && (extra->flags & HTP_TENSOR_TILED)) {
+static inline bool ggml_hexagon_tensor_is_tiled(const struct ggml_tensor * t) {
+    if (!t) return false;
+    if (t->buffer && ggml_backend_buft_is_host(t->buffer->buft)) {
+        return false;
+    }
+    return (ggml_hexagon_tensor_get_flags(t) & HTP_TENSOR_TILED) != 0;
+}
+
+static inline bool htp_matmul_is_tiled(const struct ggml_tensor * t) {
+    if (ggml_hexagon_tensor_is_tiled(t)) {
         return true;
     }
     return htp_can_rt_repack(t);
 }
 
 static inline bool htp_needs_repack(const struct ggml_tensor * t) {
-    const auto * extra = (const struct htp_tensor_extra *) t->extra;
-    if (extra && (extra->flags & HTP_TENSOR_TILED)) {
+    if (ggml_hexagon_tensor_is_tiled(t)) {
         return false;
     }
     return htp_can_rt_repack(t);

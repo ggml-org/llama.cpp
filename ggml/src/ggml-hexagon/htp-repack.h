@@ -20,19 +20,22 @@ static inline bool htp_is_tiled_weight_type(enum ggml_type type) {
 }
 
 static inline bool htp_is_tiled_weight_tensor(const struct ggml_tensor * t) {
+    if (t->op != GGML_OP_NONE) {
+        return false;
+    }
     if (!ggml_is_contiguous(t) || ggml_is_view(t)) {
         return false;
     }
     if (!htp_is_tiled_weight_type(t->type)) {
         return false;
     }
-    if (t->ne[0] < 32) {
+    if (t->ne[0] < 32 || (t->ne[0] % 32 != 0) || t->ne[3] != 1) {
         return false;
     }
     if (!ggml_is_quantized(t->type)) {
-        return (t->ne[0] % 32 == 0) && (t->ne[1] % 32 == 0) && (t->ne[2] == 1) && (t->ne[3] == 1);
+        return t->ne[1] > 1;
     }
-    return t->ne[3] == 1;
+    return true;
 }
 
 // Size of one tiled row in the DSP tiled layout. The Q3_K..Q6_K tiles store uncompressed scales/mins,
