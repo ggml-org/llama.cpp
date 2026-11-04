@@ -1277,11 +1277,17 @@ void common_fit_apply(common_params & params, llama_model_params & mparams, llam
     }
     cparams_dft.n_rs_seq = 0;
 
+    uint32_t spec_types = 0;
+    for (const auto type : params.speculative.types) {
+        spec_types |= 1u << type;
+    }
+
     const common_fit_extra_model extra = {
         /*.path_model   =*/ params_dft.model.path.c_str(),
         /*.mparams      =*/ &mparams_dft,
         /*.cparams      =*/ &cparams_dft,
         /*.shares_model =*/ !has_draft, // an MTP context runs on the weights of the main model
+        /*.spec_types   =*/ spec_types,
     };
 
     common_fit_params(params.model.path.c_str(), &mparams, &cparams,
