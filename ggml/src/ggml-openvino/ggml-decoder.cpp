@@ -2723,8 +2723,16 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
             if (m_node_dynamic_dims[node->src[0]] != -1) {
                 auto dynamic_dim_idx = m_node_dynamic_dims[node->src[0]];
                 auto dynamic_dim_stride = node->src[0]->nb[dynamic_dim_idx];
+                // Size-1 dims repeat a stride (e.g. a single KV head in [head_size, 1, n_tokens]), so prefer
+                // the match that keeps the dynamic size and fall back to the first stride match.
                 for (int i = 0; i < GGML_MAX_DIMS; i++) {
-                    if (node->nb[i] == dynamic_dim_stride) {
+                    if (node->nb[i] != dynamic_dim_stride) {
+                        continue;
+                    }
+                    if (m_node_dynamic_dims[node] == -1) {
+                        m_node_dynamic_dims[node] = i;
+                    }
+                    if (node->ne[i] == node->src[0]->ne[dynamic_dim_idx]) {
                         m_node_dynamic_dims[node] = i;
                         break;
                     }
