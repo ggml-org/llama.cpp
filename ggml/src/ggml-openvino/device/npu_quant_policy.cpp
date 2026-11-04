@@ -24,7 +24,7 @@ std::optional<ExtraQuantType> ggml_openvino_npu_token_embd_requant_type(const gg
     if (tensor->type != GGML_TYPE_Q6_K) {
         return std::nullopt;
     }
-    const std::string quant = ggml_openvino_getenv_str("GGML_OPENVINO_NPU_TOKEN_EMBD_QUANT", "f16");
+    const std::string quant = ggml_openvino_getenv_str("GGML_OPENVINO_NPU_TOKEN_EMBD_QUANT", "q8_0_c");
     ExtraQuantType type;
     if (quant == "f16") {
         type = ExtraQuantType::F16;
