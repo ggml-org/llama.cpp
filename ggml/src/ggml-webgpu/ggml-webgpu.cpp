@@ -5269,7 +5269,8 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                               src2->type == GGML_TYPE_F32 && op->src[3]->type == GGML_TYPE_F32 &&
                               op->src[4]->type == GGML_TYPE_F32 && op->src[5]->type == GGML_TYPE_F32 &&
                               s_v <= ctx->webgpu_global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup &&
-                              ggml_are_same_stride(src0, src1);
+                              ggml_are_same_stride(src0, src1) &&
+                              ggml_get_op_params_i32(op, 1) == 0; // replay of pending tokens (op param 1) is not implemented
             }
             break;
         case GGML_OP_CLAMP:
