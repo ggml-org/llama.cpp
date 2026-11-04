@@ -300,7 +300,7 @@ common_chat_params common_chat_params_init_deepseek_v3_2(const common_chat_templ
     });
 
     if (include_grammar) {
-        data.grammar_lazy = has_tools && !require_tools;
+        data.grammar_lazy = !has_response_format && has_tools && !require_tools;
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
             data.parser.build_grammar(builder, data.grammar_lazy);
         });

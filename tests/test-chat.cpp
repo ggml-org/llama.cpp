@@ -2348,6 +2348,18 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
             .run();
 
+        tst.test(
+               "I need to output the invoice details in JSON\n"
+               "</think>\n\n"
+               R"({"amount": 123.45, "date": "2025-12-03"})")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(true)
+            .tools({ special_function_tool })
+            .json_schema(invoice_schema)
+            .expect_reasoning("I need to output the invoice details in JSON")
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
+            .run();
+
         // a tool call ends the prefilled thinking block, with or without a closing </think>
         tst.test(
                "<tool_call>\n"
@@ -2687,6 +2699,18 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                R"({"amount": 123.45, "date": "2025-12-03"})"
                "\n```")
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .json_schema(invoice_schema)
+            .expect_reasoning("I need to output the invoice details in JSON")
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
+            .run();
+
+        tst.test(
+               "[THINK]I need to output the invoice details in JSON[/THINK]"
+               "```json\n"
+               R"({"amount": 123.45, "date": "2025-12-03"})"
+               "\n```")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
             .json_schema(invoice_schema)
             .expect_reasoning("I need to output the invoice details in JSON")
             .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
@@ -4403,6 +4427,19 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_reasoning("Let me check the time")
             .expect_tool_calls({ { "get_time", R"({"city": "Tokyo"})", {} } })
             .run();
+
+        tst.test(
+               "I need to output the invoice details in JSON</think>"
+               "```json\n"
+               R"({"amount": 123.45, "date": "2025-12-03"})"
+               "\n```")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ get_time_tool })
+            .json_schema(invoice_schema)
+            .expect_reasoning("I need to output the invoice details in JSON")
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
+            .run();
     }
 
     // DeepSeek V4.1: V4 behaviour, DSML tag names with a leading space
@@ -4499,6 +4536,19 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .tools({ get_time_tool })
             .expect_reasoning("Let me check the time")
             .expect_tool_calls({ { "get_time", R"({"city": "Tokyo"})", {} } })
+            .run();
+
+        tst.test(
+               "I need to output the invoice details in JSON</think>"
+               "```json\n"
+               R"({"amount": 123.45, "date": "2025-12-03"})"
+               "\n```")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ get_time_tool })
+            .json_schema(invoice_schema)
+            .expect_reasoning("I need to output the invoice details in JSON")
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
             .run();
     }
 
@@ -7738,11 +7788,13 @@ static void test_template_generation_prompt() {
             throw std::runtime_error("Test failed");
         }
         assert_contains(response_format_params.prompt.str(), R"("answer": {"type": "string"})");
+        assert_equals(false, response_format_params.grammar_lazy);
 
         response_format_inputs.json_schema = "{}";
         auto json_object_params = common_chat_templates_apply(tmpls.get(), response_format_inputs);
         assert_contains(json_object_params.prompt.str(),
                         "## Response Format:\n\nYou MUST strictly adhere to the following schema to reply:\n{}");
+        assert_equals(false, json_object_params.grammar_lazy);
 
         common_chat_msg assistant_history;
         assistant_history.role              = "assistant";
