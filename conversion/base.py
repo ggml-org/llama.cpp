@@ -1436,7 +1436,7 @@ class ModelBase:
                 matched.add(module)
                 # filter_tensors may drop a tensors so we need to check for that here.
                 if filtered_name is not None:
-                    self._nvfp4_layer_algo[filtered_name.removesuffix(".weight")] = layer_algo[module]
+                    self._nvfp4_layer_algo[filtered_name.removesuffix(".weight").removesuffix(".bias")] = layer_algo[module]
 
             unmatched = layer_algo.keys() - matched
             assert not unmatched, f"quantized_layers entries not in the model tensors: {sorted(unmatched)}"
