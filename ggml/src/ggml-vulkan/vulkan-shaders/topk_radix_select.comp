@@ -30,7 +30,6 @@ layout (push_constant) uniform parameter {
 shared uint histo[RADIX_SIZE];
 shared uint sh_bucket;
 shared uint sh_above;
-shared uint sh_equal;
 shared uint out_count;
 
 // order-preserving float -> uint mapping
@@ -69,19 +68,10 @@ float load(uint row, uint i, bool first) {
     return scratch[off];
 }
 
-// the ordered value over the column counted from the end: the keys of a row are distinct,
-// so the K-th largest key has no ties and equal values resolve to the lower columns
+// the value, then the column with the lower column first: no two keys of a row are equal,
+// so the selection of equal values does not depend on the invocation timing
 uvec2 load_key(uint row, uint i, bool first) {
     return uvec2(f2ui(load(row, i, first)), p.ncols - 1 - i);
-}
-
-// v at bit shift of a 64-bit key, as the pair (high word, low word)
-uvec2 key_bits(uint v, int shift) {
-    return shift < 32 ? uvec2(0u, v << uint(shift)) : uvec2(v << uint(shift - 32), 0u);
-}
-
-uint key_digit(uvec2 key, int shift) {
-    return (shift < 32 ? key.y >> uint(shift) : key.x >> uint(shift - 32)) & (RADIX_SIZE - 1);
 }
 
 // one workgroup per row: radix-select the K-th largest key, then compact the keys at or above it
@@ -90,27 +80,33 @@ void topk(const uint row) {
     const uint ncols = p.ncols;
     const uint row_out = row * p.k;
 
-    uvec2 prefix  = uvec2(0); // resolved bits of the K-th largest key
-    uvec2 mask    = uvec2(0); // bits of prefix resolved so far
-    uint  desired = p.k;      // count still wanted among the keys that match prefix
+    uvec2 prefix  = uvec2(0); // the known digits of the K-th largest key
+    uvec2 mask    = uvec2(0); // the bits of the known digits
+    uint  desired = p.k;      // how many keys that match the prefix go to the output
+    bool  done    = false;    // all keys that match the prefix go to the output
 
-    // the column word of the key is zero from this bit up
-    const int col_bits = findMSB(ncols - 1) + 1;
+    // the column part of the key, in whole digits
+    int col_shift = 0;
+    for (uint n = ncols - 1; n > 0; n >>= RADIX_BITS) {
+        col_shift += RADIX_BITS;
+    }
 
-    for (int shift = 64 - RADIX_BITS; shift >= 0; shift -= RADIX_BITS) {
-        if (shift < 32 && shift >= col_bits) {
-            continue;
-        }
+    const int shift_first = 32 + col_shift - RADIX_BITS;
+    for (int shift = shift_first; shift >= 0 && !done; shift -= RADIX_BITS) {
         for (uint i = tid; i < RADIX_SIZE; i += BLOCK_SIZE) {
             histo[i] = 0;
         }
         barrier();
 
-        const bool first = (shift == 64 - RADIX_BITS);
+        // the key is 64 bits wide: find the word of this digit and the shift inside that word
+        const int w   = shift >= col_shift ? 0 : 1;
+        const int bit = w == 0 ? shift - col_shift : shift;
+
+        const bool first = (shift == shift_first);
         for (uint i = tid; i < ncols; i += BLOCK_SIZE) {
             const uvec2 key = load_key(row, i, first);
             if ((key & mask) == prefix) {
-                atomicAdd(histo[key_digit(key, shift)], 1u);
+                atomicAdd(histo[(key[w] >> bit) & (RADIX_SIZE - 1)], 1u);
             }
         }
         barrier();
@@ -126,19 +122,14 @@ void topk(const uint row) {
             }
             sh_bucket = b;
             sh_above  = acc;
-            sh_equal  = histo[b];
         }
         barrier();
 
-        prefix  |= key_bits(sh_bucket, shift);
-        mask    |= key_bits(uint(RADIX_SIZE - 1), shift);
-        desired -= sh_above;
-        // the keys that match prefix are all wanted: the lower bits do not matter
-        const bool done = (sh_equal == desired);
+        prefix[w] |= sh_bucket << bit;
+        mask[w]   |= uint(RADIX_SIZE - 1) << bit;
+        desired   -= sh_above;
+        done       = histo[sh_bucket] == desired;
         barrier();
-        if (done) {
-            break;
-        }
     }
 
     if (tid == 0) {
@@ -146,7 +137,7 @@ void topk(const uint row) {
     }
     barrier();
 
-    // the K largest keys are the keys at or above the resolved prefix
+    // the K largest keys are the keys with the known digits at or above the prefix
     for (uint i = tid; i < ncols; i += BLOCK_SIZE) {
         const uvec2 key = load_key(row, i, false) & mask;
         if (key.x > prefix.x || (key.x == prefix.x && key.y >= prefix.y)) {
