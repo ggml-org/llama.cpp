@@ -1,5 +1,0 @@
-set(TARGET llama-chat-replay)
-add_executable(${TARGET} chat-replay.cpp)
-install(TARGETS ${TARGET} RUNTIME)
-target_link_libraries(${TARGET} PRIVATE llama vendor::nlohmann ${CMAKE_THREAD_LIBS_INIT})
-target_compile_features(${TARGET} PRIVATE cxx_std_17)
