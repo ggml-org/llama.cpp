@@ -12,7 +12,7 @@ namespace ov::op::internal {
 /// \ingroup ov_ops_cpp_api
 class OPENVINO_API GatedDeltaNet : public ov::op::Op {
 public:
-    OPENVINO_OP("GatedDeltaNet");
+    OPENVINO_OP("GatedDeltaNet")
 
     GatedDeltaNet() = default;
     /// \brief Constructs a GatedDeltaNet operation.

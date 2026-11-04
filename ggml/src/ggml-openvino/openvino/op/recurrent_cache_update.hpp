@@ -18,7 +18,7 @@ namespace ov::op::internal {
 /// clear or restore it before retrying.
 class OPENVINO_API RecurrentConvCacheUpdate : public Op {
 public:
-    OPENVINO_OP("RecurrentConvCacheUpdate", "internal");
+    OPENVINO_OP("RecurrentConvCacheUpdate", "internal")
     RecurrentConvCacheUpdate() = default;
     RecurrentConvCacheUpdate(const OutputVector & args, int64_t history);
     void validate_and_infer_types() override;
@@ -43,7 +43,7 @@ private:
 /// reset, duplicate sources, cycles and overlapping snapshot writes are supported.
 class OPENVINO_API RecurrentGatedDeltaNetUpdate : public Op {
 public:
-    OPENVINO_OP("RecurrentGatedDeltaNetUpdate", "internal");
+    OPENVINO_OP("RecurrentGatedDeltaNetUpdate", "internal")
     RecurrentGatedDeltaNetUpdate() = default;
     RecurrentGatedDeltaNetUpdate(const OutputVector & args,
                                  bool fuse_qk_l2norm = false,
