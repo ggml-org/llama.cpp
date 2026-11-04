@@ -608,9 +608,23 @@ public:
         return m_model_params.swa_mask != nullptr && tensor == m_model_params.swa_mask;
     }
 
-    static bool is_output_idx(const ggml_tensor * tensor, const ggml_tensor * op) {
+    // A graph-input index list of GET_ROWS: out_ids, or the inp->s_copy leaf when build_rs gathers
+    // every recurrent state at once.
+    static bool is_get_rows_input_idx(const ggml_tensor * tensor, const ggml_tensor * op) {
         return op->op == GGML_OP_GET_ROWS && tensor == op->src[1] && op->src[0]->op != GGML_OP_NONE &&
                op->src[1]->op == GGML_OP_NONE;
+    }
+
+    // out_ids, which selects the output rows. The recurrent state gather reads a state cache instead.
+    static bool is_output_idx(const ggml_tensor * tensor, const ggml_tensor * op) {
+        if (!is_get_rows_input_idx(tensor, op)) {
+            return false;
+        }
+        const ggml_tensor * data = op->src[0];
+        while (data != nullptr && (data->op == GGML_OP_VIEW || data->op == GGML_OP_RESHAPE)) {
+            data = data->src[0];
+        }
+        return !is_recurrent_cache(data);
     }
 
     // the state permutation index input used in SSM/DeltaNet models (inp->s_copy in llama-graph.cpp)
