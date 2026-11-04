@@ -5256,7 +5256,7 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 #if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
     if (device->fa_dec_xe) {
         for (uint32_t m = 0; m < 2; ++m) {
-            ggml_vk_create_pipeline(device, device->pipeline_fa_dec_xe[m], m ? "fa_dec_xe_q8_0_mask" : "fa_dec_xe_q8_0", fa_dec_xe_q8_0_len, fa_dec_xe_q8_0_data, "main", 7, sizeof(vk_flash_attn_push_constants), {1, 1, 1}, {128, device->fa_dec_xe_chunk, m, device->fa_dec_xe_diag}, 1, true, true, 16);
+            ggml_vk_create_pipeline(device, device->pipeline_fa_dec_xe[m], m ? "fa_dec_xe_q8_0_mask" : "fa_dec_xe_q8_0", fa_dec_xe_q8_0_len, fa_dec_xe_q8_0_data, "main", 7, sizeof(vk_flash_attn_push_constants), {1, 1, 1}, {128, 128, m}, 1, true, true, 16);
         }
     }
 #endif
@@ -6805,13 +6805,13 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         // Q2_K/Q3_K decode matvec with fewer instructions per block (mul_mat_vecq_xe.comp) on Intel Xe2/Xe3
         // (read by ggml_vk_load_shaders, so set before it):
-        // GGML_VK_XE_MMVQ=0 turns it off, GGML_VK_XE_MMVQ_ROWS sets the rows per workgroup (a multiple of 4).
+        // GGML_VK_DISABLE_XE_MMVQ turns it off, GGML_VK_XE_MMVQ_ROWS sets the rows per workgroup (a multiple of 4).
         device->xe_mmvq = device->vendor_id == VK_VENDOR_ID_INTEL && device->architecture == vk_device_architecture::INTEL_XE2 &&
                           device->integer_dot_product && device->subgroup_size_control && device->subgroup_require_full_support &&
-                          device->subgroup_min_size <= 16 && device->subgroup_max_size >= 16 && device->subgroup_arithmetic;
-        if (const char * s = getenv("GGML_VK_XE_MMVQ")) {
+                          device->subgroup_min_size <= 16 && device->subgroup_max_size >= 16 && device->subgroup_arithmetic && !getenv("GGML_VK_DISABLE_XE_MMVQ");
+        /*if (const char * s = getenv("GGML_VK_XE_MMVQ")) {
             device->xe_mmvq = device->xe_mmvq && atoi(s) != 0;
-        }
+        }*/
         device->xe_mmvq_rows = 8;
         if (const char * s = getenv("GGML_VK_XE_MMVQ_ROWS")) {
             device->xe_mmvq_rows = std::max(1, (atoi(s) + 3) / 4) * 4;
@@ -6838,14 +6838,14 @@ static vk_device ggml_vk_get_device(size_t idx) {
         }
 
         // Single-token flash attention over a Q8_0 cache with head size 128 and 16 query heads per KV
-        // head (flash_attn_dec_xe.comp), on the same devices as the Xe matvec: GGML_VK_FA_DEC_XE=0 turns
+        // head (flash_attn_dec_xe.comp), on the same devices as the Xe matvec: GGML_VK_DISABLE_FA_DEC_XE=0 turns
         // it off, GGML_VK_FA_DEC_XE_CHUNK sets the KV positions per workgroup (32, 64 or 128).
         device->fa_dec_xe = device->vendor_id == VK_VENDOR_ID_INTEL && device->architecture == vk_device_architecture::INTEL_XE2 &&
                             device->integer_dot_product && device->subgroup_size_control && device->subgroup_require_full_support &&
-                            device->subgroup_min_size <= 16 && device->subgroup_max_size >= 16;
-        if (const char * s = getenv("GGML_VK_FA_DEC_XE")) {
+                            device->subgroup_min_size <= 16 && device->subgroup_max_size >= 16 && !getenv("GGML_VK_DISABLE_FA_DEC_XE");
+        /*if (const char * s = getenv("GGML_VK_FA_DEC_XE")) {
             device->fa_dec_xe = device->fa_dec_xe && atoi(s) != 0;
-        }
+        }*/
         device->fa_dec_xe_chunk = 128;
         if (const char * s = getenv("GGML_VK_FA_DEC_XE_CHUNK")) {
             const int ch = atoi(s);

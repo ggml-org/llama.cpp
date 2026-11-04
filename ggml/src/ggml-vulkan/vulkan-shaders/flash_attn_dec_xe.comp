@@ -39,7 +39,6 @@ layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 layout (constant_id = 0) const uint WG = 128;      // threads; steps 1 and 3 need exactly 128
 layout (constant_id = 1) const uint CH = 128;      // KV positions per workgroup: 32, 64 or 128
 layout (constant_id = 2) const uint HAS_MASK = 1;
-layout (constant_id = 3) const uint DIAG = 0;      // timing only, wrong results: 1 skips the K dot products, 2 the P x V loop
 
 const uint D   = 128;            // head size of K and V
 const uint G   = 16;             // query heads per KV head, = subgroup size
@@ -137,7 +136,7 @@ void main() {
             const uint e = r * 16 + sl;
             const uint row = e / 17;
             kr[r] = uvec2(0);
-            if ((DIAG & 1) == 0 && row < np) {
+            if (row < np) {
                 kr[r] = data_k2[kb + row * ks + (e - row * 17)];
             }
         }
@@ -198,20 +197,18 @@ void main() {
     float s[PS];
     [[unroll]] for (uint pp = 0; pp < PS; ++pp) {
         float acc = 0.0;
-        if ((DIAG & 1) == 0) {
-            [[unroll]] for (uint pr = 0; pr < 2; ++pr) {
-                int ae = 0;
-                [[unroll]] for (uint i = 0; i < 9; ++i) {
-                    ae += dotPacked4x8EXT(int(qe[pr][i]), int(KDW(pp, pr * 17 + i)));
-                }
-                int ao = 0;
-                [[unroll]] for (uint i = 0; i < 8; ++i) {
-                    ao += dotPacked4x8EXT(int(qo[pr][i]), int(KDW(pp, pr * 17 + 9 + i)));
-                }
-                const float de = unpackHalf2x16(KDW(pp, pr * 17)).x;
-                const float dd = unpackHalf2x16(KDW(pp, pr * 17 + 8)).y;
-                acc += float(ae) * (qd[2 * pr] * de) + float(ao) * (qd[2 * pr + 1] * dd);
+        [[unroll]] for (uint pr = 0; pr < 2; ++pr) {
+            int ae = 0;
+            [[unroll]] for (uint i = 0; i < 9; ++i) {
+                ae += dotPacked4x8EXT(int(qe[pr][i]), int(KDW(pp, pr * 17 + i)));
             }
+            int ao = 0;
+            [[unroll]] for (uint i = 0; i < 8; ++i) {
+                ao += dotPacked4x8EXT(int(qo[pr][i]), int(KDW(pp, pr * 17 + 9 + i)));
+            }
+            const float de = unpackHalf2x16(KDW(pp, pr * 17)).x;
+            const float dd = unpackHalf2x16(KDW(pp, pr * 17 + 8)).y;
+            acc += float(ae) * (qd[2 * pr] * de) + float(ao) * (qd[2 * pr + 1] * dd);
         }
         s[pp] = pp < np ? acc + subgroupShuffle(mk, pp) : NEG_INF;
     }
@@ -262,7 +259,7 @@ void main() {
     [[unroll]] for (uint h = 0; h < G; ++h) {
         o[h] = vec4(0.0);
     }
-    const uint jn = (DIAG & 2) != 0 ? 0 : any_live ? nj : 0;
+    const uint jn = any_live ? nj : 0;
     const uint ja = sid * (CH / 4);
     const uint jb = min(ja + CH / 4, jn);
     const uint vstride = p.nb21 * 34 / 4;

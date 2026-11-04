@@ -327,8 +327,8 @@ decode, and `LLAMA_DIST_TP_ATTN_REBALANCE=1` for models whose KV heads do not di
 
 | Variable | Effect |
 |---|---|
-| `GGML_VK_XE_MMVQ=0` | turn off the Q2_K/Q3_K decode matrix-vector kernel for Xe2/Xe3 (`GGML_VK_XE_MMVQ_ROWS`, default 8, sets its rows per workgroup) |
-| `GGML_VK_FA_DEC_XE=0` | turn off the single-token Q8_0 flash-attention kernel for Xe2/Xe3, used for head size 128, Q8_0 K and V and 16 query heads per KV head (`-fa on -ctk q8_0 -ctv q8_0`). `GGML_VK_FA_DEC_XE_CHUNK=32/64` changes its KV chunk from 128 |
+| `GGML_VK_DISABLE_XE_MMVQ=1` | turn off the Q2_K/Q3_K decode matrix-vector kernel for Xe2/Xe3 |
+| `GGML_VK_DISABLE_FA_DEC_XE=1` | turn off the single-token Q8_0 flash-attention kernel for Xe2/Xe3, used for head size 128, Q8_0 K and V and 16 query heads per KV head (`-fa on -ctk q8_0 -ctv q8_0`) |
 | `GGML_VK_DEFER_GATE=1` | with `LLAMA_DIST_TP_RECORD_AHEAD=1`: the piece recorded ahead goes to the GPU as soon as it is recorded and waits there on an event the CPU sets once the all-reduced data is written back, instead of being submitted only at that point |
 | `GGML_VK_FENCE_POLL_PAUSES=N` | check the GPU fence every N CPU pause instructions while waiting (default 1000) |
 | `GGML_VK_FWHT=1` | run the Hadamard transform (`MUL_MAT_HADAMARD`) as the subgroup kernel on Intel too; `2` the shared-memory kernel, `0` neither; unset keeps llama.cpp's choice, which leaves Intel out. Compare the output against a run without it on a new GPU or driver |
