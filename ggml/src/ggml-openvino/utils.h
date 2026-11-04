@@ -98,7 +98,7 @@ struct decoder_runtime_ctx {
     // Attention sizes the cached prefill model was built with; decode calls overwrite the decoder's.
     int prefill_attention_size = -1;
     int prefill_attention_size_swa = -1;
-    // KV window of the decode model in the compiled pair (GGML_OPENVINO_NPU_DECODE_BUCKET).
+    // KV window of the decode model in the compiled pair (GGML_OPENVINO_NPU_DECODE_PREBUILD).
     int decode_attention_size = -1;
     std::string shared_key;
     std::map<int, std::shared_ptr<ov::InferRequest>> decode_window_requests;
@@ -123,6 +123,8 @@ struct ov_compiled_graph {
     bool weightless_bank = false;
     std::string weights_path;
     std::shared_ptr<ggml_openvino_weights_layout> weights_layout;
+    // Compute params the pair's decode model was built with; window models derive from them.
+    ComputeParams decode_c_params;
 };
 
 // Only compilation and cache publication use this mutex. Requests, decoders and

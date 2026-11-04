@@ -79,7 +79,7 @@ std::optional<ov::Tensor> try_make_kv_sliced_tensor(const std::shared_ptr<GgmlOv
                                                     const std::string & name,
                                                     const ggml_tensor * ggml_tensor) {
     // Static graphs bake the sliced length into the prefill graph; decode is sliced to its KV window
-    // with GGML_OPENVINO_NPU_DECODE_BUCKET and otherwise keeps its full-context graph.
+    // with GGML_OPENVINO_NPU_DECODE_PREBUILD and otherwise keeps its full-context graph.
     const bool slice = !ggml_decoder->is_static() ? ggml_openvino_kv_slice_enabled() :
                        ggml_decoder->m_is_prefill ? ggml_openvino_kv_slice_enabled() :
                                                     ggml_openvino_npu_decode_bucket() > 0;
@@ -2109,6 +2109,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
     }
 
     std::vector<std::string> ov_input_names_local;
+    bool pair_built = false;
     std::vector<std::string> ov_output_names_local;
 
     if (cache_hit) {
@@ -2450,7 +2451,9 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
                 graph.weightless_bank = weightless_bank;
                 graph.weights_path = weights_path;
                 graph.weights_layout = decode_bucket > 0 ? std::move(weights_layout) : nullptr;
+                graph.decode_c_params = decode_c_params;
                 shared_cache->graphs.emplace(shared_key, std::move(graph));
+                pair_built = true;
             }
 
             if (cache_enabled) {
@@ -2466,25 +2469,14 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
     }
 
     // Decode model for another KV window than the pair's; built/imported once per window with the pair's
-    // settings and weights bank, then cached in the shared compiled cache.
-    auto get_decode_window_request = [&](int window) -> std::shared_ptr<ov::InferRequest> {
-        auto & request = entry->decode_window_requests[window];
-        if (request) {
-            return request;
-        }
-        auto shared_cache = r_ctx->compiled_cache;
-        std::unique_lock<std::mutex> compile_lock(shared_cache->mutex);
-        auto graph_it = shared_cache->graphs.find(entry->shared_key);
-        if (graph_it == shared_cache->graphs.end()) {
-            throw std::runtime_error("ggml-openvino: decode window requested without a shared compiled graph");
-        }
-        auto & graph = graph_it->second;
+    // settings and weights bank, then cached in the shared compiled cache. Caller holds the shared cache mutex.
+    auto build_decode_window = [&](ov_compiled_graph & graph, const ComputeParams & base_c_params,
+                                   int window) -> ov::CompiledModel & {
         auto window_it = graph.decode_windows.find(window);
         if (window_it != graph.decode_windows.end()) {
-            request = std::make_shared<ov::InferRequest>(window_it->second.create_infer_request());
-            return request;
+            return window_it->second;
         }
-        auto window_c_params = c_params;
+        auto window_c_params = base_c_params;
         window_c_params.attention_size = window;
         const std::string model_cache_dir = ggml_openvino_model_cache_dir();
         const uint64_t fp = model_cache_dir.empty() ?
@@ -2556,15 +2548,52 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
         }
         build_static_model(args, window_decoder, "decode", std::move(model), graph.decode_config, fp, compiled,
                            built_request, names_in, names_out, t_conv, t_compile);
-        if (names_in != ov_input_names_local || names_out != ov_output_names_local) {
+        if (names_in != graph.input_names || names_out != graph.output_names) {
             throw std::runtime_error("ggml-openvino: decode window model ports differ from the base decode model");
         }
         GGML_LOG_INFO("ggml-openvino: decode KV window %d model ready in %.1f ms\n", window,
                       (ggml_time_us() - t0) / 1000.0);
-        graph.decode_windows.emplace(window, std::move(compiled));
-        request = built_request;
+        return graph.decode_windows.emplace(window, std::move(compiled)).first->second;
+    };
+
+    auto get_decode_window_request = [&](int window) -> std::shared_ptr<ov::InferRequest> {
+        auto & request = entry->decode_window_requests[window];
+        if (request) {
+            return request;
+        }
+        auto shared_cache = r_ctx->compiled_cache;
+        std::unique_lock<std::mutex> compile_lock(shared_cache->mutex);
+        auto graph_it = shared_cache->graphs.find(entry->shared_key);
+        if (graph_it == shared_cache->graphs.end()) {
+            throw std::runtime_error("ggml-openvino: decode window requested without a shared compiled graph");
+        }
+        auto & compiled = build_decode_window(graph_it->second, c_params, window);
+        request = std::make_shared<ov::InferRequest>(compiled.create_infer_request());
         return request;
     };
+
+    // Build or import every other decode window right after the pair, from the pair's own graph and params,
+    // so a growing sequence only switches requests.
+    if (pair_built && decode_bucket > 0) {
+        auto shared_cache = r_ctx->compiled_cache;
+        std::unique_lock<std::mutex> compile_lock(shared_cache->mutex);
+        auto graph_it = shared_cache->graphs.find(entry->shared_key);
+        if (graph_it != shared_cache->graphs.end()) {
+            auto & graph = graph_it->second;
+            const int64_t t0 = ggml_time_us();
+            for (int window = decode_bucket;; window *= 2) {
+                window = std::min(window, m_params.ctx_per_seq);
+                if (window != graph.decode_attention_size) {
+                    build_decode_window(graph, graph.decode_c_params, window);
+                }
+                if (window >= m_params.ctx_per_seq) {
+                    break;
+                }
+            }
+            GGML_LOG_INFO("ggml-openvino: prebuilt %zu decode KV window model(s) in %.1f ms\n",
+                          graph.decode_windows.size(), (ggml_time_us() - t0) / 1000.0);
+        }
+    }
 
     // On-demand KV: grow the storage to this call's KV window before binding, so every view of the call
     // (KV inputs, HFA past, KV outputs) addresses the same storage.
