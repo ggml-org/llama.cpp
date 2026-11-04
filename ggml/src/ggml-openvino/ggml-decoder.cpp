@@ -2717,14 +2717,15 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
             // have standard compact strides: nb[i] = type_size * prod(ne[0..i-1]).
             // Match src->nb[dynamic_dim] against result->nb[i] to find the output
             // dimension whose flat-memory boundary aligns with the source dynamic
-            // boundary. This is unambiguous (result strides are strictly monotone)
-            // and handles merged-lower-dim cases that ne-value matching misses.
+            // boundary. This handles merged-lower-dim cases that ne-value matching
+            // misses. A size-1 dim has the same stride as the dim after it
+            // ([head_dim, T] -> [head_dim, 1, T] with one KV head), so prefer the
+            // matching dim that also has the source dim's size.
             m_node_dynamic_dims[node] = -1;
             if (m_node_dynamic_dims[node->src[0]] != -1) {
                 auto dynamic_dim_idx = m_node_dynamic_dims[node->src[0]];
+                auto dynamic_dim_value = node->src[0]->ne[dynamic_dim_idx];
                 auto dynamic_dim_stride = node->src[0]->nb[dynamic_dim_idx];
-                // Size-1 dims repeat a stride (e.g. a single KV head in [head_size, 1, n_tokens]), so prefer
-                // the match that keeps the dynamic size and fall back to the first stride match.
                 for (int i = 0; i < GGML_MAX_DIMS; i++) {
                     if (node->nb[i] != dynamic_dim_stride) {
                         continue;
@@ -2732,7 +2733,7 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
                     if (m_node_dynamic_dims[node] == -1) {
                         m_node_dynamic_dims[node] = i;
                     }
-                    if (node->ne[i] == node->src[0]->ne[dynamic_dim_idx]) {
+                    if (node->ne[i] == dynamic_dim_value) {
                         m_node_dynamic_dims[node] = i;
                         break;
                     }
