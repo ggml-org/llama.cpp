@@ -4276,6 +4276,10 @@ vk_device ggml_vk_get_device(size_t idx) {
             device->subgroup_arithmetic = false;
         }
 #endif
+        // Workaround for subgroupAdd() returning wrong sums on Adreno after divergent code
+        if (device->driver_id == vk::DriverId::eQualcommProprietary) {
+            device->subgroup_arithmetic = false;
+        }
         device->subgroup_shuffle = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
                                    (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eShuffle);
 #ifdef __APPLE__
