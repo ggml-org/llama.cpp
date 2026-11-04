@@ -95,7 +95,7 @@ static inline void htp_lid_vtcm_layout_build(struct htp_lid_vtcm_layout * L, siz
     L->size_m_row  = hex_round_up(HTP_LID_KV_BLOCK * sizeof(uint16_t), 128);
     L->size_o_row  = hex_round_up(HTP_LID_KV_BLOCK * sizeof(float), 128);
 
-    L->size_qs    = n_head * L->size_qs_row + hex_round_up(n_head * sizeof(float), 128) + L->size_q_row;
+    L->size_qs    = 2 * (n_head * L->size_qs_row + hex_round_up(n_head * sizeof(float), 128)) + L->size_q_row;
     L->size_k_buf = HTP_LID_KV_BLOCK * L->size_k_raw_row;
     L->size_kt    = (2 * hex_round_up(D, HTP_LID_KV_BLOCK) + 2 * HTP_LID_KV_BLOCK + D / 32) * 128;
     L->size_m_buf = n_tok * L->size_m_row;
@@ -169,7 +169,7 @@ static inline void htp_lid_hmx_vtcm_layout_build(struct htp_lid_hmx_vtcm_layout 
     L->size_k_raw_row = L->size_k_row > hex_round_up(k_row_size, 128) ? L->size_k_row : hex_round_up(k_row_size, 128);
     L->size_m_row  = hex_round_up(Bc * sizeof(uint16_t), 128);
     L->size_o_row  = hex_round_up(Bc * sizeof(float), 128);
-    L->size_qs     = 32 * (L->size_qs_row + L->size_qh_row) + hex_round_up(Bc / 64 * 128, 128);
+    L->size_qs     = 2 * 32 * L->size_qs_row + 32 * L->size_qh_row + hex_round_up(Bc / 64 * 128, 128);
     L->size_w      = hex_round_up(n_tok * n_head * sizeof(float), 128);
 
     const size_t tile = HMX_FP16_TILE_SIZE;

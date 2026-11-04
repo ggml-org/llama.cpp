@@ -49,6 +49,27 @@ struct htp_lid_context {
     uint8_t * spad_o;
 };
 
+static inline void lid_prep_step_info(uint32_t k, uint32_t K, uint32_t t_first, uint32_t i0, uint32_t i1, uint32_t n_head,
+                                      uint32_t * out_t, uint32_t * out_ha, uint32_t * out_hb) {
+    const uint32_t t  = t_first + k;
+    const uint32_t ha = (k == 0) ? (i0 - t * n_head) : 0;
+    const uint32_t hb = (k == K - 1) ? (i1 - t * n_head) : n_head;
+    *out_t  = t;
+    *out_ha = ha;
+    *out_hb = hb;
+}
+
+static inline void lid_prep_push_step(dma_queue * dma_q, const struct htp_lid_context * lctx,
+                                      const struct htp_tensor * q, const struct htp_tensor * w,
+                                      uint8_t * qs, uint8_t * ws, uint32_t qs_row_size, uint32_t w_row_size,
+                                      uint32_t D, uint32_t n_head, uint32_t t, uint32_t ha, uint32_t hb) {
+    const uint32_t it = lctx->t0 + t;
+    dma_queue_push(dma_q, dma_make_data(qs, q->data + it * q->nb[2] + lctx->is * q->nb[3] + ha * q->nb[1]),
+                   qs_row_size, q->nb[1], D * sizeof(float), hb - ha);
+    dma_queue_push(dma_q, dma_make_data(ws, w->data + it * w->nb[1] + lctx->is * w->nb[3]),
+                   w_row_size, w_row_size, n_head * sizeof(float), 1);
+}
+
 // Splat every Q element (f16) and every head weight (f32) into a full vector.
 // Work is split over (token, head) pairs.
 static void lid_prep_thread(unsigned int nth, unsigned int ith, void * data) {
@@ -75,31 +96,47 @@ static void lid_prep_thread(unsigned int nth, unsigned int ith, void * data) {
     struct htp_thread_trace * tr    = &octx->ctx->trace[ith];
     dma_queue *               dma_q = octx->ctx->dma[ith];
 
-    const uint32_t w_row_size = n_head * sizeof(float);
+    const uint32_t w_row_size = hex_round_up(n_head * sizeof(float), 128);
+    const size_t   qs_size    = n_head * L->size_qs_row;
+    const size_t   slot_size  = qs_size + w_row_size;
 
-    uint8_t * qs = lctx->spad_qs + ith * L->size_qs;
-    uint8_t * ws = qs + n_head * L->size_qs_row;
-    uint8_t * qh = ws + hex_round_up(w_row_size, 128);
+    uint8_t * qs[2];
+    uint8_t * ws[2];
+    qs[0] = lctx->spad_qs + ith * L->size_qs;
+    ws[0] = qs[0] + qs_size;
+    qs[1] = qs[0] + slot_size;
+    ws[1] = qs[1] + qs_size;
+    uint8_t * qh = qs[0] + 2 * slot_size;
 
-    uint32_t t  = fastdiv(i0, &lctx->kp->div_n_head);
-    uint32_t ha = i0 - t * n_head;
+    const uint32_t t_first = fastdiv(i0, &lctx->kp->div_n_head);
+    const uint32_t t_last  = fastdiv(i1 - 1, &lctx->kp->div_n_head);
+    const uint32_t n_steps = t_last - t_first + 1;
 
-    for (uint32_t i = i0; i < i1; ++t, ha = 0) {
-        const uint32_t hb = MIN(n_head, ha + (i1 - i));
+    // Prologue: prime both slots
+    uint32_t t, ha, hb;
+    lid_prep_step_info(0, n_steps, t_first, i0, i1, n_head, &t, &ha, &hb);
+    lid_prep_push_step(dma_q, lctx, q, w, qs[0], ws[0], L->size_qs_row, w_row_size, D, n_head, t, ha, hb);
+
+    if (n_steps > 1) {
+        lid_prep_step_info(1, n_steps, t_first, i0, i1, n_head, &t, &ha, &hb);
+        lid_prep_push_step(dma_q, lctx, q, w, qs[1], ws[1], L->size_qs_row, w_row_size, D, n_head, t, ha, hb);
+    }
+
+    // Loop: pop(slot) -> compute(slot) -> push(slot, k + 2)
+    for (uint32_t k = 0; k < n_steps; ++k) {
+        const uint32_t slot = k & 1;
+
+        dma_queue_pop(dma_q);
+        dma_queue_pop(dma_q);
+
+        lid_prep_step_info(k, n_steps, t_first, i0, i1, n_head, &t, &ha, &hb);
         const uint32_t it = lctx->t0 + t;
-
-        dma_queue_push(dma_q, dma_make_data(qs, q->data + it * q->nb[2] + lctx->is * q->nb[3] + ha * q->nb[1]),
-                       L->size_qs_row, q->nb[1], D * sizeof(float), hb - ha);
-        dma_queue_push(dma_q, dma_make_data(ws, w->data + it * w->nb[1] + lctx->is * w->nb[3]),
-                       w_row_size, w_row_size, w_row_size, 1);
-        dma_queue_pop(dma_q);
-        dma_queue_pop(dma_q);
 
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_PREP, (uint16_t) it);
 
         HVX_Vector * restrict q_sp = (HVX_Vector *) lctx->spad_q + (t * n_head + ha) * D;
         for (uint32_t h = ha; h < hb; ++h) {
-            hvx_copy_f16_f32_aa(qh, qs + (h - ha) * L->size_qs_row, D);
+            hvx_copy_f16_f32_aa(qh, qs[slot] + (h - ha) * L->size_qs_row, D);
 
             const HVX_Vector * restrict qv = (const HVX_Vector *) qh;
             for (uint32_t d0 = 0; d0 < D; d0 += VLEN_FP16) {
@@ -111,7 +148,7 @@ static void lid_prep_thread(unsigned int nth, unsigned int ith, void * data) {
             }
         }
 
-        const HVX_Vector * restrict wv    = (const HVX_Vector *) ws;
+        const HVX_Vector * restrict wv    = (const HVX_Vector *) ws[slot];
         HVX_Vector *       restrict w_dst = (HVX_Vector *) (lctx->spad_w + t * n_head * VLEN);
         for (uint32_t h = ha; h < hb; ++h) {
             w_dst[h] = hvx_vec_repl4(Q6_V_vror_VR(wv[h / VLEN_FP32], (h % VLEN_FP32) * SIZEOF_FP32));
@@ -119,7 +156,11 @@ static void lid_prep_thread(unsigned int nth, unsigned int ith, void * data) {
 
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_PREP, (uint16_t) it);
 
-        i += hb - ha;
+        if (k + 2 < n_steps) {
+            uint32_t next_t, next_ha, next_hb;
+            lid_prep_step_info(k + 2, n_steps, t_first, i0, i1, n_head, &next_t, &next_ha, &next_hb);
+            lid_prep_push_step(dma_q, lctx, q, w, qs[slot], ws[slot], L->size_qs_row, w_row_size, D, n_head, next_t, next_ha, next_hb);
+        }
     }
 }
 
@@ -1025,7 +1066,7 @@ static __attribute__((noinline)) void lid_hmx_prep_k(const struct htp_lid_hmx_co
 }
 
 // O column of each token (64 kv per gather) + mask -> f32 rows, then one DMA out per segment
-static void lid_hmx_extract(const struct htp_lid_hmx_context * hctx, uint32_t ith, uint32_t nth, uint32_t g) {
+static __attribute__((noinline)) void lid_hmx_extract(const struct htp_lid_hmx_context * hctx, uint32_t ith, uint32_t nth, uint32_t g) {
     const struct htp_ops_context * octx = hctx->octx;
     const struct htp_tensor *      dst  = octx->dst;
     const struct htp_lid_hmx_vtcm_layout * L = &hctx->L;
@@ -1052,7 +1093,7 @@ static void lid_hmx_extract(const struct htp_lid_hmx_context * hctx, uint32_t it
     }
     const HVX_Vector v_offs = *(const HVX_Vector *) offs;
 
-    HVX_Vector * gbuf = (HVX_Vector *) (hctx->qs + ith * L->size_qs + 32 * (L->size_qs_row + L->size_qh_row));
+    HVX_Vector * gbuf = (HVX_Vector *) (hctx->qs + ith * L->size_qs + 2 * 32 * L->size_qs_row + 32 * L->size_qh_row);
 
     const HVX_Vector zero = Q6_V_vzero();
     const HVX_Vector ninf = Q6_V_vsplat_R(0xFF800000);
@@ -1118,7 +1159,7 @@ static inline uint32_t lid_hmx_n_out(const struct htp_lid_hmx_context * hctx, ui
     return lid_hmx_segs(hctx, g, seg, &n_rows);
 }
 
-static void lid_hmx_q_chunk(const struct htp_lid_hmx_context * hctx, uint32_t ith, uint32_t nth);
+static __attribute__((noinline)) void lid_hmx_q_chunk(const struct htp_lid_hmx_context * hctx, uint32_t ith, uint32_t nth);
 
 // Pipeline stage g (HMX runs block g meanwhile): prep block g + 1, extract block g - 1
 static void lid_hmx_stage(const struct htp_lid_hmx_context * hctx, uint32_t ith, uint32_t nth) {
@@ -1250,7 +1291,7 @@ static inline uint32_t lid_hmx_slot(const struct htp_lid_hmx_context * hctx, uin
 }
 
 // Scales and G of channel tile c of a Q slot (needs the slot's w)
-static inline void lid_hmx_q_scg(const struct htp_lid_hmx_context * hctx, uint32_t slot, const struct lid_hmx_set * S, uint32_t c) {
+static __attribute__((noinline)) void lid_hmx_q_scg(const struct htp_lid_hmx_context * hctx, uint32_t slot, const struct lid_hmx_set * S, uint32_t c) {
     const struct htp_lid_hmx_vtcm_layout * L = &hctx->L;
     const uint32_t nh = hctx->octx->src[0]->ne[1];
     const uint32_t ch = c * 32;
@@ -1261,8 +1302,8 @@ static inline void lid_hmx_q_scg(const struct htp_lid_hmx_context * hctx, uint32
 }
 
 // Staged f32 Q rows of channel tile c to f16, then to the weight tiles of a Q slot
-static inline void lid_hmx_q_tiles(const struct htp_lid_hmx_context * hctx, uint32_t slot, const struct lid_hmx_set * S, uint32_t c,
-                                   const uint8_t * qs, uint8_t * qh) {
+static __attribute__((noinline)) void lid_hmx_q_tiles(const struct htp_lid_hmx_context * hctx, uint32_t slot, const struct lid_hmx_set * S, uint32_t c,
+                                                      const uint8_t * qs, uint8_t * qh) {
     const struct htp_lid_hmx_vtcm_layout * L = &hctx->L;
     const uint32_t D  = hctx->octx->src[0]->ne[0];
     const uint32_t nh = hctx->octx->src[0]->ne[1];
@@ -1283,13 +1324,47 @@ static inline void lid_hmx_q_tiles(const struct htp_lid_hmx_context * hctx, uint
     hvx_gather_sync(qw);
 }
 
-// Stage g share of the next run's Q prep (the DMA queue of the thread is empty here)
-static void lid_hmx_q_chunk(const struct htp_lid_hmx_context * hctx, uint32_t ith, uint32_t nth) {
+static inline uint32_t lid_hmx_find_valid_gc(const struct htp_lid_hmx_context * hctx, uint32_t gc, uint32_t gc1) {
+    const struct fastdiv_values * div_n_ch = &hctx->kp->div_n_ch;
+    const uint32_t n_ch = hctx->L.n_ch;
+    while (gc < gc1) {
+        const uint32_t set = fastdiv(gc, div_n_ch);
+        const uint32_t c   = gc - set * n_ch;
+        if (c < hctx->nx_sets[set].n_ch) {
+            return gc;
+        }
+        gc++;
+    }
+    return gc1;
+}
+
+static inline uint32_t lid_hmx_q_chunk_push(const struct htp_lid_hmx_context * hctx, dma_queue * dma_q,
+                                            uint8_t * qs, uint32_t qb, uint32_t gc) {
     const struct htp_ops_context * octx = hctx->octx;
     const struct htp_tensor *      w    = octx->src[2];
     const struct htp_lid_hmx_vtcm_layout * L = &hctx->L;
+    const uint32_t nh = octx->src[0]->ne[1];
 
-    const uint32_t nh     = octx->src[0]->ne[1];
+    const uint32_t             set = fastdiv(gc, &hctx->kp->div_n_ch);
+    const uint32_t             c   = gc - set * L->n_ch;
+    const struct lid_hmx_set * S   = &hctx->nx_sets[set];
+
+    const uint32_t slot = lid_hmx_slot(hctx, qb, set);
+    const uint32_t ch   = c * 32;
+    const uint32_t ta   = fastdiv(ch, &hctx->kp->div_n_head);
+    const uint32_t tb   = fastdiv(MIN(ch + 32, S->nt * nh) - 1, &hctx->kp->div_n_head) + 1;
+
+    float * wd = hctx->w + slot * (L->size_w / sizeof(float));
+    dma_queue_push(dma_q, dma_make_data(wd + ta * nh, w->data + S->is * w->nb[3] + (S->t0 + ta) * w->nb[1]),
+                   nh * sizeof(float), w->nb[1], nh * sizeof(float), tb - ta);
+    return 1 + lid_hmx_push_q(hctx, dma_q, qs, S, c);
+}
+
+// Stage g share of the next run's Q prep (the DMA queue of the thread is empty here)
+static __attribute__((noinline)) void lid_hmx_q_chunk(const struct htp_lid_hmx_context * hctx, uint32_t ith, uint32_t nth) {
+    const struct htp_ops_context * octx = hctx->octx;
+    const struct htp_lid_hmx_vtcm_layout * L = &hctx->L;
+
     const uint32_t n_tot  = hctx->nx_n_run * L->n_ch;
     const uint32_t a      = fastdiv(hctx->g * n_tot, &hctx->nx_stg_div);
     const uint32_t b      = fastdiv((hctx->g + 1) * n_tot, &hctx->nx_stg_div);
@@ -1299,32 +1374,49 @@ static void lid_hmx_q_chunk(const struct htp_lid_hmx_context * hctx, uint32_t it
     const uint32_t qb     = hctx->qbuf ^ 1;
 
     dma_queue * dma_q = octx->ctx->dma[ith];
-    uint8_t *   qs    = hctx->qs + ith * L->size_qs;
-    uint8_t *   qh    = qs + 32 * L->size_qs_row;
+    uint8_t *   qs[2];
+    qs[0] = hctx->qs + ith * L->size_qs;
+    qs[1] = qs[0] + 32 * L->size_qs_row;
+    uint8_t * qh = qs[0] + 2 * 32 * L->size_qs_row;
 
-    for (uint32_t gc = gc0; gc < gc1; ++gc) {
-        const uint32_t             set = fastdiv(gc, &hctx->kp->div_n_ch);
-        const uint32_t             c   = gc - set * L->n_ch;
-        const struct lid_hmx_set * S   = &hctx->nx_sets[set];
-        if (c >= S->n_ch) {
-            continue;
-        }
+    uint32_t gc_cur = lid_hmx_find_valid_gc(hctx, gc0, gc1);
+    if (gc_cur >= gc1) {
+        return;
+    }
 
-        const uint32_t slot = lid_hmx_slot(hctx, qb, set);
-        const uint32_t ch   = c * 32;
-        const uint32_t ta   = fastdiv(ch, &hctx->kp->div_n_head);
-        const uint32_t tb   = fastdiv(MIN(ch + 32, S->nt * nh) - 1, &hctx->kp->div_n_head) + 1;
+    const uint32_t gc_next = lid_hmx_find_valid_gc(hctx, gc_cur + 1, gc1);
+    uint32_t gc_prefetch = gc1;
 
-        float * wd = hctx->w + slot * (L->size_w / sizeof(float));
-        dma_queue_push(dma_q, dma_make_data(wd + ta * nh, w->data + S->is * w->nb[3] + (S->t0 + ta) * w->nb[1]),
-                       nh * sizeof(float), w->nb[1], nh * sizeof(float), tb - ta);
-        const uint32_t n_dma = 1 + lid_hmx_push_q(hctx, dma_q, qs, S, c);
-        for (uint32_t i = 0; i < n_dma; ++i) {
+    uint32_t n_dma[2] = {0, 0};
+    n_dma[0] = lid_hmx_q_chunk_push(hctx, dma_q, qs[0], qb, gc_cur);
+    if (gc_next < gc1) {
+        n_dma[1] = lid_hmx_q_chunk_push(hctx, dma_q, qs[1], qb, gc_next);
+        gc_prefetch = lid_hmx_find_valid_gc(hctx, gc_next + 1, gc1);
+    }
+
+    uint32_t slot = 0;
+    while (gc_cur < gc1) {
+        for (uint32_t i = 0; i < n_dma[slot]; ++i) {
             dma_queue_pop(dma_q);
         }
 
-        lid_hmx_q_scg(hctx, slot, S, c);
-        lid_hmx_q_tiles(hctx, slot, S, c, qs, qh);
+        const uint32_t             set   = fastdiv(gc_cur, &hctx->kp->div_n_ch);
+        const uint32_t             c     = gc_cur - set * L->n_ch;
+        const struct lid_hmx_set * S     = &hctx->nx_sets[set];
+        const uint32_t             qslot = lid_hmx_slot(hctx, qb, set);
+
+        lid_hmx_q_scg(hctx, qslot, S, c);
+        lid_hmx_q_tiles(hctx, qslot, S, c, qs[slot], qh);
+
+        if (gc_prefetch < gc1) {
+            n_dma[slot] = lid_hmx_q_chunk_push(hctx, dma_q, qs[slot], qb, gc_prefetch);
+            gc_prefetch = lid_hmx_find_valid_gc(hctx, gc_prefetch + 1, gc1);
+        } else {
+            n_dma[slot] = 0;
+        }
+
+        gc_cur = lid_hmx_find_valid_gc(hctx, gc_cur + 1, gc1);
+        slot ^= 1;
     }
 }
 
@@ -1348,7 +1440,7 @@ static void lid_hmx_qprep_thread(unsigned int nth, unsigned int ith, void * data
     const uint32_t gc1   = MIN(gc0 + per, n_tot);
 
     uint8_t * qs = hctx->qs + ith * L->size_qs;
-    uint8_t * qh = qs + 32 * L->size_qs_row;
+    uint8_t * qh = qs + 2 * 32 * L->size_qs_row;
 
     // all input DMAs in flight at once: w of the sets, Q of the first channel tile, then K and mask of block 0
     uint32_t n_dma = 0;
