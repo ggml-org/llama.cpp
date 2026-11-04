@@ -31,6 +31,13 @@ struct dist_nd_local_addr {
 // has no NetworkDirect support or no ND provider is installed.
 std::vector<dist_nd_local_addr> dist_nd_local_addrs();
 
+// Sizes the small connection that every edge set up after this call adds next to its 256 KiB
+// one: a message of up to `bytes` (the caller's header included) rides it, so a decode exchange
+// moves a few pages instead of a whole 256 KiB slot. 0, or a size that does not fit below 256 KiB,
+// means no small connection. Call it before the first dist_nd_establish, with the same value on
+// every rank: ranks with different values refuse to connect.
+void dist_nd_set_small_message(size_t bytes);
+
 // Establishes one bidirectional ND connection with the ring peer.
 //
 //   tcp_out / tcp_in : the ring sockets already connected to the peer. tcp_out carries the

@@ -275,8 +275,6 @@ and the opt-in ones it only clears, with `-ExtraEnv 'NAME=value;NAME=value'`. Fo
 |---|---|
 | `LLAMA_DIST_TP_RDMA=0` | run this rank's edges on TCP, still over the cables. By default an edge runs on NetworkDirect when its two ranks have ND capable addresses on one subnet, the cable between them. The rendezvous is always TCP |
 | `LLAMA_DIST_TP_RDMA_DEBUG=1` | log each ND listener, connection request, connect and teardown |
-| `LLAMA_DIST_TP_RDMA_FIXED_SLOT=1` | for ND providers that need page-aligned buffers and the same length on both ends of every transfer (a provider that refuses `Register` or completes receives with an error on the default layout): every slot is exactly 256 KiB with the header inside, and every send, acks included, is one whole slot into a receive of one whole slot. Prints `[dist-tp][nd] fixed slots: ...`. Same value on every rank |
-| `LLAMA_DIST_TP_RDMA_SMALL_LANE=<bytes>` | with fixed slots (it turns them on): a second ND connection on every cable whose slots are this size, a whole number of 4096 B pages below 256 KiB. A message that fits one small slot (16 B header + payload) takes it, everything else the 256 KiB one, so a decode all-reduce no longer moves a whole 256 KiB slot. Pick the smallest page multiple that holds a decode payload: `n_embd x 2 + 16` bytes, or `n_embd x 4 + 16` with `LLAMA_DIST_TP_WIRE_F32=1` (n_embd 2880 with f16: 8192; 4096 with f16: 12288). Prints `[dist-tp][nd] small connection: ...`. Ranks with different values refuse to connect |
 | `LLAMA_DIST_TP_WIRE_F32=1` | the boundary all-reduce carries f32 on the wire. By default it carries f16, half the bytes: each payload is scaled by a power of two so its largest value fits, and the sums stay f32, so the output can differ slightly from an f32 run. Same value on every rank |
 | `LLAMA_DIST_TP_ATTN_REBALANCE=1` | split attention by query heads instead of whole KV groups, so a model whose KV head count does not divide by the rank count still gets an even share; each rank keeps the KV heads its query heads use. Same value on every rank |
 | `LLAMA_DIST_TP_SPLIT_RECURRENT=1` | Qwen3.5 and Qwen3.5-MoE: split the gated DeltaNet (recurrent) layers across the ranks. Unset, they run whole on every rank, which is always the case for Qwen3-Next. Use the same value on every rank |
@@ -326,10 +324,11 @@ the network, and prints `dist-tp record-ahead on`.
 - **Network profiles can revert to Public after a boot** and block the rendezvous. prep sets Private.
 - **A leg can pass small pings but drop full-size frames.** A run then fails at its first exchange.
   prep pings every leg at 1472 bytes with Don't Fragment and reboots the sender if needed.
-- **Some ND provider builds need page-aligned, fixed-length transfers.** On those, `ndping` and every
-  run fail at `IND2MemoryRegion::Register` (0xC00000EF) or at the first receive. Set
-  `LLAMA_DIST_TP_RDMA_SMALL_LANE` (section 6) on every rank: it turns on the fixed 256 KiB slots
-  the provider needs and adds the small connection that keeps decode messages small.
+- **Some ND provider builds need page-aligned, fixed-length transfers.** On those, `ndping` fails
+  at `IND2MemoryRegion::Register` (0xC00000EF) or at the first receive. dist-tp is not affected:
+  every transfer it makes is one whole page-aligned slot of 256 KiB, or of the size set at start-up
+  on a second, small connection per cable, which holds one decode all-reduce of the model
+  (`[dist-tp][nd] small connection: ...` in the log).
 - **An OS update can replace the USB4/RDMA driver.** Every run then goes over TCP. Record the
   known-good hashes in `DriverSha256` and run `verify_binaries.ps1`.
 - **One large model load per boot.** On integrated GPUs a second load of a large model in the same

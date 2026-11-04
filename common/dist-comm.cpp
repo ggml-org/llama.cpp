@@ -1,6 +1,7 @@
 #include "dist-comm.h"
 #include "dist-comm-nd.h"
 #include "ggml-trace.h"
+#include "gguf.h"
 
 #include <algorithm>
 #include <array>
@@ -1385,6 +1386,9 @@ std::unique_ptr<dist_comm_socket_context> dist_comm_socket_context::create(const
         return nullptr;
     }
 
+    // one decode exchange (op header and payload) takes the small ND connection
+    dist_nd_set_small_message(config.decode_floats > 0 ? sizeof(op_hdr) + config.decode_floats * sizeof(float) : 0);
+
     auto p = std::unique_ptr<impl>(new impl());
     p->cfg = config;
     p->listen_fd = create_listen_socket(config.listen_port, err);
@@ -1663,6 +1667,27 @@ bool env_true(const char * key, bool def = false) {
     std::string s(v);
     std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char) std::tolower(c); });
     return s == "1" || s == "true" || s == "yes" || s == "on";
+}
+
+// Floats in the exchange of one decode token: one row of the model's n_embd in the boundary
+// all-reduce's wire format. 0 when the model header does not give n_embd.
+size_t dist_tp_decode_floats(const std::string & model_path) {
+    gguf_init_params gp = { /* no_alloc = */ true, /* ctx = */ nullptr };
+    gguf_context * g = gguf_init_from_file(model_path.c_str(), gp);
+    if (g == nullptr) {
+        return 0;
+    }
+    size_t n_embd = 0;
+    const int64_t arch = gguf_find_key(g, "general.architecture");
+    if (arch >= 0 && gguf_get_kv_type(g, arch) == GGUF_TYPE_STRING) {
+        const std::string key = std::string(gguf_get_val_str(g, arch)) + ".embedding_length";
+        const int64_t k = gguf_find_key(g, key.c_str());
+        if (k >= 0 && gguf_get_kv_type(g, k) == GGUF_TYPE_UINT32) {
+            n_embd = gguf_get_val_u32(g, k);
+        }
+    }
+    gguf_free(g);
+    return n_embd > 0 ? ggml_backend_meta_dist_wire_floats(n_embd) : 0;
 }
 
 bool parse_int_env(const char * key, int & out) {
@@ -2355,6 +2380,7 @@ bool dist_tp_decode_batch_callback(llama_context * ctx, llama_batch * batch, voi
 
 struct common_dist_tp_runtime {
     common_dist_tp_env env;
+    size_t decode_floats = 0; // dist_comm_config::decode_floats, kept for a worker reconnect
     std::unique_ptr<dist_comm_context> comm;
     dist_tp_eval_state eval_state;
     dist_tp_decode_sync_state decode_sync_state;
@@ -2367,11 +2393,12 @@ static bool common_dist_tp_worker_reconnect(common_dist_tp_runtime * runtime, st
     }
 
     dist_comm_config comm_cfg;
-    comm_cfg.rank        = runtime->env.world_rank;
-    comm_cfg.world_size  = runtime->env.world_size;
-    comm_cfg.master_host = runtime->env.master_host;
-    comm_cfg.master_port = runtime->env.master_port;
-    comm_cfg.listen_port = runtime->env.listen_port;
+    comm_cfg.rank          = runtime->env.world_rank;
+    comm_cfg.world_size    = runtime->env.world_size;
+    comm_cfg.master_host   = runtime->env.master_host;
+    comm_cfg.master_port   = runtime->env.master_port;
+    comm_cfg.listen_port   = runtime->env.listen_port;
+    comm_cfg.decode_floats = runtime->decode_floats;
 
     auto comm = dist_comm_create(comm_cfg, err);
     if (!comm) {
@@ -2564,8 +2591,6 @@ bool common_dist_tp_apply_env_overrides(common_params & params, const common_dis
 }
 
 common_dist_tp_runtime * common_dist_tp_runtime_create(common_params & params, const common_dist_tp_env & env, std::string & err) {
-    (void) params;
-
     if (!env.enabled) {
         return nullptr;
     }
@@ -2573,11 +2598,12 @@ common_dist_tp_runtime * common_dist_tp_runtime_create(common_params & params, c
     // Cross-rank distributed TP communication is implemented here (dist_comm + callbacks).
     // This path is independent from ggml-backend-meta internals.
     dist_comm_config comm_cfg;
-    comm_cfg.rank        = env.world_rank;
-    comm_cfg.world_size  = env.world_size;
-    comm_cfg.master_host = env.master_host;
-    comm_cfg.master_port = env.master_port;
-    comm_cfg.listen_port = env.listen_port;
+    comm_cfg.rank          = env.world_rank;
+    comm_cfg.world_size    = env.world_size;
+    comm_cfg.master_host   = env.master_host;
+    comm_cfg.master_port   = env.master_port;
+    comm_cfg.listen_port   = env.listen_port;
+    comm_cfg.decode_floats = dist_tp_decode_floats(params.model.path);
 
     auto comm = dist_comm_create(comm_cfg, err);
     if (!comm) {
@@ -2586,6 +2612,7 @@ common_dist_tp_runtime * common_dist_tp_runtime_create(common_params & params, c
 
     auto * runtime = new common_dist_tp_runtime();
     runtime->env = env;
+    runtime->decode_floats = comm_cfg.decode_floats;
     runtime->comm = std::move(comm);
 
     runtime->eval_state.comm = runtime->comm.get();

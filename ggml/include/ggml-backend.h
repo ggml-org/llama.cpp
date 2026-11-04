@@ -419,6 +419,10 @@ extern "C" {
     // share cut at multiples of `granularity`, the last rank taking the rest. the meta backend splits the same way.
     GGML_API void ggml_backend_meta_dist_split_bounds(int64_t n, int64_t granularity, int rank, int world_size, int64_t * low, int64_t * high);
 
+    // the number of floats the boundary all-reduce of n values hands to the exchange hook: n / 2 + 1 with the
+    // default f16 wire (n even), n with LLAMA_DIST_TP_WIRE_F32=1. lets dist-TP size its transport for one token.
+    GGML_API size_t ggml_backend_meta_dist_wire_floats(size_t n);
+
     //
     // Utils
     //

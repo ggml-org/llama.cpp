@@ -9,11 +9,12 @@
 #include <vector>
 
 struct dist_comm_config {
-    int         rank        = 0;
-    int         world_size  = 1;
+    int         rank          = 0;
+    int         world_size    = 1;
     std::string master_host;
-    int         master_port = 0;
-    int         listen_port = 0;
+    int         master_port   = 0;
+    int         listen_port   = 0;
+    size_t      decode_floats = 0; // floats one decode token exchanges, sizes the small ND connection; 0 if unknown
 };
 
 struct dist_comm_stats {

@@ -97,6 +97,17 @@ static void dist_wire_f16_unpack(const ggml_fp16_t * x, int32_t e, float * y, si
 }
 #endif
 
+// the boundary all-reduce carries f16 on the wire unless LLAMA_DIST_TP_WIRE_F32=1, which must be the same on every rank
+static bool dist_wire_f16() {
+    static const bool on = [] {
+        const char * s = getenv("LLAMA_DIST_TP_WIRE_F32");
+        const bool f32 = s != nullptr && atoi(s) != 0;
+        fprintf(stderr, "dist-tp: boundary all-reduce carries %s on the wire\n", f32 ? "f32" : "f16");
+        return !f32;
+    }();
+    return on;
+}
+
 struct ggml_backend_meta_device;
 struct ggml_backend_meta_buffer_type;
 struct ggml_backend_meta_buffer;
@@ -163,6 +174,10 @@ static void ggml_meta_dist_split_bounds(int64_t n, int64_t granularity, int rank
 
 void ggml_backend_meta_dist_split_bounds(int64_t n, int64_t granularity, int rank, int world_size, int64_t * low, int64_t * high) {
     ggml_meta_dist_split_bounds(n, granularity, rank, world_size, low, high);
+}
+
+size_t ggml_backend_meta_dist_wire_floats(size_t n) {
+    return dist_wire_f16() && n % 2 == 0 ? n / 2 + 1 : n;
 }
 
 struct ggml_backend_meta_buffer_context;
@@ -3031,18 +3046,12 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                 // Host-side ring all-reduce: accumulate into `cur`, forward via `send`.
                 // Avoids the per-boundary GPU ADD kernel submission + node_tmp upload,
                 // which on a high submit-latency backend (Vulkan iGPU) dominates decode.
-                // f16 on the wire, unless LLAMA_DIST_TP_WIRE_F32=1. n halves (scaled by 2^-e, see dist_wire_f16_pack)
-                // and e in the last two travel as n/2 + 1 floats; the exchange only moves bytes. This rank's own share
-                // takes the same rounding, so every rank sums the same values; the sums stay f32. Every rank sees the
-                // same n, so all ranks take the same path. The setting must be the same on every rank.
-                static const bool dist_wire_f16 = [] {
-                    const char * s = getenv("LLAMA_DIST_TP_WIRE_F32");
-                    const bool f32 = s != nullptr && atoi(s) != 0;
-                    fprintf(stderr, "dist-tp: boundary all-reduce carries %s on the wire\n", f32 ? "f32" : "f16");
-                    return !f32;
-                }();
-                const bool   wire16 = dist_wire_f16 && n % 2 == 0;
-                const size_t nw     = wire16 ? n / 2 + 1 : n;
+                // f16 on the wire (dist_wire_f16): n halves (scaled by 2^-e, see dist_wire_f16_pack) and e in the
+                // last two travel as n/2 + 1 floats; the exchange only moves bytes. This rank's own share takes the
+                // same rounding, so every rank sums the same values; the sums stay f32. Every rank sees the same n,
+                // so all ranks take the same path.
+                const bool   wire16 = dist_wire_f16() && n % 2 == 0;
+                const size_t nw     = ggml_backend_meta_dist_wire_floats(n);
                 thread_local std::vector<float> send;
                 thread_local std::vector<float> recvw;
                 send.resize(nw);

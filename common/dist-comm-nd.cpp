@@ -9,6 +9,8 @@ bool dist_nd_available() { return false; }
 
 std::vector<dist_nd_local_addr> dist_nd_local_addrs() { return {}; }
 
+void dist_nd_set_small_message(size_t) {}
+
 dist_nd_conn * dist_nd_establish(uintptr_t, uintptr_t, bool, std::string & err, bool) {
     err = "this binary was built without NetworkDirect support";
     return nullptr;
@@ -73,7 +75,6 @@ static constexpr uint32_t ND_MSG_MAGIC   = 0x4E444D31; // 'NDM1'
 static constexpr uint32_t ND_HELLO_MAGIC = 0x444E4452; // 'DNDR'
 static constexpr uint32_t ND_HELLO_VER   = 1;
 
-static constexpr size_t   ND_PAYLOAD    = 256 * 1024;      // provider caps a transfer at 1 MiB
 static constexpr int      ND_RX_DEPTH   = 24;              // pre-posted receives: 24 x 256 KiB = 6 MiB
 static constexpr int      ND_WINDOW     = ND_RX_DEPTH - 1; // chunks in flight before an ack is required
 // Staging slots for outbound chunks. ONE slot meant one outstanding send, which forced the whole
@@ -101,21 +102,19 @@ struct nd_msg_hdr {
     uint32_t seq;
 };
 
-static constexpr size_t ND_SLOT = ND_PAYLOAD + sizeof(nd_msg_hdr);
+// A slot is exactly 256 KiB with the header inside it (262,128 B of payload), every buffer, slot
+// and registration is page aligned, and every send - data, ack and bye alike - is one whole slot
+// into a receive posted at one whole slot; the header carries the real length. Every provider
+// takes that layout, and some take no other: they refuse Register, or complete receives with an
+// error, when buffers are unaligned or the two ends of a transfer differ in length. The provider
+// caps a transfer at 1 MiB.
+static constexpr size_t ND_SLOT = 256 * 1024;
+static constexpr size_t ND_PAGE = 4096;
+static_assert(ND_SLOT % ND_PAGE == 0, "a slot must be a whole number of pages");
 
-// LLAMA_DIST_TP_RDMA_FIXED_SLOT=1 (opt-in): for providers that need page-aligned buffers and the
-// same length on both sides of every transfer. A slot is then exactly 256 KiB with the header
-// inside it (262,128 B of payload), every buffer, slot and registration is page aligned, and every
-// send - data, ack and bye alike - is one whole slot into a receive posted at one whole slot. The
-// header still carries the real length. Unset, the layout and lengths are the ones above.
-static constexpr size_t ND_FIXED_SLOT = 256 * 1024;
-static constexpr size_t ND_PAGE       = 4096;
-static_assert(ND_FIXED_SLOT % ND_PAGE == 0, "fixed slot must be a whole number of pages");
-
-// LLAMA_DIST_TP_RDMA_SMALL_LANE=<bytes> (opt-in, a whole number of pages below 256 KiB; implies the
-// fixed slots above): a second connection on every edge whose slots are that size. A message
-// (header and payload) that fits in one of its slots goes there, everything else on the 256 KiB
-// connection. Each connection keeps its own flow control and acks, and both share one completion
+// The small connection (dist_nd_set_small_message, a whole number of pages below 256 KiB): a
+// second connection on every edge whose slots are that size. A message (header and payload) that
+// fits in one of its slots goes there, everything else on the 256 KiB connection. Each connection keeps its own flow control and acks, and both share one completion
 // queue. Data chunks carry one sequence number across the two, and the receiver takes them in that
 // order, so the byte stream is the same whichever connection a chunk rode. On a provider that
 // moves whole slots, a decode message of a few KiB then costs a few KiB on the wire, not 256 KiB.
@@ -135,8 +134,6 @@ static inline int    nd_ctx_slot(void * ctx) { return (int)(uintptr_t)ctx - 1; }
 static void * const  ND_CTX_SEND = (void *)(uintptr_t)(ND_RX_DEPTH + 2);
 // an ack sent from the dedicated ack slot while waiting at the window, retired outside the tx ring
 static void * const  ND_CTX_ACK  = (void *)(uintptr_t)(ND_RX_DEPTH + 3);
-// the dedicated ack slot sits after the tx ring in the same registered buffer
-static constexpr size_t ND_ACK_SLOT_BYTES = 64;
 
 static bool nd_debug() {
     static const bool on = []() {
@@ -146,38 +143,11 @@ static bool nd_debug() {
     return on;
 }
 
-static bool nd_fixed_slot() {
-    static const bool on = []() {
-        const char * v = std::getenv("LLAMA_DIST_TP_RDMA_FIXED_SLOT");
-        const bool r = v && v[0] != '\0' && v[0] != '0';
-        if (r) {
-            std::fprintf(stderr, "[dist-tp][nd] fixed slots: every send and receive is one page-aligned %zu B slot\n",
-                         ND_FIXED_SLOT);
-        }
-        return r;
-    }();
-    return on;
-}
+// slot size of the small connection, 0 when there is none (dist_nd_set_small_message)
+static size_t nd_small_lane_sz = 0;
 
-// slot size of the small connection, 0 when there is none
 static size_t nd_small_lane() {
-    static const size_t sz = []() -> size_t {
-        const char * v = std::getenv("LLAMA_DIST_TP_RDMA_SMALL_LANE");
-        if (!v || v[0] == '\0' || v[0] == '0') {
-            return 0;
-        }
-        const long long b = std::strtoll(v, nullptr, 10);
-        if (b < (long long)ND_PAGE || b >= (long long)ND_FIXED_SLOT || b % (long long)ND_PAGE != 0) {
-            std::fprintf(stderr, "[dist-tp][nd] LLAMA_DIST_TP_RDMA_SMALL_LANE=%s ignored: needs a whole number of "
-                                 "%zu B pages below %zu B\n", v, ND_PAGE, ND_FIXED_SLOT);
-            return 0;
-        }
-        std::fprintf(stderr, "[dist-tp][nd] small connection: messages up to %zu B ride a second connection with "
-                             "%lld B slots, the rest %zu B slots\n",
-                     (size_t)b - sizeof(nd_msg_hdr), b, ND_FIXED_SLOT);
-        return (size_t)b;
-    }();
-    return sz;
+    return nd_small_lane_sz;
 }
 
 // the negotiation version: a peer with a different small connection setting must not connect
@@ -274,11 +244,10 @@ struct dist_nd_conn {
     size_t   rx_spill_off = 0;
     int      ack_inflight = 0;   // acks posted from the dedicated slot and not yet retired
 
-    // slot layout, fixed at setup: the defaults above, or whole 256 KiB slots (nd_fixed_slot)
-    bool   fixed    = false;
+    // slot layout, fixed at setup: ND_SLOT, or the small connection's slot size (nd_add_small_lane)
     size_t slot_sz  = ND_SLOT;
-    size_t pay_max  = ND_PAYLOAD;          // payload bytes one chunk carries behind its header
-    size_t ack_sz   = ND_ACK_SLOT_BYTES;   // the dedicated ack slot after the tx ring
+    size_t pay_max  = ND_SLOT - sizeof(nd_msg_hdr);   // payload bytes one chunk carries behind its header
+    size_t ack_sz   = ND_SLOT;                        // the dedicated ack slot after the tx ring
 
     // Small connection (nd_small_lane): root is the connection the caller holds and sm its small
     // twin. The twin shares root's adapter, overlapped file and completion queue, so every poll goes
@@ -289,11 +258,6 @@ struct dist_nd_conn {
     uintptr_t      ctx_base = 0;
     uint32_t       tx_dseq  = 0;       // root only, with sm: next data sequence number out, over both
     uint32_t       rx_dseq  = 0;       // root only, with sm: next data sequence number in
-
-    // bytes a send of len puts on the wire: a whole slot in fixed mode, else exactly len
-    ULONG wire_len(size_t len) const {
-        return (ULONG)(fixed ? slot_sz : len);
-    }
 
     uint8_t * tx_slot(int i) const {
         return tx_buf + (size_t)i * slot_sz;
@@ -477,12 +441,6 @@ static bool nd_setup(std::unique_ptr<dist_nd_conn> & conn, const struct sockaddr
                (unsigned long)info.MaxTransferLength, (size_t)info.MaxRegistrationSize,
                (unsigned long)info.MaxReceiveQueueDepth, (unsigned long)info.MaxInitiatorQueueDepth,
                (unsigned long)info.MaxCompletionQueueDepth);
-    if (nd_fixed_slot() || nd_small_lane() != 0) {
-        c->fixed   = true;
-        c->slot_sz = ND_FIXED_SLOT;
-        c->pay_max = ND_FIXED_SLOT - sizeof(nd_msg_hdr);
-        c->ack_sz  = ND_FIXED_SLOT;
-    }
     if (info.MaxTransferLength < c->slot_sz || info.MaxReceiveQueueDepth < ND_RX_DEPTH) {
         ND_LOG_ERR("adapter limits too small (transfer=%lu, rq=%lu)\n",
                    (unsigned long)info.MaxTransferLength, (unsigned long)info.MaxReceiveQueueDepth);
@@ -496,11 +454,9 @@ static bool nd_setup(std::unique_ptr<dist_nd_conn> & conn, const struct sockaddr
     if (!c->tx_buf || !c->rx_buf) {
         return false;
     }
-    if (c->fixed) {
-        // whole slots go on the wire, so never send whatever the allocator left behind
-        memset(c->tx_buf, 0, tx_bytes);
-        memset(c->rx_buf, 0, rx_bytes);
-    }
+    // whole slots go on the wire, so never send whatever the allocator left behind
+    memset(c->tx_buf, 0, tx_bytes);
+    memset(c->rx_buf, 0, rx_bytes);
 
     hr = c->adapter->CreateMemoryRegion(IID_IND2MemoryRegion, c->file, (void **)&c->tx_mr);
     if (FAILED(hr)) {
@@ -576,7 +532,6 @@ static bool nd_add_small_lane(dist_nd_conn * c) {
     s->local    = c->local;
     s->tcp_out  = c->tcp_out;
     s->tcp_in   = c->tcp_in;
-    s->fixed    = true;
     s->slot_sz  = sz;
     s->pay_max  = sz - sizeof(nd_msg_hdr);
     s->ack_sz   = sz;
@@ -640,6 +595,12 @@ static bool nd_add_small_lane(dist_nd_conn * c) {
         }
     }
     ND_LOG_DBG("small connection: posted %d receives of %zu B each\n", ND_RX_DEPTH, s->slot_sz);
+    static std::once_flag once;
+    std::call_once(once, [sz]() {
+        std::fprintf(stderr, "[dist-tp][nd] small connection: messages up to %zu B ride a second connection with "
+                             "%zu B slots, the rest %zu B slots\n",
+                     sz - sizeof(nd_msg_hdr), sz, ND_SLOT);
+    });
     c->sm = s.release();
     return true;
 }
@@ -1009,10 +970,10 @@ static bool nd_tx_slot_ready(dist_nd_conn * c) {
 // Post WITHOUT waiting for the completion. This is the change that lets an exchange overlap: this
 // function used to spin on its own send completion, so a full-duplex link carried one direction at
 // a time and every collective paid two serial transfers instead of one.
-static bool nd_post_send(dist_nd_conn * c, int slot, size_t len) {
+static bool nd_post_send(dist_nd_conn * c, int slot) {
     ND2_SGE sge = {};
     sge.Buffer            = c->tx_slot(slot);
-    sge.BufferLength      = c->wire_len(len);
+    sge.BufferLength      = (ULONG)c->slot_sz;
     sge.MemoryRegionToken = c->tx_token;
 
     if (FAILED(c->qp->Send((void *)(c->ctx_base + (uintptr_t)ND_CTX_SEND), &sge, 1, 0))) {
@@ -1045,7 +1006,7 @@ static bool nd_post_hdr_only(dist_nd_conn * c, const nd_msg_hdr & hdr) {
     }
     const int slot = c->tx_slot_cur;
     memcpy(c->tx_slot(slot), &hdr, sizeof(hdr));
-    if (!nd_post_send(c, slot, sizeof(hdr))) {
+    if (!nd_post_send(c, slot)) {
         return false;
     }
     c->tx_slot_cur = (c->tx_slot_cur + 1) % ND_TX_DEPTH;
@@ -1098,7 +1059,7 @@ static bool nd_post_ack_direct(dist_nd_conn * c) {
     memcpy(c->ack_slot(), &hdr, sizeof(hdr));
     ND2_SGE sge = {};
     sge.Buffer            = c->ack_slot();
-    sge.BufferLength      = c->wire_len(sizeof(hdr));
+    sge.BufferLength      = (ULONG)c->slot_sz;
     sge.MemoryRegionToken = c->tx_token;
     if (FAILED(c->qp->Send((void *)(c->ctx_base + (uintptr_t)ND_CTX_ACK), &sge, 1, 0))) {
         ND_LOG_ERR("ack post failed\n");
@@ -1246,9 +1207,8 @@ static bool nd_post_staged(dist_nd_conn * c) {
     const uint32_t seq = c->root->sm ? c->root->tx_dseq++ : c->tx_seq++;
     const nd_msg_hdr hdr = { ND_MSG_MAGIC, ND_MSG_DATA, (uint32_t)c->tx_fill, seq };
     memcpy(c->tx_slot(slot), &hdr, sizeof(hdr));
-    const size_t len = sizeof(hdr) + c->tx_fill;
     c->tx_fill = 0;
-    if (!nd_post_send(c, slot, len)) {
+    if (!nd_post_send(c, slot)) {
         return false;
     }
     c->tx_slot_cur = (c->tx_slot_cur + 1) % ND_TX_DEPTH;
@@ -1396,6 +1356,11 @@ static bool tcp_read_all(SOCKET fd, void * data, size_t size) {
 // ---------------------------------------------------------------------------------------
 
 bool dist_nd_available() { return true; }
+
+void dist_nd_set_small_message(size_t bytes) {
+    const size_t sz = bytes == 0 ? 0 : (bytes + sizeof(nd_msg_hdr) + ND_PAGE - 1) / ND_PAGE * ND_PAGE;
+    nd_small_lane_sz = sz < ND_SLOT ? sz : 0;
+}
 
 std::vector<dist_nd_local_addr> dist_nd_local_addrs() {
     std::vector<dist_nd_local_addr> out;
