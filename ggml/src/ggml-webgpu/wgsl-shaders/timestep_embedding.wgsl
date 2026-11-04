@@ -16,8 +16,11 @@ var<uniform> params: Params;
 var<storage, read_write> output: array<f32>;
 
 @compute @workgroup_size(WG_SIZE)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let global_thread_index = gid.x;
+fn main(
+    @builtin(global_invocation_id) gid: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>
+) {
+    let global_thread_index = gid.x + gid.y * num_wg.x * u32(WG_SIZE);
 
     let H: u32 = params.dim / 2;
 
