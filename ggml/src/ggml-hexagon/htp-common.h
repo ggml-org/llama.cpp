@@ -40,9 +40,8 @@ extern int    opt_rt_repack;
     if (opt_verbose) GGML_LOG_DEBUG(__VA_ARGS__)
 #endif
 
-
 static inline uint32_t ggml_hexagon_tensor_get_flags(const struct ggml_tensor * t) {
-    (uint32_t) (uintptr_t) t->extra;
+    return (uint32_t) (uintptr_t) t->extra;
 }
 
 static inline void ggml_hexagon_tensor_set_flags(struct ggml_tensor * t, uint32_t flags) {
@@ -57,36 +56,25 @@ static inline bool ggml_hexagon_tensor_is_fuseable(const struct ggml_tensor * t)
     return (ggml_hexagon_tensor_get_flags(t) & HTP_TENSOR_FUSEABLE) != 0;
 }
 
-static inline bool htp_can_rt_repack(const struct ggml_tensor * t) {
-    if (opt_rt_repack == 0 || !htp_is_tiled_weight_tensor(t)) {
-        return false;
-    }
-    if (t->buffer && ggml_backend_buft_is_host(t->buffer->buft)) {
-        return false;
-    }
-    return true;
-}
-
 static inline bool ggml_hexagon_tensor_is_tiled(const struct ggml_tensor * t) {
-    if (!t) return false;
-    if (t->buffer && ggml_backend_buft_is_host(t->buffer->buft)) {
-        return false;
-    }
     return (ggml_hexagon_tensor_get_flags(t) & HTP_TENSOR_TILED) != 0;
 }
 
-static inline bool htp_matmul_is_tiled(const struct ggml_tensor * t) {
-    if (ggml_hexagon_tensor_is_tiled(t)) {
-        return true;
-    }
-    return htp_can_rt_repack(t);
-}
-
-static inline bool htp_needs_repack(const struct ggml_tensor * t) {
-    if (ggml_hexagon_tensor_is_tiled(t)) {
+static inline bool ggml_hexagon_tensor_can_tile(const struct ggml_tensor * t) {
+    if (opt_rt_repack == 0) {
         return false;
     }
-    return htp_can_rt_repack(t);
+    if (t->buffer) {
+        if (ggml_backend_buft_is_host(t->buffer->buft) ||
+            ggml_backend_buffer_get_usage(t->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE) {
+            return false;
+        }
+    }
+    return htp_is_tiled_weight_tensor(t);
+}
+
+static inline bool ggml_hexagon_tensor_will_tile(const struct ggml_tensor * t) {
+    return ggml_hexagon_tensor_is_tiled(t) || ggml_hexagon_tensor_can_tile(t);
 }
 
 static inline bool htp_tensors_overlap(const struct ggml_tensor * a, const struct ggml_tensor * b) {
