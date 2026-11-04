@@ -225,8 +225,6 @@ class ModelBase:
         tensors: dict[str, Callable[[], Tensor]] = {}
 
         if remote_hf_model_id is not None:
-            is_safetensors = True
-
             logger.info(f"Using remote model with HuggingFace id: {remote_hf_model_id}")
             remote_tensors = gguf.utility.SafetensorRemote.get_list_tensors_hf_model(remote_hf_model_id)
             for name, remote_tensor in remote_tensors.items():
@@ -237,9 +235,13 @@ class ModelBase:
 
             return tensors
 
-        prefix = "model" if not self.is_mistral_format else "consolidated"
+        return self.index_local_tensors("model" if not self.is_mistral_format else "consolidated")
+
+    # index the local "<prefix>*.safetensors" files (or pytorch_model*.bin), through filter_tensors
+    def index_local_tensors(self, prefix: str) -> dict[str, Callable[[], Tensor]]:
+        tensors: dict[str, Callable[[], Tensor]] = {}
         part_names: list[str] = ModelBase.get_model_part_names(self.dir_model, prefix, ".safetensors")
-        is_safetensors: bool = len(part_names) > 0 or (not self.is_mistral_format and (self.dir_model / "model.safetensors.index.json").is_file())
+        is_safetensors: bool = len(part_names) > 0 or (not self.is_mistral_format and (self.dir_model / f"{prefix}.safetensors.index.json").is_file())
         if not is_safetensors:
             part_names = ModelBase.get_model_part_names(self.dir_model, "pytorch_model", ".bin")
 
@@ -247,7 +249,7 @@ class ModelBase:
         tensor_names_from_parts: set[str] = set()
 
         if not self.is_mistral_format:
-            index_name = "model.safetensors" if is_safetensors else "pytorch_model.bin"
+            index_name = f"{prefix}.safetensors" if is_safetensors else "pytorch_model.bin"
             index_name += ".index.json"
             index_file = self.dir_model / index_name
 
@@ -2115,6 +2117,9 @@ class TextModel(ModelBase):
             res = "jina-v2-de"
         if chkhsh == "0fe1cf6eda062318a1af7270f3331a85c539a01778ff948e24388e949c5282f4":
             # ref: https://huggingface.co/evilfreelancer/ruGPT3XL
+            res = "gpt-2"
+        if chkhsh == "df1bc34a6366466bcb36a9a1b1cc0afdb08cfe21c9250602c930f159085390a9":
+            # ref: https://huggingface.co/Lernex/Metis-1.6-Logos
             res = "gpt-2"
         if chkhsh == "9e454714343b69b99b71795c1d27a68c2a1d15dab111f4d353109f966af29da7":
             # ref: https://huggingface.co/LiquidAI/LFM2.5-8B-A1B

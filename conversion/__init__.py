@@ -45,6 +45,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "ChameleonForConditionalGeneration": "chameleon",
     "ChatGLMForConditionalGeneration": "chatglm",
     "ChatGLMModel": "chatglm",
+    "ChatterboxModel": "chatterbox",
     "ClefModel": "clef",
     "CloverMoeModelLM": "clover",
     "CodeShellForCausalLM": "codeshell",
@@ -197,6 +198,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "MambaLMHeadModel": "mamba",
     "MapleForCausalLM": "maple",
     "MellumForCausalLM": "mellum",
+    "Metis16ForCausalLM": "metis",
     "MiMoV2FlashForCausalLM": "mimo",
     "MiMoV2ForCausalLM": "mimo",
     "MiniCPM3ForCausalLM": "minicpm",
@@ -329,6 +331,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
 
 MMPROJ_MODEL_MAP: dict[str, str] = {
     "AudioFlamingo3ForConditionalGeneration": "ultravox",
+    "ChatterboxModel": "chatterbox",
     "ClefModel": "clef",
     "CogVLMForCausalLM": "cogvlm",
     "Cohere2VisionForConditionalGeneration": "command_r",

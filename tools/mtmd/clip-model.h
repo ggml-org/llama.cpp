@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <map>
 #include <vector>
 #include <unordered_set>
 #include <cstdint>
@@ -611,6 +612,235 @@ struct clip_code2wav {
     ggml_tensor * dac_post_conv_b      = nullptr;
 };
 
+struct clip_chatterbox {
+    // espnet rel-pos conformer layer of the flow encoder
+    struct enc_layer {
+        ggml_tensor * norm_mha_w = nullptr;
+        ggml_tensor * norm_mha_b = nullptr;
+        ggml_tensor * attn_q_w = nullptr;
+        ggml_tensor * attn_q_b = nullptr;
+        ggml_tensor * attn_k_w = nullptr;
+        ggml_tensor * attn_k_b = nullptr;
+        ggml_tensor * attn_v_w = nullptr;
+        ggml_tensor * attn_v_b = nullptr;
+        ggml_tensor * attn_pos_w = nullptr;      // linear_pos, no bias
+        ggml_tensor * attn_pos_bias_u = nullptr;
+        ggml_tensor * attn_pos_bias_v = nullptr;
+        ggml_tensor * attn_out_w = nullptr;
+        ggml_tensor * attn_out_b = nullptr;
+        ggml_tensor * norm_ff_w = nullptr;
+        ggml_tensor * norm_ff_b = nullptr;
+        ggml_tensor * ffn_1_w = nullptr;
+        ggml_tensor * ffn_1_b = nullptr;
+        ggml_tensor * ffn_2_w = nullptr;
+        ggml_tensor * ffn_2_b = nullptr;
+    };
+
+    // causal conv block of the estimator (conv k3 left padded + layer norm)
+    struct causal_block {
+        ggml_tensor * conv_w = nullptr;
+        ggml_tensor * conv_b = nullptr;
+        ggml_tensor * norm_w = nullptr;
+        ggml_tensor * norm_b = nullptr;
+    };
+
+    // time conditioned resnet of the estimator
+    struct resnet {
+        causal_block block1;
+        causal_block block2;
+        ggml_tensor * mlp_w = nullptr;      // time projection (mlp.1)
+        ggml_tensor * mlp_b = nullptr;
+        ggml_tensor * res_conv_w = nullptr;
+        ggml_tensor * res_conv_b = nullptr;
+    };
+
+    // diffusers style transformer block of the estimator
+    struct tfm_block {
+        ggml_tensor * norm1_w = nullptr;
+        ggml_tensor * norm1_b = nullptr;
+        ggml_tensor * attn_q_w = nullptr;   // no bias on qkv
+        ggml_tensor * attn_k_w = nullptr;
+        ggml_tensor * attn_v_w = nullptr;
+        ggml_tensor * attn_out_w = nullptr; // to_out.0
+        ggml_tensor * attn_out_b = nullptr;
+        ggml_tensor * norm3_w = nullptr;
+        ggml_tensor * norm3_b = nullptr;
+        ggml_tensor * ff_in_w = nullptr;    // ff.net.0.proj
+        ggml_tensor * ff_in_b = nullptr;
+        ggml_tensor * ff_out_w = nullptr;   // ff.net.2
+        ggml_tensor * ff_out_b = nullptr;
+    };
+
+    // one estimator stage: resnet, transformer stack, boundary causal conv (null on mid stages)
+    struct est_stage {
+        resnet res;
+        std::vector<tfm_block> tfm;
+        ggml_tensor * conv_w = nullptr;
+        ggml_tensor * conv_b = nullptr;
+    };
+
+    // snake resblock unit of the hift vocoder
+    struct hift_res_unit {
+        ggml_tensor * act1_alpha = nullptr;
+        ggml_tensor * act2_alpha = nullptr;
+        ggml_tensor * conv1_w = nullptr;
+        ggml_tensor * conv1_b = nullptr;
+        ggml_tensor * conv2_w = nullptr;
+        ggml_tensor * conv2_b = nullptr;
+    };
+    struct hift_res {
+        std::vector<hift_res_unit> units;   // dilations 1/3/5 on conv1
+    };
+
+    // one hift upsample stage: conv transpose, source injection, 3 resblocks
+    struct hift_up {
+        ggml_tensor * up_w = nullptr;
+        ggml_tensor * up_b = nullptr;
+        ggml_tensor * source_down_w = nullptr;
+        ggml_tensor * source_down_b = nullptr;
+        hift_res source_res;
+        hift_res res_0;
+        hift_res res_1;
+        hift_res res_2;
+    };
+
+    // f0 predictor conv of the hift vocoder
+    struct f0_conv {
+        ggml_tensor * w = nullptr;
+        ggml_tensor * b = nullptr;
+    };
+
+    // s3 tokenizer attention block (neox rope on q/k, fsmn memory on v)
+    struct s3tok_block {
+        ggml_tensor * attn_ln_w = nullptr;
+        ggml_tensor * attn_ln_b = nullptr;
+        ggml_tensor * attn_q_w = nullptr;
+        ggml_tensor * attn_q_b = nullptr;
+        ggml_tensor * attn_k_w = nullptr;   // no bias
+        ggml_tensor * attn_v_w = nullptr;
+        ggml_tensor * attn_v_b = nullptr;
+        ggml_tensor * fsmn_w = nullptr;
+        ggml_tensor * attn_out_w = nullptr;
+        ggml_tensor * attn_out_b = nullptr;
+        ggml_tensor * mlp_ln_w = nullptr;
+        ggml_tensor * mlp_ln_b = nullptr;
+        ggml_tensor * mlp_in_w = nullptr;
+        ggml_tensor * mlp_in_b = nullptr;
+        ggml_tensor * mlp_out_w = nullptr;
+        ggml_tensor * mlp_out_b = nullptr;
+    };
+
+    // folded batchnorm (w/b stay null on the affine free variant)
+    struct bn {
+        ggml_tensor * mean = nullptr;
+        ggml_tensor * var  = nullptr;
+        ggml_tensor * w    = nullptr;
+        ggml_tensor * b    = nullptr;
+    };
+
+    // fcm residual 2d block of the speaker encoder, the shortcut is null on stride 1 blocks
+    struct spk_res2d {
+        ggml_tensor * conv1_w = nullptr;
+        bn bn1;
+        ggml_tensor * conv2_w = nullptr;
+        bn bn2;
+        ggml_tensor * shortcut_w = nullptr;
+        bn shortcut_bn;
+    };
+
+    // cam dense tdnn layer of the speaker encoder
+    struct spk_cam_layer {
+        bn nl1_bn;
+        ggml_tensor * linear1_w = nullptr;
+        bn nl2_bn;
+        ggml_tensor * local_w = nullptr;    // cam_layer.linear_local
+        ggml_tensor * ctx1_w = nullptr;     // cam_layer.linear1
+        ggml_tensor * ctx1_b = nullptr;
+        ggml_tensor * ctx2_w = nullptr;     // cam_layer.linear2
+        ggml_tensor * ctx2_b = nullptr;
+    };
+    struct spk_cam_block {
+        std::vector<spk_cam_layer> layers;
+        bn transit_bn;
+        ggml_tensor * transit_w = nullptr;
+    };
+
+    // flow encoder
+    ggml_tensor * input_embedding_w = nullptr;  // flow.input_embedding
+    ggml_tensor * embed_linear_w = nullptr;     // fenc.embed.out.0
+    ggml_tensor * embed_linear_b = nullptr;
+    ggml_tensor * embed_norm_w = nullptr;       // fenc.embed.out.1
+    ggml_tensor * embed_norm_b = nullptr;
+    ggml_tensor * pre_conv1_w = nullptr;        // pre_lookahead_layer
+    ggml_tensor * pre_conv1_b = nullptr;
+    ggml_tensor * pre_conv2_w = nullptr;
+    ggml_tensor * pre_conv2_b = nullptr;
+    std::vector<enc_layer> enc;
+    ggml_tensor * up_conv_w = nullptr;          // fenc.up_layer.conv
+    ggml_tensor * up_conv_b = nullptr;
+    ggml_tensor * up_embed_linear_w = nullptr;  // fenc.up_embed.out.0
+    ggml_tensor * up_embed_linear_b = nullptr;
+    ggml_tensor * up_embed_norm_w = nullptr;    // fenc.up_embed.out.1
+    ggml_tensor * up_embed_norm_b = nullptr;
+    std::vector<enc_layer> up_enc;
+    ggml_tensor * after_norm_w = nullptr;
+    ggml_tensor * after_norm_b = nullptr;
+    ggml_tensor * encoder_proj_w = nullptr;     // flow.encoder_proj
+    ggml_tensor * encoder_proj_b = nullptr;
+
+    // cfm estimator
+    ggml_tensor * time_mlp_1_w = nullptr;
+    ggml_tensor * time_mlp_1_b = nullptr;
+    ggml_tensor * time_mlp_2_w = nullptr;
+    ggml_tensor * time_mlp_2_b = nullptr;
+    ggml_tensor * time_embed_mixer_w = nullptr; // meanflow variant only
+    est_stage est_down;
+    std::vector<est_stage> est_mid;
+    est_stage est_up;
+    causal_block est_final_block;
+    ggml_tensor * est_final_proj_w = nullptr;
+    ggml_tensor * est_final_proj_b = nullptr;
+
+    // hift vocoder
+    ggml_tensor * hift_pre_w = nullptr;
+    ggml_tensor * hift_pre_b = nullptr;
+    std::vector<hift_up> hift_ups;
+    ggml_tensor * hift_post_w = nullptr;
+    ggml_tensor * hift_post_b = nullptr;
+    std::vector<f0_conv> f0_condnet;
+    ggml_tensor * f0_classifier_w = nullptr;
+    ggml_tensor * f0_classifier_b = nullptr;
+
+    // s3 tokenizer
+    ggml_tensor * s3tok_conv1_w = nullptr;
+    ggml_tensor * s3tok_conv1_b = nullptr;
+    ggml_tensor * s3tok_conv2_w = nullptr;
+    ggml_tensor * s3tok_conv2_b = nullptr;
+    std::vector<s3tok_block> s3tok_blocks;
+    ggml_tensor * s3tok_down_w = nullptr;       // quantizer._codebook.project_down
+    ggml_tensor * s3tok_down_b = nullptr;
+
+    // CAMPPlus speaker encoder
+    ggml_tensor * spk_conv1_w = nullptr;
+    bn spk_bn1;
+    spk_res2d spk_layer1_0;
+    spk_res2d spk_layer1_1;
+    spk_res2d spk_layer2_0;
+    spk_res2d spk_layer2_1;
+    ggml_tensor * spk_conv2_w = nullptr;
+    bn spk_bn2;
+    ggml_tensor * spk_tdnn_w = nullptr;
+    bn spk_tdnn_bn;
+    spk_cam_block spk_block1;
+    spk_cam_block spk_block2;
+    spk_cam_block spk_block3;
+    bn spk_out_bn;
+    ggml_tensor * spk_dense_w = nullptr;
+    bn spk_dense_bn;
+    ggml_tensor * spk_affine_w = nullptr;
+    ggml_tensor * spk_affine_b = nullptr;
+};
+
 struct clip_vocos {
     ggml_tensor * input_w        = nullptr;
     ggml_tensor * input_b        = nullptr;
@@ -896,8 +1126,13 @@ struct clip_model {
     ggml_tensor * gen_upsample_w  = nullptr; // depthwise convtr, frame rate -> encoder frame rate
     std::vector<clip_layer> gen_tfm_layers; // mimi decoder_transformer
 
+    // chatterbox flow encoder, cfm estimator, hift vocoder, s3 tokenizer and CAMPPlus speaker encoder
+    clip_chatterbox cbx;
+
+    // chatterbox tensors read on the host, see clip_cbx_read_tensor()
+    std::map<std::string, ggml_tensor *> cbx_tensors;
     // predefined voices, no rows if the voice is named in the prompt (lfm3a)
-    std::map<std::string, std::vector<float>> gen_voices;
+    std::map<std::string, clip_gen_voice> gen_voices;
 
     // soprano: Vocos decoder, hidden states -> STFT coefficients
     clip_vocos vocos;

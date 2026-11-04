@@ -22,6 +22,7 @@ void llama_model_gpt2::load_arch_tensors(llama_model_loader &) {
     output_norm   = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
     output_norm_b = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "bias"),   {n_embd}, 0);
     output        = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+    output_b      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "bias"),   {n_vocab}, TENSOR_NOT_REQUIRED);
 
     // if output is NULL, init from the input tok embed
     if (output == NULL) {
@@ -140,6 +141,9 @@ llama_model_gpt2::graph::graph(const llama_model & model, const llm_graph_params
     res->t_embd = cur;
 
     cur = build_lora_mm(model.output, cur, model.output_s);
+    if (model.output_b) {
+        cur = ggml_add(ctx0, cur, model.output_b);
+    }
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;

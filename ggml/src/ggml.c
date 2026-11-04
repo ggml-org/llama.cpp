@@ -1786,6 +1786,7 @@ static struct ggml_tensor * ggml_new_tensor_impl(
         enum   ggml_type      type,
         int                   n_dims,
         const int64_t       * ne,
+        const size_t        * nb,
         struct ggml_tensor  * view_src,
         size_t                view_offs) {
 
@@ -1811,8 +1812,6 @@ static struct ggml_tensor * ggml_new_tensor_impl(
     for (int i = 1; i < n_dims; i++) {
         data_size *= ne[i];
     }
-
-    GGML_ASSERT(view_src == NULL || data_size == 0 || data_size + view_offs <= ggml_nbytes(view_src));
 
     void * data = view_src != NULL ? view_src->data : NULL;
     if (data != NULL) {
@@ -1857,11 +1856,22 @@ static struct ggml_tensor * ggml_new_tensor_impl(
         result->ne[i] = ne[i];
     }
 
-    result->nb[0] = ggml_type_size(type);
-    result->nb[1] = result->nb[0]*(result->ne[0]/ggml_blck_size(type));
-    for (int i = 2; i < GGML_MAX_DIMS; i++) {
-        result->nb[i] = result->nb[i - 1]*result->ne[i - 1];
+    // a view built with strides takes them from the caller, any other tensor is contiguous
+    if (nb != NULL) {
+        for (int i = 0; i < GGML_MAX_DIMS; i++) {
+            result->nb[i] = nb[i];
+        }
+    } else {
+        result->nb[0] = ggml_type_size(type);
+        result->nb[1] = result->nb[0]*(result->ne[0]/ggml_blck_size(type));
+        for (int i = 2; i < GGML_MAX_DIMS; i++) {
+            result->nb[i] = result->nb[i - 1]*result->ne[i - 1];
+        }
     }
+
+    // a view stays inside its source, over the bytes its strides actually reach
+    const size_t view_size = ggml_nbytes(result);
+    GGML_ASSERT(view_src == NULL || view_size == 0 || view_size + view_offs <= ggml_nbytes(view_src));
 
     ctx->n_objects++;
 
@@ -1873,7 +1883,7 @@ struct ggml_tensor * ggml_new_tensor(
         enum   ggml_type      type,
         int                   n_dims,
         const int64_t       * ne) {
-    return ggml_new_tensor_impl(ctx, type, n_dims, ne, NULL, 0);
+    return ggml_new_tensor_impl(ctx, type, n_dims, ne, NULL, NULL, 0);
 }
 
 struct ggml_tensor * ggml_new_tensor_1d(
@@ -1990,12 +2000,8 @@ struct ggml_tensor * ggml_format_name(struct ggml_tensor * tensor, const char * 
 struct ggml_tensor * ggml_view_tensor(
         struct ggml_context * ctx,
         struct ggml_tensor  * src) {
-    struct ggml_tensor * result = ggml_new_tensor_impl(ctx, src->type, GGML_MAX_DIMS, src->ne, src, 0);
+    struct ggml_tensor * result = ggml_new_tensor_impl(ctx, src->type, GGML_MAX_DIMS, src->ne, src->nb, src, 0);
     ggml_format_name(result, "%s (view)", src->name);
-
-    for (int i = 0; i < GGML_MAX_DIMS; i++) {
-        result->nb[i] = src->nb[i];
-    }
 
     return result;
 }
@@ -2946,7 +2952,7 @@ static struct ggml_tensor * ggml_glu_impl(
     }
 
     int64_t ne[GGML_MAX_DIMS] = { a->ne[0] / 2 }; for (int i = 1; i < GGML_MAX_DIMS; i++) ne[i] = a->ne[i];
-    struct ggml_tensor * result = ggml_new_tensor_impl(ctx, a->type, GGML_MAX_DIMS, b ? a->ne : ne, NULL, 0);
+    struct ggml_tensor * result = ggml_new_tensor_impl(ctx, a->type, GGML_MAX_DIMS, b ? a->ne : ne, NULL, NULL, 0);
 
     ggml_set_op_params_i32(result, 0, (int32_t) op);
     ggml_set_op_params_i32(result, 1, (int32_t) swapped);
@@ -3755,7 +3761,7 @@ struct ggml_tensor * ggml_reshape(
     // as only the shape of b is relevant, and not its memory layout, b is allowed to be non contiguous.
     GGML_ASSERT(ggml_nelements(a) == ggml_nelements(b));
 
-    struct ggml_tensor * result = ggml_new_tensor_impl(ctx, a->type, GGML_MAX_DIMS, b->ne, a, 0);
+    struct ggml_tensor * result = ggml_new_tensor_impl(ctx, a->type, GGML_MAX_DIMS, b->ne, NULL, a, 0);
     ggml_format_name(result, "%s (reshaped)", a->name);
 
     result->op     = GGML_OP_RESHAPE;
@@ -3772,7 +3778,7 @@ struct ggml_tensor * ggml_reshape_1d(
     GGML_ASSERT(ggml_nelements(a) == ne0);
 
     const int64_t ne[1] = { ne0 };
-    struct ggml_tensor * result = ggml_new_tensor_impl(ctx, a->type, 1, ne, a, 0);
+    struct ggml_tensor * result = ggml_new_tensor_impl(ctx, a->type, 1, ne, NULL, a, 0);
     ggml_format_name(result, "%s (reshaped)", a->name);
 
     result->op     = GGML_OP_RESHAPE;
@@ -3790,7 +3796,7 @@ struct ggml_tensor * ggml_reshape_2d(
     GGML_ASSERT(ggml_nelements(a) == ne0*ne1);
 
     const int64_t ne[2] = { ne0, ne1 };
-    struct ggml_tensor * result = ggml_new_tensor_impl(ctx, a->type, 2, ne, a, 0);
+    struct ggml_tensor * result = ggml_new_tensor_impl(ctx, a->type, 2, ne, NULL, a, 0);
     ggml_format_name(result, "%s (reshaped)", a->name);
 
     result->op     = GGML_OP_RESHAPE;
@@ -3809,7 +3815,7 @@ struct ggml_tensor * ggml_reshape_3d(
     GGML_ASSERT(ggml_nelements(a) == ne0*ne1*ne2);
 
     const int64_t ne[3] = { ne0, ne1, ne2 };
-    struct ggml_tensor * result = ggml_new_tensor_impl(ctx, a->type, 3, ne, a, 0);
+    struct ggml_tensor * result = ggml_new_tensor_impl(ctx, a->type, 3, ne, NULL, a, 0);
     ggml_format_name(result, "%s (reshaped)", a->name);
 
     result->op     = GGML_OP_RESHAPE;
@@ -3829,7 +3835,7 @@ struct ggml_tensor * ggml_reshape_4d(
     GGML_ASSERT(ggml_nelements(a) == ne0*ne1*ne2*ne3);
 
     const int64_t ne[4] = { ne0, ne1, ne2, ne3 };
-    struct ggml_tensor * result = ggml_new_tensor_impl(ctx, a->type, 4, ne, a, 0);
+    struct ggml_tensor * result = ggml_new_tensor_impl(ctx, a->type, 4, ne, NULL, a, 0);
     ggml_format_name(result, "%s (reshaped)", a->name);
 
     result->op     = GGML_OP_RESHAPE;
@@ -3843,8 +3849,12 @@ static struct ggml_tensor * ggml_view_impl(
         struct ggml_tensor  * a,
         int                   n_dims,
         const int64_t       * ne,
+        const size_t        * nb,
         size_t                offset) {
-    struct ggml_tensor * result = ggml_new_tensor_impl(ctx, a->type, n_dims, ne, a, offset);
+    // a strided view counts its strides from elements that are contiguous along dim 0 of its source
+    GGML_ASSERT(nb == NULL || a->nb[0] == ggml_type_size(a->type));
+
+    struct ggml_tensor * result = ggml_new_tensor_impl(ctx, a->type, n_dims, ne, nb, a, offset);
     ggml_format_name(result, "%s (view)", a->name);
 
     ggml_set_op_params(result, &offset, sizeof(offset));
@@ -3862,7 +3872,7 @@ struct ggml_tensor * ggml_view_1d(
         struct ggml_tensor  * a,
         int64_t               ne0,
         size_t                offset) {
-    struct ggml_tensor * result = ggml_view_impl(ctx, a, 1, &ne0, offset);
+    struct ggml_tensor * result = ggml_view_impl(ctx, a, 1, &ne0, NULL, offset);
 
     return result;
 }
@@ -3877,12 +3887,9 @@ struct ggml_tensor * ggml_view_2d(
         size_t                nb1,
         size_t                offset) {
     const int64_t ne[2] = { ne0, ne1 };
+    const size_t  nb[4] = { ggml_type_size(a->type), nb1, nb1*ne1, nb1*ne1 };
 
-    struct ggml_tensor * result = ggml_view_impl(ctx, a, 2, ne, offset);
-
-    result->nb[1] = nb1;
-    result->nb[2] = result->nb[1]*ne1;
-    result->nb[3] = result->nb[2];
+    struct ggml_tensor * result = ggml_view_impl(ctx, a, 2, ne, nb, offset);
 
     return result;
 }
@@ -3899,12 +3906,9 @@ struct ggml_tensor * ggml_view_3d(
         size_t                nb2,
         size_t                offset) {
     const int64_t ne[3] = { ne0, ne1, ne2 };
+    const size_t  nb[4] = { ggml_type_size(a->type), nb1, nb2, nb2*ne2 };
 
-    struct ggml_tensor * result = ggml_view_impl(ctx, a, 3, ne, offset);
-
-    result->nb[1] = nb1;
-    result->nb[2] = nb2;
-    result->nb[3] = result->nb[2]*ne2;
+    struct ggml_tensor * result = ggml_view_impl(ctx, a, 3, ne, nb, offset);
 
     return result;
 }
@@ -3923,12 +3927,9 @@ struct ggml_tensor * ggml_view_4d(
         size_t                nb3,
         size_t                offset) {
     const int64_t ne[4] = { ne0, ne1, ne2, ne3 };
+    const size_t  nb[4] = { ggml_type_size(a->type), nb1, nb2, nb3 };
 
-    struct ggml_tensor * result = ggml_view_impl(ctx, a, 4, ne, offset);
-
-    result->nb[1] = nb1;
-    result->nb[2] = nb2;
-    result->nb[3] = nb3;
+    struct ggml_tensor * result = ggml_view_impl(ctx, a, 4, ne, nb, offset);
 
     return result;
 }

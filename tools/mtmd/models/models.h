@@ -206,6 +206,53 @@ struct clip_graph_conformer : clip_graph {
     ggml_cgraph * build() override;
 };
 
+// builders shared by the chatterbox gen and spkenc graphs, defined in chatterbox-gen.cpp
+struct clip_graph_chatterbox_base : clip_graph {
+    using clip_graph::clip_graph;
+
+  protected:
+    ggml_tensor * cbx_linear(ggml_tensor * w, ggml_tensor * b, ggml_tensor * x) const;
+    ggml_tensor * cbx_conv1d(ggml_tensor * k, ggml_tensor * b, ggml_tensor * x,
+                             int stride, int pad_l, int pad_r) const;
+    ggml_tensor * cbx_conv1d_dil(ggml_tensor * k, ggml_tensor * b, ggml_tensor * x,
+                                 int pad, int dil) const;
+};
+
+struct clip_graph_chatterbox_spkenc : clip_graph_chatterbox_base {
+    clip_graph_chatterbox_spkenc(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph_chatterbox_base(ctx, img) {}
+    ggml_cgraph * build() override;
+
+  private:
+    ggml_tensor * bn1d(const clip_chatterbox::bn & n, ggml_tensor * x);
+    ggml_tensor * bn2d_relu(const clip_chatterbox::bn & n, ggml_tensor * x);
+    ggml_tensor * res2d(const clip_chatterbox::spk_res2d & r, ggml_tensor * x, int stride);
+    ggml_tensor * cam_layer(const clip_chatterbox::spk_cam_layer & l, ggml_tensor * x, int dil, ggml_tensor * segfix);
+};
+
+struct clip_graph_chatterbox : clip_graph_chatterbox_base {
+    clip_gen_process_type gen_process = CLIP_GEN_PROCESS_GEN_CODE;
+    int n_tokens = 0;
+    int n_prompt_mel  = 0;
+    int vocode_n_mel  = 0;
+    int vocode_n_stft = 0;
+    clip_graph_chatterbox(clip_ctx * ctx, const clip_image_f32 & img, clip_gen_process_type gen_process, int n_tokens,
+                          int n_prompt_mel, int vocode_n_mel, int vocode_n_stft)
+        : clip_graph_chatterbox_base(ctx, img), gen_process(gen_process), n_tokens(n_tokens), n_prompt_mel(n_prompt_mel),
+          vocode_n_mel(vocode_n_mel), vocode_n_stft(vocode_n_stft) {}
+    ggml_cgraph * build() override;
+
+  private:
+    ggml_tensor * enc_layer(const clip_chatterbox::enc_layer & l, ggml_tensor * x, ggml_tensor * pos, int T);
+    ggml_tensor * causal_block(const clip_chatterbox::causal_block & b, ggml_tensor * x);
+    ggml_tensor * resnet(const clip_chatterbox::resnet & r, ggml_tensor * x, ggml_tensor * temb);
+    ggml_tensor * tfm_block(const clip_chatterbox::tfm_block & b, ggml_tensor * x);
+    ggml_tensor * estimator(ggml_tensor * x_noise, ggml_tensor * mu, ggml_tensor * spks,
+                            ggml_tensor * cond, ggml_tensor * temb, int T);
+    ggml_tensor * hift_resblock(const clip_chatterbox::hift_res & r, ggml_tensor * x);
+    ggml_cgraph * build_s3tok(int T);
+    ggml_cgraph * build_vocoder(int n_mel, int n_stft);
+};
+
 struct clip_graph_lfm3a : clip_graph {
     clip_graph_lfm3a(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
