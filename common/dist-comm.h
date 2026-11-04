@@ -57,13 +57,12 @@ struct common_dist_tp_runtime;
 // - LLAMA_DIST_TP_MASTER     : host:port for bootstrap service
 // - LLAMA_DIST_TP_LISTEN_PORT: optional ring listener port for this rank
 //                              (default: LLAMA_DIST_TP_MASTER port + rank)
-// Optional toggles:
-// - LLAMA_DIST_TP_MODEL_SPLIT_MODE: override model split mode (none|layer|row|tensor)
-// - LLAMA_DIST_TP_MODEL_TENSOR_SPLIT: comma-separated tensor split values for model loading
 bool common_dist_tp_env_load(common_dist_tp_env & out, std::string & err);
 bool common_dist_tp_resolve(const common_params & params, common_dist_tp_env & out, std::string & err);
 
-// Applies distributed TP environment overrides to model/context init parameters.
+// Exports the resolved rank settings to the process environment (libllama reads them there) and
+// sets the model/context init parameters every rank needs: no warmup, no memory fit, and no file
+// mapping with --split-mode tensor.
 // Must run before common_init_from_params() so tensor placement and callbacks are set correctly.
 bool common_dist_tp_apply_env_overrides(common_params & params, const common_dist_tp_env & env, std::string & err);
 

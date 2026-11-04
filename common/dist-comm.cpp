@@ -402,8 +402,7 @@ socket_t connect_with_retry(const std::string & host, int port, std::string & er
     return DIST_CCL_INVALID_SOCKET;
 }
 
-// same truthiness rule as env_true() below, duplicated here because the transport selection
-// runs before that anonymous namespace is in scope
+// true for 1, true, yes or on in any case; def when the variable is unset or empty
 bool dist_transport_env_true(const char * key, bool def) {
     const char * v = std::getenv(key);
     if (!v || v[0] == '\0') {
@@ -1659,16 +1658,6 @@ std::unique_ptr<dist_comm_context> dist_comm_create(const dist_comm_config & con
 
 namespace {
 
-bool env_true(const char * key, bool def = false) {
-    const char * v = std::getenv(key);
-    if (!v) {
-        return def;
-    }
-    std::string s(v);
-    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char) std::tolower(c); });
-    return s == "1" || s == "true" || s == "yes" || s == "on";
-}
-
 // Floats in the exchange of one decode token: one row of the model's n_embd in the boundary
 // all-reduce's wire format. 0 when the model header does not give n_embd.
 size_t dist_tp_decode_floats(const std::string & model_path) {
@@ -1727,86 +1716,10 @@ bool derive_default_listen_port(int master_port, int world_rank, int & listen_po
     return true;
 }
 
-bool parse_split_mode_env(const char * key, llama_split_mode & out, std::string & err) {
-    const char * v = std::getenv(key);
-    if (!v || v[0] == '\0') {
-        return false;
-    }
-
-    std::string s(v);
-    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char) std::tolower(c); });
-
-    if (s == "none") {
-        out = LLAMA_SPLIT_MODE_NONE;
-        return true;
-    }
-    if (s == "layer") {
-        out = LLAMA_SPLIT_MODE_LAYER;
-        return true;
-    }
-    if (s == "row") {
-        out = LLAMA_SPLIT_MODE_ROW;
-        return true;
-    }
-    if (s == "tensor") {
-        out = LLAMA_SPLIT_MODE_TENSOR;
-        return true;
-    }
-
-    err = std::string(key) + " must be one of: none, layer, row, tensor";
-    return false;
-}
-
-bool parse_tensor_split_env(const char * key, float * out, size_t out_len, std::string & err) {
-    const char * v = std::getenv(key);
-    if (!v || v[0] == '\0') {
-        return false;
-    }
-
-    std::fill(out, out + out_len, 0.0f);
-
-    std::string s(v);
-    size_t start = 0;
-    size_t idx = 0;
-
-    while (start <= s.size()) {
-        const size_t end = s.find(',', start);
-        const std::string tok = s.substr(start, end == std::string::npos ? std::string::npos : end - start);
-
-        if (idx >= out_len) {
-            err = std::string(key) + " has too many entries (max " + std::to_string(out_len) + ")";
-            return false;
-        }
-
-        if (!tok.empty()) {
-            try {
-                const float val = std::stof(tok);
-                if (!std::isfinite(val) || val < 0.0f) {
-                    err = std::string(key) + " entries must be finite and >= 0";
-                    return false;
-                }
-                out[idx] = val;
-            } catch (...) {
-                err = std::string(key) + " contains an invalid float: '" + tok + "'";
-                return false;
-            }
-        }
-
-        idx++;
-        if (end == std::string::npos) {
-            break;
-        }
-        start = end + 1;
-    }
-
-    return true;
-}
-
 struct dist_tp_eval_state {
     dist_comm_context * comm = nullptr;
     int world_rank = 0;
     int world_size = 1;
-    bool allow_attn_output_collectives = true;
 };
 
 struct dist_tp_decode_sync_state {
@@ -2178,41 +2091,6 @@ void worker_reset_sequences_for_batch_if_needed(llama_context * ctx, dist_tp_dec
     }
 }
 
-bool starts_with(std::string_view value, std::string_view prefix) {
-    return value.size() >= prefix.size() && value.substr(0, prefix.size()) == prefix;
-}
-
-const std::vector<std::string> & dist_tp_collective_prefix_overrides() {
-    static const std::vector<std::string> prefixes = []() {
-        std::vector<std::string> out;
-        const char * raw = std::getenv("LLAMA_DIST_TP_COLLECT_PREFIXES");
-        if (!raw || raw[0] == '\0') {
-            return out;
-        }
-
-        std::string s(raw);
-        size_t start = 0;
-        while (start <= s.size()) {
-            const size_t end = s.find(',', start);
-            std::string tok = s.substr(start, end == std::string::npos ? std::string::npos : end - start);
-
-            const size_t first = tok.find_first_not_of(" \t\r\n");
-            if (first != std::string::npos) {
-                const size_t last = tok.find_last_not_of(" \t\r\n");
-                out.emplace_back(tok.substr(first, last - first + 1));
-            }
-
-            if (end == std::string::npos) {
-                break;
-            }
-            start = end + 1;
-        }
-
-        return out;
-    }();
-    return prefixes;
-}
-
 bool is_transport_end_error(std::string_view err) {
     return err.find("dist-peer closed connection") != std::string_view::npos ||
            err.find("peer closed connection") != std::string_view::npos ||
@@ -2242,57 +2120,6 @@ bool mark_worker_transport_end_if_needed(int rank, std::string_view err) {
     g_worker_decode_sync_state->transport_ended = true;
     g_worker_decode_sync_state->last_transport_error = std::string(err);
     return true;
-}
-
-bool dist_tp_collect_attn_output_enabled() {
-    static int enabled = -1;
-    if (enabled < 0) {
-        // Some architectures (e.g. mixed linear/full attention variants) may expose
-        // attn_output-* as an internal intermediate. Keep enabled by default and
-        // allow targeted A/B testing via env override.
-        enabled = env_true("LLAMA_DIST_TP_COLLECT_ATTN_OUTPUT", true) ? 1 : 0;
-    }
-    return enabled == 1;
-}
-
-bool dist_tp_collect_attn_output_enabled(const dist_tp_eval_state * st) {
-    if (st != nullptr && !st->allow_attn_output_collectives) {
-        return false;
-    }
-    return dist_tp_collect_attn_output_enabled();
-}
-
-bool is_dist_tp_collective_node(const ggml_tensor * t, const dist_tp_eval_state * st = nullptr, bool allow_reshaped_attn_output = false) {
-    if (t == nullptr || t->name[0] == '\0') {
-        return false;
-    }
-
-    const std::string_view name(t->name);
-    if (name.find(" (reshaped)") != std::string_view::npos) {
-        // Meta-boundary allreduce can surface reshaped attention outputs.
-        // Keep legacy exclusion for other reshaped intermediates.
-        if (!(allow_reshaped_attn_output && starts_with(name, "attn_output-"))) {
-            return false;
-        }
-    }
-
-    // Debug/triage knob: allow forcing an explicit prefix whitelist.
-    // Example: LLAMA_DIST_TP_COLLECT_PREFIXES=linear_attn_out-,ffn_down-
-    const auto & override_prefixes = dist_tp_collective_prefix_overrides();
-    if (!override_prefixes.empty()) {
-        for (const std::string & prefix : override_prefixes) {
-            if (starts_with(name, prefix)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    return (dist_tp_collect_attn_output_enabled(st) && starts_with(name, "attn_output-")) ||
-           starts_with(name, "linear_attn_out-")      ||
-           starts_with(name, "ffn_down-")             ||
-           starts_with(name, "ffn_out-")              ||
-           starts_with(name, "ffn_moe_out-");
 }
 
 bool dist_tp_meta_allreduce_tensors(void * comm_ctx, const float * send_data, size_t n,
@@ -2554,38 +2381,17 @@ bool common_dist_tp_apply_env_overrides(common_params & params, const common_dis
         return false;
     }
 
-    llama_split_mode split_mode_override = params.split_mode;
-    if (!parse_split_mode_env("LLAMA_DIST_TP_MODEL_SPLIT_MODE", split_mode_override, err)) {
-        if (!err.empty()) {
-            return false;
-        }
-    } else {
-        params.split_mode = split_mode_override;
-    }
-
-    if (!parse_tensor_split_env("LLAMA_DIST_TP_MODEL_TENSOR_SPLIT", params.tensor_split, sizeof(params.tensor_split)/sizeof(params.tensor_split[0]), err)) {
-        if (!err.empty()) {
-            return false;
-        }
-    }
-
-    if (env_true("LLAMA_DIST_TP_FAST_STARTUP", true)) {
-        params.fit_params = false;
-        params.warmup = false;
-    }
-
-    const char * use_mmap_env = std::getenv("LLAMA_DIST_TP_USE_MMAP");
-    if (use_mmap_env != nullptr) {
-        params.use_mmap = env_true("LLAMA_DIST_TP_USE_MMAP", params.use_mmap);
-    } else if (params.split_mode == LLAMA_SPLIT_MODE_TENSOR && env.world_size > 1) {
+    // every rank skips the warmup decode and the device memory fit, and a tensor split reads the
+    // file instead of mapping it, since a rank keeps only its own slice of each weight
+    params.fit_params = false;
+    params.warmup = false;
+    if (params.split_mode == LLAMA_SPLIT_MODE_TENSOR && env.world_size > 1) {
         params.use_mmap = false;
     }
 
-    if (env_true("LLAMA_DIST_TP_VERBOSE", true)) {
-        std::fprintf(stderr,
-            "[dist-tp][rank=%d] split_mode=%d use_mmap=%s warmup=%s\n",
-            env.world_rank, (int) params.split_mode, params.use_mmap ? "true" : "false", params.warmup ? "true" : "false");
-    }
+    std::fprintf(stderr,
+        "[dist-tp][rank=%d] split_mode=%d use_mmap=%s warmup=%s\n",
+        env.world_rank, (int) params.split_mode, params.use_mmap ? "true" : "false", params.warmup ? "true" : "false");
 
     return true;
 }
@@ -2619,10 +2425,6 @@ common_dist_tp_runtime * common_dist_tp_runtime_create(common_params & params, c
     runtime->eval_state.world_rank = env.world_rank;
     runtime->eval_state.world_size = env.world_size;
 
-    const bool unsupported_topology = env_true("LLAMA_DIST_TP_ALLOW_UNSUPPORTED_TOPOLOGY", false);
-
-    runtime->eval_state.allow_attn_output_collectives = true;
-
     runtime->decode_sync_state.comm = runtime->comm.get();
     runtime->decode_sync_state.world_rank = env.world_rank;
     runtime->decode_sync_state.world_size = env.world_size;
@@ -2630,11 +2432,6 @@ common_dist_tp_runtime * common_dist_tp_runtime_create(common_params & params, c
     const bool use_meta_allreduce =
         runtime->eval_state.world_size > 1 &&
         runtime->eval_state.comm != nullptr;
-
-    if (unsupported_topology && runtime->eval_state.world_rank == 0) {
-        std::fprintf(stderr,
-                "[dist-tp] unsupported topology: keeping meta-boundary allreduce enabled\n");
-    }
 
     if (use_meta_allreduce) {
         void * meta_ctx = nullptr;
@@ -2676,18 +2473,6 @@ void common_dist_tp_runtime_destroy(common_dist_tp_runtime * runtime) {
 bool common_dist_tp_runtime_attach_context(common_dist_tp_runtime * runtime, llama_context * ctx, std::string & /*err*/) {
     if (runtime == nullptr || ctx == nullptr) {
         return false;
-    }
-
-    const llama_model * model = llama_get_model(ctx);
-    const int n_head_kv = model != nullptr ? llama_model_n_head_kv(model) : 0;
-    runtime->eval_state.allow_attn_output_collectives =
-        n_head_kv <= 0 || runtime->eval_state.world_size <= n_head_kv;
-
-    if (runtime->eval_state.world_rank == 0 && n_head_kv > 0 && runtime->eval_state.world_size > n_head_kv) {
-        std::fprintf(stderr,
-            "[dist-tp] world_size=%d exceeds model n_head_kv=%d: disabling attn_output collectives by default\n",
-            runtime->eval_state.world_size,
-            n_head_kv);
     }
 
     llama_set_decode_batch_callback(ctx, dist_tp_decode_batch_callback, &runtime->decode_sync_state);

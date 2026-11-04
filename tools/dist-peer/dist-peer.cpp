@@ -15,9 +15,6 @@ static void print_usage(int argc, char ** argv) {
     std::fprintf(stderr, "  --world-rank <0..N-1>\n");
     std::fprintf(stderr, "  --dist-master <host:port>\n");
     std::fprintf(stderr, "  --dist-listen-port <port> (optional; default: master_port + world-rank)\n");
-    std::fprintf(stderr, "optional model placement controls:\n");
-    std::fprintf(stderr, "  LLAMA_DIST_TP_MODEL_SPLIT_MODE={none|layer|row|tensor}\n");
-    std::fprintf(stderr, "  LLAMA_DIST_TP_MODEL_TENSOR_SPLIT=<csv-floats>\n");
     std::fprintf(stderr, "\n");
 }
 

@@ -114,13 +114,11 @@ if($world -gt 1){ $common += " --split-mode tensor --world-size $world --dist-ma
 
 # "NAME=value", or "NAME=" to clear it, for every dist-tp variable of a rank. Every one is set OR
 # cleared explicitly: a node with one of them set system-wide would otherwise turn a TCP run into an
-# RDMA one, or change the collective. Shared by LaunchRank and -Rank0Manual.
+# RDMA one. Shared by LaunchRank and -Rank0Manual.
 function RankEnv([int]$rank){
   if($world -le 1){ return @() }
   @(
     "LLAMA_DIST_TP_RDMA=$(if($Transport -ne 'rdma'){0})"
-    # A name whitelist for collectives; setting it can silently drop required all-reduces.
-    'LLAMA_DIST_TP_COLLECT_PREFIXES='
     "LLAMA_DIST_TP_RDMA_DEBUG=$(if($RdmaDebug){1})"
   )
 }

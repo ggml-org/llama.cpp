@@ -2890,62 +2890,10 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
         return GGML_STATUS_SUCCESS;
     };
 
-    // Boundary predicate.
-    //
-    // nodes_dist_per_backend holds exactly ONE tensor per subgraph boundary: graph_compute pushes
-    // cgraph->nodes[n_nodes-1] of each subgraph, and boundaries are i < n_subgraphs-1. A subgraph
-    // boundary exists PRECISELY BECAUSE a partial result has to be summed across ranks, so the
-    // number of collectives per token is n_subgraphs-1 and every one of them is load-bearing.
-    // Dropping a single boundary leaves each rank holding only its own partial sum and corrupts
-    // every layer downstream: fast, and completely wrong.
-    //
-    // The base branch's built-in default list {linear_attn_out-, attn_output-, ffn_down-,
-    // ffn_out-, ffn_moe_out-} names a different model family (linear_attn_* is DeltaNet,
-    // ffn_moe_* is MoE) and can match the wrong subset of boundaries on other models. The
-    // filter is now OPT-IN: set LLAMA_DIST_TP_COLLECT_PREFIXES to a list that actually
-    // matches this model's boundary names and the filter engages; leave it unset and we keep
-    // known-good semantics. Deliberately there is NO built-in default list any more, because a
-    // wrong one fails silently and looks like a speedup.
-    static const std::vector<std::string> dist_collect_prefixes = []() {
-        std::vector<std::string> v;
-        const char * raw = getenv("LLAMA_DIST_TP_COLLECT_PREFIXES");
-        if (raw != nullptr && *raw != '\0') {
-            std::string s(raw);
-            size_t p = 0;
-            while (p <= s.size()) {
-                const size_t c = s.find(',', p);
-                const std::string tok = s.substr(p, c == std::string::npos ? std::string::npos : c - p);
-                if (!tok.empty()) {
-                    v.push_back(tok);
-                }
-                if (c == std::string::npos) {
-                    break;
-                }
-                p = c + 1;
-            }
-        }
-        return v;
-    }();
-
-    // One-shot inventory of the boundaries this model actually produces, so a prefix list can be
-    // chosen from evidence instead of guessed. LLAMA_DIST_TP_DUMP_BOUNDARIES=1.
-    static const bool dist_dump_boundaries = getenv("LLAMA_DIST_TP_DUMP_BOUNDARIES") != nullptr;
-
-    auto is_dist_collective_boundary = [](const ggml_tensor * node) -> bool {
-        if (node == nullptr) {
-            return false;
-        }
-        if (dist_collect_prefixes.empty()) {
-            return true;
-        }
-        const std::string_view name(node->name);
-        for (const auto & pfx : dist_collect_prefixes) {
-            if (name.rfind(pfx, 0) == 0) {
-                return true;
-            }
-        }
-        return false;
-    };
+    // nodes_dist_per_backend holds one tensor per subgraph boundary, the last node of every subgraph
+    // but the last. A boundary exists because a partial result has to be summed across the ranks,
+    // so every one is all-reduced: skipping one leaves each rank with only its own partial sum from
+    // that layer on.
 
     // ahead_next: with record-ahead, the subgraph to record while this all-reduce is on the network;
     // ahead_posted is set when that happened, and the caller then only has to flush it
@@ -2967,29 +2915,6 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
             auto & bcj = backend_ctx->backend_configs[j];
             for (ggml_tensor * node_dst : nodes_dist_per_backend[j]) {
                 if (node_dst == nullptr) {
-                    continue;
-                }
-                if (dist_dump_boundaries) {
-                    // Print each distinct boundary once: name, dtype, shape, bytes. This is the
-                    // exact set any prefix filter would have to match, and it is what shows
-                    // whether a name-based filter can express the required set at all.
-                    static std::vector<std::string> seen;
-                    const std::string nm = node_dst->name[0] ? node_dst->name : "<unnamed>";
-                    bool is_new = true;
-                    for (const std::string & s : seen) {
-                        if (s == nm) { is_new = false; break; }
-                    }
-                    if (is_new) {
-                        seen.push_back(nm);
-                        fprintf(stderr, "[dist-tp] boundary #%d name='%s' type=%s ne=[%lld,%lld,%lld,%lld] nbytes=%zu\n",
-                                (int) seen.size(), nm.c_str(), ggml_type_name(node_dst->type),
-                                (long long) node_dst->ne[0], (long long) node_dst->ne[1],
-                                (long long) node_dst->ne[2], (long long) node_dst->ne[3],
-                                ggml_nbytes(node_dst));
-                        fflush(stderr);
-                    }
-                }
-                if (!is_dist_collective_boundary(node_dst)) {
                     continue;
                 }
                 if (!ggml_is_contiguous(node_dst)) {
@@ -3175,7 +3100,7 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                 bool has_dist_boundary = false;
                 for (size_t j = 0; j < n_backends && !has_dist_boundary; j++) {
                     for (ggml_tensor * node_dst : nodes_dist_per_backend[j]) {
-                        if (is_dist_collective_boundary(node_dst)) {
+                        if (node_dst != nullptr) {
                             has_dist_boundary = true;
                             break;
                         }
