@@ -35,7 +35,7 @@ UI is for interfaces and running text: spaced and kerned like the system fonts a
 	<Metrics />
 </Section>
 
-<Version name="UI" statement="For the interface and the page around it." specs="Tracking −4 · kerning matched to SF Pro · line 1.25, cap-centred">
+<Version name="UI" statement="For the interface and the page around it." specs="Tracking 0 · kerning matched to SF Pro · line 1.25, cap-centred">
 	<UISample />
 </Version>
 
