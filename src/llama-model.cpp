@@ -1585,6 +1585,37 @@ void llama_model_base::load_vocab(llama_model_loader & ml) {
     vocab.load(ml, kv);
 }
 
+// ggml NUMA distribute: put the rows of each matrix in the memory of the node whose threads compute them; this
+// must happen before the data is loaded, so only for buffers whose pages are not allocated yet (plain CPU buffers)
+static void llama_numa_bind_weights(ggml_context * ctx, bool is_cpu_buft) {
+    ggml_backend_dev_t cpu = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    if (cpu == nullptr) {
+        return;
+    }
+    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(cpu);
+    auto * n_split = (int (*)(void)) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cpu_numa_n_row_split");
+    auto * bind    = (void (*)(void *, size_t, int64_t)) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cpu_numa_bind_rows");
+    if (n_split == nullptr || bind == nullptr || n_split() == 0) {
+        return;
+    }
+    if (!is_cpu_buft) {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            LLAMA_LOG_WARN("%s: weights in pinned host memory are not placed on NUMA nodes, use --no-host for that\n", __func__);
+        }
+        return;
+    }
+    size_t bytes = 0;
+    for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+        if (t->ne[1] > 1 && t->ne[2] == 1 && t->ne[3] == 1) {
+            bind(t->data, t->nb[1], t->ne[1]);
+            bytes += ggml_nbytes(t);
+        }
+    }
+    LLAMA_LOG_INFO("%s: %.2f MiB of weights split over %d NUMA nodes by rows\n", __func__, bytes/1024.0/1024.0, n_split());
+}
+
 bool llama_model_base::load_tensors(llama_model_loader & ml) {
     const auto & split_mode   = params.split_mode;
     const bool use_mlock      = params.load_mode == LLAMA_LOAD_MODE_MLOCK || params.load_mode == LLAMA_LOAD_MODE_MMAP_MLOCK;
@@ -1973,6 +2004,9 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
             }
             if (buf == nullptr) {
                 throw std::runtime_error(format("unable to allocate %s buffer", ggml_backend_buft_name(buft)));
+            }
+            if (!ml.no_alloc && ggml_backend_buffer_is_host(buf)) {
+                llama_numa_bind_weights(ctx, buft == ggml_backend_dev_buffer_type(dev));
             }
             if (use_mlock && ggml_backend_buffer_is_host(buf)) {
                 pimpl->mlock_bufs.emplace_back(new llama_mlock);

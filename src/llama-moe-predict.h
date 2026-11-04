@@ -173,6 +173,8 @@ private:
     std::vector<std::unique_ptr<hint_ud>> uds;
     float decay;
     size_t page_size = 4096;
+    // set when ggml splits matrix rows over NUMA nodes: reads each node's rows of an expert into that node's memory
+    void (*numa_willneed)(const void * data, size_t row_size, int64_t nrows) = nullptr;
 
     mutable std::mutex mtx;           // state
     bool     unlocked   = false;      // a single-token step has run (under mtx)

@@ -2,7 +2,8 @@
 // Part B of PLAN-cpu-gpu-matmul.md. Build with build_bench.sh. Weights are read with pread() from the GGUF shards (O_RDONLY).
 //
 //   matmul_bench [--model DIR] [--weights a,b@E,c@E:N,...] [--paths a,b,c,c4,d] [--threads 7,14,28] [--reps 20] [--warmup 3]
-//                [--expert E] [--json out.json] [--cuda-graphs 0|1] [--inventory] [--load-wait-s 300] [--hugepage] [--force]
+//                [--expert E] [--json out.json] [--cuda-graphs 0|1] [--inventory] [--load-wait-s 300] [--hugepage] [--numa] [--force]
+// --numa: ggml_numa_init(DISTRIBUTE) and the rows of each host copy bound to the node that computes them (CPU path)
 // --hugepage: host copies 2 MiB aligned + MADV_HUGEPAGE, touched before cudaHostRegister; AnonHugePages delta in the JSON
 //
 // paths: a = CPU backend, b = CUDA0 weight in VRAM, c = CUDA0 weight in pinned host memory (zero-copy),
@@ -508,6 +509,7 @@ struct opts {
     bool   inventory = false;
     bool   force = false;
     bool   hugepage = false;
+    bool   numa = false;
     double load_wait_s = 300.0;
     std::string json;
 };
@@ -754,6 +756,7 @@ int main(int argc, char ** argv) {
         else if (a == "--inventory")     { o.inventory = true; }
         else if (a == "--force")         { o.force = true; }
         else if (a == "--hugepage")      { o.hugepage = true; }
+        else if (a == "--numa")          { o.numa = true; }
         else if (a == "--load-wait-s")   { o.load_wait_s = atof(next().c_str()); }
         else { die("unknown argument %s (see the header of matmul_bench.cpp)", a.c_str()); }
     }
@@ -823,6 +826,9 @@ int main(int argc, char ** argv) {
             die("ggml_backend_cuda_init(0) failed");
         }
     }
+    if (o.numa) {
+        ggml_numa_init(GGML_NUMA_STRATEGY_DISTRIBUTE);
+    }
     ggml_backend_t cpu = ggml_backend_cpu_init();
     ggml_backend_buffer_type_t cuda_buft = need_cuda ? ggml_backend_cuda_buffer_type(0) : nullptr;
 
@@ -867,6 +873,15 @@ int main(int argc, char ** argv) {
         // K distinct host copies, padding zero
         const long huge0 = anon_huge_kib();
         char * H = (char *) host_alloc(hsize, o.hugepage);
+        if (o.numa) {
+            // the rows of each matrix go to the node whose threads compute them
+            const size_t rs = ggml_row_size(w.type, w.ne[0]);
+            for (int k = 0; k < K; ++k) {
+                for (int64_t e = 0; e < w.ne[2]; ++e) {
+                    ggml_numa_bind_rows(H + k * stride + e * rs * w.ne[1], rs, w.ne[1]);
+                }
+            }
+        }
         memset(H, 0, GGML_PAD(hsize, o.hugepage ? 2 * MIB : 4096));  // touch before cudaHostRegister
         const long huge_kib = anon_huge_kib() - huge0;
         printf("host copies: %.1f MiB, %s, AnonHugePages +%ld KiB (%.0f%% of the copies)\n", hsize / (double) MIB,

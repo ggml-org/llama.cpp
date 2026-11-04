@@ -2,6 +2,8 @@
 
 #include "llama-impl.h"
 
+#include "ggml-backend.h"
+
 #include <algorithm>
 #include <cerrno>
 #include <cmath>
@@ -135,6 +137,14 @@ llama_moe_predictor::llama_moe_predictor(const params & p, std::vector<layer_ten
 #if defined(LLAMA_MOE_PREDICT_MADVISE)
     const long pg = sysconf(_SC_PAGESIZE);
     page_size = pg > 0 ? (size_t) pg : 4096;
+
+    if (ggml_backend_dev_t cpu = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU)) {
+        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(cpu);
+        auto * n_split = (int (*)(void)) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cpu_numa_n_row_split");
+        if (n_split != nullptr && n_split() > 0) {
+            numa_willneed = (decltype(numa_willneed)) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cpu_numa_willneed_rows");
+        }
+    }
 #endif
     t_start_us = ggml_time_us();
     paused     = par.paused;
@@ -605,6 +615,13 @@ void llama_moe_predictor::prefetch_expert(int il, int e, bool low, uint64_t step
         }
         const size_t nb02 = t->nb[2];
         const uintptr_t slice = (uintptr_t) t->data + (uintptr_t) e*nb02;
+        if (numa_willneed != nullptr) {
+            numa_willneed((const void *) slice, t->nb[1], t->ne[1]);
+            if (low && n_high_pending.load(std::memory_order_relaxed) > 0) {
+                drain_high();
+            }
+            continue;
+        }
         for (size_t off = 0; off < nb02; off += MOE_PRED_PIECE) {
             const uintptr_t p   = slice + off;
             const uintptr_t n   = std::min(MOE_PRED_PIECE, nb02 - off);

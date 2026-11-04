@@ -700,12 +700,29 @@ void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
         struct ggml_numa_node * node = &g_state.numa.nodes[n];
         GGML_PRINT_DEBUG("CPUs on node %u:", n);
         node->n_cpus = 0;
-        for (uint32_t c = 0; c < g_state.numa.total_cpus; ++c) {
-            rv = snprintf(path, sizeof(path), "/sys/devices/system/node/node%u/cpu%u", n, c);
-            GGML_ASSERT(rv > 0 && (unsigned)rv < sizeof(path));
-            if (stat(path, &st) == 0) {
-                node->cpus[node->n_cpus++] = c;
-                GGML_PRINT_DEBUG(" %u", c);
+        // the first hardware thread of each core comes first, then the other threads of the cores (DISTRIBUTE pins
+        // thread j of a node to cpus[j], so the threads use separate cores before they share one)
+        for (int pass = 0; pass < 2; ++pass) {
+            for (uint32_t c = 0; c < g_state.numa.total_cpus; ++c) {
+                rv = snprintf(path, sizeof(path), "/sys/devices/system/node/node%u/cpu%u", n, c);
+                GGML_ASSERT(rv > 0 && (unsigned)rv < sizeof(path));
+                if (stat(path, &st) != 0) {
+                    continue;
+                }
+                unsigned int first = c;
+                rv = snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%u/topology/thread_siblings_list", c);
+                GGML_ASSERT(rv > 0 && (unsigned)rv < sizeof(path));
+                FILE * f = fopen(path, "r");
+                if (f) {
+                    if (fscanf(f, "%u", &first) != 1) {
+                        first = c;
+                    }
+                    fclose(f);
+                }
+                if ((first == c) == (pass == 0)) {
+                    node->cpus[node->n_cpus++] = c;
+                    GGML_PRINT_DEBUG(" %u", c);
+                }
             }
         }
         GGML_PRINT_DEBUG("\n");
@@ -729,6 +746,92 @@ void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
 
 bool ggml_is_numa(void) {
     return g_state.numa.n_nodes > 1;
+}
+
+// GGML_NUMA_STRATEGY_DISTRIBUTE: the threads are split into one contiguous block per node, and node k computes rows
+// [k*n/N, (k+1)*n/N) of a matrix product; ggml_numa_bind_rows / ggml_numa_willneed_rows put those rows in node k's memory
+int ggml_numa_n_row_split(void) {
+    return g_state.numa.numa_strategy == GGML_NUMA_STRATEGY_DISTRIBUTE && g_state.numa.n_nodes > 1 ? (int) g_state.numa.n_nodes : 0;
+}
+
+static int ggml_numa_thread_node(int ith, int nth, int n_nodes) {
+    return (int) ((int64_t) ith*n_nodes/nth);
+}
+
+// rows [*r0, *r1) of nr computed by thread ith; only valid if nth >= n_nodes
+static void ggml_numa_thread_rows(int ith, int nth, int n_nodes, int64_t nr, int64_t * r0, int64_t * r1) {
+    const int     k  = ggml_numa_thread_node(ith, nth, n_nodes);
+    const int     t0 = (int) (((int64_t) k*nth + n_nodes - 1)/n_nodes);
+    const int     t1 = (int) (((int64_t) (k + 1)*nth + n_nodes - 1)/n_nodes);
+    const int64_t a  = k*nr/n_nodes;
+    const int64_t b  = (k + 1)*nr/n_nodes;
+    *r0 = a + (b - a)*(ith - t0)/(t1 - t0);
+    *r1 = a + (b - a)*(ith - t0 + 1)/(t1 - t0);
+}
+
+#if defined(__gnu_linux__)
+#define GGML_NUMA_MPOL_DEFAULT 0
+#define GGML_NUMA_MPOL_BIND    2
+
+// page-aligned [beg, end) of node k's rows; a page shared by two nodes goes to the node that owns its first byte
+static void ggml_numa_node_pages(const void * data, size_t row_size, int64_t nrows, int k, int n_nodes, uintptr_t * beg, uintptr_t * end) {
+    const uintptr_t page = (uintptr_t) sysconf(_SC_PAGESIZE);
+    const uintptr_t p0   = (uintptr_t) data + (uintptr_t) (k*nrows/n_nodes)*row_size;
+    const uintptr_t p1   = (uintptr_t) data + (uintptr_t) ((k + 1)*nrows/n_nodes)*row_size;
+    *beg = (p0 + page - 1) & ~(page - 1);
+    *end = (p1 + page - 1) & ~(page - 1);
+}
+#endif
+
+void ggml_numa_bind_rows(void * data, size_t row_size, int64_t nrows) {
+#if defined(__gnu_linux__)
+    const int n_nodes = ggml_numa_n_row_split();
+    for (int k = 0; k < n_nodes; ++k) {
+        uintptr_t beg, end;
+        ggml_numa_node_pages(data, row_size, nrows, k, n_nodes, &beg, &end);
+        if (beg < end) {
+            unsigned long mask = 1ul << k;
+            // a hint for memory that is not touched yet: errors are ignored
+            (void) syscall(SYS_mbind, (void *) beg, end - beg, GGML_NUMA_MPOL_BIND, &mask, 8*sizeof(mask), 0);
+        }
+    }
+#else
+    GGML_UNUSED(data);
+    GGML_UNUSED(row_size);
+    GGML_UNUSED(nrows);
+#endif
+}
+
+#if defined(__gnu_linux__)
+// read-ahead of a file mapping, with the page cache pages allocated on node k (assumes the thread's default policy)
+static void ggml_numa_willneed_node(uintptr_t beg, uintptr_t end, int k) {
+    unsigned long mask = 1ul << k;
+    (void) syscall(SYS_set_mempolicy, GGML_NUMA_MPOL_BIND, &mask, 8*sizeof(mask));
+    for (uintptr_t p = beg; p < end; p += (uintptr_t) 2*1024*1024) {
+        (void) posix_madvise((void *) p, MIN(end - p, (uintptr_t) 2*1024*1024), POSIX_MADV_WILLNEED);
+    }
+    (void) syscall(SYS_set_mempolicy, GGML_NUMA_MPOL_DEFAULT, NULL, 0);
+}
+#endif
+
+void ggml_numa_willneed_rows(const void * data, size_t row_size, int64_t nrows) {
+#if defined(__gnu_linux__)
+    const int n_nodes = ggml_numa_n_row_split();
+    for (int k = 0; k < n_nodes; ++k) {
+        uintptr_t beg, end;
+        ggml_numa_node_pages(data, row_size, nrows, k, n_nodes, &beg, &end);
+        if (k == 0) {
+            beg = (uintptr_t) data & ~((uintptr_t) sysconf(_SC_PAGESIZE) - 1);
+        }
+        if (beg < end) {
+            ggml_numa_willneed_node(beg, end, k);
+        }
+    }
+#else
+    GGML_UNUSED(data);
+    GGML_UNUSED(row_size);
+    GGML_UNUSED(nrows);
+#endif
 }
 
 #if defined(__ARM_ARCH)
@@ -1432,6 +1535,16 @@ UseGgmlGemm2:;
     int64_t nchunk0 = (nr0 + chunk_size - 1) / chunk_size;
     int64_t nchunk1 = (nr1 + chunk_size - 1) / chunk_size;
 
+    // numa distribute: each thread computes rows that are in the memory of its node
+    const int n_numa = ggml_numa_n_row_split();
+    if (n_numa > 0 && nth >= n_numa && nr0 > nr1) {
+        int64_t ir0_start, ir0_end;
+        ggml_numa_thread_rows(ith, nth, n_numa, nr0, &ir0_start, &ir0_end);
+        const int64_t num_rows_per_vec_dot = (nr0 % 2 != 0) || (ne11 % 2 != 0) || ((ir0_end - ir0_start) % 2 != 0) || (nr1 % 2 != 0) ? 1 : vec_dot_num_rows;
+        ggml_compute_forward_mul_mat_one_chunk(params, dst, src0->type, num_rows_per_vec_dot, ir0_start, ir0_end, 0, nr1);
+        return;
+    }
+
     // If the chunking is poor for the number of threads on this setup, scrap the whole plan.  Re-chunk it by thread.
     //   Also, chunking by thread was measured to have perform better on NUMA systems.  See https://github.com/ggml-org/llama.cpp/pull/6915
     //   In theory, chunking should be just as useful on NUMA and non NUMA systems, but testing disagreed with that.
@@ -1583,6 +1696,34 @@ static void ggml_cpu_moe_prefetch_piece(const struct ggml_tensor * src0, int64_t
 static void ggml_cpu_mul_mat_id_prefetch(const struct ggml_tensor * src0, const int64_t * matrix_row_counts, int ith, int nth) {
     const int64_t n_as = src0->ne[2];
     const size_t  nb02 = src0->nb[2];
+
+#if defined(__gnu_linux__)
+    // numa distribute: the threads of node k read node k's rows of the used experts into node k's memory
+    const int n_numa = ggml_numa_n_row_split();
+    if (n_numa > 0 && nth >= n_numa) {
+        const int k  = ggml_numa_thread_node(ith, nth, n_numa);
+        const int t0 = (int) (((int64_t) k*nth + n_numa - 1)/n_numa);
+        const int t1 = (int) (((int64_t) (k + 1)*nth + n_numa - 1)/n_numa);
+        int64_t   j  = 0; // used expert index
+        for (int64_t a = 0; a < n_as; ++a) {
+            if (matrix_row_counts[a] == 0) {
+                continue;
+            }
+            if (j++ % (t1 - t0) == ith - t0) {
+                const char * slice = (const char *) src0->data + a*nb02;
+                uintptr_t beg, end;
+                ggml_numa_node_pages(slice, src0->nb[1], src0->ne[1], k, n_numa, &beg, &end);
+                if (k == 0) {
+                    beg = (uintptr_t) slice & ~(uintptr_t)(ggml_cpu_page_size - 1);
+                }
+                if (beg < end) {
+                    ggml_numa_willneed_node(beg, end, k);
+                }
+            }
+        }
+        return;
+    }
+#endif
 
     int64_t k = 0; // piece index over all used experts, in ascending expert order
     for (int64_t a = 0; a < n_as; ++a) {
@@ -1803,6 +1944,8 @@ static void ggml_compute_forward_mul_mat_id(
     int64_t used_rank = 0; // rank of cur_a among the used experts
 #endif
 
+    const int n_numa = ggml_numa_n_row_split();
+
     for (int cur_a = 0; cur_a < n_as; ++cur_a) {
         const int64_t cne1 = matrix_row_counts[cur_a];
 
@@ -1833,6 +1976,17 @@ static void ggml_compute_forward_mul_mat_id(
         int chunk_size = 16;
         if (nr0 == 1 || nr1 == 1) {
             chunk_size = 64;
+        }
+
+        if (n_numa > 0 && nth >= n_numa && nr0 > nr1) {
+            int64_t ir0_start, ir0_end;
+            ggml_numa_thread_rows(ith, nth, n_numa, nr0, &ir0_start, &ir0_end);
+            ggml_compute_forward_mul_mat_id_one_chunk(
+                dst, src0, src1, ids, cur_a,
+                ir0_start, ir0_end, 0, nr1,
+                src0_cur, matrix_rows, row_size, src1_cont, wdata
+            );
+            continue;
         }
 
         // disable for NUMA
@@ -2317,7 +2471,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
 
 // Android's libc implementation "bionic" does not support setting affinity
 #if defined(__gnu_linux__)
-static void set_numa_thread_affinity(int thread_n) {
+// cpu this thread is bound to by set_numa_thread_affinity (DISTRIBUTE), -1 if none
+static _Thread_local int ggml_numa_thread_bound = -1;
+
+static void set_numa_thread_affinity(int thread_n, int n_threads) {
     if (!ggml_is_numa()) {
         return;
     }
@@ -2328,9 +2485,32 @@ static void set_numa_thread_affinity(int thread_n) {
 
     switch(g_state.numa.numa_strategy) {
         case GGML_NUMA_STRATEGY_DISTRIBUTE:
-            // run thread on node_num thread_n / (threads per node)
-            node_num = thread_n % g_state.numa.n_nodes;
-            break;
+            {
+                // one contiguous block of threads per node, to match the row split of ggml_numa_thread_rows,
+                // and one cpu per thread
+                const int nth = MAX(n_threads, 1);
+                const int nn  = (int) g_state.numa.n_nodes;
+                node_num = ggml_numa_thread_node(thread_n, nth, nn);
+                const struct ggml_numa_node * node = &g_state.numa.nodes[node_num];
+                if (node->n_cpus == 0) {
+                    return;
+                }
+                const int t0  = (int) (((int64_t) node_num*nth + nn - 1)/nn);
+                const int cpu = (int) node->cpus[(thread_n - t0) % node->n_cpus];
+                if (cpu == ggml_numa_thread_bound) {
+                    return;
+                }
+                cpu_set_t * one = CPU_ALLOC(g_state.numa.total_cpus);
+                CPU_ZERO_S(setsize, one);
+                CPU_SET_S(cpu, setsize, one);
+                rv = pthread_setaffinity_np(pthread_self(), setsize, one);
+                if (rv) {
+                    fprintf(stderr, "warning: pthread_setaffinity_np() failed: %s\n", strerror(rv));
+                }
+                ggml_numa_thread_bound = rv == 0 ? cpu : -1;
+                CPU_FREE(one);
+            }
+            return;
         case GGML_NUMA_STRATEGY_ISOLATE:
             // run thread on current_node
             node_num = g_state.numa.current_node;
@@ -2366,6 +2546,7 @@ static void clear_numa_thread_affinity(void) {
     if (!ggml_is_numa()) {
         return;
     }
+    ggml_numa_thread_bound = -1;
 
     size_t setsize = CPU_ALLOC_SIZE(g_state.numa.total_cpus);
 
@@ -2385,7 +2566,7 @@ static void clear_numa_thread_affinity(void) {
 #else
 // TODO: Windows etc.
 // (the linux implementation may also work on BSD, someone should test)
-static void set_numa_thread_affinity(int thread_n) { UNUSED(thread_n);  }
+static void set_numa_thread_affinity(int thread_n, int n_threads) { UNUSED(thread_n); UNUSED(n_threads); }
 static void clear_numa_thread_affinity(void) {}
 #endif
 
@@ -3253,7 +3434,7 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
 #ifdef GGML_USE_CPU_RISCV64_SPACEMIT
     ggml_backend_cpu_riscv64_spacemit_set_numa_thread_affinity(state->ith);
 #else
-    set_numa_thread_affinity(state->ith);
+    set_numa_thread_affinity(state->ith, atomic_load_explicit(&tp->n_graph, memory_order_relaxed) & GGML_THREADPOOL_N_THREADS_MASK);
 #endif
 
     struct ggml_compute_params params = {

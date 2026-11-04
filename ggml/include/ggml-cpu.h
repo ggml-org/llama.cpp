@@ -37,6 +37,12 @@ extern "C" {
     GGML_BACKEND_API void    ggml_numa_init(enum ggml_numa_strategy numa); // call once for better performance on NUMA systems
     GGML_BACKEND_API bool    ggml_is_numa(void); // true if init detected that system has >1 NUMA node
 
+    // GGML_NUMA_STRATEGY_DISTRIBUTE splits the rows of a matrix product into one contiguous part per node; node k's
+    // threads compute rows [k*nrows/N, (k+1)*nrows/N). These place each part of a weight in its node's memory
+    GGML_BACKEND_API int     ggml_numa_n_row_split(void); // N, or 0 if rows are not split
+    GGML_BACKEND_API void    ggml_numa_bind_rows(void * data, size_t row_size, int64_t nrows); // call before the memory is first touched
+    GGML_BACKEND_API void    ggml_numa_willneed_rows(const void * data, size_t row_size, int64_t nrows); // read-ahead of a file mapping
+
     GGML_BACKEND_API struct ggml_tensor * ggml_new_i32(struct ggml_context * ctx, int32_t value);
     GGML_BACKEND_API struct ggml_tensor * ggml_new_f32(struct ggml_context * ctx, float value);
 
