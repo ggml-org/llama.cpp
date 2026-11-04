@@ -1661,7 +1661,7 @@ static void ggml_compute_forward_mul_mat_id(
             for (int id = 0; id < n_ids; ++id) {
                 const int32_t i02 = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + id*ids->nb[0]);
 
-                assert(i02 == -1 || (i02 >= 0 && i02 < n_as));
+                GGML_ASSERT(i02 == -1 || (i02 >= 0 && i02 < n_as));
 
                 if (i02 == -1) {
                     memset((char *) dst->data + id*nb1 + iid1*nb2, 0, ne0*sizeof(float));
