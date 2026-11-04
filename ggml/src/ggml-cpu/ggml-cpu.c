@@ -1436,7 +1436,6 @@ UseGgmlGemm1:;
     if (src1->type != vec_dot_type) {
         char * wdata = params->wdata;
 
-        const size_t nbw0 = ggml_type_size(vec_dot_type);
         const size_t nbw1 = ggml_row_size(vec_dot_type, ne10);
         const size_t nbw2 = nbw1*ne11;
         const size_t nbw3 = nbw2*ne12;
@@ -1448,40 +1447,28 @@ UseGgmlGemm1:;
         GGML_ASSERT(!widen || vec_dot_type == GGML_TYPE_F32);
         GGML_ASSERT(!widen || src1->type == GGML_TYPE_F16 || src1->type == GGML_TYPE_BF16);
 
-    #if 0
+        // one thread converts each row: a row written in pieces by many threads is slow to read for all of them
+        // afterwards (a 2-socket Broadwell GEMV ran at half the memory bandwidth)
+        int64_t ir = 0;
         for (int64_t i13 = 0; i13 < ne13; ++i13) {
             for (int64_t i12 = 0; i12 < ne12; ++i12) {
-                for (int64_t i11 = ith; i11 < ne11; i11 += nth) {
-                    from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
-                               (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
-                                ne10);
-                }
-            }
-        }
-    #else
-        const int64_t bs = ggml_blck_size(vec_dot_type);
-
-        for (int64_t i13 = 0; i13 < ne13; ++i13) {
-            for (int64_t i12 = 0; i12 < ne12; ++i12) {
-                for (int64_t i11 = 0; i11 < ne11; ++i11) {
-                    int64_t ne10_block_start = (ith * ne10/bs) / nth;
-                    int64_t ne10_block_end   = ((ith + 1) * ne10/bs) / nth;
-                    const void * src1_row  = (const char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11 + ne10_block_start*bs*nb10;
-                    void       * wdata_row =                    wdata  + i13*nbw3 + i12*nbw2 + i11*nbw1 + ne10_block_start*nbw0;
-
-                    const int64_t ne10_block_size = (ne10_block_end - ne10_block_start) * bs;
+                for (int64_t i11 = 0; i11 < ne11; ++i11, ++ir) {
+                    if (ir % nth != ith) {
+                        continue;
+                    }
+                    const void * src1_row  = (const char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11;
+                    void       * wdata_row =                    wdata  + i13*nbw3 + i12*nbw2 + i11*nbw1;
 
                     if (src1->type == GGML_TYPE_F16) {
-                        ggml_cpu_fp16_to_fp32((const ggml_fp16_t *) src1_row, (float *) wdata_row, ne10_block_size);
+                        ggml_cpu_fp16_to_fp32((const ggml_fp16_t *) src1_row, (float *) wdata_row, ne10);
                     } else if (src1->type == GGML_TYPE_BF16) {
-                        ggml_cpu_bf16_to_fp32((const ggml_bf16_t *) src1_row, (float *) wdata_row, ne10_block_size);
+                        ggml_cpu_bf16_to_fp32((const ggml_bf16_t *) src1_row, (float *) wdata_row, ne10);
                     } else {
-                        from_float((const float *) src1_row, wdata_row, ne10_block_size);
+                        from_float((const float *) src1_row, wdata_row, ne10);
                     }
                 }
             }
         }
-    #endif
     }
 
     if (ith == 0) {
@@ -1842,7 +1829,6 @@ static void ggml_compute_forward_mul_mat_id(
     if (src1->type != vec_dot_type) {
         char * wdata = params->wdata;
 
-        const size_t nbw0 = ggml_type_size(vec_dot_type);
         const size_t nbw1 = ggml_row_size(vec_dot_type, ne10);
         const size_t nbw2 = nbw1*ne11;
         const size_t nbw3 = nbw2*ne12;
@@ -1850,30 +1836,20 @@ static void ggml_compute_forward_mul_mat_id(
         assert(params->wsize >= ne13*nbw3);
         GGML_ASSERT(src1->type == GGML_TYPE_F32);
 
-#if 0
+        // one thread converts each row, see ggml_compute_forward_mul_mat
+        int64_t ir = 0;
         for (int64_t i13 = 0; i13 < ne13; ++i13) {
-            for (int64_t i12 = ith; i12 < ne12; i12 += nth) {
-                for (int64_t i11 = 0; i11 < ne11; ++i11) {
+            for (int64_t i12 = 0; i12 < ne12; ++i12) {
+                for (int64_t i11 = 0; i11 < ne11; ++i11, ++ir) {
+                    if (ir % nth != ith) {
+                        continue;
+                    }
                     from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
                                (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
                                ne10);
                 }
             }
         }
-#else
-        for (int64_t i13 = 0; i13 < ne13; ++i13) {
-            for (int64_t i12 = 0; i12 < ne12; ++i12) {
-                for (int64_t i11 = 0; i11 < ne11; ++i11) {
-                    size_t bs = ggml_blck_size(vec_dot_type);
-                    int64_t ne10_block_start = (ith * ne10/bs) / nth;
-                    int64_t ne10_block_end   = ((ith + 1) * ne10/bs) / nth;
-                    from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11 + ne10_block_start*bs*nb10),
-                               (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1 + ne10_block_start*nbw0),
-                               (ne10_block_end - ne10_block_start) * bs);
-                }
-            }
-        }
-#endif
     }
 
     if (ith == 0) {
