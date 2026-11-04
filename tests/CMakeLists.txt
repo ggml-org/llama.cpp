@@ -382,6 +382,9 @@ endif()
 llama_build_and_test(test-mtmd-c-api.c  LABEL behavior  LINK mtmd)
 
 llama_build_and_test(test-mtmd-impl.cpp  LABEL behavior  LINK mtmd)
+# mtmd is configured after tests; read its final build flag at generation time.
+target_compile_definitions(test-mtmd-impl PRIVATE "$<$<IN_LIST:MTMD_VIDEO,$<TARGET_PROPERTY:mtmd,COMPILE_DEFINITIONS>>:MTMD_VIDEO>")
+target_link_libraries(test-mtmd-impl PRIVATE vendor::sheredom)
 
 # GGUF model data fetcher library for tests that need real model metadata
 # Only compile when cpp-httplib has SSL support (CPPHTTPLIB_OPENSSL_SUPPORT)
