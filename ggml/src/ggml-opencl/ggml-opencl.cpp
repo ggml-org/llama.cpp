@@ -28372,8 +28372,9 @@ static void ggml_cl_mul_mat_q5_K_f32_adreno(ggml_backend_t backend, const ggml_t
     // (ne1==3) onto the efficient GEMV path instead of the transposed-GEMM dead-
     // zone (gemm_noshuffle_q5_k, the #2 chunk of MTP decode on a Q4_0-mix model
     // after q4_0 mc3). Reuses the ne1==1 GEMV image setup (q + qh + activations).
-    // Opt-in via GGML_OPENCL_Q5K_MC3=1. Per-layer only (ne01 < 32768).
-    static const bool q5k_mc3 = (getenv("GGML_OPENCL_Q5K_MC3") != nullptr);
+    // Default on for X2E, GGML_OPENCL_Q5_K_MC3=0/1 forces it. Per-layer only (ne01 < 32768).
+    static const char * q5k_mc3_env = getenv("GGML_OPENCL_Q5_K_MC3");
+    const bool q5k_mc3 = q5k_mc3_env ? atoi(q5k_mc3_env) != 0 : backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E;
     const bool use_q5k_mc3 = q5k_mc3 && (ne1 >= 2 && ne1 <= 4) && (ne01 < 32768);
 
     const bool use_bin = use_q5_k_bin_kernels(backend_ctx, src0);
@@ -28382,7 +28383,7 @@ static void ggml_cl_mul_mat_q5_K_f32_adreno(ggml_backend_t backend, const ggml_t
         if (use_q5k_mc3) {
             static bool warned = false;
             if (!warned) {
-                GGML_LOG_WARN("ggml_opencl: GGML_OPENCL_Q5K_MC3 is bypassed by Q5_K binary kernels\n");
+                GGML_LOG_WARN("ggml_opencl: GGML_OPENCL_Q5_K_MC3 is bypassed by Q5_K binary kernels\n");
                 warned = true;
             }
         }
