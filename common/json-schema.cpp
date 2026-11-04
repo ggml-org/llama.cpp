@@ -1,6 +1,9 @@
 #include "json-schema.h"
+#include "json-schema-to-grammar.h"
 #include "common.h"
+#include "../src/unicode.h"
 
+#include <algorithm>
 #include <cmath>
 #include <map>
 #include <stdexcept>
@@ -10,6 +13,86 @@
 #include <vector>
 
 namespace {
+// Use decimal spellings so fractions and large integers are not rounded again.
+struct decimal {
+    bool negative;
+    std::string digits;
+    int exponent;
+};
+
+static decimal parse_decimal(const common_json & number) {
+    std::string text = number.dump();
+    bool negative = text.front() == '-';
+    size_t start = negative ? 1 : 0;
+    size_t e = text.find_first_of("eE", start);
+    int exponent = e == std::string::npos ? 0 : std::stoi(text.substr(e + 1));
+    size_t dot = text.find('.', start);
+    if (dot != std::string::npos && (e == std::string::npos || dot < e)) {
+        exponent -= (e == std::string::npos ? text.size() : e) - dot - 1;
+        text.erase(dot, 1);
+        if (e != std::string::npos) {
+            --e;
+        }
+    }
+    std::string digits = text.substr(start, (e == std::string::npos ? text.size() : e) - start);
+    size_t first = digits.find_first_not_of('0');
+    if (first == std::string::npos) {
+        return {false, "0", 0};
+    }
+    digits.erase(0, first);
+    while (digits.size() > 1 && digits.back() == '0') {
+        digits.pop_back();
+        ++exponent;
+    }
+    return {negative, digits, exponent};
+}
+
+static std::pair<std::string, std::string> scaled_numbers(const decimal & a, const decimal & b) {
+    int scale = std::min(a.exponent, b.exponent);
+    return {a.digits == "0" ? "0" : a.digits + std::string(a.exponent - scale, '0'),
+            b.digits == "0" ? "0" : b.digits + std::string(b.exponent - scale, '0')};
+}
+
+static int compare_numbers(const common_json & left, const common_json & right) {
+    decimal a = parse_decimal(left);
+    decimal b = parse_decimal(right);
+    if (a.negative != b.negative) {
+        return a.negative ? -1 : 1;
+    }
+    auto [x, y] = scaled_numbers(a, b);
+    int order = x.size() == y.size() ? x.compare(y) : (x.size() < y.size() ? -1 : 1);
+    return a.negative ? -order : order;
+}
+
+static bool is_multiple(const common_json & value, const common_json & divisor) {
+    decimal a = parse_decimal(value);
+    decimal b = parse_decimal(divisor);
+    auto [number, base] = scaled_numbers(a, b);
+    std::string remainder;
+    for (char digit : number) {
+        remainder += digit;
+        remainder.erase(0, remainder.find_first_not_of('0'));
+        if (remainder.empty()) {
+            remainder = "0";
+        }
+        while (remainder.size() > base.size() || (remainder.size() == base.size() && remainder >= base)) {
+            int borrow = 0;
+            for (size_t i = 0; i < remainder.size(); ++i) {
+                size_t pos = remainder.size() - i - 1;
+                int sub = i < base.size() ? base[base.size() - i - 1] - '0' : 0;
+                int digit_value = remainder[pos] - '0' - sub - borrow;
+                borrow = digit_value < 0;
+                remainder[pos] = '0' + (digit_value + 10) % 10;
+            }
+            remainder.erase(0, remainder.find_first_not_of('0'));
+            if (remainder.empty()) {
+                remainder = "0";
+            }
+        }
+    }
+    return remainder == "0";
+}
+
 struct depth_guard {
     int & depth;
     depth_guard(int & depth) : depth(depth) {
@@ -238,6 +321,91 @@ class common_chat_schema_builder {
 
     int depth_ = 0;
 
+    bool matches_finite_siblings(const common_json & schema, const common_json & value, const std::string & path) {
+        if (schema.contains("type")) {
+            const auto & types = schema.at("type");
+            auto matches_type = [&](const common_json & type) {
+                if (!type.is_string()) {
+                    fail(path, "type must be a string or an array of strings");
+                }
+                const std::string name = type.get<std::string>();
+                if (name == "null")    return value.is_null();
+                if (name == "boolean") return value.is_boolean();
+                if (name == "string")  return value.is_string();
+                if (name == "array")   return value.is_array();
+                if (name == "object")  return value.is_object();
+                if (name == "number")  return value.is_number();
+                if (name == "integer") return value.is_number() && parse_decimal(value).exponent >= 0;
+                fail(path, "unrecognized type " + name);
+            };
+            bool valid = false;
+            if (types.is_array()) {
+                if (types.empty()) {
+                    fail(path, "type must not be empty");
+                }
+                for (const auto & type : types) {
+                    valid = matches_type(type) || valid;
+                }
+            } else {
+                valid = matches_type(types);
+            }
+            if (!valid) {
+                return false;
+            }
+        }
+        if (schema.contains("enum") && schema.contains("const")) {
+            if (!schema.at("enum").is_array() || schema.at("enum").empty()) {
+                fail(path, "enum must be a non-empty array");
+            }
+            bool found = false;
+            for (const auto & member : schema.at("enum")) {
+                if (value.is_number() && member.is_number() ? compare_numbers(value, member) == 0 : value == member) {
+                    found = true;
+                }
+            }
+            if (!found) {
+                return false;
+            }
+        }
+        if (value.is_string()) {
+            if (schema.contains("minLength") || schema.contains("maxLength")) {
+                size_t length = unicode_cpts_from_utf8(value.get<std::string>()).size();
+                if (length < (size_t) get_count(schema, "minLength", path, 0) ||
+                    (schema.contains("maxLength") && length > (size_t) get_count(schema, "maxLength", path, 0))) {
+                    return false;
+                }
+            }
+        }
+        if (value.is_number()) {
+            for (const auto & key : {"minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"}) {
+                if (!schema.contains(key)) {
+                    continue;
+                }
+                const auto & bound = schema.at(key);
+                if (!bound.is_number()) {
+                    fail(path, std::string(key) + " must be a number");
+                }
+                int order = compare_numbers(value, bound);
+                if ((std::string(key) == "minimum" && order < 0) ||
+                    (std::string(key) == "maximum" && order > 0) ||
+                    (std::string(key) == "exclusiveMinimum" && order <= 0) ||
+                    (std::string(key) == "exclusiveMaximum" && order >= 0)) {
+                    return false;
+                }
+            }
+            if (schema.contains("multipleOf")) {
+                const auto & divisor = schema.at("multipleOf");
+                if (!divisor.is_number() || compare_numbers(divisor, common_json(0)) <= 0) {
+                    fail(path, "multipleOf must be a positive number");
+                }
+                if (!is_multiple(value, divisor)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
     common_chat_schema_ptr build_node(const common_json & schema, const std::string & path) {
         depth_guard guard(depth_);
         return build_node_impl(schema, path);
@@ -259,6 +427,39 @@ class common_chat_schema_builder {
         if (schema.contains("type")) {
             type = schema.at("type");
         }
+        if (schema.contains("const") || schema.contains("enum")) {
+            std::vector<common_json> candidates;
+            if (schema.contains("enum")) {
+                const auto & values = schema.at("enum");
+                if (!values.is_array() || values.empty()) {
+                    fail(path, "enum must be a non-empty array");
+                }
+                if (!schema.contains("const")) {
+                    for (const auto & value : values) {
+                        candidates.push_back(value);
+                    }
+                }
+            }
+            if (schema.contains("const")) {
+                candidates.push_back(schema.at("const"));
+            }
+            candidates.erase(std::remove_if(candidates.begin(), candidates.end(), [&](const common_json & value) {
+                return !matches_finite_siblings(schema, value, path);
+            }), candidates.end());
+            if (schema.contains("pattern")) {
+                const auto & pattern = schema.at("pattern");
+                if (!pattern.is_string()) {
+                    fail(path, "pattern must be a string");
+                }
+                json_schema_filter_pattern(pattern.get<std::string>(), candidates);
+            }
+            if (schema.contains("const") && !candidates.empty()) {
+                return std::make_unique<common_chat_schema_const>(candidates.front());
+            }
+            auto node = std::make_unique<common_chat_schema_enum>();
+            node->values = std::move(candidates);
+            return node;
+        }
         if (type.is_array()) {
             // {"type": ["a", "b"], ...} is {"anyOf": [{"type": "a", ...}, {"type": "b", ...}]}
             if (type.empty()) {
@@ -270,20 +471,6 @@ class common_chat_schema_builder {
                 common_json alt = schema;
                 alt["type"] = t;
                 node->children.push_back(build_node(alt, path + "/type/" + std::to_string(i++)));
-            }
-            return node;
-        }
-        if (schema.contains("const")) {
-            return std::make_unique<common_chat_schema_const>(schema.at("const"));
-        }
-        if (schema.contains("enum")) {
-            const common_json & values = schema.at("enum");
-            if (!values.is_array() || values.empty()) {
-                fail(path, "enum must be a non-empty array");
-            }
-            auto node = std::make_unique<common_chat_schema_enum>();
-            for (const auto & value : values) {
-                node->values.push_back(value);
             }
             return node;
         }

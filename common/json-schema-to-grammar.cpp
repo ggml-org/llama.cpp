@@ -2,10 +2,13 @@
 #include "common.h"
 #include "trie.h"
 #include "unicode.h"
+#include "../src/llama-grammar.h"
 
 #include <algorithm>
+#include <cctype>
 #include <limits>
 #include <map>
+#include <memory>
 #include <regex>
 #include <sstream>
 #include <string>
@@ -427,7 +430,7 @@ private:
         }
     }
 
-    std::string _pattern_to_rule(const std::string & pattern, const std::string & name) {
+    std::string _pattern_to_rule(const std::string & pattern, const std::string & name, bool json_string = true) {
         if (pattern.length() < 2 || pattern.front() != '^' || pattern.back() != '$') {
             throw unsupported_pattern("not anchored with '^' and '$'");
         }
@@ -651,7 +654,7 @@ private:
             throw invalid_pattern("unbalanced parentheses");
         }
 
-        return _add_rule(name, "\"\\\"\" (" + rule + ") \"\\\"\"");
+        return _add_rule(name, json_string ? "\"\\\"\" (" + rule + ") \"\\\"\"" : (rule.empty() ? "\"\"" : rule));
     }
 
     /*
@@ -844,6 +847,91 @@ public:
         _rules["space"] = SPACE_RULE;
     }
 
+    void filter_pattern(const std::string & pattern, std::vector<common_json> & values) {
+        if (std::none_of(values.begin(), values.end(), [](const common_json & value) { return value.is_string(); })) {
+            return;
+        }
+        int groups = 0;
+        bool in_class = false;
+        bool has_dot = false;
+        for (size_t i = 0; i < pattern.size(); ++i) {
+            if (pattern[i] == '\\') {
+                if (i + 1 < pattern.size() && pattern[i + 1] == 'U') {
+                    throw std::invalid_argument("Cannot validate enum pattern with a \\U escape");
+                }
+                if (i + 5 < pattern.size() && pattern[i + 1] == 'u') {
+                    bool hex = true;
+                    for (size_t j = i + 2; j < i + 6; ++j) {
+                        hex &= std::isxdigit(static_cast<unsigned char>(pattern[j])) != 0;
+                    }
+                    if (hex) {
+                        unsigned codepoint = std::stoul(pattern.substr(i + 2, 4), nullptr, 16);
+                        if (codepoint >= 0xD800 && codepoint <= 0xDFFF) {
+                            throw std::invalid_argument("Cannot validate enum pattern with a surrogate escape");
+                        }
+                    }
+                }
+                ++i;
+                continue;
+            }
+            if (pattern[i] == '[') {
+                in_class = true;
+            } else if (pattern[i] == ']') {
+                in_class = false;
+            }
+            if (in_class) {
+                continue;
+            }
+            has_dot = has_dot || pattern[i] == '.';
+            if (pattern[i] == '(') {
+                ++groups;
+            } else if (pattern[i] == ')') {
+                --groups;
+            }
+            if (pattern[i] == '|' && groups == 0) {
+                throw std::invalid_argument("Cannot validate enum pattern with top-level alternatives");
+            }
+        }
+        try {
+            _pattern_to_rule(pattern, "root", false);
+        } catch (const std::runtime_error & err) {
+            throw std::invalid_argument("Cannot validate enum pattern: " + std::string(err.what()));
+        }
+        std::unique_ptr<llama_grammar, decltype(&llama_grammar_free_impl)> grammar(
+            llama_grammar_init_impl(nullptr, format_grammar().c_str(), "root", false, nullptr, 0, nullptr, 0),
+            llama_grammar_free_impl);
+        if (!grammar) {
+            throw std::invalid_argument("Cannot validate enum pattern");
+        }
+        const auto initial_stacks = grammar->stacks;
+        std::vector<common_json> filtered;
+        for (const auto & value : values) {
+            if (!value.is_string()) {
+                filtered.push_back(value);
+                continue;
+            }
+            const std::string text = value.get<std::string>();
+            if (has_dot &&
+                (text.find(u8"\u2028") != std::string::npos || text.find(u8"\u2029") != std::string::npos)) {
+                throw std::invalid_argument("Cannot validate enum dot pattern with a line separator");
+            }
+            grammar->stacks = initial_stacks;
+            grammar->partial_utf8 = {};
+            try {
+                llama_grammar_accept_str(*grammar, text);
+            } catch (const std::runtime_error &) {
+                continue;
+            }
+            for (const auto & stack : grammar->stacks) {
+                if (stack.empty()) {
+                    filtered.push_back(value);
+                    break;
+                }
+            }
+        }
+        values = std::move(filtered);
+    }
+
     std::string add_schema(const std::string & name, const common_chat_schema & schema) {
         return visit(schema, name);
     }
@@ -856,7 +944,49 @@ public:
         return _add_primitive(rule_name == "root" ? "root" : type, PRIMITIVE_RULES.at(type));
     }
 
+    bool has_empty_finite_branch(const common_chat_schema & schema, std::unordered_map<const common_chat_schema *, bool> & checked, int depth = 0) {
+        if (depth >= COMMON_RECURSIVE_LIMIT) {
+            throw std::invalid_argument("JSON schema is nested more than " + std::to_string(COMMON_RECURSIVE_LIMIT) + " levels deep");
+        }
+        auto cached = checked.find(&schema);
+        if (cached != checked.end()) {
+            return cached->second;
+        }
+        if (schema.kind() == common_chat_schema::KIND_ENUM) {
+            return checked[&schema] = as<common_chat_schema_enum>(schema).values.empty();
+        }
+        if (schema.kind() == common_chat_schema::KIND_REF) {
+            const auto * target = as<common_chat_schema_ref>(schema).target;
+            return checked[&schema] = target && has_empty_finite_branch(*target, checked, depth + 1);
+        }
+        if (schema.kind() == common_chat_schema::KIND_ALL_OF) {
+            for (const auto & child : as<common_chat_schema_all_of>(schema).children) {
+                if (has_empty_finite_branch(*child, checked, depth + 1)) {
+                    return checked[&schema] = true;
+                }
+            }
+        }
+        if (schema.kind() == common_chat_schema::KIND_ANY_OF) {
+            for (const auto & child : as<common_chat_schema_any_of>(schema).children) {
+                if (!has_empty_finite_branch(*child, checked, depth + 1)) {
+                    return checked[&schema] = false;
+                }
+            }
+            return checked[&schema] = true;
+        }
+        return checked[&schema] = false;
+    }
+
     std::string _visit_all_of(const common_chat_schema_all_of & schema, const std::string & name, const std::string & rule_name) {
+        std::unordered_map<const common_chat_schema *, bool> checked;
+        for (const auto & child : schema.children) {
+            if (has_empty_finite_branch(*child, checked)) {
+                if (name.empty()) {
+                    _errors.push_back("No enum or const values satisfy the sibling constraints");
+                }
+                return _add_rule(rule_name, "[^\\U00000000-\\U0010FFFF]");
+            }
+        }
         std::unordered_set<std::string> required;
         std::vector<std::pair<std::string, const common_chat_schema *>> properties;
         std::map<std::string, size_t> enum_values;
@@ -909,6 +1039,13 @@ public:
         depth_guard guard(_depth);
         std::string rule_name = is_reserved_name(name) ? name + "-" : name.empty() ? "root" : name;
         std::string sub_name  = name + (name.empty() ? "" : "-");
+
+        if (schema.kind() == common_chat_schema::KIND_ENUM && as<common_chat_schema_enum>(schema).values.empty()) {
+            if (name.empty()) {
+                _errors.push_back("No enum or const values satisfy the sibling constraints");
+            }
+            return _add_rule(rule_name, "[^\\U00000000-\\U0010FFFF]");
+        }
 
         switch (schema.kind()) {
             case common_chat_schema::KIND_REF:
@@ -1021,6 +1158,10 @@ public:
         return ss.str();
     }
 };
+
+void json_schema_filter_pattern(const std::string & pattern, std::vector<common_json> & values) {
+    common_chat_schema_converter(false).filter_pattern(pattern, values);
+}
 
 std::string json_schema_to_grammar(const common_json & schema, bool force_gbnf) {
 #ifdef LLAMA_USE_LLGUIDANCE
