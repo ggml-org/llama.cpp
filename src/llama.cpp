@@ -193,6 +193,7 @@ static bool llama_prepare_model_devices(const llama_model_params & params, llama
             model->get_split_state_ud.model = model;
             model->get_split_state_ud.dist_tp_rank = dist_tp_rank;
             model->get_split_state_ud.dist_tp_world_size = dist_tp_world_size;
+            model->get_split_state_ud.fa_head_map = llama_devs_support_fa_head_map(params.devices, n_devs);
             const ggml_backend_meta_dist_cfg dist_cfg = {
                 /* .world_rank = */ dist_tp_rank,
                 /* .world_size = */ dist_tp_world_size,
@@ -240,6 +241,7 @@ static bool llama_prepare_model_devices(const llama_model_params & params, llama
             model->get_split_state_ud.model     = model;
             model->get_split_state_ud.dist_tp_rank = dist_tp_rank;
             model->get_split_state_ud.dist_tp_world_size = dist_tp_world_size;
+            model->get_split_state_ud.fa_head_map = llama_devs_support_fa_head_map(devs.data(), devs.size());
             const ggml_backend_meta_dist_cfg dist_cfg = {
                 /* .world_rank = */ dist_tp_rank,
                 /* .world_size = */ dist_tp_world_size,

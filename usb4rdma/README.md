@@ -268,16 +268,23 @@ get their own connection): every all-reduce up to 64 KiB goes to all peers at on
 round the ring, with the same sum order as the ring. At 4 ranks the transport line shows the
 diagonal and only says `all payloads over ND` when it is on ND too.
 
-`run_disttp.ps1` sets or clears the `LLAMA_DIST_TP_*` switches below on every rank; pass the others,
-and the opt-in ones it only clears, with `-ExtraEnv 'NAME=value;NAME=value'`. For a manual run:
+Attention is split by whole KV groups, except in a layer whose KV heads do not divide by the rank
+count, where that would leave one rank much more work: Qwen3-235B's 4 KV heads on 3 ranks give 16, 16
+and 32 of its 64 query heads by whole groups. Such a layer is split by query heads instead (20, 22
+and 22) when that gives every rank fewer query heads than the busiest rank had, and no more KV heads,
+and the backend runs the flash attention head map (Vulkan and the CPU do). Each rank then keeps every
+KV head its query heads use, so a KV head on a boundary is projected and cached on both ranks. Each
+rank logs `dist-tp attention split by query heads` with its heads in the first such layer. Qwen3.5's
+gated DeltaNet layers are split across the ranks; Qwen3-Next's run whole on every rank.
+
+`run_disttp.ps1` sets or clears the `LLAMA_DIST_TP_*` switches below on every rank; pass the others
+with `-ExtraEnv 'NAME=value;NAME=value'`. For a manual run:
 
 | Variable | Effect |
 |---|---|
 | `LLAMA_DIST_TP_RDMA=0` | run this rank's edges on TCP, still over the cables. By default an edge runs on NetworkDirect when its two ranks have ND capable addresses on one subnet, the cable between them. The rendezvous is always TCP |
 | `LLAMA_DIST_TP_RDMA_DEBUG=1` | log each ND listener, connection request, connect and teardown |
 | `LLAMA_DIST_TP_WIRE_F32=1` | the boundary all-reduce carries f32 on the wire. By default it carries f16, half the bytes: each payload is scaled by a power of two so its largest value fits, and the sums stay f32, so the output can differ slightly from an f32 run. Same value on every rank |
-| `LLAMA_DIST_TP_ATTN_REBALANCE=1` | split attention by query heads instead of whole KV groups, so a model whose KV head count does not divide by the rank count still gets an even share; each rank keeps the KV heads its query heads use. Same value on every rank |
-| `LLAMA_DIST_TP_SPLIT_RECURRENT=1` | Qwen3.5 and Qwen3.5-MoE: split the gated DeltaNet (recurrent) layers across the ranks. Unset, they run whole on every rank, which is always the case for Qwen3-Next. Use the same value on every rank |
 | `LLAMA_DISTPROF=1` | print one `[distprof]` cost line per graph (GPU wait, time in the collective, bytes) |
 | `GGML_TRACE=1` | write an HTML trace of the graph steps to `GGML_TRACE_HTML` (default `llama-trace.html`), bounded by `GGML_TRACE_MAX_STEPS` and `GGML_TRACE_MAX_EVENTS` |
 

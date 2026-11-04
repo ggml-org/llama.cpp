@@ -2471,7 +2471,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
             int32_t hm_off = 0;
             int32_t hm_gqa = 0;
             if (llama_dist_attn_headmap(il, &hm_off, &hm_gqa)) {
-                GGML_ABORT("LLAMA_DIST_TP_ATTN_REBALANCE needs flash attention (-fa on)");
+                GGML_ABORT("the dist-tp attention split by query heads needs flash attention (-fa on)");
             }
         }
 

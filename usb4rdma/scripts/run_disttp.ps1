@@ -45,8 +45,7 @@ param(
   # connection request, connect and teardown. For diagnosing an edge, not for timing.
   [switch]$RdmaDebug,
   # More environment for every rank, 'NAME=value;NAME=value', set after the variables above so it
-  # can override them: the Vulkan switches in the README,
-  # LLAMA_DIST_TP_SPLIT_RECURRENT=1. A value must not contain & | < > ^ " or %.
+  # can override them: the Vulkan switches in the README. A value must not contain & | < > ^ " or %.
   [string]$ExtraEnv = '',
   # Start ranks 1..N-1 detached, then STOP and print the exact command to run by hand in a console
   # on rank 0. llama.cpp block-buffers stdout when it is not attached to a console, so this is the
@@ -123,8 +122,6 @@ function RankEnv([int]$rank){
     # A name whitelist for collectives; setting it can silently drop required all-reduces.
     'LLAMA_DIST_TP_COLLECT_PREFIXES='
     "LLAMA_DIST_TP_RDMA_DEBUG=$(if($RdmaDebug){1})"
-    # Off unless -ExtraEnv sets it. It must be the same on every rank.
-    'LLAMA_DIST_TP_SPLIT_RECURRENT='
   )
 }
 # A rank's whole environment: RankEnv without the names -ExtraEnv sets, then -ExtraEnv (also at

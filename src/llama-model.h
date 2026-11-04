@@ -546,14 +546,18 @@ struct llama_meta_device_get_split_state_userdata {
     const struct llama_model * model;
     int                        dist_tp_rank = 0;
     int                        dist_tp_world_size = 1;
+    bool                       fa_head_map = false; // the devices run ggml_flash_attn_ext_set_head_map
 };
 
 struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const struct ggml_tensor * tensor, void * userdata);
 bool llama_meta_device_get_tensor_shard_view(const struct ggml_tensor * tensor, void * userdata, struct llama_tensor_shard_view * out);
 
-// dist-tp attention rebalance (LLAMA_DIST_TP_ATTN_REBALANCE=1, llama-model.cpp): in layer il, local query head h of this
-// rank uses local KV head (h + *q_off) / *n_gqa. false when the layer is split by whole KV groups (the default).
+// dist-tp attention split by query heads (llama-model.cpp): in layer il, local query head h of this rank uses
+// local KV head (h + *q_off) / *n_gqa. false when the layer is split by whole KV groups.
 bool llama_dist_attn_headmap(int il, int32_t * q_off, int32_t * n_gqa);
+
+// whether every device runs flash attention with a head map (ggml_flash_attn_ext_set_head_map)
+bool llama_devs_support_fa_head_map(ggml_backend_dev_t * devs, size_t n_devs);
 
 struct llama_model {
     llm_type type = LLM_TYPE_UNKNOWN;

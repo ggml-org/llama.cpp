@@ -341,8 +341,8 @@ llama_model * llama_model_create(llama_model_loader & ml, const llama_model_para
 
 #include <atomic>
 
-// dist-tp attention rebalance (LLAMA_DIST_TP_ATTN_REBALANCE=1) head map, one entry per layer:
-// 0 = layer not rebalanced, else 1 + q_off + (n_gqa << 16). Filled while the split states are computed (model load).
+// dist-tp attention split by query heads, head map per layer: 0 = layer split by whole KV groups,
+// else 1 + q_off + (n_gqa << 16). Filled while the split states are computed (model load).
 static std::atomic<int32_t> g_dist_attn_headmap[4096];
 
 static void llama_dist_attn_headmap_set(uint32_t il, int32_t q_off, int32_t n_gqa) {
@@ -374,33 +374,15 @@ static ggml_backend_meta_split_state llama_meta_device_get_split_state_impl(
         *shard_view = {};
     }
 
-    static const bool dist_split_recurrent = [] {
-        const char * env = std::getenv("LLAMA_DIST_TP_SPLIT_RECURRENT");
-        return env != nullptr && std::atoi(env) != 0;
-    }();
-
-    // dist-tp attention rebalance (LLAMA_DIST_TP_ATTN_REBALANCE=1): split the query heads of an attention layer at
-    // head granularity instead of whole KV groups (Qwen3-235B, 4 KV heads on 3 ranks: 16/16/32 query heads by
-    // default, 20/22/22 with this) and give each rank every KV head its query heads use. The KV shards overlap
-    // between ranks (a shared KV head is projected and cached on both); the FA op carries the head map
-    // (llama_dist_attn_headmap, set in llm_graph_context::build_attn_mha). Needs flash attention.
-    static const bool dist_attn_rebalance = [] {
-        const char * env = std::getenv("LLAMA_DIST_TP_ATTN_REBALANCE");
-        return env != nullptr && std::atoi(env) != 0;
-    }();
-    auto attn_rebalance = [&](uint32_t il) -> bool {
-        if (!dist_attn_rebalance || ud->dist_tp_world_size <= 1 || ud->n_devices != 1 || il >= hparams.n_layer() ||
-                hparams.is_recr(il) || hparams.n_gqa(il) <= 1 || hparams.n_embd_k_gqa(il) != hparams.n_embd_v_gqa(il) ||
-                ud->model->arch == LLM_ARCH_QWEN3NEXT || ud->model->arch == LLM_ARCH_QWEN35 || ud->model->arch == LLM_ARCH_QWEN35MOE) {
-            return false;
-        }
-        const std::string prefix = "blk." + std::to_string(il) + ".";
-        const ggml_tensor * q_norm = ud->model->get_tensor((prefix + "attn_q_norm.weight").c_str());
-        return ud->model->get_tensor((prefix + "attn_q.weight").c_str())      != nullptr &&
-               ud->model->get_tensor((prefix + "attn_output.weight").c_str()) != nullptr &&
-               (q_norm == nullptr || q_norm->ne[1] == 1);
-    };
-    // query granularity of a rebalanced layer in elements, from the block size of attn_output as for the default split
+    // dist-tp: split the query heads of an attention layer by heads instead of whole KV groups when its KV heads do
+    // not divide by the rank count (Qwen3-235B, 4 KV heads on 3 ranks: 16/16/32 query heads by whole groups,
+    // 20/22/22 by heads). Each rank keeps every KV head its query heads use, so a KV head on a boundary is projected
+    // and cached on both ranks; the FA op carries the head map (ggml_flash_attn_ext_set_head_map, set in
+    // llm_graph_context::build_attn_mha). Used only where, on every rank, the query heads divide by the KV heads,
+    // there are no more KV heads and fewer query heads than the busiest rank has by whole groups, and only when the
+    // device runs the head map.
+    //
+    // query granularity of a layer split by heads in elements, from the block size of attn_output as for whole groups
     auto attn_rebalance_granularity = [&](uint32_t il, int64_t blck_size) -> int64_t {
         const int64_t head_dim = hparams.n_embd_head_k(il);
         int64_t blck_size_perf = blck_size;
@@ -409,13 +391,12 @@ static ggml_backend_meta_split_state llama_meta_device_get_split_state_impl(
         }
         return std::lcm(head_dim, blck_size_perf);
     };
-    // this rank's query heads [qlo, qhi) and KV heads [klo, khi) of a rebalanced layer; records the head map
-    auto attn_rebalance_heads = [&](uint32_t il, int64_t & qlo, int64_t & qhi, int64_t & klo, int64_t & khi) {
+    // query heads [qlo, qhi) and KV heads [klo, khi) of a rank when layer il is split by query heads
+    auto attn_head_split = [&](uint32_t il, int rank, int64_t & qlo, int64_t & qhi, int64_t & klo, int64_t & khi) {
         const ggml_tensor * wo = ud->model->get_tensor(("blk." + std::to_string(il) + ".attn_output.weight").c_str());
         GGML_ASSERT(wo != nullptr);
         const int64_t head_dim = hparams.n_embd_head_k(il);
         const int64_t n_gqa    = hparams.n_gqa(il);
-        const int     rank     = std::max(0, std::min(ud->dist_tp_rank, ud->dist_tp_world_size - 1));
         ggml_backend_meta_dist_split_bounds(head_dim*hparams.n_head(il), attn_rebalance_granularity(il, ggml_blck_size(wo->type)),
             rank, ud->dist_tp_world_size, &qlo, &qhi);
         GGML_ASSERT(qlo % head_dim == 0 && qhi % head_dim == 0);
@@ -423,11 +404,43 @@ static ggml_backend_meta_split_state llama_meta_device_get_split_state_impl(
         qhi /= head_dim;
         klo = qlo / n_gqa;
         khi = (qhi + n_gqa - 1) / n_gqa;
+    };
+    auto attn_rebalance = [&](uint32_t il) -> bool {
+        if (!ud->fa_head_map || ud->dist_tp_world_size <= 1 || ud->n_devices != 1 || il >= hparams.n_layer() ||
+                hparams.is_recr(il) || hparams.n_gqa(il) <= 1 || hparams.n_embd_k_gqa(il) != hparams.n_embd_v_gqa(il) ||
+                hparams.n_head_kv(il) % ud->dist_tp_world_size == 0 ||
+                ud->model->arch == LLM_ARCH_QWEN3NEXT || ud->model->arch == LLM_ARCH_QWEN35 || ud->model->arch == LLM_ARCH_QWEN35MOE) {
+            return false;
+        }
+        const std::string prefix = "blk." + std::to_string(il) + ".";
+        const ggml_tensor * q_norm = ud->model->get_tensor((prefix + "attn_q_norm.weight").c_str());
+        if (ud->model->get_tensor((prefix + "attn_q.weight").c_str())      == nullptr ||
+            ud->model->get_tensor((prefix + "attn_output.weight").c_str()) == nullptr ||
+            (q_norm != nullptr && q_norm->ne[1] != 1)) {
+            return false;
+        }
+        // KV heads of the busiest rank by whole groups
+        const int64_t kv_max = (hparams.n_head_kv(il) + ud->dist_tp_world_size - 1) / ud->dist_tp_world_size;
+        for (int r = 0; r < ud->dist_tp_world_size; ++r) {
+            int64_t qlo = 0, qhi = 0, klo = 0, khi = 0;
+            attn_head_split(il, r, qlo, qhi, klo, khi);
+            if (qhi <= qlo || (qhi - qlo) % (khi - klo) != 0 || khi - klo > kv_max ||
+                    qhi - qlo >= kv_max*(int64_t) hparams.n_gqa(il)) {
+                return false;
+            }
+        }
+        return true;
+    };
+    // this rank's query and KV heads of a layer split by query heads; records the head map
+    auto attn_rebalance_heads = [&](uint32_t il, int64_t & qlo, int64_t & qhi, int64_t & klo, int64_t & khi) {
+        const int64_t n_gqa = hparams.n_gqa(il);
+        const int     rank  = std::max(0, std::min(ud->dist_tp_rank, ud->dist_tp_world_size - 1));
+        attn_head_split(il, rank, qlo, qhi, klo, khi);
         llama_dist_attn_headmap_set(il, (int32_t) (qlo - klo*n_gqa), (int32_t) n_gqa);
         static std::atomic<bool> logged{false};
         if (!logged.exchange(true)) {
-            LLAMA_LOG_INFO("llama_meta_device_get_split_state: dist-tp attention rebalance: rank %d of %d, layer %u: "
-                "query heads %lld..%lld, KV heads %lld..%lld, q_off %lld\n", rank, ud->dist_tp_world_size, il,
+            LLAMA_LOG_INFO("llama_meta_device_get_split_state: dist-tp attention split by query heads: rank %d of %d, "
+                "layer %u: query heads %lld..%lld, KV heads %lld..%lld, q_off %lld\n", rank, ud->dist_tp_world_size, il,
                 (long long) qlo, (long long) qhi - 1, (long long) klo, (long long) khi - 1, (long long) (qlo - klo*n_gqa));
         }
     };
@@ -522,16 +535,12 @@ static ggml_backend_meta_split_state llama_meta_device_get_split_state_impl(
     };
 
     auto get_tensor_config = [&]() -> tensor_config {
-        // dist-tp: keep the gated DeltaNet (linear attention) layers of Qwen3-Next/Qwen3.5 whole on every
-        // rank. Their head-aware split below gives one rank several segments (n_segments = nr_s), and the
-        // DeltaNet graph reshapes those tensors, which the meta backend allows for one segment only
-        // (handle_reshape: GGML_ASSERT(src_ss[0].n_segments == 1)). Mirrored, the block runs on every
-        // rank with no collective; full attention, the FFN and the output still split.
-        // LLAMA_DIST_TP_SPLIT_RECURRENT=1 splits Qwen3.5's DeltaNet layers too (one segment repeated
-        // nr_s times, see below); Qwen3-Next's two-segment qkv still needs the mirror.
-        if (ud->dist_tp_world_size > 1 && ud->n_devices == 1 &&
-                !(dist_split_recurrent && ud->model->arch != LLM_ARCH_QWEN3NEXT) &&
-                (ud->model->arch == LLM_ARCH_QWEN3NEXT || ud->model->arch == LLM_ARCH_QWEN35 || ud->model->arch == LLM_ARCH_QWEN35MOE) &&
+        // dist-tp: keep the gated DeltaNet (linear attention) layers of Qwen3-Next whole on every rank. The
+        // DeltaNet graph reshapes their tensors, which the meta backend allows for one segment only
+        // (handle_reshape: GGML_ASSERT(src_ss[0].n_segments == 1)), and Qwen3-Next's qkv has two. Mirrored,
+        // the block runs on every rank with no collective; full attention, the FFN and the output still
+        // split. Qwen3.5's DeltaNet tensors repeat one segment, and split (see below).
+        if (ud->dist_tp_world_size > 1 && ud->n_devices == 1 && ud->model->arch == LLM_ARCH_QWEN3NEXT &&
                 (std::regex_match(tensor_name, pattern_qkv_weight)     || std::regex_match(tensor_name, pattern_attn_gate_weight) ||
                  std::regex_match(tensor_name, pattern_ssm_dt)         || std::regex_match(tensor_name, pattern_ssm_a)            ||
                  std::regex_match(tensor_name, pattern_ssm_alpha)      || std::regex_match(tensor_name, pattern_ssm_beta)         ||
@@ -868,9 +877,10 @@ static ggml_backend_meta_split_state llama_meta_device_get_split_state_impl(
             if (shard_view != nullptr) {
                 shard_view->n_segments = nr_s;
             }
-            if (dist_split_recurrent && nr_s > 1) {
-                // upstream's form: one segment of `local` elements, repeated nr_s times. The meta backend
-                // reshapes and views it like a multi-GPU split; the loader still reads the nr_s slices above.
+            if (nr_s > 1) {
+                // upstream's form: one segment of `local` elements, repeated nr_s times (Qwen3.5's DeltaNet
+                // tensors). The meta backend reshapes and views it like a multi-GPU split; the loader still
+                // reads the nr_s slices above.
                 for (uint32_t r = 0; r < nr_s; ++r) {
                     split_state.ne[r] = 0;
                     split_state.nr[r] = 0;
@@ -2248,6 +2258,25 @@ static bool buft_supported(ggml_backend_buffer_type_t buft, ggml_backend_dev_t d
     bool op_supported = ggml_backend_dev_supports_op(dev, op_tensor);
 
     return op_supported;
+}
+
+bool llama_devs_support_fa_head_map(ggml_backend_dev_t * devs, size_t n_devs) {
+    // a flash attention op of a shard: 2 query heads on 1 KV head, with a head map
+    auto fn = [](ggml_context * ctx) {
+        ggml_tensor * q  = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 128,   1, 2, 1);
+        ggml_tensor * k  = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 128, 256, 1, 1);
+        ggml_tensor * v  = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 128, 256, 1, 1);
+        ggml_tensor * fa = ggml_flash_attn_ext(ctx, q, k, v, nullptr, 1.0f, 0.0f, 0.0f);
+        ggml_flash_attn_ext_set_prec(fa, GGML_PREC_F32);
+        ggml_flash_attn_ext_set_head_map(fa, 1, 2);
+        return fa;
+    };
+    for (size_t i = 0; i < n_devs; ++i) {
+        if (!buft_supported(ggml_backend_dev_buffer_type(devs[i]), devs[i], fn)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 template<typename F>
