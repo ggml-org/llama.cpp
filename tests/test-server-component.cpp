@@ -3,6 +3,7 @@
 #include "../tools/server/server-common.h"
 #include "../tools/server/server-decision.h"
 #include "../tools/server/server-schema.h"
+#include "../tools/server/server-task.h"
 
 #include <algorithm>
 #include <cmath>
@@ -665,6 +666,108 @@ static void test_glob_match(testing & t) {
     });
 }
 
+static void test_responses_tool_arguments_done(testing & t) {
+    for (int prefix = 0; prefix < 4; ++prefix) {
+        t.test("prefix_" + std::to_string(prefix), [&](testing & t) {
+            server_task_result_cmpl_final result{};
+            result.oaicompat_msg.role = "assistant";
+            if (prefix & 1) {
+                result.oaicompat_msg.reasoning_content = "Choose the tools.";
+            }
+            if (prefix & 2) {
+                result.oaicompat_msg.content = "Checking.";
+            }
+            result.oaicompat_msg.tool_calls = {
+                {"weather", "{\"city\":\"Paris\"}", "weather_id"},
+                {"clock", "{}", "clock_id"},
+            };
+            result.stop = STOP_TYPE_EOS;
+
+            const json events = result.to_json_oaicompat_resp_stream();
+            size_t count = 0;
+            const size_t offset = ((prefix & 1) != 0) + ((prefix & 2) != 0);
+            for (size_t i = 0; i < events.size(); ++i) {
+                if (events[i].at("event") != "response.function_call_arguments.done") {
+                    continue;
+                }
+                const auto & call = result.oaicompat_msg.tool_calls.at(count);
+                const json & data = events[i].at("data");
+                t.assert_true("type", data.at("type") == "response.function_call_arguments.done");
+                t.assert_true("item id", data.at("item_id") == "fc_" + call.id);
+                t.assert_equal("index", offset + count, data.at("output_index").get<size_t>());
+                t.assert_equal("arguments", call.arguments, data.at("arguments").get<std::string>());
+                const json & next = events.at(i + 1);
+                t.assert_true("before item done", next.at("event") == "response.output_item.done");
+                t.assert_true("same item", data.at("item_id") == next.at("data").at("item").at("id"));
+                t.assert_true("same arguments", data.at("arguments") == next.at("data").at("item").at("arguments"));
+                ++count;
+            }
+            t.assert_equal("one event per tool call", (size_t) 2, count);
+            t.assert_true("response ends last", events.back().at("event") == "response.completed");
+            const json & response = events.back().at("data").at("response");
+            t.assert_true("completed status", response.at("status") == "completed");
+            t.assert_true("no incomplete details", response.at("incomplete_details").is_null());
+        });
+    }
+    t.test("no_tools", [](testing & t) {
+        server_task_result_cmpl_final result{};
+        result.oaicompat_msg.content = "Hello";
+        const json events = result.to_json_oaicompat_resp_stream();
+        for (const auto & event : events) {
+            t.assert_true("no tool event", event.at("event") != "response.function_call_arguments.done");
+        }
+    });
+}
+
+static void test_responses_incomplete(testing & t) {
+    t.test("non_stream", [](testing & t) {
+        server_task_result_cmpl_final result{};
+        result.oaicompat_msg.role = "assistant";
+        result.oaicompat_msg.reasoning_content = "Thinking";
+        result.oaicompat_msg.content = "Partial answer";
+        result.oaicompat_msg.tool_calls = {
+            {"weather", "{\"city\"", "weather_id"},
+        };
+        result.stop = STOP_TYPE_LIMIT;
+
+        const json response = result.to_json_oaicompat_resp();
+        t.assert_true("response status", response.at("status") == "incomplete");
+        t.assert_true("incomplete reason", response.at("incomplete_details").at("reason") == "max_output_tokens");
+        t.assert_equal("all output items present", (size_t) 3, response.at("output").size());
+        for (const json & item : response.at("output")) {
+            t.assert_true("item status", item.at("status") == "incomplete");
+        }
+    });
+
+    t.test("stream", [](testing & t) {
+        server_task_result_cmpl_final result{};
+        result.oaicompat_msg.role = "assistant";
+        result.oaicompat_msg.content = "Partial answer";
+        result.oaicompat_msg.tool_calls = {
+            {"weather", "{\"city\"", "weather_id"},
+        };
+        result.stop = STOP_TYPE_LIMIT;
+
+        const json events = result.to_json_oaicompat_resp_stream();
+        size_t item_done_count = 0;
+        for (const json & event : events) {
+            t.assert_true("no arguments done", event.at("event") != "response.function_call_arguments.done");
+            if (event.at("event") == "response.output_item.done") {
+                ++item_done_count;
+                t.assert_true("item status", event.at("data").at("item").at("status") == "incomplete");
+            }
+        }
+        t.assert_equal("one done event per item", (size_t) 2, item_done_count);
+
+        const json & terminal = events.back();
+        t.assert_true("terminal event", terminal.at("event") == "response.incomplete");
+        t.assert_true("terminal type", terminal.at("data").at("type") == "response.incomplete");
+        const json & response = terminal.at("data").at("response");
+        t.assert_true("response status", response.at("status") == "incomplete");
+        t.assert_true("incomplete reason", response.at("incomplete_details").at("reason") == "max_output_tokens");
+    });
+}
+
 int main(int argc, char ** argv) {
     testing t;
 
@@ -690,6 +793,8 @@ int main(int argc, char ** argv) {
     t.test("decision_depth",  test_decision_depth);
     t.test("glob_match",      test_glob_match);
     t.test("dry_sequence_breakers", test_dry_sequence_breakers);
+    t.test("responses_tool_arguments_done", test_responses_tool_arguments_done);
+    t.test("responses_incomplete", test_responses_incomplete);
 
     return t.summary();
 }
