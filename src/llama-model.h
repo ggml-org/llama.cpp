@@ -278,7 +278,6 @@ struct llama_layer {
     struct ggml_tensor * attn_kv_a_norm  = nullptr;
     struct ggml_tensor * attn_sub_norm   = nullptr;
     struct ggml_tensor * attn_post_norm  = nullptr;
-    struct ggml_tensor * attn_vres_lambda = nullptr;
     struct ggml_tensor * ffn_sub_norm    = nullptr;
     struct ggml_tensor * attn_norm_cross = nullptr;
     struct ggml_tensor * attn_norm_enc   = nullptr;
@@ -377,6 +376,9 @@ struct llama_layer {
     struct ggml_tensor * attn_resid_beta  = nullptr;
     struct ggml_tensor * ffn_resid_alpha  = nullptr;
     struct ggml_tensor * ffn_resid_beta   = nullptr;
+
+    // value residual mix
+    struct ggml_tensor * attn_vres_lambda = nullptr;
 
     // ff shared expert (shexp)
     struct ggml_tensor * ffn_gate_inp_shexp = nullptr;

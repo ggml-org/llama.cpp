@@ -9,17 +9,19 @@ void llama_model_ricursive::load_arch_hparams(llama_model_loader & ml) {
         throw std::runtime_error("ricursive: key_length and value_length must be equal");
     }
 
-    hparams.n_swa = 0;
-    ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
-    if (hparams.n_swa > 0) {
-        hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-        load_swa_pattern(ml, 5);
-
-        hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
-        hparams.rope_freq_scale_train_swa = 1.0f;
-    } else {
-        hparams.swa_type = LLAMA_SWA_TYPE_NONE;
+    // RoPE is only applied on the SWA layers, so a model without SWA would have no positional encoding
+    ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa);
+    if (hparams.n_swa == 0) {
+        throw std::runtime_error("ricursive: sliding_window must be > 0");
     }
+    hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
+    // default: every 5th layer is global (vendor layer_types); the per-layer array in the GGUF takes precedence
+    load_swa_pattern(ml, 5);
+
+    // the reference uses plain RoPE on the SWA layers: no rope scaling
+    hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
+    hparams.rope_freq_scale_train_swa = 1.0f;
+    ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
 
     switch (hparams.n_layer()) {
         case 80: type = LLM_TYPE_65B; break;
@@ -78,13 +80,13 @@ llama_model_ricursive::graph::graph(const llama_model & model, const llm_graph_p
 
     inpL = build_inp_embd(model.tok_embd);
 
+    // value residual (modeling_ricursive.py): every layer mixes x0 into its V input
+    // x0 = token embeddings * embedding_scale (applied in build_inp_embd), the same tensor for all layers
     ggml_tensor * inp_vres = inpL;
 
     ggml_tensor * inp_pos = build_inp_pos();
 
-    const bool has_swa = hparams.swa_type != LLAMA_SWA_TYPE_NONE;
-    llm_graph_input_attn_kv      * inp_attn_kv   = has_swa ? nullptr : build_attn_inp_kv();
-    llm_graph_input_attn_kv_iswa * inp_attn_iswa = has_swa ? build_attn_inp_kv_iswa() : nullptr;
+    auto * inp_attn = build_attn_inp_kv_iswa();
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
@@ -104,6 +106,7 @@ llama_model_ricursive::graph::graph(const llama_model & model, const llm_graph_p
             ggml_tensor * Qcur = build_lora_mm(layer.wq, attn_in, layer.wq_s);
             ggml_tensor * Kcur = build_lora_mm(layer.wk, attn_in, layer.wk_s);
 
+            // v_in = lerp(x0, attn_norm(x), sigmoid(lambda)), lambda is learned per layer
             ggml_tensor * v_in = attn_in;
             if (layer.attn_vres_lambda) {
                 ggml_tensor * mix = ggml_sigmoid(ctx0, layer.attn_vres_lambda);
@@ -121,22 +124,24 @@ llama_model_ricursive::graph::graph(const llama_model & model, const llm_graph_p
             cb(Qcur, "Qcur_normed", il);
             cb(Kcur, "Kcur_normed", il);
 
+            // global layers use no RoPE (NoPE), as in modeling_ricursive.py
             if (hparams.is_swa(il)) {
-                const float freq_base_l = model.get_rope_freq_base(cparams, il);
+                const float freq_base_l  = model.get_rope_freq_base (cparams, il);
+                const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
+
+                // plain RoPE on the SWA layers, no YaRN (same as the olmo2 SWA layers)
                 Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr,
-                        n_rot, rope_type, n_ctx_orig, freq_base_l, 1.0f,
+                        n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
                         0.0f, 1.0f, beta_fast, beta_slow);
                 Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr,
-                        n_rot, rope_type, n_ctx_orig, freq_base_l, 1.0f,
+                        n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
                         0.0f, 1.0f, beta_fast, beta_slow);
             }
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);
             cb(Vcur, "Vcur", il);
 
-            cur = has_swa
-                ? build_attn(inp_attn_iswa, NULL, NULL, NULL, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il)
-                : build_attn(inp_attn_kv,   NULL, NULL, NULL, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
+            cur = build_attn(inp_attn, NULL, NULL, NULL, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
             cb(cur, "attn_out", il);
 
             if (layer.wqkv_gate) {
