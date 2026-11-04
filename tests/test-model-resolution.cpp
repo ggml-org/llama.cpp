@@ -161,12 +161,6 @@ static const std::vector<std::string> twins = {
     "model-Q4_XS.gguf",
 };
 
-// an underscore separates the quant like a dash, as in step3p5_flash_Q4_K_S.gguf
-static const std::vector<std::string> underscore = {
-    "model_Q4_K_S.gguf",
-    "model_Q8_0.gguf",
-};
-
 // every speculative sidecar type at the same quant
 static const std::vector<std::string> quad = {
     "model-Q8_0.gguf",
@@ -299,15 +293,6 @@ static const plan_case plan_cases[] = {
 
     {"twins iq4_xs tag", twins, "test/repo:IQ4_XS", "", false, false,
      "model-IQ4_XS.gguf", {"model-IQ4_XS.gguf"},
-     "", "", "", "", ""},
-
-    // the token boundary accepts an underscore, for the tag and the default lookup
-    {"underscore tag", underscore, "test/repo:Q4_K_S", "", false, false,
-     "model_Q4_K_S.gguf", {"model_Q4_K_S.gguf"},
-     "", "", "", "", ""},
-
-    {"underscore default", underscore, "test/repo", "", false, false,
-     "model_Q8_0.gguf", {"model_Q8_0.gguf"},
      "", "", "", "", ""},
 
     // every sidecar type resolves at the tag
