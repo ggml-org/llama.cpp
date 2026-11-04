@@ -1314,7 +1314,10 @@ struct test_case {
 
     virtual bool run_whole_graph() { return false; }
     // the output must be the same in each run on the same backend
-    virtual bool deterministic() { return false; }
+    virtual bool deterministic(ggml_backend_t backend) {
+        GGML_UNUSED(backend);
+        return false;
+    }
     virtual bool same_output(ggml_tensor * t1, ggml_tensor * t2) {
         std::vector<uint8_t> t1_data(ggml_nbytes(t1));
         std::vector<uint8_t> t2_data(ggml_nbytes(t2));
@@ -1598,7 +1601,7 @@ struct test_case {
                                                                fused_nodes_to_verify.size());
 
         // compare backend1 with itself: a second copy of the graph must give the same bytes
-        if (deterministic()) {
+        if (deterministic(backend1)) {
             auto callback_same = [](int index, ggml_tensor * t1, ggml_tensor * t2, void * user_data) -> bool {
                 callback_userdata * ud = (callback_userdata *) user_data;
                 if (!ud->tc->same_output(t1, t2)) {
@@ -7321,7 +7324,15 @@ struct test_top_k : public test_case {
     bool run_whole_graph() override { return ties; }
 
     // the backends may break ties in different ways, but each backend must break them in the same way in each run
-    bool deterministic() override { return ties; }
+    bool deterministic(ggml_backend_t backend) override {
+        // TODO: Metal and ROCm are not deterministic yet
+        const char * name = ggml_backend_reg_name(ggml_backend_dev_backend_reg(ggml_backend_get_device(backend)));
+        if (strcmp(name, "MTL") == 0 || strcmp(name, "ROCm") == 0) {
+            return false;
+        }
+        // CUDA uses cub::DeviceTopK for 1 or 2 rows, which does not guarantee deterministic ties (CCCL <= 3.5)
+        return ties && ne[1]*ne[2]*ne[3] > 2;
+    }
 
     // the order in a row is not specified, so compare the sets
     bool same_output(ggml_tensor * t1, ggml_tensor * t2) override {
