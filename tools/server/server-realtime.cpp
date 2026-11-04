@@ -77,7 +77,7 @@ bool parse_max_output_tokens(const json & j, int32_t & n) {
 bool parse_tools(const json & j, std::vector<common_chat_tool> & tools, std::string & err) {
     try {
         auto parsed = common_chat_tools_parse_oaicompat(server_chat_convert_responses_tools(j));
-        // the chat template turns the parameters into a grammar, reject them before keeping the tools
+        // reject the schemas that would fail later, when the chat template builds the tool call grammar
         for (const auto & tool : parsed) {
             json_schema_to_grammar(json::parse(tool.parameters));
         }
