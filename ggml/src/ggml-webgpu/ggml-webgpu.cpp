@@ -2740,7 +2740,11 @@ static webgpu_encoded_op ggml_webgpu_group_norm(webgpu_context & ctx, ggml_tenso
     if (!decisions->inplace) {
         entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, 1, dst));
     }
-    return ggml_backend_webgpu_build(ctx, pipeline, params, entries, num_groups * (uint32_t) src->ne[3]);
+    uint32_t wg_x;
+    uint32_t wg_y;
+    compute_2d_workgroups(num_groups * (uint32_t) src->ne[3],
+                          ctx->global_ctx->capabilities.limits.maxComputeWorkgroupsPerDimension, wg_x, wg_y);
+    return ggml_backend_webgpu_build(ctx, pipeline, params, entries, wg_x, wg_y);
 }
 
 static webgpu_encoded_op ggml_webgpu_row_norm(webgpu_context & ctx, ggml_tensor * src, ggml_tensor * dst) {
@@ -4691,12 +4695,12 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
             {
                 bool           valid_type     = (src0->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32) ||
                                                 (src0->type == GGML_TYPE_F16 && op->type == GGML_TYPE_F16);
-                // We assign 1 workgroup per normalization group in each batch item,
-                // and we use 1D dispatch of workgroups for now.
-                // So we have num_norm_groups * batch_size workgroups.
                 const uint64_t num_workgroups = uint64_t(ggml_get_op_params_i32(op, 0)) * uint64_t(src0->ne[3]);
-                bool           dispatch_fits =
-                    num_workgroups <= ctx->webgpu_global_ctx->capabilities.limits.maxComputeWorkgroupsPerDimension;
+                const uint64_t max_per_dim =
+                    ctx->webgpu_global_ctx->capabilities.limits.maxComputeWorkgroupsPerDimension;
+                // Leave room for the uint32_t ceiling divisions in compute_2d_workgroups.
+                const bool dispatch_fits =
+                    num_workgroups <= max_per_dim * max_per_dim && num_workgroups <= UINT32_MAX - (max_per_dim - 1);
                 supports_op = valid_type && dispatch_fits;
                 break;
             }

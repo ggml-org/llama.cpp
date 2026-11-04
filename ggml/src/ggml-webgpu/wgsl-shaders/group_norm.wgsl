@@ -71,16 +71,18 @@ fn output_index(logical_position: u32, group_base: u32) -> u32 {
 @compute @workgroup_size(WG_SIZE)
 fn main(
     @builtin(workgroup_id) workgroup_id: vec3<u32>,
+    @builtin(num_workgroups) num_workgroups: vec3<u32>,
     @builtin(local_invocation_index) lane: u32
 ) {
     if (params.num_groups == 0u) {
         return;
     }
-    let batch_index = workgroup_id.x / params.num_groups;
+    let linear_group_id = workgroup_id.x + workgroup_id.y * num_workgroups.x;
+    let batch_index = linear_group_id / params.num_groups;
     if (batch_index >= params.batch_size) {
         return;
     }
-    let group_index = workgroup_id.x % params.num_groups;
+    let group_index = linear_group_id % params.num_groups;
     let channels_per_group = params.num_channels / params.num_groups
         + select(0u, 1u, params.num_channels % params.num_groups != 0u);
     if (group_index > params.num_channels / max(channels_per_group, 1u)) {
