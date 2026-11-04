@@ -17,7 +17,6 @@
 #include <webgpu/webgpu_cpp.h>
 
 #include <atomic>
-#include <cmath>
 #include <cstdint>
 #include <cstring>
 #ifdef GGML_WEBGPU_GPU_PROFILE
@@ -4690,32 +4689,15 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
             }
         case GGML_OP_GROUP_NORM:
             {
-                const int32_t num_groups = ggml_get_op_params_i32(op, 0);
-                const float   eps        = ggml_get_op_params_f32(op, 1);
-                supports_op = src0->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
-                              ggml_are_same_shape(src0, op) && !ggml_is_empty(src0) && num_groups > 0 &&
-                              num_groups <= src0->ne[2] && std::isfinite(eps) && eps >= 0.0f &&
-                              (uint64_t) num_groups * src0->ne[3] <=
-                                  ctx->webgpu_global_ctx->capabilities.limits.maxComputeWorkgroupsPerDimension;
-                if (!supports_op) {
-                    break;
-                }
-                const size_t   src_type_size = ggml_type_size(src0->type);
-                const size_t   dst_type_size = ggml_type_size(op->type);
-                const uint64_t max_elements  = UINT32_MAX / std::max(src_type_size, dst_type_size);
-                uint64_t       num_elements  = 1;
-                supports_op = src0->view_offs % src_type_size == 0 && op->view_offs % dst_type_size == 0;
-                for (int i = 0; i < GGML_MAX_DIMS && supports_op; ++i) {
-                    supports_op = src0->ne[i] > 0 && (uint64_t) src0->ne[i] <= max_elements / num_elements &&
-                                  src0->nb[i] % src_type_size == 0 && op->nb[i] % dst_type_size == 0 &&
-                                  src0->nb[i] / src_type_size <= UINT32_MAX && op->nb[i] / dst_type_size <= UINT32_MAX;
-                    if (supports_op) {
-                        num_elements *= src0->ne[i];
-                    }
-                    if (src0->buffer != nullptr && ggml_webgpu_tensor_equal(src0, op)) {
-                        supports_op = supports_op && src0->nb[i] == op->nb[i];
-                    }
-                }
+                bool           valid_type     = (src0->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32) ||
+                                                (src0->type == GGML_TYPE_F16 && op->type == GGML_TYPE_F16);
+                // We assign 1 workgroup per normalization group in each batch item,
+                // and we use 1D dispatch of workgroups for now.
+                // So we have num_norm_groups * batch_size workgroups.
+                const uint64_t num_workgroups = uint64_t(ggml_get_op_params_i32(op, 0)) * uint64_t(src0->ne[3]);
+                bool           dispatch_fits =
+                    num_workgroups <= ctx->webgpu_global_ctx->capabilities.limits.maxComputeWorkgroupsPerDimension;
+                supports_op = valid_type && dispatch_fits;
                 break;
             }
         case GGML_OP_RMS_NORM:

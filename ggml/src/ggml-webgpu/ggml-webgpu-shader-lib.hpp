@@ -1357,8 +1357,6 @@ class ggml_webgpu_shader_lib {
     }
 
     webgpu_pipeline get_group_norm_pipeline(const ggml_webgpu_shader_lib_context & context) {
-        GGML_ASSERT(context.src0->type == GGML_TYPE_F32 || context.src0->type == GGML_TYPE_F16);
-        GGML_ASSERT(context.dst->type == GGML_TYPE_F32 || context.dst->type == GGML_TYPE_F16);
         const ggml_webgpu_group_norm_pipeline_key key = {
             context.src0->type,
             context.dst->type,
