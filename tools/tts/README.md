@@ -154,3 +154,34 @@ The upstream repositories ship raw checkpoints without `config.json`. Download t
 python convert_hf_to_gguf.py path/to/chatterbox --outfile chatterbox.gguf
 python convert_hf_to_gguf.py path/to/chatterbox --mmproj --outfile mmproj-chatterbox.gguf
 ```
+
+## Drama 3
+
+[Fish Audio Drama 3](https://huggingface.co/fishaudio/drama-3): a Qwen3.5-MoE backbone (35B, 3B active) samples each frame's main token, a codebook tower samples the 9 other codes, and the Fish DAC decodes them to 44.1 kHz audio.
+
+Available params:
+- Speaker tags `<|speaker:0|>` to `<|speaker:15|>` in the text give each character its own voice, a text without a tag starts with `<|speaker:0|>`
+- The language is the one of the text, `--tts-lang` is not used
+- Note: `--tts-speaker-file` is not supported yet (voice cloning)
+- Note: `--top-k` and `--top-p` are not used, frames are sampled with the settings of the reference (main token: temperature 1.0, top-p 0.9, repetition-aware redraw over the last 16 frames; other codes: temperature 1.0, top-k 30, top-p 0.9)
+- Each frame is 2048 samples (about 46 ms), generation stops at the end-of-speech token
+- The codebook tower keeps the whole sequence in its KV cache, the prompt and the generated frames are limited to 4096 positions
+
+Example usage:
+
+```sh
+llama-tts -m drama3.gguf \
+    -mm mmproj-drama3.gguf \
+    -p "<|speaker:0|> Did you remember to buy the bread? <|speaker:1|> Of course I did, it is on the kitchen table." \
+    -n 1000 \
+    --output out.wav
+```
+
+**Note for GGUF conversion:**
+
+The routed experts of the checkpoint are FP8, they are dequantized at conversion. The mmproj holds the codebook tower and the decoder half of `codec.pth`, it is best kept in BF16:
+
+```sh
+python convert_hf_to_gguf.py path/to/drama-3 --outtype q8_0 --outfile drama3.gguf
+python convert_hf_to_gguf.py path/to/drama-3 --mmproj --outtype bf16 --outfile mmproj-drama3.gguf
+```

@@ -1295,6 +1295,11 @@ class MODEL_TENSOR(IntEnum):
     A_GEN_CODE_ATTN_GATE   = auto() # lfm3a: per-head sigmoid gate on the attention output
     A_GEN_CODE_HEAD_NORM   = auto() # lfm3a: per-codebook norm before the output head, merged 2D [n_codebooks, dim]
     A_GEN_CODE_MASK_EMBD   = auto() # lfm3a: MaskGIT mask embedding
+    A_GEN_CODE_ENORM       = auto() # drama3: per-layer norm of the code embedding
+    A_GEN_CODE_HNORM       = auto() # drama3: per-layer norm of the input hidden state
+    A_GEN_CODE_EH_PROJ     = auto() # drama3: per-layer [code embd; hidden] -> hidden projection
+    A_GEN_CODE_BLK_EMBD    = auto() # drama3: per-layer code embedding table
+    A_GEN_CODE_BLK_OUT_NORM = auto() # drama3: per-layer output norm
     # qwen3tts code2wav: RVQ codes -> raw PCM
     A_GEN_WAV_QUANT_FIRST_IN       = auto() # semantic RVQ, in_proj (1x1 conv, loaded as 2D)
     A_GEN_WAV_QUANT_FIRST_OUT      = auto() # semantic RVQ, out_proj
@@ -2198,6 +2203,11 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.A_GEN_CODE_ATTN_GATE:      "a.gen.code.blk.{bid}.attn_gate",
     MODEL_TENSOR.A_GEN_CODE_HEAD_NORM:      "a.gen.code.head_norm",
     MODEL_TENSOR.A_GEN_CODE_MASK_EMBD:      "a.gen.code.mask_embd",
+    MODEL_TENSOR.A_GEN_CODE_ENORM:          "a.gen.code.blk.{bid}.enorm",
+    MODEL_TENSOR.A_GEN_CODE_HNORM:          "a.gen.code.blk.{bid}.hnorm",
+    MODEL_TENSOR.A_GEN_CODE_EH_PROJ:        "a.gen.code.blk.{bid}.eh_proj",
+    MODEL_TENSOR.A_GEN_CODE_BLK_EMBD:       "a.gen.code.blk.{bid}.embd",
+    MODEL_TENSOR.A_GEN_CODE_BLK_OUT_NORM:   "a.gen.code.blk.{bid}.out_norm",
     MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_IN:  "a.gen.wav.quant.first.in_proj",
     MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_OUT: "a.gen.wav.quant.first.out_proj",
     MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_CB:  "a.gen.wav.quant.first.codebook",
@@ -2615,6 +2625,11 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.A_GEN_CODE_ATTN_GATE,
         MODEL_TENSOR.A_GEN_CODE_HEAD_NORM,
         MODEL_TENSOR.A_GEN_CODE_MASK_EMBD,
+        MODEL_TENSOR.A_GEN_CODE_ENORM,
+        MODEL_TENSOR.A_GEN_CODE_HNORM,
+        MODEL_TENSOR.A_GEN_CODE_EH_PROJ,
+        MODEL_TENSOR.A_GEN_CODE_BLK_EMBD,
+        MODEL_TENSOR.A_GEN_CODE_BLK_OUT_NORM,
         MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_IN,
         MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_OUT,
         MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_CB,
@@ -6919,6 +6934,7 @@ class VisionProjectorType:
     CHATTERBOX_SPKENC = "chatterbox_spkenc" # audio: CAMPPlus speaker encoder
     CHATTERBOX = "chatterbox" # audio generation: s3gen flow matching + HiFT vocoder
     SOPRANO = "soprano" # audio generation: Vocos decoder
+    DRAMA3_GEN = "drama3_gen" # audio generation: codebook tower + Fish DAC decoder
     HUNYUANVL      = "hunyuanvl"
     PARAKEET       = "parakeet"  # audio
     MINIMAXM3      = "minimax_m3"
