@@ -33,12 +33,12 @@ enum htp_lid_kernel_type {
 };
 
 struct htp_lid_kernel_params {
+    uint8_t  kernel_type;       // enum htp_lid_kernel_type
     uint32_t n_threads;
     uint32_t n_tokens_tile;     // tokens per Q tile
     uint32_t n_kv_blocks;       // HVX: per stream, HMX: per run of n_qsets sets
     uint32_t blocks_per_thread;
     uint32_t vtcm_size;
-    uint32_t kernel_type;       // htp_lid_kernel_type
     uint32_t k_row_size;        // K row bytes
     uint32_t kv_block;          // HMX: kv rows per block (multiple of 64)
     uint32_t n_qsets;           // HMX: Q sets kept in VTCM (streams run in one pipeline)
