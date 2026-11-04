@@ -91,7 +91,7 @@ static __device__ __forceinline__ uint32_t top_k_float_to_ordered(float value) {
 // the value, then the column with the lower column first: no two keys of a row are equal,
 // so the selection of equal values does not depend on the thread timing
 static __device__ __forceinline__ uint64_t top_k_key(float value, int col, int ncols, int col_shift) {
-    return (uint64_t) top_k_float_to_ordered(value) << col_shift | (uint32_t) (ncols - 1 - col);
+    return ((uint64_t) top_k_float_to_ordered(value) << col_shift) | (uint32_t) (ncols - 1 - col);
 }
 
 struct top_k_radix_state {

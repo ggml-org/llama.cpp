@@ -250,7 +250,7 @@ static inline uint ggml_top_k_f2ui(float x) {
 // the value, then the column with the lower column first: no two keys of a row are equal,
 // so the selection of equal values does not depend on the thread timing
 static inline ulong ggml_top_k_key(float x, uint i, uint ncols, uint col_shift) {
-    return (ulong) ggml_top_k_f2ui(x) << col_shift | (ncols - 1 - i);
+    return ((ulong) ggml_top_k_f2ui(x) << col_shift) | (ncols - 1 - i);
 }
 
 kernel void kernel_top_k_f32_i32(
