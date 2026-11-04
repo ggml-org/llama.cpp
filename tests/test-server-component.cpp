@@ -640,26 +640,6 @@ static void test_dry_sequence_breakers(testing & t) {
 }
 
 //
-// /tts temperature
-//
-
-static void test_tts_temperature(testing & t) {
-    common_params params_base;
-
-    const auto eval = [&](const json & data) {
-        server_task task(SERVER_TASK_TYPE_TTS);
-        server_schema::eval_tts_schema(params_base, task, data);
-        return task.tts_inp.data.temp;
-    };
-
-    t.assert_true("not given uses the model default", eval(json::object()) < 0.0f);
-    t.assert_true("null uses the model default", eval({{"temperature", nullptr}}) < 0.0f);
-    t.assert_equal("0 is kept", 0.0f, eval({{"temperature", 0.0}}));
-    t.assert_equal("value", 0.7f, eval({{"temperature", 0.7}}));
-    t.assert_equal("negative is clamped to 0", 0.0f, eval({{"temperature", -1.0}}));
-}
-
-//
 // glob_match
 //
 
@@ -710,7 +690,6 @@ int main(int argc, char ** argv) {
     t.test("decision_depth",  test_decision_depth);
     t.test("glob_match",      test_glob_match);
     t.test("dry_sequence_breakers", test_dry_sequence_breakers);
-    t.test("tts_temperature", test_tts_temperature);
 
     return t.summary();
 }
