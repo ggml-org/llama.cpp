@@ -420,7 +420,6 @@ llama_model_xing4_0::graph_mtp::graph_mtp(const llama_model & model, const llm_g
     cb(cur, "result_output", -1);
 
     res->t_logits = cur;
-    ggml_build_forward_expand(gf, cur);
 }
 
 ggml_tensor * llama_model_xing4_0::graph::build_hc_pre(
