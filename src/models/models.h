@@ -1777,7 +1777,8 @@ struct llama_model_nemotron_h : public llama_model_base {
     struct graph : public llm_build_mamba_base {
         graph(const llama_model & model, const llm_graph_params & params);
         ggml_tensor * build_ffn_layer(ggml_tensor * cur, const llama_model & model, int il);
-        ggml_tensor * build_attention_layer(ggml_tensor * cur, llm_graph_input_attn_kv * inp_attn,
+        ggml_tensor * build_attention_layer(ggml_tensor * cur, ggml_tensor * inp_pos,
+            llm_graph_input_attn_kv * inp_attn,
             const llama_model & model, int64_t n_embd_head, int il);
     };
 
