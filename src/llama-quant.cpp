@@ -1004,9 +1004,10 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         throw std::runtime_error(format("invalid output file type %d\n", ftype));
     }
 
-    // mmap consistently increases speed on Linux, and also increases speed on Windows with
-    // hot cache. It may cause a slowdown on macOS, possibly related to free memory.
-#if defined(__linux__) || defined(_WIN32)
+    // mmap consistently increases speed on Linux, and also increases speed on Windows with hot cache.
+    // But it requires to load the entire model in RAM on Windows, causing huge slowdowns.
+    // It may cause a slowdown on macOS, possibly related to free memory.
+#if defined(__linux__)
     constexpr llama_load_mode load_mode = LLAMA_LOAD_MODE_MMAP;
 #else
     constexpr llama_load_mode load_mode = LLAMA_LOAD_MODE_NONE;
