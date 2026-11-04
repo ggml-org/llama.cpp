@@ -4717,6 +4717,10 @@ static bool htp_kparams_solve_lightning_indexer(
     const struct ggml_tensor * q = op->src[0];
     const struct ggml_tensor * k = op->src[1];
 
+    if (opt_li_select < 1) {
+        return false;
+    }
+
     if (k->type != GGML_TYPE_F32 && k->type != GGML_TYPE_F16 && k->type != GGML_TYPE_Q8_0 && k->type != GGML_TYPE_Q4_0) {
         return false;
     }
@@ -4742,7 +4746,7 @@ static bool htp_kparams_solve_lightning_indexer(
     kparams->div_n_head = init_fastdiv_values(n_head);
     kparams->div_m_ne3  = init_fastdiv_values((uint32_t) op->src[3]->ne[3]);
 
-    if (htp_session_n_hmx(sess) > 0 && D % HMX_FP16_TILE_N_COLS == 0) {
+    if (opt_li_select >= 2 && htp_session_n_hmx(sess) > 0 && D % HMX_FP16_TILE_N_COLS == 0) {
         const uint32_t n_threads = htp_session_n_threads(sess);
         const uint32_t n_stream  = q->ne[3];
         const uint32_t n_dot     = D / HMX_FP16_TILE_N_COLS;
