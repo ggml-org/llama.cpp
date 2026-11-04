@@ -22,11 +22,10 @@ ggml_tensor * llm_build_lfm_base::build_lfm_shortconv(const llama_model & model,
     const uint32_t d_conv = hparams.n_shortconv_l_cache - 1;
     const int64_t  n_embd = hparams.n_embd;
 
-    // {n_embd, n_tokens} => {n_embd, n_seq_tokens, n_seqs}
-    cur = ggml_reshape_3d(ctx0, cur, cur->ne[0], n_seq_tokens, n_seqs);
-
     auto * bcx = build_lora_mm(model.layers[il].shortconv.in_proj, cur);
     cb(bcx, "model.layers.{}.conv.in_proj", il);
+    // {3*n_embd, n_tokens} => {3*n_embd, n_seq_tokens, n_seqs}
+    bcx = ggml_reshape_3d(ctx0, bcx, bcx->ne[0], n_seq_tokens, n_seqs);
 
     constexpr auto n_chunks = 3;
     GGML_ASSERT(bcx->ne[0] % n_chunks == 0);
@@ -76,10 +75,10 @@ ggml_tensor * llm_build_lfm_base::build_lfm_shortconv(const llama_model & model,
     cb(conv_out, "model.layers.{}.conv.conv", il);
 
     auto * y = ggml_mul(ctx0, c, conv_out);
-    y        = build_lora_mm(model.layers[il].shortconv.out_proj, y);
-    cb(y, "model.layers.{}.conv.out_proj", il);
     // {n_embd, n_seq_tokens, n_seqs} => {n_embd, n_tokens}
     y = ggml_reshape_2d(ctx0, y, y->ne[0], n_seq_tokens * n_seqs);
+    y = build_lora_mm(model.layers[il].shortconv.out_proj, y);
+    cb(y, "model.layers.{}.conv.out_proj", il);
 
     return y;
 }
@@ -118,9 +117,9 @@ ggml_tensor * llm_build_lfm_base::build_lfm_dense_ffn(const llama_model & model,
     GGML_ASSERT(!model.layers[il].ffn_gate_b);
     GGML_ASSERT(!model.layers[il].ffn_down_b);
     return build_ffn(cur,
-        model.layers[il].ffn_up,   NULL, NULL,
-        model.layers[il].ffn_gate, NULL, NULL,
-        model.layers[il].ffn_down, NULL, NULL,
+        model.layers[il].ffn_up,   NULL, model.layers[il].ffn_up_s,
+        model.layers[il].ffn_gate, NULL, model.layers[il].ffn_gate_s,
+        model.layers[il].ffn_down, NULL, model.layers[il].ffn_down_s,
         NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
 }
 
@@ -137,5 +136,10 @@ ggml_tensor * llm_build_lfm_base::build_lfm_moe_ffn(const llama_model & model,
             LLM_FFN_SILU, true,
             hparams.expert_weights_scale,
             static_cast<llama_expert_gating_func_type>(hparams.expert_gating_func),
-            il);
+            il,
+            nullptr,
+            nullptr,
+            model.layers[il].ffn_up_exps_s,
+            model.layers[il].ffn_gate_exps_s,
+            model.layers[il].ffn_down_exps_s);
 }

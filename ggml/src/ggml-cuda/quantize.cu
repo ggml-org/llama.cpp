@@ -486,17 +486,6 @@ static __global__ void quantize_mmq_q8_1(
         amax = fmaxf(amax, __shfl_xor_sync(0xFFFFFFFF, amax, offset, WARP_SIZE));
     }
 
-    float sum;
-    if (ds_layout != MMQ_Q8_1_DS_LAYOUT_D4) {
-        sum = xi.x + xi.y + xi.z + xi.w;
-
-        // Calculate sums across vals_per_sum/4 threads.
-#pragma unroll
-        for (int offset = vals_per_sum/8; offset > 0; offset >>= 1) {
-            sum += __shfl_xor_sync(0xFFFFFFFF, sum, offset, WARP_SIZE);
-        }
-    }
-
     const float d_inv = 127.0f / amax;
     char4 q;
     q.x = roundf(xi.x*d_inv);
@@ -504,6 +493,19 @@ static __global__ void quantize_mmq_q8_1(
     q.z = roundf(xi.z*d_inv);
     q.w = roundf(xi.w*d_inv);
     const float d = 1.0f / d_inv;
+
+    float sum = 0.0f;
+    if (ds_layout != MMQ_Q8_1_DS_LAYOUT_D4) {
+        int sum_q = int(q.x) + int(q.y) + int(q.z) + int(q.w);
+
+        // Calculate sums across vals_per_sum/4 threads.
+#pragma unroll
+        for (int offset = vals_per_sum/8; offset > 0; offset >>= 1) {
+            sum_q += __shfl_xor_sync(0xFFFFFFFF, sum_q, offset, WARP_SIZE);
+        }
+
+        sum = d * float(sum_q);
+    }
 
     // write the block once (normal) or to each of the token's compact rows (scatter)
     const int nwrite = scatter ? n_expert_used : 1;

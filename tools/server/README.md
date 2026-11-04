@@ -857,9 +857,9 @@ Returns raw audio bytes (`audio/wav` by default) rather than JSON. For more info
 
 `lang`: Language code for the utterance (model-dependent, e.g. `en`, `zh`). Optional.
 
-`voice`: Voice for the utterance (model-dependent, e.g. `female` or `male` for LFM3-Audio). Optional.
+`voice`: Voice for the utterance, one of the `voices` listed by `GET /props` (model-dependent, e.g. `female` or `male` for LFM3-Audio). Optional: a model with predefined voices speaks with the first of them when neither `voice` nor `speaker_ref` is given. It rejects any other name, and a predefined voice cannot be combined with `speaker_ref`.
 
-`speaker_ref_b64`: Base64-encoded reference audio to clone the speaker's voice. Optional. Alternatively, upload the reference audio as a `speaker_ref` file field via `multipart/form-data` (see example below) - if both are provided, the uploaded file takes precedence.
+`speaker_ref_b64`: Base64-encoded reference audio to clone the speaker's voice. Optional. Alternatively, upload the reference audio as a `speaker_ref` file field via `multipart/form-data` (see example below) - if both are provided, the uploaded file takes precedence. Rejected when the model has no voice encoder (e.g. Pocket TTS without voice cloning).
 
 `top_k`, `top_p`: Sampling params for the acoustic code predictor. Optional, model-dependent defaults apply.
 
@@ -1017,6 +1017,7 @@ By default, it is read-only. To make POST request to change global properties, y
 
 - `default_generation_settings` - the default generation settings for the `/completion` endpoint, which has the same fields as the `generation_settings` response object from the `/completion` endpoint.
 - `total_slots` - the total number of slots for process requests (defined by `--parallel` option)
+- `voices` - the predefined voices of an audio generation model, to pass as `voice` to `/tts`. Only present when the model has some (e.g. LFM3-Audio, Pocket TTS without voice cloning)
 - `model_path` - the path to model file (same with `-m` argument)
 - `chat_template` - the model's original Jinja2 prompt template
 - `chat_template_caps` - capabilities of the chat template (see `common/jinja/caps.h` for more info), `reasoning_effort_levels` lists the `reasoning_effort` values the template renders distinctly, from lowest to highest
@@ -1654,6 +1655,8 @@ See [examples/realtime_client.py](../../examples/realtime_client.py) for a clien
 
 See [OpenAI Responses API documentation](https://platform.openai.com/docs/api-reference/responses).
 
+`extra_params`: llama.cpp parameters that the Responses API has no field for, such as `seed`, `min_p` or `repeat_penalty`, as an object (e.g. `{"seed": 42, "min_p": 0.05}`). Its keys are merged into the converted request and behave as on `/v1/chat/completions`.
+
 *Examples:*
 
 You can use either Python `openai` library with appropriate checkpoints:
@@ -1684,7 +1687,8 @@ curl http://localhost:9931/v1/responses \
 -d '{
 "model": "gpt-4.1",
 "instructions": "You are ChatGPT, an AI assistant. Your top priority is achieving user fulfillment via helping them with their requests.",
-"input": "Write a limerick about python exceptions"
+"input": "Write a limerick about python exceptions",
+"extra_params": {"seed": 42, "min_p": 0.05}
 }'
 ```
 

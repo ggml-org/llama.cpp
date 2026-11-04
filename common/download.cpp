@@ -748,7 +748,8 @@ static hf_cache::hf_file find_best_model(const hf_cache::hf_files & files,
     }
 
     for (const auto & t : tags) {
-        std::regex pattern(t + "[.-]", std::regex::icase);
+        // match the tag as a full token, so ":F16" does not match a BF16 file
+        std::regex pattern("(^|[-./])" + t + "[.-]", std::regex::icase);
         for (const auto & f : files) {
             if (gguf_filename_is_model(f.path) &&
                 std::regex_search(f.path, pattern)) {
@@ -1005,7 +1006,7 @@ std::string common_docker_resolve_model(const std::string & docker) {
         std::string model_filename = repo;
         std::replace(model_filename.begin(), model_filename.end(), '/', '_');
         model_filename += "_" + tag + ".gguf";
-        std::string local_path = fs_path_to_utf8(fs_get_cache_file(model_filename));
+        std::string local_path = fs_get_cache_file(model_filename).string();
 
         const std::string blob_url = url_prefix + "/blobs/" + gguf_digest;
         common_download_opts opts;
