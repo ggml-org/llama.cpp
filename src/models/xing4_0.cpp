@@ -74,11 +74,6 @@ void llama_model_xing4_0::load_arch_hparams(llama_model_loader & ml) {
         // cancel the factor from the convert script
         hparams.rope_yarn_log_mul /= 0.1f;
     }
-
-    // NextN/MTP
-    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.n_layer_nextn, false);
-    GGML_ASSERT(hparams.n_layer_nextn == 0 ||
-        hparams.n_layer() + hparams.n_layer_nextn == hparams.n_layer_all);
 }
 
 void llama_model_xing4_0::load_arch_tensors(llama_model_loader & ml) {
