@@ -120,6 +120,7 @@ enum htp_op_code {
     HTP_OP_DSV4_HC_PRE,
     HTP_OP_DSV4_HC_POST,
     HTP_OP_TOP_K_MASK,
+    HTP_OP_LIGHTNING_INDEXER,
 
     HTP_OP_INVALID
 };
