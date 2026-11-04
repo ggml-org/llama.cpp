@@ -4695,13 +4695,12 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
             {
                 bool           valid_type     = (src0->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32) ||
                                                 (src0->type == GGML_TYPE_F16 && op->type == GGML_TYPE_F16);
+                // One workgroup per normalization group within each batch item.
                 const uint64_t num_workgroups = uint64_t(ggml_get_op_params_i32(op, 0)) * uint64_t(src0->ne[3]);
                 const uint64_t max_per_dim =
                     ctx->webgpu_global_ctx->capabilities.limits.maxComputeWorkgroupsPerDimension;
-                // Leave room for the uint32_t ceiling divisions in compute_2d_workgroups.
-                const bool dispatch_fits =
-                    num_workgroups <= max_per_dim * max_per_dim && num_workgroups <= UINT32_MAX - (max_per_dim - 1);
-                supports_op = valid_type && dispatch_fits;
+                const bool dispatch_fits = num_workgroups <= max_per_dim * max_per_dim;
+                supports_op              = valid_type && dispatch_fits;
                 break;
             }
         case GGML_OP_RMS_NORM:
