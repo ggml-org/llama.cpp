@@ -1870,51 +1870,59 @@ static void tiled_vec_dot_iq4nl_32x2(const uint32_t n, float * restrict s0, floa
 #define IQ2XXS_NIB_LO_MASK     0x00000F0F  // nibbles of the code bytes, lane bytes 0..1
 #define IQ2XXS_NIB_HI_MASK     0x0F0F0000  // nibbles of the code bytes, lane bytes 2..3
 
-// IQ2_XXS: 8 int8 weight words (k = 4g..4g+3 per row lane) and the odd group scale (2 * scale + 1) of a 32x32 tile
-static inline void iq2xxs_decode_tile(const uint8_t * restrict tile, HVX_Vector * restrict v_w, HVX_Vector * restrict v_ls) {
-    HVX_Vector * restrict v_scr = (HVX_Vector *) (tile + htp_tensor_get_tile_padded_size(HTP_TYPE_IQ2_XXS) - HTP_TENSOR_TILE_SCRATCH_IQ2_XXS);
+static inline HVX_Vector * iq2xxs_tile_scratch(const uint8_t * tile) {
+    return (HVX_Vector *) (tile + htp_tensor_get_tile_padded_size(HTP_TYPE_IQ2_XXS) - HTP_TENSOR_TILE_SCRATCH_IQ2_XXS);
+}
 
-    const HVX_Vector v_zero     = Q6_V_vzero();
-    const HVX_Vector v_one      = Q6_V_vsplat_R(1);
-    const HVX_Vector v_sgn_mask = Q6_V_vsplat_R(IQ2XXS_SIGN_MASK);
-    const HVX_Vector v_nib_lut  = hvx_vmem(iq2xxs_vtcm_lut);
-    const uint8_t *  grid       = iq2xxs_vtcm_lut + HTP_IQ2XXS_NIBBLE_BYTES;
+// IQ2_XXS: start the 2 halfword grid-code gathers of a tile into its scratch, returns the sign/scale words
+static inline HVX_Vector iq2xxs_gather_issue(const uint8_t * restrict tile) {
+    HVX_Vector * restrict v_scr = iq2xxs_tile_scratch(tile);
+    const uint8_t * grid = iq2xxs_vtcm_lut + HTP_IQ2XXS_NIBBLE_BYTES;
 
     // lo: 4 grid indices per row, hi: 4 sign indices + scale per row
     HVX_VectorPair p     = Q6_W_vdeal_VVR(hvx_vmem(tile + VLEN), hvx_vmem(tile), -IQ2XXS_WORD_BYTES);
     HVX_Vector     v_idx = Q6_V_lo_W(p);
-    HVX_Vector     v_sgn = Q6_V_hi_W(p);
 
     // one halfword gather per 2 groups: lane i gets the codes of groups 2h and 2h+1 in halfwords 0 and 1
-    HVX_Vector v_off0 = Q6_V_vor_VV(Q6_V_vand_VV(Q6_Vw_vasl_VwR(v_idx, 1), Q6_V_vsplat_R(IQ2XXS_IDX_LO_MASK)),
-                                    Q6_V_vand_VV(Q6_Vw_vasl_VwR(v_idx, 1 + IQ2XXS_IDX_BITS), Q6_V_vsplat_R(IQ2XXS_IDX_HI_MASK)));
+    HVX_Vector v_off0 = Q6_V_vor_VV(Q6_V_vand_VV(Q6_Vw_vasl_VwR(v_idx, IQ2XXS_CODE_SHIFT), Q6_V_vsplat_R(IQ2XXS_IDX_LO_MASK)),
+                                    Q6_V_vand_VV(Q6_Vw_vasl_VwR(v_idx, IQ2XXS_CODE_SHIFT + IQ2XXS_IDX_BITS), Q6_V_vsplat_R(IQ2XXS_IDX_HI_MASK)));
     HVX_Vector v_off1 = Q6_V_vor_VV(Q6_V_vand_VV(Q6_Vuw_vlsr_VuwR(v_idx, 2 * IQ2XXS_IDX_BITS - IQ2XXS_CODE_SHIFT), Q6_V_vsplat_R(IQ2XXS_IDX_LO_MASK)),
-                                    Q6_V_vand_VV(Q6_Vuw_vlsr_VuwR(v_idx, 2 * IQ2XXS_IDX_BITS - IQ2XXS_CODE_SHIFT - IQ2XXS_IDX_BITS), Q6_V_vsplat_R(IQ2XXS_IDX_HI_MASK)));
+                                    Q6_V_vand_VV(Q6_Vuw_vlsr_VuwR(v_idx, IQ2XXS_IDX_BITS - IQ2XXS_CODE_SHIFT), Q6_V_vsplat_R(IQ2XXS_IDX_HI_MASK)));
     Q6_vgather_ARMVh(&v_scr[0], (size_t) grid, HTP_IQ2XXS_GRID_BYTES - 1, v_off0);
     Q6_vgather_ARMVh(&v_scr[1], (size_t) grid, HTP_IQ2XXS_GRID_BYTES - 1, v_off1);
 
-    HVX_Vector v_srep[IQ2XXS_GROUPS];
+    return Q6_V_hi_W(p);
+}
+
+// IQ2_XXS: wait for the gathers of iq2xxs_gather_issue and read the grid codes
+static inline void iq2xxs_gather_wait(const uint8_t * restrict tile, HVX_Vector * restrict v_c) {
+    HVX_Vector * restrict v_scr = iq2xxs_tile_scratch(tile);
+    hvx_gather_sync(&v_scr[1]);
+    v_c[0] = v_scr[0];
+    v_c[1] = v_scr[1];
+}
+
+// IQ2_XXS: 8 int8 weight words (k = 4g..4g+3 per row lane) and the odd group scale (2 * scale + 1) of a 32x32 tile
+static inline void iq2xxs_decode_expand(const HVX_Vector * restrict v_c, HVX_Vector v_sgn, HVX_Vector * restrict v_w, HVX_Vector * restrict v_ls) {
+    const HVX_Vector v_zero     = Q6_V_vzero();
+    const HVX_Vector v_one      = Q6_V_vsplat_R(1);
+    const HVX_Vector v_sgn_mask = Q6_V_vsplat_R(IQ2XXS_SIGN_MASK);
+    const HVX_Vector v_nib_lut  = hvx_vmem(iq2xxs_vtcm_lut);
 
     #pragma unroll
     for (int l = 0; l < IQ2XXS_GROUPS; l++) {
         // 7 stored sign bits + even-parity bit
         HVX_Vector v_s7 = Q6_V_vand_VV(Q6_Vuw_vlsr_VuwR(v_sgn, IQ2XXS_SIGN_BITS * l), v_sgn_mask);
-        HVX_Vector v_t  = Q6_V_vxor_VV(v_s7, Q6_Vuw_vlsr_VuwR(v_s7, 4));
-        v_t = Q6_V_vxor_VV(v_t, Q6_Vuw_vlsr_VuwR(v_t, 2));
-        v_t = Q6_V_vxor_VV(v_t, Q6_Vuw_vlsr_VuwR(v_t, 1));
+        HVX_Vector v_t  = Q6_Vh_vpopcount_Vh(v_s7);
         HVX_Vector v_s   = Q6_V_vor_VV(v_s7, Q6_Vw_vasl_VwR(Q6_V_vand_VV(v_t, v_one), IQ2XXS_PARITY_SHIFT));
         HVX_Vector v_s16 = Q6_V_vor_VV(v_s, Q6_Vw_vasl_VwR(v_s, 8));
         HVX_Vector v_rep = Q6_V_vor_VV(v_s16, Q6_Vw_vasl_VwR(v_s16, 16));
-        v_srep[l] = v_rep;
-    }
+        HVX_VectorPred q_lo = Q6_Q_vand_VR(v_rep, IQ2XXS_SIGN_PRED_LO);
+        HVX_VectorPred q_hi = Q6_Q_vand_VR(v_rep, IQ2XXS_SIGN_PRED_HI);
 
-    hvx_gather_sync(&v_scr[1]);
-
-    #pragma unroll
-    for (int l = 0; l < IQ2XXS_GROUPS; l++) {
-        HVX_Vector v_c = v_scr[l >> 1];
+        HVX_Vector v_c2 = v_c[l >> 1];
         // code halfword duplicated in both halves of each lane
-        HVX_Vector v_d = (l & 1) ? Q6_Vh_vshuffo_VhVh(v_c, v_c) : Q6_Vh_vshuffe_VhVh(v_c, v_c);
+        HVX_Vector v_d = (l & 1) ? Q6_Vh_vshuffo_VhVh(v_c2, v_c2) : Q6_Vh_vshuffe_VhVh(v_c2, v_c2);
         // lane bytes: nibbles 0, 2, 1, 3 of the code, so vlut16 returns elements 0..3 / 4..7 as words
         HVX_Vector v_n = Q6_V_vor_VV(Q6_V_vand_VV(v_d, Q6_V_vsplat_R(IQ2XXS_NIB_LO_MASK)),
                                      Q6_V_vand_VV(Q6_Vuw_vlsr_VuwR(v_d, 4), Q6_V_vsplat_R(IQ2XXS_NIB_HI_MASK)));
@@ -1922,14 +1930,18 @@ static inline void iq2xxs_decode_tile(const uint8_t * restrict tile, HVX_Vector 
         HVX_Vector     v_g0 = Q6_V_lo_W(p_g);
         HVX_Vector     v_g1 = Q6_V_hi_W(p_g);
 
-        HVX_VectorPred q_lo = Q6_Q_vand_VR(v_srep[l], IQ2XXS_SIGN_PRED_LO);
-        HVX_VectorPred q_hi = Q6_Q_vand_VR(v_srep[l], IQ2XXS_SIGN_PRED_HI);
-
         v_w[2 * l + 0] = Q6_V_vmux_QVV(q_lo, Q6_Vb_vsub_VbVb(v_zero, v_g0), v_g0);
         v_w[2 * l + 1] = Q6_V_vmux_QVV(q_hi, Q6_Vb_vsub_VbVb(v_zero, v_g1), v_g1);
     }
 
     *v_ls = Q6_Vw_vadd_VwVw(Q6_Vw_vasl_VwR(Q6_Vuw_vlsr_VuwR(v_sgn, IQ2XXS_SCALE_SHIFT), 1), v_one);
+}
+
+static inline void iq2xxs_decode_tile(const uint8_t * restrict tile, HVX_Vector * restrict v_w, HVX_Vector * restrict v_ls) {
+    HVX_Vector v_sgn = iq2xxs_gather_issue(tile);
+    HVX_Vector v_c[2];
+    iq2xxs_gather_wait(tile, v_c);
+    iq2xxs_decode_expand(v_c, v_sgn, v_w, v_ls);
 }
 
 // IQ2_XXS: fp16 d of the 32 rows of a super-block (8 tiles) in halfword lanes 0..31
@@ -1961,14 +1973,20 @@ static void tiled_vec_dot_iq2xxs_32x1(const uint32_t n, float * restrict s, cons
     HVX_Vector v_sum_float = Q6_V_vzero();
 
     uint32_t n_k_tiles = n / 32;
+    HVX_Vector v_sgn = iq2xxs_gather_issue(tile_ptr);
     for (uint32_t kb = 0; kb < n_k_tiles; kb += IQ2XXS_TILES_PER_SB) {
         HVX_Vector v_d = iq2xxs_load_d(tile_ptr + kb * padded);
 
         for (uint32_t kt = kb; kt < kb + IQ2XXS_TILES_PER_SB; kt++) {
             const HVX_Vector * restrict v_act = (const HVX_Vector *) (y_q + kt * 1152);
 
-            HVX_Vector v_w[8], v_ls;
-            iq2xxs_decode_tile(tile_ptr + kt * padded, v_w, &v_ls);
+            HVX_Vector v_c[2], v_w[8], v_ls;
+            iq2xxs_gather_wait(tile_ptr + kt * padded, v_c);
+            HVX_Vector v_sgn_cur = v_sgn;
+            if (kt + 1 < n_k_tiles) {
+                v_sgn = iq2xxs_gather_issue(tile_ptr + (kt + 1) * padded);
+            }
+            iq2xxs_decode_expand(v_c, v_sgn_cur, v_w, &v_ls);
 
             HVX_Vector v_sum = Q6_V_vzero();
             #pragma unroll
@@ -1999,6 +2017,7 @@ static void tiled_vec_dot_iq2xxs_32x2(const uint32_t n, float * restrict s0, flo
     HVX_Vector v_sum_float_c1 = Q6_V_vzero();
 
     uint32_t n_k_tiles = n / 32;
+    HVX_Vector v_sgn = iq2xxs_gather_issue(tile_ptr);
     for (uint32_t kb = 0; kb < n_k_tiles; kb += IQ2XXS_TILES_PER_SB) {
         HVX_Vector v_d = iq2xxs_load_d(tile_ptr + kb * padded);
 
@@ -2006,8 +2025,13 @@ static void tiled_vec_dot_iq2xxs_32x2(const uint32_t n, float * restrict s0, flo
             const HVX_Vector * restrict v_act0 = (const HVX_Vector *) (y0_q + kt * 1152);
             const HVX_Vector * restrict v_act1 = (const HVX_Vector *) (y1_q + kt * 1152);
 
-            HVX_Vector v_w[8], v_ls;
-            iq2xxs_decode_tile(tile_ptr + kt * padded, v_w, &v_ls);
+            HVX_Vector v_c[2], v_w[8], v_ls;
+            iq2xxs_gather_wait(tile_ptr + kt * padded, v_c);
+            HVX_Vector v_sgn_cur = v_sgn;
+            if (kt + 1 < n_k_tiles) {
+                v_sgn = iq2xxs_gather_issue(tile_ptr + (kt + 1) * padded);
+            }
+            iq2xxs_decode_expand(v_c, v_sgn_cur, v_w, &v_ls);
 
             HVX_Vector v_sum0 = Q6_V_vzero();
             HVX_Vector v_sum1 = Q6_V_vzero();
