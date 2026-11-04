@@ -1,7 +1,9 @@
 #include "lexer.h"
 #include "runtime.h"
+#include "unicode.h"
 
 #include <cctype>
+#include <charconv>
 #include <functional>
 #include <map>
 #include <string>
@@ -75,6 +77,24 @@ lexer_result lexer::tokenize(const std::string & source) {
                 }
                 // add escaped char
                 char escaped_char = src[pos++];
+                if (escaped_char == 'x') {
+                    if (pos + 1 >= src.size()) {
+                        throw lexer_exception("incomplete hexadecimal escape", source, pos);
+                    }
+
+                    unsigned int value = 0;
+                    const char * first = &src[pos];
+                    const char * last  = first + 2;
+
+                    auto [ptr, ec] = std::from_chars(first, last, value, 16);
+                    if (ec != std::errc{} || ptr != last) {
+                        throw lexer_exception("invalid hexadecimal escape", source, pos);
+                    }
+
+                    str += common_unicode_cpt_to_utf8(value);
+                    pos += 2;
+                    continue;
+                }
                 if (escape_chars.find(escaped_char) == escape_chars.end()) {
                     throw lexer_exception(std::string("unknown escape character \\") + escaped_char, source, pos);
                 }

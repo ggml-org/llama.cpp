@@ -113,6 +113,43 @@ describe('parseParamCount', () => {
 	});
 });
 
+describe('isDecisionModel', () => {
+	it('flags the decision-model tag', () => {
+		expect(
+			HuggingFaceService.isDecisionModel({
+				pipeline_tag: 'text-classification',
+				tags: ['gguf', 'decision-model', 'text-classification']
+			})
+		).toBe(true);
+	});
+
+	it('flags a text-classification pipeline even without the tag', () => {
+		expect(
+			HuggingFaceService.isDecisionModel({ pipeline_tag: 'text-classification', tags: ['gguf'] })
+		).toBe(true);
+	});
+
+	it('passes regular LLM tasks through', () => {
+		expect(
+			HuggingFaceService.isDecisionModel({
+				pipeline_tag: 'text-generation',
+				tags: ['gguf', 'text-generation']
+			})
+		).toBe(false);
+
+		expect(
+			HuggingFaceService.isDecisionModel({
+				pipeline_tag: 'image-text-to-text',
+				tags: ['gguf', 'image-text-to-text']
+			})
+		).toBe(false);
+	});
+
+	it('passes repos without task metadata through', () => {
+		expect(HuggingFaceService.isDecisionModel({ pipeline_tag: null, tags: [] })).toBe(false);
+	});
+});
+
 describe('parseSizeBytes', () => {
 	it('parses single-letter catalog size suffixes', () => {
 		expect(parseSizeBytes('177g')).toBe(177e9);

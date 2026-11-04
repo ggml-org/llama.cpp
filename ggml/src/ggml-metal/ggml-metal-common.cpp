@@ -43,9 +43,10 @@ bool ggml_metal_op_mul_mat_use_mm(const struct ggml_tensor * op, bool has_simdgr
 
 bool ggml_metal_op_mul_mat_id_use_mm(const struct ggml_tensor * op, bool has_simdgroup_mm) {
     const int64_t ne00 = op->src[0]->ne[0];
+    const int64_t ne02 = op->src[0]->ne[2];
     const int64_t ne21 = op->src[2]->ne[1];
 
-    return has_simdgroup_mm && ne00 >= 64 && ne21 >= 32;
+    return has_simdgroup_mm && ne00 >= 64 && ne02 <= 1024 && ne21 >= 32;
 }
 
 // the most src1 rows of the few-row MMA kernels

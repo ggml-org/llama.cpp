@@ -36,6 +36,7 @@ import sys
 import tempfile
 import time
 import xml.etree.ElementTree as ET
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -406,11 +407,19 @@ def fetch_logs_and_parse_tests(
 
     with tempfile.TemporaryDirectory() as tmpdir:
         for lf in log_files:
-            zip_path = os.path.join(tmpdir, "log.zip")
+            dl_path = os.path.join(tmpdir, "log.bin")
             log.info("Downloading log file: %s", lf.filename)
-            qdc_api.download_job_log_files(client, lf.filename, zip_path)
             try:
-                shutil.unpack_archive(zip_path, tmpdir, "zip")
+                qdc_api.download_job_log_files_v2(client, lf.filename, dl_path)
+            except Exception as e:
+                log.warning("Could not download %s: %s", lf.filename, e)
+                continue
+            # v2 returns some files raw instead of zipped
+            if not zipfile.is_zipfile(dl_path):
+                os.replace(dl_path, os.path.join(tmpdir, os.path.basename(lf.filename)))
+                continue
+            try:
+                shutil.unpack_archive(dl_path, tmpdir, "zip")
             except Exception as e:
                 log.warning("Could not unpack %s as zip: %s", lf.filename, e)
 
@@ -617,7 +626,7 @@ def main() -> int:
             args.pkg_dir, Path(tmpdir), args.test, args.model_url
         )
         log.info("Uploading artifact (%d MB) ...", zip_path.stat().st_size // 1_000_000)
-        artifact_id = qdc_api.upload_file(client, str(zip_path), ArtifactType.TESTSCRIPT)
+        artifact_id = qdc_api.upload_file_v2(client, str(zip_path), ArtifactType.TESTSCRIPT)
 
     if artifact_id is None:
         log.error("Artifact upload failed")

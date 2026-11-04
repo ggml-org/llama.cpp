@@ -27,12 +27,10 @@ common_chat_params common_chat_params_init_llm_jp_harmony(const common_chat_temp
     if (inputs.is_inference && !inputs.add_generation_prompt) {
         static constexpr std::string_view return_token = "<|return|>";
         static constexpr std::string_view end_token    = "<|end|>";
-        if (size_t pos = prompt.rfind(return_token); pos != std::string::npos) {
-            prompt.replace(pos, return_token.length(), end_token);
-        }
+        prompt.replace_last(std::string(return_token), std::string(end_token));
     }
 
-    data.prompt            = prompt;
+    data.prompt            = std::move(prompt);
     data.generation_prompt = common_chat_template_generation_prompt_impl(tmpl, inputs, /* messages_override= */ adjusted_messages);
     data.message_delimiters = {
         { COMMON_CHAT_ROLE_ASSISTANT, "<|start|>assistant" },
@@ -62,7 +60,7 @@ common_chat_params common_chat_params_init_llm_jp_harmony(const common_chat_temp
             data.generation_prompt += "<|end|><|start|>assistant<|channel|>final<|message|>" + msg.render_content();
         }
 
-        data.prompt += data.generation_prompt;
+        data.prompt.append(data.generation_prompt);
     }
 
     auto has_tools           = inputs.tools.is_array() && !inputs.tools.empty();

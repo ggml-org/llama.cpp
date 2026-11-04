@@ -24,12 +24,10 @@ common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & 
     if (inputs.is_inference && !inputs.add_generation_prompt) {
         static constexpr std::string_view return_token = "<|return|>";
         static constexpr std::string_view end_token    = "<|end|>";
-        if (size_t pos = prompt.rfind(return_token); pos != std::string::npos) {
-            prompt.replace(pos, return_token.length(), end_token);
-        }
+        prompt.replace_last(std::string(return_token), std::string(end_token));
     }
 
-    data.prompt            = prompt;
+    data.prompt            = std::move(prompt);
     data.generation_prompt = common_chat_template_generation_prompt_impl(tmpl, inputs, /* messages_override= */ adjusted_messages);
     data.message_delimiters = {
         { COMMON_CHAT_ROLE_ASSISTANT, "<|start|>assistant" },
@@ -59,7 +57,7 @@ common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & 
             data.generation_prompt += "<|end|><|start|>assistant<|channel|>final<|message|>" + msg.render_content();
         }
 
-        data.prompt += data.generation_prompt;
+        data.prompt.append(data.generation_prompt);
     }
 
     auto has_tools           = inputs.tools.is_array() && !inputs.tools.empty();
@@ -73,6 +71,7 @@ common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & 
         auto content         = p.rule("message-content", p.until("<|end|>"));
         auto channel         = p.literal("<|channel|>") + (p.literal("commentary") | p.literal("analysis"));
         auto constrain_type  = p.chars("[A-Za-z0-9_-]", 1, -1);
+        auto constraint      = p.optional(p.space() + p.optional(p.literal("<|constrain|>")) + constrain_type);
 
         // Occasionally, gpt-oss-20b will prefix channels with this commentary
         auto stray_commentary = p.optional(p.literal("<|channel|>commentary") + p.optional(p.literal(" to=assistant")));
@@ -86,7 +85,7 @@ common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & 
 
         auto analysis = p.ref("analysis");
         auto preamble = p.rule("preamble", p.literal("<|channel|>commentary<|message|>") + p.content(content) + end);
-        auto final_msg = p.rule("final", stray_commentary + p.literal("<|channel|>final<|message|>") + p.content(content));
+        auto final_msg = p.rule("final", stray_commentary + p.literal("<|channel|>final") + constraint + p.literal("<|message|>") + p.content(content));
 
         // Consume any unsolicited tool calls, e.g. builtin functions
         auto unsolicited = p.rule("unsolicited", p.atomic(p.optional(channel) + p.literal(" to=") + content + end));
@@ -94,7 +93,6 @@ common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & 
         auto any = p.rule("any", preamble | analysis);
 
         if (has_response_format) {
-            auto constraint = p.optional(p.space() + p.optional(p.literal("<|constrain|>")) + constrain_type);
             auto response_format = p.rule("response-format",
                 p.literal("<|channel|>final") + constraint + p.literal("<|message|>") +
                 p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema)));
@@ -111,7 +109,6 @@ common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & 
                 const auto   params   = common_chat_tool_parameters(function);
 
                 auto func_name  = p.literal(" to=functions.") + p.tool_name(p.literal(name));
-                auto constraint = p.optional(p.space() + p.optional(p.literal("<|constrain|>")) + constrain_type);
                 auto args       = p.tool_args(p.schema(p.json(), "tool-" + std::to_string(tool_index) + "-schema", params));
 
                 // recipient in role header

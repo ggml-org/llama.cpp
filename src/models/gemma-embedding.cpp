@@ -169,6 +169,4 @@ llama_model_gemma_embedding::graph::graph(const llama_model & model, const llm_g
 
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }

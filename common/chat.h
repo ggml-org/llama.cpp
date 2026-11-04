@@ -45,6 +45,7 @@ struct common_chat_tool_call {
 struct common_chat_msg_content_part {
     std::string type;
     std::string text;
+    std::string name; // tool_reference: name of a tool from the request tools
 
     // TODO @ngxson : no known chat templates support reasoning_content in content parts yet
     //                this can be useful for models with interleaved thinking (like Kimi-K2)
@@ -52,7 +53,7 @@ struct common_chat_msg_content_part {
     // std::string reasoning_content;
 
     bool operator==(const common_chat_msg_content_part & other) const {
-        return type == other.type && text == other.text;
+        return type == other.type && text == other.text && name == other.name;
     }
 };
 
@@ -94,6 +95,8 @@ struct common_chat_msg {
     std::string                               reasoning_content;
     std::string                               tool_name;
     std::string                               tool_call_id;
+    // non-OpenAI message keys as a JSON object string, only for templates that read them (DeepSeek V4.1)
+    std::string                               extra_json;
 
     common_json to_json_oaicompat(bool concat_typed_text = false) const;
 
@@ -224,6 +227,9 @@ struct common_chat_tool {
     std::string name;
     std::string description;
     std::string parameters;
+
+    // withheld from the system prompt, a tool_reference reveals it later in the conversation
+    bool defer_loading = false;
 };
 
 enum common_chat_tool_choice {
@@ -273,9 +279,31 @@ struct common_chat_templates_inputs {
     bool                                  force_pure_content = false;
 };
 
+struct common_chat_prompt_part {
+    std::string text;
+    bool        is_input = false; // from user input, special tokens inside must not be parsed
+};
+
+// rendered chat template, split into template parts and user input parts
+struct common_chat_prompt {
+    std::vector<common_chat_prompt_part> parts;
+
+    common_chat_prompt() = default;
+
+    // single part of template text
+    explicit common_chat_prompt(std::string text) { parts.push_back({std::move(text), false}); }
+
+    std::string str() const;
+
+    void append(const std::string & text, bool is_input = false);
+
+    // replace the last occurrence of `from`, user input parts are skipped
+    void replace_last(const std::string & from, const std::string & to);
+};
+
 struct common_chat_params {
     common_chat_format                  format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
-    std::string                         prompt;
+    common_chat_prompt                  prompt;
     std::string                         grammar;
     bool                                grammar_lazy         = false;
     std::string                         generation_prompt;
@@ -380,7 +408,7 @@ class common_chat_session {
                         const common_chat_templates_inputs & inputs,
                         const common_chat_session_params &   params = {});
 
-    const std::string &      prompt()   const { return prompt_text; }
+    const common_chat_prompt & prompt() const { return prompt_parts; }
     common_chat_format       format()   const { return parser_params.format; }
     const common_chat_msg &  msg()      const { return result; }
     const common_peg_arena & parser()   const { return parser_params.parser; }
@@ -402,7 +430,7 @@ class common_chat_session {
     const common_chat_msg & finish(const common_chat_input & chunk = {});
 
   private:
-    std::string                         prompt_text;
+    common_chat_prompt                  prompt_parts;
     std::string                         grammar_text;
     bool                                grammar_lazy = false;
     std::vector<common_grammar_trigger> grammar_triggers;
@@ -444,9 +472,9 @@ common_json common_chat_tools_to_json_oaicompat(const std::vector<common_chat_to
 common_json common_chat_tool_parameters(const common_json & function);
 
 // get template caps, useful for reporting to server /props endpoint
-std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_templates * chat_templates);
+common_json common_chat_templates_get_caps(const common_chat_templates * chat_templates);
 
-std::string common_chat_template_direct_apply(
+common_chat_prompt common_chat_template_direct_apply(
     const common_chat_template & tmpl,
     const autoparser::generation_params & inputs);
 
@@ -463,6 +491,12 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
 struct common_chat_prompt_preset {
     std::string system;
     std::string user;
+    bool has_language = false; // the preset already names the requested language
 };
 
-common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates * chat_templates);
+common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates * chat_templates, const std::string & language = "");
+
+// prompt of the model's "tts" chat template for the text to speak, empty if the model has none
+// language and voice are optional, the template defines their defaults
+std::string common_chat_get_tts_prompt(const common_chat_templates * chat_templates, const std::string & text,
+                                       const std::string & language = "", const std::string & voice = "");

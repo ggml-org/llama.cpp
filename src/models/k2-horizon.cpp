@@ -357,6 +357,4 @@ llama_model_k2_horizon::graph::graph(const llama_model & model, const llm_graph_
     cur = build_lora_mm(model.output, cur, model.output_s);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }

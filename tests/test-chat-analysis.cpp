@@ -412,8 +412,8 @@ static void analyze_template(const std::string & template_path) {
             autoparser::generation_params params_with_tools = params_no_tools;
             params_with_tools.tools = tools;
 
-            std::string output_no_tools = common_chat_template_direct_apply(chat_template, params_no_tools);
-            std::string output_with_tools = common_chat_template_direct_apply(chat_template, params_with_tools);
+            std::string output_no_tools = common_chat_template_direct_apply(chat_template, params_no_tools).str();
+            std::string output_with_tools = common_chat_template_direct_apply(chat_template, params_with_tools).str();
 
             auto diff = calculate_diff_split(output_no_tools, output_with_tools);
             print_diff_split("Diff: With vs Without Tools (single user message)", diff);
@@ -431,8 +431,8 @@ static void analyze_template(const std::string & template_path) {
             autoparser::generation_params params_with_prompt = params_no_prompt;
             params_with_prompt.add_generation_prompt = true;
 
-            std::string output_no_prompt = common_chat_template_direct_apply(chat_template, params_no_prompt);
-            std::string output_with_prompt = common_chat_template_direct_apply(chat_template, params_with_prompt);
+            std::string output_no_prompt = common_chat_template_direct_apply(chat_template, params_no_prompt).str();
+            std::string output_with_prompt = common_chat_template_direct_apply(chat_template, params_with_prompt).str();
 
             auto diff = calculate_diff_split(output_no_prompt, output_with_prompt);
             print_diff_split("Diff: With vs Without add_generation_prompt (single user message)", diff);
@@ -450,8 +450,8 @@ static void analyze_template(const std::string & template_path) {
             autoparser::generation_params params_with_reasoning = params_no_reasoning;
             params_with_reasoning.messages = json::array({ user_msg, make_assistant_with_reasoning() });
 
-            std::string output_no_reasoning = common_chat_template_direct_apply(chat_template, params_no_reasoning);
-            std::string output_with_reasoning = common_chat_template_direct_apply(chat_template, params_with_reasoning);
+            std::string output_no_reasoning = common_chat_template_direct_apply(chat_template, params_no_reasoning).str();
+            std::string output_with_reasoning = common_chat_template_direct_apply(chat_template, params_with_reasoning).str();
 
             auto diff = calculate_diff_split(output_no_reasoning, output_with_reasoning);
             print_diff_split("Diff: With vs Without reasoning_content (user, assistant)", diff);
@@ -470,8 +470,8 @@ static void analyze_template(const std::string & template_path) {
             autoparser::generation_params params_with_reasoning = params_no_reasoning;
             params_with_reasoning.messages = json::array({ user_msg, make_assistant_with_reasoning(), user_msg2 });
 
-            std::string output_no_reasoning = common_chat_template_direct_apply(chat_template, params_no_reasoning);
-            std::string output_with_reasoning = common_chat_template_direct_apply(chat_template, params_with_reasoning);
+            std::string output_no_reasoning = common_chat_template_direct_apply(chat_template, params_no_reasoning).str();
+            std::string output_with_reasoning = common_chat_template_direct_apply(chat_template, params_with_reasoning).str();
 
             auto diff = calculate_diff_split(output_no_reasoning, output_with_reasoning);
             print_diff_split("Diff: With vs Without reasoning_content (user, assistant, user)", diff);
@@ -489,8 +489,8 @@ static void analyze_template(const std::string & template_path) {
             autoparser::generation_params params_with_tool = params_no_tool;
             params_with_tool.messages = json::array({ user_msg, make_assistant_one_tool() });
 
-            std::string output_no_tool = common_chat_template_direct_apply(chat_template, params_no_tool);
-            std::string output_with_tool = common_chat_template_direct_apply(chat_template, params_with_tool);
+            std::string output_no_tool = common_chat_template_direct_apply(chat_template, params_no_tool).str();
+            std::string output_with_tool = common_chat_template_direct_apply(chat_template, params_with_tool).str();
 
             auto diff = calculate_diff_split(output_no_tool, output_with_tool);
             print_diff_split("Diff: With vs Without tool call (user, assistant)", diff);
@@ -509,8 +509,8 @@ static void analyze_template(const std::string & template_path) {
             autoparser::generation_params params_with_tool = params_no_tool;
             params_with_tool.messages = json::array({ user_msg, make_assistant_one_tool(), user_msg2 });
 
-            std::string output_no_tool = common_chat_template_direct_apply(chat_template, params_no_tool);
-            std::string output_with_tool = common_chat_template_direct_apply(chat_template, params_with_tool);
+            std::string output_no_tool = common_chat_template_direct_apply(chat_template, params_no_tool).str();
+            std::string output_with_tool = common_chat_template_direct_apply(chat_template, params_with_tool).str();
 
             auto diff = calculate_diff_split(output_no_tool, output_with_tool);
             print_diff_split("Diff: With vs Without tool call (user, assistant, user)", diff);
@@ -528,8 +528,8 @@ static void analyze_template(const std::string & template_path) {
             autoparser::generation_params params_two_tools = params_one_tool;
             params_two_tools.messages = json::array({ user_msg, make_assistant_two_tools() });
 
-            std::string output_one_tool = common_chat_template_direct_apply(chat_template, params_one_tool);
-            std::string output_two_tools = common_chat_template_direct_apply(chat_template, params_two_tools);
+            std::string output_one_tool = common_chat_template_direct_apply(chat_template, params_one_tool).str();
+            std::string output_two_tools = common_chat_template_direct_apply(chat_template, params_two_tools).str();
 
             auto diff = calculate_diff_split(output_one_tool, output_two_tools);
             print_diff_split("Diff: One vs Two tool calls (user, assistant)", diff);
@@ -548,8 +548,8 @@ static void analyze_template(const std::string & template_path) {
             autoparser::generation_params params_two_tools = params_one_tool;
             params_two_tools.messages = json::array({ user_msg, make_assistant_two_tools(), user_msg2 });
 
-            std::string output_one_tool = common_chat_template_direct_apply(chat_template, params_one_tool);
-            std::string output_two_tools = common_chat_template_direct_apply(chat_template, params_two_tools);
+            std::string output_one_tool = common_chat_template_direct_apply(chat_template, params_one_tool).str();
+            std::string output_two_tools = common_chat_template_direct_apply(chat_template, params_two_tools).str();
 
             auto diff = calculate_diff_split(output_one_tool, output_two_tools);
             print_diff_split("Diff: One vs Two tool calls (user, assistant, user)", diff);
@@ -568,8 +568,8 @@ static void analyze_template(const std::string & template_path) {
             autoparser::generation_params params_with_reasoning = params_no_reasoning;
             params_with_reasoning.messages = json::array({ user_msg, make_assistant_one_tool_with_reasoning() });
 
-            std::string output_no_reasoning = common_chat_template_direct_apply(chat_template, params_no_reasoning);
-            std::string output_with_reasoning = common_chat_template_direct_apply(chat_template, params_with_reasoning);
+            std::string output_no_reasoning = common_chat_template_direct_apply(chat_template, params_no_reasoning).str();
+            std::string output_with_reasoning = common_chat_template_direct_apply(chat_template, params_with_reasoning).str();
 
             auto diff = calculate_diff_split(output_no_reasoning, output_with_reasoning);
             print_diff_split("Diff: Tool call with vs without reasoning_content (user, assistant)", diff);

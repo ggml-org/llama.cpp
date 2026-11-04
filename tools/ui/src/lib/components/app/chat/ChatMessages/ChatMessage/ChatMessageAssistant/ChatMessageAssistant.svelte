@@ -52,6 +52,9 @@
 	let isStreaming = $derived(chatStore.isStreaming());
 	let hasNoContent = $derived(!message?.content?.trim());
 	let isActivelyProcessing = $derived(isCurrentlyLoading || isStreaming);
+	// A compaction summary reports its own progress on the compaction row, so
+	// this turn stays quiet while it runs instead of duplicating the indicator.
+	let isCompacting = $derived(chatStore.isCompacting(message.convId));
 
 	// during a router auto-load the message has no model yet: target the model frozen in the
 	// persisted stream state (survives a reload), then fall back to the dropdown selection
@@ -66,6 +69,7 @@
 	let showProcessingInfoTop = $derived(
 		message?.role === MessageRole.ASSISTANT &&
 			isActivelyProcessing &&
+			!isCompacting &&
 			hasNoContent &&
 			!isAgentic &&
 			isLastAssistantMessage
@@ -74,6 +78,7 @@
 	let showProcessingInfoBottom = $derived(
 		message?.role === MessageRole.ASSISTANT &&
 			isActivelyProcessing &&
+			!isCompacting &&
 			(!hasNoContent || isAgentic) &&
 			isLastAssistantMessage
 	);
@@ -96,17 +101,37 @@
 			'.chat-message-user'
 		) as HTMLElement | null;
 
-		if (!userMessageEl) {
+		if (!previousChatMessage || !userMessageEl) {
 			lastUserMessageHeight = 0;
 
 			return;
 		}
 
+		// a first exchange opened only by synthetic rows (e.g. the working
+		// directory notice) must fit the screen as well, so they count as part
+		// of the user turn; real earlier messages still scroll away above it
+		const leadingRows: Element[] = [];
+
+		for (
+			let row = previousChatMessage.previousElementSibling;
+			row;
+			row = row.previousElementSibling
+		) {
+			leadingRows.unshift(row);
+		}
+
+		const leadingRowsAreSynthetic =
+			leadingRows.length > 0 &&
+			leadingRows.every((row) => row.classList.contains('chat-message--synthetic'));
 		const updateHeight = () => {
 			const rect = userMessageEl.getBoundingClientRect();
 			const marginTop = Math.round(parseFloat(getComputedStyle(userMessageEl).marginTop));
+			const leadingHeight = leadingRowsAreSynthetic
+				? previousChatMessage.getBoundingClientRect().top -
+					leadingRows[0].getBoundingClientRect().top
+				: 0;
 
-			lastUserMessageHeight = Math.round(rect.height + marginTop);
+			lastUserMessageHeight = Math.round(rect.height + marginTop + leadingHeight);
 		};
 
 		updateHeight();
@@ -114,6 +139,10 @@
 		const resizeObserver = new ResizeObserver(updateHeight);
 
 		resizeObserver.observe(userMessageEl);
+
+		if (leadingRowsAreSynthetic) {
+			for (const row of leadingRows) resizeObserver.observe(row);
+		}
 
 		return () => {
 			resizeObserver.disconnect();
@@ -188,7 +217,6 @@
 			onRawOutputToggle={(enabled) => (showRawOutput = enabled)}
 			{onRegenerate}
 			rawOutputEnabled={showRawOutput}
-			role={MessageRole.ASSISTANT}
 			showRawOutputSwitch={currentConfig.showRawOutputSwitch}
 		/>
 	{/if}

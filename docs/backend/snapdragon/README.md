@@ -6,8 +6,8 @@ The cross-compilation toolchain images are provided by the
 [Qualcomm Snapdragon Toolchain registry](https://github.com/snapdragon-toolchain).
 These Docker images include the Android NDK, OpenCL SDK, Hexagon SDK, CMake, and the necessary cross-compilers:
 
-* **Android toolchain**: `ghcr.io/snapdragon-toolchain/arm64-android:v0.7`
-* **Linux toolchain**: `ghcr.io/snapdragon-toolchain/arm64-linux:v0.7`
+* **Android toolchain**: `ghcr.io/snapdragon-toolchain/arm64-android:v0.8`
+* **Linux toolchain**: `ghcr.io/snapdragon-toolchain/arm64-linux:v0.8`
 
 The unified build utility (`scripts/snapdragon/build.py`) automatically pulls
 and orchestrates these containers to perform target compilation.
@@ -40,7 +40,7 @@ Alternatively, you can build llama.cpp manually by entering the cross-compilatio
 
 ```bash
 # Start the cross-compilation container manually:
-~/src/llama.cpp$ docker run -it --rm -u $(id -u):$(id -g) --volume $(pwd):/workspace --platform linux/amd64 ghcr.io/snapdragon-toolchain/arm64-android:v0.7
+~/src/llama.cpp$ docker run -it --rm -u $(id -u):$(id -g) --volume $(pwd):/workspace --platform linux/amd64 ghcr.io/snapdragon-toolchain/arm64-android:v0.8
 
 # Inside the container, build the project using presets:
 [d]/workspace> cp docs/backend/snapdragon/CMakeUserPresets.json .
@@ -53,7 +53,7 @@ Preset CMake variables:
   GGML_HEXAGON="ON"
   GGML_OPENCL="ON"
   GGML_OPENMP="OFF"
-  HEXAGON_SDK_ROOT="/opt/hexagon/6.6.0.0"
+  HEXAGON_SDK_ROOT="/opt/hexagon/6.7.0.0"
 ...
 -- Including OpenCL backend
 -- Including Hexagon backend
@@ -324,11 +324,39 @@ on 4 physical NPUs, or `--devices 'HTP0[0-1:0],HTP1[0-1:1]'` on 2 physical NPUs 
 - `GGML_HEXAGON_NHVX=0`
   Controls the number of HVX hardware threads to use. The default is all (actual number varies depending on the hardware version).
 
+- `GGML_HEXAGON_VTCM_SIZE=0`
+  Overrides the VTCM size used by each session. Accepts `K`, `M` and `G` suffixes; a plain number is in MB. The default (0) uses the size the hardware reports. Values above the hardware size will fail to start the session.
+
 - `GGML_HEXAGON_HOSTBUF=1` (default: 0, disabled)
   Enables allocating host buffers for debugging. By default, host buffers are disabled.
 
 - `GGML_HEXAGON_DMA64=0` (default: enabled on v81+)
   Disables 64-bit DMA for model weights. Set to `1` to enable it explicitly on a supported architecture.
+
+- `GGML_HEXAGON_POWER_MODE=default`
+  Controls the DCVS/HMX power mode requested from the HTP DSP for the session. Modes are listed
+  from lowest to highest power. All modes except `burst` leave DCVS enabled and keep the HTP awake.
+
+  - `low_power_saver`
+  - `power_saver`
+  - `high_power_saver`
+  - `low_balanced`
+  - `balanced`
+  - `high_performance`
+  - `sustained_high_performance`
+  - `burst` (maximum clocks, disables DCVS; may thermal-throttle on sustained workloads)
+  - `default` (currently aliases to `burst`)
+
+  Unknown values are logged as a warning and fall back to `burst`.
+
+  This must be set in the environment before the process initializes the backend registry, so
+  there is no `llama-*` CLI flag for it. The `run.py` runner exposes it as `--hex-power-mode`.
+
+  Examples:
+
+      `GGML_HEXAGON_POWER_MODE=balanced llama-completion ...`
+      `./scripts/snapdragon/run.py --hex-power-mode sustained_high_performance ...`
+
 
 - `GGML_HEXAGON_VERBOSE=1`
   Enables verbose logging of Ops from the backend. Example output:

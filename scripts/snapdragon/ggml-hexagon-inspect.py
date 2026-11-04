@@ -255,7 +255,7 @@ class HexagonToolchain:
         use_docker: bool = False,
         image_url: str = "ghcr.io/snapdragon-toolchain",
         image_name: str = "arm64-android",
-        image_ver: str = "v0.7",
+        image_ver: str = "v0.8",
     ):
         self.repo_root = repo_root
         self.image = f"{image_url}/{image_name}:{image_ver}"
@@ -322,15 +322,14 @@ class HexagonToolchain:
         if not self.docker_bin:
             raise RuntimeError("Docker is required but not installed or found on PATH.")
 
-        container_tools_dir = "/opt/hexagon/6.6.0.0/tools/HEXAGON_Tools/19.0.07/Tools/bin"
         if "objdump" in tool_name:
-            container_tool = f"{container_tools_dir}/hexagon-llvm-objdump"
+            tool_bin = "hexagon-llvm-objdump"
         elif "addr2line" in tool_name:
-            container_tool = f"{container_tools_dir}/hexagon-addr2line"
+            tool_bin = "hexagon-addr2line"
         elif "nm" in tool_name:
-            container_tool = f"{container_tools_dir}/llvm-nm"
+            tool_bin = "llvm-nm"
         else:
-            container_tool = f"{container_tools_dir}/{tool_name}"
+            tool_bin = tool_name
 
         # Translate file paths from host to /workspace
         translated_args = [translate_container_arg(arg, self.repo_root) for arg in args]
@@ -350,7 +349,9 @@ class HexagonToolchain:
         if platform.system() != "Windows":
             docker_cmd += ["-u", f"{os.getuid()}:{os.getgid()}"]
 
-        docker_cmd += [self.image, container_tool] + translated_args
+        default_tools_root = "/opt/hexagon/6.7.0.0/tools/HEXAGON_Tools/21.0.04"
+        sh_cmd = f'exec "${{HEXAGON_TOOLS_ROOT:-{default_tools_root}}}/Tools/bin/{tool_bin}" "$@"'
+        docker_cmd += [self.image, "sh", "-c", sh_cmd, "--"] + translated_args
 
         res = subprocess.run(docker_cmd, capture_output=True, text=True, input=stdin_data)
         if res.returncode != 0:
@@ -1457,8 +1458,8 @@ def main():
     )
     parser.add_argument(
         "--toolchain-version",
-        default="v0.7",
-        help="Docker toolchain tag (default: v0.7).",
+        default="v0.8",
+        help="Docker toolchain tag (default: v0.8).",
     )
     parser.add_argument(
         "--toolchain-url",

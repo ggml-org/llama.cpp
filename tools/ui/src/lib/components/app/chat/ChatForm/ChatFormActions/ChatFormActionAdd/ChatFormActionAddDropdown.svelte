@@ -15,6 +15,7 @@
 	import { getChatFormActionsContext } from '$lib/contexts';
 	import { AttachmentAction, AttachmentItemEnabledWhen } from '$lib/enums';
 	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
+	import { serverStore } from '$lib/stores';
 
 	interface Props {
 		class?: string;

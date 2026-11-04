@@ -18,10 +18,22 @@ export enum ServerModelStatus {
 	DOWNLOADED = 'downloaded',
 	DOWNLOADING = 'downloading',
 	FAILED = 'failed',
+	/** A download that never finished: listed by the server without an instance, resumable. */
+	INCOMPLETE = 'incomplete',
 	LOADED = 'loaded',
 	LOADING = 'loading',
 	SLEEPING = 'sleeping',
 	UNLOADED = 'unloaded'
+}
+
+/**
+ * Where the router found a model - matches server_model_source in
+ * tools/server/server-models.h. Only a cached model can be removed from disk.
+ */
+export enum ServerModelSource {
+	CACHE = 'cache',
+	MODELS_DIR = 'models_dir',
+	PRESET = 'preset'
 }
 
 /**

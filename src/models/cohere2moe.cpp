@@ -275,8 +275,6 @@ llama_model_cohere2moe::graph::graph(const llama_model & model, const llm_graph_
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }
 
 llama_model_cohere2moe::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
@@ -426,6 +424,4 @@ llama_model_cohere2moe::graph_mtp::graph_mtp(const llama_model & model, const ll
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }

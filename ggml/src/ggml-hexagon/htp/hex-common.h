@@ -17,6 +17,10 @@
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #endif
 
+#ifndef HEX_L2_LINE_SIZE
+#define HEX_L2_LINE_SIZE 128
+#endif
+
 static inline uint32_t hex_ceil_pow2(uint32_t x) {
     if (x <= 1) { return 1; }
     int p = 2;

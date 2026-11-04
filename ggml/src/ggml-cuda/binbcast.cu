@@ -580,8 +580,7 @@ void ggml_cuda_op_repeat_back(ggml_backend_cuda_context & ctx, ggml_tensor * dst
             float       * dst_d  = (float       *) dst->data;
             repeat_back_cuda(src0_d, dst_d, ne00, ne01, ne02, ne03, s00, s01, s02, s03, ne0, ne1, ne2, ne3, stream);
         } break;
-        default: {
+        default:
             GGML_ASSERT(false);
-        } break;
     }
 }

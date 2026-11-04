@@ -361,7 +361,7 @@ static void render_scenario(const common_chat_template & tmpl,
             inputs.tools = tools;
         }
 
-        std::string output = common_chat_template_direct_apply(tmpl, inputs);
+        std::string output = common_chat_template_direct_apply(tmpl, inputs).str();
 
         LOG_ERR("\n--- Rendered Output ---\n");
         LOG_ERR("%s\n", output.c_str());

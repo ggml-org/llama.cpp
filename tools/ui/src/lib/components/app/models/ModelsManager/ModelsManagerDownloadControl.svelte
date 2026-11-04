@@ -38,10 +38,7 @@
 			class="h-5 w-5 hover:text-foreground"
 			icon={isPaused ? MODEL_DOWNLOAD_ICONS.resume : MODEL_DOWNLOAD_ICONS.pause}
 			iconSize="h-4 w-4"
-			onclick={() =>
-				void (isPaused
-					? modelsStore.status.downloadModel(option.model)
-					: modelsStore.status.pauseDownload(option.model))}
+			onclick={() => void modelsStore.status.toggleDownload(option.model)}
 			stopPropagationOnClick
 			tooltip={isPaused ? 'Resume downloading' : 'Pause downloading'}
 			tooltipAsTitle

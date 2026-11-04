@@ -189,7 +189,6 @@ static void concat_cuda(const ggml_tensor * src0, const ggml_tensor * src1, ggml
                 break;
             default:
                 GGML_ABORT("Invalid dim: %d", dim);
-                break;
         }
     }
 }
@@ -236,7 +235,6 @@ void ggml_cuda_op_concat(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
                 break;
             default:
                 GGML_ABORT("Unsupported type size: %zu", ggml_type_size(src0->type));
-                break;
         }
     }
 }

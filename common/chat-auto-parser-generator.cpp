@@ -58,7 +58,7 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
             data.generation_prompt += msg.render_content();
         }
 
-        data.prompt += data.generation_prompt;
+        data.prompt.append(data.generation_prompt);
     }
 
     data.parser = autoparser.build_parser(inputs, parser_generation_prompt);
