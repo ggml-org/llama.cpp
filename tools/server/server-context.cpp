@@ -4104,11 +4104,14 @@ private:
                         slot.prompt.tokens.push_back(cur_tok);
 
                         // break at the last user message, or at user messages at least min step past the last checkpoint
+                        // (with --checkpoint-fill-batch: only if the rest of the prompt needs another batch anyway)
                         if (do_checkpoint && spans.is_user_start(slot.prompt.n_tokens())) {
                             const auto pos = slot.prompt.n_tokens();
                             const auto & checkpoints = slot.prompt.checkpoints;
 
-                            if (pos == last_user_pos || checkpoints.empty() || pos > checkpoints.back().n_tokens + params_base.checkpoint_min_step) {
+                            const bool rest_fits = batch.size() + (slot.task->n_tokens() - pos) <= n_batch;
+                            if (!(params_base.checkpoint_fill_batch && rest_fits) &&
+                                (pos == last_user_pos || checkpoints.empty() || pos > checkpoints.back().n_tokens + params_base.checkpoint_min_step)) {
                                 break;
                             }
                         }

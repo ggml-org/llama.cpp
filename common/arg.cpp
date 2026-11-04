@@ -1716,6 +1716,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CHECKPOINT_MIN_SPACING_NT").set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
+        {"--checkpoint-fill-batch"},
+        "do not end a prompt batch early at a user message to create a checkpoint there when the rest of the prompt fits in the batch "
+        "(for setups where every batch is expensive, e.g. weights streamed from disk per batch; default: disabled)",
+        [](common_params & params) {
+            params.checkpoint_fill_batch = true;
+        }
+    ).set_env("LLAMA_ARG_CHECKPOINT_FILL_BATCH").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"-cram", "--cache-ram"}, "N",
         string_format("set the maximum cache size in MiB (default: %d, 0 for decision models, -1 - no limit, 0 - disable)"
             "[(more info)](https://github.com/ggml-org/llama.cpp/pull/16391)", params.cache_ram_mib),
