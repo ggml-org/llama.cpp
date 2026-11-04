@@ -1231,6 +1231,7 @@ class ggml_webgpu_shader_lib {
     std::unordered_map<int, webgpu_pipeline> argsort_pipelines;        // key is order
     std::unordered_map<int, webgpu_pipeline> argsort_merge_pipelines;  // key is order
     std::unordered_map<int, webgpu_pipeline> cumsum_pipelines;         // key is fixed, no variants yet
+    std::unordered_map<int, webgpu_pipeline> timestep_embedding_pipelines; // key is fixed, no variants yet
     std::unordered_map<ggml_webgpu_row_norm_pipeline_key, webgpu_pipeline, ggml_webgpu_row_norm_pipeline_key_hash>
         row_norm_pipelines;                                            // op/inplace
 
@@ -1538,6 +1539,21 @@ class ggml_webgpu_shader_lib {
         auto processed      = preprocessor.preprocess(wgsl_cumsum, defines);
         cumsum_pipelines[1] = ggml_webgpu_create_pipeline(device, processed, "cumsum");
         return cumsum_pipelines[1];
+    }
+
+    webgpu_pipeline get_timestep_embedding_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        auto it = timestep_embedding_pipelines.find(1);
+        if (it != timestep_embedding_pipelines.end()) {
+            return it->second;
+        }
+
+        std::vector<std::string> defines;
+        defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+
+        auto processed = preprocessor.preprocess(wgsl_timestep_embedding, defines);
+        timestep_embedding_pipelines[1] = ggml_webgpu_create_pipeline(device, processed, "timestep_embedding");
+        return timestep_embedding_pipelines[1];
+
     }
 
     webgpu_pipeline get_argsort_pipeline(const ggml_webgpu_shader_lib_context & context) {
