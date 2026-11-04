@@ -6,6 +6,7 @@
 #include "server-common.h"
 #include "server-decision.h"
 #include "server-http.h"
+#include "server-kv-watermarks.h"
 #include "server-task.h"
 #include "server-queue.h"
 #include "server-realtime.h"
@@ -33,6 +34,7 @@
 #include <random>
 #include <utility>
 #include <fstream>
+#include <sstream>
 
 // fix problem with std::min and std::max
 #if defined(_WIN32)
@@ -338,6 +340,9 @@ struct server_slot {
     // state
     slot_state state = SLOT_STATE_IDLE;
 
+    bool watermark_paused = false;
+    int64_t watermark_pause_start = 0;
+
     server_prompt prompt;
 
     bool prompt_save(server_prompt_cache & prompt_cache) const {
@@ -426,6 +431,8 @@ struct server_slot {
         SLT_DBG(*this, "%s", "\n");
 
         spec_is_replay = false;
+        watermark_paused = false;
+        watermark_pause_start = 0;
 
         last_nl_pos    = 0;
         generated      = {};
@@ -1116,6 +1123,82 @@ private:
 
     server_metrics metrics;
 
+    server_kv_watermarks kv_watermarks;
+    bool kv_watermarks_enabled = false;
+    bool watermark_completed = false;
+    double watermark_free_percent = 100.0;
+    size_t watermark_resident = 0;
+
+    void update_kv_watermarks(bool schedule = true) {
+        if (!kv_watermarks_enabled) {
+            return;
+        }
+        if (schedule) {
+            const int64_t now = ggml_time_ms();
+            for (auto & slot : slots) {
+                if (slot.watermark_paused && now - slot.watermark_pause_start >= int64_t(3600) * 1000) {
+                    send_error(slot, "KV watermark wait timed out", ERROR_TYPE_UNAVAILABLE);
+                    slot.release();
+                }
+            }
+        }
+
+        server_kv_watermark_cells cells;
+        auto inspect = [&]() {
+            cells = server_kv_watermarks_get_cells(ctx_tgt);
+            const auto draft = server_kv_watermarks_get_cells(ctx_dft);
+            if (draft.total > 0 && (cells.total == 0 || draft.free_percent() < cells.free_percent())) {
+                cells = draft;
+            }
+            watermark_free_percent = cells.free_percent();
+        };
+        inspect();
+        while (watermark_free_percent <= kv_watermarks.low && try_clear_idle_slots()) {
+            inspect();
+        }
+
+        std::vector<server_slot *> candidates;
+        watermark_resident = 0;
+        for (auto & slot : slots) {
+            watermark_resident += slot.is_processing();
+            if (slot.is_processing() && !slot.audio_wait && slot.state != SLOT_STATE_WAIT_OTHER) {
+                candidates.push_back(&slot);
+            } else if (schedule) {
+                // Audio-only idle slots leave no paused work that requires a timer to wake the queue.
+                slot.watermark_paused = false;
+                slot.watermark_pause_start = 0;
+            }
+        }
+        std::sort(candidates.begin(), candidates.end(), [](const auto * a, const auto * b) {
+            return a->task->id < b->task->id;
+        });
+        const int previous_level = kv_watermarks.level;
+        kv_watermarks.update(watermark_free_percent, watermark_resident, watermark_completed);
+        watermark_completed = false;
+        const size_t runnable = std::min(candidates.size(), kv_watermarks.runnable(watermark_resident));
+        if (previous_level != kv_watermarks.level) {
+            SRV_INF("kv_watermark %s\n", json({{"event", "level"}, {"level", kv_watermarks.level},
+                {"free", cells.free}, {"total", cells.total}, {"resident", watermark_resident},
+                {"runnable", runnable}}).dump().c_str());
+        }
+        if (!schedule) {
+            return;
+        }
+        for (size_t i = 0; i < candidates.size(); ++i) {
+            auto & slot = *candidates[i];
+            const bool pause = i >= runnable;
+            if (pause == slot.watermark_paused) {
+                continue;
+            }
+            slot.watermark_paused = pause;
+            slot.watermark_pause_start = pause ? ggml_time_ms() : 0;
+            SRV_INF("kv_watermark %s\n", json({{"event", pause ? "pause" : "resume"}, {"task", slot.task->id},
+                {"slot", slot.id}, {"history", slot.prompt.n_tokens()}, {"generated", slot.stats.n_gen},
+                {"free", cells.free}, {"total", cells.total}, {"resident", watermark_resident},
+                {"runnable", runnable}, {"oldest", candidates.front()->task->id}}).dump().c_str());
+        }
+    }
+
     // queued prompt stats - llama_decode() is async, so the timing is only valid after a sync
     // note: kept out of server_metrics, which is copied as-is into the task result
     int64_t  t_decode_start  = 0; // start of the last submitted decode
@@ -1543,6 +1626,7 @@ private:
             };
 
             slot.callback_on_reset = [this](const server_slot & slot) {
+                watermark_completed |= !slot.watermark_paused;
                 // flush the generated token stats before reset()
                 if (slot.stats.n_gen > 0) {
                     metrics_on_prediction(slot);
@@ -1550,6 +1634,28 @@ private:
             };
 
             slot.reset();
+        }
+
+        kv_watermarks = {};
+        kv_watermarks_enabled = false;
+        watermark_completed = false;
+        if (const char * value = getenv("LLAMA_SERVER_KV_WATERMARKS")) {
+            std::istringstream input(value);
+            char comma = 0;
+            if (!params_base.kv_unified || !(input >> kv_watermarks.low >> comma >> kv_watermarks.critical) ||
+                    comma != ',' || kv_watermarks.critical <= 0 || kv_watermarks.critical >= kv_watermarks.low ||
+                    kv_watermarks.low >= 100 || (input >> std::ws && !input.eof())) {
+                SRV_ERR("%s", "LLAMA_SERVER_KV_WATERMARKS requires unified KV and low,critical percentages with 0 < critical < low < 100\n");
+                return false;
+            }
+            const auto target = server_kv_watermarks_get_cells(ctx_tgt);
+            const auto draft = server_kv_watermarks_get_cells(ctx_dft);
+            kv_watermarks_enabled = target.supported && draft.supported && (target.total > 0 || draft.total > 0);
+            if (kv_watermarks_enabled) {
+                SRV_INF("KV watermarks: low = %d%%, critical = %d%%, attention cells only\n", kv_watermarks.low, kv_watermarks.critical);
+            } else {
+                SRV_WRN("%s", "KV watermarks disabled: no inspectable shared attention cells in target or draft context\n");
+            }
         }
 
         {
@@ -3041,6 +3147,14 @@ private:
 
                     const int id_task = task.id;
 
+                    update_kv_watermarks(false);
+                    if (kv_watermarks_enabled && !kv_watermarks.can_admit(watermark_free_percent, watermark_resident)) {
+                        SRV_INF("kv_watermark %s\n", json({{"event", "defer"}, {"task", id_task},
+                            {"free_percent", watermark_free_percent}, {"resident", watermark_resident}}).dump().c_str());
+                        queue_tasks.defer(std::move(task));
+                        break;
+                    }
+
                     server_slot * slot = get_available_slot(task);
 
                     //
@@ -3562,13 +3676,15 @@ private:
         }
 #endif
 
+        update_kv_watermarks();
+
         // check if all slots are idle
         // a realtime slot waiting for audio has no work, the next audio control task wakes the loop
         {
             bool all_idle = true;
 
             for (auto & slot : slots) {
-                if (slot.is_processing() && !slot.audio_wait) {
+                if (slot.is_processing() && !slot.audio_wait && !slot.watermark_paused) {
                     all_idle = false;
                     break;
                 }
@@ -3682,7 +3798,7 @@ private:
     // realtime conversations (SERVER_TASK_TYPE_REALTIME) drive their own decode loop, see server_realtime_slot
     void process_realtime_slots() {
         iterate(slots, [&](server_slot & slot) {
-            if (!slot.is_processing() || !slot.rt) {
+            if (!slot.is_processing() || slot.watermark_paused || !slot.rt) {
                 return;
             }
             if (!slot.rt->update()) {
@@ -3696,7 +3812,7 @@ private:
 
     void process_tts_slots() {
         iterate(slots, [&](server_slot & slot) {
-            if (!slot.is_processing() || slot.task->type != SERVER_TASK_TYPE_TTS) {
+            if (!slot.is_processing() || slot.watermark_paused || slot.task->type != SERVER_TASK_TYPE_TTS) {
                 return;
             }
 
@@ -3773,6 +3889,9 @@ private:
         // apply context-shift if needed
         // TODO: simplify and improve
         iterate(slots, [&](server_slot & slot) {
+            if (slot.watermark_paused) {
+                return;
+            }
             if (slot.task && (slot.task->type == SERVER_TASK_TYPE_TTS || slot.task->type == SERVER_TASK_TYPE_REALTIME)) {
                 // TTS and realtime conversation slots drive their own decode loop, never enter the shared batch
                 return;
@@ -3849,7 +3968,7 @@ private:
 
         // determine which slots are generating and drafting
         iterate(slots, [&](server_slot & slot) {
-            if (slot.state != SLOT_STATE_GENERATING || slot.task->type == SERVER_TASK_TYPE_TTS || slot.task->type == SERVER_TASK_TYPE_REALTIME) {
+            if (slot.watermark_paused || slot.state != SLOT_STATE_GENERATING || slot.task->type == SERVER_TASK_TYPE_TTS || slot.task->type == SERVER_TASK_TYPE_REALTIME) {
                 return;
             }
 
@@ -3990,12 +4109,21 @@ private:
         if (params_base.cont_batching || batch.size() == 0) {
             bool add_ok = true; // false means the batch is full, skip remaining slots
 
-            iterate(slots, [&](server_slot & slot) {
+            std::vector<server_slot *> prompt_order;
+            for (auto & slot : slots) {
+                prompt_order.push_back(&slot);
+            }
+            if (kv_watermarks_enabled) {
+                std::sort(prompt_order.begin(), prompt_order.end(), [](const auto * a, const auto * b) {
+                    return (a->task ? a->task->id : -1) < (b->task ? b->task->id : -1);
+                });
+            }
+            iterate(prompt_order, [&](server_slot & slot) {
                 if (!add_ok || batch.size() >= n_batch) {
                     return; // batch is full, skip remaining slots
                 }
 
-                if (!slot.is_processing() || slot.task->type == SERVER_TASK_TYPE_TTS || slot.task->type == SERVER_TASK_TYPE_REALTIME) {
+                if (!slot.is_processing() || slot.watermark_paused || slot.task->type == SERVER_TASK_TYPE_TTS || slot.task->type == SERVER_TASK_TYPE_REALTIME) {
                     return;
                 }
 
