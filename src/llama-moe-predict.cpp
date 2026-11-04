@@ -33,6 +33,18 @@ static constexpr int      MOE_PRED_LOG     = 64;         // steps between log li
 static constexpr size_t   MOE_PRED_PROBE   = 1024u*1024; // residency probe: bytes per expert tensor (one mincore each)
 static constexpr int      MOE_PRED_NPROBE  = 8;          // experts probed per layer at most
 static constexpr int64_t  MOE_PRED_IO_GAP  = 2500000;    // us: a longer gap between io clock updates restarts the clock
+static constexpr int      MOE_PRED_QUIET   = 2;          // tokens whose selected experts were all resident: quiet
+
+#if defined(LLAMA_MOE_PREDICT_MADVISE)
+// the first and the last page of [p, p + n) are resident (for a file mapping: in the page cache)
+static bool ends_resident(uintptr_t p, size_t n, size_t page_size) {
+    const uintptr_t mask = ~(uintptr_t) (page_size - 1);
+    unsigned char v0 = 0;
+    unsigned char v1 = 0;
+    return mincore((void *) (p & mask), page_size, &v0) == 0 && (v0 & 1) &&
+           mincore((void *) ((p + n - 1) & mask), page_size, &v1) == 0 && (v1 & 1);
+}
+#endif
 
 // bytes the calling thread caused to be read from storage so far (0 if unknown)
 static uint64_t thread_read_bytes() {
@@ -111,13 +123,19 @@ llama_moe_predictor::llama_moe_predictor(const params & p, std::vector<layer_ten
 
     ls.resize(par.n_layer);
     uds.resize(par.n_layer);
+    int n_moe = 0;
     for (int il = 0; il < par.n_layer; ++il) {
         if (lt[il].exps[0] != nullptr) {
             ls[il].pop.assign(par.n_expert, 0.0f);
+            n_moe++;
             if (first_moe < 0) {
                 first_moe = il;
             }
         }
+    }
+    // the HIGH loads check residency only with a trusted mincore
+    if (par.mode == MODE_PREFETCH && par.mincore_ok) {
+        quiet_min = (uint64_t) MOE_PRED_QUIET*n_moe*par.n_used;
     }
     decay = std::pow(0.5f, 1.0f/64.0f); // popularity half-life: 64 tokens
     scratch_mark.assign(par.n_expert, 0);
@@ -456,6 +474,7 @@ void llama_moe_predictor::on_layer(int il, const int32_t * sel, size_t sel_nb0, 
             enqueue(false, il_next, guess);
         }
     }
+    quiet_latched.store(quiet_min > 0 && quiet_run.load(std::memory_order_relaxed) >= quiet_min, std::memory_order_relaxed);
     if (do_save) {
         {
             std::lock_guard<std::mutex> lock(qmtx);
@@ -511,10 +530,11 @@ void llama_moe_predictor::log_stats_locked() {
     const double elapsed = (double) std::max<int64_t>(1, ggml_time_us() - t_start_us);
     const uint64_t hn = high_n.load();
     LLAMA_LOG_INFO("%s: step %llu: recall %.3f (router top16/24/32/48 %.3f/%.3f/%.3f/%.3f, +pop4 at 16/24/32 %.3f/%.3f/%.3f), "
-            "n_r %d..%d, n_p %d..%d, unused guesses %.1f/token, worker busy %.0f%%, high wait %.1f ms, low drops %llu\n",
+            "n_r %d..%d, n_p %d..%d, unused guesses %.1f/token, worker busy %.0f%%, high wait %.1f ms, low drops %llu, resident skips %llu\n",
             __func__, (unsigned long long) step, hits/a, cf[0]/a, cf[1]/a, cf[2]/a, cf[3]/a, cfm[0]/a, cfm[1]/a, cfm[2]/a,
             nr_min, nr_max, np_min, np_max, tokens ? (double) wasted/tokens : 0.0,
-            100.0*busy_us.load()/elapsed, hn ? high_wait_us.load()/1000.0/hn : 0.0, (unsigned long long) low_drops.load());
+            100.0*busy_us.load()/elapsed, hn ? high_wait_us.load()/1000.0/hn : 0.0, (unsigned long long) low_drops.load(),
+            (unsigned long long) resident_skips.load());
 }
 
 llama_moe_predictor::layer_view llama_moe_predictor::view(int il) const {
@@ -608,13 +628,24 @@ void llama_moe_predictor::prefetch_expert(int il, int e, bool low, uint64_t step
     const bool     account = pred_tag != nullptr;
     const uint64_t io0     = account ? load_bytes(il, e, !low) : 0;
     const uint64_t nested0 = t_nested_bytes;
+    bool all_res = false;
 #if defined(LLAMA_MOE_PREDICT_MADVISE)
+    all_res = par.mincore_ok;
     for (const ggml_tensor * t : lt[il].exps) {
         if (t == nullptr || e >= t->ne[2]) {
             continue;
         }
         const size_t nb02 = t->nb[2];
         const uintptr_t slice = (uintptr_t) t->data + (uintptr_t) e*nb02;
+        // a hint on resident pages reads nothing, but the kernel still walks every page of the slice
+        if (par.mincore_ok && ends_resident(slice, nb02, page_size)) {
+            resident_skips++;
+            if (low && n_high_pending.load(std::memory_order_relaxed) > 0) {
+                drain_high();
+            }
+            continue;
+        }
+        all_res = false;
         if (numa_willneed != nullptr) {
             numa_willneed((const void *) slice, t->nb[1], t->ne[1]);
             if (low && n_high_pending.load(std::memory_order_relaxed) > 0) {
@@ -644,6 +675,12 @@ void llama_moe_predictor::prefetch_expert(int il, int e, bool low, uint64_t step
     const uint64_t b      = d > nested ? d - nested : 0;
     if (!low) {
         t_nested_bytes += b;
+    }
+    // a selected expert that was not resident, or any read from disk, ends the quiet state at once
+    if (b > 0 || (!low && !all_res)) {
+        quiet_run.store(0, std::memory_order_relaxed);
+    } else if (!low) {
+        quiet_run++;
     }
     account_load(il, e, low, step, b);
 }
@@ -1015,7 +1052,50 @@ void llama_moe_predictor_hint_op(struct ggml_tensor * dst, int ith, int nth, voi
 
     GGML_ASSERT(sel->type == GGML_TYPE_I32 && sel->ne[0] == ud->pred->n_used());
 
+    // quiet: the router op did not compute the logits, and nothing is guessed
+    const bool use_pl = pl != nullptr && !ud->pred->quiet();
+
     ud->pred->on_layer(ud->il, (const int32_t *) sel->data, sel->nb[0], sel->nb[1], (int) sel->ne[1],
-            pl ? ud->il_next : -1, pl ? (const float *) pl->data : nullptr, pl ? pl->nb[1] : 0,
+            use_pl ? ud->il_next : -1, use_pl ? (const float *) pl->data : nullptr, use_pl ? pl->nb[1] : 0,
             bias ? (const float *) bias->data : nullptr);
+}
+
+void llama_moe_predictor_router_op(struct ggml_tensor * dst, int ith, int nth, void * userdata) {
+    const auto * ud = (const llama_moe_predictor::hint_ud *) userdata;
+    if (ud->pred->quiet()) {
+        return;
+    }
+
+    const ggml_tensor * w = dst->src[0];
+    const ggml_tensor * x = dst->src[1];
+
+    GGML_ASSERT(w->type == GGML_TYPE_F32 && x->type == GGML_TYPE_F32 && x->nb[0] == sizeof(float) && w->ne[0] == x->ne[0]);
+
+    const int64_t n_embd = w->ne[0];
+    const int64_t dr = (w->ne[1] + nth - 1)/nth;
+    const int64_t e0 = dr*ith;
+    const int64_t e1 = std::min(e0 + dr, w->ne[1]);
+
+    for (int64_t e = e0; e < e1; ++e) {
+        const float * wr = (const float *) ((const char *) w->data + e*w->nb[1]);
+        for (int64_t t = 0; t < x->ne[1]; ++t) {
+            const float * xt = (const float *) ((const char *) x->data + t*x->nb[1]);
+            // independent sums, so that the compiler can vectorize without reordering
+            float acc[8] = {};
+            int64_t i = 0;
+            for (; i + 8 <= n_embd; i += 8) {
+                for (int j = 0; j < 8; ++j) {
+                    acc[j] += wr[i + j]*xt[i + j];
+                }
+            }
+            float sum = 0.0f;
+            for (int j = 0; j < 8; ++j) {
+                sum += acc[j];
+            }
+            for (; i < n_embd; ++i) {
+                sum += wr[i]*xt[i];
+            }
+            *(float *) ((char *) dst->data + e*dst->nb[0] + t*dst->nb[1]) = sum;
+        }
+    }
 }

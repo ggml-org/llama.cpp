@@ -391,8 +391,16 @@ void llama_model_kimi_k3::graph::on_moe_selected(ggml_tensor * selected_experts,
     args[n_args++] = layer.ffn_up_exps;
     args[n_args++] = selected_experts;
     if (il_next >= 0) {
-        // the next layer's router applied to this layer's router input
-        args[n_args++] = ggml_mul_mat(ctx0, model.layers[il_next].ffn_gate_inp, moe_router_in);
+        // the next layer's router applied to this layer's router input; a router in host memory is applied by an op
+        // that does nothing while the predictor is quiet
+        ggml_tensor * w = model.layers[il_next].ffn_gate_inp;
+        if (w->type == GGML_TYPE_F32 && moe_router_in->type == GGML_TYPE_F32 && w->buffer != nullptr && ggml_backend_buffer_is_host(w->buffer)) {
+            ggml_tensor * rargs[2] = { w, moe_router_in };
+            args[n_args++] = ggml_custom_4d(ctx0, GGML_TYPE_F32, w->ne[1], moe_router_in->ne[1], 1, 1, rargs, 2,
+                    llama_moe_predictor_router_op, GGML_N_TASKS_MAX, mp->get_hint_ud(il, il_next));
+        } else {
+            args[n_args++] = ggml_mul_mat(ctx0, w, moe_router_in);
+        }
         if (model.layers[il_next].ffn_exp_probs_b) {
             args[n_args++] = model.layers[il_next].ffn_exp_probs_b;
         }

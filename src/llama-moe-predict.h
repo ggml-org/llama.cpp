@@ -75,6 +75,10 @@ struct llama_moe_predictor {
     int mode()   const { return par.mode; }
     int n_used() const { return par.n_used; }
 
+    // the experts the layers selected were all resident over the last few tokens: no guesses, no router logits
+    // (latched by on_layer, so the graph ops of one layer agree)
+    bool quiet() const { return quiet_latched.load(std::memory_order_relaxed); }
+
     // introspection (tests, logs)
     struct layer_view {
         int n_r;
@@ -192,7 +196,10 @@ private:
     bool                    stop = false;
     bool                    want_save = false;
     std::vector<std::thread> workers;
-    std::atomic<uint64_t>   busy_us{0}, high_wait_us{0}, high_n{0}, low_drops{0};
+    std::atomic<uint64_t>   busy_us{0}, high_wait_us{0}, high_n{0}, low_drops{0}, resident_skips{0};
+    std::atomic<uint64_t>   quiet_run{0};    // selected experts found resident in a row (no disk read)
+    uint64_t                quiet_min = 0;   // quiet_run needed to be quiet: the selections of MOE_PRED_QUIET tokens
+    std::atomic<bool>       quiet_latched{false};
     std::atomic<uint64_t>   step_seen{0};
     std::atomic<int>        layer_seen{-1};
     std::atomic<int>        n_high_pending{0};
@@ -227,3 +234,7 @@ private:
 // the graph op: thread 0 forwards the layer's selection (src[1]) and, if present, the next layer's router logits
 // (src[2]) and bias (src[3]) to llama_moe_predictor::on_layer; src[0] only pins the op to the CPU backend
 void llama_moe_predictor_hint_op(struct ggml_tensor * dst, int ith, int nth, void * userdata);
+
+// the graph op for src[2] of the hint op: the next layer's router logits dst = src[0]^T src[1] (F32, src[0] in host
+// memory), rows split over the threads; does nothing while the predictor is quiet (userdata: the layer's hint_ud)
+void llama_moe_predictor_router_op(struct ggml_tensor * dst, int ith, int nth, void * userdata);
