@@ -24626,14 +24626,14 @@ static void ggml_cl_mul_mat_q4_0_f32_adreno_ila(ggml_backend_t backend, const gg
         CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(cl_mem), &b_img));
         CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(int),    &b_offset_for_kernel));
         CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(cl_mem), &d_img));
-        CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(int),    &c_offset_for_kernel));
-        CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(int),    &K));
-        CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(int),    &line_stride_matrix_A_in_bytes));
-        CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(int),    &line_stride_matrix_S_in_bytes));
-        CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(int),    &line_stride_matrix_B_in_bytes));
-        CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(int),    &line_stride_matrix_C_in_bytes));
-        CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(int),    &M));
-        CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(int),    &N));
+        CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(int), &c_offset_for_kernel));
+        CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(int), &K));
+        CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(int), &line_stride_matrix_A_in_bytes));
+        CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(int), &line_stride_matrix_S_in_bytes));
+        CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(int), &line_stride_matrix_B_in_bytes));
+        CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(int), &line_stride_matrix_C_in_bytes));
+        CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(int), &M));
+        CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(int), &N));
 
         size_t local_work_size[3]  = { 64, 2, 2 };
         size_t global_work_size[3] = { 64, (size_t)CEIL_DIV(M, 64), (size_t)CEIL_DIV(N_pad, gemm_tile_n) };
@@ -24641,8 +24641,8 @@ static void ggml_cl_mul_mat_q4_0_f32_adreno_ila(ggml_backend_t backend, const gg
 
         CL_CHECK(clReleaseMemObject(d_img));
         CL_CHECK(clReleaseMemObject(d_sub_buf));
-
         CL_CHECK(clReleaseMemObject(b_img));
+
         if (b_sub_buf) {
             CL_CHECK(clReleaseMemObject(b_sub_buf));
         }
