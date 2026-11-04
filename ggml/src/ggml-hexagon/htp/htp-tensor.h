@@ -25,9 +25,9 @@
 #define HTP_TENSOR_TILE_SIZE_NVFP4  576
 #define HTP_TENSOR_TILE_SIZE_IQ2_XXS 264
 #define HTP_TENSOR_TILE_SCRATCH_IQ2_XXS 256
-#define HTP_IQ2XXS_GRID_BYTES           2048  // 256 entries x 8 magnitudes
-#define HTP_IQ2XXS_SIGN_BYTES           1024  // 128 entries x 8 byte masks (0xff = negate)
-#define HTP_IQ2XXS_LUT_BYTES            (HTP_IQ2XXS_GRID_BYTES + HTP_IQ2XXS_SIGN_BYTES)
+#define HTP_IQ2XXS_NIBBLE_BYTES         128   // 16 words for vlut16, padded to a vector
+#define HTP_IQ2XXS_GRID_BYTES           512   // 256 entries x 8 elements x 2-bit magnitude code
+#define HTP_IQ2XXS_LUT_BYTES            (HTP_IQ2XXS_NIBBLE_BYTES + HTP_IQ2XXS_GRID_BYTES)
 #define HTP_TENSOR_TILE_SIZE_Q4_K   640
 #define HTP_TENSOR_TILE_SIZE_Q5_K   768
 #define HTP_TENSOR_TILE_SIZE_Q6_K   896
