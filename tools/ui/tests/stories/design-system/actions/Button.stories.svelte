@@ -11,7 +11,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design system/Actions/Button'
+		title: 'Design System/Actions/Button'
 	});
 
 	const variants: NonNullable<ButtonVariant>[] = [

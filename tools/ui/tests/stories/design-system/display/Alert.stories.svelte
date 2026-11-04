@@ -10,7 +10,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design system/Display/Alert'
+		title: 'Design System/Display/Alert'
 	});
 </script>
 

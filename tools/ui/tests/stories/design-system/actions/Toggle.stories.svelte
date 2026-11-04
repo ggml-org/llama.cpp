@@ -11,7 +11,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design system/Actions/Toggle'
+		title: 'Design System/Actions/Toggle'
 	});
 </script>
 

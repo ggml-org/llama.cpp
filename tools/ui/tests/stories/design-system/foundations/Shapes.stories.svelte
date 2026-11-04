@@ -8,7 +8,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design system/Foundations/Shapes'
+		title: 'Design System/Foundations/Shapes'
 	});
 
 	const radii = [

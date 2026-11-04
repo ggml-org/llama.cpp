@@ -10,7 +10,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design system/Forms/Checkbox'
+		title: 'Design System/Forms/Checkbox'
 	});
 </script>
 

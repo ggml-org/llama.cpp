@@ -15,7 +15,7 @@
 		parameters: {
 			layout: 'padded'
 		},
-		title: 'Chat/ChatScreen/ChatMessages/ChatMessageReasoningBlock'
+		title: 'Blocks/Chat/ChatScreen/ChatMessages/ChatMessageReasoningBlock'
 	});
 </script>
 

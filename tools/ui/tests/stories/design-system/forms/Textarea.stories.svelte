@@ -9,7 +9,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design system/Forms/Textarea'
+		title: 'Design System/Forms/Textarea'
 	});
 </script>
 

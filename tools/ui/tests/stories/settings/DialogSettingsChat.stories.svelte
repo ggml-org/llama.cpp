@@ -8,7 +8,7 @@
 		parameters: {
 			layout: 'fullscreen'
 		},
-		title: 'Settings/DialogSettingsChat'
+		title: 'Blocks/Settings/DialogSettingsChat'
 	});
 </script>
 

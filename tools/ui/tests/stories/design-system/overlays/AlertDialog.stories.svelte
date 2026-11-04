@@ -8,7 +8,7 @@
 		parameters: {
 			layout: 'fullscreen'
 		},
-		title: 'Design system/Overlays/AlertDialog'
+		title: 'Design System/Overlays/AlertDialog'
 	});
 </script>
 

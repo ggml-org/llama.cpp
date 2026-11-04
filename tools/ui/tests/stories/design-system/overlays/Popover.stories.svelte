@@ -10,7 +10,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design system/Overlays/Popover'
+		title: 'Design System/Overlays/Popover'
 	});
 </script>
 

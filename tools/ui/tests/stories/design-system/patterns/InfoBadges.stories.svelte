@@ -12,7 +12,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design system/Patterns/InfoBadges'
+		title: 'Patterns/InfoBadges'
 	});
 </script>
 

@@ -34,7 +34,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Chat/ChatScreen/ChatAttachments/ChatAttachmentsList'
+		title: 'Blocks/Chat/ChatScreen/ChatAttachments/ChatAttachmentsList'
 	});
 
 	const onFileRemove = (id: string) => console.log('remove', id);

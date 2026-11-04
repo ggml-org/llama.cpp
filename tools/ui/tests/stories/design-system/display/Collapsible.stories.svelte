@@ -11,7 +11,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design system/Display/Collapsible'
+		title: 'Design System/Display/Collapsible'
 	});
 </script>
 

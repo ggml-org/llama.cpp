@@ -28,7 +28,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Chat/ChatScreen/ChatForm/ChatFormCurrentWorkingDirectory'
+		title: 'Blocks/Chat/ChatScreen/ChatForm/ChatFormCurrentWorkingDirectory'
 	});
 
 	const directoryEntries = toGlobEntries(

@@ -6,7 +6,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design system/Foundations/Typography'
+		title: 'Design System/Foundations/Typography'
 	});
 
 	const roles = [

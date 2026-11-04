@@ -8,7 +8,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Content/MarkdownContent'
+		title: 'Blocks/Content/MarkdownContent'
 	});
 </script>
 

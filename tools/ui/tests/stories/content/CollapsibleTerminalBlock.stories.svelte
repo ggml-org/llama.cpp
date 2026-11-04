@@ -8,7 +8,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Content/CollapsibleTerminalBlock'
+		title: 'Blocks/Content/CollapsibleTerminalBlock'
 	});
 </script>
 

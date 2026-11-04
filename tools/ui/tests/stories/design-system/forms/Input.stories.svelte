@@ -9,7 +9,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design system/Forms/Input'
+		title: 'Design System/Forms/Input'
 	});
 </script>
 

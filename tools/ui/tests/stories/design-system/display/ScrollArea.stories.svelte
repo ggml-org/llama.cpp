@@ -8,7 +8,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design system/Display/ScrollArea'
+		title: 'Design System/Display/ScrollArea'
 	});
 
 	const chats = Array.from({ length: 30 }, (_, i) => `Conversation ${i + 1}`);

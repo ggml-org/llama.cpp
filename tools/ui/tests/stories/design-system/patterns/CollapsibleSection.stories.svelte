@@ -10,7 +10,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design system/Patterns/CollapsibleSection'
+		title: 'Patterns/CollapsibleSection'
 	});
 </script>
 

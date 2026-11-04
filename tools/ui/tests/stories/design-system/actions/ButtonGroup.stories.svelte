@@ -11,7 +11,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design system/Actions/ButtonGroup'
+		title: 'Design System/Actions/ButtonGroup'
 	});
 </script>
 

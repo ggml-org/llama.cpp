@@ -7,7 +7,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design system/Overlays/HoverCard'
+		title: 'Design System/Overlays/HoverCard'
 	});
 </script>
 

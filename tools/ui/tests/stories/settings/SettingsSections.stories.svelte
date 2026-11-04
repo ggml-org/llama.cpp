@@ -9,7 +9,7 @@
 		parameters: {
 			layout: 'fullscreen'
 		},
-		title: 'Settings/Sections'
+		title: 'Blocks/Settings/Sections'
 	});
 </script>
 
