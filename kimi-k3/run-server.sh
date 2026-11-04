@@ -70,6 +70,7 @@
 # prompt + 128 tokens, page cache warm): prompt 74 s, decode ~0.82-0.87 tok/s; a chat turn that adds ~50 tokens
 # ~27 s of prompt. The first request after a cold page cache decodes slower (~0.5 tok/s) while the experts are read.
 # Before these defaults (14 threads, no NUMA split, 2048-token batches): prompt ~145 s, decode ~0.67 tok/s.
+# After the CPU matmul round (kimi-k3/PLAN-cpu-matmul.md): decode ~1.0-1.2 tok/s warm, prompt unchanged.
 #
 # long context (CTX 262144): the attention cache must stay on the GPU (in host RAM the CPU would do the attention,
 # +1-2 s per token near a full context), so the dense layers and the output head move to the CPU to make room:
