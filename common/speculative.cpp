@@ -1001,8 +1001,6 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
     int32_t     block_size    = 0;
     llama_token mask_token_id = 0;
 
-    bool is_mrope = false;
-
     // block-internal attention
     bool causal_attn = false;
 
@@ -1090,9 +1088,6 @@ protected:
 
         batch        = common_batch(ctx_dft);
         batch_inject = common_batch(ctx_dft);
-
-        // embd batches on an M-RoPE draft carry 4 position rows per token
-        is_mrope = llama_model_rope_type(model_dft) == LLAMA_ROPE_TYPE_MROPE;
 
         smpls.resize(n_seq);
         for (auto & s : smpls) {
