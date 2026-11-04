@@ -498,6 +498,9 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
                 ggml-cpu/spacemit/rvv_kernels.cpp
                 ggml-cpu/spacemit/rvv_kernels.h
             )
+            if (RISCV_BINUTILS_NEED_SPACEMIT_PREFIX)
+                target_compile_definitions(${GGML_CPU_NAME} PRIVATE RISCV_BINUTILS_NEED_SPACEMIT_PREFIX)
+            endif()
             if ("RISCV64_SPACEMIT_IME1" IN_LIST RISCV64_SPACEMIT_IME_SPEC)
                 list(APPEND GGML_CPU_SOURCES ggml-cpu/spacemit/ime1_kernels.cpp)
             endif()

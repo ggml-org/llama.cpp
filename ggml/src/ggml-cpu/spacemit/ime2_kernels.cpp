@@ -23,6 +23,12 @@
 #    error "RISCV64_SPACEMIT_IME2 not defined"
 #endif
 
+#if defined(RISCV_BINUTILS_NEED_SPACEMIT_PREFIX)
+#define SMT_INSTR(instr) "smt."#instr
+#else
+#define SMT_INSTR(instr) #instr
+#endif
+
 #if defined(__GNUC__)
 #    pragma GCC diagnostic ignored "-Woverlength-strings"
 #    pragma GCC diagnostic ignored "-Wcast-qual"
@@ -1068,25 +1074,25 @@ void gemm_kernel_i8i2k_m1(size_t          blk_len,
 
             // i2 * i8 vmadot
             "vsetvli        t0, x0, e8, m1          \n\t"
-            "vmadotsu       v20, v2, v8, i8         \n\t"
-            "vmadotsu       v22, v2, v12, i8        \n\t"
-            "vmadotsu       v24, v2, v16, i8        \n\t"
-            "vmadotsu       v26, v2, v4, i8         \n\t"
+            SMT_INSTR(vmadotsu)"       v20, v2, v8, i8         \n\t"
+            SMT_INSTR(vmadotsu)"       v22, v2, v12, i8        \n\t"
+            SMT_INSTR(vmadotsu)"       v24, v2, v16, i8        \n\t"
+            SMT_INSTR(vmadotsu)"       v26, v2, v4, i8         \n\t"
 
-            "vmadotsu       v20, v3, v9, i8         \n\t"
-            "vmadotsu       v22, v3, v13, i8        \n\t"
-            "vmadotsu       v24, v3, v17, i8        \n\t"
-            "vmadotsu       v26, v3, v5, i8         \n\t"
+            SMT_INSTR(vmadotsu)"       v20, v3, v9, i8         \n\t"
+            SMT_INSTR(vmadotsu)"       v22, v3, v13, i8        \n\t"
+            SMT_INSTR(vmadotsu)"       v24, v3, v17, i8        \n\t"
+            SMT_INSTR(vmadotsu)"       v26, v3, v5, i8         \n\t"
 
-            "vmadotsu       v20, v28, v10, i8       \n\t"
-            "vmadotsu       v22, v28, v14, i8       \n\t"
-            "vmadotsu       v24, v28, v18, i8       \n\t"
-            "vmadotsu       v26, v28, v6, i8        \n\t"
+            SMT_INSTR(vmadotsu)"       v20, v28, v10, i8       \n\t"
+            SMT_INSTR(vmadotsu)"       v22, v28, v14, i8       \n\t"
+            SMT_INSTR(vmadotsu)"       v24, v28, v18, i8       \n\t"
+            SMT_INSTR(vmadotsu)"       v26, v28, v6, i8        \n\t"
 
-            "vmadotsu       v20, v29, v11, i8       \n\t"
-            "vmadotsu       v22, v29, v15, i8       \n\t"
-            "vmadotsu       v24, v29, v19, i8       \n\t"
-            "vmadotsu       v26, v29, v7, i8        \n\t"
+            SMT_INSTR(vmadotsu)"       v20, v29, v11, i8       \n\t"
+            SMT_INSTR(vmadotsu)"       v22, v29, v15, i8       \n\t"
+            SMT_INSTR(vmadotsu)"       v24, v29, v19, i8       \n\t"
+            SMT_INSTR(vmadotsu)"       v26, v29, v7, i8        \n\t"
 
             "vand.vi        v10, v0, 0xf            \n\t"  // scale
             "vwadd.vx       v12, v10, x0            \n\t"
@@ -1094,10 +1100,10 @@ void gemm_kernel_i8i2k_m1(size_t          blk_len,
             "vwadd.vx       v16, v12, x0            \n\t"
 
             "vsetvli        t0, x0, e32, m1         \n\t"
-            "vpack.vv       v2, v20, v22, 2         \n\t"
-            "vpack.vv       v4, v24, v26, 2         \n\t"
-            "vpack.vv       v6, v2, v4, 3           \n\t"  // 0,1
-            "vpack.vv       v8, v3, v5, 3           \n\t"  // 2,3
+            SMT_INSTR(vpack.vv)"       v2, v20, v22, 2         \n\t"
+            SMT_INSTR(vpack.vv)"       v4, v24, v26, 2         \n\t"
+            SMT_INSTR(vpack.vv)"       v6, v2, v4, 3           \n\t"  // 0,1
+            SMT_INSTR(vpack.vv)"       v8, v3, v5, 3           \n\t"  // 2,3
 
             // mul scale
             "vmacc.vv       v30, v6, v16            \n\t"
@@ -1127,24 +1133,24 @@ void gemm_kernel_i8i2k_m1(size_t          blk_len,
             "vnsra.wi       v13, v2, 8              \n\t"  // high 8
 
             "vsetvli        t0, x0, e32, m1         \n\t"
-            "vmadotsu       v20, v13, v8, i8        \n\t"
-            "vmadotsu       v22, v13, v9, i8        \n\t"
-            "vmadotsu       v24, v13, v10, i8       \n\t"
-            "vmadotsu       v26, v13, v11, i8       \n\t"
+            SMT_INSTR(vmadotsu)"       v20, v13, v8, i8        \n\t"
+            SMT_INSTR(vmadotsu)"       v22, v13, v9, i8        \n\t"
+            SMT_INSTR(vmadotsu)"       v24, v13, v10, i8       \n\t"
+            SMT_INSTR(vmadotsu)"       v26, v13, v11, i8       \n\t"
 
             "vsll.vi        v20, v20, 8             \n\t"
             "vsll.vi        v22, v22, 8             \n\t"
             "vsll.vi        v24, v24, 8             \n\t"
             "vsll.vi        v26, v26, 8             \n\t"
 
-            "vmadotu        v20, v12, v8, i8        \n\t"
-            "vmadotu        v22, v12, v9, i8        \n\t"
-            "vmadotu        v24, v12, v10, i8       \n\t"
-            "vmadotu        v26, v12, v11, i8       \n\t"
+            SMT_INSTR(vmadotu)"        v20, v12, v8, i8        \n\t"
+            SMT_INSTR(vmadotu)"        v22, v12, v9, i8        \n\t"
+            SMT_INSTR(vmadotu)"        v24, v12, v10, i8       \n\t"
+            SMT_INSTR(vmadotu)"        v26, v12, v11, i8       \n\t"
 
-            "vpack.vv       v2, v20, v22, 2         \n\t"
-            "vpack.vv       v4, v24, v26, 2         \n\t"
-            "vpack.vv       v28, v2, v4, 3          \n\t"
+            SMT_INSTR(vpack.vv)"       v2, v20, v22, 2         \n\t"
+            SMT_INSTR(vpack.vv)"       v4, v24, v26, 2         \n\t"
+            SMT_INSTR(vpack.vv)"       v28, v2, v4, 3          \n\t"
 
             "vsetvli        t0, x0, e16, mf2        \n\t"
             "vle16.v        v0, (t2)                \n\t"  // scale16
@@ -1222,7 +1228,7 @@ void gemm_kernel_i8i2k_m4(size_t          blk_len,
             "vsetvli        t0, x0, e16, mf2        \n\t"
             "vle16.v        v1, (s4)                \n\t"  // load scale16
             "vsetvli        t0, x0, e16, m1         \n\t"
-            "vpack.vv       v22, v1, v1, 3          \n\t"
+            SMT_INSTR(vpack.vv)"       v22, v1, v1, 3          \n\t"
 
             "addi           s4, t3, 256             \n\t"  // addr 1
             "addi           s5, t3, 512             \n\t"  // addr 2
@@ -1261,13 +1267,13 @@ void gemm_kernel_i8i2k_m4(size_t          blk_len,
 
             // 4x64 => 4x16x4
             "vsetvli        t0, x0, e8, m1          \n\t"
-            "vpack.vv       v6, v2, v3, 1           \n\t"
-            "vpack.vv       v8, v4, v5, 1           \n\t"
-            "vpack.vv       v2, v6, v8, 2           \n\t"  // 0, 2
+            SMT_INSTR(vpack.vv)"       v6, v2, v3, 1           \n\t"
+            SMT_INSTR(vpack.vv)"       v8, v4, v5, 1           \n\t"
+            SMT_INSTR(vpack.vv)"       v2, v6, v8, 2           \n\t"  // 0, 2
 
-            "vpack.vv       v20, v2, v2, 3          \n\t"  // 1
+            SMT_INSTR(vpack.vv)"       v20, v2, v2, 3          \n\t"  // 1
             "vor.vv         v23, v21, v21           \n\t"
-            "vpack.vv       v20, v3, v3, 3          \n\t"  // 3
+            SMT_INSTR(vpack.vv)"       v20, v3, v3, 3          \n\t"  // 3
 
             // B data, 32x64@i2
             "vsetvli        t0, x0, e8, m1          \n\t"
@@ -1303,33 +1309,33 @@ void gemm_kernel_i8i2k_m4(size_t          blk_len,
 
             // i2 * i8 vmadot
             "vsetvli        t0, x0, e8, m1          \n\t"
-            "vmadotsu.hp    v24, v2, v8, v0, 0, i8  \n\t"
-            "vmadotsu.hp    v25, v2, v12, v0, 1, i8 \n\t"
-            "vmadotsu.hp    v26, v2, v16, v0, 2, i8 \n\t"
-            "vmadotsu.hp    v27, v2, v4, v0, 3, i8  \n\t"
+            SMT_INSTR(vmadotsu.hp)"    v24, v2, v8, v0, 0, i8  \n\t"
+            SMT_INSTR(vmadotsu.hp)"    v25, v2, v12, v0, 1, i8 \n\t"
+            SMT_INSTR(vmadotsu.hp)"    v26, v2, v16, v0, 2, i8 \n\t"
+            SMT_INSTR(vmadotsu.hp)"    v27, v2, v4, v0, 3, i8  \n\t"
 
-            "vmadotsu.hp    v24, v23, v9, v0, 4, i8 \n\t"
-            "vmadotsu.hp    v25, v23, v13, v0, 5, i8\n\t"
-            "vmadotsu.hp    v26, v23, v17, v0, 6, i8\n\t"
-            "vmadotsu.hp    v27, v23, v5, v0, 7, i8 \n\t"
+            SMT_INSTR(vmadotsu.hp)"    v24, v23, v9, v0, 4, i8 \n\t"
+            SMT_INSTR(vmadotsu.hp)"    v25, v23, v13, v0, 5, i8\n\t"
+            SMT_INSTR(vmadotsu.hp)"    v26, v23, v17, v0, 6, i8\n\t"
+            SMT_INSTR(vmadotsu.hp)"    v27, v23, v5, v0, 7, i8 \n\t"
 
-            "vmadotsu.hp    v24, v3, v10, v1, 0, i8 \n\t"
-            "vmadotsu.hp    v25, v3, v14, v1, 1, i8 \n\t"
-            "vmadotsu.hp    v26, v3, v18, v1, 2, i8 \n\t"
-            "vmadotsu.hp    v27, v3, v6, v1, 3, i8  \n\t"
+            SMT_INSTR(vmadotsu.hp)"    v24, v3, v10, v1, 0, i8 \n\t"
+            SMT_INSTR(vmadotsu.hp)"    v25, v3, v14, v1, 1, i8 \n\t"
+            SMT_INSTR(vmadotsu.hp)"    v26, v3, v18, v1, 2, i8 \n\t"
+            SMT_INSTR(vmadotsu.hp)"    v27, v3, v6, v1, 3, i8  \n\t"
 
-            "vmadotsu.hp    v24, v21, v11, v1, 4, i8\n\t"
-            "vmadotsu.hp    v25, v21, v15, v1, 5, i8\n\t"
-            "vmadotsu.hp    v26, v21, v19, v1, 6, i8\n\t"
-            "vmadotsu.hp    v27, v21, v7, v1, 7, i8 \n\t"
+            SMT_INSTR(vmadotsu.hp)"    v24, v21, v11, v1, 4, i8\n\t"
+            SMT_INSTR(vmadotsu.hp)"    v25, v21, v15, v1, 5, i8\n\t"
+            SMT_INSTR(vmadotsu.hp)"    v26, v21, v19, v1, 6, i8\n\t"
+            SMT_INSTR(vmadotsu.hp)"    v27, v21, v7, v1, 7, i8 \n\t"
 
             "addi           t1, t1, -1              \n\t"
             "bgtz           t1, INNER_K_LOOP%=      \n\t"
 
             "vsetvli        t0, x0, e16, m1         \n\t"
-            "vpack.vv       v2, v24, v25, 1         \n\t"
-            "vpack.vv       v4, v26, v27, 1         \n\t"
-            "vpack.vv       v6, v2, v4, 2           \n\t"  // 0,1,2,3
+            SMT_INSTR(vpack.vv)"       v2, v24, v25, 1         \n\t"
+            SMT_INSTR(vpack.vv)"       v4, v26, v27, 1         \n\t"
+            SMT_INSTR(vpack.vv)"       v6, v2, v4, 2           \n\t"  // 0,1,2,3
 
             "vxor.vv        v18, v18, v18           \n\t"
             "vxor.vv        v20, v20, v20           \n\t"
@@ -1349,23 +1355,23 @@ void gemm_kernel_i8i2k_m4(size_t          blk_len,
 
             // asum * zp
             "vsetvli        t0, x0, e32, m1          \n\t"
-            "vmadotsu       v18, v11, v0, i8        \n\t"
-            "vmadotsu       v20, v11, v1, i8        \n\t"
-            "vmadotsu       v22, v11, v2, i8        \n\t"
-            "vmadotsu       v24, v11, v3, i8        \n\t"
+            SMT_INSTR(vmadotsu)"       v18, v11, v0, i8        \n\t"
+            SMT_INSTR(vmadotsu)"       v20, v11, v1, i8        \n\t"
+            SMT_INSTR(vmadotsu)"       v22, v11, v2, i8        \n\t"
+            SMT_INSTR(vmadotsu)"       v24, v11, v3, i8        \n\t"
             "vsll.vi        v18, v18, 8             \n\t"
             "vsll.vi        v20, v20, 8             \n\t"
             "vsll.vi        v22, v22, 8             \n\t"
             "vsll.vi        v24, v24, 8             \n\t"
-            "vmadotu        v18, v10, v0, i8        \n\t"
-            "vmadotu        v20, v10, v1, i8        \n\t"
-            "vmadotu        v22, v10, v2, i8        \n\t"
-            "vmadotu        v24, v10, v3, i8        \n\t"
+            SMT_INSTR(vmadotu)"        v18, v10, v0, i8        \n\t"
+            SMT_INSTR(vmadotu)"        v20, v10, v1, i8        \n\t"
+            SMT_INSTR(vmadotu)"        v22, v10, v2, i8        \n\t"
+            SMT_INSTR(vmadotu)"        v24, v10, v3, i8        \n\t"
 
-            "vpack.vv       v10, v18, v20, 2        \n\t"
-            "vpack.vv       v12, v22, v24, 2        \n\t"
-            "vpack.vv       v14, v10, v12, 3        \n\t"
-            "vpack.vv       v16, v11, v13, 3        \n\t"
+            SMT_INSTR(vpack.vv)"       v10, v18, v20, 2        \n\t"
+            SMT_INSTR(vpack.vv)"       v12, v22, v24, 2        \n\t"
+            SMT_INSTR(vpack.vv)"       v14, v10, v12, 3        \n\t"
+            SMT_INSTR(vpack.vv)"       v16, v11, v13, 3        \n\t"
 
             "vsetvli        t0, x0, e16, mf2        \n\t"
             "addi           t2, t2, 64              \n\t"
@@ -1523,15 +1529,15 @@ void gemm_kernel_i8i3k_m1(size_t          blk_len,
             "vxor.vv      v20, v16, v16           \n\t"
             "vxor.vv      v22, v16, v16           \n\t"
 
-            "vmadot       v16, v1, v12, i8        \n\t"
-            "vmadot       v18, v1, v13, i8        \n\t"
-            "vmadot       v20, v1, v14, i8        \n\t"
-            "vmadot       v22, v1, v15, i8        \n\t"
+            SMT_INSTR(vmadot)"       v16, v1, v12, i8        \n\t"
+            SMT_INSTR(vmadot)"       v18, v1, v13, i8        \n\t"
+            SMT_INSTR(vmadot)"       v20, v1, v14, i8        \n\t"
+            SMT_INSTR(vmadot)"       v22, v1, v15, i8        \n\t"
 
             "vsetvli      t0, x0, e16, m1         \n\t"
-            "vpack.vv     v24, v16, v18, 2        \n\t"
-            "vpack.vv     v26, v20, v22, 2        \n\t"
-            "vpack.vv     v16, v24, v26, 3        \n\t"  // N0-N31 in v16
+            SMT_INSTR(vpack.vv)"     v24, v16, v18, 2        \n\t"
+            SMT_INSTR(vpack.vv)"     v26, v20, v22, 2        \n\t"
+            SMT_INSTR(vpack.vv)"     v16, v24, v26, 3        \n\t"  // N0-N31 in v16
 
             // apply B int8 scales (-32 bias has been applyed)
             "vsetvli      t0, x0, e8, mf4         \n\t"
@@ -1580,15 +1586,15 @@ void gemm_kernel_i8i3k_m1(size_t          blk_len,
             "vxor.vv      v20, v16, v16           \n\t"
             "vxor.vv      v22, v16, v16           \n\t"
 
-            "vmadot       v16, v1, v12, i8        \n\t"
-            "vmadot       v18, v1, v13, i8        \n\t"
-            "vmadot       v20, v1, v14, i8        \n\t"
-            "vmadot       v22, v1, v15, i8        \n\t"
+            SMT_INSTR(vmadot)"       v16, v1, v12, i8        \n\t"
+            SMT_INSTR(vmadot)"       v18, v1, v13, i8        \n\t"
+            SMT_INSTR(vmadot)"       v20, v1, v14, i8        \n\t"
+            SMT_INSTR(vmadot)"       v22, v1, v15, i8        \n\t"
 
             "vsetvli      t0, x0, e16, m1         \n\t"
-            "vpack.vv     v24, v16, v18, 2        \n\t"
-            "vpack.vv     v26, v20, v22, 2        \n\t"
-            "vpack.vv     v16, v24, v26, 3        \n\t"  // N0-N31 in v16
+            SMT_INSTR(vpack.vv)"     v24, v16, v18, 2        \n\t"
+            SMT_INSTR(vpack.vv)"     v26, v20, v22, 2        \n\t"
+            SMT_INSTR(vpack.vv)"     v16, v24, v26, 3        \n\t"  // N0-N31 in v16
 
             // apply B int8 scales (-32 bias has been applyed)
             "vsetvli      t0, x0, e8, mf4         \n\t"
@@ -1637,15 +1643,15 @@ void gemm_kernel_i8i3k_m1(size_t          blk_len,
             "vxor.vv      v20, v16, v16           \n\t"
             "vxor.vv      v22, v16, v16           \n\t"
 
-            "vmadot       v16, v1, v12, i8        \n\t"
-            "vmadot       v18, v1, v13, i8        \n\t"
-            "vmadot       v20, v1, v14, i8        \n\t"
-            "vmadot       v22, v1, v15, i8        \n\t"
+            SMT_INSTR(vmadot)"       v16, v1, v12, i8        \n\t"
+            SMT_INSTR(vmadot)"       v18, v1, v13, i8        \n\t"
+            SMT_INSTR(vmadot)"       v20, v1, v14, i8        \n\t"
+            SMT_INSTR(vmadot)"       v22, v1, v15, i8        \n\t"
 
             "vsetvli      t0, x0, e16, m1         \n\t"
-            "vpack.vv     v24, v16, v18, 2        \n\t"
-            "vpack.vv     v26, v20, v22, 2        \n\t"
-            "vpack.vv     v16, v24, v26, 3        \n\t"
+            SMT_INSTR(vpack.vv)"     v24, v16, v18, 2        \n\t"
+            SMT_INSTR(vpack.vv)"     v26, v20, v22, 2        \n\t"
+            SMT_INSTR(vpack.vv)"     v16, v24, v26, 3        \n\t"
 
             // apply B int8 scales (-32 bias has been applyed)
             "vsetvli      t0, x0, e8, mf4         \n\t"
@@ -1688,15 +1694,15 @@ void gemm_kernel_i8i3k_m1(size_t          blk_len,
             "vxor.vv      v20, v16, v16           \n\t"
             "vxor.vv      v22, v16, v16           \n\t"
 
-            "vmadot       v16, v1, v12, i8        \n\t"
-            "vmadot       v18, v1, v13, i8        \n\t"
-            "vmadot       v20, v1, v14, i8        \n\t"
-            "vmadot       v22, v1, v15, i8        \n\t"
+            SMT_INSTR(vmadot)"       v16, v1, v12, i8        \n\t"
+            SMT_INSTR(vmadot)"       v18, v1, v13, i8        \n\t"
+            SMT_INSTR(vmadot)"       v20, v1, v14, i8        \n\t"
+            SMT_INSTR(vmadot)"       v22, v1, v15, i8        \n\t"
 
             "vsetvli      t0, x0, e16, m1         \n\t"
-            "vpack.vv     v24, v16, v18, 2        \n\t"
-            "vpack.vv     v26, v20, v22, 2        \n\t"
-            "vpack.vv     v16, v24, v26, 3        \n\t"
+            SMT_INSTR(vpack.vv)"     v24, v16, v18, 2        \n\t"
+            SMT_INSTR(vpack.vv)"     v26, v20, v22, 2        \n\t"
+            SMT_INSTR(vpack.vv)"     v16, v24, v26, 3        \n\t"
 
             // apply B int8 scales (-32 bias has been applyed)
             "vsetvli      t0, x0, e8, mf4         \n\t"
@@ -1810,7 +1816,7 @@ void gemm_kernel_i8i3k_m1(size_t          blk_len,
             "vsetvli      t0, x0, e16, mf2        \n\t"
             "vle16.v      v1, (s8)                \n\t"  // load fp16 scales16[32]
             "vsetvli      t0, x0, e16, m1         \n\t"
-            "vpack.vv     v26, v1, v1, 3          \n\t"  // broadcast/pack to match lanes
+            SMT_INSTR(vpack.vv)"     v26, v1, v1, 3          \n\t"  // broadcast/pack to match lanes
             "vmv.v.v      v17, v26                \n\t"
             "vsetvli      t0, x0, e16, m1         \n\t"
             "vfmul.vf     v30, v17, %[q3_step]    \n\t"  // v30 = scales16 * (1/16)
@@ -1893,14 +1899,14 @@ void gemm_kernel_i8i3k_m1(size_t          blk_len,
 
             // Dot products with FP16 scaling (accumulate into v24..v27)
             "vsetvli      t0, x0, e32, m1         \n\t"
-            "vmadot.hp    v24, v3, v12, v1, 0, i8 \n\t"
-            "vmadot.hp    v25, v3, v13, v1, 1, i8 \n\t"
-            "vmadot.hp    v26, v3, v14, v1, 2, i8 \n\t"
-            "vmadot.hp    v27, v3, v15, v1, 3, i8 \n\t"
-            "vmadot.hp    v24, v2, v16, v1, 4, i8 \n\t"
-            "vmadot.hp    v25, v2, v17, v1, 5, i8 \n\t"
-            "vmadot.hp    v26, v2, v18, v1, 6, i8 \n\t"
-            "vmadot.hp    v27, v2, v19, v1, 7, i8 \n\t"
+            SMT_INSTR(vmadot.hp)"    v24, v3, v12, v1, 0, i8 \n\t"
+            SMT_INSTR(vmadot.hp)"    v25, v3, v13, v1, 1, i8 \n\t"
+            SMT_INSTR(vmadot.hp)"    v26, v3, v14, v1, 2, i8 \n\t"
+            SMT_INSTR(vmadot.hp)"    v27, v3, v15, v1, 3, i8 \n\t"
+            SMT_INSTR(vmadot.hp)"    v24, v2, v16, v1, 4, i8 \n\t"
+            SMT_INSTR(vmadot.hp)"    v25, v2, v17, v1, 5, i8 \n\t"
+            SMT_INSTR(vmadot.hp)"    v26, v2, v18, v1, 6, i8 \n\t"
+            SMT_INSTR(vmadot.hp)"    v27, v2, v19, v1, 7, i8 \n\t"
 
             // (K32-47 / K48-63 blocks continue unchanged...)
             // load B scales (32 bytes per K16, 16 times => 512B)
@@ -1952,14 +1958,14 @@ void gemm_kernel_i8i3k_m1(size_t          blk_len,
             "vslidedown.vi  v2, v3, 2             \n\t"
 
             "vsetvli      t0, x0, e32, m1         \n\t"
-            "vmadot.hp    v24, v3, v20, v1, 0, i8 \n\t"
-            "vmadot.hp    v25, v3, v21, v1, 1, i8 \n\t"
-            "vmadot.hp    v26, v3, v22, v1, 2, i8 \n\t"
-            "vmadot.hp    v27, v3, v23, v1, 3, i8 \n\t"
-            "vmadot.hp    v24, v2, v8, v1, 4, i8  \n\t"
-            "vmadot.hp    v25, v2, v9, v1, 5, i8  \n\t"
-            "vmadot.hp    v26, v2, v10, v1, 6, i8 \n\t"
-            "vmadot.hp    v27, v2, v11, v1, 7, i8 \n\t"
+            SMT_INSTR(vmadot.hp)"    v24, v3, v20, v1, 0, i8 \n\t"
+            SMT_INSTR(vmadot.hp)"    v25, v3, v21, v1, 1, i8 \n\t"
+            SMT_INSTR(vmadot.hp)"    v26, v3, v22, v1, 2, i8 \n\t"
+            SMT_INSTR(vmadot.hp)"    v27, v3, v23, v1, 3, i8 \n\t"
+            SMT_INSTR(vmadot.hp)"    v24, v2, v8, v1, 4, i8  \n\t"
+            SMT_INSTR(vmadot.hp)"    v25, v2, v9, v1, 5, i8  \n\t"
+            SMT_INSTR(vmadot.hp)"    v26, v2, v10, v1, 6, i8 \n\t"
+            SMT_INSTR(vmadot.hp)"    v27, v2, v11, v1, 7, i8 \n\t"
 
             "addi         t3, t3, -1              \n\t"
             "bgtz         t3, K64_LPST%=          \n\t"
@@ -1967,9 +1973,9 @@ void gemm_kernel_i8i3k_m1(size_t          blk_len,
 
             // ---- End of K64 chunk: reduce fp16 accumulators -> fp32 and scale by A ----
             "vsetvli      t0, x0, e16, m1         \n\t"
-            "vpack.vv     v12, v24, v25, 1        \n\t"
-            "vpack.vv     v14, v26, v27, 1        \n\t"
-            "vpack.vv     v16, v12, v14, 2        \n\t"
+            SMT_INSTR(vpack.vv)"     v12, v24, v25, 1        \n\t"
+            SMT_INSTR(vpack.vv)"     v14, v26, v27, 1        \n\t"
+            SMT_INSTR(vpack.vv)"     v16, v12, v14, 2        \n\t"
             "vsetvli      t0, x0, e16, mf2        \n\t"
             "vfwcvt.f.f.v v26, v16                \n\t"  // fp16 -> fp32 vector (qsum * b_scales)
 
@@ -2000,7 +2006,7 @@ void gemm_kernel_i8i3k_m1(size_t          blk_len,
             "vsetvli      t0, x0, e16, mf2        \n\t"
             "vle16.v      v1, (s8)                \n\t"
             "vsetvli      t0, x0, e16, m1         \n\t"
-            "vpack.vv     v26, v1, v1, 3          \n\t"
+            SMT_INSTR(vpack.vv)"     v26, v1, v1, 3          \n\t"
             "vmv.v.v      v17, v26                \n\t"
             "vsetvli      t0, x0, e16, m1         \n\t"
             "vfmul.vf     v30, v17, %[q3_step]    \n\t"
@@ -2126,9 +2132,9 @@ void gemm_kernel_i8i3k_m4(size_t          blk_len,
 
             // Pack A data: merge 4 rows into 2 vectors
             "vsetvli      t0, x0, e8, m1          \n\t"
-            "vpack.vv     v16, v12, v13, 1        \n\t"
-            "vpack.vv     v18, v14, v15, 1        \n\t"
-            "vpack.vv     v2, v16, v18, 2         \n\t"
+            SMT_INSTR(vpack.vv)"     v16, v12, v13, 1        \n\t"
+            SMT_INSTR(vpack.vv)"     v18, v14, v15, 1        \n\t"
+            SMT_INSTR(vpack.vv)"     v2, v16, v18, 2         \n\t"
 
             // unpack 2-bit qs + hmask -> signed values
             "vsetvli      t0, x0, e8, m1          \n\t"
@@ -2147,16 +2153,16 @@ void gemm_kernel_i8i3k_m4(size_t          blk_len,
             "vxor.vv      v20, v16, v16           \n\t"
             "vxor.vv      v22, v16, v16           \n\t"
 
-            "vmadot       v16, v2, v12, i8        \n\t"  // 4 rows × cols 0-7
-            "vmadot       v18, v2, v13, i8        \n\t"  // 4 rows × cols 8-15
-            "vmadot       v20, v2, v14, i8        \n\t"  // 4 rows × cols 16-23
-            "vmadot       v22, v2, v15, i8        \n\t"  // 4 rows × cols 24-31
+            SMT_INSTR(vmadot)"       v16, v2, v12, i8        \n\t"  // 4 rows × cols 0-7
+            SMT_INSTR(vmadot)"       v18, v2, v13, i8        \n\t"  // 4 rows × cols 8-15
+            SMT_INSTR(vmadot)"       v20, v2, v14, i8        \n\t"  // 4 rows × cols 16-23
+            SMT_INSTR(vmadot)"       v22, v2, v15, i8        \n\t"  // 4 rows × cols 24-31
 
             "vsetvli      t0, x0, e16, m1         \n\t"
-            "vpack.vv     v12, v16, v18, 2        \n\t"  // Merge cols 0-15
-            "vpack.vv     v14, v20, v22, 2        \n\t"  // Merge cols 16-31
-            "vpack.vv     v16, v12, v14, 3        \n\t"  // Inter-row results (INT16)
-            "vpack.vv     v18, v13, v15, 3        \n\t"
+            SMT_INSTR(vpack.vv)"     v12, v16, v18, 2        \n\t"  // Merge cols 0-15
+            SMT_INSTR(vpack.vv)"     v14, v20, v22, 2        \n\t"  // Merge cols 16-31
+            SMT_INSTR(vpack.vv)"     v16, v12, v14, 3        \n\t"  // Inter-row results (INT16)
+            SMT_INSTR(vpack.vv)"     v18, v13, v15, 3        \n\t"
 
             // apply B int8 scales (-32 bias has been applyed)
             "vsetvli      t0, x0, e8, mf4         \n\t"
@@ -2208,16 +2214,16 @@ void gemm_kernel_i8i3k_m4(size_t          blk_len,
             "vxor.vv      v20, v16, v16           \n\t"
             "vxor.vv      v22, v16, v16           \n\t"
 
-            "vmadot       v16, v2, v12, i8        \n\t"
-            "vmadot       v18, v2, v13, i8        \n\t"
-            "vmadot       v20, v2, v14, i8        \n\t"
-            "vmadot       v22, v2, v15, i8        \n\t"
+            SMT_INSTR(vmadot)"       v16, v2, v12, i8        \n\t"
+            SMT_INSTR(vmadot)"       v18, v2, v13, i8        \n\t"
+            SMT_INSTR(vmadot)"       v20, v2, v14, i8        \n\t"
+            SMT_INSTR(vmadot)"       v22, v2, v15, i8        \n\t"
 
             "vsetvli      t0, x0, e16, m1         \n\t"
-            "vpack.vv     v12, v16, v18, 2        \n\t"
-            "vpack.vv     v14, v20, v22, 2        \n\t"
-            "vpack.vv     v16, v12, v14, 3        \n\t"  // N0-N31 in v16
-            "vpack.vv     v18, v13, v15, 3        \n\t"
+            SMT_INSTR(vpack.vv)"     v12, v16, v18, 2        \n\t"
+            SMT_INSTR(vpack.vv)"     v14, v20, v22, 2        \n\t"
+            SMT_INSTR(vpack.vv)"     v16, v12, v14, 3        \n\t"  // N0-N31 in v16
+            SMT_INSTR(vpack.vv)"     v18, v13, v15, 3        \n\t"
 
             // apply B int8 scales (-32 bias has been applyed)
             "vsetvli      t0, x0, e8, mf4         \n\t"
@@ -2267,16 +2273,16 @@ void gemm_kernel_i8i3k_m4(size_t          blk_len,
             "vxor.vv      v20, v16, v16           \n\t"
             "vxor.vv      v22, v16, v16           \n\t"
 
-            "vmadot       v16, v3, v12, i8        \n\t"
-            "vmadot       v18, v3, v13, i8        \n\t"
-            "vmadot       v20, v3, v14, i8        \n\t"
-            "vmadot       v22, v3, v15, i8        \n\t"
+            SMT_INSTR(vmadot)"       v16, v3, v12, i8        \n\t"
+            SMT_INSTR(vmadot)"       v18, v3, v13, i8        \n\t"
+            SMT_INSTR(vmadot)"       v20, v3, v14, i8        \n\t"
+            SMT_INSTR(vmadot)"       v22, v3, v15, i8        \n\t"
 
             "vsetvli      t0, x0, e16, m1         \n\t"
-            "vpack.vv     v12, v16, v18, 2        \n\t"
-            "vpack.vv     v14, v20, v22, 2        \n\t"
-            "vpack.vv     v16, v12, v14, 3        \n\t"  // N0-N31 in v16
-            "vpack.vv     v18, v13, v15, 3        \n\t"
+            SMT_INSTR(vpack.vv)"     v12, v16, v18, 2        \n\t"
+            SMT_INSTR(vpack.vv)"     v14, v20, v22, 2        \n\t"
+            SMT_INSTR(vpack.vv)"     v16, v12, v14, 3        \n\t"  // N0-N31 in v16
+            SMT_INSTR(vpack.vv)"     v18, v13, v15, 3        \n\t"
 
             // apply B int8 scales (-32 bias has been applyed)
             "vsetvli      t0, x0, e8, mf4         \n\t"
@@ -2322,16 +2328,16 @@ void gemm_kernel_i8i3k_m4(size_t          blk_len,
             "vxor.vv      v20, v16, v16           \n\t"
             "vxor.vv      v22, v16, v16           \n\t"
 
-            "vmadot       v16, v3, v12, i8        \n\t"
-            "vmadot       v18, v3, v13, i8        \n\t"
-            "vmadot       v20, v3, v14, i8        \n\t"
-            "vmadot       v22, v3, v15, i8        \n\t"
+            SMT_INSTR(vmadot)"       v16, v3, v12, i8        \n\t"
+            SMT_INSTR(vmadot)"       v18, v3, v13, i8        \n\t"
+            SMT_INSTR(vmadot)"       v20, v3, v14, i8        \n\t"
+            SMT_INSTR(vmadot)"       v22, v3, v15, i8        \n\t"
 
             "vsetvli      t0, x0, e16, m1         \n\t"
-            "vpack.vv     v12, v16, v18, 2        \n\t"
-            "vpack.vv     v14, v20, v22, 2        \n\t"
-            "vpack.vv     v16, v12, v14, 3        \n\t"  // N0-N31 in v16
-            "vpack.vv     v18, v13, v15, 3        \n\t"
+            SMT_INSTR(vpack.vv)"     v12, v16, v18, 2        \n\t"
+            SMT_INSTR(vpack.vv)"     v14, v20, v22, 2        \n\t"
+            SMT_INSTR(vpack.vv)"     v16, v12, v14, 3        \n\t"  // N0-N31 in v16
+            SMT_INSTR(vpack.vv)"     v18, v13, v15, 3        \n\t"
 
             // apply B int8 scales (-32 bias has been applyed)
             "vsetvli      t0, x0, e8, mf4         \n\t"
@@ -2495,8 +2501,8 @@ void gemm_kernel_i8i4_m1(size_t          blk_len,
                 "vsetvli      t0, zero, e8, m1        \n\t"
                 "vsrl.vi      v24, v3, 4              \n\t"
 
-                "vnpack4.vv   v8, v3, v3, 3           \n\t"  // lo4 of A
-                "vnpack4.vv   v10, v24, v24, 3        \n\t"  // hi4 of A
+                SMT_INSTR(vnpack4.vv)"   v8, v3, v3, 3           \n\t"  // lo4 of A
+                SMT_INSTR(vnpack4.vv)"   v10, v24, v24, 3        \n\t"  // hi4 of A
 
                 "vsetvli      t0, x0, e32, m1         \n\t"
                 "vxor.vv      v16, v16, v16           \n\t"
@@ -2504,26 +2510,26 @@ void gemm_kernel_i8i4_m1(size_t          blk_len,
                 "vxor.vv      v20, v16, v16           \n\t"
                 "vxor.vv      v22, v16, v16           \n\t"
 
-                "vmadotsu     v16, v10, v4, i4        \n\t"  // M0 N0 - N7 INT32(256bit)
-                "vmadotsu     v18, v10, v5, i4        \n\t"  // M0 N8 - N15
-                "vmadotsu     v20, v10, v6, i4        \n\t"  // M0 N16 - N23
-                "vmadotsu     v22, v10, v7, i4        \n\t"  // M0 N24 - N31
+                SMT_INSTR(vmadotsu)"     v16, v10, v4, i4        \n\t"  // M0 N0 - N7 INT32(256bit)
+                SMT_INSTR(vmadotsu)"     v18, v10, v5, i4        \n\t"  // M0 N8 - N15
+                SMT_INSTR(vmadotsu)"     v20, v10, v6, i4        \n\t"  // M0 N16 - N23
+                SMT_INSTR(vmadotsu)"     v22, v10, v7, i4        \n\t"  // M0 N24 - N31
 
                 "vsll.vi      v16, v16, 4             \n\t"
                 "vsll.vi      v18, v18, 4             \n\t"
                 "vsll.vi      v20, v20, 4             \n\t"
                 "vsll.vi      v22, v22, 4             \n\t"
 
-                "vmadotu      v16, v8, v4, i4         \n\t"
-                "vmadotu      v18, v8, v5, i4         \n\t"
-                "vmadotu      v20, v8, v6, i4         \n\t"
-                "vmadotu      v22, v8, v7, i4         \n\t"
+                SMT_INSTR(vmadotu)"      v16, v8, v4, i4         \n\t"
+                SMT_INSTR(vmadotu)"      v18, v8, v5, i4         \n\t"
+                SMT_INSTR(vmadotu)"      v20, v8, v6, i4         \n\t"
+                SMT_INSTR(vmadotu)"      v22, v8, v7, i4         \n\t"
 
                 "vsetvli      t0, x0, e16, m1         \n\t"
                 "vmv.v.i      v28, 8                  \n\t"
-                "vpack.vv     v24, v16, v18, 2        \n\t"
-                "vpack.vv     v26, v20, v22, 2        \n\t"
-                "vpack.vv     v16, v24, v26, 3        \n\t"
+                SMT_INSTR(vpack.vv)"     v24, v16, v18, 2        \n\t"
+                SMT_INSTR(vpack.vv)"     v26, v20, v22, 2        \n\t"
+                SMT_INSTR(vpack.vv)"     v16, v24, v26, 3        \n\t"
 
                 "vwmul.vx     v24, v28, t2            \n\t"
                 "vsetvli      t0, x0, e32, m1         \n\t"
@@ -2601,26 +2607,26 @@ void gemm_kernel_i8i4_m1(size_t          blk_len,
 
                 "vsetvli      t0, x0, e16, m1         \n\t"
                 "vmul.vx      v26, v28, t2            \n\t"  // asum*zp i16*i16
-                "vnpack4.vv   v8, v3, v3, 3           \n\t"  // lo4 of A
-                "vnpack4.vv   v10, v24, v24, 3        \n\t"  // hi4 of A
+                SMT_INSTR(vnpack4.vv)"   v8, v3, v3, 3           \n\t"  // lo4 of A
+                SMT_INSTR(vnpack4.vv)"   v10, v24, v24, 3        \n\t"  // hi4 of A
 
                 "vfcvt.f.x.v  v16, v26                \n\t"  // zp i16 -> fp16
                 "vadd.vi      v18, v16, 0             \n\t"
                 "vadd.vi      v20, v16, 0             \n\t"
                 "vadd.vi      v22, v16, 0             \n\t"
 
-                "vmadotsu.hp  v16, v10, v4, v1, 0, i4 \n\t"  // high 4
-                "vmadotsu.hp  v18, v10, v5, v1, 0, i4 \n\t"
-                "vmadotsu.hp  v20, v10, v6, v1, 0, i4 \n\t"
-                "vmadotsu.hp  v22, v10, v7, v1, 0, i4 \n\t"
-                "vmadotu.hp   v16, v8, v4, v0, 0, i4  \n\t"  // low 4
-                "vmadotu.hp   v18, v8, v5, v0, 0, i4  \n\t"
-                "vmadotu.hp   v20, v8, v6, v0, 0, i4  \n\t"
-                "vmadotu.hp   v22, v8, v7, v0, 0, i4  \n\t"
+                SMT_INSTR(vmadotsu.hp)"  v16, v10, v4, v1, 0, i4 \n\t"  // high 4
+                SMT_INSTR(vmadotsu.hp)"  v18, v10, v5, v1, 0, i4 \n\t"
+                SMT_INSTR(vmadotsu.hp)"  v20, v10, v6, v1, 0, i4 \n\t"
+                SMT_INSTR(vmadotsu.hp)"  v22, v10, v7, v1, 0, i4 \n\t"
+                SMT_INSTR(vmadotu.hp)"   v16, v8, v4, v0, 0, i4  \n\t"  // low 4
+                SMT_INSTR(vmadotu.hp)"   v18, v8, v5, v0, 0, i4  \n\t"
+                SMT_INSTR(vmadotu.hp)"   v20, v8, v6, v0, 0, i4  \n\t"
+                SMT_INSTR(vmadotu.hp)"   v22, v8, v7, v0, 0, i4  \n\t"
 
-                "vpack.vv     v24, v16, v18, 1        \n\t"
-                "vpack.vv     v26, v20, v22, 1        \n\t"
-                "vpack.vv     v16, v24, v26, 2        \n\t"
+                SMT_INSTR(vpack.vv)"     v24, v16, v18, 1        \n\t"
+                SMT_INSTR(vpack.vv)"     v26, v20, v22, 1        \n\t"
+                SMT_INSTR(vpack.vv)"     v16, v24, v26, 2        \n\t"
 
                 "vsetvli      t0, x0, e16, mf2        \n\t"
                 // mac result * b_scale; f16*f16->f32
@@ -2710,8 +2716,8 @@ void gemm_kernel_i8i4_m1(size_t          blk_len,
                 "vsetvli      t0, zero, e8, m1        \n\t"
                 "vsrl.vi      v24, v3, 4              \n\t"
 
-                "vnpack4.vv   v8, v3, v3, 3           \n\t"  // lo4 of A
-                "vnpack4.vv   v10, v24, v24, 3        \n\t"  // hi4 of A
+                SMT_INSTR(vnpack4.vv)"   v8, v3, v3, 3           \n\t"  // lo4 of A
+                SMT_INSTR(vnpack4.vv)"   v10, v24, v24, 3        \n\t"  // hi4 of A
 
                 "vsetvli      t0, x0, e32, m1         \n\t"
                 "vxor.vv      v16, v16, v16           \n\t"
@@ -2719,10 +2725,10 @@ void gemm_kernel_i8i4_m1(size_t          blk_len,
                 "vxor.vv      v20, v16, v16           \n\t"
                 "vxor.vv      v22, v16, v16           \n\t"
 
-                "vmadotsu     v16, v10, v4, i4        \n\t"  // M0 N0 - N7 INT32(256bit)
-                "vmadotsu     v18, v10, v5, i4        \n\t"  // M0 N8 - N15
-                "vmadotsu     v20, v10, v6, i4        \n\t"  // M0 N16 - N23
-                "vmadotsu     v22, v10, v7, i4        \n\t"  // M0 N24 - N31
+                SMT_INSTR(vmadotsu)"     v16, v10, v4, i4        \n\t"  // M0 N0 - N7 INT32(256bit)
+                SMT_INSTR(vmadotsu)"     v18, v10, v5, i4        \n\t"  // M0 N8 - N15
+                SMT_INSTR(vmadotsu)"     v20, v10, v6, i4        \n\t"  // M0 N16 - N23
+                SMT_INSTR(vmadotsu)"     v22, v10, v7, i4        \n\t"  // M0 N24 - N31
 
                 "vsll.vi      v16, v16, 4             \n\t"
                 "vsll.vi      v18, v18, 4             \n\t"
@@ -2733,15 +2739,15 @@ void gemm_kernel_i8i4_m1(size_t          blk_len,
                 "vle8.v       v1, (s4)                \n\t"  // Bzp
                 "addi         s4, s4, 32+128*4        \n\t"
 
-                "vmadotu      v16, v8, v4, i4         \n\t"
-                "vmadotu      v18, v8, v5, i4         \n\t"
-                "vmadotu      v20, v8, v6, i4         \n\t"
-                "vmadotu      v22, v8, v7, i4         \n\t"
+                SMT_INSTR(vmadotu)"      v16, v8, v4, i4         \n\t"
+                SMT_INSTR(vmadotu)"      v18, v8, v5, i4         \n\t"
+                SMT_INSTR(vmadotu)"      v20, v8, v6, i4         \n\t"
+                SMT_INSTR(vmadotu)"      v22, v8, v7, i4         \n\t"
 
                 "vwaddu.vx    v28, v1, x0             \n\t"  // uint8 -> uint16
-                "vpack.vv     v24, v16, v18, 2        \n\t"
-                "vpack.vv     v26, v20, v22, 2        \n\t"
-                "vpack.vv     v16, v24, v26, 3        \n\t"
+                SMT_INSTR(vpack.vv)"     v24, v16, v18, 2        \n\t"
+                SMT_INSTR(vpack.vv)"     v26, v20, v22, 2        \n\t"
+                SMT_INSTR(vpack.vv)"     v16, v24, v26, 3        \n\t"
 
                 "vsetvli      t0, x0, e16, m1         \n\t"
                 "vwmul.vx     v24, v28, t2            \n\t"
@@ -2820,30 +2826,30 @@ void gemm_kernel_i8i4_m1(size_t          blk_len,
                 "vsrl.vi      v24, v3, 4              \n\t"
 
                 "vsetvli      t0, x0, e16, m1         \n\t"
-                "vnpack4.vv   v8, v3, v3, 3           \n\t"  // lo4 of A
-                "vnpack4.vv   v10, v24, v24, 3        \n\t"  // hi4 of A
+                SMT_INSTR(vnpack4.vv)"   v8, v3, v3, 3           \n\t"  // lo4 of A
+                SMT_INSTR(vnpack4.vv)"   v10, v24, v24, 3        \n\t"  // hi4 of A
 
                 "vxor.vv      v16, v16, v16           \n\t"
                 "vxor.vv      v18, v16, v16           \n\t"
                 "vxor.vv      v20, v16, v16           \n\t"
                 "vxor.vv      v22, v16, v16           \n\t"
 
-                "vmadotsu.hp  v16, v10, v4, v1, 0, i4 \n\t"  // high 4
-                "vmadotsu.hp  v18, v10, v5, v1, 0, i4 \n\t"
-                "vmadotsu.hp  v20, v10, v6, v1, 0, i4 \n\t"
-                "vmadotsu.hp  v22, v10, v7, v1, 0, i4 \n\t"
-                "vmadotu.hp   v16, v8, v4, v0, 0, i4  \n\t"  // low 4
-                "vmadotu.hp   v18, v8, v5, v0, 0, i4  \n\t"
-                "vmadotu.hp   v20, v8, v6, v0, 0, i4  \n\t"
-                "vmadotu.hp   v22, v8, v7, v0, 0, i4  \n\t"
+                SMT_INSTR(vmadotsu.hp)"  v16, v10, v4, v1, 0, i4 \n\t"  // high 4
+                SMT_INSTR(vmadotsu.hp)"  v18, v10, v5, v1, 0, i4 \n\t"
+                SMT_INSTR(vmadotsu.hp)"  v20, v10, v6, v1, 0, i4 \n\t"
+                SMT_INSTR(vmadotsu.hp)"  v22, v10, v7, v1, 0, i4 \n\t"
+                SMT_INSTR(vmadotu.hp)"   v16, v8, v4, v0, 0, i4  \n\t"  // low 4
+                SMT_INSTR(vmadotu.hp)"   v18, v8, v5, v0, 0, i4  \n\t"
+                SMT_INSTR(vmadotu.hp)"   v20, v8, v6, v0, 0, i4  \n\t"
+                SMT_INSTR(vmadotu.hp)"   v22, v8, v7, v0, 0, i4  \n\t"
 
                 "vsetvli      t0, x0, e8, mf4         \n\t"
                 "vwaddu.vx    v28, v31, x0            \n\t"  // Bzp u8 -> u16
 
                 "vsetvli      t0, x0, e8, m1          \n\t"
-                "vpack.vv     v24, v16, v18, 1        \n\t"
-                "vpack.vv     v26, v20, v22, 1        \n\t"
-                "vpack.vv     v16, v24, v26, 2        \n\t"
+                SMT_INSTR(vpack.vv)"     v24, v16, v18, 1        \n\t"
+                SMT_INSTR(vpack.vv)"     v26, v20, v22, 1        \n\t"
+                SMT_INSTR(vpack.vv)"     v16, v24, v26, 2        \n\t"
 
                 "vsetvli      t0, x0, e16, mf2        \n\t"
                 "vmul.vx      v26, v28, t2            \n\t"  // asum*zp i16*i16
@@ -2953,30 +2959,30 @@ void gemm_kernel_i8i4_hp_m1(size_t          blk_len,
                 "vfwmacc.vf     v31, ft1, v10           \n\t"  // asum * scale a * scale b * blk scale
 
                 "vsetvli        t0, x0, e8, m1          \n\t"
-                "vpack.vv       v0, v8, v9, 3           \n\t"
+                SMT_INSTR(vpack.vv)"       v0, v8, v9, 3           \n\t"
                 "vsrl.vi        v28, v3, 4              \n\t"
 
                 "vsetvli        t0, x0, e16, m1         \n\t"
-                "vnpack4.vv     v2, v3, v3, 3           \n\t"  // lo4 of A
-                "vnpack4.vv     v3, v28, v28, 3         \n\t"  // hi4 of A
+                SMT_INSTR(vnpack4.vv)"     v2, v3, v3, 3           \n\t"  // lo4 of A
+                SMT_INSTR(vnpack4.vv)"     v3, v28, v28, 3         \n\t"  // hi4 of A
 
                 // i4 * i4 vmadot
                 "vsetvli        t0, x0, e16, m1         \n\t"
-                "vmadotsu.hp    v16, v3, v4, v0, 4, i4  \n\t"  // high 4
-                "vmadotsu.hp    v17, v3, v5, v0, 5, i4  \n\t"
-                "vmadotsu.hp    v18, v3, v6, v0, 6, i4  \n\t"
-                "vmadotsu.hp    v19, v3, v7, v0, 7, i4  \n\t"
-                "vmadotu.hp     v16, v2, v4, v0, 0, i4  \n\t"  // low 4
-                "vmadotu.hp     v17, v2, v5, v0, 1, i4  \n\t"
-                "vmadotu.hp     v18, v2, v6, v0, 2, i4  \n\t"
-                "vmadotu.hp     v19, v2, v7, v0, 3, i4  \n\t"
+                SMT_INSTR(vmadotsu.hp)"    v16, v3, v4, v0, 4, i4  \n\t"  // high 4
+                SMT_INSTR(vmadotsu.hp)"    v17, v3, v5, v0, 5, i4  \n\t"
+                SMT_INSTR(vmadotsu.hp)"    v18, v3, v6, v0, 6, i4  \n\t"
+                SMT_INSTR(vmadotsu.hp)"    v19, v3, v7, v0, 7, i4  \n\t"
+                SMT_INSTR(vmadotu.hp)"     v16, v2, v4, v0, 0, i4  \n\t"  // low 4
+                SMT_INSTR(vmadotu.hp)"     v17, v2, v5, v0, 1, i4  \n\t"
+                SMT_INSTR(vmadotu.hp)"     v18, v2, v6, v0, 2, i4  \n\t"
+                SMT_INSTR(vmadotu.hp)"     v19, v2, v7, v0, 3, i4  \n\t"
 
                 "addi           t5, t5, -1              \n\t"
                 "bgtz           t5, INNER_BLK_LOOP%=    \n\t"
 
-                "vpack.vv       v8, v16, v17, 1         \n\t"
-                "vpack.vv       v12, v18, v19, 1        \n\t"
-                "vpack.vv       v20, v8, v12, 2         \n\t"
+                SMT_INSTR(vpack.vv)"       v8, v16, v17, 1         \n\t"
+                SMT_INSTR(vpack.vv)"       v12, v18, v19, 1        \n\t"
+                SMT_INSTR(vpack.vv)"       v20, v8, v12, 2         \n\t"
 
                 "vsetvli        t0, x0, e16, mf2        \n\t"
                 "addi           t4, t4, -1              \n\t"
@@ -3056,8 +3062,8 @@ void gemm_kernel_i8i4_m4(size_t          blk_len,
                 "vl4r.v         v4, (%[B])          \n\t"  // 32*32@i4
                 "addi           %[B], %[B], 512     \n\t"
                 "vsrl.vi        v1, v0, 4           \n\t"
-                "vnpack4.vv     v12, v0, v1, 3      \n\t"  // A low  u4
-                "vupack.vv      v2, v12, v12, 2     \n\t"
+                SMT_INSTR(vnpack4.vv)"     v12, v0, v1, 3      \n\t"  // A low  u4
+                SMT_INSTR(vupack.vv)"      v2, v12, v12, 2     \n\t"
 
                 // init the accumu to asum * zp
                 "vsetvli        t0, x0, e32, m1     \n\t"
@@ -3068,23 +3074,23 @@ void gemm_kernel_i8i4_m4(size_t          blk_len,
 
                 // i4 * i4 vmadot
                 "vsetvli        t0, x0, e32, m1     \n\t"
-                "vmadotsu       v16, v3, v4, i4     \n\t"   // high 4
-                "vmadotsu       v18, v3, v5, i4     \n\t"
-                "vmadotsu       v20, v3, v6, i4     \n\t"
-                "vmadotsu       v22, v3, v7, i4     \n\t"
+                SMT_INSTR(vmadotsu)"       v16, v3, v4, i4     \n\t"   // high 4
+                SMT_INSTR(vmadotsu)"       v18, v3, v5, i4     \n\t"
+                SMT_INSTR(vmadotsu)"       v20, v3, v6, i4     \n\t"
+                SMT_INSTR(vmadotsu)"       v22, v3, v7, i4     \n\t"
                 "vsll.vi        v16, v16, 4         \n\t"
                 "vsll.vi        v18, v18, 4         \n\t"
                 "vsll.vi        v20, v20, 4         \n\t"
                 "vsll.vi        v22, v22, 4         \n\t"
-                "vmadotu        v16, v2, v4, i4     \n\t"   // low 4
-                "vmadotu        v18, v2, v5, i4     \n\t"
-                "vmadotu        v20, v2, v6, i4     \n\t"
-                "vmadotu        v22, v2, v7, i4     \n\t"
+                SMT_INSTR(vmadotu)"        v16, v2, v4, i4     \n\t"   // low 4
+                SMT_INSTR(vmadotu)"        v18, v2, v5, i4     \n\t"
+                SMT_INSTR(vmadotu)"        v20, v2, v6, i4     \n\t"
+                SMT_INSTR(vmadotu)"        v22, v2, v7, i4     \n\t"
 
-                "vpack.vv       v0, v16, v18, 2     \n\t"
-                "vpack.vv       v2, v20, v22, 2     \n\t"
-                "vpack.vv       v16, v0, v2, 3      \n\t"
-                "vpack.vv       v18, v1, v3, 3      \n\t"
+                SMT_INSTR(vpack.vv)"       v0, v16, v18, 2     \n\t"
+                SMT_INSTR(vpack.vv)"       v2, v20, v22, 2     \n\t"
+                SMT_INSTR(vpack.vv)"       v16, v0, v2, 3      \n\t"
+                SMT_INSTR(vpack.vv)"       v18, v1, v3, 3      \n\t"
 
                 "vrgather.vi    v0, v10, 0          \n\t"
                 "vrgather.vi    v1, v10, 1          \n\t"
@@ -3156,7 +3162,7 @@ void gemm_kernel_i8i4_m4(size_t          blk_len,
                 "vle16.v        v12, (%[B])             \n\t"
                 "addi           %[B], %[B], 64          \n\t"
                 "vsetvli        t0, x0, e16, m1         \n\t"
-                "vpack.vv       v14, v12, v12, 3        \n\t"
+                SMT_INSTR(vpack.vv)"       v14, v12, v12, 3        \n\t"
 
                 "vsetivli       t0, 4, e16, mf2         \n\t"
                 "vle16.v        v8, (%[A])              \n\t"  // asum
@@ -3172,33 +3178,33 @@ void gemm_kernel_i8i4_m4(size_t          blk_len,
                 "vl4r.v         v4, (%[B])              \n\t"  // 32*32@i4
                 "addi           %[B], %[B], 512         \n\t"
                 "vsrl.vi        v17, v16, 4             \n\t"
-                "vnpack4.vv     v12, v16, v17, 3        \n\t"  // A low  u4
-                "vupack.vv      v2, v12, v12, 2         \n\t"
+                SMT_INSTR(vnpack4.vv)"     v12, v16, v17, 3        \n\t"  // A low  u4
+                SMT_INSTR(vupack.vv)"      v2, v12, v12, 2         \n\t"
 
                 // init the accumu to asum * zp
                 "vsetvli        t0, x0, e16, m1         \n\t"
-                "vpack.vv       v16, v10, v10,0         \n\t"
+                SMT_INSTR(vpack.vv)"       v16, v10, v10,0         \n\t"
                 "vsetvli        t0, x0, e32, m1         \n\t"
-                "vpack.vv       v20, v16, v16,0         \n\t"
+                SMT_INSTR(vpack.vv)"       v20, v16, v16,0         \n\t"
                 "vsetvli        t0, x0, e64, m1         \n\t"
-                "vpack.vv       v18, v20, v20, 0        \n\t"
+                SMT_INSTR(vpack.vv)"       v18, v20, v20, 0        \n\t"
                 "vor.vv         v20, v18, v18           \n\t"
                 "vor.vv         v21, v18, v18           \n\t"
 
                 // i4 * i4 vmadot
                 "vsetvli        t0, x0, e16, m1         \n\t"
-                "vmadotsu.hp    v18, v3, v4, v1, 0, i4  \n\t"  // high 4
-                "vmadotsu.hp    v19, v3, v5, v1, 0, i4  \n\t"
-                "vmadotsu.hp    v20, v3, v6, v1, 0, i4  \n\t"
-                "vmadotsu.hp    v21, v3, v7, v1, 0, i4  \n\t"
-                "vmadotu.hp     v18, v2, v4, v0, 0, i4  \n\t"  // low 4
-                "vmadotu.hp     v19, v2, v5, v0, 0, i4  \n\t"
-                "vmadotu.hp     v20, v2, v6, v0, 0, i4  \n\t"
-                "vmadotu.hp     v21, v2, v7, v0, 0, i4  \n\t"
+                SMT_INSTR(vmadotsu.hp)"    v18, v3, v4, v1, 0, i4  \n\t"  // high 4
+                SMT_INSTR(vmadotsu.hp)"    v19, v3, v5, v1, 0, i4  \n\t"
+                SMT_INSTR(vmadotsu.hp)"    v20, v3, v6, v1, 0, i4  \n\t"
+                SMT_INSTR(vmadotsu.hp)"    v21, v3, v7, v1, 0, i4  \n\t"
+                SMT_INSTR(vmadotu.hp)"     v18, v2, v4, v0, 0, i4  \n\t"  // low 4
+                SMT_INSTR(vmadotu.hp)"     v19, v2, v5, v0, 0, i4  \n\t"
+                SMT_INSTR(vmadotu.hp)"     v20, v2, v6, v0, 0, i4  \n\t"
+                SMT_INSTR(vmadotu.hp)"     v21, v2, v7, v0, 0, i4  \n\t"
 
-                "vpack.vv       v8, v18, v19, 1         \n\t"
-                "vpack.vv       v12, v20, v21, 1        \n\t"
-                "vpack.vv       v20, v8, v12, 2         \n\t"
+                SMT_INSTR(vpack.vv)"       v8, v18, v19, 1         \n\t"
+                SMT_INSTR(vpack.vv)"       v12, v20, v21, 1        \n\t"
+                SMT_INSTR(vpack.vv)"       v20, v8, v12, 2         \n\t"
 
                 "vfwmul.vv      v16, v20, v14           \n\t"
                 "vfwmul.vv      v18, v21, v14           \n\t"
@@ -3278,8 +3284,8 @@ void gemm_kernel_i8i4_m4(size_t          blk_len,
                 "vl4r.v         v4, (%[B])      \n\t"  // 32*32@i4
                 "addi           %[B], %[B], 512 \n\t"
                 "vsrl.vi        v1, v0, 4       \n\t"
-                "vnpack4.vv     v12, v0, v1, 3  \n\t"  // A low  u4
-                "vupack.vv      v2, v12, v12, 2 \n\t"
+                SMT_INSTR(vnpack4.vv)"     v12, v0, v1, 3  \n\t"  // A low  u4
+                SMT_INSTR(vupack.vv)"      v2, v12, v12, 2 \n\t"
 
                 // init the accumu to asum * zp
                 "vsetvli        t0, x0, e32, m1 \n\t"
@@ -3290,23 +3296,23 @@ void gemm_kernel_i8i4_m4(size_t          blk_len,
 
                 // i4 * i4 vmadot
                 "vsetvli        t0, x0, e32, m1 \n\t"
-                "vmadotsu       v16, v3, v4, i4 \n\t"  // high 4
-                "vmadotsu       v18, v3, v5, i4 \n\t"
-                "vmadotsu       v20, v3, v6, i4 \n\t"
-                "vmadotsu       v22, v3, v7, i4 \n\t"
+                SMT_INSTR(vmadotsu)"       v16, v3, v4, i4 \n\t"  // high 4
+                SMT_INSTR(vmadotsu)"       v18, v3, v5, i4 \n\t"
+                SMT_INSTR(vmadotsu)"       v20, v3, v6, i4 \n\t"
+                SMT_INSTR(vmadotsu)"       v22, v3, v7, i4 \n\t"
                 "vsll.vi        v16, v16, 4     \n\t"
                 "vsll.vi        v18, v18, 4     \n\t"
                 "vsll.vi        v20, v20, 4     \n\t"
                 "vsll.vi        v22, v22, 4     \n\t"
-                "vmadotu        v16, v2, v4, i4 \n\t"  // low 4
-                "vmadotu        v18, v2, v5, i4 \n\t"
-                "vmadotu        v20, v2, v6, i4 \n\t"
-                "vmadotu        v22, v2, v7, i4 \n\t"
+                SMT_INSTR(vmadotu)"        v16, v2, v4, i4 \n\t"  // low 4
+                SMT_INSTR(vmadotu)"        v18, v2, v5, i4 \n\t"
+                SMT_INSTR(vmadotu)"        v20, v2, v6, i4 \n\t"
+                SMT_INSTR(vmadotu)"        v22, v2, v7, i4 \n\t"
 
-                "vpack.vv       v0, v16, v18, 2 \n\t"
-                "vpack.vv       v2, v20, v22, 2 \n\t"
-                "vpack.vv       v16, v0, v2, 3  \n\t"
-                "vpack.vv       v18, v1, v3, 3  \n\t"
+                SMT_INSTR(vpack.vv)"       v0, v16, v18, 2 \n\t"
+                SMT_INSTR(vpack.vv)"       v2, v20, v22, 2 \n\t"
+                SMT_INSTR(vpack.vv)"       v16, v0, v2, 3  \n\t"
+                SMT_INSTR(vpack.vv)"       v18, v1, v3, 3  \n\t"
 
                 "vsetvli        t0, x0, e16, m1 \n\t"
                 "vwmul.vx       v0, v10, s1     \n\t"
@@ -3507,9 +3513,9 @@ void gemm_kernel_i8i4_hp_m4(size_t          blk_len,
 
                 "vsetvli        t0, x0, e8, m1            \n\t"
                 "vsrl.vi        v1, v0, 4                 \n\t"
-                "vnpack4.vv     v12, v0, v1, 3            \n\t"
-                "vpack.vv       v0, v17, v16, 3           \n\t"
-                "vupack.vv      v2, v12, v12, 2           \n\t"
+                SMT_INSTR(vnpack4.vv)"     v12, v0, v1, 3            \n\t"
+                SMT_INSTR(vpack.vv)"       v0, v17, v16, 3           \n\t"
+                SMT_INSTR(vupack.vv)"      v2, v12, v12, 2           \n\t"
 
                 "vsetvli        t0, x0, e16, mf2          \n\t"  // mf2 -> mf2
                 "vfmul.vv       v10, v10, v16             \n\t"  // zp * ascale * bscale; fp16*fp16
@@ -3527,14 +3533,14 @@ void gemm_kernel_i8i4_hp_m4(size_t          blk_len,
                 "vfwmacc.vf     v31, fa1, v25             \n\t"
 
                 "vsetvli        t0, x0, e32, m1           \n\t"
-                "vmadotsu.hp    v18, v3, v4, v0, 0, i4    \n\t"  //lo4;n0n7
-                "vmadotsu.hp    v19, v3, v5, v0, 1, i4    \n\t"  //lo4;n8n15
-                "vmadotsu.hp    v20, v3, v6, v0, 2, i4    \n\t"  //lo4;n16n23
-                "vmadotsu.hp    v21, v3, v7, v0, 3, i4    \n\t"  //lo4;n24n31
-                "vmadotu.hp     v18, v2, v4, v0, 4, i4    \n\t"  //hi4;n0n7
-                "vmadotu.hp     v19, v2, v5, v0, 5, i4    \n\t"  //hi4;n8n15
-                "vmadotu.hp     v20, v2, v6, v0, 6, i4    \n\t"  //hi4;n16n23
-                "vmadotu.hp     v21, v2, v7, v0, 7, i4    \n\t"  //hi4;n24n31
+                SMT_INSTR(vmadotsu.hp)"    v18, v3, v4, v0, 0, i4    \n\t"  //lo4;n0n7
+                SMT_INSTR(vmadotsu.hp)"    v19, v3, v5, v0, 1, i4    \n\t"  //lo4;n8n15
+                SMT_INSTR(vmadotsu.hp)"    v20, v3, v6, v0, 2, i4    \n\t"  //lo4;n16n23
+                SMT_INSTR(vmadotsu.hp)"    v21, v3, v7, v0, 3, i4    \n\t"  //lo4;n24n31
+                SMT_INSTR(vmadotu.hp)"     v18, v2, v4, v0, 4, i4    \n\t"  //hi4;n0n7
+                SMT_INSTR(vmadotu.hp)"     v19, v2, v5, v0, 5, i4    \n\t"  //hi4;n8n15
+                SMT_INSTR(vmadotu.hp)"     v20, v2, v6, v0, 6, i4    \n\t"  //hi4;n16n23
+                SMT_INSTR(vmadotu.hp)"     v21, v2, v7, v0, 7, i4    \n\t"  //hi4;n24n31
 
                 "addi           t4, t4, -1                \n\t"
                 "addi           t6, t6, 8+128             \n\t"  // next A K32 subblock
@@ -3544,9 +3550,9 @@ void gemm_kernel_i8i4_hp_m4(size_t          blk_len,
                 "bgtz           t4, _KsubBLK_LPST%=       \n\t"
 
                 "vsetvli        t0, x0, e16, m1           \n\t"
-                "vpack.vv       v8, v18, v19, 1           \n\t"  // 128(16*8)->256(16*16)
-                "vpack.vv       v12, v20, v21, 1          \n\t"
-                "vpack.vv       v26, v8, v12, 2           \n\t"  // 256(16*16)->512(16*32)
+                SMT_INSTR(vpack.vv)"       v8, v18, v19, 1           \n\t"  // 128(16*8)->256(16*16)
+                SMT_INSTR(vpack.vv)"       v12, v20, v21, 1          \n\t"
+                SMT_INSTR(vpack.vv)"       v26, v8, v12, 2           \n\t"  // 256(16*16)->512(16*32)
 
                 "vsetvli        t0, x0, e16, m1           \n\t"
                 "vfwmacc.vf     v28, fa1, v26             \n\t"  // row0/1 accum += dot * packed scale
@@ -3672,9 +3678,9 @@ void gemm_kernel_i8i4_hp_m4(size_t          blk_len,
 
                 "vsetvli        t0, x0, e8, m1            \n\t"
                 "vsrl.vi        v1, v0, 4                 \n\t"
-                "vnpack4.vv     v12, v0, v1, 3            \n\t"
-                "vpack.vv       v0, v17, v16, 3           \n\t"
-                "vupack.vv      v2, v12, v12, 2           \n\t"
+                SMT_INSTR(vnpack4.vv)"     v12, v0, v1, 3            \n\t"
+                SMT_INSTR(vpack.vv)"       v0, v17, v16, 3           \n\t"
+                SMT_INSTR(vupack.vv)"      v2, v12, v12, 2           \n\t"
 
                 "vsetvli        t0, x0, e16, mf2          \n\t"  // mf2 -> m1
                 "vfmul.vf       v12, v16, ft1             \n\t"  // zp(1:n)* abscale * asum_m0; fp16*fp16
@@ -3689,14 +3695,14 @@ void gemm_kernel_i8i4_hp_m4(size_t          blk_len,
                 "vfwmacc.vf     v31, fa1, v25             \n\t"
 
                 "vsetvli        t0, x0, e32, m1           \n\t"
-                "vmadotsu.hp    v18, v3, v4, v0, 0, i4    \n\t"  //lo4;n0n7
-                "vmadotsu.hp    v19, v3, v5, v0, 1, i4    \n\t"  //lo4;n8n15
-                "vmadotsu.hp    v20, v3, v6, v0, 2, i4    \n\t"  //lo4;n16n23
-                "vmadotsu.hp    v21, v3, v7, v0, 3, i4    \n\t"  //lo4;n24n31
-                "vmadotu.hp     v18, v2, v4, v0, 4, i4    \n\t"  //hi4;n0n7
-                "vmadotu.hp     v19, v2, v5, v0, 5, i4    \n\t"  //hi4;n8n15
-                "vmadotu.hp     v20, v2, v6, v0, 6, i4    \n\t"  //hi4;n16n23
-                "vmadotu.hp     v21, v2, v7, v0, 7, i4    \n\t"  //hi4;n24n31
+                SMT_INSTR(vmadotsu.hp)"    v18, v3, v4, v0, 0, i4    \n\t"  //lo4;n0n7
+                SMT_INSTR(vmadotsu.hp)"    v19, v3, v5, v0, 1, i4    \n\t"  //lo4;n8n15
+                SMT_INSTR(vmadotsu.hp)"    v20, v3, v6, v0, 2, i4    \n\t"  //lo4;n16n23
+                SMT_INSTR(vmadotsu.hp)"    v21, v3, v7, v0, 3, i4    \n\t"  //lo4;n24n31
+                SMT_INSTR(vmadotu.hp)"     v18, v2, v4, v0, 4, i4    \n\t"  //hi4;n0n7
+                SMT_INSTR(vmadotu.hp)"     v19, v2, v5, v0, 5, i4    \n\t"  //hi4;n8n15
+                SMT_INSTR(vmadotu.hp)"     v20, v2, v6, v0, 6, i4    \n\t"  //hi4;n16n23
+                SMT_INSTR(vmadotu.hp)"     v21, v2, v7, v0, 7, i4    \n\t"  //hi4;n24n31
 
                 "addi           t4, t4, -1                \n\t"
 
@@ -3706,9 +3712,9 @@ void gemm_kernel_i8i4_hp_m4(size_t          blk_len,
                 "bgtz           t4, _KsubBLK_LPST%=       \n\t"
 
                 "vsetvli        t0, x0, e16, m1           \n\t"  //N32in1register
-                "vpack.vv       v8, v18, v19, 1           \n\t"  // 128(16*8)->256(16*16)
-                "vpack.vv       v12, v20, v21, 1          \n\t"
-                "vpack.vv       v26, v8, v12, 2           \n\t"  // 256(16*16)->512(16*32)
+                SMT_INSTR(vpack.vv)"       v8, v18, v19, 1           \n\t"  // 128(16*8)->256(16*16)
+                SMT_INSTR(vpack.vv)"       v12, v20, v21, 1          \n\t"
+                SMT_INSTR(vpack.vv)"       v26, v8, v12, 2           \n\t"  // 256(16*16)->512(16*32)
 
                 "vsetvli        t0, x0, e16, m1           \n\t"
                 "vfwmacc.vf     v28, fa1, v26             \n\t"  // row0/1 accum += dot * packed scale
@@ -3852,20 +3858,20 @@ void gemm_kernel_i8mxfp4_m1(size_t          blk_len,
 
                 // [4*32]*2
                 "vsetvli      t0, x0, e8, m1          \n\t"
-                "vpack.vv     v16, v12, v8, 0         \n\t"
-                "vpack.vv     v18, v13, v9, 0         \n\t"
-                "vpack.vv     v20, v14, v10, 0        \n\t"
-                "vpack.vv     v22, v15, v11, 0        \n\t"
+                SMT_INSTR(vpack.vv)"     v16, v12, v8, 0         \n\t"
+                SMT_INSTR(vpack.vv)"     v18, v13, v9, 0         \n\t"
+                SMT_INSTR(vpack.vv)"     v20, v14, v10, 0        \n\t"
+                SMT_INSTR(vpack.vv)"     v22, v15, v11, 0        \n\t"
 
                 "vsetvli      t0, x0, e8, m8          \n\t"
                 "vrsub.vi     v16, v16, 0, v0.t       \n\t"
 
                 // [4*32]*2 -> [8*16]
                 "vsetvli      t0, x0, e8, m1          \n\t"
-                "vupack.vv    v8, v16, v17, 1         \n\t"
-                "vupack.vv    v10, v18, v19, 1        \n\t"
-                "vupack.vv    v12, v20, v21, 1        \n\t"
-                "vupack.vv    v14, v22, v23, 1        \n\t"
+                SMT_INSTR(vupack.vv)"    v8, v16, v17, 1         \n\t"
+                SMT_INSTR(vupack.vv)"    v10, v18, v19, 1        \n\t"
+                SMT_INSTR(vupack.vv)"    v12, v20, v21, 1        \n\t"
+                SMT_INSTR(vupack.vv)"    v14, v22, v23, 1        \n\t"
 
                 "vsetvli      t0, x0, e64, m1         \n\t"
                 "vslidedown.vi  v16, v1, 2            \n\t"
@@ -3878,19 +3884,19 @@ void gemm_kernel_i8mxfp4_m1(size_t          blk_len,
                 "vxor.vv      v30, v16, v16           \n\t"
 
                 // ---- int8 dot products over the decoded MXFP4 lane groups ----
-                "vmadot       v24, v1, v8, i8         \n\t"  // N0..7
-                "vmadot       v26, v1, v10, i8        \n\t"  // N8..15
-                "vmadot       v28, v1, v12, i8        \n\t"  // N16..23
-                "vmadot       v30, v1, v14, i8        \n\t"  // N24..31
-                "vmadot       v24, v16, v9, i8        \n\t"  // N0..7
-                "vmadot       v26, v16, v11, i8       \n\t"  // N8..15
-                "vmadot       v28, v16, v13, i8       \n\t"  // N16..23
-                "vmadot       v30, v16, v15, i8       \n\t"  // N24..31
+                SMT_INSTR(vmadot)"       v24, v1, v8, i8         \n\t"  // N0..7
+                SMT_INSTR(vmadot)"       v26, v1, v10, i8        \n\t"  // N8..15
+                SMT_INSTR(vmadot)"       v28, v1, v12, i8        \n\t"  // N16..23
+                SMT_INSTR(vmadot)"       v30, v1, v14, i8        \n\t"  // N24..31
+                SMT_INSTR(vmadot)"       v24, v16, v9, i8        \n\t"  // N0..7
+                SMT_INSTR(vmadot)"       v26, v16, v11, i8       \n\t"  // N8..15
+                SMT_INSTR(vmadot)"       v28, v16, v13, i8       \n\t"  // N16..23
+                SMT_INSTR(vmadot)"       v30, v16, v15, i8       \n\t"  // N24..31
 
                 "vsetvli      t0, x0, e32, m1         \n\t"
-                "vpack.vv     v16, v24, v26, 2        \n\t"  // v16 = N0..15
-                "vpack.vv     v18, v28, v30, 2        \n\t"  // v18 = N16..31
-                "vpack.vv     v24, v16, v18, 3        \n\t"  // v24 = N0..31
+                SMT_INSTR(vpack.vv)"     v16, v24, v26, 2        \n\t"  // v16 = N0..15
+                SMT_INSTR(vpack.vv)"     v18, v28, v30, 2        \n\t"  // v18 = N16..31
+                SMT_INSTR(vpack.vv)"     v24, v16, v18, 3        \n\t"  // v24 = N0..31
 
                 "lui          t1, 0x00200             \n\t"
                 "vmv.v.x      v30, t1                 \n\t"
@@ -4004,19 +4010,19 @@ void gemm_kernel_i8mxfp4_m4(size_t          blk_len,
                 "vsrl.vi        v10, v10, 4             \n\t"
                 "vsrl.vi        v11, v11, 4             \n\t"
 
-                "vpack.vv       v16, v12, v8, 0         \n\t"
-                "vpack.vv       v18, v13, v9, 0         \n\t"
-                "vpack.vv       v20, v14, v10, 0        \n\t"
-                "vpack.vv       v22, v15, v11, 0        \n\t"
+                SMT_INSTR(vpack.vv)"       v16, v12, v8, 0         \n\t"
+                SMT_INSTR(vpack.vv)"       v18, v13, v9, 0         \n\t"
+                SMT_INSTR(vpack.vv)"       v20, v14, v10, 0        \n\t"
+                SMT_INSTR(vpack.vv)"       v22, v15, v11, 0        \n\t"
 
                 "vsetvli        t0, x0, e8, m8          \n\t"
                 "vrsub.vi       v16, v16, 0, v0.t       \n\t"
 
                 "vsetvli        t0, x0, e8, m1          \n\t"
-                "vupack.vv      v8, v16, v17, 1         \n\t"
-                "vupack.vv      v10, v18, v19, 1        \n\t"
-                "vupack.vv      v12, v20, v21, 1        \n\t"
-                "vupack.vv      v14, v22, v23, 1        \n\t"
+                SMT_INSTR(vupack.vv)"      v8, v16, v17, 1         \n\t"
+                SMT_INSTR(vupack.vv)"      v10, v18, v19, 1        \n\t"
+                SMT_INSTR(vupack.vv)"      v12, v20, v21, 1        \n\t"
+                SMT_INSTR(vupack.vv)"      v14, v22, v23, 1        \n\t"
 
                 "lui            t1, 0x00200             \n\t"
                 "vmv.v.x        v30, t1                 \n\t"
@@ -4036,24 +4042,24 @@ void gemm_kernel_i8mxfp4_m4(size_t          blk_len,
                 "vsetvli        t0, x0, e8, m1          \n\t"
                 "vle8.v         v1, (t3)                \n\t"
                 "vsetvli        t0, x0, e64, m1         \n\t"
-                "vupack.vv      v16, v1, v2, 1          \n\t"
+                SMT_INSTR(vupack.vv)"      v16, v1, v2, 1          \n\t"
                 "vsetvli        t0, x0, e32, m1         \n\t"
                 "vxor.vv        v24, v24, v24           \n\t"
                 "vxor.vv        v26, v26, v26           \n\t"
                 "vxor.vv        v28, v28, v28           \n\t"
                 "vxor.vv        v30, v30, v30           \n\t"
-                "vmadot         v24, v16, v8, i8        \n\t"
-                "vmadot         v26, v16, v10, i8       \n\t"
-                "vmadot         v28, v16, v12, i8       \n\t"
-                "vmadot         v30, v16, v14, i8       \n\t"
-                "vmadot         v24, v17, v9, i8        \n\t"
-                "vmadot         v26, v17, v11, i8       \n\t"
-                "vmadot         v28, v17, v13, i8       \n\t"
-                "vmadot         v30, v17, v15, i8       \n\t"
-                "vpack.vv       v16, v24, v26, 2        \n\t"
-                "vpack.vv       v20, v28, v30, 2        \n\t"
-                "vpack.vv       v24, v16, v20, 3        \n\t"
-                "vpack.vv       v26, v17, v21, 3        \n\t"
+                SMT_INSTR(vmadot)"         v24, v16, v8, i8        \n\t"
+                SMT_INSTR(vmadot)"         v26, v16, v10, i8       \n\t"
+                SMT_INSTR(vmadot)"         v28, v16, v12, i8       \n\t"
+                SMT_INSTR(vmadot)"         v30, v16, v14, i8       \n\t"
+                SMT_INSTR(vmadot)"         v24, v17, v9, i8        \n\t"
+                SMT_INSTR(vmadot)"         v26, v17, v11, i8       \n\t"
+                SMT_INSTR(vmadot)"         v28, v17, v13, i8       \n\t"
+                SMT_INSTR(vmadot)"         v30, v17, v15, i8       \n\t"
+                SMT_INSTR(vpack.vv)"       v16, v24, v26, 2        \n\t"
+                SMT_INSTR(vpack.vv)"       v20, v28, v30, 2        \n\t"
+                SMT_INSTR(vpack.vv)"       v24, v16, v20, 3        \n\t"
+                SMT_INSTR(vpack.vv)"       v26, v17, v21, 3        \n\t"
                 "vfcvt.f.x.v    v24, v24                \n\t"
                 "vfcvt.f.x.v    v25, v25                \n\t"
                 "vfcvt.f.x.v    v26, v26                \n\t"
@@ -4219,10 +4225,10 @@ void gemm_kernel_i8i5_m1(size_t          blk_len,
                 "slli         t2, t2, 4               \n\t"  // a_sum * 16;
                 // [4*32]*2
                 "vsetvli      t0, x0, e8, m1          \n\t"
-                "vpack.vv     v16, v12, v8, 0         \n\t"
-                "vpack.vv     v18, v13, v9, 0         \n\t"
-                "vpack.vv     v20, v14, v10, 0        \n\t"
-                "vpack.vv     v22, v15, v11, 0        \n\t"
+                SMT_INSTR(vpack.vv)"     v16, v12, v8, 0         \n\t"
+                SMT_INSTR(vpack.vv)"     v18, v13, v9, 0         \n\t"
+                SMT_INSTR(vpack.vv)"     v20, v14, v10, 0        \n\t"
+                SMT_INSTR(vpack.vv)"     v22, v15, v11, 0        \n\t"
 
                 "li           t1, 16                  \n\t"
                 "vsetvli      t0, x0, e8, m8          \n\t"
@@ -4230,10 +4236,10 @@ void gemm_kernel_i8i5_m1(size_t          blk_len,
 
                 // [4*32]*2 -> [8*16]
                 "vsetvli      t0, x0, e8, m1          \n\t"
-                "vupack.vv    v8, v16, v17, 1         \n\t"
-                "vupack.vv    v10, v18, v19, 1        \n\t"
-                "vupack.vv    v12, v20, v21, 1        \n\t"
-                "vupack.vv    v14, v22, v23, 1        \n\t"
+                SMT_INSTR(vupack.vv)"    v8, v16, v17, 1         \n\t"
+                SMT_INSTR(vupack.vv)"    v10, v18, v19, 1        \n\t"
+                SMT_INSTR(vupack.vv)"    v12, v20, v21, 1        \n\t"
+                SMT_INSTR(vupack.vv)"    v14, v22, v23, 1        \n\t"
 
                 "vsetvli      t0, x0, e64, m1         \n\t"
                 "vslidedown.vi  v16, v1, 2            \n\t"
@@ -4247,20 +4253,20 @@ void gemm_kernel_i8i5_m1(size_t          blk_len,
 
                 // ---- i8 main dot products ----
                 // vmadot: A × unsigned Bh × 16 → fp16 accumulate
-                "vmadot       v24, v1, v8, i8         \n\t"  // N0..7
-                "vmadot       v26, v1, v10, i8        \n\t"  // N8..15
-                "vmadot       v28, v1, v12, i8        \n\t"  // N16..23
-                "vmadot       v30, v1, v14, i8        \n\t"  // N24..31
+                SMT_INSTR(vmadot)"       v24, v1, v8, i8         \n\t"  // N0..7
+                SMT_INSTR(vmadot)"       v26, v1, v10, i8        \n\t"  // N8..15
+                SMT_INSTR(vmadot)"       v28, v1, v12, i8        \n\t"  // N16..23
+                SMT_INSTR(vmadot)"       v30, v1, v14, i8        \n\t"  // N24..31
                 //// vmadot: A × unsigned Bh × 1 → fp16 accumulate
-                "vmadot       v24, v16, v9, i8        \n\t"  // N0..7
-                "vmadot       v26, v16, v11, i8       \n\t"  // N8..15
-                "vmadot       v28, v16, v13, i8       \n\t"  // N16..23
-                "vmadot       v30, v16, v15, i8       \n\t"  // N24..31
+                SMT_INSTR(vmadot)"       v24, v16, v9, i8        \n\t"  // N0..7
+                SMT_INSTR(vmadot)"       v26, v16, v11, i8       \n\t"  // N8..15
+                SMT_INSTR(vmadot)"       v28, v16, v13, i8       \n\t"  // N16..23
+                SMT_INSTR(vmadot)"       v30, v16, v15, i8       \n\t"  // N24..31
 
                 "vsetvli      t0, x0, e32, m1         \n\t"
-                "vpack.vv     v16, v24, v26, 2        \n\t"  // v16 = N0..15
-                "vpack.vv     v18, v28, v30, 2        \n\t"  // v18 = N16..31
-                "vpack.vv     v24, v16, v18, 3        \n\t"  // v24 = N0..31
+                SMT_INSTR(vpack.vv)"     v16, v24, v26, 2        \n\t"  // v16 = N0..15
+                SMT_INSTR(vpack.vv)"     v18, v28, v30, 2        \n\t"  // v18 = N16..31
+                SMT_INSTR(vpack.vv)"     v24, v16, v18, 3        \n\t"  // v24 = N0..31
 
                 "vadd.vx      v24, v24, t2            \n\t"
                 // b_scale fp16 -> fp32
@@ -4381,10 +4387,10 @@ void gemm_kernel_i8i5_m1(size_t          blk_len,
 
                 // [4*32]*2
                 "vsetvli      t0, x0, e8, m1          \n\t"
-                "vpack.vv     v16, v12, v8, 0         \n\t"
-                "vpack.vv     v18, v13, v9, 0         \n\t"
-                "vpack.vv     v20, v14, v10, 0        \n\t"
-                "vpack.vv     v22, v15, v11, 0        \n\t"
+                SMT_INSTR(vpack.vv)"     v16, v12, v8, 0         \n\t"
+                SMT_INSTR(vpack.vv)"     v18, v13, v9, 0         \n\t"
+                SMT_INSTR(vpack.vv)"     v20, v14, v10, 0        \n\t"
+                SMT_INSTR(vpack.vv)"     v22, v15, v11, 0        \n\t"
 
                 "li           t1, 16                  \n\t"
                 "vsetvli      t0, x0, e8, m8          \n\t"
@@ -4392,10 +4398,10 @@ void gemm_kernel_i8i5_m1(size_t          blk_len,
 
                 // [4*32]*2 -> [8*16]
                 "vsetvli      t0, x0, e8, m1          \n\t"
-                "vupack.vv    v8, v16, v17, 1         \n\t"
-                "vupack.vv    v10, v18, v19, 1        \n\t"
-                "vupack.vv    v12, v20, v21, 1        \n\t"
-                "vupack.vv    v14, v22, v23, 1        \n\t"
+                SMT_INSTR(vupack.vv)"    v8, v16, v17, 1         \n\t"
+                SMT_INSTR(vupack.vv)"    v10, v18, v19, 1        \n\t"
+                SMT_INSTR(vupack.vv)"    v12, v20, v21, 1        \n\t"
+                SMT_INSTR(vupack.vv)"    v14, v22, v23, 1        \n\t"
 
                 "vsetvli      t0, x0, e64, m1         \n\t"
                 "vslidedown.vi  v16, v1, 2            \n\t"
@@ -4408,24 +4414,24 @@ void gemm_kernel_i8i5_m1(size_t          blk_len,
 
                 // ---- i8 main dot products ----
                 // vmadot: A × unsigned Bh × 16 → fp16 accumulate
-                "vmadot       v24, v1, v8, i8         \n\t"  // N0..7
-                "vmadot       v26, v1, v10, i8        \n\t"  // N8..15
-                "vmadot       v28, v1, v12, i8        \n\t"  // N16..23
-                "vmadot       v30, v1, v14, i8        \n\t"  // N24..31
+                SMT_INSTR(vmadot)"       v24, v1, v8, i8         \n\t"  // N0..7
+                SMT_INSTR(vmadot)"       v26, v1, v10, i8        \n\t"  // N8..15
+                SMT_INSTR(vmadot)"       v28, v1, v12, i8        \n\t"  // N16..23
+                SMT_INSTR(vmadot)"       v30, v1, v14, i8        \n\t"  // N24..31
                 // vmadot: A × unsigned Bh × 1 → fp16 accumulate
-                "vmadot       v24, v16, v9, i8        \n\t"  // N0..7
-                "vmadot       v26, v16, v11, i8       \n\t"  // N8..15
-                "vmadot       v28, v16, v13, i8       \n\t"  // N16..23
-                "vmadot       v30, v16, v15, i8       \n\t"  // N24..31
+                SMT_INSTR(vmadot)"       v24, v16, v9, i8        \n\t"  // N0..7
+                SMT_INSTR(vmadot)"       v26, v16, v11, i8       \n\t"  // N8..15
+                SMT_INSTR(vmadot)"       v28, v16, v13, i8       \n\t"  // N16..23
+                SMT_INSTR(vmadot)"       v30, v16, v15, i8       \n\t"  // N24..31
 
                 "vsetvli      t0, x0, e8, m1          \n\t"
                 "vle8.v       v1, (s4)                \n\t"  // Bzp
                 "addi         s4, s4, 32+128*4+128    \n\t"
 
                 "vsetvli      t0, x0, e8, m1          \n\t"
-                "vpack.vv     v16, v24, v26, 2        \n\t"  // v16 = N0..15
-                "vpack.vv     v18, v28, v30, 2        \n\t"  // v18 = N16..31
-                "vpack.vv     v24, v16, v18, 3        \n\t"  // v24 = N0..31
+                SMT_INSTR(vpack.vv)"     v16, v24, v26, 2        \n\t"  // v16 = N0..15
+                SMT_INSTR(vpack.vv)"     v18, v28, v30, 2        \n\t"  // v18 = N16..31
+                SMT_INSTR(vpack.vv)"     v24, v16, v18, 3        \n\t"  // v24 = N0..31
 
                 "vwaddu.vx    v28, v1, x0             \n\t"  // uint8 -> uint16
 
@@ -4541,20 +4547,20 @@ void gemm_kernel_i8i5_m4(size_t          blk_len,
                 "vsrl.vi        v10, v10, 4             \n\t"
                 "vsrl.vi        v11, v11, 4             \n\t"
 
-                "vpack.vv       v16, v12, v8, 0         \n\t"
-                "vpack.vv       v18, v13, v9, 0         \n\t"
+                SMT_INSTR(vpack.vv)"       v16, v12, v8, 0         \n\t"
+                SMT_INSTR(vpack.vv)"       v18, v13, v9, 0         \n\t"
                 "li             t2, 16                  \n\t"
-                "vpack.vv       v20, v14, v10, 0        \n\t"
-                "vpack.vv       v22, v15, v11, 0        \n\t"
+                SMT_INSTR(vpack.vv)"       v20, v14, v10, 0        \n\t"
+                SMT_INSTR(vpack.vv)"       v22, v15, v11, 0        \n\t"
 
                 "vsetvli        t0, x0, e8, m8          \n\t"
                 "vadd.vx        v16, v16, t2, v0.t      \n\t"
 
                 "vsetvli        t0, x0, e8, m1          \n\t"
-                "vupack.vv      v8, v16, v17, 1         \n\t"
-                "vupack.vv      v10, v18, v19, 1        \n\t"
-                "vupack.vv      v12, v20, v21, 1        \n\t"
-                "vupack.vv      v14, v22, v23, 1        \n\t"
+                SMT_INSTR(vupack.vv)"      v8, v16, v17, 1         \n\t"
+                SMT_INSTR(vupack.vv)"      v10, v18, v19, 1        \n\t"
+                SMT_INSTR(vupack.vv)"      v12, v20, v21, 1        \n\t"
+                SMT_INSTR(vupack.vv)"      v14, v22, v23, 1        \n\t"
 
                 // Convert per-column fp16 scales once; the same scale vector is shared by all 4 rows.
                 "vsetvli        t0, x0, e16, mf2        \n\t"
@@ -4567,24 +4573,24 @@ void gemm_kernel_i8i5_m4(size_t          blk_len,
                 // The widen/mul correction sequence intentionally matches the proven m1 Q5_1 path.
                 "vle8.v         v1, (t3)                \n\t"
                 "vsetvli        t0, x0, e64, m1         \n\t"
-                "vupack.vv      v16, v1, v2, 1          \n\t"
+                SMT_INSTR(vupack.vv)"      v16, v1, v2, 1          \n\t"
                 "vsetvli        t0, x0, e32, m1         \n\t"
                 "vxor.vv        v24, v24, v24           \n\t"
                 "vxor.vv        v26, v26, v26           \n\t"
                 "vxor.vv        v28, v28, v28           \n\t"
                 "vxor.vv        v30, v30, v30           \n\t"
-                "vmadot         v24, v16, v8, i8        \n\t"
-                "vmadot         v26, v16, v10, i8       \n\t"
-                "vmadot         v28, v16, v12, i8       \n\t"
-                "vmadot         v30, v16, v14, i8       \n\t"
-                "vmadot         v24, v17, v9, i8        \n\t"
-                "vmadot         v26, v17, v11, i8       \n\t"
-                "vmadot         v28, v17, v13, i8       \n\t"
-                "vmadot         v30, v17, v15, i8       \n\t"
-                "vpack.vv       v16, v24, v26, 2        \n\t"
-                "vpack.vv       v20, v28, v30, 2        \n\t"
-                "vpack.vv       v24, v16, v20, 3        \n\t"
-                "vpack.vv       v26, v17, v21, 3        \n\t"
+                SMT_INSTR(vmadot)"         v24, v16, v8, i8        \n\t"
+                SMT_INSTR(vmadot)"         v26, v16, v10, i8       \n\t"
+                SMT_INSTR(vmadot)"         v28, v16, v12, i8       \n\t"
+                SMT_INSTR(vmadot)"         v30, v16, v14, i8       \n\t"
+                SMT_INSTR(vmadot)"         v24, v17, v9, i8        \n\t"
+                SMT_INSTR(vmadot)"         v26, v17, v11, i8       \n\t"
+                SMT_INSTR(vmadot)"         v28, v17, v13, i8       \n\t"
+                SMT_INSTR(vmadot)"         v30, v17, v15, i8       \n\t"
+                SMT_INSTR(vpack.vv)"       v16, v24, v26, 2        \n\t"
+                SMT_INSTR(vpack.vv)"       v20, v28, v30, 2        \n\t"
+                SMT_INSTR(vpack.vv)"       v24, v16, v20, 3        \n\t"
+                SMT_INSTR(vpack.vv)"       v26, v17, v21, 3        \n\t"
                 "vsetvli        t0, x0, e8, m1          \n\t"
                 "vwaddu.vx      v28, v3, x0             \n\t"
                 "vsetvli        t0, x0, e16, m1         \n\t"
@@ -4686,20 +4692,20 @@ void gemm_kernel_i8i5_m4(size_t          blk_len,
                 "vsrl.vi        v10, v10, 4             \n\t"
                 "vsrl.vi        v11, v11, 4             \n\t"
 
-                "vpack.vv       v16, v12, v8, 0         \n\t"
-                "vpack.vv       v18, v13, v9, 0         \n\t"
+                SMT_INSTR(vpack.vv)"       v16, v12, v8, 0         \n\t"
+                SMT_INSTR(vpack.vv)"       v18, v13, v9, 0         \n\t"
                 "li             t2, 16                  \n\t"
-                "vpack.vv       v20, v14, v10, 0        \n\t"
-                "vpack.vv       v22, v15, v11, 0        \n\t"
+                SMT_INSTR(vpack.vv)"       v20, v14, v10, 0        \n\t"
+                SMT_INSTR(vpack.vv)"       v22, v15, v11, 0        \n\t"
 
                 "vsetvli        t0, x0, e8, m8          \n\t"
                 "vadd.vx        v16, v16, t2, v0.t      \n\t"
 
                 "vsetvli        t0, x0, e8, m1          \n\t"
-                "vupack.vv      v8, v16, v17, 1         \n\t"
-                "vupack.vv      v10, v18, v19, 1        \n\t"
-                "vupack.vv      v12, v20, v21, 1        \n\t"
-                "vupack.vv      v14, v22, v23, 1        \n\t"
+                SMT_INSTR(vupack.vv)"      v8, v16, v17, 1         \n\t"
+                SMT_INSTR(vupack.vv)"      v10, v18, v19, 1        \n\t"
+                SMT_INSTR(vupack.vv)"      v12, v20, v21, 1        \n\t"
+                SMT_INSTR(vupack.vv)"      v14, v22, v23, 1        \n\t"
 
                 // Convert per-column fp16 scales once; the same scale vector is shared by all 4 rows.
                 "vsetvli        t0, x0, e16, mf2        \n\t"
@@ -4709,27 +4715,27 @@ void gemm_kernel_i8i5_m4(size_t          blk_len,
                 // Row 0: dot(A0, decoded_q5) + a_sum0 * 16 (implicit Q5_0 midpoint correction).
                 "vle8.v         v1, (t3)                \n\t"
                 "vsetvli        t0, x0, e64, m1         \n\t"
-                "vupack.vv      v16, v1, v2, 1          \n\t"
+                SMT_INSTR(vupack.vv)"      v16, v1, v2, 1          \n\t"
                 "vsetvli        t0, x0, e32, m1         \n\t"
                 "vxor.vv        v24, v24, v24           \n\t"
                 "vxor.vv        v26, v26, v26           \n\t"
                 "vxor.vv        v28, v28, v28           \n\t"
                 "vxor.vv        v30, v30, v30           \n\t"
-                "vmadot         v24, v16, v8, i8        \n\t"
-                "vmadot         v26, v16, v10, i8       \n\t"
-                "vmadot         v28, v16, v12, i8       \n\t"
-                "vmadot         v30, v16, v14, i8       \n\t"
-                "vmadot         v24, v17, v9, i8        \n\t"
-                "vmadot         v26, v17, v11, i8       \n\t"
-                "vmadot         v28, v17, v13, i8       \n\t"
-                "vmadot         v30, v17, v15, i8       \n\t"
-                "vpack.vv       v16, v24, v26, 2        \n\t"
+                SMT_INSTR(vmadot)"         v24, v16, v8, i8        \n\t"
+                SMT_INSTR(vmadot)"         v26, v16, v10, i8       \n\t"
+                SMT_INSTR(vmadot)"         v28, v16, v12, i8       \n\t"
+                SMT_INSTR(vmadot)"         v30, v16, v14, i8       \n\t"
+                SMT_INSTR(vmadot)"         v24, v17, v9, i8        \n\t"
+                SMT_INSTR(vmadot)"         v26, v17, v11, i8       \n\t"
+                SMT_INSTR(vmadot)"         v28, v17, v13, i8       \n\t"
+                SMT_INSTR(vmadot)"         v30, v17, v15, i8       \n\t"
+                SMT_INSTR(vpack.vv)"       v16, v24, v26, 2        \n\t"
                 "slli           s1, s1, 4               \n\t"
-                "vpack.vv       v20, v28, v30, 2        \n\t"
+                SMT_INSTR(vpack.vv)"       v20, v28, v30, 2        \n\t"
                 "slli           s2, s2, 4               \n\t"
-                "vpack.vv       v24, v16, v20, 3        \n\t"
+                SMT_INSTR(vpack.vv)"       v24, v16, v20, 3        \n\t"
                 "slli           s3, s3, 4               \n\t"
-                "vpack.vv       v26, v17, v21, 3        \n\t"
+                SMT_INSTR(vpack.vv)"       v26, v17, v21, 3        \n\t"
                 "slli           s4, s4, 4               \n\t"
                 "vadd.vx        v24, v24, s1            \n\t"
                 "vadd.vx        v25, v25, s2            \n\t"
@@ -4836,10 +4842,10 @@ void gemm_kernel_i8i8_m1(size_t          blk_len,
             "addi         s2, s2, 6+32            \n\t"  // AScale + Asum(FP32+i16)
 
             "vsetvli      t0, zero, e32, m1       \n\t"
-            "vupack.vv    v24, v4, v5, 1          \n\t"
-            "vupack.vv    v26, v6, v7, 1          \n\t"
-            "vupack.vv    v28, v8, v9, 1          \n\t"
-            "vupack.vv    v30, v10, v11, 1        \n\t"
+            SMT_INSTR(vupack.vv)"    v24, v4, v5, 1          \n\t"
+            SMT_INSTR(vupack.vv)"    v26, v6, v7, 1          \n\t"
+            SMT_INSTR(vupack.vv)"    v28, v8, v9, 1          \n\t"
+            SMT_INSTR(vupack.vv)"    v30, v10, v11, 1        \n\t"
 
             "vslidedown.vi  v4, v3, 4             \n\t"
 
@@ -4848,19 +4854,19 @@ void gemm_kernel_i8i8_m1(size_t          blk_len,
             "vxor.vv      v20, v16, v16           \n\t"
             "vxor.vv      v22, v16, v16           \n\t"
 
-            "vmadot       v16, v3, v24, i8         \n\t"  // M0 N0 - N7 INT32(256bit)
-            "vmadot       v18, v3, v26, i8         \n\t"  // M0 N8 - N15
-            "vmadot       v20, v3, v28, i8         \n\t"  // M0 N16 - N23
-            "vmadot       v22, v3, v30, i8         \n\t"  // M0 N24 - N31
+            SMT_INSTR(vmadot)"       v16, v3, v24, i8         \n\t"  // M0 N0 - N7 INT32(256bit)
+            SMT_INSTR(vmadot)"       v18, v3, v26, i8         \n\t"  // M0 N8 - N15
+            SMT_INSTR(vmadot)"       v20, v3, v28, i8         \n\t"  // M0 N16 - N23
+            SMT_INSTR(vmadot)"       v22, v3, v30, i8         \n\t"  // M0 N24 - N31
 
-            "vmadot       v16, v4, v25, i8         \n\t"
-            "vmadot       v18, v4, v27, i8         \n\t"
-            "vmadot       v20, v4, v29, i8         \n\t"
-            "vmadot       v22, v4, v31, i8         \n\t"
+            SMT_INSTR(vmadot)"       v16, v4, v25, i8         \n\t"
+            SMT_INSTR(vmadot)"       v18, v4, v27, i8         \n\t"
+            SMT_INSTR(vmadot)"       v20, v4, v29, i8         \n\t"
+            SMT_INSTR(vmadot)"       v22, v4, v31, i8         \n\t"
 
-            "vpack.vv     v24, v16, v18, 2        \n\t"
-            "vpack.vv     v26, v20, v22, 2        \n\t"
-            "vpack.vv     v16, v24, v26, 3        \n\t"
+            SMT_INSTR(vpack.vv)"     v24, v16, v18, 2        \n\t"
+            SMT_INSTR(vpack.vv)"     v26, v20, v22, 2        \n\t"
+            SMT_INSTR(vpack.vv)"     v16, v24, v26, 3        \n\t"
 
             // b_scale fp16 -> fp32
             "vsetvli      t0, x0, e16, mf2        \n\t"
@@ -4937,12 +4943,12 @@ void gemm_kernel_i8i8_m4(size_t          blk_len,
             "addi           %[B], %[B], 512       \n\t"
 
             "vsetvli        t0, zero, e32, m1     \n\t"
-            "vupack.vv      v2, v0, v0, 1         \n\t"
+            SMT_INSTR(vupack.vv)"      v2, v0, v0, 1         \n\t"
 
-            "vupack.vv      v24, v4, v5, 1        \n\t"
-            "vupack.vv      v26, v6, v7, 1        \n\t"
-            "vupack.vv      v4, v8, v9, 1         \n\t"
-            "vupack.vv      v6, v10, v11, 1       \n\t"
+            SMT_INSTR(vupack.vv)"      v24, v4, v5, 1        \n\t"
+            SMT_INSTR(vupack.vv)"      v26, v6, v7, 1        \n\t"
+            SMT_INSTR(vupack.vv)"      v4, v8, v9, 1         \n\t"
+            SMT_INSTR(vupack.vv)"      v6, v10, v11, 1       \n\t"
 
             // init the accumu to asum * zp
             "vsetvli        t0, x0, e32, m1       \n\t"
@@ -4953,19 +4959,19 @@ void gemm_kernel_i8i8_m4(size_t          blk_len,
 
             // i4 * i4 vmadot
             "vsetvli        t0, x0, e32, m1       \n\t"
-            "vmadot         v16, v2, v24, i8      \n\t"
-            "vmadot         v18, v2, v26, i8      \n\t"
-            "vmadot         v20, v2, v4, i8       \n\t"
-            "vmadot         v22, v2, v6, i8       \n\t"
-            "vmadot         v16, v3, v25, i8      \n\t"
-            "vmadot         v18, v3, v27, i8      \n\t"
-            "vmadot         v20, v3, v5, i8       \n\t"
-            "vmadot         v22, v3, v7, i8       \n\t"
+            SMT_INSTR(vmadot)"         v16, v2, v24, i8      \n\t"
+            SMT_INSTR(vmadot)"         v18, v2, v26, i8      \n\t"
+            SMT_INSTR(vmadot)"         v20, v2, v4, i8       \n\t"
+            SMT_INSTR(vmadot)"         v22, v2, v6, i8       \n\t"
+            SMT_INSTR(vmadot)"         v16, v3, v25, i8      \n\t"
+            SMT_INSTR(vmadot)"         v18, v3, v27, i8      \n\t"
+            SMT_INSTR(vmadot)"         v20, v3, v5, i8       \n\t"
+            SMT_INSTR(vmadot)"         v22, v3, v7, i8       \n\t"
 
-            "vpack.vv       v0, v16, v18, 2       \n\t"
-            "vpack.vv       v2, v20, v22, 2       \n\t"
-            "vpack.vv       v16, v0, v2, 3        \n\t"
-            "vpack.vv       v18, v1, v3, 3        \n\t"
+            SMT_INSTR(vpack.vv)"       v0, v16, v18, 2       \n\t"
+            SMT_INSTR(vpack.vv)"       v2, v20, v22, 2       \n\t"
+            SMT_INSTR(vpack.vv)"       v16, v0, v2, 3        \n\t"
+            SMT_INSTR(vpack.vv)"       v18, v1, v3, 3        \n\t"
 
             "vfcvt.f.x.v    v16, v16              \n\t"
             "vfcvt.f.x.v    v17, v17              \n\t"
@@ -5048,7 +5054,7 @@ void moe_m2_gemm_kernel_i8i4_impl(size_t           blk_len,
                 "vle16.v        v12, (%[B])             \n\t"
                 "addi           %[B], %[B], 64          \n\t"
                 "vsetvli        t0, x0, e16, m1         \n\t"
-                "vpack.vv       v14, v12, v12, 3        \n\t"
+                SMT_INSTR(vpack.vv)"       v14, v12, v12, 3        \n\t"
 
                 // load scale A1
                 "flw            fa1, (%[A1])            \n\t"  // A1 scale
@@ -5058,7 +5064,7 @@ void moe_m2_gemm_kernel_i8i4_impl(size_t           blk_len,
                 "vmv.v.x        v10, t1                 \n\t"
                 "vmv.v.x        v11, t2                 \n\t"
 
-                "vpack.vv       v18, v10, v11, 1        \n\t"
+                SMT_INSTR(vpack.vv)"       v18, v10, v11, 1        \n\t"
                 "vsll.vi        v18, v18, 3             \n\t"  // mul 8
                 "vfcvt.f.x.v    v18, v18                \n\t"
 
@@ -5074,8 +5080,8 @@ void moe_m2_gemm_kernel_i8i4_impl(size_t           blk_len,
                 "vsrl.vi        v17, v16, 4             \n\t"
                 "vsrl.vi        v21, v20, 4             \n\t"
                 "vsetvli        t0, x0, e8, m1          \n\t"
-                "vnpack4.vv     v2, v16, v20, 2         \n\t"  // low  u4
-                "vnpack4.vv     v3, v17, v21, 2         \n\t"  // high s4
+                SMT_INSTR(vnpack4.vv)"     v2, v16, v20, 2         \n\t"  // low  u4
+                SMT_INSTR(vnpack4.vv)"     v3, v17, v21, 2         \n\t"  // high s4
 
                 // init the accumu to asum * zp
                 "vsetvli        t0, x0, e16, m1         \n\t"
@@ -5085,18 +5091,18 @@ void moe_m2_gemm_kernel_i8i4_impl(size_t           blk_len,
 
                 // i4 * i4 vmadot
                 "vsetvli        t0, x0, e16, m1         \n\t"
-                "vmadotsu.hp    v18, v3, v4, v1, 0, i4  \n\t"  // high 4
-                "vmadotsu.hp    v19, v3, v5, v1, 0, i4  \n\t"
-                "vmadotsu.hp    v20, v3, v6, v1, 0, i4  \n\t"
-                "vmadotsu.hp    v21, v3, v7, v1, 0, i4  \n\t"
-                "vmadotu.hp     v18, v2, v4, v0, 0, i4  \n\t"  // low 4
-                "vmadotu.hp     v19, v2, v5, v0, 0, i4  \n\t"
-                "vmadotu.hp     v20, v2, v6, v0, 0, i4  \n\t"
-                "vmadotu.hp     v21, v2, v7, v0, 0, i4  \n\t"
+                SMT_INSTR(vmadotsu.hp)"    v18, v3, v4, v1, 0, i4  \n\t"  // high 4
+                SMT_INSTR(vmadotsu.hp)"    v19, v3, v5, v1, 0, i4  \n\t"
+                SMT_INSTR(vmadotsu.hp)"    v20, v3, v6, v1, 0, i4  \n\t"
+                SMT_INSTR(vmadotsu.hp)"    v21, v3, v7, v1, 0, i4  \n\t"
+                SMT_INSTR(vmadotu.hp)"     v18, v2, v4, v0, 0, i4  \n\t"  // low 4
+                SMT_INSTR(vmadotu.hp)"     v19, v2, v5, v0, 0, i4  \n\t"
+                SMT_INSTR(vmadotu.hp)"     v20, v2, v6, v0, 0, i4  \n\t"
+                SMT_INSTR(vmadotu.hp)"     v21, v2, v7, v0, 0, i4  \n\t"
 
-                "vpack.vv       v8, v18, v19, 1         \n\t"
-                "vpack.vv       v12, v20, v21, 1        \n\t"
-                "vpack.vv       v20, v8, v12, 2         \n\t"
+                SMT_INSTR(vpack.vv)"       v8, v18, v19, 1         \n\t"
+                SMT_INSTR(vpack.vv)"       v12, v20, v21, 1        \n\t"
+                SMT_INSTR(vpack.vv)"       v20, v8, v12, 2         \n\t"
 
                 "vfwmul.vv      v16, v20, v14           \n\t"
 
@@ -5152,7 +5158,7 @@ void moe_m2_gemm_kernel_i8i4_impl(size_t           blk_len,
                 "vle16.v        v12, (%[B])             \n\t"
                 "addi           %[B], %[B], 64          \n\t"
                 "vsetvli        t0, x0, e16, m1         \n\t"
-                "vpack.vv       v14, v12, v12, 3        \n\t"
+                SMT_INSTR(vpack.vv)"       v14, v12, v12, 3        \n\t"
 
                 // load scale A1
                 "flw            fa1, (%[A1])            \n\t"  // A1 scale
@@ -5177,8 +5183,8 @@ void moe_m2_gemm_kernel_i8i4_impl(size_t           blk_len,
                 "vsrl.vi        v17, v16, 4             \n\t"
                 "vsrl.vi        v21, v20, 4             \n\t"
                 "vsetvli        t0, x0, e8, m1          \n\t"
-                "vnpack4.vv     v2, v16, v20, 2         \n\t"  // low  u4
-                "vnpack4.vv     v3, v17, v21, 2         \n\t"  // high s4
+                SMT_INSTR(vnpack4.vv)"     v2, v16, v20, 2         \n\t"  // low  u4
+                SMT_INSTR(vnpack4.vv)"     v3, v17, v21, 2         \n\t"  // high s4
 
                 // init the accumu to asum * zp
                 "vsetvli        t0, x0, e16, m1         \n\t"
@@ -5189,18 +5195,18 @@ void moe_m2_gemm_kernel_i8i4_impl(size_t           blk_len,
 
                 // i4 * i4 vmadot
                 "vsetvli        t0, x0, e16, m1         \n\t"
-                "vmadotsu.hp    v18, v3, v4, v1, 0, i4  \n\t"  // high 4
-                "vmadotsu.hp    v19, v3, v5, v1, 0, i4  \n\t"
-                "vmadotsu.hp    v20, v3, v6, v1, 0, i4  \n\t"
-                "vmadotsu.hp    v21, v3, v7, v1, 0, i4  \n\t"
-                "vmadotu.hp     v18, v2, v4, v0, 0, i4  \n\t"  // low 4
-                "vmadotu.hp     v19, v2, v5, v0, 0, i4  \n\t"
-                "vmadotu.hp     v20, v2, v6, v0, 0, i4  \n\t"
-                "vmadotu.hp     v21, v2, v7, v0, 0, i4  \n\t"
+                SMT_INSTR(vmadotsu.hp)"    v18, v3, v4, v1, 0, i4  \n\t"  // high 4
+                SMT_INSTR(vmadotsu.hp)"    v19, v3, v5, v1, 0, i4  \n\t"
+                SMT_INSTR(vmadotsu.hp)"    v20, v3, v6, v1, 0, i4  \n\t"
+                SMT_INSTR(vmadotsu.hp)"    v21, v3, v7, v1, 0, i4  \n\t"
+                SMT_INSTR(vmadotu.hp)"     v18, v2, v4, v0, 0, i4  \n\t"  // low 4
+                SMT_INSTR(vmadotu.hp)"     v19, v2, v5, v0, 0, i4  \n\t"
+                SMT_INSTR(vmadotu.hp)"     v20, v2, v6, v0, 0, i4  \n\t"
+                SMT_INSTR(vmadotu.hp)"     v21, v2, v7, v0, 0, i4  \n\t"
 
-                "vpack.vv       v8, v18, v19, 1         \n\t"
-                "vpack.vv       v12, v20, v21, 1        \n\t"
-                "vpack.vv       v20, v8, v12, 2         \n\t"
+                SMT_INSTR(vpack.vv)"       v8, v18, v19, 1         \n\t"
+                SMT_INSTR(vpack.vv)"       v12, v20, v21, 1        \n\t"
+                SMT_INSTR(vpack.vv)"       v20, v8, v12, 2         \n\t"
                 // asum*zp
                 "vsetvli        t0, x0, e16, mf2        \n\t"
                 "vwmul.vx       v2, v10, t1             \n\t"
@@ -5316,10 +5322,10 @@ void moe_m2_gemm_kernel_i8i5_impl(size_t           blk_len,
                 "slli           t3, t3, 4               \n\t"
                 // [4*32]*2
                 "vsetvli        t0, x0, e8, m1          \n\t"
-                "vpack.vv       v16, v12, v8, 0         \n\t"
-                "vpack.vv       v18, v13, v9, 0         \n\t"
-                "vpack.vv       v20, v14, v10, 0        \n\t"
-                "vpack.vv       v22, v15, v11, 0        \n\t"
+                SMT_INSTR(vpack.vv)"       v16, v12, v8, 0         \n\t"
+                SMT_INSTR(vpack.vv)"       v18, v13, v9, 0         \n\t"
+                SMT_INSTR(vpack.vv)"       v20, v14, v10, 0        \n\t"
+                SMT_INSTR(vpack.vv)"       v22, v15, v11, 0        \n\t"
 
                 "li             t1, 16                  \n\t"
                 "vsetvli        t0, x0, e8, m8          \n\t"
@@ -5327,36 +5333,36 @@ void moe_m2_gemm_kernel_i8i5_impl(size_t           blk_len,
 
                 // [4*32]*2 -> [8*16]
                 "vsetvli        t0, x0, e8, m1          \n\t"
-                "vupack.vv      v8, v16, v17, 1         \n\t"
-                "vupack.vv      v10, v18, v19, 1        \n\t"
-                "vupack.vv      v12, v20, v21, 1        \n\t"
-                "vupack.vv      v14, v22, v23, 1        \n\t"
+                SMT_INSTR(vupack.vv)"      v8, v16, v17, 1         \n\t"
+                SMT_INSTR(vupack.vv)"      v10, v18, v19, 1        \n\t"
+                SMT_INSTR(vupack.vv)"      v12, v20, v21, 1        \n\t"
+                SMT_INSTR(vupack.vv)"      v14, v22, v23, 1        \n\t"
 
-                "vpack.vv       v6, v4, v5, 2           \n\t"
+                SMT_INSTR(vpack.vv)"       v6, v4, v5, 2           \n\t"
 
                 // init the accumu to asum * zp
                 "vsetvli        t0, x0, e32, m1         \n\t"
                 "vxor.vv        v24, v16, v16           \n\t"
                 "vxor.vv        v26, v16, v16           \n\t"
-                "vupack.vv      v4, v6, v7, 1           \n\t"
+                SMT_INSTR(vupack.vv)"      v4, v6, v7, 1           \n\t"
                 "vxor.vv        v28, v16, v16           \n\t"
                 "vxor.vv        v30, v16, v16           \n\t"
 
                 // ---- i8 main dot products ----
                 // vmadot: A × unsigned Bh × 16 → fp16 accumulate
-                "vmadot         v24, v4, v8, i8         \n\t"  // N0..7
-                "vmadot         v26, v4, v10, i8        \n\t"  // N8..15
-                "vmadot         v28, v4, v12, i8        \n\t"  // N16..23
-                "vmadot         v30, v4, v14, i8        \n\t"  // N24..31
+                SMT_INSTR(vmadot)"         v24, v4, v8, i8         \n\t"  // N0..7
+                SMT_INSTR(vmadot)"         v26, v4, v10, i8        \n\t"  // N8..15
+                SMT_INSTR(vmadot)"         v28, v4, v12, i8        \n\t"  // N16..23
+                SMT_INSTR(vmadot)"         v30, v4, v14, i8        \n\t"  // N24..31
                 // vmadot: A × unsigned Bh × 1 → fp16 accumulate
-                "vmadot         v24, v5, v9, i8         \n\t"  // N0..7
-                "vmadot         v26, v5, v11, i8        \n\t"  // N8..15
-                "vmadot         v28, v5, v13, i8        \n\t"  // N16..23
-                "vmadot         v30, v5, v15, i8        \n\t"  // N24..31
+                SMT_INSTR(vmadot)"         v24, v5, v9, i8         \n\t"  // N0..7
+                SMT_INSTR(vmadot)"         v26, v5, v11, i8        \n\t"  // N8..15
+                SMT_INSTR(vmadot)"         v28, v5, v13, i8        \n\t"  // N16..23
+                SMT_INSTR(vmadot)"         v30, v5, v15, i8        \n\t"  // N24..31
 
-                "vpack.vv       v16, v24, v26, 2        \n\t"  // v16 = N0..15
-                "vpack.vv       v18, v28, v30, 2        \n\t"  // v18 = N16..31
-                "vpack.vv       v24, v16, v18, 3        \n\t"  // v24 = N0..31
+                SMT_INSTR(vpack.vv)"       v16, v24, v26, 2        \n\t"  // v16 = N0..15
+                SMT_INSTR(vpack.vv)"       v18, v28, v30, 2        \n\t"  // v18 = N16..31
+                SMT_INSTR(vpack.vv)"       v24, v16, v18, 3        \n\t"  // v24 = N0..31
 
                 "vadd.vx        v24, v24, t2            \n\t"
                 "vadd.vx        v25, v25, t3            \n\t"
@@ -5442,10 +5448,10 @@ void moe_m2_gemm_kernel_i8i5_impl(size_t           blk_len,
 
                 // q5_1 uses explicit zp, so keep a_sum unshifted here.
                 // [4*32]*2
-                "vpack.vv       v16, v12, v8, 0         \n\t"
-                "vpack.vv       v18, v13, v9, 0         \n\t"
-                "vpack.vv       v20, v14, v10, 0        \n\t"
-                "vpack.vv       v22, v15, v11, 0        \n\t"
+                SMT_INSTR(vpack.vv)"       v16, v12, v8, 0         \n\t"
+                SMT_INSTR(vpack.vv)"       v18, v13, v9, 0         \n\t"
+                SMT_INSTR(vpack.vv)"       v20, v14, v10, 0        \n\t"
+                SMT_INSTR(vpack.vv)"       v22, v15, v11, 0        \n\t"
 
                 "li             t1, 16                  \n\t"
                 "vsetvli        t0, x0, e8, m8          \n\t"
@@ -5453,41 +5459,41 @@ void moe_m2_gemm_kernel_i8i5_impl(size_t           blk_len,
 
                 // [4*32]*2 -> [8*16]
                 "vsetvli        t0, x0, e8, m1          \n\t"
-                "vupack.vv      v8, v16, v17, 1         \n\t"
-                "vupack.vv      v10, v18, v19, 1        \n\t"
-                "vupack.vv      v12, v20, v21, 1        \n\t"
-                "vupack.vv      v14, v22, v23, 1        \n\t"
+                SMT_INSTR(vupack.vv)"      v8, v16, v17, 1         \n\t"
+                SMT_INSTR(vupack.vv)"      v10, v18, v19, 1        \n\t"
+                SMT_INSTR(vupack.vv)"      v12, v20, v21, 1        \n\t"
+                SMT_INSTR(vupack.vv)"      v14, v22, v23, 1        \n\t"
 
-                "vpack.vv       v6, v4, v5, 2           \n\t"
+                SMT_INSTR(vpack.vv)"       v6, v4, v5, 2           \n\t"
 
                 // init the accumu to asum * zp
                 "vsetvli        t0, x0, e32, m1         \n\t"
                 "vxor.vv        v24, v16, v16           \n\t"
                 "vxor.vv        v26, v16, v16           \n\t"
-                "vupack.vv      v4, v6, v7, 1           \n\t"
+                SMT_INSTR(vupack.vv)"      v4, v6, v7, 1           \n\t"
                 "vxor.vv        v28, v16, v16           \n\t"
                 "vxor.vv        v30, v16, v16           \n\t"
 
                 // ---- i8 main dot products ----
                 // vmadot: A × unsigned Bh × 16 → fp16 accumulate
-                "vmadot         v24, v4, v8, i8         \n\t"  // N0..7
-                "vmadot         v26, v4, v10, i8        \n\t"  // N8..15
-                "vmadot         v28, v4, v12, i8        \n\t"  // N16..23
-                "vmadot         v30, v4, v14, i8        \n\t"  // N24..31
+                SMT_INSTR(vmadot)"         v24, v4, v8, i8         \n\t"  // N0..7
+                SMT_INSTR(vmadot)"         v26, v4, v10, i8        \n\t"  // N8..15
+                SMT_INSTR(vmadot)"         v28, v4, v12, i8        \n\t"  // N16..23
+                SMT_INSTR(vmadot)"         v30, v4, v14, i8        \n\t"  // N24..31
                 // vmadot: A × unsigned Bh × 1 → fp16 accumulate
-                "vmadot         v24, v5, v9, i8         \n\t"  // N0..7
-                "vmadot         v26, v5, v11, i8        \n\t"  // N8..15
-                "vmadot         v28, v5, v13, i8        \n\t"  // N16..23
-                "vmadot         v30, v5, v15, i8        \n\t"  // N24..31
+                SMT_INSTR(vmadot)"         v24, v5, v9, i8         \n\t"  // N0..7
+                SMT_INSTR(vmadot)"         v26, v5, v11, i8        \n\t"  // N8..15
+                SMT_INSTR(vmadot)"         v28, v5, v13, i8        \n\t"  // N16..23
+                SMT_INSTR(vmadot)"         v30, v5, v15, i8        \n\t"  // N24..31
 
                 "vsetvli        t0, x0, e8, mf4         \n\t"
                 "vle8.v         v4, (t5)                \n\t"  // v4 = Bzp N32 uint8
                 "addi           t5, t5, 736             \n\t"
 
                 "vsetvli        t0, x0, e8, m1          \n\t"
-                "vpack.vv       v16, v24, v26, 2        \n\t"  // v16 = N0..15
-                "vpack.vv       v18, v28, v30, 2        \n\t"  // v18 = N16..31
-                "vpack.vv       v24, v16, v18, 3        \n\t"  // v24 = N0..31
+                SMT_INSTR(vpack.vv)"       v16, v24, v26, 2        \n\t"  // v16 = N0..15
+                SMT_INSTR(vpack.vv)"       v18, v28, v30, 2        \n\t"  // v18 = N16..31
+                SMT_INSTR(vpack.vv)"       v24, v16, v18, 3        \n\t"  // v24 = N0..31
 
                 "vsetvli        t0, x0, e8, mf4         \n\t"
                 "vwaddu.vx      v28, v4, x0             \n\t"
