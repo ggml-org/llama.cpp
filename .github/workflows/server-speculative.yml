@@ -26,6 +26,9 @@ jobs:
     runs-on: [self-hosted, Linux, gb10, perf]
     container: "nvidia/cuda:13.4.3-devel-ubuntu26.04"
     timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - name: Clone
