@@ -1198,6 +1198,9 @@ extern "C" {
     LLAMA_API llama_token * llama_get_sampled_candidates_ith      (struct llama_context * ctx, int32_t i);
     LLAMA_API uint32_t      llama_get_sampled_candidates_count_ith(struct llama_context * ctx, int32_t i);
 
+    // Full-vocabulary logits for the ith token, also when a backend sampler ran for it. Valid until the next decode.
+    LLAMA_API float * llama_get_raw_logits_ith(struct llama_context * ctx, int32_t i);
+
     //
     // Vocab
     //
