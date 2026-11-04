@@ -4030,14 +4030,14 @@ void llm_graph_context::build_conv_state_store(
     const int64_t K  = (int64_t) cparams.n_rs_seq + 1;
     const int64_t Kw = std::min(n, K);
 
-    // {K-1, ..., 0} has the same size for every ubatch, so the reserved graph covers them all,
-    // and each conv layer of the graph takes its tail {Kw-1, ..., 0}
-    if (inp->s_slot_rev == nullptr) {
-        ggml_tensor * order = ggml_arange(ctx0, 0.0f, (float) K, 1.0f);
-        order = ggml_scale_bias(ctx0, order, -1.0f, (float) (K - 1));
-        inp->s_slot_rev = ggml_cast(ctx0, order, GGML_TYPE_I32);
-    }
-    ggml_tensor * slot_order = ggml_view_1d(ctx0, inp->s_slot_rev, Kw, ggml_row_size(GGML_TYPE_I32, K - Kw));
+    // each conv layer builds its own slot order {K-1, ..., 0}, on the device of the layer, and takes its tail
+    // {Kw-1, ..., 0}; the size K never depends on the ubatch, so the reserved graph covers them all
+    ggml_tensor * s_slot_rev = ggml_arange(ctx0, 0.0f, (float) K, 1.0f);
+    s_slot_rev = ggml_scale_bias(ctx0, s_slot_rev, -1.0f, (float) (K - 1));
+    s_slot_rev = ggml_cast(ctx0, s_slot_rev, GGML_TYPE_I32);
+    cb(s_slot_rev, "s_slot_rev", -1);
+
+    ggml_tensor * slot_order = ggml_view_1d(ctx0, s_slot_rev, Kw, ggml_row_size(GGML_TYPE_I32, K - Kw));
 
     // window w starts at column n - (Kw - 1) + w (ascending time) and is rollback slot Kw - 1 - w,
     // consecutive windows start one element apart, so they overlap
