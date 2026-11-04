@@ -74,11 +74,6 @@ void llama_model_xing4_0::load_arch_hparams(llama_model_loader & ml) {
         // cancel the factor from the convert script
         hparams.rope_yarn_log_mul /= 0.1f;
     }
-
-    // NextN/MTP
-    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.n_layer_nextn, false);
-    GGML_ASSERT(hparams.n_layer_nextn == 0 ||
-        hparams.n_layer() + hparams.n_layer_nextn == hparams.n_layer_all);
 }
 
 void llama_model_xing4_0::load_arch_tensors(llama_model_loader & ml) {
@@ -180,9 +175,9 @@ void llama_model_xing4_0::load_arch_tensors(llama_model_loader & ml) {
 
         // NextN/MTP tensors
         if (i >= n_layer) {
-            layer.nextn.eh_proj          = create_tensor(tn(LLM_TENSOR_NEXTN_EH_PROJ, "weight", i), { 2 * n_embd, n_embd }, mtp_flags);
-            layer.nextn.enorm            = create_tensor(tn(LLM_TENSOR_NEXTN_ENORM, "weight", i), { n_embd }, mtp_flags);
-            layer.nextn.hnorm            = create_tensor(tn(LLM_TENSOR_NEXTN_HNORM, "weight", i), { n_embd }, mtp_flags);
+            layer.nextn.eh_proj          = create_tensor(tn(LLM_TENSOR_NEXTN_EH_PROJ, "weight", i), { 2 * n_embd, n_embd }, flags);
+            layer.nextn.enorm            = create_tensor(tn(LLM_TENSOR_NEXTN_ENORM, "weight", i), { n_embd }, flags);
+            layer.nextn.hnorm            = create_tensor(tn(LLM_TENSOR_NEXTN_HNORM, "weight", i), { n_embd }, flags);
             layer.nextn.embed_tokens     = create_tensor(tn(LLM_TENSOR_NEXTN_EMBED_TOKENS, "weight", i), { n_embd, n_vocab }, TENSOR_NOT_REQUIRED | flags);
             layer.nextn.shared_head_head = create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "weight", i), { n_embd, n_vocab }, TENSOR_NOT_REQUIRED | flags);
             layer.nextn.shared_head_norm = create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "weight", i), { n_embd }, TENSOR_NOT_REQUIRED | flags);
@@ -220,26 +215,6 @@ llama_model_xing4_0::graph_mtp::graph_mtp(const llama_model & model, const llm_g
 
     GGML_ASSERT(n_embd_head_qk_nope >= 1);
     GGML_ASSERT(hparams.n_lora_q > 0);
-    GGML_ASSERT(layer.wq_a);
-    GGML_ASSERT(layer.attn_q_a_norm);
-    GGML_ASSERT(layer.wq_b);
-    GGML_ASSERT(layer.wkv_a_mqa);
-    GGML_ASSERT(layer.attn_kv_a_norm);
-    GGML_ASSERT(layer.wk_b);
-
-    const bool has_split_exps =
-            layer.ffn_up_exps   != nullptr &&
-            layer.ffn_gate_exps != nullptr;
-
-    const bool has_fused_exps = layer.ffn_gate_up_exps != nullptr;
-
-    GGML_ASSERT(has_split_exps || has_fused_exps);
-    GGML_ASSERT(layer.ffn_norm);
-    GGML_ASSERT(layer.ffn_gate_inp);
-    GGML_ASSERT(layer.ffn_down_exps);
-    GGML_ASSERT(layer.ffn_gate_shexp);
-    GGML_ASSERT(layer.ffn_down_shexp);
-    GGML_ASSERT(layer.ffn_up_shexp);
 
     auto inp = std::make_unique<llm_graph_input_embd_h>(hparams.n_embd_inp(), hparams.n_embd);
 
@@ -250,6 +225,7 @@ llama_model_xing4_0::graph_mtp::graph_mtp(const llama_model & model, const llm_g
     ggml_set_input(inp->embd);
 
     ggml_tensor * tok_embd;
+    ASSERT_EMBD_OR_TOKEN(ubatch);
     if (ubatch.token) {
         ggml_tensor * tok_embd_w = layer.nextn.embed_tokens
                 ? layer.nextn.embed_tokens
@@ -440,7 +416,6 @@ llama_model_xing4_0::graph_mtp::graph_mtp(const llama_model & model, const llm_g
     cb(cur, "result_output", -1);
 
     res->t_logits = cur;
-    ggml_build_forward_expand(gf, cur);
 }
 
 ggml_tensor * llama_model_xing4_0::graph::build_hc_pre(
@@ -860,6 +835,4 @@ llama_model_xing4_0::graph::graph(const llama_model & model, const llm_graph_par
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }
