@@ -50,14 +50,12 @@
 			<figure class="figure">
 				<div aria-hidden="true" class="figure-art">Aa</div>
 
-				<figcaption>
-					Figure 1. The same outlines as Display, spaced for reading and interfaces.
-				</figcaption>
+				<figcaption>Figure 1. Display’s outlines, spaced for reading and interfaces.</figcaption>
 			</figure>
 
 			<p class="footnote">
-				¹ UI and Display share every outline; only spacing, kerning and line spacing change between
-				them.
+				¹ UI and Display share their outlines, but for UI’s deeper descenders; spacing, kerning and
+				line spacing set them apart.
 			</p>
 		</div>
 	</article>
