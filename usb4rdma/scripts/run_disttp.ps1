@@ -16,7 +16,7 @@
 # Examples:
 #   .\run_disttp.ps1 -Transport rdma                       # $CLUSTER_RINGS[2]
 #   .\run_disttp.ps1 -Transport rdma -RankNodes A,B,C -Mesh
-#   .\run_disttp.ps1 -Transport rdma -RankNodes A,B,C -Mesh -ExtraEnv 'LLAMA_DIST_TP_RECORD_AHEAD=1'
+#   .\run_disttp.ps1 -Transport rdma -RankNodes A,B,C -Mesh -ExtraArgs '-fa on -ctk q8_0 -ctv q8_0'
 #   .\run_disttp.ps1 -Transport tcp  -RankNodes A,B
 #   .\run_disttp.ps1 -Transport none -RankNodes A          # single node baseline
 param(
@@ -49,7 +49,7 @@ param(
   # the output must match the ring's exactly.
   [switch]$Mesh,
   # More environment for every rank, 'NAME=value;NAME=value', set after the variables above so it
-  # can override them: the Vulkan switches in the README, LLAMA_DIST_TP_RECORD_AHEAD=1,
+  # can override them: the Vulkan switches in the README,
   # LLAMA_DIST_TP_SPLIT_RECURRENT=1. A value must not contain & | < > ^ " or %.
   [string]$ExtraEnv = '',
   # Start ranks 1..N-1 detached, then STOP and print the exact command to run by hand in a console
@@ -128,9 +128,8 @@ function RankEnv([int]$rank){
     "LLAMA_DIST_TP_RING_NEXT_HOST=$($next[$rank])"
     "LLAMA_DIST_TP_RDMA_DEBUG=$(if($RdmaDebug){1})"
     "LLAMA_DIST_TP_MESH=$(if($Mesh){1})"
-    # Off unless -ExtraEnv sets them. SPLIT_RECURRENT must be the same on every rank.
+    # Off unless -ExtraEnv sets it. It must be the same on every rank.
     'LLAMA_DIST_TP_SPLIT_RECURRENT='
-    'LLAMA_DIST_TP_RECORD_AHEAD='
   )
 }
 # A rank's whole environment: RankEnv without the names -ExtraEnv sets, then -ExtraEnv (also at

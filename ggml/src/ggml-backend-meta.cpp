@@ -32,7 +32,7 @@
 #endif
 #endif
 
-// LLAMA_DIST_TP_WIRE_F16 helpers. pack: y = f16(x * 2^-e) with e chosen so the largest |x| lands below 2^15
+// f16 wire helpers for the dist-tp boundary all-reduce. pack: y = f16(x * 2^-e) with e chosen so the largest |x| lands below 2^15
 // (scaling by a power of two is exact; e = 0 unless some |x| >= 32768); returns e. unpack: y = f32(x) * 2^e.
 // x86-64 uses F16C (every CPU since 2012), elsewhere the scalar conversions.
 #if defined(__x86_64__) || defined(_M_X64)
@@ -1953,7 +1953,7 @@ static inline void ggml_meta_cpu_relax() { _mm_pause(); }
 static inline void ggml_meta_cpu_relax() { std::this_thread::yield(); }
 #endif
 
-// LLAMA_DIST_TP_RECORD_AHEAD=1 (dist-TP, one Vulkan device per rank): while the all-reduce of
+// Record-ahead, for dist-tp with one Vulkan device per rank: while the all-reduce of
 // subgraph i is on the network, a helper thread records subgraph i+1 into a Vulkan command buffer
 // that is held back (ggml_backend_vk_set_defer_submit). Once the reduced tensor is written back,
 // the held work is submitted (ggml_backend_vk_flush_deferred). Subgraph i has finished on the GPU
@@ -2083,7 +2083,7 @@ struct ggml_backend_meta_context {
     ggml_backend_meta_dist_allreduce_tensor_t dist_comm_allreduce = nullptr;
     ggml_backend_meta_dist_cfg                dist_cfg;
 
-    std::unique_ptr<ggml_meta_record_ahead>   ahead; // LLAMA_DIST_TP_RECORD_AHEAD
+    std::unique_ptr<ggml_meta_record_ahead>   ahead; // dist-tp on one Vulkan device, see ggml_meta_record_ahead
 
     ggml_backend_meta_context(ggml_backend_dev_t meta_dev, const char * params) {
         const ggml_backend_meta_device_context * meta_dev_ctx = (const ggml_backend_meta_device_context *) meta_dev->context;
@@ -2133,8 +2133,7 @@ struct ggml_backend_meta_context {
 
         ggml_backend_meta_get_dist_allreduce(&dist_comm_ctx, &dist_comm_allreduce);
 
-        const char * record_ahead = getenv("LLAMA_DIST_TP_RECORD_AHEAD");
-        if (record_ahead != nullptr && atoi(record_ahead) != 0 && n_devs == 1) {
+        if (dist_comm_allreduce != nullptr && n_devs == 1) {
             ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(simple_backends[0]));
             auto set_defer = (ggml_backend_vk_set_defer_submit_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_vk_set_defer_submit");
             auto flush     = (ggml_backend_vk_flush_deferred_t)   ggml_backend_reg_get_proc_address(reg, "ggml_backend_vk_flush_deferred");
@@ -2147,9 +2146,7 @@ struct ggml_backend_meta_context {
                 }
                 ggml_meta_record_ahead * a = ahead.get();
                 ahead->th = std::thread([a] { a->run(); });
-                GGML_LOG_INFO("%s: dist-tp record-ahead on (helper polls %lld us)\n", __func__, (long long) ahead->spin_us);
-            } else {
-                GGML_LOG_WARN("%s: LLAMA_DIST_TP_RECORD_AHEAD ignored, %s has no deferred submit\n", __func__, ggml_backend_reg_name(reg));
+                GGML_LOG_INFO("%s: dist-tp record-ahead on\n", __func__);
             }
         }
     }
@@ -3034,17 +3031,15 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                 // Host-side ring all-reduce: accumulate into `cur`, forward via `send`.
                 // Avoids the per-boundary GPU ADD kernel submission + node_tmp upload,
                 // which on a high submit-latency backend (Vulkan iGPU) dominates decode.
-                // LLAMA_DIST_TP_WIRE_F16=1: f16 on the wire. n halves (scaled by 2^-e, see dist_wire_f16_pack) and e in
-                // the last two travel as n/2 + 1 floats; the exchange only moves bytes. This rank's own share takes the
-                // same rounding, so every rank sums the same values; the sums stay f32. Every rank sees the same n,
-                // so all ranks take the same path.
+                // f16 on the wire, unless LLAMA_DIST_TP_WIRE_F32=1. n halves (scaled by 2^-e, see dist_wire_f16_pack)
+                // and e in the last two travel as n/2 + 1 floats; the exchange only moves bytes. This rank's own share
+                // takes the same rounding, so every rank sums the same values; the sums stay f32. Every rank sees the
+                // same n, so all ranks take the same path. The setting must be the same on every rank.
                 static const bool dist_wire_f16 = [] {
-                    const char * s = getenv("LLAMA_DIST_TP_WIRE_F16");
-                    const bool on = s != nullptr && atoi(s) != 0;
-                    if (on) {
-                        fprintf(stderr, "dist-tp: boundary all-reduce carries f16 on the wire (LLAMA_DIST_TP_WIRE_F16)\n");
-                    }
-                    return on;
+                    const char * s = getenv("LLAMA_DIST_TP_WIRE_F32");
+                    const bool f32 = s != nullptr && atoi(s) != 0;
+                    fprintf(stderr, "dist-tp: boundary all-reduce carries %s on the wire\n", f32 ? "f32" : "f16");
+                    return !f32;
                 }();
                 const bool   wire16 = dist_wire_f16 && n % 2 == 0;
                 const size_t nw     = wire16 ? n / 2 + 1 : n;

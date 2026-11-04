@@ -204,11 +204,10 @@ Every payload goes over RDMA, the prompt included: a message may span any number
 chunks, and a rank waiting at its ND send window keeps receiving, so two ranks sending to each other
 cannot deadlock.
 
-Three nodes, full mesh, every payload on RDMA, with the Vulkan settings for Intel integrated GPUs
-from section 6 passed through `-ExtraEnv`:
+Three nodes, full mesh, every payload on RDMA, with a quantized KV cache:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_disttp.ps1 -Transport rdma -RankNodes A,B,C -Mesh -ExtraArgs '-fa on -ctk q8_0 -ctv q8_0' -ExtraEnv 'LLAMA_DIST_TP_RECORD_AHEAD=1'
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_disttp.ps1 -Transport rdma -RankNodes A,B,C -Mesh -ExtraArgs '-fa on -ctk q8_0 -ctv q8_0'
 ```
 
 Each run writes every rank's log to `scripts\logs\` and appends a JSON line to
@@ -242,7 +241,6 @@ On each node, in `cmd.exe` (not PowerShell) in the binary folder:
 set LLAMA_DIST_TP_RDMA=1
 set LLAMA_DIST_TP_MESH=1
 set LLAMA_DIST_TP_RING_NEXT_HOST=<rank r+1's address on the cable to it>
-set LLAMA_DIST_TP_RECORD_AHEAD=1
 set GGML_VK_FENCE_POLL_PAUSES=20
 set GGML_VK_DEFER_GATE=1
 llama-cli -m <model> -f <prompt> -n 64 -c 2048 -ngl 99 -t 8 --temp 0 --seed 1234 ^
@@ -285,11 +283,10 @@ and the opt-in ones it only clears, with `-ExtraEnv 'NAME=value;NAME=value'`. Fo
 | `LLAMA_DIST_TP_MESH=1` | 3 ranks: full-mesh all-reduce for payloads up to 64 KiB, the ring above. Same sum order as the ring |
 | `LLAMA_DIST_TP_MESH=1` at 4 ranks | with a cable between every pair of ranks: the two diagonals (rank 0 - rank 2, rank 1 - rank 3) get their own connection, and every all-reduce up to 64 KiB goes to all three peers at once. `LLAMA_DIST_TP_MESH_DIAG_HOSTS=-,-,<h2>,<h3>` names the address rank 2 dials (rank 0's end of the 0-2 cable) and rank 3 dials (rank 1's end of the 1-3 cable); entries 0 and 1 are not used. Same sum order as the ring. The transport line shows the diagonal and only says `all payloads over ND` when it is on ND too |
 | `LLAMA_DIST_TP_RDMA_FIXED_SLOT=1` | for ND providers that need page-aligned buffers and the same length on both ends of every transfer (a provider that refuses `Register` or completes receives with an error on the default layout): every slot is exactly 256 KiB with the header inside, and every send, acks included, is one whole slot into a receive of one whole slot. Prints `[dist-tp][nd] fixed slots: ...`. Same value on every rank |
-| `LLAMA_DIST_TP_RDMA_SMALL_LANE=<bytes>` | with fixed slots (it turns them on): a second ND connection on every cable whose slots are this size, a whole number of 4096 B pages below 256 KiB. A message that fits one small slot (16 B header + payload) takes it, everything else the 256 KiB one, so a decode all-reduce no longer moves a whole 256 KiB slot. Pick the smallest page multiple that holds a decode payload: `n_embd x 2 + 16` bytes with `LLAMA_DIST_TP_WIRE_F16=1`, `n_embd x 4 + 16` without (n_embd 2880 with f16: 8192; 4096 with f16: 12288). Prints `[dist-tp][nd] small connection: ...`. Ranks with different values refuse to connect |
-| `LLAMA_DIST_TP_WIRE_F16=1` | the boundary all-reduce carries f16 on the wire, half the bytes: each payload is scaled by a power of two so its largest value fits, and the sums stay f32. The output can differ slightly from an f32 run. Same value on every rank |
+| `LLAMA_DIST_TP_RDMA_SMALL_LANE=<bytes>` | with fixed slots (it turns them on): a second ND connection on every cable whose slots are this size, a whole number of 4096 B pages below 256 KiB. A message that fits one small slot (16 B header + payload) takes it, everything else the 256 KiB one, so a decode all-reduce no longer moves a whole 256 KiB slot. Pick the smallest page multiple that holds a decode payload: `n_embd x 2 + 16` bytes, or `n_embd x 4 + 16` with `LLAMA_DIST_TP_WIRE_F32=1` (n_embd 2880 with f16: 8192; 4096 with f16: 12288). Prints `[dist-tp][nd] small connection: ...`. Ranks with different values refuse to connect |
+| `LLAMA_DIST_TP_WIRE_F32=1` | the boundary all-reduce carries f32 on the wire. By default it carries f16, half the bytes: each payload is scaled by a power of two so its largest value fits, and the sums stay f32, so the output can differ slightly from an f32 run. Same value on every rank |
 | `LLAMA_DIST_TP_ATTN_REBALANCE=1` | split attention by query heads instead of whole KV groups, so a model whose KV head count does not divide by the rank count still gets an even share; each rank keeps the KV heads its query heads use. Same value on every rank |
 | `LLAMA_DIST_TP_SPLIT_RECURRENT=1` | Qwen3.5 and Qwen3.5-MoE: split the gated DeltaNet (recurrent) layers across the ranks. Unset, they run whole on every rank, which is always the case for Qwen3-Next. Use the same value on every rank |
-| `LLAMA_DIST_TP_RECORD_AHEAD=1` | with one GPU per rank (`--device Vulkan0`): a helper thread records the next piece of the graph while the all-reduce runs, and prints `dist-tp record-ahead on`. Needs the Vulkan backend's deferred submit; any other backend prints that the switch is ignored. `LLAMA_DIST_TP_RECORD_AHEAD_SPIN_US` (default 2000) sets how long the helper polls for work before it sleeps |
 | `LLAMA_DISTPROF=1` | print one `[distprof]` cost line per graph (GPU wait, time in the collective, bytes) |
 | `GGML_TRACE=1` | write an HTML trace of the graph steps to `GGML_TRACE_HTML` (default `llama-trace.html`), bounded by `GGML_TRACE_MAX_STEPS` and `GGML_TRACE_MAX_EVENTS` |
 
@@ -298,13 +295,11 @@ address>:<port>` on every rank.
 
 **Vulkan, Intel Xe2/Xe3 integrated GPUs.** The patches add two decode kernels that are on by default
 on the Intel devices the Vulkan backend classifies as Xe2 that have integer dot products and 16-lane
-subgroups, and switches that are off unless set. On the Xe2/Xe3 integrated GPUs with Intel's Windows
-driver they also keep two kernels that llama.cpp leaves off on Intel: the subgroup Hadamard transform
-(`MUL_MAT_HADAMARD`, used with a quantized KV cache) and the fused residual add and RMS norm
-(`GGML_VK_DISABLE_FUSION` turns that off). The settings used with the 3-node mesh above are
-`GGML_VK_FENCE_POLL_PAUSES=20 GGML_VK_DEFER_GATE=1`, with `LLAMA_DIST_TP_RECORD_AHEAD=1`. Add
-`GGML_VK_EARLY_RECORD=2` and `LLAMA_DIST_TP_WIRE_F16=1` to them for decode, and
-`LLAMA_DIST_TP_ATTN_REBALANCE=1` for models whose KV heads do not divide by the rank count.
+subgroups. On the Xe2/Xe3 integrated GPUs with Intel's Windows driver they also keep two kernels that
+llama.cpp leaves off on Intel: the subgroup Hadamard transform (`MUL_MAT_HADAMARD`, used with a
+quantized KV cache) and the fused residual add and RMS norm (`GGML_VK_DISABLE_FUSION` turns that off).
+With one GPU per rank, dist-tp records the next piece of the graph while each all-reduce is on
+the network, and prints `dist-tp record-ahead on`.
 
 | Variable | Effect |
 |---|---|
