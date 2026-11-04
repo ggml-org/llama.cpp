@@ -25,6 +25,7 @@ layout (push_constant) uniform parameter
     uint neq2;
     uint nek1;
     uint nek2;
+    uint nem2;
     uint nbq1;
     uint nbq2;
     uint nbk1;
@@ -93,6 +94,7 @@ void main() {
     const uint max_dim = (p.nek1 + p_reduce - 1) / p_reduce;
     const uint p_dim = max_dim * p_reduce;
     const uint out_row_idx = sg + out_idx * Br;
+    const bool single_head_mask = p.nem2 == 1;
     uint q_offset = min(out_row_idx, p.neq1 - 1) * p.nbq1;
     q_offset = q_offset + batch_idx * p.nbq3 + head_k_idx * p.nbq2 * gqa_ratio;
     const uint k_base = (batch_idx * p.nbk3 + (p_idx * p_reduce) * k_dim + head_k_idx * p.nbk2) / 4;
@@ -106,7 +108,7 @@ void main() {
 
     float Maskf[p_reduce / SubGroupSize];
 
-    if (out_row_idx < p.neq1) {
+    if (out_row_idx < p.neq1 && single_head_mask) {
         [[unroll]] for (uint idx = 0; idx < p_reduce / SubGroupSize; ++idx) {
             const uint mask_offset = idx * SubGroupSize + mask_base;
             if (mask_offset < p.nek1) {
@@ -190,7 +192,7 @@ void main() {
 
     barrier();
 
-    if (out_row_idx < p.neq1) {
+    if (out_row_idx < p.neq1 && single_head_mask) {
         [[unroll]] for (uint idx = 0; idx < p_reduce / SubGroupSize; ++idx) {
             F32Poolsh.F32sh[SLM_PV_SIZE + sg * p_reduce + idx * SubGroupSize + lane] = Maskf[idx];
         }
@@ -198,6 +200,7 @@ void main() {
 
     [[unroll]] for (uint out_r = 0; out_r < Br; ++out_r) {
         if (out_r + out_idx * Br < p.neq1) {
+            const uint mask_global_base = batch_idx * p.nbm3 + (out_r + out_idx * Br) * p.nek1;
             if (sg == out_r) {
                 [[unroll]] for (uint r = 0; r < pmat_row; ++r) {
                     [[unroll]] for (uint c = 0; c < pmat_col; ++c) {
@@ -209,16 +212,32 @@ void main() {
 
             barrier();
 
-            [[unroll]] for (uint idx = 0; idx < p_reduce / SubGroupSize; ++idx) {
-                Maskf[idx] = F32Poolsh.F32sh[SLM_PV_SIZE + out_r * p_reduce + idx * SubGroupSize + lane];
+            if (single_head_mask) {
+                [[unroll]] for (uint idx = 0; idx < p_reduce / SubGroupSize; ++idx) {
+                    Maskf[idx] = F32Poolsh.F32sh[SLM_PV_SIZE + out_r * p_reduce + idx * SubGroupSize + lane];
+                }
             }
 
             float Of[warp_o_row][p_reduce / SubGroupSize];
             float Mf[warp_o_row];
 
             [[unroll]] for (uint r = 0; r < warp_o_row; ++r) {
+                const uint head_q_idx = head_k_idx * gqa_ratio + sg * warp_o_row + r;
+                const uint mask_head_offset = (head_q_idx % p.nem2) * p.nek1 * p.neq1;
+
                 [[unroll]] for (uint idx = 0; idx < p_reduce / SubGroupSize; ++idx) {
                     Of[r][idx] = F32Poolsh.F32sh[pvsh_load_offset + idx * SubGroupSize + r * p_reduce] * p.scale;
+                }
+
+                if (!single_head_mask) {
+                    [[unroll]] for (uint idx = 0; idx < p_reduce / SubGroupSize; ++idx) {
+                        const uint mask_offset = idx * SubGroupSize + mask_base;
+                        if (mask_offset < p.nek1) {
+                            Maskf[idx] = float(data_m[mask_global_base + mask_head_offset + mask_offset]);
+                        } else {
+                            Maskf[idx] = NEG_FLT_MAX_OVER_2;
+                        }
+                    }
                 }
 
                 [[unroll]] for (uint idx = 0; idx < p_reduce / SubGroupSize; ++idx) {

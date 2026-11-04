@@ -25,6 +25,7 @@ layout (push_constant) uniform parameter
     uint neq2;
     uint nek1;
     uint nek2;
+    uint nem2;
     uint nbq1;
     uint nbq2;
     uint nbk1;
