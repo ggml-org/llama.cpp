@@ -15,7 +15,7 @@
 #
 # Examples:
 #   .\run_disttp.ps1 -Transport rdma                       # $CLUSTER_RINGS[2]
-#   .\run_disttp.ps1 -Transport rdma -RankNodes A,B,C -Mesh -MeshRelay 2
+#   .\run_disttp.ps1 -Transport rdma -RankNodes A,B,C -Mesh
 #   .\run_disttp.ps1 -Transport rdma -RankNodes A,B,C -Mesh -RdmaMultiChunk -ExtraEnv 'GGML_VK_FWHT=1'
 #   .\run_disttp.ps1 -Transport tcp  -RankNodes A,B
 #   .\run_disttp.ps1 -Transport none -RankNodes A          # single node baseline
@@ -65,10 +65,6 @@ param(
   # of two ring steps, using the reverse direction of each ring edge. Sums in the ring's order, so
   # the output must match the ring's exactly.
   [switch]$Mesh,
-  # LLAMA_DIST_TP_MESH_RELAY=u: the reverse direction of ring edge u (u+1 -> u) is not sent
-  # directly but relayed through the third rank, over the forward edges. Use it when one direction
-  # of one cable cannot carry ND data; every byte stays on RDMA.
-  [string]$MeshRelay = '',
   # More environment for every rank, 'NAME=value;NAME=value', set after the variables above so it
   # can override them: the Vulkan switches in the README, LLAMA_DIST_TP_RECORD_AHEAD=1,
   # LLAMA_DIST_TP_SPLIT_RECURRENT=1. A value must not contain & | < > ^ " or %.
@@ -104,8 +100,6 @@ if($world -gt 1 -and $Transport -eq 'none'){ throw "a multi-rank run needs -Tran
 $RUN = $CLUSTER_CFG.RunDir
 function RunDirFor([string]$n){ if($CLUSTER_CFG.RunDirByNode -and $CLUSTER_CFG.RunDirByNode[$n]){ $CLUSTER_CFG.RunDirByNode[$n] } else { $RUN } }
 if($Mesh -and $world -ne 3){ throw "-Mesh needs exactly 3 ranks (have $world)" }
-if($MeshRelay -and -not $Mesh){ throw "-MeshRelay only applies with -Mesh" }
-if($MeshRelay -and $MeshRelay -notmatch '^[0-2]$'){ throw "-MeshRelay takes one rank, 0..2 (have '$MeshRelay')" }
 if($RdmaMaxBytes -gt 262144 -and -not $RdmaMultiChunk){ throw "-RdmaMaxBytes above 262144 needs -RdmaMultiChunk (without it multi-chunk ND transfers can deadlock)" }
 # Not $extraEnv: PowerShell variable names ignore case, so that would be the parameter itself.
 $envExtra = @($ExtraEnv -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
@@ -156,12 +150,7 @@ function RankEnv([int]$rank){
     "LLAMA_DIST_TP_RING_NEXT_HOST=$($next[$rank])"
     "LLAMA_DIST_TP_RDMA_DEBUG=$(if($RdmaDebug){1})"
     "LLAMA_DIST_TP_MESH=$(if($Mesh){1})"
-    "LLAMA_DIST_TP_MESH_RELAY=$MeshRelay"
-    # Both put mesh traffic on TCP; this launcher never does.
-    'LLAMA_DIST_TP_MESH_REVERSE_TCP='
-    'LLAMA_DIST_TP_MESH_LARGE='
     # Off unless -ExtraEnv sets them. SPLIT_RECURRENT must be the same on every rank.
-    'LLAMA_DIST_TP_MESH_ND_LARGE='
     'LLAMA_DIST_TP_SPLIT_RECURRENT='
     'LLAMA_DIST_TP_RECORD_AHEAD='
   )
@@ -388,7 +377,7 @@ $rec = [ordered]@{
   max_coll_bytes=$(if($prof){$prof.max_coll_bytes}else{$null}); over_nd_ceiling=$overCeiling
   status=$an.status; end_reason=$endReason; build=$(if($an.builds.Count){$an.builds[0]}else{$null})
   model=(Split-Path $Model -Leaf); prompt=(Split-Path $Prompt -Leaf); n_predict=$NPred; ctx=$Ctx; extra_args=$ExtraArgs
-  threads=$Threads; ngl=$Ngl; full_duplex=(-not $NoFullDuplex); mesh=[bool]$Mesh; mesh_relay=$MeshRelay
+  threads=$Threads; ngl=$Ngl; full_duplex=(-not $NoFullDuplex); mesh=[bool]$Mesh
   rdma_multichunk=[bool]$RdmaMultiChunk; extra_env=($envExtra -join ';')
   mesh_up=$(if($Mesh){ @($raw.Values | Where-Object { "$_" -match 'dist-tp all-reduce: full mesh' }).Count }else{ $null })
   mesh_tcp_ranks=$meshTcp; device=$Device; master=$(if($world -gt 1){$Master}else{$null})

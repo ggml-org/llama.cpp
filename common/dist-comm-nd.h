@@ -50,24 +50,6 @@ dist_nd_conn * dist_nd_establish(uintptr_t tcp_out, uintptr_t tcp_in, bool liste
 bool dist_nd_send2(dist_nd_conn * c, const void * hdr, size_t hdr_size,
                    const void * payload, size_t payload_size, std::string & err);
 bool dist_nd_recv(dist_nd_conn * c, void * data, size_t size, std::string & err);
-// The 3-rank full mesh's exchange for a payload of any size: sends one message (hdr, then
-// payload) to both a and b while receiving one message of the same sizes from each, all four
-// directions at once and straight into the caller's buffers, interleaving 256 KiB chunks across
-// the two connections. It never blocks on one connection while the other could move. Needs
-// LLAMA_DIST_TP_RDMA_MULTICHUNK; a and b must be different connections, and the send buffers
-// must not overlap the receive buffers. In full-duplex mode the sends are left to
-// dist_nd_send_drain, as after dist_nd_send2.
-bool dist_nd_exchange_pair(dist_nd_conn * a, dist_nd_conn * b, const void * hdr, size_t hdr_size,
-                           const void * payload, size_t size, void * hdr_from_a, void * from_a,
-                           void * hdr_from_b, void * from_b, std::string & err);
-// The 4-rank full mesh's large exchange: dist_nd_exchange_pair over n distinct connections at once
-// (1 to 4). One message (hdr, then payload) leaves on every connection while one message of the same
-// sizes arrives from each, into hdr_from[i] / from[i] for connection i, interleaving 256 KiB chunks
-// across all of them. Same rules as the pair: LLAMA_DIST_TP_RDMA_MULTICHUNK, send buffers must not
-// overlap receive buffers, and in full-duplex mode the sends are left to dist_nd_send_drain.
-bool dist_nd_exchange_n(dist_nd_conn * const * conns, int n, const void * hdr, size_t hdr_size,
-                        const void * payload, size_t size, void * const * hdr_from, void * const * from,
-                        std::string & err);
 // Wait for sends posted but not yet retired. Only needed in full-duplex mode, where dist_nd_send2
 // returns as soon as the chunk is posted rather than when it has completed.
 bool dist_nd_send_drain(dist_nd_conn * c, std::string & err);

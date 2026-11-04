@@ -195,10 +195,7 @@ both peers at once, so the mesh uses both directions of every cable:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_disttp.ps1 -Transport rdma -RankNodes A,B,C -Mesh -ExtraArgs '-ub 16'
 ```
 
-If one direction of one cable cannot carry ND data, add `-MeshRelay u`: the reverse direction of
-ring edge u (rank u+1 to rank u) is then relayed through the third rank instead, and every byte
-still goes over RDMA, but each relayed message takes two hops. The run must report
-`ranks with a mesh direction on TCP: 0 of 3`.
+The run must report `ranks with a mesh direction on TCP: 0 of 3`.
 
 `-Transport tcp` runs the same thing over TCP on the same cables, and `-Transport none -RankNodes A`
 runs a single node.
@@ -308,11 +305,7 @@ and the opt-in ones it only clears, with `-ExtraEnv 'NAME=value;NAME=value'`. Fo
 | `LLAMA_DIST_TP_RDMA_DEBUG=1` | log each ND listener, connection request, connect and teardown |
 | `LLAMA_DIST_TP_FULL_DUPLEX=1` | post each step's send before waiting on its receive |
 | `LLAMA_DIST_TP_MESH=1` | 3 ranks: full-mesh all-reduce for payloads up to `LLAMA_DIST_TP_MESH_MAX_BYTES` (default 65536), the ring above. Same sum order as the ring |
-| `LLAMA_DIST_TP_MESH_RELAY=u` | with the mesh: relay the reverse direction of ring edge u through the third rank |
-| `LLAMA_DIST_TP_MESH_REVERSE_TCP=r,...` | with the mesh: send the reverse direction of the listed ranks' edges over TCP |
-| `LLAMA_DIST_TP_MESH_LARGE=1` | with the mesh: also mesh payloads above the ND limit, over TCP |
-| `LLAMA_DIST_TP_MESH_ND_LARGE=1` | **experimental, not yet benchmarked.** With the mesh: payloads above `LLAMA_DIST_TP_MESH_MAX_BYTES` (the prompt) also go through the mesh, on ND over both links at once, instead of the ring. Needs `LLAMA_DIST_TP_RDMA=1`, `LLAMA_DIST_TP_RDMA_MULTICHUNK=1` and `LLAMA_DIST_TP_RDMA_MAX_BYTES=0`, and no relay, reverse-TCP or `MESH_LARGE`; otherwise it prints why and the ring is kept. When on, the all-reduce line says `mesh above too (ND, both links at once)`. These payloads have no TCP fallback: a rank whose ND connection is down fails the collective. Same sum order as the ring |
-| `LLAMA_DIST_TP_MESH=1` at 4 ranks | with a cable between every pair of ranks: the two diagonals (rank 0 - rank 2, rank 1 - rank 3) get their own connection, and every all-reduce up to `LLAMA_DIST_TP_MESH_MAX_BYTES` goes to all three peers at once. `LLAMA_DIST_TP_MESH_DIAG_HOSTS=-,-,<h2>,<h3>` names the address rank 2 dials (rank 0's end of the 0-2 cable) and rank 3 dials (rank 1's end of the 1-3 cable); entries 0 and 1 are not used. `LLAMA_DIST_TP_MESH4_LARGE=1` (with `LLAMA_DIST_TP_RDMA_MULTICHUNK=1` and `LLAMA_DIST_TP_RDMA_MAX_BYTES=0`) also sends larger payloads over all three links at once. Same sum order as the ring. The transport line shows the diagonal and only says `all payloads over ND` when it is on ND too |
+| `LLAMA_DIST_TP_MESH=1` at 4 ranks | with a cable between every pair of ranks: the two diagonals (rank 0 - rank 2, rank 1 - rank 3) get their own connection, and every all-reduce up to `LLAMA_DIST_TP_MESH_MAX_BYTES` goes to all three peers at once. `LLAMA_DIST_TP_MESH_DIAG_HOSTS=-,-,<h2>,<h3>` names the address rank 2 dials (rank 0's end of the 0-2 cable) and rank 3 dials (rank 1's end of the 1-3 cable); entries 0 and 1 are not used. Same sum order as the ring. The transport line shows the diagonal and only says `all payloads over ND` when it is on ND too |
 | `LLAMA_DIST_TP_RDMA_FIXED_SLOT=1` | for ND providers that need page-aligned buffers and the same length on both ends of every transfer (a provider that refuses `Register` or completes receives with an error on the default layout): every slot is exactly 256 KiB with the header inside, and every send, acks included, is one whole slot into a receive of one whole slot. Prints `[dist-tp][nd] fixed slots: ...`. Same value on every rank |
 | `LLAMA_DIST_TP_RDMA_SMALL_LANE=<bytes>` | with fixed slots (it turns them on): a second ND connection on every cable whose slots are this size, a whole number of 4096 B pages below 256 KiB. A message that fits one small slot (16 B header + payload) takes it, everything else the 256 KiB one, so a decode all-reduce no longer moves a whole 256 KiB slot. Pick the smallest page multiple that holds a decode payload: `n_embd x 2 + 16` bytes with `LLAMA_DIST_TP_WIRE_F16=1`, `n_embd x 4 + 16` without (n_embd 2880 with f16: 8192; 4096 with f16: 12288). Prints `[dist-tp][nd] small connection: ...`. Ranks with different values refuse to connect |
 | `LLAMA_DIST_TP_WIRE_F16=1` | the boundary all-reduce carries f16 on the wire, half the bytes: each payload is scaled by a power of two so its largest value fits, and the sums stay f32. The output can differ slightly from an f32 run. Same value on every rank |

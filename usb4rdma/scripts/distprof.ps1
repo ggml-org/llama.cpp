@@ -230,8 +230,8 @@ function Get-RunAnalysis {
     }
 }
 
-# Ranks whose full-mesh banner names TCP for any direction. An all-RDMA mesh run must have 0 here
-# AND a clean ring; a relayed direction prints "via r" and stays on ND, so it does not count.
+# Ranks whose full-mesh banner names TCP for any edge. An all-RDMA mesh run must have 0 here AND a
+# clean ring.
 function Get-MeshTcpRanks([string[]]$RankTexts){
     @($RankTexts | Where-Object {
         $m = [regex]::Match("$_", 'dist-tp all-reduce: full mesh[^\r\n]*')
