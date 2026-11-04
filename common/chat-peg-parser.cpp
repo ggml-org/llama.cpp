@@ -967,6 +967,27 @@ void common_chat_peg_gemma4_mapper::from_ast(const common_peg_ast_arena & arena,
     }
 }
 
+using gemma4 = common_chat_peg_gemma4_mapper;
+
+static bool gemma4_is_value(const common_peg_ast_node & node) {
+    return node.tag == gemma4::STRING || node.tag == gemma4::NUMBER || node.tag == gemma4::BOOL ||
+           node.tag == gemma4::NULL_ || node.tag == gemma4::ARRAY || node.tag == gemma4::DICT;
+}
+
+// Collects the nearest descendants satisfying pred, looking through the rules the parser
+// wraps around the tagged nodes.
+template <class Pred>
+static void gemma4_collect(const common_peg_ast_arena & arena, const common_peg_ast_node & node, const Pred & pred, std::vector<common_peg_ast_id> & out) {
+    for (auto child_id : node.children) {
+        const auto & child = arena.get(child_id);
+        if (pred(child)) {
+            out.push_back(child_id);
+        } else {
+            gemma4_collect(arena, child, pred, out);
+        }
+    }
+}
+
 static std::string gemma4_to_json(const common_peg_ast_arena & arena, common_peg_ast_id id) {
     const auto & node = arena.get(id);
 
@@ -974,51 +995,48 @@ static std::string gemma4_to_json(const common_peg_ast_arena & arena, common_peg
         return "";
     }
 
-    if (node.rule == "gemma4-number" || node.rule == "gemma4-bool" || node.rule == "gemma4-null") {
+    if (node.tag == gemma4::NUMBER || node.tag == gemma4::BOOL || node.tag == gemma4::NULL_) {
         return std::string(node.text);
     }
 
-    if (node.rule == "gemma4-string-content") {
+    if (node.tag == gemma4::STRING_CONTENT) {
         return escape_json_string_inner(node.sanitized_text());
     }
 
-    if (node.rule == "gemma4-string") {
+    if (node.tag == gemma4::STRING) {
         std::string result = "\"";
-        if (!node.children.empty()) {
-            result += gemma4_to_json(arena, node.children[0]);
-            if (!node.is_partial) {
-                result += "\"";
-            }
+        for (auto child_id : node.children) {
+            result += gemma4_to_json(arena, child_id);
+        }
+        if (!node.is_partial) {
+            result += "\"";
         }
         return result;
     }
 
-    if (node.rule == "gemma4-array") {
-        std::string result = "[";
+    if (node.tag == gemma4::ARRAY) {
+        std::vector<common_peg_ast_id> items;
+        gemma4_collect(arena, node, gemma4_is_value, items);
 
-        bool add_comma = false;
-        for (auto child_id : node.children) {
-            if (add_comma) {
+        std::string result = "[";
+        for (size_t i = 0; i < items.size(); i++) {
+            if (i > 0) {
                 result += ',';
             }
-            add_comma = true;
-            result += gemma4_to_json(arena, child_id);
+            result += gemma4_to_json(arena, items[i]);
         }
-
         if (!node.is_partial) {
             result += ']';
         }
         return result;
     }
 
-    if (node.rule == "gemma4-dict-key-name") {
-        return std::string(node.text);
-    }
+    if (node.tag == gemma4::DICT_KEY) {
+        auto name_id = arena.find_by_tag(node, gemma4::DICT_KEY_NAME);
 
-    if (node.rule == "gemma4-dict-key") {
         std::string result = "\"";
-        if (!node.children.empty()) {
-            result += escape_json_string_inner(gemma4_to_json(arena, node.children[0]));
+        if (name_id != COMMON_PEG_INVALID_AST_ID) {
+            result += escape_json_string_inner(std::string(arena.get(name_id).text));
         }
         if (!node.is_partial) {
             result += "\":";
@@ -1026,40 +1044,29 @@ static std::string gemma4_to_json(const common_peg_ast_arena & arena, common_peg
         return result;
     }
 
-    if (node.rule == "gemma4-dict-kv") {
-        std::string result;
-        for (auto child_id : node.children) {
-            result += gemma4_to_json(arena, child_id);
-        }
-        return result;
-    }
+    if (node.tag == gemma4::DICT) {
+        std::vector<common_peg_ast_id> members;
+        gemma4_collect(arena, node, [](const common_peg_ast_node & n) { return n.tag == gemma4::DICT_KV; }, members);
 
-    if (node.rule == "gemma4-dict") {
         std::string result = "{";
-
-        bool add_comma = false;
-        for (auto child_id : node.children) {
-            if (add_comma) {
+        for (size_t i = 0; i < members.size(); i++) {
+            if (i > 0) {
                 result += ',';
             }
-            add_comma = true;
-            result += gemma4_to_json(arena, child_id);
+            result += gemma4_to_json(arena, members[i]);
         }
-
         if (!node.is_partial) {
             result += '}';
         }
         return result;
     }
 
-    if (node.rule == "gemma4-value") {
-        if (!node.children.empty()) {
-            return gemma4_to_json(arena, node.children[0]);
-        }
-        return "";
+    // members, rules and other wrappers
+    std::string result;
+    for (auto child_id : node.children) {
+        result += gemma4_to_json(arena, child_id);
     }
-
-    return "";
+    return result;
 }
 
 void common_chat_peg_gemma4_mapper::visit(const common_peg_ast_arena & arena, common_peg_ast_id id) {

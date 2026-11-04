@@ -1,5 +1,242 @@
 #include "parsers.h"
 
+#include "log.h"
+
+#include <algorithm>
+#include <cctype>
+#include <map>
+#include <optional>
+
+namespace {
+
+using gemma4 = common_chat_peg_gemma4_mapper;
+
+// Parsers for a tool's arguments in the Gemma 4 call syntax, shaped by the parameter schema
+// rather than converted from it. Keys are accepted in alphabetical order, since the template
+// renders arguments through dictsort, optional keys are skipped in place instead of being moved
+// to the end, and values are typed by the schema. Patterns, formats, lengths, numeric bounds and
+// item counts are not enforced. The grammar is derived from these parsers like any other.
+class gemma4_schema_parser {
+    common_chat_peg_builder & p_;
+
+    std::map<const common_chat_schema *, std::string> refs_;
+
+  public:
+    explicit gemma4_schema_parser(common_chat_peg_builder & p) : p_(p) {}
+
+    common_peg_parser visit(const common_chat_schema & node, const std::string & name) {
+        switch (node.kind()) {
+            case common_chat_schema::KIND_ANY:     return p_.ref("gemma4-value");
+            case common_chat_schema::KIND_NULL:    return p_.ref("gemma4-null");
+            case common_chat_schema::KIND_BOOLEAN: return p_.ref("gemma4-bool");
+            case common_chat_schema::KIND_NUMBER:  return p_.ref("gemma4-number");
+            case common_chat_schema::KIND_STRING:  return p_.ref("gemma4-string");
+            case common_chat_schema::KIND_INTEGER: return integer();
+            case common_chat_schema::KIND_REF:     return visit_ref(static_cast<const common_chat_schema_ref &>(node), name);
+            case common_chat_schema::KIND_ANY_OF:  return visit_any_of(static_cast<const common_chat_schema_any_of &>(node), name);
+            case common_chat_schema::KIND_ALL_OF:  return visit_all_of(static_cast<const common_chat_schema_all_of &>(node), name);
+            case common_chat_schema::KIND_CONST:   return visit_const(static_cast<const common_chat_schema_const &>(node));
+            case common_chat_schema::KIND_ENUM:    return visit_enum(static_cast<const common_chat_schema_enum &>(node), name);
+            case common_chat_schema::KIND_ARRAY:   return visit_array(static_cast<const common_chat_schema_array &>(node), name);
+            case common_chat_schema::KIND_TUPLE:   return visit_tuple(static_cast<const common_chat_schema_tuple &>(node), name);
+            case common_chat_schema::KIND_OBJECT:  return visit_object(static_cast<const common_chat_schema_object &>(node), name);
+        }
+        return p_.ref("gemma4-value");
+    }
+
+  private:
+    common_peg_parser integer() {
+        return p_.rule("gemma4-integer", [&]() {
+            return p_.tag(gemma4::NUMBER,
+                p_.optional(p_.literal("-")) + (p_.literal("0") | (p_.chars("[1-9]", 1, 1) + p_.chars("[0-9]", 0, -1))));
+        });
+    }
+
+    // A fixed value, written as the template writes it: strings between <|"|> tokens, the
+    // rest as JSON. Fixed containers are left to the generic value parser.
+    std::optional<common_peg_parser> fixed(const common_json & value) {
+        if (value.is_string()) {
+            return p_.tag(gemma4::STRING,
+                p_.literal("<|\"|>") + p_.tag(gemma4::STRING_CONTENT, p_.literal(value.get<std::string>())) + p_.literal("<|\"|>"));
+        }
+        if (value.is_number()) {
+            return p_.tag(gemma4::NUMBER, p_.literal(value.dump()));
+        }
+        if (value.is_boolean()) {
+            return p_.tag(gemma4::BOOL, p_.literal(value.dump()));
+        }
+        if (value.is_null()) {
+            return p_.tag(gemma4::NULL_, p_.literal("null"));
+        }
+        return std::nullopt;
+    }
+
+    // The template writes keys bare. Models keep that for identifiers and quote anything else,
+    // with single or double quotes or the string delimiter, so those are accepted as well.
+    common_peg_parser key(const std::string & key) {
+        auto name = [&]() { return p_.tag(gemma4::DICT_KEY_NAME, p_.literal(key)); };
+
+        bool identifier = !key.empty() && !std::isdigit(static_cast<unsigned char>(key[0]));
+        for (char c : key) {
+            if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_') {
+                identifier = false;
+            }
+        }
+        if (identifier) {
+            return p_.tag(gemma4::DICT_KEY, name() + p_.literal(":"));
+        }
+
+        auto alts = p_.choice();
+        if (!key.empty() && key.find_first_of(":}") == std::string::npos && std::string("'\"<").find(key[0]) == std::string::npos) {
+            alts |= name();
+        }
+        alts |= p_.literal("<|\"|>") + name() + p_.literal("<|\"|>");
+        if (key.find('\'') == std::string::npos) {
+            alts |= p_.literal("'") + name() + p_.literal("'");
+        }
+        if (key.find('"') == std::string::npos) {
+            alts |= p_.literal("\"") + name() + p_.literal("\"");
+        }
+        return p_.tag(gemma4::DICT_KEY, alts + p_.literal(":"));
+    }
+
+    common_peg_parser visit_ref(const common_chat_schema_ref & ref, const std::string & name) {
+        if (!ref.target) {
+            return p_.ref("gemma4-value");
+        }
+        auto it = refs_.find(ref.target);
+        if (it != refs_.end()) {
+            return p_.ref(it->second);
+        }
+        refs_[ref.target] = gbnf_format_rule_name(name);
+        return p_.rule(name, [&]() { return visit(*ref.target, name + "-value"); });
+    }
+
+    common_peg_parser visit_any_of(const common_chat_schema_any_of & node, const std::string & name) {
+        if (node.children.empty()) {
+            return p_.ref("gemma4-value");
+        }
+        if (node.children.size() == 1) {
+            return visit(*node.children[0], name);
+        }
+        auto alts = p_.choice();
+        for (size_t i = 0; i < node.children.size(); i++) {
+            alts |= visit(*node.children[i], name + "-" + std::to_string(i));
+        }
+        return p_.rule(name, alts);
+    }
+
+    common_peg_parser visit_all_of(const common_chat_schema_all_of & node, const std::string & name) {
+        if (node.children.size() == 1) {
+            return visit(*node.children[0], name);
+        }
+        return p_.ref("gemma4-value");
+    }
+
+    common_peg_parser visit_const(const common_chat_schema_const & node) {
+        if (auto value = fixed(node.value)) {
+            return *value;
+        }
+        return p_.ref("gemma4-value");
+    }
+
+    common_peg_parser visit_enum(const common_chat_schema_enum & node, const std::string & name) {
+        if (node.values.empty()) {
+            return p_.ref("gemma4-value");
+        }
+        auto alts = p_.choice();
+        for (const auto & value : node.values) {
+            auto parser = fixed(value);
+            if (!parser) {
+                return p_.ref("gemma4-value");
+            }
+            alts |= *parser;
+        }
+        return p_.rule(name, alts);
+    }
+
+    common_peg_parser visit_array(const common_chat_schema_array & node, const std::string & name) {
+        auto ws       = p_.space();
+        auto item     = node.items ? visit(*node.items, name + "-item") : p_.ref("gemma4-value");
+        auto elements = item + p_.zero_or_more(p_.literal(",") + ws + item);
+        return p_.rule(name, p_.tag(gemma4::ARRAY,
+            p_.literal("[") + ws + (p_.literal("]") | (elements + ws + p_.literal("]")))));
+    }
+
+    common_peg_parser visit_tuple(const common_chat_schema_tuple & node, const std::string & name) {
+        auto ws    = p_.space();
+        auto items = p_.sequence();
+        for (size_t i = 0; i < node.items.size(); i++) {
+            if (i > 0) {
+                items = items + p_.literal(",") + ws;
+            }
+            items = items + visit(*node.items[i], name + "-" + std::to_string(i));
+        }
+        return p_.rule(name, p_.tag(gemma4::ARRAY, p_.literal("[") + ws + items + ws + p_.literal("]")));
+    }
+
+    common_peg_parser visit_object(const common_chat_schema_object & node, const std::string & name) {
+        auto ws = p_.space();
+
+        std::vector<const common_chat_schema_property *> props;
+        for (const auto & prop : node.properties) {
+            props.push_back(&prop);
+        }
+        // jinja's dictsort compares keys case-insensitively
+        auto lower = [](const std::string & s) {
+            std::string out = s;
+            for (auto & c : out) {
+                c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            }
+            return out;
+        };
+        std::stable_sort(props.begin(), props.end(), [&](const auto * a, const auto * b) {
+            return lower(a->name) < lower(b->name);
+        });
+
+        if (props.empty()) {
+            if (node.additional_properties) {
+                return p_.ref("gemma4-dict");
+            }
+            return p_.rule(name, p_.tag(gemma4::DICT, p_.literal("{") + ws + p_.literal("}")));
+        }
+
+        // Members are chained from the back. rest(i) accepts members i.. after a member was
+        // already written, so each one carries its comma, and first(i) accepts members i..
+        // when nothing was written yet. Optional members are skipped in place.
+        std::optional<common_peg_parser> rest;
+        std::optional<common_peg_parser> first;
+        if (node.additional_properties) {
+            auto kv = p_.ref("gemma4-dict-kv");
+            rest    = p_.zero_or_more(p_.literal(",") + ws + kv);
+            first   = p_.optional(kv + *rest);
+        }
+
+        auto then_rest = [&](const common_peg_parser & parser) { return rest ? parser + *rest : parser; };
+
+        for (size_t i = props.size(); i-- > 0;) {
+            const auto & prop = *props[i];
+            auto kv = p_.tag(gemma4::DICT_KV, key(prop.name) + ws + visit(*prop.schema, name + "-" + std::to_string(i)));
+
+            common_peg_parser rest_i  = then_rest(p_.literal(",") + ws + kv);
+            common_peg_parser first_i = then_rest(kv);
+            if (!prop.required) {
+                rest_i  = then_rest(p_.optional(p_.literal(",") + ws + kv));
+                first_i = first ? (first_i | *first) : p_.optional(first_i);
+            }
+
+            if (i > 0) {
+                rest = p_.rule(name + "-rest-" + std::to_string(i), rest_i);
+            }
+            first = first_i;
+        }
+
+        return p_.rule(name, p_.tag(gemma4::DICT, p_.literal("{") + ws + *first + ws + p_.literal("}")));
+    }
+};
+
+}  // namespace
+
 namespace workaround {
 
 // Gemma4 uses a custom tool_responses field instead of role:tool messages.
@@ -219,31 +456,38 @@ common_chat_params common_chat_params_init_gemma4(const common_chat_template &  
 
         if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
             // Gemma4 tool calling syntax
-            // Rules should match traversal logic in gemma4_to_json()
-            p.rule("gemma4-string-content", p.until("<|\"|>"));
-            p.rule("gemma4-string", p.literal("<|\"|>") + p.ref("gemma4-string-content") + p.literal("<|\"|>"));
-            p.rule("gemma4-bool", p.json_bool());
-            p.rule("gemma4-null", p.json_null());
-            p.rule("gemma4-number", p.json_number());
-            p.rule("gemma4-dict-key", p.rule("gemma4-dict-key-name", p.chars("[^:}]", 1, -1)) + p.literal(":"));
-            p.rule("gemma4-dict-kv", p.ref("gemma4-dict-key") + p.space() + p.ref("gemma4-value"));
+            // The tags are what gemma4_to_json() in the mapper reads, the rules may wrap them freely.
+            p.rule("gemma4-string", p.tag(gemma4::STRING,
+                p.literal("<|\"|>") + p.tag(gemma4::STRING_CONTENT, p.until("<|\"|>")) + p.literal("<|\"|>")));
+            p.rule("gemma4-bool", p.tag(gemma4::BOOL, p.json_bool()));
+            p.rule("gemma4-null", p.tag(gemma4::NULL_, p.json_null()));
+            p.rule("gemma4-number", p.tag(gemma4::NUMBER, p.json_number()));
+            // Keys are bare in the template, but models quote keys that are not identifiers
+            // with single or double quotes or the string delimiter.
+            p.rule("gemma4-dict-key", p.tag(gemma4::DICT_KEY, p.choice({
+                p.literal("<|\"|>") + p.tag(gemma4::DICT_KEY_NAME, p.until("<|\"|>")) + p.literal("<|\"|>"),
+                p.literal("\"") + p.tag(gemma4::DICT_KEY_NAME, p.chars("[^\"]", 1, -1)) + p.literal("\""),
+                p.literal("'") + p.tag(gemma4::DICT_KEY_NAME, p.chars("[^']", 1, -1)) + p.literal("'"),
+                p.tag(gemma4::DICT_KEY_NAME, p.chars("[^:}]", 1, -1)),
+            }) + p.literal(":")));
+            p.rule("gemma4-dict-kv", p.tag(gemma4::DICT_KV, p.ref("gemma4-dict-key") + p.space() + p.ref("gemma4-value")));
             p.rule("gemma4-dict", [&]() {
                 auto ws = p.space();
                 auto member = p.ref("gemma4-dict-kv");
                 auto members = p.sequence({member, p.zero_or_more(p.sequence({p.literal(","), ws, member}))});
-                return p.sequence({
+                return p.tag(gemma4::DICT, p.sequence({
                     p.literal("{"), ws,
                     p.choice({p.literal("}"), p.sequence({members, ws, p.literal("}")})})
-                });
+                }));
             });
             p.rule("gemma4-array", [&]() {
                 auto ws = p.space();
                 auto value = p.ref("gemma4-value");
                 auto elements = p.sequence({value, p.zero_or_more(p.sequence({p.literal(","), ws, value}))});
-                return p.sequence({
+                return p.tag(gemma4::ARRAY, p.sequence({
                     p.literal("["), ws,
                     p.choice({p.literal("]"), p.sequence({elements, ws, p.literal("]")})})
-                });
+                }));
             });
             p.rule("gemma4-value", [&]() {
                 return p.choice({
@@ -257,12 +501,22 @@ common_chat_params common_chat_params_init_gemma4(const common_chat_template &  
             foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
                 const auto & function = tool.at("function");
                 std::string  name     = function.at("name");
-                // TODO @aldehir : need to extend json-schema-to-grammar to produce more than JSON rules
-                // const auto & params   = function.at("parameters");
+
+                // Arguments follow the shape of the parameter schema when it is an object,
+                // see gemma4_schema_parser, and are a generic dict otherwise.
+                auto args = p.ref("gemma4-dict");
+                try {
+                    auto doc = common_chat_schema_from_json(common_chat_tool_parameters(function));
+                    if (dynamic_cast<const common_chat_schema_object *>(doc.root.get())) {
+                        args = gemma4_schema_parser(p).visit(*doc.root, "tool-" + std::to_string(tool_index) + "-args");
+                    }
+                } catch (const std::exception & e) {
+                    LOG_WRN("%s: tool %s uses the generic argument parser: %s\n", __func__, name.c_str(), e.what());
+                }
 
                 tool_choice |= p.rule("tool-" + std::to_string(tool_index), p.tool(p.sequence({
                     p.tool_open(p.tool_name(p.literal(name)) + p.peek(p.literal("{"))),
-                    p.tool_args(p.ref("gemma4-dict")),
+                    p.tool_args(args),
                 })));
             });
 
