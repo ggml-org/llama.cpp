@@ -33,13 +33,14 @@ static inline void vec_binary_op_contiguous(const int64_t n, dst_t * z, const sr
     }
 }
 
+// computes the elements i0 .. i0 + n - 1 of the row
 template <float (*op)(float, float), typename src0_t, typename src1_t, typename dst_t>
-static inline void vec_binary_op_non_contiguous(const int64_t n, const int64_t ne10, const int64_t nb10, dst_t * z, const src0_t * x, const src1_t * y) {
+static inline void vec_binary_op_non_contiguous(const int64_t i0, const int64_t n, const int64_t ne10, const int64_t nb10, dst_t * z, const src0_t * x, const src1_t * y) {
     constexpr auto src0_to_f32 = type_conversion_table<src0_t>::to_f32;
     constexpr auto src1_to_f32 = type_conversion_table<src1_t>::to_f32;
     constexpr auto f32_to_dst  = type_conversion_table<dst_t >::from_f32;
 
-    for (int i = 0; i < n; i++) {
+    for (int64_t i = i0; i < i0 + n; i++) {
         int i10 = i % ne10;
         const src1_t * y_ptr = (const src1_t *)((const char *)y + i10*nb10);
         z[i] = f32_to_dst(op(src0_to_f32(x[i]), src1_to_f32(*y_ptr)));
@@ -58,7 +59,7 @@ static void apply_binary_op(const ggml_compute_params * params, ggml_tensor * ds
     GGML_ASSERT( nb0 == sizeof(dst_t));
     GGML_ASSERT(nb00 == sizeof(src0_t));
 
-    const auto [ir0, ir1] = get_thread_range(params, src0);
+    const auto [ir0, ir1, ic0, ic1] = get_thread_range_rc(params, ggml_nrows(src0), ne0);
     const bool is_src1_contiguous_rows = ggml_is_contiguous_rows(src1);
 
 #ifdef GGML_USE_ACCELERATE
@@ -92,21 +93,22 @@ static void apply_binary_op(const ggml_compute_params * params, ggml_tensor * ds
 
         if (is_src1_contiguous_rows) {
             // src1 is broadcastable across src0 and dst in i1, i2, i3
-            const int64_t nr0 = ne00 / ne10;
-
-            for (int64_t r = 0; r < nr0; ++r) {
+            for (int64_t i0 = ic0, i10 = ic0 % ne10; i0 < ic1; i10 = 0) {
+                const int64_t n = MIN(ne10 - i10, ic1 - i0);
 #ifdef GGML_USE_ACCELERATE
                 if constexpr (std::is_same_v<src0_t, float> && std::is_same_v<src1_t, float> && std::is_same_v<dst_t, float>) {
                     if (vDSP_op != nullptr) {
-                        vDSP_op(src1_ptr, 1, src0_ptr + r*ne10, 1, dst_ptr + r*ne10, 1, ne10);
+                        vDSP_op(src1_ptr + i10, 1, src0_ptr + i0, 1, dst_ptr + i0, 1, n);
+                        i0 += n;
                         continue;
                     }
                 }
 #endif
-                vec_binary_op_contiguous<op>(ne10, dst_ptr + r*ne10, src0_ptr + r*ne10, src1_ptr);
+                vec_binary_op_contiguous<op>(n, dst_ptr + i0, src0_ptr + i0, src1_ptr + i10);
+                i0 += n;
             }
         } else {
-            vec_binary_op_non_contiguous<op>(ne0, ne10, nb10, dst_ptr, src0_ptr, src1_ptr);
+            vec_binary_op_non_contiguous<op>(ic0, ic1 - ic0, ne10, nb10, dst_ptr, src0_ptr, src1_ptr);
         }
     }
 }

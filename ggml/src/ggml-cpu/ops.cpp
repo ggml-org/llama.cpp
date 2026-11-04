@@ -2055,24 +2055,26 @@ static void ggml_compute_forward_concat_f32(
     int64_t o[4] = {0, 0, 0, 0};
     o[dim] = src0->ne[dim];
 
-    const float * x;
+    const int64_t nr = ne1*ne2*ne3;
+    const int64_t dr = (nr + nth - 1)/nth;
+    const int64_t ir0 = dr*ith;
+    const int64_t ir1 = MIN(ir0 + dr, nr);
 
-    // TODO: smarter multi-theading
-    for (int i3 = 0; i3 < ne3; i3++) {
-        for (int i2 = ith; i2 < ne2; i2 += nth) {
-            for (int i1 = 0; i1 < ne1; i1++) {
-                for (int i0 = 0; i0 < ne0; i0++) {
-                    if (i0 < ne00 && i1 < ne01 && i2 < ne02 && i3 < ne03) {
-                        x = (const float *) ((const char *)src0->data + (i0       )*nb00 + (i1       )*nb01 + (i2       )*nb02 + (i3       )*nb03);
-                    } else {
-                        x = (const float *) ((const char *)src1->data + (i0 - o[0])*nb10 + (i1 - o[1])*nb11 + (i2 - o[2])*nb12 + (i3 - o[3])*nb13);
-                    }
+    for (int64_t ir = ir0; ir < ir1; ++ir) {
+        const int64_t i3 = ir/(ne2*ne1);
+        const int64_t i2 = (ir - i3*ne2*ne1)/ne1;
+        const int64_t i1 = (ir - i3*ne2*ne1 - i2*ne1);
 
-                    float * y = (float *)((char *)dst->data + i0*nb0 + i1*nb1 + i2*nb2 + i3*nb3);
+        char * y = (char *) dst->data + i1*nb1 + i2*nb2 + i3*nb3;
 
-                    *y = *x;
-                }
-            }
+        // the first ne00 elements of the rows inside src0 come from src0, the rest from src1
+        const int64_t n0 = (i1 < ne01 && i2 < ne02 && i3 < ne03) ? ne00 : 0;
+
+        for (int64_t i0 = 0; i0 < n0; i0++) {
+            *(float *) (y + i0*nb0) = *(const float *) ((const char *) src0->data + i0*nb00 + i1*nb01 + i2*nb02 + i3*nb03);
+        }
+        for (int64_t i0 = n0; i0 < ne0; i0++) {
+            *(float *) (y + i0*nb0) = *(const float *) ((const char *) src1->data + (i0 - o[0])*nb10 + (i1 - o[1])*nb11 + (i2 - o[2])*nb12 + (i3 - o[3])*nb13);
         }
     }
 }
@@ -2660,30 +2662,19 @@ static void ggml_compute_forward_silu_f32(
     GGML_TENSOR_LOCALS(int64_t, ne,  dst,  ne)
     GGML_TENSOR_LOCALS(size_t,  nb,  dst,  nb)
 
-    const int ith = params->ith;
-    const int nth = params->nth;
+    const auto [ir0, ir1, ic0, ic1] = get_thread_range_rc(params, ggml_nrows(src0), src0->ne[0]);
 
-    const int nc = src0->ne[0];
-    const int nr = ggml_nrows(src0);
+    for (int64_t ir = ir0; ir < ir1; ++ir) {
+        const int64_t i3 = ir/(ne02*ne01);
+        const int64_t i2 = (ir - i3*ne02*ne01)/ne01;
+        const int64_t i1 = (ir - i3*ne02*ne01 - i2*ne01);
 
-    // rows per thread
-    const int dr = (nr + nth - 1)/nth;
-
-    // row range for this thread
-    const int ir0 = dr*ith;
-    const int ir1 = MIN(ir0 + dr, nr);
-
-    for (int ir = ir0; ir < ir1; ++ir) {
-        const int i3 = ir/(ne02*ne01);
-        const int i2 = (ir - i3*ne02*ne01)/ne01;
-        const int i1 = (ir - i3*ne02*ne01 - i2*ne01);
-
-        ggml_vec_silu_f32(nc,
-                (float *) ((char *) dst->data  + i3*nb3  + i2*nb2  + i1*nb1),
-                (float *) ((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01));
+        ggml_vec_silu_f32(ic1 - ic0,
+                (float *) ((char *) dst->data  + i3*nb3  + i2*nb2  + i1*nb1) + ic0,
+                (float *) ((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01) + ic0);
 
 #ifndef NDEBUG
-        for (int k = 0; k < nc; k++) {
+        for (int64_t k = ic0; k < ic1; k++) {
             const float x = ((float *) ((char *) dst->data + i3*nb3 + i2*nb2 + i1*(dst->nb[1])))[k];
             GGML_UNUSED(x);
             assert(!isnan(x));
@@ -4964,37 +4955,27 @@ static void ggml_compute_forward_scale_f32(
     memcpy(&s, (float *) dst->op_params + 0, sizeof(float));
     memcpy(&b, (float *) dst->op_params + 1, sizeof(float));
 
-    const int ith = params->ith;
-    const int nth = params->nth;
-
-    const int nc = src0->ne[0];
-    const int nr = ggml_nrows(src0);
-
-    // rows per thread
-    const int dr = (nr + nth - 1)/nth;
-
-    // row range for this thread
-    const int ir0 = dr*ith;
-    const int ir1 = MIN(ir0 + dr, nr);
+    // ggml_vec_mad1_f32 uses FMA in blocks of GGML_F32_STEP (up to 64) and a scalar tail
+    const auto [ir0, ir1, ic0, ic1] = get_thread_range_rc(params, ggml_nrows(src0), src0->ne[0], 64);
 
     const size_t nb01 = src0->nb[1];
 
     const size_t nb1 = dst->nb[1];
 
     if (b == 0.0f) {
-        for (int i1 = ir0; i1 < ir1; i1++) {
+        for (int64_t i1 = ir0; i1 < ir1; i1++) {
             if (dst->data != src0->data) {
                 // src0 is same shape as dst => same indices
                 // TODO: add x parameter to ggml_vec_scale_f32 and remove this memcpy
-                memcpy((char *)dst->data + i1*nb1, (char *)src0->data + i1*nb01, nc * sizeof(float));
+                memcpy((float *) ((char *) dst->data + i1*nb1) + ic0, (float *) ((char *) src0->data + i1*nb01) + ic0, (ic1 - ic0) * sizeof(float));
             }
-            ggml_vec_scale_f32(nc, (float *) ((char *) dst->data + i1*nb1), s);
+            ggml_vec_scale_f32(ic1 - ic0, (float *) ((char *) dst->data + i1*nb1) + ic0, s);
         }
     } else {
-        for (int i1 = ir0; i1 < ir1; i1++) {
-            ggml_vec_mad1_f32(nc,
-                (float *) ((char *) dst->data  + i1*nb1),
-                (float *) ((char *) src0->data + i1*nb1),
+        for (int64_t i1 = ir0; i1 < ir1; i1++) {
+            ggml_vec_mad1_f32(ic1 - ic0,
+                (float *) ((char *) dst->data  + i1*nb1) + ic0,
+                (float *) ((char *) src0->data + i1*nb1) + ic0,
                 s, b);
         }
     }
@@ -5415,15 +5396,7 @@ static void ggml_compute_forward_get_rows_f32(
     assert(nb00 == sizeof(float));
     assert(ggml_nrows(dst) == nr);
 
-    const int ith = params->ith;
-    const int nth = params->nth;
-
-    // rows per thread
-    const int dr = (nr + nth - 1)/nth;
-
-    // row range for this thread
-    const int ir0 = dr*ith;
-    const int ir1 = MIN(ir0 + dr, nr);
+    const auto [ir0, ir1, ic0, ic1] = get_thread_range_rc(params, nr, nc);
 
     for (int64_t i = ir0; i < ir1; ++i) {
         const int64_t i12 = i/(ne11*ne10);
@@ -5433,9 +5406,8 @@ static void ggml_compute_forward_get_rows_f32(
 
         GGML_ASSERT(i01 >= 0 && i01 < ne01);
 
-        ggml_vec_cpy_f32(nc,
-                (float *) ((char *)  dst->data + i10*nb1  + i11*nb2  + i12*nb3),
-                (float *) ((char *) src0->data + i01*nb01 + i11*nb02 + i12*nb03));
+        memcpy((float *) ((char *)  dst->data + i10*nb1  + i11*nb2  + i12*nb3) + ic0,
+               (float *) ((char *) src0->data + i01*nb01 + i11*nb02 + i12*nb03) + ic0, (ic1 - ic0)*sizeof(float));
     }
 }
 

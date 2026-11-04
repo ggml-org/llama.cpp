@@ -118,7 +118,7 @@ static void apply_unary_op(const ggml_compute_params * params, ggml_tensor * dst
     GGML_ASSERT( nb0 == sizeof(dst_t));
     GGML_ASSERT(nb00 == sizeof(src0_t));
 
-    const auto [ir0, ir1] = get_thread_range(params, src0);
+    const auto [ir0, ir1, ic0, ic1] = get_thread_range_rc(params, ggml_nrows(src0), ne0);
 
     for (int64_t ir = ir0; ir < ir1; ++ir) {
         const int64_t i03 = ir/(ne02*ne01);
@@ -128,7 +128,7 @@ static void apply_unary_op(const ggml_compute_params * params, ggml_tensor * dst
         dst_t        * dst_ptr  = (dst_t  *)       ((char *)       dst->data  + i03*nb3  + i02*nb2  + i01*nb1 );
         const src0_t * src0_ptr = (const src0_t *) ((const char *) src0->data + i03*nb03 + i02*nb02 + i01*nb01);
 
-        vec_unary_op<op>(ne0, dst_ptr, src0_ptr);
+        vec_unary_op<op>(ic1 - ic0, dst_ptr + ic0, src0_ptr + ic0);
     }
 }
 

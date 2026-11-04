@@ -87,6 +87,28 @@ static std::pair<int64_t, int64_t> get_thread_range(const struct ggml_compute_pa
     return {ir0, ir1};
 }
 
+struct ggml_thread_range_rc {
+    int64_t ir0, ir1; // rows
+    int64_t ic0, ic1; // columns
+};
+
+// split rows across threads; with fewer rows than threads, split each row into blocks of blck columns instead
+// (blck must be a multiple of the SIMD step of the vec function so that its body and scalar tail see the same elements)
+static ggml_thread_range_rc get_thread_range_rc(const struct ggml_compute_params * params, int64_t nr, int64_t nc, int64_t blck = 16) {
+    const int64_t ith = params->ith;
+    const int64_t nth = params->nth;
+
+    if (nr >= nth) {
+        const int64_t dr  = (nr + nth - 1)/nth;
+        const int64_t ir0 = MIN(dr*ith, nr);
+        return {ir0, MIN(ir0 + dr, nr), 0, nc};
+    }
+
+    const int64_t dc  = ((nc + nth - 1)/nth + blck - 1)/blck*blck;
+    const int64_t ic0 = MIN(dc*ith, nc);
+    return {0, nr, ic0, MIN(ic0 + dc, nc)};
+}
+
 struct ggml_fa_tile_config {
     static constexpr size_t Q  = GGML_FA_TILE_Q;
     static constexpr size_t KV = GGML_FA_TILE_KV;
