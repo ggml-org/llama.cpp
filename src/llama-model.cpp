@@ -2850,6 +2850,36 @@ const ggml_tensor * llama_model::get_tensor(const char * name) const {
     return it->second;
 }
 
+llama_rope_params llama_model::get_rope_params(const llama_cparams & cparams, int il) const {
+    llama_rope_params res;
+
+    res.n_rot       = hparams.has_rope(il) ? hparams.n_rot(il) : 0;
+    res.n_offs      = hparams.n_lora_kv > 0 ? hparams.n_embd_head_k(il) - hparams.n_rot(il) : 0;
+    res.type        = hparams.rope_type;
+    res.n_ctx_orig  = cparams.n_ctx_orig_yarn;
+    res.freq_base   = get_rope_freq_base (cparams, il);
+    res.freq_scale  = get_rope_freq_scale(cparams, il);
+    res.ext_factor  = cparams.yarn_ext_factor;
+    res.attn_factor = cparams.yarn_attn_factor;
+    res.beta_fast   = cparams.yarn_beta_fast;
+    res.beta_slow   = cparams.yarn_beta_slow;
+    res.factors     = get_rope_factors(cparams, il);
+
+    return res;
+}
+
+llama_rope_params llama_model::get_rope_params_indexer(const llama_cparams & cparams, int il) const {
+    llama_rope_params res = get_rope_params(cparams, il);
+
+    res.n_offs     = 0;
+    res.type       = LLAMA_ROPE_TYPE_NEOX;
+    res.freq_base  = cparams.rope_freq_base;
+    res.freq_scale = cparams.rope_freq_scale;
+    res.factors    = nullptr;
+
+    return res;
+}
+
 float llama_model::get_rope_freq_base (const llama_cparams & cparams, int il) const {
     return hparams.is_swa(il) ? hparams.rope_freq_base_train_swa : cparams.rope_freq_base;
 }

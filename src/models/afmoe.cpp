@@ -130,14 +130,8 @@ llama_model_afmoe::graph::graph(const llama_model & model, const llm_graph_param
     const float kq_scale = 1.0f/sqrtf(float(n_embd_head));
 
     for (int il = 0; il < n_layer; ++il) {
-        const float freq_base_l  = model.get_rope_freq_base (cparams, il);
-        const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
 
         ggml_tensor * inpSA = inpL;
-
-        // This overlaps with SWA layers in current models, so get_rope_freq_base/scale may be superfluous
-        const bool use_rope = hparams.n_no_rope_layer_step > 0 &&
-                              (il + 1) % hparams.n_no_rope_layer_step != 0;
 
         // dual attention normalization (pre)
         cur = build_norm(inpL,
@@ -162,19 +156,11 @@ llama_model_afmoe::graph::graph(const llama_model & model, const llm_graph_param
             cb(Qcur, "Qcur_normed", il);
             cb(Kcur, "Kcur_normed", il);
 
-            if (use_rope) {
-                Qcur = ggml_rope_ext(
-                        ctx0, Qcur, inp_pos, nullptr,
-                        n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                        ext_factor, attn_factor, beta_fast, beta_slow);
-                cb(Qcur, "Qcur_rope", il);
+            Qcur = build_rope(Qcur, inp_pos, il);
+            cb(Qcur, "Qcur_rope", il);
 
-                Kcur = ggml_rope_ext(
-                        ctx0, Kcur, inp_pos, nullptr,
-                        n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                        ext_factor, attn_factor, beta_fast, beta_slow);
-                cb(Kcur, "Kcur_rope", il);
-            }
+            Kcur = build_rope(Kcur, inp_pos, il);
+            cb(Kcur, "Kcur_rope", il);
 
             cur = build_attn(inp_attn,
                     NULL, NULL, NULL,  // wo will be applied after gating

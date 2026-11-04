@@ -138,8 +138,6 @@ llama_model_llama4::graph<iswa>::graph(const llama_model & model, const llm_grap
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     for (int il = 0; il < n_layer; ++il) {
-        const float freq_base_l  = model.get_rope_freq_base (cparams, il);
-        const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
 
         ggml_tensor * inpSA = inpL;
 
@@ -155,25 +153,13 @@ llama_model_llama4::graph<iswa>::graph(const llama_model & model, const llm_grap
 
         // self-attention
         {
-            // rope freq factors for llama3; may return nullptr for llama2 and other models
-            ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
-
             // compute Q and K and RoPE them
             auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
                     n_embd_head, n_head, n_head_kv, il);
 
             if (use_rope) {
-                Qcur = ggml_rope_ext(
-                        ctx0, Qcur, inp_pos, rope_factors,
-                        n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                        ext_factor, attn_factor, beta_fast, beta_slow
-                        );
-
-                Kcur = ggml_rope_ext(
-                        ctx0, Kcur, inp_pos, rope_factors,
-                        n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                        ext_factor, attn_factor, beta_fast, beta_slow
-                        );
+                Qcur = build_rope(Qcur, inp_pos, il);
+                Kcur = build_rope(Kcur, inp_pos, il);
             } else if (inp_attn_scale) {
                 Qcur = ggml_mul(ctx0, Qcur, inp_attn_scale);
             }

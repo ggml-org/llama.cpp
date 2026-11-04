@@ -1564,6 +1564,7 @@ void llm_graph_result::set_params(const llm_graph_params & params) {
 //
 
 llm_graph_context::llm_graph_context(const llm_graph_params & params) :
+    model            (*params.model),
     arch             (params.arch),
     hparams          (params.hparams),
     cparams          (params.cparams),
@@ -1656,6 +1657,37 @@ ggml_tensor * llm_graph_context::build_hadamard_input(
     x = llama_mul_mat_hadamard(ctx0, x, t.rot);
     res->set_hdmd_input(cur, t.rot, x);
     return x;
+}
+
+static ggml_tensor * build_rope_impl(ggml_context * ctx, ggml_tensor * cur, ggml_tensor * pos, const llama_hparams & hparams, const llama_rope_params & rp) {
+    if (rp.n_rot == 0) {
+        return cur;
+    }
+
+    if (rp.type & GGML_ROPE_TYPE_MROPE) {
+        int sections[GGML_MROPE_SECTIONS];
+        std::copy(hparams.rope_sections.begin(), hparams.rope_sections.end(), sections);
+
+        return ggml_rope_multi(ctx, cur, pos, rp.factors,
+                rp.n_rot, sections, rp.type, rp.n_ctx_orig, rp.freq_base, rp.freq_scale,
+                rp.ext_factor, rp.attn_factor, rp.beta_fast, rp.beta_slow);
+    }
+
+    return ggml_rope_ext(ctx, cur, pos, rp.factors,
+            rp.n_rot, rp.type, rp.n_ctx_orig, rp.freq_base, rp.freq_scale,
+            rp.ext_factor, rp.attn_factor, rp.beta_fast, rp.beta_slow);
+}
+
+ggml_tensor * llm_graph_context::build_rope(ggml_tensor * cur, ggml_tensor * pos, int il) const {
+    return build_rope_impl(ctx0, cur, pos, hparams, model.get_rope_params(cparams, il));
+}
+
+ggml_tensor * llm_graph_context::build_rope_indexer(ggml_tensor * cur, ggml_tensor * pos, int il) const {
+    const llama_rope_params rp = model.get_rope_params_indexer(cparams, il);
+
+    ggml_tensor * res = build_rope_impl(ctx0, cur, pos, hparams, rp);
+
+    return rp.n_rot > 0 && rp.n_offs > 0 ? ggml_rope_set_offset(res, rp.n_offs) : res;
 }
 
 ggml_tensor * llm_graph_context::build_lora_mm(

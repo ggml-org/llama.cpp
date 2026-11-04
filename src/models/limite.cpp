@@ -69,6 +69,16 @@ void llama_model_limite::load_arch_tensors(llama_model_loader &) {
     }
 }
 
+llama_rope_params llama_model_limite::get_rope_params(const llama_cparams & cparams, int il) const {
+    auto res = llama_model::get_rope_params(cparams, il);
+
+    // the SWA layers use the global base and scale
+    res.freq_base  = cparams.rope_freq_base;
+    res.freq_scale = cparams.rope_freq_scale;
+
+    return res;
+}
+
 std::unique_ptr<llm_graph_context> llama_model_limite::build_arch_graph(const llm_graph_params & params) const {
     return std::make_unique<graph>(*this, params);
 }
@@ -161,14 +171,10 @@ llama_model_limite::graph::graph(const llama_model & model, const llm_graph_para
             cb(Kcur, "Kcur_normed", il);
 
             // the full attention layers use no positional encoding
-            if (hparams.is_swa(il)) {
-                Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                                     ext_factor, attn_factor, beta_fast, beta_slow);
-                Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                                     ext_factor, attn_factor, beta_fast, beta_slow);
-                cb(Qcur, "Qcur", il);
-                cb(Kcur, "Kcur", il);
-            }
+            Qcur = build_rope(Qcur, inp_pos, il);
+            Kcur = build_rope(Kcur, inp_pos, il);
+            cb(Qcur, "Qcur", il);
+            cb(Kcur, "Kcur", il);
 
             cur = build_attn(inp_attn,
                     nullptr, nullptr, nullptr,

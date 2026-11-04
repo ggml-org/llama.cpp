@@ -97,13 +97,7 @@ llama_model_muse_spark::graph::graph(const llama_model & model, const llm_graph_
     for (int il = 0; il < n_layer; ++il) {
         res->t_layer_inp[il] = inpL;
 
-        const float freq_base_l  = model.get_rope_freq_base (cparams, il);
-        const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
-
         ggml_tensor * inpSA = inpL;
-
-        // RoPE runs on the SWA layers, NoPE on the global ones.
-        const bool use_rope = hparams.is_swa(il);
 
         cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "attn_norm", il);
@@ -121,19 +115,11 @@ llama_model_muse_spark::graph::graph(const llama_model & model, const llm_graph_
             cb(Qcur, "Qcur_normed", il);
             cb(Kcur, "Kcur_normed", il);
 
-            if (use_rope) {
-                Qcur = ggml_rope_ext(
-                        ctx0, Qcur, inp_pos, nullptr,
-                        n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                        ext_factor, attn_factor, beta_fast, beta_slow);
-                cb(Qcur, "Qcur_rope", il);
+            Qcur = build_rope(Qcur, inp_pos, il);
+            cb(Qcur, "Qcur_rope", il);
 
-                Kcur = ggml_rope_ext(
-                        ctx0, Kcur, inp_pos, nullptr,
-                        n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                        ext_factor, attn_factor, beta_fast, beta_slow);
-                cb(Kcur, "Kcur_rope", il);
-            }
+            Kcur = build_rope(Kcur, inp_pos, il);
+            cb(Kcur, "Kcur_rope", il);
 
             cur = build_attn(inp_attn,
                     NULL, NULL, NULL,
