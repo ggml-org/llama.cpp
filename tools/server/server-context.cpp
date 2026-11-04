@@ -6236,6 +6236,13 @@ void server_routes::init_routes() {
                 }
                 const std::string type = json_value(ev, "type", std::string());
                 if (type == "session.update" || type == "transcription_session.update") {
+                    // the audio has no header, so audio sent at another rate would be read at the wrong speed
+                    const int32_t rate = mtmd_get_audio_sample_rate(ctx_server.mctx);
+                    const json format = ev.value("session", json()).value("audio", json()).value("input", json()).value("format", json());
+                    if (format.contains("rate") && format.at("rate") != rate) {
+                        send_error_event(string_format("audio.input.format.rate must be %d", rate), "invalid_request_error");
+                        continue;
+                    }
                     send_event(json {{"type", "session.updated"}, {"session", session_config}});
                 } else if (type == "input_audio_buffer.append") {
                     std::string pcm;
