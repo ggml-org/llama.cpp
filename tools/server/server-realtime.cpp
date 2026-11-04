@@ -7,6 +7,7 @@
 #include "base64.hpp"
 #include "chat.h"
 #include "common.h"
+#include "json-schema-to-grammar.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
 
@@ -75,7 +76,12 @@ bool parse_max_output_tokens(const json & j, int32_t & n) {
 // realtime tools have the format of the Responses API
 bool parse_tools(const json & j, std::vector<common_chat_tool> & tools, std::string & err) {
     try {
-        tools = common_chat_tools_parse_oaicompat(server_chat_convert_responses_tools(j));
+        auto parsed = common_chat_tools_parse_oaicompat(server_chat_convert_responses_tools(j));
+        // the chat template turns the parameters into a grammar, reject them before keeping the tools
+        for (const auto & tool : parsed) {
+            json_schema_to_grammar(json::parse(tool.parameters));
+        }
+        tools = std::move(parsed);
     } catch (const std::exception & e) {
         err = std::string("tools: ") + e.what();
         return false;
@@ -589,9 +595,6 @@ struct realtime_conversation {
                 return;
             }
         }
-        // kept if the chat template rejects the new tools below
-        auto prev_tools      = tools;
-        auto prev_tools_json = tools_json;
         if (session.contains("tools")) {
             std::string err;
             if (started) {
@@ -622,21 +625,9 @@ struct realtime_conversation {
         if (in.contains("transcription") && in["transcription"].is_object()) {
             language = json_value(in["transcription"], "language", language);
         }
-        if (!started) {
-            bool ok = false;
-            try {
-                ok = configure();
-            } catch (const std::exception & e) {
-                tools      = std::move(prev_tools);
-                tools_json = std::move(prev_tools_json);
-                configure();
-                send_error(std::string("session.update: ") + e.what());
-                return;
-            }
-            if (!ok) {
-                send_error("the chat template does not fit the realtime turn format", "server_error");
-                return;
-            }
+        if (!started && !configure()) {
+            send_error("the chat template does not fit the realtime turn format", "server_error");
+            return;
         }
         send_event({{"type", "session.updated"}, {"session", session_json()}});
     }
@@ -648,13 +639,7 @@ struct realtime_conversation {
             const auto preset = common_chat_get_asr_prompt(deps.meta.chat_params.tmpls.get(), language);
             instructions = preset.system;
         }
-        bool ok = false;
-        try {
-            ok = derive_turn_text();
-        } catch (...) {
-            instructions = saved;
-            throw;
-        }
+        const bool ok = derive_turn_text();
         instructions = saved;
         return ok;
     }
@@ -876,7 +861,6 @@ struct realtime_conversation {
         std::thread reader([this]() {
             std::string msg;
             while (conn.read(msg) != 0) {
-                // ws_ex_wrapper does not run on this thread, and the session survives a bad event
                 try {
                     handle(msg);
                 } catch (const std::exception & e) {
@@ -897,7 +881,6 @@ struct realtime_conversation {
                 break;
             }
             if (auto * res = dynamic_cast<server_task_result_realtime *>(result.get())) {
-                // leaving run() while reader is joinable would terminate the server
                 try {
                     on_result(*res);
                 } catch (const std::exception & e) {
