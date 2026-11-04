@@ -8519,6 +8519,11 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
     const int64_t rv2 = neq2/nev2;
     const int64_t rv3 = neq3/nev3;
 
+    // head map (ggml_flash_attn_ext_set_head_map): K/V head (iq2 + hm_off)/hm_gqa
+    const int32_t hm_off = ggml_get_op_params_i32(dst, 4);
+    const int32_t hm_gqa = ggml_get_op_params_i32(dst, 5);
+    GGML_ASSERT(hm_gqa == 0 || (nek2 == nev2 && (int64_t) hm_gqa*nek2 >= hm_off + neq2));
+
     // parallelize by q rows using ggml_vec_dot_f32
 
     float scale         = 1.0f;
@@ -8576,11 +8581,11 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
 
         // k indices
         const int ik3 = iq3 / rk3;
-        const int ik2 = iq2 / rk2;
+        const int ik2 = hm_gqa > 0 ? (iq2 + hm_off) / hm_gqa : iq2 / rk2;
 
         // v indices
         const int iv3 = iq3 / rv3;
-        const int iv2 = iq2 / rv2;
+        const int iv2 = hm_gqa > 0 ? (iq2 + hm_off) / hm_gqa : iq2 / rv2;
 
         const float * pq = (const float *) ((char *) q->data + (iq1*nbq1 + iq2*nbq2 + iq3*nbq3));
         q_to_vec_dot(pq, Q_q, DK);
@@ -8757,6 +8762,11 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
     const int64_t rv2 = neq2/nev2;
     const int64_t rv3 = neq3/nev3;
 
+    // head map (ggml_flash_attn_ext_set_head_map): K/V head (iq2 + hm_off)/hm_gqa
+    const int32_t hm_off = ggml_get_op_params_i32(dst, 4);
+    const int32_t hm_gqa = ggml_get_op_params_i32(dst, 5);
+    GGML_ASSERT(hm_gqa == 0 || (nek2 == nev2 && (int64_t) hm_gqa*nek2 >= hm_off + neq2));
+
     float scale         = 1.0f;
     float max_bias      = 0.0f;
     float logit_softcap = 0.0f;
@@ -8826,11 +8836,11 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
 
         // k indices
         const int ik3 = iq3 / rk3;
-        const int ik2 = iq2 / rk2;
+        const int ik2 = hm_gqa > 0 ? (iq2 + hm_off) / hm_gqa : iq2 / rk2;
 
         // v indices
         const int iv3 = iq3 / rv3;
-        const int iv2 = iq2 / rv2;
+        const int iv2 = hm_gqa > 0 ? (iq2 + hm_off) / hm_gqa : iq2 / rv2;
 
         {
             float * Q_f32 = (float *)Q_q;

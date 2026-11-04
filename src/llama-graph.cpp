@@ -2439,15 +2439,12 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         ggml_flash_attn_ext_add_sinks(cur, sinks);
         ggml_flash_attn_ext_set_prec (cur, GGML_PREC_F32);
 
-        // dist-tp attention rebalance: which local KV head each local query head uses (op_params 4..6,
-        // 0x48454144 marks the map; read by the meta backend and the Vulkan FA)
+        // dist-tp attention split by query heads: which local KV head each local query head uses
         {
             int32_t hm_off = 0;
             int32_t hm_gqa = 0;
             if (llama_dist_attn_headmap(il, &hm_off, &hm_gqa)) {
-                cur->op_params[4] = 0x48454144;
-                cur->op_params[5] = hm_off;
-                cur->op_params[6] = hm_gqa;
+                ggml_flash_attn_ext_set_head_map(cur, hm_off, hm_gqa);
             }
         }
 

@@ -2437,6 +2437,15 @@ extern "C" {
             struct ggml_tensor * a,
             struct ggml_tensor * sinks);
 
+    // query head h uses K/V head (h + q_off) / n_gqa instead of h / (n_head / n_head_kv)
+    // for a tensor-parallel shard whose query heads start or end inside a KV group
+    // (the shard keeps every KV head its query heads use, n_gqa*n_head_kv >= q_off + n_head);
+    // needs max_bias == 0
+    GGML_API void ggml_flash_attn_ext_set_head_map(
+            struct ggml_tensor * a,
+            int32_t              q_off,
+            int32_t              n_gqa);
+
     // TODO: needs to be adapted to ggml_flash_attn_ext
     GGML_API struct ggml_tensor * ggml_flash_attn_back(
            struct ggml_context * ctx,

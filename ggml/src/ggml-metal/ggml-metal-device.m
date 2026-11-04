@@ -1227,6 +1227,9 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_ROLL:
             return true;
         case GGML_OP_FLASH_ATTN_EXT:
+            if (op->op_params[5] != 0) {
+                return false; // head map (ggml_flash_attn_ext_set_head_map) not implemented
+            }
             // for new head sizes, add checks here
             if (op->src[0]->ne[0] != 32 &&
                 op->src[0]->ne[0] != 40 &&

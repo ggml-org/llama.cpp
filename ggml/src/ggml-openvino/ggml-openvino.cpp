@@ -1002,6 +1002,9 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
         break;
     }
     case GGML_OP_FLASH_ATTN_EXT: {
+        if (op->op_params[5] != 0) {
+            return true; // head map (ggml_flash_attn_ext_set_head_map) not implemented
+        }
         float scale = 1.0f;
         float max_bias = 0.0f;
         float logit_softcap = 0.0f;

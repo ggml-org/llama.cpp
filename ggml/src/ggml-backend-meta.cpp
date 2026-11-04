@@ -1234,9 +1234,9 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
                 if (tensor->src[i] == nullptr || src_ss[i].axis < 0 || src_ss[i].axis >= GGML_MAX_DIMS) {
                     continue;
                 }
-                // dist-tp attention rebalance (LLAMA_DIST_TP_ATTN_REBALANCE): K and V hold every KV head the
-                // rank's query heads use, so their share differs from Q's; the output follows Q
-                if (i > 0 && tensor->op == GGML_OP_FLASH_ATTN_EXT && tensor->op_params[4] == 0x48454144) {
+                // flash attention with a head map (ggml_flash_attn_ext_set_head_map): K and V hold every KV
+                // head the rank's query heads use, so their share differs from Q's; the output follows Q
+                if (i > 0 && tensor->op == GGML_OP_FLASH_ATTN_EXT && tensor->op_params[5] > 0) {
                     continue;
                 }
                 if (first_src_split_by_axis) {

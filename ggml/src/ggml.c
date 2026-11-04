@@ -5479,6 +5479,18 @@ void ggml_flash_attn_ext_add_sinks(
     a->src[4] = sinks;
 }
 
+void ggml_flash_attn_ext_set_head_map(
+        struct ggml_tensor * a,
+        int32_t              q_off,
+        int32_t              n_gqa) {
+    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
+    GGML_ASSERT(q_off >= 0 && n_gqa > 0);
+    GGML_ASSERT(ggml_get_op_params_f32(a, 1) == 0.0f); // ALiBi slopes follow the global head index
+
+    ggml_set_op_params_i32(a, 4, q_off);
+    ggml_set_op_params_i32(a, 5, n_gqa);
+}
+
 // ggml_flash_attn_back
 
 struct ggml_tensor * ggml_flash_attn_back(

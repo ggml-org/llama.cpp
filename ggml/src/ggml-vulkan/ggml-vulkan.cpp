@@ -10609,8 +10609,8 @@ static void ggml_vk_flash_attn_dec_xe(ggml_backend_vk_context * ctx, vk_context&
     float scale;
     memcpy(&scale, (const float *) dst->op_params + 0, sizeof(float));
 
-    // dist-tp attention rebalance: KV head ik2 serves local query heads ik2*16 - q_off .. +15 (see ggml_vk_flash_attn)
-    const uint32_t q_off = dst->op_params[4] == 0x48454144 ? (uint32_t) dst->op_params[5] : 0;
+    // head map (ggml_flash_attn_ext_set_head_map): KV head ik2 serves query heads ik2*16 - q_off .. +15
+    const uint32_t q_off = (uint32_t) dst->op_params[4];
 
     const uint64_t split_k_size = (HSV * ne1 * sizeof(float) + ne1 * sizeof(float) * 2) * k_num * ne2 * ne3;
     if (split_k_size > ctx->device->properties.limits.maxStorageBufferRange) {
@@ -10713,15 +10713,15 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     assert(dst->type == GGML_TYPE_F32);
     assert(q->type == GGML_TYPE_F32);
 
-    // dist-tp attention rebalance (LLAMA_DIST_TP_ATTN_REBALANCE, set in llama-graph build_attn_mha): local query head
-    // h uses local KV head (h + hm_off) / hm_g instead of h / (neq2 / nek2)
-    const bool     hm     = dst->op_params[4] == 0x48454144;
-    const uint32_t hm_off = hm ? (uint32_t) dst->op_params[5] : 0;
-    const uint32_t hm_g   = hm ? (uint32_t) dst->op_params[6] : 0;
+    // head map (ggml_flash_attn_ext_set_head_map): query head h uses KV head (h + hm_off) / hm_g
+    // instead of h / (neq2 / nek2)
+    const uint32_t hm_g   = (uint32_t) dst->op_params[5];
+    const uint32_t hm_off = hm_g > 0 ? (uint32_t) dst->op_params[4] : 0;
+    const bool     hm     = hm_g > 0;
     if (hm) {
-        GGML_ASSERT(hm_g > 0 && hm_g < 256 && hm_off < 256);
+        // the shader packs both into one push constant
+        GGML_ASSERT(hm_g < 256 && hm_off < 256);
         GGML_ASSERT(nek2 == nev2 && (int64_t) hm_g * nek2 >= (int64_t) hm_off + neq2);
-        GGML_ASSERT(((const float *) dst->op_params)[1] == 0.0f);
     }
 
 #if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)

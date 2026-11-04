@@ -7378,6 +7378,9 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
             if (adreno_e17_compiler_quirks(backend_ctx)) {
                 return false;
             }
+            if (op->op_params[5] != 0) {
+                return false; // head map (ggml_flash_attn_ext_set_head_map) not implemented
+            }
             const ggml_tensor * q = op->src[0];
             const ggml_tensor * k = op->src[1];
             const ggml_tensor * v = op->src[2];

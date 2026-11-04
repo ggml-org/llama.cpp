@@ -4281,7 +4281,8 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                                src1->type == GGML_TYPE_Q4_0 || src1->type == GGML_TYPE_Q8_0) &&
                               (src2->type == GGML_TYPE_F32 || src2->type == GGML_TYPE_F16 ||
                                src2->type == GGML_TYPE_Q4_0 || src2->type == GGML_TYPE_Q8_0) &&
-                              op->type == GGML_TYPE_F32;
+                              op->type == GGML_TYPE_F32 &&
+                              op->op_params[5] == 0; // head map (ggml_flash_attn_ext_set_head_map) not implemented
                 if (!supports_op) {
                     break;
                 }

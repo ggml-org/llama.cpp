@@ -4151,7 +4151,8 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
             break;
 
         case GGML_OP_FLASH_ATTN_EXT:
-            supp = ggml_hexagon_supported_flash_attn_ext(sess, op);
+            // head map (ggml_flash_attn_ext_set_head_map) not implemented
+            supp = op->op_params[5] == 0 && ggml_hexagon_supported_flash_attn_ext(sess, op);
             break;
 
         case GGML_OP_SET_ROWS:
