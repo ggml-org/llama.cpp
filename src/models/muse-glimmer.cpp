@@ -11,6 +11,7 @@ void llama_model_muse_glimmer::load_arch_hparams(llama_model_loader & ml) {
 
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
     load_swa_pattern(ml, 4);
+    hparams.rope_pattern = hparams.is_swa_impl;
 
     switch (hparams.n_layer()) {
         case 52: type = LLM_TYPE_30B; break;

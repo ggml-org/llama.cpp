@@ -23,6 +23,10 @@ void llama_model_llama4::load_arch_hparams(llama_model_loader & ml) {
         ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
     }
 
+    for (uint32_t il = 0; il < hparams.n_layer_all; ++il) {
+        hparams.rope_pattern[il] = (il + 1) % hparams.n_no_rope_layer_step != 0;
+    }
+
     switch (hparams.n_expert) {
         case 0: {
             // MobileLLM (no MoE)

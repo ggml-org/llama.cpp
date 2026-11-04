@@ -27,6 +27,11 @@ void llama_model_cohere2moe::load_arch_hparams(llama_model_loader & ml) {
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
     load_swa_pattern(ml, 4, true);
 
+    // the dense prefix and the MTP layers use RoPE even if they are not SWA
+    for (uint32_t il = 0; il < hparams.n_layer_all; ++il) {
+        hparams.rope_pattern[il] = hparams.is_swa(il) || il < hparams.n_layer_dense_lead || il >= hparams.n_layer();
+    }
+
     hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
     hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
     ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);

@@ -23,6 +23,10 @@ void llama_model_afmoe::load_arch_hparams(llama_model_loader & ml) {
         hparams.swa_type = LLAMA_SWA_TYPE_NONE;
     }
 
+    for (uint32_t il = 0; il < hparams.n_layer_all; ++il) {
+        hparams.rope_pattern[il] = (il + 1) % hparams.n_no_rope_layer_step != 0;
+    }
+
     // Default to sigmoid if not set
     if (hparams.expert_gating_func == LLAMA_EXPERT_GATING_FUNC_TYPE_NONE) {
         hparams.expert_gating_func = LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID;

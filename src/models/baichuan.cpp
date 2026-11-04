@@ -12,6 +12,11 @@ void llama_model_baichuan::load_arch_hparams(llama_model_loader & ml) {
         // TODO: become GGUF KV parameter
         hparams.f_max_alibi_bias = 8.0f;
     }
+
+    // only the 7B uses RoPE
+    if (type != LLM_TYPE_7B) {
+        std::fill(hparams.rope_pattern.begin(), hparams.rope_pattern.end(), 0);
+    }
 }
 
 void llama_model_baichuan::load_arch_tensors(llama_model_loader &) {

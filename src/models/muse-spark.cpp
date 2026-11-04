@@ -15,6 +15,7 @@ void llama_model_muse_spark::load_arch_hparams(llama_model_loader & ml) {
 
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
     ml.get_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl);
+    hparams.rope_pattern = hparams.is_swa_impl;
 
     switch (hparams.n_layer()) {
         case 62: type = LLM_TYPE_816B_A42B; break;

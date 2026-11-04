@@ -5,6 +5,7 @@ void llama_model_exaone4::load_arch_hparams(llama_model_loader & ml) {
         hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
         hparams.n_swa = 4096;
         load_swa_pattern(ml, 4);
+        hparams.rope_pattern = hparams.is_swa_impl;
 
         hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
         hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;

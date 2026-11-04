@@ -13,6 +13,7 @@ void llama_model_limite::load_arch_hparams(llama_model_loader & ml) {
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa);
     load_swa_pattern(ml, 4);
+    hparams.rope_pattern = hparams.is_swa_impl;
 
     std::fill(hparams.mudd_tap_idx.begin(), hparams.mudd_tap_idx.end(), -1);
     ml.get_key(LLM_KV_MUDD_TAP_COUNT, hparams.n_mudd_taps, false);

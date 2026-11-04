@@ -3,6 +3,9 @@
 void llama_model_smollm3::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
     hparams.n_no_rope_layer_step = 4;
+    for (uint32_t il = 0; il < hparams.n_layer_all; ++il) {
+        hparams.rope_pattern[il] = (il + 1) % hparams.n_no_rope_layer_step != 0;
+    }
 
     switch (hparams.n_layer()) {
         case 36: type = LLM_TYPE_3B; break;
