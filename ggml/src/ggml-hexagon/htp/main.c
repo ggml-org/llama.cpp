@@ -951,6 +951,8 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_UNARY_STEP:
         case HTP_OP_UNARY_CEIL:
         case HTP_OP_UNARY_SGN:
+        case HTP_OP_UNARY_SIN:
+        case HTP_OP_UNARY_COS:
         case HTP_OP_L2_NORM:
         case HTP_OP_HADAMARD:
             return op_unary(octx);
@@ -984,6 +986,7 @@ static int execute_op(struct htp_ops_context * octx) {
             return op_sum(octx);
 
         case HTP_OP_SUM_ROWS:
+        case HTP_OP_MEAN:
             return op_sum_rows(octx);
 
         case HTP_OP_CPY:

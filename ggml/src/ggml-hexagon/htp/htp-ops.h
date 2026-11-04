@@ -121,6 +121,9 @@ enum htp_op_code {
     HTP_OP_DSV4_HC_POST,
     HTP_OP_TOP_K_MASK,
     HTP_OP_LIGHTNING_INDEXER,
+    HTP_OP_UNARY_SIN,
+    HTP_OP_UNARY_COS,
+    HTP_OP_MEAN,
 
     HTP_OP_INVALID
 };

@@ -53,6 +53,7 @@ struct sum_rows_context {
     size_t          dst_stride;
     uint32_t        rows_per_thread;
     uint32_t        total_rows;
+    float           scale;
 };
 
 static void sum_rows_thread_f32(unsigned int nth, unsigned int ith, void *data) {
@@ -71,6 +72,7 @@ static void sum_rows_thread_f32(unsigned int nth, unsigned int ith, void *data) 
     const size_t   src_stride = smctx->src_stride;
     const size_t   dst_stride = smctx->dst_stride;
     const uint32_t ne00       = smctx->ne00;
+    const float    scale      = smctx->scale;
 
     const float * restrict src_th = (const float *) (smctx->src_data + (start_row * src_stride));
     float       * restrict dst_th = (float *)       (smctx->dst_data + (start_row * dst_stride));
@@ -89,7 +91,7 @@ static void sum_rows_thread_f32(unsigned int nth, unsigned int ith, void *data) 
             hex_l2fetch((const uint8_t *) src_local + src_stride, src_stride, src_stride, 1);
         }
 
-        *dst_local = hvx_reduce_sum_f32((const uint8_t *) src_local, ne00);
+        *dst_local = hvx_reduce_sum_f32((const uint8_t *) src_local, ne00) * scale;
     }
 
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) start_row);
@@ -143,6 +145,7 @@ int op_sum_rows(struct htp_ops_context * octx) {
         .dst_stride      = nb1,
         .rows_per_thread = rows_per_thread,
         .total_rows      = nrows,
+        .scale           = kparams->scale,
     };
 
     work_queue_run(octx->ctx->work_queue, sum_rows_thread_f32, &smctx, n_threads);

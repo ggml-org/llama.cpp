@@ -6,6 +6,7 @@
 struct htp_sum_rows_kernel_params {
     uint32_t n_threads;
     uint32_t elems_per_thread;
+    float    scale;
 };
 
 #if defined(__cplusplus)
