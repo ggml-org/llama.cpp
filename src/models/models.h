@@ -43,7 +43,8 @@ struct llm_build_delta_net_base : public llm_graph_context {
                 ggml_tensor * v,
                 ggml_tensor * g,
                 ggml_tensor * b,
-                ggml_tensor * s);
+                ggml_tensor * s,
+                int           il);
 
     // read conv state from cache, concat with qkv_mixed, write back (single slot or per-token)
     // qkv_mixed: (qkv_dim, n_seq_tokens, n_seqs); returns conv_input: (kernel_size + n_seq_tokens - 1, channels, n_seqs)
@@ -58,6 +59,27 @@ struct llm_build_delta_net_base : public llm_graph_context {
     // run delta-net attention and write the new recurrent state(s) back to ssm_states_all
     // s: (head_v_dim, head_v_dim, num_v_heads, n_seqs); returns output: (head_v_dim, num_v_heads, n_seq_tokens, n_seqs)
     ggml_tensor * build_recurrent_attn(
+            llm_graph_input_rs * inp,
+            ggml_tensor *        ssm_states_all,
+            ggml_tensor *        q,
+            ggml_tensor *        k,
+            ggml_tensor *        v,
+            ggml_tensor *        g,
+            ggml_tensor *        b,
+            ggml_tensor *        s,
+            int                  il);
+
+    // rs_replay variants: replay the kept pending tokens, then keep or commit the new ones [TAG_RECURRENT_REPLAY]
+    // x: [channels, n_seq_tokens, n_seqs] new conv inputs; returns [n_conv + n_seq_tokens, channels, n_seqs]
+    ggml_tensor * build_conv_state_replay(
+            llm_graph_input_rs * inp,
+            ggml_tensor *        conv_states_all,
+            ggml_tensor *        x,
+            int64_t              n_conv,
+            int64_t              channels,
+            int                  il);
+
+    ggml_tensor * build_recurrent_attn_replay(
             llm_graph_input_rs * inp,
             ggml_tensor *        ssm_states_all,
             ggml_tensor *        q,
