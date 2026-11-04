@@ -509,12 +509,11 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
 
         // window w starts at column n - (Kw - 1) + w (ascending time) and is rollback slot Kw - 1 - w
         // slots reaching back past this ubatch are left unwritten, like the ssm snapshots in build_recurrent_attn
-        // the windows overlap, so the view is created with one window and widened after the size check
+        // consecutive windows start one element apart, so they overlap
         ggml_tensor * windows = ggml_view_4d(ctx0, conv_input,
-                conv_kernel_size - 1, 1, conv_channels, n_seqs,
+                conv_kernel_size - 1, Kw, conv_channels, n_seqs,
                 ggml_element_size(conv_input), conv_input->nb[1], conv_input->nb[2],
                 ggml_row_size(conv_input->type, n - (Kw - 1)));
-        windows->ne[1] = Kw;
 
         // [d-1, slot, channel, seq] view of the cells of this ubatch
         ggml_tensor * slots = ggml_view_4d(ctx0, conv_states_all,
