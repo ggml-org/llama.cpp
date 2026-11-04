@@ -110,10 +110,21 @@ static ov::Output<ov::Node> reshape_flat_kv(const ov::Output<ov::Node> & kv_flat
 }
 
 OutputVector translate_flash_attn_ext(const NodeContext & context) {
-    num_inputs_check(context, 3, 5);
-    // Inputs are q, k, v, then the optional mask and sinks; supports_op rejects sinks without a mask
-    const bool has_mask = context.get_input_size() >= 4;
-    const bool has_sink = context.get_input_size() == 5;
+   num_inputs_check(context, 3, 5);
+
+    const auto input_size = context.get_input_size();
+    const std::string fourth_name = input_size == 4 ? context.get_input_names()[3] : std::string{};
+    const std::string sink_suffix = ".attn_sinks.weight";
+    const bool sink_without_mask = fourth_name.size() >= sink_suffix.size() &&
+                                   fourth_name.compare(fourth_name.size() - sink_suffix.size(),
+                                                       sink_suffix.size(), sink_suffix) == 0;
+    const bool has_mask = input_size >= 4 && !sink_without_mask;
+    const bool has_sink = input_size == 5 || sink_without_mask;
+    OPENVINO_ASSERT(!has_sink || has_mask, "FLASH_ATTN_EXT sinks require an attention mask");
+    ov::Output<ov::Node> sink;
+    if (has_sink) {
+        sink = context.get_input(4);
+    }
 
     auto q_f32 = context.get_input(0);
     auto k = context.get_input(1);
@@ -155,14 +166,15 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
         }
     }
 
-    ov::Output<ov::Node> sink;
     if (has_sink) {
-        sink = context.get_input(4);
         if (sink.get_element_type() != q->get_element_type()) {
             sink = std::make_shared<ov::op::v0::Convert>(sink, q->get_element_type());
         }
         sink = std::make_shared<ov::op::v1::Reshape>(
-            sink, ov::op::v0::Constant::create(ov::element::i64, {4}, std::vector<int64_t>{1, -1, 1, 1}), false);
+            sink,
+            ov::op::v0::Constant::create(
+                ov::element::i64, {4}, std::vector<int64_t>{1, context.get_input_shape(0)[1].get_length(), 1, 1}),
+            false);
     }
 
     //auto tile_kv = [&](int64_t num_heads, int64_t num_heads_kv, int64_t head_size, ov::Output<Node> kv) {
