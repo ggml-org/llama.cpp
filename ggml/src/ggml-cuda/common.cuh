@@ -1079,16 +1079,16 @@ static __device__ __forceinline__ int ggml_cuda_tq1_0_symbols4(const int b4, con
     const int dhi = (((whi & 0x00FF00FF) * 3) >> 8) & 0x00FF00FF;   // digits of bytes 1, 3
 
     // [digit0, digit1, digit2, digit3] as bytes, then the -1 bias for all four at once
-#if defined(GGML_USE_HIP)
-    // HIP has __vsub4 (ggml-cuda/vendors/hip.h) but no __byte_perm, so spell the 0x6240
+#if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
+    // HIP and MUSA have __vsub4 but no __byte_perm, so spell the 0x6240
     // selector out with shifts and masks: byte0 = dlo.b0, byte1 = dhi.b0, byte2 = dlo.b2,
-    // byte3 = dhi.b2. Same result, two extra ALU ops, and only on the AMD path.
+    // byte3 = dhi.b2.
     const int merged = (dlo & 0x000000FF) | ((dhi & 0x000000FF) << 8)
                      | (dlo & 0x00FF0000) | ((dhi & 0x00FF0000) << 8);
     return __vsub4(merged, 0x01010101);
 #else
     return __vsub4(__byte_perm(dlo, dhi, 0x6240), 0x01010101);
-#endif // defined(GGML_USE_HIP)
+#endif // defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
 }
 
 // Raw ternary digits 0..2 (no -1 bias) of the four bytes of b4 at trit position n, one digit per
@@ -1103,13 +1103,13 @@ static __device__ __forceinline__ int ggml_cuda_tq1_0_digits4(const int b4, cons
     const int dlo = (((wlo & 0x00FF00FF) * 3) >> 8) & 0x00FF00FF;   // digits of bytes 0, 2
     const int dhi = (((whi & 0x00FF00FF) * 3) >> 8) & 0x00FF00FF;   // digits of bytes 1, 3
 
-#if defined(GGML_USE_HIP)
+#if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
     const int merged = (dlo & 0x000000FF) | ((dhi & 0x000000FF) << 8)
                      | (dlo & 0x00FF0000) | ((dhi & 0x00FF0000) << 8);
     return merged;
 #else
     return __byte_perm(dlo, dhi, 0x6240);
-#endif // defined(GGML_USE_HIP)
+#endif // defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
 }
 
 // 3^n for the five trit positions of one TQ1_0 byte. Select chain: n is uniform per call but is

@@ -862,8 +862,14 @@ static __device__ __forceinline__ float vec_dot_tq1_0_q8_1(
         }
 
         const int qh4  = get_int_b2(bq->qh, 0);
+#if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
+        const uint32_t uqh4 = (uint32_t) qh4;
+        int       v_lo = (uqh4 & 0x000000FF) | ((uqh4 & 0x0000FF00) << 8); // qh[0], qh[1] in 16-bit lanes
+        int       v_hi = ((uqh4 >> 16) & 0x000000FF) | ((uqh4 >> 8) & 0x00FF0000); // qh[2], qh[3]
+#else
         int       v_lo = __byte_perm(qh4, 0, 0x4140); // qh[0], qh[1] in 16-bit lanes
         int       v_hi = __byte_perm(qh4, 0, 0x4342); // qh[2], qh[3]
+#endif
 
 #pragma unroll
         for (int t = 0; t < 4; ++t) {
@@ -872,7 +878,15 @@ static __device__ __forceinline__ float vec_dot_tq1_0_q8_1(
             v_lo = w_lo & 0x00FF00FF; // remainder carries to the next trit position
             v_hi = w_hi & 0x00FF00FF;
 
+#if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
+            const uint32_t uw_lo = (uint32_t) w_lo;
+            const uint32_t uw_hi = (uint32_t) w_hi;
+            const int merged = ((uw_lo >> 8) & 0x000000FF) | ((uw_lo >> 16) & 0x0000FF00)
+                             | ((uw_hi << 8) & 0x00FF0000) | (uw_hi & 0xFF000000);
+            const int s4 = __vsub4(merged, 0x01010101);
+#else
             const int s4 = __vsub4(__byte_perm(w_lo, w_hi, 0x7531), 0x01010101);
+#endif
             sumi = ggml_cuda_dp4a(s4, get_int_b4(bq8_1_chunk->qs, 4 + t), sumi);
         }
     }
