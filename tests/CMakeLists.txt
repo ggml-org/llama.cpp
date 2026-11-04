@@ -379,6 +379,12 @@ if (NOT GGML_BACKEND_DL AND GGML_CPU)
 endif()
 
 # libmtmd
+add_test(NAME test-cmake-video-options COMMAND ${CMAKE_COMMAND}
+    -DLLAMA_SOURCE_DIR=${PROJECT_SOURCE_DIR}
+    -DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/test-cmake-video-options
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/test-cmake-video-options.cmake)
+set_property(TEST test-cmake-video-options PROPERTY LABELS behavior)
+
 llama_build_and_test(test-mtmd-c-api.c  LABEL behavior  LINK mtmd)
 
 llama_build_and_test(test-mtmd-impl.cpp  LABEL behavior  LINK mtmd)
