@@ -221,7 +221,7 @@ Three nodes, full mesh, every payload on RDMA, with the Vulkan settings for Inte
 from section 6 passed through `-ExtraEnv`:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_disttp.ps1 -Transport rdma -RankNodes A,B,C -Mesh -RdmaMultiChunk -ExtraArgs '-fa on -ctk q8_0 -ctv q8_0' -ExtraEnv 'LLAMA_DIST_TP_RECORD_AHEAD=1;GGML_VK_FENCE_POLL_PAUSES=20;GGML_VK_DEFER_GATE=1;GGML_VK_FWHT=1;GGML_VK_ADD_RMS_FUSION=1'
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_disttp.ps1 -Transport rdma -RankNodes A,B,C -Mesh -RdmaMultiChunk -ExtraArgs '-fa on -ctk q8_0 -ctv q8_0' -ExtraEnv 'LLAMA_DIST_TP_RECORD_AHEAD=1;GGML_VK_FENCE_POLL_PAUSES=20;GGML_VK_DEFER_GATE=1'
 ```
 
 Each run writes every rank's log to `scripts\logs\` and appends a JSON line to
@@ -261,8 +261,6 @@ set LLAMA_DIST_TP_RING_NEXT_HOST=<rank r+1's address on the cable to it>
 set LLAMA_DIST_TP_RECORD_AHEAD=1
 set GGML_VK_FENCE_POLL_PAUSES=20
 set GGML_VK_DEFER_GATE=1
-set GGML_VK_FWHT=1
-set GGML_VK_ADD_RMS_FUSION=1
 llama-cli -m <model> -f <prompt> -n 64 -c 2048 -ngl 99 -t 8 --temp 0 --seed 1234 ^
   --device Vulkan0 -fa on -ctk q8_0 -ctv q8_0 ^
   --split-mode tensor --world-size 3 --world-rank <r> --dist-master 192.168.1.10:29500
@@ -320,10 +318,13 @@ address>:<port>` on every rank.
 
 **Vulkan, Intel Xe2/Xe3 integrated GPUs.** The patches add two decode kernels that are on by default
 on the Intel devices the Vulkan backend classifies as Xe2 that have integer dot products and 16-lane
-subgroups, and switches that are off unless set. The settings used with the 3-node mesh above are
-`GGML_VK_FENCE_POLL_PAUSES=20 GGML_VK_DEFER_GATE=1 GGML_VK_FWHT=1 GGML_VK_ADD_RMS_FUSION=1`, with
-`LLAMA_DIST_TP_RECORD_AHEAD=1`. Add `GGML_VK_EARLY_RECORD=2` and `LLAMA_DIST_TP_WIRE_F16=1` to them for
-decode, and `LLAMA_DIST_TP_ATTN_REBALANCE=1` for models whose KV heads do not divide by the rank count.
+subgroups, and switches that are off unless set. On the Xe2/Xe3 integrated GPUs with Intel's Windows
+driver they also keep two kernels that llama.cpp leaves off on Intel: the subgroup Hadamard transform
+(`MUL_MAT_HADAMARD`, used with a quantized KV cache) and the fused residual add and RMS norm
+(`GGML_VK_DISABLE_FUSION` turns that off). The settings used with the 3-node mesh above are
+`GGML_VK_FENCE_POLL_PAUSES=20 GGML_VK_DEFER_GATE=1`, with `LLAMA_DIST_TP_RECORD_AHEAD=1`. Add
+`GGML_VK_EARLY_RECORD=2` and `LLAMA_DIST_TP_WIRE_F16=1` to them for decode, and
+`LLAMA_DIST_TP_ATTN_REBALANCE=1` for models whose KV heads do not divide by the rank count.
 
 | Variable | Effect |
 |---|---|
@@ -331,8 +332,6 @@ decode, and `LLAMA_DIST_TP_ATTN_REBALANCE=1` for models whose KV heads do not di
 | `GGML_VK_DISABLE_FA_DEC_XE=1` | turn off the single-token Q8_0 flash-attention kernel for Xe2/Xe3, used for head size 128, Q8_0 K and V and 16 query heads per KV head (`-fa on -ctk q8_0 -ctv q8_0`) |
 | `GGML_VK_DEFER_GATE=1` | with `LLAMA_DIST_TP_RECORD_AHEAD=1`: the piece recorded ahead goes to the GPU as soon as it is recorded and waits there on an event the CPU sets once the all-reduced data is written back, instead of being submitted only at that point |
 | `GGML_VK_FENCE_POLL_PAUSES=N` | check the GPU fence every N CPU pause instructions while waiting (default 1000) |
-| `GGML_VK_FWHT=1` | run the Hadamard transform (`MUL_MAT_HADAMARD`) as the subgroup kernel on Intel too; `2` the shared-memory kernel, `0` neither; unset keeps llama.cpp's choice, which leaves Intel out. Compare the output against a run without it on a new GPU or driver |
-| `GGML_VK_ADD_RMS_FUSION=1` | fuse the residual add and the RMS norm that follows it on Intel too (llama.cpp leaves it off there); `0` turns it off everywhere |
 | `GGML_VK_EARLY_RECORD=2` | with `LLAMA_DIST_TP_RECORD_AHEAD=1` and `GGML_VK_DEFER_GATE=1`: at each all-reduce the read of its input goes to the GPU with the fence without waiting, and the next piece is recorded and submitted behind its gate while the GPU still runs this one. `2` polls the read-back data, `1` waits on the fence |
 | `GGML_VK_DONE_EVENT=1/2`, `GGML_VK_POLL_OUT=1`, `GGML_VK_KEEPALIVE=1` | experimental, off by default, not part of the settings above: return from a synchronize at an event in its own submit, or once the read-back data is seen in host memory, instead of at the fence; keep the GPU waiting on an event between record-ahead pieces instead of idle |
 | `GGML_VK_GRAPH_PROF=N` | diagnostic: every N synchronizes, print a `[vkgprof]` line with where the time from the first graph computed after a synchronize to the end of the next synchronize went (CPU recording before the GPU had work, GPU busy, GPU idle) |

@@ -5542,8 +5542,11 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     ggml_vk_create_pipeline(device, device->pipeline_argmax_f32, "argmax_f32", argmax_f32_len, argmax_f32_data, "main", 2, sizeof(vk_op_push_constants), {1, 1, 1}, { device->subgroup_size }, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_sum_rows_f32, "sum_rows_f32", sum_rows_f32_len, sum_rows_f32_data, "main", 2, sizeof(vk_op_sum_rows_push_constants), {1, 1, 1}, { device->subgroup_size }, 1);
-    // Intel Arc B390 was observed segfaulting with this shader.
-    if (device->subgroup_basic && device->subgroup_shuffle && device->vendor_id != VK_VENDOR_ID_INTEL) {
+    // Intel Arc B390 was observed segfaulting with this shader. The Xe2/Xe3 integrated GPUs, B390 among
+    // them, ran it without problems on Intel's Windows drivers 101.8188 and 101.8860, so they keep it.
+    const bool fwht_intel_igpu = device->architecture == vk_device_architecture::INTEL_XE2 && device->uma &&
+                                 device->driver_id == vk::DriverId::eIntelProprietaryWindows;
+    if (device->subgroup_basic && device->subgroup_shuffle && (device->vendor_id != VK_VENDOR_ID_INTEL || fwht_intel_igpu)) {
         int idx = 0;
         for (uint32_t n : {64, 128, 256, 512}) {
             if (device->subgroup_size <= n) {
@@ -6888,9 +6891,13 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         device->disable_fusion = getenv("GGML_VK_DISABLE_FUSION") != nullptr;
 
+        // Off on Intel for a possible driver bug, except on the Xe2/Xe3 integrated GPUs with Intel's
+        // Windows driver, where it ran without problems on drivers 101.8188 and 101.8860.
         device->add_rms_fusion = !device->disable_fusion &&
                                  device->subgroup_arithmetic &&
-                                 device->vendor_id != VK_VENDOR_ID_INTEL;
+                                 (device->vendor_id != VK_VENDOR_ID_INTEL ||
+                                  (device->architecture == vk_device_architecture::INTEL_XE2 && device->uma &&
+                                   device->driver_id == vk::DriverId::eIntelProprietaryWindows));
         device->partials_binding_alignment =
             std::max(4u, (uint32_t)device->properties.limits.minStorageBufferOffsetAlignment);
 

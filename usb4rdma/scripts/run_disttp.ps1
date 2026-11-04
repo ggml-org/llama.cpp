@@ -16,7 +16,7 @@
 # Examples:
 #   .\run_disttp.ps1 -Transport rdma                       # $CLUSTER_RINGS[2]
 #   .\run_disttp.ps1 -Transport rdma -RankNodes A,B,C -Mesh
-#   .\run_disttp.ps1 -Transport rdma -RankNodes A,B,C -Mesh -RdmaMultiChunk -ExtraEnv 'GGML_VK_FWHT=1'
+#   .\run_disttp.ps1 -Transport rdma -RankNodes A,B,C -Mesh -RdmaMultiChunk -ExtraEnv 'LLAMA_DIST_TP_RECORD_AHEAD=1'
 #   .\run_disttp.ps1 -Transport tcp  -RankNodes A,B
 #   .\run_disttp.ps1 -Transport none -RankNodes A          # single node baseline
 param(
