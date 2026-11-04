@@ -309,6 +309,9 @@ public:
     ggml_tensor * s_copy_main; // I32 [n_seqs]
     ggml_tensor * s_copy_tail; // I32 [n_rs - 1]
 
+    // I32 [n_slot] = {n_slot - 1, ..., 0}, rollback slot of each conv window, created by the graphs that write them
+    ggml_tensor * s_slot_rev = nullptr;
+
     const llama_memory_recurrent_context * mctx;
 
     // used in view offsets, need to match for valid graph reuse
@@ -333,12 +336,13 @@ public:
 // the mask has two shapes depending on whether `rows` is used:
 //   rows != nullptr: [n_kv_rows, n_batch/n_slices, 1, n_slices]
 //   rows == nullptr: [n_kv,      n_batch/n_stream, 1, n_stream]
-// TODO: cnv is redundant (always aliases raw) except dflash overwrites it with a derived block mask [TAG_ATTN_MASK_CNV]
 struct llm_attn_mask {
     ggml_tensor * raw  = nullptr;
-    ggml_tensor * cnv  = nullptr; // same shape
     ggml_tensor * rows = nullptr; // I32 [n_kv_rows, n_slices]
     uint32_t      n_kv = 0;
+
+    // fill every token of a sequence with the mask row of its first token (dspark draft blocks)
+    bool block_uniform = false;
 };
 
 class llm_graph_input_attn_no_cache : public llm_graph_input_i {
