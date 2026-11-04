@@ -827,6 +827,15 @@ void mtmd_helper_subprocess::start_feeder(const std::vector<uint8_t> & buf) {
     });
 }
 
+static void log_video_launch_error(ggml_log_level level, const std::string & tool, int error) {
+    const char * reason = error == subprocess_error_not_found ? "executable not found"
+                        : error == subprocess_error_permission_denied ? "permission denied"
+                        : "process creation failed";
+    g_logger.log(level, "could not launch '%s': %s (subprocess error %d); "
+                       "install ffmpeg and ffprobe in PATH or set --video-ffmpeg-dir DIR\n",
+                 tool.c_str(), reason, error);
+}
+
 struct mtmd_helper_video : mtmd_helper_video_seq {
     const mtmd_context * mctx;
     std::string path;
@@ -866,9 +875,10 @@ struct mtmd_helper_video : mtmd_helper_video_seq {
         LOG_DBG("\n");
 
         mtmd_helper_subprocess probe_sp;
-        if (probe_sp.start(cmd.data(),
-                subprocess_option_search_user_path | subprocess_option_inherit_environment) != 0) {
-            LOG_ERR("%s: failed to launch ffprobe\n", __func__);
+        const int ret = probe_sp.start(cmd.data(),
+                subprocess_option_search_user_path | subprocess_option_inherit_environment);
+        if (ret != 0) {
+            log_video_launch_error(GGML_LOG_LEVEL_ERROR, ffprobe_bin, ret);
             return false;
         }
 
@@ -907,6 +917,8 @@ struct mtmd_helper_video : mtmd_helper_video_seq {
         probe_sp.stop();
 
         if (src.width == 0 || src.height == 0 || src.fps <= 0.0f) {
+            LOG_ERR("%s: '%s' did not return valid video dimensions and frame rate; check the input media\n",
+                    __func__, ffprobe_bin.c_str());
             return false;
         }
 
@@ -934,8 +946,9 @@ struct mtmd_helper_video : mtmd_helper_video_seq {
         cmd.insert(cmd.end(), {"-i", is_buf_input() ? "cache:pipe:0" : path.c_str(), "-map", "0:a:0", "-vn", "-ac", "1",
                                "-ar", rate_str.c_str(), "-f", "f32le", "pipe:1", "-loglevel", "error", nullptr});
         mtmd_helper_subprocess audio_sp;
-        if (audio_sp.start(cmd.data(), subprocess_option_search_user_path | subprocess_option_inherit_environment) != 0) {
-            LOG_WRN("%s: failed to launch ffmpeg for the soundtrack\n", __func__);
+        const int ret = audio_sp.start(cmd.data(), subprocess_option_search_user_path | subprocess_option_inherit_environment);
+        if (ret != 0) {
+            log_video_launch_error(GGML_LOG_LEVEL_WARN, ffmpeg_bin, ret);
             return;
         }
         if (is_buf_input()) {
@@ -1039,6 +1052,9 @@ struct mtmd_helper_video : mtmd_helper_video_seq {
 
         int ret = sp.start(cmd.data(), subprocess_option_search_user_path | subprocess_option_inherit_environment);
         LOG_DBG("%s: subprocess_create ret=%d proc_alive=%d\n", __func__, ret, (int)sp.alive);
+        if (ret != 0) {
+            log_video_launch_error(GGML_LOG_LEVEL_ERROR, ffmpeg_bin, ret);
+        }
 
         if (sp.alive && is_buf_input()) {
             LOG_DBG("%s: starting feeder thread for %zu-byte buffer\n", __func__, input_buf.size());
@@ -1160,7 +1176,6 @@ mtmd_helper_video * mtmd_helper_video_init(
     ctx->use_video_config      = true;
 
     if (!ctx->probe(params.fps_target)) {
-        LOG_ERR("%s: ffprobe failed for '%s' (is ffprobe in PATH?)\n", __func__, path);
         delete ctx;
         return nullptr;
     }
@@ -1169,7 +1184,6 @@ mtmd_helper_video * mtmd_helper_video_init(
     }
 
     if (!ctx->start_ffmpeg(0.0f)) {
-        LOG_ERR("%s: failed to start ffmpeg for '%s' (is ffmpeg in PATH?)\n", __func__, path);
         delete ctx;
         return nullptr;
     }
@@ -1199,7 +1213,6 @@ mtmd_helper_video * mtmd_helper_video_init_from_buf(
     ctx->use_video_config      = true;
 
     if (!ctx->probe(params.fps_target)) {
-        LOG_ERR("%s: ffprobe failed on buffer (is ffprobe in PATH?)\n", __func__);
         delete ctx;
         return nullptr;
     }
@@ -1208,7 +1221,6 @@ mtmd_helper_video * mtmd_helper_video_init_from_buf(
     }
 
     if (!ctx->start_ffmpeg(0.0f)) {
-        LOG_ERR("%s: failed to start ffmpeg on buffer (is ffmpeg in PATH?)\n", __func__);
         delete ctx;
         return nullptr;
     }

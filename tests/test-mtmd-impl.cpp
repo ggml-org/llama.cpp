@@ -7,6 +7,8 @@
 #include "mtmd-internal.h"
 
 #include <algorithm>
+#include <chrono>
+#include <filesystem>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -402,6 +404,40 @@ static std::string video_sequence_to_str(testing & t, mtmd_helper_video_seq & vi
     t.assert_equal("end of stream", -1, ret);
     return out;
 }
+
+#ifdef MTMD_VIDEO
+MAKE_TEST(test_video_missing_decoder) {
+    std::string errors;
+    struct log_guard {
+        log_guard(std::string & errors) {
+            mtmd_helper_log_set([](ggml_log_level, const char * text, void * data) {
+                static_cast<std::string *>(data)->append(text);
+            }, &errors);
+        }
+        ~log_guard() {
+            mtmd_helper_log_set([](ggml_log_level level, const char * text, void *) {
+                if (level != GGML_LOG_LEVEL_DEBUG) fputs(text, stderr);
+            }, nullptr);
+        }
+    } guard(errors);
+
+    // The directory does not exist; no model or external decoder is required.
+    const auto directory = std::filesystem::temp_directory_path() /
+        ("mtmd-missing-decoder-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    if (!t.assert_true("fixture directory absent", !std::filesystem::exists(directory))) return;
+    const std::string path = directory.string();
+    auto params = mtmd_helper_video_init_params_default();
+    params.ffmpeg_bin_dir = path.c_str();
+    const unsigned char data[] = { 1, 2, 3 };
+    mtmd_helper_video * video = mtmd_helper_video_init_from_buf(nullptr, data, sizeof(data), params);
+    t.assert_true("missing decoder rejects input", video == nullptr);
+    mtmd_helper_video_free(video);
+    t.assert_true("names actual executable", errors.find("ffprobe") != std::string::npos);
+    t.assert_true("explains launch failure", errors.find("executable not found") != std::string::npos);
+    t.assert_true("names existing directory flag", errors.find("--video-ffmpeg-dir DIR") != std::string::npos);
+    t.assert_true("does not misdiagnose media", errors.find("valid video dimensions") == std::string::npos);
+}
+#endif
 
 MAKE_TEST(test_video_sequence_empty) {
     test_video_source video(0);
