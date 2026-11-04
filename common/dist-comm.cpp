@@ -35,6 +35,7 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -360,7 +361,55 @@ socket_t accept_socket(socket_t listen_fd, std::string & peer_host, std::string 
     return fd;
 }
 
-socket_t connect_with_retry(const std::string & host, int port, std::string & err, int max_attempts = 6000, int delay_ms = 50) {
+// A rank that is still dialing, or still waiting to be dialed, says so after DIST_WAIT_NOTE_S seconds;
+// the gap between notes then doubles up to DIST_WAIT_NOTE_MAX_S, so a worker that waits a long time for
+// the next session stays quiet.
+constexpr int DIST_WAIT_NOTE_S     = 10;
+constexpr int DIST_WAIT_NOTE_MAX_S = 300;
+
+// Waits up to timeout_ms for fd to become readable; for a listening socket, for a connection to accept.
+// Returns 1 when readable, 0 on timeout, -1 on error.
+int wait_readable(socket_t fd, int timeout_ms) {
+    fd_set rd;
+    FD_ZERO(&rd);
+    FD_SET(fd, &rd);
+    timeval tv {};
+    tv.tv_sec  = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+#ifdef _WIN32
+    return select(0, &rd, nullptr, nullptr, &tv);
+#else
+    const int rc = select(fd + 1, &rd, nullptr, nullptr, &tv);
+    return rc < 0 && errno == EINTR ? 0 : rc;
+#endif
+}
+
+// accept_socket() that says from time to time what it is still waiting for, so a rank whose
+// peer never dials in does not look hung. There is no limit: the peer that cannot dial gives up and
+// says why (connect_with_retry), and this rank's note names the peer to look at.
+socket_t accept_noting(socket_t listen_fd, const std::string & what, std::string & peer_host, std::string & err) {
+    using clock = std::chrono::steady_clock;
+    const auto start = clock::now();
+    for (int note_s = DIST_WAIT_NOTE_S;; note_s = std::min(note_s * 2, DIST_WAIT_NOTE_MAX_S)) {
+        const int ready = wait_readable(listen_fd, note_s * 1000);
+        if (ready > 0) {
+            return accept_socket(listen_fd, peer_host, err);
+        }
+        if (ready < 0) {
+            err = "select() failed: " + socket_error_string();
+            return DIST_CCL_INVALID_SOCKET;
+        }
+        const auto waited = std::chrono::duration_cast<std::chrono::seconds>(clock::now() - start);
+        std::fprintf(stderr, "dist-tp: still waiting for %s after %lld s\n", what.c_str(), (long long) waited.count());
+        std::fflush(stderr);
+    }
+}
+
+// Dials host:port until it answers or max_wait_s seconds pass, retrying every delay_ms. A peer that is
+// not listening yet refuses at once; a peer behind a link that is down never answers, and then each
+// connect() blocks for the system's SYN timeout (about 21 s on Windows), so the limit is time, not
+// attempts. Says from time to time that it is still dialing, with the last error.
+socket_t connect_with_retry(const std::string & host, int port, std::string & err, int max_wait_s = 300, int delay_ms = 50) {
     struct addrinfo hints {};
     hints.ai_family   = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
@@ -373,11 +422,18 @@ socket_t connect_with_retry(const std::string & host, int port, std::string & er
         return DIST_CCL_INVALID_SOCKET;
     }
 
+    using clock = std::chrono::steady_clock;
+    const auto start     = clock::now();
+    const auto deadline  = start + std::chrono::seconds(max_wait_s);
+    int        note_s    = DIST_WAIT_NOTE_S;
+    auto       next_note = start + std::chrono::seconds(note_s);
+    std::string last_err = "no address to try";
     socket_t fd = DIST_CCL_INVALID_SOCKET;
-    for (int attempt = 0; attempt < max_attempts; ++attempt) {
+    for (;;) {
         for (addrinfo * rp = result; rp != nullptr; rp = rp->ai_next) {
             fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
             if (fd == DIST_CCL_INVALID_SOCKET) {
+                last_err = "socket() failed: " + socket_error_string();
                 continue;
             }
 
@@ -391,14 +447,28 @@ socket_t connect_with_retry(const std::string & host, int port, std::string & er
                 return fd;
             }
 
+            last_err = "connect() failed: " + socket_error_string();
             close_fd(fd);
+        }
+
+        const auto now = clock::now();
+        if (now >= deadline) {
+            break;
+        }
+        if (now >= next_note) {
+            const auto waited = std::chrono::duration_cast<std::chrono::seconds>(now - start);
+            std::fprintf(stderr, "dist-tp: still dialing %s:%d after %lld s (%s)\n", host.c_str(), port,
+                         (long long) waited.count(), last_err.c_str());
+            std::fflush(stderr);
+            note_s    = std::min(note_s * 2, DIST_WAIT_NOTE_MAX_S);
+            next_note = now + std::chrono::seconds(note_s);
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
     }
 
     freeaddrinfo(result);
-    err = "connect() failed to " + host + ":" + std::to_string(port) +
-            " after " + std::to_string(max_attempts) + " attempts";
+    err = "no answer from " + host + ":" + port_str + " within " + std::to_string(max_wait_s) + " s (" + last_err +
+          "); check that the rank there is running and that the link to it is up";
     return DIST_CCL_INVALID_SOCKET;
 }
 
@@ -843,8 +913,13 @@ struct dist_comm_socket_context::impl {
         }
 
         for (int left = dial_diag ? 1 : 2; left > 0; --left) {
+            std::string what = ring_in_fd == DIST_CCL_INVALID_SOCKET ? "rank " + std::to_string(prev) : "";
+            if (!dial_diag && diag_fd == DIST_CCL_INVALID_SOCKET) {
+                what += (what.empty() ? "rank " : " and rank ") + std::to_string(diag);
+            }
             std::string peer_host;
-            socket_t fd = accept_socket(listen_fd, peer_host, err);
+            socket_t fd = accept_noting(listen_fd, what + " to dial in on port " + std::to_string(cfg.listen_port),
+                                       peer_host, err);
             if (fd == DIST_CCL_INVALID_SOCKET) {
                 return false;
             }
@@ -1112,8 +1187,16 @@ struct dist_comm_socket_context::impl {
         reg_fds.reserve(cfg.world_size - 1);
 
         while ((int) reg_fds.size() < cfg.world_size - 1) {
+            std::string missing;
+            for (int i = 1; i < cfg.world_size; ++i) {
+                if (members[i].host.empty()) {
+                    missing += (missing.empty() ? "" : ", ") + std::to_string(i);
+                }
+            }
+            const bool one = cfg.world_size - 1 - (int) reg_fds.size() == 1;
             std::string peer_host;
-            socket_t fd = accept_socket(listen_fd, peer_host, err);
+            socket_t fd = accept_noting(listen_fd, (one ? "rank " : "ranks ") + missing + " to register on port " +
+                                        std::to_string(cfg.listen_port), peer_host, err);
             if (fd == DIST_CCL_INVALID_SOCKET) {
                 return false;
             }
@@ -1232,7 +1315,8 @@ struct dist_comm_socket_context::impl {
         }
 
         std::string peer_host;
-        ring_in_fd = accept_socket(listen_fd, peer_host, err);
+        ring_in_fd = accept_noting(listen_fd, "rank " + std::to_string(prev) + " to dial in on port " +
+                                   std::to_string(cfg.listen_port), peer_host, err);
         if (ring_in_fd == DIST_CCL_INVALID_SOCKET) {
             return false;
         }
