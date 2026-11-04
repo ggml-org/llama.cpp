@@ -335,6 +335,44 @@ set_tests_properties(test-download-model PROPERTIES FIXTURES_SETUP test-download
 llama_test(test-llama-context  NAME test-llama-context-model  LABEL "model behavior backend"  ARGS -m "${MODEL_DEST}")
 set_tests_properties(test-llama-context-model PROPERTIES FIXTURES_REQUIRED test-download-model)
 
+if (LLAMA_BUILD_TOOLS AND GGML_CPU AND NOT EMSCRIPTEN)
+    set(PPL_TEST_TEXT " the")
+    foreach(i RANGE 1 13)
+        string(APPEND PPL_TEST_TEXT "${PPL_TEST_TEXT}")
+    endforeach()
+    set(PPL_TEST_FILE       "${CMAKE_CURRENT_BINARY_DIR}/perplexity.txt")
+    set(PPL_TEST_FILE_SHORT "${CMAKE_CURRENT_BINARY_DIR}/perplexity-short.txt")
+    set(PPL_KLD_BASE        "${CMAKE_CURRENT_BINARY_DIR}/perplexity-kld-base.bin")
+    set(PPL_KLD_BASE_SHORT  "${CMAKE_CURRENT_BINARY_DIR}/perplexity-kld-base-short.bin")
+    file(WRITE "${PPL_TEST_FILE}" "${PPL_TEST_TEXT}")
+    file(WRITE "${PPL_TEST_FILE_SHORT}" " the the the the")
+    set(PPL_TEST_ARGS -m "${MODEL_DEST}" -t 2 -ngl 0)
+
+    # the KLD bases, written by a normal perplexity run
+    llama_test(llama-perplexity  NAME test-perplexity-kld-base        LABEL "model behavior"  ARGS ${PPL_TEST_ARGS} -f "${PPL_TEST_FILE}" -c 512 -b 512 --chunks 1 --kl-divergence-base "${PPL_KLD_BASE}")
+    llama_test(llama-perplexity  NAME test-perplexity-kld-base-short  LABEL "model behavior"  ARGS ${PPL_TEST_ARGS} -f "${PPL_TEST_FILE}" -c 128 -b 128 --chunks 1 --kl-divergence-base "${PPL_KLD_BASE_SHORT}")
+    set_tests_properties(test-perplexity-kld-base       PROPERTIES FIXTURES_REQUIRED test-download-model FIXTURES_SETUP perplexity-kld-base)
+    set_tests_properties(test-perplexity-kld-base-short PROPERTIES FIXTURES_REQUIRED test-download-model FIXTURES_SETUP perplexity-kld-base-short)
+
+    llama_test(llama-perplexity  NAME test-perplexity-kld        LABEL "model behavior"  ARGS ${PPL_TEST_ARGS} -c 512 -b 512 --kl-divergence-base "${PPL_KLD_BASE}" --kl-divergence)
+    llama_test(llama-perplexity  NAME test-perplexity-kld-short  LABEL "model behavior"  ARGS ${PPL_TEST_ARGS} -c 128 -b 128 --kl-divergence-base "${PPL_KLD_BASE_SHORT}" --kl-divergence)
+    llama_test(llama-perplexity  NAME test-perplexity-stride     LABEL "model behavior"  ARGS ${PPL_TEST_ARGS} -f "${PPL_TEST_FILE}" -c 128 -b 128 --ppl-stride 64 --chunks 2)
+    set_tests_properties(test-perplexity-kld       PROPERTIES FIXTURES_REQUIRED "test-download-model;perplexity-kld-base")
+    set_tests_properties(test-perplexity-kld-short PROPERTIES FIXTURES_REQUIRED "test-download-model;perplexity-kld-base-short")
+    set_tests_properties(test-perplexity-stride    PROPERTIES FIXTURES_REQUIRED test-download-model)
+
+    # evaluation errors must give a non-zero exit status
+    llama_test(llama-perplexity  NAME test-perplexity-kld-missing-base   LABEL "model behavior"  ARGS ${PPL_TEST_ARGS} -c 512 -b 512 --kl-divergence-base "${CMAKE_CURRENT_BINARY_DIR}/perplexity-kld-missing.bin" --kl-divergence)
+    llama_test(llama-perplexity  NAME test-perplexity-kld-bad-header     LABEL "model behavior"  ARGS ${PPL_TEST_ARGS} -c 512 -b 512 --kl-divergence-base "${PPL_TEST_FILE}" --kl-divergence)
+    llama_test(llama-perplexity  NAME test-perplexity-kld-ctx-too-small  LABEL "model behavior"  ARGS ${PPL_TEST_ARGS} -c 256 -b 256 --kl-divergence-base "${PPL_KLD_BASE}" --kl-divergence)
+    llama_test(llama-perplexity  NAME test-perplexity-kld-vocab          LABEL "model behavior"  ARGS -m "${SPEC_TARGET_DIR}/llama-dense.gguf" -t 2 -ngl 0 -c 512 -b 512 --kl-divergence-base "${PPL_KLD_BASE}" --kl-divergence)
+    llama_test(llama-perplexity  NAME test-perplexity-short-input        LABEL "model behavior"  ARGS ${PPL_TEST_ARGS} -f "${PPL_TEST_FILE_SHORT}" -c 128 -b 128)
+    llama_test(llama-perplexity  NAME test-perplexity-stride-short       LABEL "model behavior"  ARGS ${PPL_TEST_ARGS} -f "${PPL_TEST_FILE_SHORT}" -c 128 -b 128 --ppl-stride 64)
+    set_tests_properties(test-perplexity-kld-missing-base test-perplexity-kld-bad-header test-perplexity-short-input test-perplexity-stride-short PROPERTIES FIXTURES_REQUIRED test-download-model WILL_FAIL TRUE)
+    set_tests_properties(test-perplexity-kld-ctx-too-small PROPERTIES FIXTURES_REQUIRED "test-download-model;perplexity-kld-base" WILL_FAIL TRUE)
+    set_tests_properties(test-perplexity-kld-vocab PROPERTIES FIXTURES_REQUIRED "speculative-model;perplexity-kld-base" WILL_FAIL TRUE)
+endif()
+
 llama_build_and_test(test-thread-safety.cpp  LABEL "main backend"  ARGS -m "${MODEL_DEST}" -ngl 99 -p "The meaning of life is" -n 128 -c 256 -ub 32 -np 4 -t 2)
 set_tests_properties(test-thread-safety PROPERTIES FIXTURES_REQUIRED test-download-model)
 

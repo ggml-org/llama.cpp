@@ -29,6 +29,7 @@ struct results_perplexity {
     double                   ppl_value;
     std::vector<float>       logits;
     std::vector<float>       probs;
+    bool                     ok;
 };
 
 struct results_log_softmax {
@@ -315,7 +316,7 @@ static results_perplexity perplexity_v2(llama_context * ctx, const common_params
         LOG_ERR("%s: you need at least %d tokens to evaluate perplexity with a context of %d\n",__func__,2*n_ctx,
                 n_ctx);
         LOG_ERR("%s: the data file you provided tokenizes to only %zu tokens\n",__func__,tokens.size());
-        return {std::move(tokens), 0., {}, {}};
+        return {std::move(tokens), 0., {}, {}, false};
     }
 
     std::vector<float> logit_history;
@@ -326,7 +327,7 @@ static results_perplexity perplexity_v2(llama_context * ctx, const common_params
 
     if (params.ppl_stride <= 0) {
         LOG_ERR("%s: stride is %d but must be greater than zero!\n",__func__,params.ppl_stride);
-        return {tokens, -1, logit_history, prob_history};
+        return {tokens, -1, logit_history, prob_history, false};
     }
 
     const int calc_chunk = n_ctx;
@@ -336,7 +337,7 @@ static results_perplexity perplexity_v2(llama_context * ctx, const common_params
     if (int(tokens.size()) <= calc_chunk) {
         LOG_ERR("%s: there are only %zu tokens, this is not enough for a context size of %d and stride %d\n",__func__,
                 tokens.size(), n_ctx, params.ppl_stride);
-        return {tokens, -1, logit_history, prob_history};
+        return {tokens, -1, logit_history, prob_history, false};
     }
 
     const int n_chunk_max = (tokens.size() - calc_chunk + params.ppl_stride - 1)  / params.ppl_stride;
@@ -379,8 +380,8 @@ static results_perplexity perplexity_v2(llama_context * ctx, const common_params
 
             //LOG_DBG("    Batch %d: starts at %d, size is %d, n_past is %d\n",j,batch_start,batch_size,j * n_batch);
             if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
-                //LOG_ERR("%s : failed to eval\n", __func__);
-                return {tokens, -1, logit_history, prob_history};
+                LOG_ERR("%s : failed to decode\n", __func__);
+                return {tokens, -1, logit_history, prob_history, false};
             }
 
             // save original token and restore it after eval
@@ -436,7 +437,7 @@ static results_perplexity perplexity_v2(llama_context * ctx, const common_params
     }
     LOG("\n");
 
-    return {tokens, std::exp(nll / count), logit_history, prob_history};
+    return {tokens, std::exp(nll / count), logit_history, prob_history, true};
 }
 
 static results_perplexity perplexity(llama_context * ctx, const common_params & params, const int32_t n_ctx) {
@@ -479,7 +480,7 @@ static results_perplexity perplexity(llama_context * ctx, const common_params & 
         LOG_ERR("%s: you need at least %d tokens to evaluate perplexity with a context of %d\n",__func__,2*n_ctx,
                 n_ctx);
         LOG_ERR("%s: the data file you provided tokenizes to only %zu tokens\n",__func__,tokens.size());
-        return {std::move(tokens), 0., {}, {}};
+        return {std::move(tokens), 0., {}, {}, false};
     }
 
     std::vector<float> logit_history;
@@ -580,8 +581,8 @@ static results_perplexity perplexity(llama_context * ctx, const common_params & 
             }
 
             if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
-                LOG_INF("%s : failed to decode\n", __func__);
-                return {tokens, -1, logit_history, prob_history};
+                LOG_ERR("%s : failed to decode\n", __func__);
+                return {tokens, -1, logit_history, prob_history, false};
             }
 
             if (num_batches > 1 && n_outputs > 0) {
@@ -650,7 +651,7 @@ static results_perplexity perplexity(llama_context * ctx, const common_params & 
     }
 
 
-    return {tokens, ppl, logit_history, prob_history};
+    return {tokens, ppl, logit_history, prob_history, true};
 }
 
 static bool decode_helper(llama_context * ctx, common_batch & batch, std::vector<float> & batch_logits, int n_batch, int n_vocab) {
@@ -1672,25 +1673,25 @@ static void multiple_choice_score(llama_context * ctx, const common_params & par
     LOG_INF("\n");
 }
 
-static void kl_divergence(llama_context * ctx, const common_params & params) {
+static bool kl_divergence(llama_context * ctx, const common_params & params) {
     const llama_model * model = llama_get_model(ctx);
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
     if (params.logits_file.empty()) {
         LOG_ERR("%s: you must provide a name of a file containing the log probabilities of the base model\n", __func__);
-        return;
+        return false;
     }
     std::ifstream in(params.logits_file.c_str(), std::ios::binary);
     if (!in) {
         LOG_ERR("%s: failed to open %s\n", __func__, params.logits_file.c_str());
-        return;
+        return false;
     }
     {
         char check[9]; check[8] = 0;
         in.read(check, 8);
         if (in.fail() || strncmp("_logits_", check, 8) != 0) {
             LOG_ERR("%s: %s does not look like a file containing log-probabilities\n", __func__, params.logits_file.c_str());
-            return;
+            return false;
         }
     }
 
@@ -1699,6 +1700,7 @@ static void kl_divergence(llama_context * ctx, const common_params & params) {
     if (n_ctx > llama_n_ctx(ctx)) {
         LOG_ERR("%s: %s has been computed with %u, while the current context is %d. Increase it with -c and retry\n",
                 __func__, params.logits_file.c_str(), n_ctx, params.n_ctx);
+        return false;
     }
 
     int n_vocab;
@@ -1707,16 +1709,17 @@ static void kl_divergence(llama_context * ctx, const common_params & params) {
     in.read((char *)&n_chunk, sizeof(n_chunk));
     if (in.fail()) {
         LOG_ERR("%s: failed reading n_vocab, n_chunk from %s\n", __func__, params.logits_file.c_str());
-        return;
+        return false;
     }
     if (n_vocab != llama_vocab_n_tokens(vocab)) {
         LOG_ERR("%s: inconsistent vocabulary (%d vs %d)\n", __func__, n_vocab, llama_vocab_n_tokens(vocab));
+        return false;
     }
 
     std::vector<llama_token> tokens(size_t(n_ctx) * n_chunk);
     if (in.read((char *)tokens.data(), tokens.size()*sizeof(tokens[0])).fail()) {
         LOG_ERR("%s: failed reading evaluation tokens from %s\n", __func__, params.logits_file.c_str());
-        return;
+        return false;
     }
 
     const int n_batch = params.n_batch;
@@ -1813,7 +1816,7 @@ static void kl_divergence(llama_context * ctx, const common_params & params) {
 
             if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
                 LOG_ERR("%s : failed to decode\n", __func__);
-                return;
+                return false;
             }
 
             if (num_batches > 1 && n_outputs > 0) {
@@ -1841,7 +1844,7 @@ static void kl_divergence(llama_context * ctx, const common_params & params) {
         for (int seq = 0; seq < n_seq_batch; seq++) {
             if (in.read((char *)log_probs_uint16.data(), log_probs_uint16.size()*sizeof(uint16_t)).fail()) {
                 LOG_ERR("%s: failed reading log-probs for chunk %d\n", __func__, i + seq);
-                return;
+                return false;
             }
 
             const float * all_logits = num_batches > 1 ? logits.data() : llama_get_logits_ith(ctx, seq*n_ctx + first);
@@ -1884,7 +1887,7 @@ static void kl_divergence(llama_context * ctx, const common_params & params) {
 
     LOG("\n");
 
-    if (kld.count < 100) return; // we do not wish to do statistics on so few values
+    if (kld.count < 100) return true; // we do not wish to do statistics on so few values
 
     std::sort(kld_values.begin(), kld_values.end());
     std::sort(p_diff_values.begin(), p_diff_values.end());
@@ -1980,6 +1983,8 @@ static void kl_divergence(llama_context * ctx, const common_params & params) {
 
     const double same_top_p = 1.0*kld.n_same_top/kld.count;
     LOG("Same top p: %6.3lf ± %5.3lf %%\n", 100.0*same_top_p, 100.0*sqrt(same_top_p*(1.0 - same_top_p)/(kld.count - 1)));
+
+    return true;
 }
 
 // satisfies -Wmissing-declarations
@@ -2052,7 +2057,7 @@ int llama_perplexity(int argc, char ** argv) {
         LOG_INF("%s\n", common_params_get_system_info(params).c_str());
     }
 
-    struct results_perplexity results;
+    bool ok = true;
     if (params.hellaswag) {
         hellaswag_score(ctx, params);
     } else if (params.winogrande) {
@@ -2060,9 +2065,9 @@ int llama_perplexity(int argc, char ** argv) {
     } else if (params.multiple_choice) {
         multiple_choice_score(ctx, params);
     } else if (params.kl_divergence) {
-        kl_divergence(ctx, params);
+        ok = kl_divergence(ctx, params);
     } else {
-        results = perplexity(ctx, params, n_ctx);
+        ok = perplexity(ctx, params, n_ctx).ok;
     }
 
     LOG("\n");
@@ -2071,5 +2076,5 @@ int llama_perplexity(int argc, char ** argv) {
 
     llama_backend_free();
 
-    return 0;
+    return ok ? 0 : 1;
 }
