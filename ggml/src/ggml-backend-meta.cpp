@@ -2258,12 +2258,7 @@ static void ggml_backend_meta_get_tensor_async(ggml_backend_t backend, const ggm
         // sums. The ring steps and the forwarding (send buffer = the previous step's receive
         // buffer, which the mesh exchange checks) are the same as below. Every rank evaluates the
         // same condition on the same shape, so all ranks take the same path.
-        // LLAMA_DIST_TP_LOGITS_SHARD=0 restores the whole-vector merge.
-        static const bool shard_merge = [] {
-            const char * s = getenv("LLAMA_DIST_TP_LOGITS_SHARD");
-            return s == nullptr || atoi(s) != 0;
-        }();
-        if (shard_merge && split_state.axis == GGML_BACKEND_SPLIT_AXIS_0 && t->type == GGML_TYPE_F32 &&
+        if (split_state.axis == GGML_BACKEND_SPLIT_AXIS_0 && t->type == GGML_TYPE_F32 &&
                 ggml_nrows(t) == 1 && host_size == n * sizeof(float)) {
             std::vector<int64_t> lo(dist_world_size), hi(dist_world_size);
             int64_t maxlen = 0;
