@@ -11178,11 +11178,19 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
     // per-seq stride in floats (seq s starts at state + s * seq_stride)
     const int64_t state_seq_stride = src_state->nb[3] / sizeof(float);
 
-    const int64_t per_thread = S_v + (K > 1 ? S_v * S_v : 0);
+    // replay: pending tokens to run before the new ones (see ggml_gated_delta_net)
+    const ggml_tensor * src_pk    = dst->src[6];
+    const ggml_tensor * src_pv    = dst->src[7];
+    const ggml_tensor * src_pgb   = dst->src[8];
+    const ggml_tensor * src_n_rep = dst->src[9];
+    const int64_t n_pend = src_pk ? ggml_get_op_params_i32(dst, 1) : 0;
+    const bool    keep   = src_pk && ggml_get_op_params_i32(dst, 2) != 0;
+
+    const int64_t per_thread = S_v + (K > 1 || keep ? S_v * S_v : 0);
     const int ith = params->ith;
 
     float * delta       = (float *)params->wdata + ith * per_thread + CACHE_LINE_SIZE_F32;
-    float * state_work  = K > 1 ? (delta + S_v) : nullptr;
+    float * state_work  = K > 1 || keep ? (delta + S_v) : nullptr;
 
     // output layout: [attn_scores | new_states]
     // attn_scores: S_v * H * n_tokens * n_seqs    floats
@@ -11216,7 +11224,7 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
 
         // For K=1, write directly to the single output slot to avoid an extra memcpy at the end.
         // For K>1, work in scratch and copy out per-token when the slot is in range.
-        float * s_out = (K > 1)
+        float * s_out = (K > 1 || keep)
             ? state_work
             : state_out_base + (iv3 * H + iv1) * S_v * S_v;
 
@@ -11224,6 +11232,48 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
         // state layout [S_v, S_v, H, n_seqs]: seq iv3 starts at iv3 * state_seq_stride.
         const float * s_in = state_in_base + iv3 * state_seq_stride + iv1 * S_v * S_v;
         memcpy(s_out, s_in, S_v * S_v * sizeof(float));
+
+        if (src_pk) {
+            const int64_t n_r = ((const int32_t *) src_n_rep->data)[iv3];
+            GGML_ASSERT(n_r >= 0 && n_r <= n_pend);
+
+            const char * pk  = (const char *) src_pk->data  + iv3*src_pk->nb[3]  + ik1*src_pk->nb[1];
+            const char * pv  = (const char *) src_pv->data  + iv3*src_pv->nb[3]  + iv1*src_pv->nb[1];
+            const char * pgb = (const char *) src_pgb->data + iv3*src_pgb->nb[3] + iv1*src_pgb->nb[1];
+
+            for (int64_t t = 0; t < n_r; t++) {
+                const float * k_d    = (const float *) (pk  + t*src_pk->nb[2]);
+                const float * v_d    = (const float *) (pv  + t*src_pv->nb[2]);
+                const float * g_d    = (const float *) (pgb + t*src_pgb->nb[2]);
+                const float beta_val = *(const float *) (pgb + (n_pend + t)*src_pgb->nb[2]);
+
+                if (kda) {
+                    for (int64_t i = 0; i < S_v; ++i) {
+                        delta[i] = expf(g_d[i]);
+                    }
+                    for (int64_t j = 0; j < S_v; ++j) {
+                        ggml_vec_mul_f32(S_v, &s_out[j * S_v], &s_out[j * S_v], delta);
+                    }
+                } else {
+                    ggml_vec_scale_f32(S_v * S_v, s_out, expf(g_d[0]));
+                }
+
+                for (int64_t j = 0; j < S_v; ++j) {
+                    float sum = 0.0f;
+                    ggml_vec_dot_f32(S_v, &sum, 0, &s_out[j * S_v], 0, k_d, 0, 1);
+                    delta[j] = (v_d[j] - sum) * beta_val;
+                }
+
+                for (int64_t j = 0; j < S_v; ++j) {
+                    ggml_vec_mad_f32(S_v, &s_out[j * S_v], k_d, delta[j]);
+                }
+            }
+
+            // the committed state, the new tokens go on in the scratch
+            if (keep) {
+                memcpy(state_out_base + (iv3 * H + iv1) * S_v * S_v, s_out, S_v * S_v * sizeof(float));
+            }
+        }
 
         // attn output pointer for first token of this (head, seq)
         float * attn_data = attn_out_base + (iv3 * n_tokens * H + iv1) * S_v;

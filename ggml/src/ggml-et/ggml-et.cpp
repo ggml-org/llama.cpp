@@ -1533,7 +1533,8 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 op->src[4]->ne[0] == 1 &&                                              // beta is scalar per position
                 et_ggml_is_row_contiguous(op->src[0]) && et_ggml_is_row_contiguous(op->src[1]) &&
                 et_ggml_is_row_contiguous(op->src[2]) && ggml_is_contiguous(op->src[3]) &&
-                ggml_is_contiguous(op->src[4]) && ggml_is_contiguous(op->src[5])) {
+                ggml_is_contiguous(op->src[4]) && ggml_is_contiguous(op->src[5]) &&
+                ggml_get_op_params_i32(op, 1) == 0) {                                  // no replay of pending tokens
                 supported = true;
             } else {
                 supported = false;

@@ -503,6 +503,11 @@ static bool htp_kparams_solve_gated_delta_net(
         return false;
     }
 
+    // replay of pending tokens (op param 1) is not implemented
+    if (ggml_get_op_params_i32(op, 1) != 0) {
+        return false;
+    }
+
     memset(kparams, 0, sizeof(*kparams));
 
     const struct ggml_tensor * q     = op->src[0];

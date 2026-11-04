@@ -35,6 +35,7 @@ public:
                             /* common */
                  uint32_t   n_seq_max,
                  uint32_t   n_rs_seq,
+                     bool   rs_replay,
                      bool   offload,
                      bool   unified,
                             /* layer filters */

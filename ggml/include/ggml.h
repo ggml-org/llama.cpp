@@ -2690,6 +2690,15 @@ extern "C" {
     // snapshots, most-recent first (slot 0 = final state, slot s = state s tokens back). K == 1
     // keeps only the final state; when n_tokens < K only slots 0..n_tokens-1 are written.
     // when n_tokens > K only slot 0 is guaranteed; backends may leave slots 1..K-1 unwritten.
+    //
+    // replay (optional, all of pend_k, pend_v, pend_gb and n_rep set, K == 1) [EXPERIMENTAL]: first runs the pending
+    // tokens of the previous ubatch, so that a rollback only drops pending tokens instead of restoring a snapshot
+    //   pend_k  : [S_k, H_k, n_pend, n_seqs]
+    //   pend_v  : [S_v, H_v, n_pend, n_seqs]
+    //   pend_gb : [g0, H_v, 2*n_pend, n_seqs], the gates of the n_pend tokens, then their betas (in element 0)
+    //   n_rep   : I32 [n_seqs], number of pending tokens to replay (<= n_pend)
+    // the state output is the state after the replay if keep is true, else the final state.
+    // op param 1 is n_pend (0 without replay): backends that do not implement the replay reject the op when it is set
     GGML_API struct ggml_tensor * ggml_gated_delta_net(
             struct ggml_context * ctx,
             struct ggml_tensor  * q,
@@ -2698,7 +2707,12 @@ extern "C" {
             struct ggml_tensor  * g,
             struct ggml_tensor  * beta,
             struct ggml_tensor  * state,
-            int64_t               K);
+            struct ggml_tensor  * pend_k,
+            struct ggml_tensor  * pend_v,
+            struct ggml_tensor  * pend_gb,
+            struct ggml_tensor  * n_rep,
+            int64_t               K,
+            bool                  keep);
 
     // DSA lightning indexer
     //

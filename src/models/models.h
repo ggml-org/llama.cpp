@@ -98,6 +98,27 @@ struct llm_build_delta_net_base : public llm_graph_context {
             ggml_tensor *        b,
             ggml_tensor *        s,
             int                  il);
+
+    // rs_replay variants: replay the kept pending tokens, then keep or commit the new ones [TAG_RECURRENT_REPLAY]
+    // x: [channels, n_seq_tokens, n_seqs] new conv inputs; returns [n_conv + n_seq_tokens, channels, n_seqs]
+    ggml_tensor * build_conv_state_replay(
+            llm_graph_input_rs * inp,
+            ggml_tensor *        conv_states_all,
+            ggml_tensor *        x,
+            int64_t              n_conv,
+            int64_t              channels,
+            int                  il);
+
+    ggml_tensor * build_recurrent_attn_replay(
+            llm_graph_input_rs * inp,
+            ggml_tensor *        ssm_states_all,
+            ggml_tensor *        q,
+            ggml_tensor *        k,
+            ggml_tensor *        v,
+            ggml_tensor *        g,
+            ggml_tensor *        b,
+            ggml_tensor *        s,
+            int                  il);
 };
 
 struct llm_build_lfm_base : public llm_graph_context {

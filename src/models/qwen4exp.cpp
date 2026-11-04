@@ -1402,6 +1402,10 @@ ggml_tensor * llama_model_qwen4exp::graph::build_conv_state_at(
         int64_t              state_cols,
         int64_t              channels,
         int                  il) {
+    if (cparams.rs_replay) {
+        return build_conv_state_replay(inp, conv_states_all, x, state_cols, channels, il);
+    }
+
     const int64_t n_seqs    = ubatch.n_seqs;
     const int64_t row_total = conv_states_all->ne[0];
 

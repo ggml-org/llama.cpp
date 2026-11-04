@@ -871,10 +871,21 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
     };
 
     auto handle_gated_delta_net = [&](const std::vector<ggml_backend_meta_split_state> & src_ss) -> ggml_backend_meta_split_state {
+        // replay (src 6..9): the pending k, v and gates/betas are split by heads like k, v and g, n_rep is per seq
+        const bool replay = tensor->src[6] != nullptr;
         if (src_ss[0].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED && src_ss[1].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED &&
                 src_ss[2].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED && src_ss[3].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED &&
                 src_ss[4].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED && src_ss[5].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED) {
+            for (int i = 6; replay && i < 10; i++) {
+                GGML_ASSERT(src_ss[i].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED);
+            }
             return src_ss[0];
+        }
+        if (replay) {
+            GGML_ASSERT(src_ss[6].axis == GGML_BACKEND_SPLIT_AXIS_1);
+            GGML_ASSERT(src_ss[7].axis == GGML_BACKEND_SPLIT_AXIS_1);
+            GGML_ASSERT(src_ss[8].axis == GGML_BACKEND_SPLIT_AXIS_1);
+            GGML_ASSERT(src_ss[9].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED);
         }
         GGML_ASSERT(src_ss[0].axis == GGML_BACKEND_SPLIT_AXIS_1);
         GGML_ASSERT(src_ss[1].axis == GGML_BACKEND_SPLIT_AXIS_1);
