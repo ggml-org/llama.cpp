@@ -80,7 +80,7 @@
 		display: grid;
 		gap: 2px;
 		font:
-			400 14px / normal 'Llama Sans Text',
+			400 14px / 1.5 'Llama Sans UI',
 			var(--body);
 		color: var(--l-muted);
 	}

@@ -2,7 +2,7 @@
 title: Llama icon
 ---
 
-<!-- The logo showcase page from ggml-org/llama.brand (logo/showcase/src/routes/+page.svx), framed by ShowcaseFrame; its rules and specs are the Brand/Logo Geometry story, its lockups the Usage story -->
+<!-- The logo showcase page from ggml-org/llama.brand (logo/showcase/src/routes/+page.svx), framed by ShowcaseFrame; its rules and specs are the Logo/Icon Geometry story, its lockups the Usage story -->
 
 <script>
 	import { deg, lower } from './lib/blueprint';

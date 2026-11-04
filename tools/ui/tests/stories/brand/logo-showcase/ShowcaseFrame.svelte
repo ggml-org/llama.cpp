@@ -5,7 +5,7 @@
 -->
 <script lang="ts">
 	import './lib/styles/logo.css';
-	import './lib/styles/fonts.css';
+	import '../fonts/fonts.css';
 	import type { Snippet } from 'svelte';
 
 	let { children }: { children: Snippet } = $props();
@@ -15,7 +15,7 @@
 
 <style>
 	.logo {
-		--body: 'Llama Sans Text', var(--font-sans);
+		--body: 'Llama Sans UI', var(--font-sans);
 		--mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
 		display: grid;
 		gap: 40px;
@@ -48,7 +48,7 @@
 		margin-top: -30px;
 		color: var(--l-muted);
 		font:
-			400 17px / normal 'Llama Sans Text',
+			400 17px / 1.5 'Llama Sans UI',
 			var(--body);
 	}
 	/* the origin's tiles sit closer under the animation they follow */

@@ -1,0 +1,71 @@
+<!--
+	The Llama Sans specimen, as on the brand site: a copy of fonts/specimen/src/routes/+page.svx in ggml-org/llama.brand,
+	without its frontmatter. SpecimenFrame puts it on its page. Change it there first.
+-->
+
+<script>
+	import { specimen } from './lib/specimen';
+	import { view, nearest, variantNotes } from './lib/view.svelte';
+	import Masthead from './lib/components/Masthead.svelte';
+	import Metrics from './lib/components/Metrics.svelte';
+	import Controls from './lib/components/Controls.svelte';
+	import Tester from './lib/components/Tester.svelte';
+	import InUse from './lib/components/InUse.svelte';
+	import Waterfall from './lib/components/Waterfall.svelte';
+	import Setting from './lib/components/Setting.svelte';
+	import GlyphGrid from './lib/components/GlyphGrid.svelte';
+	import Notes from './lib/components/Notes.svelte';
+	import Note from './lib/components/Note.svelte';
+	import CompareSwitch from './lib/components/CompareSwitch.svelte';
+
+	const { axis, glyphCount, styles } = specimen;
+	const stems = styles.map((s) => s.stem);
+</script>
+
+<Masthead variant={view.variant}>
+
+The sans of the Llama family, with Mono and Serif to follow. A neo-grotesk with an even stroke, round bowls and open, angle-cut terminals, in two variable fonts from {axis.min} to {axis.max} that share every outline: Display for headlines, UI for interfaces and running text.
+
+</Masthead>
+
+<Metrics />
+
+<Controls bind:weight={view.weight} bind:variant={view.variant} bind:size={view.size} bind:tracking={view.tracking} bind:guides={view.guides} />
+
+<Tester {glyphCount} size={view.size} tracking={view.tracking} />
+
+## In use · Llama Sans {view.variant}
+
+{variantNotes[view.variant]}
+
+<InUse variant={view.variant} {glyphCount} guides={view.guides} />
+
+## Weights
+
+<Waterfall />
+
+## Setting
+
+<Setting weight={view.weight} />
+
+<GlyphGrid weight={nearest(view.weight)} comparing={view.comparing} />
+
+## Design notes
+
+<Notes>
+	<Note term="Stroke">Near-monoline, with a {stems[0]}-unit stem at 400 rising to {stems.at(-1)} at 700. Joins stay clean, without ink traps.</Note>
+	<Note term="Curves">Bowls are eased toward true circles, fully circular in G, S and s, so rounds read soft and calm without turning geometric.</Note>
+	<Note term="Terminals">Every curved stroke end is trimmed the same short distance and cut almost square to the stroke, which keeps c, e, g, s, 2, 3, 5, 6 and 9 open and consistent.</Note>
+	<Note term="a">Double-story, on a straight stem with a flat foot. The hook runs long and ends in a flat cut; the bowl rises gently into the stem with sharp joints. Toward Bold, a small bracketed foot appears.</Note>
+	<Note term="l, r, t, f">A plain l the width of the i, and a narrow t with short arms. The ends of r, t and f are angled to match the curved terminals.</Note>
+	<Note term="G, S, s">Wide and round, with slightly open, angled ends on S and s.</Note>
+	<Note term="Display">For headlines and large sizes: tracking −26, stronger kerning (115%) and compact 1.15 em line spacing.</Note>
+	<Note term="UI">For buttons, cards, labels and running text: tracking −4 and kerning matched to SF Pro at its text sizes, with a 1.25 em line box centred on the cap height. Prose sets line-height 1.5 in CSS; the extra leading falls evenly above and below.</Note>
+	<Note term="Weights">Regular, Medium, SemiBold and Bold at 400, 500, 600 and 700, a little lighter than the numbers usually mean, with every weight in between.</Note>
+</Notes>
+
+Next pass: a straight-legged R and a shorter Q tail, an angled end on the j, slightly wider o, c, e and O, and a review of the accented glyphs. Licence: SIL Open Font License 1.1. Llama Sans is derived from Geist, © 2024 The Geist Project Authors.
+
+{#if specimen.compare}
+	<CompareSwitch bind:comparing={view.comparing} labels={specimen.compare.labels} />
+{/if}

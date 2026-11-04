@@ -540,7 +540,7 @@
 		margin: 0;
 		min-height: 2.9em;
 		font:
-			400 14px / 1.45 'Llama Sans Text',
+			400 14px / 1.45 'Llama Sans UI',
 			var(--body);
 		color: var(--l-muted);
 	}
