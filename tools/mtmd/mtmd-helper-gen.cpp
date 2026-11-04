@@ -521,19 +521,20 @@ private:
 
 // settings that only live in the reference's per-pack yaml, not in the checkpoint
 // the english packs share the same shapes and tokenizer, but disagree on these
-// both are 0 / false when the pack does not tune them, the model default is then used
-// the temperature is not tuned per pack, every shipped model samples at the model default
+// all three are 0 / false when the pack does not tune them, the model default is then used
 struct pockettts_pack_settings {
+    float temp             = 0.0f;
     int   frames_after_eos = 0;
     bool  pad_short_text   = false;
 };
 
 static pockettts_pack_settings pockettts_pack(const char * variant) {
     static const std::unordered_map<std::string, pockettts_pack_settings> packs = {
-        { "english",         { 0, false } },
-        { "english_2026-01", { 0, true  } },
-        { "english_2026-04", { 0, false } },
-        { "french_24l",      { 8, false } },
+        { "english",         { 0.3f, 0, false } },
+        { "english_2026-01", { 0.3f, 0, true  } },
+        { "english_2026-04", { 0.3f, 0, false } },
+        { "french_24l",      { 0.3f, 8, false } },
+        { "italian",         { 0.3f, 0, false } },
     };
     auto it = packs.find(variant ? variant : "");
     if (it == packs.end()) {
@@ -683,6 +684,8 @@ public:
         inp.embd = const_cast<float *>(h_state_in);
         if (temp >= 0.0f) {
             inp.temp = temp;
+        } else if (pack.temp > 0.0f) {
+            inp.temp = pack.temp;
         }
         mtmd_gen_out out{};
         if (mtmd_gen_audio_process(mctx, gen_state.get(), &inp, &out) != 0) {
@@ -1017,7 +1020,7 @@ private:
     }
 
     pockettts_pack_settings pack;
-    float temp = -1.0f; // the caller's flow noise scale, < 0 for the model default
+    float temp = -1.0f; // the caller's flow noise scale, < 0 for the pack or model default
     bool specials_ok = false;
     llama_token bos_before_voice = LLAMA_TOKEN_NULL;
     llama_token audio_bos        = LLAMA_TOKEN_NULL;
