@@ -2180,7 +2180,7 @@ struct llama_model_bailingmoe3 : public llama_model_base {
         // causal conv1d over one of Q/K/V, qkv selects which third of the conv state row is used
         ggml_tensor * build_causal_conv1d(llm_graph_input_rs * inp_rs, ggml_tensor * conv_states_all, ggml_tensor * conv_state_all,
                                           int64_t qkv, ggml_tensor * x, ggml_tensor * proj_w, ggml_tensor * conv_w,
-                                          int64_t d_conv, int64_t head_dim, int64_t n_head_kda, int64_t n_seq_tokens, int64_t n_seqs);
+                                          int64_t d_conv, int64_t head_dim, int64_t n_head, int64_t n_seq_tokens, int64_t n_seqs);
     };
 
     struct graph_mtp : public llm_graph_context {

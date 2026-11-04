@@ -163,8 +163,8 @@ std::unique_ptr<llm_graph_context> llama_model_bailingmoe3::build_arch_graph(con
 ggml_tensor * llama_model_bailingmoe3::graph::build_causal_conv1d(
         llm_graph_input_rs * inp_rs, ggml_tensor * conv_states_all, ggml_tensor * conv_state_all,
         int64_t qkv, ggml_tensor * x, ggml_tensor * proj_w, ggml_tensor * conv_w,
-        int64_t d_conv, int64_t head_dim, int64_t n_head_kda, int64_t n_seq_tokens, int64_t n_seqs) {
-    const int64_t d_inner = head_dim * n_head_kda;
+        int64_t d_conv, int64_t head_dim, int64_t n_head, int64_t n_seq_tokens, int64_t n_seqs) {
+    const int64_t d_inner = head_dim * n_head;
     const int64_t conv_state_size = (d_conv - 1) * d_inner;
     const int64_t total_state_size = 3 * conv_state_size;
 
@@ -183,7 +183,7 @@ ggml_tensor * llama_model_bailingmoe3::graph::build_causal_conv1d(
     ggml_tensor * conv_weight = ggml_reshape_2d(ctx0, conv_w, d_conv, d_inner);
     ggml_tensor * out = ggml_ssm_conv(ctx0, conv_x, conv_weight);
     out = ggml_silu(ctx0, ggml_reshape_2d(ctx0, out, d_inner, n_tokens));
-    return ggml_reshape_4d(ctx0, out, head_dim, n_head_kda, n_seq_tokens, n_seqs);
+    return ggml_reshape_4d(ctx0, out, head_dim, n_head, n_seq_tokens, n_seqs);
 }
 
 llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph_params & params) :
