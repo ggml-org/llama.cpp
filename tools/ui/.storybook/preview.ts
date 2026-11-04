@@ -27,9 +27,11 @@ const preview: Preview = {
 				order: [
 					'Introduction',
 					['Overview', 'Design guidelines'],
-					'Brand',
-					['Logo', 'Logo showcase', 'App icons'],
-					'Design system',
+					'Logo',
+					['Icon', 'Showcase', 'App icons'],
+					'Typography',
+					['Llama Sans UI', 'Llama Sans Display'],
+					'Design System',
 					[
 						'Foundations',
 						['Colors', 'Typography', 'Sizing', 'Shapes', 'Elevation', 'Surfaces'],
@@ -38,18 +40,21 @@ const preview: Preview = {
 						'Display',
 						'Overlays',
 						'Navigation',
-						'Patterns',
 						'Proposals'
 					],
-					'Chat',
-					['ChatScreen', ['ChatScreen', '*']],
-					'Content',
-					'Models',
-					'MCP',
-					'Navigation',
-					'Settings',
-					['DialogSettingsChat', 'Navigation', 'Sections'],
-					'App'
+					'Patterns',
+					'Blocks',
+					[
+						'Chat',
+						['ChatScreen', ['ChatScreen', '*']],
+						'Content',
+						'Models',
+						'MCP',
+						'Navigation',
+						'Settings',
+						['DialogSettingsChat', 'Navigation', 'Sections'],
+						'App'
+					]
 				]
 			}
 		},

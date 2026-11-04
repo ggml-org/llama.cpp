@@ -9,7 +9,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design system/Forms/Select'
+		title: 'Design System/Forms/Select'
 	});
 
 	const themes = [

@@ -10,7 +10,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Chat/ChatScreen/ChatMessages/ChatMessageUserPending'
+		title: 'Blocks/Chat/ChatScreen/ChatMessages/ChatMessageUserPending'
 	});
 
 	const props = {

@@ -11,7 +11,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Chat/ChatScreen/ChatTabs/ChatTabsItem'
+		title: 'Blocks/Chat/ChatScreen/ChatTabs/ChatTabsItem'
 	});
 
 	const tab = { href: '#/chat/conv-1', id: 'conv-1', name: 'Rust borrow checker' };

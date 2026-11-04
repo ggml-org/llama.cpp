@@ -10,7 +10,7 @@
 		parameters: {
 			layout: 'fullscreen'
 		},
-		title: 'Design system/Overlays/Dialog'
+		title: 'Design System/Overlays/Dialog'
 	});
 </script>
 

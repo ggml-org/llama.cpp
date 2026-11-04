@@ -25,7 +25,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Chat/ChatScreen/ChatForm/ChatFormPickerMention'
+		title: 'Blocks/Chat/ChatScreen/ChatForm/ChatFormPickerMention'
 	});
 
 	const searchTools = { serverHome: SERVER_HOME, serverTools: cwdServerTools };

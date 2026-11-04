@@ -14,7 +14,7 @@
 		parameters: {
 			layout: 'fullscreen'
 		},
-		title: 'Models/ModelsManager'
+		title: 'Blocks/Models/ModelsManager'
 	});
 
 	const option = (model: string, name: string, contextLength?: number): ModelOption => ({

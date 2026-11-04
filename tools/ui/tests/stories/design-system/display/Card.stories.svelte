@@ -8,7 +8,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design system/Display/Card'
+		title: 'Design System/Display/Card'
 	});
 </script>
 

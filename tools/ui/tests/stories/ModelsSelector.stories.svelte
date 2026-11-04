@@ -8,7 +8,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Models/ModelsSelector'
+		title: 'Blocks/Models/ModelsSelector'
 	});
 
 	const mockModel = (id: string, name: string, orgName?: string, tags?: string[]): ModelOption => ({

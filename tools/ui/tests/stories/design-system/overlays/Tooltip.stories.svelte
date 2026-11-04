@@ -9,7 +9,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design system/Overlays/Tooltip'
+		title: 'Design System/Overlays/Tooltip'
 	});
 </script>
 

@@ -9,7 +9,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design system/Display/Skeleton'
+		title: 'Design System/Display/Skeleton'
 	});
 </script>
 

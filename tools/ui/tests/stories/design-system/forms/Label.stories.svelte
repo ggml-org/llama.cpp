@@ -8,7 +8,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design system/Forms/Label'
+		title: 'Design System/Forms/Label'
 	});
 </script>
 

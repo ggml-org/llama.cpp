@@ -7,7 +7,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design system/Display/Separator'
+		title: 'Design System/Display/Separator'
 	});
 </script>
 

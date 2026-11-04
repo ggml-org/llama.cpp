@@ -10,7 +10,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design system/Forms/Switch'
+		title: 'Design System/Forms/Switch'
 	});
 </script>
 

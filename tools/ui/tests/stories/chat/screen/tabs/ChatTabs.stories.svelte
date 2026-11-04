@@ -10,7 +10,7 @@
 		parameters: {
 			layout: 'fullscreen'
 		},
-		title: 'Chat/ChatScreen/ChatTabs/ChatTabs'
+		title: 'Blocks/Chat/ChatScreen/ChatTabs/ChatTabs'
 	});
 
 	const chatRoute = (id: string) => ({

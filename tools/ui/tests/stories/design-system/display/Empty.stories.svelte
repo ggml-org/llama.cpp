@@ -9,7 +9,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design system/Display/Empty'
+		title: 'Design System/Display/Empty'
 	});
 </script>
 

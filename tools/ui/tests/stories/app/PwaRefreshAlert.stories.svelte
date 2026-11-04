@@ -8,7 +8,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'App/PwaRefreshAlert'
+		title: 'Blocks/App/PwaRefreshAlert'
 	});
 </script>
 

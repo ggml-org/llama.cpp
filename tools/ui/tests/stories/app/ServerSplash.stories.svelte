@@ -10,7 +10,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'App/ServerSplash'
+		title: 'Blocks/App/ServerSplash'
 	});
 </script>
 

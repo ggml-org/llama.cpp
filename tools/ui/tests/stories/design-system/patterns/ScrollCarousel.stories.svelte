@@ -11,7 +11,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design system/Patterns/ScrollCarousel'
+		title: 'Patterns/ScrollCarousel'
 	});
 
 	const items = Array.from({ length: 12 }, (_, index) => index + 1);

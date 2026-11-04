@@ -9,7 +9,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design system/Overlays/DropdownMenu'
+		title: 'Design System/Overlays/DropdownMenu'
 	});
 </script>
 

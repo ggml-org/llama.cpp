@@ -11,7 +11,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design system/Patterns/KeyValuePairs'
+		title: 'Patterns/KeyValuePairs'
 	});
 </script>
 
