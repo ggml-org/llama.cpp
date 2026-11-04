@@ -8003,6 +8003,9 @@ void ggml_compute_forward_pool_2d(
     const char * cdata = (const char*)src->data;
     const char * const data_end = cdata + ggml_nbytes(src);
 
+    // the plane loop advances cdata by src->nb[2]; it must not write past dst
+    GGML_ASSERT(ggml_nbytes(src) <= src->nb[2] * dst->ne[2] * dst->ne[3]);
+
     const int64_t px = dst->ne[0];
     const int64_t py = dst->ne[1];
     const int64_t pa = px * py;
