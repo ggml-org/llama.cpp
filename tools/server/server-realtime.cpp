@@ -855,6 +855,7 @@ struct realtime_conversation {
         std::thread reader([this]() {
             std::string msg;
             while (conn.read(msg) != 0) {
+                // ws_ex_wrapper does not run on this thread, and the session survives a bad event
                 try {
                     handle(msg);
                 } catch (const std::exception & e) {
@@ -875,6 +876,7 @@ struct realtime_conversation {
                 break;
             }
             if (auto * res = dynamic_cast<server_task_result_realtime *>(result.get())) {
+                // leaving run() while reader is joinable would terminate the server
                 try {
                     on_result(*res);
                 } catch (const std::exception & e) {

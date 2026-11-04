@@ -96,6 +96,26 @@ static server_http_context::handler_t ex_wrapper(server_http_context::handler_t 
     };
 }
 
+// same for websocket handlers: the error response of ex_wrapper is sent as an error event
+static server_http_context::ws_handler_t ws_ex_wrapper(server_http_context::ws_handler_t func) {
+    return [func = std::move(func)](const server_http_req & req, server_http_context::ws_conn & conn) {
+        const auto res = ex_wrapper([&](const server_http_req &) -> server_http_res_ptr {
+            func(req, conn);
+            return nullptr;
+        })(req);
+        if (res) {
+            try {
+                json ev = json::parse(res->data);
+                ev["type"] = "error";
+                conn.send(safe_json_to_str(ev));
+            } catch (const std::exception &) {
+                // ex_wrapper could not format the error and logged it
+            }
+            conn.close();
+        }
+    };
+}
+
 //
 // shared by every role
 //
@@ -186,7 +206,7 @@ static void server_register_routes(server_http_context & ctx_http, server_routes
     ctx_http.post("/v1/audio/transcriptions",  ex_wrapper(routes.post_transcriptions_oai));
     ctx_http.post("/audio/transcriptions",     ex_wrapper(routes.post_transcriptions_oai));
     ctx_http.post("/tts",                      ex_wrapper(routes.post_tts));
-    ctx_http.ws  ("/v1/realtime",              routes.ws_realtime);
+    ctx_http.ws  ("/v1/realtime",              ws_ex_wrapper(routes.ws_realtime));
     ctx_http.post("/v1/messages",              ex_wrapper(routes.post_anthropic_messages)); // anthropic messages API
     ctx_http.post("/infill",                   ex_wrapper(routes.post_infill));
     ctx_http.post("/embedding",                ex_wrapper(routes.post_embeddings)); // legacy
