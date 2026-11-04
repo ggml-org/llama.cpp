@@ -2135,7 +2135,7 @@ public:
             }
             prompt_tokens.insert(prompt_tokens.end(), ids.begin(), ids.begin() + n);
         }
-        if (prompt_tokens.size() >= llama_n_ctx_seq(lctx)) {
+        if (prompt_tokens.size() >= llama_n_ctx_seq(lctx) || prompt_tokens.size() > n_tower_rows) {
             LOG_ERR("mtmd_helper_gen_audio: prompt does not fit in the context\n");
             return 1;
         }
@@ -2194,7 +2194,8 @@ public:
         *out_stop    = false;
 
         const llama_token main = sample_main(llama_get_logits_ith(lctx, -1));
-        if (main == eos || (uint32_t) pos >= llama_n_ctx_seq(lctx)) {
+        const size_t n_rows = prompt_tokens.size() - 1 + codes_buf.size() / n_cb;
+        if (main == eos || (uint32_t) pos >= llama_n_ctx_seq(lctx) || n_rows >= n_tower_rows) {
             *out_stop = true;
             return 0;
         }
@@ -2290,6 +2291,8 @@ private:
     // repetition-aware sampling: if a semantic draw repeats one of the last ras_window main tokens, draw again with fixed settings
     static constexpr size_t ras_window = 16;
     static constexpr size_t n_cb       = 10;
+    // codebook tower KV rows (clip_graph_drama3_gen::n_pos_max): one per prompt row but the last, one per frame
+    static constexpr size_t n_tower_rows = 4096;
     // frames per codec call when streaming (0.33 s)
     static constexpr size_t stream_frames = 7;
 
