@@ -76,6 +76,7 @@ enum llm_type {
     LLM_TYPE_7B,
     LLM_TYPE_8B,
     LLM_TYPE_9B,
+    LLM_TYPE_10B,
     LLM_TYPE_11B,
     LLM_TYPE_12B,
     LLM_TYPE_13B,
@@ -600,6 +601,14 @@ struct llama_layer {
     struct ggml_tensor * indexer_proj     = nullptr;
     struct ggml_tensor * indexer_attn_k   = nullptr;
     struct ggml_tensor * indexer_attn_q_b = nullptr; // note: for lora a/b, not bias
+    struct ggml_tensor * indexer_q_norm   = nullptr;
+    struct ggml_tensor * indexer_q_norm_b = nullptr;
+
+    // SSMax: per-head query scale s * log(pos + 1) + b
+    struct ggml_tensor * attn_ssmax_s    = nullptr;
+    struct ggml_tensor * attn_ssmax_b    = nullptr;
+    struct ggml_tensor * indexer_ssmax_s = nullptr;
+    struct ggml_tensor * indexer_ssmax_b = nullptr;
 
     // glm5-next k-pool indexer
     struct ggml_tensor * indexer_kpool_gate = nullptr;
@@ -637,6 +646,27 @@ struct llama_layer {
 
     // gemma4 layer output scale, reused for talkie embedding skip scale
     struct ggml_tensor * out_scale = nullptr;
+
+    // metis16 per-pass hyper-connection mixes, attention pass LoRA, expert route embeddings
+    struct ggml_tensor * hc_attn_mix         = nullptr;
+    struct ggml_tensor * hc_attn_read        = nullptr;
+    struct ggml_tensor * hc_attn_write       = nullptr;
+    struct ggml_tensor * hc_ffn_mix          = nullptr;
+    struct ggml_tensor * hc_ffn_read         = nullptr;
+    struct ggml_tensor * hc_ffn_write        = nullptr;
+    struct ggml_tensor * attn_pass_lora_down = nullptr;
+    struct ggml_tensor * attn_pass_lora_up   = nullptr;
+    struct ggml_tensor * attn_pass_gate      = nullptr;
+    struct ggml_tensor * ffn_exp_embd        = nullptr;
+
+    // limite
+    struct ggml_tensor * attn_ve_gate     = nullptr;
+    struct ggml_tensor * attn_xsa_alpha   = nullptr;
+    struct ggml_tensor * attn_resid_scale = nullptr;
+    struct ggml_tensor * ffn_resid_scale  = nullptr;
+    struct ggml_tensor * mudd_down        = nullptr;
+    struct ggml_tensor * mudd_up          = nullptr;
+    struct ggml_tensor * mudd_up_b        = nullptr;
 
     struct llama_layer_posnet posnet;
 
@@ -762,6 +792,34 @@ struct llama_model {
     // hrm-text initial low-cycle state
     struct ggml_tensor * hrm_z_l_init = nullptr;
 
+    // metis16 hyper-connection stream embeddings, depth memory and continuation head
+    struct ggml_tensor * stream_embd             = nullptr;
+    struct ggml_tensor * depth_mem_state_write   = nullptr;
+    struct ggml_tensor * depth_mem_meta_write    = nullptr;
+    struct ggml_tensor * depth_mem_entry_bias    = nullptr;
+    struct ggml_tensor * depth_mem_query         = nullptr;
+    struct ggml_tensor * depth_mem_query_b       = nullptr;
+    struct ggml_tensor * depth_mem_key           = nullptr;
+    struct ggml_tensor * depth_mem_key_b         = nullptr;
+    struct ggml_tensor * depth_mem_value         = nullptr;
+    struct ggml_tensor * depth_mem_value_b       = nullptr;
+    struct ggml_tensor * depth_mem_out           = nullptr;
+    struct ggml_tensor * depth_mem_out_b         = nullptr;
+    struct ggml_tensor * depth_mem_route_state   = nullptr;
+    struct ggml_tensor * depth_mem_route_retr    = nullptr;
+    struct ggml_tensor * depth_mem_route_diff    = nullptr;
+    struct ggml_tensor * depth_mem_route_hist    = nullptr;
+    struct ggml_tensor * depth_mem_route_b       = nullptr;
+    struct ggml_tensor * depth_mem_stream_gate   = nullptr;
+    struct ggml_tensor * depth_mem_stream_gate_b = nullptr;
+    struct ggml_tensor * cont_hidden_state       = nullptr;
+    struct ggml_tensor * cont_hidden_retr        = nullptr;
+    struct ggml_tensor * cont_hidden_diff        = nullptr;
+    struct ggml_tensor * cont_hidden_route       = nullptr;
+    struct ggml_tensor * cont_hidden_b           = nullptr;
+    struct ggml_tensor * cont_output             = nullptr;
+    struct ggml_tensor * cont_output_b           = nullptr;
+
     // DeepSeek-V4
     struct ggml_tensor * hc_head_fn    = nullptr;
     struct ggml_tensor * hc_head_base  = nullptr;
@@ -783,6 +841,9 @@ struct llama_model {
     struct ggml_tensor * altup_unembd_proj    = nullptr;
     struct ggml_tensor * per_layer_tok_embd   = nullptr;
 
+    // limite value embeddings
+    struct ggml_tensor * value_embd = nullptr;
+
     struct ggml_tensor * hc_head_norm = nullptr;
     struct ggml_tensor * hc_head_down = nullptr;
     struct ggml_tensor * hc_head_up   = nullptr;
@@ -801,6 +862,9 @@ struct llama_model {
     struct ggml_tensor * dspark_markov_w2_s = nullptr;
     struct ggml_tensor * dspark_conf_proj   = nullptr;
     struct ggml_tensor * dspark_conf_proj_b = nullptr;
+    struct ggml_tensor * dspark_joint_proj   = nullptr; // rnn markov head
+    struct ggml_tensor * dspark_joint_proj_b = nullptr;
+    struct ggml_tensor * dspark_mask_embd    = nullptr; // per-slot mask embeddings
 
     struct ggml_tensor * dflash_selector_prev   = nullptr;
     struct ggml_tensor * dflash_selector_next   = nullptr;

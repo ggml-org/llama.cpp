@@ -33,9 +33,40 @@ class SettingsStore {
 	// application of server ui_settings defaults for new users.
 	private isFirstVisit = false;
 
+	/**
+	 * Whether the saved config differs from what "Reset to Default" would apply
+	 */
+	get hasCustomSettings(): boolean {
+		const propsDefaults = this.getServerDefaults();
+
+		for (const [key, value] of Object.entries(this.getResetValues())) {
+			const current = getConfigValue(this.config, key);
+
+			// sampling params reset to '' (server decides); an explicit value equal to the server default is not custom
+			if (value === '' && propsDefaults[key] !== undefined) {
+				if (
+					current !== '' &&
+					current !== undefined &&
+					normalizeFloatingPoint(current) !== normalizeFloatingPoint(propsDefaults[key])
+				) {
+					return true;
+				}
+
+				continue;
+			}
+
+			if (current !== value) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
 	canSyncParameter(key: string): boolean {
 		return ParameterSyncService.canSyncParameter(key);
 	}
+
 	/**
 	 * Clear all user overrides (for debugging)
 	 */
@@ -91,41 +122,17 @@ class SettingsStore {
 	 * Prioritizes Server defaults from /props, falls back to UI defaults
 	 */
 	forceSyncWithServerDefaults(): void {
-		const propsDefaults = this.getServerDefaults();
-		const uiSettings = serverStore.uiSettings;
-
-		for (const key of ParameterSyncService.getSyncableParameterKeys()) {
-			if (uiSettings && key in uiSettings) {
-				// UI setting from admin config: write actual value
-				setConfigValue(this.config, key, uiSettings[key]);
-			} else if (propsDefaults[key] !== undefined) {
-				// sampling param: clear it, let server decide
-				setConfigValue(this.config, key, '');
-			} else if (key in SETTING_CONFIG_DEFAULT) {
-				setConfigValue(this.config, key, getConfigValue(SETTING_CONFIG_DEFAULT, key));
-			}
-
-			this.userOverrides.delete(key);
-		}
-
-		// Non-syncable keys: reset is a full return to the instance state, the
-		// admin baseline value when defined, the factory default otherwise.
-		for (const key of Object.keys(SETTING_CONFIG_DEFAULT)) {
-			if (ParameterSyncService.canSyncParameter(key)) {
-				continue;
-			}
-
-			const value =
-				uiSettings && key in uiSettings && uiSettings[key] !== undefined
-					? uiSettings[key]
-					: getConfigValue(SETTING_CONFIG_DEFAULT, key);
-
+		for (const [key, value] of Object.entries(this.getResetValues())) {
 			setConfigValue(this.config, key, value);
 
 			if (key === SETTINGS_KEYS.THEME) {
 				setMode(value as ColorMode);
 			}
 
+			this.userOverrides.delete(key);
+		}
+
+		for (const key of ParameterSyncService.getSyncableParameterKeys()) {
 			this.userOverrides.delete(key);
 		}
 
@@ -425,6 +432,43 @@ class SettingsStore {
 			setConfigValue(this.config, SETTINGS_KEYS.USE_HUGGING_FACE_HUB, true);
 			this.saveConfig();
 		}
+	}
+
+	/**
+	 * Values applied by "Reset to Default": admin ui_settings first, then server
+	 * defaults from /props for sampling params, then the factory defaults
+	 */
+	private getResetValues(): Record<string, unknown> {
+		const propsDefaults = this.getServerDefaults();
+		const uiSettings = serverStore.uiSettings;
+		const values: Record<string, unknown> = {};
+
+		for (const key of ParameterSyncService.getSyncableParameterKeys()) {
+			if (uiSettings && key in uiSettings) {
+				// UI setting from admin config: write actual value
+				values[key] = uiSettings[key];
+			} else if (propsDefaults[key] !== undefined) {
+				// sampling param: clear it, let server decide
+				values[key] = '';
+			} else if (key in SETTING_CONFIG_DEFAULT) {
+				values[key] = getConfigValue(SETTING_CONFIG_DEFAULT, key);
+			}
+		}
+
+		// Non-syncable keys: reset is a full return to the instance state, the
+		// admin baseline value when defined, the factory default otherwise.
+		for (const key of Object.keys(SETTING_CONFIG_DEFAULT)) {
+			if (ParameterSyncService.canSyncParameter(key)) {
+				continue;
+			}
+
+			values[key] =
+				uiSettings && key in uiSettings && uiSettings[key] !== undefined
+					? uiSettings[key]
+					: getConfigValue(SETTING_CONFIG_DEFAULT, key);
+		}
+
+		return values;
 	}
 
 	/**

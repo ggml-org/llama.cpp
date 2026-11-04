@@ -24,7 +24,6 @@ public:
                      uint32_t   kv_size,
                      uint32_t   n_seq_max,
                      uint32_t   n_ubatch,
-                     uint32_t   n_pad,
         const layer_filter_cb & filter_mla,
         const layer_filter_cb & filter_lid,
         const  layer_reuse_cb & reuse);

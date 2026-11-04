@@ -27,13 +27,14 @@ struct server_context_meta {
     bool has_cap_chat;
     bool has_cap_tts;
     bool has_audio_stream; // realtime transcription, see mtmd_support_audio_stream()
+    std::vector<std::string> tts_voices; // predefined voices of the audio generation model
     json json_ui_settings;
     int slot_n_ctx;
     enum llama_pooling_type pooling_type;
 
     // chat params
     server_chat_params & chat_params;
-    std::map<std::string, bool> chat_template_caps;
+    json chat_template_caps;
 
     // tokens
     std::string bos_token_str;

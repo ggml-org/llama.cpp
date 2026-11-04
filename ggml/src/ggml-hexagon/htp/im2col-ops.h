@@ -20,19 +20,30 @@ struct htp_im2col_vtcm_layout {
     uint32_t dst_bytes_per_thread;
 };
 
+// scratch_bytes: per-thread VTCM after the two src buffers (at least 256)
 static inline void htp_im2col_vtcm_layout_build(
     struct htp_im2col_vtcm_layout * L,
     uint32_t src_row_bytes,
     uint32_t dst_row_bytes,
-    uint32_t n_threads) {
+    uint32_t n_threads,
+    uint32_t scratch_bytes) {
 
-    L->src_bytes_per_thread = 2 * src_row_bytes + 256;
+    L->src_bytes_per_thread = 2 * src_row_bytes + (scratch_bytes > 256 ? scratch_bytes : 256);
     L->dst_bytes_per_thread = 2 * dst_row_bytes;
 
     size_t off = 0;
     VTCM_LAYOUT_ALLOC(off, off_src, (size_t) L->src_bytes_per_thread * n_threads);
     VTCM_LAYOUT_ALLOC(off, off_dst, (size_t) L->dst_bytes_per_thread * n_threads);
     L->total_bytes = off;
+}
+
+// per-thread scratch: the KH == 1 blocked path keeps its offset table and one gathered row there,
+// both padded to whole vectors
+static inline uint32_t htp_im2col_scratch_bytes(uint32_t kernel_type, uint32_t KH, uint32_t patch_stride) {
+    if (kernel_type == HTP_IM2COL_KERNEL_BLOCKED_DMA && KH == 1) {
+        return 2 * hex_round_up(patch_stride, 32) * (uint32_t) sizeof(float);
+    }
+    return 256;
 }
 
 struct htp_im2col_kernel_params {
@@ -58,6 +69,7 @@ struct htp_im2col_kernel_params {
 
     struct fastdiv_values div_OH;
     struct fastdiv_values div_OD;
+    struct fastdiv_values div_nbpr;
 };
 
 #if defined(__cplusplus)

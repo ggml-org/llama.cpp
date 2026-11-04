@@ -9,7 +9,12 @@ export default defineConfig({
 	projects: [
 		{
 			name: 'chromium',
-			use: { ...devices['Desktop Chrome'] }
+			use: {
+				...devices['Desktop Chrome'],
+				// locally, the installed (auto-updated) Chrome with its sandbox on: the bundled
+				// Chromium lags behind security fixes and Playwright disables its sandbox by default
+				...(process.env.CI ? {} : { channel: 'chrome', launchOptions: { chromiumSandbox: true } })
+			}
 		}
 	],
 	reporter: 'line',
