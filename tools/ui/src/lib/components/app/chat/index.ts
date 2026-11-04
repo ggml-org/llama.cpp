@@ -516,6 +516,13 @@ export { default as ChatMessageActionIcons } from './ChatMessages/ChatMessageAct
 export { default as ChatMessageActionIconsBranchingControls } from './ChatMessages/ChatMessageActions/ChatMessageActionIcons/ChatMessageActionIconsBranchingControls.svelte';
 
 /**
+ * Right-click menu for user and assistant messages with the same actions as
+ * their action icons. Selected text, links, media, code and fields keep the
+ * browser's own menu.
+ */
+export { default as ChatMessageContextMenu } from './ChatMessages/ChatMessageActions/ChatMessageContextMenu.svelte';
+
+/**
  * Statistics display for assistant messages. Shows token counts (prompt/completion),
  * generation timing, tokens per second, and model name (when enabled in settings).
  * Data sourced from message.timings stored during generation.

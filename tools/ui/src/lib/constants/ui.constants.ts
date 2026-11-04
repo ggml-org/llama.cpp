@@ -17,6 +17,13 @@ export const COPY_FEEDBACK_RESET_MS = 1500;
 /** How long a collapsible block's body takes to expand or collapse. */
 export const COLLAPSIBLE_TRANSITION_MS = 200;
 
+/**
+ * Parts of a message where right-click keeps the browser's own menu (open or
+ * copy a link, save an image, copy code or a field), not the message actions.
+ */
+export const NATIVE_CONTEXT_MENU_SELECTOR =
+	'a, img, video, audio, pre, code, input, textarea, [contenteditable="true"]';
+
 export const FORK_TREE_DEPTH_PADDING = 8;
 export const SYSTEM_MESSAGE_PLACEHOLDER = 'System message';
 

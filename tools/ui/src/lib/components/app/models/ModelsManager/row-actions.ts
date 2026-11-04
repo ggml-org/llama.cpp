@@ -2,6 +2,7 @@ import { Compass, Eye, EyeOff, Heart, HeartOff, Trash2 } from '@lucide/svelte';
 import { MODEL_DOWNLOAD_ICONS } from '$lib/constants';
 import { ModelRowDownloadState } from '$lib/enums';
 import { modelsStore, uiStore } from '$lib/stores';
+import type { MenuAction } from '$lib/types';
 import type { ModelOption } from '$lib/types/models';
 import { repoOf } from '$lib/utils';
 
@@ -12,7 +13,7 @@ export function modelRowActions(
 	onDelete: (option: ModelOption) => void,
 	/** Download state, when the row stands for a tracked download. */
 	download?: ModelRowDownloadState | null
-) {
+): MenuAction[] {
 	// the details pane is keyed by repo, not by `<repo>:<quant>`; the entry exists only
 	// while Discover is on
 	const viewInDiscover = uiStore.isDiscoverEnabled
