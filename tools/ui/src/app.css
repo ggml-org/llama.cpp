@@ -10,6 +10,17 @@
 @import './lib/styles/tokens/components.css';
 @import './lib/styles/surfaces.css';
 
+/* Llama Sans UI, the interface version of the Llama type family (OFL, see lib/assets/fonts/OFL.txt): one variable
+   font for every weight from 400 to 700. Its line box is centred on the cap height, so labels sit in the middle of
+   buttons and chips. */
+@font-face {
+	font-family: 'Llama Sans UI';
+	src: url('./lib/assets/fonts/LlamaSansUI.woff2') format('woff2');
+	font-weight: 400 700;
+	font-style: normal;
+	font-display: swap;
+}
+
 @custom-variant dark (&:is(.dark *));
 
 /* shadcn components key their orientation styles off these, toggle-group among them */
@@ -88,6 +99,8 @@
 }
 
 @theme inline {
+	/* the default sans everywhere: Llama Sans UI, then the system stack while it loads or if it can't */
+	--font-sans: 'Llama Sans UI', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
 	--radius-sm: calc(var(--radius) - 4px);
 	--radius-md: calc(var(--radius) - 2px);
 	--radius-lg: var(--radius);
