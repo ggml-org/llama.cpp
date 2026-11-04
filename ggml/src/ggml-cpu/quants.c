@@ -538,38 +538,53 @@ void ggml_vec_dot_tq1_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
 
     const int nb = n / QK_K;
 
-    const uint8_t pow3[6] = {1, 3, 9, 27, 81, 243};
-
     float sumf = 0.0f;
 
     for (int i = 0; i < nb; ++i) {
         int sum = 0;
+        const int8_t * GGML_RESTRICT yqs = y[i].qs;
 
         for (size_t j = 0; j < sizeof(x->qs) - sizeof(x->qs) % 32; j += 32) {
-            for (size_t l = 0; l < 5; ++l) {
-                for (size_t m = 0; m < 32; ++m) {
-                    uint8_t q = x[i].qs[j + m] * pow3[l];
-                    uint16_t xi = ((uint16_t) q * 3) >> 8;
-                    sum += (xi - 1) * y[i].qs[j*5 + l*32 + m];
-                }
+            const int8_t * GGML_RESTRICT yb = yqs + j * 5;
+            for (size_t m = 0; m < 32; ++m) {
+                const uint8_t q0 = x[i].qs[j + m];
+                const uint8_t q1 = (uint8_t)(q0 * 3U);
+                const uint8_t q2 = (uint8_t)(q0 * 9U);
+                const uint8_t q3 = (uint8_t)(q0 * 27U);
+                const uint8_t q4 = (uint8_t)(q0 * 81U);
+                sum += ((int)(((uint16_t)q0 * 3U) >> 8) - 1) * yb[m +   0]
+                     + ((int)(((uint16_t)q1 * 3U) >> 8) - 1) * yb[m +  32]
+                     + ((int)(((uint16_t)q2 * 3U) >> 8) - 1) * yb[m +  64]
+                     + ((int)(((uint16_t)q3 * 3U) >> 8) - 1) * yb[m +  96]
+                     + ((int)(((uint16_t)q4 * 3U) >> 8) - 1) * yb[m + 128];
             }
         }
         for (size_t j = sizeof(x->qs) - sizeof(x->qs) % 32; j < sizeof(x->qs); j += 16) {
-            for (size_t l = 0; l < 5; ++l) {
-                for (size_t m = 0; m < 16; ++m) {
-                    uint8_t q = x[i].qs[j + m] * pow3[l];
-                    uint16_t xi = ((uint16_t) q * 3) >> 8;
-                    sum += (xi - 1) * y[i].qs[j*5 + l*16 + m];
-                }
+            const int8_t * GGML_RESTRICT yb = yqs + j * 5;
+            for (size_t m = 0; m < 16; ++m) {
+                const uint8_t q0 = x[i].qs[j + m];
+                const uint8_t q1 = (uint8_t)(q0 * 3U);
+                const uint8_t q2 = (uint8_t)(q0 * 9U);
+                const uint8_t q3 = (uint8_t)(q0 * 27U);
+                const uint8_t q4 = (uint8_t)(q0 * 81U);
+                sum += ((int)(((uint16_t)q0 * 3U) >> 8) - 1) * yb[m +  0]
+                     + ((int)(((uint16_t)q1 * 3U) >> 8) - 1) * yb[m + 16]
+                     + ((int)(((uint16_t)q2 * 3U) >> 8) - 1) * yb[m + 32]
+                     + ((int)(((uint16_t)q3 * 3U) >> 8) - 1) * yb[m + 48]
+                     + ((int)(((uint16_t)q4 * 3U) >> 8) - 1) * yb[m + 64];
             }
         }
 
-        for (size_t l = 0; l < 4; ++l) {
-            for (size_t j = 0; j < sizeof(x->qh); ++j) {
-                uint8_t q = x[i].qh[j] * pow3[l];
-                uint16_t xi = ((uint16_t) q * 3) >> 8;
-                sum += (xi - 1) * y[i].qs[sizeof(x->qs)*5 + l*sizeof(x->qh) + j];
-            }
+        const int8_t * GGML_RESTRICT yh = yqs + sizeof(x->qs) * 5;
+        for (size_t j = 0; j < sizeof(x->qh); ++j) {
+            const uint8_t q0 = x[i].qh[j];
+            const uint8_t q1 = (uint8_t)(q0 * 3U);
+            const uint8_t q2 = (uint8_t)(q0 * 9U);
+            const uint8_t q3 = (uint8_t)(q0 * 27U);
+            sum += ((int)(((uint16_t)q0 * 3U) >> 8) - 1) * yh[j +  0]
+                 + ((int)(((uint16_t)q1 * 3U) >> 8) - 1) * yh[j +  4]
+                 + ((int)(((uint16_t)q2 * 3U) >> 8) - 1) * yh[j +  8]
+                 + ((int)(((uint16_t)q3 * 3U) >> 8) - 1) * yh[j + 12];
         }
 
         sumf += (float) sum * (GGML_CPU_FP16_TO_FP32(x[i].d) * y[i].d);
