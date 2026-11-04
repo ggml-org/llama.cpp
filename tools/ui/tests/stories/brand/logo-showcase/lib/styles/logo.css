@@ -1,0 +1,49 @@
+/* The logo showcase's colours, shared by every drawing (the blueprint, the origin animation, the step tiles and the
+   rule panels). Grayscale after the brand: black icon on light grey in light mode, white icon on near-black in dark
+   mode; construction lines in a mid grey that reads over both the icon and the ground. Greys follow the llama.cpp
+   design system's neutrals. Dark mode follows the design system's .dark class on <html>. */
+:root {
+	--l-bg: oklch(0.97 0 0); /* neutral-100 */
+	--l-shape: #111111;
+	--l-shape-2: #6b6b6b;
+	--l-faint: rgba(17, 17, 17, 0.16);
+	--l-line: oklch(0.708 0 0); /* neutral-400 */
+	--l-ink: #111111;
+	--l-muted: oklch(0.556 0 0); /* fg-muted */
+	--l-panel: oklch(1 0 0); /* surface-raised */
+	--l-rule: oklch(0.922 0 0); /* line-field */
+	--l-bolt: #f65e00; /* the brand orange, as in the .cpp of the Llama.cpp lockup: the L flashes in it */
+	/* the lightning: a white-hot core, a yellow glow around it and a blue halo beyond; the L flashes in --l-bolt */
+	--l-bolt-core: #ffffff;
+	--l-bolt-glow: #ffd23f;
+	--l-bolt-halo: #3d8bff;
+	--l-ink-glow: 0.3; /* the L's glow in light mode, where it is black */
+	/* the strike's night sky, light mode only */
+	--l-night: 1;
+	--l-night-sky: oklch(0.16 0 0);
+	--l-night-ink: #fafafa;
+	/* in light mode the bolt is solid, so it reads crisply inside the black L (see-through yellow over black turns olive) */
+	--l-bolt-alpha: 1;
+	--l-bolt-tint: 0;
+	--l-paper: oklch(0.985 0 0); /* neutral-50 */
+	--l-grid: rgba(17, 17, 17, 0.05);
+	--l-grid-major: rgba(17, 17, 17, 0.13);
+}
+:root.dark {
+	--l-bg: oklch(0.16 0 0);
+	--l-shape: #fafafa;
+	--l-shape-2: #9e9e9e;
+	--l-faint: rgba(250, 250, 250, 0.18);
+	--l-line: oklch(0.439 0 0);
+	--l-ink: #fafafa;
+	--l-muted: oklch(0.708 0 0);
+	--l-panel: oklch(0.205 0 0);
+	--l-rule: oklch(1 0 0 / 0.12);
+	--l-bolt-alpha: 0.85;
+	--l-bolt-tint: 0.3;
+	--l-ink-glow: 1;
+	--l-night: 0;
+	--l-paper: oklch(0.205 0 0);
+	--l-grid: rgba(250, 250, 250, 0.05);
+	--l-grid-major: rgba(250, 250, 250, 0.13);
+}

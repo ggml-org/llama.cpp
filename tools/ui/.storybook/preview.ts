@@ -28,7 +28,7 @@ const preview: Preview = {
 					'Introduction',
 					['Overview', 'Design guidelines'],
 					'Brand',
-					['Logo', 'App icons'],
+					['Logo', 'Logo showcase', 'App icons'],
 					'Design system',
 					[
 						'Foundations',

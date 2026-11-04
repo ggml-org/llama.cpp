@@ -1,6 +1,9 @@
 <script lang="ts" module>
 	import StateGallery from '../helpers/StateGallery.svelte';
 	import StateGalleryItem from '../helpers/StateGalleryItem.svelte';
+	import Lockups from './logo-showcase/lib/components/Lockups.svelte';
+	import LogoGeometry from './logo-showcase/LogoGeometry.svx';
+	import ShowcaseFrame from './logo-showcase/ShowcaseFrame.svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import { Logo } from '$lib/components/app';
 
@@ -47,4 +50,18 @@
 			</div>
 		</StateGalleryItem>
 	</StateGallery>
+</Story>
+
+<!-- the rules that shape the icon: two blades, 60° edges, one diagonal, the split, steps of 120, soft corners -->
+<Story asChild name="Geometry" parameters={{ controls: { disable: true }, layout: 'fullscreen' }}>
+	<ShowcaseFrame>
+		<LogoGeometry />
+	</ShowcaseFrame>
+</Story>
+
+<!-- the icon as a glyph of Llama Sans (U+E000), sitting on the baseline at cap height -->
+<Story asChild name="Usage" parameters={{ controls: { disable: true }, layout: 'fullscreen' }}>
+	<ShowcaseFrame>
+		<Lockups />
+	</ShowcaseFrame>
 </Story>

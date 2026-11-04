@@ -1,0 +1,30 @@
+---
+title: Llama icon
+---
+
+<!-- The logo showcase page from ggml-org/llama.brand (logo/showcase/src/routes/+page.svx), framed by ShowcaseFrame; its rules and specs are the Brand/Logo Geometry story, its lockups the Usage story -->
+
+<script>
+	import { deg, lower } from './lib/blueprint';
+	import Blueprint from './lib/components/Blueprint.svelte';
+	import Sketch from './lib/components/Sketch.svelte';
+	import Figures from './lib/components/Figures.svelte';
+	import OriginStep from './lib/components/OriginStep.svelte';
+
+	// the origin animation's clock, shared with the tiles: each lights up once the animation has drawn it, and a
+	// click on one moves the animation to it
+	let t = $state(0);
+</script>
+
+<Blueprint bind:t />
+
+<Figures layout="steps">
+	<OriginStep bind:t step="name">It begins with a name, and the + of its C++, the language llama.cpp is written in.</OriginStep>
+	<OriginStep bind:t step="plus">A plus with the icon’s own arms: 240 wide upright, {lower} deep across.</OriginStep>
+	<OriginStep bind:t step="l">Keep the top arm, the centre and the right arm: an L inside the +.</OriginStep>
+	<OriginStep bind:t step="open">Lift out the centre block the + and the L share. Stem and foot now touch at one point.</OriginStep>
+	<OriginStep bind:t step="lean">In a flash the bolt leans it: the L slants 30° on the baseline, every edge at {deg}°, with the bolt inside.</OriginStep>
+	<OriginStep bind:t step="soften">Round only the two outer corners. That is the Llama icon.</OriginStep>
+</Figures>
+
+<Sketch />
