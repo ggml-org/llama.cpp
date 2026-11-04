@@ -2591,7 +2591,7 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
             //     root_src = src->org_src;
             // }
             if (root_src) {
-                if (is_inp_tok(root_src, node) || is_inp_pos(root_src, node) || is_output_idx(root_src, node)) {
+                if (is_inp_tok(root_src, node) || is_inp_pos(root_src, node) || is_get_rows_input_idx(root_src, node)) {
                     m_node_dynamic_dims[root_src] = 0;
                     m_node_dynamic_dims[src] = m_node_dynamic_dims[root_src];
                     continue;
@@ -2599,7 +2599,7 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
                 self(self, root_src);
                 m_node_dynamic_dims[src] = m_node_dynamic_dims[root_src];
             } else {
-                if (is_inp_tok(src, node) || is_inp_pos(src, node) || is_output_idx(src, node)) {
+                if (is_inp_tok(src, node) || is_inp_pos(src, node) || is_get_rows_input_idx(src, node)) {
                     m_node_dynamic_dims[src] = 0;
                     continue;
                 }
