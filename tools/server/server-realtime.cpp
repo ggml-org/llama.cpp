@@ -589,6 +589,9 @@ struct realtime_conversation {
                 return;
             }
         }
+        // kept if the chat template rejects the new tools below
+        auto prev_tools      = tools;
+        auto prev_tools_json = tools_json;
         if (session.contains("tools")) {
             std::string err;
             if (started) {
@@ -619,9 +622,21 @@ struct realtime_conversation {
         if (in.contains("transcription") && in["transcription"].is_object()) {
             language = json_value(in["transcription"], "language", language);
         }
-        if (!started && !configure()) {
-            send_error("the chat template does not fit the realtime turn format", "server_error");
-            return;
+        if (!started) {
+            bool ok = false;
+            try {
+                ok = configure();
+            } catch (const std::exception & e) {
+                tools      = std::move(prev_tools);
+                tools_json = std::move(prev_tools_json);
+                configure();
+                send_error(std::string("session.update: ") + e.what());
+                return;
+            }
+            if (!ok) {
+                send_error("the chat template does not fit the realtime turn format", "server_error");
+                return;
+            }
         }
         send_event({{"type", "session.updated"}, {"session", session_json()}});
     }
@@ -633,7 +648,13 @@ struct realtime_conversation {
             const auto preset = common_chat_get_asr_prompt(deps.meta.chat_params.tmpls.get(), language);
             instructions = preset.system;
         }
-        const bool ok = derive_turn_text();
+        bool ok = false;
+        try {
+            ok = derive_turn_text();
+        } catch (...) {
+            instructions = saved;
+            throw;
+        }
         instructions = saved;
         return ok;
     }
