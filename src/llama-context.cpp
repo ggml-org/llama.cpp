@@ -245,8 +245,7 @@ llama_context::llama_context(
     // TODO: more generic
     if (model.arch == LLM_ARCH_GEMMA4_ASSISTANT) {
         if (params.ctx_other == nullptr) {
-            // TODO: change from runtime_error to llama_exception to avoid printing error message
-            throw std::runtime_error("Gemma4Assistant requires ctx_other to be set (this warning is normal during memory fitting)");
+            throw std::runtime_error("Gemma4Assistant requires ctx_other to be set");
         }
 
         cparams.ctx_other = params.ctx_other;
@@ -255,7 +254,7 @@ llama_context::llama_context(
     if (model.arch == LLM_ARCH_EAGLE3 || model.arch == LLM_ARCH_DFLASH) {
         if (model.tok_embd == nullptr || model.output == nullptr) {
             if (params.ctx_other == nullptr) {
-                throw std::runtime_error(model.arch_name() + " requires ctx_other to be set (this warning is normal during memory fitting)");
+                throw std::runtime_error(model.arch_name() + " requires ctx_other to be set");
             }
             cparams.ctx_other = params.ctx_other;
         } else if (model.arch == LLM_ARCH_DFLASH) {
@@ -1483,7 +1482,12 @@ void llama_context::layer_inp_dev_alloc() {
     layer_inp_dev_dev = model.dev_output();
     auto * buft = layer_inp_dev_dev ? ggml_backend_dev_buffer_type(layer_inp_dev_dev) : ggml_backend_cpu_buffer_type();
 
-    buf_layer_inp_dev.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_layer_inp_dev.get(), buft));
+    if (model.no_alloc()) {
+        // only the size is measured, see memory_breakdown
+        buf_layer_inp_dev = llama_memory_bufs::alloc_buf(ctx_layer_inp_dev.get(), buft, /*no_alloc =*/ true, "layer input");
+    } else {
+        buf_layer_inp_dev.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_layer_inp_dev.get(), buft));
+    }
     if (!buf_layer_inp_dev) {
         // e.g. a large n_batch that does not fit next to the model, keep the host copies
         LLAMA_LOG_WARN("%s: failed to allocate the layer input device buffer, using host copies\n", __func__);
@@ -3964,6 +3968,11 @@ llama_memory_breakdown llama_context::memory_breakdown() const {
             ret[buft].compute += ggml_backend_sched_get_buffer_size(sched.get(), backend);
         }
     }
+    if (buf_layer_inp_dev) {
+        ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(buf_layer_inp_dev.get());
+        ret[buft].compute += model.no_alloc() ?
+            ggml_backend_alloc_ctx_tensors_from_buft_size(ctx_layer_inp_dev.get(), buft) : ggml_backend_buffer_get_size(buf_layer_inp_dev.get());
+    }
     return ret;
 }
 
@@ -4595,6 +4604,10 @@ struct ggml_cgraph * llama_graph_reserve(
         mctx = memory->init_full();
     }
     return ctx->graph_reserve(n_tokens, n_seqs, n_outputs, mctx.get());
+}
+
+void llama_sched_reserve(struct llama_context * ctx) {
+    ctx->sched_reserve();
 }
 
 // llama adapter API

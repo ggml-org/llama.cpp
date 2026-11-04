@@ -55,6 +55,102 @@ private:
     ggml_log_level min_level;
 };
 
+// add the memory of ctx to the devices of model, the last entry is the host
+static void common_fit_add_memory(
+        std::vector<llama_device_memory_data> & dmds, const llama_model * model, const llama_context * ctx, bool add_model) {
+    const size_t nd = llama_model_n_devices(model);
+
+    for (const auto & [buft, mb] : llama_get_memory_breakdown(ctx)) {
+        llama_memory_breakdown_data * dst = nullptr;
+        if (ggml_backend_buft_is_host(buft)) {
+            dst = &dmds.back().mb;
+        } else if (ggml_backend_dev_t dev = ggml_backend_buft_get_device(buft)) {
+            for (size_t i = 0; i < nd; i++) {
+                if (dev == llama_model_get_device(model, i)) {
+                    dst = &dmds[i].mb;
+                    break;
+                }
+            }
+        }
+        if (dst == nullptr) {
+            continue;
+        }
+
+        dst->model   += add_model ? mb.model : 0;
+        dst->context += mb.context;
+        dst->compute += mb.compute;
+    }
+}
+
+// the extra model is loaded once and measured against each context of the main model
+struct common_fit_extra_state {
+    const common_fit_extra_model * extra = nullptr; // set to nullptr if it cannot be measured
+
+    llama_model_ptr model; // not used if the extra model shares the main model
+};
+
+// add the memory of the extra context to dmds, the context is created against ctx like common_speculative_init_result does
+static void common_fit_add_memory_extra(
+        std::vector<llama_device_memory_data> & dmds, common_fit_extra_state & es, llama_model * model, llama_context * ctx) {
+    if (es.extra == nullptr) {
+        return;
+    }
+
+    try {
+        if (!es.extra->shares_model && !es.model) {
+            llama_model_params mparams = *es.extra->mparams;
+            mparams.no_alloc  = true;
+            mparams.load_mode = LLAMA_LOAD_MODE_NONE;
+
+            es.model.reset(llama_model_load_from_file(es.extra->path_model, mparams));
+            if (!es.model) {
+                throw std::runtime_error("failed to load model");
+            }
+        }
+        llama_model * model_extra = es.extra->shares_model ? model : es.model.get();
+
+        llama_context_params cparams = *es.extra->cparams;
+        cparams.n_ctx     = llama_n_ctx(ctx);
+        cparams.ctx_other = ctx;
+
+        llama_context_ptr ctx_extra(llama_init_from_model(model_extra, cparams));
+        if (!ctx_extra) {
+            throw std::runtime_error("failed to create llama_context from model");
+        }
+
+        // the main context keeps the outputs that the speculative types read from it, as set up by common_speculative
+        const auto has_type = [&](common_speculative_type type) { return (es.extra->spec_types & (1u << type)) != 0; };
+        const bool eagle3 = has_type(COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3);
+        const bool dflash = has_type(COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH) || has_type(COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK);
+        if (eagle3 || dflash) {
+            const int32_t   n_layer = llama_model_n_layer(model);
+            const int32_t * lids    = llama_model_target_layer_ids(model_extra);
+            for (uint32_t i = 0; i < llama_model_target_layer_ids_n(model_extra); i++) {
+                if (lids[i] == n_layer && eagle3) {
+                    // EAGLE3 reads the output of the last layer through the nextn embeddings
+                    llama_set_embeddings_nextn(ctx, true, /*masked*/ false);
+                } else {
+                    llama_set_embeddings_layer_inp(ctx, lids[i], true);
+                }
+            }
+        }
+        if (dflash) {
+            // by default DFlash reads the layer inputs from a device buffer on the output device
+            llama_set_embeddings_layer_inp_dev(ctx, true);
+        }
+        llama_sched_reserve(ctx);
+
+        common_fit_add_memory(dmds, model, ctx_extra.get(), !es.extra->shares_model);
+
+        LOG_TRC("%s: memory of the extra model at a context size of %" PRIu32 ":\n", __func__, cparams.n_ctx);
+        common_memory_breakdown_print(ctx_extra.get());
+    } catch (const std::runtime_error & e) {
+        // the extra model is optional, fit the main model alone rather than giving up
+        LOG_WRN("%s: failed to measure the memory of the extra model, fitting without it: %s\n", __func__, e.what());
+        es.extra = nullptr;
+    }
+}
+
 static std::vector<llama_device_memory_data> common_get_device_memory_data_impl(
         const char * path_model,
         const llama_model_params * mparams,
@@ -63,7 +159,8 @@ static std::vector<llama_device_memory_data> common_get_device_memory_data_impl(
         uint32_t & hp_ngl,
         uint32_t & hp_n_ctx_train,
         uint32_t & hp_n_expert,
-        ggml_log_level log_level) {
+        ggml_log_level log_level,
+        common_fit_extra_state * es = nullptr) {
     common_fit_log_scope log_scope(log_level);
 
     llama_model_params mparams_copy = *mparams;
@@ -84,29 +181,12 @@ static std::vector<llama_device_memory_data> common_get_device_memory_data_impl(
     const size_t nd = llama_model_n_devices(model);
     std::vector<llama_device_memory_data> ret(nd + 1);
 
-    llama_memory_breakdown memory_breakdown = llama_get_memory_breakdown(ctx);
-
-    for (const auto & [buft, mb] : memory_breakdown) {
-        if (ggml_backend_buft_is_host(buft)) {
-            ret.back().mb.model   += mb.model;
-            ret.back().mb.context += mb.context;
-            ret.back().mb.compute += mb.compute;
-            continue;
-        }
-
-        ggml_backend_dev_t dev = ggml_backend_buft_get_device(buft);
-        if (!dev) {
-            continue;
-        }
-        for (size_t i = 0; i < nd; i++) {
-            if (dev == llama_model_get_device(model, i)) {
-                ret[i].mb.model   += mb.model;
-                ret[i].mb.context += mb.context;
-                ret[i].mb.compute += mb.compute;
-                break;
-            }
-        }
+    // the extra model competes for the same memory as the main model, it can also add outputs to the main context
+    if (es != nullptr) {
+        common_fit_add_memory_extra(ret, *es, model, ctx);
     }
+
+    common_fit_add_memory(ret, model, ctx, true);
 
     {
         ggml_backend_dev_t cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
@@ -278,71 +358,14 @@ static void common_params_fit_impl(
     const uint32_t n_streams  = cparams->kv_unified ? 1 : std::max<uint32_t>(1, cparams->n_seq_max);
     const bool     n_ctx_auto = cparams->n_ctx == 0;
 
-    dmds_t   dmds_extra;       // memory of the extra model, laid out on the devices of the main model
-    uint32_t n_ctx_extra = 0;  // context that memory was measured at
-
-    // the extra model competes for the same memory as the main model, add it to every measurement
-    // its memory is measured again whenever the context it follows changes
-    auto add_extra_memory = [&](dmds_t & dmds) {
-        if (extra == nullptr) {
-            return;
-        }
-
-        if (dmds_extra.empty() || n_ctx_extra != cparams->n_ctx) {
-            std::vector<ggml_backend_dev_t> devs_extra;
-            uint32_t ngl_extra = 0;
-            uint32_t nct_extra = 0;
-            uint32_t nex_extra = 0;
-
-            extra->cparams->n_ctx = cparams->n_ctx;
-
-            LOG_TRC("%s: getting device memory data for the extra model at a context size of %" PRIu32 ":\n",
-                __func__, cparams->n_ctx);
-
-            dmds_t measured;
-            try {
-                measured = common_get_device_memory_data_impl(
-                    extra->path_model, extra->mparams, extra->cparams, devs_extra, ngl_extra, nct_extra, nex_extra, log_level);
-            } catch (const std::runtime_error & e) {
-                // the extra model is optional, fit the main model alone rather than giving up
-                LOG_WRN("%s: failed to measure the memory of the extra model, fitting without it: %s\n", __func__, e.what());
-                dmds_extra = dmds_t(devs.size() + 1);
-                n_ctx_extra = cparams->n_ctx;
-                return;
-            }
-
-            dmds_extra = dmds_t(devs.size() + 1);
-            dmds_extra.back().mb = measured.back().mb;
-            for (size_t je = 0; je < devs_extra.size(); je++) {
-                for (size_t id = 0; id < devs.size(); id++) {
-                    if (devs_extra[je] == devs[id]) {
-                        dmds_extra[id].mb.model   += measured[je].mb.model;
-                        dmds_extra[id].mb.context += measured[je].mb.context;
-                        dmds_extra[id].mb.compute += measured[je].mb.compute;
-                        break;
-                    }
-                }
-            }
-            if (extra->shares_model) {
-                for (llama_device_memory_data & dmd : dmds_extra) {
-                    dmd.mb.model = 0;
-                }
-            }
-
-            n_ctx_extra = cparams->n_ctx;
-        }
-
-        for (size_t id = 0; id < dmds.size(); id++) {
-            dmds[id].mb.model   += dmds_extra[id].mb.model;
-            dmds[id].mb.context += dmds_extra[id].mb.context;
-            dmds[id].mb.compute += dmds_extra[id].mb.compute;
-        }
-    };
+    // the memory of the extra model is added to every measurement of the main model
+    common_fit_extra_state es;
+    es.extra = extra;
 
     // step 1: get data for default parameters and check whether any changes are necessary in the first place
 
     LOG_TRC("%s: getting device memory data for initial parameters:\n", __func__);
-    dmds_t dmds_full = common_get_device_memory_data_impl(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
+    dmds_t dmds_full = common_get_device_memory_data_impl(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level, &es);
 
     // saturate instead of overflowing, this also preserves the UINT32_MAX sentinel of n_ctx_min:
     const uint32_t n_ctx_max       = (uint32_t) std::min<uint64_t>(uint64_t(hp_nct)    * n_streams, UINT32_MAX);
@@ -354,10 +377,9 @@ static void common_params_fit_impl(
         if (n_streams > 1) {
             LOG_TRC("%s: context size unset and KV cache not unified -> using %" PRIu32 " for %" PRIu32 " sequences:\n",
                 __func__, n_ctx_max, n_streams);
-            dmds_full = common_get_device_memory_data_impl(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
+            dmds_full = common_get_device_memory_data_impl(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level, &es);
         }
     }
-    add_extra_memory(dmds_full);
 
     const size_t nd = devs.size(); // number of devices
 
@@ -481,20 +503,20 @@ static void common_params_fit_impl(
                             sum_used_target -= margins[id];
                         }
                     }
-                    if (nd > 1) {
+                    if (nd > 1 && mparams->n_gpu_layers != 0) {
                         // for multiple devices we need to be more conservative in terms of how much context we think can fit:
                         //   - for dense models only whole layers can be assigned to devices
                         //   - for MoE models only whole tensors can be assigned to devices, which we estimate to be <= 1/3 of a layer
                         //   - on average we expect a waste of 0.5 layers/tensors per device
                         //   - use slightly more than the expected average for nd devices to be safe
+                        //   - with -ngl 0 there are no layers on the devices and so no waste
                         const int64_t model_per_layer = sum_projected_model / std::min(uint32_t(mparams->n_gpu_layers), hp_ngl);
                         sum_used_target -= (nd + 1) * model_per_layer / (hp_nex == 0 ? 2 : 6);
                     }
 
                     int64_t sum_projected_used_min_ctx = 0;
                     cparams->n_ctx = n_ctx_min_total;
-                    dmds_t dmds_min_ctx = common_get_device_memory_data_impl(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
-                    add_extra_memory(dmds_min_ctx);
+                    dmds_t dmds_min_ctx = common_get_device_memory_data_impl(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level, &es);
                     if (nd == 0) {
                         sum_projected_used_min_ctx = dmds_min_ctx.back().mb.total();
                     } else {
@@ -675,8 +697,7 @@ static void common_params_fit_impl(
         set_ngl_tensor_split_tbo(ngl_per_device, overflow_bufts, mparams_copy);
 
         dmds_t dmd_nl = common_get_device_memory_data_impl(
-            path_model, &mparams_copy, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
-        add_extra_memory(dmd_nl);
+            path_model, &mparams_copy, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level, &es);
 
         LOG_TRC("%s: memory for test allocation by device:\n", func_name);
         for (size_t id = 0; id < nd; id++) {
@@ -704,8 +725,7 @@ static void common_params_fit_impl(
 
         LOG_TRC("%s: getting device memory data with all MoE tensors moved to system memory:\n", __func__);
         dmds_t dmds_cpu_moe = common_get_device_memory_data_impl(
-            path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
-        add_extra_memory(dmds_cpu_moe);
+            path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level, &es);
 
         for (size_t id = 0; id < nd; id++) {
             global_surplus_cpu_moe += dmds_cpu_moe[id].free;
@@ -828,6 +848,18 @@ static void common_params_fit_impl(
     }
     assert(id_dense_start < nd);
 
+    // full layers on one device can change the memory of the others, e.g. no tensor overrides enable pipeline parallelism
+    // the others must stay within their targets, or must not grow if they are already above them (e.g. a full GPU)
+    auto fits_targets = [&](const std::vector<int64_t> & mem_test, size_t id) {
+        for (size_t jd = 0; jd < nd; jd++) {
+            const int64_t limit = jd == id ? targets[jd] : std::max(targets[jd], mem[jd]);
+            if (mem_test[jd] > limit) {
+                return false;
+            }
+        }
+        return true;
+    };
+
     LOG_TRC("%s: converting dense-only layers to full layers and filling them front-to-back with overflow to next device/system memory:\n", __func__);
     for (size_t id = 0; id <= id_dense_start && id_dense_start < nd; id++) {
         std::vector<ngl_t> ngl_per_device_high = ngl_per_device;
@@ -840,7 +872,7 @@ static void common_params_fit_impl(
         size_t id_dense_start_high = nd - 1;
         std::vector<int64_t> mem_high = get_memory_for_layers(__func__, ngl_per_device_high, overflow_bufts);
 
-        if (mem_high[id] > targets[id]) {
+        if (!fits_targets(mem_high, id)) {
             assert(ngl_per_device_high[id].n_full() >= ngl_per_device[id].n_full());
             uint32_t delta = ngl_per_device_high[id].n_full() - ngl_per_device[id].n_full();
             while (delta > 1) {
@@ -864,7 +896,7 @@ static void common_params_fit_impl(
                 }
                 const std::vector<int64_t> mem_test = get_memory_for_layers(__func__, ngl_per_device_test, overflow_bufts);
 
-                if (mem_test[id] <= targets[id]) {
+                if (fits_targets(mem_test, id)) {
                     ngl_per_device = ngl_per_device_test;
                     mem            = mem_test;
                     id_dense_start = id_dense_start_test;
@@ -888,8 +920,8 @@ static void common_params_fit_impl(
                 __func__, id, ngl_per_device[id].n_layer, ngl_per_device[id].n_part, id_dense_start);
         }
 
-        // try to fit at least part of one more layer
-        if (ngl_per_device[id_dense_start].n_layer > (id < nd - 1 ? 0 : 1)) {
+        // try to fit at least part of one more layer, the search above can convert every dense-only layer (id_dense_start == nd)
+        if (id_dense_start < nd && ngl_per_device[id_dense_start].n_layer > (id < nd - 1 ? 0 : 1)) {
             std::vector<ngl_t> ngl_per_device_test = ngl_per_device;
             size_t id_dense_start_test = id_dense_start;
             ngl_per_device_test[id_dense_start_test].n_layer--;
@@ -906,7 +938,7 @@ static void common_params_fit_impl(
             }
             LOG_TRC("%s: trying to fit one extra layer with overflow_type=LAYER_FRACTION_UP\n", __func__);
             std::vector<int64_t> mem_test = get_memory_for_layers(__func__, ngl_per_device_test, overflow_bufts_test);
-            if (mem_test[id] < targets[id] && (id + 1 == nd || mem_test[id + 1] < targets[id + 1])) {
+            if (fits_targets(mem_test, id)) {
                 ngl_per_device = ngl_per_device_test;
                 overflow_bufts = overflow_bufts_test;
                 mem            = mem_test;
@@ -917,7 +949,7 @@ static void common_params_fit_impl(
                 ngl_per_device_test[id].overflow_type = LAYER_FRACTION_GATE;
                 LOG_TRC("%s: trying to fit one extra layer with overflow_type=LAYER_FRACTION_GATE\n", __func__);
                 mem_test = get_memory_for_layers(__func__, ngl_per_device_test, overflow_bufts_test);
-                if (mem_test[id] < targets[id] && (id + 1 == nd || mem_test[id + 1] < targets[id + 1])) {
+                if (fits_targets(mem_test, id)) {
                     ngl_per_device = ngl_per_device_test;
                     overflow_bufts = overflow_bufts_test;
                     mem            = mem_test;
@@ -929,7 +961,7 @@ static void common_params_fit_impl(
                 ngl_per_device_test[id].overflow_type = LAYER_FRACTION_ATTN;
                 LOG_TRC("%s: trying to fit one extra layer with overflow_type=LAYER_FRACTION_ATTN\n", __func__);
                 mem_test = get_memory_for_layers(__func__, ngl_per_device_test, overflow_bufts_test);
-                if (mem_test[id] < targets[id] && (id + 1 == nd || mem_test[id + 1] < targets[id + 1])) {
+                if (fits_targets(mem_test, id)) {
                     ngl_per_device = ngl_per_device_test;
                     overflow_bufts = overflow_bufts_test;
                     mem            = mem_test;

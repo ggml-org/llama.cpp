@@ -13,13 +13,15 @@ enum common_params_fit_status {
 };
 
 // a second model that shares the devices of the main model, e.g. a draft model
-//   - its context follows the context of the main model, so its memory is measured again whenever that context changes
-//   - shares_model tells the fit that the weights are already counted in the main model, as for an MTP context
+//   - its context is created against each measured context of the main model, like at runtime
+//   - shares_model: the context runs on the main model, whose weights are already counted, as for an MTP context (path_model and mparams are not used)
+//   - spec_types: bit mask (1u << type) of the speculative types in use, they select the outputs of the main context that the extra model reads
 struct common_fit_extra_model {
     const char * path_model;
-    llama_model_params * mparams;
-    llama_context_params * cparams;
+    const llama_model_params * mparams;
+    const llama_context_params * cparams;
     bool shares_model;
+    uint32_t spec_types;
 };
 
 // fits mparams and cparams to free device memory (assumes system memory is unlimited)
