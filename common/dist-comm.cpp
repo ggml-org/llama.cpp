@@ -2497,6 +2497,9 @@ common_dist_tp_runtime * common_dist_tp_runtime_create(common_params & params, c
 
     auto comm = dist_comm_create(comm_cfg, err);
     if (!comm) {
+        // The caller logs err too, but llama-cli does not show that line by default; it prints only
+        // that the model failed to load.
+        std::fprintf(stderr, "error: dist-tp set-up failed on rank %d: %s\n", env.world_rank, err.c_str());
         return nullptr;
     }
 

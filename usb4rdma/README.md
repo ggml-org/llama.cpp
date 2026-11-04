@@ -345,8 +345,9 @@ the network, and prints `dist-tp record-ahead on`.
 - **Detached processes can be throttled** by Windows EcoQoS on hybrid CPUs. The scripts raise every
   rank to High priority; do the same for anything you start yourself.
 - **`--dist-master` must be one of rank 0's own addresses, reachable from every rank.** A rank that
-  cannot reach it prints `dist-tp: still dialing <address>:<port> after N s (...)` and gives up after
-  5 minutes, and rank 0 prints which ranks it is still waiting for. The same happens when a firewall
+  cannot reach it prints `dist-tp: still dialing <address>:<port> after N s (...)`, gives up after
+  5 minutes with `error: dist-tp set-up failed on rank N: ...`, and rank 0 prints which ranks it is
+  still waiting for. The same happens when a firewall
   drops the rendezvous port on the address used, for example a program rule for `llama-cli.exe` in
   another folder, or when the address belongs to a USB4 cable that is down.
 - **A USB4 link can degrade under sustained load** while still reporting Up. Check each cable with
