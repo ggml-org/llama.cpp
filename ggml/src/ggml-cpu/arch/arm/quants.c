@@ -920,9 +920,9 @@ void ggml_vec_dot_nvfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
 #if defined(__ARM_FEATURE_SVE)
 // Values beyond the first 32 bits of qh are undefined. Do not use this
 // loader for VL > 1024: it may cause a SEGV.
-static inline svbool_t load_as_svbool(const uint8_t * p) {
+static inline svbool_t load_as_svbool(const uint8_t * p, uint64_t vector_length) {
 #if defined(__GNUC__) || defined(__clang__)
-    if (ggml_cpu_get_sve_cnt() * 8 < 512) {
+    if (vector_length < 512) {
         svbool_t r;
         __asm__("ldr %0, %1"
                 : "=Upa"(r)
@@ -930,7 +930,6 @@ static inline svbool_t load_as_svbool(const uint8_t * p) {
         return r;
     }
 #endif
-    const uint64_t vector_length = ggml_cpu_get_sve_cnt() * 8;
     const svbool_t active = vector_length >= 512 ? svptrue_pat_b8(SV_VL32) : svptrue_b8();
     const uint64_t load_bytes = vector_length >= 512 ? 4 : svcntd();
     const svbool_t load = svwhilelt_b8_u64(0, load_bytes);
@@ -977,10 +976,10 @@ void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
                     const block_q8_0 * GGML_RESTRICT y0 = &y[ib];
                     const block_q8_0 * GGML_RESTRICT y1 = &y[ib + 1];
 
-                    const svbool_t qhl0p = load_as_svbool(x0->qh);
-                    const svbool_t qhh0p = load_as_svbool(((const uint8_t *) x0->qh + 2));
-                    const svbool_t qhl1p = load_as_svbool(x1->qh);
-                    const svbool_t qhh1p = load_as_svbool(((const uint8_t *) x1->qh + 2));
+                    const svbool_t qhl0p = load_as_svbool(x0->qh, vector_length);
+                    const svbool_t qhh0p = load_as_svbool(((const uint8_t *) x0->qh + 2), vector_length);
+                    const svbool_t qhl1p = load_as_svbool(x1->qh, vector_length);
+                    const svbool_t qhh1p = load_as_svbool(((const uint8_t *) x1->qh + 2), vector_length);
 
                     const svint8_t qhl0 = svdup_n_s8_z(svnot_b_z(p16, qhl0p), 0x10);
                     const svint8_t qhh0 = svdup_n_s8_z(svnot_b_z(p16, qhh0p), 0x10);
@@ -1029,8 +1028,8 @@ void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
                     const block_q8_0 * GGML_RESTRICT y0 = &y[ib];
                     const block_q8_0 * GGML_RESTRICT y1 = &y[ib + 1];
 
-                    svbool_t qhbits0p = load_as_svbool(x0->qh);
-                    svbool_t qhbits1p = load_as_svbool(x1->qh);
+                    svbool_t qhbits0p = load_as_svbool(x0->qh, vector_length);
+                    svbool_t qhbits1p = load_as_svbool(x1->qh, vector_length);
                     const svint8_t qhbits0 = svdup_n_s8_z(svnot_b_z(p32, qhbits0p), 0x10);
                     const svint8_t qhbits1 = svdup_n_s8_z(svnot_b_z(p32, qhbits1p), 0x10);
 
@@ -1055,7 +1054,6 @@ void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
                 sumf = svaddv_f32(p8, svadd_f32_x(p8, sumv0, sumv1));
             } break;
         default:
-            assert(false && "Unsupported vector length");
             break;
     }
 
@@ -1195,10 +1193,10 @@ void ggml_vec_dot_q5_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
                     summs0 += GGML_CPU_FP16_TO_FP32(x0->m) * GGML_CPU_FP16_TO_FP32(y0->s);
                     summs1 += GGML_CPU_FP16_TO_FP32(x1->m) * GGML_CPU_FP16_TO_FP32(y1->s);
 
-                    const svbool_t qhl0p = load_as_svbool(x0->qh);
-                    const svbool_t qhh0p = load_as_svbool(((const uint8_t *) x0->qh + 2));
-                    const svbool_t qhl1p = load_as_svbool(x1->qh);
-                    const svbool_t qhh1p = load_as_svbool(((const uint8_t *) x1->qh + 2));
+                    const svbool_t qhl0p = load_as_svbool(x0->qh, vector_length);
+                    const svbool_t qhh0p = load_as_svbool(((const uint8_t *) x0->qh + 2), vector_length);
+                    const svbool_t qhl1p = load_as_svbool(x1->qh, vector_length);
+                    const svbool_t qhh1p = load_as_svbool(((const uint8_t *) x1->qh + 2), vector_length);
 
                     const svint8_t qhl0 = svdup_n_s8_z(qhl0p, 0x10);
                     const svint8_t qhh0 = svdup_n_s8_z(qhh0p, 0x10);
@@ -1250,8 +1248,8 @@ void ggml_vec_dot_q5_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
                     summs0 += GGML_CPU_FP16_TO_FP32(x0->m) * GGML_CPU_FP16_TO_FP32(y0->s);
                     summs1 += GGML_CPU_FP16_TO_FP32(x1->m) * GGML_CPU_FP16_TO_FP32(y1->s);
 
-                    const svbool_t qhbits0p = load_as_svbool(x0->qh);
-                    const svbool_t qhbits1p = load_as_svbool(x1->qh);
+                    const svbool_t qhbits0p = load_as_svbool(x0->qh, vector_length);
+                    const svbool_t qhbits1p = load_as_svbool(x1->qh, vector_length);
                     const svint8_t qhbits0 = svdup_n_s8_z(qhbits0p, 0x10);
                     const svint8_t qhbits1 = svdup_n_s8_z(qhbits1p, 0x10);
 
@@ -1276,7 +1274,6 @@ void ggml_vec_dot_q5_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
                 sumf = svaddv_f32(p8, svadd_f32_x(p8, sumv0, sumv1)) + summs0 + summs1;
             } break;
         default:
-            assert(false && "Unsupported vector length");
             break;
     }
 
@@ -4549,4 +4546,3 @@ void ggml_vec_dot_iq4_xs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const v
     ggml_vec_dot_iq4_xs_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
 #endif
 }
-
