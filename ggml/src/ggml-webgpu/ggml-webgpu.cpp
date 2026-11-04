@@ -3079,25 +3079,22 @@ static webgpu_encoded_op ggml_webgpu_count_equal(webgpu_context & ctx,
                                                  ggml_tensor *    src1,
                                                  ggml_tensor *    dst) {
     const uint32_t                    ne         = ggml_nelements(src0);
-    const bool                        single_wg  = ne > 0 && ne <= GGML_WEBGPU_COUNT_EQUAL_SINGLE_WG_MAX_SIZE;
     const uint32_t                    offset_dst = ggml_webgpu_tensor_misalignment(ctx, dst);
     std::vector<webgpu_dispatch_desc> dispatches;
-    if (!single_wg) {
-        // Reset both words of the I64 result before accumulating partial counts.
-        dispatches.push_back({
-            ctx->global_ctx->memset_pipeline,
-            { offset_dst, sizeof(int64_t), 0 },
-            { ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, dst) },
-            { 1, 1 }
-        });
-    }
+    // Reset both words of the I64 result before accumulating partial counts.
+    dispatches.push_back({
+        ctx->global_ctx->memset_pipeline,
+        { offset_dst, sizeof(int64_t), 0 },
+        { ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, dst) },
+        { 1, 1 }
+    });
 
     if (ne == 0) {
         return ggml_backend_webgpu_build_multi(ctx, dispatches);
     }
 
     const bool      src_overlap = ggml_webgpu_tensor_binding_overlap(ctx->global_ctx, src0, src1);
-    webgpu_pipeline pipeline    = ctx->shader_lib->get_count_equal_pipeline(src_overlap, single_wg);
+    webgpu_pipeline pipeline    = ctx->shader_lib->get_count_equal_pipeline(src_overlap);
 
     uint32_t                          offset_src0 = ggml_webgpu_tensor_misalignment(ctx, src0) / sizeof(int32_t);
     uint32_t                          offset_src1 = ggml_webgpu_tensor_misalignment(ctx, src1) / sizeof(int32_t);
@@ -3115,7 +3112,7 @@ static webgpu_encoded_op ggml_webgpu_count_equal(webgpu_context & ctx,
     std::vector<uint32_t> params = { offset_src0, offset_src1, offset_dst / (uint32_t) sizeof(uint32_t), ne };
     uint32_t              wg_x;
     uint32_t              wg_y;
-    const uint32_t        total_wg = single_wg ? 1 : CEIL_DIV(ne, GGML_WEBGPU_COUNT_EQUAL_WG_SIZE);
+    const uint32_t        total_wg = CEIL_DIV(ne, GGML_WEBGPU_COUNT_EQUAL_WG_SIZE);
     compute_2d_workgroups(total_wg, ctx->global_ctx->capabilities.limits.maxComputeWorkgroupsPerDimension, wg_x, wg_y);
     dispatches.push_back({
         pipeline, std::move(params), std::move(entries), { wg_x, wg_y }

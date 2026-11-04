@@ -3060,31 +3060,40 @@ struct test_argmax : public test_case {
 struct test_count_equal : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne;
+    const int match_every;
+    const bool v;
+    const bool same_src;
 
     std::string vars() override {
-        return VARS_TO_STR2(type, ne);
+        return VARS_TO_STR5(type, ne, match_every, v, same_src);
     }
 
     test_count_equal(ggml_type type = GGML_TYPE_F32,
-            std::array<int64_t, 4> ne = {4, 500, 1, 1})
-        : type(type), ne(ne) {}
+            std::array<int64_t, 4> ne = {4, 500, 1, 1},
+            int match_every = 3, bool v = false, bool same_src = false)
+        : type(type), ne(ne), match_every(match_every), v(v), same_src(same_src) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
-        ggml_set_name(a, "a");
-
-        ggml_tensor * a_argmax = ggml_argmax(ctx, a);
-        ggml_set_name(a_argmax, "a_argmax");
-
-        ggml_tensor * b = ggml_new_tensor(ctx, type, 4, ne.data());
-        ggml_set_name(b, "b");
-
-        ggml_tensor * b_argmax = ggml_argmax(ctx, b);
-        ggml_set_name(b_argmax, "b_argmax");
-
-        ggml_tensor * out = ggml_count_equal(ctx, a_argmax, b_argmax);
+        ggml_tensor * inputs[2];
+        const int64_t n = ne[0] * ne[1] * ne[2] * ne[3];
+        for (int j = 0; j < 2; j++) {
+            if (v) {
+                const size_t offset = (2 * j + 1) * ggml_type_size(type);
+                ggml_tensor * base = ggml_new_tensor_1d(ctx, type, n + 2 * j + 1);
+                inputs[j] = ggml_view_4d(ctx, base, ne[0], ne[1], ne[2], ne[3],
+                    ne[0] * ggml_type_size(type), ne[0] * ne[1] * ggml_type_size(type),
+                    ne[0] * ne[1] * ne[2] * ggml_type_size(type), offset);
+            } else {
+                inputs[j] = ggml_new_tensor(ctx, type, 4, ne.data());
+            }
+            ggml_set_name(inputs[j], j == 0 ? "a" : "b");
+            if (type != GGML_TYPE_I32) {
+                inputs[j] = ggml_argmax(ctx, inputs[j]);
+                ggml_set_name(inputs[j], j == 0 ? "a_argmax" : "b_argmax");
+            }
+        }
+        ggml_tensor * out = ggml_count_equal(ctx, inputs[0], same_src ? inputs[0] : inputs[1]);
         ggml_set_name(out, "out");
-
         return out;
     }
 
@@ -3110,59 +3119,19 @@ struct test_count_equal : public test_case {
                 init_tensor_uniform(t);
             }
         }
-    }
-};
-
-struct test_count_equal_i32 : public test_case {
-    const std::array<int64_t, 4> ne;
-    const int match_every;
-    const bool v;
-    const bool same_src;
-
-    std::string vars() override {
-        return VARS_TO_STR4(ne, match_every, v, same_src);
-    }
-
-    test_count_equal_i32(std::array<int64_t, 4> ne, int match_every, bool v = false, bool same_src = false)
-        : ne(ne), match_every(match_every), v(v), same_src(same_src) {}
-
-    ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * inputs[2];
-        const int64_t n = ne[0] * ne[1] * ne[2] * ne[3];
-        for (int j = 0; j < 2; j++) {
-            if (v) {
-                const size_t offset = (2 * j + 1) * sizeof(int32_t);
-                ggml_tensor * base = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, n + 2 * j + 1);
-                inputs[j] = ggml_view_4d(ctx, base, ne[0], ne[1], ne[2], ne[3],
-                    ne[0] * sizeof(int32_t), ne[0] * ne[1] * sizeof(int32_t),
-                    ne[0] * ne[1] * ne[2] * sizeof(int32_t), offset);
-            } else {
-                inputs[j] = ggml_new_tensor(ctx, GGML_TYPE_I32, 4, ne.data());
+        if (type == GGML_TYPE_I32) {
+            ggml_tensor * out = ggml_get_tensor(ctx, "out");
+            const int64_t n = ggml_nelements(out->src[0]);
+            std::vector<int32_t> data(n);
+            for (int j = 0; j < 2; j++) {
+                for (int64_t i = 0; i < n; i++) {
+                    const int32_t value = i % 2 == 0 ? INT32_MIN : INT32_MAX;
+                    const bool match = match_every != 0 && i % match_every == 0;
+                    // Adjacent large integers must not become equal through float conversion.
+                    data[i] = j == 0 || match ? value : value + (i % 2 == 0 ? 1 : -1);
+                }
+                ggml_backend_tensor_set(out->src[j], data.data(), 0, data.size() * sizeof(int32_t));
             }
-            ggml_set_name(inputs[j], j == 0 ? "a" : "b");
-        }
-        ggml_tensor * out = ggml_count_equal(ctx, inputs[0], same_src ? inputs[0] : inputs[1]);
-        ggml_set_name(out, "out");
-        return out;
-    }
-
-    double max_nmse_err() override {
-        return 0.0;
-    }
-
-    void initialize_tensors(ggml_context * ctx) override {
-        test_case::initialize_tensors(ctx);
-        ggml_tensor * out = ggml_get_tensor(ctx, "out");
-        const int64_t n = ggml_nelements(out->src[0]);
-        std::vector<int32_t> data(n);
-        for (int j = 0; j < 2; j++) {
-            for (int64_t i = 0; i < n; i++) {
-                const int32_t value = i % 2 == 0 ? INT32_MIN : INT32_MAX;
-                const bool match = match_every != 0 && i % match_every == 0;
-                // Adjacent large integers must not become equal through float conversion.
-                data[i] = j == 0 || match ? value : value + (i % 2 == 0 ? 1 : -1);
-            }
-            ggml_backend_tensor_set(out->src[j], data.data(), 0, data.size() * sizeof(int32_t));
         }
     }
 };
@@ -10812,14 +10781,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_count_equal(GGML_TYPE_F32, {4, 5000, 1, 1}));
     for (int64_t n : {1, 255, 256, 257, 1023, 1024, 1025, 65537}) {
         for (int match_every : {0, 1, 3}) {
-            test_cases.emplace_back(new test_count_equal_i32({n, 1, 1, 1}, match_every));
+            test_cases.emplace_back(new test_count_equal(GGML_TYPE_I32, {n, 1, 1, 1}, match_every));
         }
     }
-    test_cases.emplace_back(new test_count_equal_i32({257, 3, 1, 1}, 3, true));
-    test_cases.emplace_back(new test_count_equal_i32({17, 5, 1, 1}, 1, true));
-    test_cases.emplace_back(new test_count_equal_i32({257, 1, 1, 1}, 1, true, true));
-    test_cases.emplace_back(new test_count_equal_i32({1024, 1, 1, 1}, 1, true, true));
-    test_cases.emplace_back(new test_count_equal_i32({1025, 1, 1, 1}, 1, true, true));
+    test_cases.emplace_back(new test_count_equal(GGML_TYPE_I32, {257, 3, 1, 1}, 3, true));
+    test_cases.emplace_back(new test_count_equal(GGML_TYPE_I32, {17, 5, 1, 1}, 1, true));
+    test_cases.emplace_back(new test_count_equal(GGML_TYPE_I32, {257, 1, 1, 1}, 1, true, true));
+    test_cases.emplace_back(new test_count_equal(GGML_TYPE_I32, {1024, 1, 1, 1}, 1, true, true));
+    test_cases.emplace_back(new test_count_equal(GGML_TYPE_I32, {1025, 1, 1, 1}, 1, true, true));
 
     test_cases.emplace_back(new test_argmax(GGML_TYPE_F32, {32,    1, 1, 1}));
     test_cases.emplace_back(new test_argmax(GGML_TYPE_F32, {32,  513, 1, 1}));
@@ -13002,7 +12971,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {77, 64, 20, 1}, false, false, GGML_TYPE_F32, {1, 1}, 1.0f, 0.0f));
 
     for (int64_t n : {256, 1024, 1025, 4096, 65536, 1048576}) {
-        test_cases.emplace_back(new test_count_equal_i32({n, 1, 1, 1}, 3));
+        test_cases.emplace_back(new test_count_equal(GGML_TYPE_I32, {n, 1, 1, 1}, 3));
     }
 
     test_cases.emplace_back(new test_argmax(GGML_TYPE_F32, {32, 10, 1, 1}));

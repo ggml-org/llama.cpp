@@ -35,12 +35,8 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
         @builtin(num_workgroups) num_wg: vec3<u32>,
         @builtin(local_invocation_id) lid: vec3<u32>) {
     var count = 0u;
-#ifdef SINGLE_WG
-    for (var i = lid.x; i < params.ne; i += WG_SIZE) {
-#else
     let i = (wid.x + wid.y * num_wg.x) * WG_SIZE + lid.x;
     if (i < params.ne) {
-#endif
 #ifdef SRC_OVERLAP
         count += select(0u, 1u, merged_src[params.offset_src0 + i] == merged_src[params.offset_src1 + i]);
 #else
@@ -56,11 +52,6 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
         workgroupBarrier();
     }
     if (lid.x == 0) {
-#ifdef SINGLE_WG
-        atomicStore(&dst[params.offset_dst], shared_count[0]);
-        atomicStore(&dst[params.offset_dst + 1], 0u);
-#else
         atomicAdd(&dst[params.offset_dst], shared_count[0]);
-#endif
     }
 }
