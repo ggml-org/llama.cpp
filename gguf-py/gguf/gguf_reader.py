@@ -258,6 +258,13 @@ class GGUFReader:
             offs += int(alen.nbytes)
             aparts: list[npt.NDArray[Any]] = [raw_itype, alen]
             data_idxs: list[int] = []
+            # Scalar elements are fixed-size: the declared count must fit in
+            # the remaining data or the array is malformed.
+            elem_nptype = self.gguf_scalar_to_np.get(GGUFValueType._value2member_map_.get(int(raw_itype[0])))
+            if elem_nptype is not None:
+                elem_size = int(np.empty([], dtype = elem_nptype).itemsize)
+                if int(alen[0]) * elem_size > self.data.nbytes - offs:
+                    raise ValueError(f'Array of {int(alen[0])} elements does not fit in the remaining {self.data.nbytes - offs} bytes')
             # FIXME: Handle multi-dimensional arrays properly instead of flattening
             for idx in range(alen[0]):
                 curr_size, curr_parts, curr_idxs, curr_types = self._get_field_parts(offs, raw_itype[0])
