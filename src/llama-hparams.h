@@ -254,6 +254,7 @@ struct llama_hparams {
     // Additional scale factors (Granite/Granite MoE)
     float f_residual_scale  = 0.0f;
     float f_embedding_scale = 0.0f;
+    float f_swiglu_clamp    = 0.0f;
     float f_attention_scale = 0.0f;
 
     // grok-2

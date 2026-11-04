@@ -243,6 +243,7 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_TIME_DECAY_EXTRA_DIM,              hparams.time_decay_extra_dim);
     add_kv(LLM_KV_RESIDUAL_SCALE,                    hparams.f_residual_scale);
     add_kv(LLM_KV_EMBEDDING_SCALE,                   hparams.f_embedding_scale);
+    add_kv(LLM_KV_SWIGLU_CLAMP,                      hparams.f_swiglu_clamp);
     add_kv(LLM_KV_HRM_LAYERS_PER_STACK,              hparams.n_hrm_layers_per_stack);
     add_kv(LLM_KV_HRM_H_CYCLES,                      hparams.n_hrm_h_cycles);
     add_kv(LLM_KV_HRM_L_CYCLES,                      hparams.n_hrm_l_cycles);
