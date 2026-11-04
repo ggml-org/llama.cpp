@@ -211,6 +211,7 @@ export interface AttachmentDisplayItemsOptions {
 export interface FileProcessingResult {
 	extras: DatabaseMessageExtra[];
 	emptyFiles: string[];
+	failedFiles: string[];
 }
 
 /**

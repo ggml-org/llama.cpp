@@ -23,6 +23,7 @@ function readFileAsBase64(file: File): Promise<string> {
 		};
 
 		reader.onerror = () => reject(reader.error);
+		reader.onabort = () => reject(new DOMException('File read aborted', 'AbortError'));
 
 		reader.readAsDataURL(file);
 	});
@@ -34,6 +35,7 @@ export async function parseFilesToMessageExtras(
 ): Promise<FileProcessingResult> {
 	const extras: DatabaseMessageExtra[] = [];
 	const emptyFiles: string[] = [];
+	const failedFiles: string[] = [];
 
 	for (const file of files) {
 		if (file.type === SpecialFileType.MCP_PROMPT && file.mcpPrompt) {
@@ -89,6 +91,7 @@ export async function parseFilesToMessageExtras(
 				});
 			} catch (error) {
 				console.error(`Failed to process audio file ${file.name}:`, error);
+				failedFiles.push(file.name);
 			}
 		} else if (getFileTypeCategory(file.type) === FileTypeCategory.VIDEO) {
 			// Process video files (MP4, etc)
@@ -104,6 +107,7 @@ export async function parseFilesToMessageExtras(
 				});
 			} catch (error) {
 				console.error(`Failed to process video file ${file.name}:`, error);
+				failedFiles.push(file.name);
 			}
 		} else if (getFileTypeCategory(file.type) === FileTypeCategory.PDF) {
 			try {
@@ -196,6 +200,7 @@ export async function parseFilesToMessageExtras(
 				}
 			} catch (error) {
 				console.error(`Failed to process PDF file ${file.name}:`, error);
+				failedFiles.push(file.name);
 			}
 		} else {
 			try {
@@ -217,9 +222,14 @@ export async function parseFilesToMessageExtras(
 				}
 			} catch (error) {
 				console.error(`Failed to read file ${file.name}:`, error);
+				failedFiles.push(file.name);
 			}
 		}
 	}
 
-	return { emptyFiles, extras };
+	if (failedFiles.length > 0) {
+		toast.error(`Could not read: ${failedFiles.join(', ')}. Retry or remove these files.`);
+	}
+
+	return { emptyFiles, extras, failedFiles };
 }

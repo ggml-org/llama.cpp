@@ -5,6 +5,7 @@
 	import { useDraftMessages } from '$lib/hooks/use-draft-messages.svelte';
 	import { deviceStore } from '$lib/stores';
 	import { onMount } from 'svelte';
+	import { toast } from 'svelte-sonner';
 
 	interface Props {
 		class?: string;
@@ -12,7 +13,11 @@
 		isLoading?: boolean;
 		onFileRemove?: (fileId: string) => void;
 		onFileUpload?: (files: File[]) => void;
-		onSend?: (message: string, files?: ChatUploadedFile[]) => Promise<boolean>;
+		onSend?: (
+			message: string,
+			files: ChatUploadedFile[],
+			onPrepared: (emptyFiles: string[]) => boolean
+		) => Promise<void>;
 		onStop?: () => void;
 		onSystemPromptAdd?: (draft: { message: string; files: ChatUploadedFile[] }) => void;
 		uploadedFiles?: ChatUploadedFile[];
@@ -61,6 +66,7 @@
 	});
 	let hasLoadingAttachments = $derived(uploadedFiles.some((f) => f.isLoading));
 	let message = $state('');
+	let isPreparingSend = false;
 	let previousIsLoading = $derived(isLoading);
 
 	const { clearDraft } = useDraftMessages({
@@ -76,25 +82,57 @@
 	}
 
 	async function handleSubmit() {
-		if ((!message.trim() && uploadedFiles.length === 0) || disabled || hasLoadingAttachments)
+		if (
+			(!message.trim() && uploadedFiles.length === 0) ||
+			disabled ||
+			hasLoadingAttachments ||
+			isPreparingSend
+		)
 			return;
 
 		if (!chatFormRef?.checkModelSelected()) return;
 
-		const messageToSend = message.trim();
+		const originalMessage = message;
+		const originalChatId = chatId;
 		const filesToSend = [...uploadedFiles];
 
-		message = '';
-		uploadedFiles = [];
-		clearDraft();
+		let preparationPending = true;
 
-		chatFormRef?.resetTextareaHeight();
+		isPreparingSend = true;
 
-		const success = await onSend?.(messageToSend, filesToSend);
+		try {
+			await onSend?.(originalMessage.trim(), filesToSend, (emptyFiles) => {
+				preparationPending = false;
+				isPreparingSend = false;
 
-		if (!success) {
-			message = messageToSend;
-			uploadedFiles = filesToSend;
+				// Cancel stale preparation so it cannot clear or restore over a newer draft.
+				if (
+					chatId !== originalChatId ||
+					message !== originalMessage ||
+					uploadedFiles.length !== filesToSend.length ||
+					uploadedFiles.some((file, index) => file !== filesToSend[index])
+				) {
+					toast.info('Message changed while preparing attachments. Send again.');
+
+					return false;
+				}
+
+				if (emptyFiles.length > 0) {
+					uploadedFiles = uploadedFiles.filter((file) => !emptyFiles.includes(file.name));
+
+					return true;
+				}
+
+				message = '';
+				uploadedFiles = [];
+				clearDraft();
+				chatFormRef?.resetTextareaHeight();
+
+				return true;
+			});
+		} finally {
+			// Once accepted, another submission may prepare while this reply streams.
+			if (preparationPending) isPreparingSend = false;
 		}
 	}
 
