@@ -3291,7 +3291,7 @@ public:
                 const size_t n_copy = std::min(src_size - src_off, dst_size - dst_off);
 
                 GGML_ASSERT(n_copy % ggml_type_size(src_t->type) == 0);
-                const int64_t n_el = (int64_t) (n_copy / ggml_type_size(src_t->type) * ggml_blck_size(src_t->type));
+                const int64_t n_el = n_copy / ggml_type_size(src_t->type) * ggml_blck_size(src_t->type);
 
                 auto * src_v = ggml_view_1d(ctx_scratch, src_t, n_el, src_off);
                 ggml_backend_view_init(src_v);
