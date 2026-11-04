@@ -1,6 +1,5 @@
 #version 450
 
-#extension GL_EXT_control_flow_attributes : enable
 #extension GL_EXT_shader_16bit_storage : require
 
 #include "types.glsl"
@@ -70,64 +69,53 @@ float load(uint row, uint i, bool first) {
     return scratch[off];
 }
 
-// fill the slots of the ties in column order; histo is not used any more, so it holds the prefix sum of a tile
-void tie_select(const uint row, const uint threshold, const uint desired) {
-    const uint tid = gl_LocalInvocationID.x;
-    const uint ncols = p.ncols;
-    const uint row_out = row * p.k;
-    const uint tile = min(uint(BLOCK_SIZE), uint(RADIX_SIZE));
-    uint pos0 = p.k - desired;
-    for (uint i0 = 0; i0 < ncols && pos0 < p.k; i0 += tile) {
-        const uint i  = i0 + tid;
-        const uint eq = (tid < tile && i < ncols && f2ui(load(row, i, false)) == threshold) ? 1u : 0u;
-        if (tid < tile) {
-            histo[tid] = eq;
-        }
-        barrier();
-        for (uint off = 1; off < tile; off <<= 1) {
-            const uint t = (tid < tile && tid >= off) ? histo[tid - off] : 0u;
-            barrier();
-            if (tid < tile) {
-                histo[tid] += t;
-            }
-            barrier();
-        }
-        const uint pos = pos0 + (tid < tile ? histo[tid] : 0u) - eq;
-        if (eq != 0u && pos < p.k) {
-            data_d[row_out + pos] = int(i);
-        }
-        pos0 += histo[tile - 1];
-        barrier();
-    }
+// the ordered value over the column counted from the end: the keys of a row are distinct,
+// so the K-th largest key has no ties and equal values resolve to the lower columns
+uvec2 load_key(uint row, uint i, bool first) {
+    return uvec2(f2ui(load(row, i, first)), p.ncols - 1 - i);
 }
 
-// one workgroup per row: radix-select the K-th largest, then compact it plus enough ties
+// v at bit shift of a 64-bit key, as the pair (high word, low word)
+uvec2 key_bits(uint v, int shift) {
+    return shift < 32 ? uvec2(0u, v << uint(shift)) : uvec2(v << uint(shift - 32), 0u);
+}
+
+uint key_digit(uvec2 key, int shift) {
+    return (shift < 32 ? key.y >> uint(shift) : key.x >> uint(shift - 32)) & (RADIX_SIZE - 1);
+}
+
+// one workgroup per row: radix-select the K-th largest key, then compact the keys at or above it
 void topk(const uint row) {
     const uint tid = gl_LocalInvocationID.x;
     const uint ncols = p.ncols;
     const uint row_out = row * p.k;
 
-    uint prefix  = 0;     // fixed high bits of the threshold key
-    uint desired = p.k;   // count still needed from the candidate range
+    uvec2 prefix  = uvec2(0); // resolved bits of the K-th largest key
+    uvec2 mask    = uvec2(0); // bits of prefix resolved so far
+    uint  desired = p.k;      // count still wanted among the keys that match prefix
 
-    [[unroll]] for (int shift = 32 - RADIX_BITS; shift >= 0; shift -= RADIX_BITS) {
+    // the column word of the key is zero from this bit up
+    const int col_bits = findMSB(ncols - 1) + 1;
+
+    for (int shift = 64 - RADIX_BITS; shift >= 0; shift -= RADIX_BITS) {
+        if (shift < 32 && shift >= col_bits) {
+            continue;
+        }
         for (uint i = tid; i < RADIX_SIZE; i += BLOCK_SIZE) {
             histo[i] = 0;
         }
         barrier();
 
-        const bool first     = (shift == 32 - RADIX_BITS);
-        const uint hi_mask   = (shift + RADIX_BITS >= 32) ? 0u : (0xFFFFFFFFu << uint(shift + RADIX_BITS));
-        const uint prefix_hi = prefix & hi_mask;
+        const bool first = (shift == 64 - RADIX_BITS);
         for (uint i = tid; i < ncols; i += BLOCK_SIZE) {
-            const uint key = f2ui(load(row, i, first));
-            if ((key & hi_mask) == prefix_hi) {
-                atomicAdd(histo[(key >> uint(shift)) & (RADIX_SIZE - 1)], 1u);
+            const uvec2 key = load_key(row, i, first);
+            if ((key & mask) == prefix) {
+                atomicAdd(histo[key_digit(key, shift)], 1u);
             }
         }
         barrier();
 
-        // top-down scan for the bucket holding the K-th value
+        // top-down scan for the bucket holding the K-th key
         if (tid == 0) {
             uint acc = 0;
             uint b   = 0;
@@ -142,9 +130,15 @@ void topk(const uint row) {
         }
         barrier();
 
-        prefix  |= sh_bucket << uint(shift);
+        prefix  |= key_bits(sh_bucket, shift);
+        mask    |= key_bits(uint(RADIX_SIZE - 1), shift);
         desired -= sh_above;
+        // the keys that match prefix are all wanted: the lower bits do not matter
+        const bool done = (sh_equal == desired);
         barrier();
+        if (done) {
+            break;
+        }
     }
 
     if (tid == 0) {
@@ -152,28 +146,12 @@ void topk(const uint row) {
     }
     barrier();
 
-    // emit everything above the threshold, then fill the rest from ties
-    const uint threshold = prefix;
+    // the K largest keys are the keys at or above the resolved prefix
     for (uint i = tid; i < ncols; i += BLOCK_SIZE) {
-        if (f2ui(load(row, i, false)) > threshold) {
+        const uvec2 key = load_key(row, i, false) & mask;
+        if (key.x > prefix.x || (key.x == prefix.x && key.y >= prefix.y)) {
             data_d[row_out + atomicAdd(out_count, 1u)] = int(i);
         }
-    }
-    barrier();
-    for (uint i = tid; i < ncols; i += BLOCK_SIZE) {
-        if (f2ui(load(row, i, false)) == threshold) {
-            const uint pos = atomicAdd(out_count, 1u);
-            if (pos < p.k) {
-                data_d[row_out + pos] = int(i);
-            }
-        }
-    }
-
-    // with surplus ties the loop above takes the ties in the invocation timing order, so take them again in a fixed order
-    if (sh_equal != desired) {
-        memoryBarrierBuffer();
-        barrier();
-        tie_select(row, threshold, desired);
     }
 }
 
