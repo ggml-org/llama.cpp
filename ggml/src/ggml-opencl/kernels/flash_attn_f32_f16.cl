@@ -2539,6 +2539,7 @@ __kernel void flash_attn_f32_f16_q1_vec_mq_split_k_img(
 
 #ifndef FA_MQ_ONLY  // q1_split + merge excluded from the MQ-only (g8) program
 #ifndef FA_VEC_ONLY
+REQD_FA_SG
 __kernel void flash_attn_f32_f16_q1_split(
     const global void * q_void, ulong q_offset,
     const global void * k_void, ulong k_offset,

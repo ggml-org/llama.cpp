@@ -23291,7 +23291,8 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
 
         // MQ split kernel uses MQ_NSG_SPLIT subgroups and one WG per (kv_head, batch, split)
         // matches Q1_WG_SIZE * NSG (MQ_GQA=4 -> 256; MQ_GQA=8 -> 192)
-        const size_t fd_wg = use_fd_mq ? fd_mq_wg : 64;
+        // the non-MQ split kernels run one Q1_WG_SIZE (= FA_SG) work-group: 32 on Intel, 64 otherwise
+        const size_t fd_wg = use_fd_mq ? fd_mq_wg : (backend_ctx->gpu_family == INTEL ? 32 : 64);
         const size_t fd_head_dim = use_fd_mq
             ? (size_t)(n_head_kv * fd_head_sub * n_batch)
             : (size_t)(n_head     * n_batch);
