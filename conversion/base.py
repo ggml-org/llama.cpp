@@ -1421,10 +1421,8 @@ class ModelBase:
         # Per-tensor NVFP4 precision.
         self._nvfp4_layer_algo = {}
         if quant_layers:
-            # quantized_layers keys are module paths in the source checkpoint
-            # not tensor names. So resolve each source tensor to its closest
-            # quantized_layers parent, and record the algo under the filtered
-            # tensor name (which is what _tag_prec_a4 looks up).
+            # quantized_layers keys are module paths in the source checkpoint, not tensor names
+            # resolve each source tensor to the closest quantized_layers parent and record the algo under its filtered name for _tag_prec_a4
             layer_algo = {k: v.get("quant_algo") for k, v in quant_layers.items() if isinstance(v, dict)}
             matched: set[str] = set()
             for src_name, filtered_name in self._source_tensor_names.items():
