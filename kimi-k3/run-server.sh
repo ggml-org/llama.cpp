@@ -29,14 +29,25 @@
 #               conversations, and returning to one then reprocesses it from the start; 0 turns the cache off.
 #               The active chat's own checkpoints (up to ~14 GB) come on top; both take host RAM away from the
 #               page cache that expert streaming uses
-#   THREADS     CPU threads, physical cores      (default: 14)
-#   UBATCH      prompt batch size (-b = -ub); every batch reads nearly all experts once (default: 2048)
+#   THREADS     CPU threads                      (default: the number of physical cores)
+#   NUMA        1: on a machine with several NUMA nodes (sockets), each node's threads compute their own part of
+#               every matrix, and that part of the weights is kept in the node's memory: the dense weights are split
+#               at load (in ordinary, not pinned, host memory), the experts when they are read into the page cache
+#               (--numa distribute --no-host --no-repack). 0: one memory pool, as on a single socket
+#               (default: 1 if the machine has more than one NUMA node)
+#   UBATCH      prompt batch size (-b = -ub); every batch reads nearly all experts once, so a larger batch means fewer
+#               passes over the 545 GB of experts (default: 4096 with a GPU of 15 GB or more, else 2048; at CTX 262144
+#               4096 uses 13.3 of the 16.3 GB of an RTX 5070 Ti)
 #   PREDICT     next-layer expert prediction: 0 off, 1 observe (statistics only), 2 prefetch (default: 2)
 #   OFFLOAD     1: prompt batches run the expert matmuls on the GPU (each layer's expert tensors are uploaded,
 #               streamed from disk ahead of the copy); needs ~3 expert tensors of GPU memory, so only the IQ1
 #               model fits (default: 1 for an IQ1 model file, 0 otherwise)
 #   PREDICT_STATS  where the learned prediction state is kept across restarts
 #               (default: ${XDG_STATE_HOME:-~/.local/state}/llama.cpp/<model file name>.predict.bin, one per model)
+#   CHECKPOINT_FILL  1: a prompt batch is not ended early at a user message just to place a checkpoint there when the
+#               rest of the prompt fits in the batch (--checkpoint-fill-batch): every batch costs a pass over the experts
+#               (~65-95 s), so this saves one pass on the first request and on every chat turn whose history the
+#               template re-renders; the checkpoint 4 tokens before the end of each prompt is still made (default: 1)
 #   CHECKPOINTS context checkpoints per slot (llama-server --ctx-checkpoints; default: the server's). The server
 #               splits a prompt at the user-turn start to create one, which costs a second pass over the experts
 #               (~1.6k-token prompt: 108 s with, 76 s without). 0 is right for single-turn requests; keep the
@@ -48,20 +59,22 @@
 #               `cd tools/ui && LLAMA_UI_OUT_DIR=/some/dir npm run build` (no relink); skips the UI build checks below
 #
 # THREADS should stay at the physical core count: the prediction worker runs on a spare hyperthread
+# NUMA=1 works best with kernel.numa_balancing=0 (the kernel otherwise keeps sampling and moving the dense weights)
 #
-# memory: the dense weights of the CPU layers (~49 GiB with the CTX <= 8192 profile, ~54 GiB at the long-context
-# default) are loaded into pinned host memory (-lm none), so expert streaming cannot evict them; the routed experts
-# stay on disk (--lazy-mode on) and are read per token through the page cache with GGML_CPU_MOE_PREFETCH=1.
-# --no-warmup: the warmup run would route all 896 experts per layer.
+# memory: the dense weights of the CPU layers (~33 GB at the long-context default) are read once at load with direct
+# I/O (-lm dio) into host memory that expert streaming cannot evict: pinned with NUMA=0, split over the nodes with
+# NUMA=1; the routed experts stay on disk (--lazy-mode on) and are read per token through the page cache with
+# GGML_CPU_MOE_PREFETCH=1. --no-warmup: the warmup run would route all 896 experts per layer.
 #
-# measured 2026-10-16 (IQ1 model, 256 GB RAM, CTX 8192, 1.6k-token prompt + 128 tokens): prompt ~108 s (76 s with
-# CHECKPOINTS=0), decode ~0.53 tok/s; prompt batches read the experts with O_DIRECT at 8-9 GB/s (LLAMA_COPY_DIRECT=0
-# for the old page-cache path: ~285 s)
+# measured 2026-11-03 (IQ1 model, 2x E5-2699 v4, 448 GB RAM, RTX 5070 Ti 16 GB, CTX 262144, 2.6k-token document
+# prompt + 128 tokens, page cache warm): prompt 74 s, decode ~0.82-0.87 tok/s; a chat turn that adds ~50 tokens
+# ~27 s of prompt. The first request after a cold page cache decodes slower (~0.5 tok/s) while the experts are read.
+# Before these defaults (14 threads, no NUMA split, 2048-token batches): prompt ~145 s, decode ~0.67 tok/s.
 #
 # long context (CTX 262144): the attention cache must stay on the GPU (in host RAM the CPU would do the attention,
 # +1-2 s per token near a full context), so the dense layers and the output head move to the CPU to make room:
 # expected ~+0.09 s per token. Near a full context the GPU also reads the whole cache per token (estimated ~20-25 ms)
-# and each 2048-token prompt batch adds an estimated ~15-25 s of attention to its ~70-100 s of expert streaming.
+# and each prompt batch adds an estimated ~15-25 s of attention to its ~70-100 s of expert streaming.
 # A fresh 256k-token prompt therefore takes hours; a chat that grows turn by turn only processes each new turn
 
 set -euo pipefail
@@ -108,8 +121,22 @@ else
     KV_TYPE="${KV_TYPE:-f16}"
     CACHE_RAM="${CACHE_RAM:-}"
 fi
-THREADS="${THREADS:-14}"
-UBATCH="${UBATCH:-2048}"
+# physical cores: unique (socket, core) pairs
+CORES="$(lscpu -p=SOCKET,CORE 2>/dev/null | grep -v '^#' | sort -u | wc -l)"
+THREADS="${THREADS:-${CORES:-14}}"
+NODES="$(ls -d /sys/devices/system/node/node[0-9]* 2>/dev/null | wc -l)"
+if [[ "${NODES:-1}" -gt 1 ]]; then
+    NUMA="${NUMA:-1}"
+else
+    NUMA="${NUMA:-0}"
+fi
+VRAM_MIB="$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 || true)"
+if [[ "${VRAM_MIB:-0}" =~ ^[0-9]+$ && "${VRAM_MIB:-0}" -ge 15000 ]]; then
+    UBATCH="${UBATCH:-4096}"
+else
+    UBATCH="${UBATCH:-2048}"
+fi
+CHECKPOINT_FILL="${CHECKPOINT_FILL:-1}"
 PREDICT="${PREDICT:-2}"
 PREDICT_STATS="${PREDICT_STATS:-${XDG_STATE_HOME:-$HOME/.local/state}/llama.cpp/$(basename "$MODEL" .gguf).predict.bin}"
 CHECKPOINTS="${CHECKPOINTS:-}"
@@ -131,13 +158,15 @@ for a in "$@"; do
             die "refusing '$a': it reads the whole 1.5 TB model" ;;
         --op-offload|--no-op-offload)
             die "refusing '$a': set OFFLOAD=0/1 instead (it must fit the GPU memory budget of this script)" ;;
-        -lm|--load-mode|-lzm|--lazy-mode|-fit|--fit|-ot|--override-tensor|-ngl|--n-gpu-layers|--gpu-layers|-dev|--device|-ts|--tensor-split|--rpc|--no-host)
+        -lm|--load-mode|-lzm|--lazy-mode|-fit|--fit|-ot|--override-tensor|-ngl|--n-gpu-layers|--gpu-layers|-dev|--device|-ts|--tensor-split|--rpc|--no-host|-nr|--no-repack|--repack)
             die "refusing '$a': load mode, lazy mode and tensor placement are fixed by this script (use GPU_LAYERS)" ;;
+        --numa)
+            die "refusing '$a': set it with the NUMA environment variable" ;;
         -m|--model|-c|--ctx-size|-t|--threads|--port|-b|--batch-size|-ub|--ubatch-size)
             die "refusing '$a': set it with the MODEL / CTX / THREADS / PORT / UBATCH environment variables" ;;
         -fa|--flash-attn|-np|--parallel|--host|--api-key|--api-key-file)
             die "refusing '$a': fixed by this script" ;;
-        -ctxcp|--ctx-checkpoints|--swa-checkpoints)
+        -ctxcp|--ctx-checkpoints|--swa-checkpoints|--checkpoint-fill-batch)
             die "refusing '$a': set it with the CHECKPOINTS environment variable" ;;
         -ctk|--cache-type-k|-ctv|--cache-type-v)
             die "refusing '$a': set it with the KV_TYPE environment variable" ;;
@@ -170,6 +199,9 @@ done
 [[ "$UBATCH" =~ ^[1-9][0-9]{0,3}$ && "$UBATCH" -ge 32 && "$UBATCH" -le 8192 ]] || die "UBATCH must be 32..8192"
 [[ "$PREDICT" =~ ^[012]$ ]] || die "PREDICT must be 0, 1 or 2"
 [[ "$OFFLOAD" =~ ^[01]$ ]] || die "OFFLOAD must be 0 or 1"
+[[ "$NUMA" =~ ^[01]$ ]] || die "NUMA must be 0 or 1"
+[[ "$CHECKPOINT_FILL" =~ ^[01]$ ]] || die "CHECKPOINT_FILL must be 0 or 1"
+[[ "$THREADS" =~ ^[1-9][0-9]{0,3}$ ]] || die "THREADS must be a positive number"
 [[ -z "$CHECKPOINTS" || "$CHECKPOINTS" =~ ^(0|[1-9][0-9]{0,5})$ ]] || die "CHECKPOINTS must be a non-negative integer"
 [[ "$KV_TYPE" == f16 || "$KV_TYPE" == q8_0 ]] || die "KV_TYPE must be f16 or q8_0"
 [[ "$KV_TYPE" != f16 || "$CTX" -le 131072 ]] || die "KV_TYPE=f16 does not fit the GPU above CTX 131072, use q8_0"
@@ -214,7 +246,7 @@ else
     fi
 fi
 
-# another llama process competes for the same 160 GB of RAM and page cache
+# another llama process competes for the same RAM and page cache
 if others="$(pgrep -a -x 'llama-[a-z0-9-]+' || true)"; [[ -n "$others" ]]; then
     die "another llama process is running, stop it first:
 $others"
@@ -249,8 +281,8 @@ if [[ -n "$CACHE_RAM" ]]; then
     cache_desc="$CACHE_RAM MiB"
 fi
 
-echo "run-server.sh: $gpu_desc, output head on $HEAD_ON, ctx $CTX, KV $KV_TYPE, prompt cache $cache_desc, threads $THREADS, port $PORT"
-echo "run-server.sh: loading reads ~58 GB of dense weights first"
+echo "run-server.sh: $gpu_desc, output head on $HEAD_ON, ctx $CTX, KV $KV_TYPE, prompt cache $cache_desc, threads $THREADS, NUMA $NUMA ($NODES nodes), port $PORT"
+echo "run-server.sh: loading reads ~35 GB of dense weights first (direct I/O, not kept in the page cache)"
 
 export GGML_CPU_MOE_PREFETCH=1
 if [[ "$PREDICT" != 0 ]]; then
@@ -265,14 +297,23 @@ if [[ "$OFFLOAD" == 1 ]]; then
 else
     OFFLOAD_FLAG="--no-op-offload"
 fi
+# NUMA: split rows per node; the split dense weights must be in ordinary host memory (pinned memory is placed when
+# it is allocated), and repacked weights would be computed with another row split
+NUMA_FLAG=()
+if [[ "$NUMA" == 1 ]]; then
+    NUMA_FLAG=(--numa distribute --no-host --no-repack)
+fi
 CHECKPOINTS_FLAG=()
 if [[ -n "$CHECKPOINTS" ]]; then
     CHECKPOINTS_FLAG=(--ctx-checkpoints "$CHECKPOINTS")
 fi
+if [[ "$CHECKPOINT_FILL" == 1 ]]; then
+    CHECKPOINTS_FLAG+=(--checkpoint-fill-batch)
+fi
 unset API_KEY
 exec "$BIN" "$@" \
     -m "$MODEL" \
-    -lm none --lazy-mode on $OFFLOAD_FLAG -fit off --no-warmup "${CHECKPOINTS_FLAG[@]}" \
+    -lm dio --lazy-mode on $OFFLOAD_FLAG -fit off --no-warmup "${CHECKPOINTS_FLAG[@]}" "${NUMA_FLAG[@]}" \
     -ngl 999 -ot "$OT" \
     -t "$THREADS" -fa on -c "$CTX" -ctk "$KV_TYPE" -ctv "$KV_TYPE" "${CACHE_RAM_FLAG[@]}" \
     -b "$UBATCH" -ub "$UBATCH" -np 1 \
