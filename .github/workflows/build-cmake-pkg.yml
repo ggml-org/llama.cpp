@@ -13,6 +13,8 @@ jobs:
     steps:
       - name: Clone
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24

@@ -65,6 +65,8 @@ jobs:
 
       - name: ccache-buckets-restore
         uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
         with:
           key: ctest-sanitizer-${{ matrix.sanitizer }}
           folder: llama.cpp
