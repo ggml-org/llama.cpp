@@ -2351,8 +2351,7 @@ static void ggml_backend_hexagon_free(ggml_backend_t backend) {
     delete backend;
 }
 
-static inline bool op_is_compute(ggml_tensor *node)
-{
+static inline bool ggml_hexagon_op_is_compute(const struct ggml_tensor * node) {
     return !ggml_op_is_empty(node->op) && !ggml_is_empty(node) && (node->flags & GGML_TENSOR_FLAG_COMPUTE);
 }
 
@@ -2370,7 +2369,7 @@ static void ggml_hexagon_tensor_repack(ggml_tensor * tensor, ggml_hexagon_sessio
 static void ggml_hexagon_graph_repack(const ggml_cgraph * graph, ggml_hexagon_session * sess) {
     for (int i = 0; i < graph->n_nodes; ++i) {
         ggml_tensor * n = graph->nodes[i];
-        if (!op_is_compute(n)) {
+        if (!ggml_hexagon_op_is_compute(n)) {
             continue;
         }
         if (n->op == GGML_OP_MUL_MAT || n->op == GGML_OP_MUL_MAT_ID) {
@@ -2403,7 +2402,7 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
 
         for (int i = 0; i < graph->n_nodes; ++i) {
             ggml_tensor * n = graph->nodes[i];
-            if (!op_is_compute(n)) {
+            if (!ggml_hexagon_op_is_compute(n)) {
                 continue;
             }
 
@@ -2414,9 +2413,6 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
 
             htp_opnode node(opcode, n);
             GGML_ASSERT(htp_kparams_solve(sess, node));
-            if (node.opcode == HTP_OP_CPY && node.kparams<htp_copy_kernel_params>()->total_elems == 0) {
-                continue;
-            }
 
             computed_nodes.push_back(std::move(node));
         }
@@ -3000,18 +2996,10 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
     }
 
     bool supp = false;
-    switch (op->op) {
-        case GGML_OP_NONE:
-        case GGML_OP_RESHAPE:
-        case GGML_OP_VIEW:
-        case GGML_OP_PERMUTE:
-        case GGML_OP_TRANSPOSE:
-            supp = true;
-            break;
-
-        default:
-            supp = htp_kparams_check(sess, op);
-            break;
+    if (ggml_op_is_empty(op->op) || ggml_is_empty(op)) {
+        supp = true;
+    } else {
+        supp = htp_kparams_check(sess, op);
     }
 
     ggml_hexagon_dump_op_supp(sess->c_name(), op, supp);
