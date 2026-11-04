@@ -352,6 +352,11 @@ if (GGML_METAL AND NOT GGML_BACKEND_DL)
     llama_build_and_test(test-metal-graph-optimize.cpp  LABEL "main behavior backend"  LINK ggml ggml-metal)
     target_include_directories(test-metal-graph-optimize PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src ${PROJECT_SOURCE_DIR}/ggml/src/ggml-metal)
 endif()
+if (GGML_CUDA)
+    # checks a host-side helper of the CUDA backend, needs no GPU
+    llama_build_and_test(test-cuda-uma.cpp  LABEL "main behavior"  LINK ggml)
+    target_include_directories(test-cuda-uma PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src)
+endif()
 
 llama_build(test-backend-ops.cpp LINK ggml Threads::Threads)
 

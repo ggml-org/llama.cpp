@@ -72,6 +72,7 @@
 #include "ggml-cuda/fill.cuh"
 #include "ggml-cuda/lightning-indexer.cuh"
 #include "ggml-cuda/top-k-mask.cuh"
+#include "ggml-cuda/uma.cuh"
 #include "ggml.h"
 
 #include <algorithm>
@@ -93,6 +94,10 @@
 #include <cstdlib>
 #include <string>
 #include <vector>
+
+#if defined(__linux__)
+#include <sys/stat.h>
+#endif
 
 static_assert(sizeof(half) == sizeof(ggml_fp16_t), "wrong fp16 size");
 
@@ -5752,6 +5757,13 @@ static bool ggml_backend_cuda_get_available_uma_memory(long * available_memory_k
     GGML_LOG_DEBUG("%s: final available_memory_kb: %ld\n", __func__, *available_memory_kb);
     return true;
 }
+
+// WSL2 exposes the Windows host's GPU to the VM through /dev/dxg
+static bool ggml_cuda_is_wsl() {
+    struct stat st;
+    static const bool wsl = stat("/dev/dxg", &st) == 0;
+    return wsl;
+}
 #endif // defined(__linux__)
 
 static void ggml_backend_cuda_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
@@ -5772,10 +5784,7 @@ static void ggml_backend_cuda_device_get_memory(ggml_backend_dev_t dev, size_t *
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, ggml_cuda_get_physical_device(ctx->device)));
 
-    // Check if UMA is explicitly enabled via environment variable
-    bool is_uma = prop.integrated > 0 || ggml_cuda_unified_memory_enabled();
-
-    if (is_uma) {
+    if (ggml_cuda_uma_free_from_host(prop.integrated > 0, ggml_cuda_unified_memory_enabled(), ggml_cuda_is_wsl())) {
         // For UMA systems (like DGX Spark), use system memory info
         long available_memory_kb = 0;
         long free_swap_kb = 0;
