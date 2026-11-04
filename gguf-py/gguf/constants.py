@@ -177,6 +177,7 @@ class Keys:
         NORM_BEFORE_RESIDUAL              = "{arch}.norm_before_residual"
         NORM_BEFORE_FC                    = "{arch}.norm_before_fc"
         REALTIME_DELAY_TOKENS             = "{arch}.realtime_delay_tokens"
+        USE_CFG                           = "{arch}.use_cfg"
 
     class Adapters:
         COUNT                = "{arch}.adapters.count"

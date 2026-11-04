@@ -304,6 +304,9 @@ struct llama_hparams {
     // realtime models: number of tokens the output lags behind the audio input
     uint32_t n_tokens_delay          = 0;
 
+    // cfg models: each sequence is paired with an uncond one
+    bool     use_cfg                 = false;
+
     // gemma3n altup
     uint32_t n_altup      = 4; // altup_num_inputs
     uint32_t i_altup_act  = 0; // altup_active_idx

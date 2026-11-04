@@ -1199,6 +1199,9 @@ class GGUFWriter:
     def add_realtime_delay_tokens(self, value: int) -> None:
         self.add_uint32(Keys.LLM.REALTIME_DELAY_TOKENS.format(arch=self.arch), value)
 
+    def add_use_cfg(self, value: bool) -> None:
+        self.add_bool(Keys.LLM.USE_CFG.format(arch=self.arch), value)
+
     def add_pooling_type(self, value: PoolingType) -> None:
         self.add_uint32(Keys.LLM.POOLING_TYPE.format(arch=self.arch), value.value)
 
