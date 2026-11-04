@@ -550,7 +550,7 @@ std::vector<std::unique_ptr<field>> make_tts_schema(server_task & task) {
 
     add((new field_num("temperature", task.tts_inp.data.temp))
         ->set_limits(0.0f, std::numeric_limits<float>::infinity())
-        ->set_desc("Temperature for the backbone sampler and the audio frames, 0.0 = greedy"));
+        ->set_desc("Temperature for the backbone sampler and the audio frames, for models that support it, 0.0 = greedy"));
 
     add((new field_num("seed", task.tts_inp.data.seed))
         ->set_desc("RNG seed for the backbone sampler and the codec/vocoder (-1 = random)"));
