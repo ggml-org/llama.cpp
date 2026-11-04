@@ -247,12 +247,6 @@ static inline uint ggml_top_k_f2ui(float x) {
     return y;
 }
 
-// the value, then the column with the lower column first: no two keys of a row are equal,
-// so the selection of equal values does not depend on the thread timing
-static inline ulong ggml_top_k_key(float x, uint i, uint ncols, uint col_shift) {
-    return ((ulong) ggml_top_k_f2ui(x) << col_shift) | (ncols - 1 - i);
-}
-
 kernel void kernel_top_k_f32_i32(
         constant   ggml_metal_kargs_top_k & args,
         device   const char * src0,
@@ -278,32 +272,27 @@ kernel void kernel_top_k_f32_i32(
     const uint tid = tpitg.x;
     const uint ntg_x = ntg.x;
 
-    ulong prefix  = 0;     // the known digits of the k-th largest key
-    ulong mask    = 0;     // the bits of the known digits
-    uint  desired = top_k; // how many keys that match the prefix go to the output
-    bool  done    = false; // all keys that match the prefix go to the output
+    uint prefix  = 0;     // fixed high bits of the threshold key
+    uint desired = top_k; // count still needed from the candidate range
 
-    // the column part of the key, in whole digits
-    uint col_shift = 0;
-    for (uint n = ncols - 1; n > 0; n >>= 8) {
-        col_shift += 8;
-    }
-
-    for (int shift = 24 + col_shift; shift >= 0 && !done; shift -= 8) {
+    for (int shift = 24; shift >= 0; shift -= 8) {
         for (uint i = tid; i < 256; i += ntg_x) {
             atomic_store_explicit(&histo[i], 0u, memory_order_relaxed);
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
+        const uint hi_mask   = (shift + 8 >= 32) ? 0u : (0xFFFFFFFFu << uint(shift + 8));
+        const uint prefix_hi = prefix & hi_mask;
+
         for (uint i = tid; i < ncols; i += ntg_x) {
-            const ulong key = ggml_top_k_key(src0_row[i], i, ncols, col_shift);
-            if ((key & mask) == prefix) {
-                atomic_fetch_add_explicit(&histo[(key >> shift) & 0xFFu], 1u, memory_order_relaxed);
+            const uint key = ggml_top_k_f2ui(src0_row[i]);
+            if ((key & hi_mask) == prefix_hi) {
+                atomic_fetch_add_explicit(&histo[(key >> uint(shift)) & 0xFFu], 1u, memory_order_relaxed);
             }
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
-        // top-down scan for the bucket holding the k-th key
+        // top-down scan for the bucket holding the k-th value
         if (tid == 0) {
             uint acc = 0;
             uint b   = 0;
@@ -320,10 +309,8 @@ kernel void kernel_top_k_f32_i32(
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
-        prefix  |= (ulong) *sh_bucket << shift;
-        mask    |= (ulong) 0xFFu << shift;
+        prefix  |= *sh_bucket << uint(shift);
         desired -= *sh_above;
-        done     = atomic_load_explicit(&histo[*sh_bucket], memory_order_relaxed) == desired;
 
         // ensure every thread has consumed sh_bucket/sh_above before the next pass
         threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -334,11 +321,23 @@ kernel void kernel_top_k_f32_i32(
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    // the k largest keys are the keys with the known digits at or above the prefix
+    // emit everything above the threshold, then fill the rest from ties
+    const uint threshold = prefix;
+
     for (uint i = tid; i < ncols; i += ntg_x) {
-        if ((ggml_top_k_key(src0_row[i], i, ncols, col_shift) & mask) >= prefix) {
+        if (ggml_top_k_f2ui(src0_row[i]) > threshold) {
             const uint pos = atomic_fetch_add_explicit(out_count, 1u, memory_order_relaxed);
             dst_row[pos] = (int32_t) i;
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (uint i = tid; i < ncols; i += ntg_x) {
+        if (ggml_top_k_f2ui(src0_row[i]) == threshold) {
+            const uint pos = atomic_fetch_add_explicit(out_count, 1u, memory_order_relaxed);
+            if (pos < top_k) {
+                dst_row[pos] = (int32_t) i;
+            }
         }
     }
 }

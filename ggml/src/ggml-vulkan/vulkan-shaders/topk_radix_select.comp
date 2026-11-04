@@ -1,5 +1,6 @@
 #version 450
 
+#extension GL_EXT_control_flow_attributes : enable
 #extension GL_EXT_shader_16bit_storage : require
 
 #include "types.glsl"
@@ -68,50 +69,33 @@ float load(uint row, uint i, bool first) {
     return scratch[off];
 }
 
-// the value, then the column with the lower column first: no two keys of a row are equal,
-// so the selection of equal values does not depend on the invocation timing
-uvec2 load_key(uint row, uint i, bool first) {
-    return uvec2(f2ui(load(row, i, first)), p.ncols - 1 - i);
-}
-
-// one workgroup per row: radix-select the K-th largest key, then compact the keys at or above it
+// one workgroup per row: radix-select the K-th largest, then compact it plus enough ties
 void topk(const uint row) {
     const uint tid = gl_LocalInvocationID.x;
     const uint ncols = p.ncols;
     const uint row_out = row * p.k;
 
-    uvec2 prefix  = uvec2(0); // the known digits of the K-th largest key
-    uvec2 mask    = uvec2(0); // the bits of the known digits
-    uint  desired = p.k;      // how many keys that match the prefix go to the output
-    bool  done    = false;    // all keys that match the prefix go to the output
+    uint prefix  = 0;     // fixed high bits of the threshold key
+    uint desired = p.k;   // count still needed from the candidate range
 
-    // the column part of the key, in whole digits
-    int col_shift = 0;
-    for (uint n = ncols - 1; n > 0; n >>= RADIX_BITS) {
-        col_shift += RADIX_BITS;
-    }
-
-    const int shift_first = 32 + col_shift - RADIX_BITS;
-    for (int shift = shift_first; shift >= 0 && !done; shift -= RADIX_BITS) {
+    [[unroll]] for (int shift = 32 - RADIX_BITS; shift >= 0; shift -= RADIX_BITS) {
         for (uint i = tid; i < RADIX_SIZE; i += BLOCK_SIZE) {
             histo[i] = 0;
         }
         barrier();
 
-        // the key is 64 bits wide: find the word of this digit and the shift inside that word
-        const int w   = shift >= col_shift ? 0 : 1;
-        const int bit = w == 0 ? shift - col_shift : shift;
-
-        const bool first = (shift == shift_first);
+        const bool first     = (shift == 32 - RADIX_BITS);
+        const uint hi_mask   = (shift + RADIX_BITS >= 32) ? 0u : (0xFFFFFFFFu << uint(shift + RADIX_BITS));
+        const uint prefix_hi = prefix & hi_mask;
         for (uint i = tid; i < ncols; i += BLOCK_SIZE) {
-            const uvec2 key = load_key(row, i, first);
-            if ((key & mask) == prefix) {
-                atomicAdd(histo[(key[w] >> bit) & (RADIX_SIZE - 1)], 1u);
+            const uint key = f2ui(load(row, i, first));
+            if ((key & hi_mask) == prefix_hi) {
+                atomicAdd(histo[(key >> uint(shift)) & (RADIX_SIZE - 1)], 1u);
             }
         }
         barrier();
 
-        // top-down scan for the bucket holding the K-th key
+        // top-down scan for the bucket holding the K-th value
         if (tid == 0) {
             uint acc = 0;
             uint b   = 0;
@@ -125,10 +109,8 @@ void topk(const uint row) {
         }
         barrier();
 
-        prefix[w] |= sh_bucket << bit;
-        mask[w]   |= uint(RADIX_SIZE - 1) << bit;
-        desired   -= sh_above;
-        done       = histo[sh_bucket] == desired;
+        prefix  |= sh_bucket << uint(shift);
+        desired -= sh_above;
         barrier();
     }
 
@@ -137,11 +119,20 @@ void topk(const uint row) {
     }
     barrier();
 
-    // the K largest keys are the keys with the known digits at or above the prefix
+    // emit everything above the threshold, then fill the rest from ties
+    const uint threshold = prefix;
     for (uint i = tid; i < ncols; i += BLOCK_SIZE) {
-        const uvec2 key = load_key(row, i, false) & mask;
-        if (key.x > prefix.x || (key.x == prefix.x && key.y >= prefix.y)) {
+        if (f2ui(load(row, i, false)) > threshold) {
             data_d[row_out + atomicAdd(out_count, 1u)] = int(i);
+        }
+    }
+    barrier();
+    for (uint i = tid; i < ncols; i += BLOCK_SIZE) {
+        if (f2ui(load(row, i, false)) == threshold) {
+            const uint pos = atomicAdd(out_count, 1u);
+            if (pos < p.k) {
+                data_d[row_out + pos] = int(i);
+            }
         }
     }
 }
