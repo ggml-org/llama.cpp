@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 // NetworkDirect (Windows RDMA) data path for the distributed-TP ring.
 //
@@ -12,13 +13,23 @@
 // sockets that dist-comm.cpp has already established, and every failure path leaves the caller
 // on TCP rather than aborting.
 //
-// The transport is opt-in: dist-comm.cpp only calls dist_nd_establish() when
-// LLAMA_DIST_TP_RDMA is set to a true value.
+// dist-comm.cpp calls dist_nd_establish() for an edge when both of its ranks have an ND capable
+// address on one subnet (dist_nd_local_addrs) and neither sets LLAMA_DIST_TP_RDMA=0.
 
 struct dist_nd_conn;
 
 // true when this build was compiled with NetworkDirect support
 bool dist_nd_available();
+
+// An ND capable local IPv4 address and its on-link prefix length.
+struct dist_nd_local_addr {
+    uint32_t ipv4;   // network byte order
+    uint32_t prefix; // bits
+};
+
+// The local IPv4 addresses NetworkDirect can use, with their prefix lengths. Empty when this build
+// has no NetworkDirect support or no ND provider is installed.
+std::vector<dist_nd_local_addr> dist_nd_local_addrs();
 
 // Establishes one bidirectional ND connection with the ring peer.
 //

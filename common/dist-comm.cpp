@@ -64,7 +64,7 @@ private:
 
 namespace {
 
-constexpr uint32_t DIST_COMM_MAGIC = 0x4443434c; // DCCL
+constexpr uint32_t DIST_COMM_MAGIC = 0x4443434d; // DCCL + 1: the registration carries the link table
 constexpr uint32_t OP_ALLREDUCE_F32 = 1;
 constexpr uint32_t OP_BCAST_I32     = 2;
 constexpr uint32_t OP_BCAST_VEC_I32 = 3;
@@ -81,15 +81,28 @@ using addrlen_t = socklen_t;
 constexpr socket_t DIST_CCL_INVALID_SOCKET = -1;
 #endif
 
+// A rank's ND capable addresses and their on-link prefix lengths, sent at registration and
+// broadcast by the master, so that every rank can work out the point-to-point link between every
+// pair of ranks (link_host).
+constexpr uint32_t DIST_MAX_LINK_ADDRS = 8;
+struct link_addrs_wire {
+    uint32_t rdma;                         // 1 when this rank runs its linked edges on ND
+    uint32_t count;
+    uint32_t ipv4[DIST_MAX_LINK_ADDRS];    // network byte order
+    uint32_t prefix[DIST_MAX_LINK_ADDRS];  // on-link prefix length in bits
+};
+
 struct reg_msg {
-    uint32_t magic;
-    int32_t  rank;
-    int32_t  listen_port;
+    uint32_t        magic;
+    int32_t         rank;
+    int32_t         listen_port;
+    link_addrs_wire links;
 };
 
 struct member_wire {
-    int32_t port;
-    char    host[64];
+    int32_t         port;
+    char            host[64];
+    link_addrs_wire links;
 };
 
 struct op_hdr {
@@ -100,8 +113,9 @@ struct op_hdr {
 };
 
 struct peer_info {
-    std::string host;
-    int         port = 0;
+    std::string     host;
+    int             port  = 0;
+    link_addrs_wire links = {};
 };
 
 bool ensure_socket_runtime(std::string & err) {
@@ -399,6 +413,22 @@ bool dist_transport_env_true(const char * key, bool def) {
     return s == "1" || s == "true" || s == "yes" || s == "on";
 }
 
+// This rank's entry for the link table. LLAMA_DIST_TP_RDMA=0 clears rdma, which keeps every edge of
+// this rank on TCP while the ring still dials over the point-to-point links.
+link_addrs_wire dist_local_links() {
+    link_addrs_wire out = {};
+    out.rdma = dist_nd_available() && dist_transport_env_true("LLAMA_DIST_TP_RDMA", true) ? 1 : 0;
+    for (const dist_nd_local_addr & a : dist_nd_local_addrs()) {
+        if (out.count == DIST_MAX_LINK_ADDRS) {
+            break;
+        }
+        out.ipv4[out.count]   = a.ipv4;
+        out.prefix[out.count] = a.prefix;
+        out.count++;
+    }
+    return out;
+}
+
 } // namespace
 
 struct dist_comm_socket_context::impl {
@@ -432,7 +462,7 @@ struct dist_comm_socket_context::impl {
     int32_t              mesh_next_src     = -1;
     std::vector<uint8_t> mesh_from_next;              // handed back by the second ring step
 
-    // 4-rank full mesh (LLAMA_DIST_TP_MESH=1 with LLAMA_DIST_TP_MESH_DIAG_HOSTS), see exchange_mesh4().
+    // 4-rank full mesh, when both diagonals have a point-to-point link (want_mesh4), see exchange_mesh4().
     // The diagonal joins this rank and rank + 2 over its own socket and ND connection. mesh4_pending
     // counts the ring steps still to be served from the last exchange: 2 after it, then 1, then 0.
     socket_t             diag_fd            = DIST_CCL_INVALID_SOCKET;
@@ -605,14 +635,14 @@ struct dist_comm_socket_context::impl {
     }
 
     // Whether a collective of this size runs as a mesh exchange. Every rank must answer the
-    // same way for the same size, so this reads only values derived from the environment, never
+    // same way for the same size, so this reads only values every rank derives alike, never
     // whether this rank's own ND connections happen to be up: a rank that fell back to TCP must
     // not go to the mesh while its peers stay on the ring.
     bool mesh_takes(size_t size) const {
         return mesh_max_bytes != 0 && size <= mesh_max_bytes;
     }
 
-    // Full-mesh exchange for world_size 3, opt-in via LLAMA_DIST_TP_MESH=1.
+    // Full-mesh exchange for world_size 3.
     //
     // The ring all-reduce costs world_size - 1 sequential exchanges per collective. A decode
     // collective is a 16 KB payload, so each of those exchanges is almost pure wire latency, and
@@ -737,36 +767,45 @@ struct dist_comm_socket_context::impl {
         return true;
     }
 
-    // LLAMA_DIST_TP_MESH_DIAG_HOSTS: at world_size 4, entry r (entries separated by ',' or '/') is the
-    // address rank r dials for its diagonal peer r + 2, on the cable between the two. The higher rank of
-    // each diagonal dials, so only entries 2 and 3 are used; 0 and 1 are placeholders such as '-'. Every
-    // rank reads the same value and decides the same way: a value without entries 2 and 3 keeps the ring.
-    static std::vector<std::string> mesh_diag_hosts() {
-        std::vector<std::string> out;
-        const char * v = std::getenv("LLAMA_DIST_TP_MESH_DIAG_HOSTS");
-        if (v == nullptr || v[0] == '\0') {
-            return out;
-        }
-        std::string cur;
-        for (const char * p = v;; ++p) {
-            if (*p == ',' || *p == '/' || *p == '\0') {
-                out.push_back(cur);
-                cur.clear();
-                if (*p == '\0') {
-                    break;
+    // p's address on the point-to-point link between ranks a and p: a subnet on which both have an
+    // ND capable address, the longest prefix if there are several. Empty when there is none. Every
+    // rank holds the same table, so every rank gets the same answer for every pair.
+    std::string link_host(int a, int p) const {
+        const link_addrs_wire & la = members[a].links;
+        const link_addrs_wire & lp = members[p].links;
+        uint32_t best        = 0;
+        uint32_t best_prefix = 0;
+        for (uint32_t i = 0; i < la.count; ++i) {
+            for (uint32_t j = 0; j < lp.count; ++j) {
+                const uint32_t pre = la.prefix[i];
+                if (pre == 0 || pre > 32 || pre != lp.prefix[j] || pre <= best_prefix || la.ipv4[i] == lp.ipv4[j]) {
+                    continue;
                 }
-            } else if (*p != ' ') {
-                cur += *p;
+                const uint32_t mask = htonl(pre == 32 ? 0xffffffffu : ~(0xffffffffu >> pre));
+                if (((la.ipv4[i] ^ lp.ipv4[j]) & mask) == 0) {
+                    best        = lp.ipv4[j];
+                    best_prefix = pre;
+                }
             }
         }
-        if (out.size() < 4 || out[2].empty() || out[2] == "-" || out[3].empty() || out[3] == "-") {
-            out.clear();
+        if (best_prefix == 0) {
+            return "";
         }
-        return out;
+        in_addr addr {};
+        addr.s_addr = best;
+        char buf[INET_ADDRSTRLEN] = {0};
+        return inet_ntop(AF_INET, &addr, buf, sizeof(buf)) != nullptr ? std::string(buf) : std::string();
     }
 
+    // Whether the edge between ranks a and b runs on ND: both ranks want it and they share a link.
+    bool edge_on_nd(int a, int b) const {
+        return members[a].links.rdma != 0 && members[b].links.rdma != 0 && !link_host(a, b).empty();
+    }
+
+    // world_size 4 with a point-to-point link on both diagonals (0-2 and 1-3), so a cable between
+    // every pair of ranks
     bool want_mesh4() const {
-        return cfg.world_size == 4 && dist_transport_env_true("LLAMA_DIST_TP_MESH", false) && !mesh_diag_hosts().empty();
+        return cfg.world_size == 4 && !link_host(0, 2).empty() && !link_host(1, 3).empty();
     }
 
     // establish_ring() for the 4-rank mesh: the ring edges as usual plus the two diagonals, 0-2 and 1-3.
@@ -788,9 +827,9 @@ struct dist_comm_socket_context::impl {
             return false;
         }
         if (dial_diag) {
-            const std::string host = mesh_diag_hosts()[cfg.rank];
+            const std::string host = link_host(cfg.rank, diag);
             const int         port = members[diag].port;
-            std::fprintf(stderr, "dist-tp: diagonal %d->%d dials %s:%d (LLAMA_DIST_TP_MESH_DIAG_HOSTS)\n",
+            std::fprintf(stderr, "dist-tp: diagonal %d->%d dials %s:%d (point-to-point link)\n",
                          cfg.rank, diag, host.c_str(), port);
             std::fflush(stderr);
             diag_fd = connect_with_retry(host, port, err);
@@ -833,10 +872,10 @@ struct dist_comm_socket_context::impl {
     // both of its ends get here once their own ring edges are done (establish_nd_per_edge), so no rank
     // waits on a peer that is still busy with another edge. The lower rank listens, as on the ring.
     void establish_nd_diag() {
-        if (diag_fd == DIST_CCL_INVALID_SOCKET) {
+        const int diag = (cfg.rank + 2) % 4;
+        if (diag_fd == DIST_CCL_INVALID_SOCKET || !edge_on_nd(cfg.rank, diag)) {
             return;
         }
-        const int diag = (cfg.rank + 2) % 4;
         std::string nd_err;
         nd_diag = dist_nd_establish((uintptr_t) diag_fd, (uintptr_t) diag_fd, cfg.rank < diag,
                                     nd_err, /* strict_local_addr */ true);
@@ -852,8 +891,7 @@ struct dist_comm_socket_context::impl {
         return mesh4 && size <= mesh_max_bytes;
     }
 
-    // Full-mesh exchange for world_size 4, opt-in via LLAMA_DIST_TP_MESH=1 with
-    // LLAMA_DIST_TP_MESH_DIAG_HOSTS (one cable between every pair of ranks).
+    // Full-mesh exchange for world_size 4, with one cable between every pair of ranks (want_mesh4).
     //
     // The ring all-reduce takes world_size - 1 = 3 dependent exchanges per collective. Here every
     // rank sends its payload to all three peers at once and receives theirs: next and prev over the
@@ -1027,22 +1065,15 @@ struct dist_comm_socket_context::impl {
         std::fflush(stderr);
     }
 
-    // Opt-in full-mesh all-reduce, see exchange_mesh(). Runs after select_transport() so the
-    // banner below can say which transports the mesh will use.
+    // Full-mesh all-reduce at world_size 3, and at 4 with a cable between every pair of ranks; the
+    // ring otherwise. See exchange_mesh(). Runs after select_transport() so the banner below can
+    // say which transports the mesh will use.
     void select_allreduce() {
-        if (!dist_transport_env_true("LLAMA_DIST_TP_MESH", false)) {
-            return;
-        }
         if (cfg.world_size == 4 && diag_fd != DIST_CCL_INVALID_SOCKET) {
             select_allreduce_mesh4();
             return;
         }
         if (cfg.world_size != 3) {
-            std::fprintf(stderr,
-                         "dist-tp: LLAMA_DIST_TP_MESH needs 3 ranks, or 4 with LLAMA_DIST_TP_MESH_DIAG_HOSTS "
-                         "(have %d); keeping the ring\n",
-                         cfg.world_size);
-            std::fflush(stderr);
             return;
         }
 
@@ -1075,7 +1106,7 @@ struct dist_comm_socket_context::impl {
 
     bool bootstrap_master(std::string & err) {
         members.assign(cfg.world_size, {});
-        members[0] = {cfg.master_host, cfg.listen_port};
+        members[0] = {cfg.master_host, cfg.listen_port, dist_local_links()};
 
         std::vector<socket_t> reg_fds;
         reg_fds.reserve(cfg.world_size - 1);
@@ -1102,13 +1133,19 @@ struct dist_comm_socket_context::impl {
                 close_fd(fd);
                 return false;
             }
-            members[msg.rank] = {peer_host, msg.listen_port};
+            if (msg.links.count > DIST_MAX_LINK_ADDRS) {
+                err = "invalid address count in registration";
+                close_fd(fd);
+                return false;
+            }
+            members[msg.rank] = {peer_host, msg.listen_port, msg.links};
             reg_fds.push_back(fd);
         }
 
         std::vector<member_wire> payload(cfg.world_size);
         for (int i = 0; i < cfg.world_size; ++i) {
-            payload[i].port = members[i].port;
+            payload[i].port  = members[i].port;
+            payload[i].links = members[i].links;
             std::memset(payload[i].host, 0, sizeof(payload[i].host));
             std::snprintf(payload[i].host, sizeof(payload[i].host), "%s", members[i].host.c_str());
         }
@@ -1134,6 +1171,7 @@ struct dist_comm_socket_context::impl {
             DIST_COMM_MAGIC,
             cfg.rank,
             cfg.listen_port,
+            dist_local_links(),
         };
         if (!write_msg(fd, &msg, sizeof(msg), err)) {
             close_fd(fd);
@@ -1149,8 +1187,13 @@ struct dist_comm_socket_context::impl {
 
         members.assign(cfg.world_size, {});
         for (int i = 0; i < cfg.world_size; ++i) {
-            members[i].host = payload[i].host;
-            members[i].port = payload[i].port;
+            members[i].host  = payload[i].host;
+            members[i].port  = payload[i].port;
+            members[i].links = payload[i].links;
+            if (members[i].links.count > DIST_MAX_LINK_ADDRS) {
+                err = "invalid address count in the member table";
+                return false;
+            }
         }
 
         return true;
@@ -1164,59 +1207,20 @@ struct dist_comm_socket_context::impl {
         const int next = (cfg.rank + 1) % cfg.world_size;
         const int prev = (cfg.rank + cfg.world_size - 1) % cfg.world_size;
 
-        // Where to dial for this rank's outbound ring edge.
-        //
-        // By default it is whatever the master recorded for rank next, and the master learned
-        // that from the source address of the TCP connection that rank opened to register. On a
-        // cluster with one flat network that is the right answer. It is the wrong answer here.
-        // The point to point links are separate /24s with no route between them, so bootstrap
-        // has to run over the one network every rank shares while the ring wants the fast link
-        // between each particular pair. The registering address is by construction the bootstrap
-        // one, so following it drags all world_size edges onto the slow network, including the
-        // two that have a dedicated cable sitting idle.
-        //
-        // The override names only this rank's outbound edge, which is exactly the part of the
-        // topology a rank can know on its own. The inbound side needs no counterpart: the
-        // listener is bound to INADDR_ANY, so it accepts on whichever interface prev dialed. A
-        // rank whose outbound edge has no dedicated link just leaves this unset and keeps the
-        // registered address, which is the correct answer for the edge that closes the ring on a
-        // fabric shaped like a line.
-        //
-        // Setting it is not optional bookkeeping once the ND path is per edge: dist-comm-nd
-        // derives the local RDMA address from the ring socket itself, so an edge dialed over the
-        // shared network has no ND capable address behind it and stays on TCP no matter what the
-        // cable situation is.
-        //
-        // The port still comes from the master's table unless the override spells one out. Ports
-        // are derived as master_port + rank and the master already has them right; it is only
-        // the address that bootstrap cannot know.
-        std::string next_host = members[next].host;
-        int         next_port = members[next].port;
-        {
-            const char * ov = std::getenv("LLAMA_DIST_TP_RING_NEXT_HOST");
-            if (ov != nullptr && *ov != 0) {
-                const std::string ov_str = ov;
-                next_host = ov_str;
-                // an explicit host:port is accepted, but only when the tail really is a port,
-                // so that a bare address is never truncated at some unrelated colon
-                const size_t colon = ov_str.rfind(':');
-                if (colon != std::string::npos && colon > 0 && colon + 1 < ov_str.size()) {
-                    const std::string tail = ov_str.substr(colon + 1);
-                    if (tail.find_first_not_of("0123456789") == std::string::npos) {
-                        const int ov_port = std::atoi(tail.c_str());
-                        if (ov_port > 0 && ov_port <= 65535) {
-                            next_host = ov_str.substr(0, colon);
-                            next_port = ov_port;
-                        }
-                    }
-                }
-                std::fprintf(stderr,
-                             "dist-tp: ring edge %d->%d dials %s:%d "
-                             "(LLAMA_DIST_TP_RING_NEXT_HOST overrides the registered %s:%d)\n",
-                             cfg.rank, next, next_host.c_str(), next_port,
-                             members[next].host.c_str(), members[next].port);
-            }
-        }
+        // Where to dial for this rank's outbound ring edge. The master recorded every rank at the
+        // source address of its registration, on the one network every rank shares. When this
+        // rank and next both have an ND capable address on one subnet, that subnet is the
+        // point-to-point link between them (a USB4 cable is a subnet of its own, with no route to
+        // the others), and the edge dials next's end of it instead. That is not only for speed:
+        // dist-comm-nd takes the local RDMA address from the ring socket, so an edge dialed over
+        // the shared network can only ever run TCP. The inbound side needs nothing, since the
+        // listener is bound to INADDR_ANY. A pair without a link, such as the edge that closes the
+        // ring on a fabric shaped like a line, keeps the registered address.
+        const std::string link      = link_host(cfg.rank, next);
+        const std::string next_host = link.empty() ? members[next].host : link;
+        const int         next_port = members[next].port;
+        std::fprintf(stderr, "dist-tp: ring edge %d->%d dials %s:%d (%s)\n", cfg.rank, next, next_host.c_str(),
+                     next_port, link.empty() ? "registered address" : "point-to-point link");
 
         if (want_mesh4()) {
             return establish_ring_mesh4(next_host, next_port, err);
@@ -1270,14 +1274,14 @@ struct dist_comm_socket_context::impl {
     //    on tcp_out and reads on tcp_in; at world_size 2 those are two sockets to one peer, but
     //    per edge there is exactly one socket and it already faces the right host.
     //
-    // An edge whose ring socket does not sit on an ND capable local address stays on TCP, which
-    // is the expected outcome for the edge that closes the ring on a line-shaped fabric: it has
-    // no point-to-point cable behind it and runs over whatever ordinary network carries it.
+    // An edge whose two ranks share no link stays on TCP (edge_on_nd), which is the expected
+    // outcome for the edge that closes the ring on a line-shaped fabric: it has no point-to-point
+    // cable behind it and runs over whatever ordinary network carries it.
     void establish_nd_per_edge() {
         for (int e = 0; e < cfg.world_size; ++e) {
             const int u = e;
             const int v = (e + 1) % cfg.world_size;
-            if (cfg.rank != u && cfg.rank != v) {
+            if ((cfg.rank != u && cfg.rank != v) || !edge_on_nd(u, v)) {
                 continue;
             }
             const bool i_am_u = (cfg.rank == u);
@@ -1303,33 +1307,28 @@ struct dist_comm_socket_context::impl {
         }
     }
 
-    // Selects the data path for exchange_ring(). Opt-in via LLAMA_DIST_TP_RDMA; any failure
-    // here is logged and leaves that ring edge on TCP rather than aborting the run.
+    // Selects the data path for exchange_ring(). An edge runs on ND when both of its ranks have
+    // an ND capable address on one subnet and neither sets LLAMA_DIST_TP_RDMA=0 (edge_on_nd);
+    // any failure here is logged and leaves that edge on TCP rather than aborting the run.
     void select_transport() {
-        if (cfg.world_size >= 2 && dist_transport_env_true("LLAMA_DIST_TP_RDMA", false)) {
-            if (!dist_nd_available()) {
+        if (cfg.world_size == 2 && edge_on_nd(0, 1)) {
+            std::string nd_err;
+            // next and prev are the same peer, so one bidirectional connection carries both
+            // halves. rank 0 listens and advertises, rank 1 dials in; rank 0 makes the final
+            // call.
+            nd_send = dist_nd_establish((uintptr_t) ring_out_fd, (uintptr_t) ring_in_fd,
+                                        cfg.rank == 0, nd_err);
+            if (nd_send == nullptr) {
                 std::fprintf(stderr,
-                             "dist-tp: LLAMA_DIST_TP_RDMA is set but this binary was built without "
-                             "NetworkDirect support; staying on TCP\n");
-            } else if (cfg.world_size == 2) {
-                std::string nd_err;
-                // next and prev are the same peer, so one bidirectional connection carries both
-                // halves. rank 0 listens and advertises, rank 1 dials in; rank 0 makes the final
-                // call. This is the proven 2-rank path, kept byte for byte as it was.
-                nd_send = dist_nd_establish((uintptr_t) ring_out_fd, (uintptr_t) ring_in_fd,
-                                            cfg.rank == 0, nd_err);
-                if (nd_send == nullptr) {
-                    std::fprintf(stderr,
-                                 "dist-tp: NetworkDirect setup failed on rank %d (%s); "
-                                 "falling back to TCP\n", cfg.rank, nd_err.c_str());
-                } else {
-                    nd_recv   = nd_send;
-                    nd_shared = true;
-                }
+                             "dist-tp: NetworkDirect setup failed on rank %d (%s); "
+                             "falling back to TCP\n", cfg.rank, nd_err.c_str());
             } else {
-                establish_nd_per_edge();
-                establish_nd_diag();
+                nd_recv   = nd_send;
+                nd_shared = true;
             }
+        } else if (cfg.world_size > 2) {
+            establish_nd_per_edge();
+            establish_nd_diag();
         }
 
         // The harness greps for this exact prefix to prove which transport a benchmark actually

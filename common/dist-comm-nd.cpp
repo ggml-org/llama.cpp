@@ -7,6 +7,8 @@
 
 bool dist_nd_available() { return false; }
 
+std::vector<dist_nd_local_addr> dist_nd_local_addrs() { return {}; }
+
 dist_nd_conn * dist_nd_establish(uintptr_t, uintptr_t, bool, std::string & err, bool) {
     err = "this binary was built without NetworkDirect support";
     return nullptr;
@@ -29,6 +31,7 @@ void dist_nd_free(dist_nd_conn *) {}
 #include <windows.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <iphlpapi.h>
 #include <ndsupport.h>
 
 #include <algorithm>
@@ -372,6 +375,35 @@ static bool nd_startup() {
     return ok;
 }
 
+// The local IPv4 addresses with an ND provider behind them, ports cleared.
+static std::vector<struct sockaddr_in> nd_ipv4_addrs() {
+    std::vector<struct sockaddr_in> out;
+    SIZE_T cb_list = 0;
+    NdQueryAddressList(0, nullptr, &cb_list);
+    if (cb_list == 0) {
+        ND_LOG_DBG("NdQueryAddressList reports no ND capable local addresses\n");
+        return out;
+    }
+    std::vector<uint8_t> raw(cb_list);
+    SOCKET_ADDRESS_LIST * list = (SOCKET_ADDRESS_LIST *)raw.data();
+    if (FAILED(NdQueryAddressList(0, list, &cb_list))) {
+        ND_LOG_DBG("NdQueryAddressList failed\n");
+        return out;
+    }
+    for (int i = 0; i < list->iAddressCount; i++) {
+        const struct sockaddr * sa = list->Address[i].lpSockaddr;
+        if (!sa || sa->sa_family != AF_INET) {
+            continue;
+        }
+        struct sockaddr_in addr;
+        memset(&addr, 0, sizeof(addr));
+        memcpy(&addr, sa, sizeof(addr));
+        addr.sin_port = 0;
+        out.push_back(addr);
+    }
+    return out;
+}
+
 // ---------------------------------------------------------------------------------------
 // peer liveness
 // ---------------------------------------------------------------------------------------
@@ -403,17 +435,6 @@ static bool nd_tcp_peer_closed(SOCKET fd) {
 // ---------------------------------------------------------------------------------------
 
 static bool nd_local_addr(SOCKET fd, struct sockaddr_in * out) {
-    // an explicit override lets the RDMA NIC differ from the one carrying the ring sockets
-    if (const char * env = std::getenv("LLAMA_DIST_TP_RDMA_ADDR")) {
-        memset(out, 0, sizeof(*out));
-        out->sin_family = AF_INET;
-        if (InetPtonA(AF_INET, env, &out->sin_addr) != 1) {
-            ND_LOG_ERR("LLAMA_DIST_TP_RDMA_ADDR is not a valid IPv4 address: %s\n", env);
-            return false;
-        }
-        ND_LOG_DBG("local address %s (from LLAMA_DIST_TP_RDMA_ADDR)\n", nd_addr_str(*out).s);
-        return true;
-    }
     int len = sizeof(*out);
     if (getsockname(fd, (struct sockaddr *)out, &len) != 0 || out->sin_family != AF_INET) {
         ND_LOG_DBG("getsockname on the ring socket failed, no local address\n");
@@ -632,10 +653,6 @@ static bool nd_setup_any(std::unique_ptr<dist_nd_conn> & conn, SOCKET fd, struct
         return true;
     }
     conn.reset();
-    if (std::getenv("LLAMA_DIST_TP_RDMA_ADDR")) {
-        // an explicit choice must not be silently overridden
-        return false;
-    }
     if (strict_local_addr) {
         // This edge is not on an ND capable address. Scanning would find an adapter facing some
         // other peer and advertise or dial an address unreachable across this edge, which shows
@@ -645,26 +662,8 @@ static bool nd_setup_any(std::unique_ptr<dist_nd_conn> & conn, SOCKET fd, struct
     }
     ND_LOG_DBG("setup on the ring-local address failed, scanning ND capable addresses\n");
 
-    SIZE_T cb_list = 0;
-    NdQueryAddressList(0, nullptr, &cb_list);
-    if (cb_list == 0) {
-        ND_LOG_DBG("NdQueryAddressList reports no ND capable local addresses\n");
-        return false;
-    }
-    std::vector<uint8_t> raw(cb_list);
-    SOCKET_ADDRESS_LIST * list = (SOCKET_ADDRESS_LIST *)raw.data();
-    if (FAILED(NdQueryAddressList(0, list, &cb_list))) {
-        ND_LOG_DBG("NdQueryAddressList failed\n");
-        return false;
-    }
-    for (int i = 0; i < list->iAddressCount; i++) {
-        const struct sockaddr * sa = list->Address[i].lpSockaddr;
-        if (!sa || sa->sa_family != AF_INET) {
-            continue;
-        }
-        memset(&addr, 0, sizeof(addr));
-        memcpy(&addr, sa, sizeof(addr));
-        addr.sin_port = 0;
+    for (const struct sockaddr_in & cand : nd_ipv4_addrs()) {
+        addr = cand;
         ND_LOG_DBG("trying local address %s\n", nd_addr_str(addr).s);
         if (nd_setup(conn, addr)) {
             *chosen = addr;
@@ -1397,6 +1396,43 @@ static bool tcp_read_all(SOCKET fd, void * data, size_t size) {
 // ---------------------------------------------------------------------------------------
 
 bool dist_nd_available() { return true; }
+
+std::vector<dist_nd_local_addr> dist_nd_local_addrs() {
+    std::vector<dist_nd_local_addr> out;
+    if (!nd_startup()) {
+        return out;
+    }
+    const std::vector<struct sockaddr_in> nd_addrs = nd_ipv4_addrs();
+    if (nd_addrs.empty()) {
+        return out;
+    }
+    // NetworkDirect lists the addresses without their prefix lengths; the IP helper has them
+    ULONG cb_ad = 16 * 1024;
+    std::vector<uint8_t> ad;
+    ULONG rc = ERROR_BUFFER_OVERFLOW;
+    for (int tries = 0; tries < 3 && rc == ERROR_BUFFER_OVERFLOW; tries++) {
+        ad.resize(cb_ad);
+        rc = GetAdaptersAddresses(AF_INET, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER,
+                                  nullptr, (IP_ADAPTER_ADDRESSES *)ad.data(), &cb_ad);
+    }
+    if (rc != NO_ERROR) {
+        ND_LOG_DBG("GetAdaptersAddresses failed: %lu\n", (unsigned long)rc);
+        return out;
+    }
+    for (const struct sockaddr_in & sin : nd_addrs) {
+        for (const IP_ADAPTER_ADDRESSES * a = (const IP_ADAPTER_ADDRESSES *)ad.data(); a; a = a->Next) {
+            for (const IP_ADAPTER_UNICAST_ADDRESS * u = a->FirstUnicastAddress; u; u = u->Next) {
+                const struct sockaddr * us = u->Address.lpSockaddr;
+                if (us && us->sa_family == AF_INET &&
+                    ((const struct sockaddr_in *)us)->sin_addr.s_addr == sin.sin_addr.s_addr) {
+                    out.push_back({ (uint32_t)sin.sin_addr.s_addr, (uint32_t)u->OnLinkPrefixLength });
+                    ND_LOG_DBG("ND capable address %s/%u\n", nd_addr_str(sin).s, (unsigned)u->OnLinkPrefixLength);
+                }
+            }
+        }
+    }
+    return out;
+}
 
 dist_nd_conn * dist_nd_establish(uintptr_t tcp_out_raw, uintptr_t tcp_in_raw, bool listen_side, std::string & err,
                                  bool strict_local_addr) {

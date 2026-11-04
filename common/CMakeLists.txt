@@ -188,9 +188,10 @@ endif()
 #
 # NetworkDirect (Windows RDMA) data path for distributed tensor parallelism.
 #
-# Opt in at build time with -DLLAMA_DIST_TP_ND=ON -DLLAMA_DIST_TP_ND_SDK=<NetworkDirect checkout>,
-# then opt in again at run time with LLAMA_DIST_TP_RDMA=1. Without the run-time switch the
-# binary behaves exactly as before and the ring stays on TCP.
+# Opt in at build time with -DLLAMA_DIST_TP_ND=ON -DLLAMA_DIST_TP_ND_SDK=<NetworkDirect checkout>.
+# At run time an edge then uses NetworkDirect when both of its ranks have an ND capable address on
+# one subnet; LLAMA_DIST_TP_RDMA=0 keeps a rank's edges on TCP. Without the option every edge runs
+# TCP, as before.
 #
 if (WIN32)
     option(LLAMA_DIST_TP_ND "llama: enable the NetworkDirect RDMA data path for distributed TP" OFF)
@@ -234,7 +235,7 @@ if (LLAMA_DIST_TP_ND)
     else()
         target_compile_options(llama-nd-util PRIVATE -w)
     endif()
-    target_link_libraries(${TARGET} PRIVATE llama-nd-util)
+    target_link_libraries(${TARGET} PRIVATE llama-nd-util iphlpapi)
     target_include_directories(${TARGET} PRIVATE "${LLAMA_ND_UTIL_DIR}" "${LLAMA_DIST_TP_ND_STATUS_DIR}")
     target_compile_definitions(${TARGET} PRIVATE LLAMA_DIST_TP_ND _CRT_SECURE_NO_WARNINGS)
     message(STATUS "llama: NetworkDirect dist-TP transport enabled (${LLAMA_DIST_TP_ND_SDK})")

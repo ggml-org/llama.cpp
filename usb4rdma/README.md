@@ -180,19 +180,12 @@ Two nodes over RDMA:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_disttp.ps1 -Transport rdma -RankNodes A,B
 ```
 
-Three nodes, ring all-reduce. Each all-reduce goes round the ring, every rank sending only to the
-next (rank r to r+1, the last rank back to rank 0), so each cable carries data in one direction.
-Order `-RankNodes` so that every direction the ring uses passed the test in section 3.5:
+Three nodes. At three ranks every all-reduce up to 64 KiB, which covers decode, goes to both peers
+at once (a full mesh), so it uses both directions of every cable. Larger ones, the prompt's, go
+round the ring, rank r to r+1. Every direction must have passed the test in section 3.5:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_disttp.ps1 -Transport rdma -RankNodes A,B,C
-```
-
-Three nodes, full-mesh all-reduce. Each all-reduce up to `LLAMA_DIST_TP_MESH_MAX_BYTES` goes to
-both peers at once, so the mesh uses both directions of every cable:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_disttp.ps1 -Transport rdma -RankNodes A,B,C -Mesh
 ```
 
 The run must report `ranks with a mesh direction on TCP: 0 of 3`.
@@ -207,7 +200,7 @@ cannot deadlock.
 Three nodes, full mesh, every payload on RDMA, with a quantized KV cache:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_disttp.ps1 -Transport rdma -RankNodes A,B,C -Mesh -ExtraArgs '-fa on -ctk q8_0 -ctv q8_0'
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_disttp.ps1 -Transport rdma -RankNodes A,B,C -ExtraArgs '-fa on -ctk q8_0 -ctv q8_0'
 ```
 
 Each run writes every rank's log to `scripts\logs\` and appends a JSON line to
@@ -215,11 +208,10 @@ Each run writes every rank's log to `scripts\logs\` and appends a JSON line to
 rank 0, to paste into `cmd.exe` on that node (not PowerShell: there `set X=1` sets no environment
 variable). That is how to watch tokens stream; detached ranks buffer their output.
 
-### Three nodes by hand: direct mesh, all on RDMA
+### Three nodes by hand
 
-The same run as the last `-Mesh` example above, without the scripts. "Direct" means no
-relay: every rank sends straight to both peers over the two cables it has. Example cabling, one /24
-per cable:
+The same run as the last example above, without the scripts. Every rank sends straight to both
+peers over the two cables it has. Example cabling, one /24 per cable:
 
 | Cable | Addresses |
 |---|---|
@@ -227,32 +219,31 @@ per cable:
 | rank 1 - rank 2 | rank 1 `192.168.78.1`, rank 2 `192.168.78.2` |
 | rank 2 - rank 0 | rank 0 `192.168.79.1`, rank 2 `192.168.79.2` |
 
-Rank r dials rank r+1 (mod 3) over the USB4 cable between them, so `LLAMA_DIST_TP_RING_NEXT_HOST`
-is rank r+1's address on that cable: `192.168.77.2` on rank 0, `192.168.78.2` on rank 1 and
-`192.168.79.1` on rank 2. `--dist-master` is rank 0's own address on a network every rank reaches,
-e.g. its normal network address `192.168.1.10`, and the rendezvous port. Rank 0 listens on all of
-its addresses, so each rank may instead name rank 0's end of its own USB4 cable to rank 0:
-`192.168.77.1` on ranks 0 and 1 and `192.168.79.1` on rank 2 here. The start-up then needs no other
-network, and a firewall rule that admits the USB4 subnets is enough.
+No addresses need to be given per rank. At start-up every rank reports the addresses its RDMA
+provider can use, and two ranks with addresses on one subnet, the cable between them, connect over
+that cable. `--dist-master` is rank 0's own address on a network every rank reaches, e.g. its normal
+network address `192.168.1.10`, and the rendezvous port. Rank 0 listens on all of its addresses, so
+each rank may instead name rank 0's end of its own USB4 cable to rank 0: `192.168.77.1` on ranks 0
+and 1 and `192.168.79.1` on rank 2 here. The start-up then needs no other network, and a firewall
+rule that admits the USB4 subnets is enough.
 
-On each node, in `cmd.exe` (not PowerShell) in the binary folder:
+On each node, in `cmd.exe` in the binary folder:
 
 ```bat
-set LLAMA_DIST_TP_RDMA=1
-set LLAMA_DIST_TP_MESH=1
-set LLAMA_DIST_TP_RING_NEXT_HOST=<rank r+1's address on the cable to it>
-set GGML_VK_FENCE_POLL_PAUSES=20
-set GGML_VK_DEFER_GATE=1
 llama-cli -m <model> -f <prompt> -n 64 -c 2048 -ngl 99 -t 8 --temp 0 --seed 1234 ^
   --device Vulkan0 -fa on -ctk q8_0 -ctv q8_0 ^
   --split-mode tensor --world-size 3 --world-rank <r> --dist-master 192.168.1.10:29500
 ```
 
 Add `--no-jinja` for gpt-oss (section 8). Start rank 2, then rank 1, then rank 0: rank 0 must not
-wait on peers that have not started. Every variable must be the same on every rank except
-`LLAMA_DIST_TP_RING_NEXT_HOST`, and the model, prompt and binaries must be identical. Then check
-every rank's log as in section 5: the transport line lists `ND` for both edges and says
+wait on peers that have not started. The model, prompt and binaries must be identical on every rank.
+Then check every rank's log as in section 5: `ring edge r->r+1 dials` names rank r+1's end of the
+cable between them (`192.168.77.2` on rank 0, `192.168.78.2` on rank 1 and `192.168.79.1` on rank
+2) and says `(point-to-point link)`, the transport line lists `ND` for both edges and says
 `(all payloads over ND)`, and `dist-tp all-reduce: full mesh` is printed.
+
+A node without an RDMA provider reports no addresses, so its edges dial the address it registered
+from, on the normal network, and run TCP there.
 
 ## 5. Is it really RDMA, and is it correct?
 
@@ -271,17 +262,19 @@ checks every rank's log, but know what it checks:
 
 ## 6. Environment variables
 
+None of these is needed for a normal run. The all-reduce is a full mesh at 3 ranks, and at 4 when
+there is a cable between every pair of ranks (the diagonals rank 0 - rank 2 and rank 1 - rank 3 then
+get their own connection): every all-reduce up to 64 KiB goes to all peers at once, larger ones
+round the ring, with the same sum order as the ring. At 4 ranks the transport line shows the
+diagonal and only says `all payloads over ND` when it is on ND too.
+
 `run_disttp.ps1` sets or clears the `LLAMA_DIST_TP_*` switches below on every rank; pass the others,
 and the opt-in ones it only clears, with `-ExtraEnv 'NAME=value;NAME=value'`. For a manual run:
 
 | Variable | Effect |
 |---|---|
-| `LLAMA_DIST_TP_RDMA=1` | use NetworkDirect for the ring edges; TCP remains for the rendezvous |
-| `LLAMA_DIST_TP_RING_NEXT_HOST=<ip>` | the address this rank dials for its ring-next peer: the far end of the USB4 cable to rank+1 |
-| `LLAMA_DIST_TP_RDMA_ADDR=<ip>` | the local ND address, when it must differ from the ring socket's |
+| `LLAMA_DIST_TP_RDMA=0` | run this rank's edges on TCP, still over the cables. By default an edge runs on NetworkDirect when its two ranks have ND capable addresses on one subnet, the cable between them. The rendezvous is always TCP |
 | `LLAMA_DIST_TP_RDMA_DEBUG=1` | log each ND listener, connection request, connect and teardown |
-| `LLAMA_DIST_TP_MESH=1` | 3 ranks: full-mesh all-reduce for payloads up to 64 KiB, the ring above. Same sum order as the ring |
-| `LLAMA_DIST_TP_MESH=1` at 4 ranks | with a cable between every pair of ranks: the two diagonals (rank 0 - rank 2, rank 1 - rank 3) get their own connection, and every all-reduce up to 64 KiB goes to all three peers at once. `LLAMA_DIST_TP_MESH_DIAG_HOSTS=-,-,<h2>,<h3>` names the address rank 2 dials (rank 0's end of the 0-2 cable) and rank 3 dials (rank 1's end of the 1-3 cable); entries 0 and 1 are not used. Same sum order as the ring. The transport line shows the diagonal and only says `all payloads over ND` when it is on ND too |
 | `LLAMA_DIST_TP_RDMA_FIXED_SLOT=1` | for ND providers that need page-aligned buffers and the same length on both ends of every transfer (a provider that refuses `Register` or completes receives with an error on the default layout): every slot is exactly 256 KiB with the header inside, and every send, acks included, is one whole slot into a receive of one whole slot. Prints `[dist-tp][nd] fixed slots: ...`. Same value on every rank |
 | `LLAMA_DIST_TP_RDMA_SMALL_LANE=<bytes>` | with fixed slots (it turns them on): a second ND connection on every cable whose slots are this size, a whole number of 4096 B pages below 256 KiB. A message that fits one small slot (16 B header + payload) takes it, everything else the 256 KiB one, so a decode all-reduce no longer moves a whole 256 KiB slot. Pick the smallest page multiple that holds a decode payload: `n_embd x 2 + 16` bytes, or `n_embd x 4 + 16` with `LLAMA_DIST_TP_WIRE_F32=1` (n_embd 2880 with f16: 8192; 4096 with f16: 12288). Prints `[dist-tp][nd] small connection: ...`. Ranks with different values refuse to connect |
 | `LLAMA_DIST_TP_WIRE_F32=1` | the boundary all-reduce carries f32 on the wire. By default it carries f16, half the bytes: each payload is scaled by a power of two so its largest value fits, and the sums stay f32, so the output can differ slightly from an f32 run. Same value on every rank |
@@ -318,7 +311,7 @@ the network, and prints `dist-tp record-ahead on`.
 | `nodes.ps1.template` | the site configuration; copy to `nodes.ps1` |
 | `prep_fabric.ps1` | reboot each node and prove it rebooted, MTU 1500 and Private profile on the USB4 legs, re-address `Readdress` nodes, prove every edge connects and carries full-size frames |
 | `verify_binaries.ps1` | same `llama-cli`, DLLs, model and prompt on every node; reports or checks the loaded USB4/RDMA driver images |
-| `run_disttp.ps1` | one run at 1..N ranks over RDMA or TCP (`-Mesh`, `-ExtraEnv` for further switches); analyses every rank's log |
+| `run_disttp.ps1` | one run at 1..N ranks over RDMA or TCP (`-ExtraEnv` for further switches); analyses every rank's log |
 | `distprof.ps1` | log analysis, dot-sourced by `run_disttp.ps1` |
 | `nd_pair.ps1` | NetworkDirect test between two nodes in one direction |
 | `nd_all_directions.ps1` | `nd_pair.ps1` for both directions of every cable |

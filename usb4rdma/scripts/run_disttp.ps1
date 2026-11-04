@@ -3,9 +3,9 @@
 # generated text.
 #
 # Node names, cable addresses, binary/model/prompt paths, device, threads and the rendezvous port
-# all come from nodes.ps1. Rank 0 is the first node in -RankNodes; each rank's ring-next address is
-# derived from that order against $CLUSTER_P2P. Get the map wrong and the collective routes over
-# the normal network while still printing "transport: RDMA", so it is never typed by hand.
+# all come from nodes.ps1. Rank 0 is the first node in -RankNodes. The binaries find the cable
+# between each pair of ranks themselves; the address each rank should dial for its ring-next peer is
+# derived from the rank order against $CLUSTER_P2P and checked against the one it logged.
 #
 # Ring order matters for RDMA: on each edge the lower rank accepts the ND connection, and from 3
 # ranks up each edge carries data one way, rank r -> r+1. Use the order recorded in $CLUSTER_RINGS.
@@ -15,8 +15,8 @@
 #
 # Examples:
 #   .\run_disttp.ps1 -Transport rdma                       # $CLUSTER_RINGS[2]
-#   .\run_disttp.ps1 -Transport rdma -RankNodes A,B,C -Mesh
-#   .\run_disttp.ps1 -Transport rdma -RankNodes A,B,C -Mesh -ExtraArgs '-fa on -ctk q8_0 -ctv q8_0'
+#   .\run_disttp.ps1 -Transport rdma -RankNodes A,B,C
+#   .\run_disttp.ps1 -Transport rdma -RankNodes A,B,C -ExtraArgs '-fa on -ctk q8_0 -ctv q8_0'
 #   .\run_disttp.ps1 -Transport tcp  -RankNodes A,B
 #   .\run_disttp.ps1 -Transport none -RankNodes A          # single node baseline
 param(
@@ -44,10 +44,6 @@ param(
   # LLAMA_DIST_TP_RDMA_DEBUG=1 on every rank: the ND layer logs each edge's local address, listener,
   # connection request, connect and teardown. For diagnosing an edge, not for timing.
   [switch]$RdmaDebug,
-  # LLAMA_DIST_TP_MESH=1 (3 ranks only): each small collective goes to both peers at once instead
-  # of two ring steps, using the reverse direction of each ring edge. Sums in the ring's order, so
-  # the output must match the ring's exactly.
-  [switch]$Mesh,
   # More environment for every rank, 'NAME=value;NAME=value', set after the variables above so it
   # can override them: the Vulkan switches in the README,
   # LLAMA_DIST_TP_SPLIT_RECURRENT=1. A value must not contain & | < > ^ " or %.
@@ -82,7 +78,8 @@ if($world -gt 1 -and $Transport -eq 'none'){ throw "a multi-rank run needs -Tran
 
 $RUN = $CLUSTER_CFG.RunDir
 function RunDirFor([string]$n){ if($CLUSTER_CFG.RunDirByNode -and $CLUSTER_CFG.RunDirByNode[$n]){ $CLUSTER_CFG.RunDirByNode[$n] } else { $RUN } }
-if($Mesh -and $world -ne 3){ throw "-Mesh needs exactly 3 ranks (have $world)" }
+# At 3 ranks the binaries always run the full mesh: each small collective goes to both peers at once.
+$Mesh = $world -eq 3
 # Not $extraEnv: PowerShell variable names ignore case, so that would be the parameter itself.
 $envExtra = @($ExtraEnv -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 foreach($kv in $envExtra){
@@ -91,7 +88,7 @@ foreach($kv in $envExtra){
 $LOGDIR = Join-Path $PSScriptRoot 'logs'
 if(-not (Test-Path $LOGDIR)){ New-Item -ItemType Directory $LOGDIR | Out-Null }
 
-# The ring-next address of each rank, derived from the rank ORDER against $CLUSTER_P2P.
+# The ring-next address each rank should dial, derived from the rank ORDER against $CLUSTER_P2P.
 $next = @()
 if($world -gt 1){
   for($i = 0; $i -lt $world; $i++){ $next += (Get-P2PAddr $nodeList[$i] $nodeList[($i + 1) % $world]) }
@@ -122,12 +119,10 @@ if($world -gt 1){ $common += " --split-mode tensor --world-size $world --dist-ma
 function RankEnv([int]$rank){
   if($world -le 1){ return @() }
   @(
-    "LLAMA_DIST_TP_RDMA=$(if($Transport -eq 'rdma'){1})"
+    "LLAMA_DIST_TP_RDMA=$(if($Transport -ne 'rdma'){0})"
     # A name whitelist for collectives; setting it can silently drop required all-reduces.
     'LLAMA_DIST_TP_COLLECT_PREFIXES='
-    "LLAMA_DIST_TP_RING_NEXT_HOST=$($next[$rank])"
     "LLAMA_DIST_TP_RDMA_DEBUG=$(if($RdmaDebug){1})"
-    "LLAMA_DIST_TP_MESH=$(if($Mesh){1})"
     # Off unless -ExtraEnv sets it. It must be the same on every rank.
     'LLAMA_DIST_TP_SPLIT_RECURRENT='
   )
@@ -298,7 +293,7 @@ $overCeiling = [bool]($Transport -eq 'rdma' -and $prof -and $an.nd_max_bytes -gt
 
 Write-Host ""
 Write-Host "---- transport actually selected ----"
-$transportLines = @(($r0 -split "`r?`n") | Where-Object { $_ -match 'dist-tp transport:|dist-tp all-reduce:|LLAMA_DIST_TP_MESH|ring edge|falling back to TCP|no usable NetworkDirect|staying on TCP|NetworkDirect not established' })
+$transportLines = @(($r0 -split "`r?`n") | Where-Object { $_ -match 'dist-tp transport:|dist-tp all-reduce:|ring edge|falling back to TCP|no usable NetworkDirect|staying on TCP|NetworkDirect not established' })
 if($transportLines.Count){ $transportLines | ForEach-Object { Write-Host ("  " + $_.Trim()) } } else { Write-Host "  (no transport line; single rank)" }
 if($world -gt 1){ Write-Host ("  per-rank headline: {0}" -f (($an.headlines | ForEach-Object { if($_){$_}else{'(none)'} }) -join ', ')) }
 if($Transport -eq 'rdma'){

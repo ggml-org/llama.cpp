@@ -108,7 +108,7 @@ function Get-RunAnalysis {
         [Parameter(Mandatory)][AllowEmptyCollection()][AllowEmptyString()][string[]]$RankTexts,
         # What the run ASKED for: rdma, tcp or none. The result reports what actually happened.
         [Parameter(Mandatory)][ValidateSet('rdma','tcp','none')][string]$Transport,
-        # Optional: the ring-next address each rank was given, index = rank. Each rank logs
+        # Optional: the ring-next address each rank should dial, index = rank. Each rank logs
         # "ring edge r->r+1 dials <ip>:<port>", so a stale log from a different ring is caught.
         [string[]]$ExpectedNext = @()
     )
