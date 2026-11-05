@@ -895,27 +895,7 @@ bool fs_validate_filename(const std::string & filename, bool allow_subdirs) {
     return true;
 }
 
-#include <iostream>
-
-
 #ifdef _WIN32
-std::wstring utf8_to_wstring(const std::string & str) {
-    if (str.empty()) {
-        return std::wstring();
-    }
-
-    int size = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.size(), NULL, 0);
-
-    if (size <= 0) {
-        return std::wstring();
-    }
-
-    std::wstring wstr(size, 0);
-    MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.size(), &wstr[0], size);
-
-    return wstr;
-}
-
 std::string wstring_to_utf8(const std::wstring & str) {
     if (str.empty()) {
         return std::string();
