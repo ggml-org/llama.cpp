@@ -318,6 +318,8 @@ qwen4exp            ,0   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,
 qwen4exp            ,0   ,any     ,SSM_CONV+UNARY              ,      1
 refact              ,0   ,any     ,RMS_NORM+MUL                ,      5
 refact              ,0   ,any     ,RMS_NORM+MUL                ,      5
+ricursive           ,0   ,any     ,RMS_NORM+MUL                ,      9
+ricursive           ,0   ,any     ,RMS_NORM+MUL+ADD            ,      4
 rnd1                ,0   ,any     ,MUL+ADD                     ,      4
 rnd1                ,0   ,any     ,RMS_NORM+MUL                ,      9
 rnd1                ,0   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
