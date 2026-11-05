@@ -22,9 +22,9 @@
 	--fg-on-danger: var(--neutral-0);
 	--fg-code: var(--neutral-950);
 	--fg-danger: var(--red-600);
-	--fg-success: var(--green-600);
-	--fg-warning: var(--amber-600);
-	--fg-info: var(--blue-600);
+	--fg-success: var(--green-650);
+	--fg-warning: var(--amber-650);
+	--fg-info: var(--blue-650);
 
 	/* lines: borders, dividers and focus */
 	--line-default: var(--neutral-300);
@@ -33,15 +33,20 @@
 	--line-focus: var(--neutral-400);
 	--line-danger: var(--red-600);
 
-	/* status: a soft surface and line per meaning, mixed from its text colour (in oklab, so the hue holds) */
-	--surface-success: color-mix(in oklab, var(--fg-success) 11%, var(--surface-page));
-	--surface-warning: color-mix(in oklab, var(--fg-warning) 11%, var(--surface-page));
-	--surface-danger: color-mix(in oklab, var(--fg-danger) 11%, var(--surface-page));
-	--surface-info: color-mix(in oklab, var(--fg-info) 11%, var(--surface-page));
-	--line-success-soft: color-mix(in oklab, var(--fg-success) 34%, var(--line-default));
-	--line-warning-soft: color-mix(in oklab, var(--fg-warning) 34%, var(--line-default));
-	--line-danger-soft: color-mix(in oklab, var(--fg-danger) 34%, var(--line-default));
-	--line-info-soft: color-mix(in oklab, var(--fg-info) 34%, var(--line-default));
+	/* status: a fill per meaning (dots, lamps, solid marks), brighter than its text colour, and a soft surface and
+	   line mixed from the fill (in oklab, so the hue holds) */
+	--fill-success: var(--green-550);
+	--fill-warning: var(--amber-400);
+	--fill-danger: var(--red-550);
+	--fill-info: var(--blue-550);
+	--surface-success: color-mix(in oklab, var(--fill-success) 11%, var(--surface-page));
+	--surface-warning: color-mix(in oklab, var(--fill-warning) 11%, var(--surface-page));
+	--surface-danger: color-mix(in oklab, var(--fill-danger) 11%, var(--surface-page));
+	--surface-info: color-mix(in oklab, var(--fill-info) 11%, var(--surface-page));
+	--line-success-soft: color-mix(in oklab, var(--fill-success) 34%, var(--line-default));
+	--line-warning-soft: color-mix(in oklab, var(--fill-warning) 34%, var(--line-default));
+	--line-danger-soft: color-mix(in oklab, var(--fill-danger) 34%, var(--line-default));
+	--line-info-soft: color-mix(in oklab, var(--fill-info) 34%, var(--line-default));
 
 	/* edges: hairlines of matte surfaces, darker at the sides than in the middle */
 	--edge-rest-side: var(--cool-gray-200);
@@ -66,17 +71,17 @@
 	--field-background: var(--surface-page);
 	--field-shade: var(--black-a6);
 
-	/* status lamps: fill, lighter rim, darker glyph; the same in both modes */
-	--status-danger: var(--red-500);
+	/* status lamps: the status fill, a lighter rim and a darker glyph */
+	--status-danger: var(--fill-danger);
 	--status-danger-rim: var(--red-400);
 	--status-danger-glyph: var(--red-800);
-	--status-warning: var(--yellow-400);
+	--status-warning: var(--fill-warning);
 	--status-warning-rim: var(--yellow-300);
 	--status-warning-glyph: var(--yellow-800);
-	--status-success: var(--green-500);
+	--status-success: var(--fill-success);
 	--status-success-rim: var(--green-400);
 	--status-success-glyph: var(--green-800);
-	--status-info: var(--blue-500);
+	--status-info: var(--fill-info);
 	--status-info-rim: var(--blue-400);
 	--status-info-glyph: var(--blue-800);
 
@@ -115,9 +120,9 @@
 	--fg-on-action: var(--neutral-900);
 	--fg-code: var(--neutral-300);
 	--fg-danger: var(--red-400);
-	--fg-success: var(--green-400);
-	--fg-warning: var(--amber-300);
-	--fg-info: var(--blue-300);
+	--fg-success: var(--green-450);
+	--fg-warning: var(--amber-250);
+	--fg-info: var(--blue-400);
 
 	--line-default: var(--white-a30);
 	--line-field: var(--white-a30);
@@ -125,15 +130,23 @@
 	--line-focus: var(--neutral-500);
 	--line-danger: var(--red-400);
 
-	/* the status mixes again, from the dark text colours */
-	--surface-success: color-mix(in oklab, var(--fg-success) 16%, var(--surface-page));
-	--surface-warning: color-mix(in oklab, var(--fg-warning) 16%, var(--surface-page));
-	--surface-danger: color-mix(in oklab, var(--fg-danger) 16%, var(--surface-page));
-	--surface-info: color-mix(in oklab, var(--fg-info) 16%, var(--surface-page));
-	--line-success-soft: color-mix(in oklab, var(--fg-success) 38%, var(--line-default));
-	--line-warning-soft: color-mix(in oklab, var(--fg-warning) 38%, var(--line-default));
-	--line-danger-soft: color-mix(in oklab, var(--fg-danger) 38%, var(--line-default));
-	--line-info-soft: color-mix(in oklab, var(--fg-info) 38%, var(--line-default));
+	/* the status fills, and the mixes and lamps again, from the dark fills */
+	--fill-success: var(--green-450);
+	--fill-warning: var(--amber-250);
+	--fill-danger: var(--red-450);
+	--fill-info: var(--blue-450);
+	--surface-success: color-mix(in oklab, var(--fill-success) 16%, var(--surface-page));
+	--surface-warning: color-mix(in oklab, var(--fill-warning) 16%, var(--surface-page));
+	--surface-danger: color-mix(in oklab, var(--fill-danger) 16%, var(--surface-page));
+	--surface-info: color-mix(in oklab, var(--fill-info) 16%, var(--surface-page));
+	--line-success-soft: color-mix(in oklab, var(--fill-success) 38%, var(--line-default));
+	--line-warning-soft: color-mix(in oklab, var(--fill-warning) 38%, var(--line-default));
+	--line-danger-soft: color-mix(in oklab, var(--fill-danger) 38%, var(--line-default));
+	--line-info-soft: color-mix(in oklab, var(--fill-info) 38%, var(--line-default));
+	--status-danger: var(--fill-danger);
+	--status-warning: var(--fill-warning);
+	--status-success: var(--fill-success);
+	--status-info: var(--fill-info);
 
 	--edge-rest-side: var(--white-a6);
 	--edge-rest-mid: var(--white-a4);
@@ -223,6 +236,10 @@
 	--background-color-surface-warning: var(--surface-warning);
 	--background-color-surface-danger: var(--surface-danger);
 	--background-color-surface-info: var(--surface-info);
+	--background-color-fill-success: var(--fill-success);
+	--background-color-fill-warning: var(--fill-warning);
+	--background-color-fill-danger: var(--fill-danger);
+	--background-color-fill-info: var(--fill-info);
 	--text-color-fg-default: var(--fg-default);
 	--text-color-fg-muted: var(--fg-muted);
 	--text-color-fg-on-action: var(--fg-on-action);

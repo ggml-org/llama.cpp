@@ -11,21 +11,21 @@
 			variant: {
 				// soft status badges: a pill in the status colour, a dot before the label, on its own soft surface and line
 				danger:
-					"bg-surface-danger text-fg-danger border-line-danger-soft rounded-full gap-1.5 before:size-1.5 before:shrink-0 before:rounded-full before:bg-current before:content-['']",
+					"bg-surface-danger text-fg-danger border-line-danger-soft rounded-full gap-1.5 before:size-1.5 before:shrink-0 before:rounded-full before:bg-fill-danger before:content-['']",
 				default:
 					'bg-(--badge-primary-background) text-(--badge-primary-text) [a&]:hover:bg-(--badge-primary-background-hover) border-transparent',
 				// solid, for what needs attention now
 				destructive:
 					'bg-(--badge-danger-background) [a&]:hover:bg-(--badge-danger-background-hover) focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 border-transparent text-(--badge-danger-text)',
-				info: "bg-surface-info text-fg-info border-line-info-soft rounded-full gap-1.5 before:size-1.5 before:shrink-0 before:rounded-full before:bg-current before:content-['']",
+				info: "bg-surface-info text-fg-info border-line-info-soft rounded-full gap-1.5 before:size-1.5 before:shrink-0 before:rounded-full before:bg-fill-info before:content-['']",
 				outline:
 					'text-(--badge-text) border-(--badge-outline-border) [a&]:hover:bg-(--badge-outline-background-hover)',
 				secondary:
 					'bg-(--badge-secondary-background) text-(--badge-text) [a&]:hover:bg-(--badge-secondary-background-hover) border-transparent',
 				success:
-					"bg-surface-success text-fg-success border-line-success-soft rounded-full gap-1.5 before:size-1.5 before:shrink-0 before:rounded-full before:bg-current before:content-['']",
+					"bg-surface-success text-fg-success border-line-success-soft rounded-full gap-1.5 before:size-1.5 before:shrink-0 before:rounded-full before:bg-fill-success before:content-['']",
 				warning:
-					"bg-surface-warning text-fg-warning border-line-warning-soft rounded-full gap-1.5 before:size-1.5 before:shrink-0 before:rounded-full before:bg-current before:content-['']"
+					"bg-surface-warning text-fg-warning border-line-warning-soft rounded-full gap-1.5 before:size-1.5 before:shrink-0 before:rounded-full before:bg-fill-warning before:content-['']"
 			}
 		}
 	});
