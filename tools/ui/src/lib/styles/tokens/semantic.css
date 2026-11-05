@@ -104,6 +104,11 @@
 	--elevation-raised:
 		0 25px 50px rgb(0 0 0 / 0.05), 0 12px 24px rgb(0 0 0 / 0.04), 0 6px 12px rgb(0 0 0 / 0.03),
 		0 3px 6px rgb(0 0 0 / 0.02), 0 1.5px 3px rgb(0 0 0 / 0.02);
+	/* softer steps: the chat form floats only a little; a message bubble barely lifts */
+	--elevation-soft:
+		0 12px 20px rgb(0 0 0 / 0.025), 0 6px 10px rgb(0 0 0 / 0.02), 0 2.5px 4px rgb(0 0 0 / 0.015),
+		0 1px 1.5px rgb(0 0 0 / 0.015);
+	--elevation-faint: 0 2px 4px rgb(0 0 0 / 0.025), 0 0.5px 1.5px rgb(0 0 0 / 0.03);
 	--elevation-inset: inset 0 1px 2px var(--field-shade);
 	--elevation-pressed: inset 0 1px 2px var(--black-a12);
 	--elevation-tooltip: var(--elevation-surface);
@@ -191,6 +196,10 @@
 	--elevation-raised:
 		0 25px 50px rgb(0 0 0 / 0.35), 0 12px 24px rgb(0 0 0 / 0.28), 0 6px 12px rgb(0 0 0 / 0.21),
 		0 3px 6px rgb(0 0 0 / 0.14), 0 1.5px 3px rgb(0 0 0 / 0.14);
+	--elevation-soft:
+		0 12px 20px rgb(0 0 0 / 0.175), 0 6px 10px rgb(0 0 0 / 0.14), 0 2.5px 4px rgb(0 0 0 / 0.105),
+		0 1px 1.5px rgb(0 0 0 / 0.105);
+	--elevation-faint: 0 2px 4px rgb(0 0 0 / 0.175), 0 0.5px 1.5px rgb(0 0 0 / 0.21);
 	--elevation-pressed: inset 0 1px 2px var(--black-a40);
 }
 

@@ -832,7 +832,9 @@ The elevation tokens are `elevation-surface`, `elevation-control`, `elevation-ra
 `elevation-inset` and `elevation-tooltip`. The drop shadows are shadow-plugin's smooth
 stacks, five or so soft layers instead of one hard one: `elevation-surface` is its `md`,
 `elevation-raised` its `lg`, and `elevation-control` only the near layers of its `sm`, so a
-control sits close to the page. Dark mode deepens the same stacks. The plugin is imported
+control sits close to the page. Two softer steps sit below them: `elevation-soft` for the chat form,
+which floats only a little, and `elevation-faint` for the user message bubble, which barely
+lifts. Dark mode deepens the same stacks. The plugin is imported
 unprefixed, so Tailwind's own `shadow-xs` to `shadow-2xl` draw the smooth stacks too. Every
 button carries `elevation-control` (`--button-shadow`); a ghost button only while hovered. Overlays behind dialogs are `surface-overlay`
 with a 2px blur.
