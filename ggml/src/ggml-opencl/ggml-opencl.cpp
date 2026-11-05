@@ -27770,13 +27770,13 @@ static void ggml_cl_mul_mat_q6_K_f32_adreno(ggml_backend_t backend, const ggml_t
     cl_image_desc    img_desc;
 
     // Multi-column verify GEMV
-    static const bool q6k_mc3 = (getenv("GGML_OPENCL_Q6K_MC3") != nullptr);
+    static const bool q6k_mc3 = (getenv("GGML_OPENCL_Q6_K_MC3") != nullptr);
     // Per-layer only (ne01 < 32768)
     const bool use_q6k_mc3 = q6k_mc3 && (ne1 == 3) && (ne01 < 32768);
     // Batched verify lm_head/embed (ne1 2..4, tiled layout): multi-column tiled
     // GEMV - streams the large lm_head weight once across the verify columns
     // (the #1 MTP bottleneck; mc3 above can't, it reads the noshuffle layout).
-    // Default on for X2E or with GGML_OPENCL_Q6K_MC3, GGML_OPENCL_Q6_K_TILED_MC=0/1 forces it.
+    // Default on for X2E or with GGML_OPENCL_Q6_K_MC3, GGML_OPENCL_Q6_K_TILED_MC=0/1 forces it.
     static const char * q6k_tiled_mc_env = getenv("GGML_OPENCL_Q6_K_TILED_MC");
     const bool q6k_tiled_mc = q6k_tiled_mc_env ? atoi(q6k_tiled_mc_env) != 0
                                                : (q6k_mc3 || backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E);
@@ -27788,7 +27788,7 @@ static void ggml_cl_mul_mat_q6_K_f32_adreno(ggml_backend_t backend, const ggml_t
         if (use_q6k_mc3 || use_q6k_tiled_mc) {
             static bool warned = false;
             if (!warned) {
-                GGML_LOG_WARN("ggml_opencl: GGML_OPENCL_Q6K_MC3 is bypassed by Q6_K binary kernels\n");
+                GGML_LOG_WARN("ggml_opencl: GGML_OPENCL_Q6_K_MC3 is bypassed by Q6_K binary kernels\n");
                 warned = true;
             }
         }
