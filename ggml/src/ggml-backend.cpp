@@ -1164,14 +1164,6 @@ static bool ggml_is_view_op(enum ggml_op op) {
 #define GGML_SCHED_MAX_BACKENDS 16
 #endif
 
-#ifndef GGML_SCHED_MAX_SPLIT_INPUTS
-#define GGML_SCHED_MAX_SPLIT_INPUTS 30
-#endif
-
-#ifndef GGML_SCHED_MAX_COPIES
-#define GGML_SCHED_MAX_COPIES 4
-#endif
-
 struct ggml_backend_sched_split {
     int backend_id;
     int i_start;
