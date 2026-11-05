@@ -11,7 +11,15 @@ void llama_model_ricursive::load_arch_hparams(llama_model_loader & ml) {
 
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa);
-    load_swa_pattern(ml, 5);
+    if (ml.get_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, false)) {
+        uint32_t n_pattern = 0;
+        ml.get_arr_n(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, n_pattern);
+        if (n_pattern != hparams.n_layer()) {
+            throw std::runtime_error(format("Ricursive: sliding_window_pattern has %u entries, expected %u", n_pattern, hparams.n_layer()));
+        }
+    } else {
+        load_swa_pattern(ml, 5);
+    }
 
     ml.get_key_or_arr(LLM_KV_ATTENTION_ROPE_PATTERN, hparams.rope_pattern, hparams.n_layer());
 

@@ -25,14 +25,16 @@ class RicursiveModel(TextModel):
             raise ValueError(f"Ricursive: unsupported hidden_act {act!r}")
 
         if (layer_types := hp.get("layer_types")) is None:
-            raise ValueError("Ricursive: config has no layer_types")
+            # RicursiveConfig default: every 5th layer is full attention
+            layer_types = ["full_attention" if i % 5 == 4 else "sliding_attention" for i in range(self.block_count)]
         if len(layer_types) != self.block_count:
             raise ValueError(f"Ricursive: layer_types has {len(layer_types)} entries, expected {self.block_count}")
         if unknown := set(layer_types) - {"sliding_attention", "full_attention"}:
             raise ValueError(f"Ricursive: unsupported layer_types {sorted(unknown)}")
         self.is_swa = [t == "sliding_attention" for t in layer_types]
+        # RicursiveConfig discards the stored hybrid_layer_pattern and derives it from layer_types
         if (pattern := hp.get("hybrid_layer_pattern")) is not None and pattern != [int(swa) for swa in self.is_swa]:
-            raise ValueError("Ricursive: hybrid_layer_pattern does not match layer_types")
+            logger.warning("Ricursive: hybrid_layer_pattern does not match layer_types, ignoring it")
         if not any(self.is_swa):
             raise ValueError("Ricursive: layer_types has no sliding_attention layer, all-full-attention models are not supported")
 
