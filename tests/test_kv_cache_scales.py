@@ -26,28 +26,30 @@ class TestKVCacheScales(unittest.TestCase):
             (gguf.MODEL_ARCH.LLAMA, "model.layers.2.self_attn.k_proj", "model.layers.2.self_attn.v_proj"),
         )
         for arch, k_name, v_name in cases:
-            with self.subTest(arch=arch), tempfile.TemporaryDirectory() as tmp:
-                path = Path(tmp) / "scales.gguf"
-                model = object.__new__(ModelBase)
-                model.tensor_map = gguf.get_tensor_name_map(arch, 3)
-                model.gguf_writer = gguf.GGUFWriter(path, gguf.MODEL_ARCH_NAMES[arch])
-                model.model_tensors = {
-                    k_name + ".k_scale": lambda: torch.tensor(0.5, dtype=torch.float32),
-                    v_name + ".v_scale": lambda: torch.tensor(1.0, dtype=torch.float32),
-                }
-                model._prepare_kv_cache_scales()
-                self.assertFalse(model.model_tensors)
-                model.gguf_writer.write_header_to_file()
-                model.gguf_writer.write_kv_data_to_file()
-                model.gguf_writer.write_tensors_to_file()
-                model.gguf_writer.close()
+            for dtype in (torch.float32, torch.bfloat16):
+                with self.subTest(arch=arch, dtype=dtype), tempfile.TemporaryDirectory() as tmp:
+                    path = Path(tmp) / "scales.gguf"
+                    model = object.__new__(ModelBase)
+                    model.tensor_map = gguf.get_tensor_name_map(arch, 3)
+                    model.gguf_writer = gguf.GGUFWriter(path, gguf.MODEL_ARCH_NAMES[arch])
+                    model.model_tensors = {
+                        k_name + ".k_scale": lambda: torch.tensor(0.5, dtype=dtype),
+                        v_name + ".v_scale": lambda: torch.tensor(1.0, dtype=dtype),
+                    }
+                    model._prepare_kv_cache_scales()
+                    self.assertFalse(model.model_tensors)
+                    model.gguf_writer.write_header_to_file()
+                    model.gguf_writer.write_kv_data_to_file()
+                    model.gguf_writer.write_tensors_to_file()
+                    model.gguf_writer.close()
 
-                # Release the reader's memory map before Windows removes the temporary directory.
-                self._check_scales(path)
+                    # Release the reader's memory map before Windows removes the temporary directory.
+                    self._check_scales(path)
 
     def _check_scales(self, path):
         reader = gguf.GGUFReader(path)
         self.assertEqual([t.name for t in reader.tensors], ["blk.2.attn_k.k_scale", "blk.2.attn_v.v_scale"])
+        self.assertEqual([t.tensor_type for t in reader.tensors], [gguf.GGMLQuantizationType.F32] * 2)
         self.assertEqual([float(t.data[0]) for t in reader.tensors], [0.5, 1.0])
 
 
