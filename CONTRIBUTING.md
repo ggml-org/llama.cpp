@@ -21,7 +21,7 @@ If AI is used to generate any portion of the code, contributors must adhere to t
 1. Explicitly disclose the manner in which AI was employed.
 2. Perform a comprehensive manual review prior to submitting the pull request. A proper code review usually takes something like one hour per 200-400 LOC and you should be spending **at least that much time on code review alone**.
 3. Only submit features which (given enough time) you could have implemented yourself without AI assistance. For bug fixes it is acceptable to submit patches which you don't fully understand (please explicitly disclose this when applicable).
-4. It is strictly prohibited to use AI to write your posts for you (bug reports, feature requests, pull request descriptions, Github discussions, responding to humans, ...). 
+4. It is strictly prohibited to use AI to write your posts for you (bug reports, feature requests, pull request descriptions, Github discussions, responding to humans, ...).
 
 For more info, please refer to the [AGENTS.md](AGENTS.md) file.
 
