@@ -567,7 +567,7 @@
 			isSettling && 'md:duration-300 md:ease-[cubic-bezier(0.34,1.56,0.64,1)]',
 			isDocked && !uiStore.isSidebarExpanded ? 'md:w-12' : 'md:w-(--sidebar-width)',
 			(uiStore.isSidebarExpanded || (isFloating && isPeeking)) &&
-				'md:sidebar-surface max-md:shadow-md',
+				'md:sidebar-surface max-md:shadow-(--elevation-surface)',
 			isFloating && 'md:-mr-[calc(var(--sidebar-width)-3rem)]',
 			isStripHidden && 'md:pointer-events-none',
 			uiStore.isSidebarExpanded && 'is-expanded'

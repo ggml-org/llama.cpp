@@ -33,9 +33,7 @@
 	<img alt={name} class="{height} {width} cursor-pointer object-cover {imageClass}" src={preview} />
 {/snippet}
 
-<div
-	class="group relative min-w-0 overflow-hidden rounded-lg bg-muted shadow-lg dark:border dark:border-muted {className}"
->
+<div class="group relative min-w-0 overflow-hidden rounded-lg bg-muted elevated-raised {className}">
 	{#if onclick}
 		<button
 			aria-label="Preview {name}"

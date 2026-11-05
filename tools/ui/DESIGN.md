@@ -807,14 +807,26 @@ matches the role of the surface instead of combining raw shadows.
   `smooth-shadow-ring-*` draws it, never a border next to a shadow, which would read as a
   double edge; the panel's border stays transparent so its size does not change. In light mode dialogs are solid white instead: over the dimmed page a
   translucent white turns grey.
-- **`matte-key`:** buttons. Adds a light blur and a small drop shadow on top of the
-  button's own fill. It never changes the button colour and draws no rim of its own: every
-  `matte-key` control has a border, and a rim inside it would double the edge.
+- **`matte-key`:** buttons, selects, toggles and tabs. The matte finish: on top of the
+  button's own fill it adds a light blur, a fill barely lighter at the top (`--key-sheen`) and
+  a small drop shadow. It never changes the button colour and draws no rim of its own: every
+  `matte-key` control has a border, and a rim inside it would double the edge. Nothing marks
+  the top edge alone, so the edge looks the same all round, with no gloss.
+- **`matte-key-solid`:** primary and danger buttons. The same sheen, fainter
+  (`--key-sheen-solid`), and an even 1px hairline in a shade of the fill drawn inside the
+  button (`--key-edge`), so the width does not change.
+- **`elevated-control`**, **`elevated-surface`** and **`elevated-raised`:** cards, floating
+  bars and thumbnails. An elevation token with a 1px hairline ring baked in as its last layer,
+  like shadow-plugin's `smooth-shadow-ring-*` but on our tokens, so the shadow deepens in dark
+  mode. The ring reads `--smooth-ring-color`; tint it with `smooth-ring-*`. They replace a
+  border plus a shadow; never add a border to them.
 - **`matte-well`:** inputs, textareas and checkboxes. A shallow inset shade so
   fields read as recessed.
-- **`matte-sheen`:** the user message bubble. An almost invisible top-to-bottom sheen.
+- **`matte-sheen`** and **`matte-sheen-solid`:** the user message bubble and badges. An
+  almost invisible top-to-bottom sheen, fainter on solid fills.
 - **`status-lamp`** and **`matte-orb`** with `orb-danger`, `orb-warning` or `orb-success`:
-  small status dots and the recording button.
+  small status dots and the recording button. A near-flat fill barely lighter at the top and
+  an even hairline, with no glow.
 
 The elevation tokens are `elevation-surface`, `elevation-control`, `elevation-raised`,
 `elevation-inset` and `elevation-tooltip`. The drop shadows are shadow-plugin's smooth
@@ -869,7 +881,7 @@ icon buttons in the chat form are fully round.
 
 - **Badges:** four variants with the same names: `default`, `secondary` (a light foreground
   tint), `outline` and `destructive`, plus the soft status badges `success`, `warning`, `danger` and
-  `info`. Badges are flat: a fill or a border, with no inner rim.
+  `info`. Badges are a fill or a border with the faint matte sheen and no inner rim.
 - **Toggles:** the same corners, type, heights, padding and icon size as buttons, with
   square `icon-sm`, `icon` and `icon-lg` sizes for icon-only toggles. `default` has no fill
   until hovered; `outline` borrows the outline button. Pressed toggles take

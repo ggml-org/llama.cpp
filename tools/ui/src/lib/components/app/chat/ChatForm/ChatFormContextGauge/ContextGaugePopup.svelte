@@ -172,7 +172,7 @@
 {:else if gaugePopup.open}
 	<div
 		bind:this={cardEl}
-		class="absolute z-50 w-64 -translate-x-1/2 rounded-xl border border-border bg-popover p-1.5 text-sm text-popover-foreground shadow-md dark:border-border/20"
+		class="absolute z-50 w-64 -translate-x-1/2 rounded-xl border matte-float p-1.5 text-sm"
 		onpointerenter={gaugeCardEnter}
 		onpointerleave={gaugeCardLeave}
 		role="status"

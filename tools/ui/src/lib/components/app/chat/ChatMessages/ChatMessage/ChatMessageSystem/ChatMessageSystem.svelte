@@ -159,7 +159,7 @@
 									class="pointer-events-none absolute right-0 bottom-4 left-0 flex justify-center opacity-0 transition-opacity group-hover/expand:opacity-100"
 								>
 									<Button
-										class="rounded-full px-4 py-1.5 text-xs shadow-md"
+										class="rounded-full px-4 py-1.5 text-xs shadow-(--elevation-surface)"
 										size="sm"
 										variant="outline"
 									>

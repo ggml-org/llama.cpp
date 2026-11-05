@@ -47,7 +47,7 @@
 	</div>
 
 	<!-- Download options: quant rows and the draft opt-in line -->
-	<div class="rounded-3xl border border-border/30 bg-muted/60 shadow-sm dark:border-border/20">
+	<div class="rounded-3xl bg-muted/60 elevated-control">
 		<div class="flex w-full flex-col divide-y divide-border/50 px-4 pb-1 dark:divide-border/35">
 			{#each [0, 1, 2] as _, index (index)}
 				<div
@@ -84,7 +84,7 @@
 	</div>
 
 	<!-- Readme -->
-	<div class="p-3 rounded-3xl border border-border/30 bg-muted/60 shadow-sm dark:border-border/20">
+	<div class="p-3 rounded-3xl bg-muted/60 elevated-control">
 		<div class="space-y-2.5">
 			<Skeleton class="h-3.5 w-full" />
 

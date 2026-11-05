@@ -160,7 +160,11 @@
 	{#each pdfImages as image, index (image)}
 		<p class="mb-2 text-sm text-white/50">Page {index + 1}</p>
 
-		<img alt="PDF Page {index + 1}" class="mx-auto max-w-[85vw] rounded-lg shadow-lg" src={image} />
+		<img
+			alt="PDF Page {index + 1}"
+			class="mx-auto max-w-[85vw] rounded-lg shadow-(--elevation-raised)"
+			src={image}
+		/>
 
 		<div class="h-4"></div>
 	{/each}

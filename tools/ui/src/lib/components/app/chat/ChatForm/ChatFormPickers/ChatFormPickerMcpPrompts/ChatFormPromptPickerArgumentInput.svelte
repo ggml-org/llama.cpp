@@ -66,7 +66,7 @@
 	{#if isAutocompleteActive && suggestions.length > 0}
 		<div
 			transition:fly={{ duration: 100, y: -5 }}
-			class="absolute top-full right-0 left-0 z-10 mt-1 max-h-32 overflow-y-auto rounded-lg border border-border/50 bg-background shadow-lg"
+			class="absolute top-full right-0 left-0 z-10 mt-1 max-h-32 overflow-y-auto rounded-lg border matte-float"
 		>
 			{#each suggestions as suggestion, i (suggestion)}
 				<button
