@@ -9,6 +9,7 @@ description: >-
 colors:
   primary: '{colors.action-primary}'
   neutral-0: 'oklch(1 0 0)'
+  neutral-25: 'oklch(0.988 0 0)'
   neutral-50: 'oklch(0.985 0 0)'
   neutral-100: 'oklch(0.97 0 0)'
   neutral-150: 'oklch(0.95 0 0)'
@@ -730,6 +731,13 @@ kept almost neutral) and in the status colours, which serve function only: green
 amber for warning, red for errors and blue for information, saturated enough to read at a
 glance and tuned to text contrast in both modes. The brand orange belongs to the llama.cpp
 logotype and is not part of the UI palette.
+
+Light mode has two surface themes, which share everything else (the palette, buttons, fields,
+badges, shadows and dark mode): **Paper**, the default, sets white panels, fields and keys on a
+faint grey page (`neutral-25`); **Matte** sets grey glass on a white page. Matte is the
+`theme-matte` class on `<html>`, chosen with the Light surfaces setting (Settings → General) or
+the Surface switch in Storybook's toolbar, and only its surface tokens differ: `surface-page`,
+`surface-glass`, `surface-code`, `field-background` and `float-panel-background-modal`.
 
 - **Surfaces:** `surface-page` for the page, `surface-muted` for quiet panels,
   `surface-emphasis` and `surface-selected` for stronger fills and hover or selected rows,

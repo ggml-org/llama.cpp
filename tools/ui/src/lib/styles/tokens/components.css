@@ -44,7 +44,7 @@
 	/* floating panels: menus, popovers, select lists, hover cards, drawers, dialogs */
 	--float-panel-background: color-mix(in oklch, var(--surface-raised) 86%, transparent);
 	/* in light mode a translucent modal greys over the dimmed page, so it stays solid white */
-	--float-panel-background-modal: var(--surface-page);
+	--float-panel-background-modal: var(--surface-raised);
 	--float-panel-text: var(--fg-default);
 	--float-panel-edge: var(--edge-raised);
 	--float-panel-highlight: var(--highlight-inner);
@@ -142,6 +142,11 @@
 	--badge-text: var(--fg-default);
 
 	/* status lamps and orbs read the status tokens through orb-danger and friends */
+}
+
+/* Matte: dialogs on the page colour (white), like the page under them */
+.theme-matte:not(.dark) {
+	--float-panel-background-modal: var(--surface-page);
 }
 
 .dark {

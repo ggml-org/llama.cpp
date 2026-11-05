@@ -79,12 +79,31 @@ const preview: Preview = {
 				],
 				title: 'Interaction pace'
 			}
+		},
+		// the light surface theme: Paper (white panels on a grey page) or Matte (grey glass on white)
+		surface: {
+			description: 'Light surface theme',
+			toolbar: {
+				dynamicTitle: true,
+				icon: 'paintbrush',
+				items: [
+					{ title: 'Paper', value: 'paper' },
+					{ title: 'Matte', value: 'matte' }
+				],
+				title: 'Surface'
+			}
 		}
 	},
 	initialGlobals: {
-		interactionPace: 'human'
+		interactionPace: 'human',
+		surface: 'paper'
 	},
 	decorators: [
+		(story, context) => {
+			document.documentElement.classList.toggle('theme-matte', context.globals.surface === 'matte');
+
+			return story();
+		},
 		(story) => ({
 			Component: ModeWatcherDecorator,
 			props: {
