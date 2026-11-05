@@ -250,6 +250,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_exaone4(params);
         case LLM_ARCH_EXAONE_MOE:
             return new llama_model_exaone_moe(params);
+        case LLM_ARCH_MOBILEMOE:
+            return new llama_model_mobilemoe(params);
         case LLM_ARCH_RWKV6:
             return new llama_model_rwkv6(params);
         case LLM_ARCH_RWKV6QWEN2:
@@ -3732,6 +3734,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_EXAONE:
         case LLM_ARCH_EXAONE4:
         case LLM_ARCH_EXAONE_MOE:
+        case LLM_ARCH_MOBILEMOE:
         case LLM_ARCH_MINICPM3:
         case LLM_ARCH_BAILINGMOE2:
         case LLM_ARCH_DOTS1:

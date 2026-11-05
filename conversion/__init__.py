@@ -195,6 +195,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "MT5ForConditionalGeneration": "t5",
     "MaincoderForCausalLM": "maincoder",
     "Mamba2ForCausalLM": "mamba",
+    "MobileMoEForCausalLM": "mobilemoe",
     "MambaForCausalLM": "mamba",
     "MambaLMHeadModel": "mamba",
     "MapleForCausalLM": "maple",

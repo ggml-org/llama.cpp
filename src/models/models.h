@@ -1853,6 +1853,22 @@ struct llama_model_exaone_moe : public llama_model_base {
 };
 
 
+struct llama_model_mobilemoe : public llama_model_base {
+    using llama_model_base::llama_model_base;
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+
+    struct graph : public llm_graph_context {
+        graph(const llama_model & model, const llm_graph_params & params);
+
+    private:
+        ggml_tensor * build_qat_mm(ggml_tensor * w, ggml_tensor * cur, ggml_tensor * ids, ggml_tensor * slots) const;
+        ggml_tensor * build_qat_moe(ggml_tensor * cur, const llama_layer & layer, int il) const;
+    };
+};
+
+
 struct llama_model_rwkv6 : public llama_model_base {
     llama_model_rwkv6(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
