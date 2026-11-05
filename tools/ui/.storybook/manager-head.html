@@ -1,0 +1,60 @@
+<!--
+	Old links keep working: stories that moved (Introduction/Assets to Brand/Assets, Logo/Showcase to Logo/Overview,
+	the Llama Sans UI and Display pages, the app icons into Logo/Usage …) redirect to where they are now, and a link
+	to a story that no longer exists opens Storybook's start page instead of the "Couldn't find story" error.
+-->
+<script>
+	(function () {
+		var match = location.search.match(/[?&]path=\/(story|docs)\/([^&]+)/);
+
+		if (!match) return;
+
+		var id = decodeURIComponent(match[2]);
+
+		// moved stories, old id: new id
+		var moved = {
+			'brand-colors-accent-proposal--accent-proposal': 'brand-colors-palette--palette',
+			'brand-colors-primitives--primitives': 'ui-foundations-colors--primitives',
+			'brand-logo-app-icons--icons': 'brand-logo-usage--app-icons',
+			'brand-logo-app-icons--splash-screens': 'brand-logo-usage--splash-screens',
+			'brand-logo-icon--usage': 'brand-logo-usage--glyphs',
+			'brand-logo-showcase--page': 'brand-logo-overview--overview',
+			'brand-typography-llama-sans-display--in-use': 'brand-typography-llama-sans-display--display',
+			'brand-typography-llama-sans-display--tester': 'brand-typography-tester--tester',
+			'brand-typography-llama-sans-display--weights': 'brand-typography-overview--overview',
+			'brand-typography-llama-sans-ui--glyphs': 'brand-typography-llama-sans-glyphs--glyphs',
+			'brand-typography-llama-sans-ui--interface':
+				'brand-typography-llama-sans-user-interface--user-interface',
+			'brand-typography-llama-sans-ui--running-text':
+				'brand-typography-llama-sans-running-text--running-text',
+			'brand-typography-llama-sans-ui--tester': 'brand-typography-tester--tester',
+			'brand-typography-llama-sans-ui--weights': 'brand-typography-overview--overview',
+			'introduction-assets--assets': 'brand-assets--logo'
+		};
+
+		// whole groups that moved, by id prefix
+		var movedGroups = [['brand-logo-lockup-proposal--', 'brand-logo-usage--lockup-in-context']];
+
+		function go(to) {
+			var url = location.pathname + (to ? '?path=/story/' + to : '');
+
+			if (url !== location.pathname + location.search) location.replace(url);
+		}
+
+		if (moved[id]) return go(moved[id]);
+
+		for (var i = 0; i < movedGroups.length; i++) {
+			if (id.indexOf(movedGroups[i][0]) === 0) return go(movedGroups[i][1]);
+		}
+
+		// any other id: open the start page if the story is gone
+		fetch('./index.json')
+			.then(function (response) {
+				return response.json();
+			})
+			.then(function (index) {
+				if (!index.entries || !index.entries[id]) go('');
+			})
+			.catch(function () {});
+	})();
+</script>
