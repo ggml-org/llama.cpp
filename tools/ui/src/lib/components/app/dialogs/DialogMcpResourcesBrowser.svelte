@@ -321,7 +321,7 @@
 								<Loader2 class="size-6 animate-spin text-muted-foreground" />
 							</div>
 						{:else if templatePreviewError}
-							<div class="flex flex-1 flex-col items-center justify-center gap-2 text-red-500">
+							<div class="flex flex-1 flex-col items-center justify-center gap-2 text-fg-danger">
 								<span class="text-sm">{templatePreviewError}</span>
 
 								<Button

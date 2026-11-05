@@ -249,7 +249,7 @@
 				Executing command...
 			</div>
 		{:else if execShellError}
-			<div class="flex items-start gap-2 text-xs text-red-600 italic dark:text-red-400">
+			<div class="flex items-start gap-2 text-xs text-fg-danger italic">
 				<XCircle class="mt-0.5 size-icon-xs shrink-0" />
 
 				<span>{execShellError}</span>
@@ -355,34 +355,20 @@
 		line-height: 1;
 	}
 
+	/* the status tokens, which follow the theme on their own */
 	.exit-badge.success {
-		background: color-mix(in oklch, var(--color-green-500, #22c55e) 14%, transparent);
-		color: var(--color-green-700, #15803d);
-	}
-
-	:global(.dark) .exit-badge.success {
-		background: color-mix(in oklch, var(--color-green-400, #4ade80) 18%, transparent);
-		color: var(--color-green-300, #86efac);
+		background: var(--surface-success);
+		color: var(--fg-success);
 	}
 
 	.exit-badge.failure {
-		background: color-mix(in oklch, var(--color-red-500, #ef4444) 14%, transparent);
-		color: var(--color-red-700, #b91c1c);
-	}
-
-	:global(.dark) .exit-badge.failure {
-		background: color-mix(in oklch, var(--color-red-400, #f87171) 18%, transparent);
-		color: var(--color-red-300, #fca5a5);
+		background: var(--surface-danger);
+		color: var(--fg-danger);
 	}
 
 	.exit-badge.warning {
-		background: color-mix(in oklch, var(--color-amber-500, #f59e0b) 14%, transparent);
-		color: var(--color-amber-700, #b45309);
-	}
-
-	:global(.dark) .exit-badge.warning {
-		background: color-mix(in oklch, var(--color-amber-400, #fbbf24) 18%, transparent);
-		color: var(--color-amber-300, #fcd34d);
+		background: var(--surface-warning);
+		color: var(--fg-warning);
 	}
 
 	.exit-sep {

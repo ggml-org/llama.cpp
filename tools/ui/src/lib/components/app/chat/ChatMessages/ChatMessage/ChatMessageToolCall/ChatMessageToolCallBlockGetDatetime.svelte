@@ -52,8 +52,7 @@
 	{:else if dateMeta.errorMessage}
 		<span class="text-foreground/80 text-sm font-medium">Current time&nbsp;</span>
 
-		<span class="text-red-600 text-xs italic dark:text-red-400">-&nbsp;{dateMeta.errorMessage}</span
-		>
+		<span class="text-fg-danger text-xs italic">-&nbsp;{dateMeta.errorMessage}</span>
 	{:else if dateMeta.dateString}
 		<span class="text-foreground/80 text-sm font-medium">Current time is&nbsp;</span>
 

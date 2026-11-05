@@ -156,7 +156,7 @@
 					class={[
 						`relative inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1 rounded-sm bg-background px-1.5 py-1 text-xs shadow-(--elevation-control) transition hover:bg-muted-foreground/20 max-md:h-8 max-md:px-2.25 max-md:py-1.25 max-md:text-[13px] focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
 						!ms.isCurrentModelInCache
-							? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
+							? 'bg-surface-danger !text-fg-danger hover:bg-surface-danger/80 hover:text-fg-danger'
 							: 'text-foreground',
 						open && 'text-foreground',
 						'max-w-[min(calc(100vw-4rem) md:max-w-[min(calc(100cqw-9rem),25rem)]'
@@ -225,7 +225,7 @@
 			<button
 				aria-disabled="true"
 				aria-selected="true"
-				class="flex w-full cursor-not-allowed items-center bg-red-400/10 p-2 text-left text-sm text-red-400"
+				class="flex w-full cursor-not-allowed items-center bg-surface-danger p-2 text-left text-sm text-fg-danger"
 				disabled
 				role="option"
 				type="button"

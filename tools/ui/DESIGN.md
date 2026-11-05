@@ -98,7 +98,7 @@ colors:
   line-field: '{colors.neutral-200}'
   line-control: '{colors.neutral-300}'
   line-focus: '{colors.neutral-400}'
-  line-danger: '{colors.red-600}'
+  line-danger: '{colors.fill-danger}'
   fill-success: '{colors.green-550}'
   fill-warning: '{colors.amber-400}'
   fill-danger: '{colors.red-550}'
@@ -121,8 +121,8 @@ colors:
   edge-raised: '{colors.cool-gray-200}'
   action-primary: '{colors.neutral-900}'
   action-primary-hover: 'oklch(0.205 0 0 / 0.9)'
-  action-danger: '{colors.red-600}'
-  action-danger-hover: 'oklch(0.55 0.22 27 / 0.9)'
+  action-danger: '{colors.fill-danger}'
+  action-danger-hover: 'color-mix(in oklch, {colors.fill-danger} 90%, transparent)'
   action-quiet: 'oklch(0.97 0 0 / 0.3)'
   action-quiet-hover: '{colors.neutral-100}'
   action-ghost-hover: 'oklch(0.556 0 0 / 0.1)'
@@ -157,7 +157,7 @@ colors:
   fg-muted-dark: '{colors.neutral-400}'
   fg-on-action-dark: '{colors.neutral-900}'
   fg-code-dark: '{colors.neutral-300}'
-  fg-danger-dark: '{colors.red-400}'
+  fg-danger-dark: '{colors.red-450}'
   fg-success-dark: '{colors.green-450}'
   fg-warning-dark: '{colors.amber-250}'
   fg-info-dark: '{colors.blue-400}'
@@ -165,7 +165,7 @@ colors:
   line-field-dark: '{colors.white-a30}'
   line-control-dark: '{colors.white-a12}'
   line-focus-dark: '{colors.neutral-500}'
-  line-danger-dark: '{colors.red-400}'
+  line-danger-dark: '{colors.fill-danger-dark}'
   fill-success-dark: '{colors.green-450}'
   fill-warning-dark: '{colors.amber-250}'
   fill-danger-dark: '{colors.red-450}'
@@ -188,8 +188,8 @@ colors:
   edge-raised-dark: '{colors.white-a9}'
   action-primary-dark: '{colors.neutral-200}'
   action-primary-hover-dark: 'oklch(0.922 0 0 / 0.9)'
-  action-danger-dark: 'oklch(0.69 0.2 27 / 0.6)'
-  action-danger-hover-dark: 'oklch(0.69 0.2 27 / 0.6)'
+  action-danger-dark: 'color-mix(in oklch, {colors.fill-danger-dark} 58%, transparent)'
+  action-danger-hover-dark: 'color-mix(in oklch, {colors.fill-danger-dark} 68%, transparent)'
   action-quiet-dark: 'oklch(0.708 0 0 / 0.15)'
   action-quiet-hover-dark: 'oklch(0.708 0 0 / 0.25)'
   action-ghost-hover-dark: 'oklch(0.708 0 0 / 0.1)'
@@ -427,13 +427,13 @@ components:
     typography: '{typography.label}'
     height: '36px'
   button-destructive-dark:
-    backgroundColor: '#8e141a'
+    backgroundColor: '#952420'
     textColor: '{colors.fg-on-danger}'
   button-destructive-hover:
-    backgroundColor: '#d82431'
+    backgroundColor: '#ea262d'
     textColor: '{colors.fg-on-danger}'
   button-destructive-hover-dark:
-    backgroundColor: '#a5151c'
+    backgroundColor: '#ac2824'
     textColor: '{colors.fg-on-danger}'
   toggle-on:
     backgroundColor: '{colors.surface-selected}'
@@ -580,12 +580,12 @@ components:
   badge-outline-border-dark:
     backgroundColor: '{colors.line-default-dark}'
   badge-destructive:
-    backgroundColor: '{colors.fg-danger}'
+    backgroundColor: '{colors.action-danger}'
     textColor: '{colors.fg-on-danger}'
     rounded: '{rounded.control}'
     typography: '{typography.label-sm}'
   badge-destructive-dark:
-    backgroundColor: '#b6443e'
+    backgroundColor: '#952420'
     textColor: '{colors.fg-on-danger}'
   badge-success:
     backgroundColor: '{colors.surface-success}'
@@ -741,7 +741,13 @@ fills are given as they render over the page, so contrast checks see the real co
 The palette is achromatic. Hue appears only in the hairline edges (a cool grey at hue 250,
 kept almost neutral) and in the status colours, which serve function only: green for success,
 amber for warning, red for errors and blue for information, saturated enough to read at a
-glance and tuned to text contrast in both modes. The brand orange belongs to the llama.cpp
+glance and tuned to text contrast in both modes. Each status has one root colour, its fill (`fill-*`),
+and everything in that status derives from it: the soft surface and line of alerts and badges,
+the border of an invalid field, the lamp. Red keeps to the same rule, so there is one red: the
+danger button and the solid danger badge are the fill itself (`action-danger`), solid in light
+mode and frosted, translucent matte glass in dark (58% of the fill over the page). Never style a
+danger control with its own red (`bg-destructive`, `bg-red-500` …): use the `destructive`
+variant, which `AlertDialog.Action` takes too, or the status tokens. The brand orange belongs to the llama.cpp
 logotype and is not part of the UI palette. Beige (`beige-50` to `beige-900`) is the warm neutral for communications
 (posters, boards, the site); the UI itself stays on the greys.
 

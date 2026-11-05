@@ -73,7 +73,7 @@
 		>
 			{#if isFailed}
 				<ActionIcon
-					class="size-icon-lg text-red-500 hover:text-foreground"
+					class="size-icon-lg text-fg-danger hover:text-foreground"
 					icon={MODEL_LOAD_ICONS.retry}
 					iconSize="size-icon-md"
 					onclick={() => modelsStore.status.load(option.model)}

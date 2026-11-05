@@ -36,7 +36,7 @@
 	--line-field: var(--neutral-200);
 	--line-control: var(--neutral-300);
 	--line-focus: var(--neutral-400);
-	--line-danger: var(--red-600);
+	--line-danger: var(--fill-danger);
 
 	/* status: a fill per meaning (dots, lamps, solid marks), brighter than its text colour, and a soft surface and
 	   line mixed from the fill (in oklab, so the hue holds) */
@@ -66,8 +66,9 @@
 	/* actions: fills of interactive controls */
 	--action-primary: var(--neutral-900);
 	--action-primary-hover: color-mix(in oklch, var(--neutral-900) 90%, transparent);
-	--action-danger: var(--red-600);
-	--action-danger-hover: color-mix(in oklch, var(--red-600) 90%, transparent);
+	/* one red for every danger state: the danger action is the status fill itself, the alerts' red */
+	--action-danger: var(--fill-danger);
+	--action-danger-hover: color-mix(in oklch, var(--fill-danger) 90%, transparent);
 	--action-quiet: color-mix(in oklch, var(--neutral-100) 30%, transparent);
 	--action-quiet-hover: var(--neutral-100);
 	--action-ghost-hover: color-mix(in oklch, var(--neutral-500) 10%, transparent);
@@ -144,7 +145,7 @@
 	--fg-muted: var(--neutral-400);
 	--fg-on-action: var(--neutral-900);
 	--fg-code: var(--neutral-300);
-	--fg-danger: var(--red-400);
+	--fg-danger: var(--red-450);
 	--fg-success: var(--green-450);
 	--fg-warning: var(--amber-250);
 	--fg-info: var(--blue-400);
@@ -153,7 +154,7 @@
 	--line-field: var(--white-a30);
 	--line-control: var(--white-a12);
 	--line-focus: var(--neutral-500);
-	--line-danger: var(--red-400);
+	--line-danger: var(--fill-danger);
 
 	/* the status fills, and the mixes and lamps again, from the dark fills */
 	--fill-success: var(--green-450);
@@ -184,9 +185,9 @@
 
 	--action-primary: var(--neutral-200);
 	--action-primary-hover: color-mix(in oklch, var(--neutral-200) 90%, transparent);
-	--action-danger: color-mix(in oklch, var(--red-400) 60%, transparent);
-	/* the dark fill already wins over hover, so hover keeps it */
-	--action-danger-hover: var(--action-danger);
+	/* the same red as every danger state, as matte glass: the status fill, frosted and translucent over the page */
+	--action-danger: color-mix(in oklch, var(--fill-danger) 58%, transparent);
+	--action-danger-hover: color-mix(in oklch, var(--fill-danger) 68%, transparent);
 	--action-quiet: color-mix(in oklch, var(--neutral-400) 15%, transparent);
 	--action-quiet-hover: color-mix(in oklch, var(--neutral-400) 25%, transparent);
 	--action-ghost-hover: color-mix(in oklch, var(--neutral-400) 10%, transparent);

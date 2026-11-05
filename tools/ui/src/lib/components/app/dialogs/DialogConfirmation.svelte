@@ -74,10 +74,7 @@
 		<AlertDialog.Footer>
 			<AlertDialog.Cancel onclick={onCancel}>{cancelText}</AlertDialog.Cancel>
 
-			<AlertDialog.Action
-				class={variant === 'destructive' ? 'bg-destructive text-white hover:bg-destructive/80' : ''}
-				onclick={onConfirm}
-			>
+			<AlertDialog.Action onclick={onConfirm} {variant}>
 				{confirmText}
 			</AlertDialog.Action>
 		</AlertDialog.Footer>

@@ -279,7 +279,7 @@
 
 		<SettingsChatImportExportSection
 			IconComponent={Trash2}
-			buttonClass="text-destructive-foreground justify-start justify-self-start bg-destructive hover:bg-destructive/80 md:w-auto"
+			buttonClass="justify-start justify-self-start md:w-auto"
 			buttonText="Delete all conversations"
 			buttonVariant="destructive"
 			description="Permanently delete all conversations and their messages. This action cannot be undone. Consider exporting your conversations first if you want to keep a backup."

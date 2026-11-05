@@ -16,9 +16,9 @@ export function colorLevelFromPercent(percent: number | null): ColorLevel {
 export function colorLevelTextClass(level: ColorLevel): string {
 	switch (level) {
 		case ColorLevel.CRITICAL:
-			return 'text-red-400';
+			return 'text-fg-danger';
 		case ColorLevel.WARNING:
-			return 'text-amber-400';
+			return 'text-fg-warning';
 		case ColorLevel.OK:
 			return 'text-muted-foreground';
 		default:
@@ -29,11 +29,11 @@ export function colorLevelTextClass(level: ColorLevel): string {
 export function colorLevelBgClass(level: ColorLevel): string {
 	switch (level) {
 		case ColorLevel.CRITICAL:
-			return 'bg-red-500';
+			return 'bg-fill-danger';
 		case ColorLevel.WARNING:
-			return 'bg-amber-500';
+			return 'bg-fill-warning';
 		case ColorLevel.OK:
-			return 'bg-green-500';
+			return 'bg-fill-success';
 		default:
 			return 'bg-muted';
 	}
