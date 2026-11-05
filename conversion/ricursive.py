@@ -54,11 +54,6 @@ class RicursiveModel(TextModel):
 
     def set_vocab(self):
         self._set_vocab_gpt2()
-        # gguf-py prefers the bare ChatML template in tokenizer_config.json; chat_template.jinja is the full one (tools, reasoning) that transformers uses
-        tmpl = self.dir_model / "chat_template.jinja"
-        if tmpl.is_file():
-            self.gguf_writer.add_chat_template(tmpl.read_text(encoding="utf-8"))
-            logger.info("gguf: chat_template from chat_template.jinja")
         # eos_token_id is [<|im_end|>, <|endoftext|>]: register the turn end as EOT so generation stops on it
         eos = self.hparams.get("eos_token_id")
         if isinstance(eos, list):
