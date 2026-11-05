@@ -95,14 +95,14 @@ void llama_model_llama4::load_arch_tensors(llama_model_loader &) {
 
 std::unique_ptr<llm_graph_context> llama_model_llama4::build_arch_graph(const llm_graph_params & params) const {
     if (hparams.swa_type == LLAMA_SWA_TYPE_NONE) {
-        return std::make_unique<graph<false>>(*this, params);
+        return std::make_unique<graph<false>>(params);
     } else {
-        return std::make_unique<graph<true>>(*this, params);
+        return std::make_unique<graph<true>>(params);
     }
 }
 
 template <bool iswa>
-llama_model_llama4::graph<iswa>::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_llama4::graph<iswa>::graph(const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());

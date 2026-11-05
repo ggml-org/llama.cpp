@@ -155,9 +155,9 @@ void llama_model_bailingmoe3::load_arch_tensors(llama_model_loader & ml) {
 
 std::unique_ptr<llm_graph_context> llama_model_bailingmoe3::build_arch_graph(const llm_graph_params & params) const {
     if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
-        return std::make_unique<graph_mtp>(*this, params);
+        return std::make_unique<graph_mtp>(params);
     }
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
 ggml_tensor * llama_model_bailingmoe3::graph::build_causal_conv1d(
@@ -186,8 +186,8 @@ ggml_tensor * llama_model_bailingmoe3::graph::build_causal_conv1d(
     return ggml_reshape_4d(ctx0, out, head_dim, n_head, n_seq_tokens, n_seqs);
 }
 
-llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph_params & params) :
-    llm_build_delta_net_base(params), model(model) {
+llama_model_bailingmoe3::graph::graph(const llm_graph_params & params) :
+    llm_build_delta_net_base(params) {
     ggml_tensor * inpL = build_inp_embd(model.tok_embd);
     cb(inpL, "model.input_embed", -1);
 
@@ -388,7 +388,7 @@ llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph
     res->t_logits = cur;
 }
 
-llama_model_bailingmoe3::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params) :
+llama_model_bailingmoe3::graph_mtp::graph_mtp(const llm_graph_params & params) :
     llm_graph_context(params) {
     GGML_ASSERT(hparams.n_layer_nextn == 1 && "BailingMoE3 MTP requires one NextN layer");
 

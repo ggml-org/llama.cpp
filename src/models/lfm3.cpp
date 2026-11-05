@@ -90,18 +90,18 @@ void llama_model_lfm3::load_arch_tensors(llama_model_loader &) {
 
 std::unique_ptr<llm_graph_context> llama_model_lfm3::build_arch_graph(const llm_graph_params & params) const {
     if (!hparams.causal_attn) {
-        return std::make_unique<graph<true>>(*this, params);
+        return std::make_unique<graph<true>>(params);
     }
-    return std::make_unique<graph<false>>(*this, params);
+    return std::make_unique<graph<false>>(params);
 }
 
 template <bool decision>
-llama_model_lfm3::graph<decision>::graph(const llama_model & model, const llm_graph_params & params) :
+llama_model_lfm3::graph<decision>::graph(const llm_graph_params & params) :
     llm_build_lfm_base(params) {
-    auto build_attn_block = [&model, this](ggml_tensor * cur_in,
-                                           ggml_tensor * inp_pos,
-                                           auto *        inp_attn,
-                                           int           il) -> ggml_tensor * {
+    auto build_attn_block = [this](ggml_tensor * cur_in,
+                                   ggml_tensor * inp_pos,
+                                   auto *        inp_attn,
+                                   int           il) -> ggml_tensor * {
         const int64_t n_embd_head = hparams.n_embd_head_k(il);
         const int64_t n_head_il   = hparams.n_head(il);
         const int64_t n_head_kv   = hparams.n_head_kv(il);
@@ -166,10 +166,10 @@ llama_model_lfm3::graph<decision>::graph(const llama_model & model, const llm_gr
 
         if (hparams.is_recr(il)) {
             if constexpr (decision) {
-                cur = build_lfm_shortconv(model, cur, il);
+                cur = build_lfm_shortconv(cur, il);
             } else {
                 const auto * mctx_recr = static_cast<const llama_memory_hybrid_iswa_context *>(mctx)->get_recr();
-                cur = build_lfm_shortconv(model, mctx_recr, inp_hybrid->get_recr(), cur, il);
+                cur = build_lfm_shortconv(mctx_recr, inp_hybrid->get_recr(), cur, il);
             }
         } else if constexpr (decision) {
             cur = build_attn_block(cur, inp_pos, inp_attn, il);
@@ -192,7 +192,7 @@ llama_model_lfm3::graph<decision>::graph(const llama_model & model, const llm_gr
         auto * ffn_norm_out = build_norm(cur, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
         cb(ffn_norm_out, "model.layers.{}.ffn_norm", il);
 
-        ggml_tensor * ffn_out = build_lfm_dense_ffn(model, ffn_norm_out, il);
+        ggml_tensor * ffn_out = build_lfm_dense_ffn(ffn_norm_out, il);
 
         if (model.layers[il].ffn_post_norm) {
             ffn_out = build_norm(ffn_out, model.layers[il].ffn_post_norm, NULL, LLM_NORM_RMS, il);

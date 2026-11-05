@@ -99,7 +99,7 @@ void llama_model_clef::load_arch_tensors(llama_model_loader & ml) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_clef::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
 // spans read by the head, [start, end) in ubatch token indices
@@ -243,8 +243,8 @@ public:
 };
 
 // the backbone is copied from llama_model_qwen35::graph, without the memory module
-llama_model_clef::graph::graph(const llama_model & model_base, const llm_graph_params & params) :
-    llm_build_delta_net_base(params), model(static_cast<const llama_model_clef &>(model_base)) {
+llama_model_clef::graph::graph(const llm_graph_params & params) :
+    llm_build_delta_net_base(params), model(static_cast<const llama_model_clef &>(*params.model)) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());

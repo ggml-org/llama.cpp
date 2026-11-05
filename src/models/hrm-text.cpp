@@ -86,7 +86,7 @@ void llama_model_hrm_text::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_hrm_text::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
 // one stack invocation: lps pre-norm decoder layers, then the parameterless final norm
@@ -165,9 +165,8 @@ ggml_tensor * llama_model_hrm_text::graph::build_stack(llm_graph_input_attn_kv *
     return cur;
 }
 
-llama_model_hrm_text::graph::graph(const llama_model & model, const llm_graph_params & params) :
-    llm_graph_context(params),
-    model(model) {
+llama_model_hrm_text::graph::graph(const llm_graph_params & params) :
+    llm_graph_context(params) {
     ggml_tensor * cur;
 
     // {n_embd, n_tokens}, scaled by hparams.f_embedding_scale inside build_inp_embd

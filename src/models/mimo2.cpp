@@ -79,12 +79,12 @@ void llama_model_mimo2::load_arch_tensors(llama_model_loader & ml) {
 
 std::unique_ptr<llm_graph_context> llama_model_mimo2::build_arch_graph(const llm_graph_params & params) const {
     if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
-        return std::make_unique<graph_mtp>(*this, params);
+        return std::make_unique<graph_mtp>(params);
     }
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_mimo2::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_mimo2::graph::graph(const llm_graph_params & params) : llm_graph_context(params) {
     ggml_tensor * cur;
     ggml_tensor * inpL;
 
@@ -258,7 +258,7 @@ llama_model_mimo2::graph::graph(const llama_model & model, const llm_graph_param
 // Mirrors MiMo's appended NextN block: normalize and fuse token and hidden inputs, run the decoder block,
 // expose its pre-head-norm state to the next draft step, then apply the shared output norm and LM head.
 // Converted checkpoints may store that shared norm as layer_out_norm, so it remains in the fallback chain.
-llama_model_mimo2::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params)
+llama_model_mimo2::graph_mtp::graph_mtp(const llm_graph_params & params)
     : llm_graph_context(params) {
     GGML_ASSERT(hparams.n_layer_nextn > 0 && "MIMO2 MTP requires n_layer_nextn > 0");
 

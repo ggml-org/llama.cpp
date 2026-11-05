@@ -90,7 +90,7 @@ void llama_model_minimax_m3::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_minimax_m3::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
 class llm_graph_input_msa : public llm_graph_input_i {
@@ -207,7 +207,7 @@ ggml_tensor * llama_model_minimax_m3::graph::build_attn_msa_fa(
     return ggml_reshape_2d(ctx0, o, D*HQ, T);
 }
 
-llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_minimax_m3::graph::graph(const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
     const auto & mm = static_cast<const llama_model_minimax_m3 &>(model);
 

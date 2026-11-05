@@ -93,19 +93,19 @@ std::unique_ptr<llm_graph_context> llama_model_mellum::build_arch_graph(const ll
 
     if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
         if (iswa) {
-            return std::make_unique<graph_mtp<true>>(*this, params);
+            return std::make_unique<graph_mtp<true>>(params);
         }
-        return std::make_unique<graph_mtp<false>>(*this, params);
+        return std::make_unique<graph_mtp<false>>(params);
     }
 
     if (iswa) {
-        return std::make_unique<graph<true>>(*this, params);
+        return std::make_unique<graph<true>>(params);
     }
-    return std::make_unique<graph<false>>(*this, params);
+    return std::make_unique<graph<false>>(params);
 }
 
 template <bool iswa>
-llama_model_mellum::graph<iswa>::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_mellum::graph<iswa>::graph(const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
@@ -246,7 +246,7 @@ llama_model_mellum::graph<iswa>::graph(const llama_model & model, const llm_grap
 }
 
 template <bool iswa>
-llama_model_mellum::graph_mtp<iswa>::graph_mtp(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_mellum::graph_mtp<iswa>::graph_mtp(const llm_graph_params & params) : llm_graph_context(params) {
     GGML_ASSERT(hparams.n_layer_nextn == 1 && "MELLUM MTP currently only supports a single MTP block");
 
     const int64_t n_embd_head = hparams.n_embd_head_v();

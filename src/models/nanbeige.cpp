@@ -74,10 +74,10 @@ void llama_model_nanbeige::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_nanbeige::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_nanbeige::graph::graph(const llama_model & model, const llm_graph_params & params) :
+llama_model_nanbeige::graph::graph(const llm_graph_params & params) :
         llm_graph_context(params) {
     const auto & nb = static_cast<const llama_model_nanbeige &>(model);
 

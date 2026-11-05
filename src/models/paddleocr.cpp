@@ -1,10 +1,10 @@
 #include "models.h"
 
 std::unique_ptr<llm_graph_context> llama_model_paddleocr::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_paddleocr::graph::graph(const llama_model & model, const llm_graph_params & params) :
+llama_model_paddleocr::graph::graph(const llm_graph_params & params) :
     llm_graph_context(params) {
 
     // NOTE: same with qwen2vl.cpp, but bias tensors are optional

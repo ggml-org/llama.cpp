@@ -135,12 +135,12 @@ void llama_model_cohere2moe::load_arch_tensors(llama_model_loader & ml) {
 
 std::unique_ptr<llm_graph_context> llama_model_cohere2moe::build_arch_graph(const llm_graph_params & params) const {
     if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
-        return std::make_unique<graph_mtp>(*this, params);
+        return std::make_unique<graph_mtp>(params);
     }
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_cohere2moe::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_cohere2moe::graph::graph(const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
@@ -277,7 +277,7 @@ llama_model_cohere2moe::graph::graph(const llama_model & model, const llm_graph_
     res->t_logits = cur;
 }
 
-llama_model_cohere2moe::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_cohere2moe::graph_mtp::graph_mtp(const llm_graph_params & params) : llm_graph_context(params) {
     GGML_ASSERT(hparams.n_layer_nextn > 0 && "COHERE2MOE MTP requires n_layer_nextn > 0");
     GGML_ASSERT(hparams.n_layer_nextn == 1 && "COHERE2MOE MTP currently only supports a single MTP block");
 

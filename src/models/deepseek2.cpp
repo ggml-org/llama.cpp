@@ -156,12 +156,12 @@ void llama_model_deepseek2::load_arch_tensors(llama_model_loader & ml) {
 
 std::unique_ptr<llm_graph_context> llama_model_deepseek2::build_arch_graph(const llm_graph_params & params) const {
     if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
-        return std::make_unique<graph_mtp>(*this, params);
+        return std::make_unique<graph_mtp>(params);
     }
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_deepseek2::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params) :
+llama_model_deepseek2::graph_mtp::graph_mtp(const llm_graph_params & params) :
     llm_graph_context(params) {
     GGML_ASSERT(hparams.n_layer_nextn > 0 && "GLM4 MTP requires n_layer_nextn > 0");
     GGML_ASSERT(hparams.n_layer_nextn == 1 && "GLM4 MTP currently only supports a single MTP block");
@@ -408,7 +408,7 @@ llama_model_deepseek2::graph_mtp::graph_mtp(const llama_model & model, const llm
     res->t_logits = cur;
 }
 
-llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_params & params) :
+llama_model_deepseek2::graph::graph(const llm_graph_params & params) :
     llm_graph_context(params) {
     // lite variants include DeepSeek-V2-Lite, GigaChat3-10B-A1.8B
     bool is_ocr = model.arch == LLM_ARCH_DEEPSEEK2OCR;

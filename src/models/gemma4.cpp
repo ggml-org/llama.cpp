@@ -148,7 +148,7 @@ void llama_model_gemma4::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_gemma4::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
 // get 2D slice view from a 3D tensor, the idx corresponds to the 3rd dim
@@ -157,9 +157,8 @@ static ggml_tensor * gemma4_view_2d_slice(ggml_context * ctx0, ggml_tensor * x, 
     return ggml_view_2d(ctx0, x, x->ne[0], x->ne[1], x->nb[1], idx * x->nb[2]);
 }
 
-llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_params & params) :
+llama_model_gemma4::graph::graph(const llm_graph_params & params) :
         llm_graph_context(params),
-        model(model),
         n_embd_per_layer(model.hparams.n_embd_per_layer) {
     ggml_tensor * cur;
     ggml_tensor * inpL;

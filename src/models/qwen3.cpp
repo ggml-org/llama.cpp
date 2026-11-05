@@ -51,11 +51,11 @@ void llama_model_qwen3::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_qwen3::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_qwen3::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
-    ggml_tensor * cur = build_backbone(model);
+llama_model_qwen3::graph::graph(const llm_graph_params & params) : llm_graph_context(params) {
+    ggml_tensor * cur = build_backbone();
 
     // lm_head
     cur = build_lora_mm(model.output, cur, model.output_s);
@@ -64,7 +64,7 @@ llama_model_qwen3::graph::graph(const llama_model & model, const llm_graph_param
     res->t_logits = cur;
 }
 
-ggml_tensor * llama_model_qwen3::graph::build_backbone(const llama_model & model) {
+ggml_tensor * llama_model_qwen3::graph::build_backbone() {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
