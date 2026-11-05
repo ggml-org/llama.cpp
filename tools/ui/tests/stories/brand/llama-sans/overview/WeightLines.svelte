@@ -2,6 +2,8 @@
 <script lang="ts">
 	import { specimen } from '../lib/specimen';
 
+	let { face = 'var(--headline)' }: { face?: string } = $props();
+
 	const phrases: Record<number, string> = {
 		400: 'Your own machine',
 		500: 'Quantised to fit',
@@ -10,7 +12,7 @@
 	};
 </script>
 
-<section aria-label="Weights" class="weights">
+<section style:--face={face} aria-label="Weights" class="weights">
 	{#each specimen.styles as s (s.weight)}
 		<div class="row">
 			<p class="meta"><span>{s.name}</span><span>{s.weight}</span></p>
@@ -42,7 +44,7 @@
 	}
 	.line {
 		overflow: hidden;
-		font: 400 clamp(44px, 8.6vw, 112px) / 1.05 var(--headline);
+		font: 400 clamp(44px, 8.6vw, 112px) / 1.05 var(--face);
 		letter-spacing: -0.01em;
 		white-space: nowrap;
 	}

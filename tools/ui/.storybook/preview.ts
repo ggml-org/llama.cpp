@@ -35,7 +35,7 @@ const preview: Preview = {
 						'Logo',
 						['Icon', 'Showcase', 'App icons'],
 						'Typography',
-						['Overview', 'Llama Sans UI', 'Llama Sans Display', 'Llama Mono'],
+						['Overview', 'Llama Sans UI', 'Llama Sans Display'],
 						'Colors',
 						['Communications', 'Palette proposal']
 					],

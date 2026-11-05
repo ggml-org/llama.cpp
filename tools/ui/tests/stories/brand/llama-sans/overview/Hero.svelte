@@ -1,17 +1,24 @@
 <!--
-	The overview's opening: the Llama icon (typed from the font, U+E000) over the family's name at full size, on
-	a quiet neutral gradient that follows the theme, with a kicker above and the tagline under it.
+	The overview's opening: the Llama icon (typed from the font, U+E000) over the font's name at full size, set in that
+	font (face), on a quiet neutral gradient that follows the theme, with a kicker above and the tagline under it.
 -->
 <script lang="ts">
-	let { kicker, tagline }: { kicker: string; tagline: string[] } = $props();
+	let {
+		face = 'var(--headline)',
+		kicker,
+		tagline,
+		title
+	}: { face?: string; kicker: string; tagline: string[]; title: string[] } = $props();
 </script>
 
-<header class="hero">
+<header style:--face={face} class="hero">
 	<p class="kicker">{kicker}</p>
 
 	<p aria-hidden="true" class="icon"></p>
 
-	<h1>Llama<br />Sans</h1>
+	<h1>
+		{#each title as line, i (line)}{#if i}<br />{/if}{line}{/each}
+	</h1>
 
 	<p class="tagline">
 		{#each tagline as line (line)}<span>{line}</span>{/each}
@@ -42,11 +49,11 @@
 		opacity: 0.7;
 	}
 	.icon {
-		font: 700 clamp(40px, 6vw, 72px) / 1 var(--headline);
+		font: 700 clamp(40px, 6vw, 72px) / 1 var(--face);
 		opacity: 0.85;
 	}
 	h1 {
-		font: 700 clamp(88px, 19vw, 264px) / 0.84 var(--headline);
+		font: 700 clamp(64px, 14vw, 208px) / 0.9 var(--face);
 		letter-spacing: -0.02em;
 	}
 	.tagline {

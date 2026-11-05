@@ -1,10 +1,9 @@
 <script lang="ts" module>
-	import Overview from './llama-sans/Overview.svx';
 	import OverviewFrame from './llama-sans/overview/OverviewFrame.svelte';
+	import TypographyOverview from './typography/TypographyOverview.svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 
-	// Llama Sans at a glance, before its UI and Display versions: the name at full size, both versions, the character
-	// set, the weights and the design notes
+	// The family at a glance: Llama Sans UI, Llama Sans Display and Llama Mono on one page, with a switcher at the top
 	const { Story } = defineMeta({
 		parameters: {
 			controls: { disable: true },
@@ -16,6 +15,6 @@
 
 <Story asChild name="Overview">
 	<OverviewFrame>
-		<Overview />
+		<TypographyOverview />
 	</OverviewFrame>
 </Story>

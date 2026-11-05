@@ -1,6 +1,6 @@
 <!--
-	Llama Mono at a glance, in the manner of the Llama Sans overview: the name at full size, what it is, code in it, the
-	characters that must stay apart, the weights, the character set and the key visuals. It sits in OverviewFrame,
+	Llama Mono's part of the Typography overview, after its hero: what it is, code in it, the characters that must stay
+	apart, the ligatures, the weights, the character set, the key visuals and the licence. It sits in OverviewFrame,
 	which brings the specimen's colours; Llama Mono itself is --code.
 -->
 <script lang="ts">
@@ -46,18 +46,6 @@ int main(int argc, char ** argv) {
 		'àáâãäåæçèéêëìíîïñòóôõöøœùúûüýÿß'
 	];
 </script>
-
-<header class="hero">
-	<p class="kicker">The monospace of the Llama family</p>
-
-	<p aria-hidden="true" class="icon"></p>
-
-	<h1>Llama<br />Mono</h1>
-
-	<p class="tagline">
-		<span>Every character, the same cell.</span><span>Llama Sans's letters, set for code.</span>
-	</p>
-</header>
 
 <Section columns label="For code and numbers">
 	<p>
@@ -115,40 +103,15 @@ int main(int argc, char ** argv) {
 
 <KeyVisuals />
 
-<style>
-	.hero {
-		display: grid;
-		justify-items: center;
-		gap: clamp(20px, 3vw, 36px);
-		padding: clamp(56px, 9vw, 120px) 16px clamp(64px, 10vw, 136px);
-		background: linear-gradient(160deg, var(--sheet) 0%, var(--paper) 100%);
-		color: var(--ink);
-		text-align: center;
-	}
-	.hero > * {
-		margin: 0;
-	}
-	.kicker {
-		font: 500 12px var(--code);
-		letter-spacing: 0.12em;
-		text-transform: uppercase;
-		opacity: 0.7;
-	}
-	.icon {
-		font: 700 clamp(40px, 6vw, 72px) / 1 var(--code);
-		opacity: 0.85;
-	}
-	h1 {
-		font: 700 clamp(72px, 15vw, 208px) / 0.9 var(--code);
-		letter-spacing: -0.02em;
-	}
-	.tagline {
-		display: grid;
-		gap: 2px;
-		font: 400 clamp(18px, 2.4vw, 26px) / 1.3 var(--ui);
-		opacity: 0.85;
-	}
+<Section label="Free & open source">
+	<p>
+		Llama Mono is released under the SIL Open Font License 1.1. It is derived from Geist Mono, ©
+		2024 The Geist Project Authors. The Llama icon at U+E000 is the ggml-org mark, licensed
+		separately under CC BY-NC 4.0.
+	</p>
+</Section>
 
+<style>
 	.code {
 		margin: 0;
 		padding: 20px 24px;
