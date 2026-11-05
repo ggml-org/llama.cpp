@@ -1,10 +1,9 @@
 <script lang="ts" module>
-	import ShowcaseUI from './llama-sans/lib/components/ShowcaseUI.svelte';
-	import { specimen } from './llama-sans/lib/specimen';
-	import SpecimenFrame from './llama-sans/SpecimenFrame.svelte';
+	import UserInterface from './typography/UserInterface.svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 
-	// Llama Sans at its UI optical size (opsz 16), from the brand specimen: in controls and small interface text
+	// Llama Sans in the user interface: the design system's own components with llama.cpp's content, at the sizes that
+	// put it on its UI optical size (opsz 16)
 	const { Story } = defineMeta({
 		parameters: {
 			controls: { disable: true },
@@ -12,12 +11,8 @@
 		},
 		title: 'Brand/Typography/Llama Sans/User Interface'
 	});
-
-	const { glyphCount } = specimen;
 </script>
 
 <Story asChild name="User Interface">
-	<SpecimenFrame variant="UI">
-		<ShowcaseUI {glyphCount} guides />
-	</SpecimenFrame>
+	<UserInterface />
 </Story>
