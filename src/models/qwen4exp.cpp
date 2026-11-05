@@ -1402,10 +1402,6 @@ ggml_tensor * llama_model_qwen4exp::graph::build_conv_state_at(
         int64_t              state_cols,
         int64_t              channels,
         int                  il) {
-    const auto * mctx_cur = inp->mctx;
-
-    const auto kv_head = mctx_cur->get_head();
-
     const int64_t n_seqs    = ubatch.n_seqs;
     const int64_t row_total = conv_states_all->ne[0];
 
@@ -1423,28 +1419,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_conv_state_at(
 
     ggml_tensor * conv_input = ggml_concat(ctx0, state, ggml_transpose(ctx0, x), 0);
 
-    // [TAG_RECURRENT_ROLLBACK_SPLITS] keep the last state_cols columns once per rollback slot,
-    // slot s ending s tokens earlier so a rollback of s tokens reads a history that never saw them
-    const size_t row_size = ggml_row_size(conv_states_all->type, row_total);
-    const uint32_t mem_size = mctx_cur->get_size();
-
-    const int64_t n_slots = (int64_t) cparams.n_rs_seq + 1;
-
-    for (int64_t slot = 0; slot < n_slots; ++slot) {
-        const int64_t s_idx = std::max<int64_t>(0, conv_input->ne[0] - state_cols - slot);
-
-        ggml_tensor * tail = ggml_view_3d(ctx0, conv_input,
-                state_cols, channels, n_seqs,
-                conv_input->nb[1], conv_input->nb[2],
-                ggml_row_size(conv_input->type, s_idx));
-
-        ggml_tensor * dst = ggml_view_2d(ctx0, conv_states_all,
-                state_cols * channels, n_seqs,
-                conv_states_all->nb[1],
-                (slot * mem_size + kv_head) * row_size);
-
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, tail, dst));
-    }
+    build_conv_state_store(inp, conv_states_all, conv_input, state_cols, 0);
 
     return conv_input;
 }

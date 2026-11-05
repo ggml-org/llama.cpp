@@ -2,8 +2,6 @@
 
 #include "llama-memory-recurrent.h"
 
-#include <algorithm>
-
 llm_build_lfm_base::llm_build_lfm_base(const llm_graph_params & params) : llm_graph_context(params) {}
 
 ggml_tensor * llm_build_lfm_base::build_lfm_shortconv(const llama_model & model,
@@ -11,7 +9,6 @@ ggml_tensor * llm_build_lfm_base::build_lfm_shortconv(const llama_model & model,
                                                       llm_graph_input_rs * inp_recr,
                                                       ggml_tensor * cur,
                                                       int il) {
-    const uint32_t kv_head      = mctx_recr->get_head();
     const int64_t  n_seq_tokens = ubatch.n_seq_tokens;
     const int64_t  n_seqs       = ubatch.n_seqs;
     GGML_ASSERT(n_seqs != 0);
@@ -55,20 +52,7 @@ ggml_tensor * llm_build_lfm_base::build_lfm_shortconv(const llama_model & model,
     }
     GGML_ASSERT(bx->ne[0] > conv->ne[0]);
 
-    // write conv states: slot 0 = the final state, slot s = the state s tokens back (partial rollback)
-    const int64_t K         = hparams.causal_attn && cparams.n_rs_seq > 0 ? (int64_t) cparams.n_rs_seq + 1 : 1;
-    const int64_t n_written = std::min<int64_t>(n_seq_tokens, K);
-    const auto    mem_size  = mctx_recr->get_size();
-    const size_t  row_size  = ggml_row_size(conv_state->type, (int64_t) d_conv * n_embd);
-
-    for (int64_t slot = 0; slot < n_written; ++slot) {
-        auto * conv_snap = ggml_view_3d(ctx0, bx, d_conv, bx->ne[1], bx->ne[2], bx->nb[1], bx->nb[2],
-                                        (bx->ne[0] - d_conv - slot) * ggml_element_size(bx));
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, conv_snap,
-                                               ggml_view_2d(ctx0, conv_state, (int64_t) d_conv * n_embd, n_seqs,
-                                                            conv_state->nb[1],
-                                                            ((size_t) slot * mem_size + kv_head) * row_size)));
-    }
+    build_conv_state_store(inp_recr, conv_state, bx, d_conv, 0);
 
     auto * conv_kernel = model.layers[il].shortconv.conv;
     auto * conv_out    = ggml_ssm_conv(ctx0, bx, conv_kernel);

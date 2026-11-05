@@ -481,17 +481,6 @@ void llm_graph_input_cls::set_input(const llama_ubatch * ubatch) {
     }
 }
 
-static void set_input_s_slot_rev(ggml_tensor * s_slot_rev) {
-    if (s_slot_rev) {
-        GGML_ASSERT(ggml_backend_buffer_is_host(s_slot_rev->buffer));
-        int32_t * data = (int32_t *) s_slot_rev->data;
-
-        for (int64_t i = 0; i < s_slot_rev->ne[0]; ++i) {
-            data[i] = (int32_t) (s_slot_rev->ne[0] - 1 - i);
-        }
-    }
-}
-
 void llm_graph_input_rs::set_input(const llama_ubatch * ubatch) {
     GGML_UNUSED(ubatch);
 
@@ -506,8 +495,6 @@ void llm_graph_input_rs::set_input(const llama_ubatch * ubatch) {
             data[i] = mctx->s_copy(i);
         }
     }
-
-    set_input_s_slot_rev(s_slot_rev);
 }
 
 bool llm_graph_input_rs::can_reuse(const llm_graph_params & params) {
@@ -1222,8 +1209,6 @@ void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
             data[i] = mctx->get_recr()->s_copy(i);
         }
     }
-
-    set_input_s_slot_rev(inp_rs->s_slot_rev);
 }
 
 bool llm_graph_input_mem_hybrid::can_reuse(const llm_graph_params & params) {
@@ -1270,8 +1255,6 @@ void llm_graph_input_mem_hybrid_k::set_input(const llama_ubatch * ubatch) {
             data[i] = mctx->get_recr()->s_copy(i);
         }
     }
-
-    set_input_s_slot_rev(inp_rs->s_slot_rev);
 }
 
 bool llm_graph_input_mem_hybrid_k::can_reuse(const llm_graph_params & params) {
@@ -1329,8 +1312,6 @@ void llm_graph_input_mem_hybrid_iswa::set_input(const llama_ubatch * ubatch) {
             data[i] = mctx->get_recr()->s_copy(i);
         }
     }
-
-    set_input_s_slot_rev(inp_rs->s_slot_rev);
 }
 
 bool llm_graph_input_mem_hybrid_iswa::can_reuse(const llm_graph_params & params) {
@@ -4011,6 +3992,67 @@ ggml_tensor * llm_graph_context::build_rs(
     return build_rs(s, state_copy, inp->s_copy_main, state_size, n_seqs,
                     kv_state->get_n_rs(), kv_state->get_head(), kv_state->get_size(), kv_state->get_rs_z(),
                     get_state_rows);
+}
+
+void llm_graph_context::build_conv_state_store(
+        llm_graph_input_rs * inp,
+        ggml_tensor * s,
+        ggml_tensor * conv_x,
+            int64_t   n_cols,
+             size_t   offs) const {
+    const auto * mctx_cur = inp->mctx;
+
+    const int64_t n        = conv_x->ne[0] - n_cols; // n_seq_tokens
+    const int64_t channels = conv_x->ne[1];
+    const int64_t n_seqs   = conv_x->ne[2];
+
+    const size_t row_size  = s->nb[1];
+    const size_t cell_offs = mctx_cur->get_head()*row_size + offs;
+
+    if (cparams.n_rs_seq == 0) {
+        ggml_tensor * last = ggml_view_3d(ctx0, conv_x,
+                n_cols, channels, n_seqs,
+                conv_x->nb[1], conv_x->nb[2],
+                ggml_row_size(conv_x->type, n));
+
+        ggml_tensor * cell = ggml_view_2d(ctx0, s,
+                n_cols*channels, n_seqs,
+                row_size, cell_offs);
+
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0, last, cell));
+        return;
+    }
+
+    // [TAG_RECURRENT_ROLLBACK_SPLITS]
+    // this logic assumes that the last (n_rs_seq + 1) tokens of a sequence in a batch are inside
+    //   the same ubatch, which `split_equal()` guarantees via its n_keep_tail argument
+    // a rollback of k tokens reads slot k, and the memory allows k < n only (see rs_max), so slots from n on are left unwritten
+    const int64_t K  = (int64_t) cparams.n_rs_seq + 1;
+    const int64_t Kw = std::min(n, K);
+
+    // each conv layer builds its own slot order {K-1, ..., 0}, on the device of the layer, and takes its tail
+    // {Kw-1, ..., 0}; the size K never depends on the ubatch, so the reserved graph covers them all
+    ggml_tensor * s_slot_rev = ggml_arange(ctx0, 0.0f, (float) K, 1.0f);
+    s_slot_rev = ggml_scale_bias(ctx0, s_slot_rev, -1.0f, (float) (K - 1));
+    s_slot_rev = ggml_cast(ctx0, s_slot_rev, GGML_TYPE_I32);
+    cb(s_slot_rev, "s_slot_rev", -1);
+
+    ggml_tensor * slot_order = ggml_view_1d(ctx0, s_slot_rev, Kw, ggml_row_size(GGML_TYPE_I32, K - Kw));
+
+    // window w starts at column n - (Kw - 1) + w (ascending time) and is rollback slot Kw - 1 - w,
+    // consecutive windows start one element apart, so they overlap
+    ggml_tensor * windows = ggml_view_4d(ctx0, conv_x,
+            n_cols, Kw, channels, n_seqs,
+            ggml_element_size(conv_x), conv_x->nb[1], conv_x->nb[2],
+            ggml_row_size(conv_x->type, n - (Kw - 1)));
+
+    // [n_cols, slot, channel, seq] view of the cells of this ubatch
+    ggml_tensor * slots = ggml_view_4d(ctx0, s,
+            n_cols, K, channels, n_seqs,
+            (size_t) mctx_cur->get_size()*row_size, ggml_row_size(s->type, n_cols), row_size,
+            cell_offs);
+
+    ggml_build_forward_expand(gf, ggml_set_rows(ctx0, slots, windows, slot_order));
 }
 
 ggml_tensor * llm_graph_context::build_rwkv_token_shift_load(

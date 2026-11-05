@@ -309,9 +309,6 @@ public:
     ggml_tensor * s_copy_main; // I32 [n_seqs]
     ggml_tensor * s_copy_tail; // I32 [n_rs - 1]
 
-    // I32 [n_slot] = {n_slot - 1, ..., 0}, rollback slot of each conv window, created by the graphs that write them
-    ggml_tensor * s_slot_rev = nullptr;
-
     const llama_memory_recurrent_context * mctx;
 
     // used in view offsets, need to match for valid graph reuse
@@ -1435,6 +1432,15 @@ struct llm_graph_context {
                 int32_t   state_size,
                 int32_t   n_seqs,
             const llm_graph_get_rows_fn & get_state_rows = nullptr) const;
+
+    // store the conv history of the ubatch cells, the last n_cols columns of conv_x {n_cols + n_seq_tokens, channels, n_seqs},
+    // at byte offset offs of each row of s, and with n_rs_seq > 0 once per rollback slot of this ubatch
+    void build_conv_state_store(
+            llm_graph_input_rs * inp,
+            ggml_tensor * s,
+            ggml_tensor * conv_x,
+                int64_t   n_cols,
+                 size_t   offs) const;
 
     ggml_tensor * build_rwkv_token_shift_load(
         llm_graph_input_rs * inp,
