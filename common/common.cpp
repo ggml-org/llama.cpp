@@ -1333,7 +1333,7 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
         LOG_INF("%s", "decision model reads the embeddings output, enabling embedding mode\n");
     }
 
-    if (llama_model_use_cfg(model)) {
+    if (llama_model_classifier_free_guidance(model)) {
         params.kv_unified   = true;
         cparams.kv_unified  = true;
         cparams.n_seq_max  *= 2;
