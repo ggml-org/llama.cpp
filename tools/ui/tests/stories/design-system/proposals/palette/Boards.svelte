@@ -187,6 +187,8 @@
 				color-mix(in oklab, var(--blue-800), black 28%) 100%
 			);
 		--navy-flat: color-mix(in oklab, var(--blue-800), black 28%);
+		/* backgrounds stay neutral; the colours are for shapes, numerals and accents */
+		--field-deep: linear-gradient(160deg, var(--neutral-800) 0%, var(--neutral-900) 100%);
 		--swiss: linear-gradient(160deg, var(--blue-500) 0%, var(--blue-550) 55%, var(--blue-650) 100%);
 		--swiss-flat: var(--blue-550);
 		--sky: var(--blue-400);
@@ -203,7 +205,7 @@
 		);
 		--cream: var(--beige-100);
 		--sand: var(--beige-50);
-		--sage: color-mix(in oklab, var(--green-550) 14%, var(--beige-100));
+		--sage: var(--beige-200); /* the text poster's field: neutral, like every background */
 		--teal: var(--green-550);
 		--saffron: var(--amber-400);
 		--pink: color-mix(in oklab, var(--red-400), white 62%);
@@ -246,7 +248,7 @@
 		grid-template-columns: 0.8fr 1.3fr 1.6fr;
 		grid-template-rows: 1fr auto;
 		gap: 0 5%;
-		background: var(--swiss);
+		background: var(--field-deep);
 		color: #fff;
 	}
 	.specimen .facts {
@@ -493,7 +495,7 @@
 	/* weight stack */
 	.stack {
 		align-content: start;
-		background: var(--swiss);
+		background: var(--field-deep);
 		color: #fff;
 	}
 	.stack p {
@@ -504,7 +506,11 @@
 		font-weight: 700;
 	}
 	.stack .sky {
-		color: color-mix(in oklab, var(--red-400), white 45%); /* a light red, readable on the blue */
+		color: color-mix(
+			in oklab,
+			var(--red-400),
+			white 45%
+		); /* a light red, readable on the dark field */
 	}
 	.stack .foot {
 		align-self: end;
@@ -577,6 +583,11 @@
 	}
 	.photo.tall {
 		margin: -8.5% -8.5% 0;
+		background: linear-gradient(
+			180deg,
+			var(--neutral-300) 0%,
+			var(--neutral-200) 100%
+		); /* a neutral field */
 	}
 	.classic .t {
 		font: 700 14cqi / 0.92 var(--display);
