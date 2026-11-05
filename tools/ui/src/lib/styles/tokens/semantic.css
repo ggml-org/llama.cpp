@@ -97,15 +97,14 @@
 	--sheen-end: transparent;
 	--text-shadow-engraved: 0 1px 0 var(--white-a85);
 
-	/* elevation: shadow-plugin's smooth stacks (many soft layers rather than one hard one); a control takes only
-	   the near layers of the small stack, so it sits close to the page */
+	/* elevation: shadow-plugin's smooth stacks (many soft layers rather than one hard one); a control keeps
+	   to three tight layers (nothing past 4px), so buttons sit close to the page */
 	--elevation-surface:
 		0 17.54px 23.39px rgb(0 0 0 / 0.04), 0 9.4px 12.5px rgb(0 0 0 / 0.03),
 		0 5.25px 7px rgb(0 0 0 / 0.02), 0 2.79px 3.72px -2px rgb(0 0 0 / 0.01),
 		0 1.16px 1.5px rgb(0 0 0 / 0.01);
 	--elevation-control:
-		0 4px 10.5px rgb(0 0 0 / 0.03), 0 2.3px 5.8px rgb(0 0 0 / 0.03),
-		0 1.2px 3.1px rgb(0 0 0 / 0.03), 0 0.5px 1.3px rgb(0 0 0 / 0.04);
+		0 0.5px 1px rgb(0 0 0 / 0.05), 0 1px 2px rgb(0 0 0 / 0.05), 0 2px 4px -1px rgb(0 0 0 / 0.05);
 	--elevation-raised:
 		0 25px 50px rgb(0 0 0 / 0.05), 0 12px 24px rgb(0 0 0 / 0.04), 0 6px 12px rgb(0 0 0 / 0.03),
 		0 3px 6px rgb(0 0 0 / 0.02), 0 1.5px 3px rgb(0 0 0 / 0.02);
@@ -205,8 +204,7 @@
 		0 5.25px 7px rgb(0 0 0 / 0.14), 0 2.79px 3.72px -2px rgb(0 0 0 / 0.07),
 		0 1.16px 1.5px rgb(0 0 0 / 0.07);
 	--elevation-control:
-		0 4px 10.5px rgb(0 0 0 / 0.21), 0 2.3px 5.8px rgb(0 0 0 / 0.21),
-		0 1.2px 3.1px rgb(0 0 0 / 0.21), 0 0.5px 1.3px rgb(0 0 0 / 0.28);
+		0 0.5px 1px rgb(0 0 0 / 0.3), 0 1px 2px rgb(0 0 0 / 0.25), 0 2px 4px -1px rgb(0 0 0 / 0.25);
 	--elevation-raised:
 		0 25px 50px rgb(0 0 0 / 0.35), 0 12px 24px rgb(0 0 0 / 0.28), 0 6px 12px rgb(0 0 0 / 0.21),
 		0 3px 6px rgb(0 0 0 / 0.14), 0 1.5px 3px rgb(0 0 0 / 0.14);
