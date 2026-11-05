@@ -45,16 +45,6 @@
 			</div>
 		</StateGalleryItem>
 
-		<StateGalleryItem label="matte-chip" note="badges">
-			<div class="flex h-28 items-center gap-2">
-				<span class="matte-chip rounded-md bg-secondary px-2 py-0.5 text-xs font-medium">chip</span>
-
-				<span class="matte-chip rounded-md bg-primary px-2 py-0.5 text-xs text-primary-foreground"
-					>chip</span
-				>
-			</div>
-		</StateGalleryItem>
-
 		<StateGalleryItem label="matte-sheen" note="user message bubble">
 			<div class="matte-sheen flex h-28 items-center rounded-2xl bg-primary/5 px-4 text-sm">
 				A user message

@@ -792,7 +792,6 @@ matches the role of the surface instead of combining raw shadows.
   `matte-key` control has a border, and a rim inside it would double the edge.
 - **`matte-well`:** inputs, textareas and checkboxes. A shallow inset shade so
   fields read as recessed.
-- **`matte-chip`:** badges. A thin inner rim only.
 - **`matte-sheen`:** the user message bubble. An almost invisible top-to-bottom sheen.
 - **`status-lamp`** and **`matte-orb`** with `orb-danger`, `orb-warning` or `orb-success`:
   small status dots and the recording button.
@@ -844,7 +843,8 @@ icon buttons in the chat form are fully round.
   square icon sizes.
 
 - **Badges:** four variants with the same names: `default`, `secondary` (a light foreground
-  tint), `outline` and `destructive`. Model and capability badges add `matte-chip`.
+  tint), `outline` and `destructive`, plus the soft status badges `success`, `warning`, `danger` and
+  `info`. Badges are flat: a fill or a border, with no inner rim.
 - **Toggles:** the same corners, type, heights, padding and icon size as buttons, with
   square `icon-sm`, `icon` and `icon-lg` sizes for icon-only toggles. `default` has no fill
   until hovered; `outline` borrows the outline button. Pressed toggles take

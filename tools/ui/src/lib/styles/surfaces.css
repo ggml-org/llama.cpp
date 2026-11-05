@@ -104,11 +104,6 @@
 		var(--tw-ring-shadow, 0 0 #0000);
 }
 
-/* Faint even rim for badges and chips. */
-@utility matte-chip {
-	box-shadow: inset 0 0 0 1px var(--badge-highlight);
-}
-
 /* Soft top-down sheen over a surface's own fill, e.g. the user message bubble. */
 @utility matte-sheen {
 	background-image: linear-gradient(to bottom, var(--sheen-start), var(--sheen-end));
