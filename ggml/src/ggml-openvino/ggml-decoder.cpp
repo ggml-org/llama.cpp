@@ -411,6 +411,10 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
         }
         if (src->op == GGML_OP_RESHAPE && src->src[0]->ne[0] == node->ne[0] && src->src[0]->ne[1] == node->ne[1]) {
             op_case = 4;
+        } else if (node->ne[0] == 1 && node->ne[1] == src->ne[0] && ggml_nrows(src) == 1) {
+            // [n] -> [1, n] (gemma-4 gathers the positions of its output rows this way): the source dim
+            // becomes dim 1. The next check matches too, but would make dim 2 dynamic.
+            op_case = 3;
         } else if (node->ne[0] * node->ne[1] == src->ne[0]) {
             op_case = 1;
         } else if (src->ne[0] * src->ne[1] == node->ne[0]) {
@@ -1066,8 +1070,9 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
 
             model_params.head_size = cache_k_permute->ne[0];
             model_params.n_heads_kv = cache_k_permute->ne[2];
-            compute_params.input_len = node->src[0]->ne[1];
-            compute_params.token_len_per_seq = node->src[0]->ne[1];
+            // gemma-4's KV-shared layers attend for the output tokens only, so the batch is the largest query
+            compute_params.input_len = std::max<int>(compute_params.input_len, node->src[0]->ne[1]);
+            compute_params.token_len_per_seq = std::max<int>(compute_params.token_len_per_seq, node->src[0]->ne[1]);
 
             auto * cache_k_view = cache_k_permute->src[0];
             if (cache_k_view->op != GGML_OP_VIEW || mask == nullptr) {
