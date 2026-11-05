@@ -79,7 +79,7 @@
 
 		<StateGalleryItem
 			label="Proposed"
-			note="A shade lighter at the top, a faint lit top edge, no glow"
+			note="Barely lighter at the top, an even hairline edge, no glow"
 		>
 			<div class="p-4"><MatteSet part="buttons" /></div>
 		</StateGalleryItem>

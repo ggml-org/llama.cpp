@@ -2,10 +2,12 @@
 	The proposed matte-glass finish, after the reference but quieter: every surface is a gentle gradient between near
 	shades of its own colour, with a hairline edge a step lighter than the fill and glyphs pressed lightly into the
 	surface. No glows; only a faint neutral shadow. The colours are the status fills. Plain markup, so the real
-	components stay as they are until the finish is chosen.
+	components stay as they are until the finish is chosen; the buttons are the real Button, keeping its size and
+	radius, with only the finish added by a class.
 -->
 <script lang="ts">
 	import { Check, Minus, Plus, Send, X } from '@lucide/svelte';
+	import { Button } from '$lib/components/ui/button';
 
 	let { part }: { part: 'badges' | 'buttons' | 'count' | 'tray' } = $props();
 
@@ -45,60 +47,62 @@
 	</div>
 {:else}
 	<div class="row">
-		<button class="btn primary">Load model</button>
+		<Button class="matte-primary">Load model</Button>
 
-		<button class="btn secondary">Cancel</button>
+		<Button class="matte-secondary" variant="secondary">Cancel</Button>
 
-		<button aria-label="Send" class="btn round primary"><Send /></button>
+		<Button aria-label="Send" class="matte-primary rounded-full" size="icon"><Send /></Button>
 
-		<button aria-label="Stop" class="btn round lit danger"><span class="stop"></span></button>
+		<Button aria-label="Stop" class="matte-lit danger rounded-full" size="icon"
+			><span class="stop"></span></Button
+		>
 	</div>
 {/if}
 
 <style>
-	.danger {
+	.danger,
+	.row :global(.danger) {
 		--c: var(--fill-danger);
 	}
-	.warning {
+	.warning,
+	.row :global(.warning) {
 		--c: var(--fill-warning);
 	}
-	.success {
+	.success,
+	.row :global(.success) {
 		--c: var(--fill-success);
 	}
-	.info {
+	.info,
+	.row :global(.info) {
 		--c: var(--fill-info);
 	}
 
-	/* a faint neutral shadow, the only lift */
+	/* a faint, diffuse neutral shadow, the only lift; nothing tight under the bottom edge */
 	.tray,
-	.btn,
+	.row,
 	.count,
 	.key {
-		--lift: 0 1px 2px rgb(15 23 42 / 0.06), 0 4px 12px -6px rgb(15 23 42 / 0.1);
+		--lift: 0 4px 12px -6px rgb(15 23 42 / 0.1);
 	}
 	:global(.dark) .tray,
-	:global(.dark) .btn,
+	:global(.dark) .row,
 	:global(.dark) .count,
 	:global(.dark) .key {
-		--lift: 0 1px 2px rgb(0 0 0 / 0.3), 0 4px 12px -6px rgb(0 0 0 / 0.4);
+		--lift: 0 4px 12px -6px rgb(0 0 0 / 0.4);
 	}
 
-	/* neutral: a shade lighter at the top than at the bottom, a hairline edge */
+	/* neutral: a fill barely lighter at the top, an even hairline edge */
 	.tray,
-	.btn.secondary {
-		background: linear-gradient(to bottom, #f8f8f9, #efeff1);
+	.row :global(.matte-secondary) {
+		background: linear-gradient(to bottom, #f7f7f8, #f1f1f3);
 		border: 1px solid #e0e2e6;
-		box-shadow:
-			inset 0 1px 0 rgb(255 255 255 / 0.8),
-			var(--lift);
+		box-shadow: var(--lift);
 	}
 	:global(.dark) .tray,
-	:global(.dark) .btn.secondary {
-		background: linear-gradient(to bottom, #2f3032, #28292b);
+	:global(.dark) .row :global(.matte-secondary) {
+		background: linear-gradient(to bottom, #2d2e30, #292a2c);
 		border-color: rgb(255 255 255 / 0.08);
-		box-shadow:
-			inset 0 1px 0 rgb(255 255 255 / 0.05),
-			var(--lift);
+		box-shadow: var(--lift);
 	}
 
 	.tray {
@@ -115,16 +119,16 @@
 		gap: 14px;
 	}
 
-	/* lit colour: a near-flat fill, a hairline a step lighter, the glyph a little darker and pressed in */
-	.lit {
+	/* lit colour: a near-flat fill, an even hairline a step lighter, the glyph a little darker and pressed in */
+	.lit,
+	.row :global(.matte-lit) {
 		background: linear-gradient(to bottom, oklch(from var(--c) calc(l + 0.02) c h), var(--c));
 		border: 1px solid oklch(from var(--c) calc(l + 0.06) calc(c * 0.9) h);
 		color: oklch(from var(--c) calc(l - 0.2) calc(c * 0.85) h);
-		box-shadow:
-			inset 0 1px 0 oklch(from var(--c) calc(l + 0.1) c h / 0.35),
-			var(--lift);
+		box-shadow: var(--lift);
 	}
-	.lit :global(svg) {
+	.lit :global(svg),
+	.row :global(.matte-lit svg) {
 		filter: drop-shadow(0 0.5px 0 oklch(from var(--c) calc(l + 0.1) c h / 0.7));
 	}
 
@@ -187,11 +191,10 @@
 		color: var(--fg);
 		background: linear-gradient(
 			to bottom,
-			color-mix(in oklab, var(--surface), white 35%),
+			color-mix(in oklab, var(--surface), white 20%),
 			var(--surface)
 		);
 		border: 1px solid var(--line);
-		box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.5);
 	}
 	:global(.dark) .pill {
 		background: linear-gradient(
@@ -199,7 +202,6 @@
 			color-mix(in oklab, var(--surface), white 4%),
 			var(--surface)
 		);
-		box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.04);
 	}
 	.pill.success {
 		--fg: var(--fg-success);
@@ -233,44 +235,25 @@
 		background: var(--c);
 	}
 
-	/* buttons */
-	.btn {
-		display: inline-grid;
-		place-items: center;
-		height: 36px;
-		padding: 0 16px;
-		border-radius: 999px;
-		font: 500 14px/1 var(--font-sans, system-ui);
-		cursor: pointer;
-	}
-	.btn.secondary {
+	/* buttons: the real Button's size and radius; only the finish changes */
+	.row :global(.matte-secondary) {
 		color: var(--foreground);
 	}
-	/* the primary key: dark neutral, a shade lighter at the top, a faint lit top edge */
-	.btn.primary {
+	/* the primary key: dark neutral, barely lighter at the top, an even hairline edge */
+	.row :global(.matte-primary) {
 		color: #fafafa;
-		background: linear-gradient(to bottom, #333335, #232325);
-		border: 1px solid #1c1c1e;
+		background: linear-gradient(to bottom, #2e2e30, #262628);
+		/* an even ring rather than a border, so the width stays the real button's */
 		box-shadow:
-			inset 0 1px 0 rgb(255 255 255 / 0.1),
+			inset 0 0 0 1px #1c1c1e,
 			var(--lift);
 	}
-	:global(.dark) .btn.primary {
+	:global(.dark) .row :global(.matte-primary) {
 		color: #171717;
-		background: linear-gradient(to bottom, #f6f6f7, #e6e6e8);
-		border-color: #d6d7da;
+		background: linear-gradient(to bottom, #f3f3f4, #ebebed);
 		box-shadow:
-			inset 0 1px 0 white,
+			inset 0 0 0 1px #d6d7da,
 			var(--lift);
-	}
-	.btn.round {
-		width: 36px;
-		height: 36px;
-		padding: 0;
-	}
-	.btn.round :global(svg) {
-		width: 16px;
-		height: 16px;
 	}
 	.stop {
 		width: 11px;
