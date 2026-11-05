@@ -2772,8 +2772,8 @@ static void ggml_compute_forward_silu_back_f32(
     assert(ggml_is_contiguous_1(grad));
     assert(ggml_is_contiguous_1(src1));
     assert(ggml_is_contiguous_1(dst));
-    assert(ggml_are_same_shape(src1, dst));
-    assert(ggml_are_same_shape(src1, grad));
+    GGML_ASSERT(ggml_are_same_shape(src1, dst));
+    GGML_ASSERT(ggml_are_same_shape(src1, grad));
 
     const int ith = params->ith;
     const int nth = params->nth;
@@ -2815,8 +2815,8 @@ static void ggml_compute_forward_silu_back_f16(
     assert(ggml_is_contiguous_1(grad));
     assert(ggml_is_contiguous_1(src1));
     assert(ggml_is_contiguous_1(dst));
-    assert(ggml_are_same_shape(src1, dst));
-    assert(ggml_are_same_shape(src1, grad));
+    GGML_ASSERT(ggml_are_same_shape(src1, dst));
+    GGML_ASSERT(ggml_are_same_shape(src1, grad));
 
     const int ith = params->ith;
     const int nth = params->nth;
