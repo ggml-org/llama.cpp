@@ -1,15 +1,14 @@
 <script lang="ts" module>
+	import PaletteRow from '../../brand/communications/PaletteRow.svelte';
+	import { llamaPalette } from '../../brand/communications/palettes';
 	import { seedChatStory } from '../../chat/messages/fixtures';
 	import StateGallery from '../../helpers/StateGallery.svelte';
 	import StateGalleryItem from '../../helpers/StateGalleryItem.svelte';
 	import Boards from './palette/Boards.svelte';
-	import PaletteRow from './palette/PaletteRow.svelte';
-	import { basePalette, poudrePalette } from './palette/palettes';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 
-	// Proposal: the communications palette, from the neutral base to the poudre palette. (The UI's status colours were
-	// chosen and are in the tokens; see DESIGN.md.) Delete once these colours are in the tokens too (see DESIGN.md,
-	// "Proposing changes").
+	// Proposal: the Llama palette for communications (the design system's own colours with beige), on top of the
+	// neutral base in Communications/Base. Delete once it is chosen (see DESIGN.md, "Proposing changes").
 	const { Story } = defineMeta({
 		parameters: {
 			controls: { disable: true },
@@ -19,18 +18,10 @@
 	});
 </script>
 
-<Story asChild beforeEach={() => seedChatStory()} name="Communications base">
-	<StateGallery columns={1}>
-		<StateGalleryItem label={basePalette.name} note={basePalette.note}>
-			<PaletteRow palette={basePalette} />
-		</StateGalleryItem>
-	</StateGallery>
-</Story>
-
 <Story asChild beforeEach={() => seedChatStory()} name="Specimen boards">
 	<StateGallery columns={1}>
-		<StateGalleryItem label="Key visuals" note={poudrePalette.note}>
-			<PaletteRow palette={poudrePalette} />
+		<StateGalleryItem label="Key visuals" note={llamaPalette.note}>
+			<PaletteRow palette={llamaPalette} />
 		</StateGalleryItem>
 
 		<StateGalleryItem
