@@ -2224,7 +2224,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
             const bool decode_unfold = mc_decode_config.find("NPUW_UNFOLD_IREQS") != mc_decode_config.end();
             if (!model_cache_dir.empty()) {
                 base_extra = ggml_openvino_model_cache_extra_cfg(stateful, /*recurrent=*/false);
-                base_extra = base_extra * 131 + (weightless_bank ? 2u : (self_contained ? 1u : 0u));
+                base_extra = base_extra * 131 + (weightless_bank ? 3u : (self_contained ? 1u : 0u));
                 base_extra = ggml_openvino_model_cache_mix_string(
                     base_extra, ggml_openvino_getenv_str("GGML_OPENVINO_NPU_TOKEN_EMBD_QUANT"));
                 base_extra = base_extra * 131 + (ggml_openvino_kv_slice_enabled() ? 1u : 0u);
@@ -2257,15 +2257,31 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
             }
 
             std::string weights_path;
+            std::string pair_weights_path;
+            std::string model_weights_path;
+            std::string pair_bank;
+            std::string model_bank;
             if (weightless_bank) {
-                // One bank for both models: on import NPUW matches their weights by the LazyTensor hash recorded at
-                // compile time and keeps a single resident copy, with no duplicate-uid import as with embedded weights.
+                // One weights file and NPUW bank for every pair of this model (pairs differ only in KV window):
+                // NPUW matches weights by the LazyTensor hash recorded at compile time and keeps one resident copy.
+                // A pair whose weights differ from the model file falls back to its own file and bank.
+                const uint64_t weights_fp = ggml_openvino_model_fingerprint(cgraph, device, true, m_params.rope_params,
+                                                                            16, base_extra, "weights");
+                char model_bank_name[64];
                 char shared_bank[96];
+                snprintf(model_bank_name, sizeof(model_bank_name), "ggml-wl-model-%016llx",
+                         static_cast<unsigned long long>(weights_fp));
                 snprintf(shared_bank, sizeof(shared_bank), "ggml-wl-shared-%016llx-%016llx",
                          static_cast<unsigned long long>(prefill_fp), static_cast<unsigned long long>(decode_fp));
-                mc_config["NPUW_WEIGHTS_BANK"] = std::string(shared_bank);
-                mc_decode_config["NPUW_WEIGHTS_BANK"] = std::string(shared_bank);
-                weights_path = ggml_openvino_model_cache_weights_path(model_cache_dir, prefill_fp, decode_fp);
+                pair_bank = shared_bank;
+                model_bank = model_bank_name;
+                pair_weights_path = ggml_openvino_model_cache_weights_path(model_cache_dir, prefill_fp, decode_fp);
+                model_weights_path = ggml_openvino_model_cache_weights_path(model_cache_dir, weights_fp, weights_fp);
+                // Only a pair exported with differing weights has its own file.
+                const bool pair_own = ggml_openvino_model_cache_weights_valid(pair_weights_path);
+                weights_path = pair_own ? pair_weights_path : model_weights_path;
+                mc_config["NPUW_WEIGHTS_BANK"] = pair_own ? pair_bank : model_bank;
+                mc_decode_config["NPUW_WEIGHTS_BANK"] = mc_config["NPUW_WEIGHTS_BANK"];
             } else if (self_contained) {
                 char prefill_bank[64];
                 char decode_bank[64];
@@ -2395,8 +2411,25 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
                 for (const uint64_t fp : { prefill_fp, decode_fp }) {
                     std::remove(ggml_openvino_model_cache_blob_path(model_cache_dir, fp).c_str());
                     std::remove(ggml_openvino_model_cache_manifest_path(model_cache_dir, fp).c_str());
+                    // A decode window built earlier on its own may have left a weights file for this fingerprint.
+                    ggml_openvino_model_cache_remove_weights(ggml_openvino_model_cache_weights_path(model_cache_dir, fp, fp));
                 }
-                weights_layout = ggml_openvino_model_cache_write_weights(weights_path, { model_prefill, model_decode });
+                ggml_openvino_model_cache_remove_weights(pair_weights_path);
+                ggml_openvino_weights_status status = ggml_openvino_weights_status::written;
+                weights_path = model_weights_path;
+                mc_config["NPUW_WEIGHTS_BANK"] = model_bank;
+                mc_decode_config["NPUW_WEIGHTS_BANK"] = model_bank;
+                weights_layout = ggml_openvino_model_cache_write_weights(
+                    weights_path, { model_prefill, model_decode }, /*keep_existing=*/true, &status);
+                if (status == ggml_openvino_weights_status::mismatch) {
+                    GGML_LOG_WARN("ggml-openvino: weights differ from %s, using a per-pair weights file\n",
+                                  model_weights_path.c_str());
+                    weights_path = pair_weights_path;
+                    mc_config["NPUW_WEIGHTS_BANK"] = pair_bank;
+                    mc_decode_config["NPUW_WEIGHTS_BANK"] = pair_bank;
+                    weights_layout =
+                        ggml_openvino_model_cache_write_weights(weights_path, { model_prefill, model_decode });
+                }
                 if (!weights_layout) {
                     throw std::runtime_error("ggml-openvino: failed to write NPU weights file " + weights_path);
                 }
