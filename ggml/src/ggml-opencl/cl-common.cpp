@@ -835,6 +835,7 @@ void load_cl_kernels(ggml_backend_opencl_context * backend_ctx) {
     ggml_cl_load_kernels_sqrt(backend_ctx);
     ggml_cl_load_kernels_mean(backend_ctx);
     ggml_cl_load_kernels_sub(backend_ctx);
+    ggml_cl_load_kernels_dsv4_hc(backend_ctx);
     ggml_cl_load_kernels_sum_rows(backend_ctx);
     ggml_cl_load_kernels_cumsum(backend_ctx);
     ggml_cl_load_kernels_sigmoid(backend_ctx);
