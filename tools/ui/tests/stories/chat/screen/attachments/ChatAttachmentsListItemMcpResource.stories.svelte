@@ -14,7 +14,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Blocks/Chat/ChatScreen/ChatAttachments/ChatAttachmentsListItemMcpResource'
+		title: 'UI/Blocks/Chat/ChatScreen/ChatAttachments/ChatAttachmentsListItemMcpResource'
 	});
 
 	const onclick = () => console.log('preview');

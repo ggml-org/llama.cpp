@@ -10,7 +10,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Patterns/SearchInput'
+		title: 'UI/Patterns/SearchInput'
 	});
 </script>
 

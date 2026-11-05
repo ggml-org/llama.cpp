@@ -10,7 +10,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Patterns/TruncatedText'
+		title: 'UI/Patterns/TruncatedText'
 	});
 </script>
 

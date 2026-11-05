@@ -10,7 +10,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Patterns/KeyboardShortcutInfo'
+		title: 'UI/Patterns/KeyboardShortcutInfo'
 	});
 </script>
 

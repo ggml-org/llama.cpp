@@ -13,7 +13,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design System/Foundations/Colors'
+		title: 'UI/Foundations/Colors'
 	});
 </script>
 

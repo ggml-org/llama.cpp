@@ -11,7 +11,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design System/Actions/ToggleGroup'
+		title: 'UI/Actions/ToggleGroup'
 	});
 
 	const sizes: NonNullable<ToggleSize>[] = ['icon-sm', 'icon', 'icon-lg'];

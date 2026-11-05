@@ -17,7 +17,7 @@
 			layout: 'centered'
 		},
 		tags: ['!dev'],
-		title: 'Blocks/Navigation/SidebarNavigationConversationItem/Accessibility'
+		title: 'UI/Blocks/Navigation/SidebarNavigationConversationItem/Accessibility'
 	});
 </script>
 

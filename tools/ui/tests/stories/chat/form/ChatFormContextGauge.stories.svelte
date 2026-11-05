@@ -19,7 +19,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Blocks/Chat/ChatScreen/ChatForm/ChatFormContextGauge'
+		title: 'UI/Blocks/Chat/ChatScreen/ChatForm/ChatFormContextGauge'
 	});
 
 	const N_CTX = 32768;

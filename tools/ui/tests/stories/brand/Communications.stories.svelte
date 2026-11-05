@@ -13,7 +13,7 @@
 			controls: { disable: true },
 			layout: 'fullscreen'
 		},
-		title: 'Communications/Base'
+		title: 'Brand/Colors/Communications'
 	});
 </script>
 

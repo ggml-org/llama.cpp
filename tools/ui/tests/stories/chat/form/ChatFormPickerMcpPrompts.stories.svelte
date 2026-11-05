@@ -18,7 +18,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Blocks/Chat/ChatScreen/ChatForm/ChatFormPickerMcpPrompts'
+		title: 'UI/Blocks/Chat/ChatScreen/ChatForm/ChatFormPickerMcpPrompts'
 	});
 
 	// keeps the picker in its loading state

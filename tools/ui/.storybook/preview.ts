@@ -22,17 +22,22 @@ const preview: Preview = {
 		},
 
 		options: {
-			// sidebar sections; foundations lead the design system, the full chat screen leads its folder
+			// sidebar sections: the introduction, the brand (logo, type, colour), then the UI: its foundations
+			// first, the full chat screen leading its folder
 			storySort: {
 				order: [
 					'Introduction',
 					['Overview', 'Design guidelines'],
-					'Logo',
-					['Icon', 'Showcase', 'App icons'],
-					'Typography',
-					['Overview', 'Llama Sans UI', 'Llama Sans Display', 'Llama Mono'],
-					'Communications',
-					'Design System',
+					'Brand',
+					[
+						'Logo',
+						['Icon', 'Showcase', 'App icons'],
+						'Typography',
+						['Overview', 'Llama Sans UI', 'Llama Sans Display', 'Llama Mono'],
+						'Colors',
+						['Communications', 'Palette proposal']
+					],
+					'UI',
 					[
 						'Foundations',
 						['Colors', 'Typography', 'Sizing', 'Shapes', 'Elevation', 'Surfaces'],
@@ -41,20 +46,20 @@ const preview: Preview = {
 						'Display',
 						'Overlays',
 						'Navigation',
+						'Patterns',
+						'Blocks',
+						[
+							'Chat',
+							['ChatScreen', ['ChatScreen', '*']],
+							'Content',
+							'Models',
+							'MCP',
+							'Navigation',
+							'Settings',
+							['DialogSettingsChat', 'Navigation', 'Sections'],
+							'App'
+						],
 						'Proposals'
-					],
-					'Patterns',
-					'Blocks',
-					[
-						'Chat',
-						['ChatScreen', ['ChatScreen', '*']],
-						'Content',
-						'Models',
-						'MCP',
-						'Navigation',
-						'Settings',
-						['DialogSettingsChat', 'Navigation', 'Sections'],
-						'App'
 					]
 				]
 			}

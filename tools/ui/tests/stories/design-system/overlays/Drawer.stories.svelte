@@ -8,7 +8,7 @@
 		parameters: {
 			layout: 'fullscreen'
 		},
-		title: 'Design System/Overlays/Drawer'
+		title: 'UI/Overlays/Drawer'
 	});
 </script>
 

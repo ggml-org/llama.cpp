@@ -10,7 +10,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design System/Forms/RadioGroup'
+		title: 'UI/Forms/RadioGroup'
 	});
 
 	const options = ['System', 'Light', 'Dark'];

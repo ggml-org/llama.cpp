@@ -10,7 +10,7 @@
 			layout: 'centered'
 		},
 		tags: ['!dev'],
-		title: 'Blocks/App/ScrollCarousel/Accessibility'
+		title: 'UI/Blocks/App/ScrollCarousel/Accessibility'
 	});
 </script>
 

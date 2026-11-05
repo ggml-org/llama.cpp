@@ -8,7 +8,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Blocks/MCP/McpConnectionLogs'
+		title: 'UI/Blocks/MCP/McpConnectionLogs'
 	});
 </script>
 

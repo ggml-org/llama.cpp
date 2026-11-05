@@ -34,7 +34,7 @@
 		parameters: {
 			layout: 'fullscreen'
 		},
-		title: 'Blocks/Chat/ChatScreen/ChatScreen'
+		title: 'UI/Blocks/Chat/ChatScreen/ChatScreen'
 	});
 
 	// the streamed reply ends with this sentence, so it is on screen only once the stream is done

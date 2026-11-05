@@ -11,7 +11,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Patterns/KeyValuePairs'
+		title: 'UI/Patterns/KeyValuePairs'
 	});
 </script>
 

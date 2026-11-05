@@ -9,7 +9,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design System/Foundations/Sizing'
+		title: 'UI/Foundations/Sizing'
 	});
 
 	const heights = [

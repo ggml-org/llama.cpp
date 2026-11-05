@@ -10,7 +10,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design System/Navigation/Tabs'
+		title: 'UI/Navigation/Tabs'
 	});
 </script>
 

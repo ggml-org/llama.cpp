@@ -8,7 +8,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Blocks/MCP/McpCapabilitiesBadges'
+		title: 'UI/Blocks/MCP/McpCapabilitiesBadges'
 	});
 </script>
 

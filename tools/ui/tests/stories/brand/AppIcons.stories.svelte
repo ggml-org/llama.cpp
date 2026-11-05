@@ -12,7 +12,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Logo/App icons'
+		title: 'Brand/Logo/App icons'
 	});
 
 	// @vite-pwa/assets-generator's default padding for the maskable and Apple touch icons

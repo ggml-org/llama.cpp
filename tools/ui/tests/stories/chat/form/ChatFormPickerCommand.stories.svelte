@@ -11,7 +11,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Blocks/Chat/ChatScreen/ChatForm/ChatFormPickerCommand'
+		title: 'UI/Blocks/Chat/ChatScreen/ChatForm/ChatFormPickerCommand'
 	});
 
 	const common = { commands: chatCommands, isOpen: true, onClose: fn(), onSelect: fn() };

@@ -14,7 +14,7 @@
 			controls: { disable: true },
 			layout: 'fullscreen'
 		},
-		title: 'Design System/Proposals/Palette'
+		title: 'Brand/Colors/Palette proposal'
 	});
 </script>
 

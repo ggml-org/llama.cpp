@@ -10,7 +10,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Patterns/InputWithSuggestions'
+		title: 'UI/Patterns/InputWithSuggestions'
 	});
 
 	const noop = () => {};

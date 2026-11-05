@@ -9,7 +9,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design System/Display/Badge'
+		title: 'UI/Display/Badge'
 	});
 
 	const variants: NonNullable<BadgeVariant>[] = [

@@ -9,7 +9,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Blocks/Chat/ChatScreen/ChatForm/ChatFormActionSubmit'
+		title: 'UI/Blocks/Chat/ChatScreen/ChatForm/ChatFormActionSubmit'
 	});
 </script>
 

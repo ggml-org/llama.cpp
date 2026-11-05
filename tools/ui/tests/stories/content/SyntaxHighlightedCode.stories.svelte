@@ -7,7 +7,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Blocks/Content/SyntaxHighlightedCode'
+		title: 'UI/Blocks/Content/SyntaxHighlightedCode'
 	});
 
 	const code = `fn longest<'a>(x: &'a str, y: &'a str) -> &'a str {
