@@ -6451,13 +6451,13 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
         // Opt-in: dequant-once-per-block mc3 verify GEMV (factors q4_K dequant
         // out of the 3-column loop; byte-identical, lower spill). A/B vs the
         // shipped inline mc3 in the same binary.
-        if (getenv("GGML_OPENCL_Q4K_MC3_DQ")) {
+        if (getenv("GGML_OPENCL_Q4_K_MC3_DQ")) {
             CL_gemv_compile_opts += " -DQ4K_MC3_DEQUANT_ONCE ";
         }
         // Opt-in: LDS-staged dequant mc3 verify GEMV (stages the dequantized
         // q4_K weights in __local instead of private regs that spill to slow
         // global on Adreno; byte-identical). A/B vs inline + dequant-once.
-        if (getenv("GGML_OPENCL_Q4K_MC3_LDS")) {
+        if (getenv("GGML_OPENCL_Q4_K_MC3_LDS")) {
             CL_gemv_compile_opts += " -DQ4K_MC3_DEQUANT_LDS ";
         }
 
@@ -24717,9 +24717,9 @@ static void ggml_cl_mul_mat_q4_0_f32_adreno(ggml_backend_t backend, const ggml_t
     // zone (gemm_noshuffle_q4_0 is ~50% of MTP decode on a Q4_0 model since q4_0
     // weights have no cok/mc3, unlike q4_K). Reuses the ne1==1 GEMV image setup
     // (activation image already sized by N=ne1). Byte-identical. Opt-in via
-    // GGML_OPENCL_Q40_MC3=1. Per-layer only (ne01 < 32768); q4_0 lm_head doesn't
+    // GGML_OPENCL_Q4_0_MC3=1. Per-layer only (ne01 < 32768); q4_0 lm_head doesn't
     // occur (token_embd/output stay Q6_K), guard kept for parity with q4_K mc3.
-    static const bool q40_mc3 = (getenv("GGML_OPENCL_Q40_MC3") != nullptr);
+    static const bool q40_mc3 = (getenv("GGML_OPENCL_Q4_0_MC3") != nullptr);
     const bool use_q40_mc3 = q40_mc3 && (ne1 >= 2 && ne1 <= 4) && (ne01 < 32768);
 
     const bool use_bin = use_q4_0_bin_kernels(backend_ctx, src0);
@@ -24728,7 +24728,7 @@ static void ggml_cl_mul_mat_q4_0_f32_adreno(ggml_backend_t backend, const ggml_t
         if (use_q40_mc3) {
             static bool warned = false;
             if (!warned) {
-                GGML_LOG_WARN("ggml_opencl: GGML_OPENCL_Q40_MC3 is bypassed by Q4_0 binary kernels\n");
+                GGML_LOG_WARN("ggml_opencl: GGML_OPENCL_Q4_0_MC3 is bypassed by Q4_0 binary kernels\n");
                 warned = true;
             }
         }
@@ -25109,8 +25109,8 @@ static void ggml_cl_mul_mat_q4_1_f32_adreno(ggml_backend_t backend, const ggml_t
     // Multi-column (N=3) verify GEMV for q4_1: route the spec/MTP verify batch
     // (ne1==3) onto the efficient GEMV path instead of the transposed-GEMM dead-
     // zone (gemm_noshuffle_q4_1). Reuses the ne1==1 GEMV image setup. Opt-in via
-    // GGML_OPENCL_Q41_MC3=1. Per-layer only (ne01 < 32768).
-    static const bool q41_mc3 = (getenv("GGML_OPENCL_Q41_MC3") != nullptr);
+    // GGML_OPENCL_Q4_1_MC3=1. Per-layer only (ne01 < 32768).
+    static const bool q41_mc3 = (getenv("GGML_OPENCL_Q4_1_MC3") != nullptr);
     const bool use_q41_mc3 = q41_mc3 && (ne1 >= 2 && ne1 <= 4) && (ne01 < 32768);
 
     if (ne1 == 1 || use_q41_mc3) {
@@ -26931,8 +26931,8 @@ static void ggml_cl_mul_mat_q4_k_f32_adreno(ggml_backend_t backend, const ggml_t
     // drafts + 1 bonus) onto the efficient GEMV path (subgroup-broadcast, no
     // transpose) instead of the transposed-GEMM dead-zone. Reuses the ne1==1
     // GEMV setup (the activation image is already sized by N=ne1). Byte-
-    // identical. Opt-in via GGML_OPENCL_Q4K_MC3=1 while validating.
-    static const bool q4k_mc3 = (getenv("GGML_OPENCL_Q4K_MC3") != nullptr);
+    // identical. Opt-in via GGML_OPENCL_Q4_K_MC3=1 while validating.
+    static const bool q4k_mc3 = (getenv("GGML_OPENCL_Q4_K_MC3") != nullptr);
     // Per-layer only (ne01 < 32768): the batched large-vocab lm_head at ne1==3
     // is left to the existing routing (corrupts on the Adreno GEMV path; x2-
     // unified routes batched Q6_K lm_head to CPU). Per-layer mc3 is byte-identical.
@@ -26944,7 +26944,7 @@ static void ggml_cl_mul_mat_q4_k_f32_adreno(ggml_backend_t backend, const ggml_t
         if (use_mc3) {
             static bool warned = false;
             if (!warned) {
-                GGML_LOG_WARN("ggml_opencl: GGML_OPENCL_Q4K_MC3 is bypassed by Q4_K binary kernels\n");
+                GGML_LOG_WARN("ggml_opencl: GGML_OPENCL_Q4_K_MC3 is bypassed by Q4_K binary kernels\n");
                 warned = true;
             }
         }
