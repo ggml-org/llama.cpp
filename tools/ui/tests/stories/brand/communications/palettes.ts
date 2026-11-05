@@ -26,13 +26,13 @@ export interface Palette {
 }
 
 const NAVY =
-	'radial-gradient(ellipse at 15% 10%, color-mix(in oklab, var(--blue-800), black 15%) 0%, transparent 55%), linear-gradient(160deg, color-mix(in oklab, var(--blue-800), black 38%) 0%, color-mix(in oklab, var(--blue-800), black 28%) 100%)';
+	'radial-gradient(ellipse at 15% 10%, color-mix(in oklab, var(--art-navy), white 6%) 0%, transparent 55%), linear-gradient(160deg, color-mix(in oklab, var(--art-navy), black 22%) 0%, color-mix(in oklab, var(--art-navy), black 10%) 100%)';
 const MIST =
-	'linear-gradient(160deg, color-mix(in oklab, var(--blue-400), white 62%) 0%, color-mix(in oklab, var(--blue-400), white 72%) 100%)';
+	'linear-gradient(160deg, color-mix(in oklab, var(--art-sky), white 55%) 0%, color-mix(in oklab, var(--art-sky), white 68%) 100%)';
 const base = {
 	deep: NAVY,
 	deepInk: 'var(--neutral-0)',
-	deepTone: 'color-mix(in oklab, var(--blue-800), black 28%)',
+	deepTone: 'color-mix(in oklab, var(--art-navy), black 10%)',
 	field: 'var(--beige-200)',
 	ink: 'var(--neutral-950)',
 	line: 'rgb(0 0 0 / 0.12)',
@@ -71,18 +71,18 @@ export const basePalette: Palette = {
 	]
 };
 
-/** The design system's palette for communications: neutral fields (the greys and beige) as a rule, and its blues,
- *  red, green and amber where colour serves a purpose: shapes, numerals and accents (the brand orange stays with the
- *  logotype). Every colour is a palette token or a mix within one hue. */
+/** The design system's palette for communications: neutral fields (the greys and beige) as a rule, and the artwork
+ *  colours (art-*: friendlier versions of the status hues and the vermilion accent orange, no red) where colour serves
+ *  a purpose: shapes, numerals and accents. The brand orange stays with the logotype. */
 const GREY =
 	'linear-gradient(160deg, var(--neutral-400) 0%, var(--neutral-300) 55%, var(--neutral-200) 100%)';
 
 export const llamaPalette: Palette = {
 	name: 'Llama',
-	note: "The design system's own colours on neutral fields: greys and beige behind, blues, red, green and amber for shapes and accents",
+	note: "The design system's own colours on neutral fields: greys and beige behind, the artwork blues, green, amber and accent orange for shapes",
 	roles: {
 		...base,
-		accent: 'var(--red-550)',
+		accent: 'var(--art-orange)',
 		accentInk: '#ffffff',
 		deep: 'linear-gradient(160deg, var(--neutral-800) 0%, var(--neutral-900) 100%)',
 		deepTone: 'var(--neutral-800)',
@@ -93,15 +93,15 @@ export const llamaPalette: Palette = {
 		warm: 'var(--beige-100)'
 	},
 	swatches: [
-		{ name: 'Blue 550 · Swiss', value: 'var(--blue-550)' },
-		{ name: 'Blue 400 · sky', value: 'var(--blue-400)' },
+		{ name: 'Art blue', value: 'var(--art-blue)' },
+		{ name: 'Art sky', value: 'var(--art-sky)' },
 		{ name: 'Navy', value: NAVY },
 		{ name: 'Greys', value: GREY },
 		{ name: 'Beige 100', value: 'var(--beige-100)' },
-		{ name: 'Red 550 · accent', value: 'var(--red-550)' },
-		{ name: 'Amber 400', value: 'var(--amber-400)' },
-		{ name: 'Green 550', value: 'var(--green-550)' },
-		{ name: 'Light red', value: 'color-mix(in oklab, var(--red-400), white 62%)' },
+		{ name: 'Art orange · accent', value: 'var(--art-orange)' },
+		{ name: 'Art amber', value: 'var(--art-amber)' },
+		{ name: 'Art green', value: 'var(--art-green)' },
+		{ name: 'Art orange light', value: 'var(--art-orange-light)' },
 		{ name: 'Beige 50', value: 'var(--beige-50)' }
 	]
 };

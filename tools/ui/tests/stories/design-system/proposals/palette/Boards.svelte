@@ -178,24 +178,29 @@
 		--navy:
 			radial-gradient(
 				ellipse at 15% 10%,
-				color-mix(in oklab, var(--blue-800), black 15%) 0%,
+				color-mix(in oklab, var(--art-navy), white 6%) 0%,
 				transparent 55%
 			),
 			linear-gradient(
 				160deg,
-				color-mix(in oklab, var(--blue-800), black 38%) 0%,
-				color-mix(in oklab, var(--blue-800), black 28%) 100%
+				color-mix(in oklab, var(--art-navy), black 22%) 0%,
+				color-mix(in oklab, var(--art-navy), black 10%) 100%
 			);
-		--navy-flat: color-mix(in oklab, var(--blue-800), black 28%);
+		--navy-flat: color-mix(in oklab, var(--art-navy), black 10%);
 		/* backgrounds stay neutral; the colours are for shapes, numerals and accents */
 		--field-deep: linear-gradient(160deg, var(--neutral-800) 0%, var(--neutral-900) 100%);
-		--swiss: linear-gradient(160deg, var(--blue-500) 0%, var(--blue-550) 55%, var(--blue-650) 100%);
-		--swiss-flat: var(--blue-550);
-		--sky: var(--blue-400);
+		--swiss: linear-gradient(
+			160deg,
+			color-mix(in oklab, var(--art-blue), white 8%) 0%,
+			var(--art-blue) 55%,
+			color-mix(in oklab, var(--art-blue), black 10%) 100%
+		);
+		--swiss-flat: var(--art-blue);
+		--sky: var(--art-sky);
 		--mist: linear-gradient(
 			160deg,
-			color-mix(in oklab, var(--blue-400), white 62%) 0%,
-			color-mix(in oklab, var(--blue-400), white 72%) 100%
+			color-mix(in oklab, var(--art-sky), white 55%) 0%,
+			color-mix(in oklab, var(--art-sky), white 68%) 100%
 		);
 		--grey: linear-gradient(
 			160deg,
@@ -206,10 +211,12 @@
 		--cream: var(--beige-100);
 		--sand: var(--beige-50);
 		--sage: var(--beige-200); /* the text poster's field: neutral, like every background */
-		--teal: var(--green-550);
-		--saffron: var(--amber-400);
-		--pink: color-mix(in oklab, var(--red-400), white 62%);
-		--vermilion: var(--red-550); /* the danger fill; the brand orange stays with the logotype */
+		--teal: var(--art-green);
+		--saffron: var(--art-amber);
+		--pink: var(--art-orange-light); /* a light orange in place of pink: no red */
+		--vermilion: var(
+			--art-orange
+		); /* the accent orange; the brand orange stays with the logotype */
 		--ink: var(--beige-900);
 		--display: 'Llama Sans Display', var(--font-sans);
 		display: grid;
@@ -414,16 +421,32 @@
 		right: 0.8cqi;
 	}
 	.photo.sky {
-		background: linear-gradient(180deg, var(--blue-450) 0%, var(--blue-400) 100%);
+		background: linear-gradient(
+			180deg,
+			color-mix(in oklab, var(--art-sky), black 6%) 0%,
+			var(--art-sky) 100%
+		);
 	}
 	.photo.sea {
-		background: linear-gradient(180deg, var(--green-550) 0%, var(--green-650) 100%);
+		background: linear-gradient(
+			180deg,
+			var(--art-green) 0%,
+			color-mix(in oklab, var(--art-green), black 10%) 100%
+		);
 	}
 	.photo.peach {
-		background: linear-gradient(170deg, var(--red-450) 0%, var(--red-550) 100%);
+		background: linear-gradient(
+			170deg,
+			color-mix(in oklab, var(--art-orange), white 12%) 0%,
+			var(--art-orange) 100%
+		);
 	}
 	.photo.mist {
-		background: linear-gradient(180deg, var(--amber-250) 0%, var(--amber-400) 100%); /* saffron */
+		background: linear-gradient(
+			180deg,
+			color-mix(in oklab, var(--art-amber), white 12%) 0%,
+			var(--art-amber) 100%
+		); /* saffron */
 	}
 
 	/* circles */
@@ -506,11 +529,7 @@
 		font-weight: 700;
 	}
 	.stack .sky {
-		color: color-mix(
-			in oklab,
-			var(--red-400),
-			white 45%
-		); /* a light red, readable on the dark field */
+		color: var(--art-orange-light); /* a light orange, readable on the dark field */
 	}
 	.stack .foot {
 		align-self: end;
