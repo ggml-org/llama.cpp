@@ -95,6 +95,15 @@ struct mtmd_audio_preprocessor_d1omni : mtmd_audio_preprocessor_conformer {
     bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const override;
 };
 
+struct mtmd_audio_preprocessor_lfm3a : mtmd_audio_preprocessor {
+    mtmd_audio_preprocessor_lfm3a(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
+    void initialize() override;
+    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const override;
+
+  private:
+    mtmd_audio_cache cache;
+};
+
 struct mtmd_audio_preprocessor_granite_speech : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_granite_speech(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
     void initialize() override;
@@ -162,10 +171,33 @@ struct mtmd_audio_preprocessor_pockettts : mtmd_audio_preprocessor {
     bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const override;
 };
 
+// chatterbox reference front-end: one clip gives five entries, used by position in mtmd.cpp
+//   0: CAMPPlus kaldi fbank            [80 x n_frames]  (mel major)
+//   1: s3 tokenizer log-mel, flow cap  [n_mel x n_frames] (mel major)
+//   2: s3 tokenizer log-mel, t3 cap    [n_mel x n_frames] (mel major)
+//   3: s3gen prompt features           [n_frames x 80]  (frame major, 24 kHz mel rate)
+//   4: voice encoder power mel         [n_frames x 40]  (frame major, trimmed, partial grid)
+// turbo loudness-normalizes the clip to -27 LUFS and caps the t3 clip at 15 s instead of 6 s
+struct mtmd_audio_preprocessor_chatterbox_ref : mtmd_audio_preprocessor {
+    mtmd_audio_preprocessor_chatterbox_ref(const clip_ctx * ctx, bool is_mtl) : mtmd_audio_preprocessor(ctx), is_mtl(is_mtl) {}
+    void initialize() override;
+    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const override;
+
+  private:
+    bool             is_mtl;
+    mtmd_audio_cache fbank_cache;  // entry 0, the window slot holds the povey window
+    mtmd_audio_cache s3tok_cache;  // entries 1 and 2
+    mtmd_audio_cache matcha_cache; // entry 3
+    mtmd_audio_cache ve_cache;     // entry 4
+};
+
 struct mtmd_audio_preprocessor_parakeet : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_parakeet(clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) { }
     void initialize() override;
     bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const override;
+
+  protected:
+    void log_mel(const float * samples, size_t n_samples, mtmd_audio_mel & out) const;
 
   private:
     mtmd_audio_cache cache;
@@ -175,6 +207,12 @@ struct mtmd_audio_preprocessor_parakeet : mtmd_audio_preprocessor {
                               int frame_size, int frame_step, int n_threads,
                               int n_fft_bins,
                               const mtmd_audio_cache & cache, mtmd_audio_mel & mel);
+};
+
+// one chunk per recording: the raw log-mel of its valid frames
+struct mtmd_audio_preprocessor_nemotron_transcribe : mtmd_audio_preprocessor_parakeet {
+    mtmd_audio_preprocessor_nemotron_transcribe(clip_ctx * ctx) : mtmd_audio_preprocessor_parakeet(ctx) { }
+    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const override;
 };
 
 //

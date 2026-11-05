@@ -31,6 +31,15 @@
 		promptMs={liveLlm.prompt_ms}
 		promptTokens={liveLlm.prompt_n}
 	/>
+{:else if showMessageStats && message.timings?.compaction}
+	{@const summary = message.timings.compaction}
+	<ChatMessageStatistics
+		mode={ChatMessageStatisticsMode.GENERATION}
+		predictedMs={summary.predicted_ms}
+		predictedTokens={summary.predicted_n}
+		promptMs={summary.prompt_ms}
+		promptTokens={summary.prompt_n}
+	/>
 {:else if showMessageStats && message.timings && message.timings.predicted_n && message.timings.predicted_ms}
 	{@const agentic = message.timings.agentic}
 	<ChatMessageStatistics

@@ -2,20 +2,29 @@
 # multiple collaborators per item can be specified
 #
 # ggml-org/ci               : CISC, danbev, ggerganov, netrunnereve, ngxson, taronaeo
+# ggml-org/ggml-base        : aendk, fairydreaming, ggerganov
 # ggml-org/ggml-cann        : hipudding
-# ggml-org/ggml-cuda        : JohannesGaessler, am17an, IMbackK, ORippler
+# ggml-org/ggml-cpu         : angt, chaxu01, ggerganov, max-krasnyansky, taronaeo
+# ggml-org/ggml-cuda        : am17an, gaugarg-nv, IMbackK, JohannesGaessler, ORippler, thelittlefireman, ynankani
+# ggml-org/ggml-et          : marty1885
 # ggml-org/ggml-hexagon     : lhez, max-krasnyansky
-# ggml-org/ggml-metal       : ggerganov
+# ggml-org/ggml-hip         : IMbackK, thelittlefireman
+# ggml-org/ggml-metal       : forforever73, ggerganov, jhen0409, masterFoad
 # ggml-org/ggml-opencl      : lhez, max-krasnyansky
-# ggml-org/ggml-rpc         : rgerganov
-# ggml-org/ggml-sycl        : arthw
+# ggml-org/ggml-openvino    : ravi9, wine99
+# ggml-org/ggml-riscv       : xctan
+# ggml-org/ggml-rpc         : am17an, rgerganov
+# ggml-org/ggml-sycl        : arthw, Titaniumtown
 # ggml-org/ggml-vulkan      : 0cc4m, jeffbolznv
 # ggml-org/ggml-webgpu      : reeselevine, yomaytk
-# ggml-org/ggml-zdnn        : taronaeo
-# ggml-org/llama-common     : ggerganov, aldehir, angt, danbev, ngxson, pwilkin
+# ggml-org/ggml-zdnn        : AlekseiNikiforovIBM, Andreas-Krebbel, taronaeo
+# ggml-org/llama-base       : am17an, CISC, ggerganov, ngxson, sanmai, ServeurpersoCom
+# ggml-org/llama-common     : aldehir, angt, bartowski1182, danbev, ggerganov, ngxson, nikwen, pwilkin, ruixiang63, sanmai
+# ggml-org/llama-examples   : ggerganov
+# ggml-org/llama-models     : CISC, danbev, ggerganov, ngxson
 # ggml-org/llama-mtmd       : ngxson
-# ggml-org/llama-server     : ggerganov, ngxson, allozaur, angt, ServeurpersoCom
-# ggml-org/llama-ui           : allozaur
+# ggml-org/llama-server     : allozaur, angt, ggerganov, ngxson, ServeurpersoCom
+# ggml-org/llama-ui         : allozaur
 
 /.devops/*.Dockerfile                   @ngxson
 /.github/actions/                       @ggml-org/ci
@@ -29,28 +38,12 @@
 /conversion/                            @CISC
 /convert_*.py                           @CISC
 /docs/backend/snapdragon/               @ggml-org/ggml-hexagon
-/examples/batched.swift/                @ggerganov
-/examples/batched/                      @ggerganov
-/examples/convert-llama2c-to-ggml/      @ggerganov
+/examples/                              @ggml-org/llama-examples
 /examples/debug/                        @danbev @pwilkin
-/examples/deprecation-warning/          @ggerganov
 /examples/diffusion/                    @am17an
-/examples/embedding/                    @ggerganov
-/examples/eval-callback/                @ggerganov
-/examples/export-docs/                  @ggerganov
-/examples/gen-docs/                     @ggerganov
-/examples/gguf/                         @ggerganov
 /examples/llama.android/                @ggerganov @hanyin-arm @naco-siren
-/examples/llama.swiftui/                @ggerganov
-/examples/llama.vim                     @ggerganov
-/examples/lookahead/                    @ggerganov
 /examples/lookup/                       @JohannesGaessler
 /examples/model-conversion/             @danbev
-/examples/parallel/                     @ggerganov
-/examples/passkey/                      @ggerganov
-/examples/retrieval/                    @ggerganov
-/examples/speculative-simple/           @ggerganov
-/examples/speculative/                  @ggerganov
 /ggml/cmake/                            @ggerganov
 /ggml/include/                          @ggerganov
 /ggml/src/ggml-backend-meta.cpp         @JohannesGaessler
@@ -62,7 +55,7 @@
 /ggml/src/ggml-cuda/                    @ggml-org/ggml-cuda
 /ggml/src/ggml-cuda/vendors/hip.h       @IMbackK
 /ggml/src/ggml-hexagon/                 @ggml-org/ggml-hexagon
-/ggml/src/ggml-hip/                     @IMbackK
+/ggml/src/ggml-hip/                     @ggml-org/ggml-hip
 /ggml/src/ggml-et/                      @marty1885
 /ggml/src/ggml-impl.h                   @ggerganov
 /ggml/src/ggml-metal/                   @ggml-org/ggml-metal
@@ -76,7 +69,7 @@
 /ggml/src/ggml-virtgpu/                 @kpouget
 /ggml/src/ggml-vulkan/                  @ggml-org/ggml-vulkan
 /ggml/src/ggml-webgpu/                  @ggml-org/ggml-webgpu
-/ggml/src/ggml-zdnn/                    @ggml-org/ggml-zdnn @Andreas-Krebbel @AlekseiNikiforovIBM
+/ggml/src/ggml-zdnn/                    @ggml-org/ggml-zdnn
 /ggml/src/ggml-zendnn/                  @avinashcpandey @Jiten1parmar
 /ggml/src/ggml.c                        @ggerganov
 /ggml/src/ggml.cpp                      @ggerganov
@@ -87,14 +80,14 @@
 /scripts/get*                           @ggerganov
 /scripts/sync*                          @ggerganov
 /scripts/snapdragon/                    @ggml-org/ggml-hexagon
-/src/                                   @ggerganov
+/src/                                   @ggml-org/llama-base
 /src/llama-adapter.*                    @CISC
 /src/llama-arch.*                       @CISC
 /src/llama-chat.*                       @ngxson
 /src/llama-graph.*                      @CISC
 /src/llama-model.*                      @CISC
 /src/llama-vocab.*                      @CISC
-/src/models/                            @CISC
+/src/models/                            @ggml-org/llama-models
 /tests/                                 @ggerganov
 /tests/test-chat.*                      @pwilkin
 /tests/test-server-component.cpp        @ggml-org/llama-server

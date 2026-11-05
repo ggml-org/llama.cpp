@@ -72,6 +72,19 @@ export function downloadGroups(
 	});
 }
 
+/** Model with this qualified id or raw name, from the listing or else the tracked downloads. */
+export function findModelOption(
+	key: string | null,
+	models: ModelOption[],
+	downloads: ModelQuantGroup[]
+): ModelOption | null {
+	if (!key) return null;
+
+	const matches = (candidate: ModelOption) => candidate.id === key || candidate.model === key;
+
+	return models.find(matches) ?? downloads.find((group) => matches(group.base))?.base ?? null;
+}
+
 /** One collapsible block of the manager's table. */
 export interface ModelsTableGroup {
 	/** One entry per repo, its quants hanging off it. */

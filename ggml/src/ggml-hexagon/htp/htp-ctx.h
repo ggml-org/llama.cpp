@@ -131,19 +131,32 @@ static inline void htp_ops_context_reset(struct htp_ops_context * octx, struct h
     octx->n_threads_div = ctx->n_threads_div;
 }
 
-static inline bool htp_ops_context_set_n_threads(struct htp_ops_context * octx, uint32_t n_threads) {
+static inline bool htp_ops_context_set_n_threads_div(
+        struct htp_ops_context * octx,
+        uint32_t n_threads,
+        struct fastdiv_values n_threads_div) {
     if (n_threads == 0 || n_threads > octx->ctx->n_threads) {
         return false;
     }
 
-    if (n_threads != octx->n_threads) {
-        octx->n_threads = n_threads;
-        octx->n_threads_div = n_threads == octx->ctx->n_threads
-            ? octx->ctx->n_threads_div
-            : init_fastdiv_values(n_threads);
-    }
+    octx->n_threads     = n_threads;
+    octx->n_threads_div = n_threads_div;
 
     return true;
+}
+
+static inline bool htp_ops_context_set_n_threads(struct htp_ops_context * octx, uint32_t n_threads) {
+    if (n_threads == 0 || n_threads > octx->ctx->n_threads) {
+        return false;
+    }
+    if (n_threads == octx->n_threads) {
+        return true;
+    }
+
+    const struct fastdiv_values n_threads_div = n_threads == octx->ctx->n_threads
+        ? octx->ctx->n_threads_div
+        : init_fastdiv_values(n_threads);
+    return htp_ops_context_set_n_threads_div(octx, n_threads, n_threads_div);
 }
 
 static inline void htp_ops_context_set_status(struct htp_ops_context * octx, int status) {
@@ -174,6 +187,7 @@ int op_argsort(struct htp_ops_context * octx);
 int op_top_k(struct htp_ops_context * octx);
 int op_ssm_conv(struct htp_ops_context * octx);
 int op_cumsum(struct htp_ops_context * octx);
+int op_top_k_mask(struct htp_ops_context * octx);
 int op_fill(struct htp_ops_context * octx);
 int op_concat(struct htp_ops_context * octx);
 int op_diag(struct htp_ops_context * octx);
@@ -182,9 +196,13 @@ int op_gated_delta_net(struct htp_ops_context * octx);
 int op_pad(struct htp_ops_context * octx);
 int op_im2col(struct htp_ops_context * octx);
 int op_im2col_3d(struct htp_ops_context * octx);
+int op_conv_2d(struct htp_ops_context * octx);
+int op_conv_2d_dw(struct htp_ops_context * octx);
 int op_pool_2d(struct htp_ops_context * octx);
 int op_pool_1d(struct htp_ops_context * octx);
 int op_allreduce(struct htp_ops_context * octx);
 int op_roll(struct htp_ops_context * octx);
+int op_upscale(struct htp_ops_context * octx);
+int op_lightning_indexer(struct htp_ops_context * octx);
 
 #endif /* HTP_CTX_H */

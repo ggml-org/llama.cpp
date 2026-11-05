@@ -6,8 +6,8 @@
 	import { ActionIcon, ModelId } from '$lib/components/app';
 	import { ModelRowDownloadState } from '$lib/enums';
 	import { HuggingFaceService, ModelsService } from '$lib/services';
-	import { deviceStore, modelsStore, uiStore } from '$lib/stores';
-	import type { ModelDownloadEntry, ModelOption, ModelSidecarBadge } from '$lib/types';
+	import { modelsStore, uiStore } from '$lib/stores';
+	import type { ModelDownloadEntry, ModelSidecarBadge } from '$lib/types';
 
 	interface Props {
 		/** One entry from the status feed: an in-flight or paused download. */
@@ -25,14 +25,6 @@
 	/** A draft still coming down badges the id, an on-disk one keeps its sub-line. */
 	let pendingDrafts = $derived(sidecars.filter((badge) => badge.pending));
 	let onDiskDrafts = $derived(sidecars.filter((badge) => !badge.pending));
-
-	/** The download stands for its model, so the row's info action can open on it. */
-	let option = $derived<ModelOption>({
-		capabilities: [],
-		id: entry.repoWithTag,
-		model: entry.repoWithTag,
-		name: modelsStore.toDisplayName(entry.repoWithTag)
-	});
 
 	let percent = $derived(
 		entry.progress && entry.progress.totalBytes > 0
@@ -81,11 +73,7 @@
 		<button
 			aria-label="Manage model"
 			class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
-			onclick={() =>
-				// a phone has no manager: its information dialog takes the row
-				deviceStore.isMobile
-					? uiStore.openModelInformation(option)
-					: uiStore.openModelsManager(entry.repoWithTag)}
+			onclick={() => uiStore.openModelDetails(entry.repoWithTag)}
 			type="button"
 		>
 			{#if orgName}
@@ -143,11 +131,7 @@
 			class="pointer-events-none h-5 w-5 shrink-0 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 hover:text-foreground [@media(pointer:coarse)]:pointer-events-auto [@media(pointer:coarse)]:opacity-100"
 			icon={Info}
 			iconSize="h-4 w-4"
-			onclick={() =>
-				// a phone has no manager: its information dialog takes the icon
-				deviceStore.isMobile
-					? uiStore.openModelInformation(option)
-					: uiStore.openModelsManager(entry.repoWithTag)}
+			onclick={() => uiStore.openModelDetails(entry.repoWithTag)}
 			tooltip="Manage model"
 			tooltipAsTitle
 		/>

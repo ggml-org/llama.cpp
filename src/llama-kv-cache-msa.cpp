@@ -20,21 +20,20 @@ llama_kv_cache_msa::llama_kv_cache_msa(
                      bool   unified,
                  uint32_t   kv_size,
                  uint32_t   n_seq_max,
-                 uint32_t   n_pad,
                  uint32_t   n_swa,
            llama_swa_type   swa_type,
     const layer_filter_cb & filter,
     const layer_filter_cb & filter_idx,
     const  layer_reuse_cb & reuse) :
     hparams_idx(model.hparams),
-    n_stream(unified ? 1 : n_seq_max), n_seq_max(n_seq_max), n_pad(n_pad),
+    n_stream(unified ? 1 : n_seq_max), n_seq_max(n_seq_max),
     n_swa(n_swa), swa_type(swa_type) {
 
     LLAMA_LOG_INFO("%s: creating main KV cache, size = %u cells\n", __func__, kv_size);
 
     kv_base = std::make_unique<llama_kv_cache>(
             model, no_alloc, model.hparams, type_k, type_v,
-            v_trans, offload, unified, kv_size, n_seq_max, n_pad,
+            v_trans, offload, unified, kv_size, n_seq_max,
             n_swa, swa_type, nullptr, filter, reuse, nullptr);
 
     // the MSA indexer uses a single key head per layer
@@ -46,7 +45,7 @@ llama_kv_cache_msa::llama_kv_cache_msa(
 
     kv_idx = std::make_unique<llama_kv_cache>(
             model, no_alloc, hparams_idx, type_k, type_v,
-            v_trans, offload, unified, kv_size, n_seq_max, n_pad,
+            v_trans, offload, unified, kv_size, n_seq_max,
             n_swa, swa_type, nullptr, filter_idx, reuse, nullptr);
 }
 
@@ -262,7 +261,7 @@ const llama_kv_cache_context * llama_kv_cache_msa_context::get_idx() const {
 
 uint32_t llama_kv_cache_msa_context::get_n_pos() const {
     // pad the value so that the graph remains constant across batches and can be reused
-    const uint32_t n_pad_cur = std::max(kv->get_n_pad(), 256u);
+    const uint32_t n_pad = 256;
 
     llama_pos pos_max = -1;
 
@@ -270,7 +269,7 @@ uint32_t llama_kv_cache_msa_context::get_n_pos() const {
         pos_max = std::max(pos_max, kv->seq_pos_max(seq_id));
     }
 
-    return std::max(n_pad_cur, GGML_PAD((uint32_t) (pos_max + 1), n_pad_cur));
+    return std::max(n_pad, GGML_PAD((uint32_t) (pos_max + 1), n_pad));
 }
 
 void llama_kv_cache_msa_context::set_input_cell_pos(ggml_tensor * dst, const llama_ubatch * ubatch, int32_t div) const {

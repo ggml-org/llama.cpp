@@ -34,6 +34,7 @@
 #include "work-queue.h"
 #include "hex-profile.h"
 #include "allreduce-ops.h"
+#include "dsv4-hc-ops.h"
 #include "htp-fence.h"
 
 #define HMX_QUEUE_CAPACITY     128
@@ -677,7 +678,7 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
         dma_ptr_curr += size_dma_q;
     }
 
-    ctx->ddr_spad_size = 512 * 1024; // 512 KB
+    ctx->ddr_spad_size = HTP_DDR_SPAD_SIZE;
     ctx->ddr_spad_base = memalign(128, ctx->ddr_spad_size);
 
     void * wq_ptr = (void *) ((uintptr_t) block + offset_wq);
@@ -1007,6 +1008,9 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_CUMSUM:
             return op_cumsum(octx);
 
+        case HTP_OP_TOP_K_MASK:
+            return op_top_k_mask(octx);
+
         case HTP_OP_FILL:
             return op_fill(octx);
 
@@ -1025,6 +1029,12 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_IM2COL_3D:
             return op_im2col_3d(octx);
 
+        case HTP_OP_CONV_2D:
+            return op_conv_2d(octx);
+
+        case HTP_OP_CONV_2D_DW:
+            return op_conv_2d_dw(octx);
+
         case HTP_OP_ROLL:
             return op_roll(octx);
 
@@ -1034,14 +1044,26 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_POOL_1D:
             return op_pool_1d(octx);
 
+        case HTP_OP_DSV4_HC_PRE:
+            return op_dsv4_hc_pre(octx);
+
+        case HTP_OP_DSV4_HC_POST:
+            return op_dsv4_hc_post(octx);
+
         case HTP_OP_CONCAT:
             return op_concat(octx);
 
         case HTP_OP_GATED_DELTA_NET:
             return op_gated_delta_net(octx);
 
+        case HTP_OP_LIGHTNING_INDEXER:
+            return op_lightning_indexer(octx);
+
         case HTP_OP_TRI:
             return op_unary(octx);
+
+        case HTP_OP_UPSCALE:
+            return op_upscale(octx);
 
         case HTP_OP_INVALID:
             break;

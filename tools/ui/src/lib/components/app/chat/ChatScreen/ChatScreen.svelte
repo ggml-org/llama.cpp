@@ -2,6 +2,7 @@
 	import ChatScreenActionScrollDown from './ChatScreenActionScrollDown.svelte';
 	import ChatScreenDialogsAndAlerts from './ChatScreenDialogsAndAlerts.svelte';
 	import ChatScreenGreeting from './ChatScreenGreeting.svelte';
+	import { disableScrollHandling, onNavigate } from '$app/navigation';
 	import { page } from '$app/state';
 	import {
 		ChatMessages,
@@ -21,12 +22,11 @@
 		CHAT_FORM_MOVE_TO_BOTTOM_OUT_MS,
 		ROUTES
 	} from '$lib/constants';
-	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
 	import { useChatScreenActiveModel } from '$lib/hooks/use-chat-screen-active-model.svelte';
 	import { useChatScreenDragAndDrop } from '$lib/hooks/use-chat-screen-drag-and-drop.svelte';
 	import { useChatScreenFileUpload } from '$lib/hooks/use-chat-screen-file-upload.svelte';
-	import { useChatScreenScroll } from '$lib/hooks/use-chat-screen-scroll.svelte';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
+	import { createStickToBottom } from '$lib/hooks/use-stick-to-bottom.svelte';
 	import {
 		chatStore,
 		conversationsStore,
@@ -35,18 +35,11 @@
 		settingsStore
 	} from '$lib/stores';
 	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
-	import { onDestroy, onMount, tick, untrack } from 'svelte';
+	import { tick, untrack } from 'svelte';
 
 	let { showCenteredEmpty = false } = $props();
 
-	let disableAutoScroll = $derived(
-		Boolean(settingsStore.config.disableAutoScroll) || deviceStore.isMobile
-	);
-	let isMobileUserScrolledUp = $state(false);
-	let mobileScrollDownHint = $state(false);
-	let mobileScrollDownHintLockedUntil = $state(0);
 	let emptyFileNames = $state<string[]>([]);
-	let initialMessage = $state('');
 	let showDeleteDialog = $state(false);
 	let showEmptyFileDialog = $state(false);
 	let isEmpty = $derived(
@@ -70,8 +63,10 @@
 		return '0.5rem';
 	});
 
-	const autoScroll = createAutoScrollController();
-	const scroll = useChatScreenScroll(autoScroll);
+	// The page is the scroller: it follows new content while the reader sits at
+	// the bottom, and otherwise leaves their position alone.
+	const stick = createStickToBottom();
+	let stickPin: HTMLDivElement | undefined = $state();
 	const activeModel = useChatScreenActiveModel();
 	const fileUpload = useChatScreenFileUpload({
 		activeModelId: () => activeModel.activeModelId,
@@ -91,19 +86,6 @@
 			}
 		}
 	});
-
-	function handleMobileScroll() {
-		if (!deviceStore.isMobile) return;
-
-		const container = scroll.chatScrollContainer;
-
-		if (!container) return;
-
-		const distanceFromBottom =
-			container.scrollHeight - container.clientHeight - container.scrollTop;
-
-		isMobileUserScrolledUp = distanceFromBottom > 300;
-	}
 
 	async function handleDeleteConfirm() {
 		const conversation = conversationsStore.activeConversation;
@@ -136,7 +118,8 @@
 			return false;
 		}
 
-		handleSendLikeScroll();
+		// Sending re-arms following: the reply streams in under the message.
+		stick.scrollToBottom();
 
 		await chatStore.sendMessage(message, result?.extras);
 
@@ -145,12 +128,20 @@
 
 	let lastScrolledConversationId: string | null = null;
 
-	// Lands at the bottom of a conversation the first time its messages
-	// render, whether the route comes from another conversation, from a
-	// non-conversation route or from a page refresh. Runs before the first
-	// paint of the new rows, and the landing pin keeps the bottom in place
-	// while the rows settle. Independent of the auto-scroll setting, which
-	// only governs following a streaming response.
+	// Every navigation lands anew: this screen outlives its routes, so coming
+	// back to the conversation it last landed on (via the new-chat screen)
+	// must not count as already landed. The landing also owns the scroll
+	// position, so SvelteKit's own reset (or restore, on back/forward) would
+	// only move the previous conversation, still on screen, to its top.
+	onNavigate((navigation) => {
+		lastScrolledConversationId = null;
+
+		if (navigation.to?.params?.id) disableScrollHandling();
+	});
+
+	// Lands at the bottom of a conversation the first time its messages render.
+	// The resize observer keeps it there while the list settles (lazy rows,
+	// syntax highlighting, images) without polling for a stable height.
 	async function handleMessagesReady(messageCount: number) {
 		if (messageCount === 0) return;
 
@@ -160,10 +151,7 @@
 
 		lastScrolledConversationId = id;
 		await tick();
-
-		if (conversationsStore.activeConversation?.id !== id) return;
-
-		scroll.landAtBottom();
+		stick.scrollToBottom();
 	}
 
 	/**
@@ -214,53 +202,6 @@
 		if (isEmpty !== isFormCentered) untrack(() => void moveForm());
 	});
 
-	function handleSendLikeScroll() {
-		if (!deviceStore.isMobile) {
-			autoScroll.enable();
-		}
-
-		setTimeout(() => {
-			const container = scroll.chatScrollContainer;
-
-			if (!container) return;
-
-			// the bubble of the message just sent: the last user bubble, whether or
-			// not the answer row below it has rendered yet
-			const userBubbles = container.querySelectorAll<HTMLElement>(
-				'.chat-message-user .chat-message-user-bubble'
-			);
-			const lastUserBubble = userBubbles[userBubbles.length - 1] ?? null;
-
-			if (deviceStore.isMobile) {
-				// Keep the last user message bubble just above the input on mobile
-				const bubbleHeight = lastUserBubble?.scrollHeight ?? 0;
-				const baseHeight = container.scrollHeight - innerHeight;
-
-				container.scrollTo({
-					behavior: 'smooth',
-					top: bubbleHeight > 0 ? baseHeight - bubbleHeight : baseHeight
-				});
-			} else if (lastUserBubble) {
-				// On desktop, place the last user message near the top of the viewport
-				const topPadding = 24;
-				const bubbleRect = lastUserBubble.getBoundingClientRect();
-
-				container.scrollTo({
-					behavior: 'smooth',
-					top: Math.max(0, container.scrollTop + bubbleRect.top - topPadding)
-				});
-			} else {
-				autoScroll.scrollToBottom();
-			}
-		}, 100);
-
-		if (deviceStore.isMobile) {
-			autoScroll.setDisabled(disableAutoScroll);
-			mobileScrollDownHint = true;
-			mobileScrollDownHintLockedUntil = Date.now() + 500;
-		}
-	}
-
 	function handleErrorDialogOpenChange(open: boolean) {
 		if (!open) {
 			chatStore.dismissErrorDialog();
@@ -268,65 +209,25 @@
 	}
 
 	async function handleSystemPromptAdd(draft: { message: string; files: ChatUploadedFile[] }) {
-		if (draft.message || draft.files.length > 0) {
-			chatStore.savePendingDraft(draft.message, draft.files);
-		}
-
-		await chatStore.addSystemPrompt();
+		await chatStore.addSystemPrompt(draft);
 	}
 
 	$effect(() => {
-		const shouldDisableAutoScroll =
-			settingsStore.config.disableAutoScroll ||
-			(deviceStore.isMobile && isCurrentConversationLoading);
-
-		autoScroll.setDisabled(shouldDisableAutoScroll);
-
-		if (!shouldDisableAutoScroll) {
-			autoScroll.enable();
-		}
+		stick.setEnabled(!settingsStore.config.disableAutoScroll);
 	});
 
-	onMount(() => {
-		const pendingDraft = chatStore.consumePendingDraft();
+	$effect(() => {
+		stick.attach(document.documentElement, document.body, stickPin);
 
-		if (pendingDraft) {
-			initialMessage = pendingDraft.message;
-			fileUpload.uploadedFiles = pendingDraft.files;
-		}
-
-		autoScroll.startObserving();
-
-		if (!disableAutoScroll) {
-			autoScroll.enable();
-		}
-
-		if (deviceStore.isMobile && isCurrentConversationLoading) {
-			mobileScrollDownHint = true;
-			mobileScrollDownHintLockedUntil = Date.now() + 500;
-		}
-
-		handleMobileScroll();
+		return () => stick.detach();
 	});
-
-	onDestroy(() => autoScroll.destroy());
 </script>
 
 {#if dragAndDrop.isDragOver}
 	<ChatScreenDragOverlay />
 {/if}
 
-<svelte:window
-	onkeydown={handleKeydown}
-	onscroll={(e) => {
-		scroll.handleScroll(e);
-		handleMobileScroll();
-
-		if (e.isTrusted && Date.now() > mobileScrollDownHintLockedUntil) {
-			mobileScrollDownHint = false;
-		}
-	}}
-/>
+<svelte:window onkeydown={handleKeydown} onscroll={() => stick.handleScroll()} />
 
 {#if isServerLoading}
 	<ServerLoadingSplash />
@@ -344,11 +245,11 @@
 			<ChatMessages
 				messages={conversationsStore.activeMessages}
 				onMessagesReady={handleMessagesReady}
-				onUserAction={() => {
-					handleSendLikeScroll();
-				}}
 			/>
 		{/if}
+
+		<!-- the scroll anchor that keeps the page at its bottom, see createStickToBottom -->
+		<div bind:this={stickPin} aria-hidden="true" class="stick-to-bottom-pin"></div>
 
 		<div
 			bind:this={formWrapper}
@@ -379,16 +280,8 @@
 			{/if}
 
 			<div class="pointer-events-none flex flex-col gap-6 items-center w-full">
-				{#if (deviceStore.isMobile ? mobileScrollDownHint || isMobileUserScrolledUp : autoScroll.userScrolledUp) && page.url.hash.includes(ROUTES.CHAT) && page.params.id}
-					<ChatScreenActionScrollDown
-						onclick={() => {
-							mobileScrollDownHint = false;
-							scroll.chatScrollContainer?.scrollTo({
-								behavior: 'smooth',
-								top: scroll.chatScrollContainer.scrollHeight
-							});
-						}}
-					/>
+				{#if !stick.atBottom && page.url.hash.includes(ROUTES.CHAT) && page.params.id}
+					<ChatScreenActionScrollDown onclick={() => stick.scrollToBottom('smooth')} />
 				{/if}
 			</div>
 
@@ -396,7 +289,6 @@
 				bind:uploadedFiles={fileUpload.uploadedFiles}
 				class="pointer-events-auto conversation-chat-form"
 				disabled={hasPropsError || chatStore.isEditing()}
-				{initialMessage}
 				isLoading={isCurrentConversationLoading}
 				onFileRemove={fileUpload.handleFileRemove}
 				onFileUpload={fileUpload.handleFileUpload}

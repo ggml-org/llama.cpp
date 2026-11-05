@@ -72,6 +72,8 @@ However, A6x GPUs in phones are likely not supported due to the outdated driver 
 | MXFP4                  | Support                    |
 | IQ4_NL                 | Support                    |
 
+`MUL_MAT_ID` accepts an expert id of `-1` and writes zeros to that slot. `ADD_ID` adds no bias for `-1`, including in fused MoE operations.
+
 ## Model Preparation
 
 Since common quantizations are supported now, it is recommanded to download GGUF models directly from Huggingface.
