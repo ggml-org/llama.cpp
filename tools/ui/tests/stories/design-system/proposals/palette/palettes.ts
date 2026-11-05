@@ -1,5 +1,5 @@
-// Colour for communications (posters, the site, social): a neutral base of the design system's greys, and the Haas
-// palette, which adds a Swiss blue, sky, navy, cool grey, cream and a vermilion accent on top of it. The UI itself
+// Colour for communications (posters, the site, social): a neutral base of the design system's greys, and the poudre
+// palette, which adds a powdered Swiss blue, sky, navy, warm stone, beige and a terracotta accent on top of it. The UI itself
 // stays neutral and uses colour only for status (in the tokens; see DESIGN.md). The brand orange (#f65e00) stays with the
 // llama.cpp logotype.
 
@@ -71,36 +71,38 @@ export const basePalette: Palette = {
 	]
 };
 
-/** After the classic Swiss specimen boards: the base made livelier, with a Swiss blue as the dark field, a deeper
- *  cool grey, cream, and a vermilion accent (redder and calmer than the brand orange, which stays with the logotype);
- *  saturated sky, teal, saffron and pink appear in small doses on the boards. */
-const SWISS = 'linear-gradient(160deg, #3474bd 0%, #2d67ab 55%, #275b99 100%)';
-const GREY = 'linear-gradient(160deg, #8a99a4 0%, #b0bbc2 55%, #d3d9dd 100%)';
+/** The poudre palette: the classic Swiss specimen boards' hues, powdered towards the beige and blues of the Llama Sans
+ *  Display In use story and pulled to the design system's status hues: a powdered Swiss blue as the dark field, warm
+ *  stone greys, beige, and a terracotta accent (between the danger red and clay; the brand orange stays with the
+ *  logotype), with sky, teal, saffron and a poudre pink in small doses. */
+const SWISS = 'linear-gradient(160deg, #517dae 0%, #4671a5 55%, #3d6293 100%)';
+const GREY = 'linear-gradient(160deg, #a69d93 0%, #bdb6ad 55%, #d9d3cc 100%)';
 
-export const haasPalette: Palette = {
-	name: 'Haas',
-	note: 'Livelier: a Swiss blue field, a deeper cool grey, cream and a vermilion accent, with sky, teal, saffron and pink in small doses',
+export const poudrePalette: Palette = {
+	name: 'Poudre',
+	note: 'Powdered: a soft Swiss blue field, warm stone greys, beige and a terracotta accent, with sky, teal, saffron and poudre pink in small doses',
 	roles: {
 		...base,
-		accent: '#d9553b',
+		accent: '#c97152',
 		accentInk: '#ffffff',
 		deep: SWISS,
-		deepTone: '#245a9a',
+		deepTone: '#3d6293',
+		ink: '#2b2620',
 		soft: GREY,
-		softInk: '#0f1f33',
-		surface: '#fbf9f6',
-		warm: '#f2e9dc'
+		softInk: '#2b2620',
+		surface: '#faf7f3',
+		warm: '#efe9df'
 	},
 	swatches: [
-		{ name: 'Swiss blue', value: '#2f6db5' },
-		{ name: 'Sky', value: '#7eb6e6' },
+		{ name: 'Swiss blue', value: '#4671a5' },
+		{ name: 'Sky', value: '#9bbfdf' },
 		{ name: 'Navy', value: NAVY },
-		{ name: 'Cool grey', value: GREY },
-		{ name: 'Cream', value: '#f2e9dc' },
-		{ name: 'Vermilion · accent', value: '#d9553b' },
-		{ name: 'Saffron', value: '#eda634' },
-		{ name: 'Teal', value: '#4fa5a0' },
-		{ name: 'Pink', value: '#efb8bf' },
-		{ name: 'Sage', value: '#d8dfd1' }
+		{ name: 'Stone', value: GREY },
+		{ name: 'Beige', value: '#efe9df' },
+		{ name: 'Terracotta · accent', value: '#c97152' },
+		{ name: 'Saffron', value: '#e1b671' },
+		{ name: 'Teal', value: '#70a49e' },
+		{ name: 'Poudre', value: '#edc6c6' },
+		{ name: 'Sage', value: '#daddcc' }
 	]
 };
