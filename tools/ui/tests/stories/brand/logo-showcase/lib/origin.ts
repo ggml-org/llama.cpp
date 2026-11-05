@@ -45,36 +45,36 @@ export const steps = [
 		from: 4.2,
 		name: 'Bolt',
 		note: 'Then the idea: a lightning bolt, for speed, which is what llama.cpp is about.',
-		to: 5.5
+		to: 5.1
 	},
 	// the lean isn't a move: the L snaps to 30° in the bolt's flash (see Morph); this step only carries its caption
 	{
 		ease: linear,
-		from: 5.55,
+		from: 5.15,
 		name: 'Lean',
 		note: 'In a flash the bolt leans the L 30°: every edge runs at 60°, with the bolt inside.',
-		to: 5.57
+		to: 5.17
 	},
 	// the grid the lean puts the L on draws out from the icon across the frame, and stays faint until the fill
 	{
 		ease: linear,
-		from: 5.95,
+		from: 5.3,
 		name: 'Grid',
 		note: 'Every edge now lies on a grid of ideal triangles, 120 a side: the L is built on 60°.',
-		to: 6.85
+		to: 5.9
 	},
 	// two wheels roll into the outer corners, then the corners round onto them (see Morph)
 	{
 		ease: linear,
-		from: 7.15,
+		from: 6.0,
 		name: 'Soften',
 		note: 'Two wheels turn into the outer corners, and only those two corners round onto them.',
-		to: 8.45
+		to: 6.9
 	},
-	{ ease: inOutCubic, from: 8.75, name: 'Fill', note: 'Fill it in: the Llama icon.', to: 9.25 },
-	{ ease: linear, from: 9.55, name: 'Blueprint', note: 'And this is how it is built.', to: 10.8 }
+	{ ease: inOutCubic, from: 7.0, name: 'Fill', note: 'Fill it in: the Llama icon.', to: 7.35 },
+	{ ease: linear, from: 7.5, name: 'Blueprint', note: 'And this is how it is built.', to: 8.75 }
 ];
-export const END = 10.95;
+export const END = 8.9;
 /** A step's index by name, so the code that times things off a step doesn't depend on the order. */
 export const STEP = Object.fromEntries(steps.map((s, i) => [s.name, i])) as Record<string, number>;
 export const BLUEPRINT_STEP = STEP.Blueprint;
