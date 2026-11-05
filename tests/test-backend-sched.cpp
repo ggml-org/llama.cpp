@@ -176,7 +176,7 @@ struct helper_graph {
     std::vector<ggml_tensor *> nodes;
     std::vector<int>           backend_id;
 
-    helper_graph(ggml_context * ctx, size_t graph_size) : gf(ggml_new_graph_custom(ctx, graph_size, false)) {}
+    helper_graph(ggml_context * ctx, size_t graph_size) : gf(ggml_new_graph_custom(ctx, graph_size, /*grads =*/ false)) {}
 
     ggml_tensor * add(ggml_tensor * node, int backend) {
         nodes.push_back(node);
