@@ -3,11 +3,11 @@
 	footer, a hero and the X header banner, so the proportion is judged small and large, not only at one size.
 -->
 <script lang="ts">
-	import { step } from './geometry';
+	import { step, stepAt } from './geometry';
 	import LockupMark from './LockupMark.svelte';
 	import { Button } from '$lib/components/ui/button';
 
-	const steps = [step(3), step(4)];
+	const steps = [step(3), stepAt(1.24, 'Step 3.5'), step(4)];
 
 	const HERO =
 		'radial-gradient(ellipse at 15% 10%, #dcecfb 0%, transparent 55%), radial-gradient(ellipse at 90% 95%, #e8f2fc 0%, transparent 50%), linear-gradient(160deg, #c4ddf6 0%, #d0e4f7 55%, #dfecf9 100%)';
@@ -18,8 +18,9 @@
 		<h1 class="text-3xl font-bold tracking-tight">In context</h1>
 
 		<p class="max-w-[64ch] text-sm text-muted-foreground">
-			Step 3 (the icon 1.36× the cap height) and step 4 (1.18×) where the lockup is used, at real
-			sizes. A proportion can hold up large and fall apart small, or the other way round.
+			Step 3 (the icon 1.36× the cap height), step 3.5 (1.24×) and step 4 (1.18×) where the lockup
+			is used, at real sizes. A proportion can hold up large and fall apart small, or the other way
+			round.
 		</p>
 	</header>
 
@@ -35,9 +36,9 @@
 				<p class="text-xs text-muted-foreground">{note}</p>
 			</div>
 
-			<div class="grid gap-4 lg:grid-cols-2">
+			<div class="grid gap-4 lg:grid-cols-3">
 				{#each steps as s (s.label)}
-					<figure class="m-0 grid gap-2">
+					<figure class="m-0 grid min-w-0 gap-2">
 						{@render body(s)}
 
 						<figcaption class="font-mono text-xs text-muted-foreground">
@@ -53,11 +54,14 @@
 		<div class="grid gap-2">
 			{#each [{ bg: 'bg-background', ink: 'var(--foreground)' }] as t (t.bg)}
 				<div
-					class="flex h-14 items-center justify-between gap-4 rounded-card border border-border/60 {t.bg} px-4"
+					class="@container flex h-14 min-w-0 items-center justify-between gap-4 overflow-hidden rounded-card border border-border/60 {t.bg} px-4"
 				>
 					<LockupMark ink={t.ink} name="llama.cpp" size={18} step={s} />
 
-					<nav class="flex items-center gap-4 text-body-sm text-muted-foreground max-sm:hidden">
+					<!-- the links step aside when the column is narrow -->
+					<nav
+						class="flex items-center gap-4 text-body-sm text-muted-foreground @max-[30rem]:hidden"
+					>
 						<span>Models</span><span>Docs</span><span>GitHub</span>
 					</nav>
 

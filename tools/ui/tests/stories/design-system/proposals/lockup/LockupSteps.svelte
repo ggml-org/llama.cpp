@@ -7,6 +7,7 @@
 -->
 <script lang="ts">
 	import { PATHS, SIZE } from '../../../brand/logo-showcase/lib/logo';
+	import { stepAt } from './geometry';
 
 	const CAP = 710; // Llama Sans's cap height, in font units (the wordmark is set at 1000)
 	const FROM = { gap: 221.5 / 272.6, icon: 520 / 272.6 }; // today's lockup
@@ -29,7 +30,10 @@
 			icon: FROM.icon + (TO.icon - FROM.icon) * t,
 			label: i === STEPS - 1 ? 'The glyph' : `Step ${i}`
 		};
-	}).filter((_, i) => KEPT.includes(i));
+	})
+		.filter((_, i) => KEPT.includes(i))
+		// step 3.5: the icon 1.24× the cap height, between steps 3 and 4
+		.toSpliced(2, 0, stepAt(1.24, 'Step 3.5'));
 
 	const marks = [
 		{ first: 59, name: 'llama.cpp', split: 5 },
@@ -71,9 +75,10 @@
 		<h1 class="text-3xl font-bold tracking-tight">Lockup proposal</h1>
 
 		<p class="max-w-[64ch] text-sm text-muted-foreground">
-			Steps 1, 3 and 4 of {STEPS} even steps between today’s lockup (the icon 1.91× the cap height, a
-			0.81 cap gap) and the icon as a glyph of Llama Sans (1× the cap height, a 0.47 gap), and the glyph
-			itself. The wordmark is the same size in all of them, and the icon is centred on the capitals.
+			Steps 1, 3 and 4 of {STEPS} even steps, with step 3.5 (1.24×) between 3 and 4, between today’s lockup
+			(the icon 1.91× the cap height, a 0.81 cap gap) and the icon as a glyph of Llama Sans (1× the cap
+			height, a 0.47 gap), and the glyph itself. The wordmark is the same size in all of them, and the
+			icon is centred on the capitals.
 		</p>
 	</header>
 
