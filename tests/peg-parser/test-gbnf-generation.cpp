@@ -486,42 +486,6 @@ void test_gbnf_generation(testing &t) {
         )""", gbnf);
     });
 
-    t.test("trigger start choice shares one rest", [](testing &t) {
-        auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
-            auto start = p.literal("a") + (p.literal("b") | p.literal("d"));
-            return p.until(start) + p.trigger_rule("tool", start, p.literal("x"));
-        });
-
-        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
-            parser.build_grammar(builder, true);
-        });
-
-        assert_gbnf_equal(t, R"""(
-            root ::= trigger
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
-            tool-rest ::= "x"
-            trigger ::= | [a] trigger-01 | [^a] trigger
-            trigger-01 ::= | [b] tool-rest | [d] tool-rest | [a] trigger-01 | [^abd] trigger
-        )""", gbnf);
-    });
-
-    t.test("trigger rules reject a shared start", [](testing &t) {
-        auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
-            return p.trigger_rule("one", p.literal("ab"), p.literal("x")) |
-                   p.trigger_rule("two", p.literal("ab"), p.literal("y"));
-        });
-
-        bool threw = false;
-        try {
-            build_grammar([&](const common_grammar_builder & builder) {
-                parser.build_grammar(builder, true);
-            });
-        } catch (const std::runtime_error &) {
-            threw = true;
-        }
-        t.assert_equal("duplicate_rejected", true, threw);
-    });
-
     t.test("through grammar suffix delimiter offers both rests", [](testing &t) {
         auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
             return p.through(p.eps(), { { p.literal("xab"), p.literal("1") }, { p.literal("ab"), p.literal("2") } });

@@ -101,9 +101,6 @@ common_chat_params common_chat_params_init_harmony_xml(const common_chat_templat
                 gbnf_format_literal("\n") + " " + gbnf_format_literal(PARAM_CLOSE.substr(1)) + "?"));
             auto string_value = p.tool_arg_string_value(p.until_one_of(string_ends));
             auto arg_string   = p.rule("rfl-arg-string", p.through(string_value, p.tool_arg_close(p.literal(PARAM_CLOSE))));
-            // the parser also accepts a value that runs into the next tag, the grammar keeps requiring the closing tag
-            auto missing_close = string_value + p.tool_arg_close(p.literal("\n") + p.peek(p.optional(p.literal("\n")) + next_open));
-            arg_string = p.gbnf(arg_string | missing_close, "rfl-arg-string");
             auto arg_sep = p.optional(p.literal("\n"));
 
             std::string call_close_gbnf = gbnf_format_literal("<|end|>");

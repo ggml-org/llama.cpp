@@ -224,7 +224,7 @@ common_chat_params common_chat_params_init_gemma4(const common_chat_template &  
         if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
             // Gemma4 tool calling syntax
             // Rules should match traversal logic in gemma4_to_json()
-            p.rule("gemma4-string-content", p.until(string_delim | channel_start));
+            p.rule("gemma4-string-content", p.until(string_delim));
             p.rule("gemma4-string", string_delim + p.ref("gemma4-string-content") + string_delim);
             p.rule("gemma4-bool", p.json_bool());
             p.rule("gemma4-null", p.json_null());
