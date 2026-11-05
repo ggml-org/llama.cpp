@@ -13310,6 +13310,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
 
     // Qwen3-VL-8B https://github.com/ggml-org/llama.cpp/issues/17012
     test_cases.emplace_back(new test_flash_attn_ext(72, 72, 16, {1, 1}, 5776, 5776, false, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+    // prompt batches on a q4_0 KV cache (Qwen3.8-27B: D=256, 4 KV heads, GQA 6), which run the tile
+    // kernel on the F16 copy of K/V (from 1024 KV positions on, prompt batches take the MKL kernel)
+    for (int kv : { 512, 768 }) {
+        test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, { 6, 1 }, kv, 512, true, false, 0, 0,
+                                                        GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0));
+    }
 
     // Sparse flash attention (n_kv_max hint) decode across KV depths.
     // Shapes: 576/512 DeepSeek MLA, 512/512 DeepSeek-V4/GLM-5.2, 256/256 gqa12 Qwen QSA.
