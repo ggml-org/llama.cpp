@@ -118,8 +118,5 @@ ggml_tensor * llm_build_lfm_base::build_lfm_moe_ffn(ggml_tensor * cur,
             static_cast<llama_expert_gating_func_type>(hparams.expert_gating_func),
             il,
             nullptr,
-            nullptr,
-            model.layers[il].ffn_up_exps_s,
-            model.layers[il].ffn_gate_exps_s,
-            model.layers[il].ffn_down_exps_s);
+            nullptr);
 }

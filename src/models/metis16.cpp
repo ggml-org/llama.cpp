@@ -311,7 +311,7 @@ llama_model_metis16::graph::graph(const llm_graph_params & params) :
                 ggml_tensor * K = ggml_cont(ctx0, ggml_view_3d(ctx0, qkv, n_hd, n_head_kv, n_tokens, n_hd*es, qkv->nb[1], n_hd*n_head*es));
                 ggml_tensor * V = ggml_cont(ctx0, ggml_view_3d(ctx0, qkv, n_hd, n_head_kv, n_tokens, n_hd*es, qkv->nb[1], n_hd*(n_head + n_head_kv)*es));
 
-                cur = build_attn(inp->get_attn(), layer.wo, nullptr, nullptr, Q, K, V, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_hd)), il);
+                cur = build_attn(inp->get_attn(), layer.wo, nullptr, Q, K, V, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_hd)), il);
             } else {
                 cur = build_mamba2_layer(inp->get_recr(), cur, ubatch, il);
             }
@@ -329,11 +329,11 @@ llama_model_metis16::graph::graph(const llm_graph_params & params) :
 
                 ggml_tensor * moe_out = build_moe_ffn(latent, nullptr, nullptr, nullptr, layer.ffn_down_exps, nullptr,
                         n_exp, n_used, LLM_FFN_SILU, false, 0.0f, LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT, il_p,
-                        logits, layer.ffn_gate_up_exps, nullptr, nullptr, nullptr, selected);
+                        logits, layer.ffn_gate_up_exps, selected);
                 ggml_tensor * shexp = build_ffn(latent,
-                        layer.ffn_up_shexp,   NULL, NULL,
-                        layer.ffn_gate_shexp, NULL, NULL,
-                        layer.ffn_down_shexp, NULL, NULL,
+                        layer.ffn_up_shexp,   NULL,
+                        layer.ffn_gate_shexp, NULL,
+                        layer.ffn_down_shexp, NULL,
                         NULL, LLM_FFN_SILU, LLM_FFN_PAR, il_p);
                 cur = ggml_mul_mat(ctx0, layer.ffn_latent_up, ggml_add(ctx0, moe_out, shexp));
                 cb(cur, "ffn_out", il);
