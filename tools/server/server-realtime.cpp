@@ -569,6 +569,10 @@ struct realtime_conversation {
 
     void on_session_update(const json & ev) {
         const json session = ev.value("session", json::object());
+        if (!session.is_object()) {
+            send_error("session.update: session must be an object");
+            return;
+        }
         if (session.contains("type") && session["type"].is_string() && session["type"] != type) {
             const std::string t = session["type"];
             if (t != "realtime" && t != "transcription") {
