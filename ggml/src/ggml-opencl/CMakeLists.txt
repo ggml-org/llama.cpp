@@ -73,6 +73,7 @@ ggml_add_backend_library(${TARGET_NAME}
                          ops/top_k.cpp
                          ops/top_k_mask.cpp
                          ops/argsort.cpp
+                         ops/dsv4_hc.cpp
                          ops/sum_rows.cpp
                          ops/cumsum.cpp
                          ops/glu.cpp

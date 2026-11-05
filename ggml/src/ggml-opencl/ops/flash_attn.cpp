@@ -440,7 +440,8 @@ static void ggml_opencl_ensure_fa_f32_f16_mq_decode(ggml_backend_opencl_context 
     }
 
     const bool cluster = dk == 64 || dk == 128;
-    const int head_sub = cluster ? 2 : (gqa == 8 ? (dk == 512 ? 4 : 2) : 1);
+    const int head_sub = gqa == 16 ? (cluster ? 4 : 8) :
+                         cluster   ? 2 : (gqa == 8 ? (dk == 512 ? 4 : 2) : 1);
     const int nsg_max = dk == 64 ? 1 : (dk == 128 || (gqa == 8 && dk == 256) ? 2 : 4);
     const char * kernel_name = cluster ? "flash_attn_f32_f16_q1_vec_mq_split_c8" : "flash_attn_f32_f16_q1_vec_mq_split";
     const std::string src = ggml_opencl_fa_kernel_src(FA_VARIANT_F32_F16);
@@ -448,7 +449,7 @@ static void ggml_opencl_ensure_fa_f32_f16_mq_decode(ggml_backend_opencl_context 
                              " -D FA_MQ_ONLY -D MQ_GQA=" + std::to_string(gqa / head_sub) +
                              " -D FA_HEAD_SUB=" + std::to_string(head_sub) +
                              (cluster ? " -D MQ_NSG=" + std::to_string(nsg_max) + " -D FA_CL_C=16" : " -D FA_MQ_SPLIT_ONLY") +
-                             (dk == 64 ? " -D FA_CL_MHRED -D FA_CL_MASK_BCAST" : "") +
+                             (dk == 64 ? " -D FA_CL_MHRED -D FA_CL_MASK_BCAST" : (cluster && gqa == 16 ? " -D FA_CL_MHRED" : "")) +
                              (gqa == 8 && dk == 256 ? " -D FA_Q1_Q_REG" : "");
     for (int nsg = nsg_max; nsg >= 1; nsg /= 2) {
         const size_t wg = 64 * nsg;
@@ -2614,11 +2615,18 @@ void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, const ggm
     const std::pair<int, int> dk_dv = {d_head_q, d_head_v};
     const int mq_gqa = n_head_kv > 0 ? n_head / n_head_kv : 0;
     const std::tuple<int, int, int> mq_decode_key = {d_head_q, d_head_v, mq_gqa};
+    // X2E also takes GQA 2 and 6 at head size 256 (gemma-4 SWA layers, Qwen3.5-27B),
+    // GQA 16 at 512 and 128 (gemma-4-12b global layers, muse-glimmer) and GQA 2 at 512 (gemma-4-E4B MTP drafter)
+    const bool mq_decode_x2e = backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E &&
+                               ((d_head_q == 256 && (mq_gqa == 2 || mq_gqa == 6)) ||
+                                (d_head_q == 512 && (mq_gqa == 2 || mq_gqa == 16)) ||
+                                (d_head_q == 128 && mq_gqa == 16 && backend_ctx->has_subgroup_shuffle));
     const bool mq_decode_shape = backend_ctx->gpu_family == ADRENO && is_mixed && n_q == 1 &&
                                  d_head_q == d_head_v && n_head_kv > 0 && n_head % n_head_kv == 0 &&
                                  ((((d_head_q == 64 && mq_gqa == 8) || (d_head_q == 128 && mq_gqa == 4)) &&
                                    backend_ctx->has_subgroup_shuffle) ||
-                                  ((d_head_q == 256 || d_head_q == 512) && (mq_gqa == 4 || mq_gqa == 8)));
+                                  ((d_head_q == 256 || d_head_q == 512) && (mq_gqa == 4 || mq_gqa == 8)) ||
+                                  mq_decode_x2e);
     if (mq_decode_shape && n_kv >= 32) {
         ggml_opencl_ensure_fa_f32_f16_mq_decode(backend_ctx, d_head_q, d_head_v, mq_gqa);
     }
