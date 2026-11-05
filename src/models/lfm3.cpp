@@ -121,7 +121,7 @@ llama_model_lfm3::graph<decision>::graph(const llm_graph_params & params) :
                 q, k, v, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
         cb(attn_out, "attn_out", il);
 
-        ggml_tensor * gate = build_lora_mm(model.layers[il].wqkv_gate, cur_in, model.layers[il].wqkv_gate_s);
+        ggml_tensor * gate = build_lora_mm(model.layers[il].wqkv_gate, cur_in);
         gate = ggml_sigmoid(ctx0, gate);
         cb(gate, "model.layers.{}.self_attn.gate", il);
 
