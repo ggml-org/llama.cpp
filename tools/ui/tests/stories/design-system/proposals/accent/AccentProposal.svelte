@@ -13,28 +13,20 @@
 	// contrast (WCAG) against neutral-50, beige-100, the hero's light blue, art-navy and the dark page
 	const candidates = [
 		{
-			contrast: { beige: 3.27, dark: 4.91, light: 3.78, navy: 3.1, sky: 3.03 },
-			hex: '#d9553b',
-			id: 'vermilion',
-			label: 'Vermilion',
-			note: 'Today’s art-orange: red-leaning, the warmest against the blue.',
-			value: 'oklch(0.619 0.171 33)'
-		},
-		{
 			contrast: { beige: 2.81, dark: 5.72, light: 3.25, navy: 3.61, sky: 2.61 },
 			hex: '#e3662f',
 			id: 'persimmon',
 			label: 'Persimmon',
-			note: 'A step toward true orange, still strong on white.',
+			note: 'A step from today’s vermilion toward true orange, still strong on white.',
 			value: 'oklch(0.655 0.17 42)'
 		},
 		{
-			contrast: { beige: 3.47, dark: 4.63, light: 4.01, navy: 2.92, sky: 3.22 },
-			hex: '#c65d26',
-			id: 'burnt',
-			label: 'Burnt orange',
-			note: 'Deeper and earthier: sits with beige, reads best on light grounds.',
-			value: 'oklch(0.6 0.15 45)'
+			contrast: { beige: 2.54, dark: 6.34, light: 2.93, navy: 4, sky: 2.35 },
+			hex: '#e9712b',
+			id: 'mandarin',
+			label: 'Mandarin',
+			note: 'Halfway between persimmon and tangerine: warm on white, clear on navy.',
+			value: 'oklch(0.68 0.168 47)'
 		},
 		{
 			contrast: { beige: 2.29, dark: 7.02, light: 2.65, navy: 4.43, sky: 2.12 },
@@ -43,18 +35,10 @@
 			label: 'Tangerine',
 			note: 'The blue’s complement: vivid, best on navy and ink.',
 			value: 'oklch(0.705 0.165 52)'
-		},
-		{
-			contrast: { beige: 1.84, dark: 8.76, light: 2.12, navy: 5.53, sky: 1.7 },
-			hex: '#ed9c55',
-			id: 'apricot',
-			label: 'Apricot',
-			note: 'Soft and light, after the beige: for fills, not text on light.',
-			value: 'oklch(0.76 0.13 60)'
 		}
 	];
 
-	let selected = $state('persimmon');
+	let selected = $state('mandarin');
 	const accent = $derived(candidates.find((c) => c.id === selected)!);
 
 	const grounds = [
