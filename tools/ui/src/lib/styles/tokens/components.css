@@ -134,7 +134,6 @@
 	--badge-outline-border: var(--line-default);
 	--badge-outline-background-hover: var(--surface-selected);
 	--badge-text: var(--fg-default);
-	--badge-highlight: var(--highlight-inner);
 
 	/* status lamps and orbs read the status tokens through orb-danger and friends */
 }

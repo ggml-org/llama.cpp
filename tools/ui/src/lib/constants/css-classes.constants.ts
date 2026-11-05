@@ -82,11 +82,11 @@ export const MODEL_ROW_TRAILING_CELL_CLASS =
 
 /** Neutral model badge: params, quantization, tags. */
 export const MODEL_BADGE_CLASS =
-	'matte-chip inline-flex w-fit shrink-0 items-center justify-center whitespace-nowrap rounded-md border border-border/50 px-1 py-0 text-[10px] font-mono bg-foreground/15 dark:bg-foreground/10 text-foreground [a&]:hover:bg-foreground/25';
+	'inline-flex w-fit shrink-0 items-center justify-center whitespace-nowrap rounded-md border border-border/50 px-1 py-0 text-[10px] font-mono bg-foreground/15 dark:bg-foreground/10 text-foreground [a&]:hover:bg-foreground/25';
 
 /** Emphasis model badge: draft sidecars and other markers that must stand out. */
 export const MODEL_VARIANT_BADGE_CLASS =
-	'matte-chip inline-flex w-fit shrink-0 items-center justify-center whitespace-nowrap rounded-md bg-primary px-1.5 py-0 text-[10px] font-mono font-semibold uppercase tracking-wide text-primary-foreground';
+	'inline-flex w-fit shrink-0 items-center justify-center whitespace-nowrap rounded-md bg-primary px-1.5 py-0 text-[10px] font-mono font-semibold uppercase tracking-wide text-primary-foreground';
 
 /** Default Tailwind size class for inline icon components (lucide, etc.). */
 export const ICON_CLASS_DEFAULT = 'size-icon-md';
