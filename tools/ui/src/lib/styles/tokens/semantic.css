@@ -92,14 +92,21 @@
 	--sheen-end: transparent;
 	--text-shadow-engraved: 0 1px 0 var(--white-a85);
 
-	/* elevation */
+	/* elevation: shadow-plugin's smooth stacks (many soft layers rather than one hard one); a control takes only
+	   the near layers of the small stack, so it sits close to the page */
 	--elevation-surface:
-		0 1px 3px var(--black-a8), 0 1px 2px -1px var(--black-a6), 0 6px 16px -10px var(--black-a8);
-	--elevation-control: 0 1px 3px var(--black-a10), 0 1px 2px -1px var(--black-a10);
-	--elevation-raised: 0 1px 3px var(--black-a6), 0 12px 32px -12px var(--black-a18);
+		0 17.54px 23.39px rgb(0 0 0 / 0.04), 0 9.4px 12.5px rgb(0 0 0 / 0.03),
+		0 5.25px 7px rgb(0 0 0 / 0.02), 0 2.79px 3.72px -2px rgb(0 0 0 / 0.01),
+		0 1.16px 1.5px rgb(0 0 0 / 0.01);
+	--elevation-control:
+		0 4px 10.5px rgb(0 0 0 / 0.03), 0 2.3px 5.8px rgb(0 0 0 / 0.03),
+		0 1.2px 3.1px rgb(0 0 0 / 0.03), 0 0.5px 1.3px rgb(0 0 0 / 0.04);
+	--elevation-raised:
+		0 25px 50px rgb(0 0 0 / 0.05), 0 12px 24px rgb(0 0 0 / 0.04), 0 6px 12px rgb(0 0 0 / 0.03),
+		0 3px 6px rgb(0 0 0 / 0.02), 0 1.5px 3px rgb(0 0 0 / 0.02);
 	--elevation-inset: inset 0 1px 2px var(--field-shade);
 	--elevation-pressed: inset 0 1px 2px var(--black-a12);
-	--elevation-tooltip: 0 4px 12px -4px var(--black-a30);
+	--elevation-tooltip: var(--elevation-surface);
 	--blur-surface: var(--length-24);
 	--blur-control: var(--length-12);
 }
@@ -173,10 +180,17 @@
 	--sheen-start: var(--white-a2);
 	--text-shadow-engraved: 0 -1px 0 var(--black-a55);
 
+	/* the same stacks, deeper, so they still read on a dark page */
 	--elevation-surface:
-		0 1px 3px var(--black-a30), 0 1px 2px -1px var(--black-a25), 0 6px 16px -10px var(--black-a35);
-	--elevation-control: 0 1px 2px var(--black-a30);
-	--elevation-raised: 0 1px 3px var(--black-a40), 0 16px 40px -12px var(--black-a60);
+		0 17.54px 23.39px rgb(0 0 0 / 0.28), 0 9.4px 12.5px rgb(0 0 0 / 0.21),
+		0 5.25px 7px rgb(0 0 0 / 0.14), 0 2.79px 3.72px -2px rgb(0 0 0 / 0.07),
+		0 1.16px 1.5px rgb(0 0 0 / 0.07);
+	--elevation-control:
+		0 4px 10.5px rgb(0 0 0 / 0.21), 0 2.3px 5.8px rgb(0 0 0 / 0.21),
+		0 1.2px 3.1px rgb(0 0 0 / 0.21), 0 0.5px 1.3px rgb(0 0 0 / 0.28);
+	--elevation-raised:
+		0 25px 50px rgb(0 0 0 / 0.35), 0 12px 24px rgb(0 0 0 / 0.28), 0 6px 12px rgb(0 0 0 / 0.21),
+		0 3px 6px rgb(0 0 0 / 0.14), 0 1.5px 3px rgb(0 0 0 / 0.14);
 	--elevation-pressed: inset 0 1px 2px var(--black-a40);
 }
 

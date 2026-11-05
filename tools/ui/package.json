@@ -118,5 +118,8 @@
 		"postcss-selector-parser": "7.1.6",
 		"sharp": "0.35.5",
 		"valibot": "1.4.2"
+	},
+	"dependencies": {
+		"shadow-plugin": "^2.1.1"
 	}
 }

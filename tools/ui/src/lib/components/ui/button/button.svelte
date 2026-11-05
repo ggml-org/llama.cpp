@@ -21,11 +21,11 @@
 			},
 			variant: {
 				default:
-					'bg-(--button-primary-background) text-(--button-primary-text) shadow-sm hover:bg-(--button-primary-background-hover)',
+					'bg-(--button-primary-background) text-(--button-primary-text) shadow-(--button-shadow) hover:bg-(--button-primary-background-hover)',
 				destructive:
-					'bg-(--button-danger-background) shadow-sm hover:bg-(--button-danger-background-hover) focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 text-(--button-danger-text)!',
+					'bg-(--button-danger-background) shadow-(--button-shadow) hover:bg-(--button-danger-background-hover) focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 text-(--button-danger-text)!',
 				ghost:
-					'hover:text-(--button-text) hover:bg-(--button-ghost-background-hover) backdrop-blur-sm',
+					'hover:text-(--button-text) hover:bg-(--button-ghost-background-hover) hover:shadow-(--button-shadow) backdrop-blur-sm',
 				outline:
 					'matte-key bg-(--button-outline-background) hover:text-(--button-text) hover:bg-(--button-ghost-background-hover) border border-(--button-outline-border)',
 				secondary:
