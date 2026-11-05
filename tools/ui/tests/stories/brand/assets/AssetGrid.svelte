@@ -36,6 +36,8 @@
 		ratio: string;
 		/** a profile picture: shown in the circle the platforms crop it to */
 		round?: boolean;
+		/** a transparent file: shown over a checkerboard in its ground's shades */
+		transparent?: boolean;
 	}
 
 	// social profiles: each platform's avatar and banners, light and dark, from logo/svg/social
@@ -85,41 +87,38 @@
 		title
 	}));
 
+	/**
+	 * Each icon and lockup in both of its versions, for light and for dark: on its background (-bg, shown as it is) and
+	 * transparent (shown over a checkerboard in the ground it's drawn for).
+	 */
+	function versions(name: string, path: (mode: string) => string, ratio: string): Asset[] {
+		return (['light', 'dark'] as const).flatMap((mode) => [
+			{
+				ground: 'cover' as const,
+				label: `${name}${mode === 'light' ? 'Light' : 'Dark'}, on background`,
+				path: `${path(mode)}-bg`,
+				ratio
+			},
+			{
+				ground: mode,
+				label: `${name}${mode === 'light' ? 'Light' : 'Dark'}, transparent`,
+				path: path(mode),
+				ratio,
+				transparent: true
+			}
+		]);
+	}
+
 	const logoGroups: { assets: Asset[]; note: string; title: string }[] = [
 		{
-			assets: [
-				{ ground: 'light', label: 'On light', path: 'icon/icon-light', ratio: '1 / 1' },
-				{ ground: 'dark', label: 'On dark', path: 'icon/icon-dark', ratio: '1 / 1' }
-			],
-			note: '600 × 600 · WebP and PNG at 1200 × 1200',
+			assets: versions('', (m) => `icon/icon-${m}`, '1 / 1'),
+			note: '600 × 600 · WebP and PNG at 1200 × 1200 · on background, optically centred',
 			title: 'Icon'
 		},
 		{
 			assets: [
-				{
-					ground: 'light',
-					label: 'Llama, on light',
-					path: 'lockup/llama/logo-llama-light',
-					ratio: '1773 / 600'
-				},
-				{
-					ground: 'dark',
-					label: 'Llama, on dark',
-					path: 'lockup/llama/logo-llama-dark',
-					ratio: '1773 / 600'
-				},
-				{
-					ground: 'light',
-					label: 'llama.cpp, on light',
-					path: 'lockup/llama-cpp/logo-llama-cpp-light',
-					ratio: '2413 / 600'
-				},
-				{
-					ground: 'dark',
-					label: 'llama.cpp, on dark',
-					path: 'lockup/llama-cpp/logo-llama-cpp-dark',
-					ratio: '2413 / 600'
-				}
+				...versions('Llama · ', (m) => `lockup/llama/logo-llama-${m}`, '1773 / 600'),
+				...versions('llama.cpp · ', (m) => `lockup/llama-cpp/logo-llama-cpp-${m}`, '2413 / 600')
 			],
 			note: 'The icon with the wordmark in Llama Sans Bold at its Display size · WebP and PNG at 2×',
 			title: 'Lockups'
@@ -147,7 +146,7 @@
 
 		<p class="max-w-[64ch] text-sm text-muted-foreground">
 			{section === 'logo'
-				? 'The Llama icon and the Llama and llama.cpp lockups'
+				? 'The Llama icon and the Llama and llama.cpp lockups, each on its background and transparent,'
 				: 'Profile pictures and banners for X, LinkedIn and YouTube, at each platform’s size'}, to
 			download as SVG, WebP or PNG. They come from
 			<a class="underline underline-offset-2" href="https://github.com/ggml-org/llama.brand"
@@ -183,7 +182,8 @@
 
 								asset.round && 'mx-auto w-2/3 rounded-full',
 								asset.ground === 'light' && 'bg-[#fafafa]',
-								asset.ground === 'dark' && 'bg-[#111111]'
+								asset.ground === 'dark' && 'bg-[#111111]',
+								asset.transparent && (asset.ground === 'light' ? 'checker-light' : 'checker-dark')
 							]}
 						>
 							<img
@@ -215,3 +215,18 @@
 		</section>
 	{/each}
 </div>
+
+<style>
+	/* the checkerboard that marks a transparent file, in its ground's two shades */
+	.checker-light,
+	.checker-dark {
+		background-image: repeating-conic-gradient(var(--checker) 0 25%, transparent 0 50%);
+		background-size: 16px 16px;
+	}
+	.checker-light {
+		--checker: #ebebeb;
+	}
+	.checker-dark {
+		--checker: #1f1f1f;
+	}
+</style>
