@@ -1,6 +1,6 @@
 // Colour for communications (posters, the site, social): a neutral base of the design system's greys, and the Llama
 // palette, the design system's own blues, green, amber and red with beige as the warm neutral, on top of it. The UI itself
-// stays neutral and uses colour only for status (in the tokens; see DESIGN.md). The brand orange (#f65e00) stays with the
+// stays neutral and uses colour only for status (in the tokens; see DESIGN.md). Cinder, the accent orange, is also the .cpp of the
 // llama.cpp logotype.
 
 export interface Palette {
@@ -72,7 +72,7 @@ export const basePalette: Palette = {
 };
 
 /** The design system's palette for communications: neutral fields (the greys and beige) as a rule, and the artwork
- *  colours (art-*: friendlier versions of the status hues and the vermilion accent orange, no red) where colour serves
+ *  colours (art-*: friendlier versions of the status hues and cinder, the accent orange, no red) where colour serves
  *  a purpose: shapes, numerals and accents. The brand orange stays with the logotype. */
 const GREY =
 	'linear-gradient(160deg, var(--neutral-400) 0%, var(--neutral-300) 55%, var(--neutral-200) 100%)';
@@ -82,7 +82,7 @@ export const llamaPalette: Palette = {
 	note: "The design system's own colours on neutral fields: greys and beige behind, the artwork blues, green, amber and accent orange for shapes",
 	roles: {
 		...base,
-		accent: 'var(--art-orange)',
+		accent: 'var(--art-cinder)',
 		accentInk: '#ffffff',
 		deep: 'linear-gradient(160deg, var(--neutral-800) 0%, var(--neutral-900) 100%)',
 		deepTone: 'var(--neutral-800)',
@@ -98,10 +98,10 @@ export const llamaPalette: Palette = {
 		{ name: 'Navy', value: NAVY },
 		{ name: 'Greys', value: GREY },
 		{ name: 'Beige 100', value: 'var(--beige-100)' },
-		{ name: 'Art orange · accent', value: 'var(--art-orange)' },
+		{ name: 'Cinder · accent', value: 'var(--art-cinder)' },
 		{ name: 'Art amber', value: 'var(--art-amber)' },
 		{ name: 'Art green', value: 'var(--art-green)' },
-		{ name: 'Art orange light', value: 'var(--art-orange-light)' },
+		{ name: 'Cinder light', value: 'var(--art-cinder-light)' },
 		{ name: 'Beige 50', value: 'var(--beige-50)' }
 	]
 };

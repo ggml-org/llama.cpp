@@ -213,10 +213,8 @@
 		--sage: var(--art-amber); /* the text poster: a warm, vibrant pop */
 		--teal: var(--art-green);
 		--saffron: var(--art-amber);
-		--pink: var(--art-orange-light); /* a light orange in place of pink: no red */
-		--vermilion: var(
-			--art-orange
-		); /* the accent orange; the brand orange stays with the logotype */
+		--pink: var(--art-cinder-light); /* a light orange in place of pink: no red */
+		--cinder: var(--art-cinder); /* the accent orange; the brand orange stays with the logotype */
 		--ink: var(--beige-900);
 		--display: 'Llama Sans', var(--font-sans);
 		display: grid;
@@ -402,7 +400,7 @@
 		width: 0.8cqi;
 		height: 0.8cqi;
 		border-radius: 50%;
-		background: var(--vermilion);
+		background: var(--cinder);
 	}
 	.tl {
 		top: 0.8cqi;
@@ -437,8 +435,8 @@
 	.photo.peach {
 		background: linear-gradient(
 			170deg,
-			color-mix(in oklab, var(--art-orange), white 12%) 0%,
-			var(--art-orange) 100%
+			color-mix(in oklab, var(--art-cinder), white 12%) 0%,
+			var(--art-cinder) 100%
 		);
 	}
 	.photo.mist {
@@ -511,7 +509,7 @@
 		background: var(--sky);
 	}
 	.c13 {
-		background: var(--vermilion);
+		background: var(--cinder);
 		color: #fff;
 	}
 
@@ -529,7 +527,7 @@
 		font-weight: 700;
 	}
 	.stack .sky {
-		color: var(--art-orange-light); /* a light orange, readable on the dark field */
+		color: var(--art-cinder-light); /* a light orange, readable on the dark field */
 	}
 	.stack .foot {
 		align-self: end;
@@ -547,7 +545,7 @@
 	}
 	.numerals p {
 		font: 700 34cqi / 0.86 var(--display);
-		color: var(--vermilion);
+		color: var(--cinder);
 		letter-spacing: -0.03em;
 	}
 	.numerals .navy {
@@ -558,7 +556,7 @@
 		-webkit-text-stroke: 0.6cqi var(--swiss-flat);
 	}
 	.numerals .outline-n:not(.navy) {
-		-webkit-text-stroke-color: var(--vermilion);
+		-webkit-text-stroke-color: var(--cinder);
 	}
 
 	/* exhibition poster */

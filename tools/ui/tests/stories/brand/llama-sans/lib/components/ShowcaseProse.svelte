@@ -112,7 +112,7 @@
 	}
 	blockquote {
 		padding: 4px 0 4px 18px;
-		border-left: 3px solid var(--clay);
+		border-left: 3px solid var(--cinder);
 	}
 	blockquote p {
 		font: 500 20px / 1.4 var(--display); /* no italic yet: never let the browser fake one */

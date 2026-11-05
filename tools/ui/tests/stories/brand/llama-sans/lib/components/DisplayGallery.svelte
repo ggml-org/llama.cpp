@@ -249,7 +249,7 @@
 	}
 	.numerals .outline {
 		color: transparent;
-		-webkit-text-stroke: 0.4cqi var(--clay);
+		-webkit-text-stroke: 0.4cqi var(--cinder);
 	}
 	.numerals .slate {
 		color: var(--slate);
@@ -413,7 +413,7 @@
 		color: var(--brand-light);
 	}
 	.s-clay {
-		background: var(--clay);
+		background: var(--cinder);
 		color: #fff;
 	}
 	.s-slate {

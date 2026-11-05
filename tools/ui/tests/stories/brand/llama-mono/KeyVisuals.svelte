@@ -1,7 +1,7 @@
 <!--
 	Llama Mono's key visuals: four neutral posters in fixed greys (they read the same in both themes), each set in the
 	font's own cells. A terminal starting llama-server, the look-alikes kept apart, a generation speed in tabular
-	figures, and the first bytes of a GGUF file as a hex dump. The vermilion cursor is the one accent.
+	figures, and the first bytes of a GGUF file as a hex dump. The cinder cursor is the one accent.
 -->
 <script lang="ts">
 	const terminal = [
@@ -162,7 +162,7 @@
 		width: 1ch;
 		height: 1.1em;
 		vertical-align: -0.2em;
-		background: var(--vermilion);
+		background: var(--cinder);
 	}
 	.term .icon {
 		font: 700 6cqi / 1 var(--code);
@@ -263,6 +263,6 @@
 	}
 	.rows p:first-child .ascii {
 		opacity: 1;
-		color: var(--vermilion);
+		color: var(--cinder);
 	}
 </style>
