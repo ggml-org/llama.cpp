@@ -13,7 +13,7 @@ export const STEPS = [0, 120, 240, 360, 480, 600]; // five steps of 120 across t
 
 // every part of the blueprint belongs to one idea of the mark; hovering or tapping a part highlights its idea
 // (null: plain construction, such as the overall frame, which only fades back with the rest)
-export type Feature = 'upper' | 'lower' | 'angle' | 'split' | 'steps' | 'corners';
+export type Feature = 'upper' | 'lower' | 'angle' | 'split' | 'steps' | 'corners' | 'triangles';
 export type Tag = Feature | null;
 
 // perpendicular to the 60° edges, through a point
@@ -50,6 +50,33 @@ export const lines: { a: Pt; b: Pt; f: Tag }[] = (
 
 	return { a: p, b: q, f };
 });
+
+// the ideal triangles inside the L: a grid of equilateral triangles 120 a side, set on the split. With the icon's own
+// slope a row is 104 high, so the foot is two rows exactly, and every slanted edge, the split and both of the foot's
+// flat edges lie on it; only the upper blade's top edge cuts across. Drawn clipped to the icon.
+const row = 60 / (-dir[0] / dir[1]); // 104: where the 60° and 120° lines from neighbouring grid points meet
+const slanted = (k: number, s: 1 | -1): [Pt, Pt] => [
+	[120 * k, SPLIT],
+	[120 * k - s * 60, SPLIT + row]
+]; // 60° (s 1) or 120°
+const range = (from: number, to: number) =>
+	Array.from({ length: to - from + 1 }, (_, i) => from + i);
+
+/** The grid's lines, cut to a box (x0, y0, x1, y1). */
+export const triangles = (around: [number, number, number, number]): [Pt, Pt][] =>
+	[
+		...range(-16, 16).map(
+			(n) =>
+				[
+					[0, SPLIT + n * row],
+					[1, SPLIT + n * row]
+				] as [Pt, Pt]
+		),
+		...range(-30, 30).flatMap((k) => [slanted(k, 1), slanted(k, -1)])
+	]
+		.map(([a, b]) => extend(a, b, around))
+		.filter(([a, b]) => a && b);
+export const lattice = triangles([-20, -20, SIZE + 20, SIZE + 20]);
 
 // blueprint dimensions: two end points, a tick offset, where the label sits
 export type Dim = { a: Pt; b: Pt; t: Pt; at: Pt; label: string; f: Tag; rot?: boolean };
@@ -106,6 +133,11 @@ export const features: { f: Feature; name: string; note: string }[] = [
 		f: 'steps',
 		name: 'Steps of 120',
 		note: `Five steps of 120 span the ${SIZE}: the feet start at 0 and 120, the blades meet on 240, the foot’s corner lands on 480.`
+	},
+	{
+		f: 'triangles',
+		name: 'Triangles',
+		note: `Inside, the L sits on ideal triangles, 120 a side and ${Math.round(row)} high: the slanted edges, the split and the foot all lie on them.`
 	},
 	{
 		f: 'corners',

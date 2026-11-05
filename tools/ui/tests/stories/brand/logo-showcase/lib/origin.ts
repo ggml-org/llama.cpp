@@ -32,58 +32,62 @@ export const steps = [
 		note: 'Its plus grows the icon’s own arms: 240 wide upright, 208 deep across.',
 		to: 2.4
 	},
+	// the L: what the plus doesn't need fades out while the camera moves to where the bolt will strike (see Morph and camera)
 	{
-		ease: inOutQuart,
+		ease: linear,
 		from: 2.75,
 		name: 'L',
-		note: 'Keep the top arm, the centre and the right arm: an L inside the +.',
-		to: 3.4
-	},
-	{
-		ease: inOutQuart,
-		from: 3.75,
-		name: 'Open the corner',
-		note: 'Lift out the centre block. Stem and foot now touch at one point.',
-		to: 4.35
+		note: 'Keep the top and right arms and leave the centre empty: an L inside the +, stem and foot touching at one point.',
+		to: 3.85
 	},
 	{
 		ease: linear,
-		from: 4.7,
+		from: 4.2,
 		name: 'Bolt',
 		note: 'Then the idea: a lightning bolt, for speed, which is what llama.cpp is about.',
-		to: 6.0
+		to: 5.5
 	},
 	// the lean isn't a move: the L snaps to 30° in the bolt's flash (see Morph); this step only carries its caption
 	{
 		ease: linear,
-		from: 6.05,
+		from: 5.55,
 		name: 'Lean',
 		note: 'In a flash the bolt leans the L 30°: every edge runs at 60°, with the bolt inside.',
-		to: 6.07
+		to: 5.57
 	},
+	// the grid the lean puts the L on draws out from the icon across the frame, and stays faint until the fill
 	{
-		ease: inOutQuart,
-		from: 6.85,
-		name: 'Soften',
-		note: 'Round only the two outer corners.',
-		to: 7.55
+		ease: linear,
+		from: 5.95,
+		name: 'Grid',
+		note: 'Every edge now lies on a grid of ideal triangles, 120 a side: the L is built on 60°.',
+		to: 6.85
 	},
-	{ ease: inOutCubic, from: 7.85, name: 'Fill', note: 'Fill it in: the Llama icon.', to: 8.35 },
-	{ ease: linear, from: 8.65, name: 'Blueprint', note: 'And this is how it is built.', to: 9.9 }
+	// two wheels roll into the outer corners, then the corners round onto them (see Morph)
+	{
+		ease: linear,
+		from: 7.15,
+		name: 'Soften',
+		note: 'Two wheels turn into the outer corners, and only those two corners round onto them.',
+		to: 8.45
+	},
+	{ ease: inOutCubic, from: 8.75, name: 'Fill', note: 'Fill it in: the Llama icon.', to: 9.25 },
+	{ ease: linear, from: 9.55, name: 'Blueprint', note: 'And this is how it is built.', to: 10.8 }
 ];
-export const END = 10.05;
+export const END = 10.95;
 /** A step's index by name, so the code that times things off a step doesn't depend on the order. */
 export const STEP = Object.fromEntries(steps.map((s, i) => [s.name, i])) as Record<string, number>;
 export const BLUEPRINT_STEP = STEP.Blueprint;
 /** The steps that have a tile under the animation, in order; the bolt is shown inside the lean. */
-export const TILES = ['llama.cpp', 'Plus', 'L', 'Open the corner', 'Lean', 'Soften'];
+export const TILES = ['llama.cpp', 'Plus', 'L', 'Lean', 'Soften'];
 /** When each part of the blueprint fades in, in seconds after the Blueprint step starts. */
 export const BLUEPRINT = {
 	dims: [0.55, 1.05],
 	grid: [0.1, 0.6],
 	lines: [0.3, 0.85],
 	parts: [0.25, 0.75],
-	title: [0.8, 1.25]
+	title: [0.8, 1.25],
+	triangles: [0.45, 1.2]
 } as const;
 
 /** How far step i has got at time t, eased (0 before it starts, 1 once it is done). */
@@ -173,7 +177,7 @@ export function camera(t: number, aspect: number, final: Frame) {
 	const legs = [
 		over(steps[STEP['.cpp']].from, steps[STEP['.cpp']].to), // the zoom to .cpp, before any letter changes
 		over(steps[STEP.Plus].from, steps[STEP.Plus].to),
-		over(steps[STEP.L].from, steps[STEP.Lean].to),
+		over(steps[STEP.L].from, steps[STEP.L].to), // to where the bolt will strike, while the rest of the plus fades; it stays there
 		over(steps[BLUEPRINT_STEP].from, steps[BLUEPRINT_STEP].from + 0.8)
 	];
 

@@ -5,7 +5,7 @@
 	pinned: the part a tap or a chip has highlighted. controls: the floating play bar, chips and caption.
 -->
 <script lang="ts">
-	import { box, deg, dims, type Feature, features, lines, r, vb } from '../blueprint';
+	import { box, deg, dims, type Feature, features, lattice, lines, r, vb } from '../blueprint';
 	import { corners, PATHS, SIZE, SPLIT } from '../logo';
 	import {
 		BLUEPRINT,
@@ -91,6 +91,9 @@
 
 		return n < 0 ? '' : `${String(n + 1).padStart(2, '0')} `;
 	};
+	// the triangles pencil in one stroke after another, each over the last two fifths of their window
+	const drawn = (i: number) =>
+		done ? 1 : Math.min(1, Math.max(0, (fade.triangles - (i / lattice.length) * 0.6) / 0.4));
 	const current = $derived(features.find((x) => x.f === active));
 	const featureAt = (e: Event) =>
 		((e.target as Element).closest('[data-f]') as HTMLElement | null)?.dataset.f as
@@ -177,6 +180,29 @@
 			<g style:opacity={fade.parts}>
 				{#each [['lower', PATHS[0]], ['upper', PATHS[1]]] as [f, d] (f)}
 					<path class:on={active === f} class="part" {d} data-f={f} />
+				{/each}
+			</g>
+			<!-- the ideal triangles, lightly pencilled inside the letter shape -->
+			<clipPath id="bp-icon"
+				>{#each PATHS as d, i (i)}<path {d} />{/each}</clipPath
+			>
+
+			<g
+				class:on={active === 'triangles'}
+				class="triangles"
+				clip-path="url(#bp-icon)"
+				data-f="triangles"
+			>
+				{#each lattice as [a, b], i (i)}
+					<line
+						pathLength="1"
+						stroke-dasharray="1"
+						stroke-dashoffset={1 - drawn(i)}
+						x1={a[0]}
+						x2={b[0]}
+						y1={a[1]}
+						y2={b[1]}
+					/>
 				{/each}
 			</g>
 			<!-- the origin animation, drawn into this same drawing until the blueprint takes over -->
@@ -381,6 +407,20 @@
 	.hero svg.focused [data-f]:not(.on),
 	.hero svg.focused .static {
 		opacity: 0.14;
+	}
+	/* slight strokes, like pencil inside the shape; not a target of their own, the chip highlights them */
+	.triangles {
+		pointer-events: none;
+	}
+	.triangles line {
+		stroke: var(--l-ink);
+		stroke-opacity: 0.22;
+		stroke-width: 1.1;
+		stroke-linecap: round;
+	}
+	.triangles.on line {
+		stroke-opacity: 0.6;
+		stroke-width: 1.6;
 	}
 	.hit {
 		fill: none;

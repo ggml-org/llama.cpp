@@ -132,6 +132,25 @@
 		stroke-dasharray: 5 5;
 		vector-effect: non-scaling-stroke;
 	}
+	/* the grid of ideal triangles the lean puts the L on */
+	svg :global(.tri) {
+		stroke: var(--l-line);
+		stroke-opacity: 0.45;
+		stroke-width: 1;
+		vector-effect: non-scaling-stroke;
+	}
+	/* the empty centre that makes the + an L, marked in the accent */
+	svg :global(.mark) {
+		fill: var(--l-mark);
+		fill-opacity: 0.12;
+		stroke: var(--l-mark);
+		stroke-width: 2.5;
+		stroke-dasharray: 7 5;
+		vector-effect: non-scaling-stroke;
+	}
+	svg :global(.mark-joint) {
+		fill: var(--l-mark);
+	}
 	svg :global(.strike) {
 		fill: var(--l-bolt-core);
 		stroke: var(--l-bolt-glow);

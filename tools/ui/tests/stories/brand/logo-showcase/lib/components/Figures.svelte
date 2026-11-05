@@ -1,4 +1,4 @@
-<!-- A grid of <Figure>s: "steps" fit the origin's six tiles on one row where they can, "rules" lay the six rule
+<!-- A grid of <Figure>s: "steps" fit the origin's five tiles on one row where they can, "rules" lay the six rule
      panels out 3 x 2 on wide screens, 2 x 3 on tablets and in one column on phones. -->
 <script lang="ts">
 	import type { Snippet } from 'svelte';

@@ -21,9 +21,8 @@ title: Llama icon
 <Figures layout="steps">
 	<OriginStep bind:t step="name">It begins with a name, and the + of its C++, the language llama.cpp is written in.</OriginStep>
 	<OriginStep bind:t step="plus">A plus with the icon’s own arms: 240 wide upright, {lower} deep across.</OriginStep>
-	<OriginStep bind:t step="l">Keep the top arm, the centre and the right arm: an L inside the +.</OriginStep>
-	<OriginStep bind:t step="open">Lift out the centre block the + and the L share. Stem and foot now touch at one point.</OriginStep>
-	<OriginStep bind:t step="lean">In a flash the bolt leans it: the L slants 30° on the baseline, every edge at {deg}°, with the bolt inside.</OriginStep>
+	<OriginStep bind:t step="l">Keep the top and right arms and leave the centre empty: an L inside the +, its stem and foot touching at one point.</OriginStep>
+	<OriginStep bind:t step="lean">In a flash the bolt leans it: the L slants 30° on the baseline, every edge at {deg}°, on a grid of ideal triangles, with the bolt inside.</OriginStep>
 	<OriginStep bind:t step="soften">Round only the two outer corners. That is the Llama icon.</OriginStep>
 </Figures>
 
