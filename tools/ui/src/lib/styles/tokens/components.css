@@ -13,7 +13,7 @@
 	--chat-form-edge-side-focus: var(--edge-focus-side);
 	--chat-form-edge-mid-focus: var(--edge-focus-mid);
 	--chat-form-highlight: var(--highlight-inner);
-	--chat-form-shadow: var(--elevation-surface);
+	--chat-form-shadow: var(--elevation-soft);
 	--chat-form-radius: var(--radius-surface);
 	--chat-form-radius-compact: var(--radius-surface-lg);
 
@@ -37,6 +37,7 @@
 	/* user message bubble */
 	--user-bubble-background: color-mix(in oklch, var(--action-primary) 5%, transparent);
 	--user-bubble-edge: var(--edge-faint);
+	--user-bubble-shadow: var(--elevation-faint);
 	--user-bubble-sheen-start: var(--sheen-start);
 	--user-bubble-sheen-end: var(--sheen-end);
 
@@ -161,8 +162,9 @@
 	--button-danger-edge: color-mix(in oklab, var(--button-danger-background), white 10%);
 }
 
-/* the user bubble is a card with an even, fainter edge */
+/* the user bubble is a card with an even, fainter edge and a barely noticeable shadow */
 .chat-message-user-bubble {
+	--card-shadow: var(--user-bubble-shadow);
 	--card-edge-side: var(--user-bubble-edge);
 	--card-edge-mid: var(--user-bubble-edge);
 }
