@@ -295,6 +295,20 @@ extern "C" {
 #    define GGML_BACKEND_DL_SCORE_IMPL(score_fn)
 #endif
 
+// limits of the scheduler (ggml-backend.cpp)
+
+#ifndef GGML_SCHED_MAX_SPLIT_INPUTS
+#define GGML_SCHED_MAX_SPLIT_INPUTS 30
+#endif
+
+#ifndef GGML_SCHED_MAX_COPIES
+#define GGML_SCHED_MAX_COPIES 4
+#endif
+
+#ifndef GGML_SCHED_MAX_BACKENDS
+#define GGML_SCHED_MAX_BACKENDS 16
+#endif
+
 #ifdef  __cplusplus
 }
 #endif

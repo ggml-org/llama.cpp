@@ -435,6 +435,7 @@ if (NOT LLAMA_USE_SYSTEM_GGML)
 
     # Needs non-public ggml{,-backend}-impl.h
     llama_build_and_test(test-alloc.cpp  LABEL "behavior backend"  LINK ggml)
+    target_compile_definitions(test-alloc PRIVATE GGML_SCHED_MAX_COPIES=${GGML_SCHED_MAX_COPIES})
 endif()
 
 llama_build(test-export-graph-ops.cpp)
