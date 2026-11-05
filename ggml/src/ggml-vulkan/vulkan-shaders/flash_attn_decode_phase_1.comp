@@ -4,6 +4,11 @@
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#if defined(KV_Q8_0) || defined(KV_Q4_0)
+#define KV_QUANT 1
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+#endif
 #extension GL_KHR_memory_scope_semantics : enable
 #extension GL_KHR_shader_subgroup_basic : enable
 #extension GL_KHR_shader_subgroup_ballot : enable
@@ -14,7 +19,11 @@
 layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
 layout (binding = 0) readonly buffer Q {float16_t qState[];};
+#if defined(KV_QUANT)
+#include "flash_attn_decode_quant.glsl"
+#else
 layout (binding = 1) readonly buffer K_VEC4 {f16vec4 kStateVec4[];};
+#endif
 layout (binding = 2) buffer MASK_F16 {float16_t mState_f16[];};
 layout (binding = 3) buffer P_FP16 {float16_t matP_f16[];};
 layout (binding = 4) buffer OUT_MAX {float out_max_f32[];};
@@ -75,6 +84,12 @@ shared slm_pool_alias_block {
   float16_t slm_pool_k[SLM_POOL_SIZE_K];
 } slm_pool_f16;
 
+#if defined(KV_QUANT)
+#define FA_LOAD_K4(row, col) f16vec4(dequant_kv_4(offsetBaseK + (row) * kvDim * KV_BLOCK_SIZE + (col) * 4))
+#else
+#define FA_LOAD_K4(row, col) kStateVec4[offsetBaseK + (row) * kvDim / 4 + (col)]
+#endif
+
 void main() {
   const uint lane = gl_SubgroupInvocationID;
   const uint kHeadIdx = gl_WorkGroupID.x % p.kvHead;
@@ -91,7 +106,11 @@ void main() {
   const uint tokFlatIdx = localLinearId + outGroupIdx * N_TOK;
   uint offsetBaseQ = min(tokFlatIdx, p.activationLength - 1) * qDim;
   offsetBaseQ = offsetBaseQ + d * p.batchStrideQ + kHeadIdx * HEAD_DIM * GQA_RATIO;
+#if defined(KV_QUANT)
+  const uint offsetBaseK = (d * p.batchStrideK + (v * MATP_REDUCE) * kvDim + kHeadIdx * p.kvStride2) * KV_BLOCK_SIZE;
+#else
   const uint offsetBaseK = (d * p.batchStrideK + (v * MATP_REDUCE) * kvDim + kHeadIdx * p.kvStride2) / 4;
+#endif
   uint offsetOut = d * p.qHead * p.activationLength * pDim + v * MATP_REDUCE + kHeadIdx * GQA_RATIO * pDim + (localLinearId * O_COUNT + outGroupIdx * N_TOK * p.qHead) * pDim + lane;
   uint offsetMax = d * p.qHead * p.activationLength * maxDim + v + kHeadIdx * GQA_RATIO * maxDim + (localLinearId * O_COUNT + outGroupIdx * N_TOK * p.qHead) * maxDim;
   const uint offsetSlmLoadPv = (localLinearId * O_COUNT * MATP_REDUCE + lane);
@@ -126,12 +145,12 @@ void main() {
     const uint kColIdx = flatOffset % HEAD_DIM_VEC4;
     const uint slmChunkCol = kColIdx % SLM_CHUNK_SIZE;
     const uint slmChunkRow = kColIdx / SLM_CHUNK_SIZE;
-    const uint offsetK = offsetBaseK + kRowIdx * kvDim / 4 + kColIdx;
     const uint offsetSlmK = kRowIdx * TK + slmChunkRow * TK * MATP_PER_LOOP + slmChunkCol * 4;
-    slm_pool_f16.slm_pool_k[offsetSlmK + 0] = kStateVec4[offsetK].x;
-    slm_pool_f16.slm_pool_k[offsetSlmK + 1] = kStateVec4[offsetK].y;
-    slm_pool_f16.slm_pool_k[offsetSlmK + 2] = kStateVec4[offsetK].z;
-    slm_pool_f16.slm_pool_k[offsetSlmK + 3] = kStateVec4[offsetK].w;
+    const f16vec4 kv4 = FA_LOAD_K4(kRowIdx, kColIdx);
+    slm_pool_f16.slm_pool_k[offsetSlmK + 0] = kv4.x;
+    slm_pool_f16.slm_pool_k[offsetSlmK + 1] = kv4.y;
+    slm_pool_f16.slm_pool_k[offsetSlmK + 2] = kv4.z;
+    slm_pool_f16.slm_pool_k[offsetSlmK + 3] = kv4.w;
   }
 
   [[unroll]] for (uint pLoop = 0; pLoop < P_LOOP_COUNT; pLoop++) {
@@ -142,8 +161,7 @@ void main() {
         const uint flatOffset = kLoad * GROUPSIZE + wgLane;
         const uint kRowIdx = flatOffset / HEAD_DIM_VEC4 + (pLoop + 1) * MATP_PER_LOOP;
         const uint kColIdx = flatOffset % HEAD_DIM_VEC4;
-        const uint offsetK = offsetBaseK + kRowIdx * kvDim / 4 + kColIdx;
-        kTemp[kLoad] = kStateVec4[offsetK];
+        kTemp[kLoad] = FA_LOAD_K4(kRowIdx, kColIdx);
       }
     }
 
