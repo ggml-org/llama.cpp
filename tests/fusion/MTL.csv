@@ -336,4 +336,5 @@ talkie              ,0   ,any     ,ADD+ADD                     ,      2
 xing4_0             ,0   ,any     ,ADD+ADD+ADD                 ,      1
 xing4_0             ,0   ,any     ,MUL+ADD                     ,      2
 xing4_0             ,0   ,any     ,RMS_NORM+MUL                ,      9
+xing4_0             ,0   ,any     ,UNARY+ADD+ARGSORT+GET_ROWS  ,      1
 xverse              ,0   ,any     ,RMS_NORM+MUL                ,      5

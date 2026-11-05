@@ -203,13 +203,8 @@ llama_model_glm4_moe::graph_mtp::graph_mtp(const llm_graph_params & params)
         cb(Kcur, "mtp_Kcur_normed", il);
     }
 
-    Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot,
-            rope_type, n_ctx_orig, freq_base, freq_scale,
-            ext_factor, attn_factor, beta_fast, beta_slow);
-
-    Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_rot,
-            rope_type, n_ctx_orig, freq_base, freq_scale,
-            ext_factor, attn_factor, beta_fast, beta_slow);
+    Qcur = build_rope(Qcur, inp_pos, il);
+    Kcur = build_rope(Kcur, inp_pos, il);
 
     cb(Qcur, "mtp_Qcur", il);
     cb(Kcur, "mtp_Kcur", il);
@@ -287,9 +282,6 @@ llama_model_glm4_moe::graph::graph(const llm_graph_params & params) : llm_graph_
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
 
-    int sections[4];
-    std::copy(std::begin(hparams.rope_sections), std::begin(hparams.rope_sections) + 4, sections);
-
     ggml_tensor * cur;
     ggml_tensor * inpL;
 
@@ -331,24 +323,9 @@ llama_model_glm4_moe::graph::graph(const llm_graph_params & params) : llm_graph_
                 cb(Kcur, "Kcur_normed", il);
             }
 
-            if (use_mrope) {
-                Qcur = ggml_rope_multi(ctx0, Qcur, inp_pos, nullptr,
-                            n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale,
-                            ext_factor, attn_factor, beta_fast, beta_slow);
-
-                Kcur = ggml_rope_multi(ctx0, Kcur, inp_pos, nullptr,
-                            n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale,
-                            ext_factor, attn_factor, beta_fast, beta_slow);
-            } else {
-                // Normal RoPE
-                Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot,
-                                    rope_type, n_ctx_orig, freq_base, freq_scale,
-                                    ext_factor, attn_factor, beta_fast, beta_slow);
-
-                Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_rot,
-                                    rope_type, n_ctx_orig, freq_base, freq_scale,
-                                    ext_factor, attn_factor, beta_fast, beta_slow);
-            }
+            // Normal RoPE
+            Qcur = build_rope(Qcur, inp_pos, il);
+            Kcur = build_rope(Kcur, inp_pos, il);
 
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);

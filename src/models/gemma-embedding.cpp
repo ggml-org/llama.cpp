@@ -89,8 +89,6 @@ llama_model_gemma_embedding::graph::graph(const llm_graph_params & params) :
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     for (int il = 0; il < n_layer; ++il) {
-        const float freq_base_l  = model.get_rope_freq_base(cparams, il);
-        const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
 
         // norm
         cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
@@ -105,14 +103,12 @@ llama_model_gemma_embedding::graph::graph(const llm_graph_params & params) :
             Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, il);
             cb(Qcur, "Qcur_normed", il);
 
-            Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                                 ext_factor, attn_factor, beta_fast, beta_slow);
+            Qcur = build_rope(Qcur, inp_pos, il);
 
             Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, il);
             cb(Kcur, "Kcur_normed", il);
 
-            Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                                 ext_factor, attn_factor, beta_fast, beta_slow);
+            Kcur = build_rope(Kcur, inp_pos, il);
 
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);

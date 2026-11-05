@@ -234,20 +234,9 @@ llama_model_eagle3::graph<false>::graph(const llm_graph_params & params) : llm_g
         Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
         Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
-        // rope freq factors, returns nullptr if not available
-        ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
-
         // RoPE
-        Qcur = ggml_rope_ext(
-                ctx0, Qcur, inp_pos, rope_factors,
-                n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                ext_factor, attn_factor, beta_fast, beta_slow
-                );
-        Kcur = ggml_rope_ext(
-                ctx0, Kcur, inp_pos, rope_factors,
-                n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                ext_factor, attn_factor, beta_fast, beta_slow
-                );
+        Qcur = build_rope(Qcur, inp_pos, il);
+        Kcur = build_rope(Kcur, inp_pos, il);
 
         cb(Qcur, "Qcur_rope", il);
         cb(Kcur, "Kcur_rope", il);

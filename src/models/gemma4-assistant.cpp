@@ -131,14 +131,9 @@ llama_model_gemma4_assistant::graph::graph(const llm_graph_params & params) :
     ggml_tensor * inpL = cur;
 
     for (int il = 0; il < n_layer_nextn; ++il) {
-        const bool is_swa = hparams.is_swa(il);
 
         const int64_t n_embd_head = hparams.n_embd_head_k(il);
         const int64_t n_head      = hparams.n_head(il);
-
-        const float freq_base_l  = model.get_rope_freq_base(cparams, il);
-        const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
-        const int   n_rot_l      = hparams.n_rot(il);
 
         ggml_tensor * cur_norm = build_norm(inpL, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, il);
         cb(cur_norm, "attn_norm", il);
@@ -148,9 +143,7 @@ llama_model_gemma4_assistant::graph::graph(const llm_graph_params & params) :
         Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, nullptr, LLM_NORM_RMS, il);
         cb(Qcur, "Qcur_normed", il);
 
-        ggml_tensor * freq_factors = is_swa ? nullptr : model.layers[il].rope_freqs;
-        Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, freq_factors, n_rot_l, rope_type, n_ctx_orig,
-                             freq_base_l, freq_scale_l, ext_factor, attn_factor, beta_fast, beta_slow);
+        Qcur = build_rope(Qcur, inp_pos, il);
         cb(Qcur, "Qcur_pos", il);
 
         cur = build_attn(inp_attn, model.layers[il].wo, nullptr, nullptr,

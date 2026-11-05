@@ -233,21 +233,11 @@ llama_model_gemma4::graph::graph(const llm_graph_params & params) :
         const int64_t n_head    = hparams.n_head(il);
         const int64_t n_head_kv = hparams.n_head_kv(il);
 
-        const float freq_base_l  = model.get_rope_freq_base(cparams, il);
-        const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
-        const int   n_rot_l      = hparams.n_rot(il);
-
         res->t_layer_inp[il] = inpL;
 
         // norm
         cur = build_norm(inpL, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, il);
         cb(cur, "attn_norm", il);
-
-        ggml_tensor * freq_factors = nullptr;
-        if (!hparams.is_swa(il)) {
-            // full_attention layers use rope_freqs for proportional rope
-            freq_factors = model.layers[il].rope_freqs;
-        }
 
         // Q projection (shared for both non-KV and KV layers)
         // this is to mirror Gemma4Attention in pytorch code
@@ -269,8 +259,7 @@ llama_model_gemma4::graph::graph(const llm_graph_params & params) :
             Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, nullptr, LLM_NORM_RMS, il);
             cb(Qcur, "Qcur_normed", il);
 
-            Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, freq_factors, n_rot_l, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                                 ext_factor, attn_factor, beta_fast, beta_slow);
+            Qcur = build_rope(Qcur, inp_pos, il);
             cb(Qcur, "Qcur_pos", il);
         }
 
@@ -303,8 +292,7 @@ llama_model_gemma4::graph::graph(const llm_graph_params & params) :
             cb(Kcur, "Kcur_normed", il);
             cb(Vcur, "Vcur_normed", il);
 
-            Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, freq_factors, n_rot_l, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                                 ext_factor, attn_factor, beta_fast, beta_slow);
+            Kcur = build_rope(Kcur, inp_pos, il);
 
             cb(Kcur, "Kcur_pos", il);
 
