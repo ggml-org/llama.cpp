@@ -1403,6 +1403,7 @@ void llm_graph_result::reset() {
     inputs.clear();
     fused_nodes.clear();
     hdmd_inputs.clear();
+    cpu_parts.clear();
 
     buf_compute_meta.resize(ggml_tensor_overhead()*max_nodes + ggml_graph_overhead_custom(max_nodes, false));
 
@@ -1506,6 +1507,10 @@ llm_graph_input_i * llm_graph_result::add_input(llm_graph_input_ptr input) {
 
 void llm_graph_result::add_fused_node(llm_graph_fused_node result) {
     fused_nodes.push_back(result);
+}
+
+void llm_graph_result::add_cpu_part(const ggml_tensor * lookup, int32_t n_used, std::vector<const ggml_tensor *> inputs) {
+    cpu_parts.push_back({ lookup, n_used, std::move(inputs) });
 }
 
 ggml_tensor * llm_graph_result::get_hdmd_input(const ggml_tensor * cur, const ggml_tensor * rot) const {
@@ -2376,7 +2381,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             cpu_ids = ggml_reshape_2d(ctx0, cpu_ids, n_expert_used, n_tokens);
             sel2d   = ggml_reshape_2d(ctx0, sel, n_expert_used, n_tokens);
         } else {
-            moe_cache->set_cpu_part(lookup, n_expert_used, {});
+            res->add_cpu_part(lookup, n_expert_used, {});
         }
     }
 
@@ -2568,7 +2573,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             }
         }
 
-        moe_cache->set_cpu_part(lookup, n_expert_used, { lookup->src[1], cur });
+        res->add_cpu_part(lookup, n_expert_used, { lookup->src[1], cur });
 
         experts = ggml_add(ctx0, experts_dev, experts_cpu);
         ggml_backend_sched_set_tensor_backend(sched, experts, moe_cache->backend(il));

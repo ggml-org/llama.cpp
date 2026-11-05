@@ -788,7 +788,7 @@ struct llm_graph_params {
     const llama_adapter_loras    * loras;
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
-    llama_moe_cache              * moe_cache;
+    const llama_moe_cache        * moe_cache;
 
     const llama_prec_policy * prec_policy = nullptr;
 
@@ -899,6 +899,14 @@ struct llm_graph_fused_node {
     int il;
 };
 
+// a CPU part of the MoE cache, accumulated in the graph result during the graph build and
+// applied to the cache by the llama_context after the graph inputs are set
+struct llm_graph_cpu_part {
+    const ggml_tensor * lookup;              // the get_rows that looks up the slots of the selected experts
+    int32_t n_used;                          // experts per token
+    std::vector<const ggml_tensor *> inputs; // device tensors read by the CPU part
+};
+
 class llm_graph_result {
 public:
     llm_graph_result(int64_t max_nodes);
@@ -934,11 +942,15 @@ public:
 
     void add_fused_node(llm_graph_fused_node result);
 
+    void add_cpu_part(const ggml_tensor * lookup, int32_t n_used, std::vector<const ggml_tensor *> inputs);
+
     // Hadamard-transformed activations, keyed by (input, rotation): folded weights that read the same activation share one transform
     ggml_tensor * get_hdmd_input(const ggml_tensor * cur, const ggml_tensor * rot) const;
     void          set_hdmd_input(const ggml_tensor * cur, const ggml_tensor * rot, ggml_tensor * res);
 
     const std::vector<llm_graph_fused_node> & get_fused_nodes() const { return fused_nodes; }
+
+    const std::vector<llm_graph_cpu_part> & get_cpu_parts() const { return cpu_parts; }
 
     void set_params(const llm_graph_params & params);
 
@@ -959,6 +971,8 @@ public:
 
     std::vector<llm_graph_input_ptr> inputs;
     std::vector<llm_graph_fused_node> fused_nodes;
+
+    std::vector<llm_graph_cpu_part> cpu_parts;
 
     std::map<std::pair<const ggml_tensor *, const ggml_tensor *>, ggml_tensor *> hdmd_inputs;
 
@@ -1046,7 +1060,7 @@ struct llm_graph_context {
     const llama_adapter_loras    * loras;
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
-    llama_moe_cache              * moe_cache;
+    const llama_moe_cache        * moe_cache;
 
     const llama_prec_policy * prec_policy;
 
