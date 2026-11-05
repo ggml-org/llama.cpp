@@ -1018,6 +1018,9 @@ struct vk_device_struct {
     ggml_backend_buffer_type buffer_type;
 
     bool disable_fusion;
+    std::atomic<bool> fusion_stats_enabled {false};
+    std::mutex fusion_mutex;
+    std::map<std::string, uint64_t> fusion_counts;
     bool disable_descriptor_reuse;
     std::atomic<uint64_t> buffer_destroy_count {};
     bool disable_host_visible_vidmem;
