@@ -4332,8 +4332,20 @@ llama_context * llama_init_from_model(
     }
 
     const bool fp8_cache = params.type_k == GGML_TYPE_F8_E4M3 || params.type_v == GGML_TYPE_F8_E4M3;
-    if (fp8_cache && (model->hparams.is_mla() || model->arch == LLM_ARCH_DEEPSEEK4)) {
-        LLAMA_LOG_ERROR("%s: FP8 cache is not supported for MLA models\n", __func__);
+    // Direct cache consumers do not use the shared attention scaling helpers.
+    if (fp8_cache && (model->hparams.is_mla() ||
+            model->arch == LLM_ARCH_DEEPSEEK32 ||
+            model->arch == LLM_ARCH_DEEPSEEK4 ||
+            model->arch == LLM_ARCH_DEEPSEEK41 ||
+            model->arch == LLM_ARCH_GLM_DSA ||
+            model->arch == LLM_ARCH_GLM5_NEXT ||
+            model->arch == LLM_ARCH_DOTS3NOTE ||
+            model->arch == LLM_ARCH_MISTRAL_LARGE4 ||
+            model->arch == LLM_ARCH_HY_V4 ||
+            model->arch == LLM_ARCH_MINIMAX_M3 ||
+            model->arch == LLM_ARCH_QWEN4EXP ||
+            model->arch == LLM_ARCH_DFLASH)) {
+        LLAMA_LOG_ERROR("%s: FP8 cache is not supported for architecture '%s'\n", __func__, llm_arch_name(model->arch));
         return nullptr;
     }
 
