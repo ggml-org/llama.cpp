@@ -80,6 +80,11 @@ OutputVector translate_reshape(const NodeContext & context) {
             shape[1] = -1;
         }
         break;
+    case 11:
+        // ROPE positions keep the layout of inp_pos. gemma-4 reshapes the positions of its output rows, and a
+        // batch can have no output rows, so the size checks of the other cases cannot place the dim.
+        shape = {1, 1, 1, -1};
+        break;
     default:
         FRONT_END_OP_CONVERSION_CHECK(false, "Unsupported RESHAPE case: ", op_case);
     }
