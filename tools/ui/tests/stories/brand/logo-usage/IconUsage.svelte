@@ -1,5 +1,5 @@
 <!--
-	How the Llama icon is used, one case per section: as its two glyphs of Llama Sans (U+E000 for text, U+E001, the
+	How the Llama icon is used, one case per section (section picks which; each is a story of Brand/Logo/Usage): as its two glyphs of Llama Sans (U+E000 for text, U+E001, the
 	capital form at the lockup's proportion) in display type and buttons, the lockup in context, in a download badge
 	and in running text, then as the web app's favicon, PWA, maskable and Apple touch icons and
 	its splash screens, with their proportions and placement drawn in. The app icons follow the web UI's own
@@ -152,270 +152,298 @@
 		{ name: 'Llama', platform: 'macOS', top: 'Download for' },
 		{ name: 'llama.cpp', platform: 'GitHub', top: 'Get it on' }
 	];
+
+	let {
+		section
+	}: { section: 'badge' | 'buttons' | 'context' | 'glyphs' | 'icons' | 'splash' | 'text' } =
+		$props();
 </script>
 
 <!-- 1. in type -->
-<p class="kicker">In Llama Sans · U+E000 and U+E001</p>
+{#if section === 'glyphs'}
+	<p class="kicker">In Llama Sans · U+E001 and U+E000</p>
 
-<h2>Two glyphs of the font</h2>
+	<h2>Two glyphs of the font</h2>
 
-<p>
-	The icon is a character of Llama Sans, in two sizes, so anything set in it can carry the mark
-	without an image, in the text's colour and weight. U+E000 sits on the baseline at exactly the cap
-	height, for running text and controls. U+E001, its capital form, is the lockup's icon: 1.24 times
-	the cap height, centred on the capitals, with the lockup's gap after it, so a name typed after it
-	is the logo. In all caps, the case feature swaps one for the other.
-</p>
+	<p>
+		The icon is a character of Llama Sans, in two sizes, so anything set in it can carry the mark
+		without an image, in the text's colour and weight. U+E001 is the one to reach for: the icon 1.24
+		times the cap height, centred on the capitals, with the lockup's gap after it. Use it in small
+		text, in controls and before a name, where a cap-height mark would read as smaller than the
+		letters. U+E000 sits on the baseline at exactly the cap height: keep it for headlines, where the
+		icon should sit quietly among large capitals and not stand out. In all caps, the case feature
+		swaps U+E000 for U+E001.
+	</p>
 
-<div class="display">
-	<p class="lockup"> llama.cpp</p>
+	<div class="display">
+		<p class="lockup"> llama.cpp</p>
 
-	<p class="lockup"> Llama</p>
-</div>
+		<p class="lockup"> Llama</p>
+	</div>
 
-<div class="pair">
-	<p><span class="tag">U+E000</span><span class="sample"> Llama</span></p>
+	<div class="pair">
+		<p>
+			<span class="tag">U+E001 · small text, controls, names</span><span class="small-sample"
+				>Models run locally in  Llama.</span
+			>
+		</p>
 
-	<p><span class="tag">U+E001</span><span class="sample"> Llama</span></p>
-</div>
+		<p>
+			<span class="tag">U+E000 · headlines</span><span class="sample">Run it in  Llama</span>
+		</p>
+	</div>
+{/if}
 
 <!-- 2. in buttons -->
-<p class="kicker">In buttons</p>
+{#if section === 'buttons'}
+	<p class="kicker">In buttons</p>
 
-<h2>Open in Llama</h2>
+	<h2>Open in Llama</h2>
 
-<p>
-	As a glyph, the icon centres on the button's line box like the label's capitals, with a word space
-	after it, so it needs no icon slot and no nudging. U+E000 keeps the label's own size; U+E001 gives
-	the icon the lockup's presence, for a button that stands for the app. These are the design
-	system's own buttons.
-</p>
+	<p>
+		Buttons always take the capital glyph, U+E001: at a label's size the cap-height glyph reads as
+		smaller than the letters beside it. As a glyph, the icon centres on the button's line box like
+		the label's capitals, with a word space after it, so it needs no icon slot and no nudging. These
+		are the design system's own buttons.
+	</p>
 
-<div class="buttons">
-	{#each [{ code: '', label: 'U+E000, the text glyph' }, { code: '', label: 'U+E001, the capital glyph' }] as g (g.label)}
-		<p class="row-label">{g.label}</p>
+	<div class="buttons">
+		<div class="row">
+			<Button size="sm"><span class="glyph"></span> Open in Llama</Button>
+
+			<Button><span class="glyph"></span> Open in Llama</Button>
+
+			<Button size="lg"><span class="glyph"></span> Open in Llama</Button>
+		</div>
 
 		<div class="row">
-			<Button size="sm"><span class="glyph">{g.code}</span> Open in Llama</Button>
+			<Button variant="outline"><span class="glyph"></span> llama.app</Button>
 
-			<Button><span class="glyph">{g.code}</span> Open in Llama</Button>
+			<Button variant="secondary"><span class="glyph"></span> Run with llama.cpp</Button>
 
-			<Button size="lg"><span class="glyph">{g.code}</span> Open in Llama</Button>
+			<Button variant="ghost"><span class="glyph"></span> llama.cpp</Button>
 
-			<Button variant="outline"><span class="glyph">{g.code}</span> llama.app</Button>
-
-			<Button variant="secondary"><span class="glyph">{g.code}</span> Run with llama.cpp</Button>
-
-			<Button variant="ghost"><span class="glyph">{g.code}</span> llama.cpp</Button>
-
-			<Button aria-label="Llama" size="icon" variant="outline"
-				><span class="glyph">{g.code}</span></Button
-			>
+			<Button aria-label="Llama" size="icon" variant="outline"><span class="glyph"></span></Button>
 		</div>
-	{/each}
-</div>
+	</div>
+{/if}
 
 <!-- 3. the lockup in context -->
-<p class="kicker">The lockup in context</p>
+{#if section === 'context'}
+	<p class="kicker">The lockup in context</p>
 
-<h2>Where the name goes</h2>
+	<h2>Where the name goes</h2>
 
-<p>
-	The lockup at the sizes it is used at: an app header, a footer, a hero and the X header. Each is
-	the capital glyph typed before the name, so it matches the logo files exactly.
-</p>
+	<p>
+		The lockup at the sizes it is used at: an app header, a footer, a hero and the X header. Each is
+		the capital glyph typed before the name, so it matches the logo files exactly.
+	</p>
 
-<div class="contexts">
-	<div class="ctx header">
-		<span style:font-size="18px" class="mark"> llama<span class="cpp">.cpp</span></span>
+	<div class="contexts">
+		<div class="ctx header">
+			<span style:font-size="18px" class="mark"> llama<span class="cpp">.cpp</span></span>
 
-		<span class="links">Models · Docs · GitHub</span>
+			<span class="links">Models · Docs · GitHub</span>
 
-		<Button size="sm">Download</Button>
+			<Button size="sm">Download</Button>
+		</div>
+
+		<div class="ctx header dark">
+			<span style:font-size="16px" class="mark"> Llama</span>
+
+			<span class="links">Settings</span>
+		</div>
+
+		<div class="ctx footer">
+			<span style:font-size="13px" class="mark"> llama<span class="cpp">.cpp</span></span>
+
+			<span class="links">MIT licence · ggml-org</span>
+		</div>
+
+		<div style:background={HERO} class="ctx hero">
+			<span style:color="#0f1f33" style:font-size="clamp(40px, 7vw, 64px)" class="mark"
+				> Llama</span
+			>
+		</div>
+
+		<div class="ctx banner">
+			<span style:font-size="8cqi" class="mark"> llama<span class="cpp">.cpp</span></span>
+		</div>
 	</div>
-
-	<div class="ctx header dark">
-		<span style:font-size="16px" class="mark"> Llama</span>
-
-		<span class="links">Settings</span>
-	</div>
-
-	<div class="ctx footer">
-		<span style:font-size="13px" class="mark"> llama<span class="cpp">.cpp</span></span>
-
-		<span class="links">MIT licence · ggml-org</span>
-	</div>
-
-	<div style:background={HERO} class="ctx hero">
-		<span style:color="#0f1f33" style:font-size="clamp(40px, 7vw, 64px)" class="mark"> Llama</span>
-	</div>
-
-	<div class="ctx banner">
-		<span style:font-size="8cqi" class="mark"> llama<span class="cpp">.cpp</span></span>
-	</div>
-</div>
+{/if}
 
 <!-- 4. a download badge -->
-<p class="kicker">Download badge</p>
+{#if section === 'badge'}
+	<p class="kicker">Download badge</p>
 
-<h2>Get the app</h2>
+	<h2>Get the app</h2>
 
-<p>
-	Our own equivalent of a store badge, for links to download Llama or get llama.cpp: a dark key with
-	the icon at the height of its two lines and a small line over the name. 48 px high (40 for a
-	compact one), radius 10, the icon 24 px, 14 from the left edge and 10 from the text.
-</p>
+	<p>
+		Our own equivalent of a store badge, for links to download Llama or get llama.cpp: a dark key
+		with the icon at the height of its two lines and a small line over the name. 48 px high (40 for
+		a compact one), radius 10, the icon the capital glyph (U+E001) at 18 px, 14 from the left edge
+		and 10 from the text.
+	</p>
 
-<div class="badges">
-	{#each badges as b (b.name)}
-		{#each ['dark', 'light'] as const as tone (tone)}
-			<a class="badge {tone}" href="#top" onclick={(e) => e.preventDefault()}>
-				<span aria-hidden="true" class="badge-icon"></span>
+	<div class="badges">
+		{#each badges as b (b.name)}
+			{#each ['dark', 'light'] as const as tone (tone)}
+				<a class="badge {tone}" href="#top" onclick={(e) => e.preventDefault()}>
+					<span aria-hidden="true" class="badge-icon"></span>
 
-				<span class="badge-text">
-					<span class="badge-top">{b.top}</span>
+					<span class="badge-text">
+						<span class="badge-top">{b.top}</span>
 
-					<span class="badge-name">{b.platform}</span>
-				</span>
-			</a>
+						<span class="badge-name">{b.platform}</span>
+					</span>
+				</a>
+			{/each}
 		{/each}
-	{/each}
 
-	<a class="badge dark compact" href="#top" onclick={(e) => e.preventDefault()}>
-		<span aria-hidden="true" class="badge-icon"></span>
+		<a class="badge dark compact" href="#top" onclick={(e) => e.preventDefault()}>
+			<span aria-hidden="true" class="badge-icon"></span>
 
-		<span class="badge-text">
-			<span class="badge-top">Download for</span>
+			<span class="badge-text">
+				<span class="badge-top">Download for</span>
 
-			<span class="badge-name">macOS</span>
-		</span>
-	</a>
+				<span class="badge-name">macOS</span>
+			</span>
+		</a>
 
-	<a class="badge light compact" href="#top" onclick={(e) => e.preventDefault()}>
-		<Download aria-hidden="true" class="badge-lucide" />
+		<a class="badge light compact" href="#top" onclick={(e) => e.preventDefault()}>
+			<Download aria-hidden="true" class="badge-lucide" />
 
-		<span class="badge-text">
-			<span class="badge-top">Get the model</span>
+			<span class="badge-text">
+				<span class="badge-top">Get the model</span>
 
-			<span class="badge-name">GGUF</span>
-		</span>
-	</a>
-</div>
+				<span class="badge-name">GGUF</span>
+			</span>
+		</a>
+	</div>
+{/if}
 
 <!-- 5. in running text -->
-<p class="kicker">In running text</p>
+{#if section === 'text'}
+	<p class="kicker">In running text</p>
 
-<h2>Inline, at any size</h2>
+	<h2>Inline, at any size</h2>
 
-<p>
-	In a sentence the icon reads as a capital: the same height, the same weight, on the same baseline.
-	Use it before the name it stands for, never as a word on its own.
-</p>
-
-<div class="inline">
-	<p style:font-size="14px">
-		Models load with  llama.cpp and run locally in  Llama, on your own machine.
+	<p>
+		In small text the icon takes its capital form, U+E001, so it holds its own next to the letters;
+		in a headline, the cap-height U+E000 sits quietly among the capitals. Use it before the name it
+		stands for, never as a word on its own.
 	</p>
 
-	<p style:font-size="17px">
-		Models load with  llama.cpp and run locally in  Llama, on your own machine.
-	</p>
+	<div class="inline">
+		<p style:font-size="14px">
+			Models load with  llama.cpp and run locally in  Llama, on your own machine.
+		</p>
 
-	<p class="big">Run it in  Llama.</p>
-</div>
+		<p style:font-size="17px">
+			Models load with  llama.cpp and run locally in  Llama, on your own machine.
+		</p>
+
+		<p class="big">Run it in  Llama.</p>
+	</div>
+{/if}
 
 <!-- 6. app icons -->
-<p class="kicker">App icons</p>
+{#if section === 'icons'}
+	<p class="kicker">App icons</p>
 
-<h2>On the tab and the home screen</h2>
+	<h2>On the tab and the home screen</h2>
 
-<p>
-	The web app's favicon, PWA, maskable and Apple touch icons, with their proportions drawn in. All
-	of them start from the favicon, the icon with a {percent(PWA_ASSET_GENERATOR.FAVICON_PADDING / 2)} margin;
-	the square icons add the generator's 30% padding, and the PWA icon is the maskable one at 85%, cut round.
-	The icon sits a little above centre ({Math.round(OPTICAL_LIFT * 1000) / 10}% of its height), so it
-	looks centred. The files the web UI ships still carry the old llama.cpp mark; these are drawn with
-	the L.
-</p>
+	<p>
+		The web app's favicon, PWA, maskable and Apple touch icons, with their proportions drawn in. All
+		of them start from the favicon, the icon with a {percent(
+			PWA_ASSET_GENERATOR.FAVICON_PADDING / 2
+		)} margin; the square icons add the generator's 30% padding, and the PWA icon is the maskable one
+		at 85%, cut round. The icon sits a little above centre ({Math.round(OPTICAL_LIFT * 1000) / 10}%
+		of its height), so it looks centred. The files the web UI ships still carry the old llama.cpp
+		mark; these are drawn with the L.
+	</p>
 
-<div class="icons">
-	{#each icons as icon (icon.label)}
-		{@const p = placed(100, 100, icon.scale)}
-		<figure class="icon-card">
-			<svg
-				class:checker={!icon.background}
-				class:checker-dark={!icon.background && icon.dark}
-				class="icon-art"
-				viewBox="0 0 100 100"
-			>
-				{#if icon.background}
-					{#if icon.round}
-						<circle cx="50" cy="50" fill={icon.background} r="50" />
-					{:else}
-						<rect fill={icon.background} height="100" width="100" />
+	<div class="icons">
+		{#each icons as icon (icon.label)}
+			{@const p = placed(100, 100, icon.scale)}
+			<figure class="icon-card">
+				<svg
+					class:checker={!icon.background}
+					class:checker-dark={!icon.background && icon.dark}
+					class="icon-art"
+					viewBox="0 0 100 100"
+				>
+					{#if icon.background}
+						{#if icon.round}
+							<circle cx="50" cy="50" fill={icon.background} r="50" />
+						{:else}
+							<rect fill={icon.background} height="100" width="100" />
+						{/if}
 					{/if}
-				{/if}
 
-				<g fill={icon.ink} transform={p.transform}>
-					{#each PATHS as d (d)}<path {d} />{/each}
-				</g>
+					<g fill={icon.ink} transform={p.transform}>
+						{#each PATHS as d (d)}<path {d} />{/each}
+					</g>
 
-				<!-- the icon's box -->
-				<rect class="guide" height={p.side} width={p.side} x={p.x} y={p.y} />
+					<!-- the icon's box -->
+					<rect class="guide" height={p.side} width={p.side} x={p.x} y={p.y} />
 
-				{#if icon.guide === 'safe'}
-					<circle class="guide safe" cx="50" cy="50" r="40" />
-				{:else if icon.guide === 'apple'}
-					<rect class="guide safe" height="100" rx="22.5" width="100" />
-				{/if}
-			</svg>
+					{#if icon.guide === 'safe'}
+						<circle class="guide safe" cx="50" cy="50" r="40" />
+					{:else if icon.guide === 'apple'}
+						<rect class="guide safe" height="100" rx="22.5" width="100" />
+					{/if}
+				</svg>
 
-			<figcaption>
-				<span class="icon-label">{icon.label}</span>
+				<figcaption>
+					<span class="icon-label">{icon.label}</span>
 
-				{#each icon.spec as line (line)}<span class="icon-spec">{line}</span>{/each}
+					{#each icon.spec as line (line)}<span class="icon-spec">{line}</span>{/each}
 
-				<span class="icon-files">{icon.files}</span>
-			</figcaption>
-		</figure>
-	{/each}
-</div>
+					<span class="icon-files">{icon.files}</span>
+				</figcaption>
+			</figure>
+		{/each}
+	</div>
+{/if}
 
 <!-- 7. splash screens -->
-<p class="kicker">Splash screens</p>
+{#if section === 'splash'}
+	<p class="kicker">Splash screens</p>
 
-<h2>While the app opens</h2>
+	<h2>While the app opens</h2>
 
-<p>
-	For now the splash screens are the icon alone, centred on the light or dark page colour at
-	{percent(splash)} of the screen's shorter side, for every iPhone and iPad size, upright and on its side.
-	A designed splash screen will follow.
-</p>
+	<p>
+		For now the splash screens are the icon alone, centred on the light or dark page colour at
+		{percent(splash)} of the screen's shorter side, for every iPhone and iPad size, upright and on its
+		side. A designed splash screen will follow.
+	</p>
 
-<div class="splashes">
-	{#each splashes as s (s.label)}
-		{@const p = placed(s.w, s.h, splash)}
-		<figure class="splash-card">
-			<svg style:aspect-ratio="{s.w} / {s.h}" class="splash-art" viewBox="0 0 {s.w} {s.h}">
-				<rect fill={s.background} height={s.h} width={s.w} />
+	<div class="splashes">
+		{#each splashes as s (s.label)}
+			{@const p = placed(s.w, s.h, splash)}
+			<figure class="splash-card">
+				<svg style:aspect-ratio="{s.w} / {s.h}" class="splash-art" viewBox="0 0 {s.w} {s.h}">
+					<rect fill={s.background} height={s.h} width={s.w} />
 
-				<g fill={s.ink} transform={p.transform}>
-					{#each PATHS as d (d)}<path {d} />{/each}
-				</g>
+					<g fill={s.ink} transform={p.transform}>
+						{#each PATHS as d (d)}<path {d} />{/each}
+					</g>
 
-				<rect class="guide" height={p.side} width={p.side} x={p.x} y={p.y} />
-			</svg>
+					<rect class="guide" height={p.side} width={p.side} x={p.x} y={p.y} />
+				</svg>
 
-			<figcaption>
-				<span class="icon-label">{s.label}</span>
+				<figcaption>
+					<span class="icon-label">{s.label}</span>
 
-				<span class="icon-spec">{s.w} × {s.h} · icon {Math.round(p.side)} px</span>
+					<span class="icon-spec">{s.w} × {s.h} · icon {Math.round(p.side)} px</span>
 
-				<span class="icon-files">{s.files}</span>
-			</figcaption>
-		</figure>
-	{/each}
-</div>
+					<span class="icon-files">{s.files}</span>
+				</figcaption>
+			</figure>
+		{/each}
+	</div>
+{/if}
 
 <style>
 	.glyph {
@@ -459,21 +487,22 @@
 		gap: 4px;
 		margin: 0;
 	}
-	.tag,
-	.row-label {
+	.tag {
 		margin: 0;
 		font: 500 11px var(--mono);
 		letter-spacing: 0.08em;
 		text-transform: uppercase;
 		color: var(--l-muted);
 	}
+	.small-sample {
+		font:
+			400 15px / 1.5 'Llama Sans',
+			var(--body);
+	}
 	.sample {
 		font:
 			700 44px / 1.15 'Llama Sans',
 			var(--body);
-	}
-	.buttons .row-label:not(:first-child) {
-		margin-top: 8px;
 	}
 
 	/* 3 */
@@ -567,9 +596,10 @@
 		color: #111111;
 		box-shadow: inset 0 0 0 1px rgb(17 17 17 / 0.16);
 	}
+	/* the capital glyph at 20 px: an 18 px icon */
 	.badge-icon {
 		font:
-			700 24px / 1 'Llama Sans',
+			700 20px / 1 'Llama Sans',
 			var(--body);
 	}
 	.badge :global(.badge-lucide) {
@@ -600,7 +630,7 @@
 		border-radius: 8px;
 	}
 	.compact .badge-icon {
-		font-size: 20px;
+		font-size: 17px;
 	}
 	.compact .badge-top {
 		font-size: 9px;

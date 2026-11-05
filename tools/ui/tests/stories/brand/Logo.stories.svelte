@@ -3,7 +3,6 @@
 	import StateGalleryItem from '../helpers/StateGalleryItem.svelte';
 	import LogoGeometry from './logo-showcase/LogoGeometry.svx';
 	import ShowcaseFrame from './logo-showcase/ShowcaseFrame.svelte';
-	import IconUsage from './logo-usage/IconUsage.svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import { Logo } from '$lib/components/app';
 
@@ -56,13 +55,5 @@
 <Story asChild name="Geometry" parameters={{ controls: { disable: true }, layout: 'fullscreen' }}>
 	<ShowcaseFrame>
 		<LogoGeometry />
-	</ShowcaseFrame>
-</Story>
-
-<!-- the icon in use, one case per section: in type, buttons, a download badge and running text, then the web app's
-     icons and splash screens with their proportions -->
-<Story asChild name="Usage" parameters={{ controls: { disable: true }, layout: 'fullscreen' }}>
-	<ShowcaseFrame>
-		<IconUsage />
 	</ShowcaseFrame>
 </Story>
