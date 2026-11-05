@@ -1,6 +1,6 @@
 <!--
 	Llama Sans at a glance, in the manner of rsms.me/inter and github.com/mona-sans: the name at full size, the family,
-	its two versions, the character set, the weights and the design notes. Its parts are in overview/; the numbers and
+	its two versions with icons and posters, close-ups of its details, the character set, the weights and the notes. Its parts are in overview/; the numbers and
 	notes come from the specimen in ggml-org/llama.brand (fonts/specimen). OverviewFrame puts it on its page.
 -->
 
@@ -16,7 +16,9 @@
 	import DisplaySample from './overview/DisplaySample.svelte';
 	import CharGrid from './overview/CharGrid.svelte';
 	import WeightLines from './overview/WeightLines.svelte';
-	import Details from './overview/Details.svelte';
+	import Closeups from './overview/Closeups.svelte';
+	import IconsSample from './overview/IconsSample.svelte';
+	import Posters from './overview/Posters.svelte';
 
 	const { axis, glyphCount, styles } = specimen;
 	const stems = styles.map((s) => s.stem);
@@ -38,7 +40,7 @@ Beatrice Warde compared good type to a crystal goblet: clear enough that you see
 
 It isn't featureless, though. A few angled cuts give it just enough character to lead the eye along the line, and they come forward only when you look for them.
 
-<Details />
+<Closeups />
 
 </Section>
 
@@ -50,9 +52,15 @@ It isn't featureless, though. A few angled cuts give it just enough character to
 	<UISample />
 </Version>
 
+<Section label="With Lucide icons">
+	<IconsSample />
+</Section>
+
 <Version name="Display" side="end" statement="Quiet letters for loud ideas." specs="Tracking −26 · kerning 115% · line 1.15">
 	<DisplaySample />
 </Version>
+
+<Posters />
 
 <CharGrid />
 
