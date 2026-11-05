@@ -2690,7 +2690,7 @@ static void ggml_compute_forward_leaky_relu_f32(
 
     assert(ggml_is_contiguous_1(src0));
     assert(ggml_is_contiguous_1(dst));
-    assert(ggml_are_same_shape(src0, dst));
+    GGML_ASSERT(ggml_are_same_shape(src0, dst));
 
     const int n  = ggml_nrows(src0);
     const int nc = src0->ne[0];
@@ -2720,7 +2720,7 @@ static void ggml_compute_forward_leaky_relu_f16(
 
     assert(ggml_is_contiguous_1(src0));
     assert(ggml_is_contiguous_1(dst));
-    assert(ggml_are_same_shape(src0, dst));
+    GGML_ASSERT(ggml_are_same_shape(src0, dst));
 
     const int n  = ggml_nrows(src0);
     const int nc = src0->ne[0];
