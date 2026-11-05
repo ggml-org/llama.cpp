@@ -1,6 +1,6 @@
 <!--
 	The overview's opening: the Llama icon (typed from the font, U+E000) over the family's name at full size, on
-	llama.app's navy in both themes, with a kicker above and the tagline under it.
+	llama.app's hero gradient (light blue, navy in dark mode), with a kicker above and the tagline under it.
 -->
 <script lang="ts">
 	let { kicker, tagline }: { kicker: string; tagline: string[] } = $props();
@@ -24,8 +24,8 @@
 		justify-items: center;
 		gap: clamp(20px, 3vw, 36px);
 		padding: clamp(56px, 9vw, 120px) 16px clamp(64px, 10vw, 136px);
-		background: var(--llama-navy);
-		color: #fff;
+		background: var(--llama-hero); /* llama.app's hero: its light blue, and its navy in dark mode */
+		color: var(--llama-hero-ink);
 		text-align: center;
 	}
 	.hero > * {
@@ -39,7 +39,7 @@
 	}
 	.icon {
 		font: 700 clamp(40px, 6vw, 72px) / 1 var(--headline);
-		color: var(--llama-sky);
+		opacity: 0.85;
 	}
 	h1 {
 		font: 700 clamp(88px, 19vw, 264px) / 0.84 var(--headline);
