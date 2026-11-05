@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -601,8 +602,9 @@ static void gguf_merge(const split_params & split_params) {
         fprintf(stderr, "\033[3Ddone\n");
 
         if (!split_params.dry_run && split_params.delete_splits) {
-            int delete_result = std::remove(split_path.c_str());
-            if (delete_result != 0) {
+            std::error_code ec;
+            const bool delete_result = std::filesystem::remove(split_path, ec);
+            if (!delete_result || ec) {
                 merge_error = true;
                 fprintf(stderr, "error: failed to delete %s\n", split_path.c_str());
             } else {
