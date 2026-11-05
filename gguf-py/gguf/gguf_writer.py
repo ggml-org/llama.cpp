@@ -912,8 +912,8 @@ class GGUFWriter:
     def add_swiglu_clamp_exp(self, values: Sequence[float]) -> None:
         self.add_array(Keys.LLM.SWIGLU_CLAMP_EXP.format(arch=self.arch), values)
 
-    def add_swiglu_clamp(self, value: float) -> None:
-        self.add_float32(Keys.LLM.SWIGLU_CLAMP.format(arch=self.arch), value)
+    def add_swiglu_clamp(self, values: Sequence[float]) -> None:
+        self.add_array(Keys.LLM.SWIGLU_CLAMP.format(arch=self.arch), values)
 
     def add_swiglu_clamp_shexp(self, values: Sequence[float]) -> None:
         self.add_array(Keys.LLM.SWIGLU_CLAMP_SHEXP.format(arch=self.arch), values)

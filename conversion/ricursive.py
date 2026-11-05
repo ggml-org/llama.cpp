@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from typing import Iterable, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -80,8 +82,11 @@ class RicursiveModel(TextModel):
             if embed_scale == 0:
                 raise ValueError(f"Ricursive: unsupported embed_scale {embed_scale!r}")
             self.gguf_writer.add_embedding_scale(float(embed_scale))
+        # absent and 0 both mean no clamp (the reference tests `if clamp_threshold:`)
         if (clamp := hparams.get("ffn_clamp_threshold")) is not None:
-            self.gguf_writer.add_swiglu_clamp(float(clamp))
+            if clamp < 0 or not math.isfinite(clamp):
+                raise ValueError(f"Ricursive: unsupported ffn_clamp_threshold {clamp!r}")
+            self.gguf_writer.add_swiglu_clamp([float(clamp)] * self.block_count)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # value_res_lambda has no .weight suffix in the checkpoint

@@ -254,7 +254,6 @@ struct llama_hparams {
     // Additional scale factors (Granite/Granite MoE)
     float f_residual_scale  = 0.0f;
     float f_embedding_scale = 0.0f;
-    float f_swiglu_clamp    = 0.0f;
     float f_attention_scale = 0.0f;
 
     // grok-2
@@ -432,6 +431,7 @@ struct llama_hparams {
     // Step35: optional per-layer clamps for (Swi)GLU
     std::array<float, LLAMA_MAX_LAYERS> swiglu_clamp_exp; // clamping for expert FFN
     std::array<float, LLAMA_MAX_LAYERS> swiglu_clamp_shexp; // shared expert
+    std::array<float, LLAMA_MAX_LAYERS> swiglu_clamp;       // dense FFN
 
     // this value n_pattern means that every nth layer is dense (i.e. non-SWA)
     // dense_first means whether the pattern is start with a dense layer

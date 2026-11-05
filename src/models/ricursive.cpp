@@ -3,7 +3,13 @@
 void llama_model_ricursive::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_EMBEDDING_SCALE,             hparams.f_embedding_scale, false);
-    ml.get_key(LLM_KV_SWIGLU_CLAMP,                hparams.f_swiglu_clamp,    false);
+    // optional: absent or 0 means no clamp (the reference tests `if clamp_threshold:`); a scalar applies to every layer
+    ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP, hparams.swiglu_clamp, hparams.n_layer_all, false);
+    for (uint32_t il = 0; il < hparams.n_layer_all; ++il) {
+        if (!std::isfinite(hparams.swiglu_clamp[il]) || hparams.swiglu_clamp[il] < 0.0f) {
+            throw std::runtime_error(format("ricursive: swiglu_clamp for layer %u must be finite and non-negative, got %g", il, hparams.swiglu_clamp[il]));
+        }
+    }
 
     if (hparams.n_embd_head_k() != hparams.n_embd_head_v()) {
         throw std::runtime_error("ricursive: key_length and value_length must be equal");
@@ -204,8 +210,8 @@ llama_model_ricursive::graph::graph(const llama_model & model, const llm_graph_p
         {
             ggml_tensor * gate = build_lora_mm(layer.ffn_gate, cur, layer.ffn_gate_s);
             ggml_tensor * up   = build_lora_mm(layer.ffn_up,   cur, layer.ffn_up_s);
-            cur = hparams.f_swiglu_clamp > 0.0f
-                ? ggml_swiglu_clamp(ctx0, gate, up, hparams.f_swiglu_clamp)
+            cur = hparams.swiglu_clamp[il] > 0.0f
+                ? ggml_swiglu_clamp(ctx0, gate, up, hparams.swiglu_clamp[il])
                 : ggml_swiglu_split(ctx0, gate, up);
             cb(cur, "ffn_swiglu", il);
             cur = build_lora_mm(layer.ffn_down, cur, layer.ffn_down_s);
