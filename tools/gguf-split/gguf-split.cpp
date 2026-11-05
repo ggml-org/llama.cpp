@@ -18,14 +18,6 @@
 #include <string>
 #include <vector>
 
-#if defined(_WIN32)
-    #include <windows.h>
-    #ifndef PATH_MAX
-        #define PATH_MAX MAX_PATH
-    #endif
-    #include <io.h>
-#endif
-
 enum split_operation : uint8_t {
     OP_NONE,
     OP_SPLIT,
@@ -193,6 +185,27 @@ static bool split_params_parse(int argc, const char ** argv, split_params & para
     return result;
 }
 
+static std::string split_path_from_prefix(const std::string & prefix, int i, int n) {
+    std::string result(prefix.size() + sizeof("-00000-of-00000.gguf"), '\0');
+    int32_t len = llama_split_path(result.data(), result.size(), prefix.c_str(), i, n);
+    if (len <= 0 || (size_t) len >= result.size()) {
+        fprintf(stderr, "%s: failed to construct split path from %s\n", __func__, prefix.c_str());
+        exit(EXIT_FAILURE);
+    }
+    result.resize(len);
+    return result;
+}
+
+static std::string split_prefix_from_path(const std::string & path, int i, int n) {
+    std::string result(path.size() + 1, '\0');
+    int32_t len = llama_split_prefix(result.data(), result.size(), path.c_str(), i, n);
+    if (len <= 0 || (size_t) len >= result.size()) {
+        return "";
+    }
+    result.resize(len);
+    return result;
+}
+
 static void zeros(std::ofstream & file, size_t n) {
     char zero = 0;
     for (size_t i = 0; i < n; ++i) {
@@ -317,11 +330,10 @@ struct split_strategy {
         int n_split = ctx_outs.size();
         for (auto & ctx_out : ctx_outs) {
             // construct file path
-            char split_path[PATH_MAX] = {0};
-            llama_split_path(split_path, sizeof(split_path), params.output.c_str(), i_split, n_split);
+            std::string split_path = split_path_from_prefix(params.output, i_split, n_split);
 
             // open the output file
-            printf("Writing file %s ... ", split_path);
+            printf("Writing file %s ... ", split_path.c_str());
             fflush(stdout);
             std::ofstream fout = std::ofstream(split_path, std::ios::binary);
             fout.exceptions(std::ofstream::failbit); // fail fast on write errors
@@ -428,9 +440,8 @@ static void gguf_merge(const split_params & split_params) {
     std::vector<ggml_context *> ctx_metas;
     std::vector<gguf_context *> ctx_ggufs;
 
-    char split_path[PATH_MAX] = {0};
-    strncpy(split_path, split_params.input.c_str(), sizeof(split_path) - 1);
-    char split_prefix[PATH_MAX] = {0};
+    std::string split_path = split_params.input;
+    std::string split_prefix;
 
     // First pass to find KV and tensors metadata
     for (int i_split = 0; i_split < n_split; i_split++) {
@@ -442,11 +453,11 @@ static void gguf_merge(const split_params & split_params) {
         };
 
         if (i_split > 0) {
-            llama_split_path(split_path, sizeof(split_path), split_prefix, i_split, n_split);
+            split_path = split_path_from_prefix(split_prefix, i_split, n_split);
         }
-        fprintf(stderr, "%s: reading metadata %s ...", __func__, split_path);
+        fprintf(stderr, "%s: reading metadata %s ...", __func__, split_path.c_str());
 
-        auto * ctx_gguf = gguf_init_from_file(split_path, params);
+        auto * ctx_gguf = gguf_init_from_file(split_path.c_str(), params);
         if (!ctx_gguf) {
             fprintf(stderr, "\n%s:  failed to load input GGUF from %s\n", __func__, split_params.input.c_str());
             exit(EXIT_FAILURE);
@@ -460,7 +471,7 @@ static void gguf_merge(const split_params & split_params) {
             auto key_split_count = gguf_find_key(ctx_gguf, LLM_KV_SPLIT_COUNT);
             if (key_split_no < 0 || gguf_get_val_u16(ctx_gguf, key_split_no) != i_split ||
                 key_split_count < 0 || gguf_get_val_u16(ctx_gguf, key_split_count) != n_split) {
-                fprintf(stderr, "\n%s: %s is not split %d of %d\n", __func__, split_path, i_split + 1, n_split);
+                fprintf(stderr, "\n%s: %s is not split %d of %d\n", __func__, split_path.c_str(), i_split + 1, n_split);
                 exit(EXIT_FAILURE);
             }
         }
@@ -491,11 +502,12 @@ static void gguf_merge(const split_params & split_params) {
             }
 
             // Verify the file naming and extract split_prefix
-            if (!llama_split_prefix(split_prefix, sizeof (split_prefix), split_path, i_split, n_split)) {
+            split_prefix = split_prefix_from_path(split_path, i_split, n_split);
+            if (split_prefix.empty()) {
                 fprintf(stderr, "\n%s: unexpected input file name: %s"
                                 " i_split=%d"
                                 " n_split=%d\n", __func__,
-                        split_path, i_split, n_split);
+                        split_path.c_str(), i_split, n_split);
                 gguf_free(ctx_gguf);
                 ggml_free(ctx_meta);
                 gguf_free(ctx_out);
@@ -539,10 +551,10 @@ static void gguf_merge(const split_params & split_params) {
     // Write tensors data
     bool merge_error = false;
     for (int i_split = 0; i_split < n_split; i_split++) {
-        llama_split_path(split_path, sizeof(split_path), split_prefix, i_split, n_split);
+        split_path = split_path_from_prefix(split_prefix, i_split, n_split);
         std::ifstream f_input(split_path, std::ios::binary);
         if (!f_input.is_open()) {
-            fprintf(stderr, "%s:  failed to open input GGUF from %s\n", __func__, split_path);
+            fprintf(stderr, "%s:  failed to open input GGUF from %s\n", __func__, split_path.c_str());
             for (uint32_t i = 0; i < ctx_ggufs.size(); i++) {
                 gguf_free(ctx_ggufs[i]);
                 ggml_free(ctx_metas[i]);
@@ -553,7 +565,7 @@ static void gguf_merge(const split_params & split_params) {
             }
             exit(EXIT_FAILURE);
         }
-        fprintf(stderr, "%s: writing tensors %s ...", __func__, split_path);
+        fprintf(stderr, "%s: writing tensors %s ...", __func__, split_path.c_str());
 
         auto * ctx_gguf = ctx_ggufs[i_split];
         auto * ctx_meta = ctx_metas[i_split];
@@ -589,12 +601,12 @@ static void gguf_merge(const split_params & split_params) {
         fprintf(stderr, "\033[3Ddone\n");
 
         if (!split_params.dry_run && split_params.delete_splits) {
-            int delete_result = std::remove(split_path);
+            int delete_result = std::remove(split_path.c_str());
             if (delete_result != 0) {
                 merge_error = true;
-                fprintf(stderr, "error: failed to delete %s\n", split_path);
+                fprintf(stderr, "error: failed to delete %s\n", split_path.c_str());
             } else {
-                fprintf(stderr, "%s: deleted file %s\n", __func__, split_path);
+                fprintf(stderr, "%s: deleted file %s\n", __func__, split_path.c_str());
             }
         }
     }
