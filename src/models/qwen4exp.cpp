@@ -1005,7 +1005,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_attn_qsa(
     sel = ggml_reshape_4d(ctx0, sel, sel->ne[0], sel->ne[1]/n_stream, 1, n_stream);
     cb(sel, "kq_mask_qsa", il);
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, nullptr, sel, nullptr, nullptr, n_sel, kq_scale, il);
+    ggml_tensor * cur = build_attn_mha(q, k, v, nullptr, sel, nullptr, nullptr, nullptr, n_sel, kq_scale, il);
     cb(cur, "kqv_out", il);
 
     // the rotation is its own inverse, so undo it on the value side of the output
@@ -1443,7 +1443,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_conv_state_at(
                 conv_states_all->nb[1],
                 (slot * mem_size + kv_head) * row_size);
 
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, ggml_cont(ctx0, tail), dst));
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0, tail, dst));
     }
 
     return conv_input;

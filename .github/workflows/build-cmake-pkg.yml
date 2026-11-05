@@ -9,11 +9,27 @@ permissions:
 
 jobs:
   linux:
-    runs-on: [self-hosted, Linux, fast]
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - name: Clone
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
+        with:
+          restore: false
+          save: false
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
+        with:
+          key: build-cmake-pkg
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
 
       - name: Build
         run: |
@@ -55,3 +71,15 @@ jobs:
           cd examples/simple-cmake-pkg
           cmake -S . -B build -DCMAKE_PREFIX_PATH="$PREFIX"/lib/cmake
           cmake --build build -j $(nproc)
+
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: build-cmake-pkg
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true

@@ -92,6 +92,26 @@ export class TabsStore {
 		await this.close(id, true);
 	}
 
+	/**
+	 * Close several tabs at once, e.g. the others or the ones to the right of
+	 * a tab. When the active tab is among them, navigate to `keepId`, the tab
+	 * the action was taken on.
+	 * @param ids - Tab ids to close
+	 * @param keepId - Tab that stays open
+	 * @param activeId - Tab of the current route, if any
+	 * @param view - Links of the tabs the view shows; all tabs when omitted
+	 */
+	async closeMany(
+		ids: string[],
+		keepId: string,
+		activeId: string | null,
+		view: Pick<TabView, 'hrefFor'> = { hrefFor: (tabId) => this.hrefFor(tabId) }
+	): Promise<void> {
+		this.removeTabs(ids);
+
+		if (activeId && ids.includes(activeId)) await goto(view.hrefFor(keepId));
+	}
+
 	hrefFor(id: string): string {
 		return id === NEW_CHAT_TAB_ID ? ROUTES.START : RouterService.chat(id);
 	}

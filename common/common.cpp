@@ -983,20 +983,9 @@ void common_set_env(const std::string & name, const std::string & value) {
 #endif
 }
 
-std::filesystem::path common_get_path_from_env(const std::string & name) {
-#if defined(_WIN32)
-    const std::wstring wname = utf8_to_wstring(name);
-    const wchar_t * wvalue = _wgetenv(wname.c_str());
-    return wvalue ? std::filesystem::path(wvalue) : std::filesystem::path();
-#else
-    const char * value = std::getenv(name.c_str());
-    return value ? std::filesystem::path(value) : std::filesystem::path();
-#endif
-}
-
 #if !defined(_WIN32)
 static std::filesystem::path get_home_directory() {
-    std::filesystem::path home = common_get_path_from_env("HOME");
+    std::filesystem::path home = common_get_env("HOME");
     if (!home.empty()) {
         return home;
     }
@@ -1009,19 +998,19 @@ static std::filesystem::path get_home_directory() {
 #endif
 
 std::filesystem::path fs_get_cache_directory() {
-    std::filesystem::path cache_directory = common_get_path_from_env("LLAMA_CACHE");
+    std::filesystem::path cache_directory = common_get_env("LLAMA_CACHE");
     if (!cache_directory.empty()) {
         return cache_directory;
     }
 #if defined(_WIN32)
-    cache_directory = common_get_path_from_env("LOCALAPPDATA");
+    cache_directory = common_get_env("LOCALAPPDATA");
     if (cache_directory.empty()) {
         throw std::runtime_error("Failed to find %LOCALAPPDATA% directory");
     }
 #elif defined(__APPLE__)
     cache_directory = get_home_directory() / "Library/Caches";
 #else
-    cache_directory = common_get_path_from_env("XDG_CACHE_HOME");
+    cache_directory = common_get_env("XDG_CACHE_HOME");
     if (cache_directory.empty()) {
         cache_directory = get_home_directory() / ".cache";
     }
@@ -1032,12 +1021,12 @@ std::filesystem::path fs_get_cache_directory() {
 std::filesystem::path fs_get_config_directory() {
     std::filesystem::path config_directory;
 #if defined(_WIN32)
-    config_directory = common_get_path_from_env("APPDATA");
+    config_directory = common_get_env("APPDATA");
     if (config_directory.empty()) {
         throw std::runtime_error("Failed to find %APPDATA% directory");
     }
 #else
-    config_directory = common_get_path_from_env("XDG_CONFIG_HOME");
+    config_directory = common_get_env("XDG_CONFIG_HOME");
     if (config_directory.empty()) {
         config_directory = get_home_directory() / ".config";
     }
@@ -2275,6 +2264,16 @@ int32_t common_batch::add_embd(llama_embd embd, const llama_pos * pos, llama_seq
     return size() - 1;
 }
 
+int32_t common_batch::add_embd_row(int32_t row, const llama_pos * pos, llama_seq_id seq_id, bool output) {
+    token t = { LLAMA_TOKEN_NULL, { 0, 0, 0, 0 }, seq_id, output, { nullptr, 0, 0 }, { nullptr, 0, 0 }, {} };
+    t.embd_row = row;
+    for (int32_t j = 0; j < n_pos; ++j) {
+        t.pos[j] = pos[j];
+    }
+    tokens.push_back(t);
+    return size() - 1;
+}
+
 llama_batch_ext * common_batch::get_sub_batch(int32_t off, int32_t n) {
     GGML_ASSERT(batch && "common_batch was not initialized with a context");
     GGML_ASSERT(off >= 0 && n >= 0 && off + n <= size());
@@ -2295,6 +2294,12 @@ llama_batch_ext * common_batch::get_sub_batch(int32_t off, int32_t n) {
             if (t.embd.data && !llama_batch_ext_set_embd_token(res, idx, t.embd)) {
                 GGML_ABORT("%s: failed to set the embedding of token %d at index %d\n", __func__, t.id, i);
             }
+        } else if (t.embd_row >= 0) {
+            idx = llama_batch_ext_add_embd_row(res, t.seq_id, t.embd_row);
+            if (idx < 0) {
+                GGML_ABORT("%s: failed to add embd row %d at index %d (error %d, n = %d)\n", __func__, t.embd_row, i, idx, n);
+            }
+            llama_batch_ext_set_pos(res, idx, t.pos.data());
         } else {
             idx = llama_batch_ext_add_embd(res, t.seq_id, t.embd);
             if (idx < 0) {
