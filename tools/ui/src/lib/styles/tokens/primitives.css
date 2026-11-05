@@ -43,9 +43,9 @@
 	--art-navy: oklch(0.33 0.07 256);
 	--art-green: oklch(0.64 0.09 165);
 	--art-amber: oklch(0.8 0.12 78);
-	/* cinder: the brand's one accent orange, warm next to the hero blue and the beige (#e87227) */
-	--art-cinder: oklch(0.68 0.168 48);
-	--art-cinder-light: oklch(0.85 0.065 48);
+	/* cinder: the brand's one accent orange, warm next to the hero blue and the beige (#e9712e) */
+	--art-cinder: oklch(0.68 0.168 46);
+	--art-cinder-light: oklch(0.85 0.065 46);
 
 	/* red, yellow and green: each scale keeps the hue of its root (red-500, yellow-400, green-500) */
 	--red-400: oklch(0.69 0.2 27);

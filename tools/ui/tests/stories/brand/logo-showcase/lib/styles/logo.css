@@ -12,8 +12,8 @@
 	--l-muted: oklch(0.556 0 0); /* fg-muted */
 	--l-panel: oklch(1 0 0); /* surface-raised */
 	--l-rule: oklch(0.922 0 0); /* line-field */
-	--l-mark: #e87227; /* cinder, the one accent: marks a detail, such as the L's empty centre */
-	--l-bolt: #e87227; /* cinder, as in the .cpp of the llama.cpp lockup: the L flashes in it */
+	--l-mark: #e9712e; /* cinder, the one accent: marks a detail, such as the L's empty centre */
+	--l-bolt: #e9712e; /* cinder, as in the .cpp of the llama.cpp lockup: the L flashes in it */
 	/* the lightning: a white-hot core, a yellow glow around it and a blue halo beyond; the L flashes in --l-bolt */
 	--l-bolt-core: #ffffff;
 	--l-bolt-glow: #ffd23f;
