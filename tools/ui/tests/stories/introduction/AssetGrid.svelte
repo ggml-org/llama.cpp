@@ -24,7 +24,58 @@
 		/** dark marks for light grounds (light) or light marks for dark ones (dark); covers bring their own field */
 		ground: 'cover' | 'dark' | 'light';
 		path: string;
+		/** the asset's own proportions, for covers and social banners (default 3 / 1) */
+		ratio?: string;
+		/** a profile picture: shown in the circle the platforms crop it to */
+		round?: boolean;
 	}
+
+	// social profiles: each platform's avatar and banners, light and dark, from logo/svg/social
+	const social: {
+		banners: [string, string, number, number][];
+		name: string;
+		size: number;
+		title: string;
+	}[] = [
+		{ banners: [['header', 'Header', 1500, 500]], name: 'x', size: 400, title: 'X' },
+		{
+			banners: [
+				['cover', 'Cover', 1584, 396],
+				['page-cover', 'Page cover', 1128, 191]
+			],
+			name: 'linkedin',
+			size: 400,
+			title: 'LinkedIn'
+		},
+		{ banners: [['banner', 'Banner', 2560, 1440]], name: 'youtube', size: 800, title: 'YouTube' }
+	];
+
+	const socialGroups = social.map(({ banners, name, size, title }) => ({
+		assets: [
+			...(['light', 'dark'] as const).map((mode) => ({
+				ground: 'cover' as const,
+				label: `Avatar, ${mode}`,
+				path: `social/${name}/${name}-avatar-${mode}`,
+				ratio: '1 / 1',
+				round: true
+			})),
+			...banners.flatMap(([kind, label, w, h]) =>
+				['llama', 'llama-cpp'].flatMap((lockup) =>
+					(['light', 'dark'] as const).map((mode) => ({
+						ground: 'cover' as const,
+						label: `${label}, ${lockup === 'llama' ? 'Llama' : 'llama.cpp'}, ${mode}`,
+						path: `social/${name}/${name}-${kind}-${lockup}-${mode}`,
+						ratio: `${w} / ${h}`
+					}))
+				)
+			)
+		],
+		note: [
+			`${size} × ${size} avatar`,
+			...banners.map(([, label, w, h]) => `${label.toLowerCase()} ${w} × ${h}`)
+		].join(' · '),
+		title
+	}));
 
 	const groups: { assets: Asset[]; note: string; title: string }[] = [
 		{
@@ -66,7 +117,8 @@
 			],
 			note: '7500 × 2500, for banners and social cards',
 			title: 'Covers'
-		}
+		},
+		...socialGroups
 	];
 
 	const formats: { format: Format; label: string }[] = [
@@ -83,8 +135,8 @@
 		<h1 class="text-3xl font-bold tracking-tight">Assets</h1>
 
 		<p class="max-w-[64ch] text-sm text-muted-foreground">
-			The Llama icon, the Llama and llama.cpp lockups and the covers, to download as SVG, WebP or
-			PNG. They come from
+			The Llama icon, the Llama and llama.cpp lockups, the covers and the social profile pictures
+			and banners for X, LinkedIn and YouTube, to download as SVG, WebP or PNG. They come from
 			<a class="underline underline-offset-2" href="https://github.com/ggml-org/llama.brand"
 				>ggml-org/llama.brand</a
 			>, under CC BY-NC 4.0 with the permissions in its BRAND-USAGE.md: use them as they are to
@@ -102,8 +154,8 @@
 
 			<div
 				class={[
-					'grid gap-4',
-					group.title === 'Icon'
+					'grid items-end gap-4',
+					group.title === 'Icon' || socialGroups.includes(group as (typeof socialGroups)[number])
 						? 'grid-cols-[repeat(auto-fill,minmax(14rem,1fr))]'
 						: 'grid-cols-[repeat(auto-fill,minmax(22rem,1fr))]'
 				]}
@@ -111,9 +163,11 @@
 				{#each group.assets as asset (asset.path)}
 					<figure class="m-0 grid min-w-0 gap-2">
 						<div
+							style:aspect-ratio={asset.ground === 'cover' ? (asset.ratio ?? '3 / 1') : undefined}
 							class={[
 								'grid min-w-0 place-items-center overflow-hidden rounded-card border border-border/60',
-								asset.ground === 'cover' ? 'aspect-[3/1]' : 'aspect-[4/3] p-8',
+								asset.ground === 'cover' ? '' : 'aspect-[4/3] p-8',
+								asset.round && 'mx-auto w-2/3 rounded-full',
 								asset.ground === 'light' && 'bg-[#fafafa]',
 								asset.ground === 'dark' && 'bg-[#111111]'
 							]}
