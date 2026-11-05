@@ -2453,11 +2453,9 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
             if (m_node_dynamic_dims[node->src[0]] != -1) {
                 auto dynamic_dim_idx = m_node_dynamic_dims[node->src[0]];
                 // auto dynamic_dim_value = node->src[0]->ne[dynamic_dim_idx];
-                for (int i = 0; i < GGML_MAX_DIMS; i++) {
-                    if (node->op_params[i] == dynamic_dim_idx) {
-                        m_node_dynamic_dims[node] = i;
-                        break;
-                    }
+                // src dim i moves to dim op_params[i]
+                if (dynamic_dim_idx >= 0 && dynamic_dim_idx < GGML_MAX_DIMS) {
+                    m_node_dynamic_dims[node] = node->op_params[dynamic_dim_idx];
                 }
                 // OPENVINO_ASSERT(dynamic_dim_value == node->ne[m_node_dynamic_dims[node]],
                 //                 "Dynamic dim value mismatch for node: " + std::string(node->name) +
@@ -2585,7 +2583,27 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
                 }
             }
             break;
-        case GGML_OP_CONCAT:
+        case GGML_OP_CONCAT: {
+            // a dynamic dim of a source that is not the concat axis stays valid in the result
+            const int src0_dynamic_dim = m_node_dynamic_dims[node->src[0]];
+            const int src1_dynamic_dim = m_node_dynamic_dims[node->src[1]];
+            // sources should agree; on conflict keep src[0] but show warning
+            if (src0_dynamic_dim != -1 && src1_dynamic_dim != -1 && src0_dynamic_dim != src1_dynamic_dim) {
+                GGML_LOG_WARN("ggml-openvino: different dynamic dims for CONCAT node '%s', src[0]: '%s', src[1]: '%s'\n",
+                              node->name, node->src[0]->name, node->src[1]->name);
+            }
+            int src_dynamic_dim = -1;
+            for (int s = 0; s < 2 && src_dynamic_dim == -1; s++) {
+                auto it = m_node_dynamic_dims.find(node->src[s]);
+                if (it != m_node_dynamic_dims.end()) {
+                    src_dynamic_dim = it->second;
+                }
+            }
+            if (src_dynamic_dim != -1) {
+                m_node_dynamic_dims[node] = src_dynamic_dim;
+                break;
+            }
+            // no source is dynamic: fall back to the dim that grew (the concat axis)
             for (int i = 0; i < GGML_MAX_DIMS; i++) {
                 if (node->src[0]->ne[i] != node->ne[i]) {
                     m_node_dynamic_dims[node] = i;
@@ -2593,6 +2611,7 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
                 }
             }
             break;
+        }
         case GGML_OP_SSM_CONV:
         case GGML_OP_GATED_DELTA_NET:
             m_node_dynamic_dims[node] = 1;
