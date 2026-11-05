@@ -27,9 +27,11 @@ const preview: Preview = {
 			storySort: {
 				order: [
 					'Introduction',
-					['Assets', 'Design guidelines'],
+					['Design guidelines'],
 					'Brand',
 					[
+						'Assets',
+						['Logo', 'Social profiles'],
 						'Logo',
 						['Icon', 'Showcase', 'App icons'],
 						'Typography',
