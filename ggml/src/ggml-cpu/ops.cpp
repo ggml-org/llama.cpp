@@ -8791,6 +8791,8 @@ static void ggml_compute_forward_top_k_f32(
 
     const int top_k = ne0;
 
+    GGML_ASSERT(top_k <= ne00);
+
     int32_t * tmp = (int32_t *) params->wdata + (ne00 + CACHE_LINE_SIZE_F32) * ith;
 
     for (int64_t i = ith; i < nr; i += nth) {
