@@ -15,7 +15,11 @@
 	--ds-neutral-950: oklch(0.145 0 0);
 	--brand-ink: #111111;
 	--brand-light: #fafafa;
-	--brand-orange: #f65e00;
+	--brand-orange: #f65e00; /* the llama.cpp logotype's own; elsewhere the accent is clay */
+	--clay: #a8704f;
+	--beige: #efe9df;
+	--beige-ink: #2b2620;
+	--slate: #3a5878; /* a muted navy, between llama.app's hero blues */
 
 	/* the specimen's roles, mapped onto the design system's semantic tokens */
 	--paper: var(--ds-neutral-0);
@@ -23,9 +27,9 @@
 	--ink: var(--ds-neutral-950);
 	--muted: var(--ds-neutral-500);
 	--rule: var(--ds-neutral-200);
-	--guide: oklch(0.623 0.214 259.815); /* llama.app blue */
-	--guide-soft: oklch(0.623 0.214 259.815 / 0.28);
-	--mark: var(--brand-orange);
+	--guide: oklch(0.56 0.07 250); /* llama.app blue */
+	--guide-soft: oklch(0.56 0.07 250 / 0.28);
+	--mark: var(--clay);
 	--body: 'Llama Sans UI', system-ui, -apple-system, 'Segoe UI', sans-serif;
 	--mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
 
@@ -62,8 +66,8 @@
 	--ink: var(--ds-neutral-50);
 	--muted: var(--ds-neutral-400);
 	--rule: oklch(1 0 0 / 0.12);
-	--guide: oklch(0.707 0.165 254.624);
-	--guide-soft: oklch(0.707 0.165 254.624 / 0.3);
+	--guide: oklch(0.72 0.06 250);
+	--guide-soft: oklch(0.72 0.06 250 / 0.3);
 	--llama-hero: var(--llama-navy);
 	--llama-hero-ink: #ffffff;
 	--llama-hero-rule: rgb(255 255 255 / 0.3);
@@ -159,9 +163,9 @@
 	background: var(--llama-hero);
 	color: var(--llama-hero-ink);
 }
-:where(.specimen) .c-orange {
-	background: var(--brand-orange);
-	color: #ffffff;
+:where(.specimen) .c-beige {
+	background: var(--beige);
+	color: var(--beige-ink);
 }
 :where(.specimen) .c-ink {
 	background: var(--brand-ink);

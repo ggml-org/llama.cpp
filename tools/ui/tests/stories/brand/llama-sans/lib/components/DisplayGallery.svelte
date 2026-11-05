@@ -13,12 +13,12 @@
 	];
 	const stickers: [string, string][] = [
 		['1.0', 'ink'],
-		['&', 'orange'],
-		['+', 'blue'],
+		['&', 'clay'],
+		['+', 'slate'],
 		['Aa', 'paper'],
-		['Q8', 'orange'],
+		['Q8', 'clay'],
 		['GGUF', 'ink'],
-		['70B', 'blue'],
+		['70B', 'slate'],
 		['2026', 'paper']
 	];
 </script>
@@ -52,7 +52,7 @@
 	</article>
 
 	<!-- every step of the weight axis -->
-	<article class="card c-orange weights">
+	<article class="card c-beige weights">
 		<p class="mono-label">One axis · 400 to 700</p>
 
 		<ol>
@@ -66,14 +66,14 @@
 
 		<p class="n outline">128K</p>
 
-		<p class="n blue">128K</p>
+		<p class="n slate">128K</p>
 
 		<p class="mono-label">Tokens of context</p>
 	</article>
 
 	<!-- a wall of small posters -->
 	<article class="card c-ink posters">
-		<div class="tile t-orange"><span class="plus">+</span></div>
+		<div class="tile t-beige"><span class="plus">+</span></div>
 
 		<div class="tile t-paper"><span class="q">Q4</span><span class="tag">4-bit</span></div>
 
@@ -142,7 +142,7 @@
 	</article>
 
 	<!-- a billboard -->
-	<article class="card full c-orange billboard">
+	<article class="card full c-beige billboard">
 		<p class="claim">Run it yourself.</p>
 
 		<p class="by"><span>llama.cpp</span><span>Inference on your own hardware</span></p>
@@ -249,10 +249,10 @@
 	}
 	.numerals .outline {
 		color: transparent;
-		-webkit-text-stroke: 0.4cqi var(--brand-orange);
+		-webkit-text-stroke: 0.4cqi var(--clay);
 	}
-	.numerals .blue {
-		color: var(--llama-blue);
+	.numerals .slate {
+		color: var(--slate);
 	}
 	.numerals .mono-label {
 		margin-top: 3cqi;
@@ -272,9 +272,9 @@
 		border-radius: 1.6cqi;
 		padding: 3cqi;
 	}
-	.t-orange {
-		background: var(--brand-orange);
-		color: #fff;
+	.t-beige {
+		background: var(--beige);
+		color: var(--beige-ink);
 		place-items: center;
 	}
 	.t-paper {
@@ -360,8 +360,8 @@
 		grid-template-rows: auto auto 1fr auto;
 		padding: 4cqi 5cqi 5cqi;
 		background:
-			radial-gradient(120% 80% at 85% 110%, rgb(246 94 0 / 0.55), transparent 60%),
-			radial-gradient(90% 60% at 0% 0%, #22385c, transparent 70%), var(--brand-ink);
+			radial-gradient(120% 80% at 85% 110%, rgb(255 255 255 / 0.08), transparent 60%),
+			var(--llama-navy); /* one hue: navy, a little lighter in a corner */
 	}
 	.cover .masthead {
 		font: 700 27cqi / 0.8 var(--display);
@@ -412,12 +412,12 @@
 		background: var(--brand-ink);
 		color: var(--brand-light);
 	}
-	.s-orange {
-		background: var(--brand-orange);
+	.s-clay {
+		background: var(--clay);
 		color: #fff;
 	}
-	.s-blue {
-		background: var(--llama-blue);
+	.s-slate {
+		background: var(--slate);
 		color: #fff;
 	}
 	.s-paper {
@@ -432,7 +432,7 @@
 		height: 100%;
 	}
 	.glyphs .guide {
-		stroke: var(--llama-blue);
+		stroke: var(--ds-neutral-400);
 		stroke-width: 1;
 		opacity: 0.55;
 		vector-effect: non-scaling-stroke;
@@ -441,7 +441,7 @@
 		font: 500 9px var(--mono);
 		letter-spacing: 0.08em;
 		text-transform: uppercase;
-		fill: var(--llama-blue);
+		fill: var(--ds-neutral-500);
 	}
 	.glyphs .ag {
 		font: 600 220px var(--display);

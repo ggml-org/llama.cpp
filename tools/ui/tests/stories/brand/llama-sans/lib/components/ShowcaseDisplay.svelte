@@ -166,8 +166,8 @@
 		gap: 0;
 		padding: clamp(24px, 4vw, 48px);
 		border-radius: 14px;
-		background: var(--mark);
-		color: var(--paper);
+		background: var(--llama-hero); /* llama.app's hero: light blue, navy in dark mode */
+		color: var(--llama-hero-ink);
 		overflow: hidden;
 	}
 	.poster-word {
@@ -176,7 +176,7 @@
 	}
 	.poster-word.outline {
 		color: transparent;
-		-webkit-text-stroke: 2px var(--paper);
+		-webkit-text-stroke: 2px var(--llama-hero-ink); /* not currentColor: the fill is transparent */
 	}
 	.poster-meta {
 		margin-top: 10px;

@@ -173,7 +173,7 @@
 		border: 1px solid rgb(0 0 0 / 0.12);
 		border-radius: 1cqi;
 		font: 700 22cqi / 1 var(--display);
-		color: var(--llama-blue);
+		color: var(--brand-ink);
 	}
 	.data .facts {
 		display: grid;
@@ -181,7 +181,7 @@
 		padding: 4cqi;
 		border-radius: 1cqi;
 		background: #fff;
-		color: var(--llama-blue);
+		color: var(--brand-ink);
 	}
 	.data dt {
 		font: 700 18px / normal var(--display);
@@ -216,11 +216,11 @@
 		gap: 4cqi;
 		align-items: baseline;
 		padding-block: 1.4cqi;
-		border-top: 1px solid var(--llama-sky);
+		border-top: 1px solid rgb(255 255 255 / 0.22);
 		font: 400 8cqi / 1.1 var(--display);
 	}
 	.index li:last-child {
-		border-bottom: 1px solid var(--llama-sky);
+		border-bottom: 1px solid rgb(255 255 255 / 0.22);
 	}
 	.index li.strong {
 		font-weight: 700;
@@ -306,9 +306,9 @@
 	}
 	.docs .note {
 		padding: 10px 14px;
-		border-left: 3px solid var(--brand-orange);
+		border-left: 3px solid var(--clay);
 		border-radius: 0 8px 8px 0;
-		background: color-mix(in srgb, var(--brand-orange) 10%, white);
+		background: color-mix(in srgb, var(--clay) 12%, white);
 		font-size: 14px;
 	}
 	@media (max-width: 700px) {
