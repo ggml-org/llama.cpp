@@ -137,8 +137,9 @@
 	--badge-primary-text: var(--fg-on-action);
 	--badge-secondary-background: color-mix(in oklch, var(--fg-default) 15%, transparent);
 	--badge-secondary-background-hover: color-mix(in oklch, var(--fg-default) 25%, transparent);
-	--badge-danger-background: var(--fg-danger);
-	--badge-danger-background-hover: color-mix(in oklch, var(--fg-danger) 90%, transparent);
+	/* the solid danger badge is the danger action's red, like the button */
+	--badge-danger-background: var(--action-danger);
+	--badge-danger-background-hover: var(--action-danger-hover);
 	--badge-danger-text: var(--fg-on-danger);
 	--badge-outline-border: var(--line-default);
 	--badge-outline-background-hover: var(--surface-selected);
@@ -156,7 +157,7 @@
 	--button-secondary-background-hover: var(--surface-muted);
 	--button-secondary-border: color-mix(in oklch, var(--line-default) 20%, transparent);
 	--badge-secondary-background: color-mix(in oklch, var(--fg-default) 10%, transparent);
-	--badge-danger-background: color-mix(in oklch, var(--fg-danger) 70%, transparent);
+	--badge-danger-background: var(--action-danger);
 	--badge-danger-background-hover: var(--badge-danger-background);
 	--toggle-group-key-background-idle: transparent;
 	--toggle-group-key-background-idle-hover: var(--action-ghost-hover);
@@ -164,15 +165,13 @@
 	--switch-thumb-on: var(--surface-raised);
 	--float-panel-background-modal: color-mix(in oklch, var(--surface-page) 86%, transparent);
 	/* the matte finish again, from the dark fills. The danger key is matte glass: a frosted, translucent red over the
-	   page, its edge a soft tint of the red rather than a lighter rim, and no sheen (a lit rim and sheen on red read
+	   page (--action-danger), its edge a soft tint of the red rather than a lighter rim, and no sheen (a lit rim and sheen on red read
 	   as metal) */
 	--key-sheen: var(--sheen-start);
 	--key-sheen-solid: var(--white-a9);
 	--button-primary-edge: color-mix(in oklab, var(--button-primary-background), black 10%);
-	--button-danger-background: color-mix(in oklch, var(--red-500) 58%, transparent);
-	--button-danger-background-hover: color-mix(in oklch, var(--red-500) 68%, transparent);
 	--button-danger-sheen: transparent;
-	--button-danger-edge: color-mix(in oklch, var(--red-400) 32%, transparent);
+	--button-danger-edge: color-mix(in oklch, var(--line-danger) 40%, transparent);
 }
 
 /* the user bubble is a card with an even, fainter edge, no inner ring and a barely noticeable shadow */

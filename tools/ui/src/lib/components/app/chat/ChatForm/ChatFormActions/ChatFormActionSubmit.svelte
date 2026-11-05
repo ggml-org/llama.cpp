@@ -20,7 +20,7 @@
 		class={[
 			'md:size-8 size-9 rounded-full p-0',
 			showErrorState &&
-				'bg-red-400/10 text-red-400 hover:bg-red-400/20 hover:text-red-400 disabled:opacity-100'
+				'bg-surface-danger text-fg-danger hover:bg-surface-danger/80 hover:text-fg-danger disabled:opacity-100'
 		]}
 		disabled={isDisabled}
 		type="submit"

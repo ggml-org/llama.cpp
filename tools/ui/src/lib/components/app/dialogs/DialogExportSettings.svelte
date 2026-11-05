@@ -69,10 +69,7 @@
 		<AlertDialog.Footer>
 			<AlertDialog.Cancel onclick={onCancel}>Cancel</AlertDialog.Cancel>
 
-			<AlertDialog.Action
-				class="bg-destructive text-white hover:bg-destructive/80"
-				onclick={onConfirm}
-			>
+			<AlertDialog.Action onclick={onConfirm} variant="destructive">
 				{#if includeSensitiveData}
 					Export Anyway
 				{:else}

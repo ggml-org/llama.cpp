@@ -49,7 +49,7 @@
 	{#snippet children(_meta, ctx)}
 		{#if editFileBody?.errorMessage}
 			<div
-				class="flex items-start gap-2 rounded bg-red-500/10 p-2 text-xs text-red-600 italic dark:text-red-400"
+				class="flex items-start gap-2 rounded bg-surface-danger p-2 text-xs text-fg-danger italic"
 			>
 				<XCircle class="mt-0.5 size-icon-xs shrink-0" />
 

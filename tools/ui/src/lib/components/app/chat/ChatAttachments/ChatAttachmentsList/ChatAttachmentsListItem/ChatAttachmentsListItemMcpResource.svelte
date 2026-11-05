@@ -23,7 +23,7 @@
 	const favicon = $derived(mcpStore.getServerFavicon(attachment.resource.serverName));
 
 	function getStatusClass(attachment: MCPResourceAttachment): string {
-		if (attachment.error) return 'border-red-500/50 bg-red-500/10';
+		if (attachment.error) return 'border-line-danger-soft bg-surface-danger';
 
 		if (attachment.loading) return 'border-border/50 bg-muted/30';
 
@@ -47,7 +47,7 @@
 			{#if attachment.loading}
 				<Loader2 class="size-icon-xs animate-spin text-muted-foreground" />
 			{:else if attachment.error}
-				<AlertCircle class="size-icon-xs text-red-500" />
+				<AlertCircle class="size-icon-xs text-fg-danger" />
 			{:else}
 				<ResourceIcon class="size-icon-xs text-muted-foreground" />
 			{/if}

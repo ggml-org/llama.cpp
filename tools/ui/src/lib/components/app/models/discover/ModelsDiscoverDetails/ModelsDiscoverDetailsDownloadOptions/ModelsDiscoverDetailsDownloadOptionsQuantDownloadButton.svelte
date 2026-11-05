@@ -221,7 +221,7 @@
 	>
 		{#if entry.isFailed}
 			<span
-				class="rounded-md bg-destructive px-1 py-0.5 text-[10px] font-semibold tracking-wide text-destructive-foreground uppercase"
+				class="rounded-md bg-(--badge-danger-background) px-1 py-0.5 text-[10px] font-semibold tracking-wide text-(--badge-danger-text) uppercase"
 			>
 				Failed
 			</span>
