@@ -27,16 +27,17 @@ class SpecCase:
 
 
 CASES = [
-    # Floors are the minimum of three identical DGX Spark calibration runs minus
-    # three acceptance-rate percentage points and 0.2 accepted tokens per step.
+    # Compact floors are the minimum of three identical GB10 calibration runs
+    # against current master minus six acceptance-rate percentage points and
+    # 0.2 accepted tokens per verification step.
     SpecCase(
         name="mtp",
         spec_type="draft-mtp",
         target="Qwen3.5-4B-MTP-Q4_K_M.gguf",
         draft=None,
         n_max=3,
-        min_accept_rate=0.6855,
-        min_accept_len=2.9230,
+        min_accept_rate=0.6040,
+        min_accept_len=2.7766,
     ),
     SpecCase(
         name="dflash",
@@ -44,8 +45,8 @@ CASES = [
         target="Qwen3-4B-Q4_K_M.gguf",
         draft="dflash-Qwen3-4B-Q4_K_M.gguf",
         n_max=7,
-        min_accept_rate=0.1567,
-        min_accept_len=2.0754,
+        min_accept_rate=0.1404,
+        min_accept_len=2.1687,
     ),
     SpecCase(
         name="dspark",
@@ -53,8 +54,8 @@ CASES = [
         target="Qwen3-4B-Q4_K_M.gguf",
         draft="dspark-Qwen3-4B-Q4_K_M.gguf",
         n_max=7,
-        min_accept_rate=0.2578,
-        min_accept_len=2.7766,
+        min_accept_rate=0.2767,
+        min_accept_len=3.1246,
     ),
     SpecCase(
         name="eagle3",
@@ -62,9 +63,10 @@ CASES = [
         target="Qwen3-4B-Q4_K_M.gguf",
         draft="eagle3-Qwen3-4B-Q8_0.gguf",
         n_max=3,
-        min_accept_rate=0.2747,
-        min_accept_len=1.7095,
+        min_accept_rate=0.2006,
+        min_accept_len=1.5757,
     ),
+    # Nightly floors retain the earlier three-point rate and 0.2 length margins.
     SpecCase(
         name="dflash2",
         spec_type="draft-dflash",

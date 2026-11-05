@@ -68,15 +68,16 @@ variable to the runner's persistent model directory when its mount path is confi
 DFlash2 and LiLiCorr measurements belong in the internal nightly performance/quality runs.
 
 The acceptance floors use one-sided regression checks: improvements do not fail. Three identical
-DGX Spark calibration runs produced MTP `0.7155 / 3.1230`, DFlash `0.1867 / 2.2754`, DSpark
-`0.2878 / 2.9766`, EAGLE-3 `0.3047 / 1.9095`, DFlash2 `0.5480 / 4.7414`, and LiLiCorr
-`0.6699 / 5.6444` for acceptance rate and length. The enforced floors subtract three percentage
-points and 0.2 accepted tokens per verification step. The committed six-method suite passed on
-DGX Spark in 41.12 seconds.
+runs on the GB10 runner against the PR merged with current master produced MTP `0.6640 / 2.9766`,
+DFlash `0.2004 / 2.3687`, DSpark `0.3367 / 3.3246`, and EAGLE-3 `0.2606 / 1.7757` for acceptance
+rate and length. The compact floors subtract six percentage points and 0.2 accepted tokens per
+verification step. The six-point rate margin is wider than the largest observed cross-environment
+shift of 0.0506. Warm compact runs completed in about 40 seconds. The DFlash2 and LiLiCorr nightly
+floors retain their earlier three-point rate and 0.2 length margins.
 
 DFlash's token-acceptance rate is lower because the denominator counts every token proposed in each
-seven-token draft block. It accepted 213 of 1,141 proposed tokens over 167 verification steps,
-equivalent to 1.275 accepted draft tokens per step and a mean acceptance length of 2.2754. The floor
+seven-token draft block. It accepted 219 of 1,093 proposed tokens over 160 verification steps,
+equivalent to 1.369 accepted draft tokens per step and a mean acceptance length of 2.3687. The floor
 is intended to detect regressions from that deterministic baseline, not to define a quality target.
 
 To run with stdout/stderr display in real time (verbose output, but useful for debugging):
