@@ -36,6 +36,68 @@ endif ()
 if (GGML_OPENCL_USE_ADRENO_BIN_KERNELS)
     message(STATUS "OpenCL will use precompiled binary kernels for Adreno (improved performance on some platforms)")
     add_compile_definitions(GGML_OPENCL_USE_ADRENO_BIN_KERNELS)
+    target_link_libraries(${TARGET_NAME} PRIVATE ${CMAKE_DL_LIBS})
+endif ()
+
+# The library is only published for Windows. A failed download is not fatal:
+# without the library the backend uses its builtin kernels.
+if (GGML_OPENCL_USE_ADRENO_BIN_KERNELS AND GGML_OPENCL_ADRENO_BIN_KERNELS_FETCH AND WIN32)
+    # Bump the version and hash together when a new library release is published.
+    set(ADRENO_BIN_KERNELS_VERSION "0.0.15")
+    set(ADRENO_BIN_KERNELS_ZIP_SHA256 "325c89a3bce51abe95f40c6bacece005d5ca9cf6166eb5f17d33592cd13ab795")
+    set(ADRENO_BIN_KERNELS_URL "https://softwarecenter.qualcomm.com/api/download/software/tools/Adreno_Kernel_Library_GGML/Windows/${ADRENO_BIN_KERNELS_VERSION}/adreno-opencl-kernels-${ADRENO_BIN_KERNELS_VERSION}.zip")
+
+    set(ADRENO_BIN_KERNELS_ROOT "${CMAKE_BINARY_DIR}/_deps/adreno-opencl-kernels-${ADRENO_BIN_KERNELS_VERSION}")
+    set(ADRENO_BIN_KERNELS_ZIP "${ADRENO_BIN_KERNELS_ROOT}.zip")
+    set(ADRENO_BIN_KERNELS_DLL "${ADRENO_BIN_KERNELS_ROOT}/adreno-opencl-kernels.dll")
+    set(ADRENO_BIN_KERNELS_LICENSE "${ADRENO_BIN_KERNELS_ROOT}/license.txt")
+
+    if (NOT EXISTS "${ADRENO_BIN_KERNELS_DLL}" OR NOT EXISTS "${ADRENO_BIN_KERNELS_LICENSE}")
+        message(STATUS "OpenCL: fetching Adreno binary kernel library ${ADRENO_BIN_KERNELS_VERSION} from Qualcomm; its use is subject to the license in license.txt")
+        file(DOWNLOAD "${ADRENO_BIN_KERNELS_URL}" "${ADRENO_BIN_KERNELS_ZIP}"
+            TLS_VERIFY ON
+            STATUS ADRENO_BIN_KERNELS_DOWNLOAD_STATUS)
+        list(GET ADRENO_BIN_KERNELS_DOWNLOAD_STATUS 0 ADRENO_BIN_KERNELS_DOWNLOAD_RESULT)
+        if (ADRENO_BIN_KERNELS_DOWNLOAD_RESULT EQUAL 0)
+            file(SHA256 "${ADRENO_BIN_KERNELS_ZIP}" ADRENO_BIN_KERNELS_ZIP_ACTUAL_SHA256)
+            if (NOT ADRENO_BIN_KERNELS_ZIP_ACTUAL_SHA256 STREQUAL ADRENO_BIN_KERNELS_ZIP_SHA256)
+                file(REMOVE "${ADRENO_BIN_KERNELS_ZIP}")
+                message(FATAL_ERROR "Adreno binary kernel library hash mismatch: expected ${ADRENO_BIN_KERNELS_ZIP_SHA256}, got ${ADRENO_BIN_KERNELS_ZIP_ACTUAL_SHA256}")
+            endif ()
+
+            file(MAKE_DIRECTORY "${ADRENO_BIN_KERNELS_ROOT}")
+            execute_process(
+                COMMAND ${CMAKE_COMMAND} -E tar xf "${ADRENO_BIN_KERNELS_ZIP}"
+                WORKING_DIRECTORY "${ADRENO_BIN_KERNELS_ROOT}"
+                RESULT_VARIABLE ADRENO_BIN_KERNELS_EXTRACT_RESULT)
+            if (NOT ADRENO_BIN_KERNELS_EXTRACT_RESULT EQUAL 0)
+                message(WARNING "Failed to extract the Adreno binary kernel library from ${ADRENO_BIN_KERNELS_ZIP}")
+            endif ()
+        else ()
+            list(GET ADRENO_BIN_KERNELS_DOWNLOAD_STATUS 1 ADRENO_BIN_KERNELS_DOWNLOAD_ERROR)
+            message(WARNING "Failed to download the Adreno binary kernel library (${ADRENO_BIN_KERNELS_DOWNLOAD_ERROR}); "
+                            "the builtin kernels will be used. Set GGML_OPENCL_ADRENO_BIN_KERNELS_FETCH=OFF to skip the download.")
+        endif ()
+        file(REMOVE "${ADRENO_BIN_KERNELS_ZIP}")
+    endif ()
+
+    if (EXISTS "${ADRENO_BIN_KERNELS_DLL}" AND EXISTS "${ADRENO_BIN_KERNELS_LICENSE}")
+        if (COMMAND license_add_file)
+            license_add_file("Adreno OpenCL kernels" "${ADRENO_BIN_KERNELS_LICENSE}")
+        endif ()
+
+        set(ADRENO_BIN_KERNELS_OUTPUT_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+        if (CMAKE_CONFIGURATION_TYPES)
+            string(APPEND ADRENO_BIN_KERNELS_OUTPUT_DIR "/$<CONFIG>")
+        endif ()
+        add_custom_target(ggml-opencl-adreno-bin-kernels ALL
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${ADRENO_BIN_KERNELS_OUTPUT_DIR}"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ADRENO_BIN_KERNELS_DLL}" "${ADRENO_BIN_KERNELS_OUTPUT_DIR}/adreno-opencl-kernels.dll"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ADRENO_BIN_KERNELS_LICENSE}" "${ADRENO_BIN_KERNELS_OUTPUT_DIR}/LICENSE-adreno-opencl-kernels")
+        add_dependencies(${TARGET_NAME} ggml-opencl-adreno-bin-kernels)
+        install(FILES "${ADRENO_BIN_KERNELS_DLL}" DESTINATION ${CMAKE_INSTALL_BINDIR})
+        install(FILES "${ADRENO_BIN_KERNELS_LICENSE}" DESTINATION ${CMAKE_INSTALL_BINDIR} RENAME LICENSE-adreno-opencl-kernels)
+    endif ()
 endif ()
 
 function(ggml_opencl_add_kernel KNAME)
