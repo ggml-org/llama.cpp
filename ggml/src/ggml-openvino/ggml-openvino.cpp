@@ -457,8 +457,8 @@ static void ggml_backend_openvino_buffer_memset_tensor(ggml_backend_buffer_t buf
         auto mem_fill_fn = ggml_openvino_get_clEnqueueMemFillINTEL();
         if (mem_fill_fn != nullptr) {
             uint8_t pattern = value;
-            cl_int err = mem_fill_fn(queue, (char *) tensor->data + offset, &pattern, sizeof(pattern), size, 0, nullptr,
-                                     nullptr);
+            cl_int err = mem_fill_fn(queue, (char *) tensor->data + offset, &pattern,
+                                     sizeof(pattern), size, 0, nullptr, nullptr);
             if (err != CL_SUCCESS) {
                 GGML_LOG_ERROR("%s: clEnqueueMemFillINTEL failed with error %d\n", __func__, err);
             }
@@ -594,8 +594,8 @@ static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer
             cl_command_queue queue = ggml_openvino_get_cl_queue();
             auto mem_cpy_fn = ggml_openvino_get_clEnqueueMemcpyINTEL();
             if (mem_cpy_fn != nullptr) {
-                cl_int err =
-                    mem_cpy_fn(queue, CL_TRUE, (char *) tensor->data + offset, data, size, 0, nullptr, nullptr);
+                cl_int err = mem_cpy_fn(queue, CL_TRUE, (char *) tensor->data + offset, data, size,
+                                        0, nullptr, nullptr);
                 if (err != CL_SUCCESS) {
                     GGML_LOG_ERROR("%s: clEnqueueMemcpyINTEL failed with error %d\n", __func__, err);
                 }
@@ -642,8 +642,8 @@ static void ggml_backend_openvino_buffer_get_tensor(ggml_backend_buffer_t buffer
         cl_command_queue queue = ggml_openvino_get_cl_queue();
         auto mem_cpy_fn = ggml_openvino_get_clEnqueueMemcpyINTEL();
         if (mem_cpy_fn != nullptr) {
-            cl_int err =
-                mem_cpy_fn(queue, CL_TRUE, data, (const char *) tensor->data + offset, size, 0, nullptr, nullptr);
+            cl_int err = mem_cpy_fn(queue, CL_TRUE, data, (const char *) tensor->data + offset,
+                                    size, 0, nullptr, nullptr);
             if (err != CL_SUCCESS) {
                 GGML_LOG_ERROR("%s: clEnqueueMemcpyINTEL failed with error %d\n", __func__, err);
             }
@@ -672,7 +672,8 @@ static bool ggml_backend_openvino_buffer_cpy_tensor(ggml_backend_buffer_t buffer
         }
         // Can copy from host to device
         if (ggml_backend_buffer_is_host(src->buffer)) {
-            cl_int err = mem_cpy_fn(queue, CL_TRUE, dst->data, src->data, ggml_nbytes(src), 0, nullptr, nullptr);
+            cl_int err = mem_cpy_fn(queue, CL_TRUE, dst->data,
+                                    src->data, ggml_nbytes(src), 0, nullptr, nullptr);
             if (err != CL_SUCCESS) {
                 GGML_LOG_ERROR("%s: clEnqueueMemcpyINTEL (host-to-device) failed with error %d\n", __func__, err);
                 return false;
@@ -684,7 +685,9 @@ static bool ggml_backend_openvino_buffer_cpy_tensor(ggml_backend_buffer_t buffer
             ggml_backend_openvino_buffer_context * src_ctx =
                 (ggml_backend_openvino_buffer_context *) src->buffer->context;
             if (src_ctx->is_remote) {
-                cl_int err = mem_cpy_fn(queue, CL_TRUE, dst->data, src->data, ggml_nbytes(src), 0, nullptr, nullptr);
+                cl_int err = mem_cpy_fn(queue, CL_TRUE, dst->data,
+                                        src->data, ggml_nbytes(src),
+                                        0, nullptr, nullptr);
                 if (err != CL_SUCCESS) {
                     GGML_LOG_ERROR("%s: clEnqueueMemcpyINTEL (device-to-device) failed with error %d\n", __func__, err);
                     return false;
@@ -1425,7 +1428,8 @@ static bool cpy_output_view_is_supported(const ggml_tensor * op) {
         return false;
     }
 
-    return ggml_nbytes(op) == 0 || ggml_is_contiguous(op) || GgmlOvDecoder::is_conv_state_writeback(op);
+    return ggml_nbytes(op) == 0 || ggml_is_contiguous(op) || GgmlOvDecoder::is_conv_state_writeback(op) ||
+           GgmlOvDecoder::is_gdn_snapshot_writeback(op);
 }
 
 static bool mul_mat_id_requires_large_tmp(const ggml_tensor * op) {
@@ -1493,6 +1497,12 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
     }
 
     switch (op->op) {
+    case GGML_OP_TOP_K: {
+        if (op->src[0]->type != GGML_TYPE_F32 || op->type != GGML_TYPE_I32 || ggml_openvino_is_npu()) {
+            return {false, "TOP_K requires F32 input and I32 output on CPU or GPU"};
+        }
+        break;
+    }
     case GGML_OP_CONCAT: {
         if (op->type == GGML_TYPE_I64) {
             return {false, "CONCAT with I64 type is not supported"};
@@ -1804,9 +1814,19 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         if (op->src[3]->ne[0] != 1) {
             return {false, "GATED_DELTA_NET with kda (per-key-dimension gating) is not supported"};
         }
-        // K > 1 (multiple state snapshots) not supported by fused op
-        if (((const int32_t *) op->op_params)[0] > 1) {
-            return {false, "GATED_DELTA_NET with K > 1 (multiple state snapshots) is not supported"};
+        if (op->op_params[0] > 1) {
+#ifndef GGML_OPENVINO_HAS_CACHE_UPDATE
+            static std::atomic_flag warned = ATOMIC_FLAG_INIT;
+            if (!warned.test_and_set()) {
+                GGML_LOG_WARN("OpenVINO snapshot/rollback (speculative decoding) is not supported by this package; "
+                              "a patched OpenVINO package with recurrent cache-update ops is required.\n");
+            }
+            return {false, "GATED_DELTA_NET snapshots require a patched OpenVINO package"};
+#else
+            if (!ggml_openvino_is_gpu() || ggml_openvino_getenv_int("GGML_OPENVINO_FORCE_STATIC")) {
+                return {false, "GATED_DELTA_NET snapshots require dynamic GPU execution"};
+            }
+#endif
         }
         break;
     }
@@ -2021,7 +2041,7 @@ static ggml_openvino_op_support ggml_backend_openvino_device_supports_op_impl(gg
         if (supported_types.find(src->type) == supported_types.end()) {
             return {false, "src[" + std::to_string(i) + "] type " + std::string(ggml_type_name(src->type)) + " is not supported"};
         }
-        if (!has_strides_on_element_grid(src)) {
+        if (!has_strides_on_element_grid(src) && !(i == 1 && GgmlOvDecoder::is_gdn_snapshot_writeback(op))) {
             return {false, "src[" + std::to_string(i) + "] strides are not multiples of each other"};
         }
         const bool is_supported_3d_moe_expert =

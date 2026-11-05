@@ -117,11 +117,16 @@ struct ComputeParams {
     //      [ 18432,     0,     1,     1]            1: VIEW        cache_r_l0 (view)
 
     struct RsWriteback {
-        int slot_begin = 0;  // first cache slot written by the CPY
-        int src_begin = -1;  // first source column copied by a conv-state CPY
+        int64_t slot_begin = 0;  // first cache slot written by the CPY
+        int64_t src_begin = -1;  // first source column copied by a conv-state CPY
+        int64_t seq_count = -1;
+        int64_t snapshot_stride = -1;
     };
 
     std::map<std::string, RsWriteback> rs_writebacks;
+    std::map<std::string, int64_t> sampling_rows;
+    std::map<std::string, int64_t> gdn_attention_rows;
+    std::map<std::string, std::vector<int64_t>> recurrent_controls;
     // Destination slot offset of each state cache writeback CPY node, keyed by node name. It
     // changes with the batch (kv head, active sequence count) and, with rollback enabled
     // (cparams.n_rs_seq > 0), the conv state is written back once per snapshot slot. Passed to the
@@ -148,6 +153,8 @@ public:
         int node_op_case = 0;
         void * data_addr;
     };
+
+    const ggml_cgraph * get_cgraph() const { return m_cgraph; }
 
     // Graph decoder
     GgmlOvDecoder(ggml_cgraph * cgraph,
@@ -437,6 +444,12 @@ public:
 
     void set_compute_params(const ComputeParams & compute_params) { m_compute_params = compute_params; }
 
+    // Per-request storage: scalar runtime controls are host-produced and shape inference
+    // may read them. USM host allocations let the GPU consume them without tiny uploads.
+    std::map<std::string, ov::Tensor> runtime_input_storage;
+    std::map<std::string, ov::Tensor> runtime_input_tensors;
+    std::map<std::string, ov::Tensor> runtime_output_scratch;
+
     bool m_is_static = false;
     bool m_is_stateful = false;
     bool m_is_prefill = false;
@@ -472,6 +485,15 @@ public:
         return tensor->op == GGML_OP_GET_ROWS && op->op == GGML_OP_RMS_NORM;
     }
 
+    static bool is_activation_input(const ggml_tensor * tensor, const ggml_tensor * op) {
+        if (tensor == nullptr || op == nullptr || tensor->type != GGML_TYPE_F32 || tensor->ne[2] != 1 ||
+            tensor->ne[3] != 1 || (tensor->buffer != nullptr && tensor->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS)) {
+            return false;
+        }
+        return (op->op == GGML_OP_RMS_NORM || op->op == GGML_OP_L2_NORM) && op->src[0] == tensor &&
+               (tensor->op == GGML_OP_NONE || tensor->op == GGML_OP_CPY);
+    }
+
     static bool is_inp_mask(const ggml_tensor * tensor, const ggml_tensor * op) {
         return op->op == GGML_OP_CPY || (op->op == GGML_OP_FLASH_ATTN_EXT && tensor == op->src[3]) ||
                (op->op == GGML_OP_SOFT_MAX && tensor == op->src[1]);
@@ -497,6 +519,67 @@ public:
                                      strncmp(tensor->name, "cache_s_l", strlen("cache_s_l")) == 0 ||
                                      strncmp(tensor->name, "cache_ple_r_l", strlen("cache_ple_r_l")) == 0);
     }
+
+    static bool is_gdn_snapshot_writeback(const ggml_tensor * node) {
+        if (!(node != nullptr && node->op == GGML_OP_CPY && node->src[0] != nullptr &&
+               node->src[0]->op == GGML_OP_VIEW && node->src[0]->src[0] != nullptr &&
+               node->src[0]->src[0]->op == GGML_OP_GATED_DELTA_NET && node->src[0]->src[0]->op_params[0] > 1 &&
+               node->src[1] != nullptr && node->src[1]->op == GGML_OP_VIEW && node->view_src != nullptr &&
+               node->src[1]->view_src == node->view_src && node->src[0]->ne[0] == node->src[1]->ne[0] &&
+               node->src[1]->nb[1] > 0 && node->src[1]->nb[1] == ggml_row_size(node->type, node->ne[0]) &&
+               node->src[1]->nb[2] % node->src[1]->nb[1] == 0 &&
+               node->src[1]->view_offs % node->src[1]->nb[1] == 0)) {
+            return false;
+        }
+        const auto * source = node->src[0];
+        const auto * destination = node->src[1];
+        const auto * packed = source->src[0];
+        if (node->type != GGML_TYPE_F32 || source->type != node->type || destination->type != node->type ||
+            node->view_src->type != node->type || !ggml_is_contiguous(node->view_src) ||
+            packed->nb[1] == 0 || source->view_offs % packed->nb[1] != 0 ||
+            source->nb[0] != sizeof(float) || destination->nb[0] != sizeof(float) ||
+            source->ne[3] != 1 || destination->ne[3] != 1) {
+            return false;
+        }
+        for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+            if (source->ne[i] <= 0 || source->ne[i] != destination->ne[i]) {
+                return false;
+            }
+        }
+        const size_t plane_stride = destination->nb[2] / destination->nb[1];
+        if (plane_stride == 0 || size_t(destination->ne[1]) > plane_stride -
+            (destination->view_offs / destination->nb[1]) % plane_stride) {
+            return false;
+        }
+        for (const auto * view : {source, destination}) {
+            size_t remaining = ggml_nbytes(view == source ? packed : node->view_src);
+            if (view->view_offs > remaining || remaining - view->view_offs < sizeof(float)) {
+                return false;
+            }
+            remaining -= view->view_offs + sizeof(float);
+            for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+                const size_t count = view->ne[i] - 1;
+                if (view->nb[i] != 0 && count > remaining / view->nb[i]) {
+                    return false;
+                }
+                remaining -= count * view->nb[i];
+            }
+        }
+        return true;
+    }
+
+    static bool is_sampling_view(const ggml_tensor * node) {
+        return node != nullptr && node->op == GGML_OP_VIEW && node->src[0] != nullptr &&
+               node->src[0]->op == GGML_OP_PAD && node->ne[0] == node->src[0]->ne[0] &&
+               node->ne[1] == 1 && node->ne[2] == 1 && node->ne[3] == 1;
+    }
+
+    static bool is_sampling_top_k(const ggml_tensor * node) {
+        return node != nullptr && node->op == GGML_OP_TOP_K && node->src[0] != nullptr &&
+               node->src[0]->op == GGML_OP_RESHAPE && is_sampling_view(node->src[0]->src[0]);
+    }
+
+    bool is_direct_gdn_view(const ggml_tensor * node) const;
 
     inline static bool is_cache(const ggml_tensor * tensor, const ggml_tensor * op) {
         return is_recurrent_cache(tensor) || is_kvcache(tensor, op);

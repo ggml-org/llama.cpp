@@ -43,11 +43,15 @@ GGML_OP_CONVERTER(translate_glu_geglu_quick);
 GGML_OP_CONVERTER(translate_set_rows);
 GGML_OP_CONVERTER(translate_cpy);
 GGML_OP_CONVERTER(translate_argsort);
+GGML_OP_CONVERTER(translate_top_k);
 GGML_OP_CONVERTER(translate_flash_attn_ext);
 GGML_OP_CONVERTER(translate_clamp);
 GGML_OP_CONVERTER(translate_pad);
 GGML_OP_CONVERTER(translate_ssm_conv);
 GGML_OP_CONVERTER(translate_gated_delta_net);
+#ifdef GGML_OPENVINO_HAS_CACHE_UPDATE
+OutputVector translate_recurrent_gated_delta_net(const NodeContext & context, const OutputVector & cache_inputs);
+#endif
 GGML_OP_CONVERTER(translate_repeat);
 GGML_OP_CONVERTER(translate_cumsum);
 GGML_OP_CONVERTER(translate_fill);

@@ -173,7 +173,8 @@ bool ggml_openvino_model_cache_only() {
 static const char * cache_settings[] = {
     "GGML_OPENVINO_REQUANT_KQUANT",
     "GGML_OPENVINO_NATIVE_SOFTPLUS",
-    "GGML_OPENVINO_KV_SLICE",
+    // GGML_OPENVINO_KV_SLICE only changes dynamic runtime bindings. Dynamic
+    // attention graphs accept either shape and share the same compiled blob.
     "GGML_OPENVINO_MANUAL_GQA_ATTN",
     "GGML_OPENVINO_EXACT_ZERO_POINT",
     "GGML_OPENVINO_STATEFUL_EXECUTION",
@@ -352,7 +353,10 @@ uint64_t ggml_openvino_model_fingerprint(const ggml_cgraph * cgraph,
                                          uint64_t extra_cfg,
                                          const std::string & graph_signature) {
     uint64_t h = FNV_OFFSET;
-    h = fnv1a_u64(h, 2);
+    // Version 3 includes dense Q8_0/Q5_1 requantization in q4_asym64_all.
+    // Version 4 uses GatedDeltaNet output 1 for snapshots in snapshot mode; older
+    // graphs use the incompatible three-output contract.
+    h = fnv1a_u64(h, 4);
     h = fnv1a(h, graph_signature.data(), graph_signature.size());
     for (const char * name : cache_settings) {
         const char * value = ggml_openvino_getenv_str(name, "");

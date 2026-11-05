@@ -9,6 +9,7 @@
 #include <memory>
 #include <openvino/op/add.hpp>
 #include <openvino/op/clamp.hpp>
+#include <openvino/op/concat.hpp>
 #include <openvino/op/convert.hpp>
 #include <openvino/op/cos.hpp>
 #include <openvino/op/divide.hpp>
@@ -444,6 +445,75 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
     if (view_input_size == 0) {
         // No view inputs, return the input as is
         return input;
+    }
+
+    // Integer router views can share these strides when their row count is zero.
+    // Packed projections can store query and gate in separate halves of each head.
+    if (!context.is_static() && view_input_size == 1 && input.get_element_type().is_real()) {
+        const auto source = context.get_view_input_src_ggml_shape(input_index, 0);
+        const auto view = context.get_view_input_ggml_shape(input_index, 0);
+        const auto source_stride = context.get_view_input_src_stride(input_index, 0);
+        const auto view_stride = context.get_view_input_stride(input_index, 0);
+        if (source.size() == 4 && view.size() == 4 && source_stride.size() == 4 && view_stride.size() == 4 &&
+            source[0] == 1 && source[1] == 1 && view[0] == 1 && view[1] == source[2] &&
+            view[2] > 0 && view[3] > 0 && source_stride[3] > 0 &&
+            view_stride[1] == source_stride[2] && view_stride[3] == source_stride[3] &&
+            view_stride[2] % source_stride[3] == 0) {
+            const size_t head_width = view_stride[2] / source_stride[3];
+            const auto offset = context.get_view_input_offset(input_index, 0);
+            const auto source_offset = context.get_view_input_src_offset(input_index, 0);
+            if (head_width > view[3] && source[3] % head_width == 0 && source[3] / head_width == view[2] &&
+                offset >= source_offset && (offset - source_offset) % source_stride[3] == 0) {
+                const size_t begin = (offset - source_offset) / source_stride[3];
+                if (begin <= head_width - view[3]) {
+                    auto heads = std::make_shared<ov::op::v1::Reshape>(input,
+                        ov::op::v0::Constant::create(ov::element::i64, {4},
+                            std::vector<int64_t>{1, -1, int64_t(view[2]), int64_t(head_width)}), false);
+                    auto part = std::make_shared<ov::op::v8::Slice>(heads,
+                        ov::op::v0::Constant::create(ov::element::i64, {1}, {begin}),
+                        ov::op::v0::Constant::create(ov::element::i64, {1}, {begin + view[3]}),
+                        ov::op::v0::Constant::create(ov::element::i64, {1}, {1}),
+                        ov::op::v0::Constant::create(ov::element::i64, {1}, {3}));
+                    return part;
+                }
+            }
+        }
+    }
+
+    if (!context.is_static() && view_input_size == 1 && input.get_element_type().is_real() &&
+        context.has_input("s_copy_active_slot_len")) {
+        const auto source = context.get_view_input_src_ggml_shape(input_index, 0);
+        const auto view = context.get_view_input_ggml_shape(input_index, 0);
+        const auto source_stride = context.get_view_input_src_stride(input_index, 0);
+        const auto view_stride = context.get_view_input_stride(input_index, 0);
+        if (source.size() == 4 && view.size() == 4 && source_stride.size() == 4 && view_stride.size() == 4 &&
+            source[0] == 1 && view[0] == source[1] && view[1] == source[2] && view[3] > 0 &&
+            view[2] <= source[3] / view[3] &&
+            view_stride[0] == source_stride[1] && view_stride[1] == source_stride[2] &&
+            view_stride[3] == source_stride[3]) {
+            const auto offset = context.get_view_input_offset(input_index, 0);
+            const auto source_offset = context.get_view_input_src_offset(input_index, 0);
+            if (offset >= source_offset && source_stride[3] > 0 &&
+                (offset - source_offset) % source_stride[3] == 0) {
+                const int64_t begin = (offset - source_offset) / source_stride[3];
+                const int64_t width = view[2] * view[3];
+                if (begin <= int64_t(source[3]) - width) {
+                    auto sliced = std::make_shared<ov::op::v8::Slice>(input,
+                        ov::op::v0::Constant::create(ov::element::i64, {1}, {begin}),
+                        ov::op::v0::Constant::create(ov::element::i64, {1}, {begin + width}),
+                        ov::op::v0::Constant::create(ov::element::i64, {1}, {1}),
+                        ov::op::v0::Constant::create(ov::element::i64, {1}, {3}));
+                    auto prefix = std::make_shared<ov::op::v8::Gather>(
+                        std::make_shared<ov::op::v3::ShapeOf>(input, ov::element::i64),
+                        ov::op::v0::Constant::create(ov::element::i64, {2}, {1, 2}),
+                        ov::op::v0::Constant::create(ov::element::i64, {}, {0}));
+                    auto shape = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{prefix,
+                        ov::op::v0::Constant::create(ov::element::i64, {2},
+                            std::vector<int64_t>{int64_t(view[2]), int64_t(view[3])})}, 0);
+                    return std::make_shared<ov::op::v1::Reshape>(sliced, shape, false);
+                }
+            }
+        }
     }
 
     // If translate_view already resolved this VIEW (produced a Slice), the input
