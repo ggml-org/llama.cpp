@@ -1,5 +1,6 @@
 <!--
-	The Typography overview: Llama Sans and Llama Mono on one page, with a switcher pinned at the top. Each font gets the
+	The Typography overview: Llama Sans and Llama Mono on one page, with the design system's Tabs pinned at the top to
+	switch between them. Each font gets the
 	same layout, after rsms.me/inter and github.com/mona-sans: a hero set in it, then its own part (SansOverview, with a
 	part for each end of its optical size axis, and MonoOverview). It sits in OverviewFrame, which brings the
 	specimen's colours and fonts.
@@ -9,6 +10,7 @@
 	import { specimen } from '../llama-sans/lib/specimen';
 	import Hero from '../llama-sans/overview/Hero.svelte';
 	import SansOverview from './SansOverview.svelte';
+	import * as Tabs from '$lib/components/ui/tabs';
 
 	type Variant = 'mono' | 'sans';
 
@@ -49,55 +51,30 @@
 
 	let selected = $state<Variant>('sans');
 	const current = $derived(variants.find((v) => v.id === selected)!);
-
-	function select(id: Variant) {
-		if (id === selected) return;
-
-		selected = id;
-		// a new version starts at its hero, wherever the switcher was used
-		window.scrollTo({ top: 0 });
-	}
-
-	// left and right arrows move between the tabs, as in any tablist
-	function onkeydown(event: KeyboardEvent) {
-		const step = { ArrowLeft: -1, ArrowRight: 1 }[event.key];
-
-		if (!step) return;
-
-		const i =
-			(variants.findIndex((v) => v.id === selected) + step + variants.length) % variants.length;
-
-		select(variants[i].id);
-		(event.currentTarget as HTMLElement)
-			.querySelector<HTMLElement>(`#tab-${variants[i].id}`)
-			?.focus();
-	}
 </script>
 
 <div class="page">
+	<!-- the design system's Tabs (in .ds, so the specimen's reset leaves them alone); a new font starts at its hero,
+	     wherever the switcher was used -->
 	<nav class="switcher">
-		<div aria-label="Typeface" class="tabs" {onkeydown} role="tablist" tabindex="-1">
-			{#each variants as v (v.id)}
-				<button
-					style:--face={v.face}
-					aria-controls="panel"
-					aria-selected={v.id === selected}
-					class="tab"
-					id="tab-{v.id}"
-					onclick={() => select(v.id)}
-					role="tab"
-					tabindex={v.id === selected ? 0 : -1}
-					type="button"
-				>
-					<span class="family">{v.family}</span>
+		<Tabs.Root
+			bind:value={selected}
+			class="ds items-center"
+			onValueChange={() => window.scrollTo({ top: 0 })}
+		>
+			<Tabs.List aria-label="Typeface">
+				{#each variants as v (v.id)}
+					<Tabs.Trigger style="font-family: {v.face}" value={v.id}>
+						<span class="family">{v.family}</span>
 
-					<span class="name">{v.name}</span>
-				</button>
-			{/each}
-		</div>
+						{v.name}
+					</Tabs.Trigger>
+				{/each}
+			</Tabs.List>
+		</Tabs.Root>
 	</nav>
 
-	<div aria-labelledby="tab-{selected}" class="panel" id="panel" role="tabpanel">
+	<div aria-label="Llama {current.name}" class="panel" role="region">
 		{#key selected}
 			<Hero
 				face={current.face}
@@ -132,48 +109,8 @@
 		backdrop-filter: blur(12px);
 		border-bottom: 1px solid var(--rule);
 	}
-	.tabs {
-		display: flex;
-		gap: 4px;
-		padding: 4px;
-		border-radius: 999px;
-		background: var(--sheet);
-	}
-	.tab {
-		display: inline-flex;
-		align-items: baseline;
-		gap: 6px;
-		padding: 8px 16px;
-		border: 0;
-		border-radius: 999px;
-		background: transparent;
-		color: var(--muted);
-		font: 600 15px / 1.25 var(--face);
-		cursor: pointer;
-		transition:
-			background-color 150ms ease,
-			color 150ms ease;
-	}
-	.tab:hover {
-		color: var(--ink);
-	}
-	.tab[aria-selected='true'] {
-		background: var(--paper);
-		color: var(--ink);
-		box-shadow:
-			0 1px 2px rgb(0 0 0 / 0.08),
-			0 0 0 1px var(--rule);
-	}
-	/* in dark the paper is darker than the track, so the selected tab rises to a lighter grey instead */
-	:global(.dark) .tab[aria-selected='true'] {
-		background: color-mix(in oklab, var(--ink) 14%, var(--sheet));
-		box-shadow: none;
-	}
-	.tab:focus-visible {
-		outline: 2px solid var(--mark);
-		outline-offset: 2px;
-	}
 	.family {
+		margin-right: 0.25em;
 		font-weight: 400;
 	}
 	@media (max-width: 480px) {

@@ -54,12 +54,14 @@
 }
 /* the design system's base styles (preflight, form controls) step aside: inside the frame every element starts from
    the browser's own defaults, as on the brand site. SVGs keep theirs, so their presentation attributes still apply */
-.specimen :where(*:not(svg, svg *)) {
+/* a .ds element keeps the design system's own styles, so its components (tabs, toggle groups, switches) can sit on
+   the specimen's pages as they are */
+.specimen :where(*:not(svg, svg *, .ds, .ds *)) {
 	all: revert;
 }
 /* the optical size a page or section pins (--opsz-pin, e.g. 'opsz' 40) reaches every element: the font shorthand
    resets font-variation-settings, so the pin can't simply inherit. Unset, the browser picks opsz from font-size */
-.specimen *:not(svg, svg *) {
+.specimen *:not(svg, svg *, .ds, .ds *) {
 	font-variation-settings: var(--opsz-pin, normal) !important;
 }
 .specimen :where(svg) {
