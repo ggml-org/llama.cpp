@@ -6066,7 +6066,6 @@ int ggml_metal_op_topk_moe(ggml_metal_op_t ctx, int idx) {
     if (with_norm) {
         ggml_tensor * denom_node = ctx->node(idx + sum_rows_pos + 1);
         if (denom_node->op == GGML_OP_SCALE) {
-            // the sum adjustment is a bias (DeepSeek-V4.1), the scale factor is checked to be 1.0
             bias = ggml_get_op_params_f32(denom_node, 1);
         } else {
             clamp = ggml_get_op_params_f32(denom_node, 0);

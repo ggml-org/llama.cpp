@@ -345,10 +345,6 @@ static bool ggml_metal_fusion_check_snake(
 
 #define GGML_METAL_TOPK_MOE_MAX_EXPERTS 1024
 
-// SOFT_MAX or UNARY(sigmoid) or UNARY(softplus) + SQRT + ARGSORT + GET_ROWS (plus
-// optional norm/scale) for MoE routing. This is a multi-output elision chain: the
-// fused kernel writes both the selected expert ids and the gathered/normalized
-// routing weights.
 static const std::vector<ggml_op> ops_topk_moe = {
     GGML_OP_SOFT_MAX, GGML_OP_RESHAPE, GGML_OP_ARGSORT, GGML_OP_VIEW, GGML_OP_GET_ROWS
 };
@@ -363,7 +359,6 @@ static const std::vector<ggml_op> ops_topk_moe_norm_scale = {
     GGML_OP_SOFT_MAX, GGML_OP_RESHAPE, GGML_OP_ARGSORT, GGML_OP_VIEW, GGML_OP_GET_ROWS,
     GGML_OP_RESHAPE, GGML_OP_SUM_ROWS, GGML_OP_CLAMP, GGML_OP_DIV, GGML_OP_RESHAPE, GGML_OP_SCALE
 };
-// the sum is adjusted with an additive bias instead of a lower clamp (DeepSeek-V4.1)
 static const std::vector<ggml_op> ops_topk_moe_norm_bias = {
     GGML_OP_SOFT_MAX, GGML_OP_RESHAPE, GGML_OP_ARGSORT, GGML_OP_VIEW, GGML_OP_GET_ROWS,
     GGML_OP_RESHAPE, GGML_OP_SUM_ROWS, GGML_OP_SCALE, GGML_OP_DIV, GGML_OP_RESHAPE
@@ -372,8 +367,7 @@ static const std::vector<ggml_op> ops_topk_moe_norm_scale_bias = {
     GGML_OP_SOFT_MAX, GGML_OP_RESHAPE, GGML_OP_ARGSORT, GGML_OP_VIEW, GGML_OP_GET_ROWS,
     GGML_OP_RESHAPE, GGML_OP_SUM_ROWS, GGML_OP_SCALE, GGML_OP_DIV, GGML_OP_RESHAPE, GGML_OP_SCALE
 };
-// sqrt(softplus) scoring with an expert selection bias; the unbiased scores are the
-// routing weights (DeepSeek-V4/V4.1)
+
 static const std::vector<ggml_op> ops_topk_moe_sp = {
     GGML_OP_UNARY, GGML_OP_SQRT, GGML_OP_RESHAPE, GGML_OP_ADD, GGML_OP_ARGSORT, GGML_OP_VIEW, GGML_OP_GET_ROWS
 };
@@ -396,8 +390,7 @@ static const std::vector<ggml_op> ops_topk_moe_sp_norm_scale_bias = {
     GGML_OP_UNARY, GGML_OP_SQRT, GGML_OP_RESHAPE, GGML_OP_ADD, GGML_OP_ARGSORT, GGML_OP_VIEW, GGML_OP_GET_ROWS,
     GGML_OP_RESHAPE, GGML_OP_SUM_ROWS, GGML_OP_SCALE, GGML_OP_DIV, GGML_OP_RESHAPE, GGML_OP_SCALE
 };
-// sigmoid scoring with an expert selection bias; the unbiased scores are the routing
-// weights (GLM, DeepSeek-V2/V3.2, ...)
+
 static const std::vector<ggml_op> ops_topk_moe_sig = {
     GGML_OP_UNARY, GGML_OP_RESHAPE, GGML_OP_ADD, GGML_OP_ARGSORT, GGML_OP_VIEW, GGML_OP_GET_ROWS
 };
@@ -433,7 +426,6 @@ static bool ggml_metal_fusion_check_topk_moe(
 
     const int n_ops = (int) fusion->ops.size();
 
-    // the norm variants append SUM_ROWS + DIV, the scale variants end with SCALE
     bool with_norm = false;
     for (int j = 0; j < n_ops; ++j) {
         with_norm |= fusion->ops[j] == GGML_OP_SUM_ROWS;
