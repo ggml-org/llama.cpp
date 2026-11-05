@@ -46,9 +46,9 @@ void llama_model_ricursive::load_arch_hparams(llama_model_loader & ml) {
         }
     }
 
-    // the reference uses plain RoPE on the SWA layers: no rope scaling
+    // the SWA layers are the only RoPE layers, they use the model RoPE parameters
     hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
-    hparams.rope_freq_scale_train_swa = 1.0f;
+    hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
     ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
 
     switch (hparams.n_layer()) {
@@ -118,8 +118,7 @@ llama_model_ricursive::graph::graph(const llama_model & model, const llm_graph_p
 
     inpL = build_inp_embd(model.tok_embd);
 
-    // value residual (modeling_ricursive.py): every layer mixes x0 into its V input
-    // x0 = token embeddings * embedding_scale (applied in build_inp_embd), the same tensor for all layers
+    // value residual: x0 = token embeddings * embedding_scale, the same tensor for all layers (modeling_ricursive.py:380-381,405)
     ggml_tensor * inp_vres = inpL;
 
     ggml_tensor * inp_pos = build_inp_pos();
@@ -144,7 +143,7 @@ llama_model_ricursive::graph::graph(const llama_model & model, const llm_graph_p
             ggml_tensor * Qcur = build_lora_mm(layer.wq, attn_in, layer.wq_s);
             ggml_tensor * Kcur = build_lora_mm(layer.wk, attn_in, layer.wk_s);
 
-            // v_in = lerp(x0, attn_norm(x), sigmoid(lambda)), lambda is learned per layer
+            // v_in = lerp(x0, attn_norm(x), sigmoid(lambda)), lambda is learned per layer (modeling_ricursive.py:182-185)
             ggml_tensor * v_in = attn_in;
             if (layer.attn_vres_lambda) {
                 ggml_tensor * mix = ggml_sigmoid(ctx0, layer.attn_vres_lambda);
@@ -162,18 +161,17 @@ llama_model_ricursive::graph::graph(const llama_model & model, const llm_graph_p
             cb(Qcur, "Qcur_normed", il);
             cb(Kcur, "Kcur_normed", il);
 
-            // global layers use no RoPE (NoPE), as in modeling_ricursive.py
+            // global layers use no RoPE (NoPE): the reference rotates only sliding_attention layers (modeling_ricursive.py:127-129,203-205)
             if (hparams.has_rope(il)) {
                 const float freq_base_l  = model.get_rope_freq_base (cparams, il);
                 const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
 
-                // plain RoPE on the SWA layers, no YaRN (same as the olmo2 SWA layers)
                 Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr,
                         n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                        0.0f, 1.0f, beta_fast, beta_slow);
+                        ext_factor, attn_factor, beta_fast, beta_slow);
                 Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr,
                         n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                        0.0f, 1.0f, beta_fast, beta_slow);
+                        ext_factor, attn_factor, beta_fast, beta_slow);
             }
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);
@@ -183,7 +181,7 @@ llama_model_ricursive::graph::graph(const llama_model & model, const llm_graph_p
             cb(cur, "attn_out", il);
 
             if (layer.wqkv_gate) {
-                ggml_tensor * gate = build_lora_mm(layer.wqkv_gate, attn_in);
+                ggml_tensor * gate = build_lora_mm(layer.wqkv_gate, attn_in, layer.wqkv_gate_s);
                 gate = ggml_sigmoid(ctx0, gate);
                 cb(gate, "attn_gate", il);
                 cur = ggml_mul(ctx0, cur, gate);
@@ -232,7 +230,7 @@ llama_model_ricursive::graph::graph(const llama_model & model, const llm_graph_p
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    cur = build_lora_mm(model.output, cur);
+    cur = build_lora_mm(model.output, cur, model.output_s);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 }
