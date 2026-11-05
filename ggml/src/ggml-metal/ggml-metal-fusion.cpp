@@ -500,6 +500,131 @@ static bool ggml_metal_fusion_check_topk_moe(
     return true;
 }
 
+// SIGMOID + ADD(selection bias) + ARGSORT + GET_ROWS of the unbiased probs + norm (plus optional scale).
+// DeepSeek-V3 style routing (Nemotron-H MoE, GLM, ...): the top-k ranks sigmoid + bias, the gathered
+// routing weights are the unbiased sigmoid values.
+static const std::vector<ggml_op> ops_topk_moe_sigmoid_norm = {
+    GGML_OP_UNARY, GGML_OP_RESHAPE, GGML_OP_ADD, GGML_OP_ARGSORT, GGML_OP_VIEW, GGML_OP_GET_ROWS,
+    GGML_OP_RESHAPE, GGML_OP_SUM_ROWS, GGML_OP_CLAMP, GGML_OP_DIV, GGML_OP_RESHAPE
+};
+static const std::vector<ggml_op> ops_topk_moe_sigmoid_norm_scale = {
+    GGML_OP_UNARY, GGML_OP_RESHAPE, GGML_OP_ADD, GGML_OP_ARGSORT, GGML_OP_VIEW, GGML_OP_GET_ROWS,
+    GGML_OP_RESHAPE, GGML_OP_SUM_ROWS, GGML_OP_CLAMP, GGML_OP_DIV, GGML_OP_RESHAPE, GGML_OP_SCALE
+};
+
+static bool ggml_metal_fusion_check_topk_moe_sigmoid(
+        const ggml_metal_fusion       * fusion,
+        const ggml_tensor * const     * nodes,
+        const ggml_cgraph             * gf,
+        const int                     * node_idxs,
+              int                       idx,
+              ggml_metal_fusion_mode    mode) {
+    GGML_UNUSED(nodes);
+
+    const std::vector<ggml_op> & ops_all = fusion->ops_all;
+    const bool with_scale = ops_all.back() == GGML_OP_SCALE;
+
+    const int raw_start = node_idxs[idx];
+    int       raw_end   = node_idxs[idx + (int) fusion->ops.size() - 1];
+
+    // without the scale the chain ends with a RESHAPE that the non-empty sequence filters out
+    if (!with_scale) {
+        if (raw_end + 1 >= gf->n_nodes) {
+            return false;
+        }
+        const ggml_tensor * trailing_reshape = gf->nodes[raw_end + 1];
+        if (trailing_reshape->op != GGML_OP_RESHAPE || trailing_reshape->src[0] != gf->nodes[raw_end]) {
+            return false;
+        }
+        raw_end++;
+    }
+
+    const int raw_count = raw_end - raw_start + 1;
+    if (raw_count != (int) ops_all.size()) {
+        return false;
+    }
+
+    int raw_idxs[GGML_METAL_FUSION_MAX];
+    for (int i = 0; i < raw_count; ++i) {
+        raw_idxs[i] = raw_start + i;
+        if (gf->nodes[raw_start + i]->op != ops_all[i]) {
+            return false;
+        }
+    }
+
+    const ggml_tensor * sigmoid          = gf->nodes[raw_start + 0];
+    const ggml_tensor * probs_reshaped   = gf->nodes[raw_start + 1];
+    const ggml_tensor * biased           = gf->nodes[raw_start + 2];
+    const ggml_tensor * argsort          = gf->nodes[raw_start + 3];
+    const ggml_tensor * ids              = gf->nodes[raw_start + 4];
+    const ggml_tensor * get_rows         = gf->nodes[raw_start + 5];
+    const ggml_tensor * weights_reshaped = gf->nodes[raw_start + 6];
+    const ggml_tensor * sum_rows         = gf->nodes[raw_start + 7];
+    const ggml_tensor * clamp            = gf->nodes[raw_start + 8];
+    const ggml_tensor * div              = gf->nodes[raw_start + 9];
+    const ggml_tensor * out_reshaped     = gf->nodes[raw_start + 10];
+    const ggml_tensor * out              = gf->nodes[raw_end];
+    const ggml_tensor * logits           = sigmoid->src[0];
+    const ggml_tensor * bias             = biased->src[0] == sigmoid ? biased->src[1] : biased->src[0];
+
+    if (ggml_get_unary_op(sigmoid) != GGML_UNARY_OP_SIGMOID) {
+        return false;
+    }
+
+    if (logits->type != GGML_TYPE_F32 || sigmoid->type != GGML_TYPE_F32 || bias->type != GGML_TYPE_F32 ||
+        out->type != GGML_TYPE_F32 || ids->type != GGML_TYPE_I32) {
+        return false;
+    }
+
+    const int64_t n_expert      = logits->ne[0];
+    const int64_t n_tokens      = logits->ne[1];
+    const int64_t n_expert_used = ids->ne[0];
+
+    if (n_expert <= 0 || n_expert_used <= 0 || n_expert_used > n_expert ||
+        n_expert > GGML_METAL_TOPK_MOE_MAX_EXPERTS || n_expert_used > GGML_METAL_TOPK_MOE_MAX_EXPERTS) {
+        return false;
+    }
+
+    if (logits->ne[2] != 1 || logits->ne[3] != 1 ||
+        bias->ne[0] != n_expert || ggml_nelements(bias) != n_expert || !ggml_is_contiguous(bias) ||
+        ids->ne[1] != n_tokens || ids->ne[2] != 1 || ids->ne[3] != 1 ||
+        out->ne[0] != 1 || out->ne[1] != n_expert_used || out->ne[2] != n_tokens || out->ne[3] != 1) {
+        return false;
+    }
+
+    if (!ggml_is_contiguous(logits) || !ggml_is_contiguous(out) ||
+        ids->nb[0] != ggml_type_size(GGML_TYPE_I32) ||
+        ids->nb[1] != ggml_type_size(GGML_TYPE_I32) * n_expert) {
+        return false;
+    }
+
+    if (probs_reshaped->src[0] != sigmoid || (biased->src[0] != sigmoid && biased->src[1] != sigmoid) ||
+        argsort->src[0] != biased || ids->src[0] != argsort ||
+        get_rows->src[0] != probs_reshaped || get_rows->src[1] != ids ||
+        weights_reshaped->src[0] != get_rows || sum_rows->src[0] != weights_reshaped ||
+        clamp->src[0] != sum_rows || div->src[0] != weights_reshaped || div->src[1] != clamp ||
+        out_reshaped->src[0] != div) {
+        return false;
+    }
+
+    if (with_scale && gf->nodes[raw_start + 11]->src[0] != out_reshaped) {
+        return false;
+    }
+
+    const int outputs[2] = { raw_start + 4, raw_end };
+    if (!ggml_can_fuse_subgraph_ext(gf, raw_idxs, raw_count, ops_all.data(), outputs, 2)) {
+        return false;
+    }
+
+    if (mode == GGML_METAL_FUSION_FULL) {
+        if (!logits->data || !out->data || !ids->data || !bias->data) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 #define GGML_METAL_MOE_REDUCE_MAX_EXPERTS 8
 
 struct ggml_metal_moe_reduce_match {
@@ -781,6 +906,8 @@ static const std::vector<ggml_metal_fusion> ggml_metal_fusions = {
     { GGML_METAL_FUSION_TOPK_MOE,       ops_topk_moe_scale,         {1},    true,  ggml_metal_fusion_check_topk_moe },
     { GGML_METAL_FUSION_TOPK_MOE,       ops_topk_moe_norm,          {1},    true,  ggml_metal_fusion_check_topk_moe },
     { GGML_METAL_FUSION_TOPK_MOE,       ops_topk_moe_norm_scale,    {1},    true,  ggml_metal_fusion_check_topk_moe },
+    { GGML_METAL_FUSION_TOPK_MOE,       ops_topk_moe_sigmoid_norm,  {2},    true,  ggml_metal_fusion_check_topk_moe_sigmoid },
+    { GGML_METAL_FUSION_TOPK_MOE,       ops_topk_moe_sigmoid_norm_scale, {2}, true,  ggml_metal_fusion_check_topk_moe_sigmoid },
     { GGML_METAL_FUSION_MOE_REDUCE,     ops_moe_reduce_2,           {},     true,  ggml_metal_fusion_check_moe_reduce },
     { GGML_METAL_FUSION_MOE_REDUCE,     ops_moe_reduce_3,           {},     true,  ggml_metal_fusion_check_moe_reduce },
     { GGML_METAL_FUSION_MOE_REDUCE,     ops_moe_reduce_4,           {},     true,  ggml_metal_fusion_check_moe_reduce },
