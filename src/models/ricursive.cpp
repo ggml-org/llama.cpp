@@ -1,0 +1,208 @@
+#include "models.h"
+
+void llama_model_ricursive::load_arch_hparams(llama_model_loader & ml) {
+    ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+    ml.get_key(LLM_KV_EMBEDDING_SCALE,             hparams.f_embedding_scale, false);
+    ml.get_key(LLM_KV_SWIGLU_CLAMP,                hparams.f_swiglu_clamp,    false);
+
+    hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
+    ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa);
+    load_swa_pattern(ml, 5);
+
+    ml.get_key_or_arr(LLM_KV_ATTENTION_ROPE_PATTERN, hparams.rope_pattern, hparams.n_layer());
+
+    for (uint32_t il = 0; il < hparams.n_layer(); ++il) {
+        if (hparams.has_rope(il) != hparams.is_swa(il)) {
+            throw std::runtime_error(format("Ricursive: layer %u has %s but %s", il,
+                    hparams.has_rope(il) ? "RoPE" : "no RoPE", hparams.is_swa(il) ? "a sliding window" : "no sliding window"));
+        }
+    }
+
+    hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
+    hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
+
+    switch (hparams.n_layer()) {
+        case 80: type = LLM_TYPE_65B; break;
+        default: type = LLM_TYPE_UNKNOWN;
+    }
+}
+
+void llama_model_ricursive::load_arch_tensors(llama_model_loader &) {
+    LLAMA_LOAD_LOCALS;
+
+    tok_embd    = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD,  "weight"), {n_embd, n_vocab}, 0);
+    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, 0);
+
+    for (int i = 0; i < n_layer; ++i) {
+        auto & layer = layers[i];
+
+        layer.attn_norm      = create_tensor(tn(LLM_TENSOR_ATTN_NORM,      "weight", i), {n_embd}, 0);
+        layer.attn_post_norm = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), {n_embd}, 0);
+
+        layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
+        layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_k_gqa}, 0);
+        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_v_gqa}, 0);
+        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, 0);
+
+        layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, 0);
+        layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, 0);
+
+        layer.wqkv_gate   = create_tensor(tn(LLM_TENSOR_ATTN_GATE,   "weight", i), {n_embd, n_embd_head_k * n_head}, TENSOR_NOT_REQUIRED);
+        layer.attn_valres = create_tensor(tn(LLM_TENSOR_ATTN_VALRES, "weight", i), {1}, TENSOR_NOT_REQUIRED);
+
+        layer.ffn_norm      = create_tensor(tn(LLM_TENSOR_FFN_NORM,      "weight", i), {n_embd}, 0);
+        layer.ffn_post_norm = create_tensor(tn(LLM_TENSOR_FFN_POST_NORM, "weight", i), {n_embd}, 0);
+
+        layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd, n_ff}, 0);
+        layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, 0);
+        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, n_ff}, 0);
+    }
+
+    for (int i = 1; i < n_layer; ++i) {
+        if ((layers[i].wqkv_gate == nullptr) != (layers[0].wqkv_gate == nullptr) ||
+            (layers[i].attn_valres == nullptr) != (layers[0].attn_valres == nullptr)) {
+            throw std::runtime_error("Ricursive: attn_gate and attn_valres must be present in all layers or in none");
+        }
+    }
+}
+
+llama_model_ricursive::graph::graph(const llama_model & model, const llm_graph_params & params)
+    : llm_graph_context(params) {
+    const int64_t n_embd_head = hparams.n_embd_head_v();
+    GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
+
+    ggml_tensor * cur;
+    ggml_tensor * inpL = build_inp_embd(model.tok_embd);
+    ggml_tensor * inp_pos = build_inp_pos();
+
+    auto * inp_attn = build_attn_inp_kv_iswa();
+
+    ggml_tensor * inp_out_ids = build_inp_out_ids();
+
+    const float kq_scale = 1.0f / sqrtf(float(n_embd_head));
+
+    ggml_tensor * valres = inpL;
+
+    for (int il = 0; il < n_layer; ++il) {
+        const auto & layer = model.layers[il];
+
+        ggml_tensor * residual = inpL;
+
+        cur = build_norm(inpL, layer.attn_norm, NULL, LLM_NORM_RMS, il);
+        cb(cur, "attn_norm", il);
+
+        ggml_tensor * attn_inp = cur;
+
+        ggml_tensor * Qcur = build_lora_mm(layer.wq, attn_inp, layer.wq_s);
+        cb(Qcur, "Qcur", il);
+
+        ggml_tensor * Kcur = build_lora_mm(layer.wk, attn_inp, layer.wk_s);
+        cb(Kcur, "Kcur", il);
+
+        ggml_tensor * Vinp = attn_inp;
+        if (layer.attn_valres) {
+            ggml_tensor * blend = ggml_sigmoid(ctx0, layer.attn_valres);
+            Vinp = ggml_add(ctx0, valres, ggml_mul(ctx0, ggml_sub(ctx0, attn_inp, valres), blend));
+            cb(Vinp, "attn_valres", il);
+        }
+
+        ggml_tensor * Vcur = build_lora_mm(layer.wv, Vinp, layer.wv_s);
+        cb(Vcur, "Vcur", il);
+
+        Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
+        Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+        Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+
+        Qcur = build_norm(Qcur, layer.attn_q_norm, NULL, LLM_NORM_RMS, il);
+        Kcur = build_norm(Kcur, layer.attn_k_norm, NULL, LLM_NORM_RMS, il);
+        cb(Qcur, "Qcur_normed", il);
+        cb(Kcur, "Kcur_normed", il);
+
+        if (hparams.has_rope(il)) {
+            const float freq_base_l  = model.get_rope_freq_base (cparams, il);
+            const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
+
+            Qcur = ggml_rope_ext(
+                    ctx0, Qcur, inp_pos, nullptr,
+                    n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
+                    ext_factor, attn_factor, beta_fast, beta_slow);
+            cb(Qcur, "Qcur_rope", il);
+
+            Kcur = ggml_rope_ext(
+                    ctx0, Kcur, inp_pos, nullptr,
+                    n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
+                    ext_factor, attn_factor, beta_fast, beta_slow);
+            cb(Kcur, "Kcur_rope", il);
+        }
+
+        cur = build_attn(inp_attn,
+                nullptr, nullptr, nullptr,
+                Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
+        cb(cur, "kqv_out", il);
+
+        if (layer.wqkv_gate) {
+            ggml_tensor * gate = build_lora_mm(layer.wqkv_gate, attn_inp, layer.wqkv_gate_s);
+            cb(gate, "attn_gate_proj", il);
+
+            gate = ggml_sigmoid(ctx0, gate);
+            cb(gate, "attn_gate_sig", il);
+
+            cur = ggml_mul(ctx0, cur, gate);
+            cb(cur, "attn_gated", il);
+        }
+
+        cur = build_lora_mm(layer.wo, cur, layer.wo_s);
+        cb(cur, "attn_out", il);
+
+        cur = build_norm(cur, layer.attn_post_norm, NULL, LLM_NORM_RMS, il);
+        cb(cur, "attn_post_norm", il);
+
+        if (il == n_layer - 1 && inp_out_ids) {
+            cur      = ggml_get_rows(ctx0, cur,      inp_out_ids);
+            residual = ggml_get_rows(ctx0, residual, inp_out_ids);
+        }
+
+        ggml_tensor * ffn_inp = ggml_add(ctx0, cur, residual);
+        cb(ffn_inp, "ffn_inp", il);
+
+        cur = build_norm(ffn_inp, layer.ffn_norm, NULL, LLM_NORM_RMS, il);
+        cb(cur, "ffn_norm", il);
+
+        ggml_tensor * gate = build_lora_mm(layer.ffn_gate, cur, layer.ffn_gate_s);
+        cb(gate, "ffn_gate", il);
+
+        ggml_tensor * up = build_lora_mm(layer.ffn_up, cur, layer.ffn_up_s);
+        cb(up, "ffn_up", il);
+
+        if (hparams.f_swiglu_clamp != 0.0f) {
+            cur = ggml_swiglu_clamp(ctx0, gate, up, hparams.f_swiglu_clamp);
+        } else {
+            cur = ggml_swiglu_split(ctx0, gate, up);
+        }
+        cb(cur, "ffn_swiglu", il);
+
+        cur = build_lora_mm(layer.ffn_down, cur, layer.ffn_down_s);
+        cb(cur, "ffn_out", il);
+
+        cur = build_norm(cur, layer.ffn_post_norm, NULL, LLM_NORM_RMS, il);
+        cb(cur, "ffn_post_norm", il);
+
+        cur = ggml_add(ctx0, cur, ffn_inp);
+
+        inpL = build_cvec(cur, il);
+        cb(inpL, "l_out", il);
+    }
+
+    cur = build_norm(inpL, model.output_norm, NULL, LLM_NORM_RMS, -1);
+    cb(cur, "result_norm", -1);
+    res->t_embd = cur;
+
+    cur = build_lora_mm(model.output, cur, model.output_s);
+    cb(cur, "result_output", -1);
+    res->t_logits = cur;
+}
+
+std::unique_ptr<llm_graph_context> llama_model_ricursive::build_arch_graph(const llm_graph_params & params) const {
+    return std::make_unique<graph>(*this, params);
+}

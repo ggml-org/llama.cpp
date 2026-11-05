@@ -180,6 +180,7 @@ enum llm_arch {
     LLM_ARCH_BEAM,
     LLM_ARCH_KOLIBRI1,
     LLM_ARCH_LIMITE,
+    LLM_ARCH_RICURSIVE,
     LLM_ARCH_UNKNOWN,
 };
 
@@ -227,6 +228,7 @@ enum llm_kv {
     LLM_KV_EXPERT_FEED_FORWARD_LENGTH,
     LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH,
     LLM_KV_EXPERT_CHUNK_FEED_FORWARD_LENGTH,
+    LLM_KV_SWIGLU_CLAMP,
     LLM_KV_SWIGLU_CLAMP_EXP,
     LLM_KV_SWIGLU_CLAMP_SHEXP,
     LLM_KV_USE_PARALLEL_RESIDUAL,
@@ -666,6 +668,7 @@ enum llm_tensor {
     LLM_TENSOR_FFN_RESID_SCALE,     // limite: residual scale (ffn)
     LLM_TENSOR_MUDD_DOWN,           // limite: dense connection mixer
     LLM_TENSOR_MUDD_UP,             // limite: dense connection mixer
+    LLM_TENSOR_ATTN_VALRES,         // ricursive: value residual lambda
     LLM_TENSOR_TIME_MIX_W0,
     LLM_TENSOR_TIME_MIX_W1,
     LLM_TENSOR_TIME_MIX_W2,
