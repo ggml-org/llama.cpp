@@ -1,10 +1,9 @@
 <script lang="ts" module>
-	import { componentGroups, semanticGroups } from './tokens';
+	import { componentGroups, primitiveGroups, semanticGroups } from './tokens';
 	import TokenTier from './TokenTier.svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 
-	// the UI's colour tokens, semantic and per component, read from src/lib/styles/tokens/*.css so the swatches follow
-	// the CSS as it changes; the primitives they point at are in Brand/Colors/Primitives
+	// read from src/lib/styles/tokens/*.css, so the swatches follow the CSS as it changes
 	const { Story } = defineMeta({
 		parameters: {
 			layout: 'centered'
@@ -13,10 +12,18 @@
 	});
 </script>
 
+<Story asChild name="Primitives">
+	<TokenTier
+		groups={primitiveGroups}
+		intro="Raw values named by what they are. Only semantic tokens point at these; components never use them directly."
+		showReference={false}
+	/>
+</Story>
+
 <Story asChild name="Semantic">
 	<TokenTier
 		groups={semanticGroups}
-		intro="Named by purpose. Each points at a primitive (Brand/Colors/Primitives), and this is the only tier that changes between light and dark. Switch the theme to see the dark values."
+		intro="Named by purpose. Each points at a primitive, and this is the only tier that changes between light and dark. Switch the theme to see the dark values."
 		showReference={true}
 	/>
 </Story>
