@@ -43,7 +43,7 @@ const preview: Preview = {
 							'Llama Mono'
 						],
 						'Colors',
-						['Communications', 'Palette proposal']
+						['Communications', 'Palette proposal', 'Accent proposal']
 					],
 					'UI',
 					[
