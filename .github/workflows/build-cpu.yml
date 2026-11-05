@@ -7,7 +7,6 @@ on:
       - master
     paths: [
       '.github/workflows/build-cpu.yml',
-      '.github/workflows/build-cmake-pkg.yml',
       '**/CMakeLists.txt',
       '**/.cmake',
       '**/*.h',
@@ -20,7 +19,6 @@ on:
     types: [opened, synchronize, reopened]
     paths: [
       '.github/workflows/build-cpu.yml',
-      '.github/workflows/build-cmake-pkg.yml',
       'ggml/src/ggml-rpc/**',
       '**/CMakeLists.txt',
       '**/.cmake',
