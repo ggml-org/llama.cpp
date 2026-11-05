@@ -129,7 +129,7 @@
 	<button
 		aria-label={readonly ? `Preview ${name}` : undefined}
 		class="rounded-lg border border-border bg-muted p-3 {className} cursor-pointer {readonly
-			? 'w-full max-w-2xl transition-shadow hover:shadow-md'
+			? 'w-full max-w-2xl transition-shadow hover:shadow-(--elevation-surface)'
 			: `group relative text-left ${textContent ? 'max-h-24 max-w-72' : 'max-w-36'}`} overflow-hidden"
 		{onclick}
 		type="button"

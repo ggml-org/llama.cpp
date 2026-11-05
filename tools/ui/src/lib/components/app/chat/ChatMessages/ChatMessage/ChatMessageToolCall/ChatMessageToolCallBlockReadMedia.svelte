@@ -72,7 +72,7 @@
 				<div class="mt-2">
 					<img
 						alt={readMediaMeta?.fileName ?? 'media'}
-						class="max-h-[60vh] max-w-full rounded-lg object-contain shadow-lg"
+						class="max-h-[60vh] max-w-full rounded-lg object-contain shadow-(--elevation-raised)"
 						loading="lazy"
 						src={mediaAttachment.base64Url}
 					/>

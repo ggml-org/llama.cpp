@@ -186,7 +186,7 @@
 </script>
 
 {#if bitDepthRows.length}
-	<section class="rounded-3xl border border-border/30 bg-muted/60 shadow-sm dark:border-border/20">
+	<section class="rounded-3xl bg-muted/60 elevated-control">
 		<!-- One chip per main quant, each an independent download action. The draft
 			 of that quant rides with it and badges the chip; the server picks its file,
 			 the way -hf does. -->

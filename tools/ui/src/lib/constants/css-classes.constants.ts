@@ -11,8 +11,7 @@ export const INPUT_CLASSES = `
 
 export const PANEL_CLASSES = `
     bg-background
-    border border-border/30 dark:border-border/20
-    shadow-sm backdrop-blur-lg!
+    elevated-control backdrop-blur-lg!
     rounded-t-lg!
 `;
 
@@ -31,7 +30,7 @@ export const TAB_SURFACE_CLASS =
 
 /** Tab surface at rest: invisible until hovered. */
 export const TAB_SURFACE_IDLE_CLASS =
-	'border-transparent hover:bg-primary/10 hover:border-border/10 hover:shadow-sm';
+	'border-transparent hover:bg-primary/10 hover:border-border/10 hover:shadow-(--elevation-control)';
 
 /** Tab surface of the open tab. */
 export const TAB_SURFACE_ACTIVE_CLASS =

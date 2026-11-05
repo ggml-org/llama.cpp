@@ -21,9 +21,9 @@
 			},
 			variant: {
 				default:
-					'bg-(--button-primary-background) text-(--button-primary-text) shadow-(--button-shadow) hover:bg-(--button-primary-background-hover)',
+					'matte-key-solid [--key-edge:var(--button-primary-edge)] bg-(--button-primary-background) text-(--button-primary-text) hover:bg-(--button-primary-background-hover)',
 				destructive:
-					'bg-(--button-danger-background) shadow-(--button-shadow) hover:bg-(--button-danger-background-hover) focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 text-(--button-danger-text)!',
+					'matte-key-solid [--key-edge:var(--button-danger-edge)] bg-(--button-danger-background) hover:bg-(--button-danger-background-hover) focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 text-(--button-danger-text)!',
 				ghost:
 					'hover:text-(--button-text) hover:bg-(--button-ghost-background-hover) hover:shadow-(--button-shadow) backdrop-blur-sm',
 				outline:

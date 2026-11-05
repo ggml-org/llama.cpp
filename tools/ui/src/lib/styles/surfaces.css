@@ -79,6 +79,28 @@
 	--glass-shadow: var(--sidebar-shadow);
 }
 
+/* Elevated surfaces (cards, floating bars, thumbnails): an elevation token with the hairline ring baked in as its
+   last layer, like shadow-plugin's smooth-shadow-ring-*, but on our tokens, so the shadow deepens in dark mode. The
+   ring reads --smooth-ring-color (black 5%, white 18% in dark); tint it with smooth-ring-*. Never pair these with a
+   border: the ring is the edge. */
+@utility elevated-control {
+	box-shadow:
+		var(--elevation-control),
+		0 0 0 var(--smooth-ring-width, 1px) var(--smooth-ring-color);
+}
+
+@utility elevated-surface {
+	box-shadow:
+		var(--elevation-surface),
+		0 0 0 var(--smooth-ring-width, 1px) var(--smooth-ring-color);
+}
+
+@utility elevated-raised {
+	box-shadow:
+		var(--elevation-raised),
+		0 0 0 var(--smooth-ring-width, 1px) var(--smooth-ring-color);
+}
+
 /* Floating panel (menus, popovers, drawers): frosted fill, faint rim, lifted shadow. The edge is the hairline ring
    baked into the shadow (as shadow-plugin's smooth-shadow-ring does), not the border, so the two never draw a double
    edge; the border stays transparent so the panel keeps its size. */
@@ -107,38 +129,52 @@
 		var(--tw-ring-shadow, 0 0 #0000);
 }
 
-/* Soft top-down sheen over a surface's own fill, e.g. the user message bubble. */
+/* Soft top-down sheen over a surface's own fill, e.g. the user message bubble and the soft badges. */
 @utility matte-sheen {
 	background-image: linear-gradient(to bottom, var(--sheen-start), var(--sheen-end));
 }
 
-/* Frosted button finish: keeps the button's own fill and border, adds blur and a small drop shadow. */
+/* The fainter sheen for a solid fill (solid badges): barely lighter at the top. */
+@utility matte-sheen-solid {
+	background-image: linear-gradient(to bottom, var(--key-sheen-solid), transparent);
+}
+
+/* Frosted button finish: keeps the button's own fill and border, adds blur, a fill barely lighter at the top and a
+   small drop shadow. No highlight line at the top: the edge is the same all round. */
 @utility matte-key {
+	background-image: linear-gradient(to bottom, var(--key-sheen), transparent);
 	backdrop-filter: blur(var(--blur-control)) saturate(1.4);
 	box-shadow: var(--button-shadow);
 }
 
-/* Lit colored control (record, error send). Set the color with orb-danger, orb-warning or orb-success. */
+/* The same finish on a solid fill (primary and danger buttons): the sheen, and an even hairline in a shade of the
+   fill drawn inside it, so the width stays the button's. Set the shade with --key-edge. */
+@utility matte-key-solid {
+	@apply matte-sheen-solid;
+	box-shadow:
+		inset 0 0 0 1px var(--key-edge),
+		var(--button-shadow);
+}
+
+/* Lit colored control (record, error send): a near-flat fill barely lighter at the top, an even hairline a step
+   lighter, the glyph pressed in a little; no glow. Set the color with orb-danger, orb-warning or orb-success. */
 @utility matte-orb {
-	background-image: radial-gradient(
-		circle at 50% 35%,
-		color-mix(in oklch, var(--orb), white 18%),
-		var(--orb) 70%
+	background-image: linear-gradient(
+		to bottom,
+		color-mix(in oklab, var(--orb), white 6%),
+		var(--orb)
 	);
 	color: var(--orb-glyph);
 	box-shadow:
-		inset 0 0 0 1.5px var(--orb-rim),
-		inset 0 1px 1px var(--white-a40),
-		inset 0 -2px 3px var(--black-a8),
-		0 1px 2px var(--black-a18),
-		0 6px 16px -4px color-mix(in oklch, var(--orb) 60%, transparent);
+		inset 0 0 0 1px var(--orb-rim),
+		var(--button-shadow);
 	transition:
 		box-shadow 150ms ease,
 		filter 150ms ease,
 		translate 150ms ease;
 
 	& svg {
-		filter: drop-shadow(0 1px 0 var(--white-a30));
+		filter: drop-shadow(0 0.5px 0 var(--white-a30));
 	}
 
 	&:hover:not(:disabled) {
@@ -151,23 +187,18 @@
 
 	&:disabled {
 		filter: saturate(0.25);
-		box-shadow:
-			inset 0 0 0 1.5px var(--orb-rim),
-			inset 0 1px 1px var(--white-a40),
-			0 1px 2px var(--black-a12);
+		box-shadow: inset 0 0 0 1px var(--orb-rim);
 	}
 }
 
-/* Small glowing lamp for status dots. */
+/* Small lamp for status dots: the fill, barely lighter at the top, and a faint darker hairline; no glow. */
 @utility status-lamp {
-	background-image: radial-gradient(
-		circle at 50% 30%,
-		color-mix(in oklch, var(--orb), white 35%),
-		var(--orb) 65%
+	background-image: linear-gradient(
+		to bottom,
+		color-mix(in oklab, var(--orb), white 12%),
+		var(--orb)
 	);
-	box-shadow:
-		inset 0 0 0 0.5px var(--orb-glyph),
-		0 0 6px color-mix(in oklch, var(--orb) 70%, transparent);
+	box-shadow: inset 0 0 0 0.5px color-mix(in oklab, var(--orb-glyph) 50%, transparent);
 }
 
 @utility orb-danger {

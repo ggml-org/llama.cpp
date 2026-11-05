@@ -36,7 +36,7 @@
 			<button
 				{...props}
 				aria-label={tooltipText}
-				class="group relative inline-flex h-auto cursor-pointer items-center gap-1 rounded-md border border-dashed border-border/60 px-2 py-1 text-left font-mono text-xs shadow-sm transition-[background-color,border-color,transform] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] hover:bg-muted-foreground/10 hover:border-border active:scale-[0.97] dark:border-border/40 dark:hover:bg-muted-foreground/15"
+				class="group relative inline-flex h-auto cursor-pointer items-center gap-1 rounded-md border border-dashed border-border/60 px-2 py-1 text-left font-mono text-xs shadow-(--elevation-control) transition-[background-color,border-color,transform] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] hover:bg-muted-foreground/10 hover:border-border active:scale-[0.97] dark:border-border/40 dark:hover:bg-muted-foreground/15"
 				onclick={addDraft}
 				type="button"
 			>

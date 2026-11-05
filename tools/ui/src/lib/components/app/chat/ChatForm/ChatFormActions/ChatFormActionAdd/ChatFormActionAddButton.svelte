@@ -15,7 +15,7 @@
 <Tooltip.Root>
 	<Tooltip.Trigger class="w-full">
 		<Button
-			class="file-upload-button bg-background size-9 rounded-full p-0 shadow-sm md:size-8 dark:bg-muted-foreground/15"
+			class="file-upload-button bg-background size-9 rounded-full p-0 shadow-(--button-shadow) md:size-8 dark:bg-muted-foreground/15"
 			{disabled}
 			{onclick}
 			type="button"

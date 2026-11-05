@@ -72,7 +72,7 @@
 
 <div
 	aria-label="Bulk actions for selected conversations"
-	class="flex items-center gap-1.5 rounded-xl border border-border/50 bg-background/50 px-2 py-1.5 shadow-sm backdrop-blur-xl {className}"
+	class="flex items-center gap-1.5 rounded-xl bg-background/50 px-2 py-1.5 elevated-surface backdrop-blur-xl {className}"
 	role="toolbar"
 >
 	<label class="flex min-w-0 cursor-pointer items-center gap-2">
