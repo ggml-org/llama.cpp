@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from typing import Iterable, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -31,6 +33,8 @@ class RicursiveModel(TextModel):
         self.is_swa = [t == "sliding_attention" for t in layer_types]
         if (pattern := hp.get("hybrid_layer_pattern")) is not None and pattern != [int(swa) for swa in self.is_swa]:
             raise ValueError("Ricursive: hybrid_layer_pattern does not match layer_types")
+        if not any(self.is_swa):
+            raise ValueError("Ricursive: layer_types has no sliding_attention layer, all-full-attention models are not supported")
 
         if not hp.get("gate_full_precision", True):
             logger.warning("Ricursive: gate_full_precision is false, llama.cpp computes the attention gate in f32")
@@ -46,6 +50,7 @@ class RicursiveModel(TextModel):
 
     def set_vocab(self):
         self._set_vocab_gpt2()
+        # tokenizer_config.json has a short template without tools, transformers uses this file instead
         if (tmpl_file := self.dir_model / "chat_template.jinja").is_file():
             self.gguf_writer.remove_key(gguf.Keys.Tokenizer.CHAT_TEMPLATE)
             self.gguf_writer.add_chat_template(tmpl_file.read_text(encoding="utf-8"))
@@ -56,6 +61,7 @@ class RicursiveModel(TextModel):
 
         self.gguf_writer.add_sliding_window(hp["sliding_window"])
         self.gguf_writer.add_sliding_window_pattern(self.is_swa)
+        # sliding layers use RoPE, full attention layers use no positional encoding
         self.gguf_writer.add_rope_pattern(self.is_swa)
 
         if (embed_scale := hp.get("embed_scale")) is not None:
@@ -63,6 +69,8 @@ class RicursiveModel(TextModel):
                 raise ValueError(f"Ricursive: unsupported embed_scale {embed_scale!r}")
             self.gguf_writer.add_embedding_scale(embed_scale)
         if clamp := hp.get("ffn_clamp_threshold"):
+            if clamp < 0 or not math.isfinite(clamp):
+                raise ValueError(f"Ricursive: unsupported ffn_clamp_threshold {clamp!r}")
             self.gguf_writer.add_swiglu_clamp(clamp)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:

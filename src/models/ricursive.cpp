@@ -5,6 +5,10 @@ void llama_model_ricursive::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EMBEDDING_SCALE,             hparams.f_embedding_scale, false);
     ml.get_key(LLM_KV_SWIGLU_CLAMP,                hparams.f_swiglu_clamp,    false);
 
+    if (!std::isfinite(hparams.f_swiglu_clamp) || hparams.f_swiglu_clamp < 0.0f) {
+        throw std::runtime_error(format("Ricursive: swiglu_clamp must be finite and non-negative, got %g", hparams.f_swiglu_clamp));
+    }
+
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa);
     load_swa_pattern(ml, 5);
@@ -16,6 +20,10 @@ void llama_model_ricursive::load_arch_hparams(llama_model_loader & ml) {
             throw std::runtime_error(format("Ricursive: layer %u has %s but %s", il,
                     hparams.has_rope(il) ? "RoPE" : "no RoPE", hparams.is_swa(il) ? "a sliding window" : "no sliding window"));
         }
+    }
+
+    if (!hparams.is_swa_any()) {
+        throw std::runtime_error("Ricursive: no sliding window layer, this arch always builds a hybrid SWA/dense KV cache");
     }
 
     hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
