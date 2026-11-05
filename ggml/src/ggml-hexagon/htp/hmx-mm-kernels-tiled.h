@@ -869,6 +869,11 @@ static void dequantize_tiled_weight_to_fp16_task_iq2_xxs(
     HVX_Vector v_d = Q6_V_vzero();
     const HVX_Vector v_eighth = Q6_Vh_vsplat_R(IQ2XXS_D_SCALE_F16);
 
+    HVX_Vector v_sgn = Q6_V_vzero();
+    if (start_tile < end_tile) {
+        v_sgn = iq2xxs_gather_issue(state->src + start_tile * state->aligned_tile_size);
+    }
+
     for (uint32_t t = start_tile; t < end_tile; t++) {
         const uint8_t * tile = state->src + t * state->aligned_tile_size;
         __fp16 * dst_ptr = state->dst + t * HTP_MM_HMX_TILE_N_ELMS;
@@ -878,8 +883,13 @@ static void dequantize_tiled_weight_to_fp16_task_iq2_xxs(
             v_d = iq2xxs_gather_d(tile - (t & (IQ2XXS_TILES_PER_SB - 1)) * state->aligned_tile_size);
         }
 
-        HVX_Vector v_w[2 * IQ2XXS_GROUPS], v_ls;
-        iq2xxs_decode_tile(tile, v_w, &v_ls);
+        HVX_Vector v_c[2], v_w[2 * IQ2XXS_GROUPS], v_ls;
+        iq2xxs_gather_wait(tile, v_c);
+        const HVX_Vector v_sgn_cur = v_sgn;
+        if (t + 1 < end_tile) {
+            v_sgn = iq2xxs_gather_issue(tile + state->aligned_tile_size);
+        }
+        iq2xxs_decode_expand(v_c, v_sgn_cur, v_w, &v_ls);
 
         HVX_Vector v_ls_h  = Q6_Vhf_equals_Vh(Q6_Vh_vpacke_VwVw(v_ls, v_ls));
         HVX_Vector v_sc    = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_d, v_ls_h));

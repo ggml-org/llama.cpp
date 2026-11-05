@@ -5658,6 +5658,9 @@ struct test_mul_mat : public test_case {
 // weights at trained-model magnitude, so per-block scales are small (the default +-1 range hides fp16 underflow)
 static constexpr float SMALL_W_RANGE = 0.02f;
 
+// large weights, so outputs approach the fp16 max (65504) without exceeding it
+static constexpr float LARGE_W_RANGE = 200.0f;
+
 struct test_mul_mat_small_w : public test_mul_mat {
     using test_mul_mat::test_mul_mat;
     std::string vars() override { return test_mul_mat::vars() + ",small_w=1"; }
@@ -5665,6 +5668,20 @@ struct test_mul_mat_small_w : public test_mul_mat {
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
             if (strcmp(t->name, "a") == 0) {
                 init_tensor_uniform(t, -SMALL_W_RANGE, SMALL_W_RANGE);
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
+struct test_mul_mat_large_w : public test_mul_mat {
+    using test_mul_mat::test_mul_mat;
+    std::string vars() override { return test_mul_mat::vars() + ",large_w=1"; }
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "a") == 0) {
+                init_tensor_uniform(t, -LARGE_W_RANGE, LARGE_W_RANGE);
             } else {
                 init_tensor_uniform(t);
             }
@@ -5967,6 +5984,19 @@ struct test_mul_mat_id_small_w : public test_mul_mat_id {
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
             if (strcmp(t->name, "as") == 0) {
                 init_tensor_uniform(t, -SMALL_W_RANGE, SMALL_W_RANGE);
+            }
+        }
+    }
+};
+
+struct test_mul_mat_id_large_w : public test_mul_mat_id {
+    using test_mul_mat_id::test_mul_mat_id;
+    std::string vars() override { return test_mul_mat_id::vars() + ",large_w=1"; }
+    void initialize_tensors(ggml_context * ctx) override {
+        test_mul_mat_id::initialize_tensors(ctx);
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "as") == 0) {
+                init_tensor_uniform(t, -LARGE_W_RANGE, LARGE_W_RANGE);
             }
         }
     }
@@ -12242,15 +12272,18 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
-    // small-magnitude weights through every HTP quant path: decode GEMV (n=1), HMX prefill (n=8, 512), MoE
+    // small- and large-magnitude weights through every HTP quant path: decode GEMV (n=1), HMX prefill (n=8, 512), MoE
     for (ggml_type type_a : {GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GGML_TYPE_MXFP4, GGML_TYPE_NVFP4, GGML_TYPE_IQ4_NL,
                              GGML_TYPE_Q3_K, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K, GGML_TYPE_IQ2_XXS}) {
         for (int n : {1, 8, 512}) {
             test_cases.emplace_back(new test_mul_mat_small_w(type_a, GGML_TYPE_F32, 4096, n, 2560, {1, 1}, {1, 1}));
             test_cases.emplace_back(new test_mul_mat_small_w(type_a, GGML_TYPE_F32, 2560, n, 9216, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat_large_w(type_a, GGML_TYPE_F32, 4096, n, 2560, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat_large_w(type_a, GGML_TYPE_F32, 2560, n, 9216, {1, 1}, {1, 1}));
         }
         for (int n : {1, 8, 64}) {
             test_cases.emplace_back(new test_mul_mat_id_small_w(type_a, GGML_TYPE_F32, 8, 4, false, 512, n, 2048));
+            test_cases.emplace_back(new test_mul_mat_id_large_w(type_a, GGML_TYPE_F32, 8, 4, false, 512, n, 2048));
         }
     }
 
