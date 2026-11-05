@@ -307,9 +307,7 @@ div.markdown-user-content :global(.table-wrapper) {
 .markdown-content :global(.code-language) {
 	color: var(--color-foreground);
 	font-weight: 500;
-	font-family:
-		ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas,
-		'Liberation Mono', Menlo, monospace;
+	font-family: var(--font-mono);
 	text-transform: uppercase;
 	font-size: 0.75rem;
 	letter-spacing: 0.05em;

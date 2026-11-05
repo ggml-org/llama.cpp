@@ -221,7 +221,7 @@ typography:
     fontWeight: 400
     lineHeight: 1rem
   code:
-    fontFamily: ui-monospace
+    fontFamily: Llama Mono
     fontSize: 0.875rem
     fontWeight: 400
     lineHeight: 1.25rem
@@ -764,8 +764,9 @@ logotype and is not part of the UI palette.
 
 ## Typography
 
-The UI uses Llama Sans UI (with the system sans-serif stack as its fallback) and the system
-monospace stack for code. Type is set through roles that fix size, line height and weight together:
+The UI uses Llama Sans UI (with the system sans-serif stack as its fallback) and Llama Mono
+for code (with the system monospace stack as its fallback). Llama Mono keeps every character,
+its coding ligatures included, in one cell, so code and numbers line up in columns. Type is set through roles that fix size, line height and weight together:
 
 - `body` (16/24, 400): chat messages and the chat input.
 - `body-sm` (14/20, 400): most text, fields and lists.

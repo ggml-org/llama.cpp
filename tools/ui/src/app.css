@@ -23,6 +23,16 @@
 	font-display: swap;
 }
 
+/* Llama Mono, the family's monospace (OFL, same file), for code, commands and numbers in columns: every character in
+   one 600-unit cell, its coding ligatures included, from 400 to 700. */
+@font-face {
+	font-family: 'Llama Mono';
+	src: url('./lib/assets/fonts/LlamaMono.woff2') format('woff2');
+	font-weight: 400 700;
+	font-style: normal;
+	font-display: swap;
+}
+
 @custom-variant dark (&:is(.dark *));
 
 /* shadcn components key their orientation styles off these, toggle-group among them */
@@ -57,8 +67,8 @@
 	/* expanded desktop sidebar width, overridden once the user drags its edge */
 	--sidebar-width: 18rem;
 	--font-mono:
-		ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas,
-		'Liberation Mono', Menlo, monospace;
+		'Llama Mono', ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono',
+		Consolas, 'Liberation Mono', Menlo, monospace;
 	--layer-popover: 1000000;
 
 	--chat-form-area-height: 8rem;

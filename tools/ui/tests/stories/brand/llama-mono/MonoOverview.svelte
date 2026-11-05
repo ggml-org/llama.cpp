@@ -17,6 +17,8 @@
 	// the look-alikes code has to keep apart, in pairs and threes
 	const distinctions = ['0 O o', '1 l I |', 'rn m', ', . ;', '\' ` "', '- – —', '{ ( [', '5 S s'];
 
+	const ligatures = ['->', '=>', '<=', '>=', '!=', '==', '===', '!==', '<=>', '|>', '::', '...'];
+
 	const code = `// load a GGUF model and print what it holds
 int main(int argc, char ** argv) {
     llama_model_params params = llama_model_default_params();
@@ -81,6 +83,16 @@ int main(int argc, char ** argv) {
 	<div class="pairs">
 		{#each distinctions as d (d)}<span>{d}</span>{/each}
 	</div>
+</Section>
+
+<Section label="Ligatures">
+	<div class="ligatures">
+		{#each ligatures as l (l)}<span>{l}</span>{/each}
+	</div>
+
+	<p class="note">
+		Each ligature keeps one cell per character, so the columns after it stay in line.
+	</p>
 </Section>
 
 <Section label="Weights">
@@ -158,6 +170,24 @@ int main(int argc, char ** argv) {
 		font: 500 clamp(24px, 3vw, 34px) / 1 var(--code);
 		text-align: center;
 		white-space: pre;
+	}
+
+	.ligatures {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+		gap: 8px;
+	}
+	.ligatures span {
+		padding: 18px 12px;
+		border-radius: 10px;
+		background: var(--sheet);
+		font: 500 clamp(24px, 3vw, 34px) / 1 var(--code);
+		text-align: center;
+		white-space: pre;
+	}
+	.note {
+		font: 400 14px / 1.5 var(--ui);
+		opacity: 0.7;
 	}
 
 	.weights {

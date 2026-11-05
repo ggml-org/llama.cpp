@@ -35,12 +35,7 @@
 	/* Llama Mono is the code face on these pages; the rest stays on the overview's fonts */
 	.mono-page {
 		--code: 'Llama Mono', ui-monospace, monospace;
-		/* Geist Mono's coding ligatures (-> => -- !==) are one cell wide, so they would pull the columns out of line;
-		   off until the font draws them across their cells (the tt join is calt, and stays) */
 		display: contents;
-	}
-	.mono-page :global(*) {
-		font-feature-settings: 'liga' 0;
 	}
 	.posters-only {
 		display: block;
