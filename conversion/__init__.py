@@ -45,6 +45,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "ChameleonForConditionalGeneration": "chameleon",
     "ChatGLMForConditionalGeneration": "chatglm",
     "ChatGLMModel": "chatglm",
+    "ChatterboxModel": "chatterbox",
     "ClefModel": "clef",
     "CloverMoeModelLM": "clover",
     "CodeShellForCausalLM": "codeshell",
@@ -94,6 +95,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "FalconForCausalLM": "falcon",
     "FalconH1ForCausalLM": "falcon_h1",
     "FalconMambaForCausalLM": "mamba",
+    "FishOmniModel": "drama3",
     "GPT2LMHeadModel": "gpt2",
     "GPTBigCodeForCausalLM": "starcoder",
     "GPTNeoXForCausalLM": "gptneox",
@@ -330,6 +332,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
 
 MMPROJ_MODEL_MAP: dict[str, str] = {
     "AudioFlamingo3ForConditionalGeneration": "ultravox",
+    "ChatterboxModel": "chatterbox",
     "ClefModel": "clef",
     "CogVLMForCausalLM": "cogvlm",
     "Cohere2VisionForConditionalGeneration": "command_r",
@@ -344,6 +347,7 @@ MMPROJ_MODEL_MAP: dict[str, str] = {
     "DotsOCRForCausalLM": "dotsocr",
     "EmbeddingGemma2Model": "gemma",
     "Exaone4_5_ForConditionalGeneration": "exaone",
+    "FishOmniModel": "drama3",
     "Gemma3ForConditionalGeneration": "gemma",
     "Gemma3nForConditionalGeneration": "gemma",
     "Gemma4ForConditionalGeneration": "gemma",

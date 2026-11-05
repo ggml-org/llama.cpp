@@ -7,6 +7,7 @@
 #include "base64.hpp"
 #include "chat.h"
 #include "common.h"
+#include "json-schema-to-grammar.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
 
@@ -75,7 +76,12 @@ bool parse_max_output_tokens(const json & j, int32_t & n) {
 // realtime tools have the format of the Responses API
 bool parse_tools(const json & j, std::vector<common_chat_tool> & tools, std::string & err) {
     try {
-        tools = common_chat_tools_parse_oaicompat(server_chat_convert_responses_tools(j));
+        auto parsed = common_chat_tools_parse_oaicompat(server_chat_convert_responses_tools(j));
+        // reject the schemas that would fail later, when the chat template builds the tool call grammar
+        for (const auto & tool : parsed) {
+            json_schema_to_grammar(json::parse(tool.parameters));
+        }
+        tools = std::move(parsed);
     } catch (const std::exception & e) {
         err = std::string("tools: ") + e.what();
         return false;
@@ -855,7 +861,11 @@ struct realtime_conversation {
         std::thread reader([this]() {
             std::string msg;
             while (conn.read(msg) != 0) {
-                handle(msg);
+                try {
+                    handle(msg);
+                } catch (const std::exception & e) {
+                    send_error(e.what(), "server_error");
+                }
             }
             closed = true;
             conn.close();
@@ -871,7 +881,12 @@ struct realtime_conversation {
                 break;
             }
             if (auto * res = dynamic_cast<server_task_result_realtime *>(result.get())) {
-                on_result(*res);
+                try {
+                    on_result(*res);
+                } catch (const std::exception & e) {
+                    send_error(e.what(), "server_error");
+                    break;
+                }
             }
         }
 

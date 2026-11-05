@@ -887,6 +887,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_cpy_f32_f32_pack = nullptr;
     cl_kernel kernel_cpy_f32_f32_flat = nullptr;
     cl_kernel kernel_mul_mat_f32_f32;
+    cl_kernel kernel_mul_mv_f32_f32_r2 = nullptr;
     cl_kernel kernel_fwht[2] = {};
     size_t fwht_workgroup_size[2] = {};
     cl_kernel kernel_mul_mat_f16_f16;
@@ -1027,10 +1028,13 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_mul_mv_q2_0_f32_flat;
     cl_kernel kernel_mul_mm_q2_0_f32_l4_lm;
     cl_kernel kernel_gemv_noshuffle_q2_0_f32 = nullptr;
+    cl_kernel kernel_gemv_noshuffle_q2_0_f32_wide = nullptr;
+    size_t q2_0_mv_workgroup_size = 512;
+    size_t q2_0_mv_workgroup_size_wide = 512;
     cl_kernel kernel_gemm_noshuffle_q2_0_f32 = nullptr;
     cl_kernel kernel_gemm_noshuffle_q2_0_q8_1_dp4a = nullptr;
     cl_kernel kernel_gemm_noshuffle_q2_0_q8_1_dp4a_narrow = nullptr;
-    int q2_0_mv_nsg = 8;
+    int q2_0_mv_nsg = 32;
     cl_kernel kernel_mul_mv_q2_0_f32;
     cl_kernel kernel_convert_block_iq1_m, kernel_restore_block_iq1_m;
     cl_kernel kernel_mul_mv_iq1_m_f32_flat;
@@ -3591,6 +3595,17 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
         CL_CHECK((backend_ctx->kernel_mul_mat_f32_f32 = clCreateKernel(backend_ctx->program_mul_mv_f32_f32, "kernel_mul_mat_f32_f32", &err), err));
+        if (backend_ctx->adreno_gen == ADRENO_GPU_GEN::A8X) {
+            cl_kernel kernel = clCreateKernel(backend_ctx->program_mul_mv_f32_f32, "kernel_mul_mv_f32_f32_r2", &err);
+            CL_CHECK(err);
+            size_t max_workgroup;
+            CL_CHECK(clGetKernelWorkGroupInfo(kernel, backend_ctx->device, CL_KERNEL_WORK_GROUP_SIZE, sizeof(max_workgroup), &max_workgroup, nullptr));
+            if (max_workgroup >= 64) {
+                backend_ctx->kernel_mul_mv_f32_f32_r2 = kernel;
+            } else {
+                CL_CHECK(clReleaseKernel(kernel));
+            }
+        }
         GGML_LOG_CONT(".");
     }
 
@@ -5076,25 +5091,30 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
 #endif
         if (const char * env = getenv("GGML_OPENCL_Q2_0_MV_NSG")) {
             const int nsg = atoi(env);
-            if (nsg == 1 || nsg == 2 || nsg == 4 || nsg == 8) {
+            if (nsg == 1 || nsg == 2 || nsg == 4 || nsg == 8 || nsg == 16 || nsg == 32) {
                 backend_ctx->q2_0_mv_nsg = nsg;
             }
         }
-        for (;;) {
-            const std::string opts = compile_opts + " -DQ2_0_MV_NSG=" + std::to_string(backend_ctx->q2_0_mv_nsg);
+        for (int wide = 0; wide < 2; ++wide) {
+            const std::string opts = compile_opts + " -DQ2_0_MV_WIDE=" + std::to_string(wide);
             cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), opts);
             cl_kernel kernel = clCreateKernel(prog, "kernel_gemv_noshuffle_q2_0_f32", &err);
             CL_CHECK(err);
             CL_CHECK(clReleaseProgram(prog));
             size_t max_workgroup;
             CL_CHECK(clGetKernelWorkGroupInfo(kernel, backend_ctx->device, CL_KERNEL_WORK_GROUP_SIZE, sizeof(max_workgroup), &max_workgroup, nullptr));
-            if (64*(size_t)backend_ctx->q2_0_mv_nsg <= max_workgroup) {
-                backend_ctx->kernel_gemv_noshuffle_q2_0_f32 = kernel;
-                break;
+            size_t workgroup = 512;
+            while (workgroup > max_workgroup) {
+                workgroup /= 2;
             }
-            CL_CHECK(clReleaseKernel(kernel));
-            GGML_ASSERT(backend_ctx->q2_0_mv_nsg > 1);
-            backend_ctx->q2_0_mv_nsg /= 2;
+            GGML_ASSERT(workgroup >= 64);
+            if (wide) {
+                backend_ctx->kernel_gemv_noshuffle_q2_0_f32_wide = kernel;
+                backend_ctx->q2_0_mv_workgroup_size_wide = workgroup;
+            } else {
+                backend_ctx->kernel_gemv_noshuffle_q2_0_f32 = kernel;
+                backend_ctx->q2_0_mv_workgroup_size = workgroup;
+            }
         }
         GGML_LOG_CONT(".");
     }
@@ -7815,7 +7835,8 @@ static void ggml_opencl_ensure_fa_f32_f16_mq_decode(ggml_backend_opencl_context 
     }
 
     const bool cluster = dk == 64 || dk == 128;
-    const int head_sub = cluster ? 2 : (gqa == 8 ? (dk == 512 ? 4 : 2) : 1);
+    const int head_sub = gqa == 16 ? (cluster ? 4 : 8) :
+                         cluster   ? 2 : (gqa == 8 ? (dk == 512 ? 4 : 2) : 1);
     const int nsg_max = dk == 64 ? 1 : (dk == 128 || (gqa == 8 && dk == 256) ? 2 : 4);
     const char * kernel_name = cluster ? "flash_attn_f32_f16_q1_vec_mq_split_c8" : "flash_attn_f32_f16_q1_vec_mq_split";
     const std::string src = ggml_opencl_fa_kernel_src(FA_VARIANT_F32_F16);
@@ -7823,7 +7844,7 @@ static void ggml_opencl_ensure_fa_f32_f16_mq_decode(ggml_backend_opencl_context 
                              " -D FA_MQ_ONLY -D MQ_GQA=" + std::to_string(gqa / head_sub) +
                              " -D FA_HEAD_SUB=" + std::to_string(head_sub) +
                              (cluster ? " -D MQ_NSG=" + std::to_string(nsg_max) + " -D FA_CL_C=16" : " -D FA_MQ_SPLIT_ONLY") +
-                             (dk == 64 ? " -D FA_CL_MHRED -D FA_CL_MASK_BCAST" : "") +
+                             (dk == 64 ? " -D FA_CL_MHRED -D FA_CL_MASK_BCAST" : (cluster && gqa == 16 ? " -D FA_CL_MHRED" : "")) +
                              (gqa == 8 && dk == 256 ? " -D FA_Q1_Q_REG" : "");
     for (int nsg = nsg_max; nsg >= 1; nsg /= 2) {
         const size_t wg = 64 * nsg;
@@ -10819,7 +10840,8 @@ static void ggml_cl_mul_mat_q4_k_glu_fused(ggml_backend_t backend, ggml_tensor *
     // byte-identical to the per-op path. Keep the maxwg query as a further floor
     // for any driver that reports < 512.
     size_t maxwg = backend_ctx->get_kernel_workgroup_size(kernel);
-    size_t nsg_y = 8;
+    // X2E: 4 is faster than 8 on every q4_K FFN shape measured there
+    size_t nsg_y = backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E ? 4 : 8;
     while (nsg_y > 1 && 64 * nsg_y > maxwg) { nsg_y >>= 1; }
     size_t local_work_size[3]  = { 64, nsg_y, 1 };
     size_t global_work_size[3] = { (size_t)CEIL_DIV(M / 2, 64) * 64, nsg_y, 1 };
@@ -12128,9 +12150,13 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                 }
                 if (q->ne[1] == 1) {
                     const char * decode_env = getenv("GGML_OPENCL_FA_DK512_DECODE");
+                    const int64_t gqa = k->ne[2] > 0 ? q->ne[2] / k->ne[2] : 0;
+                    // GQA 2 and 16 decode on the X2E MQ kernels (see mq_decode_x2e in ggml_cl_flash_attn)
+                    const bool gqa_ok = gqa == 4 || gqa == 8 ||
+                                        (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E && (gqa == 2 || gqa == 16));
                     if ((decode_env && decode_env[0] == '0') ||
                         backend_ctx->gpu_family != ADRENO || k->ne[2] <= 0 ||
-                        (q->ne[2] / k->ne[2] != 4 && q->ne[2] / k->ne[2] != 8) || q->ne[2] % k->ne[2] != 0 ||
+                        !gqa_ok || q->ne[2] % k->ne[2] != 0 ||
                         !ggml_opencl_ensure_fa_f32_f16_vec_512(backend_ctx)) {
                         return false;
                     }
@@ -22576,11 +22602,18 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
     const std::pair<int, int> dk_dv = {d_head_q, d_head_v};
     const int mq_gqa = n_head_kv > 0 ? n_head / n_head_kv : 0;
     const std::tuple<int, int, int> mq_decode_key = {d_head_q, d_head_v, mq_gqa};
+    // X2E also takes GQA 2 and 6 at head size 256 (gemma-4 SWA layers, Qwen3.5-27B),
+    // GQA 16 at 512 and 128 (gemma-4-12b global layers, muse-glimmer) and GQA 2 at 512 (gemma-4-E4B MTP drafter)
+    const bool mq_decode_x2e = backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E &&
+                               ((d_head_q == 256 && (mq_gqa == 2 || mq_gqa == 6)) ||
+                                (d_head_q == 512 && (mq_gqa == 2 || mq_gqa == 16)) ||
+                                (d_head_q == 128 && mq_gqa == 16 && backend_ctx->has_subgroup_shuffle));
     const bool mq_decode_shape = backend_ctx->gpu_family == ADRENO && is_mixed && n_q == 1 &&
                                  d_head_q == d_head_v && n_head_kv > 0 && n_head % n_head_kv == 0 &&
                                  ((((d_head_q == 64 && mq_gqa == 8) || (d_head_q == 128 && mq_gqa == 4)) &&
                                    backend_ctx->has_subgroup_shuffle) ||
-                                  ((d_head_q == 256 || d_head_q == 512) && (mq_gqa == 4 || mq_gqa == 8)));
+                                  ((d_head_q == 256 || d_head_q == 512) && (mq_gqa == 4 || mq_gqa == 8)) ||
+                                  mq_decode_x2e);
     if (mq_decode_shape && n_kv >= 32) {
         ggml_opencl_ensure_fa_f32_f16_mq_decode(backend_ctx, d_head_q, d_head_v, mq_gqa);
     }
@@ -24248,7 +24281,15 @@ static void ggml_cl_mul_mat_q2_0_f32_adreno(ggml_backend_t backend, const ggml_t
     const int k = src0->ne[0];
 
     if (n == 1 || !ggml_is_contiguous(src1) || offset1 % backend_ctx->alignment != 0) {
-        cl_kernel gemv = backend_ctx->kernel_gemv_noshuffle_q2_0_f32;
+        const bool wide = m >= 16384 && m % 8 == 0;
+        cl_kernel gemv = wide ? backend_ctx->kernel_gemv_noshuffle_q2_0_f32_wide : backend_ctx->kernel_gemv_noshuffle_q2_0_f32;
+        const size_t workgroup = wide ? backend_ctx->q2_0_mv_workgroup_size_wide : backend_ctx->q2_0_mv_workgroup_size;
+        const size_t rows = wide ? 8 : 4;
+        size_t nsg = std::min((size_t)backend_ctx->q2_0_mv_nsg, wide ? size_t(8) : m >= 4096 ? size_t(16) : size_t(32));
+        while (nsg > (size_t)k/64 || nsg*16 > workgroup) {
+            nsg /= 2;
+        }
+        const size_t lanes = workgroup/nsg;
         const int stride_d = dst->ne[0];
         const int stride_b = src1->nb[1]/sizeof(float);
         CL_CHECK(clSetKernelArg(gemv,  0, sizeof(cl_mem),    &extra0->qs));
@@ -24261,9 +24302,8 @@ static void ggml_cl_mul_mat_q2_0_f32_adreno(ggml_backend_t backend, const ggml_t
         CL_CHECK(clSetKernelArg(gemv,  7, sizeof(int),       &m));
         CL_CHECK(clSetKernelArg(gemv,  8, sizeof(int),       &stride_b));
         CL_CHECK(clSetKernelArg(gemv,  9, sizeof(int),       &stride_d));
-        const size_t nsg = backend_ctx->q2_0_mv_nsg;
-        size_t global[] = { (size_t)CEIL_DIV(m, 128)*64, (size_t)n*nsg, 1 };
-        size_t local[] = { 64, nsg, 1 };
+        size_t global[] = { (size_t)CEIL_DIV(m, rows*lanes)*lanes, (size_t)n*nsg, 1 };
+        size_t local[] = { lanes, nsg, 1 };
         backend_ctx->enqueue_ndrange_kernel(gemv, 3, global, local, dst);
         return;
     }
@@ -30881,9 +30921,15 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
     // Override with GGML_OPENCL_A7X_F32_LM_BYPASS=0.
     static const char * a7x_f32lm_env    = getenv("GGML_OPENCL_A7X_F32_LM_BYPASS");
     static const bool   a7x_f32lm_bypass = (a7x_f32lm_env == nullptr || a7x_f32lm_env[0] != '0');
+    // The 64-column tile wastes work on small F32 matrices, including block rotations.
+    const bool f32_use_mv = (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E ||
+                            (backend_ctx->kernel_mul_mv_f32_f32_r2 != nullptr && ne00 <= 512)) &&
+                           src0t == GGML_TYPE_F32 && ne00 >= 256 && ne00 <= 1024 && ne00 % 16 == 0 && ne01 <= 512 && ne11 <= 16 &&
+                           ne02 == 1 && ne12 == 1 && ne13 == 1 &&
+                           ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && (offset0 | offset1) % 16 == 0;
     if (src1t == GGML_TYPE_F32 &&
         ne00 % 16 == 0 &&
-        ne11 > 1 &&
+        ne11 > 1 && !f32_use_mv &&
         !(a7x_f32lm_bypass && src0t == GGML_TYPE_F32 && ne11 > 8 &&
           backend_ctx->adreno_gen == ADRENO_GPU_GEN::A7X)) {
         switch(src0t) {
@@ -32072,6 +32118,9 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
             GGML_ASSERT(src1t == GGML_TYPE_F32);
             kernel = backend_ctx->kernel_mul_mat_f32_f32;
             nrows = 4;
+            if (f32_use_mv && ne11 > 1 && backend_ctx->kernel_mul_mv_f32_f32_r2 != nullptr) {
+                kernel = backend_ctx->kernel_mul_mv_f32_f32_r2;
+            }
 
             if (backend_ctx->gpu_family == INTEL) {
                 nth0 = 32;
@@ -33833,8 +33882,9 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
             backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
         } else {
             int64_t ny = (ne11 + nrows - 1)/nrows;
+            int64_t nx = kernel == backend_ctx->kernel_mul_mv_f32_f32_r2 ? CEIL_DIV(ne01, 2) : ne01;
 
-            size_t global_work_size[] = {(size_t)ne01*nth0, (size_t)ny*nth1, (size_t)ne12*ne13};
+            size_t global_work_size[] = {(size_t)nx*nth0, (size_t)ny*nth1, (size_t)ne12*ne13};
             size_t local_work_size[] = {(size_t)nth0, (size_t)nth1, 1};
 
             backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);

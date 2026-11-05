@@ -225,8 +225,6 @@ class ModelBase:
         tensors: dict[str, Callable[[], Tensor]] = {}
 
         if remote_hf_model_id is not None:
-            is_safetensors = True
-
             logger.info(f"Using remote model with HuggingFace id: {remote_hf_model_id}")
             remote_tensors = gguf.utility.SafetensorRemote.get_list_tensors_hf_model(remote_hf_model_id)
             for name, remote_tensor in remote_tensors.items():
@@ -237,9 +235,13 @@ class ModelBase:
 
             return tensors
 
-        prefix = "model" if not self.is_mistral_format else "consolidated"
+        return self.index_local_tensors("model" if not self.is_mistral_format else "consolidated")
+
+    # index the local "<prefix>*.safetensors" files (or pytorch_model*.bin), through filter_tensors
+    def index_local_tensors(self, prefix: str) -> dict[str, Callable[[], Tensor]]:
+        tensors: dict[str, Callable[[], Tensor]] = {}
         part_names: list[str] = ModelBase.get_model_part_names(self.dir_model, prefix, ".safetensors")
-        is_safetensors: bool = len(part_names) > 0 or (not self.is_mistral_format and (self.dir_model / "model.safetensors.index.json").is_file())
+        is_safetensors: bool = len(part_names) > 0 or (not self.is_mistral_format and (self.dir_model / f"{prefix}.safetensors.index.json").is_file())
         if not is_safetensors:
             part_names = ModelBase.get_model_part_names(self.dir_model, "pytorch_model", ".bin")
 
@@ -247,7 +249,7 @@ class ModelBase:
         tensor_names_from_parts: set[str] = set()
 
         if not self.is_mistral_format:
-            index_name = "model.safetensors" if is_safetensors else "pytorch_model.bin"
+            index_name = f"{prefix}.safetensors" if is_safetensors else "pytorch_model.bin"
             index_name += ".index.json"
             index_file = self.dir_model / index_name
 
@@ -492,7 +494,7 @@ class ModelBase:
                         s = self.model_tensors[name]
                         self.model_tensors[weight_name] = lambda w=w, s=s: dequant_bitnet(w(), s())
                         tensors_to_remove.append(name)
-            elif quant_method == "fp8":
+            elif quant_method in ("fp8", "bsgemm-moe"):  # bsgemm-moe: drama-3, same block layout
                 block_size = quant_config.get("weight_block_size")
                 for name in self.model_tensors.keys():
                     if name.endswith("_scale_inv"):
