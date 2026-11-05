@@ -803,7 +803,9 @@ matches the role of the surface instead of combining raw shadows.
   those slots at one component's tokens, so each component needs a single class.
 - **`matte-float`** and **`matte-float-modal`:** menus, popovers, select lists, hover cards
   and drawers, and dialogs over the page colour. An 86% opaque panel with blur, a faint edge
-  and a deeper shadow. In light mode dialogs are solid white instead: over the dimmed page a
+  and a deeper shadow. The edge is a hairline ring baked into the shadow, as shadow-plugin's
+  `smooth-shadow-ring-*` draws it, never a border next to a shadow, which would read as a
+  double edge; the panel's border stays transparent so its size does not change. In light mode dialogs are solid white instead: over the dimmed page a
   translucent white turns grey.
 - **`matte-key`:** buttons. Adds a light blur and a small drop shadow on top of the
   button's own fill. It never changes the button colour and draws no rim of its own: every
@@ -815,7 +817,12 @@ matches the role of the surface instead of combining raw shadows.
   small status dots and the recording button.
 
 The elevation tokens are `elevation-surface`, `elevation-control`, `elevation-raised`,
-`elevation-inset` and `elevation-tooltip`. Overlays behind dialogs are `surface-overlay`
+`elevation-inset` and `elevation-tooltip`. The drop shadows are shadow-plugin's smooth
+stacks, five or so soft layers instead of one hard one: `elevation-surface` is its `md`,
+`elevation-raised` its `lg`, and `elevation-control` only the near layers of its `sm`, so a
+control sits close to the page. Dark mode deepens the same stacks. The plugin is imported
+unprefixed, so Tailwind's own `shadow-xs` to `shadow-2xl` draw the smooth stacks too. Every
+button carries `elevation-control` (`--button-shadow`); a ghost button only while hovered. Overlays behind dialogs are `surface-overlay`
 with a 2px blur.
 
 ## Shapes

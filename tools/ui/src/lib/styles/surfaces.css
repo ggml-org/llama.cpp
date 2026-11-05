@@ -79,15 +79,18 @@
 	--glass-shadow: var(--sidebar-shadow);
 }
 
-/* Floating panel (menus, popovers, drawers): frosted fill, faint rim, lifted shadow. */
+/* Floating panel (menus, popovers, drawers): frosted fill, faint rim, lifted shadow. The edge is the hairline ring
+   baked into the shadow (as shadow-plugin's smooth-shadow-ring does), not the border, so the two never draw a double
+   edge; the border stays transparent so the panel keeps its size. */
 @utility matte-float {
 	background-color: var(--float-background, var(--float-panel-background));
-	border-color: var(--float-panel-edge);
+	border-color: transparent;
 	color: var(--float-panel-text);
 	backdrop-filter: blur(var(--blur-surface)) saturate(1.5);
 	box-shadow:
 		inset 0 0 0 1px var(--float-panel-highlight),
-		var(--float-panel-shadow);
+		var(--float-panel-shadow),
+		0 0 0 var(--smooth-ring-width, 1px) var(--float-panel-edge);
 }
 
 /* Dialogs float over the page colour rather than the raised one. */

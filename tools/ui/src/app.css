@@ -1,4 +1,6 @@
 @import 'tailwindcss';
+/* smooth stacked shadows: the shadow-{size} scale, plus smooth-shadow-ring-* for elevated surfaces */
+@import 'shadow-plugin/unprefixed';
 @source '.';
 /* stories may use classes the app does not, so tailwind scans them too */
 @source '../tests/stories';
