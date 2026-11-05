@@ -772,7 +772,8 @@ the Surface switch in Storybook's toolbar, and only its surface tokens differ: `
 
 ## Typography
 
-The UI uses Llama Sans UI (with the system sans-serif stack as its fallback) and Llama Mono
+The UI uses Llama Sans UI (with the system sans-serif stack as its fallback), Llama Sans
+Display for every heading (`h1` to `h6`, also `font-display`) and Llama Mono
 for code (with the system monospace stack as its fallback). Llama Mono keeps every character,
 its coding ligatures included, in one cell, so code and numbers line up in columns. Type is set through roles that fix size, line height and weight together:
 
