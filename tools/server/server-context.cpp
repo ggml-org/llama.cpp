@@ -2724,7 +2724,7 @@ private:
     void create_checkpoint(server_slot & slot, const int64_t n_tokens_cur, llama_pos pos_min, llama_pos pos_max) {
         const int id_task = slot.task->id;
 
-        // checkpoints past the common prefix were erased, so one at the same position holds the same state - keep it
+        // update_slots() erased checkpoints past the common prefix also, so one at the same position holds the same state - keep it
         // instead of copying again, unless it came from a slot file (id_task == -1, may fail to load)
         for (auto & cur : slot.prompt.checkpoints) {
             if (cur.id_task != -1 && cur.n_tokens == slot.prompt.n_tokens() - n_tokens_cur && cur.pos_min == pos_min && cur.pos_max == pos_max) {

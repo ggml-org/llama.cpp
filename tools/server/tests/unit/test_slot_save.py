@@ -729,16 +729,23 @@ def test_cache_reuse_does_not_restore_shifted_checkpoint():
     m = len(a) // 2
     b = a[:m] + a[m + 16:] # the checkpoint of a at n - 36 is now inside the shifted tail
 
-    def complete(prompt, cache_prompt):
+    def top_logprobs(prompt, cache_prompt):
         res = server.make_request("POST", "/completion", data={
             "prompt": prompt,
+            "n_predict": 1,
+            "n_probs": 5,
             "cache_prompt": cache_prompt,
         })
         assert res.status_code == 200
-        return res.body["content"]
+        return [(p["id"], p["logprob"]) for p in res.body["completion_probabilities"][0]["top_logprobs"]]
 
-    complete(a, True)
-    assert complete(b, True) == complete(b, False)
+    expected = top_logprobs(b, False)
+    top_logprobs(a, True)
+    actual = top_logprobs(b, True)
+
+    assert [tid for tid, _ in actual] == [tid for tid, _ in expected]
+    for (_, lp), (_, lp_expected) in zip(actual, expected):
+        assert lp == pytest.approx(lp_expected, abs=1e-3)
 
 
 # checkpoint appendix: magic(4) version(4) count(4), then per checkpoint
