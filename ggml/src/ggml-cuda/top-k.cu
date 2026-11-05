@@ -273,7 +273,7 @@ static void top_k_radix_cuda(
     constexpr int NBINS = 1 << RADIX_BITS;
     const int blocks_per_row = (int) std::min<int64_t>(((int64_t) ncols + 1023) / 1024, 64);
     // each block of a row reads a contiguous range of whole tiles
-    const int block_cols = (ncols + blocks_per_row * BLOCK_SIZE - 1) / (blocks_per_row * BLOCK_SIZE) * BLOCK_SIZE;
+    const int block_cols = (int) (((int64_t) ncols + blocks_per_row * BLOCK_SIZE - 1) / (blocks_per_row * BLOCK_SIZE) * BLOCK_SIZE);
 
     // chunk the rows to bound the histogram memory to 64 MB
     const int64_t chunk_nrows = ggml_cuda_chunk_nrows((size_t) blocks_per_row * NBINS * sizeof(int), nrows);
