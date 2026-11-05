@@ -281,11 +281,11 @@ public:
             }
         };
 
-        GGML_ASSERT(ggml_backend_buffer_is_host(self_kq_mask->buffer));
-        if (self_kq_mask->type == GGML_TYPE_F16) {
-            fill_mask((ggml_fp16_t *) self_kq_mask->data, ggml_fp32_to_fp16(0.0f), ggml_fp32_to_fp16(-INFINITY));
+        GGML_ASSERT(ggml_backend_buffer_is_host(self_attn_mask.raw->buffer));
+        if (self_attn_mask.raw->type == GGML_TYPE_F16) {
+            fill_mask((ggml_fp16_t *) self_attn_mask.raw->data, ggml_fp32_to_fp16(0.0f), ggml_fp32_to_fp16(-INFINITY));
         } else {
-            fill_mask((float *) self_kq_mask->data, 0.0f, -INFINITY);
+            fill_mask((float *) self_attn_mask.raw->data, 0.0f, -INFINITY);
         }
     }
 
@@ -330,9 +330,8 @@ llama_model_lfm2::graph_decision::graph_decision(const llama_model & model, cons
     llm_graph_input_attn_no_cache * inp_attn[2];
     for (bool is_head : {false, true}) {
         auto inp = std::make_unique<llm_graph_input_attn_media>(hparams, cparams, is_head);
-        inp->self_kq_mask = ggml_new_tensor_4d(ctx0, type_mask, n_tokens, n_tokens, 1, 1);
-        ggml_set_input(inp->self_kq_mask);
-        inp->self_kq_mask_cnv = inp->self_kq_mask;
+        inp->self_attn_mask.raw = ggml_new_tensor_4d(ctx0, type_mask, n_tokens, n_tokens, 1, 1);
+        ggml_set_input(inp->self_attn_mask.raw);
         inp_attn[is_head] = (llm_graph_input_attn_no_cache *) res->add_input(std::move(inp));
     }
 
@@ -400,9 +399,9 @@ llama_model_lfm2::graph_decision::graph_decision(const llama_model & model, cons
 
         ggml_tensor * ffn_out = build_norm(cur, layer.ffn_norm, NULL, LLM_NORM_RMS, il);
         ffn_out = build_ffn(ffn_out,
-                layer.ffn_up,   NULL, NULL,
-                layer.ffn_gate, NULL, NULL,
-                layer.ffn_down, NULL, NULL,
+                layer.ffn_up,   NULL, layer.ffn_up_s,
+                layer.ffn_gate, NULL, layer.ffn_gate_s,
+                layer.ffn_down, NULL, layer.ffn_down_s,
                 NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
 
         cur = ggml_add(ctx0, cur, ffn_out);

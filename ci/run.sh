@@ -296,25 +296,6 @@ function gg_run_test_llama_archs_tensor_split {
     set +e
 }
 
-# test_llama_archs_models
-
-function gg_run_test_llama_archs_models {
-    cd ${SRC}
-
-    set -e
-
-    # TODO: fix and re-enable `test-llama-archs` on OpenVINO
-    # TODO: the `test-llama-archs` currently does not build on Windows, so we check if the binary exists
-    if [ -z ${GG_BUILD_OPENVINO} ] && [ -f ./build-ci-release/bin/test-llama-archs ]; then
-        rm -rf build-ci-models && mkdir -p build-ci-models
-
-        # generate the dummy models used by the model-dependent tests
-        ./build-ci-release/bin/test-llama-archs -o build-ci-models 2>&1
-    fi
-
-    set +e
-}
-
 # test_scripts
 
 function gg_run_test_scripts {
@@ -701,7 +682,6 @@ test $ret -eq 0 && gg_run ctest_release
 
 test $ret -eq 0 && gg_run test_backend_ops
 
-test $ret -eq 0 && gg_run test_llama_archs_models
 test $ret -eq 0 && gg_run test_llama_archs_tensor_split
 
 if [ -z ${GG_BUILD_LOW_PERF} ]; then

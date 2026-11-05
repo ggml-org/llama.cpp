@@ -481,7 +481,7 @@ cmake --build build --config Release
 Now you can load the model in conversation mode using `Vulkan`
 
 ```sh
-build/bin/Release/llama-cli -m "[PATH TO MODEL]" -ngl 100 -c 16384 -t 10 -n -2 -cnv
+build/bin/Release/llama-cli -m "[PATH TO MODEL]" -ngl 100 -c 16384 -t 10 -n -2
 ```
 
 **MSYS2**
