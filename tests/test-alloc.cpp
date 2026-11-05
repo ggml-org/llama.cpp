@@ -769,6 +769,19 @@ static void test_graph_optimize_deps_exceed_creation_size() {
     GGML_ASSERT(msg.str().find("backend id entries") != std::string::npos);
 }
 
+// Worst case for the tensor arena of the scheduler (sched->ctx), per unit of graph size M = max(n_nodes, n_leafs):
+//   capacity = GGML_SCHED_MAX_SPLIT_INPUTS * 2 * sizeof(ggml_tensor) bytes (the 2 is the one of the formula of the arena)
+//   bound    = GGML_MAX_SRC * (C + 1) + (C - 1) objects of ggml_tensor_overhead() bytes
+//              C = n_copies: 1, or GGML_SCHED_MAX_COPIES in parallel mode
+//              (GGML_MAX_SRC pairs per node, C copies + 1 view each; C - 1 extra copies per input leaf)
+static void test_sched_ctx_bound() {
+    const size_t capacity = GGML_SCHED_MAX_SPLIT_INPUTS*2*sizeof(struct ggml_tensor);
+    for (const size_t n_copies : { (size_t) 1, (size_t) GGML_SCHED_MAX_COPIES }) {
+        const size_t bound = GGML_MAX_SRC*(n_copies + 1) + (n_copies - 1);
+        GGML_ASSERT(bound*ggml_tensor_overhead() <= capacity);
+    }
+}
+
 // Check that the size reported by ggml_backend_alloc_ctx_tensors_from_buft_size
 // matches the actual size of the buffer allocated for the ctx tensors
 static ggml_backend_buffer_ptr check_size_matches(ggml_backend_buffer_type_t buft, ggml_context * ctx) {
@@ -1228,6 +1241,7 @@ int main(int argc, char ** argv) {
     run("test_graph_optimize_alloc_dep", test_graph_optimize_alloc_dep);
     run("test_graph_optimize_many_deps", test_graph_optimize_many_deps);
     run("test_graph_optimize_deps_exceed_creation_size", test_graph_optimize_deps_exceed_creation_size);
+    run("test_sched_ctx_bound", test_sched_ctx_bound);
     run("test_buft_alloc_buffer_n_single_buffer", test_buft_alloc_buffer_n_single_buffer);
     run("test_buft_alloc_buffer_n_multi_buffer", test_buft_alloc_buffer_n_multi_buffer);
     run("test_buft_alloc_buffer_n_zero_size", test_buft_alloc_buffer_n_zero_size);
