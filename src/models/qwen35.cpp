@@ -552,8 +552,7 @@ llama_model_qwen35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
 
     res->add_input(std::move(inp));
 
-    ggml_tensor * inp_pos     = build_inp_pos();
-    ggml_tensor * inp_out_ids = build_inp_out_ids();
+    ggml_tensor * inp_pos = build_inp_pos();
 
     auto * inp_attn = build_attn_inp_kv();
 
@@ -610,6 +609,14 @@ llama_model_qwen35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
     Kcur = ggml_rope_multi(ctx0, Kcur, inp_pos, nullptr,
             n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale,
             ext_factor, attn_factor, beta_fast, beta_slow);
+
+    // no row of the result is read (e.g. the draft catch-up): only the K/V of this block are used
+    if (n_outputs == 0 && (!cparams.embeddings_nextn || cparams.embeddings_nextn_masked)) {
+        build_attn_kv_store(inp_attn, Kcur, Vcur, il);
+        return;
+    }
+
+    ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     const float kq_scale = hparams.f_attention_scale == 0.0f
             ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
