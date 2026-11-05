@@ -5,6 +5,9 @@
 -->
 <script lang="ts">
 	import { specimen } from '../llama-sans/lib/specimen';
+	import { Label } from '$lib/components/ui/label';
+	import { Switch } from '$lib/components/ui/switch';
+	import * as ToggleGroup from '$lib/components/ui/toggle-group';
 
 	const { axis } = specimen;
 
@@ -24,7 +27,10 @@
 	let opszMode = $state<'auto' | 'pin'>('auto');
 	let opsz = $state(16);
 	let ligatures = $state(true);
-	let show = $state({ mono: true, sans: true });
+	let fonts = $state(['sans', 'mono']);
+	const show = $derived({ mono: fonts.includes('mono'), sans: fonts.includes('sans') });
+	// the preset the text still matches, if any
+	const preset = $derived(samples.find((s) => s.text === text)?.label ?? '');
 
 	// what Llama Sans is set at: the browser maps opsz to the size in px, within the axis's 16–40
 	const effective = $derived(opszMode === 'auto' ? Math.min(40, Math.max(16, size)) : opsz);
@@ -60,34 +66,30 @@
 		</p>
 	</header>
 
-	<div class="controls">
+	<!-- the design system's own controls (in .ds, so the specimen's reset leaves them alone); there is no slider in it
+	     yet, so the four ranges stay native -->
+	<div class="controls ds">
 		<div class="group">
 			<span class="label">Fonts</span>
 
-			<div class="chips">
-				<label class="chip">
-					<input bind:checked={show.sans} disabled={!show.mono} type="checkbox" />Llama Sans
-				</label>
+			<ToggleGroup.Root bind:value={() => fonts, (v) => v.length && (fonts = v)} type="multiple">
+				<ToggleGroup.Item value="sans">Llama Sans</ToggleGroup.Item>
 
-				<label class="chip">
-					<input bind:checked={show.mono} disabled={!show.sans} type="checkbox" />Llama Mono
-				</label>
-			</div>
+				<ToggleGroup.Item value="mono">Llama Mono</ToggleGroup.Item>
+			</ToggleGroup.Root>
 		</div>
 
 		<div class="group">
 			<span class="label">Text</span>
 
-			<div class="chips">
+			<ToggleGroup.Root
+				bind:value={() => preset, (v) => v && (text = samples.find((s) => s.label === v)!.text)}
+				type="single"
+			>
 				{#each samples as s (s.label)}
-					<button
-						aria-pressed={text === s.text}
-						class="chip"
-						onclick={() => (text = s.text)}
-						type="button">{s.label}</button
-					>
+					<ToggleGroup.Item value={s.label}>{s.label}</ToggleGroup.Item>
 				{/each}
-			</div>
+			</ToggleGroup.Root>
 		</div>
 
 		<label class="slider">
@@ -117,15 +119,14 @@
 		<div class="group">
 			<span class="label">Llama Sans optical size</span>
 
-			<div class="chips">
-				<label class="chip">
-					<input bind:group={opszMode} type="radio" value="auto" />Auto, from size
-				</label>
+			<ToggleGroup.Root
+				bind:value={() => opszMode, (v) => v && (opszMode = v as 'auto' | 'pin')}
+				type="single"
+			>
+				<ToggleGroup.Item value="auto">Auto, from size</ToggleGroup.Item>
 
-				<label class="chip">
-					<input bind:group={opszMode} type="radio" value="pin" />Pinned
-				</label>
-			</div>
+				<ToggleGroup.Item value="pin">Pinned</ToggleGroup.Item>
+			</ToggleGroup.Root>
 
 			{#if opszMode === 'pin'}
 				<label class="slider">
@@ -142,9 +143,9 @@
 		<div class="group">
 			<span class="label">Llama Mono</span>
 
-			<div class="chips">
-				<label class="chip"><input bind:checked={ligatures} type="checkbox" />Ligatures</label>
-			</div>
+			<Label class="flex h-control-sm items-center gap-2 text-label-sm">
+				<Switch bind:checked={ligatures} /> Ligatures
+			</Label>
 		</div>
 	</div>
 
@@ -246,38 +247,6 @@
 		margin: 0;
 		accent-color: var(--ink);
 	}
-	.chips {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 6px;
-	}
-	.chip {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		padding: 6px 12px;
-		border: 1px solid var(--rule);
-		border-radius: 999px;
-		background: var(--paper);
-		color: var(--ink);
-		font: 500 13px / 1.25 var(--ui);
-		cursor: pointer;
-	}
-	.chip input {
-		margin: 0;
-		accent-color: var(--ink);
-	}
-	button.chip[aria-pressed='true'] {
-		border-color: var(--ink);
-		background: var(--ink);
-		color: var(--paper);
-	}
-	.chip:focus-visible,
-	.chip:has(input:focus-visible) {
-		outline: 2px solid var(--mark);
-		outline-offset: 2px;
-	}
-
 	.rows {
 		display: grid;
 		gap: 28px;
