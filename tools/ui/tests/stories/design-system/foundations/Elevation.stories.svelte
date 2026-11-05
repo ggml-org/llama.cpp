@@ -8,7 +8,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design System/Foundations/Elevation'
+		title: 'UI/Foundations/Elevation'
 	});
 
 	const levels = [

@@ -10,7 +10,7 @@
 			controls: { disable: true },
 			layout: 'fullscreen'
 		},
-		title: 'Typography/Overview'
+		title: 'Brand/Typography/Overview'
 	});
 </script>
 

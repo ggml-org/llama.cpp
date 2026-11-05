@@ -9,7 +9,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Blocks/Chat/ChatScreen/ChatScreenStreamResumeStatus'
+		title: 'UI/Blocks/Chat/ChatScreen/ChatScreenStreamResumeStatus'
 	});
 </script>
 

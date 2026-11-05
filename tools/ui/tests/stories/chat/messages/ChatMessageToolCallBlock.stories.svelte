@@ -33,7 +33,7 @@
 		parameters: {
 			layout: 'padded'
 		},
-		title: 'Blocks/Chat/ChatScreen/ChatMessages/ChatMessageToolCallBlock'
+		title: 'UI/Blocks/Chat/ChatScreen/ChatMessages/ChatMessageToolCallBlock'
 	});
 </script>
 

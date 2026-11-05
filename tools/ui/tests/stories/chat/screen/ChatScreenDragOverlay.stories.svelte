@@ -7,7 +7,7 @@
 		parameters: {
 			layout: 'fullscreen'
 		},
-		title: 'Blocks/Chat/ChatScreen/ChatScreenDragOverlay'
+		title: 'UI/Blocks/Chat/ChatScreen/ChatScreenDragOverlay'
 	});
 </script>
 

@@ -8,7 +8,7 @@
 		parameters: {
 			layout: 'fullscreen'
 		},
-		title: 'Logo/Showcase'
+		title: 'Brand/Logo/Showcase'
 	});
 </script>
 

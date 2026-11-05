@@ -10,7 +10,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Blocks/MCP/McpServerCard'
+		title: 'UI/Blocks/MCP/McpServerCard'
 	});
 
 	const handlers = {

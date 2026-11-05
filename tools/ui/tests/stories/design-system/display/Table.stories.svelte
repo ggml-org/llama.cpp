@@ -7,7 +7,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design System/Display/Table'
+		title: 'UI/Display/Table'
 	});
 
 	const rows = [

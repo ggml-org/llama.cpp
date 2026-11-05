@@ -8,7 +8,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Design System/Foundations/Surfaces'
+		title: 'UI/Foundations/Surfaces'
 	});
 </script>
 

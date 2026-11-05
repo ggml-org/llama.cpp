@@ -10,7 +10,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Patterns/CollapsibleSection'
+		title: 'UI/Patterns/CollapsibleSection'
 	});
 </script>
 

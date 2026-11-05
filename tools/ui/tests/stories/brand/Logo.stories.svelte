@@ -13,7 +13,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Logo/Icon'
+		title: 'Brand/Logo/Icon'
 	});
 
 	const sizes = [

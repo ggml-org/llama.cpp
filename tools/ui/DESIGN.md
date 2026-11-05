@@ -988,7 +988,8 @@ icon buttons in the chat form are fully round.
 Visual changes are decided in Storybook before they reach the components.
 
 1. **Prototype first.** Add a temporary story at `tests/stories/design-system/proposals/`
-   titled `Design System/Proposals/<topic>`, with one story per question.
+   titled `UI/Proposals/<topic>` (or under its Brand section, e.g. `Brand/Colors/...`, for brand
+   work), with one story per question.
 2. **Show current and proposed side by side.** Use `StateGallery` with two columns: each row
    is a pair of `StateGalleryItem`s labelled `Current` and `Proposed`, with a short note
    saying what differs. Render the current state with the real component, and the proposal

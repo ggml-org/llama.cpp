@@ -9,7 +9,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Patterns/DialogConfirmation'
+		title: 'UI/Patterns/DialogConfirmation'
 	});
 </script>
 

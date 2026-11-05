@@ -11,7 +11,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Patterns/ActionIcon'
+		title: 'UI/Patterns/ActionIcon'
 	});
 </script>
 

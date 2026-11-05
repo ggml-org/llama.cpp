@@ -11,7 +11,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Blocks/Chat/ChatScreen/ChatMessages/ChatMessageStatistics'
+		title: 'UI/Blocks/Chat/ChatScreen/ChatMessages/ChatMessageStatistics'
 	});
 
 	const stats = {

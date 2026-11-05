@@ -11,7 +11,7 @@
 			controls: { disable: true },
 			layout: 'fullscreen'
 		},
-		title: 'Typography/Llama Mono'
+		title: 'Brand/Typography/Llama Mono'
 	});
 </script>
 
