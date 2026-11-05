@@ -209,7 +209,7 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1(ggml_backend_cuda_con
     ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 64/ncols2, ncols2>(ctx, dst);
 }
 
-// Whether the MMA FA GQA optimization (multiple Q heads per tile, ncols2 > 1) can be used.
+// Whether the MMA FA GQA optimization (multiple Q heads per K/V head, ncols2 > 1) can be used.
 // Edge cases like no mask, ALiBi, unpadded K/V, or misaligned addresses for large data transfers
 //     are put into the template specialization without GQA optimizations.
 // Single source of truth for both kernel selection and ncols2 dispatch: they must agree,
