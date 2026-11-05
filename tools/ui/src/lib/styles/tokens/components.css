@@ -71,11 +71,14 @@
 	--button-outline-border: var(--line-control);
 	--button-text: var(--fg-default);
 	--button-shadow: var(--elevation-control);
-	/* the matte finish: a fill barely lighter at the top; solid fills also get an even hairline in a shade of the fill */
-	--key-sheen: var(--sheen-start);
+	/* the matte finish: a fill barely lighter at the top; solid fills also get an even hairline in a shade of the fill.
+	   Kept faint, so keys read as frosted glass rather than polished: the danger key fainter still, since a sheen on
+	   saturated red is what turns it metallic */
+	--key-sheen: var(--white-a12);
 	--key-sheen-solid: var(--white-a6);
 	--button-primary-edge: color-mix(in oklab, var(--button-primary-background), black 30%);
-	--button-danger-edge: color-mix(in oklab, var(--button-danger-background), black 12%);
+	--button-danger-sheen: var(--white-a2);
+	--button-danger-edge: color-mix(in oklab, var(--button-danger-background), black 6%);
 
 	/* toggles; the outline variant borrows the button outline */
 	--toggle-background-hover: var(--action-ghost-hover);
@@ -160,11 +163,16 @@
 	/* on the near-white track the thumb stays dark and opaque */
 	--switch-thumb-on: var(--surface-raised);
 	--float-panel-background-modal: color-mix(in oklch, var(--surface-page) 86%, transparent);
-	/* the matte finish again, from the dark fills */
+	/* the matte finish again, from the dark fills. The danger key is matte glass: a frosted, translucent red over the
+	   page, its edge a soft tint of the red rather than a lighter rim, and no sheen (a lit rim and sheen on red read
+	   as metal) */
 	--key-sheen: var(--sheen-start);
 	--key-sheen-solid: var(--white-a9);
 	--button-primary-edge: color-mix(in oklab, var(--button-primary-background), black 10%);
-	--button-danger-edge: color-mix(in oklab, var(--button-danger-background), white 10%);
+	--button-danger-background: color-mix(in oklch, var(--red-500) 58%, transparent);
+	--button-danger-background-hover: color-mix(in oklch, var(--red-500) 68%, transparent);
+	--button-danger-sheen: transparent;
+	--button-danger-edge: color-mix(in oklch, var(--red-400) 32%, transparent);
 }
 
 /* the user bubble is a card with an even, fainter edge, no inner ring and a barely noticeable shadow */
