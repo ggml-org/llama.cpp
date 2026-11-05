@@ -55,6 +55,8 @@ enum htp_mm_kernel_type {
     // HVX quantized paths
     HTP_MM_KERNEL_HVX_QUANT_ROW,      // standard row-wise parallel quantization
     HTP_MM_KERNEL_HVX_QUANT_BLOCK,    // parallel block-wise quantization
+    HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT, // row-wise fallback flat quantization
+    HTP_MM_KERNEL_HVX_QK_DDR,         // flat DDR path for K-quant (Q4_K/Q6_K) superblock weights
 };
 
 // Op-specific struct for precomputed matmul params
@@ -210,6 +212,37 @@ static inline size_t htp_mm_f16_tiled_row_size(uint32_t ne) {
 static inline size_t htp_mm_tiled_act_row_size(int weight_type, uint32_t ne) {
     if (weight_type == HTP_TYPE_F16) {
         return htp_mm_f16_tiled_row_size(ne);
+static inline size_t htp_mm_q8_1_flat_row_size(uint32_t ne) {
+    const uint32_t quants_size = hex_align_up(ne, 128);
+    const uint32_t num_scales = (ne + 31) / 32;
+    const uint32_t scales_size = hex_align_up(num_scales * 4, 128);
+    return quants_size + scales_size;
+}
+
+// Flat Q8_K activation row: quants region (int8 qs[QK_K] per block) followed by a
+// per-block scale/bsums region (float d + int16 bsums[QK_K/16]), each 128-byte aligned.
+static inline size_t htp_mm_q8_k_flat_row_size(uint32_t ne) {
+    const uint32_t num_blocks = (ne + QK_K - 1) / QK_K;
+    const uint32_t quants_size = hex_align_up(num_blocks * QK_K, 128);
+    const uint32_t scales_size = hex_align_up(num_blocks * (sizeof(float) + (QK_K / 16) * sizeof(int16_t)), 128);
+    return quants_size + scales_size;
+}
+
+static inline size_t htp_mm_get_tiled_row_stride(int weight_type, uint32_t k) {
+    uint32_t nb = (k + QK_Q4_0_TILED - 1) / QK_Q4_0_TILED;
+    switch (weight_type) {
+        case HTP_TYPE_Q4_0:
+        case HTP_TYPE_IQ4_NL:
+        case HTP_TYPE_Q4_1:
+        case HTP_TYPE_Q8_0:
+        case HTP_TYPE_MXFP4:
+            return (size_t) nb * htp_mm_get_weight_tile_size(weight_type);
+        case HTP_TYPE_F16:
+            return (size_t) k * sizeof(__fp16);
+        case HTP_TYPE_F32:
+            return (size_t) k * sizeof(float);
+        default:
+            return 0;
     }
     return htp_mm_weight_has_offset(weight_type) ? htp_mm_q8_1_tiled_row_size(ne) : htp_mm_q8_0_tiled_row_size(ne);
 }
@@ -489,6 +522,32 @@ static inline void htp_mm_hvx_vtcm_layout_build(
                 src0_sz    = htp_mm_round_up(n_prefetch * src0_row_size_padded, 256) * n_threads;
                 dst_sz     = dst_nrows > 0 ? htp_mm_round_up(dst_row_size, 128) * n_threads : 0;
                 act_raw_sz = 0;
+            case HTP_MM_KERNEL_HVX_F16_F32_DDR:
+            case HTP_MM_KERNEL_HVX_F16_F16_DDR:
+            case HTP_MM_KERNEL_HVX_F32_F32_DDR:
+            case HTP_MM_KERNEL_HVX_F32_F16_DDR: {
+                src0_sz = htp_mm_round_up(n_prefetch * src0_row_size, 256) * n_threads;
+                src1_sz = htp_mm_round_up(n_prefetch * src1_row_size, 256) * n_threads;
+                dst_sz  = dst_nrows > 0 ? htp_mm_round_up(dst_row_size, 128) * n_threads : 0;
+                break;
+            }
+            case HTP_MM_KERNEL_HVX_QK_DDR: {
+                // Unlike the other DDR kernel types above (which stream src1 through a
+                // small n_prefetch-sized sliding window via hvx_mm_4d), this kernel type's
+                // quant_task_func fully quantizes all src1_nrows rows into vtcm_src1 up
+                // front (see quantize_f32_q8_k_flat / QUANTIZE_IMPL), and hvx_mm_2d/hvx_mv_2d
+                // then index vtcm_src1 by the full row range, so the buffer must be sized
+                // for all rows, not just n_prefetch of them.
+                src0_sz = htp_mm_round_up(n_prefetch * src0_row_size, 256) * n_threads;
+                src1_sz = htp_mm_round_up(src1_row_size * src1_nrows, 256);
+                dst_sz  = dst_nrows > 0 ? htp_mm_round_up(dst_row_size, 128) * n_threads : 0;
+                break;
+            }
+            case HTP_MM_KERNEL_HVX_F32_F32_VTCM: {
+                size_t f32_src1_row_size = htp_mm_round_up(ne10 * 4, 128);
+                src1_sz = htp_mm_round_up(f32_src1_row_size * src1_nrows, 256);
+                src0_sz = htp_mm_round_up(n_prefetch * src0_row_size_padded, 256) * n_threads;
+                dst_sz  = dst_nrows > 0 ? htp_mm_round_up(dst_row_size, 128) * n_threads : 0;
                 break;
             }
             case HTP_MM_KERNEL_HVX_QUANT_BLOCK:
