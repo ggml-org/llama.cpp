@@ -155,7 +155,7 @@ void llama_model_hy_v4::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_hy_v4::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
 // reduce hc streams x[:,i,:] weighted by w[i,:] -> [n_embd, n_tokens]
@@ -267,7 +267,6 @@ ggml_tensor * llama_model_hy_v4::graph::build_hc_head(
 }
 
 ggml_tensor * llama_model_hy_v4::graph::build_attention(
-        const llama_model & model,
         llm_graph_input_attn_k * inp_attn,
         ggml_tensor * cur,
         ggml_tensor * inp_pos,
@@ -339,7 +338,6 @@ ggml_tensor * llama_model_hy_v4::graph::build_attention(
 }
 
 ggml_tensor * llama_model_hy_v4::graph::build_indexer_top_k(
-        const llama_model & model,
         llm_graph_input_attn_k_dsa * inp_attn_dsa,
         ggml_tensor * cur,
         ggml_tensor * qr,
@@ -419,7 +417,6 @@ ggml_tensor * llama_model_hy_v4::graph::build_indexer_top_k(
 
 llama_model_hy_v4::graph::attn_dsa
 llama_model_hy_v4::graph::build_attention_dsa(
-        const llama_model & model,
         llm_graph_input_attn_k_dsa * inp_attn_dsa,
         ggml_tensor * cur,
         ggml_tensor * inp_pos,
@@ -438,7 +435,7 @@ llama_model_hy_v4::graph::build_attention_dsa(
 
     ggml_tensor * top_k = last_top_k;
     if (hparams.is_indexer_full(il)) {
-        top_k = build_indexer_top_k(model, inp_attn_dsa, cur, qr, inp_pos, il);
+        top_k = build_indexer_top_k(inp_attn_dsa, cur, qr, inp_pos, il);
         cb(top_k, "top_k", il);
     }
     GGML_ASSERT(top_k != nullptr);
@@ -495,7 +492,7 @@ llama_model_hy_v4::graph::build_attention_dsa(
     return { out, top_k };
 }
 
-llama_model_hy_v4::graph::graph(const llama_model & model, const llm_graph_params & params) :
+llama_model_hy_v4::graph::graph(const llm_graph_params & params) :
     llm_graph_context(params) {
     const int64_t hc = hparams.dsv4_hc_mult;
     const int64_t n_embd_head_k = hparams.n_embd_head_k_mla();
@@ -528,11 +525,11 @@ llama_model_hy_v4::graph::graph(const llama_model & model, const llm_graph_param
         cb(cur, "attn_norm", il);
 
         if (is_dsa) {
-            attn_dsa attn = build_attention_dsa(model, inp_attn_dsa, cur, inp_pos, last_top_k, kq_scale, il);
+            attn_dsa attn = build_attention_dsa(inp_attn_dsa, cur, inp_pos, last_top_k, kq_scale, il);
             cur = attn.cur;
             last_top_k = attn.top_k;
         } else {
-            cur = build_attention(model, inp_attn, cur, inp_pos, kq_scale, il);
+            cur = build_attention(inp_attn, cur, inp_pos, kq_scale, il);
         }
 
         inpL = build_hc_post(cur, residual, attn_hc.post, il);

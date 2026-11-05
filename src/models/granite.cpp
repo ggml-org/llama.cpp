@@ -117,13 +117,10 @@ void llama_model_granite::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_granite::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_granite::graph::graph(
-    const llama_model & model,
-    const llm_graph_params & params)
-    : llm_graph_context(params) {
+llama_model_granite::graph::graph(const llm_graph_params & params) : llm_graph_context(params) {
 
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
@@ -172,14 +169,14 @@ llama_model_granite::graph::graph(
         // self-attention
         cur = build_attention_layer(
             cur, inp_pos, inp_attn,
-            model, n_embd_head, il);
+            n_embd_head, il);
 
         if (il == n_layer - 1 && inp_out_ids) {
             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
         // ffn
-        cur = build_layer_ffn(cur, inpSA, model, il);
+        cur = build_layer_ffn(cur, inpSA, il);
 
         // input for next layer
         inpL = cur;
@@ -206,7 +203,6 @@ ggml_tensor * llama_model_granite::graph::build_attention_layer(
           ggml_tensor             * cur,
           ggml_tensor             * inp_pos,
           llm_graph_input_attn_kv * inp_attn,
-    const llama_model             & model,
     const int64_t                 n_embd_head,
     const int                     il) {
 
@@ -243,7 +239,6 @@ ggml_tensor * llama_model_granite::graph::build_attention_layer(
 ggml_tensor * llama_model_granite::graph::build_layer_ffn(
           ggml_tensor       * cur,
           ggml_tensor       * inpSA,
-    const llama_model       & model,
     const int                 il) {
 
     // For Granite architectures - scale residual
