@@ -8721,6 +8721,8 @@ static void ggml_compute_forward_argsort_f32(
 
     const int64_t nr = ggml_nrows(src0);
 
+    GGML_ASSERT(nr <= ggml_nrows(dst));
+
     ggml_sort_order order = (ggml_sort_order) ggml_get_op_params_i32(dst, 0);
 
     for (int64_t i = ith; i < nr; i += nth) {
