@@ -221,7 +221,7 @@
 
 		if (x < 1) return lerp(1, glow, outCubic((x - SETTLE) / (1 - SETTLE)));
 
-		return glow * (1 - outCubic(clamp((t - leanEnd - 0.1) / 0.45)));
+		return glow * (1 - outCubic(clamp((t - leanEnd - 0.05) / 0.3)));
 	});
 	const reach = $derived(-20 + 1100 * outCubic(clamp(pBolt / 0.06))); // how far down the strike has got: past the tip (y 784) and its glow
 
@@ -243,9 +243,9 @@
 	const night = $derived(
 		pBolt <= 0
 			? 0
-			: t < leanEnd + 0.5
+			: t < leanEnd + 0.2
 				? clamp(pBolt / 0.03)
-				: 1 - inOutCubic(clamp((t - leanEnd - 0.5) / 0.45))
+				: 1 - inOutCubic(clamp((t - leanEnd - 0.2) / 0.35))
 	);
 	const lAlpha = $derived(
 		pBolt <= 0.04
