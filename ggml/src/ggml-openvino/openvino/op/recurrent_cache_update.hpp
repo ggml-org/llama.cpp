@@ -8,14 +8,12 @@ namespace ov::op::internal {
 /// Inputs: original cache, active rows, extra rows, reset begin/length,
 /// extra offsets, QKV [1,B,C,T], windows and depthwise weights.
 /// Nine inputs; output 0 is convolution [1,B,T,C].
-/// Output 1 is the complete updated [1,1,S,C*history] cache.
-/// GPU execution may reuse a caller's identical input/output USM allocation only
-/// when it is the exclusive cache reader. Required original rows are gathered into
-/// device scratch before any reset, reorder or window write, preserving cycles,
-/// duplicate sources and later-window precedence. Other bindings retain immutable
-/// input semantics. Preserved rows retain the existing computation-precision rounding.
-/// A failed in-place inference may partially modify the cache; the caller must
-/// clear or restore it before retrying.
+/// Cache input 0 is a writable GPU RemoteTensor, updated in place.
+/// Other inputs and output 0 must not overlap its allocation.
+/// The cache must be a Parameter or an exclusive Reshape alias; no other op
+/// may read it in the same inference. Required original rows are staged before
+/// reset, reorder and window writes, preserving cycles and duplicate sources.
+/// A failed inference may partially modify the cache; clear or restore it before retrying.
 class OPENVINO_API RecurrentConvCacheUpdate : public Op {
 public:
     OPENVINO_OP("RecurrentConvCacheUpdate", "internal")
@@ -34,13 +32,10 @@ private:
 /// Qwen3.5/Qwen3.6 llama.cpp GDN and generic cache_s maintenance.
 /// Twelve inputs: Q/K/V, cache, gate/beta,
 /// active/extra rows, reset begin/length, extra offsets, ordered write control.
-/// Outputs are attention [B,T,H,V] and the complete [1,1,S,H*V*K] updated cache.
-/// snapshot_count saves only the newest min(T,count) states, newest first.
-/// Required active/nonidentity rows are staged on device before computation;
-/// identity reorder sources need no scratch copy.
-/// GPU input/output aliasing uses staged original rows as described above;
-/// distinct allocations keep the immutable-source implementation. Runtime maps,
-/// reset, duplicate sources, cycles and overlapping snapshot writes are supported.
+/// The only output is attention [B,T,H,V]. Cache input 3 is updated in place
+/// under the same writable-input contract as RecurrentConvCacheUpdate.
+/// snapshot_count saves the newest min(T,count) states in cache, newest first.
+/// Active/nonidentity rows are staged before writes; identity rows need no copy.
 class OPENVINO_API RecurrentGatedDeltaNetUpdate : public Op {
 public:
     OPENVINO_OP("RecurrentGatedDeltaNetUpdate", "internal")

@@ -214,7 +214,7 @@ static uint64_t ggml_openvino_model_cache_extra_cfg(bool stateful, bool recurren
                                         ggml_openvino_getenv_int("GGML_OPENVINO_MANUAL_GQA_ATTN") > 0 :
                                         ggml_openvino_is_gpu();
 
-    uint64_t extra_cfg = 14;  // Snapshots use the independent cache-update op; ordinary GDN is unchanged.
+    uint64_t extra_cfg = 15;  // Recurrent caches are writable inputs without cache Results.
 #ifdef GGML_OPENVINO_HAS_CACHE_UPDATE
     extra_cfg = extra_cfg * 131 + (ggml_openvino_getenv_int("GGML_OPENVINO_DISABLE_FUSED_RECURRENCE") ? 0u : 1u);
 #else
