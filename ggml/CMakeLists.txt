@@ -268,6 +268,8 @@ option(GGML_OPENCL                          "ggml: use OpenCL"                  
 option(GGML_OPENCL_PROFILING                "ggml: use OpenCL profiling (increases overhead)" OFF)
 option(GGML_OPENCL_EMBED_KERNELS            "ggml: embed kernels"                             ON)
 option(GGML_OPENCL_USE_ADRENO_KERNELS       "ggml: use optimized kernels for Adreno"          ON)
+option(GGML_OPENCL_USE_ADRENO_BIN_KERNELS   "ggml: load the Adreno binary kernel library"     ON)
+option(GGML_OPENCL_ADRENO_BIN_KERNELS_FETCH "ggml: fetch the Adreno binary kernel library"    ON)
 set   (GGML_OPENCL_TARGET_VERSION "300" CACHE STRING
                                             "ggml: OpenCL API version to target")
 
