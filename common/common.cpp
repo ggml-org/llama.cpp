@@ -1042,7 +1042,7 @@ std::filesystem::path fs_get_cache_file(const std::string & filename) {
     if (ec) {
         throw std::runtime_error("failed to create cache directory: " + cache_directory.string());
     }
-    return cache_directory / std::filesystem::u8path(filename);
+    return cache_directory / filename;
 }
 
 //
