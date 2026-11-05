@@ -28,3 +28,10 @@ export function step(i: number): Step {
 
 // each wordmark's first letter's left sidebearing, in font units, so the gap is measured to its ink
 export const FIRST_LSB: Record<string, number> = { Llama: 69, 'llama.cpp': 59 };
+
+/** A step between the even ones, by its icon size (× the cap height); the gap follows the same line. */
+export function stepAt(icon: number, label: string): Step {
+	const t = (FROM.icon - icon) / (FROM.icon - TO.icon);
+
+	return { gap: FROM.gap + (TO.gap - FROM.gap) * t, glyph: false, icon, label };
+}
