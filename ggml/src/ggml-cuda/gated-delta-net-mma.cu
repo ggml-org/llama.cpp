@@ -364,20 +364,25 @@ static __global__ __launch_bounds__(256, BLOCKS) void gdn_single(ggml_cuda_gdn_m
 }
 
 template <int C, int V, int BLOCKS = 1> bool init(int device) {
-    static std::once_flag once[GGML_CUDA_MAX_DEVICES];
-    static bool           available[GGML_CUDA_MAX_DEVICES] = {};
-    std::call_once(once[device], [device] {
+    static std::mutex mutex[GGML_CUDA_MAX_DEVICES];
+    static uint64_t   generation[GGML_CUDA_MAX_DEVICES] = {};
+    static bool       available[GGML_CUDA_MAX_DEVICES] = {};
+
+    const uint64_t current = ggml_cuda_context_generation();
+    std::lock_guard<std::mutex> lock(mutex[device]);
+    if (generation[device] != current) {
         ggml_cuda_set_device(device);
-        if (sizeof(shared<C, V>) > ggml_cuda_info().devices[device].smpbo) {
-            return;
+        available[device] = false;
+        if (sizeof(shared<C, V>) <= ggml_cuda_info().devices[device].smpbo) {
+            const auto status = cudaFuncSetAttribute((const void *) gdn_single<C, V, BLOCKS>,
+                                                     cudaFuncAttributeMaxDynamicSharedMemorySize, sizeof(shared<C, V>));
+            available[device] = status == cudaSuccess;
+            if (status != cudaSuccess) {
+                (void) cudaGetLastError();
+            }
         }
-        const auto status = cudaFuncSetAttribute((const void *) gdn_single<C, V, BLOCKS>,
-                                                 cudaFuncAttributeMaxDynamicSharedMemorySize, sizeof(shared<C, V>));
-        available[device] = status == cudaSuccess;
-        if (status != cudaSuccess) {
-            (void) cudaGetLastError();
-        }
-    });
+        generation[device] = current;
+    }
     return available[device];
 }
 
