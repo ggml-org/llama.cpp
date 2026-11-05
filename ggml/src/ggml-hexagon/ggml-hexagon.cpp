@@ -1190,8 +1190,7 @@ struct ggml_hexagon_opbatch {
     std::vector<htp_tensor>          h_tens;    // htp tensor descriptors
     std::vector<htp_op_desc>         h_ops;     // htp op descriptors
 
-    std::unordered_map<const ggml_tensor*, int> t_map; // tensor ptr  to index
-    std::unordered_multimap<void*, int>         d_map; // tensor data to index
+    std::unordered_map<uint64_t, int> t_map; // tensor hash to index
 
     unsigned int n_bufs;     // num buffers in the batch
     unsigned int n_tens;     // num tensors ...
@@ -1210,7 +1209,6 @@ struct ggml_hexagon_opbatch {
         b_vmem = 0;
 
         t_map.clear();
-        d_map.clear();
         ops.resize(n_ops_max);
     }
 
@@ -1230,7 +1228,6 @@ struct ggml_hexagon_opbatch {
         h_ops.resize(n_ops_max);
 
         t_map.reserve(n_tens_max);
-        d_map.reserve(n_tens_max);
 
         GGML_LOG_INFO("ggml-hex: %s op batching: n-bufs %u n-tensors %u n-ops %u vmem %zu\n",
                 sess->c_name(), n_bufs_max, n_tens_max, n_ops_max, b_vmem_max);
@@ -1308,28 +1305,33 @@ struct ggml_hexagon_opbatch {
         h.flags = flags & (HTP_TENSOR_WEIGHT | HTP_TENSOR_TILED | HTP_TENSOR_FENCE);
     }
 
-    static bool same_shape(const htp_tensor & a, const htp_tensor & b) {
-        return (a.type == b.type) &&
-               (a.ne[0] == b.ne[0]) && (a.ne[1] == b.ne[1]) && (a.ne[2] == b.ne[2]) && (a.ne[3] == b.ne[3]) &&
-               (a.nb[0] == b.nb[0]) && (a.nb[1] == b.nb[1]) && (a.nb[2] == b.nb[2]) && (a.nb[3] == b.nb[3]);
+    static uint64_t hash_tensor(const ggml_tensor * t, const htp_tensor & shape) {
+        uint64_t hash = 1469598103934665603ull;
+        auto hash_value = [&hash](uint64_t value) {
+            hash ^= value;
+            hash *= 1099511628211ull;
+        };
+
+        hash_value((uintptr_t) t->data);
+        hash_value(shape.type);
+        hash_value(shape.size);
+        hash_value(shape.flags);
+        for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+            hash_value(shape.ne[i]);
+            hash_value(shape.nb[i]);
+        }
+        return hash;
     }
 
     // add tensor and return its index
     int add_tensor(const ggml_tensor * t) {
-        // Lookup by tensor ptr
-        auto it = t_map.find(t);
-        if (it != t_map.end()) { return it->second; }
-
         htp_tensor shape {};
         init_tensor_shape(shape, t);
 
-        // Lookup by tensor data and shape
-        auto range = d_map.equal_range(t->data);
-        for (auto dit = range.first; dit != range.second; ++dit) {
-            if (same_shape(h_tens[dit->second], shape)) {
-                t_map.insert({t, dit->second});
-                return dit->second;
-            }
+        const uint64_t hash = hash_tensor(t, shape);
+        auto it = t_map.find(hash);
+        if (it != t_map.end()) {
+            return it->second;
         }
 
         auto sbuf = static_cast<ggml_hexagon_shared_buffer *>(t->buffer->context);
@@ -1338,8 +1340,7 @@ struct ggml_hexagon_opbatch {
         int ti = n_tens++;
         GGML_ASSERT(n_tens <= n_tens_max);
 
-        t_map.insert({t,       ti});
-        d_map.insert({t->data, ti});
+        t_map[hash] = ti;
 
         uint64_t t_offset = (uint8_t *) t->data - sbuf->base();
 
@@ -1369,8 +1370,11 @@ struct ggml_hexagon_opbatch {
 
         auto fit_tensor = [&](const ggml_tensor * t) {
             if (!t) return;
+
             if (check_tens) {
-                if (t_map.count(t)) return;
+                htp_tensor shape {};
+                init_tensor_shape(shape, t);
+                if (t_map.count(hash_tensor(t, shape))) return;
                 extra_tens++;
             }
 
