@@ -2,6 +2,9 @@
 #include "dequantize.hpp"
 #include "xmx.hpp"
 
+// one sub-group of 4 x WARP_SIZE work-items per row: the most rows one launch can take
+static constexpr int64_t LI_F32_MAX_ROWS = INT32_MAX / (4 * WARP_SIZE) * 4;
+
 static void lightning_indexer_f32_sycl(
         const char * q, const char * k, const char * w, const char * m, float * dst,
         int64_t n_embd, int64_t n_head, int64_t n_batch, int64_t n_stream, int64_t n_kv,
@@ -12,15 +15,19 @@ static void lightning_indexer_f32_sycl(
         int64_t nbm1, int64_t nbm3,
         int64_t nb1, int64_t nb3,
         ggml_type k_type,
+        int64_t row0,
         queue_ptr stream) {
 
     constexpr int64_t LANES = WARP_SIZE;
     constexpr int64_t ELEMS_PER_LANE = 8;
     constexpr int64_t ROWS_PER_BLOCK = 4;
     constexpr int64_t BLOCK_SIZE = ROWS_PER_BLOCK * LANES;
+    static_assert(LI_F32_MAX_ROWS % ROWS_PER_BLOCK == 0 && LI_F32_MAX_ROWS / ROWS_PER_BLOCK * BLOCK_SIZE <= INT32_MAX);
 
     const int64_t n_rows = n_batch * n_stream * n_kv;
-    const int64_t n_blocks = (n_rows + ROWS_PER_BLOCK - 1) / ROWS_PER_BLOCK;
+    // rows [row0, row0 + LI_F32_MAX_ROWS): a launch of more than INT32_MAX work-items throws
+    const int64_t n_launch = std::min(n_rows - row0, LI_F32_MAX_ROWS);
+    const int64_t n_blocks = (n_launch + ROWS_PER_BLOCK - 1) / ROWS_PER_BLOCK;
 
     stream->parallel_for(
         sycl::nd_range<1>(
@@ -29,7 +36,7 @@ static void lightning_indexer_f32_sycl(
         [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
             const int64_t ir   = item.get_global_id(0);
             const int64_t lane = ir % LANES;
-            const int64_t row  = ir / LANES;
+            const int64_t row  = row0 + ir / LANES;
             if (row >= n_rows) {
                 return;
             }
@@ -560,15 +567,18 @@ void ggml_sycl_op_lightning_indexer(ggml_backend_sycl_context & ctx, ggml_tensor
         }
     }
 
-    lightning_indexer_f32_sycl(
-            (const char *) q->data, (const char *) k->data,
-            (const char *) w->data, (const char *) m->data, (float *) dst->data,
-            n_embd, n_head, n_batch, n_stream, n_kv, nem3,
-            nbq1, nbq2, nbq3,
-            nbk2, nbk3,
-            nbw1, nbw3,
-            nbm1, nbm3,
-            nb1, nb3,
-            k->type,
-            ctx.stream());
+    for (int64_t row0 = 0; row0 < n_batch * n_stream * n_kv; row0 += LI_F32_MAX_ROWS) {
+        lightning_indexer_f32_sycl(
+                (const char *) q->data, (const char *) k->data,
+                (const char *) w->data, (const char *) m->data, (float *) dst->data,
+                n_embd, n_head, n_batch, n_stream, n_kv, nem3,
+                nbq1, nbq2, nbq3,
+                nbk2, nbk3,
+                nbw1, nbw3,
+                nbm1, nbm3,
+                nb1, nb3,
+                k->type,
+                row0,
+                ctx.stream());
+    }
 }
