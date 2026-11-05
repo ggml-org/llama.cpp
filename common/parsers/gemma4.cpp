@@ -12,10 +12,11 @@ namespace {
 using gemma4 = common_chat_peg_gemma4_mapper;
 
 // Parsers for a tool's arguments in the Gemma 4 call syntax, shaped by the parameter schema
-// rather than converted from it. Keys are accepted in alphabetical order, since the template
-// renders arguments through dictsort, optional keys are skipped in place instead of being moved
-// to the end, and values are typed by the schema. Patterns, formats, lengths, numeric bounds and
-// item counts are not enforced. The grammar is derived from these parsers like any other.
+// rather than converted from it. Only the shape is enforced: object keys are accepted in
+// alphabetical order, since the template renders arguments through dictsort, optional keys are
+// skipped in place instead of being moved to the end, and nested objects and arrays are shaped
+// the same way. Every other value is accepted as written, so the schema guides the model without
+// forcing values it cannot see. The grammar is derived from these parsers like any other.
 class gemma4_schema_parser {
     common_chat_peg_builder & p_;
 
@@ -26,49 +27,40 @@ class gemma4_schema_parser {
 
     common_peg_parser visit(const common_chat_schema & node, const std::string & name) {
         switch (node.kind()) {
-            case common_chat_schema::KIND_ANY:     return p_.ref("gemma4-value");
-            case common_chat_schema::KIND_NULL:    return p_.ref("gemma4-null");
-            case common_chat_schema::KIND_BOOLEAN: return p_.ref("gemma4-bool");
-            case common_chat_schema::KIND_NUMBER:  return p_.ref("gemma4-number");
-            case common_chat_schema::KIND_STRING:  return p_.ref("gemma4-string");
-            case common_chat_schema::KIND_INTEGER: return integer();
-            case common_chat_schema::KIND_REF:     return visit_ref(static_cast<const common_chat_schema_ref &>(node), name);
-            case common_chat_schema::KIND_ANY_OF:  return visit_any_of(static_cast<const common_chat_schema_any_of &>(node), name);
-            case common_chat_schema::KIND_ALL_OF:  return visit_all_of(static_cast<const common_chat_schema_all_of &>(node), name);
-            case common_chat_schema::KIND_CONST:   return visit_const(static_cast<const common_chat_schema_const &>(node));
-            case common_chat_schema::KIND_ENUM:    return visit_enum(static_cast<const common_chat_schema_enum &>(node), name);
-            case common_chat_schema::KIND_ARRAY:   return visit_array(static_cast<const common_chat_schema_array &>(node), name);
-            case common_chat_schema::KIND_TUPLE:   return visit_tuple(static_cast<const common_chat_schema_tuple &>(node), name);
-            case common_chat_schema::KIND_OBJECT:  return visit_object(static_cast<const common_chat_schema_object &>(node), name);
+            case common_chat_schema::KIND_REF:    return visit_ref(static_cast<const common_chat_schema_ref &>(node), name);
+            case common_chat_schema::KIND_ANY_OF: return visit_any_of(static_cast<const common_chat_schema_any_of &>(node), name);
+            case common_chat_schema::KIND_ALL_OF: return visit_all_of(static_cast<const common_chat_schema_all_of &>(node), name);
+            case common_chat_schema::KIND_ARRAY:  return visit_array(static_cast<const common_chat_schema_array &>(node), name);
+            case common_chat_schema::KIND_TUPLE:  return visit_tuple(static_cast<const common_chat_schema_tuple &>(node), name);
+            case common_chat_schema::KIND_OBJECT: return visit_object(static_cast<const common_chat_schema_object &>(node), name);
+            default:                              return p_.ref("gemma4-value");
         }
-        return p_.ref("gemma4-value");
     }
 
   private:
-    common_peg_parser integer() {
-        return p_.rule("gemma4-integer", [&]() {
-            return p_.tag(gemma4::NUMBER,
-                p_.optional(p_.literal("-")) + (p_.literal("0") | (p_.chars("[1-9]", 1, 1) + p_.chars("[0-9]", 0, -1))));
-        });
-    }
-
-    // A fixed value, written as the template writes it: strings between <|"|> tokens, the
-    // rest as JSON. Fixed containers are left to the generic value parser.
-    std::optional<common_peg_parser> fixed(const common_json & value) {
-        if (value.is_string()) {
-            return p_.tag(gemma4::STRING,
-                p_.literal("<|\"|>") + p_.tag(gemma4::STRING_CONTENT, p_.literal(value.get<std::string>())) + p_.literal("<|\"|>"));
+    // Whether a schema contributes a shape of its own, as opposed to accepting any value.
+    static bool shaped(const common_chat_schema & node) {
+        switch (node.kind()) {
+            case common_chat_schema::KIND_REF:
+                return static_cast<const common_chat_schema_ref &>(node).target != nullptr;
+            case common_chat_schema::KIND_ANY_OF:
+                for (const auto & child : static_cast<const common_chat_schema_any_of &>(node).children) {
+                    if (shaped(*child)) {
+                        return true;
+                    }
+                }
+                return false;
+            case common_chat_schema::KIND_ALL_OF: {
+                const auto & children = static_cast<const common_chat_schema_all_of &>(node).children;
+                return children.size() == 1 && shaped(*children[0]);
+            }
+            case common_chat_schema::KIND_ARRAY:
+            case common_chat_schema::KIND_TUPLE:
+            case common_chat_schema::KIND_OBJECT:
+                return true;
+            default:
+                return false;
         }
-        if (value.is_number()) {
-            return p_.tag(gemma4::NUMBER, p_.literal(value.dump()));
-        }
-        if (value.is_boolean()) {
-            return p_.tag(gemma4::BOOL, p_.literal(value.dump()));
-        }
-        if (value.is_null()) {
-            return p_.tag(gemma4::NULL_, p_.literal("null"));
-        }
-        return std::nullopt;
     }
 
     // The template writes keys bare. Models keep that for identifiers and quote anything else,
@@ -112,16 +104,25 @@ class gemma4_schema_parser {
         return p_.rule(name, [&]() { return visit(*ref.target, name + "-value"); });
     }
 
+    // Shaped alternatives are tried first, then anything else collapses into one generic value.
     common_peg_parser visit_any_of(const common_chat_schema_any_of & node, const std::string & name) {
-        if (node.children.empty()) {
+        if (!shaped(node)) {
             return p_.ref("gemma4-value");
         }
         if (node.children.size() == 1) {
             return visit(*node.children[0], name);
         }
-        auto alts = p_.choice();
+        auto alts  = p_.choice();
+        bool loose = false;
         for (size_t i = 0; i < node.children.size(); i++) {
-            alts |= visit(*node.children[i], name + "-" + std::to_string(i));
+            if (shaped(*node.children[i])) {
+                alts |= visit(*node.children[i], name + "-" + std::to_string(i));
+            } else {
+                loose = true;
+            }
+        }
+        if (loose) {
+            alts |= p_.ref("gemma4-value");
         }
         return p_.rule(name, alts);
     }
@@ -133,31 +134,9 @@ class gemma4_schema_parser {
         return p_.ref("gemma4-value");
     }
 
-    common_peg_parser visit_const(const common_chat_schema_const & node) {
-        if (auto value = fixed(node.value)) {
-            return *value;
-        }
-        return p_.ref("gemma4-value");
-    }
-
-    common_peg_parser visit_enum(const common_chat_schema_enum & node, const std::string & name) {
-        if (node.values.empty()) {
-            return p_.ref("gemma4-value");
-        }
-        auto alts = p_.choice();
-        for (const auto & value : node.values) {
-            auto parser = fixed(value);
-            if (!parser) {
-                return p_.ref("gemma4-value");
-            }
-            alts |= *parser;
-        }
-        return p_.rule(name, alts);
-    }
-
     common_peg_parser visit_array(const common_chat_schema_array & node, const std::string & name) {
         auto ws       = p_.space();
-        auto item     = node.items ? visit(*node.items, name + "-item") : p_.ref("gemma4-value");
+        auto item     = node.items && shaped(*node.items) ? visit(*node.items, name + "-item") : p_.ref("gemma4-value");
         auto elements = item + p_.zero_or_more(p_.literal(",") + ws + item);
         return p_.rule(name, p_.tag(gemma4::ARRAY,
             p_.literal("[") + ws + (p_.literal("]") | (elements + ws + p_.literal("]")))));

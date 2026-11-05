@@ -3189,7 +3189,8 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
 
         // The argument grammar follows the shape of the parameter schema: keys in
-        // alphabetical order, optional keys skipped in place, typed values.
+        // alphabetical order, optional keys skipped in place, nested objects and arrays
+        // shaped the same way, any other value accepted as written.
         common_chat_tool shape_tool{
             /* .name = */ "shape",
             /* .description = */ "Schema-shaped arguments",
@@ -3264,10 +3265,14 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             assert_equals(false, accepts("edits:[]"));
             // key of the call written inside an item
             assert_equals(false, accepts("edits:[{newText:<|\"|>b<|\"|>,oldText:<|\"|>a<|\"|>,path:<|\"|>f<|\"|>}]"));
-            // value outside the enum, non-integer count, wrong type
-            assert_equals(false, accepts("edits:[],mode:<|\"|>slow<|\"|>,path:<|\"|>f<|\"|>"));
-            assert_equals(false, accepts("count:3.5,edits:[],path:<|\"|>f<|\"|>"));
-            assert_equals(false, accepts("edits:[],path:3"));
+            // values are not typed: outside the enum, non-integer count, number for a string
+            assert_equals(true,  accepts("edits:[],mode:<|\"|>slow<|\"|>,path:<|\"|>f<|\"|>"));
+            assert_equals(true,  accepts("count:3.5,edits:[],path:<|\"|>f<|\"|>"));
+            assert_equals(true,  accepts("edits:[],path:3"));
+            // but the shape of nested objects and arrays still holds
+            assert_equals(false, accepts("edits:[{oldText:<|\"|>a<|\"|>}],path:<|\"|>f<|\"|>"));
+            assert_equals(false, accepts("edits:{},path:<|\"|>f<|\"|>"));
+            assert_equals(false, accepts("edits:[],headers:[],path:<|\"|>f<|\"|>"));
             // a key with a colon can only be quoted
             assert_equals(false, accepts("edits:[],headers:{accept:lang:<|\"|>en<|\"|>},path:<|\"|>f<|\"|>"));
             assert_equals(true,  accepts("edits:[],headers:{'accept:lang':<|\"|>en<|\"|>},path:<|\"|>f<|\"|>"));
