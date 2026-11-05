@@ -3253,11 +3253,12 @@ static webgpu_encoded_op ggml_webgpu_timestep_embedding(webgpu_context & ctx, gg
     const uint64_t workgroups =
         CEIL_DIV(invocation_count, shader_lib_ctx.max_wg_size);
 
-    GGML_ASSERT(workgroups <=
-        ctx->global_ctx->capabilities.limits.maxComputeWorkgroupsPerDimension);
+    GGML_ASSERT(workgroups <= UINT32_MAX);
+    uint32_t wg_x, wg_y;
+    compute_2d_workgroups((uint32_t) workgroups,
+                         ctx->global_ctx->capabilities.limits.maxComputeWorkgroupsPerDimension, wg_x, wg_y);
 
-    return ggml_backend_webgpu_build(
-        ctx, pipeline, params, entries, (uint32_t) workgroups);
+    return ggml_backend_webgpu_build(ctx, pipeline, params, entries, wg_x, wg_y);
 }
 
 static webgpu_encoded_op ggml_webgpu_sum_rows(webgpu_context & ctx, ggml_tensor * src, ggml_tensor * dst) {
@@ -4839,25 +4840,15 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
         case GGML_OP_TIMESTEP_EMBEDDING:
             {
                 const int dim = ggml_get_op_params_i32(op, 0);
-                const int max_period = ggml_get_op_params_i32(op, 1);
-
-                if (src0->type != GGML_TYPE_F32 ||
-                    op->type != GGML_TYPE_F32 ||
-                    !ggml_is_vector(src0) ||
-                    !ggml_is_contiguous(src0) ||
-                    !ggml_is_contiguous(op) ||
-                    dim < 1 || max_period <= 0) {
+                if (src0->type != GGML_TYPE_F32 || !ggml_is_contiguous(src0)) {
                     break;
                 }
 
                 const auto & limits = ctx->webgpu_global_ctx->capabilities.limits;
-                const uint64_t invocation_count =
-                    (uint64_t) src0->ne[0] * (dim == 1 ? 1 : dim / 2);
-
-                supports_op =
-                    invocation_count <= UINT32_MAX &&
-                    CEIL_DIV(invocation_count, limits.maxComputeInvocationsPerWorkgroup)
-                        <= limits.maxComputeWorkgroupsPerDimension;
+                const uint64_t invocations = (uint64_t) src0->ne[0] * (dim == 1 ? 1 : dim / 2);
+                const uint64_t workgroups = CEIL_DIV(invocations, limits.maxComputeInvocationsPerWorkgroup);
+                const uint64_t max_per_dim = limits.maxComputeWorkgroupsPerDimension;
+                supports_op = workgroups <= max_per_dim * max_per_dim;
                 break;
             }
         case GGML_OP_SUM:

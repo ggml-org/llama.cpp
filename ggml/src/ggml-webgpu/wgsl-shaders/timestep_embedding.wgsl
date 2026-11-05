@@ -24,7 +24,6 @@ fn main(
 
     let H: u32 = params.dim / 2;
 
-    
     if (params.dim == 1 && global_thread_index < params.num_timesteps) {
         output[params.output_offset + global_thread_index] = 0.0;
     }
@@ -33,14 +32,14 @@ fn main(
 
     let timestep_index: u32 = global_thread_index / H;
     let frequency_index: u32 = global_thread_index % H;
-    
+
     let frequency: f32 = exp(-log(params.max_period) * f32(frequency_index) / f32(H));
     let angle: f32 = timesteps[params.input_offset + timestep_index] * frequency;
 
     output[params.output_offset + timestep_index * params.dim + frequency_index] = cos(angle);
     output[params.output_offset + timestep_index * params.dim + frequency_index + H] = sin(angle);
 
-    // For odd dims, we zero out the last output via the first thread of each timestep block, 
+    // For odd dims, we zero out the last output via the first thread of each timestep block,
     // since we expect cos(x) sin(x) pairs for each frequency.
     if (params.dim % 2 == 1 && frequency_index == 0) {
         output[params.output_offset + timestep_index * params.dim + (params.dim - 1)] = 0.0;
