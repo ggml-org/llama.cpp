@@ -187,8 +187,8 @@
 				color-mix(in oklab, var(--art-navy), black 10%) 100%
 			);
 		--navy-flat: color-mix(in oklab, var(--art-navy), black 10%);
-		/* backgrounds stay neutral; the colours are for shapes, numerals and accents */
-		--field-deep: linear-gradient(160deg, var(--neutral-800) 0%, var(--neutral-900) 100%);
+		/* fields: neutral greys and beige, In use's light hero blue (mist) and navy, and one vibrant blue; the
+		   artwork colours add the pops (shapes, tiles, numerals, highlighted words) */
 		--swiss: linear-gradient(
 			160deg,
 			color-mix(in oklab, var(--art-blue), white 8%) 0%,
@@ -210,7 +210,7 @@
 		);
 		--cream: var(--beige-100);
 		--sand: var(--beige-50);
-		--sage: var(--beige-200); /* the text poster's field: neutral, like every background */
+		--sage: var(--art-amber); /* the text poster: a warm, vibrant pop */
 		--teal: var(--art-green);
 		--saffron: var(--art-amber);
 		--pink: var(--art-orange-light); /* a light orange in place of pink: no red */
@@ -255,7 +255,7 @@
 		grid-template-columns: 0.8fr 1.3fr 1.6fr;
 		grid-template-rows: 1fr auto;
 		gap: 0 5%;
-		background: var(--field-deep);
+		background: var(--navy); /* In use's navy */
 		color: #fff;
 	}
 	.specimen .facts {
@@ -307,9 +307,9 @@
 	.title {
 		grid-template-rows: auto 1fr auto;
 		background:
-			repeating-linear-gradient(90deg, rgb(255 255 255 / 0.12) 0 1px, transparent 1px 8.33%),
-			var(--grey);
-		color: #fff;
+			repeating-linear-gradient(90deg, rgb(255 255 255 / 0.45) 0 1px, transparent 1px 8.33%),
+			var(--mist); /* llama.app's light hero blue, as in In use */
+		color: var(--art-navy);
 	}
 	.title .top,
 	.title .bottom {
@@ -317,7 +317,7 @@
 		grid-template-columns: repeat(3, 1fr);
 		gap: 4cqi;
 		font: 600 1.9cqi / 1.15 var(--display);
-		color: var(--ink);
+		color: var(--art-navy);
 		white-space: pre-line;
 	}
 	.title .bottom {
@@ -518,7 +518,7 @@
 	/* weight stack */
 	.stack {
 		align-content: start;
-		background: var(--field-deep);
+		background: var(--swiss); /* the one vibrant field: the artwork blue */
 		color: #fff;
 	}
 	.stack p {
@@ -602,11 +602,7 @@
 	}
 	.photo.tall {
 		margin: -8.5% -8.5% 0;
-		background: linear-gradient(
-			180deg,
-			var(--neutral-300) 0%,
-			var(--neutral-200) 100%
-		); /* a neutral field */
+		background: var(--mist); /* the light hero blue */
 	}
 	.classic .t {
 		font: 700 14cqi / 0.92 var(--display);
