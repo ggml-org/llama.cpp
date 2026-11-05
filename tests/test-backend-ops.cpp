@@ -7525,6 +7525,8 @@ struct test_topk_moe : public test_case {
     const MoeGatingFunc gating_func;
     const float scale_w;
     const int n_expert_groups;
+    ggml_tensor * logits {};
+    ggml_tensor * exp_probs_b {};
     ggml_tensor * weights {};
     ggml_tensor * selected_experts {};
 
@@ -7556,13 +7558,106 @@ struct test_topk_moe : public test_case {
 
     bool run_whole_graph() override { return true; }
 
+    // the selection scores (probs plus bias) of a row are a random permutation of a grid, and the experts of
+    // the n_group_used best groups move up by half a step, so every expert and group decision is one step
+    // apart; the logits are the inverse of the gating function at these scores
+    void initialize_tensors(ggml_context * ctx) override {
+        const int  n_expert        = ne[0];
+        const int  n_exp_per_group = n_expert / n_expert_groups;
+        const int  n_group_used    = n_expert_groups / 2;
+        const bool softmax         = gating_func == GATING_FUNC_SOFTMAX;
+
+        // softmax probs sum to one, so its grid step and bias scale with 1/n_expert
+        const double step = softmax ? 1.0 / ((double) n_expert * n_expert) : 0.5 / n_expert;
+        const double bmax = softmax ? 0.125 / n_expert : 0.2;
+
+        std::default_random_engine             rng(std::random_device{}());
+        std::uniform_real_distribution<double> dist(-bmax, bmax);
+
+        std::vector<float> bias(n_expert, 0.0f);
+        if (exp_probs_b) {
+            for (float & v : bias) {
+                v = dist(rng);
+            }
+            ggml_backend_tensor_set(exp_probs_b, bias.data(), 0, ggml_nbytes(exp_probs_b));
+        }
+
+        std::vector<int> perm(n_expert);
+        for (int i = 0; i < n_expert; ++i) {
+            perm[i] = i;
+        }
+
+        std::vector<double> rank(n_expert);
+        std::vector<int>    score(n_expert_groups);
+        std::vector<int>    order(n_expert_groups);
+        std::vector<float>  x(ggml_nelements(logits));
+        for (int64_t r = 0; r < ggml_nrows(logits); ++r) {
+            std::shuffle(perm.begin(), perm.end(), rng);
+            for (int i = 0; i < n_expert; ++i) {
+                rank[i] = perm[i];
+            }
+
+            if (n_expert_groups > 1) {
+                for (int g = 0; g < n_expert_groups; ++g) {
+                    const int * grp = perm.data() + g*n_exp_per_group;
+                    int         r0  = -1;
+                    int         r1  = -1;
+                    for (int i = 0; i < n_exp_per_group; ++i) {
+                        if (grp[i] > r0) {
+                            r1 = r0;
+                            r0 = grp[i];
+                        } else if (grp[i] > r1) {
+                            r1 = grp[i];
+                        }
+                    }
+                    score[g] = r0 + r1;
+                    order[g] = g;
+                }
+                std::sort(order.begin(), order.end(), [&](int a, int b) { return score[a] > score[b]; });
+                for (int k = 0; k < n_group_used; ++k) {
+                    for (int i = 0; i < n_exp_per_group; ++i) {
+                        rank[order[k]*n_exp_per_group + i] += 0.5;
+                    }
+                }
+            }
+
+            // probs = scores - bias, with softmax probs shifted to sum to one
+            double c = 0.25;
+            if (softmax) {
+                double sum = 0.0;
+                for (int i = 0; i < n_expert; ++i) {
+                    sum += rank[i]*step - bias[i];
+                }
+                c = (1.0 - sum) / n_expert;
+            }
+
+            float * row = x.data() + r*n_expert;
+            for (int i = 0; i < n_expert; ++i) {
+                const double p = c + rank[i]*step - bias[i];
+                row[i] = gating_func == GATING_FUNC_SOFTMAX       ? std::log(p) :
+                         gating_func == GATING_FUNC_SIGMOID       ? std::log(p / (1.0 - p)) :
+                         gating_func == GATING_FUNC_SQRT_SOFTPLUS ? std::log(std::expm1(p*p)) :
+                                                                    p;
+            }
+        }
+        ggml_backend_tensor_set(logits, x.data(), 0, ggml_nbytes(logits));
+
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            const ggml_tensor * src = t->view_src ? t->view_src : t;
+            if (src != logits && src != exp_probs_b) {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+
     ggml_tensor * build_graph(ggml_context * ctx) override {
         const int n_expert = ne[0];
         const int n_tokens = ne[1];
         const int n_exp_per_group = n_expert / n_expert_groups;
         const int n_group_used = n_expert_groups / 2;
 
-        ggml_tensor * logits = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
+        logits      = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
+        exp_probs_b = nullptr;
         ggml_tensor * probs            =
             (gating_func == GATING_FUNC_SOFTMAX) ? ggml_soft_max(ctx, logits) :
             (gating_func == GATING_FUNC_SIGMOID) ? ggml_sigmoid(ctx, logits) :
@@ -7571,7 +7666,7 @@ struct test_topk_moe : public test_case {
 
         ggml_tensor * selection_probs = probs;
         if (bias_probs) {
-            ggml_tensor * exp_probs_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ne[0]);
+            exp_probs_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ne[0]);
             ggml_set_name(exp_probs_b, "exp_probs_b");
             selection_probs = ggml_add(ctx, probs, exp_probs_b);
             ggml_set_name(selection_probs, "selection_probs");
