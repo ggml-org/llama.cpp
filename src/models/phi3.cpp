@@ -93,8 +93,6 @@ llama_model_phi3::graph<iswa>::graph(const llm_graph_params & params) : llm_grap
 
         // self-attention
         {
-            // rope freq factors for 128k context
-            ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
 
             ggml_tensor* attn_norm_output = build_norm(inpL,
                     model.layers[il].attn_norm,
@@ -104,17 +102,8 @@ llama_model_phi3::graph<iswa>::graph(const llm_graph_params & params) : llm_grap
 
             auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], attn_norm_output,
                     n_embd_head, n_head, n_head_kv, il);
-            Qcur = ggml_rope_ext(
-                    ctx0, Qcur, inp_pos, rope_factors,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow
-                    );
-
-            Kcur = ggml_rope_ext(
-                    ctx0, Kcur, inp_pos, rope_factors,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow
-                    );
+            Qcur = build_rope(Qcur, inp_pos, il);
+            Kcur = build_rope(Kcur, inp_pos, il);
 
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);

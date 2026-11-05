@@ -249,9 +249,6 @@ llama_model_clef::graph::graph(const llm_graph_params & params) :
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
 
-    int sections[4];
-    std::copy(std::begin(hparams.rope_sections), std::begin(hparams.rope_sections) + 4, sections);
-
     ggml_tensor * cur;
     ggml_tensor * inpL;
 
@@ -274,7 +271,7 @@ llama_model_clef::graph::graph(const llm_graph_params & params) :
         if (hparams.is_recr(il)) {
             cur = build_layer_attn_linear(cur, il);
         } else {
-            cur = build_layer_attn(inp_attn, cur, inp_pos, sections, il);
+            cur = build_layer_attn(inp_attn, cur, inp_pos, il);
         }
 
         cur = ggml_add(ctx0, cur, inpSA);
@@ -359,7 +356,6 @@ ggml_tensor * llama_model_clef::graph::build_layer_attn(
         llm_graph_input_attn_no_cache * inp,
         ggml_tensor *                   cur,
         ggml_tensor *                   inp_pos,
-        int *                           sections,
         int                             il) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
@@ -389,17 +385,8 @@ ggml_tensor * llama_model_clef::graph::build_layer_attn(
 
     Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
-    Qcur = ggml_rope_multi(
-            ctx0, Qcur, inp_pos, nullptr,
-            n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale,
-            ext_factor, attn_factor, beta_fast, beta_slow
-            );
-
-    Kcur = ggml_rope_multi(
-            ctx0, Kcur, inp_pos, nullptr,
-            n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale,
-            ext_factor, attn_factor, beta_fast, beta_slow
-            );
+    Qcur = build_rope(Qcur, inp_pos, il);
+    Kcur = build_rope(Kcur, inp_pos, il);
 
     const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
 

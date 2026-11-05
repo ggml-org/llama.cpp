@@ -114,7 +114,9 @@ public:
         const  layer_reuse_cb & reuse,
         const  layer_share_cb & share,
         // a model can hold more than one cache, so the tensor names have to stay unique
-                 const char *   name_tag = "");
+                 const char *   name_tag = "",
+        // lightning indexer keys are rotated with the indexer RoPE parameters
+                       bool   is_indexer = false);
 
     ~llama_kv_cache() = default;
 
@@ -282,6 +284,8 @@ private:
 
     // SWA
     const uint32_t n_swa = 0;
+
+    const bool is_indexer = false;
 
     // env: LLAMA_ATTN_ROT_DISABLE
     uint32_t n_rot_k = 0;

@@ -134,6 +134,16 @@ void llama_model_lfm2::load_arch_tensors(llama_model_loader &) {
     dense_2_out_layers_b = create_tensor(tn(LLM_TENSOR_DENSE_2_OUT, "bias"),   {hparams.n_embd_out()        }, TENSOR_NOT_REQUIRED);
 }
 
+llama_rope_params llama_model_lfm2::get_rope_params(const llama_cparams & cparams, int il) const {
+    auto res = llama_model::get_rope_params(cparams, il);
+
+    // the SWA layers use the global base and scale
+    res.freq_base  = cparams.rope_freq_base;
+    res.freq_scale = cparams.rope_freq_scale;
+
+    return res;
+}
+
 std::unique_ptr<llm_graph_context> llama_model_lfm2::build_arch_graph(const llm_graph_params & params) const {
     if (hparams.n_layer_decision > 0) {
         return std::make_unique<graph_decision>(params);
@@ -170,10 +180,8 @@ llama_model_lfm2::graph<iswa>::graph(const llm_graph_params & params) :
         cb(k, "model.layers.{}.self_attn.k_layernorm", il);
 
         // RoPE
-        q = ggml_rope_ext(ctx0, q, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor,
-                          attn_factor, beta_fast, beta_slow);
-        k = ggml_rope_ext(ctx0, k, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor,
-                          attn_factor, beta_fast, beta_slow);
+        q = build_rope(q, inp_pos, il);
+        k = build_rope(k, inp_pos, il);
 
         cur = build_attn(inp_attn,
                 model.layers[il].wo, NULL, model.layers[il].wo_s,
@@ -384,10 +392,8 @@ llama_model_lfm2::graph_decision::graph_decision(const llm_graph_params & params
             q = build_norm(q, layer.attn_q_norm, NULL, LLM_NORM_RMS, il);
             k = build_norm(k, layer.attn_k_norm, NULL, LLM_NORM_RMS, il);
 
-            q = ggml_rope_ext(ctx0, q, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor,
-                              attn_factor, beta_fast, beta_slow);
-            k = ggml_rope_ext(ctx0, k, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor,
-                              attn_factor, beta_fast, beta_slow);
+            q = build_rope(q, inp_pos, il);
+            k = build_rope(k, inp_pos, il);
 
             cur = build_attn(inp_attn[0],
                     layer.wo, NULL, layer.wo_s,

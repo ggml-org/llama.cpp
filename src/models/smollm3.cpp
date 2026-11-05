@@ -69,8 +69,6 @@ llama_model_smollm3::graph::graph(const llm_graph_params & params) : llm_graph_c
     for (int il = 0; il < n_layer; ++il) {
         ggml_tensor * inpSA = inpL;
 
-        const bool use_rope = (il + 1) % hparams.n_no_rope_layer_step != 0;
-
         // norm
         cur = build_norm(inpL,
                 model.layers[il].attn_norm, NULL,
@@ -83,19 +81,8 @@ llama_model_smollm3::graph::graph(const llm_graph_params & params) : llm_graph_c
             auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
                     n_embd_head, n_head, n_head_kv, il);
 
-            if (use_rope) {
-                Qcur = ggml_rope_ext(
-                        ctx0, Qcur, inp_pos, nullptr,
-                        n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                        ext_factor, attn_factor, beta_fast, beta_slow
-                        );
-
-                Kcur = ggml_rope_ext(
-                        ctx0, Kcur, inp_pos, nullptr,
-                        n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                        ext_factor, attn_factor, beta_fast, beta_slow
-                        );
-            }
+            Qcur = build_rope(Qcur, inp_pos, il);
+            Kcur = build_rope(Kcur, inp_pos, il);
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);
             cb(Vcur, "Vcur", il);

@@ -114,12 +114,10 @@ ggml_tensor * llama_model_hrm_text::graph::build_stack(llm_graph_input_attn_kv *
 
             auto [Qcur, Kcur, Vcur] = build_qkv(layer, cur, n_embd_head_k, n_head, n_head_kv, s);
 
-            Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                                 ext_factor, attn_factor, beta_fast, beta_slow);
+            Qcur = build_rope(Qcur, inp_pos, il);
             cb(Qcur, "Qcur", s);
 
-            Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                                 ext_factor, attn_factor, beta_fast, beta_slow);
+            Kcur = build_rope(Kcur, inp_pos, il);
             cb(Kcur, "Kcur", s);
 
             cur = build_attn(inp_attn,

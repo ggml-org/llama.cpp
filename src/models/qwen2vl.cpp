@@ -55,9 +55,6 @@ llama_model_qwen2vl::graph::graph(const llm_graph_params & params) : llm_graph_c
 
     auto * inp_attn = build_attn_inp_kv();
 
-    int sections[4];
-    std::copy(std::begin(hparams.rope_sections), std::begin(hparams.rope_sections) + 4, sections);
-
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     for (int il = 0; il < n_layer; ++il) {
@@ -75,17 +72,8 @@ llama_model_qwen2vl::graph::graph(const llm_graph_params & params) : llm_graph_c
             auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
                     n_embd_head, n_head, n_head_kv, il);
 
-            Qcur = ggml_rope_multi(
-                    ctx0, Qcur, inp_pos, nullptr,
-                    n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow
-                    );
-
-            Kcur = ggml_rope_multi(
-                    ctx0, Kcur, inp_pos, nullptr,
-                    n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow
-                    );
+            Qcur = build_rope(Qcur, inp_pos, il);
+            Kcur = build_rope(Kcur, inp_pos, il);
 
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);

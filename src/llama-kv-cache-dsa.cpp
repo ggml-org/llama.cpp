@@ -45,23 +45,6 @@ llama_kv_cache_dsa::llama_kv_cache_dsa(
     std::fill(hparams_lid.n_head_kv_arr.begin(), hparams_lid.n_head_kv_arr.end(), 1);
     hparams_lid.n_embd_head_k_full = model.hparams.indexer_head_size;
 
-    // the indexer keys do not always follow the MLA keys, see the model graphs
-    switch (model.arch) {
-        case LLM_ARCH_GLM_DSA:
-            hparams_lid.rope_type = LLAMA_ROPE_TYPE_NORM;
-            hparams_lid.n_lora_kv = 0;
-            break;
-        case LLM_ARCH_MISTRAL_LARGE4:
-            hparams_lid.n_lora_kv = 0;
-            break;
-        case LLM_ARCH_HY_V4:
-            break;
-        default:
-            hparams_lid.rope_type = LLAMA_ROPE_TYPE_NEOX;
-            hparams_lid.n_lora_kv = 0;
-            break;
-    }
-
     // KV sharing applies to the MLA cache only, each indexer owns its keys
     std::iota(hparams_lid.kv_source_impl.begin(), hparams_lid.kv_source_impl.end(), 0);
 
@@ -70,7 +53,7 @@ llama_kv_cache_dsa::llama_kv_cache_dsa(
     kv_lid = std::make_unique<llama_kv_cache>(
             model, no_alloc, hparams_lid, type_k, type_v,
             v_trans, offload, unified, kv_size, n_seq_max,
-            n_swa, swa_type, nullptr, filter_lid, nullptr, nullptr);
+            n_swa, swa_type, nullptr, filter_lid, nullptr, nullptr, "", true);
 }
 
 void llama_kv_cache_dsa::clear(bool data) {

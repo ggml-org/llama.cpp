@@ -224,9 +224,7 @@ llama_model_deepseek32::graph::graph(const llm_graph_params & params) :
 
                 // {n_embd_indexer_head, n_indexer_head, n_tokens}
                 indexer_q = ggml_reshape_3d(ctx0, indexer_q, n_embd_indexer_head, n_indexer_head, n_tokens);
-                indexer_q = ggml_rope_ext(ctx0, indexer_q, inp_pos, nullptr, n_rot,
-                                     LLAMA_ROPE_TYPE_NEOX, n_ctx_orig, freq_base, freq_scale,
-                                     ext_factor, attn_factor, beta_fast, beta_slow);
+                indexer_q = build_rope_indexer(indexer_q, inp_pos, il);
                 cb(indexer_q, "indexer_q", il);
 
                 ggml_tensor * indexer_k = ggml_mul_mat(ctx0, model.layers[il].indexer_attn_k, cur);
@@ -237,9 +235,7 @@ llama_model_deepseek32::graph::graph(const llm_graph_params & params) :
 
                 // {n_embd_indexer_head, 1, n_tokens}
                 indexer_k = ggml_reshape_3d(ctx0, indexer_k, n_embd_indexer_head, 1, n_tokens);
-                indexer_k = ggml_rope_ext(ctx0, indexer_k, inp_pos, nullptr, n_rot,
-                                     LLAMA_ROPE_TYPE_NEOX, n_ctx_orig, freq_base, freq_scale,
-                                     ext_factor, attn_factor, beta_fast, beta_slow);
+                indexer_k = build_rope_indexer(indexer_k, inp_pos, il);
                 cb(indexer_k, "indexer_k", il);
 
                 // perform Hadamard transform on indexer q and k
@@ -347,12 +343,10 @@ llama_model_deepseek32::graph::graph(const llm_graph_params & params) :
                                               ggml_row_size(kv_cmpr_pe->type, kv_lora_rank));
             cb(k_pe, "k_pe", il);
 
-            q_pe = ggml_rope_ext(ctx0, q_pe, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                                 ext_factor, attn_factor, beta_fast, beta_slow);
+            q_pe = build_rope(q_pe, inp_pos, il);
             cb(q_pe, "q_pe", il);
 
-            k_pe = ggml_rope_ext(ctx0, k_pe, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                                 ext_factor, attn_factor, beta_fast, beta_slow);
+            k_pe = build_rope(k_pe, inp_pos, il);
             cb(k_pe, "k_pe", il);
 
             kv_cmpr = build_norm(kv_cmpr, model.layers[il].attn_kv_a_norm, nullptr, LLM_NORM_RMS, il);
@@ -607,12 +601,10 @@ llama_model_deepseek32::graph_mtp::graph_mtp(const llm_graph_params & params)
                                           ggml_row_size(kv_cmpr_pe->type, kv_lora_rank));
         cb(k_pe, "mtp_k_pe", il);
 
-        q_pe = ggml_rope_ext(ctx0, q_pe, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                             ext_factor, attn_factor, beta_fast, beta_slow);
+        q_pe = build_rope(q_pe, inp_pos, il);
         cb(q_pe, "mtp_q_pe", il);
 
-        k_pe = ggml_rope_ext(ctx0, k_pe, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                             ext_factor, attn_factor, beta_fast, beta_slow);
+        k_pe = build_rope(k_pe, inp_pos, il);
         cb(k_pe, "mtp_k_pe", il);
 
         kv_cmpr = build_norm(kv_cmpr, layer.attn_kv_a_norm, nullptr, LLM_NORM_RMS, il);

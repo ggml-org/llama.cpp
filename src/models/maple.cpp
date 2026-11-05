@@ -88,16 +88,8 @@ llama_model_maple::graph::graph(const llm_graph_params & params) :
             cb(Qcur, "Qcur_normed", il);
             cb(Kcur, "Kcur_normed", il);
 
-            if (hparams.is_swa(il)) {
-                const int64_t n_rot_l = hparams.n_rot(il);
-                const float freq_base_l = model.get_rope_freq_base(cparams, il);
-                const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
-
-                Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot_l, rope_type, n_ctx_orig, freq_base_l,
-                                     freq_scale_l, ext_factor, attn_factor, beta_fast, beta_slow);
-                Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_rot_l, rope_type, n_ctx_orig, freq_base_l,
-                                     freq_scale_l, ext_factor, attn_factor, beta_fast, beta_slow);
-            }
+            Qcur = build_rope(Qcur, inp_pos, il);
+            Kcur = build_rope(Kcur, inp_pos, il);
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);
             cb(Vcur, "Vcur", il);

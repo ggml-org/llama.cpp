@@ -106,12 +106,6 @@ llama_model_lfm3::graph<decision>::graph(const llm_graph_params & params) :
         const int64_t n_head_il   = hparams.n_head(il);
         const int64_t n_head_kv   = hparams.n_head_kv(il);
 
-        const int     n_rot_l      = hparams.n_rot(il);
-        const float   freq_base_l  = model.get_rope_freq_base (cparams, il);
-        const float   freq_scale_l = model.get_rope_freq_scale(cparams, il);
-
-        ggml_tensor * rope_factors = hparams.is_swa(il) ? nullptr : model.layers[il].rope_freqs;
-
         auto [q, k, v] = build_qkv(model.layers[il], cur_in, n_embd_head, n_head_il, n_head_kv, il);
 
         q = build_norm(q, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, il);
@@ -119,10 +113,8 @@ llama_model_lfm3::graph<decision>::graph(const llm_graph_params & params) :
         k = build_norm(k, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, il);
         cb(k, "model.layers.{}.self_attn.k_layernorm", il);
 
-        q = ggml_rope_ext(ctx0, q, inp_pos, rope_factors, n_rot_l, rope_type, n_ctx_orig,
-                          freq_base_l, freq_scale_l, ext_factor, attn_factor, beta_fast, beta_slow);
-        k = ggml_rope_ext(ctx0, k, inp_pos, rope_factors, n_rot_l, rope_type, n_ctx_orig,
-                          freq_base_l, freq_scale_l, ext_factor, attn_factor, beta_fast, beta_slow);
+        q = build_rope(q, inp_pos, il);
+        k = build_rope(k, inp_pos, il);
 
         ggml_tensor * attn_out = build_attn(inp_attn,
                 NULL, NULL, NULL,

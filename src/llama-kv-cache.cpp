@@ -79,9 +79,10 @@ llama_kv_cache::llama_kv_cache(
     const layer_filter_cb & filter,
     const  layer_reuse_cb & reuse,
     const  layer_share_cb & share,
-               const char * name_tag) :
+               const char * name_tag,
+                     bool   is_indexer) :
     model(model), hparams(hparams), v_trans(v_trans),
-    n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_swa(n_swa),
+    n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_swa(n_swa), is_indexer(is_indexer),
     attn_rot_bufs(no_alloc), swa_type(swa_type), ctxs_bufs(no_alloc),
     other(static_cast<llama_kv_cache *>(mem_other)),
     v_cells_impl(other ? other->v_cells_impl : std::make_shared<llama_kv_cells_vec>()),
@@ -2093,108 +2094,33 @@ ggml_tensor * llama_kv_cache::build_rope_shift(
                 ggml_tensor * shift,
                 ggml_tensor * rot,
                    uint32_t   il) const {
-    const auto & n_ctx_orig = cparams.n_ctx_orig_yarn;
+    const llama_rope_params rp = is_indexer ? model.get_rope_params_indexer(cparams, il) : model.get_rope_params(cparams, il);
 
-    const auto & yarn_beta_fast = cparams.yarn_beta_fast;
-    const auto & yarn_beta_slow = cparams.yarn_beta_slow;
-
-    float yarn_ext_factor  = cparams.yarn_ext_factor;
-    float yarn_attn_factor = cparams.yarn_attn_factor;
-
-    const auto & n_rot = hparams.n_rot(il);
-
-    auto rope_type = hparams.rope_type == LLAMA_ROPE_TYPE_MROPE || hparams.rope_type == LLAMA_ROPE_TYPE_IMROPE
+    const auto rope_type = rp.type == LLAMA_ROPE_TYPE_MROPE || rp.type == LLAMA_ROPE_TYPE_IMROPE
                                 // @ngxson : this is a workaround
                                 // for M-RoPE, we want to rotate the whole vector when doing KV shift
                                 // a normal RoPE should work, we just need to use the correct ordering
                                 // ref: https://github.com/ggml-org/llama.cpp/pull/13870
                                 ? LLAMA_ROPE_TYPE_NEOX
-                                : hparams.rope_type;
+                                : rp.type;
 
     const int64_t n_head_kv     = hparams.n_head_kv(il);
     const int64_t n_embd_k_gqa  = hparams.n_embd_k_gqa(il);
     const int64_t n_embd_head_k = hparams.n_embd_head_k(il);
     const int64_t n_cells       = ggml_nelements(k)/n_embd_k_gqa;
 
-    const int64_t n_offs = hparams.n_lora_kv > 0 ? n_embd_head_k - n_rot : 0;
-
-    float freq_base  = model.get_rope_freq_base (cparams, il);
-    float freq_scale = model.get_rope_freq_scale(cparams, il);
-
-    ggml_tensor * factors = model.get_rope_factors(cparams, il);
-    ggml_tensor * k_norm  = nullptr; // K norm weight applied after RoPE
-
-    // TODO: move to the model impl
-    switch (model.arch) {
-        case LLM_ARCH_COGVLM: // plain ggml_rope
-            freq_base        = 10000.0f;
-            freq_scale       = 1.0f;
-            yarn_ext_factor  = 0.0f;
-            yarn_attn_factor = 1.0f;
-            factors          = nullptr;
-            break;
-        case LLM_ARCH_DEEPSEEK2OCR:
-            rope_type        = LLAMA_ROPE_TYPE_NEOX;
-            freq_scale       = 1.0f;
-            yarn_ext_factor  = 0.0f;
-            yarn_attn_factor = 1.0f;
-            break;
-        case LLM_ARCH_FALCON_H1:
-        case LLM_ARCH_PANGU_EMBED:
-            factors = nullptr;
-            break;
-        case LLM_ARCH_COHERE2:
-        case LLM_ARCH_COHERE2MOE:
-        case LLM_ARCH_EXAONE_MOE:
-        case LLM_ARCH_EXAONE4:
-        case LLM_ARCH_FLINT:
-        case LLM_ARCH_GRANITE_SWA:
-        case LLM_ARCH_LFM2:
-        case LLM_ARCH_LIMITE:
-            // the SWA layers use the global parameters
-            freq_base  = cparams.rope_freq_base;
-            freq_scale = cparams.rope_freq_scale;
-            break;
-        case LLM_ARCH_DOTS3NOTE:
-            freq_scale = cparams.rope_freq_scale;
-            break;
-        case LLM_ARCH_OLMO2:
-            freq_base = cparams.rope_freq_base;
-            if (hparams.is_swa(il)) {
-                freq_scale       = 1.0f;
-                yarn_ext_factor  = 0.0f;
-                yarn_attn_factor = 1.0f;
-            }
-            break;
-        case LLM_ARCH_LAGUNA:
-        case LLM_ARCH_MELLUM:
-            // no YaRN on the SWA layers
-            if (hparams.is_swa(il)) {
-                yarn_ext_factor  = 0.0f;
-                yarn_attn_factor = 1.0f;
-            }
-            break;
-        case LLM_ARCH_HUNYUAN_MOE:
-        case LLM_ARCH_HUNYUAN_DENSE:
-        case LLM_ARCH_MAINCODER:
-            k_norm = model.layers[il].attn_k_norm;
-            break;
-        default:
-            break;
-    }
-
-    if (!ggml_is_quantized(k->type) && !rot && !k_norm) {
+    if (!ggml_is_quantized(k->type) && !rot && !rp.k_norm) {
         // we rotate only the n_rot dimensions
         ggml_tensor * k_rope =
             ggml_view_3d(ctx, k,
-                n_rot, n_head_kv, n_cells,
+                rp.n_rot, n_head_kv, n_cells,
                 ggml_row_size(k->type, n_embd_head_k),
                 ggml_row_size(k->type, n_embd_k_gqa),
-                ggml_row_size(k->type, n_offs));
+                ggml_row_size(k->type, rp.n_offs));
 
         return ggml_rope_ext_inplace(ctx, k_rope,
-                shift, factors, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                yarn_ext_factor, yarn_attn_factor, yarn_beta_fast, yarn_beta_slow);
+                shift, rp.factors, rp.n_rot, rope_type, rp.n_ctx_orig, rp.freq_base, rp.freq_scale,
+                rp.ext_factor, rp.attn_factor, rp.beta_fast, rp.beta_slow);
     }
 
     // convert to f32 -> RoPE -> convert back, on whole rows as a head is not always a multiple of the block size
@@ -2206,19 +2132,19 @@ ggml_tensor * llama_kv_cache::build_rope_shift(
     }
 
     // the RMS norm commutes with RoPE, but the weight does not
-    if (k_norm) {
-        tmp = ggml_div(ctx, tmp, k_norm);
+    if (rp.k_norm) {
+        tmp = ggml_div(ctx, tmp, rp.k_norm);
     }
 
     tmp = ggml_rope_ext(ctx, tmp,
-            shift, factors, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-            yarn_ext_factor, yarn_attn_factor, yarn_beta_fast, yarn_beta_slow);
-    if (n_offs > 0) {
-        tmp = ggml_rope_set_offset(tmp, n_offs);
+            shift, rp.factors, rp.n_rot, rope_type, rp.n_ctx_orig, rp.freq_base, rp.freq_scale,
+            rp.ext_factor, rp.attn_factor, rp.beta_fast, rp.beta_slow);
+    if (rp.n_offs > 0) {
+        tmp = ggml_rope_set_offset(tmp, rp.n_offs);
     }
 
-    if (k_norm) {
-        tmp = ggml_mul(ctx, tmp, k_norm);
+    if (rp.k_norm) {
+        tmp = ggml_mul(ctx, tmp, rp.k_norm);
     }
 
     // rotate fwd
