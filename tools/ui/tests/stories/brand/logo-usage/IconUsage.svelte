@@ -144,7 +144,9 @@
 		return { side, transform: `translate(${x} ${y}) scale(${side / SIZE})`, x, y };
 	}
 
-	// llama.app's hero, as on the brand's boards
+	// llama.app's hero and its navy night version, as on the brand's boards
+	const NAVY =
+		'radial-gradient(ellipse at 15% 10%, #22385c 0%, transparent 55%), radial-gradient(ellipse at 90% 95%, #1e3752 0%, transparent 50%), linear-gradient(160deg, #152238 0%, #172a42 55%, #1a3049 100%)';
 	const HERO =
 		'radial-gradient(ellipse at 15% 10%, #dcecfb 0%, transparent 55%), radial-gradient(ellipse at 90% 95%, #e8f2fc 0%, transparent 50%), linear-gradient(160deg, #c4ddf6 0%, #d0e4f7 55%, #dfecf9 100%)';
 
@@ -235,8 +237,9 @@
 	<h2>Where the name goes</h2>
 
 	<p>
-		The lockup at the sizes it is used at: an app header, a footer, a hero and the X header. Each is
-		the capital glyph typed before the name, so it matches the logo files exactly.
+		The lockup at the sizes it is used at: an app header, a footer, a hero and the X header, on the
+		hero's light blue and its navy. Each is the capital glyph typed before the name, so it matches
+		the logo files exactly.
 	</p>
 
 	<div class="contexts">
@@ -266,9 +269,12 @@
 			>
 		</div>
 
-		<div class="ctx banner">
-			<span style:font-size="8cqi" class="mark"> llama<span class="cpp">.cpp</span></span>
-		</div>
+		<!-- the X header, 1500 × 500, in both of the hero's colourways -->
+		{#each [{ field: HERO, ink: '#111111', name: 'light' }, { field: NAVY, ink: '#fafafa', name: 'navy' }] as b (b.name)}
+			<div style:background={b.field} style:color={b.ink} class="ctx banner">
+				<span style:font-size="8cqi" class="mark"> llama<span class="cpp">.cpp</span></span>
+			</div>
+		{/each}
 	</div>
 {/if}
 
@@ -508,7 +514,6 @@
 	/* 3 */
 	.contexts {
 		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
 		gap: 12px;
 	}
 	.ctx {
@@ -542,9 +547,18 @@
 	}
 	.ctx.header {
 		height: 56px;
+		container-type: inline-size;
 	}
-	.ctx.dark,
-	.ctx.banner {
+	/* in a narrow header the links step aside, as they would in the app */
+	@container (max-width: 26rem) {
+		.ctx.header .links {
+			display: none;
+		}
+		.ctx.header :global(button) {
+			margin-left: auto;
+		}
+	}
+	.ctx.dark {
 		background: #111111;
 		color: #fafafa;
 	}
@@ -556,7 +570,6 @@
 	}
 	.ctx.hero,
 	.ctx.banner {
-		grid-column: 1 / -1;
 		justify-content: center;
 	}
 	.ctx.hero {
