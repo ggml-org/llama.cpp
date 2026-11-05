@@ -12,6 +12,7 @@
 	const FROM = { gap: 221.5 / 272.6, icon: 520 / 272.6 }; // today's lockup
 	const TO = { gap: (49 + 213 + 69) / CAP, icon: 1 }; // the glyph: its right sidebearing, a space, the L's left
 	const STEPS = 6;
+	const GLYPH = ' '; // the icon as Llama Sans draws it, then a word space
 	// one scale for every step (px per font unit), so the wordmark is the same size throughout and only the icon and
 	// the gap change
 	const SCALE = 0.06;
@@ -24,6 +25,7 @@
 
 		return {
 			gap: FROM.gap + (TO.gap - FROM.gap) * t,
+			glyph: i === STEPS - 1,
 			icon: FROM.icon + (TO.icon - FROM.icon) * t,
 			label: i === STEPS - 1 ? 'The glyph' : `Step ${i}`
 		};
@@ -69,9 +71,9 @@
 		<h1 class="text-3xl font-bold tracking-tight">Lockup proposal</h1>
 
 		<p class="max-w-[64ch] text-sm text-muted-foreground">
-			Steps 1, 3 and 4 of {STEPS} even steps between today’s lockup (the icon 1.91× the cap height, a 0.81
-			cap gap) and the icon as a glyph of Llama Sans (1× the cap height, a 0.47 gap), and the glyph itself.
-			The wordmark is the same size in all of them, and the icon is centred on the capitals.
+			Steps 1, 3 and 4 of {STEPS} even steps between today’s lockup (the icon 1.91× the cap height, a
+			0.81 cap gap) and the icon as a glyph of Llama Sans (1× the cap height, a 0.47 gap), and the glyph
+			itself. The wordmark is the same size in all of them, and the icon is centred on the capitals.
 		</p>
 	</header>
 
@@ -103,20 +105,23 @@
 									class="block h-auto max-w-full"
 									viewBox="0 {top} {(widths[key] ?? 4000) + 20} {bottom - top}"
 								>
-									<g fill={tone.ink} transform={l.iconTransform}>
-										{#each PATHS as d (d)}<path {d} />{/each}
-									</g>
+									{#if !step.glyph}
+										<g fill={tone.ink} transform={l.iconTransform}>
+											{#each PATHS as d (d)}<path {d} />{/each}
+										</g>
+									{/if}
 
+									<!-- the glyph step is typed: the icon character (U+E000) and a space, as in running text -->
 									<text
 										use:measure={key}
 										fill={tone.ink}
 										font-family="'Llama Sans'"
 										font-size="1000"
 										font-weight="700"
-										x={l.textX}
+										x={step.glyph ? 0 : l.textX}
 										y="0"
-										>{mark.name.slice(0, mark.split)}<tspan fill="var(--art-cinder)"
-											>{mark.name.slice(mark.split)}</tspan
+										>{step.glyph ? GLYPH : ''}{mark.name.slice(0, mark.split)}<tspan
+											fill="var(--art-cinder)">{mark.name.slice(mark.split)}</tspan
 										></text
 									>
 								</svg>
