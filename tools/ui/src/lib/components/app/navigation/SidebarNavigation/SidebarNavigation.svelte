@@ -646,7 +646,7 @@
 				? 'transition-[opacity,height] duration-200 ease-out'
 				: 'md:transition-opacity md:duration-150 md:ease-out'} {deviceStore.isMobile &&
 			!uiStore.isSidebarExpanded
-				? 'opacity-0 !h-0'
+				? 'opacity-0 invisible !h-0'
 				: ''} {isStripHidden ? 'md:opacity-0' : ''}"
 		>
 			<SidebarNavigationActions
