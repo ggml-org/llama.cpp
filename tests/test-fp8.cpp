@@ -680,8 +680,8 @@ static void check_fp8_cache_decode(llama_model * model) {
                     for (uint32_t i = 0; i < count; ++i) {
                         for (uint32_t seq = 0; seq < params.n_seq_max; ++seq) {
                             if (model->arch == LLM_ARCH_DFLASH && pos == 0) {
-                                const llama_pos position = i;
-                                batch.add_embd({ features.data() + i*llama_model_n_embd_inp(model), 1, (size_t) llama_model_n_embd_inp(model) }, &position, seq, false);
+                                const llama_pos position[GGML_MROPE_SECTIONS] = { (llama_pos) i, 0, 0, 0 };
+                                batch.add_embd({ features.data() + i*llama_model_n_embd_inp(model), 1, (size_t) llama_model_n_embd_inp(model) }, position, seq, false);
                             } else {
                                 batch.add(tokens[pos + i], pos + i, seq, true);
                             }
