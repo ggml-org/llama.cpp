@@ -135,7 +135,7 @@ void main() {
         const float sum = FaTypeK == GGML_TYPE_Q8_0 ? 0.0f : subgroupClusteredAdd(thread_sum, 8);
 
         if (r < Br) {
-            Qf[buf_ib].qs[buf_iqs] = pack32(i8vec4(vals));
+            Qf[buf_ib].qs[buf_iqs] = pack_i8x4(ivec4(vals));
 
             if (buf_iqs == 0) {
                 Qf[buf_ib].ds = FaTypeK == GGML_TYPE_Q8_0 ? FLOAT_TYPEV2(qd, 0.0f) : FLOAT_TYPEV2(qd, sum * qd);

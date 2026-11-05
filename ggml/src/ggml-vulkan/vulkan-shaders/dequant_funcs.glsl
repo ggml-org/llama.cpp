@@ -121,8 +121,8 @@ vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     return vec2(int(data_a[a_offset + ib].qs[iqs]), int(data_a[a_offset + ib].qs[iqs + 1]));
 }
 vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
-    const i8vec2 v0 = unpack8(int32_t(data_a_packed16[a_offset + ib].qs[iqs/2])).xy; // vec4 used due to #12147
-    const i8vec2 v1 = unpack8(int32_t(data_a_packed16[a_offset + ib].qs[iqs/2 + 1])).xy;
+    const ivec2 v0 = unpack_i8x4(int32_t(data_a_packed16[a_offset + ib].qs[iqs/2])).xy;
+    const ivec2 v1 = unpack_i8x4(int32_t(data_a_packed16[a_offset + ib].qs[iqs/2 + 1])).xy;
     return vec4(v0.x, v0.y, v1.x, v1.y);
 }
 #endif
@@ -245,7 +245,7 @@ vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     // Add parity bit
     const uint sign8 = sign7 | (bitCount(sign7) << 7);
     const uint sign = sign8 >> (iqs % 8);
-    const u8vec4 grid = unpack8(iq2xxs_grid[qs][(iqs % 8) / 4] >> (8 * (iqs % 4)));
+    const uvec4 grid = unpack_u8x4(iq2xxs_grid[qs][(iqs % 8) / 4] >> (8 * (iqs % 4)));
     bool sign0 = (sign & 1) != 0;
     bool sign1 = (sign & 2) != 0;
     return db * vec2(
@@ -265,7 +265,7 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
     // Add parity bit
     const uint sign8 = sign7 | (bitCount(sign7) << 7);
     const uint sign = sign8 >> (iqs % 8);
-    const u8vec4 grid = unpack8(iq2xxs_grid[qs][(iqs % 8) / 4] >> (8 * (iqs % 4)));
+    const uvec4 grid = unpack_u8x4(iq2xxs_grid[qs][(iqs % 8) / 4] >> (8 * (iqs % 4)));
     bool sign0 = (sign & 1) != 0;
     bool sign1 = (sign & 2) != 0;
     bool sign2 = (sign & 4) != 0;
@@ -288,7 +288,7 @@ vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     // Add parity bit
     const uint sign8 = sign7 | (bitCount(sign7) << 7);
     const uint sign = sign8 >> (iqs % 8);
-    const u8vec4 grid = unpack8(iq2xs_grid[qs & 511][(iqs % 8) / 4] >> (8 * (iqs % 4)));
+    const uvec4 grid = unpack_u8x4(iq2xs_grid[qs & 511][(iqs % 8) / 4] >> (8 * (iqs % 4)));
     bool sign0 = (sign & 1) != 0;
     bool sign1 = (sign & 2) != 0;
     return db * vec2(
@@ -304,7 +304,7 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
     // Add parity bit
     const uint sign8 = sign7 | (bitCount(sign7) << 7);
     const uint sign = sign8 >> (iqs % 8);
-    const u8vec4 grid = unpack8(iq2xs_grid[qs & 511][(iqs % 8) / 4] >> (8 * (iqs % 4)));
+    const uvec4 grid = unpack_u8x4(iq2xs_grid[qs & 511][(iqs % 8) / 4] >> (8 * (iqs % 4)));
     bool sign0 = (sign & 1) != 0;
     bool sign1 = (sign & 2) != 0;
     bool sign2 = (sign & 4) != 0;
@@ -330,7 +330,7 @@ vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     const uint sign = data_a[a_offset + ib].qs[QUANT_K / 8 + ib8] >> (iqs % 8);
 
     const float db = 0.25 * (0.5 + scale);
-    const u8vec4 grid = unpack8(iq2s_grid[qs | ((qh << (8 - qhshift)) & 0x300)][(iqs % 8) / 4]);
+    const uvec4 grid = unpack_u8x4(iq2s_grid[qs | ((qh << (8 - qhshift)) & 0x300)][(iqs % 8) / 4]);
     bool sign0 = (sign & 1) != 0;
     bool sign1 = (sign & 2) != 0;
     return db * vec2(
@@ -349,7 +349,7 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
     const uint sign = data_a[a_offset + ib].qs[QUANT_K / 8 + ib8] >> (iqs % 8);
 
     const float db = 0.25 * (0.5 + scale);
-    const u8vec4 grid = unpack8(iq2s_grid[qs | ((qh << (8 - qhshift)) & 0x300)][(iqs % 8) / 4]);
+    const uvec4 grid = unpack_u8x4(iq2s_grid[qs | ((qh << (8 - qhshift)) & 0x300)][(iqs % 8) / 4]);
     bool sign0 = (sign & 1) != 0;
     bool sign1 = (sign & 2) != 0;
     bool sign2 = (sign & 4) != 0;
@@ -377,7 +377,7 @@ vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     // Add parity bit
     const uint sign8 = sign7 | (bitCount(sign7) << 7);
     const uint sign = sign8 >> (iqs % 8);
-    const u8vec4 grid = unpack8(iq3xxs_grid[qs] >> (8 * (iqs % 4)));
+    const uvec4 grid = unpack_u8x4(iq3xxs_grid[qs] >> (8 * (iqs % 4)));
     bool sign0 = (sign & 1) != 0;
     bool sign1 = (sign & 2) != 0;
     return db * vec2(
@@ -397,7 +397,7 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
     // Add parity bit
     const uint sign8 = sign7 | (bitCount(sign7) << 7);
     const uint sign = sign8 >> (iqs % 8);
-    const u8vec4 grid = unpack8(iq3xxs_grid[qs]);
+    const uvec4 grid = unpack_u8x4(iq3xxs_grid[qs]);
     bool sign0 = (sign & 1) != 0;
     bool sign1 = (sign & 2) != 0;
     bool sign2 = (sign & 4) != 0;
@@ -456,8 +456,8 @@ vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     const uint sl = (data_a[a_offset + ib].scales_l[ib32/2] >> (4 * (ib32 & 1))) & 0xF;
     const uint sh = (data_a[a_offset + ib].scales_h >> (2 * ib32)) & 3;
     const uint qshift = (iqs & 16) >> 2;
-    u8vec2 qs = u8vec2(data_a[a_offset + ib].qs[iq], data_a[a_offset + ib].qs[iq + 1]);
-    qs = (qs >> qshift) & uint8_t(0xF);
+    uvec2 qs = uvec2(data_a[a_offset + ib].qs[iq], data_a[a_offset + ib].qs[iq + 1]);
+    qs = (qs >> qshift) & 0xFu;
 
     const float dl = float(int(sl | (sh << 4)) - 32);
     return dl * vec2(kvalues_iq4nl[qs.x], kvalues_iq4nl[qs.y]);
@@ -469,7 +469,7 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
     const uint sl = (data_a[a_offset + ib].scales_l[ib32/2] >> (4 * (ib32 & 1))) & 0xF;
     const uint sh = (data_a[a_offset + ib].scales_h >> (2 * ib32)) & 3;
     const uint qshift = (iqs & 16) >> 2;
-    const u8vec4 qs = unpack8((data_a_packed32[a_offset + ib].qs[iq/4] >> qshift) & 0x0F0F0F0F);
+    const uvec4 qs = unpack_u8x4((data_a_packed32[a_offset + ib].qs[iq/4] >> qshift) & 0x0F0F0F0F);
 
     const float dl = float(int(sl | (sh << 4)) - 32);
     return dl * vec4(

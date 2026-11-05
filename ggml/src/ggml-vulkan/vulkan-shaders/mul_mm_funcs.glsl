@@ -122,7 +122,7 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
 
     const float d = float(data_a[ib].d);
     const uint qs = data_a[ib].qs[8 * ib32 + ib8];
-    const uint signs = pack32(u8vec4(
+    const uint signs = pack_u8x4(uvec4(
         data_a[ib].qs[8*ib32 + 4],
         data_a[ib].qs[8*ib32 + 5],
         data_a[ib].qs[8*ib32 + 6],
@@ -132,8 +132,8 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
     const uint32_t sign7 = bitfieldExtract(signs, 7 * int(ib8), 7);
     const uint sign = sign7 | (bitCount(sign7) << 7);
     const uvec2 grid = iq2xxs_grid[qs];
-    const vec4 grid0 = vec4(unpack8(grid.x));
-    const vec4 grid1 = vec4(unpack8(grid.y));
+    const vec4 grid0 = vec4(unpack_u8x4(grid.x));
+    const vec4 grid1 = vec4(unpack_u8x4(grid.y));
 
     store_a(col, k_pair, db * FLOAT_TYPEV2((sign &   1) != 0 ? -grid0.x : grid0.x,
                                             (sign &   2) != 0 ? -grid0.y : grid0.y));
@@ -162,8 +162,8 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
     const uint sign7 = qs >> 9;
     const uint sign = sign7 | (bitCount(sign7) << 7);
     const uvec2 grid = iq2xs_grid[qs & 511];
-    const vec4 grid0 = vec4(unpack8(grid.x));
-    const vec4 grid1 = vec4(unpack8(grid.y));
+    const vec4 grid0 = vec4(unpack_u8x4(grid.x));
+    const vec4 grid1 = vec4(unpack_u8x4(grid.y));
 
     store_a(col, k_pair, db * FLOAT_TYPEV2((sign &   1) != 0 ? -grid0.x : grid0.x,
                                             (sign &   2) != 0 ? -grid0.y : grid0.y));
@@ -194,8 +194,8 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
     const float d = float(data_a[ib].d);
     const FLOAT_TYPE db = FLOAT_TYPE(d * 0.25 * (0.5 + scale));
     const uvec2 grid = iq2s_grid[qs | ((qh << (8 - qhshift)) & 0x300)];
-    const vec4 grid0 = vec4(unpack8(grid.x));
-    const vec4 grid1 = vec4(unpack8(grid.y));
+    const vec4 grid0 = vec4(unpack_u8x4(grid.x));
+    const vec4 grid1 = vec4(unpack_u8x4(grid.y));
 
     store_a(col, k_pair, db * FLOAT_TYPEV2((sign &   1) != 0 ? -grid0.x : grid0.x,
                                             (sign &   2) != 0 ? -grid0.y : grid0.y));
@@ -227,7 +227,7 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
     const uint32_t sign7 = bitfieldExtract(signs, 7 * (int(iqs / 2) % 4), 7);
     const uint sign = (sign7 | (bitCount(sign7) << 7)) >> (4 * (idx % 2));
     const uint grid = iq3xxs_grid[qs];
-    const vec4 v = db * vec4(unpack8(grid));
+    const vec4 v = db * vec4(unpack_u8x4(grid));
 
     store_a(col, k_pair, FLOAT_TYPEV2((sign &   1) != 0 ? -v.x : v.x,
                                         (sign &   2) != 0 ? -v.y : v.y));
@@ -251,7 +251,7 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
     const i8vec2 sign01 = i8vec2(1 - (2 & i8vec2(sign << 1, sign)));
     const float db = d * (1 + 2 * ((scale >> (4 * (iqh & 1))) & 0xf));
     const uint32_t grid = iq3s_grid[qs | ((qh << (8 - (iqs % 8))) & 256)];
-    const vec4 v = db * vec4(unpack8(grid));
+    const vec4 v = db * vec4(unpack_u8x4(grid));
 
     store_a(col, k_pair, FLOAT_TYPEV2((sign &   1) != 0 ? -v.x : v.x,
                                         (sign &   2) != 0 ? -v.y : v.y));
@@ -273,8 +273,8 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
     const float dl = d * float(int(sl | (sh << 4)) - 32);
     const uint vui = uint(data_a_packed32[ib].qs[iq]);
 
-    const u8vec4 qs0 = unpack8( vui       & 0x0F0F0F0F);
-    const u8vec4 qs1 = unpack8((vui >> 4) & 0x0F0F0F0F);
+    const uvec4 qs0 = unpack_u8x4( vui       & 0x0F0F0F0F);
+    const uvec4 qs1 = unpack_u8x4((vui >> 4) & 0x0F0F0F0F);
     const vec4 v0 = dl * vec4(kvalues_iq4nl[qs0.x], kvalues_iq4nl[qs0.y], kvalues_iq4nl[qs0.z], kvalues_iq4nl[qs0.w]);
     const vec4 v1 = dl * vec4(kvalues_iq4nl[qs1.x], kvalues_iq4nl[qs1.y], kvalues_iq4nl[qs1.z], kvalues_iq4nl[qs1.w]);
 
@@ -355,8 +355,8 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
 
         const float d = float(a_q4_0_p16.data[ib].d);
         const uint vui = uint(a_q4_0_p16.data[ib].qs[2*iqs]) | (uint(a_q4_0_p16.data[ib].qs[2*iqs + 1]) << 16);
-        const vec4 v0 = (vec4(unpack8(vui & 0x0F0F0F0F)) - 8.0f) * d;
-        const vec4 v1 = (vec4(unpack8((vui >> 4) & 0x0F0F0F0F)) - 8.0f) * d;
+        const vec4 v0 = (vec4(unpack_u8x4(vui & 0x0F0F0F0F)) - 8.0f) * d;
+        const vec4 v1 = (vec4(unpack_u8x4((vui >> 4) & 0x0F0F0F0F)) - 8.0f) * d;
 
         store_a(col, k_pair, FLOAT_TYPEV2(v0.xy));
         store_a(col, k_pair + 1, FLOAT_TYPEV2(v0.zw));
@@ -371,8 +371,8 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
 
         const vec2 dm = vec2(a_q4_1_p32.data[ib].dm);
         const uint vui = a_q4_1_p32.data[ib].qs[iqs];
-        const vec4 v0 = vec4(unpack8(vui & 0x0F0F0F0F)) * dm.x + dm.y;
-        const vec4 v1 = vec4(unpack8((vui >> 4) & 0x0F0F0F0F)) * dm.x + dm.y;
+        const vec4 v0 = vec4(unpack_u8x4(vui & 0x0F0F0F0F)) * dm.x + dm.y;
+        const vec4 v1 = vec4(unpack_u8x4((vui >> 4) & 0x0F0F0F0F)) * dm.x + dm.y;
 
         store_a(col, k_pair, FLOAT_TYPEV2(v0.xy));
         store_a(col, k_pair + 1, FLOAT_TYPEV2(v0.zw));
@@ -425,8 +425,8 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
         const uint iqs = idx & 0x07;
 
         const float d = float(a_q8_0_p16.data[ib].d);
-        const i8vec2 v0 = unpack8(int32_t(a_q8_0_p16.data[ib].qs[2*iqs])).xy; // vec4 used due to #12147
-        const i8vec2 v1 = unpack8(int32_t(a_q8_0_p16.data[ib].qs[2*iqs + 1])).xy;
+        const ivec2 v0 = unpack_i8x4(int32_t(a_q8_0_p16.data[ib].qs[2*iqs])).xy;
+        const ivec2 v1 = unpack_i8x4(int32_t(a_q8_0_p16.data[ib].qs[2*iqs + 1])).xy;
         const vec4 v = vec4(v0.x, v0.y, v1.x, v1.y) * d;
 
         store_a(col, k_pair, FLOAT_TYPEV2(v.xy));
@@ -468,7 +468,7 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
         const uint scalesi = iqs / 8;                      // 0..15
         const uint qsshift = ((iqs % 64) / 16) * 2;        // 0,2,4,6
 
-        const vec4 qs = vec4(unpack8((a_q2_k_p32.data[ib].qs[qsi / 2] >> qsshift) & 0x03030303));
+        const vec4 qs = vec4(unpack_u8x4((a_q2_k_p32.data[ib].qs[qsi / 2] >> qsshift) & 0x03030303));
         const uint scales = a_q2_k.data[ib].scales[scalesi];
         const vec2 dm = vec2(a_q2_k.data[ib].dm);
 
@@ -495,8 +495,8 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
                                 | (((a_q3_k.data[ib].scales[8 + (is % 4)] >> (2 * int(is / 4))) & 3) << 4));
         const float dl = float(a_q3_k.data[ib].d) * float(us - 32);
 
-        const vec2 qs = vec2(unpack8((uint(a_q3_k_p16.data[ib].qs[qsi / 2]) >> qsshift) & 0x0303).xy);
-        const vec2 hm = vec2(unpack8(((uint(a_q3_k_p16.data[ib].hmask[hmi / 2]) >> (4 * n + halfsplit)) & 0x0101 ^ 0x0101) << 2).xy);
+        const vec2 qs = vec2(unpack_u8x4((uint(a_q3_k_p16.data[ib].qs[qsi / 2]) >> qsshift) & 0x0303).xy);
+        const vec2 hm = vec2(unpack_u8x4(((uint(a_q3_k_p16.data[ib].hmask[hmi / 2]) >> (4 * n + halfsplit)) & 0x0101 ^ 0x0101) << 2).xy);
 
         store_a(col, k_pair, FLOAT_TYPEV2(dl * (qs.x - hm.x),
                                         dl * (qs.y - hm.y)));
@@ -533,7 +533,7 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
         const float d = loadd.x * sc;
         const float m = -loadd.y * mbyte;
 
-        const vec4 q = vec4(unpack8((a_q4_k_p32.data[ib].qs[qsi / 4] >> (b * 4)) & 0x0F0F0F0F));
+        const vec4 q = vec4(unpack_u8x4((a_q4_k_p32.data[ib].qs[qsi / 4] >> (b * 4)) & 0x0F0F0F0F));
 
         store_a(col, k_pair, FLOAT_TYPEV2(fma(d, q.x, m), fma(d, q.y, m)));
         store_a(col, k_pair + 1, FLOAT_TYPEV2(fma(d, q.z, m), fma(d, q.w, m)));
@@ -572,7 +572,7 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
 
         const uint qs = (a_q5_k_p32.data[ib].qs[qsi / 4] >> (b * 4)) & 0x0F0F0F0F;
         const uint qh = ((a_q5_k_p32.data[ib].qh[qhi / 4] >> (iqs / 16)) & 0x01010101) << 4;
-        const vec4 q = vec4(unpack8(qs | qh));
+        const vec4 q = vec4(unpack_u8x4(qs | qh));
 
         store_a(col, k_pair, FLOAT_TYPEV2(fma(d, q.x, m), fma(d, q.y, m)));
         store_a(col, k_pair + 1, FLOAT_TYPEV2(fma(d, q.z, m), fma(d, q.w, m)));
@@ -595,7 +595,7 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
 
         const uint ql = (uint(a_q6_k_p16.data[ib].ql[qsi]) >> b) & 0x0F0F;
         const uint qh = (uint(a_q6_k_p16.data[ib].qh[qhi]) >> qhshift) & 0x0303;
-        const vec2 q = (vec2(unpack8(ql | (qh << 4)).xy) - 32) * dscale;
+        const vec2 q = (vec2(unpack_u8x4(ql | (qh << 4)).xy) - 32) * dscale;
 
         store_a(col, k_pair, FLOAT_TYPEV2(q.x, q.y));
     } else if (MmTypeA == GGML_TYPE_TQ1_0) {
