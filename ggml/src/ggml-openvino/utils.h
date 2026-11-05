@@ -18,20 +18,28 @@
 // Cache key for a translated/compiled graph. Node count plus the two end node names identify a
 // graph during inference, where the same few graphs repeat for the whole session. The list of
 // external input names below tells those apart more precisely, but it walks every node and every
-// src slot, so it is built only when GGML_OPENVINO_FULL_GRAPH_KEY is set. Op tests run many small
-// graphs that can share a node count and end names, and need the full key.
+// src slot, so it is built only when GGML_OPENVINO_FULL_GRAPH_KEY is set. Sampler row names are
+// always included to distinguish sampler configurations, even when active subsets share the packed input. Op tests run
+// many small graphs that can share a node count and end names, and need the full key.
 struct graph_key {
     int n_nodes;
     int n_leaves;
     std::string first_node_name;
     std::string last_node_name;
-    // Each entry: "<src_name>:<src_idx>:<op_type>"
+    // External source descriptors "<src_name>:<src_idx>:<op_type>" and sampler row Parameter names.
     std::vector<std::string> input_srcs;
 
     graph_key(const ggml_cgraph * cgraph, bool include_inputs = false) : n_nodes(cgraph->n_nodes), n_leaves(cgraph->n_leafs) {
         if (n_nodes > 0) {
             first_node_name = cgraph->nodes[0]->name;
             last_node_name = cgraph->nodes[n_nodes - 1]->name;
+        }
+
+        for (int i = 0; i < n_nodes; ++i) {
+            const auto * node = cgraph->nodes[i];
+            if (GgmlOvDecoder::is_sampling_view(node)) {
+                input_srcs.push_back("sampling_row_" + std::string(node->name) + "#n" + std::to_string(i));
+            }
         }
 
         static const bool full_key = ggml_openvino_getenv_int("GGML_OPENVINO_FULL_GRAPH_KEY") != 0;

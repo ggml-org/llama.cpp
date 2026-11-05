@@ -70,6 +70,16 @@ OutputVector translate_reshape(const NodeContext & context) {
     case 8:
         shape[0] = -1;
         break;
+    case 10:
+        if (context.has_input("s_copy_active_slot_len")) {
+            new_shape_node = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{
+                context.get_input("s_copy_active_slot_len"),
+                ov::op::v0::Constant::create(ov::element::i64, {3},
+                    std::vector<int64_t>{-1, shape[2], shape[3]})}, 0);
+        } else {
+            shape[1] = -1;
+        }
+        break;
     default:
         FRONT_END_OP_CONVERSION_CHECK(false, "Unsupported RESHAPE case: ", op_case);
     }

@@ -63,7 +63,15 @@ std::optional<ov::Tensor> try_make_kv_sliced_tensor(const std::shared_ptr<GgmlOv
     if (!slice || ggml_decoder->is_stateful()) {
         return std::nullopt;
     }
-    if (ggml_tensor->op != GGML_OP_NONE || ggml_tensor->view_src != nullptr) {
+    if (ggml_tensor->op != GGML_OP_NONE || ggml_tensor->view_src != nullptr || !ggml_is_contiguous(ggml_tensor)) {
+        return std::nullopt;
+    }
+    // USAGE_ANY alone is not proof of an attention cache. Only the ordinary
+    // llama.cpp K/V roots have this prefix layout; recurrent caches (including
+    // rollback snapshots) must always bind their complete stored row bank.
+    if (GgmlOvDecoder::is_recurrent_cache(ggml_tensor) ||
+        (strncmp(ggml_tensor->name, "cache_k_l", strlen("cache_k_l")) != 0 &&
+         strncmp(ggml_tensor->name, "cache_v_l", strlen("cache_v_l")) != 0)) {
         return std::nullopt;
     }
 
@@ -160,10 +168,14 @@ static uint64_t ggml_openvino_model_cache_extra_cfg(bool stateful, bool recurren
                                         ggml_openvino_getenv_int("GGML_OPENVINO_MANUAL_GQA_ATTN") > 0 :
                                         ggml_openvino_is_gpu();
 
-    uint64_t extra_cfg = 1;  // Graph-ordinal port names (invalidate older disk-cache blobs).
+    uint64_t extra_cfg = 14;  // Snapshots use the independent cache-update op; ordinary GDN is unchanged.
+#ifdef GGML_OPENVINO_HAS_CACHE_UPDATE
+    extra_cfg = extra_cfg * 131 + (ggml_openvino_getenv_int("GGML_OPENVINO_DISABLE_FUSED_RECURRENCE") ? 0u : 1u);
+#else
+    extra_cfg = extra_cfg * 131;
+#endif
     extra_cfg = extra_cfg * 131 + (stateful ? (recurrent ? 2u : 1u) : 0u);
     extra_cfg = extra_cfg * 131 + (ggml_openvino_reduce_compile_mem_enabled() ? 1u : 0u);
-    extra_cfg = extra_cfg * 131 + (ggml_openvino_kv_slice_enabled() ? 0u : 1u);
     extra_cfg = extra_cfg * 131 + (ggml_openvino_getenv_int("GGML_OPENVINO_ENABLE_KV_4D") > 0 ? 1u : 0u);
     extra_cfg = extra_cfg * 131 + (manual_gqa_enabled ? 1u : 0u);
     extra_cfg = extra_cfg * 131 + (ggml_openvino_getenv_int("GGML_OPENVINO_PROFILING") >= 2 ? 1u : 0u);
@@ -307,6 +319,10 @@ static std::string dynamic_graph_signature(const ggml_cgraph * graph,
     for (const auto & [name, input] : decoder.get_model_extra_inputs()) {
         append_string(name);
         append_string(input.type.get_type_name());
+        append(input.shape.size());
+        for (auto dim : input.shape) {
+            append(dim);
+        }
         append(input.is_parameter);
         if (!input.is_parameter) {
             append(input.value);
@@ -352,8 +368,16 @@ static bool compiled_model_matches_graph(const ov::CompiledModel & model,
             continue;
         }
         const auto & port = model.output(i);
+        const auto * tensor = graph_it->second;
+        auto expected_shape = GgmlOvDecoder::get_shape(tensor);
+        if (decoder.is_kvcache_4d_input(tensor)) {
+            // Cache Results use the same head-split layout as their Parameters.
+            const auto heads = static_cast<size_t>(decoder.get_n_heads_kv_for_tensor(tensor));
+            expected_shape = {1, static_cast<size_t>(tensor->ne[1]), heads,
+                              static_cast<size_t>(tensor->ne[0]) / heads};
+        }
         if (port.get_element_type() != GgmlOvDecoder::get_ov_type(graph_it->second) ||
-            !port.get_partial_shape().compatible(ov::PartialShape(GgmlOvDecoder::get_shape(graph_it->second)))) {
+            !port.get_partial_shape().compatible(ov::PartialShape(expected_shape))) {
             return false;
         }
     }
@@ -410,27 +434,6 @@ static void dump_ov_profiling_info(const ov::InferRequest & infer_request) {
                   executed_count, total_real_time / 1000.0, total_cpu_time / 1000.0);
 }
 
-static void reset_single_slot_recurrent_cache(ggml_cgraph * cgraph,
-                                              const ModelParams & model_params,
-                                              const ComputeParams & compute_params) {
-    if (model_params.n_rs_slots != 1 || compute_params.cache_rs_reset_len == 0) {
-        return;
-    }
-    GGML_ASSERT(compute_params.cache_rs_reset_idx == 0 && compute_params.cache_rs_reset_len == 1);
-
-    std::set<ggml_backend_buffer_t> buffers;
-    for (int i = 0; i < cgraph->n_nodes; i++) {
-        auto * node = cgraph->nodes[i];
-        if (node->op == GGML_OP_SCALE && GgmlOvDecoder::is_recurrent_cache(node->view_src) &&
-            node->view_src->ne[1] == 1 && node->view_src->buffer != nullptr) {
-            buffers.insert(node->view_src->buffer);
-        }
-    }
-    for (auto * buffer : buffers) {
-        ggml_backend_buffer_clear(buffer, 0);
-    }
-}
-
 static uint64_t ggml_openvino_model_cache_mix_string(uint64_t hash, const char * value) {
     if (!value) {
         return hash * 131;
@@ -469,21 +472,32 @@ ov::Tensor create_ov_output_tensor(const std::shared_ptr<GgmlOvDecoder> & ggml_d
             output_data = ggml_tensor->view_src->data;
         } else {
             output_shape = GgmlOvDecoder::get_shape(ggml_tensor);
+            if (ggml_tensor->op == GGML_OP_GATED_DELTA_NET && ggml_tensor->op_params[0] > 1) {
+                const auto * value = ggml_tensor->src[2];
+                const int64_t valid_count = std::min<int64_t>(value->ne[2], ggml_tensor->op_params[0]);
+                output_shape[2] = (value->ne[2] + valid_count * value->ne[0]) * value->ne[3];
+            }
         }
     }
 
-    // The sliced path above covers eligible KV outputs. This also covers recurrent state and full-size KV fallbacks.
+    // Reuse the caller-owned full-cache binding when its shape and storage match.
     if (!ggml_openvino_getenv_int("GGML_OPENVINO_DISABLE_REMOTE_OUTPUTS") && !ggml_decoder->is_static() &&
-        !ggml_decoder->is_splited_model() && ggml_openvino_buffer_is_remote(ggml_tensor) &&
-        ggml_tensor->extra != nullptr) {
-        auto * extra_base = static_cast<ggml_openvino_extra_base *>(ggml_tensor->extra);
-        if (extra_base->type == ggml_openvino_extra_base::Type::TENSOR) {
-            auto * tensor_extra = static_cast<ggml_openvino_tensor_extra *>(extra_base);
-            if (tensor_extra->tensor != nullptr && tensor_extra->tensor->get_element_type() == output_type &&
-                tensor_extra->tensor->get_shape() == output_shape) {
-                return *tensor_extra->tensor;
+        !ggml_decoder->is_splited_model() && ggml_openvino_buffer_is_remote(ggml_tensor)) {
+        auto resolved = output_data;
+        if (ggml_tensor->extra != nullptr) {
+            auto * base = static_cast<ggml_openvino_extra_base *>(ggml_tensor->extra);
+            if (base->type == ggml_openvino_extra_base::Type::TENSOR) {
+                auto & cached = static_cast<ggml_openvino_tensor_extra *>(base)->tensor;
+                if (cached && cached->get_element_type() == output_type && cached->get_shape() == output_shape) {
+                    auto remote = cached->as<ov::intel_gpu::ocl::USMTensor>();
+                    if (remote.get() == resolved) {
+                        return *cached;
+                    }
+                }
             }
         }
+        auto context = ggml_openvino_get_remote_context()->as<ov::intel_gpu::ocl::ClContext>();
+        return context.create_tensor(output_type, output_shape, resolved);
     }
 
     ov::Tensor output_tensor(output_type, output_shape, output_data);
@@ -569,6 +583,12 @@ ov::Tensor make_contiguous_split_input_tensor(const struct ggml_tensor * ggml_te
 ov::Tensor convert_ggml_input_to_ov(const std::shared_ptr<GgmlOvDecoder> & ggml_decoder, const std::string & name) {
     const auto * ggml_tensor = ggml_decoder->get_input_ggml_tensor(name);
 
+    if (name == "rs_active_rows") {
+        const auto count = ggml_decoder->get_compute_params().s_copy_active_slot_len;
+        GGML_ASSERT(count > 0 && count <= ggml_nelements(ggml_tensor));
+        return ov::Tensor(ov::element::i32, ov::Shape{1, 1, 1, size_t(count)}, ggml_tensor->data);
+    }
+
     if (auto kv_4d = try_make_kv_4d_tensor(ggml_decoder, ggml_tensor)) {
         return *kv_4d;
     }
@@ -607,11 +627,43 @@ ov::Tensor get_ov_input_tensor(const std::shared_ptr<GgmlOvDecoder> & ggml_decod
     ov::Tensor input_tensor;
     auto extra_input = ggml_decoder->get_model_extra_inputs().find(param_name);
     if (extra_input != ggml_decoder->get_model_extra_inputs().end()) {
-        input_tensor = ov::Tensor(extra_input->second.type, extra_input->second.shape);
-        if (extra_input->second.type == ov::element::i64) {
-            *input_tensor.data<int64_t>() = extra_input->second.value;
+        auto & cached = ggml_decoder->runtime_input_tensors[param_name];
+        if (!cached || cached.get_element_type() != extra_input->second.type ||
+            cached.get_shape() != extra_input->second.shape) {
+            if (ggml_openvino_is_gpu() && !ggml_decoder->is_static() && !ggml_decoder->is_stateful()) {
+                auto context = ggml_openvino_get_remote_context()->as<ov::intel_gpu::ocl::ClContext>();
+                auto storage = context.create_usm_host_tensor(extra_input->second.type, extra_input->second.shape);
+                cached = ov::Tensor(extra_input->second.type, extra_input->second.shape, storage.get());
+                ggml_decoder->runtime_input_storage[param_name] = storage;
+            } else {
+                cached = ov::Tensor(extra_input->second.type, extra_input->second.shape);
+            }
+        }
+        input_tensor = cached;
+        if (param_name == "sampling_rows") {
+            auto * data = input_tensor.data<int64_t>();
+            for (const auto & row : ggml_decoder->get_compute_params().sampling_rows) {
+                *data++ = row.second;
+            }
+        } else if (param_name.compare(0, 11, "rs_offsets_") == 0 || param_name.compare(0, 11, "rs_windows_") == 0) {
+            const auto & controls = ggml_decoder->get_compute_params();
+            const auto & values = controls.recurrent_controls.at(param_name);
+            std::copy(values.begin(), values.end(), input_tensor.data<int64_t>());
+        } else if (param_name.compare(0, 10, "rs_update_") == 0) {
+            const auto & controls = ggml_decoder->get_compute_params();
+            const auto & write = controls.rs_writebacks.at(param_name.substr(10));
+            auto data = input_tensor.data<int64_t>();
+            data[0] = write.slot_begin;
+            data[1] = write.seq_count >= 0 ? write.seq_count : controls.s_copy_active_slot_len;
+            data[2] = write.snapshot_stride >= 0 ? write.snapshot_stride : data[1];
+            // Direct GDN states contain no attention prefix.
+            data[3] = 0;
         } else {
-            std::memset(input_tensor.data(), 0, input_tensor.get_byte_size());
+            if (extra_input->second.type == ov::element::i64) {
+                *input_tensor.data<int64_t>() = extra_input->second.value;
+            } else {
+                std::memset(input_tensor.data(), 0, input_tensor.get_byte_size());
+            }
         }
     } else {
         input_tensor = convert_ggml_input_to_ov(ggml_decoder, param_name);
@@ -952,7 +1004,7 @@ enum ggml_status naive_compute(ggml_cgraph * cgraph,
             // Debug-only output added via GGML_OPENVINO_DEBUG_NODE; nothing to copy into.
             if (ggml_openvino_getenv_int("GGML_OPENVINO_DEBUG_OUTPUT") ||
                 ggml_openvino_getenv_str("GGML_OPENVINO_DEBUG_NODE")) {
-                print_output_tensor_info(output_names[i], output_tensor, output_tensor.data());
+                print_output_tensor_info(output_names[i], output_tensor, nullptr);
             }
             continue;
         }
@@ -1095,7 +1147,9 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::share
             if (cache_hit) {
                 entry = it->second;
             } else {
-                r_ctx->clear_caches_locked();
+                if (r_ctx->stateful || r_ctx->decoder_cache.size() >= 8) {
+                    r_ctx->clear_caches_locked();
+                }
                 auto mutex = std::make_shared<std::mutex>();
                 entry = std::make_shared<decoder_runtime_ctx>(mutex);
                 r_ctx->decoder_cache[key] = entry;
@@ -1519,8 +1573,6 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::share
                     "or disable GGML_OPENVINO_STATEFUL_EXECUTION.\n");
                 return GGML_STATUS_FAILED;
             }
-        } else {
-            reset_single_slot_recurrent_cache(cgraph, m_params, c_params);
         }
 
         auto & in_bindings = ggml_decoder->port_bindings(true, ov_input_names.size(), infer_request.get());
@@ -1567,14 +1619,30 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::share
                 continue;
             }
             auto * ggml_tensor = model_output_it->second;
-            if (ggml_nbytes(ggml_tensor) == 0) {
-                continue;
-            }
             ggml_decoder->take_last_kv_tensor_id();  // clear
-            auto output_tensor = create_ov_output_tensor(ggml_decoder, infer_request, i, ggml_tensor);
+            ov::Tensor output_tensor;
+            const bool inactive = (ggml_tensor->op != GGML_OP_NONE && !(ggml_tensor->flags & GGML_TENSOR_FLAG_COMPUTE)) ||
+                                  ggml_nbytes(ggml_tensor) == 0;
+            if (inactive) {
+                // Inactive pure sampling branches have no scheduler allocation. Never bind a stale active output.
+                auto & scratch = ggml_decoder->runtime_output_scratch[ov_output_names[i]];
+                const auto type = GgmlOvDecoder::get_ov_type(ggml_tensor);
+                const auto shape = GgmlOvDecoder::get_shape(ggml_tensor);
+                if (!scratch || scratch.get_element_type() != type || scratch.get_shape() != shape) {
+                    if (ggml_openvino_is_gpu() && ggml_nbytes(ggml_tensor) > 0) {
+                        auto context = ggml_openvino_get_remote_context()->as<ov::intel_gpu::ocl::ClContext>();
+                        scratch = context.create_usm_device_tensor(type, shape);
+                    } else {
+                        scratch = ov::Tensor(type, shape);
+                    }
+                }
+                output_tensor = scratch;
+            } else {
+                output_tensor = create_ov_output_tensor(ggml_decoder, infer_request, i, ggml_tensor);
+            }
             uint64_t id = ggml_decoder->take_last_kv_tensor_id();
             auto & binding = out_bindings[i];
-            if (id == 0 && io_staging_enabled() && !ggml_openvino_buffer_is_remote(ggml_tensor) &&
+            if (!inactive && id == 0 && io_staging_enabled() && !ggml_openvino_buffer_is_remote(ggml_tensor) &&
                 stageable_size(output_tensor)) {
                 void * dst = output_tensor.data();
                 const size_t bytes = output_tensor.get_byte_size();
@@ -1604,7 +1672,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::share
             ggml_openvino_getenv_str("GGML_OPENVINO_DEBUG_NODE")) {
             for (size_t i = 0; i < ov_output_names.size(); i++) {
                 const auto output_tensor = infer_request->get_output_tensor(i);
-                print_output_tensor_info(ov_output_names[i], output_tensor, output_tensor.data());
+                print_output_tensor_info(ov_output_names[i], output_tensor, nullptr);
             }
         }
 
@@ -2193,8 +2261,6 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
         }
     }
 
-    reset_single_slot_recurrent_cache(cgraph, m_params, c_params);
-
     if (is_prefill) {
         auto inp_len = get_inp_pos_n_tokens(cgraph, inp_pos);
         for (int chunk_index = 0; chunk_index * prefill_chunk_size < inp_len; chunk_index++) {
@@ -2242,7 +2308,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
                 ggml_openvino_getenv_str("GGML_OPENVINO_DEBUG_NODE")) {
                 for (size_t i = 0; i < ov_output_names_local.size(); i++) {
                     const auto output_tensor = infer_request->get_output_tensor(i);
-                    print_output_tensor_info(ov_output_names_local[i], output_tensor, output_tensor.data());
+                    print_output_tensor_info(ov_output_names_local[i], output_tensor, nullptr);
                 }
             }
         }
@@ -2282,7 +2348,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
             ggml_openvino_getenv_str("GGML_OPENVINO_DEBUG_NODE")) {
             for (size_t i = 0; i < ov_output_names_local.size(); i++) {
                 const auto output_tensor = infer_request->get_output_tensor(i);
-                print_output_tensor_info(ov_output_names_local[i], output_tensor, output_tensor.data());
+                print_output_tensor_info(ov_output_names_local[i], output_tensor, nullptr);
             }
         }
     }
@@ -2302,19 +2368,53 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
 }
 }  // namespace
 
-// Nodes on the unselected branches of ggml_build_forward_select() stay in the graph but must not be
-// computed. Keep them out of the OV model, or their inputs become parameters with fixed shapes.
-static ggml_cgraph * get_compute_graph(ggml_cgraph * cgraph, ov_runtime_context & r_ctx) {
+// Drop unselected branches except pure top-k sampling. Keeping those branches gives MTP a stable
+// model interface as active slots change; inactive results use private output buffers.
+static ggml_cgraph * get_compute_graph(ggml_cgraph * cgraph, ov_runtime_context & r_ctx, bool stable_sampling) {
     auto is_skipped = [](const ggml_tensor * node) {
         return node->op != GGML_OP_NONE && !(node->flags & GGML_TENSOR_FLAG_COMPUTE);
     };
     if (std::none_of(cgraph->nodes, cgraph->nodes + cgraph->n_nodes, is_skipped)) {
         return cgraph;
     }
+    std::unordered_set<const ggml_tensor *> retained;
+    if (stable_sampling) {
+        auto use_count = [&](const ggml_tensor * node) {
+            return cgraph->use_counts[ggml_hash_find(&cgraph->visited_hash_set, node)];
+        };
+        for (int i = 0; i < cgraph->n_nodes; ++i) {
+            const auto * scores = cgraph->nodes[i];
+            if (scores->op != GGML_OP_GET_ROWS || !GgmlOvDecoder::is_sampling_top_k(scores->src[1])) {
+                continue;
+            }
+            const auto * top_k = scores->src[1];
+            const auto * flat = top_k->src[0];
+            const auto * rows = scores->src[0];
+            if (!rows || rows->op != GGML_OP_RESHAPE || rows->src[0] != flat ||
+                use_count(scores) != 0 || use_count(top_k) != 1 || use_count(rows) != 1 ||
+                use_count(flat) != 2 || use_count(flat->src[0]) != 1) {
+                continue;
+            }
+            // Retain only read-only top-k chains. Stateful samplers must keep their branch selection semantics.
+            std::vector<const ggml_tensor *> pending = {scores};
+            while (!pending.empty()) {
+                const auto * node = pending.back();
+                pending.pop_back();
+                if (!is_skipped(node) || !retained.insert(node).second) {
+                    continue;
+                }
+                for (const auto * src : node->src) {
+                    if (src) {
+                        pending.push_back(src);
+                    }
+                }
+            }
+        }
+    }
     auto & compute = r_ctx.compute_graphs[cgraph];
     compute.nodes.clear();
     std::copy_if(cgraph->nodes, cgraph->nodes + cgraph->n_nodes, std::back_inserter(compute.nodes),
-                 [&](const ggml_tensor * node) { return !is_skipped(node); });
+                 [&](const ggml_tensor * node) { return !is_skipped(node) || retained.count(node); });
     compute.graph = *cgraph;
     compute.graph.nodes = compute.nodes.data();
     compute.graph.n_nodes = (int) compute.nodes.size();
@@ -2339,7 +2439,7 @@ enum ggml_status ov_graph_compute(ggml_cgraph * cgraph, ggml_backend_t backend) 
         GGML_ASSERT(ctx->runtime_context != nullptr);
         std::shared_ptr<ov_runtime_context> r_ctx = std::static_pointer_cast<ov_runtime_context>(ctx->runtime_context);
         std::lock_guard<std::mutex> execution_lock(r_ctx->execution_mutex);
-        cgraph = get_compute_graph(cgraph, *r_ctx);
+        cgraph = get_compute_graph(cgraph, *r_ctx, !is_static && !r_ctx->stateful);
 
         return is_static ? ov_graph_compute_static(cgraph, r_ctx) : ov_graph_compute_dynamic(cgraph, r_ctx);
     } catch (const ov::Exception & e) {
@@ -2567,6 +2667,8 @@ void print_input_tensor_info(const std::string & name, const ov::Tensor & tensor
 }
 
 void print_output_tensor_info(const std::string & name, const ov::Tensor & tensor, const void * output_dst) {
+    ov::Tensor host(tensor.get_element_type(), tensor.get_shape());
+    tensor.copy_to(host);
     std::cout << "Output name: " << name << ", Output shape: " << tensor.get_shape() << ", Address: " << output_dst
               << '\n';
 
@@ -2600,13 +2702,13 @@ void print_output_tensor_info(const std::string & name, const ov::Tensor & tenso
 
     switch (tensor.get_element_type()) {
     case ov::element::f32: {
-        const float * data = tensor.data<float>();
+        const float * data = host.data<float>();
         size_t size = tensor.get_size();
         print_float_stats("[f32]", size, [data](size_t i) { return data[i]; });
         break;
     }
     case ov::element::f16: {
-        const ov::float16 * data = tensor.data<ov::float16>();
+        const ov::float16 * data = host.data<ov::float16>();
         size_t size = tensor.get_size();
         print_float_stats("[f16]", size, [data](size_t i) { return static_cast<float>(data[i]); });
         break;

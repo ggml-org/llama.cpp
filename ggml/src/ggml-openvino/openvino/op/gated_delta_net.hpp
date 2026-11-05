@@ -1,3 +1,6 @@
+// Copyright (C) 2018-2026 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+//
 #pragma once
 
 #include "openvino/op/op.hpp"
@@ -9,7 +12,7 @@ namespace ov::op::internal {
 /// \ingroup ov_ops_cpp_api
 class OPENVINO_API GatedDeltaNet : public ov::op::Op {
 public:
-    OPENVINO_OP("GatedDeltaNet")
+    OPENVINO_OP("GatedDeltaNet");
 
     GatedDeltaNet() = default;
     /// \brief Constructs a GatedDeltaNet operation.

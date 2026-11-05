@@ -144,6 +144,7 @@ void ggml_openvino_device_config::init() {
         "GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS",
         "GGML_OPENVINO_ENABLE_CACHE",
         "GGML_OPENVINO_DISABLE_CACHE",
+        "GGML_OPENVINO_DISABLE_FUSED_RECURRENCE",
         "GGML_OPENVINO_ENABLE_KV_4D",
         "GGML_OPENVINO_ENABLE_FALLBACK",
         "GGML_OPENVINO_KV_SCATTER_ELEMENTS",
@@ -433,12 +434,13 @@ std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor *
     //
     // GGML_OPENVINO_REQUANT_KQUANT selects a 4-bit target instead. Names are
     // q4_<sym|asym><group>[_all]: <sym|asym> says whether a per-group zero point is kept, <group>
-    // is the group size, and the _all suffix sends Q4_K down the same path (without it only
-    // Q6_K/Q5_K are touched):
+    // is the group size. The _all suffix includes Q4_K; q4_asym64_all also includes
+    // ordinary Q8_0/Q5_1 linear weights, matching the INT4_ASYM/group-64 primary precision
+    // used by NNCF with ratio=1.0. Embedding/output retain the channel-wise INT8 overrides above:
     //   q4_sym128      Q6_K/Q5_K -> Q4_0_128 (u4, group 128, symmetric)
     //   q4_sym128_all  and Q4_K too -- drops Q4_K's per-32 zero point, which costs some accuracy
     //   q4_asym64      Q6_K/Q5_K -> Q4_1_64 (u4, group 64, asymmetric)
-    //   q4_asym64_all  Q6_K/Q5_K and Q4_K -> Q4_1_64 (u4, group 64, asymmetric)
+    //   q4_asym64_all  Q6_K/Q5_K/Q4_K/Q8_0/Q5_1 -> Q4_1_64 (u4, group 64, asymmetric)
     //   native         no requantization at all (keep Q6_K/Q5_K as they are)
     //
     // q4_asym64 leaves Q4_K at its native group 32. Use q4_asym64_all to keep the group size uniform.
@@ -458,6 +460,13 @@ std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor *
         if (asym64_all) {
             return ExtraQuantType::Q4_1_64;
         }
+    }
+    // Include dense Q8_0/Q5_1 in the explicit all-asymmetric policy. Keep the default GPU
+    // workaround below restricted to MoE experts: ordinary grouped INT8 MatMul is supported.
+    if (asym64_all && (tensor->type == GGML_TYPE_Q5_1 || tensor->type == GGML_TYPE_Q8_0)) {
+        // A group must fit within each row. Use backup channel-wise INT8 for incompatible
+        // widths (Q8_0/Q5_1 allow rows of 32 weights); every affected Qwen3.6 row is divisible by 64.
+        return tensor->ne[0] % 64 == 0 ? ExtraQuantType::Q4_1_64 : ExtraQuantType::Q8_0_C;
     }
     if (tensor->type == GGML_TYPE_Q5_0) {
         //return ExtraQuantType::Q4_0_128;
@@ -728,7 +737,8 @@ ggml_openvino_tensor_extra * ggml_openvino_create_tensor_extra(const ggml_tensor
     if (is_remote) {
         GGML_ASSERT(ggml_openvino_is_gpu());
         auto gpu_context = remote_context->as<ov::intel_gpu::ocl::ClContext>();
-        auto usm_tensor = gpu_context.create_tensor(element_type, shape, tensor->data);
+        auto usm_tensor = gpu_context.create_tensor(element_type, shape,
+                                                    tensor->data);
         ov_tensor = std::make_shared<ov::intel_gpu::ocl::USMTensor>(std::move(usm_tensor));
     } else {
         ov_tensor = std::make_shared<ov::Tensor>(element_type, shape, tensor->data);

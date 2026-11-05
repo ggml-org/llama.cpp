@@ -5,6 +5,9 @@
 #include "ggml-openvino/openvino/node_context.h"
 #include "ggml-openvino/openvino/utils.h"
 #include "input_model.h"
+#ifdef GGML_OPENVINO_HAS_CACHE_UPDATE
+#include "recurrent_cache_fusion.h"
+#endif
 #include "pass/mark_decompression_convert_constant_folding.h"
 #include "pass/mark_dequantization_subgraph.h"
 #include "pass_registry/pipeline.h"
@@ -16,6 +19,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <set>
 #include <openvino/core/node.hpp>
 #include <openvino/core/preprocess/pre_post_process.hpp>
 #include <openvino/core/shape.hpp>
@@ -306,6 +310,25 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
         (*tensor_map)[it.first] = it.second;
     }
 
+    if (tensor_map->count("sampling_rows")) {
+        // Match ComputeParams::sampling_rows ordering without one Parameter per sampling branch.
+        std::set<std::string> names;
+        ggml_model_decoder->visit_subgraph([&](const std::shared_ptr<GgmlDecoder> & decoder, int node_idx) {
+            if (decoder->get_op_type(node_idx) == "GGML_OP_VIEW" && decoder->get_op_case(node_idx) == 3) {
+                names.insert("sampling_row_" + decoder->get_op_name(node_idx));
+            }
+        });
+        int64_t index = 0;
+        for (const auto & name : names) {
+            (*tensor_map)[name] = std::make_shared<v8::Gather>(tensor_map->at("sampling_rows"),
+                v0::Constant::create(element::i64, {1}, {index++}),
+                v0::Constant::create(element::i64, {}, {0}));
+        }
+    }
+
+#ifdef GGML_OPENVINO_HAS_CACHE_UPDATE
+    RecurrentCacheFusion recurrent_fusion(ggml_model_decoder, tensor_map);
+#endif
     auto translate_node = [&](const std::shared_ptr<GgmlDecoder> & decoder, int node_idx) {
         auto operation_type = decoder->get_op_type(node_idx);
         if (operation_type == "GGML_OP_NONE") {
@@ -326,7 +349,13 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
         FRONT_END_OP_CONVERSION_CHECK(it != m_translator_map.end(), "Translation for operation type ", operation_type,
                                       " is not implemented.");
         NodeContext node_context(decoder, tensor_map, node_idx, this);
-        ov::OutputVector converted_outputs = it->second(node_context);
+        ov::OutputVector converted_outputs;
+#ifdef GGML_OPENVINO_HAS_CACHE_UPDATE
+        converted_outputs = recurrent_fusion.translate(node_idx, node_context);
+#endif
+        if (converted_outputs.empty()) {
+            converted_outputs = it->second(node_context);
+        }
 
         FRONT_END_OP_CONVERSION_CHECK(node_output_names.size() == converted_outputs.size(), "Number of ",
                                       operation_type, " outputs greater than number of converted outputs, which are ",

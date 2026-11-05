@@ -6,14 +6,18 @@
 #include <memory>
 #include <openvino/op/add.hpp>
 #include <openvino/op/constant.hpp>
+#include <openvino/op/concat.hpp>
 #include <openvino/op/divide.hpp>
+#include <openvino/op/gather.hpp>
 #include <openvino/op/multiply.hpp>
 #include <openvino/op/negative.hpp>
 #include <openvino/op/power.hpp>
+#include <openvino/op/range.hpp>
 #include <openvino/op/reduce_mean.hpp>
 #include <openvino/op/reshape.hpp>
 #include <openvino/op/slice.hpp>
 #include <openvino/op/sqrt.hpp>
+#include <openvino/op/squeeze.hpp>
 
 namespace ov {
 namespace frontend {
@@ -27,13 +31,7 @@ OutputVector translate_rms_norm(const NodeContext & context) {
 
     ov::Output<ov::Node> input_node;
     if (op_case == 3) {
-        // Flatten sequence and token dimensions to match the gate layout.
-        auto input_shape = context.get_input_shape(0).to_shape();
-        input_node = std::make_shared<ov::op::v1::Reshape>(
-            context.get_input(0),
-            ov::op::v0::Constant::create(
-                ov::element::i64, {4}, std::vector<int64_t>{1, -1, (int64_t) input_shape[2], (int64_t) input_shape[3]}),
-            false);
+        input_node = context.get_input(0);
     } else if (op_case == 1) {
         input_node = process_view_input_new(context, 0);
     } else if (op_case == 2 || op_case == 3) {
@@ -42,7 +40,10 @@ OutputVector translate_rms_norm(const NodeContext & context) {
         // ssm_state_size * n_seqs rows. Slice it off (scaling by the active sequence count) to keep
         // just the attention output.
         ov::Output<ov::Node> state_end;
-        if (context.has_input("s_copy_active_slot_len")) {
+        const auto attention_rows_name = "gdn_attention_rows_" + context.get_view_input_src_name(0, 0);
+        if (context.has_input(attention_rows_name)) {
+            state_end = context.get_input(attention_rows_name);
+        } else if (context.has_input("s_copy_active_slot_len")) {
             auto len = context.get_input("s_copy_active_slot_len");
             auto state_rows = std::make_shared<ov::op::v1::Multiply>(
                 ov::op::v0::Constant::create(ov::element::i64, {1}, {ssm_state_size}), len);
@@ -50,17 +51,30 @@ OutputVector translate_rms_norm(const NodeContext & context) {
         } else {
             state_end = ov::op::v0::Constant::create(ov::element::i64, {1}, {-ssm_state_size});
         }
-        auto gdn_attn_output = std::make_shared<ov::op::v8::Slice>(
-            context.get_input(0), ov::op::v0::Constant::create(ov::element::i64, {1}, {0}), state_end,
-            ov::op::v0::Constant::create(ov::element::i64, {1}, {1}),
-            ov::op::v0::Constant::create(ov::element::i64, {1}, {2}));
+        ov::Output<ov::Node> gdn_attn_output;
+        if (context.has_input(attention_rows_name)) {
+            auto indices = std::make_shared<ov::op::v4::Range>(
+                ov::op::v0::Constant::create(ov::element::i64, {}, {0}),
+                std::make_shared<ov::op::v0::Squeeze>(state_end),
+                ov::op::v0::Constant::create(ov::element::i64, {}, {1}), ov::element::i64);
+            gdn_attn_output = std::make_shared<ov::op::v8::Gather>(context.get_input(0), indices,
+                ov::op::v0::Constant::create(ov::element::i64, {}, {2}));
+        } else {
+            gdn_attn_output = std::make_shared<ov::op::v8::Slice>(
+                context.get_input(0), ov::op::v0::Constant::create(ov::element::i64, {1}, {0}), state_end,
+                ov::op::v0::Constant::create(ov::element::i64, {1}, {1}),
+                ov::op::v0::Constant::create(ov::element::i64, {1}, {2}));
+        }
 
         auto input_shape = context.get_input_shape(0).to_shape();
-        input_node = std::make_shared<ov::op::v1::Reshape>(
-            gdn_attn_output,
-            ov::op::v0::Constant::create(
-                ov::element::i64, {4}, std::vector<int64_t>{1, -1, (int64_t) input_shape[2], (int64_t) input_shape[3]}),
-            false);
+        ov::Output<ov::Node> sequences = ov::op::v0::Constant::create(ov::element::i64, {1}, {input_shape[0]});
+        if (context.has_input("s_copy_active_slot_len")) {
+            sequences = context.get_input("s_copy_active_slot_len");
+        }
+        auto shape = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{
+            sequences, ov::op::v0::Constant::create(ov::element::i64, {3},
+                std::vector<int64_t>{-1, (int64_t) input_shape[2], (int64_t) input_shape[3]})}, 0);
+        input_node = std::make_shared<ov::op::v1::Reshape>(gdn_attn_output, shape, false);
 
     } else {
         input_node = process_view_input_new(context, 0);
