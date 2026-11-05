@@ -7,19 +7,19 @@
 #include <functional>
 #include <string>
 
-constexpr size_t COMMON_CHAT_MAX_PERMUTE = 6;
-
 std::string json_schema_to_grammar(const common_json & schema, bool force_gbnf = false);
 std::string json_schema_to_grammar(const common_chat_schema_document & schema);
 
 struct common_grammar_builder {
     std::function<std::string(const std::string &, const std::string &)>    add_rule;
     std::function<std::string(const std::string &, const common_chat_schema &)> add_schema;
-    std::function<std::string(const std::string &, const common_chat_schema &)> add_schema_unordered;
 };
 
 struct common_grammar_options {
     bool dotall = false;
+    // any-order object rules: grammar states per object, and for the whole grammar
+    size_t max_object_states = 1024;
+    size_t max_total_states  = 4096;
 };
 
 std::string gbnf_format_literal(const std::string & literal);

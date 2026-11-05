@@ -356,9 +356,11 @@ class common_chat_schema_converter {
 private:
     friend std::string build_grammar(const std::function<void(const common_grammar_builder &)> & cb, const common_grammar_options & options);
     bool _dotall;
-    bool _unordered_properties = false;
+    size_t _max_object_states;
+    size_t _max_total_states;
+    size_t _states_used = 0;
     std::map<std::string, std::string> _rules;
-    std::map<std::pair<const common_chat_schema *, bool>, std::string> _refs;
+    std::map<const common_chat_schema *, std::string> _refs;
     std::vector<std::string> _errors;
     std::vector<std::string> _warnings;
     int _depth = 0;
@@ -372,15 +374,6 @@ private:
             }
         }
         ~depth_guard() { depth--; }
-    };
-
-    struct unordered_properties_guard {
-        bool & unordered;
-        bool prev;
-        unordered_properties_guard(bool & unordered) : unordered(unordered), prev(unordered) {
-            unordered = true;
-        }
-        ~unordered_properties_guard() { unordered = prev; }
     };
 
     template <typename T>
@@ -739,14 +732,14 @@ private:
             _errors.push_back("Unresolved $ref " + schema.ref);
             return "";
         }
-        const auto key = std::make_pair(schema.target, _unordered_properties);
+        const auto * key = schema.target;
         auto it = _refs.find(key);
         if (it != _refs.end()) {
             return it->second;
         }
         auto hash = schema.ref.find('#');
         std::string ref_fragment = hash != std::string::npos ? schema.ref.substr(hash + 1) : schema.ref;
-        std::string ref_name = _reserve_rule_name("ref" + gbnf_format_rule_name(ref_fragment) + (_unordered_properties ? "-unordered" : ""));
+        std::string ref_name = _reserve_rule_name("ref" + gbnf_format_rule_name(ref_fragment));
         _refs[key] = ref_name;
         const int prev_reserved_depth = _reserved_depth;
         _reserved_depth = _depth + 1;
@@ -803,135 +796,103 @@ private:
             return "\"{\" space \"}\"";
         }
 
-        if (_unordered_properties) {
-            const std::string prefix = name + (name.empty() ? "" : "-");
-            const size_t n_required = required_props.size();
-            // untracked keys may repeat; with more than COMMON_CHAT_MAX_PERMUTE required keys, required keys keep the declared order
-            std::vector<std::string> tracked = required_props;
-            std::vector<std::string> free_kvs;
-            for (const auto & prop_name : optional_props) {
-                if (prop_name != "*" && tracked.size() < COMMON_CHAT_MAX_PERMUTE) {
-                    tracked.push_back(prop_name);
-                } else {
-                    free_kvs.push_back(prop_kv_rule_names[prop_name]);
-                }
+        const std::string prefix = name + (name.empty() ? "" : "-");
+        const size_t n_required = required_props.size();
+        std::vector<std::string> keys = required_props;
+        std::string additional_kv;
+        for (const auto & prop_name : optional_props) {
+            if (prop_name == "*") {
+                additional_kv = prop_kv_rule_names[prop_name];
+            } else {
+                keys.push_back(prop_name);
             }
-            std::string free_kv = free_kvs.empty() ? "" : _add_rule(prefix + "free-kv", string_join(free_kvs, " | "));
+        }
 
-            std::vector<std::string> firsts;
-            if (n_required > COMMON_CHAT_MAX_PERMUTE) {
-                std::vector<std::string> rest(n_required + 1);
-                for (size_t n_seen = n_required + 1; n_seen-- > 0;) {
-                    if (free_kv.empty() && (n_seen == 0 || n_seen == n_required)) {
-                        continue;
-                    }
-                    rest[n_seen] = _reserve_rule_name(prefix + "rest-" + std::to_string(n_seen));
-                    std::vector<std::string> alts;
-                    if (!free_kv.empty()) {
-                        alts.push_back(free_kv + " " + rest[n_seen]);
-                    }
-                    if (n_seen < n_required) {
-                        alts.push_back(prop_kv_rule_names[required_props[n_seen]] + " " + rest[n_seen + 1]);
-                    }
-                    std::string body = "\",\" space ( " + string_join(alts, " | ") + " )";
-                    _rules[rest[n_seen]] = n_seen == n_required ? "( " + body + " )?" : body;
-                }
-                firsts.push_back(prop_kv_rule_names[required_props[0]] + " " + rest[1]);
-                if (!free_kv.empty()) {
-                    firsts.push_back(free_kv + " " + rest[0]);
+        // a tracked key is seen at most once, which needs one state per subset of tracked keys;
+        // the rest share a counter, so they may come in any order but at most keys.size() - n_tracked times in total
+        // past the grammar-wide total, later objects still get a small budget
+        const size_t remaining = _max_total_states > _states_used ? _max_total_states - _states_used : 0;
+        const size_t budget = std::min(_max_object_states, std::max(_max_object_states / 16, remaining));
+        const size_t n_keys = keys.size();
+        size_t n_tracked = 0;
+        for (size_t k = std::min<size_t>(n_keys, 20); k > 0; k--) {
+            if ((size_t(1) << k) * (n_keys - k + 1) <= budget) {
+                n_tracked = k;
+                break;
+            }
+        }
+        // too many required keys to track as a set: they keep the declared order
+        const bool ordered_required = n_required > n_tracked;
+        if (ordered_required) {
+            n_tracked = n_required;
+        }
+        const std::vector<std::string> tracked(keys.begin(), keys.begin() + n_tracked);
+        const size_t n_untracked = n_keys - n_tracked;
+        _states_used += (ordered_required ? n_required + 1 : size_t(1) << n_tracked) * (n_untracked + 1);
+        std::vector<std::string> untracked_kvs;
+        for (size_t i = n_tracked; i < n_keys; i++) {
+            untracked_kvs.push_back(prop_kv_rule_names[keys[i]]);
+        }
+        const std::string untracked_kv = untracked_kvs.size() > 1 ? _add_rule(prefix + "untracked-kv", string_join(untracked_kvs, " | ")) : untracked_kvs.empty() ? "" : untracked_kvs[0];
+
+        const size_t required_mask = ordered_required ? 0 : (size_t(1) << n_required) - 1;
+        auto all_required = [&](size_t seen) {
+            return ordered_required ? seen == n_required : (seen & required_mask) == required_mask;
+        };
+        auto all_tracked = [&](size_t seen) {
+            return ordered_required ? seen == n_required : seen == (size_t(1) << n_tracked) - 1;
+        };
+        auto group = [](const std::vector<std::string> & alts) {
+            return alts.size() == 1 ? alts[0] : "( " + string_join(alts, " | ") + " )";
+        };
+
+        std::map<std::pair<size_t, size_t>, std::string> rest_rules;
+        std::function<std::string(size_t, size_t)> rest;
+        auto next_kvs = [&](size_t seen, size_t n_untracked_seen) {
+            std::vector<std::string> alts;
+            auto add = [&](const std::string & kv, size_t seen_after, size_t n_untracked_after) {
+                const std::string r = rest(seen_after, n_untracked_after);
+                alts.push_back(kv + (r.empty() ? "" : " " + r));
+            };
+            if (!additional_kv.empty()) {
+                add(additional_kv, seen, n_untracked_seen);
+            }
+            if (ordered_required) {
+                if (seen < n_required) {
+                    add(prop_kv_rule_names[tracked[seen]], seen + 1, n_untracked_seen);
                 }
             } else {
-                const size_t required_mask = (size_t(1) << n_required) - 1;
-                std::map<size_t, std::string> rest_rules;
-                std::function<std::string(size_t)> rest;
-                auto tracked_alts = [&](size_t seen) {
-                    std::vector<std::string> alts;
-                    for (size_t i = 0; i < tracked.size(); i++) {
-                        const size_t bit = size_t(1) << i;
-                        if (!(seen & bit)) {
-                            alts.push_back(prop_kv_rule_names[tracked[i]] + " " + rest(seen | bit));
-                        }
+                for (size_t i = 0; i < n_tracked; i++) {
+                    const size_t bit = size_t(1) << i;
+                    if (!(seen & bit)) {
+                        add(prop_kv_rule_names[tracked[i]], seen | bit, n_untracked_seen);
                     }
-                    return alts;
-                };
-                // one "," then the next key, so only one stack waits for the comma
-                rest = [&](size_t seen) -> std::string {
-                    auto it = rest_rules.find(seen);
-                    if (it != rest_rules.end()) {
-                        return it->second;
-                    }
-                    auto alts = tracked_alts(seen);
-                    if (alts.empty() && free_kv.empty()) {
-                        return rest_rules[seen] = "";
-                    }
-                    auto rule_name = _reserve_rule_name(prefix + "rest-" + std::to_string(seen));
-                    rest_rules[seen] = rule_name;
-                    if (!free_kv.empty()) {
-                        alts.insert(alts.begin(), free_kv + " " + rule_name);
-                    }
-                    std::string body = "\",\" space ( " + string_join(alts, " | ") + " )";
-                    _rules[rule_name] = (seen & required_mask) == required_mask ? "( " + body + " )?" : body;
-                    return rule_name;
-                };
-                firsts = tracked_alts(0);
-                if (!free_kv.empty()) {
-                    firsts.push_back(free_kv + " " + rest(0));
                 }
             }
-            return "\"{\" space ( " + string_join(firsts, " | ") + " )" + (n_required == 0 ? "?" : "") + " space \"}\"";
-        }
-
-        std::string rule = "\"{\" space ";
-        for (size_t i = 0; i < required_props.size(); i++) {
-            if (i > 0) {
-                rule += " \",\" space ";
+            if (n_untracked_seen < n_untracked) {
+                add(untracked_kv, seen, n_untracked_seen + 1);
             }
-            rule += prop_kv_rule_names[required_props[i]];
-        }
-
-        if (!optional_props.empty()) {
-            rule += " (";
-            if (!required_props.empty()) {
-                rule += " \",\" space ( ";
+            return alts;
+        };
+        // one "," then the next key, so only one stack waits for the comma
+        rest = [&](size_t seen, size_t n_untracked_seen) -> std::string {
+            const auto key = std::make_pair(seen, n_untracked_seen);
+            auto it = rest_rules.find(key);
+            if (it != rest_rules.end()) {
+                return it->second;
             }
-
-            std::function<std::string(const std::vector<std::string> &, bool)> get_recursive_refs = [&](const std::vector<std::string> & ks, bool first_is_optional) {
-                std::string res;
-                if (ks.empty()) {
-                    return res;
-                }
-                const std::string& k = ks[0];
-                std::string kv_rule_name = prop_kv_rule_names[k];
-                std::string comma_ref = "( \",\" space " + kv_rule_name + " )";
-                if (first_is_optional) {
-                    res = comma_ref + (k == "*" ? "*" : "?");
-                } else {
-                    res = kv_rule_name + (k == "*" ? " " + comma_ref + "*" : "");
-                }
-                if (ks.size() > 1) {
-                    res += " " + _add_rule(
-                        name + (name.empty() ? "" : "-") + k + "-rest",
-                        get_recursive_refs(std::vector<std::string>(ks.begin() + 1, ks.end()), true)
-                    );
-                }
-                return res;
-            };
-
-            for (size_t i = 0; i < optional_props.size(); i++) {
-                if (i > 0) {
-                    rule += " | ";
-                }
-                rule += get_recursive_refs(std::vector<std::string>(optional_props.begin() + i, optional_props.end()), false);
+            if (additional_kv.empty() && all_tracked(seen) && n_untracked_seen == n_untracked) {
+                return rest_rules[key] = "";
             }
-            if (!required_props.empty()) {
-                rule += " )";
-            }
-            rule += " )?";
-        }
+            const std::string rule_name = _reserve_rule_name(prefix + "rest-" + std::to_string(seen) + (n_untracked == 0 ? "" : "-" + std::to_string(n_untracked_seen)));
+            rest_rules[key] = rule_name;
+            const std::string body = "\",\" space " + group(next_kvs(seen, n_untracked_seen));
+            _rules[rule_name] = all_required(seen) ? "( " + body + " )?" : body;
+            return rule_name;
+        };
 
-        rule += " space \"}\"";
-
-        return rule;
+        const auto firsts = next_kvs(0, 0);
+        return "\"{\" space " + (all_required(0) ? "( " + string_join(firsts, " | ") + " )?" : group(firsts)) + " space \"}\"";
     }
 
     std::string _add_primitive(const std::string & name, const BuiltinRule & rule) {
@@ -954,16 +915,12 @@ private:
     }
 
 public:
-    explicit common_chat_schema_converter(bool dotall) : _dotall(dotall) {
+    explicit common_chat_schema_converter(const common_grammar_options & options)
+        : _dotall(options.dotall), _max_object_states(options.max_object_states), _max_total_states(options.max_total_states) {
         _rules["space"] = SPACE_RULE;
     }
 
     std::string add_schema(const std::string & name, const common_chat_schema & schema) {
-        return visit(schema, name);
-    }
-
-    std::string add_schema_unordered(const std::string & name, const common_chat_schema & schema) {
-        unordered_properties_guard guard(_unordered_properties);
         return visit(schema, name);
     }
 
@@ -1166,23 +1123,20 @@ std::string json_schema_to_grammar(const common_json & schema, bool force_gbnf) 
 }
 
 std::string json_schema_to_grammar(const common_chat_schema_document & schema) {
-    common_chat_schema_converter converter(false);
+    common_chat_schema_converter converter(common_grammar_options{});
     converter.visit(*schema.root, "");
     converter.check_errors();
     return converter.format_grammar();
 }
 
 std::string build_grammar(const std::function<void(const common_grammar_builder &)> & cb, const common_grammar_options & options) {
-    common_chat_schema_converter converter(options.dotall);
+    common_chat_schema_converter converter(options);
     common_grammar_builder builder {
         /* .add_rule = */ [&](const std::string & name, const std::string & rule) {
             return converter._add_rule(name, rule);
         },
         /* .add_schema = */ [&](const std::string & name, const common_chat_schema & schema) {
             return converter.add_schema(name == "root" ? "" : name, schema);
-        },
-        /* .add_schema_unordered = */ [&](const std::string & name, const common_chat_schema & schema) {
-            return converter.add_schema_unordered(name == "root" ? "" : name, schema);
         },
     };
     cb(builder);

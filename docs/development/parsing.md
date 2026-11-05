@@ -108,8 +108,8 @@ For a more complete example, see `test_example_native()` in
 - **`ref(name)`** - Creates a lightweight reference to a named rule (for recursive grammars)
 - **`rule(name, p, trigger)`** - Creates a named rule and returns a reference
 - **`trigger_rule(name, p)`** - Creates a trigger rule (entry point for lazy grammar generation)
-- **`schema(p, name, schema, raw, unordered)`** - Wraps parser with JSON schema metadata for grammar generation
-- **`schema(p, name, doc, node, raw, unordered)`** - Same, for a node of a `common_chat_schema_document` built earlier, e.g. one tool parameter
+- **`schema(p, name, schema, raw)`** - Wraps parser with JSON schema metadata for grammar generation
+- **`schema(p, name, doc, node, raw)`** - Same, for a node of a `common_chat_schema_document` built earlier, e.g. one tool parameter
 
 ### AST Control
 
@@ -145,7 +145,7 @@ no interaction with the grammar sampling.
 
 ### JSON Schema
 
-The `schema(p, name, schema, raw, unordered)` parser will use the `json-schema-to-grammar`
+The `schema(p, name, schema, raw)` parser will use the `json-schema-to-grammar`
 implementation to generate the grammar instead of the underlying parser.
 
 The `raw` option emits a grammar suitable for a raw string instead of a JSON
@@ -164,9 +164,6 @@ root ::= "<arg>" .* "</arg>"
 This creates an ambiguous grammar that cannot be parsed by the PEG parser. To
 help mitigate this, if `.*` is found in the pattern, the grammar from the
 underlying parser will be emitted instead.
-
-The `unordered` option emits a grammar that accepts object properties in any
-order, for models that do not follow the order given in the schema.
 
 ## Common AST Shapes for Chat Parsing
 

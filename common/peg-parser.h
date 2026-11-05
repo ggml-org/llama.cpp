@@ -282,9 +282,6 @@ struct common_peg_schema_parser {
 
     // Indicates if the GBNF should accept a raw string that matches the schema.
     bool raw;
-
-    // Indicates if the GBNF should accept object properties in any order.
-    bool unordered;
 };
 
 struct common_peg_rule_parser {
@@ -520,10 +517,10 @@ class common_peg_parser_builder {
     common_peg_parser marker();
 
     // Wraps a parser with the schema its GBNF is generated from, a node of the document that owns it
-    common_peg_parser schema(const common_peg_parser & p, const std::string & name, common_chat_schema_document_ptr doc, const common_chat_schema & node, bool raw = false, bool unordered = false);
+    common_peg_parser schema(const common_peg_parser & p, const std::string & name, common_chat_schema_document_ptr doc, const common_chat_schema & node, bool raw = false);
 
     // Parses the JSON schema into a document of its own
-    common_peg_parser schema(const common_peg_parser & p, const std::string & name, const common_json & schema, bool raw = false, bool unordered = false);
+    common_peg_parser schema(const common_peg_parser & p, const std::string & name, const common_json & schema, bool raw = false);
 
     // Creates a named rule, stores it in the grammar, and returns a ref.
     // If trigger=true, marks this rule as an entry point for lazy grammar generation.
