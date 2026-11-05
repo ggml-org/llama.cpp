@@ -194,6 +194,13 @@ static __global__ void top_k_radix_gather(
     using lane_mask_t = std::conditional_t<warp_size == 64, uint64_t, uint32_t>;
     // HIP requires a 64-bit mask also for a 32-wide warp
     constexpr uint64_t ballot_mask = ~(lane_mask_t) 0;
+    const auto popc = [](const lane_mask_t mask) {
+        if constexpr (warp_size == 64) {
+            return __popcll(mask);
+        } else {
+            return __popc(mask);
+        }
+    };
     __shared__ int warp_ties[nwarps];
 
     const int row = blockIdx.x / blocks_per_row;
@@ -250,11 +257,11 @@ static __global__ void top_k_radix_gather(
         const bool    is_tie = col < warp_end && top_k_float_to_ordered(row_src[col]) == threshold;
 
         const lane_mask_t ties    = (lane_mask_t) __ballot_sync(ballot_mask, is_tie);
-        const int         tie_pos = pos + __popcll(ties & (((lane_mask_t) 1 << lane) - 1));
+        const int         tie_pos = pos + popc(ties & (((lane_mask_t) 1 << lane) - 1));
         if (is_tie && tie_pos < pos_end) {
             row_dst[k - rank + tie_pos] = col;
         }
-        pos += __popcll(ties);
+        pos += popc(ties);
     }
 }
 
