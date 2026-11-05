@@ -55,14 +55,14 @@
 		gap: 6px;
 		justify-items: start;
 		font:
-			400 14px / 1.5 'Llama Sans UI',
+			400 14px / 1.5 'Llama Sans',
 			var(--body);
 		color: var(--l-muted);
 	}
 	.sketch-text strong {
 		color: var(--l-ink);
 		font:
-			600 15px / normal 'Llama Sans UI',
+			600 15px / normal 'Llama Sans',
 			var(--body);
 	}
 	.sketch-open,
@@ -75,7 +75,7 @@
 		box-shadow: inset 0 0 0 1px var(--l-ink);
 		color: var(--l-ink);
 		font:
-			500 15px / normal 'Llama Sans UI',
+			500 15px / normal 'Llama Sans',
 			var(--body);
 		cursor: pointer;
 	}

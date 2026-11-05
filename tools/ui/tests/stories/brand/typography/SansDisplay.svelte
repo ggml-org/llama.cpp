@@ -1,6 +1,7 @@
 <!--
 	Llama Sans Display's part of the Typography overview, after its hero: what it's for, what sets it apart
-	(highlights), headings and posters set in it, the numbers, the characters and weights, and the shared design notes.
+	(highlights), the optical size axis, headings and posters set in it, the numbers, the characters and weights, and
+	the shared design notes.
 -->
 <script lang="ts">
 	import Metrics from '../llama-sans/lib/components/Metrics.svelte';
@@ -11,6 +12,7 @@
 	import Version from '../llama-sans/overview/Version.svelte';
 	import WeightLines from '../llama-sans/overview/WeightLines.svelte';
 	import Highlights, { type Highlight } from './Highlights.svelte';
+	import OpticalSizes from './OpticalSizes.svelte';
 	import SansNotes from './SansNotes.svelte';
 
 	const face = 'var(--headline)';
@@ -36,42 +38,49 @@
 		},
 		{
 			sample: 'Two lines,\none heading',
-			spec: 'Line 1.15',
-			text: 'A compact line, so a heading that wraps still reads as one block.',
+			spec: 'line-height 1.15',
+			text: 'Headings set a compact 1.15 line, so one that wraps still reads as one block. The font keeps UI’s cap-centred line box at every size.',
 			title: 'Compact lines'
 		},
 		{
 			sample: 'Aa  Aa',
-			spec: 'Shared outlines',
-			text: 'The same letters as UI, so a heading and the paragraph under it are visibly one family; only the spacing changes.',
-			title: 'One family with UI'
+			spec: 'One font · opsz 16–40',
+			text: 'The same font as UI, so a heading and the paragraph under it are visibly one family; only the spacing changes, with the size.',
+			title: 'One font with UI'
 		},
 		{
 			sample: 'h1 – h6',
-			spec: '--font-display',
-			text: 'The design system sets every heading, from the chat greeting down to h6, in Display.',
-			title: 'Every heading'
+			spec: 'font-optical-sizing: auto',
+			text: 'Headings are Llama Sans like everything else; their size alone moves them toward Display, all the way from 40 px.',
+			title: 'Every large heading'
 		}
 	];
 </script>
 
 <Section columns label="For headlines and large type">
 	<p>
-		Llama Sans Display is for headings, titles, posters and anything set large. It shares its
-		outlines with UI and tightens what large sizes need tightened: tracking, kerning and the line.
+		Llama Sans Display is Llama Sans at its large optical size, opsz 40: headings, titles, posters
+		and anything set large, with the tracking and kerning large sizes need.
 	</p>
 
-	<p>Use it from about 24 px up. Below that, Llama Sans UI's looser spacing reads better.</p>
+	<p>
+		There's no separate font to pick: from 16 to 40 px the spacing moves on its own from UI's to
+		Display's, and from 40 px up it's all Display.
+	</p>
 </Section>
 
 <Section label="Highlights">
 	<Highlights {face} items={highlights} large />
 </Section>
 
+<Section label="Optical size">
+	<OpticalSizes />
+</Section>
+
 <Version
 	name="Display"
 	side="end"
-	specs="Tracking −22 · kerning 115% · line 1.15"
+	specs="opsz 40 · tracking −22 · kerning 115% · line-height 1.15"
 	statement="Quiet letters for loud ideas."
 >
 	<DisplaySample />

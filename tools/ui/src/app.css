@@ -12,22 +12,14 @@
 @import './lib/styles/tokens/components.css';
 @import './lib/styles/surfaces.css';
 
-/* Llama Sans UI, the interface version of the Llama type family (OFL, see lib/assets/fonts/OFL.txt): one variable
-   font for every weight from 400 to 700. Its line box is centred on the cap height, so labels sit in the middle of
+/* Llama Sans, the sans of the Llama type family (OFL, see lib/assets/fonts/OFL.txt): one variable font for every
+   weight from 400 to 700 and every optical size from 16 to 40. The browser sets the optical size from font-size
+   (font-optical-sizing: auto), so text up to 16px is spaced and kerned for interfaces, 40px and up tight for
+   headlines, with a blend in between. Its line box is centred on the cap height, so labels sit in the middle of
    buttons and chips. */
 @font-face {
-	font-family: 'Llama Sans UI';
-	src: url('./lib/assets/fonts/LlamaSansUI.woff2') format('woff2');
-	font-weight: 400 700;
-	font-style: normal;
-	font-display: swap;
-}
-
-/* Llama Sans Display, the headline version (same file's licence): tighter, with firmer kerning and compact lines,
-   for every heading */
-@font-face {
-	font-family: 'Llama Sans Display';
-	src: url('./lib/assets/fonts/LlamaSansDisplay.woff2') format('woff2');
+	font-family: 'Llama Sans';
+	src: url('./lib/assets/fonts/LlamaSans.woff2') format('woff2');
 	font-weight: 400 700;
 	font-style: normal;
 	font-display: swap;
@@ -121,11 +113,9 @@
 }
 
 @theme inline {
-	/* the default sans everywhere: Llama Sans UI, then the system stack while it loads or if it can't */
-	--font-sans: 'Llama Sans UI', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
-	/* headings: Llama Sans Display (font-display), on the same fallbacks */
-	--font-display:
-		'Llama Sans Display', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+	/* the sans everywhere, headings included (their size sets the optical size): Llama Sans, then the system stack
+	   while it loads or if it can't */
+	--font-sans: 'Llama Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
 	--radius-sm: calc(var(--radius) - 4px);
 	--radius-md: calc(var(--radius) - 2px);
 	--radius-lg: var(--radius);
@@ -159,11 +149,6 @@
 		@apply bg-background text-foreground antialiased;
 		scrollbar-width: thin;
 		scrollbar-gutter: stable;
-	}
-
-	/* every heading in Llama Sans Display */
-	:is(h1, h2, h3, h4, h5, h6) {
-		font-family: var(--font-display);
 	}
 
 	/* no elastic bounce past the ends of the page: it drags the sticky and

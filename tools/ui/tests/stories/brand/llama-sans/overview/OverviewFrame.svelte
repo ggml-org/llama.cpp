@@ -14,8 +14,8 @@
 
 <style>
 	.overview {
-		--ui: 'Llama Sans UI', var(--body);
-		--headline: 'Llama Sans Display', var(--body);
+		--ui: 'Llama Sans', var(--body);
+		--headline: 'Llama Sans', var(--body);
 		--code: 'Llama Mono', ui-monospace, monospace;
 		--column: min(1180px, 100% - 2 * max(16px, 4vw));
 		/* the overview is neutral: the design system's greys everywhere, and vermilion as the one accent, only where it

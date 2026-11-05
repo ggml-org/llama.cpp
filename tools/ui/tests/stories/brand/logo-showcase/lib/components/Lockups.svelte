@@ -34,7 +34,7 @@
 	}
 	.display {
 		font:
-			700 clamp(48px, 9vw, 112px) / normal 'Llama Sans Display',
+			700 clamp(48px, 9vw, 112px) / 1.15 'Llama Sans',
 			var(--body);
 	}
 	.ui {
@@ -50,7 +50,7 @@
 		background: var(--l-ink);
 		color: var(--l-bg);
 		font:
-			500 15px / normal 'Llama Sans UI',
+			500 15px / normal 'Llama Sans',
 			var(--body);
 	}
 	.pill.ghost {
@@ -61,7 +61,7 @@
 	.text {
 		max-width: 62ch;
 		font:
-			400 17px / 1.5 'Llama Sans UI',
+			400 17px / 1.5 'Llama Sans',
 			var(--body);
 	}
 </style>

@@ -1,4 +1,4 @@
-<!-- Llama Sans Display in a stack of headings, each on the font's own 1.15 em line. -->
+<!-- Llama Sans Display in a stack of headings, each on a 1.15 em line. -->
 <div class="display-sample">
 	<p class="h1">The shape of a sentence</p>
 
@@ -12,7 +12,7 @@
 		display: grid;
 		gap: 6px;
 		font-family: var(--headline);
-		line-height: normal;
+		line-height: 1.15;
 	}
 	p {
 		margin: 0;

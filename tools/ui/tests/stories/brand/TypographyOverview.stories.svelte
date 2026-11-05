@@ -3,7 +3,8 @@
 	import TypographyOverview from './typography/TypographyOverview.svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 
-	// The family at a glance: Llama Sans UI, Llama Sans Display and Llama Mono on one page, with a switcher at the top
+	// The family at a glance: Llama Sans at its UI and Display optical sizes, and Llama Mono, on one page with a switcher
+	// at the top
 	const { Story } = defineMeta({
 		parameters: {
 			controls: { disable: true },

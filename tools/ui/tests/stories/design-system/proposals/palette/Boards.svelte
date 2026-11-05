@@ -218,7 +218,7 @@
 			--art-orange
 		); /* the accent orange; the brand orange stays with the logotype */
 		--ink: var(--beige-900);
-		--display: 'Llama Sans Display', var(--font-sans);
+		--display: 'Llama Sans', var(--font-sans);
 		display: grid;
 		grid-template-columns: repeat(4, minmax(0, 1fr));
 		gap: 14px;

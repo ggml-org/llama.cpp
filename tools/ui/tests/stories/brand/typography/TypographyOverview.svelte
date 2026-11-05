@@ -1,6 +1,7 @@
 <!--
-	The Typography overview: Llama Sans UI, Llama Sans Display and Llama Mono on one page, with a switcher pinned at the
-	top. Each version gets the same layout, after rsms.me/inter and github.com/mona-sans: a hero set in it, then its own
+	The Typography overview: Llama Sans at its two optical sizes, UI (opsz 16) and Display (opsz 40), and Llama Mono on
+	one page, with a switcher pinned at the top. Each Sans tab pins its optical size, so everything in it, large or
+	small, shows that end of the axis. Each version gets the same layout, after rsms.me/inter and github.com/mona-sans: a hero set in it, then its own
 	part (SansUI, SansDisplay, MonoOverview). It sits in OverviewFrame, which brings the specimen's colours and fonts.
 -->
 <script lang="ts">
@@ -11,6 +12,9 @@
 	import SansUI from './SansUI.svelte';
 
 	type Variant = 'display' | 'mono' | 'ui';
+
+	// each tab's optical size, pinned (Llama Mono has none)
+	const opsz: Record<Variant, string> = { display: "'opsz' 40", mono: 'normal', ui: "'opsz' 16" };
 
 	const { axis } = specimen;
 
@@ -27,7 +31,7 @@
 			face: 'var(--ui)',
 			family: 'Llama Sans',
 			id: 'ui',
-			kicker: 'For interfaces and running text',
+			kicker: 'Optical size 16 · for interfaces and running text',
 			name: 'UI',
 			tagline: [
 				'Spaced for small sizes.',
@@ -40,9 +44,9 @@
 			face: 'var(--headline)',
 			family: 'Llama Sans',
 			id: 'display',
-			kicker: 'For headlines and large type',
+			kicker: 'Optical size 40 · for headlines and large type',
 			name: 'Display',
-			tagline: ['The same letters as UI.', 'Set tight for large sizes.'],
+			tagline: ['The same font as UI.', 'Set tight for large sizes.'],
 			title: ['Llama Sans', 'Display']
 		},
 		{
@@ -89,6 +93,7 @@
 			{#each variants as v (v.id)}
 				<button
 					style:--face={v.face}
+					style:--opsz-pin={opsz[v.id]}
 					aria-controls="panel"
 					aria-selected={v.id === selected}
 					class="tab"
@@ -106,7 +111,13 @@
 		</div>
 	</nav>
 
-	<div aria-labelledby="tab-{selected}" class="panel" id="panel" role="tabpanel">
+	<div
+		style:--opsz-pin={opsz[selected]}
+		aria-labelledby="tab-{selected}"
+		class="panel"
+		id="panel"
+		role="tabpanel"
+	>
 		{#key selected}
 			<Hero
 				face={current.face}

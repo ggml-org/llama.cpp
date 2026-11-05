@@ -36,7 +36,7 @@
 	dd {
 		margin: 0;
 		font:
-			400 15px / normal 'Llama Sans UI',
+			400 15px / normal 'Llama Sans',
 			var(--body);
 	}
 </style>

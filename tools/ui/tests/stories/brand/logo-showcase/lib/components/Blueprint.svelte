@@ -357,7 +357,7 @@
 	}
 	.bp-title {
 		font:
-			700 20px 'Llama Sans Display',
+			700 20px 'Llama Sans',
 			var(--body);
 		letter-spacing: 0;
 		fill: var(--l-ink);
@@ -517,7 +517,7 @@
 		box-shadow: inset 0 0 0 1px var(--l-rule);
 		color: var(--l-muted);
 		font:
-			500 13px / normal 'Llama Sans UI',
+			500 13px / normal 'Llama Sans',
 			var(--body);
 		cursor: pointer;
 		transition:
@@ -540,7 +540,7 @@
 		margin: 0;
 		min-height: 2.9em;
 		font:
-			400 14px / 1.45 'Llama Sans UI',
+			400 14px / 1.45 'Llama Sans',
 			var(--body);
 		color: var(--l-muted);
 	}
