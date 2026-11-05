@@ -5976,6 +5976,11 @@ static uint32_t ggml_vk_guess_split_k(ggml_backend_vk_context * ctx, uint32_t m,
                 split_k = ctx->device->shader_core_count / (m_tiles * n_tiles);
             } else if (m_tiles * n_tiles <= ctx->device->shader_core_count * 2 / 3) {
                 split_k = 3;
+            } else if ((ctx->device->architecture == AMD_RDNA3 || ctx->device->architecture == AMD_RDNA4) &&
+                       m_tiles * n_tiles > ctx->device->shader_core_count &&
+                       m_tiles * n_tiles <= ctx->device->shader_core_count * 4 / 3) {
+                // two waves, the second one at most 1/3 full
+                split_k = 3;
             }
             // Cap the split at 8x. Unless k is huge this is a lot of overhead.
             split_k = std::min(split_k, 8u);
