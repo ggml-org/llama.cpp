@@ -17,27 +17,19 @@
 		--ui: 'Llama Sans UI', var(--body);
 		--headline: 'Llama Sans Display', var(--body);
 		--column: min(1180px, 100% - 2 * max(16px, 4vw));
-		/* the overview's palette: the design system's greys, llama.app's soft blue, a warm beige and a muted clay.
-		   The brand orange is kept for the llama.cpp logotype, so here clay takes over as the one accent (--mark) */
-		--beige: #efe9df;
-		--beige-deep: #e3dbcc;
-		--beige-ink: #2b2620;
-		--clay: #a8704f;
-		--clay-soft: rgb(168 112 79 / 0.14);
-		--mist:
-			radial-gradient(ellipse at 15% 10%, #dcecfb 0%, transparent 55%),
-			radial-gradient(ellipse at 90% 95%, #e8f2fc 0%, transparent 50%),
-			linear-gradient(160deg, #c4ddf6 0%, #d0e4f7 55%, #dfecf9 100%); /* llama.app's light hero, in either theme */
-		--mist-ink: #0f1f33;
-		--mark: var(--clay);
+		/* the overview is neutral: the design system's greys everywhere, and vermilion as the one accent, only where it
+		   does a job (marking a detail, an angle, a joint). The brand orange is kept for the llama.cpp logotype */
+		--vermilion: #d9553b;
+		--vermilion-soft: rgb(217 85 59 / 0.12);
+		--mark: var(--vermilion);
 		display: grid;
 		gap: clamp(64px, 9vw, 128px);
 		padding-bottom: 96px;
 		font-family: var(--ui);
 	}
 	:global(.dark) .overview {
-		--clay: #c99572;
-		--clay-soft: rgb(201 149 114 / 0.16);
+		--vermilion: #e8735a;
+		--vermilion-soft: rgb(232 115 90 / 0.16);
 	}
 	.overview > :global(*) {
 		min-width: 0;
