@@ -23,6 +23,16 @@
 	font-display: swap;
 }
 
+/* Llama Sans Display, the headline version (same file's licence): tighter, with firmer kerning and compact lines,
+   for every heading */
+@font-face {
+	font-family: 'Llama Sans Display';
+	src: url('./lib/assets/fonts/LlamaSansDisplay.woff2') format('woff2');
+	font-weight: 400 700;
+	font-style: normal;
+	font-display: swap;
+}
+
 /* Llama Mono, the family's monospace (OFL, same file), for code, commands and numbers in columns: every character in
    one 600-unit cell, its coding ligatures included, from 400 to 700. */
 @font-face {
@@ -113,6 +123,9 @@
 @theme inline {
 	/* the default sans everywhere: Llama Sans UI, then the system stack while it loads or if it can't */
 	--font-sans: 'Llama Sans UI', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+	/* headings: Llama Sans Display (font-display), on the same fallbacks */
+	--font-display:
+		'Llama Sans Display', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
 	--radius-sm: calc(var(--radius) - 4px);
 	--radius-md: calc(var(--radius) - 2px);
 	--radius-lg: var(--radius);
@@ -146,6 +159,11 @@
 		@apply bg-background text-foreground antialiased;
 		scrollbar-width: thin;
 		scrollbar-gutter: stable;
+	}
+
+	/* every heading in Llama Sans Display */
+	:is(h1, h2, h3, h4, h5, h6) {
+		font-family: var(--font-display);
 	}
 
 	/* no elastic bounce past the ends of the page: it drags the sticky and
