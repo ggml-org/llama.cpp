@@ -841,6 +841,15 @@ struct clip_chatterbox {
     ggml_tensor * spk_affine_b = nullptr;
 };
 
+// drama3 tower: extra tensors around the generic block
+struct clip_drama3_layer {
+    ggml_tensor * enorm_w    = nullptr;
+    ggml_tensor * hnorm_w    = nullptr;
+    ggml_tensor * eh_proj_w  = nullptr; // [code embd; hidden] -> hidden
+    ggml_tensor * embd_w     = nullptr;
+    ggml_tensor * out_norm_w = nullptr;
+};
+
 struct clip_vocos {
     ggml_tensor * input_w        = nullptr;
     ggml_tensor * input_b        = nullptr;
@@ -1107,6 +1116,7 @@ struct clip_model {
 
     // qwen3tts code2wav: RVQ codes -> raw PCM
     clip_code2wav c2w;
+    std::vector<clip_drama3_layer> drama3_layers;
 
     // pocket-tts: SEANet stack, shared by the encoder (speaker path) and the decoder (gen path)
     clip_seanet seanet;

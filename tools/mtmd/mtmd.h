@@ -467,6 +467,7 @@ enum mtmd_gen_audio_type {
     MTMD_GEN_AUDIO_TYPE_SOPRANO,
     MTMD_GEN_AUDIO_TYPE_LFM3A,
     MTMD_GEN_AUDIO_TYPE_CHATTERBOX,
+    MTMD_GEN_AUDIO_TYPE_DRAMA3,
 };
 
 struct mtmd_gen_audio_info {

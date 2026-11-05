@@ -494,7 +494,7 @@ class ModelBase:
                         s = self.model_tensors[name]
                         self.model_tensors[weight_name] = lambda w=w, s=s: dequant_bitnet(w(), s())
                         tensors_to_remove.append(name)
-            elif quant_method == "fp8":
+            elif quant_method in ("fp8", "bsgemm-moe"):  # bsgemm-moe: drama-3, same block layout
                 block_size = quant_config.get("weight_block_size")
                 for name in self.model_tensors.keys():
                     if name.endswith("_scale_inv"):
