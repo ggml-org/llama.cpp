@@ -2432,6 +2432,32 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CACHE_TYPE_V"));
     add_opt(common_arg(
+        {"--cache-type-k-swa"}, "TYPE",
+        string_format(
+            "KV cache data type for K of the sliding-window cache\n"
+            "allowed values: %s\n"
+            "(default: same as --cache-type-k)\n"
+            "no effect unless the model keeps a separate sliding-window KV cache",
+            get_all_kv_cache_types().c_str()
+        ),
+        [](common_params & params, const std::string & value) {
+            params.cache_type_k_swa = kv_cache_type_from_str(value);
+        }
+    ).set_env("LLAMA_ARG_CACHE_TYPE_K_SWA"));
+    add_opt(common_arg(
+        {"--cache-type-v-swa"}, "TYPE",
+        string_format(
+            "KV cache data type for V of the sliding-window cache\n"
+            "allowed values: %s\n"
+            "(default: same as --cache-type-v)\n"
+            "no effect unless the model keeps a separate sliding-window KV cache",
+            get_all_kv_cache_types().c_str()
+        ),
+        [](common_params & params, const std::string & value) {
+            params.cache_type_v_swa = kv_cache_type_from_str(value);
+        }
+    ).set_env("LLAMA_ARG_CACHE_TYPE_V_SWA"));
+    add_opt(common_arg(
         {"--hellaswag"},
         "compute HellaSwag score over random tasks from datafile supplied with -f",
         [](common_params & params) {
