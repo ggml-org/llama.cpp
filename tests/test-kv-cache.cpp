@@ -2,6 +2,7 @@
 #include "llama-model.h"
 
 #include <numeric>
+#include <string>
 
 static void init_model(llama_model & model, uint32_t n_layer) {
     model.hparams = {};
@@ -16,6 +17,48 @@ static void init_model(llama_model & model, uint32_t n_layer) {
 
 int main() {
     llama_backend_init();
+
+    {
+        std::string errors;
+        llama_log_set([](ggml_log_level level, const char * text, void * user_data) {
+            if (level == GGML_LOG_LEVEL_ERROR) {
+                *static_cast<std::string *>(user_data) += text;
+            }
+        }, &errors);
+
+        for (llm_arch arch : { LLM_ARCH_DEEPSEEK2, LLM_ARCH_DEEPSEEK32, LLM_ARCH_DEEPSEEK4,
+                LLM_ARCH_DEEPSEEK41, LLM_ARCH_GLM_DSA, LLM_ARCH_GLM5_NEXT, LLM_ARCH_DOTS3NOTE,
+                LLM_ARCH_MISTRAL_LARGE4, LLM_ARCH_HY_V4, LLM_ARCH_MINIMAX_M3, LLM_ARCH_QWEN4EXP,
+                LLM_ARCH_DFLASH }) {
+            std::unique_ptr<llama_model> model(llama_model_create(arch, llama_model_default_params()));
+            init_model(*model, 1);
+            if (arch == LLM_ARCH_DEEPSEEK2) {
+                model->hparams.n_embd_head_k_mla_impl = 4;
+                model->hparams.n_embd_head_v_mla_impl = 4;
+            }
+
+            for (ggml_type type_k : { GGML_TYPE_F16, GGML_TYPE_F8_E4M3 }) {
+                for (ggml_type type_v : { GGML_TYPE_F16, GGML_TYPE_F8_E4M3 }) {
+                    if (type_k == GGML_TYPE_F16 && type_v == GGML_TYPE_F16) {
+                        continue;
+                    }
+                    auto params = llama_context_default_params();
+                    params.type_k = type_k;
+                    params.type_v = type_v;
+                    errors.clear();
+                    llama_context * ctx = llama_init_from_model(model.get(), params);
+                    GGML_ASSERT(ctx == nullptr);
+                    if (type_k == type_v || (!model->hparams.is_mla() && arch != LLM_ARCH_DEEPSEEK4 && arch != LLM_ARCH_DEEPSEEK41)) {
+                        GGML_ASSERT(errors.find("FP8 cache is not supported for architecture") != std::string::npos);
+                    } else {
+                        GGML_ASSERT(errors.find("model does not support different K") != std::string::npos);
+                    }
+                }
+            }
+        }
+
+        llama_log_set(nullptr, nullptr);
+    }
 
     {
         std::unique_ptr<llama_model> target(llama_model_create(LLM_ARCH_GEMMA4, llama_model_default_params()));
