@@ -16,7 +16,7 @@
 <style>
 	.logo {
 		--body: 'Llama Sans', var(--font-sans);
-		--mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
+		--mono: 'Llama Mono', ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
 		display: grid;
 		gap: 40px;
 		max-width: 1180px;
