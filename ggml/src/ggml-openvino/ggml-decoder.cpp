@@ -365,7 +365,9 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
         bool recurrent_sequence = false;
         for (int i = 0; i < m_cgraph->n_nodes && !recurrent_sequence; ++i) {
             const auto * consumer = m_cgraph->nodes[i];
-            if (consumer->op == GGML_OP_MUL_MAT_ID && consumer->src[1] == node) {
+            if (consumer->op == GGML_OP_ROPE && consumer->src[1] == node) {
+                return 11;
+            } else if (consumer->op == GGML_OP_MUL_MAT_ID && consumer->src[1] == node) {
                 return 1;
             } else if (consumer->op == GGML_OP_GATED_DELTA_NET) {
                 for (int j : {3, 4}) {
