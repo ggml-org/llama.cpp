@@ -7914,6 +7914,8 @@ static void ggml_compute_forward_pool_1d_ksp(
 
     const int64_t nr = ggml_nrows(src);
 
+    GGML_ASSERT(nr <= ggml_nrows(dst));
+
     for (int64_t ir = 0; ir < nr; ++ir) {
         const char * srow_bytes =            (const char *) src->data + ir * src->nb[1];
         float      * drow       = (float *) ((      char *) dst->data + ir * dst->nb[1]);
