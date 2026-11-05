@@ -2,22 +2,27 @@
 
 void llama_model_ricursive::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+    // optional: folded checkpoints have no embed_scale, the scale is already baked into token_embd
     ml.get_key(LLM_KV_EMBEDDING_SCALE,             hparams.f_embedding_scale, false);
-    ml.get_key(LLM_KV_SWIGLU_CLAMP,                hparams.f_swiglu_clamp,    false);
+    // optional: absent or 0 means no clamp (the reference tests `if clamp_threshold:`)
+    ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP, hparams.swiglu_clamp, hparams.n_layer_all, false);
 
-    if (!std::isfinite(hparams.f_swiglu_clamp) || hparams.f_swiglu_clamp < 0.0f) {
-        throw std::runtime_error(format("Ricursive: swiglu_clamp must be finite and non-negative, got %g", hparams.f_swiglu_clamp));
+    for (uint32_t il = 0; il < hparams.n_layer_all; ++il) {
+        if (!std::isfinite(hparams.swiglu_clamp[il]) || hparams.swiglu_clamp[il] < 0.0f) {
+            throw std::runtime_error(format("Ricursive: swiglu_clamp for layer %u must be finite and non-negative, got %g", il, hparams.swiglu_clamp[il]));
+        }
     }
 
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa);
     if (ml.get_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, false)) {
-        uint32_t n_pattern = 0;
-        ml.get_arr_n(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, n_pattern);
-        if (n_pattern != hparams.n_layer()) {
-            throw std::runtime_error(format("Ricursive: sliding_window_pattern has %u entries, expected %u", n_pattern, hparams.n_layer()));
+        uint32_t n_entries = 0;
+        ml.get_arr_n(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, n_entries);
+        if (n_entries != hparams.n_layer()) {
+            throw std::runtime_error(format("Ricursive: sliding_window_pattern has %u entries, expected %u", n_entries, hparams.n_layer()));
         }
     } else {
+        // RicursiveConfig default: full attention every 5th layer (i % 5 == 4)
         load_swa_pattern(ml, 5);
     }
 
@@ -118,6 +123,7 @@ llama_model_ricursive::graph::graph(const llama_model & model, const llm_graph_p
 
         ggml_tensor * Vinp = attn_inp;
         if (layer.attn_valres) {
+            // modeling_ricursive.py:404-405,182-185: valres = the scaled embeddings for every layer, V input = torch.lerp(valres, x, sigmoid(lambda)) = valres + blend*(x - valres)
             ggml_tensor * blend = ggml_sigmoid(ctx0, layer.attn_valres);
             Vinp = ggml_add(ctx0, valres, ggml_mul(ctx0, ggml_sub(ctx0, attn_inp, valres), blend));
             cb(Vinp, "attn_valres", il);
@@ -191,8 +197,9 @@ llama_model_ricursive::graph::graph(const llama_model & model, const llm_graph_p
         ggml_tensor * up = build_lora_mm(layer.ffn_up, cur, layer.ffn_up_s);
         cb(up, "ffn_up", il);
 
-        if (hparams.f_swiglu_clamp != 0.0f) {
-            cur = ggml_swiglu_clamp(ctx0, gate, up, hparams.f_swiglu_clamp);
+        // the reference clamps the raw gate before the activation (gate.clamp(max=c), then silu(gate) * up), not the silu output
+        if (hparams.swiglu_clamp[il] != 0.0f) {
+            cur = ggml_swiglu_clamp(ctx0, gate, up, hparams.swiglu_clamp[il]);
         } else {
             cur = ggml_swiglu_split(ctx0, gate, up);
         }

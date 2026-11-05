@@ -14,6 +14,7 @@ from .base import ModelBase, TextModel, gguf, logger
 @ModelBase.example("ricursiveAI/Ripple-65B-Preview")
 class RicursiveModel(TextModel):
     model_arch = gguf.MODEL_ARCH.RICURSIVE
+    # norms: post_attention_layernorm -> ATTN_POST_NORM, pre_feedforward_layernorm -> FFN_PRE_NORM (blk.N.ffn_norm); FFN_NORM is not in the arch's tensor list, it would claim post_attention_layernorm
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -50,13 +51,6 @@ class RicursiveModel(TextModel):
             if enabled and sum(name.endswith(suffix) for name in names) != self.block_count:
                 raise ValueError(f"Ricursive: expected one {suffix!r} tensor per layer")
 
-    def set_vocab(self):
-        self._set_vocab_gpt2()
-        # tokenizer_config.json has a short template without tools, transformers uses this file instead
-        if (tmpl_file := self.dir_model / "chat_template.jinja").is_file():
-            self.gguf_writer.remove_key(gguf.Keys.Tokenizer.CHAT_TEMPLATE)
-            self.gguf_writer.add_chat_template(tmpl_file.read_text(encoding="utf-8"))
-
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         hp = self.hparams
@@ -73,7 +67,7 @@ class RicursiveModel(TextModel):
         if clamp := hp.get("ffn_clamp_threshold"):
             if clamp < 0 or not math.isfinite(clamp):
                 raise ValueError(f"Ricursive: unsupported ffn_clamp_threshold {clamp!r}")
-            self.gguf_writer.add_swiglu_clamp(clamp)
+            self.gguf_writer.add_swiglu_clamp([float(clamp)] * self.block_count)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name.endswith(".value_res_lambda"):
