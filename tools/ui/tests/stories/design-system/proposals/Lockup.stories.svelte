@@ -1,4 +1,6 @@
 <script lang="ts" module>
+	import GlyphButtons from './lockup/GlyphButtons.svelte';
+	import LockupContexts from './lockup/LockupContexts.svelte';
 	import LockupSteps from './lockup/LockupSteps.svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 
@@ -13,6 +15,14 @@
 	});
 </script>
 
-<Story asChild name="Lockup proposal">
+<Story asChild name="Steps">
 	<LockupSteps />
+</Story>
+
+<Story asChild name="In context">
+	<LockupContexts />
+</Story>
+
+<Story asChild name="Glyph in buttons">
+	<GlyphButtons />
 </Story>
