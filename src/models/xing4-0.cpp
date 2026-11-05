@@ -452,18 +452,8 @@ ggml_tensor * llama_model_xing4_0::graph::build_hc_sinkhorn(
         int           il) const {
     GGML_UNUSED(il);
 
-    // comb is [src_hc, dst_hc, n_tokens] (ne0 = src). Mirrors the reference
-    // mhc_pre_big_fuse_with_clamp_tilelang kernel: softmax over src, then
-    // sinkhorn_iterations x (col-norm over src, row-norm over dst); eps is only
-    // added to the normalization denominators, never to the values.
-    // ggml_soft_max also performs the reference's first column normalization.
-    //
-    // NOTE: this decomposed fallback (only used when fused_dsv4_hc_comb is off)
-    // cannot add eps to the first src-normalization because ggml_soft_max
-    // divides by the raw sum. It keeps the exact reference semantics otherwise,
-    // including the [-30, 30] logits clamp applied by the caller; the fused
-    // ggml_dsv4_hc_comb path differs from the reference as described in the
-    // file header (no clamp, +eps on values, first denominator without eps).
+    // comb is [src_hc, dst_hc, n_tokens]. Mirrors the reference mhc_pre_big_fuse_with_clamp_tilelang kernel.
+    // Note: This decomposed fallback (used when fused_dsv4_hc_comb is off) keeps exact reference semantics.
     comb = ggml_soft_max(ctx0, comb);
 
     ggml_tensor * eps = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
