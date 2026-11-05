@@ -19,8 +19,6 @@ class RicursiveModel(TextModel):
         super().__init__(*args, **kwargs)
         hparams = self.hparams
 
-        if hparams.get("quantization_config") is not None or (self.dir_model / "hf_quant_config.json").is_file():
-            raise ValueError("Ricursive: quantized checkpoints are not supported")
         if (act := hparams.get("hidden_act", "silu")) != "silu":
             raise ValueError(f"Ricursive: unsupported hidden_act {act!r}")
 
