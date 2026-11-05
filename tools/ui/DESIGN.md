@@ -27,6 +27,11 @@ colors:
   cool-gray-200: 'oklch(0.91 0.005 250)'
   cool-gray-300: 'oklch(0.86 0.007 250)'
   cool-gray-400: 'oklch(0.81 0.01 250)'
+  beige-50: 'oklch(0.965 0.01 80)'
+  beige-100: 'oklch(0.936 0.015 81)'
+  beige-200: 'oklch(0.89 0.02 80)'
+  beige-400: 'oklch(0.72 0.025 76)'
+  beige-900: 'oklch(0.272 0.013 72)'
   red-400: 'oklch(0.69 0.2 27)'
   red-500: 'oklch(0.6 0.235 27)'
   red-450: 'oklch(0.635 0.229 28)'
@@ -730,7 +735,8 @@ The palette is achromatic. Hue appears only in the hairline edges (a cool grey a
 kept almost neutral) and in the status colours, which serve function only: green for success,
 amber for warning, red for errors and blue for information, saturated enough to read at a
 glance and tuned to text contrast in both modes. The brand orange belongs to the llama.cpp
-logotype and is not part of the UI palette.
+logotype and is not part of the UI palette. Beige (`beige-50` to `beige-900`) is the warm neutral for communications
+(posters, boards, the site); the UI itself stays on the greys.
 
 Light mode has two surface themes, which share everything else (the palette, buttons, fields,
 badges, shadows and dark mode): **Paper**, the default, sets white panels, fields and keys on a

@@ -28,6 +28,14 @@
 	--cool-gray-300: oklch(0.86 0.007 250);
 	--cool-gray-400: oklch(0.81 0.01 250);
 
+	/* beige: a warm neutral for communications (posters, boards, the site), after the type specimen's In use beige;
+	   the UI itself stays on the greys */
+	--beige-50: oklch(0.965 0.01 80);
+	--beige-100: oklch(0.936 0.015 81);
+	--beige-200: oklch(0.89 0.02 80);
+	--beige-400: oklch(0.72 0.025 76);
+	--beige-900: oklch(0.272 0.013 72);
+
 	/* red, yellow and green: each scale keeps the hue of its root (red-500, yellow-400, green-500) */
 	--red-400: oklch(0.69 0.2 27);
 	--red-450: oklch(0.635 0.229 28);

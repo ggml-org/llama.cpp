@@ -1,7 +1,8 @@
 <!--
-	Specimen boards and posters for Llama Sans in the poudre palette: the classic Swiss specimen boards' hues (a
-	Swiss blue, sky, teal, saffron, pink and a terracotta accent), powdered towards the beige and blues of the
-	Llama Sans Display In use story and pulled to the design system's status hues, on warm stone greys. Fixed colours, so they read the same in both themes. Set in Llama Sans Display and UI.
+	Specimen boards and posters for Llama Sans, after the classic Swiss specimen boards, in the design system's own
+	palette: its blues (a Swiss blue, sky, navy), green, amber and red, the greys, and beige as the warm neutral.
+	Light mixes stay within one hue. Fixed to light, so they read the same in both themes. Set in Llama Sans Display
+	and UI.
 -->
 <script lang="ts">
 	import '../../../brand/fonts/fonts.css';
@@ -172,36 +173,42 @@
 
 <style>
 	.boards {
-		/* the poudre palette: the Haas boards' hues, powdered towards the In use story's beige and pulled to the
-		   design system's status hues (blue 254, amber 78, red 28–40, green-teal 188), on warm stone greys and a
-		   beige-ink; the blues meet llama.app's hero blue and navy */
+		/* every colour from the design system's palette: its blues, greens, ambers and reds (the status fills and
+		   their steps), the greys, and beige as the warm neutral; mixes stay within one hue */
 		--navy:
-			radial-gradient(ellipse at 15% 10%, #293e5a 0%, transparent 55%),
-			linear-gradient(160deg, #1b2c44 0%, #1e3049 55%, #20334f 100%);
-		--navy-flat: #20334f;
-		--swiss: linear-gradient(
-			160deg,
-			#517dae 0%,
-			#4671a5 55%,
-			#3d6293 100%
-		); /* a powdered mid blue */
-		--swiss-flat: #4671a5;
-		--sky: #9bbfdf;
+			radial-gradient(
+				ellipse at 15% 10%,
+				color-mix(in oklab, var(--blue-800), black 15%) 0%,
+				transparent 55%
+			),
+			linear-gradient(
+				160deg,
+				color-mix(in oklab, var(--blue-800), black 38%) 0%,
+				color-mix(in oklab, var(--blue-800), black 28%) 100%
+			);
+		--navy-flat: color-mix(in oklab, var(--blue-800), black 28%);
+		--swiss: linear-gradient(160deg, var(--blue-500) 0%, var(--blue-550) 55%, var(--blue-650) 100%);
+		--swiss-flat: var(--blue-550);
+		--sky: var(--blue-400);
 		--mist: linear-gradient(
 			160deg,
-			#c4ddf6 0%,
-			#d0e4f7 55%,
-			#dfecf9 100%
-		); /* llama.app's hero blue */
-		--grey: linear-gradient(160deg, #a69d93 0%, #bdb6ad 55%, #d9d3cc 100%); /* warm stone */
-		--cream: #efe9df; /* In use's beige */
-		--sand: #f6f2eb;
-		--sage: #daddcc;
-		--teal: #70a49e;
-		--saffron: #e1b671;
-		--pink: #edc6c6; /* poudre */
-		--vermilion: #c97152; /* a terracotta between the danger red and clay; the brand orange stays with the logotype */
-		--ink: #2b2620; /* In use's beige-ink */
+			color-mix(in oklab, var(--blue-400), white 62%) 0%,
+			color-mix(in oklab, var(--blue-400), white 72%) 100%
+		);
+		--grey: linear-gradient(
+			160deg,
+			var(--neutral-400) 0%,
+			var(--neutral-300) 55%,
+			var(--neutral-200) 100%
+		);
+		--cream: var(--beige-100);
+		--sand: var(--beige-50);
+		--sage: color-mix(in oklab, var(--green-550) 14%, var(--beige-100));
+		--teal: var(--green-550);
+		--saffron: var(--amber-400);
+		--pink: color-mix(in oklab, var(--red-400), white 62%);
+		--vermilion: var(--red-550); /* the danger fill; the brand orange stays with the logotype */
+		--ink: var(--beige-900);
 		--display: 'Llama Sans Display', var(--font-sans);
 		display: grid;
 		grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -320,7 +327,7 @@
 	.alphabet {
 		grid-template-columns: 1fr 1fr;
 		gap: 4%;
-		background: #ebe7e2;
+		background: var(--beige-200);
 		color: var(--ink);
 	}
 	.alphabet .info {
@@ -369,7 +376,7 @@
 		display: grid;
 		gap: 3cqi;
 		padding: 2.4cqi;
-		background: #faf7f3;
+		background: var(--beige-50);
 		box-shadow: 0 0.4cqi 1.2cqi rgb(0 0 0 / 0.06);
 	}
 	.mini .photo {
@@ -405,16 +412,16 @@
 		right: 0.8cqi;
 	}
 	.photo.sky {
-		background: linear-gradient(180deg, #8db2d5 0%, #9bbfdf 100%);
+		background: linear-gradient(180deg, var(--blue-450) 0%, var(--blue-400) 100%);
 	}
 	.photo.sea {
-		background: linear-gradient(180deg, #70a49e 0%, #619490 100%);
+		background: linear-gradient(180deg, var(--green-550) 0%, var(--green-650) 100%);
 	}
 	.photo.peach {
-		background: linear-gradient(170deg, #d6886a 0%, #c97152 100%);
+		background: linear-gradient(170deg, var(--red-450) 0%, var(--red-550) 100%);
 	}
 	.photo.mist {
-		background: linear-gradient(180deg, #e1b671 0%, #d6a45f 100%); /* saffron */
+		background: linear-gradient(180deg, var(--amber-250) 0%, var(--amber-400) 100%); /* saffron */
 	}
 
 	/* circles */
@@ -431,7 +438,7 @@
 		width: 80%;
 		aspect-ratio: 1;
 		border-radius: 50%;
-		background: #faf7f3;
+		background: var(--beige-50);
 		color: var(--ink);
 		container-type: inline-size;
 	}
@@ -473,7 +480,7 @@
 		background: var(--pink);
 	}
 	.c11 {
-		background: radial-gradient(circle at 35% 35%, #a69d93, #8d847b);
+		background: radial-gradient(circle at 35% 35%, var(--neutral-400), var(--neutral-500));
 	}
 	.c12 {
 		background: var(--sky);
@@ -497,7 +504,7 @@
 		font-weight: 700;
 	}
 	.stack .sky {
-		color: #f5c4b5; /* a light terracotta, readable on the blue */
+		color: color-mix(in oklab, var(--red-400), white 45%); /* a light red, readable on the blue */
 	}
 	.stack .foot {
 		align-self: end;
@@ -532,8 +539,8 @@
 	/* exhibition poster */
 	.light {
 		grid-template-rows: auto auto 1fr auto;
-		background: #191511;
-		color: #f1eee9;
+		background: var(--neutral-950);
+		color: var(--neutral-100);
 	}
 	.light .t {
 		font: 600 7.4cqi / 1.05 var(--display);
@@ -565,7 +572,7 @@
 	.classic {
 		grid-template-rows: 1fr auto auto;
 		gap: 4%;
-		background: #faf7f3;
+		background: var(--beige-50);
 		color: var(--ink);
 	}
 	.photo.tall {

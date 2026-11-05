@@ -5,8 +5,8 @@
 	the palette's roles, so the posters compare like for like. Set in Llama Sans Display and UI.
 -->
 <script lang="ts">
-	import '../../../brand/fonts/fonts.css';
-	import { noopChatActions, userMessage } from '../../../chat/messages/fixtures';
+	import '../fonts/fonts.css';
+	import { noopChatActions, userMessage } from '../../chat/messages/fixtures';
 	import type { Palette } from './palettes';
 	import { ChevronRight, Clock, Download, Gauge, Hash } from '@lucide/svelte';
 	import { BadgeInfo, BadgesModality } from '$lib/components/app';
