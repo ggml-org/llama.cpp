@@ -39,9 +39,11 @@ if (GGML_OPENCL_USE_ADRENO_BIN_KERNELS)
     target_link_libraries(${TARGET_NAME} PRIVATE ${CMAKE_DL_LIBS})
 endif ()
 
-# The library is only published for Windows. A failed download is not fatal:
-# without the library the backend uses its builtin kernels.
-if (GGML_OPENCL_USE_ADRENO_BIN_KERNELS AND GGML_OPENCL_ADRENO_BIN_KERNELS_FETCH AND WIN32)
+# The library is only published for Windows on ARM64. A failed download is not
+# fatal: without the library the backend uses its builtin kernels.
+string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" ADRENO_BIN_KERNELS_SYSTEM_PROCESSOR)
+if (GGML_OPENCL_USE_ADRENO_BIN_KERNELS AND GGML_OPENCL_ADRENO_BIN_KERNELS_FETCH AND
+    WIN32 AND ADRENO_BIN_KERNELS_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
     # Bump the version and hash together when a new library release is published.
     set(ADRENO_BIN_KERNELS_VERSION "0.0.15")
     set(ADRENO_BIN_KERNELS_ZIP_SHA256 "325c89a3bce51abe95f40c6bacece005d5ca9cf6166eb5f17d33592cd13ab795")
