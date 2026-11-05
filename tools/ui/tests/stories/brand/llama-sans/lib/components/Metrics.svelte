@@ -56,7 +56,7 @@
 	<div>
 		<dt>UI</dt>
 
-		<dd>tracking +6 · kerning after SF Pro · line 1.25, cap-centred</dd>
+		<dd>tracking +3 · kerning after SF Pro · line 1.25, cap-centred</dd>
 	</div>
 </dl>
 

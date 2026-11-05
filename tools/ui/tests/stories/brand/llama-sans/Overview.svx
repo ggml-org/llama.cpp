@@ -48,7 +48,7 @@ It isn't featureless, though. A few angled cuts give it just enough character to
 	<Metrics />
 </Section>
 
-<Version name="UI" statement="For the interface and the page around it." specs="Tracking +6 · kerning matched to SF Pro · line 1.25, cap-centred">
+<Version name="UI" statement="For the interface and the page around it." specs="Tracking +3 · kerning matched to SF Pro · line 1.25, cap-centred">
 	<UISample />
 </Version>
 
