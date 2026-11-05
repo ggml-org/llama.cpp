@@ -631,7 +631,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         std::vector<float> swiglu_clamp;
         swiglu_clamp.reserve(n_layer);
         for (uint32_t il = 0; il < n_layer; il++) {
-            swiglu_clamp.push_back(il % 3 == 1 ? 0.0f : 2.0f); // mix clamped and unclamped layers
+            swiglu_clamp.push_back(il % 3 == 1 ? 0.0f : 2.0f);
         }
         ms.add_kv(LLM_KV_EMBEDDING_SCALE, 16.0f);
         ms.add_kv(LLM_KV_SWIGLU_CLAMP,    swiglu_clamp);
