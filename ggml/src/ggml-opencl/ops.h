@@ -83,6 +83,8 @@ struct ggml_opencl_relu_kernels {
 struct ggml_opencl_sigmoid_kernels {
     cl_kernel kernel_sigmoid_f32;
     cl_kernel kernel_sigmoid_f16;
+    cl_kernel kernel_sigmoid_f32_nc;
+    cl_kernel kernel_sigmoid_f16_nc;
 };
 
 struct ggml_opencl_tri_kernels {
@@ -234,6 +236,13 @@ struct ggml_opencl_argsort_kernels {
 struct ggml_opencl_sum_rows_kernels {
     cl_kernel kernel_sum_rows_f32;
     cl_kernel kernel_sum_rows_f32_4;
+};
+
+struct ggml_opencl_dsv4_hc_kernels {
+    cl_kernel kernel_dsv4_hc_pre = nullptr;
+    cl_kernel kernel_dsv4_hc_post[2] = {};
+    size_t local_dsv4_hc_pre = 0;
+    size_t local_dsv4_hc_post[2] = {};
 };
 
 struct ggml_opencl_cumsum_kernels {
@@ -506,6 +515,7 @@ struct ggml_opencl_repack_kernels {
 
 struct ggml_opencl_mul_mat_kernels {
     cl_kernel kernel_mul_mat_f32_f32;
+    cl_kernel kernel_mul_mv_f32_f32_r2 = nullptr;
     cl_kernel kernel_fwht[2];
     size_t fwht_workgroup_size[2];
     cl_kernel kernel_mul_mat_f16_f16;
@@ -653,10 +663,13 @@ struct ggml_opencl_mul_mat_kernels {
     int q3_k_mv_rows = 2;
     int q3_k_mv_nsg = 8;
     cl_kernel kernel_gemv_noshuffle_q2_0_f32 = nullptr;
+    cl_kernel kernel_gemv_noshuffle_q2_0_f32_wide = nullptr;
+    size_t q2_0_mv_workgroup_size = 512;
+    size_t q2_0_mv_workgroup_size_wide = 512;
     cl_kernel kernel_gemm_noshuffle_q2_0_f32 = nullptr;
     cl_kernel kernel_gemm_noshuffle_q2_0_q8_1_dp4a = nullptr;
     cl_kernel kernel_gemm_noshuffle_q2_0_q8_1_dp4a_narrow = nullptr;
-    int q2_0_mv_nsg = 8;
+    int q2_0_mv_nsg = 32;
     cl_kernel kernel_gemv_noshuffle_iq2_s_f32 = nullptr;
     cl_kernel kernel_gemm_noshuffle_iq2_s_f32 = nullptr;
     cl_kernel kernel_gemm_noshuffle_iq2_s_q8_1_dp4a = nullptr;
@@ -905,6 +918,7 @@ void ggml_cl_lightning_indexer(ggml_backend_t backend, const ggml_tensor * src0,
 void ggml_cl_top_k(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_cl_top_k_mask(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_cl_argsort(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
+void ggml_cl_dsv4_hc(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_cl_sum_rows(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_cl_cumsum(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_cl_glu(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
@@ -1018,6 +1032,7 @@ void ggml_cl_load_kernels_lightning_indexer(ggml_backend_opencl_context * backen
 void ggml_cl_load_kernels_top_k(ggml_backend_opencl_context * backend_ctx);
 void ggml_cl_load_kernels_top_k_mask(ggml_backend_opencl_context * backend_ctx);
 void ggml_cl_load_kernels_argsort(ggml_backend_opencl_context * backend_ctx);
+void ggml_cl_load_kernels_dsv4_hc(ggml_backend_opencl_context * backend_ctx);
 void ggml_cl_load_kernels_sum_rows(ggml_backend_opencl_context * backend_ctx);
 void ggml_cl_load_kernels_cumsum(ggml_backend_opencl_context * backend_ctx);
 void ggml_cl_load_kernels_glu(ggml_backend_opencl_context * backend_ctx);

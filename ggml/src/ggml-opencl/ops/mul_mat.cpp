@@ -697,6 +697,17 @@ void ggml_cl_load_kernels_mul_mat(ggml_backend_opencl_context * backend_ctx) {
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
         CL_CHECK((backend_ctx->mul_mat.kernel_mul_mat_f32_f32 = clCreateKernel(prog, "kernel_mul_mat_f32_f32", &err), err));
+        if (backend_ctx->adreno_gen == ADRENO_GPU_GEN::A8X) {
+            cl_kernel kernel = clCreateKernel(prog, "kernel_mul_mv_f32_f32_r2", &err);
+            CL_CHECK(err);
+            size_t max_workgroup;
+            CL_CHECK(clGetKernelWorkGroupInfo(kernel, backend_ctx->device, CL_KERNEL_WORK_GROUP_SIZE, sizeof(max_workgroup), &max_workgroup, nullptr));
+            if (max_workgroup >= 64) {
+                backend_ctx->mul_mat.kernel_mul_mv_f32_f32_r2 = kernel;
+            } else {
+                CL_CHECK(clReleaseKernel(kernel));
+            }
+        }
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -3261,7 +3272,7 @@ static bool ggml_cl_mm_q6_k_f32(ggml_backend_t backend, const ggml_tensor * src0
     return true;
 }
 
-static void ggml_cl_mv_f32_f32(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+static void ggml_cl_mv_f32_f32(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, bool f32_use_mv) {
     ggml_backend_opencl_context * backend_ctx = (ggml_backend_opencl_context *) backend->context;
 
     ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *) src0->extra;
@@ -3289,6 +3300,9 @@ static void ggml_cl_mv_f32_f32(ggml_backend_t backend, const ggml_tensor * src0,
     //GGML_ASSERT(ne02 == ne12);
     kernel = backend_ctx->mul_mat.kernel_mul_mat_f32_f32;
     nrows = 4;
+    if (f32_use_mv && ne11 > 1 && backend_ctx->mul_mat.kernel_mul_mv_f32_f32_r2 != nullptr) {
+        kernel = backend_ctx->mul_mat.kernel_mul_mv_f32_f32_r2;
+    }
 
     if (backend_ctx->gpu_family == INTEL) {
         nth0 = 32;
@@ -3326,8 +3340,9 @@ static void ggml_cl_mv_f32_f32(ggml_backend_t backend, const ggml_tensor * src0,
     CL_CHECK(clSetKernelArg(kernel, 23, sizeof(int),      &r3));
 
     int64_t ny = (ne11 + nrows - 1)/nrows;
+    int64_t nx = kernel == backend_ctx->mul_mat.kernel_mul_mv_f32_f32_r2 ? CEIL_DIV(ne01, 2) : ne01;
 
-    size_t global_work_size[] = {(size_t)ne01*nth0, (size_t)ny*nth1, (size_t)ne12*ne13};
+    size_t global_work_size[] = {(size_t)nx*nth0, (size_t)ny*nth1, (size_t)ne12*ne13};
     size_t local_work_size[] = {(size_t)nth0, (size_t)nth1, 1};
 
     backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
@@ -6258,9 +6273,16 @@ void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, const ggm
     // Override with GGML_OPENCL_A7X_F32_LM_BYPASS=0.
     static const char * a7x_f32lm_env    = getenv("GGML_OPENCL_A7X_F32_LM_BYPASS");
     static const bool   a7x_f32lm_bypass = (a7x_f32lm_env == nullptr || a7x_f32lm_env[0] != '0');
+    // The 64-column tile wastes work on small F32 matrices, including block rotations.
+    const cl_ulong f32_offset0 = src0t == GGML_TYPE_F32 ? ((ggml_tensor_extra_cl *) src0->extra)->offset + src0->view_offs : 0;
+    const bool f32_use_mv = (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E ||
+                            (backend_ctx->mul_mat.kernel_mul_mv_f32_f32_r2 != nullptr && ne00 <= 512)) &&
+                           src0t == GGML_TYPE_F32 && ne00 >= 256 && ne00 <= 1024 && ne00 % 16 == 0 && ne01 <= 512 && ne11 <= 16 &&
+                           ne02 == 1 && ne12 == 1 && ne13 == 1 &&
+                           ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && (f32_offset0 | offset1) % 16 == 0;
     if (src1t == GGML_TYPE_F32 &&
         ne00 % 16 == 0 &&
-        ne11 > 1 &&
+        ne11 > 1 && !f32_use_mv &&
         !(a7x_f32lm_bypass && src0t == GGML_TYPE_F32 && ne11 > 8 &&
           backend_ctx->adreno_gen == ADRENO_GPU_GEN::A7X)) {
         switch(src0t) {
@@ -6467,7 +6489,7 @@ void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, const ggm
     switch (src0t) {
         case GGML_TYPE_F32:
             GGML_ASSERT(src1t == GGML_TYPE_F32);
-            ggml_cl_mv_f32_f32(backend, src0, src1, dst);
+            ggml_cl_mv_f32_f32(backend, src0, src1, dst, f32_use_mv);
             return;
         case GGML_TYPE_F16:
             if (src1t == GGML_TYPE_F32) {

@@ -379,25 +379,30 @@ void ggml_cl_load_kernels_mul_mat_adreno(ggml_backend_opencl_context * backend_c
 #endif
         if (const char * env = getenv("GGML_OPENCL_Q2_0_MV_NSG")) {
             const int nsg = atoi(env);
-            if (nsg == 1 || nsg == 2 || nsg == 4 || nsg == 8) {
+            if (nsg == 1 || nsg == 2 || nsg == 4 || nsg == 8 || nsg == 16 || nsg == 32) {
                 backend_ctx->mul_mat.q2_0_mv_nsg = nsg;
             }
         }
-        for (;;) {
-            const std::string opts = compile_opts + " -DQ2_0_MV_NSG=" + std::to_string(backend_ctx->mul_mat.q2_0_mv_nsg);
+        for (int wide = 0; wide < 2; ++wide) {
+            const std::string opts = compile_opts + " -DQ2_0_MV_WIDE=" + std::to_string(wide);
             cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), opts);
             cl_kernel kernel = clCreateKernel(prog, "kernel_gemv_noshuffle_q2_0_f32", &err);
             CL_CHECK(err);
             CL_CHECK(clReleaseProgram(prog));
             size_t max_workgroup;
             CL_CHECK(clGetKernelWorkGroupInfo(kernel, backend_ctx->device, CL_KERNEL_WORK_GROUP_SIZE, sizeof(max_workgroup), &max_workgroup, nullptr));
-            if (64*(size_t)backend_ctx->mul_mat.q2_0_mv_nsg <= max_workgroup) {
-                backend_ctx->mul_mat.kernel_gemv_noshuffle_q2_0_f32 = kernel;
-                break;
+            size_t workgroup = 512;
+            while (workgroup > max_workgroup) {
+                workgroup /= 2;
             }
-            CL_CHECK(clReleaseKernel(kernel));
-            GGML_ASSERT(backend_ctx->mul_mat.q2_0_mv_nsg > 1);
-            backend_ctx->mul_mat.q2_0_mv_nsg /= 2;
+            GGML_ASSERT(workgroup >= 64);
+            if (wide) {
+                backend_ctx->mul_mat.kernel_gemv_noshuffle_q2_0_f32_wide = kernel;
+                backend_ctx->mul_mat.q2_0_mv_workgroup_size_wide = workgroup;
+            } else {
+                backend_ctx->mul_mat.kernel_gemv_noshuffle_q2_0_f32 = kernel;
+                backend_ctx->mul_mat.q2_0_mv_workgroup_size = workgroup;
+            }
         }
         GGML_LOG_CONT(".");
     }
@@ -3785,7 +3790,15 @@ void ggml_cl_mul_mat_q2_0_f32_adreno(ggml_backend_t backend, const ggml_tensor *
     const int k = src0->ne[0];
 
     if (n == 1 || !ggml_is_contiguous(src1) || offset1 % backend_ctx->alignment != 0) {
-        cl_kernel gemv = backend_ctx->mul_mat.kernel_gemv_noshuffle_q2_0_f32;
+        const bool wide = m >= 16384 && m % 8 == 0;
+        cl_kernel gemv = wide ? backend_ctx->mul_mat.kernel_gemv_noshuffle_q2_0_f32_wide : backend_ctx->mul_mat.kernel_gemv_noshuffle_q2_0_f32;
+        const size_t workgroup = wide ? backend_ctx->mul_mat.q2_0_mv_workgroup_size_wide : backend_ctx->mul_mat.q2_0_mv_workgroup_size;
+        const size_t rows = wide ? 8 : 4;
+        size_t nsg = std::min((size_t)backend_ctx->mul_mat.q2_0_mv_nsg, wide ? size_t(8) : m >= 4096 ? size_t(16) : size_t(32));
+        while (nsg > (size_t)k/64 || nsg*16 > workgroup) {
+            nsg /= 2;
+        }
+        const size_t lanes = workgroup/nsg;
         const int stride_d = dst->ne[0];
         const int stride_b = src1->nb[1]/sizeof(float);
         CL_CHECK(clSetKernelArg(gemv,  0, sizeof(cl_mem),    &extra0->qs));
@@ -3798,9 +3811,8 @@ void ggml_cl_mul_mat_q2_0_f32_adreno(ggml_backend_t backend, const ggml_tensor *
         CL_CHECK(clSetKernelArg(gemv,  7, sizeof(int),       &m));
         CL_CHECK(clSetKernelArg(gemv,  8, sizeof(int),       &stride_b));
         CL_CHECK(clSetKernelArg(gemv,  9, sizeof(int),       &stride_d));
-        const size_t nsg = backend_ctx->mul_mat.q2_0_mv_nsg;
-        size_t global[] = { (size_t)CEIL_DIV(m, 128)*64, (size_t)n*nsg, 1 };
-        size_t local[] = { 64, nsg, 1 };
+        size_t global[] = { (size_t)CEIL_DIV(m, rows*lanes)*lanes, (size_t)n*nsg, 1 };
+        size_t local[] = { lanes, nsg, 1 };
         backend_ctx->enqueue_ndrange_kernel(gemv, 3, global, local, dst);
         return;
     }
@@ -9587,7 +9599,8 @@ void ggml_cl_mul_mat_q4_K_glu_fused(ggml_backend_t backend, ggml_tensor * gate_t
     // byte-identical to the per-op path. Keep the maxwg query as a further floor
     // for any driver that reports < 512.
     size_t maxwg = backend_ctx->get_kernel_workgroup_size(kernel);
-    size_t nsg_y = 8;
+    // X2E: 4 is faster than 8 on every q4_K FFN shape measured there
+    size_t nsg_y = backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E ? 4 : 8;
     while (nsg_y > 1 && 64 * nsg_y > maxwg) { nsg_y >>= 1; }
     size_t local_work_size[3]  = { 64, nsg_y, 1 };
     size_t global_work_size[3] = { (size_t)CEIL_DIV(M / 2, 64) * 64, nsg_y, 1 };

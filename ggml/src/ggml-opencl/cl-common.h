@@ -829,6 +829,7 @@ struct ggml_backend_opencl_context {
     ggml_opencl_top_k_mask_kernels top_k_mask = {};
     ggml_opencl_lightning_indexer_kernels lightning_indexer = {};
     ggml_opencl_argsort_kernels argsort = {};
+    ggml_opencl_dsv4_hc_kernels dsv4_hc = {};
     ggml_opencl_sum_rows_kernels sum_rows = {};
     ggml_opencl_cumsum_kernels cumsum = {};
     ggml_opencl_repeat_kernels repeat = {};
@@ -999,6 +1000,14 @@ struct ggml_backend_opencl_context {
     }
 
     ~ggml_backend_opencl_context() {
+        if (dsv4_hc.kernel_dsv4_hc_pre) {
+            CL_CHECK(clReleaseKernel(dsv4_hc.kernel_dsv4_hc_pre));
+        }
+        for (int i = 0; i < 2; ++i) {
+            if (dsv4_hc.kernel_dsv4_hc_post[i]) {
+                CL_CHECK(clReleaseKernel(dsv4_hc.kernel_dsv4_hc_post[i]));
+            }
+        }
         if (iq1_s_grid_image) {
             CL_CHECK(clReleaseMemObject(iq1_s_grid_image));
         }
