@@ -748,6 +748,40 @@ def test_cache_reuse_does_not_restore_shifted_checkpoint():
         assert lp == pytest.approx(lp_expected, abs=1e-3)
 
 
+# a request that goes back to a position that already has a checkpoint keeps it instead of copying the state again
+def test_checkpoint_reused_not_copied(tmp_path):
+    server = ServerPreset.tinylfm2()
+    server.n_ubatch = 32 # end-of-prompt checkpoints at n - 36 and n - 4
+    server.debug = True
+    server.log_path = str(tmp_path / "server.log")
+    server.start()
+
+    words = ["budget", "hiring", "roadmap", "risk", "vendor", "launch", "audit", "review"] * 4
+    res = server.make_request("POST", "/tokenize", data={
+        "content": " ".join(f"Item {i}: the {w} report was filed on day {i % 7} by team {i % 5}." for i, w in enumerate(words)),
+    })
+    assert res.status_code == 200
+    tokens = res.body["tokens"]
+    prefix, tail = tokens[:-16], tokens[-16:]
+
+    # same prefix, different tail of the same length: the second request restores the checkpoint at n - 36 and
+    # reaches it again while processing
+    for t in [tail, tail[::-1]]:
+        res = server.make_request("POST", "/completion", data={
+            "prompt": prefix + t,
+            "n_predict": 1,
+            "cache_prompt": True,
+        })
+        assert res.status_code == 200
+
+    server.stop()
+
+    with open(server.log_path, encoding="utf-8", errors="replace") as f:
+        log = f.read()
+    assert "reusing context checkpoint" in log
+    assert "superseding context checkpoint" not in log
+
+
 # checkpoint appendix: magic(4) version(4) count(4), then per checkpoint
 # n_tokens(8) pos_min(4) pos_max(4) and three blobs (target, draft, speculative), each size(8) + data
 def parse_ckpt_appendix(data):
