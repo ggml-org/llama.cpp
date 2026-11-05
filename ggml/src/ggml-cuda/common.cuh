@@ -1091,27 +1091,6 @@ static __device__ __forceinline__ int ggml_cuda_tq1_0_symbols4(const int b4, con
 #endif // defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
 }
 
-// Raw ternary digits 0..2 (no -1 bias) of the four bytes of b4 at trit position n, one digit per
-// byte. Identical SWAR chain to ggml_cuda_tq1_0_symbols4 minus the final __vsub4: the planar GEMV
-// kernels (mmvq-tq-pt.cuh) keep the digits unsigned and subtract the exact integer sum of the
-// activations once per 32 elements, which saves one ALU op per four weights and keeps every dp4a
-// operand non-negative on the weight side.
-static __device__ __forceinline__ int ggml_cuda_tq1_0_digits4(const int b4, const int p3n) {
-    const int wlo = ((b4     ) & 0x00FF00FF) * p3n;   // 16-bit lanes: bytes 0 and 2 of b4
-    const int whi = ((b4 >> 8) & 0x00FF00FF) * p3n;   // 16-bit lanes: bytes 1 and 3
-
-    const int dlo = (((wlo & 0x00FF00FF) * 3) >> 8) & 0x00FF00FF;   // digits of bytes 0, 2
-    const int dhi = (((whi & 0x00FF00FF) * 3) >> 8) & 0x00FF00FF;   // digits of bytes 1, 3
-
-#if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
-    const int merged = (dlo & 0x000000FF) | ((dhi & 0x000000FF) << 8)
-                     | (dlo & 0x00FF0000) | ((dhi & 0x00FF0000) << 8);
-    return merged;
-#else
-    return __byte_perm(dlo, dhi, 0x6240);
-#endif // defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
-}
-
 // 3^n for the five trit positions of one TQ1_0 byte. Select chain: n is uniform per call but is
 // not known at compile time (it comes from iqs), and a branch here would diverge the warp.
 static __device__ __forceinline__ int ggml_cuda_tq1_0_pow3(const int n) {

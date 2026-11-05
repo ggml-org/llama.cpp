@@ -1,5 +1,4 @@
 #include "mmvq.cuh"
-#include "mmvq-tq-pt.cuh"
 #include "quantize.cuh"
 #include "unary.cuh"
 #include "vecdotq.cuh"
@@ -1584,33 +1583,11 @@ void ggml_cuda_mul_mat_vec_q(
     const int64_t ne10_padded = GGML_PAD(ne10, MATRIX_ROW_PADDING);
     ggml_cuda_pool_alloc<char> src1_q8_1(ctx.pool(), ne13*ne12 * ne11*ne10_padded * sizeof(block_q8_1)/QK8_1);
 
-    // Ternary GEMV: planar-transposed activations (mmvq-tq-pt.cuh). The PT column is byte for byte
-    // the same size as the AoS one, so the allocation below and every stride further down are shared.
-    //
-    // The activation layout is baked in right here, before quantization, so every host-side
-    // invariant the PT launchers rely on has to be decided here as well. A shape the PT path does
-    // not describe falls back to AoS instead of aborting at run time.
-    const bool has_fusion_local = fusion_local.gate != nullptr || fusion_local.x_bias != nullptr ||
-                                  fusion_local.gate_bias != nullptr || fusion_local.x_scale != nullptr ||
-                                  fusion_local.gate_scale != nullptr || fusion_local.shared_up != nullptr;
-    const int64_t pt_nchannels_dst = ids ? ne1 : ne2;
-    const int64_t pt_ncols_dst     = ids ? ne2 : ne1;
-    // MUL_MAT_ID walks the channel dimension through ids, so the ratio is only meaningful without ids.
-    const bool pt_channels_ok = ids || (ne02 >= 1 && pt_nchannels_dst % ne02 == 0 && pt_nchannels_dst >= ne02);
-    const bool pt_samples_ok  = ne03 >= 1 && ne3 % ne03 == 0 && ne3 >= ne03;
-    const bool pt_slots_ok    = pt_ncols_dst >= 1 && pt_ncols_dst <= TQ_PT_MAX_SLOTS;
-    const bool use_tq_pt = pt_channels_ok && pt_samples_ok && pt_slots_ok && mul_mat_vec_tq_pt_supported(
-        src0->type, ne00, has_fusion_local, ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size);
-
     {
         const int64_t s11 = src1->nb[1] / ts_src1;
         const int64_t s12 = src1->nb[2] / ts_src1;
         const int64_t s13 = src1->nb[3] / ts_src1;
-        if (use_tq_pt) {
-            quantize_row_q8_1_pt_cuda(src1_d, src1_q8_1.get(), src0->type, ne10, s11, s12, s13, ne10_padded, ne11, ne12, ne13, stream);
-        } else {
-            quantize_row_q8_1_cuda(src1_d, nullptr, src1_q8_1.get(), src0->type, ne10, s11, s12, s13, ne10_padded, ne11, ne12, ne13, stream);
-        }
+        quantize_row_q8_1_cuda(src1_d, nullptr, src1_q8_1.get(), src0->type, ne10, s11, s12, s13, ne10_padded, ne11, ne12, ne13, stream);
     }
 
     const int64_t s01 = src0->nb[1] / ts_src0;
@@ -1634,16 +1611,6 @@ void ggml_cuda_mul_mat_vec_q(
     const int64_t stride_channel_y   = ids ? s11  : s12;
 
     const int64_t ids_stride = ids ? ids->nb[1] / ggml_type_size(ids->type) : 0;
-
-    if (use_tq_pt) {
-        mul_mat_vec_tq_pt(
-            src0->data, src0->type, src1_q8_1.get(), ids_d, dst_d, ne00,
-            ne01,              ncols_dst,     s01, stride_col_y,     stride_col_dst,
-            ne02, nchannels_y, nchannels_dst, s02, stride_channel_y, stride_channel_dst,
-            ne03,              ne3,           s03, s13,              s3,               ids_stride,
-            (int) (ne10_padded / TQ_PT_QK), stream);
-        return;
-    }
 
     mul_mat_vec_q_switch_type(
         src0->data, src0->type, src1_q8_1.get(), ids_d, fusion_local, dst_d, ne00,
