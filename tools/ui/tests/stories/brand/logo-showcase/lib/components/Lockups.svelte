@@ -6,7 +6,8 @@
 <section aria-label="The icon in Llama Sans" class="type">
 	<span class="kicker">In Llama Sans · U+E000</span>
 
-	<p class="lockup display"> {name}</p>
+	<!-- the capital icon, U+E001: the lockup's proportion, typed -->
+	<p class="lockup display"> {name}</p>
 
 	<p class="lockup ui">
 		<span class="pill"> Open in Llama</span><span class="pill ghost"> llama.app</span>

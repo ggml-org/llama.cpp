@@ -1,6 +1,7 @@
 <!--
-	How the Llama icon is used, one case per section: as a glyph of Llama Sans (U+E000) in display type, in buttons,
-	in a download badge and in running text, then as the web app's favicon, PWA, maskable and Apple touch icons and
+	How the Llama icon is used, one case per section: as its two glyphs of Llama Sans (U+E000 for text, U+E001, the
+	capital form at the lockup's proportion) in display type and buttons, the lockup in context, in a download badge
+	and in running text, then as the web app's favicon, PWA, maskable and Apple touch icons and
 	its splash screens, with their proportions and placement drawn in. The app icons follow the web UI's own
 	pwa-assets.config.ts (PWA_ASSET_GENERATOR) and make-icons-circular.js, but are drawn with the L: the files it ships
 	still carry the old llama.cpp mark. It sits in the logo showcase's frame (ShowcaseFrame), on its colours.
@@ -143,6 +144,10 @@
 		return { side, transform: `translate(${x} ${y}) scale(${side / SIZE})`, x, y };
 	}
 
+	// llama.app's hero, as on the brand's boards
+	const HERO =
+		'radial-gradient(ellipse at 15% 10%, #dcecfb 0%, transparent 55%), radial-gradient(ellipse at 90% 95%, #e8f2fc 0%, transparent 50%), linear-gradient(160deg, #c4ddf6 0%, #d0e4f7 55%, #dfecf9 100%)';
+
 	const badges = [
 		{ name: 'Llama', platform: 'macOS', top: 'Download for' },
 		{ name: 'llama.cpp', platform: 'GitHub', top: 'Get it on' }
@@ -150,19 +155,28 @@
 </script>
 
 <!-- 1. in type -->
-<p class="kicker">In Llama Sans · U+E000</p>
+<p class="kicker">In Llama Sans · U+E000 and U+E001</p>
 
-<h2>A glyph of the font</h2>
+<h2>Two glyphs of the font</h2>
 
 <p>
-	The icon is a character of Llama Sans, so anything set in it can carry the mark without an image:
-	it sits on the baseline, reaches exactly the cap height and takes the text's colour and weight.
+	The icon is a character of Llama Sans, in two sizes, so anything set in it can carry the mark
+	without an image, in the text's colour and weight. U+E000 sits on the baseline at exactly the cap
+	height, for running text and controls. U+E001, its capital form, is the lockup's icon: 1.24 times
+	the cap height, centred on the capitals, with the lockup's gap after it, so a name typed after it
+	is the logo. In all caps, the case feature swaps one for the other.
 </p>
 
 <div class="display">
-	<p class="lockup"> llama.cpp</p>
+	<p class="lockup"> llama.cpp</p>
 
-	<p class="lockup"> Llama</p>
+	<p class="lockup"> Llama</p>
+</div>
+
+<div class="pair">
+	<p><span class="tag">U+E000</span><span class="sample"> Llama</span></p>
+
+	<p><span class="tag">U+E001</span><span class="sample"> Llama</span></p>
 </div>
 
 <!-- 2. in buttons -->
@@ -171,32 +185,77 @@
 <h2>Open in Llama</h2>
 
 <p>
-	As a glyph, the icon centres on the button's line box exactly like the label's capitals, with a
-	word space after it, so it needs no icon slot and no nudging. These are the design system's own
-	buttons.
+	As a glyph, the icon centres on the button's line box like the label's capitals, with a word space
+	after it, so it needs no icon slot and no nudging. U+E000 keeps the label's own size; U+E001 gives
+	the icon the lockup's presence, for a button that stands for the app. These are the design
+	system's own buttons.
 </p>
 
 <div class="buttons">
-	<div class="row">
-		<Button size="sm"><span class="glyph"></span> Open in Llama</Button>
+	{#each [{ code: '', label: 'U+E000, the text glyph' }, { code: '', label: 'U+E001, the capital glyph' }] as g (g.label)}
+		<p class="row-label">{g.label}</p>
 
-		<Button><span class="glyph"></span> Open in Llama</Button>
+		<div class="row">
+			<Button size="sm"><span class="glyph">{g.code}</span> Open in Llama</Button>
 
-		<Button size="lg"><span class="glyph"></span> Open in Llama</Button>
+			<Button><span class="glyph">{g.code}</span> Open in Llama</Button>
+
+			<Button size="lg"><span class="glyph">{g.code}</span> Open in Llama</Button>
+
+			<Button variant="outline"><span class="glyph">{g.code}</span> llama.app</Button>
+
+			<Button variant="secondary"><span class="glyph">{g.code}</span> Run with llama.cpp</Button>
+
+			<Button variant="ghost"><span class="glyph">{g.code}</span> llama.cpp</Button>
+
+			<Button aria-label="Llama" size="icon" variant="outline"
+				><span class="glyph">{g.code}</span></Button
+			>
+		</div>
+	{/each}
+</div>
+
+<!-- 3. the lockup in context -->
+<p class="kicker">The lockup in context</p>
+
+<h2>Where the name goes</h2>
+
+<p>
+	The lockup at the sizes it is used at: an app header, a footer, a hero and the X header. Each is
+	the capital glyph typed before the name, so it matches the logo files exactly.
+</p>
+
+<div class="contexts">
+	<div class="ctx header">
+		<span style:font-size="18px" class="mark"> llama<span class="cpp">.cpp</span></span>
+
+		<span class="links">Models · Docs · GitHub</span>
+
+		<Button size="sm">Download</Button>
 	</div>
 
-	<div class="row">
-		<Button variant="outline"><span class="glyph"></span> llama.app</Button>
+	<div class="ctx header dark">
+		<span style:font-size="16px" class="mark"> Llama</span>
 
-		<Button variant="secondary"><span class="glyph"></span> Run with llama.cpp</Button>
+		<span class="links">Settings</span>
+	</div>
 
-		<Button variant="ghost"><span class="glyph"></span> llama.cpp</Button>
+	<div class="ctx footer">
+		<span style:font-size="13px" class="mark"> llama<span class="cpp">.cpp</span></span>
 
-		<Button aria-label="Llama" size="icon" variant="outline"><span class="glyph"></span></Button>
+		<span class="links">MIT licence · ggml-org</span>
+	</div>
+
+	<div style:background={HERO} class="ctx hero">
+		<span style:color="#0f1f33" style:font-size="clamp(40px, 7vw, 64px)" class="mark"> Llama</span>
+	</div>
+
+	<div class="ctx banner">
+		<span style:font-size="8cqi" class="mark"> llama<span class="cpp">.cpp</span></span>
 	</div>
 </div>
 
-<!-- 3. a download badge -->
+<!-- 4. a download badge -->
 <p class="kicker">Download badge</p>
 
 <h2>Get the app</h2>
@@ -243,7 +302,7 @@
 	</a>
 </div>
 
-<!-- 4. in running text -->
+<!-- 5. in running text -->
 <p class="kicker">In running text</p>
 
 <h2>Inline, at any size</h2>
@@ -265,7 +324,7 @@
 	<p class="big">Run it in  Llama.</p>
 </div>
 
-<!-- 5. app icons -->
+<!-- 6. app icons -->
 <p class="kicker">App icons</p>
 
 <h2>On the tab and the home screen</h2>
@@ -322,7 +381,7 @@
 	{/each}
 </div>
 
-<!-- 6. splash screens -->
+<!-- 7. splash screens -->
 <p class="kicker">Splash screens</p>
 
 <h2>While the app opens</h2>
@@ -390,7 +449,96 @@
 		gap: 10px;
 	}
 
+	.pair {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 12px 40px;
+	}
+	.pair p {
+		display: grid;
+		gap: 4px;
+		margin: 0;
+	}
+	.tag,
+	.row-label {
+		margin: 0;
+		font: 500 11px var(--mono);
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--l-muted);
+	}
+	.sample {
+		font:
+			700 44px / 1.15 'Llama Sans',
+			var(--body);
+	}
+	.buttons .row-label:not(:first-child) {
+		margin-top: 8px;
+	}
+
 	/* 3 */
+	.contexts {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+		gap: 12px;
+	}
+	.ctx {
+		display: flex;
+		align-items: center;
+		gap: 16px;
+		min-width: 0;
+		padding: 0 16px;
+		border-radius: 14px;
+		background: var(--l-panel);
+		color: var(--l-ink);
+		overflow: hidden;
+	}
+	.ctx .mark {
+		flex: none;
+		font-family: 'Llama Sans', var(--body);
+		font-weight: 700;
+		line-height: 1;
+		white-space: nowrap;
+	}
+	.ctx .cpp {
+		color: var(--art-cinder);
+	}
+	.ctx .links {
+		margin-left: auto;
+		font:
+			400 13px / 1.25 'Llama Sans',
+			var(--body);
+		color: var(--l-muted);
+		white-space: nowrap;
+	}
+	.ctx.header {
+		height: 56px;
+	}
+	.ctx.dark,
+	.ctx.banner {
+		background: #111111;
+		color: #fafafa;
+	}
+	.ctx.dark .links {
+		color: rgb(250 250 250 / 0.6);
+	}
+	.ctx.footer {
+		height: 64px;
+	}
+	.ctx.hero,
+	.ctx.banner {
+		grid-column: 1 / -1;
+		justify-content: center;
+	}
+	.ctx.hero {
+		min-height: 220px;
+	}
+	.ctx.banner {
+		aspect-ratio: 3 / 1;
+		container-type: inline-size;
+	}
+
+	/* 4 */
 	.badges {
 		display: flex;
 		flex-wrap: wrap;
@@ -461,7 +609,7 @@
 		font-size: 15px;
 	}
 
-	/* 4 */
+	/* 5 */
 	.inline {
 		display: grid;
 		gap: 12px;
@@ -478,7 +626,7 @@
 			var(--body);
 	}
 
-	/* 5 and 6 */
+	/* 6 and 7 */
 	.icons {
 		display: grid;
 		grid-template-columns: repeat(auto-fill, minmax(min(100%, 180px), 1fr));
