@@ -1730,8 +1730,8 @@ public:
             // the uncond sequence lives half a seq space away from the cond one
             const int32_t n_seq_max = (int32_t) llama_n_seq_max(lctx);
             seq_uncond = (llama_seq_id) (n_seq_max / 2 + seq_id);
-            if (n_seq_max < 2 || seq_id >= n_seq_max / 2) {
-                LOG_ERR("mtmd_helper_gen_audio: multilingual chatterbox needs a paired cfg sequence "
+            if (!llama_model_classifier_free_guidance(llama_get_model(lctx)) || seq_id >= n_seq_max / 2) {
+                LOG_ERR("mtmd_helper_gen_audio: multilingual chatterbox needs a backbone with classifier_free_guidance and a paired cfg sequence "
                         "(n_seq_max = %d, seq_id = %d)\n", n_seq_max, seq_id);
                 return 1;
             }

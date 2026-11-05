@@ -212,6 +212,8 @@ class ChatterboxTalkerModel(TextModel):
         self.gguf_writer.add_sampling_temp(sampling["temp"])
         self.gguf_writer.add_sampling_penalty_repeat(sampling["penalty_repeat"])
         self.gguf_writer.add_sampling_penalty_last_n(PENALTY_LAST_N)
+        if not self.is_turbo:
+            self.gguf_writer.add_classifier_free_guidance(True)
 
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
         if self.is_turbo:
