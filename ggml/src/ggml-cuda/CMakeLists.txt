@@ -160,7 +160,6 @@ if (CUDAToolkit_FOUND)
         target_link_libraries(ggml-cuda PRIVATE CCCL::CCCL)
     endif()
 
-    # cuBLASLt is a transitive dependency of cuBLAS, but FP8 matmuls call its API directly.
     if (GGML_STATIC)
         if (WIN32)
             # As of 12.3.1 CUDA Toolkit for Windows does not offer a static cublas library
