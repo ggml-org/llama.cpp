@@ -504,9 +504,43 @@ std::string ggml_openvino_model_cache_weights_path(const std::string & dir, uint
     return dir + "/" + hex64(fp_a) + "-" + hex64(fp_b) + ".weights.bin";
 }
 
+static uint64_t weights_hash_mix(uint64_t h, uint64_t v) {
+    h ^= v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+    return h * 0x100000001b3ULL;
+}
+
+static uint64_t weights_hash_bytes(uint64_t h, const void * data, size_t size) {
+    const auto * p = static_cast<const unsigned char *>(data);
+    size_t i = 0;
+    for (; i + 8 <= size; i += 8) {
+        uint64_t w;
+        std::memcpy(&w, p + i, 8);
+        h = (h ^ w) * 0x100000001b3ULL;
+    }
+    for (; i < size; ++i) {
+        h = (h ^ p[i]) * 0x100000001b3ULL;
+    }
+    return h;
+}
+
+// Content hash recorded in a weights file's size record, or false if it has none.
+static bool read_weights_hash(const std::string & path, uint64_t & hash) {
+    std::ifstream meta(path + ".meta");
+    std::string key, value;
+    while (meta >> key >> value) {
+        if (key == "hash") {
+            hash = std::stoull(value, nullptr, 16);
+            return true;
+        }
+    }
+    return false;
+}
+
 std::shared_ptr<ggml_openvino_weights_layout> ggml_openvino_model_cache_write_weights(
     const std::string & path,
-    const std::vector<std::shared_ptr<ov::Model>> & models) {
+    const std::vector<std::shared_ptr<ov::Model>> & models,
+    bool keep_existing,
+    ggml_openvino_weights_status * status) {
     struct region {
         const void * data;
         size_t size;
@@ -548,6 +582,32 @@ std::shared_ptr<ggml_openvino_weights_layout> ggml_openvino_model_cache_write_we
             cnst->get_byte_size(), layout->regions.at(cnst->get_data_ptr()).first, cnst->get_element_type());
     }
 
+    uint64_t content_hash = weights_hash_mix(0xcbf29ce484222325ULL, total);
+    for (const auto & r : regions) {
+        content_hash = weights_hash_mix(content_hash, r.offset);
+        content_hash = weights_hash_mix(content_hash, r.size);
+        content_hash = weights_hash_bytes(content_hash, r.data, r.size);
+    }
+
+    if (keep_existing && ggml_openvino_model_cache_weights_valid(path)) {
+        uint64_t existing_hash = 0;
+        if (read_weights_hash(path, existing_hash) && existing_hash == content_hash) {
+            if (status) {
+                *status = ggml_openvino_weights_status::reused;
+            }
+            GGML_LOG_INFO("ggml-openvino: model cache REUSED %s (%zu regions, %.1f MiB)\n", path.c_str(),
+                          regions.size(), total / 1024.0 / 1024.0);
+            return layout;
+        }
+        if (status) {
+            *status = ggml_openvino_weights_status::mismatch;
+        }
+        return nullptr;
+    }
+    if (status) {
+        *status = ggml_openvino_weights_status::written;
+    }
+
     // Publish the data file first and its size record last, so a valid record always describes a complete file.
     const std::string data_tmp = path + ".tmp";
     const std::string meta_path = path + ".meta";
@@ -573,7 +633,7 @@ std::shared_ptr<ggml_openvino_weights_layout> ggml_openvino_model_cache_write_we
     }
     {
         std::ofstream f(meta_tmp, std::ios::trunc);
-        f << "size " << total << "\nregions " << regions.size() << "\n";
+        f << "size " << total << "\nregions " << regions.size() << "\nhash " << hex64(content_hash) << "\n";
         f.close();
         if (!f.good()) {
             std::remove(data_tmp.c_str());
