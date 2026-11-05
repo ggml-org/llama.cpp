@@ -283,6 +283,12 @@ struct backend_consts {
     }
 };
 
+// TODO add tests for the auto-assign logic of nodes to backends of the scheduler. Possible tests:
+// - test of CPU backend with any other backend. Expectation is that GEMM-nodes (usually the first accelerated components) are assigned to the non-CPU backend
+// - test of the property that tensor location influences backend assignment.
+// - test of neighbor propagation logic? 3 nodes, with the middle one initially on CPU, moved to the other backend?
+
+
 // stress test: a tensor is incremented and sent back and forth between the backends in a ping-pong pattern.
 // One pass pairs every backend a with every other backend b via nested loops.
 // The counter is brought to a, then bounced to b and back for every partner in turn.
