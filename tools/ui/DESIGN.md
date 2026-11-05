@@ -32,8 +32,8 @@ colors:
   art-navy: 'oklch(0.33 0.07 256)'
   art-green: 'oklch(0.64 0.09 165)'
   art-amber: 'oklch(0.8 0.12 78)'
-  art-orange: 'oklch(0.619 0.171 33)'
-  art-orange-light: 'oklch(0.85 0.065 45)'
+  art-cinder: 'oklch(0.68 0.168 48)'
+  art-cinder-light: 'oklch(0.85 0.065 48)'
   beige-50: 'oklch(0.965 0.01 80)'
   beige-100: 'oklch(0.936 0.015 81)'
   beige-200: 'oklch(0.89 0.02 80)'
@@ -747,15 +747,15 @@ the border of an invalid field, the lamp. Red keeps to the same rule, so there i
 danger button and the solid danger badge are the fill itself (`action-danger`), solid in light
 mode and frosted, translucent matte glass in dark (58% of the fill over the page). Never style a
 danger control with its own red (`bg-destructive`, `bg-red-500` …): use the `destructive`
-variant, which `AlertDialog.Action` takes too, or the status tokens. The brand orange belongs to the llama.cpp
-logotype and is not part of the UI palette. Beige (`beige-50` to `beige-900`) is the warm neutral for communications
+variant, which `AlertDialog.Action` takes too, or the status tokens. Cinder (`art-cinder`, `oklch(0.68 0.168 48)`, #e87227) is the brand's one accent orange: the .cpp of the llama.cpp
+logotype, the mark on a detail in the brand pages and the warm pop in artwork. It is not part of the UI palette. Beige (`beige-50` to `beige-900`) is the warm neutral for communications
 (posters, boards, the site); the UI itself stays on the greys.
 
 Backgrounds stay neutral as a rule, in the UI and in communications alike: greys and beige
 behind, colour only where it serves a purpose, functional (status, a selection, focus) or
 creative (a shape, a numeral, an illustration). Artwork takes its colours from the `art-*` primitives,
-friendlier versions of the status hues (blue, sky, navy, a teal-leaning green, amber) and the
-vermilion accent orange, never from the status colours themselves, and never red.
+friendlier versions of the status hues (blue, sky, navy, a teal-leaning green, amber) and cinder,
+the accent orange, never from the status colours themselves, and never red.
 
 Light mode has two surface themes, which share everything else (the palette, buttons, fields,
 badges, shadows and dark mode): **Paper**, the default, sets white panels, fields and keys on a

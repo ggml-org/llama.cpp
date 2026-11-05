@@ -18,19 +18,15 @@
 		--headline: 'Llama Sans', var(--body);
 		--code: 'Llama Mono', ui-monospace, monospace;
 		--column: min(1180px, 100% - 2 * max(16px, 4vw));
-		/* the overview is neutral: the design system's greys everywhere, and vermilion as the one accent, only where it
+		/* the overview is neutral: the design system's greys everywhere, and cinder as the one accent, only where it
 		   does a job (marking a detail, an angle, a joint). The brand orange is kept for the llama.cpp logotype */
-		--vermilion: #d9553b;
-		--vermilion-soft: rgb(217 85 59 / 0.12);
-		--mark: var(--vermilion);
+		--cinder: oklch(0.68 0.168 48);
+		--cinder-soft: oklch(0.68 0.168 48 / 0.14);
+		--mark: var(--cinder);
 		display: grid;
 		gap: clamp(64px, 9vw, 128px);
 		padding-bottom: 96px;
 		font-family: var(--ui);
-	}
-	:global(.dark) .overview {
-		--vermilion: #e8735a;
-		--vermilion-soft: rgb(232 115 90 / 0.16);
 	}
 	.overview > :global(*) {
 		min-width: 0;

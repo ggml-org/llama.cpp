@@ -306,9 +306,9 @@
 	}
 	.docs .note {
 		padding: 10px 14px;
-		border-left: 3px solid var(--clay);
+		border-left: 3px solid var(--cinder);
 		border-radius: 0 8px 8px 0;
-		background: color-mix(in srgb, var(--clay) 12%, white);
+		background: color-mix(in srgb, var(--cinder) 12%, white);
 		font-size: 14px;
 	}
 	@media (max-width: 700px) {
