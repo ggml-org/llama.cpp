@@ -1,5 +1,5 @@
 <!--
-	Llama Sans Display at poster scale: four pieces in fixed palettes (they read the same in both themes), after the
+	Llama Sans Display at poster scale: four neutral pieces in fixed greys (they read the same in both themes), after the
 	GitHub poster series: words on a dot grid, a stacked statement, a big word over a branch graph and a word stack.
 -->
 <script lang="ts">
@@ -152,15 +152,15 @@
 	}
 	.dots .icon {
 		font: 700 7cqi / 1 var(--headline);
-		color: var(--beige);
+		color: var(--ds-neutral-400);
 		opacity: 1;
 	}
 
-	/* a stacked statement, beige */
+	/* a stacked statement, light grey */
 	.stack {
 		grid-template-rows: auto 1fr auto auto;
-		background: var(--beige);
-		color: var(--beige-ink);
+		background: var(--ds-neutral-100);
+		color: var(--ds-neutral-950);
 	}
 	.stack .top,
 	.stack .bottom {
@@ -175,18 +175,18 @@
 		align-self: center;
 		justify-self: center;
 		font: 700 34cqi / 1 var(--headline);
-		color: var(--clay);
+		color: var(--ds-neutral-950);
 	}
 	.stack footer {
 		margin-top: 5cqi;
 	}
 
-	/* a big word over a branch graph, on llama.app's soft blue */
+	/* a big word over a branch graph, soft grey */
 	.gguf {
 		grid-template-rows: auto auto 1fr auto;
 		gap: 4%; /* of the card: its own sizes can't use cqi, which measures the card's container */
-		background: var(--mist);
-		color: var(--mist-ink);
+		background: linear-gradient(160deg, #e2e2e2 0%, #ececec 100%);
+		color: var(--ds-neutral-950);
 	}
 	.gguf .word {
 		font: 700 33cqi / 0.8 var(--headline);
@@ -201,12 +201,12 @@
 	}
 	.gguf svg :is(line, path) {
 		fill: none;
-		stroke: var(--mist-ink);
+		stroke: var(--ds-neutral-950);
 		stroke-width: 2.5;
 	}
 	.gguf svg circle {
-		fill: #d6e7f8;
-		stroke: var(--mist-ink);
+		fill: #e7e7e7;
+		stroke: var(--ds-neutral-950);
 		stroke-width: 2.5;
 	}
 	.gguf .text {
@@ -220,11 +220,11 @@
 		opacity: 1;
 	}
 
-	/* a word stack on llama.app's navy */
+	/* a word stack, near-black */
 	.words {
 		grid-template-rows: repeat(4, auto);
 		align-content: space-between;
-		background: var(--llama-navy);
+		background: linear-gradient(160deg, #1c1c1c 0%, #141414 100%);
 		color: #fff;
 	}
 	.words :is(.w1, .w2, .w3) {

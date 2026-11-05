@@ -269,8 +269,8 @@
 		left: 10px;
 		padding: 2px 8px;
 		border-radius: 999px;
-		background: var(--clay-soft);
-		color: var(--clay);
+		background: var(--vermilion-soft);
+		color: var(--vermilion);
 		font: 500 11px / 1.5 var(--mono);
 	}
 	figcaption {

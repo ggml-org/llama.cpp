@@ -24,7 +24,7 @@
 </script>
 
 <Story asChild name="UI status">
-	<StateGallery columns={2}>
+	<StateGallery columns={3}>
 		<StateGalleryItem label="Current" note="Alert: default and destructive only">
 			<div class="grid gap-2">
 				<Alert.Root>
@@ -49,6 +49,10 @@
 			<StatusProposal part="alerts" />
 		</StateGalleryItem>
 
+		<StateGalleryItem label="Saturated" note="The same hues with more colour">
+			<StatusProposal part="alerts" saturated />
+		</StateGalleryItem>
+
 		<StateGalleryItem label="Current" note="Badge: no success, warning or info">
 			<div class="flex flex-wrap gap-2">
 				<Badge>Default</Badge>
@@ -63,6 +67,10 @@
 
 		<StateGalleryItem label="Proposed" note="Status badges with a dot">
 			<StatusProposal part="badges" />
+		</StateGalleryItem>
+
+		<StateGalleryItem label="Saturated" note="The same hues with more colour">
+			<StatusProposal part="badges" saturated />
 		</StateGalleryItem>
 
 		<StateGalleryItem label="Current" note="Status dots: success, warning, danger">
@@ -83,6 +91,10 @@
 			<StatusProposal part="dots" />
 		</StateGalleryItem>
 
+		<StateGalleryItem label="Saturated" note="The same hues with more colour">
+			<StatusProposal part="dots" saturated />
+		</StateGalleryItem>
+
 		<StateGalleryItem label="Current" note="Hint text: danger and success only">
 			<div class="grid gap-1.5 text-[13px]">
 				<p class="m-0 text-fg-success">Port 9931 is free.</p>
@@ -93,6 +105,10 @@
 
 		<StateGalleryItem label="Proposed" note="All four, at text contrast">
 			<StatusProposal part="text" />
+		</StateGalleryItem>
+
+		<StateGalleryItem label="Saturated" note="The same hues with more colour">
+			<StatusProposal part="text" saturated />
 		</StateGalleryItem>
 	</StateGallery>
 </Story>

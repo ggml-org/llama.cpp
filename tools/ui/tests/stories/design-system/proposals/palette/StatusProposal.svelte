@@ -1,12 +1,16 @@
 <!--
 	The proposed status colours for the UI, which otherwise stays neutral: success, warning, error and info, each as
 	text, a soft surface, a line and a dot, in both themes. Prototyped here with classes; the tokens and components
-	change only once it is chosen. `part` picks which pieces to show, so each sits next to its current counterpart.
+	change only once it is chosen. `part` picks which pieces to show, so each sits next to its current counterpart;
+	`saturated` shows the same hues with more colour.
 -->
 <script lang="ts">
 	import { CircleAlert, CircleCheck, Info, TriangleAlert } from '@lucide/svelte';
 
-	let { part }: { part: 'alerts' | 'badges' | 'dots' | 'text' } = $props();
+	let {
+		part,
+		saturated = false
+	}: { part: 'alerts' | 'badges' | 'dots' | 'text'; saturated?: boolean } = $props();
 
 	const tones = [
 		{
@@ -42,7 +46,7 @@
 	];
 </script>
 
-<div class="status">
+<div class:saturated class="status">
 	{#if part === 'alerts'}
 		<div class="alerts">
 			{#each tones as t (t.key)}
@@ -94,6 +98,23 @@
 		--info: oklch(0.77 0.07 250);
 		--soft: 13%;
 		--edge: 32%;
+	}
+	/* the saturated variant: the same hues with more colour, still at text contrast in both themes */
+	.status.saturated {
+		--success: oklch(0.52 0.15 150);
+		--warning: oklch(0.56 0.15 65);
+		--danger: oklch(0.54 0.21 27);
+		--info: oklch(0.52 0.13 255);
+		--soft: 11%;
+		--edge: 34%;
+	}
+	:global(.dark) .status.saturated {
+		--success: oklch(0.79 0.16 150);
+		--warning: oklch(0.83 0.15 78);
+		--danger: oklch(0.73 0.19 27);
+		--info: oklch(0.77 0.12 255);
+		--soft: 16%;
+		--edge: 38%;
 	}
 	.success {
 		--tone: var(--success);
