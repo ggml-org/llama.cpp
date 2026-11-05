@@ -237,7 +237,7 @@ jobs:
           older: 5m
           min: 1
           dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}
- 
+
   build-cmake-pkg:
     runs-on: ubuntu-24.04
     steps:
