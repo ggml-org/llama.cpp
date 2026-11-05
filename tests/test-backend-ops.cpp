@@ -12524,6 +12524,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // head size 256, single-token decode, GQA 2 and 6: the tile kernel with 2 Q columns per block
+    for (int nr2 : { 2, 6, }) {
+        test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {nr2, 1}, 4096, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+    }
+
     for (int hsk : { 40, 64, 72, 80, 96, 128, 192, 256, 320, 512, 576 }) {
         for (int hsv : { 40, 64, 72, 80, 96, 128, 192, 256, 512 }) {
             if (hsk != 96 && hsk != 192 && hsk != 320 && hsk != 576 && hsk != hsv) continue;
