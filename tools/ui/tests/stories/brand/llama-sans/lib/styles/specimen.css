@@ -16,7 +16,7 @@
 	--brand-ink: #111111;
 	--brand-light: #fafafa;
 	--cinder: oklch(
-		0.68 0.168 46
+		0.68 0.18 46
 	); /* the brand's one accent orange, as in the .cpp of the llama.cpp logotype */
 	--beige: #efe9df;
 	--beige-ink: #2b2620;

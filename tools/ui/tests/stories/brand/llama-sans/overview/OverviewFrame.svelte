@@ -20,8 +20,8 @@
 		--column: min(1180px, 100% - 2 * max(16px, 4vw));
 		/* the overview is neutral: the design system's greys everywhere, and cinder as the one accent, only where it
 		   does a job (marking a detail, an angle, a joint). The brand orange is kept for the llama.cpp logotype */
-		--cinder: oklch(0.68 0.168 46);
-		--cinder-soft: oklch(0.68 0.168 46 / 0.14);
+		--cinder: oklch(0.68 0.18 46);
+		--cinder-soft: oklch(0.68 0.18 46 / 0.14);
 		--mark: var(--cinder);
 		display: grid;
 		gap: clamp(64px, 9vw, 128px);
