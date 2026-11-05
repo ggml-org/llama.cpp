@@ -1,6 +1,6 @@
 // Colour for communications (posters, the site, social): a neutral base of the design system's greys, and the Haas
 // palette, which adds a Swiss blue, sky, navy, cool grey, cream and a vermilion accent on top of it. The UI itself
-// stays neutral and uses colour only for status (see StatusProposal). The brand orange (#f65e00) stays with the
+// stays neutral and uses colour only for status (in the tokens; see DESIGN.md). The brand orange (#f65e00) stays with the
 // llama.cpp logotype.
 
 export interface Palette {

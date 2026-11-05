@@ -12,7 +12,16 @@
 		title: 'Design System/Display/Badge'
 	});
 
-	const variants: NonNullable<BadgeVariant>[] = ['default', 'secondary', 'outline', 'destructive'];
+	const variants: NonNullable<BadgeVariant>[] = [
+		'default',
+		'secondary',
+		'outline',
+		'destructive',
+		'success',
+		'warning',
+		'danger',
+		'info'
+	];
 </script>
 
 <Story asChild name="Default">

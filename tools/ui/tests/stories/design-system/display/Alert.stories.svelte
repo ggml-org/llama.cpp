@@ -1,7 +1,7 @@
 <script lang="ts" module>
 	import StateGallery from '../../helpers/StateGallery.svelte';
 	import StateGalleryItem from '../../helpers/StateGalleryItem.svelte';
-	import { CircleAlert, Info } from '@lucide/svelte';
+	import { CircleAlert, CircleCheck, Info, TriangleAlert } from '@lucide/svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import * as Alert from '$lib/components/ui/alert';
 
@@ -33,6 +33,36 @@
 				<Alert.Title>Context is full</Alert.Title>
 
 				<Alert.Description>Start a new chat or remove some attachments.</Alert.Description>
+			</Alert.Root>
+		</StateGalleryItem>
+
+		<StateGalleryItem label="Success">
+			<Alert.Root variant="success">
+				<CircleCheck />
+
+				<Alert.Title>Model loaded</Alert.Title>
+
+				<Alert.Description>Qwen 2.5 7B is ready on port 9931.</Alert.Description>
+			</Alert.Root>
+		</StateGalleryItem>
+
+		<StateGalleryItem label="Warning">
+			<Alert.Root variant="warning">
+				<TriangleAlert />
+
+				<Alert.Title>Low memory</Alert.Title>
+
+				<Alert.Description>Gemma 2 27B needs 16.6 GB; 12 GB is free.</Alert.Description>
+			</Alert.Root>
+		</StateGalleryItem>
+
+		<StateGalleryItem label="Info">
+			<Alert.Root variant="info">
+				<Info />
+
+				<Alert.Title>Update available</Alert.Title>
+
+				<Alert.Description>llama.cpp b9726 adds faster prompt processing.</Alert.Description>
 			</Alert.Root>
 		</StateGalleryItem>
 
