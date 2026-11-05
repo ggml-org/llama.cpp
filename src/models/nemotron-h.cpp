@@ -212,6 +212,9 @@ llama_model_nemotron_h::graph::graph(const llama_model & model, const llm_graph_
 
     auto * inp = build_inp_mem_hybrid();
 
+    // Positional embeddings for RoPE (needed by attention layers)
+    ggml_tensor * inp_pos = build_inp_pos();
+
     ggml_tensor * inp_out_ids = build_inp_out_ids();
     const bool extract_final_inp = (size_t) n_layer < cparams.embeddings_layer_inp.size() && cparams.embeddings_layer_inp[n_layer];
 
@@ -229,7 +232,7 @@ llama_model_nemotron_h::graph::graph(const llama_model & model, const llm_graph_
             cur = build_mamba2_layer(inp->get_recr(), cur, model, ubatch, il);
         } else if (hparams.n_ff(il) == 0) {
             // attention layer //
-            cur = build_attention_layer(cur, inp->get_attn(), model, n_embd_head, il);
+            cur = build_attention_layer(cur, inp_pos, inp->get_attn(), model, n_embd_head, il);
         } else {
             cur = build_ffn_layer(cur, model, il);
         }
@@ -276,11 +279,25 @@ llama_model_nemotron_h::graph::graph(const llama_model & model, const llm_graph_
 }
 
 ggml_tensor * llama_model_nemotron_h::graph::build_attention_layer(ggml_tensor *             cur,
+                                                          ggml_tensor *             inp_pos,
                                                           llm_graph_input_attn_kv * inp_attn,
                                                           const llama_model &       model,
                                                                 int64_t             n_embd_head,
                                                                 int                 il) {
     auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur, n_embd_head, hparams.n_head(il), hparams.n_head_kv(il), il);
+
+    // Apply RoPE to Q and K (GPT-NeoX layout, matching HF NemotronHForCausalLM)
+    if (hparams.has_rope(il)) {
+        ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
+        Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, rope_factors, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                             ext_factor, attn_factor, beta_fast, beta_slow);
+        Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, rope_factors, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                             ext_factor, attn_factor, beta_fast, beta_slow);
+    }
+
+    cb(Qcur, "Qcur", il);
+    cb(Kcur, "Kcur", il);
+    cb(Vcur, "Vcur", il);
 
     const float kq_scale =
         hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
@@ -298,7 +315,7 @@ ggml_tensor * llama_model_nemotron_h::graph::build_ffn_layer(ggml_tensor * cur, 
                 NULL,                      NULL,                        NULL,
                 model.layers[il].ffn_down, model.layers[il].ffn_down_b, model.layers[il].ffn_down_s,
                 NULL,
-                LLM_FFN_RELU_SQR, LLM_FFN_PAR, il);
+                LLM_FFN_GELU, LLM_FFN_PAR, il);
         cb(cur, "ffn_out", il);
     } else {
         ggml_tensor * inp_emb    = cur;
@@ -319,7 +336,7 @@ ggml_tensor * llama_model_nemotron_h::graph::build_ffn_layer(ggml_tensor * cur, 
                     model.layers[il].ffn_down_exps,
                     model.layers[il].ffn_exp_probs_b,
                     model.layers[il].ffn_up_exps->ne[2], (int64_t)hparams.n_expert_used(il),
-                    LLM_FFN_RELU_SQR, hparams.expert_weights_norm,
+                    LLM_FFN_GELU, hparams.expert_weights_norm,
                     hparams.expert_weights_scale,
                     LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID,
                     il,
@@ -338,7 +355,7 @@ ggml_tensor * llama_model_nemotron_h::graph::build_ffn_layer(ggml_tensor * cur, 
                     NULL /* no gate */           ,   NULL, NULL,
                     model.layers[il].ffn_down_shexp, NULL, model.layers[il].ffn_down_shexp_s,
                     NULL,
-                    LLM_FFN_RELU_SQR, LLM_FFN_PAR, il);
+                    LLM_FFN_GELU, LLM_FFN_PAR, il);
         cb(ffn_shexp, "ffn_shexp", il);
 
         cur = ggml_add(ctx0, moe_out, ffn_shexp);
