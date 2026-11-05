@@ -87,7 +87,7 @@ The library is published at https://softwarecenter.qualcomm.com/catalog/item/Adr
 Its use is subject to the license in the `license.txt` file shipped with it.
 
 The library is enabled by default (`GGML_OPENCL_USE_ADRENO_BIN_KERNELS=ON`).
-On Windows, CMake downloads the library version pinned in `ggml/src/ggml-opencl/CMakeLists.txt` during configuration (`GGML_OPENCL_ADRENO_BIN_KERNELS_FETCH=ON`).
+On Windows on ARM64, CMake downloads the library version pinned in `ggml/src/ggml-opencl/CMakeLists.txt` during configuration (`GGML_OPENCL_ADRENO_BIN_KERNELS_FETCH=ON`).
 The download is verified against a SHA256 hash, and the build copies `adreno-opencl-kernels.dll` and `LICENSE-adreno-opencl-kernels` alongside the executables.
 If the download fails, configuration continues with a warning.
 To skip the download, add `-DGGML_OPENCL_ADRENO_BIN_KERNELS_FETCH=OFF`, then extract `adreno-opencl-kernels.dll` from the zip file downloaded from the above URL and put it alongside the executables yourself.
@@ -105,7 +105,7 @@ The OpenCL backend has the following CMake options that control the behavior of 
 | `GGML_OPENCL_EMBED_KERNELS`            | `ON`           | Embed OpenCL kernels into the executable.               |
 | `GGML_OPENCL_USE_ADRENO_KERNELS`       | `ON`           | Use kernels optimized for Adreno.                       |
 | `GGML_OPENCL_USE_ADRENO_BIN_KERNELS`   | `ON`           | Allow using binary kernel lib for Adreno.               |
-| `GGML_OPENCL_ADRENO_BIN_KERNELS_FETCH` | `ON`           | Download the binary kernel lib for Adreno (Windows).    |
+| `GGML_OPENCL_ADRENO_BIN_KERNELS_FETCH` | `ON`           | Download the binary kernel lib for Adreno (Windows ARM64). |
 
 ## Program Binary Cache
 
