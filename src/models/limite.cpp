@@ -80,10 +80,10 @@ llama_rope_params llama_model_limite::get_rope_params(const llama_cparams & cpar
 }
 
 std::unique_ptr<llm_graph_context> llama_model_limite::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_limite::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_limite::graph::graph(const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_k();
     const int64_t n_taps      = hparams.n_mudd_taps;
 

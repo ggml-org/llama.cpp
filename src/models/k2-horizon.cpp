@@ -117,7 +117,7 @@ void llama_model_k2_horizon::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_k2_horizon::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
 // RMS norm over n_groups equal slices of ne[0], then one full-width weight
@@ -210,7 +210,7 @@ ggml_tensor * llama_model_k2_horizon::graph::build_routed_value(const llama_laye
     return value_out;
 }
 
-llama_model_k2_horizon::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_k2_horizon::graph::graph(const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
 

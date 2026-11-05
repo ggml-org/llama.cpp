@@ -103,7 +103,7 @@ void llama_model_beam::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_beam::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
 static ggml_tensor * beam_residual_add(ggml_context * ctx, ggml_tensor * h, ggml_tensor * r, int i) {
@@ -112,7 +112,7 @@ static ggml_tensor * beam_residual_add(ggml_context * ctx, ggml_tensor * h, ggml
     return ggml_add(ctx, ggml_scale(ctx, h, h_scale), ggml_scale(ctx, r, r_scale));
 }
 
-llama_model_beam::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_beam::graph::graph(const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
 

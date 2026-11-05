@@ -154,10 +154,10 @@ llama_rope_params llama_model_dots3note::get_rope_params(const llama_cparams & c
 }
 
 std::unique_ptr<llm_graph_context> llama_model_dots3note::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_dots3note::graph::graph(const llama_model & model, const llm_graph_params & params) :
+llama_model_dots3note::graph::graph(const llm_graph_params & params) :
     llm_graph_context(params) {
     GGML_ASSERT(hparams.is_mla());
 

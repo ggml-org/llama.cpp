@@ -158,10 +158,10 @@ llama_rope_params llama_model_mistral_large4::get_rope_params_indexer(const llam
 }
 
 std::unique_ptr<llm_graph_context> llama_model_mistral_large4::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_mistral_large4::graph::graph(const llama_model & model, const llm_graph_params & params) :
+llama_model_mistral_large4::graph::graph(const llm_graph_params & params) :
     llm_graph_context(params) {
     GGML_ASSERT(hparams.is_mla());
 
