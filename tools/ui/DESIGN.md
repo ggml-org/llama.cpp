@@ -737,6 +737,7 @@ logotype and is not part of the UI palette.
 - **Status surfaces:** `surface-success`, `surface-warning`, `surface-danger` and
   `surface-info` are soft tints of each status colour for alerts and soft badges, with
   `line-*-soft` hairlines to match. They are mixed in oklab so the hue holds over the page.
+  Soft status badges are pills with a small dot in the status colour before the label.
 - **Status:** `status-danger`, `status-warning`, `status-success` and `status-info` are the
   lamp fills for error or stopped, loading or warning, ready or connected, and informational. Each has a lighter `-rim` and
   a darker `-glyph`. They are the same in both modes. Known gap: the glyph on the red lamp
