@@ -19,10 +19,9 @@ The project differentiates between 3 levels of contributors:
 If AI is used to generate any portion of the code, contributors must adhere to the following requirements:
 
 1. Explicitly disclose the manner in which AI was employed.
-2. Check for an existing PR addressing the same change; if one exists, comment there to work with its author instead of opening a duplicate.
-3. Perform a comprehensive manual review prior to submitting the pull request. A proper code review usually takes something like one hour per 200-400 LOC and you should be spending **at least that much time on code review alone**.
-4. Be prepared to explain every line of code you submit when asked about it by a maintainer.
-5. It is strictly prohibited to use AI to write your posts for you (bug reports, feature requests, pull request descriptions, Github discussions, responding to humans, ...).
+2. Perform a comprehensive manual review prior to submitting the pull request. A proper code review usually takes something like one hour per 200-400 LOC and you should be spending **at least that much time on code review alone**.
+3. Only submit features which (given enough time) you could have implemented yourself without AI assistance. For bug fixes it is acceptable to submit patches which you don't fully understand (please explicitly disclose this when applicable).
+4. It is strictly prohibited to use AI to write your posts for you (bug reports, feature requests, pull request descriptions, Github discussions, responding to humans, ...). 
 
 For more info, please refer to the [AGENTS.md](AGENTS.md) file.
 
@@ -30,14 +29,14 @@ For more info, please refer to the [AGENTS.md](AGENTS.md) file.
 
 ### Before you start
 
-- Search for existing discussions and PRs first - duplicates will likely be closed without questions.
-- Features must begin with an issue, not a PR - let interest accumulate before writing code; niche features may only land as an example/tool, or on a private fork.
+- Search for existing discussions and PRs first - duplicates may be closed without questions.
+- You are free to open a PR for a new feature even without prior contribution history. However, please be aware that we can only review and merge PRs that align with the interests of the project as a whole. To avoid wasted efforts, consider opening an issue and/or discussion first and getting prior input from maintainers. The CODEOWNERS file may give you a hint regarding who would be responsible.
 - Bug-fix PRs must include a reproducible issue and a regression test that fails before your change and passes after. Fixes without a test may be closed without review.
 - New CLI or public API additions carry a **higher bar** than internal changes - justify why an existing mechanism doesn't suffice.
 - Meeting all of the above still doesn't guarantee a merge - see [Pull requests (for maintainers)](#pull-requests-for-maintainers).
-- If you are a new contributor
-    - Limit your open PRs to 1
-    - Do not submit trivial fixes (e.g. typos, formatting changes)
+- If you are a new contributor, limit your open PRs to 1
+- Make the size of your PRs proportional to your contribution history. Maintainers are generally willing to invest time into reviewing your PRs but that amount of time is proportional to the amount of trust they have in you. If a new contributor opens a 1000 LOC PR a maintainer may conclude that even reading through the code once is not worth their time. This is because with the advent of AI a maintainer doesn't know whether the person pressing the submit button actually understands (or even read) the code they are submitting.
+- That being said, please do not submit trivial fixes (e.g. typos, formatting changes) as a new contributor
 
 ### Preparing your PR
 
