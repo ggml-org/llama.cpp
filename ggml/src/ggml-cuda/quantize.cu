@@ -100,7 +100,7 @@ static __global__ void quantize_q8_1(
     y[ib].ds = make_half2(d, d * sum);
 }
 
-// emax is the unbiased exponent of the format max (e2m1: 6.0, e4m3: 448.0), keeping amax / 2^emax in range
+// emax is the unbiased exponent of the format's max value (e2m1: 6.0, e4m3: 448.0), keeping amax / 2^emax in range
 constexpr int E2M1_EMAX = 2;
 [[maybe_unused]] constexpr int E4M3_EMAX = 8; // used only by the Blackwell activation kernel
 

@@ -63,7 +63,7 @@ static_assert(sizeof(block_q8_1_mmq) == QK8_1_MMQ + 4*sizeof(half2), "Unexpected
 static_assert(sizeof(block_q8_1_mmq) == 4*sizeof(block_q8_1),      "Unexpected block_q8_1_mmq size");
 static_assert(sizeof(block_fp4_mmq)  == sizeof(block_q8_1_mmq),    "Unexpected block_fp4_mmq size");
 
-// activation block for the mxfp block-scaled mma (Blackwell): 128 e4m3 values,
+// activation block for the kind::mxf8f6f4 block-scaled mma (Blackwell): 128 e4m3 values,
 // d4[0] packs 4 ue8m0 scales (byte f covers values 32f..32f+31), d4[1..3] pad to MMQ_TILE_Y_K
 struct block_fp8_mmq {
     uint32_t d4[4];
@@ -245,6 +245,14 @@ struct ggml_cuda_mmq_config {
 
 #undef CASE
 
+// mxfp4 weights with FP8 src1 on Blackwell: native FP4 tile shape, but the FP8 src1 blocks halve the K range of a weight tile
+static constexpr __host__ __device__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config_blackwell_fp8(const ggml_type type, const int J, const bool fallback) {
+    ggml_cuda_mmq_config cfg = ggml_cuda_mmq_get_config_blackwell(type, J, fallback);
+    cfg.K_vram      = MMQ_ITER_K;
+    cfg.sram_layout = GGML_CUDA_MMQ_SRAM_LAYOUT_FP8;
+    return cfg;
+}
+
 static __host__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config(const ggml_type type, const int J, const bool fallback, const int cc, const ggml_prec prec_src1) {
     if (GGML_CUDA_CC_IS_AMD(cc)) {
         if (GGML_CUDA_CC_IS_GCN(cc)) {
@@ -269,11 +277,7 @@ static __host__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config(const ggml_type ty
     }
     if (blackwell_mma_available(cc)) {
         if (type == GGML_TYPE_MXFP4 && prec_src1 == GGML_PREC_FP8) {
-            // keep the FP4 tile shape, the FP8 src1 blocks halve the K range of a weight tile
-            ggml_cuda_mmq_config cfg = ggml_cuda_mmq_get_config_blackwell(type, J, fallback);
-            cfg.K_vram      = MMQ_ITER_K;
-            cfg.sram_layout = GGML_CUDA_MMQ_SRAM_LAYOUT_FP8;
-            return cfg;
+            return ggml_cuda_mmq_get_config_blackwell_fp8(type, J, fallback);
         }
         // only src1 at Q4 uses the native FP4 config, higher precisions keep src1 at Q8_1
         if (prec_src1 != GGML_PREC_Q4 && (type == GGML_TYPE_NVFP4 || type == GGML_TYPE_MXFP4)) {
@@ -310,11 +314,7 @@ static constexpr __device__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config(ggml_t
 #else
 #ifdef BLACKWELL_MMA_AVAILABLE
     if (type == GGML_TYPE_MXFP4 && prec_src1 == GGML_PREC_FP8) {
-        // keep the FP4 tile shape, the FP8 src1 blocks halve the K range of a weight tile
-        ggml_cuda_mmq_config cfg = ggml_cuda_mmq_get_config_blackwell(type, J, fallback);
-        cfg.K_vram      = MMQ_ITER_K;
-        cfg.sram_layout = GGML_CUDA_MMQ_SRAM_LAYOUT_FP8;
-        return cfg;
+        return ggml_cuda_mmq_get_config_blackwell_fp8(type, J, fallback);
     }
     // only src1 at Q4 uses the native FP4 config, higher precisions keep src1 at Q8_1
     if (prec_src1 != GGML_PREC_Q4 && (type == GGML_TYPE_NVFP4 || type == GGML_TYPE_MXFP4)) {

@@ -1272,12 +1272,13 @@ namespace ggml_cuda_mma {
 #endif // AMD_MFMA_AVAILABLE
     }
 
+    // Blackwell block-scaled MMA. A holds e2m1 weights; B holds e2m1 at Q4, e4m3 at FP8.
     template <ggml_type type, ggml_prec prec_src1>
-    static __device__ __forceinline__ void mma_block_scaled_fp4(tile<16, 8, float> &     D,
-                                                                const tile<16, 8, int> & A,
-                                                                const tile<8, 8, int> &  B,
-                                                                uint32_t                 a_scale,
-                                                                uint32_t                 b_scale) {
+    static __device__ __forceinline__ void mma_block_scaled(tile<16, 8, float> &     D,
+                                                            const tile<16, 8, int> & A,
+                                                            const tile<8, 8, int> &  B,
+                                                            uint32_t                 a_scale,
+                                                            uint32_t                 b_scale) {
         static_assert(prec_src1 != GGML_PREC_FP8 || type == GGML_TYPE_MXFP4, "FP8 src1 is only defined for mxfp4 weights");
 #ifdef BLACKWELL_MMA_AVAILABLE
         const int * Axi = (const int *) A.x;

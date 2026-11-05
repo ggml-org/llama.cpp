@@ -1229,13 +1229,14 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
             tile_C & C = *reinterpret_cast<tile_C *>(sum + (j0 / tile_C::J + n) * tile_C::ne);
 #pragma unroll
             for (int frag = 0; frag < nfrags; ++frag) {
-                mma_block_scaled_fp4<type, GGML_PREC_Q4>(C, A[n][frag], B[frag], scaleA[n][frag], scaleB[frag]);
+                mma_block_scaled<type, GGML_PREC_Q4>(C, A[n][frag], B[frag], scaleA[n][frag], scaleB[frag]);
             }
         }
     }
 }
 
 // mxfp4 weights x fp8 (e4m3) activations on Blackwell: kind::mxf8f6f4, m16n8k32, one ue8m0 scale per 32 values.
+// Each call takes one 128-value fp8 y block and the matching half (k00 = 0 or MMQ_TILE_NE_K) of the mxfp4 tile.
 template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_mxfp4_fp8_mma(
         const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
     typedef tile<16, 8, int>   tile_A;
@@ -1259,7 +1260,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     const int g = threadIdx.x / 4;
     const int t = threadIdx.x % 4;
 
-    // scale_vec::1X with byte-id 0 takes scale_A for rows g and g + 8 from the quad lanes with t%4 == 0 and 1
+    // scale_vec::1X with byte-id 0 takes scale_A for rows g and g + 8 from the quad lanes with t == 0 and 1
     const int tidx_A = g + (t % 2) * 8;
     const int i0     = (threadIdx.y / ntx) * rows_per_warp;
 
@@ -1317,7 +1318,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
             tile_C & C = *reinterpret_cast<tile_C *>(sum + (j0 / tile_C::J + n) * tile_C::ne);
 #pragma unroll
             for (int frag = 0; frag < nfrags; ++frag) {
-                mma_block_scaled_fp4<type, GGML_PREC_FP8>(C, A[n][frag], B[frag], scaleA[n][frag], scaleB[frag]);
+                mma_block_scaled<type, GGML_PREC_FP8>(C, A[n][frag], B[frag], scaleA[n][frag], scaleB[frag]);
             }
         }
     }
