@@ -728,6 +728,8 @@ class ModelBase:
             scale_size = prod(scale.shape)
             is_channel_scale = 1 <= scale.ndim <= weight.ndim and scale.shape[0] == weight.shape[0] and all(size == 1 for size in scale.shape[1:])
             if unsupported_layout or (scale_size != 1 and not is_channel_scale):
+                if self._is_nvfp4_compressed_tensors(quant_config.get("quant_method"), quant_config.get("format"), quant_config.get("config_groups") or {}):
+                    continue
                 raise ValueError(
                     f"FP8 weight {weight_name!r} has an unsupported block/group scale "
                     f"(scale shape {list(scale.shape)}, weight shape {list(weight.shape)}); "
