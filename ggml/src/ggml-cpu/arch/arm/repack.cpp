@@ -48,6 +48,28 @@ static inline void decode_q_Kx8_6bit_scales(const uint8_t * scales_in, int16x8_t
 }
 #endif
 
+#if defined(__aarch64__) && defined(__ARM_FEATURE_SVE) && defined(__ARM_FEATURE_DOTPROD)
+static inline void decode_q_Kx8_6bit_scales_sve(const uint8_t * scales_in, int8_t * out_mins, int8_t * out_scales) {
+    constexpr uint32_t kmask1 = 0x3f3f3f3f;
+    constexpr uint32_t kmask2 = 0x0f0f0f0f;
+    constexpr uint32_t kmask3 = 0x03030303;
+    constexpr uint8_t  scales_size = 12;
+
+    uint32_t sm[3];
+    memcpy(sm, scales_in, scales_size);
+
+    uint32_t mins_u32[2];
+    mins_u32[0] = sm[1] & kmask1;
+    mins_u32[1] = ((sm[2] >> 4) & kmask2) | (((sm[1] >> 6) & kmask3) << 4);
+    memcpy(out_mins, mins_u32, 8);
+
+    uint32_t scales_u32[2];
+    scales_u32[0] = sm[0] & kmask1;
+    scales_u32[1] = (sm[2] & kmask2) | (((sm[0] >> 6) & kmask3) << 4);
+    memcpy(out_scales, scales_u32, 8);
+}
+#endif
+
 #if defined(__aarch64__) && defined(__ARM_NEON) && (defined(__ARM_FEATURE_DOTPROD) || defined(__ARM_FEATURE_MATMUL_INT8))
 #define B1(c,s,n)  0x ## n ## c ,  0x ## n ## s
 #define B2(c,s,n) B1(c,s,n ## c), B1(c,s,n ## s)
@@ -1110,6 +1132,137 @@ void ggml_gemv_q5_K_8x8_q8_K(int                        n,
     UNUSED(nb);
     UNUSED(ncols_interleaved);
     UNUSED(blocklen);
+#if defined(__aarch64__) && defined(__ARM_FEATURE_SVE) && defined(__ARM_FEATURE_DOTPROD) && defined(__ARM_FEATURE_SVE_MATMUL_INT8)
+    // 256-bit SVE: 32 x int8 -> 8 x int32
+    if (ggml_cpu_get_sve_cnt() == QK8_0) {
+        const svbool_t pgb = svptrue_b8();               // all 32 int8 lanes
+        const svbool_t pg8 = svptrue_pat_b32(SV_VL8);    // all 8 int32/f32 lanes
+        const svuint8_t m4b = svdup_n_u8(0x0f);
+
+        const block_q8_K * GGML_RESTRICT q8_ptr = (const block_q8_K *) vy;
+
+        for (int x = 0; x < nc / ncols_interleaved; x++) {
+            const block_q5_Kx8 * GGML_RESTRICT q5_ptr = (const block_q5_Kx8 *) vx + (x * nb);
+
+            svfloat32_t acc_f32 = svdup_n_f32(0);
+
+            for (int b = 0; b < nb; b++) {
+                // Per-column scale/min factors (8 lanes -> 8 columns). zip1 with zero puts fp16 d[c] in the
+                // low half of 32-bit lane c, which is the half svcvt_f32_f16 widens, so lane c = column c.
+                const svfloat32_t q5_d =
+                    svcvt_f32_f16_x(pg8, svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL8), (const __fp16 *) q5_ptr[b].d),
+                                                    svdup_n_f16(0)));
+                const svfloat32_t q5_dmin =
+                    svcvt_f32_f16_x(pg8, svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL8), (const __fp16 *) q5_ptr[b].dmin),
+                                                    svdup_n_f16(0)));
+                const svfloat32_t q8_d     = svdup_n_f32(q8_ptr[b].d);
+                const svfloat32_t sb_scale = svmul_f32_x(pg8, q5_d, q8_d);
+                const svfloat32_t sb_min   = svmul_f32_x(pg8, q5_dmin, q8_d);
+
+                // Each bsum is 16 elements, pairwise add leaves the 8 bsums of the entire block.
+                // uzp1/uzp2 split the 16 lanes into even/odd halves; adding them is the pairwise reduce.
+                const svbool_t  pg16    = svptrue_pat_b16(SV_VL16);
+                const svint16_t bsums16 = svld1_s16(pg16, q8_ptr[b].bsums);
+                const svint16_t bsums8  = svadd_s16_x(pg16, svuzp1_s16(bsums16, bsums16),
+                                                            svuzp2_s16(bsums16, bsums16));
+                int16_t bsums_arr[8];
+                svst1_s16(svptrue_pat_b16(SV_VL8), bsums_arr, bsums8);
+
+                // qh holds the high bit for every quant. Cols 0-3 live in one 32-byte vector,
+                // cols 4-7 in the next. Subblock sb consumes high-bit pair (2*sb, 2*sb+1).
+                const uint8_t * qh_base = q5_ptr[b].qh;
+
+                for (int sb = 0; sb < QK_K / 64; sb++) {
+                    const svuint8_t qh_mask_lo = svdup_n_u8((uint8_t) (1u << (2 * sb)));
+                    const svuint8_t qh_mask_hi = svdup_n_u8((uint8_t) (2u << (2 * sb)));
+                    // Scales/mins for the low and high nibbles (8 columns each)
+                    int8_t aux_scales_lo[8];
+                    int8_t aux_scales_hi[8];
+                    int8_t aux_mins_lo[8];
+                    int8_t aux_mins_hi[8];
+                    decode_q_Kx8_6bit_scales_sve(&q5_ptr[b].scales[sb * 24 + 0], aux_mins_lo, aux_scales_lo);
+                    decode_q_Kx8_6bit_scales_sve(&q5_ptr[b].scales[sb * 24 + 12], aux_mins_hi, aux_scales_hi);
+                    const svint32_t scales_lo = svld1sb_s32(pg8, aux_scales_lo);
+                    const svint32_t scales_hi = svld1sb_s32(pg8, aux_scales_hi);
+                    const svint32_t mins_lo   = svld1sb_s32(pg8, aux_mins_lo);
+                    const svint32_t mins_hi   = svld1sb_s32(pg8, aux_mins_hi);
+
+                    const uint8_t * qs_base = q5_ptr[b].qs + sb * QK_K;
+                    const int8_t *  q8_base = q8_ptr[b].qs + sb * 64;
+
+                    // acc_lo -> low nibble (quants 0..31), acc_hi -> high nibble (quants 32..63)
+                    svint32_t acc_lo_0123, acc_lo_4567, acc_hi_0123, acc_hi_4567;
+                    acc_lo_0123 = acc_lo_4567 = acc_hi_0123 = acc_hi_4567 = svdup_n_s32(0);
+                    svint32_t qh_lo_0123, qh_lo_4567, qh_hi_0123, qh_hi_4567;
+                    qh_lo_0123 = qh_lo_4567 = qh_hi_0123 = qh_hi_4567 = svdup_n_s32(0);
+
+                    for (int j = 0; j < 4; j++) {
+                        // Broadcast the 8 q8 quants of this chunk across all four 8-byte groups
+                        uint64_t q8_lo_raw;
+                        uint64_t q8_hi_raw;
+                        memcpy(&q8_lo_raw, q8_base + j * 8, sizeof(q8_lo_raw));
+                        memcpy(&q8_hi_raw, q8_base + 32 + j * 8, sizeof(q8_hi_raw));
+                        const svint8_t q8_lo = svreinterpret_s8_u64(svdup_n_u64(q8_lo_raw));
+                        const svint8_t q8_hi = svreinterpret_s8_u64(svdup_n_u64(q8_hi_raw));
+
+                        // Cols 0-3
+                        {
+                            const svuint8_t qs = svld1_u8(pgb, qs_base + 64 * j);
+                            const svuint8_t qh = svld1_u8(pgb, qh_base + 64 * j);
+                            acc_lo_0123 = svdot_s32(acc_lo_0123, svreinterpret_s8_u8(svand_u8_x(pgb, qs, m4b)), q8_lo);
+                            acc_hi_0123 = svdot_s32(acc_hi_0123, svreinterpret_s8_u8(svlsr_n_u8_x(pgb, qs, 4)), q8_hi);
+                            qh_lo_0123  = svusdot_s32(qh_lo_0123, svand_u8_x(pgb, qh, qh_mask_lo), q8_lo);
+                            qh_hi_0123  = svusdot_s32(qh_hi_0123, svand_u8_x(pgb, qh, qh_mask_hi), q8_hi);
+                        }
+                        // Cols 4-7
+                        {
+                            const svuint8_t qs = svld1_u8(pgb, qs_base + 64 * j + 32);
+                            const svuint8_t qh = svld1_u8(pgb, qh_base + 64 * j + 32);
+                            acc_lo_4567 = svdot_s32(acc_lo_4567, svreinterpret_s8_u8(svand_u8_x(pgb, qs, m4b)), q8_lo);
+                            acc_hi_4567 = svdot_s32(acc_hi_4567, svreinterpret_s8_u8(svlsr_n_u8_x(pgb, qs, 4)), q8_hi);
+                            qh_lo_4567  = svusdot_s32(qh_lo_4567, svand_u8_x(pgb, qh, qh_mask_lo), q8_lo);
+                            qh_hi_4567  = svusdot_s32(qh_hi_4567, svand_u8_x(pgb, qh, qh_mask_hi), q8_hi);
+                        }
+                    }
+
+                    // The 5th bit is kept out of the weights: qh_* hold dot(qh & (1 << bit), q8), which equals
+                    // 2^bit * dot(hbit, q8). Shifting by (4 - bit) gives the 16 * dot(hbit, q8) term exactly.
+                    const int sh_lo = 4 - 2 * sb;
+                    const int sh_hi = 3 - 2 * sb;
+                    auto hbit_term = [&](svint32_t v, int sh) {
+                        return sh >= 0 ? svlsl_n_s32_x(pgb, v, sh) : svasr_n_s32_x(pgb, v, -sh);
+                    };
+                    acc_lo_0123 = svadd_s32_x(pgb, acc_lo_0123, hbit_term(qh_lo_0123, sh_lo));
+                    acc_lo_4567 = svadd_s32_x(pgb, acc_lo_4567, hbit_term(qh_lo_4567, sh_lo));
+                    acc_hi_0123 = svadd_s32_x(pgb, acc_hi_0123, hbit_term(qh_hi_0123, sh_hi));
+                    acc_hi_4567 = svadd_s32_x(pgb, acc_hi_4567, hbit_term(qh_hi_4567, sh_hi));
+
+                    // Each svdot lane pair holds one column's two half-sums. Deinterleaving the two
+                    // 4-column halves against each other (uzp1/uzp2 across both regs) reduces and merges
+                    // all 8 columns in one step: even lanes = first partials, odd lanes = second partials.
+                    const svint32_t acc_lo = svadd_s32_x(pg8, svuzp1_s32(acc_lo_0123, acc_lo_4567),
+                                                              svuzp2_s32(acc_lo_0123, acc_lo_4567));
+                    const svint32_t acc_hi = svadd_s32_x(pg8, svuzp1_s32(acc_hi_0123, acc_hi_4567),
+                                                              svuzp2_s32(acc_hi_0123, acc_hi_4567));
+
+                    // acc += sb_scale * (scales_lo*acc_lo + scales_hi*acc_hi): fold the two per-column
+                    // int32 products before a single float convert + fused-multiply-add.
+                    svint32_t isum = svmul_s32_x(pg8, scales_lo, acc_lo);
+                    isum           = svmla_s32_x(pg8, isum, scales_hi, acc_hi);
+                    acc_f32        = svmla_f32_x(pg8, acc_f32, sb_scale, svcvt_f32_s32_x(pg8, isum));
+
+                    // Bias correction: (bsum_lo * mins_lo + bsum_hi * mins_hi) * sb_min
+                    svint32_t bias = svmul_s32_x(pg8, svdup_n_s32(bsums_arr[2 * sb + 0]), mins_lo);
+                    bias           = svmla_s32_x(pg8, bias, svdup_n_s32(bsums_arr[2 * sb + 1]), mins_hi);
+                    acc_f32        = svmls_f32_x(pg8, acc_f32, sb_min, svcvt_f32_s32_x(pg8, bias));
+                }  // for sb
+            }  // for b
+
+            svst1_f32(pg8, s + x * ncols_interleaved, acc_f32);
+        }  // for x
+        return;
+    }
+#endif  // defined(__aarch64__) && defined(__ARM_FEATURE_SVE) && defined(__ARM_FEATURE_DOTPROD) && defined(__ARM_FEATURE_SVE_MATMUL_INT8)
 
 #if defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
     constexpr int    col_pairs = ncols_interleaved / 2;
