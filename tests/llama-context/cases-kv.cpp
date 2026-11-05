@@ -819,6 +819,87 @@ struct case_comp_padding : ctx_test {
     }
 };
 
+// the sliding-window cache can use a wider type than the full-attention cache.
+// with the flags unset, both caches stay on the base type.
+struct case_swa_cache_type : ctx_test {
+    const char * name() const override { return "swa_type"; }
+
+    const char * description() const override {
+        return "sliding-window KV cache can use a different type from the full-attention cache";
+    }
+
+    std::string skip_reason(model_run & mr) const override {
+        if (llama_model_n_swa(mr.model) <= 0) {
+            return "model has no sliding-window cache";
+        }
+
+        return ctx_test::skip_reason(mr);
+    }
+
+    case_result run(model_run & mr) const override {
+        // quantized K/V also allocate Hadamard buffers, which can outweigh the dtype delta
+        struct rot_off {
+            llama_model * model;
+            explicit rot_off(llama_model * model) : model(model) { llama_model_set_attn_rot(model, false); }
+            ~rot_off() { llama_model_set_attn_rot(model, true); }
+        } restore_rot(mr.model);
+
+        ctx_opts base;
+        base.n_ctx    = 512;
+        base.n_batch  = 512;
+        base.n_ubatch = 512;
+        base.fa       = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+        base.type_k   = GGML_TYPE_Q8_0;
+        base.type_v   = GGML_TYPE_Q8_0;
+        base.quiet    = true;
+
+        auto uniform = mr.ctx(base);
+        if (!uniform) {
+            return case_result::skip("q8_0 KV cache is not supported");
+        }
+
+        const auto kv_bytes = [](llama_context * ctx) {
+            size_t n = 0;
+            for (const auto & row : llama_get_memory_breakdown(ctx)) {
+                n += row.second.context;
+            }
+            return n;
+        };
+
+        const size_t n_uniform = kv_bytes(uniform.get());
+
+        ctx_opts mixed = base;
+        mixed.type_k_swa = GGML_TYPE_F16;
+        mixed.type_v_swa = GGML_TYPE_F16;
+        mixed.quiet      = false;
+
+        auto swa_f16 = mr.ctx(mixed);
+        CTX_REQUIRE(swa_f16, "failed to create a context with an f16 sliding-window cache");
+
+        const size_t n_mixed = kv_bytes(swa_f16.get());
+        CTX_REQUIRE(n_mixed > n_uniform,
+                "f16 sliding-window cache did not increase KV memory (" + std::to_string(n_mixed) +
+                    " <= " + std::to_string(n_uniform) + ")");
+
+        const size_t n_tok = std::min<size_t>(mr.tokens.size(), 32);
+        CTX_REQUIRE(n_tok > 0, "no prompt tokens");
+        CTX_REQUIRE(decode_seq(swa_f16.get(), mr.tokens, 0, (llama_pos) n_tok, 0, true),
+                "decode failed with an f16 sliding-window cache and a q8_0 full-attention cache");
+
+        ctx_opts explicit_same = base;
+        explicit_same.type_k_swa = GGML_TYPE_Q8_0;
+        explicit_same.type_v_swa = GGML_TYPE_Q8_0;
+
+        auto same = mr.ctx(explicit_same);
+        CTX_REQUIRE(same, "failed to create a context with an explicit q8_0 sliding-window cache");
+        CTX_REQUIRE(kv_bytes(same.get()) == n_uniform, "default SWA cache type differs from the base type");
+
+        TLOG_INF("%s: q8_0 KV %zu bytes, f16 SWA KV %zu bytes\n", __func__, n_uniform, n_mixed);
+
+        return case_result::pass();
+    }
+};
+
 std::vector<ctx_test_ptr> make_kv_cases() {
     std::vector<ctx_test_ptr> cases;
 
@@ -836,6 +917,7 @@ std::vector<ctx_test_ptr> make_kv_cases() {
     cases.push_back(std::make_unique<case_state_restore_fragmented>());
     cases.push_back(std::make_unique<case_noalloc>());
     cases.push_back(std::make_unique<case_comp_padding>());
+    cases.push_back(std::make_unique<case_swa_cache_type>());
 
     return cases;
 }

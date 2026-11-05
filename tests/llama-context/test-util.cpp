@@ -356,6 +356,12 @@ llama_context_ptr make_ctx(llama_model * model, const common_params & params, co
     if (opts.type_v != GGML_TYPE_COUNT) {
         cparams.type_v = opts.type_v;
     }
+    if (opts.type_k_swa != GGML_TYPE_COUNT) {
+        cparams.type_k_swa = opts.type_k_swa;
+    }
+    if (opts.type_v_swa != GGML_TYPE_COUNT) {
+        cparams.type_v_swa = opts.type_v_swa;
+    }
 
     return init_ctx(model, cparams, opts.fill);
 }
