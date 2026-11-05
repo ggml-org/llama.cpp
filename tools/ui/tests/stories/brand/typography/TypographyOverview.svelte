@@ -1,20 +1,16 @@
 <!--
-	The Typography overview: Llama Sans at its two optical sizes, UI (opsz 16) and Display (opsz 40), and Llama Mono on
-	one page, with a switcher pinned at the top. Each Sans tab pins its optical size, so everything in it, large or
-	small, shows that end of the axis. Each version gets the same layout, after rsms.me/inter and github.com/mona-sans: a hero set in it, then its own
-	part (SansUI, SansDisplay, MonoOverview). It sits in OverviewFrame, which brings the specimen's colours and fonts.
+	The Typography overview: Llama Sans and Llama Mono on one page, with a switcher pinned at the top. Each font gets the
+	same layout, after rsms.me/inter and github.com/mona-sans: a hero set in it, then its own part (SansOverview, with a
+	part for each end of its optical size axis, and MonoOverview). It sits in OverviewFrame, which brings the
+	specimen's colours and fonts.
 -->
 <script lang="ts">
 	import MonoOverview from '../llama-mono/MonoOverview.svelte';
 	import { specimen } from '../llama-sans/lib/specimen';
 	import Hero from '../llama-sans/overview/Hero.svelte';
-	import SansDisplay from './SansDisplay.svelte';
-	import SansUI from './SansUI.svelte';
+	import SansOverview from './SansOverview.svelte';
 
-	type Variant = 'display' | 'mono' | 'ui';
-
-	// each tab's optical size, pinned (Llama Mono has none)
-	const opsz: Record<Variant, string> = { display: "'opsz' 40", mono: 'normal', ui: "'opsz' 16" };
+	type Variant = 'mono' | 'sans';
 
 	const { axis } = specimen;
 
@@ -28,26 +24,17 @@
 		title: string[];
 	}[] = [
 		{
-			face: 'var(--ui)',
-			family: 'Llama Sans',
-			id: 'ui',
-			kicker: 'Optical size 16 · for interfaces and running text',
-			name: 'UI',
+			face: 'var(--headline)',
+			family: 'Llama',
+			id: 'sans',
+			kicker: 'For interfaces, reading and headlines',
+			name: 'Sans',
 			tagline: [
-				'Spaced for small sizes.',
-				'Centred on the caps.',
+				'One font for every size.',
+				'Spaced for text at 16, tight for headlines at 40.',
 				`Every weight from ${axis.min} to ${axis.max}.`
 			],
-			title: ['Llama Sans', 'UI']
-		},
-		{
-			face: 'var(--headline)',
-			family: 'Llama Sans',
-			id: 'display',
-			kicker: 'Optical size 40 · for headlines and large type',
-			name: 'Display',
-			tagline: ['The same font as UI.', 'Set tight for large sizes.'],
-			title: ['Llama Sans', 'Display']
+			title: ['Llama', 'Sans']
 		},
 		{
 			face: 'var(--code)',
@@ -60,7 +47,7 @@
 		}
 	];
 
-	let selected = $state<Variant>('ui');
+	let selected = $state<Variant>('sans');
 	const current = $derived(variants.find((v) => v.id === selected)!);
 
 	function select(id: Variant) {
@@ -93,7 +80,6 @@
 			{#each variants as v (v.id)}
 				<button
 					style:--face={v.face}
-					style:--opsz-pin={opsz[v.id]}
 					aria-controls="panel"
 					aria-selected={v.id === selected}
 					class="tab"
@@ -111,13 +97,7 @@
 		</div>
 	</nav>
 
-	<div
-		style:--opsz-pin={opsz[selected]}
-		aria-labelledby="tab-{selected}"
-		class="panel"
-		id="panel"
-		role="tabpanel"
-	>
+	<div aria-labelledby="tab-{selected}" class="panel" id="panel" role="tabpanel">
 		{#key selected}
 			<Hero
 				face={current.face}
@@ -126,10 +106,8 @@
 				title={current.title}
 			/>
 
-			{#if selected === 'ui'}
-				<SansUI />
-			{:else if selected === 'display'}
-				<SansDisplay />
+			{#if selected === 'sans'}
+				<SansOverview />
 			{:else}
 				<MonoOverview />
 			{/if}
