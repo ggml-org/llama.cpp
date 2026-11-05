@@ -15,8 +15,30 @@ void llama_model_ricursive::load_arch_hparams(llama_model_loader & ml) {
         throw std::runtime_error("ricursive: sliding_window must be > 0");
     }
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-    // default: every 5th layer is global (vendor layer_types); the per-layer array in the GGUF takes precedence
-    load_swa_pattern(ml, 5);
+    if (ml.get_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, false)) {
+        // load_swa_pattern only bounds the array by LLAMA_MAX_LAYERS: a short one would leave the last layers dense and without RoPE
+        uint32_t n_entries = 0;
+        ml.get_arr_n(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, n_entries);
+        if (n_entries != hparams.n_layer()) {
+            throw std::runtime_error(format("ricursive: sliding_window_pattern has %u entries, expected %u", n_entries, hparams.n_layer()));
+        }
+    } else {
+        // default: every 5th layer is global (RicursiveConfig layer_types: full attention iff i % 5 == 4)
+        load_swa_pattern(ml, 5);
+    }
+    if (!hparams.is_swa_any()) {
+        throw std::runtime_error("ricursive: no sliding window layer, the model would have no positional encoding");
+    }
+
+    // RoPE exactly on the SWA layers; rope_pattern is optional because the first published GGUFs do not carry it
+    hparams.rope_pattern = hparams.is_swa_impl;
+    ml.get_key_or_arr(LLM_KV_ATTENTION_ROPE_PATTERN, hparams.rope_pattern, hparams.n_layer(), false);
+    for (uint32_t il = 0; il < hparams.n_layer(); ++il) {
+        if (hparams.has_rope(il) != hparams.is_swa(il)) {
+            throw std::runtime_error(format("ricursive: layer %u has %s but %s", il,
+                    hparams.has_rope(il) ? "RoPE" : "no RoPE", hparams.is_swa(il) ? "a sliding window" : "no sliding window"));
+        }
+    }
 
     // the reference uses plain RoPE on the SWA layers: no rope scaling
     hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
@@ -65,6 +87,16 @@ void llama_model_ricursive::load_arch_tensors(llama_model_loader &) {
         layer.ffn_up        = create_tensor(tn(LLM_TENSOR_FFN_UP,        "weight", i), {n_embd, n_ff}, 0);
         layer.ffn_down      = create_tensor(tn(LLM_TENSOR_FFN_DOWN,      "weight", i), {n_ff, n_embd}, 0);
         layer.ffn_post_norm = create_tensor(tn(LLM_TENSOR_FFN_POST_NORM, "weight", i), {n_embd},       0);
+    }
+
+    // the gate and the value residual are per-model switches (use_gated_attention, use_valres)
+    for (int i = 1; i < n_layer; ++i) {
+        if ((layers[i].wqkv_gate == nullptr) != (layers[0].wqkv_gate == nullptr)) {
+            throw std::runtime_error(format("ricursive: attn_gate must be present in all layers or in none (layers 0 and %d differ)", i));
+        }
+        if ((layers[i].attn_vres_lambda == nullptr) != (layers[0].attn_vres_lambda == nullptr)) {
+            throw std::runtime_error(format("ricursive: attn_vres_lambda must be present in all layers or in none (layers 0 and %d differ)", i));
+        }
     }
 }
 
@@ -125,7 +157,7 @@ llama_model_ricursive::graph::graph(const llama_model & model, const llm_graph_p
             cb(Kcur, "Kcur_normed", il);
 
             // global layers use no RoPE (NoPE), as in modeling_ricursive.py
-            if (hparams.is_swa(il)) {
+            if (hparams.has_rope(il)) {
                 const float freq_base_l  = model.get_rope_freq_base (cparams, il);
                 const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
 
