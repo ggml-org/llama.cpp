@@ -1,5 +1,7 @@
 <!-- The character set in a hairline grid, after github.com/mona-sans: capitals, lowercase, figures and punctuation. -->
 <script lang="ts">
+	let { face = 'var(--ui)' }: { face?: string } = $props();
+
 	const chars = [
 		...'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
 		...'abcdefghijklmnopqrstuvwxyz',
@@ -9,7 +11,7 @@
 	];
 </script>
 
-<section aria-label="Character set" class="chars">
+<section style:--face={face} aria-label="Character set" class="chars">
 	{#each chars as ch (ch)}<span>{ch}</span>{/each}
 </section>
 
@@ -28,6 +30,6 @@
 		aspect-ratio: 1;
 		border-right: 1px solid var(--rule);
 		border-bottom: 1px solid var(--rule);
-		font: 400 clamp(22px, 3vw, 36px) / 1 var(--ui);
+		font: 400 clamp(22px, 3vw, 36px) / 1 var(--face);
 	}
 </style>
