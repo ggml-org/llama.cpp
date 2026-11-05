@@ -427,13 +427,13 @@ components:
     typography: '{typography.label}'
     height: '36px'
   button-destructive-dark:
-    backgroundColor: '#9e3d37'
+    backgroundColor: '#8e141a'
     textColor: '{colors.fg-on-danger}'
   button-destructive-hover:
     backgroundColor: '#d82431'
     textColor: '{colors.fg-on-danger}'
   button-destructive-hover-dark:
-    backgroundColor: '#9e3d37'
+    backgroundColor: '#a5151c'
     textColor: '{colors.fg-on-danger}'
   toggle-on:
     backgroundColor: '{colors.surface-selected}'
@@ -841,13 +841,16 @@ matches the role of the surface instead of combining raw shadows.
   double edge; the panel's border stays transparent so its size does not change. In light mode dialogs are solid white instead: over the dimmed page a
   translucent white turns grey.
 - **`matte-key`:** buttons, selects, toggles and tabs. The matte finish: on top of the
-  button's own fill it adds a light blur, a fill barely lighter at the top (`--key-sheen`) and
-  a small drop shadow. It never changes the button colour and draws no rim of its own: every
+  button's own fill it adds a light blur, a fill barely lighter at the top (`--key-sheen`, 12% white in light mode, 2% in dark)
+  and a small drop shadow. It never changes the button colour and draws no rim of its own: every
   `matte-key` control has a border, and a rim inside it would double the edge. Nothing marks
   the top edge alone, so the edge looks the same all round, with no gloss.
 - **`matte-key-solid`:** primary and danger buttons. The same sheen, fainter
-  (`--key-sheen-solid`), and an even 1px hairline in a shade of the fill drawn inside the
-  button (`--key-edge`), so the width does not change.
+  (`--key-sheen-solid`), the same blur, and an even 1px hairline in a shade of the fill drawn
+  inside the button (`--key-edge`), so the width does not change. The danger key stays matte
+  glass rather than metal: its sheen is almost none (`--button-danger-sheen`), and in dark mode
+  it is a frosted, translucent red (`red-500` at 58%) whose edge is a soft tint of the red, never
+  a lighter rim.
 - **`elevated-control`**, **`elevated-surface`** and **`elevated-raised`:** cards, floating
   bars and thumbnails. An elevation token with a 1px hairline ring baked in as its last layer,
   like shadow-plugin's `smooth-shadow-ring-*` but on our tokens, so the shadow deepens in dark

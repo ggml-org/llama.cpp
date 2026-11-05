@@ -147,10 +147,12 @@
 	box-shadow: var(--button-shadow);
 }
 
-/* The same finish on a solid fill (primary and danger buttons): the sheen, and an even hairline in a shade of the
-   fill drawn inside it, so the width stays the button's. Set the shade with --key-edge. */
+/* The same finish on a solid fill (primary and danger buttons): the sheen, the frosting (it shows wherever the fill is
+   translucent, as the danger key's is in dark), and an even hairline in a shade of the fill drawn inside it, so the
+   width stays the button's. Set the shade with --key-edge. */
 @utility matte-key-solid {
 	@apply matte-sheen-solid;
+	backdrop-filter: blur(var(--blur-control)) saturate(1.4);
 	box-shadow:
 		inset 0 0 0 1px var(--key-edge),
 		var(--button-shadow);
