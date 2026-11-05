@@ -42,6 +42,16 @@
 	--green-600: oklch(0.55 0.16 148);
 	--green-800: oklch(0.45 0.14 148);
 
+	/* amber and blue: the warning and info hues, as saturated as the reds and greens */
+	--amber-300: oklch(0.83 0.15 78);
+	--amber-600: oklch(0.56 0.15 65);
+
+	--blue-300: oklch(0.77 0.12 255);
+	--blue-400: oklch(0.7 0.13 255);
+	--blue-500: oklch(0.62 0.15 255);
+	--blue-600: oklch(0.52 0.13 255);
+	--blue-800: oklch(0.42 0.11 255);
+
 	/* translucent white and black, named by opacity in percent */
 	--white-a2: oklch(1 0 0 / 0.02);
 	--white-a4: oklch(1 0 0 / 0.04);

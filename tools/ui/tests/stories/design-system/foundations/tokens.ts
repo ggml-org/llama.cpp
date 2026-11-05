@@ -17,7 +17,7 @@ export interface TokenGroup {
 
 // colour tokens only: lengths, shadows and blur are documented elsewhere
 const COLOR_VALUE =
-	/oklch|color-mix|transparent|var\(--(neutral|cool-gray|red|yellow|green|white|black|surface|fg|line|edge|action|field|status|highlight|sheen|user-bubble|fg-danger)/;
+	/oklch|color-mix|transparent|var\(--(neutral|cool-gray|red|yellow|green|amber|blue|white|black|surface|fg|line|edge|action|field|status|highlight|sheen|user-bubble|fg-danger)/;
 const NOT_COLOR = /px|rem|var\(--(length|elevation|blur|radius|font|line-height)/;
 
 function block(css: string, selector: string): string {

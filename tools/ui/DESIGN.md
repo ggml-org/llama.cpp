@@ -3,7 +3,7 @@ version: alpha
 name: llama.cpp Web UI - Matte Glass
 description: >-
   Neutral, quiet chat interface for llama-server. Frosted matte surfaces with faint
-  blue-grey hairlines, near-flat fills, and red/yellow/green status lamps. Tokens come in
+  blue-grey hairlines, near-flat fills, and status colours for success, warning, error and info. Tokens come in
   three tiers: primitives, semantic tokens (with a "-dark" twin where dark mode differs)
   and components. Generated from src/lib/styles/tokens/*.css.
 colors:
@@ -37,6 +37,13 @@ colors:
   green-500: 'oklch(0.73 0.2 148)'
   green-600: 'oklch(0.55 0.16 148)'
   green-800: 'oklch(0.45 0.14 148)'
+  amber-300: 'oklch(0.83 0.15 78)'
+  amber-600: 'oklch(0.56 0.15 65)'
+  blue-300: 'oklch(0.77 0.12 255)'
+  blue-400: 'oklch(0.7 0.13 255)'
+  blue-500: 'oklch(0.62 0.15 255)'
+  blue-600: 'oklch(0.52 0.13 255)'
+  blue-800: 'oklch(0.42 0.11 255)'
   white-a2: 'oklch(1 0 0 / 0.02)'
   white-a4: 'oklch(1 0 0 / 0.04)'
   white-a6: 'oklch(1 0 0 / 0.06)'
@@ -66,11 +73,21 @@ colors:
   fg-code: '{colors.neutral-950}'
   fg-danger: '{colors.red-600}'
   fg-success: '{colors.green-600}'
+  fg-warning: '{colors.amber-600}'
+  fg-info: '{colors.blue-600}'
   line-default: '{colors.neutral-300}'
   line-field: '{colors.neutral-200}'
   line-control: '{colors.neutral-300}'
   line-focus: '{colors.neutral-400}'
   line-danger: '{colors.red-600}'
+  surface-success: 'color-mix(in oklab, {colors.fg-success} 11%, {colors.surface-page})'
+  surface-warning: 'color-mix(in oklab, {colors.fg-warning} 11%, {colors.surface-page})'
+  surface-danger: 'color-mix(in oklab, {colors.fg-danger} 11%, {colors.surface-page})'
+  surface-info: 'color-mix(in oklab, {colors.fg-info} 11%, {colors.surface-page})'
+  line-success-soft: 'color-mix(in oklab, {colors.fg-success} 34%, {colors.line-default})'
+  line-warning-soft: 'color-mix(in oklab, {colors.fg-warning} 34%, {colors.line-default})'
+  line-danger-soft: 'color-mix(in oklab, {colors.fg-danger} 34%, {colors.line-default})'
+  line-info-soft: 'color-mix(in oklab, {colors.fg-info} 34%, {colors.line-default})'
   edge-rest-side: '{colors.cool-gray-200}'
   edge-rest-mid: '{colors.cool-gray-100}'
   edge-focus-side: '{colors.cool-gray-400}'
@@ -97,6 +114,9 @@ colors:
   status-success: '{colors.green-500}'
   status-success-rim: '{colors.green-400}'
   status-success-glyph: '{colors.green-800}'
+  status-info: '{colors.blue-500}'
+  status-info-rim: '{colors.blue-400}'
+  status-info-glyph: '{colors.blue-800}'
   highlight-inner: '{colors.white-a50}'
   highlight-inverse: '{colors.white-a12}'
   sheen-start: '{colors.white-a20}'
@@ -116,11 +136,21 @@ colors:
   fg-code-dark: '{colors.neutral-300}'
   fg-danger-dark: '{colors.red-400}'
   fg-success-dark: '{colors.green-400}'
+  fg-warning-dark: '{colors.amber-300}'
+  fg-info-dark: '{colors.blue-300}'
   line-default-dark: '{colors.white-a30}'
   line-field-dark: '{colors.white-a30}'
   line-control-dark: '{colors.white-a12}'
   line-focus-dark: '{colors.neutral-500}'
   line-danger-dark: '{colors.red-400}'
+  surface-success-dark: 'color-mix(in oklab, {colors.fg-success-dark} 16%, {colors.surface-page-dark})'
+  surface-warning-dark: 'color-mix(in oklab, {colors.fg-warning-dark} 16%, {colors.surface-page-dark})'
+  surface-danger-dark: 'color-mix(in oklab, {colors.fg-danger-dark} 16%, {colors.surface-page-dark})'
+  surface-info-dark: 'color-mix(in oklab, {colors.fg-info-dark} 16%, {colors.surface-page-dark})'
+  line-success-soft-dark: 'color-mix(in oklab, {colors.fg-success-dark} 38%, {colors.line-default-dark})'
+  line-warning-soft-dark: 'color-mix(in oklab, {colors.fg-warning-dark} 38%, {colors.line-default-dark})'
+  line-danger-soft-dark: 'color-mix(in oklab, {colors.fg-danger-dark} 38%, {colors.line-default-dark})'
+  line-info-soft-dark: 'color-mix(in oklab, {colors.fg-info-dark} 38%, {colors.line-default-dark})'
   edge-rest-side-dark: '{colors.white-a6}'
   edge-rest-mid-dark: '{colors.white-a4}'
   edge-focus-side-dark: '{colors.white-a18}'
@@ -530,6 +560,38 @@ components:
   badge-destructive-dark:
     backgroundColor: '#b6443e'
     textColor: '{colors.fg-on-danger}'
+  badge-success:
+    backgroundColor: '{colors.surface-success}'
+    textColor: '{colors.fg-success}'
+    rounded: '{rounded.control}'
+    typography: '{typography.label-sm}'
+  badge-success-dark:
+    backgroundColor: '{colors.surface-success-dark}'
+    textColor: '{colors.fg-success-dark}'
+  badge-warning:
+    backgroundColor: '{colors.surface-warning}'
+    textColor: '{colors.fg-warning}'
+    rounded: '{rounded.control}'
+    typography: '{typography.label-sm}'
+  badge-warning-dark:
+    backgroundColor: '{colors.surface-warning-dark}'
+    textColor: '{colors.fg-warning-dark}'
+  badge-danger:
+    backgroundColor: '{colors.surface-danger}'
+    textColor: '{colors.fg-danger}'
+    rounded: '{rounded.control}'
+    typography: '{typography.label-sm}'
+  badge-danger-dark:
+    backgroundColor: '{colors.surface-danger-dark}'
+    textColor: '{colors.fg-danger-dark}'
+  badge-info:
+    backgroundColor: '{colors.surface-info}'
+    textColor: '{colors.fg-info}'
+    rounded: '{rounded.control}'
+    typography: '{typography.label-sm}'
+  badge-info-dark:
+    backgroundColor: '{colors.surface-info-dark}'
+    textColor: '{colors.fg-info-dark}'
   code-block:
     backgroundColor: '{colors.surface-code}'
     textColor: '{colors.fg-code}'
@@ -621,8 +683,8 @@ components:
 The llama.cpp web UI is a local, private chat client for llama-server. It should feel calm
 and tool-like: neutral greys, plenty of space, and surfaces that read as frosted matte glass
 rather than shiny plastic. Depth comes from blur, a faint hairline edge and soft shadows,
-never from strong gradients. Colour is reserved for meaning: the red, yellow and green
-status lamps, destructive actions, and the content itself.
+never from strong gradients. Colour is reserved for meaning: the status colours (success,
+warning, error and info), destructive actions, and the content itself.
 
 Design tokens come in three tiers, each in its own file under `src/lib/styles/tokens/`:
 
@@ -650,7 +712,10 @@ fills are given as they render over the page, so contrast checks see the real co
 ## Colors
 
 The palette is achromatic. Hue appears only in the hairline edges (a cool grey at hue 250,
-kept almost neutral) and in status and error colours.
+kept almost neutral) and in the status colours, which serve function only: green for success,
+amber for warning, red for errors and blue for information, saturated enough to read at a
+glance and tuned to text contrast in both modes. The brand orange belongs to the llama.cpp
+logotype and is not part of the UI palette.
 
 - **Surfaces:** `surface-page` for the page, `surface-muted` for quiet panels,
   `surface-emphasis` and `surface-selected` for stronger fills and hover or selected rows,
@@ -658,8 +723,9 @@ kept almost neutral) and in status and error colours.
   recessed track, `surface-pressed` for a key pressed in, `surface-glass` for the translucent matte fill, `surface-code` for code and
   `surface-overlay` behind dialogs.
 - **Foreground:** `fg-default` and `fg-muted` for text and icons, `fg-on-action` and
-  `fg-on-danger` on filled buttons, `fg-code` for code, `fg-danger` for errors and
-  `fg-success` for confirmations such as a copied check.
+  `fg-on-danger` on filled buttons, `fg-code` for code, `fg-danger` for errors,
+  `fg-success` for confirmations such as a copied check, `fg-warning` for cautions and
+  `fg-info` for neutral notices.
 - **Lines:** `line-default` for dividers, `line-control` for outlined controls (soft in dark
   mode), `line-field` for inputs, `line-focus` for focus and `line-danger` for invalid fields.
 - **Edges:** the hairlines of matte surfaces, darker at the sides than in the middle.
@@ -668,16 +734,19 @@ kept almost neutral) and in status and error colours.
   `edge-raised` for floating panels.
 - **Actions:** `action-primary` (near black in light mode, near white in dark mode) and its
   hover, `action-danger` and its hover, and `action-ghost-hover`.
-- **Status:** `status-danger`, `status-warning` and `status-success` are the lamp fills for
-  error or stopped, loading or warning, and ready or connected. Each has a lighter `-rim` and
+- **Status surfaces:** `surface-success`, `surface-warning`, `surface-danger` and
+  `surface-info` are soft tints of each status colour for alerts and soft badges, with
+  `line-*-soft` hairlines to match. They are mixed in oklab so the hue holds over the page.
+- **Status:** `status-danger`, `status-warning`, `status-success` and `status-info` are the
+  lamp fills for error or stopped, loading or warning, ready or connected, and informational. Each has a lighter `-rim` and
   a darker `-glyph`. They are the same in both modes. Known gap: the glyph on the red lamp
   reaches only about 2:1 and on the green lamp about 3.2:1, below WCAG AA, so the lamp colour
   must never be the only signal; pair it with a label or tooltip.
 
 ## Typography
 
-The UI uses the system sans-serif stack (`system-ui`) and the system monospace stack for
-code. Type is set through roles that fix size, line height and weight together:
+The UI uses Llama Sans UI (with the system sans-serif stack as its fallback) and the system
+monospace stack for code. Type is set through roles that fix size, line height and weight together:
 
 - `body` (16/24, 400): chat messages and the chat input.
 - `body-sm` (14/20, 400): most text, fields and lists.
