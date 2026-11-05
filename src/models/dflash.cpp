@@ -1002,6 +1002,8 @@ llama_model_dflash::graph<false>::graph(const llm_graph_params & params) : llm_g
                 if (v_rot) {
                     Vcur = llama_mul_mat_hadamard(ctx0, Vcur, v_rot);
                 }
+                ggml_tensor * q = nullptr;
+                build_attn_scale_kv_inputs(ctx0, kv, q, Kcur, Vcur, il);
                 ggml_build_forward_expand(gf, kv->cpy_k(ctx0, Kcur, k_idxs, il));
                 ggml_build_forward_expand(gf, kv->cpy_v(ctx0, Vcur, v_idxs, il));
             } else {
@@ -1012,6 +1014,8 @@ llama_model_dflash::graph<false>::graph(const llm_graph_params & params) : llm_g
                 if (inp_attn->self_v_rot[il]) {
                     Vcur = llama_mul_mat_hadamard(ctx0, Vcur, inp_attn->self_v_rot[il]);
                 }
+                ggml_tensor * q = nullptr;
+                build_attn_scale_kv_inputs(ctx0, inp_attn->mctx, q, Kcur, Vcur, il);
                 ggml_build_forward_expand(gf, inp_attn->mctx->cpy_k(ctx0, Kcur, inp_attn->get_k_idxs(), il));
                 ggml_build_forward_expand(gf, inp_attn->mctx->cpy_v(ctx0, Vcur, inp_attn->get_v_idxs(), il));
             }

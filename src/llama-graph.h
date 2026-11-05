@@ -1505,3 +1505,5 @@ struct llm_graph_context {
 
 // TODO: better name
 int32_t llama_relative_position_bucket(llama_pos x, llama_pos y, uint64_t n_buckets, bool bidirectional);
+
+void build_attn_scale_kv_inputs(ggml_context * ctx, const llama_kv_cache_context * mctx, ggml_tensor * & q, ggml_tensor * & k, ggml_tensor * & v, int32_t il);

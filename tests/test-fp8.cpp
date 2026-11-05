@@ -530,6 +530,139 @@ static void check_fp8_context_shift(llama_model * model) {
     model->layers[0].k_cache_scale = old_scale;
 }
 
+static void check_fp8_cache_decode(llama_model * model) {
+    const uint32_t n_layer = model->hparams.n_layer();
+    ggml_context_ptr scale_ctx(ggml_init({ (2*n_layer + 1)*ggml_tensor_overhead(), nullptr, true }));
+    std::vector<ggml_tensor *> old_scales;
+    std::vector<ggml_tensor *> scales;
+    for (uint32_t il = 0; il < n_layer; ++il) {
+        old_scales.push_back(model->layers[il].k_cache_scale);
+        scales.push_back(ggml_new_tensor_1d(scale_ctx.get(), GGML_TYPE_F32, 1));
+        old_scales.push_back(model->layers[il].v_cache_scale);
+        scales.push_back(ggml_new_tensor_1d(scale_ctx.get(), GGML_TYPE_F32, 1));
+    }
+    ggml_backend_buffer_ptr scale_buf(ggml_backend_alloc_ctx_tensors_from_buft(scale_ctx.get(), ggml_backend_cpu_buffer_type()));
+
+    struct reference_data {
+        std::vector<float> scales;
+        size_t writes = 0;
+    } reference;
+    reference.scales.resize(2*n_layer);
+    // Exercise chunked prefill, multiple streams and single-token decode.
+    const auto tokens = get_tokens(132, llama_vocab_n_tokens(llama_model_get_vocab(model)), 9);
+
+    for (int scaled : { 0, 1, 2 }) {
+        for (uint32_t il = 0; il < n_layer; ++il) {
+            const bool scale_layer = scaled == 1 || (scaled == 2 && il % 2 == 0);
+            reference.scales[2*il] = scale_layer ? 0.3f + 0.07f*il : 1.0f;
+            reference.scales[2*il + 1] = scale_layer ? 0.6f + 0.03f*il : 1.0f;
+            model->layers[il].k_cache_scale = scale_layer ? scales[2*il] : nullptr;
+            model->layers[il].v_cache_scale = scale_layer ? scales[2*il + 1] : nullptr;
+            if (scale_layer) {
+                ggml_backend_tensor_set(scales[2*il], &reference.scales[2*il], 0, sizeof(float));
+                ggml_backend_tensor_set(scales[2*il + 1], &reference.scales[2*il + 1], 0, sizeof(float));
+            }
+        }
+        for (auto flash : { LLAMA_FLASH_ATTN_TYPE_DISABLED, LLAMA_FLASH_ATTN_TYPE_ENABLED }) {
+            std::vector<float> results[2];
+            for (int ref = 0; ref < 2; ++ref) {
+                auto params = llama_context_default_params();
+                params.n_seq_max = scaled ? 2 : 1;
+                params.n_ctx = 256*params.n_seq_max;
+                params.n_batch = 256;
+                params.n_ubatch = 64;
+                params.n_threads = 1;
+                params.n_threads_batch = 1;
+                params.type_k = params.type_v = ref ? GGML_TYPE_F32 : GGML_TYPE_F8_E4M3;
+                params.flash_attn_type = flash;
+                params.offload_kqv = false;
+                if (ref) {
+                    // Round FP32 storage independently of the scaled cache graphs.
+                    reference.writes = 0;
+                    params.cb_eval_user_data = &reference;
+                    params.cb_eval = [](ggml_tensor * t, bool ask, void * user_data) {
+                        if (t->op != GGML_OP_SET_ROWS) {
+                            return false;
+                        }
+                        ggml_tensor * storage = t->src[2];
+                        while (storage->view_src) {
+                            storage = storage->view_src;
+                        }
+                        if (strncmp(storage->name, "cache_", 6) != 0) {
+                            return false;
+                        }
+                        if (!ask) {
+                            auto & data = *static_cast<reference_data *>(user_data);
+                            const char * layer = strstr(storage->name, "_l");
+                            GGML_ASSERT(layer && storage->type == GGML_TYPE_F32 && ggml_is_contiguous(storage));
+                            const float scale = data.scales.at(2*std::stoi(layer + 2) + (layer[-1] == 'v'));
+                            std::vector<float> values(ggml_nelements(storage));
+                            std::vector<uint8_t> rounded(values.size());
+                            ggml_backend_tensor_get(storage, values.data(), 0, ggml_nbytes(storage));
+                            for (float & value : values) {
+                                value /= scale;
+                            }
+                            const auto * traits = ggml_get_type_traits(GGML_TYPE_F8_E4M3);
+                            traits->from_float_ref(values.data(), rounded.data(), values.size());
+                            traits->to_float(rounded.data(), values.data(), values.size());
+                            for (float & value : values) {
+                                value *= scale;
+                            }
+                            ggml_backend_tensor_set(storage, values.data(), 0, ggml_nbytes(storage));
+                            ++data.writes;
+                        }
+                        return true;
+                    };
+                }
+                llama_context_ptr lctx(llama_init_from_model(model, params));
+                GGML_ASSERT(lctx);
+                std::vector<float> features(128*llama_model_n_embd_inp(model));
+                std::mt19937 gen(7);
+                std::normal_distribution<float> dist(0.0f, 0.1f);
+                for (float & value : features) {
+                    value = dist(gen);
+                }
+                for (uint32_t pos = 0; pos < tokens.size();) {
+                    const uint32_t count = pos == 0 ? 128 : 1;
+                    common_batch batch(lctx.get());
+                    for (uint32_t i = 0; i < count; ++i) {
+                        for (uint32_t seq = 0; seq < params.n_seq_max; ++seq) {
+                            if (model->arch == LLM_ARCH_DFLASH && pos == 0) {
+                                const llama_pos position = i;
+                                batch.add_embd({ features.data() + i*llama_model_n_embd_inp(model), 1, (size_t) llama_model_n_embd_inp(model) }, &position, seq, false);
+                            } else {
+                                batch.add(tokens[pos + i], pos + i, seq, true);
+                            }
+                        }
+                    }
+                    GGML_ASSERT(llama_process(lctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0);
+                    if (model->arch == LLM_ARCH_DFLASH && pos == 0) {
+                        pos += count;
+                        continue;
+                    }
+                    for (uint32_t i = 0; i < count*params.n_seq_max; ++i) {
+                        const float * logits = llama_get_logits_ith(lctx.get(), i);
+                        const auto n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
+                        results[ref].insert(results[ref].end(), logits, logits + n_vocab);
+                    }
+                    pos += count;
+                }
+                if (ref) {
+                    GGML_ASSERT(reference.writes > 0);
+                }
+            }
+            const double error = nmse(results[1], results[0]);
+            LOG("FP8 cache decode: arch=%s flash=%s scaled=%d nmse=%.2e\n",
+                    llama_arch_name(model->arch), llama_flash_attn_type_name(flash), scaled, error);
+            GGML_ASSERT(std::isfinite(error) && error < 1e-5);
+        }
+    }
+    for (uint32_t il = 0; il < n_layer; ++il) {
+        model->layers[il].k_cache_scale = old_scales[2*il];
+        model->layers[il].v_cache_scale = old_scales[2*il + 1];
+    }
+}
+
 enum class test_status {
     PASS,
     FAIL,
@@ -541,15 +674,21 @@ static test_status test_fp8_kv(const std::string & path, const char * target_bac
     auto params = llama_model_default_params();
     params.devices = cpu_devices;
     params.progress_callback = silent_model_load_progress;
+    bool is_dflash = false;
     {
         llama_model_ptr model = load_model(path, params);
-        if (model->arch != LLM_ARCH_LLAMA || model->hparams.n_expert > 0) {
-            LOG("FP8 KV: only dense Llama fixtures are supported, skipping %s\n", path.c_str());
-            return test_status::SKIP;
+        is_dflash = model->arch == LLM_ARCH_DFLASH;
+        if (is_dflash) {
+            check_fp8_cache_decode(model.get());
+        } else {
+            if (model->arch != LLM_ARCH_LLAMA || model->hparams.n_expert > 0) {
+                LOG("FP8 KV: only dense Llama and DFlash fixtures are supported, skipping %s\n", path.c_str());
+                return test_status::SKIP;
+            }
+            LOG("FP8 KV: CPU attention and context shift\n");
+            check_fp8_attention(model.get());
+            check_fp8_context_shift(model.get());
         }
-        LOG("FP8 KV: CPU attention and context shift\n");
-        check_fp8_attention(model.get());
-        check_fp8_context_shift(model.get());
     }
 
     std::vector<ggml_backend_dev_t> devices_meta;
@@ -568,10 +707,14 @@ static test_status test_fp8_kv(const std::string & path, const char * target_bac
         params.devices = devices;
         LOG("FP8 KV: device=%s\n", ggml_backend_dev_name(dev));
         llama_model_ptr model = load_model(path, params);
-        check_fp8_attention(model.get());
-        check_fp8_attention(model.get(), false);
+        if (is_dflash) {
+            check_fp8_cache_decode(model.get());
+        } else {
+            check_fp8_attention(model.get());
+            check_fp8_attention(model.get(), false);
+        }
     }
-    if (!target_backend && !devices_meta.empty()) {
+    if (!is_dflash && !target_backend && !devices_meta.empty()) {
         devices_meta.push_back(nullptr);
         params.devices = devices_meta.data();
         params.split_mode = LLAMA_SPLIT_MODE_TENSOR;

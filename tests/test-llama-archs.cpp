@@ -7,6 +7,7 @@
 #include "llama.h"
 #include "llama-cpp.h"
 #include "../src/llama-ext.h"
+#include "../src/llama-model.h"
 
 #include <algorithm>
 #include <cinttypes>
@@ -777,6 +778,18 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     ms.add_kv(LLM_KV_ACTIVATION_SITU_LINEAR_BETA, 25.0f);
     ms.add_kv(LLM_KV_KDA_GATE_LOWER_BOUND,        -5.0f);
 
+    if (arch == LLM_ARCH_DFLASH) {
+        ms.add_kv(LLM_KV_TARGET_LAYERS, std::vector<uint32_t>{0});
+        GGML_ASSERT(gguf_remove_key(ms.gguf_ctx, "dflash.attention.kv_lora_rank") >= 0);
+        GGML_ASSERT(gguf_remove_key(ms.gguf_ctx, "dflash.attention.sliding_window") >= 0);
+        ggml_context_ptr ctx(ggml_init({ 2*ggml_tensor_overhead(), nullptr, true }));
+        ggml_tensor * embd = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, n_embd, n_vocab);
+        ggml_set_name(embd, "token_embd.weight");
+        gguf_add_tensor(ms.gguf_ctx, embd);
+        ggml_set_name(embd, "output.weight");
+        gguf_add_tensor(ms.gguf_ctx, embd);
+    }
+
     for (uint32_t il = 0; il < n_layer; il++) {
         ggml_tensor t;
         memset(&t, 0, sizeof(ggml_tensor));
@@ -1140,7 +1153,7 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
         if (!arch_matches(arch_filter, arch)) {
             continue;
         }
-        if (arch == LLM_ARCH_EAGLE3 || arch == LLM_ARCH_DFLASH || arch == LLM_ARCH_GEMMA4_ASSISTANT) {
+        if (arch == LLM_ARCH_EAGLE3 || arch == LLM_ARCH_GEMMA4_ASSISTANT) {
             continue;
         }
         for (bool moe : {false, true}) {
@@ -1158,7 +1171,19 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
             llama_model_ptr model = get_model(gguf_ctx.get(), nullptr, seed, stdev, {});
             const std::string path = dir + "/" + llama_arch_name(arch) + (moe ? "-moe.gguf" : "-dense.gguf");
             LOG_INF("%s: '%s %s' -> %s ...", __func__, llama_arch_name(arch), moe ? "MoE" : "dense", path.c_str());
-            llama_model_save_to_file(model.get(), path.c_str());
+            if (arch == LLM_ARCH_DFLASH) {
+                // Preserve the draft metadata and encoder tensors missing from the model saver.
+                gguf_context_ptr draft(gguf_init_empty());
+                gguf_set_kv(draft.get(), gguf_ctx.get());
+                for (const auto & tensor : model->tensors_by_name) {
+                    if (gguf_find_tensor(draft.get(), tensor.second->name) < 0) {
+                        gguf_add_tensor(draft.get(), tensor.second);
+                    }
+                }
+                GGML_ASSERT(gguf_write_to_file(draft.get(), path.c_str(), false));
+            } else {
+                llama_model_save_to_file(model.get(), path.c_str());
+            }
             const std::uintmax_t size = std::filesystem::file_size(path);
             LOG_CNT(" (%.2f MB)\n", (double) size / (1024.0 * 1024.0));
         }

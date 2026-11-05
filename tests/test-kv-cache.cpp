@@ -36,6 +36,9 @@ int main() {
                 model->hparams.n_embd_head_k_mla_impl = 4;
                 model->hparams.n_embd_head_v_mla_impl = 4;
             }
+            if (arch == LLM_ARCH_DFLASH) {
+                model->hparams.dsv4_hc_mult = 4;
+            }
 
             for (ggml_type type_k : { GGML_TYPE_F16, GGML_TYPE_F8_E4M3 }) {
                 for (ggml_type type_v : { GGML_TYPE_F16, GGML_TYPE_F8_E4M3 }) {

@@ -3272,7 +3272,7 @@ static bool is_type_scaled(ggml_type type) {
     return type == GGML_TYPE_F8_E4M3;
 }
 
-static void build_attn_scale_kv_inputs(
+void build_attn_scale_kv_inputs(
         ggml_context * ctx,
         const llama_kv_cache_context * mctx,
         ggml_tensor * & q,
@@ -3283,7 +3283,9 @@ static void build_attn_scale_kv_inputs(
         // Store K/s and move its dequant scale to Q: (Q*s) dot (K/s) = Q dot K.
         ggml_tensor * scale = mctx->get_k_scale(il);
         if (scale) {
-            q = ggml_mul(ctx, q, scale);
+            if (q) {
+                q = ggml_mul(ctx, q, scale);
+            }
             if (k) {
                 k = ggml_div(ctx, k, scale);
             }

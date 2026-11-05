@@ -4344,7 +4344,7 @@ llama_context * llama_init_from_model(
             model->arch == LLM_ARCH_HY_V4 ||
             model->arch == LLM_ARCH_MINIMAX_M3 ||
             model->arch == LLM_ARCH_QWEN4EXP ||
-            model->arch == LLM_ARCH_DFLASH)) {
+            (model->arch == LLM_ARCH_DFLASH && model->hparams.dsv4_hc_mult > 0))) {
         LLAMA_LOG_ERROR("%s: FP8 cache is not supported for architecture '%s'\n", __func__, llm_arch_name(model->arch));
         return nullptr;
     }
