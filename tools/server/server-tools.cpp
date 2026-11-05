@@ -112,18 +112,6 @@ enum class list_kind {
     all,   // both
 };
 
-// a narrow path uses the active code page on Windows, so every crossing between
-// a std::string (always UTF-8 here) and fs::path is converted explicitly
-static fs::path path_from_utf8(const std::string & s) {
-    return fs::u8path(s);
-}
-
-// '/' separators on every platform: Windows accepts them, the web UI needs them
-static std::string path_to_utf8(const fs::path & p) {
-    const auto s = p.generic_u8string();
-    return std::string(s.begin(), s.end());
-}
-
 // home directory, read once at first use (getenv is not thread safe against setenv)
 static const std::string & home_dir() {
     static const std::string home = [] {
@@ -318,7 +306,7 @@ public:
     std::string resolve(const std::string & path) const override {
         const std::string p = expand_home(path);
 
-        fs::path full = path_from_utf8(p);
+        fs::path full = p;
         if (!full.is_absolute()) {
             if (cwd.empty()) {
                 std::error_code ec;
@@ -326,7 +314,7 @@ public:
                 if (ec) return p;
                 full = cur / full;
             } else {
-                full = path_from_utf8(cwd) / full;
+                full = fs::path(cwd) / full;
             }
         }
 
@@ -336,27 +324,27 @@ public:
         if (!full.has_filename() && full != full.root_path()) {
             full = full.parent_path();
         }
-        return path_to_utf8(full);
+        return full.generic_string();
     }
 
     bool is_directory(const std::string & path) const override {
         std::error_code ec;
-        return fs::is_directory(path_from_utf8(resolve(path)), ec) && !ec;
+        return fs::is_directory(resolve(path), ec) && !ec;
     }
 
     bool is_regular_file(const std::string & path) const override {
         std::error_code ec;
-        return fs::is_regular_file(path_from_utf8(resolve(path)), ec) && !ec;
+        return fs::is_regular_file(resolve(path), ec) && !ec;
     }
 
     bool file_size(const std::string & path, uintmax_t & out_size) const override {
         std::error_code ec;
-        out_size = fs::file_size(path_from_utf8(resolve(path)), ec);
+        out_size = fs::file_size(resolve(path), ec);
         return !ec;
     }
 
     bool read_file(const std::string & path, std::string & out) const override {
-        std::ifstream f(path_from_utf8(resolve(path)), std::ios::binary);
+        std::ifstream f(resolve(path), std::ios::binary);
         if (!f) return false;
         std::ostringstream ss;
         ss << f.rdbuf();
@@ -366,7 +354,7 @@ public:
 
     bool write_file(const std::string & path, const std::string & content) const override {
         std::error_code ec;
-        fs::path fpath = path_from_utf8(resolve(path));
+        fs::path fpath = resolve(path);
         if (fpath.has_parent_path()) {
             fs::create_directories(fpath.parent_path(), ec);
             if (ec) return false;
@@ -402,7 +390,7 @@ public:
                     if (line.empty()) continue;
                     std::replace(line.begin(), line.end(), '\\', '/');
                     if (max_depth > 0 && entry_depth(line) > max_depth) continue;
-                    if (is_regular_file(path_to_utf8(path_from_utf8(base) / path_from_utf8(line)))) {
+                    if (is_regular_file((fs::path(base) / line).generic_string())) {
                         out.entries.push_back({line, false});
                     }
                 }
@@ -472,7 +460,7 @@ private:
         std::vector<list_entry> result;
 
         std::vector<std::tuple<fs::path, fs::path, int>> stack;
-        stack.emplace_back(path_from_utf8(base), fs::path(), 0);
+        stack.emplace_back(base, fs::path(), 0);
 
         while (!stack.empty()) {
             if (std::chrono::steady_clock::now() >= deadline) {
@@ -507,16 +495,16 @@ private:
                 if (tec) continue;
                 if (is_dir) {
                     if (kind == list_kind::dirs || kind == list_kind::all) {
-                        result.push_back({path_to_utf8(rel_dir / fname), true});
+                        result.push_back({(rel_dir / fname).generic_string(), true});
                     }
                     // junk directories stay selectable but are never walked: they can be enormous
-                    if (junk_dir_names().count(get_effective_name(path_to_utf8(fname))) > 0) continue;
+                    if (junk_dir_names().count(get_effective_name(fname.generic_string())) > 0) continue;
                     if (!is_link(entry) && (max_depth == 0 || depth + 1 < max_depth)) {
                         stack.emplace_back(entry.path(), rel_dir / fname, depth + 1);
                     }
                 } else if (entry.is_regular_file(tec)) {
                     if (kind == list_kind::files || kind == list_kind::all) {
-                        result.push_back({path_to_utf8(rel_dir / fname), false});
+                        result.push_back({(rel_dir / fname).generic_string(), false});
                     }
                 }
             }
@@ -864,7 +852,7 @@ static std::unique_ptr<tools_io> make_tools_io(const json & params) {
 // no '/' in pattern -> match basename at any depth; else match full relative path
 static bool path_glob_match(const std::string & pattern, const std::string & rel_path) {
     if (pattern.find('/') == std::string::npos) {
-        return glob_match(pattern, path_to_utf8(path_from_utf8(rel_path).filename()));
+        return glob_match(pattern, fs::path(rel_path).filename().generic_string());
     }
     if (pattern == "**" || pattern.rfind("**/", 0) == 0 || pattern.rfind('/', 0) == 0) {
         return glob_match(pattern, rel_path);
@@ -1187,7 +1175,7 @@ struct server_tool_grep_search : server_tool {
             for (const auto & entry : listing.entries) {
                 if (!path_glob_match(include, entry.rel)) continue;
                 if (!exclude.empty() && path_glob_match(exclude, entry.rel)) continue;
-                files.emplace_back(path_to_utf8(path_from_utf8(abs_path) / path_from_utf8(entry.rel)), entry.rel);
+                files.emplace_back((fs::path(abs_path) / entry.rel).generic_string(), entry.rel);
             }
         } else {
             return {{"error", "path does not exist: " + path}};
@@ -1754,7 +1742,7 @@ struct server_tool_get_info : server_tool {
         if (cwd.empty()) {
             if (json_value(params, "runtime", std::string()).empty()) {
                 std::error_code ec;
-                cwd = path_to_utf8(fs::current_path(ec));
+                cwd = fs::current_path(ec).generic_string();
             } else {
                 auto pwd = io->run({"pwd"}, SERVER_TOOL_GET_INFO_MAX_OUTPUT, SERVER_TOOL_GET_INFO_TIMEOUT);
                 cwd = pwd.exit_code == 0 && !pwd.timed_out ? string_strip(pwd.output) : "unknown";
@@ -1922,7 +1910,7 @@ private:
             "llama-tools-runtime-cid-%zu.tmp", std::hash<std::thread::id>{}(std::this_thread::get_id()));
         fs::remove(cidfile, ec);
 
-        std::vector<std::string> args = {bin, "run", "--rm", "-i", "--cidfile", path_to_utf8(cidfile), image, "sh"};
+        std::vector<std::string> args = {bin, "run", "--rm", "-i", "--cidfile", cidfile.generic_string(), image, "sh"};
         int options = subprocess_option_no_window
                     | subprocess_option_inherit_environment
                     | subprocess_option_search_user_path;
