@@ -148,12 +148,12 @@ void llama_model_deepseek32::load_arch_tensors(llama_model_loader & ml) {
 
 std::unique_ptr<llm_graph_context> llama_model_deepseek32::build_arch_graph(const llm_graph_params & params) const {
     if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
-        return std::make_unique<graph_mtp>(*this, params);
+        return std::make_unique<graph_mtp>(params);
     }
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_params & params) :
+llama_model_deepseek32::graph::graph(const llm_graph_params & params) :
     llm_graph_context(params) {
     const bool is_mla = hparams.is_mla();
     GGML_ASSERT(is_mla);
@@ -484,7 +484,7 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
 //   with shared expert, exactly as the trunk deepseek2 graph builds it) ->
 //   shared_head_norm (fallback output_norm) -> shared LM head.
 // The DSA indexer is not used at runtime.
-llama_model_deepseek32::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params)
+llama_model_deepseek32::graph_mtp::graph_mtp(const llm_graph_params & params)
     : llm_graph_context(params) {
     GGML_ASSERT(hparams.n_layer_nextn > 0 && "DEEPSEEK32 MTP requires n_layer_nextn > 0");
     GGML_ASSERT(hparams.n_layer_nextn == 1 && "DEEPSEEK32 MTP currently only supports a single MTP block");

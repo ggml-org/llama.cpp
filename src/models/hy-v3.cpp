@@ -89,12 +89,12 @@ void llama_model_hy_v3::load_arch_tensors(llama_model_loader & ml) {
 
 std::unique_ptr<llm_graph_context> llama_model_hy_v3::build_arch_graph(const llm_graph_params & params) const {
     if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
-        return std::make_unique<graph_mtp>(*this, params);
+        return std::make_unique<graph_mtp>(params);
     }
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_hy_v3::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_hy_v3::graph::graph(const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
@@ -225,7 +225,7 @@ llama_model_hy_v3::graph::graph(const llama_model & model, const llm_graph_param
 //   hy_v3 decoder block -> final_layernorm (stored as nextn.shared_head_norm) ->
 //   shared LM head (the main model's lm_head; the checkpoint has no separate
 //   MTP head or MTP embeddings).
-llama_model_hy_v3::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params)
+llama_model_hy_v3::graph_mtp::graph_mtp(const llm_graph_params & params)
     : llm_graph_context(params) {
     GGML_ASSERT(hparams.n_layer_nextn > 0 && "HY_V3 MTP requires n_layer_nextn > 0");
 
