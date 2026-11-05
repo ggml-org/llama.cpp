@@ -185,9 +185,6 @@ struct llama_hparams {
     // by default, all layers use RoPE (controlled by rope_finetuned)
     std::array<uint32_t, LLAMA_MAX_LAYERS> rope_pattern;
 
-    // set on the hparams of a lightning indexer key cache
-    bool is_indexer_cache = false;
-
     // Sliding Window Attention (SWA)
     llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
     // the size of the sliding window (0 - no SWA)

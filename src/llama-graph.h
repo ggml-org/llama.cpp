@@ -790,9 +790,7 @@ using llm_graph_cb = std::function<void(const llama_ubatch & ubatch, ggml_tensor
 class llm_graph_result;
 
 struct llm_graph_params {
-    llm_arch arch = LLM_ARCH_UNKNOWN;
-
-    const llama_model * model;
+    const llama_model * model = nullptr;
 
     llama_hparams hparams;
     llama_cparams cparams;
@@ -911,7 +909,7 @@ struct llm_graph_params {
             cparams.causal_attn             == other.cparams.causal_attn             &&
             layer_inp_dev == other.layer_inp_dev &&
             layer_inp_src == other.layer_inp_src &&
-            arch  == other.arch  &&
+            model == other.model &&
             gtype == other.gtype &&
             cvec  == other.cvec  &&
             loras == other.loras &&
@@ -1029,8 +1027,6 @@ struct llm_graph_amax_src1 {
 
 struct llm_graph_context {
     const llama_model & model;
-
-    const llm_arch arch;
 
     const llama_hparams & hparams;
     const llama_cparams & cparams;
