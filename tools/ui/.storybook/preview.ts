@@ -27,7 +27,7 @@ const preview: Preview = {
 			storySort: {
 				order: [
 					'Introduction',
-					['Overview', 'Design guidelines'],
+					['Assets', 'Design guidelines'],
 					'Brand',
 					[
 						'Logo',
