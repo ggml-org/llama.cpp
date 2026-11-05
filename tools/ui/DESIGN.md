@@ -27,6 +27,13 @@ colors:
   cool-gray-200: 'oklch(0.91 0.005 250)'
   cool-gray-300: 'oklch(0.86 0.007 250)'
   cool-gray-400: 'oklch(0.81 0.01 250)'
+  art-blue: 'oklch(0.56 0.12 254)'
+  art-sky: 'oklch(0.78 0.075 245)'
+  art-navy: 'oklch(0.33 0.07 256)'
+  art-green: 'oklch(0.64 0.09 165)'
+  art-amber: 'oklch(0.8 0.12 78)'
+  art-orange: 'oklch(0.619 0.171 33)'
+  art-orange-light: 'oklch(0.85 0.065 45)'
   beige-50: 'oklch(0.965 0.01 80)'
   beige-100: 'oklch(0.936 0.015 81)'
   beige-200: 'oklch(0.89 0.02 80)'
@@ -740,7 +747,9 @@ logotype and is not part of the UI palette. Beige (`beige-50` to `beige-900`) is
 
 Backgrounds stay neutral as a rule, in the UI and in communications alike: greys and beige
 behind, colour only where it serves a purpose, functional (status, a selection, focus) or
-creative (a shape, a numeral, an illustration).
+creative (a shape, a numeral, an illustration). Artwork takes its colours from the `art-*` primitives,
+friendlier versions of the status hues (blue, sky, navy, a teal-leaning green, amber) and the
+vermilion accent orange, never from the status colours themselves, and never red.
 
 Light mode has two surface themes, which share everything else (the palette, buttons, fields,
 badges, shadows and dark mode): **Paper**, the default, sets white panels, fields and keys on a

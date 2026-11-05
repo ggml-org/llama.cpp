@@ -36,6 +36,16 @@
 	--beige-400: oklch(0.72 0.025 76);
 	--beige-900: oklch(0.272 0.013 72);
 
+	/* artwork: the status hues made friendlier for posters, boards and illustrations (softer chroma, a green turned
+	   towards teal), with no red, and the vermilion accent orange. Never for status, which keeps its own colours */
+	--art-blue: oklch(0.56 0.12 254);
+	--art-sky: oklch(0.78 0.075 245);
+	--art-navy: oklch(0.33 0.07 256);
+	--art-green: oklch(0.64 0.09 165);
+	--art-amber: oklch(0.8 0.12 78);
+	--art-orange: oklch(0.619 0.171 33);
+	--art-orange-light: oklch(0.85 0.065 45);
+
 	/* red, yellow and green: each scale keeps the hue of its root (red-500, yellow-400, green-500) */
 	--red-400: oklch(0.69 0.2 27);
 	--red-450: oklch(0.635 0.229 28);
