@@ -63,6 +63,7 @@ struct llama_hparams {
 
     bool vocab_only;
     bool rope_finetuned;
+    bool yarn_truncate = true;
     bool use_par_res;
     bool swin_norm;
     bool norm_before_residual = false;
