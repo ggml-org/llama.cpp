@@ -21,12 +21,12 @@
 			value: 'oklch(0.655 0.17 42)'
 		},
 		{
-			contrast: { beige: 2.54, dark: 6.34, light: 2.93, navy: 4, sky: 2.35 },
-			hex: '#e9712b',
+			contrast: { beige: 2.53, dark: 6.35, light: 2.93, navy: 4.01, sky: 2.35 },
+			hex: '#e87224',
 			id: 'mandarin',
 			label: 'Mandarin',
 			note: 'Halfway between persimmon and tangerine: warm on white, clear on navy.',
-			value: 'oklch(0.68 0.168 47)'
+			value: 'oklch(0.68 0.168 49)'
 		},
 		{
 			contrast: { beige: 2.29, dark: 7.02, light: 2.65, navy: 4.43, sky: 2.12 },
