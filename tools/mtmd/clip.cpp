@@ -1,4 +1,3 @@
-#define _USE_MATH_DEFINES // for M_PI
 #include "clip.h"
 #include "clip-impl.h"
 #include "clip-model.h"
