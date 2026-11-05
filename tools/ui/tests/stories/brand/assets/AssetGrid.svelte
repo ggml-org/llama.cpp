@@ -28,11 +28,12 @@
 
 	interface Asset {
 		label: string;
-		/** dark marks for light grounds (light) or light marks for dark ones (dark); covers bring their own field */
+		/** dark marks for light grounds (light) or light marks for dark ones (dark); social assets bring their own field */
 		ground: 'cover' | 'dark' | 'light';
 		path: string;
-		/** the asset's own proportions, for covers and social banners (default 3 / 1) */
-		ratio?: string;
+		/** the asset's own proportions: the thumbnail takes them, so it shows the file as it is (a mark on its ground with
+		    an even margin, 12% of the shorter side) */
+		ratio: string;
 		/** a profile picture: shown in the circle the platforms crop it to */
 		round?: boolean;
 	}
@@ -87,43 +88,41 @@
 	const logoGroups: { assets: Asset[]; note: string; title: string }[] = [
 		{
 			assets: [
-				{ ground: 'light', label: 'On light', path: 'icon/icon-light' },
-				{ ground: 'dark', label: 'On dark', path: 'icon/icon-dark' }
+				{ ground: 'light', label: 'On light', path: 'icon/icon-light', ratio: '1 / 1' },
+				{ ground: 'dark', label: 'On dark', path: 'icon/icon-dark', ratio: '1 / 1' }
 			],
 			note: '600 × 600 · WebP and PNG at 1200 × 1200',
 			title: 'Icon'
 		},
 		{
 			assets: [
-				{ ground: 'light', label: 'Llama, on light', path: 'lockup/llama/logo-llama-light' },
-				{ ground: 'dark', label: 'Llama, on dark', path: 'lockup/llama/logo-llama-dark' },
+				{
+					ground: 'light',
+					label: 'Llama, on light',
+					path: 'lockup/llama/logo-llama-light',
+					ratio: '1773 / 600'
+				},
+				{
+					ground: 'dark',
+					label: 'Llama, on dark',
+					path: 'lockup/llama/logo-llama-dark',
+					ratio: '1773 / 600'
+				},
 				{
 					ground: 'light',
 					label: 'llama.cpp, on light',
-					path: 'lockup/llama-cpp/logo-llama-cpp-light'
+					path: 'lockup/llama-cpp/logo-llama-cpp-light',
+					ratio: '2413 / 600'
 				},
 				{
 					ground: 'dark',
 					label: 'llama.cpp, on dark',
-					path: 'lockup/llama-cpp/logo-llama-cpp-dark'
+					path: 'lockup/llama-cpp/logo-llama-cpp-dark',
+					ratio: '2413 / 600'
 				}
 			],
 			note: 'The icon with the wordmark in Llama Sans Bold at its Display size · WebP and PNG at 2×',
 			title: 'Lockups'
-		},
-		{
-			assets: [
-				{ ground: 'cover', label: 'Llama, light', path: 'cover/llama/cover-llama-light' },
-				{ ground: 'cover', label: 'Llama, dark', path: 'cover/llama/cover-llama-dark' },
-				{
-					ground: 'cover',
-					label: 'llama.cpp, light',
-					path: 'cover/llama-cpp/cover-llama-cpp-light'
-				},
-				{ ground: 'cover', label: 'llama.cpp, dark', path: 'cover/llama-cpp/cover-llama-cpp-dark' }
-			],
-			note: '7500 × 2500, for banners and social cards',
-			title: 'Covers'
 		}
 	];
 
@@ -148,7 +147,7 @@
 
 		<p class="max-w-[64ch] text-sm text-muted-foreground">
 			{section === 'logo'
-				? 'The Llama icon, the Llama and llama.cpp lockups and the covers'
+				? 'The Llama icon and the Llama and llama.cpp lockups'
 				: 'Profile pictures and banners for X, LinkedIn and YouTube, at each platform’s size'}, to
 			download as SVG, WebP or PNG. They come from
 			<a class="underline underline-offset-2" href="https://github.com/ggml-org/llama.brand"
@@ -177,10 +176,11 @@
 				{#each group.assets as asset (asset.path)}
 					<figure class="m-0 grid min-w-0 gap-2">
 						<div
-							style:aspect-ratio={asset.ground === 'cover' ? (asset.ratio ?? '3 / 1') : undefined}
+							style:aspect-ratio={asset.ratio}
+							style:padding={asset.ground === 'cover' ? undefined : `calc(12% / (${asset.ratio}))`}
 							class={[
-								'grid min-w-0 place-items-center overflow-hidden rounded-card border border-border/60',
-								asset.ground === 'cover' ? '' : 'aspect-[4/3] p-8',
+								'min-w-0 overflow-hidden rounded-card border border-border/60',
+
 								asset.round && 'mx-auto w-2/3 rounded-full',
 								asset.ground === 'light' && 'bg-[#fafafa]',
 								asset.ground === 'dark' && 'bg-[#111111]'
@@ -188,9 +188,10 @@
 						>
 							<img
 								alt={asset.label}
-								class={asset.ground === 'cover'
-									? 'size-full object-cover'
-									: 'h-auto max-h-full w-full max-w-full object-contain'}
+								class={[
+									'block size-full',
+									asset.ground === 'cover' ? 'object-cover' : 'object-contain'
+								]}
 								src={url(asset.path, 'svg')}
 							/>
 						</div>
