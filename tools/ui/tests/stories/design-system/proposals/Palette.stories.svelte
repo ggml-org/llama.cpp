@@ -4,10 +4,10 @@
 	import StateGalleryItem from '../../helpers/StateGalleryItem.svelte';
 	import Boards from './palette/Boards.svelte';
 	import PaletteRow from './palette/PaletteRow.svelte';
-	import { basePalette, haasPalette } from './palette/palettes';
+	import { basePalette, poudrePalette } from './palette/palettes';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 
-	// Proposal: the communications palette, from the neutral base to the Haas palette. (The UI's status colours were
+	// Proposal: the communications palette, from the neutral base to the poudre palette. (The UI's status colours were
 	// chosen and are in the tokens; see DESIGN.md.) Delete once these colours are in the tokens too (see DESIGN.md,
 	// "Proposing changes").
 	const { Story } = defineMeta({
@@ -29,8 +29,8 @@
 
 <Story asChild beforeEach={() => seedChatStory()} name="Specimen boards">
 	<StateGallery columns={1}>
-		<StateGalleryItem label="Key visuals" note={haasPalette.note}>
-			<PaletteRow palette={haasPalette} />
+		<StateGalleryItem label="Key visuals" note={poudrePalette.note}>
+			<PaletteRow palette={poudrePalette} />
 		</StateGalleryItem>
 
 		<StateGalleryItem
