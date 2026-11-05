@@ -9,6 +9,7 @@
 #include "ggml.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
+#include "ggml-cpp.h"
 
 #include <cinttypes>
 #include <cstdio>
@@ -30,9 +31,9 @@ static test_result test_sleep(ggml_backend_t backend, ggml_type type, int64_t ne
         /*.mem_buffer =*/ nullptr,
         /*.no_alloc   =*/ true,
     };
-    ggml_context * ctx_static = ggml_init(params_static);
+    ggml_context_ptr ctx_static(ggml_init(params_static));
 
-    ggml_tensor * x = ggml_new_tensor_1d(ctx_static, type, ne);
+    ggml_tensor * x = ggml_new_tensor_1d(ctx_static.get(), type, ne);
     ggml_set_name(x, "x");
     ggml_set_input(x);
 
@@ -41,12 +42,12 @@ static test_result test_sleep(ggml_backend_t backend, ggml_type type, int64_t ne
         /*.mem_buffer =*/ nullptr,
         /*.no_alloc   =*/ true,
     };
-    ggml_context * ctx_compute = ggml_init(params_compute);
-    ggml_cgraph * gf = ggml_new_graph_custom(ctx_compute, graph_size, false);
+    ggml_context_ptr ctx_compute(ggml_init(params_compute));
+    ggml_cgraph * gf = ggml_new_graph_custom(ctx_compute.get(), graph_size, false);
 
     ggml_tensor * out = x;
     for (int i = 0; i < n_nodes; i++) {
-        out = ggml_sleep(ctx_compute, out, us);
+        out = ggml_sleep(ctx_compute.get(), out, us);
     }
     ggml_set_name(out, "out");
     ggml_build_forward_expand(gf, out);
@@ -62,7 +63,7 @@ static test_result test_sleep(ggml_backend_t backend, ggml_type type, int64_t ne
         printf("%snot supported\n", desc);
         result = TEST_SKIP;
     } else {
-        ggml_backend_buffer_t buf_static = ggml_backend_alloc_ctx_tensors(ctx_static, backend);
+        ggml_backend_buffer_ptr buf_static(ggml_backend_alloc_ctx_tensors(ctx_static.get(), backend));
 
         // random bytes rather than random floats, so that bit patterns a value-wise copy could
         // mangle, such as NaNs and denormals, are covered as well
@@ -73,8 +74,8 @@ static test_result test_sleep(ggml_backend_t backend, ggml_type type, int64_t ne
         }
         ggml_backend_tensor_set(x, data_in.data(), 0, data_in.size());
 
-        ggml_gallocr_t galloc = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend));
-        ggml_gallocr_alloc_graph(galloc, gf);
+        ggml_gallocr_ptr galloc(ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend)));
+        ggml_gallocr_alloc_graph(galloc.get(), gf);
 
         // warm up, so that one-time costs such as lazy CUDA module loading are not timed
         ggml_backend_graph_compute(backend, gf);
@@ -101,13 +102,7 @@ static test_result test_sleep(ggml_backend_t backend, ggml_type type, int64_t ne
         }
 
         result = ok_status && ok_alias && ok_data && ok_time ? TEST_OK : TEST_FAIL;
-
-        ggml_gallocr_free(galloc);
-        ggml_backend_buffer_free(buf_static);
     }
-
-    ggml_free(ctx_compute);
-    ggml_free(ctx_static);
 
     return result;
 }
@@ -123,7 +118,7 @@ int main() {
     for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
         ggml_backend_dev_t dev = ggml_backend_dev_get(i);
 
-        ggml_backend_t backend = ggml_backend_dev_init(dev, nullptr);
+        ggml_backend_ptr backend(ggml_backend_dev_init(dev, nullptr));
         if (backend == nullptr) {
             printf("  failed to initialize %s\n", ggml_backend_dev_name(dev));
             n_fail++;
@@ -145,14 +140,12 @@ int main() {
         };
 
         for (const auto & c : cases) {
-            switch (test_sleep(backend, c.type, c.ne, c.us, c.n_nodes)) {
+            switch (test_sleep(backend.get(), c.type, c.ne, c.us, c.n_nodes)) {
                 case TEST_OK:   n_ok++;   break;
                 case TEST_FAIL: n_fail++; break;
                 case TEST_SKIP: n_skip++; break;
             }
         }
-
-        ggml_backend_free(backend);
     }
 
     printf("%d passed, %d failed, %d skipped\n", n_ok, n_fail, n_skip);
