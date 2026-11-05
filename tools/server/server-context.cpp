@@ -6442,7 +6442,7 @@ void server_routes::init_routes() {
                         res->error(format_error_response("when batch is true, each element of \"content\" must be a string", ERROR_TYPE_INVALID_REQUEST));
                         return res;
                     }
-                    // each sequence is tokenized on its own: BOS and space prefix restart per element
+                    // tokenize each element separately so add_special applies per sequence
                     tokens_response.push_back(encode_tokens(tokenize_mixed(ctx_server.vocab, item, add_special, parse_special)));
                 }
             } else {
