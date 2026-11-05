@@ -1593,8 +1593,11 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::share
 
             entry->ptr = ggml_decoder;
             if (!shared_key.empty() && shared_it == shared_cache->graphs.end()) {
-                shared_cache->graphs.emplace(shared_key,
-                                             ov_compiled_graph{shared_model, {}, ov_input_names, ov_output_names, {}, {}});
+                ov_compiled_graph graph;
+                graph.decode = shared_model;
+                graph.input_names = ov_input_names;
+                graph.output_names = ov_output_names;
+                shared_cache->graphs.emplace(shared_key, std::move(graph));
             }
             if (cache_enabled) {
                 std::lock_guard<std::mutex> map_lock(r_ctx->ctx_mutex);
@@ -2441,8 +2444,13 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
             entry->decode_window_requests.clear();
 
             if (!shared_key.empty()) {
-                ov_compiled_graph graph{compiled_model_decode, compiled_model_prefill, names_in_decode,
-                                        names_out_decode,      names_in_prefill,       names_out_prefill};
+                ov_compiled_graph graph;
+                graph.decode = compiled_model_decode;
+                graph.prefill = compiled_model_prefill;
+                graph.input_names = names_in_decode;
+                graph.output_names = names_out_decode;
+                graph.prefill_input_names = names_in_prefill;
+                graph.prefill_output_names = names_out_prefill;
                 graph.decode_attention_size = decode_c_params.attention_size;
                 graph.decode_config = mc_decode_config;
                 graph.cache_base_extra = base_extra;
@@ -2524,7 +2532,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
         auto window_decoder = std::make_shared<GgmlOvDecoder>(cgraph, m_params, window_c_params, model_weights,
                                                               is_static, stateful, false, false, prefill_chunk_size);
         static_build_args args{&core,  device,       false, 0, model_cache_dir, cgraph, graph.self_contained,
-                               skip_weights, graph.weightless_bank};
+                               skip_weights, graph.weightless_bank, {}};
         ov::CompiledModel compiled;
         std::shared_ptr<ov::InferRequest> built_request;
         std::vector<std::string> names_in, names_out;
