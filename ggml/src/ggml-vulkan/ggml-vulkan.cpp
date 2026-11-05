@@ -10840,7 +10840,10 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     const uint32_t Tr = CEIL_DIV(N, Br);
 
     // Try to use split_k when KV is large enough to be worth the overhead.
-    const uint32_t split_wgs = ctx->device->fa_split_wgs ? ctx->device->fa_split_wgs : shader_core_count * 2;
+    // On Intel the scalar workgroup is small, so two per core leave most of each Xe core
+    // idle when there are only a few rows (decode). Aim for 16 per core instead.
+    const uint32_t wgs_per_core = (ctx->device->vendor_id == VK_VENDOR_ID_INTEL && tuning_params.path == FA_SCALAR) ? 16 : 2;
+    const uint32_t split_wgs = ctx->device->fa_split_wgs ? ctx->device->fa_split_wgs : shader_core_count * wgs_per_core;
     if (gqa_ratio > 1 && workgroups_x <= Br) {
         split_k = split_wgs / (workgroups_x * workgroups_y * workgroups_z);
     } else if (gqa_ratio <= 1) {
