@@ -166,13 +166,13 @@
 		display: grid;
 		gap: 1cqi;
 		align-content: start;
-		font: 600 1.6cqi / normal var(--display);
+		font: 600 1.6cqi / 1.15 var(--display);
 	}
 	.type-card .alpha {
 		display: grid;
 		gap: 1cqi;
 		align-content: start;
-		font: 600 1.6cqi / normal var(--display);
+		font: 600 1.6cqi / 1.15 var(--display);
 	}
 	.type-card .alpha p,
 	.type-card .meta p {
@@ -385,7 +385,7 @@
 		margin-top: 3cqi;
 		padding: 0;
 		list-style: none;
-		font: 500 3.4cqi / normal var(--display);
+		font: 500 3.4cqi / 1.15 var(--display);
 		opacity: 0.85;
 	}
 
@@ -462,7 +462,7 @@
 		display: flex;
 		justify-content: space-between;
 		gap: 2cqi;
-		font: 600 1.9cqi / normal var(--display);
+		font: 600 1.9cqi / 1.15 var(--display);
 	}
 	@media (max-width: 700px) {
 		.billboard .claim {

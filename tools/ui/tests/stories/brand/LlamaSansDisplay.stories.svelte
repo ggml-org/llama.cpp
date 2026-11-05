@@ -14,7 +14,7 @@
 			controls: { disable: true },
 			layout: 'fullscreen'
 		},
-		title: 'Brand/Typography/Llama Sans Display'
+		title: 'Brand/Typography/Llama Sans/Display'
 	});
 
 	const { glyphCount } = specimen;

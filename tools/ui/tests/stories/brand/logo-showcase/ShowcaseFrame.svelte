@@ -15,7 +15,7 @@
 
 <style>
 	.logo {
-		--body: 'Llama Sans UI', var(--font-sans);
+		--body: 'Llama Sans', var(--font-sans);
 		--mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
 		display: grid;
 		gap: 40px;
@@ -40,7 +40,7 @@
 	}
 	.logo > :global(h2) {
 		font:
-			700 clamp(32px, 5vw, 56px) / normal 'Llama Sans Display',
+			700 clamp(32px, 5vw, 56px) / 1.15 'Llama Sans',
 			var(--body);
 	}
 	.logo > :global(h2 + p) {
@@ -48,7 +48,7 @@
 		margin-top: -30px;
 		color: var(--l-muted);
 		font:
-			400 17px / 1.5 'Llama Sans UI',
+			400 17px / 1.5 'Llama Sans',
 			var(--body);
 	}
 	/* the origin's tiles sit closer under the animation they follow */

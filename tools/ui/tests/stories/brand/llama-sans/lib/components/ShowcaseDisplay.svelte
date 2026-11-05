@@ -24,8 +24,8 @@
 		<h4 class="h3">Terminals, apertures and the space between</h4>
 
 		<p class="dek">
-			Three heading sizes, one set of outlines. Each line sits at the font’s built-in 1.15 em, so
-			stacked headings close up without extra CSS.
+			Three heading sizes, one set of outlines. Each line sits on a 1.15 em line-height, so stacked
+			headings close up without extra CSS.
 		</p>
 	</section>
 
@@ -84,14 +84,14 @@
 		opacity: 0.7;
 	}
 	.hero-title {
-		font: clamp(44px, 9vw, 120px) / normal var(--display);
+		font: clamp(44px, 9vw, 120px) / 1.15 var(--display);
 		font-weight: max(var(--w), 600);
 		text-wrap: balance;
 		max-width: 12ch;
 	}
 	.hero-sub {
 		max-width: 46ch;
-		font: 400 clamp(17px, 2vw, 22px) / normal var(--display);
+		font: 400 clamp(17px, 2vw, 22px) / 1.15 var(--display);
 		opacity: 0.8;
 	}
 	.stack {
@@ -107,15 +107,15 @@
 		margin-bottom: 6px;
 	}
 	.h1 {
-		font: var(--w) clamp(36px, 6vw, 72px) / normal var(--display);
+		font: var(--w) clamp(36px, 6vw, 72px) / 1.15 var(--display);
 		text-wrap: balance;
 	}
 	.h2 {
-		font: var(--w) clamp(26px, 4vw, 44px) / normal var(--display);
+		font: var(--w) clamp(26px, 4vw, 44px) / 1.15 var(--display);
 		text-wrap: balance;
 	}
 	.h3 {
-		font: var(--w) clamp(20px, 2.6vw, 28px) / normal var(--display);
+		font: var(--w) clamp(20px, 2.6vw, 28px) / 1.15 var(--display);
 		color: var(--muted);
 		text-wrap: balance;
 	}
@@ -145,7 +145,7 @@
 		gap: 4px 14px;
 	}
 	.big {
-		font: var(--w) clamp(64px, 10vw, 128px) / normal var(--display);
+		font: var(--w) clamp(64px, 10vw, 128px) / 1.15 var(--display);
 		font-variant-numeric: tabular-nums;
 	}
 	.to {
@@ -158,7 +158,7 @@
 		color: var(--muted);
 	}
 	.quote p {
-		font: var(--w) clamp(26px, 3.4vw, 40px) / normal var(--display);
+		font: var(--w) clamp(26px, 3.4vw, 40px) / 1.15 var(--display);
 		text-wrap: balance;
 	}
 	.poster {
@@ -171,7 +171,7 @@
 		overflow: hidden;
 	}
 	.poster-word {
-		font: 700 clamp(56px, 13vw, 180px) / normal var(--display);
+		font: 700 clamp(56px, 13vw, 180px) / 1.15 var(--display);
 		overflow-wrap: anywhere;
 	}
 	.poster-word.outline {

@@ -80,14 +80,14 @@
 		display: grid;
 		gap: 2px;
 		font:
-			400 14px / 1.5 'Llama Sans UI',
+			400 14px / 1.5 'Llama Sans',
 			var(--body);
 		color: var(--l-muted);
 	}
 	strong {
 		color: var(--l-ink);
 		font:
-			600 15px / normal 'Llama Sans UI',
+			600 15px / normal 'Llama Sans',
 			var(--body);
 	}
 	.step {
@@ -160,7 +160,7 @@
 	}
 	svg :global(.note) {
 		font:
-			500 30px 'Llama Sans UI',
+			500 30px 'Llama Sans',
 			var(--body);
 		fill: var(--l-ink);
 	}

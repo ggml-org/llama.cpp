@@ -108,7 +108,7 @@
 					path: 'lockup/llama-cpp/logo-llama-cpp-dark'
 				}
 			],
-			note: 'The icon with the wordmark in Llama Sans Display · WebP and PNG at 2×',
+			note: 'The icon with the wordmark in Llama Sans Bold at its Display size · WebP and PNG at 2×',
 			title: 'Lockups'
 		},
 		{

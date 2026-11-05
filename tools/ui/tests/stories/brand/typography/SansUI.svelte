@@ -14,6 +14,7 @@
 	import Version from '../llama-sans/overview/Version.svelte';
 	import WeightLines from '../llama-sans/overview/WeightLines.svelte';
 	import Highlights, { type Highlight } from './Highlights.svelte';
+	import OpticalSizes from './OpticalSizes.svelte';
 	import SansNotes from './SansNotes.svelte';
 
 	const face = 'var(--ui)';
@@ -60,9 +61,9 @@
 
 <Section columns label="For interfaces and running text">
 	<p>
-		Llama Sans UI is the design system's text face: buttons, menus, labels, chat messages and long
-		reading. It shares its outlines with Display; only the spacing, kerning and line box differ,
-		tuned for 12 to 18 px.
+		Llama Sans UI is Llama Sans at its small optical size, opsz 16: the design system's text, from
+		buttons, menus and labels to chat messages and long reading. The browser picks it on its own for
+		text up to 16 px, spaced and kerned for those sizes.
 	</p>
 
 	<p>
@@ -73,6 +74,10 @@
 
 <Section label="Highlights">
 	<Highlights {face} items={highlights} />
+</Section>
+
+<Section label="Optical size">
+	<OpticalSizes />
 </Section>
 
 <Section label="Clear glass">
@@ -93,7 +98,7 @@
 
 <Version
 	name="UI"
-	specs="Tracking +3 · kerning matched to SF Pro · line 1.25, cap-centred"
+	specs="opsz 16 · tracking +3 · kerning matched to SF Pro · line 1.25, cap-centred"
 	statement="For the interface and the page around it."
 >
 	<UISample />

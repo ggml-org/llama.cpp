@@ -226,7 +226,7 @@
 
 <style>
 	.palette {
-		--display: 'Llama Sans Display', var(--font-sans);
+		--display: 'Llama Sans', var(--font-sans);
 		--mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
 		display: grid;
 		gap: 14px;

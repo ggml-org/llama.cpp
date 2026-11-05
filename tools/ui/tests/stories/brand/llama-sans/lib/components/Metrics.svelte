@@ -42,6 +42,12 @@
 	</div>
 
 	<div>
+		<dt>Optical size axis</dt>
+
+		<dd>16–40</dd>
+	</div>
+
+	<div>
 		<dt>Stems {styles.map((s) => s.weight).join(' · ')}</dt>
 
 		<dd>{styles.map((s) => s.stem).join(' · ')}</dd>
@@ -50,13 +56,13 @@
 	<div>
 		<dt>Display</dt>
 
-		<dd>tracking −22 · kerning 115% · line 1.15</dd>
+		<dd>opsz 40 · tracking −22 · kerning 115% · set at line-height 1.15</dd>
 	</div>
 
 	<div>
 		<dt>UI</dt>
 
-		<dd>tracking +3 · kerning after SF Pro · line 1.25, cap-centred</dd>
+		<dd>opsz 16 · tracking +3 · kerning after SF Pro · line 1.25, cap-centred</dd>
 	</div>
 </dl>
 

@@ -791,9 +791,13 @@ the Surface switch in Storybook's toolbar, and only its surface tokens differ: `
 
 ## Typography
 
-The UI uses Llama Sans UI (with the system sans-serif stack as its fallback), Llama Sans
-Display for every heading (`h1` to `h6`, also `font-display`) and Llama Mono
-for code (with the system monospace stack as its fallback). Llama Mono keeps every character,
+The UI uses Llama Sans for all text, headings included (with the system sans-serif stack as its
+fallback), and Llama Mono for code (with the system monospace stack as its fallback). Llama Sans
+is one variable font with an optical size axis: the browser sets it from the font-size, so text up
+to 16px gets the UI spacing and kerning, 40px and up the tighter Display setting, with a blend in
+between. Nothing needs choosing per element; pin an end only to show it, with
+`font-variation-settings: 'opsz' 16` or `40`. Its line box is 1.25 at every size, centred on the
+cap height; large headings set `line-height: 1.15` themselves. Llama Mono keeps every character,
 its coding ligatures included, in one cell, so code and numbers line up in columns. Type is set through roles that fix size, line height and weight together:
 
 - `body` (16/24, 400): chat messages and the chat input.

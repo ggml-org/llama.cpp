@@ -1,13 +1,4 @@
-/* Llama Sans Display and Llama Mono for the brand showcases (logo and type); Llama Sans UI is the design system's own
-   (src/app.css) */
-@font-face {
-	font-family: 'Llama Sans Display';
-	src: url('./LlamaSansDisplay.woff2') format('woff2');
-	font-weight: 400 700;
-	font-style: normal;
-	font-display: block;
-}
-
+/* Llama Mono for the brand showcases (logo and type); Llama Sans is the design system's own (src/app.css) */
 @font-face {
 	font-family: 'Llama Mono';
 	src: url('./LlamaMono.woff2') format('woff2');
