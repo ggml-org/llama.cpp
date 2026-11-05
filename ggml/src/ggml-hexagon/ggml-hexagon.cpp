@@ -1320,6 +1320,12 @@ struct ggml_hexagon_opbatch {
             hash_value(shape.ne[i]);
             hash_value(shape.nb[i]);
         }
+
+        // avalanche high bits down to low bits for power-of-two table indexing
+        hash ^= hash >> 33;
+        hash *= 0xff51afd7ed558ccdull;
+        hash ^= hash >> 33;
+
         return hash;
     }
 
