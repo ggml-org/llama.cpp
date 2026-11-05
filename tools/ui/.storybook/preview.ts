@@ -33,7 +33,7 @@ const preview: Preview = {
 						'Assets',
 						['Logo', 'Social profiles'],
 						'Logo',
-						['Overview', 'Icon', 'App icons'],
+						['Overview', 'Icon'],
 						'Typography',
 						[
 							'Overview',
