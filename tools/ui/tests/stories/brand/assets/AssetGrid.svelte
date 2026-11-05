@@ -6,9 +6,16 @@
 <script lang="ts">
 	import { Download } from '@lucide/svelte';
 
+	interface Props {
+		/** the logo files (icon, lockups, covers) or the social profile pictures and banners */
+		section: 'logo' | 'social';
+	}
+
+	let { section }: Props = $props();
+
 	type Format = 'png' | 'svg' | 'webp';
 
-	const files = import.meta.glob('./assets/logo/**/*.{svg,webp,png}', {
+	const files = import.meta.glob('./files/logo/**/*.{svg,webp,png}', {
 		eager: true,
 		import: 'default',
 		query: '?url'
@@ -16,7 +23,7 @@
 
 	/** The URL of one asset, by its path under logo/<format>/ without the extension. */
 	function url(path: string, format: Format): string {
-		return files[`./assets/logo/${format}/${path}.${format}`];
+		return files[`./files/logo/${format}/${path}.${format}`];
 	}
 
 	interface Asset {
@@ -77,7 +84,7 @@
 		title
 	}));
 
-	const groups: { assets: Asset[]; note: string; title: string }[] = [
+	const logoGroups: { assets: Asset[]; note: string; title: string }[] = [
 		{
 			assets: [
 				{ ground: 'light', label: 'On light', path: 'icon/icon-light' },
@@ -117,9 +124,12 @@
 			],
 			note: '7500 × 2500, for banners and social cards',
 			title: 'Covers'
-		},
-		...socialGroups
+		}
 	];
+
+	const groups: { assets: Asset[]; note: string; title: string }[] = $derived(
+		section === 'logo' ? logoGroups : socialGroups
+	);
 
 	const formats: { format: Format; label: string }[] = [
 		{ format: 'svg', label: 'SVG' },
@@ -132,11 +142,15 @@
 
 <div class="mx-auto grid w-[min(72rem,calc(100%-2rem))] gap-12 py-10">
 	<header class="grid gap-2">
-		<h1 class="text-3xl font-bold tracking-tight">Assets</h1>
+		<h1 class="text-3xl font-bold tracking-tight">
+			{section === 'logo' ? 'Logo assets' : 'Social profiles'}
+		</h1>
 
 		<p class="max-w-[64ch] text-sm text-muted-foreground">
-			The Llama icon, the Llama and llama.cpp lockups, the covers and the social profile pictures
-			and banners for X, LinkedIn and YouTube, to download as SVG, WebP or PNG. They come from
+			{section === 'logo'
+				? 'The Llama icon, the Llama and llama.cpp lockups and the covers'
+				: 'Profile pictures and banners for X, LinkedIn and YouTube, at each platform’s size'}, to
+			download as SVG, WebP or PNG. They come from
 			<a class="underline underline-offset-2" href="https://github.com/ggml-org/llama.brand"
 				>ggml-org/llama.brand</a
 			>, under CC BY-NC 4.0 with the permissions in its BRAND-USAGE.md: use them as they are to
@@ -155,7 +169,7 @@
 			<div
 				class={[
 					'grid items-end gap-4',
-					group.title === 'Icon' || socialGroups.includes(group as (typeof socialGroups)[number])
+					group.title === 'Icon' || section === 'social'
 						? 'grid-cols-[repeat(auto-fill,minmax(14rem,1fr))]'
 						: 'grid-cols-[repeat(auto-fill,minmax(22rem,1fr))]'
 				]}
