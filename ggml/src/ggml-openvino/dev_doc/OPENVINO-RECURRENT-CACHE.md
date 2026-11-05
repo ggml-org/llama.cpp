@@ -1,8 +1,10 @@
 # Current Qwen GPU implementation
 
-As of 2026-10-29, the default Qwen3.5/Qwen3.6 path is dynamic stateless execution with `RecurrentConvCacheUpdate`, `RecurrentGatedDeltaNetUpdate`, and stable pure-top-k MTP translation. It supports one or multiple slots and rollback. The implementation applies to `qwen35` and `qwen35moe`; the reference model is the UD Qwen3.6-35B-A3B MTP GGUF.
+On the input-inplace development branch, the default Qwen3.5/Qwen3.6 path is dynamic stateless execution with `RecurrentConvCacheUpdate`, `RecurrentGatedDeltaNetUpdate`, and stable pure-top-k MTP translation. It supports one or multiple slots and rollback. The implementation applies to `qwen35` and `qwen35moe`; the reference model is the UD Qwen3.6-35B-A3B MTP GGUF.
 
-Build against the matching OpenVINO runtime/GPU plugin with the independent Update ops. The tested runtime is `qwen-mtp-inplace-primary`, commit `9299cc3d78`; llama.cpp stable sampling is `71c0bbc4d`. Configure `GGML_OPENVINO_DEVICE=GPU`, native softplus, and the documented requantization policy. The current cache translation revision is 14.
+Build against the matching OpenVINO runtime/GPU plugin with single-output Update ops. Configure `GGML_OPENVINO_DEVICE=GPU`, native softplus, and the documented requantization policy. The cache translation revision is 15. Historical measurements retain their original source revisions.
+
+The separate dynamic output-binding fix in OpenVINO PR #39354 remains required for cache-only MTP serving. Native cache-op export/import tests pass without it, but Qwen3.6 imported MTP graphs still trigger the missing-input-memory error without the fix.
 
 ## Buffer ownership and operation boundaries
 
@@ -15,17 +17,17 @@ Build against the matching OpenVINO runtime/GPU plugin with the independent Upda
 | Protected source rows | Private device scratch | Staged before writes to protect cycles, duplicate sources and overlaps |
 | Inactive sampling results | Private device-USM scratch | Discarded without touching inactive GGML output buffers |
 
-Attention context capacity does not set recurrent-cache size. Cache input Parameter and cache Result bind the same stable allocation on the primary path. There are no rotation banks or pointer swaps.
+Attention context capacity does not set recurrent-cache size. Each cache input Parameter binds a stable writable allocation; recurrent cache Results are omitted. There are no rotation banks or pointer swaps.
 
 The GPU plugin uses two stages: first preserve required original rows in scratch while applying logical reset and precision rounding; then compute and perform ordered writes. This avoids overwriting a source before another destination has read it. Identity reorder sources need no scratch writes. In-place execution removes the spare full output bank, not every cache read or internal memory transaction.
 
-`RecurrentConvCacheUpdate` has nine required inputs, including depthwise weights. Output 0 is convolution `[1,B,T,C]`; output 1 is the full updated cache. It does not expose an intermediate history/QKV tensor. `RecurrentGatedDeltaNetUpdate` emits attention and the full updated state cache; the cache retains the newest `min(T,snapshot_count)` states for MTP, newest first.
+`RecurrentConvCacheUpdate` has nine inputs, including depthwise weights, and returns convolution `[1,B,T,C]`. `RecurrentGatedDeltaNetUpdate` returns attention and writes the newest `min(T,snapshot_count)` states into its cache input, newest first. Neither op returns a cache tensor.
 
 ## Generic fallback and restrictions
 
-Exact compatible layouts/storage and exclusive cache readers permit mutation, including eligible optimized Reshape aliases. Shared original-cache readers, incompatible layouts, unrelated overlaps or unsupported execution paths retain immutable-input semantics using a private output and required Result copy-back. Restore or clear state after a failed aliased inference before retrying. GPU replay is disabled for these ops because stage selection depends on bindings.
+Writable cache inputs must be GPU RemoteTensors with exclusive graph readers, optionally through Reshape aliases. The GPU plugin rejects shared cache readers and computed cache banks. Other inputs and the computation output must not overlap the cache. The frontend skips fusion for unmatched cache reads and retains functional cache writeback. Restore or clear state after a failed inference before retrying.
 
-`GGML_OPENVINO_DISABLE_FUSED_RECURRENCE=1` retains the ordinary cache decomposition for diagnosis. Naive graphs skip full-model recurrence fusion setup. Unmatched/naive snapshot GDN uses the independent Update op with a temporary cache bank; ordinary GDN remains unchanged. Snapshot/rollback (speculative decoding) on OpenVINO requires a patched runtime/GPU plugin. Unpatched packages reject snapshot GDN with a warning and allow scheduler fallback to another backend. Rotation, the former three-op cache solution, the history-only/separate-convolution mode and single-slot no-rollback shortcuts are removed. Stateful and NPU MTP are not the supported default; this validation does not claim those paths.
+`GGML_OPENVINO_DISABLE_FUSED_RECURRENCE=1` retains ordinary cache decomposition. Naive graphs skip full-model recurrence fusion. Unmatched snapshot GDN uses ordinary GDN token prefixes to preserve state outputs. The fused path requires the matching native runtime; dynamic GPU fallback can use ordinary GDN. Stateful and NPU MTP are outside this change.
 
 ## Attention KV layout
 
@@ -37,11 +39,11 @@ Leave `GGML_OPENVINO_KV_SLICE` at its default (`1`). Live-prefix slicing applies
 
 The [graph walkthrough](MTP-SAMPLING-GRAPH.md) describes the fixed sampling interface. The backend keeps pure top-k branches for all configured slots, packs runtime row indices, and uses scratch for inactive outputs. It does not change the original cgraph or execute inactive stateful sampler chains. Only the small sampling branches stay at configured capacity; the expensive draft layer processes active rows.
 
-One compatible draft graph is shared across active subsets. Trunk and genuinely different graph stages/configurations remain separate. Prepare a compatible revision-14 cache once, then use cache-only mode. Exhaustive active-subset priming is no longer required, though first-use model import and runtime preparation still have a cost.
+One compatible draft graph is shared across active subsets. Trunk and genuinely different graph stages/configurations remain separate. Prepare a compatible revision-15 cache once, then use cache-only mode. Exhaustive active-subset priming is no longer required, though first-use model import and runtime preparation still have a cost.
 
 ## Validation
 
-Native OV tests cover shape/attribute serialization, reset, cycles, duplicates, overlapping writes, mixed precision, changing shapes, aliased/distinct buffers, exclusive Reshapes, shared readers, host/device USM and export/import. Convolution is checked against a host reference; GDN uses an independent cache mapping around ordinary GDN. See `docs/dev/qwen35-llamacpp-recurrent-cache.md` and `recurrent_cache_update.cpp` in the OV checkout for contracts and tests.
+Native OV tests cover shape/attribute serialization, reset, cycles, duplicates, overlapping writes, mixed precision, changing shapes, writable cache input rebinding, exclusive Reshapes, shared readers, host/device USM and export/import. Convolution is checked against a host reference; GDN uses an independent cache mapping around ordinary GDN. See `docs/dev/qwen35-llamacpp-recurrent-cache.md` and `recurrent_cache_update.cpp` in the OV checkout for contracts and tests.
 
 ## Debugging and source map
 
@@ -49,6 +51,6 @@ Native OV tests cover shape/attribute serialization, reset, cycles, duplicates, 
 - `utils.cpp`: compute-branch filtering, compiled reuse and input/output binding.
 - `openvino/recurrent_cache_fusion.cpp`: structural pattern matching and native Update op translation.
 - `openvino/translate_session.cpp`: runtime sampling aliases and model construction.
-- OV `recurrent_cache_update` implementation: mutation eligibility, source staging and GPU computation.
+- OV `recurrent_cache_update` implementation: writable-input validation, source staging and GPU computation.
 
 `GGML_OPENVINO_DUMP_CGRAPH=1` dumps the raw graph before filtering. It includes COMPUTE/OUTPUT flags and byte offsets and overwrites `cgraph_ov.txt` on each call. Enable dumps only for diagnosis; use the captured examples for a static view. GPU profiles and OpenCL copy traces add overhead, and lack of an explicit copy call does not prove zero traffic inside a kernel.

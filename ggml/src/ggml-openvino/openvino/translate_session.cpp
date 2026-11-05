@@ -415,6 +415,12 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
     ggml_model_decoder->visit_subgraph(node_visitor);
 
     for (const auto & name : ggml_model_decoder->get_model_output_names()) {
+#ifdef GGML_OPENVINO_HAS_CACHE_UPDATE
+        if (recurrent_fusion.is_inplace_output(name)) {
+            // The fused kernel updates the bound cache input; no cache Result is needed.
+            continue;
+        }
+#endif
         FRONT_END_GENERAL_CHECK(tensor_map->find(name) != tensor_map->end(),
                                 "Output name not found in tensor map: ", name);
         auto result = std::make_shared<v0::Result>(tensor_map->at(name));

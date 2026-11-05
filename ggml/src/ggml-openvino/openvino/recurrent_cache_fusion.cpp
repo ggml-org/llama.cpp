@@ -12,6 +12,7 @@
 #    include <openvino/op/concat.hpp>
 #    include <openvino/op/constant.hpp>
 #    include <openvino/op/convert.hpp>
+#    include <openvino/op/parameter.hpp>
 #    include <openvino/op/reshape.hpp>
 #    include <openvino/op/slice.hpp>
 
@@ -145,25 +146,23 @@ RecurrentCacheFusion::RecurrentCacheFusion(const std::shared_ptr<GgmlDecoder> & 
             const auto & name = decoder->get_op_name(snapshot);
             complete &= tensors->count("rs_slot_begin_" + name) && tensors->count("rs_src_begin_" + name);
         }
-        const int last = group.concat < 0 ? group.writeback : std::max(group.compute, group.snapshots.back());
-        for (int j = group.reset + 1; j <= last && complete; ++j) {
+        for (int j = 0; j < graph->n_nodes && complete; ++j) {
             const auto node = graph->nodes[j];
-            // An unrelated cache write cannot be crossed by this fusion. Cache aliases and
-            // reads of the gather stay valid through the normal in-place refresh machinery.
+            // Other cache readers or writers require functional translation.
             for (int source = 0; source < GGML_MAX_SRC; ++source) {
                 const auto input = node->src[source];
                 if (!input || (input != root && input->view_src != root)) {
                     continue;
                 }
                 const bool alias = node->op == GGML_OP_VIEW || node->op == GGML_OP_RESHAPE;
-                const bool matched_read = j == group.gather;
+                const bool matched_read = j == group.gather || j == group.reset;
                 const bool destination = node->op == GGML_OP_CPY && source == 1;
                 if (!alias && !matched_read && !destination) {
                     complete = false;
                 }
             }
             if (node->view_src == root && (node->op == GGML_OP_SCALE || node->op == GGML_OP_CPY) &&
-                j != group.remainder && j != group.writeback &&
+                j != group.reset && j != group.remainder && j != group.writeback &&
                 std::find(group.snapshots.begin(), group.snapshots.end(), j) == group.snapshots.end()) {
                 complete = false;
             }
@@ -208,6 +207,7 @@ RecurrentCacheFusion::RecurrentCacheFusion(const std::shared_ptr<GgmlDecoder> & 
         if (!complete) {
             continue;
         }
+        group.root_name = GgmlOvDecoder::get_tensor_name(graph, root);
         const auto id = m_groups.size();
         for (int n : {group.reset, group.gather, group.remainder}) {
             m_nodes[n] = id;
@@ -241,7 +241,18 @@ OutputVector RecurrentCacheFusion::translate(int index, const NodeContext & cont
     };
     if (index == group.reset) {
         group.old_cache = context.get_input(0);
+        auto root = group.old_cache.get_node_shared_ptr();
+        while (ov::is_type<v1::Reshape>(root)) {
+            root = root->input_value(0).get_node_shared_ptr();
+        }
+        group.enabled = ov::is_type<v0::Parameter>(root);
+        if (!group.enabled) {
+            return {};
+        }
         return {group.old_cache};
+    }
+    if (!group.enabled) {
+        return {};
     }
     NodeContext gather_context(m_decoder, m_tensors, group.gather);
     auto rows = process_view_input_new(gather_context, 1);
@@ -289,7 +300,6 @@ OutputVector RecurrentCacheFusion::translate(int index, const NodeContext & cont
         auto fused = std::make_shared<internal::RecurrentConvCacheUpdate>(inputs, history);
         fused->set_friendly_name(compute_context.get_name() + "/RecurrentConvCacheUpdate");
         group.conv = fused->output(0);
-        group.updated = fused->output(1);
         return op::translate_concat(context);
     }
     if (index == group.compute) {
@@ -297,11 +307,14 @@ OutputVector RecurrentCacheFusion::translate(int index, const NodeContext & cont
             return {group.conv};
         }
         inputs.push_back(context.get_input("rs_update_" + m_decoder->get_op_name(group.writeback)));
-        auto outputs = op::translate_recurrent_gated_delta_net(context, inputs);
-        group.updated = outputs.back();
-        return outputs;
+        return op::translate_recurrent_gated_delta_net(context, inputs);
     }
-    return {group.updated};
+    return {group.old_cache};
+}
+
+bool RecurrentCacheFusion::is_inplace_output(const std::string & name) const {
+    return std::any_of(m_groups.begin(), m_groups.end(),
+                       [&](const Group & group) { return group.enabled && group.root_name == name; });
 }
 }  // namespace ov::frontend::ggml
 #endif
