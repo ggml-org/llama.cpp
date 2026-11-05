@@ -812,7 +812,7 @@
 		aria-multiline="true"
 		aria-placeholder={placeholder}
 		class={[
-			'chat-form-input-rich text-md min-h-12 w-full overflow-y-auto whitespace-pre-wrap wrap-break-word border-0 bg-transparent p-0 leading-6 outline-none focus-visible:ring-0 focus-visible:ring-offset-0',
+			'chat-form-input-rich text-md min-h-[2.375rem] w-full overflow-y-auto whitespace-pre-wrap wrap-break-word border-0 bg-transparent px-0 py-1 leading-6 outline-none focus-visible:ring-0 focus-visible:ring-offset-0',
 			disabled && 'cursor-not-allowed'
 		]}
 		contenteditable={!disabled}

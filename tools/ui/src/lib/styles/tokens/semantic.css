@@ -1,18 +1,23 @@
 /*
  * Tier 2: semantic tokens. Named by purpose, they point at primitives and are the
  * only tier that changes between light and dark. Pattern: [category]-[role]-[state].
+ *
+ * Light mode comes in two surface themes that share everything else (colours, buttons, fields,
+ * shadows): Paper, the default, puts white panels, fields and keys on a faint grey page; Matte
+ * (the theme-matte class on <html>) puts grey glass on a white page.
  */
 :root {
-	/* surfaces: what a region of the page sits on */
-	--surface-page: var(--neutral-0);
+	/* surfaces: what a region of the page sits on. Paper: the page a faint grey, so glass, fields
+	   and keys, white, sit lighter than it */
+	--surface-page: var(--neutral-25);
 	--surface-muted: var(--neutral-100);
 	--surface-emphasis: var(--neutral-150);
 	--surface-selected: var(--neutral-150);
 	--surface-raised: var(--neutral-0);
 	--surface-lifted: var(--neutral-0);
 	--surface-pressed: var(--neutral-0);
-	--surface-glass: color-mix(in oklch, var(--neutral-100) 60%, transparent);
-	--surface-code: var(--neutral-50);
+	--surface-glass: color-mix(in oklch, var(--neutral-0) 80%, transparent);
+	--surface-code: var(--neutral-100);
 	--surface-overlay: var(--black-a40);
 
 	/* foreground: text and icons */
@@ -68,7 +73,7 @@
 	--action-ghost-hover: color-mix(in oklch, var(--neutral-500) 10%, transparent);
 
 	/* fields: editable controls */
-	--field-background: var(--surface-page);
+	--field-background: var(--neutral-0);
 	--field-shade: var(--black-a6);
 
 	/* status lamps: the status fill, a lighter rim and a darker glyph */
@@ -114,6 +119,14 @@
 	--elevation-tooltip: var(--elevation-surface);
 	--blur-surface: var(--length-24);
 	--blur-control: var(--length-12);
+}
+
+/* Matte, the alternative light theme: grey glass on a white page, fields on the page colour */
+.theme-matte:not(.dark) {
+	--surface-page: var(--neutral-0);
+	--surface-glass: color-mix(in oklch, var(--neutral-100) 60%, transparent);
+	--surface-code: var(--neutral-50);
+	--field-background: var(--surface-page);
 }
 
 .dark {

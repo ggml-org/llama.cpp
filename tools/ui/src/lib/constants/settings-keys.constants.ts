@@ -68,6 +68,7 @@ export const SETTINGS_KEYS = {
 	SHOW_SYSTEM_MESSAGE: 'showSystemMessage',
 	SHOW_THOUGHT_IN_PROGRESS: 'showThoughtInProgress',
 	SHOW_TOOL_CALL_IN_PROGRESS: 'showToolCallInProgress',
+	SURFACE_THEME: 'surfaceTheme',
 	SYMBOLIC_MATH_ENABLED: 'symbolicMathEnabled',
 	SYSTEM_MESSAGE: 'systemMessage',
 	// Sampling

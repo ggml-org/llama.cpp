@@ -97,6 +97,7 @@ export {
 	McpPromptVariant,
 	ScrollCarouselVariant,
 	SidebarAction,
+	SurfaceTheme,
 	TooltipSide,
 	UrlProtocol
 } from './ui.enums';

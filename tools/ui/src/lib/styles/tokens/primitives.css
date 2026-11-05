@@ -3,8 +3,9 @@
  * Only semantic tokens (semantic.css) reference these; components never do.
  */
 :root {
-	/* neutral greys: Tailwind's neutral scale plus three in-between steps */
+	/* neutral greys: Tailwind's neutral scale plus four in-between steps */
 	--neutral-0: oklch(1 0 0);
+	--neutral-25: oklch(0.988 0 0);
 	--neutral-50: oklch(0.985 0 0);
 	--neutral-100: oklch(0.97 0 0);
 	--neutral-150: oklch(0.95 0 0);

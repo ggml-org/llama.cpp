@@ -385,7 +385,7 @@ export { minMemoryTierGb } from './model-compatibility';
 export { uuid } from './uuid';
 
 // CSS utilities
-export { remToPx } from './css';
+export { applySurfaceTheme, remToPx } from './css';
 
 // Audio format helper (used by agentic store and chat service)
 export { getAudioInputFormat } from './audio-format';

@@ -8,7 +8,9 @@ import { FILE_GLOB_SEARCH_PICKERS } from './working-directory.constants';
 import {
 	Code,
 	Database,
+	File,
 	Funnel,
+	GlassWater,
 	ListRestart,
 	Monitor,
 	Moon,
@@ -16,7 +18,7 @@ import {
 	SlidersVertical,
 	Sun
 } from '@lucide/svelte';
-import { SyncableParameterType } from '$lib/enums';
+import { SurfaceTheme, SyncableParameterType } from '$lib/enums';
 import { SettingsFieldType } from '$lib/enums/settings.enums';
 import { ColorMode } from '$lib/enums/ui.enums';
 import type {
@@ -72,6 +74,17 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 					{ icon: Monitor, label: 'System', value: ColorMode.SYSTEM },
 					{ icon: Sun, label: 'Light', value: ColorMode.LIGHT },
 					{ icon: Moon, label: 'Dark', value: ColorMode.DARK }
+				],
+				type: SettingsFieldType.SELECT
+			},
+			{
+				defaultValue: SurfaceTheme.PAPER,
+				help: 'Choose how the light theme draws its surfaces: Paper puts white panels, fields and buttons on a faint grey page; Matte puts grey glass on a white page. Dark mode is the same for both.',
+				key: SETTINGS_KEYS.SURFACE_THEME,
+				label: 'Light surfaces',
+				options: [
+					{ icon: File, label: 'Paper', value: SurfaceTheme.PAPER },
+					{ icon: GlassWater, label: 'Matte', value: SurfaceTheme.MATTE }
 				],
 				type: SettingsFieldType.SELECT
 			},

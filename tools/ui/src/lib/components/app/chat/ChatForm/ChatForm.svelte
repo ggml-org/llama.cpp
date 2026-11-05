@@ -607,7 +607,7 @@
 			<ChatFormInput
 				bind:this={inputRef}
 				bind:value
-				class="px-5 py-1.5 md:pt-0"
+				class="mb-0.5 px-5 py-1.5 md:pt-0"
 				{disabled}
 				onInput={() => {
 					pickers.handleInput();
