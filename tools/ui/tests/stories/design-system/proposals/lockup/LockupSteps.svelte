@@ -16,15 +16,18 @@
 	// the gap change
 	const SCALE = 0.06;
 
+	// the two kept from the six even steps between them
+	const KEPT = [1, 4];
+
 	const steps = Array.from({ length: STEPS }, (_, i) => {
 		const t = i / (STEPS - 1);
 
 		return {
 			gap: FROM.gap + (TO.gap - FROM.gap) * t,
 			icon: FROM.icon + (TO.icon - FROM.icon) * t,
-			label: i === 0 ? 'Today’s lockup' : i === STEPS - 1 ? 'The glyph' : `Step ${i}`
+			label: `Step ${i}`
 		};
-	});
+	}).filter((_, i) => KEPT.includes(i));
 
 	const marks = [
 		{ first: 59, name: 'llama.cpp', split: 5 },
@@ -66,10 +69,9 @@
 		<h1 class="text-3xl font-bold tracking-tight">Lockup proposal</h1>
 
 		<p class="max-w-[64ch] text-sm text-muted-foreground">
-			The icon-to-wordmark proportion in {STEPS} even steps, from today’s lockup to the icon as a glyph
-			of Llama Sans. The wordmark stays the same size; the icon shrinks from 1.91× to 1× the cap height
-			and the gap before the first letter from 0.81 to 0.47 cap heights, the icon centred on the capitals
-			throughout.
+			Two of {STEPS} even steps between today’s lockup (the icon 1.91× the cap height, a 0.81 cap gap)
+			and the icon as a glyph of Llama Sans (1× the cap height, a 0.47 gap). The wordmark is the same
+			size in both, and the icon is centred on the capitals.
 		</p>
 	</header>
 
