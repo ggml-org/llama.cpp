@@ -1562,6 +1562,8 @@ static bool htp_kparams_solve_unary_impl(
                 case HTP_OP_UNARY_STEP:
                 case HTP_OP_UNARY_CEIL:
                 case HTP_OP_UNARY_SGN:
+                case HTP_OP_UNARY_SIN:
+                case HTP_OP_UNARY_COS:
                     break;
                 default:
                     return false;

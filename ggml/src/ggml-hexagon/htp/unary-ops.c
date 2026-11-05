@@ -470,6 +470,34 @@ static void l2_norm_f16(const void * restrict src,
     }
 }
 
+static void sin_f16(const void * restrict src,
+                    void * restrict dst,
+                    const uint32_t num_rows,
+                    const struct htp_unary_context * uctx) {
+    htp_unary_op_preamble;
+
+    for (uint32_t ir = 0; ir < num_rows; ir++) {
+        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * src0_row_size_aligned);
+        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * dst_row_size_aligned);
+
+        hvx_sin_f16_aa(dst_local, src_local, ne0);
+    }
+}
+
+static void cos_f16(const void * restrict src,
+                    void * restrict dst,
+                    const uint32_t num_rows,
+                    const struct htp_unary_context * uctx) {
+    htp_unary_op_preamble;
+
+    for (uint32_t ir = 0; ir < num_rows; ir++) {
+        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * src0_row_size_aligned);
+        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * dst_row_size_aligned);
+
+        hvx_cos_f16_aa(dst_local, src_local, ne0);
+    }
+}
+
 static void neg_f32(const void * restrict src,
                     void * restrict dst,
                     const uint32_t num_rows,
@@ -1810,8 +1838,8 @@ static int execute_op_unary(struct htp_ops_context * octx) {
         case HTP_OP_UNARY_STEP:      op_type = is_f16 ? "step-f16"     : "step-f32";         break;
         case HTP_OP_UNARY_CEIL:      op_type = is_f16 ? "ceil-f16"     : "ceil-f32";         break;
         case HTP_OP_UNARY_SGN:       op_type = is_f16 ? "sgn-f16"      : "sgn-f32";          break;
-        case HTP_OP_UNARY_SIN:       op_type = "sin-f32";                                    break;
-        case HTP_OP_UNARY_COS:       op_type = "cos-f32";                                    break;
+        case HTP_OP_UNARY_SIN:       op_type = is_f16 ? "sin-f16"      : "sin-f32";          break;
+        case HTP_OP_UNARY_COS:       op_type = is_f16 ? "cos-f16"      : "cos-f32";          break;
         case HTP_OP_L2_NORM:         op_type = is_f16 ? "l2norm-f16"   : "l2norm-f32";       break;
         case HTP_OP_TRI:             op_type = "tri-f32";                                    break;
         case HTP_OP_HADAMARD:        op_type = is_f16 ? "hadamard-f16" : "hadamard-f32";     break;
@@ -1970,6 +1998,8 @@ static int execute_op_unary(struct htp_ops_context * octx) {
             case HTP_OP_UNARY_STEP:      compute_func = (void *) step_f16;                break;
             case HTP_OP_UNARY_CEIL:      compute_func = (void *) ceil_f16;                break;
             case HTP_OP_UNARY_SGN:       compute_func = (void *) sgn_f16;                 break;
+            case HTP_OP_UNARY_SIN:       compute_func = (void *) sin_f16;                 break;
+            case HTP_OP_UNARY_COS:       compute_func = (void *) cos_f16;                 break;
             case HTP_OP_HADAMARD:        compute_func = (void *) hadamard_f16;            break;
             default:                     break;
         }
