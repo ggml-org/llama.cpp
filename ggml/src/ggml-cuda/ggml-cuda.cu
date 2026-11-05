@@ -3391,10 +3391,6 @@ static const struct {
 };
 
 static bool ggml_cuda_topk_moe_group_fusion(const struct ggml_cgraph * cgraph, int node_idx, const ggml_tensor * selection, ggml_cuda_topk_moe_args & args) {
-#if defined(GGML_USE_HIP) && HIP_VERSION < 60300000
-    GGML_UNUSED_VARS(cgraph, node_idx, selection, args);
-    return false;
-#else
     const int n_ops = (int) std::size(topk_moe_group_pattern);
     if (node_idx + n_ops > cgraph->n_nodes) {
         return false;
@@ -3423,7 +3419,6 @@ static bool ggml_cuda_topk_moe_group_fusion(const struct ggml_cgraph * cgraph, i
     args.n_groups     = n_groups;
     args.n_group_used = n_group_used;
     return true;
-#endif // defined(GGML_USE_HIP) && HIP_VERSION < 60300000
 }
 
 static bool ggml_cuda_topk_moe_fusion(const struct ggml_cgraph * cgraph, int node_idx, ggml_cuda_topk_moe_args & args) {
