@@ -2275,7 +2275,7 @@ struct llama_model_ricursive : public llama_model_base {
     void load_arch_tensors(llama_model_loader & ml) override;
 
     struct graph : public llm_graph_context {
-        graph(const llama_model & model, const llm_graph_params & params);
+        graph(const llm_graph_params & params);
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
