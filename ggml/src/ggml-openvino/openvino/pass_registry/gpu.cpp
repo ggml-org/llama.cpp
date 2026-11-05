@@ -4,6 +4,7 @@
 #include "ggml-openvino/openvino/pass/align_eltwise_ranks.h"
 #include "ggml-openvino/openvino/pass/fuse_moe_compressed.h"
 #include "ggml-openvino/openvino/pass/fuse_moe_router.h"
+#include "ggml-openvino/openvino/pass/keep_sum_square_fp32.h"
 
 namespace ov {
 namespace frontend {
@@ -12,6 +13,8 @@ namespace pipeline {
 
 void register_gpu_passes(ov::pass::Manager & manager, const GraphTraits & traits) {
     (void) traits;
+
+    manager.register_pass<pass::KeepSumSquareFP32>();
 
     // MoE: fuse router + experts into MOECompressed. It has no CPU plugin implementation, so it is a GPU
     // pass. GGML_OPENVINO_MOE_OP=0 keeps the unfused GatherMatmul path for fallback/debugging.
