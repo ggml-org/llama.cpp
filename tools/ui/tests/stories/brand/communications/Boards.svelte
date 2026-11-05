@@ -1,11 +1,12 @@
 <!--
-	Specimen boards and posters for Llama Sans, after the classic Swiss specimen boards, in the design system's own
-	palette: its blues (a Swiss blue, sky, navy), green, amber and red, the greys, and beige as the warm neutral.
+	Specimen boards and posters for Llama Sans, after the classic Swiss specimen boards, in the brand palette: the art
+	colours (a Swiss blue, sky, navy, green and amber), cinder as the accent, the greys, and beige as the warm neutral;
+	no red.
 	Light mixes stay within one hue. Fixed to light, so they read the same in both themes. Set in Llama Sans Display
 	and UI.
 -->
 <script lang="ts">
-	import '../../../brand/fonts/fonts.css';
+	import '../fonts/fonts.css';
 
 	const upper = 'ABCDEFGHIJKLMN\nOPQRSTUVWXYZ';
 	const lower = 'abcdefghijklmn\nopqrstuvwxyz()&?!';
@@ -173,8 +174,8 @@
 
 <style>
 	.boards {
-		/* every colour from the design system's palette: its blues, greens, ambers and reds (the status fills and
-		   their steps), the greys, and beige as the warm neutral; mixes stay within one hue */
+		/* every colour from the brand palette: the art colours (art-*), cinder, the greys, and beige as the warm
+		   neutral; mixes stay within one hue */
 		--navy:
 			radial-gradient(
 				ellipse at 15% 10%,
@@ -214,7 +215,7 @@
 		--teal: var(--art-green);
 		--saffron: var(--art-amber);
 		--pink: var(--art-cinder-light); /* a light orange in place of pink: no red */
-		--cinder: var(--art-cinder); /* the accent orange; the brand orange stays with the logotype */
+		--cinder: var(--art-cinder); /* the accent orange and the .cpp of the logotype */
 		--ink: var(--beige-900);
 		--display: 'Llama Sans', var(--font-sans);
 		display: grid;

@@ -25,23 +25,6 @@ export interface Palette {
 	};
 }
 
-const NAVY =
-	'radial-gradient(ellipse at 15% 10%, color-mix(in oklab, var(--art-navy), white 6%) 0%, transparent 55%), linear-gradient(160deg, color-mix(in oklab, var(--art-navy), black 22%) 0%, color-mix(in oklab, var(--art-navy), black 10%) 100%)';
-const MIST =
-	'linear-gradient(160deg, color-mix(in oklab, var(--art-sky), white 55%) 0%, color-mix(in oklab, var(--art-sky), white 68%) 100%)';
-const base = {
-	deep: NAVY,
-	deepInk: 'var(--neutral-0)',
-	deepTone: 'color-mix(in oklab, var(--art-navy), black 10%)',
-	field: 'var(--beige-200)',
-	ink: 'var(--neutral-950)',
-	line: 'rgb(0 0 0 / 0.12)',
-	soft: MIST,
-	softInk: 'var(--neutral-950)',
-	surface: 'var(--neutral-50)',
-	warm: 'var(--beige-100)'
-};
-
 /** The base on its own: the design system's greys only, every role neutral. */
 export const basePalette: Palette = {
 	name: 'Base',
@@ -68,40 +51,5 @@ export const basePalette: Palette = {
 		{ name: 'Neutral 700', value: 'var(--neutral-700)' },
 		{ name: 'Neutral 900', value: 'var(--neutral-900)' },
 		{ name: 'Neutral 950', value: 'var(--neutral-950)' }
-	]
-};
-
-/** The design system's palette for communications: neutral fields (the greys and beige) as a rule, and the artwork
- *  colours (art-*: friendlier versions of the status hues and cinder, the accent orange, no red) where colour serves
- *  a purpose: shapes, numerals and accents. The brand orange stays with the logotype. */
-const GREY =
-	'linear-gradient(160deg, var(--neutral-400) 0%, var(--neutral-300) 55%, var(--neutral-200) 100%)';
-
-export const llamaPalette: Palette = {
-	name: 'Llama',
-	note: "The design system's own colours on neutral fields: greys and beige behind, the artwork blues, green, amber and accent orange for shapes",
-	roles: {
-		...base,
-		accent: 'var(--art-cinder)',
-		accentInk: '#ffffff',
-		deep: 'linear-gradient(160deg, var(--neutral-800) 0%, var(--neutral-900) 100%)',
-		deepTone: 'var(--neutral-800)',
-		ink: 'var(--beige-900)',
-		soft: GREY,
-		softInk: 'var(--beige-900)',
-		surface: 'var(--beige-50)',
-		warm: 'var(--beige-100)'
-	},
-	swatches: [
-		{ name: 'Art blue', value: 'var(--art-blue)' },
-		{ name: 'Art sky', value: 'var(--art-sky)' },
-		{ name: 'Navy', value: NAVY },
-		{ name: 'Greys', value: GREY },
-		{ name: 'Beige 100', value: 'var(--beige-100)' },
-		{ name: 'Cinder · accent', value: 'var(--art-cinder)' },
-		{ name: 'Art amber', value: 'var(--art-amber)' },
-		{ name: 'Art green', value: 'var(--art-green)' },
-		{ name: 'Cinder light', value: 'var(--art-cinder-light)' },
-		{ name: 'Beige 50', value: 'var(--beige-50)' }
 	]
 };
