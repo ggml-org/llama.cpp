@@ -33,7 +33,7 @@ const base = {
 	deep: NAVY,
 	deepInk: 'var(--neutral-0)',
 	deepTone: 'color-mix(in oklab, var(--blue-800), black 28%)',
-	field: 'color-mix(in oklab, var(--green-550) 14%, var(--beige-100))',
+	field: 'var(--beige-200)',
 	ink: 'var(--neutral-950)',
 	line: 'rgb(0 0 0 / 0.12)',
 	soft: MIST,
@@ -71,23 +71,21 @@ export const basePalette: Palette = {
 	]
 };
 
-/** The design system's palette for communications: its blues as the fields (a Swiss blue, sky, navy), the greys,
- *  beige as the warm neutral, and its red as the accent (the brand orange stays with the logotype), with green, amber
- *  and a light red in small doses. Every colour is a palette token or a mix within one hue. */
-const SWISS =
-	'linear-gradient(160deg, var(--blue-500) 0%, var(--blue-550) 55%, var(--blue-650) 100%)';
+/** The design system's palette for communications: neutral fields (the greys and beige) as a rule, and its blues,
+ *  red, green and amber where colour serves a purpose: shapes, numerals and accents (the brand orange stays with the
+ *  logotype). Every colour is a palette token or a mix within one hue. */
 const GREY =
 	'linear-gradient(160deg, var(--neutral-400) 0%, var(--neutral-300) 55%, var(--neutral-200) 100%)';
 
 export const llamaPalette: Palette = {
 	name: 'Llama',
-	note: "The design system's own colours: its blues as fields, greys, beige and a red accent, with green, amber and a light red in small doses",
+	note: "The design system's own colours on neutral fields: greys and beige behind, blues, red, green and amber for shapes and accents",
 	roles: {
 		...base,
 		accent: 'var(--red-550)',
 		accentInk: '#ffffff',
-		deep: SWISS,
-		deepTone: 'var(--blue-650)',
+		deep: 'linear-gradient(160deg, var(--neutral-800) 0%, var(--neutral-900) 100%)',
+		deepTone: 'var(--neutral-800)',
 		ink: 'var(--beige-900)',
 		soft: GREY,
 		softInk: 'var(--beige-900)',

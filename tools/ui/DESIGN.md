@@ -738,6 +738,10 @@ glance and tuned to text contrast in both modes. The brand orange belongs to the
 logotype and is not part of the UI palette. Beige (`beige-50` to `beige-900`) is the warm neutral for communications
 (posters, boards, the site); the UI itself stays on the greys.
 
+Backgrounds stay neutral as a rule, in the UI and in communications alike: greys and beige
+behind, colour only where it serves a purpose, functional (status, a selection, focus) or
+creative (a shape, a numeral, an illustration).
+
 Light mode has two surface themes, which share everything else (the palette, buttons, fields,
 badges, shadows and dark mode): **Paper**, the default, sets white panels, fields and keys on a
 faint grey page (`neutral-25`); **Matte** sets grey glass on a white page. Matte is the
