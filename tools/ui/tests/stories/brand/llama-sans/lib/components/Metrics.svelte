@@ -50,7 +50,7 @@
 	<div>
 		<dt>Display</dt>
 
-		<dd>tracking −26 · kerning 115% · line 1.15</dd>
+		<dd>tracking −22 · kerning 115% · line 1.15</dd>
 	</div>
 
 	<div>

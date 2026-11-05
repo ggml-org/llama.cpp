@@ -56,7 +56,7 @@ It isn't featureless, though. A few angled cuts give it just enough character to
 	<IconsSample />
 </Section>
 
-<Version name="Display" side="end" statement="Quiet letters for loud ideas." specs="Tracking −26 · kerning 115% · line 1.15">
+<Version name="Display" side="end" statement="Quiet letters for loud ideas." specs="Tracking −22 · kerning 115% · line 1.15">
 	<DisplaySample />
 </Version>
 
