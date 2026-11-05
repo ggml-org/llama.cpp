@@ -129,7 +129,9 @@ struct vk_xe_fa_push_constants {
     uint32_t neq2;
     uint32_t nek1;
     uint32_t nek2;
+    uint32_t nem1;
     uint32_t nem2;
+    uint32_t nem3;
     uint32_t nbq1;
     uint32_t nbq2;
     uint32_t nbk1;
@@ -139,7 +141,6 @@ struct vk_xe_fa_push_constants {
     uint32_t nbq3;
     uint32_t nbk3;
     uint32_t nbv3;
-    uint32_t nbm3;
     uint32_t nb3;
     uint32_t gqa_ratio;
     uint32_t flag;

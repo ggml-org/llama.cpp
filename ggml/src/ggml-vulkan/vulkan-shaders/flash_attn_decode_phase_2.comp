@@ -25,7 +25,9 @@ layout (push_constant) uniform parameter
     uint neq2;
     uint nek1;
     uint nek2;
+    uint nem1;
     uint nem2;
+    uint nem3;
     uint nbq1;
     uint nbq2;
     uint nbk1;
@@ -35,7 +37,6 @@ layout (push_constant) uniform parameter
     uint nbq3;
     uint nbk3;
     uint nbv3;
-    uint nbm3;
     uint nb3;
     uint gqa_ratio;
     uint flag;
@@ -51,7 +52,7 @@ layout (constant_id = 5) const uint p_per_loop = 64;
 layout (constant_id = 6) const uint p_reduce = 32;
 layout (constant_id = 7) const uint Bc = 16;
 
-#define SINK_ENABLE_BIT (1 << 1)
+#define SINK_ENABLE_BIT (1 << 16)
 
 const uint TK = 16;
 const uint TN = SubGroupSize;
