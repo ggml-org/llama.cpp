@@ -1313,6 +1313,12 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
         LOG_INF("%s", "decision model reads the embeddings output, enabling embedding mode\n");
     }
 
+    if (llama_model_classifier_free_guidance(model)) {
+        params.kv_unified   = true;
+        cparams.kv_unified  = true;
+        cparams.n_seq_max  *= 2;
+    }
+
     // embeddings need the whole batch in one ubatch, so n_batch must not be larger than n_ubatch
     // (server.cpp does this check for --embedding, but before the model is loaded)
     if (cparams.embeddings && cparams.n_batch > cparams.n_ubatch) {
