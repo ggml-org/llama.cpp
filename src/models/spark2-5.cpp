@@ -73,19 +73,12 @@ llama_model_spark2_5::graph::graph(const llm_graph_params & params) : llm_graph_
 
         const int64_t n_head_i = hparams.n_head(il);
         const int64_t n_head_kv_i = hparams.n_head_kv(il);
-        const int64_t n_rot_i = hparams.n_rot(il);
-        const float freq_base_i = model.get_rope_freq_base(cparams, il);
-        const float freq_scale_i = model.get_rope_freq_scale(cparams, il);
 
         ggml_tensor * attn_inp = cur;
         auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur, n_embd_head, n_head_i, n_head_kv_i, il);
 
-        Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr,
-                n_rot_i, rope_type, n_ctx_orig, freq_base_i, freq_scale_i,
-                ext_factor, attn_factor, beta_fast, beta_slow);
-        Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr,
-                n_rot_i, rope_type, n_ctx_orig, freq_base_i, freq_scale_i,
-                ext_factor, attn_factor, beta_fast, beta_slow);
+        Qcur = build_rope(Qcur, inp_pos, il);
+        Kcur = build_rope(Kcur, inp_pos, il);
         cb(Qcur, "Qcur_rope", il);
         cb(Kcur, "Kcur_rope", il);
 

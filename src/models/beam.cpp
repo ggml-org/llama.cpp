@@ -156,15 +156,9 @@ llama_model_beam::graph::graph(const llm_graph_params & params) : llm_graph_cont
             cb(Kcur, "Kcur_normed", il);
 
             if (is_swa) {
-                const float freq_base_l  = model.get_rope_freq_base (cparams, il);
-                const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
 
-                Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr,
-                        n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                        ext_factor, attn_factor, beta_fast, beta_slow);
-                Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr,
-                        n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                        ext_factor, attn_factor, beta_fast, beta_slow);
+                Qcur = build_rope(Qcur, inp_pos, il);
+                Kcur = build_rope(Kcur, inp_pos, il);
                 cb(Qcur, "Qcur_rope", il);
                 cb(Kcur, "Kcur_rope", il);
             } else {

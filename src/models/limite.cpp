@@ -13,6 +13,7 @@ void llama_model_limite::load_arch_hparams(llama_model_loader & ml) {
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa);
     load_swa_pattern(ml, 4);
+    hparams.rope_pattern = hparams.is_swa_impl;
 
     std::fill(hparams.mudd_tap_idx.begin(), hparams.mudd_tap_idx.end(), -1);
     ml.get_key(LLM_KV_MUDD_TAP_COUNT, hparams.n_mudd_taps, false);
@@ -66,6 +67,16 @@ void llama_model_limite::load_arch_tensors(llama_model_loader &) {
             layer.mudd_up_b = create_tensor(tn(LLM_TENSOR_MUDD_UP,   "bias",   i), {2*n_taps},         0);
         }
     }
+}
+
+llama_rope_params llama_model_limite::get_rope_params(const llama_cparams & cparams, int il) const {
+    auto res = llama_model::get_rope_params(cparams, il);
+
+    // the SWA layers use the global base and scale
+    res.freq_base  = cparams.rope_freq_base;
+    res.freq_scale = cparams.rope_freq_scale;
+
+    return res;
 }
 
 std::unique_ptr<llm_graph_context> llama_model_limite::build_arch_graph(const llm_graph_params & params) const {
@@ -160,14 +171,10 @@ llama_model_limite::graph::graph(const llm_graph_params & params) : llm_graph_co
             cb(Kcur, "Kcur_normed", il);
 
             // the full attention layers use no positional encoding
-            if (hparams.is_swa(il)) {
-                Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                                     ext_factor, attn_factor, beta_fast, beta_slow);
-                Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                                     ext_factor, attn_factor, beta_fast, beta_slow);
-                cb(Qcur, "Qcur", il);
-                cb(Kcur, "Kcur", il);
-            }
+            Qcur = build_rope(Qcur, inp_pos, il);
+            Kcur = build_rope(Kcur, inp_pos, il);
+            cb(Qcur, "Qcur", il);
+            cb(Kcur, "Kcur", il);
 
             cur = build_attn(inp_attn,
                     nullptr, nullptr, nullptr,
