@@ -8,11 +8,11 @@
 		parameters: {
 			layout: 'fullscreen'
 		},
-		title: 'Brand/Logo/Showcase'
+		title: 'Brand/Logo/Overview'
 	});
 </script>
 
-<Story asChild name="Page">
+<Story asChild name="Overview">
 	<ShowcaseFrame>
 		<LogoShowcase />
 	</ShowcaseFrame>
