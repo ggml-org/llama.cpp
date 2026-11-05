@@ -669,6 +669,8 @@ static void ggml_backend_hexagon_buffer_set_tensor(ggml_backend_buffer_t buffer,
     auto sbuf = (ggml_hexagon_shared_buffer *) buffer->context;
     auto sess = sbuf->sess;
 
+    sess->flush_sync();
+
     if (ggml_backend_buffer_get_usage(buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
         ggml_hexagon_tensor_set_flags(tensor, HTP_TENSOR_WEIGHT);
     }
@@ -720,6 +722,8 @@ static void ggml_backend_hexagon_buffer_set_tensor_2d(ggml_backend_buffer_t buff
                                                       size_t                stride_data) {
     auto sbuf = (ggml_hexagon_shared_buffer *) buffer->context;
     auto sess = sbuf->sess;
+
+    sess->flush_sync();
 
     if (ggml_backend_buffer_get_usage(buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
         ggml_hexagon_tensor_set_flags(tensor, HTP_TENSOR_WEIGHT);
@@ -779,6 +783,10 @@ static void ggml_backend_hexagon_buffer_set_tensor_n(ggml_backend_buffer_t buffe
                                                      const size_t * sizes,
                                                      size_t n_tensors) {
     const bool is_weights = ggml_backend_buffer_get_usage(buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
+    auto sbuf = (ggml_hexagon_shared_buffer *) buffer->context;
+    auto sess = sbuf->sess;
+
+    sess->flush_sync();
 
     for (size_t i = 0; i < n_tensors; i++) {
         if (sizes[i] == 0) {
@@ -822,8 +830,12 @@ static void ggml_backend_hexagon_host_buffer_set_tensor(ggml_backend_buffer_t bu
                                                         const void *          data,
                                                         size_t                offset,
                                                         size_t                size) {
+    auto sbuf = (ggml_hexagon_shared_buffer *) buffer->context;
+    auto sess = sbuf->sess;
+
+    sess->flush_sync();
+
     memcpy((char *) tensor->data + offset, data, size);
-    GGML_UNUSED(buffer);
 }
 
 static void ggml_backend_hexagon_host_buffer_get_tensor(ggml_backend_buffer_t buffer,
@@ -841,13 +853,17 @@ static void ggml_backend_hexagon_host_buffer_set_tensor_n(ggml_backend_buffer_t 
                                                           const size_t * offsets,
                                                           const size_t * sizes,
                                                           size_t n_tensors) {
+    auto sbuf = (ggml_hexagon_shared_buffer *) buffer->context;
+    auto sess = sbuf->sess;
+
+    sess->flush_sync();
+
     for (size_t i = 0; i < n_tensors; i++) {
         if (sizes[i] == 0) {
             continue;
         }
         memcpy((char *) tensors[i]->data + offsets[i], data[i], sizes[i]);
     }
-    GGML_UNUSED(buffer);
 }
 
 static ggml_backend_buffer_i ggml_backend_hexagon_host_buffer_interface = {
