@@ -318,14 +318,10 @@ llama_model_xing4_0::graph_mtp::graph_mtp(const llama_model & model, const llm_g
     const float kq_scale =
             1.0f * mscale * mscale / sqrtf(float(n_embd_head_k_mla));
 
-    q_pe = ggml_rope_ext(ctx0, q_pe, inp_pos, nullptr,
-            n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-            ext_factor, attn_factor, beta_fast, beta_slow);
+    q_pe = build_rope(q_pe, inp_pos, il);
     cb(q_pe, "mtp_q_pe_rope", il);
 
-    k_pe = ggml_rope_ext(ctx0, k_pe, inp_pos, nullptr,
-            n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-            ext_factor, attn_factor, beta_fast, beta_slow);
+    k_pe = build_rope(k_pe, inp_pos, il);
     cb(k_pe, "mtp_k_pe_rope", il);
 
     q_nope = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);
@@ -686,12 +682,10 @@ llama_model_xing4_0::graph::graph(const llama_model & model, const llm_graph_par
                                           ggml_row_size(kv_cmpr_pe->type, kv_lora_rank));
         cb(k_pe, "k_pe_in", il);
 
-        q_pe = ggml_rope_ext(ctx0, q_pe, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                             ext_factor, attn_factor, beta_fast, beta_slow);
+        q_pe = build_rope(q_pe, inp_pos, il);
         cb(q_pe, "q_pe", il);
 
-        k_pe = ggml_rope_ext(ctx0, k_pe, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                             ext_factor, attn_factor, beta_fast, beta_slow);
+        k_pe = build_rope(k_pe, inp_pos, il);
         cb(k_pe, "k_pe", il);
 
         kv_cmpr = build_norm(kv_cmpr, layer.attn_kv_a_norm, nullptr, LLM_NORM_RMS, il);
