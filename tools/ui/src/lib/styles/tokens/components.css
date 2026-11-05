@@ -162,9 +162,11 @@
 	--button-danger-edge: color-mix(in oklab, var(--button-danger-background), white 10%);
 }
 
-/* the user bubble is a card with an even, fainter edge and a barely noticeable shadow */
+/* the user bubble is a card with an even, fainter edge, no inner ring and a barely noticeable shadow */
 .chat-message-user-bubble {
 	--card-shadow: var(--user-bubble-shadow);
+	/* no inner highlight ring: the bubble is a flat tint with its hairline edge */
+	--card-highlight: transparent;
 	--card-edge-side: var(--user-bubble-edge);
 	--card-edge-mid: var(--user-bubble-edge);
 }
