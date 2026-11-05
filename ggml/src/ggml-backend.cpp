@@ -2122,6 +2122,60 @@ static void ggml_backend_sched_copy_input(ggml_backend_sched_t sched, struct ggm
     }
 }
 
+static bool ggml_backend_sched_copy_inputs_batched(ggml_backend_sched_t sched, ggml_backend_sched_split * split) {
+    if (split->n_inputs < 2) {
+        return false;
+    }
+
+    const int backend_id = split->backend_id;
+    ggml_backend_t backend = sched->backends[backend_id];
+    if (!ggml_backend_is_meta(backend)) {
+        return false;
+    }
+
+    bool source_backends[GGML_SCHED_MAX_BACKENDS] = {};
+    for (int i = 0; i < split->n_inputs; i++) {
+        ggml_tensor * src = split->inputs[i];
+        ggml_tensor * dst = tensor_copy(src, backend_id, sched->cur_copy);
+        if (!src->buffer || !src->data || ggml_backend_sched_is_host_weight(src) ||
+                !ggml_backend_buffer_is_host(src->buffer) || !ggml_is_contiguous(src) ||
+                !ggml_are_same_layout(src, dst) || !ggml_backend_meta_can_batch_input(backend, dst)) {
+            return false;
+        }
+        ggml_backend_t source = ggml_backend_sched_get_tensor_backend(sched, src);
+        if (!source) {
+            return false;
+        }
+        const int source_id = ggml_backend_sched_backend_id(sched, source);
+        if (source_id < 0 || source_id >= sched->n_backends) {
+            return false;
+        }
+        source_backends[source_id] = true;
+    }
+
+    // Finish prior reads before overwriting the destination buffers.
+    if (sched->events[backend_id][sched->cur_copy] != NULL) {
+        ggml_backend_event_synchronize(sched->events[backend_id][sched->cur_copy]);
+    } else {
+        ggml_backend_synchronize(backend);
+    }
+    for (int i = 0; i < sched->n_backends; i++) {
+        if (source_backends[i]) {
+            ggml_backend_synchronize(sched->backends[i]);
+        }
+    }
+
+    for (int i = 0; i < split->n_inputs; i++) {
+        ggml_tensor * src = split->inputs[i];
+        ggml_tensor * dst = tensor_copy(src, backend_id, sched->cur_copy);
+        ggml_backend_tensor_set_async(backend, dst, src->data, 0, ggml_nbytes(src));
+    }
+
+    // Keep caller input storage valid until all queued sends have consumed it.
+    ggml_backend_synchronize(backend);
+    return true;
+}
+
 static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t sched) {
     GGML_ASSERT(sched);
     struct ggml_backend_sched_split * splits = sched->splits;
@@ -2143,16 +2197,18 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
             }
         }
 
-        // copy the input tensors to the split backend
-        // the weights in host memory are copied last, so that the copy callback can read the other inputs of the split
-        for (int input_id = 0; input_id < split->n_inputs; input_id++) {
-            if (!ggml_backend_sched_is_host_weight(split->inputs[input_id])) {
-                ggml_backend_sched_copy_input(sched, split, split->inputs[input_id]);
+        if (!ggml_backend_sched_copy_inputs_batched(sched, split)) {
+            // copy the input tensors to the split backend
+            // the weights in host memory are copied last, so that the copy callback can read the other inputs of the split
+            for (int input_id = 0; input_id < split->n_inputs; input_id++) {
+                if (!ggml_backend_sched_is_host_weight(split->inputs[input_id])) {
+                    ggml_backend_sched_copy_input(sched, split, split->inputs[input_id]);
+                }
             }
-        }
-        for (int input_id = 0; input_id < split->n_inputs; input_id++) {
-            if (ggml_backend_sched_is_host_weight(split->inputs[input_id])) {
-                ggml_backend_sched_copy_input(sched, split, split->inputs[input_id]);
+            for (int input_id = 0; input_id < split->n_inputs; input_id++) {
+                if (ggml_backend_sched_is_host_weight(split->inputs[input_id])) {
+                    ggml_backend_sched_copy_input(sched, split, split->inputs[input_id]);
+                }
             }
         }
 

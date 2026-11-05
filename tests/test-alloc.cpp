@@ -25,6 +25,19 @@ struct dummy_backend_context {
     bool custom_alloc_buffer_n_called   = false;
     bool custom_get_alloc_size_n_called = false;
 
+    bool is_host = true;
+    bool track_uploads = false;
+    int n_async_sets = 0;
+    int n_syncs = 0;
+    ggml_backend_buffer_type_t buffer_type = nullptr;
+    std::vector<uint8_t> storage;
+    struct upload {
+        const uint8_t * data;
+        size_t size;
+    };
+    std::vector<upload> pending_uploads;
+    std::vector<std::vector<uint8_t>> uploads;
+
     size_t allocated_total() const {
         size_t n = 0;
         for (ggml_backend_buffer_t buf : buffers) {
@@ -82,8 +95,8 @@ static size_t dummy_backend_buffer_type_get_alloc_size_n_custom(
     return 64;
 }
 
-static bool dummy_backend_buffer_type_is_host(ggml_backend_buffer_type_t /*buft*/) {
-    return true;
+static bool dummy_backend_buffer_type_is_host(ggml_backend_buffer_type_t buft) {
+    return ((dummy_backend_context *) buft->context)->is_host;
 }
 
 // ggml_backend_buffer interface
@@ -96,8 +109,9 @@ static void dummy_backend_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     ctx->buffers.erase(i);
 }
 
-static void * dummy_backend_buffer_get_base(ggml_backend_buffer_t /*buft*/) {
-    return alloc_base;
+static void * dummy_backend_buffer_get_base(ggml_backend_buffer_t buffer) {
+    auto * ctx = (dummy_backend_context *) buffer->context;
+    return ctx->storage.empty() ? alloc_base : ctx->storage.data();
 }
 
 static ggml_status dummy_backend_buffer_init_tensor(ggml_backend_buffer_t /*buft*/, ggml_tensor * /*x*/) {
@@ -106,7 +120,12 @@ static ggml_status dummy_backend_buffer_init_tensor(ggml_backend_buffer_t /*buft
 
 static void dummy_backend_buffer_memset_tensor(ggml_backend_buffer_t /*buft*/, ggml_tensor * /*x*/, uint8_t, size_t, size_t) {}
 
-static void dummy_backend_buffer_set_tensor(ggml_backend_buffer_t /*buft*/, ggml_tensor * /*x*/, const void *, size_t, size_t) {}
+static void dummy_backend_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * /*x*/, const void * data, size_t, size_t size) {
+    auto * ctx = (dummy_backend_context *) buffer->context;
+    if (ctx->track_uploads) {
+        ctx->uploads.emplace_back((const uint8_t *) data, (const uint8_t *) data + size);
+    }
+}
 
 static void dummy_backend_buffer_get_tensor(ggml_backend_buffer_t /*buft*/, const ggml_tensor * /*x*/, void *, size_t, size_t) {}
 
@@ -1099,6 +1118,138 @@ static void test_buft_get_alloc_size_n_does_not_allocate() {
     GGML_ASSERT(x[1]->data == nullptr);
 }
 
+static void dummy_backend_synchronize(ggml_backend_t backend) {
+    auto * ctx = (dummy_backend_context *) backend->context;
+    ctx->n_syncs++;
+    for (const auto & upload : ctx->pending_uploads) {
+        ctx->uploads.emplace_back(upload.data, upload.data + upload.size);
+    }
+    ctx->pending_uploads.clear();
+}
+
+static void dummy_backend_enable_async(dummy_backend & backend) {
+    static ggml_backend_reg reg = {GGML_BACKEND_API_VERSION, {}, nullptr};
+    auto * ctx = backend.context.get();
+    ctx->device.reg = &reg;
+    ctx->buffer_type = &backend.buffer_type;
+    ctx->device.iface.get_name = [](ggml_backend_dev_t) { return "dummy_device"; };
+    ctx->device.iface.get_props = [](ggml_backend_dev_t, ggml_backend_dev_props * props) {
+        *props = {};
+        props->caps.async = true;
+    };
+    ctx->device.iface.get_buffer_type = [](ggml_backend_dev_t dev) {
+        return ((dummy_backend_context *) dev->context)->buffer_type;
+    };
+    ctx->device.iface.init_backend = [](ggml_backend_dev_t dev, const char *) {
+        return new ggml_backend(((dummy_backend_context *) dev->context)->backend);
+    };
+    ctx->backend.iface.free = [](ggml_backend_t b) { delete b; };
+    ctx->backend.iface.set_tensor_async = [](ggml_backend_t b, ggml_tensor *, const void * data, size_t, size_t size) {
+        auto * c = (dummy_backend_context *) b->context;
+        c->n_async_sets++;
+        c->pending_uploads.push_back({(const uint8_t *) data, size});
+    };
+    ctx->backend.iface.synchronize = dummy_backend_synchronize;
+    ctx->backend.iface.graph_compute = [](ggml_backend_t, ggml_cgraph *) { return GGML_STATUS_SUCCESS; };
+}
+
+static ggml_backend_meta_split_state test_input_split_state(const ggml_tensor *, void *) {
+    return {GGML_BACKEND_SPLIT_AXIS_MIRRORED, {0}, {1}, 1};
+}
+
+static void test_sched_input_batch(int n_inputs, int width, bool parallel, bool weights = false, bool strided = false) {
+    // Meta devices cache their child device pointers.
+    static dummy_backend targets[] = {dummy_backend_init(SIZE_MAX), dummy_backend_init(SIZE_MAX)};
+    for (auto & target : targets) {
+        dummy_backend_enable_async(target);
+        target.context->is_host = false;
+        target.context->track_uploads = true;
+    }
+    dummy_backend host = dummy_backend_init(SIZE_MAX);
+    dummy_backend_enable_async(host);
+    host.context->storage.resize(2*n_inputs*width*4*sizeof(float) + 128);
+    ggml_backend_dev_t devices[] = {&targets[0].context->device, &targets[1].context->device};
+    auto * device = ggml_backend_meta_device(devices, 2, test_input_split_state, nullptr);
+    ggml_backend_ptr meta(ggml_backend_dev_init(device, nullptr));
+    ggml_backend_t backends[] = {meta.get(), &host.context->backend};
+    ggml_backend_buffer_type_t bufts[] = {ggml_backend_get_default_buffer_type(meta.get()), &host.buffer_type};
+    ggml_backend_sched_ptr sched(ggml_backend_sched_new(backends, bufts, 2, 64, parallel, true));
+
+    ggml_context_ptr inputs(ggml_init({64*ggml_tensor_overhead(), nullptr, true}));
+    ggml_context_ptr nodes(ggml_init({128*ggml_tensor_overhead() + ggml_graph_overhead_custom(64, false), nullptr, true}));
+    auto * graph = ggml_new_graph_custom(nodes.get(), 64, false);
+    std::vector<ggml_tensor *> tensors;
+    for (int i = 0; i < n_inputs; i++) {
+        const bool view = strided && i == n_inputs - 1;
+        auto * storage = ggml_new_tensor_2d(inputs.get(), GGML_TYPE_F32, width*(view ? 2 : 1), 4);
+        auto * input = view ? ggml_view_2d(inputs.get(), storage, width, 4, storage->nb[1], 0) : storage;
+        if (i % 2 == 0) {
+            ggml_set_input(storage);
+        }
+        ggml_format_name(input, "input_%d", i);
+        auto * output = ggml_add(nodes.get(), input, input);
+        ggml_set_output(output);
+        ggml_backend_sched_set_tensor_backend(sched.get(), input, backends[1]);
+        ggml_backend_sched_set_tensor_backend(sched.get(), output, meta.get());
+        ggml_build_forward_expand(graph, output);
+        tensors.push_back(input);
+    }
+    ggml_backend_buffer_ptr input_buffer(ggml_backend_alloc_ctx_tensors_from_buft(inputs.get(), &host.buffer_type));
+    GGML_ASSERT(input_buffer);
+    GGML_ASSERT(ggml_backend_buffer_get_size(input_buffer.get()) <= host.context->storage.size());
+    if (weights) {
+        ggml_backend_buffer_set_usage(input_buffer.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+    }
+    GGML_ASSERT(ggml_backend_sched_alloc_graph(sched.get(), graph));
+
+    for (int iteration = 0; iteration < 4; iteration++) {
+        std::vector<std::vector<uint8_t>> expected;
+        for (int i = 0; i < n_inputs; i++) {
+            auto * data = (uint8_t *) tensors[i]->data;
+            const size_t size = ggml_nbytes(tensors[i]);
+            for (size_t j = 0; j < size; j++) {
+                data[j] = (uint8_t) (i + j + 17*iteration);
+            }
+            expected.emplace_back(data, data + size);
+        }
+        for (auto & target : targets) {
+            target.context->uploads.clear();
+            target.context->n_async_sets = 0;
+            target.context->n_syncs = 0;
+        }
+        GGML_ASSERT(ggml_backend_sched_graph_compute_async(sched.get(), graph) == GGML_STATUS_SUCCESS);
+        const bool batched = n_inputs > 1 && !weights && !strided;
+        for (auto & target : targets) {
+            GGML_ASSERT(target.context->pending_uploads.empty());
+            GGML_ASSERT(target.context->n_async_sets == (batched ? n_inputs : 0));
+            if (batched) {
+                GGML_ASSERT(target.context->n_syncs <= 3);
+            }
+        }
+        // Deferred uploads must consume the source before it can be reused.
+        std::fill(host.context->storage.begin(), host.context->storage.end(), 0xa5);
+        ggml_backend_synchronize(meta.get());
+        if (!strided) {
+            std::sort(expected.begin(), expected.end());
+            for (auto & target : targets) {
+                std::sort(target.context->uploads.begin(), target.context->uploads.end());
+                GGML_ASSERT(target.context->uploads == expected);
+            }
+        }
+    }
+}
+
+static void test_sched_mirrored_inputs() {
+    for (bool parallel : {false, true}) {
+        test_sched_input_batch(2, 16, parallel);
+        test_sched_input_batch(14, 16, parallel);
+        test_sched_input_batch(14, 257, parallel);
+        test_sched_input_batch(1, 16, parallel);
+        test_sched_input_batch(14, 16, parallel, true);
+        test_sched_input_batch(14, 16, parallel, false, true);
+    }
+}
+
 static void run(const char * name, void (*f)()) {
     printf("%s ", name);
     fflush(stdout);
@@ -1107,6 +1258,7 @@ static void run(const char * name, void (*f)()) {
 }
 
 int main() {
+    run("test_sched_mirrored_inputs", test_sched_mirrored_inputs);
     run("test_max_size_too_many_tensors", test_max_size_too_many_tensors);
     run("test_max_size_tensor_too_large", test_max_size_tensor_too_large);
     run("test_tensor_larger_than_max_size", test_tensor_larger_than_max_size);
