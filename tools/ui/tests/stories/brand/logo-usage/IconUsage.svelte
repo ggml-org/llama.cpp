@@ -237,10 +237,10 @@
 	<h2>Where the name goes</h2>
 
 	<p>
-		The lockup at the sizes it is used at: an app header, a footer, a hero and the X header. The
-		llama.cpp lockup always sits on a neutral ground (white, the greys, ink); only the Llama lockup
-		goes on colour, the hero's light blue and its navy. Each is the capital glyph typed before the
-		name, so it matches the logo files exactly.
+		The lockup at the sizes it is used at: an app header, a footer and a hero. The llama.cpp lockup
+		always sits on a neutral ground (white, the greys, ink); only the Llama lockup goes on colour,
+		the hero's light blue and its navy. Each is the capital glyph typed before the name, so it
+		matches the logo files exactly.
 	</p>
 
 	<div class="contexts">
@@ -264,17 +264,10 @@
 			<span class="links">MIT licence · ggml-org</span>
 		</div>
 
-		<div style:background={HERO} class="ctx hero">
-			<span style:color="#0f1f33" style:font-size="clamp(40px, 7vw, 64px)" class="mark"
-				> Llama</span
-			>
-		</div>
-
-		<!-- the X header, 1500 × 500, in both of the hero's colourways: the Llama lockup (llama.cpp's stays on neutral
-		     grounds) -->
+		<!-- the hero, on llama.app's light blue and its navy: the Llama lockup (llama.cpp's stays on neutral grounds) -->
 		{#each [{ field: HERO, ink: '#111111', name: 'light' }, { field: NAVY, ink: '#fafafa', name: 'navy' }] as b (b.name)}
-			<div style:background={b.field} style:color={b.ink} class="ctx banner">
-				<span style:font-size="8cqi" class="mark"> Llama</span>
+			<div style:background={b.field} style:color={b.ink} class="ctx hero">
+				<span style:font-size="clamp(40px, 7vw, 64px)" class="mark"> Llama</span>
 			</div>
 		{/each}
 	</div>
@@ -570,16 +563,11 @@
 	.ctx.footer {
 		height: 64px;
 	}
-	.ctx.hero,
-	.ctx.banner {
+	.ctx.hero {
 		justify-content: center;
 	}
 	.ctx.hero {
 		min-height: 220px;
-	}
-	.ctx.banner {
-		aspect-ratio: 3 / 1;
-		container-type: inline-size;
 	}
 
 	/* 4 */
