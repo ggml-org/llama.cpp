@@ -72,10 +72,10 @@ static void sum_rows_thread_f32(unsigned int nth, unsigned int ith, void *data) 
     const size_t   src_stride = smctx->src_stride;
     const size_t   dst_stride = smctx->dst_stride;
     const uint32_t ne00       = smctx->ne00;
-    const float    scale      = smctx->scale;
+    const HVX_Vector vscale   = hvx_vec_splat_f32(smctx->scale);
 
-    const float * restrict src_th = (const float *) (smctx->src_data + (start_row * src_stride));
-    float       * restrict dst_th = (float *)       (smctx->dst_data + (start_row * dst_stride));
+    const uint8_t * restrict src_th = smctx->src_data + (start_row * src_stride);
+    uint8_t       * restrict dst_th = smctx->dst_data + (start_row * dst_stride);
 
     // Calculate actual number of rows for this thread
     const uint32_t n_rows = end_row - start_row;
@@ -83,15 +83,29 @@ static void sum_rows_thread_f32(unsigned int nth, unsigned int ith, void *data) 
     struct htp_thread_trace * tr = &smctx->octx->ctx->trace[ith];
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) start_row);
 
-    for (uint32_t ir = 0; ir < n_rows; ir++) {
-        const float * restrict src_local = (const float *) ((const uint8_t *) src_th + ir * src_stride);
-        float       * restrict dst_local = (float *)       ((uint8_t *)       dst_th + ir * dst_stride);
+    // 32 row sums are packed into one vector and stored at once: no scalar write per row
+    const uint32_t epv = 128 / sizeof(float);
 
-        if (ir + 1 < n_rows) {
-            hex_l2fetch((const uint8_t *) src_local + src_stride, src_stride, src_stride, 1);
+    for (uint32_t ir = 0; ir < n_rows; ir += epv) {
+        const uint32_t nr = MIN(epv, n_rows - ir);
+
+        HVX_Vector out = Q6_V_vzero();
+        for (uint32_t k = 0; k < nr; k++) {
+            const uint8_t * restrict src_local = src_th + (ir + k) * src_stride;
+
+            if (ir + k + 1 < n_rows) {
+                hex_l2fetch(src_local + src_stride, src_stride, src_stride, 1);
+            }
+
+            // shift the packed sums down one lane, new sum enters at lane 31
+            out = Q6_V_valign_VVR(hvx_reduce_sum_f32_vec(src_local, ne00), out, sizeof(float));
         }
 
-        *dst_local = hvx_reduce_sum_f32((const uint8_t *) src_local, ne00) * scale;
+        // after nr rows the first sum sits at lane 32 - nr: rotate it to lane 0
+        out = Q6_V_vror_VR(out, (epv - nr) * sizeof(float));
+        out = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(out, vscale));
+
+        hvx_vec_store_u(dst_th + ir * dst_stride, nr * sizeof(float), out);
     }
 
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) start_row);

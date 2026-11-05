@@ -75,34 +75,44 @@ static __attribute__((noinline)) HVX_Vector hvx_vec_sin_f32(HVX_Vector x) {
     return vsin;
 }
 
-#define hvx_sincos_loop_body(vec_fn)                                                   \
-    do {                                                                               \
-        HVX_Vector * restrict vdst = (HVX_Vector *) dst;                               \
-        HVX_Vector * restrict vsrc = (HVX_Vector *) src;                               \
-                                                                                       \
-        const uint32_t epv  = 128 / sizeof(float);                                     \
-        const uint32_t nvec = n / epv;                                                 \
-        const uint32_t nloe = n % epv;                                                 \
-                                                                                       \
-        uint32_t i = 0;                                                                \
-        for (; i < nvec; i++) {                                                        \
-            vdst[i] = vec_fn(vsrc[i]);                                                 \
-        }                                                                              \
-        if (nloe) {                                                                    \
-            hvx_vec_store_a((void *) &vdst[i], nloe * sizeof(float), vec_fn(vsrc[i])); \
-        }                                                                              \
-    } while (0)
-
 static inline void hvx_sin_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
     assert((unsigned long) dst % 128 == 0);
     assert((unsigned long) src % 128 == 0);
-    hvx_sincos_loop_body(hvx_vec_sin_f32);
+
+    HVX_Vector * restrict vdst = (HVX_Vector *) dst;
+    HVX_Vector * restrict vsrc = (HVX_Vector *) src;
+
+    const uint32_t epv  = 128 / sizeof(float);
+    const uint32_t nvec = n / epv;
+    const uint32_t nloe = n % epv;
+
+    uint32_t i = 0;
+    for (; i < nvec; i++) {
+        vdst[i] = hvx_vec_sin_f32(vsrc[i]);
+    }
+    if (nloe) {
+        hvx_vec_store_a((void *) &vdst[i], nloe * sizeof(float), hvx_vec_sin_f32(vsrc[i]));
+    }
 }
 
 static inline void hvx_cos_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
     assert((unsigned long) dst % 128 == 0);
     assert((unsigned long) src % 128 == 0);
-    hvx_sincos_loop_body(hvx_vec_cos_f32);
+
+    HVX_Vector * restrict vdst = (HVX_Vector *) dst;
+    HVX_Vector * restrict vsrc = (HVX_Vector *) src;
+
+    const uint32_t epv  = 128 / sizeof(float);
+    const uint32_t nvec = n / epv;
+    const uint32_t nloe = n % epv;
+
+    uint32_t i = 0;
+    for (; i < nvec; i++) {
+        vdst[i] = hvx_vec_cos_f32(vsrc[i]);
+    }
+    if (nloe) {
+        hvx_vec_store_a((void *) &vdst[i], nloe * sizeof(float), hvx_vec_cos_f32(vsrc[i]));
+    }
 }
 
 #endif /* HVX_SIN_COS_H */

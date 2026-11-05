@@ -222,6 +222,7 @@ static inline HVX_Vector hvx_vec_reduce_max2_f32(HVX_Vector in, HVX_Vector _max)
 #define HVX_SUM_SQ_OP(acc, val) Q6_Vqf32_vadd_Vqf32Vqf32(acc, Q6_Vqf32_vmpy_VsfVsf(val, val))
 #define HVX_REDUCE_MAX_SCALAR(v) hvx_vec_get_f32(v)
 #define HVX_REDUCE_SUM_SCALAR(v) hvx_vec_get_f32(Q6_Vsf_equals_Vqf32(v))
+#define HVX_REDUCE_SUM_VEC(v) Q6_Vsf_equals_Vqf32(v)
 
 // Max variants
 
@@ -262,6 +263,27 @@ static inline float hvx_reduce_sum_f32(const uint8_t * restrict src, const int n
         return hvx_reduce_sum_f32_a(src, num_elems);
     } else {
         return hvx_reduce_sum_f32_u(src, num_elems);
+    }
+}
+
+// Sum variants with the total replicated in all 32 lanes
+
+static inline HVX_Vector hvx_reduce_sum_f32_vec_a(const uint8_t * restrict src, const int num_elems) {
+    HVX_Vector init_vec = Q6_V_vsplat_R(0);
+    assert((unsigned long) src % 128 == 0);
+    hvx_reduce_loop_body(HVX_Vector, init_vec, init_vec, HVX_REDUCE_SUM_OP, hvx_vec_reduce_sum_qf32, HVX_REDUCE_SUM_VEC);
+}
+
+static inline HVX_Vector hvx_reduce_sum_f32_vec_u(const uint8_t * restrict src, const int num_elems) {
+    HVX_Vector init_vec = Q6_V_vsplat_R(0);
+    hvx_reduce_loop_body(HVX_UVector, init_vec, init_vec, HVX_REDUCE_SUM_OP, hvx_vec_reduce_sum_qf32, HVX_REDUCE_SUM_VEC);
+}
+
+static inline HVX_Vector hvx_reduce_sum_f32_vec(const uint8_t * restrict src, const int num_elems) {
+    if (hex_is_aligned((void *) src, 128)) {
+        return hvx_reduce_sum_f32_vec_a(src, num_elems);
+    } else {
+        return hvx_reduce_sum_f32_vec_u(src, num_elems);
     }
 }
 
