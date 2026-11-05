@@ -307,7 +307,7 @@ static test_result stress_test_linked_list(const std::vector<ggml_backend_t> & b
 
     // initial pseudo-random value draw so that the expected result is known before graph execution
     std::mt19937                       rng(42);
-    std::uniform_int_distribution<int> draw_value(1, 10);
+    std::uniform_int_distribution<int> draw_value(1, 10000);
 
     std::vector<int> input_value(n_inputs); // random values store
     int64_t          sum_inputs = 0;
