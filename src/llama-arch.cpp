@@ -106,6 +106,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_EXAONE,           "exaone"           },
     { LLM_ARCH_EXAONE4,          "exaone4"          },
     { LLM_ARCH_EXAONE_MOE,       "exaone-moe"       },
+    { LLM_ARCH_MOBILEMOE,        "mobilemoe"        },
     { LLM_ARCH_RWKV6,            "rwkv6"            },
     { LLM_ARCH_RWKV6QWEN2,       "rwkv6qwen2"       },
     { LLM_ARCH_RWKV7,            "rwkv7"            },
@@ -1425,6 +1426,7 @@ bool llm_arch_supports_mixed_batch(const llm_arch & arch) {
 
 bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
     switch (arch) {
+        case LLM_ARCH_MOBILEMOE:
         case LLM_ARCH_CLOVER_MOE:
         case LLM_ARCH_GROK:
         case LLM_ARCH_MPT:
@@ -1472,6 +1474,7 @@ bool llama_arch_supports_save(llm_arch arch) {
         case LLM_ARCH_GEMMA3N:
         case LLM_ARCH_BITNET:
         case LLM_ARCH_T5:
+        case LLM_ARCH_MOBILEMOE:
         case LLM_ARCH_APERTUS:
         case LLM_ARCH_STEP35:
         case LLM_ARCH_CLEF: // the head tensors are not saved
