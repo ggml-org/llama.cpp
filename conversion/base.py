@@ -356,9 +356,10 @@ class ModelBase:
             new_name = gguf.TENSOR_NAMES[scale_type].format(bid=bid) + suffix
 
             scale = LazyTorchTensor.to_eager(self.model_tensors.pop(name)())
-            if scale.dtype != torch.float32 or scale.numel() != 1:
-                raise ValueError(f"KV cache scale {name!r} must be a scalar FP32 tensor")
+            if scale.dtype not in (torch.bfloat16, torch.float32) or scale.numel() != 1:
+                raise ValueError(f"KV cache scale {name!r} must be a scalar BF16 or FP32 tensor")
 
+            scale = scale.float()
             value = float(scale.item())
             if not math.isfinite(value) or value == 0.0:
                 raise ValueError(f"KV cache scale {name!r} must be finite and nonzero")
