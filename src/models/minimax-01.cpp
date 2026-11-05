@@ -61,7 +61,7 @@ void llama_model_minimax_01::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_minimax_01::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
 class llm_graph_input_la : public llm_graph_input_i {
@@ -189,7 +189,7 @@ public:
     ggml_tensor * inp_diag_decay = nullptr; // F32 [n_batch, n_batch, n_head]
 };
 
-llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_minimax_01::graph::graph(const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());

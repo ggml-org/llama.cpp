@@ -167,6 +167,8 @@ class ModelBase:
         self._fusable_qkv_weight_layers: set[int] = set()
         self._fusable_qkv_bias_layers: set[int] = set()
         self.hparams = ModelBase.load_hparams(self.dir_model, self.is_mistral_format) if hparams is None else hparams
+        # source tensor name to filtered tensor name mapping.
+        self._source_tensor_names: dict[str, str | None] = {}
         self.model_tensors = self.index_tensors(remote_hf_model_id=remote_hf_model_id)
         self.metadata_override = metadata_override
         self.model_name = model_name
@@ -229,7 +231,9 @@ class ModelBase:
             remote_tensors = gguf.utility.SafetensorRemote.get_list_tensors_hf_model(remote_hf_model_id)
             for name, remote_tensor in remote_tensors.items():
                 data_gen = lambda r=remote_tensor: LazyTorchTensor.from_remote_tensor(r)  # noqa: E731
-                if titem := self.filter_tensors((name, data_gen)):
+                titem = self.filter_tensors((name, data_gen))
+                self._source_tensor_names[name] = titem[0] if titem else None
+                if titem:
                     tname, tgen = titem
                     tensors[tname] = tgen
 
@@ -294,7 +298,9 @@ class ModelBase:
                             data_gen = lambda data=data_torch: LazyTorchTensor.from_eager(data)  # noqa: E731
                         else:
                             data_gen = lambda data=data_torch: data  # noqa: E731
-                    if titem := self.filter_tensors((name, data_gen)):
+                    titem = self.filter_tensors((name, data_gen))
+                    self._source_tensor_names[name] = titem[0] if titem else None
+                    if titem:
                         tname, tgen = titem
                         tensors[tname] = tgen
 
@@ -1417,18 +1423,25 @@ class ModelBase:
         # Per-tensor NVFP4 precision.
         self._nvfp4_layer_algo = {}
         if quant_layers:
-            # store all possible module paths and assert if a quantized layer is not in the model
-            modules: set[str] = set()
-            for name in self.model_tensors:
-                while name := name.rpartition(".")[0]:
-                    modules.add(name)
-
-            for layer_name, entry in quant_layers.items():
-                if not isinstance(entry, dict):
+            # quantized_layers keys are module paths in the source checkpoint, not tensor names
+            # resolve each source tensor to the closest quantized_layers parent and record the algo under its filtered name for _tag_prec_a4
+            layer_algo = {k: v.get("quant_algo") for k, v in quant_layers.items() if isinstance(v, dict)}
+            matched: set[str] = set()
+            for src_name, filtered_name in self._source_tensor_names.items():
+                module = src_name
+                while module := module.rpartition(".")[0]:
+                    if module in layer_algo:
+                        break
+                if not module:
                     continue
-                if titem := self.filter_tensors((layer_name, lambda: torch.empty(0))):
-                    assert titem[0] in modules, f"quantized_layers entry {layer_name!r} is not in the model tensors"
-                    self._nvfp4_layer_algo[titem[0]] = entry.get("quant_algo")
+
+                matched.add(module)
+                # filter_tensors may drop a tensors so we need to check for that here.
+                if filtered_name is not None:
+                    self._nvfp4_layer_algo[filtered_name.removesuffix(".weight").removesuffix(".bias")] = layer_algo[module]
+
+            unmatched = layer_algo.keys() - matched
+            assert not unmatched, f"quantized_layers entries not in the model tensors: {sorted(unmatched)}"
 
         # NVFP4 weights are repacked and written directly to gguf_writer.
         # This must run before dequant_model so NVFP4 tensors are removed

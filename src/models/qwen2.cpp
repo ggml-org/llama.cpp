@@ -47,10 +47,10 @@ void llama_model_qwen2::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_qwen2::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_qwen2::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_qwen2::graph::graph(const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
@@ -117,9 +117,9 @@ llama_model_qwen2::graph::graph(const llama_model & model, const llm_graph_param
         cb(cur, "ffn_norm", il);
 
         cur = build_ffn(cur,
-                model.layers[il].ffn_up,   NULL, NULL,
-                model.layers[il].ffn_gate, NULL, NULL,
-                model.layers[il].ffn_down, NULL, NULL,
+                model.layers[il].ffn_up,   NULL, model.layers[il].ffn_up_s,
+                model.layers[il].ffn_gate, NULL, model.layers[il].ffn_gate_s,
+                model.layers[il].ffn_down, NULL, model.layers[il].ffn_down_s,
                 NULL,
                 LLM_FFN_SILU, LLM_FFN_PAR, il);
         cb(cur, "ffn_out", il);
