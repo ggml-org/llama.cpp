@@ -57,14 +57,12 @@
 			assets: [
 				{ ground: 'cover', label: 'Llama, light', path: 'cover/llama/cover-llama-light' },
 				{ ground: 'cover', label: 'Llama, dark', path: 'cover/llama/cover-llama-dark' },
-				{ ground: 'cover', label: 'Llama, orange', path: 'cover/llama/cover-llama-alt' },
 				{
 					ground: 'cover',
 					label: 'llama.cpp, light',
 					path: 'cover/llama-cpp/cover-llama-cpp-light'
 				},
-				{ ground: 'cover', label: 'llama.cpp, dark', path: 'cover/llama-cpp/cover-llama-cpp-dark' },
-				{ ground: 'cover', label: 'llama.cpp, orange', path: 'cover/llama-cpp/cover-llama-cpp-alt' }
+				{ ground: 'cover', label: 'llama.cpp, dark', path: 'cover/llama-cpp/cover-llama-cpp-dark' }
 			],
 			note: '7500 × 2500, for banners and social cards',
 			title: 'Covers'
