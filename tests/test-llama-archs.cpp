@@ -647,6 +647,15 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ms.add_kv(LLM_KV_MUDD_TAP_INDICES,            std::vector<int32_t>({-1, -1, -1, -1, 0, 2, 1, 3}));
     }
 
+    if (arch == LLM_ARCH_GRT) {
+        // the position rotates the whole residual stream, two mixer stages cover a stride > 1
+        ms.add_kv(LLM_KV_ROPE_DIMENSION_COUNT,        n_embd);
+        ms.add_kv(LLM_KV_ROPE_FREQ_BASE,              10000.0f);
+        ms.add_kv(LLM_KV_ATTENTION_ROTATION_COUNT,    uint32_t(3));
+        ms.add_kv(LLM_KV_MIXER_ROTATION_COUNT,        uint32_t(2));
+        ms.add_kv(LLM_KV_FEED_FORWARD_ROTATION_COUNT, uint32_t(3));
+    }
+
     // dummy tokenizer: token ids are derived from fixed-size chunks and detokenized as hex ids
     {
         std::vector<std::string> tokenizer_list(n_vocab);

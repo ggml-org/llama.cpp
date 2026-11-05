@@ -176,6 +176,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_K2_HORIZON,       "k2-horizon"       },
     { LLM_ARCH_BEAM,             "beam"             },
     { LLM_ARCH_KOLIBRI1,         "kolibri1"         },
+    { LLM_ARCH_GRT,              "grt"              },
     { LLM_ARCH_UNKNOWN,          "(unknown)"        },
 };
 
@@ -220,6 +221,8 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_ACTIVATION_SITU_BETA,              "%s.activation.situ_beta"              },
     { LLM_KV_ACTIVATION_SITU_LINEAR_BETA,       "%s.activation.situ_linear_beta"       },
     { LLM_KV_FEED_FORWARD_LENGTH,               "%s.feed_forward_length"               },
+    { LLM_KV_FEED_FORWARD_ROTATION_COUNT,       "%s.feed_forward_rotation_count"       },
+    { LLM_KV_MIXER_ROTATION_COUNT,              "%s.mixer_rotation_count"              },
     { LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        "%s.expert_feed_forward_length"        },
     { LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, "%s.expert_shared_feed_forward_length" },
     { LLM_KV_EXPERT_CHUNK_FEED_FORWARD_LENGTH,  "%s.expert_chunk_feed_forward_length"  },
@@ -305,6 +308,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_ATTENTION_VALUE_EXPERT_COUNT,           "%s.attention.value_expert_count"           },
     { LLM_KV_ATTENTION_VALUE_EXPERT_USED_COUNT,      "%s.attention.value_expert_used_count"      },
     { LLM_KV_ATTENTION_XSA_EPS,                      "%s.attention.xsa_epsilon"                  },
+    { LLM_KV_ATTENTION_ROTATION_COUNT,               "%s.attention.rotation_count"               },
 
     { LLM_KV_ATTENTION_SCALE,                        "%s.attention.scale"                        },
     { LLM_KV_ATTENTION_OUTPUT_SCALE,                 "%s.attention.output_scale"                 },
@@ -879,6 +883,12 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_LILICORR_ANCHOR_OUT_HEAD,               "lilicorr.anchor_out_head" },
     { LLM_TENSOR_ATTN_V_GATE,                            "blk.%d.attn_v_gate" },
     { LLM_TENSOR_ATTN_V_EXPS,                            "blk.%d.attn_v_exps" },
+    { LLM_TENSOR_ATTN_QKV_ROT,                           "blk.%d.attn_qkv_rot" },
+    { LLM_TENSOR_ATTN_OUT_ROT,                           "blk.%d.attn_output_rot" },
+    { LLM_TENSOR_MIXER_NORM,                             "blk.%d.mixer_norm" },
+    { LLM_TENSOR_MIXER_ROT,                              "blk.%d.mixer_rot" },
+    { LLM_TENSOR_FFN_UP_ROT,                             "blk.%d.ffn_up_rot" },
+    { LLM_TENSOR_FFN_DOWN_ROT,                           "blk.%d.ffn_down_rot" },
 };
 
 // declare information about the model weight tensors:
@@ -1265,6 +1275,12 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
 
     {LLM_TENSOR_ATTN_V_GATE,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_ATTN_V_EXPS,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID}},
+    {LLM_TENSOR_ATTN_QKV_ROT,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_ATTN_OUT_ROT,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_MIXER_NORM,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_MIXER_ROT,                  {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_FFN_UP_ROT,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_FFN_DOWN_ROT,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
 };
 
 LLM_KV::LLM_KV(llm_arch arch, const char * suffix) : arch(arch), suffix(suffix) {}
@@ -1460,6 +1476,7 @@ bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
         case LLM_ARCH_KIMI_K3:
         case LLM_ARCH_QWEN3TTS:
         case LLM_ARCH_LIMITE:
+        case LLM_ARCH_GRT:
             return false;
         default:
             return true;

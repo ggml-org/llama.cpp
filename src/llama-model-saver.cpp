@@ -261,6 +261,9 @@ void llama_model_saver::add_kv_from_model() {
         add_kv(LLM_KV_MUDD_TAP_INDICES, std::vector<int32_t>(
                 hparams.mudd_tap_idx.begin(), hparams.mudd_tap_idx.begin() + hparams.n_layer()*hparams.n_mudd_taps));
     }
+    add_kv(LLM_KV_ATTENTION_ROTATION_COUNT,          hparams.grt_n_rot_attn);
+    add_kv(LLM_KV_MIXER_ROTATION_COUNT,              hparams.grt_n_rot_mixer);
+    add_kv(LLM_KV_FEED_FORWARD_ROTATION_COUNT,       hparams.grt_n_rot_ffn);
     add_kv(LLM_KV_TOKEN_SHIFT_COUNT,                 hparams.token_shift_count);
     add_kv(LLM_KV_INTERLEAVE_MOE_LAYER_STEP,         hparams.n_moe_layer_step);
     // add_kv(LLM_KV_FULL_ATTENTION_INTERVAL,           ???); // saved as LLM_KV_ATTENTION_RECURRENT_LAYERS instead

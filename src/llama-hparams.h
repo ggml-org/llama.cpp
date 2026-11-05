@@ -245,6 +245,11 @@ struct llama_hparams {
     uint32_t n_mudd_taps = 0;
     std::array<int32_t, LLAMA_MAX_LAYERS> mudd_tap_idx; // [n_layer][n_mudd_taps], -1 = no mixing
 
+    // grt: rotation stages per chain, a mixer count of 0 means no mixer
+    uint32_t grt_n_rot_attn  = 0;
+    uint32_t grt_n_rot_mixer = 0;
+    uint32_t grt_n_rot_ffn   = 0;
+
     bool ssm_dt_b_c_rms = false;
 
     float f_clamp_kqv      = 0.0f;
