@@ -246,7 +246,8 @@ llama_kv_cache::llama_kv_cache(
 
         map_layer_ids[il] = layers.size();
 
-        layers.push_back({ il, k, v, model.layers[il].k_cache_scale, model.layers[il].v_cache_scale, k_stream, v_stream, });
+        // MLA stores V in K, so both use the K cache scale.
+        layers.push_back({ il, k, v, model.layers[il].k_cache_scale, has_v ? model.layers[il].v_cache_scale : model.layers[il].k_cache_scale, k_stream, v_stream, });
     }
 
     if (reuse) {
@@ -1277,7 +1278,7 @@ ggml_type llama_kv_cache::type_k() const {
 }
 
 ggml_type llama_kv_cache::type_v() const {
-    return layers[0].v->type;
+    return layers[0].v ? layers[0].v->type : layers[0].k->type;
 }
 
 std::vector<uint32_t> llama_kv_cache::get_layer_ids() const {

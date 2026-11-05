@@ -897,7 +897,7 @@ ggml_tensor * llama_model_glm5_next::graph::build_kpool_select(
     ggml_tensor * pzero = ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd_indexer, n_tokens), 0.0f);
     ggml_tensor * packed = ggml_concat(ctx0, ggml_concat(ctx0, ik, ig, 0), pzero, 0);
     packed = ggml_reshape_3d(ctx0, packed, 3*n_embd_indexer, 1, n_tokens);
-    ggml_build_forward_expand(gf, mctx_lid->cpy_k(ctx0, packed, inp_kpool->k_idxs, il));
+    ggml_build_forward_expand(gf, mctx_lid->cpy_k(ctx0, build_attn_scale_k_input(ctx0, mctx_lid, packed, il), inp_kpool->k_idxs, il));
 
     auto kpool_cache = mctx_hyb->get_kpool_access(ctx0, il, n_embd_indexer);
     const int64_t n_kv = mctx_lid->get_n_kv();
@@ -1073,6 +1073,9 @@ llama_model_glm5_next::graph::build_dsa_layer(
         GGML_ASSERT(sel != nullptr && "shared indexer layer must follow a full indexer layer");
     }
 
+    ggml_tensor * v_cur = nullptr;
+    build_attn_scale_kv_inputs(ctx0, mctx_mla, q_absorbed, kv_cmpr, v_cur, il);
+
     ggml_build_forward_expand(gf, q_absorbed);
     ggml_build_forward_expand(gf, kv_cmpr);
     ggml_build_forward_expand(gf, mctx_mla->cpy_k(ctx0, kv_cmpr, inp_attn->get_k_idxs(), il));
@@ -1080,6 +1083,7 @@ llama_model_glm5_next::graph::build_dsa_layer(
     cb(sel, "kq_mask_dsa", il);
 
     ggml_tensor * out = build_attn_mha(q_absorbed, k, v, nullptr, sel, nullptr, nullptr, layer.wv_b, inp_kpool->n_sel, kq_scale, il);
+    out = build_attn_scale_kv_output(ctx0, mctx_mla, out, il);
     cb(out, "kqv_out", il);
 
     out = ggml_mul_mat(ctx0, layer.wo, out);

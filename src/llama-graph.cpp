@@ -3122,6 +3122,9 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         if (!v_trans) {
             // note: avoid this branch
             v = ggml_cont(ctx0, ggml_transpose(ctx0, v));
+            if (!cparams.offload_kqv) {
+                ggml_backend_sched_set_tensor_backend(sched, v, backend_cpu);
+            }
             cb(v, "v_cont", il);
         }
 
@@ -3301,7 +3304,7 @@ void build_attn_scale_kv_inputs(
     }
 }
 
-static ggml_tensor * build_attn_scale_kv_output(
+ggml_tensor * build_attn_scale_kv_output(
         ggml_context * ctx,
         const llama_kv_cache_context * mctx,
         ggml_tensor * cur,
@@ -3315,6 +3318,25 @@ static ggml_tensor * build_attn_scale_kv_output(
     }
 
     return cur;
+}
+
+ggml_tensor * build_attn_scale_k_input(ggml_context * ctx, const llama_kv_cache_context * mctx, ggml_tensor * k, int32_t il) {
+    if (is_type_scaled(mctx->type_k())) {
+        if (ggml_tensor * scale = mctx->get_k_scale(il)) {
+            k = ggml_div(ctx, k, scale);
+        }
+    }
+    return k;
+}
+
+ggml_tensor * build_attn_scale_k_output(ggml_context * ctx, const llama_kv_cache_context * mctx, ggml_tensor * k, int32_t il) {
+    if (is_type_scaled(k->type)) {
+        k = ggml_cast(ctx, k, GGML_TYPE_F32);
+        if (ggml_tensor * scale = mctx->get_k_scale(il)) {
+            k = ggml_mul(ctx, k, scale);
+        }
+    }
+    return k;
 }
 
 ggml_tensor * llm_graph_context::build_attn(
@@ -3459,6 +3481,8 @@ ggml_tensor * llm_graph_context::build_attn(
 
     const auto * mctx_cur = inp->mctx;
 
+    build_attn_scale_kv_inputs(ctx0, mctx_cur, q_cur, k_cur, v_cur, il);
+
     // store to KV cache
     {
         const auto & k_idxs = inp->get_k_idxs();
@@ -3474,6 +3498,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * v = ggml_view_4d(ctx0, k, v_cur->ne[0], k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, sinks, v_mla, 0, kq_scale, il);
+    cur = build_attn_scale_kv_output(ctx0, mctx_cur, cur, il);
     cb(cur, "kqv_out", il);
 
     if (wo) {
@@ -3537,6 +3562,8 @@ ggml_tensor * llm_graph_context::build_attn(
 
     const auto * mctx_cur = inp->mctx->get_mla();
 
+    build_attn_scale_kv_inputs(ctx0, mctx_cur, q_cur, k_cur, v_cur, il);
+
     // store to KV cache
     // note: k_cur is null for layers that reuse the KV cache of another layer
     if (k_cur) {
@@ -3591,6 +3618,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * v = ggml_view_4d(ctx0, k, n_embd_v, k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask_top_k, nullptr, sinks, v_mla, top_k->ne[0], kq_scale, il);
+    cur = build_attn_scale_kv_output(ctx0, mctx_cur, cur, il);
     cb(cur, "kqv_out", il);
 
     if (wo) {
@@ -3737,6 +3765,8 @@ ggml_tensor * llm_graph_context::build_attn(
     const auto * mctx_iswa = inp->mctx;
     const auto * mctx_cur = is_swa ? mctx_iswa->get_swa() : mctx_iswa->get_base();
 
+    build_attn_scale_kv_inputs(ctx0, mctx_cur, q_cur, k_cur, v_cur, il);
+
     // optionally store to KV cache
     if (k_cur) {
         const auto & k_idxs = is_swa ? inp->get_k_idxs_swa() : inp->get_k_idxs();
@@ -3753,6 +3783,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * v = ggml_view_4d(ctx0, k, v_cur->ne[0], k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, sinks, v_mla, 0, kq_scale, il);
+    cur = build_attn_scale_kv_output(ctx0, mctx_cur, cur, il);
     cb(cur, "kqv_out", il);
 
     if (k_rot) {

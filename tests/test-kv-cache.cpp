@@ -26,40 +26,22 @@ int main() {
             }
         }, &errors);
 
-        for (llm_arch arch : { LLM_ARCH_DEEPSEEK2, LLM_ARCH_DEEPSEEK32, LLM_ARCH_DEEPSEEK4,
-                LLM_ARCH_DEEPSEEK41, LLM_ARCH_GLM_DSA, LLM_ARCH_GLM5_NEXT, LLM_ARCH_DOTS3NOTE,
-                LLM_ARCH_MISTRAL_LARGE4, LLM_ARCH_HY_V4, LLM_ARCH_MINIMAX_M3, LLM_ARCH_QWEN4EXP,
-                LLM_ARCH_DFLASH }) {
+        for (llm_arch arch : { LLM_ARCH_DEEPSEEK2, LLM_ARCH_DEEPSEEK4, LLM_ARCH_DEEPSEEK41 }) {
             std::unique_ptr<llama_model> model(llama_model_create(arch, llama_model_default_params()));
             init_model(*model, 1);
             if (arch == LLM_ARCH_DEEPSEEK2) {
                 model->hparams.n_embd_head_k_mla_impl = 4;
                 model->hparams.n_embd_head_v_mla_impl = 4;
             }
-            if (arch == LLM_ARCH_DFLASH) {
-                model->hparams.dsv4_hc_mult = 4;
-            }
-
-            for (ggml_type type_k : { GGML_TYPE_F16, GGML_TYPE_F8_E4M3 }) {
-                for (ggml_type type_v : { GGML_TYPE_F16, GGML_TYPE_F8_E4M3 }) {
-                    if (type_k == GGML_TYPE_F16 && type_v == GGML_TYPE_F16) {
-                        continue;
-                    }
-                    auto params = llama_context_default_params();
-                    params.type_k = type_k;
-                    params.type_v = type_v;
-                    errors.clear();
-                    llama_context * ctx = llama_init_from_model(model.get(), params);
-                    GGML_ASSERT(ctx == nullptr);
-                    if (type_k == type_v || (!model->hparams.is_mla() && arch != LLM_ARCH_DEEPSEEK4 && arch != LLM_ARCH_DEEPSEEK41)) {
-                        GGML_ASSERT(errors.find("FP8 cache is not supported for architecture") != std::string::npos);
-                    } else {
-                        GGML_ASSERT(errors.find("model does not support different K") != std::string::npos);
-                    }
-                }
+            for (bool fp8_k : { false, true }) {
+                auto params = llama_context_default_params();
+                params.type_k = fp8_k ? GGML_TYPE_F8_E4M3 : GGML_TYPE_F16;
+                params.type_v = fp8_k ? GGML_TYPE_F16 : GGML_TYPE_F8_E4M3;
+                errors.clear();
+                GGML_ASSERT(llama_init_from_model(model.get(), params) == nullptr);
+                GGML_ASSERT(errors.find("model does not support different K") != std::string::npos);
             }
         }
-
         llama_log_set(nullptr, nullptr);
     }
 
@@ -97,6 +79,30 @@ int main() {
         GGML_ASSERT(shared.get_v_scale(0) == source.get_v_scale(2));
         GGML_ASSERT(shared.get_k_scale(1) == nullptr);
         GGML_ASSERT(shared.get_v_scale(1) == nullptr);
+    }
+
+    {
+        std::unique_ptr<llama_model> model(llama_model_create(LLM_ARCH_DEEPSEEK2, llama_model_default_params()));
+        init_model(*model, 1);
+        model->hparams.n_embd_head_k_mla_impl = 2;
+        model->hparams.n_embd_head_v_mla_impl = 2;
+
+        ggml_context_ptr ctx(ggml_init({ 4096, nullptr, false }));
+        model->layers[0].k_cache_scale = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 1);
+        model->layers[0].v_cache_scale = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 1);
+        ggml_set_f32(model->layers[0].k_cache_scale, 0.5f);
+        ggml_set_f32(model->layers[0].v_cache_scale, 0.25f);
+
+        for (bool scaled : { true, false }) {
+            if (!scaled) {
+                model->layers[0].k_cache_scale = nullptr;
+            }
+            llama_kv_cache cache(*model, false, model->hparams, GGML_TYPE_F8_E4M3, GGML_TYPE_F8_E4M3,
+                    false, false, true, 32, 1, 0, LLAMA_SWA_TYPE_NONE, nullptr, nullptr, nullptr, nullptr);
+            GGML_ASSERT(cache.get_k_scale(0) == model->layers[0].k_cache_scale);
+            GGML_ASSERT(cache.get_v_scale(0) == cache.get_k_scale(0));
+            GGML_ASSERT(cache.type_v() == cache.type_k());
+        }
     }
 
     llama_backend_free();

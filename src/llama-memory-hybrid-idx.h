@@ -141,11 +141,12 @@ public:
     private:
         friend class llama_memory_hybrid_idx_context;
 
-        kpool_access(ggml_context * ctx, ggml_tensor * k, int64_t n_embd);
+        kpool_access(ggml_context * ctx, ggml_tensor * k, ggml_tensor * scale, int64_t n_embd);
 
         ggml_context * ctx;
         ggml_tensor  * key_gate;
         ggml_tensor  * pooled;
+        ggml_tensor  * scale;
     };
 
     using slot_info_vec_t = llama_kv_cache::slot_info_vec_t;

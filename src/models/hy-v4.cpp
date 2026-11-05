@@ -378,11 +378,11 @@ ggml_tensor * llama_model_hy_v4::graph::build_indexer_top_k(
 
     const auto * mctx_lid   = inp_attn_dsa->mctx->get_lid();
     const auto & k_idxs_lid = inp_attn_dsa->get_k_idxs_lid();
-    ggml_build_forward_expand(gf, mctx_lid->cpy_k(ctx0, ik, k_idxs_lid, il));
+    ggml_build_forward_expand(gf, mctx_lid->cpy_k(ctx0, build_attn_scale_k_input(ctx0, mctx_lid, ik, il), k_idxs_lid, il));
 
     ggml_tensor * iw = ggml_mul_mat(ctx0, layer.indexer_proj, cur);
 
-    ik = mctx_lid->get_k(ctx0, il);
+    ik = build_attn_scale_k_output(ctx0, mctx_lid, mctx_lid->get_k(ctx0, il), il);
 
     const auto n_stream = ik->ne[3];
     iq = ggml_view_4d(ctx0, iq, iq->ne[0], iq->ne[1], iq->ne[2]/n_stream, n_stream,

@@ -1267,7 +1267,7 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llm_graph_params & params) :
             if (inp_attn->self_k_rot_swa[il]) {
                 kv = llama_mul_mat_hadamard(ctx0, kv, inp_attn->self_k_rot_swa[il]);
             }
-            ggml_build_forward_expand(gf, inp_attn->mctx->get_swa()->cpy_k(ctx0, kv, inp_attn->get_k_idxs_swa(), il));
+            ggml_build_forward_expand(gf, inp_attn->mctx->get_swa()->cpy_k(ctx0, build_attn_scale_k_input(ctx0, inp_attn->mctx->get_swa(), kv, il), inp_attn->get_k_idxs_swa(), il));
         }
 
         res->t_embd = inp_g;
@@ -1441,7 +1441,7 @@ llama_model_dflash::graph_dsv41::graph_dsv41(const llm_graph_params & params) :
             if (inp_attn->self_k_rot_swa[il]) {
                 kv = llama_mul_mat_hadamard(ctx0, kv, inp_attn->self_k_rot_swa[il]);
             }
-            ggml_build_forward_expand(gf, inp_attn->mctx->get_swa()->cpy_k(ctx0, kv, inp_attn->get_k_idxs_swa(), il));
+            ggml_build_forward_expand(gf, inp_attn->mctx->get_swa()->cpy_k(ctx0, build_attn_scale_k_input(ctx0, inp_attn->mctx->get_swa(), kv, il), inp_attn->get_k_idxs_swa(), il));
         }
 
         res->t_embd = inp_g;
@@ -1684,7 +1684,7 @@ llama_model_dflash::graph_mistral_large4::graph_mistral_large4(const llm_graph_p
             if (inp_attn->self_k_rot_swa[il]) {
                 kv = llama_mul_mat_hadamard(ctx0, kv, inp_attn->self_k_rot_swa[il]);
             }
-            ggml_build_forward_expand(gf, inp_attn->mctx->get_swa()->cpy_k(ctx0, kv, inp_attn->get_k_idxs_swa(), il));
+            ggml_build_forward_expand(gf, inp_attn->mctx->get_swa()->cpy_k(ctx0, build_attn_scale_k_input(ctx0, inp_attn->mctx->get_swa(), kv, il), inp_attn->get_k_idxs_swa(), il));
         }
 
         res->t_embd = inp_g;

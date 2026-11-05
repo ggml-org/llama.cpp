@@ -347,8 +347,8 @@ llama_model_minimax_m3::graph::graph(const llm_graph_params & params) : llm_grap
                 const auto * mctx_msa_l = static_cast<const llama_kv_cache_msa_context *>(mctx);
                 const auto * mctx_cur = mctx_msa_l->get_base();
                 const auto * mctx_idx = mctx_msa_l->get_idx();
-                ggml_build_forward_expand(gf, mctx_idx->cpy_k(ctx0, ik, inp_attn->get_k_idxs_idx(), il));
-                ggml_tensor * ik_kv = mctx_idx->get_k(ctx0, il);
+                ggml_build_forward_expand(gf, mctx_idx->cpy_k(ctx0, build_attn_scale_k_input(ctx0, mctx_idx, ik, il), inp_attn->get_k_idxs_idx(), il));
+                ggml_tensor * ik_kv = build_attn_scale_k_output(ctx0, mctx_idx, mctx_idx->get_k(ctx0, il), il);
 
                 if (inp_attn->self_k_rot[il]) {
                     Qcur = llama_mul_mat_hadamard(ctx0, Qcur, inp_attn->self_k_rot[il]);
@@ -357,6 +357,8 @@ llama_model_minimax_m3::graph::graph(const llm_graph_params & params) : llm_grap
                 if (inp_attn->self_v_rot[il]) {
                     Vcur = llama_mul_mat_hadamard(ctx0, Vcur, inp_attn->self_v_rot[il]);
                 }
+
+                build_attn_scale_kv_inputs(ctx0, mctx_cur, Qcur, Kcur, Vcur, il);
 
                 // Main branch: store K/V, take cache views
                 ggml_build_forward_expand(gf, Qcur);
@@ -518,6 +520,7 @@ llama_model_minimax_m3::graph::graph(const llm_graph_params & params) : llm_grap
                         cur = ggml_concat(ctx0, cur, outs[st], 1);
                     }
                 }
+                cur = build_attn_scale_kv_output(ctx0, mctx_cur, cur, il);
                 if (inp_attn->self_v_rot[il]) {
                     cur = llama_mul_mat_hadamard(ctx0, cur, inp_attn->self_v_rot[il]);
                 }

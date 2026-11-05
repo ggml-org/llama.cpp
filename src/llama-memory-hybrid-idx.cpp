@@ -569,7 +569,7 @@ uint32_t llama_memory_hybrid_idx_context::get_n_stream() const {
     return ns_ubatch[i_cur];
 }
 
-llama_memory_hybrid_idx_context::kpool_access::kpool_access(ggml_context * ctx, ggml_tensor * k, int64_t n_embd) : ctx(ctx) {
+llama_memory_hybrid_idx_context::kpool_access::kpool_access(ggml_context * ctx, ggml_tensor * k, ggml_tensor * scale, int64_t n_embd) : ctx(ctx), scale(k->type == GGML_TYPE_F8_E4M3 ? scale : nullptr) {
     // rows are the per-token part (glm5-next: key | gate, qwen4exp: key), then the pooled key
     const int64_t n_tok = k->ne[0] - n_embd;
     GGML_ASSERT(n_tok > 0 && n_tok % n_embd == 0);
@@ -583,22 +583,24 @@ llama_memory_hybrid_idx_context::kpool_access::kpool_access(ggml_context * ctx, 
 }
 
 ggml_tensor * llama_memory_hybrid_idx_context::kpool_access::gather_key_gate(ggml_tensor * idxs) const {
-    return ggml_get_rows(ctx, key_gate, idxs);
+    ggml_tensor * values = ggml_get_rows(ctx, key_gate, idxs);
+    return scale ? ggml_mul(ctx, values, scale) : values;
 }
 
 ggml_tensor * llama_memory_hybrid_idx_context::kpool_access::scatter_pooled(ggml_tensor * values, ggml_tensor * idxs) const {
-    return ggml_set_rows(ctx, pooled, values, idxs);
+    return ggml_set_rows(ctx, pooled, scale ? ggml_div(ctx, values, scale) : values, idxs);
 }
 
 ggml_tensor * llama_memory_hybrid_idx_context::kpool_access::gather_pooled(ggml_tensor * idxs) const {
-    return ggml_get_rows(ctx, pooled, idxs);
+    ggml_tensor * values = ggml_get_rows(ctx, pooled, idxs);
+    return scale ? ggml_mul(ctx, values, scale) : values;
 }
 
 llama_memory_hybrid_idx_context::kpool_access llama_memory_hybrid_idx_context::get_kpool_access(
         ggml_context * ctx, int32_t il, int64_t n_embd) const {
     GGML_ASSERT(mem != nullptr && mem->get_mem_idx() != nullptr);
 
-    return kpool_access(ctx, mem->get_mem_idx()->get_k_storage(il), n_embd);
+    return kpool_access(ctx, mem->get_mem_idx()->get_k_storage(il), mem->get_mem_idx()->get_k_scale(il), n_embd);
 }
 
 // k-pool DSA indexer (glm5-next, qwen4exp QSA)

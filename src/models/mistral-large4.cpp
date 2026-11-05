@@ -273,13 +273,13 @@ llama_model_mistral_large4::graph::graph(const llm_graph_params & params) :
                 // store indexer keys to KV cache
                 const auto * mctx_lid = inp_attn_dsa->mctx->get_lid();
                 const auto & k_idxs_lid = inp_attn_dsa->get_k_idxs_lid();
-                ggml_build_forward_expand(gf, mctx_lid->cpy_k(ctx0, indexer_k, k_idxs_lid, il));
+                ggml_build_forward_expand(gf, mctx_lid->cpy_k(ctx0, build_attn_scale_k_input(ctx0, mctx_lid, indexer_k, il), k_idxs_lid, il));
 
                 ggml_tensor * indexer_weights = ggml_mul_mat(ctx0, layer.indexer_proj, cur);
                 cb(indexer_weights, "indexer_weights", il);
 
                 // get cached indexer keys
-                indexer_k = mctx_lid->get_k(ctx0, il);
+                indexer_k = build_attn_scale_k_output(ctx0, mctx_lid, mctx_lid->get_k(ctx0, il), il);
 
                 // split the batch into streams if needed
                 const auto n_stream = indexer_k->ne[3];

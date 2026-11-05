@@ -532,11 +532,11 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
         if (hparams.dsv41_topk_src[il] == il) {
             ggml_tensor * ik = ggml_view_4d(ctx0, comp_all, n_idx_embd, 1, n_comp, n_stream,
                     comp_all->nb[1], comp_all->nb[2], comp_all->nb[3], ggml_row_size(comp_all->type, n_embd_head));
-            // the fused indexer reads the strided view in place, the unfused path needs it contiguous; CUDA has no same-type copy of quantized views, so dequantize them
+            // CUDA has no same-type copy of quantized views; scalar FP8 can be read strided.
             const bool fused_idx = sparse && cparams.fused_lid && ci.kq_mask->type == GGML_TYPE_F16;
             if (ggml_is_quantized(ik->type)) {
                 ik = ggml_cast(ctx0, ik, GGML_TYPE_F32);
-            } else if (!fused_idx) {
+            } else if (!fused_idx && ik->type != GGML_TYPE_F8_E4M3) {
                 ik = ggml_cont(ctx0, ik);
             }
 
@@ -644,12 +644,20 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
         ggml_tensor * raw_k    = inp_attn->mctx->get_k(ctx0, il);
         ggml_tensor * raw_mask = inp_attn->self_attn_mask.raw;
 
+        const bool mixed_fp8 = raw_k->type != comp_all->type &&
+                (raw_k->type == GGML_TYPE_F8_E4M3 || comp_all->type == GGML_TYPE_F8_E4M3);
+        if (mixed_fp8) {
+            // One cache may have an imported scale while the other uses unit scale.
+            raw_k = raw_k->type == GGML_TYPE_F32 ? raw_k : ggml_cast(ctx0, raw_k, GGML_TYPE_F32);
+            comp_all = comp_all->type == GGML_TYPE_F32 ? comp_all : ggml_cast(ctx0, comp_all, GGML_TYPE_F32);
+        }
+
         const int32_t topk_src = hparams.dsv41_topk_src[il];
         const int64_t k_sel    = top_k->ne[0];
         const int64_t n_raw    = raw_k->ne[2];
 
         // few queries per stream: attend over [window | top-k rows of the query], one FA stream per query; same keys and mask as dense, different key order
-        const bool gather = sparse && cparams.flash_attn && raw_mask->type == GGML_TYPE_F16 && ci.kq_mask->type == GGML_TYPE_F16 &&
+        const bool gather = sparse && !mixed_fp8 && cparams.flash_attn && raw_mask->type == GGML_TYPE_F16 && ci.kq_mask->type == GGML_TYPE_F16 &&
                 ((n_stream == 1 && nt <= 32) || nt == n_stream);
 
         if (gather) {
@@ -685,7 +693,7 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
             }
 
             if (n_stream == 1 && nt > 1) {
-                if (ggml_is_quantized(raw_k->type)) {
+                if (ggml_is_quantized(raw_k->type) || raw_k->type == GGML_TYPE_F8_E4M3) {
                     // no REPEAT kernel for quantized types: byte-exact copies by doubling concats
                     ggml_tensor * rep = nullptr;
                     ggml_tensor * pw  = raw_k;
@@ -728,7 +736,7 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
             } else if (ggml_is_quantized(comp_k->type)) {
                 // quantized cache without rotation (LLAMA_ATTN_ROT_DISABLE=1): via F32 for the same reason
                 comp_k = ggml_cast(ctx0, ggml_cast(ctx0, comp_k, GGML_TYPE_F32), raw_k->type);
-            } else {
+            } else if (comp_k->type != GGML_TYPE_F8_E4M3) {
                 comp_k = comp_k->type != raw_k->type ? ggml_cast(ctx0, comp_k, raw_k->type) : ggml_cont(ctx0, comp_k);
             }
             cb(comp_k, "comp_k", il);

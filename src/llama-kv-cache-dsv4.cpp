@@ -2041,12 +2041,34 @@ uint32_t llama_kv_cache_dsv4_raw_context::get_n_write() const {
     return ubatches_write[i_next].n_tokens;
 }
 
+static ggml_tensor * dsv4_scale_k_input(ggml_context * ctx, const llama_kv_cache * kv, ggml_tensor * cur, int32_t il) {
+    if (kv->type_k() == GGML_TYPE_F8_E4M3) {
+        if (ggml_tensor * scale = kv->get_k_scale(il)) {
+            cur = ggml_div(ctx, cur, scale);
+        }
+    }
+    return cur;
+}
+
+static ggml_tensor * dsv4_scale_k_output(ggml_context * ctx, const llama_kv_cache * kv, ggml_tensor * cur, int32_t il) {
+    if (cur->type == GGML_TYPE_F8_E4M3) {
+        if (ggml_tensor * scale = kv->get_k_scale(il)) {
+            // Restore non-unit scales before combining caches or reading packed indexer keys.
+            cur = ggml_cast(ctx, cur, GGML_TYPE_F32);
+            cur = ggml_mul(ctx, cur, scale);
+        }
+    }
+    return cur;
+}
+
 ggml_tensor * llama_kv_cache_dsv4_raw_context::get_k(ggml_context * ctx, int32_t il) const {
-    return kv_swa->get_k(ctx, il, n_kv, sinfos_read[i_next]);
+    return dsv4_scale_k_output(ctx, kv_swa, kv_swa->get_k(ctx, il, n_kv, sinfos_read[i_next]), il);
 }
 
 ggml_tensor * llama_kv_cache_dsv4_raw_context::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const {
     const auto & sinfo = sinfos_write[i_next];
+
+    k_cur = dsv4_scale_k_input(ctx, kv_swa, k_cur, il);
 
     if (k_cur->ne[2] == k_idxs->ne[0]) {
         return kv_swa->cpy_k(ctx, k_cur, k_idxs, il, sinfo);
@@ -2064,6 +2086,10 @@ ggml_tensor * llama_kv_cache_dsv4_raw_context::cpy_k(ggml_context * ctx, ggml_te
     for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
         ggml_tensor * k_idxs_s = ggml_view_1d(ctx, k_idxs, sinfo.size(), s*sinfo.size()*ggml_element_size(k_idxs));
         ggml_tensor * cur = kv_swa->cpy_k(ctx, k_cur, k_idxs_s, il, sinfo);
+        if (cur->type == GGML_TYPE_F8_E4M3) {
+            // One element is enough to keep the write dependency.
+            cur = ggml_cast(ctx, ggml_view_1d(ctx, cur, 1, 0), GGML_TYPE_F32);
+        }
         if (res == nullptr) {
             res = cur;
         } else {
@@ -2144,11 +2170,11 @@ uint32_t llama_kv_cache_dsv4_comp_context::get_n_kv() const {
 }
 
 ggml_tensor * llama_kv_cache_dsv4_comp_context::get_k(ggml_context * ctx, int32_t il) const {
-    return kv->get_k(ctx, il, n_kv, sinfos[i_cur]);
+    return dsv4_scale_k_output(ctx, kv, kv->get_k(ctx, il, n_kv, sinfos[i_cur]), il);
 }
 
 ggml_tensor * llama_kv_cache_dsv4_comp_context::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const {
-    return kv->cpy_k(ctx, k_cur, k_idxs, il, sinfos[i_cur]);
+    return kv->cpy_k(ctx, dsv4_scale_k_input(ctx, kv, k_cur, il), k_idxs, il, sinfos[i_cur]);
 }
 
 std::vector<ggml_tensor *> llama_kv_cache_dsv4_comp_context::get_k_rot() const {

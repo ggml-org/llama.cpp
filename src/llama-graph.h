@@ -1507,3 +1507,6 @@ struct llm_graph_context {
 int32_t llama_relative_position_bucket(llama_pos x, llama_pos y, uint64_t n_buckets, bool bidirectional);
 
 void build_attn_scale_kv_inputs(ggml_context * ctx, const llama_kv_cache_context * mctx, ggml_tensor * & q, ggml_tensor * & k, ggml_tensor * & v, int32_t il);
+ggml_tensor * build_attn_scale_kv_output(ggml_context * ctx, const llama_kv_cache_context * mctx, ggml_tensor * cur, int32_t il);
+ggml_tensor * build_attn_scale_k_input(ggml_context * ctx, const llama_kv_cache_context * mctx, ggml_tensor * k, int32_t il);
+ggml_tensor * build_attn_scale_k_output(ggml_context * ctx, const llama_kv_cache_context * mctx, ggml_tensor * k, int32_t il);

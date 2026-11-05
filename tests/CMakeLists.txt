@@ -250,6 +250,14 @@ if (GGML_CPU AND (NOT WIN32 OR NOT BUILD_SHARED_LIBS))
     llama_test(test-fp8 NAME test-fp8-kv-dflash LABEL "main behavior backend"
         ARGS --models "${FP8_DFLASH_MODEL_DIR}" --kv)
     set_tests_properties(test-fp8-kv-dflash PROPERTIES FIXTURES_REQUIRED fp8-dflash-models)
+    set(FP8_MLA_MODEL_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-models-fp8-mla")
+    file(MAKE_DIRECTORY "${FP8_MLA_MODEL_DIR}")
+    llama_test(test-llama-archs NAME test-generate-fp8-mla-models LABEL "main behavior backend"
+        ARGS -a "^(deepseek2|deepseek32|dots3note|deepseek4|deepseek41|glm-dsa|glm5-next|mistral-large4|hy_v4|minimax-m3|qwen4exp|kimi-linear|bailingmoe3|kimi-k3)$" -s 1 -o "${FP8_MLA_MODEL_DIR}")
+    set_tests_properties(test-generate-fp8-mla-models PROPERTIES FIXTURES_SETUP fp8-mla-models)
+    llama_test(test-fp8 NAME test-fp8-kv-mla LABEL "main behavior backend"
+        ARGS --models "${FP8_MLA_MODEL_DIR}" --kv)
+    set_tests_properties(test-fp8-kv-mla PROPERTIES FIXTURES_REQUIRED fp8-mla-models)
 endif()
 
 set(MODEL_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-models/")

@@ -290,7 +290,7 @@ static void check_fp8_requantize(
     }
 }
 
-static void check_fp8_attention(llama_model * model, bool offload_kqv = true) {
+static void check_fp8_attention(llama_model * model, bool offload_kqv = true, int il = 0) {
     // TODO: enable CPU KV cache tests with tensor split after the meta backend handles the attention transfers.
     if (model->split_mode() == LLAMA_SPLIT_MODE_TENSOR && !offload_kqv) {
         LOG("FP8 attention: tensor split with CPU KV cache is not supported, skipping\n");
@@ -300,30 +300,49 @@ static void check_fp8_attention(llama_model * model, bool offload_kqv = true) {
     ggml_context_ptr scale_ctx(ggml_init({ 4096, nullptr, true }));
     ggml_tensor * k_scale = ggml_new_tensor_1d(scale_ctx.get(), GGML_TYPE_F32, 1);
     ggml_tensor * v_scale = ggml_new_tensor_1d(scale_ctx.get(), GGML_TYPE_F32, 1);
-    ggml_set_name(k_scale, "blk.0.attn_k.k_scale");
-    ggml_set_name(v_scale, "blk.0.attn_v.v_scale");
-    ggml_backend_buffer_ptr scale_buf(ggml_backend_alloc_ctx_tensors_from_buft(scale_ctx.get(), ggml_backend_dev_buffer_type(model->dev_layer(0))));
-    ggml_tensor * old_k_scale = model->layers[0].k_cache_scale;
-    ggml_tensor * old_v_scale = model->layers[0].v_cache_scale;
+    ggml_format_name(k_scale, "blk.%d.attn_k.k_scale", il);
+    ggml_format_name(v_scale, "blk.%d.attn_v.v_scale", il);
+    ggml_backend_buffer_ptr scale_buf(ggml_backend_alloc_ctx_tensors_from_buft(scale_ctx.get(), ggml_backend_dev_buffer_type(model->dev_layer(il))));
+    ggml_tensor * old_k_scale = model->layers[il].k_cache_scale;
+    ggml_tensor * old_v_scale = model->layers[il].v_cache_scale;
 
-    const int64_t head_size = model->hparams.n_embd_head_k();
-    const int64_t n_head = model->hparams.n_head();
+    const bool is_mla = model->hparams.is_mla();
+    const int64_t head_size = model->hparams.n_embd_head_k(il);
+    const int64_t n_head = model->hparams.n_head(il);
     const int64_t n_tokens = 4;
-    GGML_ASSERT(n_head == model->hparams.n_head_kv());
-    GGML_ASSERT(head_size == model->hparams.n_embd_head_v());
+    const int64_t n_head_kv = model->hparams.n_head_kv(il);
+    const int64_t value_size = model->hparams.n_embd_head_v(il);
+    const int64_t output_size = is_mla ? model->hparams.n_embd_head_v_mla() : value_size;
+    GGML_ASSERT(is_mla ? n_head_kv == 1 : n_head == n_head_kv);
+    GGML_ASSERT(is_mla || head_size == value_size);
+
+    std::vector<float> wv;
+    if (is_mla) {
+        ggml_tensor * w = model->layers[il].wv_b;
+        GGML_ASSERT(w && ggml_is_contiguous(w));
+        wv.resize(ggml_nelements(w));
+        if (w->type == GGML_TYPE_F32) {
+            ggml_backend_tensor_get(w, wv.data(), 0, ggml_nbytes(w));
+        } else {
+            std::vector<uint8_t> raw(ggml_nbytes(w));
+            ggml_backend_tensor_get(w, raw.data(), 0, raw.size());
+            ggml_get_type_traits(w->type)->to_float(raw.data(), wv.data(), wv.size());
+        }
+    }
 
     for (llama_flash_attn_type flash : { LLAMA_FLASH_ATTN_TYPE_DISABLED, LLAMA_FLASH_ATTN_TYPE_ENABLED }) {
         if (model->split_mode() == LLAMA_SPLIT_MODE_TENSOR && flash == LLAMA_FLASH_ATTN_TYPE_DISABLED) {
             LOG("FP8 attention: tensor split requires flash attention, skipping disabled cases\n");
             continue;
         }
-        for (int scaled : { 1, 2, 3 }) {
+        for (int scaled : { 0, 1, 2, 3 }) {
             const float sk = scaled & 1 ? 0.03125f : 1.0f;
-            const float sv = scaled & 2 ? 0.125f : 1.0f;
+            const float sv = is_mla ? sk : (scaled & 2 ? 0.125f : 1.0f);
+            const float stored_sv = 0.125f;
             ggml_backend_tensor_set(k_scale, &sk, 0, sizeof(sk));
-            ggml_backend_tensor_set(v_scale, &sv, 0, sizeof(sv));
-            model->layers[0].k_cache_scale = scaled & 1 ? k_scale : nullptr;
-            model->layers[0].v_cache_scale = scaled & 2 ? v_scale : nullptr;
+            ggml_backend_tensor_set(v_scale, is_mla ? &stored_sv : &sv, 0, sizeof(sv));
+            model->layers[il].k_cache_scale = scaled & 1 ? k_scale : nullptr;
+            model->layers[il].v_cache_scale = scaled & 2 ? v_scale : nullptr;
 
             std::vector<float> tensors[4];
             auto params = llama_context_default_params();
@@ -332,15 +351,15 @@ static void check_fp8_attention(llama_model * model, bool offload_kqv = true) {
             params.n_ubatch = n_tokens;
             params.n_threads = 1;
             params.n_threads_batch = 1;
-            params.type_k = scaled & 1 ? GGML_TYPE_F8_E4M3 : GGML_TYPE_F16;
-            params.type_v = scaled & 2 ? GGML_TYPE_F8_E4M3 : GGML_TYPE_F16;
+            params.type_k = (is_mla || (scaled & 1)) ? GGML_TYPE_F8_E4M3 : GGML_TYPE_F16;
+            params.type_v = (is_mla || (scaled & 2)) ? GGML_TYPE_F8_E4M3 : GGML_TYPE_F16;
             params.flash_attn_type = flash;
             params.offload_kqv = offload_kqv;
             if (model->split_mode() == LLAMA_SPLIT_MODE_TENSOR) {
                 ggml_context_ptr ctx(ggml_init({ 8*ggml_tensor_overhead(), nullptr, true }));
                 ggml_tensor * q = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F32, head_size, n_tokens, n_head, 1);
-                ggml_tensor * k = ggml_new_tensor_4d(ctx.get(), params.type_k, head_size, params.n_ctx, n_head, 1);
-                ggml_tensor * v = ggml_new_tensor_4d(ctx.get(), params.type_v, head_size, params.n_ctx, n_head, 1);
+                ggml_tensor * k = ggml_new_tensor_4d(ctx.get(), params.type_k, head_size, params.n_ctx, n_head_kv, 1);
+                ggml_tensor * v = ggml_new_tensor_4d(ctx.get(), params.type_v, value_size, params.n_ctx, n_head_kv, 1);
                 ggml_tensor * mask = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F16, params.n_ctx, params.n_ctx, 1, 1);
                 ggml_tensor * attn = ggml_flash_attn_ext(ctx.get(), q, k, v, mask, 1.0f/sqrtf(head_size), 0.0f, 0.0f);
                 auto * dev = model->dev_layer(0);
@@ -359,14 +378,14 @@ static void check_fp8_attention(llama_model * model, bool offload_kqv = true) {
                 llama_kv_cache::slot_info slots;
                 bool supported = true;
                 for (uint32_t il = 0; il < model->hparams.n_layer(); ++il) {
-                    ggml_tensor * k = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, head_size, n_head, n_tokens);
-                    ggml_tensor * v = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, head_size, n_head, n_tokens);
+                    ggml_tensor * k = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, head_size, n_head_kv, n_tokens);
+                    ggml_tensor * v = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, value_size, n_head_kv, n_tokens);
                     ggml_tensor * k_idxs = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I64, n_tokens);
                     ggml_tensor * v_idxs = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I64,
                             flash == LLAMA_FLASH_ATTN_TYPE_DISABLED ? n_tokens*head_size*n_head : n_tokens);
                     auto * dev = model->dev_layer(il);
                     if (!ggml_backend_dev_supports_op(dev, probe.cpy_k(ctx.get(), k, k_idxs, il, slots)) ||
-                        !ggml_backend_dev_supports_op(dev, probe.cpy_v(ctx.get(), v, v_idxs, il, slots))) {
+                        (!is_mla && !ggml_backend_dev_supports_op(dev, probe.cpy_v(ctx.get(), v, v_idxs, il, slots)))) {
                         LOG("FP8 attention: flash=%s scaled=%d offload=1: cache writes not supported on %s, skipping\n",
                                 llama_flash_attn_type_name(flash), scaled, ggml_backend_dev_name(dev));
                         supported = false;
@@ -377,16 +396,22 @@ static void check_fp8_attention(llama_model * model, bool offload_kqv = true) {
                     continue;
                 }
             }
-            params.cb_eval_user_data = tensors;
+            struct capture_data {
+                std::vector<float> * tensors;
+                std::string names[4];
+            } capture = { tensors, { "Qcur-" + std::to_string(il), "Kcur-" + std::to_string(il),
+                                    "Vcur-" + std::to_string(il),
+                                    std::string(model->arch == LLM_ARCH_DOTS3NOTE ? "attn_out-" : "kqv_out-") + std::to_string(il) } };
+            params.cb_eval_user_data = &capture;
             params.cb_eval = [](ggml_tensor * t, bool ask, void * user_data) {
-                const char * names[] = { "Qcur-0", "Kcur-0", "Vcur-0", "kqv_out-0" };
+                auto & capture = *static_cast<capture_data *>(user_data);
                 for (int i = 0; i < 4; ++i) {
-                    if (strcmp(t->name, names[i]) != 0) {
+                    if (strcmp(t->name, capture.names[i].c_str()) != 0) {
                         continue;
                     }
                     if (!ask) {
                         GGML_ASSERT(t->type == GGML_TYPE_F32 && ggml_is_contiguous(t));
-                        auto & data = static_cast<std::vector<float> *>(user_data)[i];
+                        auto & data = capture.tensors[i];
                         data.resize(ggml_nelements(t));
                         ggml_backend_tensor_get(t, data.data(), 0, data.size()*sizeof(float));
                     }
@@ -399,8 +424,18 @@ static void check_fp8_attention(llama_model * model, bool offload_kqv = true) {
             GGML_ASSERT(lctx->get_cparams().flash_attn == (flash == LLAMA_FLASH_ATTN_TYPE_ENABLED));
             get_logits(model, lctx.get(), { 1, 2, 3, 4 });
             llama_synchronize(lctx.get());
-            for (const auto & data : tensors) {
-                GGML_ASSERT(data.size() == (size_t) (head_size*n_head*n_tokens));
+            GGML_ASSERT(tensors[0].size() == (size_t) (head_size*n_head*n_tokens));
+            GGML_ASSERT(tensors[1].size() == (size_t) (head_size*n_head_kv*n_tokens));
+            GGML_ASSERT(tensors[2].size() == (size_t) (value_size*n_head_kv*n_tokens));
+            GGML_ASSERT(tensors[3].size() == (size_t) (output_size*n_head*n_tokens));
+
+            double kq_scale = 1.0/sqrt((double) head_size);
+            if (is_mla) {
+                const auto & cp = lctx->get_cparams();
+                const float freq_scale = model->get_rope_freq_scale(cp, il);
+                const float attn_factor = cp.yarn_attn_factor * (1.0f + 0.1f * logf(1.0f/freq_scale));
+                const float mscale = attn_factor * (1.0f + 0.1f * model->hparams.rope_yarn_log_mul * logf(1.0f/freq_scale));
+                kq_scale = mscale*mscale/sqrt((double) model->hparams.n_embd_head_k_mla());
             }
 
             // Round the original K/V independently of the cache write graph.
@@ -432,12 +467,12 @@ static void check_fp8_attention(llama_model * model, bool offload_kqv = true) {
                     std::vector<double> scores(token + 1);
                     double max_score = -INFINITY;
                     for (int64_t past = 0; past <= token; ++past) {
-                        const int64_t kv_offset = (past*n_head + head)*head_size;
+                        const int64_t kv_offset = (past*n_head_kv + head % n_head_kv)*head_size;
                         double dot = 0.0;
                         for (int64_t d = 0; d < head_size; ++d) {
                             dot += (double) tensors[0][q_offset + d]*tensors[1][kv_offset + d];
                         }
-                        scores[past] = dot/sqrt((double) head_size);
+                        scores[past] = dot*kq_scale;
                         max_score = std::max(max_score, scores[past]);
                     }
                     double sum = 0.0;
@@ -445,10 +480,21 @@ static void check_fp8_attention(llama_model * model, bool offload_kqv = true) {
                         score = exp(score - max_score);
                         sum += score;
                     }
+                    std::vector<double> weighted(value_size, 0.0);
                     for (int64_t past = 0; past <= token; ++past) {
-                        const int64_t kv_offset = (past*n_head + head)*head_size;
-                        for (int64_t d = 0; d < head_size; ++d) {
-                            expected[q_offset + d] += scores[past]/sum*tensors[2][kv_offset + d];
+                        const int64_t kv_offset = (past*n_head_kv + head % n_head_kv)*value_size;
+                        for (int64_t d = 0; d < value_size; ++d) {
+                            weighted[d] += scores[past]/sum*tensors[2][kv_offset + d];
+                        }
+                    }
+                    const int64_t out_offset = (token*n_head + head)*output_size;
+                    for (int64_t d = 0; d < output_size; ++d) {
+                        if (is_mla) {
+                            for (int64_t c = 0; c < value_size; ++c) {
+                                expected[out_offset + d] += weighted[c]*wv[(head*output_size + d)*value_size + c];
+                            }
+                        } else {
+                            expected[out_offset + d] = weighted[d];
                         }
                     }
                 }
@@ -460,8 +506,8 @@ static void check_fp8_attention(llama_model * model, bool offload_kqv = true) {
             GGML_ASSERT(std::isfinite(error) && error < 1e-5);
         }
     }
-    model->layers[0].k_cache_scale = old_k_scale;
-    model->layers[0].v_cache_scale = old_v_scale;
+    model->layers[il].k_cache_scale = old_k_scale;
+    model->layers[il].v_cache_scale = old_v_scale;
 }
 
 static void check_fp8_context_shift(llama_model * model) {
@@ -505,11 +551,17 @@ static void check_fp8_context_shift(llama_model * model) {
         for (int i = 1; i < 4; ++i) {
             ((int32_t *) shifts->data)[i] = -1;
         }
-        ggml_tensor * expected_f32 = ggml_rope_ext(ctx.get(), keys, shifts, model->get_rope_factors(cp, 0), hp.n_rot(), hp.rope_type,
+        ggml_tensor * rope_keys = keys;
+        if (hp.is_mla()) {
+            rope_keys = ggml_view_3d(ctx.get(), keys, hp.n_rot(), keys->ne[1], keys->ne[2], keys->nb[1], keys->nb[2],
+                    (hp.n_embd_head_k() - hp.n_rot())*sizeof(float));
+        }
+        ggml_tensor * shifted = ggml_rope_ext(ctx.get(), rope_keys, shifts, model->get_rope_factors(cp, 0), hp.n_rot(), hp.rope_type,
                 cp.n_ctx_orig_yarn, model->get_rope_freq_base(cp, 0), model->get_rope_freq_scale(cp, 0),
                 cp.yarn_ext_factor, cp.yarn_attn_factor, cp.yarn_beta_fast, cp.yarn_beta_slow);
+        ggml_tensor * expected_f32 = hp.is_mla() ? keys : shifted;
         ggml_cgraph * gf = ggml_new_graph(ctx.get());
-        ggml_build_forward_expand(gf, expected_f32);
+        ggml_build_forward_expand(gf, hp.is_mla() ? ggml_cpy(ctx.get(), shifted, rope_keys) : shifted);
         GGML_ASSERT(ggml_graph_compute_with_ctx(ctx.get(), gf, 1) == GGML_STATUS_SUCCESS);
         std::vector<uint8_t> expected(before.size());
         ggml_quantize_chunk(GGML_TYPE_F8_E4M3, (float *) expected_f32->data, expected.data(), 0,
@@ -674,18 +726,24 @@ static test_status test_fp8_kv(const std::string & path, const char * target_bac
     auto params = llama_model_default_params();
     params.devices = cpu_devices;
     params.progress_callback = silent_model_load_progress;
-    bool is_dflash = false;
+    bool direct_cache = false;
     {
         llama_model_ptr model = load_model(path, params);
-        is_dflash = model->arch == LLM_ARCH_DFLASH;
-        if (is_dflash) {
+        if (!model->hparams.is_mla() && model->arch != LLM_ARCH_LLAMA &&
+                model->arch != LLM_ARCH_DEEPSEEK4 && model->arch != LLM_ARCH_DEEPSEEK41 &&
+                model->arch != LLM_ARCH_MINIMAX_M3 && model->arch != LLM_ARCH_QWEN4EXP &&
+                model->arch != LLM_ARCH_DFLASH) {
+            LOG("FP8 KV: unsupported test fixture, skipping %s\n", path.c_str());
+            return test_status::SKIP;
+        }
+        direct_cache = model->arch != LLM_ARCH_LLAMA;
+        if (direct_cache) {
             check_fp8_cache_decode(model.get());
-        } else {
-            if (model->arch != LLM_ARCH_LLAMA || model->hparams.n_expert > 0) {
-                LOG("FP8 KV: only dense Llama and DFlash fixtures are supported, skipping %s\n", path.c_str());
-                return test_status::SKIP;
+            if (model->arch == LLM_ARCH_DEEPSEEK2) {
+                check_fp8_attention(model.get());
+                check_fp8_context_shift(model.get());
             }
-            LOG("FP8 KV: CPU attention and context shift\n");
+        } else {
             check_fp8_attention(model.get());
             check_fp8_context_shift(model.get());
         }
@@ -707,14 +765,14 @@ static test_status test_fp8_kv(const std::string & path, const char * target_bac
         params.devices = devices;
         LOG("FP8 KV: device=%s\n", ggml_backend_dev_name(dev));
         llama_model_ptr model = load_model(path, params);
-        if (is_dflash) {
+        if (direct_cache) {
             check_fp8_cache_decode(model.get());
         } else {
             check_fp8_attention(model.get());
             check_fp8_attention(model.get(), false);
         }
     }
-    if (!is_dflash && !target_backend && !devices_meta.empty()) {
+    if (!direct_cache && !target_backend && !devices_meta.empty()) {
         devices_meta.push_back(nullptr);
         params.devices = devices_meta.data();
         params.split_mode = LLAMA_SPLIT_MODE_TENSOR;
