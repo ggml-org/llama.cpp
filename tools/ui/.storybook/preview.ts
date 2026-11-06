@@ -38,7 +38,8 @@ const preview: Preview = {
 							'Tester',
 							'Llama Sans',
 							['User Interface', 'Running text', 'Display', 'Glyphs'],
-							'Llama Mono'
+							'Llama Mono',
+							['Terminal', 'User Interface', 'Logs', 'Diff', 'llama.cpp logo', 'Key visuals']
 						],
 						'Colors',
 						['Palette'],
