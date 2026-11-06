@@ -104,6 +104,9 @@ std::filesystem::path get_server_exec_path();
 //
 
 std::string random_string();
+
+// float samples to signed 16-bit PCM bytes
+std::string pcm_f32_to_s16(const std::vector<float> & samples);
 std::string gen_chatcmplid();
 std::string gen_tool_call_id();
 

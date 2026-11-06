@@ -9,6 +9,8 @@
 
 #include "server-common.h"
 
+#include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <random>
 #include <sstream>
@@ -178,6 +180,15 @@ std::string random_string() {
     }
 
     return result;
+}
+
+std::string pcm_f32_to_s16(const std::vector<float> & samples) {
+    std::string bytes(samples.size() * sizeof(int16_t), '\0');
+    for (size_t i = 0; i < samples.size(); i++) {
+        const int16_t v = (int16_t) std::lround(std::max(-1.0f, std::min(1.0f, samples[i])) * 32767.0f);
+        memcpy(&bytes[2 * i], &v, sizeof(v));
+    }
+    return bytes;
 }
 
 std::string gen_chatcmplid() {
