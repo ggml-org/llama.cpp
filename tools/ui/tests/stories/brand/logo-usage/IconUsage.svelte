@@ -3,15 +3,17 @@
 	the splash screens, which are UI/Foundations/Brand): as its two glyphs of Llama Sans (U+E000 for text, U+E001, the
 	capital form at the lockup's proportion) in display type and buttons, the two lockups in context (Llama in Sans,
 	llama.cpp in Mono), in a download badge and in running text, then as the web app's favicon, PWA, maskable and Apple
-	touch icons and its splash screens, with their proportions and placement drawn in, and in the social avatars, with
-	how it is optically centred in a circle. The app icons follow the web UI's own pwa-assets.config.ts
-	(PWA_ASSET_GENERATOR) and make-icons-circular.js, but are drawn with the L: the files it ships still carry the old
-	llama.cpp mark. It sits in the logo showcase's frame (ShowcaseFrame), on its colours.
+	touch icons and its splash screens, with their proportions and placement drawn in, the Llama app's macOS icon as it
+	ships (from ggml-org/Llama-macOS) with its recipe, and in the social avatars, with how it is optically centred in
+	a circle. The app icons follow the web UI's own pwa-assets.config.ts (PWA_ASSET_GENERATOR) and
+	make-icons-circular.js, but are drawn with the L: the files it ships still carry the old llama.cpp mark. It sits
+	in the logo showcase's frame (ShowcaseFrame), on its colours.
 -->
 <script lang="ts">
 	import avatarSvg from '../assets/files/logo/svg/social/x/x-avatar-light.svg?raw';
 	import OpticalCentre from '../assets/OpticalCentre.svelte';
 	import { PATHS, SIZE } from '../logo-showcase/lib/logo';
+	import macosIcon from './files/llama-macos-icon-1024.png';
 	import { Download } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { FAVICON_COLORS, PWA_ASSET_GENERATOR, THEME_COLORS } from '$lib/constants';
@@ -447,6 +449,59 @@
 		{/each}
 	</div>
 
+	<!-- the Llama app's macOS icon as it ships, from ggml-org/Llama-macOS, with its grid and the recipe it follows -->
+	<div class="macos">
+		<figure class="macos-art">
+			<img alt="The Llama app's macOS icon" src={macosIcon} />
+
+			<svg viewBox="0 0 1024 1024">
+				<!-- Apple's macOS grid: the 824 plate, 100 in from each edge, and the canvas's centre lines -->
+				<rect class="guide safe" height="824" width="824" x="100" y="100" />
+
+				<line class="guide safe" x1="512" x2="512" y1="0" y2="1024" />
+
+				<line class="guide safe" x1="0" x2="1024" y1="512" y2="512" />
+				<!-- the mark's box, 512 tall, 8 above centre -->
+				<rect class="guide" height="512" width="512" x="256" y="248" />
+			</svg>
+		</figure>
+
+		<div class="macos-recipe">
+			<p class="icon-label">The Llama app on macOS</p>
+
+			<p>
+				Drawn by hand and committed as finished PNGs to <a
+					href="https://github.com/ggml-org/Llama-macOS/tree/main/Llama/Assets.xcassets/AppIcon.appiconset"
+					>ggml-org/Llama-macOS</a
+				>; no script in the repo makes them. The recipe:
+			</p>
+
+			<ol>
+				<li>
+					A 1024 × 1024 transparent canvas on Apple's macOS grid: an 824 × 824 plate with continuous
+					(squircle) corners, 100 in from each edge, and no shadow.
+				</li>
+
+				<li>The plate in one flat colour, #3F4040: no gradient, no highlight.</li>
+
+				<li>
+					The icon in white, 512 tall, 62% of the plate, centred across and 8 above centre, about
+					1/64 of its height.
+				</li>
+
+				<li>
+					Exported at the appiconset's ten sizes, 16, 32, 128, 256 and 512 at 1× and 2×, into
+					Llama/Assets.xcassets/AppIcon.appiconset.
+				</li>
+			</ol>
+
+			<p>
+				The brand's macos-1024 file follows the same grid, but on the brand's ink and field, with
+				the icon at 67.2% of the plate and placed like the avatars.
+			</p>
+		</div>
+	</div>
+
 	<!-- the avatars, and how the icon is optically centred in a circle crop, as in them and the PWA icon -->
 	<p class="avatars-intro">
 		The social avatars are the icon at 56% of a square, which every platform crops to a circle.
@@ -840,5 +895,53 @@
 		font:
 			400 17px / 1.5 'Llama Sans',
 			var(--body);
+	}
+	/* the macOS icon beside its recipe */
+	.macos {
+		display: grid;
+		grid-template-columns: minmax(0, 16rem) minmax(0, 1fr);
+		gap: 2rem;
+		align-items: start;
+		margin-top: 3rem;
+	}
+	@media (max-width: 640px) {
+		.macos {
+			grid-template-columns: minmax(0, 1fr);
+		}
+	}
+	.macos-art {
+		position: relative;
+		margin: 0;
+	}
+	.macos-art img,
+	.macos-art svg {
+		display: block;
+		width: 100%;
+		aspect-ratio: 1;
+	}
+	.macos-art svg {
+		position: absolute;
+		inset: 0;
+	}
+	.macos-recipe {
+		display: grid;
+		gap: 0.75rem;
+		max-width: 62ch;
+		color: var(--l-muted);
+		font-size: 15px;
+	}
+	.macos-recipe .icon-label {
+		color: var(--l-ink);
+	}
+	.macos-recipe ol {
+		display: grid;
+		list-style: decimal;
+		gap: 0.375rem;
+		margin: 0;
+		padding-left: 1.25rem;
+	}
+	.macos-recipe a {
+		text-decoration: underline;
+		text-underline-offset: 2px;
 	}
 </style>
