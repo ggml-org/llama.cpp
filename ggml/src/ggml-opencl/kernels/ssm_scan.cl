@@ -214,3 +214,133 @@ kernel void kernel_ssm_scan_f32_mamba2_d256(
     s_warp[tid + 128] = state2;
     s_warp[tid + 192] = state3;
 }
+
+kernel void kernel_ssm_scan_f32(
+        global const char * s_buf,
+        ulong               s_off,
+        global const char * x_buf,
+        ulong               x_off,
+        global const char * dt_buf,
+        ulong               dt_off,
+        global const char * A_buf,
+        ulong               A_off,
+        global const char * B_buf,
+        ulong               B_off,
+        global const char * C_buf,
+        ulong               C_off,
+        global const char * ids_buf,
+        ulong               ids_off,
+        global       char * dst_buf,
+        ulong               dst_off,
+        ulong               s_nb2,
+        ulong               s_nb3,
+        ulong               x_nb2,
+        ulong               x_nb3,
+        ulong               dt_nb1,
+        ulong               dt_nb2,
+        ulong               A_nb1,
+        ulong               B_nb2,
+        ulong               B_nb3,
+        ulong               C_nb2,
+        ulong               C_nb3,
+        ulong               state_off,
+        int                 head_dim,
+        int                 n_head,
+        int                 n_group,
+        int                 n_tokens,
+        ulong               s_nb1,
+        ulong               x_nb1,
+        ulong               B_nb1,
+        ulong               C_nb1,
+        uint                A_ne0,
+        uint                d_state,
+        uint                n_seqs,
+        uint                K,
+        local        float * reduce
+) {
+    global const char * s_data   = s_buf   + s_off;
+    global const char * x_data   = x_buf   + x_off;
+    global const char * dt_data  = dt_buf  + dt_off;
+    global const char * A_data   = A_buf   + A_off;
+    global const char * B_data   = B_buf   + B_off;
+    global const char * C_data   = C_buf   + C_off;
+    global const int  * ids_data = (global const int *) (ids_buf + ids_off);
+    global       float * dst     = (global float *) (dst_buf + dst_off);
+    const uint y_elems = state_off / sizeof(float);
+
+    const uint tid       = get_local_id(0);
+    const uint inner_idx = get_group_id(0);
+    const uint seq_idx   = get_group_id(1);
+    const uint head_idx  = inner_idx / head_dim;
+    const uint dim_idx   = inner_idx - head_idx * head_dim;
+    const uint group_idx = head_idx / (n_head / n_group);
+    const uint state_slot = (uint) ids_data[seq_idx];
+
+    const ulong s_idx = (ulong) state_slot * s_nb3 +
+                        (ulong) head_idx * s_nb2 +
+                        (ulong) dim_idx * s_nb1 +
+                        (ulong) tid * sizeof(float);
+    float state = *((global const float *) (s_data + s_idx));
+
+    const ulong A_idx = (ulong) head_idx * A_nb1 +
+                        (ulong) (tid % A_ne0) * sizeof(float);
+    const float A_value = *((global const float *) (A_data + A_idx));
+
+    for (int token_idx = 0; token_idx < n_tokens; ++token_idx) {
+        const ulong x_idx = (ulong) head_idx * x_nb1 +
+                            (ulong) token_idx * x_nb2 +
+                            (ulong) seq_idx * x_nb3 +
+                            (ulong) dim_idx * sizeof(float);
+        const ulong dt_idx = (ulong) token_idx * dt_nb1 +
+                             (ulong) seq_idx * dt_nb2 +
+                             (ulong) head_idx * sizeof(float);
+        const ulong B_idx = (ulong) group_idx * B_nb1 +
+                            (ulong) token_idx * B_nb2 +
+                            (ulong) seq_idx * B_nb3 +
+                            (ulong) tid * sizeof(float);
+        const ulong C_idx = (ulong) group_idx * C_nb1 +
+                            (ulong) token_idx * C_nb2 +
+                            (ulong) seq_idx * C_nb3 +
+                            (ulong) tid * sizeof(float);
+
+        const float x_value  = *((global const float *) (x_data  + x_idx));
+        const float dt_value = *((global const float *) (dt_data + dt_idx));
+        const float B_value  = *((global const float *) (B_data  + B_idx));
+        const float C_value  = *((global const float *) (C_data  + C_idx));
+        const float dt_soft_plus = dt_value > 20.0f ? dt_value : log(1.0f + exp(dt_value));
+        const float dA = exp(dt_soft_plus * A_value);
+        const float x_dt = x_value * dt_soft_plus;
+
+        state = mad(state, dA, B_value * x_dt);
+        reduce[tid] = state * C_value;
+        barrier(CLK_LOCAL_MEM_FENCE);
+
+        for (uint stride = d_state / 2; stride > 0; stride >>= 1) {
+            if (tid < stride) {
+                reduce[tid] += reduce[tid + stride];
+            }
+            barrier(CLK_LOCAL_MEM_FENCE);
+        }
+
+        if (tid == 0) {
+            const uint y_idx = dim_idx + head_idx * head_dim +
+                               token_idx * n_head * head_dim +
+                               seq_idx * n_tokens * n_head * head_dim;
+            dst[y_idx] = reduce[0];
+        }
+
+        const uint snapshot_slot = n_tokens - 1 - token_idx;
+        if (snapshot_slot > 0 && snapshot_slot < K) {
+            const uint snapshot_idx = y_elems + tid + dim_idx * d_state +
+                                      head_idx * d_state * head_dim +
+                                      (snapshot_slot * n_seqs + seq_idx) * d_state * head_dim * n_head;
+            dst[snapshot_idx] = state;
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+
+    const uint state_idx = y_elems + tid + dim_idx * d_state +
+                           head_idx * d_state * head_dim +
+                           seq_idx * d_state * head_dim * n_head;
+    dst[state_idx] = state;
+}

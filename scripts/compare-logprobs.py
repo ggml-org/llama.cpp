@@ -15,8 +15,8 @@ Unlike compare-logits.py, it allows dumping logits from a hosted API endpoint. U
 
 Example usage:
     Step 1: Dump logits from two different servers
-        python scripts/compare-logprobs.py dump logits_llama.log http://localhost:8080/v1/completions
-        python scripts/compare-logprobs.py dump logits_other.log http://other-engine:8000/v1/completions
+        python scripts/compare-logprobs.py dump logits_llama.log http://localhost:9931/v1/completions
+        python scripts/compare-logprobs.py dump logits_other.log http://other-engine/v1/completions
 
         (optionally, you can add --api-key <key> if the endpoint requires authentication)
 

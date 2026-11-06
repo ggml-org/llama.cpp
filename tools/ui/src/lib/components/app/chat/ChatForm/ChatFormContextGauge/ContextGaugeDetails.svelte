@@ -1,8 +1,5 @@
 <script lang="ts">
 	import ContextGaugeDetailRow from './ContextGaugeDetailRow.svelte';
-	import { gaugePopup } from './gauge-popup.svelte';
-	import { ChevronDown } from '@lucide/svelte';
-	import * as Collapsible from '$lib/components/ui/collapsible';
 	import { STATS_UNITS } from '$lib/constants';
 
 	interface Props {
@@ -35,21 +32,15 @@
 	const hasCurrent = $derived(currentRead > 0 || currentOutput > 0);
 </script>
 
-<Collapsible.Root bind:open={gaugePopup.detailsOpen} class="mt-3 border-t border-border/50 pt-4">
-	<Collapsible.Trigger
-		class="flex w-full cursor-pointer items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-	>
-		<span>Token usage details</span>
+<div class="mt-3 border-t border-border/50 pt-4">
+	<p class="text-xs text-muted-foreground max-md:text-[13px]">Token usage details</p>
 
-		<ChevronDown
-			class={'ml-auto h-3 w-3 transition-transform' + (gaugePopup.detailsOpen ? ' rotate-180' : '')}
-		/>
-	</Collapsible.Trigger>
-
-	<Collapsible.Content class="flex flex-col gap-4 text-xs pt-4">
+	<div class="flex flex-col gap-4 pt-4 text-xs max-md:gap-5 max-md:text-[13px]">
 		{#if hasCumulative}
 			<div>
-				<h3 class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70 mb-2">
+				<h3
+					class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70 mb-2 max-md:text-xs"
+				>
 					Across all turns
 				</h3>
 
@@ -57,12 +48,13 @@
 					{#if cumulativeRead > 0}
 						<ContextGaugeDetailRow
 							label="Prompt tokens evaluated"
-							value={`${cumulativeRead.toLocaleString()} tok`}
 							subtitle={cumulativeCacheTotal > 0
 								? `${cumulativeCacheTotal.toLocaleString()} reused from KV cache`
 								: undefined}
+							value={`${cumulativeRead.toLocaleString()} tok`}
 						/>
 					{/if}
+
 					{#if cumulativeOutput > 0}
 						<ContextGaugeDetailRow
 							label="Tokens generated"
@@ -75,7 +67,9 @@
 
 		{#if hasCurrent}
 			<div>
-				<h3 class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70 mb-2">
+				<h3
+					class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70 mb-2 max-md:text-xs"
+				>
 					This turn · KV cache
 				</h3>
 
@@ -83,10 +77,10 @@
 					{#if currentRead > 0}
 						<ContextGaugeDetailRow
 							label="Prompt"
-							value={`${currentRead.toLocaleString()} tok`}
 							subtitle={currentCache > 0
 								? `${currentFresh.toLocaleString()} fresh + ${currentCache.toLocaleString()} cached`
 								: undefined}
+							value={`${currentRead.toLocaleString()} tok`}
 						/>
 					{/if}
 
@@ -100,6 +94,7 @@
 					<div class="pt-1 mt-0.5 border-t border-border/30">
 						<div class="flex justify-between">
 							<span class="text-muted-foreground">KV cache total</span>
+
 							<span class="font-mono font-medium">{kvTotal.toLocaleString()} tok</span>
 						</div>
 					</div>
@@ -119,5 +114,5 @@
 		{#each transientDetails as detail (detail)}
 			<div class="font-mono text-muted-foreground">{detail}</div>
 		{/each}
-	</Collapsible.Content>
-</Collapsible.Root>
+	</div>
+</div>

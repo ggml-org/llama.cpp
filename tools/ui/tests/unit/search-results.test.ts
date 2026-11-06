@@ -2,7 +2,8 @@ import {
 	extractSearchQuery,
 	extractSearchResults,
 	faviconForUrl,
-	isWebSearchToolName
+	isWebSearchToolName,
+	looksLikeSearchResult
 } from '$lib/utils/search-results';
 import { describe, expect, it } from 'vitest';
 
@@ -117,5 +118,29 @@ describe('isWebSearchToolName', () => {
 		expect(isWebSearchToolName('web_fetch')).toBe(false);
 		expect(isWebSearchToolName('read_file')).toBe(false);
 		expect(isWebSearchToolName('exec_shell_command')).toBe(false);
+	});
+});
+
+describe('extractSearchResults prefilter', () => {
+	it('returns the shared empty array for blobs without the wire format', () => {
+		// exec/file tool results never carry Title:/URL: field lines; the
+		// cheap prefilter must skip the line-split parse for them
+		const stdout = `${'make[1]: entering directory\n'.repeat(5000)}`;
+
+		expect(extractSearchResults(stdout)).toEqual([]);
+	});
+
+	it('returns an empty result when only one required field is present', () => {
+		expect(extractSearchResults('URL: https://example.com')).toEqual([]);
+		expect(extractSearchResults('Title: only a title')).toEqual([]);
+	});
+});
+
+describe('looksLikeSearchResult', () => {
+	it('requires both Title and URL field markers', () => {
+		expect(looksLikeSearchResult('Title: a\nURL: https://b')).toBe(true);
+		expect(looksLikeSearchResult('URL: https://b')).toBe(false);
+		expect(looksLikeSearchResult('plain stdout')).toBe(false);
+		expect(looksLikeSearchResult(undefined)).toBe(false);
 	});
 });

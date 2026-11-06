@@ -53,7 +53,10 @@ endif()
 
 set(TARGET llama-common)
 
+include(parsers/sources.cmake)
+
 add_library(${TARGET}
+    ${LLAMA_CHAT_PARSERS_SOURCES}
     arg.cpp
     arg.h
     base64.hpp
@@ -75,12 +78,18 @@ add_library(${TARGET}
     download.h
     fit.cpp
     fit.h
+    file-lock.cpp
+    file-lock.h
     hf-cache.cpp
     hf-cache.h
     http.h
     imatrix-loader.cpp
     imatrix-loader.h
     json-schema-to-grammar.cpp
+    json-schema.cpp
+    json-schema.h
+    json.cpp
+    json.h
     llguidance.cpp
     log.cpp
     log.h
@@ -177,3 +186,8 @@ if (LLAMA_LLGUIDANCE)
 endif()
 
 target_link_libraries(${TARGET} PUBLIC llama Threads::Threads)
+
+if (CMAKE_SYSTEM_NAME MATCHES "AIX")
+    # AIX's flock() function comes from libbsd.a
+    target_link_libraries(${TARGET} PRIVATE -lbsd)
+endif()

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import '../app.css';
 	import { browser } from '$app/environment';
-	import { goto } from '$app/navigation';
+	import { afterNavigate, goto } from '$app/navigation';
 	import { base } from '$app/paths';
 	import { page } from '$app/state';
 	import { SidebarNavigation } from '$lib/components/app';
@@ -11,7 +11,8 @@
 		FAVICON_PATHS,
 		FAVICON_SELECTORS,
 		HEADERS,
-		ROUTES,
+		MODELS_ROUTE_ID,
+		NEW_CHAT_TAB_ID,
 		SETTINGS_KEYS,
 		TOOLTIP_DELAY_DURATION
 	} from '$lib/constants';
@@ -26,6 +27,8 @@
 		modelsStore,
 		serverStore,
 		settingsStore,
+		tabsStore,
+		uiStore,
 		versionStore
 	} from '$lib/stores';
 	import { initStores } from '$lib/stores/init';
@@ -43,12 +46,7 @@
 	let innerHeight = $state<number | undefined>();
 	let innerWidth = $state(browser ? window.innerWidth : 0);
 
-	let chatSidebar:
-		| {
-				activateSearchMode?: () => void;
-				editActiveConversation?: () => void;
-		  }
-		| undefined = $state();
+	let chatSidebar: { editActiveConversation?: () => void } | undefined = $state();
 
 	let showBuildVersion = $derived(
 		settingsStore.config[SETTINGS_KEYS.SHOW_BUILD_VERSION] as boolean
@@ -74,6 +72,27 @@
 		}
 	}
 
+	function navigateToTab(direction: -1 | 1) {
+		// only makes sense with conversation tabs enabled
+		if (!settingsStore.config.conversationTabs) return;
+
+		const openTabs = tabsStore.openTabs;
+
+		if (openTabs.length === 0) return;
+
+		const activeId = page.params.id ?? NEW_CHAT_TAB_ID;
+		const idx = openTabs.indexOf(activeId);
+		// active tab not in list (e.g. a non-chat route): start from an edge
+		const targetIdx =
+			idx === -1
+				? direction === 1
+					? 0
+					: openTabs.length - 1
+				: (idx + direction + openTabs.length) % openTabs.length;
+
+		void tabsStore.activate(openTabs[targetIdx]);
+	}
+
 	function navigateToConversation(direction: -1 | 1) {
 		const allConvs = conversationsStore.conversations;
 
@@ -96,15 +115,20 @@
 		if (targetIdx >= 0 && targetIdx < allConvs.length) {
 			goto(RouterService.chat(allConvs[targetIdx].id));
 		} else {
-			goto(ROUTES.NEW_CHAT);
+			conversationsStore.openNewChat();
 		}
 	}
+
+	// the models page returns to wherever it was reached from, by any kind of navigation
+	afterNavigate(() => uiStore.rememberModelsReturnRoute());
 
 	// Global keyboard shortcuts
 	const { handleKeydown } = useKeyboardShortcuts({
 		editActiveConversation: () => chatSidebar?.editActiveConversation?.(),
 		navigateToNextConversation: () => navigateToConversation(1),
-		navigateToPrevConversation: () => navigateToConversation(-1)
+		navigateToNextTab: () => navigateToTab(1),
+		navigateToPrevConversation: () => navigateToConversation(-1),
+		navigateToPrevTab: () => navigateToTab(-1)
 	});
 
 	function checkApiKey() {
@@ -119,7 +143,9 @@
 
 		untrack(() => {
 			if (
-				(page.route.id === '/(chat)' || page.route.id === '/(chat)/chat/[id]') &&
+				(page.route.id === '/(chat)' ||
+					page.route.id === '/(chat)/chat/[id]' ||
+					page.route.id === MODELS_ROUTE_ID) &&
 				page.status !== 401 &&
 				page.status !== 403
 			) {
@@ -257,7 +283,7 @@
 
 <svelte:head>
 	{#if pwaAssetsHead.themeColor}
-		<meta name="theme-color" content={pwaAssetsHead.themeColor.content} />
+		<meta content={pwaAssetsHead.themeColor.content} name="theme-color" />
 	{/if}
 
 	{#if settingsStore.config.customCss}
@@ -271,29 +297,24 @@
 	<PwaMetaTags />
 </svelte:head>
 
-<svelte:window onkeydown={handleKeydown} bind:innerHeight bind:innerWidth />
+<svelte:window bind:innerHeight bind:innerWidth onkeydown={handleKeydown} />
 <svelte:document onvisibilitychange={handleVisibilityChange} />
 
 <Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
 	<div class="flex flex-col md:flex-row">
-		<SidebarNavigation
-			onSearchClick={() => {
-				if (deviceStore.isMobile) {
-					goto(ROUTES.SEARCH);
-				} else if (chatSidebar?.activateSearchMode) {
-					chatSidebar.activateSearchMode();
-				}
-			}}
-		/>
+		<SidebarNavigation />
 
-		<div class="flex-1">
+		<!-- min-w-0 lets the chat column shrink below its content width, so wide
+		     code blocks and tables scroll inside their own containers instead of
+		     stretching the page into a horizontal scrollbar -->
+		<div class="min-w-0 flex-1">
 			{@render children?.()}
 		</div>
 	</div>
 
 	<ModeWatcher />
 
-	<Toaster richColors />
+	<Toaster closeButton richColors />
 </Tooltip.Provider>
 
 <!-- PWA update prompt + version -->
@@ -303,8 +324,8 @@
 	{/if}
 
 	<PwaRefreshAlert
-		needRefresh={$needRefresh || pwa.needRefreshByStorage}
 		forceReload={pwa.needRefreshByStorage}
+		needRefresh={$needRefresh || pwa.needRefreshByStorage}
 		{updateServiceWorker}
 	/>
 </div>

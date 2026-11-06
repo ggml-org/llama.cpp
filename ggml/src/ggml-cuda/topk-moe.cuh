@@ -3,6 +3,9 @@
 
 #include <initializer_list>
 
+// Rows that one CUDA block handles.
+#define TOPK_MOE_ROWS_PER_BLOCK 8
+
 struct ggml_cuda_topk_moe_args {
     bool sigmoid{};
     bool sqrt_softplus{};
@@ -11,6 +14,8 @@ struct ggml_cuda_topk_moe_args {
     bool prob_bias{};
     bool norm{};
     bool scale{};
+    int  n_groups{};     // > 0: pick experts only from the top n_group_used expert groups
+    int  n_group_used{};
 };
 
 void ggml_cuda_op_topk_moe(ggml_backend_cuda_context &     ctx,

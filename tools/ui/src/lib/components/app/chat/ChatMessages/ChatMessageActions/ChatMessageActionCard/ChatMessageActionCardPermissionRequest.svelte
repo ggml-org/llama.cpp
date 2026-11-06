@@ -28,10 +28,10 @@
 		<DropdownMenu.Root>
 			<ButtonGroup.Root class="overflow-hidden rounded-md shadow-sm">
 				<Button
-					variant="secondary"
-					size="sm"
 					class="!rounded-r-none !shadow-none"
 					onclick={() => onDecision(ToolPermissionDecision.ONCE)}
+					size="sm"
+					variant="secondary"
 				>
 					Allow once
 				</Button>
@@ -39,11 +39,11 @@
 				<ButtonGroup.Separator />
 
 				<DropdownMenu.Trigger
+					aria-label="More allow options"
 					class={cn(
 						buttonVariants({ size: 'sm', variant: 'secondary' }),
 						'inline-flex cursor-pointer items-center !rounded-l-none !shadow-none !px-2'
 					)}
-					aria-label="More allow options"
 				>
 					<ChevronDown class="h-3.5 w-3.5" />
 				</DropdownMenu.Trigger>
@@ -54,6 +54,7 @@
 					Always allow <pre>{toolName}</pre>
 					tool
 				</DropdownMenu.Item>
+
 				{#if serverLabel}
 					<DropdownMenu.Item onclick={() => onDecision(ToolPermissionDecision.ALWAYS_SERVER)}>
 						Always allow all tools from {serverLabel}
@@ -73,7 +74,7 @@
 			</DropdownMenu.Content>
 		</DropdownMenu.Root>
 
-		<Button variant="destructive" size="sm" onclick={() => onDecision(ToolPermissionDecision.DENY)}>
+		<Button onclick={() => onDecision(ToolPermissionDecision.DENY)} size="sm" variant="destructive">
 			Deny
 		</Button>
 	{/snippet}

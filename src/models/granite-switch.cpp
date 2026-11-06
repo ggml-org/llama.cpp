@@ -149,6 +149,7 @@ public:
 // K dim-0 is +gain for an adapter token, -gain otherwise; the causal softmax then
 // lets a single visible adapter token dominate so the readback recovers its slot.
 void llm_graph_input_switch::set_input(const llama_ubatch * ubatch) {
+    ASSERT_EMBD_OR_TOKEN(*ubatch);
     if (!ubatch->token) {
         return;
     }
@@ -185,7 +186,7 @@ void llm_graph_input_switch::set_input(const llama_ubatch * ubatch) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_granite_switch::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
 // per-token switched LoRA delta: B_a*(A_a*x), adapter selected per token via ids.
@@ -218,14 +219,12 @@ ggml_tensor * llama_model_granite_switch::graph::build_switched_lora_mm(
     return ggml_add(ctx0, base, delta);
 }
 
-llama_model_granite_switch::graph::graph(
-    const llama_model & model,
-    const llm_graph_params & params)
-    : llm_graph_context(params) {
+llama_model_granite_switch::graph::graph(const llm_graph_params & params) : llm_graph_context(params) {
 
     const auto & smodel = static_cast<const llama_model_granite_switch &>(model);
 
     // TODO: support raw embedding input (multimodal / pre-embedded tokens) when needed
+    ASSERT_EMBD_OR_TOKEN(ubatch);
     GGML_ASSERT(ubatch.token && "granite-switch requires token input");
 
     const int64_t n_embd_head = hparams.n_embd_head_v();
@@ -291,12 +290,14 @@ llama_model_granite_switch::graph::graph(
     ggml_tensor * cur;
 
     for (int il = 0; il < n_layer; ++il) {
+        res->t_layer_inp[il] = inpL;
+
         ggml_tensor * inpSA = inpL;
 
         cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "attn_norm", il);
 
-        cur = build_attention_layer(cur, inp_pos, adapter_ids, inp_attn, model, n_embd_head, il);
+        cur = build_attention_layer(cur, inp_pos, adapter_ids, inp_attn, n_embd_head, il);
 
         if (il == n_layer - 1 && inp_out_ids) {
             cur   = ggml_get_rows(ctx0, cur,   inp_out_ids);
@@ -308,7 +309,7 @@ llama_model_granite_switch::graph::graph(
             adapter_ids = ggml_reshape_1d(ctx0, adapter_ids, n_out);
         }
 
-        cur = build_layer_ffn(cur, inpSA, adapter_ids, model, il);
+        cur = build_layer_ffn(cur, inpSA, adapter_ids, il);
 
         inpL = cur;
     }
@@ -324,8 +325,6 @@ llama_model_granite_switch::graph::graph(
     cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_logit_scale);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }
 
 ggml_tensor * llama_model_granite_switch::graph::build_attention_layer(
@@ -333,7 +332,6 @@ ggml_tensor * llama_model_granite_switch::graph::build_attention_layer(
           ggml_tensor             * inp_pos,
           ggml_tensor             * adapter_ids,
           llm_graph_input_attn_kv * inp_attn,
-    const llama_model             & model,
     const int64_t                 n_embd_head,
     const int                     il) {
 
@@ -362,15 +360,8 @@ ggml_tensor * llama_model_granite_switch::graph::build_attention_layer(
     Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
     Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
-    if (hparams.has_rope(il)) {
-        ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
-        Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, rope_factors,
-                n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                ext_factor, attn_factor, beta_fast, beta_slow);
-        Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, rope_factors,
-                n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                ext_factor, attn_factor, beta_fast, beta_slow);
-    }
+    Qcur = build_rope(Qcur, inp_pos, il);
+    Kcur = build_rope(Kcur, inp_pos, il);
     cb(Qcur, "Qcur", il);
     cb(Kcur, "Kcur", il);
     cb(Vcur, "Vcur", il);
@@ -393,7 +384,6 @@ ggml_tensor * llama_model_granite_switch::graph::build_layer_ffn(
           ggml_tensor       * cur,
           ggml_tensor       * inpSA,
           ggml_tensor       * adapter_ids,
-    const llama_model       & model,
     const int                 il) {
 
     const auto & layer = model.layers[il];

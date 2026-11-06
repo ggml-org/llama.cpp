@@ -213,7 +213,9 @@ set_target_properties(ggml-base PROPERTIES
     SOVERSION ${GGML_VERSION_MAJOR}
 )
 
-target_include_directories(ggml-base PRIVATE .)
+configure_file(ggml-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/ggml-version.h @ONLY)
+
+target_include_directories(ggml-base PRIVATE . ${CMAKE_CURRENT_BINARY_DIR})
 if (GGML_BACKEND_DL)
     target_compile_definitions(ggml-base PUBLIC GGML_BACKEND_DL)
 endif()
@@ -460,6 +462,8 @@ function(ggml_add_cpu_backend_variant tag_name)
             set(GGML_INTERNAL_${feat} ON)
         endforeach()
     elseif (GGML_SYSTEM_ARCH STREQUAL "s390x")
+        set(GGML_NATIVE OFF)
+
         foreach (feat VXE2 NNPA)
             set(GGML_INTERNAL_${feat} OFF)
         endforeach()
@@ -567,6 +571,14 @@ if (GGML_CPU_ALL_VARIANTS)
         if (CMAKE_SYSTEM_NAME MATCHES "Linux")
             ggml_add_cpu_backend_variant(z15    Z15 VXE2)
             ggml_add_cpu_backend_variant(z16    Z16 VXE2 NNPA)
+
+            # check if compiler supports "-march=z17" codename
+            check_cxx_compiler_flag("-march=arch15" GGML_CXX_SUPPORTS_Z17)
+            if (GGML_CXX_SUPPORTS_Z17)
+                ggml_add_cpu_backend_variant(arch15 Z17 VXE2 NNPA)
+            else()
+                message(WARNING "Skipping z17 target: compiler must be GCC 15.1 and later")
+            endif()
         else()
             message(FATAL_ERROR "Unsupported s390x target OS: ${CMAKE_SYSTEM_NAME}")
         endif()
@@ -625,7 +637,11 @@ endif()
 
 if (BUILD_SHARED_LIBS)
     foreach (target ggml-base ggml)
-        set_target_properties(${target} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+        set_target_properties(${target} PROPERTIES
+            POSITION_INDEPENDENT_CODE ON
+            C_VISIBILITY_PRESET hidden
+            CXX_VISIBILITY_PRESET hidden
+        )
         target_compile_definitions(${target} PRIVATE GGML_BUILD)
         target_compile_definitions(${target} PUBLIC  GGML_SHARED)
     endforeach()

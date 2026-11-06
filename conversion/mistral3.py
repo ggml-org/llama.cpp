@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import ModelBase, TextModel, gguf
+from .base import ModelBase, TextModel, get_model_architecture, gguf
 
 from .deepseek import DeepseekV2Model
 from .llama import LlamaModel
@@ -13,9 +13,11 @@ from .llama import LlamaModel
 
 @ModelBase.register(
     "Mistral3ForConditionalGeneration",
+    "Mistral3Model",
     "Ministral3ForCausalLM",
+    "Ministral3Model",
 )
-@ModelBase.example("mistralai/Mistral-Small-3.1-24B-Instruct-2503", "hf-tiny-v2/tiny-random-Ministral3ForCausalLM")
+@ModelBase.example("mistralai/Mistral-Small-3.1-24B-Instruct-2503", "hf-tiny-v2/tiny-random-Ministral3ForCausalLM", "nvidia/Nemotron-3-Embed-1B-BF16", "nvidia/Nemotron-3.5-Embed-1B-BF16")
 class Mistral3Model(TextModel):
     class Ministral3Model(LlamaModel):
         model_arch = gguf.MODEL_ARCH.MISTRAL3
@@ -28,6 +30,23 @@ class Mistral3Model(TextModel):
                 assert rope_params["rope_type"] == "yarn", "ministral3 rope_type must be 'yarn'"
                 self.gguf_writer.add_rope_scaling_yarn_log_mul(rope_params["mscale_all_dim"])
                 self.gguf_writer.add_attn_temperature_scale(rope_params["llama_4_scaling_beta"])
+
+    class Mistral3EmbedNemotronModel(Ministral3Model):
+        model_arch = gguf.MODEL_ARCH.MISTRAL3
+
+        def set_vocab(self):
+            super().set_vocab()
+            self.gguf_writer.add_add_bos_token(False)
+            self.gguf_writer.add_add_eos_token(False)
+
+        def get_vocab_base_pre(self, tokenizer) -> str:
+            if self.origin_hf_arch == "Mistral3Model":
+                return "nemotron-3.5-embed"
+            return super().get_vocab_base_pre(tokenizer)
+
+        def set_gguf_parameters(self):
+            super().set_gguf_parameters()
+            self._try_set_pooling_type()
 
     class Mistral4Model(DeepseekV2Model):
         model_arch = gguf.MODEL_ARCH.MISTRAL4
@@ -42,12 +61,20 @@ class Mistral3Model(TextModel):
     model_arch = gguf.MODEL_ARCH.MISTRAL3 # unused
     impl: TextModel
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, dir_model, *args, **kwargs):
+        hparams = ModelBase.load_hparams(dir_model, is_mistral_format=False)
+        hf_arch = get_model_architecture(hparams, self.model_type)
+        if hf_arch in ("Ministral3Model", "Mistral3Model"):
+            text_config = hparams.get("text_config", hparams)
+            if text_config.get("is_causal") is not False:
+                raise NotImplementedError(f"Expected a Nemotron Embed model for {hf_arch}, but is_causal is not False")
+        super().__init__(dir_model, *args, **kwargs)
         if self.hparams.get("model_type") == "mistral4":
-            self.impl = Mistral3Model.Mistral4Model(*args, **kwargs)
+            self.impl = Mistral3Model.Mistral4Model(dir_model, *args, **kwargs)
+        elif self.hf_arch in ("Ministral3Model", "Mistral3Model"):
+            self.impl = Mistral3Model.Mistral3EmbedNemotronModel(dir_model, *args, **kwargs)
         else:
-            self.impl = Mistral3Model.Ministral3Model(*args, **kwargs)
+            self.impl = Mistral3Model.Ministral3Model(dir_model, *args, **kwargs)
 
     def set_vocab(self):
         self.impl.set_vocab()
@@ -66,3 +93,13 @@ class Mistral3Model(TextModel):
 
     def write(self):
         self.impl.write()
+
+
+@ModelBase.register("VoxtralRealtimeForConditionalGeneration")
+@ModelBase.example("mistralai/Voxtral-Mini-4B-Realtime-2602")
+class VoxtralRealtimeModel(LlamaModel):
+    model_arch = gguf.MODEL_ARCH.MISTRAL3
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_realtime_delay_tokens(self.hparams["default_num_delay_tokens"])

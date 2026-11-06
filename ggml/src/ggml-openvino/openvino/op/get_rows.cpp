@@ -5,6 +5,7 @@
 #include <climits>
 #include <openvino/core/node.hpp>
 #include <openvino/core/node_output.hpp>
+#include <openvino/op/add.hpp>
 #include <openvino/op/broadcast.hpp>
 #include <openvino/op/concat.hpp>
 #include <openvino/op/constant.hpp>
@@ -24,9 +25,29 @@ OutputVector translate_get_rows(const NodeContext & context) {
     num_inputs_check(context, 2, 2);
 
     Output<Node> res;
-    auto data = process_view_input_new(context, 0);
+    Output<Node> data;
+    int64_t row_offset = 0;
+    if (context.get_view_input_size(0) > 0 && context.get_input(0).get_partial_shape().rank() == 2) {
+        // A row range view over a 2D weight Constant folds into the gather indices,
+        // which keeps the dequantization subgraph intact for the plugins.
+        const auto view_shape = context.get_view_input_ggml_shape(0, 0);
+        const auto view_stride = context.get_view_input_stride(0, 0);
+        const size_t view_offset = context.get_view_input_offset(0, 0);
+        const size_t row_bytes = view_stride[2];
+        data = context.get_input(0);
+        FRONT_END_OP_CONVERSION_CHECK(row_bytes > 0 && view_offset % row_bytes == 0 &&
+                                          data.get_partial_shape()[1].compatible(view_shape[3]),
+                                      "GET_ROWS: view over a weight must be a row range");
+        row_offset = static_cast<int64_t>(view_offset / row_bytes);
+    } else {
+        data = process_view_input_new(context, 0);
+    }
 
     auto op_case = context.get_op_case();
+    if (op_case == 3 || op_case == 4) {
+        return {data};
+    }
+
     ov::Output<ov::Node> indices;
     if ((op_case == 1 || op_case == 2) && context.has_input("s_copy_active_slot_len")) {
         // Recurrent state reorder (inp->s_copy): slice the active (op_case 1) or extra (op_case 2)
@@ -49,8 +70,23 @@ OutputVector translate_get_rows(const NodeContext & context) {
 
     // data[1,b,x,y] ind[1,1,b,x'] test-backend-ops case
     // data[x,y] ind[1,1,1,x'] normal case
-    indices =
-        std::make_shared<ov::op::v0::Squeeze>(indices, ov::op::v0::Constant::create(ov::element::i64, {2}, {0, 1}));
+    // Squeeze the leading dims down to [b,x']. Stateful models drop one rank, so a hardcoded
+    // {0,1} would also strip the batch dim whenever b == 1 (every decode step).
+    const auto indices_rank = indices.get_partial_shape().rank();
+    FRONT_END_OP_CONVERSION_CHECK(indices_rank.is_static(), "Expected static rank for GET_ROWS indices");
+    std::vector<int64_t> indices_squeeze_axes;
+    for (int64_t i = 0; i + 2 < indices_rank.get_length(); ++i) {
+        indices_squeeze_axes.push_back(i);
+    }
+    if (!indices_squeeze_axes.empty()) {
+        indices = std::make_shared<ov::op::v0::Squeeze>(
+            indices, ov::op::v0::Constant::create(ov::element::i64, {indices_squeeze_axes.size()},
+                                                  indices_squeeze_axes));
+    }
+    if (row_offset != 0) {
+        indices = std::make_shared<ov::op::v1::Add>(
+            indices, ov::op::v0::Constant::create(indices.get_element_type(), {}, {row_offset}));
+    }
     if (data.get_partial_shape().rank() == 4) {
         if (!(data.get_partial_shape()[1].is_dynamic()) && data.get_partial_shape()[1].get_length() == 1) {
             // Work-around for a bug in ov cpu plugin for test-backend-ops

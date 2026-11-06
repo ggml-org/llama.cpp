@@ -56,23 +56,23 @@
 {#if useRichInput}
 	<ChatFormInputRich
 		bind:this={richRef}
+		bind:value
 		class={className}
 		{disabled}
 		{onInput}
 		{onKeydown}
 		{onPaste}
 		{placeholder}
-		bind:value
 	/>
 {:else}
 	<ChatFormInputBasic
 		bind:this={basicRef}
+		bind:value
 		class={className}
 		{disabled}
 		{onInput}
 		{onKeydown}
 		{onPaste}
 		{placeholder}
-		bind:value
 	/>
 {/if}

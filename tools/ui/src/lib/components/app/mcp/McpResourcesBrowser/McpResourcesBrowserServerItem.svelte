@@ -86,7 +86,7 @@
 
 	{#if isFolder}
 		{@const folderCount = countTreeResources(node)}
-		<Collapsible.Root open={isFolderExpanded} onOpenChange={() => onToggleFolder(folderId)}>
+		<Collapsible.Root onOpenChange={() => onToggleFolder(folderId)} open={isFolderExpanded}>
 			<Collapsible.Trigger
 				class="flex w-full items-center gap-2 rounded px-2 py-1 text-sm hover:bg-muted/50"
 			>
@@ -121,9 +121,9 @@
 			{#if onToggle}
 				<Checkbox
 					checked={isSelected}
+					class={ICON_CLASS_DEFAULT}
 					onCheckedChange={(checked: boolean | 'indeterminate') =>
 						handleCheckboxChange(resource, checked === true)}
-					class={ICON_CLASS_DEFAULT}
 				/>
 			{/if}
 
@@ -146,7 +146,7 @@
 	{/if}
 {/snippet}
 
-<Collapsible.Root open={isExpanded} onOpenChange={onToggleServer}>
+<Collapsible.Root onOpenChange={onToggleServer} open={isExpanded}>
 	<Collapsible.Trigger
 		class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/50"
 	>

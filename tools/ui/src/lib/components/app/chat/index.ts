@@ -165,7 +165,7 @@ export { default as ChatForm } from './ChatForm/ChatForm.svelte';
 /**
  * Wrapper component for the "add to chat" button (Plus icon).
  * Exposes a `button` snippet that can be used inside DropdownMenu.Trigger (desktop)
- * or Sheet.Root (mobile) to maintain consistent styling while allowing
+ * or Drawer.Root (mobile) to maintain consistent styling while allowing
  * platform-specific trigger wrappers.
  */
 export { default as ChatFormActionsAdd } from './ChatForm/ChatFormActions/ChatFormActionAdd/ChatFormActionsAdd.svelte';
@@ -192,11 +192,11 @@ export { default as ChatFormActions } from './ChatForm/ChatFormActions/ChatFormA
 export { default as ChatFormActionSubmit } from './ChatForm/ChatFormActions/ChatFormActionSubmit.svelte';
 
 /**
- * Model selector component for the chat form action bar. Renders either a dropdown
- * (desktop) or bottom sheet (mobile) for selecting the conversation model in router mode.
+ * Model selector component for the chat form action bar and the assistant message
+ * model badge. Renders a dropdown on desktop and a bottom drawer on a phone.
  * Exposes an `open` method for programmatically opening the selector.
  */
-export { default as ChatFormActionModels } from './ChatForm/ChatFormActions/ChatFormActionModels.svelte';
+export { default as ChatFormActionReasoning } from './ChatForm/ChatFormActions/ChatFormActionReasoning.svelte';
 
 /**
  * Dropdown submenu for managing tool permissions in the chat form.
@@ -219,36 +219,6 @@ export { default as ChatFormActionModels } from './ChatForm/ChatFormActions/Chat
  * ```
  */
 export { default as ChatFormActionAddToolsSubmenu } from './ChatForm/ChatFormActions/ChatFormActionAdd/ChatFormActionAddToolsSubmenu.svelte';
-
-/**
- * Dropdown submenu for managing MCP servers in the chat form.
- *
- * Displays a searchable list of enabled MCP servers with toggle switches
- * to enable/disable each server for chat. Shows server favicon, health status,
- * and a "Manage MCP Servers" settings link.
- *
- * Features:
- * - Search/filter servers by name or URL
- * - Per-server toggle to enable/disable for chat
- * - Health check indicator (shows "Error" badge for failed servers)
- * - Server favicon display
- * - Settings link to manage MCP server configuration
- *
- * @example
- * ```svelte
- * <ChatFormActionAddMcpServersSubmenu onMcpSettingsClick={handleMcpSettingsClick} />
- * ```
- */
-export { default as ChatFormActionAddMcpServersSubmenu } from './ChatForm/ChatFormActions/ChatFormActionAdd/ChatFormActionAddMcpServersSubmenu.svelte';
-
-/**
- * Dropdown submenu for selecting reasoning effort level.
- *
- * Shows a "Reasoning" sub-menu item with a lightbulb icon indicating
- * thinking status, and a nested list of effort levels.
- * Only visible when the current model supports thinking.
- */
-export { default as ChatFormActionAddReasoningSubmenu } from './ChatForm/ChatFormActions/ChatFormActionAdd/ChatFormActionAddReasoningSubmenu.svelte';
 
 /**
  * Compact context-usage gauge with per-turn and cumulative breakdown in the tooltip.
@@ -442,10 +412,7 @@ export { default as ChatFormPickers } from './ChatForm/ChatFormPickers/ChatFormP
  *
  * @example
  * ```svelte
- * <ChatMessages
- *   messages={activeMessages()}
- *   onUserAction={resetAutoScroll}
- * />
+ * <ChatMessages messages={activeMessages()} onMessagesReady={handleReady} />
  * ```
  */
 export { default as ChatMessages } from './ChatMessages/ChatMessages.svelte';
@@ -549,6 +516,13 @@ export { default as ChatMessageActionIcons } from './ChatMessages/ChatMessageAct
 export { default as ChatMessageActionIconsBranchingControls } from './ChatMessages/ChatMessageActions/ChatMessageActionIcons/ChatMessageActionIconsBranchingControls.svelte';
 
 /**
+ * Right-click menu for user and assistant messages with the same actions as
+ * their action icons. Selected text, links, media, code and fields keep the
+ * browser's own menu.
+ */
+export { default as ChatMessageContextMenu } from './ChatMessages/ChatMessageActions/ChatMessageContextMenu.svelte';
+
+/**
  * Statistics display for assistant messages. Shows token counts (prompt/completion),
  * generation timing, tokens per second, and model name (when enabled in settings).
  * Data sourced from message.timings stored during generation.
@@ -578,6 +552,13 @@ export { default as ChatMessageCwdChange } from './ChatMessages/ChatMessage/Chat
  * surfaces as a user bubble.
  */
 export { default as ChatMessageSynthetic } from './ChatMessages/ChatMessage/ChatMessageSynthetic.svelte';
+
+/**
+ * Collapsible summary card for compaction nodes. Shows a shimmering pending
+ * header while the summary streams in, then the stored summary as markdown;
+ * later requests slice the branch at this node.
+ */
+export { default as ChatMessageCompaction } from './ChatMessages/ChatMessage/ChatMessageCompaction.svelte';
 
 /**
  * Formatted content display for MCP prompt messages. Renders the full prompt
@@ -646,7 +627,7 @@ export { default as ChatMessageSystem } from './ChatMessages/ChatMessage/ChatMes
  *
  * **Architecture:**
  * - Composes ChatMessages, ChatScreenForm, and dialogs
- * - Manages auto-scroll via `createAutoScrollController()` hook
+ * - Follows new content via `createStickToBottom()` while the reader is at the bottom
  * - Handles file upload pipeline (validation → processing → state update)
  * - Integrates with serverStore for loading/error/warning states
  * - Tracks active model for modality validation (vision, audio)
@@ -685,6 +666,18 @@ export { default as ChatMessageSystem } from './ChatMessages/ChatMessage/ChatMes
  * ```
  */
 export { default as ChatScreen } from './ChatScreen/ChatScreen.svelte';
+
+/**
+ * **ChatTabs** - Browser-style tab bar for open conversations
+ *
+ * Horizontal strip of tabs rendered above ChatScreen in the chat layout,
+ * one per conversation tracked by tabsStore. The active tab follows the
+ * route's conversation id; clicking a tab navigates to it, middle-click or
+ * the close button closes it (switching to the left neighbor when closing
+ * the active tab), and a trailing "+" button starts a new chat. Shows a
+ * spinner on tabs with a running generation. Desktop-only.
+ */
+export { default as ChatTabs } from './ChatTabs/ChatTabs.svelte';
 
 /**
  * Visual overlay displayed when user drags files over the chat screen.

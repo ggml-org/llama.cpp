@@ -636,6 +636,7 @@ bool ggml_et_op_glu(ggml_backend_et_device_context * dev_ctx, const ggml_tensor 
         case GGML_GLU_OP_GEGLU:
         case GGML_GLU_OP_SWIGLU:
         case GGML_GLU_OP_SWIGLU_OAI:
+        case GGML_GLU_OP_SWIGLU_CLAMP:
         case GGML_GLU_OP_GEGLU_ERF:
         case GGML_GLU_OP_GEGLU_QUICK:
             break;
@@ -661,6 +662,8 @@ bool ggml_et_op_glu(ggml_backend_et_device_context * dev_ctx, const ggml_tensor 
     params.limit       = 0.0f;
     if (glu_op_type == GGML_GLU_OP_SWIGLU_OAI) {
         params.alpha = ggml_get_op_params_f32(node, 2);
+    }
+    if (glu_op_type == GGML_GLU_OP_SWIGLU_OAI || glu_op_type == GGML_GLU_OP_SWIGLU_CLAMP) {
         params.limit = ggml_get_op_params_f32(node, 3);
     }
     // Phase 1: Initialize CPU comparison context and copy source buffers (before ET kernel)

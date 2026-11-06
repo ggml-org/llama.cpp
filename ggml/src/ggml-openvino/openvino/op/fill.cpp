@@ -20,7 +20,7 @@ OutputVector translate_fill(const NodeContext & context) {
 
     auto shape = context.get_input_shape(0).to_shape();
 
-    auto val = ov::op::v0::Constant::create(ov::element::f32, {}, {c});
+    auto val = ov::op::v0::Constant::create(context.get_output_type(), {}, {c});
     auto target_shape = ov::op::v0::Constant::create(ov::element::i64, {shape.size()},
         std::vector<int64_t>(shape.begin(), shape.end()));
     auto res = std::make_shared<ov::op::v3::Broadcast>(val, target_shape);

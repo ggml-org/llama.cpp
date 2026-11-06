@@ -1,8 +1,8 @@
 """
 On-device bench and completion test runner for llama.cpp (CPU, GPU, NPU backends).
 
-On Android: calls upstream run-*.sh scripts from llama.cpp/scripts/snapdragon/adb/
-on the QDC runner host (scripts wrap commands in ``adb shell`` internally).
+On Android: calls scripts/snapdragon/run.py on the QDC runner host
+(script wraps commands in adb shell internally).
 
 On Linux: runs llama-bench directly via run_linux.sh (BASH framework).
 
@@ -19,11 +19,10 @@ import pytest
 from utils import (
     BIN_PATH,
     MODEL_DEVICE_PATH,
-    MODEL_NAME,
     PROMPT_DIR,
     push_bundle_if_needed,
     run_adb_command,
-    run_script,
+    run_snapdragon,
     write_qdc_log,
 )
 
@@ -52,12 +51,18 @@ def install(driver):
     ],
 )
 def test_llama_completion(device):
-    result = run_script(
-        "run-completion.sh",
-        extra_env={"D": device, "M": MODEL_NAME},
-        extra_args=["--batch-size", "128", "-n", "128", "--seed", "42",
-                    "-f", f"{PROMPT_DIR}/bench_prompt.txt"],
-    )
+    args = [
+        "llama-completion",
+        "-m", MODEL_DEVICE_PATH,
+        "-f", f"{PROMPT_DIR}/bench_prompt.txt",
+        "-no-cnv",
+        "--ctx-size", "8192",
+        "-n", "128",
+        "--seed", "42",
+    ]
+    if device == "HTP0":
+        args += ["--ubatch-size", "1024"]
+    result = run_snapdragon(args, device=device)
     write_qdc_log(f"llama_completion_{device}.log", result.stdout or "")
     assert result.returncode == 0, (
         f"llama-completion {device} failed (exit {result.returncode})"
@@ -76,11 +81,16 @@ _DEVICE_LOG_NAME = {"none": "cpu", "GPUOpenCL": "gpu", "HTP0": "htp"}
     ],
 )
 def test_llama_bench(device):
-    result = run_script(
-        "run-bench.sh",
-        extra_env={"D": device, "M": MODEL_NAME},
-        extra_args=["--batch-size", "128", "-p", "128", "-n", "32"],
-    )
+    args = [
+        "llama-bench",
+        "-m", MODEL_DEVICE_PATH,
+        "-ngl", "99",
+        "-p", "128",
+        "-n", "32",
+    ]
+    if device == "HTP0":
+        args += ["--ubatch-size", "1024"]
+    result = run_snapdragon(args, device=device)
     write_qdc_log(f"llama_bench_{_DEVICE_LOG_NAME[device]}.log", result.stdout or "")
     assert result.returncode == 0, (
         f"llama-bench {device} failed (exit {result.returncode})"

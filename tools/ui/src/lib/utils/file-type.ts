@@ -38,6 +38,7 @@ export function getFileTypeCategory(mimeType: string): FileTypeCategory | null {
 		case MimeTypeAudio.MP3_MPEG:
 		case MimeTypeAudio.MP3:
 		case MimeTypeAudio.MP4:
+		case MimeTypeAudio.OGG:
 		case MimeTypeAudio.WAV:
 		case MimeTypeAudio.WAVE:
 		case MimeTypeAudio.X_WAV:
@@ -51,6 +52,7 @@ export function getFileTypeCategory(mimeType: string): FileTypeCategory | null {
 		// Video
 		case MimeTypeVideo.MP4:
 		case MimeTypeVideo.OGG:
+		case MimeTypeVideo.WEBM:
 			return FileTypeCategory.VIDEO;
 
 		// PDF

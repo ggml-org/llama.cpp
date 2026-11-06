@@ -1,8 +1,6 @@
 <script lang="ts">
-	import {
-		ChatAttachmentsListItemMcpResource,
-		HorizontalScrollCarousel
-	} from '$lib/components/app';
+	import { ChatAttachmentsListItemMcpResource, ScrollCarousel } from '$lib/components/app';
+	import { ScrollCarouselVariant } from '$lib/enums';
 	import { mcpStore } from '$lib/stores';
 
 	interface Props {
@@ -26,15 +24,15 @@
 
 {#if hasAttachments}
 	<div class={className}>
-		<HorizontalScrollCarousel gapSize="2">
+		<ScrollCarousel gapSize="2" variant={ScrollCarouselVariant.CENTER}>
 			{#each attachments as attachment, i (attachment.id)}
 				<ChatAttachmentsListItemMcpResource
-					class={i === 0 ? 'ml-3' : ''}
 					{attachment}
+					class={i === 0 ? 'ml-3' : ''}
 					onRemove={handleRemove}
 					onclick={() => handleResourceClick(attachment.resource.uri)}
 				/>
 			{/each}
-		</HorizontalScrollCarousel>
+		</ScrollCarousel>
 	</div>
 {/if}

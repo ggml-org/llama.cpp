@@ -11,6 +11,7 @@
 import {
 	CONFIG_LOCALSTORAGE_KEY,
 	DB_APP_NAME_DEPRECATED,
+	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
 	IDXDB_STORES,
 	IDXDB_TABLES,
 	LEGACY_AGENTIC_REGEX,
@@ -21,6 +22,7 @@ import {
 	STORAGE_APP_NAME_DEPRECATED
 } from '$lib/constants';
 import { BooleanString, MessageRole } from '$lib/enums';
+import type { McpServerOverride } from '$lib/types/database';
 import Dexie from 'dexie';
 
 // Types
@@ -652,6 +654,39 @@ const renderKeysMigration: Migration = {
 			console.log('[Migration] Render keys: unfolded the raw text toggle');
 	}
 };
+const LEGACY_MODEL_ORG_NAME_KEY = 'showModelOrgNameInTrigger';
+const MODEL_ORG_NAME_KEY_MIGRATION_ID = 'model-org-name-key-v1';
+/**
+ * Renames the trigger-only org name key onto the selector-wide one. The persisted
+ * config always carries the legacy key, so a value it holds carries over; a config
+ * that already set the new key keeps its own value.
+ */
+const modelOrgNameKeyMigration: Migration = {
+	description: 'Rename the trigger-only org name key onto the selector-wide one',
+	id: MODEL_ORG_NAME_KEY_MIGRATION_ID,
+
+	async run(): Promise<void> {
+		const configRaw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
+
+		if (configRaw === null) return;
+
+		const config = JSON.parse(configRaw);
+
+		if (!(LEGACY_MODEL_ORG_NAME_KEY in config)) return;
+
+		if (!(SETTINGS_KEYS.SHOW_MODEL_ORG_NAME in config)) {
+			config[SETTINGS_KEYS.SHOW_MODEL_ORG_NAME] = config[LEGACY_MODEL_ORG_NAME_KEY] === true;
+		}
+
+		// Dropped rather than preserved: the new key covers the trigger too, so leaving the
+		// old one behind would let a stale value fight the restored one.
+		delete config[LEGACY_MODEL_ORG_NAME_KEY];
+		localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify(config));
+
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+			console.log('[Migration] Model org name: renamed the trigger key');
+	}
+};
 const MCP_DEFAULT_OVERRIDES_LEGACY_KEY = `${STORAGE_APP_NAME}.mcpDefaultServerOverrides`;
 const MCP_DEFAULT_OVERRIDES_MERGE_MIGRATION_ID = 'mcp-default-overrides-merge-v1';
 /**
@@ -737,6 +772,61 @@ const mcpDefaultOverridesMergeMigration: Migration = {
 			);
 	}
 };
+const MCP_SERVER_OVERRIDES_TO_TOOL_POLICY_MIGRATION_ID = 'mcp-server-overrides-to-tool-policy-v1';
+const mcpServerOverridesToToolPolicyMigration: Migration = {
+	description:
+		'Seed per-conversation disabled tool keys from the global defaults and legacy per-conversation MCP server overrides (legacy field preserved)',
+	id: MCP_SERVER_OVERRIDES_TO_TOOL_POLICY_MIGRATION_ID,
+
+	async run(): Promise<void> {
+		// The global disabled set used to apply to every conversation; it is now
+		// the defaults seeded into newly created conversations, so existing rows
+		// are seeded with it to keep their behavior unchanged.
+		let defaults: string[] = [];
+
+		try {
+			const raw = localStorage.getItem(DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY);
+
+			if (raw) {
+				const parsed: unknown = JSON.parse(raw);
+
+				if (Array.isArray(parsed)) {
+					defaults = parsed.filter((k): k is string => typeof k === 'string');
+				}
+			}
+		} catch {
+			// fall through with empty defaults so legacy overrides still migrate
+		}
+
+		const db = await getDatabaseService();
+		const conversations = await db.getAllConversations();
+
+		let migratedCount = 0;
+
+		for (const conv of conversations) {
+			// re-run safety: a row that already has a policy is left alone
+			if (conv.disabledTools !== undefined) continue;
+
+			// A legacy per-conversation server disable becomes a server-scoped tool
+			// key (same format as toolsStore.getMcpServerToolsKey). Per-conversation
+			// enables are dropped: the global server flag governs now.
+			const serverGroupKeys = (conv.mcpServerOverrides ?? [])
+				.filter((o: McpServerOverride) => !o.enabled)
+				.map((o: McpServerOverride) => `mcp:${o.serverId}`);
+			const disabledTools = [...new Set([...defaults, ...serverGroupKeys])];
+
+			if (disabledTools.length === 0) continue;
+
+			await db.updateConversation(conv.id, { disabledTools });
+			migratedCount++;
+		}
+
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+			console.log(
+				`[Migration] MCP server overrides -> tool policy: updated ${migratedCount} conversations`
+			);
+	}
+};
 const migrations: Migration[] = [
 	localStorageMigration,
 	idxdbMigration,
@@ -746,7 +836,9 @@ const migrations: Migration[] = [
 	mcpDefaultEnabledMigration,
 	mcpDefaultOverridesMergeMigration,
 	configTypesMigration,
-	renderKeysMigration
+	renderKeysMigration,
+	modelOrgNameKeyMigration,
+	mcpServerOverridesToToolPolicyMigration
 ];
 
 export const MigrationService = {

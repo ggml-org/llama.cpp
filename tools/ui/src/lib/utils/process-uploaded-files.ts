@@ -1,9 +1,11 @@
+import { isServerDecodableAudio } from './audio-format';
+import { convertToWav, createAudioFile } from './audio-recording';
 import { heicFileToJpegDataURL, isHeicMimeType } from './heic-to-jpeg';
 import { convertPDFToText } from './pdf-processing';
 import { isSvgMimeType, svgBase64UrlToPngDataURL } from './svg-to-png';
 import { isWebpMimeType, webpBase64UrlToPngDataURL } from './webp-to-png';
 import { SETTINGS_KEYS } from '$lib/constants';
-import { FileTypeCategory } from '$lib/enums';
+import { FileExtensionAudio, FileTypeCategory, MimeTypeAudio } from '$lib/enums';
 import { modelsStore } from '$lib/stores/models/index.svelte';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
 import { getFileTypeCategory } from '$lib/utils';
@@ -127,10 +129,35 @@ export async function processFilesToChatUploaded(
 					});
 				}
 			} else if (getFileTypeCategory(file.type) === FileTypeCategory.AUDIO) {
-				// Generate preview URL for audio files
-				const preview = await readFileAsDataURL(file);
+				let audioFile = file;
 
-				results.push({ ...base, preview });
+				// Server only decodes WAV and MP3, so convert other audio (OGG, WEBM, MP4) to WAV in the browser
+				if (!isServerDecodableAudio(file.type)) {
+					const wavBlob = await convertToWav(file);
+
+					if (wavBlob.type !== MimeTypeAudio.WAV) {
+						toast.error(`Failed to decode audio file ${file.name}`);
+
+						continue;
+					}
+
+					audioFile = createAudioFile(
+						wavBlob,
+						file.name.replace(/\.[^.]*$/, '') + FileExtensionAudio.WAV
+					);
+				}
+
+				// Generate preview URL for audio files
+				const preview = await readFileAsDataURL(audioFile);
+
+				results.push({
+					...base,
+					file: audioFile,
+					name: audioFile.name,
+					preview,
+					size: audioFile.size,
+					type: audioFile.type
+				});
 			} else if (getFileTypeCategory(file.type) === FileTypeCategory.VIDEO) {
 				// Generate preview URL for video files
 				const preview = await readFileAsDataURL(file);

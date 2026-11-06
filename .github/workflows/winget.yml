@@ -5,10 +5,14 @@ on:
   schedule:
     - cron: '28 5 * * *' # Update every day at 5:28 UTC
 
+cache-mode: none
+permissions:
+  contents: read
+
 jobs:
   update:
     name: Update Winget Package
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # previously ubuntu-latest
     if: github.repository_owner == 'ggml-org'
 
     steps:
@@ -31,16 +35,18 @@ jobs:
               repo: context.repo.repo,
             });
             const { tag_name: version, assets: assets } = releases.find(({assets}) => assets.find(asset => asset.name.includes('win-vulkan')));
-            const { browser_download_url: asset_url } = assets.find(asset => asset.name.includes('win-vulkan'));
+            const { browser_download_url: asset_url_x64 } = assets.find(asset => asset.name.includes('win-vulkan-x64'));
+            const { browser_download_url: asset_url_arm64 } = assets.find(asset => asset.name.includes('win-vulkan-arm64'));
             console.log("Latest release:", version);
             core.setOutput('VERSION', version);
-            core.setOutput('ASSETURL', asset_url);
+            core.setOutput('ASSETURL_X64', asset_url_x64);
+            core.setOutput('ASSETURL_ARM64', asset_url_arm64);
 
       - name: Update manifest
         run: |
           echo "Updating manifest..."
           komac update --version ${{ steps.find_latest_release.outputs.VERSION }} \
-            --urls "${{ steps.find_latest_release.outputs.ASSETURL }}" \
+            --urls "${{ steps.find_latest_release.outputs.ASSETURL_X64 }}" "${{ steps.find_latest_release.outputs.ASSETURL_ARM64 }}" \
             --token ${{ secrets.WINGET_GITHUB_TOKEN }} \
             --submit \
             ggml.llamacpp

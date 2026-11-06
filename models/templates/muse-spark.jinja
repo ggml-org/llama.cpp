@@ -1,0 +1,228 @@
+{%- set tools = tools | default(none) -%}
+{%- set add_generation_prompt = add_generation_prompt | default(false) -%}
+{%- set reasoning_effort = reasoning_effort | default(none) -%}
+{%- set disable_reasoning = disable_reasoning | default(false) -%}
+{%- set cutoff_date = cutoff_date | default('2026-01-04') -%}
+{%- set current_date = current_date | default(strftime_now('%Y-%m-%d') if strftime_now is defined else none) -%}
+{%- set reasoning_effort_map = {'minimal': 1, 'low': 16, 'medium': 64, 'high': 256} -%}
+
+{#- Neutralise control sequences in caller-supplied text so it cannot be
+    tokenized as structure. "<|" is broken because every special token has the
+    form "<|...|>"; the bare media placeholders are broken because the
+    multimodal processor rewrites them positionally and a literal one in text
+    would desynchronise placeholders from the attached media. -#}
+{%- macro esc(value) -%}
+    {{- value | string
+        | replace('<|', '< |')
+        | replace('<image>', '< image>')
+        | replace('<video>', '< video>')
+        | replace('<audio>', '< audio>') -}}
+{%- endmacro -%}
+
+{%- macro esc_header(value) -%}
+    {{- esc(value) | replace('\r', ' ') | replace('\n', ' ') -}}
+{%- endmacro -%}
+
+{%- macro esc_attr(value) -%}
+    {{- esc_header(value)
+        | replace('&', '&amp;')
+        | replace('"', '&quot;')
+        | replace("'", '&#39;')
+        | replace('<', '&lt;')
+        | replace('>', '&gt;') -}}
+{%- endmacro -%}
+
+{%- macro render_content(content) -%}
+    {%- if content is string -%}
+        {{- esc(content | trim) -}}
+    {%- elif content is not none -%}
+        {%- for part in content -%}
+            {%- set part_type = part.get('type', '') -%}
+            {%- if part_type in ['image', 'input_image', 'image_url'] -%}
+                {{- '<|patch|>' -}}
+            {%- elif part_type in ['video', 'input_video', 'video_url'] -%}
+                {{- '<|video|>' -}}
+            {%- elif part_type in ['audio', 'input_audio', 'audio_url'] -%}
+                {{- '<|audio|>' -}}
+            {%- elif part_type in ['text', 'input_text', 'output_text'] -%}
+                {{- esc(part.get('text', '') | trim) -}}
+            {%- endif -%}
+        {%- endfor -%}
+    {%- endif -%}
+{%- endmacro -%}
+
+{%- macro render_atem(tc) -%}
+    {%- set args = tc.function.arguments -%}
+    {%- if args is not mapping -%}
+        {{- raise_exception('This chat template requires tool_call.function.arguments to be a dict (mapping). The jinja sandbox has no JSON parser, so deserialize the arguments string before calling apply_chat_template.') -}}
+    {%- endif -%}
+    {{- '<atem:function_calls>\n<atem:invoke name="' -}}{{- esc_attr(tc.function.name) -}}{{- '">\n' -}}
+    {%- for k, v in args.items() -%}
+        {{- '<atem:parameter name="' -}}{{- esc_attr(k) -}}{{- '">' -}}
+        {%- if v is boolean -%}
+            {%- if v -%}
+                true
+            {%- else -%}
+                false
+            {%- endif -%}
+        {%- elif v is none -%}
+            null
+        {%- elif v is mapping or (v is iterable and v is not string) -%}
+            {{- esc(v | tojson) -}}
+        {%- else -%}
+            {{- esc(v) -}}
+        {%- endif -%}
+        {{- '</atem:parameter>\n' -}}
+    {%- endfor -%}
+    {{- '</atem:invoke>\n</atem:function_calls>' -}}
+{%- endmacro -%}
+
+{%- macro render_tool_defs(tools) -%}
+    {{- 'In this environment you have access to a set of tools you can use to answer the user\'s question.\n\n' -}}
+    {{- 'You can invoke a function by writing a "<atem:function_calls>" block like the following as part of your reply to the user:\n' -}}
+    {{- '<atem:function_calls>\n<atem:invoke name="$FUNCTION_NAME">\n<atem:parameter name="$PARAMETER_NAME">$PARAMETER_VALUE</atem:parameter>\n...\n</atem:invoke>\n</atem:function_calls>\n\n' -}}
+    {{- 'String and scalar parameters should be specified as is, while lists and objects should use JSON format. Note that spaces for string values are not stripped. The output is not expected to be valid XML and is parsed with regular expressions.\n' -}}
+    {{- 'Here are the functions available in JSONSchema format:\n' -}}
+    {{- '// Tool metadata\n{"name": "", "description": ""}\n' -}}
+    {{- '// Function schemas' -}}
+    {%- for tool in tools -%}
+        {%- set fn = tool.function if tool.function is defined else tool -%}
+        {{- '\n{"name": ' -}}{{- fn.name | tojson -}}
+        {{- ', "description": ' -}}{{- (fn.description if fn.description is defined and fn.description else '') | tojson -}}
+        {{- ', "parameters": ' -}}{{- (fn.parameters if fn.parameters is defined and fn.parameters else {}) | tojson -}}{{- '}' -}}
+    {%- endfor -%}
+    {{- '\n\n' -}}
+    {{- 'Here are examples of how to call functions in the tool set. To make parallel tool calls, emit each call as its own message (one tool call per message) in consecutive messages, as shown below:\n' -}}
+    {{- '(If the tool namespace is not specified, invoke the function directly as `example_function_name_1` rather than `example_tool_name_1.example_function_name_1`)\n\n' -}}
+    {{- 'to=example_tool_name_1.example_function_name_1\n\n' -}}
+    {{- '<atem:function_calls>\n<atem:invoke name="example_tool_name_1.example_function_name_1">\n' -}}
+    {{- '<atem:parameter name="example_parameter_1">value_1</atem:parameter>\n' -}}
+    {{- '</atem:invoke>\n</atem:function_calls>\n\n' -}}
+    {{- 'to=example_tool_name_2.example_function_name_2\n\n' -}}
+    {{- '<atem:function_calls>\n<atem:invoke name="example_tool_name_2.example_function_name_2">\n' -}}
+    {{- '<atem:parameter name="example_parameter_2">This is the value for the second parameter\nthat can span\n"multiple" lines\n</atem:parameter>\n' -}}
+    {{- '<atem:parameter name="example_parameter_3">value_3</atem:parameter>\n' -}}
+    {{- '</atem:invoke>\n</atem:function_calls>' -}}
+{%- endmacro -%}
+
+{%- macro render_valid_recipients(tools) -%}
+    {%- set rns = namespace(recipients=[]) -%}
+    {{- 'Use the appropriate recipient for each message:\n\n' -}}
+    {%- if not disable_reasoning -%}
+        {%- set rns.recipients = rns.recipients + ['"self"'] -%}
+        {{- '- "self": private reasoning and tool planning.\n' -}}
+    {%- endif -%}
+    {%- set rns.recipients = rns.recipients + ['"commentary"'] -%}
+    {{- '- "commentary": user-visible intermediate updates while the assistant will continue working, including messages sent to the user before or between tool calls.\n' -}}
+    {%- if tools -%}
+        {%- set first_tool = tools | first -%}
+        {%- set first_fn = (first_tool.function if first_tool.function is defined else first_tool).name -%}
+        {%- set rns.recipients = rns.recipients + ['"[func_name] (e.g., ' ~ esc_header(first_fn) ~ ')"'] -%}
+        {{- '- "tool" or "[tool name]": the name of the tool to call.\n' -}}
+    {%- endif -%}
+    {%- set rns.recipients = rns.recipients + ['"user"'] -%}
+    {{- '- "user": messages that end the assistant turn, such as a completed response or clarification question that waits for the user\'s reply; do not use for pre-tool updates or partial responses.\n' -}}
+    {{- '\n# Valid recipients: ' ~ rns.recipients | join(', ') ~ '.' -}}
+{%- endmacro -%}
+
+{{- bos_token -}}
+{%- set ns = namespace(instructions=none, rest=messages) -%}
+{%- if messages and messages[0]['role'] in ['system', 'developer'] -%}
+    {%- set ns.instructions = render_content(messages[0]['content'])
+          | replace('Reasoning effort', 'Reasoning strength')
+          | replace('Reasoning Effort', 'Reasoning Strength')
+          | replace('reasoning effort', 'reasoning strength')
+          | replace('REASONING EFFORT', 'REASONING STRENGTH') -%}
+    {%- set ns.rest = messages[1:] -%}
+{%- endif -%}
+{%- set sys = namespace(parts=['You are a helpful AI assistant.', 'Knowledge cutoff: ' ~ cutoff_date ~ '.']) -%}
+{%- if current_date -%}
+    {%- set sys.parts = sys.parts + ['Current date: ' ~ current_date ~ '.'] -%}
+{%- endif -%}
+{%- if ns.instructions -%}
+    {%- set sys.parts = sys.parts + [ns.instructions] -%}
+{%- endif -%}
+{%- if tools -%}
+    {%- set sys.parts = sys.parts + [render_tool_defs(tools) | trim] -%}
+{%- endif -%}
+{%- if not disable_reasoning and reasoning_effort in reasoning_effort_map and 'reasoning strength:' not in ((ns.instructions if ns.instructions else '') | lower) -%}
+    {%- set sys.parts = sys.parts + ['Reasoning strength: ' ~ reasoning_effort_map[reasoning_effort] ~ '.'] -%}
+{%- endif -%}
+{%- set sys.parts = sys.parts + [render_valid_recipients(tools) | trim] -%}
+{{- '<|start|>system<|message|>' ~ sys.parts | join('\n\n') ~ '<|eot|>' -}}
+{%- for message in ns.rest -%}
+    {%- set role = message['role'] -%}
+    {%- set end_token = '<|eom|>' if (not loop.last and ns.rest[loop.index0 + 1]['role'] == role) else '<|eot|>' -%}
+    {%- if role in ['system', 'developer'] -%}
+        {{- '<|start|>' + role + '<|message|>' -}}
+        {{- render_content(message['content']) -}}
+        {{- '<|eot|>' -}}
+    {%- elif role == 'user' -%}
+        {{- '<|start|>user<|message|>' -}}
+        {%- if message.get('render_timestamp') and message.get('timestamp') -%}
+            {%- set ts = message['timestamp'] -%}
+            {%- if ts is string -%}
+                {{- '[' ~ esc_header(ts) ~ '] ' -}}
+            {%- elif ts.strftime is defined -%}
+                {{- '[' ~ (ts.strftime('%a %Y-%m-%d %H:%M %Z') | trim) ~ '] ' -}}
+            {%- endif -%}
+        {%- endif -%}
+        {{- render_content(message['content']) -}}
+        {{- '<|eot|>' -}}
+    {%- elif role == 'tool' -%}
+        {%- set tname = message.get('name') -%}
+        {%- if not tname -%}
+            {%- set tcid = message.get('tool_call_id') -%}
+            {%- set tns = namespace(name=tcid if tcid else '') -%}
+            {%- for m in messages -%}
+                {%- if m.get('tool_calls') -%}
+                    {%- for tc in m['tool_calls'] -%}
+                        {%- if tcid is not none and tc.id is defined and tc.id == tcid -%}
+                            {%- set tns.name = tc.function.name -%}
+                        {%- endif -%}
+                    {%- endfor -%}
+                {%- endif -%}
+            {%- endfor -%}
+            {%- set tname = tns.name -%}
+        {%- endif -%}
+        {%- if not tname -%}
+            {{- raise_exception('tool message has no name and no matching tool_call_id') -}}
+        {%- endif -%}
+        {{- '<|start|>tool ' -}}{{- esc_header(tname) -}}{{- '<|message|><tool_output name="' -}}{{- esc_attr(tname) -}}{{- '">\n' -}}
+        {{- render_content(message['content']) -}}
+        {{- '\n</tool_output><|eot|>' -}}
+    {%- elif role == 'assistant' -%}
+        {%- set reasoning = message.get('reasoning_content') or message.get('reasoning') -%}
+        {%- if reasoning -%}
+            {{- '<|start|>assistant to=self<|message|>' -}}{{- esc(reasoning) -}}{{- '<|eom|>' -}}
+        {%- endif -%}
+        {%- set body = render_content(message.get('content')) -%}
+        {%- if message.get('tool_calls') -%}
+            {%- if body -%}
+                {{- '<|start|>assistant to=commentary<|message|>' + body + '<|eom|>' -}}
+            {%- endif -%}
+            {%- for tc in message['tool_calls'] -%}
+                {{- '<|start|>assistant to=' -}}{{- esc_header(tc.function.name) -}}{{- '<|message|>' -}}
+                {{- render_atem(tc) -}}
+                {{- (end_token if loop.last else '<|eom|>') -}}
+            {%- endfor -%}
+        {%- elif body or not reasoning -%}
+            {%- set recipient = message.get('recipient') or 'user' -%}
+            {%- if recipient == 'user' -%}
+                {%- set end_turn = true -%}
+            {%- elif recipient in ['self', 'commentary'] -%}
+                {%- set end_turn = false -%}
+            {%- elif message.get('end_turn') is not none -%}
+                {%- set end_turn = message.get('end_turn') -%}
+            {%- else -%}
+                {%- set end_turn = false -%}
+            {%- endif -%}
+            {{- '<|start|>assistant to=' -}}{{- esc_header(recipient) -}}{{- '<|message|>' -}}
+            {{- body -}}
+            {{- ('<|eot|>' if end_turn else '<|eom|>') -}}
+        {%- endif -%}
+    {%- endif -%}
+{%- endfor -%}
+{%- if add_generation_prompt -%}
+    {{- '<|start|>assistant' -}}
+{%- endif -%}

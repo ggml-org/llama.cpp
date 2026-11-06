@@ -136,7 +136,7 @@ export { ConversationTransferService } from './conversation-transfer.service';
  *
  * **Server Mode Behavior:**
  * - **MODEL mode**: Only `list()` is relevant — single model always loaded
- * - **ROUTER mode**: Full lifecycle — `list()`, `listRouter()`, `load()`, `unload()`
+ * - **ROUTER mode**: Full lifecycle - `list()`, `load()`, `unload()`
  *
  * **Endpoints:**
  * - `GET /v1/models` — OpenAI-compatible model list (both modes)
@@ -146,6 +146,16 @@ export { ConversationTransferService } from './conversation-transfer.service';
  * @see modelsStore in stores/models/index.svelte.ts — primary consumer for reactive model state
  */
 export { ModelsService } from './models.service';
+
+/**
+ * **HuggingFaceService** - Hugging Face Hub browsing and searching
+ *
+ * Stateless HTTP client for the HF REST API (`/api/models`, `/tree`, raw
+ * README) and the llama.app model catalog. Provides GGUF file analysis
+ * (quant metadata, shard collapsing, size formatting) used by the models
+ * discover UI.
+ */
+export { HuggingFaceService } from './huggingface.service';
 
 /**
  * **PropsService** - Server properties and capabilities retrieval
@@ -294,7 +304,7 @@ export { SandboxService } from './sandbox.service';
  * **RouterService** — Dynamic route URL construction utility
  *
  * Stateless utility for building dynamic route URLs from ROUTES base paths.
- * Static routes (START, NEW_CHAT, MCP_SERVERS) live in ROUTES constants;
+ * Static routes (START, MCP_SERVERS) live in ROUTES constants;
  * dynamic routes (CHAT, SETTINGS) are constructed here by appending parameters.
  *
  * **Architecture & Relationships:**
@@ -307,7 +317,6 @@ export { SandboxService } from './sandbox.service';
  *
  * **Key Responsibilities:**
  * - Build chat URLs for specific conversations: `RouterService.chat(id)` → `#/chat/:id`
- * - Build settings URLs for sections: `RouterService.settings(section)` → `#/settings/:section`
  *
  * @see ROUTES in constants/routes.ts — static route base paths
  */
@@ -340,3 +349,13 @@ export { RouterService } from './router.service';
  * @see migration.service.ts — full implementation (non-destructive)
  */
 export { MigrationService } from './migration.service';
+
+/**
+ * **SettingsService** - localStorage persistence layer for settings
+ *
+ * Stateless read/write of the settings config and user-override keys. Business
+ * logic (default merging, mobile defaults, theme migration) stays in the store.
+ *
+ * @see settingsStore in stores/settings/index.svelte.ts - reactive state + business logic
+ */
+export { SettingsService } from './settings.service';

@@ -25,13 +25,15 @@ export interface SettingsEntry {
 	help: string;
 	defaultValue: SettingsConfigValue;
 	type: SettingsFieldType;
-	section?: string;
 	options?: Array<{ value: string; label: string; icon: Component }>;
 	/** Options rendered for RADIO fields. Each entry maps a `value` (the radio's selected value) to the underlying config `key` whose boolean state mirrors it. */
 	radioOptions?: Array<{ value: string; label: string; key: string; isExperimental?: boolean }>;
 	isExperimental?: boolean;
 	isPositiveInteger?: boolean;
+	/** When true, the field is rendered as a password input (e.g. API key). */
 	isPrivate?: boolean;
+	/** When false, the setting is stored/synced but has no standalone field; it is rendered by a sibling control or a dedicated page. */
+	standaloneField?: boolean;
 	placeholder?: string;
 	min?: number;
 	max?: number;
@@ -87,8 +89,10 @@ export interface SettingsChatServiceOptions {
 	excludeReasoningFromContext?: boolean;
 	// Enable model thinking/reasoning via chat_template_kwargs
 	enableThinking?: boolean;
-	// Reasoning effort level (low/medium/high/max) for thinking models
+	// Reasoning effort level the chat template honors, sent as reasoning_effort
 	reasoningEffort?: ReasoningEffort;
+	// Token budget for thinking, sent as thinking_budget_tokens
+	thinkingBudgetTokens?: number;
 	tools?: OpenAIToolDefinition[];
 	// Generation parameters
 	temperature?: number;
@@ -131,7 +135,8 @@ export interface SettingsChatServiceOptions {
 		response: string,
 		reasoningContent?: string,
 		timings?: ChatMessageTimings,
-		toolCalls?: string
+		toolCalls?: string,
+		finishReason?: string
 	) => void;
 	onError?: (error: Error) => void;
 	onConnectionState?: (state: StreamConnectionState) => void;

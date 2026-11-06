@@ -7,20 +7,110 @@
  */
 
 import { base } from '$app/paths';
-import { API_MODELS, MODEL_ID } from '$lib/constants';
+import { API_MODELS, MODEL_ID, type ModelSidecar } from '$lib/constants';
 import { ServerModelStatus } from '$lib/enums';
-import type { ParsedModelId } from '$lib/types/models';
+import type { ModelSidecarBadge, ParsedModelId } from '$lib/types/models';
 import {
+	apiDelete,
 	apiFetch,
 	apiPost,
 	extractSseDataPayload,
+	isAuxSidecar,
 	normalizeModelName,
+	repoOf,
+	sidecarFromFileToken,
 	splitSseRecords
 } from '$lib/utils';
 import { getAuthHeaders } from '$lib/utils/api-headers';
 
 export class ModelsService {
 	private static readonly SSE_RECONNECT_MS = 1000;
+
+	/**
+	 * Build the `<repo>:<tag>` id of a download option: `<quant>` for the model
+	 * weights, `<quant>-<sidecar>` for a sidecar of that quant. The UI keys its
+	 * options with it; the server only ever sees the model and its sidecar kinds.
+	 */
+	static buildDownloadTag(
+		repoId: string,
+		quant: string | null,
+		sidecar: ModelSidecar | null
+	): string {
+		if (!quant && !sidecar) return repoId;
+
+		if (!quant) return `${repoId}:${sidecar}`;
+
+		const tag = sidecar ? `${quant}-${sidecar}` : quant;
+
+		return `${repoId}:${tag}`;
+	}
+
+	/**
+	 * Cancel an in-flight download, or remove a downloaded/failed model from the
+	 * cache (ROUTER mode only): DELETE /models?model=<repo:tag>. With a sidecar,
+	 * only that sidecar of the cached model goes and the model stays.
+	 */
+	static async cancelDownload(
+		model: string,
+		sidecar: ModelSidecar | null = null
+	): Promise<ApiModelsDownloadResponse> {
+		return apiDelete<ApiModelsDownloadResponse>(
+			API_MODELS.DELETE,
+			sidecar ? { model, sidecar } : { model }
+		);
+	}
+
+	/**
+	 * Start a model download from HuggingFace (ROUTER mode only). The response
+	 * returns immediately; progress arrives over /models/sse. The server picks
+	 * the model file matching the tag and the files of the sidecar kinds, as -hf
+	 * does; posting a cached model again adds the sidecars it lacks.
+	 */
+	static async downloadModel(
+		model: string,
+		sidecars: ModelSidecar[]
+	): Promise<ApiModelsDownloadResponse> {
+		const payload: ApiModelsDownloadRequest = { model, sidecars };
+
+		return apiPost<ApiModelsDownloadResponse>(API_MODELS.DOWNLOAD, payload);
+	}
+
+	/**
+	 * Draft sidecar badges of the cached models, keyed by repo. Each listing entry
+	 * reports the sidecar kinds it has on disk, never the file: the draft's own
+	 * quant stays unknown here, and the `--model-draft` args report it once the
+	 * model is loaded.
+	 */
+	static draftSidecarsByRepo(
+		entries: { id: string; sidecars?: ModelSidecar[]; status?: { value?: unknown } }[]
+	): Map<string, ModelSidecarBadge[]> {
+		const byRepo = new Map<string, ModelSidecarBadge[]>();
+
+		for (const { id, sidecars, status } of entries) {
+			// an unfinished download is not on disk yet; the download row tracks it
+			if (
+				status?.value === ServerModelStatus.DOWNLOADING ||
+				status?.value === ServerModelStatus.INCOMPLETE
+			)
+				continue;
+
+			const repo = repoOf(id);
+
+			for (const kind of sidecars ?? []) {
+				if (isAuxSidecar(kind)) continue;
+
+				const kinds = byRepo.get(repo) ?? [];
+
+				if (!kinds.some((b) => b.kind === kind && b.repo === repo)) {
+					kinds.push({ kind, quant: null, repo });
+				}
+
+				byRepo.set(repo, kinds);
+			}
+		}
+
+		return byRepo;
+	}
 
 	/**
 	 * Check if a model is loaded based on its metadata.
@@ -40,12 +130,6 @@ export class ModelsService {
 	 *
 	 */
 
-	/**
-	 * Check if a model is currently loading.
-	 *
-	 * @param model - Model data entry from the API response
-	 * @returns True if the model status is LOADING
-	 */
 	static isModelLoading(model: ApiModelDataEntry): boolean {
 		return model.status.value === ServerModelStatus.LOADING;
 	}
@@ -56,19 +140,8 @@ export class ModelsService {
 	 *
 	 * @returns List of available models with basic metadata
 	 */
-	static async list(): Promise<ApiModelListResponse> {
-		return apiFetch<ApiModelListResponse>(API_MODELS.LIST);
-	}
-
-	/**
-	 * Fetch list of all models with detailed metadata (ROUTER mode).
-	 * Returns models with load status, paths, and other metadata
-	 * beyond what the OpenAI-compatible endpoint provides.
-	 *
-	 * @returns List of models with detailed status and configuration info
-	 */
-	static async listRouter(): Promise<ApiRouterModelsListResponse> {
-		return apiFetch<ApiRouterModelsListResponse>(API_MODELS.LIST);
+	static async list(): Promise<ApiModelsListResponse> {
+		return apiFetch<ApiModelsListResponse>(API_MODELS.LIST);
 	}
 
 	/**
@@ -80,14 +153,14 @@ export class ModelsService {
 	 * @param extraArgs - Optional additional arguments to pass to the model instance
 	 * @returns Load response from the server
 	 */
-	static async load(modelId: string, extraArgs?: string[]): Promise<ApiRouterModelsLoadResponse> {
+	static async load(modelId: string, extraArgs?: string[]): Promise<ApiModelsLoadResponse> {
 		const payload: { model: string; extra_args?: string[] } = { model: modelId };
 
 		if (extraArgs && extraArgs.length > 0) {
 			payload.extra_args = extraArgs;
 		}
 
-		return apiPost<ApiRouterModelsLoadResponse>(API_MODELS.LOAD, payload);
+		return apiPost<ApiModelsLoadResponse>(API_MODELS.LOAD, payload);
 	}
 
 	/**
@@ -108,19 +181,68 @@ export class ModelsService {
 			params: null,
 			quantization: null,
 			raw: modelId,
+			sidecar: null,
 			tags: []
 		};
+
 		// strip directory path and weight extension so a bare `-m /path/file.gguf`
 		// parses like a clean repo id; the HF `org/model` form is preserved
-		const source = normalizeModelName(modelId).replace(MODEL_ID.WEIGHT_EXTENSION_RE, '');
+		let source = normalizeModelName(modelId).replace(MODEL_ID.WEIGHT_EXTENSION_REGEX, '');
+
+		// 0. Detect sidecar prefix (mtp-, dflash-, mmproj-) before any other
+		//    splitting so the inner id parses cleanly.
+		const prefixMatch = source.match(MODEL_ID.SIDECAR_PREFIX_REGEX);
+
+		if (prefixMatch) {
+			result.sidecar = sidecarFromFileToken(prefixMatch[1].toLowerCase());
+			source = prefixMatch[2];
+
+			// a sidecar filename's remainder may be just the quant token,
+			// e.g. `mtp-Q4_0.gguf` or `mmproj-F16.gguf`
+			if (MODEL_ID.QUANTIZATION_SEGMENT_REGEX.test(source)) {
+				result.quantization = source.toUpperCase();
+				source = '';
+			}
+		} else {
+			// 0b. Detect `-<type>` suffix (`-mtp`, `-dflash`, `-dspark`, `-eagle3`).
+			//     Only strip it when the segment preceding it looks like a real quant
+			//     token, so a model literally named `MyModel-mtp` is not mistaken for a
+			//     draft one.
+			const suffixMatch = source.match(MODEL_ID.SIDECAR_SUFFIX_REGEX);
+
+			if (suffixMatch) {
+				const candidate = suffixMatch[1];
+				const headSeg = candidate.split(MODEL_ID.SEGMENT_SEPARATOR).pop();
+
+				if (headSeg && MODEL_ID.QUANTIZATION_SEGMENT_REGEX.test(headSeg)) {
+					result.sidecar = sidecarFromFileToken(suffixMatch[2].toLowerCase());
+					source = candidate;
+				}
+			}
+		}
+
 		// 1. Extract colon-separated quantization (e.g. `model:Q4_K_M`)
 		const colonIdx = source.indexOf(MODEL_ID.QUANTIZATION_SEPARATOR);
 
 		let modelPath: string;
 
 		if (colonIdx !== MODEL_ID.NOT_FOUND) {
-			result.quantization = source.slice(colonIdx + 1) || null;
+			const tag = source.slice(colonIdx + 1);
+
 			modelPath = source.slice(0, colonIdx);
+
+			// a download tag carries the sidecar after the quant, e.g.
+			// `repo:Q8_0-dflash`, or a bare sidecar, e.g. `repo:mmproj`
+			const tagSuffix = tag.match(MODEL_ID.SIDECAR_SUFFIX_REGEX);
+
+			if (tagSuffix && MODEL_ID.QUANTIZATION_SEGMENT_REGEX.test(tagSuffix[1])) {
+				result.sidecar = sidecarFromFileToken(tagSuffix[2].toLowerCase());
+				result.quantization = tagSuffix[1];
+			} else if (sidecarFromFileToken(tag.toLowerCase())) {
+				result.sidecar = sidecarFromFileToken(tag.toLowerCase());
+			} else {
+				result.quantization = tag || null;
+			}
 		} else {
 			modelPath = source;
 		}
@@ -143,7 +265,7 @@ export class ModelsService {
 		if (dotIdx !== MODEL_ID.NOT_FOUND && !result.quantization) {
 			const afterDot = modelStr.slice(dotIdx + 1);
 
-			if (MODEL_ID.QUANTIZATION_SEGMENT_RE.test(afterDot)) {
+			if (MODEL_ID.QUANTIZATION_SEGMENT_REGEX.test(afterDot)) {
 				result.quantization = afterDot;
 				modelStr = modelStr.slice(0, dotIdx);
 			}
@@ -158,8 +280,8 @@ export class ModelsService {
 			const last = segments[segments.length - 1];
 			const secondLast = segments.length > 2 ? segments[segments.length - 2] : null;
 
-			if (MODEL_ID.QUANTIZATION_SEGMENT_RE.test(last)) {
-				if (secondLast && MODEL_ID.CUSTOM_QUANTIZATION_PREFIX_RE.test(secondLast)) {
+			if (MODEL_ID.QUANTIZATION_SEGMENT_REGEX.test(last)) {
+				if (secondLast && MODEL_ID.CUSTOM_QUANTIZATION_PREFIX_REGEX.test(secondLast)) {
 					result.quantization = `${secondLast}-${last}`;
 					segments.splice(segments.length - 2, 2);
 				} else {
@@ -176,10 +298,10 @@ export class ModelsService {
 		for (let i = 0; i < segments.length; i++) {
 			const seg = segments[i];
 
-			if (paramsIdx === MODEL_ID.NOT_FOUND && MODEL_ID.PARAMS_RE.test(seg)) {
+			if (paramsIdx === MODEL_ID.NOT_FOUND && MODEL_ID.PARAMS_REGEX.test(seg)) {
 				paramsIdx = i;
 				result.params = seg.toUpperCase();
-			} else if (paramsIdx !== MODEL_ID.NOT_FOUND && MODEL_ID.ACTIVATED_PARAMS_RE.test(seg)) {
+			} else if (paramsIdx !== MODEL_ID.NOT_FOUND && MODEL_ID.ACTIVATED_PARAMS_REGEX.test(seg)) {
 				activatedParamsIdx = i;
 				result.activatedParams = seg.toUpperCase();
 			}
@@ -187,8 +309,17 @@ export class ModelsService {
 
 		// 6. Model name = segments before params; tags = remaining segments after params
 		const pivotIdx = paramsIdx !== MODEL_ID.NOT_FOUND ? paramsIdx : segments.length;
+		const modelSegments = segments.slice(0, pivotIdx);
 
-		result.modelName = segments.slice(0, pivotIdx).join(MODEL_ID.SEGMENT_SEPARATOR) || null;
+		// strip trailing container-format segments (e.g. GGUF) from the model name
+		while (
+			modelSegments.length > 0 &&
+			MODEL_ID.IGNORED_SEGMENTS.has(modelSegments[modelSegments.length - 1].toUpperCase())
+		) {
+			modelSegments.pop();
+		}
+
+		result.modelName = modelSegments.join(MODEL_ID.SEGMENT_SEPARATOR) || null;
 
 		if (paramsIdx !== MODEL_ID.NOT_FOUND) {
 			result.tags = segments.slice(paramsIdx + 1).filter((_, relIdx) => {
@@ -211,8 +342,8 @@ export class ModelsService {
 	 * @param modelId - Model identifier to unload
 	 * @returns Unload response from the server
 	 */
-	static async unload(modelId: string): Promise<ApiRouterModelsUnloadResponse> {
-		return apiPost<ApiRouterModelsUnloadResponse>(API_MODELS.UNLOAD, { model: modelId });
+	static async unload(modelId: string): Promise<ApiModelsUnloadResponse> {
+		return apiPost<ApiModelsUnloadResponse>(API_MODELS.UNLOAD, { model: modelId });
 	}
 
 	/**

@@ -12,6 +12,25 @@ export enum TooltipSide {
 }
 
 /**
+ * ScrollCarousel arrow placement.
+ */
+export enum ScrollCarouselVariant {
+	CENTER = 'center',
+	TOP = 'top'
+}
+
+/**
+ * Sidebar icon strip actions handled directly by the sidebar.
+ */
+export enum SidebarAction {
+	MANAGE_MODELS = 'manage-models',
+	MCP = 'mcp',
+	NEW_CHAT = 'new-chat',
+	SEARCH = 'search',
+	SETTINGS = 'settings'
+}
+
+/**
  * MCP prompt display variant
  */
 export enum McpPromptVariant {
@@ -43,4 +62,12 @@ export enum ColorLevel {
 	NEUTRAL = 'neutral',
 	OK = 'ok',
 	WARNING = 'warning'
+}
+
+/**
+ * Which menu an item's actions render in.
+ */
+export enum MenuKind {
+	CONTEXT = 'context',
+	DROPDOWN = 'dropdown'
 }

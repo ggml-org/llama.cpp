@@ -1,20 +1,18 @@
 <script lang="ts">
-	import { Info, Loader2 } from '@lucide/svelte';
-	import { AgenticSectionType } from '$lib/enums';
+	import ToolCallBlock from './ToolCallBlock.svelte';
+	import { XCircle } from '@lucide/svelte';
 	import { toolsStore } from '$lib/stores';
 	import type { AgenticSection } from '$lib/types';
 	import { abbreviateHome } from '$lib/utils';
 
 	interface Props {
 		section: AgenticSection;
-		isStreaming?: boolean;
+		open: boolean;
+		isStreaming: boolean;
+		onToggle?: () => void;
 	}
 
-	let { isStreaming = false, section }: Props = $props();
-
-	const isPending = $derived(section.type === AgenticSectionType.TOOL_CALL_PENDING);
-	const isStreamingCall = $derived(section.type === AgenticSectionType.TOOL_CALL_STREAMING);
-	const showSpinner = $derived(isPending || (isStreamingCall && isStreaming));
+	let { isStreaming, onToggle, open, section }: Props = $props();
 
 	type GetInfoMeta = {
 		os?: string;
@@ -50,24 +48,79 @@
 	const cwdDisplay = $derived(abbreviateHome(infoMeta.cwd ?? '', home));
 </script>
 
-<div class="text-muted-foreground flex items-center gap-2 py-1.5">
-	<Info class="text-muted-foreground/60 h-3.5 w-3.5 shrink-0" />
-	{#if showSpinner}
-		<span class="text-foreground/80 text-sm font-medium">Runtime info</span>
-		<Loader2 class="text-muted-foreground/70 h-3 w-3 animate-spin" />
-	{:else if infoMeta.errorMessage}
-		<span class="text-foreground/80 text-sm font-medium">Runtime info&nbsp;</span>
-		<span class="text-red-600 text-xs italic dark:text-red-400">-&nbsp;{infoMeta.errorMessage}</span
-		>
-	{:else if infoMeta.os || infoMeta.cwd}
-		<span class="text-foreground/80 text-sm font-medium">Runtime info&nbsp;</span>
-		{#if infoMeta.os}
-			<span class="font-mono text-foreground/90 text-sm">{infoMeta.os}</span>
+<ToolCallBlock
+	{isStreaming}
+	meta={infoMeta}
+	{onToggle}
+	{open}
+	{section}
+	spinIconWhenActive
+	title="Runtime info"
+>
+	{#snippet children(meta, _ctx)}
+		{#if meta?.errorMessage}
+			<div
+				class="flex items-start gap-2 rounded bg-red-500/10 p-2 text-xs text-red-600 italic dark:text-red-400"
+			>
+				<XCircle class="mt-0.5 h-3 w-3 shrink-0" />
+
+				<span>{meta.errorMessage}</span>
+			</div>
+		{:else if infoMeta.os || infoMeta.cwd}
+			<table class="w-full table-fixed border-collapse text-sm">
+				<colgroup>
+					<col class="w-12" />
+
+					<col />
+				</colgroup>
+
+				<tbody class="divide-y divide-border/50">
+					{#if infoMeta.os}
+						<tr>
+							<th
+								class="py-1 pr-3 text-left align-baseline text-[11px] font-medium tracking-wide text-muted-foreground/60 uppercase"
+								scope="row"
+							>
+								os
+							</th>
+
+							<td class="py-1 align-baseline">
+								<div class="min-w-0 overflow-x-auto font-mono text-foreground/90">
+									{infoMeta.os}
+								</div>
+							</td>
+						</tr>
+					{/if}
+
+					{#if infoMeta.cwd}
+						<tr>
+							<th
+								class="py-1 pr-3 text-left align-baseline text-[11px] font-medium tracking-wide text-muted-foreground/60 uppercase"
+								scope="row"
+							>
+								cwd
+							</th>
+
+							<td class="py-1 align-baseline">
+								<div
+									class="min-w-0 overflow-x-auto font-mono text-foreground/90"
+									title={infoMeta.cwd}
+								>
+									{cwdDisplay}
+								</div>
+							</td>
+						</tr>
+					{/if}
+				</tbody>
+			</table>
+		{:else if section.toolResult}
+			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">
+				{section.toolResult}
+			</div>
+		{:else}
+			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">
+				Waiting for runtime info...
+			</div>
 		{/if}
-		{#if infoMeta.cwd}
-			<span class="font-mono text-foreground/90 text-sm" title={infoMeta.cwd}>{cwdDisplay}</span>
-		{/if}
-	{:else}
-		<span class="text-foreground/80 text-sm font-medium">Runtime info</span>
-	{/if}
-</div>
+	{/snippet}
+</ToolCallBlock>

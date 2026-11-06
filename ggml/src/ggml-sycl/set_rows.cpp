@@ -291,7 +291,7 @@ static void set_rows_sycl(
 
     stream->parallel_for(
         sycl::nd_range<1>(grid_size * block_size, block_size),
-        [=](sycl::nd_item<1> item_ct1) [[intel::reqd_sub_group_size(WARP_SIZE)]] {
+        [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
             k_set_rows<TIn, TIdx, TOut>(
                 src0_d, src1_d, dst_d,
                 ne00, ne01, ne02,
@@ -546,7 +546,8 @@ static void set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor * s
                 stream);
             break;
         default:
-            GGML_ABORT("Unsupported tensor type!");
+            GGML_ABORT("Unsupported tensor type: src0 %s src1 %s dst %s", ggml_type_name(dst->src[0]->type),
+                ggml_type_name(dst->src[1]->type), ggml_type_name(dst->type));
             break;
     }
 }

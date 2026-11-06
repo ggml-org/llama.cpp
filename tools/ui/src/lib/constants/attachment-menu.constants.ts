@@ -1,11 +1,5 @@
-import { FolderOpen, MessageSquare, Zap } from '@lucide/svelte';
 import { FILE_TYPE_ICONS } from '$lib/constants';
-import {
-	AttachmentAction,
-	AttachmentItemEnabledWhen,
-	AttachmentItemVisibleWhen,
-	AttachmentMenuItemId
-} from '$lib/enums';
+import { AttachmentAction, AttachmentItemEnabledWhen, AttachmentMenuItemId } from '$lib/enums';
 import type { AttachmentMenuItem } from '$lib/types';
 
 /**
@@ -58,36 +52,21 @@ export const ATTACHMENT_FILE_ITEMS: AttachmentMenuItem[] = [
 	}
 ];
 
-export const ATTACHMENT_EXTRA_ITEMS: AttachmentMenuItem[] = [];
-
-export const ATTACHMENT_PROMPT_ITEMS: AttachmentMenuItem[] = [
-	{
-		action: AttachmentAction.SYSTEM_PROMPT_CLICK,
-		enabledWhen: AttachmentItemEnabledWhen.ALWAYS,
-		hasEnabledTooltip: true,
-		icon: MessageSquare,
-		id: AttachmentMenuItemId.SYSTEM_MESSAGE,
-		label: 'System Message'
-	},
-	{
-		action: AttachmentAction.MCP_PROMPT_CLICK,
-		enabledWhen: AttachmentItemEnabledWhen.ALWAYS,
-		icon: Zap,
-		id: AttachmentMenuItemId.MCP_PROMPT,
-		label: 'MCP Prompts',
-		visibleWhen: AttachmentItemVisibleWhen.HAS_MCP_PROMPTS_SUPPORT
-	}
-];
-
-export const ATTACHMENT_MCP_ITEMS: AttachmentMenuItem[] = [
-	{
-		action: AttachmentAction.MCP_RESOURCES_CLICK,
-		enabledWhen: AttachmentItemEnabledWhen.ALWAYS,
-		icon: FolderOpen,
-		id: AttachmentMenuItemId.MCP_RESOURCES,
-		label: 'MCP Resources',
-		visibleWhen: AttachmentItemVisibleWhen.HAS_MCP_RESOURCES_SUPPORT
-	}
-];
-
 export const ATTACHMENT_TOOLTIP_TEXT = 'Add files, prompts, tools or MCP Servers';
+
+/** Text shared by the add menu's two surfaces: the desktop dropdown and the mobile drawer. */
+export const ATTACHMENT_MENU_TEXT = {
+	ADD_FILES: 'Add files',
+	ADD_TO_CHAT: 'Add to chat',
+	DESCRIPTION: 'Add files, system prompt or pick the tools the model may call',
+	SYSTEM_MESSAGE: 'System Message',
+	TOOLS: 'Tools'
+} as const;
+
+/** Modality labels behind the file-upload row's enabled-when flags, both surfaces. */
+export const ATTACHMENT_MODALITY_TEXT: Record<AttachmentItemEnabledWhen, string> = {
+	[AttachmentItemEnabledWhen.ALWAYS]: '',
+	[AttachmentItemEnabledWhen.HAS_AUDIO_MODALITY]: 'Audio',
+	[AttachmentItemEnabledWhen.HAS_VIDEO_MODALITY]: 'Video',
+	[AttachmentItemEnabledWhen.HAS_VISION_MODALITY]: 'Vision'
+};

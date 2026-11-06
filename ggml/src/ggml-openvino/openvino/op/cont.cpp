@@ -3,12 +3,9 @@
 #include "../op_table.h"
 #include "../utils.h"
 
-#include <climits>
-#include <cstdint>
 #include <memory>
 #include <openvino/op/reshape.hpp>
 #include <openvino/op/slice.hpp>
-#include <vector>
 
 namespace ov {
 namespace frontend {

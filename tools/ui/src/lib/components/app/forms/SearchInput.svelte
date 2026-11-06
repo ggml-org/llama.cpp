@@ -11,6 +11,8 @@
 		onClose?: () => void;
 		onKeyDown?: (event: KeyboardEvent) => void;
 		class?: string;
+		/** Input height, matching the small size of the other controls. */
+		size?: 'sm' | 'default';
 		id?: string;
 		ref?: HTMLInputElement | null;
 		isCancelAlwaysVisible?: boolean;
@@ -26,6 +28,7 @@
 		onKeyDown,
 		placeholder = 'Search...',
 		ref = $bindable(null),
+		size = 'default',
 		value = $bindable('')
 	}: Props = $props();
 
@@ -55,11 +58,13 @@
 	/>
 
 	<Input
-		{autofocus}
-		{id}
-		bind:value
 		bind:ref
-		class="pl-9 {showClearButton ? 'pr-9' : ''}"
+		bind:value
+		{autofocus}
+		class="max-md:h-10 pl-9 {showClearButton ? 'pr-9' : ''} {size === 'sm'
+			? 'h-8'
+			: ''} [&::-webkit-search-cancel-button]:hidden"
+		{id}
 		oninput={handleInput}
 		onkeydown={onKeyDown}
 		{placeholder}
@@ -68,10 +73,10 @@
 
 	{#if showClearButton}
 		<button
-			type="button"
+			aria-label={value ? 'Clear search' : 'Close'}
 			class="absolute top-1/2 right-3 -translate-y-1/2 transform cursor-pointer text-muted-foreground transition-colors hover:text-foreground"
 			onclick={handleClear}
-			aria-label={value ? 'Clear search' : 'Close'}
+			type="button"
 		>
 			<X class={ICON_CLASS_DEFAULT} />
 		</button>

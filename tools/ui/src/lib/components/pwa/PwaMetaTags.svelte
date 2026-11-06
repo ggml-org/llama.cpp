@@ -6,17 +6,20 @@
 
 <svelte:head>
 	<!-- Theme color for light/dark modes -->
-	<meta name="theme-color" content={THEME_COLORS.LIGHT} media={MEDIA_QUERIES.PREFERS_LIGHT} />
-	<meta name="theme-color" content={THEME_COLORS.DARK} media={MEDIA_QUERIES.PREFERS_DARK} />
+	<meta content={THEME_COLORS.LIGHT} media={MEDIA_QUERIES.PREFERS_LIGHT} name="theme-color" />
+
+	<meta content={THEME_COLORS.DARK} media={MEDIA_QUERIES.PREFERS_DARK} name="theme-color" />
 
 	<!-- Apple mobile web app meta tags -->
 	<meta
-		name={APPLE_META_TAGS.MOBILE_WEB_APP_CAPABLE.name}
 		content={APPLE_META_TAGS.MOBILE_WEB_APP_CAPABLE.content}
+		name={APPLE_META_TAGS.MOBILE_WEB_APP_CAPABLE.name}
 	/>
+
 	<meta
-		name={APPLE_META_TAGS.STATUS_BAR_STYLE.name}
 		content={APPLE_META_TAGS.STATUS_BAR_STYLE.content}
+		name={APPLE_META_TAGS.STATUS_BAR_STYLE.name}
 	/>
-	<meta name={APPLE_META_TAGS.MOBILE_WEB_APP_TITLE.name} content={appName} />
+
+	<meta content={appName} name={APPLE_META_TAGS.MOBILE_WEB_APP_TITLE.name} />
 </svelte:head>

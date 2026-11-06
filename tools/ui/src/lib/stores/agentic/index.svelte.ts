@@ -44,7 +44,6 @@ import type {
 	AgenticFlowParams,
 	AgenticFlowResult,
 	AgenticSession,
-	McpServerOverride,
 	MCPToolCall,
 	SettingsConfigType,
 	ToolExecutionResult
@@ -54,6 +53,7 @@ import type {
 	AgenticFlowOptions,
 	AgenticMessage,
 	AgenticToolCallList,
+	AgenticToolPolicy,
 	SteeringMessage
 } from '$lib/types/agentic';
 import type {
@@ -74,6 +74,7 @@ import type {
 	DatabaseMessageExtraAudioFile,
 	DatabaseMessageExtraImageFile
 } from '$lib/types/database';
+import type { OpenAIToolDefinition } from '$lib/types/mcp';
 import {
 	executeBrowserInfoTool,
 	executeGetDatetimeTool,
@@ -201,10 +202,10 @@ class AgenticStore {
 		return active;
 	}
 
-	getConfig(settings: SettingsConfigType, perChatOverrides?: McpServerOverride[]): AgenticConfig {
+	getConfig(settings: SettingsConfigType): AgenticConfig {
 		const maxTurns = Number(settings.agenticMaxTurns) || DEFAULT_AGENTIC_CONFIG.maxTurns;
 		const hasTools =
-			mcpStore.hasEnabledServers(perChatOverrides) ||
+			mcpStore.hasEnabledServers() ||
 			toolsStore.serverTools.length > 0 ||
 			toolsStore.browserTools.length > 0 ||
 			toolsStore.customTools.length > 0;
@@ -294,6 +295,24 @@ class AgenticStore {
 		return this.sessions.get(conversationId)?.isRunning ?? false;
 	}
 
+	/**
+	 * What a request of the chat sends under this tool policy: its messages
+	 * as the agentic flow shapes them, and the tools it offers, none when the
+	 * flow does not run. A request built from it shares the prefix the server
+	 * cached for the conversation.
+	 */
+	async requestFor(
+		messages: ApiChatMessageData[],
+		toolPolicy?: AgenticToolPolicy
+	): Promise<{ messages: ApiChatMessageData[]; tools: OpenAIToolDefinition[] }> {
+		const tools = await this.toolsFor(toolPolicy);
+
+		return {
+			messages: tools.length > 0 ? (toAgenticMessages(messages) as ApiChatMessageData[]) : messages,
+			tools
+		};
+	}
+
 	resolveContinue(conversationId: string, shouldContinue: boolean): void {
 		this.gates.resolveContinue(conversationId, shouldContinue);
 	}
@@ -309,37 +328,21 @@ class AgenticStore {
 			flowRootMessageId,
 			messages,
 			options = {},
-			perChatOverrides,
-			signal
+			signal,
+			toolPolicy
 		} = params;
 
 		// Clear any pending permissions/continue requests for this conversation when starting a new flow
 		this.gates.clear(conversationId);
 
-		// Ensure server tools are fetched before checking if agentic is enabled
-		if (toolsStore.serverTools.length === 0 && !toolsStore.loading) {
-			await toolsStore.fetchServerTools();
-		}
-
-		const agenticConfig = this.getConfig(settingsStore.config, perChatOverrides);
-
-		if (!agenticConfig.enabled) return { handled: false };
-
-		const hasMcpServers = mcpStore.hasEnabledServers(perChatOverrides);
-
-		if (hasMcpServers) {
-			const initialized = await mcpStore.ensureInitialized(perChatOverrides);
-
-			if (!initialized) {
-				console.log('[AgenticStore] MCP not initialized');
-			}
-		}
-
-		const tools = toolsStore.getEnabledToolsForLLM();
+		const agenticConfig = this.getConfig(settingsStore.config);
+		const tools = await this.toolsFor(toolPolicy);
 
 		if (tools.length === 0) {
 			return { handled: false };
 		}
+
+		const hasMcpServers = conversationsStore.preferences.policyEnabledServerIds().length > 0;
 
 		console.log(`[AgenticStore] Starting agentic flow with ${tools.length} tools`);
 
@@ -1057,6 +1060,42 @@ class AgenticStore {
 		if (trimmed === '') return {};
 
 		return JSON.parse(trimmed) as Record<string, unknown>;
+	}
+
+	/**
+	 * The tools a flow under this policy offers the model, none when agentic
+	 * is off. Server tools are fetched first: a disabled /tools endpoint stays
+	 * disabled for the life of the server, so the tools panel is the only
+	 * place that probes it again. Every settings-enabled MCP server is
+	 * initialized, and the collection filters by the policy, so switching
+	 * policies never re-initializes connections; a caller without a policy
+	 * falls back to the global defaults.
+	 */
+	private async toolsFor(toolPolicy?: AgenticToolPolicy): Promise<OpenAIToolDefinition[]> {
+		if (
+			toolsStore.serverTools.length === 0 &&
+			!toolsStore.loading &&
+			!toolsStore.isToolsEndpointUnreachable
+		) {
+			await toolsStore.fetchServerTools();
+		}
+
+		if (!this.getConfig(settingsStore.config).enabled) return [];
+
+		const disabledTools = new Set(toolPolicy?.disabledTools ?? toolsStore.disabledTools);
+		const disabledToolCategories = new Set(
+			toolPolicy?.disabledToolCategories ?? toolsStore.disabledToolCategories
+		);
+
+		if (conversationsStore.preferences.policyEnabledServerIds().length > 0) {
+			const initialized = await mcpStore.ensureInitialized();
+
+			if (!initialized) {
+				console.log('[AgenticStore] MCP not initialized');
+			}
+		}
+
+		return toolsStore.getEnabledToolsForLLM(disabledTools, disabledToolCategories);
 	}
 
 	private updateSession(conversationId: string, update: Partial<AgenticSession>): void {

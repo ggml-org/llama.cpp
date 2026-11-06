@@ -1,4 +1,5 @@
 #include "models.h"
+
 #include "llama-memory-recurrent.h"
 
 //
@@ -30,7 +31,7 @@ void llama_model_kimi_k3::load_arch_hparams(llama_model_loader & ml) {
         hparams.is_recr_impl[i] = hparams.n_head_kv(i) == 0;
     }
 
-    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp);
+    ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all);
     ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,        hparams.n_expert_shared);
     ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,  hparams.n_layer_dense_lead, false);
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,       hparams.expert_weights_scale, false);
@@ -94,7 +95,7 @@ void llama_model_kimi_k3::load_arch_tensors(llama_model_loader &) {
             layer.ssm_beta = create_tensor(tn(LLM_TENSOR_SSM_BETA, "weight", i), {n_embd, n_head}, 0);
 
             // K3's A_log is a plain 1-D [n_head] tensor (kimi-linear's is padded)
-            layer.ssm_a = create_tensor(tn(LLM_TENSOR_SSM_A, i), {n_head}, 0);
+            layer.ssm_a = create_tensor(tn(LLM_TENSOR_SSM_A_NOSCAN, i), {n_head}, 0);
             layer.ssm_dt_b = create_tensor(tn(LLM_TENSOR_SSM_DT, "bias", i), {d_inner}, 0);
 
             // K3 uses a single full-rank gate instead of kimi-linear's g_a/g_b pair
@@ -139,7 +140,7 @@ void llama_model_kimi_k3::load_arch_tensors(llama_model_loader &) {
             layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, 0);
             layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, n_ff}, 0);
         } else {
-            const int64_t n_ff_exp = hparams.n_ff_exp;
+            const int64_t n_ff_exp = hparams.n_ff_exp();
 
             layer.ffn_gate_inp    = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,    "weight", i), {n_embd, n_expert}, 0);
             layer.ffn_exp_probs_b = create_tensor(tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias",   i), {n_expert}, 0);
@@ -165,7 +166,7 @@ void llama_model_kimi_k3::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_kimi_k3::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
 // situ(gate, up) = beta*tanh(gate/beta)*sigmoid(gate) * linear_beta*tanh(up/linear_beta)
@@ -231,8 +232,8 @@ ggml_tensor * llama_model_kimi_k3::graph::res_mix(ggml_tensor * cur, ggml_tensor
     return out;
 }
 
-llama_model_kimi_k3::graph::graph(const llama_model & model, const llm_graph_params & params) :
-    llm_build_delta_net_base(params), model(model) {
+llama_model_kimi_k3::graph::graph(const llm_graph_params & params) :
+    llm_build_delta_net_base(params) {
 
     ggml_tensor * cur;
     ggml_tensor * inpL;
@@ -344,8 +345,6 @@ llama_model_kimi_k3::graph::graph(const llama_model & model, const llm_graph_par
     cur = ggml_mul_mat(ctx0, model.output, cur);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }
 
 //
@@ -353,12 +352,11 @@ llama_model_kimi_k3::graph::graph(const llama_model & model, const llm_graph_par
 //
 
 // causal conv1d over one of Q/K/V. `qkv` selects which third of the conv state to use
-static ggml_tensor * kimi_k3_conv1d(ggml_cgraph * gf, ggml_context * ctx0,
-                                    ggml_tensor * conv_states_all, ggml_tensor * conv_state_all,
-                                    int64_t qkv, ggml_tensor * x, ggml_tensor * proj_w, ggml_tensor * conv_w,
-                                    int64_t d_conv, int64_t head_dim, int64_t n_head,
-                                    int64_t n_seq_tokens, int64_t n_seqs, int64_t n_tokens, int64_t kv_head) {
-    const int64_t d_inner         = head_dim * n_head;
+ggml_tensor * llama_model_kimi_k3::graph::build_kda_conv1d(
+        llm_graph_input_rs * inp_rs, ggml_tensor * conv_states_all, ggml_tensor * conv_state_all,
+        int64_t qkv, ggml_tensor * x, ggml_tensor * proj_w, ggml_tensor * conv_w,
+        int64_t d_conv, int64_t head_dim, int64_t n_head_kda, int64_t n_seq_tokens, int64_t n_seqs) {
+    const int64_t d_inner         = head_dim * n_head_kda;
     const int64_t conv_state_size = (d_conv - 1) * d_inner;
     const int64_t n_embd_r_total  = 3 * conv_state_size;
 
@@ -371,21 +369,15 @@ static ggml_tensor * kimi_k3_conv1d(ggml_cgraph * gf, ggml_context * ctx0,
     ggml_tensor * x_3d   = ggml_reshape_3d(ctx0, x_proj, d_inner, n_seq_tokens, n_seqs);
     ggml_tensor * conv_x = ggml_concat(ctx0, conv_state_x, ggml_transpose(ctx0, x_3d), 0);
 
-    ggml_tensor * last_conv_x = ggml_view_3d(ctx0, conv_x, d_conv - 1, d_inner, n_seqs,
-        conv_x->nb[1], conv_x->nb[2], n_seq_tokens * conv_x->nb[0]);
-    ggml_build_forward_expand(gf,
-        ggml_cpy(ctx0, last_conv_x,
-            ggml_view_3d(ctx0, conv_states_all, d_conv - 1, d_inner, n_seqs,
-                (d_conv - 1)   * ggml_element_size(conv_states_all),
-                n_embd_r_total * ggml_element_size(conv_states_all),
-                (kv_head * n_embd_r_total + qkv * conv_state_size) * ggml_element_size(conv_states_all))));
+    build_conv_state_store(inp_rs, conv_states_all, conv_x, d_conv - 1,
+        ggml_row_size(conv_states_all->type, qkv * conv_state_size));
 
     ggml_tensor * conv_weight = ggml_reshape_2d(ctx0, conv_w, d_conv, d_inner);
     ggml_tensor * Xcur = ggml_ssm_conv(ctx0, conv_x, conv_weight);
     Xcur = ggml_reshape_2d(ctx0, Xcur, d_inner, n_tokens);
     Xcur = ggml_silu(ctx0, Xcur);
 
-    return ggml_reshape_4d(ctx0, Xcur, head_dim, n_head, n_seq_tokens, n_seqs);
+    return ggml_reshape_4d(ctx0, Xcur, head_dim, n_head_kda, n_seq_tokens, n_seqs);
 }
 
 ggml_tensor * llama_model_kimi_k3::graph::build_kda_layer(
@@ -394,14 +386,13 @@ ggml_tensor * llama_model_kimi_k3::graph::build_kda_layer(
         int64_t d_inner, int64_t n_seq_tokens, int64_t n_seqs, int il) {
 
     const auto * mctx_cur = inp_rs->mctx;
-    const auto   kv_head  = mctx_cur->get_head();
 
     ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
     ggml_tensor * conv_state_all  = build_rs(inp_rs, conv_states_all, hparams.n_embd_r(), n_seqs);
 
-    ggml_tensor * Qcur = kimi_k3_conv1d(gf, ctx0, conv_states_all, conv_state_all, 0, cur, layer.wq, layer.ssm_q_conv, d_conv, head_dim, n_head_kda, n_seq_tokens, n_seqs, n_tokens, kv_head);
-    ggml_tensor * Kcur = kimi_k3_conv1d(gf, ctx0, conv_states_all, conv_state_all, 1, cur, layer.wk, layer.ssm_k_conv, d_conv, head_dim, n_head_kda, n_seq_tokens, n_seqs, n_tokens, kv_head);
-    ggml_tensor * Vcur = kimi_k3_conv1d(gf, ctx0, conv_states_all, conv_state_all, 2, cur, layer.wv, layer.ssm_v_conv, d_conv, head_dim, n_head_kda, n_seq_tokens, n_seqs, n_tokens, kv_head);
+    ggml_tensor * Qcur = build_kda_conv1d(inp_rs, conv_states_all, conv_state_all, 0, cur, layer.wq, layer.ssm_q_conv, d_conv, head_dim, n_head_kda, n_seq_tokens, n_seqs);
+    ggml_tensor * Kcur = build_kda_conv1d(inp_rs, conv_states_all, conv_state_all, 1, cur, layer.wk, layer.ssm_k_conv, d_conv, head_dim, n_head_kda, n_seq_tokens, n_seqs);
+    ggml_tensor * Vcur = build_kda_conv1d(inp_rs, conv_states_all, conv_state_all, 2, cur, layer.wv, layer.ssm_v_conv, d_conv, head_dim, n_head_kda, n_seq_tokens, n_seqs);
     cb(Qcur, "kda_q_conv", il);
     cb(Kcur, "kda_k_conv", il);
     cb(Vcur, "kda_v_conv", il);
@@ -441,20 +432,13 @@ ggml_tensor * llama_model_kimi_k3::graph::build_kda_layer(
     ggml_tensor * state = build_rs(inp_rs, ssm_states_all, hparams.n_embd_s(), n_seqs);
     state = ggml_reshape_4d(ctx0, state, head_dim, head_dim, n_head_kda, n_seqs);
 
-    const float eps = hparams.f_norm_rms_eps;
-    Qcur = ggml_l2_norm(ctx0, Qcur, eps);
-    Kcur = ggml_l2_norm(ctx0, Kcur, eps);
+    const float eps_norm = hparams.f_norm_rms_eps;
+    Qcur = build_gdn_l2_norm(ctx0, Qcur, eps_norm);
+    Kcur = build_gdn_l2_norm(ctx0, Kcur, eps_norm);
 
-    auto attn_out = build_delta_net(Qcur, Kcur, Vcur, g1, beta, state, il);
-
-    ggml_tensor * output    = ggml_cont(ctx0, attn_out.first);
+    ggml_tensor * output = build_recurrent_attn(inp_rs, ssm_states_all, Qcur, Kcur, Vcur, g1, beta, state, il);
+    output = ggml_cont(ctx0, output);
     cb(output, "kda_scan_out", il);
-    ggml_tensor * new_state = attn_out.second;
-
-    ggml_build_forward_expand(gf,
-        ggml_cpy(ctx0, new_state,
-            ggml_view_1d(ctx0, ssm_states_all, hparams.n_embd_s() * n_seqs,
-                         kv_head * hparams.n_embd_s() * ggml_element_size(ssm_states_all))));
 
     // K3: single full-rank gate (kimi-linear factors this as g_b(g_a(x)))
     ggml_tensor * cur_2d = ggml_reshape_2d(ctx0, cur_3d, cur_3d->ne[0], n_seq_tokens * n_seqs);
@@ -584,7 +568,7 @@ ggml_tensor * llama_model_kimi_k3::graph::build_latent_moe(
         layer.ffn_down_exps,
         layer.ffn_exp_probs_b,
         hparams.n_expert,
-        hparams.n_expert_used,
+        hparams.n_expert_used(),
         LLM_FFN_SITU, hparams.expert_weights_norm,
         hparams.expert_weights_scale,
         (llama_expert_gating_func_type) hparams.expert_gating_func,

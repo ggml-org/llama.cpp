@@ -6,10 +6,22 @@
  * No reactive state; consumed by settingsStore.
  */
 
-import { SETTINGS_KEYS, SYNCABLE_PARAMETERS } from '$lib/constants';
+import { SETTINGS_KEYS, SETTINGS_REGISTRY } from '$lib/constants';
 import { ParameterSource, SyncableParameterType } from '$lib/enums';
-import type { ParameterInfo, ParameterRecord, ParameterValue } from '$lib/types';
+import type { ParameterInfo, ParameterRecord, ParameterValue, SyncableParameter } from '$lib/types';
 import { normalizeFloatingPoint } from '$lib/utils';
+
+/** Mapping of UI setting keys to server parameter keys, derived from the registry. */
+export const SYNCABLE_PARAMETERS: SyncableParameter[] = SETTINGS_REGISTRY.flatMap(
+	(section) => section.settings
+)
+	.filter((s) => s.sync !== undefined)
+	.map((s) => ({
+		canSync: true,
+		key: s.key,
+		serverKey: s.sync!.serverKey,
+		type: s.sync!.paramType
+	}));
 
 export class ParameterSyncService {
 	/**

@@ -20,7 +20,6 @@ struct ggml_cuda_cutlass_weight {
     const uint8_t * scales        = nullptr;
     const uint8_t * scales_linear = nullptr;
     int64_t         k             = 0;
-    ggml_type       type          = GGML_TYPE_COUNT;
 };
 
 struct ggml_cuda_cutlass_weight_layout {

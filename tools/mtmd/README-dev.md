@@ -20,6 +20,7 @@ In short:
 A typical pipeline of the core libmtmd is as follows:
 - A bitmap (RGB image or PCM audio) is created
 - Bitmap and the text prompt is provided to `mtmd_tokenize()` that breaks the input into chunks
+    - Alternatively, `mtmd_tokenize_from_parts()` takes a list of pre-split text/media parts instead of a marker-based prompt
     - The tokenizer function first expands a "lazy" bitmap if it finds one. Typically, this is used by video, so that one media token corresponds to one input bitmap
     - For models that support "fused" temporal frames like Qwen-VL, the tokenizer tries to merge pair of consecutive frames into one batch. Only bitmaps marked by `mtmd_bitmap_set_mergeable()` are merged
     - The preprocessor will then be called, which produces a list of chunks
@@ -54,7 +55,7 @@ For example, Qwen3-TTS:
 Due to wide variety of audio generation pipelines, the `mtmd_gen_audio` system is designed to be flexible and reusable by new models.
 
 `mtmd_gen_audio` is split into 2 main API:
-- Core API `mtmd.h`: handles main inference. Important: the API surface must be stateless; caller must handle state management and audio frame accumulation.
+- Core API `mtmd.h`: handles main inference. Important: `mtmd_gen_state` holds only the per-sequence data that the mmproj itself writes and reads back (RNG, decoder KV / conv state, output buffers). Data that goes to or comes from the backbone (hidden states, codes, PCM) must stay explicit in `mtmd_gen_inp` / `mtmd_gen_out`; the caller drives the backbone and handles audio frame accumulation.
 - Helper API `mtmd-helper.h`: provides a model-agnostic stateful API. Usage example can be found in the `tools/tts` directory.
 
 ### Checklist for porting new audio generation models to mtmd
@@ -89,3 +90,4 @@ IMPORTANT: If your model needs changes that don't fit the existing infrastructur
 No-go checklist (these will get the PR rejected and require discussion before proceeding):
 - Violating the API design constraints stated above
 - Adding a new model-specific binary: the API and binary surface must stay model-agnostic
+- Adding new flags to conversion script: this script must stay model-agnostic

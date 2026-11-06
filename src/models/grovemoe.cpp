@@ -1,7 +1,7 @@
 #include "models.h"
 
 void llama_model_grovemoe::load_arch_hparams(llama_model_loader & ml) {
-    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp);
+    ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all);
     ml.get_key(LLM_KV_EXPERT_CHUNK_FEED_FORWARD_LENGTH,  hparams.n_ff_chexp, false);
     ml.get_key(LLM_KV_EXPERT_GROUP_SCALE,                hparams.expert_group_scale);
     ml.get_key(LLM_KV_EXPERTS_PER_GROUP,                 hparams.n_group_experts);
@@ -46,7 +46,7 @@ void llama_model_grovemoe::load_arch_tensors(llama_model_loader &) {
         layer.ffn_gate_inp = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert}, 0);
 
         // MoE branch
-        const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
+        const int64_t n_ff_exp = hparams.n_ff_exp() ? hparams.n_ff_exp() : n_ff / n_expert_used;
         const int64_t n_ff_chexp = hparams.n_ff_chexp ? hparams.n_ff_chexp : n_embd_head_k;
         const int64_t n_chunk_expert = n_expert / hparams.n_group_experts;
 
@@ -61,10 +61,10 @@ void llama_model_grovemoe::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_grovemoe::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_grovemoe::graph::graph(const llama_model & model, const llm_graph_params & params) :
+llama_model_grovemoe::graph::graph(const llm_graph_params & params) :
     llm_graph_context(params) {
     const int64_t n_embd_head    = hparams.n_embd_head_v();
     const int64_t n_chunk_expert = n_expert / hparams.n_group_experts;
@@ -100,14 +100,12 @@ llama_model_grovemoe::graph::graph(const llama_model & model, const llm_graph_pa
             Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, il);
             cb(Qcur, "Qcur_normed", il);
 
-            Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                                 ext_factor, attn_factor, beta_fast, beta_slow);
+            Qcur = build_rope(Qcur, inp_pos, il);
 
             Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, il);
             cb(Kcur, "Kcur_normed", il);
 
-            Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                                 ext_factor, attn_factor, beta_fast, beta_slow);
+            Kcur = build_rope(Kcur, inp_pos, il);
 
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);
@@ -188,6 +186,4 @@ llama_model_grovemoe::graph::graph(const llama_model & model, const llm_graph_pa
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }

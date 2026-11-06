@@ -12,10 +12,9 @@
 #include <cstddef>
 #include <cstring>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <unordered_map>
-
-using llama_buf_map = std::unordered_map<uint32_t, ggml_backend_buffer_t>;
 
 // lists of buffer types used for each layer
 using buft_list_t = std::vector<std::pair<ggml_backend_dev_t, ggml_backend_buffer_type_t>>;
@@ -68,6 +67,7 @@ struct llama_model_loader {
     static const int TENSOR_SKIP            = 1 << 2;
     static const int TENSOR_SKIP_IF_VIRTUAL = 1 << 3;
     static const int TENSOR_ALLOW_RESHAPE   = 1 << 4;
+    static const int TENSOR_READ_LAZY       = 1 << 5; // read rows on demand instead of loading whole tensor; requires mmap for now
 
     int n_kv      = 0;
     int n_tensors = 0;
@@ -81,6 +81,39 @@ struct llama_model_loader {
     bool check_tensors;
     bool no_alloc;
     bool load_mtp;
+
+    // handle TENSOR_READ_LAZY
+    // use case: keep PLE / engrams embd tensors on disk, read them on demand
+    struct lazy_read {
+        // set by the caller before the create_tensor() calls
+        enum llama_lazy_mode mode = LLAMA_LAZY_MODE_OFF;
+
+        // decide whether this tensor is read lazily
+        // pass w to also record it, or nullptr to only ask
+        bool add(const std::string & name, const ggml_tensor * t, const llama_tensor_weight * w);
+
+        bool any() const {
+            return !ranges.empty();
+        }
+
+        bool has(const ggml_tensor * t) const {
+            return tensors.count(ggml_get_name(t)) > 0;
+        }
+
+        const llama_mmap::ranges & for_file(uint32_t idx) const {
+            static const llama_mmap::ranges none;
+
+            const auto it = ranges.find(idx);
+            return it == ranges.end() ? none : it->second;
+        }
+
+        // lazy tensors are gathered on the host, so no offload setting applies to them
+        static ggml_backend_buffer_type_t buft();
+
+    private:
+        std::map<uint32_t, llama_mmap::ranges> ranges;
+        std::set<std::string>                  tensors;
+    } lazy;
 
     llama_files files;
     llama_ftype ftype;
@@ -112,7 +145,22 @@ struct llama_model_loader {
         }
     };
 
-    std::map<ggml_backend_buffer_type_t, ggml_context_ptr, ggml_backend_buft_comparator> ctx_map;
+    // lazy tensors need dedicated context
+    struct ctx_key {
+        ggml_backend_buffer_type_t buft;
+        bool lazy;
+    };
+
+    struct ctx_key_comparator {
+        bool operator()(const ctx_key & lhs, const ctx_key & rhs) const {
+            if (lhs.lazy != rhs.lazy) {
+                return lhs.lazy < rhs.lazy;
+            }
+            return strcmp(ggml_backend_buft_name(lhs.buft), ggml_backend_buft_name(rhs.buft)) < 0;
+        }
+    };
+
+    std::map<ctx_key, ggml_context_ptr, ctx_key_comparator> ctx_map;
 
     // track tensors that had to be moved for debugging:
     size_t n_tensors_moved = 0;
@@ -192,18 +240,28 @@ struct llama_model_loader {
 
     void init_mappings(bool prefetch = true, llama_mlocks * mlock_mmaps = nullptr);
 
-    void get_mapping_range(size_t * first, size_t * last, void ** addr, int idx, ggml_context * ctx) const;
+    // byte range within a mapped file
+    struct mapping_range {
+        size_t first; // inclusive
+        size_t last;  // exclusive
+    };
+
+    // sorted, non-overlapping ranges of file 'idx' that back the tensors of 'ctx'
+    // ranges owned by other contexts are excluded, so that a buffer wrapping them won't pin
+    // data that this context never reads (lazy tensors, -cmoe tensors, ...)
+    std::vector<mapping_range> get_mapping_ranges(uint32_t idx, ggml_context * ctx) const;
 
     // release a weight's mmap pages
     void unmap_weight(const llama_tensor_weight & w) const;
 
-    // for backwards compatibility, does not support ggml-backend
-    void load_data_for(struct ggml_tensor * cur) const;
+    // read a byte range of a weight's data
+    // with mmap, returns a pointer into the mapping, otherwise reads into buf and returns buf
+    const void * load_data_range(const llama_tensor_weight & w, size_t offs, size_t size, void * buf) const;
 
     // Returns false if cancelled by progress_callback
     bool load_all_data(
             struct ggml_context * ctx,
-            llama_buf_map & bufs,
+            std::vector<ggml_backend_buffer_t> & bufs,
             llama_mlocks * lmlocks,
             llama_progress_callback progress_callback,
             void * progress_callback_user_data);

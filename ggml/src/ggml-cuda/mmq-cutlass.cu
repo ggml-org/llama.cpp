@@ -26,8 +26,6 @@ bool ggml_cuda_cutlass_mul_mat_supported(
 
 #ifdef GGML_CUDA_CUTLASS
 
-#    include <cuda_fp8.h>
-
 #    include "cute/tensor.hpp"
 #    include "cutlass/cutlass.h"
 #    include "cutlass/detail/sm100_blockscaled_layout.hpp"
@@ -36,69 +34,6 @@ bool ggml_cuda_cutlass_mul_mat_supported(
 #    include "cutlass/gemm/device/gemm_universal_adapter.h"
 #    include "cutlass/gemm/kernel/gemm_universal.hpp"
 #    include "cutlass/util/packed_stride.hpp"
-
-static __device__ __forceinline__ uint8_t cutlass_mxfp8_scale(float amax) {
-    if (!(amax > 0.0f)) {
-        return 0;
-    }
-
-    constexpr float e4m3_max = 448.0f;
-    const int exponent = __float2int_ru(log2f(amax / e4m3_max));
-    return (uint8_t) max(0, min(254, exponent + 127));
-}
-
-static __device__ __forceinline__ float cutlass_half_warp_amax(float value0, float value1) {
-    float amax = fmaxf(fabsf(value0), fabsf(value1));
-#    pragma unroll
-    for (int mask = 8; mask > 0; mask >>= 1) {
-        amax = fmaxf(amax, __shfl_xor_sync(0xFFFFFFFF, amax, mask, 16));
-    }
-    return amax;
-}
-
-static __global__ void cutlass_quantize_mxfp8(
-        const float * __restrict__ src,
-        uint8_t * __restrict__ dst,
-        uint8_t * __restrict__ scales,
-        int64_t n_cols,
-        int64_t n_cols_padded,
-        int64_t stride_row) {
-    constexpr int warps = 8;
-    const int row       = blockIdx.x;
-    const int warp      = threadIdx.x / WARP_SIZE;
-    const int lane      = threadIdx.x % WARP_SIZE;
-    const int half      = lane / 16;
-    const int pair_lane = lane % 16;
-    const int scale_blocks      = n_cols_padded / WARP_SIZE;
-    const int scale_block_pairs = scale_blocks / 2;
-
-    for (int pair = warp; pair < scale_block_pairs; pair += warps) {
-        const int scale_block = 2 * pair + half;
-        const int64_t k       = (int64_t) scale_block * WARP_SIZE + pair_lane * 2;
-        float2 value          = { 0.0f, 0.0f };
-        if (k + 1 < n_cols) {
-            value = *reinterpret_cast<const float2 *>(src + (int64_t) row * stride_row + k);
-        } else {
-            if (k < n_cols) {
-                value.x = src[(int64_t) row * stride_row + k];
-            }
-            if (k + 1 < n_cols) {
-                value.y = src[(int64_t) row * stride_row + k + 1];
-            }
-        }
-
-        const float amax         = cutlass_half_warp_amax(value.x, value.y);
-        const uint8_t scale      = cutlass_mxfp8_scale(amax);
-        const float inv_scale    = amax == 0.0f ? 0.0f : __frcp_rn(ggml_cuda_e8m0_to_fp32(scale));
-        const __nv_fp8_e4m3 q0(value.x * inv_scale);
-        const __nv_fp8_e4m3 q1(value.y * inv_scale);
-        *reinterpret_cast<uint16_t *>(dst + (int64_t) row * n_cols_padded + k) =
-            (uint16_t) q0.__x | ((uint16_t) q1.__x << 8);
-        if (pair_lane == 0) {
-            scales[ggml_cuda_cutlass_blockscaled_scale_offset(row, scale_block, scale_blocks)] = scale;
-        }
-    }
-}
 
 static __global__ void cutlass_quantize_nvfp4(
         const float * __restrict__ src,
@@ -148,31 +83,26 @@ static __global__ void cutlass_quantize_nvfp4(
     }
 }
 
-static size_t cutlass_activation_size(ggml_type type, int64_t n_rows, int64_t n_cols) {
-    GGML_ASSERT(type == GGML_TYPE_MXFP4 || type == GGML_TYPE_NVFP4);
+static size_t cutlass_activation_size(int64_t n_rows, int64_t n_cols) {
     GGML_ASSERT(n_rows > 0 && n_cols > 0 && n_cols % 128 == 0);
-    return type == GGML_TYPE_NVFP4 ? (size_t) n_rows * n_cols / 2 : (size_t) n_rows * n_cols;
+    return (size_t) n_rows * n_cols / 2;
 }
 
-static size_t cutlass_scale_size(ggml_type type, int64_t n_rows, int64_t n_cols) {
-    GGML_ASSERT(type == GGML_TYPE_MXFP4 || type == GGML_TYPE_NVFP4);
+static size_t cutlass_scale_size(int64_t n_rows, int64_t n_cols) {
     GGML_ASSERT(n_rows > 0 && n_cols > 0 && n_cols % 128 == 0);
-    const int scale_values = type == GGML_TYPE_NVFP4 ? QK_NVFP4_SUB : QK_MXFP4;
-    return (size_t) GGML_PAD(n_rows, 128) * (n_cols / scale_values);
+    return (size_t) GGML_PAD(n_rows, 128) * (n_cols / QK_NVFP4_SUB);
 }
 
 static bool cutlass_quantize(
         const float * src,
         uint8_t * dst,
         uint8_t * scales,
-        ggml_type type,
         int64_t n_cols,
         int64_t n_cols_padded,
         int64_t stride_row,
         int64_t n_rows,
         cudaStream_t stream) {
-    if ((type != GGML_TYPE_MXFP4 && type != GGML_TYPE_NVFP4) ||
-        n_cols <= 0 || n_cols % 2 != 0 ||
+    if (n_cols <= 0 || n_cols % 2 != 0 ||
         n_cols_padded < n_cols || n_cols_padded % 128 != 0 ||
         stride_row < n_cols || stride_row % 2 != 0 ||
         n_rows <= 0 || n_rows > UINT_MAX) {
@@ -180,14 +110,9 @@ static bool cutlass_quantize(
     }
 
     constexpr int threads = 256;
-    CUDA_CHECK(cudaMemsetAsync(scales, 0, cutlass_scale_size(type, n_rows, n_cols_padded), stream));
-    if (type == GGML_TYPE_NVFP4) {
-        cutlass_quantize_nvfp4<<<(unsigned) n_rows, threads, 0, stream>>>(
-            src, dst, scales, n_cols, n_cols_padded, stride_row);
-    } else {
-        cutlass_quantize_mxfp8<<<(unsigned) n_rows, threads, 0, stream>>>(
-            src, dst, scales, n_cols, n_cols_padded, stride_row);
-    }
+    CUDA_CHECK(cudaMemsetAsync(scales, 0, cutlass_scale_size(n_rows, n_cols_padded), stream));
+    cutlass_quantize_nvfp4<<<(unsigned) n_rows, threads, 0, stream>>>(
+        src, dst, scales, n_cols, n_cols_padded, stride_row);
     CUDA_CHECK(cudaGetLastError());
     return true;
 }
@@ -196,49 +121,18 @@ namespace ggml_cutlass_sm120 {
 
 using namespace cute;
 
-struct mxfp_format_traits {
-    static constexpr int scale_granularity = QK_MXFP4;
-
-    using Scale      = cutlass::float_ue8m0_t;
-    using Activation = cutlass::float_e4m3_t;
-    using Weight     = cutlass::float_e2m1_t;
-
-    template <typename Element>
-    using MainloopElement = cute::tuple<Element, Scale>;
-
-    template <typename Element>
-    static constexpr int alignment = 128 / cutlass::sizeof_bits<Element>::value;
-};
-
-struct nvfp4_format_traits {
-    static constexpr int scale_granularity = QK_NVFP4_SUB;
-
-    using Scale      = cutlass::float_ue4m3_t;
-    using Activation = cutlass::nv_float4_t<cutlass::float_e2m1_t>;
-    using Weight     = Activation;
-
-    template <typename Element>
-    using MainloopElement = Element;
-
-    template <typename Element>
-    static constexpr int alignment = 32;
-};
-
-template <typename Format>
-struct blockscaled_kernel_traits {
+struct nvfp4_kernel_traits {
     using Output           = float;
-    using ElementA         = typename Format::Activation;
-    using ElementB         = typename Format::Weight;
-    using ElementAMainloop = typename Format::template MainloopElement<ElementA>;
-    using ElementBMainloop = typename Format::template MainloopElement<ElementB>;
+    using ElementA         = cutlass::nv_float4_t<cutlass::float_e2m1_t>;
+    using ElementB         = ElementA;
     using LayoutA          = cutlass::layout::RowMajor;
     using LayoutB          = cutlass::layout::ColumnMajor;
     using LayoutD          = cutlass::layout::RowMajor;
     using TileShape        = Shape<_128, _128, _128>;
     using ClusterShape     = Shape<_1, _1, _1>;
 
-    static constexpr int alignment_a = Format::template alignment<ElementA>;
-    static constexpr int alignment_b = Format::template alignment<ElementB>;
+    static constexpr int alignment_a = 32;
+    static constexpr int alignment_b = 32;
     static constexpr int alignment_d = 128 / cutlass::sizeof_bits<Output>::value;
 
     using EpilogueBuilder = cutlass::epilogue::collective::CollectiveBuilder<
@@ -256,16 +150,16 @@ struct blockscaled_kernel_traits {
         LayoutD,
         alignment_d,
         cutlass::epilogue::collective::EpilogueScheduleAuto>;
-    using CollectiveEpilogue = typename EpilogueBuilder::CollectiveOp;
+    using CollectiveEpilogue = EpilogueBuilder::CollectiveOp;
     using StageCount = cutlass::gemm::collective::StageCountAutoCarveout<static_cast<int>(
-        sizeof(typename CollectiveEpilogue::SharedStorage))>;
+        sizeof(CollectiveEpilogue::SharedStorage))>;
     using MainloopBuilder = cutlass::gemm::collective::CollectiveBuilder<
         cutlass::arch::Sm120,
         cutlass::arch::OpClassBlockScaledTensorOp,
-        ElementAMainloop,
+        ElementA,
         LayoutA,
         alignment_a,
-        ElementBMainloop,
+        ElementB,
         LayoutB,
         alignment_b,
         float,
@@ -273,22 +167,21 @@ struct blockscaled_kernel_traits {
         ClusterShape,
         StageCount,
         cutlass::gemm::collective::KernelScheduleAuto>;
-    using CollectiveMainloop = typename MainloopBuilder::CollectiveOp;
+    using CollectiveMainloop = MainloopBuilder::CollectiveOp;
     using ProblemShape = Shape<int, int, int, int>;
     using GemmKernel = cutlass::gemm::kernel::GemmUniversal<
         ProblemShape, CollectiveMainloop, CollectiveEpilogue, void>;
     using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
-    using StrideA = typename GemmKernel::StrideA;
-    using StrideB = typename GemmKernel::StrideB;
-    using StrideC = typename GemmKernel::StrideC;
-    using StrideD = typename GemmKernel::StrideD;
-    using Scale = typename Format::Scale;
-    using BlockScaleConfig = typename CollectiveMainloop::Sm1xxBlkScaledConfig;
+    using StrideA = GemmKernel::StrideA;
+    using StrideB = GemmKernel::StrideB;
+    using StrideC = GemmKernel::StrideC;
+    using StrideD = GemmKernel::StrideD;
+    using Scale = cutlass::float_ue4m3_t;
+    using BlockScaleConfig = CollectiveMainloop::Sm1xxBlkScaledConfig;
 
-    static_assert(CollectiveMainloop::TiledMma::SFVecSize == Format::scale_granularity);
+    static_assert(CollectiveMainloop::TiledMma::SFVecSize == QK_NVFP4_SUB);
 };
 
-template <typename Traits>
 static bool run_dense_gemm(
         ggml_backend_cuda_context & ctx,
         const ggml_cuda_cutlass_weight & weight,
@@ -299,35 +192,36 @@ static bool run_dense_gemm(
         int n,
         int k,
         cudaStream_t stream) {
-    using Gemm             = typename Traits::Gemm;
-    using BlockScaleConfig = typename Traits::BlockScaleConfig;
+    using Traits           = nvfp4_kernel_traits;
+    using Gemm             = Traits::Gemm;
+    using BlockScaleConfig = Traits::BlockScaleConfig;
 
-    const auto stride_a   = cutlass::make_cute_packed_stride(typename Traits::StrideA{}, make_shape(m, k, 1));
-    const auto stride_b   = cutlass::make_cute_packed_stride(typename Traits::StrideB{}, make_shape(n, k, 1));
-    const auto stride_c   = cutlass::make_cute_packed_stride(typename Traits::StrideC{}, make_shape(m, n, 1));
-    const auto stride_d   = cutlass::make_cute_packed_stride(typename Traits::StrideD{}, make_shape(m, n, 1));
+    const auto stride_a   = cutlass::make_cute_packed_stride(Traits::StrideA{}, make_shape(m, k, 1));
+    const auto stride_b   = cutlass::make_cute_packed_stride(Traits::StrideB{}, make_shape(n, k, 1));
+    const auto stride_c   = cutlass::make_cute_packed_stride(Traits::StrideC{}, make_shape(m, n, 1));
+    const auto stride_d   = cutlass::make_cute_packed_stride(Traits::StrideD{}, make_shape(m, n, 1));
     const auto shape      = make_shape(m, n, k, 1);
     const auto layout_sfa = BlockScaleConfig::tile_atom_to_shape_SFA(shape);
     const auto layout_sfb = BlockScaleConfig::tile_atom_to_shape_SFB(shape);
 
-    typename Gemm::Arguments arguments = {
+    Gemm::Arguments arguments = {
         cutlass::gemm::GemmUniversalMode::kGemm,
         shape,
         {
-            reinterpret_cast<const typename Gemm::ElementA *>(activation),
+            reinterpret_cast<const Gemm::ElementA *>(activation),
             stride_a,
-            reinterpret_cast<const typename Gemm::ElementB *>(weight.values),
+            reinterpret_cast<const Gemm::ElementB *>(weight.values),
             stride_b,
-            reinterpret_cast<const typename Traits::Scale *>(activation_scales),
+            reinterpret_cast<const Traits::Scale *>(activation_scales),
             layout_sfa,
-            reinterpret_cast<const typename Traits::Scale *>(weight.scales),
+            reinterpret_cast<const Traits::Scale *>(weight.scales),
             layout_sfb,
         },
         {
             {},
             nullptr,
             stride_c,
-            reinterpret_cast<typename Traits::Output *>(dst),
+            reinterpret_cast<Traits::Output *>(dst),
             stride_d,
         },
     };
@@ -356,27 +250,6 @@ static bool run_dense_gemm(
         return false;
     }
     return true;
-}
-
-static bool dispatch_dense_gemm(
-        ggml_backend_cuda_context & ctx,
-        const ggml_cuda_cutlass_weight & weight,
-        const uint8_t * activation,
-        const uint8_t * activation_scales,
-        void * dst,
-        int m,
-        int n,
-        int k,
-        cudaStream_t stream) {
-    if (weight.type == GGML_TYPE_MXFP4) {
-        return run_dense_gemm<blockscaled_kernel_traits<mxfp_format_traits>>(
-            ctx, weight, activation, activation_scales, dst, m, n, k, stream);
-    }
-    if (weight.type == GGML_TYPE_NVFP4) {
-        return run_dense_gemm<blockscaled_kernel_traits<nvfp4_format_traits>>(
-            ctx, weight, activation, activation_scales, dst, m, n, k, stream);
-    }
-    return false;
 }
 
 } // namespace ggml_cutlass_sm120
@@ -418,13 +291,12 @@ bool ggml_cuda_cutlass_mul_mat(
 
     ggml_cuda_pool_alloc<uint8_t> activation(ctx.pool());
     ggml_cuda_pool_alloc<uint8_t> activation_scales(ctx.pool());
-    uint8_t * activation_data = activation.alloc(cutlass_activation_size(src0->type, m, k_padded));
-    uint8_t * scale_data = activation_scales.alloc(cutlass_scale_size(src0->type, m, k_padded));
+    uint8_t * activation_data = activation.alloc(cutlass_activation_size(m, k_padded));
+    uint8_t * scale_data = activation_scales.alloc(cutlass_scale_size(m, k_padded));
     if (!cutlass_quantize(
             (const float *) src1->data,
             activation_data,
             scale_data,
-            src0->type,
             k,
             k_padded,
             src1->nb[1] / sizeof(float),
@@ -433,7 +305,7 @@ bool ggml_cuda_cutlass_mul_mat(
         return false;
     }
 
-    return dispatch_dense_gemm(
+    return run_dense_gemm(
         ctx, weight, activation_data, scale_data, dst->data,
         (int) m, (int) n, (int) k_padded, stream);
 }

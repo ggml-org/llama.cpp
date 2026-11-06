@@ -22,6 +22,9 @@ export { chatStore } from './chat/index.svelte';
 
 export { draftMessagesStore } from './chat/drafts.svelte';
 
+// CONVERSATION TABS
+export { tabsStore } from './tabs.svelte';
+
 // CONTEXT STATS (active conversation context window usage)
 export { contextStatsStore } from './chat/context-stats.svelte';
 
@@ -37,13 +40,17 @@ export { mcpStore } from './mcp/index.svelte';
 // MODELS
 export { modelsStore } from './models/index.svelte';
 
+// MODELS DISCOVER (HuggingFace browse state for the discover dialog)
+export { modelsDiscoverStore } from './models-discover/index.svelte';
+
 // SERVER
 export { serverStore } from './server.svelte';
 
+// UI / LAYOUT
+export { uiStore } from './ui.svelte';
+
 // SETTINGS / UI PREFERENCES
 export { settingsStore } from './settings/index.svelte';
-
-export { settingsReferrer } from './settings/referrer.svelte';
 
 export { permissionsStore } from './permissions.svelte';
 

@@ -10,11 +10,10 @@
 	import Label from '$lib/components/ui/label/label.svelte';
 	import { Switch } from '$lib/components/ui/switch';
 	import { getChatMessageActionsContext, getChatMessageEditContext } from '$lib/contexts';
-	import { MessageRole } from '$lib/enums';
 	import { conversationsStore } from '$lib/stores';
+	import { untrack } from 'svelte';
 
 	interface Props {
-		role: MessageRole.USER | MessageRole.ASSISTANT;
 		justify: 'start' | 'end';
 		actionsPosition: 'left' | 'right';
 		onRegenerate?: () => void;
@@ -31,14 +30,12 @@
 		onRawOutputToggle,
 		onRegenerate,
 		rawOutputEnabled = false,
-		role,
 		showRawOutputSwitch = false
 	}: Props = $props();
 
 	const messageActions = getChatMessageActionsContext();
 	const editCtx = getChatMessageEditContext();
 
-	let showForkDialog = $state(false);
 	let forkName = $state('');
 	let forkIncludeAttachments = $state(true);
 
@@ -47,20 +44,23 @@
 		messageActions.setShowDeleteDialog(false);
 	}
 
-	function handleOpenForkDialog() {
-		const conv = conversationsStore.activeConversation;
+	// fills the fork form each time the dialog opens, from the icon or the
+	// message's context menu
+	$effect(() => {
+		if (!messageActions.showForkDialog) return;
 
-		forkName = `Fork of ${conv?.name ?? 'Conversation'}`;
-		forkIncludeAttachments = true;
-		showForkDialog = true;
-	}
+		untrack(() => {
+			forkName = `Fork of ${conversationsStore.activeConversation?.name ?? 'Conversation'}`;
+			forkIncludeAttachments = true;
+		});
+	});
 
 	function handleConfirmFork() {
 		messageActions.forkConversation?.({
 			includeAttachments: forkIncludeAttachments,
 			name: forkName.trim()
 		});
-		showForkDialog = false;
+		messageActions.setShowForkDialog(false);
 	}
 </script>
 
@@ -77,29 +77,34 @@
 		<div
 			class="pointer-events-auto inset-0 flex items-center gap-1 opacity-100 transition-all duration-150"
 		>
-			<ActionIcon icon={Copy} tooltip="Copy" onclick={messageActions.copy} />
+			<ActionIcon icon={Copy} onclick={messageActions.copy} tooltip="Copy" />
 
-			<ActionIcon icon={Edit} tooltip="Edit" onclick={editCtx.startEdit} />
+			<ActionIcon icon={Edit} onclick={editCtx.startEdit} tooltip="Edit" />
 
-			{#if role === MessageRole.ASSISTANT && onRegenerate}
-				<ActionIcon icon={RefreshCw} tooltip="Regenerate" onclick={() => onRegenerate()} />
+			{#if onRegenerate}
+				<ActionIcon icon={RefreshCw} onclick={() => onRegenerate()} tooltip="Regenerate" />
 			{/if}
 
-			{#if role === MessageRole.ASSISTANT && onContinue}
-				<ActionIcon icon={ArrowRight} tooltip="Continue" onclick={onContinue} />
+			{#if onContinue}
+				<ActionIcon icon={ArrowRight} onclick={onContinue} tooltip="Continue" />
 			{/if}
 
 			{#if messageActions.forkConversation}
-				<ActionIcon icon={GitBranch} tooltip="Fork conversation" onclick={handleOpenForkDialog} />
+				<ActionIcon
+					icon={GitBranch}
+					onclick={() => messageActions.setShowForkDialog(true)}
+					tooltip="Fork conversation"
+				/>
 			{/if}
 
-			<ActionIcon icon={Trash2} tooltip="Delete" onclick={messageActions.requestDelete} />
+			<ActionIcon icon={Trash2} onclick={messageActions.requestDelete} tooltip="Delete" />
 		</div>
 	</div>
 
 	{#if showRawOutputSwitch}
 		<div class="flex items-center gap-2">
 			<span class="text-xs text-muted-foreground">Show raw output</span>
+
 			<Switch
 				checked={rawOutputEnabled}
 				onCheckedChange={(checked) => onRawOutputToggle?.(checked)}
@@ -109,54 +114,54 @@
 </div>
 
 <DialogConfirmation
-	open={messageActions.showDeleteDialog}
-	title="Delete Message"
-	description={messageActions.deletionInfo && messageActions.deletionInfo.totalCount > 1
-		? `This will delete ${messageActions.deletionInfo.totalCount} messages including: ${messageActions.deletionInfo.userMessages} user message${messageActions.deletionInfo.userMessages > 1 ? 's' : ''} and ${messageActions.deletionInfo.assistantMessages} assistant response${messageActions.deletionInfo.assistantMessages > 1 ? 's' : ''}. All messages in this branch and their responses will be permanently removed. This action cannot be undone.`
-		: 'Are you sure you want to delete this message? This action cannot be undone.'}
+	cancelText="Cancel"
 	confirmText={messageActions.deletionInfo && messageActions.deletionInfo.totalCount > 1
 		? `Delete ${messageActions.deletionInfo.totalCount} Messages`
 		: 'Delete'}
-	cancelText="Cancel"
-	variant="destructive"
+	description={messageActions.deletionInfo && messageActions.deletionInfo.totalCount > 1
+		? `This will delete ${messageActions.deletionInfo.totalCount} messages including: ${messageActions.deletionInfo.userMessages} user message${messageActions.deletionInfo.userMessages > 1 ? 's' : ''} and ${messageActions.deletionInfo.assistantMessages} assistant response${messageActions.deletionInfo.assistantMessages > 1 ? 's' : ''}. All messages in this branch and their responses will be permanently removed. This action cannot be undone.`
+		: 'Are you sure you want to delete this message? This action cannot be undone.'}
 	icon={Trash2}
-	onConfirm={handleConfirmDelete}
 	onCancel={() => messageActions.setShowDeleteDialog(false)}
+	onConfirm={handleConfirmDelete}
+	open={messageActions.showDeleteDialog}
+	title="Delete Message"
+	variant="destructive"
 />
 
 <DialogConfirmation
-	bind:open={showForkDialog}
-	title="Fork Conversation"
-	description="Create a new conversation branching from this message."
-	confirmText="Fork"
 	cancelText="Cancel"
+	confirmText="Fork"
+	description="Create a new conversation branching from this message."
 	icon={GitBranch}
+	onCancel={() => messageActions.setShowForkDialog(false)}
 	onConfirm={handleConfirmFork}
-	onCancel={() => (showForkDialog = false)}
+	open={messageActions.showForkDialog}
+	title="Fork Conversation"
 >
 	<div class="flex flex-col gap-4 py-2">
 		<div class="flex flex-col gap-2">
 			<Label for="fork-name">Title</Label>
 
 			<Input
-				id="fork-name"
+				bind:value={forkName}
 				class="text-foreground"
+				id="fork-name"
 				placeholder="Enter fork name"
 				type="text"
-				bind:value={forkName}
 			/>
 		</div>
 
 		<div class="flex items-center gap-2">
 			<Checkbox
-				id="fork-attachments"
 				checked={forkIncludeAttachments}
+				id="fork-attachments"
 				onCheckedChange={(checked) => {
 					forkIncludeAttachments = checked === true;
 				}}
 			/>
 
-			<Label for="fork-attachments" class="cursor-pointer text-sm font-normal">
+			<Label class="cursor-pointer text-sm font-normal" for="fork-attachments">
 				Include all attachments
 			</Label>
 		</div>

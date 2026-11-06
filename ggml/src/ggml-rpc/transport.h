@@ -15,11 +15,16 @@ struct socket_t {
 
     bool send_data(const void * data, size_t size);
     bool recv_data(void * data, size_t size);
+    // Must be called at every message boundary: the RDMA transport coalesces
+    // writes into fixed-size frames and posts the trailing partial frame only
+    // here. No-op on TCP.
+    bool flush();
 
     socket_ptr accept();
 
     void get_caps(uint8_t * local_caps);
     void update_caps(const uint8_t * remote_caps);
+    const char * transport_name() const;
 
     static socket_ptr create_server(const char * host, int port);
     static socket_ptr connect(const char * host, int port);

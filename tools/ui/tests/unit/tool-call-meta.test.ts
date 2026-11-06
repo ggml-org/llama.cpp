@@ -28,3 +28,15 @@ describe('tryParseToolResultObject', () => {
 		expect(tryParseToolResultObject('{bad')).toBeNull();
 	});
 });
+
+describe('tryParseToolResultObject gating', () => {
+	it('parses JSON objects that start after leading whitespace', () => {
+		expect(tryParseToolResultObject('\n  {"result":"ok"}')).toEqual({ result: 'ok' });
+	});
+
+	it('skips the parse for large plain-text results', () => {
+		// most tool results are file contents or stdout; the gate avoids a
+		// doomed JSON.parse over the whole blob
+		expect(tryParseToolResultObject(`${'stdout line\n'.repeat(2000)}`)).toBeNull();
+	});
+});

@@ -30,21 +30,21 @@
 	}
 </script>
 
-<DialogPrimitive.Root {open} onOpenChange={handleOpenChange}>
+<DialogPrimitive.Root onOpenChange={handleOpenChange} {open}>
 	<DialogPrimitive.Portal>
 		<DialogPrimitive.Overlay class="code-preview-overlay" />
 
 		<DialogPrimitive.Content class="code-preview-content">
 			<iframe
 				bind:this={iframeRef}
-				title="Preview {language}"
-				sandbox="allow-scripts"
 				class="code-preview-iframe"
+				sandbox="allow-scripts"
+				title="Preview {language}"
 			></iframe>
 
 			<DialogPrimitive.Close
-				class="code-preview-close absolute top-4 right-4 border-none bg-transparent text-white opacity-70 mix-blend-difference transition-opacity hover:opacity-100 focus-visible:ring-0 focus-visible:ring-offset-0 focus-visible:outline-none disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-8"
 				aria-label="Close preview"
+				class="code-preview-close absolute top-4 right-4 border-none bg-transparent text-white opacity-70 mix-blend-difference transition-opacity hover:opacity-100 focus-visible:ring-0 focus-visible:ring-offset-0 focus-visible:outline-none disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-8"
 			>
 				<XIcon />
 

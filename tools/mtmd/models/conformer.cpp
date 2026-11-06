@@ -4,7 +4,7 @@ ggml_cgraph * clip_graph_conformer::build() {
     const int n_frames   = img.nx();
     const int n_pos      = n_frames / 2;
     const int n_pos_embd = (((((n_frames + 1) / 2) + 1) / 2 + 1) / 2) * 2 - 1;
-    GGML_ASSERT(model.position_embeddings->ne[1] >= n_pos);
+    GGML_ASSERT(!model.position_embeddings || model.position_embeddings->ne[1] >= n_pos);
 
     ggml_tensor * pos_emb = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 512, n_pos_embd);
     ggml_set_name(pos_emb, "pos_emb");
@@ -124,8 +124,7 @@ ggml_cgraph * clip_graph_conformer::build() {
                 const auto pos_len = matrix_bd->ne[0];
                 const auto q_len   = matrix_bd->ne[1];
                 const auto h       = matrix_bd->ne[2];
-                matrix_bd          = ggml_pad(ctx0, matrix_bd, 1, 0, 0, 0);
-                matrix_bd          = ggml_roll(ctx0, matrix_bd, 1, 0, 0, 0);
+                matrix_bd          = ggml_pad_ext(ctx0, matrix_bd, 1, 0, 0, 0, 0, 0, 0, 0);
                 matrix_bd          = ggml_reshape_3d(ctx0, matrix_bd, q_len, pos_len + 1, h);
                 matrix_bd          = ggml_view_3d(ctx0, matrix_bd, q_len, pos_len, h, matrix_bd->nb[1],
                                                         matrix_bd->nb[2], matrix_bd->nb[0] * q_len);
@@ -165,7 +164,7 @@ ggml_cgraph * clip_graph_conformer::build() {
             // TODO @ngxson : support this ops in ggml
             {
                 int64_t       d    = x->ne[0] / 2;
-                ggml_tensor * gate = ggml_sigmoid(ctx0, ggml_view_2d(ctx0, x, d, x->ne[1], x->nb[1], d * x->nb[0]));
+                ggml_tensor * gate = ggml_sigmoid(ctx0, ggml_cont(ctx0, ggml_view_2d(ctx0, x, d, x->ne[1], x->nb[1], d * x->nb[0])));
                 x                  = ggml_mul(ctx0, ggml_view_2d(ctx0, x, d, x->ne[1], x->nb[1], 0), gate);
                 x                  = ggml_cont(ctx0, ggml_transpose(ctx0, x));
             }
@@ -207,6 +206,13 @@ ggml_cgraph * clip_graph_conformer::build() {
     cur = build_norm(cur, model.mm_0_w, model.mm_0_b, NORM_TYPE_NORMAL, 1e-5, -1);
     cb(cur, "audio_adapter.model.{}", 0);
     cur = build_ffn(cur, model.mm_1_w, model.mm_1_b, nullptr, nullptr, model.mm_3_w, model.mm_3_b, FFN_GELU_ERF, -1);
+
+    // d1omni_a: residual block after the projector
+    if (model.mm_4_w) {
+        ggml_tensor * x = build_norm(cur, model.mm_4_w, model.mm_4_b, NORM_TYPE_NORMAL, 1e-5, -1);
+        x   = build_ffn(x, model.mm_5_w, model.mm_5_b, nullptr, nullptr, model.mm_6_w, model.mm_6_b, FFN_GELU_ERF, -1);
+        cur = ggml_add(ctx0, cur, x);
+    }
 
     cb(cur, "projected", -1);
 

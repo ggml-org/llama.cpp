@@ -3,11 +3,11 @@
 void llama_model_deepseek::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,   hparams.n_layer_dense_lead, false);
-    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,  hparams.n_ff_exp);
+    ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all);
     ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,         hparams.n_expert_shared);
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,        hparams.expert_weights_scale, false);
 
-    switch (hparams.n_ff_exp) {
+    switch (hparams.n_ff_exp()) {
         case 1408: type = LLM_TYPE_16B; break;
         case 1792: type = LLM_TYPE_20B; break;
         default: type = LLM_TYPE_UNKNOWN;
@@ -19,7 +19,7 @@ void llama_model_deepseek::load_arch_tensors(llama_model_loader &) {
     const int64_t n_expert_shared = hparams.n_expert_shared;
 
 
-    const int64_t n_ff_exp        = hparams.n_ff_exp;
+    const int64_t n_ff_exp        = hparams.n_ff_exp();
 
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
@@ -68,10 +68,10 @@ void llama_model_deepseek::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_deepseek::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_deepseek::graph::graph(const llama_model & model, const llm_graph_params & params) :
+llama_model_deepseek::graph::graph(const llm_graph_params & params) :
     llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
@@ -102,18 +102,12 @@ llama_model_deepseek::graph::graph(const llama_model & model, const llm_graph_pa
 
         // self-attention
         {
-            // rope freq factors for llama3; may return nullptr for llama2 and other models
-            ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
-
             // compute Q and K and RoPE them
             auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
                     n_embd_head, n_head, n_head_kv, il);
 
-            Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, rope_factors, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                                 ext_factor, attn_factor, beta_fast, beta_slow);
-
-            Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, rope_factors, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                                 ext_factor, attn_factor, beta_fast, beta_slow);
+            Qcur = build_rope(Qcur, inp_pos, il);
+            Kcur = build_rope(Kcur, inp_pos, il);
 
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);
@@ -189,6 +183,4 @@ llama_model_deepseek::graph::graph(const llama_model & model, const llm_graph_pa
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }
