@@ -165,9 +165,9 @@
 
 <!-- 1. in type -->
 {#if section === 'glyphs'}
-	<p class="kicker">In Llama Sans · U+E001 and U+E000</p>
+	<p class="kicker">In Llama Sans · U+E002, U+E001 and U+E000</p>
 
-	<h2>Two glyphs of the font</h2>
+	<h2>Three glyphs of the font</h2>
 
 	<p>
 		The icon is a character of Llama Sans, in two sizes, so anything set in it can carry the mark
@@ -176,16 +176,21 @@
 		text, in controls and before a name, where a cap-height mark would read as smaller than the
 		letters. U+E000 sits on the baseline at exactly the cap height: keep it for headlines, where the
 		icon should sit quietly among large capitals and not stand out. In all caps, the case feature
-		swaps U+E000 for U+E001.
+		swaps U+E000 for U+E001. U+E002 is the lockup: U+E001 with the space after it built in, typed
+		straight before the name, in Llama Sans or in Llama Mono, which carries it too.
 	</p>
 
 	<div class="display">
-		<p class="lockup"> llama.cpp</p>
+		<p class="lockup mono">llama.cpp</p>
 
-		<p class="lockup"> Llama</p>
+		<p class="lockup">Llama</p>
 	</div>
 
 	<div class="pair">
+		<p>
+			<span class="tag">U+E002 · the lockup</span><span class="small-sample">Llama</span>
+		</p>
+
 		<p>
 			<span class="tag">U+E001 · small text, controls, names</span><span class="small-sample"
 				>Models run locally in  Llama.</span
@@ -241,17 +246,15 @@
 	<p>
 		The two lockups at the sizes they are used at: app headers, a terminal, a footer and a hero.
 		Llama, the app, is set in Llama Sans with its capital L; llama.cpp, the engine, in Llama Mono
-		and all lowercase, as it is typed in a terminal. Both start with Llama Sans's capital glyph
-		(U+E001) and a Llama Sans space, so the icon and the gap are the same in each. The llama.cpp
-		lockup always sits on a neutral ground (white, the greys, ink); only the Llama lockup goes on
-		colour, the hero's light blue and its navy.
+		and all lowercase, as it is typed in a terminal. Both start with the lockup glyph, U+E002: the
+		capital icon with the gap built in, the same in both fonts, so the lockup is one character and
+		the name. The llama.cpp lockup always sits on a neutral ground (white, the greys, ink); only the
+		Llama lockup goes on colour, the hero's light blue and its navy.
 	</p>
 
 	<div class="contexts">
 		<div class="ctx header mono">
-			<span style:font-size="18px" class="mark"
-				><span class="glyph"> </span>llama<span class="cpp">.cpp</span></span
-			>
+			<span style:font-size="18px" class="mark">llama<span class="cpp">.cpp</span></span>
 
 			<span class="links">docs · server · cli</span>
 
@@ -259,7 +262,7 @@
 		</div>
 
 		<div class="ctx header dark">
-			<span style:font-size="16px" class="mark"> Llama</span>
+			<span style:font-size="16px" class="mark">Llama</span>
 
 			<span class="links">Settings</span>
 		</div>
@@ -270,9 +273,7 @@
 <span class="banner"> llama.cpp</span> b6123 · slot 0 ready, ctx 32768</pre>
 
 		<div class="ctx footer mono">
-			<span style:font-size="13px" class="mark"
-				><span class="glyph"> </span>llama<span class="cpp">.cpp</span></span
-			>
+			<span style:font-size="13px" class="mark">llama<span class="cpp">.cpp</span></span>
 
 			<span class="links">MIT licence · ggml-org</span>
 		</div>
@@ -280,7 +281,7 @@
 		<!-- the hero, on llama.app's light blue and its navy: the Llama lockup (llama.cpp's stays on neutral grounds) -->
 		{#each [{ field: HERO, ink: '#111111', name: 'light' }, { field: NAVY, ink: '#fafafa', name: 'navy' }] as b (b.name)}
 			<div style:background={b.field} style:color={b.ink} class="ctx hero">
-				<span style:font-size="clamp(40px, 7vw, 64px)" class="mark"> Llama</span>
+				<span style:font-size="clamp(40px, 7vw, 64px)" class="mark">Llama</span>
 			</div>
 		{/each}
 	</div>
@@ -475,6 +476,9 @@
 			700 clamp(48px, 9vw, 112px) / 1.15 'Llama Sans',
 			var(--body);
 	}
+	.lockup.mono {
+		font-family: var(--mono);
+	}
 
 	/* 2 */
 	.buttons {
@@ -583,13 +587,10 @@
 		min-height: 220px;
 	}
 
-	/* llama.cpp's name in Llama Mono, after Llama Sans's capital glyph and space */
+	/* llama.cpp's lockup in Llama Mono, which carries the same U+E002 */
 	.ctx.mono .mark,
 	.ctx.mono .links {
 		font-family: var(--mono);
-	}
-	.ctx.mono .glyph {
-		font-family: 'Llama Sans', var(--body);
 	}
 	.ctx.terminal {
 		display: block;
