@@ -179,8 +179,27 @@ ggml_cgraph * clip_graph_qwen3vl::build() {
         embeddings = ggml_concat(ctx0, embeddings, deepstack_features, 0);
     } // concat along the feature dimension
 
+    // optional extra projector on top of the merger output
+    embeddings = build_mmproj_extra(embeddings);
+
     // build the graph
     ggml_build_forward_expand(gf, embeddings);
 
     return gf;
+}
+
+// custom projector appended after the qwen3vl merger (NanbeigeVL port):
+// merger output (5120) -> RMSNorm -> Linear(5120->7168) -> GELU(erf) -> Linear(7168->7168)
+ggml_tensor * clip_graph_qwen3vl_mlp::build_mmproj_extra(ggml_tensor * embeddings) {
+    embeddings = build_norm(embeddings, model.mm_input_norm_w, nullptr, NORM_TYPE_RMS, 1e-6f, -1);
+    cb(embeddings, "mmproj_extra_norm", -1);
+
+    embeddings = build_ffn(embeddings,
+        model.mm_4_w, model.mm_4_b,
+        nullptr, nullptr,
+        model.mm_6_w, model.mm_6_b,
+        FFN_GELU_ERF, -1);
+    cb(embeddings, "mmproj_extra_out", -1);
+
+    return embeddings;
 }

@@ -781,6 +781,7 @@ struct mtmd_context {
             case PROJECTOR_TYPE_QWEN2VL:
             case PROJECTOR_TYPE_QWEN25VL:
             case PROJECTOR_TYPE_QWEN3VL:
+            case PROJECTOR_TYPE_QWEN3VL_MLP:
             case PROJECTOR_TYPE_LING3VL:
             case PROJECTOR_TYPE_MIMOVL:
                 {

@@ -1027,6 +1027,10 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const 
             {
                 builder = std::make_unique<clip_graph_qwen3vl>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_QWEN3VL_MLP:
+            {
+                builder = std::make_unique<clip_graph_qwen3vl_mlp>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_SENSENOVA_U1:
             {
                 builder = std::make_unique<clip_graph_sensenova_u1>(ctx, img);
@@ -1864,6 +1868,7 @@ struct clip_model_loader {
                 case PROJECTOR_TYPE_QWEN2VL:
                 case PROJECTOR_TYPE_QWEN25VL:
                 case PROJECTOR_TYPE_QWEN3VL:
+                case PROJECTOR_TYPE_QWEN3VL_MLP:
                 case PROJECTOR_TYPE_LING3VL:
                     {
                         hparams.n_merge = 2; // default value for Qwen 2 and 2.5
@@ -2875,6 +2880,20 @@ struct clip_model_loader {
                     model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"));
                     model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
                     model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
+                } break;
+            case PROJECTOR_TYPE_QWEN3VL_MLP:
+                {
+                    // qwen3vl merger (ViT output -> text dim)
+                    model.mm_0_w = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
+                    model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"));
+                    model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
+                    // custom projector appended after the merger (NanbeigeVL port)
+                    model.mm_input_norm_w = get_tensor(TN_MM_INP_NORM);
+                    model.mm_4_w = get_tensor(string_format(TN_LLAVA_PROJ, 4, "weight"));
+                    model.mm_4_b = get_tensor(string_format(TN_LLAVA_PROJ, 4, "bias"));
+                    model.mm_6_w = get_tensor(string_format(TN_LLAVA_PROJ, 6, "weight"));
+                    model.mm_6_b = get_tensor(string_format(TN_LLAVA_PROJ, 6, "bias"));
                 } break;
             case PROJECTOR_TYPE_LFM3VL:
                 {
@@ -4668,6 +4687,7 @@ int clip_n_output_tokens_x(const clip_ctx * ctx, const clip_image_f32 * img) {
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_QWEN3VL:
+        case PROJECTOR_TYPE_QWEN3VL_MLP:
         case PROJECTOR_TYPE_SENSENOVA_U1:
         case PROJECTOR_TYPE_LING3VL:
         case PROJECTOR_TYPE_EXAONE4_5:
@@ -4701,6 +4721,7 @@ int clip_n_output_tokens_y(const clip_ctx * ctx, const clip_image_f32 * img) {
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_QWEN3VL:
+        case PROJECTOR_TYPE_QWEN3VL_MLP:
         case PROJECTOR_TYPE_SENSENOVA_U1:
         case PROJECTOR_TYPE_LING3VL:
         case PROJECTOR_TYPE_EXAONE4_5:
@@ -4790,6 +4811,7 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_QWEN3VL:
+        case PROJECTOR_TYPE_QWEN3VL_MLP:
         case PROJECTOR_TYPE_SENSENOVA_U1:
         case PROJECTOR_TYPE_LING3VL:
         case PROJECTOR_TYPE_EXAONE4_5:
@@ -5681,6 +5703,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
             } break;
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN3VL:
+        case PROJECTOR_TYPE_QWEN3VL_MLP:
         case PROJECTOR_TYPE_LING3VL:
         case PROJECTOR_TYPE_GLM4V:
         case PROJECTOR_TYPE_GLM5V:
@@ -6998,6 +7021,9 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_QWEN3VL:
             // main path + deepstack paths
             return ctx->model.mm_1_b->ne[0] * (1 + ctx->model.n_deepstack_layers);
+        case PROJECTOR_TYPE_QWEN3VL_MLP:
+            // merger output goes through the extra MLP projector
+            return ctx->model.mm_6_b->ne[0];
         case PROJECTOR_TYPE_LING3VL:
             return ctx->model.mm_1_b->ne[0];
         case PROJECTOR_TYPE_MIMOVL:
@@ -7106,6 +7132,7 @@ int clip_model_n_temporal_merge(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_QWEN3VL:
+        case PROJECTOR_TYPE_QWEN3VL_MLP:
         case PROJECTOR_TYPE_LFM3VL:
         case PROJECTOR_TYPE_NEMOTRON_OMNI:
         case PROJECTOR_TYPE_LING3VL:

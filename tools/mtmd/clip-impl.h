@@ -511,6 +511,7 @@ enum projector_type {
     PROJECTOR_TYPE_GLM_EDGE,
     PROJECTOR_TYPE_QWEN2VL,
     PROJECTOR_TYPE_QWEN3VL,
+    PROJECTOR_TYPE_QWEN3VL_MLP, // ViT + merger + custom MLP projector (NanbeigeVL port)
     PROJECTOR_TYPE_LING3VL,
     PROJECTOR_TYPE_STEP3VL,
     PROJECTOR_TYPE_GEMMA3,
@@ -593,6 +594,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_QWEN2VL,           "qwen2vl_merger"},
     { PROJECTOR_TYPE_QWEN25VL,          "qwen2.5vl_merger"},
     { PROJECTOR_TYPE_QWEN3VL,           "qwen3vl_merger"},
+    { PROJECTOR_TYPE_QWEN3VL_MLP,       "qwen3vl_mlp"},
     { PROJECTOR_TYPE_LING3VL,           "ling3vl"},
     { PROJECTOR_TYPE_STEP3VL,           "step3vl"},
     { PROJECTOR_TYPE_GEMMA3,            "gemma3"},

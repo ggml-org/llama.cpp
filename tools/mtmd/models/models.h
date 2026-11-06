@@ -48,6 +48,14 @@ struct clip_graph_qwen2vl : clip_graph {
 struct clip_graph_qwen3vl : clip_graph_qwen2vl {
     clip_graph_qwen3vl(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph_qwen2vl(ctx, img) {}
     ggml_cgraph * build() override;
+    // hook: extra projector applied on the merger output (default: identity)
+    virtual ggml_tensor * build_mmproj_extra(ggml_tensor * embeddings) { return embeddings; }
+};
+
+// qwen3vl ViT + merger + custom MLP projector: RMSNorm -> Linear -> GELU(erf) -> Linear
+struct clip_graph_qwen3vl_mlp : clip_graph_qwen3vl {
+    clip_graph_qwen3vl_mlp(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph_qwen3vl(ctx, img) {}
+    ggml_tensor * build_mmproj_extra(ggml_tensor * embeddings) override;
 };
 
 struct clip_graph_sensenova_u1 : clip_graph {
