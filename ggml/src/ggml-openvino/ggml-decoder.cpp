@@ -495,7 +495,10 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
             // kv cache tensor
             std::string src_name(node->view_src->name);
             int layer = extract_layer_from_name(src_name).value();
-            if (ggml_is_contiguous(node->src[0])) {
+            // a transposed V cache view is contiguous too when the attended length is the whole cache (one ubatch
+            // that fills it)
+            const bool v_trans_cache = m_model_params.v_trans && src_name.rfind("cache_v_l", 0) == 0;
+            if (ggml_is_contiguous(node->src[0]) && !v_trans_cache) {
                 // -  19: [    64,     8,   256,     1] VIEW            cache_k_l0 (view)             [ 2,   128,  1024, 1048576]
                 //         [   512,  1024,     1,     1]      0: NONE     cache_k_l0                    [ 2,  1024, 1048576, 1048576]
                 // -  20: [    64,   256,     8,     1] PERMUTE         cache_k_l0 (view) (permuted)  [ 2,  1024,   128, 1048576]
