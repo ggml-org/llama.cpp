@@ -1,28 +1,30 @@
 <!--
-	Several versions of one piece side by side in a row that scrolls sideways, each as wide as the row and snapping into
-	place, with its id and note under it. The first one fills the row, so the piece lines up with its neighbours in a
-	gallery.
+	Several versions of one piece side by side in a row that scrolls sideways, snapping into place, with its id and note
+	under each. Each is `itemWidth` wide (the row's width by default, and never wider), so a wide row shows several at
+	once and a narrow one shows one at a time; the gap is a StateGallery's, so they line up with the columns below.
 -->
 <script generics="T extends { id: string; note?: string }" lang="ts">
 	import type { Snippet } from 'svelte';
 
 	interface Props {
 		children: Snippet<[T]>;
+		/** each version's width */
+		itemWidth?: string;
 		items: T[];
 		/** what the versions are of, for assistive tech */
 		label: string;
 	}
 
-	let { children, items, label }: Props = $props();
+	let { children, items, itemWidth = '100%', label }: Props = $props();
 </script>
 
 <div
 	aria-label={label}
-	class="flex snap-x snap-mandatory gap-4 overflow-x-auto overscroll-x-contain pb-2"
+	class="flex snap-x snap-mandatory gap-6 overflow-x-auto overscroll-x-contain pb-2"
 	role="group"
 >
 	{#each items as item, i (item.id)}
-		<div class="grid w-full shrink-0 snap-start gap-1">
+		<div style:width="min({itemWidth}, 100%)" class="grid shrink-0 snap-start gap-1">
 			{@render children(item)}
 
 			<p class="m-0 text-xs text-muted-foreground">

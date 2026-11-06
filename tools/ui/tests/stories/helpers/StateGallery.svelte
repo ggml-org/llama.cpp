@@ -41,7 +41,12 @@
 		<h2 class="mb-4 text-sm font-medium text-muted-foreground">{title}</h2>
 	{/if}
 
-	<div style:grid-template-columns={gridTemplate} class="grid items-start gap-x-6 gap-y-8">
+	<!-- a query container, so a cell can take the gallery's whole width (StateGalleryItem's `full`) -->
+	<div
+		style:container-type="inline-size"
+		style:grid-template-columns={gridTemplate}
+		class="grid items-start gap-x-6 gap-y-8"
+	>
 		{@render children()}
 	</div>
 </section>
