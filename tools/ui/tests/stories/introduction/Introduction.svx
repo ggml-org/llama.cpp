@@ -6,8 +6,11 @@
 
 <script>
 	import Figure from '../philosophy/Figure.svelte';
+	import Principles from './Principles.svelte';
 	import Products from '../philosophy/figures/Products.svelte';
+	import Sections from './Sections.svelte';
 	import Stack from './Stack.svelte';
+	import Uses from './Uses.svelte';
 </script>
 
 <p class="kicker">Llama · Storybook</p>
@@ -18,9 +21,7 @@
 
 ## In short
 
-- **What:** the **Llama Brand** (the icon, Llama Sans and Llama Mono, the colours), the component library **Llama UI** built on it, the app **Llama Chat** built from that, and the communications made with them.
-- **Who it's for:** people who design or build Llama products, and the agents that work with them.
-- **Why one place:** the brand, the UI and the posts make the same decisions, so they're shown side by side and checked against each other.
+The **Llama Brand** (the icon, Llama Sans and Llama Mono, the colours), the component library **Llama UI** built on it, the app **Llama Chat** built from that, and the communications made with them, in one place, for the people and agents who design and build Llama products.
 
 <Figure n={1} caption="The building blocks, from the bottom: the Llama Brand, Llama UI built on it and Llama Chat built from that. The communications are made from the brand and the app.">
 	<Stack />
@@ -28,31 +29,21 @@
 
 ## What it's for
 
-- **Designing:** work out a new screen, post or asset by rendering its variations in the **Scrapbook**, built from the real system, before one is chosen.
-- **Building:** look up a component, its states and its tokens, in light and dark.
-- **Checking:** every story renders the real code, and the accessibility addon checks each one.
-- **Handing over:** the rules for agents (**Agents**) are exported, with **Communications**, as the Llama design system for Claude Design, by `npm run export:design-system`.
+<Figure n={2} caption="Four uses. The handover runs with npm run export:design-system.">
+	<Uses />
+</Figure>
 
 ## How we think
 
-The short version of **Philosophy**:
+The short version of **Philosophy**; the reasons are in **Ideology**, **Product** and **Design**.
 
-- **Personal, on hardware you already have:** the model runs on your own laptop, desktop or phone. Your conversations stay on it, and it works offline, without an account, so what you ask stays private and the AI you rely on is yours to keep. Capable AI shouldn't depend on a subscription or someone else's data centre; it should be open to everyone.
-- **Simple by default, deep on request:** nothing comes pre-installed. The Llama app suggests models that fit your device, and recommends one above the rest: small enough for any of them, and able to read, see and hear. Every other setting is one step away rather than on the first screen.
-- **Recognisable, easy to change:** the character is in three places, the icon, the details of the type and one accent, cinder. Everything else is neutral, so an app can bring its own colour.
-- **Function first:** every element has a job and a reason for its size. The interface stays out of the way of the conversation.
-- **Design lives in code:** the tokens, in three tiers, are the design. Change a primitive and the rest follows.
-
-The reasons are in **Ideology**, **Product** and **Design**, under **Philosophy**.
+<Figure n={3} caption="Five ideas, each drawn with the real system: the devices a model runs on, the first run's recommendation, the three places the character lives, a control on its grid and one token chain.">
+	<Principles />
+</Figure>
 
 ## How it fits together
 
-- **llama.brand** holds the **Llama Brand**, the one source of the icon, the fonts and the colours: the layer Llama UI is built on.
-- **llama.cpp** runs the models. Its server, llama-server, bundles **Llama Chat**, built from **Llama UI** in `tools/ui`, which is this Storybook's home.
-- **Llama for Mac** and **Llama for Windows** run llama-server and open Llama Chat in their own window.
-- **llama.app**, the website, shows models the way Llama Chat does.
-
-<Figure n={2} caption="The products and their repositories. llama.brand supplies the brand; llama.cpp holds the engine and Llama UI; the native apps run the engine and open Llama Chat.">
+<Figure n={4} caption="The products and their repositories. llama.brand supplies the brand; llama.cpp holds the engine and Llama UI, in tools/ui, this Storybook's home; the native apps run llama-server and open Llama Chat. llama.app shows models the way Llama Chat does.">
 	<Products />
 </Figure>
 
@@ -60,13 +51,9 @@ Inside Llama UI, the tokens go from primitives to semantic roles to components, 
 
 ## How it's laid out
 
-- **Introduction:** this page.
-- **Agents:** **Design guidelines** (`DESIGN.md`) and **Brand guidelines** (`BRAND.md`), the rules written for agents first: precise rather than persuasive.
-- **Philosophy:** **Ideology**, **Product** and **Design**, the why, written for people.
-- **Brand:** the logo, from how the icon is drawn to its files, the typography and the colours.
-- **Communications:** how posts, store screenshots, link previews and swag are made, from the direction and the grid to the finished pieces.
-- **UI:** the foundations, every component from actions to overlays, the patterns, and the blocks, Llama Chat's real screens.
-- **Scrapbook:** proposals, prototypes and variations for the UI, communications and the brand, side by side before one is chosen.
+<Figure n={5} caption="The sections, in sidebar order.">
+	<Sections />
+</Figure>
 
 ## Working in it
 

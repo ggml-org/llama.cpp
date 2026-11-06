@@ -77,7 +77,7 @@
 	<div class="link across">
 		<span class="line"></span>
 
-		<span class="label">Run <code>llama-server</code> and open Llama Chat in their own window</span>
+		<span class="label">Run <code>llama-server</code> and open Llama Chat</span>
 	</div>
 
 	<section class="card card-surface rounded-card apps">
