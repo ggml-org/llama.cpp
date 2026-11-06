@@ -715,68 +715,65 @@ def test_checkpoint_after_one_token_divergence(swa_server):
         assert lp == pytest.approx(lp_expected, abs=1e-3)
 
 
-# cache reuse shifts the tail of the cached prompt over a deleted chunk - the checkpoints there were created from the
-# deleted tokens and must not be restored
-def test_cache_reuse_does_not_restore_shifted_checkpoint():
-    server = ServerPreset.tinylfm2()
+# a request that goes back to a position that already has a checkpoint keeps it instead of copying the state again,
+# and protects it from thinning like one it created
+@pytest.mark.parametrize("preset", [
+    pytest.param(ServerPreset.tinylfm2,   id="hybrid"),
+    pytest.param(ServerPreset.tinygemma3, id="swa"),
+])
+def test_checkpoint_reuse(preset, tmp_path):
+    server = preset()
+    server.n_ctx = 4096
+    server.n_slots = 1
     server.n_ubatch = 32 # end-of-prompt checkpoints at n - 36 and n - 4
-    server.n_cache_reuse = 8
+    server.n_ctx_checkpoints = 3
     server.temperature = 0.0
+    server.debug = True
+    server.log_path = str(tmp_path / "server.log")
     server.start()
 
-    words = ["budget", "hiring", "roadmap", "risk", "vendor", "launch", "audit", "review"] * 6
-    res = server.make_request("POST", "/tokenize", data={
-        "content": " ".join(f"Item {i}: the {w} report was filed on day {i % 7} by team {i % 5}." for i, w in enumerate(words)),
-    })
-    assert res.status_code == 200
-    a = res.body["tokens"]
-    m = len(a) // 2
-    b = a[:m] + a[m + 16:] # the checkpoint of a at n - 36 is now inside the shifted tail
+    def report_tokens(n_items):
+        words = ["budget", "hiring", "roadmap", "risk", "vendor", "launch", "audit", "review"]
+        return tokenize(server, " ".join(f"Item {i}: the {words[i % 8]} report was filed on day {i % 7} by team {i % 5}." for i in range(n_items)))
 
-    def top_logprobs(prompt, cache_prompt):
+    def completion(prompt, cache_prompt=True, n_cache_reuse=0):
         res = server.make_request("POST", "/completion", data={
             "prompt": prompt,
             "n_predict": 1,
             "n_probs": 5,
             "cache_prompt": cache_prompt,
+            "n_cache_reuse": n_cache_reuse,
         })
         assert res.status_code == 200
-        return [(p["id"], p["logprob"]) for p in res.body["completion_probabilities"][0]["top_logprobs"]]
+        return res.body
 
-    expected = top_logprobs(b, False)
-    top_logprobs(a, True)
-    actual = top_logprobs(b, True)
+    def top_logprobs(body):
+        return [(p["id"], p["logprob"]) for p in body["completion_probabilities"][0]["top_logprobs"]]
+
+    tokens = report_tokens(32)
+    prefix, tail = tokens[:-16], tokens[-16:]
+
+    completion(tokens[:-100]) # an earlier checkpoint, so thinning has one to keep before n - 36
+    completion(tokens)
+    # same prefix, different tail of the same length: goes back to the checkpoint at n - 36 and reuses it, then fills
+    # the list when creating the one at n - 4
+    n_restored = completion(prefix + tail[::-1])["timings"]["prompt_n"]
+    # the reused checkpoint survived thinning
+    assert completion(prefix + tail[1:] + tail[:1])["timings"]["prompt_n"] == n_restored
+
+    # cache reuse shifts the tail of the cached prompt over a deleted chunk - the checkpoints there were created from
+    # the deleted tokens and must not be restored
+    a = report_tokens(48)
+    m = len(a) // 2
+    b = a[:m] + a[m + 16:] # the checkpoint of a at n - 36 is now inside the shifted tail
+
+    expected = top_logprobs(completion(b, cache_prompt=False))
+    completion(a)
+    actual = top_logprobs(completion(b, n_cache_reuse=8))
 
     assert [tid for tid, _ in actual] == [tid for tid, _ in expected]
     for (_, lp), (_, lp_expected) in zip(actual, expected):
         assert lp == pytest.approx(lp_expected, abs=1e-3)
-
-
-# a request that goes back to a position that already has a checkpoint keeps it instead of copying the state again
-def test_checkpoint_reused_not_copied(tmp_path):
-    server = ServerPreset.tinylfm2()
-    server.n_ubatch = 32 # end-of-prompt checkpoints at n - 36 and n - 4
-    server.debug = True
-    server.log_path = str(tmp_path / "server.log")
-    server.start()
-
-    words = ["budget", "hiring", "roadmap", "risk", "vendor", "launch", "audit", "review"] * 4
-    res = server.make_request("POST", "/tokenize", data={
-        "content": " ".join(f"Item {i}: the {w} report was filed on day {i % 7} by team {i % 5}." for i, w in enumerate(words)),
-    })
-    assert res.status_code == 200
-    tokens = res.body["tokens"]
-    prefix, tail = tokens[:-16], tokens[-16:]
-
-    # same prefix, different tail of the same length: the second request restores the checkpoint at n - 36 and
-    # reaches it again while processing
-    for t in [tail, tail[::-1]]:
-        res = server.make_request("POST", "/completion", data={
-            "prompt": prefix + t,
-            "n_predict": 1,
-            "cache_prompt": True,
-        })
-        assert res.status_code == 200
 
     server.stop()
 
@@ -784,38 +781,6 @@ def test_checkpoint_reused_not_copied(tmp_path):
         log = f.read()
     assert "reusing context checkpoint" in log
     assert "superseding context checkpoint" not in log
-
-
-# with the checkpoint list full, the checkpoint a request reused must survive thinning like one it created
-def test_reused_checkpoint_not_thinned():
-    server = ServerPreset.tinylfm2()
-    server.n_ubatch = 32 # end-of-prompt checkpoints at n - 36 and n - 4
-    server.n_ctx_checkpoints = 3
-    server.start()
-
-    words = ["budget", "hiring", "roadmap", "risk", "vendor", "launch", "audit", "review"] * 4
-    res = server.make_request("POST", "/tokenize", data={
-        "content": " ".join(f"Item {i}: the {w} report was filed on day {i % 7} by team {i % 5}." for i, w in enumerate(words)),
-    })
-    assert res.status_code == 200
-    tokens = res.body["tokens"]
-    prefix, tail = tokens[:-16], tokens[-16:]
-
-    def prompt_n(prompt):
-        res = server.make_request("POST", "/completion", data={
-            "prompt": prompt,
-            "n_predict": 1,
-            "cache_prompt": True,
-        })
-        assert res.status_code == 200
-        return res.body["timings"]["prompt_n"]
-
-    prompt_n(tokens[:-100]) # an earlier checkpoint, so thinning has one to keep before n - 36
-    prompt_n(tokens)
-    # restores the checkpoint at n - 36 and reuses it, then fills the list when creating the one at n - 4
-    n_restored = prompt_n(prefix + tail[::-1])
-    # the checkpoint at n - 36 is still there
-    assert prompt_n(prefix + tail[1:] + tail[:1]) == n_restored
 
 
 # checkpoint appendix: magic(4) version(4) count(4), then per checkpoint

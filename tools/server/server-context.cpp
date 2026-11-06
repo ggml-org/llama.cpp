@@ -431,6 +431,9 @@ struct server_slot {
 
         spec_is_replay = false;
 
+        ckpt_reused      = nullptr;
+        ckpt_reused_task = -1;
+
         last_nl_pos    = 0;
         generated      = {};
         has_new_line   = false;
