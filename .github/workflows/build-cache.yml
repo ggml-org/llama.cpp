@@ -40,7 +40,7 @@ jobs:
   #        path: ./spacemit_toolchain
   #        version: ${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}
 
-  ubuntu-24-openvino-cache:
+  ubuntu-26-openvino-cache:
     runs-on: ubuntu-26.04
 
     env:
