@@ -5,7 +5,21 @@
 	45 and 32% black. The header with the server's dot and address (and, with `network`, the QR code for phones), the
 	installed models with their chips, Recommended for your Mac, Browse models, and the version with Settings and
 	Quit. The models are small and medium ones from llama.app's catalog; their logos are the app's own ModelLogos.
+	`installed` and `recommended` replace the rows (none installed is the first launch, with a grey dot), and
+	`downloading` shows the first recommended row's download in progress.
 -->
+<script lang="ts" module>
+	export interface MacMenuRow {
+		active?: boolean;
+		logo: string;
+		name: string;
+		params?: string;
+		quant?: string;
+		subtitle: string;
+		vision?: boolean;
+	}
+</script>
+
 <script lang="ts">
 	import qr from './assets/qr-network.svg?raw';
 	import gemma from './logos/gemma.svg?raw';
@@ -22,24 +36,20 @@
 		QrCode
 	} from '@lucide/svelte';
 
+	type Row = MacMenuRow;
+
 	interface Props {
+		/** the first recommended row's download, from 0 to 1 */
+		downloading?: number;
+		/** the installed models, in place of the default ones; none is the first launch */
+		installed?: Row[];
 		/** the server reachable from other devices: its network address, and the QR code open */
 		network?: boolean;
+		/** the models recommended for this Mac, in place of the default ones */
+		recommended?: Row[];
 	}
 
-	let { network = false }: Props = $props();
-
-	interface Row {
-		active?: boolean;
-		logo: string;
-		name: string;
-		params?: string;
-		quant?: string;
-		subtitle: string;
-		vision?: boolean;
-	}
-
-	const installed: Row[] = [
+	const INSTALLED: Row[] = [
 		{
 			active: true,
 			logo: gemma,
@@ -65,7 +75,7 @@
 			vision: true
 		}
 	];
-	const recommended: Row[] = [
+	const RECOMMENDED: Row[] = [
 		{
 			logo: liquid,
 			name: 'LFM2.5',
@@ -82,6 +92,13 @@
 			vision: true
 		}
 	];
+	let {
+		downloading,
+		installed = INSTALLED,
+		network = false,
+		recommended = RECOMMENDED
+	}: Props = $props();
+
 	const host = $derived(network ? '100.101.42.7:9931' : 'localhost:9931');
 </script>
 
@@ -93,7 +110,7 @@
 	</span>
 {/snippet}
 
-{#snippet modelRow(row: Row, trailing: 'chevron' | 'install')}
+{#snippet modelRow(row: Row, trailing: 'chevron' | 'install', progress?: number)}
 	<div class="row model">
 		<span class={['icon', { active: row.active }]}>{@html row.logo}</span>
 
@@ -105,6 +122,10 @@
 
 		{#if trailing === 'chevron'}
 			<ChevronRight class="trailing" size={14} strokeWidth={2} />
+		{:else if progress !== undefined}
+			<span class="percent">{Math.round(progress * 100)}%</span>
+
+			<i class="progress"><i style:width="{progress * 100}%"></i></i>
 		{:else}
 			<ArrowDown class="trailing" size={14} strokeWidth={2} />
 		{/if}
@@ -113,7 +134,7 @@
 
 <div class="menu">
 	<div class="row header">
-		<p class="name">Llama <i class="dot"></i></p>
+		<p class="name">Llama <i class={['dot', { idle: installed.length === 0 }]}></i></p>
 
 		<p class="actions">
 			<span>{host}</span>
@@ -122,7 +143,7 @@
 
 			{#if network}<QrCode class="glyph qr" size={11} strokeWidth={2} />{/if}
 
-			<span class="open">Open chat</span>
+			{#if installed.length}<span class="open">Open chat</span>{/if}
 		</p>
 
 		{#if network}<span class="qrcode">{@html qr}</span>{/if}
@@ -132,13 +153,19 @@
 
 	<p class="row section">Installed <span class="link">models</span></p>
 
-	{#each installed as row (row.name)}{@render modelRow(row, 'chevron')}{/each}
+	{#each installed as row (row.name)}{@render modelRow(row, 'chevron')}{:else}<p class="row none">
+			None yet
+		</p>{/each}
 
 	<i class="separator"></i>
 
 	<p class="row section">Recommended for your Mac</p>
 
-	{#each recommended as row (row.name)}{@render modelRow(row, 'install')}{/each}
+	{#each recommended as row, i (row.name)}{@render modelRow(
+			row,
+			'install',
+			i === 0 ? downloading : undefined
+		)}{/each}
 
 	<i class="separator"></i>
 
@@ -247,6 +274,33 @@
 		width: 100%;
 		height: 100%;
 	}
+	.dot.idle {
+		background: rgb(0 0 0 / 0.25);
+	}
+	.none {
+		color: var(--secondary);
+		font-size: 11px;
+	}
+	.percent {
+		color: var(--secondary);
+		font-size: 11px;
+		font-variant-numeric: tabular-nums;
+	}
+	.progress {
+		position: absolute;
+		right: 8px;
+		bottom: 0;
+		left: 44px;
+		height: 3px;
+		overflow: hidden;
+		border-radius: 2px;
+		background: var(--subtle);
+	}
+	.progress i {
+		display: block;
+		height: 100%;
+		background: var(--link);
+	}
 	.separator {
 		display: block;
 		height: 1px;
@@ -261,6 +315,7 @@
 		color: var(--link);
 	}
 	.model {
+		position: relative;
 		display: flex;
 		align-items: center;
 		gap: 6px;

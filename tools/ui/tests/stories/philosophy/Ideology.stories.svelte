@@ -1,4 +1,5 @@
 <script lang="ts" module>
+	import { seedChatStory } from '../chat/messages/fixtures';
 	import Editorial from './Editorial.svelte';
 	import Ideology from './Ideology.svx';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
@@ -13,7 +14,7 @@
 	});
 </script>
 
-<Story asChild name="Ideology">
+<Story asChild beforeEach={() => seedChatStory()} name="Ideology">
 	<Editorial>
 		<Ideology />
 	</Editorial>

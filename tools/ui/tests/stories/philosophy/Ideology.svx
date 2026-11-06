@@ -4,12 +4,12 @@
 -->
 
 <script>
-	import Disclosure from './figures/Disclosure.svelte';
 	import Figure from './Figure.svelte';
 	import Layers from './figures/Layers.svelte';
 	import Machine from './figures/Machine.svelte';
 	import Reach from './figures/Reach.svelte';
 	import Sharing from './figures/Sharing.svelte';
+	import Storyboard from './figures/Storyboard.svelte';
 	import Shows from './figures/Shows.svelte';
 	import Voice from './figures/Voice.svelte';
 </script>
@@ -46,10 +46,12 @@ Running a model used to take a terminal and terms like GGUF, quantization and sp
 
 Nothing comes pre-installed. The Llama app suggests models that fit your device and recommends one above the rest: small enough for any device, and able to read, see and hear. You choose; the app downloads your choice from Hugging Face and keeps the server running.
 
+Managing models is the native apps' job, so people rarely have to think about it. In Llama Chat, the model manager and Discover are for power users and should stay off until someone turns them on; anyone else should find a model by name in the global search, next to their conversations and projects.
+
 Sampling, penalties, system prompts, custom recipes and every other setting stay available, one step away rather than on the first screen. Where exactly to draw that line is still open.
 
-<Figure n={3} caption="The same app at three depths, with the real controls: the first run, the settings and the advanced panel.">
-	<Disclosure />
+<Figure n={3} caption="The first run with Llama for Mac, in four frames from the real app and Llama Chat. Nothing comes pre-installed; settings wait until someone asks.">
+	<Storyboard />
 </Figure>
 
 ## Shared
