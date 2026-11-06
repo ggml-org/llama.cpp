@@ -12,8 +12,8 @@
 	import Measure from './philosophy/figures/Measure.svelte';
 	import Names from './philosophy/figures/Names.svelte';
 	import Neutral from './philosophy/figures/Neutral.svelte';
+	import Products from './philosophy/figures/Products.svelte';
 	import Restyle from './philosophy/figures/Restyle.svelte';
-	import Stack from './philosophy/figures/Stack.svelte';
 	import Tokens from './philosophy/figures/Tokens.svelte';
 </script>
 
@@ -25,10 +25,10 @@
 
 ## The Llama stack
 
-llama.cpp runs models on your own machine. Around it sits a stack of libraries, packages and technologies, and example apps built on them. **Llama UI** is the library of UI and UX components that this Storybook documents. **Llama Chat** is the local, private chat client built from it, and it replaces the legacy web UI. The brand (the icon, the type, the colours) is how people recognise all of them.
+llama.cpp runs models on your own machine. Around it sits a stack of libraries, packages and technologies, and the apps built on them. **Llama UI** is the library of UI and UX components that this Storybook documents. **Llama Chat** is the local, private chat client built from it, which replaces the legacy web UI and ships inside llama.cpp's server. **Llama for Mac** and **Llama for Windows** are the native apps: they put llama.cpp in the menu bar or the system tray, run its server for you, and open Llama Chat in their own window. The brand (the icon, the type, the colours) is how people recognise all of them, and it has one source, **llama.brand**.
 
-<Figure n={1} caption="The stack, from the app down to the engine. Each layer is meant to be used on its own, and built on.">
-	<Stack />
+<Figure n={1} caption="The products and their repositories. llama.brand is where the brand comes from; llama.cpp holds the engine and Llama UI; the native apps run the engine and open Llama Chat.">
+	<Products />
 </Figure>
 
 The stack is meant to be used and built on, and the design is too. People should be able to take Llama UI into their own apps, fork Llama Chat, or restyle either one without fighting the system.
@@ -89,7 +89,7 @@ It is also in the fonts (U+E000 to U+E002), so it can be typed like a letter, se
 
 ## Grotesque type
 
-Llama Sans belongs to the grotesque line. It started with Akzidenz-Grotesk in 1898, continued through Neue Haas Grotesk, released in 1957 and soon renamed Helvetica, and on to the signs of the New York subway, countless logos, and system fonts like Apple's San Francisco. These faces have lasted because they are plain, sturdy and neutral enough to carry any message.
+Llama Sans belongs to the grotesque line. It started with Akzidenz-Grotesk in 1898 and continued through Neue Haas Grotesk, released in 1957 and soon renamed Helvetica. From there it went everywhere: Josef Müller-Brockmann's concert posters for the Zurich Tonhalle, the American Airlines logo, the signs of the New York subway, the first iPhone, and system fonts like Apple's San Francisco. These faces have lasted because they are plain, sturdy and neutral enough to carry any message.
 
 <Figure n={7} caption="The grotesque line, every name set in Llama Sans rather than its own face; then the letters that make Llama Sans its own, and Llama Mono's cells.">
 	<Grotesque />

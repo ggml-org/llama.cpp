@@ -5,8 +5,15 @@
 <script lang="ts">
 	const line = [
 		{ name: 'Akzidenz-Grotesk', note: 'Berthold, Berlin', year: '1898' },
+		{
+			name: 'The Zurich Tonhalle posters',
+			note: 'Josef Müller-Brockmann, in Akzidenz-Grotesk',
+			year: '1950s'
+		},
 		{ name: 'Neue Haas Grotesk', note: 'Haas, Münchenstein; Helvetica from 1960', year: '1957' },
+		{ name: 'The American Airlines logo', note: 'Massimo Vignelli, in Helvetica', year: '1967' },
 		{ name: 'The New York subway signs', note: 'Unimark’s standards manual', year: '1970' },
+		{ name: 'The first iPhone', note: 'its interface set in Helvetica', year: '2007' },
 		{ name: 'San Francisco', note: 'Apple’s system font', year: '2015' },
 		{ name: 'Geist', note: 'Vercel, open source', year: '2023' },
 		{ name: 'Llama Sans', note: 'built from Geist', ours: true, year: '2026' }
