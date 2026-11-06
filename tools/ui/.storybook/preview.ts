@@ -57,7 +57,7 @@ const preview: Preview = {
 						'Modules',
 						['Headline blocks', 'Model cards', 'Stat cards', 'Product shot'],
 						'Key visuals',
-						['Statement', 'Product', 'Roster', 'Bulletin', 'Numeral', 'Words'],
+						['Statement', 'Product', 'Roster', 'Bulletin', 'Numeral', 'Receipt'],
 						'Applications',
 						['Model drop', "What's new", 'Link previews', 'Open models poster', 'Swag']
 					],

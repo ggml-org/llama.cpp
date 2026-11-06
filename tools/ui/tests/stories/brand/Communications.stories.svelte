@@ -1,7 +1,7 @@
 <script lang="ts" module>
 	import StateGallery from '../helpers/StateGallery.svelte';
 	import StateGalleryItem from '../helpers/StateGalleryItem.svelte';
-	import Words from './communications/layouts/Words.svelte';
+	import Receipt from './communications/layouts/Receipt.svelte';
 	import LinkPreview from './communications/posts/LinkPreview.svelte';
 	import ModelDropPost from './communications/posts/ModelDropPost.svelte';
 	import {
@@ -11,15 +11,15 @@
 		modelDrop,
 		type ModelDropCopy,
 		openModels,
+		type ReceiptCopy,
 		whatsNew,
-		type WhatsNewCopy,
-		type WordsCopy
+		type WhatsNewCopy
 	} from './communications/posts/post';
 	import WhatsNewPost from './communications/posts/WhatsNewPost.svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 
 	// Communications' applications: key visuals with real copy, the pieces that ship. Model drop is a Roster, What's new
-	// a Bulletin, llama.app's link preview a Product, llama.cpp's a Statement and the open models poster Words. The copy is in the controls
+	// a Bulletin, llama.app's link preview a Product, llama.cpp's a Statement and the open models poster a Receipt. The copy is in the controls
 	const { Story } = defineMeta({
 		parameters: {
 			controls: { disable: true },
@@ -91,17 +91,19 @@
 
 <Story args={{ ...openModels, overlay: false }} name="Open models poster" parameters={editable}>
 	{#snippet template(args)}
-		{@const copy = args as WordsCopy & { overlay: boolean }}
+		{@const copy = args as ReceiptCopy & { overlay: boolean }}
 		<StateGallery minItemWidth="20rem">
 			{#each ['poster', 'portrait', 'square', 'story'] as const as format (format)}
 				{#each tones as tone (tone)}
-					<StateGalleryItem label="{FORMATS[format].name}, {tone}" note="Words · {size(format)}">
-						<Words
-							accent={copy.accent}
+					<StateGalleryItem label="{FORMATS[format].name}, {tone}" note="Receipt · {size(format)}">
+						<Receipt
+							footer={copy.footer}
 							{format}
+							header={{ brand: 'Llama', url: 'llama.app' }}
+							headline={copy.headline}
 							overlay={copy.overlay}
-							paragraphs={copy.paragraphs}
-							signoff={copy.signoff}
+							rows={copy.rows}
+							title={copy.title}
 							{tone}
 						/>
 					</StateGalleryItem>

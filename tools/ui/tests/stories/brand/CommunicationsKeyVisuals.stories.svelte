@@ -4,9 +4,9 @@
 	import Bulletin from './communications/layouts/Bulletin.svelte';
 	import Numeral from './communications/layouts/Numeral.svelte';
 	import Product from './communications/layouts/Product.svelte';
+	import Receipt from './communications/layouts/Receipt.svelte';
 	import Roster from './communications/layouts/Roster.svelte';
 	import Statement from './communications/layouts/Statement.svelte';
-	import Words from './communications/layouts/Words.svelte';
 	import BranchMotif from './communications/posts/BranchMotif.svelte';
 	import Curve from './communications/posts/Curve.svelte';
 	import ModelCard from './communications/posts/ModelCard.svelte';
@@ -170,21 +170,24 @@
 	{/snippet}
 </Story>
 
-<Story args={{ overlay: false, tone: 'light' }} name="Words">
+<Story args={{ overlay: false, tone: 'light' }} name="Receipt">
 	{#snippet template(args)}
 		{@const { overlay, tone } = args as Args}
 		<StateGallery minItemWidth="18rem">
 			{#each ['poster', 'portrait', 'square', 'story', 'landscape'] as const as format (format)}
 				<StateGalleryItem label={FORMATS[format].name} note={note(format)}>
-					<Words
-						accent="said plainly"
+					<Receipt
+						{footer}
 						{format}
+						header={{ brand: 'Llama', url: 'llama.app' }}
+						headline={twoLines}
 						{overlay}
-						paragraphs={[
-							'One thing, said plainly, in a few words.',
-							'A second line that turns it.'
+						rows={[
+							['a line', 'its value'],
+							['another', 'its value'],
+							['total', 'the point']
 						]}
-						signoff={['llama.app', 'A line under the address']}
+						title="What it took"
 						{tone}
 					/>
 				</StateGalleryItem>
