@@ -304,6 +304,9 @@ struct llama_hparams {
     // realtime models: number of tokens the output lags behind the audio input
     uint32_t n_tokens_delay          = 0;
 
+    // each sequence is paired with an unconditional one
+    bool     classifier_free_guidance = false;
+
     // gemma3n altup
     uint32_t n_altup      = 4; // altup_num_inputs
     uint32_t i_altup_act  = 0; // altup_active_idx
@@ -431,6 +434,7 @@ struct llama_hparams {
     // Step35: optional per-layer clamps for (Swi)GLU
     std::array<float, LLAMA_MAX_LAYERS> swiglu_clamp_exp; // clamping for expert FFN
     std::array<float, LLAMA_MAX_LAYERS> swiglu_clamp_shexp; // shared expert
+    std::array<float, LLAMA_MAX_LAYERS> swiglu_clamp;       // dense FFN
 
     // this value n_pattern means that every nth layer is dense (i.e. non-SWA)
     // dense_first means whether the pattern is start with a dense layer

@@ -389,6 +389,12 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
         quantize &= name.find("attn_v_b.weight")         == std::string::npos;
     }
 
+    // xing4_0: do not quantize the MHC hyper-connection gate matrices
+    // (the 1D hc_*_base / hc_*_scale tensors are already excluded by the n_dims < 2 rule)
+    if (arch == LLM_ARCH_XING4_0) {
+        quantize &= name.find("hc_") == std::string::npos;
+    }
+
     // the decision head of vllm-decision2 is small and computed in F32
     if (arch == LLM_ARCH_VLLM_DECISION2) {
         quantize &= name.compare(0, 9, "decision.") != 0;

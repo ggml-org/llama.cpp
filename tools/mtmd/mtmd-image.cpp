@@ -819,12 +819,12 @@ mtmd_image_preproc_out mtmd_image_preprocessor_dyn_size::preprocess(const clip_i
 }
 
 //
-// mtmd_image_preprocessor_lfm3vl
+// mtmd_image_preprocessor_qwen3vl
 //
 
 // rounds before the pixel checks (an edge may round to 0) and computes in double, as transformers does
-clip_image_size mtmd_image_preprocessor_lfm3vl::smart_resize(int width, int height, int factor, int64_t min_pixels, int64_t max_pixels,
-                                                             int n_frames, int temporal_factor) {
+clip_image_size mtmd_image_preprocessor_qwen3vl::smart_resize(int width, int height, int factor, int64_t min_pixels, int64_t max_pixels,
+                                                              int n_frames, int temporal_factor) {
     double h = height;
     double w = width;
     // the video variant first upscales edges below factor
@@ -850,18 +850,13 @@ clip_image_size mtmd_image_preprocessor_lfm3vl::smart_resize(int width, int heig
     return {std::max(factor, w_bar), std::max(factor, h_bar)};
 }
 
-clip_image_size mtmd_image_preprocessor_lfm3vl::target_size(const clip_image_size & original_size) const {
-    return smart_resize(original_size.width, original_size.height, hparams.patch_size * hparams.n_merge,
-                        hparams.image_min_pixels, hparams.image_max_pixels);
-}
-
-bool mtmd_image_preprocessor_lfm3vl::get_video_frame_size(int n_frames, int width, int height, clip_image_size & out) const {
-    // Lfm3VlVideoProcessor size: shortest_edge 4096, longest_edge 25165824, temporal_patch_size 2
+bool mtmd_image_preprocessor_qwen3vl::get_video_frame_size(int n_frames, int width, int height, clip_image_size & out) const {
+    // Qwen3VLVideoProcessor (and Lfm3VlVideoProcessor) size: shortest_edge 4096, longest_edge 25165824, temporal_patch_size 2
     out = smart_resize(width, height, hparams.patch_size * hparams.n_merge, 4096, 25165824, n_frames, 2);
     return true;
 }
 
-mtmd_image_preproc_out mtmd_image_preprocessor_lfm3vl::preprocess_video_frame(const clip_image_u8 & img) const {
+mtmd_image_preproc_out mtmd_image_preprocessor_qwen3vl::preprocess_video_frame(const clip_image_u8 & img) const {
     const int f = hparams.patch_size * hparams.n_merge;
     const auto size = img.get_size();
     return resize_to(img, {
@@ -870,7 +865,7 @@ mtmd_image_preproc_out mtmd_image_preprocessor_lfm3vl::preprocess_video_frame(co
     });
 }
 
-mtmd_image_preproc_out mtmd_image_preprocessor_lfm3vl::resize_to(const clip_image_u8 & img, const clip_image_size & size) const {
+mtmd_image_preproc_out mtmd_image_preprocessor_qwen3vl::resize_to(const clip_image_u8 & img, const clip_image_size & size) const {
     clip_image_u8 resized_image;
     img_tool::resize(img, resized_image, size,
                         hparams.image_resize_algo,
@@ -879,6 +874,15 @@ mtmd_image_preproc_out mtmd_image_preprocessor_lfm3vl::resize_to(const clip_imag
     mtmd_image_preproc_out output;
     output.append(hparams, resized_image, true);
     return output;
+}
+
+//
+// mtmd_image_preprocessor_lfm3vl
+//
+
+clip_image_size mtmd_image_preprocessor_lfm3vl::target_size(const clip_image_size & original_size) const {
+    return smart_resize(original_size.width, original_size.height, hparams.patch_size * hparams.n_merge,
+                        hparams.image_min_pixels, hparams.image_max_pixels);
 }
 
 //
