@@ -1110,7 +1110,7 @@ struct ggml_backend_opencl_context {
     size_t local_dsv4_hc_pre = 0;
     size_t local_dsv4_hc_post[2] = {};
     cl_kernel kernel_cumsum_blk, kernel_cumsum_add;
-    cl_kernel kernel_repeat_f32;
+    cl_kernel kernel_repeat_f32, kernel_repeat_f16;
     cl_kernel kernel_pad;
     cl_kernel kernel_tanh_f32, kernel_tanh_f32_4, kernel_tanh_f32_nc;
     cl_kernel kernel_tanh_f16, kernel_tanh_f16_4, kernel_tanh_f16_nc;
@@ -4345,6 +4345,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
         CL_CHECK((backend_ctx->kernel_repeat_f32 = clCreateKernel(prog, "kernel_repeat_f32", &err), err));
+        CL_CHECK((backend_ctx->kernel_repeat_f16 = clCreateKernel(prog, "kernel_repeat_f16", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -11800,7 +11801,7 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
         case GGML_OP_L2_NORM:
             return ggml_is_contiguous_rows(op->src[0]);
         case GGML_OP_REPEAT:
-            return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32; // Assuming F32 for now, can be expanded
+            return op->src[0]->type == op->type && (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16);
         case GGML_OP_PAD:
             // TODO: add circular padding support for opencl, see https://github.com/ggml-org/llama.cpp/pull/16985
             if (ggml_get_op_params_i32(op, 8) != 0) {
@@ -20820,6 +20821,9 @@ static void ggml_cl_repeat(ggml_backend_t backend, const ggml_tensor * src0, con
     const cl_ulong nb3 = dst->nb[3];
 
     cl_kernel kernel = backend_ctx->kernel_repeat_f32;
+    if (src0->type == GGML_TYPE_F16) {
+        kernel = backend_ctx->kernel_repeat_f16;
+    }
 
     CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->data_device));
     CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong), &offset0));
