@@ -32,9 +32,11 @@
 	const scale = $derived(actual ? 1 : column ? Math.min(1, column / format.width) : 0);
 </script>
 
+<!-- never wider than the piece, which is shown at most at its real size -->
 <div
 	bind:clientWidth={column}
 	style:height={actual ? undefined : `${format.height * scale}px`}
+	style:max-width={actual ? undefined : `${format.width}px`}
 	class={['fit', { actual }]}
 >
 	<article

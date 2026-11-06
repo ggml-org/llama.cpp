@@ -36,6 +36,9 @@
 		')'
 	].join('\n');
 	const size = (f: keyof typeof FORMATS) => `${FORMATS[f].width} × ${FORMATS[f].height}`;
+	// the pieces at 1.6 times a two-up gallery's size: two screenshots to a row on a wide screen, one on a narrower
+	// one, scaled down below their width
+	const gallery = { itemWidth: '55rem', width: '113.5rem' };
 	const grounds = {
 		control: 'inline-radio' as const,
 		options: ['day', 'night', 'light', 'dark', 'sand']
@@ -55,7 +58,7 @@
 >
 	{#snippet template(args)}
 		{@const { overlay, tone } = args as ArtArgs}
-		<StateGallery minItemWidth="16rem">
+		<StateGallery itemWidth="27rem" width={gallery.width}>
 			<StateGalleryItem label={FORMATS.msTile.name} note={size('msTile')}>
 				<StoreArt kind="tile" {overlay} {tone} />
 			</StateGalleryItem>
@@ -78,7 +81,7 @@
 >
 	{#snippet template(args)}
 		{@const { overlay, tone } = args as ArtArgs}
-		<StateGallery columns={1}>
+		<StateGallery itemWidth="111.5rem" width={gallery.width}>
 			<StateGalleryItem
 				label={FORMATS.msHero.name}
 				note="No words: the Store sets the name over it · {size('msHero')}"
@@ -98,7 +101,7 @@
 	{#snippet template(args)}
 		{@const { apps, chat, fits, gpu, models, opener, overlay, tone } = args as MicrosoftStoreCopy &
 			ArtArgs}
-		<StateGallery minItemWidth="26rem">
+		<StateGallery {...gallery}>
 			<StateGalleryItem label="1, the opener" note={size('msScreenshot')}>
 				<StoreScreenshot {...opener} kind="brand" {overlay} {tone} />
 			</StateGalleryItem>
