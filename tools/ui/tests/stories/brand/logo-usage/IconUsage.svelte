@@ -445,16 +445,28 @@
 
 	<h2>On the tab, the home screen and the profile</h2>
 
+	<!-- first how the icon is placed, optically centred, which every icon below is built on -->
 	<p>
+		Every icon starts from the same placement. Centred exactly, the L reads low, its weight in the
+		wide foot; so the icon is lifted {Math.round(OPTICAL_LIFT * 1000) / 10}% of its height and
+		nudged
+		{Math.round(OPTICAL_NUDGE * 1000) / 10}% of its width left, and looks centred. Cut to a circle,
+		as in the social avatars and the PWA icon, it then clears the circle's edge at its corners and
+		tips nearly evenly. Drawn from the avatar file itself, the icon at 56% of a square, which every
+		platform crops round.
+	</p>
+
+	<div class="optical">
+		<OpticalCentre placement={avatar} />
+	</div>
+
+	<p class="icons-intro">
 		The web app's favicon, PWA, maskable and Apple touch icons, with their proportions drawn in. All
 		of them start from the favicon, the icon with a {percent(
 			PWA_ASSET_GENERATOR.FAVICON_PADDING / 2
 		)} margin; the square icons add the generator's 30% padding, and the PWA icon is the maskable one
-		at 85%, cut round. The icon sits a little above and left of centre ({Math.round(
-			OPTICAL_LIFT * 1000
-		) / 10}% of its height up, {Math.round(OPTICAL_NUDGE * 1000) / 10}% of its width left), so it
-		looks centred and, cut round, clears the circle evenly, as drawn below. The files the web UI
-		ships still carry the old llama.cpp mark; these are drawn with the L.
+		at 85%, cut round. The files the web UI ships still carry the old llama.cpp mark; these are drawn
+		with the L.
 	</p>
 
 	<div class="icons">
@@ -540,20 +552,6 @@
 				<figcaption class="icon-label">Windows, the taskbar and the tray, {mode}</figcaption>
 			</figure>
 		{/each}
-	</div>
-
-	<!-- the avatars, and how the icon is optically centred in a circle crop, as in them and the PWA icon -->
-	<p class="avatars-intro">
-		The social avatars are the icon at 56% of a square, which every platform crops to a circle.
-		Centred exactly, the icon reads low, its weight in the wide foot; the avatars, like the PWA
-		icon, lift it {Math.round(OPTICAL_LIFT * 1000) / 10}% of its height and nudge it {Math.round(
-			OPTICAL_NUDGE * 1000
-		) / 10}% of its width left, so the circle clears its corners and tips nearly evenly. Drawn from
-		the avatar file itself.
-	</p>
-
-	<div class="optical">
-		<OpticalCentre placement={avatar} />
 	</div>
 {/if}
 
@@ -927,10 +925,10 @@
 		max-width: 54rem;
 		margin-top: 2rem;
 	}
-	/* the avatars' lead, set like the section's own under its heading */
-	.avatars-intro {
+	/* the icons' lead, after the placement, set like the section's own under its heading */
+	.icons-intro {
 		max-width: 62ch;
-		margin-top: 1.5rem;
+		margin-top: 2.5rem;
 		color: var(--l-muted);
 		font:
 			400 17px / 1.5 'Llama Sans',
