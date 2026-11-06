@@ -7325,8 +7325,12 @@ struct test_top_k : public test_case {
 
     // the backends may break ties in different ways, but each backend must break them in the same way in each run
     bool deterministic(ggml_backend_t backend) override {
-        // TODO: ROCm and Vulkan are not deterministic yet, SYCL gathers the ties with an atomic counter as well
+        // TODO: Vulkan is not deterministic yet, SYCL gathers the ties with an atomic counter as well
         const char * name = ggml_backend_reg_name(ggml_backend_dev_backend_reg(ggml_backend_get_device(backend)));
+        // ROCm has no cub::DeviceTopK, every row goes through the radix or bitonic path
+        if (strcmp(name, "ROCm") == 0) {
+            return ties;
+        }
         if (strcmp(name, "CUDA") != 0 && strcmp(name, "MTL") != 0) {
             return false;
         }
