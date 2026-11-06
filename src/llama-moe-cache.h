@@ -21,6 +21,7 @@ public:
     ggml_backend_t backend(int32_t il) const;
 
     // the slot map of layer il, if its experts can be read from the cache for n_tokens tokens, nullptr otherwise
+    // I32 [1, n_expert] in host memory: the slot of each expert, -1 if it is not cached, MUL_MAT_ID skips these
     ggml_tensor * get_slot_map(int32_t il, int64_t n_tokens, int64_t n_expert_used) const;
 
     // the experts of w in the cache, nullptr if w is not cached
@@ -29,7 +30,8 @@ public:
     // the share of the misses that the CPU computes while the device uploads the others, 0 if all misses are uploaded
     float cpu_share() const;
 
-    // the experts of layer il computed on the CPU: I32 [1, n_expert] in host memory, e for these experts, -1 for the others
+    // the complement of the slot map of layer il: I32 [1, n_expert] in host memory, -1 if expert e is cached, else e
+    // after the slot lookup, the selected experts that are not cached are computed on the CPU
     ggml_tensor * get_cpu_map(int32_t il) const;
 
     // the CPU part of the layer of the slot lookup, with n_used experts per token, no inputs if the graph has no CPU part

@@ -104,11 +104,11 @@ def trace_tokens(trace):
 
 # cache simulation, mirrors src/llama-moe-cache.cpp
 
-def n_slots_of(g, size_mib, n_zero, n_expert_used):
+def n_slots_of(g, size_mib, n_expert_used):
     budget = int(float(size_mib * 1024 * 1024) * g.split / g.split_sum * float(g.host_bytes) / float(g.dev_host_bytes))
 
     def alloc(n):
-        return sum(pad(nb2 * (n + n_zero + 1), g.alignment) for nb2 in g.nb2)
+        return sum(pad(nb2 * (n + 1), g.alignment) for nb2 in g.nb2)
 
     if alloc(0) > budget:
         return 0
@@ -122,13 +122,12 @@ def n_slots_of(g, size_mib, n_zero, n_expert_used):
     return lo if lo >= n_expert_used else 0
 
 
-def full_mib(trace, share):
+def full_mib(trace):
     """smallest cache that holds all experts"""
-    _, n_expert_used, groups, _ = trace
-    n_zero = min(n_expert_used, 64) if f32(share) > 0.0 else 0
+    _, _, groups, _ = trace
     res = 0.0
     for g in groups:
-        alloc = sum(pad(nb2 * (len(g.layers) * g.n_expert + n_zero + 1), g.alignment) for nb2 in g.nb2)
+        alloc = sum(pad(nb2 * (len(g.layers) * g.n_expert + 1), g.alignment) for nb2 in g.nb2)
         res = max(res, alloc / (g.split / g.split_sum * g.host_bytes / g.dev_host_bytes))
     return math.ceil(res / 2**20) + 1
 
@@ -139,7 +138,7 @@ class SLRU:
     def __init__(self, layers, n_expert, n_slots):
         self.n_expert = n_expert
         self.n_slots = n_slots
-        self.slot_map = {il: [n_slots] * n_expert for il in layers}
+        self.slot_map = {il: [-1] * n_expert for il in layers}
         self.key_of = [-1] * n_slots
         self.prev = [s - 1 for s in range(n_slots)]
         self.next = [s + 1 if s + 1 < n_slots else -1 for s in range(n_slots)]
@@ -190,7 +189,7 @@ class SLRU:
                 s = self.next[s]
         raise RuntimeError("no SLRU victim")
 
-    def plan(self, il, ids, n_used, n_zero, n_cpu, rng):
+    def plan(self, il, ids, n_cpu, rng):
         """returns (uploaded, computed on the CPU, rng)"""
         self.seen_gen += 1
         seen, gen = self.seen, self.seen_gen
@@ -203,10 +202,9 @@ class SLRU:
             raise RuntimeError(f"layer {il}: {len(uniq)} experts for {self.n_slots} slots")
 
         slots = self.slot_map[il]
-        n_slots = self.n_slots
         misses = []
         for e in uniq:
-            if slots[e] < n_slots:
+            if slots[e] >= 0:
                 self.touch(slots[e])
             else:
                 misses.append(e)
@@ -216,43 +214,20 @@ class SLRU:
             rng = (rng * 6364136223846793005 + 1442695040888963407) & MASK64
             j = i + (rng >> 33) % (len(misses) - i)
             misses[i], misses[j] = misses[j], misses[i]
-        n_cpu_done = 0
-        if n_c > 0:
-            # distinct zero slots per token, a miss without one is uploaded
-            n_tokens = len(ids) // n_used
-            token_zero = [0] * n_tokens
-            n_keep = n_c
-            i = 0
-            while i < n_keep:
-                e = misses[i]
-                toks = [it for it in range(n_tokens) if e in ids[it * n_used:(it + 1) * n_used]]
-                used = 0
-                for it in toks:
-                    used |= token_zero[it]
-                z = ((~used) & (used + 1)).bit_length() - 1
-                if z >= n_zero:
-                    n_keep -= 1
-                    misses[i], misses[n_keep] = misses[n_keep], misses[i]
-                    continue
-                for it in toks:
-                    token_zero[it] |= 1 << z
-                slots[e] = n_slots + z
-                n_cpu_done += 1
-                i += 1
-            del misses[:n_keep]
+        del misses[:n_c]
 
         misses.sort()
         for e in misses:
             s = self.victim(il)
             key = self.key_of[s]
             if key >= 0:
-                self.slot_map[key // self.n_expert][key % self.n_expert] = n_slots
+                self.slot_map[key // self.n_expert][key % self.n_expert] = -1
             else:
                 self.n_filled += 1
             self.key_of[s] = il * self.n_expert + e
             slots[e] = s
             self.move(s, False)
-        return len(misses), n_cpu_done, rng
+        return len(misses), n_c, rng
 
 
 def replay(trace, size_mib, share, skip_tokens):
@@ -260,10 +235,9 @@ def replay(trace, size_mib, share, skip_tokens):
     n_layer, n_expert_used, groups, records = trace
     share = f32(share)
     share_q = int(math.floor(f32(share * 65536.0) + 0.5))  # std::lround(cpu_share*65536.0f)
-    n_zero = min(n_expert_used, 64) if share > 0.0 else 0
     caches, group_of = [], {}
     for ig, g in enumerate(groups):
-        n = n_slots_of(g, size_mib, n_zero, n_expert_used)
+        n = n_slots_of(g, size_mib, n_expert_used)
         caches.append(SLRU(g.layers, g.n_expert, n) if n > 0 else None)
         group_of.update((il, ig) for il in g.layers)
 
@@ -289,7 +263,7 @@ def replay(trace, size_mib, share, skip_tokens):
             acc[il] = v & 0xFFFF
             return v >> 16
 
-        n_fill, n_c, rng = c.plan(il, ids, n_used, n_zero, n_cpu, rng)
+        n_fill, n_c, rng = c.plan(il, ids, n_cpu, rng)
         if count:
             up += n_fill * g.expert_bytes
             cpu += n_c * g.expert_bytes
@@ -557,7 +531,7 @@ def tune(cmd, out, max_mib):
         r["up_gib"], r["cpu_gib"] = r["up_mib"] / 1024 / r["tokens"], r["cpu"] * gib / r["tokens"]
     m, errs, ok = fit(runs)
 
-    full = full_mib(trace, max(SHARES))
+    full = full_mib(trace)
     top = min(cap, full)
     sizes = sorted({rnd(min(f * host, top)) for f in (0.05, 0.10, 0.20, 0.30, 0.40, 0.50)} | {small, large, full if cap >= full else rnd(top)})
     skip = trace_tokens(trace) // 2  # warm-up
