@@ -77,29 +77,6 @@
 	--p-solid-ink: #111111;
 	--p-link: var(--art-sky);
 }
-.ground-blue {
-	--p-bg: var(--art-blue);
-	--p-ink: #fafafa;
-	--p-muted: rgb(250 250 250 / 0.76);
-	--p-line: rgb(250 250 250 / 0.24);
-	--p-card: rgb(250 250 250 / 0.1);
-	--p-inset: rgb(250 250 250 / 0.12);
-	--p-solid: #fafafa;
-	--p-solid-ink: var(--art-navy);
-	--p-link: #fafafa;
-}
-.ground-amber {
-	--p-bg: var(--art-amber);
-	--p-ink: #111111;
-	--p-muted: rgb(17 17 17 / 0.7);
-	--p-line: rgb(17 17 17 / 0.16);
-	--p-card: rgb(255 255 255 / 0.4);
-	--p-inset: rgb(17 17 17 / 0.07);
-	--p-solid: #111111;
-	--p-solid-ink: var(--art-amber);
-	--p-link: #111111;
-}
-
 /* the type scale, at a low specificity so a layout sets its own margins */
 :where(.ground) :where(.t-label) {
 	margin: 0;
