@@ -98,7 +98,7 @@ struct decoder_runtime_ctx {
     // Attention sizes the cached prefill model was built with; decode calls overwrite the decoder's.
     int prefill_attention_size = -1;
     int prefill_attention_size_swa = -1;
-    // KV window of the decode model in the compiled pair (GGML_OPENVINO_NPU_DECODE_PREBUILD).
+    // KV window of the decode model in the compiled pair (GGML_OPENVINO_NPU_BLOB_PREBUILD).
     int decode_attention_size = -1;
     std::string shared_key;
     std::map<int, std::shared_ptr<ov::InferRequest>> decode_window_requests;
