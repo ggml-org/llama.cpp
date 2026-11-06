@@ -359,7 +359,7 @@ export const microsoftStore: MicrosoftStoreCopy = {
 		{
 			headline: 'Chat with AI,\nprivately.',
 			id: 'B',
-			lede: 'It runs on your PC, so your conversations stay with you.',
+			lede: 'It runs on your PC. Your conversations stay with you.',
 			note: 'Privacy, as what you do'
 		},
 		{
@@ -459,7 +459,7 @@ export const macAppStore: MacAppStoreCopy = {
 		{
 			headline: 'Chat with AI,\nprivately.',
 			id: 'B',
-			lede: 'It runs on your Mac, so your conversations stay with you.',
+			lede: 'It runs on your Mac. Your conversations stay with you.',
 			note: 'Privacy, as what you do'
 		},
 		{
