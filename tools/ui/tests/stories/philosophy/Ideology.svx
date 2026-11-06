@@ -64,9 +64,15 @@ A server doesn't have to serve one person. One machine can serve a family, a tea
 
 ## Three layers
 
-Between a person and the AI are three layers: the **application** (the UI and UX), **inference** (the engine and server that run the model) and the **model** (the weights). The **harness**, the agentic loop and the tools it can call, bridges the first two: the loop runs in the app, and its tools run in the app or in llama-server.
+Between a person and the AI are three layers, and they are different kinds of thing.
 
-The weights are what everything else is built on, so they stay open. In the Llama stack, every layer above them can run on your own hardware, with no provider in between.
+- **Model:** the weights. They are research output, closer to science than to a product: on their own they have no user and no interface, and everything else is built on them. That is why they stay open; closing them would hold back everything built on top.
+- **Inference:** the engine and the server that run the model. Elsewhere this layer is a provider's API, with its terms and its monitoring. In the Llama stack it is llama-server on your own hardware, or on a server someone you trust shares, so you are the provider.
+- **Application:** where AI meets people and their work. This is where what the AI does has real effects, so this is where care and responsibility belong.
+
+It is the difference between steel and a car: you test the car on the road, not the steel at the mill.
+
+The **harness**, the agentic loop and the tools it can call, bridges the application and inference: the loop runs in the app, and its tools run in the app or in llama-server.
 
 <Figure n={5} caption="The three layers, from the one people use down to the weights, with the Llama part on each.">
 	<Layers />
@@ -90,4 +96,4 @@ We say what the product does, with real numbers, and show the real product. No h
 	<Shows />
 </Figure>
 
-<p class="colophon">Set in Llama Sans and Llama Mono.</p>
+<p class="colophon">Set in Llama Sans and Llama Mono. The three layers follow Clément Delangue’s comparison of model weights to steel.</p>
