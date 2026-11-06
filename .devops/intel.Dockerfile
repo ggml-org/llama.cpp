@@ -91,11 +91,11 @@ COPY --from=build /opt/intel/oneapi/dnnl /opt/intel/oneapi/dnnl
 #ARG IGDGMM_VERSION=22.8.2
 
 
-ARG IGC_VERSION=v2.34.4
-ARG IGC_VERSION_FULL=2_2.34.4+21428
-ARG COMPUTE_RUNTIME_VERSION=26.18.38308.1
-ARG COMPUTE_RUNTIME_VERSION_FULL=26.18.38308.1-0
-ARG IGDGMM_VERSION=22.10.0
+ARG IGC_VERSION=v2.42.6
+ARG IGC_VERSION_FULL=2_2.42.6+23070
+ARG COMPUTE_RUNTIME_VERSION=26.40.40196.8
+ARG COMPUTE_RUNTIME_VERSION_FULL=26.40.40196.8-0
+ARG IGDGMM_VERSION=22.10.2
 RUN mkdir /tmp/neo/ && cd /tmp/neo/ \
   && wget https://github.com/intel/intel-graphics-compiler/releases/download/$IGC_VERSION/intel-igc-core-${IGC_VERSION_FULL}_amd64.deb \
   && wget https://github.com/intel/intel-graphics-compiler/releases/download/$IGC_VERSION/intel-igc-opencl-${IGC_VERSION_FULL}_amd64.deb \
