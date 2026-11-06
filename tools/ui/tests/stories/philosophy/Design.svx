@@ -10,6 +10,7 @@
 	import Grotesque from './figures/Grotesque.svelte';
 	import IconSizes from './figures/IconSizes.svelte';
 	import Measure from './figures/Measure.svelte';
+	import Assets from './figures/Assets.svelte';
 	import Boards from '../brand/communications/Boards.svelte';
 	import Names from './figures/Names.svelte';
 	import Neutral from './figures/Neutral.svelte';
@@ -61,15 +62,17 @@ The tokens are CSS, and when the docs and the CSS disagree, the CSS wins. Every 
 	<Tokens />
 </Figure>
 
-The brand assets are generated as well: scripts build the lockups, covers, avatars and app icons from the icon and the fonts, and the fonts from their sources. Each change is made in one place and rebuilt.
+The brand assets are generated too. Scripts build the fonts from their sources, and the lockups, app icons, profile pictures and headers from the icon and the fonts. A change to a source is made once, and every file is rebuilt from it.
 
-The logo starts from the + of C++, the language llama.cpp is written in, keeping the arms that form an L. A lightning bolt, for speed, slants the L to 60°. Its construction, every edge on a grid of equal triangles and only the two outer corners rounded, is in **Brand › Logo › Overview**.
+<Figure n={5} caption="Real files built from the same sources: a lockup, app icons for three platforms, a profile picture and an X header. How the icon itself is drawn is in Brand › Logo › Overview.">
+	<Assets />
+</Figure>
 
 ## The icon at every size
 
 The icon is one solid shape: straight lines and two rounded corners. It reads the same from a 14px favicon to a 7500px cover, in one colour, on light or dark. It is also a glyph in both fonts (U+E000 to U+E002), so it can be typed inline and takes the colour and weight of the text around it.
 
-<Figure n={5} caption="The icon from 14 to 160px. Below, U+E002 in Llama Sans, in a sentence and in a real button.">
+<Figure n={6} caption="The icon from 14 to 160px. Below, U+E002 in Llama Sans, in a sentence and in a real button.">
 	<IconSizes />
 </Figure>
 
@@ -79,7 +82,7 @@ The outline is simple enough to stay recognisable whatever fills it, so artwork 
 
 The quantized L is the first example: the icon quantized the way llama.cpp quantizes a model. The exact outline at 16 bits at the top, then half the precision at each step, through 8 and 4 bits, to whole pixels at 2 bits at the foot. It reads as the icon, explains quantization, and asks how much detail a shape can lose before it stops being itself.
 
-<Figure n={6} caption="The quantized L from Communications › Swag: the icon at four bit depths with its legend, and on a black t-shirt.">
+<Figure n={7} caption="The quantized L from Communications › Swag: the icon at four bit depths with its legend, and on a black t-shirt.">
 	<Quantized />
 </Figure>
 
@@ -89,7 +92,7 @@ The outline stays exact, the colours stay ink and cinder, and the idea has to be
 
 Llama Sans is a grotesque, the family that began with Akzidenz-Grotesk in 1898 and Neue Haas Grotesk in 1957, renamed Helvetica in 1960. Grotesques set Müller-Brockmann's Tonhalle posters, the American Airlines logo, the New York subway signs, the first iPhone and Apple's San Francisco. They have lasted because they are plain and neutral enough for any message.
 
-<Figure n={7} caption="The grotesque line, each name set in Llama Sans; then the letters that make Llama Sans its own, and Llama Mono's cells.">
+<Figure n={8} caption="The grotesque line, each name set in Llama Sans; then the letters that make Llama Sans its own, and Llama Mono's cells.">
 	<Grotesque />
 </Figure>
 
@@ -104,7 +107,7 @@ Most of the interface is grey. Each group of colours has one job:
 - **Art colours:** softer versions of those hues, for illustrations and communications. There is no red, so artwork never looks like an error.
 - **Cinder** (#EE6C1E): the one accent, for the .cpp in the llama.cpp logotype and small details such as the section numbers on this page.
 
-<Figure n={8} caption="The palette by how much of it you see: mostly greys, the rest as slivers. Below, the real badges, the only place status colours appear.">
+<Figure n={9} caption="The palette by how much of it you see: mostly greys, the rest as slivers. Below, the real badges, the only place status colours appear.">
 	<Neutral />
 </Figure>
 
@@ -114,7 +117,7 @@ Backgrounds are neutral too. Only the Llama lockup goes on colour: llama.app's l
 
 **Llama** is the product: capital L, Llama Sans, allowed on colour. **llama.cpp** is the engine: lowercase, Llama Mono Bold, .cpp in cinder, on neutral grounds only. Both use the same icon glyph, which ties the two lockups together.
 
-<Figure n={9} caption="Both lockups typed: U+E002 and the name, in each font. Llama on llama.app's blue; llama.cpp on light and dark.">
+<Figure n={10} caption="Both lockups typed: U+E002 and the name, in each font. Llama on llama.app's blue; llama.cpp on light and dark.">
 	<Names />
 </Figure>
 
@@ -124,13 +127,13 @@ Posts, link previews, posters and the site follow the app's rules: neutral groun
 
 Each post is a Svelte template with its copy kept as data, and the key visuals use real Llama Chat screens, so a new post is new copy, not a new design.
 
-<Figure n={10} caption="The real templates from Communications › Applications: a model drop post on light, llama.app's link preview on blue, and llama.cpp's GitHub preview on dark.">
+<Figure n={11} caption="The real templates from Communications › Applications: a model drop post on light, llama.app's link preview on blue, and llama.cpp's GitHub preview on dark.">
 	<Posts />
 </Figure>
 
 Artwork has more room. The specimen boards follow the Swiss format: one face set large on art-colour, sand or grey grounds, with cinder as the only warm accent.
 
-<Figure n={11} caption="Specimen boards and posters for Llama Sans, in the brand palette.">
+<Figure n={12} caption="Specimen boards and posters for Llama Sans, in the brand palette.">
 	<Boards />
 </Figure>
 
