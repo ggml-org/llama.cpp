@@ -45,7 +45,7 @@ The products map onto the three layers in **Ideology**. The **model** is a GGUF 
 
 ## Simple first, depth on request
 
-The apps follow **Ideology**'s simple by default. A first run offers one suggested model, small and multimodal (today, LFM3 Omni), and the Llama app does the rest: it downloads the model from Hugging Face, sets up how it runs and keeps llama-server going, with no terminal. Llama Chat opens on a conversation, not on settings.
+The apps follow **Ideology**'s simple by default. A first run offers one suggested model, small and multimodal, and the Llama app does the rest: it downloads the model from Hugging Face, sets up how it runs and keeps llama-server going, with no terminal. Llama Chat opens on a conversation, not on settings.
 
 The depth stays one step away. Sampling, penalties, system prompts, custom recipes and every other model and server setting are there for anyone who asks for them, behind a disclosure rather than on the first screen, and in plain words where a term needs one. How far to hide and how to explain is still being worked out.
 
