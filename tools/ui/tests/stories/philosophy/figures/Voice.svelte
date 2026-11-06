@@ -1,5 +1,5 @@
 <!--
-	People first, shown not preached: what we say next to what we do not. Plain words and real numbers on one side;
+	Voice: what we say next to what we do not. Plain words and real numbers on one side;
 	hype, fear and pride on the other, struck through.
 -->
 <script lang="ts">
@@ -7,7 +7,7 @@
 		['Runs on your computer, even offline.', 'The most powerful AI ever built.'],
 		['4.6 GB. Fits in 8 GB of memory.', 'Blazing fast. Insanely capable.'],
 		['Your conversations stay with you.', 'They are watching everything you type.'],
-		['Built in the open, with everyone.', 'The only AI you can trust.']
+		['Open source, MIT licensed.', 'The only AI you can trust.']
 	];
 </script>
 

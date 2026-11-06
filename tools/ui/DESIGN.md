@@ -739,7 +739,7 @@ Its principles, as rules to apply here:
   the interface around it stays neutral and quiet.
 - **Colour has one job.** Greys build everything; status colours show status and nothing else;
   art colours and cinder are for artwork and the odd brand detail, never for the UI's controls.
-- **Enough character, easy to change.** Keep the character in the icon, the type and one
+- **Recognisable, easy to change.** Keep the character in the icon, the type and one
   accent, so an app built on Llama UI can restyle it through component tokens alone.
 - **Design lives in code.** The CSS is the source of truth; prefer what is generated or
   derived over hand-tuned values, and record the reason next to the value. Content pages are

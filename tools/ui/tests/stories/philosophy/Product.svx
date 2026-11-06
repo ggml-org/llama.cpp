@@ -15,48 +15,50 @@
 
 # Product
 
-<p class="lead">One design system, many apps. <strong>Llama UI</strong> draws and handles interaction; each app decides what happens and talks to llama-server.</p>
+<p class="lead">One design system, several apps. <strong>Llama UI</strong> draws the interface and handles interaction; each app owns its state and talks to llama-server.</p>
 
 ## The Llama stack
 
-llama.cpp runs models on your own machine. Around it sits a stack of libraries, packages and technologies, and the apps built on them. **Llama UI** is the library of UI and UX components that this Storybook documents. **Llama Chat** is the local, private chat client built from it, which replaces the legacy web UI and ships inside llama.cpp's server. **Llama for Mac** and **Llama for Windows** are the native apps: they put llama.cpp in the menu bar or the system tray, run its server for you, and open Llama Chat in their own window. The brand (the icon, the type, the colours) is how people recognise all of them, and it has one source, **llama.brand**.
+- **llama.cpp** runs models locally; **llama-server** is its HTTP server.
+- **Llama UI** is the component library this Storybook documents.
+- **Llama Chat** is the chat client built from it. It replaces the legacy web UI and ships inside llama-server.
+- **Llama for Mac** and **Llama for Windows** run llama-server from the menu bar or the system tray and open Llama Chat in their own window.
+- **llama.brand** is the one source of the icon, the fonts and the colours.
 
-<Figure n={1} caption="The products and their repositories. llama.brand is where the brand comes from; llama.cpp holds the engine and Llama UI; the native apps run the engine and open Llama Chat.">
+<Figure n={1} caption="The products and their repositories. llama.brand supplies the brand; llama.cpp holds the engine and Llama UI; the native apps run the engine and open Llama Chat.">
 	<Products />
 </Figure>
 
 ## One library, many apps
 
-Llama UI is the design system and component library: UI and UX, no business logic. Llama Chat is the first application built on it. Other apps can follow on the same parts, and the llama.app website uses the same library, so models look and behave the same everywhere.
-
-Splitting the library from the apps lets anyone build their own app on the Llama stack, and lets Llama Chat ship in more places.
+Llama UI holds UI and UX only, no business logic. Llama Chat is the first app built on it, and the llama.app website uses it too, so models look and behave the same in both. Keeping the library separate lets anyone build their own app on it.
 
 ## Llama UI draws, the apps decide
 
-The line between the two is simple: the library draws the parts and handles interaction, and the app owns the state and talks to the server. Components get data in and report what the user did out.
+Components take data in and report what the user did. State and calls to the server belong to the app.
 
-<Figure n={2} caption="What belongs in Llama UI and what belongs in an app. A chat app is a composition of the library's parts with the app's own logic.">
+<Figure n={2} caption="What belongs in Llama UI and what belongs in an app. A chat app is the library's parts plus the app's own logic.">
 	<Rule />
 </Figure>
 
 ## Across the three layers
 
-The products map onto the three layers in **Ideology**. The **model** is a GGUF file from Hugging Face, which the apps help you find, download and keep. The **service** is llama-server: on your machine, run for you by a native app, or run by someone else and shared. The **application** is Llama UI and the apps built on it, which never assume a cloud account and make clear which model runs, and where.
+- **Model:** a GGUF file from Hugging Face, which the apps help find, download and keep.
+- **Service:** llama-server, run by hand, started by a native app, or shared by someone else.
+- **Application:** Llama UI and the apps built on it. They never assume a cloud account and always show which model runs, and where.
 
 ## Simple first, depth on request
 
-The apps follow **Ideology**'s simple by default. A first run offers one suggested model, small and multimodal, and the Llama app does the rest: it downloads the model from Hugging Face, sets up how it runs and keeps llama-server going, with no terminal. Llama Chat opens on a conversation, not on settings.
-
-The depth stays one step away. Sampling, penalties, system prompts, custom recipes and every other model and server setting are there for anyone who asks for them, behind a disclosure rather than on the first screen, and in plain words where a term needs one. How far to hide and how to explain is still being worked out.
+The first run offers one suggested model, small and multimodal. The Llama app downloads it, configures it and runs llama-server, with no terminal. Llama Chat opens on a conversation, not on settings. Every other model and server setting sits behind a disclosure, with a short explanation where a term needs one.
 
 ## One build, three channels
 
-Llama Chat is a static app: plain HTML, JavaScript and CSS. Each release builds it once, and the same build can ship three ways; only the thing serving it changes. Today it ships inside llama-server. The plan is to also ship it as `npx llama-chat` and at chat.llama.app, which carry the client alone and connect to a server you add.
+Llama Chat is a static app (HTML, JavaScript and CSS), built once per release. Today it ships inside llama-server. Planned: `npx llama-chat` and chat.llama.app, which carry the client only and connect to a server you add.
 
-<Figure n={3} caption="The same build of Llama Chat in three channels. Only the bundled one comes with its own server; the others are the client alone.">
+<Figure n={3} caption="The same build in three channels. Only the bundled one comes with a server.">
 	<Channels />
 </Figure>
 
-In the plan, the app works out where it is at runtime, with no build flags: if its own origin answers as llama.cpp it runs bundled; otherwise it opens on adding a server.
+The app will tell where it runs at runtime, with no build flags: if its own origin answers as llama.cpp, it runs bundled; otherwise it asks for a server.
 
 <p class="colophon">After the Llama Suite planning pages: Llama UI Stack, and One build, three channels.</p>

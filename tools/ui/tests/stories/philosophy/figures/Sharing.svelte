@@ -1,5 +1,5 @@
 <!--
-	Shared, not rented: one server run by one person, used by the people around it (a family, a team, a lab, a
+	Shared: one server run by one person, used by the people around it (a family, a team, a lab, a
 	neighbourhood), each with their own devices. Drawn as a hub; the shared server is the cinder node.
 -->
 <script lang="ts">

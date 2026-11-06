@@ -1,5 +1,5 @@
 <!--
-	AI for everyone: the machines people already have, from a laptop to a server, each with its memory as a bar and
+	Ordinary hardware: the machines people already have, from a laptop to a server, each with its memory as a bar and
 	the share a model takes at a 4-bit quant. Sizes are rough, to show the range, not a promise. The laptop, where most
 	people are, is the cinder one.
 -->
