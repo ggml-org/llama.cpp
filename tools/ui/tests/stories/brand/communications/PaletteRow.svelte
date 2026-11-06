@@ -66,7 +66,11 @@
 		{#each palette.swatches as s (s.name)}
 			<li>
 				<span style:background={s.value} class="chip"></span>{s.name}<code
-					>{s.value.startsWith('#') ? s.value : 'gradient'}</code
+					>{s.value.startsWith('var(')
+						? s.value.slice(4, -1)
+						: s.value.includes('gradient')
+							? 'gradient'
+							: s.value}</code
 				>
 			</li>
 		{/each}
@@ -269,6 +273,12 @@
 	@media (max-width: 900px) {
 		.posters {
 			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+	}
+	/* on a phone the cards with the real UI in them need the full width */
+	@media (max-width: 560px) {
+		.posters {
+			grid-template-columns: minmax(0, 1fr);
 		}
 	}
 	.card {
