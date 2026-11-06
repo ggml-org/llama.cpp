@@ -28,6 +28,8 @@ add_library(mtmd
             clip-model.h
             clip-graph.h
             models/models.h
+            models/chatterbox-gen.cpp
+            models/chatterbox-spkenc.cpp
             models/cogvlm.cpp
             models/conformer.cpp
             models/deepseek4v.cpp
@@ -48,6 +50,7 @@ add_library(mtmd
             models/kimik25.cpp
             models/nemotron-v2-vl.cpp
             models/nemotron-omni.cpp
+            models/nemotron-transcribe.cpp
             models/muse-glimmer.cpp
             models/muse-spark-audio.cpp
             models/llama4.cpp
@@ -68,6 +71,7 @@ add_library(mtmd
             models/mimo-audio.cpp
             models/qwen3tts-spkenc.cpp
             models/qwen3tts-gen.cpp
+            models/drama3-gen.cpp
             models/pockettts-seanet.cpp
             models/pockettts-spkenc.cpp
             models/pockettts-gen.cpp

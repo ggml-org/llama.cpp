@@ -74,6 +74,9 @@ export const IMAGE_FILE_TYPES = {
 	}
 } as const;
 
+/** `content` that messages stored before the text was kept carry for a PDF sent as images. */
+export const PDF_AS_IMAGES_LEGACY_CONTENT_REGEX = /^PDF file with \d+ pages$/;
+
 export const PDF_FILE_TYPES = {
 	[FileTypePdf.PDF]: {
 		extensions: [FileExtensionPdf.PDF],
