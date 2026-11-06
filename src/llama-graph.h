@@ -1357,6 +1357,12 @@ struct llm_graph_context {
             ggml_tensor * top_k,   // [n_top, n_tokens]
                     int   il) const;
 
+    // kq_mask with only the cells named by top_k left visible, for sparse attention
+    ggml_tensor * build_top_k_mask(
+            ggml_tensor * kq_mask, // [n_kv, n_tokens/n_stream, 1, n_stream]
+            ggml_tensor * top_k,   // [n_top, n_tokens]
+                    int   il) const;
+
     llm_graph_input_attn_kv_iswa * build_attn_inp_kv_iswa() const;
 
     llm_graph_input_dsv4 * build_inp_dsv4() const;
