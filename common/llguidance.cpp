@@ -118,6 +118,7 @@ static llama_sampler_i llama_sampler_llg_i = {
     /* .backend_set_input = */ NULL,
     /* .backend_reset     = */ NULL,
     /* .copy_state        = */ NULL,
+    /* .backend_shapes_fixed = */ false,
 };
 
 static size_t llama_sampler_llg_tokenize_fn(const void * user_data, const uint8_t * bytes, size_t bytes_len,

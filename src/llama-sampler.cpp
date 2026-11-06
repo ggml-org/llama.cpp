@@ -516,6 +516,7 @@ static struct llama_sampler_i llama_sampler_empty_i = {
     /* .backend_set_input = */ llama_sampler_empty_backend_set_input,
     /* .backend_reset     = */ nullptr,
     /* .copy_state        = */ nullptr,
+    /* .backend_shapes_fixed = */ true,
 };
 
 struct llama_sampler * llama_sampler_init_empty(const char * name) {
@@ -579,7 +580,7 @@ static void llama_sampler_backend_copy_state(const struct llama_sampler * src, s
 struct llama_sampler_backend_probe {
     ggml_context_ptr ctx;
     ggml_cgraph * gf;
-    size_t output_width;
+    llama_sampler_output_sizes output_sizes;
 };
 
 static llama_sampler_backend_probe llama_sampler_backend_probe_graph(
@@ -623,14 +624,13 @@ static llama_sampler_backend_probe llama_sampler_backend_probe_graph(
         sampler->iface->backend_reset(sampler);
     }
 
-    size_t output_width = 1;
-    for (auto * output : { data.probs, data.candidates }) {
-        if (output) {
-            output_width = std::max(output_width, (size_t) ggml_nelements(output));
-        }
-    }
+    const llama_sampler_output_sizes output_sizes = {
+        data.logits     ? (size_t) ggml_nelements(data.logits)     : 0,
+        data.probs      ? (size_t) ggml_nelements(data.probs)      : 0,
+        data.candidates ? (size_t) ggml_nelements(data.candidates) : 0,
+    };
 
-    return { std::move(ctx_ptr), gf, output_width };
+    return { std::move(ctx_ptr), gf, output_sizes };
 }
 
 static uint32_t llama_sampler_backend_probe_n_nodes(const llama_sampler_backend_probe & probe) {
@@ -874,6 +874,7 @@ static struct llama_sampler_i llama_sampler_chain_i = {
     /* .backend_set_input = */ llama_sampler_chain_backend_set_input,
     /* .backend_reset     = */ llama_sampler_chain_backend_reset,
     /* .copy_state        = */ llama_sampler_chain_copy_state,
+    /* .backend_shapes_fixed = */ false,
 };
 
 struct llama_sampler * llama_sampler_chain_init(struct llama_sampler_chain_params params) {
@@ -883,7 +884,9 @@ struct llama_sampler * llama_sampler_chain_init(struct llama_sampler_chain_param
             /* .params               = */ params,
             /* .is_init              = */ false,
             /* .n_nodes              = */ 0,
-            /* .output_width         = */ 0,
+            /* .output_sizes         = */ {},
+            /* .output_sizes_valid   = */ false,
+            /* .revision             = */ 0,
             /* .samplers             = */ {},
             /* .cur                  = */ {},
             /* .t_sample_us          = */ 0,
@@ -900,6 +903,11 @@ uint32_t llama_sampler_backend_n_nodes(const llama_sampler * sampler) {
     GGML_ASSERT(chain->is_init);
 
     return chain->n_nodes;
+}
+
+uint64_t llama_sampler_backend_revision(const llama_sampler * sampler) {
+    GGML_ASSERT(sampler->iface == &llama_sampler_chain_i);
+    return ((const llama_sampler_chain *) sampler->ctx)->revision;
 }
 
 llama_token llama_sampler_sample(struct llama_sampler * smpl, struct llama_context * ctx, int32_t idx) {
@@ -975,7 +983,8 @@ llama_token llama_sampler_sample(struct llama_sampler * smpl, struct llama_conte
 
 void llama_sampler_chain_add(struct llama_sampler * chain, struct llama_sampler * smpl) {
     auto * p = (llama_sampler_chain *) chain->ctx;
-    p->output_width = 0;
+    p->output_sizes_valid = false;
+    p->revision++;
     p->samplers.push_back({
         /* .is_backend = */ false,
         /* .ptr        = */ smpl,
@@ -1013,7 +1022,8 @@ struct llama_sampler * llama_sampler_chain_remove(struct llama_sampler * chain, 
 
     auto * result = p->samplers[i].ptr;
     p->samplers.erase(p->samplers.begin() + i);
-    p->output_width = 0;
+    p->output_sizes_valid = false;
+    p->revision++;
 
     return result;
 }
@@ -1120,6 +1130,7 @@ static struct llama_sampler_i llama_sampler_greedy_i = {
     /* .backend_set_input = */ nullptr,
     /* .backend_reset     = */ nullptr,
     /* .copy_state        = */ llama_sampler_backend_copy_state<llama_sampler_greedy>,
+    /* .backend_shapes_fixed = */ true,
 };
 
 struct llama_sampler * llama_sampler_init_greedy() {
@@ -1412,6 +1423,7 @@ static struct llama_sampler_i llama_sampler_dist_i = {
     /* .backend_set_input = */ llama_sampler_dist_backend_set_input,
     /* .backend_reset     = */ llama_sampler_dist_backend_reset,
     /* .copy_state        = */ llama_sampler_backend_copy_state<llama_sampler_dist>,
+    /* .backend_shapes_fixed = */ true,
 };
 
 struct llama_sampler * llama_sampler_init_dist(uint32_t seed) {
@@ -1532,6 +1544,7 @@ static struct llama_sampler_i llama_sampler_top_k_i = {
     /* .backend_set_input = */ nullptr,
     /* .backend_reset     = */ nullptr,
     /* .copy_state        = */ llama_sampler_backend_copy_state<llama_sampler_top_k>,
+    /* .backend_shapes_fixed = */ true,
 };
 
 struct llama_sampler * llama_sampler_init_top_k(int32_t k) {
@@ -1732,6 +1745,7 @@ static struct llama_sampler_i llama_sampler_top_p_i = {
     /* .backend_set_input = */ nullptr,
     /* .backend_reset     = */ nullptr,
     /* .copy_state        = */ llama_sampler_backend_copy_state<llama_sampler_top_p>,
+    /* .backend_shapes_fixed = */ true,
 };
 
 struct llama_sampler * llama_sampler_init_top_p(float p, size_t min_keep) {
@@ -1895,6 +1909,7 @@ static struct llama_sampler_i llama_sampler_min_p_i = {
     /* .backend_set_input = */ nullptr,
     /* .backend_reset     = */ nullptr,
     /* .copy_state        = */ llama_sampler_backend_copy_state<llama_sampler_min_p>,
+    /* .backend_shapes_fixed = */ true,
 };
 
 struct llama_sampler * llama_sampler_init_min_p(float p, size_t min_keep) {
@@ -2007,6 +2022,7 @@ static struct llama_sampler_i llama_sampler_typical_i = {
     /* .backend_set_input = */ nullptr,
     /* .backend_reset     = */ nullptr,
     /* .copy_state        = */ nullptr,
+    /* .backend_shapes_fixed = */ false,
 };
 
 struct llama_sampler * llama_sampler_init_typical(float p, size_t min_keep) {
@@ -2117,6 +2133,7 @@ static struct llama_sampler_i llama_sampler_temp_i = {
     /* .backend_set_input = */ nullptr,
     /* .backend_reset     = */ nullptr,
     /* .copy_state        = */ llama_sampler_backend_copy_state<llama_sampler_temp>,
+    /* .backend_shapes_fixed = */ true,
 };
 
 struct llama_sampler * llama_sampler_init_temp(float temp) {
@@ -2320,6 +2337,7 @@ static struct llama_sampler_i llama_sampler_temp_ext_i = {
     /* .backend_set_input = */ nullptr,
     /* .backend_reset     = */ nullptr,
     /* .copy_state        = */ llama_sampler_backend_copy_state<llama_sampler_temp_ext>,
+    /* .backend_shapes_fixed = */ true,
 };
 
 struct llama_sampler * llama_sampler_init_temp_ext(float temp, float delta, float exponent) {
@@ -2429,6 +2447,7 @@ static struct llama_sampler_i llama_sampler_xtc_i = {
     /* .backend_set_input = */ nullptr,
     /* .backend_reset     = */ nullptr,
     /* .copy_state        = */ nullptr,
+    /* .backend_shapes_fixed = */ false,
 };
 
 struct llama_sampler * llama_sampler_init_xtc(float p, float t, size_t min_keep, uint32_t seed) {
@@ -2550,6 +2569,7 @@ static struct llama_sampler_i llama_sampler_mirostat_i = {
     /* .backend_set_input = */ nullptr,
     /* .backend_reset     = */ nullptr,
     /* .copy_state        = */ nullptr,
+    /* .backend_shapes_fixed = */ false,
 };
 
 struct llama_sampler * llama_sampler_init_mirostat(int32_t n_vocab, uint32_t seed, float tau, float eta, int32_t m) {
@@ -2656,6 +2676,7 @@ static struct llama_sampler_i llama_sampler_mirostat_v2_i = {
     /* .backend_set_input = */ nullptr,
     /* .backend_reset     = */ nullptr,
     /* .copy_state        = */ nullptr,
+    /* .backend_shapes_fixed = */ false,
 };
 
 struct llama_sampler * llama_sampler_init_mirostat_v2(uint32_t seed, float tau, float eta) {
@@ -2779,6 +2800,7 @@ static struct llama_sampler_i llama_sampler_grammar_i = {
     /* .backend_set_input = */ nullptr,
     /* .backend_reset     = */ nullptr,
     /* .copy_state        = */ nullptr,
+    /* .backend_shapes_fixed = */ false,
 };
 
 static struct llama_sampler * llama_sampler_init_grammar_impl(
@@ -3216,6 +3238,7 @@ static struct llama_sampler_i llama_sampler_penalties_i = {
     /* .backend_set_input = */ llama_sampler_penalties_backend_set_input,
     /* .backend_reset     = */ llama_sampler_penalties_backend_reset,
     /* .copy_state        = */ llama_sampler_backend_copy_state<llama_sampler_penalties>,
+    /* .backend_shapes_fixed = */ true,
 };
 
 struct llama_sampler * llama_sampler_init_penalties(
@@ -3313,6 +3336,7 @@ static struct llama_sampler_i llama_sampler_top_n_sigma_i = {
     /* .backend_set_input = */ nullptr,
     /* .backend_reset     = */ nullptr,
     /* .copy_state        = */ nullptr,
+    /* .backend_shapes_fixed = */ false,
 };
 
 struct llama_sampler * llama_sampler_init_top_n_sigma(float n) {
@@ -3660,6 +3684,7 @@ static struct llama_sampler_i llama_sampler_dry_i = {
     /* .backend_set_input = */ nullptr,
     /* .backend_reset     = */ nullptr,
     /* .copy_state        = */ nullptr,
+    /* .backend_shapes_fixed = */ false,
 };
 
 struct llama_sampler * llama_sampler_init_dry(const struct llama_vocab * vocab, float dry_multiplier, float dry_base, int32_t dry_allowed_length, int32_t dry_penalty_last_n, const char** seq_breakers, size_t num_breakers) {
@@ -3896,6 +3921,7 @@ static struct llama_sampler_i llama_sampler_adaptive_p_i = {
     /* .backend_set_input = */ nullptr,
     /* .backend_reset     = */ nullptr,
     /* .copy_state        = */ nullptr,
+    /* .backend_shapes_fixed = */ false,
 };
 
 struct llama_sampler * llama_sampler_init_adaptive_p(
@@ -4079,6 +4105,7 @@ static struct llama_sampler_i llama_sampler_logit_bias_i = {
     /* .backend_set_input = */ llama_sampler_logit_bias_backend_set_input,
     /* .backend_reset     = */ llama_sampler_logit_bias_backend_reset,
     /* .copy_state        = */ llama_sampler_backend_copy_state<llama_sampler_logit_bias>,
+    /* .backend_shapes_fixed = */ true,
 };
 
 struct llama_sampler * llama_sampler_init_logit_bias(
@@ -4324,6 +4351,7 @@ static struct llama_sampler_i llama_sampler_infill_i = {
     /* .backend_set_input = */ nullptr,
     /* .backend_reset     = */ nullptr,
     /* .copy_state        = */ nullptr,
+    /* .backend_shapes_fixed = */ false,
 };
 
 struct llama_sampler * llama_sampler_init_infill(const struct llama_vocab * vocab) {
@@ -4365,46 +4393,37 @@ void llama_sampler_copy(const struct llama_sampler * src, struct llama_sampler *
 
 // utils
 
-static size_t llama_sampler_backend_probe_output_width(llama_sampler * sampler, int64_t n_vocab) {
+static llama_sampler_output_sizes llama_sampler_backend_probe_output_sizes(llama_sampler * sampler, int64_t n_vocab) {
     GGML_ASSERT(sampler->iface == &llama_sampler_chain_i);
     const auto * chain = (const llama_sampler_chain *) sampler->ctx;
     GGML_ASSERT(chain->is_init);
 
-    // Only these samplers have state-independent output shapes.
     for (const auto & entry : chain->samplers) {
         if (!entry.is_backend) {
             break;
         }
-        const auto * iface = entry.ptr->iface;
-        if (iface != &llama_sampler_empty_i &&
-            iface != &llama_sampler_greedy_i &&
-            iface != &llama_sampler_dist_i &&
-            iface != &llama_sampler_top_k_i &&
-            iface != &llama_sampler_top_p_i &&
-            iface != &llama_sampler_min_p_i &&
-            iface != &llama_sampler_temp_i &&
-            iface != &llama_sampler_temp_ext_i &&
-            iface != &llama_sampler_penalties_i &&
-            iface != &llama_sampler_logit_bias_i) {
-            return n_vocab;
+        if (!entry.ptr->iface->backend_shapes_fixed) {
+            return { (size_t) n_vocab, (size_t) n_vocab, (size_t) n_vocab };
         }
     }
 
     const auto probe = llama_sampler_backend_probe_graph(
             sampler, n_vocab, std::max<uint32_t>(chain->n_nodes, GGML_DEFAULT_GRAPH_SIZE), false);
-    return probe.output_width;
+    return probe.output_sizes;
 }
 
-void llama_sampler_backend_init_output_width(llama_sampler * sampler, int64_t n_vocab) {
-    const size_t width = llama_sampler_backend_probe_output_width(sampler, n_vocab);
-    ((llama_sampler_chain *) sampler->ctx)->output_width = width;
+void llama_sampler_backend_init_output_sizes(llama_sampler * sampler, int64_t n_vocab) {
+    const auto sizes = llama_sampler_backend_probe_output_sizes(sampler, n_vocab);
+    auto * chain = (llama_sampler_chain *) sampler->ctx;
+    chain->output_sizes = sizes;
+    chain->output_sizes_valid = true;
 }
 
-size_t llama_sampler_backend_output_width(const llama_sampler * sampler, int64_t n_vocab) {
+llama_sampler_output_sizes llama_sampler_backend_output_sizes(const llama_sampler * sampler, int64_t n_vocab) {
     GGML_ASSERT(sampler->iface == &llama_sampler_chain_i);
     const auto * chain = (const llama_sampler_chain *) sampler->ctx;
     // Do not reset a live sampling graph to probe a mutated chain.
-    return chain->output_width == 0 ? (size_t) n_vocab : chain->output_width;
+    return chain->output_sizes_valid ? chain->output_sizes : llama_sampler_output_sizes{ (size_t) n_vocab, (size_t) n_vocab, (size_t) n_vocab };
 }
 
 uint32_t llama_sampler_get_seed(const struct llama_sampler * smpl) {

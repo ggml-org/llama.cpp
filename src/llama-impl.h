@@ -90,6 +90,11 @@ template <typename T>
 struct buffer_view {
     T * data;
     size_t size = 0;
+    size_t stride = 0;
+
+    T * row(size_t i) const {
+        return data + i*stride;
+    }
 
     bool has_data() const {
         return data && size > 0;

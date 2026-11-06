@@ -730,6 +730,14 @@ void llama_context::sched_new(size_t max_nodes, bool parallel) {
 }
 
 void llama_context::sched_reserve() {
+    for (const auto & [seq_id, sampler] : sampling.samplers) {
+        const auto it = sampling.revisions.find(seq_id);
+        if (it == sampling.revisions.end() || it->second != llama_sampler_backend_revision(sampler)) {
+            sched_need_reserve = true;
+            break;
+        }
+    }
+
     if (!sched_need_reserve) {
         return;
     }
@@ -877,6 +885,11 @@ void llama_context::sched_reserve() {
                 val(n_splits_pp, n_splits_tg).c_str(),
                 val(n_inputs_pp, n_inputs_tg).c_str(),
                 val(n_input_tensors_pp, n_input_tensors_tg).c_str());
+    }
+
+    sampling.revisions.clear();
+    for (const auto & [seq_id, sampler] : sampling.samplers) {
+        sampling.revisions[seq_id] = llama_sampler_backend_revision(sampler);
     }
 
     const int64_t t_end_us = ggml_time_us();
@@ -1071,7 +1084,7 @@ float * llama_context::get_logits_ith(int32_t i) {
         }
 
         const int64_t j = output_resolve_row(i);
-        return logits.data + j*model.vocab.n_tokens();
+        return logits.row(j);
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: invalid logits id %d, reason: %s\n", __func__, i, err.what());
 #ifndef NDEBUG
@@ -1101,8 +1114,7 @@ float * llama_context::get_embeddings_ith(int32_t i) {
         }
 
         const int64_t j = output_resolve_row(i);
-        const uint32_t n_embd_out = model.hparams.n_embd_out();
-        return embd.data + j*n_embd_out;
+        return embd.row(j);
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: invalid embeddings id %d, reason: %s\n", __func__, i, err.what());
 #ifndef NDEBUG
@@ -1136,18 +1148,16 @@ float * llama_context::get_embeddings_nextn_ith(int32_t i) {
             throw std::runtime_error("no nextn embeddings");
         }
 
-        const uint32_t n_embd = model.hparams.n_embd_out();
-
         if (!cparams.embeddings_nextn_masked) {
             // unmasked: nextn rows are stored densely, indexed by raw token position.
-            if (i < 0 || (size_t)(i + 1) * n_embd > embd_nextn.size) {
-                throw std::runtime_error(format("out of range [0, %zu)", embd_nextn.size / n_embd));
+            if (i < 0 || (size_t)(i + 1) * embd_nextn.stride > embd_nextn.size) {
+                throw std::runtime_error(format("out of range [0, %zu)", embd_nextn.size / embd_nextn.stride));
             }
-            return embd_nextn.data + (size_t) i * n_embd;
+            return embd_nextn.row(i);
         }
 
         const int64_t j = output_resolve_row(i);
-        return embd_nextn.data + j*n_embd;
+        return embd_nextn.row(j);
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: invalid nextn embeddings id %d, reason: %s\n", __func__, i, err.what());
 #ifndef NDEBUG
@@ -1176,7 +1186,7 @@ llama_token llama_context::get_sampled_token_ith(int32_t idx) {
     try {
         const int64_t row = output_resolve_row(idx);
         GGML_ASSERT(row < (int64_t) sampling.sampled.size);
-        return sampling.sampled.data[row];
+        return *sampling.sampled.row(row);
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: invalid backend sampled token id %d, reason: %s\n", __func__, idx, err.what());
         return LLAMA_TOKEN_NULL;
@@ -1195,7 +1205,7 @@ float * llama_context::get_sampled_probs_ith(int32_t idx) {
         if ((size_t) row >= sampling.probs_count.size() || sampling.probs_count[row] == 0) {
             return nullptr;
         }
-        return sampling.probs.data + row*sampling.output_stride;
+        return sampling.probs.row(row);
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: invalid backend sampled probs id %d, reason: %s\n", __func__, idx, err.what());
         return nullptr;
@@ -1214,7 +1224,7 @@ float * llama_context::get_sampled_logits_ith(int32_t idx) {
         if ((size_t) row >= sampling.logits_count.size() || sampling.logits_count[row] == 0) {
             return nullptr;
         }
-        return sampling.logits.data + row*model.vocab.n_tokens();
+        return sampling.logits.row(row);
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: invalid backend sampled logits id %d, reason: %s\n", __func__, idx, err.what());
         return nullptr;
@@ -1229,7 +1239,7 @@ const llama_token * llama_context::get_sampled_candidates_ith(int32_t idx) {
         if (sampling.candidates.has_data() &&
             (size_t) row < sampling.candidates_count.size() &&
             sampling.candidates_count[row] > 0) {
-            return sampling.candidates.data + row*sampling.output_stride;
+            return sampling.candidates.row(row);
         }
     } catch (const std::exception & err) {
         // fallback to full vocab list
@@ -1437,7 +1447,7 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
 
         sampler->iface->backend_init(sampler, buft, cparams.n_outputs_max_per_seq);
 
-        llama_sampler_backend_init_output_width(sampler, model.vocab.n_tokens());
+        llama_sampler_backend_init_output_sizes(sampler, model.vocab.n_tokens());
         sampling.samplers[seq_id] = sampler;
 
         sched_need_reserve = true;
@@ -1638,11 +1648,11 @@ int llama_context::encode(const llama_batch_ext & batch_inp) {
     }
     embd_seq.clear();
 
+    sched_reserve();
+
     if (t_compute_start_us == 0) {
         t_compute_start_us = ggml_time_us();
     }
-
-    sched_reserve();
 
     n_queued_tokens += n_tokens;
 
@@ -1793,14 +1803,9 @@ template<typename T>
 static void copy_tensor_async_rows(
     const std::vector<ggml_tensor *> & tensors,
     const buffer_view<T> & dst,
-    size_t stride,
     uint32_t row_offset,
     ggml_backend_sched_t sched,
     std::vector<uint32_t> * counts = nullptr) {
-    if (!dst.has_data()) {
-        return;
-    }
-
     for (size_t i = 0; i < tensors.size(); ++i) {
         auto * tensor = tensors[i];
         if (tensor == nullptr) {
@@ -1810,11 +1815,11 @@ static void copy_tensor_async_rows(
         const uint32_t row = row_offset + i;
         const size_t n_elements = ggml_nelements(tensor);
         GGML_ASSERT(ggml_is_contiguous(tensor) && "sampling tensor must be contiguous for async copy");
-        GGML_ASSERT(n_elements <= stride);
-        GGML_ASSERT((size_t) row * stride + n_elements <= dst.size);
+        GGML_ASSERT(n_elements <= dst.stride);
+        GGML_ASSERT((size_t) row * dst.stride + n_elements <= dst.size);
 
         ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(sched, tensor);
-        T * row_ptr = dst.data + (size_t) row * stride;
+        T * row_ptr = dst.row(row);
         ggml_backend_tensor_get_async(backend, tensor, row_ptr, 0, ggml_nbytes(tensor));
 
         if (counts) {
@@ -1927,6 +1932,8 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
     }
     embd_seq.clear();
 
+    sched_reserve();
+
     if (t_compute_start_us == 0) {
         t_compute_start_us = ggml_time_us();
     }
@@ -1934,8 +1941,6 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
 
     output_swaps.clear();
     embd_batch_idxs.clear();
-
-    sched_reserve();
 
     bool did_optimize = false;
 
@@ -2074,7 +2079,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
             GGML_ASSERT(backend_res != nullptr);
             GGML_ASSERT(logits.data != nullptr);
 
-            float * logits_out = logits.data + n_outputs_prev*n_vocab;
+            float * logits_out = logits.row(n_outputs_prev);
 
             if (n_outputs) {
                 GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
@@ -2094,7 +2099,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
                         // extract token embeddings
                         GGML_ASSERT(embd.data != nullptr);
                         const uint32_t n_embd_out = hparams.n_embd_out();
-                        float * embd_out = embd.data + n_outputs_prev*n_embd_out;
+                        float * embd_out = embd.row(n_outputs_prev);
 
                         if (n_outputs) {
                             GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
@@ -2158,7 +2163,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
                 GGML_ASSERT(backend_h != nullptr);
 
                 const uint32_t n_embd  = hparams.n_embd_out();
-                float * embd_nextn_out = embd_nextn.data + offset*n_embd;
+                float * embd_nextn_out = embd_nextn.row(offset);
 
                 GGML_ASSERT((offset + n_rows)*n_embd <= (int64_t) embd_nextn.size);
                 ggml_backend_tensor_get_async(backend_h, t_h_nextn, embd_nextn_out, 0, n_rows*n_embd*sizeof(float));
@@ -2174,13 +2179,11 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
         }
 
         if (has_samplers) {
-            const auto stride = sampling.output_stride;
-
             // async copy the sampling data from the backend to the host
-            copy_tensor_async_rows(res->t_sampled,        sampling.sampled,    1,      n_outputs_prev, sched.get());
-            copy_tensor_async_rows(res->t_sampled_logits, sampling.logits,     n_vocab, n_outputs_prev, sched.get(), &sampling.logits_count);
-            copy_tensor_async_rows(res->t_sampled_probs,  sampling.probs,      stride, n_outputs_prev, sched.get(), &sampling.probs_count);
-            copy_tensor_async_rows(res->t_candidates,     sampling.candidates, stride, n_outputs_prev, sched.get(), &sampling.candidates_count);
+            copy_tensor_async_rows(res->t_sampled,        sampling.sampled,    n_outputs_prev, sched.get());
+            copy_tensor_async_rows(res->t_sampled_logits, sampling.logits,     n_outputs_prev, sched.get(), &sampling.logits_count);
+            copy_tensor_async_rows(res->t_sampled_probs,  sampling.probs,      n_outputs_prev, sched.get(), &sampling.probs_count);
+            copy_tensor_async_rows(res->t_candidates,     sampling.candidates, n_outputs_prev, sched.get(), &sampling.candidates_count);
         }
 
         n_outputs_prev += n_outputs;
@@ -2290,22 +2293,26 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
 
     // Allocate backend sampling output buffers if there are backend samplers configured.
     const bool has_sampling = !sampling.samplers.empty();
-    size_t output_stride = 0;
+    llama_sampler_output_sizes output_sizes = {};
     if (has_sampling) {
         for (const auto & entry : sampling.samplers) {
-            output_stride = std::max(output_stride, llama_sampler_backend_output_width(entry.second, n_vocab));
+            const auto sizes = llama_sampler_backend_output_sizes(entry.second, n_vocab);
+            output_sizes.logits     = std::max(output_sizes.logits,     sizes.logits);
+            output_sizes.probs      = std::max(output_sizes.probs,      sizes.probs);
+            output_sizes.candidates = std::max(output_sizes.candidates, sizes.candidates);
         }
-        GGML_ASSERT(output_stride > 0);
 
-        // llama_get_logits_ith also exposes sampled logits with vocabulary-width rows.
-        backend_float_count = (n_vocab + output_stride) * n_outputs_max;
-        backend_token_count = (1 + output_stride) * n_outputs_max;
+        backend_float_count = (output_sizes.logits + output_sizes.probs) * n_outputs_max;
+        backend_token_count = (1 + output_sizes.candidates) * n_outputs_max;
     }
 
-    const bool sampling_layout_changed = sampling.output_stride != output_stride ||
-            sampling.sampled.size != (has_sampling ? (size_t) n_outputs_max : 0);
+    const bool sampling_layout_changed =
+            sampling.logits.stride     != output_sizes.logits ||
+            sampling.probs.stride      != output_sizes.probs ||
+            sampling.candidates.stride != output_sizes.candidates ||
+            sampling.sampled.size      != (has_sampling ? (size_t) n_outputs_max : 0);
     if (buf_output && sampling_layout_changed) {
-        synchronize();
+        ggml_backend_sched_synchronize(sched.get());
     }
     if (output_ids.empty()) {
         // init, never resized afterwards
@@ -2338,7 +2345,6 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
             sampling.logits_count.clear();
             sampling.probs_count.clear();
             sampling.candidates_count.clear();
-            sampling.output_stride = 0;
             output_swaps.clear();
             this->n_outputs = 0;
             logits.data = nullptr;
@@ -2364,25 +2370,23 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
         ggml_backend_buffer_clear(buf_output.get(), 0);
     }
 
-    sampling.output_stride = output_stride;
-
     float * output_base = (float *) ggml_backend_buffer_get_base(buf_output.get());
 
     size_t offset = 0;
     uint8_t * base = (uint8_t *) output_base;
 
-    logits = has_logits ? buffer_view<float>{output_base, logits.size} : buffer_view<float>{nullptr, 0};
+    logits = has_logits ? buffer_view<float>{output_base, logits.size, (size_t) n_vocab} : buffer_view<float>{nullptr, 0};
     offset += logits.size * sizeof(float);
 
-    embd = has_embd ? buffer_view<float>{(float *) (base + offset), embd.size} : buffer_view<float>{nullptr, 0};
+    embd = has_embd ? buffer_view<float>{(float *) (base + offset), embd.size, (size_t) n_embd_out} : buffer_view<float>{nullptr, 0};
     offset += embd.size * sizeof(float);
 
-    embd_nextn = has_embd_nextn ? buffer_view<float>{(float *) (base + offset), embd_nextn.size} : buffer_view<float>{nullptr, 0};
+    embd_nextn = has_embd_nextn ? buffer_view<float>{(float *) (base + offset), embd_nextn.size, (size_t) n_embd_out} : buffer_view<float>{nullptr, 0};
     offset += embd_nextn.size * sizeof(float);
 
     for (uint32_t il = 0; il < embd_layer_inp.size(); ++il) {
         if (cparams.embeddings_layer_inp[il]) {
-            embd_layer_inp[il] = buffer_view<float>{(float *) (base + offset), (size_t) n_embd * n_batch};
+            embd_layer_inp[il] = buffer_view<float>{(float *) (base + offset), (size_t) n_embd * n_batch, (size_t) n_embd};
             offset += embd_layer_inp[il].size * sizeof(float);
         } else {
             embd_layer_inp[il] = buffer_view<float>{nullptr, 0};
@@ -2390,16 +2394,16 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
     }
 
     if (has_sampling) {
-        sampling.logits = {(float *) (base + offset), (size_t)(n_vocab*n_outputs_max)};
+        sampling.logits = {(float *) (base + offset), output_sizes.logits*(size_t)n_outputs_max, output_sizes.logits};
         offset += sampling.logits.size * sizeof(float);
 
-        sampling.probs = {(float *) (base + offset), output_stride*(size_t)n_outputs_max};
+        sampling.probs = {(float *) (base + offset), output_sizes.probs*(size_t)n_outputs_max, output_sizes.probs};
         offset += sampling.probs.size * sizeof(float);
 
-        sampling.sampled = {(llama_token *) (base + offset), (size_t)n_outputs_max};
+        sampling.sampled = {(llama_token *) (base + offset), (size_t)n_outputs_max, 1};
         offset += sampling.sampled.size * sizeof(llama_token);
 
-        sampling.candidates = {(llama_token *) (base + offset), output_stride*(size_t)n_outputs_max};
+        sampling.candidates = {(llama_token *) (base + offset), output_sizes.candidates*(size_t)n_outputs_max, output_sizes.candidates};
         offset += sampling.candidates.size * sizeof(llama_token);
 
         // The count vectors keep track of the actual number of logits/probs/candidates
@@ -2455,66 +2459,47 @@ bool llama_context::extract_layer_inputs(const llm_graph_result * res, size_t to
         GGML_ASSERT(nfloats % n_tokens == 0);
 
         const size_t row_floats = nfloats / n_tokens;
-        GGML_ASSERT(row_floats == model.hparams.n_embd);
-        const size_t dst_offset = token_offset * row_floats;
+        GGML_ASSERT(row_floats == embd_layer_inp[il].stride);
+        const size_t dst_offset = token_offset * embd_layer_inp[il].stride;
         GGML_ASSERT(dst_offset + nfloats <= embd_layer_inp[il].size);
 
         ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(sched.get(), t);
         GGML_ASSERT(backend != nullptr);
         // Tensor-split backends require a zero source offset.
-        ggml_backend_tensor_get_async(backend, t, embd_layer_inp[il].data + dst_offset, 0, nbytes);
+        ggml_backend_tensor_get_async(backend, t, embd_layer_inp[il].row(token_offset), 0, nbytes);
         extracted = true;
     }
     return extracted;
 }
 
 void llama_context::output_reorder() {
-    const uint64_t n_vocab     = model.vocab.n_tokens();
-    const uint64_t n_embd      = model.hparams.n_embd;
-    const uint64_t n_embd_out  = model.hparams.n_embd_out();
+    const auto swap_rows = [](const auto & view, size_t i0, size_t i1) {
+        if (view.has_data()) {
+            std::swap_ranges(view.row(i0), view.row(i0) + view.stride, view.row(i1));
+        }
+    };
 
     for (size_t s = 0; s < output_swaps.size(); ++s) {
         const uint64_t i0 = output_swaps[s].i0;
         const uint64_t i1 = output_swaps[s].i1;
 
-        if (logits.size > 0) {
-            for (uint64_t k = 0; k < n_vocab; k++) {
-                std::swap(logits.data[i0*n_vocab + k], logits.data[i1*n_vocab + k]);
-            }
-        }
+        swap_rows(logits, i0, i1);
+        swap_rows(embd, i0, i1);
 
-        if (embd.size > 0) {
-            for (uint64_t k = 0; k < n_embd_out; k++) {
-                std::swap(embd.data[i0*n_embd_out + k], embd.data[i1*n_embd_out + k]);
-            }
-        }
-
-        if (embd_nextn.size > 0 && cparams.embeddings_nextn_masked) {
-            for (uint64_t k = 0; k < n_embd_out; k++) {
-                std::swap(embd_nextn.data[i0*n_embd_out + k], embd_nextn.data[i1*n_embd_out + k]);
-            }
+        if (cparams.embeddings_nextn_masked) {
+            swap_rows(embd_nextn, i0, i1);
         }
 
         if (!sampling.samplers.empty()) {
-            assert(sampling.logits.size > 0);
-            assert(sampling.probs.size > 0);
-            assert(sampling.candidates.size > 0);
             assert(sampling.sampled.size > 0);
             assert(sampling.logits_count.size() > 0);
             assert(sampling.probs_count.size() > 0);
             assert(sampling.candidates_count.size() > 0);
 
-            for (uint64_t k = 0; k < n_vocab; ++k) {
-                std::swap(sampling.logits.data[i0*n_vocab + k], sampling.logits.data[i1*n_vocab + k]);
-            }
-
-            const size_t stride = sampling.output_stride;
-            for (size_t k = 0; k < stride; ++k) {
-                std::swap(sampling.probs.data[i0*stride + k], sampling.probs.data[i1*stride + k]);
-                std::swap(sampling.candidates.data[i0*stride + k], sampling.candidates.data[i1*stride + k]);
-            }
-
-            std::swap(sampling.sampled.data[i0],     sampling.sampled.data[i1]);
+            swap_rows(sampling.logits,     i0, i1);
+            swap_rows(sampling.probs,      i0, i1);
+            swap_rows(sampling.candidates, i0, i1);
+            swap_rows(sampling.sampled,    i0, i1);
             std::swap(sampling.logits_count[i0],     sampling.logits_count[i1]);
             std::swap(sampling.probs_count[i0],      sampling.probs_count[i1]);
             std::swap(sampling.candidates_count[i0], sampling.candidates_count[i1]);
@@ -2529,17 +2514,11 @@ void llama_context::output_reorder() {
         while (embd_batch_idxs[i] != (int32_t) i) {
             const int32_t j = embd_batch_idxs[i];
             GGML_ASSERT(j >= 0 && (size_t) j < embd_batch_idxs.size());
-            if (embd_nextn.has_data() && !cparams.embeddings_nextn_masked) {
-                for (size_t k = 0; k < n_embd_out; ++k) {
-                    std::swap(embd_nextn.data[i*n_embd_out + k], embd_nextn.data[j*n_embd_out + k]);
-                }
+            if (!cparams.embeddings_nextn_masked) {
+                swap_rows(embd_nextn, i, j);
             }
             for (auto & layer : embd_layer_inp) {
-                if (layer.has_data()) {
-                    for (size_t k = 0; k < n_embd; ++k) {
-                        std::swap(layer.data[i*n_embd + k], layer.data[j*n_embd + k]);
-                    }
-                }
+                swap_rows(layer, i, j);
             }
             std::swap(embd_batch_idxs[i], embd_batch_idxs[j]);
         }

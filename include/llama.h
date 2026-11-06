@@ -1143,6 +1143,8 @@ extern "C" {
 
     // Logits for the ith token. For positive indices, Equivalent to:
     // llama_get_logits(ctx) + ctx->output_ids[i]*n_vocab
+    // With backend sampling, returns sampled logits instead when available.
+    // Their length is llama_get_sampled_logits_count_ith(), and llama_get_sampled_candidates_ith() maps indices to token ids.
     // Negative indices can be used to access logits in reverse order, -1 is the last logit.
     // returns NULL for invalid ids.
     LLAMA_API float * llama_get_logits_ith(struct llama_context * ctx, int32_t i);
@@ -1424,6 +1426,9 @@ extern "C" {
         // copy mutable state from src into dst while keeping dst's references to the current sampling graph
         // src and dst must have the same type and configuration
         void (*copy_state)(const struct llama_sampler * src, struct llama_sampler * dst);
+
+        // true if backend output shapes depend only on input shapes and sampler configuration, not sampling state
+        bool backend_shapes_fixed;
     };
 
     struct llama_sampler {
