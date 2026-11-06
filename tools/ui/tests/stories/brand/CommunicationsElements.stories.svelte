@@ -42,7 +42,7 @@
 	const rem = (px: number) => `${px / 16}rem`;
 	const header = tile(540, 420);
 	const chips = tile(352, 340);
-	const figures = tile(540, 440);
+	const figures = tile(620, 440);
 	const motif = tile(340, 300);
 	const app = tile(500, 600);
 
