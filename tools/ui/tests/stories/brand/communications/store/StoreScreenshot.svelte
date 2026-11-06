@@ -8,22 +8,29 @@
 	`brand` is the opener, the headline at display size over
 	the Llama lockup; `art` takes a figure of its own (a motif, a code card). The headline keeps to the top quarter;
 	the Store's text over the bottom quarter only ever covers the picture.
+
+	With `platform="mac"` it is a Mac App Store screenshot instead (16:10, 2880 × 1800, a 1440 × 900 screen at 2x),
+	drawn after Llama for Mac in light mode: `desktop` is its menu dropped from the menu bar, `window` is Llama Chat in
+	a Safari web app's window, and `phone` is the menu with its QR code open beside a phone that scanned it.
 -->
 <script lang="ts">
-	import { WindowsTaskbar } from '../../../../../.storybook/mockups';
+	import { MacMenuBar, WindowsTaskbar } from '../../../../../.storybook/mockups';
 	import { PATHS, SIZE } from '../../logo-showcase/lib/logo';
-	import { FORMATS, grid, type Ground, ICON, LOCKUP } from '../posts/post';
+	import { FORMATS, grid, type Ground, ICON, LOCKUP, type PostFormat } from '../posts/post';
 	import PostFrame from '../posts/PostFrame.svelte';
-	import { type Scene, SCENE_MODEL_ID, SCENES } from './scenes';
+	import MacMenu from './MacMenu.svelte';
+	import { MAC_SCENES, type MacScene, type Scene, SCENE_MODEL_ID, SCENES } from './scenes';
 	import WindowsTray from './WindowsTray.svelte';
 	import type { Snippet } from 'svelte';
 
 	interface Props {
 		children?: Snippet;
 		headline: string;
-		kind: 'art' | 'brand' | 'card' | 'desktop' | 'overlay' | 'window';
+		kind: 'art' | 'brand' | 'card' | 'desktop' | 'overlay' | 'phone' | 'window';
 		lede?: string;
 		overlay?: boolean;
+		/** the app it pictures, for its store: Llama for Windows (the default) or Llama for Mac */
+		platform?: 'mac' | 'windows';
 		/** the app scene a `window` shows */
 		scene?: Scene;
 		tone: Ground;
@@ -37,28 +44,34 @@
 		kind,
 		lede,
 		overlay,
+		platform = 'windows',
 		scene = 'chat',
 		tone,
 		tray = 'list'
 	}: Props = $props();
 
-	const format = FORMATS.msScreenshot;
-	const g = grid(format);
-	// the quick chat is 28 units wide; the desktop is drawn at 1.6 times Windows' size, its taskbar 48px high; the
-	// Models card close up at 2.1 times
-	const windowZoom = (g.unit * 28) / 1160;
+	const mac = $derived(platform === 'mac');
+	const format = $derived<PostFormat>(mac ? FORMATS.macScreenshot : FORMATS.msScreenshot);
+	const g = $derived(grid(format));
+	// the quick chat (or the Mac's window) is 28 units wide; the desktop is drawn at 1.6 times Windows' size, its taskbar
+	// 48px high; the Models card close up at 2.1 times
+	const windowZoom = $derived((g.unit * 28) / 1160);
 	const desk = 1.6;
 	const close = 2.1;
 	// from the area's bottom down to the piece's edge
-	const below = g.margin + (format.safe?.bottom ?? 0);
-	// on the desktop the shot runs down to a margin above the taskbar, so the words centre on the screen over it; the
-	// flyout and the taskbar are placed from there
-	const deskEdge = g.margin + 48 * desk;
+	const below = $derived(g.margin + (format.safe?.bottom ?? 0));
+	// on Windows' desktop the shot runs down to a margin above the taskbar, so the words centre on the screen over it;
+	// the flyout and the taskbar are placed from there. The Mac's has no taskbar
+	const deskEdge = $derived(mac ? below : g.margin + 48 * desk);
 	const trayIcon = { paths: PATHS, viewBox: `0 0 ${SIZE} ${SIZE}` };
 	// Alt + Space: the quick chat, 26 units wide, over another app's window, a gap above the taskbar (drawn at 1.4)
 	const bar = 1.4;
-	const floatWidth = g.unit * 26;
-	const floatZoom = floatWidth / 1160;
+	const floatWidth = $derived(g.unit * 26);
+	const floatZoom = $derived(floatWidth / 1160);
+	// the Mac: its 24-point menu bar and the menu under it at 2.8 times (the screen is 2x, larger to read at the Store's
+	// size), the menu kept 8 points from the screen's edge as macOS keeps it; the phone at 1.3 times its 390 points
+	const mz = 2.8;
+	const phoneZoom = 1.3;
 	let floatHeight = $state(0);
 </script>
 
@@ -92,11 +105,34 @@
 	</div>
 {/snippet}
 
+{#snippet macBar()}
+	<div
+		style:left="{-g.margin}px"
+		style:top="{-g.margin}px"
+		style:width="{format.width}px"
+		class="mac-bar"
+	>
+		<div style:width="{format.width / mz}px" style:zoom={mz}>
+			<MacMenuBar clock="Fri Nov 6  10:24" />
+		</div>
+	</div>
+{/snippet}
+
+{#snippet macMenu(network: boolean)}
+	<div
+		style:right="{8 * mz - g.margin}px"
+		style:top="{(24 + 2) * mz - g.margin}px"
+		class="mac-menu"
+	>
+		<div style:zoom={mz}><MacMenu {network} /></div>
+	</div>
+{/snippet}
+
 <PostFrame {format} label="Store screenshot, {kind}, {tone}" {overlay} {tone}>
 	<!-- beside the flyout, the words stand in the middle of the screen above the taskbar -->
 	<div
 		style:margin-bottom={kind === 'desktop' ? `${deskEdge - below}px` : undefined}
-		class={['shot', `kind-${kind}`]}
+		class={['shot', `kind-${kind}`, { mac }]}
 	>
 		<div class="text">
 			<h2 class={kind === 'brand' ? 't-display' : 'headline'}>{headline}</h2>
@@ -108,7 +144,57 @@
 			{/if}
 		</div>
 
-		{#if kind === 'window'}
+		{#if kind === 'window' && mac}
+			<!-- Llama Chat in a Safari web app's window, laid out at 1160 points and zoomed as Windows' quick chat is -->
+			<div
+				style:margin-bottom="{(g.unit - below) / windowZoom}px"
+				style:zoom={windowZoom}
+				class="window mac-window"
+			>
+				<div class="mac-titlebar">
+					<span class="lights"><i></i><i></i><i></i></span>
+
+					<span class="mac-title">Llama</span>
+				</div>
+
+				<iframe
+					loading="eager"
+					src="iframe.html?id={MAC_SCENES[
+						scene as MacScene
+					]}&viewMode=story&globals=interactionPace:instant"
+					tabindex="-1"
+					title="Llama, {scene}"
+				></iframe>
+			</div>
+		{:else if kind === 'desktop' && mac}
+			{@render macBar()}
+
+			{@render macMenu(false)}
+		{:else if kind === 'phone'}
+			<!-- the menu with its QR code open, and the phone that scanned it, Llama Chat in Safari at the Mac's address -->
+			{@render macBar()}
+
+			{@render macMenu(true)}
+
+			<div
+				style:bottom="{g.unit - below}px"
+				style:right="{(8 + 300) * mz - g.margin + g.unit}px"
+				class="phone-at"
+			>
+				<div style:zoom={phoneZoom} class="phone">
+					<div class="phone-status"><span>10:24</span><span class="phone-icons"></span></div>
+
+					<iframe
+						loading="eager"
+						src="iframe.html?id={MAC_SCENES.phone}&viewMode=story&globals=interactionPace:instant"
+						tabindex="-1"
+						title="Llama on a phone"
+					></iframe>
+
+					<div class="phone-safari"><span>100.101.42.7</span></div>
+				</div>
+			</div>
+		{:else if kind === 'window'}
 			<!-- laid out at 1160 px, a small laptop's, and zoomed so the app reads at Store size; it ends a unit above the edge -->
 			<div
 				style:margin-bottom="{(g.unit - below) / windowZoom}px"
@@ -283,6 +369,144 @@
 	.flyout {
 		position: absolute;
 		right: 0;
+	}
+
+	/* the Mac: the words on the left beside the menu (and the phone), the menu bar across the top */
+	.kind-phone {
+		align-items: flex-start;
+		justify-content: center;
+	}
+	.kind-phone .text {
+		justify-items: start;
+		max-width: calc(var(--u) * 15);
+		text-align: left;
+	}
+	.mac-bar,
+	.mac-menu,
+	.phone-at {
+		position: absolute;
+	}
+	.mac-window {
+		border: 0.5px solid rgb(0 0 0 / 0.2);
+		border-radius: 10px;
+		background: #fff;
+		color: #1d1d1f;
+		box-shadow:
+			0 40px 80px -24px rgb(17 34 60 / 0.45),
+			0 0 0 0.5px rgb(0 0 0 / 0.05);
+	}
+	.mac-titlebar {
+		position: relative;
+		display: flex;
+		align-items: center;
+		height: 38px;
+		padding: 0 16px;
+		background: #f6f6f6;
+		border-bottom: 1px solid rgb(0 0 0 / 0.08);
+	}
+	.lights {
+		display: flex;
+		gap: 8px;
+	}
+	.lights i {
+		width: 12px;
+		height: 12px;
+		border-radius: 50%;
+		background: #ff5f57;
+		box-shadow: inset 0 0 0 0.5px rgb(0 0 0 / 0.12);
+	}
+	.lights i:nth-child(2) {
+		background: #febc2e;
+	}
+	.lights i:nth-child(3) {
+		background: #28c840;
+	}
+	.mac-title {
+		position: absolute;
+		inset: 0;
+		display: grid;
+		place-items: center;
+		font:
+			600 13px / 1 -apple-system,
+			BlinkMacSystemFont,
+			'SF Pro Text',
+			system-ui,
+			sans-serif;
+		pointer-events: none;
+	}
+	.mac-window iframe {
+		width: 100%;
+		margin: 0;
+		border-radius: 0 0 10px 10px;
+		background: #fff;
+	}
+	/* a phone: 390 by 844 points, Safari's address bar at the bottom with the Mac's address */
+	.phone {
+		display: flex;
+		flex-direction: column;
+		width: 390px;
+		height: 844px;
+		overflow: hidden;
+		border: 12px solid #1d1d1f;
+		border-radius: 56px;
+		background: #fff;
+		box-shadow: 0 40px 80px -24px rgb(17 34 60 / 0.45);
+	}
+	.phone-status {
+		display: flex;
+		flex: none;
+		align-items: center;
+		justify-content: space-between;
+		height: 50px;
+		padding: 0 34px;
+		color: #000;
+		font:
+			600 16px / 1 -apple-system,
+			BlinkMacSystemFont,
+			'SF Pro Text',
+			system-ui,
+			sans-serif;
+	}
+	.phone-icons {
+		width: 64px;
+		height: 12px;
+		border-radius: 4px;
+		background: linear-gradient(
+			90deg,
+			#000 0 26%,
+			transparent 26% 38%,
+			#000 38% 62%,
+			transparent 62% 70%,
+			#000 70%
+		);
+		opacity: 0.85;
+	}
+	.phone iframe {
+		flex: 1;
+		width: 100%;
+		margin: 0;
+		border-radius: 0;
+		background: #fff;
+	}
+	.phone-safari {
+		display: grid;
+		flex: none;
+		place-items: center;
+		height: 84px;
+		background: #f7f7f7;
+		border-top: 1px solid rgb(0 0 0 / 0.08);
+	}
+	.phone-safari span {
+		padding: 10px 70px;
+		border-radius: 14px;
+		background: rgb(118 118 128 / 0.12);
+		color: #1d1d1f;
+		font:
+			400 15px / 1 -apple-system,
+			BlinkMacSystemFont,
+			'SF Pro Text',
+			system-ui,
+			sans-serif;
 	}
 
 	/* Alt + Space: the keys, then the quick chat over another app */

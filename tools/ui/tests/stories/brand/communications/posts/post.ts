@@ -38,6 +38,13 @@ export interface PostFormat {
 export const FORMATS = {
 	billboard: { height: 800, name: 'Billboard 3:1', use: 'Banners, screens at events', width: 2400 },
 	landscape: { height: 900, name: 'Landscape 16:9', use: 'X, Bluesky, slides', width: 1600 },
+	/** the Mac App Store's screenshots: 16:10 at the largest size Apple takes, a 1440 × 900 screen at 2x */
+	macScreenshot: {
+		height: 1800,
+		name: 'Mac App Store screenshot 16:10',
+		use: 'Mac App Store screenshots, up to ten',
+		width: 2880
+	},
 	/** the Microsoft Store's listing: artwork, screenshots and logos; the Store may lay text over the bottom quarter */
 	msHero: {
 		height: 1080,
@@ -395,5 +402,93 @@ export const microsoftStore: MicrosoftStoreCopy = {
 	verdicts: {
 		headline: 'Know before\nyou download.',
 		lede: 'Every version says whether it fits your PC, from what it needs and what your PC has.'
+	}
+};
+
+/**
+ * The Mac App Store listing: the same voice as the Microsoft Store's, for Llama for Mac and what it does that the
+ * Windows app doesn't (its menu bar, a Safari web app in the Dock, its models reached from a phone), from its release
+ * notes and README. It claims nothing about telemetry: the Mac app reports crashes
+ */
+export interface MacAppStoreCopy {
+	apps: StoreLine;
+	chats: (StoreVariant & { scene: 'chat' | 'document' })[];
+	hardware: StoreLine;
+	menu: StoreLine;
+	openers: StoreVariant[];
+	phone: StoreLine;
+	size: StoreLine & { figureLabel: string; value: string };
+}
+
+export const macAppStore: MacAppStoreCopy = {
+	apps: {
+		headline: 'Works with the apps\nyou already use.',
+		lede: 'Any app that speaks the OpenAI API can use your models, right on your Mac.'
+	},
+	chats: [
+		{
+			headline: 'Chat in a window\nof its own.',
+			id: 'A',
+			lede: 'Add Llama to the Dock as a Safari web app. Your conversations stay on your Mac.',
+			note: 'Writing',
+			scene: 'chat'
+		},
+		{
+			headline: 'Your documents\nstay on your Mac.',
+			id: 'B',
+			lede: 'Summarize a lease, a bill or a letter, even offline.',
+			note: 'Documents',
+			scene: 'document'
+		}
+	],
+	hardware: {
+		headline: 'Runs on the Mac\nyou already have.',
+		lede: 'Recommended for your Mac lists the models that fit its memory.'
+	},
+	menu: {
+		headline: 'Lives in your\nmenu bar.',
+		lede: 'Llama runs the server for you and suggests a first model that fits your Mac.'
+	},
+	openers: [
+		{
+			headline: 'Your AI.\nOn your Mac.',
+			id: 'A',
+			lede: 'Free and open source. No account, no subscription.',
+			note: 'Ownership'
+		},
+		{
+			headline: 'Chat with AI,\nprivately.',
+			id: 'B',
+			lede: 'It runs on your Mac, so your conversations stay with you.',
+			note: 'Privacy, as what you do'
+		},
+		{
+			headline: 'Run your own AI.\nLocal and private.',
+			id: 'C',
+			lede: 'On your Mac, even offline. No account, no subscription.',
+			note: 'Privacy, with ownership'
+		},
+		{
+			headline: 'Local AI.\nFree and private.',
+			id: 'D',
+			lede: 'Run open models from Hugging Face on your Mac.',
+			note: 'Privacy, with price'
+		},
+		{
+			headline: 'Private AI,\nright on your Mac.',
+			id: 'E',
+			lede: 'Your conversations stay on it. Free, and it works offline.',
+			note: 'Privacy, with place'
+		}
+	],
+	phone: {
+		headline: 'Your models,\non your phone too.',
+		lede: 'Scan the code in the menu. Over Tailscale, only your own devices can reach them.'
+	},
+	size: {
+		figureLabel: 'a native Mac app',
+		headline: 'Small, and\nmade for the Mac.',
+		lede: 'It shares one llama.cpp with your terminal, and your models with your other tools.',
+		value: '4 MB'
 	}
 };

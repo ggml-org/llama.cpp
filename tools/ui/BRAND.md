@@ -104,6 +104,7 @@ wide ones 12, with a gutter of ½u.
 | Store screenshot 16:9 | 1920 × 1080 | Microsoft Store screenshots: a centred headline over the real app     | 45    |
 | Poster art 2:3        | 720 × 1080  | The Microsoft Store's main logo: the icon over the name               | 30    |
 | App tile icon         | 300 × 300   | The Microsoft Store's tile: the icon alone                            | 12.5  |
+| Mac App Store 16:10   | 2880 × 1800 | Mac App Store screenshots: a 1440 × 900 screen at 2x                  | 75    |
 
 ## Building blocks
 
@@ -143,6 +144,10 @@ model's page with its fit verdicts), or one figure: a motif, a receipt, a number
 what the app already does, from its release notes and README. The models shown are small and medium ones from
 llama.app's catalog. The words keep to the top three quarters, since the Store may lay its own text over the bottom
 quarter. The opener and the chat come in several versions, to compare or to A/B test.
+
+The Mac App Store's set is the same voice at 16:10, drawn after Llama for Mac in light mode: its menu (rebuilt from
+the app's source) dropped from the menu bar, Llama Chat in a Safari web app's window, and the menu's QR code beside a
+phone that scanned it. It claims nothing about telemetry: the Mac app reports crashes.
 
 ## Rules
 

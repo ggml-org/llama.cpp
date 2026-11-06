@@ -65,6 +65,7 @@ const preview: Preview = {
 							'Link previews',
 							'Open models poster',
 							'Microsoft Store',
+							'Mac App Store',
 							'Store scenes',
 							'Swag'
 						]

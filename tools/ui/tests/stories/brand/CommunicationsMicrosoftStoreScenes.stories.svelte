@@ -14,7 +14,8 @@
 
 	// The app scenes the Microsoft Store screenshots frame in Llama for Windows' quick chat: the real Llama Chat with
 	// everyday content, in dark mode with conversation tabs, as the Windows app shows it: a note, a lease, a
-	// notification, and a line made friendlier from another app, through Alt + Space
+	// notification, and a line made friendlier from another app, through Alt + Space. The note and the lease also come
+	// as Llama for Mac shows them, in light mode in a Safari web app
 	const { Story } = defineMeta({
 		parameters: {
 			colorScheme: 'dark',
@@ -60,14 +61,14 @@
 		};
 	}
 
-	/** the stores and server as the Windows app has them, with a scene's conversation open or none */
-	function scene(conversation?: Scene) {
+	/** the stores and server as the Windows app has them (or the Mac's, without tabs), with a scene's conversation open */
+	function scene(conversation?: Scene, tabs = true) {
 		return async () => {
-			// with tabs, but without the per-message stats, so the question and the answer both fit
+			// without the per-message stats, so the question and the answer both fit
 			const restoreStores = seedStores({
 				activeConversation: null,
 				activeMessages: [],
-				config: { conversationTabs: true, showMessageStats: false },
+				config: { conversationTabs: tabs, showMessageStats: false },
 				serverProps: modelServerProps({ model_path: SCENE_MODEL_PATH }),
 				serverRole: ServerRole.MODEL
 			});
@@ -128,6 +129,51 @@
 	name="Quick chat"
 	parameters={route(sceneConversationId('quick'))}
 	play={pinOnceIn(/Thanks so much/)}
+>
+	<ChatScreen />
+</Story>
+
+<Story
+	asChild
+	beforeEach={scene('chat', false)}
+	name="Chat on Mac"
+	parameters={{ ...route(sceneConversationId('chat')), colorScheme: 'light' }}
+	play={pinOnceIn(/Could you arrange a repair/)}
+>
+	<ChatScreen />
+</Story>
+
+<Story
+	asChild
+	beforeEach={scene('document', false)}
+	name="Document on Mac"
+	parameters={{ ...route(sceneConversationId('document')), colorScheme: 'light' }}
+	play={pinOnceIn(/two things to watch/)}
+>
+	<ChatScreen />
+</Story>
+
+<Story
+	asChild
+	beforeEach={scene('chat', false)}
+	name="Chat on a phone"
+	parameters={{ ...route(sceneConversationId('chat')), colorScheme: 'light' }}
+	play={async (context) => {
+		// at a phone's width the form is fixed to the window's bottom; a download's copy would place it against the
+		// whole picture, so here it sticks to the bottom instead, as it does on a wider screen
+		const style = context.canvasElement.ownerDocument.createElement('style');
+
+		style.textContent =
+			'.chat-screen > div:has(> .chat-screen-form-wrapper) { position: sticky !important; }';
+		context.canvasElement.ownerDocument.head.append(style);
+		await pinOnceIn(/Could you arrange a repair/)(context);
+		const unpinScroll = unpin;
+
+		unpin = () => {
+			unpinScroll();
+			style.remove();
+		};
+	}}
 >
 	<ChatScreen />
 </Story>

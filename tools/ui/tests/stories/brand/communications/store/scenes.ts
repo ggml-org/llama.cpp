@@ -22,6 +22,15 @@ export const SCENES = {
 
 export type Scene = keyof typeof SCENES;
 
+/** the scenes as Llama for Mac shows them: the same conversations in light mode, in a Safari web app */
+export const MAC_SCENES = {
+	chat: 'communications-applications-store-scenes--chat-on-mac',
+	document: 'communications-applications-store-scenes--document-on-mac',
+	phone: 'communications-applications-store-scenes--chat-on-a-phone'
+} as const;
+
+export type MacScene = keyof typeof MAC_SCENES;
+
 const minutesAgo = (minutes: number) => Date.now() - minutes * 60_000;
 
 /** a question and its answer, as the app stores a conversation */
