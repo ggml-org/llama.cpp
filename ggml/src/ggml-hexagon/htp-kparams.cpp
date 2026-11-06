@@ -4089,7 +4089,7 @@ static bool htp_conv_normalize_geom(const struct ggml_tensor * dst, struct htp_c
         return false;
     }
 
-    *g = (struct htp_conv_norm_geom) {
+    *g = {
         /* .KW   = */ (uint32_t) src0->ne[0],
         /* .KH   = */ (uint32_t) kh_w,
         /* .Cin  = */ (uint32_t) cin_w,
