@@ -1,10 +1,10 @@
 <!--
-	How the icon sits in a circle crop (the avatars, the PWA icon), the same square three times: the icon at the exact
-	centre, lifted 1/60 of its height (the first optical centre), and as the files place it, lifted and nudged left. Its
-	box, the centre lines and the margins all round are drawn in, and a circle fills the gap between the crop and each of
-	the icon's four outer corners, touching both: the two rounded ones (the blade's top left, the foot's bottom right)
-	and the two sharp ones (the blade's top right, the foot's bottom left). The files' placement comes from the file
-	itself (its translate and scale), so the figure follows the files.
+	How the icon sits in a circle crop (the avatars, the PWA icon), as a slideshow of three placements switched at once:
+	the icon at the exact centre, lifted 1/60 of its height (the first optical centre), and as the files place it,
+	lifted and nudged left. Each shows the avatar light and dark, then measured: the icon's box, the centre lines, the
+	margins all round, and a circle in the gap between the crop and each of the icon's outer points, touching both (its
+	rounded corners, its sharp corners and the tips at its middle). The files' placement comes from the file itself
+	(its translate and scale), so the figure follows the files.
 -->
 <script lang="ts">
 	import { PATHS, SIZE } from '../logo-showcase/lib/logo';
@@ -13,17 +13,15 @@
 	import * as ToggleGroup from '$lib/components/ui/toggle-group';
 
 	interface Props {
-		/** placements to try beside these, each lifted and nudged left by these fractions of the icon's size */
-		candidates?: { label: string; lift: number; nudge: number }[];
 		/** the canvas's side and the icon's placement in it, as in its SVG */
 		placement: { scale: number; size: number; x: number; y: number };
 	}
 
-	let { candidates = [], placement }: Props = $props();
+	let { placement }: Props = $props();
 
 	const side = $derived(SIZE * placement.scale);
 	const centred = $derived((placement.size - side) / 2);
-	// the files' lift and nudge, as fractions of the icon's size: 1/39 up and 1/31 left in the brand's files
+	// the files' lift and nudge, as fractions of the icon's size: 1/40 up and 1/100 left in the brand's files
 	const lift = $derived(Math.round(side / (centred - placement.y)));
 	const nudge = $derived(Math.round(side / (centred - placement.x)));
 
@@ -137,12 +135,7 @@
 				label: `Lifted 1/${lift} and nudged 1/${nudge} left, as in the files`,
 				x: placement.x,
 				y: placement.y
-			},
-			...candidates.map(({ label, lift, nudge }) => ({
-				label: `Try: ${label}`,
-				x: centred - side * nudge,
-				y: centred - side * lift
-			}))
+			}
 		].map((panel) => {
 			const g = gaps(panel.x, panel.y);
 
@@ -316,11 +309,11 @@
 		The icon fills {Math.round((side / placement.size) * 100)}% of the side; the numbers are pixels
 		at {placement.size}
 		× {placement.size}. Each circle fills the gap between the circle crop and one of the icon’s
-		outer corners: orange at the rounded ones (the blade’s top left, the foot’s bottom right), grey
-		at the sharp ones (the blade’s top right, the foot’s bottom left), blue at the tips in the
-		middle (the blade’s left, the foot’s right). The tips sit level, mirrored about the icon’s
-		centre line, so they are even only when the icon is not nudged sideways; the nudge that evens
-		the other two pairs moves them apart.
+		outer points: orange at the rounded corners (the blade’s top left, the foot’s bottom right),
+		grey at the sharp corners (the blade’s top right, the foot’s bottom left), blue at the tips in
+		the middle (the blade’s left, the foot’s right). No placement evens all three pairs, since the
+		tips are even only without a sideways nudge; lifted 1/{lift} and nudged 1/{nudge} left, the files
+		keep every pair within a few pixels.
 	</figcaption>
 </figure>
 
