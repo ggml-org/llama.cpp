@@ -191,6 +191,21 @@ if (CUDAToolkit_FOUND)
         endif()
     endif()
 
+    if (GGML_CUDA_FATBIN_PACK)
+        if (NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR GGML_CUDA_NO_VMM OR NOT (GGML_BACKEND_DL OR BUILD_SHARED_LIBS))
+            message(FATAL_ERROR "GGML_CUDA_FATBIN_PACK requires a Linux shared library build without GGML_CUDA_NO_VMM")
+        endif()
+
+        find_package(Python3 REQUIRED COMPONENTS Interpreter)
+        find_program(GGML_CUDA_ZSTD_EXECUTABLE zstd REQUIRED)
+
+        # already compressed images cannot be packed
+        set(GGML_CUDA_COMPRESSION_MODE none)
+
+        set_target_properties(ggml-cuda PROPERTIES RULE_LAUNCH_LINK
+            "${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/fatbin-pack/fatbin_pack_link.py --cc ${CMAKE_C_COMPILER} --zstd ${GGML_CUDA_ZSTD_EXECUTABLE} --zstd-dir ${CMAKE_CURRENT_SOURCE_DIR}/../../../vendor/zstd --")
+    endif()
+
     set(CUDA_CXX_FLAGS "")
 
     set(CUDA_FLAGS -use_fast_math -extended-lambda)
