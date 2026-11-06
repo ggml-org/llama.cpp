@@ -300,8 +300,8 @@ export const microsoftStore: MicrosoftStoreCopy = {
 		lede: 'Your conversations stay on your PC.'
 	},
 	fits: {
-		headline: 'Picks a model\nthat fits your PC.',
-		lede: 'Llama sits in the tray, runs the server for you and suggests what to try next.'
+		headline: 'Good models to start with,\nright in the tray.',
+		lede: 'Llama runs the server for you. Pick one, or search all of Hugging Face.'
 	},
 	gpu: {
 		headline: 'Runs on the graphics card\nyou already have.',
@@ -309,7 +309,7 @@ export const microsoftStore: MicrosoftStoreCopy = {
 	},
 	models: {
 		headline: 'The models you choose\nstay yours.',
-		lede: 'Downloaded once from Hugging Face. No one can swap them or change them.'
+		lede: 'Each one is a file on your PC: open its folder, run it or delete it. No one else can change it.'
 	},
 	opener: {
 		headline: 'Your AI.\nOn your PC.',

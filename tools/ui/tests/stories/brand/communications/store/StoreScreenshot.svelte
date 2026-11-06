@@ -1,48 +1,41 @@
 <!--
 	A Microsoft Store screenshot: one practical point in a centred headline, and under it the thing that proves it,
-	large and running off the bottom edge, as the Store's best listings do. `window` frames a real app scene (a story
-	of Store scenes) in a Windows 11 window; `desktop` is Llama's flyout over the taskbar; `brand` is the opener, the
-	headline at display size over the Llama lockup; `art` takes a figure of its own (a motif, a code card). The
-	headline keeps to the top quarter; the Store's text over the bottom quarter only ever covers the picture.
+	large, as the Store's best listings do. Drawn after Llama for Windows as it is, in Windows' dark theme: `window` is
+	its quick chat, a frameless window with the running model in a pill and Llama Chat inside (a real app scene, a
+	story of Store scenes); `desktop` is its tray flyout over the taskbar, flush with the screen's edge; `card` is the
+	flyout's Models card up close, running off the bottom; `brand` is the opener, the headline at display size over
+	the Llama lockup; `art` takes a figure of its own (a motif, a code card). The headline keeps to the top quarter;
+	the Store's text over the bottom quarter only ever covers the picture.
 -->
 <script lang="ts">
 	import { WindowsTaskbar } from '../../../../../.storybook/mockups';
 	import { PATHS, SIZE } from '../../logo-showcase/lib/logo';
-	import AppPanel from '../posts/AppPanel.svelte';
 	import { FORMATS, grid, type Ground, ICON, LOCKUP } from '../posts/post';
 	import PostFrame from '../posts/PostFrame.svelte';
-	import { type Scene, SCENES } from './scenes';
+	import { type Scene, SCENE_MODEL_ID, SCENES } from './scenes';
+	import WindowsTray from './WindowsTray.svelte';
 	import type { Snippet } from 'svelte';
 
 	interface Props {
 		children?: Snippet;
 		headline: string;
-		kind: 'art' | 'brand' | 'desktop' | 'window';
+		kind: 'art' | 'brand' | 'card' | 'desktop' | 'window';
 		lede?: string;
 		overlay?: boolean;
 		/** the app scene a `window` shows */
 		scene?: Scene;
-		/** the window's title */
-		title?: string;
 		tone: Ground;
 	}
 
-	let {
-		children,
-		headline,
-		kind,
-		lede,
-		overlay,
-		scene = 'chat',
-		title = 'Llama',
-		tone
-	}: Props = $props();
+	let { children, headline, kind, lede, overlay, scene = 'chat', tone }: Props = $props();
 
 	const format = FORMATS.msScreenshot;
 	const g = grid(format);
-	// the window is 30 units wide; the desktop is drawn at 1.6 times Windows' size, its taskbar 48px high
+	// the quick chat is 30 units wide; the desktop is drawn at 1.3 times Windows' size, its taskbar 48px high; the
+	// Models card close up at 2.1 times
 	const windowZoom = (g.unit * 30) / 1040;
-	const desk = 1.6;
+	const desk = 1.3;
+	const close = 2.1;
 	// from the area's bottom down to the piece's edge
 	const below = g.margin + (format.safe?.bottom ?? 0);
 	const trayIcon = { paths: PATHS, viewBox: `0 0 ${SIZE} ${SIZE}` };
@@ -57,20 +50,16 @@
 		</div>
 
 		{#if kind === 'window'}
-			<!-- the window is laid out at 1040 px, a small laptop's, and zoomed to the piece so the app reads at Store size -->
-			<div style:margin-bottom="{-below / windowZoom}px" style:zoom={windowZoom} class="window">
-				<div class="titlebar">
+			<!-- laid out at 1040 px, a small laptop's, and zoomed so the app reads at Store size; it ends a unit above the edge -->
+			<div
+				style:margin-bottom="{(g.unit - below) / windowZoom}px"
+				style:zoom={windowZoom}
+				class="window"
+			>
+				<div class="window-head">
 					<span class="app-icon">{ICON}</span>
 
-					<span class="title">{title}</span>
-
-					<span aria-hidden="true" class="captions">
-						<svg viewBox="0 0 46 32"><path d="M18 16h10" /></svg>
-
-						<svg viewBox="0 0 46 32"><rect height="9" rx="1.5" width="9" x="18.5" y="11.5" /></svg>
-
-						<svg viewBox="0 0 46 32"><path d="M18 11l10 10M28 11 18 21" /></svg>
-					</span>
+					<span class="pill"><i class="dot"></i>{SCENE_MODEL_ID}</span>
 				</div>
 
 				<iframe
@@ -79,11 +68,13 @@
 					tabindex="-1"
 					title="Llama, {scene}"
 				></iframe>
+
+				<p class="dismiss"><kbd>Esc</kbd> to dismiss</p>
 			</div>
 		{:else if kind === 'desktop'}
-			<!-- a flyout opens 12px over the taskbar -->
-			<div style:bottom="{(48 + 12) * desk - below}px" class="flyout">
-				<div style:zoom={desk}><AppPanel bar={false} platform="windows" /></div>
+			<!-- the flyout stands on the taskbar at the screen's right edge -->
+			<div style:bottom="{48 * desk - below}px" style:right="{-g.margin}px" class="flyout">
+				<div style:zoom={desk}><WindowsTray rows={3} /></div>
 			</div>
 
 			<div
@@ -93,8 +84,12 @@
 				class="taskbar"
 			>
 				<div style:width="{format.width / desk}px" style:zoom={desk}>
-					<WindowsTaskbar clock={['10:24', '06/11/2026']} {trayIcon} />
+					<WindowsTaskbar clock={['10:24 AM', '11/6/2026']} mode="dark" {trayIcon} />
 				</div>
+			</div>
+		{:else if kind === 'card'}
+			<div style:margin-bottom="{-below / close}px" style:zoom={close} class="close-up">
+				<WindowsTray card rows={4} />
 			</div>
 		{:else if kind === 'brand'}
 			<span class="lockup">{LOCKUP}Llama</span>
@@ -132,10 +127,7 @@
 		text-wrap: balance;
 	}
 
-	/*
-		a window: 1040px wide, zoomed to 30 units, down to the piece's bottom edge, where it is cut off (the app gets the
-		height that shows, so its own bottom, the message box, stays in view)
-	*/
+	/* the quick chat: Windows' dark frame round Llama Chat, its model in a pill, Esc to close it */
 	.window {
 		display: flex;
 		flex: 1 1 0;
@@ -144,46 +136,70 @@
 		min-height: 0;
 		margin-top: 40px;
 		overflow: hidden;
-		border: 1px solid rgb(17 17 17 / 0.12);
-		border-bottom: 0;
-		border-radius: 8px 8px 0 0;
-		background: #fff;
+		border: 1px solid rgb(255 255 255 / 0.1);
+		border-radius: 8px;
+		background: #202020;
+		color: #fff;
+		font:
+			400 13px / 1 'Segoe UI Variable',
+			'Segoe UI',
+			var(--sans);
 		box-shadow:
-			0 32px 64px -24px rgb(17 34 60 / 0.35),
-			0 2px 8px rgb(17 34 60 / 0.08);
+			0 32px 64px -24px rgb(17 34 60 / 0.5),
+			0 2px 8px rgb(17 34 60 / 0.12);
 	}
-	.titlebar {
+	.window-head {
 		display: flex;
 		align-items: center;
-		gap: 10px;
-		height: 32px;
-		padding-left: 12px;
-		background: #f3f3f3;
-		color: #111;
-		font: 400 12px / 1 var(--sans);
+		justify-content: space-between;
+		height: 48px;
+		padding: 0 12px 0 18px;
 	}
 	.app-icon {
-		font: 700 14px / 1 var(--sans);
+		font: 700 18px / 1 var(--sans);
 	}
-	.title {
-		flex: 1;
-	}
-	.captions {
+	.pill {
 		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 7px 12px;
+		border-radius: 999px;
+		background: rgb(255 255 255 / 0.06);
 	}
-	.captions svg {
-		width: 46px;
-		height: 32px;
-		fill: none;
-		stroke: #111;
-		stroke-width: 1;
+	.dot {
+		width: 8px;
+		height: 8px;
+		border-radius: 50%;
+		background: #3fb950;
 	}
 	iframe {
 		display: block;
 		flex: 1;
-		width: 1040px;
+		width: calc(100% - 32px);
+		margin: 0 16px;
 		border: 0;
+		border-radius: 4px;
+		background: #0a0a0a;
 		pointer-events: none;
+	}
+	.dismiss {
+		margin: 0;
+		padding: 10px 0 12px;
+		color: rgb(255 255 255 / 0.6);
+		font-size: 12px;
+		text-align: center;
+	}
+	.dismiss kbd {
+		color: rgb(255 255 255 / 0.85);
+		font: inherit;
+	}
+
+	.close-up {
+		flex: none;
+		width: 400px;
+		margin-top: 20px;
+		border-radius: 8px;
+		box-shadow: 0 24px 48px -20px rgb(17 34 60 / 0.5);
 	}
 
 	/* the desktop: the flyout over the full taskbar, which runs edge to edge at the bottom */
