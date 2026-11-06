@@ -50,7 +50,7 @@ jobs:
     runs-on: [self-hosted, Linux, Intel, OpenVINO]
 
     env:
-      # Sync versions in build.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
+      # Sync versions in build-openvino.yml, ci-self-hosted-openvino.yml, release.yml, release-publish.yml, build-cache.yml, .devops/openvino.Dockerfile, docs/backend/OPENVINO.md
       OPENVINO_VERSION_MAJOR: "2026.4.1"
       OPENVINO_VERSION_FULL: "2026.4.1.22982.07f9c262b05"
 

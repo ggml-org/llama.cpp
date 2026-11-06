@@ -225,6 +225,9 @@ ggml_cgraph * clip_graph_pockettts_gen::build() {
     keep = ggml_mul(ctx0, keep,
         ggml_step(ctx0, ggml_scale_bias(ctx0, ggml_add(ctx0, pos_k, base), 1.0f, 0.5f - (float) prefix)));
     ggml_tensor * kq_mask = ggml_reshape_4d(ctx0, ggml_log(ctx0, keep), n_kv, n_pos, 1, 1);
+    if (flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED) {
+        kq_mask = ggml_cast(ctx0, kq_mask, GGML_TYPE_F16);
+    }
 
     for (int il = 0; il < n_layer; il++) {
         const auto & layer = model.gen_tfm_layers[il];

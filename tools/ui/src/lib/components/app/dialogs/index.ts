@@ -109,6 +109,14 @@ export { default as DialogExportSettings } from './DialogExportSettings.svelte';
 export { default as DialogConfirmation } from './DialogConfirmation.svelte';
 
 /**
+ * **DialogSearch** - Spotlight-style search over chats and sidebar actions
+ *
+ * Opens over the app with a focused input and a keyboard-driven result list:
+ * arrow keys move the highlight, Enter opens, Escape closes. Desktop only; phones use the `/search` page.
+ */
+export { default as DialogSearch } from './DialogSearch.svelte';
+
+/**
  * **DialogConfirmDownload** - Confirm a destructive download action
  *
  * Shared confirmation for stopping/cancelling an in-flight download or deleting
@@ -118,6 +126,23 @@ export { default as DialogConfirmation } from './DialogConfirmation.svelte';
  * repo:tag.
  */
 export { default as DialogConfirmDownload } from './DialogConfirmDownload.svelte';
+
+/**
+ * **DialogConversationDelete** - Confirm deleting a conversation
+ *
+ * Destructive confirmation shared by every conversation delete entry point
+ * (keyboard shortcut, sidebar, mobile search).
+ *
+ * @example
+ * ```svelte
+ * <DialogConversationDelete
+ *   bind:open={showDelete}
+ *   onConfirm={handleDelete}
+ *   onCancel={() => (showDelete = false)}
+ * />
+ * ```
+ */
+export { default as DialogConversationDelete } from './DialogConversationDelete.svelte';
 
 /**
  * **DialogConversationRename** - Rename a conversation
@@ -404,55 +429,6 @@ export { default as DialogModelNotAvailable } from './DialogModelNotAvailable.sv
 export { default as DialogConversationSelection } from './DialogConversationSelection.svelte';
 
 /**
- *
- * MODEL INFORMATION DIALOGS
- *
- * Dialogs for displaying model and server information.
- *
- */
-
-/**
- * **DialogModelInformation** - Model details display
- *
- * Dialog showing comprehensive information about the currently loaded model
- * and server configuration. Displays model metadata, capabilities, and
- * server settings in a structured table format.
- *
- * **Architecture:**
- * - Uses ShadCN Dialog with wide layout for table display
- * - Fetches data from serverStore (props) and modelsStore (metadata)
- * - Auto-fetches models when dialog opens if not loaded
- *
- * **Information Displayed:**
- * - **Model**: Name with copy button
- * - **File Path**: Full path to model file with copy button
- * - **Context Size**: Current context window size
- * - **Training Context**: Original training context (if available)
- * - **Model Size**: File size in human-readable format
- * - **Parameters**: Parameter count (e.g., "7B", "70B")
- * - **Embedding Size**: Embedding dimension
- * - **Vocabulary Size**: Token vocabulary size
- * - **Vocabulary Type**: Tokenizer type (BPE, etc.)
- * - **Parallel Slots**: Number of concurrent request slots
- * - **Modalities**: Supported input types (text, vision, audio)
- * - **Build Info**: Server build information
- * - **Chat Template**: Full Jinja template in scrollable code block
- *
- * **Features:**
- * - Copy buttons for model name and path
- * - Modality badges with icons
- * - Responsive table layout with container queries
- * - Loading state while fetching model info
- * - Scrollable chat template display
- *
- * @example
- * ```svelte
- * <DialogModelInformation bind:open={showModelInfo} />
- * ```
- */
-export { default as DialogModelInformation } from './DialogModelInformation.svelte';
-
-/**
  * **DialogMcpResourcesBrowser** - MCP resources browser dialog
  *
  * Dialog for browsing and attaching MCP resources to chat context.
@@ -537,3 +513,6 @@ export { default as DialogMcpResourcePreview } from './DialogMcpResourcePreview.
  * ```
  */
 export { default as DialogMermaidPreview } from './DialogMermaidPreview.svelte';
+
+/** **DialogDiscoverModels** - shell for the Hugging Face model discovery view. */
+export { default as DialogDiscoverModels } from './DialogDiscoverModels.svelte';

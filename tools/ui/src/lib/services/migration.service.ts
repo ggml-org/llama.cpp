@@ -654,6 +654,39 @@ const renderKeysMigration: Migration = {
 			console.log('[Migration] Render keys: unfolded the raw text toggle');
 	}
 };
+const LEGACY_MODEL_ORG_NAME_KEY = 'showModelOrgNameInTrigger';
+const MODEL_ORG_NAME_KEY_MIGRATION_ID = 'model-org-name-key-v1';
+/**
+ * Renames the trigger-only org name key onto the selector-wide one. The persisted
+ * config always carries the legacy key, so a value it holds carries over; a config
+ * that already set the new key keeps its own value.
+ */
+const modelOrgNameKeyMigration: Migration = {
+	description: 'Rename the trigger-only org name key onto the selector-wide one',
+	id: MODEL_ORG_NAME_KEY_MIGRATION_ID,
+
+	async run(): Promise<void> {
+		const configRaw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
+
+		if (configRaw === null) return;
+
+		const config = JSON.parse(configRaw);
+
+		if (!(LEGACY_MODEL_ORG_NAME_KEY in config)) return;
+
+		if (!(SETTINGS_KEYS.SHOW_MODEL_ORG_NAME in config)) {
+			config[SETTINGS_KEYS.SHOW_MODEL_ORG_NAME] = config[LEGACY_MODEL_ORG_NAME_KEY] === true;
+		}
+
+		// Dropped rather than preserved: the new key covers the trigger too, so leaving the
+		// old one behind would let a stale value fight the restored one.
+		delete config[LEGACY_MODEL_ORG_NAME_KEY];
+		localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify(config));
+
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+			console.log('[Migration] Model org name: renamed the trigger key');
+	}
+};
 const MCP_DEFAULT_OVERRIDES_LEGACY_KEY = `${STORAGE_APP_NAME}.mcpDefaultServerOverrides`;
 const MCP_DEFAULT_OVERRIDES_MERGE_MIGRATION_ID = 'mcp-default-overrides-merge-v1';
 /**
@@ -804,6 +837,7 @@ const migrations: Migration[] = [
 	mcpDefaultOverridesMergeMigration,
 	configTypesMigration,
 	renderKeysMigration,
+	modelOrgNameKeyMigration,
 	mcpServerOverridesToToolPolicyMigration
 ];
 

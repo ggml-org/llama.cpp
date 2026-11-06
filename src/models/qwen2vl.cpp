@@ -36,10 +36,10 @@ void llama_model_qwen2vl::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_qwen2vl::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_qwen2vl::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_qwen2vl::graph::graph(const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
@@ -54,9 +54,6 @@ llama_model_qwen2vl::graph::graph(const llama_model & model, const llm_graph_par
     ggml_tensor * inp_pos = build_inp_pos();
 
     auto * inp_attn = build_attn_inp_kv();
-
-    int sections[4];
-    std::copy(std::begin(hparams.rope_sections), std::begin(hparams.rope_sections) + 4, sections);
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
@@ -75,17 +72,8 @@ llama_model_qwen2vl::graph::graph(const llama_model & model, const llm_graph_par
             auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
                     n_embd_head, n_head, n_head_kv, il);
 
-            Qcur = ggml_rope_multi(
-                    ctx0, Qcur, inp_pos, nullptr,
-                    n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow
-                    );
-
-            Kcur = ggml_rope_multi(
-                    ctx0, Kcur, inp_pos, nullptr,
-                    n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow
-                    );
+            Qcur = build_rope(Qcur, inp_pos, il);
+            Kcur = build_rope(Kcur, inp_pos, il);
 
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);
@@ -138,6 +126,4 @@ llama_model_qwen2vl::graph::graph(const llama_model & model, const llm_graph_par
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }

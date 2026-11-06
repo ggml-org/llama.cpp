@@ -6,8 +6,14 @@
 #include "json.h"
 
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <cctype>
+#include <cfloat>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <vector>
 #include <optional>
 #include <algorithm>
@@ -64,6 +70,17 @@ void func_args::push_front(const value & val) {
 
 const std::vector<value> & func_args::get_args() const {
     return args;
+}
+
+void func_args::ensure_kwargs(std::initializer_list<const char *> names) const {
+    for (const auto & arg : args) {
+        if (is_val<value_kwarg>(arg)) {
+            auto * kwarg = cast_val<value_kwarg>(arg);
+            if (std::find(names.begin(), names.end(), kwarg->key) == names.end()) {
+                throw raised_exception("Function '" + func_name + "' got an unexpected keyword argument '" + kwarg->key + "'");
+            }
+        }
+    }
 }
 
 /**
@@ -128,6 +145,14 @@ static value empty_value_fn(const func_args &) {
         return mk_val<T>();
     }
 }
+
+template<typename T>
+static value empty_value_no_args_fn(const func_args & args) {
+    args.ensure_kwargs();
+    args.ensure_count(1, 1);
+    return empty_value_fn<T>(args);
+}
+
 template<typename T>
 static value test_type_fn(const func_args & args) {
     args.ensure_count(1);
@@ -239,6 +264,8 @@ static std::string json_ensure_ascii_preserving_format(const std::string & json_
     return output;
 }
 
+static std::string float_repr(double val);
+
 static value tojson(const func_args & args) {
     args.ensure_count(1, 5);
     value val_ascii      = args.get_kwarg_or_pos("ensure_ascii", 1);
@@ -292,74 +319,53 @@ static value & get_attribute(const value & val, const value & attr, value & defa
     return default_val;
 }
 
-template<bool is_reject>
-static value selectattr(const func_args & args) {
-    args.ensure_count(2, 4);
-    args.ensure_vals<value_array, value_string, value_string, value_string>(true, true, false, false);
+template<bool is_reject, bool lookup_attr>
+static value select_or_reject(const func_args & args) {
+    // example: array | select("odd") -> test_is_odd(item)
+    // example: array | selectattr("status", "equalto", "active") -> test_is_equalto(item.status, "active")
+    constexpr size_t test_pos = lookup_attr ? 2 : 1;
+    args.ensure_count(test_pos);
+    args.ensure_val<value_array>(args.get_pos(0));
+    value attr;
+    if constexpr (lookup_attr) {
+        attr = args.get_pos(1);
+        args.ensure_val<value_string>(attr);
+    }
+
+    auto & builtins = global_builtins();
+    auto test_it = builtins.end();
+    if (args.count() > test_pos) {
+        args.ensure_val<value_string>(args.get_pos(test_pos));
+        std::string test_name = args.get_pos(test_pos)->as_string().str();
+        test_it = builtins.find("test_is_" + test_name);
+        if (test_it == builtins.end()) {
+            throw raised_exception(args.func_name + ": unknown test '" + test_name + "'");
+        }
+    }
 
     auto arr = args.get_pos(0)->as_array();
-    auto attribute = args.get_pos(1);
     auto out = mk_val<value_array>();
     value val_default = mk_val<value_undefined>();
 
-    if (args.count() == 2) {
-        // example: array | selectattr("active")
-        for (const auto & item : arr) {
-            value attr_val = get_attribute(item, attribute, val_default);
-            bool is_selected = attr_val->as_bool();
-            if constexpr (is_reject) is_selected = !is_selected;
-            if (is_selected) out->push_back(item);
+    for (const auto & item : arr) {
+        value val = item;
+        if constexpr (lookup_attr) {
+            val = get_attribute(item, attr, val_default);
         }
-        return out;
-
-    } else if (args.count() == 3) {
-        // example: array | selectattr("equalto", "text")
-        // translated to: test_is_equalto(item, "text")
-        std::string test_name = args.get_pos(1)->as_string().str();
-        value test_val = args.get_pos(2);
-        auto & builtins = global_builtins();
-        auto it = builtins.find("test_is_" + test_name);
-        if (it == builtins.end()) {
-            throw raised_exception("selectattr: unknown test '" + test_name + "'");
-        }
-        auto test_fn = it->second;
-        for (const auto & item : arr) {
+        bool is_selected;
+        if (test_it == builtins.end()) {
+            is_selected = val->as_bool();
+        } else {
             func_args test_args(args.ctx);
-            test_args.push_back(item); // current object
-            test_args.push_back(test_val); // extra argument
-            value test_result = test_fn(test_args);
-            bool is_selected = test_result->as_bool();
-            if constexpr (is_reject) is_selected = !is_selected;
-            if (is_selected) out->push_back(item);
+            test_args.push_back(val);
+            for (size_t i = test_pos + 1; i < args.count(); i++) {
+                test_args.push_back(args.get_pos(i));
+            }
+            is_selected = test_it->second(test_args)->as_bool();
         }
-        return out;
-
-    } else if (args.count() == 4) {
-        // example: array | selectattr("status", "equalto", "active")
-        // translated to: test_is_equalto(item.status, "active")
-        std::string test_name = args.get_pos(2)->as_string().str();
-        auto extra_arg = args.get_pos(3);
-        auto & builtins = global_builtins();
-        auto it = builtins.find("test_is_" + test_name);
-        if (it == builtins.end()) {
-            throw raised_exception("selectattr: unknown test '" + test_name + "'");
-        }
-        auto test_fn = it->second;
-        for (const auto & item : arr) {
-            value attr_val = get_attribute(item, attribute, val_default);
-            func_args test_args(args.ctx);
-            test_args.push_back(attr_val); // attribute value
-            test_args.push_back(extra_arg); // extra argument
-            value test_result = test_fn(test_args);
-            bool is_selected = test_result->as_bool();
-            if constexpr (is_reject) is_selected = !is_selected;
-            if (is_selected) out->push_back(item);
-        }
-        return out;
-    } else {
-        throw raised_exception("selectattr: invalid number of arguments");
+        if constexpr (is_reject) is_selected = !is_selected;
+        if (is_selected) out->push_back(item);
     }
-
     return out;
 }
 
@@ -418,7 +424,12 @@ const func_builtins & global_builtins() {
             throw raised_exception("Jinja Exception: " + msg);
         }},
         {"dict", toobject},
-        {"namespace", toobject},
+        {"namespace", [](const func_args & args) -> value {
+            // unlike a dict, a namespace has no methods: ns.items is the attribute, as in jinja2
+            value out = toobject(args);
+            cast_val<value_object>(out)->has_builtins = false;
+            return out;
+        }},
         {"strftime_now", [](const func_args & args) -> value {
             args.ensure_vals<value_string>();
             std::string format = args.get_pos(0)->as_string().str();
@@ -602,6 +613,52 @@ const func_builtins & global_builtins() {
     return builtins;
 }
 
+value try_builtin_func(context & ctx, const std::string & name, value & input, bool undef_on_missing) {
+    JJ_DEBUG("Trying built-in function '%s' for type %s", name.c_str(), input->type().c_str());
+    if (ctx.is_get_stats) {
+        value_t::stats_t::mark_used(input);
+        input->stats.ops.insert(name);
+    }
+    auto builtins = input->get_builtins();
+    auto it = builtins.find(name);
+    if (it != builtins.end()) {
+        JJ_DEBUG("Binding built-in '%s'", name.c_str());
+        return mk_val<value_func>(name, it->second, input);
+    }
+    if (undef_on_missing) {
+        return mk_val<value_undefined>(name);
+    }
+    throw std::runtime_error("Unknown (built-in) filter '" + name + "' for type " + input->type());
+}
+
+value apply_filter_by_name(context & ctx, std::string filter_id, value input, const func_args & args) {
+    if (filter_id == "count") {
+        filter_id = "length";
+    } else if (filter_id == "d") {
+        filter_id = "default";
+    } else if (filter_id == "e") {
+        filter_id = "escape";
+    } else if (filter_id == "trim") {
+        filter_id = "strip";
+    }
+
+    // TODO: Refactor filters so this coercion can be done automatically
+    if (!input->is_undefined() && !is_val<value_string>(input) && (
+        filter_id == "capitalize" ||
+        filter_id == "lower" ||
+        filter_id == "replace" ||
+        filter_id == "strip" ||
+        filter_id == "title" ||
+        filter_id == "upper" ||
+        filter_id == "wordcount"
+    )) {
+        JJ_DEBUG("Coercing %s to String for '%s' filter", input->type().c_str(), filter_id.c_str());
+        input = mk_val<value_string>(input->as_string());
+    }
+
+    return try_builtin_func(ctx, filter_id, input)->invoke(args);
+}
+
 
 const func_builtins & value_int_t::get_builtins() const {
     static const func_builtins builtins = {
@@ -629,6 +686,11 @@ const func_builtins & value_int_t::get_builtins() const {
 
 
 const func_builtins & value_float_t::get_builtins() const {
+    // Python's str() of a float, nan and inf stay as they are (tojson writes NaN and Infinity)
+    static const func_handler tostring = [](const func_args & args) -> value {
+        args.ensure_vals<value_float>();
+        return mk_val<value_string>(float_repr(args.get_pos(0)->as_float()));
+    };
     static const func_builtins builtins = {
         {"default", default_value},
         {"abs", [](const func_args & args) -> value {
@@ -645,8 +707,8 @@ const func_builtins & value_float_t::get_builtins() const {
             args.ensure_vals<value_float>();
             return mk_val<value_float>(args.get_pos(0)->as_float());
         }},
-        {"safe", tojson},
-        {"string", tojson},
+        {"safe", tostring},
+        {"string", tostring},
         {"tojson", tojson},
     };
     return builtins;
@@ -670,16 +732,22 @@ const func_builtins & value_string_t::get_builtins() const {
     static const func_builtins builtins = {
         {"default", default_value},
         {"upper", [](const func_args & args) -> value {
+            args.ensure_kwargs();
+            args.ensure_count(1, 1);
             args.ensure_vals<value_string>();
             jinja::string str = args.get_pos(0)->as_string().uppercase();
             return mk_val<value_string>(str);
         }},
         {"lower", [](const func_args & args) -> value {
+            args.ensure_kwargs();
+            args.ensure_count(1, 1);
             args.ensure_vals<value_string>();
             jinja::string str = args.get_pos(0)->as_string().lowercase();
             return mk_val<value_string>(str);
         }},
         {"strip", [](const func_args & args) -> value {
+            args.ensure_kwargs({"chars"});
+            args.ensure_count(1, 2);
             value val_input = args.get_pos(0);
             if (!is_val<value_string>(val_input)) {
                 throw raised_exception("strip() first argument must be a string");
@@ -710,11 +778,15 @@ const func_builtins & value_string_t::get_builtins() const {
             }
         }},
         {"title", [](const func_args & args) -> value {
+            args.ensure_kwargs();
+            args.ensure_count(1, 1);
             args.ensure_vals<value_string>();
             jinja::string str = args.get_pos(0)->as_string().titlecase();
             return mk_val<value_string>(str);
         }},
         {"capitalize", [](const func_args & args) -> value {
+            args.ensure_kwargs();
+            args.ensure_count(1, 1);
             args.ensure_vals<value_string>();
             jinja::string str = args.get_pos(0)->as_string().capitalize();
             return mk_val<value_string>(str);
@@ -1016,8 +1088,8 @@ const func_builtins & value_bool_t::get_builtins() const {
     return builtins;
 }
 
-[[noreturn]] static value array_unique_not_implemented(const func_args &) {
-    throw not_implemented_exception("Array unique builtin not implemented");
+[[noreturn]] static value array_sum_not_implemented(const func_args &) {
+    throw not_implemented_exception("Array sum builtin not implemented");
 }
 
 const func_builtins & value_array_t::get_builtins() const {
@@ -1082,11 +1154,13 @@ const func_builtins & value_array_t::get_builtins() const {
             auto arr = slice(val->as_array(), start, stop, step);
             return is_val<value_tuple>(val) ? mk_val<value_tuple>(std::move(arr)) : mk_val<value_array>(std::move(arr));
         }},
-        {"selectattr", selectattr<false>},
-        {"select", selectattr<false>},
-        {"rejectattr", selectattr<true>},
-        {"reject", selectattr<true>},
+        {"selectattr", select_or_reject<false, true>},
+        {"select", select_or_reject<false, false>},
+        {"rejectattr", select_or_reject<true, true>},
+        {"reject", select_or_reject<true, false>},
+        {"sum", array_sum_not_implemented},
         {"join", [](const func_args & args) -> value {
+            args.ensure_kwargs({"d", "attribute"});
             args.ensure_count(1, 3);
             if (!is_val<value_array>(args.get_pos(0))) {
                 throw raised_exception("join() first argument must be an array");
@@ -1124,13 +1198,28 @@ const func_builtins & value_array_t::get_builtins() const {
         {"tojson", tojson},
         {"map", [](const func_args & args) -> value {
             args.ensure_count(2);
-            if (!is_val<value_array>(args.get_pos(0))) {
+            value val = args.get_pos(0);
+            if (!is_val<value_array>(val)) {
                 throw raised_exception("map: first argument must be an array");
             }
             if (!is_val<value_kwarg>(args.get_args().at(1))) {
-                throw not_implemented_exception("map: filter-mapping not implemented");
+                value filter = args.get_pos(1);
+                if (!is_val<value_string>(filter)) {
+                    throw raised_exception("map: filter name must be a string");
+                }
+                auto out = mk_val<value_array>();
+                func_args filter_args(args.ctx);
+                const auto & all_args = args.get_args();
+                for (size_t i = 2; i < all_args.size(); ++i) {
+                    filter_args.push_back(all_args[i]);
+                }
+                const std::string filter_id = filter->as_string().str();
+                auto arr = val->as_array();
+                for (const auto & item : arr) {
+                    out->push_back(apply_filter_by_name(args.ctx, filter_id, item, filter_args));
+                }
+                return is_val<value_tuple>(val) ? mk_val<value_tuple>(out->as_array()) : out;
             }
-            value val       = args.get_pos(0);
             value attribute = args.get_kwarg_or_pos("attribute", 1);
             value default_val = args.get_kwarg("default", mk_val<value_undefined>());
             auto out = mk_val<value_array>();
@@ -1139,7 +1228,7 @@ const func_builtins & value_array_t::get_builtins() const {
                 value attr_val = get_attribute(item, attribute, default_val);
                 out->push_back(attr_val);
             }
-            return is_val<value_tuple>(val) ? mk_val<value_tuple>(std::move(out->as_array())) : out;
+            return is_val<value_tuple>(val) ? mk_val<value_tuple>(out->as_array()) : out;
         }},
         {"append", [](const func_args & args) -> value {
             args.ensure_count(2);
@@ -1245,7 +1334,36 @@ const func_builtins & value_array_t::get_builtins() const {
             }
             return result;
         }},
-        {"unique", array_unique_not_implemented},
+        {"unique", [](const func_args & args) -> value {
+            args.ensure_count(1, 3);
+            args.ensure_vals<value_array>();
+            value val       = args.get_pos(0);
+            value val_case  = args.get_kwarg_or_pos("case_sensitive", 1);
+            value attribute = args.get_kwarg_or_pos("attribute",      2);
+            // FIXME: unique is currently always case sensitive
+            //const bool case_sensitive = val_case->as_bool(); // undefined == false
+            value undef = mk_val<value_undefined>();
+            std::vector<value> result;
+            std::vector<value> seen;
+            for (const auto & item : val->as_array()) {
+                value key = item;
+                if (!attribute->is_undefined()) {
+                    key = get_attribute(item, attribute, undef);
+                }
+                bool dup = false;
+                for (const auto & s : seen) {
+                    if (value_compare(s, key, value_compare_op::eq)) {
+                        dup = true;
+                        break;
+                    }
+                }
+                if (!dup) {
+                    seen.push_back(key);
+                    result.push_back(item);
+                }
+            }
+            return mk_val<value_array>(std::move(result));
+        }},
     };
     return builtins;
 }
@@ -1279,6 +1397,15 @@ const func_builtins & value_object_t::get_builtins() const {
             return obj->at(key, default_val);
         }},
         {"keys", [](const func_args & args) -> value {
+            args.ensure_vals<value_object>();
+            const auto & obj = args.get_pos(0)->as_ordered_object();
+            auto result = mk_val<value_array>();
+            for (const auto & pair : obj) {
+                result->push_back(pair.first);
+            }
+            return result;
+        }},
+        {"list", [](const func_args & args) -> value {
             args.ensure_vals<value_object>();
             const auto & obj = args.get_pos(0)->as_ordered_object();
             auto result = mk_val<value_array>();
@@ -1374,14 +1501,18 @@ const func_builtins & value_none_t::get_builtins() const {
 const func_builtins & value_undefined_t::get_builtins() const {
     static const func_builtins builtins = {
         {"default", default_value},
-        {"capitalize", empty_value_fn<value_string>},
+        {"capitalize", empty_value_no_args_fn<value_string>},
         {"first", empty_value_fn<value_undefined>},
         {"items", empty_value_fn<value_array>},
-        {"join", empty_value_fn<value_string>},
+        {"join", [](const func_args & args) -> value {
+            args.ensure_kwargs({"d", "attribute"});
+            args.ensure_count(1, 3);
+            return empty_value_fn<value_string>(args);
+        }},
         {"last", empty_value_fn<value_undefined>},
         {"length", empty_value_fn<value_int>},
         {"list", empty_value_fn<value_array>},
-        {"lower", empty_value_fn<value_string>},
+        {"lower", empty_value_no_args_fn<value_string>},
         {"map", empty_value_fn<value_array>},
         {"max", empty_value_fn<value_undefined>},
         {"min", empty_value_fn<value_undefined>},
@@ -1394,12 +1525,16 @@ const func_builtins & value_undefined_t::get_builtins() const {
         {"selectattr", empty_value_fn<value_array>},
         {"sort", empty_value_fn<value_array>},
         {"string", empty_value_fn<value_string>},
-        {"strip", empty_value_fn<value_string>},
+        {"strip", [](const func_args & args) -> value {
+            args.ensure_kwargs({"chars"});
+            args.ensure_count(1, 2);
+            return empty_value_fn<value_string>(args);
+        }},
         {"sum", empty_value_fn<value_int>},
-        {"title", empty_value_fn<value_string>},
+        {"title", empty_value_no_args_fn<value_string>},
         {"truncate", empty_value_fn<value_string>},
         {"unique", empty_value_fn<value_array>},
-        {"upper", empty_value_fn<value_string>},
+        {"upper", empty_value_no_args_fn<value_string>},
         {"wordcount", empty_value_fn<value_int>},
     };
     return builtins;
@@ -1409,7 +1544,8 @@ const func_builtins & value_undefined_t::get_builtins() const {
 //////////////////////////////////
 
 
-static value from_json(const common_json & j, bool mark_input) {
+// the runtime walks values with recursion, a deeper input overflows the stack
+static value from_json(const common_json & j, bool mark_input, int depth = 0) {
     if (j.is_null()) {
         return mk_val<value_none>();
     } else if (j.is_boolean()) {
@@ -1424,16 +1560,18 @@ static value from_json(const common_json & j, bool mark_input) {
             str->mark_input();
         }
         return str;
+    } else if ((j.is_array() || j.is_object()) && depth >= JINJA_RECURSIVE_LIMIT) {
+        throw std::invalid_argument("JSON is nested more than " + std::to_string(JINJA_RECURSIVE_LIMIT) + " levels deep");
     } else if (j.is_array()) {
         auto arr = mk_val<value_array>();
         for (const auto & item : j) {
-            arr->push_back(from_json(item, mark_input));
+            arr->push_back(from_json(item, mark_input, depth + 1));
         }
         return arr;
     } else if (j.is_object()) {
         auto obj = mk_val<value_object>();
         for (auto it = j.begin(); it != j.end(); ++it) {
-            obj->insert(it.key(), from_json(it.value(), mark_input));
+            obj->insert(it.key(), from_json(it.value(), mark_input, depth + 1));
         }
         return obj;
     } else {
@@ -1517,6 +1655,77 @@ void global_from_json(context & ctx, const common_json & json_obj, bool mark_inp
     }
 }
 
+// a float as Python's repr() and str() write it: the shortest digits that read back as the same value
+static std::string float_repr(double val) {
+    if (!std::isfinite(val)) {
+        return std::isnan(val) ? "nan" : val < 0 ? "-inf" : "inf";
+    }
+    const double mag = std::fabs(val);
+
+    // at a power of 2 the gap to the value below is half the gap above, the nearest digits can miss while the next ones up read back
+    int exp2 = 0;
+    const bool is_pow2 = std::frexp(mag, &exp2) == 0.5;
+
+    // a normal double has at most one decimal of up to DBL_DIG digits that reads back as it, the search can start at DBL_DIG digits
+    // 17 digits always read back
+    std::string digits;
+    int exp10 = 0;
+    for (int prec = mag < DBL_MIN ? 0 : DBL_DIG - 1; digits.empty(); prec++) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%.*e", prec, mag);
+        const char * e = std::strchr(buf, 'e');
+        // only the digits, the decimal point depends on the locale
+        std::string d(buf, e - buf);
+        d.erase(std::remove_if(d.begin(), d.end(), [](char c) { return c < '0' || c > '9'; }), d.end());
+        exp10 = std::atoi(e + 1);
+        const auto reads_back = [&](const std::string & cand) {
+            return std::strtod((cand + "e" + std::to_string(exp10 - prec)).c_str(), nullptr) == mag;
+        };
+        if (prec == 16 || reads_back(d)) {
+            digits = d;
+        } else if (is_pow2 && d.back() != '9') {
+            // a last digit 9 is not bumped (it would carry): no power of 2, from 2^-1074 to 2^1023, needs it
+            d.back()++;
+            if (reads_back(d)) {
+                digits = d;
+            }
+        }
+    }
+    while (digits.size() > 1 && digits.back() == '0') {
+        digits.pop_back();
+    }
+
+    // fixed notation for 1e-4 <= |val| < 1e16, else d.ddde+XX
+    const int n     = static_cast<int>(digits.size());
+    const int point = exp10 + 1; // number of digits before the decimal point
+    std::string out = std::signbit(val) ? "-" : "";
+    if (point > -4 && point <= 16) {
+        if (point <= 0) {
+            out += "0." + std::string(-point, '0') + digits;
+        } else if (point >= n) {
+            out += digits + std::string(point - n, '0') + ".0";
+        } else {
+            out += digits.substr(0, point) + "." + digits.substr(point);
+        }
+    } else {
+        char buf[16];
+        snprintf(buf, sizeof(buf), "e%c%02d", exp10 < 0 ? '-' : '+', std::abs(exp10));
+        out += digits.substr(0, 1) + (n > 1 ? "." + digits.substr(1) : "") + buf;
+    }
+    return out;
+}
+
+// a float as json.dumps writes it: nan and inf as NaN and Infinity, which are not valid JSON
+static std::string float_json(double val) {
+    if (std::isnan(val)) {
+        return "NaN";
+    }
+    if (std::isinf(val)) {
+        return val < 0 ? "-Infinity" : "Infinity";
+    }
+    return float_repr(val);
+}
+
 // recursively convert value to JSON string
 // TODO: avoid circular references
 static void value_to_json_internal(std::ostringstream & oss, const value & val, int curr_lvl, int indent, const std::string_view item_sep, const std::string_view key_sep) {
@@ -1534,7 +1743,7 @@ static void value_to_json_internal(std::ostringstream & oss, const value & val, 
     } else if (is_val<value_int>(val)) {
         oss << val->as_int();
     } else if (is_val<value_float>(val)) {
-        oss << val->as_float();
+        oss << float_json(val->as_float());
     } else if (is_val<value_string>(val)) {
         oss << "\"";
         for (char c : val->as_string().str()) {
@@ -1557,6 +1766,8 @@ static void value_to_json_internal(std::ostringstream & oss, const value & val, 
             }
         }
         oss << "\"";
+    } else if ((is_val<value_array>(val) || is_val<value_object>(val)) && curr_lvl >= JINJA_RECURSIVE_LIMIT) {
+        throw std::runtime_error("value is nested more than " + std::to_string(JINJA_RECURSIVE_LIMIT) + " levels deep");
     } else if (is_val<value_array>(val)) {
         const auto & arr = val->as_array();
         oss << "[";
@@ -1581,7 +1792,8 @@ static void value_to_json_internal(std::ostringstream & oss, const value & val, 
             size_t i = 0;
             for (const auto & pair : obj) {
                 oss << indent_str() << (indent > 0 ? std::string(indent, ' ') : "");
-                value_to_json_internal(oss, mk_val<value_string>(pair.first->as_string().str()), curr_lvl + 1, indent, item_sep, key_sep);
+                const std::string key = is_val<value_float>(pair.first) ? float_json(pair.first->as_float()) : pair.first->as_string().str();
+                value_to_json_internal(oss, mk_val<value_string>(key), curr_lvl + 1, indent, item_sep, key_sep);
                 oss << key_sep;
                 value_to_json_internal(oss, pair.second, curr_lvl + 1, indent, item_sep, key_sep);
                 if (i < obj.size() - 1) {
@@ -1621,17 +1833,20 @@ std::string value_to_string_repr(const value & val) {
 }
 
 // stats utility
-void value_t::stats_t::mark_used(value & val, bool deep) {
+void value_t::stats_t::mark_used(value & val, bool deep, int depth) {
     val->stats.used = true;
+    if (deep && (is_val<value_array>(val) || is_val<value_object>(val)) && depth >= JINJA_RECURSIVE_LIMIT) {
+        throw std::runtime_error("value is nested more than " + std::to_string(JINJA_RECURSIVE_LIMIT) + " levels deep");
+    }
     if (deep) {
         if (is_val<value_array>(val)) {
             for (auto & item : val->val_arr) {
-                mark_used(item, deep);
+                mark_used(item, deep, depth + 1);
             }
         } else if (is_val<value_object>(val)) {
             for (auto & pair : val->val_obj) {
-                mark_used(pair.first, deep);
-                mark_used(pair.second, deep);
+                mark_used(pair.first, deep, depth + 1);
+                mark_used(pair.second, deep, depth + 1);
             }
         }
     }

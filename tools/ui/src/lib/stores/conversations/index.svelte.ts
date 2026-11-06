@@ -16,6 +16,7 @@ import { DatabaseService } from '$lib/services/database.service';
 import { MigrationService } from '$lib/services/migration.service';
 import { RouterService } from '$lib/services/router.service';
 // direct imports between stores, not via the barrel, to avoid circular deps
+import { draftMessagesStore } from '$lib/stores/chat/drafts.svelte';
 import {
 	ConversationPreferences,
 	type ConversationsPreferencesHost
@@ -156,7 +157,7 @@ class ConversationsStore implements ConversationsPreferencesHost {
 
 				tabsStore.removeTabs([...idsToRemove].filter((id) => id !== activeId));
 				this.clearActiveConversation();
-				await tabsStore.close(activeId, activeId);
+				await tabsStore.closeConversation(activeId);
 			} else {
 				tabsStore.removeTabs([...idsToRemove]);
 			}
@@ -260,9 +261,13 @@ class ConversationsStore implements ConversationsPreferencesHost {
 	/**
 	 * Creates a new conversation and navigates to it
 	 * @param name - Optional name for the conversation
+	 * @param draft - Optional input draft to carry over to the new conversation
 	 * @returns The ID of the created conversation
 	 */
-	async createConversation(name?: string): Promise<string> {
+	async createConversation(
+		name?: string,
+		draft?: { message: string; files: ChatUploadedFile[] }
+	): Promise<string> {
 		const conversationName = name || `Chat ${new Date().toLocaleString()}`;
 		// The tool policy is seeded from the current defaults: edits made inside
 		// the conversation afterwards live on its row and do not flow back into
@@ -281,7 +286,16 @@ class ConversationsStore implements ConversationsPreferencesHost {
 		this.activeConversation = conversation;
 		this.activeMessages = [];
 
+		if (draft) {
+			draftMessagesStore.saveDraftMessage(conversation.id, draft.message, draft.files);
+		}
+
 		await goto(RouterService.chat(conversation.id));
+
+		// the draft moved to the new conversation, so drop the copy saved for the new-chat screen
+		if (draft) {
+			draftMessagesStore.clearDraftMessage(undefined);
+		}
 
 		return conversation.id;
 	}
@@ -340,7 +354,7 @@ class ConversationsStore implements ConversationsPreferencesHost {
 
 					tabsStore.removeTabs([...idsToRemove].filter((id) => id !== activeId));
 					this.clearActiveConversation();
-					await tabsStore.close(activeId, activeId);
+					await tabsStore.closeConversation(activeId);
 				} else {
 					tabsStore.removeTabs([...idsToRemove]);
 				}
@@ -361,7 +375,7 @@ class ConversationsStore implements ConversationsPreferencesHost {
 
 				if (this.activeConversation?.id === convId) {
 					this.clearActiveConversation();
-					await tabsStore.close(convId, convId);
+					await tabsStore.closeConversation(convId);
 				} else {
 					tabsStore.removeTabs([convId]);
 				}

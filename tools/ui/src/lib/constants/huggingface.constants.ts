@@ -99,6 +99,12 @@ export const HF_GATED_TAG = 'gated';
 export const HF_GGUF_TAG = 'gguf';
 export const HF_SAFETENSORS_TAG = 'safetensors';
 
+/** Hub tag marking decision models, which answer with probabilities, not text. */
+export const HF_DECISION_MODEL_TAG = 'decision-model';
+
+/** `pipeline_tag` that also marks a decision model, with or without the hub tag. */
+export const HF_DECISION_PIPELINE_TAG = 'text-classification';
+
 // Pipeline tasks (logic use only - matching `pipeline_tag` values against tags)
 
 /**

@@ -146,12 +146,7 @@ ggml_cgraph * clip_graph_minicpmv4_6::build() {
         // so each window-major group of 4 tokens only attends to itself)
         vit_merger_window_idx     = add_i32_input("vit_merger_window_idx", n_pos);
         vit_merger_inv_window_idx = add_i32_input("vit_merger_inv_window_idx", n_pos);
-        vit_merger_window_mask    = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_pos, n_pos);
-        ggml_set_name(vit_merger_window_mask, "vit_merger_window_mask");
-        ggml_set_input(vit_merger_window_mask);
-        if (flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED) {
-            vit_merger_window_mask = ggml_cast(ctx0, vit_merger_window_mask, GGML_TYPE_F16);
-        }
+        vit_merger_window_mask    = build_inp_attn_mask(n_pos, n_pos);
 
         // ViT merger 2x2 downsample gather indices
         vit_merger_ds_idx_0 = add_i32_input("vit_merger_ds_idx_0", n_ds);
@@ -354,6 +349,8 @@ ggml_cgraph * clip_graph_minicpmv4_6::build() {
 
         inpL = cur;
     }
+
+    inpL = build_suffix(inpL);
 
     ggml_build_forward_expand(gf, inpL);
     return gf;

@@ -37,13 +37,7 @@ struct htp_gdn_kernel_params {
     uint32_t K;
 
     uint32_t total_rows;
-    uint32_t row_start;
-    uint32_t nrows;
-    uint32_t rows_per_thread;
-
     uint32_t kda;
-    uint32_t state_aligned;
-    uint32_t vtcm_per_thread;
     uint32_t vtcm_size;
     uint32_t state_seq_stride;
     uint32_t state_size_per_snap;
@@ -55,7 +49,6 @@ struct htp_gdn_kernel_params {
     struct fastdiv_values div_k1;
     struct fastdiv_values div_rq3;
     struct fastdiv_values div_rk3;
-    struct fastdiv_values div_n_threads;
 };
 
 #if defined(__cplusplus)
@@ -67,18 +60,21 @@ _Static_assert(sizeof(struct htp_gdn_kernel_params) <= 128, "htp_gdn_kernel_para
 struct htp_gdn_vtcm_layout {
     size_t state_aligned;
     size_t bytes_per_thread;
+    size_t off_state;
     size_t total_bytes;
 };
 
 static inline void htp_gdn_vtcm_layout_build(
-    struct htp_gdn_vtcm_layout * layout,
+    struct htp_gdn_vtcm_layout * L,
     uint32_t S_v,
     uint32_t n_threads
 ) {
     size_t state_bytes = (size_t) S_v * S_v * sizeof(float);
-    layout->state_aligned = hex_round_up(state_bytes, 128);
-    layout->bytes_per_thread = 2 * layout->state_aligned;
-    layout->total_bytes = layout->bytes_per_thread * n_threads;
+    L->state_aligned = hex_round_up(state_bytes, 128);
+    L->bytes_per_thread = 2 * L->state_aligned;
+    size_t off = 0;
+    VTCM_LAYOUT_ALLOC(off, off_state, L->bytes_per_thread * n_threads);
+    L->total_bytes = off;
 }
 
 struct htp_gdn_hmx_vtcm_layout {
@@ -208,7 +204,7 @@ static inline void htp_gdn_hmx_vtcm_layout_build(
     VTCM_LAYOUT_ALLOC_OPTIONAL(off, off_g_f32[1], bh * dma_scalar_sz, pipeline);
     VTCM_LAYOUT_ALLOC(off, off_b_f32[0], bh * dma_scalar_sz);
     VTCM_LAYOUT_ALLOC_OPTIONAL(off, off_b_f32[1], bh * dma_scalar_sz, pipeline);
-    const size_t raw_gb_sz = hex_round_up(bh * chunk_size * sizeof(float), 128);
+    const size_t raw_gb_sz = hex_round_up((bh + 1) * chunk_size * sizeof(float), 128);
     VTCM_LAYOUT_ALLOC(off, off_g_raw[0], raw_gb_sz);
     VTCM_LAYOUT_ALLOC_OPTIONAL(off, off_g_raw[1], raw_gb_sz, pipeline);
     VTCM_LAYOUT_ALLOC(off, off_b_raw[0], raw_gb_sz);

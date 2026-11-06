@@ -13,6 +13,7 @@
 #include <cstring>
 #include <future>
 #include <regex>
+#include <unordered_set>
 
 static const size_t kiB = 1024;
 static const size_t MiB = 1024*kiB;
@@ -39,6 +40,7 @@ const char * llama_ftype_name(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_BF16:      name = LLAMA_FTYPE_PREFIX "BF16"; break;
         case LLAMA_FTYPE_MOSTLY_Q1_0:      name = LLAMA_FTYPE_PREFIX "Q1_0"; break;
         case LLAMA_FTYPE_MOSTLY_Q2_0:      name = LLAMA_FTYPE_PREFIX "Q2_0"; break;
+        case LLAMA_FTYPE_MOSTLY_F8_E4M3:   name = LLAMA_FTYPE_PREFIX "F8_E4M3"; break;
         case LLAMA_FTYPE_MOSTLY_Q4_0:      name = LLAMA_FTYPE_PREFIX "Q4_0"; break;
         case LLAMA_FTYPE_MOSTLY_Q4_1:      name = LLAMA_FTYPE_PREFIX "Q4_1"; break;
         case LLAMA_FTYPE_MOSTLY_Q5_0:      name = LLAMA_FTYPE_PREFIX "Q5_0"; break;
@@ -410,9 +412,11 @@ namespace GGUFMeta {
 
     template bool llama_model_loader::get_arr<std::vector<std::string>>(enum llm_kv kid, std::vector<std::string> & result, bool required);
     template bool llama_model_loader::get_arr<std::array<int32_t, 512>>(enum llm_kv kid, std::array<int32_t, 512> & result, bool required);
+    template bool llama_model_loader::get_arr<std::array<float, 3>>(enum llm_kv kid, std::array<float, 3> & result, bool required);
     template bool llama_model_loader::get_arr<std::vector<int32_t>>(enum llm_kv kid, std::vector<int32_t> & result, bool required);
     template bool llama_model_loader::get_arr<std::array<uint32_t, LLAMA_MAX_LAYERS>>(enum llm_kv kid, std::array<uint32_t, LLAMA_MAX_LAYERS> & result, bool required);
     template bool llama_model_loader::get_arr<std::vector<uint32_t>>(enum llm_kv kid, std::vector<uint32_t> & result, bool required);
+    template bool llama_model_loader::get_arr<std::vector<uint64_t>>(enum llm_kv kid, std::vector<uint64_t> & result, bool required);
     template bool llama_model_loader::get_arr<std::array<uint64_t, LLAMA_MAX_PLE_NGRAM>>(enum llm_kv kid, std::array<uint64_t, LLAMA_MAX_PLE_NGRAM> & result, bool required);
     template bool llama_model_loader::get_arr<std::array<uint64_t, LLAMA_MAX_PLE_HEADS>>(enum llm_kv kid, std::array<uint64_t, LLAMA_MAX_PLE_HEADS> & result, bool required);
 
@@ -440,6 +444,7 @@ namespace GGUFMeta {
     template bool llama_model_loader::get_key<bool>       (enum llm_kv kid, bool & result,        bool required);
     template bool llama_model_loader::get_key<float>      (enum llm_kv kid, float & result,       bool required);
     template bool llama_model_loader::get_key<uint32_t>   (enum llm_kv kid, uint32_t & result,    bool required);
+    template bool llama_model_loader::get_key<int32_t>    (enum llm_kv kid, int32_t & result,     bool required);
     template bool llama_model_loader::get_key<std::string>(enum llm_kv kid, std::string & result, bool required);
 
     template<>
@@ -779,6 +784,7 @@ llama_model_loader::llama_model_loader(
             case GGML_TYPE_NVFP4:   ftype = LLAMA_FTYPE_MOSTLY_NVFP4;   break;
             case GGML_TYPE_Q1_0:    ftype = LLAMA_FTYPE_MOSTLY_Q1_0;    break;
             case GGML_TYPE_Q2_0:    ftype = LLAMA_FTYPE_MOSTLY_Q2_0;    break;
+            case GGML_TYPE_F8_E4M3: ftype = LLAMA_FTYPE_MOSTLY_F8_E4M3; break;
             default:
                 {
                     LLAMA_LOG_WARN("%s: unknown type %s\n", __func__, ggml_type_name(type_max));
@@ -806,8 +812,8 @@ llama_model_loader::llama_model_loader(
                 ? format("%s[%s,%zu]", gguf_type_name(type), gguf_type_name(gguf_get_arr_type(metadata, i)), gguf_get_arr_n(metadata, i))
                 : gguf_type_name(type);
 
-            std::string value          = gguf_kv_to_str(metadata, i);
             const size_t MAX_VALUE_LEN = 40;
+            std::string value          = gguf_kv_to_str(metadata, i, MAX_VALUE_LEN);
             if (value.size() > MAX_VALUE_LEN) {
                 value = format("%s...", value.substr(0, MAX_VALUE_LEN - 3).c_str());
             }
@@ -949,6 +955,13 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
             {
                 ggml_tensor * b = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 512);
                 op_tensor = ggml_get_rows(ctx, w, b);
+            } break;
+        case GGML_OP_SET_ROWS:
+            {
+                // w holds the row indices (e.g. d2t)
+                ggml_tensor * a = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, w->ne[0]);
+                ggml_tensor * b = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, w->ne[0]);
+                op_tensor = ggml_set_rows(ctx, a, b, w);
             } break;
         case GGML_OP_MUL_MAT:
             {
@@ -1446,21 +1459,80 @@ void llama_model_loader::init_mappings(bool prefetch, llama_mlocks * mlock_mmaps
     }
 }
 
-void llama_model_loader::get_mapping_range(size_t * first, size_t * last, void ** addr, int idx, ggml_context * ctx) const {
-    GGML_ASSERT(!mappings.empty());
-    const auto & mapping = mappings.at(idx);
+using mapping_ranges = std::vector<llama_model_loader::mapping_range>;
 
-    *first = mapping->size();
-    *last  = 0;
-    *addr = mapping->addr();
+// merge a list of [first, last) ranges into a sorted, non-overlapping list
+static mapping_ranges merge_ranges(mapping_ranges ranges) {
+    std::sort(ranges.begin(), ranges.end(), [](const auto & a, const auto & b) { return a.first < b.first; });
+
+    mapping_ranges res;
+    for (const auto & range : ranges) {
+        if (!res.empty() && range.first <= res.back().last) {
+            res.back().last = std::max(res.back().last, range.last);
+        } else {
+            res.push_back(range);
+        }
+    }
+
+    return res;
+}
+
+// subtract the sorted, non-overlapping ranges 'sub' from 'a'
+static mapping_ranges sub_ranges(const mapping_ranges & a, const mapping_ranges & sub) {
+    mapping_ranges res;
+
+    for (const auto & x : a) {
+        size_t cur = x.first;
+        for (const auto & y : sub) {
+            if (y.last <= cur || y.first >= x.last) {
+                continue;
+            }
+            if (y.first > cur) {
+                res.push_back({ cur, y.first });
+            }
+            cur = std::max(cur, y.last);
+        }
+        if (cur < x.last) {
+            res.push_back({ cur, x.last });
+        }
+    }
+
+    return res;
+}
+
+std::vector<llama_model_loader::mapping_range> llama_model_loader::get_mapping_ranges(uint32_t idx, ggml_context * ctx) const {
+    GGML_ASSERT(idx < mappings.size());
+
+    // data of this context, and data of the other contexts that share the same file
+    // a weight that is mapped in several contexts (e.g. the token embedding) is not foreign data
+    std::unordered_set<const llama_tensor_weight *> own;
+    mapping_ranges own_ranges;
+    mapping_ranges other;
+
     for (ggml_tensor * tensor = ggml_get_first_tensor(ctx); tensor; tensor = ggml_get_next_tensor(ctx, tensor)) {
         const auto * weight = get_weight(ggml_get_name(tensor));
         if (!weight || weight->idx != idx) {
             continue;
         }
-        *first = std::min(*first, weight->offs);
-        *last  = std::max(*last,  weight->offs + ggml_nbytes(tensor));
+        own.insert(weight);
+        own_ranges.push_back({ weight->offs, weight->offs + ggml_nbytes(tensor) });
     }
+
+    for (const auto & it : ctx_map) {
+        if (!it.second || it.second.get() == ctx) {
+            continue;
+        }
+
+        for (ggml_tensor * tensor = ggml_get_first_tensor(it.second.get()); tensor; tensor = ggml_get_next_tensor(it.second.get(), tensor)) {
+            const auto * weight = get_weight(ggml_get_name(tensor));
+            if (!weight || weight->idx != idx || own.count(weight)) {
+                continue;
+            }
+            other.push_back({ weight->offs, weight->offs + ggml_nbytes(tensor) });
+        }
+    }
+
+    return sub_ranges(merge_ranges(std::move(own_ranges)), merge_ranges(std::move(other)));
 }
 
 void llama_model_loader::unmap_weight(const llama_tensor_weight & w) const {
@@ -1492,7 +1564,7 @@ const void * llama_model_loader::load_data_range(const llama_tensor_weight & w, 
 
 bool llama_model_loader::load_all_data(
         struct ggml_context * ctx,
-        llama_buf_map & bufs,
+        std::vector<ggml_backend_buffer_t> & bufs,
         llama_mlocks * lmlocks,
         llama_progress_callback progress_callback,
         void * progress_callback_user_data) {
@@ -1528,7 +1600,7 @@ bool llama_model_loader::load_all_data(
         }
         // When not using mmaped io use async uploads from pinned memory to GPU memory.
         // First determine if the backend supports the necessary features for async uploads.
-        auto * buf = bufs.count(0) ? bufs.at(0) : nullptr;
+        auto * buf = bufs.empty() ? nullptr : bufs[0];
         if (!buf) {
             LLAMA_LOG_DEBUG("%s: no buffer found for async uploads\n", func);
             return nullptr;
@@ -1599,7 +1671,7 @@ bool llama_model_loader::load_all_data(
     if (upload_backend) {
         LLAMA_LOG_DEBUG("%s: using async uploads for device %s, buffer type %s, backend %s\n", __func__,
             ggml_backend_dev_name(ggml_backend_get_device(upload_backend)),
-            ggml_backend_buft_name(ggml_backend_buffer_get_type(bufs.at(0))),
+            ggml_backend_buft_name(ggml_backend_buffer_get_type(bufs[0])),
             ggml_backend_name(upload_backend));
     }
 
@@ -1621,6 +1693,8 @@ bool llama_model_loader::load_all_data(
         });
     }
 
+    // staging buffer for non-host buffers without async uploads, reused because a fresh allocation per tensor page faults on every load
+    std::vector<no_init<uint8_t>> read_buf;
     for (struct ggml_tensor * cur : tensors) {
         const auto * weight = get_weight(ggml_get_name(cur));
         if (weight == nullptr) {
@@ -1640,11 +1714,17 @@ bool llama_model_loader::load_all_data(
 
         if (from_mapping) {
             const auto & mapping = mappings.at(weight->idx);
-            ggml_backend_buffer_t buf_mmap = nullptr;
-            if (bufs.count(weight->idx)) {
-                buf_mmap = bufs.at(weight->idx);
-            }
             uint8_t * data = (uint8_t *) mapping->addr() + weight->offs;
+
+            // the tensors of a file can be spread across several buffers - find the one containing this tensor's data
+            ggml_backend_buffer_t buf_mmap = nullptr;
+            for (const auto & buf : bufs) {
+                const uint8_t * base = (const uint8_t *) ggml_backend_buffer_get_base(buf);
+                if (base && base <= data && data + n_size <= base + ggml_backend_buffer_get_size(buf)) {
+                    buf_mmap = buf;
+                    break;
+                }
+            }
 
             if (check_tensors) {
                 validation_result.emplace_back(std::async(std::launch::async, [cur, data, n_size] {
@@ -1734,12 +1814,26 @@ bool llama_model_loader::load_all_data(
                         buffer_idx %= n_buffers;
                     }
                 } else {
-                    // scoped to one tensor so only one staging buffer is alive at a time
-                    std::vector<no_init<uint8_t>> read_buf(n_size);
-                    file->seek(weight->offs, SEEK_SET);
-                    file->read_raw(read_buf.data(), n_size);
-                    ggml_backend_tensor_set(cur, read_buf.data(), 0, n_size);
-                    if (check_tensors && !ggml_validate_row_data(cur->type, read_buf.data(), n_size)) {
+                    // with direct IO read the aligned range around the tensor and use the data inside it, so no bounce buffer is needed
+                    const size_t align          = file->read_alignment();
+                    const size_t aligned_offset = weight->offs & ~(align - 1);
+                    const size_t pad            = weight->offs - aligned_offset;
+                    const size_t read_size      = (pad + n_size + align - 1) & ~(align - 1);
+                    const size_t buf_size       = read_size + align - 1;
+
+                    // tensors come biggest-first: shrink the buffer when it gets too large, so peak memory stays close to one tensor
+                    if (read_buf.size() < buf_size || read_buf.size() > 2*buf_size) {
+                        // free the old buffer first, `read_buf = {}` would keep its capacity
+                        read_buf = std::vector<no_init<uint8_t>>();
+                        read_buf.resize(buf_size);
+                    }
+                    uint8_t * read_dst = (uint8_t *) GGML_PAD((uintptr_t) read_buf.data(), align);
+                    file->seek(aligned_offset, SEEK_SET);
+                    file->read_raw_unsafe(read_dst, read_size);
+
+                    const uint8_t * data = read_dst + pad;
+                    ggml_backend_tensor_set(cur, data, 0, n_size);
+                    if (check_tensors && !ggml_validate_row_data(cur->type, data, n_size)) {
                         throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
                     }
                 }

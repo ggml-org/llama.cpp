@@ -12,6 +12,58 @@ uint32_t vk_perf_logger_frequency = 1;
 
 std::string vk_pipeline_stats_filter;
 
+void ggml_vk_count_fusion(const vk_device & device, const char * label) {
+    if (!device->fusion_stats_enabled.load(std::memory_order_relaxed)) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(device->fusion_mutex);
+    device->fusion_counts[label]++;
+}
+
+void * ggml_backend_vk_fusion_get(ggml_backend_dev_t dev) {
+    auto * ctx = (ggml_backend_vk_device_context *) dev->context;
+    return ggml_vk_get_device(ctx->device).get();
+}
+
+void ggml_backend_vk_fusion_stats_init(void * finfo) {
+    auto * device = (vk_device_struct *) finfo;
+    device->fusion_stats_enabled.store(true, std::memory_order_relaxed);
+}
+
+void ggml_backend_vk_fusion_stats_reset(void * finfo) {
+    auto * device = (vk_device_struct *) finfo;
+    std::lock_guard<std::mutex> lock(device->fusion_mutex);
+    // Keep labels and their order stable between fused and unfused runs.
+    for (auto & entry : device->fusion_counts) {
+        entry.second = 0;
+    }
+}
+
+int ggml_backend_vk_fusion_stats_get(void * finfo, const char ** labels, uint64_t * counts, int n) {
+    auto * device = (vk_device_struct *) finfo;
+    std::lock_guard<std::mutex> lock(device->fusion_mutex);
+    if (labels == nullptr) {
+        return (int) device->fusion_counts.size();
+    }
+    int i = 0;
+    for (const auto & entry : device->fusion_counts) {
+        if (i >= n) {
+            break;
+        }
+        labels[i] = entry.first.c_str();
+        if (counts) {
+            counts[i] = entry.second;
+        }
+        i++;
+    }
+    return i;
+}
+
+void ggml_backend_vk_fusion_set_enabled(void * finfo, bool enabled) {
+    auto * device = (vk_device_struct *) finfo;
+    device->disable_fusion = !enabled;
+}
+
 void vk_memory_logger::log_allocation(vk_buffer_ref buf_ref, size_t size) {
     if (!vk_memory_logger_enabled) {
         return;
@@ -173,7 +225,8 @@ void ggml_vk_test_matmul(ggml_backend_vk_context * ctx, size_t m, size_t n, size
             ctx, subctx, p, ggml_vk_subbuffer(ctx, d_X), ggml_vk_subbuffer(ctx, d_Y), ggml_vk_subbuffer(ctx, d_D), ggml_vk_subbuffer(ctx, ctx->prealloc_split_k),
             m, n, k,
             k, k, m, k*m, k*n, m*n,
-            split_k, batch, batch, batch, 1, 1, n
+            split_k, batch, batch, batch, 1, 1, n,
+            k * sizeof(Y_TYPE), m * sizeof(float)
         );
     }
     ggml_vk_ctx_end(subctx);
@@ -640,7 +693,8 @@ void ggml_vk_test_dequant_matmul(ggml_backend_vk_context * ctx, size_t m, size_t
                 ctx, subctx, p, { qx_buf, 0, qx_sz }, { qy_buf, 0, qy_sz }, { d_buf, 0, d_sz }, { ctx->prealloc_split_k, 0, ctx->prealloc_size_split_k },
                 m, n, k,
                 k, k, m, k*m, k*n, m*n,
-                split_k, batch, batch, batch, 1, 1, n
+                split_k, batch, batch, batch, 1, 1, n,
+                (uint64_t)(k / ggml_blck_size(GGML_TYPE_Q8_1)) * ggml_type_size(GGML_TYPE_Q8_1), m * sizeof(float)
             );
         }
     } else {
@@ -649,7 +703,8 @@ void ggml_vk_test_dequant_matmul(ggml_backend_vk_context * ctx, size_t m, size_t
                 ctx, subctx, p, { qx_buf, 0, qx_sz }, { y_buf, 0, y_sz }, { d_buf, 0, d_sz }, { ctx->prealloc_split_k, 0, ctx->prealloc_size_split_k },
                 m, n, k,
                 k, k, m, k*m, k*n, m*n,
-                split_k, batch, batch, batch, 1, 1, n
+                split_k, batch, batch, batch, 1, 1, n,
+                k * sizeof(float), m * sizeof(float)
             );
         }
     }

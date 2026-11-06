@@ -113,13 +113,13 @@ Although, the validated models below were tested with `llama-cli` using the `Q4_
 | [bartowski/Qwen_Qwen3-1.7B-Q4_K_M](https://huggingface.co/bartowski/Qwen_Qwen3-1.7B-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
 | [Qwen/Qwen3-4B-Q4_K_M](https://huggingface.co/Qwen/Qwen3-4B-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
 | [lm-kit/Qwen3-8B-Q4_K_M](https://huggingface.co/lm-kit/qwen-3-8b-instruct-gguf) | ✓ / ✓ | ✓ / ✓ | ✓ |
-| [bartowski/Qwen_Qwen3.5-0.8B-Q4_K_M](https://huggingface.co/bartowski/Qwen_Qwen3.5-0.8B-GGUF) | ✓ / ✓ | ✓ / ~ | ✗ |
-| [bartowski/Qwen_Qwen3.5-2B-Q4_K_M](https://huggingface.co/bartowski/Qwen_Qwen3.5-2B-GGUF) | ✓ / ✓ | ✓ / ~ | ✗ |
-| [bartowski/Qwen_Qwen3.5-4B-Q4_K_M](https://huggingface.co/bartowski/Qwen_Qwen3.5-4B-GGUF) | ✓ / ✓ | ✓ / ~ | ✗ |
-| [lmstudio-community/Qwen3.5-9B-Q4_K_M](https://huggingface.co/lmstudio-community/Qwen3.5-9B-GGUF) | ✓ / ✓ | ✓ / ~ | ✗ |
+| [bartowski/Qwen_Qwen3.5-0.8B-Q4_K_M](https://huggingface.co/bartowski/Qwen_Qwen3.5-0.8B-GGUF) | ✓ / ✓ | ✓ / ✓ | ✗ |
+| [bartowski/Qwen_Qwen3.5-2B-Q4_K_M](https://huggingface.co/bartowski/Qwen_Qwen3.5-2B-GGUF) | ✓ / ✓ | ✓ / ✓ | ✗ |
+| [bartowski/Qwen_Qwen3.5-4B-Q4_K_M](https://huggingface.co/bartowski/Qwen_Qwen3.5-4B-GGUF) | ✓ / ✓ | ✓ / ✓ | ✗ |
+| [lmstudio-community/Qwen3.5-9B-Q4_K_M](https://huggingface.co/lmstudio-community/Qwen3.5-9B-GGUF) | ✓ / ✓ | ✓ / ✓ | ✗ |
 |  |  |  |  |
 | [unsloth/gemma-3-4b-it-Q4_K_M](https://huggingface.co/unsloth/gemma-3-4b-it-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
-| [bartowski/google_gemma-4-E2B-it-Q4_K_M](https://huggingface.co/bartowski/google_gemma-4-E2B-it-GGUF) | ✓ / ✓ | ✓ / ~ | ~ |
+| [bartowski/google_gemma-4-E2B-it-Q4_K_M](https://huggingface.co/bartowski/google_gemma-4-E2B-it-GGUF) | ✓ / ✓ | ✓ / ✓ | ~ |
 | [bartowski/google_gemma-4-E4B-it-Q4_K_M](https://huggingface.co/bartowski/google_gemma-4-E4B-it-GGUF) | ✓ / ✓ | ✗ / ✗ | ✓ |
 | [bartowski/gemma-4-12B-it-Q4_K_M](https://huggingface.co/bartowski/gemma-4-12B-it-GGUF) | ✓ / ✓ | ✓ / ✓ | ✗ |
 |  |  |  |  |

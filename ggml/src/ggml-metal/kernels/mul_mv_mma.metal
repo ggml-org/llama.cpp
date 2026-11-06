@@ -605,4 +605,23 @@ MUL_MV_MMA_GEN("q5_1", block_q5_1, 2,     dequantize_q5_1)
 MUL_MV_MMA_GEN("q4_K", block_q4_K, QK_NL, dequantize_q4_K)
 MUL_MV_MMA_GEN("q6_K", block_q6_K, QK_NL, dequantize_q6_K)
 
+#if defined(GGML_METAL_HAS_BF16)
+MUL_MV_MMA_GEN("bf16",    bfloat4x4,     1,     dequantize_bf16)
+#endif
+MUL_MV_MMA_GEN("q1_0",    block_q1_0,    8,     dequantize_q1_0)
+MUL_MV_MMA_GEN("q2_0",    block_q2_0,    4,     dequantize_q2_0)
+MUL_MV_MMA_GEN("mxfp4",   block_mxfp4,   2,     dequantize_mxfp4)
+MUL_MV_MMA_GEN("q2_K",    block_q2_K,    QK_NL, dequantize_q2_K)
+MUL_MV_MMA_GEN("q3_K",    block_q3_K,    QK_NL, dequantize_q3_K)
+MUL_MV_MMA_GEN("iq2_xxs", block_iq2_xxs, QK_NL, dequantize_iq2_xxs)
+MUL_MV_MMA_GEN("iq2_xs",  block_iq2_xs,  QK_NL, dequantize_iq2_xs)
+MUL_MV_MMA_GEN("iq2_s",   block_iq2_s,   QK_NL, dequantize_iq2_s)
+MUL_MV_MMA_GEN("iq3_xxs", block_iq3_xxs, QK_NL, dequantize_iq3_xxs)
+MUL_MV_MMA_GEN("iq3_s",   block_iq3_s,   QK_NL, dequantize_iq3_s)
+MUL_MV_MMA_GEN("iq1_s",   block_iq1_s,   QK_NL, dequantize_iq1_s)
+MUL_MV_MMA_GEN("iq1_m",   block_iq1_m,   QK_NL, dequantize_iq1_m)
+MUL_MV_MMA_GEN("iq4_nl",  block_iq4_nl,  2,     dequantize_iq4_nl)
+MUL_MV_MMA_GEN("iq4_xs",  block_iq4_xs,  QK_NL, dequantize_iq4_xs)
+MUL_MV_MMA_GEN("tq2_0",   block_tq2_0,   QK_NL, dequantize_tq2_0)
+
 #undef MUL_MV_MMA_GEN

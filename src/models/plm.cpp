@@ -42,10 +42,10 @@ void llama_model_plm::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_plm::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_plm::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_plm::graph::graph(const llm_graph_params & params) : llm_graph_context(params) {
     const float kq_scale = 1.0f/sqrtf(float(hparams.n_embd_head_k()));
 
     const uint32_t n_embd_head_qk_rope = hparams.n_rot();
@@ -133,20 +133,12 @@ llama_model_plm::graph::graph(const llama_model & model, const llm_graph_params 
                     0);
             cb(v_states, "v_states", il);
 
-            q = ggml_rope_ext(
-                    ctx0, q, inp_pos, nullptr,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow
-                    );
+            q = build_rope(q, inp_pos, il);
             q = ggml_rope_set_offset(q, n_embd_head_qk_nope);
             cb(q, "q_rope", il);
 
             // shared RoPE key
-            k_pe = ggml_rope_ext(
-                    ctx0, k_pe, inp_pos, nullptr,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow
-                    );
+            k_pe = build_rope(k_pe, inp_pos, il);
             cb(k_pe, "k_pe", il);
 
             ggml_tensor * q_states = q;
@@ -201,6 +193,4 @@ llama_model_plm::graph::graph(const llama_model & model, const llm_graph_params 
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }

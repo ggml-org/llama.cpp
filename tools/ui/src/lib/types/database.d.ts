@@ -134,6 +134,8 @@ export interface DatabaseMessage {
 	toolCwd?: string;
 	/** Internal flag marking a UI-generated message (e.g. a cwd change). The row is sent to the model as a "user" turn so chat templates accept it; the flag is only read by the renderer. */
 	isSynthetic?: boolean;
+	/** Steps a compaction node keeps as written before it, read by the model after its summary */
+	kept?: number;
 	children: string[];
 	extra?: DatabaseMessageExtra[];
 	timings?: ChatMessageTimings;

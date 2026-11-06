@@ -19,6 +19,7 @@
 #define GGML_WEBGPU_I32_SIZE_BYTES                   4
 #define GGML_WEBGPU_FLASH_ATTN_PREFERRED_KV_SG_TILES 8u
 #define GGML_WEBGPU_FLASH_ATTN_VEC_MAX_SEQ_LEN       20u
+#define GGML_WEBGPU_MUL_MAT_VEC_MAX_ROWS             4
 #define GGML_WEBGPU_FLASH_ATTN_VEC_MAX_KV_TILE       32u
 #define GGML_WEBGPU_FLASH_ATTN_TILE_MAX_KV_TILE      64u
 #define GGML_WEBGPU_FLASH_ATTN_PREFERRED_WG_SIZE     128u
@@ -1053,6 +1054,22 @@ struct ggml_webgpu_mul_mat_shader_decisions {
 
 /** MUL_MAT_ID **/
 
+struct ggml_webgpu_mul_mat_id_gather_pipeline_key {
+    uint32_t n_experts;
+
+    bool operator==(const ggml_webgpu_mul_mat_id_gather_pipeline_key & other) const {
+        return n_experts == other.n_experts;
+    }
+};
+
+struct ggml_webgpu_mul_mat_id_gather_pipeline_key_hash {
+    size_t operator()(const ggml_webgpu_mul_mat_id_gather_pipeline_key & key) const {
+        size_t seed = 0;
+        ggml_webgpu_hash_combine(seed, key.n_experts);
+        return seed;
+    }
+};
+
 struct ggml_webgpu_mul_mat_id_pipeline_key {
     ggml_type src0_type;
     ggml_type src1_type;
@@ -1173,9 +1190,10 @@ struct ggml_webgpu_soft_max_pipeline_key_hash {
 
 inline bool ggml_webgpu_can_use_mmvq(const ggml_tensor * src0,
                                      const ggml_tensor * src1,
+                                     int64_t             n_rows,
                                      bool                supports_dot_product,
                                      const std::string & vendor) {
-    if (src1->ne[1] <= 4) {
+    if (n_rows <= GGML_WEBGPU_MUL_MAT_VEC_MAX_ROWS) {
         bool supports_dp4a = vendor == "amd" || vendor == "intel" || vendor == "nvidia";
         if (supports_dp4a && supports_dot_product) {
             switch (src1->type) {
@@ -1210,11 +1228,12 @@ class ggml_webgpu_shader_lib {
     wgpu::Device           device;
     pre_wgsl::Preprocessor preprocessor;
 
-    std::unordered_map<int, webgpu_pipeline> sum_rows_pipelines;       // key is fixed, no variants yet
+    std::unordered_map<int, webgpu_pipeline> sum_rows_pipelines;       // key is whether to compute the mean
     std::unordered_map<int, webgpu_pipeline> argmax_pipelines;         // key is vec4
     std::unordered_map<int, webgpu_pipeline> argsort_pipelines;        // key is order
     std::unordered_map<int, webgpu_pipeline> argsort_merge_pipelines;  // key is order
     std::unordered_map<int, webgpu_pipeline> cumsum_pipelines;         // key is fixed, no variants yet
+    std::unordered_map<int, webgpu_pipeline> arange_pipelines;         // key is fixed, no variants yet
     std::unordered_map<ggml_webgpu_row_norm_pipeline_key, webgpu_pipeline, ggml_webgpu_row_norm_pipeline_key_hash>
         row_norm_pipelines;                                            // op/inplace
 
@@ -1263,12 +1282,15 @@ class ggml_webgpu_shader_lib {
     std::unordered_map<ggml_webgpu_mul_mat_pipeline_key, webgpu_pipeline, ggml_webgpu_mul_mat_pipeline_key_hash>
         mul_mat_fast_pipelines;  // fast mat-mat (reg-tile or subgroup)
     std::unordered_map<ggml_webgpu_quantize_q8_pipeline_key, webgpu_pipeline, ggml_webgpu_quantize_q8_pipeline_key_hash>
-                                             quantize_q8_pipelines;
-    std::unordered_map<int, webgpu_pipeline> mul_mat_id_gather_pipelines;  // key is fixed
+        quantize_q8_pipelines;
+    std::unordered_map<ggml_webgpu_mul_mat_id_gather_pipeline_key,
+                       webgpu_pipeline,
+                       ggml_webgpu_mul_mat_id_gather_pipeline_key_hash>
+        mul_mat_id_gather_pipelines;  // n_experts
     std::unordered_map<ggml_webgpu_mul_mat_id_pipeline_key, webgpu_pipeline, ggml_webgpu_mul_mat_id_pipeline_key_hash>
-        mul_mat_id_pipelines;                                              // src0_type/src1_type
+        mul_mat_id_pipelines;         // src0_type/src1_type
     std::unordered_map<ggml_webgpu_mul_mat_id_pipeline_key, webgpu_pipeline, ggml_webgpu_mul_mat_id_pipeline_key_hash>
-        mul_mat_id_vec_pipelines;                                          // src0_type/src1_type
+        mul_mat_id_vec_pipelines;     // src0_type/src1_type
 
     std::unordered_map<ggml_webgpu_set_rows_pipeline_key, webgpu_pipeline, ggml_webgpu_set_rows_pipeline_key_hash>
         set_rows_pipelines;
@@ -1297,16 +1319,20 @@ class ggml_webgpu_shader_lib {
     ggml_webgpu_shader_lib(wgpu::Device device) { this->device = device; }
 
     webgpu_pipeline get_sum_rows_pipeline(const ggml_webgpu_shader_lib_context & context) {
-        auto it = sum_rows_pipelines.find(1);
+        const bool mean = context.dst->op == GGML_OP_MEAN;
+        auto       it   = sum_rows_pipelines.find(mean);
         if (it != sum_rows_pipelines.end()) {
             return it->second;
         }
         std::vector<std::string> defines;
         defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+        if (mean) {
+            defines.push_back("MEAN");
+        }
 
-        auto processed        = preprocessor.preprocess(wgsl_sum_rows, defines);
-        sum_rows_pipelines[1] = ggml_webgpu_create_pipeline(device, processed, "sum_rows");
-        return sum_rows_pipelines[1];
+        auto processed           = preprocessor.preprocess(wgsl_sum_rows, defines);
+        sum_rows_pipelines[mean] = ggml_webgpu_create_pipeline(device, processed, mean ? "mean" : "sum_rows");
+        return sum_rows_pipelines[mean];
     }
 
     webgpu_pipeline get_row_norm_pipeline(const ggml_webgpu_shader_lib_context & context) {
@@ -1636,6 +1662,7 @@ class ggml_webgpu_shader_lib {
 
                     switch (key.src_type) {
                         case GGML_TYPE_Q1_0:
+                        case GGML_TYPE_Q2_0:
                         case GGML_TYPE_Q4_0:
                         case GGML_TYPE_Q5_0:
                         case GGML_TYPE_Q8_0:
@@ -1680,7 +1707,7 @@ class ggml_webgpu_shader_lib {
                     } else if ((key.src_type >= GGML_TYPE_Q4_0 && key.src_type <= GGML_TYPE_Q8_1) ||
                                key.src_type == GGML_TYPE_IQ4_NL || key.src_type == GGML_TYPE_MXFP4) {
                         defines.push_back("BLOCK_SIZE=32u");
-                    } else if (key.src_type == GGML_TYPE_NVFP4) {
+                    } else if (key.src_type == GGML_TYPE_Q2_0 || key.src_type == GGML_TYPE_NVFP4) {
                         defines.push_back("BLOCK_SIZE=64u");
                     } else if (key.src_type >= GGML_TYPE_Q2_K) {
                         defines.push_back("BLOCK_SIZE=256u");
@@ -1921,6 +1948,24 @@ class ggml_webgpu_shader_lib {
         return gated_delta_net_pipelines[key];
     }
 
+    webgpu_pipeline get_arange_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        auto it = arange_pipelines.find(1);
+        if (it != arange_pipelines.end()) {
+            return it->second;
+        }
+
+        std::vector<std::string> defines;
+        defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+
+        auto processed           = preprocessor.preprocess(wgsl_arange, defines);
+        auto decisions           = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+        decisions->wg_size       = context.max_wg_size;
+        webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, "arange");
+        pipeline.context         = decisions;
+        arange_pipelines[1]      = pipeline;
+        return arange_pipelines[1];
+    }
+
     webgpu_pipeline get_pad_pipeline(const ggml_webgpu_shader_lib_context & context) {
         ggml_webgpu_pad_pipeline_key key = {};
         key.circular                     = ggml_get_op_params_i32(context.dst, 8) != 0;
@@ -1991,13 +2036,13 @@ class ggml_webgpu_shader_lib {
         ggml_webgpu_mul_mat_vec_pipeline_key key = {};
         key.src0_type                            = context.src0->type;
         key.src1_type                            = context.src1->type;
-        key.vectorized = (context.src0->ne[0] % 4 == 0 &&
-                          (context.src0->type == GGML_TYPE_F32 || context.src0->type == GGML_TYPE_F16)) ?
-                             1 :
-                             0;
-        key.num_cols   = context.dst->ne[1];
-        key.use_mmvq =
-            ggml_webgpu_can_use_mmvq(context.src0, context.src1, context.supports_dot_product, context.vendor);
+        key.vectorized  = (context.src0->ne[0] % 4 == 0 &&
+                           (context.src0->type == GGML_TYPE_F32 || context.src0->type == GGML_TYPE_F16)) ?
+                              1 :
+                              0;
+        key.num_cols    = context.dst->ne[1];
+        key.use_mmvq    = ggml_webgpu_can_use_mmvq(context.src0, context.src1, context.src1->ne[1],
+                                                   context.supports_dot_product, context.vendor);
         key.src_overlap = src_overlap;
 
         auto it = mul_mat_vec_pipelines.find(key);
@@ -2325,20 +2370,26 @@ class ggml_webgpu_shader_lib {
     }
 
     webgpu_pipeline get_mul_mat_id_gather_pipeline(const ggml_webgpu_shader_lib_context & context) {
-        auto it = mul_mat_id_gather_pipelines.find(1);
+        ggml_webgpu_mul_mat_id_gather_pipeline_key key = {};
+        key.n_experts                                  = (uint32_t) context.src0->ne[2];
+
+        auto it = mul_mat_id_gather_pipelines.find(key);
         if (it != mul_mat_id_gather_pipelines.end()) {
             return it->second;
         }
         std::vector<std::string> defines;
-        defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+        defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size) + "u");
+        defines.push_back(std::string("N_EXPERT=") + std::to_string(key.n_experts) + "u");
+        defines.push_back(std::string("TILE_N_SLOTS=") +
+                          std::to_string(WEBGPU_MUL_MAT_TILE_N * WEBGPU_MUL_MAT_WG_SIZE_N) + "u");
 
         auto processed     = preprocessor.preprocess(wgsl_mul_mat_id_gather, defines);
         auto decisions     = std::make_shared<ggml_webgpu_generic_shader_decisions>();
         decisions->wg_size = context.max_wg_size;
 
-        webgpu_pipeline pipeline       = ggml_webgpu_create_pipeline(device, processed, "mul_mat_id_gather");
-        pipeline.context               = decisions;
-        mul_mat_id_gather_pipelines[1] = pipeline;
+        webgpu_pipeline pipeline         = ggml_webgpu_create_pipeline(device, processed, "mul_mat_id_gather");
+        pipeline.context                 = decisions;
+        mul_mat_id_gather_pipelines[key] = pipeline;
         return pipeline;
     }
 

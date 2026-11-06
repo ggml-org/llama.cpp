@@ -139,13 +139,13 @@
 /* Lists */
 .markdown-content :global(ul) {
 	list-style-type: disc;
-	margin-inline-start: 1.5rem;
+	margin-inline-start: 2rem;
 	margin-bottom: 1rem;
 }
 
 .markdown-content :global(ol) {
 	list-style-type: decimal;
-	margin-inline-start: 1.5rem;
+	margin-inline-start: 2rem;
 	margin-bottom: 1rem;
 }
 
@@ -500,6 +500,8 @@ div.markdown-user-content :global(.table-wrapper) {
 	margin: 1.5rem 0;
 	border-radius: 0.5rem;
 	border: 1px solid var(--border);
+	/* a wide table scrolls here, it does not widen the column */
+	max-width: 100%;
 }
 
 .markdown-content :global(.table-wrapper table) {
@@ -530,11 +532,9 @@ div.markdown-user-content :global(.table-wrapper) {
 		padding: 0.375rem 0.5rem;
 	}
 
+	/* no full-bleed: it hid the outer columns */
 	.markdown-content :global(.table-wrapper) {
-		margin: 0.5rem -1rem;
-		border-radius: 0;
-		border-left: none;
-		border-right: none;
+		margin: 1rem 0;
 	}
 }
 

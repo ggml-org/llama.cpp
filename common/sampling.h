@@ -118,6 +118,12 @@ std::string common_sampler_type_to_str(enum common_sampler_type cnstr);
 std::vector<enum common_sampler_type> common_sampler_types_from_names(const std::vector<std::string> & names);
 std::vector<enum common_sampler_type> common_sampler_types_from_chars(const std::string & chars);
 
+// add the strings that are a single token in the vocab to the preserved tokens
+void common_sampling_add_preserved_tokens(common_params_sampling & sampling, const llama_vocab * vocab, const std::vector<std::string> & tokens);
+
+// add grammar triggers, a trigger word that is a single token becomes a token trigger and must be a preserved token
+void common_sampling_add_grammar_triggers(common_params_sampling & sampling, const llama_vocab * vocab, std::vector<common_grammar_trigger> triggers);
+
 llama_sampler * llama_sampler_init_llg(const llama_vocab * vocab,
                 const char * grammar_kind, const char * grammar_data);
 

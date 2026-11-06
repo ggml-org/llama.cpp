@@ -5,7 +5,7 @@
 	import { Card } from '$lib/components/ui/card';
 	import { INPUT_CLASSES } from '$lib/constants';
 	import { getChatMessageEditContext } from '$lib/contexts';
-	import { KeyboardKey, MessageRole } from '$lib/enums';
+	import { KeyboardKey } from '$lib/enums';
 	import { settingsStore } from '$lib/stores';
 	import { autoResizeTextarea, isIMEComposing } from '$lib/utils';
 
@@ -118,7 +118,7 @@
 		{#if message.content.trim()}
 			<div class="relative max-w-[80%]">
 				<button
-					class="group/expand w-full text-left {!isExpanded && showExpandButton
+					class="group/expand block w-full text-left {!isExpanded && showExpandButton
 						? 'cursor-pointer'
 						: 'cursor-auto'}"
 					onclick={showExpandButton && !isExpanded ? toggleExpand : undefined}
@@ -191,7 +191,7 @@
 
 		{#if message.timestamp}
 			<div class="max-w-[80%]">
-				<ChatMessageActionIcons actionsPosition="right" justify="end" role={MessageRole.USER} />
+				<ChatMessageActionIcons actionsPosition="right" justify="end" />
 			</div>
 		{/if}
 	{/if}

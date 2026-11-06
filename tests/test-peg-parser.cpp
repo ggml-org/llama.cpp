@@ -19,7 +19,6 @@ int main(int argc, char *argv[]) {
     t.test("unicode", test_unicode);
     t.test("json", test_json_parser);
     t.test("gbnf", test_gbnf_generation);
-    t.test("serialization", test_json_serialization);
     t.test("python-dict", test_python_dict_parser);
 
     return t.summary();

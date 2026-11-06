@@ -37,9 +37,18 @@ export enum ModelAuxSidecar {
 }
 
 /**
- * Why an in-flight download is being stopped, so the terminal `download_failed`
- * feed event can be attributed: a user pause (resumable) or a user cancel
- * (discard). Distinguishes these from a genuine download failure.
+ * Role of a selectable GGUF in the download options: the main weights, a
+ * speculative-decoding draft sidecar, or an auxiliary sidecar (mmproj).
+ */
+export enum ModelSelectableFileKind {
+	AUX = 'aux',
+	DRAFT = 'draft',
+	MAIN = 'main'
+}
+
+/**
+ * Why an in-flight download is being stopped, so the terminal `download_failed` feed
+ * event can be attributed: a user pause (resumable) or a user cancel (discard).
  */
 export enum ModelDownloadStopRequest {
 	CANCEL = 'cancel',
@@ -54,4 +63,32 @@ export enum ModelDownloadStopRequest {
 export enum ModelDownloadConfirmAction {
 	CANCEL = 'cancel',
 	DELETE = 'delete'
+}
+
+/** What a table row group folds: the quants of one repo, or its variants. */
+export enum ModelGroupKind {
+	QUANTS = 'quants',
+	VARIANTS = 'variants'
+}
+
+/** Kind of one collapsible block of the models manager table. */
+export enum ModelsTableGroupKind {
+	DOWNLOADING = 'downloading',
+	FAVORITES = 'favorites',
+	HIDDEN = 'hidden',
+	LOADED = 'loaded',
+	LOCAL = 'local'
+}
+
+/** Download state a manager row reports in place of its load state. */
+export enum ModelRowDownloadState {
+	DOWNLOADED = 'downloaded',
+	DOWNLOADING = 'downloading',
+	PAUSED = 'paused'
+}
+
+/** Column the models manager table can be ordered by. */
+export enum ModelsTableSortKey {
+	CONTEXT = 'context',
+	NAME = 'name'
 }

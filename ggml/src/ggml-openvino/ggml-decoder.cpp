@@ -336,7 +336,9 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
         }
         if (op_case == 1 && m_is_stateful) {
             // Recurrent convolution and GDN gates retain their rank-4 layout.
-            bool recurrent = src->op == GGML_OP_GET_ROWS && is_recurrent_cache(src->src[0]);
+            // The gathered states may come through a view of the one gather of all states (see build_rs).
+            const auto * gather = src->op == GGML_OP_VIEW ? src->src[0] : src;
+            bool recurrent = gather->op == GGML_OP_GET_ROWS && is_recurrent_cache(gather->src[0]);
             for (int i = 0; i < m_cgraph->n_nodes && !recurrent; ++i) {
                 const auto * consumer = m_cgraph->nodes[i];
                 if (consumer->op == GGML_OP_GATED_DELTA_NET) {
@@ -411,15 +413,19 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
         break;
     }
     case GGML_OP_GET_ROWS: {
-        if (node->src[1]->op == GGML_OP_VIEW) {
-            // GET_ROWS gathering recurrent state cache rows via the inp->s_copy index list:
-            // src[0] is a reshape of cache_r/cache_s, src[1] is a view of the s_copy leaf.
-            // op_case 1/2: active/extra rows of a multi-slot cache
-            // op_case 3/4: active/extra rows of a single-slot cache
-            if (node->src[0]->op == GGML_OP_RESHAPE && node->src[0]->src[0] != nullptr &&
-                is_recurrent_cache(node->src[0]->src[0])) {
-                const bool single_slot = node->src[0]->src[0]->ne[1] == 1;
+        // GET_ROWS gathering recurrent state cache rows via the inp->s_copy index list:
+        // src[0] is a reshape of cache_r/cache_s, src[1] is a view of the s_copy leaf, or the leaf itself
+        // when one gather covers all states (see build_rs).
+        // op_case 1/2: active/extra rows of a multi-slot cache
+        // op_case 3/4: active/extra rows of a single-slot cache
+        if (node->src[0]->op == GGML_OP_RESHAPE && node->src[0]->src[0] != nullptr &&
+            is_recurrent_cache(node->src[0]->src[0])) {
+            const bool single_slot = node->src[0]->src[0]->ne[1] == 1;
+            if (node->src[1]->op == GGML_OP_VIEW) {
                 op_case = (node->src[1]->view_offs == 0 ? 1 : 2) + (single_slot ? 2 : 0);
+            } else if (single_slot) {
+                // a single-slot cache holds exactly the one state the gather selects
+                op_case = 3;
             }
         }
         break;
@@ -579,6 +585,12 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
                        node->src[1]->op == GGML_OP_VIEW && node->src[1]->view_src == node->view_src) {
                 op_case = 4;
                 break;
+            } else if (node->src[0]->src[0]->op == GGML_OP_GET_ROWS && node->src[1] != nullptr &&
+                       node->src[1]->op == GGML_OP_VIEW && node->src[1]->view_src != nullptr &&
+                       is_recurrent_cache(node->src[1]->view_src) && node->src[1]->view_src->ne[1] == 1) {
+                // defrag remainder writeback of a single-slot cache, taken from a view of the one gather of
+                // all states (see build_rs)
+                op_case = 9;
             }
         } else if (node->src[0]->op == GGML_OP_GET_ROWS && node->src[1] != nullptr &&
                    node->src[1]->op == GGML_OP_VIEW && node->src[1]->view_src != nullptr &&
@@ -1096,6 +1108,9 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op,
     } else if (is_inp_mean(input, op)) {
         input_shape = m_is_static ? ov::PartialShape{1, 1, input->ne[1], m_prefill_chunk_size} :
                                     ov::PartialShape{1, 1, -1, -1};
+
+    } else if (is_inp_scale_rows(input, op)) {
+        input_shape = ov::PartialShape{1, 1, m_is_static ? (m_is_prefill ? m_prefill_chunk_size : 1) : -1, 1};
 
     } else if (is_inp_mask(input, op)) {
         // mask
@@ -2101,6 +2116,10 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
                     m_node_dynamic_dims[src] = 0;
                     continue;
                 }
+                if (is_inp_scale_rows(src, node)) {
+                    m_node_dynamic_dims[src] = 1;
+                    continue;
+                }
                 if (node->op == GGML_OP_VIEW && src->op == GGML_OP_NONE && !is_stateful() && !m_model_is_splitted) {
                     m_node_dynamic_dims[src] = 1;
                     continue;
@@ -2181,8 +2200,11 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
                 }
                 if (m_node_dynamic_dims[node] != -1 && dynamic_dim_value != node->ne[m_node_dynamic_dims[node]]) {
                     m_node_dynamic_dims[node] = -1;
-                    GGML_LOG_WARN("ggml-openvino: dynamic dim value mismatch for VIEW node '%s', src[0]: '%s'\n",
-                                  node->name, node->src[0]->name);
+                    // an empty view, e.g. the extra states of a single-slot recurrent cache, always mismatches
+                    if (ggml_nelements(node) > 0) {
+                        GGML_LOG_WARN("ggml-openvino: dynamic dim value mismatch for VIEW node '%s', src[0]: '%s'\n",
+                                      node->name, node->src[0]->name);
+                    }
                 }
             }
             break;
@@ -2307,6 +2329,7 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
         case GGML_OP_DIAG:
         case GGML_OP_TRI:
         case GGML_OP_REPEAT:
+        case GGML_OP_DUP:
         // Shape-preserving elementwise ops: the dynamic dim is unchanged from src[0].
         // DIV/CLAMP are used in the MoE routing-weight normalization
         // (sum_rows -> clamp -> div). If they are left untracked here the dynamic

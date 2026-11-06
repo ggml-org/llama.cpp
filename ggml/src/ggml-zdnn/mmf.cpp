@@ -1,5 +1,6 @@
 #include "ggml.h"
 #include "mmf.hpp"
+#include "utils.hpp"
 
 void ggml_zdnn_mul_mat_f(
     const ggml_backend_zdnn_context * ctx,
@@ -64,6 +65,14 @@ void ggml_zdnn_mul_mat_f(
     GGML_ASSERT(weights_extra->pre_tfm_desc.dim2 == weights->ne[1] && "weights_extra->pre_tfm_desc.dim2 must match weights->ne[1]");
     GGML_ASSERT(inputs_extra->pre_tfm_desc.dim1  == inputs->ne[0]  && "inputs_extra->pre_tfm_desc.dim1 must match inputs->ne[0]");
     GGML_ASSERT(inputs_extra->pre_tfm_desc.dim2  == inputs->ne[1]  && "inputs_extra->pre_tfm_desc.dim2 must match inputs->ne[1]");
+
+    // compute tensors are transformed on first use
+    if (!weights_extra->ztensor.is_transformed) {
+        ggml_zdnn_load_tensor(weights_extra->ztensor, weights->data);
+    }
+    if (!inputs_extra->ztensor.is_transformed) {
+        ggml_zdnn_load_tensor(inputs_extra->ztensor, inputs->data);
+    }
 
     ZDNN_CHECK(zdnn_matmul_transpose_op(&inputs_extra->ztensor, &weights_extra->ztensor, &bias_extra->ztensor,
                                         false, true, MATMUL_OP_ADDITION, &output_extra->ztensor));

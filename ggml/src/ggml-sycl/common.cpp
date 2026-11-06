@@ -115,7 +115,8 @@ void * ggml_sycl_malloc_device(size_t size, sycl::queue &q, ggml_sycl_mem_type t
 #else
         ze_device_mem_alloc_desc_t alloc_desc = {ZE_STRUCTURE_TYPE_DEVICE_MEM_ALLOC_DESC, nullptr, 0, 0};
 #endif
-        ze_result_t r = zeMemAllocDevice(ze_ctx, &alloc_desc, size, 64, ze_dev, &ptr);
+        // request SYCL_BUFFER_ALIGNMENT so tensor offsets aligned to it stay aligned in absolute terms
+        ze_result_t r = zeMemAllocDevice(ze_ctx, &alloc_desc, size, SYCL_BUFFER_ALIGNMENT, ze_dev, &ptr);
         if (r == ZE_RESULT_SUCCESS && ptr) {
             ggml_sycl_memtrace_add(type, ptr, size);
             return ptr;

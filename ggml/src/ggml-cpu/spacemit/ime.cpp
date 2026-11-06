@@ -682,7 +682,12 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
                     const int32_t i02 =
                         *(const int32_t *) ((const char *) ids->data + iid1 * ids->nb[1] + id * ids->nb[0]);
 
-                    GGML_ASSERT(i02 >= 0 && i02 < n_as);
+                    GGML_ASSERT(i02 == -1 || (i02 >= 0 && i02 < n_as));
+
+                    if (i02 == -1) {
+                        memset((char *) dst->data + id * nb1 + iid1 * nb2, 0, ne0 * sizeof(float));
+                        continue;
+                    }
 
                     MMID_MATRIX_ROW(i02, matrix_row_counts[i02]) = { id, iid1 };
                     matrix_row_counts[i02] += 1;
@@ -1041,6 +1046,10 @@ class tensor_traits_common : public tensor_traits_base {
                         return true;
                 }
             case GGML_OP_FLASH_ATTN_EXT:
+                // K/V row lists are handled by the generic CPU path
+                if (op->src[5] != nullptr) {
+                    return false;
+                }
                 forward_flash_attn_ext_f16(params, op);
                 return true;
             case GGML_OP_CONT:
@@ -1484,6 +1493,9 @@ static const ggml_backend_buffer_i ggml_backend_riscv64_spacemit_buffer_i = {
     /* .cpy_tensor      = */ nullptr,
     /* .clear           = */ ggml_backend_riscv64_spacemit_buffer_clear,
     /* .reset           = */ nullptr,
+    /* .set_tensor_n    = */ NULL,
+    /* .get_tensor_n    = */ NULL,
+    /* .cpy_tensor_n    = */ NULL,
 };
 
 static const char * ggml_backend_cpu_riscv64_spacemit_buffer_type_get_name(ggml_backend_buffer_type_t buft) {
