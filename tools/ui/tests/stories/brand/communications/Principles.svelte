@@ -1,32 +1,37 @@
 <!--
-	Communications' direction in words: what a piece should feel like, the three layers it can speak for, and how
-	the section builds one, from the foundations up to the applications, as the design system builds the app.
+	Communications' direction in words: what a piece should say and how it looks, after Philosophy (Ideology, Product
+	and Design); the three layers it can speak for; and how the section builds one, from the foundations up to the
+	applications, as the design system builds the app.
 -->
 <script lang="ts">
 	const principles = [
 		[
-			'Local is freedom',
-			'A model on your own machine is yours: the weights, the conversations, the traces. You choose what runs, and no one can swap it or weaken it behind your back.'
+			'Personal and private',
+			'Show the model on the reader’s own phone, laptop or desktop. Conversations stay there, it works offline and there is no account. Say what that gives people; point at no one.'
 		],
 		[
-			'AI for everyone',
-			'Open models on the hardware people already have, and on servers people share with each other. Access to AI belongs to people everywhere, not to a subscription.'
+			'Open to everyone',
+			'Open models on hardware people already have, and on servers people share. Real machines and real sizes, not a subscription.'
 		],
 		[
-			'People first',
-			'A hopeful, humane future that people build for themselves. Shown, not preached: no pride, no fear, no hype.'
+			'Simple first',
+			'Lead with what people do: a letter, a photo, a question. GGUF, quants and flags belong to pieces about the engine.'
 		],
 		[
 			'The real thing',
 			'The app and the commands appear as they are, rendered from the design system, never mocked up or redrawn.'
 		],
 		[
-			'Calm and exact',
-			'Neutral grounds, big type and few words. Numbers are real and set in tabular figures; the Mono speaks for the engine.'
+			'Plain and exact',
+			'Say what the product does, with real numbers: no hype, no fear, no superlatives. Neutral grounds, big type and few words; figures in tabular Llama Mono.'
 		],
 		[
-			'One accent',
-			'Cinder, the .cpp of the logotype, marks one thing per piece: the chosen path, the figure that matters, a tag.'
+			'Four colours, one accent',
+			'Beyond the greys, sand, the day sky and the night sky are grounds; cinder marks one thing per piece. No red.'
+		],
+		[
+			'Play that teaches',
+			'The mark can carry an idea, as the quantized L does, when the idea is true to llama.cpp and the outline stays exact.'
 		],
 		[
 			'Built on the unit',
@@ -34,14 +39,17 @@
 		]
 	];
 
-	// how a piece speaks for each of the three layers (what they are is in Philosophy › Ideology)
+	// how a piece speaks for each of the three layers, top to bottom (what they are is in Philosophy › Ideology)
 	const stack = [
-		['Model', 'Model cards, sizes, quants; the maker’s name, never their logo'],
 		[
-			'Service',
-			'llama.cpp in Llama Mono, commands and figures, on the neutrals; a server can be run by one and shared by many'
+			'Application',
+			'Llama in Llama Sans and the real app, with the harness at work in it: the loop and its tools. On any ground.'
 		],
-		['Application', 'Llama in Llama Sans, the real app, on any ground']
+		[
+			'Inference',
+			'llama.cpp in Llama Mono, commands and figures, on light and dark: your own hardware, or a server someone shares'
+		],
+		['Model', 'Model cards, sizes, quants; the maker’s name, never their logo']
 	];
 
 	// the voice, by example: an early ad for llama.app, and the same thing said plainly (Applications › Open models poster, on the Receipt key visual)
@@ -50,7 +58,7 @@
 			'100,000+ open models. One computer: yours. And a receipt beside it: 1,284,902 tokens generated, no account, total $0.00.',
 		before:
 			'Download llama.app and run 100,000+ open AI models locally on any device, for free. Or would you rather keep paying for burning tokens in the cloud? Choose wisely ;)',
-		why: 'The fact stays, the sneer goes. The receipt makes the point about paying by the token without saying it, the copy is in Llama Sans and the figures in Llama Mono, and the $0.00 carries the one accent.'
+		why: 'The fact stays, the sneer goes. The receipt makes the point about paying by the token without pointing at anyone, the copy is in Llama Sans and the figures in Llama Mono, and the $0.00 carries the one accent.'
 	};
 
 	const layers = [
@@ -59,7 +67,7 @@
 		['Elements', 'Lockups, chips, figures, commands, motifs'],
 		['Modules', 'Headline blocks, model and stat cards, the product'],
 		['Key visuals', 'Layouts: Statement, Product, Roster, Bulletin, Numeral'],
-		['Applications', 'Key visuals with real copy: posts, link previews, swag']
+		['Applications', 'Key visuals with real copy: posts, link previews, store pages, swag']
 	];
 </script>
 
@@ -78,13 +86,15 @@
 		<h2>Speaking for the three layers</h2>
 
 		<p class="note">
-			Model, service and application, as Philosophy › Ideology sets them out. A piece is about one
-			of them, and sounds like it.
+			Application, inference and model, as Philosophy › Ideology sets them out, with the harness
+			bridging the first two. A piece is about one of them, and sounds like it.
 		</p>
 
 		<ol class="stack">
 			{#each stack as [name, voice], i (name)}
-				<li><span class="n">{i + 1}</span><b>{name}</b><span class="voice">{voice}</span></li>
+				<li>
+					<span class="n">{stack.length - i}</span><b>{name}</b><span class="voice">{voice}</span>
+				</li>
 			{/each}
 		</ol>
 	</section>
