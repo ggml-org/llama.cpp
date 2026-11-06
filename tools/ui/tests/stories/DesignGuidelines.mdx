@@ -10,6 +10,12 @@ export const [, tokens, guidelines] = designMd.split(/^---$/m);
 
 # Design guidelines
 
+<div className="callout">
+
+**Written for agents first.** This is the how of Llama UI, in a form an agent can follow when it builds or changes the UI: the tokens, the roles and the rules, precise rather than persuasive. People can read it too, but the why behind it is in **Introduction › Design philosophy**.
+
+</div>
+
 Rendered from `tools/ui/DESIGN.md`. The implementation lives in `src/app.css`, and every token and surface below can be seen under **UI** in this Storybook, and the logo, type and colours under **Brand**.
 
 <Markdown>{guidelines}</Markdown>

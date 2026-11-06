@@ -1,8 +1,9 @@
 ---
 version: alpha
-name: llama.cpp Web UI - Matte Glass
+name: Llama UI - Matte Glass
 description: >-
-  Neutral, quiet chat interface for llama-server. Frosted matte surfaces with faint
+  Llama UI, the design system and components of Llama Chat, the chat client llama-server
+  bundles. Neutral and quiet: frosted matte surfaces with faint
   blue-grey hairlines, near-flat fills, and status colours for success, warning, error and info. Tokens come in
   three tiers: primitives, semantic tokens (with a "-dark" twin where dark mode differs)
   and components. Generated from src/lib/styles/tokens/*.css.
@@ -707,11 +708,30 @@ components:
 
 ## Overview
 
-The llama.cpp web UI is a local, private chat client for llama-server. It should feel calm
+**Llama UI** is the design system and component library this file describes. **Llama Chat**,
+built from it, is the local, private chat client that llama-server bundles, and the native
+Llama apps (Llama for Mac, Llama for Windows) open it in their own window. It should feel calm
 and tool-like: neutral greys, plenty of space, and surfaces that read as frosted matte glass
 rather than shiny plastic. Depth comes from blur, a faint hairline edge and soft shadows,
 never from strong gradients. Colour is reserved for meaning: the status colours (success,
 warning, error and info), destructive actions, and the content itself.
+
+This file is the how, written for agents first. The why, written for people, is
+**Introduction › Design philosophy** in Storybook (`tests/stories/introduction/DesignPhilosophy.svx`).
+Its principles, as rules to apply here:
+
+- **Function first.** Every element has a job and takes its measurements from a shared role
+  (control heights, corners, icon sizes, type roles); never give one component its own.
+- **The content is the loudest thing.** The conversation carries the weight and the colour;
+  the interface around it stays neutral and quiet.
+- **Colour has one job.** Greys build everything; status colours show status and nothing else;
+  art colours and cinder are for artwork and the odd brand detail, never for the UI's controls.
+- **Enough character, easy to change.** Keep the character in the icon, the type and one
+  accent, so an app built on Llama UI can restyle it through component tokens alone.
+- **Design lives in code.** The CSS is the source of truth; prefer what is generated or
+  derived over hand-tuned values, and record the reason next to the value.
+- **Reuse before adding.** An existing role before a new token, an existing component before
+  a new one.
 
 Design tokens come in three tiers, each in its own file under `src/lib/styles/tokens/`:
 
