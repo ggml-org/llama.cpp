@@ -228,20 +228,6 @@ class KimiK3Model(TextModel):
         # --- cross-layer attention residuals ---
         self.gguf_writer.add_attn_res_block_size(self.hparams["attn_res_block_size"])
 
-        # --- DSA indexer (K3.1) ---
-        if (dsa := self.hparams.get("dsa_config")) is not None:
-            dsa_layers = dsa["dsa_layers"]
-            # the layer lists are 1-indexed, like linear_attn_config's
-            assert sorted(dsa_layers) == sorted(full_attn_layers), \
-                "every full-attention layer is expected to own a DSA indexer"
-            self.gguf_writer.add_indexer_head_count(dsa["index_num_heads"])
-            self.gguf_writer.add_indexer_key_length(dsa["index_head_dim"])
-            self.gguf_writer.add_indexer_top_k(dsa["index_topk"])
-            self.gguf_writer.add_indexer_types([(il + 1) in dsa_layers
-                                                for il in range(self.hparams["num_hidden_layers"])])
-            # eps of the indexer key LayerNorm; the config declares no separate value
-            self.gguf_writer.add_layer_norm_eps(dsa.get("index_norm_eps", self.hparams["rms_norm_eps"]))
-
     def prepare_tensors(self):
         super().prepare_tensors()
         if self._experts is not None:
@@ -372,3 +358,20 @@ class KimiK31Model(KimiK3Model):
     """
 
     model_arch = gguf.MODEL_ARCH.KIMI_K31
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        # --- DSA indexer ---
+        dsa = self.hparams["dsa_config"]
+        dsa_layers = dsa["dsa_layers"]
+        # the layer lists are 1-indexed, like linear_attn_config's
+        assert sorted(dsa_layers) == sorted(self.hparams["linear_attn_config"]["full_attn_layers"]), \
+            "every full-attention layer is expected to own a DSA indexer"
+        self.gguf_writer.add_indexer_head_count(dsa["index_num_heads"])
+        self.gguf_writer.add_indexer_key_length(dsa["index_head_dim"])
+        self.gguf_writer.add_indexer_top_k(dsa["index_topk"])
+        self.gguf_writer.add_indexer_types([(il + 1) in dsa_layers
+                                            for il in range(self.hparams["num_hidden_layers"])])
+        # eps of the indexer key LayerNorm; the config declares no separate value
+        self.gguf_writer.add_layer_norm_eps(dsa.get("index_norm_eps", self.hparams["rms_norm_eps"]))
