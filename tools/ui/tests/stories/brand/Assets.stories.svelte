@@ -9,7 +9,7 @@
 			controls: { disable: true },
 			layout: 'fullscreen'
 		},
-		title: 'Brand/Assets'
+		title: 'Brand/Logo/Assets'
 	});
 </script>
 

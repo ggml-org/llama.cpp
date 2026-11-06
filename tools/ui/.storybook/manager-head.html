@@ -1,7 +1,8 @@
 <!--
-	Old links keep working: stories that moved (Introduction/Assets to Brand/Assets, Logo/Showcase to Logo/Overview,
-	the Llama Sans UI and Display pages, the app icons into Logo/Usage …) redirect to where they are now, and a link
-	to a story that no longer exists opens Storybook's start page instead of the "Couldn't find story" error.
+	Old links keep working: stories that moved (Introduction/Assets and Brand/Assets to Brand/Logo/Assets,
+	Logo/Showcase to Logo/Overview, the Llama Sans UI and Display pages, the app icons into Logo/Usage …) redirect to
+	where they are now, and a link to a story that no longer exists opens Storybook's start page instead of the
+	"Couldn't find story" error.
 -->
 <script>
 	(function () {
@@ -13,6 +14,8 @@
 
 		// moved stories, old id: new id
 		var moved = {
+			'brand-assets--logo': 'brand-logo-assets--logo',
+			'brand-assets--social-profiles': 'brand-logo-assets--social-profiles',
 			'brand-colors-accent-proposal--accent-proposal': 'brand-colors-palette--palette',
 			'brand-colors-communications--base': 'brand-colors-communications--key-visuals',
 			'brand-colors-palette-proposal--specimen-boards': 'brand-colors-communications--artwork',
@@ -34,7 +37,7 @@
 				'brand-typography-llama-sans-running-text--running-text',
 			'brand-typography-llama-sans-ui--tester': 'brand-typography-tester--tester',
 			'brand-typography-llama-sans-ui--weights': 'brand-typography-overview--overview',
-			'introduction-assets--assets': 'brand-assets--logo'
+			'introduction-assets--assets': 'brand-logo-assets--logo'
 		};
 
 		// whole groups that moved, by id prefix
