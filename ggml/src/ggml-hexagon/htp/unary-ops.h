@@ -19,8 +19,6 @@ struct htp_unary_kernel_params {
     uint32_t  vtcm_size;
     uint32_t  tiles_per_row;
 
-    uint32_t  post_add;          // RMS_NORM_MUL: dst = rms_norm(src0) * src1 + src2 (src2 laid out like src0)
-
     // Fastdiv helpers
     struct fastdiv_values div_ne01;
     struct fastdiv_values div_ne02;
@@ -41,6 +39,7 @@ static inline bool htp_op_is_unary(uint32_t opcode) {
         case HTP_OP_NORM:
         case HTP_OP_RMS_NORM:
         case HTP_OP_RMS_NORM_MUL:
+        case HTP_OP_RMS_NORM_MUL_ADD:
         case HTP_OP_SCALE:
         case HTP_OP_SQR:
         case HTP_OP_SQRT:
@@ -76,6 +75,7 @@ static inline bool htp_unary_is_elementwise(uint32_t opcode) {
         case HTP_OP_NORM:
         case HTP_OP_RMS_NORM:
         case HTP_OP_RMS_NORM_MUL:
+        case HTP_OP_RMS_NORM_MUL_ADD:
         case HTP_OP_L2_NORM:
         case HTP_OP_HADAMARD:
         case HTP_OP_TRI:
@@ -112,12 +112,13 @@ static inline void htp_unary_vtcm_layout_build(
     uint32_t col_tile,
     uint32_t block,
     bool broadcast_weight,
-    uint32_t n_threads,
-    bool post_add
+    uint32_t n_threads
 ) {
+    const bool has_weight = (op == HTP_OP_RMS_NORM_MUL || op == HTP_OP_RMS_NORM_MUL_ADD);
+
     L->src0_row_size_aligned = hex_round_up(src0_data_row_size, 128);
     L->dst_row_size_aligned  = hex_round_up(dst_data_row_size,  128);
-    L->src1_row_size_aligned = (op == HTP_OP_RMS_NORM_MUL) ? hex_round_up(src1_data_row_size, 128) : 0;
+    L->src1_row_size_aligned = has_weight ? hex_round_up(src1_data_row_size, 128) : 0;
 
     if (col_tile > 0) {
         const size_t col_tile_bytes = col_tile * elem_size;
@@ -127,9 +128,9 @@ static inline void htp_unary_vtcm_layout_build(
         L->src2_bytes = 0;
     } else {
         L->src0_bytes = L->src0_row_size_aligned * block * 2;
-        L->src2_bytes = post_add ? L->src0_bytes : 0;
+        L->src2_bytes = (op == HTP_OP_RMS_NORM_MUL_ADD) ? L->src0_bytes : 0;
         L->dst_bytes  = L->dst_row_size_aligned  * block * 2;
-        if (op == HTP_OP_RMS_NORM_MUL) {
+        if (has_weight) {
             L->src1_bytes = broadcast_weight ? L->src1_row_size_aligned : (L->src1_row_size_aligned * block * 2);
         } else {
             L->src1_bytes = 0;
@@ -155,23 +156,29 @@ static inline void htp_unary_solve_layout(
     uint32_t n_threads,
     size_t vtcm_size,
     size_t elem_size,
-    bool post_add,
     uint32_t * out_col_tile,
     uint32_t * out_vtcm_row_per_thread
 ) {
+    const bool has_weight = (op == HTP_OP_RMS_NORM_MUL || op == HTP_OP_RMS_NORM_MUL_ADD);
+
     const size_t dst_elem_size      = (op == HTP_OP_HADAMARD) ? sizeof(float) : elem_size;
     const size_t src0_data_row_size = ne00 * elem_size;
     const size_t dst_data_row_size  = ne10 * dst_elem_size;
-    const size_t src1_data_row_size = (op == HTP_OP_RMS_NORM_MUL) ? (ne11 * sizeof(float)) : 0;
+    const size_t src1_data_row_size = has_weight ? (ne11 * sizeof(float)) : 0;
 
     const size_t src0_row_size_aligned = hex_round_up(src0_data_row_size, 128);
     const size_t dst_row_size_aligned  = hex_round_up(dst_data_row_size,  128);
-    const size_t src1_row_size_aligned = (op == HTP_OP_RMS_NORM_MUL) ? hex_round_up(src1_data_row_size, 128) : 0;
+    const size_t src1_row_size_aligned = has_weight ? hex_round_up(src1_data_row_size, 128) : 0;
 
     size_t vtcm_size_per_row = 0;
     size_t vtcm_row_per_thread = 0;
 
-    if (op == HTP_OP_RMS_NORM_MUL) {
+    if (op == HTP_OP_RMS_NORM_MUL_ADD) {
+        size_t src1_vtcm_total = n_threads * src1_row_size_aligned;
+        size_t available_vtcm  = (vtcm_size > src1_vtcm_total) ? (vtcm_size - src1_vtcm_total) : 0;
+        vtcm_size_per_row      = 2 * (2 * src0_row_size_aligned + dst_row_size_aligned);
+        vtcm_row_per_thread    = available_vtcm / (n_threads * vtcm_size_per_row);
+    } else if (op == HTP_OP_RMS_NORM_MUL) {
         if (broadcast_weight) {
             size_t available_vtcm = vtcm_size;
             size_t src1_vtcm_total = n_threads * src1_row_size_aligned;
@@ -180,10 +187,10 @@ static inline void htp_unary_solve_layout(
             } else {
                 available_vtcm = 0;
             }
-            vtcm_size_per_row = 2 * (src0_row_size_aligned * (post_add ? 2 : 1) + dst_row_size_aligned);
+            vtcm_size_per_row = 2 * (src0_row_size_aligned + dst_row_size_aligned);
             vtcm_row_per_thread = available_vtcm / (n_threads * vtcm_size_per_row);
         } else {
-            vtcm_size_per_row = 2 * (src0_row_size_aligned * (post_add ? 2 : 1) + dst_row_size_aligned + src1_row_size_aligned);
+            vtcm_size_per_row = 2 * (src0_row_size_aligned + dst_row_size_aligned + src1_row_size_aligned);
             vtcm_row_per_thread = vtcm_size / (n_threads * vtcm_size_per_row);
         }
     } else {
@@ -196,8 +203,8 @@ static inline void htp_unary_solve_layout(
     }
 
     const bool is_reduction = (op == HTP_OP_NORM || op == HTP_OP_RMS_NORM ||
-                               op == HTP_OP_RMS_NORM_MUL || op == HTP_OP_L2_NORM ||
-                               op == HTP_OP_HADAMARD);
+                               op == HTP_OP_RMS_NORM_MUL || op == HTP_OP_RMS_NORM_MUL_ADD ||
+                               op == HTP_OP_L2_NORM || op == HTP_OP_HADAMARD);
     // The tiled fallback path below only has F32 task functions (unary_task_f32_tiled_*);
     // F16 has no tiled kernels, so it must stay on the row-block path like reduction ops.
     // NOTE: if F16 ends up with vtcm_row_per_thread == 0 here (row too large for the VTCM
@@ -215,7 +222,7 @@ static inline void htp_unary_solve_layout(
 
     const uint32_t block = col_tile ? 0 : (uint32_t) vtcm_row_per_thread;
     htp_unary_vtcm_layout_build(L, op, src0_data_row_size, dst_data_row_size, src1_data_row_size,
-                                elem_size, col_tile, block, broadcast_weight, n_threads, post_add);
+                                elem_size, col_tile, block, broadcast_weight, n_threads);
 
     *out_col_tile = col_tile;
     *out_vtcm_row_per_thread = (uint32_t) vtcm_row_per_thread;

@@ -159,8 +159,7 @@ static bool fuse_rms_norm_mul(const ggml_hexagon_session * sess, htp_opnode & pr
 
 // post-norm residual: dst = rms_norm(x) * w + r
 static bool fuse_rms_norm_mul_add(const ggml_hexagon_session * sess, htp_opnode & prev, const htp_opnode & cur) {
-    if (prev.opcode != HTP_OP_RMS_NORM_MUL || prev.inputs.size() != 2) return false;
-    if (prev.kparams<htp_unary_kernel_params>()->post_add) return false;
+    if (prev.opcode != HTP_OP_RMS_NORM_MUL) return false;
 
     const ggml_tensor * r = nullptr;
     if (!htp_match_consumer(prev, cur, /*commutative=*/ true, &r)) return false;
@@ -168,14 +167,13 @@ static bool fuse_rms_norm_mul_add(const ggml_hexagon_session * sess, htp_opnode 
     const ggml_tensor * src0   = prev.src0();
     const ggml_tensor * weight = prev.inputs[1];
     const ggml_tensor * dst    = cur.dst();
-    if (weight->ne[1] != 1 || weight->ne[2] != 1 || weight->ne[3] != 1) return false;
-    if (r->type != GGML_TYPE_F32 || !ggml_are_same_layout(src0, r)) return false;
-    if (!htp_same_shape_and_contiguity(prev.dst(), dst)) return false;
+    if (!ggml_are_same_layout(src0, r)) return false;
     if (htp_inputs_overlap_unsafe(prev, dst, r)) return false;
 
     struct htp_unary_kernel_params kparams;
     if (!htp_kparams_solve_rms_norm_mul_add(sess, src0, weight, dst, &kparams)) return false;
 
+    prev.opcode = HTP_OP_RMS_NORM_MUL_ADD;
     prev.inputs.push_back(r);
     prev.outputs[0] = dst;
     prev.fused.push_back(cur.node);
@@ -186,7 +184,6 @@ static bool fuse_rms_norm_mul_add(const ggml_hexagon_session * sess, htp_opnode 
 static bool fuse_rms_norm_scale(const ggml_hexagon_session * sess, htp_opnode & prev, const htp_opnode & cur) {
     GGML_UNUSED(sess);
     if (prev.opcode != HTP_OP_RMS_NORM && prev.opcode != HTP_OP_RMS_NORM_MUL) return false;
-    if (prev.opcode == HTP_OP_RMS_NORM_MUL && prev.kparams<htp_unary_kernel_params>()->post_add) return false;
     if (!htp_match_consumer(prev, cur, /*commutative=*/ false)) return false;
 
     const ggml_tensor * src0 = prev.src0();
