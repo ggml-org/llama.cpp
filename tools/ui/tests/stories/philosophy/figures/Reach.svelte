@@ -8,7 +8,7 @@
 		{ fits: 'Small models, up to about 4B', memory: 8, model: 2.5, name: 'Phone' },
 		{ fits: 'Up to about 14B', memory: 16, model: 9, name: 'Laptop' },
 		{ fits: 'Up to about 30B', memory: 32, model: 18, name: 'Desktop' },
-		{ fits: 'Up to about 70B', memory: 64, model: 42, name: 'Workstation' },
+		{ fits: 'Up to about 120B', memory: 128, model: 70, name: 'Workstation' },
 		{ fits: 'The largest open models', memory: 256, model: 200, name: 'Server' }
 	];
 </script>
