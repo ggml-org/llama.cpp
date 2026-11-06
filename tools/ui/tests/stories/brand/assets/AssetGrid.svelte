@@ -366,7 +366,7 @@
 						{/each}
 
 						{#if group.optical}
-							<div class="col-span-full mt-4">
+							<div class="col-span-full mt-12">
 								<OpticalCentre
 									candidates={[
 										{ label: 'lifted 1/25, no nudge', lift: 1 / 25, nudge: 0 },
