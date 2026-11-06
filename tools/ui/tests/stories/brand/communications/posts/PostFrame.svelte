@@ -1,7 +1,9 @@
 <!--
 	A piece at its real pixel size, scaled down to fit its column. It sets the ground (grounds.css) and the format's
 	grid: --u, the unit every size is a multiple of, and an area inset by the margin and the platform's safe area, which
-	the layouts fill. `overlay` draws the grid on top: the margins, the columns and, on a story, the safe area.
+	the layouts fill. `overlay` draws the grid on top: the margins, the columns and, on a story, the safe area. `actual`
+	shows it at its real size instead, in a box that scrolls sideways when the column is narrower, for parts that need a
+	close look.
 -->
 <script lang="ts">
 	import '../../fonts/fonts.css';
@@ -10,6 +12,8 @@
 	import type { Snippet } from 'svelte';
 
 	interface Props {
+		/** at its real size, scrolling sideways in a narrow column, rather than scaled to fit */
+		actual?: boolean;
 		children: Snippet;
 		format: PostFormat;
 		label: string;
@@ -17,15 +21,19 @@
 		tone: Ground;
 	}
 
-	let { children, format, label, overlay = false, tone }: Props = $props();
+	let { actual = false, children, format, label, overlay = false, tone }: Props = $props();
 
 	let column = $state(0);
 	const g = $derived(grid(format));
 	const safe = $derived(format.safe ?? { bottom: 0, top: 0 });
-	const scale = $derived(column ? Math.min(1, column / format.width) : 0);
+	const scale = $derived(actual ? 1 : column ? Math.min(1, column / format.width) : 0);
 </script>
 
-<div bind:clientWidth={column} style:height="{format.height * scale}px" class="fit">
+<div
+	bind:clientWidth={column}
+	style:height={actual ? undefined : `${format.height * scale}px`}
+	class={['fit', { actual }]}
+>
 	<article
 		style:--cols={g.columns}
 		style:--gutter="{g.gutter}px"
@@ -59,6 +67,12 @@
 		overflow: hidden;
 		border-radius: 12px;
 		box-shadow: 0 0 0 1px var(--border);
+	}
+	/* at its real size: as wide as the piece, scrolling sideways when the column is narrower */
+	.actual {
+		width: fit-content;
+		max-width: 100%;
+		overflow: auto;
 	}
 	.post {
 		position: relative;

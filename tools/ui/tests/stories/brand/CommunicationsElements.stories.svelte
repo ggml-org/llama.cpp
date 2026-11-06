@@ -30,13 +30,13 @@
 </script>
 
 <Story asChild name="Header and footer">
-	<StateGallery minItemWidth="20rem">
+	<StateGallery columns={1}>
 		{#each ['light', 'dark'] as const as tone (tone)}
 			<StateGalleryItem
 				label="Header and footer, {tone}"
 				note="The top and bottom rows of every piece"
 			>
-				<PostFrame format={tile} label="Header and footer" {tone}>
+				<PostFrame actual format={tile} label="Header and footer" {tone}>
 					<div class="stack">
 						<PostHeader brand="Llama" url="llama.app" />
 
@@ -55,13 +55,13 @@
 </Story>
 
 <Story asChild name="Chips and labels">
-	<StateGallery minItemWidth="20rem">
+	<StateGallery columns={1}>
 		{#each tones as tone (tone)}
 			<StateGalleryItem
 				label="Chips and labels, {tone}"
 				note="Outline for use cases, solid for a tag, cinder once"
 			>
-				<PostFrame format={tile} label="Chips" {tone}>
+				<PostFrame actual format={tile} label="Chips" {tone}>
 					<div class="stack">
 						<p class="t-label">Fresh drops</p>
 
@@ -82,13 +82,13 @@
 </Story>
 
 <Story asChild name="Figures and commands">
-	<StateGallery minItemWidth="20rem">
+	<StateGallery columns={1}>
 		{#each ['light', 'dark'] as const as tone (tone)}
 			<StateGalleryItem
 				label="Figures and commands, {tone}"
 				note="Real numbers in tabular figures; the prompt in cinder"
 			>
-				<PostFrame format={tile} label="Figures" {tone}>
+				<PostFrame actual format={tile} label="Figures" {tone}>
 					<div class="row figures">
 						<Figure accent label="tokens per second" size={3.6} value="142" />
 
@@ -103,22 +103,22 @@
 </Story>
 
 <Story asChild name="Motifs">
-	<StateGallery minItemWidth="16rem">
+	<StateGallery columns={1}>
 		{#each ['light', 'dark'] as const as tone (tone)}
 			<StateGalleryItem label="Token tree, {tone}" note="Decisions, sampling, probabilities">
-				<PostFrame format={tile} label="Token tree" {tone}>
+				<PostFrame actual format={tile} label="Token tree" {tone}>
 					<div class="motif fill"><BranchMotif /></div>
 				</PostFrame>
 			</StateGalleryItem>
 
 			<StateGalleryItem label="Curve, {tone}" note="Speed, benchmarks, anything over time">
-				<PostFrame format={tile} label="Curve" {tone}>
+				<PostFrame actual format={tile} label="Curve" {tone}>
 					<div class="motif fill"><Curve /></div>
 				</PostFrame>
 			</StateGalleryItem>
 
 			<StateGalleryItem label="Quantised blocks, {tone}" note="Quants, sizes, fitting in memory">
-				<PostFrame format={tile} label="Quantised blocks" {tone}>
+				<PostFrame actual format={tile} label="Quantised blocks" {tone}>
 					<div class="blocks"><QuantBlocks columns={12} rows={6} /></div>
 				</PostFrame>
 			</StateGalleryItem>
@@ -127,7 +127,7 @@
 				label="Dot grid, {tone}"
 				note="The unit made visible, behind a word or figure"
 			>
-				<PostFrame format={tile} label="Dot grid" {tone}>
+				<PostFrame actual format={tile} label="Dot grid" {tone}>
 					<DotGrid at={[9, 5]} />
 				</PostFrame>
 			</StateGalleryItem>
@@ -136,13 +136,13 @@
 </Story>
 
 <Story asChild name="The app">
-	<StateGallery minItemWidth="20rem">
+	<StateGallery columns={1}>
 		{#each ['day', 'night'] as const as tone (tone)}
 			<StateGalleryItem
 				label="Menu bar and panel, {tone}"
 				note="The Llama app as it is, at its own size"
 			>
-				<PostFrame format={{ height: 720, name: 'Tile', width: 720 }} label="The app" {tone}>
+				<PostFrame actual format={{ height: 720, name: 'Tile', width: 720 }} label="The app" {tone}>
 					<div class="app"><AppPanel /></div>
 				</PostFrame>
 			</StateGalleryItem>
