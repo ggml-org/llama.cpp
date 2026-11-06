@@ -4,10 +4,13 @@
 -->
 <script lang="ts">
 	import './motif.css';
-	import { type Box, device, pen, shadow } from './box';
+	import { type Box, device, front, pen, shadow } from './box';
 	import Solid from './Solid.svelte';
 
-	const view = device(100, 230);
+	let { flat = false }: { flat?: boolean } = $props();
+
+	// the isometric view, or straight at the front for the flat version
+	const view = $derived(flat ? front(128, 270) : device(100, 230));
 	const units: Box[] = [0, 1, 2, 3].map((i) => ({
 		max: [1.25, 0.06 + i * 0.44 + 0.38, 0.85],
 		min: [-1.25, 0.06 + i * 0.44, -0.85]
@@ -16,16 +19,17 @@
 		max: [x + 0.11, 1.86, -0.78],
 		min: [x, 0, -0.9]
 	}));
-	const pens = units.map((u) => pen(u, view));
+	const pens = $derived(units.map((u) => pen(u, view)));
 	const bays = [0.14, 0.42, 0.7, 0.98, 1.26];
 </script>
 
 <svg aria-hidden="true" class="motif-svg" viewBox="0 0 400 300">
-	<polygon class="floor" points={shadow(units[0], view)} />
+	{#if !flat}
+		<polygon class="floor" points={shadow(units[0], view)} />{/if}
 
 	{#each units as unit, i (i)}
 		{@const d = pens[i]}
-		<Solid box={unit} {view} />
+		<Solid box={unit} {flat} {view} />
 
 		{#each bays as u (u)}
 			<polygon class="detail" points={d.rect('front', u, 0.08, 0.24, 0.22)} />
@@ -46,6 +50,6 @@
 	{/each}
 
 	{#each rails as rail, i (i)}
-		<Solid box={rail} {view} />
+		<Solid box={rail} {flat} {view} />
 	{/each}
 </svg>

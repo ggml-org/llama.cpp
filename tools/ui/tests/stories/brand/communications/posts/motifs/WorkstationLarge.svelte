@@ -5,16 +5,19 @@
 -->
 <script lang="ts">
 	import './motif.css';
-	import { type Box, device, pen, shadow } from './box';
+	import { type Box, device, front, pen, shadow } from './box';
 	import Solid from './Solid.svelte';
 
-	const view = device(96, 248);
+	let { flat = false }: { flat?: boolean } = $props();
+
+	// the isometric view, or straight at the front for the flat version
+	const view = $derived(flat ? front(120, 281) : device(96, 248));
 	const body: Box = { max: [0.55, 2.0, 0.9], min: [-0.55, 0, -0.9] };
 	const handles: Box[] = [
 		{ max: [0.42, 2.18, -0.62], min: [-0.42, 2.0, -0.76] },
 		{ max: [0.42, 2.18, 0.76], min: [-0.42, 2.0, 0.62] }
 	];
-	const d = pen(body, view);
+	const d = $derived.by(() => pen(body, view));
 
 	const lattice = Array.from({ length: 6 * 13 }, (_, i) => [
 		0.17 + (i % 6) * 0.153,
@@ -23,19 +26,24 @@
 </script>
 
 <svg aria-hidden="true" class="motif-svg" viewBox="0 0 400 300">
-	<polygon class="floor" points={shadow(body, view)} />
+	{#if !flat}
+		<polygon class="floor" points={shadow(body, view)} />{/if}
 
-	<Solid box={handles[1]} {view} />
+	<Solid box={handles[1]} {flat} {view} />
 
-	<Solid box={body} {view} />
+	<Solid box={body} {flat} {view} />
 
-	<Solid box={handles[0]} {view} />
+	<Solid box={handles[0]} {flat} {view} />
 
 	{#each lattice as [u, v] (u + '-' + v)}
 		<polygon style:opacity="0.75" class="detail" points={d.circle('front', u, v, 0.05, 14)} />
 	{/each}
 
-	<polygon style:opacity="0.35" class="detail" points={d.rect('right', 0.12, 0.12, 1.56, 1.76)} />
+	{#if !flat}<polygon
+			style:opacity="0.35"
+			class="detail"
+			points={d.rect('right', 0.12, 0.12, 1.56, 1.76)}
+		/>{/if}
 
 	<polygon class="accent" points={d.circle('front', 0.92, 1.92, 0.032, 12)} />
 </svg>

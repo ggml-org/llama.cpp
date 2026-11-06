@@ -23,6 +23,7 @@
 	import PostHeader from './communications/posts/PostHeader.svelte';
 	import QuantBlocks from './communications/posts/QuantBlocks.svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
+	import type { Component } from 'svelte';
 
 	// Communications' elements: the smallest parts of a piece, each in units, on a tile of the grounds. Lockups and the
 	// header, chips and labels, figures, commands, motifs and the app itself
@@ -46,7 +47,7 @@
 	const app = tile(500, 600);
 
 	// the motifs drawn as SVG, each filling its tile: the ideas, then the machines
-	const motifs = [
+	const ideas: { component: Component; name: string; note: string }[] = [
 		{
 			component: BranchMotif,
 			name: 'Decision tree',
@@ -56,7 +57,10 @@
 		{ component: Tensor, name: 'Tensor', note: 'Weights, layers, quantization' },
 		{ component: GradientDescent, name: 'Gradient descent', note: 'Training and fine-tuning' },
 		{ component: VectorSpace, name: 'Vector space', note: 'Embeddings, search, retrieval' },
-		{ component: Curve, name: 'Curve', note: 'Speed, benchmarks, anything over time' },
+		{ component: Curve, name: 'Curve', note: 'Speed, benchmarks, anything over time' }
+	];
+	// the machines, each drawn in 3D and flat, straight at its front
+	const machines: { component: Component<{ flat?: boolean }>; name: string; note: string }[] = [
 		{ component: Gpu, name: 'GPU', note: 'Hardware, offload, speed' },
 		{ component: Laptop, name: 'Laptop', note: 'The machine people already have' },
 		{ component: WorkstationSmall, name: 'Small workstation', note: 'Bigger models on a desk' },
@@ -146,12 +150,25 @@
 <Story asChild name="Motifs">
 	<StateGallery minItemWidth={rem(motif.width)}>
 		{#each ['light', 'dark'] as const as tone (tone)}
-			{#each motifs as m (m.name)}
+			{#each ideas as m (m.name)}
 				<StateGalleryItem label="{m.name}, {tone}" note={m.note}>
 					<PostFrame actual format={motif} label={m.name} {tone} unit={U}>
 						<div class="motif fill"><m.component /></div>
 					</PostFrame>
 				</StateGalleryItem>
+			{/each}
+
+			{#each machines as m (m.name)}
+				{#each [false, true] as flat (flat)}
+					<StateGalleryItem
+						label="{m.name}{flat ? ', flat' : ''}, {tone}"
+						note={flat ? 'Its front, straight on' : m.note}
+					>
+						<PostFrame actual format={motif} label={m.name} {tone} unit={U}>
+							<div class="motif fill"><m.component {flat} /></div>
+						</PostFrame>
+					</StateGalleryItem>
+				{/each}
 			{/each}
 
 			<StateGalleryItem label="Quantised blocks, {tone}" note="Quants, sizes, fitting in memory">
