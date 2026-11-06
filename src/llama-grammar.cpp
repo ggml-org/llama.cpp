@@ -981,6 +981,7 @@ static void llama_grammar_left_factor(llama_grammar_rules & rules) {
         size_t end;
     };
 
+    const size_t n_rules_original = rules.size();
     bool changed = true;
     while (changed) {
         changed = false;
@@ -1011,7 +1012,8 @@ static void llama_grammar_left_factor(llama_grammar_rules & rules) {
 
             for (const auto & [astart, aend] : alt_ranges) {
                 size_t len = aend - astart;
-                if (len == 1 && rule[astart].type == LLAMA_GRETYPE_RULE_REF) {
+                // Resolving references in generated suffixes can expand recursive rules forever.
+                if (ri < n_rules_original && len == 1 && rule[astart].type == LLAMA_GRETYPE_RULE_REF) {
                     size_t ref_id = static_cast<size_t>(rule[astart].value);
                     if (ref_id < rules.size()) {
                         size_t ref_end = 0;

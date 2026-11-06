@@ -193,6 +193,11 @@ static void test_schema(const std::string & test_desc, const std::string & schem
 }
 
 static void test_simple_grammar() {
+    test_grammar(
+        "left factor recursive references",
+        "root ::= \"ok\" | choice\nchoice ::= a | b | c | d\na ::= \"x\" a\nb ::= \"x\" b\nc ::= \"x\" c\nd ::= \"x\" d",
+        {"ok"}, {"", "x", "xx", "okx"});
+
     test_schema(
         "min 0",
         R"""({
