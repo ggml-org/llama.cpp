@@ -31,6 +31,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #ifdef _WIN32
@@ -1005,8 +1006,18 @@ uint64_t ggml_backend_openvino_weight_fingerprint(const ggml_tensor * tensor) {
         }
         GGML_ABORT("ggml-openvino: missing source identity for weight %s", tensor->name);
     }
+    // Weights outside OpenVINO buffers (e.g. a CPU-buffer token_embd) live as long as the model.
+    static std::mutex fallback_mutex;
+    static std::map<std::tuple<const void *, size_t, std::string>, uint64_t> fallback_fingerprints;
+    const auto key = std::make_tuple(static_cast<const void *>(tensor->data), ggml_nbytes(tensor), std::string(tensor->name));
+    std::lock_guard<std::mutex> lock(fallback_mutex);
+    auto it = fallback_fingerprints.find(key);
+    if (it != fallback_fingerprints.end()) {
+        return it->second;
+    }
     std::vector<ggml_openvino_source_mapping> mappings;
-    return ggml_openvino_source_fingerprint(tensor->data, ggml_nbytes(tensor), mappings);
+    return fallback_fingerprints[key] =
+               ggml_openvino_source_fingerprint(tensor->data, ggml_nbytes(tensor), mappings);
 }
 
 static void ggml_backend_openvino_free(ggml_backend_t backend) {

@@ -137,15 +137,16 @@ bool ggml_openvino_npu_hfa_prefill_enabled();
 bool ggml_openvino_npu_decode_unfold_enabled();
 bool ggml_openvino_npu_parallel_compile_enabled();
 
-// GGML_OPENVINO_NPU_DECODE_PREBUILD=1: static NPU decode attends a KV window of 1024*2^k rows (clamped to ctx)
-// instead of the whole ctx, with one decode model per window, all built/imported with the prefill/decode pair.
+// GGML_OPENVINO_NPU_BLOB_PREBUILD=1: static NPU graphs attend a KV window of 1024*2^k rows (clamped to ctx)
+// instead of the whole ctx, with one decode model per window, all built/imported with the prefill/decode pair;
+// with head-major KV the prefill models of every window are also exported and preloaded.
 // Returns the window base (1024), 0 = off.
 int ggml_openvino_npu_decode_bucket();
 
 // On-demand NPU KV cache (GGML_OPENVINO_NPU_KV_ON_DEMAND): the ggml KV buffer stays non-resident and the
 // NPU binds per-tensor L0 storage that grows (base*2^k rows, base = decode bucket or 1024) with the rows in use.
 bool ggml_openvino_npu_kv_on_demand_enabled();
-// On-demand KV with DECODE_PREBUILD and KV_SLICE: K storage is [heads][rows][head_size] and V storage is
+// On-demand KV with BLOB_PREBUILD and KV_SLICE: K storage is [heads][rows][head_size] and V storage is
 // [heads][head_size][rows] (head-major with heads * head_size channels); every static graph binds the whole storage
 // as [1, heads, rows, head_size] / [1, heads, head_size, rows], and attention uses V^T.
 bool ggml_openvino_npu_kv_head_major_enabled();

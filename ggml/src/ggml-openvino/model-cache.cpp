@@ -21,6 +21,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #if defined(_WIN32)
@@ -87,25 +88,14 @@ uint64_t weight_fingerprint(const ggml_tensor * t) {
 // fingerprinted once, deterministically.
 template <typename F>
 void for_each_weight(const ggml_cgraph * cgraph, F && fn) {
-    std::vector<const ggml_tensor *> seen;
+    std::unordered_set<const ggml_tensor *> seen;
     for (int i = 0; i < cgraph->n_nodes; ++i) {
         const ggml_tensor * node = cgraph->nodes[i];
         for (int s = 0; s < GGML_MAX_SRC; ++s) {
             const ggml_tensor * src = node->src[s];
-            if (!is_weight_src(src)) {
+            if (!is_weight_src(src) || !seen.insert(src).second) {
                 continue;
             }
-            bool dup = false;
-            for (const auto * p : seen) {
-                if (p == src) {
-                    dup = true;
-                    break;
-                }
-            }
-            if (dup) {
-                continue;
-            }
-            seen.push_back(src);
             fn(src);
         }
     }
