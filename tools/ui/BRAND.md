@@ -100,7 +100,7 @@ wide ones 12, with a gutter of ½u.
 | Poster A-series       | 1240 × 1754 | Print at 150 dpi                                                      | 51.7  |
 | Billboard 3:1         | 2400 × 800  | Banners, screens at events                                            | 50    |
 | Super hero art 16:9   | 1920 × 1080 | The top of the Microsoft Store listing; artwork with no words         | 45    |
-| Store screenshot 16:9 | 1920 × 1080 | Microsoft Store screenshots, four or more                             | 45    |
+| Store screenshot 16:9 | 1920 × 1080 | Microsoft Store screenshots: a centred headline over the real app     | 45    |
 | Poster art 2:3        | 720 × 1080  | The Microsoft Store's main logo: the icon over the name               | 30    |
 | App tile icon         | 300 × 300   | The Microsoft Store's tile: the icon alone                            | 12.5  |
 
@@ -131,6 +131,14 @@ Layouts built from the blocks on the grid. A new piece starts from one of them.
 | Bulletin   | News with several items: what's new, release notes    | Headline and lede, a lead item and a side column       |
 | Numeral    | One figure that carries the point: speed, size, count | The figure huge in cinder over a dot grid              |
 | Receipt    | A point made with facts: cost, size, what it took     | Sans headline, a Mono receipt with the total in cinder |
+
+### Store screenshots
+
+Each screenshot says one practical thing the app does on Windows, in a centred headline of one or two lines, with
+what we stand for in the lede (yours, private, free) rather than in the headline. Under it is the proof, large and
+running off the bottom edge: the real Llama Chat or model manager in a Windows 11 window, Llama's flyout over the
+taskbar, or one motif or code card. The models shown are small and medium ones from llama.app's catalog. The words
+keep to the top three quarters, since the Store may lay its own text over the bottom quarter.
 
 ## Rules
 

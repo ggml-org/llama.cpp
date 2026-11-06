@@ -10,10 +10,12 @@
 	import { ArrowDown, ChevronRight, Copy, LayoutGrid } from '@lucide/svelte';
 
 	interface Props {
+		/** the menu bar or the tray under the panel; off where the piece draws the whole taskbar instead */
+		bar?: boolean;
 		platform?: 'mac' | 'windows';
 	}
 
-	let { platform = 'mac' }: Props = $props();
+	let { bar = true, platform = 'mac' }: Props = $props();
 
 	const installed = [
 		{ name: 'Qwen3.8', params: '27B', size: '19.0 GB' },
@@ -23,7 +25,9 @@
 </script>
 
 <div class={['app', platform]}>
-	{#if platform === 'windows'}
+	{#if !bar}
+		<!-- no bar: the piece draws the taskbar itself -->
+	{:else if platform === 'windows'}
 		<!-- the taskbar's notification area, drawn after Windows 11: hidden icons, Llama, Wi-Fi, sound, battery, clock -->
 		<div class="bar tray">
 			<span>
