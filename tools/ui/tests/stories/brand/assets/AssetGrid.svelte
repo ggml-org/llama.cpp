@@ -337,11 +337,14 @@
 									<span class="text-sm">{asset.label}</span>
 
 									<span class={['flex flex-wrap gap-1', asset.round && 'justify-center']}>
+										<!-- the click stops here: @storybook/sveltekit's MockProvider cancels every link click that
+										     reaches the window, to log it as navigation, which would swallow the download -->
 										{#each downloads(asset) as file (file.name)}
 											<Button
 												class="h-6 px-1.5 font-mono text-xs text-muted-foreground has-[>svg]:px-1.5"
 												download={file.name}
 												href={file.href}
+												onclick={(event: MouseEvent) => event.stopPropagation()}
 												size="sm"
 												variant="ghost"><Download class="size-3" />{file.label}</Button
 											>
