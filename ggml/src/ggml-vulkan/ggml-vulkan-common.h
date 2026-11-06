@@ -232,6 +232,7 @@ const char * ggml_backend_vk_buffer_type_name(ggml_backend_buffer_type_t buft);
 ggml_backend_buffer_t ggml_backend_vk_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size);
 size_t ggml_backend_vk_buffer_type_get_alignment(ggml_backend_buffer_type_t buft);
 size_t ggml_backend_vk_buffer_type_get_max_size(ggml_backend_buffer_type_t buft);
+size_t ggml_backend_vk_buffer_type_get_max_alloc_size(ggml_backend_buffer_type_t buft);
 size_t ggml_backend_vk_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor);
 void ggml_backend_vk_free(ggml_backend_t backend);
 ggml_backend_buffer_t ggml_backend_vk_device_buffer_from_host_ptr(ggml_backend_dev_t dev, void * ptr, size_t size, size_t max_tensor_size);

@@ -341,6 +341,7 @@ static const struct ggml_backend_buffer_type_i ggml_backend_meta_buffer_type_ifa
     /* .get_alloc_size      = */ ggml_backend_meta_buffer_type_get_alloc_size,
     /* .get_alloc_size_n    = */ NULL,
     /* .is_host             = */ ggml_backend_meta_buffer_type_is_host,
+    /* .get_max_alloc_size  = */ NULL,
 };
 
 bool ggml_backend_buft_is_meta(ggml_backend_buffer_type_t buft) {
