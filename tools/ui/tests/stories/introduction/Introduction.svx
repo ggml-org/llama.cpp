@@ -28,7 +28,7 @@
 
 ## What it's for
 
-- **Designing:** try a new screen, post or asset against the real system before it ships.
+- **Designing:** work out a new screen, post or asset by rendering its variations in the **Scrapbook**, built from the real system, before one is chosen.
 - **Building:** look up a component, its states and its tokens, in light and dark.
 - **Checking:** every story renders the real code, and the accessibility addon checks each one.
 - **Handing over:** the rules for agents (**Agents**) are exported, with **Communications**, as the Llama design system for Claude Design, by `npm run export:design-system`.
@@ -37,7 +37,7 @@
 
 The short version of **Philosophy**:
 
-- **Local, on ordinary hardware:** the model runs on your own machine, one people already have; the conversations stay on it, and it works offline, without an account.
+- **Personal, on hardware you already have:** the model runs on your own laptop, desktop or phone. Your conversations stay on it, and it works offline, without an account, so what you ask stays private and the AI you rely on is yours to keep. Capable AI shouldn't depend on a subscription or someone else's data centre; it should be open to everyone.
 - **Simple by default, deep on request:** the apps start with one suggested model, set up for you; every other setting is one step away rather than on the first screen.
 - **Recognisable, easy to change:** the character is in three places, the icon, the details of the type and one accent, cinder. Everything else is neutral, so an app can bring its own colour.
 - **Function first:** every element has a job and a reason for its size. The interface stays out of the way of the conversation.
@@ -65,7 +65,8 @@ Inside Llama UI, the tokens go from primitives to semantic roles to components, 
 - **Philosophy:** **Ideology**, **Product** and **Design**, the why, written for people.
 - **Brand:** the logo, from how the icon is drawn to its files, the typography and the colours.
 - **Communications:** how posts, store screenshots, link previews and swag are made, from the direction and the grid to the finished pieces.
-- **UI:** the foundations, every component from actions to overlays, the patterns, and the blocks, Llama Chat's real screens. Proposals are ideas not yet in the app.
+- **UI:** the foundations, every component from actions to overlays, the patterns, and the blocks, Llama Chat's real screens.
+- **Scrapbook:** proposals, prototypes and variations for the UI, communications and the brand, side by side before one is chosen.
 
 ## Working in it
 

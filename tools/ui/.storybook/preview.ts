@@ -92,9 +92,10 @@ const preview: Preview = {
 							'Settings',
 							['DialogSettingsChat', 'Navigation', 'Sections'],
 							'App'
-						],
-						'Proposals'
-					]
+						]
+					],
+					'Scrapbook',
+					['About', 'UI', 'Communications', 'Brand']
 				]
 			}
 		},
