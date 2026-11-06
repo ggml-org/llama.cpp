@@ -4,7 +4,7 @@
 	text, where the platforms crop least.
 -->
 <script lang="ts">
-	import { FORMATS, grid } from '../posts/post';
+	import { FORMATS, grid, type PostFormat } from '../posts/post';
 	import PostFrame from '../posts/PostFrame.svelte';
 	import PostHeader from '../posts/PostHeader.svelte';
 	import ProductShot from '../posts/ProductShot.svelte';
@@ -14,15 +14,19 @@
 		caption?: string;
 		headline: string;
 		lede?: string;
+		/** the app as it shows on a Mac (the menu bar) or on Windows (over the taskbar) */
+		platform?: 'mac' | 'windows';
 	}
 
-	let { caption, format, header, headline, lede, overlay, tone }: Props = $props();
+	let { caption, format, header, headline, lede, overlay, platform, tone }: Props = $props();
 
 	const g = $derived(grid(FORMATS[format]));
-	// the app's width in units: on a wide format, as much as the height allows (the panel is 1.3 times as high as wide)
+	const f = $derived<PostFormat>(FORMATS[format]);
+	// the app's width in units: on a wide format, as much as the area's height allows (the panel is 1.3 times as high
+	// as wide)
 	const shot = $derived(
 		g.shape === 'wide'
-			? Math.min(15, (FORMATS[format].height / g.unit - 4) / 1.3)
+			? Math.min(15, ((f.height - (f.safe?.top ?? 0) - (f.safe?.bottom ?? 0)) / g.unit - 4) / 1.3)
 			: g.shape === 'tall'
 				? 17
 				: 14
@@ -46,8 +50,8 @@
 			{#if caption}<p class="caption">{caption}</p>{/if}
 		</div>
 
-		<div class="shot">
-			<ProductShot size={shot} unit={g.unit} />
+		<div class={['shot', platform]}>
+			<ProductShot {platform} size={shot} unit={g.unit} />
 		</div>
 	</div>
 </PostFrame>
@@ -101,5 +105,9 @@
 	:global(.shape-wide) .shot {
 		grid-column: 8 / -1;
 		align-self: start;
+	}
+	/* on Windows the app opens over the taskbar, at the bottom of the screen */
+	:global(.shape-wide) .shot.windows {
+		align-self: end;
 	}
 </style>

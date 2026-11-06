@@ -2,11 +2,18 @@
 	The Llama app as it shows in a link preview: the menu bar with its icon and the macOS symbols beside it (sound,
 	Wi-Fi, battery, Spotlight, Control Center, drawn after the system's own), and the panel under it with the server,
 	the installed models and a recommendation. Drawn at the size it takes in a 1200 × 630 card; the models carry
-	their initials rather than their makers' logos.
+	their initials rather than their makers' logos. On `windows` it is the same panel as a flyout over the taskbar's
+	notification area (the hidden icons' chevron, Llama, Wi-Fi, sound, battery and the clock, drawn after Windows 11).
 -->
 <script lang="ts">
 	import { ICON } from './post';
 	import { ArrowDown, ChevronRight, Copy, LayoutGrid } from '@lucide/svelte';
+
+	interface Props {
+		platform?: 'mac' | 'windows';
+	}
+
+	let { platform = 'mac' }: Props = $props();
 
 	const installed = [
 		{ name: 'Qwen3.8', params: '27B', size: '19.0 GB' },
@@ -15,52 +22,95 @@
 	];
 </script>
 
-<div class="app">
-	<div class="bar">
-		<span class="menu-icon">{ICON}</span>
+<div class={['app', platform]}>
+	{#if platform === 'windows'}
+		<!-- the taskbar's notification area, drawn after Windows 11: hidden icons, Llama, Wi-Fi, sound, battery, clock -->
+		<div class="bar tray">
+			<span>
+				<svg aria-hidden="true" class="glyph" height="16" viewBox="0 0 16 16" width="16">
+					<path class="thin" d="M4 10l4-4 4 4" />
+				</svg>
+			</span>
 
-		<!-- the menu bar's own symbols, drawn after macOS: sound, Wi-Fi, battery, Spotlight, Control Center -->
-		<svg aria-hidden="true" class="glyph" height="16" viewBox="0 0 20 16" width="20">
-			<path class="filled" d="M2 5.5h3l4-3.5v12l-4-3.5H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1z" />
+			<span class="menu-icon">{ICON}</span>
 
-			<path class="stroked" d="M12 5.2a4 4 0 0 1 0 5.6M14.6 3a7.2 7.2 0 0 1 0 10" />
-		</svg>
+			<span class="status">
+				<svg aria-hidden="true" class="glyph" height="16" viewBox="0 0 20 16" width="20">
+					<path
+						class="thin"
+						d="M1.8 6.2a11.5 11.5 0 0 1 16.4 0M4.6 9a7.6 7.6 0 0 1 10.8 0M7.4 11.8a3.6 3.6 0 0 1 5.2 0"
+					/>
 
-		<svg aria-hidden="true" class="glyph" height="16" viewBox="0 0 20 16" width="20">
-			<path
-				class="stroked"
-				d="M2.2 6.3a11 11 0 0 1 15.6 0M5 9.1a7 7 0 0 1 10 0M7.8 11.9a3 3 0 0 1 4.4 0"
-			/>
+					<circle class="filled" cx="10" cy="14.3" r="1.1" />
+				</svg>
 
-			<circle class="filled" cx="10" cy="14.2" r="1.3" />
-		</svg>
+				<svg aria-hidden="true" class="glyph" height="16" viewBox="0 0 20 16" width="20">
+					<path
+						class="thin"
+						d="M2.5 6h2.8L9 2.8v10.4L5.3 10H2.5a.8.8 0 0 1-.8-.8V6.8a.8.8 0 0 1 .8-.8z"
+					/>
 
-		<svg aria-hidden="true" class="glyph" height="16" viewBox="0 0 29 16" width="29">
-			<rect class="outline" height="11.5" rx="3.6" width="24" x="1" y="2.25" />
+					<path class="thin" d="M12 5.4a3.8 3.8 0 0 1 0 5.2M14.5 3.2a7 7 0 0 1 0 9.6" />
+				</svg>
 
-			<rect class="filled" height="7.5" rx="1.8" width="15" x="3" y="4.25" />
+				<svg aria-hidden="true" class="glyph" height="16" viewBox="0 0 26 16" width="26">
+					<rect class="thin" height="10" rx="2.2" width="20" x="1.5" y="3" />
 
-			<path class="nub" d="M26.5 6.2c1 .3 1.6 1 1.6 1.8s-.6 1.5-1.6 1.8z" />
-		</svg>
+					<rect class="filled" height="6" rx="1" width="12" x="3.5" y="5" />
 
-		<svg aria-hidden="true" class="glyph" height="16" viewBox="0 0 16 16" width="16">
-			<circle class="stroked" cx="6.6" cy="6.6" r="4.6" />
+					<path class="filled" d="M23 6.3h.8a.7.7 0 0 1 .7.7v2a.7.7 0 0 1-.7.7H23z" />
+				</svg>
+			</span>
 
-			<path class="stroked" d="M10.2 10.2 14.2 14.2" />
-		</svg>
+			<span class="clock stacked"><span>10:24</span><span>06/11/2026</span></span>
+		</div>
+	{:else}
+		<div class="bar">
+			<span class="menu-icon">{ICON}</span>
 
-		<svg aria-hidden="true" class="glyph" height="16" viewBox="0 0 18 16" width="18">
-			<rect class="outline" height="5.6" rx="2.8" width="14" x="2" y="1.4" />
+			<!-- the menu bar's own symbols, drawn after macOS: sound, Wi-Fi, battery, Spotlight, Control Center -->
+			<svg aria-hidden="true" class="glyph" height="16" viewBox="0 0 20 16" width="20">
+				<path class="filled" d="M2 5.5h3l4-3.5v12l-4-3.5H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1z" />
 
-			<circle class="filled" cx="12.8" cy="4.2" r="1.7" />
+				<path class="stroked" d="M12 5.2a4 4 0 0 1 0 5.6M14.6 3a7.2 7.2 0 0 1 0 10" />
+			</svg>
 
-			<rect class="filled" height="5.6" rx="2.8" width="14" x="2" y="9" />
+			<svg aria-hidden="true" class="glyph" height="16" viewBox="0 0 20 16" width="20">
+				<path
+					class="stroked"
+					d="M2.2 6.3a11 11 0 0 1 15.6 0M5 9.1a7 7 0 0 1 10 0M7.8 11.9a3 3 0 0 1 4.4 0"
+				/>
 
-			<circle class="knob" cx="5.2" cy="11.8" r="1.7" />
-		</svg>
+				<circle class="filled" cx="10" cy="14.2" r="1.3" />
+			</svg>
 
-		<span class="clock"><span>Fri 6 Nov</span><span>10:24</span></span>
-	</div>
+			<svg aria-hidden="true" class="glyph" height="16" viewBox="0 0 29 16" width="29">
+				<rect class="outline" height="11.5" rx="3.6" width="24" x="1" y="2.25" />
+
+				<rect class="filled" height="7.5" rx="1.8" width="15" x="3" y="4.25" />
+
+				<path class="nub" d="M26.5 6.2c1 .3 1.6 1 1.6 1.8s-.6 1.5-1.6 1.8z" />
+			</svg>
+
+			<svg aria-hidden="true" class="glyph" height="16" viewBox="0 0 16 16" width="16">
+				<circle class="stroked" cx="6.6" cy="6.6" r="4.6" />
+
+				<path class="stroked" d="M10.2 10.2 14.2 14.2" />
+			</svg>
+
+			<svg aria-hidden="true" class="glyph" height="16" viewBox="0 0 18 16" width="18">
+				<rect class="outline" height="5.6" rx="2.8" width="14" x="2" y="1.4" />
+
+				<circle class="filled" cx="12.8" cy="4.2" r="1.7" />
+
+				<rect class="filled" height="5.6" rx="2.8" width="14" x="2" y="9" />
+
+				<circle class="knob" cx="5.2" cy="11.8" r="1.7" />
+			</svg>
+
+			<span class="clock"><span>Fri 6 Nov</span><span>10:24</span></span>
+		</div>
+	{/if}
 
 	<div class="panel">
 		<div class="head">
@@ -83,7 +133,7 @@
 			</div>
 		{/each}
 
-		<p class="section">Recommended for this Mac</p>
+		<p class="section">Recommended for this {platform === 'windows' ? 'PC' : 'Mac'}</p>
 
 		<div class="model">
 			<span class="avatar">g</span>
@@ -118,6 +168,49 @@
 		width: 380px;
 		color: #111111;
 		font: 400 13px / 1.3 var(--sans);
+	}
+	/* on Windows the panel opens over the taskbar, its corners and shadow Windows 11's */
+	.app.windows {
+		flex-direction: column-reverse;
+	}
+	.windows .panel {
+		border-radius: 8px;
+	}
+	.tray {
+		gap: 6px;
+		padding: 4px 6px;
+		border-radius: 8px;
+		background: var(--p-card, rgb(255 255 255 / 0.6));
+		font-size: 12px;
+		font-weight: 400;
+		letter-spacing: 0;
+	}
+	.tray > * {
+		display: flex;
+		align-items: center;
+		padding: 6px;
+	}
+	.tray .menu-icon {
+		width: 28px;
+		height: 28px;
+		padding: 0;
+	}
+	.status {
+		gap: 8px;
+		border-radius: 6px;
+	}
+	.glyph .thin {
+		fill: none;
+		stroke: currentColor;
+		stroke-linecap: round;
+		stroke-linejoin: round;
+		stroke-width: 1.4;
+	}
+	.clock.stacked {
+		flex-direction: column;
+		align-items: flex-end;
+		gap: 0;
+		line-height: 1.25;
 	}
 	.app :global(p) {
 		margin: 0;

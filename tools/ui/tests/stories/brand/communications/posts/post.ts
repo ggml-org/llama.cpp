@@ -38,6 +38,28 @@ export interface PostFormat {
 export const FORMATS = {
 	billboard: { height: 800, name: 'Billboard 3:1', use: 'Banners, screens at events', width: 2400 },
 	landscape: { height: 900, name: 'Landscape 16:9', use: 'X, Bluesky, slides', width: 1600 },
+	/** the Microsoft Store's listing: artwork, screenshots and logos; the Store may lay text over the bottom quarter */
+	msHero: {
+		height: 1080,
+		name: 'Super hero art 16:9',
+		safe: { bottom: 270, top: 0 },
+		use: 'The top of the Microsoft Store listing',
+		width: 1920
+	},
+	msPoster: {
+		height: 1080,
+		name: 'Poster art 2:3',
+		use: 'The Microsoft Store’s main logo',
+		width: 720
+	},
+	msScreenshot: {
+		height: 1080,
+		name: 'Store screenshot 16:9',
+		safe: { bottom: 270, top: 0 },
+		use: 'Microsoft Store screenshots, four or more',
+		width: 1920
+	},
+	msTile: { height: 300, name: 'App tile icon', use: 'The Microsoft Store’s tile', width: 300 },
 	og: { height: 630, name: 'Open Graph', use: 'Link previews on llama.app', width: 1200 },
 	portrait: { height: 1350, name: 'Portrait 4:5', use: 'Instagram, LinkedIn', width: 1080 },
 	poster: { height: 1754, name: 'Poster A-series', use: 'Print, at 150 dpi', width: 1240 },
@@ -248,4 +270,43 @@ export const openModels: ReceiptCopy = {
 		['total', '$0.00']
 	],
 	title: 'Your AI bill, today'
+};
+
+export interface StoreScreenshot {
+	headline: string;
+	lede: string;
+}
+
+export interface MicrosoftStoreCopy {
+	/** what the Product screenshot's chip says */
+	caption: string;
+	/** one per screenshot, in their order: Product, Statement, Receipt, Numeral */
+	screenshots: [
+		StoreScreenshot,
+		StoreScreenshot,
+		ReceiptCopy,
+		StoreScreenshot & { figureLabel: string; value: string }
+	];
+}
+
+/** the Microsoft Store listing: four screenshots, each one point, in the order the Store shows them */
+export const microsoftStore: MicrosoftStoreCopy = {
+	caption: 'Llama, in the system tray',
+	screenshots: [
+		{
+			headline: 'Your AI.\nOn your PC.',
+			lede: 'Open models, running on your own computer. Nothing leaves it.'
+		},
+		{
+			headline: 'Works offline.',
+			lede: 'Download a model once and it runs without a connection, on the train or in the air.'
+		},
+		openModels,
+		{
+			figureLabel: 'a month, for as long as you use it',
+			headline: 'Free, and yours to keep.',
+			lede: 'No account, no subscription, no usage limits.',
+			value: '$0'
+		}
+	]
 };
