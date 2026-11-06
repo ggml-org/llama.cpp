@@ -291,20 +291,32 @@ kernel void kernel_top_k_f32_i32(
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
-        // top-down scan for the bucket holding the k-th value
-        if (tid == 0) {
-            uint acc = 0;
-            uint b   = 0;
-            for (int bb = 255; bb >= 0; --bb) {
-                const uint c = atomic_load_explicit(&histo[bb], memory_order_relaxed);
-                if (acc + c >= desired) {
-                    b = uint(bb);
-                    break;
-                }
-                acc += c;
+        // top-down scan for the bucket holding the k-th value: each lane of the first
+        // simdgroup sums 8 bins, the lane whose range reaches desired scans its own bins
+        if (tid < 32) {
+            const uint top = 255 - 8*tid;
+
+            uint c[8];
+            uint sum = 0;
+            for (uint j = 0; j < 8; ++j) {
+                c[j] = atomic_load_explicit(&histo[top - j], memory_order_relaxed);
+                sum += c[j];
             }
-            *sh_bucket = b;
-            *sh_above  = acc;
+            uint acc = simd_prefix_exclusive_sum(sum);
+
+            const simd_vote::vote_t hit = simd_vote::vote_t(simd_ballot(acc + sum >= desired));
+            if (tid == (uint) ctz(hit)) {
+                uint b = top;
+                for (uint j = 0; j < 8; ++j) {
+                    if (acc + c[j] >= desired) {
+                        b = top - j;
+                        break;
+                    }
+                    acc += c[j];
+                }
+                *sh_bucket = b;
+                *sh_above  = acc;
+            }
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
@@ -337,8 +349,8 @@ kernel void kernel_top_k_f32_i32(
         ct += (key == threshold) ? 1u : 0u;
     }
 
-    // per-warp totals into the now unused histogram, so that thread 0 can compute
-    // the exclusive base of each warp with a serial scan
+    // per-warp totals into the now unused histogram, so that the first warp can
+    // compute the exclusive base of each warp with a scan across its lanes
     const uint wca = simd_sum(ca);
     const uint wct = simd_sum(ct);
     if (lane == 0) {
@@ -347,22 +359,22 @@ kernel void kernel_top_k_f32_i32(
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    if (tid == 0) {
-        uint acc = 0;
-        for (uint t = 0; t < nw; ++t) {
-            const uint c2 = atomic_load_explicit(&histo[t], memory_order_relaxed);
-            atomic_store_explicit(&histo[t], acc, memory_order_relaxed);
-            acc += c2;
+    if (tid < 32) {
+        const bool valid = tid < nw;
+        const uint sa = valid ? atomic_load_explicit(&histo[tid],      memory_order_relaxed) : 0u;
+        const uint st = valid ? atomic_load_explicit(&histo[32 + tid], memory_order_relaxed) : 0u;
+        const uint ea = simd_prefix_exclusive_sum(sa);
+        const uint et = simd_prefix_exclusive_sum(st);
+        if (valid) {
+            atomic_store_explicit(&histo[tid],      ea, memory_order_relaxed);
+            atomic_store_explicit(&histo[32 + tid], et, memory_order_relaxed);
         }
-        *sh_bucket = acc; // total above the threshold
-
-        acc = 0;
-        for (uint t = 0; t < nw; ++t) {
-            const uint c2 = atomic_load_explicit(&histo[32 + t], memory_order_relaxed);
-            atomic_store_explicit(&histo[32 + t], acc, memory_order_relaxed);
-            acc += c2;
+        const uint ta = simd_sum(sa);
+        const uint tt = simd_sum(st);
+        if (tid == 0) {
+            *sh_bucket = ta; // total above the threshold
+            *sh_above  = tt; // total tied with the threshold
         }
-        *sh_above = acc; // total tied with the threshold
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
