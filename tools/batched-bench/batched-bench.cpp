@@ -4,6 +4,7 @@
 #include "llama.h"
 
 #include <algorithm>
+#include <cinttypes>
 #include <clocale>
 #include <cstdio>
 #include <string>
@@ -11,6 +12,14 @@
 
 static bool invalid_shape(const std::vector<int> & values) {
     return values.empty() || *std::min_element(values.begin(), values.end()) <= 0;
+}
+
+// 64-bit to prevent 32-bit arithmetic overflow
+static int64_t required_kv(bool is_pp_shared, bool kv_unified, int64_t pp, int64_t tg, int64_t pl) {
+    if (is_pp_shared && kv_unified) {
+        return pp + pl*tg;
+    }
+    return pl*(pp + tg);
 }
 
 static void print_usage(int, char ** argv) {
@@ -135,9 +144,9 @@ int llama_batched_bench(int argc, char ** argv) {
                 const int tg = n_tg[i_tg];
                 const int pl = n_pl[i_pl];
 
-                const int n_ctx_req = is_pp_shared ? (params.kv_unified ? pp : pl*pp) + pl*tg : pl*(pp + tg);
+                const int64_t n_kv = required_kv(is_pp_shared, params.kv_unified, pp, tg, pl);
 
-                if (n_ctx_req > n_kv_max) {
+                if (n_kv > n_kv_max) {
                     continue;
                 }
 
@@ -223,8 +232,6 @@ int llama_batched_bench(int argc, char ** argv) {
 
                 const auto t_tg_end = ggml_time_us();
 
-                const int32_t n_kv = n_ctx_req;
-
                 const float t_pp = (t_pp_end - t_pp_start) / 1000000.0f;
                 const float t_tg = (t_tg_end - t_tg_start) / 1000000.0f;
                 const float t    = t_pp + t_tg;
@@ -236,12 +243,12 @@ int llama_batched_bench(int argc, char ** argv) {
                 if(params.batched_bench_output_jsonl) {
                     LOG(
                         "{\"n_kv_max\": %d, \"n_batch\": %d, \"n_ubatch\": %d, \"flash_attn\": %d, \"is_pp_shared\": %d, \"n_gpu_layers\": %d, \"n_threads\": %u, \"n_threads_batch\": %u, "
-                        "\"pp\": %d, \"tg\": %d, \"pl\": %d, \"n_kv\": %d, \"t_pp\": %f, \"speed_pp\": %f, \"t_tg\": %f, \"speed_tg\": %f, \"t\": %f, \"speed\": %f}\n",
+                        "\"pp\": %d, \"tg\": %d, \"pl\": %d, \"n_kv\": %" PRId64 ", \"t_pp\": %f, \"speed_pp\": %f, \"t_tg\": %f, \"speed_tg\": %f, \"t\": %f, \"speed\": %f}\n",
                         n_kv_max, params.n_batch, params.n_ubatch, int(params.flash_attn_type), params.is_pp_shared, params.n_gpu_layers, ctx_params.n_threads, ctx_params.n_threads_batch,
                         pp, tg, pl, n_kv, t_pp, speed_pp, t_tg, speed_tg, t, speed
                     );
                 } else {
-                    LOG("|%6d | %6d | %4d | %6d | %8.3f | %8.2f | %8.3f | %8.2f | %8.3f | %8.2f |\n", pp, tg, pl, n_kv, t_pp, speed_pp, t_tg, speed_tg, t, speed);
+                    LOG("|%6d | %6d | %4d | %6" PRId64 " | %8.3f | %8.2f | %8.3f | %8.2f | %8.3f | %8.2f |\n", pp, tg, pl, n_kv, t_pp, speed_pp, t_tg, speed_tg, t, speed);
                 }
             }
         }
