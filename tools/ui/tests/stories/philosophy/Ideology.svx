@@ -26,7 +26,7 @@ The model runs on a device you already own: your phone, laptop or desktop. It is
 
 Your conversations stay on that device, and everything works offline, without an account. There is nothing to sign in to and nothing to send, so what you ask stays private and secure by default. That is what personal AI means here.
 
-<Figure n={1} caption="One computer holds the conversations, the server and the model. The model is downloaded from Hugging Face once; nothing else leaves.">
+<Figure n={1} caption="One device holds the conversations, the server and the model. The model is downloaded from Hugging Face once; nothing else leaves.">
 	<Machine />
 </Figure>
 
@@ -44,7 +44,7 @@ Access to AI should be as open as access to information: available to anyone, wh
 
 Running a model used to take a terminal and terms like GGUF, quantization and speculative decoding. Most people want help with a letter, a photo or a question, and need none of that.
 
-So the apps start with one suggested model: small enough for an ordinary computer, able to see and hear as well as read. The Llama app downloads it from Hugging Face, configures it and keeps the server running.
+Nothing comes pre-installed. The Llama app suggests models that fit your device and recommends one above the rest: small enough for any device, and able to read, see and hear. You choose; the app downloads your choice from Hugging Face and keeps the server running.
 
 Sampling, penalties, system prompts, custom recipes and every other setting stay available, one step away rather than on the first screen. Where exactly to draw that line is still open.
 
