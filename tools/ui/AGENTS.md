@@ -12,7 +12,7 @@ Anything that is mostly content (a doc, an overview, a showcase or a Storybook p
 
 - Write the prose as plain Markdown, so it reads well as source, for people and for agents alike.
 - Put each custom piece in its own `.svelte` file and import it in the page's `<script>`. Keep logic and styles out of the `.svx` file.
-- Frame the page with a Svelte component that sets its typography, and show it in Storybook as a fullscreen story, as `Philosophy.stories.svelte` and `LogoShowcase.stories.svelte` do. Storybook's MDX is rendered with React and cannot hold Svelte components, so use MDX only for pages that are Markdown alone, such as Design guidelines.
+- Frame the page with a Svelte component that sets its typography, and show it in Storybook as a fullscreen story, as `philosophy/Design.stories.svelte` and `LogoShowcase.stories.svelte` do. Storybook's MDX is rendered with React and cannot hold Svelte components, so use MDX only for pages that are Markdown alone, such as Design guidelines.
 - Do not add another Markdown-to-HTML pipeline. Content goes through mdsvex; user and assistant messages go through `MarkdownContent`.
 
 ### mdsvex versions
