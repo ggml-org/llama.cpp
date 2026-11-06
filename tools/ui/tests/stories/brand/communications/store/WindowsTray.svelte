@@ -1,21 +1,28 @@
 <!--
-	Llama for Windows' tray flyout, drawn after the app (Morgan's build, November 2026) in Windows 11's dark theme: the
-	icon with settings and quit, the Models card (the installed models with their tags and their folder, delete and run
-	buttons, then "Browse more" over llama.app's catalog), a Hugging Face search under it, and the server's status and
-	build. The catalog's makers carry their initials rather than their logos, as everywhere in communications. `card`
-	draws the Models card alone, for a close-up.
+	Llama for Windows' tray flyout, measured off a screenshot of the app (Morgan's build, November 2026; Windows 11
+	dark at 200%, so every size here is half the screenshot's pixels): the icon with settings and quit; the Models card,
+	a fixed height that clips its list, with the installed models (a chip, the name, tags for size, quant, vision and
+	file size, and folder, delete and run) and, under "Browse more", llama.app's catalog with each maker's logo (the
+	macOS app's ModelLogos); the Hugging Face search; and the server's status with its build. The catalog's lines come
+	without the app's stray Markdown asterisks. `card` draws the Models card alone, for a close-up.
 -->
 <script lang="ts">
-	import { ICON } from '../posts/post';
+	import hfLogo from '../../../fixtures/assets/hf-logo.svg?url';
+	import { PATHS, SIZE } from '../../logo-showcase/lib/logo';
+	import gemma from './logos/gemma.svg?raw';
+	import gpt from './logos/gpt.svg?raw';
+	import liquid from './logos/liquid.svg?raw';
+	import meta from './logos/meta.svg?raw';
+	import qwen from './logos/qwen.svg?raw';
 	import {
 		ChevronRight,
 		Cpu,
 		Eye,
 		Folder,
+		Monitor,
 		Play,
 		Power,
 		Search,
-		Server,
 		Settings,
 		SquareArrowOutUpRight,
 		Trash2
@@ -24,60 +31,68 @@
 	interface Props {
 		/** the Models card alone */
 		card?: boolean;
-		/** how many of the catalog's models show under "Browse more" */
-		rows?: number;
 	}
 
-	let { card = false, rows = 5 }: Props = $props();
+	let { card = false }: Props = $props();
 
-	// small and medium models from llama.app's catalog; the one running is highlighted
+	// small and medium models from llama.app's catalog
 	const installed = [
-		{ name: 'Gemma 4', running: true, size: '4.59 GB', tags: ['E4B', 'Q4_K_M'], vision: true },
-		{ name: 'LFM 3 Omni', size: '1.8 GB', tags: ['2B', 'Q8_0'], vision: true }
+		{ name: 'Gemma 4', size: '4.59 GB', tags: ['E4B', 'Q4_K_M'] },
+		{ name: 'LFM 3 Omni', size: '1.8 GB', tags: ['2B', 'Q8_0'] }
 	];
+	// the logos as the app shows them: most in white on the tile, Meta's and Liquid's on a white plate of their own
 	const catalog = [
 		{
-			about: 'Liquid AI’s **fast local model** for reasoning and tool use.',
-			initials: 'L',
-			name: 'LFM 2.5',
-			sizes: '24B-A2B'
-		},
-		{
-			about: 'OpenAI’s open-weight family for **local reasoning and agents**.',
-			initials: 'O',
+			about: 'OpenAI’s open-weight family for local reasoning and agents.',
+			logo: gpt,
 			name: 'GPT-OSS',
 			sizes: '20B · 120B'
 		},
 		{
-			about: 'Alibaba’s multimodal **mid-sized models for coding and research**.',
-			initials: 'Q',
+			about: 'Google’s most capable open agentic models for your laptops.',
+			logo: gemma,
+			name: 'Gemma 4',
+			sizes: 'E2B · E4B · 12B · 26B-A4B · 31B'
+		},
+		{
+			about: 'Alibaba’s multimodal mid-sized models for coding and research.',
+			logo: qwen,
 			name: 'Qwen 3.8',
 			sizes: '27B'
 		},
 		{
-			about: 'Meta’s **local model to run on your laptop** powering always-on agents.',
-			initials: 'M',
+			about: 'Meta’s local model to run on your laptop powering always-on agents.',
+			logo: meta,
 			name: 'Muse Glimmer',
+			plate: 'square',
 			sizes: '30B'
 		},
 		{
-			about: 'Google’s most capable open **agentic models for your laptops**.',
-			initials: 'G',
-			name: 'Gemma 4',
-			sizes: 'E2B · E4B · 12B · 26B-A4B · 31B'
+			about: 'Liquid AI’s fast local model for reasoning and tool use.',
+			logo: liquid,
+			name: 'LFM 2.5',
+			plate: 'round',
+			sizes: '24B-A2B'
+		},
+		{
+			about: 'Liquid AI’s tiny omni model for text, images, and audio.',
+			logo: liquid,
+			name: 'LFM 3 Omni',
+			plate: 'round',
+			sizes: '2B'
 		}
 	];
-	// the catalog's descriptions mark their key phrase in bold
-	const parts = (text: string) => text.split('**').map((t, i) => ({ bold: i % 2 === 1, t }));
 </script>
 
 {#snippet models()}
 	<div class="card">
-		<p class="card-title">Models <SquareArrowOutUpRight size={15} /></p>
+		<p class="card-title">
+			Models <span class="open"><SquareArrowOutUpRight size={13} strokeWidth={1.5} /></span>
+		</p>
 
 		{#each installed as m (m.name)}
-			<div class={['row', 'installed', { running: m.running }]}>
-				<span class="tile"><Cpu size={20} /></span>
+			<div class="row installed">
+				<span class="tile"><Cpu size={18} strokeWidth={1.75} /></span>
 
 				<span class="info">
 					<b>{m.name}</b>
@@ -85,32 +100,37 @@
 					<span class="tags">
 						{#each m.tags as tag (tag)}<i>{tag}</i>{/each}
 
-						{#if m.vision}<i aria-label="vision"><Eye size={13} /></i>{/if}
+						<i aria-label="vision"><Eye size={11} strokeWidth={1.5} /></i>
 
 						<span>{m.size}</span>
 					</span>
 				</span>
 
-				<span class="actions"><Folder size={18} /><Trash2 size={18} /><Play size={18} /></span>
+				<span class="actions">
+					<Folder size={17} strokeWidth={1.2} />
+
+					<Trash2 size={17} strokeWidth={1.2} />
+
+					<Play size={17} strokeWidth={1.2} />
+				</span>
 			</div>
 		{/each}
 
-		<p class="divider"><span>Browse more</span></p>
+		<p class="browse">Browse more</p>
 
-		{#each catalog.slice(0, rows) as m (m.name)}
+		{#each catalog as m (m.name)}
 			<div class="row">
-				<span class="tile initials">{m.initials}</span>
-
-				<span class="info">
-					<b>{m.name} <span class="sizes">{m.sizes}</span></b>
-
-					<small
-						>{#each parts(m.about) as p, i (i)}{#if p.bold}<strong>{p.t}</strong
-								>{:else}{p.t}{/if}{/each}</small
-					>
+				<span class="tile">
+					<span class={['logo', m.plate]}>{@html m.logo}</span>
 				</span>
 
-				<ChevronRight size={16} />
+				<span class="info">
+					<b>{m.name}<span class="bar">|</span><span class="sizes">{m.sizes}</span></b>
+
+					<small>{m.about}</small>
+				</span>
+
+				<ChevronRight size={13} strokeWidth={1.5} />
 			</div>
 		{/each}
 	</div>
@@ -121,93 +141,132 @@
 {:else}
 	<div class="flyout">
 		<div class="head">
-			<span class="icon">{ICON}</span>
+			<svg aria-label="Llama" class="icon" role="img" viewBox="0 0 {SIZE} {SIZE}">
+				{#each PATHS as d (d)}<path {d} />{/each}
+			</svg>
 
-			<span class="buttons"><Settings size={19} /><Power size={19} /></span>
+			<span class="buttons"
+				><Settings size={15} strokeWidth={1.5} /><Power size={15} strokeWidth={1.5} /></span
+			>
 		</div>
 
 		{@render models()}
 
 		<div class="search">
-			<span class="hf">HF</span>
+			<span class="hf"><img alt="Hugging Face" src={hfLogo} /></span>
 
-			<span class="field">Search models …<Search size={16} /></span>
+			<span class="field">Search models …<Search size={12} strokeWidth={1.75} /></span>
 		</div>
 
 		<p class="status">
-			<i class="dot"></i>0.14.1.0 · version 0.8.0 (build 12019)<Server size={15} />
+			<i class="dot"></i>0.14.1.0 - version: 0.8.0-dev (build 12019, commit 1052f7e1d)<Monitor
+				size={13}
+				strokeWidth={1.75}
+			/>
 		</p>
 	</div>
 {/if}
 
 <style>
-	/* Windows 11's dark flyout: a Mica-like dark grey, cards a step lighter, Segoe UI where there is one */
+	/* Windows 11's dark acrylic flyout, its card a step lighter, in Segoe UI where there is one */
 	.flyout {
-		display: grid;
-		gap: 12px;
-		width: 400px;
+		display: flex;
+		flex-direction: column;
+		width: 417px;
+		height: 560px;
 		box-sizing: border-box;
-		padding: 14px 8px 12px;
-		border: 1px solid rgb(255 255 255 / 0.08);
-		border-radius: 8px 8px 0 0;
-		background: #202020;
+		border: 1px solid rgb(255 255 255 / 0.16);
+		border-radius: 8px;
+		background: #242422;
 		color: #fff;
 		font:
-			400 14px / 1.35 'Segoe UI Variable',
+			400 12.5px / 1.3 'Segoe UI Variable Text',
 			'Segoe UI',
-			var(--sans);
-	}
-	.flyout :global(p) {
-		margin: 0;
+			system-ui,
+			sans-serif;
+		box-shadow: 0 16px 40px rgb(0 0 0 / 0.4);
 	}
 	.only-card {
-		padding: 0;
+		width: auto;
+		height: auto;
 		border: 0;
 		background: none;
+		box-shadow: none;
 	}
 	.head {
 		display: flex;
+		flex: none;
 		align-items: center;
 		justify-content: space-between;
-		padding: 0 6px 12px;
-		border-bottom: 1px solid rgb(255 255 255 / 0.08);
+		height: 44px;
+		margin: 0 15px;
+		border-bottom: 1px solid rgb(255 255 255 / 0.12);
 	}
 	.icon {
-		font: 700 20px / 1 var(--sans);
+		width: 20px;
+		height: 20px;
+		fill: #fff;
 	}
 	.buttons {
 		display: flex;
-		gap: 16px;
-		color: rgb(255 255 255 / 0.9);
+		gap: 13px;
 	}
+
 	.card {
-		display: grid;
-		padding: 12px 8px 8px;
-		border: 1px solid rgb(255 255 255 / 0.06);
+		display: flex;
+		flex: none;
+		flex-direction: column;
+		width: 386px;
+		height: 410px;
+		box-sizing: border-box;
+		margin: 13px 15px 0 16px;
+		overflow: hidden;
 		border-radius: 8px;
-		background: #2b2b2b;
+		background: #31302d;
+		box-shadow:
+			0 0 0 1px rgb(0 0 0 / 0.18),
+			0 1px 2px rgb(0 0 0 / 0.3);
 	}
 	.card-title {
 		display: flex;
+		flex: none;
 		align-items: center;
-		gap: 8px;
-		padding: 0 8px 10px;
+		gap: 10px;
+		height: 31.5px;
+		margin: 0;
+		padding: 7px 0 0 9px;
+		box-sizing: border-box;
+		color: rgb(255 255 255 / 0.82);
+		font-size: 13.5px;
+	}
+	.open {
+		display: grid;
 		color: rgb(255 255 255 / 0.75);
-		font-size: 15px;
 	}
+
 	.row {
+		position: relative;
 		display: flex;
+		flex: none;
 		align-items: center;
-		gap: 12px;
-		padding: 7px 8px;
-		color: rgb(255 255 255 / 0.6);
+		gap: 10.5px;
+		height: 45.5px;
+		padding: 0 19px 0 16px;
+		color: #fff;
 	}
-	.row + .row:not(.installed) {
-		border-top: 1px solid rgb(255 255 255 / 0.07);
+	.installed {
+		height: 48px;
+		padding-right: 22px;
 	}
-	.running {
-		border-radius: 6px;
-		background: rgb(255 255 255 / 0.06);
+	/* the separators run from the tile's edge to 16px short of the card's */
+	.row + .row::before {
+		position: absolute;
+		top: 0;
+		right: 16px;
+		left: 16px;
+		height: 1px;
+		background: rgb(255 255 255 / 0.1);
+		content: '';
 	}
 	.tile {
 		display: grid;
@@ -215,19 +274,44 @@
 		place-items: center;
 		width: 32px;
 		height: 32px;
-		border-radius: 6px;
-		background: rgb(255 255 255 / 0.08);
+		border-radius: 4px;
+		background: #474541;
+	}
+	.logo {
+		display: grid;
+		place-items: center;
+		width: 22.5px;
+		height: 22.5px;
 		color: #fff;
 	}
-	.initials {
-		font: 600 14px / 1 var(--sans);
+	.logo :global(svg) {
+		width: 100%;
+		height: 100%;
+	}
+	/* Meta's mark in its blue on a white square, Liquid's in black on a white disc */
+	.logo.square {
+		width: 24px;
+		height: 24px;
+		padding: 3px;
+		box-sizing: border-box;
+		border-radius: 1px;
+		background: #fff;
+		color: #0668e1;
+	}
+	.logo.round {
+		width: 23px;
+		height: 23px;
+		padding: 4px;
+		box-sizing: border-box;
+		border-radius: 50%;
+		background: #fff;
+		color: #000;
 	}
 	.info {
 		display: grid;
 		flex: 1;
-		gap: 3px;
+		gap: 2px;
 		min-width: 0;
-		color: #fff;
 	}
 	.info b {
 		overflow: hidden;
@@ -235,101 +319,115 @@
 		white-space: nowrap;
 		text-overflow: ellipsis;
 	}
+	.bar {
+		margin: 0 7px;
+		color: rgb(255 255 255 / 0.7);
+		font-weight: 400;
+	}
 	.sizes {
-		margin-left: 4px;
-		padding-left: 8px;
-		border-left: 1px solid rgb(255 255 255 / 0.4);
-		color: rgb(255 255 255 / 0.75);
+		color: rgb(255 255 255 / 0.85);
 		font-weight: 400;
 	}
 	.info small {
 		overflow: hidden;
-		color: rgb(255 255 255 / 0.75);
-		font-size: 12.5px;
+		color: rgb(255 255 255 / 0.85);
+		font-size: 10.75px;
 		white-space: nowrap;
 		text-overflow: ellipsis;
-	}
-	.info strong {
-		font-weight: 600;
 	}
 	.tags {
 		display: flex;
 		align-items: center;
-		gap: 5px;
-		color: rgb(255 255 255 / 0.8);
-		font-size: 12.5px;
+		gap: 7px;
+		color: rgb(255 255 255 / 0.85);
+		font-size: 11px;
 	}
 	.tags i {
 		display: inline-grid;
 		place-items: center;
-		height: 20px;
-		padding: 0 6px;
-		border-radius: 4px;
-		background: rgb(255 255 255 / 0.1);
+		height: 15px;
+		padding: 0 4px;
+		border-radius: 3px;
+		background: #474541;
 		font-style: normal;
 	}
 	.actions {
 		display: flex;
-		gap: 12px;
+		gap: 11.5px;
+		color: rgb(255 255 255 / 0.8);
+	}
+	.row :global(.lucide-chevron-right) {
+		flex: none;
 		color: rgb(255 255 255 / 0.75);
 	}
-	.divider {
+	.browse {
 		display: flex;
+		flex: none;
 		align-items: center;
-		gap: 10px;
-		padding: 6px 0;
-		color: rgb(255 255 255 / 0.6);
-		font-size: 13px;
+		gap: 8px;
+		height: 28px;
+		margin: 0;
+		padding: 0 7.5px 0 8.5px;
+		color: rgb(255 255 255 / 0.62);
+		font-size: 11.5px;
 	}
-	.divider::before,
-	.divider::after {
+	.browse::before,
+	.browse::after {
 		flex: 1;
 		height: 1px;
-		background: rgb(255 255 255 / 0.12);
+		background: rgb(255 255 255 / 0.1);
 		content: '';
 	}
+
 	.search {
 		display: flex;
-		gap: 6px;
+		flex: none;
+		gap: 4px;
+		height: 32px;
+		margin: 13.5px 14px 0 15px;
 	}
 	.hf {
 		display: grid;
 		flex: none;
 		place-items: center;
-		width: 34px;
-		border-radius: 6px;
-		background: #2b2b2b;
-		color: #ffd21e;
-		font: 700 12px / 1 var(--sans);
+		width: 32px;
+		border-radius: 4px;
+		background: #393937;
+	}
+	.hf img {
+		width: 19px;
+		height: 19px;
 	}
 	.field {
 		display: flex;
 		flex: 1;
 		align-items: center;
 		justify-content: space-between;
-		padding: 8px 12px;
-		border-radius: 6px;
-		border-bottom: 2px solid #4cc2ff;
-		background: #1c1c1c;
-		color: rgb(255 255 255 / 0.65);
+		padding: 0 14px 0 11.5px;
+		border-radius: 4px;
+		background: #343431;
+		box-shadow: inset 0 -1px 0 #a4a4a2;
+		color: rgb(255 255 255 / 0.78);
+		font-size: 12.5px;
 	}
 	.status {
 		display: flex;
+		flex: 1;
 		align-items: center;
-		gap: 8px;
 		justify-content: center;
-		padding-top: 10px;
-		border-top: 1px solid rgb(255 255 255 / 0.08);
-		color: rgb(255 255 255 / 0.85);
-		font-size: 12.5px;
+		gap: 7px;
+		margin: 13px 15px 0;
+		border-top: 1px solid rgb(255 255 255 / 0.1);
+		font-size: 11px;
+		font-weight: 600;
 	}
 	.status :global(svg) {
-		color: #4cc2ff;
+		color: #4d9be6;
 	}
 	.dot {
-		width: 8px;
-		height: 8px;
+		width: 7px;
+		height: 7px;
 		border-radius: 50%;
-		background: #3fb950;
+		background: #6dbe61;
 	}
 </style>
