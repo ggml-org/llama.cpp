@@ -118,6 +118,7 @@ class ServerProcess:
     sleep_idle_seconds: int | None = None
     cache_ram: int | None = None
     n_cache_reuse: int | None = None
+    n_ctx_checkpoints: int | None = None
     override_kv: str | None = None
     no_cache_idle_slots: bool = False
     log_path: str | None = None
@@ -296,6 +297,8 @@ class ServerProcess:
             server_args.extend(["--cache-ram", self.cache_ram])
         if self.n_cache_reuse:
             server_args.extend(["--cache-reuse", self.n_cache_reuse])
+        if self.n_ctx_checkpoints:
+            server_args.extend(["--ctx-checkpoints", self.n_ctx_checkpoints])
         if self.override_kv:
             server_args.extend(["--override-kv", self.override_kv])
         if self.no_cache_idle_slots:
