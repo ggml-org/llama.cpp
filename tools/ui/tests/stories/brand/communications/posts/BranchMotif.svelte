@@ -1,6 +1,7 @@
 <!--
-	A token tree: a model choosing between options, the chosen path in cinder with its probability in Mono, the
-	rest in the post's ink. A motif for posts about decisions, sampling and probabilities.
+	A decision tree, for decision models: a model choosing between options, the chosen path in cinder with its
+	probability in Mono, the rest in the post's ink. A motif for posts about decision models, choices and
+	probabilities.
 -->
 <script lang="ts">
 	interface Props {

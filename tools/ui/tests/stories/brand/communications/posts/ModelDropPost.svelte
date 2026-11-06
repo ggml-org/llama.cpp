@@ -1,5 +1,5 @@
 <!--
-	A model drop, on the Roster key visual: the icon and who it is from, the headline with the token tree beside it,
+	A model drop, on the Roster key visual: the icon and who it is from, the headline with the decision tree beside it,
 	the lede, use cases as chips, and the new models as cards, the leading one tagged in cinder. Square drops the
 	lede and the chips, and the story keeps the leading model only.
 -->
