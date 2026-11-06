@@ -124,22 +124,19 @@
 
 	const panels = $derived(
 		[
-			{ label: 'At the exact centre', short: 'Exact centre', x: centred, y: centred },
+			{ label: 'At the exact centre', x: centred, y: centred },
 			{
 				label: 'Lifted 1/60, the first optical centre',
-				short: 'Lifted 1/60',
 				x: centred,
 				y: centred - side / 60
 			},
 			{
 				label: `Lifted 1/${lift} and nudged 1/${nudge} left, as in the files`,
-				short: `Lifted 1/${lift}, nudged 1/${nudge} left`,
 				x: placement.x,
 				y: placement.y
 			},
 			...candidates.map(({ label, lift, nudge }) => ({
 				label: `Try: ${label}`,
-				short: `Try: ${label}`,
 				x: centred - side * nudge,
 				y: centred - side * lift
 			}))
@@ -153,132 +150,121 @@
 	const round = (n: number) => Math.round(n * 10) / 10;
 </script>
 
-<figure class="m-0 grid min-w-0 gap-3">
-	<!-- the three placements as they show, light and dark in the circle crop, with nothing drawn in -->
-	<div
-		style:--panels={panels.length}
-		class="grid grid-cols-2 gap-4 sm:grid-cols-[repeat(var(--panels),minmax(0,1fr))]"
-	>
-		{#each panels as panel (panel.label)}
-			<div class="grid min-w-0 content-start gap-2">
-				<div class="grid grid-cols-2 gap-2">
-					{#each [['#FAFAFA', '#111111'], ['#111111', '#FAFAFA']] as [ground, ink] (ground)}
-						<svg
-							class="block aspect-square w-full rounded-full border border-border/60"
-							viewBox="0 0 {placement.size} {placement.size}"
-						>
-							<circle
-								cx={placement.size / 2}
-								cy={placement.size / 2}
-								fill={ground}
-								r={placement.size / 2}
-							/>
+<figure class="m-0 grid min-w-0 gap-16">
+	<!-- each placement in its own section: the avatar light and dark as it shows, then measured -->
+	{#each panels as panel (panel.label)}
+		<section class="grid gap-4">
+			<div class="grid gap-1">
+				<h3 class="text-sm font-medium">{panel.label}</h3>
 
-							<g fill={ink} transform="translate({panel.x} {panel.y}) scale({placement.scale})">
-								{#each PATHS as d (d)}<path {d} />{/each}
-							</g>
-						</svg>
-					{/each}
+				<p class="text-xs text-muted-foreground">{panel.note}</p>
+			</div>
+
+			<div class="grid grid-cols-2 items-center gap-6 sm:grid-cols-3">
+				{#each [['#FAFAFA', '#111111'], ['#111111', '#FAFAFA']] as [ground, ink] (ground)}
+					<svg
+						class="block aspect-square w-full rounded-full border border-border/60"
+						viewBox="0 0 {placement.size} {placement.size}"
+					>
+						<circle
+							cx={placement.size / 2}
+							cy={placement.size / 2}
+							fill={ground}
+							r={placement.size / 2}
+						/>
+
+						<g fill={ink} transform="translate({panel.x} {panel.y}) scale({placement.scale})">
+							{#each PATHS as d (d)}<path {d} />{/each}
+						</g>
+					</svg>
+				{/each}
+
+				<div class="col-span-2 sm:col-span-1">
+					<svg
+						class="block aspect-square w-full overflow-hidden rounded-card border border-border/60"
+						viewBox="0 0 {placement.size} {placement.size}"
+					>
+						<rect fill="#FAFAFA" height={placement.size} width={placement.size} />
+
+						<!-- the circle it is cropped to, and its centre lines -->
+						<circle
+							class="guide muted"
+							cx={placement.size / 2}
+							cy={placement.size / 2}
+							r={placement.size / 2}
+						/>
+
+						<line
+							class="guide muted"
+							x1="0"
+							x2={placement.size}
+							y1={placement.size / 2}
+							y2={placement.size / 2}
+						/>
+
+						<line
+							class="guide muted"
+							x1={placement.size / 2}
+							x2={placement.size / 2}
+							y1="0"
+							y2={placement.size}
+						/>
+
+						<g fill="#111111" transform="translate({panel.x} {panel.y}) scale({placement.scale})">
+							{#each PATHS as d (d)}<path {d} />{/each}
+						</g>
+
+						<!-- the icon's box and its centre lines -->
+						<rect class="guide" height={side} width={side} x={panel.x} y={panel.y} />
+
+						<line
+							class="guide solid"
+							x1={panel.x}
+							x2={panel.x + side}
+							y1={panel.y + side / 2}
+							y2={panel.y + side / 2}
+						/>
+
+						<line
+							class="guide solid"
+							x1={panel.x + side / 2}
+							x2={panel.x + side / 2}
+							y1={panel.y}
+							y2={panel.y + side}
+						/>
+
+						<!-- the gaps between the crop and the icon's outer corners, each filled by a circle touching both -->
+						{#each panel.gaps as g (g.kind + g.name)}
+							<circle class={['gap', g.kind]} cx={g.cx} cy={g.cy} r={g.gap / 2} />
+
+							<text class="margin" font-size={placement.size * 0.04} x={g.cx} y={g.cy}
+								>{round(g.gap)}</text
+							>
+						{/each}
+
+						<!-- the margins round the icon's box: above and below in the square's corners, outside the crop -->
+						{#each [{ at: [0.08, panel.y / 2], value: panel.y }, { at: [0.92, (placement.size + panel.y + side) / 2], value: placement.size - panel.y - side }] as m (m.at[0])}
+							<text
+								class="margin"
+								font-size={placement.size * 0.045}
+								x={placement.size * m.at[0]}
+								y={m.at[1]}>{round(m.value)}</text
+							>
+						{/each}
+
+						{#each [{ value: panel.x, x: panel.x / 2 }, { value: placement.size - panel.x - side, x: (placement.size + panel.x + side) / 2 }] as m (m.x)}
+							<text
+								class="margin"
+								font-size={placement.size * 0.045}
+								x={m.x}
+								y={placement.size * 0.42}>{round(m.value)}</text
+							>
+						{/each}
+					</svg>
 				</div>
-
-				<span class="text-center text-xs">{panel.short}</span>
 			</div>
-		{/each}
-	</div>
-
-	<div class="mt-4 grid gap-4 sm:grid-cols-3">
-		{#each panels as panel (panel.label)}
-			<div class="grid min-w-0 content-start gap-2">
-				<svg
-					class="block aspect-square w-full overflow-hidden rounded-card border border-border/60"
-					viewBox="0 0 {placement.size} {placement.size}"
-				>
-					<rect fill="#FAFAFA" height={placement.size} width={placement.size} />
-
-					<!-- the circle it is cropped to, and its centre lines -->
-					<circle
-						class="guide muted"
-						cx={placement.size / 2}
-						cy={placement.size / 2}
-						r={placement.size / 2}
-					/>
-
-					<line
-						class="guide muted"
-						x1="0"
-						x2={placement.size}
-						y1={placement.size / 2}
-						y2={placement.size / 2}
-					/>
-
-					<line
-						class="guide muted"
-						x1={placement.size / 2}
-						x2={placement.size / 2}
-						y1="0"
-						y2={placement.size}
-					/>
-
-					<g fill="#111111" transform="translate({panel.x} {panel.y}) scale({placement.scale})">
-						{#each PATHS as d (d)}<path {d} />{/each}
-					</g>
-
-					<!-- the icon's box and its centre lines -->
-					<rect class="guide" height={side} width={side} x={panel.x} y={panel.y} />
-
-					<line
-						class="guide solid"
-						x1={panel.x}
-						x2={panel.x + side}
-						y1={panel.y + side / 2}
-						y2={panel.y + side / 2}
-					/>
-
-					<line
-						class="guide solid"
-						x1={panel.x + side / 2}
-						x2={panel.x + side / 2}
-						y1={panel.y}
-						y2={panel.y + side}
-					/>
-
-					<!-- the gaps between the crop and the icon's outer corners, each filled by a circle touching both -->
-					{#each panel.gaps as g (g.kind + g.name)}
-						<circle class={['gap', g.kind]} cx={g.cx} cy={g.cy} r={g.gap / 2} />
-
-						<text class="margin" font-size={placement.size * 0.04} x={g.cx} y={g.cy}
-							>{round(g.gap)}</text
-						>
-					{/each}
-
-					<!-- the margins round the icon's box: above and below in the square's corners, outside the crop -->
-					{#each [{ at: [0.08, panel.y / 2], value: panel.y }, { at: [0.92, (placement.size + panel.y + side) / 2], value: placement.size - panel.y - side }] as m (m.at[0])}
-						<text
-							class="margin"
-							font-size={placement.size * 0.045}
-							x={placement.size * m.at[0]}
-							y={m.at[1]}>{round(m.value)}</text
-						>
-					{/each}
-
-					{#each [{ value: panel.x, x: panel.x / 2 }, { value: placement.size - panel.x - side, x: (placement.size + panel.x + side) / 2 }] as m (m.x)}
-						<text
-							class="margin"
-							font-size={placement.size * 0.045}
-							x={m.x}
-							y={placement.size * 0.42}>{round(m.value)}</text
-						>
-					{/each}
-				</svg>
-
-				<span class="grid text-center">
-					<span class="text-sm">{panel.label}</span>
-
-					<span class="text-xs text-muted-foreground">{panel.note}</span>
-				</span>
-			</div>
-		{/each}
-	</div>
+		</section>
+	{/each}
 
 	<figcaption class="text-xs text-muted-foreground">
 		The icon fills {Math.round((side / placement.size) * 100)}% of the side; the numbers are pixels
