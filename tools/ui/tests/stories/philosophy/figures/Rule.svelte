@@ -19,7 +19,7 @@
 				'Talking to llama-server',
 				'Storing conversations and notes',
 				'The agentic loop and tool permissions',
-				'Managing models and servers'
+				'Managing models and servers, mostly in the native apps'
 			],
 			name: 'In the apps',
 			note: 'Decide what happens'
