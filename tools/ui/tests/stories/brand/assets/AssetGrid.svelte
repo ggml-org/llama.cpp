@@ -21,9 +21,24 @@
 		query: '?url'
 	}) as Record<string, string>;
 
+	const svgs = import.meta.glob('./files/logo/svg/**/*.svg', {
+		eager: true,
+		import: 'default',
+		query: '?raw'
+	}) as Record<string, string>;
+
 	/** The URL of one asset, by its path under logo/<format>/ without the extension. */
 	function url(path: string, format: Format): string {
 		return files[`./files/logo/${format}/${path}.${format}`];
+	}
+
+	/** An asset's own proportions, from its SVG's viewBox, as an aspect-ratio. */
+	function ratio(path: string): string {
+		const [, , w, h] = svgs[`./files/logo/svg/${path}.svg`]
+			.match(/viewBox="([^"]+)"/)![1]
+			.split(/\s+/);
+
+		return `${w} / ${h}`;
 	}
 
 	interface Asset {
@@ -31,9 +46,6 @@
 		/** dark marks for light grounds (light) or light marks for dark ones (dark); social assets bring their own field */
 		ground: 'cover' | 'dark' | 'light';
 		path: string;
-		/** the asset's own proportions: the thumbnail takes them, so it shows the file as it is (a mark on its ground with
-		    an even margin, 12% of the shorter side) */
-		ratio: string;
 		/** a profile picture: shown in the circle the platforms crop it to */
 		round?: boolean;
 		/** a transparent file: shown over a checkerboard in its ground's shades */
@@ -66,16 +78,14 @@
 				ground: 'cover' as const,
 				label: `Avatar, ${mode}`,
 				path: `social/${name}/${name}-avatar-${mode}`,
-				ratio: '1 / 1',
 				round: true
 			})),
-			...banners.flatMap(([kind, label, w, h]) =>
+			...banners.flatMap(([kind, label]) =>
 				['llama', 'llama-cpp'].flatMap((lockup) =>
 					(['light', 'dark'] as const).map((mode) => ({
 						ground: 'cover' as const,
 						label: `${label}, ${lockup === 'llama' ? 'Llama' : 'llama.cpp'}, ${mode}`,
-						path: `social/${name}/${name}-${kind}-${lockup}-${mode}`,
-						ratio: `${w} / ${h}`
+						path: `social/${name}/${name}-${kind}-${lockup}-${mode}`
 					}))
 				)
 			)
@@ -91,19 +101,17 @@
 	 * Each icon and lockup in both of its versions, for light and for dark: on its background (-bg, shown as it is) and
 	 * transparent (shown over a checkerboard in the ground it's drawn for).
 	 */
-	function versions(name: string, path: (mode: string) => string, ratio: string): Asset[] {
+	function versions(name: string, path: (mode: string) => string): Asset[] {
 		return (['light', 'dark'] as const).flatMap((mode) => [
 			{
 				ground: 'cover' as const,
 				label: `${name}${mode === 'light' ? 'Light' : 'Dark'}, on background`,
-				path: `${path(mode)}-bg`,
-				ratio
+				path: `${path(mode)}-bg`
 			},
 			{
 				ground: mode,
 				label: `${name}${mode === 'light' ? 'Light' : 'Dark'}, transparent`,
 				path: path(mode),
-				ratio,
 				transparent: true
 			}
 		]);
@@ -111,14 +119,14 @@
 
 	const logoGroups: { assets: Asset[]; note: string; title: string }[] = [
 		{
-			assets: versions('', (m) => `icon/icon-${m}`, '1 / 1'),
+			assets: versions('', (m) => `icon/icon-${m}`),
 			note: '600 × 600 · WebP and PNG at 1200 × 1200 · on background, optically centred',
 			title: 'Icon'
 		},
 		{
 			assets: [
-				...versions('Llama · ', (m) => `lockup/llama/logo-llama-${m}`, '2342 / 600'),
-				...versions('llama.cpp · ', (m) => `lockup/llama-cpp/logo-llama-cpp-${m}`, '3926 / 600')
+				...versions('Llama · ', (m) => `lockup/llama/logo-llama-${m}`),
+				...versions('llama.cpp · ', (m) => `lockup/llama-cpp/logo-llama-cpp-${m}`)
 			],
 			note: 'The icon with the wordmark: Llama in Llama Sans Bold at its Display size, llama.cpp in Llama Mono Bold · WebP and PNG at 2×',
 			title: 'Lockups'
@@ -175,8 +183,7 @@
 				{#each group.assets as asset (asset.path)}
 					<figure class="m-0 grid min-w-0 gap-2">
 						<div
-							style:aspect-ratio={asset.ratio}
-							style:padding={asset.ground === 'cover' ? undefined : `calc(12% / (${asset.ratio}))`}
+							style:aspect-ratio={ratio(asset.path)}
 							class={[
 								'min-w-0 overflow-hidden rounded-card border border-border/60',
 
