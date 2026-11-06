@@ -2239,6 +2239,56 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
     return use_mul_mat_vec_q;
 }
 
+// Whether ggml_cuda_mul_mat/ggml_cuda_mul_mat_id would dispatch this node to MMQ. Used for fusion only.
+static bool ggml_cuda_mul_mat_uses_mmq(const ggml_tensor * tensor) {
+    const ggml_tensor * src0 = tensor->src[0];
+    const ggml_tensor * src1 = tensor->src[1];
+
+    if (tensor->op != GGML_OP_MUL_MAT && tensor->op != GGML_OP_MUL_MAT_ID) {
+        return false;
+    }
+
+    // ggml_cuda_mul_mat_id has no padding check, only ggml_cuda_mul_mat falls back to cuBLAS for a bad padding clear.
+    const bool bad_padding_clear = tensor->op == GGML_OP_MUL_MAT &&
+                                   ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE &&
+                                   ggml_nbytes(src0) != ggml_backend_buffer_get_alloc_size(src0->buffer, src0) &&
+                                   src0->view_src;
+    if (bad_padding_clear || src1->type != GGML_TYPE_F32 || tensor->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    const auto & dev = ggml_cuda_info().devices[ggml_cuda_get_device()];
+    const int cc = dev.cc;
+    if (tensor->op == GGML_OP_MUL_MAT_ID) {
+        if (src1->ne[2] <= MMVQ_MAX_BATCH_SIZE && ggml_is_quantized(src0->type) &&
+                src1->ne[2] <= get_mmvq_mmid_max_batch(src0->type, cc)) {
+            return false;
+        }
+        return ggml_cuda_should_use_mmq(src0->type, cc, src1->ne[2], src0->ne[2]);
+    }
+
+    if (ggml_cuda_op_mul_mat_use_fwht(tensor)) {
+        return false;
+    }
+
+    const int warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
+    if (ggml_cuda_should_use_mmvf(src0, cc, warp_size, src1->ne[1])) {
+        return false;
+    }
+    if (src0->ne[1] == 1 && src1->ne[1] > MMVF_MAX_BATCH_SIZE && tensor->ne[2] == 1 && tensor->ne[3] == 1 &&
+            src0->type == GGML_TYPE_F32 && ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(tensor) &&
+            ggml_cuda_should_use_mmvf(src1, cc, warp_size, 1)) {
+        return false;
+    }
+    if (ggml_cuda_should_use_mmf(src0->type, cc, warp_size, src0->ne, src0->nb, src1->ne[1], false)) {
+        return false;
+    }
+    if (ggml_cuda_should_use_mmvq(src0->type, cc, src1->ne[1])) {
+        return false;
+    }
+    return ggml_cuda_should_use_mmq(src0->type, cc, src1->ne[1], 0);
+}
+
 static bool ggml_cuda_match_shared_expert(const ggml_cgraph * graph, int routed_idx, int shared_idx) {
     if (routed_idx + 2 >= graph->n_nodes || shared_idx + 2 >= graph->n_nodes || shared_idx < routed_idx + 3) {
         return false;
@@ -2448,7 +2498,7 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         ggml_cuda_mul_mat_vec_q(ctx, src0, src1, nullptr, dst);
         return;
     }
-    if (ggml_cuda_should_use_mmq(src0->type, cc, ne11, /*n_experts =*/ 0)) {
+    if (ggml_cuda_mul_mat_uses_mmq(dst)) {
         ggml_cuda_mul_mat_q(ctx, src0, src1, nullptr, dst);
         return;
     }
@@ -2528,7 +2578,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
             }
         }
 
-        if (ggml_cuda_should_use_mmq(src0->type, cc, ne12, /*n_experts=*/ne02)) {
+        if (ggml_cuda_mul_mat_uses_mmq(dst)) {
             ggml_cuda_mul_mat_q(ctx, src0, src1, ids, dst);
             return;
         }
@@ -4968,6 +5018,12 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
                     ggml_get_op_params_i32(mm_node, 3) != GGML_PREC_F32 &&
                     ggml_cuda_mul_mat_fp8(*cuda_ctx, src0, src1, scale_node, scale)) {
                 return 1;
+            }
+
+            if (!with_bias && ggml_cuda_mul_mat_uses_mmq(mm_node)) {
+                fusion_data.prec_src1 = ggml_prec_get_src(mm_node, 1);
+                ggml_cuda_mul_mat_q(*cuda_ctx, src0, src1, ids, out_node, &fusion_data);
+                return n_ops - 1;
             }
 
             if (ggml_cuda_should_fuse_mul_mat_vec_q(mm_node)) {
