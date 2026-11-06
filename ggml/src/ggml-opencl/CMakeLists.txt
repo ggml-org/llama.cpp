@@ -78,6 +78,7 @@ set(GGML_OPENCL_KERNELS
     diag_mask_inf
     diag
     div
+    dsv4_hc
     gelu
     get_rows
     glu
