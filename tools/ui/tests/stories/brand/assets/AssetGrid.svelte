@@ -57,7 +57,18 @@
 		transparent?: boolean;
 		/** a transparent file with its own margin (an app icon's canvas): shown as it is, with none added */
 		unpadded?: boolean;
+		/** a file with no SVG (a native app's icon): its thumbnail and proportions */
+		image?: { ratio: string; src: string };
 	}
+
+	// the native apps' icons as they ship, from ggml-org/Llama-macOS and ggml-org/Llama-Windows
+	const native = import.meta.glob('./files/native/**/*.{ico,png}', {
+		eager: true,
+		import: 'default',
+		query: '?url'
+	}) as Record<string, string>;
+
+	const nativeFile = (path: string) => native[`./files/native/${path}`];
 
 	// social profiles: each platform's banners, light and dark, from logo/svg/social (the avatars are one section)
 	const social: {
@@ -248,6 +259,87 @@
 				}
 			],
 			title: 'Windows'
+		},
+		{
+			note: 'The icons the Llama apps ship, as they are in their repos: macOS’s appiconset (from ggml-org/Llama-macOS), hand-made, the white icon on a #3F4040 squircle on Apple’s grid · Windows’s package assets and the exe’s icon (from ggml-org/Llama-Windows), the white icon on #111111',
+			rows: [
+				{
+					assets: (
+						[
+							[
+								'macOS',
+								'macos/icon_512x512@2x.png',
+								'1 / 1',
+								'cover',
+								[['PNG 1024', 'macos/icon_512x512@2x.png', 'llama-macos-1024.png']]
+							],
+							[
+								'Windows, taskbar',
+								'windows/Square44x44Logo.scale-400.png',
+								'1 / 1',
+								'cover',
+								[
+									[
+										'PNG 176',
+										'windows/Square44x44Logo.scale-400.png',
+										'llama-windows-taskbar-176.png'
+									]
+								]
+							],
+							[
+								'Windows, Start tile',
+								'windows/Square150x150Logo.scale-400.png',
+								'1 / 1',
+								'cover',
+								[
+									[
+										'PNG 600',
+										'windows/Square150x150Logo.scale-400.png',
+										'llama-windows-tile-600.png'
+									]
+								]
+							],
+							[
+								'Windows, wide tile',
+								'windows/Wide310x150Logo.scale-400.png',
+								'1240 / 600',
+								'cover',
+								[
+									[
+										'PNG 1240',
+										'windows/Wide310x150Logo.scale-400.png',
+										'llama-windows-wide-tile-1240x600.png'
+									]
+								]
+							],
+							[
+								'Windows, exe icon',
+								'windows/llama_256.png',
+								'1 / 1',
+								'light',
+								[
+									['ICO', 'windows/llama.ico', 'llama-windows.ico'],
+									['ICO, white', 'windows/llama-white.ico', 'llama-windows-white.ico'],
+									['PNG 256', 'windows/llama_256.png', 'llama-windows-256.png']
+								]
+							]
+						] as const
+					).map(([label, thumbnail, ratio, ground, files]) => ({
+						downloads: files.map(([fileLabel, path, name]) => ({
+							href: nativeFile(path),
+							label: fileLabel,
+							name
+						})),
+						ground,
+						image: { ratio, src: nativeFile(thumbnail) },
+						label,
+						path: `native/${thumbnail}`,
+						transparent: ground !== 'cover',
+						unpadded: true
+					}))
+				}
+			],
+			title: 'Native apps'
 		}
 	];
 
@@ -310,7 +402,7 @@
 						{#each row.assets as asset (asset.path)}
 							<figure class="m-0 grid min-w-0 gap-2">
 								<div
-									style:aspect-ratio={ratio(asset.path)}
+									style:aspect-ratio={asset.image?.ratio ?? ratio(asset.path)}
 									style:padding={asset.transparent && !asset.unpadded
 										? `calc(12% / (${ratio(asset.path)}))`
 										: undefined}
@@ -329,7 +421,7 @@
 											'block size-full',
 											asset.transparent ? 'object-contain' : 'object-cover'
 										]}
-										src={url(asset.path, 'svg')}
+										src={asset.image?.src ?? url(asset.path, 'svg')}
 									/>
 								</div>
 
