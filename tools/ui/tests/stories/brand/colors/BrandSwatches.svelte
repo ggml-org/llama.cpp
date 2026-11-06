@@ -17,10 +17,10 @@
 		value?: string;
 	}
 
-	// the hero gradient from llama.app and its navy night version (as in the specimen's boards and the social assets)
-	const HERO =
+	// llama.app's hero gradients, the day sky and the night sky (as in the specimen's boards and the social assets)
+	const DAY_SKY =
 		'radial-gradient(ellipse at 15% 10%, #dcecfb 0%, transparent 55%), radial-gradient(ellipse at 90% 95%, #e8f2fc 0%, transparent 50%), linear-gradient(160deg, #c4ddf6 0%, #d0e4f7 55%, #dfecf9 100%)';
-	const NAVY =
+	const NIGHT_SKY =
 		'radial-gradient(ellipse at 15% 10%, #22385c 0%, transparent 55%), radial-gradient(ellipse at 90% 95%, #1e3752 0%, transparent 50%), linear-gradient(160deg, #152238 0%, #172a42 55%, #1a3049 100%)';
 	const GREYS =
 		'linear-gradient(160deg, var(--neutral-400) 0%, var(--neutral-300) 55%, var(--neutral-200) 100%)';
@@ -40,10 +40,10 @@
 			title: 'Grounds and ink'
 		},
 		{
-			note: 'Fields with a purpose: the hero blue and its navy night from llama.app, and the greys.',
+			note: 'Fields with a purpose: the day sky and the night sky from llama.app’s hero, and the greys.',
 			swatches: [
-				{ name: 'Hero blue', note: 'llama.app’s hero, ink #0f1f33', value: HERO },
-				{ dark: true, name: 'Navy', note: 'the hero at night, white ink', value: NAVY },
+				{ name: 'Day sky', note: 'llama.app’s hero, ink #0f1f33', value: DAY_SKY },
+				{ dark: true, name: 'Night sky', note: 'the hero after dark, white ink', value: NIGHT_SKY },
 				{ name: 'Greys', note: 'a cool title field', value: GREYS },
 				{ dark: true, name: 'Deep', note: 'the dark field', value: DEEP }
 			],

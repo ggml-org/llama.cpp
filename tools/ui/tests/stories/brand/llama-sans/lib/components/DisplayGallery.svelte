@@ -282,7 +282,7 @@
 		color: var(--brand-ink);
 	}
 	.t-blue {
-		background: var(--llama-navy);
+		background: var(--llama-night-sky);
 		color: #fff;
 	}
 	.tile .plus {
@@ -361,7 +361,7 @@
 		padding: 4cqi 5cqi 5cqi;
 		background:
 			radial-gradient(120% 80% at 85% 110%, rgb(255 255 255 / 0.08), transparent 60%),
-			var(--llama-navy); /* one hue: navy, a little lighter in a corner */
+			var(--llama-night-sky); /* one hue: the night sky, a little lighter in a corner */
 	}
 	.cover .masthead {
 		font: 700 27cqi / 0.8 var(--display);

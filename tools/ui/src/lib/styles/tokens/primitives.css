@@ -36,11 +36,11 @@
 	--sand-400: oklch(0.72 0.025 76);
 	--sand-900: oklch(0.272 0.013 72);
 
-	/* artwork: the day sky and the night sky, llama.app's light blue and its navy, and cinder, the accent orange; with
+	/* artwork: the day sky and the night sky, llama.app's light and dark hero grounds, and cinder, the accent orange; with
 	   the greys and sand, the whole communications palette. Never for status, which keeps its own colours */
 	--art-day-sky: oklch(0.78 0.075 245);
 	--art-night-sky: oklch(0.33 0.07 256);
-	/* cinder: the brand's one accent orange, warm next to the hero blue and the sand (#ee6c1e) */
+	/* cinder: the brand's one accent orange, warm next to the day sky and the sand (#ee6c1e) */
 	--art-cinder: oklch(0.68 0.18 46);
 	--art-cinder-light: oklch(0.85 0.065 46);
 

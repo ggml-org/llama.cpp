@@ -12,7 +12,7 @@ export interface Palette {
 	roles: {
 		accent: string; // the one accent: a mark, a highlight, one sticker (never in UI chrome)
 		accentInk: string; // text on the accent
-		deep: string; // the dark field (navy)
+		deep: string; // the dark field (the night sky)
 		deepInk: string;
 		deepTone: string; // a flat colour from the dark field, for small shapes
 		field: string; // a quiet background (sage)

@@ -21,7 +21,7 @@
 </script>
 
 <div class="boards">
-	<!-- a specimen board on navy, after the Helvetica board -->
+	<!-- a specimen board on the night sky, after the Helvetica board -->
 	<article aria-label="Specimen board" class="board wide specimen">
 		<div class="facts">
 			<p><b>Llama Sans<br />UI</b></p>
@@ -138,7 +138,7 @@
 	.boards {
 		/* every colour from the brand palette: the art colours (art-*), cinder, the greys, and sand as the warm
 		   neutral; mixes stay within one hue */
-		--navy:
+		--night-sky:
 			radial-gradient(
 				ellipse at 15% 10%,
 				color-mix(in oklab, var(--art-night-sky), white 6%) 0%,
@@ -207,7 +207,7 @@
 		grid-template-columns: 0.8fr 1.3fr 1.6fr;
 		grid-template-rows: 1fr auto;
 		gap: 0 5%;
-		background: var(--navy); /* In use's navy */
+		background: var(--night-sky);
 		color: #fff;
 	}
 	.specimen .facts {
@@ -260,7 +260,7 @@
 		grid-template-rows: auto 1fr auto;
 		background:
 			repeating-linear-gradient(90deg, rgb(255 255 255 / 0.45) 0 1px, transparent 1px 8.33%),
-			var(--mist); /* llama.app's light hero blue, as in In use */
+			var(--mist); /* the day sky, as in In use */
 		color: var(--art-night-sky);
 	}
 	.title .top,

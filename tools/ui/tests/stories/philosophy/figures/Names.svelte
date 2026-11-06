@@ -1,5 +1,5 @@
 <!--
-	The two lockups, typed rather than placed: U+E002 and the name, Llama in Llama Sans Bold on llama.app's hero blue,
+	The two lockups, typed rather than placed: U+E002 and the name, Llama in Llama Sans Bold on the day sky,
 	llama.cpp in Llama Mono Bold on the neutral light and dark grounds
 -->
 <script lang="ts">
