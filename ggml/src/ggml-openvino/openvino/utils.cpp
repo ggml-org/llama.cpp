@@ -581,7 +581,7 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
     // subgraph boundary; each layer receives one of its output ports.
     // The dynamic GPU path uses it too: a StridedSlice costs a full shape inference per run on GPU, a Split output does
     // not (gemma-4 slices its per-layer embeddings this way, once per layer)
-    const bool dynamic_split = !context.is_static() && !context.is_stateful() && ggml_openvino_is_gpu();
+    const bool dynamic_split = !context.is_static() && ggml_openvino_is_gpu();
     if ((context.is_static() || dynamic_split) && view_input_size == 1) {
         auto view_stride_v = context.get_view_input_stride(input_index, 0);
         auto view_src_stride_v = context.get_view_input_src_stride(input_index, 0);
@@ -629,7 +629,14 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
                         exact_chunk = i == static_cast<size_t>(split_dim) || view_ggml_shape[i] == 1 ||
                                       view_stride_v[i] == view_src_stride_v[i];
                     }
-                    if (split_index >= 0 && split_index < num_splits && dynamic_split && exact_chunk) {
+                    // stateful execution drops the leading size-1 axis, so the input can be one rank lower than the
+                    // ggml metadata
+                    const auto input_rank = input.get_partial_shape().rank();
+                    const int64_t rank_shift = input_rank.is_static() ?
+                                                   static_cast<int64_t>(ndims) - input_rank.get_length() :
+                                                   static_cast<int64_t>(ndims);
+                    if (split_index >= 0 && split_index < num_splits && dynamic_split && exact_chunk &&
+                        split_dim >= rank_shift) {
                         // the Split keeps its input alive, so only keep a weak reference to it on the input
                         auto src_node = input.get_node_shared_ptr();
                         std::string rt_key =
@@ -640,8 +647,8 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
                             split_node = rt_info[rt_key].as<std::weak_ptr<ov::Node>>().lock();
                         }
                         if (split_node == nullptr) {
-                            auto axis_const =
-                                ov::op::v0::Constant::create(ov::element::i64, {}, {static_cast<int64_t>(split_dim)});
+                            auto axis_const = ov::op::v0::Constant::create(
+                                ov::element::i64, {}, {static_cast<int64_t>(split_dim) - rank_shift});
                             split_node =
                                 std::make_shared<ov::op::v1::Split>(input, axis_const, static_cast<size_t>(num_splits));
                             split_node->set_friendly_name(src_node->get_friendly_name() + "_split");
