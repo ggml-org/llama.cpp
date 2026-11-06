@@ -4,7 +4,7 @@
 	and the chapter navigation fixed at the right.
 -->
 <script lang="ts">
-	import '../../brand/fonts/fonts.css';
+	import '../brand/fonts/fonts.css';
 	import Chapters from './Chapters.svelte';
 	import type { Snippet } from 'svelte';
 

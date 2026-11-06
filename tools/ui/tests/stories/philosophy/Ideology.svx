@@ -1,0 +1,49 @@
+<!--
+	What we stand for (Philosophy › Ideology): why llama.cpp, Llama UI and the apps exist, before how they look or fit
+	together. Written for people first and readable as plain Markdown by agents too. Set in Editorial.
+-->
+
+<script>
+	import Figure from './Figure.svelte';
+	import Layers from './figures/Layers.svelte';
+</script>
+
+<p class="kicker">Philosophy · What we stand for</p>
+
+# Ideology
+
+<p class="lead">Why <strong>llama.cpp</strong>, <strong>Llama UI</strong> and the apps exist. How they fit together is in <strong>Product</strong>, and how they look in <strong>Design</strong>.</p>
+
+## Local is freedom
+
+A model on your own machine is yours. You choose which one runs, and it stays the model you chose: no one can swap it, cut it down or change its behaviour behind your back. Your conversations and traces stay where you are, and work goes on without a connection or an account.
+
+That is the point of running AI locally. It is not about distrust of anyone; it is about people being able to own and control the tools they think and work with.
+
+## AI for everyone
+
+Open models run on the hardware people already have, from a laptop to a server. Access to AI should not depend on where someone lives, what they can pay each month or whose terms they accept. Making it run well on ordinary machines is how it reaches everyone.
+
+## Shared, not rented
+
+The server does not have to be yours alone. One person's server can serve their family, a team, a lab or a neighbourhood, and people can pool the machines they have. Shared this way, AI stays in the hands of the people who use it, and someone without the hardware gets the same freedom as the person who has it.
+
+## Three layers
+
+Between a person and a model there are three layers: the **model**, the weights themselves; the **service**, the server that runs inference with them; and the **application**, the harness, UI and UX people work with. Each of them can be on your side.
+
+<Figure n={1} caption="The three layers, from the one people use to the weights underneath. Every product in the Llama stack sits on one of them.">
+	<Layers />
+</Figure>
+
+## People first
+
+The future we want is a bright one for people: AI that helps them think, make and understand, on their terms. We say that by showing it, not by preaching it. No pride, no righteousness, no fear and no hype: plain words, real numbers and the real product.
+
+## How it shows
+
+- **In the product:** it makes clear which model runs and on which server, needs no account, and works offline.
+- **In the design:** calm and neutral, so the conversation is the loudest thing on the screen, and open, so anyone can restyle it or build on it.
+- **In communications:** local shown as freedom, the real app and real figures, and the same calm voice.
+
+<p class="colophon">Set in Llama Sans and Llama Mono.</p>

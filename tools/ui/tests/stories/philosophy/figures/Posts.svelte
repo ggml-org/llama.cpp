@@ -3,9 +3,9 @@
 	the two link previews, llama.app's on the hero blue and llama.cpp's on dark; their copy is the templates' own
 -->
 <script lang="ts">
-	import LinkPreview from '../../../brand/communications/posts/LinkPreview.svelte';
-	import ModelDropPost from '../../../brand/communications/posts/ModelDropPost.svelte';
-	import { linkPreview, modelDrop } from '../../../brand/communications/posts/post';
+	import LinkPreview from '../../brand/communications/posts/LinkPreview.svelte';
+	import ModelDropPost from '../../brand/communications/posts/ModelDropPost.svelte';
+	import { linkPreview, modelDrop } from '../../brand/communications/posts/post';
 </script>
 
 <div class="posts">

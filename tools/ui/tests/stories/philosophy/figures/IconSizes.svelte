@@ -1,6 +1,6 @@
 <!-- The Llama icon from favicon to poster size, then typed as a letter: U+E002 in Llama Sans, inside a real button -->
 <script lang="ts">
-	import { PATHS, SIZE } from '../../../brand/logo-showcase/lib/logo';
+	import { PATHS, SIZE } from '../../brand/logo-showcase/lib/logo';
 	import { Button } from '$lib/components/ui/button';
 
 	const sizes = [14, 16, 24, 32, 48, 96, 160];
