@@ -10037,7 +10037,7 @@ static void ggml_compute_forward_ssm_scan_f32(
 
     GGML_ASSERT(K >= 1);
     GGML_ASSERT(ggml_nelements(src1) + K*nc*nr*nh*ns == ggml_nelements(dst));
-    GGML_ASSERT(src0->nb[0] == sizeof(float));
+    GGML_ASSERT(src0->nb[0] == ggml_type_size(src0->type));
     GGML_ASSERT(src1->nb[0] == sizeof(float));
     GGML_ASSERT(src2->nb[0] == sizeof(float));
     GGML_ASSERT(src3->nb[0] == sizeof(float));
@@ -10055,10 +10055,19 @@ static void ggml_compute_forward_ssm_scan_f32(
     const int ih1 = MIN(ih0 + dh, nh);
 
     const int32_t * ids = (const int32_t *) src6->data;
+    const size_t state_head_bytes = nc * nr * sizeof(float);
+    const size_t state_seq_bytes = nh * state_head_bytes;
 
     for (int i3 = 0; i3 < ns; ++i3) {
         const float * s0 = (const float *) ((const char *) src0->data + ids[i3]*(src0->nb[3])); // {d_state, dim, nh, ns}
-              float * s  = (      float *) ((      char *) dst->data  + i3*(src0->nb[3]) + s_off); // {d_state, dim, nh, ns}
+              float * s  = (      float *) ((      char *) dst->data  + i3*state_seq_bytes + s_off); // {d_state, dim, nh, ns}
+        if (src0->type == GGML_TYPE_F16) {
+            const ggml_fp16_t * state = (const ggml_fp16_t *) ((const char *) src0->data + ids[i3]*src0->nb[3]);
+            for (int h = ih0; h < ih1; ++h) {
+                ggml_fp16_to_fp32_row(state + h*nc*nr, s + h*nc*nr, nc*nr);
+            }
+            s0 = s;
+        }
 
         for (int i2 = 0; i2 < nt; ++i2) {
             const float * x  = (const float *) ((const char *) src1->data + i2*(src1->nb[2]) + i3*(src1->nb[3])); // {dim, nh, nt, ns}
@@ -10222,9 +10231,9 @@ static void ggml_compute_forward_ssm_scan_f32(
             }
             const int64_t slot = nt - 1 - i2;
             if (K > 1 && slot > 0 && slot < K) {
-                float * s_snapshot = (float *) ((char *) dst->data + s_off + (slot*ns + i3)*(src0->nb[3]));
+                float * s_snapshot = (float *) ((char *) dst->data + s_off + (slot*ns + i3)*state_seq_bytes);
                 for (int h = ih0; h < ih1; ++h) {
-                    memcpy((char *) s_snapshot + h*src0->nb[2], (char *) s + h*src0->nb[2], src0->nb[2]);
+                    memcpy((char *) s_snapshot + h*state_head_bytes, (char *) s + h*state_head_bytes, state_head_bytes);
                 }
             }
             // use the output as the source when it's not the first token-wise iteration
@@ -10238,6 +10247,7 @@ void ggml_compute_forward_ssm_scan(
         ggml_tensor * dst) {
     switch (dst->src[0]->type) {
         case GGML_TYPE_F32:
+        case GGML_TYPE_F16:
             {
                 ggml_compute_forward_ssm_scan_f32(params, dst);
             } break;

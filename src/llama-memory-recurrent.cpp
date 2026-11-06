@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <map>
@@ -35,6 +36,17 @@ llama_memory_recurrent::llama_memory_recurrent(
 
     this->n_rs_seq = n_rs_seq;
     rs_idx.assign(n_seq_max, 0);
+
+    const char * cache_type = getenv("LLAMA_SSM_CACHE_TYPE");
+    if (cache_type) {
+        if (strcmp(cache_type, "f32") == 0) {
+            type_s = GGML_TYPE_F32;
+        } else if (strcmp(cache_type, "f16") == 0) {
+            type_s = GGML_TYPE_F16;
+        } else {
+            throw std::runtime_error("LLAMA_SSM_CACHE_TYPE must be f32 or f16");
+        }
+    }
 
     cells.clear();
     cells.resize(mem_size);
@@ -79,6 +91,13 @@ llama_memory_recurrent::llama_memory_recurrent(
         if (filter && !filter(i)) {
             LLAMA_LOG_DEBUG("%s: layer %3d: skipped\n", __func__, i);
             continue;
+        }
+
+        const auto & layer = model.layers[i];
+        if (type_s != GGML_TYPE_F32 &&
+                (hparams.ssm_n_group == 0 || !layer.ssm_in || !layer.ssm_d || !layer.ssm_a ||
+                 layer.ssm_a->ne[0] != 1 || layer.ssm_a->ne[1] != hparams.ssm_dt_rank)) {
+            throw std::runtime_error("FP16 SSM cache requires Mamba-2 recurrent layers");
         }
 
         const char * dev_name = "CPU";

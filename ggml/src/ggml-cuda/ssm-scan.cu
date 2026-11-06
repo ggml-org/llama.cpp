@@ -140,17 +140,17 @@ __global__ void __launch_bounds__(splitD, 1)
 #endif // __clang__
 
 // assumes as many threads as d_state
-template <int c_factor, int d_state>
+template <int c_factor, int d_state, typename T>
 __global__ void __launch_bounds__(d_state, 1)
     ssm_scan_f32_group(
-        const float * src0_ptr, const float * src1_ptr, const float * src2_ptr,
+        const T * src0_ptr, const float * src1_ptr, const float * src2_ptr,
         const float * src3_ptr, const float * src4_ptr, const float * src5_ptr,
         const int32_t * src6_ptr, float * dst_ptr,
         const int src0_nb2, const int src0_nb3, const int src1_nb2, const int src1_nb3,
         const int src2_nb1, const int src2_nb2, const int src3_nb1,
         const int src4_nb2, const int src4_nb3, const int src5_nb2, const int src5_nb3,
-        char * s_base, const int64_t s_slot_bytes, const int64_t n_head, const int64_t d_head, const int64_t n_group, const int64_t n_tok, const int64_t K) {
-    const float   * GGML_CUDA_RESTRICT src0 = src0_ptr;
+        char * s_base, const int64_t s_slot_bytes, const bool fused_cache, const int64_t n_head, const int64_t d_head, const int64_t n_group, const int64_t n_tok, const int64_t K) {
+    const T       * GGML_CUDA_RESTRICT src0 = src0_ptr;
     const float   * GGML_CUDA_RESTRICT src1 = src1_ptr;
     const float   * GGML_CUDA_RESTRICT src2 = src2_ptr;
     const float   * GGML_CUDA_RESTRICT src3 = src3_ptr;
@@ -171,20 +171,21 @@ __global__ void __launch_bounds__(d_state, 1)
     }
 
     const int head_idx =  warp_idx / d_head;
-    const int head_off = (warp_idx % d_head) * sizeof(float);
+    const int head_off = warp_idx % d_head;
     const int seq_idx  = blockIdx.y;
 
     const int group_off = (head_idx / (n_head / n_group)) * d_state * sizeof(float);
 
     // TODO: refactor strides to be in elements/floats instead of bytes to be cleaner and consistent with the rest of the codebase
-    const float * s0_warp = (const float *) ((const char *) src0 + src6[seq_idx] * src0_nb3 + head_idx * src0_nb2 + head_off * d_state);
+    const T     * s0_warp = (const T *) ((const char *) src0 + src6[seq_idx] * src0_nb3 + head_idx * src0_nb2 + head_off * d_state * sizeof(T));
     const float * x_warp  = (const float *) ((const char *) src1 + (seq_idx * src1_nb3) + (warp_idx * sizeof(float)));
     const float * dt_warp = (const float *) ((const char *) src2 + (seq_idx * src2_nb2) + head_idx * sizeof(float));
     const float * A_warp  = (const float *) ((const char *) src3 + head_idx * src3_nb1);
     const float * B_warp  = (const float *) ((const char *) src4 + (seq_idx * src4_nb3) + (group_off));
     const float * C_warp  = (const float *) ((const char *) src5 + (seq_idx * src5_nb3) + (group_off));
     float *       y_warp  = dst + (seq_idx * n_tok * n_head * d_head) + warp_idx;
-    float *       s_warp  = (float *) (s_base + seq_idx * src0_nb3 + head_idx * src0_nb2 + head_off * d_state);
+    const int state_size = fused_cache ? sizeof(T) : sizeof(float);
+    char * s_warp = s_base + (seq_idx * (src0_nb3 / sizeof(T)) + head_idx * (src0_nb2 / sizeof(T)) + head_off * d_state) * state_size;
 
     // strides across n_seq_tokens
     const int stride_x  = src1_nb2 / sizeof(float);
@@ -198,7 +199,7 @@ __global__ void __launch_bounds__(d_state, 1)
 
 #pragma unroll
     for (int j = 0; j < c_factor; j++) {
-        state[j] = s0_warp[WARP_SIZE * j + lane];
+        state[j] = float(s0_warp[WARP_SIZE * j + lane]);
     }
 
     for (int64_t i = 0; i < n_tok; i++) {
@@ -227,10 +228,14 @@ __global__ void __launch_bounds__(d_state, 1)
         // Slot 0 is the final state written below; slots 1..K-1 are rollback snapshots.
         const int64_t slot = n_tok - 1 - i;
         if (K > 1 && slot > 0 && slot < K) {
-            float * s_snapshot_warp = (float *) ((char *) s_warp + slot * s_slot_bytes);
+            char * s_snapshot_warp = s_warp + slot * s_slot_bytes;
 #pragma unroll
             for (int j = 0; j < c_factor; j++) {
-                s_snapshot_warp[WARP_SIZE * j + lane] = state[j];
+                if (fused_cache) {
+                    ((T *) s_snapshot_warp)[WARP_SIZE * j + lane] = T(state[j]);
+                } else {
+                    ((float *) s_snapshot_warp)[WARP_SIZE * j + lane] = state[j];
+                }
             }
         }
     }
@@ -238,11 +243,16 @@ __global__ void __launch_bounds__(d_state, 1)
     // write back the state
 #pragma unroll
     for (int j = 0; j < c_factor; j++) {
-        s_warp[WARP_SIZE * j + lane] = state[j];
+        if (fused_cache) {
+            ((T *) s_warp)[WARP_SIZE * j + lane] = T(state[j]);
+        } else {
+            ((float *) s_warp)[WARP_SIZE * j + lane] = state[j];
+        }
     }
 }
 
-static void ssm_scan_f32_cuda(const float * src0, const float * src1, const float * src2, const float * src3,
+template <typename T>
+static void ssm_scan_f32_cuda(const T * src0, const float * src1, const float * src2, const float * src3,
                               const float * src4, const float * src5, const int32_t * src6, float * dst,
                               const int src0_nb2, const int src0_nb3, const int src1_nb2, const int src1_nb3, const int src2_nb1,
                               const int src2_nb2, const int src3_nb1, const int src4_nb2, const int src4_nb3, const int src5_nb2,
@@ -251,7 +261,7 @@ static void ssm_scan_f32_cuda(const float * src0, const float * src1, const floa
                               const int64_t K, const ggml_cuda_ssm_scan_fused_cache * cache, cudaStream_t stream) {
     // when fused, the states go straight into the recurrent cache and the dst tail is left alone
     char * const  s_base       = cache ? (char *) cache->data : (char *) dst + s_off;
-    const int64_t s_slot_bytes = cache ? cache->slot_stride * (int64_t) sizeof(float) : n_seq * (int64_t) src0_nb3;
+    const int64_t s_slot_bytes = cache ? cache->slot_stride * (int64_t) sizeof(T) : n_seq * (int64_t) (src0_nb3 / sizeof(T)) * sizeof(float);
 
     // NOTE: if you change conditions here, be sure to update the corresponding supports_op condition!
     if (src3_nb1 == sizeof(float)) {
@@ -262,35 +272,37 @@ static void ssm_scan_f32_cuda(const float * src0, const float * src1, const floa
 
             const dim3 blocks((n_head * head_dim + (num_warps - 1)) / num_warps, n_seq, 1);
             const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks, threads, 0, stream);
-            ggml_cuda_kernel_launch(ssm_scan_f32_group<96/WARP_SIZE, 96>, launch_params,
+            ggml_cuda_kernel_launch(ssm_scan_f32_group<96/WARP_SIZE, 96, T>, launch_params,
                     src0, src1, src2, src3, src4, src5, src6, dst,
                     src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2, src3_nb1,
-                    src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_base, s_slot_bytes, n_head, head_dim, n_group, n_tok, K);
+                    src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_base, s_slot_bytes, cache != nullptr, n_head, head_dim, n_group, n_tok, K);
         } else if (d_state == 128) {
             constexpr int threads   = 128;
             constexpr int num_warps = threads/WARP_SIZE;
 
             const dim3 blocks((n_head * head_dim + (num_warps - 1)) / num_warps, n_seq, 1);
             const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks, threads, 0, stream);
-            ggml_cuda_kernel_launch(ssm_scan_f32_group<128/WARP_SIZE, 128>, launch_params,
+            ggml_cuda_kernel_launch(ssm_scan_f32_group<128/WARP_SIZE, 128, T>, launch_params,
                     src0, src1, src2, src3, src4, src5, src6, dst,
                     src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2, src3_nb1,
-                    src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_base, s_slot_bytes, n_head, head_dim, n_group, n_tok, K);
+                    src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_base, s_slot_bytes, cache != nullptr, n_head, head_dim, n_group, n_tok, K);
         } else if (d_state == 256) { // Falcon-H1
             constexpr int threads   = 256;
             constexpr int num_warps = threads/WARP_SIZE;
 
             const dim3 blocks((n_head * head_dim + (num_warps - 1)) / num_warps, n_seq, 1);
             const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks, threads, 0, stream);
-            ggml_cuda_kernel_launch(ssm_scan_f32_group<256/WARP_SIZE, 256>, launch_params,
+            ggml_cuda_kernel_launch(ssm_scan_f32_group<256/WARP_SIZE, 256, T>, launch_params,
                     src0, src1, src2, src3, src4, src5, src6, dst,
                     src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2, src3_nb1,
-                    src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_base, s_slot_bytes, n_head, head_dim, n_group, n_tok, K);
+                    src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_base, s_slot_bytes, cache != nullptr, n_head, head_dim, n_group, n_tok, K);
         } else {
             GGML_ABORT("doesn't support d_state!=(96, 128 or 256).");
         }
     } else {
         // Mamba-1
+        GGML_ASSERT(sizeof(T) == sizeof(float));
+        const float * src0_f32 = (const float *) src0;
         GGML_ASSERT(K == 1);
         constexpr int threads = 128;
         GGML_ASSERT(n_head % threads == 0);
@@ -303,55 +315,55 @@ static void ssm_scan_f32_cuda(const float * src0, const float * src1, const floa
             {
             case 1:
                 ggml_cuda_kernel_launch(ssm_scan_f32<threads, 16, 1>, launch_params,
-                    src0, src1, src2, src3, src4, src5, src6, dst,
+                    src0_f32, src1, src2, src3, src4, src5, src6, dst,
                 src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2,
                 src3_nb1, src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, n_tok);
                 break;
             case 2:
                 ggml_cuda_kernel_launch(ssm_scan_f32<threads, 16, 2>, launch_params,
-                    src0, src1, src2, src3, src4, src5, src6, dst,
+                    src0_f32, src1, src2, src3, src4, src5, src6, dst,
                 src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2,
                 src3_nb1, src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, n_tok);
                 break;
             case 3:
                 ggml_cuda_kernel_launch(ssm_scan_f32<threads, 16, 3>, launch_params,
-                    src0, src1, src2, src3, src4, src5, src6, dst,
+                    src0_f32, src1, src2, src3, src4, src5, src6, dst,
                 src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2,
                 src3_nb1, src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, n_tok);
                 break;
             case 4:
                 ggml_cuda_kernel_launch(ssm_scan_f32<threads, 16, 4>, launch_params,
-                    src0, src1, src2, src3, src4, src5, src6, dst,
+                    src0_f32, src1, src2, src3, src4, src5, src6, dst,
                 src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2,
                 src3_nb1, src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, n_tok);
                 break;
             case 5:
                 ggml_cuda_kernel_launch(ssm_scan_f32<threads, 16, 5>, launch_params,
-                    src0, src1, src2, src3, src4, src5, src6, dst,
+                    src0_f32, src1, src2, src3, src4, src5, src6, dst,
                 src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2,
                 src3_nb1, src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, n_tok);
                 break;
             case 6:
                 ggml_cuda_kernel_launch(ssm_scan_f32<threads, 16, 6>, launch_params,
-                    src0, src1, src2, src3, src4, src5, src6, dst,
+                    src0_f32, src1, src2, src3, src4, src5, src6, dst,
                 src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2,
                 src3_nb1, src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, n_tok);
                 break;
             case 7:
                 ggml_cuda_kernel_launch(ssm_scan_f32<threads, 16, 7>, launch_params,
-                    src0, src1, src2, src3, src4, src5, src6, dst,
+                    src0_f32, src1, src2, src3, src4, src5, src6, dst,
                 src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2,
                 src3_nb1, src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, n_tok);
                 break;
             case 8:
                 ggml_cuda_kernel_launch(ssm_scan_f32<threads, 16, 8>, launch_params,
-                    src0, src1, src2, src3, src4, src5, src6, dst,
+                    src0_f32, src1, src2, src3, src4, src5, src6, dst,
                 src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2,
                 src3_nb1, src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, n_tok);
                 break;
             default:
                 ggml_cuda_kernel_launch(ssm_scan_f32<threads, 16, 0>, launch_params,
-                    src0, src1, src2, src3, src4, src5, src6, dst,
+                    src0_f32, src1, src2, src3, src4, src5, src6, dst,
                 src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2,
                 src3_nb1, src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, n_tok);
                 break;
@@ -576,9 +588,9 @@ __global__ void ssm_ssd_scale_state_kernel(
 // Copy initial state from src0[ids[s]] into s_cur for each sequence.
 // src0 and s_cur can alias when the state is written straight into the cache.
 // Grid: (ceil(d_state * head_dim * n_head / BLOCK), n_seqs)
-template <int BLOCK_SIZE>
+template <int BLOCK_SIZE, typename T>
 __global__ void ssm_ssd_init_state_kernel(
-        const float * src0,                    // {d_state, head_dim, n_head, n_rs}
+        const T * src0,                        // {d_state, head_dim, n_head, n_rs}
         const int32_t * __restrict__ ids,      // {n_seqs}
         float * s_cur,                         // {d_state, head_dim, n_head, n_seqs}
         const int state_size,                  // d_state * head_dim * n_head
@@ -587,16 +599,17 @@ __global__ void ssm_ssd_init_state_kernel(
     const int idx = blockIdx.x * BLOCK_SIZE + threadIdx.x;
     if (idx >= state_size) return;
 
-    const float * s_src = src0 + (int64_t)ids[s] * s0_stride_seq;
-    s_cur[s * state_size + idx] = s_src[idx];
+    const T * s_src = src0 + (int64_t)ids[s] * s0_stride_seq;
+    s_cur[s * state_size + idx] = float(s_src[idx]);
 }
 
 // SSD (State Space Duality) dispatch for Mamba-2 prefill.
 // Chunked matmuls: CB, materialize M + cuBLAS Y, S@C, B@X_dt.
 // All strides are in elements (floats), not bytes.
+template <typename T>
 static void ssm_scan_ssd_f32_cuda(
         ggml_backend_cuda_context & ctx,
-        const float * src0_d, const float * src1_d, const float * src2_d, const float * src3_d,
+        const T * src0_d, const float * src1_d, const float * src2_d, const float * src3_d,
         const float * src4_d, const float * src5_d, const int32_t * src6_d, float * dst_d,
         const int64_t s0_stride_seq,                                   // state (src0) stride between seqs
         const int x_stride_tok,  const int x_stride_seq,               // x (src1) strides
@@ -645,7 +658,7 @@ static void ssm_scan_ssd_f32_cuda(
         constexpr int BLOCK = 256;
         const int64_t state_size = d_state * head_dim * n_head;
         dim3 grid((state_size + BLOCK - 1) / BLOCK, n_seq);
-        ssm_ssd_init_state_kernel<BLOCK><<<grid, BLOCK, 0, stream>>>(
+        ssm_ssd_init_state_kernel<BLOCK, T><<<grid, BLOCK, 0, stream>>>(
             src0_d, src6_d, s_cur, state_size, s0_stride_seq);
         CUDA_CHECK(cudaGetLastError());
     }
@@ -785,6 +798,7 @@ static void ssm_scan_ssd_f32_cuda(
 }
 #endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 
+template <typename T>
 static void ggml_cuda_op_ssm_scan_impl(ggml_backend_cuda_context & ctx, ggml_tensor * dst,
                                        const ggml_cuda_ssm_scan_fused_cache * cache) {
     const struct ggml_tensor * src0 = dst->src[0];  // s
@@ -807,7 +821,7 @@ static void ggml_cuda_op_ssm_scan_impl(ggml_backend_cuda_context & ctx, ggml_ten
     const int64_t s_off = ggml_nelements(src1) * sizeof(float);
 
     GGML_ASSERT(ggml_nelements(src1) + K*nc*nr*nh*n_s == ggml_nelements(dst));
-    GGML_ASSERT(src0->nb[0] == sizeof(float));
+    GGML_ASSERT(src0->nb[0] == sizeof(T));
     GGML_ASSERT(src1->nb[0] == sizeof(float));
     GGML_ASSERT(src2->nb[0] == sizeof(float));
     GGML_ASSERT(src3->nb[0] == sizeof(float));
@@ -816,7 +830,7 @@ static void ggml_cuda_op_ssm_scan_impl(ggml_backend_cuda_context & ctx, ggml_ten
     GGML_ASSERT(src6->nb[0] == sizeof(int32_t));
     GGML_ASSERT(src3->ne[0] == 1 || K == 1);
 
-    const float * src0_d = (const float *) src0->data;
+    const T *     src0_d = (const T *) src0->data;
     const float * src1_d = (const float *) src1->data;
     const float * src2_d = (const float *) src2->data;
     const float * src3_d = (const float *) src3->data;
@@ -826,7 +840,7 @@ static void ggml_cuda_op_ssm_scan_impl(ggml_backend_cuda_context & ctx, ggml_ten
     float *       dst_d  = (float *) dst->data;
     cudaStream_t  stream = ctx.stream();
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16);
     GGML_ASSERT(src6->type == GGML_TYPE_I32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
@@ -859,18 +873,19 @@ static void ggml_cuda_op_ssm_scan_impl(ggml_backend_cuda_context & ctx, ggml_ten
         // ssm_ssd_init_state_kernel uses flat linear indexing within each sequence,
         // so src0 must be fully contiguous across all inner dimensions.
         // The scan path handles non-contiguous nb[2] via src0_nb2 but does not handle nb[1].
-        GGML_ASSERT(src0->nb[1] == nc         * sizeof(float));
-        GGML_ASSERT(src0->nb[2] == nc * nr    * sizeof(float));
+        GGML_ASSERT(src0->nb[1] == nc         * sizeof(T));
+        GGML_ASSERT(src0->nb[2] == nc * nr    * sizeof(T));
+        GGML_ASSERT(cache == nullptr || src0->type == GGML_TYPE_F32);
 
         ssm_scan_ssd_f32_cuda(ctx,
             src0_d, src1_d, src2_d, src3_d, src4_d, src5_d, src6_d, dst_d,
-            (int64_t)(src0->nb[3] / sizeof(float)),
+            (int64_t)(src0->nb[3] / sizeof(T)),
             (int)(src1->nb[2] / sizeof(float)), (int)(src1->nb[3] / sizeof(float)),
             (int)(src2->nb[1] / sizeof(float)), (int)(src2->nb[2] / sizeof(float)),
             (int)(src3->nb[1] / sizeof(float)),
             (int)(src4->nb[2] / sizeof(float)), (int)(src4->nb[3] / sizeof(float)),
             (int)(src5->nb[2] / sizeof(float)), (int)(src5->nb[3] / sizeof(float)),
-            cache ? cache->data : (float *) ((char *) dst_d + s_off), nc, nr, nh, ng, n_t, n_s);
+            cache ? (float *) cache->data : (float *) ((char *) dst_d + s_off), nc, nr, nh, ng, n_t, n_s);
         return;
     }
 #endif
@@ -878,6 +893,16 @@ static void ggml_cuda_op_ssm_scan_impl(ggml_backend_cuda_context & ctx, ggml_ten
                       src0->nb[2], src0->nb[3], src1->nb[2], src1->nb[3], src2->nb[1], src2->nb[2],
                       src3->nb[1], src4->nb[2], src4->nb[3], src5->nb[2], src5->nb[3],
                       s_off, nc, nr, nh, ng, n_t, n_s, K, cache, stream);
+}
+
+static void ggml_cuda_op_ssm_scan_impl(ggml_backend_cuda_context & ctx, ggml_tensor * dst,
+                                      const ggml_cuda_ssm_scan_fused_cache * cache) {
+    if (dst->src[0]->type == GGML_TYPE_F16) {
+        ggml_cuda_op_ssm_scan_impl<half>(ctx, dst, cache);
+    } else {
+        GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
+        ggml_cuda_op_ssm_scan_impl<float>(ctx, dst, cache);
+    }
 }
 
 void ggml_cuda_op_ssm_scan(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {

@@ -5794,6 +5794,9 @@ struct ggml_tensor * ggml_ssm_scan(
         int64_t               K) {
     GGML_ASSERT(K >= 1);
     GGML_ASSERT(K <= INT32_MAX);
+    GGML_ASSERT(s->type == GGML_TYPE_F32 || (s->type == GGML_TYPE_F16 && A->ne[0] == 1));
+    GGML_ASSERT(x->type == GGML_TYPE_F32 && dt->type == GGML_TYPE_F32 && A->type == GGML_TYPE_F32);
+    GGML_ASSERT(B->type == GGML_TYPE_F32 && C->type == GGML_TYPE_F32);
     GGML_ASSERT(ggml_is_contiguous(s));
     GGML_ASSERT(ggml_is_contiguous(dt));
     GGML_ASSERT(ggml_is_contiguous(A));
