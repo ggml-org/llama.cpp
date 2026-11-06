@@ -21,7 +21,7 @@
 
 <p class="kicker">Philosophy · Design</p>
 
-# Design philosophy
+# Design
 
 <p class="lead">Why the brand, <strong>Llama UI</strong> and <strong>Llama Chat</strong> look and work the way they do. They share one set of decisions, so this page covers all three. What we stand for is in <strong>Ideology</strong>, how the products fit together in <strong>Product</strong>, and the how in <strong>Design guidelines</strong>.</p>
 
