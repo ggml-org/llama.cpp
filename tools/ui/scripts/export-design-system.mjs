@@ -12,8 +12,9 @@
  * The export writes, under <out>/project/: README.md (BRAND.md and an index of what is in the system),
  * tokens.json, the fonts, the logos and motifs under assets/ (rendered from the stories with their colours baked in),
  * and a component per key visual with its guidelines, a preview and example images rendered at their real size.
- * Images under assets/ are uploaded to the system as assets; the `index` step then writes the system's index
- * (project/design-system.json) from the upload results, `{ "<path under project/>": "/_blob/<id>" }`.
+ * Images under assets/, and the example images the previews show (listed in <out>/preview-images.json), are
+ * uploaded to the system as assets; the `index` step then writes the system's index (project/design-system.json) and
+ * points the previews at their uploads, from the upload results, `{ "<path under project/>": "/_blob/<id>" }`.
  */
 
 import { execSync } from 'node:child_process';
@@ -738,6 +739,18 @@ if (args[0] === 'index') {
 		fs.readFileSync(path.resolve(flag('uploads', 'uploads.json')), 'utf8')
 	);
 
+	// the previews show their example images from the uploads: a preview cannot load the system's plain files
+	for (const k of KEY_VISUALS) {
+		const file = path.join(PROJECT, `components/${k.name}/preview.html`);
+		const html = fs
+			.readFileSync(file, 'utf8')
+			.replace(/src="\.\.\/\.\.\/([^"]+)"/g, (m, rel) =>
+				uploads[rel] ? `src="${uploads[rel]}"` : m
+			);
+
+		fs.writeFileSync(file, html);
+	}
+
 	write(
 		'design-system.json',
 		`${JSON.stringify(index(uploads, flag('title', 'Llama')), null, '\t')}\n`
@@ -778,6 +791,24 @@ if (args[0] === 'index') {
 	}
 
 	write('components/Cover/preview.html', COVER);
+	// the previews need a bundle to run; the key visuals have no code of their own here, so it is empty
+	write(
+		'components/bundle.js',
+		`/* @ds-bundle: {"format":4,"namespace":"Llama","components":[]} */\nwindow.Llama = {};\n`
+	);
+	// the images the previews show, to upload as assets before the index step
+	write(
+		'../preview-images.json',
+		`${JSON.stringify(
+			KEY_VISUALS.flatMap((k) =>
+				[...componentPreview(k, examples[k.name]).matchAll(/src="\.\.\/\.\.\/([^"]+)"/g)].map(
+					(m) => m[1]
+				)
+			),
+			null,
+			'\t'
+		)}\n`
+	);
 	write('README.md', readme(count));
 
 	console.log(
