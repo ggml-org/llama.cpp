@@ -731,6 +731,10 @@ Its principles, as rules to apply here:
 
 - **Function first.** Every element has a job and takes its measurements from a shared role
   (control heights, corners, icon sizes, type roles); never give one component its own.
+- **Simple by default, deep on request.** The first screen offers a suggested model and
+  sensible defaults; advanced settings (sampling, penalties, system prompts, recipes) sit one
+  step away behind a disclosure, never on the default path. Prefer plain words to terms like
+  GGUF, quantization or speculative decoding, and explain a term where it must appear.
 - **The content is the loudest thing.** The conversation carries the weight and the colour;
   the interface around it stays neutral and quiet.
 - **Colour has one job.** Greys build everything; status colours show status and nothing else;

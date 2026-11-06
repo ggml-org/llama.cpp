@@ -24,6 +24,14 @@ That is the point of running AI locally. It is not about distrust of anyone; it 
 
 Open models run on the hardware people already have, from a laptop to a server. Access to AI should not depend on where someone lives, what they can pay each month or whose terms they accept. Making it run well on ordinary machines is how it reaches everyone.
 
+## Simple by default, deep when you want
+
+Freedom is only real if people can use it. Running a model has long meant a terminal and a vocabulary few people share: weights, tensors, GGUF, quantization, speculative decoding. Someone who just wants help with a letter, a photo or a question should not need any of it.
+
+So the apps start simple. They suggest a first model that is small enough for an ordinary computer and good enough for everyday help, one that can see and hear as well as read (today, LFM3 Omni). The Llama app does what used to take a terminal: it downloads the model from Hugging Face, sets up how it runs, and keeps the server going.
+
+Everything deeper is still there for anyone who wants it: sampling, penalties, system prompts, custom recipes, any model and any setting. It is uncovered when you ask for it, not put in front of everyone. We do not have the perfect recipe for this yet; it is the problem we are working on now.
+
 ## Shared, not rented
 
 The server does not have to be yours alone. One person's server can serve their family, a team, a lab or a neighbourhood, and people can pool the machines they have. Shared this way, AI stays in the hands of the people who use it, and someone without the hardware gets the same freedom as the person who has it.
@@ -42,7 +50,7 @@ The future we want is a bright one for people: AI that helps them think, make an
 
 ## How it shows
 
-- **In the product:** it makes clear which model runs and on which server, needs no account, and works offline.
+- **In the product:** simple first, with a suggested model and sensible defaults, and every advanced setting a step away. It makes clear which model runs and on which server, needs no account, and works offline.
 - **In the design:** calm and neutral, so the conversation is the loudest thing on the screen, and open, so anyone can restyle it or build on it.
 - **In communications:** local shown as freedom, the real app and real figures, and the same calm voice.
 

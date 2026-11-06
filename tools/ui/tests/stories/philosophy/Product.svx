@@ -43,6 +43,12 @@ The line between the two is simple: the library draws the parts and handles inte
 
 The products map onto the three layers in **Ideology**. The **model** is a GGUF file from Hugging Face, which the apps help you find, download and keep. The **service** is llama-server: on your machine, run for you by a native app, or run by someone else and shared. The **application** is Llama UI and the apps built on it, which never assume a cloud account and make clear which model runs, and where.
 
+## Simple first, depth on request
+
+The apps follow **Ideology**'s simple by default. A first run offers one suggested model, small and multimodal (today, LFM3 Omni), and the Llama app does the rest: it downloads the model from Hugging Face, sets up how it runs and keeps llama-server going, with no terminal. Llama Chat opens on a conversation, not on settings.
+
+The depth stays one step away. Sampling, penalties, system prompts, custom recipes and every other model and server setting are there for anyone who asks for them, behind a disclosure rather than on the first screen, and in plain words where a term needs one. How far to hide and how to explain is still being worked out.
+
 ## One build, three channels
 
 Llama Chat is a static app: plain HTML, JavaScript and CSS. Each release builds it once, and the same build can ship three ways; only the thing serving it changes. Today it ships inside llama-server. The plan is to also ship it as `npx llama-chat` and at chat.llama.app, which carry the client alone and connect to a server you add.
