@@ -1,16 +1,20 @@
 #include "testing.h"
 
+#include "ggml-backend.h"
 #include "mtmd-audio.h"
 #include "mtmd-helper.h"
 #include "mtmd-image.h"
 #include "mtmd-internal.h"
 
+#include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -479,15 +483,6 @@ MAKE_TEST(test_audio_preprocessor_conformer) {
         }
     }
 
-    mtmd_audio_preprocessor_conformer preproc(hparams);
-    preproc.initialize();
-    std::vector<mtmd_audio_mel> mels;
-    if (!t.assert_true("preprocess", preproc.preprocess(samples.data(), samples.size(), mels))) {
-        return;
-    }
-    const mtmd_audio_mel & mel = mels[0];
-    t.assert_equal("n_len", (int64_t) 101, mel.n_len);
-
     // reference values from NeMo AudioToMelSpectrogramPreprocessor (liquid-audio 1.3.0)
     // { mel bin, frame, value }
     const std::vector<std::tuple<int, int, float>> cases = {
@@ -496,10 +491,123 @@ MAKE_TEST(test_audio_preprocessor_conformer) {
         {  24, 60, -0.0476f }, // silence -> quiet tone
         { 100, 20, -0.0913f }, // tones, high bin
     };
-    for (const auto & [bin, frame, expected] : cases) {
-        const float actual = mel.data[bin * mel.n_len + frame];
-        t.assert_true("mel[" + std::to_string(bin) + "][" + std::to_string(frame) + "] = " + std::to_string(actual) + ", expected " + std::to_string(expected), std::fabs(actual - expected) < 1e-3f);
+
+    // the result must not depend on the number of threads
+    for (int n_threads : { 1, 4, 7 }) {
+        auto cpu = clip_cpu_runner_init(n_threads);
+        mtmd_audio_preprocessor_conformer preproc(hparams);
+        preproc.mel_config.cpu = cpu.get();
+        preproc.initialize();
+        std::vector<mtmd_audio_mel> mels;
+        if (!t.assert_true("preprocess", preproc.preprocess(samples.data(), samples.size(), mels))) {
+            return;
+        }
+        const mtmd_audio_mel & mel = mels[0];
+        t.assert_equal("n_len", (int64_t) 101, mel.n_len);
+
+        for (const auto & [bin, frame, expected] : cases) {
+            const float actual = mel.data[bin * mel.n_len + frame];
+            t.assert_true("mel[" + std::to_string(bin) + "][" + std::to_string(frame) + "] = " + std::to_string(actual) + ", expected " + std::to_string(expected), std::fabs(actual - expected) < 1e-3f);
+        }
     }
+}
+
+MAKE_TEST(test_audio_preprocessor_threads) {
+    clip_hparams hparams;
+    hparams.n_mel_bins        = 128;
+    hparams.audio_sample_rate = 16000;
+    hparams.audio_n_fft       = 512;
+    hparams.audio_window_len  = 400;
+    hparams.audio_hop_len     = 160;
+
+    // chirp: every frame has a different content
+    std::vector<float> samples(hparams.audio_sample_rate * 5);
+    for (size_t i = 0; i < samples.size(); i++) {
+        samples[i] = (float) (0.3 * std::sin(0.05 * i + 2e-6 * i * i));
+    }
+
+    auto cpu_ref = clip_cpu_runner_init(1);
+    mtmd_audio_preprocessor_conformer preproc_ref(hparams);
+    preproc_ref.mel_config.cpu = cpu_ref.get();
+    preproc_ref.initialize();
+    std::vector<mtmd_audio_mel> mels_ref;
+    if (!t.assert_true("preprocess", preproc_ref.preprocess(samples.data(), samples.size(), mels_ref))) {
+        return;
+    }
+
+    // frames are independent, so the whole output must be bit-exact with the single-threaded one
+    // the server shares one preprocessor between requests
+    for (int n_threads : { 4, 12 }) {
+        const int n_callers = 3;
+        const int n_iters   = 20;
+
+        auto cpu = clip_cpu_runner_init(n_threads);
+        mtmd_audio_preprocessor_conformer preproc(hparams);
+        preproc.mel_config.cpu = cpu.get();
+        preproc.initialize();
+
+        std::atomic<int> n_bad = 0;
+        std::vector<std::thread> callers;
+        for (int ic = 0; ic < n_callers; ic++) {
+            callers.emplace_back([&]() {
+                for (int ii = 0; ii < n_iters; ii++) {
+                    std::vector<mtmd_audio_mel> mels;
+                    const bool ok = preproc.preprocess(samples.data(), samples.size(), mels);
+                    n_bad += !ok || mels.size() != 1 || mels[0].data != mels_ref[0].data;
+                }
+            });
+        }
+        for (auto & caller : callers) {
+            caller.join();
+        }
+        t.assert_equal("n_bad, n_threads = " + std::to_string(n_threads), 0, n_bad.load());
+    }
+}
+
+MAKE_TEST(test_audio_log_mel_blocks) {
+    const int n_mel    = 80;
+    const int n_fft    = 400;
+    const int hop      = 160;
+    const int n_frames = 8192 + 100; // long audio is split into blocks of 8192 frames
+
+    mtmd_audio_cache cache;
+    cache.fill_sin_cos_table(n_fft);
+    cache.fill_hann_window(n_fft, true);
+    cache.fill_mel_filterbank_matrix(n_mel, n_fft, 16000);
+
+    auto cpu = clip_cpu_runner_init(2);
+
+    mtmd_audio_mel_config config;
+    config.cpu        = cpu.get();
+    config.n_mel      = n_mel;
+    config.n_fft_bins = 1 + n_fft / 2;
+    config.hop_length = hop;
+    config.cache      = &cache;
+
+    std::vector<float> samples((size_t) (n_frames - 1) * hop + n_fft);
+    for (size_t i = 0; i < samples.size(); i++) {
+        samples[i] = (float) (0.3 * std::sin(0.05 * i + 1e-6 * i * i));
+    }
+
+    // frames are independent: the frames around the seam must not change when computed on their own
+    // not bit-exact, x86 matmul kernels round differently depending on the shape
+    const int off   = 8192 - 50;
+    const int n_sub = n_frames - off;
+    std::vector<float> all((size_t) n_frames * n_mel);
+    std::vector<float> sub((size_t) n_sub * n_mel);
+    const float * window = cache.hann_window.data();
+    if (!t.assert_true("all", clip_audio_log_mel(config, samples.data(), window, n_frames, all.data())) ||
+        !t.assert_true("sub", clip_audio_log_mel(config, samples.data() + (size_t) off * hop, window, n_sub, sub.data()))) {
+        return;
+    }
+
+    float max_diff = 0.0f;
+    for (int j = 0; j < n_mel; j++) {
+        for (int i = 0; i < n_sub; i++) {
+            max_diff = std::max(max_diff, std::fabs(all[(size_t) j * n_frames + off + i] - sub[(size_t) j * n_sub + i]));
+        }
+    }
+    t.assert_true("max_diff = " + std::to_string(max_diff), max_diff < 1e-5f);
 }
 
 //
@@ -509,6 +617,9 @@ MAKE_TEST(test_audio_preprocessor_conformer) {
 int main(int argc, char ** argv) {
     testing t(std::cout);
     t.verbose = true;
+
+    // the audio preprocessors run on the CPU backend
+    ggml_backend_load_all();
 
     // the video helper logs every frame at debug level
     mtmd_helper_log_set([](ggml_log_level level, const char * text, void *) {

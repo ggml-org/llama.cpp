@@ -53,11 +53,41 @@ struct mtmd_audio_cache {
 // compute one log10-mel frame from n_fft windowed samples, cache must be initialized for n_fft
 void mtmd_audio_log_mel_frame(const mtmd_audio_cache & cache, const float * samples, int n_fft, int n_mel, float * out);
 
+struct mtmd_audio_mel_config {
+    int64_t n_mel            = 0;
+    int64_t n_fft_bins       = 0;
+    int32_t hann_window_size = 0;
+    int32_t hop_length       = 0;
+    int32_t sample_rate      = 0;
+    bool    no_padding       = false;
+    bool    center_padding   = false;
+    float   preemph          = 0.f;
+    bool    use_natural_log  = false;
+    bool    norm_per_feature = false;
+    bool    use_magnitude    = false;  // |X| instead of |X|^2
+    float   mel_floor        = 5.960464477539063e-08f;
+    bool    mel_floor_add    = false;  // log(x + floor) instead of log(max(x, floor))
+    bool    std_eps_after_sqrt = false;  // std + eps instead of sqrt(var + eps)
+
+    const mtmd_audio_cache * cache = nullptr;
+    clip_cpu_runner *        cpu   = nullptr;
+};
+
+// ggml_custom op: windowed FFT of each frame, dst[:, i] = { re[0..n_fft_bins), im[0..n_fft_bins) } of frame i
+// src[0] is the waveform, src[1] the window, userdata the mtmd_audio_mel_config
+// TODO: replace by a ggml op
+void mtmd_audio_stft_op(ggml_tensor * dst, int ith, int nth, void * userdata);
+
 struct mtmd_audio_preprocessor {
     const clip_hparams & hparams;
+    mtmd_audio_mel_config mel_config; // filled by initialize() of the preprocessors that use the log-mel graph
 
     mtmd_audio_preprocessor(const clip_ctx * ctx): hparams(*clip_get_hparams(ctx)) {}
     mtmd_audio_preprocessor(const clip_hparams & hparams): hparams(hparams) {}
+
+    // mel_config points to the cache of this instance
+    mtmd_audio_preprocessor(const mtmd_audio_preprocessor &) = delete;
+    mtmd_audio_preprocessor & operator=(const mtmd_audio_preprocessor &) = delete;
 
     virtual ~mtmd_audio_preprocessor() = default;
     virtual void initialize() = 0; // NOT thread-safe
@@ -197,16 +227,10 @@ struct mtmd_audio_preprocessor_parakeet : mtmd_audio_preprocessor {
     bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const override;
 
   protected:
-    void log_mel(const float * samples, size_t n_samples, mtmd_audio_mel & out) const;
+    bool log_mel(const float * samples, size_t n_samples, mtmd_audio_mel & out) const;
 
   private:
     mtmd_audio_cache cache;
-
-    static void worker_thread(int ith, const float * window_func, int window_size,
-                              const std::vector<float> & samples, int n_samples,
-                              int frame_size, int frame_step, int n_threads,
-                              int n_fft_bins,
-                              const mtmd_audio_cache & cache, mtmd_audio_mel & mel);
 };
 
 // one chunk per recording: the raw log-mel of its valid frames
