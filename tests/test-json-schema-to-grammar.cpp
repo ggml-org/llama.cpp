@@ -1327,6 +1327,52 @@ static void test_all(const std::string & title, std::function<void(const TestCas
 
     test({
         SUCCESS,
+        "allOf with plain integer and number schemas",
+        R"""({
+            "allOf": [
+                {"type": "integer"},
+                {"type": "number", "minimum": 0, "maximum": 100}
+            ]
+        })""",
+        R"""(
+            integral-part ::= [0] | [1-9] [0-9]{0,15}
+            root ::= ("-"? integral-part)
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+    
+    test({
+        SUCCESS,
+        "allOf with a single integer schema",
+        R"""({
+            "allOf": [
+                {"type": "integer"}
+            ]
+        })""",
+        R"""(
+            integral-part ::= [0] | [1-9] [0-9]{0,15}
+            root ::= ("-"? integral-part)
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "allOf with bounded integer and number schemas",
+        R"""({
+            "allOf": [
+                {"type": "integer", "minimum": 0, "maximum": 100},
+                {"type": "number"}
+            ]
+        })""",
+        R"""(
+            root ::= ([0-9] | ([1-8] [0-9] | [9] [0-9]) | "100")
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
         "conflicting names",
         R"""({
             "type": "object",
