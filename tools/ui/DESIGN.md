@@ -716,6 +716,12 @@ rather than shiny plastic. Depth comes from blur, a faint hairline edge and soft
 never from strong gradients. Colour is reserved for meaning: the status colours (success,
 warning, error and info), destructive actions, and the content itself.
 
+There are three layers between a person and a model: the **model** (the weights, a GGUF
+file), the **service** (the server that runs inference: llama.cpp and llama-server) and the
+**application** (the harness, the UI and UX). Llama UI and Llama Chat are the application
+layer. Running all three locally is the point: people choose their model and keep their
+conversations and traces, so the UI never assumes a cloud account or hides which model runs.
+
 This file is the how, written for agents first. The why, written for people, is
 **Introduction › Design philosophy** in Storybook (`tests/stories/introduction/DesignPhilosophy.svx`).
 Its principles, as rules to apply here:
