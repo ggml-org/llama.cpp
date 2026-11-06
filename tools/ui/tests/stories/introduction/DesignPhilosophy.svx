@@ -1,0 +1,130 @@
+<!--
+	The design philosophy: why the brand, Llama UI and Llama Chat look and work the way they do. Written for people
+	first and readable as plain Markdown by agents too; the how, for agents first, is DESIGN.md (Design guidelines).
+	Set in Editorial; every figure is built from the real components, fonts and tokens.
+-->
+
+<script>
+	import Figure from './philosophy/Figure.svelte';
+	import Goblet from './philosophy/figures/Goblet.svelte';
+	import Grotesque from './philosophy/figures/Grotesque.svelte';
+	import IconSizes from './philosophy/figures/IconSizes.svelte';
+	import Measure from './philosophy/figures/Measure.svelte';
+	import Names from './philosophy/figures/Names.svelte';
+	import Neutral from './philosophy/figures/Neutral.svelte';
+	import Restyle from './philosophy/figures/Restyle.svelte';
+	import Stack from './philosophy/figures/Stack.svelte';
+	import Tokens from './philosophy/figures/Tokens.svelte';
+</script>
+
+<p class="kicker">Introduction · The why</p>
+
+# Design philosophy
+
+<p class="lead">Why the brand, <strong>Llama UI</strong> and <strong>Llama Chat</strong> look and work the way they do. They share one set of decisions, so this page covers all three. <strong>Design guidelines</strong> has the how.</p>
+
+## The Llama stack
+
+llama.cpp runs models on your own machine. Around it sits a stack of libraries, packages and technologies, and example apps built on them. **Llama UI** is the library of UI and UX components that this Storybook documents. **Llama Chat** is the local, private chat client built from it, and it replaces the legacy web UI. The brand (the icon, the type, the colours) is how people recognise all of them.
+
+<Figure n={1} caption="The stack, from the app down to the engine. Each layer is meant to be used on its own, and built on.">
+	<Stack />
+</Figure>
+
+The stack is meant to be used and built on, and the design is too. People should be able to take Llama UI into their own apps, fork Llama Chat, or restyle either one without fighting the system.
+
+## Enough character, and no more
+
+The system has just enough character to be recognisable, and it is still easy to change. That character lives in a few places: the icon, the details of the type and one accent colour. Everything else stays neutral. Something built on Llama UI can add its own colour, or its own logo, on top of a quiet base instead of having to undo a loud one.
+
+<Figure n={2} caption="The same real controls as Llama UI ships them, then re-coloured through a handful of component tokens. Nothing else changes, and nothing has to be undone first.">
+	<Restyle />
+</Figure>
+
+## Function first, and beauty from care
+
+Good design is timeless, and it gets there by doing its job first. Every element should serve a purpose, sit where it does for a reason, and be finished with care. Beauty comes from that care and from good proportion, not from ornament. That is the lesson of Swiss typography and the Bauhaus, and it has held for a hundred years.
+
+<p class="pull">Every measurement has a reason, and the reasons are few.</p>
+
+In practice that means a small set of roles, used everywhere. A button doesn't get its own height, corner or icon size; it takes the control's, so every button, field and toggle lines up with every other one.
+
+<Figure n={3} caption="A real button at twice its size on the 4px grid. Its height, corner, icon and label each come from a role that every other control shares.">
+	<Measure />
+</Figure>
+
+## The crystal goblet
+
+In *The Crystal Goblet*, Beatrice Warde argued that typography should be like a clear glass: its job is to show the wine, not to draw the eye to itself. Llama UI holds to the same idea. In Llama Chat, the loudest thing on screen is the conversation: what you wrote and what the model answered.
+
+<Figure n={4} caption="A real exchange in Llama Chat: the user bubble, the model's answer and the chat form, on the app's own page. The conversation carries the colour and the weight; the interface stays in the glass.">
+	<Goblet />
+</Figure>
+
+The interface around it is neutral grey, its surfaces are frosted matte glass that reads as material, not effect, and its type is set to be read rather than noticed. When a control does draw attention, it is because it means something: a status, a selection, focus, an action that can't be undone.
+
+<p class="pull">The interface is the glass. The conversation is the wine.</p>
+
+## Design, engineering and code
+
+Design, engineering and code are faces of one cube, not separate crafts handing work across a wall. That is why the system lives as code. The tokens are CSS, and when the docs and the CSS disagree, the CSS wins. Every component and screen in this Storybook is the real implementation, not a picture of it, and the key visuals in **Brand › Communications** are built from real Llama Chat screens, so a poster can't promise something the app doesn't do.
+
+<Figure n={5} caption="One decision, the primary fill, through the three token tiers to the screen. Change the primitive and every tier after it follows, in both themes.">
+	<Tokens />
+</Figure>
+
+The brand assets are built the same way. The lockups, covers, social avatars and app icons are generated by scripts from the icon and the fonts, and the fonts are built by scripts from their sources. Anything with a reason behind it can be checked, rebuilt, and changed in one place.
+
+Each decision is given two ways: the idea behind it and the measurements. The logo shows both. It begins with the + of C++, the language llama.cpp is written in, and keeps only the arms that make an L inside it. Then a lightning bolt, for speed, leans the L to 60°. The same mark is also set out as a blueprint, every edge on a grid of equal triangles and only the two outer corners rounded, in **Brand › Logo › Overview**. The story makes it memorable; the geometry makes it exact.
+
+## An icon that holds at every size
+
+A logo earns its place by being recognised at a glance and holding up from a 14px favicon to a 7500px cover. The Llama icon is a single shape, solid, made of straight lines and two rounded corners, so it stays itself at every size, in one colour, light or dark.
+
+<Figure n={6} caption="The icon from 14 to 160px, the same drawing at every size. Below, typed as a letter: U+E002 in Llama Sans, once in a sentence and once in a real button.">
+	<IconSizes />
+</Figure>
+
+It is also in the fonts (U+E000 to U+E002), so it can be typed like a letter, set in a line of text, and take the colour and weight of the words around it.
+
+## Grotesque type
+
+Llama Sans belongs to the grotesque line. It started with Akzidenz-Grotesk in 1898, continued through Neue Haas Grotesk, released in 1957 and soon renamed Helvetica, and on to the signs of the New York subway, countless logos, and system fonts like Apple's San Francisco. These faces have lasted because they are plain, sturdy and neutral enough to carry any message.
+
+<Figure n={7} caption="The grotesque line, every name set in Llama Sans rather than its own face; then the letters that make Llama Sans its own, and Llama Mono's cells.">
+	<Grotesque />
+</Figure>
+
+Llama Sans is built from Geist, an open neo-grotesk, and its changes take inspiration from Akzidenz-Grotesk and Neue Haas Grotesk: rounder curves, open, angle-cut terminals, a tailless a and a narrow t. It is one variable font with an optical-size axis, so the browser chooses UI or Display spacing from the font size and nobody has to choose a cut for each element. Llama Mono carries the same letter changes in a fixed cell, so code lines up and l, 1, I and | stay distinct. Both are open under the SIL Open Font License, like the font they come from.
+
+## Neutral by default
+
+Most of what you see is grey, and colour is the exception. Each kind of colour has one job and stays in it:
+
+- **Greys** build everything: pages, surfaces, lines and text, in light and dark.
+- **Status colours** (green, amber, red and blue) only ever show status. Each has one root colour that its surfaces, lines and lamps derive from, so there is one red, and none of them is used for decoration.
+- **Art colours** are friendlier versions of those hues, for shapes, numerals and illustrations in communications. Red is never one of them, so artwork can't be mistaken for an error.
+- **Cinder** (#EE6C1E) is the one accent. It marks the .cpp of the llama.cpp logotype and the odd detail, like the section numbers on this page, and gives the brand a little of its warmth.
+
+<Figure n={8} caption="The palette by how much of it you see: the greys first and by far, the rest as slivers. Below, the real badges: the status colours appear here and nowhere else.">
+	<Neutral />
+</Figure>
+
+Backgrounds stay neutral too. The llama.cpp lockup always sits on light, dark or grey grounds. Only the Llama lockup goes on colour, llama.app's light blue and its navy.
+
+## Two names, one family
+
+**Llama** is the product name: a capital L, set in Llama Sans, and allowed on colour. **llama.cpp** is the engine: always lowercase, set in Llama Mono Bold like the code it is, with .cpp in cinder. Both share the same icon, which is the same glyph in both fonts, so the two lockups belong together even though they are set differently.
+
+<Figure n={9} caption="Both lockups typed, not placed: U+E002 followed by the name, in each font. Llama goes on llama.app's hero blue; llama.cpp stays on neutral light and dark.">
+	<Names />
+</Figure>
+
+## When something new comes up
+
+1. Reuse an existing role before adding a token, and an existing component before writing a new one.
+2. Give every colour and effect a job. If it has none, leave it out.
+3. Prefer what is generated or derived over what is tuned by hand, and record the reason next to the value.
+4. Keep it in code, in this Storybook, where anyone can see it, run it and change it.
+
+<p class="colophon">Set in Llama Sans and Llama Mono. Every figure on this page is drawn with the real components, fonts and tokens.</p>
