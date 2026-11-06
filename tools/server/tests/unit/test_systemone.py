@@ -158,6 +158,29 @@ def test_systemone_shared_prompt():
     assert abs(res.body["answers"]["angry"]["noul"] - res_single.body["answers"]["angry"]["noul"]) < 0.01
 
 
+def test_systemone_shared_prompt_across_groups():
+    global server
+    server = ServerPreset.tinyopenjev()
+    server.n_slots = 4
+    server.server_metrics = True
+    server.start()
+
+    state = TEST_STATE * 32
+    questions = {f"q{i}": {"type": "noul", "instructions": f"{i}: Is the customer angry?"} for i in range(8)}
+    tokens = server.make_request("POST", "/tokenize", data={"content": state})
+    assert tokens.status_code == 200
+    n_state = len(tokens.body["tokens"])
+
+    res = server.make_request("POST", "/v1/systemone", data={"state": state, "questions": questions})
+    assert res.status_code == 200
+    assert list(res.body["answers"]) == list(questions)
+
+    n_processed, n_cached = get_prompt_metrics(server)
+    assert n_processed + n_cached == res.body["usage"]["input_tokens"]
+    # the state is evaluated once, all other copies are cached (one boundary token per question is allowed)
+    assert n_processed <= res.body["usage"]["input_tokens"] - (len(questions) - 1) * n_state + len(questions)
+
+
 @pytest.mark.parametrize("cache_ram", [None, 100])
 def test_systemone_prompt_cache(cache_ram, tmp_path):
     global server
