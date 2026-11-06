@@ -698,17 +698,21 @@ def test_checkpoint_after_one_token_divergence(swa_server):
             "prompt": prompt,
             "id_slot": 1,
             "cache_prompt": cache_prompt,
-            "n_predict": 8,
+            "n_predict": 1,
+            "n_probs": 5,
         })
         assert res.status_code == 200
-        return res.body
+        return res.body["timings"]["cache_n"], [(p["id"], p["logprob"]) for p in res.body["completion_probabilities"][0]["top_logprobs"]]
 
     complete(a, True)
     complete(b, True)
-    cached = complete(c, True)
-    assert cached["timings"]["cache_n"] > 0
-    fresh = complete(c, False)
-    assert cached["content"] == fresh["content"]
+    cache_n, actual = complete(c, True)
+    assert cache_n > 0
+    _, expected = complete(c, False)
+
+    assert [tid for tid, _ in actual] == [tid for tid, _ in expected]
+    for (_, lp), (_, lp_expected) in zip(actual, expected):
+        assert lp == pytest.approx(lp_expected, abs=1e-3)
 
 
 # cache reuse shifts the tail of the cached prompt over a deleted chunk - the checkpoints there were created from the
