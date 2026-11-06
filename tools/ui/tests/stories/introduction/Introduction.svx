@@ -38,7 +38,7 @@
 The short version of **Philosophy**:
 
 - **Personal, on hardware you already have:** the model runs on your own laptop, desktop or phone. Your conversations stay on it, and it works offline, without an account, so what you ask stays private and the AI you rely on is yours to keep. Capable AI shouldn't depend on a subscription or someone else's data centre; it should be open to everyone.
-- **Simple by default, deep on request:** the apps start with one suggested model, set up for you; every other setting is one step away rather than on the first screen.
+- **Simple by default, deep on request:** nothing comes pre-installed. The Llama app suggests models that fit your device, and recommends one above the rest: small enough for any of them, and able to read, see and hear. Every other setting is one step away rather than on the first screen.
 - **Recognisable, easy to change:** the character is in three places, the icon, the details of the type and one accent, cinder. Everything else is neutral, so an app can bring its own colour.
 - **Function first:** every element has a job and a reason for its size. The interface stays out of the way of the conversation.
 - **Design lives in code:** the tokens, in three tiers, are the design. Change a primitive and the rest follows.
