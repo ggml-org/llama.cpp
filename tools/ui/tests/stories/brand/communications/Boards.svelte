@@ -1,7 +1,7 @@
 <!--
-	Specimen boards and posters for Llama Sans, after the classic Swiss specimen boards, in the brand palette: the art
-	colours (a Swiss blue, sky, navy, green and amber), cinder as the accent, the greys, and beige as the warm neutral;
-	no red.
+	Specimen boards and posters for Llama Sans, after the classic Swiss specimen boards, in the brand palette: four
+	boards (specimen, title, alphabet, a wall of small posters), then three posters on the communications grounds
+	(dark, sand under the navy, the hero blue), cinder once on each; no red.
 	Light mixes stay within one hue. Fixed to light, so they read the same in both themes. Set in Llama Sans Display
 	and UI.
 -->
@@ -12,12 +12,6 @@
 	const lower = 'abcdefghijklmn\nopqrstuvwxyz()&?!';
 	const figures = '1234567890.,;:’”/–';
 	const rows = [400, 500, 600, 700, 400, 500, 600, 700];
-	const weights = [
-		[400, 'Regular'],
-		[500, 'Medium'],
-		[600, 'SemiBold'],
-		[700, 'Bold']
-	] as const;
 	const wall = [
 		{ caption: 'Run it yourself', image: 'sky' },
 		{ caption: 'Quantised to fit', image: 'sea' },
@@ -104,38 +98,6 @@
 		{/each}
 	</article>
 
-	<!-- a collage of circles on cream -->
-	<article aria-label="Circles" class="board wide circles">
-		{#each Array.from({ length: 15 }, (_, i) => i) as i (i)}
-			<span class="c c{i}">
-				{#if i === 1}<b class="year">20<br />26</b>
-				{:else if i === 3}<b class="list">Regular<br />Medium<br />SemiBold<br />Bold</b>
-				{:else if i === 4}<b>Aa</b>
-				{:else if i === 6}<b>&amp;</b>
-				{:else if i === 8}<b class="icon"></b>
-				{:else if i === 10}<b>*</b>
-				{:else if i === 12}<b class="word">Llama<br />Sans</b>
-				{:else if i === 13}<b>+</b>{/if}
-			</span>
-		{/each}
-	</article>
-
-	<!-- a weight stack on navy -->
-	<article aria-label="Weights" class="board poster stack">
-		<p class="lead">Llama Sans–</p>
-
-		{#each weights as [w, name], i (w)}<p class:sky={i % 2 === 0} style:font-weight={w}>
-				{name}
-			</p>{/each}
-
-		<p class="foot">Four weights · one axis · 400 to 700</p>
-	</article>
-
-	<!-- numerals, solid and outline, on sand -->
-	<article aria-label="26" class="board poster numerals">
-		{#each [0, 1, 2, 3] as i (i)}<p class:navy={i < 2} class:outline-n={i % 2 === 1}>26</p>{/each}
-	</article>
-
 	<!-- an exhibition poster with light beams -->
 	<article aria-label="Explorations in light" class="board poster light">
 		<p class="t">Explorations in light</p>
@@ -145,11 +107,11 @@
 		<div class="beams"></div>
 
 		<p class="credit">
-			<span>Set in Llama Sans<br />Display &amp; UI</span><span>11<br />26</span>
+			<span>Set in Llama Sans<br />Display &amp; UI</span><span class="date">11<br />26</span>
 		</p>
 	</article>
 
-	<!-- a quiet classic: a sky image under a short title -->
+	<!-- a quiet classic: a navy image over sand, under a short title -->
 	<article aria-label="A quiet classic" class="board poster classic">
 		<div class="photo sky tall"></div>
 
@@ -158,9 +120,9 @@
 		<p class="s">A quiet classic</p>
 	</article>
 
-	<!-- a text poster on sage -->
-	<article aria-label="About Llama Sans" class="board poster sage">
-		<p class="label">Llama Sans</p>
+	<!-- a text poster on llama.app's hero blue -->
+	<article aria-label="About Llama Sans" class="board poster note">
+		<p class="label"><i class="dot"></i>Llama Sans</p>
 
 		<p class="body">
 			The Llama Sans design is a neo-grotesk with an even stroke, round bowls and open, angle-cut
@@ -187,44 +149,31 @@
 				color-mix(in oklab, var(--art-navy), black 22%) 0%,
 				color-mix(in oklab, var(--art-navy), black 10%) 100%
 			);
-		--navy-flat: color-mix(in oklab, var(--art-navy), black 10%);
-		/* fields: neutral greys and beige, In use's light hero blue (mist) and navy, and one vibrant blue; the
-		   artwork colours add the pops (shapes, tiles, numerals, highlighted words) */
-		--swiss: linear-gradient(
-			160deg,
-			color-mix(in oklab, var(--art-blue), white 8%) 0%,
-			var(--art-blue) 55%,
-			color-mix(in oklab, var(--art-blue), black 10%) 100%
-		);
-		--swiss-flat: var(--art-blue);
-		--sky: var(--art-sky);
 		--mist: linear-gradient(
 			160deg,
 			color-mix(in oklab, var(--art-sky), white 55%) 0%,
 			color-mix(in oklab, var(--art-sky), white 68%) 100%
 		);
-		--grey: linear-gradient(
-			160deg,
-			var(--neutral-400) 0%,
-			var(--neutral-300) 55%,
-			var(--neutral-200) 100%
-		);
 		--cream: var(--beige-100);
-		--sand: var(--beige-50);
-		--sage: var(--art-amber); /* the text poster: a warm, vibrant pop */
-		--teal: var(--art-green);
-		--saffron: var(--art-amber);
-		--pink: var(--art-cinder-light); /* a light orange in place of pink: no red */
+		/* llama.app's hero, as the hero ground */
+		--hero:
+			radial-gradient(ellipse at 15% 10%, #dcecfb 0%, transparent 55%),
+			radial-gradient(ellipse at 90% 95%, #e8f2fc 0%, transparent 50%),
+			linear-gradient(160deg, #c4ddf6 0%, #d0e4f7 55%, #dfecf9 100%);
 		--cinder: var(--art-cinder); /* the accent orange and the .cpp of the logotype */
 		--ink: var(--beige-900);
 		--display: 'Llama Sans', var(--font-sans);
 		display: grid;
-		grid-template-columns: repeat(4, minmax(0, 1fr));
+		/* twelve columns: the boards take halves, the posters thirds */
+		grid-template-columns: repeat(12, minmax(0, 1fr));
 		gap: 14px;
 	}
 	@media (max-width: 900px) {
-		.boards {
-			grid-template-columns: repeat(2, minmax(0, 1fr));
+		.wide {
+			grid-column: span 12 !important;
+		}
+		.poster {
+			grid-column: span 6 !important;
 		}
 	}
 	.boards :is(p, ul) {
@@ -240,11 +189,12 @@
 		font-family: var(--display);
 	}
 	.wide {
-		grid-column: span 2;
+		grid-column: span 6;
 		aspect-ratio: 16 / 10;
 		padding: 5%;
 	}
 	.poster {
+		grid-column: span 4;
 		aspect-ratio: 3 / 4;
 		padding: 8%;
 	}
@@ -448,123 +398,11 @@
 		); /* saffron */
 	}
 
-	/* circles */
-	.circles {
-		grid-template-columns: repeat(5, 1fr);
-		grid-template-rows: repeat(3, 1fr);
-		gap: 2.5%;
-		place-items: center;
-		background: var(--cream);
-	}
-	.c {
-		display: grid;
-		place-items: center;
-		width: 80%;
-		aspect-ratio: 1;
-		border-radius: 50%;
-		background: var(--beige-50);
-		color: var(--ink);
-		container-type: inline-size;
-	}
-	.c b {
-		font: 700 42cqi / 1 var(--display);
-	}
-	.c .year {
-		font-size: 30cqi;
-		line-height: 0.85;
-	}
-	.c .list {
-		font: 600 12cqi / 1.1 var(--display);
-	}
-	.c .word {
-		font: 700 20cqi / 0.9 var(--display);
-	}
-	.c1 {
-		background: var(--saffron);
-	}
-	.c3 {
-		background: var(--sky);
-	}
-	.c4 {
-		background: var(--teal);
-		color: #fff;
-	}
-	.c6 {
-		background: var(--swiss-flat);
-		color: #fff;
-	}
-	.c7 {
-		background: repeating-linear-gradient(0deg, var(--navy-flat) 0 6%, var(--sky) 6% 12%);
-	}
-	.c8 {
-		background: var(--ink);
-		color: #fff;
-	}
-	.c10 {
-		background: var(--pink);
-	}
-	.c11 {
-		background: radial-gradient(circle at 35% 35%, var(--neutral-400), var(--neutral-500));
-	}
-	.c12 {
-		background: var(--sky);
-	}
-	.c13 {
-		background: var(--cinder);
-		color: #fff;
-	}
-
-	/* weight stack */
-	.stack {
-		align-content: start;
-		background: var(--swiss); /* the one vibrant field: the artwork blue */
-		color: #fff;
-	}
-	.stack p {
-		font: 400 13cqi / 1 var(--display);
-		letter-spacing: -0.02em;
-	}
-	.stack .lead {
-		font-weight: 700;
-	}
-	.stack .sky {
-		color: var(--art-cinder-light); /* a light orange, readable on the dark field */
-	}
-	.stack .foot {
-		align-self: end;
-		margin-top: 8cqi;
-		font: 500 3.4cqi / 1.3 var(--font-sans);
-		letter-spacing: 0;
-		opacity: 0.7;
-	}
-
-	/* numerals */
-	.numerals {
-		align-content: center;
-		justify-items: center;
-		background: var(--cream);
-	}
-	.numerals p {
-		font: 700 34cqi / 0.86 var(--display);
-		color: var(--cinder);
-		letter-spacing: -0.03em;
-	}
-	.numerals .navy {
-		color: var(--swiss-flat);
-	}
-	.numerals .outline-n {
-		color: transparent;
-		-webkit-text-stroke: 0.6cqi var(--swiss-flat);
-	}
-	.numerals .outline-n:not(.navy) {
-		-webkit-text-stroke-color: var(--cinder);
-	}
-
 	/* exhibition poster */
 	.light {
 		grid-template-rows: auto auto 1fr auto;
-		background: var(--neutral-950);
-		color: var(--neutral-100);
+		background: #111111; /* the dark ground */
+		color: #fafafa;
 	}
 	.light .t {
 		font: 600 7.4cqi / 1.05 var(--display);
@@ -589,7 +427,10 @@
 		display: flex;
 		justify-content: space-between;
 		font: 500 2.8cqi / 1.3 var(--font-sans);
-		opacity: 0.7;
+		color: rgb(250 250 250 / 0.7);
+	}
+	.light .date {
+		color: var(--cinder); /* the one accent */
 	}
 
 	/* a quiet classic */
@@ -601,7 +442,7 @@
 	}
 	.photo.tall {
 		margin: -8.5% -8.5% 0;
-		background: var(--mist); /* the light hero blue */
+		background: var(--navy); /* the navy ground, over sand */
 	}
 	.classic .t {
 		font: 700 14cqi / 0.92 var(--display);
@@ -612,24 +453,34 @@
 		font: 500 5cqi / 1 var(--display);
 	}
 
-	/* text poster on sage */
-	.sage {
+	/* text poster on the hero blue */
+	.note {
 		grid-template-rows: auto 1fr auto;
-		background: var(--sage);
-		color: var(--ink);
+		background: var(--hero);
+		color: #111111;
 	}
-	.sage .label {
+	.note .label {
+		display: flex;
+		gap: 1.6cqi;
+		align-items: center;
 		font: 600 3.4cqi / 1.2 var(--font-sans);
 		letter-spacing: 0.06em;
 		text-transform: uppercase;
 	}
-	.sage .body {
-		align-self: center;
-		font: 600 6.4cqi / 1.15 var(--display);
-		text-transform: uppercase;
-		letter-spacing: 0.01em;
+	.note .dot {
+		width: 2.4cqi;
+		height: 2.4cqi;
+		border-radius: 50%;
+		background: var(--cinder);
 	}
-	.sage .end {
+	.note .body {
+		align-self: center;
+		font: 600 7cqi / 1.12 var(--display);
+		letter-spacing: -0.01em;
+		text-wrap: pretty;
+	}
+	.note .end {
 		justify-self: end;
+		color: rgb(17 17 17 / 0.62);
 	}
 </style>

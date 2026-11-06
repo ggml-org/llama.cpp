@@ -2,16 +2,14 @@
 // stories' args, so it can be rewritten in Storybook's controls before a post is exported.
 
 /**
- * The grounds a piece is set on. The neutrals (light, dark) take either lockup; llama.app's hero blue and navy, the
- * Swiss blue, sand and amber take the Llama lockup only. Cinder is never a ground: it is the one accent on top of them
+ * The grounds a piece is set on. The neutrals (light, dark) take either lockup; llama.app's hero blue and navy, and
+ * sand take the Llama lockup only. Cinder is never a ground: it is the one accent on top of them
  */
-export type Ground = 'amber' | 'blue' | 'dark' | 'hero' | 'light' | 'navy' | 'sand';
+export type Ground = 'dark' | 'hero' | 'light' | 'navy' | 'sand';
 /** the older name, kept for the post templates */
 export type PostTone = Ground;
 
 export const GROUNDS: Record<Ground, { lockups: string; name: string; note: string }> = {
-	amber: { lockups: 'Llama', name: 'Amber', note: 'A warm pop, used rarely' },
-	blue: { lockups: 'Llama', name: 'Blue', note: 'The Swiss blue, for a loud piece' },
 	dark: { lockups: 'Llama, llama.cpp', name: 'Dark', note: 'Ink, for the developer side' },
 	hero: { lockups: 'Llama', name: 'Hero', note: "llama.app's light blue sky" },
 	light: { lockups: 'Llama, llama.cpp', name: 'Light', note: 'The default: neutral 50 with ink' },
