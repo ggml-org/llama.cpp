@@ -783,8 +783,7 @@ mode and frosted, translucent matte glass in dark (58% of the fill over the page
 danger control with its own red (`bg-destructive`, `bg-red-500` …): use the `destructive`
 variant, which `AlertDialog.Action` takes too, or the status tokens. Cinder (`art-cinder`, `oklch(0.68 0.18 46)`, #ee6c1e) is the brand's one accent orange: the .cpp of the llama.cpp
 logotype, the mark on a detail in the brand pages and the warm pop in artwork. It is not part of the UI palette. Sand (`sand-50` to `sand-900`) is the warm neutral for communications
-and artwork (posts, posters, boards, the site). It is a token like the others, but no UI element uses it: the UI
-stays on the greys.
+(posters, boards, the site); the UI itself stays on the greys.
 
 Backgrounds stay neutral as a rule, in the UI and in communications alike: greys and sand
 behind, colour only where it serves a purpose, functional (status, a selection, focus) or
@@ -1026,8 +1025,6 @@ icon buttons in the chat form are fully round.
 - Don't use Tailwind's palette classes (`text-amber-500`, `bg-green-500/10`) for meaning in
   new code; use the semantic tokens. Some older components still do and are being moved over.
 - Don't introduce new accent hues (such as a blue submit button) without a design decision.
-- Don't use sand (`sand-*`) in UI elements. It is a token for communications and artwork;
-  the UI stays on the greys.
 - Don't put white rims or highlights on large ambient containers such as the sidebar.
 - Don't animate for decoration: no motion on things that did not change, no bounces on
   entrances, and nothing that delays the user.
