@@ -28,8 +28,8 @@
 	--cool-gray-300: oklch(0.86 0.007 250);
 	--cool-gray-400: oklch(0.81 0.01 250);
 
-	/* sand: a warm neutral for communications (posters, boards, the site), after the type specimen's In use sand;
-	   the UI itself stays on the greys */
+	/* sand: a warm neutral for communications and artwork only (posts, posters, boards, the site), after the type
+	   specimen's In use sand. A token like the rest, but no UI element uses it: the UI stays on the greys */
 	--sand-50: oklch(0.965 0.01 80);
 	--sand-100: oklch(0.936 0.015 81);
 	--sand-200: oklch(0.89 0.02 80);
