@@ -1,22 +1,16 @@
 <!--
-	The four layers between a person and the AI, top to bottom: the application people use, the harness (the agentic
-	loop and its tools), inference (the engine and server) and the model's weights. Each says what it is, what it is in
-	the Llama stack, and what it means to have it on your side. The application, the one people touch, carries the
-	cinder mark.
+	The three layers between a person and the AI, top to bottom: the application people use (with its harness, the
+	agentic loop and its tools), inference (the engine and server) and the model's weights. Each says what it is, what
+	it is in the Llama stack, and what it means to have it on your side. The application, the one people touch, carries
+	the cinder mark.
 -->
 <script lang="ts">
 	const layers = [
 		{
-			here: 'Llama Chat, Llama for Mac and Windows, Llama UI',
+			here: 'Llama Chat, Llama for Mac and Windows',
 			name: 'Application',
-			what: 'The UI and UX people work with.',
-			yours: 'Your conversations and settings, kept where you are'
-		},
-		{
-			here: 'Llama Chat’s agentic loop; server, browser and MCP tools',
-			name: 'Harness',
-			what: 'What the model can do: the loop that calls tools, and the tools.',
-			yours: 'Only the tools you added, with the permissions you set'
+			what: 'The UI and UX people work with, and its harness: the agentic loop and the tools it calls.',
+			yours: 'Your conversations kept where you are; only the tools you added'
 		},
 		{
 			here: 'ggml, libllama and llama-server',

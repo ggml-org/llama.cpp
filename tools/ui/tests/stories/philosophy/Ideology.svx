@@ -62,13 +62,13 @@ A server doesn't have to serve one person. One machine can serve a family, a tea
 	<Sharing />
 </Figure>
 
-## Four layers
+## Three layers
 
-Between a person and the AI are four layers: the **application** (the UI and UX), the **harness** (the agentic loop and the tools it can call), **inference** (the engine and server that run the model) and the **model** (the weights).
+Between a person and the AI are three layers: the **application** (the UI and UX, with the harness inside it: the agentic loop and the tools it can call), **inference** (the engine and server that run the model) and the **model** (the weights).
 
 The weights are what everything else is built on, so they stay open. In the Llama stack, every layer above them can run on your own hardware, with no provider in between.
 
-<Figure n={5} caption="The four layers, from the one people use down to the weights, with the Llama part on each.">
+<Figure n={5} caption="The three layers, from the one people use down to the weights, with the Llama part on each.">
 	<Layers />
 </Figure>
 
