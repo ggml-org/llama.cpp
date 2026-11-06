@@ -118,7 +118,7 @@ if (CUDAToolkit_FOUND)
 
     # Every .cu file parses the same large headers. Compile the small ones in batches to pay for that less often.
     set(GGML_CUDA_BATCH_SIZE 6)
-    set(GGML_CUDA_BATCH_SKIP ggml-cuda.cu conv2d-dw.cu mmvq.cu mmvf.cu binbcast.cu argsort.cu fattn.cu sum.cu ssm-scan.cu top-k.cu mean.cu getrows.cu cumsum.cu)
+    set(GGML_CUDA_BATCH_SKIP ggml-cuda.cu conv2d-dw.cu mmvq.cu mmvf.cu binbcast.cu argsort.cu sum.cu ssm-scan.cu top-k.cu mean.cu getrows.cu cumsum.cu)
     set(GGML_CUDA_BATCHED "")
     foreach(SRC IN LISTS GGML_SOURCES_CUDA)
         get_filename_component(SRC_NAME ${SRC} NAME)
