@@ -10,7 +10,7 @@
 		],
 		[
 			'AI for everyone',
-			'Open models on the hardware people already have. Access to AI belongs to people everywhere, not to a subscription.'
+			'Open models on the hardware people already have, and on servers people share with each other. Access to AI belongs to people everywhere, not to a subscription.'
 		],
 		[
 			'People first',
@@ -37,7 +37,10 @@
 	// how a piece speaks for each of the three layers (what they are is in Introduction › Design philosophy)
 	const stack = [
 		['Model', 'Model cards, sizes, quants; the maker’s name, never their logo'],
-		['Service', 'llama.cpp in Llama Mono, commands and figures, on the neutrals'],
+		[
+			'Service',
+			'llama.cpp in Llama Mono, commands and figures, on the neutrals; a server can be run by one and shared by many'
+		],
 		['Application', 'Llama in Llama Sans, the real app, on any ground']
 	];
 
