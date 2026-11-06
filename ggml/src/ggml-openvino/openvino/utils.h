@@ -75,6 +75,10 @@ ov::Output<ov::Node> process_view_input(const NodeContext & context, int input_i
 
 ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int input_index);
 
+// A KQ mask input. Stateful execution reads the mask parameters through the masks rebuilt from the positions (see
+// add_sliced_mask_stateful); any other input, e.g. the mask rows gemma-4 gathers for its KV-shared layers, as is.
+ov::Output<ov::Node> get_kq_mask_input(const NodeContext & context, size_t input_index);
+
 // A stateless KV cache in the [1, ctx, n_heads_kv, head_size] layout (GgmlOvDecoder::is_kvcache_4d), as opposed to
 // [1, n_seq, ctx, n_heads_kv * head_size]
 inline bool is_kvcache_4d_shape(const ov::PartialShape & shape) {

@@ -39,8 +39,11 @@ OutputVector translate_get_rows(const NodeContext & context) {
                                           data.get_partial_shape()[1].compatible(view_shape[3]),
                                       "GET_ROWS: view over a weight must be a row range");
         row_offset = static_cast<int64_t>(view_offset / row_bytes);
-    } else {
+    } else if (context.get_view_input_size(0) > 0) {
         data = process_view_input_new(context, 0);
+    } else {
+        // gemma-4 gathers the mask rows of its output tokens for the KV-shared layers
+        data = get_kq_mask_input(context, 0);
     }
 
     auto op_case = context.get_op_case();

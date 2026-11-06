@@ -79,14 +79,7 @@ OutputVector translate_soft_max(const NodeContext & context) {
                 grouped, std::make_shared<ov::op::v0::Constant>(grouped.get_element_type(), ov::Shape{},
                                                                 std::vector<float>{scale}));
         }
-        ov::Output<ov::Node> mask = context.get_input(1);
-        std::string mask_name = "KQ_mask_sliced";
-        if (context.get_input_names()[1].find("swa") != std::string::npos) {
-            mask_name = "KQ_mask_swa_sliced";
-        }
-        if (context.has_input(mask_name)) {
-            mask = context.get_input(mask_name);
-        }
+        ov::Output<ov::Node> mask = get_kq_mask_input(context, 1);
         if (mask.get_element_type() != grouped.get_element_type()) {
             mask = std::make_shared<ov::op::v0::Convert>(mask, grouped.get_element_type());
         }
@@ -117,16 +110,7 @@ OutputVector translate_soft_max(const NodeContext & context) {
     // Optional mask add: logits += mask
     // For max_bias > 0 (ALiBi), apply per-head slope to mask before adding.
     if (has_mask) {
-        ov::Output<ov::Node> mask = context.get_input(1);
-
-        // For stateful
-        std::string mask_name = "KQ_mask_sliced";
-        if (context.get_input_names()[1].find("swa") != std::string::npos) {
-            mask_name = "KQ_mask_swa_sliced";
-        }
-        if (context.has_input(mask_name)) {
-            mask = context.get_input(mask_name);
-        }
+        ov::Output<ov::Node> mask = get_kq_mask_input(context, 1);
 
         if (mask.get_element_type() != logits.get_element_type()) {
             mask = std::make_shared<ov::op::v0::Convert>(mask, logits.get_element_type());

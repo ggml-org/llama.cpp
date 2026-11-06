@@ -437,6 +437,17 @@ std::shared_ptr<ov::Node> gather_compressed_rows(const ov::Output<ov::Node> & we
     return saw_compressed ? gathered : nullptr;
 }
 
+ov::Output<ov::Node> get_kq_mask_input(const NodeContext & context, size_t input_index) {
+    const auto & name = context.get_input_names()[input_index];
+    const std::string sliced = name == "self_kq_mask_swa"                  ? "KQ_mask_swa_sliced" :
+                               name == "self_kq_mask" || name == "KQ_mask" ? "KQ_mask_sliced" :
+                                                                             std::string();
+    if (!sliced.empty() && context.has_input(sliced)) {
+        return context.get_input(sliced);
+    }
+    return context.get_input(input_index);
+}
+
 ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int input_index) {
     auto input = context.get_input(input_index);
 

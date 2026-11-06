@@ -147,17 +147,9 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
 
     ov::Output<ov::Node> res;
 
-    // For stateful
     ov::Output<ov::Node> mask;
     if (has_mask) {
-        mask = context.get_input(3);
-        std::string mask_name = "KQ_mask_sliced";
-        if (context.get_input_names()[3].find("swa") != std::string::npos) {
-            mask_name = "KQ_mask_swa_sliced";
-        }
-        if (context.has_input(mask_name)) {
-            mask = context.get_input(mask_name);
-        }
+        mask = get_kq_mask_input(context, 3);
         if (mask.get_element_type() != ov::element::f16) {
             mask = std::make_shared<ov::op::v0::Convert>(mask, ov::element::f16);
         }
