@@ -112,8 +112,8 @@
 		{@const { apps, chat, fits, gpu, models, openers, overlay, tone } = args as MicrosoftStoreCopy &
 			ArtArgs}
 		<StateGallery {...gallery}>
-			<StateGalleryItem label="1, the opener" note="{openers.length} versions of the tagline">
-				<Variants items={openers} label="Versions of the opener">
+			<StateGalleryItem full label="1, the opener" note="{openers.length} versions of the tagline">
+				<Variants itemWidth={gallery.itemWidth} items={openers} label="Versions of the opener">
 					{#snippet children(o)}
 						<Downloadable name="llama-store-screenshot-1-opener-{o.id.toLowerCase()}-{tone}">
 							<StoreScreenshot headline={o.headline} kind="brand" lede={o.lede} {overlay} {tone} />
