@@ -52,7 +52,7 @@
 	</article>
 
 	<!-- every step of the weight axis -->
-	<article class="card c-beige weights">
+	<article class="card c-sand weights">
 		<p class="mono-label">One axis · 400 to 700</p>
 
 		<ol>
@@ -73,7 +73,7 @@
 
 	<!-- a wall of small posters -->
 	<article class="card c-ink posters">
-		<div class="tile t-beige"><span class="plus">+</span></div>
+		<div class="tile t-sand"><span class="plus">+</span></div>
 
 		<div class="tile t-paper"><span class="q">Q4</span><span class="tag">4-bit</span></div>
 
@@ -142,7 +142,7 @@
 	</article>
 
 	<!-- a billboard -->
-	<article class="card full c-beige billboard">
+	<article class="card full c-sand billboard">
 		<p class="claim">Run it yourself.</p>
 
 		<p class="by"><span>llama.cpp</span><span>Inference on your own hardware</span></p>
@@ -272,9 +272,9 @@
 		border-radius: 1.6cqi;
 		padding: 3cqi;
 	}
-	.t-beige {
-		background: var(--beige);
-		color: var(--beige-ink);
+	.t-sand {
+		background: var(--sand);
+		color: var(--sand-ink);
 		place-items: center;
 	}
 	.t-paper {

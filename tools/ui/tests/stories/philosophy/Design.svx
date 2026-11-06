@@ -138,7 +138,7 @@ They are built the same way too. The key visuals show the real Llama Chat, not a
 	<Posts />
 </Figure>
 
-Artwork is where the brand is allowed to play. The specimen boards follow the classic Swiss boards: one face, set large, on grounds from the art colours, beige and the greys, with cinder as the one warm mark and never red.
+Artwork is where the brand is allowed to play. The specimen boards follow the classic Swiss boards: one face, set large, on grounds from the art colours, sand and the greys, with cinder as the one warm mark and never red.
 
 <Figure n={11} caption="Specimen boards and posters for Llama Sans, after the Swiss specimen boards, in the brand palette.">
 	<Boards />

@@ -28,13 +28,13 @@
 	--cool-gray-300: oklch(0.86 0.007 250);
 	--cool-gray-400: oklch(0.81 0.01 250);
 
-	/* beige: a warm neutral for communications (posters, boards, the site), after the type specimen's In use beige;
+	/* sand: a warm neutral for communications (posters, boards, the site), after the type specimen's In use sand;
 	   the UI itself stays on the greys */
-	--beige-50: oklch(0.965 0.01 80);
-	--beige-100: oklch(0.936 0.015 81);
-	--beige-200: oklch(0.89 0.02 80);
-	--beige-400: oklch(0.72 0.025 76);
-	--beige-900: oklch(0.272 0.013 72);
+	--sand-50: oklch(0.965 0.01 80);
+	--sand-100: oklch(0.936 0.015 81);
+	--sand-200: oklch(0.89 0.02 80);
+	--sand-400: oklch(0.72 0.025 76);
+	--sand-900: oklch(0.272 0.013 72);
 
 	/* artwork: the status hues made friendlier for posters, boards and illustrations (softer chroma, a green turned
 	   towards teal), with no red, and cinder, the accent orange. Never for status, which keeps its own colours */
@@ -43,7 +43,7 @@
 	--art-navy: oklch(0.33 0.07 256);
 	--art-green: oklch(0.64 0.09 165);
 	--art-amber: oklch(0.8 0.12 78);
-	/* cinder: the brand's one accent orange, warm next to the hero blue and the beige (#ee6c1e) */
+	/* cinder: the brand's one accent orange, warm next to the hero blue and the sand (#ee6c1e) */
 	--art-cinder: oklch(0.68 0.18 46);
 	--art-cinder-light: oklch(0.85 0.065 46);
 

@@ -22,7 +22,7 @@ export const GROUNDS: Record<Ground, { lockups: string; name: string; note: stri
 		name: 'Night sky',
 		note: 'Darkest at the top, a faint glow at the horizon'
 	},
-	sand: { lockups: 'Llama', name: 'Sand', note: 'Beige, the warm neutral, with its own ink' }
+	sand: { lockups: 'Llama', name: 'Sand', note: 'The warm neutral, with its own ink' }
 };
 
 export interface PostFormat {

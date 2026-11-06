@@ -136,7 +136,7 @@
 
 <style>
 	.boards {
-		/* every colour from the brand palette: the art colours (art-*), cinder, the greys, and beige as the warm
+		/* every colour from the brand palette: the art colours (art-*), cinder, the greys, and sand as the warm
 		   neutral; mixes stay within one hue */
 		--navy:
 			radial-gradient(
@@ -154,7 +154,7 @@
 			color-mix(in oklab, var(--art-sky), white 55%) 0%,
 			color-mix(in oklab, var(--art-sky), white 68%) 100%
 		);
-		--cream: var(--beige-100);
+		--cream: var(--sand-100);
 		/* the day and night skies, as the grounds */
 		--day-sky:
 			radial-gradient(ellipse at 15% 10%, #dcecfb 0%, transparent 55%),
@@ -164,7 +164,7 @@
 			radial-gradient(ellipse 120% 60% at 50% 115%, rgb(46 70 104 / 0.35) 0%, transparent 70%),
 			linear-gradient(180deg, #0f1a2b 0%, #13213a 55%, #182a45 100%);
 		--cinder: var(--art-cinder); /* the accent orange and the .cpp of the logotype */
-		--ink: var(--beige-900);
+		--ink: var(--sand-900);
 		--display: 'Llama Sans', var(--font-sans);
 		display: grid;
 		/* twelve columns: the boards take halves, the posters thirds */
@@ -288,7 +288,7 @@
 	.alphabet {
 		grid-template-columns: 1fr 1fr;
 		gap: 4%;
-		background: var(--beige-200);
+		background: var(--sand-200);
 		color: var(--ink);
 	}
 	.alphabet .info {
@@ -337,7 +337,7 @@
 		display: grid;
 		gap: 3cqi;
 		padding: 2.4cqi;
-		background: var(--beige-50);
+		background: var(--sand-50);
 		box-shadow: 0 0.4cqi 1.2cqi rgb(0 0 0 / 0.06);
 	}
 	.mini .photo {
@@ -440,7 +440,7 @@
 	.classic {
 		grid-template-rows: 1fr auto auto;
 		gap: 4%;
-		background: var(--beige-50);
+		background: var(--sand-50);
 		color: var(--ink);
 	}
 	.photo.tall {

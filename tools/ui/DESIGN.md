@@ -35,11 +35,11 @@ colors:
   art-amber: 'oklch(0.8 0.12 78)'
   art-cinder: 'oklch(0.68 0.18 46)'
   art-cinder-light: 'oklch(0.85 0.065 46)'
-  beige-50: 'oklch(0.965 0.01 80)'
-  beige-100: 'oklch(0.936 0.015 81)'
-  beige-200: 'oklch(0.89 0.02 80)'
-  beige-400: 'oklch(0.72 0.025 76)'
-  beige-900: 'oklch(0.272 0.013 72)'
+  sand-50: 'oklch(0.965 0.01 80)'
+  sand-100: 'oklch(0.936 0.015 81)'
+  sand-200: 'oklch(0.89 0.02 80)'
+  sand-400: 'oklch(0.72 0.025 76)'
+  sand-900: 'oklch(0.272 0.013 72)'
   red-400: 'oklch(0.69 0.2 27)'
   red-500: 'oklch(0.6 0.235 27)'
   red-450: 'oklch(0.635 0.229 28)'
@@ -782,10 +782,10 @@ danger button and the solid danger badge are the fill itself (`action-danger`), 
 mode and frosted, translucent matte glass in dark (58% of the fill over the page). Never style a
 danger control with its own red (`bg-destructive`, `bg-red-500` …): use the `destructive`
 variant, which `AlertDialog.Action` takes too, or the status tokens. Cinder (`art-cinder`, `oklch(0.68 0.18 46)`, #ee6c1e) is the brand's one accent orange: the .cpp of the llama.cpp
-logotype, the mark on a detail in the brand pages and the warm pop in artwork. It is not part of the UI palette. Beige (`beige-50` to `beige-900`) is the warm neutral for communications
+logotype, the mark on a detail in the brand pages and the warm pop in artwork. It is not part of the UI palette. Sand (`sand-50` to `sand-900`) is the warm neutral for communications
 (posters, boards, the site); the UI itself stays on the greys.
 
-Backgrounds stay neutral as a rule, in the UI and in communications alike: greys and beige
+Backgrounds stay neutral as a rule, in the UI and in communications alike: greys and sand
 behind, colour only where it serves a purpose, functional (status, a selection, focus) or
 creative (a shape, a numeral, an illustration). Artwork takes its colours from the `art-*` primitives,
 friendlier versions of the status hues (blue, sky, navy, a teal-leaning green, amber) and cinder,
