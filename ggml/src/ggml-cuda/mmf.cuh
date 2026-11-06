@@ -10,6 +10,16 @@ using namespace ggml_cuda_mma;
 #define MMF_ROWS_PER_BLOCK 32
 #define MMF_ROWS_PER_BLOCK_CDNA 64
 
+#define MMF_IDS_COLS_PER_BLOCK 16
+
+static constexpr __host__ __device__ bool ggml_cuda_mmf_use_compact_ids(const bool has_ids, const int64_t ncols_dst) {
+    return has_ids && ncols_dst > MMF_IDS_COLS_PER_BLOCK;
+}
+
+static constexpr __host__ __device__ int64_t ggml_cuda_mmf_get_cols_per_block(const bool has_ids, const int64_t ncols_dst) {
+    return ggml_cuda_mmf_use_compact_ids(has_ids, ncols_dst) ? MMF_IDS_COLS_PER_BLOCK : ncols_dst;
+}
+
 static __forceinline__ int64_t mmf_get_max_block_size(int cc) {
     if (GGML_CUDA_CC_IS_CDNA(cc)) {
         return 512;
@@ -596,14 +606,10 @@ static inline void mul_mat_f_switch_ids(
         const int64_t sample_ratio, const int64_t stride_sample_x, const int64_t stride_sample_y, const int64_t stride_sample_dst,
         const dim3 & block_nums, const dim3 & block_dims, const int nbytes_shared_total, cudaStream_t stream,
         const mmf_ids_data * ids_data) {
-    // The compact-ids kernel is only used for ncols_dst > 16, which always dispatches with cols_per_block == 16
-    // (see mul_mat_f_switch_cols_per_block). Do not instantiate it for the other tile widths.
-    if constexpr (cols_per_block == 16) {
+    if constexpr (cols_per_block == MMF_IDS_COLS_PER_BLOCK) {
         const bool has_ids_data = ids_data && ids_data->ids_src_compact;
 
-        // Use the compact-ids kernel only for larger tiles; for small ncols_dst (< 16)
-        // we prefer the normal mul_mat_f path with has_ids=true.
-        if (has_ids_data && ncols_dst > 16) {
+        if (ggml_cuda_mmf_use_compact_ids(has_ids_data, ncols_dst)) {
             if (ids_data->max_tiles == 0) {
                 return;
             }
@@ -763,7 +769,7 @@ static void mul_mat_f_switch_cols_per_block(
         const int64_t nsamples_dst, const int64_t stride_sample_x, const int64_t stride_sample_y, const int64_t stride_sample_dst,
         cudaStream_t stream, const mmf_ids_data * ids_data) {
 
-    const int ncols_case = (ids && ncols_dst > 16) ? 16 : ncols_dst;
+    const int ncols_case = ggml_cuda_mmf_get_cols_per_block(ids != nullptr, ncols_dst);
 
     GGML_ASSERT(ids || ncols_dst <= 16);
 
