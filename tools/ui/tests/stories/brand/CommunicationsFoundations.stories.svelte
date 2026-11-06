@@ -25,7 +25,7 @@
 	});
 
 	const formats = Object.keys(FORMATS) as FormatKey[];
-	const grounds: Ground[] = ['light', 'dark', 'sand', 'hero', 'navy'];
+	const grounds: Ground[] = ['light', 'dark', 'sand', 'day', 'night'];
 	const tile = { height: 720, name: 'Tile', width: 1080 };
 	const scale = [
 		['t-display', 'Display', '3.2 u', 'Your AI.'],

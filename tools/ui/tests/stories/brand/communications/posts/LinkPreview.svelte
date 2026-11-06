@@ -1,6 +1,6 @@
 <!--
 	A link preview. llama.app's Open Graph card, on the Product key visual: the Llama lockup, the headline and the
-	caption on the hero blue or the navy, with the app beside them. llama.cpp's GitHub social preview, on the
+	caption on the day sky or the night sky, with the app beside them. llama.cpp's GitHub social preview, on the
 	Statement key visual: its lockup in Llama Mono on a neutral ground, the headline, the lede and a command.
 -->
 <script lang="ts">

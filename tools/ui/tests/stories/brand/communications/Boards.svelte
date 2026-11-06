@@ -1,7 +1,7 @@
 <!--
 	Specimen boards and posters for Llama Sans, after the classic Swiss specimen boards, in the brand palette: four
 	boards (specimen, title, alphabet, a wall of small posters), then three posters on the communications grounds
-	(dark, sand under the navy, the hero blue), cinder once on each; no red.
+	(dark, sand under the night sky, the day sky), cinder once on each; no red.
 	Light mixes stay within one hue. Fixed to light, so they read the same in both themes. Set in Llama Sans Display
 	and UI.
 -->
@@ -111,7 +111,7 @@
 		</p>
 	</article>
 
-	<!-- a quiet classic: a navy image over sand, under a short title -->
+	<!-- a quiet classic: a night sky over sand, under a short title -->
 	<article aria-label="A quiet classic" class="board poster classic">
 		<div class="photo sky tall"></div>
 
@@ -120,7 +120,7 @@
 		<p class="s">A quiet classic</p>
 	</article>
 
-	<!-- a text poster on llama.app's hero blue -->
+	<!-- a text poster on the day sky -->
 	<article aria-label="About Llama Sans" class="board poster note">
 		<p class="label"><i class="dot"></i>Llama Sans</p>
 
@@ -155,11 +155,14 @@
 			color-mix(in oklab, var(--art-sky), white 68%) 100%
 		);
 		--cream: var(--beige-100);
-		/* llama.app's hero, as the hero ground */
-		--hero:
+		/* the day and night skies, as the grounds */
+		--day-sky:
 			radial-gradient(ellipse at 15% 10%, #dcecfb 0%, transparent 55%),
 			radial-gradient(ellipse at 90% 95%, #e8f2fc 0%, transparent 50%),
 			linear-gradient(160deg, #c4ddf6 0%, #d0e4f7 55%, #dfecf9 100%);
+		--night-sky:
+			radial-gradient(ellipse 120% 60% at 50% 115%, rgb(46 70 104 / 0.35) 0%, transparent 70%),
+			linear-gradient(180deg, #0f1a2b 0%, #13213a 55%, #182a45 100%);
 		--cinder: var(--art-cinder); /* the accent orange and the .cpp of the logotype */
 		--ink: var(--beige-900);
 		--display: 'Llama Sans', var(--font-sans);
@@ -442,7 +445,7 @@
 	}
 	.photo.tall {
 		margin: -8.5% -8.5% 0;
-		background: var(--navy); /* the navy ground, over sand */
+		background: var(--night-sky); /* the night sky, over sand */
 	}
 	.classic .t {
 		font: 700 14cqi / 0.92 var(--display);
@@ -453,10 +456,10 @@
 		font: 500 5cqi / 1 var(--display);
 	}
 
-	/* text poster on the hero blue */
+	/* text poster on the day sky */
 	.note {
 		grid-template-rows: auto 1fr auto;
-		background: var(--hero);
+		background: var(--day-sky);
 		color: #111111;
 	}
 	.note .label {

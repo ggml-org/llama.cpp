@@ -1,6 +1,6 @@
 <!--
 	Communications from the real templates in Brand › Communications, scaled to fit: a model drop post on light, and
-	the two link previews, llama.app's on the hero blue and llama.cpp's on dark; their copy is the templates' own
+	the two link previews, llama.app's on the day sky and llama.cpp's on dark; their copy is the templates' own
 -->
 <script lang="ts">
 	import LinkPreview from '../../brand/communications/posts/LinkPreview.svelte';
@@ -15,7 +15,7 @@
 
 	<div class="stack">
 		<div class="post rounded-card elevated-surface">
-			<LinkPreview copy={linkPreview} kind="og" tone="hero" />
+			<LinkPreview copy={linkPreview} kind="og" tone="day" />
 		</div>
 
 		<div class="post rounded-card elevated-surface">
