@@ -9,6 +9,10 @@
 #include <string>
 #include <vector>
 
+static bool invalid_shape(const std::vector<int> & values) {
+    return values.empty() || *std::min_element(values.begin(), values.end()) <= 0;
+}
+
 static void print_usage(int, char ** argv) {
     LOG("\nexample usage:\n");
     LOG("\n    %s -m model.gguf -c 2048 -b 2048 -ub 512 -npp 128,256,512 -ntg 128,256 -npl 1,2,4,8,16,32 [-pps]\n", argv[0]);
@@ -35,6 +39,11 @@ int llama_batched_bench(int argc, char ** argv) {
     std::vector<int> n_pp = params.n_pp;
     std::vector<int> n_tg = params.n_tg;
     std::vector<int> n_pl = params.n_pl;
+
+    if (invalid_shape(n_pp) || invalid_shape(n_tg) || invalid_shape(n_pl)) {
+        LOG_ERR("benchmark needs positive PP, TG, and parallel prompt counts\n");
+        return 1;
+    }
 
     // init LLM
 
