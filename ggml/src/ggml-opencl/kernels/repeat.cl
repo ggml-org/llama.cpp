@@ -40,3 +40,4 @@ kernel void kernel_repeat_##SUFFIX(                                             
 
 KERNEL_REPEAT(f32, float)
 KERNEL_REPEAT(f16, ushort)
+KERNEL_REPEAT(i32, int)
