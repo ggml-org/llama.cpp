@@ -503,7 +503,8 @@ constexpr int FATTN_MMA_Q4_0_BLOCK_BYTES = 18;
 // The staging area is a linear row-major layout, row size = D2/16 blocks * block_bytes.
 template<int fused, int nwarps, int nbatch_fa, int D2>
 static __device__ __forceinline__ void flash_attn_ext_f16_load_tile_q(
-        const char * const __restrict__ KV, char * const __restrict__ stage, const int stride_KV, const int k_VKQ_0) {
+        const char * const __restrict__ KV, char * const __restrict__ stage, const int stride_KV,
+        const int k_VKQ_0, const int32_t * const __restrict__ indices) {
     static_assert(fused == FATTN_MMA_FUSED_Q8_0 || fused == FATTN_MMA_FUSED_Q4_0, "unhandled fused type");
     constexpr int block_bytes = fused == FATTN_MMA_FUSED_Q8_0 ? FATTN_MMA_Q8_0_BLOCK_BYTES : FATTN_MMA_Q4_0_BLOCK_BYTES;
     static_assert(D2 % 16 == 0 && (D2/16) * block_bytes % 16 == 0, "quantized tile rows must be a multiple of 16 B");
@@ -517,7 +518,9 @@ static __device__ __forceinline__ void flash_attn_ext_f16_load_tile_q(
     for (int c = threadIdx.y*warp_size + threadIdx.x; c < nbatch_fa*chunks_per_row; c += nwarps*warp_size) {
         const int i = c / chunks_per_row;
         const int q = c % chunks_per_row;
-        cp_async_cg_16<preload>(stage_32 + c*sizeof(uint4), KV + int64_t(k_VKQ_0 + i)*(stride_KV*4) + q*sizeof(uint4));
+        // K/V rows given per mask column via the kv_rows list, negative rows are padding (mirrors flash_attn_ext_f16_load_tile):
+        const int64_t i_KV = indices ? max(indices[k_VKQ_0 + i], 0) : k_VKQ_0 + i;
+        cp_async_cg_16<preload>(stage_32 + c*sizeof(uint4), KV + i_KV*(stride_KV*4) + q*sizeof(uint4));
     }
 }
 
@@ -777,7 +780,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
             __syncthreads(); // The staging area is reused by the V load below.
         }
         if constexpr (q_V) {
-            flash_attn_ext_f16_load_tile_q<fused_V, nwarps, nbatch_fa, DV/2>((const char *) V_h2, stage, stride_V, k_VKQ_0);
+            flash_attn_ext_f16_load_tile_q<fused_V, nwarps, nbatch_fa, DV/2>((const char *) V_h2, stage, stride_V, k_VKQ_0, indices);
         } else {
             flash_attn_ext_f16_load_tile<stride_tile_V, nwarps, nbatch_fa, use_cp_async, oob_check, use_sparse>
                 (V_h2, tile_V, nbatch_V2, stride_V, k_VKQ_0, k_VKQ_sup, indices);
@@ -1143,7 +1146,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
             }
             if constexpr (q_K) {
                 static_assert(!use_sparse, "fused KV dequant does not support sparse gather");
-                flash_attn_ext_f16_load_tile_q<fused_K, nwarps, nbatch_fa, DKQ/2>((const char *) K_h2, stage, stride_K, k_VKQ_0 + nbatch_fa);
+                flash_attn_ext_f16_load_tile_q<fused_K, nwarps, nbatch_fa, DKQ/2>((const char *) K_h2, stage, stride_K, k_VKQ_0 + nbatch_fa, indices);
             } else {
                 flash_attn_ext_f16_load_tile<stride_tile_K, nwarps, nbatch_fa, use_cp_async, oob_check, use_sparse>
                     (K_h2, tile_K, nbatch_K2, stride_K, k_VKQ_0 + nbatch_fa, k_VKQ_sup, indices);
@@ -1505,7 +1508,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
         }
         if constexpr (q_K) {
             static_assert(!use_sparse, "fused KV dequant does not support sparse gather");
-            flash_attn_ext_f16_load_tile_q<fused_K, nwarps, nbatch_fa, DKQ/2>((const char *) K_h2, stage, stride_K, kb0*nbatch_fa);
+            flash_attn_ext_f16_load_tile_q<fused_K, nwarps, nbatch_fa, DKQ/2>((const char *) K_h2, stage, stride_K, kb0*nbatch_fa, indices);
         } else {
             flash_attn_ext_f16_load_tile<stride_tile_K, nwarps, nbatch_fa, use_cp_async, oob_check, use_sparse>
                 (K_h2, tile_K, nbatch_K2, stride_K, kb0*nbatch_fa, k_VKQ_sup, indices);
