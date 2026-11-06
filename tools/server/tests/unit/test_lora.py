@@ -107,6 +107,37 @@ def test_lora_ram_prompt_cache():
     assert restored["timings"]["cache_n"] > 0
 
 
+def test_lora_ram_prompt_cache_restore_same_lora():
+    global server
+    server.n_slots = 1
+    server.n_ctx = 2048
+    server.n_predict = 4
+    server.cache_ram = 256
+    server.start()
+
+    prompt = "Look in thy glass and tell the face thou viewest. " * 15
+    other = "The quick brown fox jumps over the lazy dog. " * 15
+    lora = [{"id": 0, "scale": 0.5}]
+
+    def complete(text: str, lora_config: list[dict] | None):
+        data = {"prompt": text, "temperature": 0.0, "cache_prompt": True}
+        if lora_config is not None:
+            data["lora"] = lora_config
+        res = server.make_request("POST", "/completion", data=data)
+        assert res.status_code == 200
+        return res.body
+
+    first = complete(prompt, lora)
+    assert first["timings"]["cache_n"] == 0
+    n_prompt = first["timings"]["prompt_n"]
+    assert n_prompt > 1
+
+    # Use the slot with the default LoRA while the first prompt stays in RAM.
+    complete(other, None)
+    restored = complete(prompt + "And then", lora)
+    assert restored["timings"]["cache_n"] >= n_prompt - 1
+
+
 @pytest.mark.skipif(not is_slow_test_allowed(), reason="skipping slow test")
 def test_with_big_model():
     server = ServerProcess()
