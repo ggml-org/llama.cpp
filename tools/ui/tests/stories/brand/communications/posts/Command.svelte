@@ -1,6 +1,7 @@
 <!--
 	A command in a terminal: the prompt in cinder, the command in Llama Mono, on the ground's inset. The one place a
-	piece shows code.
+	piece shows code. It stays on one line, as typed, so the piece is laid out wide enough to hold it; the leading is
+	the terminal's, not the display type's.
 -->
 <script lang="ts">
 	interface Props {
@@ -18,14 +19,13 @@
 <style>
 	.terminal {
 		margin: 0;
-		padding: calc(var(--s) * 0.85) calc(var(--s) * 1);
+		padding: calc(var(--s) * 0.6) calc(var(--s) * 1);
 		border: 2px solid var(--p-line);
 		border-radius: calc(var(--s) * 0.55);
 		background: var(--p-inset);
 		color: var(--p-ink);
-		font: 400 var(--s) / 1 var(--mono);
-		white-space: pre-wrap;
-		overflow-wrap: anywhere;
+		font: 400 var(--s) / 1.5 var(--mono);
+		white-space: pre;
 	}
 	.prompt {
 		color: var(--art-cinder);
