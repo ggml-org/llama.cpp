@@ -110,7 +110,7 @@ Although OpenVINO supports a wide range of [Intel hardware](https://docs.openvin
 
 **NPU:**
 - All other quantized tensors are requantized to `Q4_0_128`.
-- For a `Q6_K` token embedding, `GGML_OPENVINO_NPU_TOKEN_EMBD_QUANT` selects another layout.
+- For a `Q6_K` token embedding, `GGML_OPENVINO_NPU_TOKEN_EMBD_QUANT` selects another layout. When it is set, it also applies to a `Q4_K` or `Q5_K` token embedding.
 - The validated models use `Q4_K_M` files.
 
 **Layout names:**
@@ -883,7 +883,7 @@ The defaults fit most models. The variables below trade one property for another
 |---|---|---|---|---|
 | `GGML_OPENVINO_PREFILL_CHUNK_SIZE` | NPU | Integer | `256` | Number of tokens that the NPU processes in one prefill step. A larger value can make long prompts faster, and makes the first load longer. Zero or a negative value means the default. Example: `GGML_OPENVINO_PREFILL_CHUNK_SIZE=512`. |
 | `GGML_OPENVINO_KV_ONLY_PREFILL` | NPU | Boolean | `1` | For models whose last layers reuse the KV cache of an earlier layer (Gemma 3n and Gemma 4 E2B/E4B): compile the prefill with only the KV-cache writes as outputs, which drops those layers and the output layer from it, and compute the output token of a batch with one decode step. Takes effect only with full-context decode (`GGML_OPENVINO_NPU_BLOB_PREBUILD=0`), without `GGML_OPENVINO_NPU_HFA_PREFILL`, and not for models with recurrent state. A batch that needs more than one output token switches to the full prefill. `0` turns it off. |
-| `GGML_OPENVINO_NPU_TOKEN_EMBD_QUANT` | NPU | String | `q8_0_c` | How a `Q6_K` `token_embd.weight` is stored for the NPU: `q8_0_c` (8-bit, one scale per row), `f16`, `q4_0_128` (4-bit, one scale per 128 weights) or `q4_0_c` (4-bit, one scale per row). The 4-bit layouts use less memory at some cost in accuracy; `f16` uses more memory. Keep the default unless memory is tight. |
+| `GGML_OPENVINO_NPU_TOKEN_EMBD_QUANT` | NPU | String | `q8_0_c` | How a `Q6_K` `token_embd.weight` is stored for the NPU: `q8_0_c` (8-bit, one scale per row), `f16`, `q4_0_128` (4-bit, one scale per 128 weights) or `q4_0_c` (4-bit, one scale per row). The 4-bit layouts use less memory at some cost in accuracy; `f16` uses more memory. Keep the default unless memory is tight. When set, it also applies to a `Q4_K` or `Q5_K` `token_embd.weight`, which otherwise keeps the 8-bit layout of the other weights; with a tied output layer (Gemma 4 E2B) `q4_0_128` stores it in about half the memory. |
 | `GGML_OPENVINO_NPU_HOST_GATHER` | NPU | Boolean | `0` | Look up the rows of large embedding tables (64 MiB or more) on the host, from the GGUF data, and pass them to the NPU graph as an input, instead of binding the whole table to the NPU. A table used only for such lookups, such as the per-layer embedding table of Gemma 3n and Gemma 4 E2B/E4B, is then not converted for the NPU at all. Lowers memory and decode time for such models. |
 | `GGML_OPENVINO_GDN_DECOMPOSE` | all | Boolean | auto | Translate `GATED_DELTA_NET` (Qwen3.5) into MatMul operations instead of the OpenVINO `GatedDeltaNet` op. Unset: on for the Lunar Lake NPU, off elsewhere. `0` turns it off, `1` turns it on for any device. Try `1` for Qwen3.5 on the Panther Lake NPU. |
 | `GGML_OPENVINO_MANUAL_GQA_ATTN` | CPU, GPU | Boolean | on for GPU | Build grouped-query attention from separate MatMul operations. Unset: on for GPU, off for CPU and NPU. `1` turns it on, `0` turns it off. Try `1` on the CPU for faster decode. |
