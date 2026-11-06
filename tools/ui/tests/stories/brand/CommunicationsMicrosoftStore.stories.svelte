@@ -11,10 +11,11 @@
 	import StoreArt from './communications/store/StoreArt.svelte';
 	import StoreScreenshot from './communications/store/StoreScreenshot.svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
+	import SyntaxHighlightedCode from '$lib/components/app/content/SyntaxHighlightedCode.svelte';
 
 	// The Microsoft Store listing: the logos (the app tile and the poster art), the super hero art at the top of the
-	// listing, and the screenshots: each one practical thing the app does on Windows, a centred headline over the real
-	// app (Store scenes) running off the bottom edge. The Store may lay its own text over the bottom quarter of the 16:9
+	// listing, and the screenshots: each one practical thing the app does on Windows, a centred headline over Llama for
+	// Windows as it is (its quick chat with the real Llama Chat from Store scenes, its tray flyout). The Store may lay its own text over the bottom quarter of the 16:9
 	// pieces, so the words keep to the top
 	const { Story } = defineMeta({
 		parameters: {
@@ -102,23 +103,16 @@
 				<StoreScreenshot {...opener} kind="brand" {overlay} {tone} />
 			</StateGalleryItem>
 
-			<StateGalleryItem label="2, chat" note="Llama Chat, in its window">
+			<StateGalleryItem label="2, chat" note="Llama Chat, in the quick chat">
 				<StoreScreenshot {...chat} kind="window" {overlay} scene="chat" {tone} />
 			</StateGalleryItem>
 
-			<StateGalleryItem label="3, the tray" note="The flyout over the taskbar">
+			<StateGalleryItem label="3, the tray" note="The tray flyout over the taskbar">
 				<StoreScreenshot {...fits} kind="desktop" {overlay} {tone} />
 			</StateGalleryItem>
 
-			<StateGalleryItem label="4, models" note="The model manager">
-				<StoreScreenshot
-					{...models}
-					kind="window"
-					{overlay}
-					scene="models"
-					title="Llama · Models"
-					{tone}
-				/>
+			<StateGalleryItem label="4, models" note="The flyout's Models card, close up">
+				<StoreScreenshot {...models} kind="card" {overlay} {tone} />
 			</StateGalleryItem>
 
 			<StateGalleryItem label="5, hardware" note="The GPU motif">
@@ -129,7 +123,9 @@
 
 			<StateGalleryItem label="6, other apps" note="llama-server's OpenAI-compatible API">
 				<StoreScreenshot {...apps} kind="art" {overlay} {tone}>
-					<pre class="code"><span class="file">app.py</span>{code}</pre>
+					<div class="code">
+						<SyntaxHighlightedCode class="p-3" {code} language="python" maxHeight="none" />
+					</div>
 				</StoreScreenshot>
 			</StateGalleryItem>
 		</StateGallery>
@@ -141,23 +137,8 @@
 		width: calc(var(--u) * 30);
 		height: 100%;
 	}
-	/* a code card: the ground's card in Llama Mono, the address in cinder */
+	/* the app's own highlighted code block, drawn at about two and a half times its size */
 	.code {
-		display: grid;
-		gap: calc(var(--u) * 0.5);
-		margin: 0;
-		padding: calc(var(--u) * 1.2) calc(var(--u) * 1.6);
-		border: 1px solid var(--p-line);
-		border-radius: calc(var(--u) * 0.4);
-		background: var(--p-card);
-		color: var(--p-ink);
-		font: 400 calc(var(--u) * 0.85) / 1.6 var(--mono);
-		white-space: pre;
-	}
-	.file {
-		color: var(--p-muted);
-		font-size: calc(var(--u) * 0.48);
-		letter-spacing: 0.12em;
-		text-transform: uppercase;
+		zoom: 2.4;
 	}
 </style>
