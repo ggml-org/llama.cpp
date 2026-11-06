@@ -5,6 +5,7 @@
 #include "mtmd-image.h"
 #include "mtmd-internal.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -499,6 +500,68 @@ MAKE_TEST(test_audio_preprocessor_conformer) {
     for (const auto & [bin, frame, expected] : cases) {
         const float actual = mel.data[bin * mel.n_len + frame];
         t.assert_true("mel[" + std::to_string(bin) + "][" + std::to_string(frame) + "] = " + std::to_string(actual) + ", expected " + std::to_string(expected), std::fabs(actual - expected) < 1e-3f);
+    }
+}
+
+MAKE_TEST(test_audio_preprocessor_whisper_chunks) {
+    // Qwen2-Audio / Qwen2.5-Omni mel params: 100 frames per second
+    clip_hparams hparams;
+    hparams.n_mel_bins        = 128;
+    hparams.audio_sample_rate = 16000;
+    hparams.audio_n_fft       = 400;
+    hparams.audio_window_len  = 400;
+    hparams.audio_hop_len     = 160;
+
+    auto make_samples = [](size_t n_samples) {
+        std::vector<float> samples(n_samples);
+        for (size_t i = 0; i < n_samples; i++) {
+            samples[i] = (float) ((i * 7919) % 1000) / 500.0f - 1.0f;
+        }
+        return samples;
+    };
+
+    auto run = [&](size_t n_samples, bool trim, std::vector<mtmd_audio_mel> & output) {
+        const std::vector<float> samples = make_samples(n_samples);
+        mtmd_audio_preprocessor_whisper preproc(hparams, trim);
+        preproc.initialize();
+        return preproc.preprocess(samples.data(), samples.size(), output);
+    };
+
+    // { n_samples, trim_to_input, expected n_len of each chunk }
+    const std::vector<std::tuple<size_t, bool, std::string>> cases = {
+        {  176000, false, "3000"           }, // 11s
+        {  480000, false, "3000,3000"      }, // 30s
+        { 1040000, false, "3000,3000,3000" }, // 65s
+        {  176080, true,  "1101"           }, // 11.005s
+        {     160, true,  "4"              }, // 0.01s
+        {  480000, true,  "3000"           }, // 30s
+        {  480320, true,  "3000"           }, // 30.02s: 2 trailing frames give no token
+        {  480480, true,  "3000,3"         }, // 30.03s
+    };
+
+    for (const auto & [n_samples, trim, expected] : cases) {
+        const std::string name = std::to_string(n_samples) + " samples, trim=" + (trim ? "true" : "false");
+        std::vector<mtmd_audio_mel> output;
+        t.assert_true("preprocess " + name, run(n_samples, trim, output));
+
+        std::string lens;
+        for (const auto & mel : output) {
+            lens += (lens.empty() ? "" : ",") + std::to_string(mel.n_len);
+            t.assert_equal("data size for " + name, (size_t) (mel.n_len * mel.n_mel), mel.data.size());
+        }
+        t.assert_equal("chunk lengths for " + name, expected, lens);
+    }
+
+    // trimming only shortens the mel
+    std::vector<mtmd_audio_mel> full;
+    std::vector<mtmd_audio_mel> trimmed;
+    if (t.assert_true("preprocess for prefix check", run(176000, false, full) && run(176000, true, trimmed))) {
+        bool is_prefix = true;
+        for (int64_t i = 0; i < trimmed[0].n_mel; i++) {
+            const float * row = trimmed[0].data.data() + i * trimmed[0].n_len;
+            is_prefix &= std::equal(row, row + trimmed[0].n_len, full[0].data.data() + i * full[0].n_len);
+        }
+        t.assert_true("trimmed mel is a prefix of the untrimmed mel", is_prefix);
     }
 }
 

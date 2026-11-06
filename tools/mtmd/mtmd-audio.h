@@ -65,12 +65,19 @@ struct mtmd_audio_preprocessor {
 };
 
 struct mtmd_audio_preprocessor_whisper : mtmd_audio_preprocessor {
-    mtmd_audio_preprocessor_whisper(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
+    // trim_to_input: emit only the frames that cover the input, not whole 30s padded chunks (Qwen2-Audio and Qwen2.5-Omni mask the padding)
+    mtmd_audio_preprocessor_whisper(const clip_ctx * ctx, bool trim_to_input = false)
+        : mtmd_audio_preprocessor(ctx), trim_to_input(trim_to_input) {}
+
+    mtmd_audio_preprocessor_whisper(const clip_hparams & hparams, bool trim_to_input = false)
+        : mtmd_audio_preprocessor(hparams), trim_to_input(trim_to_input) {}
+
     void initialize() override;
     bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const override;
 
   private:
     mtmd_audio_cache cache;
+    bool trim_to_input;
 };
 
 struct mtmd_audio_preprocessor_muse_spark_audio : mtmd_audio_preprocessor {

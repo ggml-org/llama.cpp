@@ -624,10 +624,25 @@ bool mtmd_audio_preprocessor_whisper::preprocess(const float *                 s
     }
     const size_t frames_per_chunk = 3000;
     GGML_ASSERT((size_t) out_full.n_len > frames_per_chunk);
-    for (size_t off = 0; off < (size_t) out_full.n_len; off += frames_per_chunk) {
-        int64_t n_len = std::min((int64_t)frames_per_chunk, out_full.n_len - (int64_t)off);
-        if (n_len < (int64_t)frames_per_chunk) {
-            break;  // last incomplete chunk will always be a padded chunk, safe to ignore
+
+    size_t frames_total;
+    if (trim_to_input) {
+        // transformers drops the frames outside feature_attention_mask
+        frames_total = (n_samples + hparams.audio_hop_len - 1) / hparams.audio_hop_len;
+    } else {
+        // last incomplete chunk will always be a padded chunk, safe to ignore
+        frames_total = ((size_t) out_full.n_len / frames_per_chunk) * frames_per_chunk;
+    }
+    GGML_ASSERT(frames_total <= (size_t) out_full.n_len);
+
+    for (size_t off = 0; off < frames_total; off += frames_per_chunk) {
+        int64_t n_len = std::min<int64_t>(frames_per_chunk, frames_total - off);
+        if (n_len < 3) {
+            // conv stride 2 + avg pool 2 give no token from 1 or 2 frames, transformers gives none either
+            if (off > 0) {
+                break;
+            }
+            n_len = 4; // keep one token so very short audio is not empty
         }
 
         mtmd_audio_mel out_chunk;
@@ -638,7 +653,7 @@ bool mtmd_audio_preprocessor_whisper::preprocess(const float *                 s
 
         for (int64_t i = 0; i < out_full.n_mel; i++) {
             auto src = out_full.data.begin() + (size_t)i * out_full.n_len + off;
-            out_chunk.data.insert(out_chunk.data.end(), src, src + frames_per_chunk);
+            out_chunk.data.insert(out_chunk.data.end(), src, src + n_len);
         }
 
         output.push_back(std::move(out_chunk));
