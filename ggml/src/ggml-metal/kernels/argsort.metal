@@ -319,36 +319,37 @@ kernel void kernel_top_k_f32_i32(
     // result does not depend on the thread scheduling
     const uint threshold = prefix;
 
-    // contiguous per-thread chunks, so that the scan below follows the column order
-    const uint chunk = (ncols + ntg_x - 1) / ntg_x;
-    const uint lo = tid*chunk;
-    const uint hi = MIN(lo + chunk, ncols);
+    // each warp scans a contiguous chunk of the row, and the lanes of the warp
+    // interleave within the chunk with stride 32 to keep the accesses coalesced
+    const uint lane  = tid & 31u;
+    const uint wg    = tid >> 5u;
+    const uint nw    = ntg_x >> 5u;
+    const uint wlo   = wg*((ncols + nw - 1) / nw);
+    const uint whi   = MIN(wlo + (ncols + nw - 1) / nw, ncols);
+    const uint wlen  = wlo < whi ? whi - wlo : 0;
+    const uint nstep = (wlen + 31) >> 5;
 
-    uint ca = 0; // elements above the threshold in this chunk
-    uint ct = 0; // elements tied with the threshold in this chunk
-    for (uint i = lo; i < hi; ++i) {
+    uint ca = 0; // elements above the threshold in this lane's substream
+    uint ct = 0; // elements tied with the threshold in this lane's substream
+    for (uint i = wlo + lane; i < whi; i += 32u) {
         const uint key = ggml_top_k_f2ui(src0_row[i]);
         ca += (key >  threshold) ? 1u : 0u;
         ct += (key == threshold) ? 1u : 0u;
     }
 
-    // per-simdgroup totals into the now unused histogram, so that thread 0 can
-    // compute the exclusive base of each simdgroup with a serial scan
-    uint inca = ca;
-    uint inct = ct;
-    for (uint mask = 16u; mask > 0u; mask >>= 1) {
-        inca += simd_shuffle_xor(inca, mask);
-        inct += simd_shuffle_xor(inct, mask);
-    }
-    if ((tid & 31) == 0) {
-        atomic_store_explicit(&histo[tid/32u],      inca, memory_order_relaxed);
-        atomic_store_explicit(&histo[32 + tid/32u], inct, memory_order_relaxed);
+    // per-warp totals into the now unused histogram, so that thread 0 can compute
+    // the exclusive base of each warp with a serial scan
+    const uint wca = simd_sum(ca);
+    const uint wct = simd_sum(ct);
+    if (lane == 0) {
+        atomic_store_explicit(&histo[wg],      wca, memory_order_relaxed);
+        atomic_store_explicit(&histo[32 + wg], wct, memory_order_relaxed);
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
     if (tid == 0) {
         uint acc = 0;
-        for (uint t = 0; t < ntg.x/32u; ++t) {
+        for (uint t = 0; t < nw; ++t) {
             const uint c2 = atomic_load_explicit(&histo[t], memory_order_relaxed);
             atomic_store_explicit(&histo[t], acc, memory_order_relaxed);
             acc += c2;
@@ -356,31 +357,59 @@ kernel void kernel_top_k_f32_i32(
         *sh_bucket = acc; // total above the threshold
 
         acc = 0;
-        for (uint t = 0; t < ntg.x/32u; ++t) {
+        for (uint t = 0; t < nw; ++t) {
             const uint c2 = atomic_load_explicit(&histo[32 + t], memory_order_relaxed);
             atomic_store_explicit(&histo[32 + t], acc, memory_order_relaxed);
             acc += c2;
         }
+        *sh_above = acc; // total tied with the threshold
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    // each kept element goes at the simdgroup's exclusive base plus its rank
-    // among the elements with a lower column within the simdgroup
-    const uint base_a = atomic_load_explicit(&histo[tid/32u], memory_order_relaxed) + simd_prefix_exclusive_sum(ca);
-    const uint base_t = *sh_bucket + atomic_load_explicit(&histo[32 + tid/32u], memory_order_relaxed) + simd_prefix_exclusive_sum(ct);
+    const uint above_total = *sh_bucket;
+    const uint tie_total   = *sh_above;
+    const uint base_wa = atomic_load_explicit(&histo[wg],      memory_order_relaxed);
+    const uint base_wt = above_total + atomic_load_explicit(&histo[32 + wg], memory_order_relaxed);
 
-    uint na = 0;
-    uint nt = 0;
-    for (uint i = lo; i < hi; ++i) {
-        const uint key = ggml_top_k_f2ui(src0_row[i]);
-        if (key > threshold) {
-            dst_row[base_a + na] = (int32_t) i;
-            ++na;
-        } else if (key == threshold) {
-            if (base_t + nt < top_k) {
-                dst_row[base_t + nt] = (int32_t) i;
+    // the lanes write their kept elements at lane-major ranks, which does not
+    // depend on the thread scheduling. with more tied candidates than remaining
+    // slots, the ties are instead ranked in column order with a per-step
+    // cross-lane scan, so that the lowest tied indices are the ones kept
+    const uint excl_a = simd_prefix_exclusive_sum(ca);
+    const uint excl_t = simd_prefix_exclusive_sum(ct);
+
+    if (tie_total <= top_k - above_total) {
+        uint na = 0;
+        uint nt = 0;
+        for (uint i = wlo + lane; i < whi; i += 32u) {
+            const uint key = ggml_top_k_f2ui(src0_row[i]);
+            if (key > threshold) {
+                dst_row[base_wa + excl_a + na] = (int32_t) i;
+                ++na;
+            } else if (key == threshold) {
+                dst_row[base_wt + excl_t + nt] = (int32_t) i;
+                ++nt;
             }
-            ++nt;
+        }
+    } else {
+        uint na = 0;
+        for (uint i = wlo + lane; i < whi; i += 32u) {
+            if (ggml_top_k_f2ui(src0_row[i]) > threshold) {
+                dst_row[base_wa + excl_a + na] = (int32_t) i;
+                ++na;
+            }
+        }
+
+        uint tt = 0; // tied elements in the earlier steps of this warp
+        for (uint s = 0; s < nstep; ++s) {
+            const uint i   = wlo + 32u*s + lane;
+            const bool ok  = i < whi;
+            const bool t   = ok && ggml_top_k_f2ui(src0_row[i]) == threshold;
+            const uint pos = base_wt + tt + simd_prefix_exclusive_sum((uint) t);
+            if (t && pos < top_k) {
+                dst_row[pos] = (int32_t) i;
+            }
+            tt += simd_sum((uint) t);
         }
     }
 }
