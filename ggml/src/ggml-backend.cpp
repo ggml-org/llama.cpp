@@ -1197,6 +1197,7 @@ struct ggml_backend_sched {
     struct ggml_hash_set  hash_set;
     int                 * hv_tensor_backend_ids; // [hash_set.size]
     struct ggml_tensor ** hv_tensor_copies;      // [hash_set.size][n_backends][n_copies]
+    bool                * hv_tensor_copy_needed; // [hash_set.size][n_backends], true if a node has the compute flag and reads the copy
 
     int * node_backend_ids; // [graph_size]
     int * leaf_backend_ids; // [graph_size]
@@ -1252,6 +1253,7 @@ struct ggml_backend_sched {
 #define tensor_backend_id(tensor) sched->hv_tensor_backend_ids[hash_id(tensor)]
 #define tensor_id_copy(id, backend_id, copy_id) sched->hv_tensor_copies[(id) * sched->n_backends * sched->n_copies + (backend_id) * sched->n_copies + (copy_id)]
 #define tensor_copy(tensor, backend_id, copy_id) tensor_id_copy(hash_id(tensor), backend_id, copy_id)
+#define tensor_id_copy_needed(id, backend_id) sched->hv_tensor_copy_needed[(id) * sched->n_backends + (backend_id)]
 
 static void ggml_backend_sched_split_inputs_grow(struct ggml_backend_sched_split * split) {
     int new_cap = GGML_SCHED_MAX_SPLIT_INPUTS;
@@ -1801,6 +1803,11 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                         split->inputs[n_inputs] = src;
                     }
                     node->src[j] = tensor_id_copy(src_id, cur_backend_id, sched->cur_copy);
+                    // record whether the copy is needed: nodes without the compute flag, such as the
+                    // branches that ggml_build_forward_select did not pick, are skipped by the backends
+                    if (node->flags & GGML_TENSOR_FLAG_COMPUTE) {
+                        tensor_id_copy_needed(src_id, cur_backend_id) = true;
+                    }
                 }
             }
         }
@@ -2133,9 +2140,15 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         int split_backend_id = split->backend_id;
         ggml_backend_t split_backend = sched->backends[split_backend_id];
 
+        // skip the inputs that no node with the compute flag reads, their copies would only move unused data
+        int n_needed_inputs = 0;
+        for (int input_id = 0; input_id < split->n_inputs; input_id++) {
+            n_needed_inputs += tensor_id_copy_needed(hash_id(split->inputs[input_id]), split_backend_id);
+        }
+
         // ensure the previous split's async work has completed before we start
         // this split, the allocator may have reused buffer regions across splits
-        if (split->n_inputs == 0 && prev_backend_id >= 0 && prev_backend_id != split_backend_id) {
+        if (n_needed_inputs == 0 && prev_backend_id >= 0 && prev_backend_id != split_backend_id) {
             if (sched->events[prev_backend_id][sched->cur_copy] != NULL) {
                 ggml_backend_event_synchronize(sched->events[prev_backend_id][sched->cur_copy]);
             } else {
@@ -2146,13 +2159,15 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         // copy the input tensors to the split backend
         // the weights in host memory are copied last, so that the copy callback can read the other inputs of the split
         for (int input_id = 0; input_id < split->n_inputs; input_id++) {
-            if (!ggml_backend_sched_is_host_weight(split->inputs[input_id])) {
-                ggml_backend_sched_copy_input(sched, split, split->inputs[input_id]);
+            struct ggml_tensor * input = split->inputs[input_id];
+            if (tensor_id_copy_needed(hash_id(input), split_backend_id) && !ggml_backend_sched_is_host_weight(input)) {
+                ggml_backend_sched_copy_input(sched, split, input);
             }
         }
         for (int input_id = 0; input_id < split->n_inputs; input_id++) {
-            if (ggml_backend_sched_is_host_weight(split->inputs[input_id])) {
-                ggml_backend_sched_copy_input(sched, split, split->inputs[input_id]);
+            struct ggml_tensor * input = split->inputs[input_id];
+            if (tensor_id_copy_needed(hash_id(input), split_backend_id) && ggml_backend_sched_is_host_weight(input)) {
+                ggml_backend_sched_copy_input(sched, split, input);
             }
         }
 
@@ -2237,6 +2252,7 @@ ggml_backend_sched_t ggml_backend_sched_new(
     sched->hash_set    = ggml_hash_set_new(graph_size);
     sched->hv_tensor_backend_ids = (int *) malloc(sched->hash_set.size * sizeof(sched->hv_tensor_backend_ids[0]));
     sched->hv_tensor_copies      = (ggml_tensor **) malloc(sched->hash_set.size * sched->n_backends * sched->n_copies * sizeof(struct ggml_tensor *));
+    sched->hv_tensor_copy_needed = (bool *) malloc(sched->hash_set.size * sched->n_backends * sizeof(bool));
 
     const size_t ggml_sched_max_splits = graph_size; // at most there is one split for each node in the graph
     const size_t nodes_size = graph_size + ggml_sched_max_splits*GGML_SCHED_MAX_SPLIT_INPUTS*2;
@@ -2297,6 +2313,7 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
     free(sched->graph_inputs);
     free(sched->hv_tensor_backend_ids);
     free(sched->hv_tensor_copies);
+    free(sched->hv_tensor_copy_needed);
     free(sched->node_backend_ids);
     free(sched->leaf_backend_ids);
     free(sched->prev_node_backend_ids);
@@ -2314,6 +2331,7 @@ void ggml_backend_sched_reset(ggml_backend_sched_t sched) {
         ggml_hash_set_reset(&sched->hash_set);
         memset(sched->hv_tensor_backend_ids, -1, sched->hash_set.size * sizeof(sched->hv_tensor_backend_ids[0]));
         memset(sched->hv_tensor_copies,       0, sched->hash_set.size * sched->n_backends * sched->n_copies * sizeof(struct ggml_tensor *));
+        memset(sched->hv_tensor_copy_needed,  0, sched->hash_set.size * sched->n_backends * sizeof(bool));
         sched->is_reset = true;
     }
     sched->is_alloc = false;
