@@ -176,12 +176,8 @@ jobs:
         include:
           - build: 'x64'
             os: ubuntu-22.04
-          - build: '26.04-x64'
-            os: ubuntu-26.04
           - build: 'arm64'
             os: ubuntu-24.04-arm
-          - build: '26.04-arm64'
-            os: ubuntu-26.04-arm
           - build: 's390x'
             os: ubuntu-24.04-s390x
           - build: '26.04-s390x'
@@ -263,7 +259,7 @@ jobs:
           - build: 'x64'
             os: ubuntu-22.04
           - build: 'arm64'
-            os: ubuntu-26.04-arm
+            os: ubuntu-24.04-arm
 
     runs-on: ${{ matrix.os }}
 
@@ -465,7 +461,7 @@ jobs:
     needs: [check-release, ui-build]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
 
     env:
       NDK_VERSION: "29.0.14206865"
@@ -550,7 +546,7 @@ jobs:
     needs: [check-release, ui-build]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     container: 'ghcr.io/snapdragon-toolchain/arm64-android:v0.8'
 
     defaults:
@@ -603,7 +599,7 @@ jobs:
     needs: [check-release, ui-build]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     container: 'ghcr.io/snapdragon-toolchain/arm64-linux:v0.8'
 
     defaults:
