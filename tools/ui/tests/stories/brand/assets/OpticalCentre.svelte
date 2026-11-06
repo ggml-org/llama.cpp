@@ -1,16 +1,17 @@
 <!--
-	How the icon sits in a circle crop (the avatars, the PWA icon), as a slideshow of three placements switched at once:
-	the icon at the exact centre, lifted 1/60 of its height (the first optical centre), and as the files place it,
-	lifted and nudged left. Each shows the avatar light and dark, then measured: the icon's box, the centre lines, the
-	margins all round, and a circle in the gap between the crop and each of the icon's outer points, touching both (its
-	rounded corners, its sharp corners and the tips at its middle). The files' placement comes from the file itself
-	(its translate and scale), so the figure follows the files.
+	How the icon sits in a circle crop (the avatars, the PWA icon), animated: the icon holds at the exact centre, eases
+	over to where the files place it, lifted and nudged left, holds, and eases back, on a loop (still at the files'
+	placement with reduced motion). The avatar shows light and dark, then measured as it moves: the icon's box, the
+	centre lines, the margins all round, and a circle in the gap between the crop and each of the icon's outer points,
+	touching both (its rounded corners, its sharp corners and the tips at its middle). The files' placement comes from
+	the file itself (its translate and scale), so the figure follows the files.
 -->
 <script lang="ts">
 	import { PATHS, SIZE } from '../logo-showcase/lib/logo';
-	import { ChevronLeft, ChevronRight } from '@lucide/svelte';
+	import { Pause, Play } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
-	import * as ToggleGroup from '$lib/components/ui/toggle-group';
+	import { cubicInOut } from 'svelte/easing';
+	import { prefersReducedMotion, Tween } from 'svelte/motion';
 
 	interface Props {
 		/** the canvas's side and the icon's placement in it, as in its SVG */
@@ -123,75 +124,75 @@
 			.join(' · ');
 	}
 
-	const panels = $derived(
-		[
-			{ label: 'At the exact centre', x: centred, y: centred },
-			{
-				label: 'Lifted 1/60, the first optical centre',
-				x: centred,
-				y: centred - side / 60
-			},
-			{
-				label: `Lifted 1/${lift} and nudged 1/${nudge} left, as in the files`,
-				x: placement.x,
-				y: placement.y
+	// how far the icon has moved from the exact centre to the files' placement: it holds centred, eases over, holds
+	// there, and eases back, while every measure follows it
+	const progress = new Tween(0, { duration: 1400, easing: cubicInOut });
+	let paused = $state(false);
+
+	const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+	$effect(() => {
+		if (prefersReducedMotion.current) {
+			progress.set(1, { duration: 0 });
+
+			return;
+		}
+
+		if (paused) return;
+
+		let stopped = false;
+
+		(async () => {
+			while (!stopped) {
+				await wait(1500);
+
+				if (stopped) break;
+
+				await progress.set(1);
+				await wait(3000);
+
+				if (stopped) break;
+
+				await progress.set(0);
 			}
-		].map((panel) => {
-			const g = gaps(panel.x, panel.y);
+		})();
 
-			return { ...panel, gaps: g, note: balance(g) };
-		})
-	);
+		return () => (stopped = true);
+	});
 
-	// the placement on show: one at a time, switched at once, so the icon's shift between them is plain to see
-	let current = $state(0);
+	const shown = $derived.by(() => {
+		const x = centred + (placement.x - centred) * progress.current;
+		const y = centred + (placement.y - centred) * progress.current;
+		const g = gaps(x, y);
+		const label =
+			progress.current < 0.01
+				? 'At the exact centre'
+				: progress.current > 0.99
+					? `Lifted 1/${lift} and nudged 1/${nudge} left, as in the files`
+					: 'Moving to the files’ placement';
 
-	const step = (by: number) => (current = (current + by + panels.length) % panels.length);
-
-	function onkeydown(event: KeyboardEvent) {
-		if (event.key === 'ArrowLeft') step(-1);
-		else if (event.key === 'ArrowRight') step(1);
-		else return;
-
-		event.preventDefault();
-	}
+		return { gaps: g, key: 'shown', label, note: balance(g), x, y };
+	});
 
 	const round = (n: number) => Math.round(n * 10) / 10;
 </script>
 
 <!-- the arrow keys step through the placements while it has focus -->
-<figure
-	aria-label="Icon placements"
-	class="m-0 grid min-w-0 gap-6 rounded-card outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
-	{onkeydown}
-	tabindex="0"
->
-	<div class="flex flex-wrap items-center gap-2">
-		<Button aria-label="Previous placement" onclick={() => step(-1)} size="icon" variant="outline"
-			><ChevronLeft /></Button
-		>
+<figure aria-label="Icon placements" class="m-0 grid min-w-0 gap-6">
+	{#if !prefersReducedMotion.current}
+		<div class="flex items-center gap-2">
+			<Button onclick={() => (paused = !paused)} size="sm" variant="outline">
+				{#if paused}<Play /> Play{:else}<Pause /> Pause{/if}
+			</Button>
 
-		<ToggleGroup.Root
-			onValueChange={(value) => value && (current = Number(value))}
-			type="single"
-			value={String(current)}
-		>
-			{#each panels as panel, i (panel.label)}
-				<ToggleGroup.Item aria-label={panel.label} title={panel.label} value={String(i)}
-					>{i + 1}</ToggleGroup.Item
-				>
-			{/each}
-		</ToggleGroup.Root>
+			<span class="text-xs text-muted-foreground">
+				from the exact centre to the files’ placement, lifted 1/{lift} and nudged 1/{nudge} left
+			</span>
+		</div>
+	{/if}
 
-		<Button aria-label="Next placement" onclick={() => step(1)} size="icon" variant="outline"
-			><ChevronRight /></Button
-		>
-
-		<span class="text-xs text-muted-foreground">← → to step through</span>
-	</div>
-
-	<!-- one placement at a time: the avatar light and dark, small as it shows, then measured -->
-	{#each [panels[current]] as panel (panel.label)}
+	<!-- the placement as it moves: the avatar light and dark, small as it shows, then measured -->
+	{#each [shown] as panel (panel.key)}
 		<section class="grid gap-4">
 			<div class="grid gap-1">
 				<h3 class="text-sm font-medium">{panel.label}</h3>
