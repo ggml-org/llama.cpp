@@ -426,6 +426,61 @@ static bool fuse_unary_mul_glu(const ggml_hexagon_session * sess, htp_opnode & p
     return true;
 }
 
+// gate/up matmul + GLU(gate, up) -> one matmul with the GLU in the HMX output epilogue:
+// MUL_MAT_NX / MUL_MAT_ID_NX with separate gate and up weights, or MUL_MAT_ID with a merged gate_up weight
+static bool fuse_mul_mat_glu(const ggml_hexagon_session * sess, htp_opnode & prev, const htp_opnode & cur) {
+    const bool nx     = prev.opcode == HTP_OP_MUL_MAT_NX || prev.opcode == HTP_OP_MUL_MAT_ID_NX;
+    const bool merged = prev.opcode == HTP_OP_MUL_MAT_ID;
+    if (!(nx && prev.outputs.size() == 2) && !(merged && prev.outputs.size() == 1)) return false;
+    if (!cur.src1() || ggml_get_op_params_i32(cur.node, 1) != 0) return false; // split, not swapped
+
+    auto * kparams = prev.kparams<htp_mm_kernel_params>();
+    if (!kparams->n_hmx || kparams->kernel_type != HTP_MM_KERNEL_HMX_2D || kparams->glu_op) return false;
+
+    const ggml_tensor * gate = cur.src0();
+    const ggml_tensor * up   = cur.src1();
+    const ggml_tensor * dst  = cur.dst();
+    if (gate->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32 || !ggml_are_same_shape(gate, up) ||
+        !ggml_are_same_shape(gate, dst) || !ggml_is_contiguous(dst) || dst->ne[0] % 32 != 0) {
+        return false;
+    }
+
+    int g = 0;
+    if (nx) {
+        g = htp_same_tensor_data(gate, prev.outputs[0]) ? 0 : 1;
+        if (!htp_same_tensor_data(gate, prev.outputs[g]) || !htp_same_tensor_data(up, prev.outputs[1 - g])) return false;
+        if (!ggml_hexagon_tensor_is_fuseable(prev.outputs[0]) || !ggml_hexagon_tensor_is_fuseable(prev.outputs[1])) return false;
+        if (!ggml_is_contiguous(gate) || !ggml_is_contiguous(up)) return false;
+    } else {
+        const ggml_tensor * gate_up = prev.dst();
+        if (gate->view_src != gate_up || up->view_src != gate_up || !ggml_hexagon_tensor_is_fuseable(gate_up)) return false;
+        if (gate_up->ne[0] != 2 * gate->ne[0] || gate->view_offs != 0 || up->view_offs != gate->ne[0] * sizeof(float)) return false;
+        if (!ggml_are_same_stride(gate, up) || gate->nb[1] != gate_up->nb[1] || gate->nb[2] != gate_up->nb[2]) return false;
+    }
+    if (prev.opcode == HTP_OP_MUL_MAT_NX && kparams->n_chunk < 64) return false;
+    if (htp_inputs_overlap_unsafe(prev, dst)) return false;
+
+    // auto: fuse only when the per-core N slice is no wider than K, and not for MoE GEGLU
+    if (opt_mmglu == 0) return false;
+    if (opt_mmglu < 0) {
+        const bool moe = prev.opcode == HTP_OP_MUL_MAT_ID || prev.opcode == HTP_OP_MUL_MAT_ID_NX;
+        if (moe && cur.opcode == HTP_OP_GLU_GEGLU) return false;
+        if (prev.src0()->ne[1] > (int64_t) htp_session_mdev_count(sess) * prev.src0()->ne[0]) return false;
+    }
+
+    kparams->glu_op = cur.opcode;
+    if (prev.opcode == HTP_OP_MUL_MAT_NX) {
+        kparams->n_chunk &= ~63;
+    }
+    if (nx && g == 1) {
+        std::swap(prev.inputs[0], prev.inputs[1]);
+    }
+    const bool collapsed = nx && prev.outputs[0]->ne[1] != gate->ne[1];
+    prev.outputs = { collapsed ? prev.add_dummy(htp_tensor_collapse_rows(dst)) : dst };
+    prev.fused.push_back(cur.node);
+    return true;
+}
+
 static bool fuse_mul_mul_scalar(const ggml_hexagon_session * sess, htp_opnode & prev, const htp_opnode & cur) {
     if (prev.opcode != HTP_OP_MUL || prev.inputs.size() != 2) return false;
 
@@ -596,6 +651,25 @@ int htp_fusion_max(const struct ggml_cgraph * graph, int idx) {
     return f;
 }
 
+// merged gate_up output whose only uses are two views feeding one GLU
+static bool htp_fusion_is_glu_pair(const struct ggml_cgraph * graph, int i) {
+    const ggml_tensor * t = graph->nodes[i];
+    if (!ggml_node_has_n_uses(graph, i, 2)) return false;
+
+    int n_views = 0;
+    for (int j = i + 1; j < graph->n_nodes && j <= i + 3; j++) {
+        const ggml_tensor * v = graph->nodes[j];
+        if (v->op == GGML_OP_VIEW && v->view_src == t) {
+            if (ggml_node_get_use_count(graph, j) != 1 || (v->flags & GGML_TENSOR_FLAG_OUTPUT)) return false;
+            n_views++;
+        } else {
+            return n_views == 2 && v->op == GGML_OP_GLU && v->src[0] && v->src[1] &&
+                   v->src[0]->view_src == t && v->src[1]->view_src == t;
+        }
+    }
+    return false;
+}
+
 void htp_fusion_tag_graph(struct ggml_cgraph * graph) {
     for (int i = 0; i < graph->n_nodes; i++) {
         ggml_tensor * node = graph->nodes[i];
@@ -608,6 +682,9 @@ void htp_fusion_tag_graph(struct ggml_cgraph * graph) {
              op == GGML_OP_SSM_CONV ||
              (op == GGML_OP_MUL_MAT && !htp_is_hadamard(node))) &&
             ggml_node_has_n_uses(graph, i, 1)) {
+            ggml_hexagon_tensor_set_flags(node, HTP_TENSOR_FUSEABLE);
+        }
+        if (op == GGML_OP_MUL_MAT_ID && htp_fusion_is_glu_pair(graph, i)) {
             ggml_hexagon_tensor_set_flags(node, HTP_TENSOR_FUSEABLE);
         }
     }
@@ -641,6 +718,9 @@ bool htp_fusion_try_fuse(const struct ggml_hexagon_session * sess, struct htp_op
             return htp_fusion_enabled(HTP_FUSE_MUL_MAT_NX) && fuse_mul_mat_nx(sess, prev, cur);
         case HTP_OP_MUL_MAT_ID:
             return htp_fusion_enabled(HTP_FUSE_MUL_MAT_ID_NX) && fuse_mul_mat_id_nx(sess, prev, cur);
+        case HTP_OP_GLU_SWIGLU:
+        case HTP_OP_GLU_GEGLU:
+            return htp_fusion_enabled(HTP_FUSE_MUL_MAT_GLU) && fuse_mul_mat_glu(sess, prev, cur);
         default:
             return false;
     }

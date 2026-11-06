@@ -33,6 +33,7 @@ extern int    opt_opqueue;
 extern int    opt_optrace;
 extern int    opt_oppoll;
 extern int    opt_opfusion;
+extern int    opt_mmglu;
 extern int    opt_rt_repack;
 
 #ifndef HEX_VERBOSE
