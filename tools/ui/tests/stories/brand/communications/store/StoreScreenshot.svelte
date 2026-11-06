@@ -31,18 +31,25 @@
 
 	const format = FORMATS.msScreenshot;
 	const g = grid(format);
-	// the quick chat is 28 units wide; the desktop is drawn at 1.2 times Windows' size, its taskbar 48px high; the
+	// the quick chat is 28 units wide; the desktop is drawn at 1.6 times Windows' size, its taskbar 48px high; the
 	// Models card close up at 2.1 times
 	const windowZoom = (g.unit * 28) / 1040;
-	const desk = 1.2;
+	const desk = 1.6;
 	const close = 2.1;
 	// from the area's bottom down to the piece's edge
 	const below = g.margin + (format.safe?.bottom ?? 0);
+	// on the desktop the shot runs down to a margin above the taskbar, so the words centre on the screen over it; the
+	// flyout and the taskbar are placed from there
+	const deskEdge = g.margin + 48 * desk;
 	const trayIcon = { paths: PATHS, viewBox: `0 0 ${SIZE} ${SIZE}` };
 </script>
 
 <PostFrame {format} label="Store screenshot, {kind}, {tone}" {overlay} {tone}>
-	<div class={['shot', `kind-${kind}`]}>
+	<!-- beside the flyout, the words stand in the middle of the screen above the taskbar -->
+	<div
+		style:margin-bottom={kind === 'desktop' ? `${deskEdge - below}px` : undefined}
+		class={['shot', `kind-${kind}`]}
+	>
 		<div class="text">
 			<h2 class={kind === 'brand' ? 't-display' : 'headline'}>{headline}</h2>
 
@@ -73,12 +80,12 @@
 			</div>
 		{:else if kind === 'desktop'}
 			<!-- the flyout stands on the taskbar at the screen's right edge -->
-			<div style:bottom="{48 * desk - below}px" style:right="{-g.margin}px" class="flyout">
+			<div style:bottom="{48 * desk - deskEdge}px" style:right="{-g.margin}px" class="flyout">
 				<div style:zoom={desk}><WindowsTray /></div>
 			</div>
 
 			<div
-				style:bottom="{-below}px"
+				style:bottom="{-deskEdge}px"
 				style:left="{-g.margin}px"
 				style:width="{format.width}px"
 				class="taskbar"
@@ -206,7 +213,16 @@
 		box-shadow: 0 24px 48px -20px rgb(17 34 60 / 0.5);
 	}
 
-	/* the desktop: the flyout over the full taskbar, which runs edge to edge at the bottom */
+	/* the desktop: the words on the left, the flyout over the full taskbar, which runs edge to edge at the bottom */
+	.kind-desktop {
+		align-items: flex-start;
+		justify-content: center;
+	}
+	.kind-desktop .text {
+		justify-items: start;
+		max-width: calc(var(--u) * 24);
+		text-align: left;
+	}
 	.flyout {
 		position: absolute;
 		right: 0;
