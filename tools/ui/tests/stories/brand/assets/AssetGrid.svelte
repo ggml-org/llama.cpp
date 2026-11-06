@@ -117,10 +117,10 @@
 		},
 		{
 			assets: [
-				...versions('Llama · ', (m) => `lockup/llama/logo-llama-${m}`, '1773 / 600'),
-				...versions('llama.cpp · ', (m) => `lockup/llama-cpp/logo-llama-cpp-${m}`, '2413 / 600')
+				...versions('Llama · ', (m) => `lockup/llama/logo-llama-${m}`, '2342 / 600'),
+				...versions('llama.cpp · ', (m) => `lockup/llama-cpp/logo-llama-cpp-${m}`, '3926 / 600')
 			],
-			note: 'The icon with the wordmark in Llama Sans Bold at its Display size · WebP and PNG at 2×',
+			note: 'The icon with the wordmark: Llama in Llama Sans Bold at its Display size, llama.cpp in Llama Mono Bold · WebP and PNG at 2×',
 			title: 'Lockups'
 		}
 	];

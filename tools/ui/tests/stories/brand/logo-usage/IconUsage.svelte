@@ -244,15 +244,23 @@
 	<h2>Where the name goes</h2>
 
 	<p>
-		The two lockups at the sizes they are used at: app headers, a terminal, a footer and a hero.
-		Llama, the app, is set in Llama Sans with its capital L; llama.cpp, the engine, in Llama Mono
-		and all lowercase, as it is typed in a terminal. Both start with the lockup glyph, U+E002: the
-		capital icon with the gap built in, the same in both fonts, so the lockup is one character and
-		the name. The llama.cpp lockup always sits on a neutral ground (white, the greys, ink); only the
-		Llama lockup goes on colour, the hero's light blue and its navy.
+		The two lockups at the sizes they are used at: the README banner, app headers, a terminal, a
+		footer and a hero. Llama, the app, is set in Llama Sans with its capital L; llama.cpp, the
+		engine, in Llama Mono and all lowercase, as it is typed in a terminal. Both start with the
+		lockup glyph, U+E002: the capital icon with the gap built in, the same in both fonts, so the
+		lockup is one character and the name. The llama.cpp lockup always sits on a neutral ground
+		(white, the greys, ink); only the Llama lockup goes on colour, the hero's light blue and its
+		navy.
 	</p>
 
 	<div class="contexts">
+		<!-- the README banner, as on github.com/ggml-org/llama.cpp: the cover, 3:1, the lockup centred at its size -->
+		{#each ['dark', 'light'] as const as tone (tone)}
+			<div class="ctx banner mono {tone}">
+				<span class="mark">llama<span class="cpp">.cpp</span></span>
+			</div>
+		{/each}
+
 		<div class="ctx header mono">
 			<span style:font-size="18px" class="mark">llama<span class="cpp">.cpp</span></span>
 
@@ -585,6 +593,25 @@
 	}
 	.ctx.hero {
 		min-height: 220px;
+	}
+	/* the cover's proportions: 3:1, the icon 20.8% of its height (520 of 2500), so the type is 7.9% of its width */
+	.ctx.banner {
+		justify-content: center;
+		aspect-ratio: 3;
+		container-type: inline-size;
+		border-radius: 0;
+	}
+	.ctx.banner .mark {
+		font-size: 7.9cqw;
+	}
+	.ctx.banner.dark {
+		background: #111111;
+		color: #fafafa;
+	}
+	.ctx.banner.light {
+		background: #fafafa;
+		color: #111111;
+		box-shadow: inset 0 0 0 1px var(--l-rule);
 	}
 
 	/* llama.cpp's lockup in Llama Mono, which carries the same U+E002 */
