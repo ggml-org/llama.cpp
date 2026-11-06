@@ -16,7 +16,7 @@
 	import VectorSpace from './communications/posts/motifs/VectorSpace.svelte';
 	import WorkstationLarge from './communications/posts/motifs/WorkstationLarge.svelte';
 	import WorkstationSmall from './communications/posts/motifs/WorkstationSmall.svelte';
-	import type { Ground } from './communications/posts/post';
+	import { type Ground, GROUNDS } from './communications/posts/post';
 	import PostChip from './communications/posts/PostChip.svelte';
 	import PostFooter from './communications/posts/PostFooter.svelte';
 	import PostFrame from './communications/posts/PostFrame.svelte';
@@ -46,7 +46,7 @@
 	const motif = tile(340, 300);
 	const app = tile(500, 600);
 
-	// the motifs drawn as SVG, each filling its tile: the ideas, then the machines
+	// the motifs drawn as SVG, each filling its tile: models and maths, then the machines
 	const ideas: { component: Component; name: string; note: string }[] = [
 		{
 			component: BranchMotif,
@@ -56,8 +56,7 @@
 		{ component: NeuralNet, name: 'Neural network', note: 'Models and what is inside them' },
 		{ component: Tensor, name: 'Tensor', note: 'Weights, layers, quantization' },
 		{ component: GradientDescent, name: 'Gradient descent', note: 'Training and fine-tuning' },
-		{ component: VectorSpace, name: 'Vector space', note: 'Embeddings, search, retrieval' },
-		{ component: Curve, name: 'Curve', note: 'Speed, benchmarks, anything over time' }
+		{ component: VectorSpace, name: 'Vector space', note: 'Embeddings, search, retrieval' }
 	];
 	// the machines, each drawn in 3D and flat, straight at its front
 	const machines: { component: Component<{ flat?: boolean }>; name: string; note: string }[] = [
@@ -147,21 +146,50 @@
 	</StateGallery>
 </Story>
 
-<Story asChild name="Motifs">
-	<StateGallery minItemWidth={rem(motif.width)}>
-		{#each ['light', 'dark'] as const as tone (tone)}
+<Story
+	argTypes={{ tone: { control: 'select', name: 'Ground', options: Object.keys(GROUNDS) } }}
+	args={{ tone: 'light' }}
+	name="Motifs"
+	parameters={{ controls: { disable: false, expanded: true } }}
+>
+	{#snippet template(args)}
+		{@const tone = args.tone as Ground}
+		<StateGallery minItemWidth={rem(motif.width)} title="Models and maths">
 			{#each ideas as m (m.name)}
-				<StateGalleryItem label="{m.name}, {tone}" note={m.note}>
+				<StateGalleryItem label={m.name} note={m.note}>
 					<PostFrame actual format={motif} label={m.name} {tone} unit={U}>
 						<div class="motif fill"><m.component /></div>
 					</PostFrame>
 				</StateGalleryItem>
 			{/each}
+		</StateGallery>
 
+		<StateGallery minItemWidth={rem(motif.width)} title="Charts and fields">
+			<StateGalleryItem label="Curve" note="Speed, benchmarks, anything over time">
+				<PostFrame actual format={motif} label="Curve" {tone} unit={U}>
+					<div class="motif fill"><Curve /></div>
+				</PostFrame>
+			</StateGalleryItem>
+
+			<StateGalleryItem label="Quantised blocks" note="Quants, sizes, fitting in memory">
+				<PostFrame actual format={motif} label="Quantised blocks" {tone} unit={U}>
+					<div class="blocks"><QuantBlocks columns={12} rows={6} /></div>
+				</PostFrame>
+			</StateGalleryItem>
+
+			<StateGalleryItem label="Dot grid" note="The unit made visible, behind a word or figure">
+				<PostFrame actual format={motif} label="Dot grid" {tone} unit={U}>
+					<DotGrid at={[6, 4]} />
+				</PostFrame>
+			</StateGalleryItem>
+		</StateGallery>
+
+		<!-- the machines in two columns: isometric on the left, flat on the right -->
+		<StateGallery columns={2} title="Machines: isometric and flat">
 			{#each machines as m (m.name)}
 				{#each [false, true] as flat (flat)}
 					<StateGalleryItem
-						label="{m.name}{flat ? ', flat' : ''}, {tone}"
+						label="{m.name}, {flat ? 'flat' : 'isometric'}"
 						note={flat ? 'Its front, straight on' : m.note}
 					>
 						<PostFrame actual format={motif} label={m.name} {tone} unit={U}>
@@ -170,23 +198,8 @@
 					</StateGalleryItem>
 				{/each}
 			{/each}
-
-			<StateGalleryItem label="Quantised blocks, {tone}" note="Quants, sizes, fitting in memory">
-				<PostFrame actual format={motif} label="Quantised blocks" {tone} unit={U}>
-					<div class="blocks"><QuantBlocks columns={12} rows={6} /></div>
-				</PostFrame>
-			</StateGalleryItem>
-
-			<StateGalleryItem
-				label="Dot grid, {tone}"
-				note="The unit made visible, behind a word or figure"
-			>
-				<PostFrame actual format={motif} label="Dot grid" {tone} unit={U}>
-					<DotGrid at={[6, 4]} />
-				</PostFrame>
-			</StateGalleryItem>
-		{/each}
-	</StateGallery>
+		</StateGallery>
+	{/snippet}
 </Story>
 
 <Story asChild name="The app">

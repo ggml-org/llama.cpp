@@ -10,6 +10,7 @@
 	import BranchMotif from './communications/posts/BranchMotif.svelte';
 	import Curve from './communications/posts/Curve.svelte';
 	import ModelCard from './communications/posts/ModelCard.svelte';
+	import Laptop from './communications/posts/motifs/Laptop.svelte';
 	import {
 		type FormatKey,
 		FORMATS,
@@ -57,7 +58,7 @@
 						{overlay}
 						{tone}
 					>
-						{#snippet motif()}<BranchMotif />{/snippet}
+						{#snippet motif()}<Laptop />{/snippet}
 					</Statement>
 				</StateGalleryItem>
 			{/each}

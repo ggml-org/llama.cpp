@@ -1,5 +1,5 @@
 <!--
-	A decision tree, for decision models: from one question the options branch, and branch again, each branch as
+	A decision tree, for decision models: from one question three options, and three more under each, each branch as
 	heavy and as dark as it is likely, the chosen path level through the middle in cinder with its probability in
 	Mono, and the runner-up's above it. A motif for posts about decision models, choices and probabilities.
 -->
@@ -14,7 +14,7 @@
 
 	let { values = ['0.91', '0.06'] }: Props = $props();
 
-	const view: View = { cx: 211, cy: 150, distance: 1000, pitch: 0, scale: 85, yaw: 0 };
+	const view: View = { cx: 209, cy: 150, distance: 1000, pitch: 0, scale: 92, yaw: 0 };
 	const p = (q: Point3) => project(q, view);
 
 	interface Node {
@@ -32,12 +32,12 @@
 		[1, 0.6],
 		[-1, -0.3]
 	];
-	const xs = [-2, -0.7, 0.55, 1.75];
-	const spreads = [1.05, 0.45, 0.18];
+	const xs = [-1.8, -0.1, 1.6];
+	const spreads = [1.1, 0.42];
 	const grow = (at: Point3, level: number, p: number): Node => ({
 		at,
 		children:
-			level === 3
+			level === 2
 				? []
 				: (level === 0 ? first : odds).map((q, i) =>
 						grow(
@@ -86,22 +86,22 @@
 
 		return { x: x + dx, y: y + dy };
 	};
-	const top = label(tree.children[0], -10, 24);
-	const runner = label(tree.children[1], 0, -14);
+	const top = label(tree.children[0], -12, 32);
+	const runner = label(tree.children[1], 0, -16);
 </script>
 
 <svg aria-hidden="true" class="motif-svg" viewBox="0 0 400 300">
 	{#each branches.filter((b) => !b.chosen) as b, i (i)}
 		<polyline
-			style:opacity={0.22 + 0.55 * Math.sqrt(b.p) * (1 - 0.4 * far(b.line[8][2], 3))}
-			style:stroke-width={1.1 + 6 * b.p}
+			style:opacity={0.3 + 0.55 * Math.sqrt(b.p) * (1 - 0.4 * far(b.line[8][2], 3))}
+			style:stroke-width={1.8 + 7 * b.p}
 			class="branch"
 			points={pts(b.line)}
 		/>
 	{/each}
 
 	{#each branches.filter((b) => b.chosen) as b, i (i)}
-		<polyline style:stroke-width="4" class="accent-line" points={pts(b.line)} />
+		<polyline style:stroke-width="5" class="accent-line" points={pts(b.line)} />
 	{/each}
 
 	{#each nodes as n, i (i)}
@@ -110,7 +110,7 @@
 			class={n.chosen ? 'accent' : 'solid'}
 			cx={n.pt[0]}
 			cy={n.pt[1]}
-			r={n.chosen ? 6.5 : 2.6 + 3.4 * Math.sqrt(n.p)}
+			r={n.chosen ? 8 : 3.6 + 4 * Math.sqrt(n.p)}
 		/>
 	{/each}
 
@@ -124,6 +124,9 @@
 		fill: none;
 		stroke: var(--p-ink);
 		stroke-linecap: round;
+	}
+	text {
+		font-size: 30px;
 	}
 	text.chosen {
 		fill: var(--art-cinder);
