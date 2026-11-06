@@ -24,10 +24,10 @@
 </script>
 
 <Story asChild name="Headline blocks">
-	<StateGallery minItemWidth="20rem">
+	<StateGallery columns={1}>
 		{#each ['light', 'dark'] as const as tone (tone)}
 			<StateGalleryItem label="Headline, {tone}" note="Label, headline, lede and chips">
-				<PostFrame format={tile} label="Headline block" {tone}>
+				<PostFrame actual format={tile} label="Headline block" {tone}>
 					<HeadlineBlock
 						chips={modelDrop.chips.slice(0, 2)}
 						headline="Decision models, running locally."
@@ -38,7 +38,7 @@
 			</StateGalleryItem>
 
 			<StateGalleryItem label="Display, {tone}" note="The headline alone, at display size">
-				<PostFrame format={tile} label="Headline block" {tone}>
+				<PostFrame actual format={tile} label="Headline block" {tone}>
 					<HeadlineBlock headline={linkPreview.headline} level="display" />
 				</PostFrame>
 			</StateGalleryItem>
@@ -47,13 +47,13 @@
 </Story>
 
 <Story asChild name="Model cards">
-	<StateGallery minItemWidth="20rem">
+	<StateGallery columns={1}>
 		{#each ['light', 'dark'] as const as tone (tone)}
 			<StateGalleryItem
 				label="Models, {tone}"
 				note="Tagged, with stats, and a family with its members inset"
 			>
-				<PostFrame format={tall} label="Model cards" {tone}>
+				<PostFrame actual format={tall} label="Model cards" {tone}>
 					<div class="cards">
 						<ModelCard model={modelDrop.models[0]} size={0.9} />
 
@@ -63,7 +63,7 @@
 			</StateGalleryItem>
 
 			<StateGalleryItem label="Family, {tone}" note="One card holding its members">
-				<PostFrame format={tall} label="Family card" {tone}>
+				<PostFrame actual format={tall} label="Family card" {tone}>
 					<ModelCard
 						aside={whatsNew.family.aside}
 						model={{ about: whatsNew.family.about, name: whatsNew.family.name }}
@@ -84,13 +84,13 @@
 </Story>
 
 <Story asChild name="Stat cards">
-	<StateGallery minItemWidth="20rem">
+	<StateGallery columns={1}>
 		{#each ['light', 'dark'] as const as tone (tone)}
 			<StateGalleryItem
 				label="Stats, {tone}"
 				note="Figures that compare, the one that matters in cinder"
 			>
-				<PostFrame format={tile} label="Stat cards" {tone}>
+				<PostFrame actual format={tile} label="Stat cards" {tone}>
 					<div class="stats">
 						<StatCard accent label="tok/s" note="On an M4 Max, at Q4_K_M" value="142" />
 
@@ -105,13 +105,13 @@
 </Story>
 
 <Story asChild name="Product shot">
-	<StateGallery minItemWidth="20rem">
+	<StateGallery columns={1}>
 		{#each ['day', 'night'] as const as tone (tone)}
 			<StateGalleryItem
 				label="Product, {tone}"
 				note="The app at a width in units, whatever the format"
 			>
-				<PostFrame format={tall} label="Product shot" {tone}>
+				<PostFrame actual format={tall} label="Product shot" {tone}>
 					<div class="shot"><ProductShot size={14} unit={grid(tall).unit} /></div>
 				</PostFrame>
 			</StateGalleryItem>
