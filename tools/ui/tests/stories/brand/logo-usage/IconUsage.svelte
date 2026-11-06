@@ -10,6 +10,14 @@
 	in the logo showcase's frame (ShowcaseFrame), on its colours.
 -->
 <script lang="ts">
+	import {
+		MAC_DOCK_PLACEHOLDERS,
+		MacDock,
+		MacMenuBar,
+		MockDesktop,
+		WINDOWS_TASKBAR_PLACEHOLDERS,
+		WindowsTaskbar
+	} from '../../../../.storybook/mockups';
 	import avatarSvg from '../assets/files/logo/svg/social/x/x-avatar-light.svg?raw';
 	import macosIcon from '../assets/files/native/macos/icon_512x512@2x.png';
 	import windowsIcon from '../assets/files/native/windows/Square44x44Logo.scale-400.png';
@@ -74,6 +82,21 @@
 			src: windowsTile
 		}
 	];
+
+	// the native apps where their OS puts them: Llama in the Dock (running, its name label showing), its status item in
+	// the menu bar, and on the Windows taskbar (active) and in its tray
+	const dockApps = [
+		...MAC_DOCK_PLACEHOLDERS.slice(0, 3),
+		{ icon: macosIcon, name: 'Llama', running: true },
+		...MAC_DOCK_PLACEHOLDERS.slice(3)
+	];
+	const taskbarApps = [
+		...WINDOWS_TASKBAR_PLACEHOLDERS.slice(0, 2),
+		{ active: true, icon: windowsIcon, name: 'Llama', running: true },
+		...WINDOWS_TASKBAR_PLACEHOLDERS.slice(2)
+	];
+	// Windows' tray icon: the icon alone, as llama.ico and llama-white.ico are, in the taskbar's ink
+	const trayIcon = { paths: PATHS, viewBox: `0 0 ${SIZE} ${SIZE}` };
 
 	interface AppIcon {
 		background: string | null; // null: transparent, shown on a checkerboard (a dark one for a light icon)
@@ -496,6 +519,29 @@
 		{/each}
 	</div>
 
+	<!-- the native apps in place, light and dark: a Mac's desktop, the menu bar over the Dock, and a PC's taskbar -->
+	<div class="in-place">
+		{#each ['light', 'dark'] as const as mode (mode)}
+			<figure class="in-place-card">
+				<MockDesktop align="between" height={250} {mode}>
+					<MacMenuBar {mode} />
+
+					<MacDock apps={dockApps} labelled="Llama" {mode} />
+				</MockDesktop>
+
+				<figcaption class="icon-label">macOS, the menu bar and the Dock, {mode}</figcaption>
+			</figure>
+
+			<figure class="in-place-card">
+				<MockDesktop align="bottom" height={170} {mode}>
+					<WindowsTaskbar apps={taskbarApps} {mode} {trayIcon} />
+				</MockDesktop>
+
+				<figcaption class="icon-label">Windows, the taskbar and the tray, {mode}</figcaption>
+			</figure>
+		{/each}
+	</div>
+
 	<!-- the avatars, and how the icon is optically centred in a circle crop, as in them and the PWA icon -->
 	<p class="avatars-intro">
 		The social avatars are the icon at 56% of a square, which every platform crops to a circle.
@@ -899,5 +945,16 @@
 		border-radius: 0;
 		background: transparent;
 		object-fit: contain;
+	}
+	/* the native apps in place, each desktop across */
+	.in-place {
+		display: grid;
+		gap: 24px;
+	}
+	.in-place-card {
+		display: grid;
+		gap: 8px;
+		min-width: 0;
+		margin: 0;
 	}
 </style>
