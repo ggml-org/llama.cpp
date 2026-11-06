@@ -18,10 +18,12 @@
 	const GENERATOR_ICON_PADDING = 0.3;
 	// make-icons-circular.js scales the maskable icon to 85% before cutting the circle
 	const CIRCULAR_ICON_SCALE = 0.85;
-	// the icon sits 1/150 of its height above centre in a square or a circle: its weight is low (the wide bottom bar),
-	// so mathematically centred it reads as sitting low, and at 1/150 the two corners nearest a circle round it are
-	// equally far from it (as in the brand's -bg files and social avatars)
-	const OPTICAL_LIFT = 1 / 150;
+	// the icon sits 1/39 of its height above centre and 1/31 of its width left of it, in a square or a circle: its
+	// weight is low (the wide bottom bar), so mathematically centred it reads as sitting low, and so placed its rounded
+	// corners and its sharp outer corners are each as far from a circle round it as their pair (as in the brand's -bg
+	// files, social avatars and app icons)
+	const OPTICAL_LIFT = 1 / 39;
+	const OPTICAL_NUDGE = 1 / 31;
 
 	// every output starts from favicon.svg, the icon already shrunk by the favicon padding
 	const favicon = 1 - PWA_ASSET_GENERATOR.FAVICON_PADDING;
@@ -138,10 +140,10 @@
 		}
 	];
 
-	// the icon placed in a w × h box at `scale` of its shorter side, centred, lifted optically
+	// the icon placed in a w × h box at `scale` of its shorter side, centred, lifted and nudged optically
 	function placed(w: number, h: number, scale: number) {
 		const side = Math.min(w, h) * scale;
-		const x = (w - side) / 2;
+		const x = (w - side) / 2 - side * OPTICAL_NUDGE;
 		const y = (h - side) / 2 - side * OPTICAL_LIFT;
 
 		return { side, transform: `translate(${x} ${y}) scale(${side / SIZE})`, x, y };
@@ -384,10 +386,11 @@
 		of them start from the favicon, the icon with a {percent(
 			PWA_ASSET_GENERATOR.FAVICON_PADDING / 2
 		)} margin; the square icons add the generator's 30% padding, and the PWA icon is the maskable one
-		at 85%, cut round. The icon sits a little above centre ({Math.round(OPTICAL_LIFT * 1000) / 10}%
-		of its height), so it looks centred and, cut round, clears the circle evenly, as drawn below on
-		the PWA icon. The files the web UI ships still carry the old llama.cpp mark; these are drawn
-		with the L.
+		at 85%, cut round. The icon sits a little above and left of centre ({Math.round(
+			OPTICAL_LIFT * 1000
+		) / 10}% of its height up, {Math.round(OPTICAL_NUDGE * 1000) / 10}% of its width left), so it
+		looks centred and, cut round, clears the circle evenly, as drawn below on the PWA icon. The
+		files the web UI ships still carry the old llama.cpp mark; these are drawn with the L.
 	</p>
 
 	<div class="icons">
@@ -807,7 +810,7 @@
 		overflow-wrap: anywhere;
 	}
 	.optical {
-		max-width: 36rem;
+		max-width: 54rem;
 		margin-top: 2rem;
 	}
 </style>

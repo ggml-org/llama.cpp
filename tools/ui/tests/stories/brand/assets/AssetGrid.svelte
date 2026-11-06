@@ -270,9 +270,7 @@
 	);
 
 	// the page's columns: as many as its longest row, so every thumbnail is the same width
-	const columns = $derived(
-		Math.max(...groups.flatMap((g) => g.rows.map((r) => r.assets.length + (g.optical ? 2 : 0))))
-	);
+	const columns = $derived(Math.max(...groups.flatMap((g) => g.rows.map((r) => r.assets.length))));
 
 	/** An asset's downloads: its own SVG, WebP and PNG, unless it names others. */
 	const downloads = (asset: Asset) =>
@@ -368,7 +366,7 @@
 						{/each}
 
 						{#if group.optical}
-							<div class="col-span-2">
+							<div class="col-span-full mt-4">
 								<OpticalCentre placement={group.optical} />
 							</div>
 						{/if}
