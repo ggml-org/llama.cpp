@@ -18,13 +18,11 @@ from .kimi_linear import KimiLinearModel
 @ModelBase.example("moonshotai/Kimi-K3")
 class KimiK3Model(TextModel):
     """
-    Kimi-K3 / Kimi-K3.1 text model (KimiLinearForCausalLM under a `language_model.` prefix).
+    Kimi-K3 text model (KimiLinearForCausalLM under a `language_model.` prefix).
 
     Shares the hybrid MLA + KDA skeleton with kimi-linear, but that converter
     cannot load it: K3 adds cross-layer attention residuals, a latent MoE, the
     situ activation, an MLA output gate and a full-rank KDA gate.
-
-    K3.1 replaces the full-attention MLA layers with DSA.
 
     The vision tower and mm_projector are skipped - text only for now.
     """
