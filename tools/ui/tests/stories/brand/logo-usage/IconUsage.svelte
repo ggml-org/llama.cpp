@@ -337,14 +337,15 @@
 	<p>
 		A test of giving each name its own voice: the app, Llama, in Llama Sans with its capital L; the
 		engine, llama.cpp, in Llama Mono and all lowercase, as it is typed in a terminal. Both take the
-		same capital icon (U+E001) at the same size and gap, so side by side only the name changes.
+		same capital icon (U+E001) at the same size; llama.cpp adds one Llama Mono space to the gap, so
+		the name starts on the next cell.
 	</p>
 
 	{#each ['light', 'dark'] as const as tone (tone)}
 		<div class="pair-panel {tone}">
 			<p class="lockup"><span class="glyph"> </span>Llama</p>
 
-			<p class="lockup mono"><span class="glyph"> </span>llama.cpp</p>
+			<p class="lockup mono"><span class="glyph"> </span>&nbsp;llama.cpp</p>
 		</div>
 	{/each}
 
@@ -355,7 +356,7 @@
 
 				<span class="mark"><span class="glyph"> </span>Llama</span>
 
-				<span class="mark mono"><span class="glyph"> </span>llama.cpp</span>
+				<span class="mark mono"><span class="glyph"> </span>&nbsp;llama.cpp</span>
 			</div>
 		{/each}
 	</div>
@@ -371,7 +372,7 @@
 
 		<div class="ctx header mono">
 			<span style:font-size="18px" class="mark"
-				><span class="glyph"> </span>llama<span class="cpp">.cpp</span></span
+				><span class="glyph"> </span>&nbsp;llama<span class="cpp">.cpp</span></span
 			>
 
 			<span class="links">docs · server · cli</span>
@@ -383,7 +384,7 @@
 			<span style:font-size="13px" class="mark"><span class="glyph"> </span>Llama</span>
 
 			<span class="links"
-				>runs on <span class="mono-name"><span class="glyph"> </span>llama.cpp</span></span
+				>runs on <span class="mono-name"><span class="glyph"> </span>&nbsp;llama.cpp</span></span
 			>
 		</div>
 	</div>
