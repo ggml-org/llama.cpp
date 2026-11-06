@@ -104,11 +104,11 @@ kernel void kernel_gemv_noshuffle_q6_K_f32_tiled(
     }
 }
 
-// Multi-column (N=3) variant of the tiled q6_K decode GEMV, for the speculative/
-// MTP VERIFY lm_head/embed (ne1=3 = 2 drafts + 1 bonus). Identical tiled weight
-// layout + unpack as the ne1=1 kernel above; each WI computes 3 output columns,
+// Multi-column (ne1 in [2..4]) variant of the tiled q6_K decode GEMV, for the
+// speculative/MTP VERIFY lm_head/embed (drafts + 1 bonus). Identical tiled weight
+// layout + unpack as the ne1=1 kernel above; each WI computes up to 4 output columns,
 // streaming the (large) lm_head weight ONCE per superblock and reusing it across
-// the 3 verify activation columns (dequant once per code, MAC into 3 accs). This
+// the verify activation columns (dequant once per code, MAC into 4 accs). This
 // is the lm_head analogue of the per-layer mc3 GEMV; the multiply order matches
 // the ne1=1 kernel, so each column is byte-identical to a standalone tiled GEMV.
 #if defined(ADRENO_GPU)
@@ -123,7 +123,8 @@ kernel void kernel_gemv_noshuffle_q6_K_f32_tiled_mc3(
     global float * dst,
     ulong offsetd,
     int ne00,
-    int ne01
+    int ne01,
+    int ne1
 ) {
     int grp = get_local_id(1);
     int row = get_global_id(0);
@@ -133,7 +134,12 @@ kernel void kernel_gemv_noshuffle_q6_K_f32_tiled_mc3(
     int nb = ne00 / 256;
     int col_stride = ne00 / 4;          // activation float4 pixels per column
 
-    float acc0 = 0.0f, acc1 = 0.0f, acc2 = 0.0f;
+    // columns past ne1 re-read the last column and are not stored
+    int col1 = min(1, ne1 - 1) * col_stride;
+    int col2 = min(2, ne1 - 1) * col_stride;
+    int col3 = min(3, ne1 - 1) * col_stride;
+
+    float acc0 = 0.0f, acc1 = 0.0f, acc2 = 0.0f, acc3 = 0.0f;
 
     for (int sb = grp; sb < nb; sb += NSUBGROUPS) {
         int tile_blk = rt * nb + sb;
@@ -157,9 +163,10 @@ kernel void kernel_gemv_noshuffle_q6_K_f32_tiled_mc3(
         int act_base = sb * 64;
         #pragma unroll
         for (int e4 = 0; e4 < 64; ++e4) {
-            float4 a0 = read_imagef(src1, 0*col_stride + act_base + e4);
-            float4 a1 = read_imagef(src1, 1*col_stride + act_base + e4);
-            float4 a2 = read_imagef(src1, 2*col_stride + act_base + e4);
+            float4 a0 = read_imagef(src1, act_base + e4);
+            float4 a1 = read_imagef(src1, col1 + act_base + e4);
+            float4 a2 = read_imagef(src1, col2 + act_base + e4);
+            float4 a3 = read_imagef(src1, col3 + act_base + e4);
             #pragma unroll
             for (int t = 0; t < 4; ++t) {
                 int  e    = e4 * 4 + t;
@@ -171,15 +178,17 @@ kernel void kernel_gemv_noshuffle_q6_K_f32_tiled_mc3(
                 float av0 = (t == 0) ? a0.x : (t == 1) ? a0.y : (t == 2) ? a0.z : a0.w;
                 float av1 = (t == 0) ? a1.x : (t == 1) ? a1.y : (t == 2) ? a1.z : a1.w;
                 float av2 = (t == 0) ? a2.x : (t == 1) ? a2.y : (t == 2) ? a2.z : a2.w;
+                float av3 = (t == 0) ? a3.x : (t == 1) ? a3.y : (t == 2) ? a3.z : a3.w;
                 acc0 += w * av0;
                 acc1 += w * av1;
                 acc2 += w * av2;
+                acc3 += w * av3;
             }
         }
     }
 
     local float4 reduce_lm[NSUBGROUPS * TILE_ROWS];
-    reduce_lm[grp * TILE_ROWS + rit] = (float4)(acc0, acc1, acc2, 0.0f);
+    reduce_lm[grp * TILE_ROWS + rit] = (float4)(acc0, acc1, acc2, acc3);
     barrier(CLK_LOCAL_MEM_FENCE);
 
     if (grp == 0) {
@@ -188,9 +197,10 @@ kernel void kernel_gemv_noshuffle_q6_K_f32_tiled_mc3(
                      + reduce_lm[2 * TILE_ROWS + rit]
                      + reduce_lm[3 * TILE_ROWS + rit];
         dst = (global float*)((global char*)dst + offsetd);
-        // dst column-major [ne01 rows x 3 cols]: (row, col) at col*ne01 + row
+        // dst column-major [ne01 rows x ne1 cols]: (row, col) at col*ne01 + row
         dst[0*ne01 + row] = total.x;
         dst[1*ne01 + row] = total.y;
-        dst[2*ne01 + row] = total.z;
+        if (ne1 > 2) dst[2*ne01 + row] = total.z;
+        if (ne1 > 3) dst[3*ne01 + row] = total.w;
     }
 }
