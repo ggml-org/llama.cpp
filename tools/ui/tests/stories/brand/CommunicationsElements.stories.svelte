@@ -14,7 +14,8 @@
 	import Server from './communications/posts/motifs/Server.svelte';
 	import Tensor from './communications/posts/motifs/Tensor.svelte';
 	import VectorSpace from './communications/posts/motifs/VectorSpace.svelte';
-	import Workstation from './communications/posts/motifs/Workstation.svelte';
+	import WorkstationLarge from './communications/posts/motifs/WorkstationLarge.svelte';
+	import WorkstationSmall from './communications/posts/motifs/WorkstationSmall.svelte';
 	import type { Ground } from './communications/posts/post';
 	import PostChip from './communications/posts/PostChip.svelte';
 	import PostFooter from './communications/posts/PostFooter.svelte';
@@ -54,7 +55,12 @@
 		{ component: Curve, name: 'Curve', note: 'Speed, benchmarks, anything over time' },
 		{ component: Gpu, name: 'GPU', note: 'Hardware, offload, speed' },
 		{ component: Laptop, name: 'Laptop', note: 'The machine people already have' },
-		{ component: Workstation, name: 'Workstation', note: 'Bigger models on a desk' },
+		{ component: WorkstationSmall, name: 'Small workstation', note: 'Bigger models on a desk' },
+		{
+			component: WorkstationLarge,
+			name: 'Large workstation',
+			note: 'The biggest models on a desk'
+		},
 		{ component: Server, name: 'Server', note: 'llama-server, sharing, the largest models' }
 	];
 	const tones: Ground[] = ['light', 'dark', 'day'];
