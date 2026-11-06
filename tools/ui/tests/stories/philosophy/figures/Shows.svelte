@@ -1,5 +1,5 @@
 <!--
-	How it shows: the same ideas in the product, the design and communications, each as a real piece. A model row as
+	In practice: the same ideas in the product, the design and communications, each as a real piece. A model row as
 	the app shows it, the neutral greys with one cinder mark, and llama.app's link preview.
 -->
 <script lang="ts">

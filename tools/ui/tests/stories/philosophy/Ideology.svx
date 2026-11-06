@@ -18,69 +18,67 @@
 
 # Ideology
 
-<p class="lead">Why <strong>llama.cpp</strong>, <strong>Llama UI</strong> and the apps exist. How they fit together is in <strong>Product</strong>, and how they look in <strong>Design</strong>.</p>
+<p class="lead">Why <strong>llama.cpp</strong>, <strong>Llama UI</strong> and the apps exist. <strong>Product</strong> covers how they fit together, <strong>Design</strong> how they look.</p>
 
-## Local is freedom
+## Local
 
-A model on your own machine is yours. You choose which one runs, and it stays the model you chose: no one can swap it, cut it down or change its behaviour behind your back. Your conversations and traces stay where you are, and work goes on without a connection or an account.
+A model on your own machine is yours to choose, set up and keep. It runs the way you configured it, your conversations stay on your computer, and it works offline, without an account.
 
-That is the point of running AI locally. It is not about distrust of anyone; it is about people being able to own and control the tools they think and work with.
-
-<Figure n={1} caption="Everything that matters on one computer: the conversations, the server and the model file you chose. The model came from Hugging Face once; nothing else has to leave.">
+<Figure n={1} caption="One computer holds the conversations, the server and the model. The model is downloaded from Hugging Face once; nothing else leaves.">
 	<Machine />
 </Figure>
 
-## AI for everyone
+## Ordinary hardware
 
-Open models run on the hardware people already have, from a laptop to a server. Access to AI should not depend on where someone lives, what they can pay each month or whose terms they accept. Making it run well on ordinary machines is how it reaches everyone.
+Open models run on hardware people already have, from a laptop to a server. Making them run well there puts AI within reach of anyone with a computer.
 
-<Figure n={2} caption="The machines people already have, and roughly how big a model each runs at a 4-bit quant. The bar is the model's share of the memory.">
+<Figure n={2} caption="Common machines and roughly the largest model each runs at a 4-bit quant. The bar is the model's share of the memory.">
 	<Reach />
 </Figure>
 
-## Simple by default, deep when you want
+## Simple by default
 
-Freedom is only real if people can use it. Running a model has long meant a terminal and a vocabulary few people share: weights, tensors, GGUF, quantization, speculative decoding. Someone who just wants help with a letter, a photo or a question should not need any of it.
+Running a model used to take a terminal and terms like GGUF, quantization and speculative decoding. Most people want help with a letter, a photo or a question, and need none of that.
 
-So the apps start simple. They suggest a first model that is small enough for an ordinary computer and good enough for everyday help, one that can see and hear as well as read. The Llama app does what used to take a terminal: it downloads the model from Hugging Face, sets up how it runs, and keeps the server going.
+So the apps start with one suggested model: small enough for an ordinary computer, able to see and hear as well as read. The Llama app downloads it from Hugging Face, configures it and keeps the server running.
 
-Everything deeper is still there for anyone who wants it: sampling, penalties, system prompts, custom recipes, any model and any setting. It is uncovered when you ask for it, not put in front of everyone. We do not have the perfect recipe for this yet; it is the problem we are working on now.
+Sampling, penalties, system prompts, custom recipes and every other setting stay available, one step away rather than on the first screen. Where exactly to draw that line is still open.
 
-<Figure n={3} caption="The same app at three depths, with the real controls. The first run asks for one click; settings and the advanced panel are there when you ask for them.">
+<Figure n={3} caption="The same app at three depths, with the real controls: the first run, the settings and the advanced panel.">
 	<Disclosure />
 </Figure>
 
-## Shared, not rented
+## Shared
 
-The server does not have to be yours alone. One person's server can serve their family, a team, a lab or a neighbourhood, and people can pool the machines they have. Shared this way, AI stays in the hands of the people who use it, and someone without the hardware gets the same freedom as the person who has it.
+A server doesn't have to serve one person. One machine can serve a family, a team, a lab or a neighbourhood, so people without the hardware can use it too.
 
-<Figure n={4} caption="One server, run by one person, used by the people around it, each on their own devices.">
+<Figure n={4} caption="One server, run by one person, used by others on their own devices.">
 	<Sharing />
 </Figure>
 
 ## Three layers
 
-Between a person and a model there are three layers: the **model**, the weights themselves; the **service**, the server that runs inference with them; and the **application**, the harness, UI and UX people work with. Each of them can be on your side.
+Between a person and a model are three layers: the **model** (the weights), the **service** (the server that runs inference) and the **application** (the harness, UI and UX). Every product in the stack sits on one of them, and each can run under the user's control.
 
-<Figure n={5} caption="The three layers, from the one people use to the weights underneath. Every product in the Llama stack sits on one of them.">
+<Figure n={5} caption="The three layers, from the one people use down to the weights, with the Llama product on each.">
 	<Layers />
 </Figure>
 
-## People first
+## Voice
 
-The future we want is a bright one for people: AI that helps them think, make and understand, on their terms. We say that by showing it, not by preaching it. No pride, no righteousness, no fear and no hype: plain words, real numbers and the real product.
+We say what the product does, with real numbers, and show the real product. No hype, no fear, no superlatives.
 
-<Figure n={6} caption="What we say, and what we do not: plain words and real numbers rather than hype, fear or pride.">
+<Figure n={6} caption="What we write, and what we don't.">
 	<Voice />
 </Figure>
 
-## How it shows
+## In practice
 
-- **In the product:** simple first, with a suggested model and sensible defaults, and every advanced setting a step away. It makes clear which model runs and on which server, needs no account, and works offline.
-- **In the design:** calm and neutral, so the conversation is the loudest thing on the screen, and open, so anyone can restyle it or build on it.
-- **In communications:** local shown as freedom, the real app and real figures, and the same calm voice.
+- **Product:** a suggested model and sensible defaults, with advanced settings one step away. It always shows which model runs on which server, needs no account and works offline.
+- **Design:** neutral, so the conversation stands out, and open, so anyone can restyle it.
+- **Communications:** the real app, real figures and the same plain voice.
 
-<Figure n={7} caption="The same ideas, three ways: a model row as the app shows it, the neutral greys with one accent, and llama.app's link preview.">
+<Figure n={7} caption="A model row as the app shows it, the greys with one accent, and llama.app's link preview.">
 	<Shows />
 </Figure>
 
