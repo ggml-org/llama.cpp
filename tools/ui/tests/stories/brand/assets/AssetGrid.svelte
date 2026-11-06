@@ -367,7 +367,13 @@
 
 						{#if group.optical}
 							<div class="col-span-full mt-4">
-								<OpticalCentre placement={group.optical} />
+								<OpticalCentre
+									candidates={[
+										{ label: 'lifted 1/25, no nudge', lift: 1 / 25, nudge: 0 },
+										{ label: 'lifted 1/40, nudged 1/100 left', lift: 1 / 40, nudge: 1 / 100 }
+									]}
+									placement={group.optical}
+								/>
 							</div>
 						{/if}
 					</div>
