@@ -4,13 +4,16 @@
 -->
 <script lang="ts">
 	import './motif.css';
-	import { type Box, device, pen, shadow } from './box';
+	import { type Box, device, front, pen, shadow } from './box';
 	import { type Point3, project, pts } from './project';
 	import Solid from './Solid.svelte';
 
-	const view = device(98, 190);
+	let { flat = false }: { flat?: boolean } = $props();
+
+	// the isometric view, or straight at the front for the flat version
+	const view = $derived(flat ? front(140, 266) : device(98, 190));
 	const base: Box = { max: [1.25, 0.09, 0.85], min: [-1.25, 0, -0.85] };
-	const b = pen(base, view);
+	const b = $derived.by(() => pen(base, view));
 
 	// the lid, hinged at the back of the base and leaning back a little; (u, t) across and up its face
 	const lean = 0.22;
@@ -32,7 +35,8 @@
 </script>
 
 <svg aria-hidden="true" class="motif-svg" viewBox="0 0 400 300">
-	<polygon class="floor" points={shadow(base, view)} />
+	{#if !flat}
+		<polygon class="floor" points={shadow(base, view)} />{/if}
 
 	<polygon class="face" points={quad(0, 0, 2.4, 1.6)} />
 
@@ -48,11 +52,19 @@
 
 	<polygon class="accent" points={quad(0.79, 0.53, 0.035, 0.12)} />
 
-	<Solid box={base} {view} />
+	<Solid box={base} {flat} {view} />
 
 	{#each keys as [u, v] (u + '-' + v)}
-		<polygon style:opacity="0.55" class="detail" points={b.rect('top', u, v, 0.13, 0.1)} />
+		{#if !flat}<polygon
+				style:opacity="0.55"
+				class="detail"
+				points={b.rect('top', u, v, 0.13, 0.1)}
+			/>{/if}
 	{/each}
 
-	<polygon style:opacity="0.7" class="detail" points={b.rect('top', 0.88, 0.16, 0.74, 0.56)} />
+	{#if !flat}<polygon
+			style:opacity="0.7"
+			class="detail"
+			points={b.rect('top', 0.88, 0.16, 0.74, 0.56)}
+		/>{/if}
 </svg>

@@ -13,6 +13,16 @@ export const device = (scale: number, cy = 160): View => ({
 	yaw: -0.6
 });
 
+/** the camera for a machine's flat version: straight at its front, without perspective */
+export const front = (scale: number, cy = 160): View => ({
+	cx: 200,
+	cy,
+	distance: 1000,
+	pitch: 0,
+	scale,
+	yaw: 0
+});
+
 export interface Box {
 	max: Point3;
 	min: Point3;

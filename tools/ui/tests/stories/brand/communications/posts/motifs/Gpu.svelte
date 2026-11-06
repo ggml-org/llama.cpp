@@ -5,12 +5,15 @@
 -->
 <script lang="ts">
 	import './motif.css';
-	import { type Box, device, pen, shadow } from './box';
+	import { type Box, device, front, pen, shadow } from './box';
 	import Solid from './Solid.svelte';
 
-	const view = device(118, 150);
+	let { flat = false }: { flat?: boolean } = $props();
+
+	// the isometric view, or straight at the front for the flat version
+	const view = $derived(flat ? front(135, 150) : device(118, 150));
 	const card: Box = { max: [1.3, 0.62, 0.2], min: [-1.3, -0.5, -0.2] };
-	const d = pen(card, view);
+	const d = $derived.by(() => pen(card, view));
 
 	const fans = [0.68, 1.9];
 	const blade = (cu: number) =>
@@ -31,13 +34,14 @@
 </script>
 
 <svg aria-hidden="true" class="motif-svg" viewBox="0 0 400 300">
-	<polygon class="floor" points={shadow(card, view)} />
+	{#if !flat}
+		<polygon class="floor" points={shadow(card, view)} />{/if}
 
 	{#each fingers as u (u)}
 		<polygon class="hole" points={d.rect('front', u, -0.12, 0.035, 0.12)} />
 	{/each}
 
-	<Solid box={card} {view} />
+	<Solid box={card} {flat} {view} />
 
 	<polygon class="detail" points={d.rect('front', 0.08, 0.08, 2.44, 0.96)} />
 
@@ -52,11 +56,15 @@
 	{/each}
 
 	{#each fins as u (u)}
-		<polyline style:opacity="0.6" class="detail" points={d.line('top', u, 0.06, u, 0.34)} />
+		{#if !flat}<polyline
+				style:opacity="0.6"
+				class="detail"
+				points={d.line('top', u, 0.06, u, 0.34)}
+			/>{/if}
 	{/each}
 
 	{#each [0.2, 0.42, 0.64] as v (v)}
-		<polygon class="detail" points={d.rect('right', 0.1, v, 0.2, 0.12)} />
+		{#if !flat}<polygon class="detail" points={d.rect('right', 0.1, v, 0.2, 0.12)} />{/if}
 	{/each}
 
 	<polygon class="accent" points={d.circle('front', 2.36, 0.94, 0.045)} />
