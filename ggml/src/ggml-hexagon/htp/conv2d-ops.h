@@ -35,6 +35,8 @@ struct htp_conv2d_tiled_params {
     uint32_t wk_chunk;
     struct fastdiv_values div_ow_tiles;
     struct fastdiv_values div_oh;
+    struct fastdiv_values div_khr;  // kernel ne[1], unfolds conv_3d kh = kd * KHr + kh'
+    struct fastdiv_values div_ohr;  // dst ne[1], unfolds conv_3d oh = od * OHr + oh'
 };
 
 struct htp_conv2d_window_params {
