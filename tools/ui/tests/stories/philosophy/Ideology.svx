@@ -20,17 +20,21 @@
 
 <p class="lead">Why <strong>llama.cpp</strong>, <strong>Llama UI</strong> and the apps exist. <strong>Product</strong> covers how they fit together, <strong>Design</strong> how they look.</p>
 
-## Local
+## Personal and private
 
-A model on your own machine is yours to choose, set up and keep. It runs the way you configured it, your conversations stay on your computer, and it works offline, without an account.
+The model runs on a device you already own: your phone, laptop or desktop. It is yours to choose, set up and keep, and it runs the way you configured it.
+
+Your conversations stay on that device, and everything works offline, without an account. There is nothing to sign in to and nothing to send, so what you ask stays private and secure by default. That is what personal AI means here.
 
 <Figure n={1} caption="One computer holds the conversations, the server and the model. The model is downloaded from Hugging Face once; nothing else leaves.">
 	<Machine />
 </Figure>
 
-## Ordinary hardware
+## Open to everyone
 
-Open models run on hardware people already have, from a laptop to a server. Making them run well there puts AI within reach of anyone with a computer.
+Open models run on hardware people already have, from a phone to a server. Making them run well there means capable AI doesn't depend on a subscription, a fast connection or a data centre.
+
+Access to AI should be as open as access to information: available to anyone, wherever they live and whatever they can pay. Running it well on ordinary machines is how llama.cpp works towards that.
 
 <Figure n={2} caption="Common machines and roughly the largest model each runs at a 4-bit quant. The bar is the model's share of the memory.">
 	<Reach />

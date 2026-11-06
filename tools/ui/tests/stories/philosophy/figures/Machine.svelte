@@ -1,5 +1,5 @@
 <!--
-	Local: everything that matters inside one computer. The conversations in Llama Chat, llama-server running
+	Personal and private: everything that matters inside one computer. The conversations in Llama Chat, llama-server running
 	the model, and the model file you chose, inside a boundary; outside it, only the download the model came from. The
 	boundary's label carries the cinder dot.
 -->
