@@ -168,6 +168,12 @@ kimi-k3             ,0   ,any     ,MUL+ADD                     ,      2
 kimi-k3             ,0   ,any     ,RMS_NORM+MUL                ,     17
 kimi-k3             ,0   ,any     ,RMS_NORM+SCALE              ,      2
 kimi-k3             ,0   ,any     ,UNARY+ADD+ARGSORT+GET_ROWS  ,      1
+kimi-k31            ,0   ,any     ,GATED_DELTA_NET+CPY         ,      1
+kimi-k31            ,0   ,any     ,MUL+ADD                     ,      2
+kimi-k31            ,0   ,any     ,NORM+MUL+ADD                ,      1
+kimi-k31            ,0   ,any     ,RMS_NORM+MUL                ,     17
+kimi-k31            ,0   ,any     ,RMS_NORM+SCALE              ,      2
+kimi-k31            ,0   ,any     ,UNARY+ADD+ARGSORT+GET_ROWS  ,      1
 kimi-linear         ,0   ,any     ,ADD+ADD                     ,      1
 kimi-linear         ,0   ,any     ,GATED_DELTA_NET+CPY         ,      1
 kimi-linear         ,0   ,any     ,MUL+ADD                     ,      2
