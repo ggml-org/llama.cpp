@@ -40,7 +40,7 @@
 }
 .motif-svg text {
 	fill: var(--p-muted);
-	font: 500 18px var(--mono);
+	font: 500 24px var(--mono);
 }
 
 /* the machines: faces filled with the ground's flat colour, then shaded with ink; edges in ink */
