@@ -10,11 +10,13 @@
 	import { PATHS, SIZE } from '../logo-showcase/lib/logo';
 
 	interface Props {
+		/** placements to try beside these, each lifted and nudged left by these fractions of the icon's size */
+		candidates?: { label: string; lift: number; nudge: number }[];
 		/** the canvas's side and the icon's placement in it, as in its SVG */
 		placement: { scale: number; size: number; x: number; y: number };
 	}
 
-	let { placement }: Props = $props();
+	let { candidates = [], placement }: Props = $props();
 
 	const side = $derived(SIZE * placement.scale);
 	const centred = $derived((placement.size - side) / 2);
@@ -25,8 +27,8 @@
 	type Point = [number, number];
 
 	/**
-	 * A path's two outer corners, in the icon's own 600 units: its rounded corner (its curve's control points) and its
-	 * sharp one (its corner farthest from the icon's centre).
+	 * A path's outer corners, in the icon's own 600 units: its rounded corner (its curve's control points), its sharp
+	 * one (its corner farthest from the icon's centre) and its tip at the middle (its corner farthest to the side).
 	 */
 	function outerCorners(d: string) {
 		const points: Point[] = [];
@@ -54,7 +56,13 @@
 
 		const reach = ([x, y]: Point) => Math.hypot(x - SIZE / 2, y - SIZE / 2);
 
-		return { curve, sharp: points.reduce((far, p) => (reach(p) > reach(far) ? p : far)) };
+		return {
+			curve,
+			sharp: points.reduce((far, p) => (reach(p) > reach(far) ? p : far)),
+			tip: points.reduce((far, p) =>
+				Math.abs(p[0] - SIZE / 2) > Math.abs(far[0] - SIZE / 2) ? p : far
+			)
+		};
 	}
 
 	// the foot, then the blade
@@ -78,8 +86,13 @@
 
 			return { cx: c + v[0] + r * n[0], cy: c + v[1] + r * n[1], gap: 2 * r };
 		};
+		const outward = (v: number[]) => {
+			const d = Math.hypot(v[0], v[1]);
 
-		return CORNERS.flatMap(({ curve: [p0, p1, p2, p3], sharp }, i) => {
+			return fill(v, [v[0] / d, v[1] / d]);
+		};
+
+		return CORNERS.flatMap(({ curve: [p0, p1, p2, p3], sharp, tip }, i) => {
 			const apex = [0, 1].map((k) => (p0[k] + 3 * p1[k] + 3 * p2[k] + p3[k]) / 8);
 			const tangent = [0, 1].map((k) => p3[k] + p2[k] - p1[k] - p0[k]);
 			const length = Math.hypot(tangent[0], tangent[1]);
@@ -88,23 +101,21 @@
 
 			if (n[0] * (apex[0] - SIZE / 2) + n[1] * (apex[1] - SIZE / 2) < 0) n = [-n[0], -n[1]];
 
-			const v = onCanvas(sharp);
-			const d = Math.hypot(v[0], v[1]);
-
 			return [
 				{ ...fill(onCanvas(apex), n), kind: 'rounded', name: NAMES[i] },
-				{ ...fill(v, [v[0] / d, v[1] / d]), kind: 'sharp', name: NAMES[i] }
+				{ ...outward(onCanvas(sharp)), kind: 'sharp', name: NAMES[i] },
+				{ ...outward(onCanvas(tip)), kind: 'middle', name: NAMES[i] }
 			];
 		});
 	}
 
 	/** For each kind of corner, whether the pair is even (within half a pixel) or which comes nearer the crop. */
 	function balance(g: ReturnType<typeof gaps>) {
-		return ['rounded', 'sharp']
+		return ['rounded', 'sharp', 'middle']
 			.map((kind) => {
 				const [a, b] = g.filter((gap) => gap.kind === kind);
 
-				if (Math.abs(a.gap - b.gap) < 0.5) return `${kind} corners even`;
+				if (Math.abs(a.gap - b.gap) < 0.5) return `${kind} even`;
 
 				return `${kind}: the ${a.gap < b.gap ? a.name : b.name}’s nearer`;
 			})
@@ -125,7 +136,13 @@
 				short: `Lifted 1/${lift}, nudged 1/${nudge} left`,
 				x: placement.x,
 				y: placement.y
-			}
+			},
+			...candidates.map(({ label, lift, nudge }) => ({
+				label: `Try: ${label}`,
+				short: `Try: ${label}`,
+				x: centred - side * nudge,
+				y: centred - side * lift
+			}))
 		].map((panel) => {
 			const g = gaps(panel.x, panel.y);
 
@@ -138,7 +155,10 @@
 
 <figure class="m-0 grid min-w-0 gap-3">
 	<!-- the three placements as they show, light and dark in the circle crop, with nothing drawn in -->
-	<div class="grid grid-cols-3 gap-4">
+	<div
+		style:--panels={panels.length}
+		class="grid grid-cols-2 gap-4 sm:grid-cols-[repeat(var(--panels),minmax(0,1fr))]"
+	>
 		{#each panels as panel (panel.label)}
 			<div class="grid min-w-0 content-start gap-2">
 				<div class="grid grid-cols-2 gap-2">
@@ -262,13 +282,13 @@
 
 	<figcaption class="text-xs text-muted-foreground">
 		The icon fills {Math.round((side / placement.size) * 100)}% of the side; the numbers are pixels
-		at
-		{placement.size} × {placement.size}. Each circle fills the gap between the circle crop and one
-		of the icon’s outer corners: the rounded ones, the blade’s top left and the foot’s bottom right,
-		and the sharp ones, the blade’s top right and the foot’s bottom left. Centred, the foot sits
-		nearer the crop; the first lift, 1/60, evens the weight but not the corners; lifted 1/{lift} and nudged
-		1/{nudge} left, each pair of corners is as far from the crop as the other, so the circle clears the
-		icon evenly all round.
+		at {placement.size}
+		× {placement.size}. Each circle fills the gap between the circle crop and one of the icon’s
+		outer corners: orange at the rounded ones (the blade’s top left, the foot’s bottom right), grey
+		at the sharp ones (the blade’s top right, the foot’s bottom left), blue at the tips in the
+		middle (the blade’s left, the foot’s right). The tips sit level, mirrored about the icon’s
+		centre line, so they are even only when the icon is not nudged sideways; the nudge that evens
+		the other two pairs moves them apart.
 	</figcaption>
 </figure>
 
@@ -295,6 +315,10 @@
 	.gap.sharp {
 		fill: color-mix(in srgb, #a3a3a3 14%, transparent);
 		stroke: #a3a3a3;
+	}
+	.gap.middle {
+		fill: color-mix(in srgb, #3b82f6 10%, transparent);
+		stroke: #3b82f6;
 	}
 	.margin {
 		dominant-baseline: middle;
