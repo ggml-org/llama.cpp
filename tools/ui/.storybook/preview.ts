@@ -46,11 +46,18 @@ const preview: Preview = {
 					],
 					'Communications',
 					[
-						'Posts',
-						['Model drop', "What's new", 'Link previews'],
+						'Direction',
+						['Principles', 'Mood board', 'Specimen boards'],
+						'Foundations',
+						['Formats and grid', 'Grounds', 'Type'],
+						'Elements',
+						['Header and footer', 'Chips and labels', 'Figures and commands', 'Motifs', 'The app'],
+						'Modules',
+						['Headline blocks', 'Model cards', 'Stat cards', 'Product shot'],
 						'Key visuals',
-						'Artwork',
-						'Swag'
+						['Statement', 'Product', 'Roster', 'Bulletin', 'Numeral'],
+						'Applications',
+						['Model drop', "What's new", 'Link previews', 'Swag']
 					],
 					'UI',
 					[

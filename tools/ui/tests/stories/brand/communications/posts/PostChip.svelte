@@ -6,15 +6,15 @@
 
 	interface Props {
 		children: Snippet;
-		/** the pill's font size */
+		/** the pill's font size in units */
 		size?: number;
 		variant?: 'accent' | 'outline' | 'solid';
 	}
 
-	let { children, size = 24, variant = 'outline' }: Props = $props();
+	let { children, size = 0.5, variant = 'outline' }: Props = $props();
 </script>
 
-<span style:--s="{size}px" class="chip {variant}">{@render children()}</span>
+<span style:--s="calc(var(--u) * {size})" class="chip {variant}">{@render children()}</span>
 
 <style>
 	.chip {

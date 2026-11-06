@@ -12,15 +12,15 @@
 		aside?: string;
 		children?: Snippet;
 		model: Model;
-		/** the name's font size; the rest follows it */
+		/** the name's font size in units; the rest follows it */
 		size?: number;
 		variant?: 'card' | 'inset';
 	}
 
-	let { aside, children, model, size = 48, variant = 'card' }: Props = $props();
+	let { aside, children, model, size = 1, variant = 'card' }: Props = $props();
 </script>
 
-<article style:--s="{size}px" class="card {variant}">
+<article style:--s="calc(var(--u) * {size})" class="card {variant}">
 	{#if model.tag}
 		<PostChip size={size * 0.46} variant={model.accent ? 'accent' : 'solid'}>{model.tag}</PostChip>
 	{/if}
@@ -142,11 +142,7 @@
 		padding: 0.7em 0.9em;
 		border-radius: 0.6em;
 		background: var(--p-inset);
-		color: var(--art-blue);
+		color: var(--p-link);
 		font: 400 calc(var(--s) * 0.4) / 1 var(--mono);
-	}
-	:global(.dark) .repo,
-	:global(.navy) .repo {
-		color: var(--art-sky);
 	}
 </style>

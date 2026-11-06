@@ -9,15 +9,15 @@
 		brand: 'icon' | 'Llama' | 'llama.cpp';
 		kicker?: string;
 		pill?: string;
-		/** the lockup's font size; the kicker, pill and URL follow it */
+		/** the lockup's size in units; the kicker, pill and URL follow it */
 		size?: number;
 		url?: string;
 	}
 
-	let { brand, kicker, pill, size = 40, url }: Props = $props();
+	let { brand, kicker, pill, size = 0.8, url }: Props = $props();
 </script>
 
-<header style:--s="{size}px" class="row">
+<header style:--s="calc(var(--u) * {size})" class="row">
 	{#if brand === 'icon'}
 		<span aria-label="Llama" class="icon" role="img">{ICON}</span>
 	{:else if brand === 'Llama'}

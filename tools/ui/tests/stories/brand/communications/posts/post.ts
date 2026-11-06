@@ -1,23 +1,77 @@
 // The social post and link preview templates: their formats, tones and the copy they ship with. The copy is the
 // stories' args, so it can be rewritten in Storybook's controls before a post is exported.
 
-/** neutral grounds take either lockup; the hero blue and navy take the Llama lockup only */
-export type PostTone = 'dark' | 'hero' | 'light' | 'navy';
+/**
+ * The grounds a piece is set on. The neutrals (light, dark) take either lockup; llama.app's hero blue and navy, the
+ * Swiss blue, sand and amber take the Llama lockup only. Cinder is never a ground: it is the one accent on top of them
+ */
+export type Ground = 'amber' | 'blue' | 'dark' | 'hero' | 'light' | 'navy' | 'sand';
+/** the older name, kept for the post templates */
+export type PostTone = Ground;
+
+export const GROUNDS: Record<Ground, { lockups: string; name: string; note: string }> = {
+	amber: { lockups: 'Llama', name: 'Amber', note: 'A warm pop, used rarely' },
+	blue: { lockups: 'Llama', name: 'Blue', note: 'The Swiss blue, for a loud piece' },
+	dark: { lockups: 'Llama, llama.cpp', name: 'Dark', note: 'Ink, for the developer side' },
+	hero: { lockups: 'Llama', name: 'Hero', note: "llama.app's light blue sky" },
+	light: { lockups: 'Llama, llama.cpp', name: 'Light', note: 'The default: neutral 50 with ink' },
+	navy: { lockups: 'Llama', name: 'Navy', note: 'The hero at night' },
+	sand: { lockups: 'Llama', name: 'Sand', note: 'Beige, the warm neutral, with its own ink' }
+};
 
 export interface PostFormat {
 	height: number;
 	name: string;
+	/** the pixels at the top and bottom the platform covers with its own bars */
+	safe?: { bottom: number; top: number };
+	/** where it goes */
+	use?: string;
 	width: number;
 }
 
 export const FORMATS = {
-	landscape: { height: 900, name: 'Landscape 16:9', width: 1600 },
-	og: { height: 630, name: 'Open Graph', width: 1200 },
-	portrait: { height: 1350, name: 'Portrait 4:5', width: 1080 },
-	repo: { height: 640, name: 'GitHub social preview', width: 1280 },
-	square: { height: 1080, name: 'Square', width: 1080 },
-	story: { height: 1920, name: 'Story 9:16', width: 1080 }
+	billboard: { height: 800, name: 'Billboard 3:1', use: 'Banners, screens at events', width: 2400 },
+	landscape: { height: 900, name: 'Landscape 16:9', use: 'X, Bluesky, slides', width: 1600 },
+	og: { height: 630, name: 'Open Graph', use: 'Link previews on llama.app', width: 1200 },
+	portrait: { height: 1350, name: 'Portrait 4:5', use: 'Instagram, LinkedIn', width: 1080 },
+	poster: { height: 1754, name: 'Poster A-series', use: 'Print, at 150 dpi', width: 1240 },
+	repo: { height: 640, name: 'GitHub social preview', use: 'The repo’s link preview', width: 1280 },
+	square: { height: 1080, name: 'Square', use: 'Instagram, LinkedIn, X', width: 1080 },
+	story: {
+		height: 1920,
+		name: 'Story 9:16',
+		safe: { bottom: 320, top: 220 },
+		use: 'Instagram and TikTok stories, Shorts',
+		width: 1080
+	}
 } satisfies Record<string, PostFormat>;
+
+export type FormatKey = keyof typeof FORMATS;
+
+export type Shape = 'square' | 'tall' | 'wide';
+
+export interface Grid {
+	/** the column count: six on square and tall formats, twelve on wide ones */
+	columns: number;
+	/** the space between columns, half a unit */
+	gutter: number;
+	/** the margin on every side, two units (plus the safe area) */
+	margin: number;
+	shape: Shape;
+	/**
+	 * the unit: a 24th of the short side, or a 48th of the long side on a format wider than 2:1. Every size in a piece
+	 * (type, spacing, radii) is a multiple of it
+	 */
+	unit: number;
+}
+
+/** The grid for a format: one unit tied to its short side, so a layout scales across formats rather than being redrawn */
+export function grid({ height, width }: PostFormat): Grid {
+	const unit = Math.max(Math.min(width, height) / 24, Math.max(width, height) / 48);
+	const shape: Shape = width / height >= 1.5 ? 'wide' : height / width >= 1.3 ? 'tall' : 'square';
+
+	return { columns: shape === 'wide' ? 12 : 6, gutter: unit / 2, margin: unit * 2, shape, unit };
+}
 
 /** the lockup glyph, U+E002: the icon with the lockup's gap built in, typed straight before the name */
 export const LOCKUP = '';
