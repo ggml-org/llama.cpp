@@ -44,11 +44,12 @@ Components take data in and report what the user did. State and calls to the ser
 
 ## Across the three layers
 
-- **Application:** Llama Chat, Llama for Mac and Windows, or your own app. Ours never assume a cloud account and always show which model runs, and where. The harness lives inside the app: in Llama Chat, it is the agentic loop and the tools it calls, on the server, in the browser or from MCP servers you add. Llama UI is a library for building apps, not a layer: an app can use the layers below without it.
+- **Application:** Llama Chat, Llama for Mac and Windows, or your own app. Ours never assume a cloud account and always show which model runs, and where. Llama UI is a library for building apps, not a layer: an app can use the layers below without it.
+- **Harness**, across the line between the application and inference: the agentic loop and the tools it calls. The loop and browser tools run in the app, server tools run in llama-server, and MCP servers you add can be reached from either.
 - **Inference:** llama-server, libllama and ggml, on your hardware. llama-server is run by hand, started by a native app or shared by someone else.
 - **Model:** a GGUF file from Hugging Face, which the apps help find, download and keep.
 
-<Figure n={3} caption="The Llama stack across the three layers, the harness inside the application, with the real parts on each. Code is set in Llama Mono; the dashed slot is for apps that aren't ours.">
+<Figure n={3} caption="The Llama stack across the three layers, the harness laid across the application and inference, and the real parts on each. Code is set in Llama Mono; the dashed slot is for apps that aren't ours.">
 	<StackLayers />
 </Figure>
 

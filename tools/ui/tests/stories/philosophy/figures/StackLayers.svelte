@@ -1,9 +1,10 @@
 <!--
-	The Llama stack across its three layers, top to bottom: the application people use, with its harness (the agentic
-	loop and the tools it calls) inside it, inference that runs the model, and the model's open weights, each with what
-	it is for and its real parts. Code names (ggml, libllama, GGUF, MCP) are set in Llama Mono. The slot for apps that
-	are not ours is dashed, as in the Introduction's building blocks; the application layer, the one people touch,
-	carries the cinder mark.
+	The Llama stack across its three layers, top to bottom: the application people use, inference that runs the model,
+	and the model's open weights, each with what it is for and its real parts. The harness (the agentic loop and the
+	tools it calls) is laid across the line between the application and inference, each part on the side it runs on:
+	the loop and browser tools in the app, server tools in llama-server, MCP reached from either. Code names are set in
+	Llama Mono; the slot for apps that are not ours is dashed; the application, the layer people touch, carries the
+	cinder mark.
 -->
 <script lang="ts">
 	interface Part {
@@ -14,14 +15,21 @@
 		note: string;
 	}
 
-	const layers: { harness?: Part[]; name: string; parts: Part[]; who: string }[] = [
+	// the harness, laid across the line between the application and inference: each part on the side it runs on
+	const loop: Part = {
+		name: 'Agentic loop',
+		note: 'In Llama Chat: calls tools and feeds back their results'
+	};
+	const browser: Part = { name: 'Browser tools', note: 'Run in the page, on your device' };
+	const server: Part = { name: 'Server tools', note: 'Run by llama-server, next to the model' };
+	const mcp: Part = {
+		code: true,
+		name: 'MCP',
+		note: 'Tools and resources from the servers you add, called from either side'
+	};
+
+	const layers: { name: string; parts: Part[]; who: string }[] = [
 		{
-			harness: [
-				{ name: 'Agentic loop', note: 'In Llama Chat: calls tools and feeds back their results' },
-				{ name: 'Server tools', note: 'Run by llama-server, next to the model' },
-				{ name: 'Browser tools', note: 'Run in the page, on your device' },
-				{ code: true, name: 'MCP', note: 'Tools and resources from the servers you add' }
-			],
 			name: 'Application',
 			parts: [
 				{ name: 'Llama Chat', note: 'The chat client, bundled with llama-server' },
@@ -57,21 +65,31 @@
 	];
 </script>
 
+{#snippet tile(part: Part, area = '')}
+	<li
+		style:grid-area={area || null}
+		class={['part rounded-panel', part.open ? 'open' : 'bg-surface-lifted elevated-control']}
+	>
+		<b class:code={part.code}>{part.name}</b>
+
+		<span>{part.note}</span>
+	</li>
+{/snippet}
+
 {#snippet list(parts: Part[])}
 	<ul>
-		{#each parts as part (part.name)}
-			<li class={['part rounded-panel', part.open ? 'open' : 'bg-surface-lifted elevated-control']}>
-				<b class:code={part.code}>{part.name}</b>
-
-				<span>{part.note}</span>
-			</li>
-		{/each}
+		{#each parts as part (part.name)}{@render tile(part)}{/each}
 	</ul>
 {/snippet}
 
 <div class="stack">
 	{#each layers as layer, i (layer.name)}
-		<section class={['layer card-surface rounded-card', { first: i === 0 }]}>
+		<section
+			class={[
+				'layer card-surface rounded-card',
+				{ above: i === 0, below: i === 1, first: i === 0 }
+			]}
+		>
 			<header>
 				<span class="n">0{layers.length - i}</span>
 
@@ -81,17 +99,32 @@
 			</header>
 
 			{@render list(layer.parts)}
-
-			{#if layer.harness}
-				<div class="harness rounded-panel">
-					<p class="sub">Harness <span>the agentic loop and the tools it calls</span></p>
-
-					{@render list(layer.harness)}
-				</div>
-			{/if}
 		</section>
 
-		{#if i < layers.length - 1}<span aria-hidden="true" class="arrow">↓</span>{/if}
+		{#if i === 0}
+			<div class="harness card-surface rounded-card">
+				<p class="sub">
+					Harness <span>The agentic loop and the tools it calls, across the app and the server</span
+					>
+				</p>
+
+				<ul class="bridge">
+					<li class="side app">In the app</li>
+
+					{@render tile(loop, 'loop')}
+
+					{@render tile(browser, 'browser')}
+
+					{@render tile(mcp, 'mcp')}
+
+					<li class="side server">In llama-server</li>
+
+					{@render tile(server, 'server')}
+				</ul>
+			</div>
+		{:else if i < layers.length - 1}
+			<span aria-hidden="true" class="arrow">↓</span>
+		{/if}
 	{/each}
 </div>
 
@@ -172,23 +205,79 @@
 		line-height: 1.4;
 	}
 
+	/* the two layers the harness bridges leave room for it to overlap them */
+	.above {
+		padding-bottom: 88px;
+	}
+
+	.below {
+		padding-top: 88px;
+	}
+
 	.harness {
+		position: relative;
+		z-index: 1;
 		display: grid;
-		gap: 8px;
-		padding: 10px;
+		gap: 10px;
+		margin: -76px 28px;
+		padding: 12px 14px;
 		border: 1px solid var(--line-default);
 	}
 
 	.sub {
 		margin: 0;
-		font-size: 14px;
+		font-size: 15px;
 		font-weight: 600;
 	}
 
 	.sub span {
 		margin-left: 6px;
 		color: var(--figure-muted);
+		font-size: 13px;
 		font-weight: 400;
+	}
+
+	.bridge {
+		grid-template-columns: 7rem repeat(3, minmax(0, 1fr));
+		grid-template-areas:
+			'app-label loop browser mcp'
+			'server-label server server mcp';
+	}
+
+	.side {
+		align-self: center;
+		margin: 0;
+		color: var(--figure-muted);
+		font: 500 11px var(--mono);
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+	}
+
+	.side.app {
+		grid-area: app-label;
+	}
+
+	.side.server {
+		grid-area: server-label;
+	}
+
+	@media (width < 720px) {
+		.above {
+			padding-bottom: 40px;
+		}
+
+		.below {
+			padding-top: 40px;
+		}
+
+		.harness {
+			margin: -28px 8px;
+		}
+
+		.bridge {
+			grid-template-columns: minmax(0, 1fr);
+			grid-template-areas: 'app-label' 'loop' 'browser' 'server-label' 'server' 'mcp';
+		}
 	}
 
 	.arrow {
