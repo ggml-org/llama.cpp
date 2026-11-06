@@ -1,6 +1,7 @@
 /*
 	Communications' grounds and type scale. A ground sets a piece's background and its inks as variables, which every
-	element and module reads (--p-bg, --p-ink, --p-muted, --p-line, --p-card, --p-inset, --p-solid, --p-solid-ink,
+	element and module reads (--p-bg, --p-base (a flat colour of the ground, for shapes that hide what is behind
+	them), --p-ink, --p-muted, --p-line, --p-card, --p-inset, --p-solid, --p-solid-ink,
 	--p-link). The type scale is in units (--u, a 24th of the format's short side), so a headline is the same weight of
 	the piece in a square post and on a billboard.
 */
@@ -16,6 +17,7 @@
 }
 
 .ground-light {
+	--p-base: #fafafa;
 	--p-bg: #fafafa;
 	--p-ink: #111111;
 	--p-muted: rgb(17 17 17 / 0.62);
@@ -27,6 +29,7 @@
 	--p-link: var(--art-blue);
 }
 .ground-dark {
+	--p-base: #111111;
 	--p-bg: #111111;
 	--p-ink: #fafafa;
 	--p-muted: rgb(250 250 250 / 0.62);
@@ -38,6 +41,7 @@
 	--p-link: var(--art-sky);
 }
 .ground-sand {
+	--p-base: var(--beige-50);
 	--p-bg: var(--beige-50);
 	--p-ink: var(--beige-900);
 	--p-muted: color-mix(in oklab, var(--beige-900) 66%, transparent);
@@ -50,6 +54,7 @@
 }
 /* the day sky: llama.app's hero, deeper blue at the top and light at the horizon */
 .ground-day {
+	--p-base: #d0e4f7;
 	--p-bg:
 		radial-gradient(ellipse at 15% 10%, #dcecfb 0%, transparent 55%),
 		radial-gradient(ellipse at 90% 95%, #e8f2fc 0%, transparent 50%),
@@ -66,6 +71,7 @@
 /* the night sky: darkest at the top, lifting a little towards the horizon, with a faint glow there; the steps are
    small, so it reads as one dark blue */
 .ground-night {
+	--p-base: #13213a;
 	--p-bg:
 		radial-gradient(ellipse 120% 60% at 50% 115%, rgb(46 70 104 / 0.35) 0%, transparent 70%),
 		linear-gradient(180deg, #0f1a2b 0%, #13213a 55%, #182a45 100%);
