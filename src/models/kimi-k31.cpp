@@ -59,7 +59,7 @@ void llama_model_kimi_k31::load_arch_hparams(llama_model_loader & ml) {
     }
 
     switch (hparams.n_layer()) {
-        case 93: type = LLM_TYPE_2_8T_A50B; break; // Kimi-K3 / Kimi-K3.1
+        case 93: type = LLM_TYPE_2_8T_A50B; break; // Kimi-K3.1-Pro
         default: type = LLM_TYPE_UNKNOWN;
     }
 }
