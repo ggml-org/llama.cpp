@@ -7,6 +7,7 @@
 <script>
 	import Figure from '../philosophy/Figure.svelte';
 	import Products from '../philosophy/figures/Products.svelte';
+	import Stack from './Stack.svelte';
 </script>
 
 <p class="kicker">Llama · Storybook</p>
@@ -20,6 +21,10 @@
 - **What:** the **Llama Brand** (the icon, Llama Sans and Llama Mono, the colours), the component library **Llama UI** built on it, the app **Llama Chat** built from that, and the communications made with them.
 - **Who it's for:** people who design or build Llama products, and the agents that work with them.
 - **Why one place:** the brand, the UI and the posts make the same decisions, so they're shown side by side and checked against each other.
+
+<Figure n={1} caption="The building blocks, from the bottom: the Llama Brand, Llama UI built on it and Llama Chat built from that. The communications are made from the brand and the app.">
+	<Stack />
+</Figure>
 
 ## What it's for
 
@@ -47,7 +52,7 @@ The reasons are in **Ideology**, **Product** and **Design**, under **Philosophy*
 - **Llama for Mac** and **Llama for Windows** run llama-server and open Llama Chat in their own window.
 - **llama.app**, the website, shows models the way Llama Chat does.
 
-<Figure n={1} caption="The products and their repositories. llama.brand supplies the brand; llama.cpp holds the engine and Llama UI; the native apps run the engine and open Llama Chat.">
+<Figure n={2} caption="The products and their repositories. llama.brand supplies the brand; llama.cpp holds the engine and Llama UI; the native apps run the engine and open Llama Chat.">
 	<Products />
 </Figure>
 
