@@ -7,6 +7,14 @@
 	import Curve from './communications/posts/Curve.svelte';
 	import DotGrid from './communications/posts/DotGrid.svelte';
 	import Figure from './communications/posts/Figure.svelte';
+	import Gpu from './communications/posts/motifs/Gpu.svelte';
+	import GradientDescent from './communications/posts/motifs/GradientDescent.svelte';
+	import Laptop from './communications/posts/motifs/Laptop.svelte';
+	import NeuralNet from './communications/posts/motifs/NeuralNet.svelte';
+	import Server from './communications/posts/motifs/Server.svelte';
+	import Tensor from './communications/posts/motifs/Tensor.svelte';
+	import VectorSpace from './communications/posts/motifs/VectorSpace.svelte';
+	import Workstation from './communications/posts/motifs/Workstation.svelte';
 	import type { Ground } from './communications/posts/post';
 	import PostChip from './communications/posts/PostChip.svelte';
 	import PostFooter from './communications/posts/PostFooter.svelte';
@@ -25,18 +33,41 @@
 		title: 'Communications/Elements'
 	});
 
-	const tile = { height: 720, name: 'Tile', width: 1080 };
+	// specimen tiles at their real size, on one fixed unit so every part reads the same, sized to what they hold; the
+	// galleries fit as many to a row as the width allows
+	const U = 28;
+	const tile = (width: number, height: number) => ({ height, name: 'Tile', width });
+	const rem = (px: number) => `${px / 16}rem`;
+	const header = tile(540, 420);
+	const chips = tile(352, 340);
+	const figures = tile(540, 440);
+	const motif = tile(340, 300);
+	const app = tile(500, 600);
+
+	// the motifs drawn as SVG, each filling its tile: the ideas, then the machines
+	const motifs = [
+		{ component: BranchMotif, name: 'Token tree', note: 'Decisions, sampling, probabilities' },
+		{ component: NeuralNet, name: 'Neural network', note: 'Models and what is inside them' },
+		{ component: Tensor, name: 'Tensor', note: 'Weights, layers, quantization' },
+		{ component: GradientDescent, name: 'Gradient descent', note: 'Training and fine-tuning' },
+		{ component: VectorSpace, name: 'Vector space', note: 'Embeddings, search, retrieval' },
+		{ component: Curve, name: 'Curve', note: 'Speed, benchmarks, anything over time' },
+		{ component: Gpu, name: 'GPU', note: 'Hardware, offload, speed' },
+		{ component: Laptop, name: 'Laptop', note: 'The machine people already have' },
+		{ component: Workstation, name: 'Workstation', note: 'Bigger models on a desk' },
+		{ component: Server, name: 'Server', note: 'llama-server, sharing, the largest models' }
+	];
 	const tones: Ground[] = ['light', 'dark', 'day'];
 </script>
 
 <Story asChild name="Header and footer">
-	<StateGallery columns={1}>
+	<StateGallery minItemWidth={rem(header.width)}>
 		{#each ['light', 'dark'] as const as tone (tone)}
 			<StateGalleryItem
 				label="Header and footer, {tone}"
 				note="The top and bottom rows of every piece"
 			>
-				<PostFrame actual format={tile} label="Header and footer" {tone}>
+				<PostFrame actual format={header} label="Header and footer" {tone} unit={U}>
 					<div class="stack">
 						<PostHeader brand="Llama" url="llama.app" />
 
@@ -55,13 +86,13 @@
 </Story>
 
 <Story asChild name="Chips and labels">
-	<StateGallery columns={1}>
+	<StateGallery minItemWidth={rem(chips.width)}>
 		{#each tones as tone (tone)}
 			<StateGalleryItem
 				label="Chips and labels, {tone}"
 				note="Outline for use cases, solid for a tag, cinder once"
 			>
-				<PostFrame actual format={tile} label="Chips" {tone}>
+				<PostFrame actual format={chips} label="Chips" {tone} unit={U}>
 					<div class="stack">
 						<p class="t-label">Fresh drops</p>
 
@@ -82,13 +113,13 @@
 </Story>
 
 <Story asChild name="Figures and commands">
-	<StateGallery columns={1}>
+	<StateGallery minItemWidth={rem(figures.width)}>
 		{#each ['light', 'dark'] as const as tone (tone)}
 			<StateGalleryItem
 				label="Figures and commands, {tone}"
 				note="Real numbers in tabular figures; the prompt in cinder"
 			>
-				<PostFrame actual format={tile} label="Figures" {tone}>
+				<PostFrame actual format={figures} label="Figures" {tone} unit={U}>
 					<div class="row figures">
 						<Figure accent label="tokens per second" size={3.6} value="142" />
 
@@ -103,22 +134,18 @@
 </Story>
 
 <Story asChild name="Motifs">
-	<StateGallery columns={1}>
+	<StateGallery minItemWidth={rem(motif.width)}>
 		{#each ['light', 'dark'] as const as tone (tone)}
-			<StateGalleryItem label="Token tree, {tone}" note="Decisions, sampling, probabilities">
-				<PostFrame actual format={tile} label="Token tree" {tone}>
-					<div class="motif fill"><BranchMotif /></div>
-				</PostFrame>
-			</StateGalleryItem>
-
-			<StateGalleryItem label="Curve, {tone}" note="Speed, benchmarks, anything over time">
-				<PostFrame actual format={tile} label="Curve" {tone}>
-					<div class="motif fill"><Curve /></div>
-				</PostFrame>
-			</StateGalleryItem>
+			{#each motifs as m (m.name)}
+				<StateGalleryItem label="{m.name}, {tone}" note={m.note}>
+					<PostFrame actual format={motif} label={m.name} {tone} unit={U}>
+						<div class="motif fill"><m.component /></div>
+					</PostFrame>
+				</StateGalleryItem>
+			{/each}
 
 			<StateGalleryItem label="Quantised blocks, {tone}" note="Quants, sizes, fitting in memory">
-				<PostFrame actual format={tile} label="Quantised blocks" {tone}>
+				<PostFrame actual format={motif} label="Quantised blocks" {tone} unit={U}>
 					<div class="blocks"><QuantBlocks columns={12} rows={6} /></div>
 				</PostFrame>
 			</StateGalleryItem>
@@ -127,8 +154,8 @@
 				label="Dot grid, {tone}"
 				note="The unit made visible, behind a word or figure"
 			>
-				<PostFrame actual format={tile} label="Dot grid" {tone}>
-					<DotGrid at={[9, 5]} />
+				<PostFrame actual format={motif} label="Dot grid" {tone} unit={U}>
+					<DotGrid at={[6, 4]} />
 				</PostFrame>
 			</StateGalleryItem>
 		{/each}
@@ -136,13 +163,13 @@
 </Story>
 
 <Story asChild name="The app">
-	<StateGallery columns={1}>
+	<StateGallery minItemWidth={rem(app.width)}>
 		{#each ['day', 'night'] as const as tone (tone)}
 			<StateGalleryItem
 				label="Menu bar and panel, {tone}"
 				note="The Llama app as it is, at its own size"
 			>
-				<PostFrame actual format={{ height: 720, name: 'Tile', width: 720 }} label="The app" {tone}>
+				<PostFrame actual format={app} label="The app" {tone} unit={U}>
 					<div class="app"><AppPanel /></div>
 				</PostFrame>
 			</StateGalleryItem>

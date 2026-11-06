@@ -6,6 +6,7 @@
 	import Product from './communications/layouts/Product.svelte';
 	import Roster from './communications/layouts/Roster.svelte';
 	import Statement from './communications/layouts/Statement.svelte';
+	import Words from './communications/layouts/Words.svelte';
 	import BranchMotif from './communications/posts/BranchMotif.svelte';
 	import Curve from './communications/posts/Curve.svelte';
 	import ModelCard from './communications/posts/ModelCard.svelte';
@@ -162,6 +163,29 @@
 						{overlay}
 						{tone}
 						value="142"
+					/>
+				</StateGalleryItem>
+			{/each}
+		</StateGallery>
+	{/snippet}
+</Story>
+
+<Story args={{ overlay: false, tone: 'light' }} name="Words">
+	{#snippet template(args)}
+		{@const { overlay, tone } = args as Args}
+		<StateGallery minItemWidth="18rem">
+			{#each ['poster', 'portrait', 'square', 'story', 'landscape'] as const as format (format)}
+				<StateGalleryItem label={FORMATS[format].name} note={note(format)}>
+					<Words
+						accent="said plainly"
+						{format}
+						{overlay}
+						paragraphs={[
+							'One thing, said plainly, in a few words.',
+							'A second line that turns it.'
+						]}
+						signoff={['llama.app', 'A line under the address']}
+						{tone}
 					/>
 				</StateGalleryItem>
 			{/each}

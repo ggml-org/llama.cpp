@@ -3,7 +3,7 @@
 	import StateGalleryItem from '../helpers/StateGalleryItem.svelte';
 	import HeadlineBlock from './communications/posts/HeadlineBlock.svelte';
 	import ModelCard from './communications/posts/ModelCard.svelte';
-	import { grid, linkPreview, modelDrop, whatsNew } from './communications/posts/post';
+	import { linkPreview, modelDrop, whatsNew } from './communications/posts/post';
 	import PostFrame from './communications/posts/PostFrame.svelte';
 	import ProductShot from './communications/posts/ProductShot.svelte';
 	import StatCard from './communications/posts/StatCard.svelte';
@@ -19,15 +19,23 @@
 		title: 'Communications/Modules'
 	});
 
-	const tile = { height: 720, name: 'Tile', width: 1080 };
-	const tall = { height: 1080, name: 'Tile', width: 1080 };
+	// specimen tiles at their real size, on one fixed unit, sized to what they hold; the galleries fit as many to a row
+	// as the width allows
+	const U = 28;
+	const tile = (width: number, height: number) => ({ height, name: 'Tile', width });
+	const rem = (px: number) => `${px / 16}rem`;
+	const headline = tile(540, 480);
+	const cards = tile(540, 760);
+	const family = tile(540, 760);
+	const stats = tile(540, 360);
+	const shot = tile(500, 640);
 </script>
 
 <Story asChild name="Headline blocks">
-	<StateGallery columns={1}>
+	<StateGallery minItemWidth={rem(headline.width)}>
 		{#each ['light', 'dark'] as const as tone (tone)}
 			<StateGalleryItem label="Headline, {tone}" note="Label, headline, lede and chips">
-				<PostFrame actual format={tile} label="Headline block" {tone}>
+				<PostFrame actual format={headline} label="Headline block" {tone} unit={U}>
 					<HeadlineBlock
 						chips={modelDrop.chips.slice(0, 2)}
 						headline="Decision models, running locally."
@@ -38,7 +46,7 @@
 			</StateGalleryItem>
 
 			<StateGalleryItem label="Display, {tone}" note="The headline alone, at display size">
-				<PostFrame actual format={tile} label="Headline block" {tone}>
+				<PostFrame actual format={headline} label="Headline block" {tone} unit={U}>
 					<HeadlineBlock headline={linkPreview.headline} level="display" />
 				</PostFrame>
 			</StateGalleryItem>
@@ -47,13 +55,13 @@
 </Story>
 
 <Story asChild name="Model cards">
-	<StateGallery columns={1}>
+	<StateGallery minItemWidth={rem(family.width)}>
 		{#each ['light', 'dark'] as const as tone (tone)}
 			<StateGalleryItem
 				label="Models, {tone}"
 				note="Tagged, with stats, and a family with its members inset"
 			>
-				<PostFrame actual format={tall} label="Model cards" {tone}>
+				<PostFrame actual format={cards} label="Model cards" {tone} unit={U}>
 					<div class="cards">
 						<ModelCard model={modelDrop.models[0]} size={0.9} />
 
@@ -63,7 +71,7 @@
 			</StateGalleryItem>
 
 			<StateGalleryItem label="Family, {tone}" note="One card holding its members">
-				<PostFrame actual format={tall} label="Family card" {tone}>
+				<PostFrame actual format={family} label="Family card" {tone} unit={U}>
 					<ModelCard
 						aside={whatsNew.family.aside}
 						model={{ about: whatsNew.family.about, name: whatsNew.family.name }}
@@ -84,13 +92,13 @@
 </Story>
 
 <Story asChild name="Stat cards">
-	<StateGallery columns={1}>
+	<StateGallery minItemWidth={rem(stats.width)}>
 		{#each ['light', 'dark'] as const as tone (tone)}
 			<StateGalleryItem
 				label="Stats, {tone}"
 				note="Figures that compare, the one that matters in cinder"
 			>
-				<PostFrame actual format={tile} label="Stat cards" {tone}>
+				<PostFrame actual format={stats} label="Stat cards" {tone} unit={U}>
 					<div class="stats">
 						<StatCard accent label="tok/s" note="On an M4 Max, at Q4_K_M" value="142" />
 
@@ -105,14 +113,14 @@
 </Story>
 
 <Story asChild name="Product shot">
-	<StateGallery columns={1}>
+	<StateGallery minItemWidth={rem(shot.width)}>
 		{#each ['day', 'night'] as const as tone (tone)}
 			<StateGalleryItem
 				label="Product, {tone}"
 				note="The app at a width in units, whatever the format"
 			>
-				<PostFrame actual format={tall} label="Product shot" {tone}>
-					<div class="shot"><ProductShot size={14} unit={grid(tall).unit} /></div>
+				<PostFrame actual format={shot} label="Product shot" {tone} unit={U}>
+					<div class="shot"><ProductShot size={14} unit={U} /></div>
 				</PostFrame>
 			</StateGalleryItem>
 		{/each}
