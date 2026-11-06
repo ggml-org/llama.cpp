@@ -39,6 +39,23 @@ static inline __m128 lasx_extract_128_hi_s(__m256 a) {
     __asm__("" : "=f"(r) : "0"(t));
     return r;
 }
+
+static inline void lasx_decode_q4_K_scales(const uint8_t * scales, uint32_t * out) {
+    const int     perm[8]      = { 0, 1, 2, 2, 3, 4, 5, 5 };
+    const int     last_perm[8] = { 2, 3, 4, 4, 5, 6, 7, 7 };
+    const int     shifts[8]    = { 0, 4, 0, 4, 0, 4, 0, 4 };
+    const __m256i shift        = __lasx_xvld(shifts, 0);
+    for (int i = 0; i < 4; i++) {
+        const int     offset  = i < 3 ? i * 24 : 64;
+        const __m256i indices = __lasx_xvld(i < 3 ? perm : last_perm, 0);
+        const __m256i raw     = __lasx_xvperm_w(__lasx_xvld(scales + offset, 0), indices);
+        const __m256i low     = __lasx_xvandi_b(raw, 0x3f);
+        __m256i       high    = __lasx_xvslli_b(__lasx_xvsrli_b(raw, 6), 4);
+        __m256i       nibble  = __lasx_xvsrl_w(__lasx_xvshuf4i_w(raw, 0xaa), shift);
+        high                  = __lasx_xvor_v(high, __lasx_xvandi_b(nibble, 0x0f));
+        __lasx_xvst(__lasx_xvilvl_w(high, low), out + i * 8, 0);
+    }
+}
 #endif
 
 void ggml_quantize_mat_q8_0_4x8(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
@@ -268,158 +285,594 @@ void ggml_gemm_q4_0_8x8_q8_0(int                        n,
 #endif
 }
 
-void ggml_gemv_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
-#if defined __loongarch_asx
-    const int qk = QK_K;
-    const int nb = n / qk;
-    const int ncols_interleaved = 8;
-    const int blocklen = 8;
-    static const uint32_t kmask1 = 0x3f3f3f3f;
-    static const uint32_t kmask2 = 0x0f0f0f0f;
-    static const uint32_t kmask3 = 0x03030303;
+void ggml_quantize_mat_q8_K_4x8(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    assert(QK_K == 256);
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
 
-    assert (n % qk == 0);
-    assert (nc % ncols_interleaved == 0);
+    block_q8_Kx4 * GGML_RESTRICT y = (block_q8_Kx4 *) vy;
+
+#if defined(__loongarch_asx)
+    float  iscale[4];
+    __m256 iscale_vec[4];
+
+    for (int i = 0; i < nb; i++) {
+        for (int row_iter = 0; row_iter < 4; row_iter++) {
+            const float * src = x + row_iter * k + i * QK_K;
+            __m256        v0  = (__m256) __lasx_xvld(src + 0, 0);
+            __m256        v1  = (__m256) __lasx_xvld(src + 8, 0);
+            __m256        v2  = (__m256) __lasx_xvld(src + 16, 0);
+            __m256        v3  = (__m256) __lasx_xvld(src + 24, 0);
+
+            __m256 max0 = v0;
+            __m256 max1 = v1;
+            __m256 max2 = v2;
+            __m256 max3 = v3;
+            __m256 min0 = v0;
+            __m256 min1 = v1;
+            __m256 min2 = v2;
+            __m256 min3 = v3;
+
+            for (int sb = 1; sb < 8; sb++) {
+                v0   = (__m256) __lasx_xvld(src + sb * 32 + 0, 0);
+                v1   = (__m256) __lasx_xvld(src + sb * 32 + 8, 0);
+                v2   = (__m256) __lasx_xvld(src + sb * 32 + 16, 0);
+                v3   = (__m256) __lasx_xvld(src + sb * 32 + 24, 0);
+                max0 = __lasx_xvfmax_s(max0, v0);
+                max1 = __lasx_xvfmax_s(max1, v1);
+                max2 = __lasx_xvfmax_s(max2, v2);
+                max3 = __lasx_xvfmax_s(max3, v3);
+                min0 = __lasx_xvfmin_s(min0, v0);
+                min1 = __lasx_xvfmin_s(min1, v1);
+                min2 = __lasx_xvfmin_s(min2, v2);
+                min3 = __lasx_xvfmin_s(min3, v3);
+            }
+
+            max0        = __lasx_xvfmax_s(__lasx_xvfmax_s(max0, max1), __lasx_xvfmax_s(max2, max3));
+            __m128 max4 = __lsx_vfmax_s(lasx_extract_128_hi_s(max0), lasx_extract_128_lo_s(max0));
+            max4        = __lsx_vfmax_s(max4, (__m128) __lsx_vshuf4i_w((__m128i) max4, 0x4e));
+            max4        = __lsx_vfmax_s(max4, (__m128) __lsx_vshuf4i_w((__m128i) max4, 0xb1));
+            float max_scalar;
+            __asm__("" : "=f"(max_scalar) : "0"(max4));
+            min0        = __lasx_xvfmin_s(__lasx_xvfmin_s(min0, min1), __lasx_xvfmin_s(min2, min3));
+            __m128 min4 = __lsx_vfmin_s(lasx_extract_128_hi_s(min0), lasx_extract_128_lo_s(min0));
+            min4        = __lsx_vfmin_s(min4, (__m128) __lsx_vshuf4i_w((__m128i) min4, 0x4e));
+            min4        = __lsx_vfmin_s(min4, (__m128) __lsx_vshuf4i_w((__m128i) min4, 0xb1));
+            float min_scalar;
+            __asm__("" : "=f"(min_scalar) : "0"(min4));
+
+            max_scalar           = max_scalar >= -min_scalar ? max_scalar : min_scalar;
+            iscale[row_iter]     = max_scalar ? -127.f / max_scalar : 0.0f;
+            y[i].d[row_iter]     = max_scalar ? 1.0f / iscale[row_iter] : 0.0f;
+            iscale_vec[row_iter] = (__m256) __lasx_xvldrepl_w(iscale + row_iter, 0);
+        }
+
+        const int     perm_mask[8] = { 0, 4, 1, 5, 2, 6, 3, 7 };
+        const __m256i perm         = __lasx_xvld(perm_mask, 0);
+        for (int sb = 0; sb < 4; sb++) {
+            __m256i sums[4];
+            for (int g = 0; g < 4; g++) {
+                __m256i quants[2];
+                for (int t = 0; t < 2; t++) {
+                    const int     j   = sb * 8 + g * 2 + t;
+                    const float * src = x + i * QK_K + j * 8;
+                    __m256i       i0 =
+                        __lasx_xvftintrne_w_s(__lasx_xvfmul_s((__m256) __lasx_xvld(src + 0 * k, 0), iscale_vec[0]));
+                    __m256i i1 =
+                        __lasx_xvftintrne_w_s(__lasx_xvfmul_s((__m256) __lasx_xvld(src + 1 * k, 0), iscale_vec[1]));
+                    __m256i i2 =
+                        __lasx_xvftintrne_w_s(__lasx_xvfmul_s((__m256) __lasx_xvld(src + 2 * k, 0), iscale_vec[2]));
+                    __m256i i3 =
+                        __lasx_xvftintrne_w_s(__lasx_xvfmul_s((__m256) __lasx_xvld(src + 3 * k, 0), iscale_vec[3]));
+                    i0        = __lasx_xvssrani_h_w(i1, i0, 0);
+                    i2        = __lasx_xvssrani_h_w(i3, i2, 0);
+                    i0        = __lasx_xvssrani_b_h(i2, i0, 0);
+                    quants[t] = __lasx_xvperm_w(i0, perm);
+                    __lasx_xvst(quants[t], y[i].qs + 32 * j, 0);
+                }
+                __m256i sum =
+                    __lasx_xvadd_h(__lasx_xvhaddw_h_b(quants[0], quants[0]), __lasx_xvhaddw_h_b(quants[1], quants[1]));
+                sum     = __lasx_xvhaddw_w_h(sum, sum);
+                sums[g] = __lasx_xvhaddw_d_w(sum, sum);
+            }
+            const __m256i sums01 = __lasx_xvssrani_w_d(sums[1], sums[0], 0);
+            const __m256i sums23 = __lasx_xvssrani_w_d(sums[3], sums[2], 0);
+            const __m256i packed = __lasx_xvssrani_h_w(sums23, sums01, 0);
+            const __m256i even   = __lasx_xvpickev_h(packed, packed);
+            const __m256i odd    = __lasx_xvpickod_h(packed, packed);
+            __lasx_xvst(__lasx_xvilvl_d(odd, even), y[i].bsums + sb * 16, 0);
+        }
+    }
+#else
+    UNUSED(nb);
+    UNUSED(y);
+    ggml_quantize_mat_q8_K_4x8_generic(x, vy, k);
+#endif
+}
+
+void ggml_gemv_q4_K_8x8_q8_K(int                        n,
+                             float * GGML_RESTRICT      s,
+                             size_t                     bs,
+                             const void * GGML_RESTRICT vx,
+                             const void * GGML_RESTRICT vy,
+                             int                        nr,
+                             int                        nc) {
+#if defined(__loongarch_asx)
+    const int qk                = QK_K;
+    const int nb                = n / qk;
+    const int ncols_interleaved = 8;
+    const int blocklen          = 8;
+
+    assert(n % qk == 0);
+    assert(nc % ncols_interleaved == 0);
 
     UNUSED(bs);
     UNUSED(nr);
 
-    float sumf[8];
-    float sum_minf[8];
     uint32_t utmp[32];
-    int sumi1;
-    int sumi2;
-    int sumi;
 
     const block_q8_K * a_ptr = (const block_q8_K *) vy;
     for (int x = 0; x < nc / ncols_interleaved; x++) {
-        const block_q4_Kx8 * b_ptr = (const block_q4_Kx8 *) vx + (x * nb);
+        const block_q4_Kx8 * b_ptr = (const block_q4_Kx8 *) vx + x * nb;
 
-        for (int j = 0; j < ncols_interleaved; j++) {
-            sumf[j] = 0.0;
-            sum_minf[j] = 0.0;
-        }
+        __m256 vsumf = (__m256) __lasx_xvldi(0);
+        __m256 vminf = (__m256) __lasx_xvldi(0);
         for (int l = 0; l < nb; l++) {
-            for (int sb = 0; sb < 8; sb++) {
-                memcpy(utmp + sb * 4, b_ptr[l].scales + sb * 12, 12);
-                utmp[sb * 4 + 3] = ((utmp[sb * 4 + 2] >> 4) & kmask2) | (((utmp[sb * 4 + 1] >> 6) & kmask3) << 4);
-                const uint32_t uaux_0 = utmp[sb * 4 + 1] & kmask1;
-                utmp[sb * 4 + 1] = (utmp[sb * 4 + 2] & kmask2) | (((utmp[sb * 4 + 0] >> 6) & kmask3) << 4);
-                utmp[sb * 4 + 2] = uaux_0;
-                utmp[sb * 4 + 0] &= kmask1;
-            }
-            for (int k = 0; k < (qk / (2 * blocklen)); k++) {
-                uint8_t *scales_0 = (uint8_t*) utmp + (k / 4) * 32;
-                uint8_t *scales_1 = (uint8_t*) utmp + (k / 4) * 32 + 16;
-                for (int j = 0; j < ncols_interleaved; j++) {
-                    sumi1 = 0;
-                    sumi2 = 0;
-                    sumi = 0;
-                    for (int i = 0; i < blocklen; ++i) {
-                        const int v0 = (int8_t) (b_ptr[l].qs[k * ncols_interleaved * blocklen + j * blocklen + i] & 0xF);
-                        const int v1 = (int8_t) (b_ptr[l].qs[k * ncols_interleaved * blocklen + j * blocklen + i] >> 4);
-                        sumi1 = (v0 * a_ptr[l].qs[(k >> 2) * 64 + (k % 4) * blocklen + i]);
-                        sumi2 = (v1 * a_ptr[l].qs[(k >> 2) * 64 + (k % 4) * blocklen + i + 32]);
-                        sumi1 = sumi1 * scales_0[j];
-                        sumi2 = sumi2 * scales_1[j];
-                        sumi += sumi1 + sumi2;
-                    }
-                    sumf[j] += sumi * GGML_CPU_FP16_TO_FP32(b_ptr[l].d[j]) * a_ptr[l].d;
+            lasx_decode_q4_K_scales(b_ptr[l].scales, utmp);
+            __m256 a_scale  = (__m256) __lasx_xvldrepl_w(&a_ptr[l].d, 0);
+            __m256 b_scale  = __lasx_xvfcvtl_s_h(__lasx_xvpermi_d(__lasx_xvld(b_ptr[l].d, 0), 0x10));
+            __m256 ab_scale = __lasx_xvfmul_s(a_scale, b_scale);
+            for (int k = 0; k < 4; k++) {
+                __m256i sum_lo_0 = __lasx_xvldi(0);
+                __m256i sum_lo_1 = __lasx_xvldi(0);
+                __m256i sum_hi_0 = __lasx_xvldi(0);
+                __m256i sum_hi_1 = __lasx_xvldi(0);
+                for (int j = 0; j < 4; j++) {
+                    const uint8_t * b     = b_ptr[l].qs + k * 256 + j * 64;
+                    const int8_t *  a     = a_ptr[l].qs + k * 64 + j * blocklen;
+                    const __m256i   a_lo  = __lasx_xvldrepl_d(a, 0);
+                    const __m256i   a_hi  = __lasx_xvldrepl_d(a, 32);
+                    const __m256i   b0    = __lasx_xvld(b, 0);
+                    const __m256i   b1    = __lasx_xvld(b, 32);
+                    const __m256i   b0_lo = __lasx_xvandi_b(b0, 0x0f);
+                    const __m256i   b1_lo = __lasx_xvandi_b(b1, 0x0f);
+                    const __m256i   b0_hi = __lasx_xvsrli_b(b0, 4);
+                    const __m256i   b1_hi = __lasx_xvsrli_b(b1, 4);
+
+                    // Each halfword accumulates eight products, bounded by 15360.
+                    sum_lo_0 = __lasx_xvmaddwev_h_b(sum_lo_0, b0_lo, a_lo);
+                    sum_lo_0 = __lasx_xvmaddwod_h_b(sum_lo_0, b0_lo, a_lo);
+                    sum_lo_1 = __lasx_xvmaddwev_h_b(sum_lo_1, b1_lo, a_lo);
+                    sum_lo_1 = __lasx_xvmaddwod_h_b(sum_lo_1, b1_lo, a_lo);
+                    sum_hi_0 = __lasx_xvmaddwev_h_b(sum_hi_0, b0_hi, a_hi);
+                    sum_hi_0 = __lasx_xvmaddwod_h_b(sum_hi_0, b0_hi, a_hi);
+                    sum_hi_1 = __lasx_xvmaddwev_h_b(sum_hi_1, b1_hi, a_hi);
+                    sum_hi_1 = __lasx_xvmaddwod_h_b(sum_hi_1, b1_hi, a_hi);
                 }
+                sum_lo_0             = __lasx_xvhaddw_w_h(sum_lo_0, sum_lo_0);
+                sum_lo_1             = __lasx_xvhaddw_w_h(sum_lo_1, sum_lo_1);
+                sum_hi_0             = __lasx_xvhaddw_w_h(sum_hi_0, sum_hi_0);
+                sum_hi_1             = __lasx_xvhaddw_w_h(sum_hi_1, sum_hi_1);
+                const __m256i sum_lo = __lasx_xvpermi_d(
+                    __lasx_xvadd_w(__lasx_xvpickev_w(sum_lo_1, sum_lo_0), __lasx_xvpickod_w(sum_lo_1, sum_lo_0)), 0xd8);
+                const __m256i sum_hi = __lasx_xvpermi_d(
+                    __lasx_xvadd_w(__lasx_xvpickev_w(sum_hi_1, sum_hi_0), __lasx_xvpickod_w(sum_hi_1, sum_hi_0)), 0xd8);
+                const __m256i scales   = __lasx_xvld((uint8_t *) utmp + k * 32, 0);
+                const __m256i scale_lo = __lasx_vext2xv_w_b(scales);
+                const __m256i scale_hi = __lasx_vext2xv_w_b(__lasx_xvpermi_q(scales, scales, 0x03));
+                const __m256i sum      = __lasx_xvmadd_w(__lasx_xvmul_w(sum_lo, scale_lo), sum_hi, scale_hi);
+                vsumf                  = __lasx_xvfmadd_s(__lasx_xvffint_s_w(sum), ab_scale, vsumf);
             }
-            for (int sb = 0; sb < 8; sb++) {
-                uint8_t *mins = (uint8_t*) utmp + 8 + sb * 16;
-                for (int j = 0; j < ncols_interleaved; j++) {
-                    sum_minf[j] += mins[j] * (a_ptr[l].bsums[sb * 2] + a_ptr[l].bsums[sb * 2 + 1]) * GGML_CPU_FP16_TO_FP32(b_ptr[l].dmin[j]) * a_ptr[l].d;
-                }
+            {
+                __m256i mins_0_1 = __lasx_xvld(utmp, 8);
+                __m256i mins_0   = __lasx_vext2xv_w_b(mins_0_1);
+                __m256i mins_1   = __lasx_vext2xv_w_b(__lasx_xvpermi_q(mins_0_1, mins_0_1, 0x03));
+                __m256i mins_2_3 = __lasx_xvld(utmp, 40);
+                __m256i mins_2   = __lasx_vext2xv_w_b(mins_2_3);
+                __m256i mins_3   = __lasx_vext2xv_w_b(__lasx_xvpermi_q(mins_2_3, mins_2_3, 0x03));
+                __m256i mins_4_5 = __lasx_xvld(utmp, 72);
+                __m256i mins_4   = __lasx_vext2xv_w_b(mins_4_5);
+                __m256i mins_5   = __lasx_vext2xv_w_b(__lasx_xvpermi_q(mins_4_5, mins_4_5, 0x03));
+                __m256i mins_6_7 = __lasx_xvpermi_d(__lasx_xvld(utmp, 96), 0xf5);
+                __m256i mins_6   = __lasx_vext2xv_w_b(mins_6_7);
+                __m256i mins_7   = __lasx_vext2xv_w_b(__lasx_xvpermi_q(mins_6_7, mins_6_7, 0x03));
+
+                __m256i vbsums = __lasx_xvld(a_ptr[l].bsums, 0);
+                vbsums         = __lasx_xvhaddw_w_h(vbsums, vbsums);
+
+                __m256i bias = __lasx_xvldi(0);
+
+                const __m256i bsum_0 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 0));
+                const __m256i bsum_1 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 1));
+                const __m256i bsum_2 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 2));
+                const __m256i bsum_3 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 3));
+                const __m256i bsum_4 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 4));
+                const __m256i bsum_5 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 5));
+                const __m256i bsum_6 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 6));
+                const __m256i bsum_7 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 7));
+
+                bias = __lasx_xvmadd_w(bias, mins_0, bsum_0);
+                bias = __lasx_xvmadd_w(bias, mins_1, bsum_1);
+                bias = __lasx_xvmadd_w(bias, mins_2, bsum_2);
+                bias = __lasx_xvmadd_w(bias, mins_3, bsum_3);
+                bias = __lasx_xvmadd_w(bias, mins_4, bsum_4);
+                bias = __lasx_xvmadd_w(bias, mins_5, bsum_5);
+                bias = __lasx_xvmadd_w(bias, mins_6, bsum_6);
+                bias = __lasx_xvmadd_w(bias, mins_7, bsum_7);
+
+                __m256       dmin      = __lasx_xvfcvtl_s_h(__lasx_xvpermi_d(__lasx_xvld(b_ptr[l].dmin, 0), 0x10));
+                __m256       a_d       = (__m256) __lasx_xvldrepl_w(&a_ptr[l].d, 0);
+                const __m256 min_scale = __lasx_xvfmul_s(a_d, dmin);
+                vminf                  = __lasx_xvfmadd_s(__lasx_xvffint_s_w(bias), min_scale, vminf);
             }
         }
-        for (int j = 0; j < ncols_interleaved; j++) {
-            s[x * ncols_interleaved + j] = sumf[j] - sum_minf[j];
-        }
+        __lasx_xvst(__lasx_xvfsub_s(vsumf, vminf), s + x * ncols_interleaved, 0);
     }
 #else
-ggml_gemv_q4_K_8x8_q8_K_generic(n, s, bs, vx, vy, nr, nc);
+    ggml_gemv_q4_K_8x8_q8_K_generic(n, s, bs, vx, vy, nr, nc);
 #endif
 }
 
-void ggml_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
-#ifdef __loongarch_asx
-    const int qk = QK_K;
-    const int nb = n / qk;
-    const int ncols_interleaved = 8;
-    const int blocklen = 8;
-    static const uint32_t kmask1 = 0x3f3f3f3f;
-    static const uint32_t kmask2 = 0x0f0f0f0f;
-    static const uint32_t kmask3 = 0x03030303;
+void ggml_gemm_q4_K_8x8_q8_K(int                        n,
+                             float * GGML_RESTRICT      s,
+                             size_t                     bs,
+                             const void * GGML_RESTRICT vx,
+                             const void * GGML_RESTRICT vy,
+                             int                        nr,
+                             int                        nc) {
+#if defined(__loongarch_asx)
+    const int             qk                = QK_K;
+    const int             nb                = n / qk;
+    const int             ncols_interleaved = 8;
+    static const uint32_t kmask1            = 0x3f3f3f3f;
+    static const uint32_t kmask2            = 0x0f0f0f0f;
+    static const uint32_t kmask3            = 0x03030303;
 
-    assert (n % qk == 0);
-    assert (nr % 4 == 0);
-    assert (nc % ncols_interleaved == 0);
+    assert(n % qk == 0);
+    assert(nr % 4 == 0);
+    assert(nc % ncols_interleaved == 0);
 
-    UNUSED(bs);
-
-    float sumf[4][8];
-    float sum_minf[4][8];
+    __m256   sumvf[4];
     uint32_t utmp[32];
-    int sumi1;
-    int sumi2;
-    int sumi;
 
     for (int y = 0; y < nr / 4; y++) {
-        const block_q8_Kx4 * a_ptr = (const block_q8_Kx4 *) vy + (y * nb);
+        const block_q8_Kx4 * a_ptr = (const block_q8_Kx4 *) vy + y * nb;
         for (int x = 0; x < nc / ncols_interleaved; x++) {
-            const block_q4_Kx8 * b_ptr = (const block_q4_Kx8 *) vx + (x * nb);
+            const block_q4_Kx8 * b_ptr = (const block_q4_Kx8 *) vx + x * nb;
             for (int m = 0; m < 4; m++) {
-                for (int j = 0; j < ncols_interleaved; j++) {
-                    sumf[m][j] = 0.0;
-                    sum_minf[m][j] = 0.0;
-                }
+                sumvf[m] = (__m256) __lasx_xvldi(0);
             }
             for (int l = 0; l < nb; l++) {
                 for (int sb = 0; sb < 8; sb++) {
                     memcpy(utmp + sb * 4, b_ptr[l].scales + sb * 12, 12);
                     utmp[sb * 4 + 3] = ((utmp[sb * 4 + 2] >> 4) & kmask2) | (((utmp[sb * 4 + 1] >> 6) & kmask3) << 4);
                     const uint32_t uaux_0 = utmp[sb * 4 + 1] & kmask1;
-                    utmp[sb * 4 + 1] = (utmp[sb * 4 + 2] & kmask2) | (((utmp[sb * 4 + 0] >> 6) & kmask3) << 4);
-                    utmp[sb * 4 + 2] = uaux_0;
+                    utmp[sb * 4 + 1]      = (utmp[sb * 4 + 2] & kmask2) | (((utmp[sb * 4 + 0] >> 6) & kmask3) << 4);
+                    utmp[sb * 4 + 2]      = uaux_0;
                     utmp[sb * 4 + 0] &= kmask1;
                 }
-                for (int k = 0; k < (qk / (2 * blocklen)); k++) {
-                    uint8_t *scales_0 = (uint8_t*) utmp + (k / 4) * 32;
-                    uint8_t *scales_1 = (uint8_t*) utmp + (k / 4) * 32 + 16;
-                    for (int m = 0; m < 4; m++) {
-                        for (int j = 0; j < ncols_interleaved; j++) {
-                            sumi1 = 0;
-                            sumi2 = 0;
-                            sumi = 0;
-                            for (int i = 0; i < blocklen; ++i) {
-                                const int v0 = (int8_t) (b_ptr[l].qs[k * ncols_interleaved * blocklen + j * blocklen + i] & 0xF);
-                                const int v1 = (int8_t) (b_ptr[l].qs[k * ncols_interleaved * blocklen + j * blocklen + i] >> 4);
-                                sumi1 = (v0 * a_ptr[l].qs[(k >> 2) * 256 + (k % 4) * 4 * blocklen + m * blocklen + i]);
-                                sumi2 = (v1 * a_ptr[l].qs[(k >> 2) * 256 + (k % 4) * 4 * blocklen + m * blocklen + i + 128]);
-                                sumi1 = sumi1 * scales_0[j];
-                                sumi2 = sumi2 * scales_1[j];
-                                sumi += sumi1 + sumi2;
+                __m256  b_d      = __lasx_xvfcvtl_s_h(__lasx_xvpermi_d(__lasx_xvld(b_ptr[l].d, 0), 0x10));
+                __m256i sumv_0_0 = __lasx_xvldi(0);
+                __m256i sumv_0_1 = __lasx_xvldi(0);
+                __m256i sumv_0_2 = __lasx_xvldi(0);
+                __m256i sumv_0_3 = __lasx_xvldi(0);
+                __m256i sumv_1_0 = __lasx_xvldi(0);
+                __m256i sumv_1_1 = __lasx_xvldi(0);
+                __m256i sumv_1_2 = __lasx_xvldi(0);
+                __m256i sumv_1_3 = __lasx_xvldi(0);
+                for (int sb = 0; sb < 4; sb++) {
+                    const uint8_t * scales    = (uint8_t *) utmp + sb * 32;
+                    __m256i         vscale    = __lasx_xvld(scales, 0);
+                    __m256i         vscale_lo = __lasx_vext2xv_w_b(vscale);
+                    __m256i         vscale_hi = __lasx_vext2xv_w_b(__lasx_xvpermi_q(vscale, vscale, 0x03));
+                    __m256i         lo        = __lasx_xvilvl_w(vscale_lo, vscale_lo);
+                    __m256i         hi        = __lasx_xvilvh_w(vscale_lo, vscale_lo);
+                    const __m256i   vscales_0 = __lasx_xvpermi_q(lo, hi, 0x02);
+                    const __m256i   vscales_1 = __lasx_xvpermi_q(lo, hi, 0x13);
+
+                    lo = __lasx_xvilvl_w(vscale_hi, vscale_hi);
+                    hi = __lasx_xvilvh_w(vscale_hi, vscale_hi);
+
+                    const __m256i vscales_2 = __lasx_xvpermi_q(lo, hi, 0x02);
+                    const __m256i vscales_3 = __lasx_xvpermi_q(lo, hi, 0x13);
+                    {
+                        __m256i sum_lo_0 = __lasx_xvldi(0);
+                        __m256i sum_lo_1 = __lasx_xvldi(0);
+                        __m256i sum_lo_2 = __lasx_xvldi(0);
+                        __m256i sum_lo_3 = __lasx_xvldi(0);
+                        __m256i sum_hi_0 = __lasx_xvldi(0);
+                        __m256i sum_hi_1 = __lasx_xvldi(0);
+                        __m256i sum_hi_2 = __lasx_xvldi(0);
+                        __m256i sum_hi_3 = __lasx_xvldi(0);
+#    pragma GCC unroll 2
+                        for (int ik = 0; ik < 4; ik++) {
+                            const int8_t * a_k   = a_ptr[l].qs + sb * 256 + ik * 32;
+                            const __m256i  a_lo  = __lasx_xvld(a_k, 0);
+                            const __m256i  a_hi  = __lasx_xvld(a_k, 128);
+                            const __m256i  vx    = __lasx_xvld(b_ptr[l].qs + sb * 256 + ik * 64, 0);
+                            const __m256i  vx_lo = __lasx_xvandi_b(vx, 0x0f);
+                            const __m256i  vx_hi = __lasx_xvsrli_b(vx, 4);
+                            {
+                                const __m256i vy_lo = __lasx_xvreplve0_d(a_lo);
+                                const __m256i vy_hi = __lasx_xvreplve0_d(a_hi);
+                                sum_lo_0            = __lasx_xvmaddwev_h_b(sum_lo_0, vx_lo, vy_lo);
+                                sum_lo_0            = __lasx_xvmaddwod_h_b(sum_lo_0, vx_lo, vy_lo);
+                                sum_hi_0            = __lasx_xvmaddwev_h_b(sum_hi_0, vx_hi, vy_hi);
+                                sum_hi_0            = __lasx_xvmaddwod_h_b(sum_hi_0, vx_hi, vy_hi);
                             }
-                            sumf[m][j] += sumi * GGML_CPU_FP16_TO_FP32(b_ptr[l].d[j]) * a_ptr[l].d[m];
+                            {
+                                const __m256i vy_lo = __lasx_xvpermi_d(a_lo, 0x55);
+                                const __m256i vy_hi = __lasx_xvpermi_d(a_hi, 0x55);
+                                sum_lo_1            = __lasx_xvmaddwev_h_b(sum_lo_1, vx_lo, vy_lo);
+                                sum_lo_1            = __lasx_xvmaddwod_h_b(sum_lo_1, vx_lo, vy_lo);
+                                sum_hi_1            = __lasx_xvmaddwev_h_b(sum_hi_1, vx_hi, vy_hi);
+                                sum_hi_1            = __lasx_xvmaddwod_h_b(sum_hi_1, vx_hi, vy_hi);
+                            }
+                            {
+                                const __m256i vy_lo = __lasx_xvpermi_d(a_lo, 0xaa);
+                                const __m256i vy_hi = __lasx_xvpermi_d(a_hi, 0xaa);
+                                sum_lo_2            = __lasx_xvmaddwev_h_b(sum_lo_2, vx_lo, vy_lo);
+                                sum_lo_2            = __lasx_xvmaddwod_h_b(sum_lo_2, vx_lo, vy_lo);
+                                sum_hi_2            = __lasx_xvmaddwev_h_b(sum_hi_2, vx_hi, vy_hi);
+                                sum_hi_2            = __lasx_xvmaddwod_h_b(sum_hi_2, vx_hi, vy_hi);
+                            }
+                            {
+                                const __m256i vy_lo = __lasx_xvpermi_d(a_lo, 0xff);
+                                const __m256i vy_hi = __lasx_xvpermi_d(a_hi, 0xff);
+                                sum_lo_3            = __lasx_xvmaddwev_h_b(sum_lo_3, vx_lo, vy_lo);
+                                sum_lo_3            = __lasx_xvmaddwod_h_b(sum_lo_3, vx_lo, vy_lo);
+                                sum_hi_3            = __lasx_xvmaddwev_h_b(sum_hi_3, vx_hi, vy_hi);
+                                sum_hi_3            = __lasx_xvmaddwod_h_b(sum_hi_3, vx_hi, vy_hi);
+                            }
                         }
+                        sum_lo_0 = __lasx_xvhaddw_w_h(sum_lo_0, sum_lo_0);
+                        sum_hi_0 = __lasx_xvhaddw_w_h(sum_hi_0, sum_hi_0);
+                        sumv_0_0 = __lasx_xvmadd_w(sumv_0_0, sum_lo_0, vscales_0);
+                        sumv_0_0 = __lasx_xvmadd_w(sumv_0_0, sum_hi_0, vscales_2);
+                        sum_lo_1 = __lasx_xvhaddw_w_h(sum_lo_1, sum_lo_1);
+                        sum_hi_1 = __lasx_xvhaddw_w_h(sum_hi_1, sum_hi_1);
+                        sumv_0_1 = __lasx_xvmadd_w(sumv_0_1, sum_lo_1, vscales_0);
+                        sumv_0_1 = __lasx_xvmadd_w(sumv_0_1, sum_hi_1, vscales_2);
+                        sum_lo_2 = __lasx_xvhaddw_w_h(sum_lo_2, sum_lo_2);
+                        sum_hi_2 = __lasx_xvhaddw_w_h(sum_hi_2, sum_hi_2);
+                        sumv_0_2 = __lasx_xvmadd_w(sumv_0_2, sum_lo_2, vscales_0);
+                        sumv_0_2 = __lasx_xvmadd_w(sumv_0_2, sum_hi_2, vscales_2);
+                        sum_lo_3 = __lasx_xvhaddw_w_h(sum_lo_3, sum_lo_3);
+                        sum_hi_3 = __lasx_xvhaddw_w_h(sum_hi_3, sum_hi_3);
+                        sumv_0_3 = __lasx_xvmadd_w(sumv_0_3, sum_lo_3, vscales_0);
+                        sumv_0_3 = __lasx_xvmadd_w(sumv_0_3, sum_hi_3, vscales_2);
+                    }
+                    {
+                        __m256i sum_lo_0 = __lasx_xvldi(0);
+                        __m256i sum_lo_1 = __lasx_xvldi(0);
+                        __m256i sum_lo_2 = __lasx_xvldi(0);
+                        __m256i sum_lo_3 = __lasx_xvldi(0);
+                        __m256i sum_hi_0 = __lasx_xvldi(0);
+                        __m256i sum_hi_1 = __lasx_xvldi(0);
+                        __m256i sum_hi_2 = __lasx_xvldi(0);
+                        __m256i sum_hi_3 = __lasx_xvldi(0);
+#    pragma GCC unroll 2
+                        for (int ik = 0; ik < 4; ik++) {
+                            const int8_t * a_k   = a_ptr[l].qs + sb * 256 + ik * 32;
+                            const __m256i  a_lo  = __lasx_xvld(a_k, 0);
+                            const __m256i  a_hi  = __lasx_xvld(a_k, 128);
+                            const __m256i  vx    = __lasx_xvld(b_ptr[l].qs + sb * 256 + ik * 64, 32);
+                            const __m256i  vx_lo = __lasx_xvandi_b(vx, 0x0f);
+                            const __m256i  vx_hi = __lasx_xvsrli_b(vx, 4);
+                            {
+                                const __m256i vy_lo = __lasx_xvreplve0_d(a_lo);
+                                const __m256i vy_hi = __lasx_xvreplve0_d(a_hi);
+                                sum_lo_0            = __lasx_xvmaddwev_h_b(sum_lo_0, vx_lo, vy_lo);
+                                sum_lo_0            = __lasx_xvmaddwod_h_b(sum_lo_0, vx_lo, vy_lo);
+                                sum_hi_0            = __lasx_xvmaddwev_h_b(sum_hi_0, vx_hi, vy_hi);
+                                sum_hi_0            = __lasx_xvmaddwod_h_b(sum_hi_0, vx_hi, vy_hi);
+                            }
+                            {
+                                const __m256i vy_lo = __lasx_xvpermi_d(a_lo, 0x55);
+                                const __m256i vy_hi = __lasx_xvpermi_d(a_hi, 0x55);
+                                sum_lo_1            = __lasx_xvmaddwev_h_b(sum_lo_1, vx_lo, vy_lo);
+                                sum_lo_1            = __lasx_xvmaddwod_h_b(sum_lo_1, vx_lo, vy_lo);
+                                sum_hi_1            = __lasx_xvmaddwev_h_b(sum_hi_1, vx_hi, vy_hi);
+                                sum_hi_1            = __lasx_xvmaddwod_h_b(sum_hi_1, vx_hi, vy_hi);
+                            }
+                            {
+                                const __m256i vy_lo = __lasx_xvpermi_d(a_lo, 0xaa);
+                                const __m256i vy_hi = __lasx_xvpermi_d(a_hi, 0xaa);
+                                sum_lo_2            = __lasx_xvmaddwev_h_b(sum_lo_2, vx_lo, vy_lo);
+                                sum_lo_2            = __lasx_xvmaddwod_h_b(sum_lo_2, vx_lo, vy_lo);
+                                sum_hi_2            = __lasx_xvmaddwev_h_b(sum_hi_2, vx_hi, vy_hi);
+                                sum_hi_2            = __lasx_xvmaddwod_h_b(sum_hi_2, vx_hi, vy_hi);
+                            }
+                            {
+                                const __m256i vy_lo = __lasx_xvpermi_d(a_lo, 0xff);
+                                const __m256i vy_hi = __lasx_xvpermi_d(a_hi, 0xff);
+                                sum_lo_3            = __lasx_xvmaddwev_h_b(sum_lo_3, vx_lo, vy_lo);
+                                sum_lo_3            = __lasx_xvmaddwod_h_b(sum_lo_3, vx_lo, vy_lo);
+                                sum_hi_3            = __lasx_xvmaddwev_h_b(sum_hi_3, vx_hi, vy_hi);
+                                sum_hi_3            = __lasx_xvmaddwod_h_b(sum_hi_3, vx_hi, vy_hi);
+                            }
+                        }
+                        sum_lo_0 = __lasx_xvhaddw_w_h(sum_lo_0, sum_lo_0);
+                        sum_hi_0 = __lasx_xvhaddw_w_h(sum_hi_0, sum_hi_0);
+                        sumv_1_0 = __lasx_xvmadd_w(sumv_1_0, sum_lo_0, vscales_1);
+                        sumv_1_0 = __lasx_xvmadd_w(sumv_1_0, sum_hi_0, vscales_3);
+                        sum_lo_1 = __lasx_xvhaddw_w_h(sum_lo_1, sum_lo_1);
+                        sum_hi_1 = __lasx_xvhaddw_w_h(sum_hi_1, sum_hi_1);
+                        sumv_1_1 = __lasx_xvmadd_w(sumv_1_1, sum_lo_1, vscales_1);
+                        sumv_1_1 = __lasx_xvmadd_w(sumv_1_1, sum_hi_1, vscales_3);
+                        sum_lo_2 = __lasx_xvhaddw_w_h(sum_lo_2, sum_lo_2);
+                        sum_hi_2 = __lasx_xvhaddw_w_h(sum_hi_2, sum_hi_2);
+                        sumv_1_2 = __lasx_xvmadd_w(sumv_1_2, sum_lo_2, vscales_1);
+                        sumv_1_2 = __lasx_xvmadd_w(sumv_1_2, sum_hi_2, vscales_3);
+                        sum_lo_3 = __lasx_xvhaddw_w_h(sum_lo_3, sum_lo_3);
+                        sum_hi_3 = __lasx_xvhaddw_w_h(sum_hi_3, sum_hi_3);
+                        sumv_1_3 = __lasx_xvmadd_w(sumv_1_3, sum_lo_3, vscales_1);
+                        sumv_1_3 = __lasx_xvmadd_w(sumv_1_3, sum_hi_3, vscales_3);
                     }
                 }
-                for (int sb = 0; sb < 8; sb++) {
-                    uint8_t *mins = (uint8_t*) utmp + 8 + sb * 16;
-                    for(int m = 0; m < 4; m++) {
-                        const int16_t *bsums = a_ptr[l].bsums + (sb * 8) + (m * 4) - ((sb % 2) * 6);
-                        for(int j = 0; j < ncols_interleaved; j++) {
-                            sum_minf[m][j] += mins[j] * (bsums[0] + bsums[1]) * GGML_CPU_FP16_TO_FP32(b_ptr[l].dmin[j]) * a_ptr[l].d[m];
-                        }
+                {
+                    __m256  a_d  = (__m256) __lasx_xvldrepl_w(a_ptr[l].d, 0);
+                    __m256i even = __lasx_xvpickev_w(sumv_1_0, sumv_0_0);
+                    __m256i odd  = __lasx_xvpickod_w(sumv_1_0, sumv_0_0);
+
+                    sumv_0_0 = __lasx_xvpermi_d(__lasx_xvadd_w(even, odd), 0xd8);
+
+                    const __m256 ab_d = __lasx_xvfmul_s(a_d, b_d);
+                    sumvf[0]          = __lasx_xvfmadd_s(__lasx_xvffint_s_w(sumv_0_0), ab_d, sumvf[0]);
+                }
+                {
+                    __m256  a_d  = (__m256) __lasx_xvldrepl_w(a_ptr[l].d + 1, 0);
+                    __m256i even = __lasx_xvpickev_w(sumv_1_1, sumv_0_1);
+                    __m256i odd  = __lasx_xvpickod_w(sumv_1_1, sumv_0_1);
+
+                    sumv_0_1 = __lasx_xvpermi_d(__lasx_xvadd_w(even, odd), 0xd8);
+
+                    const __m256 ab_d = __lasx_xvfmul_s(a_d, b_d);
+                    sumvf[1]          = __lasx_xvfmadd_s(__lasx_xvffint_s_w(sumv_0_1), ab_d, sumvf[1]);
+                }
+                {
+                    __m256  a_d  = (__m256) __lasx_xvldrepl_w(a_ptr[l].d + 2, 0);
+                    __m256i even = __lasx_xvpickev_w(sumv_1_2, sumv_0_2);
+                    __m256i odd  = __lasx_xvpickod_w(sumv_1_2, sumv_0_2);
+
+                    sumv_0_2 = __lasx_xvpermi_d(__lasx_xvadd_w(even, odd), 0xd8);
+
+                    const __m256 ab_d = __lasx_xvfmul_s(a_d, b_d);
+                    sumvf[2]          = __lasx_xvfmadd_s(__lasx_xvffint_s_w(sumv_0_2), ab_d, sumvf[2]);
+                }
+                {
+                    __m256  a_d  = (__m256) __lasx_xvldrepl_w(a_ptr[l].d + 3, 0);
+                    __m256i even = __lasx_xvpickev_w(sumv_1_3, sumv_0_3);
+                    __m256i odd  = __lasx_xvpickod_w(sumv_1_3, sumv_0_3);
+
+                    sumv_0_3 = __lasx_xvpermi_d(__lasx_xvadd_w(even, odd), 0xd8);
+
+                    const __m256 ab_d = __lasx_xvfmul_s(a_d, b_d);
+                    sumvf[3]          = __lasx_xvfmadd_s(__lasx_xvffint_s_w(sumv_0_3), ab_d, sumvf[3]);
+                }
+                __m256i bias[4];
+                for (int i = 0; i < 4; i++) {
+                    bias[i] = __lasx_xvldi(0);
+                }
+                {
+                    {
+                        __m256i vbsums = __lasx_xvld(a_ptr[l].bsums, 0);
+                        vbsums         = __lasx_xvhaddw_w_h(vbsums, vbsums);
+
+                        const __m256i bsum_0 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 0));
+                        const __m256i bsum_1 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 1));
+                        const __m256i bsum_2 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 2));
+                        const __m256i bsum_3 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 3));
+                        const __m256i bsum_4 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 4));
+                        const __m256i bsum_5 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 5));
+                        const __m256i bsum_6 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 6));
+                        const __m256i bsum_7 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 7));
+
+                        __m256i mins_0_1 = __lasx_xvld(utmp, 8);
+                        __m256i mins_0   = __lasx_vext2xv_w_b(mins_0_1);
+                        __m256i mins_1   = __lasx_vext2xv_w_b(__lasx_xvpermi_q(mins_0_1, mins_0_1, 0x03));
+
+                        bias[0] = __lasx_xvmadd_w(bias[0], mins_0, bsum_0);
+                        bias[1] = __lasx_xvmadd_w(bias[1], mins_0, bsum_2);
+                        bias[2] = __lasx_xvmadd_w(bias[2], mins_0, bsum_4);
+                        bias[3] = __lasx_xvmadd_w(bias[3], mins_0, bsum_6);
+                        bias[0] = __lasx_xvmadd_w(bias[0], mins_1, bsum_1);
+                        bias[1] = __lasx_xvmadd_w(bias[1], mins_1, bsum_3);
+                        bias[2] = __lasx_xvmadd_w(bias[2], mins_1, bsum_5);
+                        bias[3] = __lasx_xvmadd_w(bias[3], mins_1, bsum_7);
                     }
+                    {
+                        __m256i vbsums = __lasx_xvld(a_ptr[l].bsums, 32);
+                        vbsums         = __lasx_xvhaddw_w_h(vbsums, vbsums);
+
+                        const __m256i bsum_0 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 0));
+                        const __m256i bsum_1 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 1));
+                        const __m256i bsum_2 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 2));
+                        const __m256i bsum_3 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 3));
+                        const __m256i bsum_4 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 4));
+                        const __m256i bsum_5 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 5));
+                        const __m256i bsum_6 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 6));
+                        const __m256i bsum_7 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 7));
+
+                        __m256i mins_0_1 = __lasx_xvld(utmp, 40);
+                        __m256i mins_0   = __lasx_vext2xv_w_b(mins_0_1);
+                        __m256i mins_1   = __lasx_vext2xv_w_b(__lasx_xvpermi_q(mins_0_1, mins_0_1, 0x03));
+
+                        bias[0] = __lasx_xvmadd_w(bias[0], mins_0, bsum_0);
+                        bias[1] = __lasx_xvmadd_w(bias[1], mins_0, bsum_2);
+                        bias[2] = __lasx_xvmadd_w(bias[2], mins_0, bsum_4);
+                        bias[3] = __lasx_xvmadd_w(bias[3], mins_0, bsum_6);
+                        bias[0] = __lasx_xvmadd_w(bias[0], mins_1, bsum_1);
+                        bias[1] = __lasx_xvmadd_w(bias[1], mins_1, bsum_3);
+                        bias[2] = __lasx_xvmadd_w(bias[2], mins_1, bsum_5);
+                        bias[3] = __lasx_xvmadd_w(bias[3], mins_1, bsum_7);
+                    }
+                    {
+                        __m256i vbsums = __lasx_xvld(a_ptr[l].bsums, 64);
+                        vbsums         = __lasx_xvhaddw_w_h(vbsums, vbsums);
+
+                        const __m256i bsum_0 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 0));
+                        const __m256i bsum_1 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 1));
+                        const __m256i bsum_2 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 2));
+                        const __m256i bsum_3 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 3));
+                        const __m256i bsum_4 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 4));
+                        const __m256i bsum_5 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 5));
+                        const __m256i bsum_6 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 6));
+                        const __m256i bsum_7 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 7));
+
+                        __m256i mins_0_1 = __lasx_xvld(utmp, 72);
+                        __m256i mins_0   = __lasx_vext2xv_w_b(mins_0_1);
+                        __m256i mins_1   = __lasx_vext2xv_w_b(__lasx_xvpermi_q(mins_0_1, mins_0_1, 0x03));
+
+                        bias[0] = __lasx_xvmadd_w(bias[0], mins_0, bsum_0);
+                        bias[1] = __lasx_xvmadd_w(bias[1], mins_0, bsum_2);
+                        bias[2] = __lasx_xvmadd_w(bias[2], mins_0, bsum_4);
+                        bias[3] = __lasx_xvmadd_w(bias[3], mins_0, bsum_6);
+                        bias[0] = __lasx_xvmadd_w(bias[0], mins_1, bsum_1);
+                        bias[1] = __lasx_xvmadd_w(bias[1], mins_1, bsum_3);
+                        bias[2] = __lasx_xvmadd_w(bias[2], mins_1, bsum_5);
+                        bias[3] = __lasx_xvmadd_w(bias[3], mins_1, bsum_7);
+                    }
+                    {
+                        __m256i vbsums = __lasx_xvld(a_ptr[l].bsums, 96);
+                        vbsums         = __lasx_xvhaddw_w_h(vbsums, vbsums);
+
+                        const __m256i bsum_0 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 0));
+                        const __m256i bsum_1 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 1));
+                        const __m256i bsum_2 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 2));
+                        const __m256i bsum_3 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 3));
+                        const __m256i bsum_4 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 4));
+                        const __m256i bsum_5 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 5));
+                        const __m256i bsum_6 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 6));
+                        const __m256i bsum_7 = __lasx_xvreplgr2vr_w(__lasx_xvpickve2gr_w(vbsums, 7));
+
+                        __m256i mins_0_1 = __lasx_xvpermi_d(__lasx_xvld(utmp, 96), 0xf5);
+                        __m256i mins_0   = __lasx_vext2xv_w_b(mins_0_1);
+                        __m256i mins_1   = __lasx_vext2xv_w_b(__lasx_xvpermi_q(mins_0_1, mins_0_1, 0x03));
+
+                        bias[0] = __lasx_xvmadd_w(bias[0], mins_0, bsum_0);
+                        bias[1] = __lasx_xvmadd_w(bias[1], mins_0, bsum_2);
+                        bias[2] = __lasx_xvmadd_w(bias[2], mins_0, bsum_4);
+                        bias[3] = __lasx_xvmadd_w(bias[3], mins_0, bsum_6);
+                        bias[0] = __lasx_xvmadd_w(bias[0], mins_1, bsum_1);
+                        bias[1] = __lasx_xvmadd_w(bias[1], mins_1, bsum_3);
+                        bias[2] = __lasx_xvmadd_w(bias[2], mins_1, bsum_5);
+                        bias[3] = __lasx_xvmadd_w(bias[3], mins_1, bsum_7);
+                    }
+                    __m256 b_dmin = (__m256) __lasx_xvld(b_ptr[l].dmin, 0);
+                    b_dmin        = __lasx_xvfcvtl_s_h(__lasx_xvpermi_d(b_dmin, 0x10));
+                    __m256 a_d    = (__m256) __lasx_xvldrepl_w(a_ptr[l].d + 0, 0);
+                    sumvf[0] = __lasx_xvfnmsub_s(__lasx_xvfmul_s(b_dmin, __lasx_xvffint_s_w(bias[0])), a_d, sumvf[0]);
+                    a_d      = (__m256) __lasx_xvldrepl_w(a_ptr[l].d + 1, 0);
+                    sumvf[1] = __lasx_xvfnmsub_s(__lasx_xvfmul_s(b_dmin, __lasx_xvffint_s_w(bias[1])), a_d, sumvf[1]);
+                    a_d      = (__m256) __lasx_xvldrepl_w(a_ptr[l].d + 2, 0);
+                    sumvf[2] = __lasx_xvfnmsub_s(__lasx_xvfmul_s(b_dmin, __lasx_xvffint_s_w(bias[2])), a_d, sumvf[2]);
+                    a_d      = (__m256) __lasx_xvldrepl_w(a_ptr[l].d + 3, 0);
+                    sumvf[3] = __lasx_xvfnmsub_s(__lasx_xvfmul_s(b_dmin, __lasx_xvffint_s_w(bias[3])), a_d, sumvf[3]);
                 }
             }
             for (int m = 0; m < 4; m++) {
-                for (int j = 0; j < ncols_interleaved; j++) {
-                    s[(y * 4 + m) * bs + x * ncols_interleaved + j] = sumf[m][j] - sum_minf[m][j];
-                }
+                __lasx_xvst((__m256i) sumvf[m], &s[(y * 4 + m) * bs + x * ncols_interleaved], 0);
             }
         }
     }
