@@ -340,6 +340,10 @@ struct server_slot {
 
     server_prompt prompt;
 
+    // checkpoint reused by a task - checkpoints are immutable, so its id_task still names the task that created it
+    const common_prompt_checkpoint * ckpt_reused = nullptr;
+    int ckpt_reused_task = -1;
+
     bool prompt_save(server_prompt_cache & prompt_cache) const {
         if (prompt.tokens.size() == 0) {
             return false;
@@ -2733,19 +2737,22 @@ private:
             const auto & cur = *ckpt;
             if (cur.id_task != -1 && cur.n_tokens == slot.prompt.n_tokens() - n_tokens_cur && cur.pos_min == pos_min && cur.pos_max == pos_max) {
                 SLT_TRC(slot, "reusing context checkpoint at n_tokens = %" PRId64 "\n", cur.n_tokens);
+                slot.ckpt_reused      = ckpt.get();
+                slot.ckpt_reused_task = id_task;
                 return;
             }
         }
 
         // evict checkpoints within min-step of a previous checkpoint, unless they were
-        // created by the current task
+        // created or reused by the current task
         // only when the list is full, otherwise short prompts keep just the oldest checkpoint
         int64_t last = -1;
         for (auto it = slot.prompt.checkpoints.begin();
                 slot.prompt.checkpoints.size() + 1 >= (size_t) params_base.n_ctx_checkpoints &&
                 it != slot.prompt.checkpoints.end(); ) {
             const auto & cur = **it;
-            if (cur.id_task != id_task && last >= 0 && cur.n_tokens <= last + params_base.checkpoint_min_step) {
+            const bool is_cur = cur.id_task == id_task || (it->get() == slot.ckpt_reused && slot.ckpt_reused_task == id_task);
+            if (!is_cur && last >= 0 && cur.n_tokens <= last + params_base.checkpoint_min_step) {
                 SLT_TRC(slot, "erasing context checkpoint too close to an earlier one (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
                         cur.pos_min, cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
 

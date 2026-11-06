@@ -786,6 +786,38 @@ def test_checkpoint_reused_not_copied(tmp_path):
     assert "superseding context checkpoint" not in log
 
 
+# with the checkpoint list full, the checkpoint a request reused must survive thinning like one it created
+def test_reused_checkpoint_not_thinned():
+    server = ServerPreset.tinylfm2()
+    server.n_ubatch = 32 # end-of-prompt checkpoints at n - 36 and n - 4
+    server.n_ctx_checkpoints = 3
+    server.start()
+
+    words = ["budget", "hiring", "roadmap", "risk", "vendor", "launch", "audit", "review"] * 4
+    res = server.make_request("POST", "/tokenize", data={
+        "content": " ".join(f"Item {i}: the {w} report was filed on day {i % 7} by team {i % 5}." for i, w in enumerate(words)),
+    })
+    assert res.status_code == 200
+    tokens = res.body["tokens"]
+    prefix, tail = tokens[:-16], tokens[-16:]
+
+    def prompt_n(prompt):
+        res = server.make_request("POST", "/completion", data={
+            "prompt": prompt,
+            "n_predict": 1,
+            "cache_prompt": True,
+        })
+        assert res.status_code == 200
+        return res.body["timings"]["prompt_n"]
+
+    prompt_n(tokens[:-100]) # an earlier checkpoint, so thinning has one to keep before n - 36
+    prompt_n(tokens)
+    # restores the checkpoint at n - 36 and reuses it, then fills the list when creating the one at n - 4
+    n_restored = prompt_n(prefix + tail[::-1])
+    # the checkpoint at n - 36 is still there
+    assert prompt_n(prefix + tail[1:] + tail[:1]) == n_restored
+
+
 # checkpoint appendix: magic(4) version(4) count(4), then per checkpoint
 # n_tokens(8) pos_min(4) pos_max(4) and three blobs (target, draft, speculative), each size(8) + data
 def parse_ckpt_appendix(data):
