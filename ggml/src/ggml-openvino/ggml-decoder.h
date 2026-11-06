@@ -44,6 +44,9 @@ struct ModelParams {
     // layers on the mask they consume. Only used to tell the two masks apart when naming OV
     // parameters -- both carry the same tensor name. Null when the graph has a single mask.
     const ggml_tensor * swa_mask = nullptr;
+    // The attention masks that are graph inputs, by identity: gemma-4's KV-shared layers also read them through
+    // GET_ROWS, which must resolve to the same OV parameter as the attention ops
+    std::set<const ggml_tensor *> kq_masks;
 
     std::vector<std::string> kv_names;
     size_t kv_buffer_ctx_id = 0;
@@ -611,6 +614,8 @@ public:
     bool is_swa_mask(const ggml_tensor * tensor) const {
         return m_model_params.swa_mask != nullptr && tensor == m_model_params.swa_mask;
     }
+
+    bool is_kq_mask(const ggml_tensor * tensor) const { return m_model_params.kq_masks.count(tensor) != 0; }
 
     // A graph-input index list of GET_ROWS: out_ids, or the inp->s_copy leaf when build_rs gathers
     // every recurrent state at once.

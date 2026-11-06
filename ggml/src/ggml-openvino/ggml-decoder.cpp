@@ -233,7 +233,9 @@ static std::string get_tensor_graph_input_ov_name(const GgmlOvDecoder * decoder,
     if (GgmlOvDecoder::is_inp_emb(tensor, op)) {
         return "embd";
     }
-    if (GgmlOvDecoder::is_inp_mask(tensor, op)) {
+    // gemma-4's KV-shared layers read the mask rows of their output tokens through GET_ROWS, which is not a mask
+    // consumer, so match the masks by identity too
+    if (GgmlOvDecoder::is_inp_mask(tensor, op) || decoder->is_kq_mask(tensor)) {
         // Give the two attention masks distinct OV parameter names. build_attn_inp_kq_mask()
         // names the full-attention mask and the sliding-window mask identically, so keying a
         // parameter off the name alone makes the second mask overwrite the first and both
@@ -999,8 +1001,13 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
                 continue;
             }
             layer_extent[layer.value()] = leaf->ne[1];
-            layer_mask[layer.value()] = mask;
+            // the layer's own attention comes first: gemma-4's KV-shared layers read the same cache with mask rows
+            // taken from the graph input
+            layer_mask.emplace(layer.value(), mask);
             max_extent = std::max(max_extent, leaf->ne[1]);
+            if (mask->op == GGML_OP_NONE) {
+                model_params.kq_masks.insert(mask);
+            }
         }
 
         for (const auto & [layer, extent] : layer_extent) {
