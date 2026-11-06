@@ -151,7 +151,7 @@
 </script>
 
 <figure class="m-0 grid min-w-0 gap-16">
-	<!-- each placement in its own section: the avatar light and dark as it shows, then measured -->
+	<!-- each placement in its own section: the avatar light and dark, small as it shows, then measured -->
 	{#each panels as panel (panel.label)}
 		<section class="grid gap-4">
 			<div class="grid gap-1">
@@ -160,10 +160,10 @@
 				<p class="text-xs text-muted-foreground">{panel.note}</p>
 			</div>
 
-			<div class="grid grid-cols-2 items-center gap-6 sm:grid-cols-3">
+			<div class="flex flex-wrap items-center gap-8">
 				{#each [['#FAFAFA', '#111111'], ['#111111', '#FAFAFA']] as [ground, ink] (ground)}
 					<svg
-						class="block aspect-square w-full rounded-full border border-border/60"
+						class="block size-24 shrink-0 rounded-full border border-border/60"
 						viewBox="0 0 {placement.size} {placement.size}"
 					>
 						<circle
@@ -179,7 +179,7 @@
 					</svg>
 				{/each}
 
-				<div class="col-span-2 sm:col-span-1">
+				<div class="w-full sm:ml-8 sm:w-[calc((100%-3rem)/3)]">
 					<svg
 						class="block aspect-square w-full overflow-hidden rounded-card border border-border/60"
 						viewBox="0 0 {placement.size} {placement.size}"
