@@ -9,8 +9,8 @@
 	import { Button } from '$lib/components/ui/button';
 
 	interface Props {
-		/** the logo files (icon, lockups, covers) or the social profile pictures and banners */
-		section: 'logo' | 'social';
+		/** the logo files (icon, lockups), the social profile pictures and banners, or the app icons */
+		section: 'app' | 'logo' | 'social';
 	}
 
 	let { section }: Props = $props();
@@ -56,6 +56,8 @@
 		round?: boolean;
 		/** a transparent file: shown over a checkerboard in its ground's shades */
 		transparent?: boolean;
+		/** a transparent file with its own margin (an app icon's canvas): shown as it is, with none added */
+		unpadded?: boolean;
 	}
 
 	// social profiles: each platform's banners, light and dark, from logo/svg/social (the avatars are one section)
@@ -186,7 +188,91 @@
 		}
 	];
 
-	const groups: Group[] = $derived(section === 'logo' ? logoGroups : socialGroups);
+	/**
+	 * An app icon in both modes, from logo/svg/app/<platform>: on its field (shown as it is) or, transparent, over a
+	 * checkerboard in its mode's shades.
+	 */
+	function app(platform: string, name: string, label: string, transparent = false): Asset[] {
+		return (['light', 'dark'] as const).map((mode) => ({
+			ground: transparent ? mode : ('cover' as const),
+			label: `${label}, ${modeLabel(mode).toLowerCase()}`,
+			path: `app/${platform}/${name}-${mode}`,
+			transparent,
+			unpadded: true
+		}));
+	}
+
+	// the icon for each platform, from logo/scripts/build_app_icons.py: full-bleed squares carry it at 67.2%, inside
+	// the 80% safe circle, and every one is lifted 1/150 of its height
+	const appGroups: Group[] = [
+		{
+			note: 'For the web app manifest · the round icon (any) at 512 × 512, the icon 57.1% of the circle, transparent outside it · the maskable icon at 512 × 512, full bleed, the icon inside the 80% safe circle',
+			rows: [
+				{
+					assets: [
+						...app('pwa', 'pwa-512x512', 'Round', true),
+						...app('pwa', 'pwa-maskable-512x512', 'Maskable')
+					]
+				}
+			],
+			title: 'PWA'
+		},
+		{
+			note: 'Full-bleed squares that iOS rounds: the touch icon for the web at 180 × 180 and the iOS app icon at 1024 × 1024 · the macOS app icon at 1024 × 1024, on Apple’s 824 × 824 rounded square, transparent around it',
+			rows: [
+				{
+					assets: [
+						...app('apple', 'apple-touch-icon-180x180', 'Touch icon'),
+						...app('apple', 'ios-1024x1024', 'iOS'),
+						...app('apple', 'macos-1024x1024', 'macOS', true)
+					]
+				}
+			],
+			title: 'Apple'
+		},
+		{
+			note: 'The adaptive icon’s two layers at 432 × 432 (108 dp at 4×), the icon inside the 66 dp circle every launcher shows · the Play Store icon at 512 × 512 · one monochrome layer, which the launcher tints for themed icons',
+			rows: [
+				{
+					assets: [
+						...app('android', 'android-adaptive-foreground-432x432', 'Foreground', true),
+						...app('android', 'android-adaptive-background-432x432', 'Background'),
+						...app('android', 'android-play-512x512', 'Play Store'),
+						{
+							ground: 'light',
+							label: 'Monochrome',
+							path: 'app/android/android-monochrome-432x432',
+							transparent: true,
+							unpadded: true
+						}
+					]
+				}
+			],
+			title: 'Android'
+		},
+		{
+			note: 'The app icon at 256 × 256, transparent with a 1/16 margin · the Start and Store tiles at 150 × 150 and 310 × 150, the icon at half their height',
+			rows: [
+				{
+					assets: [
+						...app('windows', 'windows-app-icon-256x256', 'App icon', true),
+						...app('windows', 'windows-tile-150x150', 'Tile'),
+						...app('windows', 'windows-tile-wide-310x150', 'Wide tile')
+					]
+				}
+			],
+			title: 'Windows'
+		}
+	];
+
+	const groups: Group[] = $derived(
+		section === 'logo' ? logoGroups : section === 'social' ? socialGroups : appGroups
+	);
+
+	// the page's columns: as many as its longest row, so every thumbnail is the same width
+	const columns = $derived(
+		Math.max(...groups.flatMap((g) => g.rows.map((r) => r.assets.length + (g.optical ? 2 : 0))))
+	);
 
 	/** An asset's downloads: its own SVG, WebP and PNG, unless it names others. */
 	const downloads = (asset: Asset) =>
@@ -201,14 +287,16 @@
 <div class="mx-auto grid w-[min(72rem,calc(100%-2rem))] gap-20 py-10">
 	<header class="grid gap-2">
 		<h1 class="text-3xl font-bold tracking-tight">
-			{section === 'logo' ? 'Logo assets' : 'Social profiles'}
+			{section === 'logo' ? 'Logo assets' : section === 'social' ? 'Social profiles' : 'App icons'}
 		</h1>
 
 		<p class="max-w-[64ch] text-sm text-muted-foreground">
 			{section === 'logo'
 				? 'The Llama icon and the Llama and llama.cpp lockups, each on its background and transparent'
-				: 'Profile pictures and banners for X, LinkedIn and YouTube, at each platform’s size'}, to
-			download as SVG, WebP or PNG. They come from
+				: section === 'social'
+					? 'Profile pictures and banners for X, LinkedIn and YouTube, at each platform’s size'
+					: 'The icon for a PWA, Apple’s platforms, Android and Windows, light and dark, at each platform’s size and in its shape'},
+			to download as SVG, WebP or PNG. They come from
 			<a class="underline underline-offset-2" href="https://github.com/ggml-org/llama.brand"
 				>ggml-org/llama.brand</a
 			>, under CC BY-NC 4.0 with the permissions in its BRAND-USAGE.md: use them as they are to
@@ -230,18 +318,16 @@
 						<h3 class="text-sm font-medium text-muted-foreground">{row.label}</h3>
 					{/if}
 
-					<!-- every row on one line, in its group's columns so the rows line up; two to a line on phones -->
+					<!-- every row on one line, in the page's columns so the rows and sections line up; two to a line on phones -->
 					<div
-						style:--cols={Math.max(
-							...group.rows.map((r) => r.assets.length + (group.optical ? 2 : 0))
-						)}
+						style:--cols={columns}
 						class="grid grid-cols-2 items-start gap-4 sm:grid-cols-[repeat(var(--cols),minmax(0,1fr))]"
 					>
 						{#each row.assets as asset (asset.path)}
 							<figure class="m-0 grid min-w-0 gap-2">
 								<div
 									style:aspect-ratio={ratio(asset.path)}
-									style:padding={asset.transparent
+									style:padding={asset.transparent && !asset.unpadded
 										? `calc(12% / (${ratio(asset.path)}))`
 										: undefined}
 									class={[
@@ -264,7 +350,7 @@
 								</div>
 
 								<figcaption class={['grid gap-1', asset.round && 'justify-items-center']}>
-									<span class="truncate text-sm">{asset.label}</span>
+									<span class="text-sm">{asset.label}</span>
 
 									<span class={['flex flex-wrap gap-1', asset.round && 'justify-center']}>
 										{#each downloads(asset) as file (file.name)}

@@ -31,7 +31,7 @@ const preview: Preview = {
 					'Brand',
 					[
 						'Logo',
-						['Overview', 'Icon', 'Usage', 'Assets', ['Logo', 'Social profiles']],
+						['Overview', 'Icon', 'Usage', 'Assets', ['Logo', 'Social profiles', 'App icons']],
 						'Typography',
 						[
 							'Overview',
