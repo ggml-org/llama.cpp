@@ -2731,9 +2731,12 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
                 }
                 // A size-1 dim may carry any stride (MLA's k_pe = ggml_view_3d(.., ne1 = 1, ..) gives it the row
                 // stride), so among the dims with the source's stride take the outermost one of the same size.
+                // With a dynamic size of 1 every trailing size-1 dim matches (Qwen3.5's Qcur view: ne2 = n_tokens = 1,
+                // nb3 == nb2), so keep the innermost match there.
                 for (int i = 0; i < GGML_MAX_DIMS; i++) {
-                    if (node->nb[i] == dynamic_dim_stride &&
-                        (m_node_dynamic_dims[node] == -1 || node->ne[i] == dynamic_dim_value)) {
+                    const bool first_match = m_node_dynamic_dims[node] == -1;
+                    const bool same_size = dynamic_dim_value != 1 && node->ne[i] == dynamic_dim_value;
+                    if (node->nb[i] == dynamic_dim_stride && (first_match || same_size)) {
                         m_node_dynamic_dims[node] = i;
                     }
                 }
