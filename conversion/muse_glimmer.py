@@ -94,7 +94,7 @@ class MuseGlimmerVisionModel(MmprojModel):
         assert self.hparams_vision is not None
         c = self.hparams_vision  # enriched vision_config from get_vision_config()
 
-        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.MUSE_GLIMMER)
+        self.gguf_writer.add_clip_vision_projector_type(gguf.VisionProjectorType.MUSE_GLIMMER)
         self.gguf_writer.add_vision_attention_layernorm_eps(float(c["layer_norm_eps"]))
         self.gguf_writer.add_vision_spatial_merge_size(int(c["merge_size"]))
 

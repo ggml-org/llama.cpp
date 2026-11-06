@@ -999,6 +999,8 @@ class Gemma4VisionAudioModel(MmprojModel):
         assert self.hparams_vision is not None
         self.gguf_writer.add_clip_vision_projector_type(gguf.VisionProjectorType.GEMMA4V)
         self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams_vision.get("layer_norm_eps", 1e-6))
+        assert self.hparams_vision.get("hidden_activation", "gelu_pytorch_tanh") == "gelu_pytorch_tanh"
+        self.gguf_writer.add_vision_use_gelu(True)
 
         # audio params
         if self.has_audio_encoder:

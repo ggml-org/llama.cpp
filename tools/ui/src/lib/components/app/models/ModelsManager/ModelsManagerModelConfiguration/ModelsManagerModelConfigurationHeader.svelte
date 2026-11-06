@@ -8,8 +8,14 @@
 	import type { ModelOption } from '$lib/types/models';
 
 	interface Props {
+		isDownload?: boolean;
+		isDownloadPaused?: boolean;
 		isLoaded: boolean;
 		onClose: () => void;
+		/** Opens the manager dialog on the Discover view, focused on this model's repo. */
+		onSeeInDiscover?: () => void;
+		onRequestCancelDownload?: () => void;
+		onToggleDownload?: () => void;
 		onToggleLoad: () => void;
 		onUseInChat: () => void;
 		onUseInNewChat: () => void;
@@ -18,13 +24,27 @@
 		status: ServerModelStatus | null;
 	}
 
-	let { isLoaded, onClose, onToggleLoad, onUseInChat, onUseInNewChat, option, status }: Props =
-		$props();
+	let {
+		isDownload = false,
+		isDownloadPaused = false,
+		isLoaded,
+		onClose,
+		onRequestCancelDownload,
+		onSeeInDiscover,
+		onToggleDownload,
+		onToggleLoad,
+		onUseInChat,
+		onUseInNewChat,
+		option,
+		status
+	}: Props = $props();
 
 	let isMobile = $derived(deviceStore.isMobile);
 	let isLoading = $derived(status === ServerModelStatus.LOADING);
 
 	let statusLabel = $derived.by(() => {
+		if (isDownload) return isDownloadPaused ? 'Paused' : 'Downloading';
+
 		if (status === ServerModelStatus.LOADING) return 'Loading';
 
 		if (status === ServerModelStatus.FAILED) return 'Failed to load';
@@ -37,6 +57,8 @@
 	});
 
 	let statusDot = $derived.by(() => {
+		if (isDownload) return isDownloadPaused ? 'bg-yellow-500' : 'bg-blue-500 animate-pulse';
+
 		if (status === ServerModelStatus.FAILED) return 'bg-red-500';
 
 		if (status === ServerModelStatus.LOADING) return 'bg-muted-foreground/50 animate-pulse';
@@ -52,7 +74,7 @@
 <!-- only the desktop pane leaves the right edge to the panel border: on a phone the
      pane covers the screen, so its two sides carry the same padding, and it takes a
      little more room around the model it names -->
-<header class="space-y-2.5 pt-3 pl-4 max-md:space-y-4 max-md:pt-4 max-md:pr-4 max-md:pb-4">
+<header class="space-y-2.5 px-4 pt-3 max-md:space-y-4 max-md:pt-4 max-md:pb-4">
 	<div class="flex items-start justify-between gap-3">
 		<div class="flex min-w-0 items-center gap-3">
 			<!-- same geometry as the discover details header: base org, quant org badge -->
@@ -86,22 +108,30 @@
 			</div>
 		</div>
 
-		<Button
-			aria-label="Close details"
-			class="h-7 w-7 max-md:-mt-3 max-md:-mr-3 max-md:h-10 max-md:w-10 max-md:rounded-full"
-			onclick={onClose}
-			size="icon"
-			variant="ghost"
-		>
-			<X class="h-4 w-4" />
-		</Button>
+		<!-- a phone's bottom drawer closes by its handle and overlay, it needs no button -->
+		{#if !isMobile}
+			<Button
+				aria-label="Close details"
+				class="h-7 w-7"
+				onclick={onClose}
+				size="icon"
+				variant="ghost"
+			>
+				<X class="h-4 w-4" />
+			</Button>
+		{/if}
 	</div>
 
 	<!-- a phone floats the actions at the bottom of the pane, where the thumb is -->
 	{#if !isMobile}
 		<ModelsManagerModelConfigurationActions
+			{isDownload}
+			{isDownloadPaused}
 			{isLoaded}
 			{isLoading}
+			{onRequestCancelDownload}
+			{onSeeInDiscover}
+			{onToggleDownload}
 			{onToggleLoad}
 			{onUseInChat}
 			{onUseInNewChat}

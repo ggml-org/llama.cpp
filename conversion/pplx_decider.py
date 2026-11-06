@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from pathlib import Path
-from typing import Any, Callable, Iterable, TYPE_CHECKING
+from typing import Any, Iterable, TYPE_CHECKING
 
 import torch
 
@@ -35,6 +35,7 @@ def _load_pplx_decider_hparams(dir_model: Path) -> dict[str, Any]:
 
 @ModelBase.register("PplxDeciderModel")
 @ModelBase.example("perplexity-ai/pplx-decider-v1-27b")
+@ModelBase.example("FINAL-Bench/Darwin-27B-ZTC-v5")
 class PplxDeciderModel(Qwen3_5TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN35
     no_mtp = True  # the checkpoint has no MTP head
@@ -77,14 +78,6 @@ class PplxDeciderModel(Qwen3_5TextModel):
         for name in ("choice", "score", "noul"):
             self.gguf_writer.add_decision_temperature(name, self.hparams["decision"]["temperature"])
 
-    @classmethod
-    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
-        name, gen = item
-        # the checkpoint is the bare backbone, its text tensors have no "model." prefix
-        if name.startswith("language_model."):
-            name = "model." + name
-        return super().filter_tensors((name, gen))
-
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
         yield from super().generate_extra_tensors()
         from safetensors.torch import load_file
@@ -92,7 +85,7 @@ class PplxDeciderModel(Qwen3_5TextModel):
         # the readout has one row per option label, store it as an LM head that is zero for the other tokens
         readout = load_file(self.dir_model / "readout.safetensors")["weight"]
         token_ids = self.hparams["decision"]["token_ids"]
-        n_vocab = self.hparams["text_config"]["vocab_size"]
+        n_vocab = self.hparams["vocab_size"]
         assert readout.shape[0] == len(token_ids) == len(set(token_ids))
         lm_head = torch.zeros(n_vocab, readout.shape[1], dtype=readout.dtype)
         lm_head[token_ids] = readout

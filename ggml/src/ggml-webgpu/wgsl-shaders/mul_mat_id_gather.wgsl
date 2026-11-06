@@ -2,19 +2,24 @@ enable f16;
 
 struct MulMatIdGatherParams {
     offset_ids: u32,
+    offset_dst: u32,
 
     n_expert: u32,
     n_expert_used: u32,
     n_tokens: u32,
 
     stride_ids_1: u32,
+
+    m: u32,
 };
 
 @group(0) @binding(0) var<storage, read_write> ids: array<i32>;        // [n_expert_used, n_tokens]
 @group(0) @binding(1) var<storage, read_write> ids_slot_pos: array<u32>; // [n_expert_used * n_tokens]
 @group(0) @binding(2) var<storage, read_write> ids_tiles: array<u32>; // [n_tiles, (expert, first slot, n slots) * n_tiles]
 
-@group(0) @binding(3) var<uniform> params: MulMatIdGatherParams;
+@group(0) @binding(3) var<storage, read_write> dst: array<f32>; // [m, n_expert_used, n_tokens]
+
+@group(0) @binding(4) var<uniform> params: MulMatIdGatherParams;
 
 // per expert: the slot count, replaced by the first slot of the expert in ids_slot_pos by the prefix sum, then advanced as its write cursor
 var<workgroup> ids_count: array<atomic<u32>, N_EXPERT>;
@@ -36,8 +41,10 @@ fn main(@builtin(local_invocation_id) local_id: vec3<u32>) {
     for (var i = thread_id; i < ids_slots_num; i += WG_SIZE) {
         let row = i / params.n_expert_used;
         let col = i % params.n_expert_used;
-        let expert = u32(ids[params.offset_ids + row * params.stride_ids_1 + col]);
-        atomicAdd(&ids_count[expert], 1u);
+        let expert = ids[params.offset_ids + row * params.stride_ids_1 + col];
+        if (expert != -1) { // skipped slot, owned by no expert
+            atomicAdd(&ids_count[u32(expert)], 1u);
+        }
     }
 
     workgroupBarrier();
@@ -71,8 +78,23 @@ fn main(@builtin(local_invocation_id) local_id: vec3<u32>) {
     for (var i = thread_id; i < ids_slots_num; i += WG_SIZE) {
         let row = i / params.n_expert_used;
         let col = i % params.n_expert_used;
-        let expert = u32(ids[params.offset_ids + row * params.stride_ids_1 + col]);
-        let pos = atomicAdd(&ids_count[expert], 1u);
-        ids_slot_pos[pos] = i;
+        let expert = ids[params.offset_ids + row * params.stride_ids_1 + col];
+        if (expert != -1) {
+            let pos = atomicAdd(&ids_count[u32(expert)], 1u);
+            ids_slot_pos[pos] = i;
+        }
+    }
+
+    // the matmul writes only the rows that an expert owns, so zero the rows of the skipped slots
+    for (var i: u32 = 0; i < ids_slots_num; i += 1) {
+        let row = i / params.n_expert_used;
+        let col = i % params.n_expert_used;
+        if (ids[params.offset_ids + row * params.stride_ids_1 + col] != -1) {
+            continue;
+        }
+        let dst_row = params.offset_dst + i * params.m;
+        for (var r = thread_id; r < params.m; r += WG_SIZE) {
+            dst[dst_row + r] = 0.0f;
+        }
     }
 }

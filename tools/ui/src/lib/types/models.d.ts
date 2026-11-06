@@ -76,6 +76,8 @@ export interface ModelSidecarBadge {
 	quant: string | null;
 	/** Repo the sidecar file belongs to, which may differ from the model's. */
 	repo: string;
+	/** True while the draft is still coming down; a download row reads it as in flight. */
+	pending?: boolean;
 }
 
 /** Modality capabilities for file validation. */

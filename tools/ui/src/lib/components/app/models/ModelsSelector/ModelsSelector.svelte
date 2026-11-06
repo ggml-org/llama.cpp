@@ -14,8 +14,9 @@
 	import { KeyboardKey, ServerModelStatus } from '$lib/enums';
 	import { useChatFormModel } from '$lib/hooks/use-chat-form-model.svelte';
 	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
-	import { deviceStore, modelsStore, serverStore, settingsStore } from '$lib/stores';
+	import { deviceStore, modelsStore, serverStore, settingsStore, uiStore } from '$lib/stores';
 	import { type ModelItem, modelLoadFraction } from '$lib/utils';
+	import { untrack } from 'svelte';
 
 	interface Props {
 		/** Model to show, when the caller owns it, e.g. the model of one message. */
@@ -164,6 +165,15 @@
 			}
 		}
 	}
+
+	// the details drawer's chat actions finish the pick, so an open picker closes too
+	$effect(() => {
+		if (!uiStore.modelsSelectorCloseSignal) return;
+
+		untrack(() => {
+			if (isOpen) ms.handleOpenChange(false);
+		});
+	});
 
 	// bits-ui auto-focuses the opened content, which can yank the page scroll: the
 	// content prevents that and this focuses the search input instead

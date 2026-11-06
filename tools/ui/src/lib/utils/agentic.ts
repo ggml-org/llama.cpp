@@ -541,6 +541,49 @@ export function hasAgenticContent(
 }
 
 /**
+ * Default expansion of a section, used until the user toggles it by hand.
+ *
+ * @param section - The section to judge
+ * @param flags - Display settings plus the tool call the agentic loop is running now.
+ *   A running call outranks its section type: `exec_shell_command` persists an empty
+ *   result before reading output, so a live call can already be TOOL_CALL.
+ */
+export function isSectionExpandedByDefault(
+	section: AgenticSection,
+	{
+		alwaysShowToolCallContent,
+		executingToolCallId,
+		showThoughtInProgress,
+		showToolCallInProgress
+	}: {
+		alwaysShowToolCallContent: boolean;
+		executingToolCallId?: string | null;
+		showThoughtInProgress: boolean;
+		showToolCallInProgress: boolean;
+	}
+): boolean {
+	const isRunning = section.toolCallId !== undefined && section.toolCallId === executingToolCallId;
+
+	if (
+		isRunning ||
+		section.type === AgenticSectionType.TOOL_CALL_PENDING ||
+		section.type === AgenticSectionType.TOOL_CALL_STREAMING
+	) {
+		return showToolCallInProgress || alwaysShowToolCallContent;
+	}
+
+	if (section.type === AgenticSectionType.TOOL_CALL) {
+		return alwaysShowToolCallContent;
+	}
+
+	if (section.type === AgenticSectionType.REASONING_PENDING) {
+		return showThoughtInProgress;
+	}
+
+	return false;
+}
+
+/**
  * Decide how a Continue click on messages[idx] should resume generation.
  * Pure function over the persisted history snapshot.
  */

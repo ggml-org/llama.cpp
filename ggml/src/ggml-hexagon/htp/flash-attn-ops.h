@@ -32,10 +32,20 @@ enum htp_fa_kernel_type {
     HTP_FA_KERNEL_HMX
 };
 
+// Multicore: gcd(n_kv_heads, N) teams own the KV heads, team members share the Q-blocks
+#define HTP_FA_FLAG_TEAM_SPLIT 0x01
+
+static inline void htp_fa_mdev_teams(uint32_t n_kv_heads, uint32_t mdev_count, bool head_split,
+                                     uint32_t * n_teams, uint32_t * team_size) {
+    const uint32_t t = (head_split && n_kv_heads > 0 && mdev_count > 1) ? hex_gcd_u32(n_kv_heads, mdev_count) : 1;
+    *n_teams   = t;
+    *team_size = mdev_count > 1 ? mdev_count / t : 1;
+}
+
 struct htp_fa_kernel_params {
     uint8_t  kernel_type;        // enum htp_fa_kernel_type
     uint8_t  head_split;         // 1 = partition by KV heads in multicore, 0 = token partition
-    uint8_t  flags;              // reserved
+    uint8_t  flags;              // HTP_FA_FLAG_*
     uint8_t  n_threads;          // Number of threads to run
 
     // Common parameters
@@ -49,9 +59,6 @@ struct htp_fa_kernel_params {
     float    logit_softcap;
     uint32_t vtcm_size;
 
-    uint32_t qrows;
-    uint32_t qrows_per_thread;
-    uint32_t qrow_start;
     float    m0;
     float    m1;
     uint32_t n_head_log2;
@@ -67,8 +74,6 @@ struct htp_fa_kernel_params {
     union {
         struct {
             uint32_t g_br;
-            uint32_t row_buf_stride;
-            uint32_t mask_buf_row_stride;
             int32_t  mask_broadcast;
             int32_t  pipeline;
             struct fastdiv_values div_G;
@@ -85,6 +90,8 @@ struct htp_fa_kernel_params {
 
 #if defined(__cplusplus)
 static_assert(sizeof(struct htp_fa_kernel_params) <= 128, "htp_fa_kernel_params is too large for kernel_params blob");
+#else
+_Static_assert(sizeof(struct htp_fa_kernel_params) <= 128, "htp_fa_kernel_params is too large for kernel_params blob");
 #endif
 
 // VTCM region layout for the HMX flash-attention kernel.
@@ -126,6 +133,7 @@ struct hmx_fa_vtcm_layout {
     // Region byte sizes reused by the device at runtime (not just for allocation).
     size_t q_tile_bytes;
     size_t o_tile_bytes;
+    size_t k_tile_bytes;
     size_t s_tile_bytes;       // S and P tiles (same size)
     size_t d_tile_bytes;       // d_tiles[0..1] + d_inv_l, allocated back to back
     size_t m_line_bytes;       // one mask row
@@ -140,6 +148,8 @@ struct hmx_fa_vtcm_layout {
     bool   pipeline;
     size_t total_bytes;
 };
+
+#define FA_MAX_KV_BLOCKS 1024
 
 // Build the VTCM layout.
 
@@ -224,6 +234,7 @@ static inline void hmx_fa_vtcm_layout_build(struct hmx_fa_vtcm_layout * L,
 
     L->q_tile_bytes        = q_tile_size;
     L->o_tile_bytes        = o_tile_size;
+    L->k_tile_bytes        = k_tile_size;
     L->col_vec_bytes       = col_vec_size;
     L->s_tile_bytes        = s_tile_size;
     // Measured from the actual offsets rather than assumed to be N * d_tile_size, so
@@ -321,7 +332,8 @@ static inline int hmx_fa_find_chunk_size(size_t * Br_out,
                                          size_t   n_threads,
                                          bool     is_q_fp32,
                                          bool     has_sinks,
-                                         size_t   n_heads) {
+                                         size_t   n_heads,
+                                         size_t   q_split) {
     const size_t T       = HMX_FP16_TILE_N_ROWS;  // 32
     const size_t br_unit = hmx_ceil_div(T, gqa_factor);
     const size_t bc_unit = HMX_FP16_TILE_N_COLS * 2;  // 64
@@ -332,8 +344,12 @@ static inline int hmx_fa_find_chunk_size(size_t * Br_out,
 
     // Pipeline constraint: cap Bc so n_kv_blocks >= FA_MIN_KV_BLOCKS.
     // Only relax when kv_len is too short to form enough blocks.
-    const size_t Bc_limit     = can_pipeline ? hex_align_down(kv_len / FA_MIN_KV_BLOCKS, bc_unit) :
-                                               (kv_len >= bc_unit ? hex_align_down(kv_len, bc_unit) : bc_unit);
+    size_t Bc_limit     = can_pipeline ? hex_align_down(kv_len / FA_MIN_KV_BLOCKS, bc_unit) :
+                                         (kv_len >= bc_unit ? hex_align_down(kv_len, bc_unit) : bc_unit);
+    // For small-Q SWA-sized KV caches (qo_len <= 16, kv_len <= 2048), cap Bc at 256 for block-skipping granularity
+    if (qo_len <= 16 && kv_len <= 2048 && Bc_limit > 256) {
+        Bc_limit = 256;
+    }
     // Cost coefficients calibrated from profiling
     const size_t c_q_fixed    = 800;   // per-Q-block: q_load + epilogue o_update + o_norm + o_store
     const size_t c_iter_base  = 200;   // per-KV-iter base (HMX dot/update + DMA)
@@ -357,7 +373,8 @@ static inline int hmx_fa_find_chunk_size(size_t * Br_out,
                 const size_t vecs_per_t     = n_use > 0 ? (n_row_vec_cnt + n_use - 1) / n_use : 1;
 
                 const size_t c_iter_actual  = c_iter_base + c_softmax * vecs_per_t;
-                const size_t cost           = q_blocks * (c_q_fixed + kv_blocks * c_iter_actual);
+                const size_t q_blocks_nsp   = (q_blocks + q_split - 1) / (q_split ? q_split : 1);
+                const size_t cost           = q_blocks_nsp * (c_q_fixed + kv_blocks * c_iter_actual);
                 const size_t mn             = Br * Bc;
 
                 if (cost < best_cost || (cost == best_cost && mn > best_mn)) {

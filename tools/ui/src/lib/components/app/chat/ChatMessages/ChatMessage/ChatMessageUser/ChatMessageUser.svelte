@@ -1,6 +1,7 @@
 <script lang="ts">
 	import {
 		ChatMessageActionIcons,
+		ChatMessageContextMenu,
 		ChatMessageEditForm,
 		ChatMessageStatistics,
 		ChatMessageUserBubble
@@ -29,7 +30,11 @@
 	const processingState = useProcessingState();
 
 	const currentConfig = $derived(settingsStore.config);
-	const isActivelyProcessing = $derived(isLastUserMessage && chatStore.isLoading);
+	// A compaction summary reports its own progress on the compaction row, so
+	// the summarized turn does not show live reading stats while it runs.
+	const isActivelyProcessing = $derived(
+		isLastUserMessage && chatStore.isLoading && !chatStore.isCompacting(message.convId)
+	);
 
 	// For agentic turns, prefer the cumulative agentic.llm totals over per-call timings.
 	let storedReadingStats = $derived.by(() => {
@@ -68,11 +73,13 @@
 	{#if editCtx.isEditing}
 		<ChatMessageEditForm />
 	{:else}
-		<ChatMessageUserBubble
-			attachments={message.extra}
-			content={message.content}
-			renderMarkdown={true}
-		/>
+		<ChatMessageContextMenu disabled={!message.timestamp} role={MessageRole.USER}>
+			<ChatMessageUserBubble
+				attachments={message.extra}
+				content={message.content}
+				renderMarkdown={true}
+			/>
+		</ChatMessageContextMenu>
 
 		{#if showStoredReadingStats}
 			<!-- Reading stats sourced from the assistant message that followed this turn -->
@@ -107,7 +114,7 @@
 
 		{#if message.timestamp}
 			<div class="max-w-[80%]">
-				<ChatMessageActionIcons actionsPosition="right" justify="end" role={MessageRole.USER} />
+				<ChatMessageActionIcons actionsPosition="right" justify="end" />
 			</div>
 		{/if}
 	{/if}

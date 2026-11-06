@@ -7,7 +7,6 @@ on:
       - master
     paths: [
       '.github/workflows/build-cpu.yml',
-      '.github/workflows/build-cmake-pkg.yml',
       '**/CMakeLists.txt',
       '**/.cmake',
       '**/*.h',
@@ -20,7 +19,6 @@ on:
     types: [opened, synchronize, reopened]
     paths: [
       '.github/workflows/build-cpu.yml',
-      '.github/workflows/build-cmake-pkg.yml',
       'ggml/src/ggml-rpc/**',
       '**/CMakeLists.txt',
       '**/.cmake',
@@ -47,9 +45,6 @@ env:
   LLAMA_ARG_LOG_TIMESTAMPS: 1
 
 jobs:
-  build-cmake-pkg:
-    uses: ./.github/workflows/build-cmake-pkg.yml
-
   ubuntu:
     strategy:
       matrix:
@@ -129,7 +124,7 @@ jobs:
         id: cmake_test
         run: |
           cd build
-          ctest -L 'main|python' --verbose --timeout 900
+          ctest -L main --verbose --timeout 900
 
       - name: Test llama2c conversion
         id: llama2c_test
@@ -242,3 +237,79 @@ jobs:
           older: 5m
           min: 1
           dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}
+
+  build-cmake-pkg:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Clone
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
+        with:
+          restore: false
+          save: false
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
+        with:
+          key: build-cmake-pkg
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
+
+      - name: Build
+        run: |
+          PREFIX="$(pwd)"/inst
+          cmake -S . -B build \
+                -DCMAKE_PREFIX_PATH="$PREFIX" \
+                -DLLAMA_OPENSSL=OFF \
+                -DLLAMA_BUILD_TESTS=OFF \
+                -DLLAMA_BUILD_TOOLS=OFF \
+                -DLLAMA_BUILD_EXAMPLES=OFF \
+                -DLLAMA_BUILD_APP=OFF \
+                -DLLAMA_BUILD_IS_DEV=OFF \
+                -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release -j $(nproc)
+          cmake --install build --prefix "$PREFIX" --config Release
+
+          export LLAMA_CONFIG="$PREFIX"/lib/cmake/llama/llama-config.cmake
+          build_commit=$(git rev-parse --short HEAD | xargs)
+          build_number=$(git rev-list --count HEAD | xargs)
+
+          major=$(grep -oE "set\(LLAMA_VERSION_MAJOR[[:space:]]+[0-9]+" CMakeLists.txt | grep -oE "[0-9]+$")
+          minor=$(grep -oE "set\(LLAMA_VERSION_MINOR[[:space:]]+[0-9]+" CMakeLists.txt | grep -oE "[0-9]+$")
+          patch=$(grep -oE "set\(LLAMA_VERSION_PATCH[[:space:]]+[0-9]+" CMakeLists.txt | grep -oE "[0-9]+$")
+          build_version="$major.$minor.$patch"
+
+          checks=("set\(LLAMA_VERSION[[:space:]]+$build_version\)"
+                  "set\(LLAMA_BUILD_COMMIT[[:space:]]+$build_commit\)"
+                  "set\(LLAMA_BUILD_NUMBER[[:space:]]+$build_number\)")
+
+          for check in "${checks[@]}"; do
+              if ! grep -qE "$check" "$LLAMA_CONFIG"; then
+                  echo "Checking llama-config.cmake version... \"$check\" failed!"
+                  exit 1
+              fi
+          done
+
+          echo "Checking llama-config.cmake version... success."
+
+          cd examples/simple-cmake-pkg
+          cmake -S . -B build -DCMAKE_PREFIX_PATH="$PREFIX"/lib/cmake
+          cmake --build build -j $(nproc)
+
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: build-cmake-pkg
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true

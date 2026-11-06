@@ -3,6 +3,7 @@
 #include "server-common.h"
 #include "server-task.h"
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <string>
@@ -39,12 +40,14 @@ struct server_decision_context {
     bool can_share_prompt() const {
         switch (type) {
             case COMMON_DECISION_TYPE_OPENJEV:
+            case COMMON_DECISION_TYPE_GRANITE_SWITCH:
             case COMMON_DECISION_TYPE_LEV:
             case COMMON_DECISION_TYPE_KEV:
             case COMMON_DECISION_TYPE_NIMBLE:
             case COMMON_DECISION_TYPE_PPLX_DECIDER:
             case COMMON_DECISION_TYPE_VLLM_DECISION2:
             case COMMON_DECISION_TYPE_LFM2_D1:
+            case COMMON_DECISION_TYPE_H2O_LIGHTNING:
                 return true;
             default:
                 return false;
@@ -56,6 +59,10 @@ struct server_decision_context {
         return type == COMMON_DECISION_TYPE_CLEF;
     }
 
+    bool is_lfm3_d1() const {
+        return type == COMMON_DECISION_TYPE_LFM3_D1 || type == COMMON_DECISION_TYPE_LFM3_D1_OMNI;
+    }
+
     // true if the prompt of the model has a place for images
     bool can_use_images() const {
         switch (type) {
@@ -65,14 +72,27 @@ struct server_decision_context {
             case COMMON_DECISION_TYPE_VLLM_D3:
             case COMMON_DECISION_TYPE_LFM2_D1:
             case COMMON_DECISION_TYPE_LFM2_D1_OMNI:
+            case COMMON_DECISION_TYPE_H2O_LIGHTNING:
+            case COMMON_DECISION_TYPE_MINICPM_OCR_JEV:
+            case COMMON_DECISION_TYPE_LFM3_D1:
+            case COMMON_DECISION_TYPE_LFM3_D1_OMNI:
                 return true;
             default:
                 return false;
         }
     }
 
+    // false for a decision-only model, it serves no text generation
+    bool can_generate() const {
+        const auto out = server_model_output_modalities(type, true, false);
+        return std::find(out.begin(), out.end(), "text") != out.end();
+    }
+
     // throw std::invalid_argument on bad input
     std::vector<server_decision_question> parse_questions(const json & body) const;
+
+    // the state as the model reads it, done once per request; returns the state for most models
+    json prepare_state(const json & state) const;
 
     // returns the state without its images, they are appended to files in order
     // images come from "files" (alias "images") and from the image_url and input_audio parts of a state made of chat messages
@@ -120,7 +140,7 @@ private:
     bool   strict_payload  = false; // state, instructions and descriptions must be text, an object or an array
     bool   canonical_legend = false; // non-string score descriptions are returned as canonical JSON text
 
-    // OPENJEV, LEV, NIMBLE, PPLX_DECIDER, VLLM_D3
+    // OPENJEV, LEV, NIMBLE, PPLX_DECIDER, VLLM_D3, H2O_LIGHTNING
     std::vector<llama_token> labels;
     std::vector<std::string> label_texts; // only if the label of an option is given to the template
 
@@ -130,6 +150,10 @@ private:
     std::string text_marker;
     size_t      max_head_tokens   = 0; // question + options
     size_t      max_option_tokens = 48;
+
+    // H2O_LIGHTNING
+    std::vector<std::string> quoted_spellings; // texts of the special tokens, quoted in the input, longest first
+    std::string              quoted_first;     // the first bytes of these texts
 
     std::string render(
             const json & state,
@@ -142,6 +166,14 @@ private:
     size_t n_outputs(const server_decision_question & question) const;
     // LFM2_D1: label text and tokens of each option
     void d1_labels(const server_decision_question & question, std::vector<std::string> & texts, std::vector<llama_tokens> & groups) const;
+    // H2O_LIGHTNING: the input of the template, its texts are rendered as the reference shim does
+    json render_h2o(const json & state, const server_decision_question & question) const;
+    std::string h2o_cut_state(const std::string & text) const;
+    std::string h2o_quote(const std::string & text) const;
+    // the texts of the tokens with these attributes, quoted_spellings and quoted_first
+    void init_quoted_spellings(uint32_t attrs, size_t min_size);
+    // LFM3_D1: a zero-width space after the first character of each special token text (d1 prompt.py: plain)
+    std::string d1_break(const std::string & text) const;
     void fill_task_laya(llama_tokens & tokens, const server_decision_question & question, server_task & task) const;
     void fill_task_d1omni(
             const json & state,

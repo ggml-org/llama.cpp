@@ -60,6 +60,140 @@ kernel void kernel_argmax_f32(
     dst_i32[tgpig] = arg_val;
 }
 
+kernel void kernel_argmax_part_f32(
+        constant ggml_metal_kargs_argmax & args,
+        device   const char * src0,
+        device         char * tmp,
+        threadgroup    char * shmem [[threadgroup(0)]],
+        uint3 tgpig[[threadgroup_position_in_grid]],
+        uint3 tpitg[[thread_position_in_threadgroup]],
+        uint  sgitg[[simdgroup_index_in_threadgroup]],
+        uint  tiisg[[thread_index_in_simdgroup]],
+        uint3  ntg[[threads_per_threadgroup]]) {
+    const int row  = tgpig.y;
+    const int part = tgpig.x;
+    const int ne00 = (int) args.ne00;
+    const int npart = (int) args.npart;
+    const int chunk = (ne00 + npart - 1) / npart;
+    const int start = part * chunk;
+    const int end   = min(start + chunk, ne00);
+
+    device const float * x_row = (device const float *) ((device const char *) src0 + row * args.nb01);
+
+    float   lmax = -INFINITY;
+    int32_t larg = -1;
+
+    for (int i00 = start + tpitg.x; i00 < end; i00 += ntg.x) {
+        if (x_row[i00] > lmax) {
+            lmax = x_row[i00];
+            larg = i00;
+        }
+    }
+
+    // find the argmax value in the block
+    float max_val = simd_max(lmax);
+    int32_t arg_val = simd_max(select(-1, larg, lmax == max_val));
+
+    threadgroup   float * shared_maxval = (threadgroup   float *) shmem;
+    threadgroup int32_t * shared_argmax = (threadgroup int32_t *) shmem + N_SIMDWIDTH;
+
+    if (ntg.x > N_SIMDWIDTH) {
+        if (sgitg == 0) {
+            shared_maxval[tiisg] = -INFINITY;
+            shared_argmax[tiisg] = -1;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (tiisg == 0) {
+            shared_maxval[sgitg] = max_val;
+            shared_argmax[sgitg] = arg_val;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        max_val = shared_maxval[tiisg];
+        arg_val = shared_argmax[tiisg];
+
+        float max_val_reduced   = simd_max(max_val);
+        int32_t arg_val_reduced = simd_max(select(-1, arg_val, max_val == max_val_reduced));
+
+        max_val = max_val_reduced;
+        arg_val = arg_val_reduced;
+    }
+
+    if (tpitg.x == 0) {
+        device float * tmp_max = (device float *) tmp;
+        device int32_t * tmp_arg = (device int32_t *) tmp + npart * (int) args.ne01;
+
+        tmp_max[row*npart + part] = max_val;
+        tmp_arg[row*npart + part] = arg_val;
+    }
+}
+
+kernel void kernel_argmax_final_f32(
+        constant ggml_metal_kargs_argmax & args,
+        device   const char * tmp,
+        device         char * dst,
+        threadgroup    char * shmem [[threadgroup(0)]],
+        uint3 tgpig[[threadgroup_position_in_grid]],
+        uint3 tpitg[[thread_position_in_threadgroup]],
+        uint  sgitg[[simdgroup_index_in_threadgroup]],
+        uint  tiisg[[thread_index_in_simdgroup]],
+        uint3  ntg[[threads_per_threadgroup]]) {
+    const int row = tgpig.x;
+    const int npart = (int) args.npart;
+
+    device const float * tmp_max = (device const float *) tmp;
+    device const int32_t * tmp_arg = (device const int32_t *) tmp + npart * (int) args.ne01;
+
+    float   lmax = -INFINITY;
+    int32_t larg = -1;
+
+    for (int i = tpitg.x; i < npart; i += ntg.x) {
+        if (tmp_max[row*npart + i] > lmax) {
+            lmax = tmp_max[row*npart + i];
+            larg = tmp_arg[row*npart + i];
+        }
+    }
+
+    // find the argmax value in the block
+    float max_val = simd_max(lmax);
+    int32_t arg_val = simd_max(select(-1, larg, lmax == max_val));
+
+    threadgroup   float * shared_maxval = (threadgroup   float *) shmem;
+    threadgroup int32_t * shared_argmax = (threadgroup int32_t *) shmem + N_SIMDWIDTH;
+
+    if (ntg.x > N_SIMDWIDTH) {
+        if (sgitg == 0) {
+            shared_maxval[tiisg] = -INFINITY;
+            shared_argmax[tiisg] = -1;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (tiisg == 0) {
+            shared_maxval[sgitg] = max_val;
+            shared_argmax[sgitg] = arg_val;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        max_val = shared_maxval[tiisg];
+        arg_val = shared_argmax[tiisg];
+
+        float max_val_reduced   = simd_max(max_val);
+        int32_t arg_val_reduced = simd_max(select(-1, arg_val, max_val == max_val_reduced));
+
+        max_val = max_val_reduced;
+        arg_val = arg_val_reduced;
+    }
+
+    if (tpitg.x == 0) {
+        ((device int32_t *) dst)[row] = arg_val;
+    }
+}
+
 kernel void kernel_diag_f32(
         constant ggml_metal_kargs_diag & args,
         device   const char * src0,
@@ -772,3 +906,99 @@ kernel void kernel_dsv4_hc_post_f32(
         *(device float *) (dst + i0*args.nb_d0 + idst*args.nb_d1 + it*args.nb_d2) = result[idst];
     }
 }
+
+constant bool FC_top_k_mask_has_score  [[function_constant(FC_TOP_K_MASK + 0)]];
+constant bool FC_top_k_mask_has_blocks [[function_constant(FC_TOP_K_MASK + 1)]];
+constant bool FC_top_k_mask_has_extra  [[function_constant(FC_TOP_K_MASK + 2)]];
+constant bool FC_top_k_mask_vec        [[function_constant(FC_TOP_K_MASK + 3)]];
+
+// the fill runs before the scatter, both are fully parallel over the whole dst and over the picks of one row
+template <typename T, typename T4>
+kernel void kernel_top_k_mask_fill(
+        constant ggml_metal_kargs_top_k_mask & args,
+        device char * dst,
+        uint  tid[[thread_position_in_grid]],
+        uint ntot[[threads_per_grid]]) {
+    const T ninf = T(-INFINITY);
+
+    if (FC_top_k_mask_vec) {
+        device T4 * dst_4 = (device T4 *) dst;
+        for (int64_t i = tid; i < args.n_elems/4; i += ntot) {
+            dst_4[i] = T4(ninf);
+        }
+    } else {
+        device T * dst_t = (device T *) dst;
+        for (int64_t i = tid; i < args.n_elems; i += ntot) {
+            dst_t[i] = ninf;
+        }
+    }
+}
+
+typedef decltype(kernel_top_k_mask_fill<half,  half4>)  kernel_top_k_mask_fill_h_t;
+typedef decltype(kernel_top_k_mask_fill<float, float4>) kernel_top_k_mask_fill_f_t;
+
+template [[host_name("kernel_top_k_mask_fill_f16")]] kernel kernel_top_k_mask_fill_h_t kernel_top_k_mask_fill<half,  half4>;
+template [[host_name("kernel_top_k_mask_fill_f32")]] kernel kernel_top_k_mask_fill_f_t kernel_top_k_mask_fill<float, float4>;
+
+// one threadgroup per row: copy the mask cells of the live picks and of the extra cells over the fill
+template <typename T, typename T4>
+kernel void kernel_top_k_mask(
+        constant ggml_metal_kargs_top_k_mask & args,
+        device const  char * mask,
+        device const  char * top_k,
+        device const  char * score,
+        device const  char * blocks,
+        device const  char * extra,
+        device        char * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        uint3   tpitg[[thread_position_in_threadgroup]],
+        uint3 ntg_max[[threads_per_threadgroup]]) {
+    const int i1 = tgpig.x;
+    const int i2 = tgpig.y;
+    const int i3 = tgpig.z;
+
+    const int   tiitg = tpitg.x;
+    const int     ntg = ntg_max.x;
+
+    device const char * mask_row  = mask  + (i1 % args.m1)*args.nbm1 + (i2 % args.m2)*args.nbm2 + (i3 % args.m3)*args.nbm3;
+    device       char * dst_row   = dst   + i1*args.nb1 + i2*args.nb2 + i3*args.nb3;
+    device const char * top_k_row = top_k + i1*args.nbk1 + i2*args.nbk2 + i3*args.nbk3;
+
+    device const T * mask_row_t = (device const T *) mask_row;
+    device       T * dst_row_t  = (device       T *) dst_row;
+
+    for (int i = tiitg; i < args.n_top; i += ntg) {
+        const int32_t p = *(device const int32_t *) (top_k_row + i*args.nbk0);
+        if (p < 0 || p >= args.n_pick) {
+            continue;
+        }
+        if (FC_top_k_mask_has_score && !(*(device const float *) (score + p*args.nbs0 + i1*args.nbs1 + i2*args.nbs2 + i3*args.nbs3) > -INFINITY)) {
+            continue;
+        }
+        if (FC_top_k_mask_has_blocks) {
+            FOR_UNROLL (int k = 0; k < args.n_blk; ++k) {
+                const int32_t c = *(device const int32_t *) (blocks + k*args.nbb0 + p*args.nbb1);
+                if (c >= 0 && c < args.n_kv) {
+                    dst_row_t[c] = mask_row_t[c];
+                }
+            }
+        } else if (p < args.n_kv) {
+            dst_row_t[p] = mask_row_t[p];
+        }
+    }
+
+    if (FC_top_k_mask_has_extra) {
+        for (int i = tiitg; i < args.n_extra; i += ntg) {
+            const int32_t c = *(device const int32_t *) (extra + i*args.nbe0 + i1*args.nbe1 + i2*args.nbe2 + i3*args.nbe3);
+            if (c >= 0 && c < args.n_kv) {
+                dst_row_t[c] = mask_row_t[c];
+            }
+        }
+    }
+}
+
+typedef decltype(kernel_top_k_mask<half,  half4>)  kernel_top_k_mask_h_t;
+typedef decltype(kernel_top_k_mask<float, float4>) kernel_top_k_mask_f_t;
+
+template [[host_name("kernel_top_k_mask_f16")]] kernel kernel_top_k_mask_h_t kernel_top_k_mask<half,  half4>;
+template [[host_name("kernel_top_k_mask_f32")]] kernel kernel_top_k_mask_f_t kernel_top_k_mask<float, float4>;

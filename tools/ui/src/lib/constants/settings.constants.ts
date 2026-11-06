@@ -1,5 +1,6 @@
 import { DEFAULT_AGENTIC_CONFIG } from './agentic.constants';
 import { CLI_FLAGS } from './cli-flags.constants';
+import { COMPACTION } from './compaction.constants';
 import { DEFAULT_MCP_CONFIG } from './mcp.constants';
 import { SETTINGS_KEYS } from './settings-keys.constants';
 import { TITLE_GENERATION } from './title-generation.constants';
@@ -127,12 +128,17 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
-				// Deliberately off for now: the natural place to turn it on is the first
-				// run experience, once onboarding exists to ask the user about it.
 				defaultValue: false,
-				help: 'Fetch model metadata (avatars, context length, chat template) from the Hugging Face Hub. When off, the UI only shows what the server reports for /v1/models and hides the org avatars.',
+				help: 'Show the Discover Models sidebar action to browse and download HuggingFace GGUF models. Turns the Hugging Face Hub API on while it is enabled. Only available in router mode.',
+				key: SETTINGS_KEYS.ENABLE_DISCOVER_MODELS,
+				label: 'Enable Discover Models',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: false,
+				help: 'Fetch model display data (avatars, context length, chat template) and everything in the Discover Models view from the Hugging Face Hub API. Locked on while Discover Models is enabled; can be turned on alone for just the display data.',
 				key: SETTINGS_KEYS.USE_HUGGING_FACE_HUB,
-				label: 'Use Hugging Face Hub API for models metadata',
+				label: 'Use the Hugging Face Hub API',
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
@@ -170,6 +176,21 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				label: 'Generate title with LLM',
 				standaloneField: false,
 				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: COMPACTION.DEFAULT_PROMPT,
+				help: 'Optional override for the instruction sent to the model when compacting a conversation.',
+				key: SETTINGS_KEYS.COMPACTION_PROMPT,
+				label: 'Compaction prompt',
+				type: SettingsFieldType.TEXTAREA
+			},
+			{
+				defaultValue: COMPACTION.DEFAULT_PRESERVED_STEPS,
+				help: 'Last steps a compaction keeps as written after the summary: a user message, or an assistant message with its tool results.',
+				isPositiveInteger: true,
+				key: SETTINGS_KEYS.COMPACTION_PRESERVED_STEPS,
+				label: 'Compaction preserved steps',
+				type: SettingsFieldType.INPUT
 			},
 			{
 				defaultValue: false,
@@ -223,8 +244,15 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
+				defaultValue: true,
+				help: 'Expand tool call details while the call is being generated and executed, and collapse them again once its result is in. Mirrors "Show thought in progress". Tool calls you expand or collapse by hand keep your choice.',
+				key: SETTINGS_KEYS.SHOW_TOOL_CALL_IN_PROGRESS,
+				label: 'Show tool call in progress',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
 				defaultValue: false,
-				help: 'Automatically expand tool call details while executing and keep them expanded after completion.',
+				help: 'Keep tool call details expanded after completion. Takes precedence over "Show tool call in progress", which only covers the in-flight phases.',
 				key: SETTINGS_KEYS.ALWAYS_SHOW_TOOL_CALL_CONTENT,
 				label: 'Always show tool call content',
 				type: SettingsFieldType.CHECKBOX
@@ -252,7 +280,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 			},
 			{
 				defaultValue: false,
-				help: 'Disable automatic scrolling while messages stream so you can control the viewport position manually.',
+				help: 'Stop the view from following new content while messages stream, so you control the viewport position yourself.',
 				key: SETTINGS_KEYS.DISABLE_AUTO_SCROLL,
 				label: 'Disable automatic scroll',
 				type: SettingsFieldType.CHECKBOX

@@ -2,6 +2,7 @@
 
 #include "llama-ext.h"
 
+#include <algorithm>
 #include <cmath>
 
 void llama_model_clef::load_arch_hparams(llama_model_loader & ml) {
@@ -98,7 +99,7 @@ void llama_model_clef::load_arch_tensors(llama_model_loader & ml) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_clef::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
 // spans read by the head, [start, end) in ubatch token indices
@@ -242,14 +243,11 @@ public:
 };
 
 // the backbone is copied from llama_model_qwen35::graph, without the memory module
-llama_model_clef::graph::graph(const llama_model & model_base, const llm_graph_params & params) :
-    llm_build_delta_net_base(params), model(static_cast<const llama_model_clef &>(model_base)) {
+llama_model_clef::graph::graph(const llm_graph_params & params) :
+    llm_build_delta_net_base(params), model(static_cast<const llama_model_clef &>(*params.model)) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
-
-    int sections[4];
-    std::copy(std::begin(hparams.rope_sections), std::begin(hparams.rope_sections) + 4, sections);
 
     ggml_tensor * cur;
     ggml_tensor * inpL;
@@ -273,7 +271,7 @@ llama_model_clef::graph::graph(const llama_model & model_base, const llm_graph_p
         if (hparams.is_recr(il)) {
             cur = build_layer_attn_linear(cur, il);
         } else {
-            cur = build_layer_attn(inp_attn, cur, inp_pos, sections, il);
+            cur = build_layer_attn(inp_attn, cur, inp_pos, il);
         }
 
         cur = ggml_add(ctx0, cur, inpSA);
@@ -320,7 +318,7 @@ public:
     using llm_graph_input_attn_no_cache::llm_graph_input_attn_no_cache;
 
     void set_input(const llama_ubatch * ubatch) override {
-        const int64_t n_kv     = self_kq_mask->ne[0];
+        const int64_t n_kv     = self_attn_mask.raw->ne[0];
         const int64_t n_tokens = ubatch->n_tokens;
 
         const auto fill_mask = [&](auto * data, auto zero, auto ninf) {
@@ -332,11 +330,11 @@ public:
             }
         };
 
-        GGML_ASSERT(ggml_backend_buffer_is_host(self_kq_mask->buffer));
-        if (self_kq_mask->type == GGML_TYPE_F16) {
-            fill_mask((ggml_fp16_t *) self_kq_mask->data, ggml_fp32_to_fp16(0.0f), ggml_fp32_to_fp16(-INFINITY));
+        GGML_ASSERT(ggml_backend_buffer_is_host(self_attn_mask.raw->buffer));
+        if (self_attn_mask.raw->type == GGML_TYPE_F16) {
+            fill_mask((ggml_fp16_t *) self_attn_mask.raw->data, ggml_fp32_to_fp16(0.0f), ggml_fp32_to_fp16(-INFINITY));
         } else {
-            fill_mask((float *) self_kq_mask->data, 0.0f, -INFINITY);
+            fill_mask((float *) self_attn_mask.raw->data, 0.0f, -INFINITY);
         }
     }
 };
@@ -347,11 +345,9 @@ llm_graph_input_attn_no_cache * llama_model_clef::graph::build_attn_inp_causal()
 
     const auto type_mask = cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
 
-    inp->self_kq_mask = ggml_new_tensor_4d(ctx0, type_mask, GGML_PAD(n_tokens, 256), n_tokens, 1, 1);
-    ggml_set_input(inp->self_kq_mask);
-    cb(inp->self_kq_mask, "self_kq_mask", -1);
-
-    inp->self_kq_mask_cnv = inp->self_kq_mask;
+    inp->self_attn_mask.raw = ggml_new_tensor_4d(ctx0, type_mask, GGML_PAD(n_tokens, 256), n_tokens, 1, 1);
+    ggml_set_input(inp->self_attn_mask.raw);
+    cb(inp->self_attn_mask.raw, "self_kq_mask", -1);
 
     return (llm_graph_input_attn_no_cache *) res->add_input(std::move(inp));
 }
@@ -360,7 +356,6 @@ ggml_tensor * llama_model_clef::graph::build_layer_attn(
         llm_graph_input_attn_no_cache * inp,
         ggml_tensor *                   cur,
         ggml_tensor *                   inp_pos,
-        int *                           sections,
         int                             il) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
@@ -390,17 +385,8 @@ ggml_tensor * llama_model_clef::graph::build_layer_attn(
 
     Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
-    Qcur = ggml_rope_multi(
-            ctx0, Qcur, inp_pos, nullptr,
-            n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale,
-            ext_factor, attn_factor, beta_fast, beta_slow
-            );
-
-    Kcur = ggml_rope_multi(
-            ctx0, Kcur, inp_pos, nullptr,
-            n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale,
-            ext_factor, attn_factor, beta_fast, beta_slow
-            );
+    Qcur = build_rope(Qcur, inp_pos, il);
+    Kcur = build_rope(Kcur, inp_pos, il);
 
     const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
 

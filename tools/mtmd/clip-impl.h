@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ggml.h"
+#include "ggml-cpp.h"
 #include "gguf.h"
 #include "clip.h"
 
@@ -15,6 +16,7 @@
 #include <vector>
 #include <memory>
 #include <fstream>
+#include <random>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -55,6 +57,8 @@
 #define KEY_PREPROC_MIN_TILES       "clip.vision.preproc_min_tiles"
 #define KEY_PREPROC_MAX_TILES       "clip.vision.preproc_max_tiles"
 #define KEY_PREPROC_IMAGE_SIZE      "clip.vision.preproc_image_size"
+#define KEY_PREPROC_TILE_SIZE       "clip.vision.preproc_tile_size"
+#define KEY_PREPROC_MAX_PIXELS_TOLERANCE "clip.vision.preproc_max_pixels_tolerance"
 #define KEY_PATCH_SIZE              "clip.vision.patch_size"
 #define KEY_IMAGE_MEAN              "clip.vision.image_mean"
 #define KEY_IMAGE_STD               "clip.vision.image_std"
@@ -85,6 +89,9 @@
 #define KEY_A_PROJ_STACK_FACTOR    "clip.audio.projector.stack_factor"
 #define KEY_A_CHUNK_SIZE           "clip.audio.chunk_size"
 #define KEY_A_CONV_KERNEL_SIZE     "clip.audio.conv_kernel_size"
+#define KEY_A_HIDDEN_SIZES         "clip.audio.hidden_sizes"
+#define KEY_A_PATCH_SIZES          "clip.audio.patch_sizes"
+#define KEY_A_DEPTHS               "clip.audio.depths"
 #define KEY_A_MAX_POS_EMB          "clip.audio.max_pos_emb"
 #define KEY_A_PROJ_WINDOW_SIZE     "clip.audio.projector.window_size"
 #define KEY_A_PROJ_DOWNSAMPLE_RATE "clip.audio.projector.downsample_rate"
@@ -99,7 +106,17 @@
 #define KEY_GEN_AUDIO_PROJ_TYPE    "clip.gen.audio.projector_type" // for models with mixed modalities
 // name of the weight variant, for settings that are not in the checkpoint
 #define KEY_GEN_AUDIO_VARIANT      "clip.gen.audio.model_variant"
+// sampling defaults of the generated audio, like general.sampling.* for text
+#define KEY_GEN_AUDIO_TEMP           "clip.gen.audio.sampling.temp"
+#define KEY_GEN_AUDIO_TOP_K          "clip.gen.audio.sampling.top_k"
+#define KEY_GEN_AUDIO_PENALTY_REPEAT "clip.gen.audio.sampling.penalty_repeat"
+#define KEY_GEN_AUDIO_PENALTY_LAST_N "clip.gen.audio.sampling.penalty_last_n"
 #define KEY_AUDIO_SUBSMPL_FACTOR   "clip.audio.subsampling_factor"
+
+// nemotron transcribe
+#define KEY_A_ROPE_DIMS            "clip.audio.rope_dims"
+#define KEY_A_SPK_N_BLOCK          "clip.audio.spk.block_count"
+#define KEY_A_SPK_N_HEAD           "clip.audio.spk.head_count"
 
 //
 // tensor name constants
@@ -165,6 +182,12 @@
 #define TN_DEEPSTACK_NORM  "v.deepstack.%d.norm.%s"     // qwen3vl deepstack
 #define TN_DEEPSTACK_FC1   "v.deepstack.%d.fc1.%s"      // qwen3vl deepstack
 #define TN_DEEPSTACK_FC2   "v.deepstack.%d.fc2.%s"      // qwen3vl deepstack
+
+// lfm3vl
+#define TN_LFM3VL_EMBEDDING_NORM   "%s.embedding_norm.%s"
+#define TN_LFM3VL_CONV2D_IN_PROJ   "%s.blk.%d.conv2d_in_proj.%s"
+#define TN_LFM3VL_CONV2D_SPATIAL   "%s.blk.%d.conv2d_spatial.%s"
+#define TN_LFM3VL_CONV2D_OUT_PROJ  "%s.blk.%d.conv2d_out_proj.%s"
 
 // mimicpmv
 #define TN_MINICPMV_POS_EMBD_K "resampler.pos_embed_k"
@@ -233,6 +256,18 @@
 #define TN_A_GEN_CODE_OUT_EMBD "a.gen.code.out_embd.%s"
 #define TN_A_GEN_CODE_NORM     "a.gen.code.output_norm.%s"
 
+// lfm3a depthformer (MaskGIT), the codec decoder uses the generic layer names with prefix "a.gen.wav.tfm"
+#define TN_A_GEN_CODE_HEAD_NORM "a.gen.code.head_norm.%s"
+#define TN_A_GEN_CODE_MASK_EMBD "a.gen.code.mask_embd"
+#define TN_ATTN_GATE            "%s.blk.%d.attn_gate.%s"
+
+// drama3 tower, the rest of the block uses the generic names with prefix "a.gen.code"
+#define TN_A_GEN_CODE_ENORM        "a.gen.code.blk.%d.enorm.%s"
+#define TN_A_GEN_CODE_HNORM        "a.gen.code.blk.%d.hnorm.%s"
+#define TN_A_GEN_CODE_EH_PROJ      "a.gen.code.blk.%d.eh_proj.%s"
+#define TN_A_GEN_CODE_BLK_EMBD     "a.gen.code.blk.%d.embd.%s"
+#define TN_A_GEN_CODE_BLK_OUT_NORM "a.gen.code.blk.%d.out_norm.%s"
+
 // qwen3tts code2wav (RVQ codes -> raw PCM)
 // pre_transformer layers use the generic TN_ATTN_*/TN_FFN_*/TN_LN_*/TN_LS_* macros, prefix "a.gen.wav.tfm"
 #define TN_A_GEN_WAV_QUANT_FIRST_IN  "a.gen.wav.quant.first.in_proj.%s"
@@ -292,6 +327,12 @@
 #define TN_A_GEN_WAV_SEANET_RES_CONV1  "a.gen.wav.seanet.blk.%d.res_conv1.%s"
 #define TN_A_GEN_WAV_SEANET_RES_CONV2  "a.gen.wav.seanet.blk.%d.res_conv2.%s"
 #define TN_A_GEN_WAV_SEANET_SCALE_CONV "a.gen.wav.seanet.blk.%d.scale_conv.%s"
+
+// soprano: Vocos decoder, the ConvNeXt blocks use TN_A_GEN_WAV_UP_*
+#define TN_A_GEN_WAV_INPUT           "a.gen.wav.input.%s"
+#define TN_A_GEN_WAV_NORM            "a.gen.wav.norm.%s"
+#define TN_A_GEN_WAV_OUTPUT_NORM     "a.gen.wav.output_norm.%s"
+#define TN_A_GEN_WAV_OUTPUT          "a.gen.wav.output.%s"
 
 // cogvlm
 #define TN_MM_POST_FC_NORM "mm.post_fc_norm.%s"
@@ -369,6 +410,8 @@
 #define TN_A_INP_PROJ        "a.input_projection.%s"
 #define TN_A_CONV1D          "a.conv1d.%d.%s"
 #define TN_A_CONV1D_NORM     "a.conv1d.%d.norm.%s"
+#define TN_A_PATCH           "a.patch.%d.%s"
+#define TN_A_PATCH_NORM      "a.patch.%d.norm.%s"
 #define TN_A_OUT_PROJ        "a.pre_encode.out.%s"
 #define TN_A_ATTN_PRE_NORM   "%s.blk.%d.attn_pre_norm.%s"
 #define TN_A_ATTN_POST_NORM  "%s.blk.%d.attn_post_norm.%s"
@@ -438,8 +481,46 @@
 #define TN_CONV_NORM_MEAN        "%s.blk.%d.conv_norm_mean"
 #define TN_CONV_NORM_VAR         "%s.blk.%d.conv_norm_var"
 
+// nemotron transcribe
+#define TN_A_SPK_INP_PROJ        "a.spk.input_projection.%s"
+#define TN_A_SPK_HEAD            "a.spk.head.%s.%s" // proj, upsample, fc1, fc2
+#define TN_A_SPK_SIL_EMB         "a.spk.head.sil_emb"
+#define TN_A_FUSION_NORM         "a.fusion.%s.%s"   // asr_norm, spk_norm
+#define TN_A_FUSION_KERNEL       "a.fusion.spk_kernel"
+
 // align x to upper multiple of n
 #define CLIP_ALIGN(x, n) ((((x) + (n) - 1) / (n)) * (n))
+
+// sliding window KV cache of a causal audio encoder, see clip_enc_state_init()
+struct clip_enc_state {
+    int32_t n_ctx  = 0; // ring slots: attention window + frames per call
+    int32_t n_past = 0; // absolute position of the next frame
+
+    std::vector<int32_t> slot_pos;  // absolute position held by each slot, -1 if empty
+    std::vector<float>   stem_tail; // last conv stem output frame, empty on a cold start
+
+    ggml_context_ptr        ctx_data;
+    ggml_backend_buffer_ptr buf;
+    std::vector<ggml_tensor *> k; // per layer [n_embd_kv, n_ctx]
+    std::vector<ggml_tensor *> v;
+
+    // lfm3a: same order as list_lfm3a_state_slots(), F32 [ne0, ne1], updated in place
+    std::vector<ggml_tensor *> slots;
+
+    // nemotron transcribe: the window's normalized log-mel, cache and FIFO rows in; its speaker rows and predictions out
+    std::vector<float> mel_norm;
+    std::vector<float> spk_prev;
+    std::vector<float> spk_chunk, spk_preds;
+};
+
+// per-sequence state of audio generation, see clip_gen_state_init()
+struct clip_gen_state {
+    std::mt19937 rng;
+
+    ggml_context_ptr        ctx_data;
+    ggml_backend_buffer_ptr buf;
+    std::vector<ggml_tensor *> slots; // same order as list_gen_state_slots(), F32 [ne0, ne1]
+};
 
 // forward declaration
 // TODO: improve this later
@@ -475,9 +556,11 @@ enum projector_type {
     PROJECTOR_TYPE_GLMA,
     PROJECTOR_TYPE_QWEN25O, // will be replaced by QWEN2A or QWEN25VL depending on clip_ctx
     PROJECTOR_TYPE_VOXTRAL,
+    PROJECTOR_TYPE_VOXTRAL_RT,
     PROJECTOR_TYPE_MERALION,
     PROJECTOR_TYPE_MUSIC_FLAMINGO,
     PROJECTOR_TYPE_LFM2,
+    PROJECTOR_TYPE_LFM3VL,
     PROJECTOR_TYPE_D1OMNI_V,
     PROJECTOR_TYPE_KIMIVL,
     PROJECTOR_TYPE_PADDLEOCR,
@@ -490,20 +573,25 @@ enum projector_type {
     PROJECTOR_TYPE_DEEPSEEKOCR,
     PROJECTOR_TYPE_DEEPSEEKOCR2,
     PROJECTOR_TYPE_DEEPSEEK4V,
+    PROJECTOR_TYPE_DEEPSEEK41V,
     PROJECTOR_TYPE_LFM2A,
     PROJECTOR_TYPE_D1OMNI_A,
+    PROJECTOR_TYPE_LFM3A,
     PROJECTOR_TYPE_GLM4V,
     PROJECTOR_TYPE_GLM5V,
     PROJECTOR_TYPE_YOUTUVL,
     PROJECTOR_TYPE_YASA2,
     PROJECTOR_TYPE_KIMIK25,
     PROJECTOR_TYPE_NEMOTRON_V2_VL,
+    PROJECTOR_TYPE_NEMOTRON_OMNI,
     PROJECTOR_TYPE_HUNYUANVL,
     PROJECTOR_TYPE_PARAKEET,
     PROJECTOR_TYPE_EXAONE4_5,
     PROJECTOR_TYPE_MINICPMV4_6,
     PROJECTOR_TYPE_MINICPMV4_7,
+    PROJECTOR_TYPE_MINICPM_OCR_1_0,
     PROJECTOR_TYPE_GRANITE_SPEECH,
+    PROJECTOR_TYPE_NEMOTRON_TRANSCRIBE,
     PROJECTOR_TYPE_MIMOVL,
     PROJECTOR_TYPE_MINIMAX_M3,
     PROJECTOR_TYPE_GRANITE4_VISION,
@@ -512,8 +600,15 @@ enum projector_type {
     PROJECTOR_TYPE_QWEN3TTS_GEN,
     PROJECTOR_TYPE_POCKETTTS_SPKENC,
     PROJECTOR_TYPE_POCKETTTS_GEN,
+    PROJECTOR_TYPE_SOPRANO,
+    PROJECTOR_TYPE_LFM3A_GEN,
+    PROJECTOR_TYPE_DRAMA3_GEN,
     PROJECTOR_TYPE_MUSE_GLIMMER,
+    PROJECTOR_TYPE_SENSENOVA_U1,
     PROJECTOR_TYPE_COHERE2V,
+    PROJECTOR_TYPE_MUSE_SPARK_AUDIO,
+    PROJECTOR_TYPE_CHATTERBOX,
+    PROJECTOR_TYPE_CHATTERBOX_SPKENC,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -546,9 +641,11 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_GLMA,              "glma"},
     { PROJECTOR_TYPE_QWEN25O,           "qwen2.5o"},
     { PROJECTOR_TYPE_VOXTRAL,           "voxtral"},
+    { PROJECTOR_TYPE_VOXTRAL_RT,        "voxtral_rt"},
     { PROJECTOR_TYPE_MERALION,          "meralion"},
     { PROJECTOR_TYPE_MUSIC_FLAMINGO,    "musicflamingo"},
     { PROJECTOR_TYPE_LFM2,              "lfm2"},
+    { PROJECTOR_TYPE_LFM3VL,            "lfm3vl"},
     { PROJECTOR_TYPE_D1OMNI_V,          "d1omni_v"},
     { PROJECTOR_TYPE_KIMIVL,            "kimivl"},
     { PROJECTOR_TYPE_PADDLEOCR,         "paddleocr"},
@@ -561,19 +658,24 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_DEEPSEEKOCR,       "deepseekocr"},
     { PROJECTOR_TYPE_DEEPSEEKOCR2,      "deepseekocr2"},
     { PROJECTOR_TYPE_DEEPSEEK4V,        "deepseek4v"},
+    { PROJECTOR_TYPE_DEEPSEEK41V,       "deepseek41v"},
     { PROJECTOR_TYPE_LFM2A,             "lfm2a"},
     { PROJECTOR_TYPE_D1OMNI_A,          "d1omni_a"},
+    { PROJECTOR_TYPE_LFM3A,             "lfm3a"},
     { PROJECTOR_TYPE_GLM4V,             "glm4v"},
     { PROJECTOR_TYPE_GLM5V,             "glm5v"},
     { PROJECTOR_TYPE_YOUTUVL,           "youtuvl"},
     { PROJECTOR_TYPE_YASA2,             "yasa2"},
     { PROJECTOR_TYPE_KIMIK25,           "kimik25"},
     { PROJECTOR_TYPE_NEMOTRON_V2_VL,    "nemotron_v2_vl"},
+    { PROJECTOR_TYPE_NEMOTRON_OMNI,     "nemotron_omni"},
     { PROJECTOR_TYPE_EXAONE4_5,         "exaone4_5"},
     { PROJECTOR_TYPE_HUNYUANVL,         "hunyuanvl"},
     { PROJECTOR_TYPE_MINICPMV4_6,       "minicpmv4_6"},
     { PROJECTOR_TYPE_MINICPMV4_7,       "minicpmv4_7"},
+    { PROJECTOR_TYPE_MINICPM_OCR_1_0,   "minicpm_ocr_1_0"},
     { PROJECTOR_TYPE_GRANITE_SPEECH,    "granite_speech"},
+    { PROJECTOR_TYPE_NEMOTRON_TRANSCRIBE, "nemotron_transcribe"},
     { PROJECTOR_TYPE_MIMOVL,            "mimovl"},
     { PROJECTOR_TYPE_MINIMAX_M3,        "minimax_m3"},
     { PROJECTOR_TYPE_GRANITE4_VISION,   "granite4_vision"},
@@ -583,8 +685,15 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_QWEN3TTS_GEN,      "qwen3tts_gen"},
     { PROJECTOR_TYPE_POCKETTTS_SPKENC,  "pockettts_spkenc"},
     { PROJECTOR_TYPE_POCKETTTS_GEN,     "pockettts_gen"},
+    { PROJECTOR_TYPE_SOPRANO,           "soprano"},
+    { PROJECTOR_TYPE_LFM3A_GEN,         "lfm3a_gen"},
+    { PROJECTOR_TYPE_DRAMA3_GEN,        "drama3_gen"},
     { PROJECTOR_TYPE_MUSE_GLIMMER,      "muse-glimmer"},
+    { PROJECTOR_TYPE_SENSENOVA_U1,      "sensenova_u1"},
     { PROJECTOR_TYPE_COHERE2V,          "cohere2v"},
+    { PROJECTOR_TYPE_MUSE_SPARK_AUDIO,  "muse-spark-audio"},
+    { PROJECTOR_TYPE_CHATTERBOX,        "chatterbox"},
+    { PROJECTOR_TYPE_CHATTERBOX_SPKENC, "chatterbox_spkenc"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {
@@ -829,6 +938,11 @@ static inline void clip_anyres_unpad(int cur_w, int cur_h, int orig_w, int orig_
     }
 }
 
+// deepseek41v: [START] ([IMAGE]*n_llm_w [NEWLINE])*n_llm_h [END], ref: num_image_tokens() in image_processor.py
+static inline int dsv41_n_block_tokens(int n_llm_w, int n_llm_h) {
+    return n_llm_h * (n_llm_w + 1) + 2;
+}
+
 // deepseek4v: layout of the LLM token block built from the aligner grid
 struct dsv4_block_layout {
     int rows;     // grid rows, padded to an even count
@@ -904,11 +1018,13 @@ static void clip_log_internal(enum ggml_log_level level, const char * format, ..
 struct clip_image_f32_batch {
     std::vector<clip_image_f32> entries;
     bool is_audio = false;
+    bool is_video = false;
 
     clip_image_f32_batch clone() const {
         clip_image_f32_batch new_batch{
             /* entries  */ {},
             /* is_audio */ is_audio,
+            /* is_video */ is_video,
         };
         new_batch.entries.reserve(entries.size());
         for (const auto & entry : entries) {

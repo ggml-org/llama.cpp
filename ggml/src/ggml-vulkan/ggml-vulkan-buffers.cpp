@@ -1,6 +1,5 @@
 #include "ggml-vulkan-common.h"
 
-#include <atomic>
 #include <cstdint>
 #include <cstdlib>
 #include <mutex>
@@ -10,7 +9,11 @@ static void * portable_aligned_malloc(size_t align, size_t size) {
 #ifdef _WIN32
     return _aligned_malloc(size, align);
 #else
-    return std::aligned_alloc(align, size);
+    void * ptr = nullptr;
+    if (posix_memalign(&ptr, align, size) != 0) {
+        return nullptr;
+    }
+    return ptr;
 #endif
 }
 
@@ -226,7 +229,7 @@ vk_buffer ggml_vk_create_buffer_device(vk_device& device, size_t size) {
             buf = ggml_vk_create_buffer(device, size, {vk::MemoryPropertyFlagBits::eDeviceLocal | vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
                                                        vk::MemoryPropertyFlagBits::eDeviceLocal,
                                                        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent});
-        } else if (device->disable_host_visible_vidmem) {
+        } else if (!device->rebar || device->disable_host_visible_vidmem) {
             if (device->allow_sysmem_fallback) {
                 buf = ggml_vk_create_buffer(device, size, {vk::MemoryPropertyFlagBits::eDeviceLocal,
                                                            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent});
@@ -363,21 +366,16 @@ void ggml_vk_host_get(const vk_device& device, const void * ptr, vk_buffer& buf,
     vk_host_allocation & entry = vk_instance.host_allocations[index];
 
     if (entry.views[device->idx] == nullptr) {
-        if (!vk_instance.multi_device) {
+        const uint32_t bit = 1u << device->idx;
+        if (!vk_instance.multi_device || !vk_instance.device_host_buffer_import[device->idx] || (vk_instance.host_import_failed & bit)) {
             return;
         }
-        if (!device->external_memory_host) {
-            static std::atomic<uint32_t> warned_mask{0};
-            const uint32_t bit = 1u << device->idx;
-            if (!(warned_mask.fetch_or(bit) & bit)) {
-                GGML_LOG_WARN("ggml_vulkan: %s does not support VK_EXT_external_memory_host; host memory "
-                    "will be staged, not pinned, on this device\n", device->name.c_str());
-            }
-            return;
-        }
+        GGML_ASSERT(device->external_memory_host);
         // const only propagates from the const context; the pointee is mutable
         entry.views[device->idx] = ggml_vk_buffer_from_host_ptr(const_cast<vk_device&>(device), entry.base, entry.size);
         if (entry.views[device->idx] == nullptr) {
+            vk_instance.host_import_failed |= bit;
+            GGML_LOG_WARN("ggml_vulkan: %s: host memory import failed, using staging\n", device->name.c_str());
             return;
         }
     }
@@ -839,6 +837,9 @@ ggml_backend_buffer_i ggml_backend_vk_buffer_interface = {
     /* .cpy_tensor      = */ ggml_backend_vk_buffer_cpy_tensor,
     /* .clear           = */ ggml_backend_vk_buffer_clear,
     /* .reset           = */ NULL,
+    /* .set_tensor_n    = */ NULL,
+    /* .get_tensor_n    = */ NULL,
+    /* .cpy_tensor_n    = */ NULL,
 };
 
 vk_buffer ggml_vk_buffer_from_host_ptr(vk_device & device, void * ptr, size_t size) {
