@@ -31,9 +31,9 @@
 
 	const format = FORMATS.msScreenshot;
 	const g = grid(format);
-	// the quick chat is 30 units wide; the desktop is drawn at 1.3 times Windows' size, its taskbar 48px high; the
+	// the quick chat is 28 units wide; the desktop is drawn at 1.3 times Windows' size, its taskbar 48px high; the
 	// Models card close up at 2.1 times
-	const windowZoom = (g.unit * 30) / 1040;
+	const windowZoom = (g.unit * 28) / 1040;
 	const desk = 1.3;
 	const close = 2.1;
 	// from the area's bottom down to the piece's edge
@@ -122,8 +122,12 @@
 		white-space: pre-line;
 		text-wrap: balance;
 	}
+	/* larger and darker than a post's lede: the Store shows screenshots at about a third of their size */
 	.text :global(.t-lede) {
 		margin: 0;
+		color: color-mix(in srgb, var(--p-ink) 78%, transparent);
+		font-size: calc(var(--u) * 0.9);
+		line-height: 1.3;
 		text-wrap: balance;
 	}
 
@@ -211,16 +215,30 @@
 		position: absolute;
 	}
 
-	/* the opener: the statement big in the middle, the lockup under it */
+	/*
+		the opener: the statement big in the middle, the lede at a size that still reads at the Store's thumbnail (about a
+		third of the piece), and the lockup between the two in size, set apart under them
+	*/
 	.kind-brand {
 		justify-content: center;
-		gap: calc(var(--u) * 2);
+		gap: calc(var(--u) * 2.2);
+		/* centred on the whole piece, not only on the area above the bottom quarter */
+		margin-bottom: calc(-1 * var(--safe-bottom));
+	}
+	.kind-brand .text {
+		gap: calc(var(--u) * 1.1);
 	}
 	.kind-brand .t-display {
+		margin: 0;
+		font-size: calc(var(--u) * 3.6);
 		white-space: pre-line;
 	}
+	.kind-brand .text :global(.t-lede) {
+		max-width: calc(var(--u) * 24);
+		font-size: calc(var(--u) * 1.05);
+	}
 	.lockup {
-		font: 700 calc(var(--u) * 1.4) / 1 var(--sans);
+		font: 700 calc(var(--u) * 1.6) / 1 var(--sans);
 		letter-spacing: -0.01em;
 	}
 
