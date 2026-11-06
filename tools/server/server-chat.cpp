@@ -311,6 +311,16 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
         chatcmpl_body.erase("reasoning");
     }
 
+    // llama.cpp params (e.g. seed, min_p) go under extra_params and are merged into the converted body
+    if (response_body.contains("extra_params")) {
+        chatcmpl_body.erase("extra_params");
+        if (response_body.at("extra_params").is_object()) {
+            for (const auto & [key, value] : response_body.at("extra_params").items()) {
+                chatcmpl_body[key] = value;
+            }
+        }
+    }
+
     return chatcmpl_body;
 }
 
