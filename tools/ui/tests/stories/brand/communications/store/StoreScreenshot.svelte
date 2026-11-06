@@ -237,9 +237,8 @@
 	*/
 	.kind-brand {
 		justify-content: center;
-		gap: calc(var(--u) * 2.2);
-		/* centred on the whole piece, not only on the area above the bottom quarter */
-		margin-bottom: calc(-1 * var(--safe-bottom));
+		/* centred in the top three quarters, so the lockup stays clear of the Store's text */
+		gap: calc(var(--u) * 1.6);
 	}
 	.kind-brand .text {
 		gap: calc(var(--u) * 1.1);

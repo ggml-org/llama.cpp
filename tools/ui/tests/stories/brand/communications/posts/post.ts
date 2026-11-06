@@ -316,3 +316,47 @@ export const microsoftStore: MicrosoftStoreCopy = {
 		lede: 'Free and open source. No account, no subscription.'
 	}
 };
+
+export interface TaglineProposal extends StoreLine {
+	/** a short name for the proposal, A, B and so on */
+	id: string;
+	/** what it leans on */
+	note: string;
+}
+
+/**
+ * The opener's tagline, proposed several ways to compare, or to A/B test as the first screenshot in a Microsoft Store
+ * product page experiment. Most lead with privacy; all keep to the voice: sentence case, full stops, no superlatives
+ */
+export const taglineProposals: TaglineProposal[] = [
+	{
+		headline: 'Your AI.\nOn your PC.',
+		id: 'A',
+		lede: 'Free and open source. No account, no subscription.',
+		note: 'Ownership: the current opener'
+	},
+	{
+		headline: 'Chat with AI,\nprivately.',
+		id: 'B',
+		lede: 'It runs on your PC, so your conversations stay with you.',
+		note: 'Privacy, as what you do'
+	},
+	{
+		headline: 'Run your own AI.\nLocal and private.',
+		id: 'C',
+		lede: 'On your PC, even offline. No account, no subscription.',
+		note: 'Privacy, with ownership'
+	},
+	{
+		headline: 'Local AI.\nFree and private.',
+		id: 'D',
+		lede: 'Run open models from Hugging Face on your PC.',
+		note: 'Privacy, with price'
+	},
+	{
+		headline: 'Private AI,\nright on your PC.',
+		id: 'E',
+		lede: 'Your conversations stay on it. Free, and it works offline.',
+		note: 'Privacy, with place'
+	}
+];
