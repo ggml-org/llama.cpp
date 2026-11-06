@@ -1,12 +1,20 @@
 <!--
-	Communications' direction in words: what a piece should feel like, and how the section builds one, from the
-	foundations up to the applications, as the design system builds the app.
+	Communications' direction in words: what a piece should feel like, the three layers it can speak for, and how
+	the section builds one, from the foundations up to the applications, as the design system builds the app.
 -->
 <script lang="ts">
 	const principles = [
 		[
-			'Local, and proud of it',
-			'Every piece is about running AI on your own machine. Show the machine: the menu bar, a terminal, a file size that fits.'
+			'Local is freedom',
+			'A model on your own machine is yours: the weights, the conversations, the traces. You choose what runs, and no one can swap it or weaken it behind your back.'
+		],
+		[
+			'AI for everyone',
+			'Open models on the hardware people already have. Access to AI belongs to people everywhere, not to a subscription.'
+		],
+		[
+			'People first',
+			'A hopeful, humane future that people build for themselves. Shown, not preached: no pride, no fear, no hype.'
 		],
 		[
 			'The real thing',
@@ -23,11 +31,14 @@
 		[
 			'Built on the unit',
 			'Every size is a multiple of the unit, a 24th of the short side, so one layout works from a story to a billboard.'
-		],
-		[
-			'Two voices',
-			'Llama, the app, on the bright grounds; llama.cpp, the engine, in Llama Mono on the neutrals.'
 		]
+	];
+
+	// how a piece speaks for each of the three layers (what they are is in Introduction › Design philosophy)
+	const stack = [
+		['Model', 'Model cards, sizes, quants; the maker’s name, never their logo'],
+		['Service', 'llama.cpp in Llama Mono, commands and figures, on the neutrals'],
+		['Application', 'Llama in Llama Sans, the real app, on any ground']
 	];
 
 	const layers = [
@@ -47,6 +58,21 @@
 		<ol class="principles">
 			{#each principles as [title, body] (title)}
 				<li><b>{title}</b><span>{body}</span></li>
+			{/each}
+		</ol>
+	</section>
+
+	<section>
+		<h2>Speaking for the three layers</h2>
+
+		<p class="note">
+			Model, service and application, as Design philosophy sets them out. A piece is about one of
+			them, and sounds like it.
+		</p>
+
+		<ol class="stack">
+			{#each stack as [name, voice], i (name)}
+				<li><span class="n">{i + 1}</span><b>{name}</b><span class="voice">{voice}</span></li>
 			{/each}
 		</ol>
 	</section>
@@ -98,6 +124,35 @@
 	.principles span {
 		color: var(--muted-foreground);
 		line-height: 1.5;
+	}
+	.stack {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+		gap: 1rem;
+	}
+	.stack li {
+		display: grid;
+		grid-template-columns: auto 1fr;
+		align-content: start;
+		gap: 0.4rem 0.75rem;
+		padding: 1rem 1.25rem;
+		border: 1px solid var(--border);
+		border-radius: 0.75rem;
+	}
+	.stack b {
+		font-size: 1.25rem;
+		font-weight: 600;
+	}
+	.note {
+		margin: 0 0 1rem;
+		color: var(--muted-foreground);
+	}
+	.stack .voice {
+		grid-column: 1 / -1;
+		line-height: 1.5;
+	}
+	.voice {
+		color: var(--muted-foreground);
 	}
 	.layers li {
 		display: grid;
