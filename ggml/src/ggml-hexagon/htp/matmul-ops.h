@@ -40,6 +40,8 @@ extern "C" {
 #define HTP_MM_DMA_ACT_ROWS_PER_STEP 2
 #define HTP_MM_DMA_ACT_MULTIPLIER    (2 * HTP_MM_DMA_ACT_ROWS_PER_STEP)
 
+#define HTP_MM_OUT_SCALE_ONE         0x3c00  // 1.0 in FP16
+
 enum htp_mm_kernel_type {
     HTP_MM_KERNEL_UNSUPPORTED = 0,
 
@@ -85,6 +87,8 @@ struct htp_mm_kernel_params {
     struct fastdiv_values div_ne12;
     struct fastdiv_values div_n_act_hvx;
     struct fastdiv_values div_ne00_padded;
+
+    uint16_t out_scale;          // HMX output scale (FP16 bits), applied before the FP16 output tile
 };
 
 #if defined(__cplusplus)

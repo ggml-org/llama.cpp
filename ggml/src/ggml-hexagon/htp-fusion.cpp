@@ -3,7 +3,11 @@
 #include "ggml-impl.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
+
+// relative error bound of FP32 -> FP16 round-to-nearest for normal values
+static constexpr float HTP_FP16_ROUND_REL_ERR = 0x1p-11f;
 
 static inline bool htp_same_tensor_data(const ggml_tensor * a, const ggml_tensor * b) {
     return a && b && (a == b || a->data == b->data);
@@ -211,6 +215,7 @@ static bool fuse_rms_norm_scale(const ggml_hexagon_session * sess, htp_opnode & 
 
 static bool fuse_mul_mat_add(const ggml_hexagon_session * sess, htp_opnode & prev, const htp_opnode & cur) {
     if (prev.opcode != HTP_OP_MUL_MAT) return false;
+    if (prev.kparams<htp_mm_kernel_params>()->out_scale != HTP_MM_OUT_SCALE_ONE) return false;
 
     const ggml_tensor * src2 = nullptr;
     if (!htp_match_consumer(prev, cur, /*commutative=*/ true, &src2)) return false;
@@ -257,6 +262,39 @@ static bool fuse_mul_mat_add(const ggml_hexagon_session * sess, htp_opnode & pre
     return true;
 }
 
+// mul_mat * per-tensor weight scale: the HMX output scale applies it before the FP16 output tile
+static bool fuse_mul_mat_scale(const ggml_hexagon_session * sess, htp_opnode & prev, const htp_opnode & cur) {
+    if (prev.opcode != HTP_OP_MUL_MAT) return false;
+
+    auto * kparams = prev.kparams<htp_mm_kernel_params>();
+    if (kparams->n_hmx == 0 || kparams->out_scale != HTP_MM_OUT_SCALE_ONE) return false;
+
+    const ggml_tensor * scale_t = nullptr;
+    if (!htp_match_consumer(prev, cur, /*commutative=*/ true, &scale_t)) return false;
+    if (scale_t->type != GGML_TYPE_F32 || ggml_nelements(scale_t) != 1 || scale_t->op != GGML_OP_NONE ||
+        !scale_t->buffer || ggml_backend_buffer_get_usage(scale_t->buffer) != GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
+        return false;
+    }
+
+    const ggml_tensor * src0 = prev.node->src[0];
+    const ggml_tensor * src1 = prev.node->src[1];
+    const ggml_tensor * dst  = cur.node;
+    if (dst->type != GGML_TYPE_F32 || !ggml_are_same_shape(prev.node, dst) || !ggml_are_same_stride(prev.node, dst)) return false;
+    if (htp_tensors_overlap(dst, src0) || htp_tensors_overlap(dst, src1)) return false;
+
+    float scale = 0.0f;
+    ggml_backend_tensor_get(scale_t, &scale, 0, sizeof(scale));
+    const ggml_fp16_t scale_f16 = GGML_FP32_TO_FP16(scale);
+    if (!(std::fabs(GGML_FP16_TO_FP32(scale_f16) - scale) <= HTP_FP16_ROUND_REL_ERR * std::fabs(scale))) return false;
+
+    kparams->out_scale = scale_f16;
+    prev.inputs  = { src0, src1 };
+    prev.outputs = { dst };
+    htp_opnode_collapse(sess, prev);
+    prev.fused.push_back(cur.node);
+    return true;
+}
+
 static bool fuse_mul_mat_nx(const ggml_hexagon_session * sess, htp_opnode & prev, const htp_opnode & cur) {
     if (prev.opcode != HTP_OP_MUL_MAT && prev.opcode != HTP_OP_MUL_MAT_NX) return false;
 
@@ -271,6 +309,8 @@ static bool fuse_mul_mat_nx(const ggml_hexagon_session * sess, htp_opnode & prev
 
     auto * orig_kparams = prev.kparams<htp_mm_kernel_params>();
     const auto * cur_kparams = cur.kparams<htp_mm_kernel_params>();
+
+    if (orig_kparams->out_scale != HTP_MM_OUT_SCALE_ONE) return false;
 
     if (x_in != x_orig || w_in->type != w0->type || w_in->ne[0] != w0->ne[0] ||
         w0->ne[2] != 1 || w0->ne[3] != 1 || w_in->ne[2] != 1 || w_in->ne[3] != 1 ||
@@ -647,7 +687,8 @@ bool htp_fusion_try_fuse(const struct ggml_hexagon_session * sess, struct htp_op
                    (htp_fusion_enabled(HTP_FUSE_RMS_NORM_MUL_ADD) && fuse_rms_norm_mul_add(sess, prev, cur)) ||
                    (htp_fusion_enabled(HTP_FUSE_BINARY_NX)     && fuse_binary_nx(sess, prev, cur));
         case HTP_OP_MUL:
-            return (htp_fusion_enabled(HTP_FUSE_RMS_NORM_MUL)   && fuse_rms_norm_mul(sess, prev, cur))   ||
+            return (htp_fusion_enabled(HTP_FUSE_MUL_MAT_SCALE)  && fuse_mul_mat_scale(sess, prev, cur))  ||
+                   (htp_fusion_enabled(HTP_FUSE_RMS_NORM_MUL)   && fuse_rms_norm_mul(sess, prev, cur))   ||
                    (htp_fusion_enabled(HTP_FUSE_UNARY_MUL_GLU)  && fuse_unary_mul_glu(sess, prev, cur))  ||
                    (htp_fusion_enabled(HTP_FUSE_MUL_MUL_SCALAR) && fuse_mul_mul_scalar(sess, prev, cur)) ||
                    (htp_fusion_enabled(HTP_FUSE_BINARY_NX)      && fuse_binary_nx(sess, prev, cur));

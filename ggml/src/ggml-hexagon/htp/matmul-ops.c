@@ -61,6 +61,7 @@ typedef struct {
     int           r3;
     struct fastdiv_values div_r2;
     struct fastdiv_values div_r3;
+    uint16_t      out_scale;
 } hmx_mm_batched_params_t;
 
 static bool htp_matmul_has_extended_weight(const struct htp_ops_context * octx, uint32_t n_weights) {
@@ -2663,7 +2664,8 @@ static int hmx_mm_2d_f32(struct htp_context *ctx,
                                   const struct fastdiv_values * k_div,
                                   int tile_size,
                                   int aligned_tile_size,
-                                  int vtcm_size) {
+                                  int vtcm_size,
+                                  uint16_t out_scale) {
     struct htp_thread_trace * tr = &ctx->trace[0];
     htp_trace_event_start(tr, HTP_TRACE_EVT_INIT, 0);
 
@@ -2719,7 +2721,7 @@ static int hmx_mm_2d_f32(struct htp_context *ctx,
     void    *vtcm_scratch2   = VTCM_LAYOUT_PTR_OPTIONAL(void, base, L.off_dst[1], pipeline);
     __fp16  *vtcm_scales     = VTCM_LAYOUT_PTR(__fp16, base, L.off_scales);
 
-    hmx_init_column_scales(vtcm_scales, Q6_V_vsplat_R(0x3c00));  // scale: 1.0, bias: 0.0 in FP16
+    hmx_init_column_scales(vtcm_scales, Q6_V_vsplat_R(out_scale));  // scale: out_scale, bias: 0.0 in FP16
     if (L.lut_bytes > 0) {
         iq2xxs_lut_copy(base + L.off_lut);
     }
@@ -3261,7 +3263,8 @@ static int hmx_mm_batched_simple(struct htp_context *ctx,
                                 params->act_stride, params->act_elem_size, params->weight_stride,
                                 params->weight_type, params->k, params->dst_stride, params->bias_stride, params->dst_cols,
                                 m_chunk, n_chunk, pipeline, n_hvx, act_hvx,
-                                act_hvx_div, k_div, params->tile_size, params->aligned_tile_size, vtcm_size);
+                                act_hvx_div, k_div, params->tile_size, params->aligned_tile_size, vtcm_size,
+                                params->out_scale);
         }
     }
     return ret;
@@ -3323,7 +3326,7 @@ static int hmx_mm_batched(struct htp_context *ctx, const hmx_mm_batched_params_t
         dma_queue_pop(params->weight_dma);
     }
 
-    hmx_init_column_scales(vtcm_scales, Q6_V_vsplat_R(0x3c00));  // scale: 1.0, bias: 0.0 in FP16
+    hmx_init_column_scales(vtcm_scales, Q6_V_vsplat_R(params->out_scale));  // scale: out_scale, bias: 0.0 in FP16
 
     FARF(HIGH, "%s: grouped path m=%d k=%d n=%d group=%d streams=%d mc=%zu nc=%zu vtcm=%zu/%zu",
             __func__, params->m, params->k, params->n, group_size, params->ne13,
@@ -3760,6 +3763,7 @@ static int hmx_mm_op_matmul(struct htp_ops_context * octx, const struct htp_mm_k
             .r3                = (ne03 > 0) ? (ne13 / ne03) : 1,
             .div_r2            = kparams->div_r2,
             .div_r3            = kparams->div_r3,
+            .out_scale         = kparams->out_scale,
         };
         ret = hmx_mm_batched(octx->ctx, &batch_params,
                              kparams->m_chunk, kparams->n_chunk,
@@ -3778,7 +3782,7 @@ static int hmx_mm_op_matmul(struct htp_ops_context * octx, const struct htp_mm_k
             kparams->n_act_hvx,
             &kparams->div_n_act_hvx,
             &kparams->div_ne00_padded,
-            kparams->tile_size, kparams->aligned_tile_size, kparams->vtcm_size
+            kparams->tile_size, kparams->aligned_tile_size, kparams->vtcm_size, kparams->out_scale
         );
     }
 
