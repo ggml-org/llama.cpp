@@ -1387,6 +1387,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_gemm_noshuffle_q8_0_q8_1_dp4a_ila_a8_bin = nullptr;
     cl_kernel kernel_gemv_noshuffle_q8_0_f32;
     cl_kernel kernel_gemv_noshuffle_q8_0_f32_splitk;  // split-K across WGs (small-M decode)
+    cl_kernel kernel_gemv_noshuffle_q8_0_f32_mc;      // multi-column (N 2..4) verify GEMV
     cl_kernel kernel_gemm_noshuffle_q1_0_f32;
     cl_kernel kernel_gemv_noshuffle_q1_0_f32;
     cl_kernel kernel_gemv_noshuffle_q1_0_f32_nsg1 = nullptr;
@@ -6334,6 +6335,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
 
         CL_CHECK((backend_ctx->kernel_gemv_noshuffle_q8_0_f32 = clCreateKernel(prog, "kernel_gemv_noshuffle_q8_0_f32", &err), err));
         CL_CHECK((backend_ctx->kernel_gemv_noshuffle_q8_0_f32_splitk = clCreateKernel(prog, "kernel_gemv_noshuffle_q8_0_f32_splitk", &err), err));
+        CL_CHECK((backend_ctx->kernel_gemv_noshuffle_q8_0_f32_mc = clCreateKernel(prog, "kernel_gemv_noshuffle_q8_0_f32_mc", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -26194,7 +26196,13 @@ static void ggml_cl_mul_mat_q8_0_f32_adreno(ggml_backend_t backend, const ggml_t
     int N = ne1;
     int K = ne00;
 
-    if (ne1 == 1) {
+    // Multi-column verify GEMV for ne1 2..4, reuses the ne1 == 1 image setup.
+    // Default on for X2E, GGML_OPENCL_Q8_0_MC=0/1 forces it.
+    static const char * q8_mc_env = getenv("GGML_OPENCL_Q8_0_MC");
+    const bool q8_mc = q8_mc_env ? atoi(q8_mc_env) != 0 : backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E;
+    const bool use_q8_mc = q8_mc && ne1 >= 2 && ne1 <= 4;
+
+    if (ne1 == 1 || use_q8_mc) {
         cl_mem q_img = nullptr;
         cl_mem b_sub_buf = nullptr;
         cl_mem b_img = nullptr;
@@ -26219,6 +26227,30 @@ static void ggml_cl_mul_mat_q8_0_f32_adreno(ggml_backend_t backend, const ggml_t
         img_desc.image_width = K * N / 4;
         img_desc.buffer = b_sub_buf;
         CL_CHECK((b_img = clCreateImage(context, CL_MEM_READ_ONLY, &img_fmt, &img_desc, NULL, &err), err));
+
+        if (use_q8_mc) {
+            kernel = backend_ctx->kernel_gemv_noshuffle_q8_0_f32_mc;
+
+            CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &q_img));
+            CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem),   &extra0_q8_0->d));
+            CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &b_img));
+            CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem),   &extrad->data_device));
+            CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_ulong), &offsetd));
+            CL_CHECK(clSetKernelArg(kernel, 5, sizeof(int),      &ne00));
+            CL_CHECK(clSetKernelArg(kernel, 6, sizeof(int),      &ne01));
+            CL_CHECK(clSetKernelArg(kernel, 7, sizeof(int),      &ne1));
+
+            size_t wavesize = backend_ctx->adreno_wave_size;
+            size_t local_work_size[]  = { wavesize, 4, 1 };
+            size_t global_work_size[] = { CEIL_DIV(M, wavesize)*wavesize, 4, 1 };
+
+            backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+
+            CL_CHECK(clReleaseMemObject(q_img));
+            CL_CHECK(clReleaseMemObject(b_img));
+            CL_CHECK(clReleaseMemObject(b_sub_buf));
+            return;
+        }
 
         // Split-K for small-M decode GEMVs. The base kernel puts one output row
         // per lane and splits K only inside one workgroup, so M is the sole source
