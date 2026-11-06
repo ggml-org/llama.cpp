@@ -98,7 +98,8 @@ static bool test_backend(const fs::path & missing, const fs::path & system_dll, 
     log = {};
     // The explicit loader uses native narrow paths on Windows.
     CHECK(ggml_backend_load(missing.string().c_str()) == nullptr);
-    CHECK(log.text.find(missing.u8string()) != std::string::npos);
+    const auto missing_u8 = missing.u8string();
+    CHECK(log.text.find(std::string(reinterpret_cast<const char *>(missing_u8.data()), missing_u8.size())) != std::string::npos);
     CHECK(has_error(log.text, load_code));
 
     log = {};
