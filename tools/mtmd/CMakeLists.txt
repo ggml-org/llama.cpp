@@ -12,21 +12,25 @@ endif()
 
 find_package(Threads REQUIRED)
 
+set(MTMD_CORE_SOURCES
+    mtmd.cpp
+    mtmd-audio.cpp
+    mtmd-image.cpp
+    mtmd.h
+    mtmd-internal.h
+    mtmd-helper.cpp
+    mtmd-helper-gen.cpp
+    mtmd-helper-common.h
+    mtmd-helper.h
+    clip.cpp
+    clip.h
+    clip-impl.h
+    clip-model.h
+    clip-graph.h
+)
+
 add_library(mtmd
-            mtmd.cpp
-            mtmd-audio.cpp
-            mtmd-image.cpp
-            mtmd.h
-            mtmd-internal.h
-            mtmd-helper.cpp
-            mtmd-helper-gen.cpp
-            mtmd-helper-common.h
-            mtmd-helper.h
-            clip.cpp
-            clip.h
-            clip-impl.h
-            clip-model.h
-            clip-graph.h
+            ${MTMD_CORE_SOURCES}
             models/models.h
             models/chatterbox-gen.cpp
             models/chatterbox-spkenc.cpp
@@ -91,12 +95,21 @@ set_target_properties(mtmd PROPERTIES
     VERSION ${LLAMA_VERSION_BASE}
     SOVERSION ${LLAMA_VERSION_MAJOR}
     MACHO_CURRENT_VERSION 0 # keep macOS linker from seeing oversized version number
+    UNITY_BUILD ON
+    UNITY_BUILD_BATCH_SIZE 16
 )
+
+# exclude non-model sources from unity build
+set_source_files_properties(${MTMD_CORE_SOURCES}
+    PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 
 target_link_libraries     (mtmd PUBLIC ggml llama)
 target_link_libraries     (mtmd PRIVATE Threads::Threads vendor::hash vendor::miniaudio vendor::stb vendor::sheredom)
 target_include_directories(mtmd PUBLIC  .)
 target_compile_features   (mtmd PRIVATE cxx_std_17)
+
+# for M_PI, set here because a unity batch can include <cmath> before the source that needs it
+target_compile_definitions(mtmd PRIVATE _USE_MATH_DEFINES)
 
 if (MTMD_VIDEO)
     target_compile_definitions(mtmd PRIVATE MTMD_VIDEO)

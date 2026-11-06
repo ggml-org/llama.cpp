@@ -628,7 +628,7 @@ static bool htp_matmul_is_hmx_eligible(
         return false;
     }
 
-    if (!htp_is_hmx_weight_type((ggml_type) wtype)) {
+    if (!htp_is_tiled_weight_type((ggml_type) wtype)) {
         return false;
     }
 
@@ -636,7 +636,7 @@ static bool htp_matmul_is_hmx_eligible(
         return false;
     }
 
-    const bool is_tiled = htp_tensor_is_tiled(src0);
+    const bool is_tiled = ggml_hexagon_tensor_will_tile(src0);
     if (ggml_is_quantized((ggml_type) wtype) && !is_tiled) {
         return false;
     }
@@ -674,7 +674,7 @@ static bool htp_kparams_solve_hmx_mm(
     size_t vtcm_budget,
     struct htp_mm_kernel_params * kparams
 ) {
-    const bool     is_tiled          = htp_tensor_is_tiled(src0);
+    const bool     is_tiled          = ggml_hexagon_tensor_will_tile(src0);
     const int      aligned_tile_size = is_tiled ? htp_tensor_get_tile_padded_size(wtype) : 0;
     const int      n_threads         = (int) htp_session_n_threads(sess);
     const uint32_t mdev_count        = htp_session_mdev_count(sess);
@@ -893,7 +893,7 @@ static bool htp_kparams_solve_matmul_impl(
     const int ne12 = src1->ne[2];
     const int ne13 = src1->ne[3];
 
-    const bool is_tiled    = htp_tensor_is_tiled(src0);
+    const bool is_tiled    = ggml_hexagon_tensor_will_tile(src0);
     const int  wtype       = (is_tiled && (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_BF16)) ? GGML_TYPE_F16 : src0->type;
     const int  ne00_padded = is_tiled ? hex_round_up(ne00, htp_tensor_get_tile_k(wtype)) : ne00;
     const int  ne11_padded = hex_round_up(ne11, 32);
@@ -1109,7 +1109,7 @@ bool htp_kparams_solve_mmnx(
     const int ne12 = act->ne[2];
     const int ne13 = act->ne[3];
 
-    const bool is_tiled    = htp_tensor_is_tiled(src0);
+    const bool is_tiled    = ggml_hexagon_tensor_will_tile(src0);
     const int  wtype       = (is_tiled && (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_BF16)) ? GGML_TYPE_F16 : src0->type;
     const int  ne00_padded = is_tiled ? hex_round_up(ne00, 32) : ne00;
     const int  ne11_padded = hex_round_up(ne11, 32);
@@ -1683,7 +1683,7 @@ bool htp_kparams_solve_repeat_get_rows(
     const uint32_t ne12 = src1->ne[2];
     const uint32_t nr   = ne10 * ne11 * ne12;
 
-    const bool tiled = htp_tensor_is_tiled(src0);
+    const bool tiled = ggml_hexagon_tensor_is_tiled(src0);
     const int  wtype = (tiled && (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_BF16)) ? GGML_TYPE_F16 : src0->type;
 
     if (tiled) {
@@ -1873,6 +1873,10 @@ static bool htp_kparams_solve_rope(
     const struct ggml_tensor * src1 = op->src[1];
     const struct ggml_tensor * src2 = op->src[2];
     const struct ggml_tensor * dst  = op;
+
+    if (!ggml_rope_get_truncate(op)) {
+        return false;
+    }
 
     if (!ggml_are_same_shape(src0, dst)) {
         return false;
