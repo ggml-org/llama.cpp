@@ -114,7 +114,7 @@ Most of the interface is grey. Each group of colours has one job:
 
 Backgrounds are neutral too. Only the Llama lockup goes on colour: the day sky and the night sky.
 
-Beyond the greys, communications have four colours, each from the world llama.cpp runs in. **Sand** is the warm ground for posters and boards, and a nod to silicon, made from sand, that every chip is built on. **Day sky** and **night sky** are llama.app's light blue and its navy, the grounds Llama goes on. **Cinder** is the one warm accent.
+Beyond the greys, communications have four colours, each from the world llama.cpp runs in. **Sand** is the warm ground for posters and boards, and a nod to silicon, made from sand, that every chip is built on. **Day sky** and **night sky** are llama.app's hero by day and after dark, the grounds Llama goes on. **Cinder** is the one warm accent.
 
 <Figure n={10} caption="Sand, the day sky, the night sky and cinder, as the real tokens.">
 	<ArtColours />
@@ -124,17 +124,17 @@ Beyond the greys, communications have four colours, each from the world llama.cp
 
 **Llama** is the product: capital L, Llama Sans, allowed on colour. **llama.cpp** is the engine: lowercase, Llama Mono Bold, .cpp in cinder, on neutral grounds only. Both use the same icon glyph, which ties the two lockups together.
 
-<Figure n={11} caption="Both lockups typed: U+E002 and the name, in each font. Llama on llama.app's blue; llama.cpp on light and dark.">
+<Figure n={11} caption="Both lockups typed: U+E002 and the name, in each font. Llama on the day sky; llama.cpp on light and dark.">
 	<Names />
 </Figure>
 
 ## Communications
 
-Posts, link previews, posters and the site follow the app's rules: neutral grounds, Llama Sans and Llama Mono, typed lockups, and colour only from sand, the two skies and cinder. Llama posts may use llama.app's blue and navy; llama.cpp posts stay on light and dark.
+Posts, link previews, posters and the site follow the app's rules: neutral grounds, Llama Sans and Llama Mono, typed lockups, and colour only from sand, the two skies and cinder. Llama posts may use the day sky and the night sky; llama.cpp posts stay on light and dark.
 
 Each post is a Svelte template with its copy kept as data, and the key visuals use real Llama Chat screens, so a new post is new copy, not a new design.
 
-<Figure n={12} caption="The real templates from Communications › Applications: a model drop post on light, llama.app's link preview on blue, and llama.cpp's GitHub preview on dark.">
+<Figure n={12} caption="The real templates from Communications › Applications: a model drop post on light, llama.app's link preview on the day sky, and llama.cpp's GitHub preview on dark.">
 	<Posts />
 </Figure>
 

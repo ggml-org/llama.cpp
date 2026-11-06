@@ -166,7 +166,7 @@
 		gap: 0;
 		padding: clamp(24px, 4vw, 48px);
 		border-radius: 14px;
-		background: var(--llama-hero); /* llama.app's hero: light blue, navy in dark mode */
+		background: var(--llama-hero); /* llama.app's hero: the day sky, the night sky in dark mode */
 		color: var(--llama-hero-ink);
 		overflow: hidden;
 	}

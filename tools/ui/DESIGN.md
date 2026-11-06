@@ -785,7 +785,7 @@ logotype, the mark on a detail in the brand pages and the warm pop in artwork. I
 Backgrounds stay neutral as a rule, in the UI and in communications alike: greys and sand
 behind, colour only where it serves a purpose, functional (status, a selection, focus) or
 creative (a shape, a numeral, an illustration). Artwork takes its colours from the greys, sand and
-the `art-*` primitives: the day sky and the night sky (llama.app's light blue and its navy) and
+the `art-*` primitives: the day sky and the night sky (llama.app's light and dark hero grounds) and
 cinder, the accent orange; never from the status colours, and never red.
 
 Light mode has two surface themes, which share everything else (the palette, buttons, fields,

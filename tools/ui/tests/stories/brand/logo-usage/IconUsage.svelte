@@ -213,10 +213,10 @@
 		return { side, transform: `translate(${x} ${y}) scale(${side / SIZE})`, x, y };
 	}
 
-	// llama.app's hero and its navy night version, as on the brand's boards
-	const NAVY =
+	// llama.app's hero, the day sky and the night sky, as on the brand's boards
+	const NIGHT_SKY =
 		'radial-gradient(ellipse at 15% 10%, #22385c 0%, transparent 55%), radial-gradient(ellipse at 90% 95%, #1e3752 0%, transparent 50%), linear-gradient(160deg, #152238 0%, #172a42 55%, #1a3049 100%)';
-	const HERO =
+	const DAY_SKY =
 		'radial-gradient(ellipse at 15% 10%, #dcecfb 0%, transparent 55%), radial-gradient(ellipse at 90% 95%, #e8f2fc 0%, transparent 50%), linear-gradient(160deg, #c4ddf6 0%, #d0e4f7 55%, #dfecf9 100%)';
 
 	const badges = [
@@ -318,8 +318,7 @@
 		lockup glyph, U+E002: the capital icon with the gap built in, so the lockup is one character and
 		the name. Llama Mono's is drawn a little larger: with the icons matched, llama.cpp's wider,
 		heavier letters set at 90% of Llama's. The llama.cpp lockup always sits on a neutral ground
-		(white, the greys, ink); only the Llama lockup goes on colour, the hero's light blue and its
-		navy.
+		(white, the greys, ink); only the Llama lockup goes on colour, the day sky and the night sky.
 	</p>
 
 	<div class="contexts">
@@ -355,8 +354,8 @@
 			<span class="links">MIT licence · ggml-org</span>
 		</div>
 
-		<!-- the hero, on llama.app's light blue and its navy: the Llama lockup (llama.cpp's stays on neutral grounds) -->
-		{#each [{ field: HERO, ink: '#111111', name: 'light' }, { field: NAVY, ink: '#fafafa', name: 'navy' }] as b (b.name)}
+		<!-- the hero, on the day sky and the night sky: the Llama lockup (llama.cpp's stays on neutral grounds) -->
+		{#each [{ field: DAY_SKY, ink: '#111111', name: 'day sky' }, { field: NIGHT_SKY, ink: '#fafafa', name: 'night sky' }] as b (b.name)}
 			<div style:background={b.field} style:color={b.ink} class="ctx hero">
 				<span style:font-size="clamp(40px, 7vw, 64px)" class="mark">Llama</span>
 			</div>

@@ -5,8 +5,13 @@
 <script lang="ts">
 	const grounds = [
 		{ dark: false, name: 'Sand', note: 'Silicon, the base of every chip', token: '--sand-100' },
-		{ dark: false, name: 'Day sky', note: 'llama.app’s light blue', token: '--art-day-sky' },
-		{ dark: true, name: 'Night sky', note: 'Its navy, after dark', token: '--art-night-sky' },
+		{ dark: false, name: 'Day sky', note: 'llama.app’s hero, by day', token: '--art-day-sky' },
+		{
+			dark: true,
+			name: 'Night sky',
+			note: 'llama.app’s hero, after dark',
+			token: '--art-night-sky'
+		},
 		{ dark: true, name: 'Cinder', note: 'The one accent, #ee6c1e', token: '--art-cinder' }
 	];
 </script>

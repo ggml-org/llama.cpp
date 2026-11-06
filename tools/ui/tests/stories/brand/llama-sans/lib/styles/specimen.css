@@ -20,7 +20,7 @@
 	); /* the brand's one accent orange, as in the .cpp of the llama.cpp logotype */
 	--sand: #efe9df;
 	--sand-ink: #2b2620;
-	--slate: #3a5878; /* a muted navy, between llama.app's hero blues */
+	--slate: #3a5878; /* a muted blue, between the day sky and the night sky */
 
 	/* the specimen's roles, mapped onto the design system's semantic tokens */
 	--paper: var(--ds-neutral-0);
@@ -41,7 +41,7 @@
 		linear-gradient(160deg, #c4ddf6 0%, #d0e4f7 55%, #dfecf9 100%);
 	--llama-hero-ink: #0f1f33;
 	--llama-hero-rule: rgb(15 31 51 / 0.25);
-	--llama-navy:
+	--llama-night-sky:
 		radial-gradient(ellipse at 15% 10%, #22385c 0%, transparent 55%),
 		radial-gradient(ellipse at 90% 95%, #1e3752 0%, transparent 50%),
 		linear-gradient(160deg, #152238 0%, #172a42 55%, #1a3049 100%);
@@ -76,7 +76,7 @@
 	--rule: oklch(1 0 0 / 0.12);
 	--guide: oklch(0.72 0.06 250);
 	--guide-soft: oklch(0.72 0.06 250 / 0.3);
-	--llama-hero: var(--llama-navy);
+	--llama-hero: var(--llama-night-sky);
 	--llama-hero-ink: #ffffff;
 	--llama-hero-rule: rgb(255 255 255 / 0.3);
 	color-scheme: dark;
