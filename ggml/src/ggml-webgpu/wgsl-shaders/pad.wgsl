@@ -64,6 +64,18 @@ fn main(@builtin(num_workgroups) num_wg: vec3<u32>,
 
     var value: f32 = 0.0;
 
+#ifdef REFLECT
+    var x: u32;
+    if (i0 < params.lp0) {
+        x = params.lp0 - i0;
+    } else if (i0 < params.lp0 + params.src_ne0) {
+        x = i0 - params.lp0;
+    } else {
+        x = params.src_ne0 - 2 - (i0 - params.lp0 - params.src_ne0);
+    }
+    value = src[params.offset_src + x * params.stride_src0 + i1 * params.stride_src1 +
+                i2 * params.stride_src2 + i3 * params.stride_src3];
+#else
 #ifdef CIRCULAR
     let ci0 = wrap_around(i32(i0) - i32(params.lp0), params.src_ne0);
     let ci1 = wrap_around(i32(i1) - i32(params.lp1), params.src_ne1);
@@ -85,5 +97,6 @@ fn main(@builtin(num_workgroups) num_wg: vec3<u32>,
     }
 #endif
 
+#endif
     dst[params.offset_dst + gid_i] = value;
 }
