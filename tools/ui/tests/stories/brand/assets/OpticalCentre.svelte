@@ -8,6 +8,9 @@
 -->
 <script lang="ts">
 	import { PATHS, SIZE } from '../logo-showcase/lib/logo';
+	import { ChevronLeft, ChevronRight } from '@lucide/svelte';
+	import { Button } from '$lib/components/ui/button';
+	import * as ToggleGroup from '$lib/components/ui/toggle-group';
 
 	interface Props {
 		/** placements to try beside these, each lifted and nudged left by these fractions of the icon's size */
@@ -147,12 +150,55 @@
 		})
 	);
 
+	// the placement on show: one at a time, switched at once, so the icon's shift between them is plain to see
+	let current = $state(0);
+
+	const step = (by: number) => (current = (current + by + panels.length) % panels.length);
+
+	function onkeydown(event: KeyboardEvent) {
+		if (event.key === 'ArrowLeft') step(-1);
+		else if (event.key === 'ArrowRight') step(1);
+		else return;
+
+		event.preventDefault();
+	}
+
 	const round = (n: number) => Math.round(n * 10) / 10;
 </script>
 
-<figure class="m-0 grid min-w-0 gap-16">
-	<!-- each placement in its own section: the avatar light and dark, small as it shows, then measured -->
-	{#each panels as panel (panel.label)}
+<!-- the arrow keys step through the placements while it has focus -->
+<figure
+	aria-label="Icon placements"
+	class="m-0 grid min-w-0 gap-6 rounded-card outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+	{onkeydown}
+	tabindex="0"
+>
+	<div class="flex flex-wrap items-center gap-2">
+		<Button aria-label="Previous placement" onclick={() => step(-1)} size="icon" variant="outline"
+			><ChevronLeft /></Button
+		>
+
+		<ToggleGroup.Root
+			onValueChange={(value) => value && (current = Number(value))}
+			type="single"
+			value={String(current)}
+		>
+			{#each panels as panel, i (panel.label)}
+				<ToggleGroup.Item aria-label={panel.label} title={panel.label} value={String(i)}
+					>{i + 1}</ToggleGroup.Item
+				>
+			{/each}
+		</ToggleGroup.Root>
+
+		<Button aria-label="Next placement" onclick={() => step(1)} size="icon" variant="outline"
+			><ChevronRight /></Button
+		>
+
+		<span class="text-xs text-muted-foreground">← → to step through</span>
+	</div>
+
+	<!-- one placement at a time: the avatar light and dark, small as it shows, then measured -->
+	{#each [panels[current]] as panel (panel.label)}
 		<section class="grid gap-4">
 			<div class="grid gap-1">
 				<h3 class="text-sm font-medium">{panel.label}</h3>
