@@ -2968,9 +2968,7 @@ struct llama_model_kimi_k31 : public llama_model_base {
     void load_arch_tensors(llama_model_loader & ml) override;
 
     struct graph : public llm_build_delta_net_base {
-        graph(const llama_model & model, const llm_graph_params & params);
-
-        const llama_model & model;
+        graph(const llm_graph_params & params);
 
         // Cross-layer residual attention (kimi-k3's `_apply_attn_res`).
         ggml_tensor * resi_stack = nullptr;
