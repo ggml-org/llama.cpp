@@ -13,11 +13,11 @@
 
 # Introduction
 
-<p class="lead">This is where the <strong>Llama brand</strong>, <strong>Llama UI</strong> and <strong>Llama Chat</strong> are designed, built and checked. Everything in it is the real component, font or file, so what you see here is what ships.</p>
+<p class="lead">This is where the <strong>Llama Brand</strong>, <strong>Llama UI</strong> and <strong>Llama Chat</strong> are designed, built and checked. Everything in it is the real component, font or file, so what you see here is what ships.</p>
 
 ## In short
 
-- **What:** the **Llama brand** (the icon, Llama Sans and Llama Mono, the colours), the component library **Llama UI** built on it, the app **Llama Chat** built from that, and the communications made with them.
+- **What:** the **Llama Brand** (the icon, Llama Sans and Llama Mono, the colours), the component library **Llama UI** built on it, the app **Llama Chat** built from that, and the communications made with them.
 - **Who it's for:** people who design or build Llama products, and the agents that work with them.
 - **Why one place:** the brand, the UI and the posts make the same decisions, so they're shown side by side and checked against each other.
 
@@ -42,7 +42,7 @@ The reasons are in **Ideology**, **Product** and **Design**, under **Philosophy*
 
 ## How it fits together
 
-- **llama.brand** holds the **Llama brand**, the one source of the icon, the fonts and the colours: the layer Llama UI is built on.
+- **llama.brand** holds the **Llama Brand**, the one source of the icon, the fonts and the colours: the layer Llama UI is built on.
 - **llama.cpp** runs the models. Its server, llama-server, bundles **Llama Chat**, built from **Llama UI** in `tools/ui`, which is this Storybook's home.
 - **Llama for Mac** and **Llama for Windows** run llama-server and open Llama Chat in their own window.
 - **llama.app**, the website, shows models the way Llama Chat does.

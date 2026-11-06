@@ -1,4 +1,4 @@
-# Llama brand and communications
+# Llama Brand and communications
 
 This is the brand book for **Llama** (the app) and **llama.cpp** (the engine): the rules for posts, posters,
 release images, video thumbnails, link previews, banners and any other piece the team makes. It is written for
