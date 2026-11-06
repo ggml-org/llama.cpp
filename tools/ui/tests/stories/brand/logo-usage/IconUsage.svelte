@@ -247,8 +247,9 @@
 		The two lockups at the sizes they are used at: the README banner, app headers, a terminal, a
 		footer and a hero. Llama, the app, is set in Llama Sans with its capital L; llama.cpp, the
 		engine, in Llama Mono and all lowercase, as it is typed in a terminal. Both start with the
-		lockup glyph, U+E002: the capital icon with the gap built in, the same in both fonts, so the
-		lockup is one character and the name. The llama.cpp lockup always sits on a neutral ground
+		lockup glyph, U+E002: the capital icon with the gap built in, so the lockup is one character and
+		the name. Llama Mono's is drawn a little larger: with the icons matched, llama.cpp's wider,
+		heavier letters set at 90% of Llama's. The llama.cpp lockup always sits on a neutral ground
 		(white, the greys, ink); only the Llama lockup goes on colour, the hero's light blue and its
 		navy.
 	</p>
@@ -262,7 +263,7 @@
 		{/each}
 
 		<div class="ctx header mono">
-			<span style:font-size="18px" class="mark">llama<span class="cpp">.cpp</span></span>
+			<span style:font-size="16.2px" class="mark">llama<span class="cpp">.cpp</span></span>
 
 			<span class="links">docs · server · cli</span>
 
@@ -281,7 +282,7 @@
 <span class="banner"> llama.cpp</span> b6123 · slot 0 ready, ctx 32768</pre>
 
 		<div class="ctx footer mono">
-			<span style:font-size="13px" class="mark">llama<span class="cpp">.cpp</span></span>
+			<span style:font-size="11.7px" class="mark">llama<span class="cpp">.cpp</span></span>
 
 			<span class="links">MIT licence · ggml-org</span>
 		</div>
@@ -484,8 +485,10 @@
 			700 clamp(48px, 9vw, 112px) / 1.15 'Llama Sans',
 			var(--body);
 	}
+	/* llama.cpp's U+E002 is 1 / 0.9 times Llama Sans's: at 90% of the size the icon matches Llama's, the name smaller */
 	.lockup.mono {
 		font-family: var(--mono);
+		font-size: clamp(43px, 8.1vw, 101px);
 	}
 
 	/* 2 */
@@ -594,7 +597,7 @@
 	.ctx.hero {
 		min-height: 220px;
 	}
-	/* the cover's proportions: 3:1, the icon 20.8% of its height (520 of 2500), so the type is 7.9% of its width */
+	/* the cover's proportions: 3:1, the icon 20.8% of its height (520 of 2500), so the type is 7.1% of its width */
 	.ctx.banner {
 		justify-content: center;
 		aspect-ratio: 3;
@@ -602,7 +605,7 @@
 		border-radius: 0;
 	}
 	.ctx.banner .mark {
-		font-size: 7.9cqw;
+		font-size: 7.1cqw;
 	}
 	.ctx.banner.dark {
 		background: #111111;

@@ -40,6 +40,11 @@
 	}
 	.display.mono {
 		font-family: var(--mono);
+		font-size: clamp(
+			43px,
+			8.1vw,
+			101px
+		); /* 90%: Llama Mono's U+E002 is 1 / 0.9 times Llama Sans's */
 	}
 	.ui {
 		display: flex;
