@@ -291,6 +291,7 @@ struct clip_layer {
     ggml_tensor * v_b = nullptr;
     ggml_tensor * qkv_w = nullptr;
     ggml_tensor * qkv_b = nullptr;
+    ggml_tensor * rope_freqs = nullptr; // mage-vl
 
     ggml_tensor * o_w = nullptr;
     ggml_tensor * o_b = nullptr;
