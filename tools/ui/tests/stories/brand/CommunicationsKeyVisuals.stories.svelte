@@ -64,7 +64,7 @@
 	{/snippet}
 </Story>
 
-<Story args={{ overlay: false, tone: 'hero' }} name="Product">
+<Story args={{ overlay: false, tone: 'day' }} name="Product">
 	{#snippet template(args)}
 		{@const { overlay, tone } = args as Args}
 		<StateGallery minItemWidth="18rem">

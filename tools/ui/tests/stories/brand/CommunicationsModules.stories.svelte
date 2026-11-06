@@ -106,7 +106,7 @@
 
 <Story asChild name="Product shot">
 	<StateGallery minItemWidth="20rem">
-		{#each ['hero', 'navy'] as const as tone (tone)}
+		{#each ['day', 'night'] as const as tone (tone)}
 			<StateGalleryItem
 				label="Product, {tone}"
 				note="The app at a width in units, whatever the format"

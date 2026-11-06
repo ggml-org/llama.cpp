@@ -43,7 +43,7 @@
 	<section class="card card-surface rounded-card">
 		<span class="label">In communications</span>
 
-		<LinkPreview copy={linkPreview} kind="og" tone="hero" />
+		<LinkPreview copy={linkPreview} kind="og" tone="day" />
 
 		<p class="note">The real app, in a calm voice</p>
 	</section>

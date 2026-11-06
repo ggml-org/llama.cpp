@@ -48,8 +48,8 @@
 	--p-solid-ink: var(--beige-50);
 	--p-link: var(--art-blue);
 }
-/* llama.app's hero and its navy night version, as in Brand/Logo/Usage */
-.ground-hero {
+/* the day sky: llama.app's hero, deeper blue at the top and light at the horizon */
+.ground-day {
 	--p-bg:
 		radial-gradient(ellipse at 15% 10%, #dcecfb 0%, transparent 55%),
 		radial-gradient(ellipse at 90% 95%, #e8f2fc 0%, transparent 50%),
@@ -63,11 +63,12 @@
 	--p-solid-ink: #fafafa;
 	--p-link: var(--art-blue);
 }
-.ground-navy {
+/* the night sky: darkest at the top, lifting a little towards the horizon, with a faint glow there; the steps are
+   small, so it reads as one dark blue */
+.ground-night {
 	--p-bg:
-		radial-gradient(ellipse at 15% 10%, #22385c 0%, transparent 55%),
-		radial-gradient(ellipse at 90% 95%, #1e3752 0%, transparent 50%),
-		linear-gradient(160deg, #152238 0%, #172a42 55%, #1a3049 100%);
+		radial-gradient(ellipse 120% 60% at 50% 115%, rgb(46 70 104 / 0.35) 0%, transparent 70%),
+		linear-gradient(180deg, #0f1a2b 0%, #13213a 55%, #182a45 100%);
 	--p-ink: #fafafa;
 	--p-muted: rgb(250 250 250 / 0.66);
 	--p-line: rgb(250 250 250 / 0.14);

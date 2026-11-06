@@ -65,7 +65,7 @@
 	{#snippet template(args)}
 		{@const copy = args as LinkPreviewCopy & { overlay: boolean }}
 		<StateGallery minItemWidth="26rem">
-			{#each ['hero', 'navy'] as const as tone (tone)}
+			{#each ['day', 'night'] as const as tone (tone)}
 				<StateGalleryItem
 					label="llama.app, {FORMATS.og.name}, {tone}"
 					note="Product · {size('og')}"

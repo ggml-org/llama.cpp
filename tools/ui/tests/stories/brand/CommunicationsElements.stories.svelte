@@ -26,7 +26,7 @@
 	});
 
 	const tile = { height: 720, name: 'Tile', width: 1080 };
-	const tones: Ground[] = ['light', 'dark', 'hero'];
+	const tones: Ground[] = ['light', 'dark', 'day'];
 </script>
 
 <Story asChild name="Header and footer">
@@ -137,7 +137,7 @@
 
 <Story asChild name="The app">
 	<StateGallery minItemWidth="20rem">
-		{#each ['hero', 'navy'] as const as tone (tone)}
+		{#each ['day', 'night'] as const as tone (tone)}
 			<StateGalleryItem
 				label="Menu bar and panel, {tone}"
 				note="The Llama app as it is, at its own size"
