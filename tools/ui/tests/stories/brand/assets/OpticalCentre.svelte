@@ -1,15 +1,15 @@
 <!--
-	How the icon sits in the avatars: the same square twice, the icon set at the exact centre and as the files place
+	How the icon sits in a circle crop (the avatars, the PWA icon): the same square twice, the icon set at the exact centre and as the files place
 	it, lifted a little, with its box, both centre lines and the margins above and below drawn in, and a circle in each
 	of the two gaps where the icon comes nearest the circle crop, touching both. At the exact centre the foot comes
-	nearer the crop than the blade; lifted, the two gaps are even. The placement comes from the avatar file itself (its
+	nearer the crop than the blade; lifted, the two gaps are even. The placement comes from the file itself (its
 	translate and scale), so the figure follows the files.
 -->
 <script lang="ts">
 	import { PATHS, SIZE } from '../logo-showcase/lib/logo';
 
 	interface Props {
-		/** the avatar's side and the icon's placement in it, as in its SVG */
+		/** the canvas's side and the icon's placement in it, as in its SVG */
 		placement: { scale: number; size: number; x: number; y: number };
 	}
 
@@ -117,7 +117,7 @@
 				>
 					<rect fill="#FAFAFA" height={placement.size} width={placement.size} />
 
-					<!-- the circle the platforms crop it to -->
+					<!-- the circle it is cropped to -->
 					<circle
 						class="guide muted"
 						cx={placement.size / 2}
