@@ -6448,15 +6448,12 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
         if (backend_ctx->adreno_gen == ADRENO_GPU_GEN::A6X) {
             CL_gemv_compile_opts += " -DGGML_CL_A6X_CONSTFOLD_FIX";
         }
-        // Opt-in: dequant-once-per-block mc3 verify GEMV (factors q4_K dequant
-        // out of the 3-column loop; byte-identical, lower spill). A/B vs the
-        // shipped inline mc3 in the same binary.
+        // dequant-once-per-block mc3 verify GEMV
         if (getenv("GGML_OPENCL_Q4_K_MC3_DQ")) {
             CL_gemv_compile_opts += " -DQ4K_MC3_DEQUANT_ONCE ";
         }
-        // Opt-in: LDS-staged dequant mc3 verify GEMV (stages the dequantized
-        // q4_K weights in __local instead of private regs that spill to slow
-        // global on Adreno; byte-identical). A/B vs inline + dequant-once.
+        // LM-staged dequant mc3 verify GEMV, stages the dequantized
+        // q4_K weights in __local instead of regs
         if (getenv("GGML_OPENCL_Q4_K_MC3_LDS")) {
             CL_gemv_compile_opts += " -DQ4K_MC3_DEQUANT_LDS ";
         }
@@ -24701,13 +24698,7 @@ static void ggml_cl_mul_mat_q4_0_f32_adreno(ggml_backend_t backend, const ggml_t
     int N = ne1;
     int K = ne00;
 
-    // Multi-column (N=3) verify GEMV for q4_0: route the spec/MTP verify batch
-    // (ne1==3) onto the efficient GEMV path instead of the transposed-GEMM dead-
-    // zone (gemm_noshuffle_q4_0 is ~50% of MTP decode on a Q4_0 model since q4_0
-    // weights have no cok/mc3, unlike q4_K). Reuses the ne1==1 GEMV image setup
-    // (activation image already sized by N=ne1). Byte-identical. Opt-in via
-    // GGML_OPENCL_Q4_0_MC3=1. Per-layer only (ne01 < 32768); q4_0 lm_head doesn't
-    // occur (token_embd/output stay Q6_K), guard kept for parity with q4_K mc3.
+    // Multi-column (N=3) verify GEMV for q4_0
     static const bool q40_mc3 = (getenv("GGML_OPENCL_Q4_0_MC3") != nullptr);
     const bool use_q40_mc3 = q40_mc3 && (ne1 >= 2 && ne1 <= 4) && (ne01 < 32768);
 
@@ -25095,10 +25086,7 @@ static void ggml_cl_mul_mat_q4_1_f32_adreno(ggml_backend_t backend, const ggml_t
     int N = ne1;
     int K = ne00;
 
-    // Multi-column (N=3) verify GEMV for q4_1: route the spec/MTP verify batch
-    // (ne1==3) onto the efficient GEMV path instead of the transposed-GEMM dead-
-    // zone (gemm_noshuffle_q4_1). Reuses the ne1==1 GEMV image setup. Opt-in via
-    // GGML_OPENCL_Q4_1_MC3=1. Per-layer only (ne01 < 32768).
+    // Multi-column (N=3) verify GEMV for q4_1
     static const bool q41_mc3 = (getenv("GGML_OPENCL_Q4_1_MC3") != nullptr);
     const bool use_q41_mc3 = q41_mc3 && (ne1 >= 2 && ne1 <= 4) && (ne01 < 32768);
 
@@ -26916,15 +26904,8 @@ static void ggml_cl_mul_mat_q4_k_f32_adreno(ggml_backend_t backend, const ggml_t
     cl_uchar mask_d4 = 0x0F;
     cl_uchar mask_hi2 = 0xC0;
 
-    // Multi-column verify GEMV: route the spec/MTP verify batch (ne1==3 = 2
-    // drafts + 1 bonus) onto the efficient GEMV path (subgroup-broadcast, no
-    // transpose) instead of the transposed-GEMM dead-zone. Reuses the ne1==1
-    // GEMV setup (the activation image is already sized by N=ne1). Byte-
-    // identical. Opt-in via GGML_OPENCL_Q4_K_MC3=1 while validating.
+    // Multi-column verify GEMV
     static const bool q4k_mc3 = (getenv("GGML_OPENCL_Q4_K_MC3") != nullptr);
-    // Per-layer only (ne01 < 32768): the batched large-vocab lm_head at ne1==3
-    // is left to the existing routing (corrupts on the Adreno GEMV path; x2-
-    // unified routes batched Q6_K lm_head to CPU). Per-layer mc3 is byte-identical.
     const bool use_mc3 = q4k_mc3 && (ne1 == 3) && (ne01 < 32768);
 
     const bool use_bin = use_q4_k_bin_kernels(backend_ctx, src0);
@@ -27760,12 +27741,9 @@ static void ggml_cl_mul_mat_q6_K_f32_adreno(ggml_backend_t backend, const ggml_t
 
     // Multi-column verify GEMV
     static const bool q6k_mc3 = (getenv("GGML_OPENCL_Q6_K_MC3") != nullptr);
-    // Per-layer only (ne01 < 32768)
     const bool use_q6k_mc3 = q6k_mc3 && (ne1 == 3) && (ne01 < 32768);
-    // Batched verify lm_head/embed (ne1 2..4, tiled layout): multi-column tiled
-    // GEMV - streams the large lm_head weight once across the verify columns
-    // (the #1 MTP bottleneck; mc3 above can't, it reads the noshuffle layout).
-    // Default on for X2E or with GGML_OPENCL_Q6_K_MC3, GGML_OPENCL_Q6_K_TILED_MC=0/1 forces it.
+    // Multi-column tiled vocab GEMV for verify
+    // streams the large lm_head weight once across the verify columns
     static const char * q6k_tiled_mc_env = getenv("GGML_OPENCL_Q6_K_TILED_MC");
     const bool q6k_tiled_mc = q6k_tiled_mc_env ? atoi(q6k_tiled_mc_env) != 0
                                                : (q6k_mc3 || backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E);
