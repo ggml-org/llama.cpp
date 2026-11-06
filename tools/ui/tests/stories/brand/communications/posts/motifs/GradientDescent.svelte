@@ -1,40 +1,81 @@
 <!--
-	Gradient descent: a loss curve, and the steps a model takes down it, each a dot, the last one at the minimum in
-	cinder. A motif for posts about training and fine-tuning.
+	Gradient descent: a loss surface in 3D, drawn as a wire mesh that fades with distance, and the steps a model takes
+	down it, from a ridge to the lowest valley, the last one in cinder. A motif for posts about training and
+	fine-tuning.
 -->
 <script lang="ts">
 	import './motif.css';
+	import { far, project, pts, type View } from './project';
 
-	const loss = (x: number) => 40 + 0.0042 * (x - 250) ** 2 + 8 * Math.sin(x / 22);
-	const curve = Array.from({ length: 81 }, (_, i) => {
-		const x = 20 + i * 4.5;
+	const view: View = { cx: 200, cy: 150, distance: 4, pitch: 0.55, scale: 150, yaw: 0.62 };
+	// a bowl with ripples, so the way down is not a straight line
+	const loss = (x: number, z: number) =>
+		0.4 * (0.8 * x * x + z * z) + 0.17 * Math.sin(3.2 * x) * Math.cos(2.6 * z) - 0.32;
+	const at = (x: number, z: number) => project([x, loss(x, z), z], view);
 
-		return `${i ? 'L' : 'M'}${x} ${260 - loss(x) * 0.95}`;
-	}).join(' ');
-	const steps = [50, 112, 160, 196, 222, 240];
-	const at = (x: number) => [x, 260 - loss(x) * 0.95];
+	const n = 20;
+	const samples = 32;
+	const line = (fixed: number, across: boolean) =>
+		Array.from({ length: samples + 1 }, (_, i) => {
+			const t = -1 + (2 * i) / samples;
+
+			return across ? at(t, fixed) : at(fixed, t);
+		});
+	const mesh = Array.from({ length: n + 1 }, (_, i) => -1 + (2 * i) / n).flatMap((f) => [
+		line(f, true),
+		line(f, false)
+	]);
+	const fade = (l: number[][]) =>
+		0.12 + 0.5 * (1 - far(l.reduce((s, p) => s + p[2], 0) / l.length));
+
+	// the descent: steps against the gradient from a high corner
+	const steps = (() => {
+		// start from the highest corner, so the way down is long
+		let [x, z] = (
+			[
+				[0.95, 0.95],
+				[0.95, -0.95],
+				[-0.95, 0.95],
+				[-0.95, -0.95]
+			] as const
+		).reduce((a, b) => (loss(b[0], b[1]) > loss(a[0], a[1]) ? b : a));
+
+		const out: number[][] = [];
+		const e = 0.001;
+
+		for (let i = 0; i < 12; i++) {
+			const p = project([x, loss(x, z) + 0.03, z], view);
+
+			out.push(p);
+
+			const gx = (loss(x + e, z) - loss(x - e, z)) / (2 * e);
+			const gz = (loss(x, z + e) - loss(x, z - e)) / (2 * e);
+
+			x -= 0.2 * gx;
+			z -= 0.2 * gz;
+		}
+
+		return out;
+	})();
 </script>
 
 <svg aria-hidden="true" class="motif-svg" viewBox="0 0 400 300">
-	<line class="thin" x1="20" x2="380" y1="270" y2="270" />
-
-	<path class="ink" d={curve} />
-
-	{#each steps.slice(0, -1) as s, i (s)}
-		{@const [ax, ay] = at(s)}
-		{@const [bx, by] = at(steps[i + 1])}
-		<line style:opacity="0.6" class="thin" x1={ax} x2={bx} y1={ay} y2={by} />
+	{#each mesh as l, i (i)}
+		<polyline style:opacity={fade(l)} class="mesh" points={pts(l)} />
 	{/each}
 
-	{#each steps as s, i (s)}
-		{@const [cx, cy] = at(s)}
-		<circle
-			class={i === steps.length - 1 ? 'accent' : 'solid'}
-			{cx}
-			{cy}
-			r={i === steps.length - 1 ? 13 : 9}
-		/>
-	{/each}
+	<polyline style:stroke-width="4" class="ink" points={pts(steps)} />
 
-	<text x="20" y="295">loss</text>
+	{#each steps as [cx, cy], i (i)}
+		{@const last = i === steps.length - 1}
+		<circle class={last ? 'accent' : 'solid'} {cx} {cy} r={last ? 10 : 5.5} />
+	{/each}
 </svg>
+
+<style>
+	.mesh {
+		fill: none;
+		stroke: var(--p-ink);
+		stroke-width: 1.4;
+	}
+</style>
