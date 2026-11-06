@@ -721,6 +721,8 @@ file), the **service** (the server that runs inference: llama.cpp and llama-serv
 **application** (the harness, the UI and UX). Llama UI and Llama Chat are the application
 layer. Running all three locally is the point: people choose their model and keep their
 conversations and traces, so the UI never assumes a cloud account or hides which model runs.
+The service need not be on the same machine: a server can be run by one person and shared by
+many (a family, a team, a community), so the UI should make clear which server a model runs on.
 
 This file is the how, written for agents first. The why, written for people, is
 **Introduction › Design philosophy** in Storybook (`tests/stories/introduction/DesignPhilosophy.svx`).

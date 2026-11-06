@@ -44,6 +44,8 @@ Between a person and a model there are three layers, and every product sits on o
 
 Running all three on your own machine is what makes local mean freedom: you choose the model, you keep your conversations and traces, and no one can change what you run behind your back.
 
+The service layer does not have to be yours alone. A server one person runs can serve their family, a team, a lab or a neighbourhood, and people can pool the machines they have. Shared this way, AI stays in the hands of the people who use it rather than a single provider, and someone without the hardware still gets the same freedom.
+
 The stack is meant to be used and built on, and the design is too. People should be able to take Llama UI into their own apps, fork Llama Chat, or restyle either one without fighting the system.
 
 ## Enough character, and no more
