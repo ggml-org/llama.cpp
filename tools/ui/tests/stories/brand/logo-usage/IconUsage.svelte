@@ -1,10 +1,11 @@
 <!--
-	How the Llama icon is used, one case per section (section picks which; each is a story of Brand/Logo/Usage): as its two glyphs of Llama Sans (U+E000 for text, U+E001, the
-	capital form at the lockup's proportion) in display type and buttons, the lockup in context, in Llama Mono and the two lockups together, in a download badge
-	and in running text, then as the web app's favicon, PWA, maskable and Apple touch icons and
-	its splash screens, with their proportions and placement drawn in. The app icons follow the web UI's own
-	pwa-assets.config.ts (PWA_ASSET_GENERATOR) and make-icons-circular.js, but are drawn with the L: the files it ships
-	still carry the old llama.cpp mark. It sits in the logo showcase's frame (ShowcaseFrame), on its colours.
+	How the Llama icon is used, one case per section (section picks which; each is a story of Brand/Logo/Usage): as
+	its two glyphs of Llama Sans (U+E000 for text, U+E001, the capital form at the lockup's proportion) in display
+	type and buttons, the two lockups in context (Llama in Sans, llama.cpp in Mono), in a download badge and in
+	running text, then as the web app's favicon, PWA, maskable and Apple touch icons and its splash screens, with
+	their proportions and placement drawn in. The app icons follow the web UI's own pwa-assets.config.ts
+	(PWA_ASSET_GENERATOR) and make-icons-circular.js, but are drawn with the L: the files it ships still carry the old
+	llama.cpp mark. It sits in the logo showcase's frame (ShowcaseFrame), on its colours.
 -->
 <script lang="ts">
 	import { PATHS, SIZE } from '../logo-showcase/lib/logo';
@@ -158,16 +159,7 @@
 	let {
 		section
 	}: {
-		section:
-			| 'badge'
-			| 'buttons'
-			| 'context'
-			| 'glyphs'
-			| 'icons'
-			| 'mono'
-			| 'pair'
-			| 'splash'
-			| 'text';
+		section: 'badge' | 'buttons' | 'context' | 'glyphs' | 'icons' | 'splash' | 'text';
 	} = $props();
 </script>
 
@@ -240,67 +232,20 @@
 	</div>
 {/if}
 
-<!-- 3. the lockup in context -->
+<!-- 3. the lockups: Llama in Llama Sans, llama.cpp in Llama Mono -->
 {#if section === 'context'}
-	<p class="kicker">The lockup in context</p>
+	<p class="kicker">The lockups in context</p>
 
 	<h2>Where the name goes</h2>
 
 	<p>
-		The lockup at the sizes it is used at: an app header, a footer and a hero. The llama.cpp lockup
-		always sits on a neutral ground (white, the greys, ink); only the Llama lockup goes on colour,
-		the hero's light blue and its navy. Each is the capital glyph typed before the name, so it
-		matches the logo files exactly.
+		The two lockups at the sizes they are used at: app headers, a terminal, a footer and a hero.
+		Llama, the app, is set in Llama Sans with its capital L; llama.cpp, the engine, in Llama Mono
+		and all lowercase, as it is typed in a terminal. Both start with Llama Sans's capital glyph
+		(U+E001) and a Llama Sans space, so the icon and the gap are the same in each. The llama.cpp
+		lockup always sits on a neutral ground (white, the greys, ink); only the Llama lockup goes on
+		colour, the hero's light blue and its navy.
 	</p>
-
-	<div class="contexts">
-		<div class="ctx header">
-			<span style:font-size="18px" class="mark"> llama<span class="cpp">.cpp</span></span>
-
-			<span class="links">Models · Docs · GitHub</span>
-
-			<Button size="sm">Download</Button>
-		</div>
-
-		<div class="ctx header dark">
-			<span style:font-size="16px" class="mark"> Llama</span>
-
-			<span class="links">Settings</span>
-		</div>
-
-		<div class="ctx footer">
-			<span style:font-size="13px" class="mark"> llama<span class="cpp">.cpp</span></span>
-
-			<span class="links">MIT licence · ggml-org</span>
-		</div>
-
-		<!-- the hero, on llama.app's light blue and its navy: the Llama lockup (llama.cpp's stays on neutral grounds) -->
-		{#each [{ field: HERO, ink: '#111111', name: 'light' }, { field: NAVY, ink: '#fafafa', name: 'navy' }] as b (b.name)}
-			<div style:background={b.field} style:color={b.ink} class="ctx hero">
-				<span style:font-size="clamp(40px, 7vw, 64px)" class="mark"> Llama</span>
-			</div>
-		{/each}
-	</div>
-{/if}
-
-<!-- 4. the lockup in Llama Mono -->
-{#if section === 'mono'}
-	<p class="kicker">In Llama Mono</p>
-
-	<h2>The lockup in Llama Mono</h2>
-
-	<p>
-		Where the type around it is monospaced (the terminal, a README, the docs, a CLI's banner), the
-		name can be set in Llama Mono. The icon stays Llama Sans's capital glyph, U+E001, at the same
-		1.24 times the cap height and with the same gap, so only the name changes. Llama Mono's own
-		U+E000 fills one cell: keep it for code and terminal output, where the grid has to hold.
-	</p>
-
-	<div class="display">
-		<p class="lockup mono"><span class="glyph"> </span>llama.cpp</p>
-
-		<p class="lockup mono"><span class="glyph"> </span>Llama</p>
-	</div>
 
 	<div class="contexts">
 		<div class="ctx header mono">
@@ -311,6 +256,12 @@
 			<span class="links">docs · server · cli</span>
 
 			<Button size="sm">Download</Button>
+		</div>
+
+		<div class="ctx header dark">
+			<span style:font-size="16px" class="mark"> Llama</span>
+
+			<span class="links">Settings</span>
 		</div>
 
 		<!-- terminal output: Llama Mono's own one-cell icon, so the columns line up -->
@@ -325,72 +276,17 @@
 
 			<span class="links">MIT licence · ggml-org</span>
 		</div>
-	</div>
-{/if}
 
-<!-- 5. the two lockups together: Llama in Sans, llama.cpp in Mono -->
-{#if section === 'pair'}
-	<p class="kicker">Proposal · the two lockups</p>
-
-	<h2>Llama in Sans, llama.cpp in Mono</h2>
-
-	<p>
-		A test of giving each name its own voice: the app, Llama, in Llama Sans with its capital L; the
-		engine, llama.cpp, in Llama Mono and all lowercase, as it is typed in a terminal. Both take the
-		same capital icon (U+E001) at the same size; llama.cpp adds one more Llama Sans space to the
-		gap, a little wider than the Llama lockup's.
-	</p>
-
-	{#each ['light', 'dark'] as const as tone (tone)}
-		<div class="pair-panel {tone}">
-			<p class="lockup"><span class="glyph"> </span>Llama</p>
-
-			<p class="lockup mono"><span class="glyph"> &nbsp;</span>llama.cpp</p>
-		</div>
-	{/each}
-
-	<div class="pair-sizes">
-		{#each [48, 32, 20, 16, 13] as size (size)}
-			<div style:font-size="{size}px" class="pair-row">
-				<span class="tag">{size} px</span>
-
-				<span class="mark"><span class="glyph"> </span>Llama</span>
-
-				<span class="mark mono"><span class="glyph"> &nbsp;</span>llama.cpp</span>
+		<!-- the hero, on llama.app's light blue and its navy: the Llama lockup (llama.cpp's stays on neutral grounds) -->
+		{#each [{ field: HERO, ink: '#111111', name: 'light' }, { field: NAVY, ink: '#fafafa', name: 'navy' }] as b (b.name)}
+			<div style:background={b.field} style:color={b.ink} class="ctx hero">
+				<span style:font-size="clamp(40px, 7vw, 64px)" class="mark"> Llama</span>
 			</div>
 		{/each}
 	</div>
-
-	<div class="contexts">
-		<div class="ctx header">
-			<span style:font-size="18px" class="mark"><span class="glyph"> </span>Llama</span>
-
-			<span class="links">Models · Chats · Settings</span>
-
-			<Button size="sm">Download</Button>
-		</div>
-
-		<div class="ctx header mono">
-			<span style:font-size="18px" class="mark"
-				><span class="glyph"> &nbsp;</span>llama<span class="cpp">.cpp</span></span
-			>
-
-			<span class="links">docs · server · cli</span>
-
-			<Button size="sm">GitHub</Button>
-		</div>
-
-		<div class="ctx footer">
-			<span style:font-size="13px" class="mark"><span class="glyph"> </span>Llama</span>
-
-			<span class="links"
-				>runs on <span class="mono-name"><span class="glyph"> &nbsp;</span>llama.cpp</span></span
-			>
-		</div>
-	</div>
 {/if}
 
-<!-- 6. a download badge -->
+<!-- 4. a download badge -->
 {#if section === 'badge'}
 	<p class="kicker">Download badge</p>
 
@@ -440,7 +336,7 @@
 	</div>
 {/if}
 
-<!-- 7. in running text -->
+<!-- 5. in running text -->
 {#if section === 'text'}
 	<p class="kicker">In running text</p>
 
@@ -465,7 +361,7 @@
 	</div>
 {/if}
 
-<!-- 8. app icons -->
+<!-- 6. app icons -->
 {#if section === 'icons'}
 	<p class="kicker">App icons</p>
 
@@ -525,7 +421,7 @@
 	</div>
 {/if}
 
-<!-- 9. splash screens -->
+<!-- 7. splash screens -->
 {#if section === 'splash'}
 	<p class="kicker">Splash screens</p>
 
@@ -687,13 +583,11 @@
 		min-height: 220px;
 	}
 
-	/* 4: the name in Llama Mono, the icon still Llama Sans's capital glyph */
-	.lockup.mono,
+	/* llama.cpp's name in Llama Mono, after Llama Sans's capital glyph and space */
 	.ctx.mono .mark,
 	.ctx.mono .links {
 		font-family: var(--mono);
 	}
-	.lockup.mono .glyph,
 	.ctx.mono .glyph {
 		font-family: 'Llama Sans', var(--body);
 	}
@@ -709,61 +603,12 @@
 	.terminal .prompt {
 		color: rgb(250 250 250 / 0.5);
 	}
-	/* 5 */
-	.pair-panel {
-		display: grid;
-		gap: 4px;
-		padding: clamp(20px, 4vw, 40px);
-		border-radius: 16px;
-		background: #fafafa;
-		color: #111111;
-		box-shadow: inset 0 0 0 1px var(--l-rule);
-	}
-	.pair-panel.dark {
-		background: #111111;
-		color: #fafafa;
-	}
-	.pair-panel .lockup {
-		font-size: clamp(40px, 7vw, 88px);
-	}
-	.pair-sizes {
-		display: grid;
-		gap: 14px;
-	}
-	.pair-row {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: baseline;
-		gap: 8px 1.5em;
-	}
-	.pair-row .tag {
-		width: 48px;
-		font-size: 11px;
-	}
-	.pair-row .mark {
-		font-family: 'Llama Sans', var(--body);
-		font-weight: 700;
-		line-height: 1.15;
-		white-space: nowrap;
-	}
-	.pair-row .mark.mono,
-	.mono-name {
-		font-family: var(--mono);
-	}
-	.pair-row .mark.mono .glyph,
-	.mono-name .glyph {
-		font-family: 'Llama Sans', var(--body);
-	}
-	.mono-name {
-		font-weight: 700;
-		color: var(--l-ink);
-	}
 	.terminal .banner {
 		color: var(--art-cinder);
 		font-weight: 700;
 	}
 
-	/* 6 */
+	/* 4 */
 	.badges {
 		display: flex;
 		flex-wrap: wrap;
@@ -835,7 +680,7 @@
 		font-size: 15px;
 	}
 
-	/* 7 */
+	/* 5 */
 	.inline {
 		display: grid;
 		gap: 12px;
@@ -852,7 +697,7 @@
 			var(--body);
 	}
 
-	/* 8 and 9 */
+	/* 6 and 7 */
 	.icons {
 		display: grid;
 		grid-template-columns: repeat(auto-fill, minmax(min(100%, 180px), 1fr));
