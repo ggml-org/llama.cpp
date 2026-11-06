@@ -231,18 +231,21 @@ export const linkPreview: LinkPreviewCopy = {
 	repoLede: 'Run open models on your own hardware, from a laptop to a server.'
 };
 
-export interface WordsCopy {
-	accent: string;
-	paragraphs: string[];
-	signoff: [string, string];
+export interface ReceiptCopy {
+	footer: [string, string];
+	headline: string;
+	rows: [string, string][];
+	title: string;
 }
 
-/** a poster in Llama Mono: an early ad for llama.app, rewritten to say it plainly */
-export const openModels: WordsCopy = {
-	accent: 'on your own computer',
-	paragraphs: [
-		'Over 100,000 open models, running on your own computer.',
-		'No account. No meter running.'
+/** an early llama.app ad, said plainly: the headline states it, the receipt makes the point about paying per token */
+export const openModels: ReceiptCopy = {
+	footer: ['Free AI for everyone', 'Open source · Works offline'],
+	headline: '100,000+ open models.\nOne computer: yours.',
+	rows: [
+		['tokens generated', '1,284,902'],
+		['account', 'none'],
+		['total', '$0.00']
 	],
-	signoff: ['llama.app', 'Free AI for everyone']
+	title: 'Your AI bill, today'
 };

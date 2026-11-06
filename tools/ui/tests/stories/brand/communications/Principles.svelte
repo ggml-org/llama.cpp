@@ -44,12 +44,13 @@
 		['Application', 'Llama in Llama Sans, the real app, on any ground']
 	];
 
-	// the voice, by example: an early ad for llama.app, and the same thing said plainly (Applications › Open models poster)
+	// the voice, by example: an early ad for llama.app, and the same thing said plainly (Applications › Open models poster, on the Receipt key visual)
 	const voice = {
-		after: 'Over 100,000 open models, running on your own computer. No account. No meter running.',
+		after:
+			'100,000+ open models. One computer: yours. And a receipt beside it: 1,284,902 tokens generated, no account, total $0.00.',
 		before:
 			'Download llama.app and run 100,000+ open AI models locally on any device, for free. Or would you rather keep paying for burning tokens in the cloud? Choose wisely ;)',
-		why: 'The fact stays, the sneer goes. Freedom is shown by what the app does, not by mocking the alternative, and one phrase carries the accent.'
+		why: 'The fact stays, the sneer goes. The receipt makes the point about paying by the token without saying it, the copy is in Llama Sans and the figures in Llama Mono, and the $0.00 carries the one accent.'
 	};
 
 	const layers = [
