@@ -1,15 +1,21 @@
 <!--
 	The page the design philosophy is set on: an editorial column of running text at a reading size, with figures that
-	break out wider and pull quotes in Display. Numbered section heads, the numbers in cinder (the mark on a detail).
+	break out wider and pull quotes in Display. Numbered section heads, the numbers in cinder (the mark on a detail),
+	and the chapter navigation fixed at the right.
 -->
 <script lang="ts">
 	import '../../brand/fonts/fonts.css';
+	import Chapters from './Chapters.svelte';
 	import type { Snippet } from 'svelte';
 
 	let { children }: { children: Snippet } = $props();
+
+	let article: HTMLElement | undefined = $state();
 </script>
 
-<article class="editorial">{@render children()}</article>
+<article bind:this={article} class="editorial">{@render children()}</article>
+
+<Chapters root={article} />
 
 <style>
 	.editorial {
