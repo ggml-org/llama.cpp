@@ -1352,6 +1352,11 @@ static bool has_view_op_input(const ggml_tensor * op) {
 // OV slices whole elements per axis, so each stride must be a multiple of the next smaller one
 // (e.g. a batch stride of m*nb[1] + pad bytes cannot be expressed and would be read wrongly).
 static bool has_strides_on_element_grid(const ggml_tensor * t) {
+    // nothing is read from an empty tensor (gemma-4's KV-shared layers in a batch without output rows), and its strides
+    // past the empty dim are 0
+    if (ggml_nelements(t) == 0) {
+        return true;
+    }
     std::vector<size_t> strides;
     for (int i = 0; i < GGML_MAX_DIMS; i++) {
         if (t->ne[i] > 1) {
