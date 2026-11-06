@@ -8,6 +8,7 @@
 	llama.cpp mark. It sits in the logo showcase's frame (ShowcaseFrame), on its colours.
 -->
 <script lang="ts">
+	import OpticalCentre from '../assets/OpticalCentre.svelte';
 	import { PATHS, SIZE } from '../logo-showcase/lib/logo';
 	import { Download } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
@@ -384,8 +385,9 @@
 			PWA_ASSET_GENERATOR.FAVICON_PADDING / 2
 		)} margin; the square icons add the generator's 30% padding, and the PWA icon is the maskable one
 		at 85%, cut round. The icon sits a little above centre ({Math.round(OPTICAL_LIFT * 1000) / 10}%
-		of its height), so it looks centred. The files the web UI ships still carry the old llama.cpp
-		mark; these are drawn with the L.
+		of its height), so it looks centred and, cut round, clears the circle evenly, as drawn below on
+		the PWA icon. The files the web UI ships still carry the old llama.cpp mark; these are drawn
+		with the L.
 	</p>
 
 	<div class="icons">
@@ -429,6 +431,12 @@
 				</figcaption>
 			</figure>
 		{/each}
+	</div>
+
+	<!-- the lift, drawn on the PWA icon: the round one, 512 × 512 -->
+	{@const pwa = placed(512, 512, circle)}
+	<div class="optical">
+		<OpticalCentre placement={{ scale: pwa.side / SIZE, size: 512, x: pwa.x, y: pwa.y }} />
 	</div>
 {/if}
 
@@ -797,5 +805,9 @@
 		font: 500 11px / 1.4 var(--mono);
 		color: var(--l-muted);
 		overflow-wrap: anywhere;
+	}
+	.optical {
+		max-width: 36rem;
+		margin-top: 2rem;
 	}
 </style>
