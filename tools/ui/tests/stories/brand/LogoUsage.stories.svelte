@@ -3,8 +3,8 @@
 	import IconUsage from './logo-usage/IconUsage.svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 
-	// the icon and the lockup in use, one case per story: the font's two glyphs, buttons, the lockup in context, a
-	// download badge, running text, and the web app's icons and splash screens with their proportions
+	// the icon and the lockup in use, one case per story: the font's two glyphs, buttons, the lockup in context and
+	// in Llama Mono, a download badge, running text, and the web app's icons and splash screens with their proportions
 	const { Story } = defineMeta({
 		parameters: {
 			controls: { disable: true },
@@ -24,6 +24,10 @@
 
 <Story asChild name="Lockup in context">
 	<ShowcaseFrame><IconUsage section="context" /></ShowcaseFrame>
+</Story>
+
+<Story asChild name="Lockup in Llama Mono">
+	<ShowcaseFrame><IconUsage section="mono" /></ShowcaseFrame>
 </Story>
 
 <Story asChild name="Download badge">

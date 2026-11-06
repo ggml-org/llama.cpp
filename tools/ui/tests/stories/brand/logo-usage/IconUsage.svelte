@@ -1,6 +1,6 @@
 <!--
 	How the Llama icon is used, one case per section (section picks which; each is a story of Brand/Logo/Usage): as its two glyphs of Llama Sans (U+E000 for text, U+E001, the
-	capital form at the lockup's proportion) in display type and buttons, the lockup in context, in a download badge
+	capital form at the lockup's proportion) in display type and buttons, the lockup in context and in Llama Mono, in a download badge
 	and in running text, then as the web app's favicon, PWA, maskable and Apple touch icons and
 	its splash screens, with their proportions and placement drawn in. The app icons follow the web UI's own
 	pwa-assets.config.ts (PWA_ASSET_GENERATOR) and make-icons-circular.js, but are drawn with the L: the files it ships
@@ -157,8 +157,9 @@
 
 	let {
 		section
-	}: { section: 'badge' | 'buttons' | 'context' | 'glyphs' | 'icons' | 'splash' | 'text' } =
-		$props();
+	}: {
+		section: 'badge' | 'buttons' | 'context' | 'glyphs' | 'icons' | 'mono' | 'splash' | 'text';
+	} = $props();
 </script>
 
 <!-- 1. in type -->
@@ -273,7 +274,52 @@
 	</div>
 {/if}
 
-<!-- 4. a download badge -->
+<!-- 4. the lockup in Llama Mono -->
+{#if section === 'mono'}
+	<p class="kicker">In Llama Mono</p>
+
+	<h2>The lockup in Llama Mono</h2>
+
+	<p>
+		Where the type around it is monospaced (the terminal, a README, the docs, a CLI's banner), the
+		name can be set in Llama Mono. The icon stays Llama Sans's capital glyph, U+E001, at the same
+		1.24 times the cap height and with the same gap, so only the name changes. Llama Mono's own
+		U+E000 fills one cell: keep it for code and terminal output, where the grid has to hold.
+	</p>
+
+	<div class="display">
+		<p class="lockup mono"><span class="glyph"> </span>llama.cpp</p>
+
+		<p class="lockup mono"><span class="glyph"> </span>Llama</p>
+	</div>
+
+	<div class="contexts">
+		<div class="ctx header mono">
+			<span style:font-size="18px" class="mark"
+				><span class="glyph"> </span>llama<span class="cpp">.cpp</span></span
+			>
+
+			<span class="links">docs · server · cli</span>
+
+			<Button size="sm">Download</Button>
+		</div>
+
+		<!-- terminal output: Llama Mono's own one-cell icon, so the columns line up -->
+		<pre class="ctx terminal"><span class="prompt">$</span> llama-server -m model.gguf --port 8080
+<span class="banner"> llama.cpp</span> b6123 · listening on http://127.0.0.1:8080
+<span class="banner"> llama.cpp</span> b6123 · slot 0 ready, ctx 32768</pre>
+
+		<div class="ctx footer mono">
+			<span style:font-size="13px" class="mark"
+				><span class="glyph"> </span>llama<span class="cpp">.cpp</span></span
+			>
+
+			<span class="links">MIT licence · ggml-org</span>
+		</div>
+	</div>
+{/if}
+
+<!-- 5. a download badge -->
 {#if section === 'badge'}
 	<p class="kicker">Download badge</p>
 
@@ -323,7 +369,7 @@
 	</div>
 {/if}
 
-<!-- 5. in running text -->
+<!-- 6. in running text -->
 {#if section === 'text'}
 	<p class="kicker">In running text</p>
 
@@ -348,7 +394,7 @@
 	</div>
 {/if}
 
-<!-- 6. app icons -->
+<!-- 7. app icons -->
 {#if section === 'icons'}
 	<p class="kicker">App icons</p>
 
@@ -408,7 +454,7 @@
 	</div>
 {/if}
 
-<!-- 7. splash screens -->
+<!-- 8. splash screens -->
 {#if section === 'splash'}
 	<p class="kicker">Splash screens</p>
 
@@ -570,7 +616,34 @@
 		min-height: 220px;
 	}
 
-	/* 4 */
+	/* 4: the name in Llama Mono, the icon still Llama Sans's capital glyph */
+	.lockup.mono,
+	.ctx.mono .mark,
+	.ctx.mono .links {
+		font-family: var(--mono);
+	}
+	.lockup.mono .glyph,
+	.ctx.mono .glyph {
+		font-family: 'Llama Sans', var(--body);
+	}
+	.ctx.terminal {
+		display: block;
+		margin: 0;
+		padding: 16px;
+		background: #111111;
+		color: #fafafa;
+		font: 400 13px / 1.6 var(--mono);
+		overflow-x: auto;
+	}
+	.terminal .prompt {
+		color: rgb(250 250 250 / 0.5);
+	}
+	.terminal .banner {
+		color: var(--art-cinder);
+		font-weight: 700;
+	}
+
+	/* 5 */
 	.badges {
 		display: flex;
 		flex-wrap: wrap;
@@ -642,7 +715,7 @@
 		font-size: 15px;
 	}
 
-	/* 5 */
+	/* 6 */
 	.inline {
 		display: grid;
 		gap: 12px;
@@ -659,7 +732,7 @@
 			var(--body);
 	}
 
-	/* 6 and 7 */
+	/* 7 and 8 */
 	.icons {
 		display: grid;
 		grid-template-columns: repeat(auto-fill, minmax(min(100%, 180px), 1fr));
