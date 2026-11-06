@@ -49,7 +49,7 @@ Components take data in and report what the user did. State and calls to the ser
 
 ## Simple first, depth on request
 
-The first run offers one suggested model, small and multimodal. The Llama app downloads it, configures it and runs llama-server, with no terminal. Llama Chat opens on a conversation, not on settings. Every other model and server setting sits behind a disclosure, with a short explanation where a term needs one.
+Nothing comes pre-installed. On the first run, the Llama app suggests models that fit the device and recommends one: small enough for any device, and able to read, see and hear. Once you choose, the app downloads the model and runs llama-server, with no terminal. Llama Chat opens on a conversation, not on settings. Every other model and server setting sits behind a disclosure, with a short explanation where a term needs one.
 
 ## One build, three channels
 

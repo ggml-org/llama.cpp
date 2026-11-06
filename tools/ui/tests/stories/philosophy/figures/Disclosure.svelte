@@ -20,9 +20,9 @@
 	<section class="depth card-surface rounded-card first">
 		<span class="step">1 · First run</span>
 
-		<p class="title">A model for this computer</p>
+		<p class="title">Recommended for this device</p>
 
-		<p class="note">Small, sees and hears, works offline</p>
+		<p class="note">Small, reads, sees and hears, works offline</p>
 
 		<div class="row">
 			<Badge variant="outline">2.4 GB</Badge><Button size="sm">Download and start</Button>
