@@ -3,8 +3,9 @@
 	import { installFakeServer } from '../chat/screen/chat-screen.fixtures';
 	import {
 		openSceneConversation,
-		SCENE_CONVERSATION_ID,
-		SCENE_MODEL_PATH
+		type Scene,
+		SCENE_MODEL_PATH,
+		sceneConversationId
 	} from './communications/store/scenes';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import ChatScreen from '$lib/components/app/chat/ChatScreen/ChatScreen.svelte';
@@ -12,7 +13,8 @@
 	import { within } from 'storybook/test';
 
 	// The app scenes the Microsoft Store screenshots frame in Llama for Windows' quick chat: the real Llama Chat with
-	// everyday content, in dark mode with conversation tabs, as the Windows app shows it
+	// everyday content, in dark mode with conversation tabs, as the Windows app shows it: a note, a lease, a
+	// notification, and a line made friendlier from another app, through Alt + Space
 	const { Story } = defineMeta({
 		parameters: {
 			colorScheme: 'dark',
@@ -22,26 +24,30 @@
 		title: 'Communications/Applications/Store scenes'
 	});
 
-	const chatRoute = {
+	const route = (id?: string) => ({
 		sveltekit_experimental: {
 			state: {
-				page: {
-					params: { id: SCENE_CONVERSATION_ID },
-					route: { id: '/(chat)/chat/[id]' },
-					url: new URL(`http://localhost/#/chat/${SCENE_CONVERSATION_ID}`)
-				}
+				page: id
+					? {
+							params: { id },
+							route: { id: '/(chat)/chat/[id]' },
+							url: new URL(`http://localhost/#/chat/${id}`)
+						}
+					: { params: {}, route: { id: '/(chat)' }, url: new URL('http://localhost/#/') }
 			}
 		}
-	};
+	});
 
-	// a scene is a picture: once pinned, its window stays scrolled to the top, without the scroll-to-bottom button that
-	// would offer to leave it, until the story changes
+	// a scene is a picture: once pinned, its window stays scrolled with the first message at the top (past the chat's
+	// own top padding), without the scroll-to-bottom button that would offer to leave it, until the story changes
 	let unpin = () => {};
 
 	function pinTop(view: Window | null) {
 		if (!view) return;
 
-		const top = () => view.scrollTo(0, 0);
+		const first = view.document.querySelector('.chat-message');
+		const offset = first ? Math.max(0, first.getBoundingClientRect().top + view.scrollY - 8) : 0;
+		const top = () => view.scrollTo(0, offset);
 		const style = view.document.createElement('style');
 
 		style.textContent = '[aria-label="Scroll to bottom"] { display: none; }';
@@ -54,37 +60,74 @@
 		};
 	}
 
-	async function chat() {
-		// as the Windows app opens it, with tabs, but without the per-message stats, so the question and the answer both fit
-		const restoreStores = seedStores({
-			activeConversation: null,
-			activeMessages: [],
-			config: { conversationTabs: true, showMessageStats: false },
-			serverProps: modelServerProps({ model_path: SCENE_MODEL_PATH }),
-			serverRole: ServerRole.MODEL
-		});
-		const restoreServer = installFakeServer();
+	/** the stores and server as the Windows app has them, with a scene's conversation open or none */
+	function scene(conversation?: Scene) {
+		return async () => {
+			// with tabs, but without the per-message stats, so the question and the answer both fit
+			const restoreStores = seedStores({
+				activeConversation: null,
+				activeMessages: [],
+				config: { conversationTabs: true, showMessageStats: false },
+				serverProps: modelServerProps({ model_path: SCENE_MODEL_PATH }),
+				serverRole: ServerRole.MODEL
+			});
+			const restoreServer = installFakeServer();
 
-		await openSceneConversation();
+			if (conversation) await openSceneConversation(conversation);
 
-		return () => {
-			unpin();
-			restoreServer();
-			restoreStores();
+			return () => {
+				unpin();
+				restoreServer();
+				restoreStores();
+			};
 		};
 	}
+
+	/** the chat keeps to its end; the screenshot wants the question in view, so once the answer is in it stays at the top */
+	const pinOnceIn =
+		(text: RegExp) =>
+		async ({ canvasElement }: { canvasElement: HTMLElement }) => {
+			await within(canvasElement).findByText(text);
+			pinTop(canvasElement.ownerDocument.defaultView);
+		};
 </script>
 
 <Story
 	asChild
-	beforeEach={chat}
+	beforeEach={scene('chat')}
 	name="Chat"
-	parameters={chatRoute}
-	play={async ({ canvasElement }) => {
-		// the chat keeps to its end; the screenshot wants the question in view, so the scene stays at the top
-		await within(canvasElement).findByText(/Could you arrange a repair/);
-		pinTop(canvasElement.ownerDocument.defaultView);
-	}}
+	parameters={route(sceneConversationId('chat'))}
+	play={pinOnceIn(/Could you arrange a repair/)}
+>
+	<ChatScreen />
+</Story>
+
+<Story
+	asChild
+	beforeEach={scene('document')}
+	name="Document"
+	parameters={route(sceneConversationId('document'))}
+	play={pinOnceIn(/two things to watch/)}
+>
+	<ChatScreen />
+</Story>
+
+<Story
+	asChild
+	beforeEach={scene('screenshot')}
+	name="Screenshot"
+	parameters={route(sceneConversationId('screenshot'))}
+	play={pinOnceIn(/Storage Sense/)}
+>
+	<ChatScreen />
+</Story>
+
+<Story
+	asChild
+	beforeEach={scene('quick')}
+	name="Quick chat"
+	parameters={route(sceneConversationId('quick'))}
+	play={pinOnceIn(/Thanks so much/)}
 >
 	<ChatScreen />
 </Story>

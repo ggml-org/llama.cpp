@@ -286,18 +286,24 @@ export interface StoreVariant extends StoreLine {
 }
 
 /**
- * The Microsoft Store listing, in the order the Store shows it: each screenshot one practical thing the app does on
- * Windows, said so that what we stand for comes through (yours, private, for everyone) without preaching it. The
- * opener comes in several versions, most leading with privacy, all in the voice: sentence case, full stops, no
+ * The Microsoft Store listing, in the order the Store shows it (ten screenshots, its most): each one practical thing
+ * the app does on Windows, said so that what we stand for comes through (yours, private, for everyone) without
+ * preaching it, and only what the app already does (its release notes, its README). The opener and the chat come in
+ * several versions, the opener's mostly leading with privacy; all in the voice: sentence case, full stops, no
  * superlatives
  */
 export interface MicrosoftStoreCopy {
 	apps: StoreLine;
-	chat: StoreLine;
-	fits: StoreLine;
+	/** the chat, each version with its own conversation (a Store scene) */
+	chats: (StoreVariant & { scene: 'chat' | 'document' | 'screenshot' })[];
 	gpu: StoreLine;
 	models: StoreLine;
 	openers: StoreVariant[];
+	privacy: StoreLine;
+	quick: StoreLine;
+	speed: StoreLine & { figureLabel: string; value: string };
+	tray: StoreLine;
+	verdicts: StoreLine;
 }
 
 export const microsoftStore: MicrosoftStoreCopy = {
@@ -305,14 +311,29 @@ export const microsoftStore: MicrosoftStoreCopy = {
 		headline: 'Works with the apps\nyou already use.',
 		lede: 'Any app that speaks the OpenAI API can use your models, right on your PC.'
 	},
-	chat: {
-		headline: 'Help with everyday things,\neven offline.',
-		lede: 'Your conversations stay on your PC.'
-	},
-	fits: {
-		headline: 'Good models to start with,\nright in the tray.',
-		lede: 'Llama runs the server for you. Pick one, or search all of Hugging Face.'
-	},
+	chats: [
+		{
+			headline: 'Help with everyday things,\neven offline.',
+			id: 'A',
+			lede: 'Your conversations stay on your PC.',
+			note: 'Writing',
+			scene: 'chat'
+		},
+		{
+			headline: 'Your documents\nstay on your PC.',
+			id: 'B',
+			lede: 'Summarize a lease, a bill or a letter, even offline.',
+			note: 'Documents',
+			scene: 'document'
+		},
+		{
+			headline: 'Ask about what’s\non your screen.',
+			id: 'C',
+			lede: 'Share a screenshot for a plain answer. It never leaves your PC.',
+			note: 'Screenshots',
+			scene: 'screenshot'
+		}
+	],
 	gpu: {
 		headline: 'Runs on the graphics card\nyou already have.',
 		lede: 'NVIDIA, AMD or Intel, or on the processor alone.'
@@ -352,5 +373,27 @@ export const microsoftStore: MicrosoftStoreCopy = {
 			lede: 'Your conversations stay on it. Free, and it works offline.',
 			note: 'Privacy, with place'
 		}
-	]
+	],
+	privacy: {
+		headline: 'No telemetry.\nNone.',
+		lede: 'No events, no analytics, no install ID. Your prompts and replies stay on your PC.'
+	},
+	quick: {
+		headline: 'A quick chat,\nfrom any app.',
+		lede: 'Esc hides it, and your conversation waits for the next time.'
+	},
+	speed: {
+		figureLabel: 'faster, with the same answers',
+		headline: 'Faster replies,\nsame answers.',
+		lede: 'Models that can draft ahead do it on their own. Nothing to set up.',
+		value: 'Up to 2×'
+	},
+	tray: {
+		headline: 'Good models to start with,\nright in the tray.',
+		lede: 'Llama runs the server for you. Pick one, or search all of Hugging Face.'
+	},
+	verdicts: {
+		headline: 'Know before\nyou download.',
+		lede: 'Every version says whether it fits your PC, from what it needs and what your PC has.'
+	}
 };

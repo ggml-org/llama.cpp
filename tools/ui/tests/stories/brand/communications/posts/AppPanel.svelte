@@ -116,7 +116,7 @@
 		<div class="head">
 			<p class="title">Llama <i class="live"></i></p>
 
-			<p class="host">localhost:8080 <Copy size={12} /></p>
+			<p class="host">localhost:9931 <Copy size={12} /></p>
 
 			<span class="open">Open chat</span>
 		</div>

@@ -4,7 +4,9 @@
 	a fixed height that clips its list, with the installed models (a chip, the name, tags for size, quant, vision and
 	file size, and folder, delete and run) and, under "Browse more", llama.app's catalog with each maker's logo (the
 	macOS app's ModelLogos); the Hugging Face search; and the server's status with its build. The catalog's lines come
-	without the app's stray Markdown asterisks. `card` draws the Models card alone, for a close-up.
+	without the app's stray Markdown asterisks. `card` draws the Models card alone, for a close-up. `view="details"`
+	shows a model's page in the card instead (after the 0.13 release notes' screenshot): its sizes, and its versions with
+	the fit verdict for this PC, fits or might fit.
 -->
 <script lang="ts">
 	import hfLogo from '../../../fixtures/assets/hf-logo.svg?url';
@@ -15,8 +17,11 @@
 	import meta from './logos/meta.svg?raw';
 	import qwen from './logos/qwen.svg?raw';
 	import {
+		ArrowLeft,
+		Check,
 		ChevronRight,
 		Cpu,
+		Download,
 		Eye,
 		Folder,
 		Monitor,
@@ -31,9 +36,17 @@
 	interface Props {
 		/** the Models card alone */
 		card?: boolean;
+		/** the model list, or a model's page with its versions and their fit verdicts */
+		view?: 'details' | 'list';
 	}
 
-	let { card = false }: Props = $props();
+	let { card = false, view = 'list' }: Props = $props();
+
+	// LFM 2.5's page as the app shows it: one size, two versions, each with whether it fits this PC
+	const versions = [
+		{ fit: 'maybe', label: 'Higher quality', quant: 'Q8_0', size: '25.5 GB' },
+		{ fit: 'yes', label: 'Balanced', quant: 'Q4_K_M', size: '14.5 GB' }
+	] as const;
 
 	// small and medium models from llama.app's catalog
 	const installed = [
@@ -136,8 +149,55 @@
 	</div>
 {/snippet}
 
+{#snippet details()}
+	<div class="card details">
+		<p class="back"><ArrowLeft size={15} strokeWidth={1.5} />Models</p>
+
+		<div class="model">
+			<span class="tile big"><span class="logo round">{@html liquid}</span></span>
+
+			<span class="info">
+				<b>LFM 2.5</b>
+
+				<small class="clamp"
+					>Liquid AI’s reasoning mixture-of-experts model with 24B parameters and 2B active, built
+					for fast on-device agents.</small
+				>
+			</span>
+		</div>
+
+		<p class="label">Choose a model size</p>
+
+		<span class="size">24B-A2B</span>
+
+		<p class="label">Choose a version</p>
+
+		{#each versions as v (v.quant)}
+			<div class="version">
+				<Download size={16} strokeWidth={1.25} />
+
+				<span class="name">{v.label}</span>
+
+				<span class="weight">{v.quant} · {v.size}</span>
+
+				<span
+					aria-label={v.fit === 'yes' ? 'Fits this PC' : 'Might fit this PC'}
+					class={['fit', v.fit]}
+					role="img"
+				>
+					{#if v.fit === 'yes'}<Check size={9} strokeWidth={3} />{:else}?{/if}
+				</span>
+			</div>
+		{/each}
+	</div>
+{/snippet}
+
+{#snippet body()}
+	{#if view === 'details'}{@render details()}{:else}{@render models()}{/if}
+{/snippet}
+
 {#if card}
-	<div class="flyout only-card">{@render models()}</div>
+	<div class="flyout only-card">{@render body()}</div>
 {:else}
 	<div class="flyout">
 		<div class="head">
@@ -150,7 +210,7 @@
 			>
 		</div>
 
-		{@render models()}
+		{@render body()}
 
 		<div class="search">
 			<span class="hf"><img alt="Hugging Face" src={hfLogo} /></span>
@@ -168,6 +228,97 @@
 {/if}
 
 <style>
+	/* a model's page in the card: measured off the 0.13 release notes' screenshot, at half its pixels */
+	.details {
+		padding: 10px 16px 16px 24px;
+	}
+	.back {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		height: 31.5px;
+		margin: 0;
+		color: rgb(255 255 255 / 0.82);
+		font-size: 13.5px;
+	}
+	.model {
+		display: flex;
+		align-items: flex-start;
+		gap: 10px;
+		margin: 10px 0 0 -1.5px;
+	}
+	.tile.big {
+		width: 40px;
+		height: 40px;
+	}
+	.tile.big .logo.round {
+		width: 28px;
+		height: 28px;
+		padding: 5px;
+	}
+	.clamp {
+		display: -webkit-box;
+		-webkit-box-orient: vertical;
+		-webkit-line-clamp: 2;
+		line-clamp: 2;
+		white-space: normal !important;
+	}
+	.label {
+		margin: 16px 0 8px;
+		color: rgb(255 255 255 / 0.85);
+		font-size: 13px;
+		font-weight: 600;
+	}
+	.size {
+		display: inline-grid;
+		place-items: center;
+		align-self: flex-start;
+		height: 29px;
+		padding: 0 8px;
+		box-sizing: border-box;
+		border: 1.5px solid #4cc2ff;
+		border-radius: 4px;
+		background: #3c3d3f;
+		font-size: 13px;
+		font-weight: 600;
+	}
+	.version {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		height: 30px;
+		padding: 0 4px;
+		color: rgb(255 255 255 / 0.85);
+	}
+	.version .name {
+		flex: 1;
+		color: #fff;
+		font-size: 14px;
+	}
+	.weight {
+		font-size: 13px;
+	}
+	.fit {
+		display: grid;
+		place-items: center;
+		width: 12.5px;
+		height: 12.5px;
+		border-radius: 2.5px;
+		font:
+			700 10px / 1 'Segoe UI Variable Text',
+			'Segoe UI',
+			system-ui,
+			sans-serif;
+	}
+	.fit.maybe {
+		background: #fe9a00;
+		color: #1a1a1a;
+	}
+	.fit.yes {
+		background: #009966;
+		color: #fff;
+	}
+
 	/* Windows 11's dark acrylic flyout, its card a step lighter, in Segoe UI where there is one */
 	.flyout {
 		display: flex;
