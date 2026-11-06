@@ -3,11 +3,12 @@
 	its two glyphs of Llama Sans (U+E000 for text, U+E001, the capital form at the lockup's proportion) in display
 	type and buttons, the two lockups in context (Llama in Sans, llama.cpp in Mono), in a download badge and in
 	running text, then as the web app's favicon, PWA, maskable and Apple touch icons and its splash screens, with
-	their proportions and placement drawn in. The app icons follow the web UI's own pwa-assets.config.ts
+	their proportions and placement drawn in, and in the social avatars, with how it is optically centred. The app icons follow the web UI's own pwa-assets.config.ts
 	(PWA_ASSET_GENERATOR) and make-icons-circular.js, but are drawn with the L: the files it ships still carry the old
 	llama.cpp mark. It sits in the logo showcase's frame (ShowcaseFrame), on its colours.
 -->
 <script lang="ts">
+	import avatarSvg from '../assets/files/logo/svg/social/x/x-avatar-light.svg?raw';
 	import OpticalCentre from '../assets/OpticalCentre.svelte';
 	import { PATHS, SIZE } from '../logo-showcase/lib/logo';
 	import { Download } from '@lucide/svelte';
@@ -33,6 +34,15 @@
 	const splash = (1 - PWA_ASSET_GENERATOR.SPLASH_PADDING) * favicon;
 
 	const percent = (f: number) => `${Math.round(f * 1000) / 10}%`;
+
+	// the social avatar's icon placement, read from its file: its side, and the icon's translate and scale
+	const avatar = (() => {
+		const [, x, y, scale] = avatarSvg
+			.match(/translate\(([\d.]+) ([\d.]+)\) scale\(([\d.]+)\)/)!
+			.map(Number);
+
+		return { scale, size: Number(avatarSvg.match(/width="(\d+)"/)![1]), x, y };
+	})();
 
 	interface AppIcon {
 		background: string | null; // null: transparent, shown on a checkerboard (a dark one for a light icon)
@@ -163,7 +173,7 @@
 	let {
 		section
 	}: {
-		section: 'badge' | 'buttons' | 'context' | 'glyphs' | 'icons' | 'splash' | 'text';
+		section: 'avatars' | 'badge' | 'buttons' | 'context' | 'glyphs' | 'icons' | 'splash' | 'text';
 	} = $props();
 </script>
 
@@ -443,7 +453,27 @@
 	</div>
 {/if}
 
-<!-- 7. splash screens -->
+<!-- 7. social avatars -->
+{#if section === 'avatars'}
+	<p class="kicker">Avatars</p>
+
+	<h2>In a profile's circle</h2>
+
+	<p>
+		The profile picture every platform shows, the icon at 56% of a square that the platform crops to
+		a circle. Centred exactly, the icon reads low, its weight in the wide foot; the avatars lift it
+		{Math.round(OPTICAL_LIFT * 1000) / 10}% of its height and nudge it {Math.round(
+			OPTICAL_NUDGE * 1000
+		) / 10}% of its width left, so the circle clears its corners and tips nearly evenly. Drawn from
+		the avatar file itself.
+	</p>
+
+	<div class="optical">
+		<OpticalCentre placement={avatar} />
+	</div>
+{/if}
+
+<!-- 8. splash screens -->
 {#if section === 'splash'}
 	<p class="kicker">Splash screens</p>
 
