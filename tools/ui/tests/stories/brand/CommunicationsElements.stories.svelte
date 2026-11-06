@@ -47,7 +47,11 @@
 
 	// the motifs drawn as SVG, each filling its tile: the ideas, then the machines
 	const motifs = [
-		{ component: BranchMotif, name: 'Token tree', note: 'Decisions, sampling, probabilities' },
+		{
+			component: BranchMotif,
+			name: 'Decision tree',
+			note: 'Decision models, choices, probabilities'
+		},
 		{ component: NeuralNet, name: 'Neural network', note: 'Models and what is inside them' },
 		{ component: Tensor, name: 'Tensor', note: 'Weights, layers, quantization' },
 		{ component: GradientDescent, name: 'Gradient descent', note: 'Training and fine-tuning' },

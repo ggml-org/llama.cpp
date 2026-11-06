@@ -1,20 +1,12 @@
 <!--
-	The Llama app as it shows in a link preview: the menu bar with its icon, and the panel under it with the server,
+	The Llama app as it shows in a link preview: the menu bar with its icon and the macOS symbols beside it (sound,
+	Wi-Fi, battery, Spotlight, Control Center, drawn after the system's own), and the panel under it with the server,
 	the installed models and a recommendation. Drawn at the size it takes in a 1200 × 630 card; the models carry
 	their initials rather than their makers' logos.
 -->
 <script lang="ts">
 	import { ICON } from './post';
-	import {
-		ArrowDown,
-		BatteryMedium,
-		ChevronRight,
-		Copy,
-		LayoutGrid,
-		Search,
-		Volume2,
-		Wifi
-	} from '@lucide/svelte';
+	import { ArrowDown, ChevronRight, Copy, LayoutGrid } from '@lucide/svelte';
 
 	const installed = [
 		{ name: 'Qwen3.8', params: '27B', size: '19.0 GB' },
@@ -27,9 +19,47 @@
 	<div class="bar">
 		<span class="menu-icon">{ICON}</span>
 
-		<Volume2 size={16} /><Wifi size={16} /><BatteryMedium size={18} /><Search size={15} />
+		<!-- the menu bar's own symbols, drawn after macOS: sound, Wi-Fi, battery, Spotlight, Control Center -->
+		<svg aria-hidden="true" class="glyph" height="16" viewBox="0 0 20 16" width="20">
+			<path class="filled" d="M2 5.5h3l4-3.5v12l-4-3.5H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1z" />
 
-		<span>Wed Sep 23 10:24</span>
+			<path class="stroked" d="M12 5.2a4 4 0 0 1 0 5.6M14.6 3a7.2 7.2 0 0 1 0 10" />
+		</svg>
+
+		<svg aria-hidden="true" class="glyph" height="16" viewBox="0 0 20 16" width="20">
+			<path
+				class="stroked"
+				d="M2.2 6.3a11 11 0 0 1 15.6 0M5 9.1a7 7 0 0 1 10 0M7.8 11.9a3 3 0 0 1 4.4 0"
+			/>
+
+			<circle class="filled" cx="10" cy="14.2" r="1.3" />
+		</svg>
+
+		<svg aria-hidden="true" class="glyph" height="16" viewBox="0 0 29 16" width="29">
+			<rect class="outline" height="11.5" rx="3.6" width="24" x="1" y="2.25" />
+
+			<rect class="filled" height="7.5" rx="1.8" width="15" x="3" y="4.25" />
+
+			<path class="nub" d="M26.5 6.2c1 .3 1.6 1 1.6 1.8s-.6 1.5-1.6 1.8z" />
+		</svg>
+
+		<svg aria-hidden="true" class="glyph" height="16" viewBox="0 0 16 16" width="16">
+			<circle class="stroked" cx="6.6" cy="6.6" r="4.6" />
+
+			<path class="stroked" d="M10.2 10.2 14.2 14.2" />
+		</svg>
+
+		<svg aria-hidden="true" class="glyph" height="16" viewBox="0 0 18 16" width="18">
+			<rect class="outline" height="5.6" rx="2.8" width="14" x="2" y="1.4" />
+
+			<circle class="filled" cx="12.8" cy="4.2" r="1.7" />
+
+			<rect class="filled" height="5.6" rx="2.8" width="14" x="2" y="9" />
+
+			<circle class="knob" cx="5.2" cy="11.8" r="1.7" />
+		</svg>
+
+		<span class="clock"><span>Fri 6 Nov</span><span>10:24</span></span>
 	</div>
 
 	<div class="panel">
@@ -95,10 +125,45 @@
 	.bar {
 		display: flex;
 		align-items: center;
-		gap: 14px;
+		gap: 15px;
 		color: var(--p-ink);
-		font-size: 14px;
+		font-size: 13.5px;
 		font-weight: 500;
+		letter-spacing: 0.01em;
+	}
+	/* the symbols: bold strokes and solid shapes in the bar's ink, at the menu bar's 16px */
+	.glyph {
+		flex: none;
+		overflow: visible;
+	}
+	.glyph .filled,
+	.glyph .nub {
+		fill: currentColor;
+	}
+	.glyph .nub {
+		opacity: 0.45;
+	}
+	.glyph .stroked,
+	.glyph .outline {
+		fill: none;
+		stroke: currentColor;
+		stroke-linecap: round;
+		stroke-linejoin: round;
+	}
+	.glyph .stroked {
+		stroke-width: 2;
+	}
+	.glyph .outline {
+		stroke-width: 1.2;
+		opacity: 0.5;
+	}
+	.glyph .knob {
+		fill: var(--p-base, #fff);
+	}
+	.clock {
+		display: flex;
+		gap: 9px;
+		white-space: nowrap;
 	}
 	.menu-icon {
 		display: grid;
