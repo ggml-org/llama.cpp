@@ -14,15 +14,20 @@ static void kernel_roll_fused_i0_i1(
     const float *src_d,
     float *dst_d,
     int ne0, int ne1, int ne2, int ne3,
+    size_t nb1, size_t nb2, size_t nb3,
+    size_t nb01, size_t nb02, size_t nb03,
     int sh0, int sh1, int sh2, int sh3)
 {
     if (ne0 == 0 || ne1 == 0 || ne2 == 0 || ne3 == 0) return;
 
 
-    const int stride1 = ne0;
-    const int stride2 = ne0 * ne1;
-    const int stride3 = ne0 * ne1 * ne2;
-
+    // element strides, axis 0 is packed
+    const size_t s1  = nb1  / sizeof(float);
+    const size_t s2  = nb2  / sizeof(float);
+    const size_t s3  = nb3  / sizeof(float);
+    const size_t s01 = nb01 / sizeof(float);
+    const size_t s02 = nb02 / sizeof(float);
+    const size_t s03 = nb03 / sizeof(float);
 
     const int shNe0 = (ne0 - sh0) % ne0;
     const int shNe1 = (ne1 - sh1) % ne1;
@@ -46,21 +51,21 @@ static void kernel_roll_fused_i0_i1(
             const int i0 = fused - i1 * ne0;  // fused % ne0
 
 
-            const int idx_dst = i0
-                              + i1 * stride1
-                              + i2 * stride2
-                              + i3 * stride3;
+            const size_t idx_dst = i0
+                              + i1 * s1
+                              + i2 * s2
+                              + i3 * s3;
 
 
-            const int s0 = wrap_add(i0, shNe0, ne0);
-            const int s1 = wrap_add(i1, shNe1, ne1);
-            const int s2 = wrap_add(i2, shNe2, ne2);
-            const int s3 = wrap_add(i3, shNe3, ne3);
+            const int s0w = wrap_add(i0, shNe0, ne0);
+            const int s1w = wrap_add(i1, shNe1, ne1);
+            const int s2w = wrap_add(i2, shNe2, ne2);
+            const int s3w = wrap_add(i3, shNe3, ne3);
 
-            const int idx_src = s0
-                              + s1 * stride1
-                              + s2 * stride2
-                              + s3 * stride3;
+            const int idx_src = s0w
+                              + s1w * s01
+                              + s2w * s02
+                              + s3w * s03;
 
             dst_d[idx_dst] = src_d[idx_src];
         });
@@ -115,6 +120,8 @@ void ggml_sycl_roll(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
         kernel_roll_fused_i0_i1(
             *q, src_d, dst_d,
             ne0, ne1, ne2, ne3,
+            dst->nb[1], dst->nb[2], dst->nb[3],
+            src->nb[1], src->nb[2], src->nb[3],
             shift0, shift1, shift2, shift3
         );
     } catch (const std::exception &e) {
