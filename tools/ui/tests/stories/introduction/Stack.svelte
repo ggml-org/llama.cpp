@@ -1,7 +1,8 @@
 <!--
 	What this Storybook holds, as building blocks: the Llama Brand at the base, Llama UI built on it, Llama Chat built
 	from Llama UI, and the communications made from the brand and the app beside them. Llama Chat, the one people use,
-	carries the cinder mark; the brand carries the icon.
+	carries the cinder mark; the brand carries the icon. Beside Llama Chat, a dashed, dimmed slot for the other apps
+	anyone can build on Llama UI.
 -->
 <script lang="ts">
 	import { PATHS, SIZE } from '../brand/logo-showcase/lib/logo';
@@ -14,6 +15,12 @@
 		<h3>Llama Chat</h3>
 
 		<p>The app, built from Llama UI</p>
+	</div>
+
+	<div class="block apps rounded-card">
+		<h3>Other apps</h3>
+
+		<p>Yours, built on Llama UI</p>
 	</div>
 
 	<div class="block comms card-surface rounded-card">
@@ -48,11 +55,11 @@
 <style>
 	.stack {
 		display: grid;
-		grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+		grid-template-columns: minmax(0, 2fr) minmax(0, 1.4fr) minmax(0, 2fr);
 		grid-template-areas:
-			'chat comms'
-			'ui comms'
-			'brand brand';
+			'chat apps comms'
+			'ui ui comms'
+			'brand brand brand';
 		gap: 8px;
 	}
 
@@ -71,6 +78,18 @@
 
 	.ui {
 		grid-area: ui;
+	}
+
+	/* not one of ours: a slot, dashed and dimmed, for whatever someone builds next */
+	.apps {
+		grid-area: apps;
+		grid-template-columns: minmax(0, 1fr);
+		border: 1.5px dashed color-mix(in oklab, var(--fg-muted) 55%, transparent);
+		opacity: 0.7;
+	}
+
+	.apps p {
+		grid-column: 1;
 	}
 
 	.brand {
@@ -125,7 +144,7 @@
 	@media (max-width: 640px) {
 		.stack {
 			grid-template-columns: minmax(0, 1fr);
-			grid-template-areas: 'chat' 'ui' 'brand' 'comms';
+			grid-template-areas: 'chat' 'apps' 'ui' 'brand' 'comms';
 		}
 	}
 </style>
