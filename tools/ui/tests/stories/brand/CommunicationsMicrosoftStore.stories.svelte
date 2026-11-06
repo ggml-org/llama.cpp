@@ -19,8 +19,8 @@
 	// listing, and the screenshots: each one practical thing the app does on Windows, a centred headline over Llama for
 	// Windows as it is (its quick chat with the real Llama Chat from Store scenes, its tray flyout). The Store may lay its
 	// own text over the bottom quarter of the 16:9 pieces, so the words keep to the top. The opener comes in several
-	// versions, in a carousel, to compare or to A/B test. Every piece downloads as WebP or PNG at its real size, as set
-	// in the controls
+	// versions, side by side in a row that scrolls, to compare or to A/B test. Every piece downloads as WebP or PNG at its
+	// real size, as set in the controls
 	const { Story } = defineMeta({
 		parameters: {
 			controls: { disable: true },
