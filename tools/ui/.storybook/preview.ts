@@ -45,7 +45,13 @@ const preview: Preview = {
 						['Palette']
 					],
 					'Communications',
-					['Posts', ['Model drop', "What's new", 'Link previews'], 'Key visuals', 'Artwork'],
+					[
+						'Posts',
+						['Model drop', "What's new", 'Link previews'],
+						'Key visuals',
+						'Artwork',
+						'Swag'
+					],
 					'UI',
 					[
 						'Foundations',
