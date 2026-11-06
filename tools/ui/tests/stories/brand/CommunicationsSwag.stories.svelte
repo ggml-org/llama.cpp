@@ -8,7 +8,7 @@
 			controls: { disable: true },
 			layout: 'fullscreen'
 		},
-		title: 'Communications/Swag'
+		title: 'Communications/Applications/Swag'
 	});
 </script>
 

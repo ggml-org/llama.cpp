@@ -6,10 +6,10 @@
 		size?: number;
 	}
 
-	let { left, right, size = 20 }: Props = $props();
+	let { left, right, size = 0.45 }: Props = $props();
 </script>
 
-<footer style:font-size="{size}px" class="row">
+<footer style:font-size="calc(var(--u) * {size})" class="row">
 	<span>{left}</span>
 
 	{#if right}<span>{right}</span>{/if}
@@ -19,7 +19,7 @@
 	.row {
 		display: flex;
 		justify-content: space-between;
-		gap: 24px;
+		gap: var(--u);
 		margin-top: auto;
 		color: var(--p-muted);
 		line-height: 1;
