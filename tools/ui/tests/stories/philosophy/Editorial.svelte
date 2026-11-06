@@ -20,7 +20,7 @@
 <style>
 	.editorial {
 		--mono: 'Llama Mono', ui-monospace, 'SF Mono', Menlo, monospace;
-		--text: min(40rem, 100%);
+		--text: min(40rem, calc(100% - 32px));
 		display: grid;
 		grid-template-columns:
 			[full-start] minmax(16px, 1fr) [wide-start] minmax(0, 9rem) [text-start] var(--text)
