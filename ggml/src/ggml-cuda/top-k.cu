@@ -171,13 +171,6 @@ static __global__ void top_k_radix_select(
     }
 }
 
-static __global__ void top_k_radix_reset_counters(top_k_radix_state * states, int nrows) {
-    const int row = blockIdx.x * blockDim.x + threadIdx.x;
-    if (row < nrows) {
-        states[row].greater_count = 0;
-    }
-}
-
 template<int BLOCK_SIZE, int RADIX_BITS>
 static __global__ void top_k_radix_gather(
         const float * __restrict__ src,
@@ -297,8 +290,6 @@ static void top_k_radix_cuda(
                 <<<iter_nrows, BLOCK_SIZE, 0, stream>>>(histograms, states, blocks_per_row, shift);
         }
 
-        top_k_radix_reset_counters
-            <<<(iter_nrows + BLOCK_SIZE - 1) / BLOCK_SIZE, BLOCK_SIZE, 0, stream>>>(states, iter_nrows);
         top_k_radix_gather<BLOCK_SIZE, RADIX_BITS>
             <<<row_grid, BLOCK_SIZE, 0, stream>>>(
                 src, dst, histograms, states, ncols, block_cols, k, blocks_per_row);
