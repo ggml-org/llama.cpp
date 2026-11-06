@@ -83,44 +83,11 @@ std::vector<llama_grammar_candidate> llama_grammar_reject_candidates_for_stack(
         const llama_grammar_stack      & stack,
         const llama_grammar_candidates & candidates);
 
-enum llama_grammar_ast_type {
-    LLAMA_GRAMMAR_AST_ALTERNATES,
-    LLAMA_GRAMMAR_AST_SEQUENCE,
-    LLAMA_GRAMMAR_AST_TERMINAL,
-    LLAMA_GRAMMAR_AST_RULE_REF,
-    LLAMA_GRAMMAR_AST_REPEAT,
-};
-
-struct llama_grammar_ast_node {
-    llama_grammar_ast_type type;
-    std::string name;
-    llama_grammar_rule elements;
-    std::vector<llama_grammar_ast_node> children;
-    uint64_t min = 0;
-    uint64_t max = UINT64_MAX; // UINT64_MAX means no upper bound
-
-    llama_grammar_ast_node(llama_grammar_ast_type type) : type(type) {}
-    llama_grammar_ast_node(const llama_grammar_ast_node &) = default;
-    llama_grammar_ast_node(llama_grammar_ast_node &&) noexcept = default;
-    llama_grammar_ast_node & operator=(const llama_grammar_ast_node &) = default;
-    llama_grammar_ast_node & operator=(llama_grammar_ast_node &&) noexcept = default;
-
-    ~llama_grammar_ast_node() {
-        // Drop single-child chains without recursion for consecutive quantifiers.
-        while (children.size() == 1) {
-            std::vector<llama_grammar_ast_node> next;
-            next.swap(children.front().children);
-            children.swap(next);
-        }
-    }
-};
-
 struct llama_grammar_parser {
     const llama_vocab * vocab;
     std::map<std::string, uint32_t> symbol_ids;
 
     llama_grammar_rules rules;
-    size_t n_alternates = 0;
 
     llama_grammar_parser(const struct llama_vocab * vocab = nullptr) : vocab(vocab) {}
 
@@ -132,21 +99,20 @@ struct llama_grammar_parser {
     void add_rule(uint32_t rule_id, const llama_grammar_rule & rule);
 
     const char * parse_alternates(
-            const char             * src,
-            llama_grammar_ast_node & node,
-            bool                     is_nested,
-            uint32_t                 depth = 0);
+            const char        * src,
+            const std::string & rule_name,
+            uint32_t            rule_id,
+            bool                is_nested,
+            uint32_t            depth = 0);
 
     const char * parse_sequence(
-            const char             * src,
-            llama_grammar_ast_node & node,
-            bool                     is_nested,
-            uint32_t                 depth = 0);
+            const char         * src,
+            const std::string  & rule_name,
+            llama_grammar_rule & rule,
+            bool               is_nested,
+            uint32_t           depth = 0);
 
-    const char * parse_rule(const char * src, llama_grammar_ast_node & node);
-
-    void build_rule(const llama_grammar_ast_node & node, const std::string & rule_name, uint32_t rule_id);
-    void build_sequence(const llama_grammar_ast_node & node, const std::string & rule_name, llama_grammar_rule & rule);
+    const char * parse_rule(const char * src);
 
     bool parse(const char * src);
     void print(FILE * file);
