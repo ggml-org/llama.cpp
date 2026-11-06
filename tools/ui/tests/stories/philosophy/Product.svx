@@ -22,7 +22,7 @@
 - **llama.cpp** runs models locally; **llama-server** is its HTTP server.
 - **Llama UI** is the component library this Storybook documents.
 - **Llama Chat** is the chat client built from it. It replaces the legacy web UI and ships inside llama-server.
-- **Llama for Mac** and **Llama for Windows** run llama-server from the menu bar or the system tray and open Llama Chat in their own window.
+- **Llama for Mac** and **Llama for Windows** run llama-server from the menu bar or the system tray and open Llama Chat. On a Mac it opens in a new tab of the default browser, and gets a window of its own when added to the Dock as a Safari web app.
 - **llama.brand** is the one source of the icon, the fonts and the colours.
 
 <Figure n={1} caption="The products and their repositories. llama.brand supplies the brand; llama.cpp holds the engine and Llama UI; the native apps run the engine and open Llama Chat.">
