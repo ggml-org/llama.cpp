@@ -912,6 +912,9 @@ class GGUFWriter:
     def add_swiglu_clamp_exp(self, values: Sequence[float]) -> None:
         self.add_array(Keys.LLM.SWIGLU_CLAMP_EXP.format(arch=self.arch), values)
 
+    def add_swiglu_clamp(self, values: Sequence[float]) -> None:
+        self.add_array(Keys.LLM.SWIGLU_CLAMP.format(arch=self.arch), values)
+
     def add_swiglu_clamp_shexp(self, values: Sequence[float]) -> None:
         self.add_array(Keys.LLM.SWIGLU_CLAMP_SHEXP.format(arch=self.arch), values)
 
@@ -1198,6 +1201,9 @@ class GGUFWriter:
 
     def add_realtime_delay_tokens(self, value: int) -> None:
         self.add_uint32(Keys.LLM.REALTIME_DELAY_TOKENS.format(arch=self.arch), value)
+
+    def add_classifier_free_guidance(self, value: bool) -> None:
+        self.add_bool(Keys.LLM.CLASSIFIER_FREE_GUIDANCE.format(arch=self.arch), value)
 
     def add_pooling_type(self, value: PoolingType) -> None:
         self.add_uint32(Keys.LLM.POOLING_TYPE.format(arch=self.arch), value.value)

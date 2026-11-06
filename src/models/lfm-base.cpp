@@ -4,8 +4,7 @@
 
 llm_build_lfm_base::llm_build_lfm_base(const llm_graph_params & params) : llm_graph_context(params) {}
 
-ggml_tensor * llm_build_lfm_base::build_lfm_shortconv(const llama_model & model,
-                                                      const llama_memory_recurrent_context * mctx_recr,
+ggml_tensor * llm_build_lfm_base::build_lfm_shortconv(const llama_memory_recurrent_context * mctx_recr,
                                                       llm_graph_input_rs * inp_recr,
                                                       ggml_tensor * cur,
                                                       int il) {
@@ -67,8 +66,7 @@ ggml_tensor * llm_build_lfm_base::build_lfm_shortconv(const llama_model & model,
     return y;
 }
 
-ggml_tensor * llm_build_lfm_base::build_lfm_shortconv(const llama_model & model,
-                                                      ggml_tensor * cur,
+ggml_tensor * llm_build_lfm_base::build_lfm_shortconv(ggml_tensor * cur,
                                                       int il) {
     const int64_t d_conv = hparams.n_shortconv_l_cache - 1;
 
@@ -94,8 +92,7 @@ ggml_tensor * llm_build_lfm_base::build_lfm_shortconv(const llama_model & model,
     return y;
 }
 
-ggml_tensor * llm_build_lfm_base::build_lfm_dense_ffn(const llama_model & model,
-                                                      ggml_tensor * cur,
+ggml_tensor * llm_build_lfm_base::build_lfm_dense_ffn(ggml_tensor * cur,
                                                       int il) {
     GGML_ASSERT(!model.layers[il].ffn_up_b);
     GGML_ASSERT(!model.layers[il].ffn_gate_b);
@@ -107,8 +104,7 @@ ggml_tensor * llm_build_lfm_base::build_lfm_dense_ffn(const llama_model & model,
         NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
 }
 
-ggml_tensor * llm_build_lfm_base::build_lfm_moe_ffn(const llama_model & model,
-                                                    ggml_tensor * cur,
+ggml_tensor * llm_build_lfm_base::build_lfm_moe_ffn(ggml_tensor * cur,
                                                     int il) {
     return build_moe_ffn(cur,
             model.layers[il].ffn_gate_inp,

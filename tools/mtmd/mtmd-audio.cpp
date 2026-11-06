@@ -1,6 +1,5 @@
 #include "mtmd-audio.h"
 
-#define _USE_MATH_DEFINES // for M_PI
 #include <cfloat>
 #include <cmath>
 #include <cstdint>
