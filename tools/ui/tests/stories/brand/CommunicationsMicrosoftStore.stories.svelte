@@ -7,10 +7,9 @@
 		FORMATS,
 		type Ground,
 		microsoftStore,
-		type MicrosoftStoreCopy,
-		type TaglineProposal,
-		taglineProposals
+		type MicrosoftStoreCopy
 	} from './communications/posts/post';
+	import Variants from './communications/posts/Variants.svelte';
 	import StoreArt from './communications/store/StoreArt.svelte';
 	import StoreScreenshot from './communications/store/StoreScreenshot.svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
@@ -19,9 +18,9 @@
 	// The Microsoft Store listing: the logos (the app tile and the poster art), the super hero art at the top of the
 	// listing, and the screenshots: each one practical thing the app does on Windows, a centred headline over Llama for
 	// Windows as it is (its quick chat with the real Llama Chat from Store scenes, its tray flyout). The Store may lay its
-	// own text over the bottom quarter of the 16:9 pieces, so the words keep to the top. The opener's tagline is also
-	// proposed several ways, to compare or to A/B test. Every piece downloads as WebP or PNG at its real size, as set in
-	// the controls
+	// own text over the bottom quarter of the 16:9 pieces, so the words keep to the top. The opener comes in several
+	// versions, in a carousel, to compare or to A/B test. Every piece downloads as WebP or PNG at its real size, as set
+	// in the controls
 	const { Story } = defineMeta({
 		parameters: {
 			controls: { disable: true },
@@ -110,13 +109,17 @@
 	parameters={editable}
 >
 	{#snippet template(args)}
-		{@const { apps, chat, fits, gpu, models, opener, overlay, tone } = args as MicrosoftStoreCopy &
+		{@const { apps, chat, fits, gpu, models, openers, overlay, tone } = args as MicrosoftStoreCopy &
 			ArtArgs}
 		<StateGallery {...gallery}>
-			<StateGalleryItem label="1, the opener" note={size('msScreenshot')}>
-				<Downloadable name="llama-store-screenshot-1-opener-{tone}"
-					><StoreScreenshot {...opener} kind="brand" {overlay} {tone} /></Downloadable
-				>
+			<StateGalleryItem label="1, the opener" note="{openers.length} versions of the tagline">
+				<Variants items={openers} label="Versions of the opener">
+					{#snippet children(o)}
+						<Downloadable name="llama-store-screenshot-1-opener-{o.id.toLowerCase()}-{tone}">
+							<StoreScreenshot headline={o.headline} kind="brand" lede={o.lede} {overlay} {tone} />
+						</Downloadable>
+					{/snippet}
+				</Variants>
 			</StateGalleryItem>
 
 			<StateGalleryItem label="2, chat" note="Llama Chat, in the quick chat">
@@ -154,26 +157,6 @@
 					</StoreScreenshot></Downloadable
 				>
 			</StateGalleryItem>
-		</StateGallery>
-	{/snippet}
-</Story>
-
-<Story
-	argTypes={{ tone: grounds }}
-	args={{ overlay: false, proposals: taglineProposals, tone: 'day' }}
-	name="Tagline proposals"
-	parameters={editable}
->
-	{#snippet template(args)}
-		{@const { overlay, proposals, tone } = args as ArtArgs & { proposals: TaglineProposal[] }}
-		<StateGallery {...gallery}>
-			{#each proposals as p (p.id)}
-				<StateGalleryItem label="{p.id}, {p.headline.replace('\n', ' ')}" note={p.note}>
-					<Downloadable name="llama-store-opener-{p.id.toLowerCase()}-{tone}">
-						<StoreScreenshot headline={p.headline} kind="brand" lede={p.lede} {overlay} {tone} />
-					</Downloadable>
-				</StateGalleryItem>
-			{/each}
 		</StateGallery>
 	{/snippet}
 </Story>

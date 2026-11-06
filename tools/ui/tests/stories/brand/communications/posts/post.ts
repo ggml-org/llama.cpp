@@ -277,9 +277,19 @@ export interface StoreLine {
 	lede?: string;
 }
 
+/** a version of a screenshot's copy: one of several to compare, or to A/B test in a Store product page experiment */
+export interface StoreVariant extends StoreLine {
+	/** a short name for it, A, B and so on */
+	id: string;
+	/** what it leans on */
+	note: string;
+}
+
 /**
  * The Microsoft Store listing, in the order the Store shows it: each screenshot one practical thing the app does on
- * Windows, said so that what we stand for comes through (yours, private, for everyone) without preaching it
+ * Windows, said so that what we stand for comes through (yours, private, for everyone) without preaching it. The
+ * opener comes in several versions, most leading with privacy, all in the voice: sentence case, full stops, no
+ * superlatives
  */
 export interface MicrosoftStoreCopy {
 	apps: StoreLine;
@@ -287,7 +297,7 @@ export interface MicrosoftStoreCopy {
 	fits: StoreLine;
 	gpu: StoreLine;
 	models: StoreLine;
-	opener: StoreLine;
+	openers: StoreVariant[];
 }
 
 export const microsoftStore: MicrosoftStoreCopy = {
@@ -311,52 +321,36 @@ export const microsoftStore: MicrosoftStoreCopy = {
 		headline: 'The models you choose\nstay yours.',
 		lede: 'Each one is a file on your PC: open its folder, run it or delete it. No one else can change it.'
 	},
-	opener: {
-		headline: 'Your AI.\nOn your PC.',
-		lede: 'Free and open source. No account, no subscription.'
-	}
+	openers: [
+		{
+			headline: 'Your AI.\nOn your PC.',
+			id: 'A',
+			lede: 'Free and open source. No account, no subscription.',
+			note: 'Ownership'
+		},
+		{
+			headline: 'Chat with AI,\nprivately.',
+			id: 'B',
+			lede: 'It runs on your PC, so your conversations stay with you.',
+			note: 'Privacy, as what you do'
+		},
+		{
+			headline: 'Run your own AI.\nLocal and private.',
+			id: 'C',
+			lede: 'On your PC, even offline. No account, no subscription.',
+			note: 'Privacy, with ownership'
+		},
+		{
+			headline: 'Local AI.\nFree and private.',
+			id: 'D',
+			lede: 'Run open models from Hugging Face on your PC.',
+			note: 'Privacy, with price'
+		},
+		{
+			headline: 'Private AI,\nright on your PC.',
+			id: 'E',
+			lede: 'Your conversations stay on it. Free, and it works offline.',
+			note: 'Privacy, with place'
+		}
+	]
 };
-
-export interface TaglineProposal extends StoreLine {
-	/** a short name for the proposal, A, B and so on */
-	id: string;
-	/** what it leans on */
-	note: string;
-}
-
-/**
- * The opener's tagline, proposed several ways to compare, or to A/B test as the first screenshot in a Microsoft Store
- * product page experiment. Most lead with privacy; all keep to the voice: sentence case, full stops, no superlatives
- */
-export const taglineProposals: TaglineProposal[] = [
-	{
-		headline: 'Your AI.\nOn your PC.',
-		id: 'A',
-		lede: 'Free and open source. No account, no subscription.',
-		note: 'Ownership: the current opener'
-	},
-	{
-		headline: 'Chat with AI,\nprivately.',
-		id: 'B',
-		lede: 'It runs on your PC, so your conversations stay with you.',
-		note: 'Privacy, as what you do'
-	},
-	{
-		headline: 'Run your own AI.\nLocal and private.',
-		id: 'C',
-		lede: 'On your PC, even offline. No account, no subscription.',
-		note: 'Privacy, with ownership'
-	},
-	{
-		headline: 'Local AI.\nFree and private.',
-		id: 'D',
-		lede: 'Run open models from Hugging Face on your PC.',
-		note: 'Privacy, with price'
-	},
-	{
-		headline: 'Private AI,\nright on your PC.',
-		id: 'E',
-		lede: 'Your conversations stay on it. Free, and it works offline.',
-		note: 'Privacy, with place'
-	}
-];
