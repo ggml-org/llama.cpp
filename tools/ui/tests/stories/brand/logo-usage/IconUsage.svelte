@@ -18,12 +18,12 @@
 	const GENERATOR_ICON_PADDING = 0.3;
 	// make-icons-circular.js scales the maskable icon to 85% before cutting the circle
 	const CIRCULAR_ICON_SCALE = 0.85;
-	// the icon sits 1/39 of its height above centre and 1/31 of its width left of it, in a square or a circle: its
-	// weight is low (the wide bottom bar), so mathematically centred it reads as sitting low, and so placed its rounded
-	// corners and its sharp outer corners are each as far from a circle round it as their pair (as in the brand's -bg
-	// files, social avatars and app icons)
-	const OPTICAL_LIFT = 1 / 39;
-	const OPTICAL_NUDGE = 1 / 31;
+	// the icon sits 1/40 of its height above centre and 1/100 of its width left of it, in a square or a circle: its
+	// weight is low (the wide bottom bar), so mathematically centred it reads as sitting low, and so placed a circle
+	// round it clears its rounded corners, sharp corners and middle tips nearly evenly (as in the brand's -bg files,
+	// social avatars and app icons)
+	const OPTICAL_LIFT = 1 / 40;
+	const OPTICAL_NUDGE = 1 / 100;
 
 	// every output starts from favicon.svg, the icon already shrunk by the favicon padding
 	const favicon = 1 - PWA_ASSET_GENERATOR.FAVICON_PADDING;
