@@ -22,7 +22,7 @@ const preview: Preview = {
 		},
 
 		options: {
-			// sidebar sections: the introduction, the brand (logo, type, colour), then the UI: its foundations
+			// sidebar sections: the introduction, the brand (logo, type, colour), communications, then the UI: its foundations
 			// first, the full chat screen leading its folder
 			storySort: {
 				order: [
@@ -42,10 +42,10 @@ const preview: Preview = {
 							['Terminal', 'User Interface', 'Logs', 'Diff', 'llama.cpp logo', 'Key visuals']
 						],
 						'Colors',
-						['Palette'],
-						'Communications',
-						['Model drop', "What's new", 'Link previews', 'Key visuals', 'Artwork']
+						['Palette']
 					],
+					'Communications',
+					['Posts', ['Model drop', "What's new", 'Link previews'], 'Key visuals', 'Artwork'],
 					'UI',
 					[
 						'Foundations',
