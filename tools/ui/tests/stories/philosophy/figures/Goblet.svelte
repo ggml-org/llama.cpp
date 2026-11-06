@@ -3,7 +3,7 @@
 	the app's own page colour. The story seeds the chat stores (seedChatStory) so the form can render.
 -->
 <script lang="ts">
-	import { assistantMessage, noopChatActions, userMessage } from '../../../chat/messages/fixtures';
+	import { assistantMessage, noopChatActions, userMessage } from '../../chat/messages/fixtures';
 	import ChatMessage from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessage.svelte';
 	import ChatScreenForm from '$lib/components/app/chat/ChatScreen/ChatScreenForm.svelte';
 	import { onMount } from 'svelte';

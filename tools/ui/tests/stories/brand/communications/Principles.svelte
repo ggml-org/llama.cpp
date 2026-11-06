@@ -34,7 +34,7 @@
 		]
 	];
 
-	// how a piece speaks for each of the three layers (what they are is in Introduction › Design philosophy)
+	// how a piece speaks for each of the three layers (what they are is in Philosophy › Ideology)
 	const stack = [
 		['Model', 'Model cards, sizes, quants; the maker’s name, never their logo'],
 		[
@@ -69,8 +69,8 @@
 		<h2>Speaking for the three layers</h2>
 
 		<p class="note">
-			Model, service and application, as Design philosophy sets them out. A piece is about one of
-			them, and sounds like it.
+			Model, service and application, as Philosophy › Ideology sets them out. A piece is about one
+			of them, and sounds like it.
 		</p>
 
 		<ol class="stack">

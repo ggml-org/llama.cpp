@@ -22,12 +22,14 @@ const preview: Preview = {
 		},
 
 		options: {
-			// sidebar sections: the introduction, the brand (logo, type, colour), communications, then the UI: its foundations
+			// sidebar sections: the introduction, the philosophy, the brand (logo, type, colour), communications, then the UI: its foundations
 			// first, the full chat screen leading its folder
 			storySort: {
 				order: [
 					'Introduction',
-					['Design guidelines', 'Design philosophy'],
+					['Design guidelines'],
+					'Philosophy',
+					['Ideology', 'Product', 'Design'],
 					'Brand',
 					[
 						'Logo',

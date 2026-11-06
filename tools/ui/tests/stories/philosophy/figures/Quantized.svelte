@@ -3,9 +3,9 @@
 	and printed on a black t-shirt as the Swag Creator places it
 -->
 <script lang="ts">
-	import { ARTWORKS, FABRICS, PLACEMENTS } from '../../../brand/communications/swag/prints';
-	import { quantized, QUANTIZED_SIZE } from '../../../brand/communications/swag/quantized';
-	import Tee from '../../../brand/communications/swag/Tee.svelte';
+	import { ARTWORKS, FABRICS, PLACEMENTS } from '../../brand/communications/swag/prints';
+	import { quantized, QUANTIZED_SIZE } from '../../brand/communications/swag/quantized';
+	import Tee from '../../brand/communications/swag/Tee.svelte';
 
 	const artwork = ARTWORKS.find((a) => a.id === 'quantized')!;
 	const black = FABRICS.find((f) => f.id === 'black')!;

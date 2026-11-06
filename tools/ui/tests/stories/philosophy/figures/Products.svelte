@@ -5,7 +5,7 @@
 	Llama-Windows is a port of Llama-macOS. Two columns on wide screens, one on narrow ones.
 -->
 <script lang="ts">
-	import { PATHS, SIZE } from '../../../brand/logo-showcase/lib/logo';
+	import { PATHS, SIZE } from '../../brand/logo-showcase/lib/logo';
 	import { Badge } from '$lib/components/ui/badge';
 </script>
 

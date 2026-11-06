@@ -1,0 +1,56 @@
+<!--
+	How the products fit together (Philosophy › Product): the Llama stack, the line between Llama UI and the apps, the
+	three layers in it, and how Llama Chat ships. The most important parts of the Llama Suite planning pages
+	(Llama UI Stack, One build, three channels); the roadmap and the app concepts stay there for now. Set in Editorial.
+-->
+
+<script>
+	import Channels from './figures/Channels.svelte';
+	import Figure from './Figure.svelte';
+	import Products from './figures/Products.svelte';
+	import Rule from './figures/Rule.svelte';
+</script>
+
+<p class="kicker">Philosophy · How it fits together</p>
+
+# Product
+
+<p class="lead">One design system, many apps. <strong>Llama UI</strong> draws and handles interaction; each app decides what happens and talks to llama-server.</p>
+
+## The Llama stack
+
+llama.cpp runs models on your own machine. Around it sits a stack of libraries, packages and technologies, and the apps built on them. **Llama UI** is the library of UI and UX components that this Storybook documents. **Llama Chat** is the local, private chat client built from it, which replaces the legacy web UI and ships inside llama.cpp's server. **Llama for Mac** and **Llama for Windows** are the native apps: they put llama.cpp in the menu bar or the system tray, run its server for you, and open Llama Chat in their own window. The brand (the icon, the type, the colours) is how people recognise all of them, and it has one source, **llama.brand**.
+
+<Figure n={1} caption="The products and their repositories. llama.brand is where the brand comes from; llama.cpp holds the engine and Llama UI; the native apps run the engine and open Llama Chat.">
+	<Products />
+</Figure>
+
+## One library, many apps
+
+Llama UI is the design system and component library: UI and UX, no business logic. Llama Chat is the first application built on it. Other apps can follow on the same parts, and the llama.app website uses the same library, so models look and behave the same everywhere.
+
+Splitting the library from the apps lets anyone build their own app on the Llama stack, and lets Llama Chat ship in more places.
+
+## Llama UI draws, the apps decide
+
+The line between the two is simple: the library draws the parts and handles interaction, and the app owns the state and talks to the server. Components get data in and report what the user did out.
+
+<Figure n={2} caption="What belongs in Llama UI and what belongs in an app. A chat app is a composition of the library's parts with the app's own logic.">
+	<Rule />
+</Figure>
+
+## Across the three layers
+
+The products map onto the three layers in **Ideology**. The **model** is a GGUF file from Hugging Face, which the apps help you find, download and keep. The **service** is llama-server: on your machine, run for you by a native app, or run by someone else and shared. The **application** is Llama UI and the apps built on it, which never assume a cloud account and make clear which model runs, and where.
+
+## One build, three channels
+
+Llama Chat is a static app: plain HTML, JavaScript and CSS. Each release builds it once, and the same build can ship three ways; only the thing serving it changes. Today it ships inside llama-server. The plan is to also ship it as `npx llama-chat` and at chat.llama.app, which carry the client alone and connect to a server you add.
+
+<Figure n={3} caption="The same build of Llama Chat in three channels. Only the bundled one comes with its own server; the others are the client alone.">
+	<Channels />
+</Figure>
+
+In the plan, the app works out where it is at runtime, with no build flags: if its own origin answers as llama.cpp it runs bundled; otherwise it opens on adding a server.
+
+<p class="colophon">After the Llama Suite planning pages: Llama UI Stack, and One build, three channels.</p>
