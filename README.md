@@ -1,5 +1,5 @@
 > **This is llama.cpp with tensor parallelism over USB4 RDMA.** Distributed tensor-parallel
-> inference across 2 or 3 Windows machines joined by USB4 cables, with the all-reduce over Microsoft
+> inference across 2 to 4 Windows machines joined by USB4 cables, with the all-reduce over Microsoft
 > NetworkDirect (RDMA), and Vulkan decode kernels for Intel Xe2/Xe3 integrated GPUs. How to build
 > and run it: [usb4rdma/README.md](usb4rdma/README.md). The llama.cpp README follows unchanged.
 

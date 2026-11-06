@@ -1,6 +1,6 @@
 # Tensor parallelism over USB4 RDMA
 
-Distributed tensor-parallel LLM inference across 2 or 3 Windows machines joined by USB4 cables.
+Distributed tensor-parallel LLM inference across 2 to 4 Windows machines joined by USB4 cables.
 Every layer of the model is split across the machines, and the partial results are summed with an
 all-reduce over Microsoft NetworkDirect (RDMA) on the USB4 links.
 
@@ -11,7 +11,7 @@ lists them.
 
 | Path | What |
 |---|---|
-| the repository root | the llama.cpp source with a NetworkDirect transport for the tensor-parallel all-reduce, full-duplex sends, a 3-rank full-mesh all-reduce, multi-chunk RDMA messages, profiling, removal of the GitHub Actions workflows inherited from llama.cpp, fixes for gpt-oss, Qwen3-Next and Qwen3.5, and Vulkan decode kernels and GPU submission changes for Intel Xe2/Xe3 integrated GPUs |
+| the repository root | the llama.cpp source with a NetworkDirect transport for the tensor-parallel all-reduce, full-duplex sends, a full-mesh all-reduce at 3 and 4 ranks, multi-chunk RDMA messages, profiling, removal of the GitHub Actions workflows inherited from llama.cpp, fixes for gpt-oss and Qwen3.5, and Vulkan decode kernels and GPU submission changes for Intel Xe2/Xe3 integrated GPUs |
 | `usb4rdma/build.cmd` | builds `llama-cli.exe` and its DLLs from this tree |
 | `usb4rdma/scripts/` | PowerShell scripts, run from a controller machine, that prepare the USB4 links, check the nodes, launch every rank and verify what transport each one actually used |
 | `usb4rdma/prompts/` | a sample prompt |
@@ -33,7 +33,8 @@ Earlier versions of this repository carried the changes as a patch series (`patc
 - The model (GGUF) and the prompt at the same path on every node.
 
 **Cables**: one USB4 cable between every pair of nodes that are adjacent in the ring. 2 nodes need
-1 cable, 3 nodes need 3.
+1 cable, 3 nodes need 3 and 4 nodes need 4. For the 4-rank full mesh (section 6) add the two
+diagonals, 6 cables in all.
 
 **Controller**: a separate Windows machine with PowerShell 5.1 and the OpenSSH client that can reach
 each node's normal network address on TCP 22. It must not be one of the nodes, because
@@ -276,7 +277,9 @@ and 22) when that gives every rank fewer query heads than the busiest rank had, 
 and the backend runs the flash attention head map (Vulkan and the CPU do). Each rank then keeps every
 KV head its query heads use, so a KV head on a boundary is projected and cached on both ranks. Each
 rank logs `dist-tp attention split by query heads` with its heads in the first such layer. Qwen3.5's
-gated DeltaNet layers are split across the ranks; Qwen3-Next's run whole on every rank.
+gated DeltaNet layers are split across the ranks. Qwen3-Next's run whole on every rank, so the model
+loads, but its tensor-parallel output has not been verified; compare it against a single node
+(section 5) before using it.
 
 `run_disttp.ps1` sets `LLAMA_DIST_TP_RDMA` from `-Transport` and `LLAMA_DIST_TP_RDMA_DEBUG` from
 `-RdmaDebug` on every rank; pass the others with `-ExtraEnv 'NAME=value;NAME=value'`. For a manual

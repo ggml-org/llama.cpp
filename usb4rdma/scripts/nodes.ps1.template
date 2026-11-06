@@ -32,7 +32,8 @@ $CLUSTER_NODES = [ordered]@{
 # One entry per USB4 cable, keyed "X|Y", giving each end's static address ON THAT CABLE. Use one
 # /24 per cable: with two cables on one subnet both ends can claim the same address while the link
 # still reports Up. A ring of N ranks needs a cable between every consecutive pair, including
-# last -> first, so 3 ranks need 3 cables and 2 ranks need 1.
+# last -> first, so 2 ranks need 1 cable, 3 ranks need 3 and 4 ranks need 4. The 4-rank full mesh
+# also needs the two diagonals (6 cables, one between every pair).
 $CLUSTER_P2P = [ordered]@{
     'A|B' = @{ A = '192.168.77.1'; B = '192.168.77.2' }
     'B|C' = @{ B = '192.168.78.1'; C = '192.168.78.2' }
