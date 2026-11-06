@@ -20,8 +20,8 @@
 
 	const looks = [
 		{ label: 'As shipped', style: '' },
-		{ label: 'Your blue', style: accent('var(--art-blue)') },
-		{ label: 'Your green', style: accent('var(--art-green)') }
+		{ label: 'Night sky', style: accent('var(--art-night-sky)') },
+		{ label: 'Cinder', style: accent('var(--art-cinder)') }
 	];
 </script>
 

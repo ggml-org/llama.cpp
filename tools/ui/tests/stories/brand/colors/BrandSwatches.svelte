@@ -54,11 +54,8 @@
 			swatches: [
 				{ dark: true, name: 'Cinder', note: 'the accent · #ee6c1e', token: 'art-cinder' },
 				{ name: 'Cinder light', token: 'art-cinder-light' },
-				{ dark: true, name: 'Art blue', token: 'art-blue' },
-				{ name: 'Art sky', token: 'art-sky' },
-				{ dark: true, name: 'Art navy', token: 'art-navy' },
-				{ dark: true, name: 'Art green', token: 'art-green' },
-				{ name: 'Art amber', token: 'art-amber' }
+				{ name: 'Day sky', token: 'art-day-sky' },
+				{ dark: true, name: 'Night sky', token: 'art-night-sky' }
 			],
 			title: 'Colours'
 		}

@@ -128,7 +128,7 @@
 		width: 7px;
 		height: 7px;
 		border-radius: 50%;
-		background: var(--status-success, var(--art-green));
+		background: var(--status-success);
 	}
 
 	.outside {

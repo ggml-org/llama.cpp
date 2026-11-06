@@ -77,7 +77,7 @@ accent.
 
 - **Cinder** (`art-cinder`, `oklch(0.68 0.18 46)`, #ee6c1e) is the one accent: one thing per piece, such as the
   chosen path, the figure that matters, a tag, the `.cpp` of the logotype. Never a ground.
-- **Art colours** (`art-blue`, `art-sky`, `art-navy`, `art-green`, `art-amber`, `art-cinder-light`) are for
+- **Art colours** (`art-day-sky`, `art-night-sky`, `art-cinder-light`) are for
   illustration and artwork details, never for grounds of whole pieces and never for text.
 - **No red.** Red is the UI's danger colour only.
 - On every ground each piece reads its inks from the ground: ink, muted ink (about 62% of ink), a hairline (about

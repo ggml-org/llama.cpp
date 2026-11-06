@@ -10,12 +10,17 @@
 		(n) => `var(--neutral-${n})`
 	);
 	const status = ['success', 'warning', 'danger', 'info'].map((s) => `var(--fill-${s})`);
-	const art = ['blue', 'sky', 'navy', 'green', 'amber'].map((a) => `var(--art-${a})`);
+	const art = ['day-sky', 'night-sky'].map((a) => `var(--art-${a})`);
 
 	const groups = [
 		{ colours: greys, label: 'Greys', note: 'Pages, surfaces, lines and text', width: 6 },
 		{ colours: status, label: 'Status', note: 'Status, and nothing else', width: 0.3 },
-		{ colours: art, label: 'Art', note: 'Artwork, never red', width: 0.25 },
+		{
+			colours: [...art, 'var(--sand-200)'],
+			label: 'Art',
+			note: 'Day sky, night sky and sand',
+			width: 0.25
+		},
 		{ colours: ['var(--art-cinder)'], label: 'Cinder', note: 'The one accent', width: 1 }
 	];
 </script>

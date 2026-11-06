@@ -105,18 +105,18 @@ Most of the interface is grey. Each group of colours has one job:
 
 - **Greys:** pages, surfaces, lines and text, in light and dark.
 - **Status colours** (green, amber, red and blue): status only. Each has one root colour that its surfaces, lines and lamps derive from.
-- **Art colours:** softer versions of those hues, for illustrations and communications. There is no red, so artwork never looks like an error.
+- **Art colours:** the day sky and the night sky, for grounds and illustrations in communications. There is no red, so artwork never looks like an error.
 - **Cinder** (#EE6C1E): the one accent, for the .cpp in the llama.cpp logotype and small details such as the section numbers on this page.
 
 <Figure n={9} caption="The palette by how much of it you see: mostly greys, the rest as slivers. Below, the real badges, the only place status colours appear.">
 	<Neutral />
 </Figure>
 
-Backgrounds are neutral too. Only the Llama lockup goes on colour: llama.app's light blue and navy.
+Backgrounds are neutral too. Only the Llama lockup goes on colour: the day sky and the night sky.
 
-The art colours come from the world llama.cpp runs in. **Sand** is the warm ground for posters and boards, and a nod to silicon, made from sand, that every chip is built on. **Sky** and **navy** are the day sky and the night sky, the light and dark grounds Llama goes on. **Cinder** is the one warm accent, and **blue**, **green** and **amber** fill shapes and numerals.
+Beyond the greys, communications have four colours, each from the world llama.cpp runs in. **Sand** is the warm ground for posters and boards, and a nod to silicon, made from sand, that every chip is built on. **Day sky** and **night sky** are llama.app's light blue and its navy, the grounds Llama goes on. **Cinder** is the one warm accent.
 
-<Figure n={10} caption="The art colours as the real tokens: sand, sky and navy as grounds, the rest as marks.">
+<Figure n={10} caption="Sand, the day sky, the night sky and cinder, as the real tokens.">
 	<ArtColours />
 </Figure>
 
@@ -130,7 +130,7 @@ The art colours come from the world llama.cpp runs in. **Sand** is the warm grou
 
 ## Communications
 
-Posts, link previews, posters and the site follow the app's rules: neutral grounds, Llama Sans and Llama Mono, typed lockups, and colour only from the art colours and cinder. Llama posts may use llama.app's blue and navy; llama.cpp posts stay on light and dark.
+Posts, link previews, posters and the site follow the app's rules: neutral grounds, Llama Sans and Llama Mono, typed lockups, and colour only from sand, the two skies and cinder. Llama posts may use llama.app's blue and navy; llama.cpp posts stay on light and dark.
 
 Each post is a Svelte template with its copy kept as data, and the key visuals use real Llama Chat screens, so a new post is new copy, not a new design.
 
@@ -138,7 +138,7 @@ Each post is a Svelte template with its copy kept as data, and the key visuals u
 	<Posts />
 </Figure>
 
-Artwork has more room. The specimen boards follow the Swiss format: one face set large on art-colour, sand or grey grounds, with cinder as the only warm accent.
+Artwork has more room. The specimen boards follow the Swiss format: one face set large on sand, sky or grey grounds, with cinder as the only warm accent.
 
 <Figure n={13} caption="Specimen boards and posters for Llama Sans, in the brand palette.">
 	<Boards />
