@@ -2,14 +2,17 @@
 title: Llama icon
 ---
 
-<!-- The logo showcase page from ggml-org/llama.brand (logo/showcase/src/routes/+page.svx), framed by ShowcaseFrame; its rules and specs are the Logo/Icon Geometry story, its lockups the Usage story -->
+<!-- The logo showcase page from ggml-org/llama.brand (logo/showcase/src/routes/+page.svx), framed by ShowcaseFrame: the origin, then the rules that shape the icon and its numbers; its lockups are the Usage story -->
 
 <script>
-	import { deg, lower } from './lib/blueprint';
+	import { SIZE, SPLIT } from './lib/logo';
+	import { deg, lower, r, trim } from './lib/blueprint';
 	import Blueprint from './lib/components/Blueprint.svelte';
 	import Sketch from './lib/components/Sketch.svelte';
 	import Figures from './lib/components/Figures.svelte';
 	import OriginStep from './lib/components/OriginStep.svelte';
+	import Rule from './lib/components/Rule.svelte';
+	import Specs from './lib/components/Specs.svelte';
 
 	// the origin animation's clock, shared with the tiles: each lights up once the animation has drawn it, and a
 	// click on one moves the animation to it
@@ -27,3 +30,14 @@ title: Llama icon
 </Figures>
 
 <Sketch />
+
+<Figures layout="rules">
+	<Rule rule="blades">A tall blade and a short foot, offset to the right, touching at one point.</Rule>
+	<Rule rule="angle">All four slanted edges lean at {deg}°: the blades are parallel parallelograms.</Rule>
+	<Rule rule="diagonal">The upper blade’s right edge and the foot’s left edge are the same line, through the joint.</Rule>
+	<Rule rule="split">{SPLIT} above, {lower} below: close to two thirds to one third.</Rule>
+	<Rule rule="steps">Five steps of 120 span the {SIZE}: the feet, the joint and the foot’s corner all land on them.</Rule>
+	<Rule rule="corners">Only the two 120° outer corners round off: cut back {trim}, on a circle of radius ≈ {r}.</Rule>
+</Figures>
+
+<Specs />

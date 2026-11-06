@@ -3,7 +3,7 @@
 	import ShowcaseFrame from './ShowcaseFrame.svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 
-	// the icon's construction, as on the brand site: the origin animation into the blueprint, then its rules
+	// the icon's construction, as on the brand site: the origin animation into the blueprint, then its rules and numbers
 	const { Story } = defineMeta({
 		parameters: {
 			layout: 'fullscreen'
