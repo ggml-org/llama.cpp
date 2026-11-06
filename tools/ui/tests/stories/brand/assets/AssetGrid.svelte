@@ -203,6 +203,29 @@
 	// the 80% safe circle, and every one is lifted 1/150 of its height
 	const appGroups: Group[] = [
 		{
+			note: 'The web UI’s own five, in its colours, #111111 on white: the favicon for light tabs and the one for dark tabs, transparent with the icon at 96% · the round PWA icon, the maskable icon at 512 × 512 and the Apple touch icon at 180 × 180',
+			rows: [
+				{
+					assets: (
+						[
+							['Favicon', 'favicon', 'light'],
+							['Favicon, dark', 'favicon-dark', 'dark'],
+							['PWA', 'pwa-512x512', 'light'],
+							['Maskable', 'maskable-icon-512x512', 'cover'],
+							['Apple touch', 'apple-touch-icon-180x180', 'cover']
+						] as const
+					).map(([label, name, ground]) => ({
+						ground,
+						label,
+						path: `app/web/${name}`,
+						transparent: ground !== 'cover',
+						unpadded: true
+					}))
+				}
+			],
+			title: 'Web app'
+		},
+		{
 			note: 'For the web app manifest · the round icon (any) at 512 × 512, the icon 57.1% of the circle, transparent outside it · the maskable icon at 512 × 512, full bleed, the icon inside the 80% safe circle',
 			rows: [
 				{
@@ -371,7 +394,7 @@
 				? 'The Llama icon and the Llama and llama.cpp lockups, each on its background and transparent'
 				: section === 'social'
 					? 'Profile pictures and banners for X, LinkedIn and YouTube, at each platform’s size'
-					: 'The icon for a PWA, Apple’s platforms, Android and Windows, light and dark, at each platform’s size and in its shape'},
+					: 'The icon for the web app, a PWA, Apple’s platforms, Android and Windows, and as the native apps ship it, at each platform’s size and in its shape'},
 			to download as SVG, WebP or PNG. They come from
 			<a class="underline underline-offset-2" href="https://github.com/ggml-org/llama.brand"
 				>ggml-org/llama.brand</a
