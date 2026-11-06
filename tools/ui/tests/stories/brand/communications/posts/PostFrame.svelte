@@ -1,7 +1,8 @@
 <!--
 	A piece at its real pixel size, scaled down to fit its column. It sets the ground (grounds.css) and the format's
 	grid: --u, the unit every size is a multiple of, and an area inset by the margin and the platform's safe area, which
-	the layouts fill. `overlay` draws the grid on top: the margins, the columns and, on a story, the safe area. `actual`
+	the layouts fill. `overlay` draws the grid on top: the margins, the columns and the safe area (a story's, or the bottom quarter the Microsoft Store
+	may cover). `actual`
 	shows it at its real size instead, in a box that scrolls sideways when the column is narrower, for parts that need a
 	close look.
 -->
@@ -53,7 +54,9 @@
 
 		{#if overlay}
 			<div aria-hidden="true" class="overlay">
-				{#if safe.top}<i class="safe top"></i><i class="safe bottom"></i>{/if}
+				{#if safe.top}<i class="safe top"></i>{/if}
+
+				{#if safe.bottom}<i class="safe bottom"></i>{/if}
 
 				<div class="columns">
 					{#each Array(g.columns) as _, i (i)}<i></i>{/each}

@@ -59,7 +59,14 @@ const preview: Preview = {
 						'Key visuals',
 						['Statement', 'Product', 'Roster', 'Bulletin', 'Numeral', 'Receipt'],
 						'Applications',
-						['Model drop', "What's new", 'Link previews', 'Open models poster', 'Swag']
+						[
+							'Model drop',
+							"What's new",
+							'Link previews',
+							'Open models poster',
+							'Microsoft Store',
+							'Swag'
+						]
 					],
 					'UI',
 					[

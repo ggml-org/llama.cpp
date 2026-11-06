@@ -85,7 +85,8 @@ accent.
 ## Formats and grid
 
 Every size in a piece is a multiple of one unit, **u = the short side ÷ 24** (on formats wider than 2:1, the long
-side ÷ 48). The margin is 2u on every side, plus the platform's safe area. Square and tall formats have 6 columns,
+side ÷ 48). The margin is 2u on every side, plus the platform's safe area (on the Microsoft Store's 16:9 pieces, the
+bottom quarter, where the Store may set its own text). Square and tall formats have 6 columns,
 wide ones 12, with a gutter of ½u.
 
 | Format                | Size        | For                                                                   | u     |
@@ -98,6 +99,10 @@ wide ones 12, with a gutter of ½u.
 | GitHub social preview | 1280 × 640  | The repo's link preview                                               | 26.7  |
 | Poster A-series       | 1240 × 1754 | Print at 150 dpi                                                      | 51.7  |
 | Billboard 3:1         | 2400 × 800  | Banners, screens at events                                            | 50    |
+| Super hero art 16:9   | 1920 × 1080 | The top of the Microsoft Store listing; artwork with no words         | 45    |
+| Store screenshot 16:9 | 1920 × 1080 | Microsoft Store screenshots, four or more                             | 45    |
+| Poster art 2:3        | 720 × 1080  | The Microsoft Store's main logo: the icon over the name               | 30    |
+| App tile icon         | 300 × 300   | The Microsoft Store's tile: the icon alone                            | 12.5  |
 
 ## Building blocks
 
