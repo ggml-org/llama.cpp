@@ -12,10 +12,11 @@ and from the Storybook by `npm run export:design-system`. The how of the app's o
 
 ## What we stand for
 
-Running AI on your own computer is freedom: you own the model, your conversations and your traces, you choose
-what runs, and no one changes it behind your back. Open models on the hardware people already have make AI
-available to everyone, and a server one person runs can be shared by many. The apps are simple by default and
-deep when you want them. We say all of this by showing it, never by preaching it.
+AI that is personal and private: the model runs on a device you already own (a phone, a laptop, a desktop), your
+conversations stay on it, and it works offline, without an account. Open models on the hardware people already
+have put it within reach of anyone, and a server one person runs can be shared by many. Nothing comes
+pre-installed: the apps suggest models that fit the device and keep every other setting one step away. We say all
+of this by showing it, never by preaching it, and point at no one. The reasons are in Storybook's **Philosophy**.
 
 ### Voice
 
@@ -46,7 +47,7 @@ deep when you want them. We say all of this by showing it, never by preaching it
 - **Llama Sans** for everything people read: headlines, ledes, body, captions. One variable font, weights 400 to
   700, with optical sizes from 16 to 40 that the browser picks from the font size. Headlines Bold (700), tight
   (letter-spacing -0.02em to -0.035em), line height 0.92 to 0.98.
-- **Llama Mono** only for what is code or data: commands, URLs and repo ids, figures in tables and receipts, and
+- **Llama Mono** only for what is code or data: commands, URLs and repo ids, figures in tables, and
   small uppercase labels (0.12em tracking). Never for headlines or running text.
 - Figures are tabular. A number in a piece is real and states its unit.
 
@@ -125,14 +126,13 @@ wide ones 12, with a gutter of ½u.
 
 Layouts built from the blocks on the grid. A new piece starts from one of them.
 
-| Key visual | Use it for                                            | Shape                                                  |
-| ---------- | ----------------------------------------------------- | ------------------------------------------------------ |
-| Statement  | One thing said big: a launch line, a manifesto        | Display headline, lede, a motif filling the rest       |
-| Product    | The app itself: link previews, launch images          | Headline beside the product shot, a caption chip       |
-| Roster     | Several items of one kind: a model drop               | Headline with a motif, chips, a row of cards           |
-| Bulletin   | News with several items: what's new, release notes    | Headline and lede, a lead item and a side column       |
-| Numeral    | One figure that carries the point: speed, size, count | The figure huge in cinder over a dot grid              |
-| Receipt    | A point made with facts: cost, size, what it took     | Sans headline, a Mono receipt with the total in cinder |
+| Key visual | Use it for                                            | Shape                                            |
+| ---------- | ----------------------------------------------------- | ------------------------------------------------ |
+| Statement  | One thing said big: a launch line, a manifesto        | Display headline, lede, a motif filling the rest |
+| Product    | The app itself: link previews, launch images          | Headline beside the product shot, a caption chip |
+| Roster     | Several items of one kind: a model drop               | Headline with a motif, chips, a row of cards     |
+| Bulletin   | News with several items: what's new, release notes    | Headline and lede, a lead item and a side column |
+| Numeral    | One figure that carries the point: speed, size, count | The figure huge in cinder over a dot grid        |
 
 ### Store screenshots
 

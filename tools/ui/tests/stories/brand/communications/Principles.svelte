@@ -52,13 +52,12 @@
 		['Model', 'Model cards, sizes, quants; the maker’s name, never their logo']
 	];
 
-	// the voice, by example: an early ad for llama.app, and the same thing said plainly (Applications › Open models poster, on the Receipt key visual)
+	// the voice, by example: an early ad for llama.app, and the same offer said plainly
 	const voice = {
-		after:
-			'100,000+ open models. One computer: yours. And a receipt beside it: 1,284,902 tokens generated, no account, total $0.00.',
+		after: '100,000+ open models, on your own computer. Free, offline, with no account.',
 		before:
 			'Download llama.app and run 100,000+ open AI models locally on any device, for free. Or would you rather keep paying for burning tokens in the cloud? Choose wisely ;)',
-		why: 'The fact stays, the sneer goes. The receipt makes the point about paying by the token without pointing at anyone, the copy is in Llama Sans and the figures in Llama Mono, and the $0.00 carries the one accent.'
+		why: 'The fact stays, the sneer goes: the same offer, said plainly, with no one to point at. The copy is in Llama Sans and the figure in Llama Mono.'
 	};
 
 	const layers = [

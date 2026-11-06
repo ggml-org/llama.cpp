@@ -105,34 +105,15 @@ const KEY_VISUALS = [
 		stories: ['communications-key-visuals--numeral'],
 		summary: 'Numeral lets one figure carry the piece: the number huge in cinder over a dot grid.',
 		use: 'Speed, size, a count, a milestone: when one real number is the news.'
-	},
-	{
-		name: 'Receipt',
-		shape: [
-			'Header: the lockup and the URL.',
-			'A display headline in Llama Sans.',
-			'A receipt in Llama Mono: a title, its lines, and the total under a dashed rule in cinder.',
-			'Footer.'
-		],
-		stories: [
-			'communications-key-visuals--receipt',
-			'communications-applications--open-models-poster'
-		],
-		summary:
-			'Receipt makes a point with facts: a Llama Sans headline and a Mono receipt with its total in cinder.',
-		use: 'Cost, size, what it took: a point the facts make better than a claim.'
 	}
 ];
 const STORY_PATHS = {
 	'communications-applications--link-previews': 'Communications › Applications › Link previews',
 	'communications-applications--model-drop': 'Communications › Applications › Model drop',
-	'communications-applications--open-models-poster':
-		'Communications › Applications › Open models poster',
 	'communications-applications--what-s-new': 'Communications › Applications › What’s new',
 	'communications-key-visuals--bulletin': 'Communications › Key visuals › Bulletin',
 	'communications-key-visuals--numeral': 'Communications › Key visuals › Numeral',
 	'communications-key-visuals--product': 'Communications › Key visuals › Product',
-	'communications-key-visuals--receipt': 'Communications › Key visuals › Receipt',
 	'communications-key-visuals--roster': 'Communications › Key visuals › Roster',
 	'communications-key-visuals--statement': 'Communications › Key visuals › Statement'
 };
