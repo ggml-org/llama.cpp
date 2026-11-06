@@ -42,3 +42,29 @@
 	fill: var(--p-muted);
 	font: 500 18px var(--mono);
 }
+
+/* the machines: faces filled with the ground's flat colour, then shaded with ink; edges in ink */
+.motif-svg .face {
+	fill: var(--p-base);
+}
+.motif-svg .shade {
+	fill: var(--p-ink);
+	stroke: var(--p-ink);
+	stroke-width: 2.2;
+	stroke-linejoin: round;
+}
+.motif-svg .detail {
+	fill: none;
+	stroke: var(--p-ink);
+	stroke-width: 1.6;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+.motif-svg .hole {
+	fill: var(--p-ink);
+	opacity: 0.55;
+}
+.motif-svg .floor {
+	fill: var(--p-ink);
+	opacity: 0.06;
+}
