@@ -11,11 +11,11 @@
 -->
 <script lang="ts">
 	import avatarSvg from '../assets/files/logo/svg/social/x/x-avatar-light.svg?raw';
+	import macosIcon from '../assets/files/native/macos/icon_512x512@2x.png';
+	import windowsIcon from '../assets/files/native/windows/Square44x44Logo.scale-400.png';
+	import windowsTile from '../assets/files/native/windows/Square150x150Logo.scale-400.png';
 	import OpticalCentre from '../assets/OpticalCentre.svelte';
 	import { PATHS, SIZE } from '../logo-showcase/lib/logo';
-	import macosIcon from './files/llama-macos-icon-1024.png';
-	import windowsIcon from './files/llama-windows-square44-176.png';
-	import windowsTile from './files/llama-windows-square150-600.png';
 	import { Download } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { FAVICON_COLORS, PWA_ASSET_GENERATOR, THEME_COLORS } from '$lib/constants';
