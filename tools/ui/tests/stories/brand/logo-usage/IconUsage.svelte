@@ -3,9 +3,10 @@
 	its two glyphs of Llama Sans (U+E000 for text, U+E001, the capital form at the lockup's proportion) in display
 	type and buttons, the two lockups in context (Llama in Sans, llama.cpp in Mono), in a download badge and in
 	running text, then as the web app's favicon, PWA, maskable and Apple touch icons and its splash screens, with
-	their proportions and placement drawn in, and in the social avatars, with how it is optically centred. The app icons follow the web UI's own pwa-assets.config.ts
-	(PWA_ASSET_GENERATOR) and make-icons-circular.js, but are drawn with the L: the files it ships still carry the old
-	llama.cpp mark. It sits in the logo showcase's frame (ShowcaseFrame), on its colours.
+	their proportions and placement drawn in, and in the social avatars, with how it is optically centred in a circle.
+	The app icons follow the web UI's own pwa-assets.config.ts (PWA_ASSET_GENERATOR) and make-icons-circular.js, but
+	are drawn with the L: the files it ships still carry the old llama.cpp mark. It sits in the logo showcase's frame
+	(ShowcaseFrame), on its colours.
 -->
 <script lang="ts">
 	import avatarSvg from '../assets/files/logo/svg/social/x/x-avatar-light.svg?raw';
@@ -173,7 +174,7 @@
 	let {
 		section
 	}: {
-		section: 'avatars' | 'badge' | 'buttons' | 'context' | 'glyphs' | 'icons' | 'splash' | 'text';
+		section: 'badge' | 'buttons' | 'context' | 'glyphs' | 'icons' | 'splash' | 'text';
 	} = $props();
 </script>
 
@@ -387,9 +388,9 @@
 
 <!-- 6. app icons -->
 {#if section === 'icons'}
-	<p class="kicker">App icons</p>
+	<p class="kicker">App icons and avatars</p>
 
-	<h2>On the tab and the home screen</h2>
+	<h2>On the tab, the home screen and the profile</h2>
 
 	<p>
 		The web app's favicon, PWA, maskable and Apple touch icons, with their proportions drawn in. All
@@ -399,8 +400,8 @@
 		at 85%, cut round. The icon sits a little above and left of centre ({Math.round(
 			OPTICAL_LIFT * 1000
 		) / 10}% of its height up, {Math.round(OPTICAL_NUDGE * 1000) / 10}% of its width left), so it
-		looks centred and, cut round, clears the circle evenly, as drawn below on the PWA icon. The
-		files the web UI ships still carry the old llama.cpp mark; these are drawn with the L.
+		looks centred and, cut round, clears the circle evenly, as drawn below. The files the web UI
+		ships still carry the old llama.cpp mark; these are drawn with the L.
 	</p>
 
 	<div class="icons">
@@ -446,23 +447,11 @@
 		{/each}
 	</div>
 
-	<!-- the lift, drawn on the PWA icon: the round one, 512 × 512 -->
-	{@const pwa = placed(512, 512, circle)}
-	<div class="optical">
-		<OpticalCentre placement={{ scale: pwa.side / SIZE, size: 512, x: pwa.x, y: pwa.y }} />
-	</div>
-{/if}
-
-<!-- 7. social avatars -->
-{#if section === 'avatars'}
-	<p class="kicker">Avatars</p>
-
-	<h2>In a profile's circle</h2>
-
-	<p>
-		The profile picture every platform shows, the icon at 56% of a square that the platform crops to
-		a circle. Centred exactly, the icon reads low, its weight in the wide foot; the avatars lift it
-		{Math.round(OPTICAL_LIFT * 1000) / 10}% of its height and nudge it {Math.round(
+	<!-- the avatars, and how the icon is optically centred in a circle crop, as in them and the PWA icon -->
+	<p class="avatars-intro">
+		The social avatars are the icon at 56% of a square, which every platform crops to a circle.
+		Centred exactly, the icon reads low, its weight in the wide foot; the avatars, like the PWA
+		icon, lift it {Math.round(OPTICAL_LIFT * 1000) / 10}% of its height and nudge it {Math.round(
 			OPTICAL_NUDGE * 1000
 		) / 10}% of its width left, so the circle clears its corners and tips nearly evenly. Drawn from
 		the avatar file itself.
@@ -473,7 +462,7 @@
 	</div>
 {/if}
 
-<!-- 8. splash screens -->
+<!-- 7. splash screens -->
 {#if section === 'splash'}
 	<p class="kicker">Splash screens</p>
 
@@ -842,5 +831,14 @@
 	.optical {
 		max-width: 54rem;
 		margin-top: 2rem;
+	}
+	/* the avatars' lead, set like the section's own under its heading */
+	.avatars-intro {
+		max-width: 62ch;
+		margin-top: 1.5rem;
+		color: var(--l-muted);
+		font:
+			400 17px / 1.5 'Llama Sans',
+			var(--body);
 	}
 </style>
