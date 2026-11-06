@@ -21,7 +21,7 @@
 </script>
 
 <div class="neutral">
-	<div class="strip">
+	<div class="strip rounded-control elevated-control">
 		{#each groups as g (g.label)}
 			{#each g.colours as c (c)}<span style:background={c} style:flex-grow={g.width}></span>{/each}
 		{/each}
@@ -67,12 +67,14 @@
 	.chip {
 		display: flex;
 		overflow: hidden;
-		box-shadow: inset 0 0 0 1px var(--line-default);
 	}
 
 	.strip {
 		height: 96px;
-		border-radius: 6px;
+	}
+
+	.chip {
+		box-shadow: inset 0 0 0 1px var(--line-default);
 	}
 
 	.strip span {

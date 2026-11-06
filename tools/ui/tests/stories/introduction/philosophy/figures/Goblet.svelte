@@ -23,7 +23,7 @@
 	});
 </script>
 
-<div bind:this={chat} class="goblet">
+<div bind:this={chat} class="goblet rounded-card elevated-surface">
 	<div class="messages">
 		<ChatMessage chatActions={noopChatActions} message={userMessage} />
 
@@ -40,7 +40,6 @@
 		width: min(44rem, 100%);
 		margin-inline: auto;
 		padding: clamp(16px, 3vw, 32px);
-		border-radius: 10px;
 		background: var(--surface-page);
 	}
 

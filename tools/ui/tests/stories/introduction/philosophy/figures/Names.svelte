@@ -8,13 +8,13 @@
 </script>
 
 <div class="names">
-	<div style:background={HERO} class="tile llama">
+	<div style:background={HERO} class="tile llama rounded-card elevated-surface">
 		<span aria-label="Llama" class="lockup" role="img">Llama</span>
 
 		<span class="note">Llama Sans Bold · on colour</span>
 	</div>
 
-	<div class="tile light">
+	<div class="tile light rounded-card elevated-surface">
 		<span aria-label="llama.cpp" class="lockup mono" role="img"
 			>llama<span class="cpp">.cpp</span></span
 		>
@@ -22,7 +22,7 @@
 		<span class="note">Llama Mono Bold · on light</span>
 	</div>
 
-	<div class="tile dark">
+	<div class="tile dark rounded-card elevated-surface">
 		<span aria-label="llama.cpp" class="lockup mono" role="img"
 			>llama<span class="cpp">.cpp</span></span
 		>
@@ -44,7 +44,6 @@
 		gap: 24px;
 		min-height: 13rem;
 		padding: 24px;
-		border-radius: 10px;
 		container-type: inline-size;
 	}
 
@@ -54,13 +53,11 @@
 
 	.light {
 		background: #fafafa;
-		box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.08);
 		color: #111111;
 	}
 
 	.dark {
 		background: #111111;
-		box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.08);
 		color: #fafafa;
 	}
 
