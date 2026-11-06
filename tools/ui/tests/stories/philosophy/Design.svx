@@ -5,6 +5,7 @@
 -->
 
 <script>
+	import ArtColours from './figures/ArtColours.svelte';
 	import Figure from './Figure.svelte';
 	import Goblet from './figures/Goblet.svelte';
 	import Grotesque from './figures/Grotesque.svelte';
@@ -113,11 +114,17 @@ Most of the interface is grey. Each group of colours has one job:
 
 Backgrounds are neutral too. Only the Llama lockup goes on colour: llama.app's light blue and navy.
 
+The art colours come from the world llama.cpp runs in. **Sand** is the warm ground for posters and boards, and a nod to silicon, made from sand, that every chip is built on. **Sky** and **navy** are the day sky and the night sky, the light and dark grounds Llama goes on. **Cinder** is the one warm accent, and **blue**, **green** and **amber** fill shapes and numerals.
+
+<Figure n={10} caption="The art colours as the real tokens: sand, sky and navy as grounds, the rest as marks.">
+	<ArtColours />
+</Figure>
+
 ## Two names, one family
 
 **Llama** is the product: capital L, Llama Sans, allowed on colour. **llama.cpp** is the engine: lowercase, Llama Mono Bold, .cpp in cinder, on neutral grounds only. Both use the same icon glyph, which ties the two lockups together.
 
-<Figure n={10} caption="Both lockups typed: U+E002 and the name, in each font. Llama on llama.app's blue; llama.cpp on light and dark.">
+<Figure n={11} caption="Both lockups typed: U+E002 and the name, in each font. Llama on llama.app's blue; llama.cpp on light and dark.">
 	<Names />
 </Figure>
 
@@ -127,13 +134,13 @@ Posts, link previews, posters and the site follow the app's rules: neutral groun
 
 Each post is a Svelte template with its copy kept as data, and the key visuals use real Llama Chat screens, so a new post is new copy, not a new design.
 
-<Figure n={11} caption="The real templates from Communications › Applications: a model drop post on light, llama.app's link preview on blue, and llama.cpp's GitHub preview on dark.">
+<Figure n={12} caption="The real templates from Communications › Applications: a model drop post on light, llama.app's link preview on blue, and llama.cpp's GitHub preview on dark.">
 	<Posts />
 </Figure>
 
 Artwork has more room. The specimen boards follow the Swiss format: one face set large on art-colour, sand or grey grounds, with cinder as the only warm accent.
 
-<Figure n={12} caption="Specimen boards and posters for Llama Sans, in the brand palette.">
+<Figure n={13} caption="Specimen boards and posters for Llama Sans, in the brand palette.">
 	<Boards />
 </Figure>
 

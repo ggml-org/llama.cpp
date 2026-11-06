@@ -16,7 +16,7 @@
 			here: 'ggml, libllama and llama-server',
 			name: 'Inference',
 			what: 'The engine and the server that run the model, and the tools the server runs.',
-			yours: 'On your hardware, or a server someone you trust shares'
+			yours: 'You are the provider: your hardware, or a server you trust'
 		},
 		{
 			here: 'A GGUF file, from Hugging Face',
