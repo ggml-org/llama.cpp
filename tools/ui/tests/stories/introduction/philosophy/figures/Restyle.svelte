@@ -27,7 +27,7 @@
 
 <div class="looks">
 	{#each looks as look (look.label)}
-		<div class="look" style={look.style}>
+		<div class="look card-surface rounded-card" style={look.style}>
 			<span class="label">{look.label}</span>
 
 			<div class="row">
@@ -58,8 +58,6 @@
 		display: grid;
 		gap: 16px;
 		padding: 20px;
-		border-radius: 10px;
-		background: var(--surface-page);
 	}
 
 	.label {

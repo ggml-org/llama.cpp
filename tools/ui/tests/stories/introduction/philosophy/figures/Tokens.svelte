@@ -14,7 +14,7 @@
 		<li>
 			<span class="tier">{t.tier}</span>
 
-			<span class="swatch"></span>
+			<span class="swatch rounded-control elevated-control"></span>
 
 			<code>{t.name}</code>
 
@@ -75,9 +75,7 @@
 
 	.swatch {
 		width: 56px;
-		border-radius: 8px;
 		background: var(--button-primary-background);
-		box-shadow: inset 0 0 0 1px var(--line-default);
 	}
 
 	code {

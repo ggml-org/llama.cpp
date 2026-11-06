@@ -10,8 +10,10 @@
 	import Grotesque from './philosophy/figures/Grotesque.svelte';
 	import IconSizes from './philosophy/figures/IconSizes.svelte';
 	import Measure from './philosophy/figures/Measure.svelte';
+	import Boards from '../brand/communications/Boards.svelte';
 	import Names from './philosophy/figures/Names.svelte';
 	import Neutral from './philosophy/figures/Neutral.svelte';
+	import Posts from './philosophy/figures/Posts.svelte';
 	import Products from './philosophy/figures/Products.svelte';
 	import Restyle from './philosophy/figures/Restyle.svelte';
 	import Tokens from './philosophy/figures/Tokens.svelte';
@@ -118,6 +120,22 @@ Backgrounds stay neutral too. The llama.cpp lockup always sits on light, dark or
 
 <Figure n={9} caption="Both lockups typed, not placed: U+E002 followed by the name, in each font. Llama goes on llama.app's hero blue; llama.cpp stays on neutral light and dark.">
 	<Names />
+</Figure>
+
+## Communications
+
+Posts, link previews, posters and the site follow the same rules as the app. They are neutral by default, set in Llama Sans and Llama Mono, with the lockups typed rather than placed, and colour comes only from the art colours and cinder. Llama posts may go on llama.app's hero blue and its navy; llama.cpp ones stay on light and dark.
+
+They are built the same way too. The key visuals show the real Llama Chat, not a mock-up of it, and every post is a Svelte template with its copy kept as data, so a new post is new words, not a new design, and it can never drift from the product it shows.
+
+<Figure n={10} caption="The real templates from Brand › Communications, at their own proportions: a model drop post on light, llama.app's link preview on the hero blue, and llama.cpp's GitHub preview on dark.">
+	<Posts />
+</Figure>
+
+Artwork is where the brand is allowed to play. The specimen boards follow the classic Swiss boards: one face, set large, on grounds from the art colours, beige and the greys, with cinder as the one warm mark and never red.
+
+<Figure n={11} caption="Specimen boards and posters for Llama Sans, after the Swiss specimen boards, in the brand palette.">
+	<Boards />
 </Figure>
 
 ## When something new comes up

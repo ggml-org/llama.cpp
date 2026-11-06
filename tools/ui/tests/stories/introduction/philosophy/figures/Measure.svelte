@@ -13,7 +13,7 @@
 </script>
 
 <div class="measure">
-	<div class="stage">
+	<div class="stage rounded-card shadow-(--elevation-inset)">
 		<div class="button">
 			<Button><Play />Run model</Button>
 		</div>
@@ -43,8 +43,7 @@
 		display: grid;
 		place-items: center;
 		min-height: 14rem;
-		border-radius: 10px;
-		background-color: var(--surface-page);
+		background-color: var(--surface-muted);
 		background-image:
 			linear-gradient(
 				to right,
