@@ -235,10 +235,14 @@
 		the opener: the statement big in the middle, the lede at a size that still reads at the Store's thumbnail (about a
 		third of the piece), and the lockup between the two in size, set apart under them
 	*/
+	/*
+		centred on the whole piece, and short enough (the lede on one line) to stay clear of the bottom quarter, where the
+		Store may set its own text
+	*/
 	.kind-brand {
 		justify-content: center;
-		/* centred in the top three quarters, so the lockup stays clear of the Store's text */
-		gap: calc(var(--u) * 1.6);
+		gap: calc(var(--u) * 1.3);
+		margin-bottom: calc(-1 * var(--safe-bottom));
 	}
 	.kind-brand .text {
 		gap: calc(var(--u) * 1.1);
@@ -249,7 +253,7 @@
 		white-space: pre-line;
 	}
 	.kind-brand .text :global(.t-lede) {
-		max-width: calc(var(--u) * 24);
+		max-width: calc(var(--u) * 34);
 		font-size: calc(var(--u) * 1.05);
 	}
 	.lockup {
