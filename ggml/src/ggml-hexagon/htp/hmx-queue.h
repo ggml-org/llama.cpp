@@ -12,6 +12,7 @@
 
 #include "hex-utils.h"
 #include "hex-profile.h"
+#include "htp-thread.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -23,7 +24,7 @@ extern "C" {
 #define HMX_QUEUE_POLL_COUNT 1
 #endif
 
-typedef void (*hmx_queue_func)(void *);
+typedef void (*hmx_queue_func)(const htp_thread_t * th, void *);
 
 // Dummy funcs used as signals
 enum hmx_queue_signal {
@@ -49,10 +50,10 @@ struct hmx_queue_s {
 
     atomic_uint      seqn;      // incremented for all pushes, used with futex
     qurt_thread_t    thread;
+    htp_thread_t     th;
     void *           stack;
     uint32_t         hap_rctx;
     bool             hmx_locked;
-    struct htp_thread_trace * trace;
     bool             external_mem; // memory owned externally
 };
 
@@ -60,7 +61,7 @@ typedef struct hmx_queue_s * hmx_queue_t;
 
 size_t      hmx_queue_sizeof(size_t capacity, uint32_t stack_size);
 size_t      hmx_queue_alignof(void);
-hmx_queue_t hmx_queue_init(void * ptr, size_t capacity, uint32_t stack_size, uint32_t hap_rctx, struct htp_thread_trace * trace);
+hmx_queue_t hmx_queue_init(void * ptr, size_t capacity, uint32_t stack_size, uint32_t hap_rctx, dma_queue_t * dma, struct htp_thread_trace * trace);
 void        hmx_queue_free(hmx_queue_t q);
 
 static inline struct hmx_queue_desc hmx_queue_make_desc(hmx_queue_func func, void * data) {

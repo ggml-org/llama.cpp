@@ -192,7 +192,11 @@ struct htp_op_desc {
 };
 
 #ifndef HTP_MAX_NTHREADS
-#define HTP_MAX_NTHREADS 10
+#define HTP_MAX_NTHREADS 12
+#endif
+
+#ifndef HTP_MAX_NHVX
+#define HTP_MAX_NHVX 8
 #endif
 
 #define HTP_TRACE_MAX_EVENTS 256
@@ -285,7 +289,7 @@ struct htp_opbatch_rsp {
     uint32_t n_tensors;      // Number of tensors
     uint32_t n_ops;          // Number of op profile descriptors
     uint32_t usecs;          // Number of usec
-    uint32_t n_traces[HTP_MAX_NTHREADS + 1];
+    uint32_t n_traces[HTP_MAX_NTHREADS];
     // struct htp_prof_desc profs[];  -- dspqueue buf 0
 };
 
