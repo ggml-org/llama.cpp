@@ -1140,13 +1140,20 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
             const std::string mask_name = mask->op != GGML_OP_NONE      ? std::string() :
                                           mask == model_params.swa_mask ? get_tensor_ov_name(cgraph, mask) + "_swa" :
                                                                           get_tensor_ov_name(cgraph, mask);
+            // gemma-4's KV-shared layers come last and take their mask rows from the input masks with GET_ROWS: keep
+            // the name and window read from the input
+            const bool derived_mask = mask_name.empty();
             if (layer_is_swa) {
                 compute_params.attention_size_swa = mask->ne[0];
-                compute_params.swa_window = get_swa_window_from_mask(mask);
-                compute_params.mask_swa_name = mask_name;
+                if (!derived_mask || compute_params.mask_swa_name.empty()) {
+                    compute_params.swa_window = get_swa_window_from_mask(mask);
+                    compute_params.mask_swa_name = mask_name;
+                }
             } else {
                 compute_params.attention_size = mask->ne[0];
-                compute_params.mask_name = mask_name;
+                if (!derived_mask || compute_params.mask_name.empty()) {
+                    compute_params.mask_name = mask_name;
+                }
             }
             if (is_static) {
                 const bool slice_prefill = ggml_openvino_kv_slice_enabled() && compute_params.input_len > 1;
