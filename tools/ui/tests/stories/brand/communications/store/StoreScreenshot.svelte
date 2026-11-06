@@ -31,10 +31,10 @@
 
 	const format = FORMATS.msScreenshot;
 	const g = grid(format);
-	// the quick chat is 28 units wide; the desktop is drawn at 1.3 times Windows' size, its taskbar 48px high; the
+	// the quick chat is 28 units wide; the desktop is drawn at 1.2 times Windows' size, its taskbar 48px high; the
 	// Models card close up at 2.1 times
 	const windowZoom = (g.unit * 28) / 1040;
-	const desk = 1.3;
+	const desk = 1.2;
 	const close = 2.1;
 	// from the area's bottom down to the piece's edge
 	const below = g.margin + (format.safe?.bottom ?? 0);
@@ -74,7 +74,7 @@
 		{:else if kind === 'desktop'}
 			<!-- the flyout stands on the taskbar at the screen's right edge -->
 			<div style:bottom="{48 * desk - below}px" style:right="{-g.margin}px" class="flyout">
-				<div style:zoom={desk}><WindowsTray rows={3} /></div>
+				<div style:zoom={desk}><WindowsTray /></div>
 			</div>
 
 			<div
@@ -89,7 +89,7 @@
 			</div>
 		{:else if kind === 'card'}
 			<div style:margin-bottom="{-below / close}px" style:zoom={close} class="close-up">
-				<WindowsTray card rows={4} />
+				<WindowsTray card />
 			</div>
 		{:else if kind === 'brand'}
 			<span class="lockup">{LOCKUP}Llama</span>

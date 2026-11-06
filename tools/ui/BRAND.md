@@ -22,7 +22,8 @@ deep when you want them. We say all of this by showing it, never by preaching it
 - Plain words and real numbers. Short sentences. Name things the way people know them.
 - Calm and hopeful. No pride, no righteousness, no fear and no hype.
 - Show what the app does rather than mock the alternative.
-- Name model makers in words, never with their logos. Never pick favourites among models or vendors.
+- Name model makers in words, never with their logos, except inside the real app where it shows them (its model
+  lists). Never pick favourites among models or vendors.
 
 | We say                                     | We don't                                                                          |
 | ------------------------------------------ | --------------------------------------------------------------------------------- |
