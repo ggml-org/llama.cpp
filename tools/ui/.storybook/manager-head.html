@@ -64,14 +64,18 @@
 			'philosophy--design': 'philosophy-design--design',
 			'philosophy--ideology': 'philosophy-ideology--ideology',
 			'philosophy--product': 'philosophy-product--product',
-			'introduction-assets--assets': 'brand-logo-assets--logo'
+			'introduction-assets--assets': 'brand-logo-assets--logo',
+			'introduction-design-guidelines--docs': 'agents-design-guidelines--docs',
+			'introduction-brand-guidelines--docs': 'agents-brand-guidelines--docs'
 		};
 
 		// whole groups that moved, by id prefix
 		var movedGroups = [['brand-logo-lockup-proposal--', 'brand-logo-usage--lockups']];
 
 		function go(to) {
-			var url = location.pathname + (to ? '?path=/story/' + to : '');
+			var url =
+				location.pathname +
+				(to ? '?path=/' + (/--docs$/.test(to) ? 'docs' : 'story') + '/' + to : '');
 
 			if (url !== location.pathname + location.search) location.replace(url);
 		}
