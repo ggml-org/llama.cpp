@@ -1966,8 +1966,8 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
 
     if (output && tok_embd &&
             strcmp(output->name, tok_embd->name) == 0 &&
-            (output_s || output_in_s)) {
-        throw std::runtime_error("output scales require a separate output weight");
+            (tok_embd_s || output_s || output_in_s)) {
+        throw std::runtime_error("embedding and output scales require a separate output weight");
     }
     // populate tensors_by_name
     for (auto & [_, ctx_ptr] : ml.ctx_map) {
@@ -2127,6 +2127,14 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     for (auto & [ctx, bufs] : ctx_bufs) {
         if (!ml.load_all_data(ctx, bufs, use_mlock ? &pimpl->mlock_mmaps : NULL, params.progress_callback, params.progress_callback_user_data)) {
             return false;
+        }
+    }
+
+    if (tok_embd_s && !ml.no_alloc) {
+        float scale;
+        ggml_backend_tensor_get(tok_embd_s, &scale, 0, sizeof(scale));
+        if (!std::isfinite(scale)) {
+            throw std::runtime_error("token embedding scale must be finite");
         }
     }
 
@@ -4094,6 +4102,16 @@ static void llama_tensor_rows_to_f32(const ggml_tensor * tensor, int64_t row0, i
     }
 }
 
+static void llama_scale_tok_embd(const llama_model * model, float * out, size_t n) {
+    if (model->tok_embd_s) {
+        float scale;
+        ggml_backend_tensor_get(model->tok_embd_s, &scale, 0, sizeof(scale));
+        for (size_t i = 0; i < n; ++i) {
+            out[i] *= scale;
+        }
+    }
+}
+
 uint32_t llama_model_get_tok_embd(const struct llama_model * model, float * out) {
     if (model->vocab.n_tokens() == 0 || model->tok_embd == nullptr) {
         return 0;
@@ -4108,6 +4126,7 @@ uint32_t llama_model_get_tok_embd(const struct llama_model * model, float * out)
     }
 
     llama_tensor_rows_to_f32(tensor, 0, tensor->ne[1], out);
+    llama_scale_tok_embd(model, out, nelements);
 
     return (uint32_t) nelements;
 }
@@ -4128,6 +4147,7 @@ uint32_t llama_model_get_tok_embd_rows(const struct llama_model * model, const l
         }
         llama_tensor_rows_to_f32(tensor, tokens[i], 1, out + (size_t) i * tensor->ne[0]);
     }
+    llama_scale_tok_embd(model, out, (size_t) n_tokens * tensor->ne[0]);
 
     return n_tokens * (uint32_t) tensor->ne[0];
 }

@@ -812,6 +812,9 @@ struct llm_graph_params {
 
     const llama_hadamard * hdmd = nullptr;
 
+    ggml_tensor * tok_embd = nullptr;
+    ggml_tensor * tok_embd_s = nullptr;
+
     ggml_tensor * layer_inp_dev = nullptr; // own layer input device buffer (write)
     ggml_tensor * layer_inp_src = nullptr; // ctx_other's layer input device buffer (read)
 
@@ -1075,6 +1078,9 @@ struct llm_graph_context {
     const llama_prec_policy * prec_policy;
 
     const llama_hadamard * hdmd;
+
+    ggml_tensor * tok_embd;
+    ggml_tensor * tok_embd_s;
 
     ggml_tensor * layer_inp_dev;
     ggml_tensor * layer_inp_src;

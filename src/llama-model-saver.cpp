@@ -507,6 +507,7 @@ void llama_model_saver::add_tensors_from_model() {
             std::string(model->output->name) != std::string(model->tok_embd->name)) {
         add_tensor(model->tok_embd); // some models use the same tensor for tok_embd and output
     }
+    add_tensor(model->tok_embd_s);
     add_tensor(model->type_embd);
     add_tensor(model->pos_embd);
     add_tensor(model->tok_norm);

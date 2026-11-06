@@ -768,6 +768,7 @@ struct llama_model {
     std::vector<int32_t> engram_token_map;
 
     struct ggml_tensor * tok_embd   = nullptr;
+    struct ggml_tensor * tok_embd_s = nullptr;
     struct ggml_tensor * type_embd  = nullptr;
     struct ggml_tensor * pos_embd   = nullptr;
     struct ggml_tensor * tok_norm   = nullptr;

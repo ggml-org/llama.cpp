@@ -191,6 +191,10 @@ llama_context::llama_context(
     //     may need to be backend-dependent
     LLAMA_LOG_INFO("%s: constructing llama_context\n", __func__);
 
+    if (model.tok_embd_s && params.ctx_type != LLAMA_CONTEXT_TYPE_DEFAULT) {
+        throw std::runtime_error("scaled token embeddings require a default context");
+    }
+
     t_start_us = model.t_start_us;
     t_load_us  = model.t_load_us;
 
@@ -2923,6 +2927,8 @@ llm_graph_params llama_context::graph_params(
         /*.moe_cache   =*/ moe_cache.get(),
         /*.prec_policy =*/ &model.prec_policy,
         /*.hdmd        =*/ model.hdmd.rot.empty() ? nullptr : &model.hdmd,
+        /*.tok_embd    =*/ model.tok_embd,
+        /*.tok_embd_s  =*/ model.tok_embd_s,
         /*.layer_inp_dev =*/ layer_inp_dev,
         /*.layer_inp_src =*/ supports_embd_row() ? cparams.ctx_other->get_layer_inp_dev() : nullptr,
         /*.samplers    =*/ sampling.samplers,
