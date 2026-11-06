@@ -1098,6 +1098,10 @@ bool is_host_input(const std::shared_ptr<GgmlOvDecoder> & ggml_decoder, const st
     return t != nullptr && !ggml_openvino_buffer_is_remote(t);
 }
 
+// Off until the OpenVINO GPU plugin is fixed: it writes out of bounds when a dynamic output it bound to USM host memory
+// is later bound to plain host memory, which output staging does when the output count changes between calls.
+constexpr bool k_stage_outputs = false;
+
 bool stageable_size(const ov::Tensor & t) {
     return t.get_byte_size() > 0 && t.get_byte_size() <= k_io_staging_max_bytes;
 }
@@ -1710,8 +1714,8 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::share
             }
             uint64_t id = ggml_decoder->take_last_kv_tensor_id();
             auto & binding = out_bindings[i];
-            if (!inactive && id == 0 && io_staging_enabled() && !ggml_openvino_buffer_is_remote(ggml_tensor) &&
-                stageable_size(output_tensor)) {
+            if (k_stage_outputs && !inactive && id == 0 && io_staging_enabled() &&
+                !ggml_openvino_buffer_is_remote(ggml_tensor) && stageable_size(output_tensor)) {
                 void * dst = output_tensor.data();
                 const size_t bytes = output_tensor.get_byte_size();
                 output_tensor = staging_for(*ggml_decoder, binding, output_tensor);
