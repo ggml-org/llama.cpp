@@ -1,3 +1,5 @@
+#pragma once
+
 #include "common.cuh"
 #include "fattn-common.cuh"
 
