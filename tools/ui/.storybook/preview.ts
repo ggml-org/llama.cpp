@@ -48,7 +48,7 @@ const preview: Preview = {
 					'UI',
 					[
 						'Foundations',
-						['Colors', 'Typography', 'Sizing', 'Shapes', 'Elevation', 'Surfaces'],
+						['Colors', 'Typography', 'Sizing', 'Shapes', 'Elevation', 'Surfaces', 'Brand'],
 						'Actions',
 						'Forms',
 						'Display',

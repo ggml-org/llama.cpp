@@ -1,12 +1,12 @@
 <!--
-	How the Llama icon is used, one case per section (section picks which; each is a story of Brand/Logo/Usage): as
-	its two glyphs of Llama Sans (U+E000 for text, U+E001, the capital form at the lockup's proportion) in display
-	type and buttons, the two lockups in context (Llama in Sans, llama.cpp in Mono), in a download badge and in
-	running text, then as the web app's favicon, PWA, maskable and Apple touch icons and its splash screens, with
-	their proportions and placement drawn in, and in the social avatars, with how it is optically centred in a circle.
-	The app icons follow the web UI's own pwa-assets.config.ts (PWA_ASSET_GENERATOR) and make-icons-circular.js, but
-	are drawn with the L: the files it ships still carry the old llama.cpp mark. It sits in the logo showcase's frame
-	(ShowcaseFrame), on its colours.
+	How the Llama icon is used, one case per section (section picks which; each is a story of Brand/Logo/Usage, but
+	the splash screens, which are UI/Foundations/Brand): as its two glyphs of Llama Sans (U+E000 for text, U+E001, the
+	capital form at the lockup's proportion) in display type and buttons, the two lockups in context (Llama in Sans,
+	llama.cpp in Mono), in a download badge and in running text, then as the web app's favicon, PWA, maskable and Apple
+	touch icons and its splash screens, with their proportions and placement drawn in, and in the social avatars, with
+	how it is optically centred in a circle. The app icons follow the web UI's own pwa-assets.config.ts
+	(PWA_ASSET_GENERATOR) and make-icons-circular.js, but are drawn with the L: the files it ships still carry the old
+	llama.cpp mark. It sits in the logo showcase's frame (ShowcaseFrame), on its colours.
 -->
 <script lang="ts">
 	import avatarSvg from '../assets/files/logo/svg/social/x/x-avatar-light.svg?raw';
