@@ -35,6 +35,8 @@ static/favicon*
 # Storybook
 *storybook.log
 storybook-static
+# Llama design system for Claude (npm run export:design-system)
+design-system-export
 *.code-workspace
 
 # Vitest browser mode failure artifacts

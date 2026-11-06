@@ -1,0 +1,24 @@
+import { Markdown, Meta, Unstyled } from '@storybook/addon-docs/blocks';
+import brandMd from '../../BRAND.md?raw';
+
+export const [, ...body] = brandMd.split(/^# .*$/m);
+
+<Meta title="Introduction/Brand guidelines" />
+
+<Unstyled>
+<div className="ds-docs">
+
+# Brand guidelines
+
+<div className="callout">
+
+**Written for agents first.** This is the brand book for Llama and llama.cpp: how posts, posters, release images, video thumbnails and link previews are made. The Llama design system in Claude, which Claude Design reads, is exported from this page and from **Communications** by `npm run export:design-system`.
+
+</div>
+
+Rendered from `tools/ui/BRAND.md`. Everything it describes is drawn under **Communications**, **Brand** and **Philosophy** in this Storybook, which win where the two disagree.
+
+<Markdown>{body.join('')}</Markdown>
+
+</div>
+</Unstyled>
