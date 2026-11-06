@@ -44,6 +44,14 @@
 		['Application', 'Llama in Llama Sans, the real app, on any ground']
 	];
 
+	// the voice, by example: an early ad for llama.app, and the same thing said plainly (Applications › Open models poster)
+	const voice = {
+		after: 'Over 100,000 open models, running on your own computer. No account. No meter running.',
+		before:
+			'Download llama.app and run 100,000+ open AI models locally on any device, for free. Or would you rather keep paying for burning tokens in the cloud? Choose wisely ;)',
+		why: 'The fact stays, the sneer goes. Freedom is shown by what the app does, not by mocking the alternative, and one phrase carries the accent.'
+	};
+
 	const layers = [
 		['Direction', 'The mood and these principles'],
 		['Foundations', 'Formats and the grid, grounds, type'],
@@ -78,6 +86,18 @@
 				<li><span class="n">{i + 1}</span><b>{name}</b><span class="voice">{voice}</span></li>
 			{/each}
 		</ol>
+	</section>
+
+	<section>
+		<h2>The voice, by example</h2>
+
+		<div class="voice">
+			<p class="before"><span class="tag">Before</span>{voice.before}</p>
+
+			<p class="after"><span class="tag">After</span>{voice.after}</p>
+		</div>
+
+		<p class="note">{voice.why}</p>
 	</section>
 
 	<section>
@@ -156,6 +176,31 @@
 	}
 	.voice {
 		color: var(--muted-foreground);
+	}
+	.voice {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+		gap: 1rem;
+		margin-bottom: 1rem;
+	}
+	.voice p {
+		display: grid;
+		gap: 0.5rem;
+		align-content: start;
+		margin: 0;
+		padding: 1rem 1.25rem;
+		border: 1px solid var(--border);
+		border-radius: 0.75rem;
+		font: 400 0.95rem / 1.5 var(--font-mono);
+	}
+	.before {
+		color: var(--muted-foreground);
+	}
+	.tag {
+		color: var(--muted-foreground);
+		font: 500 0.7rem var(--font-mono);
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
 	}
 	.layers li {
 		display: grid;

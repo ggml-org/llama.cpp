@@ -1,6 +1,7 @@
 <script lang="ts" module>
 	import StateGallery from '../helpers/StateGallery.svelte';
 	import StateGalleryItem from '../helpers/StateGalleryItem.svelte';
+	import Words from './communications/layouts/Words.svelte';
 	import LinkPreview from './communications/posts/LinkPreview.svelte';
 	import ModelDropPost from './communications/posts/ModelDropPost.svelte';
 	import {
@@ -9,14 +10,16 @@
 		type LinkPreviewCopy,
 		modelDrop,
 		type ModelDropCopy,
+		openModels,
 		whatsNew,
-		type WhatsNewCopy
+		type WhatsNewCopy,
+		type WordsCopy
 	} from './communications/posts/post';
 	import WhatsNewPost from './communications/posts/WhatsNewPost.svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 
 	// Communications' applications: key visuals with real copy, the pieces that ship. Model drop is a Roster, What's new
-	// a Bulletin, llama.app's link preview a Product and llama.cpp's a Statement. The copy is in the controls
+	// a Bulletin, llama.app's link preview a Product, llama.cpp's a Statement and the open models poster Words. The copy is in the controls
 	const { Story } = defineMeta({
 		parameters: {
 			controls: { disable: true },
@@ -81,6 +84,28 @@
 				>
 					<LinkPreview {copy} kind="repo" overlay={copy.overlay} {tone} />
 				</StateGalleryItem>
+			{/each}
+		</StateGallery>
+	{/snippet}
+</Story>
+
+<Story args={{ ...openModels, overlay: false }} name="Open models poster" parameters={editable}>
+	{#snippet template(args)}
+		{@const copy = args as WordsCopy & { overlay: boolean }}
+		<StateGallery minItemWidth="20rem">
+			{#each ['poster', 'portrait', 'square', 'story'] as const as format (format)}
+				{#each tones as tone (tone)}
+					<StateGalleryItem label="{FORMATS[format].name}, {tone}" note="Words · {size(format)}">
+						<Words
+							accent={copy.accent}
+							{format}
+							overlay={copy.overlay}
+							paragraphs={copy.paragraphs}
+							signoff={copy.signoff}
+							{tone}
+						/>
+					</StateGalleryItem>
+				{/each}
 			{/each}
 		</StateGallery>
 	{/snippet}

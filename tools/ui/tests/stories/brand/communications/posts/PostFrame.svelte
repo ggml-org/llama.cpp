@@ -19,12 +19,14 @@
 		label: string;
 		overlay?: boolean;
 		tone: Ground;
+		/** a fixed unit in pixels, for a specimen tile sized to its content rather than a format */
+		unit?: number;
 	}
 
-	let { actual = false, children, format, label, overlay = false, tone }: Props = $props();
+	let { actual = false, children, format, label, overlay = false, tone, unit }: Props = $props();
 
 	let column = $state(0);
-	const g = $derived(grid(format));
+	const g = $derived(grid(format, unit));
 	const safe = $derived(format.safe ?? { bottom: 0, top: 0 });
 	const scale = $derived(actual ? 1 : column ? Math.min(1, column / format.width) : 0);
 </script>

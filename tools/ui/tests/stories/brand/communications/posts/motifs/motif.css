@@ -1,0 +1,44 @@
+/*
+	The motifs' shared drawing: lines in the ground's ink, round caps, labels in Llama Mono in the muted ink, and one
+	cinder detail per motif. Each motif is an SVG that fills its box (see .fill in grounds.css).
+*/
+.motif-svg {
+	display: block;
+	width: 100%;
+	height: 100%;
+	overflow: visible;
+}
+.motif-svg .ink {
+	fill: none;
+	stroke: var(--p-ink);
+	stroke-width: 7;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+.motif-svg .thin {
+	fill: none;
+	stroke: var(--p-ink);
+	stroke-width: 3;
+	stroke-linecap: round;
+	opacity: 0.3;
+}
+.motif-svg .solid {
+	fill: var(--p-ink);
+}
+.motif-svg .soft {
+	fill: var(--p-inset);
+}
+.motif-svg .accent {
+	fill: var(--art-cinder);
+}
+.motif-svg .accent-line {
+	fill: none;
+	stroke: var(--art-cinder);
+	stroke-width: 7;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+.motif-svg text {
+	fill: var(--p-muted);
+	font: 500 18px var(--mono);
+}

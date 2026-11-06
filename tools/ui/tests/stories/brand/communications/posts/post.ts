@@ -71,9 +71,12 @@ export interface Grid {
 	unit: number;
 }
 
-/** The grid for a format: one unit tied to its short side, so a layout scales across formats rather than being redrawn */
-export function grid({ height, width }: PostFormat): Grid {
-	const unit = Math.max(Math.min(width, height) / 24, Math.max(width, height) / 48);
+/**
+ * The grid for a format: one unit tied to its short side, so a layout scales across formats rather than being redrawn.
+ * `unit` fixes it instead, for a specimen tile sized to its content
+ */
+export function grid({ height, width }: PostFormat, unit?: number): Grid {
+	unit ??= Math.max(Math.min(width, height) / 24, Math.max(width, height) / 48);
 	const shape: Shape = width / height >= 1.5 ? 'wide' : height / width >= 1.3 ? 'tall' : 'square';
 
 	return { columns: shape === 'wide' ? 12 : 6, gutter: unit / 2, margin: unit * 2, shape, unit };
@@ -226,4 +229,20 @@ export const linkPreview: LinkPreviewCopy = {
 	headline: 'Your AI.\nOn your computer.',
 	repoHeadline: 'LLM inference\nin C/C++',
 	repoLede: 'Run open models on your own hardware, from a laptop to a server.'
+};
+
+export interface WordsCopy {
+	accent: string;
+	paragraphs: string[];
+	signoff: [string, string];
+}
+
+/** a poster in Llama Mono: an early ad for llama.app, rewritten to say it plainly */
+export const openModels: WordsCopy = {
+	accent: 'on your own computer',
+	paragraphs: [
+		'Over 100,000 open models, running on your own computer.',
+		'No account. No meter running.'
+	],
+	signoff: ['llama.app', 'Free AI for everyone']
 };
