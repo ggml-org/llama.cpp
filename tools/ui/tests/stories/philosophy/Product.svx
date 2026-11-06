@@ -1,6 +1,6 @@
 <!--
 	How the products fit together (Philosophy › Product): the Llama stack, the line between Llama UI and the apps, the
-	three layers in it, and how Llama Chat ships. The most important parts of the Llama Suite planning pages
+	four layers in it, and how Llama Chat ships. The most important parts of the Llama Suite planning pages
 	(Llama UI Stack, One build, three channels); the roadmap and the app concepts stay there for now. Set in Editorial.
 -->
 
@@ -9,6 +9,7 @@
 	import Figure from './Figure.svelte';
 	import Products from './figures/Products.svelte';
 	import Rule from './figures/Rule.svelte';
+	import StackLayers from './figures/StackLayers.svelte';
 </script>
 
 <p class="kicker">Philosophy · How it fits together</p>
@@ -41,11 +42,16 @@ Components take data in and report what the user did. State and calls to the ser
 	<Rule />
 </Figure>
 
-## Across the three layers
+## Across the four layers
 
-- **Model:** a GGUF file from Hugging Face, which the apps help find, download and keep.
-- **Service:** llama-server, run by hand, started by a native app, or shared by someone else.
 - **Application:** Llama UI and the apps built on it. They never assume a cloud account and always show which model runs, and where.
+- **Harness:** Llama Chat's agentic loop and the tools it can call: on the server, in the browser, or from MCP servers you add.
+- **Inference:** llama-server, libllama and ggml, on your hardware. llama-server is run by hand, started by a native app or shared by someone else.
+- **Model:** a GGUF file from Hugging Face, which the apps help find, download and keep.
+
+<Figure n={3} caption="The Llama stack across the four layers, with the real parts on each. Code is set in Llama Mono; the dashed slot is for apps that aren't ours.">
+	<StackLayers />
+</Figure>
 
 ## Simple first, depth on request
 
@@ -55,7 +61,7 @@ Nothing comes pre-installed. On the first run, the Llama app suggests models tha
 
 Llama Chat is a static app (HTML, JavaScript and CSS), built once per release. Today it ships inside llama-server. Planned: `npx llama-chat` and chat.llama.app, which carry the client only and connect to a server you add.
 
-<Figure n={3} caption="The same build in three channels. Only the bundled one comes with a server.">
+<Figure n={4} caption="The same build in three channels. Only the bundled one comes with a server.">
 	<Channels />
 </Figure>
 

@@ -1,27 +1,34 @@
 <!--
-	The three layers between a person and a model, top to bottom: the application people use, the service that runs
-	inference, and the model's weights. Each says what it is, what it is in the Llama stack, and what it means to have it
-	on your side. The application, the one people touch, carries the cinder mark.
+	The four layers between a person and the AI, top to bottom: the application people use, the harness (the agentic
+	loop and its tools), inference (the engine and server) and the model's weights. Each says what it is, what it is in
+	the Llama stack, and what it means to have it on your side. The application, the one people touch, carries the
+	cinder mark.
 -->
 <script lang="ts">
 	const layers = [
 		{
-			here: 'Llama UI, Llama Chat, Llama for Mac and Windows',
+			here: 'Llama Chat, Llama for Mac and Windows, Llama UI',
 			name: 'Application',
-			what: 'How people work with the model: the harness, the UI and UX.',
-			yours: 'Your conversations, traces and settings, kept where you are'
+			what: 'The UI and UX people work with.',
+			yours: 'Your conversations and settings, kept where you are'
 		},
 		{
-			here: 'llama.cpp and llama-server',
-			name: 'Service',
-			what: 'The server that runs inference with the model.',
-			yours: 'On your machine, or one someone you trust runs and shares'
+			here: 'Llama Chat’s agentic loop; server, browser and MCP tools',
+			name: 'Harness',
+			what: 'What the model can do: the loop that calls tools, and the tools.',
+			yours: 'Only the tools you added, with the permissions you set'
+		},
+		{
+			here: 'ggml, libllama and llama-server',
+			name: 'Inference',
+			what: 'The engine and the server that run the model.',
+			yours: 'On your hardware, or a server someone you trust shares'
 		},
 		{
 			here: 'A GGUF file, from Hugging Face',
 			name: 'Model',
-			what: 'The weights: the neural network itself.',
-			yours: 'The exact model you chose, unchanged until you change it'
+			what: 'The weights: what everything else is built on.',
+			yours: 'Open, and the exact model you chose'
 		}
 	];
 </script>
@@ -29,7 +36,7 @@
 <ol class="layers">
 	{#each layers as layer, i (layer.name)}
 		<li class:top={i === 0} class="layer card-surface rounded-card">
-			<span class="n">{3 - i}</span>
+			<span class="n">{layers.length - i}</span>
 
 			<h3>{layer.name}</h3>
 
