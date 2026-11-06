@@ -254,7 +254,6 @@ kernel void kernel_top_k_f32_i32(
         threadgroup atomic_uint * histo     [[threadgroup(0)]],
         threadgroup        uint * sh_bucket [[threadgroup(1)]],
         threadgroup        uint * sh_above  [[threadgroup(2)]],
-        threadgroup atomic_uint * out_count [[threadgroup(3)]],
         uint3   tgpig[[threadgroup_position_in_grid]],
         ushort3 tpitg[[thread_position_in_threadgroup]],
         ushort3   ntg[[threads_per_threadgroup]]) {
@@ -316,28 +315,72 @@ kernel void kernel_top_k_f32_i32(
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
 
-    if (tid == 0) {
-        atomic_store_explicit(out_count, 0u, memory_order_relaxed);
+    // deterministic compaction: rank the kept elements by column order, so the
+    // result does not depend on the thread scheduling
+    const uint threshold = prefix;
+
+    // contiguous per-thread chunks, so that the scan below follows the column order
+    const uint chunk = (ncols + ntg_x - 1) / ntg_x;
+    const uint lo = tid*chunk;
+    const uint hi = MIN(lo + chunk, ncols);
+
+    uint ca = 0; // elements above the threshold in this chunk
+    uint ct = 0; // elements tied with the threshold in this chunk
+    for (uint i = lo; i < hi; ++i) {
+        const uint key = ggml_top_k_f2ui(src0_row[i]);
+        ca += (key >  threshold) ? 1u : 0u;
+        ct += (key == threshold) ? 1u : 0u;
+    }
+
+    // per-simdgroup totals into the now unused histogram, so that thread 0 can
+    // compute the exclusive base of each simdgroup with a serial scan
+    uint inca = ca;
+    uint inct = ct;
+    for (uint mask = 16u; mask > 0u; mask >>= 1) {
+        inca += simd_shuffle_xor(inca, mask);
+        inct += simd_shuffle_xor(inct, mask);
+    }
+    if ((tid & 31) == 0) {
+        atomic_store_explicit(&histo[tid/32u],      inca, memory_order_relaxed);
+        atomic_store_explicit(&histo[32 + tid/32u], inct, memory_order_relaxed);
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    // emit everything above the threshold, then fill the rest from ties
-    const uint threshold = prefix;
+    if (tid == 0) {
+        uint acc = 0;
+        for (uint t = 0; t < ntg.x/32u; ++t) {
+            const uint c2 = atomic_load_explicit(&histo[t], memory_order_relaxed);
+            atomic_store_explicit(&histo[t], acc, memory_order_relaxed);
+            acc += c2;
+        }
+        *sh_bucket = acc; // total above the threshold
 
-    for (uint i = tid; i < ncols; i += ntg_x) {
-        if (ggml_top_k_f2ui(src0_row[i]) > threshold) {
-            const uint pos = atomic_fetch_add_explicit(out_count, 1u, memory_order_relaxed);
-            dst_row[pos] = (int32_t) i;
+        acc = 0;
+        for (uint t = 0; t < ntg.x/32u; ++t) {
+            const uint c2 = atomic_load_explicit(&histo[32 + t], memory_order_relaxed);
+            atomic_store_explicit(&histo[32 + t], acc, memory_order_relaxed);
+            acc += c2;
         }
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    for (uint i = tid; i < ncols; i += ntg_x) {
-        if (ggml_top_k_f2ui(src0_row[i]) == threshold) {
-            const uint pos = atomic_fetch_add_explicit(out_count, 1u, memory_order_relaxed);
-            if (pos < top_k) {
-                dst_row[pos] = (int32_t) i;
+    // each kept element goes at the simdgroup's exclusive base plus its rank
+    // among the elements with a lower column within the simdgroup
+    const uint base_a = atomic_load_explicit(&histo[tid/32u], memory_order_relaxed) + simd_prefix_exclusive_sum(ca);
+    const uint base_t = *sh_bucket + atomic_load_explicit(&histo[32 + tid/32u], memory_order_relaxed) + simd_prefix_exclusive_sum(ct);
+
+    uint na = 0;
+    uint nt = 0;
+    for (uint i = lo; i < hi; ++i) {
+        const uint key = ggml_top_k_f2ui(src0_row[i]);
+        if (key > threshold) {
+            dst_row[base_a + na] = (int32_t) i;
+            ++na;
+        } else if (key == threshold) {
+            if (base_t + nt < top_k) {
+                dst_row[base_t + nt] = (int32_t) i;
             }
+            ++nt;
         }
     }
 }
