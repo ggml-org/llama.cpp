@@ -1,8 +1,9 @@
 <!--
-	The Llama stack across its four layers, top to bottom: the application people use, the harness that lets the model
-	act, inference that runs it, and the model's open weights, each with what it is for and its real parts. Code names
-	(ggml, libllama, GGUF, MCP) are set in Llama Mono. The slot for apps that are not ours is dashed, as in the
-	Introduction's building blocks; the application layer, the one people touch, carries the cinder mark.
+	The Llama stack across its three layers, top to bottom: the application people use, with its harness (the agentic
+	loop and the tools it calls) inside it, inference that runs the model, and the model's open weights, each with what
+	it is for and its real parts. Code names (ggml, libllama, GGUF, MCP) are set in Llama Mono. The slot for apps that
+	are not ours is dashed, as in the Introduction's building blocks; the application layer, the one people touch,
+	carries the cinder mark.
 -->
 <script lang="ts">
 	interface Part {
@@ -13,26 +14,21 @@
 		note: string;
 	}
 
-	const layers: { name: string; parts: Part[]; who: string }[] = [
+	const layers: { harness?: Part[]; name: string; parts: Part[]; who: string }[] = [
 		{
-			name: 'Application',
-			parts: [
-				{ name: 'Llama Chat', note: 'The chat client, bundled with llama-server' },
-				{ name: 'Llama for Mac and Windows', note: 'Run the server from the menu bar or tray' },
-				{ name: 'Llama UI', note: 'The components every app is built from' },
-				{ name: 'Your app', note: 'On Llama UI, or on the server’s API', open: true }
-			],
-			who: 'What people use'
-		},
-		{
-			name: 'Harness',
-			parts: [
+			harness: [
 				{ name: 'Agentic loop', note: 'In Llama Chat: calls tools and feeds back their results' },
 				{ name: 'Server tools', note: 'Run by llama-server, next to the model' },
 				{ name: 'Browser tools', note: 'Run in the page, on your device' },
 				{ code: true, name: 'MCP', note: 'Tools and resources from the servers you add' }
 			],
-			who: 'What the model can do'
+			name: 'Application',
+			parts: [
+				{ name: 'Llama Chat', note: 'The chat client, bundled with llama-server' },
+				{ name: 'Llama for Mac and Windows', note: 'Run the server from the menu bar or tray' },
+				{ name: 'Your app', note: 'On the server’s API, with Llama UI or without', open: true }
+			],
+			who: 'What people use'
 		},
 		{
 			name: 'Inference',
@@ -61,6 +57,18 @@
 	];
 </script>
 
+{#snippet list(parts: Part[])}
+	<ul>
+		{#each parts as part (part.name)}
+			<li class={['part rounded-panel', part.open ? 'open' : 'bg-surface-lifted elevated-control']}>
+				<b class:code={part.code}>{part.name}</b>
+
+				<span>{part.note}</span>
+			</li>
+		{/each}
+	</ul>
+{/snippet}
+
 <div class="stack">
 	{#each layers as layer, i (layer.name)}
 		<section class={['layer card-surface rounded-card', { first: i === 0 }]}>
@@ -72,20 +80,15 @@
 				<span class="who">{layer.who}</span>
 			</header>
 
-			<ul>
-				{#each layer.parts as part (part.name)}
-					<li
-						class={[
-							'part rounded-panel',
-							part.open ? 'open' : 'bg-surface-lifted elevated-control'
-						]}
-					>
-						<b class:code={part.code}>{part.name}</b>
+			{@render list(layer.parts)}
 
-						<span>{part.note}</span>
-					</li>
-				{/each}
-			</ul>
+			{#if layer.harness}
+				<div class="harness rounded-panel">
+					<p class="sub">Harness <span>the agentic loop and the tools it calls</span></p>
+
+					{@render list(layer.harness)}
+				</div>
+			{/if}
 		</section>
 
 		{#if i < layers.length - 1}<span aria-hidden="true" class="arrow">↓</span>{/if}
@@ -167,6 +170,25 @@
 		color: var(--figure-muted);
 		font-size: 12px;
 		line-height: 1.4;
+	}
+
+	.harness {
+		display: grid;
+		gap: 8px;
+		padding: 10px;
+		border: 1px solid var(--line-default);
+	}
+
+	.sub {
+		margin: 0;
+		font-size: 14px;
+		font-weight: 600;
+	}
+
+	.sub span {
+		margin-left: 6px;
+		color: var(--figure-muted);
+		font-weight: 400;
 	}
 
 	.arrow {

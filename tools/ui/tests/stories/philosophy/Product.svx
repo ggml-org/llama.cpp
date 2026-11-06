@@ -1,6 +1,6 @@
 <!--
 	How the products fit together (Philosophy › Product): the Llama stack, the line between Llama UI and the apps, the
-	four layers in it, and how Llama Chat ships. The most important parts of the Llama Suite planning pages
+	three layers in it, and how Llama Chat ships. The most important parts of the Llama Suite planning pages
 	(Llama UI Stack, One build, three channels); the roadmap and the app concepts stay there for now. Set in Editorial.
 -->
 
@@ -42,14 +42,13 @@ Components take data in and report what the user did. State and calls to the ser
 	<Rule />
 </Figure>
 
-## Across the four layers
+## Across the three layers
 
-- **Application:** Llama UI and the apps built on it. They never assume a cloud account and always show which model runs, and where.
-- **Harness:** Llama Chat's agentic loop and the tools it can call: on the server, in the browser, or from MCP servers you add.
+- **Application:** Llama Chat, Llama for Mac and Windows, or your own app. Ours never assume a cloud account and always show which model runs, and where. The harness lives inside the app: in Llama Chat, it is the agentic loop and the tools it calls, on the server, in the browser or from MCP servers you add. Llama UI is a library for building apps, not a layer: an app can use the layers below without it.
 - **Inference:** llama-server, libllama and ggml, on your hardware. llama-server is run by hand, started by a native app or shared by someone else.
 - **Model:** a GGUF file from Hugging Face, which the apps help find, download and keep.
 
-<Figure n={3} caption="The Llama stack across the four layers, with the real parts on each. Code is set in Llama Mono; the dashed slot is for apps that aren't ours.">
+<Figure n={3} caption="The Llama stack across the three layers, the harness inside the application, with the real parts on each. Code is set in Llama Mono; the dashed slot is for apps that aren't ours.">
 	<StackLayers />
 </Figure>
 
