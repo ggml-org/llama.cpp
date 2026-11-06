@@ -1229,13 +1229,13 @@ class ggml_webgpu_shader_lib {
     wgpu::Device           device;
     pre_wgsl::Preprocessor preprocessor;
 
-    std::unordered_map<int, webgpu_pipeline> count_equal_pipelines;    // key is src_overlap
     std::unordered_map<int, webgpu_pipeline> sum_rows_pipelines;       // key is fixed, no variants yet
     std::unordered_map<int, webgpu_pipeline> argmax_pipelines;         // key is vec4
     std::unordered_map<int, webgpu_pipeline> argsort_pipelines;        // key is order
     std::unordered_map<int, webgpu_pipeline> argsort_merge_pipelines;  // key is order
     std::unordered_map<int, webgpu_pipeline> cumsum_pipelines;         // key is fixed, no variants yet
     std::unordered_map<int, webgpu_pipeline> arange_pipelines;         // key is fixed, no variants yet
+    std::unordered_map<int, webgpu_pipeline> count_equal_pipelines;    // key is src_overlap
     std::unordered_map<ggml_webgpu_row_norm_pipeline_key, webgpu_pipeline, ggml_webgpu_row_norm_pipeline_key_hash>
         row_norm_pipelines;                                            // op/inplace
 
