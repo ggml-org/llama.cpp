@@ -14,7 +14,7 @@
 	const samples = [
 		{ label: 'Pangram', text: 'The quick brown fox jumps over the lazy dog' },
 		{ label: 'Interface', text: 'Settings · Models · New chat · Load GGUF' },
-		{ label: 'Code', text: 'llama-server -m model.gguf --port 8080 -> ok != err' },
+		{ label: 'Code', text: 'llama-server -m model.gguf --port 9931 -> ok != err' },
 		{ label: 'Numbers', text: '0123456789 · 42.7 tok/s · 0x1F40 · 3/4' },
 		{ label: 'Look-alikes', text: 'Il1| O0o rn m {[( )]} ,.;' }
 	];

@@ -16,11 +16,11 @@
 <Story asChild name="Default">
 	<StateGallery columns={2}>
 		<StateGalleryItem label="Empty">
-			<Input placeholder="http://localhost:8080" />
+			<Input placeholder="http://localhost:9931" />
 		</StateGalleryItem>
 
 		<StateGalleryItem label="Filled">
-			<Input value="http://localhost:8080" />
+			<Input value="http://localhost:9931" />
 		</StateGalleryItem>
 
 		<StateGalleryItem label="Invalid">

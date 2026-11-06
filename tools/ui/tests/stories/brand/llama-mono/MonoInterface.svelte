@@ -11,13 +11,13 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
 
-	let endpoint = $state('http://127.0.0.1:8080/v1');
+	let endpoint = $state('http://127.0.0.1:9931/v1');
 	let seed = $state('42');
 	let temperature = $state('0.8');
 	let copied = $state(false);
 
 	const command = `llama-server -hf ggml-org/gemma-3-12b-it-GGUF \\
-    --n-gpu-layers 99 --ctx-size 32768 --port 8080`;
+    --n-gpu-layers 99 --ctx-size 32768 --port 9931`;
 
 	const response = `{
   "model": "gemma-3-12b-it-Q4_K_M.gguf",

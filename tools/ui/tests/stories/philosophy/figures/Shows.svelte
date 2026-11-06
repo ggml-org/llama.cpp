@@ -24,7 +24,7 @@
 		<div class="model rounded-panel bg-surface-lifted">
 			<p class="name">Your model <Badge variant="outline">Q4_K_M</Badge></p>
 
-			<p class="where"><i class="live"></i>On this computer · <code>localhost:8080</code></p>
+			<p class="where"><i class="live"></i>On this computer · <code>localhost:9931</code></p>
 		</div>
 
 		<p class="note">Which model, on which server, always in view</p>

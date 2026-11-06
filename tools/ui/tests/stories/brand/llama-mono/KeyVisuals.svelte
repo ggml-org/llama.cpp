@@ -10,7 +10,7 @@
 		{ kind: 'log', text: 'offloaded 27/27 layers to GPU' },
 		{ kind: 'log', text: 'main: model loaded' },
 		{ kind: 'ok', text: 'server is listening on' },
-		{ kind: 'ok', text: 'http://127.0.0.1:8080' }
+		{ kind: 'ok', text: 'http://127.0.0.1:9931' }
 	];
 
 	// "GGUF", version 3, then the tensor and key-value counts (little-endian u64s)

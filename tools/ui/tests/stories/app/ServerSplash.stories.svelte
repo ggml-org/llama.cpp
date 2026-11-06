@@ -23,7 +23,7 @@
 		<StateGalleryItem label="Error">
 			<ServerErrorSplash
 				class="h-96"
-				error="Failed to fetch: the server at localhost:8080 is not reachable"
+				error="Failed to fetch: the server at localhost:9931 is not reachable"
 				onRetry={() => console.log('retry')}
 			/>
 		</StateGalleryItem>

@@ -24,7 +24,7 @@
 		<section class="part card-surface rounded-card">
 			<header><b>llama-server</b><span>Runs the model, here</span></header>
 
-			<p class="status"><i class="live"></i><code>localhost:8080</code></p>
+			<p class="status"><i class="live"></i><code>localhost:9931</code></p>
 		</section>
 
 		<section class="part card-surface rounded-card">

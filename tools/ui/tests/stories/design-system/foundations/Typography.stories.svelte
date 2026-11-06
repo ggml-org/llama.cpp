@@ -47,7 +47,7 @@
 		<div class="grid grid-cols-[9rem_1fr] items-baseline gap-6">
 			<span class="font-mono text-[11px] text-muted-foreground">font-mono</span>
 
-			<code class="font-mono text-body-sm">llama-server -m model.gguf --port 8080</code>
+			<code class="font-mono text-body-sm">llama-server -m model.gguf --port 9931</code>
 		</div>
 
 		<div class="grid grid-cols-[9rem_1fr] items-baseline gap-6">

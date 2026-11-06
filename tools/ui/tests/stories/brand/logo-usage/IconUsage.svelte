@@ -345,8 +345,8 @@
 		</div>
 
 		<!-- terminal output: Llama Mono's own one-cell icon, so the columns line up -->
-		<pre class="ctx terminal"><span class="prompt">$</span> llama-server -m model.gguf --port 8080
-<span class="banner"> llama.cpp</span> b6123 · listening on http://127.0.0.1:8080
+		<pre class="ctx terminal"><span class="prompt">$</span> llama-server -m model.gguf --port 9931
+<span class="banner"> llama.cpp</span> b6123 · listening on http://127.0.0.1:9931
 <span class="banner"> llama.cpp</span> b6123 · slot 0 ready, ctx 32768</pre>
 
 		<div class="ctx footer mono">
