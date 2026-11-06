@@ -113,10 +113,16 @@
 
 	const panels = $derived(
 		[
-			{ label: 'At the exact centre', x: centred, y: centred },
-			{ label: 'Lifted 1/60, the first optical centre', x: centred, y: centred - side / 60 },
+			{ label: 'At the exact centre', short: 'Exact centre', x: centred, y: centred },
+			{
+				label: 'Lifted 1/60, the first optical centre',
+				short: 'Lifted 1/60',
+				x: centred,
+				y: centred - side / 60
+			},
 			{
 				label: `Lifted 1/${lift} and nudged 1/${nudge} left, as in the files`,
+				short: `Lifted 1/${lift}, nudged 1/${nudge} left`,
 				x: placement.x,
 				y: placement.y
 			}
@@ -131,7 +137,36 @@
 </script>
 
 <figure class="m-0 grid min-w-0 gap-3">
-	<div class="grid gap-4 sm:grid-cols-3">
+	<!-- the three placements as they show, light and dark in the circle crop, with nothing drawn in -->
+	<div class="grid grid-cols-3 gap-4">
+		{#each panels as panel (panel.label)}
+			<div class="grid min-w-0 content-start gap-2">
+				<div class="grid grid-cols-2 gap-2">
+					{#each [['#FAFAFA', '#111111'], ['#111111', '#FAFAFA']] as [ground, ink] (ground)}
+						<svg
+							class="block aspect-square w-full rounded-full border border-border/60"
+							viewBox="0 0 {placement.size} {placement.size}"
+						>
+							<circle
+								cx={placement.size / 2}
+								cy={placement.size / 2}
+								fill={ground}
+								r={placement.size / 2}
+							/>
+
+							<g fill={ink} transform="translate({panel.x} {panel.y}) scale({placement.scale})">
+								{#each PATHS as d (d)}<path {d} />{/each}
+							</g>
+						</svg>
+					{/each}
+				</div>
+
+				<span class="text-center text-xs">{panel.short}</span>
+			</div>
+		{/each}
+	</div>
+
+	<div class="mt-4 grid gap-4 sm:grid-cols-3">
 		{#each panels as panel (panel.label)}
 			<div class="grid min-w-0 content-start gap-2">
 				<svg
