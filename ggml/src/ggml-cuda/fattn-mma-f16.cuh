@@ -750,8 +750,13 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
     constexpr int stride_tile_K = swz ? nbatch_K2 : nbatch_K2 + 4;
     constexpr int stride_tile_V = V_is_K_view ? stride_tile_K : (swz ? nbatch_V2 : nbatch_V2 + 4);
 
-    constexpr bool q_K = fused_K != FATTN_MMA_FUSED_NONE;
-    constexpr bool q_V = fused_V != FATTN_MMA_FUSED_NONE;
+    // The fused dequant path consumes the raw tiles staged by the multi-stage cp.async pipeline,
+    // which only exists for cc >= Ampere. The dispatch instantiates the fused template args for
+    // every compile pass, so on older architectures / HIP clamp them to the unfused path.
+    constexpr int  fused_K_eff = nstages > 1 ? fused_K : FATTN_MMA_FUSED_NONE;
+    constexpr int  fused_V_eff = nstages > 1 ? fused_V : FATTN_MMA_FUSED_NONE;
+    constexpr bool q_K         = fused_K_eff != FATTN_MMA_FUSED_NONE;
+    constexpr bool q_V         = fused_V_eff != FATTN_MMA_FUSED_NONE;
     char   * stage    = flash_attn_ext_f16_stage<ncols1, nbatch_fa>(tile_mask);
 
     const int k_VKQ_0 = kb0 * nbatch_fa;
@@ -776,11 +781,11 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
         static_assert(!q_V || !use_sparse, "fused KV dequant does not support sparse gather");
         if constexpr (q_K) {
             // Raw K bytes from the previous iter's prefetch are now in the staging area:
-            flash_attn_ext_f16_dequant_tile_q<fused_K, stride_tile_K, nwarps, nbatch_fa, DKQ/2>(stage, tile_K);
+            flash_attn_ext_f16_dequant_tile_q<fused_K_eff, stride_tile_K, nwarps, nbatch_fa, DKQ/2>(stage, tile_K);
             __syncthreads(); // The staging area is reused by the V load below.
         }
         if constexpr (q_V) {
-            flash_attn_ext_f16_load_tile_q<fused_V, nwarps, nbatch_fa, DV/2>((const char *) V_h2, stage, stride_V, k_VKQ_0, indices);
+            flash_attn_ext_f16_load_tile_q<fused_V_eff, nwarps, nbatch_fa, DV/2>((const char *) V_h2, stage, stride_V, k_VKQ_0, indices);
         } else {
             flash_attn_ext_f16_load_tile<stride_tile_V, nwarps, nbatch_fa, use_cp_async, oob_check, use_sparse>
                 (V_h2, tile_V, nbatch_V2, stride_V, k_VKQ_0, k_VKQ_sup, indices);
@@ -1136,7 +1141,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
         cp_async_wait_all();
         __syncthreads();
         if constexpr (q_V) {
-            flash_attn_ext_f16_dequant_tile_q<fused_V, stride_tile_V, nwarps, nbatch_fa, DV/2>(stage, tile_V);
+            flash_attn_ext_f16_dequant_tile_q<fused_V_eff, stride_tile_V, nwarps, nbatch_fa, DV/2>(stage, tile_V);
             __syncthreads(); // staging is reused by the K load below; tile_V must be visible for the PV loop.
         }
         if (!last_iter) {
@@ -1146,7 +1151,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
             }
             if constexpr (q_K) {
                 static_assert(!use_sparse, "fused KV dequant does not support sparse gather");
-                flash_attn_ext_f16_load_tile_q<fused_K, nwarps, nbatch_fa, DKQ/2>((const char *) K_h2, stage, stride_K, k_VKQ_0 + nbatch_fa, indices);
+                flash_attn_ext_f16_load_tile_q<fused_K_eff, nwarps, nbatch_fa, DKQ/2>((const char *) K_h2, stage, stride_K, k_VKQ_0 + nbatch_fa, indices);
             } else {
                 flash_attn_ext_f16_load_tile<stride_tile_K, nwarps, nbatch_fa, use_cp_async, oob_check, use_sparse>
                     (K_h2, tile_K, nbatch_K2, stride_K, k_VKQ_0 + nbatch_fa, k_VKQ_sup, indices);
@@ -1412,9 +1417,13 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
     half  * tile_mask = (half *) (nstages > 1 ? tile_V + nbatch_fa * stride_tile_V : tile_V + nbatch_fa * stride_tile_KV_max);
     // Linear staging area for raw quantized tiles, only used by the multi-stage pipeline:
     char  * stage     = flash_attn_ext_f16_stage<ncols1, nbatch_fa>(tile_mask);
-    constexpr bool q_K = fused_K != FATTN_MMA_FUSED_NONE;
-    constexpr bool q_V = fused_V != FATTN_MMA_FUSED_NONE;
-    static_assert(!q_K && !q_V || nstages > 1, "fused dequant requires the multi-stage pipeline");
+    // The fused dequant path requires the multi-stage cp.async pipeline, which only exists for
+    // cc >= Ampere. The dispatch instantiates the fused template args for every compile pass,
+    // so on older architectures / HIP clamp them to the unfused path.
+    // Only K is loaded through the fused path here, the fused V dequant runs in process_tile.
+    constexpr int  fused_K_eff = nstages > 1 ? fused_K : FATTN_MMA_FUSED_NONE;
+    constexpr int  fused_V_eff = nstages > 1 ? fused_V : FATTN_MMA_FUSED_NONE;
+    constexpr bool q_K         = fused_K_eff != FATTN_MMA_FUSED_NONE;
 
     T_B_KQ    Q_B[(Q_in_reg ? DKQ/(2*T_B_KQ::J) : 1)];
 #if defined(TURING_MMA_AVAILABLE)
@@ -1508,7 +1517,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
         }
         if constexpr (q_K) {
             static_assert(!use_sparse, "fused KV dequant does not support sparse gather");
-            flash_attn_ext_f16_load_tile_q<fused_K, nwarps, nbatch_fa, DKQ/2>((const char *) K_h2, stage, stride_K, kb0*nbatch_fa, indices);
+            flash_attn_ext_f16_load_tile_q<fused_K_eff, nwarps, nbatch_fa, DKQ/2>((const char *) K_h2, stage, stride_K, kb0*nbatch_fa, indices);
         } else {
             flash_attn_ext_f16_load_tile<stride_tile_K, nwarps, nbatch_fa, use_cp_async, oob_check, use_sparse>
                 (K_h2, tile_K, nbatch_K2, stride_K, kb0*nbatch_fa, k_VKQ_sup, indices);
@@ -1543,7 +1552,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
             constexpr int  k_VKQ_sup = nbatch_fa;
             flash_attn_ext_f16_iter
                 <DKQ, DV, ncols1, ncols2, nwarps, use_logit_softcap, V_is_K_view, use_sparse, needs_fixup, is_fixup, last_iter, oob_check,
-                 T_A_KQ, T_B_KQ, T_C_KQ, T_A_VKQ, T_B_VKQ, T_C_VKQ, fused_K, fused_V>
+                 T_A_KQ, T_B_KQ, T_C_KQ, T_A_VKQ, T_B_VKQ, T_C_VKQ, fused_K_eff, fused_V_eff>
                 (Q_f2, K_h2, V_h2, mask_h, indices, dstk, dstk_fixup, scale, slope, logit_softcap,
                  ne01, ne02, stride_K, stride_V, stride_mask, tile_Q, tile_K, tile_V, tile_mask, Q_B, VKQ_C,
                  KQ_max, KQ_rowsum, jt, kb0, k_VKQ_sup);
@@ -1552,7 +1561,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
         constexpr int  k_VKQ_sup = nbatch_fa;
         flash_attn_ext_f16_iter
             <DKQ, DV, ncols1, ncols2, nwarps, use_logit_softcap, V_is_K_view, use_sparse, needs_fixup, is_fixup, last_iter, oob_check,
-              T_A_KQ, T_B_KQ, T_C_KQ, T_A_VKQ, T_B_VKQ, T_C_VKQ, fused_K, fused_V>
+              T_A_KQ, T_B_KQ, T_C_KQ, T_A_VKQ, T_B_VKQ, T_C_VKQ, fused_K_eff, fused_V_eff>
             (Q_f2, K_h2, V_h2, mask_h, indices, dstk, dstk_fixup, scale, slope, logit_softcap,
              ne01, ne02, stride_K, stride_V, stride_mask, tile_Q, tile_K, tile_V, tile_mask, Q_B, VKQ_C,
              KQ_max, KQ_rowsum, jt, kb0, k_VKQ_sup);
