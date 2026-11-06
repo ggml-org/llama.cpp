@@ -448,6 +448,7 @@ server_task_result_ptr server_response::recv(const std::unordered_set<int> & id_
 }
 
 server_task_result_ptr server_response::recv_with_timeout(const std::unordered_set<int> & id_tasks, int timeout) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout);
     while (true) {
         std::unique_lock<std::mutex> lock(mutex_results);
 
@@ -459,7 +460,7 @@ server_task_result_ptr server_response::recv_with_timeout(const std::unordered_s
             }
         }
 
-        std::cv_status cr_res = condition_results.wait_for(lock, std::chrono::seconds(timeout));
+        std::cv_status cr_res = condition_results.wait_until(lock, deadline);
         if (!running) {
             RES_DBG("%s : queue result stop\n", __func__);
             std::terminate(); // we cannot return here since the caller is HTTP code
@@ -517,23 +518,23 @@ void server_response_reader::post_task(server_task && task, bool front) {
     GGML_ASSERT(!task.is_parent() && "not supported, use post_tasks() instead");
     task.index = 0;
     id_tasks.insert(task.id);
-    states.push_back(task.create_state());
+    states.push_back(task_result_state());
     queue_results.add_waiting_task_id(task.id);
     queue_tasks.post(std::move(task), front);
 }
 
-void server_response_reader::post_tasks(std::vector<server_task> && tasks, bool front) {
+void server_response_reader::post_tasks(std::vector<server_task> && tasks, const common_chat_session & session, bool front) {
     GGML_ASSERT(id_tasks.empty() && "post_tasks() can only be called once per reader");
     id_tasks = server_task::get_list_id(tasks);
     states.reserve(tasks.size());
     size_t index = 0;
     for (auto & task : tasks) {
         task.index = index++;
-        states.push_back(task.create_state());
+        states.push_back(task_result_state(session));
         // for child tasks
         for (auto & child_task : task.child_tasks) {
             child_task.index = index++;
-            states.push_back(child_task.create_state());
+            states.push_back(task_result_state(session));
         }
     }
     GGML_ASSERT(states.size() == id_tasks.size());

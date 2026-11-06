@@ -5,7 +5,7 @@ import {Counter, Rate, Trend} from 'k6/metrics'
 import exec from 'k6/execution';
 
 // Server chat completions prefix
-const server_url = __ENV.SERVER_BENCH_URL ? __ENV.SERVER_BENCH_URL : 'http://localhost:8080/v1'
+const server_url = __ENV.SERVER_BENCH_URL ? __ENV.SERVER_BENCH_URL : 'http://localhost:9931/v1'
 
 // Number of total prompts in the dataset - default 10m / 10 seconds/request * number of users
 const n_prompt = __ENV.SERVER_BENCH_N_PROMPTS ? parseInt(__ENV.SERVER_BENCH_N_PROMPTS) : 600 / 10 * 8

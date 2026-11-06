@@ -48,43 +48,24 @@ typedef struct VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV {
 #endif
 
 #include <algorithm>
-
 #include <cmath>
-
 #include <functional>
-
 #include <iomanip>
-
 #include <iostream>
-
 #include <tuple>
-
 #include <vector>
-
 #include <deque>
-
 #include <sstream>
-
 #include <utility>
-
 #include <memory>
-
 #include <limits>
-
 #include <map>
-
 #include <set>
-
 #include <unordered_map>
-
 #include <shared_mutex>
-
 #include <mutex>
-
 #include <future>
-
 #include <condition_variable>
-
 #include <thread>
 
 #if defined(_MSC_VER)
@@ -110,9 +91,7 @@ typedef struct VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV {
 #endif
 
 #include "ggml-impl.h"
-
 #include "ggml-backend-impl.h"
-
 #include "ggml-vulkan-shaders.hpp"
 
 #if !defined(VK_KHR_shader_bfloat16)
@@ -403,6 +382,7 @@ enum vk_conv_shapes {
     CONV_SHAPE_64x32,
     CONV_SHAPE_32x256,
     CONV_SHAPE_64x128,
+    CONV_SHAPE_256x128,
     CONV_SHAPE_COUNT,
 };
 
@@ -418,6 +398,7 @@ inline vk_conv_block_size vk_conv_block_sizes[CONV_SHAPE_COUNT] = {
     {  64,  32, 32 }, // CONV_SHAPE_64x32
     {  32, 256, 16 }, // CONV_SHAPE_32x256
     {  64, 128, 16 }, // CONV_SHAPE_64x128
+    { 256, 128, 16 }, // CONV_SHAPE_256x128
 };
 
 enum dmmv_wg_sizes {
@@ -504,6 +485,15 @@ static constexpr uint32_t num_argsort_pipelines = 11;
 static constexpr uint32_t num_topk_moe_pipelines = 10;
 
 static constexpr uint32_t num_topk_pipelines = 11;
+
+// FWHT block widths with a dedicated pipeline. The subgroup shader keeps n/subgroup_size
+// values per invocation, so widths above fwht_max_subgroup_n, or a subgroup narrow enough to
+// exceed fwht_max_subgroup_el_w values, use the shared-memory shader with one row per
+// workgroup instead.
+static constexpr uint32_t num_fwht_pipelines     = 8;
+static constexpr uint32_t fwht_max_subgroup_n    = 512;
+static constexpr uint32_t fwht_max_subgroup_el_w = 64;
+static constexpr uint32_t fwht_rows              = 4;
 
 static constexpr std::initializer_list<ggml_op> topk_moe_early_softmax_norm{ GGML_OP_SOFT_MAX, GGML_OP_RESHAPE,  GGML_OP_ARGSORT,
                                                                              GGML_OP_VIEW,     GGML_OP_GET_ROWS, GGML_OP_RESHAPE,
@@ -680,7 +670,6 @@ class vk_memory_logger;
 struct vk_device_struct {
     std::recursive_mutex mutex;
     std::mutex queue_submit_mutex;
-    mutable std::shared_mutex pinned_memory_mutex;
 
     // Guards compile_pending, all_pipelines, and the dynamic pipeline maps
     // (flash_attn, fa_mask_opt, solve_tri, conv2d, etc). The actual compile
@@ -699,6 +688,7 @@ struct vk_device_struct {
     uint64_t suballocation_block_size;
     uint64_t min_imported_host_pointer_alignment;
     bool external_memory_host {};
+    bool external_semaphore {};
     bool fp16;
     bool bf16;
     bool pipeline_robustness;
@@ -717,6 +707,7 @@ struct vk_device_struct {
     uint32_t subgroup_size_log2;
     uint32_t shader_core_count;
     bool uma;
+    bool rebar;
     bool prefer_host_memory;
     bool float_controls_rte_fp16;
     bool float_controls_denorm_preserve_fp16;
@@ -857,8 +848,8 @@ struct vk_device_struct {
     vk_pipeline pipeline_roll_f32;
     vk_pipeline pipeline_repeat_i32, pipeline_repeat_back_f32;
     vk_pipeline pipeline_repeat_i16;
-    vk_pipeline pipeline_cpy_f32_f32, pipeline_cpy_f32_f16, pipeline_cpy_f16_f16, pipeline_cpy_f16_f32, pipeline_cpy_f32_bf16, pipeline_cpy_bf16_f32, pipeline_cpy_f32_i32, pipeline_cpy_i32_f32;
-    vk_pipeline pipeline_contig_cpy_f32_f32, pipeline_contig_cpy_f32_f16, pipeline_contig_cpy_f16_f16, pipeline_contig_cpy_f16_f32, pipeline_contig_cpy_f32_bf16, pipeline_contig_cpy_bf16_f32, pipeline_contig_cpy_f32_i32, pipeline_contig_cpy_i32_f32;
+    vk_pipeline pipeline_cpy_32, pipeline_cpy_f32_f16, pipeline_cpy_16, pipeline_cpy_f16_f32, pipeline_cpy_f32_bf16, pipeline_cpy_bf16_f32, pipeline_cpy_bf16_f16, pipeline_cpy_f32_i32, pipeline_cpy_i32_f32;
+    vk_pipeline pipeline_contig_cpy_32, pipeline_contig_cpy_f32_f16, pipeline_contig_cpy_16, pipeline_contig_cpy_f16_f32, pipeline_contig_cpy_f32_bf16, pipeline_contig_cpy_bf16_f32, pipeline_contig_cpy_bf16_f16, pipeline_contig_cpy_f32_i32, pipeline_contig_cpy_i32_f32;
     vk_pipeline pipeline_cpy_f32_quant[GGML_TYPE_COUNT];
     vk_pipeline pipeline_cpy_quant_f32[GGML_TYPE_COUNT];
     vk_pipeline pipeline_cpy_transpose_16, pipeline_cpy_transpose_32;
@@ -868,18 +859,18 @@ struct vk_device_struct {
     vk_pipeline pipeline_set_rows_i64[2][GGML_TYPE_COUNT];
     vk_pipeline pipeline_norm_f32;
     vk_pipeline pipeline_group_norm_f32;
-    vk_pipeline pipeline_rms_norm_f32;
-    vk_pipeline pipeline_rms_norm_mul_f32;
-    vk_pipeline pipeline_rms_norm_mul_add_f32;
-    vk_pipeline pipeline_rms_norm_mul_add_mul_f32;
+    std::array<vk_pipeline, 3> pipeline_rms_norm_f32;
+    std::array<vk_pipeline, 3> pipeline_rms_norm_mul_f32;
+    std::array<vk_pipeline, 3> pipeline_rms_norm_mul_add_f32;
+    std::array<vk_pipeline, 3> pipeline_rms_norm_mul_add_mul_f32;
     vk_pipeline pipeline_rms_norm_mul_add_partials_f32;
     vk_pipeline pipeline_rms_norm_mul_add_mul_partials_f32;
     vk_pipeline pipeline_rms_norm_set_rows_f32_f32;
     vk_pipeline pipeline_rms_norm_set_rows_f32_f16;
     vk_pipeline pipeline_rms_norm_partials_f32;
     vk_pipeline pipeline_rms_norm_mul_partials_f32;
-    vk_pipeline pipeline_rms_norm_mul_rope_f32_f32;
-    vk_pipeline pipeline_rms_norm_mul_rope_f32_f16;
+    std::array<vk_pipeline, 3> pipeline_rms_norm_mul_rope_f32_f32;
+    std::array<vk_pipeline, 3> pipeline_rms_norm_mul_rope_f32_f16;
     vk_pipeline pipeline_rms_norm_back_f32;
     vk_pipeline pipeline_l2_norm_f32;
 
@@ -954,7 +945,9 @@ struct vk_device_struct {
     vk_pipeline pipeline_sum_rows_f32;
     vk_pipeline pipeline_cross_entropy_loss_f32, pipeline_cross_entropy_loss_f32_wg512;
     vk_pipeline pipeline_cross_entropy_loss_back_f32, pipeline_cross_entropy_loss_back_f32_wg512;
-    vk_pipeline pipeline_fwht_f32[4];
+    vk_pipeline pipeline_fwht_f32[num_fwht_pipelines];
+    vk_pipeline pipeline_fwht_f16[num_fwht_pipelines];
+    uint32_t    fwht_rows_per_wg[num_fwht_pipelines] = {};
     vk_pipeline pipeline_cumsum_f32;
     vk_pipeline pipeline_cumsum_small_f32;
     vk_pipeline pipeline_cumsum_multipass1_f32;
@@ -980,6 +973,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_snake_bf16;
     vk_pipeline pipeline_pool1d_f32;
     vk_pipeline pipeline_pool2d_f32;
+    vk_pipeline pipeline_pool2d_subgroup_f32;
     vk_pipeline pipeline_rwkv_wkv6_f32;
     vk_pipeline pipeline_rwkv_wkv7_f32;
     vk_pipeline pipeline_gated_linear_attn_f32;
@@ -1019,14 +1013,15 @@ struct vk_device_struct {
 
     std::vector<vk_pipeline_ref> all_pipelines;
 
-    std::vector<std::tuple<void*, size_t, vk_buffer>> pinned_memory;
-
     vk::Fence fence;
     vk_buffer sync_staging;
 
     ggml_backend_buffer_type buffer_type;
 
     bool disable_fusion;
+    std::atomic<bool> fusion_stats_enabled {false};
+    std::mutex fusion_mutex;
+    std::map<std::string, uint64_t> fusion_counts;
     bool disable_descriptor_reuse;
     std::atomic<uint64_t> buffer_destroy_count {};
     bool disable_host_visible_vidmem;
@@ -1108,6 +1103,9 @@ struct vk_submission {
     vk_command_buffer* buffer = nullptr;
     std::vector<vk_semaphore> wait_semaphores;
     std::vector<vk_semaphore> signal_semaphores;
+    // submit waits until *ready >= ready_value
+    const std::atomic<uint64_t> * ready = nullptr;
+    uint64_t ready_value = 0;
 };
 
 typedef std::vector<vk_submission> vk_sequence;
@@ -1246,7 +1244,7 @@ struct ggml_backend_vk_context {
 
     vk_device device;
 
-    size_t semaphore_idx, event_idx;
+    size_t semaphore_idx, binary_semaphore_idx, event_idx;
     ggml_vk_garbage_collector gc;
     size_t prealloc_size_x, prealloc_size_y, prealloc_size_split_k, prealloc_size_add_rms_partials, prealloc_size_add_rms_partials_offset;
     vk_buffer prealloc_x, prealloc_y, prealloc_split_k, prealloc_add_rms_partials, sync_staging;
@@ -1333,6 +1331,12 @@ struct ggml_backend_vk_buffer_context {
 
 };
 
+struct vk_host_allocation {
+    void *    base = nullptr;
+    size_t    size = 0;
+    vk_buffer views[GGML_VK_MAX_DEVICES];  // indexed by device->idx; null = not (yet) mapped here
+};
+
 struct vk_instance_t {
     vk::Instance instance;
 
@@ -1346,7 +1350,17 @@ struct vk_instance_t {
 
     std::vector<size_t> device_indices;
     std::vector<bool>   device_supports_membudget;
+    std::vector<bool>   device_host_buffer_import;
     vk_device devices[GGML_VK_MAX_DEVICES];
+
+    std::vector<vk_host_allocation> host_allocations;
+    std::shared_mutex               host_allocations_mutex;
+
+    size_t host_import_alignment = 0;
+    uint32_t host_import_failed = 0;  // bitmask by device->idx, guarded by host_allocations_mutex
+
+    bool multi_device = false;
+    bool allreduce_disabled = false;
 };
 
 typedef void (*ggml_vk_func_t)(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);

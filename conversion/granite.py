@@ -8,7 +8,7 @@ import torch
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import MmprojModel, ModelBase, gguf, logger
+from .base import MmprojModel, ModelBase, gguf, jinja_str_or_json, logger
 
 from .llama import LlamaModel
 from .mamba import Mamba2Model
@@ -239,8 +239,21 @@ class GraniteSwitchModel(GraniteMoeModel):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # the weightless switch reserves one cache slot: one fewer block than num_hidden_layers
-        self.block_count = self.block_count - 1
+        # The weightless switch layer(s) are counted in num_hidden_layers but carry no tensors.
+        # The count is not fixed, nor is it present in hparams, so we derive it here based on tensor block names.
+        layer_ids = {
+            int(m.group(1))
+            for name in self.model_tensors
+            if (m := re.match(r"(?:model\.)?layers\.(\d+)\.", name))
+        }
+        if not layer_ids:
+            raise ValueError("graniteswitch: no 'model.layers.N' tensors found in checkpoint")
+        n_weight_layers = max(layer_ids) + 1
+        logger.info(
+            "gguf: (graniteswitch) num_hidden_layers %s counts %d weightless switch layer(s); using %d blocks",
+            self.hparams["num_hidden_layers"], self.block_count - n_weight_layers, n_weight_layers,
+        )
+        self.block_count = n_weight_layers
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
 
         self._n_adapters = int(self.hparams["num_adapters"])
@@ -271,9 +284,39 @@ class GraniteSwitchModel(GraniteMoeModel):
         self.gguf_writer.add_adapter_lora_rank(self._max_lora_rank)
         self.gguf_writer.add_adapter_token_ids_activate(self.hparams["adapter_token_ids"])
         self.gguf_writer.add_adapter_token_ids_substitute(self.hparams["adapter_substitute_token_ids"])
+        if self._has_decision_adapter():
+            self.gguf_writer.add_decision_type(gguf.DecisionType.GRANITE_SWITCH)
         router_gain = float(self.hparams.get("control_token_gain", 15.0))
         self.gguf_writer.add_adapter_router_gain(router_gain)
         logger.info("gguf: (graniteswitch) num_adapters=%s max_lora_rank=%s n_slots=%s router_gain=%s", self._n_adapters, self._max_lora_rank, self._n_slots, router_gain)
+
+    def _has_decision_adapter(self) -> bool:
+        return "decision" in self.hparams.get("adapter_names", [])
+
+    def set_vocab(self):
+        super().set_vocab()
+        if self._has_decision_adapter():
+            systemone_template = self._systemone_template()
+            logger.info("System One Template: %s", systemone_template)
+            self.gguf_writer.add_chat_template([{"name": "systemone", "template": systemone_template}])
+
+    def _systemone_template(self) -> str:
+        # prompt of the decision aLoRA: a state turn, then a question turn that opens with the control token
+        # (it replaces the first token of "### DECISION"), the answer is the label token that comes next
+        description = jinja_str_or_json("o.description")
+        option = (
+            "{% if type != 'noul' %}{{ o.label }}: {% if o.description %}" + description + "{% endif %}"
+            "{% elif o.key == 'true' %}A: {% if o.description %}" + description + "{% else %}The statement is true.{% endif %}"
+            "{% else %}B: {% if o.description %}" + description + "{% else %}The statement is false.{% endif %}{% endif %}"
+        )
+        return (
+            "<|start_of_role|>user<|end_of_role|>State:\n" + jinja_str_or_json("state") + "<|end_of_text|>\n"
+            "<|start_of_role|>user<|end_of_role|><|decision|> DECISION\nQuestion:\n" + jinja_str_or_json("instructions")
+            + "{% if type == 'score' %} Rate along the ordered levels below (lowest first).{% endif %}"
+            "{{ '\n\nOptions:\n' }}"
+            "{% for o in options %}" + option + "{{ '\n' }}{% endfor %}"
+            "{{ '\nReply with exactly one option label.<|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>' }}"
+        )
 
     def _lora_a(self, data: Tensor) -> Tensor:
         # on-disk A: [n_adapters, 1, max_rank, in] -> [n_adapters+1, max_rank, in]

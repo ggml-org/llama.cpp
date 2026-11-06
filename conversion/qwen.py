@@ -59,6 +59,10 @@ class Qwen2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN2
 
     def set_vocab(self):
+        # HuggingFaceBio/Carbon-14B: Qwen3 with the HybridDNATokenizer (Qwen3 BPE plus DNA 6-mers)
+        if self._is_hybriddna():
+            self._set_vocab_hybriddna()
+            return
         try:
             self._set_vocab_sentencepiece()
         except FileNotFoundError:
@@ -78,6 +82,15 @@ class Qwen2Model(TextModel):
 @ModelBase.example("Qwen/Qwen1.5-MoE-A2.7B")
 class Qwen2MoeModel(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN2MOE
+
+    def _map_fp8_weight_names(self, name: str) -> tuple[str, ...]:
+        if name.removesuffix(".weight").endswith(".mlp.experts.gate_up_proj"):
+            bid = next(int(part) for part in self.map_tensor_name(name).split(".") if part.isdecimal())
+            return (
+                self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_EXP, bid),
+                self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_EXP, bid),
+            )
+        return super()._map_fp8_weight_names(name)
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -253,6 +266,11 @@ class Qwen3Model(Qwen2Model):
                     yield from super().modify_tensors(data_torch, name, bid)
                 return
 
+        # output embedding projection (voyage-4-nano)
+        if name == "linear.weight":
+            self.gguf_writer.add_embedding_length_out(data_torch.shape[0])
+            name = "dense_2_out.weight"
+
         yield from super().modify_tensors(data_torch, name, bid)
 
 
@@ -372,6 +390,16 @@ class _QwenMtpMixin:
 @ModelBase.example("Qwen/Qwen3-Next-80B-A3B-Instruct")
 class Qwen3NextModel(_QwenMtpMixin, Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3NEXT
+
+    def _map_fp8_weight_names(self, name: str) -> tuple[str, ...]:
+        if name.endswith(".linear_attn.in_proj_qkvz.weight"):
+            bid = next(int(part) for part in self.map_tensor_name(name).split(".") if part.isdecimal())
+            # Both split projections keep the original per-tensor scales.
+            return (
+                self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_QKV, bid),
+                self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_GATE, bid),
+            )
+        return super()._map_fp8_weight_names(name)
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -570,17 +598,25 @@ class _LinearAttentionVReorderBase(Qwen3NextModel):
         elif name.endswith((".linear_attn.in_proj_a.weight", ".linear_attn.in_proj_b.weight")):
             weight, scale = reorder_rows(weight, scale, 1)
         elif name.endswith(".linear_attn.out_proj.weight"):
-            col_perm = self._reorder_v_heads(
-                torch.arange(num_v_heads * head_v_dim, dtype=torch.long).unsqueeze(0),
-                1, num_k_heads, num_v_per_k, head_v_dim,
-            ).squeeze(0)
-            weight, scale = apply_col_perm(weight, scale, col_perm)
+            if self._hadamard_folds_tensor(name):
+                # folded weight: keep the grouped V order, the runtime permutes the activation instead
+                self._hadamard_gdn_v_grouped = True
+            else:
+                col_perm = self._reorder_v_heads(
+                    torch.arange(num_v_heads * head_v_dim, dtype=torch.long).unsqueeze(0),
+                    1, num_k_heads, num_v_per_k, head_v_dim,
+                ).squeeze(0)
+                weight, scale = apply_col_perm(weight, scale, col_perm)
 
         return weight, scale
 
     def _repack_nvfp4(self, name: str, weight: Tensor, scale: Tensor, scale2: Tensor, input_scale: Tensor):
         weight, scale = self._transform_nvfp4_weight(name, weight, scale)
         super()._repack_nvfp4(name, weight, scale, scale2, input_scale)
+
+    def _hadamard_folds_tensor(self, name: str) -> bool:
+        # a manifest name and `name` can differ only by leading wrapper prefixes
+        return any(name.endswith(n) or n.endswith(name) for n in self.hadamard_folded_names())
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         num_k_heads = self.hparams.get("linear_num_key_heads", 0)
@@ -628,8 +664,12 @@ class _LinearAttentionVReorderBase(Qwen3NextModel):
                 data_torch = torch.cat([qk_part, v_part], dim=0)
 
             elif ".out_proj." in name:
-                # Out projection weight: reorder columns (input dimension)
-                data_torch = self._reorder_v_heads(data_torch, 1, num_k_heads, num_v_per_k, head_v_dim)
+                if self._hadamard_folds_tensor(name):
+                    # folded weight: keep the grouped V order, the runtime permutes the activation instead
+                    self._hadamard_gdn_v_grouped = True
+                else:
+                    # Out projection weight: reorder columns (input dimension)
+                    data_torch = self._reorder_v_heads(data_torch, 1, num_k_heads, num_v_per_k, head_v_dim)
 
         yield from super().modify_tensors(data_torch, name, bid)
 
@@ -650,10 +690,69 @@ class _Qwen35MRopeMixin:
             self.gguf_writer.add_rope_dimension_sections(self._QWEN35_DEFAULT_MROPE_SECTION)
 
 
-@ModelBase.register("Qwen3_5ForConditionalGeneration", "Qwen3_5ForCausalLM")
+@ModelBase.register("Qwen3_5ForConditionalGeneration", "Qwen3_5ForCausalLM", "Qwen3_5TextModel")
 @ModelBase.example("Qwen/Qwen3.5-9B")
 class Qwen3_5TextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35
+
+    def __init__(self, dir_model, *args, **kwargs):
+        # Inner TextModel does not own mtp.*. Set no_mtp before mixin bumps block_count.
+        hparams = kwargs.pop("hparams", None)
+        if hparams is None:
+            hparams = ModelBase.load_hparams(dir_model, self.is_mistral_format)
+        if get_model_architecture(hparams, ModelType.TEXT) == "Qwen3_5TextModel":
+            self.no_mtp = True
+        super().__init__(dir_model, *args, hparams=hparams, **kwargs)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self._try_set_pooling_type()
+
+
+@ModelBase.register("MiniCPMOCRForSequenceClassification")
+class MiniCPMOCRSeqClsModel(Qwen3_5TextModel):
+    # OCR consistency judge: Qwen3.5 VL trunk with a value head read at the last token
+    # the class scores are [inconsistent, consistent], the softmax temperature is 1
+    model_arch = gguf.MODEL_ARCH.QWEN35
+    no_mtp = True  # the checkpoint has no MTP head
+
+    CLASS_LABELS = ["inconsistent", "consistent"]
+
+    def set_vocab(self):
+        super().set_vocab()
+        self.gguf_writer.add_chat_template([{"name": "systemone", "template": self._systemone_template()}])
+
+    def _systemone_template(self) -> str:
+        # the prompt of the training data, the two images are the original page and the one
+        # rendered from the OCR text; the task is fixed, there is nothing to fill in
+        # the trailing newlines are in an expression, so the template does not drop them
+        return (
+            "<|im_start|>user\n{{ images[0] }}\nOCR文本：\n{{ state }}\n{{ images[1] }}\n"
+            "第一张图是原图，第二张图是上述 OCR 文本渲染得到的图片。\n"
+            "请判断该 OCR 文本及其对应渲染图是否与原图内容一致。\n"
+            "这是一个二分类任务：一致标为 1，不一致标为 0。"
+            "{{ '<|im_end|>\\n<|im_start|>assistant\\n<think>\\n\\n</think>\\n\\n' }}"
+        )
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        # the config.json of the checkpoint keeps the one of the base model, it has no num_labels / id2label
+        if "score.weight" not in self.model_tensors:
+            raise ValueError("the checkpoint has no score.weight classification head")
+
+        self.gguf_writer.add_pooling_type(gguf.PoolingType.LAST)
+        self.gguf_writer.add_embedding_length_out(len(self.CLASS_LABELS))
+        self.gguf_writer.add_classifier_output_labels(self.CLASS_LABELS)
+        self.gguf_writer.add_decision_type(gguf.DecisionType.MINICPM_OCR_JEV)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name == "score.weight":
+            if data_torch.shape[0] != len(self.CLASS_LABELS):
+                raise ValueError(f"score.weight must have {len(self.CLASS_LABELS)} rows, got {data_torch.shape[0]}")
+            yield (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.CLS_OUT] + ".weight", data_torch)
+            return
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 def _is_openjev_checkpoint(dir_model: Path) -> bool:

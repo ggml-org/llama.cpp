@@ -15,6 +15,12 @@
 
 #include "common.hpp"
 
+// q5_K multi-column MMVQ shares weights across columns, pairs rows and fuses gate/up in the reorder
+// layout: faster on Xe2 (BMG), so untested archs keep the per-column kernel
+inline bool ggml_sycl_q5_k_mmvq_reuse(int device) {
+    const gpu_arch arch = ggml_sycl_info().devices[device].hw_info.arch;
+    return arch == gpu_arch::intel_gpu_bmg_g21 || arch == gpu_arch::intel_gpu_bmg_g31;
+}
 
 void ggml_sycl_op_mul_mat_vec_q(
     ggml_backend_sycl_context & ctx,
@@ -73,6 +79,24 @@ bool ggml_sycl_mul_mat_vec_q_glu_reorder(
     int                stride_col_dst,       // floats between output columns in dst
     dpct::queue_ptr    stream);
 
+
+// Fused dense-FFN GEMV on the XMX engines for reordered weights of one type, up * act(gate) for up to
+// GGML_SYCL_XMX_GLU_MAX_COLS (at most) activation columns. Returns false if it does not apply, the caller falls back.
+// vy: src1 quantized with quantize_and_reorder_q8_1_soa.
+bool ggml_sycl_mul_mat_vec_q_glu_xmx(
+    int                device,
+    enum ggml_type     src0_type,
+    enum ggml_glu_op   glu_op,
+    const void *       vx,                   // up weights
+    const void *       vgate,                // gate weights
+    const void *       vy,
+    float *            dst,
+    int                ncols,                // K, shared by both weights
+    int                nrows,                // output rows, i.e. weight ne[1]
+    int                ncols_dst,            // activation columns
+    int                stride_col_y_bytes,   // bytes between activation columns in vy
+    int                stride_col_dst,       // floats between output columns in dst
+    dpct::queue_ptr    stream);
 
 // Fused dense-FFN GEMV + GLU over the standard (non-reorder) layout; the gate and up
 // weights may carry different block types (q5_K / iq4_xs, mixed included).

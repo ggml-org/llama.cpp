@@ -244,8 +244,10 @@ elif [ "$DO_CHECK" -eq 1 ]; then
     # From here on, we don't want to exit on first error
     set +e
 
+    ACC_STRICT=
+    [ "$STRICT" -eq 0 ] || ACC_STRICT="-strict"
     abi-compliance-checker \
-        -strict \
+        $ACC_STRICT \
         -source \
         -library "$PROJECT_NAME" \
         -old "$BUILD_DIR/apiabi/api.dump" \

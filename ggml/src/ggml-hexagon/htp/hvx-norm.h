@@ -11,7 +11,8 @@
 static inline void hvx_fast_rms_norm_f32(const uint8_t * restrict src,
                                          uint8_t * restrict dst,
                                          const int num_elems,
-                                         float     epsilon) {
+                                         float     epsilon,
+                                         float     scale) {
 
     const HVX_Vector * restrict v_src = (HVX_Vector *) src;
     HVX_Vector * restrict v_dst       = (HVX_Vector *) dst;
@@ -48,6 +49,9 @@ static inline void hvx_fast_rms_norm_f32(const uint8_t * restrict src,
 
     // Scale full vectors
     HVX_Vector scale_v = hvx_vec_rsqrt_f32(Q6_Vsf_equals_Vqf32(mean_epsilon_v));
+    if (scale != 0.0f) {
+        scale_v = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(scale_v, hvx_vec_splat_f32(scale)));
+    }
 
     #pragma unroll(4)
     for (int i = 0; i < nvec; i++) {
@@ -72,7 +76,8 @@ static inline void hvx_fast_rms_norm_mul_f32(const uint8_t * restrict src,
                                              const uint8_t * restrict weight,
                                              uint8_t * restrict dst,
                                              const int num_elems,
-                                             float     epsilon) {
+                                             float     epsilon,
+                                             float     scale) {
     const HVX_Vector * restrict v_src    = (const HVX_Vector *) src;
     const HVX_Vector * restrict v_weight = (const HVX_Vector *) weight;
     HVX_Vector * restrict v_dst          = (HVX_Vector *) dst;
@@ -109,6 +114,9 @@ static inline void hvx_fast_rms_norm_mul_f32(const uint8_t * restrict src,
 
     // Scale and multiply
     HVX_Vector scale_v = hvx_vec_rsqrt_f32(Q6_Vsf_equals_Vqf32(mean_epsilon_v));
+    if (scale != 0.0f) {
+        scale_v = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(scale_v, hvx_vec_splat_f32(scale)));
+    }
 
     #pragma unroll(4)
     for (int i = 0; i < nvec; i++) {

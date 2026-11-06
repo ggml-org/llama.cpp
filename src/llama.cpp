@@ -342,7 +342,6 @@ static std::pair<int, llama_model *> llama_model_load(struct gguf_context * meta
         model->t_start_us = tm.t_start_us;
 
         model->hparams.vocab_only = params.vocab_only;
-        model->hparams.no_alloc   = params.no_alloc;
 
         try {
             model->load_hparams(ml);
