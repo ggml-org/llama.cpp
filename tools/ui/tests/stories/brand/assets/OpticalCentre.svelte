@@ -125,15 +125,18 @@
 	}
 
 	// how far the icon has moved from the exact centre to the files' placement: it holds centred, eases over, holds
-	// there, and eases back, while every measure follows it
+	// there, and eases back; the measures draw on only once it has arrived, and clear before it leaves
 	const progress = new Tween(0, { duration: 1400, easing: cubicInOut });
+	let measured = $state(false);
 	let paused = $state(false);
+	const uid = $props.id();
 
 	const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 	$effect(() => {
 		if (prefersReducedMotion.current) {
 			progress.set(1, { duration: 0 });
+			measured = true;
 
 			return;
 		}
@@ -149,7 +152,16 @@
 				if (stopped) break;
 
 				await progress.set(1);
-				await wait(3000);
+
+				if (stopped) break;
+
+				measured = true;
+				await wait(4500);
+
+				if (stopped) break;
+
+				measured = false;
+				await wait(500);
 
 				if (stopped) break;
 
@@ -177,7 +189,6 @@
 	const round = (n: number) => Math.round(n * 10) / 10;
 </script>
 
-<!-- the arrow keys step through the placements while it has focus -->
 <figure aria-label="Icon placements" class="m-0 grid min-w-0 gap-6">
 	{#if !prefersReducedMotion.current}
 		<div class="flex items-center gap-2">
@@ -197,7 +208,7 @@
 			<div class="grid gap-1">
 				<h3 class="text-sm font-medium">{panel.label}</h3>
 
-				<p class="text-xs text-muted-foreground">{panel.note}</p>
+				<p class={['fade-note text-xs text-muted-foreground', measured && 'shown']}>{panel.note}</p>
 			</div>
 
 			<div class="flex flex-wrap items-center gap-8">
@@ -254,52 +265,96 @@
 							{#each PATHS as d (d)}<path {d} />{/each}
 						</g>
 
-						<!-- the icon's box and its centre lines -->
-						<rect class="guide" height={side} width={side} x={panel.x} y={panel.y} />
+						<!-- the measures: drawn on once the icon has arrived, in turn, and cleared before it moves back -->
+						<g class={['measures', measured && 'shown']}>
+							<!-- the icon's box, dashed, revealed by a solid copy drawn on in its mask, then its centre lines -->
+							<mask id="{uid}-box">
+								<rect
+									class="draw"
+									fill="none"
+									height={side}
+									pathLength="1"
+									stroke="white"
+									stroke-width={placement.size / 40}
+									width={side}
+									x={panel.x}
+									y={panel.y}
+								/>
+							</mask>
 
-						<line
-							class="guide solid"
-							x1={panel.x}
-							x2={panel.x + side}
-							y1={panel.y + side / 2}
-							y2={panel.y + side / 2}
-						/>
+							<rect
+								class="guide"
+								height={side}
+								mask="url(#{uid}-box)"
+								width={side}
+								x={panel.x}
+								y={panel.y}
+							/>
 
-						<line
-							class="guide solid"
-							x1={panel.x + side / 2}
-							x2={panel.x + side / 2}
-							y1={panel.y}
-							y2={panel.y + side}
-						/>
+							<line
+								style:--delay="350ms"
+								class="guide solid draw"
+								pathLength="1"
+								stroke-width={placement.size / 320}
+								x1={panel.x}
+								x2={panel.x + side}
+								y1={panel.y + side / 2}
+								y2={panel.y + side / 2}
+							/>
 
-						<!-- the gaps between the crop and the icon's outer corners, each filled by a circle touching both -->
-						{#each panel.gaps as g (g.kind + g.name)}
-							<circle class={['gap', g.kind]} cx={g.cx} cy={g.cy} r={g.gap / 2} />
+							<line
+								style:--delay="450ms"
+								class="guide solid draw"
+								pathLength="1"
+								stroke-width={placement.size / 320}
+								x1={panel.x + side / 2}
+								x2={panel.x + side / 2}
+								y1={panel.y}
+								y2={panel.y + side}
+							/>
 
-							<text class="margin" font-size={placement.size * 0.04} x={g.cx} y={g.cy}
-								>{round(g.gap)}</text
-							>
-						{/each}
+							<!-- the gaps between the crop and the icon's outer corners, each filled by a circle touching both -->
+							{#each panel.gaps as g, i (g.kind + g.name)}
+								<circle
+									style:--delay="{600 + i * 90}ms"
+									class={['gap draw', g.kind]}
+									cx={g.cx}
+									cy={g.cy}
+									pathLength="1"
+									r={g.gap / 2}
+									stroke-width={placement.size / 320}
+								/>
 
-						<!-- the margins round the icon's box: above and below in the square's corners, outside the crop -->
-						{#each [{ at: [0.08, panel.y / 2], value: panel.y }, { at: [0.92, (placement.size + panel.y + side) / 2], value: placement.size - panel.y - side }] as m (m.at[0])}
-							<text
-								class="margin"
-								font-size={placement.size * 0.045}
-								x={placement.size * m.at[0]}
-								y={m.at[1]}>{round(m.value)}</text
-							>
-						{/each}
+								<text
+									style:--delay="{1100 + i * 60}ms"
+									class="margin fade"
+									font-size={placement.size * 0.04}
+									x={g.cx}
+									y={g.cy}>{round(g.gap)}</text
+								>
+							{/each}
 
-						{#each [{ value: panel.x, x: panel.x / 2 }, { value: placement.size - panel.x - side, x: (placement.size + panel.x + side) / 2 }] as m (m.x)}
-							<text
-								class="margin"
-								font-size={placement.size * 0.045}
-								x={m.x}
-								y={placement.size * 0.42}>{round(m.value)}</text
-							>
-						{/each}
+							<!-- the margins round the icon's box: above and below in the square's corners, outside the crop -->
+							{#each [{ at: [0.08, panel.y / 2], value: panel.y }, { at: [0.92, (placement.size + panel.y + side) / 2], value: placement.size - panel.y - side }] as m (m.at[0])}
+								<text
+									style:--delay="1300ms"
+									class="margin fade"
+									font-size={placement.size * 0.045}
+									x={placement.size * m.at[0]}
+									y={m.at[1]}>{round(m.value)}</text
+								>
+							{/each}
+
+							{#each [{ value: panel.x, x: panel.x / 2 }, { value: placement.size - panel.x - side, x: (placement.size + panel.x + side) / 2 }] as m (m.x)}
+								<text
+									style:--delay="1300ms"
+									class="margin fade"
+									font-size={placement.size * 0.045}
+									x={m.x}
+									y={placement.size * 0.42}>{round(m.value)}</text
+								>
+							{/each}
+						</g>
 					</svg>
 				</div>
 			</div>
@@ -335,8 +390,6 @@
 	.gap {
 		fill: color-mix(in srgb, #ee6c1e 12%, transparent);
 		stroke: #ee6c1e;
-		stroke-width: 1px;
-		vector-effect: non-scaling-stroke;
 	}
 	.gap.sharp {
 		fill: color-mix(in srgb, #a3a3a3 14%, transparent);
@@ -351,5 +404,46 @@
 		fill: #ee6c1e;
 		font-family: var(--font-mono, monospace);
 		text-anchor: middle;
+	}
+
+	/* drawn on: a stroke traced from nothing along its length, then the fills and numbers faded in, each after its
+	   --delay; cleared quicker, all at once */
+	.measures .draw {
+		stroke-dasharray: 1;
+		stroke-dashoffset: 1;
+		vector-effect: none;
+		transition: stroke-dashoffset 300ms ease-in;
+	}
+	.measures.shown .draw {
+		stroke-dashoffset: 0;
+		transition: stroke-dashoffset 700ms cubic-bezier(0.65, 0, 0.35, 1) var(--delay, 0ms);
+	}
+	.measures .gap {
+		fill-opacity: 0;
+		transition:
+			stroke-dashoffset 300ms ease-in,
+			fill-opacity 250ms ease-in;
+	}
+	.measures.shown .gap {
+		fill-opacity: 1;
+		transition:
+			stroke-dashoffset 700ms cubic-bezier(0.65, 0, 0.35, 1) var(--delay, 0ms),
+			fill-opacity 500ms ease-out calc(var(--delay, 0ms) + 500ms);
+	}
+	.measures .fade,
+	.fade-note {
+		opacity: 0;
+		transition: opacity 250ms ease-in;
+	}
+	.measures.shown .fade,
+	.fade-note.shown {
+		opacity: 1;
+		transition: opacity 400ms ease-out var(--delay, 1300ms);
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.measures *,
+		.fade-note {
+			transition: none !important;
+		}
 	}
 </style>
