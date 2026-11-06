@@ -1,7 +1,7 @@
 <!--
-	A decision tree, for decision models, in 3D: from one question the options fan out in depth and branch again,
-	each branch as heavy and as dark as it is likely, the chosen path in cinder with its probability in Mono, and the
-	runner-up's beside it. A motif for posts about decision models, choices and probabilities.
+	A decision tree, for decision models: from one question the options branch, and branch again, each branch as
+	heavy and as dark as it is likely, the chosen path level through the middle in cinder with its probability in
+	Mono, and the runner-up's above it. A motif for posts about decision models, choices and probabilities.
 -->
 <script lang="ts">
 	import './motifs/motif.css';
@@ -14,7 +14,7 @@
 
 	let { values = ['0.91', '0.06'] }: Props = $props();
 
-	const view: View = { cx: 205, cy: 140, distance: 6, pitch: 0.42, scale: 96, yaw: -0.58 };
+	const view: View = { cx: 211, cy: 150, distance: 1000, pitch: 0, scale: 85, yaw: 0 };
 	const p = (q: Point3) => project(q, view);
 
 	interface Node {
@@ -86,7 +86,7 @@
 
 		return { x: x + dx, y: y + dy };
 	};
-	const top = label(tree.children[0], -14, 22);
+	const top = label(tree.children[0], -10, 24);
 	const runner = label(tree.children[1], 0, -14);
 </script>
 
