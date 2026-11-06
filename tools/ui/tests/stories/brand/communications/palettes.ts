@@ -1,5 +1,5 @@
 // Colour for communications (posters, the site, social): a neutral base of the design system's greys, and the Llama
-// palette, the design system's own blues, green, amber and red with beige as the warm neutral, on top of it. The UI itself
+// palette, the design system's own blues, green, amber and red with sand as the warm neutral, on top of it. The UI itself
 // stays neutral and uses colour only for status (in the tokens; see DESIGN.md). Cinder, the accent orange, is also the .cpp of the
 // llama.cpp logotype.
 

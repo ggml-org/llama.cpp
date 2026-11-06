@@ -41,15 +41,15 @@
 	--p-link: var(--art-sky);
 }
 .ground-sand {
-	--p-base: var(--beige-50);
-	--p-bg: var(--beige-50);
-	--p-ink: var(--beige-900);
-	--p-muted: color-mix(in oklab, var(--beige-900) 66%, transparent);
-	--p-line: color-mix(in oklab, var(--beige-900) 12%, transparent);
-	--p-card: var(--beige-100);
-	--p-inset: var(--beige-200);
-	--p-solid: var(--beige-900);
-	--p-solid-ink: var(--beige-50);
+	--p-base: var(--sand-50);
+	--p-bg: var(--sand-50);
+	--p-ink: var(--sand-900);
+	--p-muted: color-mix(in oklab, var(--sand-900) 66%, transparent);
+	--p-line: color-mix(in oklab, var(--sand-900) 12%, transparent);
+	--p-card: var(--sand-100);
+	--p-inset: var(--sand-200);
+	--p-solid: var(--sand-900);
+	--p-solid-ink: var(--sand-50);
 	--p-link: var(--art-blue);
 }
 /* the day sky: llama.app's hero, deeper blue at the top and light at the horizon */

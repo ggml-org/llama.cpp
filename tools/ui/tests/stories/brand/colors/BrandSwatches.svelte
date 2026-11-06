@@ -28,14 +28,14 @@
 
 	const groups: { note: string; swatches: Swatch[]; title: string }[] = [
 		{
-			note: 'Fields stay neutral as a rule: the logo’s ink and light, paper and beige.',
+			note: 'Fields stay neutral as a rule: the logo’s ink and light, paper and sand.',
 			swatches: [
 				{ dark: true, name: 'Ink', note: 'the logo on light, text', value: '#111111' },
 				{ name: 'Light', note: 'the logo on dark, its field', value: '#fafafa' },
 				{ name: 'Paper', token: 'neutral-50' },
-				{ name: 'Beige 50', token: 'beige-50' },
-				{ name: 'Beige 100', token: 'beige-100' },
-				{ dark: true, name: 'Beige ink', note: 'text on beige', token: 'beige-900' }
+				{ name: 'Sand 50', token: 'sand-50' },
+				{ name: 'Sand 100', token: 'sand-100' },
+				{ dark: true, name: 'Sand ink', note: 'text on sand', token: 'sand-900' }
 			],
 			title: 'Grounds and ink'
 		},

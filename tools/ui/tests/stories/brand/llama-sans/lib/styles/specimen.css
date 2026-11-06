@@ -18,8 +18,8 @@
 	--cinder: oklch(
 		0.68 0.18 46
 	); /* the brand's one accent orange, as in the .cpp of the llama.cpp logotype */
-	--beige: #efe9df;
-	--beige-ink: #2b2620;
+	--sand: #efe9df;
+	--sand-ink: #2b2620;
 	--slate: #3a5878; /* a muted navy, between llama.app's hero blues */
 
 	/* the specimen's roles, mapped onto the design system's semantic tokens */
@@ -171,9 +171,9 @@
 	background: var(--llama-hero);
 	color: var(--llama-hero-ink);
 }
-:where(.specimen) .c-beige {
-	background: var(--beige);
-	color: var(--beige-ink);
+:where(.specimen) .c-sand {
+	background: var(--sand);
+	color: var(--sand-ink);
 }
 :where(.specimen) .c-ink {
 	background: var(--brand-ink);

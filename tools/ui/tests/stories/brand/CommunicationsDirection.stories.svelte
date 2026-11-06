@@ -38,7 +38,7 @@
 	<StateGallery columns={1}>
 		<StateGalleryItem
 			label="Specimen boards and posters"
-			note="After the classic Swiss specimen boards, in the brand palette: the art colours, beige and cinder"
+			note="After the classic Swiss specimen boards, in the brand palette: the art colours, sand and cinder"
 		>
 			<Boards />
 		</StateGalleryItem>
