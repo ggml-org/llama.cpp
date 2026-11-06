@@ -4,7 +4,6 @@
 	when the brand repo's logos change.
 -->
 <script lang="ts">
-	import OpticalCentre from './OpticalCentre.svelte';
 	import { Download } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 
@@ -81,23 +80,11 @@
 	/** A section of the page: one logo or platform, its assets in rows that each fit on one line. */
 	interface Group {
 		note: string;
-		/** the avatar's icon placement, for the figure of how it is optically centred, beside the avatars */
-		optical?: { scale: number; size: number; x: number; y: number };
 		rows: { assets: Asset[]; label?: string }[];
 		title: string;
 	}
 
 	const modeLabel = (mode: 'dark' | 'light') => (mode === 'light' ? 'Light' : 'Dark');
-
-	/** Where an SVG places the icon: its side and the icon's translate and scale. */
-	function placement(path: string) {
-		const svg = svgs[`./files/logo/svg/${path}.svg`];
-		const [, x, y, scale] = svg
-			.match(/translate\(([\d.]+) ([\d.]+)\) scale\(([\d.]+)\)/)!
-			.map(Number);
-
-		return { scale, size: Number(svg.match(/width="(\d+)"/)![1]), x, y };
-	}
 
 	/**
 	 * One avatar for every platform, light and dark: X's and LinkedIn's are the same 400 × 400 picture, YouTube's the
@@ -105,7 +92,6 @@
 	 */
 	const avatarGroup: Group = {
 		note: 'The icon in a square, for every platform’s profile picture, which crops it to a circle · WebP and PNG at 400 × 400 (X, LinkedIn) and 800 × 800 (YouTube)',
-		optical: placement('social/x/x-avatar-light'),
 		rows: [
 			{
 				assets: (['light', 'dark'] as const).map((mode) => ({
@@ -364,12 +350,6 @@
 								</figcaption>
 							</figure>
 						{/each}
-
-						{#if group.optical}
-							<div class="col-span-full mt-12">
-								<OpticalCentre placement={group.optical} />
-							</div>
-						{/if}
 					</div>
 				</div>
 			{/each}

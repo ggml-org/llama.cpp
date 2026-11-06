@@ -4,8 +4,8 @@
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 
 	// the icon and the lockup in use, one case per story: the font's two glyphs, buttons, the two lockups in
-	// context, a download badge, running text, and the web app's icons and splash
-	// screens with their proportions
+	// context, a download badge, running text, the web app's icons, the social avatars and the splash
+	// screens, with their proportions
 	const { Story } = defineMeta({
 		parameters: {
 			controls: { disable: true },
@@ -37,6 +37,10 @@
 
 <Story asChild name="App icons">
 	<ShowcaseFrame><IconUsage section="icons" /></ShowcaseFrame>
+</Story>
+
+<Story asChild name="Avatars">
+	<ShowcaseFrame><IconUsage section="avatars" /></ShowcaseFrame>
 </Story>
 
 <Story asChild name="Splash screens">
