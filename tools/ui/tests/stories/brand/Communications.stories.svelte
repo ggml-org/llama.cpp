@@ -1,10 +1,6 @@
 <script lang="ts" module>
-	import { seedChatStory } from '../chat/messages/fixtures';
 	import StateGallery from '../helpers/StateGallery.svelte';
 	import StateGalleryItem from '../helpers/StateGalleryItem.svelte';
-	import Boards from './communications/Boards.svelte';
-	import PaletteRow from './communications/PaletteRow.svelte';
-	import { basePalette } from './communications/palettes';
 	import LinkPreview from './communications/posts/LinkPreview.svelte';
 	import ModelDropPost from './communications/posts/ModelDropPost.svelte';
 	import {
@@ -19,14 +15,14 @@
 	import WhatsNewPost from './communications/posts/WhatsNewPost.svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 
-	// Communications (social posts, link previews, posters, the site): the post templates, drawn at their real size
-	// with their copy in the controls; the neutral key visuals with the real UI on them; and the colour artwork
+	// Communications' post templates (social posts and link previews), drawn at their real size with their copy in the
+	// controls. The key visuals and the artwork are their own items in Communications
 	const { Story } = defineMeta({
 		parameters: {
 			controls: { disable: true },
 			layout: 'fullscreen'
 		},
-		title: 'Brand/Communications'
+		title: 'Communications/Posts'
 	});
 
 	const editable = { controls: { disable: false, expanded: true } };
@@ -78,23 +74,4 @@
 			{/each}
 		</StateGallery>
 	{/snippet}
-</Story>
-
-<Story asChild beforeEach={() => seedChatStory()} name="Key visuals">
-	<StateGallery columns={1}>
-		<StateGalleryItem label={basePalette.name} note={basePalette.note}>
-			<PaletteRow palette={basePalette} />
-		</StateGalleryItem>
-	</StateGallery>
-</Story>
-
-<Story asChild name="Artwork">
-	<StateGallery columns={1}>
-		<StateGalleryItem
-			label="Specimen boards and posters"
-			note="After the classic Swiss specimen boards, in the brand palette: the art colours, beige and cinder"
-		>
-			<Boards />
-		</StateGalleryItem>
-	</StateGallery>
 </Story>
