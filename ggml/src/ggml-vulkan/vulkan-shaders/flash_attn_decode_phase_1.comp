@@ -50,10 +50,10 @@ layout (constant_id = 3) const uint SubGroupSize = 16;
 layout (constant_id = 4) const uint p_reduce = 32;
 layout (constant_id = 5) const uint Br = 1;
 layout (constant_id = 6) const uint pmat_count = 4;
+layout (constant_id = 7) const uint TM = 8;
+layout (constant_id = 8) const uint TN = 16;
 
 const uint TK = 16;
-const uint TN = SubGroupSize;
-const uint TM = 8;
 const uint sg_count = WorkGroupSize / SubGroupSize;
 const uint p_per_loop = pmat_count * TM;
 const uint p_loops = p_reduce / p_per_loop;
@@ -220,7 +220,7 @@ void main() {
 
     barrier();
 
-    if (out_row_idx < p.neq1 && single_head_mask) {
+    if (sg < Br && out_row_idx < p.neq1 && single_head_mask) {
         [[unroll]] for (uint idx = 0; idx < p_reduce / SubGroupSize; ++idx) {
             F32Poolsh.F32sh[SLM_PV_SIZE + sg * p_reduce + idx * SubGroupSize + lane] = Maskf[idx];
         }

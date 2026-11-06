@@ -1025,6 +1025,7 @@ struct vk_device_struct {
     bool disable_host_visible_vidmem;
     bool allow_sysmem_fallback;
     bool disable_graph_optimize;
+    bool xe_fa_support {};
 
     std::unique_ptr<vk_memory_logger> memory_logger;
 

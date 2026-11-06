@@ -51,14 +51,16 @@ layout (constant_id = 4) const uint SubGroupSize = 16;
 layout (constant_id = 5) const uint p_per_loop = 64;
 layout (constant_id = 6) const uint p_reduce = 32;
 layout (constant_id = 7) const uint Bc = 16;
+layout (constant_id = 8) const uint TM = 8;
+layout (constant_id = 9) const uint TN = 16;
 
 #define SINK_ENABLE_BIT (1 << 16)
 
 const uint TK = 16;
-const uint TN = SubGroupSize;
-const uint TM = 8;
 const uint o_row = gqa_ratio * Wr;
-const uint omat_row = (gqa_ratio * Wr + SubGroupSize - 1) / SubGroupSize;
+const uint omat_row = (o_row + TN - 1) / TN;
+const uint o_scalar_row = (o_row + SubGroupSize - 1) / SubGroupSize;
+
 const uint omat_col = Bc / TM;
 const uint v_head_wgs = HSV / Bc;
 
@@ -71,11 +73,11 @@ const uint size_max = o_row * p_per_loop / p_reduce;
 const uint max_loops = (size_max + WorkGroupSize - 1) / WorkGroupSize;
 const uint global_max_loops = (o_row + sg_count - 1) / sg_count;
 
-#define SLM_POOL_SIZE_GLOBAL_MAX (global_max_loops * sg_count)
+#define SLM_POOL_SIZE_GLOBAL_MAX ((global_max_loops * sg_count + SubGroupSize - 1) / SubGroupSize * SubGroupSize)
 #define SLM_POOL_SIZE_O (sg_count * omat_row * TN * omat_col * TM)
 #define SLM_POOL_SIZE_P (p_loops * p_loop_col)
 #define SLM_POOL_SIZE_MAX (max_loops * WorkGroupSize)
-#define SLM_POOL_SIZE_SOFTMAX_SUM (sg_count * p_loops)
+#define SLM_POOL_SIZE_SOFTMAX_SUM ((sg_count * p_loops + SubGroupSize - 1) / SubGroupSize * SubGroupSize)
 
 const uint psh_base = SLM_POOL_SIZE_GLOBAL_MAX * 2 + SLM_POOL_SIZE_SOFTMAX_SUM * 2 + SLM_POOL_SIZE_MAX * 2 * 2;
 
@@ -128,11 +130,11 @@ void main() {
     float global_max[p_loops];
     uint max_row_base[max_loops];
     uint max_col_base[max_loops];
-    uint o_offset[omat_row];
-    bool o_mask[omat_row];
-    float sink[omat_row];
+    uint o_offset[o_scalar_row];
+    bool o_mask[o_scalar_row];
+    float sink[o_scalar_row];
 
-    [[unroll]] for (uint r = 0; r < omat_row; ++r) {
+    [[unroll]] for (uint r = 0; r < o_scalar_row; ++r) {
         const uint flat_offset = r * SubGroupSize + lane;
         const uint row_idx = flat_offset / gqa_ratio;
         const uint col_idx = flat_offset % gqa_ratio;
@@ -310,21 +312,21 @@ void main() {
 
     if (sg == 1) {
         const uint lf_base = lfsh_offset + lane * sg_per_line;
-        float Lfrcp_temp[omat_row][sg_per_line];
-        [[unroll]] for (uint r = 0; r < omat_row; ++r) {
+        float Lfrcp_temp[o_scalar_row][sg_per_line];
+        [[unroll]] for (uint r = 0; r < o_scalar_row; ++r) {
             [[unroll]] for (uint reduce = 0; reduce < sg_per_line; ++reduce) {
                 Lfrcp_temp[r][reduce] = F32Poolsh.F32sh[lf_base + r * SubGroupSize * sg_per_line + reduce];
             }
         }
 
-        [[unroll]] for (uint pm = 0; pm < omat_row; ++pm) {
+        [[unroll]] for (uint pm = 0; pm < o_scalar_row; ++pm) {
             [[unroll]] for (uint reduce = 1; reduce < sg_per_line; ++reduce) {
                 Lfrcp_temp[pm][0] = Lfrcp_temp[pm][0] + Lfrcp_temp[pm][reduce];
             }
         }
 
         if ((p.flag & SINK_ENABLE_BIT) != 0) {
-            [[unroll]] for (uint r = 0; r < omat_row; ++r) {
+            [[unroll]] for (uint r = 0; r < o_scalar_row; ++r) {
                 float Mf = F32Poolsh.F32sh[global_maxsh_offset + r * SubGroupSize + lane];
                 float sink_emf = Mf - sink[r];
                 sink_emf = exp(sink_emf);
@@ -336,7 +338,7 @@ void main() {
                 F32Poolsh.F32sh[lfsh_offset + r * SubGroupSize + lane] = Lfrcp_temp[r][0];
             }
         } else {
-            [[unroll]] for (uint r = 0; r < omat_row; ++r) {
+            [[unroll]] for (uint r = 0; r < o_scalar_row; ++r) {
                 F32Poolsh.F32sh[lfsh_offset + r * SubGroupSize + lane] = (Lfrcp_temp[r][0] == 0.0f) ? 0.0f : (1.0f / Lfrcp_temp[r][0]);
             }
         }
@@ -372,21 +374,21 @@ void main() {
         const uint sh_base1 = sh_base0 + split_p_sg / 2 * omat_row * TN * omat_col * TM;
 
         const uint o_base = (batch_idx * p.nb3 + v_idx * Bc + head_v_idx * gqa_ratio * HSV + out_row_idx * o_dim * Wr) / 4;
-        float Lfrcp[omat_row];
-        float Of[omat_row][4];
-        [[unroll]] for (uint r = 0; r < omat_row; ++r) {
+        float Lfrcp[o_scalar_row];
+        float Of[o_scalar_row][4];
+        [[unroll]] for (uint r = 0; r < o_scalar_row; ++r) {
             Lfrcp[r] = F32Poolsh.F32sh[lfsh_offset + r * SubGroupSize + lane];
         }
 
         [[unroll]] for (uint c = 0; c < Bc / 4; ++c) {
-            [[unroll]] for (uint r = 0; r < omat_row; ++r) {
+            [[unroll]] for (uint r = 0; r < o_scalar_row; ++r) {
                 [[unroll]] for (uint vc = 0; vc < 4; ++vc) {
                     Of[r][vc] = F32Poolsh.F32sh[sh_base0 + r * SubGroupSize * Bc + c * 4 + vc] * Lfrcp[r];
                     Of[r][vc] = Of[r][vc] + F32Poolsh.F32sh[sh_base1 + r * SubGroupSize * Bc + c * 4 + vc] * Lfrcp[r];
                 }
             }
 
-            [[unroll]] for (uint r = 0; r < omat_row; ++r) {
+            [[unroll]] for (uint r = 0; r < o_scalar_row; ++r) {
                 if (o_mask[r]) {
                     data_ov4[o_base + o_offset[r] + c] = vec4(Of[r][0], Of[r][1], Of[r][2], Of[r][3]);
                 }
