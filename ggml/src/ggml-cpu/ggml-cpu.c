@@ -86,6 +86,9 @@ float ggml_table_f32_e8m0_half[1 << 8];
 // precomputed f32 table for ue4m3 (1 KB) (simd-mappings.h)
 float ggml_table_f32_ue4m3[1 << 8];
 
+// Signed FP8 needs its own table: UE4M3 ignores the sign, halves values for NVFP4, and maps NaN to zero.
+float ggml_table_f32_f8_e4m3[1 << 8];
+
 #if defined(__ARM_ARCH)
 struct ggml_arm_arch_features_type {
     int sve_cnt;
@@ -294,6 +297,12 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_nvfp4,
         .vec_dot                  = ggml_vec_dot_nvfp4_q8_0,
         .vec_dot_type             = GGML_TYPE_Q8_0,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_F8_E4M3] = {
+        .from_float               = quantize_row_f8_e4m3,
+        .vec_dot                  = ggml_vec_dot_f8_e4m3_f32,
+        .vec_dot_type             = GGML_TYPE_F32,
         .nrows                    = 1,
     },
     [GGML_TYPE_Q2_K] = {
@@ -737,7 +746,7 @@ static void ggml_init_arm_arch_features(void) {}
 #endif
 #endif // __ARM_ARCH
 
-#if defined(__riscv) && defined(__riscv_v_intrinsic)
+#if defined(__riscv) && defined(__riscv_v)
 #include <riscv_vector.h>
 static void ggml_init_riscv_arch_features(void) {
     ggml_riscv_arch_features.rvv_vlen = __riscv_vlenb();
@@ -2876,7 +2885,7 @@ struct ggml_cplan ggml_graph_plan(
                 case GGML_OP_ADD_ID:
                 case GGML_OP_ADD1:
                     {
-                        if (ggml_is_quantized(node->src[0]->type)) {
+                        if (ggml_is_quantized(node->src[0]->type) || node->src[0]->type == GGML_TYPE_F8_E4M3) {
                             cur = ggml_type_size(GGML_TYPE_F32) * node->src[0]->ne[0] * n_tasks;
                         }
                     } break;
@@ -2924,7 +2933,7 @@ struct ggml_cplan ggml_graph_plan(
                     } break;
                 case GGML_OP_OUT_PROD:
                     {
-                        if (ggml_is_quantized(node->src[0]->type) ||
+                        if (ggml_is_quantized(node->src[0]->type) || node->src[0]->type == GGML_TYPE_F8_E4M3 ||
                             node->src[0]->type == GGML_TYPE_F16) {
                             cur = ggml_type_size(GGML_TYPE_F32) * node->src[0]->ne[0] * n_tasks;
                         }
@@ -3547,7 +3556,7 @@ void ggml_cpu_fp16_to_fp32(const ggml_fp16_t * x, float * y, int64_t n) {
         _mm_storeu_ps(y + i, y_vec);
     }
 
-#elif defined(__riscv_v_intrinsic) && defined(__riscv_zvfhmin)
+#elif defined(__riscv_v) && defined(__riscv_zvfhmin)
     // calculate step size
     const int epr = __riscv_vsetvlmax_e16m2();
     const int step = epr * 2;
@@ -3617,7 +3626,7 @@ void ggml_cpu_bf16_to_fp32(const ggml_bf16_t * x, float * y, int64_t n) {
                                         (const __m128i *)(x + i))),
                                 16)));
     }
-#elif defined(__riscv_v_intrinsic) && defined(__riscv_zvfbfmin)
+#elif defined(__riscv_v) && defined(__riscv_zvfbfmin)
     // calculate step size
     const int epr = __riscv_vsetvlmax_e16m2();
     const int step = epr * 2;
@@ -3737,7 +3746,7 @@ int ggml_cpu_has_arm_fma(void) {
 }
 
 int ggml_cpu_has_riscv_v(void) {
-#if defined(__riscv_v_intrinsic)
+#if defined(__riscv_v)
     return 1;
 #else
     return 0;
@@ -3745,7 +3754,7 @@ int ggml_cpu_has_riscv_v(void) {
 }
 
 int ggml_cpu_get_rvv_vlen(void) {
-#if defined(__riscv) && defined(__riscv_v_intrinsic)
+#if defined(__riscv) && defined(__riscv_v)
     return ggml_riscv_arch_features.rvv_vlen;
 #else
     return 0;
@@ -3908,6 +3917,7 @@ void ggml_cpu_init(void) {
             // initialize UE4M3 table (256 entries)
             for (int i = 0; i < (1 << 8); ++i) {
                 ggml_table_f32_ue4m3[i] = ggml_ue4m3_to_fp32(i);
+                ggml_table_f32_f8_e4m3[i] = ggml_f8_e4m3_to_fp32(i);
             }
 
             const uint64_t t_end = ggml_time_us(); UNUSED(t_end);

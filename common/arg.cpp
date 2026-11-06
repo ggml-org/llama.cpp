@@ -4,6 +4,7 @@
 #include "chat.h"
 #include "common.h"
 #include "download.h"
+#include "http.h"
 #include "json-schema-to-grammar.h"
 #include "json.h"
 #include "llama.h"
@@ -11,16 +12,6 @@
 #include "sampling.h"
 #include "speculative.h"
 #include "preset.h"
-
-// fix problem with std::min and std::max
-#if defined(_WIN32)
-#define WIN32_LEAN_AND_MEAN
-#ifndef NOMINMAX
-#   define NOMINMAX
-#endif
-#include <windows.h>
-#include <shellapi.h>
-#endif
 
 #include <algorithm>
 #include <cinttypes>
@@ -37,20 +28,6 @@
 #include <system_error>
 #include <thread> // for hardware_concurrency
 #include <vector>
-
-#ifndef __EMSCRIPTEN__
-#ifdef __linux__
-#include <linux/limits.h>
-#elif defined(_WIN32)
-#   if !defined(PATH_MAX)
-#   define PATH_MAX MAX_PATH
-#   endif
-#elif defined(_AIX)
-#include <sys/limits.h>
-#else
-#include <sys/syslimits.h>
-#endif
-#endif
 
 #define LLAMA_MAX_URL_LENGTH 2084 // Maximum URL Length in Chrome: 2083
 
@@ -351,7 +328,7 @@ static bool parse_bool_value(const std::string & value) {
 static std::string get_default_local_path(const std::string & url) {
     auto f = string_split<std::string>(url, '#').front();
     f = string_split<std::string>(f, '?').front();
-    return fs_path_to_utf8(fs_get_cache_file(string_split<std::string>(f, '/').back()));
+    return fs_get_cache_file(string_split<std::string>(f, '/').back()).string();
 }
 
 static bool spec_types_is_default(const common_params & params) {
@@ -423,7 +400,26 @@ bool common_models_handler_is_preset_repo(const common_models_handler & handler)
     return !handler.plan.preset.url.empty();
 }
 
+static common_download_opts download_opts_for_url(const common_download_opts & opts, const std::string & url) {
+    common_download_opts result = opts;
+    try {
+        const auto hf    = common_http_parse_url(common_get_model_endpoint());
+        const auto parts = common_http_parse_url(url);
+
+        if (parts.scheme == hf.scheme &&
+            parts.host   == hf.host &&
+            parts.port   == hf.port &&
+            string_starts_with(result.bearer_token, "hf_")) {
+            return result;
+        }
+    } catch (const std::exception &) {
+    }
+    result.bearer_token.clear();
+    return result;
+}
+
 static std::vector<common_download_task> build_url_tasks(const common_params_model & model, common_download_opts opts) {
+    opts = download_opts_for_url(opts, model.url);
     auto parts = common_download_get_all_parts(model.url);
     std::vector<common_download_task> tasks;
 
@@ -512,7 +508,7 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
         common_download_task task;
         task.url        = params.mmproj.url;
         task.local_path = params.mmproj.path;
-        task.opts       = opts;
+        task.opts       = download_opts_for_url(opts, task.url);
         tasks.push_back(task);
     }
     bool had_spec_url = false;
@@ -520,7 +516,7 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
         common_download_task task;
         task.url        = params.speculative.draft.mparams.url;
         task.local_path = params.speculative.draft.mparams.path;
-        task.opts       = opts;
+        task.opts       = download_opts_for_url(opts, task.url);
         tasks.push_back(task);
         had_spec_url = true;
     }
@@ -734,7 +730,7 @@ static void common_params_apply_system_config(common_params & params, llama_exam
     std::vector<std::filesystem::path> paths;
 
 #if defined(_WIN32)
-    const std::filesystem::path program_data = common_get_path_from_env("PROGRAMDATA");
+    const std::filesystem::path program_data = common_get_env("PROGRAMDATA");
     if (!program_data.empty()) {
         paths.push_back(program_data / "llama.cpp" / "config.ini");
     }
@@ -762,7 +758,7 @@ static void common_params_apply_system_config(common_params & params, llama_exam
     common_preset_context ctx(ex);
     ctx.ignore_unknown_keys = true; // the same config file is shared by all programs
     for (const auto & path : found) {
-        LOG_INF("using config file: %s\n", fs_path_to_utf8(path).c_str());
+        LOG_INF("using config file: %s\n", path.string().c_str());
         common_preset global;
         common_presets presets = ctx.load_from_ini(path, global);
         global.apply_to_params(params);
@@ -1259,44 +1255,7 @@ bool common_params_to_map(int argc, char ** argv, llama_example ex, std::map<com
     return true;
 }
 
-#ifdef _WIN32
-struct utf8_argv {
-    std::vector<std::string> buf;
-    std::vector<char*> ptrs;
-};
-
-static utf8_argv make_utf8_argv() {
-    utf8_argv out;
-    int wargc = 0;
-    LPWSTR* wargv = CommandLineToArgvW(GetCommandLineW(), &wargc);
-    if (!wargv) return out;
-
-    out.buf.reserve(wargc);
-    for (int i = 0; i < wargc; ++i) {
-        int n = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wargv[i], -1, nullptr, 0, nullptr, nullptr);
-        if (n <= 0) { out.buf.emplace_back(); continue; }
-        auto& s = out.buf.emplace_back();
-        s.resize(static_cast<size_t>(n - 1));
-        (void)WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1, s.data(), n, nullptr, nullptr);
-    }
-    LocalFree(wargv);
-
-    out.ptrs.reserve(out.buf.size() + 1);
-    for (auto& s : out.buf) out.ptrs.push_back(s.data());
-    out.ptrs.push_back(nullptr);
-    return out;
-}
-#endif
-
 bool common_params_parse(int argc, char ** argv, common_params & params, llama_example ex, void(*print_usage)(int, char **)) {
-#ifdef _WIN32
-    auto utf8 = make_utf8_argv();
-    // repair argv only when it matches the process command line
-    if (static_cast<int>(utf8.buf.size()) == argc) {
-        argv = utf8.ptrs.data();
-    }
-#endif
-
     auto ctx_arg = common_params_parser_init(params, ex, print_usage);
     const common_params params_org = ctx_arg.params; // the example can modify the default params
 

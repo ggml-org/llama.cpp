@@ -17,6 +17,13 @@ export const COPY_FEEDBACK_RESET_MS = 1500;
 /** How long a collapsible block's body takes to expand or collapse. */
 export const COLLAPSIBLE_TRANSITION_MS = 200;
 
+/**
+ * Parts of a message where right-click keeps the browser's own menu (open or
+ * copy a link, save an image, copy code or a field), not the message actions.
+ */
+export const NATIVE_CONTEXT_MENU_SELECTOR =
+	'a, img, video, audio, pre, code, input, textarea, [contenteditable="true"]';
+
 export const FORK_TREE_DEPTH_PADDING = 8;
 export const SYSTEM_MESSAGE_PLACEHOLDER = 'System message';
 
@@ -88,6 +95,8 @@ export const SIDEBAR_COLLAPSE_WIDTH = '9rem';
 export const SIDEBAR_OVERSTRETCH_PX = 80;
 /** Spring-back duration when a drag ends outside the width bounds. */
 export const SIDEBAR_SETTLE_MS = 300;
+/** Duration of the sidebar's open and close slide, matching its `duration-200` transition. */
+export const SIDEBAR_TOGGLE_MS = 200;
 
 /** Max height for tool-result code blocks (json / source / diff / streaming code). */
 export const MAX_HEIGHT_CODE_BLOCK = '22rem';

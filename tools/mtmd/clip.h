@@ -96,7 +96,18 @@ enum clip_gen_process_type {
     CLIP_GEN_PROCESS_GEN_UNKNOWN,
     CLIP_GEN_PROCESS_GEN_CODE, // h_state to codes
     CLIP_GEN_PROCESS_GEN_WAV,  // codes to raw PCM audio
+    CLIP_GEN_PROCESS_TTS,        // full utterance of codes to raw PCM audio
+    CLIP_GEN_PROCESS_TTS_VOCODE, // internal: mel + source stft to istft input
+    CLIP_GEN_PROCESS_TOKENIZE,   // raw PCM audio to semantic speech tokens
 };
+
+// gen-side voice reference (chatterbox): speech tokens, mel-rate features and the speaker vector
+struct clip_gen_ref {
+    std::vector<int32_t> tokens;
+    std::vector<float>   feat;
+    std::vector<float>   spk;
+};
+
 struct clip_encode_params {
     int n_threads = 1;
     const clip_image_f32_batch * imgs = nullptr;
@@ -114,10 +125,20 @@ struct clip_encode_params {
     float   temp = 0.0f;                      // sampling temperature, noise scale for flow-matching decoders
     bool * out_is_eos = nullptr;
 
+    // TOKENIZE: speech embedding rows of the produced codes
+    std::vector<float> * out_code_embd = nullptr;
+
     // GEN_WAV
     const std::vector<int32_t> * codes = nullptr;     // this frame's 16 RVQ codes
     const std::vector<float> *   feats = nullptr;     // continuous counterpart of codes
     std::vector<float> * out_audio = nullptr;         // decoded PCM samples, F32
+    const clip_gen_ref * ref = nullptr; // TTS reference conditioning of the voice
+    // TTS_VOCODE internal stage inputs
+    const std::vector<float> * mel_in   = nullptr;
+    const std::vector<float> * sstft_in = nullptr;
+    int vocode_n_mel  = 0;
+    int vocode_n_stft = 0;
+    std::vector<float> * out_spec = nullptr;
 
     // audio gen: state of one sequence, clip_encode() updates it in place
     struct clip_gen_state * gen_state = nullptr;
@@ -138,6 +159,17 @@ void                    clip_enc_state_free(struct clip_enc_state * state);
 struct clip_gen_state * clip_gen_state_init(struct clip_ctx * ctx, uint32_t seed);
 void                    clip_gen_state_free(struct clip_gen_state * state);
 void                    clip_gen_state_reset(struct clip_gen_state * state);
+
+// read a chatterbox tensor by name as F32, returns the element count (0 if not found), out may be null to query the size
+size_t clip_cbx_read_tensor(struct clip_ctx * ctx, const char * name, float * out, size_t n_max);
+
+// a predefined voice: backbone rows, plus the gen-side reference when the gen stack needs one
+struct clip_gen_voice {
+    std::vector<float> rows;
+    clip_gen_ref       ref;
+};
+
+const std::map<std::string, clip_gen_voice> & clip_gen_get_voices(const struct clip_ctx * ctx);
 
 bool clip_is_llava(const struct clip_ctx * ctx);
 // note for contributor: this clip_is_(model) pattern is deprecated
