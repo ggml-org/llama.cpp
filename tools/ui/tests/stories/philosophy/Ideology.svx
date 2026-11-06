@@ -28,7 +28,7 @@ Open models run on the hardware people already have, from a laptop to a server. 
 
 Freedom is only real if people can use it. Running a model has long meant a terminal and a vocabulary few people share: weights, tensors, GGUF, quantization, speculative decoding. Someone who just wants help with a letter, a photo or a question should not need any of it.
 
-So the apps start simple. They suggest a first model that is small enough for an ordinary computer and good enough for everyday help, one that can see and hear as well as read (today, LFM3 Omni). The Llama app does what used to take a terminal: it downloads the model from Hugging Face, sets up how it runs, and keeps the server going.
+So the apps start simple. They suggest a first model that is small enough for an ordinary computer and good enough for everyday help, one that can see and hear as well as read. The Llama app does what used to take a terminal: it downloads the model from Hugging Face, sets up how it runs, and keeps the server going.
 
 Everything deeper is still there for anyone who wants it: sampling, penalties, system prompts, custom recipes, any model and any setting. It is uncovered when you ask for it, not put in front of everyone. We do not have the perfect recipe for this yet; it is the problem we are working on now.
 
