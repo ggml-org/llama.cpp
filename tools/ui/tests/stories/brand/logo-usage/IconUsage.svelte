@@ -1,6 +1,6 @@
 <!--
 	How the Llama icon is used, one case per section (section picks which; each is a story of Brand/Logo/Usage): as its two glyphs of Llama Sans (U+E000 for text, U+E001, the
-	capital form at the lockup's proportion) in display type and buttons, the lockup in context and in Llama Mono, in a download badge
+	capital form at the lockup's proportion) in display type and buttons, the lockup in context, in Llama Mono and the two lockups together, in a download badge
 	and in running text, then as the web app's favicon, PWA, maskable and Apple touch icons and
 	its splash screens, with their proportions and placement drawn in. The app icons follow the web UI's own
 	pwa-assets.config.ts (PWA_ASSET_GENERATOR) and make-icons-circular.js, but are drawn with the L: the files it ships
@@ -158,7 +158,16 @@
 	let {
 		section
 	}: {
-		section: 'badge' | 'buttons' | 'context' | 'glyphs' | 'icons' | 'mono' | 'splash' | 'text';
+		section:
+			| 'badge'
+			| 'buttons'
+			| 'context'
+			| 'glyphs'
+			| 'icons'
+			| 'mono'
+			| 'pair'
+			| 'splash'
+			| 'text';
 	} = $props();
 </script>
 
@@ -319,7 +328,68 @@
 	</div>
 {/if}
 
-<!-- 5. a download badge -->
+<!-- 5. the two lockups together: Llama in Sans, llama.cpp in Mono -->
+{#if section === 'pair'}
+	<p class="kicker">Proposal · the two lockups</p>
+
+	<h2>Llama in Sans, llama.cpp in Mono</h2>
+
+	<p>
+		A test of giving each name its own voice: the app, Llama, in Llama Sans with its capital L; the
+		engine, llama.cpp, in Llama Mono and all lowercase, as it is typed in a terminal. Both take the
+		same capital icon (U+E001) at the same size and gap, so side by side only the name changes.
+	</p>
+
+	{#each ['light', 'dark'] as const as tone (tone)}
+		<div class="pair-panel {tone}">
+			<p class="lockup"><span class="glyph"> </span>Llama</p>
+
+			<p class="lockup mono"><span class="glyph"> </span>llama.cpp</p>
+		</div>
+	{/each}
+
+	<div class="pair-sizes">
+		{#each [48, 32, 20, 16, 13] as size (size)}
+			<div style:font-size="{size}px" class="pair-row">
+				<span class="tag">{size} px</span>
+
+				<span class="mark"><span class="glyph"> </span>Llama</span>
+
+				<span class="mark mono"><span class="glyph"> </span>llama.cpp</span>
+			</div>
+		{/each}
+	</div>
+
+	<div class="contexts">
+		<div class="ctx header">
+			<span style:font-size="18px" class="mark"><span class="glyph"> </span>Llama</span>
+
+			<span class="links">Models · Chats · Settings</span>
+
+			<Button size="sm">Download</Button>
+		</div>
+
+		<div class="ctx header mono">
+			<span style:font-size="18px" class="mark"
+				><span class="glyph"> </span>llama<span class="cpp">.cpp</span></span
+			>
+
+			<span class="links">docs · server · cli</span>
+
+			<Button size="sm">GitHub</Button>
+		</div>
+
+		<div class="ctx footer">
+			<span style:font-size="13px" class="mark"><span class="glyph"> </span>Llama</span>
+
+			<span class="links"
+				>runs on <span class="mono-name"><span class="glyph"> </span>llama.cpp</span></span
+			>
+		</div>
+	</div>
+{/if}
+
+<!-- 6. a download badge -->
 {#if section === 'badge'}
 	<p class="kicker">Download badge</p>
 
@@ -369,7 +439,7 @@
 	</div>
 {/if}
 
-<!-- 6. in running text -->
+<!-- 7. in running text -->
 {#if section === 'text'}
 	<p class="kicker">In running text</p>
 
@@ -394,7 +464,7 @@
 	</div>
 {/if}
 
-<!-- 7. app icons -->
+<!-- 8. app icons -->
 {#if section === 'icons'}
 	<p class="kicker">App icons</p>
 
@@ -454,7 +524,7 @@
 	</div>
 {/if}
 
-<!-- 8. splash screens -->
+<!-- 9. splash screens -->
 {#if section === 'splash'}
 	<p class="kicker">Splash screens</p>
 
@@ -638,12 +708,61 @@
 	.terminal .prompt {
 		color: rgb(250 250 250 / 0.5);
 	}
+	/* 5 */
+	.pair-panel {
+		display: grid;
+		gap: 4px;
+		padding: clamp(20px, 4vw, 40px);
+		border-radius: 16px;
+		background: #fafafa;
+		color: #111111;
+		box-shadow: inset 0 0 0 1px var(--l-rule);
+	}
+	.pair-panel.dark {
+		background: #111111;
+		color: #fafafa;
+	}
+	.pair-panel .lockup {
+		font-size: clamp(40px, 7vw, 88px);
+	}
+	.pair-sizes {
+		display: grid;
+		gap: 14px;
+	}
+	.pair-row {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: 8px 1.5em;
+	}
+	.pair-row .tag {
+		width: 48px;
+		font-size: 11px;
+	}
+	.pair-row .mark {
+		font-family: 'Llama Sans', var(--body);
+		font-weight: 700;
+		line-height: 1.15;
+		white-space: nowrap;
+	}
+	.pair-row .mark.mono,
+	.mono-name {
+		font-family: var(--mono);
+	}
+	.pair-row .mark.mono .glyph,
+	.mono-name .glyph {
+		font-family: 'Llama Sans', var(--body);
+	}
+	.mono-name {
+		font-weight: 700;
+		color: var(--l-ink);
+	}
 	.terminal .banner {
 		color: var(--art-cinder);
 		font-weight: 700;
 	}
 
-	/* 5 */
+	/* 6 */
 	.badges {
 		display: flex;
 		flex-wrap: wrap;
@@ -715,7 +834,7 @@
 		font-size: 15px;
 	}
 
-	/* 6 */
+	/* 7 */
 	.inline {
 		display: grid;
 		gap: 12px;
@@ -732,7 +851,7 @@
 			var(--body);
 	}
 
-	/* 7 and 8 */
+	/* 8 and 9 */
 	.icons {
 		display: grid;
 		grid-template-columns: repeat(auto-fill, minmax(min(100%, 180px), 1fr));
