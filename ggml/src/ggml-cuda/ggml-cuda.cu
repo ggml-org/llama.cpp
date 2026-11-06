@@ -6574,8 +6574,8 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t 
         bool has_fp8 = false;
         bool has_fp4 = false;
         for (int id = 0; id < info.device_count; ++id) {
-            has_fp8 = has_fp8 || fp8_mma_hardware_available(info.devices[id].cc);
-            has_fp4 = has_fp4 || blackwell_mma_available(info.devices[id].cc);
+            has_fp8 |= fp8_mma_hardware_available(info.devices[id].cc);
+            has_fp4 |= blackwell_mma_available(info.devices[id].cc);
             if (has_fp8 && has_fp4) {
                 break;
             }
