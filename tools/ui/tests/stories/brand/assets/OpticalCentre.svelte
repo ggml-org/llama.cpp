@@ -1,15 +1,17 @@
 <!--
-	How the icon sits in a circle crop (the avatars, the PWA icon), animated: the icon holds at the exact centre, eases
-	over to where the files place it, lifted and nudged left, holds, and eases back, on a loop (still at the files'
-	placement with reduced motion). The avatar shows light and dark, then measured as it moves: the icon's box, the
+	How the icon sits in a circle crop (the avatars, the PWA icon), animated in steps: the icon holds at the exact
+	centre, lifts, is nudged left to where the files place it, is measured, and eases back, on a loop. Below it, a tile
+	for each step, as in the logo overview's origin: each lights up once the animation reaches it, and a click moves
+	the animation there (with reduced motion it doesn't loop, and a click shows the step at once). The avatar shows light and dark, then measured as it moves: the icon's box, the
 	centre lines, the margins all round, and a circle in the gap between the crop and each of the icon's outer points,
 	touching both (its rounded corners, its sharp corners and the tips at its middle). The files' placement comes from
 	the file itself (its translate and scale), so the figure follows the files.
 -->
 <script lang="ts">
+	import Figure from '../logo-showcase/lib/components/Figure.svelte';
+	import Figures from '../logo-showcase/lib/components/Figures.svelte';
 	import { PATHS, SIZE } from '../logo-showcase/lib/logo';
-	import { Pause, Play } from '@lucide/svelte';
-	import { Button } from '$lib/components/ui/button';
+	import { untrack } from 'svelte';
 	import { cubicInOut } from 'svelte/easing';
 	import { prefersReducedMotion, Tween } from 'svelte/motion';
 
@@ -124,84 +126,97 @@
 			.join(' · ');
 	}
 
-	// how far the icon has moved from the exact centre to the files' placement: it holds centred, eases over, holds
-	// there, and eases back; the measures draw on only once it has arrived, and clear before it leaves
-	const progress = new Tween(0, { duration: 1400, easing: cubicInOut });
+	// the steps, in order: centred, lifted, nudged left to the files' placement, then measured there
+	const STEPS = ['centred', 'lifted', 'nudged', 'measured'] as const;
+	// how long each step holds before the next
+	const HOLDS = [1500, 900, 900, 4500];
+
+	// how far the icon has been lifted and nudged, from the exact centre (0) to the files' placement (1); the measures
+	// draw on only once it has arrived, and clear before it leaves
+	const lifted = new Tween(0, { duration: 1000, easing: cubicInOut });
+	const nudged = new Tween(0, { duration: 900, easing: cubicInOut });
+	let step = $state(0);
 	let measured = $state(false);
-	let paused = $state(false);
+	// where the loop (re)starts: a click on a tile moves it there
+	let from = $state({ at: 0 });
 	const uid = $props.id();
 
 	const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+	// the loop that's running: a click starts another, and a stale one stops at its next await
+	let run = 0;
+
+	/** Moves the icon to step i (lifted from the second, nudged from the third, measured at the last), then shows it. */
+	async function show(i: number, id: number, duration?: number) {
+		const options = duration === undefined ? undefined : { duration };
+
+		if (i < 3 && measured) {
+			measured = false;
+
+			if (duration !== 0) await wait(500);
+		}
+
+		if (id !== run) return;
+
+		await Promise.all([lifted.set(i >= 1 ? 1 : 0, options), nudged.set(i >= 2 ? 1 : 0, options)]);
+
+		if (id !== run) return;
+
+		step = i;
+		measured = i === 3;
+	}
+
 	$effect(() => {
+		const start = from.at;
+		const id = untrack(() => ++run);
+
 		if (prefersReducedMotion.current) {
-			progress.set(1, { duration: 0 });
-			measured = true;
+			untrack(() => show(start, id, 0));
 
 			return;
 		}
 
-		if (paused) return;
+		untrack(async () => {
+			for (let i = start; id === run; i = (i + 1) % STEPS.length) {
+				await show(i, id);
 
-		let stopped = false;
+				if (id !== run) break;
 
-		(async () => {
-			while (!stopped) {
-				await wait(1500);
-
-				if (stopped) break;
-
-				await progress.set(1);
-
-				if (stopped) break;
-
-				measured = true;
-				await wait(4500);
-
-				if (stopped) break;
-
-				measured = false;
-				await wait(500);
-
-				if (stopped) break;
-
-				await progress.set(0);
+				await wait(HOLDS[i]);
 			}
-		})();
+		});
 
-		return () => (stopped = true);
+		// unmounted, or restarted: this loop is stale
+		return () => run++;
+	});
+
+	/** The icon's top left with it lifted and nudged by l and n (0 to 1 of the files' lift and nudge). */
+	const at = (l: number, n: number) => ({
+		x: centred + (placement.x - centred) * n,
+		y: centred + (placement.y - centred) * l
 	});
 
 	const shown = $derived.by(() => {
-		const x = centred + (placement.x - centred) * progress.current;
-		const y = centred + (placement.y - centred) * progress.current;
+		const { x, y } = at(lifted.current, nudged.current);
 		const g = gaps(x, y);
-		const label =
-			progress.current < 0.01
-				? 'At the exact centre'
-				: progress.current > 0.99
-					? `Lifted 1/${lift} and nudged 1/${nudge} left, as in the files`
-					: 'Moving to the files’ placement';
+		const label = [
+			'At the exact centre',
+			`Lifted 1/${lift} of its height`,
+			`Lifted 1/${lift} and nudged 1/${nudge} left, as in the files`,
+			`Lifted 1/${lift} and nudged 1/${nudge} left, as in the files`
+		][step];
 
 		return { gaps: g, key: 'shown', label, note: balance(g), x, y };
 	});
+
+	// each tile's drawing, at its step's placement
+	const tiles = $derived(STEPS.map((name, i) => ({ name, ...at(i >= 1 ? 1 : 0, i >= 2 ? 1 : 0) })));
+	const titles = { centred: 'Centred', lifted: 'Lifted', measured: 'Measured', nudged: 'Nudged' };
 
 	const round = (n: number) => Math.round(n * 10) / 10;
 </script>
 
 <figure aria-label="Icon placements" class="m-0 grid min-w-0 gap-6">
-	{#if !prefersReducedMotion.current}
-		<div class="flex items-center gap-2">
-			<Button onclick={() => (paused = !paused)} size="sm" variant="outline">
-				{#if paused}<Play /> Play{:else}<Pause /> Pause{/if}
-			</Button>
-
-			<span class="text-xs text-muted-foreground">
-				from the exact centre to the files’ placement, lifted 1/{lift} and nudged 1/{nudge} left
-			</span>
-		</div>
-	{/if}
-
 	<!-- the placement as it moves: the avatar light and dark, small as it shows, then measured -->
 	{#each [shown] as panel (panel.key)}
 		<section class="grid gap-4">
@@ -361,6 +376,70 @@
 		</section>
 	{/each}
 
+	<!-- the steps, as tiles: each lights up once the animation reaches it, and a click moves the animation there -->
+	<Figures layout="steps">
+		{#each tiles as tile, i (tile.name)}
+			<Figure
+				action="Show {titles[tile.name]} in the animation"
+				dim={i > step}
+				n={String(i + 1).padStart(2, '0')}
+				onclick={() => (from = { at: i })}
+				title={titles[tile.name]}
+				view="0 0 {placement.size} {placement.size}"
+			>
+				{#snippet drawing()}
+					<circle
+						class="tile-crop"
+						cx={placement.size / 2}
+						cy={placement.size / 2}
+						r={placement.size / 2 - 1}
+					/>
+
+					<line
+						class="tile-axis"
+						x1="0"
+						x2={placement.size}
+						y1={placement.size / 2}
+						y2={placement.size / 2}
+					/>
+
+					<line
+						class="tile-axis"
+						x1={placement.size / 2}
+						x2={placement.size / 2}
+						y1="0"
+						y2={placement.size}
+					/>
+
+					<g
+						fill="var(--l-shape)"
+						transform="translate({tile.x} {tile.y}) scale({placement.scale})"
+					>
+						{#each PATHS as d (d)}<path {d} />{/each}
+					</g>
+
+					{#if tile.name === 'measured'}
+						{#each gaps(tile.x, tile.y) as g (g.kind + g.name)}
+							<circle class={['gap tile-gap', g.kind]} cx={g.cx} cy={g.cy} r={g.gap / 2} />
+						{/each}
+					{:else}
+						<rect class="tile-box" height={side} width={side} x={tile.x} y={tile.y} />
+					{/if}
+				{/snippet}
+
+				{#if tile.name === 'centred'}
+					At the exact centre of the square, the icon reads low: its weight sits in the wide foot.
+				{:else if tile.name === 'lifted'}
+					Up 1/{lift} of its height, it looks centred.
+				{:else if tile.name === 'nudged'}
+					Left 1/{nudge} of its width: where the files place it, in the avatars and the PWA icon.
+				{:else}
+					Each gap between the crop and the icon's outer points, filled by a circle touching both.
+				{/if}
+			</Figure>
+		{/each}
+	</Figures>
+
 	<figcaption class="text-xs text-muted-foreground">
 		The icon fills {Math.round((side / placement.size) * 100)}% of the side; the numbers are pixels
 		at {placement.size}
@@ -398,6 +477,28 @@
 	.gap.middle {
 		fill: color-mix(in srgb, #3b82f6 10%, transparent);
 		stroke: #3b82f6;
+	}
+	/* the tiles' marks: the crop and its centre lines, faint, and the icon's box */
+	.tile-crop,
+	.tile-axis {
+		fill: none;
+		stroke: var(--l-line);
+		stroke-width: 1px;
+		vector-effect: non-scaling-stroke;
+	}
+	.tile-axis {
+		stroke-dasharray: 4 3;
+	}
+	.tile-box {
+		fill: none;
+		stroke: #ee6c1e;
+		stroke-dasharray: 4 3;
+		stroke-width: 1px;
+		vector-effect: non-scaling-stroke;
+	}
+	.tile-gap {
+		stroke-width: 1px;
+		vector-effect: non-scaling-stroke;
 	}
 	.margin {
 		dominant-baseline: middle;
