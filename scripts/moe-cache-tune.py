@@ -133,8 +133,10 @@ def full_mib(trace, share):
     return math.ceil(res / 2**20) + 1
 
 
-class SLRU:
-    """moe_cache_slru"""
+class ClassLRU:
+    """moe_cache_lru, with its float32 rounding of the CRF"""
+    N_CLASS = 8
+    CRF_HALF_LIFE = 128.0  # tokens
 
     def __init__(self, layers, n_expert, n_slots):
         self.n_expert = n_expert
@@ -143,17 +145,19 @@ class SLRU:
         self.key_of = [-1] * n_slots
         self.prev = [s - 1 for s in range(n_slots)]
         self.next = [s + 1 if s + 1 < n_slots else -1 for s in range(n_slots)]
-        self.head = [0, -1]
-        self.tail = [n_slots - 1, -1]
-        self.is_protected = [False] * n_slots
-        self.n_protected = 0
+        self.head = [0] + [-1] * (self.N_CLASS - 1)
+        self.tail = [n_slots - 1] + [-1] * (self.N_CLASS - 1)
+        self.list_of = [0] * n_slots
         self.n_filled = 0
+        self.crf = {}       # key -> CRF, 0 before the first use
+        self.last_use = {}  # key -> layer clock at the last use
+        self.clock = {il: 0 for il in layers}
         self.seen = [0] * n_expert
         self.seen_gen = 0
 
-    def move(self, s, protect):
-        frm = self.is_protected[s]
-        if frm == protect and s == self.tail[frm]:
+    def move(self, s, c):
+        frm = self.list_of[s]
+        if frm == c and s == self.tail[frm]:
             return
         prev, nxt, head, tail = self.prev, self.next, self.head, self.tail
         if prev[s] >= 0:
@@ -164,31 +168,49 @@ class SLRU:
             prev[nxt[s]] = prev[s]
         else:
             tail[frm] = prev[s]
-        prev[s] = tail[protect]
+        prev[s] = tail[c]
         nxt[s] = -1
-        if tail[protect] >= 0:
-            nxt[tail[protect]] = s
+        if tail[c] >= 0:
+            nxt[tail[c]] = s
         else:
-            head[protect] = s
-        tail[protect] = s
-        self.is_protected[s] = protect
-        self.n_protected += int(protect) - int(frm)
+            head[c] = s
+        tail[c] = s
+        self.list_of[s] = c
 
-    def touch(self, s):
-        self.move(s, True)
-        if self.n_protected > self.n_slots // 2:
-            self.move(self.head[1], False)
+    def class_of(self, key):
+        return min(self.N_CLASS - 1, int(f32(math.log2(self.crf[key]))))  # (int) log2f
+
+    def decayed_crf(self, il, key):
+        crf = self.crf.get(key, 0.0)
+        if crf == 0.0:
+            return 0.0
+        x = f32(f32(-(self.clock[il] - self.last_use[key])) / self.CRF_HALF_LIFE)
+        return f32(crf * f32(2.0 ** x))
+
+    def use(self, il, key):
+        self.crf[key] = f32(self.decayed_crf(il, key) + 1.0)
+        self.last_use[key] = self.clock[il]
+
+    def is_selected(self, il, key):
+        return key >= 0 and key // self.n_expert == il and self.seen[key % self.n_expert] == self.seen_gen
 
     def victim(self, il):
-        n_expert, key_of, seen, gen = self.n_expert, self.key_of, self.seen, self.seen_gen
-        for segment in (0, 1):
-            s = self.head[segment]
-            while s >= 0:
-                key = key_of[s]
-                if key < 0 or key // n_expert != il or seen[key % n_expert] != gen:
-                    return s
+        res, res_score = -1, -1.0
+        for c in range(self.N_CLASS):
+            s = self.head[c]
+            while s >= 0 and self.is_selected(il, self.key_of[s]):
                 s = self.next[s]
-        raise RuntimeError("no SLRU victim")
+            if s < 0:
+                continue
+            key = self.key_of[s]
+            if key < 0:
+                return s  # unused slot
+            score = math.ldexp(float(self.clock[key // self.n_expert] - self.last_use[key]), -c)  # age/2^class
+            if score > res_score:
+                res, res_score = s, score
+        if res < 0:
+            raise RuntimeError("no MoE cache victim")
+        return res
 
     def plan(self, il, ids, n_used, n_zero, n_cpu, rng):
         """returns (uploaded, computed on the CPU, rng)"""
@@ -204,10 +226,13 @@ class SLRU:
 
         slots = self.slot_map[il]
         n_slots = self.n_slots
+        n_tokens = len(ids) // n_used
         misses = []
         for e in uniq:
+            key = il * self.n_expert + e
+            self.use(il, key)
             if slots[e] < n_slots:
-                self.touch(slots[e])
+                self.move(slots[e], self.class_of(key))
             else:
                 misses.append(e)
 
@@ -219,7 +244,6 @@ class SLRU:
         n_cpu_done = 0
         if n_c > 0:
             # distinct zero slots per token, a miss without one is uploaded
-            n_tokens = len(ids) // n_used
             token_zero = [0] * n_tokens
             n_keep = n_c
             i = 0
@@ -249,9 +273,11 @@ class SLRU:
                 self.slot_map[key // self.n_expert][key % self.n_expert] = n_slots
             else:
                 self.n_filled += 1
-            self.key_of[s] = il * self.n_expert + e
+            key = il * self.n_expert + e
+            self.key_of[s] = key
             slots[e] = s
-            self.move(s, False)
+            self.move(s, self.class_of(key))
+        self.clock[il] += n_tokens
         return len(misses), n_cpu_done, rng
 
 
@@ -264,7 +290,7 @@ def replay(trace, size_mib, share, skip_tokens):
     caches, group_of = [], {}
     for ig, g in enumerate(groups):
         n = n_slots_of(g, size_mib, n_zero, n_expert_used)
-        caches.append(SLRU(g.layers, g.n_expert, n) if n > 0 else None)
+        caches.append(ClassLRU(g.layers, g.n_expert, n) if n > 0 else None)
         group_of.update((il, ig) for il in g.layers)
 
     first = min(il for il, _, _ in records)
