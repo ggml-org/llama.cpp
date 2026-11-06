@@ -4664,7 +4664,11 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
             }
         }
     } else if (cur->type == GGML_TYPE_IQ4_NL) {
+#if defined(__loongarch__)
+        if (ggml_cpu_has_avx2() || ggml_cpu_has_lasx()) {
+#else
         if (ggml_cpu_has_avx2()) {
+#endif
             if (cur->ne[1] % 8 == 0) {
                 return &iq4_nl_8x8_q8_0;
             }
