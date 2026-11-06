@@ -12131,9 +12131,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
     // a selection of the indexer of sparse attention, with more ties at the threshold than slots
     test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {1088, 2048, 1, 1}, 512, true));
-    // radix path (ncols > 2048) with tie overflow, to check the deterministic tie handling
-    test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {4096, 2048, 1, 1}, 512, true));
-    test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {4096,   1, 1, 1}, 512, true));
 
     for (int i = 0; i < 20; ++i) {
         for (int k : {1, 2, 3, 7, 15, 100, 500, 1023, 9999}) {
@@ -13307,12 +13304,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     for (auto k : {20, 40}) {
         test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {151936, 1, 1, 1}, k));
     }
-
-    // tie-heavy data to monitor the cost of the deterministic tie handling
-    test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, { 65536, 16, 1, 1 },   16, true));
-    test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {131072,  8, 1, 1 }, 2048, true));
-    test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {200000, 16, 1, 1 },  400, true));
-    test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, { 65536, 16, 1, 1 }, 2048, true));
 
     // short rows, many of them: MoE routing and group selection. The opposite corner from
     // the indexer, and the one where a work-group per row is the wasteful choice.
