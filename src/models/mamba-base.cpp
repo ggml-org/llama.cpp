@@ -8,7 +8,6 @@ llm_build_mamba_base::llm_build_mamba_base(const llm_graph_params & params) : ll
 
 ggml_tensor * llm_build_mamba_base::build_mamba_layer(llm_graph_input_rs * inp,
                                                          ggml_tensor *        cur,
-                                                         const llama_model &  model,
                                                          const llama_ubatch & ubatch,
                                                          int                  il) {
     const auto * mctx_cur = inp->mctx;
@@ -152,7 +151,6 @@ ggml_tensor * llm_build_mamba_base::build_mamba_layer(llm_graph_input_rs * inp,
 
 ggml_tensor * llm_build_mamba_base::build_mamba2_layer(llm_graph_input_rs * inp,
                                                           ggml_tensor *        cur,
-                                                          const llama_model &  model,
                                                           const llama_ubatch & ubatch,
                                                           int                  il) const {
     const auto * mctx_cur = inp->mctx;
