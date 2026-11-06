@@ -5,6 +5,14 @@
 #include "mmf.cuh"
 #include "convert.cuh"
 
+static __device__ __forceinline__ float2 mmvf_load_fp8x2(const ggml_fp8_e4m3_t * x) {
+#if defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+    return ggml_cuda_cast<float2>(*reinterpret_cast<const __nv_fp8x2_e4m3 *>(x));
+#else
+    return make_float2(ggml_cuda_cast<float>(x[0]), ggml_cuda_cast<float>(x[1]));
+#endif
+}
+
 template <typename T, typename type_acc, int ncols_dst, int block_size, bool has_fusion = false, bool is_multi_token_id = false>
 static __global__ void mul_mat_vec_f(
         const T * x_ptr, const float * y_ptr, const int32_t * ids_ptr, const ggml_cuda_mm_fusion_args_device fusion, float * dst_ptr,
@@ -318,28 +326,12 @@ static __global__ void mul_mat_vec_f(
 #endif
     } else if constexpr (std::is_same_v<T, ggml_fp8_e4m3_t>) {
         const float2 * y2 = (const float2 *) y;
-#if defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
-        const __nv_fp8x2_e4m3 * x2 = reinterpret_cast<const __nv_fp8x2_e4m3 *>(x);
-        const __nv_fp8x2_e4m3 * gate_x2 = reinterpret_cast<const __nv_fp8x2_e4m3 *>(gate_x);
-#endif
         for (int col2 = tid; col2 < ncols2; col2 += block_size) {
-#if defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
-            const float2 tmpx = ggml_cuda_cast<float2>(x2[col2]);
-#else
-            const float2 tmpx = make_float2(
-                ggml_cuda_cast<float>(x[2*col2 + 0]),
-                ggml_cuda_cast<float>(x[2*col2 + 1]));
-#endif
+            const float2 tmpx = mmvf_load_fp8x2(x + 2*col2);
             float2 tmpx_gate = {};
             if constexpr (has_fusion) {
                 if (use_gate) {
-#if defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
-                    tmpx_gate = ggml_cuda_cast<float2>(gate_x2[col2]);
-#else
-                    tmpx_gate = make_float2(
-                        ggml_cuda_cast<float>(gate_x[2*col2 + 0]),
-                        ggml_cuda_cast<float>(gate_x[2*col2 + 1]));
-#endif
+                    tmpx_gate = mmvf_load_fp8x2(gate_x + 2*col2);
                 }
             }
 #pragma unroll
