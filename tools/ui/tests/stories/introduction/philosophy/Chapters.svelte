@@ -1,6 +1,6 @@
 <!--
-	The chapter navigation: the page's section heads as a list fixed at the right, centred. Inactive chapters are small
-	and dimmed; the one being read is in the full foreground colour and a little larger. Clicking a chapter scrolls to
+	The chapter navigation: the page's section heads as a list fixed at the right, centred. Every chapter is set at one size;
+	inactive ones are dimmed, and the one being read is in the full foreground colour. Clicking a chapter scrolls to
 	it. Shown only where there is room beside the text.
 -->
 <script lang="ts">
@@ -91,7 +91,7 @@
 	}
 
 	/* only where the column leaves room for it */
-	@media (width >= 1280px) {
+	@media (width >= 1440px) {
 		.chapters {
 			display: block;
 		}
@@ -111,13 +111,12 @@
 		align-items: baseline;
 		padding-block: 4px;
 		color: var(--fg-muted);
-		font-size: 12px;
+		font-size: 14px;
 		line-height: 1.3;
 		text-decoration: none;
 		opacity: 0.6;
 		transition:
 			color 200ms ease-out,
-			font-size 200ms ease-out,
 			opacity 200ms ease-out;
 	}
 
@@ -127,7 +126,6 @@
 
 	a.active {
 		color: var(--fg-default);
-		font-size: 14px;
 		font-weight: 500;
 		opacity: 1;
 	}
