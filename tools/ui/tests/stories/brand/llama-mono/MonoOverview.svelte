@@ -89,7 +89,7 @@ int main(int argc, char ** argv) {
 			<p style:font-weight={w.weight}>
 				<span class="label">{w.name} {w.weight}</span>
 
-				<span class="line">llama-server --port 8080</span>
+				<span class="line">llama-server --port 9931</span>
 			</p>
 		{/each}
 	</div>

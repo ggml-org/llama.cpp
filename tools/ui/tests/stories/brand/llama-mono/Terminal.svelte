@@ -20,7 +20,7 @@
 		prompt(
 			'~/models',
 			'main',
-			'llama-server -hf ggml-org/gemma-3-12b-it-GGUF --port 8080 -c 32768'
+			'llama-server -hf ggml-org/gemma-3-12b-it-GGUF --port 9931 -c 32768'
 		),
 		[['dim', 'build: 6123 (a1b2c3d4) with Apple clang 17.0.0 for arm64-apple-darwin']],
 		[['dim', 'system info: n_threads = 12 / 16 | Metal : EMBED_LIBRARY = 1']],
@@ -29,7 +29,7 @@
 		[['', 'llama_context: n_ctx = 32768, n_batch = 2048, flash_attn = auto']],
 		[['warn', 'warn: the chat template has no system role, merging it into the first turn']],
 		[['', 'srv  load_model: initializing slots, n_slots = 4']],
-		[['ok', 'main: server is listening on http://127.0.0.1:8080']],
+		[['ok', 'main: server is listening on http://127.0.0.1:9931']],
 		[['ok', 'main: starting the main loop...']]
 	];
 

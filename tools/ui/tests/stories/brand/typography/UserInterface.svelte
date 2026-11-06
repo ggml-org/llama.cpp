@@ -134,7 +134,7 @@
 				<Card.Header>
 					<Card.Title>Server</Card.Title>
 
-					<Card.Description>llama-server on 127.0.0.1:8080</Card.Description>
+					<Card.Description>llama-server on 127.0.0.1:9931</Card.Description>
 				</Card.Header>
 
 				<Card.Content class="grid gap-4">

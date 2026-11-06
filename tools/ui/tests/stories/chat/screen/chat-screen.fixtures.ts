@@ -57,7 +57,7 @@ export const screenConversation: ExportedConversation = {
 		}),
 		turn('a2', 'u2', [], {
 			content:
-				'Point the server at the file and open the web UI:\n\n```sh\nllama-server -m Qwen3-8B-Q4_K_M.gguf --port 8080\n```\n\nThen visit `http://localhost:8080`.',
+				'Point the server at the file and open the web UI:\n\n```sh\nllama-server -m Qwen3-8B-Q4_K_M.gguf --port 9931\n```\n\nThen visit `http://localhost:9931`.',
 			model: MODEL_NAME,
 			role: MessageRole.ASSISTANT,
 			timestamp: minutesAgo(2),
