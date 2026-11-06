@@ -55,6 +55,15 @@
 		@apply border-l-2 border-line-default pl-4 text-fg-muted;
 	}
 
+	/* a note that stands out from the running text: a quiet panel with the accent on its edge */
+	& :where(.callout) {
+		@apply my-6 rounded-panel border-l-2 border-(--art-cinder) bg-surface-muted px-5 py-4;
+
+		& > :where(p) {
+			@apply my-0;
+		}
+	}
+
 	& :where(hr) {
 		@apply my-8 border-line-default;
 	}
