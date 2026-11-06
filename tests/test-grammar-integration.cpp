@@ -623,6 +623,19 @@ static void test_special_chars() {
             "🔵🟠abc🟠🔵"
         }
     );
+
+    test_grammar(
+        "left factor character alternatives",
+        "root ::= [ab] \"x\" | [ac] \"x\" | [ad] \"x\" | [ae] \"x\"",
+        {"ax", "bx", "cx", "dx", "ex"}, {"", "a", "fx", "axx"});
+    test_grammar(
+        "left factor character ranges",
+        "root ::= [a-b] \"x\" | [a-c] \"x\" | [a-d] \"x\" | [a-e] \"x\"",
+        {"ax", "bx", "cx", "dx", "ex"}, {"", "a", "fx", "axx"});
+    test_grammar(
+        "left factor referenced character alternatives",
+        "root ::= a | b | c | d\na ::= \"p\" [a] \"x\"\nb ::= \"p\" [ab] \"x\"\nc ::= \"p\" [ac] \"x\"\nd ::= \"p\" [ad] \"x\"",
+        {"pax", "pbx", "pcx", "pdx"}, {"", "px", "pex", "paxx"});
 }
 
 static void test_quantifiers() {

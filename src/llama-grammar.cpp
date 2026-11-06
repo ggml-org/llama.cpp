@@ -963,6 +963,18 @@ static void llama_grammar_left_factor(llama_grammar_rules & rules) {
         return a.type == b.type && a.value == b.value;
     };
 
+    // Keep the prefix boundary outside character classes.
+    auto trim_prefix = [](const llama_grammar_rule & rule, size_t start, size_t length) {
+        while (length > 0) {
+            const auto type = rule[start + length].type;
+            if (type != LLAMA_GRETYPE_CHAR_ALT && type != LLAMA_GRETYPE_CHAR_RNG_UPPER) {
+                break;
+            }
+            length--;
+        }
+        return length;
+    };
+
     struct alt_info {
         size_t rule_idx;
         size_t start;
@@ -1044,6 +1056,9 @@ static void llama_grammar_left_factor(llama_grammar_rules & rules) {
                     }
                 }
 
+                for (const auto & alt : alt_ranges) {
+                    prefix_len = trim_prefix(rule, alt.first, prefix_len);
+                }
                 if (prefix_len == 0) {
                     continue;
                 }
@@ -1097,6 +1112,9 @@ static void llama_grammar_left_factor(llama_grammar_rules & rules) {
                 }
             }
 
+            for (const auto & alt : resolved) {
+                prefix_len = trim_prefix(rules[alt.rule_idx], alt.start, prefix_len);
+            }
             if (prefix_len == 0) {
                 continue;
             }
