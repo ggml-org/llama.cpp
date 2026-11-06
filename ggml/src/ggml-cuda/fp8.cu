@@ -71,6 +71,11 @@ static __global__ void quantize_fp8_e4m3(
     }
 }
 
+static void fp8_set_batch(cublasLtMatrixLayout_t desc, int32_t count, int64_t stride) {
+    CUBLAS_CHECK(cublasLtMatrixLayoutSetAttribute(desc, CUBLASLT_MATRIX_LAYOUT_BATCH_COUNT, &count, sizeof(count)));
+    CUBLAS_CHECK(cublasLtMatrixLayoutSetAttribute(desc, CUBLASLT_MATRIX_LAYOUT_STRIDED_BATCH_OFFSET, &stride, sizeof(stride)));
+}
+
 static void fp8_destroy_matmul(
         cublasLtMatmulDesc_t op_desc, cublasLtMatrixLayout_t a_desc, cublasLtMatrixLayout_t b_desc,
         cublasLtMatrixLayout_t d_desc) {
@@ -133,9 +138,33 @@ bool ggml_cuda_mul_mat_fp8(
         CUBLAS_CHECK(cublasLtMatmulDescSetAttribute(
             op_desc, CUBLASLT_MATMUL_DESC_A_SCALE_POINTER, &scale_ptr, sizeof(scale_ptr)));
     }
+    const int64_t r2 = ne12 / ne02;
+    const int64_t r3 = ne13 / ne03;
+
+    // src1 batches that share a src0 matrix are adjacent in the compact src1 copy and in dst, fold them into N
+    const int64_t n = ne11*(ne02 == 1 ? r2*r3 : r2);
+
+    // batch the remaining matmuls with a fixed src0 stride, or issue one batched call per i3 if there is none
+    int64_t batch_count = ne02;
+    int64_t stride_a    = nb02;
+    int64_t n_calls     = ne13;
+    if (ne02 == 1) {
+        batch_count = ne03;
+        stride_a    = nb03;
+        n_calls     = 1;
+    } else if (r3 == 1 && (ne03 == 1 || nb03 == ne02*nb02)) {
+        batch_count = ne02*ne03;
+        n_calls     = 1;
+    }
+
     CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&a_desc, CUDA_R_8F_E4M3, ne00, ne01, ne00));
-    CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&b_desc, CUDA_R_8F_E4M3, ne10, ne11, ne10));
-    CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&d_desc, CUDA_R_32F, ne0, ne1, ne0));
+    CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&b_desc, CUDA_R_8F_E4M3, ne10, n, ne10));
+    CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&d_desc, CUDA_R_32F, ne0, n, ne0));
+    if (batch_count > 1) {
+        fp8_set_batch(a_desc, batch_count, stride_a);
+        fp8_set_batch(b_desc, batch_count, ne10*n);
+        fp8_set_batch(d_desc, batch_count, ne0*n);
+    }
 
     // TODO: Allow workspace in the heuristic search for potential performance gains.
     // cuBLASLt takes caller-owned workspace per matmul call.
@@ -153,16 +182,12 @@ bool ggml_cuda_mul_mat_fp8(
 
     const float alpha = 1.0f;
     const float beta = 0.0f;
-    const int64_t r2 = ne12 / ne02;
-    const int64_t r3 = ne13 / ne03;
-    for (int64_t i3 = 0; i3 < ne13; ++i3) {
-        for (int64_t i2 = 0; i2 < ne12; ++i2) {
-            const char * a = (const char *) src0->data + (i2/r2)*nb02 + (i3/r3)*nb03;
-            const uint8_t * b = src1_fp8.ptr + (i3*ne12 + i2)*ne11*ne10;
-            float * d = (float *) ((char *) dst->data + i2*dst->nb[2] + i3*dst->nb[3]);
-            CUBLAS_CHECK(cublasLtMatmul(ctx.cublaslt_handle(), op_desc, &alpha, a, a_desc, b, b_desc,
-                &beta, d, d_desc, d, d_desc, &heuristic.algo, nullptr, 0, stream));
-        }
+    for (int64_t i3 = 0; i3 < n_calls; ++i3) {
+        const char * a = (const char *) src0->data + (i3/r3)*nb03;
+        const uint8_t * b = src1_fp8.ptr + i3*ne12*ne11*ne10;
+        float * d = (float *) ((char *) dst->data + i3*dst->nb[3]);
+        CUBLAS_CHECK(cublasLtMatmul(ctx.cublaslt_handle(), op_desc, &alpha, a, a_desc, b, b_desc,
+            &beta, d, d_desc, d, d_desc, &heuristic.algo, nullptr, 0, stream));
     }
 
     fp8_destroy_matmul(op_desc, a_desc, b_desc, d_desc);
