@@ -135,12 +135,14 @@ Layouts built from the blocks on the grid. A new piece starts from one of them.
 
 ### Store screenshots
 
-Each screenshot says one practical thing the app does on Windows, in a centred headline of one or two lines, with
-what we stand for in the lede (yours, private, free) rather than in the headline. Under it is the proof, large and
-running off the bottom edge, drawn after Llama for Windows as it is, in Windows' dark theme: its quick chat with the
-real Llama Chat inside, its tray flyout over the taskbar, a close-up of the flyout's models, or one motif or the
-app's own highlighted code. The models shown are small and medium ones from llama.app's catalog. The words
-keep to the top three quarters, since the Store may lay its own text over the bottom quarter.
+Each screenshot says one practical thing the app does, in a centred headline of one or two lines, with what we stand
+for in the lede (yours, private, free) rather than in the headline. Under it is the proof, large, drawn after the app
+as it is (Llama for Windows in Windows' dark theme): its quick chat with the real Llama Chat inside, the quick chat
+over another app with its shortcut's keys, its tray flyout over the taskbar, its Models card up close (the list, or a
+model's page with its fit verdicts), or one figure: a motif, a receipt, a number, the app's own highlighted code. Only
+what the app already does, from its release notes and README. The models shown are small and medium ones from
+llama.app's catalog. The words keep to the top three quarters, since the Store may lay its own text over the bottom
+quarter. The opener and the chat come in several versions, to compare or to A/B test.
 
 ## Rules
 
