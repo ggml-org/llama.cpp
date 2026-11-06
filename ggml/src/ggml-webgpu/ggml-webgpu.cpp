@@ -4882,10 +4882,8 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
             supports_op = op->type == GGML_TYPE_F32 && src0->type == op->type && ggml_is_contiguously_allocated(src0);
             break;
         case GGML_OP_COUNT_EQUAL:
-            // The 32-bit byte-addressable inputs bound the count to fit in the low word of I64.
-            supports_op = op->type == GGML_TYPE_I64 && src0->type == GGML_TYPE_I32 && src1->type == GGML_TYPE_I32 &&
-                          ggml_are_same_shape(src0, src1) && ggml_is_contiguous(src0) && ggml_is_contiguous(src1) &&
-                          ggml_nelements(src0) <= int64_t(UINT32_MAX / sizeof(int32_t));
+            supports_op = src0->type == GGML_TYPE_I32 && src1->type == GGML_TYPE_I32 && ggml_is_contiguous(src0) &&
+                          ggml_is_contiguous(src1);
             break;
         case GGML_OP_SUM_ROWS:
             supports_op = op->type == GGML_TYPE_F32 && src0->type == op->type && ggml_is_contiguous_rows(src0);
