@@ -18,11 +18,13 @@ from .kimi_linear import KimiLinearModel
 @ModelBase.example("moonshotai/Kimi-K3")
 class KimiK3Model(TextModel):
     """
-    Kimi-K3 text model (KimiLinearForCausalLM under a `language_model.` prefix).
+    Kimi-K3 / Kimi-K3.1 text model (KimiLinearForCausalLM under a `language_model.` prefix).
 
     Shares the hybrid MLA + KDA skeleton with kimi-linear, but that converter
     cannot load it: K3 adds cross-layer attention residuals, a latent MoE, the
     situ activation, an MLA output gate and a full-rank KDA gate.
+
+    K3.1 replaces the full-attention MLA layers with DSA.
 
     The vision tower and mm_projector are skipped - text only for now.
     """
@@ -226,6 +228,20 @@ class KimiK3Model(TextModel):
         # --- cross-layer attention residuals ---
         self.gguf_writer.add_attn_res_block_size(self.hparams["attn_res_block_size"])
 
+        # --- DSA indexer (K3.1) ---
+        if (dsa := self.hparams.get("dsa_config")) is not None:
+            dsa_layers = dsa["dsa_layers"]
+            # the layer lists are 1-indexed, like linear_attn_config's
+            assert sorted(dsa_layers) == sorted(full_attn_layers), \
+                "every full-attention layer is expected to own a DSA indexer"
+            self.gguf_writer.add_indexer_head_count(dsa["index_num_heads"])
+            self.gguf_writer.add_indexer_key_length(dsa["index_head_dim"])
+            self.gguf_writer.add_indexer_top_k(dsa["index_topk"])
+            self.gguf_writer.add_indexer_types([(il + 1) in dsa_layers
+                                                for il in range(self.hparams["num_hidden_layers"])])
+            # eps of the indexer key LayerNorm; the config declares no separate value
+            self.gguf_writer.add_layer_norm_eps(dsa.get("index_norm_eps", self.hparams["rms_norm_eps"]))
+
     def prepare_tensors(self):
         super().prepare_tensors()
         if self._experts is not None:
@@ -343,3 +359,16 @@ class KimiK3Model(TextModel):
             return
 
         yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("KimiK31ForConditionalGeneration")
+@ModelBase.example("moonshotai/Kimi-K3.1-Pro")
+class KimiK31Model(KimiK3Model):
+    """
+    Kimi-K3.1: K3 with the full-attention MLA layers replaced by gated DSA.
+
+    The tensor set is K3's plus a lightning indexer per full-attention layer,
+    and `dsa_config` adds the attention.indexer.* metadata.
+    """
+
+    model_arch = gguf.MODEL_ARCH.KIMI_K31

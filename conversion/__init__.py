@@ -158,6 +158,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "KORMoForCausalLM": "qwen",
     "KimiK25ForConditionalGeneration": "deepseek",
     "KimiK3ForConditionalGeneration": "kimi_k3",
+    "KimiK31ForConditionalGeneration": "kimi_k3",
     "KimiLinearForCausalLM": "kimi_linear",
     "KimiLinearModel": "kimi_linear",
     "KimiVLForConditionalGeneration": "deepseek",
