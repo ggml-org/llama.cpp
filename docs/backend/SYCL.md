@@ -54,7 +54,6 @@ The packages for FP32 and FP16 would have different accuracy and performance on 
 
 - 2026.11
   - Update the CI and release build for oneAPI 2026.2 and Level Zero SDK 1.34.0. oneDNN is updated to the 2026.1 stand-alone package.
-  - oneAPI 2026.2 improves prompt processing: measured with the same code on Arc B570, Qwen3.8-9B Q6_K pp512 is 565 vs 378 t/s (+50%) vs the 2026.1-based release build. Token generation is unchanged.
 
 - 2026.09
   - Update the CI build environment for oneAPI 2026.1 (unified oneAPI Toolkit). oneDNN is removed from the Deep Learning Essentials package in 2026.0, so the CI now uses the oneAPI Toolkit installer which still includes oneDNN.
