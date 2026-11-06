@@ -739,7 +739,7 @@ struct ggml_opencl_mul_mat_kernels {
     cl_kernel kernel_gemv_noshuffle_q6_K_f32_o4;
     cl_kernel kernel_gemv_noshuffle_q6_K_f32_o4_global;
     cl_kernel kernel_gemv_noshuffle_q6_K_f32_tiled;
-    cl_kernel kernel_gemv_noshuffle_q6_K_f32_tiled_mc3;
+    cl_kernel kernel_gemv_noshuffle_q6_K_f32_tiled_mc3;  // tiled multi-column (N 2..4) verify lm_head
     cl_kernel kernel_gemm_noshuffle_q6_K_f32_tiled;
     cl_kernel kernel_gemv_noshuffle_q6_K_f32_mc3;
     cl_kernel kernel_gemm_noshuffle_q6_K_f32;
