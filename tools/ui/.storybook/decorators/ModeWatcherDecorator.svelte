@@ -5,14 +5,19 @@
 
 	interface Props {
 		children?: any;
+		/** a mode the story is always shown in, rather than the viewer's */
+		forced?: 'dark' | 'light';
 	}
 
-	let { children }: Props = $props();
+	let { children, forced }: Props = $props();
 
-	onMount(applyColorScheme);
+	onMount(() => {
+		if (forced) document.documentElement.classList.toggle('dark', forced === 'dark');
+		else applyColorScheme();
+	});
 </script>
 
-<ModeWatcher />
+{#if !forced}<ModeWatcher />{/if}
 
 {#if children}
 	{@const Component = children}

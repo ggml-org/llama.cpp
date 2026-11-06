@@ -272,41 +272,47 @@ export const openModels: ReceiptCopy = {
 	title: 'Your AI bill, today'
 };
 
-export interface StoreScreenshot {
+export interface StoreLine {
 	headline: string;
-	lede: string;
+	lede?: string;
 }
 
+/**
+ * The Microsoft Store listing, in the order the Store shows it: each screenshot one practical thing the app does on
+ * Windows, said so that what we stand for comes through (yours, private, for everyone) without preaching it
+ */
 export interface MicrosoftStoreCopy {
-	/** what the Product screenshot's chip says */
-	caption: string;
-	/** one per screenshot, in their order: Product, Statement, Receipt, Numeral */
-	screenshots: [
-		StoreScreenshot,
-		StoreScreenshot,
-		ReceiptCopy,
-		StoreScreenshot & { figureLabel: string; value: string }
-	];
+	apps: StoreLine;
+	chat: StoreLine;
+	fits: StoreLine;
+	gpu: StoreLine;
+	models: StoreLine;
+	opener: StoreLine;
 }
 
-/** the Microsoft Store listing: four screenshots, each one point, in the order the Store shows them */
 export const microsoftStore: MicrosoftStoreCopy = {
-	caption: 'Llama, in the system tray',
-	screenshots: [
-		{
-			headline: 'Your AI.\nOn your PC.',
-			lede: 'Open models, running on your own computer. Nothing leaves it.'
-		},
-		{
-			headline: 'Works offline.',
-			lede: 'Download a model once and it runs without a connection, on the train or in the air.'
-		},
-		openModels,
-		{
-			figureLabel: 'a month, for as long as you use it',
-			headline: 'Free, and yours to keep.',
-			lede: 'No account, no subscription, no usage limits.',
-			value: '$0'
-		}
-	]
+	apps: {
+		headline: 'Works with the apps\nyou already use.',
+		lede: 'Any app that speaks the OpenAI API can use your models, right on your PC.'
+	},
+	chat: {
+		headline: 'Help with everyday things,\neven offline.',
+		lede: 'Your conversations stay on your PC.'
+	},
+	fits: {
+		headline: 'Picks a model\nthat fits your PC.',
+		lede: 'Llama sits in the tray, runs the server for you and suggests what to try next.'
+	},
+	gpu: {
+		headline: 'Runs on the graphics card\nyou already have.',
+		lede: 'NVIDIA, AMD or Intel, or on the processor alone.'
+	},
+	models: {
+		headline: 'The models you choose\nstay yours.',
+		lede: 'Downloaded once from Hugging Face. No one can swap them or change them.'
+	},
+	opener: {
+		headline: 'Your AI.\nOn your PC.',
+		lede: 'Free and open source. No account, no subscription.'
+	}
 };

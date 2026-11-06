@@ -65,6 +65,7 @@ const preview: Preview = {
 							'Link previews',
 							'Open models poster',
 							'Microsoft Store',
+							'Store scenes',
 							'Swag'
 						]
 					],
@@ -141,10 +142,12 @@ const preview: Preview = {
 
 			return story();
 		},
-		(story) => ({
+		// `parameters.colorScheme` fixes a story to light or dark, whatever the viewer chose (a scene in a store screenshot)
+		(story, context) => ({
 			Component: ModeWatcherDecorator,
 			props: {
-				children: story
+				children: story,
+				forced: context.parameters.colorScheme
 			}
 		}),
 		(story) => ({
