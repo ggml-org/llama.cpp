@@ -11447,12 +11447,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             for (bool broadcast : {false, true}) {
                 test_cases.emplace_back(new test_mul_mat_id(type, GGML_TYPE_F32, 37, 2, broadcast, 65, n, 256));
             }
-            // skipped slots (id == -1) are dropped by the device schedule and must still be zeroed
             test_cases.emplace_back(new test_mul_mat_id(type, GGML_TYPE_F32, 37, 2, false, 65, n, 256, 0, false, true));
         }
     }
 
-    // Both experts receive every token; 65 tokens exceeds the device schedule width heuristic.
+    // Both experts receive every token
     for (ggml_type type : {GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, GGML_TYPE_Q4_K}) {
         for (int n : {64, 65}) {
             test_cases.emplace_back(new test_mul_mat_id(type, GGML_TYPE_F32, 2, 2, false, 33, n, 512));
