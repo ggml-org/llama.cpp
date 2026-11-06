@@ -297,7 +297,7 @@
 		width: 7px;
 		height: 7px;
 		border-radius: 50%;
-		background: var(--art-green);
+		background: var(--status-success);
 	}
 	.host {
 		display: flex;
@@ -308,7 +308,7 @@
 	}
 	.open {
 		grid-row: 2;
-		color: var(--art-blue);
+		color: var(--art-night-sky);
 		font-weight: 500;
 	}
 	.section {

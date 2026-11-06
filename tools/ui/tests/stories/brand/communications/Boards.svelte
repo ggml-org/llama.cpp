@@ -14,9 +14,9 @@
 	const rows = [400, 500, 600, 700, 400, 500, 600, 700];
 	const wall = [
 		{ caption: 'Run it yourself', image: 'sky' },
-		{ caption: 'Quantised to fit', image: 'sea' },
+		{ caption: 'Quantised to fit', image: 'sand' },
 		{ caption: 'Tokens per second', image: 'peach' },
-		{ caption: 'Small models', image: 'mist' }
+		{ caption: 'Small models', image: 'night' }
 	];
 </script>
 
@@ -141,18 +141,18 @@
 		--navy:
 			radial-gradient(
 				ellipse at 15% 10%,
-				color-mix(in oklab, var(--art-navy), white 6%) 0%,
+				color-mix(in oklab, var(--art-night-sky), white 6%) 0%,
 				transparent 55%
 			),
 			linear-gradient(
 				160deg,
-				color-mix(in oklab, var(--art-navy), black 22%) 0%,
-				color-mix(in oklab, var(--art-navy), black 10%) 100%
+				color-mix(in oklab, var(--art-night-sky), black 22%) 0%,
+				color-mix(in oklab, var(--art-night-sky), black 10%) 100%
 			);
 		--mist: linear-gradient(
 			160deg,
-			color-mix(in oklab, var(--art-sky), white 55%) 0%,
-			color-mix(in oklab, var(--art-sky), white 68%) 100%
+			color-mix(in oklab, var(--art-day-sky), white 55%) 0%,
+			color-mix(in oklab, var(--art-day-sky), white 68%) 100%
 		);
 		--cream: var(--sand-100);
 		/* the day and night skies, as the grounds */
@@ -261,7 +261,7 @@
 		background:
 			repeating-linear-gradient(90deg, rgb(255 255 255 / 0.45) 0 1px, transparent 1px 8.33%),
 			var(--mist); /* llama.app's light hero blue, as in In use */
-		color: var(--art-navy);
+		color: var(--art-night-sky);
 	}
 	.title .top,
 	.title .bottom {
@@ -269,7 +269,7 @@
 		grid-template-columns: repeat(3, 1fr);
 		gap: 4cqi;
 		font: 600 1.9cqi / 1.15 var(--display);
-		color: var(--art-navy);
+		color: var(--art-night-sky);
 		white-space: pre-line;
 	}
 	.title .bottom {
@@ -375,16 +375,12 @@
 	.photo.sky {
 		background: linear-gradient(
 			180deg,
-			color-mix(in oklab, var(--art-sky), black 6%) 0%,
-			var(--art-sky) 100%
+			color-mix(in oklab, var(--art-day-sky), black 6%) 0%,
+			var(--art-day-sky) 100%
 		);
 	}
-	.photo.sea {
-		background: linear-gradient(
-			180deg,
-			var(--art-green) 0%,
-			color-mix(in oklab, var(--art-green), black 10%) 100%
-		);
+	.photo.sand {
+		background: linear-gradient(180deg, var(--sand-200) 0%, var(--sand-400) 100%);
 	}
 	.photo.peach {
 		background: linear-gradient(
@@ -393,12 +389,12 @@
 			var(--art-cinder) 100%
 		);
 	}
-	.photo.mist {
+	.photo.night {
 		background: linear-gradient(
 			180deg,
-			color-mix(in oklab, var(--art-amber), white 12%) 0%,
-			var(--art-amber) 100%
-		); /* saffron */
+			color-mix(in oklab, var(--art-night-sky), black 22%) 0%,
+			var(--art-night-sky) 100%
+		);
 	}
 
 	/* exhibition poster */

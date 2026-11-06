@@ -108,7 +108,7 @@
 		width: 7px;
 		height: 7px;
 		border-radius: 50%;
-		background: var(--art-green);
+		background: var(--status-success);
 	}
 
 	.greys {
