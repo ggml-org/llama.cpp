@@ -1,6 +1,7 @@
 <script lang="ts" module>
 	import StateGallery from '../helpers/StateGallery.svelte';
 	import StateGalleryItem from '../helpers/StateGalleryItem.svelte';
+	import Downloadable from './communications/posts/Downloadable.svelte';
 	import Gpu from './communications/posts/motifs/Gpu.svelte';
 	import {
 		FORMATS,
@@ -15,8 +16,9 @@
 
 	// The Microsoft Store listing: the logos (the app tile and the poster art), the super hero art at the top of the
 	// listing, and the screenshots: each one practical thing the app does on Windows, a centred headline over Llama for
-	// Windows as it is (its quick chat with the real Llama Chat from Store scenes, its tray flyout). The Store may lay its own text over the bottom quarter of the 16:9
-	// pieces, so the words keep to the top
+	// Windows as it is (its quick chat with the real Llama Chat from Store scenes, its tray flyout). The Store may lay its
+	// own text over the bottom quarter of the 16:9 pieces, so the words keep to the top. Every piece downloads as WebP or
+	// PNG at its real size, as set in the controls
 	const { Story } = defineMeta({
 		parameters: {
 			controls: { disable: true },
@@ -60,14 +62,18 @@
 		{@const { overlay, tone } = args as ArtArgs}
 		<StateGallery itemWidth="27rem" width={gallery.width}>
 			<StateGalleryItem label={FORMATS.msTile.name} note={size('msTile')}>
-				<StoreArt kind="tile" {overlay} {tone} />
+				<Downloadable name="llama-store-app-tile-{tone}"
+					><StoreArt kind="tile" {overlay} {tone} /></Downloadable
+				>
 			</StateGalleryItem>
 
 			<StateGalleryItem
 				label={FORMATS.msPoster.name}
 				note="The Store's main logo · {size('msPoster')}"
 			>
-				<StoreArt kind="poster" {overlay} {tone} />
+				<Downloadable name="llama-store-poster-art-{tone}"
+					><StoreArt kind="poster" {overlay} {tone} /></Downloadable
+				>
 			</StateGalleryItem>
 		</StateGallery>
 	{/snippet}
@@ -86,7 +92,9 @@
 				label={FORMATS.msHero.name}
 				note="No words: the Store sets the name over it · {size('msHero')}"
 			>
-				<StoreArt kind="hero" {overlay} {tone} />
+				<Downloadable name="llama-store-super-hero-art-{tone}"
+					><StoreArt kind="hero" {overlay} {tone} /></Downloadable
+				>
 			</StateGalleryItem>
 		</StateGallery>
 	{/snippet}
@@ -103,33 +111,45 @@
 			ArtArgs}
 		<StateGallery {...gallery}>
 			<StateGalleryItem label="1, the opener" note={size('msScreenshot')}>
-				<StoreScreenshot {...opener} kind="brand" {overlay} {tone} />
+				<Downloadable name="llama-store-screenshot-1-opener-{tone}"
+					><StoreScreenshot {...opener} kind="brand" {overlay} {tone} /></Downloadable
+				>
 			</StateGalleryItem>
 
 			<StateGalleryItem label="2, chat" note="Llama Chat, in the quick chat">
-				<StoreScreenshot {...chat} kind="window" {overlay} scene="chat" {tone} />
+				<Downloadable name="llama-store-screenshot-2-chat-{tone}"
+					><StoreScreenshot {...chat} kind="window" {overlay} scene="chat" {tone} /></Downloadable
+				>
 			</StateGalleryItem>
 
 			<StateGalleryItem label="3, the tray" note="The tray flyout over the taskbar">
-				<StoreScreenshot {...fits} kind="desktop" {overlay} {tone} />
+				<Downloadable name="llama-store-screenshot-3-tray-{tone}"
+					><StoreScreenshot {...fits} kind="desktop" {overlay} {tone} /></Downloadable
+				>
 			</StateGalleryItem>
 
 			<StateGalleryItem label="4, models" note="The flyout's Models card, close up">
-				<StoreScreenshot {...models} kind="card" {overlay} {tone} />
+				<Downloadable name="llama-store-screenshot-4-models-{tone}"
+					><StoreScreenshot {...models} kind="card" {overlay} {tone} /></Downloadable
+				>
 			</StateGalleryItem>
 
 			<StateGalleryItem label="5, hardware" note="The GPU motif">
-				<StoreScreenshot {...gpu} kind="art" {overlay} {tone}>
-					<div class="fill gpu"><Gpu /></div>
-				</StoreScreenshot>
+				<Downloadable name="llama-store-screenshot-5-hardware-{tone}"
+					><StoreScreenshot {...gpu} kind="art" {overlay} {tone}>
+						<div class="fill gpu"><Gpu /></div>
+					</StoreScreenshot></Downloadable
+				>
 			</StateGalleryItem>
 
 			<StateGalleryItem label="6, other apps" note="llama-server's OpenAI-compatible API">
-				<StoreScreenshot {...apps} kind="art" {overlay} {tone}>
-					<div class="code">
-						<SyntaxHighlightedCode class="p-3" {code} language="python" maxHeight="none" />
-					</div>
-				</StoreScreenshot>
+				<Downloadable name="llama-store-screenshot-6-apps-{tone}"
+					><StoreScreenshot {...apps} kind="art" {overlay} {tone}>
+						<div class="code">
+							<SyntaxHighlightedCode class="p-3" {code} language="python" maxHeight="none" />
+						</div>
+					</StoreScreenshot></Downloadable
+				>
 			</StateGalleryItem>
 		</StateGallery>
 	{/snippet}
