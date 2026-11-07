@@ -334,6 +334,7 @@ struct server_slot {
     stop_type stop;
 
     std::string stopping_word;
+    bool stopping_word_from_template = false;
 
     // state
     slot_state state = SLOT_STATE_IDLE;
@@ -430,6 +431,7 @@ struct server_slot {
         truncated      = false;
         stop           = STOP_TYPE_NONE;
         stopping_word  = "";
+        stopping_word_from_template = false;
         n_sent_text    = 0;
 
         if (can_speculate()) {
@@ -687,7 +689,11 @@ struct server_slot {
 
         size_t stop_pos = std::string::npos;
 
-        for (const std::string & word : task->params.antiprompt) {
+        const auto & antiprompt = task->params.antiprompt;
+        const size_t n_client_stops = antiprompt.size() - task->params.n_template_stops;
+
+        for (size_t i = 0; i < antiprompt.size(); i++) {
+            const std::string & word = antiprompt[i];
             size_t pos;
 
             if (is_full_stop) {
@@ -704,6 +710,7 @@ struct server_slot {
                 if (is_full_stop) {
                     stop           = STOP_TYPE_WORD;
                     stopping_word  = word;
+                    stopping_word_from_template = i >= n_client_stops;
                     has_next_token = false;
                 }
                 stop_pos = pos;
@@ -2432,6 +2439,7 @@ private:
         res->n_tokens_cached       = slot.prompt.n_tokens();
         res->has_new_line          = slot.has_new_line;
         res->stopping_word         = slot.stopping_word;
+        res->stopping_word_from_template = slot.stopping_word_from_template;
         res->stop                  = slot.stop;
         res->post_sampling_probs   = slot.task->params.post_sampling_probs;
 

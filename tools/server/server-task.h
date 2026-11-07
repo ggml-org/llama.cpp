@@ -95,6 +95,7 @@ struct task_params {
     std::map<int, float> lora; // mapping adapter ID -> scale
 
     std::vector<std::string> antiprompt;
+    size_t n_template_stops = 0; // trailing antiprompt entries added by the chat template, not the client
     std::vector<std::string> response_fields;
 
     bool timings_per_token   = false;
@@ -309,6 +310,7 @@ struct server_task {
         session.apply_sampling(params.sampling);
         params.chat_format = session.format();
         params.antiprompt.insert(params.antiprompt.end(), session.additional_stops().begin(), session.additional_stops().end());
+        params.n_template_stops = session.additional_stops().size();
         params.message_spans = tokens.find_message_spans(session.message_delimiters());
     }
 
@@ -419,6 +421,7 @@ struct server_task_result_cmpl_final : server_task_result {
     int32_t n_tokens_cached;
     bool has_new_line;
     std::string stopping_word;
+    bool stopping_word_from_template = false;
     stop_type stop = STOP_TYPE_NONE;
 
     bool post_sampling_probs;
@@ -476,6 +479,10 @@ struct server_task_result_cmpl_final : server_task_result {
     json to_json_anthropic();
 
     json to_json_anthropic_stream();
+
+    std::string anthropic_stop_reason() const;
+
+    json anthropic_stop_sequence() const;
 };
 
 struct server_task_result_cmpl_partial : server_task_result {

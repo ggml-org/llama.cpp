@@ -731,15 +731,26 @@ json server_task_result_cmpl_final::to_json_oaicompat_asr() {
     return event;
 }
 
-json server_task_result_cmpl_final::to_json_anthropic() {
-    std::string stop_reason = "max_tokens";
-    if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
-        if (!oaicompat_msg.tool_calls.empty()) {
-            stop_reason = "tool_use";
-        } else {
-            stop_reason = stop == STOP_TYPE_WORD ? "stop_sequence" : "end_turn";
-        }
+// a stop string added by the chat template ends the turn like EOS; only a client stop sequence is reported as such
+std::string server_task_result_cmpl_final::anthropic_stop_reason() const {
+    if (stop != STOP_TYPE_WORD && stop != STOP_TYPE_EOS) {
+        return "max_tokens";
     }
+    if (!oaicompat_msg.tool_calls.empty()) {
+        return "tool_use";
+    }
+    return stop == STOP_TYPE_WORD && !stopping_word_from_template ? "stop_sequence" : "end_turn";
+}
+
+json server_task_result_cmpl_final::anthropic_stop_sequence() const {
+    if (stopping_word.empty() || stopping_word_from_template) {
+        return nullptr;
+    }
+    return stopping_word;
+}
+
+json server_task_result_cmpl_final::to_json_anthropic() {
+    const std::string stop_reason = anthropic_stop_reason();
 
     json content_blocks = json::array();
 
@@ -790,7 +801,7 @@ json server_task_result_cmpl_final::to_json_anthropic() {
         {"content", content_blocks},
         {"model", oaicompat_model},
         {"stop_reason", stop_reason},
-        {"stop_sequence", stopping_word.empty() ? nullptr : json(stopping_word)},
+        {"stop_sequence", anthropic_stop_sequence()},
         {"usage", {
             {"cache_read_input_tokens", n_prompt_tokens_cache},
             {"input_tokens", n_prompt_tokens - n_prompt_tokens_cache},
@@ -804,14 +815,7 @@ json server_task_result_cmpl_final::to_json_anthropic() {
 json server_task_result_cmpl_final::to_json_anthropic_stream() {
     json events = json::array();
 
-    std::string stop_reason = "max_tokens";
-    if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
-        if (!oaicompat_msg.tool_calls.empty()) {
-            stop_reason = "tool_use";
-        } else {
-            stop_reason = stop == STOP_TYPE_WORD ? "stop_sequence" : "end_turn";
-        }
-    }
+    const std::string stop_reason = anthropic_stop_reason();
 
     bool has_thinking = !oaicompat_msg.reasoning_content.empty();
     bool has_text     = !oaicompat_msg.content.empty();
@@ -975,7 +979,7 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
             {"type", "message_delta"},
             {"delta", {
                 {"stop_reason", stop_reason},
-                {"stop_sequence", stopping_word.empty() ? nullptr : json(stopping_word)}
+                {"stop_sequence", anthropic_stop_sequence()}
             }},
             {"usage", {
                 {"output_tokens", n_decoded}
