@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <memory>
@@ -312,7 +313,14 @@ static size_t ggml_backend_meta_buffer_type_get_max_size(ggml_backend_buffer_typ
     return max_size;
 }
 
+static bool ggml_backend_meta_slice_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor, size_t & size);
+
 static size_t ggml_backend_meta_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor) {
+    size_t slice_size = 0;
+    if (ggml_backend_meta_slice_alloc_size(buft, tensor, slice_size)) {
+        return slice_size;
+    }
+
     const size_t n_simple_bufts = ggml_backend_meta_buft_n_bufts(buft);
     size_t max_alloc_size = 0;
     for (size_t i = 0; i < n_simple_bufts; i++) {
@@ -517,13 +525,36 @@ static int ggml_backend_meta_view_slab_dim(const struct ggml_tensor * view, cons
 
 static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(const struct ggml_tensor * tensor, bool assume_sync);
 
+// get_alloc_size runs before the node has a buffer, so the split state must be reachable without
+// one. stc is only forwarded, never dereferenced, so a default-constructed one is enough.
+struct ggml_backend_meta_alloc_pass {
+    static constexpr size_t nbtc = ggml_backend_meta_buffer_context::nbtc;
+
+    bool   active = false;
+    size_t n_bufs = 0;
+    ggml_backend_meta_simple_tensor_container stc;
+    std::map<std::pair<const ggml_tensor *, bool>, std::pair<ggml_backend_meta_split_state, char[nbtc]>> cache;
+};
+
+static thread_local ggml_backend_meta_alloc_pass g_meta_alloc_pass;
+
 static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
         ggml_backend_meta_simple_tensor_container & stc, const struct ggml_tensor * tensor, bool assume_sync) {
+    // during the alloc pass the scheduler has not inserted the meta copies yet, so a src can still
+    // be host-allocated. it is not split, same as the copy reports later at placement time
+    if (tensor->buffer != nullptr && !ggml_backend_buffer_is_meta(tensor->buffer)) {
+        GGML_ASSERT(g_meta_alloc_pass.active);
+        return {GGML_BACKEND_SPLIT_AXIS_MIRRORED, {0}, {1}, 1};
+    }
+
     // FIXME Currently this function preserves/erases the information in n_segments and nr in an inconsistent way.
     // Since the operations in question are developed specifically for llama.cpp this currently does not manifest as a bug there.
     // However, in a broader ggml context with arbitrary ggml graphs this can lead to unexpected results.
-    const size_t n_bufs = ggml_backend_meta_buffer_n_bufs(tensor->buffer);
-    ggml_backend_meta_buffer_context * buf_ctx = (ggml_backend_meta_buffer_context *) tensor->buffer->context;
+    const bool unallocated = tensor->buffer == nullptr;
+    GGML_ASSERT(!unallocated || g_meta_alloc_pass.active);
+    const size_t n_bufs = unallocated ? g_meta_alloc_pass.n_bufs : ggml_backend_meta_buffer_n_bufs(tensor->buffer);
+    ggml_backend_meta_buffer_context * buf_ctx = unallocated ?
+        nullptr : (ggml_backend_meta_buffer_context *) tensor->buffer->context;
 
     auto split_states_equal = [&](const ggml_backend_meta_split_state & a, const ggml_backend_meta_split_state & b) -> bool {
         if (a.axis != b.axis) {
@@ -891,7 +922,8 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
         if (ggml_nelements(tensor) == 0) {
             return {GGML_BACKEND_SPLIT_AXIS_UNKNOWN, {0}, {1}, 1};
         }
-        if (ggml_backend_buffer_get_usage(tensor->buffer) != GGML_BACKEND_BUFFER_USAGE_COMPUTE && tensor->view_src == nullptr) {
+        if (tensor->buffer != nullptr &&
+                ggml_backend_buffer_get_usage(tensor->buffer) != GGML_BACKEND_BUFFER_USAGE_COMPUTE && tensor->view_src == nullptr) {
             ggml_backend_dev_t dev = ggml_backend_buft_get_device(ggml_backend_buffer_get_type(tensor->buffer));
             const ggml_backend_meta_device_context * dev_ctx = (const ggml_backend_meta_device_context *) dev->context;
             ggml_backend_meta_split_state ret = dev_ctx->get_split_state(tensor, dev_ctx->get_split_state_ud);
@@ -1136,7 +1168,6 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
         }
         if (split_state.axis >= 0 && split_state.axis < GGML_MAX_DIMS) {
             bool first_src_split_by_axis = true;
-            const size_t n_bufs = ggml_backend_meta_buffer_n_bufs(tensor->buffer);
 
             for (size_t i = 0; i < GGML_MAX_SRC; i++) {
                 if (tensor->src[i] == nullptr || src_ss[i].axis < 0 || src_ss[i].axis >= GGML_MAX_DIMS) {
@@ -1178,16 +1209,18 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
     };
 
     const std::pair key = std::make_pair(tensor, assume_sync);
-    auto it = buf_ctx->split_state_cache.find(key);
-    if (it != buf_ctx->split_state_cache.end() && memcmp(it->second.second, (const char *) tensor, sizeof(it->second.second)) != 0) {
-        buf_ctx->split_state_cache.clear();
-        it = buf_ctx->split_state_cache.end();
+    auto & split_state_cache = unallocated ? g_meta_alloc_pass.cache : buf_ctx->split_state_cache;
+    const int debug = unallocated ? 0 : buf_ctx->debug;
+    auto it = split_state_cache.find(key);
+    if (it != split_state_cache.end() && memcmp(it->second.second, (const char *) tensor, sizeof(it->second.second)) != 0) {
+        split_state_cache.clear();
+        it = split_state_cache.end();
     }
 
-    if (it == buf_ctx->split_state_cache.end()) {
-        buf_ctx->split_state_cache[key].first = calculate_split_state();
-        memcpy(buf_ctx->split_state_cache[key].second, tensor, sizeof(buf_ctx->split_state_cache[key].second));
-        if (buf_ctx->debug > 0) {
+    if (it == split_state_cache.end()) {
+        split_state_cache[key].first = calculate_split_state();
+        memcpy(split_state_cache[key].second, tensor, sizeof(split_state_cache[key].second));
+        if (debug > 0) {
             std::string srcs_info;
             for (size_t i = 0; i < GGML_MAX_SRC; i++) {
                 if (tensor->src[i] == nullptr || tensor->src[i] == tensor) {
@@ -1214,15 +1247,15 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
                 if (!ne_info.empty()) {
                     ne_info += ", ";
                 }
-                const ggml_backend_meta_split_state & ss = buf_ctx->split_state_cache[key].first;
+                const ggml_backend_meta_split_state & ss = split_state_cache[key].first;
                 ne_info += std::to_string(ss.ne[j]) + "x" + std::to_string(ss.nr[0]);
             }
             GGML_LOG_DEBUG("SPLIT_STATE: {%s} -> %s[%s, %s, {%s}]\n", srcs_info.c_str(), tensor->name, ggml_op_name(tensor->op),
-                ggml_backend_meta_split_axis_name(buf_ctx->split_state_cache[key].first.axis), ne_info.c_str());
+                ggml_backend_meta_split_axis_name(split_state_cache[key].first.axis), ne_info.c_str());
         }
     }
 
-    ggml_backend_meta_split_state ret = buf_ctx->split_state_cache[key].first;
+    ggml_backend_meta_split_state ret = split_state_cache[key].first;
     GGML_ASSERT(ret.axis != GGML_BACKEND_SPLIT_AXIS_NONE);
 #ifndef NDEBUG
     if (ret.axis >= 0 && ret.axis < GGML_MAX_DIMS) {
@@ -1243,6 +1276,11 @@ static bool ggml_backend_meta_is_host_view(const struct ggml_tensor * tensor) {
 }
 
 static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(const struct ggml_tensor * tensor, bool assume_sync) {
+    if (tensor->buffer == nullptr) {
+        GGML_ASSERT(g_meta_alloc_pass.active);
+        return ggml_backend_meta_get_split_state(g_meta_alloc_pass.stc, tensor, assume_sync);
+    }
+
     // [TAG_META_HOST_VIEWS]
     // TODO: technically, this check should not be needed if the backend scheduler correctly prevents assigning
     //       such host-buffer views to the meta backend. figure out how to update the scheduler logic to achieve that
@@ -1256,6 +1294,69 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(co
 
     ggml_backend_meta_buffer_context * buf_ctx = (ggml_backend_meta_buffer_context *) tensor->buffer->context;
     return ggml_backend_meta_get_split_state(buf_ctx->get_simple_tensor_container(tensor), tensor, assume_sync);
+}
+
+// shape of device j's slice. used for both sizing and placement so the two cannot diverge
+static void ggml_backend_meta_slice_shape(
+        const ggml_tensor * tensor, const ggml_backend_meta_split_state & split_state,
+        size_t n_bufs, size_t j, int64_t ne[GGML_MAX_DIMS], size_t nb[GGML_MAX_DIMS]) {
+    for (size_t k = 0; k < GGML_MAX_DIMS; k++) {
+        ne[k] = tensor->ne[k];
+        nb[k] = tensor->nb[k];
+    }
+
+    const int split_dim = split_state.axis;
+    if (split_dim < 0 || split_dim >= GGML_MAX_DIMS) {
+        return;
+    }
+
+    // TODO: the following assert fails for llama-parallel even though the results are correct:
+    // GGML_ASSERT(ggml_is_contiguously_allocated(tensor));
+    ne[split_dim] = 0;
+    for (size_t s = 0; s < split_state.n_segments; s++) {
+        ne[split_dim] += split_state.ne[s*n_bufs + j] * split_state.nr[s];
+    }
+    for (int i = 0; i < GGML_MAX_DIMS; i++) {
+        if (tensor->nb[i] > tensor->nb[split_dim]) {
+            nb[i] = tensor->nb[i] * ne[split_dim]/tensor->ne[split_dim];
+        }
+    }
+}
+
+static bool ggml_backend_meta_slice_arena_enabled() {
+    static const bool enabled = []() {
+        const char * s = getenv("GGML_META_DEDUP");
+        return s == nullptr || atoi(s) != 0;
+    }();
+    return enabled;
+}
+
+// gallocr derives the arena stride from get_alloc_size, so reporting the per-device slice size is
+// what makes a split tensor cost 1/N. max over devices keeps the stride uniform, as placement needs
+static bool ggml_backend_meta_slice_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor, size_t & size) {
+    const size_t n_bufs = ggml_backend_meta_buft_n_bufts(buft);
+    if (n_bufs < 2 || tensor->buffer != nullptr || tensor->view_src != nullptr ||
+            !ggml_backend_meta_slice_arena_enabled()) {
+        return false;
+    }
+
+    g_meta_alloc_pass.active = true;
+    g_meta_alloc_pass.n_bufs = n_bufs;
+    const ggml_backend_meta_split_state split_state = ggml_backend_meta_get_split_state(tensor, /*assume_sync =*/ true);
+    g_meta_alloc_pass.active = false;
+
+    // MIRRORED, PARTIAL and UNKNOWN need every device to hold the whole tensor
+    if (split_state.axis < 0 || split_state.axis >= GGML_MAX_DIMS) {
+        return false;
+    }
+
+    ggml_tensor probe = *tensor;
+    size = 0;
+    for (size_t j = 0; j < n_bufs; j++) {
+        ggml_backend_meta_slice_shape(tensor, split_state, n_bufs, j, probe.ne, probe.nb);
+        size = std::max(size, ggml_backend_buft_get_alloc_size(ggml_backend_meta_buft_simple_buft(buft, j), &probe));
+    }
+    return true;
 }
 
 static void * ggml_backend_meta_buffer_get_base(ggml_backend_buffer_t buffer) {
@@ -1287,17 +1388,7 @@ static enum ggml_status ggml_backend_meta_buffer_init_tensor_impl(ggml_backend_m
         ggml_backend_buffer_t   simple_buf = buf_ctx->bufs[j].get();
 
         if (split_dim >= 0 && split_dim < GGML_MAX_DIMS) {
-            // TODO: the following assert fails for llama-parallel even though the results are correct:
-            // GGML_ASSERT(ggml_is_contiguously_allocated(tensor));
-            ne[split_dim] = 0;
-            for (size_t s = 0; s < split_state.n_segments; s++) {
-                ne[split_dim] += split_state.ne[s*n_simple_bufs + j] * split_state.nr[s];
-            }
-            for (int i = 0; i < GGML_MAX_DIMS; i++) {
-                if (tensor->nb[i] > tensor->nb[split_dim]) {
-                    nb[i] = tensor->nb[i] * ne[split_dim]/tensor->ne[split_dim];
-                }
-            }
+            ggml_backend_meta_slice_shape(tensor, split_state, n_simple_bufs, j, ne, nb);
         }
 
         ggml_tensor * t_ij = ggml_new_tensor(simple_ctx, tensor->type, GGML_MAX_DIMS, ne);

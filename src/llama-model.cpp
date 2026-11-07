@@ -29,6 +29,7 @@
 #include <cassert>
 #include <cfloat>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <cmath>
 #include <functional>
@@ -412,6 +413,15 @@ llama_model * llama_model_create(llama_model_loader & ml, const llama_model_para
     return llama_model_create(arch, params);
 }
 
+// GGML_META_DEDUP=0 restores the upstream split policy, for A/B measurement
+static bool llama_meta_dedup_enabled() {
+    static const bool enabled = []() {
+        const char * s = getenv("GGML_META_DEDUP");
+        return s == nullptr || atoi(s) != 0;
+    }();
+    return enabled;
+}
+
 struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const struct ggml_tensor * tensor, void * userdata) {
     const llama_meta_device_get_split_state_userdata * ud = (const llama_meta_device_get_split_state_userdata *) userdata;
     const llama_hparams & hparams = ud->model->hparams;
@@ -658,7 +668,14 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
         }
 
         // output
-        if (std::regex_match(tensor_name, pattern_output_weight)) {
+        // with tied embeddings the LM head is a duplicate of token_embd.weight and keeps that name,
+        // so match it by identity. if the loader returned one tensor for both uses it must stay
+        // mirrored, as get_rows needs every row
+        const bool is_lm_head = llama_meta_dedup_enabled()
+            && ud->model->output != nullptr
+            && tensor == ud->model->output
+            && tensor != ud->model->tok_embd;
+        if (std::regex_match(tensor_name, pattern_output_weight) || is_lm_head) {
             if (is_dsv4) {
                 return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_MIRRORED);
             }
