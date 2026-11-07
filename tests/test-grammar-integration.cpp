@@ -638,11 +638,11 @@ static void test_special_chars() {
     );
 
     test_grammar(
-        "left factor character alternatives",
+        "skip left factoring inside character classes",
         "root ::= [ab] \"x\" | [ac] \"x\" | [ad] \"x\" | [ae] \"x\"",
         {"ax", "bx", "cx", "dx", "ex"}, {"", "a", "fx", "axx"});
     test_grammar(
-        "left factor character ranges",
+        "skip left factoring inside character ranges",
         "root ::= [a-b] \"x\" | [a-c] \"x\" | [a-d] \"x\" | [a-e] \"x\"",
         {"ax", "bx", "cx", "dx", "ex"}, {"", "a", "fx", "axx"});
     test_grammar(
