@@ -4,8 +4,8 @@
 #include <stdint.h>
 
 struct htp_sum_rows_kernel_params {
-    uint32_t n_threads;
-    uint32_t elems_per_thread;
+    uint32_t n_hvx;
+    uint32_t elems_per_hvx;
 };
 
 #if defined(__cplusplus)

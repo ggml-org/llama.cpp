@@ -345,14 +345,14 @@ jobs:
             defines: '-DGGML_CUDA_CCCL_VERSION=v3.4.3'
           - build: 'x64'
             os: ubuntu-24.04
-            cuda: '13.4.1'
-            label: '13.4'
-            defines: '-DGGML_CUDA_CCCL_VERSION=v3.4.3'
+            cuda: '13.5.0'
+            label: '13.5'
+            defines: ''
           - build: 'arm64'
             os: ubuntu-24.04-arm
-            cuda: '13.4.1'
-            label: '13.4'
-            defines: '-DGGML_CUDA_CCCL_VERSION=v3.4.3'
+            cuda: '13.5.0'
+            label: '13.5'
+            defines: ''
 
     runs-on: ${{ matrix.os }}
     container: nvidia/cuda:${{ matrix.cuda }}-devel-ubuntu24.04
@@ -1211,12 +1211,12 @@ jobs:
           - cuda: '12.4'
             arch: x64
             defines: '-DGGML_CUDA_CCCL_VERSION=v3.4.3'
-          - cuda: '13.4'
+          - cuda: '13.5'
             arch: x64
-            defines: '-DGGML_CUDA_CCCL_VERSION=v3.4.3'
-          - cuda: '13.4'
+            defines: ''
+          - cuda: '13.5'
             arch: arm64
-            defines: '-DGGML_CUDA_CCCL_VERSION=v3.4.3 -DCMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-msvc-cuda.cmake'
+            defines: '-DCMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-msvc-cuda.cmake'
 
     steps:
       - name: Clone
