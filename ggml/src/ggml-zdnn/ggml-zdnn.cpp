@@ -240,6 +240,17 @@ static void ggml_zdnn_free(ggml_backend_zdnn_context * ctx) {
 // backend interface
 //
 
+static bool ggml_zdnn_ztensor_in_buffer(
+    const ggml_backend_zdnn_buffer_context * ctx,
+    const zdnn_ztensor & ztensor) {
+
+    const char * ptr           = (const char *)ztensor.buffer;
+    const char * buf_start_ptr = (const char *)ctx->all_data;
+    const char * buf_end_ptr   = buf_start_ptr + ctx->all_size;
+
+    return buf_start_ptr <= ptr && ptr < buf_end_ptr;
+}
+
 static void ggml_backend_zdnn_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     ggml_backend_zdnn_buffer_context * ctx = (ggml_backend_zdnn_buffer_context *)buffer->context;
 
@@ -248,7 +259,9 @@ static void ggml_backend_zdnn_buffer_free_buffer(ggml_backend_buffer_t buffer) {
 
         // Free any extra buffer allocated for the tensor. E.g., bias for GGML_OP_MUL_MAT
         if (buf->extra != nullptr) free(buf->extra->data);
-        if (buf->ztensor.buffer_size > 0) ZDNN_CHECK(zdnn_free_ztensor_buffer(&buf->ztensor));
+        if (buf->ztensor.buffer_size > 0 && !ggml_zdnn_ztensor_in_buffer(ctx, buf->ztensor)) {
+            ZDNN_CHECK(zdnn_free_ztensor_buffer(&buf->ztensor));
+        }
     }
 
     if (ctx->owned) {
@@ -387,7 +400,7 @@ static void ggml_backend_zdnn_buffer_reset(ggml_backend_buffer_t buffer) {
             free(buf->extra->data);
         }
 
-        if (buf->ztensor.buffer_size > 0) {
+        if (buf->ztensor.buffer_size > 0 && !ggml_zdnn_ztensor_in_buffer(ctx, buf->ztensor)) {
             ZDNN_CHECK(zdnn_free_ztensor_buffer(&buf->ztensor));
         }
     }
@@ -469,6 +482,22 @@ static size_t ggml_backend_zdnn_buffer_type_get_alignment(ggml_backend_buffer_ty
     GGML_UNUSED(buft);
 }
 
+static size_t ggml_backend_zdnn_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor) {
+    // views share the ztensor of their source, empty tensors have none, and the rest cannot grow
+    if (tensor->view_src != nullptr || ggml_is_empty(tensor) || !ggml_zdnn_ztensor_in_alloc(tensor)) {
+        return ggml_nbytes(tensor);
+    }
+
+    zdnn_tensor_desc pre_tfm_desc;
+    zdnn_tensor_desc tfm_desc;
+    ggml_zdnn_init_tensor_desc(pre_tfm_desc, tfm_desc, tensor);
+
+    // room for the ztensor after the tensor data, at the next 4K boundary
+    return ggml_nbytes(tensor) + GGML_ZDNN_ZTENSOR_ALIGN - 1 + zdnn_getsize_ztensor(&tfm_desc);
+
+    GGML_UNUSED(buft);
+}
+
 static bool ggml_backend_zdnn_buffer_type_is_host(ggml_backend_buffer_type_t buft) {
     return true;
 
@@ -483,7 +512,7 @@ ggml_backend_buffer_type_t ggml_backend_zdnn_buffer_type(void) {
             /* .alloc_buffer_n      = */ NULL,
             /* .get_alignment       = */ ggml_backend_zdnn_buffer_type_get_alignment,
             /* .get_max_size        = */ NULL,
-            /* .get_alloc_size      = */ NULL,  // defaults to ggml_nbytes
+            /* .get_alloc_size      = */ ggml_backend_zdnn_buffer_type_get_alloc_size,  // used with autofitting
             /* .get_alloc_size_n    = */ NULL,
             /* .is_host             = */ ggml_backend_zdnn_buffer_type_is_host,
         },
