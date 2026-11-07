@@ -1550,7 +1550,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                 } else {
                     cur_backend_id = *node_backend_id;
                 }
-            } else if (cur_backend_id != -1) {
+            } else if (cur_backend_id != -1 && node->view_src == NULL) {
                 ggml_backend_sched_set_if_supported(sched, node, cur_backend_id, node_backend_id);
             }
         }
@@ -1571,7 +1571,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                 } else {
                     cur_backend_id = *node_backend_id;
                 }
-            } else if (cur_backend_id != -1) {
+            } else if (cur_backend_id != -1 && node->view_src == NULL) {
                 ggml_backend_sched_set_if_supported(sched, node, cur_backend_id, node_backend_id);
             }
         }
@@ -1587,7 +1587,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
             int * node_backend_id = &tensor_backend_id(node);
             if (*node_backend_id != -1) {
                 cur_backend_id = *node_backend_id;
-            } else if (cur_backend_id != -1) {
+            } else if (cur_backend_id != -1 && node->view_src == NULL) {
                 ggml_backend_sched_set_if_supported(sched, node, cur_backend_id, node_backend_id);
             }
         }
@@ -1603,7 +1603,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
             int * node_backend_id = &tensor_backend_id(node);
             if (*node_backend_id != -1) {
                 cur_backend_id = *node_backend_id;
-            } else if (cur_backend_id != -1) {
+            } else if (cur_backend_id != -1 && node->view_src == NULL) {
                 ggml_backend_sched_set_if_supported(sched, node, cur_backend_id, node_backend_id);
             }
         }
@@ -1627,7 +1627,8 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
             // unassigned node: find the backend with the most supported inputs
             int n_supported_best = -1;
             for (int b = 0; b < sched->n_backends; b++) {
-                if (ggml_backend_supports_op(sched->backends[b], node)) {
+                if (ggml_backend_supports_op(sched->backends[b], node)
+                && (node->view_src == NULL || ggml_backend_sched_buffer_supported(sched, node->view_src, b))) {
                     int n_supported = 0;
                     for (int j = 0; j < GGML_MAX_SRC; j++) {
                         struct ggml_tensor * src = node->src[j];
