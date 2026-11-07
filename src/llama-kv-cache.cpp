@@ -1065,73 +1065,104 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
 
         uint32_t n_tested = 0;
 
-        // for continuous slots, we test that all tokens in the ubatch fit, starting from the current head
-        // for non-continuous slots, we test the tokens one by one
-        const uint32_t n_test = cont ? n_tokens : 1;
+        auto can_use_cell = [&](uint32_t cell_idx) -> bool {
+            bool can_use = cells.is_empty(cell_idx);
 
-        while (true) {
-            if (head_cur + n_test > cells.size()) {
-                n_tested += cells.size() - head_cur;
-                head_cur = 0;
-                continue;
-            }
+            if (!can_use && cells.seq_count(cell_idx) == 1) {
+                const llama_pos pos_cell = cells.pos_get(cell_idx);
+                const llama_seq_id seq_id_cell = cells.seq_get(cell_idx);
 
-            for (uint32_t i = 0; i < n_test; i++) {
-                const auto idx = head_cur;
-
-                head_cur++;
-                n_tested++;
-
-                //const llama_pos    pos    = ubatch.pos[i];
-                //const llama_seq_id seq_id = ubatch.seq_id[i][0];
-
-                // can we use this cell? either:
-                //  - the cell is empty
-                //  - the cell is occupied only by one sequence:
-                //    - (disabled) mask causally, if the sequence is the same as the one we are inserting
-                //    - mask SWA, using current max pos for that sequence in the cache
-                //                always insert in the cell with minimum pos
-                bool can_use = cells.is_empty(idx);
-
-                if (!can_use && cells.seq_count(idx) == 1) {
-                    const llama_pos pos_cell = cells.pos_get(idx);
-
-                    // (disabled) causal mask
-                    // note: it's better to purge any "future" tokens beforehand
-                    //if (cells.seq_has(idx, seq_id)) {
-                    //    can_use = pos_cell >= pos;
-                    //}
-
-                    if (!can_use) {
-                        const llama_seq_id seq_id_cell = cells.seq_get(idx);
-
-                        // SWA mask
-                        if (llama_hparams::is_masked_swa(n_swa, swa_type, pos_cell, cells.seq_pos_max(seq_id_cell) + 1)) {
-                            can_use = true;
-                        }
-                    }
-                }
-
-                if (can_use) {
-                    res.idxs[s].push_back(idx);
-                } else {
-                    if (cont) {
-                        break;
-                    }
+                // SWA mask (enforces ValidSeqId invariant: seq_id_cell >= 0)
+                if (seq_id_cell >= 0 && seq_id_cell < LLAMA_MAX_SEQ &&
+                    llama_hparams::is_masked_swa(n_swa, swa_type, pos_cell, cells.seq_pos_max(seq_id_cell) + 1)) {
+                    can_use = true;
                 }
             }
 
-            if (res.idxs[s].size() == n_tokens) {
-                break;
+            return can_use;
+        };
+
+        if (cont) {
+            // Contiguous slot search with stride skipping on collision
+            const uint32_t w = n_tokens;
+            const uint32_t size = cells.size();
+
+            auto check_window = [&](uint32_t start) -> int64_t {
+                for (uint32_t off = 0; off < w; ++off) {
+                    const uint32_t cell_idx = start + off;
+                    if (!can_use_cell(cell_idx)) {
+                        return (int64_t)cell_idx;
+                    }
+                }
+                return -1;
+            };
+
+            auto stride_search = [&](uint32_t cur, uint32_t max_start) -> int64_t {
+                while (cur <= max_start && cur + w <= size && w > 0) {
+                    const int64_t bad_idx = check_window(cur);
+                    if (bad_idx < 0) {
+                        return (int64_t)cur;
+                    }
+                    cur = (uint32_t)bad_idx + 1;
+                }
+                return -1;
+            };
+
+            int64_t slot_start = -1;
+            uint32_t head_norm = (head_cur < size) ? head_cur : 0;
+
+            if (head_norm + w > size) {
+                // Window cannot fit between head_norm and size; search from beginning
+                if (size >= w) {
+                    slot_start = stride_search(0, size - w);
+                }
+            } else {
+                // Phase 1: Search from head_norm to buffer end
+                slot_start = stride_search(head_norm, size - w);
+                // Phase 2: Wrap to 0 and search slots starting before head_norm.
+                // Slots starting before head_norm are permitted to cross head_norm as long as cur + w <= size.
+                if (slot_start < 0 && head_norm > 0 && size >= w) {
+                    const uint32_t max_start = std::min(head_norm - 1, size - w);
+                    slot_start = stride_search(0, max_start);
+                }
             }
 
-            if (cont) {
-                res.idxs[s].clear();
-            }
-
-            if (n_tested >= cells.size()) {
-                //LLAMA_LOG_ERROR("%s: failed to find a slot for %d tokens\n", __func__, n_tokens);
+            if (slot_start >= 0) {
+                for (uint32_t i = 0; i < w; ++i) {
+                    res.idxs[s].push_back((uint32_t)slot_start + i);
+                }
+            } else {
                 return { };
+            }
+        } else {
+            // for non-continuous slots, we test the tokens one by one
+            const uint32_t n_test = 1;
+
+            while (true) {
+                if (head_cur + n_test > cells.size()) {
+                    n_tested += cells.size() - head_cur;
+                    head_cur = 0;
+                    continue;
+                }
+
+                for (uint32_t i = 0; i < n_test; i++) {
+                    const auto idx = head_cur;
+
+                    head_cur++;
+                    n_tested++;
+
+                    if (can_use_cell(idx)) {
+                        res.idxs[s].push_back(idx);
+                    }
+                }
+
+                if (res.idxs[s].size() == n_tokens) {
+                    break;
+                }
+
+                if (n_tested >= cells.size()) {
+                    return { };
+                }
             }
         }
 
