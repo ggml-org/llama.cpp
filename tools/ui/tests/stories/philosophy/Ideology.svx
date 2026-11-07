@@ -58,9 +58,9 @@ Where exactly to draw the line between the two is still open.
 
 ## Shared
 
-A server doesn't have to serve one person. One machine can serve a family, a team, a lab or a neighbourhood, so people without the hardware can use it too.
+A server doesn't have to sit next to the person using it, or serve only one. Your phone can use the model on your Mac; one machine can serve a family or an office; a few together can be opened to anyone. People without the hardware can use it too.
 
-<Figure n={4} caption="One server, run by one person, used by others on their own devices.">
+<Figure n={4} caption="Four setups, from one person to the internet. In each, one machine runs the model and others use it from their own devices.">
 	<Sharing />
 </Figure>
 
