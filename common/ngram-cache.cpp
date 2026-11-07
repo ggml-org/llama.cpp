@@ -170,6 +170,10 @@ void common_ngram_cache_draft(
         std::vector<common_ngram> ngrams_cd;
         for (int ngram_size_cd = ngram_min; ngram_size_cd <= ngram_max; ++ngram_size_cd) {
             const int ngram_start_cd = inp_size-ngram_size_cd + draft.size()-1;
+            if (ngram_start_cd < 0) {
+                // not enough tokens yet for this ngram size or any larger one
+                break;
+            }
             common_ngram ngram_cd;
             for (int j = ngram_start_cd; j < ngram_start_cd + ngram_size_cd; ++j) {
                 ngram_cd.tokens[j-ngram_start_cd] = get_token(inp, draft, j);
