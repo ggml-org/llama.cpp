@@ -100,20 +100,21 @@ static __global__ void quantize_q8_1(
     y[ib].ds = make_half2(d, d * sum);
 }
 
-__device__ __forceinline__ uint8_t compute_e8m0_scale(float amax) {
+// emax is the unbiased exponent of the format's max value (e2m1: 6.0, e4m3: 448.0), keeping amax / 2^emax in range
+constexpr int E2M1_EMAX = 2;
+[[maybe_unused]] constexpr int E4M3_EMAX = 8; // used only by the Blackwell activation kernel
+
+__device__ __forceinline__ uint8_t compute_e8m0_scale(float amax, int emax) {
     if (!(amax > 0.0f)) {
         return 0;
     }
-
-    // FP4 E2M1: max exponent (unbiased) is 2.
-    constexpr int FP4_E2M1_EMAX = 2;
 
     const float e = log2f(amax);
 
     // "even" -> round-to-nearest integer, ties-to-even
     const int e_int = __float2int_rn(e);
 
-    const int shared_exp = e_int - FP4_E2M1_EMAX;
+    const int shared_exp = e_int - emax;
 
     int biased = shared_exp + 127;
 
@@ -392,7 +393,7 @@ static __global__ void quantize_mmq_mxfp4(const float * __restrict__ x,
             amax = fmaxf(amax, __shfl_xor_sync(0xFFFFFFFF, amax, mask, WARP_SIZE));
         }
 
-        const uint8_t e = compute_e8m0_scale(amax);
+        const uint8_t e = compute_e8m0_scale(amax, E2M1_EMAX);
         scales[b] = e;
         const float inv_s = (amax == 0.0f) ? 0.0f : __frcp_rn(ggml_cuda_e8m0_to_fp32(e));
 
@@ -450,6 +451,80 @@ static __global__ void quantize_mmq_mxfp4(const float * __restrict__ x,
         }
     }
     GGML_UNUSED(n_expert_used);
+}
+
+template <bool scatter>
+static __global__ void quantize_mmq_fp8(
+        const float * __restrict__ x, const int32_t * __restrict__ ids, void * __restrict__ vy,
+        const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
+        const int64_t ne0, const int ne1, const int ne2, const int n_expert_used) {
+#if defined(BLACKWELL_MMA_AVAILABLE)
+    constexpr int vals_per_lane   = 4;
+    constexpr int vals_per_warp   = QK_FP8_MMQ;
+    constexpr int lanes_per_scale = QK_MXFP4 / vals_per_lane; // 8 lanes of 4 values share one ue8m0
+
+    const int warp_id = threadIdx.y;
+    const int lane_id_32 = threadIdx.x;
+
+    const int nwarps = blockDim.y;
+
+    const int64_t warp_start_offset = (blockIdx.y * nwarps + warp_id) * vals_per_warp;
+
+    if (warp_start_offset >= ne0) {
+        return;
+    }
+
+    const int64_t k_block = warp_start_offset / QK_FP8_MMQ;
+
+    ggml_cuda_pdl_sync();
+    int64_t base_pos;
+    if constexpr (scatter) {
+        base_pos = (int64_t) blockIdx.x * s02;
+    } else {
+        const int64_t i2  = blockIdx.z % ne2;
+        const int64_t i3  = blockIdx.z / ne2;
+        const int64_t i01 = ids ? ids[blockIdx.x] : blockIdx.x;
+        base_pos = i3 * s03 + i2 * s02 + i01 * s01;
+    }
+
+    const int64_t i0 = warp_start_offset + vals_per_lane * lane_id_32;
+
+    const float4 * x4 = (const float4 *) x;
+    const float4   xv = (i0 < ne00) ? x4[(base_pos + i0)/vals_per_lane] : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+
+    float amax = fmaxf(fmaxf(fabsf(xv.x), fabsf(xv.y)), fmaxf(fabsf(xv.z), fabsf(xv.w)));
+#pragma unroll
+    for (int mask = 4; mask > 0; mask >>= 1) {
+        amax = fmaxf(amax, __shfl_xor_sync(0xFFFFFFFF, amax, mask, WARP_SIZE));
+    }
+
+    const uint8_t e = compute_e8m0_scale(amax, E4M3_EMAX);
+    const float inv_s = (amax == 0.0f) ? 0.0f : __frcp_rn(ggml_cuda_e8m0_to_fp32(e));
+
+    const uint32_t packed = __nv_fp8x4_e4m3(make_float4(xv.x * inv_s, xv.y * inv_s, xv.z * inv_s, xv.w * inv_s)).__x;
+
+    block_fp8_mmq * y = (block_fp8_mmq *) vy;
+
+    const int nwrite = scatter ? n_expert_used : 1;
+#pragma unroll
+    for (int slot = 0; slot < nwrite; ++slot) {
+        int64_t ib;
+        if constexpr (scatter) {
+            const int64_t i = ids[(int64_t) blockIdx.x * n_expert_used + slot];
+            ib = k_block*ne1 + i;
+        } else {
+            const int64_t ib0 = blockIdx.z*((int64_t) ne1 * (ne0 / QK_FP8_MMQ));
+            ib = ib0 + k_block*ne1 + blockIdx.x;
+        }
+        ((uint32_t *) y[ib].qs)[lane_id_32] = packed;
+        if (lane_id_32 % lanes_per_scale == 0) {
+            ((uint8_t *) &y[ib].d4[0])[lane_id_32 / lanes_per_scale] = e;
+        }
+    }
+#else
+    GGML_UNUSED_VARS(x, ids, vy, ne00, s01, s02, s03, ne0, ne1, ne2, n_expert_used);
+    NO_DEVICE_CODE;
+#endif // BLACKWELL_MMA_AVAILABLE
 }
 
 // scatter: grid over tokens, quantize once, write to all the token's compact rows
@@ -693,4 +768,37 @@ void quantize_mmq_fp4_cuda(
 
         quantize_mmq_mxfp4<false><<<num_blocks, block_size, 0, stream>>>(x, ids, vy, ne00, s01, s02, s03, ne0, ne1, ne2, /*n_expert_used=*/0);
     }
+}
+
+void quantize_mmq_fp8_cuda(
+        const float * x, const int32_t * ids, void * vy,
+        const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
+        const int64_t ne0, const int64_t ne1, const int64_t ne2, const int64_t ne3, cudaStream_t stream) {
+    GGML_ASSERT(ne0 % QK_FP8_MMQ == 0);
+
+    constexpr int nwarps = 8;
+    constexpr int vals_per_cta = nwarps * QK_FP8_MMQ;
+
+    const int64_t block_num_y = (ne0 + vals_per_cta - 1) / vals_per_cta;
+    const dim3    num_blocks(ne1, block_num_y, ne2 * ne3);
+    const dim3    block_size(WARP_SIZE, nwarps, 1);
+
+    quantize_mmq_fp8<false><<<num_blocks, block_size, 0, stream>>>(x, ids, vy, ne00, s01, s02, s03, ne0, ne1, ne2, /*n_expert_used=*/0);
+}
+
+void quantize_scatter_mmq_fp8_cuda(
+        const float * x, const int32_t * ids_src1_inv, void * vy,
+        const int64_t ne00, const int64_t stride_token, const int64_t ne0,
+        const int64_t n_tokens, const int64_t nrows_dst, const int n_expert_used, cudaStream_t stream) {
+    GGML_ASSERT(ne0 % QK_FP8_MMQ == 0);
+
+    constexpr int nwarps = 8;
+    constexpr int vals_per_cta = nwarps * QK_FP8_MMQ;
+
+    const int64_t block_num_y = (ne0 + vals_per_cta - 1) / vals_per_cta;
+    const dim3    num_blocks(n_tokens, block_num_y, 1);
+    const dim3    block_size(WARP_SIZE, nwarps, 1);
+
+    quantize_mmq_fp8<true><<<num_blocks, block_size, 0, stream>>>(
+        x, ids_src1_inv, vy, ne00, /*s01=*/0, /*s02=*/stride_token, /*s03=*/0, ne0, /*ne1=*/(int) nrows_dst, /*ne2=*/1, n_expert_used);
 }

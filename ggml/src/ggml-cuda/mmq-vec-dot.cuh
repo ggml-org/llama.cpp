@@ -1229,9 +1229,101 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
             tile_C & C = *reinterpret_cast<tile_C *>(sum + (j0 / tile_C::J + n) * tile_C::ne);
 #pragma unroll
             for (int frag = 0; frag < nfrags; ++frag) {
-                mma_block_scaled_fp4<type>(C, A[n][frag], B[frag], scaleA[n][frag], scaleB[frag]);
+                mma_block_scaled<type, GGML_PREC_Q4>(C, A[n][frag], B[frag], scaleA[n][frag], scaleB[frag]);
             }
         }
     }
 }
 
+// mxfp4 weights x fp8 (e4m3) activations on Blackwell: kind::mxf8f6f4, m16n8k32, one ue8m0 scale per 32 values.
+// Each call takes one 128-value fp8 y block and the matching half (k00 = 0 or MMQ_TILE_NE_K) of the mxfp4 tile.
+template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_mxfp4_fp8_mma(
+        const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
+    typedef tile<16, 8, int>   tile_A;
+    typedef tile<8,  8, int>   tile_B;
+    typedef tile<16, 8, float> tile_C;
+
+#ifdef BLACKWELL_MMA_AVAILABLE
+    constexpr int sram_stride   = ggml_cuda_mmq_get_sram_stride(type, J, fallback, GGML_PREC_FP8);
+    constexpr int rows_per_warp = ggml_cuda_mmq_get_rows_per_warp(type, J, fallback, GGML_PREC_FP8);
+    constexpr int ntx           = rows_per_warp / tile_C::I;
+    constexpr int nfrags        = MMQ_TILE_NE_K / tile_A::J;
+    constexpr int iter_k        = ggml_cuda_mmq_get_K_vram(type, J, fallback, GGML_PREC_FP8);
+
+    y += (threadIdx.y % ntx) * (tile_C::J * MMQ_TILE_Y_K);
+
+    const int *      x_qs = (const int *) x;
+    const uint32_t * x_sc = (const uint32_t *) (x_qs + iter_k / 8);
+    const int *      y_qs = (const int *) y + 4;
+    const uint32_t * y_sc = (const uint32_t *) y;
+
+    const int g = threadIdx.x / 4;
+    const int t = threadIdx.x % 4;
+
+    // scale_vec::1X with byte-id 0 takes scale_A for rows g and g + 8 from the quad lanes with t == 0 and 1
+    const int tidx_A = g + (t % 2) * 8;
+    const int i0     = (threadIdx.y / ntx) * rows_per_warp;
+
+    tile_A   A[ntx][nfrags];
+    uint32_t scaleA[ntx][nfrags];
+
+    static_assert(nfrags == FP8_SCALES_PER_WORD, "one scale word covers all fragments and one y block");
+
+#pragma unroll
+    for (int n = 0; n < ntx; ++n) {
+        const uint32_t sa = x_sc[(i0 + n * tile_A::I + tidx_A) * sram_stride + k00 / (tile_A::J*FP8_SCALES_PER_WORD)];
+#pragma unroll
+        for (int frag = 0; frag < nfrags; ++frag) {
+            // the mma only reads byte 0 of the scale operand, so shift each frag's scale byte down
+            scaleA[n][frag] = sa >> (8*frag);
+        }
+#pragma unroll
+        for (int frag = 0; frag < nfrags; ++frag) {
+            const int k0 = k00 + frag * tile_A::J;
+            const int pi = 4*(k0 / 8) + t; // 32 mxfp4 values == 4 ints per frag
+            // an mxfp4 byte holds value j in the low nibble and j + 16 in the high one, so the low nibbles of an
+            // int are a0 (A cols 4t..4t+3) and the high ones a2; kind::mxf8f6f4 wants e2m1 in bits [5:2]
+            const uint32_t lo_mask = 0x0F0F0F0F;
+            const uint32_t hi_mask = 0x3C3C3C3C;
+            const uint32_t p0 = *(const uint32_t *) (x_qs + (i0 + n*tile_A::I + g    )*sram_stride + pi);
+            const uint32_t p1 = *(const uint32_t *) (x_qs + (i0 + n*tile_A::I + g + 8)*sram_stride + pi);
+            A[n][frag].x[0] = (p0 & lo_mask) << 2;
+            A[n][frag].x[2] = (p0 >> 2) & hi_mask;
+            A[n][frag].x[1] = (p1 & lo_mask) << 2;
+            A[n][frag].x[3] = (p1 >> 2) & hi_mask;
+        }
+    }
+
+#pragma unroll
+    for (int j0 = 0; j0 < J; j0 += ntx * tile_C::J) {
+        tile_B   B[nfrags];
+        uint32_t scaleB[nfrags];
+
+#pragma unroll
+        for (int frag = 0; frag < nfrags; ++frag) {
+            const int k0 = frag * tile_B::J;
+            // m16n8k32 B fragment: y_qs is in natural order, so lane (g, t) reads k 4t.. and 16+4t.. of col g
+            B[frag].x[0] = y_qs[(j0 + g)*MMQ_TILE_Y_K + k0 + t];
+            B[frag].x[1] = y_qs[(j0 + g)*MMQ_TILE_Y_K + k0 + 4 + t];
+        }
+        const uint32_t sb = y_sc[(j0 + g) * MMQ_TILE_Y_K];
+#pragma unroll
+        for (int frag = 0; frag < nfrags; ++frag) {
+            scaleB[frag] = sb >> (8*frag);
+        }
+
+#pragma unroll
+        for (int n = 0; n < ntx; ++n) {
+            // accumulate in place into the output sum array
+            tile_C & C = *reinterpret_cast<tile_C *>(sum + (j0 / tile_C::J + n) * tile_C::ne);
+#pragma unroll
+            for (int frag = 0; frag < nfrags; ++frag) {
+                mma_block_scaled<type, GGML_PREC_FP8>(C, A[n][frag], B[frag], scaleA[n][frag], scaleB[frag]);
+            }
+        }
+    }
+#else
+    GGML_UNUSED_VARS(x, y, sum, k00);
+    NO_DEVICE_CODE;
+#endif // BLACKWELL_MMA_AVAILABLE
+}

@@ -6093,6 +6093,7 @@ static bool ggml_vk_src1_prec_allows_q8(const ggml_tensor * dst) {
     switch (ggml_prec_get_src(dst, 1)) {
         case GGML_PREC_UNDEFINED:
         case GGML_PREC_Q8:
+        case GGML_PREC_FP8:
         case GGML_PREC_Q4:
             return true;
         case GGML_PREC_F32:
@@ -6111,6 +6112,7 @@ static bool ggml_vk_prec_allows_f16acc(ggml_prec prec) {
         case GGML_PREC_UNDEFINED:
         case GGML_PREC_F16:
         case GGML_PREC_Q8:
+        case GGML_PREC_FP8:
         case GGML_PREC_Q4:
             return true;
     }

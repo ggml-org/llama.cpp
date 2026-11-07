@@ -27,6 +27,8 @@ enum mmq_q8_1_ds_layout {
 
 static constexpr int QK8_1_MMQ  = 4*QK8_1;
 static constexpr int QK_FP4_MMQ = 2*QK8_1_MMQ;
+static constexpr int QK_FP8_MMQ = QK8_1_MMQ;
+static constexpr int FP8_SCALES_PER_WORD = QK_FP8_MMQ / QK_MXFP4;
 
 struct block_q8_1_mmq {
     // The y float data is converted to a data layout that can simply be copied to shared memory as a contiguous block.
@@ -60,6 +62,14 @@ struct block_fp4_mmq {
 static_assert(sizeof(block_q8_1_mmq) == QK8_1_MMQ + 4*sizeof(half2), "Unexpected block_q8_1_mmq size");
 static_assert(sizeof(block_q8_1_mmq) == 4*sizeof(block_q8_1),      "Unexpected block_q8_1_mmq size");
 static_assert(sizeof(block_fp4_mmq)  == sizeof(block_q8_1_mmq),    "Unexpected block_fp4_mmq size");
+
+// activation block for the kind::mxf8f6f4 block-scaled mma (Blackwell): 128 e4m3 values,
+// d4[0] packs 4 ue8m0 scales (byte f covers values 32f..32f+31), d4[1..3] pad to MMQ_TILE_Y_K
+struct block_fp8_mmq {
+    uint32_t d4[4];
+    int8_t   qs[QK_FP8_MMQ];
+};
+static_assert(sizeof(block_fp8_mmq) == sizeof(block_q8_1_mmq), "Unexpected block_fp8_mmq size");
 
 static mmq_q8_1_ds_layout mmq_get_q8_1_ds_layout(const ggml_type type_x) {
     switch (type_x) {
@@ -129,6 +139,7 @@ enum ggml_cuda_mmq_sram_layout {
     GGML_CUDA_MMQ_SRAM_LAYOUT_Q3_K,
     GGML_CUDA_MMQ_SRAM_LAYOUT_Q6_K,
     GGML_CUDA_MMQ_SRAM_LAYOUT_FP4,   // MXFP4 and NVFP4 on Blackwell.
+    GGML_CUDA_MMQ_SRAM_LAYOUT_FP8,   // mxfp4 weights, FP8 src1 on Blackwell.
     GGML_CUDA_MMQ_SRAM_LAYOUT_NVFP4, // Generic NVFP4
 };
 
@@ -146,6 +157,9 @@ static constexpr __host__ __device__ int ggml_cuda_mmq_get_sram_stride(ggml_cuda
             return 2*MMQ_TILE_NE_K + MMQ_TILE_NE_K/QI6_K   + MMQ_TILE_NE_K/8 + 7;
         case GGML_CUDA_MMQ_SRAM_LAYOUT_FP4:
             return 2*MMQ_TILE_NE_K + 8                     + 4;
+        case GGML_CUDA_MMQ_SRAM_LAYOUT_FP8:
+            // 256 mxfp4 values in 32 words + one scale word per 128 values + 2 words of padding
+            return MMQ_ITER_K/8 + MMQ_ITER_K/(FP8_SCALES_PER_WORD*QK_MXFP4) + 2;
         case GGML_CUDA_MMQ_SRAM_LAYOUT_NVFP4:
             return 2*MMQ_TILE_NE_K + MMQ_TILE_NE_K/2       + 4;
         default:
@@ -159,6 +173,7 @@ static_assert(ggml_cuda_mmq_get_sram_stride(GGML_CUDA_MMQ_SRAM_LAYOUT_Q2_K)  % 8
 static_assert(ggml_cuda_mmq_get_sram_stride(GGML_CUDA_MMQ_SRAM_LAYOUT_Q3_K)  % 8 == 4, "Wrong padding.");
 static_assert(ggml_cuda_mmq_get_sram_stride(GGML_CUDA_MMQ_SRAM_LAYOUT_Q6_K)  % 8 == 4, "Wrong padding.");
 static_assert(ggml_cuda_mmq_get_sram_stride(GGML_CUDA_MMQ_SRAM_LAYOUT_FP4)   % 8 == 4, "Wrong padding.");
+static_assert(ggml_cuda_mmq_get_sram_stride(GGML_CUDA_MMQ_SRAM_LAYOUT_FP8)   % 8 == 4, "Wrong padding.");
 static_assert(ggml_cuda_mmq_get_sram_stride(GGML_CUDA_MMQ_SRAM_LAYOUT_NVFP4) % 8 == 4, "Wrong padding.");
 
 static_assert(ggml_cuda_mmq_get_sram_stride(GGML_CUDA_MMQ_SRAM_LAYOUT_FP4) == ggml_cuda_mmq_get_sram_stride(GGML_CUDA_MMQ_SRAM_LAYOUT_Q8_1), "Wrong tile size for MXFP4");
@@ -230,6 +245,14 @@ struct ggml_cuda_mmq_config {
 
 #undef CASE
 
+// mxfp4 weights with FP8 src1 on Blackwell: native FP4 tile shape, but the FP8 src1 blocks halve the K range of a weight tile
+static constexpr __host__ __device__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config_blackwell_fp8(const ggml_type type, const int J, const bool fallback) {
+    ggml_cuda_mmq_config cfg = ggml_cuda_mmq_get_config_blackwell(type, J, fallback);
+    cfg.K_vram      = MMQ_ITER_K;
+    cfg.sram_layout = GGML_CUDA_MMQ_SRAM_LAYOUT_FP8;
+    return cfg;
+}
+
 static __host__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config(const ggml_type type, const int J, const bool fallback, const int cc, const ggml_prec prec_src1) {
     if (GGML_CUDA_CC_IS_AMD(cc)) {
         if (GGML_CUDA_CC_IS_GCN(cc)) {
@@ -253,6 +276,9 @@ static __host__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config(const ggml_type ty
         return ggml_cuda_mmq_get_config_rdna2(type, J, fallback);
     }
     if (blackwell_mma_available(cc)) {
+        if (type == GGML_TYPE_MXFP4 && prec_src1 == GGML_PREC_FP8) {
+            return ggml_cuda_mmq_get_config_blackwell_fp8(type, J, fallback);
+        }
         // only src1 at Q4 uses the native FP4 config, higher precisions keep src1 at Q8_1
         if (prec_src1 != GGML_PREC_Q4 && (type == GGML_TYPE_NVFP4 || type == GGML_TYPE_MXFP4)) {
             return ggml_cuda_mmq_get_config_ampere(type, J, fallback);
@@ -287,6 +313,9 @@ static constexpr __device__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config(ggml_t
 #endif // CDNA
 #else
 #ifdef BLACKWELL_MMA_AVAILABLE
+    if (type == GGML_TYPE_MXFP4 && prec_src1 == GGML_PREC_FP8) {
+        return ggml_cuda_mmq_get_config_blackwell_fp8(type, J, fallback);
+    }
     // only src1 at Q4 uses the native FP4 config, higher precisions keep src1 at Q8_1
     if (prec_src1 != GGML_PREC_Q4 && (type == GGML_TYPE_NVFP4 || type == GGML_TYPE_MXFP4)) {
         return ggml_cuda_mmq_get_config_ampere(type, J, fallback);
@@ -739,6 +768,13 @@ static constexpr __device__ ggml_cuda_mmq_util_funcs ggml_cuda_mmq_get_util_func
                     ggml_cuda_mmq_vec_dot_fp4_fp4_mma<type, J, fallback>,
                     ggml_cuda_mmq_write_back_mma<type, J, fallback, prec_src1, false>);
             }
+            if constexpr (prec_src1 == GGML_PREC_FP8) {
+                return ggml_cuda_mmq_util_funcs(
+                    -1,
+                    ggml_cuda_mmq_load_tiles_mxfp4_fp8<type, J, fallback>,
+                    ggml_cuda_mmq_vec_dot_mxfp4_fp8_mma<type, J, fallback>,
+                    ggml_cuda_mmq_write_back_mma<type, J, fallback, prec_src1, false>);
+            }
             break;
         case GGML_TYPE_NVFP4:
             if (prec_src1 == GGML_PREC_Q4) {
@@ -944,8 +980,8 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
     int * tile_x = tile_y + GGML_PAD(J*MMQ_TILE_Y_K, nwarps*warp_size);
 
 #if defined(BLACKWELL_MMA_AVAILABLE)
-    // FP4 tile stores 8 blocks. src1 above Q4 uses the generic
-    // Q8_1 tile layout instead of the packed FP4 tile.
+    // FP4 tile stores 8 blocks. The Q8_1 and FP8 blocks both hold 4 and fill the same
+    // MMQ_TILE_Y_K row, so only the packed FP4 tile changes the block size here.
     constexpr int ne_block = ((type == GGML_TYPE_MXFP4 || type == GGML_TYPE_NVFP4) && prec_src1 == GGML_PREC_Q4) ?
         QK_FP4_MMQ : QK8_1_MMQ;
 #else
@@ -1616,6 +1652,10 @@ void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cuda
 #define DECL_MMQ_CASE_W4A4(type)                                                   \
     template void mul_mat_q_case<type, GGML_PREC_Q4>(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) \
 
+// FP8 variant: mxfp4 weights with e4m3 src1 on the mxf8f6f4 MMA.
+#define DECL_MMQ_CASE_FP8(type)                                                    \
+    template void mul_mat_q_case<type, GGML_PREC_FP8>(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) \
+
 extern DECL_MMQ_CASE(GGML_TYPE_Q1_0);
 extern DECL_MMQ_CASE(GGML_TYPE_Q2_0);
 extern DECL_MMQ_CASE(GGML_TYPE_Q4_0);
@@ -1640,6 +1680,7 @@ extern DECL_MMQ_CASE(GGML_TYPE_IQ4_NL);
 extern DECL_MMQ_CASE(GGML_TYPE_IQ4_XS);
 // -----------------------------------------
 extern DECL_MMQ_CASE(GGML_TYPE_MXFP4);
+extern DECL_MMQ_CASE_FP8(GGML_TYPE_MXFP4);
 extern DECL_MMQ_CASE(GGML_TYPE_NVFP4);
 extern DECL_MMQ_CASE_W4A4(GGML_TYPE_MXFP4);
 extern DECL_MMQ_CASE_W4A4(GGML_TYPE_NVFP4);
