@@ -19,6 +19,8 @@ private:
     bool sleeping = false;
     bool req_stop_sleeping = false;
     int64_t time_last_task = 0;
+    int64_t time_last_heartbeat = 0;
+    int64_t heartbeat_interval_ms = 0;  // 0 = disabled
 
     // queues
     std::deque<server_task> queue_tasks;
@@ -42,6 +44,10 @@ private:
     worker_t worker;
 
     // callback functions
+    std::function<void(server_task &&)> callback_new_task;
+    std::function<void(void)>           callback_update_slots;
+    std::function<void(bool)>           callback_sleeping_state;
+    std::function<void(void)>           callback_heartbeat;
     std::function<bool(server_task &&, bool)> callback_new_task;
     std::function<void(void)>                 callback_update_slots;
     std::vector<std::function<void(bool)>>    callback_sleeping_state;
@@ -92,7 +98,7 @@ public:
      * - Call callback_sleeping_state(false)
      * - Exit sleeping state
      */
-    void start_loop(int64_t idle_sleep_ms = -1);
+    void start_loop(int64_t idle_sleep_ms = -1, int64_t heartbeat_ms = 0);
 
     // while waiting for work() to finish, run process_new_tasks on the worker thread
     // returns once work() is done (may throw exceptions)
@@ -125,6 +131,11 @@ public:
     // Register the function to be called when all slots data is ready to be processed
     void on_update_slots(std::function<void(void)> callback) {
         callback_update_slots = std::move(callback);
+    }
+
+    // Register GPU heartbeat callback
+    void on_heartbeat(std::function<void(void)> callback) {
+        callback_heartbeat = std::move(callback);
     }
 
     // Register callback for sleeping state change; multiple callbacks are allowed
