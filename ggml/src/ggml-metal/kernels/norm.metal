@@ -236,37 +236,59 @@ typedef decltype(kernel_l2_norm_impl<float, float>) kernel_l2_norm_t;
 template [[host_name("kernel_l2_norm_f32_f32")]]   kernel kernel_l2_norm_t kernel_l2_norm_impl<float,  float>;
 template [[host_name("kernel_l2_norm_f32_f32_4")]] kernel kernel_l2_norm_t kernel_l2_norm_impl<float4, float4>;
 
+constant bool FC_group_norm_flat [[function_constant(FC_GROUP_NORM + 0)]];
+
 kernel void kernel_group_norm_f32(
         constant ggml_metal_kargs_group_norm & args,
-        device const float * src0,
-        device       float * dst,
+        device const char * src0,
+        device       char * dst,
         threadgroup float  * buf [[threadgroup(0)]],
-        uint tgpig[[threadgroup_position_in_grid]],
-        uint tpitg[[thread_position_in_threadgroup]],
-        uint sgitg[[simdgroup_index_in_threadgroup]],
-        uint tiisg[[thread_index_in_simdgroup]],
-        uint   ntg[[threads_per_threadgroup]]) {
-    const int64_t ne = args.ne00*args.ne01*args.ne02;
-    const int64_t gs = args.ne00*args.ne01*((args.ne02 + args.ngrp - 1) / args.ngrp);
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort  sgitg[[simdgroup_index_in_threadgroup]],
+        ushort  tiisg[[thread_index_in_simdgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
+    const int64_t ne00 = args.ne00;
+    const int64_t ne01 = args.ne01;
+    const int64_t ne02 = args.ne02;
 
-    int start = tgpig * gs;
-    int end   = start + gs;
+    const int64_t ngrp = args.ngrp;
 
-    start += tpitg;
+    const int64_t i03 = tgpig.z; // batch index
+    const int64_t ig  = tgpig.x; // group index
 
-    if (end >= ne) {
-        end = ne;
-    }
+    const int64_t cpg = (ne02 + ngrp - 1)/ngrp;
+
+    const int64_t c0 =  ig*cpg;
+    const int64_t c1 = (c0 + cpg < ne02) ? c0 + cpg : ne02;
+
+    const int64_t npf  = ne00*ne01;      // elements per channel
+    const int64_t gs   = npf*(c1 - c0);  // elements in this group
+
+    device const char * x03 = src0 + i03*args.nb03 + c0*args.nb02;
+    device       char * y03 = dst  + i03*args.nb3  + c0*args.nb2;
 
     float tmp = 0.0f; // partial sum for thread in warp
 
-    for (int j = start; j < end; j += ntg) {
-        tmp += src0[j];
+    if (FC_group_norm_flat) {
+        device const float * x = (device const float *) x03;
+        for (int64_t e = tpitg.x; e < gs; e += ntg.x) {
+            tmp += x[e];
+        }
+    } else {
+        for (int64_t e = tpitg.x; e < gs; e += ntg.x) {
+            const int64_t i02 = c0 + e/npf;
+            const int64_t ir  = e - (i02 - c0)*npf;
+            const int64_t i01 = ir/ne00;
+            const int64_t i00 = ir - i01*ne00;
+
+            tmp += *(device const float *)(x03 + (i02 - c0)*args.nb02 + i01*args.nb01 + i00*sizeof(float));
+        }
     }
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
     tmp = simd_sum(tmp);
-    if (ntg > N_SIMDWIDTH) {
+    if (ntg.x > N_SIMDWIDTH) {
         if (sgitg == 0) {
             buf[tiisg] = 0.0f;
         }
@@ -286,14 +308,31 @@ kernel void kernel_group_norm_f32(
     const float mean = tmp / gs;
     tmp = 0.0f;
 
-    for (int j = start; j < end; j += ntg) {
-        float xi = src0[j] - mean;
-        dst[j] = xi;
-        tmp += xi * xi;
+    if (FC_group_norm_flat) {
+        device const float * x = (device const float *) x03;
+        device       float * y = (device       float *) y03;
+        for (int64_t e = tpitg.x; e < gs; e += ntg.x) {
+            const float xi = x[e] - mean;
+            y[e] = xi;
+            tmp += xi*xi;
+        }
+    } else {
+        for (int64_t e = tpitg.x; e < gs; e += ntg.x) {
+            const int64_t i02 = c0 + e/npf;
+            const int64_t ir  = e - (i02 - c0)*npf;
+            const int64_t i01 = ir/ne00;
+            const int64_t i00 = ir - i01*ne00;
+
+            const float xi = *(device const float *)(x03 + (i02 - c0)*args.nb02 + i01*args.nb01 + i00*sizeof(float)) - mean;
+
+            *(device float *)(y03 + (i02 - c0)*args.nb2 + i01*args.nb1 + i00*sizeof(float)) = xi;
+
+            tmp += xi*xi;
+        }
     }
 
     tmp = simd_sum(tmp);
-    if (ntg > N_SIMDWIDTH) {
+    if (ntg.x > N_SIMDWIDTH) {
         if (sgitg == 0) {
             buf[tiisg] = 0.0f;
         }
@@ -312,7 +351,20 @@ kernel void kernel_group_norm_f32(
 
     const float variance = tmp / gs;
     const float scale = 1.0f/sqrt(variance + args.eps);
-    for (int j = start; j < end; j += ntg) {
-        dst[j] *= scale;
+
+    if (FC_group_norm_flat) {
+        device float * y = (device float *) y03;
+        for (int64_t e = tpitg.x; e < gs; e += ntg.x) {
+            y[e] *= scale;
+        }
+    } else {
+        for (int64_t e = tpitg.x; e < gs; e += ntg.x) {
+            const int64_t i02 = c0 + e/npf;
+            const int64_t ir  = e - (i02 - c0)*npf;
+            const int64_t i01 = ir/ne00;
+            const int64_t i00 = ir - i01*ne00;
+
+            *(device float *)(y03 + (i02 - c0)*args.nb2 + i01*args.nb1 + i00*sizeof(float)) *= scale;
+        }
     }
 }
