@@ -27,8 +27,10 @@
 #  include <array>
 #  include <cerrno>
 #  include <chrono>
+#  include <cstdio>
 #  include <time.h>
 #  ifndef _WIN32
+#    include <net/if.h>
 #    include <poll.h>
 #  endif
 #  ifdef GGML_RPC_RDMA_APPLE
@@ -211,16 +213,61 @@ bool socket_t::impl::tcp_peer_closed() {
 #endif
 }
 
+// Netdev the TCP peer is reached through, looked up in the kernel ARP table.
+// Returns 0 when unknown (IPv6, routed peer, no entry).
+static unsigned rdma_peer_ifindex(sockfd_t fd) {
+    sockaddr_storage addr = {};
+    socklen_t addr_len = sizeof(addr);
+    if (getpeername(fd, reinterpret_cast<sockaddr *>(&addr), &addr_len) != 0) {
+        return 0;
+    }
+    in_addr ip = {};
+    if (addr.ss_family == AF_INET) {
+        ip = reinterpret_cast<const sockaddr_in *>(&addr)->sin_addr;
+    } else if (addr.ss_family == AF_INET6 && IN6_IS_ADDR_V4MAPPED(&reinterpret_cast<const sockaddr_in6 *>(&addr)->sin6_addr)) {
+        memcpy(&ip, &reinterpret_cast<const sockaddr_in6 *>(&addr)->sin6_addr.s6_addr[12], 4);
+    } else {
+        return 0;
+    }
+    char want[INET_ADDRSTRLEN];
+    if (!inet_ntop(AF_INET, &ip, want, sizeof(want))) {
+        return 0;
+    }
+
+    FILE * f = fopen("/proc/net/arp", "r");
+    if (!f) {
+        return 0;
+    }
+    // columns: IP address, HW type, Flags, HW address, Mask, Device
+    char line[256];
+    char ip_str[64];
+    char dev[IF_NAMESIZE + 1];
+    unsigned ifindex = 0;
+    while (fgets(line, sizeof(line), f)) {
+        if (sscanf(line, "%63s %*s %*s %*s %*s %16s", ip_str, dev) == 2 && strcmp(ip_str, want) == 0) {
+            ifindex = if_nametoindex(dev);
+            break;
+        }
+    }
+    fclose(f);
+    return ifindex;
+}
+
 bool socket_t::impl::rdma_probe() {
-    const char * dev_env = std::getenv("GGML_RDMA_DEV");
-    const char * gid_env = std::getenv("GGML_RDMA_GID");
+    const char * dev_env  = std::getenv("GGML_RDMA_DEV");
+    const char * gid_env  = std::getenv("GGML_RDMA_GID");
+    const char * port_env = std::getenv("GGML_RDMA_PORT");
 
     auto target_gid = rdma_build_target_gid();
     if (!target_gid) {
         return false;
     }
 
-    const uint8_t ib_port = 1;
+    // the same local IP can be on several ports (e.g. a /32 on each link of a hub),
+    // so only accept GIDs bound to the netdev that actually reaches the peer
+    const unsigned peer_ifindex = rdma_peer_ifindex(fd);
+
+    uint8_t ib_port = 0;
     int num_devs = 0;
     ibv_device ** devs = ibv_get_device_list(&num_devs);
     if (!devs || num_devs == 0) return false;
@@ -230,58 +277,67 @@ bool socket_t::impl::rdma_probe() {
     int gid_idx = gid_env ? atoi(gid_env) : -1;
     int gid_version = IBV_GID_TYPE_IB;  // 0 = unknown/IB
 
-    for (int d = 0; d < num_devs; d++) {
+    for (int d = 0; d < num_devs && !ibctx; d++) {
         const char * dn = ibv_get_device_name(devs[d]);
         if (dev_env && strcmp(dev_env, dn) != 0) continue;
 
         ibv_context * ctx = ibv_open_device(devs[d]);
         if (!ctx) continue;
 
-        ibv_port_attr pa;
-        if (ibv_query_port(ctx, ib_port, &pa) != 0) { ibv_close_device(ctx); continue; }
+        ibv_device_attr da;
+        if (ibv_query_device(ctx, &da) != 0) { ibv_close_device(ctx); continue; }
 
-        int found_gid = gid_idx;
-        int found_version = IBV_GID_TYPE_IB;
-        if (found_gid < 0) {
-            // Find a GID on this port whose bytes equal the local TCP address
-            // (IPv4 or IPv6). Prefer RoCE v2 (UDP/IP, L3-routable) over v1
-            // (raw Ethernet, same-L2 only) so silent hangs on L3-routed paths
-            // are avoided. ibv_query_gid_ex returns gid+type in one call.
-            int v2_idx = -1;
-            int v1_idx = -1;
-            for (int i = 0; i < pa.gid_tbl_len; i++) {
+        // multi-port NICs expose every port under one device, the TCP address may be on any of them
+        for (uint8_t p = 1; p <= da.phys_port_cnt && !ibctx; p++) {
+            if (port_env && atoi(port_env) != p) continue;
+
+            ibv_port_attr pa;
+            if (ibv_query_port(ctx, p, &pa) != 0 || pa.state != IBV_PORT_ACTIVE) continue;
+
+            int found_gid = gid_idx;
+            int found_version = IBV_GID_TYPE_IB;
+            if (found_gid < 0) {
+                // Find a GID on this port whose bytes equal the local TCP address
+                // (IPv4 or IPv6). Prefer RoCE v2 (UDP/IP, L3-routable) over v1
+                // (raw Ethernet, same-L2 only) so silent hangs on L3-routed paths
+                // are avoided. ibv_query_gid_ex returns gid+type in one call.
+                int v2_idx = -1;
+                int v1_idx = -1;
+                for (int i = 0; i < pa.gid_tbl_len; i++) {
+                    ibv_gid_entry entry = {};
+                    if (ibv_query_gid_ex(ctx, p, i, &entry, 0) != 0) continue;
+                    if (memcmp(entry.gid.raw, target_gid->data(), RDMA_GID_SIZE) != 0) continue;
+                    if (peer_ifindex && entry.ndev_ifindex && entry.ndev_ifindex != peer_ifindex) continue;
+                    if (entry.gid_type == IBV_GID_TYPE_ROCE_V2 && v2_idx < 0) {
+                        v2_idx = i;
+                    } else if (entry.gid_type == IBV_GID_TYPE_ROCE_V1 && v1_idx < 0) {
+                        v1_idx = i;
+                    }
+                }
+                if (v2_idx >= 0) {
+                    found_gid = v2_idx;
+                    found_version = IBV_GID_TYPE_ROCE_V2;
+                } else if (v1_idx >= 0) {
+                    found_gid = v1_idx;
+                    found_version = IBV_GID_TYPE_ROCE_V1;
+                }
+            } else {
+                // Explicit GID index from GGML_RDMA_GID — fetch its type for logging.
                 ibv_gid_entry entry = {};
-                if (ibv_query_gid_ex(ctx, ib_port, i, &entry, 0) != 0) continue;
-                if (memcmp(entry.gid.raw, target_gid->data(), RDMA_GID_SIZE) != 0) continue;
-                if (entry.gid_type == IBV_GID_TYPE_ROCE_V2 && v2_idx < 0) {
-                    v2_idx = i;
-                } else if (entry.gid_type == IBV_GID_TYPE_ROCE_V1 && v1_idx < 0) {
-                    v1_idx = i;
+                if (ibv_query_gid_ex(ctx, p, found_gid, &entry, 0) == 0) {
+                    found_version = entry.gid_type;
                 }
             }
-            if (v2_idx >= 0) {
-                found_gid = v2_idx;
-                found_version = IBV_GID_TYPE_ROCE_V2;
-            } else if (v1_idx >= 0) {
-                found_gid = v1_idx;
-                found_version = IBV_GID_TYPE_ROCE_V1;
-            }
-        } else {
-            // Explicit GID index from GGML_RDMA_GID — fetch its type for logging.
-            ibv_gid_entry entry = {};
-            if (ibv_query_gid_ex(ctx, ib_port, found_gid, &entry, 0) == 0) {
-                found_version = entry.gid_type;
+            if (found_gid >= 0) {
+                ibctx = ctx;
+                ib_port = p;
+                gid_idx = found_gid;
+                gid_version = found_version;
+                matched_dev = dn;
+                rdma_local.path_mtu = pa.active_mtu;
             }
         }
-        if (found_gid >= 0) {
-            ibctx = ctx;
-            gid_idx = found_gid;
-            gid_version = found_version;
-            matched_dev = dn;
-            rdma_local.path_mtu = pa.active_mtu;
-            break;
-        }
-        ibv_close_device(ctx);
+        if (!ibctx) ibv_close_device(ctx);
     }
     ibv_free_device_list(devs);
     if (!ibctx) return false;
@@ -337,8 +393,8 @@ bool socket_t::impl::rdma_probe() {
     } else if (gid_version == IBV_GID_TYPE_ROCE_V1) {
         ver_str = " RoCEv1";
     }
-    LOG_INFO("RDMA probed: dev=%s gid=%d%s qpn=%u inline=%u\n",
-                  matched_dev, gid_idx, ver_str, rdma_local.qpn, rdma->max_inline);
+    LOG_INFO("RDMA probed: dev=%s port=%u gid=%d%s qpn=%u inline=%u\n",
+                  matched_dev, ib_port, gid_idx, ver_str, rdma_local.qpn, rdma->max_inline);
     return true;
 }
 
