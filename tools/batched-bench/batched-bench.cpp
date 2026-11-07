@@ -2,6 +2,7 @@
 #include "common.h"
 #include "log.h"
 #include "llama.h"
+#include "llama-cpp.h"
 
 #include <algorithm>
 #include <cinttypes>
@@ -63,7 +64,8 @@ int llama_batched_bench(int argc, char ** argv) {
 
     llama_model_params model_params = common_model_params_to_llama(params);
 
-    llama_model * model = llama_model_load_from_file(params.model.path.c_str(), model_params);
+    llama_model_ptr model_owner(llama_model_load_from_file(params.model.path.c_str(), model_params));
+    llama_model * model = model_owner.get();
 
     if (model == NULL) {
         fprintf(stderr , "%s: error: unable to load model\n" , __func__);
@@ -75,11 +77,11 @@ int llama_batched_bench(int argc, char ** argv) {
     // ensure enough sequences are available
     ctx_params.n_seq_max = n_pl.empty() ? 1 : *std::max_element(n_pl.begin(), n_pl.end());
 
-    llama_context * ctx = llama_init_from_model(model, ctx_params);
+    llama_context_ptr ctx_owner(llama_init_from_model(model, ctx_params));
+    llama_context * ctx = ctx_owner.get();
 
     if (ctx == NULL) {
         fprintf(stderr , "%s: error: failed to create the llama_context\n" , __func__);
-        llama_model_free(model);
         return 1;
     }
 
@@ -123,8 +125,6 @@ int llama_batched_bench(int argc, char ** argv) {
 
         if (!decode_helper(ctx, batch, ctx_params.n_batch, true)) {
             LOG_ERR("%s: llama_decode() failed\n", __func__);
-            llama_free(ctx);
-            llama_model_free(model);
             return 1;
         }
     }
@@ -164,8 +164,6 @@ int llama_batched_bench(int argc, char ** argv) {
 
                 if (!decode_helper(ctx, batch, ctx_params.n_batch, false)) {
                     LOG_ERR("%s: llama_decode() failed\n", __func__);
-                    llama_free(ctx);
-                    llama_model_free(model);
                     return 1;
                 }
 
@@ -184,8 +182,6 @@ int llama_batched_bench(int argc, char ** argv) {
                         batch.add(get_token_rand(), pp + 0, 0, true);
                         if (!decode_helper(ctx, batch, ctx_params.n_batch, true)) {
                             LOG_ERR("%s: llama_decode() failed\n", __func__);
-                            llama_free(ctx);
-                            llama_model_free(model);
                             return 1;
                         }
                         llama_memory_seq_rm(mem, 0, pp, -1);
@@ -205,8 +201,6 @@ int llama_batched_bench(int argc, char ** argv) {
 
                             if (!decode_helper(ctx, batch, ctx_params.n_batch, true)) {
                                 LOG_ERR("%s: llama_decode() failed\n", __func__);
-                                llama_free(ctx);
-                                llama_model_free(model);
                                 return 1;
                             }
                         }
@@ -223,8 +217,6 @@ int llama_batched_bench(int argc, char ** argv) {
 
                         if (!decode_helper(ctx, batch, ctx_params.n_batch, true)) {
                             LOG_ERR("%s: llama_decode() failed\n", __func__);
-                            llama_free(ctx);
-                            llama_model_free(model);
                             return 1;
                         }
                     }
@@ -258,9 +250,9 @@ int llama_batched_bench(int argc, char ** argv) {
     llama_perf_context_print(ctx);
 
 
-    llama_free(ctx);
-    llama_model_free(model);
-
+    batch.batch.reset();
+    ctx_owner.reset();
+    model_owner.reset();
     llama_backend_free();
 
     return 0;
