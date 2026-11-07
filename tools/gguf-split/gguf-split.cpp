@@ -73,12 +73,16 @@ static void split_print_usage(const char * executable) {
 // return convert string, for example "128M" or "4G" to number of bytes
 static size_t split_str_to_n_bytes(std::string str) {
     size_t n_bytes = 0;
-    int n;
+    int n = 0;
     if (str.back() == 'M') {
-        sscanf(str.c_str(), "%d", &n);
+        if (sscanf(str.c_str(), "%dM", &n) != 1) {
+            throw std::invalid_argument("error: invalid size value: " + str);
+        }
         n_bytes = (size_t)n * 1000 * 1000; // megabytes
     } else if (str.back() == 'G') {
-        sscanf(str.c_str(), "%d", &n);
+        if (sscanf(str.c_str(), "%dG", &n) != 1) {
+            throw std::invalid_argument("error: invalid size value: " + str);
+        }
         n_bytes = (size_t)n * 1000 * 1000 * 1000; // gigabytes
     } else {
         throw std::invalid_argument("error: supported units are M (megabytes) or G (gigabytes), but got: " + std::string(1, str.back()));
@@ -137,7 +141,12 @@ static void split_params_parse_ex(int argc, const char ** argv, split_params & p
                 throw std::invalid_argument("error: either --split-max-tensors or --split-max-size can be specified, but not both");
             }
             params.mode = MODE_TENSOR;
-            params.n_split_tensors = atoi(argv[arg_idx]);
+            char * str_end = nullptr;
+            const long n_split_tensors = strtol(argv[arg_idx], &str_end, 10);
+            if (str_end == argv[arg_idx] || *str_end != '\0' || n_split_tensors <= 0 || n_split_tensors > INT_MAX) {
+                throw std::invalid_argument("error: --split-max-tensors must be a positive integer, but got: " + std::string(argv[arg_idx]));
+            }
+            params.n_split_tensors = (int) n_split_tensors;
         } else if (arg == "--split-max-size") {
             if (++arg_idx >= argc) {
                 invalid_param = true;
