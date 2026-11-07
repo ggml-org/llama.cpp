@@ -2150,8 +2150,23 @@ void ggml_hexagon_session::allocate(const ggml_hexagon_device_config & config) n
     std::string session_uri;
     int err = AEE_EFAILED;
 
-    // 1. Try configuring DSP search path via FASTRPC_MANAGE_DSP_LIBRARY_PATH
+    // 1. Try opening session with absolute path in URI
     if (!lib_dir.empty()) {
+        std::string abs_prefix = "file:///" + lib_dir;
+        if (abs_prefix.back() != '/' && abs_prefix.back() != '\\') {
+            abs_prefix += "/";
+        }
+
+        HEX_VERBOSE("ggml-hex: %s trying absolute path URI: %s\n", this->c_name(), abs_prefix.c_str());
+        err = open_session(abs_prefix, session_uri);
+        if (err != AEE_SUCCESS) {
+            HEX_VERBOSE("ggml-hex: %s failed to open session with absolute path : uri %s error 0x%x\n",
+                        this->c_name(), session_uri.c_str(), err);
+        }
+    }
+
+    // 2. Fallback to DSP search path via FASTRPC_MANAGE_DSP_LIBRARY_PATH
+    if (err != AEE_SUCCESS && !lib_dir.empty()) {
         int sp_err = htpdrv_set_dsp_search_path(this->domain_id, lib_dir, this->c_name());
         if (sp_err == AEE_SUCCESS) {
             err = open_session("file:///", session_uri);
@@ -2159,21 +2174,6 @@ void ggml_hexagon_session::allocate(const ggml_hexagon_device_config & config) n
                 HEX_VERBOSE("ggml-hex: %s failed to open session with search path : uri %s error 0x%x\n",
                             this->c_name(), session_uri.c_str(), err);
             }
-        }
-    }
-
-    // 2. Fallback to absolute path in URI
-    if (err != AEE_SUCCESS && !lib_dir.empty()) {
-        std::string abs_prefix = "file:///" + lib_dir;
-        if (abs_prefix.back() != '/' && abs_prefix.back() != '\\') {
-            abs_prefix += "/";
-        }
-
-        HEX_VERBOSE("ggml-hex: %s trying absolute path fallback: %s\n", this->c_name(), abs_prefix.c_str());
-        err = open_session(abs_prefix, session_uri);
-        if (err != AEE_SUCCESS) {
-            HEX_VERBOSE("ggml-hex: %s failed to open session with absolute path : uri %s error 0x%x\n",
-                        this->c_name(), session_uri.c_str(), err);
         }
     }
 
