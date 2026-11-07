@@ -22,14 +22,6 @@
 #include <cstring>
 #include <vector>
 
-static unsigned long long checksum(const unsigned char * p, int n) {
-    unsigned long long s = 0;
-    for (int i = 0; i < n; ++i) {
-        s += (unsigned long long) p[i] * (unsigned long long) (i + 1);
-    }
-    return s;
-}
-
 // setenv is absent on MSVC; _putenv_s is the Windows equivalent.
 static void set_env(const char * name, const char * value) {
 #ifdef _WIN32
@@ -48,7 +40,7 @@ int main() {
         return 0; // no CUDA device -> not a failure
     }
 
-    const int N = 1 << 20; // 1 MiB
+    const int N = 1 << 22; // 4 MiB: long enough for the compute stream to overtake the upload
     ggml_backend_buffer_type_t buft = ggml_backend_cuda_buffer_type(0);
     ggml_backend_buffer_t buf = ggml_backend_buft_alloc_buffer(buft, N);
     if (buf == nullptr) {
@@ -57,7 +49,7 @@ int main() {
     }
 
     struct ggml_init_params params = {
-        /*.mem_size   =*/ ggml_tensor_overhead() * 4,
+        /*.mem_size   =*/ ggml_tensor_overhead() * 8,
         /*.mem_buffer =*/ nullptr,
         /*.no_alloc   =*/ true,
     };
@@ -65,23 +57,24 @@ int main() {
     struct ggml_tensor * t = ggml_new_tensor_1d(ctx, GGML_TYPE_I8, N);
     ggml_backend_tensor_alloc(buf, t, ggml_backend_buffer_get_base(buf));
 
-    std::vector<unsigned char> hin(N), hout(N);
-    const int ITER = 255; // > n_up_events (64): forces ring-slot reuse
+    std::vector<std::vector<unsigned char>> hin(200, std::vector<unsigned char>(N));
+    std::vector<std::vector<unsigned char>> hout(200, std::vector<unsigned char>(N));
+    const int ITER = 200; // > n_up_events (64): forces ring-slot reuse
     int bad = 0;
+
+    // No synchronize inside the loop: the compute stream must overtake the upload
+    // if the per-copy event wait is missing.
+    for (int i = 0; i < ITER; ++i) {
+        memset(hin[i].data(), (unsigned char) (i & 0xFF), N);
+        ggml_backend_tensor_set_async(backend, t, hin[i].data(), 0, N);  // up_stream
+        ggml_backend_tensor_get_async(backend, t, hout[i].data(), 0, N); // compute stream
+    }
+    ggml_backend_synchronize(backend);
 
     for (int i = 0; i < ITER; ++i) {
         const unsigned char v = (unsigned char) (i & 0xFF);
-        memset(hin.data(), v, N);
-        const unsigned long long want = checksum(hin.data(), N);
-
-        ggml_backend_tensor_set_async(backend, t, hin.data(), 0, N);  // up_stream
-        ggml_backend_tensor_get_async(backend, t, hout.data(), 0, N); // compute stream
-        ggml_backend_synchronize(backend);
-
-        const unsigned long long got = checksum(hout.data(), N);
-        if (got != want || memcmp(hin.data(), hout.data(), N) != 0) {
-            fprintf(stderr, "MISMATCH iter %d: want %llu got %llu (event reused before completion)\n",
-                    i, want, got);
+        if (memcmp(hin[i].data(), hout[i].data(), N) != 0) {
+            fprintf(stderr, "MISMATCH iter %d: expected 0x%02x (event reused before completion)\n", i, v);
             ++bad;
         }
     }
@@ -93,12 +86,15 @@ int main() {
     for (int k = 0; k < 100; ++k) {
         ggml_backend_t b = ggml_backend_cuda_init(0);
         ggml_backend_buffer_t bb = ggml_backend_buft_alloc_buffer(ggml_backend_cuda_buffer_type(0), N);
-        struct ggml_tensor * tt = ggml_new_tensor_1d(ctx, GGML_TYPE_I8, N);
+        struct ggml_init_params lp = { ggml_tensor_overhead() * 8, nullptr, true };
+        struct ggml_context * lctx = ggml_init(lp);
+        struct ggml_tensor * tt = ggml_new_tensor_1d(lctx, GGML_TYPE_I8, N);
         ggml_backend_tensor_alloc(bb, tt, ggml_backend_buffer_get_base(bb));
-        ggml_backend_tensor_set_async(b, tt, hin.data(), 0, N); // creates up_stream + events
+        ggml_backend_tensor_set_async(b, tt, hin[0].data(), 0, N); // creates up_stream + events
         ggml_backend_synchronize(b);
         ggml_backend_buffer_free(bb);
         ggml_backend_free(b);
+        ggml_free(lctx);
     }
     size_t free1 = 0, total1 = 0;
     ggml_backend_cuda_get_device_memory(0, &free1, &total1);
