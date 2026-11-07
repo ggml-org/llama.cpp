@@ -518,6 +518,10 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
 }
 
 json server_task_result_cmpl_final::to_json_oaicompat_resp() {
+    const bool is_incomplete = stop == STOP_TYPE_LIMIT;
+    const char * status = is_incomplete ? "incomplete" : "completed";
+    const json incomplete_details = is_incomplete ? json { {"reason", "max_output_tokens"} } : json(nullptr);
+
     common_chat_msg msg;
     if (!oaicompat_msg.empty()) {
         msg = oaicompat_msg;
@@ -538,7 +542,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
                 {"type", "reasoning_text"},
             }})},
             {"encrypted_content", ""},
-            {"status",            "completed"},
+            {"status",            status},
         });
     }
 
@@ -552,7 +556,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
             }})},
             {"id",     "msg_" + random_string()},
             {"role",   msg.role},
-            {"status", "completed"},
+            {"status", status},
             {"type",   "message"},
         });
     }
@@ -561,7 +565,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
         output.push_back(json {
             {"id",        "fc_" + tool_call.id},
             {"type",      "function_call"},
-            {"status",    "completed"},
+            {"status",    status},
             {"arguments", tool_call.arguments},
             {"call_id",   "call_" + tool_call.id},
             {"name",      tool_call.name},
@@ -576,7 +580,8 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
         {"model",        oaicompat_model},
         {"object",       "response"},
         {"output",       output},
-        {"status",       "completed"},
+        {"status",             status},
+        {"incomplete_details", incomplete_details},
         {"usage",        json {
             {"input_tokens",  n_prompt_tokens},
             {"output_tokens", n_decoded},
@@ -589,6 +594,11 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
 }
 
 json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
+    const bool is_incomplete = stop == STOP_TYPE_LIMIT;
+    const char * status = is_incomplete ? "incomplete" : "completed";
+    const char * terminal_event = is_incomplete ? "response.incomplete" : "response.completed";
+    const json incomplete_details = is_incomplete ? json { {"reason", "max_output_tokens"} } : json(nullptr);
+
     std::vector<json> server_sent_events;
     std::vector<json> output;
     size_t output_index = 0;
@@ -604,6 +614,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
                 {"type", "reasoning_text"},
             }})},
             {"encrypted_content", ""},
+            {"status",            status},
         };
 
         server_sent_events.push_back(json {
@@ -649,7 +660,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
         });
         const json output_item = {
             {"type",    "message"},
-            {"status",  "completed"},
+            {"status",  status},
             {"id",      oai_resp_message_id},
             {"content", json::array({content_part})},
             {"role",    "assistant"}
@@ -671,11 +682,22 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
         const json output_item = {
             {"id",        "fc_" + tool_call.id},
             {"type",      "function_call"},
-            {"status",    "completed"},
+            {"status",    status},
             {"arguments", tool_call.arguments},
             {"call_id",   "call_" + tool_call.id},
             {"name",      tool_call.name}
         };
+        if (!is_incomplete) {
+            server_sent_events.push_back(json {
+                {"event", "response.function_call_arguments.done"},
+                {"data", json {
+                    {"type", "response.function_call_arguments.done"},
+                    {"item_id", "fc_" + tool_call.id},
+                    {"output_index", item_output_index},
+                    {"arguments", tool_call.arguments}
+                }}
+            });
+        }
         server_sent_events.push_back(json {
             {"event", "response.output_item.done"},
             {"data", json {
@@ -689,14 +711,15 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
 
     std::time_t t = std::time(0);
     server_sent_events.push_back(json {
-        {"event", "response.completed"},
+        {"event", terminal_event},
         {"data", json {
-            {"type", "response.completed"},
+            {"type", terminal_event},
             {"response", json {
                 {"id",         oai_resp_id},
                 {"object",     "response"},
                 {"created_at", t},
-                {"status",     "completed"},
+                {"status",             status},
+                {"incomplete_details", incomplete_details},
                 {"model",      oaicompat_model},
                 {"output",     output},
                 {"usage",      json {
