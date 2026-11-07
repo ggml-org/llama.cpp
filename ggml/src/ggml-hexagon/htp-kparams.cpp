@@ -29,6 +29,7 @@ htp_op_code htp_op_remap(const struct ggml_tensor * t) {
         case GGML_OP_SET_ROWS:        return HTP_OP_SET_ROWS;
         case GGML_OP_SUM:             return HTP_OP_SUM;
         case GGML_OP_SUM_ROWS:        return HTP_OP_SUM_ROWS;
+        case GGML_OP_MEAN:            return HTP_OP_MEAN;
         case GGML_OP_POOL_2D:         return HTP_OP_POOL_2D;
         case GGML_OP_POOL_1D:         return HTP_OP_POOL_1D;
         case GGML_OP_ARGSORT:         return HTP_OP_ARGSORT;
@@ -44,6 +45,8 @@ htp_op_code htp_op_remap(const struct ggml_tensor * t) {
         case GGML_OP_SQR:             return HTP_OP_SQR;
         case GGML_OP_SQRT:            return HTP_OP_SQRT;
         case GGML_OP_LOG:             return HTP_OP_UNARY_LOG;
+        case GGML_OP_SIN:             return HTP_OP_UNARY_SIN;
+        case GGML_OP_COS:             return HTP_OP_UNARY_COS;
         case GGML_OP_SOFT_MAX:        return HTP_OP_SOFTMAX;
         case GGML_OP_SSM_CONV:        return HTP_OP_SSM_CONV;
         case GGML_OP_GATED_DELTA_NET: return HTP_OP_GATED_DELTA_NET;
@@ -1560,6 +1563,8 @@ static bool htp_kparams_solve_unary_impl(
                 case HTP_OP_UNARY_STEP:
                 case HTP_OP_UNARY_CEIL:
                 case HTP_OP_UNARY_SGN:
+                case HTP_OP_UNARY_SIN:
+                case HTP_OP_UNARY_COS:
                     break;
                 default:
                     return false;
@@ -2006,6 +2011,8 @@ static bool htp_kparams_solve_sum_rows(
     const uint32_t ne00             = src0->ne[0];
     const uint32_t src0_nrows       = src0->ne[1] * src0->ne[2] * src0->ne[3];
     const uint32_t max_threads_sess = htp_session_n_threads(sess);
+
+    kparams->scale = (op->op == GGML_OP_MEAN) ? 1.0f / (float) ne00 : 1.0f;
 
     if (op->op == GGML_OP_SUM) {
         const uint32_t total_elems = (uint32_t) ggml_nelements(src0);
@@ -5479,6 +5486,7 @@ bool htp_kparams_solve(
             return htp_kparams_invoke<htp_kparams_solve_conv3d>(sess, op, kparams);
 
         case HTP_OP_SUM_ROWS:
+        case HTP_OP_MEAN:
         case HTP_OP_SUM:
         case HTP_OP_ARGMAX:
             return htp_kparams_invoke<htp_kparams_solve_sum_rows>(sess, op, kparams);
