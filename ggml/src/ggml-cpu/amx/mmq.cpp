@@ -208,17 +208,15 @@ inline void ggml_tile_config_init(void) {
         return;
     }
 
-    alignas(64) tile_config_t tc = {};
-    tc.palette_id = 1;
-    tc.start_row = 0;
-    tc.rows[0] = 8;   tc.colsb[0] = 64;
-    tc.rows[1] = 8;   tc.colsb[1] = 64;
-    tc.rows[2] = 16;  tc.colsb[2] = 32;
-    tc.rows[3] = 16;  tc.colsb[3] = 32;
-    tc.rows[4] = 16;  tc.colsb[4] = 64;
-    tc.rows[5] = 16;  tc.colsb[5] = 64;
-    tc.rows[6] = 16;  tc.colsb[6] = 64;
-    tc.rows[7] = 16;  tc.colsb[7] = 64;
+    // GCC 11/12 give _tile_loadconfig an 8-byte memory operand,
+    // use constant-initialized to avoid dead store elimination.
+    alignas(64) static const tile_config_t tc = {
+        /*.palette_id =*/ 1,
+        /*.start_row  =*/ 0,
+        /*.reserved_0 =*/ {},
+        /*.colsb      =*/ { 64, 64, 32, 32, 64, 64, 64, 64 },
+        /*.rows       =*/ {  8,  8, 16, 16, 16, 16, 16, 16 },
+    };
 
     _tile_loadconfig(&tc);
     done = true;
