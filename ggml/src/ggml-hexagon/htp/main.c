@@ -1030,6 +1030,7 @@ static int execute_op(struct htp_ops_context * octx) {
             return op_im2col_3d(octx);
 
         case HTP_OP_CONV_2D:
+        case HTP_OP_CONV_3D:
             return op_conv_2d(octx);
 
         case HTP_OP_CONV_2D_DW:
