@@ -93,6 +93,9 @@ public:
 private:
     const bool unified;
 
+    // 0 when swa_full is enabled
+    const uint32_t n_swa;
+
     std::unique_ptr<llama_kv_cache> kv_base;
     std::unique_ptr<llama_kv_cache> kv_swa;
 };
