@@ -10,6 +10,7 @@
 #include "mtmd.h"
 #include "mtmd-helper.h"
 #include "mtmd-helper-common.h"
+#include "mtmd-helper-video.h"
 #include "llama.h"
 #include "../src/llama-ext.h"
 
@@ -18,6 +19,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cinttypes>
+#include <cerrno>
 #include <vector>
 
 //#define MTMD_AUDIO_DEBUG
@@ -602,6 +604,8 @@ mtmd_bitmap * mtmd_helper_video_seq::read_next_frame() {
 
     if (!frame_indices.empty()) {
         if (next_index >= frame_indices.size()) {
+            src_alive = false;
+            src_error = !finish_raw_frames();
             return nullptr;
         }
         // skip to the wanted source frame; a repeated index reuses the frame in frame_buf
@@ -609,6 +613,8 @@ mtmd_bitmap * mtmd_helper_video_seq::read_next_frame() {
         while (src_frame <= want) {
             if (!read_raw_frame()) {
                 src_alive = false;
+                // A probed source ended before an explicitly selected frame.
+                src_error = true;
                 return nullptr;
             }
             src_frame++;
@@ -658,7 +664,7 @@ int32_t mtmd_helper_video_seq::read_next(mtmd_bitmap ** out_bitmap, char ** out_
             __func__, (int)src_alive, (int)start_emitted, current_frame);
 
     if (!src_alive) {
-        return (current_frame == 0) ? -2 : -1;
+        return src_error || current_frame == 0 ? -2 : -1;
     }
 
     if (!start_emitted) {
@@ -672,7 +678,7 @@ int32_t mtmd_helper_video_seq::read_next(mtmd_bitmap ** out_bitmap, char ** out_
 
     mtmd_bitmap * frame = read_next_frame();
     if (!frame) {
-        return -1;
+        return src_error || current_frame == 0 ? -2 : -1;
     }
 
     const int32_t ts_per_n_frames = this->ts_per_n_frames();
@@ -724,6 +730,103 @@ int32_t mtmd_helper_video_seq::read_next(mtmd_bitmap ** out_bitmap, char ** out_
 
 #ifdef MTMD_VIDEO
 
+int mtmd_helper_subprocess::start(const char * const command[], int options) {
+    const int result = subprocess_create(command, options, &proc);
+    created = alive = result == 0;
+    if (created) {
+        // stderr has a separate pipe; draining it lets the decoder exit even after many errors.
+        stderr_reader = std::thread([this]() {
+            char buffer[4096];
+            FILE * fp = subprocess_stderr(&proc);
+            while (fread(buffer, 1, sizeof(buffer), fp) > 0) {}
+        });
+    }
+    return result;
+}
+
+int mtmd_helper_subprocess::finish() {
+    if (!created) {
+        return 0;
+    }
+#ifdef _WIN32
+    // Close the retained child-stdin read handle before joining, so an early child exit breaks a blocked Windows write.
+    if (proc.hStdInput) {
+        CloseHandle(proc.hStdInput);
+        proc.hStdInput = nullptr;
+    }
+#endif
+    // The feeder owns subprocess_stdin until it finishes; destroy closes it.
+    if (feeder.joinable()) {
+        feeder.join();
+    }
+    int exit_code = -1;
+    int result;
+    do {
+        result = subprocess_join(&proc, &exit_code);
+#ifndef _WIN32
+    } while (result != 0 && errno == EINTR);
+#else
+    } while (false);
+#endif
+    if (stderr_reader.joinable()) {
+        stderr_reader.join();
+    }
+    // join clears the POSIX child id. Release ownership before a later stop().
+    // Signalling child id zero would signal the process group.
+    created = false;
+    alive = false;
+    subprocess_destroy(&proc);
+    return result == 0 ? exit_code : -1;
+}
+
+void mtmd_helper_subprocess::stop() {
+    if (created) {
+        subprocess_terminate(&proc);
+        finish();
+    }
+}
+
+mtmd_helper_subprocess::frame_result mtmd_helper_subprocess::read_frame(std::vector<uint8_t> & frame) {
+    FILE * fp = stdout_pipe();
+    size_t total_read = 0;
+    while (total_read < frame.size()) {
+        const size_t n = fread(frame.data() + total_read, 1, frame.size() - total_read, fp);
+        if (n == 0) {
+            if (ferror(fp)) {
+                stop();
+                return frame_result::error;
+            }
+            const int exit_code = finish();
+            return total_read == 0 && exit_code == 0 ? frame_result::eof : frame_result::error;
+        }
+        total_read += n;
+    }
+    return frame_result::frame;
+}
+
+void mtmd_helper_subprocess::start_feeder(const std::vector<uint8_t> & buf) {
+    feeder = std::thread([this, &buf]() {
+#ifndef _WIN32
+        // ffmpeg can exit before it reads all the input, for example when ffprobe already got the metadata.
+        // the write below must then fail with EPIPE, instead of killing the process with SIGPIPE
+        sigset_t sigpipe_set;
+        sigemptyset(&sigpipe_set);
+        sigaddset(&sigpipe_set, SIGPIPE);
+        pthread_sigmask(SIG_BLOCK, &sigpipe_set, nullptr); // linux sends the signal to the writing thread
+#endif
+        FILE * f = subprocess_stdin(&proc);
+        if (!f) {
+            return;
+        }
+#ifdef F_SETNOSIGPIPE
+        fcntl(fileno(f), F_SETNOSIGPIPE, 1); // macos/bsd send it to the process, so turn it off per fd
+#endif
+        fwrite(buf.data(), 1, buf.size(), f);
+        fclose(f);
+        proc.stdin_file = nullptr; // prevent double-close in subprocess_destroy
+    });
+}
+
 struct mtmd_helper_video : mtmd_helper_video_seq {
     const mtmd_context * mctx;
     std::string path;
@@ -731,72 +834,7 @@ struct mtmd_helper_video : mtmd_helper_video_seq {
     std::string ffmpeg_bin;
     std::string ffprobe_bin;
 
-    // RAII wrapper for managing subprocess
-    struct subprocess_handle {
-        struct subprocess_s proc = {};
-        bool created = false; // process exists and must be cleaned up
-        bool alive   = false; // process can still give us data
-        std::thread feeder;
-
-        subprocess_handle() = default;
-        subprocess_handle(const subprocess_handle &) = delete;
-        subprocess_handle & operator=(const subprocess_handle &) = delete;
-        ~subprocess_handle() { stop(); }
-
-        void stop() {
-            // note: alive becomes false on stdout EOF, but the process still needs cleanup
-            if (!created) {
-                return;
-            }
-            subprocess_terminate(&proc);
-#ifdef _WIN32
-            // no SIGPIPE on windows: a blocked feeder only gets a broken pipe once we close our read end of the child stdin
-            if (proc.hStdInput) {
-                CloseHandle(proc.hStdInput);
-                proc.hStdInput = nullptr;
-            }
-#endif
-            // join before destroy: feeder holds a FILE* from subprocess_stdin;
-            // subprocess_destroy closes it, so the thread must finish first
-            if (feeder.joinable()) {
-                feeder.join();
-            }
-            subprocess_join(&proc, nullptr); // reap the child, or else it stays a zombie
-            subprocess_destroy(&proc);
-            created = false;
-            alive   = false;
-        }
-
-        FILE * stdout_pipe() {
-            return subprocess_stdout(&proc);
-        }
-
-        // buf is tied to lifetime of mtmd_helper_video, so it's guaranteed to outlive the feeder thread
-        void start_feeder(const std::vector<uint8_t> & buf) {
-            feeder = std::thread([this, &buf]() {
-#ifndef _WIN32
-                // ffmpeg can exit before it reads all the input, for example when ffprobe already got the metadata.
-                // the write below must then fail with EPIPE, instead of killing the process with SIGPIPE
-                sigset_t sigpipe_set;
-                sigemptyset(&sigpipe_set);
-                sigaddset(&sigpipe_set, SIGPIPE);
-                pthread_sigmask(SIG_BLOCK, &sigpipe_set, nullptr); // linux sends the signal to the writing thread
-#endif
-                FILE * f = subprocess_stdin(&proc);
-                if (!f) {
-                    return;
-                }
-#ifdef F_SETNOSIGPIPE
-                fcntl(fileno(f), F_SETNOSIGPIPE, 1); // macos/bsd send it to the process, so turn it off per fd
-#endif
-                fwrite(buf.data(), 1, buf.size(), f);
-                fclose(f);
-                proc.stdin_file = nullptr; // prevent double-close in subprocess_destroy
-            });
-        }
-    };
-
-    subprocess_handle sp;
+    mtmd_helper_subprocess sp;
 
     // apply mtmd_get_video_config(); false for still images decoded via ffmpeg
     bool   use_video_config = false;
@@ -827,15 +865,12 @@ struct mtmd_helper_video : mtmd_helper_video_seq {
         for (size_t i = 0; cmd[i]; i++) { LOG_DBG(" %s", cmd[i]); }
         LOG_DBG("\n");
 
-        subprocess_handle probe_sp;
-        if (subprocess_create(cmd.data(),
-                subprocess_option_search_user_path | subprocess_option_inherit_environment,
-                &probe_sp.proc) != 0) {
+        mtmd_helper_subprocess probe_sp;
+        if (probe_sp.start(cmd.data(),
+                subprocess_option_search_user_path | subprocess_option_inherit_environment) != 0) {
             LOG_ERR("%s: failed to launch ffprobe\n", __func__);
             return false;
         }
-        probe_sp.created = true;
-        probe_sp.alive   = true;
 
         if (is_buf_input()) {
             probe_sp.start_feeder(input_buf);
@@ -898,14 +933,11 @@ struct mtmd_helper_video : mtmd_helper_video_seq {
         }
         cmd.insert(cmd.end(), {"-i", is_buf_input() ? "cache:pipe:0" : path.c_str(), "-map", "0:a:0", "-vn", "-ac", "1",
                                "-ar", rate_str.c_str(), "-f", "f32le", "pipe:1", "-loglevel", "error", nullptr});
-        subprocess_handle audio_sp;
-        if (subprocess_create(cmd.data(), subprocess_option_search_user_path | subprocess_option_inherit_environment,
-                              &audio_sp.proc) != 0) {
+        mtmd_helper_subprocess audio_sp;
+        if (audio_sp.start(cmd.data(), subprocess_option_search_user_path | subprocess_option_inherit_environment) != 0) {
             LOG_WRN("%s: failed to launch ffmpeg for the soundtrack\n", __func__);
             return;
         }
-        audio_sp.created = true;
-        audio_sp.alive   = true;
         if (is_buf_input()) {
             audio_sp.start_feeder(input_buf);
         }
@@ -1005,13 +1037,7 @@ struct mtmd_helper_video : mtmd_helper_video_seq {
         }
         LOG_DBG("\n");
 
-        int ret = subprocess_create(
-            cmd.data(),
-            subprocess_option_search_user_path | subprocess_option_inherit_environment,
-            &sp.proc);
-
-        sp.created = (ret == 0);
-        sp.alive   = (ret == 0);
+        int ret = sp.start(cmd.data(), subprocess_option_search_user_path | subprocess_option_inherit_environment);
         LOG_DBG("%s: subprocess_create ret=%d proc_alive=%d\n", __func__, ret, (int)sp.alive);
 
         if (sp.alive && is_buf_input()) {
@@ -1027,25 +1053,15 @@ struct mtmd_helper_video : mtmd_helper_video_seq {
         sp.stop();
     }
 
-    // read one raw frame from ffmpeg into frame_buf
     bool read_raw_frame() override {
-        FILE * fp = sp.stdout_pipe();
-        const size_t frame_size = (size_t)info.width * info.height * 3;
-        LOG_DBG("%s: reading frame %d, expecting %zu bytes (%ux%u)\n",
-                __func__, current_frame, frame_size, info.width, info.height);
+        const auto result = sp.read_frame(frame_buf);
+        src_error = result == mtmd_helper_subprocess::frame_result::error;
+        return result == mtmd_helper_subprocess::frame_result::frame;
+    }
 
-        size_t total_read = 0;
-        while (total_read < frame_size) {
-            size_t n = fread(frame_buf.data() + total_read, 1, frame_size - total_read, fp);
-            if (n == 0) {
-                // clean EOF only if no bytes read yet; partial frame is an error
-                LOG_DBG("%s: fread returned 0 after %zu/%zu bytes (ferror=%d)\n",
-                        __func__, total_read, frame_size, ferror(fp));
-                return false;
-            }
-            total_read += n;
-        }
-        return true;
+    bool finish_raw_frames() override {
+        // Indexed sampling consumes the -frames:v output cap without another read, but still requires a clean exit.
+        return sp.finish() == 0;
     }
 
     static float parse_rational(const char * s) {
