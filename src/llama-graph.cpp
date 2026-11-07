@@ -124,8 +124,6 @@ static llm_attn_mask build_attn_inp_attn_mask(
         ggml_set_name(attn_mask.raw, "attn_inp_kq_mask");
     }
 
-    attn_mask.cnv = attn_mask.raw;
-
     return attn_mask;
 }
 
@@ -1547,7 +1545,7 @@ void llm_graph_result::set_params(const llm_graph_params & params) {
 //
 
 llm_graph_context::llm_graph_context(const llm_graph_params & params) :
-    arch             (params.arch),
+    model            (*params.model),
     hparams          (params.hparams),
     cparams          (params.cparams),
     ubatch           (params.ubatch),
@@ -1639,6 +1637,37 @@ ggml_tensor * llm_graph_context::build_hadamard_input(
     x = llama_mul_mat_hadamard(ctx0, x, t.rot);
     res->set_hdmd_input(cur, t.rot, x);
     return x;
+}
+
+static ggml_tensor * build_rope_impl(ggml_context * ctx, ggml_tensor * cur, ggml_tensor * pos, const llama_hparams & hparams, const llama_rope_params & rp) {
+    if (rp.n_rot == 0) {
+        return cur;
+    }
+
+    if (rp.type & GGML_ROPE_TYPE_MROPE) {
+        int sections[GGML_MROPE_SECTIONS];
+        std::copy(hparams.rope_sections.begin(), hparams.rope_sections.end(), sections);
+
+        return ggml_rope_multi(ctx, cur, pos, rp.factors,
+                rp.n_rot, sections, rp.type, rp.n_ctx_orig, rp.freq_base, rp.freq_scale,
+                rp.ext_factor, rp.attn_factor, rp.beta_fast, rp.beta_slow);
+    }
+
+    return ggml_rope_ext(ctx, cur, pos, rp.factors,
+            rp.n_rot, rp.type, rp.n_ctx_orig, rp.freq_base, rp.freq_scale,
+            rp.ext_factor, rp.attn_factor, rp.beta_fast, rp.beta_slow);
+}
+
+ggml_tensor * llm_graph_context::build_rope(ggml_tensor * cur, ggml_tensor * pos, int il) const {
+    return build_rope_impl(ctx0, cur, pos, hparams, model.get_rope_params(cparams, il));
+}
+
+ggml_tensor * llm_graph_context::build_rope_indexer(ggml_tensor * cur, ggml_tensor * pos, int il) const {
+    const llama_rope_params rp = model.get_rope_params_indexer(cparams, il);
+
+    ggml_tensor * res = build_rope_impl(ctx0, cur, pos, hparams, rp);
+
+    return rp.n_rot > 0 && rp.n_offs > 0 ? ggml_rope_set_offset(res, rp.n_offs) : res;
 }
 
 ggml_tensor * llm_graph_context::build_lora_mm(
@@ -1951,6 +1980,8 @@ ggml_tensor * llm_graph_context::build_ffn(
      llm_ffn_op_type   type_op,
    llm_ffn_gate_type   type_gate,
                  int   il) const {
+    const llm_arch arch = model.arch;
+
     // NVFP4 support is currently restricted to
     // 1) LORA absence (*_s would be applied after LORA residual, which is incorrect)
     // 2) bias absense (*_s would be applied after bias addition, which is incorrect)
@@ -2234,6 +2265,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
          ggml_tensor * selected_experts_in,
          ggml_tensor * post_exp_norm,
                float   post_exp_norm_eps) const {
+    const llm_arch arch = model.arch;
     const int64_t n_embd   = cur->ne[0];
     const int64_t n_tokens = cur->ne[1];
     const bool weight_before_ffn = arch == LLM_ARCH_LLAMA4; // for llama4, we apply the sigmoid-ed weights before the FFN
@@ -2659,7 +2691,7 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd, float to
 
     // mixed path (ubatch.is_mixed()): set_rows the token rows into a copy of the embd rows, with its own inputs as select branches must not share tensors
     // TODO: use inp->tokens and inp->embd once ggml_build_forward_select allows it
-    const bool has_mixed = llm_arch_supports_mixed_batch(arch) && cparams.ctx_type == LLAMA_CONTEXT_TYPE_DEFAULT;
+    const bool has_mixed = llm_arch_supports_mixed_batch(model.arch) && cparams.ctx_type == LLAMA_CONTEXT_TYPE_DEFAULT;
 
     const int64_t n_tok_rows = has_mixed ? llm_graph_n_tok_rows(ubatch) : 0;
 
@@ -2885,7 +2917,7 @@ ggml_tensor * llm_graph_context::build_inp_mean() const {
 }
 
 ggml_tensor * llm_graph_context::build_inp_cls() const {
-    auto inp = std::make_unique<llm_graph_input_cls>(cparams, arch);
+    auto inp = std::make_unique<llm_graph_input_cls>(cparams, model.arch);
 
     auto & cur = inp->cls;
 
@@ -3056,7 +3088,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         //       while for some models F16 is enough, for others it is not, so we default to F32 here
         ggml_prec_set_acc(kq, GGML_PREC_F32);
 
-        if (arch == LLM_ARCH_GROK) {
+        if (model.arch == LLM_ARCH_GROK) {
             // need to do the following:
             // multiply by attn_output_multiplier
             // and then :
@@ -3131,16 +3163,11 @@ llm_graph_input_attn_no_cache * llm_graph_context::build_attn_inp_no_cache() con
     ggml_set_input(inp->self_attn_mask.raw);
     cb(inp->self_attn_mask.raw, "self_kq_mask", -1);
 
-    inp->self_attn_mask.cnv = inp->self_attn_mask.raw;
-
     if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
         inp->self_attn_mask_swa.raw = ggml_new_tensor_4d(ctx0, type_mask, n_kv, n_tokens, 1, 1);
         ggml_set_input(inp->self_attn_mask_swa.raw);
-
-        inp->self_attn_mask_swa.cnv = inp->self_attn_mask_swa.raw;
     } else {
         inp->self_attn_mask_swa.raw = nullptr;
-        inp->self_attn_mask_swa.cnv = nullptr;
     }
 
     return (llm_graph_input_attn_no_cache *) res->add_input(std::move(inp));
@@ -3169,7 +3196,7 @@ ggml_tensor * llm_graph_context::build_attn(
 
     const bool is_swa = hparams.is_swa(il);
 
-    const auto & kq_mask = is_swa ? inp->self_attn_mask_swa.cnv : inp->self_attn_mask.cnv;
+    const auto & kq_mask = is_swa ? inp->self_attn_mask_swa.raw : inp->self_attn_mask.raw;
     const auto & kv_rows = is_swa ? inp->self_attn_mask_swa.rows : inp->self_attn_mask.rows;
 
     // [TAG_NO_CACHE_PAD]
@@ -3254,6 +3281,8 @@ ggml_tensor * llm_graph_context::build_attn(
         ggml_tensor * v_mla, // TODO: remove
             float     kq_scale,
             int       il) const {
+    const llm_arch arch = model.arch;
+
     GGML_ASSERT(v_mla == nullptr);
 
     if (inp->self_k_rot[il]) {
@@ -3296,7 +3325,7 @@ ggml_tensor * llm_graph_context::build_attn(
         v = mctx_cur->get_v(ctx0, il);
     }
 
-    const auto & kq_mask = inp->self_attn_mask.cnv;
+    const auto & kq_mask = inp->self_attn_mask.raw;
     const auto & kv_rows = inp->self_attn_mask.rows;
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, sinks, v_mla, 0, kq_scale, il);
@@ -3341,7 +3370,6 @@ static std::unique_ptr<llm_graph_input_attn_k> build_attn_inp_k_impl(
         inp->self_k_idxs = mctx_cur->build_input_k_idxs(ctx0, ubatch);
 
         inp->self_attn_mask.raw = build_attn_inp_kq_mask(ctx0, mctx_cur, ubatch, cparams);
-        inp->self_attn_mask.cnv = inp->self_attn_mask.raw;
     }
 
     return inp;
@@ -3368,6 +3396,8 @@ ggml_tensor * llm_graph_context::build_attn(
         ggml_tensor * v_mla,
             float     kq_scale,
             int       il) const {
+    const llm_arch arch = model.arch;
+
     // these nodes are added to the graph together so that they are not reordered
     // by doing so, the number of splits in the graph is reduced
     // expand k later to enable rope fusion which directly writes into k-v cache
@@ -3384,7 +3414,7 @@ ggml_tensor * llm_graph_context::build_attn(
         ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
     }
 
-    const auto & kq_mask = inp->self_attn_mask.cnv;
+    const auto & kq_mask = inp->self_attn_mask.raw;
     const auto & kv_rows = inp->self_attn_mask.rows;
 
     ggml_tensor * q = q_cur;
@@ -3426,6 +3456,41 @@ ggml_tensor * llm_graph_context::build_fused_top_k_mask(
     return cur;
 }
 
+ggml_tensor * llm_graph_context::build_top_k_mask(
+        ggml_tensor * kq_mask,
+        ggml_tensor * top_k,
+                int   il) const {
+    if (cparams.fused_top_k_mask) {
+        return build_fused_top_k_mask(kq_mask, top_k, il);
+    }
+
+    // prepare new kq mask - starts filled with -INFINITY
+    ggml_tensor * kq_mask_all = ggml_fill(ctx0, kq_mask, -INFINITY);
+
+    // reshape KQ mask into tensor with rows of size 1:
+    // [n_kv, n_batch, 1, n_stream] -> [1, n_kv, n_batch, n_stream]
+    kq_mask_all = ggml_view_4d(ctx0, kq_mask_all, 1, kq_mask_all->ne[0], kq_mask_all->ne[1], kq_mask_all->ne[3], kq_mask_all->nb[0], kq_mask_all->nb[1], kq_mask_all->nb[2], 0);
+
+    // reshape top_k indices: [n_top_k, n_batch, 1, n_stream] -> [n_top_k, n_batch, n_stream, 1]
+    ggml_tensor * top_k_3d = ggml_view_4d(ctx0, top_k, top_k->ne[0], top_k->ne[1], top_k->ne[3], 1, top_k->nb[1], top_k->nb[2], top_k->ne[3]*top_k->nb[3], 0);
+
+    // prepare zero-filled tensor with rows of size 1: [1, n_top_k, n_batch, n_stream]
+    // this will be our source of zero values for unmasking top k mask elements
+    ggml_tensor * zeros = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, 1, top_k_3d->ne[0], top_k_3d->ne[1], top_k_3d->ne[2]);
+    zeros = ggml_fill(ctx0, zeros, 0.0f);
+
+    // modify KQ mask by unmasking elements that are in top_k indices
+    // ggml_set_rows([1, n_kv, n_batch, n_stream], [1, n_top_k, n_batch, n_stream], [n_top_k, n_batch, n_stream, 1])
+    ggml_tensor * kq_mask_top_k = ggml_set_rows(ctx0, kq_mask_all, zeros, top_k_3d);
+
+    // reshape to restore the original shape of KQ mask:
+    // [1, n_kv, n_batch, n_stream] -> [n_kv, n_batch, 1, n_stream]
+    kq_mask_top_k = ggml_view_4d(ctx0, kq_mask_top_k, kq_mask_top_k->ne[1], kq_mask_top_k->ne[2], 1, kq_mask_top_k->ne[3], kq_mask_top_k->nb[2], kq_mask_top_k->nb[3], kq_mask_top_k->nb[3], 0);
+
+    // combine with the original kq mask
+    return ggml_add(ctx0, kq_mask_top_k, kq_mask);
+}
+
 ggml_tensor * llm_graph_context::build_attn(
         llm_graph_input_attn_k_dsa * inp,
         ggml_tensor * wo,
@@ -3465,41 +3530,12 @@ ggml_tensor * llm_graph_context::build_attn(
 
     // top_k indexes the cells, and the indexer mask of the same type is built the same way
     // let's use it, so when no other layer reads the MLA mask is not allocated
-    ggml_tensor * kq_mask = inp->self_attn_mask_mla.cnv;
-    if (inp->self_attn_mask_lid.cnv->type == kq_mask->type) {
-        kq_mask = inp->self_attn_mask_lid.cnv;
+    ggml_tensor * kq_mask = inp->self_attn_mask_mla.raw;
+    if (inp->self_attn_mask_lid.raw->type == kq_mask->type) {
+        kq_mask = inp->self_attn_mask_lid.raw;
     }
 
-    ggml_tensor * kq_mask_top_k = nullptr;
-    if (cparams.fused_top_k_mask) {
-        kq_mask_top_k = build_fused_top_k_mask(kq_mask, top_k, il);
-    } else {
-        // prepare new kq mask - starts filled with -INFINITY
-        ggml_tensor * kq_mask_all = ggml_fill(ctx0, kq_mask, -INFINITY);
-
-        // reshape KQ mask into tensor with rows of size 1:
-        // [n_kv, n_batch, 1, n_stream] -> [1, n_kv, n_batch, n_stream]
-        kq_mask_all = ggml_view_4d(ctx0, kq_mask_all, 1, kq_mask_all->ne[0], kq_mask_all->ne[1], kq_mask_all->ne[3], kq_mask_all->nb[0], kq_mask_all->nb[1], kq_mask_all->nb[2], 0);
-
-        // reshape top_k indices: [n_top_k, n_batch, 1, n_stream] -> [n_top_k, n_batch, n_stream, 1]
-        ggml_tensor * top_k_3d = ggml_view_4d(ctx0, top_k, top_k->ne[0], top_k->ne[1], top_k->ne[3], 1, top_k->nb[1], top_k->nb[2], top_k->ne[3]*top_k->nb[3], 0);
-
-        // prepare zero-filled tensor with rows of size 1: [1, n_top_k, n_batch, n_stream]
-        // this will be our source of zero values for unmasking top k mask elements
-        ggml_tensor * zeros = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, 1, top_k_3d->ne[0], top_k_3d->ne[1], top_k_3d->ne[2]);
-        zeros = ggml_fill(ctx0, zeros, 0.0f);
-
-        // modify KQ mask by unmasking elements that are in top_k indices
-        // ggml_set_rows([1, n_kv, n_batch, n_stream], [1, n_top_k, n_batch, n_stream], [n_top_k, n_batch, n_stream, 1])
-        kq_mask_top_k = ggml_set_rows(ctx0, kq_mask_all, zeros, top_k_3d);
-
-        // reshape to restore the original shape of KQ mask:
-        // [1, n_kv, n_batch, n_stream] -> [n_kv, n_batch, 1, n_stream]
-        kq_mask_top_k = ggml_view_4d(ctx0, kq_mask_top_k, kq_mask_top_k->ne[1], kq_mask_top_k->ne[2], 1, kq_mask_top_k->ne[3], kq_mask_top_k->nb[2], kq_mask_top_k->nb[3], kq_mask_top_k->nb[3], 0);
-
-        // combine with the original kq mask
-        kq_mask_top_k = ggml_add(ctx0, kq_mask_top_k, kq_mask);
-    }
+    ggml_tensor * kq_mask_top_k = build_top_k_mask(kq_mask, top_k, il);
 
     ggml_tensor * q = q_cur;
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
@@ -3589,7 +3625,7 @@ ggml_tensor * llm_graph_context::build_attn(
         ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il));
     }
 
-    const auto & kq_mask = is_swa ? inp->self_attn_mask_swa.cnv : inp->self_attn_mask.cnv;
+    const auto & kq_mask = is_swa ? inp->self_attn_mask_swa.raw : inp->self_attn_mask.raw;
     const auto & kv_rows = is_swa ? inp->self_attn_mask_swa.rows : inp->self_attn_mask.rows;
 
     ggml_tensor * q = q_cur;
@@ -3660,7 +3696,7 @@ ggml_tensor * llm_graph_context::build_attn(
         ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
     }
 
-    const auto & kq_mask = is_swa ? inp->self_attn_mask_swa.cnv : inp->self_attn_mask.cnv;
+    const auto & kq_mask = is_swa ? inp->self_attn_mask_swa.raw : inp->self_attn_mask.raw;
     const auto & kv_rows = is_swa ? inp->self_attn_mask_swa.rows : inp->self_attn_mask.rows;
 
     // MLA-style attention: the cached K is used as V
@@ -3697,8 +3733,6 @@ llm_graph_input_attn_cross * llm_graph_context::build_attn_inp_cross() const {
     inp->cross_attn_mask.raw = ggml_new_tensor_4d(ctx0, type_mask, n_enc, n_tokens, 1, 1);
     ggml_set_input(inp->cross_attn_mask.raw);
 
-    inp->cross_attn_mask.cnv = inp->cross_attn_mask.raw;
-
     return (llm_graph_input_attn_cross *) res->add_input(std::move(inp));
 }
 
@@ -3721,7 +3755,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_build_forward_expand(gf, k_cur);
     ggml_build_forward_expand(gf, v_cur);
 
-    const auto & kq_mask = inp->cross_attn_mask.cnv;
+    const auto & kq_mask = inp->cross_attn_mask.raw;
     const auto & kv_rows = inp->cross_attn_mask.rows;
 
     ggml_tensor * q = q_cur;
@@ -3759,7 +3793,6 @@ static std::unique_ptr<llm_graph_input_attn_k_dsa> build_attn_inp_k_dsa_impl(
         inp->self_k_idxs_mla = mctx_cur->get_mla()->build_input_k_idxs(ctx0, ubatch);
 
         inp->self_attn_mask_mla.raw = build_attn_inp_kq_mask(ctx0, mctx_cur->get_mla(), ubatch, cparams);
-        inp->self_attn_mask_mla.cnv = inp->self_attn_mask_mla.raw;
     }
 
     {
@@ -3770,7 +3803,6 @@ static std::unique_ptr<llm_graph_input_attn_k_dsa> build_attn_inp_k_dsa_impl(
         cparams_copy.flash_attn = cparams.fused_lid;
 
         inp->self_attn_mask_lid.raw = build_attn_inp_kq_mask(ctx0, mctx_cur->get_lid(), ubatch, cparams_copy);
-        inp->self_attn_mask_lid.cnv = inp->self_attn_mask_lid.raw;
 
         inp->self_k_rot_lid = mctx_cur->get_lid()->get_k_rot();
     }
@@ -3797,7 +3829,6 @@ llm_graph_input_attn_k_dsa_iswa * llm_graph_context::build_attn_inp_k_dsa_iswa()
     inp_swa->self_k_idxs = mctx_cur->get_swa()->build_input_k_idxs(ctx0, ubatch);
 
     inp_swa->self_attn_mask.raw = build_attn_inp_kq_mask(ctx0, mctx_cur->get_swa(), ubatch, cparams);
-    inp_swa->self_attn_mask.cnv = inp_swa->self_attn_mask.raw;
 
     auto inp = std::make_unique<llm_graph_input_attn_k_dsa_iswa>(std::move(inp_dsa), std::move(inp_swa), mctx_cur);
 
@@ -3819,7 +3850,6 @@ llm_graph_input_attn_kv_msa * llm_graph_context::build_attn_inp_kv_msa(bool msa_
         inp->self_v_idxs = mctx_base->build_input_v_idxs(ctx0, ubatch);
 
         inp->self_attn_mask.raw = build_attn_inp_kq_mask(ctx0, mctx_base, ubatch, cparams);
-        inp->self_attn_mask.cnv = inp->self_attn_mask.raw;
     }
 
     inp->self_k_rot = mctx_base->get_k_rot();
@@ -3874,7 +3904,6 @@ llm_graph_input_attn_k_iswa * llm_graph_context::build_attn_inp_k_iswa() const {
         inp->self_k_idxs = mctx_cur->get_base()->build_input_k_idxs(ctx0, ubatch);
 
         inp->self_attn_mask.raw = build_attn_inp_kq_mask(ctx0, mctx_cur->get_base(), ubatch, cparams);
-        inp->self_attn_mask.cnv = inp->self_attn_mask.raw;
     }
 
     {
@@ -3883,7 +3912,6 @@ llm_graph_input_attn_k_iswa * llm_graph_context::build_attn_inp_k_iswa() const {
         inp->self_k_idxs_swa = mctx_cur->get_swa()->build_input_k_idxs(ctx0, ubatch);
 
         inp->self_attn_mask_swa.raw = build_attn_inp_kq_mask(ctx0, mctx_cur->get_swa(), ubatch, cparams);
-        inp->self_attn_mask_swa.cnv = inp->self_attn_mask_swa.raw;
     }
 
     inp->self_k_rot = mctx_cur->get_base()->get_k_rot();
@@ -3905,7 +3933,6 @@ llm_graph_input_dsv4 * llm_graph_context::build_inp_dsv4() const {
 
     inp_raw->self_k_idxs = raw_ctx->build_input_k_idxs(ctx0, ubatch);
     inp_raw->self_attn_mask.raw = dsv4_build_raw_kq_mask(ctx0, raw_ctx, ubatch, cparams, n_stream);
-    inp_raw->self_attn_mask.cnv = inp_raw->self_attn_mask.raw;
 
     inp_raw->self_k_rot = raw_ctx->get_k_rot();
     auto inp = std::make_unique<llm_graph_input_dsv4>(cparams, std::move(inp_raw), mctx_cur);
@@ -4011,6 +4038,67 @@ ggml_tensor * llm_graph_context::build_rs(
                     get_state_rows);
 }
 
+void llm_graph_context::build_conv_state_store(
+        llm_graph_input_rs * inp,
+        ggml_tensor * s,
+        ggml_tensor * conv_x,
+            int64_t   n_cols,
+             size_t   offs) const {
+    const auto * mctx_cur = inp->mctx;
+
+    const int64_t n        = conv_x->ne[0] - n_cols; // n_seq_tokens
+    const int64_t channels = conv_x->ne[1];
+    const int64_t n_seqs   = conv_x->ne[2];
+
+    const size_t row_size  = s->nb[1];
+    const size_t cell_offs = mctx_cur->get_head()*row_size + offs;
+
+    if (cparams.n_rs_seq == 0) {
+        ggml_tensor * last = ggml_view_3d(ctx0, conv_x,
+                n_cols, channels, n_seqs,
+                conv_x->nb[1], conv_x->nb[2],
+                ggml_row_size(conv_x->type, n));
+
+        ggml_tensor * cell = ggml_view_2d(ctx0, s,
+                n_cols*channels, n_seqs,
+                row_size, cell_offs);
+
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0, last, cell));
+        return;
+    }
+
+    // [TAG_RECURRENT_ROLLBACK_SPLITS]
+    // this logic assumes that the last (n_rs_seq + 1) tokens of a sequence in a batch are inside
+    //   the same ubatch, which `split_equal()` guarantees via its n_keep_tail argument
+    // a rollback of k tokens reads slot k, and the memory allows k < n only (see rs_max), so slots from n on are left unwritten
+    const int64_t K  = (int64_t) cparams.n_rs_seq + 1;
+    const int64_t Kw = std::min(n, K);
+
+    // each conv layer builds its own slot order {K-1, ..., 0}, on the device of the layer, and takes its tail
+    // {Kw-1, ..., 0}; the size K never depends on the ubatch, so the reserved graph covers them all
+    ggml_tensor * s_slot_rev = ggml_arange(ctx0, 0.0f, (float) K, 1.0f);
+    s_slot_rev = ggml_scale_bias(ctx0, s_slot_rev, -1.0f, (float) (K - 1));
+    s_slot_rev = ggml_cast(ctx0, s_slot_rev, GGML_TYPE_I32);
+    cb(s_slot_rev, "s_slot_rev", -1);
+
+    ggml_tensor * slot_order = ggml_view_1d(ctx0, s_slot_rev, Kw, ggml_row_size(GGML_TYPE_I32, K - Kw));
+
+    // window w starts at column n - (Kw - 1) + w (ascending time) and is rollback slot Kw - 1 - w,
+    // consecutive windows start one element apart, so they overlap
+    ggml_tensor * windows = ggml_view_4d(ctx0, conv_x,
+            n_cols, Kw, channels, n_seqs,
+            ggml_element_size(conv_x), conv_x->nb[1], conv_x->nb[2],
+            ggml_row_size(conv_x->type, n - (Kw - 1)));
+
+    // [n_cols, slot, channel, seq] view of the cells of this ubatch
+    ggml_tensor * slots = ggml_view_4d(ctx0, s,
+            n_cols, K, channels, n_seqs,
+            (size_t) mctx_cur->get_size()*row_size, ggml_row_size(s->type, n_cols), row_size,
+            cell_offs);
+
+    ggml_build_forward_expand(gf, ggml_set_rows(ctx0, slots, windows, slot_order));
+}
+
 ggml_tensor * llm_graph_context::build_rwkv_token_shift_load(
     llm_graph_input_rs * inp,
     const llama_ubatch & ubatch,
@@ -4089,7 +4177,6 @@ llm_graph_input_mem_hybrid_iswa * llm_graph_context::build_inp_mem_hybrid_iswa()
         inp_attn->self_v_idxs = attn_ctx->get_base()->build_input_v_idxs(ctx0, ubatch);
 
         inp_attn->self_attn_mask.raw = build_attn_inp_kq_mask(ctx0, attn_ctx->get_base(), ubatch, cparams);
-        inp_attn->self_attn_mask.cnv = inp_attn->self_attn_mask.raw;
     }
 
     {
@@ -4097,7 +4184,6 @@ llm_graph_input_mem_hybrid_iswa * llm_graph_context::build_inp_mem_hybrid_iswa()
         inp_attn->self_v_idxs_swa = attn_ctx->get_swa()->build_input_v_idxs(ctx0, ubatch);
 
         inp_attn->self_attn_mask_swa.raw = build_attn_inp_kq_mask(ctx0, attn_ctx->get_swa(), ubatch, cparams);
-        inp_attn->self_attn_mask_swa.cnv = inp_attn->self_attn_mask_swa.raw;
     }
 
     inp_attn->self_k_rot = attn_ctx->get_base()->get_k_rot();
@@ -4142,6 +4228,8 @@ void llm_graph_context::build_pooling(
         ggml_tensor * cls_out,
         ggml_tensor * cls_out_b,
         ggml_tensor * cls_norm) const {
+    const llm_arch arch = model.arch;
+
     if (!cparams.embeddings) {
         // a graph without logits still computes t_embd, so that it is never empty
         if (res->t_logits == nullptr && res->t_embd != nullptr) {

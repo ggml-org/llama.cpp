@@ -222,7 +222,7 @@ std::unique_ptr<llm_graph_context> llama_model_deepseek41::build_arch_graph(cons
         throw std::runtime_error("DeepSeek-V4.1 has no MTP graph: its DSpark draft is a separate DFLASH GGUF "
                 "(convert_hf_to_gguf.py --dspark), used with --spec-type draft-dspark");
     }
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
 // Engram n-gram hash (engram.py NgramHashState.forward)
@@ -642,7 +642,7 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
         ggml_build_forward_expand(gf, inp_attn->mctx->cpy_k(ctx0, kv, inp_attn->get_k_idxs(), il));
 
         ggml_tensor * raw_k    = inp_attn->mctx->get_k(ctx0, il);
-        ggml_tensor * raw_mask = inp_attn->self_attn_mask.cnv;
+        ggml_tensor * raw_mask = inp_attn->self_attn_mask.raw;
 
         const int32_t topk_src = hparams.dsv41_topk_src[il];
         const int64_t k_sel    = top_k->ne[0];
@@ -765,9 +765,9 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
     return out;
 }
 
-llama_model_deepseek41::graph::graph(const llama_model & model_base, const llm_graph_params & params) :
-    llama_model_deepseek4::graph(params) {
-    const auto & model = static_cast<const llama_model_deepseek41 &>(model_base);
+llama_model_deepseek41::graph::graph(const llm_graph_params & params) :
+    llama_model_deepseek4::graph(params, no_build{}) {
+    const auto & model = static_cast<const llama_model_deepseek41 &>(this->model);
 
     static const bool sparse_env = dsv41_env_on("LLAMA_DSV41_SPARSE");
     sparse = sparse_env;
