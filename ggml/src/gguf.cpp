@@ -1544,7 +1544,11 @@ struct gguf_writer_base {
     void write_tensor_meta(const struct gguf_tensor_info & info) {
         write(info.t.name);
 
-        const uint32_t n_dims = ggml_n_dims(&info.t);
+        // do not use ggml_n_dims, it drops dims with ne == 0
+        uint32_t n_dims = GGML_MAX_DIMS;
+        while (n_dims > 1 && info.t.ne[n_dims - 1] == 1) {
+            n_dims--;
+        }
         write(n_dims);
 
         for (uint32_t j = 0; j < n_dims; ++j) {

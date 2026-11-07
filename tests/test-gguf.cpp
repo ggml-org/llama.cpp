@@ -1436,6 +1436,32 @@ static std::pair<int, int> test_gguf_set_kv(ggml_backend_dev_t dev, const unsign
     return std::make_pair(npass, ntest);
 }
 
+static bool test_zero_size_tensor() {
+    ggml_init_params ggml_params = { ggml_tensor_overhead(), nullptr, /*no_alloc =*/ true };
+    ggml_context * ctx_0 = ggml_init(ggml_params);
+    ggml_tensor  * t_0   = ggml_new_tensor_2d(ctx_0, GGML_TYPE_F32, 64, 0);
+    ggml_set_name(t_0, "a");
+
+    gguf_context * gguf_ctx_0 = gguf_init_empty();
+    gguf_add_tensor(gguf_ctx_0, t_0);
+    std::vector<int8_t> buf;
+    gguf_write_to_buf(gguf_ctx_0, buf, /*only_meta =*/ true);
+
+    ggml_context * ctx_1 = nullptr;
+    gguf_init_params gguf_params = { /*no_alloc =*/ true, /*ctx =*/ &ctx_1 };
+    gguf_context * gguf_ctx_1 = gguf_init_from_buffer(buf.data(), buf.size(), gguf_params);
+
+    const ggml_tensor * t_1 = ctx_1 ? ggml_get_tensor(ctx_1, "a") : nullptr;
+    const bool ok = t_1 && ggml_are_same_shape(t_0, t_1);
+    printf("%s: %s\n\n", __func__, ok ? "\033[1;32mOK\033[0m" : "\033[1;31mFAIL\033[0m");
+
+    ggml_free(ctx_0);
+    ggml_free(ctx_1);
+    gguf_free(gguf_ctx_0);
+    gguf_free(gguf_ctx_1);
+    return ok;
+}
+
 static void print_usage() {
     printf("usage: test-gguf [seed]\n");
     printf("  if no seed is unspecified then a random seed is used\n");
@@ -1461,6 +1487,8 @@ int main(int argc, char ** argv) {
         npass += result.first;
         ntest += result.second;
     }
+    npass += test_zero_size_tensor();
+    ntest++;
 
     for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
         ggml_backend_dev_t dev = ggml_backend_dev_get(i);
