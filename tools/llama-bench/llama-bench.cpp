@@ -2162,6 +2162,9 @@ struct sql_printer : public printer {
 struct ctx_state {
     int depth = 0; // in tokens
 
+    ggml_type type_k = GGML_TYPE_F16;
+    ggml_type type_v = GGML_TYPE_F16;
+    llama_flash_attn_type flash_attn = LLAMA_FLASH_ATTN_TYPE_AUTO;
     std::vector<uint8_t> buf; // the llama_context state buffer
 };
 
@@ -2363,6 +2366,8 @@ int llama_bench(int argc, char ** argv) {
 
         // keep the same model between tests when possible
         if (!lmodel || !prev_inst || !inst.equal_mparams(*prev_inst)) {
+            cstate.depth = 0;
+
             if (lmodel) {
                 llama_model_free(lmodel);
             }
@@ -2445,7 +2450,10 @@ int llama_bench(int argc, char ** argv) {
             llama_memory_clear(llama_get_memory(ctx), false);
 
             if (t.n_depth > 0) {
-                bool is_cached = t.n_depth == cstate.depth;
+                bool is_cached = t.n_depth == cstate.depth &&
+                                 cparams.type_k == cstate.type_k &&
+                                 cparams.type_v == cstate.type_v &&
+                                 cparams.flash_attn_type == cstate.flash_attn;
 
                 if (is_cached) {
                     // if previously we have computed at this depth, just restore the state
@@ -2471,6 +2479,9 @@ int llama_bench(int argc, char ** argv) {
 
                     // store the context state for reuse in later runs
                     cstate.depth = t.n_depth;
+                    cstate.type_k = cparams.type_k;
+                    cstate.type_v = cparams.type_v;
+                    cstate.flash_attn = cparams.flash_attn_type;
                     cstate.buf.resize(llama_state_seq_get_size(ctx, 0));
                     llama_state_seq_get_data(ctx, cstate.buf.data(), cstate.buf.size(), 0);
                 } else {
