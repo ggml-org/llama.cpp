@@ -181,7 +181,8 @@ struct llama_model_loader {
         bool no_alloc,
         bool load_mtp,
         const llama_model_kv_override * param_overrides_p,
-        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p);
+        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p,
+        bool ignore_shard_num_mismatch = false);
 
     template<typename T>
     typename std::enable_if<std::is_integral<T>::value, bool>::type
