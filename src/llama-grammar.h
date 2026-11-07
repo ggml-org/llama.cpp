@@ -2,10 +2,12 @@
 
 #include "llama.h"
 
+#include <list>
 #include <map>
 #include <memory>
 #include <regex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 struct llama_vocab;
@@ -126,6 +128,33 @@ struct llama_grammar_trigger_pattern {
     size_t find(const std::string & input) const;
 };
 
+struct llama_grammar_mask_cache {
+    struct key {
+        const llama_grammar_rules * program;
+        const llama_vocab * vocab;
+        uint32_t n_vocab;
+        llama_partial_utf8 partial_utf8;
+        bool enabled;
+        // Sorted unique stacks: frame count followed by (rule index, element offset) pairs.
+        std::vector<size_t> stacks;
+
+        bool operator==(const key & other) const;
+    };
+
+    struct entry {
+        key state;
+        std::vector<uint32_t> mask;
+        size_t bytes;
+    };
+
+    size_t max_entries = 128;
+    size_t max_bytes = 8 * 1024 * 1024;
+    size_t bytes = 0;
+    size_t hits = 0;
+    size_t misses = 0;
+    std::list<entry> entries;
+};
+
 struct llama_grammar {
     // maintain a list of llama_tokens and their positions in the trigger_buffer
     using token_pos = std::pair<llama_token, std::pair<size_t, size_t>>;
@@ -151,6 +180,30 @@ struct llama_grammar {
                              trigger_patterns;         // Regular expressions that trigger a lazy grammar. Must be a full match of the entire generated
                                                        // string, and the grammar will be given the string from the first match group onwards.
 
+    // Cache ownership binds program identity to this grammar; clones start with an empty cache.
+    mutable llama_grammar_mask_cache mask_cache;
+
+    std::unordered_map<const llama_grammar_element *, std::pair<size_t, size_t>> rule_positions = {};
+    void init_rule_positions();
+
+    struct candidate_storage {
+        llama_grammar_candidates candidates;
+        std::vector<size_t> offsets;
+        std::vector<uint32_t> code_points;
+
+        void clear();
+        void add(size_t index, llama_token id, const std::string & piece, llama_partial_utf8 partial_utf8);
+        void set_pointers();
+    };
+    mutable candidate_storage scratch = {};
+
+    struct acceptance_storage {
+        std::vector<uint32_t> code_points;
+        llama_grammar_stacks stacks_new;
+        llama_grammar_stacks current_stacks;
+        llama_grammar_stacks next_stacks;
+    };
+    acceptance_storage accept_scratch = {};
 };
 
 //
@@ -182,6 +235,10 @@ struct llama_grammar * llama_grammar_clone_impl(const struct llama_grammar & gra
 void llama_grammar_apply_impl(
         const struct llama_grammar & grammar,
             llama_token_data_array * cur_p);
+
+std::vector<uint32_t> llama_grammar_get_allowed_tokens(const llama_grammar & grammar);
+
+bool llama_grammar_get_allowed_tokens_trie(const llama_grammar & grammar, std::vector<uint32_t> & mask, size_t max_work = 256 * 1024);
 
 void llama_grammar_accept_impl(
               struct llama_grammar & grammar,

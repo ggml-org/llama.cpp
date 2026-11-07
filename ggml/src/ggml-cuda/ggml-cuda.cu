@@ -30,6 +30,8 @@
 #include "ggml-cuda/fp8.cuh"
 #include "ggml-cuda/fwht.cuh"
 #include "ggml-cuda/getrows.cuh"
+#include "ggml-cuda/token-mask.cuh"
+#include "ggml-token-mask.h"
 #include "ggml-cuda/im2col.cuh"
 #include "ggml-cuda/mmf.cuh"
 #include "ggml-cuda/mmq.cuh"
@@ -2718,6 +2720,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             break;
         case GGML_OP_REPEAT_BACK:
             ggml_cuda_op_repeat_back(ctx, dst);
+            break;
+        case GGML_OP_TOKEN_MASK:
+            ggml_cuda_op_token_mask(ctx, dst);
             break;
         case GGML_OP_GET_ROWS:
             ggml_cuda_op_get_rows(ctx, dst);
@@ -6371,6 +6376,9 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                         return false;
                 }
             }
+        case GGML_OP_TOKEN_MASK:
+            return ggml_token_mask_valid_layout(op->src[0], op->src[1], op->src[2], op->src[3]) &&
+                op->type == GGML_TYPE_F32 && ggml_are_same_shape(op, op->src[0]) && ggml_is_contiguous(op);
         case GGML_OP_GET_ROWS_BACK:
             return op->type == GGML_TYPE_F32 && op->src[0]->type == GGML_TYPE_F32 && op->ne[2] == 1 && op->ne[3] == 1;
         case GGML_OP_SET_ROWS:

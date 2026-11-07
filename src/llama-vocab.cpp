@@ -18,6 +18,7 @@
 #include <forward_list>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <queue>
 #include <set>
 #include <unordered_map>
@@ -2147,6 +2148,9 @@ struct llama_vocab::impl {
 
     std::vector<llama_token> cache_special_tokens;
     std::vector<std::string> cache_token_to_piece; // llama_token_to_piece(special = true);
+    std::mutex grammar_trie_mutex;
+    std::unique_ptr<llama_vocab_trie> grammar_trie;
+    bool grammar_trie_attempted = false;
     struct pair_hash {
         size_t operator()(const std::pair<std::string, std::string> & p) const {
             return std::hash<std::string>{}(p.first) ^  //create some hash for pair
@@ -4363,7 +4367,68 @@ llama_vocab::llama_vocab() : pimpl(new impl(*this)) {
 llama_vocab::~llama_vocab() = default;
 
 void llama_vocab::load(llama_model_loader & ml, const LLM_KV & kv) {
+    pimpl->grammar_trie.reset();
+    pimpl->grammar_trie_attempted = false;
     pimpl->load(ml, kv);
+}
+
+const llama_vocab_trie * llama_vocab::get_grammar_trie() const {
+    std::lock_guard<std::mutex> lock(pimpl->grammar_trie_mutex);
+    if (pimpl->grammar_trie_attempted) {
+        return pimpl->grammar_trie.get();
+    }
+
+    const size_t max_bytes = 64 * 1024 * 1024;
+    const size_t n_vocab = n_tokens();
+    size_t n_nodes = 1;
+    pimpl->grammar_trie_attempted = true;
+    if (n_vocab > max_bytes / (sizeof(llama_vocab_trie::terminal) + sizeof(llama_token))) {
+        return nullptr;
+    }
+    const size_t max_nodes = (max_bytes - n_vocab * (sizeof(llama_vocab_trie::terminal) + sizeof(llama_token))) /
+        sizeof(llama_vocab_trie::node);
+    for (const auto & piece : pimpl->cache_token_to_piece) {
+        if (n_nodes > max_nodes || piece.size() > max_nodes - n_nodes) {
+            return nullptr;
+        }
+        n_nodes += piece.size();
+    }
+
+    auto trie = std::make_unique<llama_vocab_trie>();
+    trie->nodes.reserve(n_nodes);
+    trie->terminals.reserve(n_vocab);
+    trie->eog.reserve(n_vocab);
+    trie->nodes.emplace_back();
+    for (uint32_t id = 0; id < n_vocab; ++id) {
+        const auto & piece = token_to_piece(id);
+        if (is_eog(id)) {
+            trie->eog.push_back(id);
+            continue;
+        }
+        if (piece.empty() || piece[0] == 0) {
+            continue;
+        }
+        uint32_t parent = 0;
+        for (const uint8_t byte : piece) {
+            uint32_t child = trie->nodes[parent].child;
+            while (child != llama_vocab_trie::none && trie->nodes[child].byte != byte) {
+                child = trie->nodes[child].sibling;
+            }
+            if (child == llama_vocab_trie::none) {
+                child = trie->nodes.size();
+                llama_vocab_trie::node node;
+                node.byte = byte;
+                node.sibling = trie->nodes[parent].child;
+                trie->nodes.push_back(node);
+                trie->nodes[parent].child = child;
+            }
+            parent = child;
+        }
+        trie->terminals.push_back({ static_cast<llama_token>(id), trie->nodes[parent].terminal });
+        trie->nodes[parent].terminal = trie->terminals.size() - 1;
+    }
+    pimpl->grammar_trie = std::move(trie);
+    return pimpl->grammar_trie.get();
 }
 
 std::string llama_vocab::get_tokenizer_model() const {

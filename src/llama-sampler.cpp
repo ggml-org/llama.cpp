@@ -1,4 +1,5 @@
 #include "llama-sampler.h"
+#include "llama-ext.h"
 
 #include "llama-impl.h"
 #include "llama-vocab.h"
@@ -8,6 +9,7 @@
 
 #include <array>
 #include <algorithm>
+#include <bitset>
 #include <cassert>
 #include <cfloat>
 #include <chrono>
@@ -20,6 +22,10 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <stdexcept>
+
+#if defined(_MSC_VER)
+#    include <intrin.h>
+#endif
 
 // the ring buffer works similarly to std::deque, but with a fixed capacity
 template<typename T>
@@ -499,7 +505,7 @@ static void llama_sampler_empty_backend_apply(
     GGML_UNUSED(data);
 }
 
-static void llama_sampler_empty_backend_set_input(struct llama_sampler * smpl) {
+static void llama_sampler_empty_backend_set_input(struct llama_sampler * smpl, ggml_backend_sched_t ) {
     GGML_UNUSED(smpl);
 }
 
@@ -581,11 +587,18 @@ struct llama_sampler_backend_probe {
     ggml_cgraph * gf;
 };
 
+static int64_t llama_sampler_backend_probe_n_vocab(const llama_sampler * sampler);
+
 static llama_sampler_backend_probe llama_sampler_backend_probe_graph(
         llama_sampler * sampler,
         int64_t         n_candidates,
         uint32_t        max_nodes,
         bool            with_candidates) {
+    const int64_t n_vocab = llama_sampler_backend_probe_n_vocab(sampler);
+    if (n_vocab > 0) {
+        n_candidates = n_vocab;
+    }
+
     ggml_init_params params = {
         /*.mem_size   =*/ max_nodes * ggml_tensor_overhead() + ggml_graph_overhead_custom(max_nodes, false),
         /*.mem_buffer =*/ nullptr,
@@ -806,10 +819,13 @@ static void llama_sampler_chain_backend_apply(
         if (smpl.ptr->iface->backend_apply) {
             smpl.ptr->iface->backend_apply(smpl.ptr, ctx, gf, data);
         }
+        if (data->skip) {
+            break;
+        }
     }
 }
 
-static void llama_sampler_chain_backend_set_input(struct llama_sampler * smpl) {
+static void llama_sampler_chain_backend_set_input(struct llama_sampler * smpl, ggml_backend_sched_t sched) {
     auto * chain = (llama_sampler_chain *) smpl->ctx;
 
     for (auto & smpl : chain->samplers) {
@@ -818,7 +834,7 @@ static void llama_sampler_chain_backend_set_input(struct llama_sampler * smpl) {
         }
 
         if (smpl.ptr->iface->backend_set_input) {
-            smpl.ptr->iface->backend_set_input(smpl.ptr);
+            smpl.ptr->iface->backend_set_input(smpl.ptr, sched);
         }
     }
 }
@@ -868,6 +884,38 @@ static struct llama_sampler_i llama_sampler_chain_i = {
     /* .copy_state        = */ llama_sampler_chain_copy_state,
 };
 
+bool llama_sampler_backend_prepare(llama_sampler * sampler, const llama_sampler_row * rows, size_t n_rows) {
+    if (sampler->iface == &llama_sampler_chain_i) {
+        auto * chain = (llama_sampler_chain *) sampler->ctx;
+        for (auto & entry : chain->samplers) {
+            if (!entry.is_backend) {
+                break;
+            }
+            if (!llama_sampler_backend_prepare(entry.ptr, rows, n_rows)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    return !sampler->iface->backend_prepare || sampler->iface->backend_prepare(sampler, rows, n_rows);
+}
+
+bool llama_sampler_backend_row_usable(const llama_sampler * sampler, size_t row) {
+    if (sampler->iface == &llama_sampler_chain_i) {
+        const auto * chain = (const llama_sampler_chain *) sampler->ctx;
+        for (const auto & entry : chain->samplers) {
+            if (!entry.is_backend) {
+                break;
+            }
+            if (!llama_sampler_backend_row_usable(entry.ptr, row)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    return !sampler->iface->backend_row_usable || sampler->iface->backend_row_usable(sampler, row);
+}
+
 struct llama_sampler * llama_sampler_chain_init(struct llama_sampler_chain_params params) {
     return llama_sampler_init(
         /* .iface = */ &llama_sampler_chain_i,
@@ -883,6 +931,11 @@ struct llama_sampler * llama_sampler_chain_init(struct llama_sampler_chain_param
     );
 }
 
+uint32_t llama_sampler_output_flags(const llama_sampler * sampler) {
+    GGML_ASSERT(sampler->iface == &llama_sampler_chain_i);
+    return ((const llama_sampler_chain *) sampler->ctx)->params.output_flags;
+}
+
 uint32_t llama_sampler_backend_n_nodes(const llama_sampler * sampler) {
     GGML_ASSERT(sampler != nullptr);
     GGML_ASSERT(sampler->iface == &llama_sampler_chain_i);
@@ -894,6 +947,9 @@ uint32_t llama_sampler_backend_n_nodes(const llama_sampler * sampler) {
 }
 
 llama_token llama_sampler_sample(struct llama_sampler * smpl, struct llama_context * ctx, int32_t idx) {
+    if (!llama_sampler_row_usable(ctx, idx)) {
+        return LLAMA_TOKEN_NULL;
+    }
     const llama_token   sampled_token  = llama_get_sampled_token_ith     (ctx, idx);
     const float *       sampled_probs  = llama_get_sampled_probs_ith     (ctx, idx);
     const float *       sampled_logits = llama_get_sampled_logits_ith    (ctx, idx);
@@ -1138,6 +1194,7 @@ struct llama_sampler_dist : public llama_sampler_backend {
 
     // inputs for the current sampling graph
     std::vector<ggml_tensor *> inp_uniforms;
+    std::vector<bool> uniforms_active = {};
 
     void copy_state(const llama_sampler_dist & src) {
         // note: inp_uniforms and backend_transactional belong to the current sampling graph
@@ -1291,6 +1348,7 @@ static void llama_sampler_dist_backend_apply(
     ggml_format_name(inp_uniform, "uniform_%zu", sctx->inp_uniforms.size());
     ggml_set_input(inp_uniform);
     sctx->inp_uniforms.push_back(inp_uniform);
+    sctx->uniforms_active.push_back(!data->inactive);
 
     // flatten
     struct ggml_tensor * logits = ggml_reshape_1d(ctx, data->logits, ggml_nelements(data->logits));
@@ -1342,10 +1400,9 @@ static void llama_sampler_dist_backend_apply(
     data->probs = probs;
 }
 
-static void llama_sampler_dist_backend_set_input(struct llama_sampler * smpl) {
+static void llama_sampler_dist_backend_set_input(struct llama_sampler * smpl, ggml_backend_sched_t ) {
     auto * sctx = (llama_sampler_dist *) smpl->ctx;
 
-    GGML_ASSERT(!sctx->inp_uniforms.empty());
 
     // We sample in double precision and cast to float to match rnd numbers of
     // llama_sampler_dist which uses double precision (sampling from
@@ -1356,7 +1413,11 @@ static void llama_sampler_dist_backend_set_input(struct llama_sampler * smpl) {
 
     auto & rng = sctx->backend_transactional ? sctx->rng_backend : sctx->rng;
 
-    for (auto * inp_uniform : sctx->inp_uniforms) {
+    for (size_t i = 0; i < sctx->inp_uniforms.size(); ++i) {
+        if (!sctx->uniforms_active[i]) {
+            continue;
+        }
+        auto * inp_uniform = sctx->inp_uniforms[i];
         GGML_ASSERT(inp_uniform != nullptr);
 
         const float rnd = dist(rng);
@@ -1371,6 +1432,7 @@ static void llama_sampler_dist_backend_set_input(struct llama_sampler * smpl) {
 static void llama_sampler_dist_backend_reset(struct llama_sampler * smpl) {
     auto * sctx = (llama_sampler_dist *) smpl->ctx;
     sctx->inp_uniforms.clear();
+    sctx->uniforms_active.clear();
 }
 
 static void llama_sampler_dist_accept(struct llama_sampler * smpl, llama_token token) {
@@ -1438,6 +1500,25 @@ void llama_sampler_backend_begin(llama_sampler * sampler) {
             ctx->rng_backend = ctx->rng;
             ctx->n_backend_draws_generated = 0;
             ctx->n_backend_draws_committed = 0;
+        }
+    }
+}
+
+void llama_sampler_backend_replay(llama_sampler * sampler, bool retry) {
+    if (sampler->iface == &llama_sampler_chain_i) {
+        auto * chain = (llama_sampler_chain *) sampler->ctx;
+        for (auto & entry : chain->samplers) {
+            llama_sampler_backend_replay(entry.ptr, retry);
+        }
+    } else if (sampler->iface == &llama_sampler_dist_i) {
+        auto * ctx = (llama_sampler_dist *) sampler->ctx;
+        if (ctx->backend_transactional) {
+            if (retry) {
+                llama_sampler_dist_accept(sampler, LLAMA_TOKEN_NULL);
+            }
+            ctx->n_backend_draws_generated = 0;
+            ctx->n_backend_draws_committed = 0;
+            ctx->rng_backend = ctx->rng;
         }
     }
 }
@@ -2671,6 +2752,52 @@ struct llama_sampler_grammar {
     std::string grammar_root;
 
     struct llama_grammar * grammar;
+
+    uint64_t state_generation = 1;
+    uint64_t prepared_generation = 0;
+    struct packed_mask {
+        bool materialized = false;
+        std::array<int32_t, 4> desc = {};
+        std::vector<uint32_t> payload;
+    };
+    packed_mask mask = {};
+    llama_grammar_stacks mask_stacks = {};
+    llama_partial_utf8 mask_partial_utf8 = {};
+    bool mask_awaiting_trigger = false;
+
+    struct mask_binding {
+        struct upload_deleter {
+            void operator()(ggml_backend_event_t event) const {
+                ggml_backend_event_synchronize(event);
+                ggml_backend_event_free(event);
+            }
+        };
+        ggml_tensor * payload = nullptr;
+        ggml_tensor * desc = nullptr;
+        std::unique_ptr<std::array<int32_t, 4>> last_desc = std::make_unique<std::array<int32_t, 4>>();
+        bool desc_set = false;
+        struct entry {
+            std::array<int32_t, 4> desc = {};
+            std::vector<uint32_t> payload;
+            uint64_t used = 0;
+        };
+        std::vector<entry> cache;
+        uint64_t clock = 0;
+        std::unique_ptr<ggml_backend_event, upload_deleter> uploaded;
+    };
+    struct prepared_row {
+        int32_t idx;
+        llama_sampler_prefix_type type;
+        std::vector<llama_token> prefix;
+        packed_mask mask;
+        bool usable = false;
+        std::unique_ptr<llama_grammar, decltype(&llama_grammar_free_impl)> state {nullptr, llama_grammar_free_impl};
+    };
+    std::vector<mask_binding> bindings = {};
+    std::vector<prepared_row> prepared_rows = {};
+    std::vector<size_t> rows = {};
+    uint64_t rows_generation = 0;
+
 };
 
 static const char * llama_sampler_grammar_name(const struct llama_sampler * /*smpl*/) {
@@ -2680,7 +2807,18 @@ static const char * llama_sampler_grammar_name(const struct llama_sampler * /*sm
 static void llama_sampler_grammar_accept_impl(struct llama_sampler * smpl, llama_token token) {
     auto * ctx = (llama_sampler_grammar *) smpl->ctx;
     if (ctx->grammar) {
+        const bool prepared = ctx->prepared_generation == ctx->state_generation;
+        ++ctx->state_generation;
+        ctx->rows.clear();
+        ctx->prepared_rows.clear();
         llama_grammar_accept_impl(*ctx->grammar, token);
+        if (prepared && ctx->mask_awaiting_trigger == ctx->grammar->awaiting_trigger &&
+                (ctx->grammar->awaiting_trigger ||
+                 (ctx->mask_stacks == ctx->grammar->stacks &&
+                  (ctx->grammar->partial_utf8.n_remain == 0 || ctx->mask_partial_utf8.value == ctx->grammar->partial_utf8.value) &&
+                  ctx->mask_partial_utf8.n_remain == ctx->grammar->partial_utf8.n_remain))) {
+            ctx->prepared_generation = ctx->state_generation;
+        }
     }
 }
 
@@ -2720,6 +2858,9 @@ static void llama_sampler_grammar_reset(struct llama_sampler * smpl) {
 
     llama_grammar_free_impl(ctx->grammar);
     ctx->grammar = grammar_new;
+    ctx->rows.clear();
+    ctx->prepared_rows.clear();
+    ++ctx->state_generation;
 }
 
 static struct llama_sampler * llama_sampler_grammar_clone(const struct llama_sampler * smpl) {
@@ -2753,6 +2894,346 @@ static void llama_sampler_grammar_free(struct llama_sampler * smpl) {
     delete ctx;
 }
 
+static bool llama_sampler_grammar_backend_init(
+        llama_sampler * smpl, ggml_backend_buffer_type_t buft, uint32_t n_outputs_max_per_seq) {
+    auto * ctx = (llama_sampler_grammar *) smpl->ctx;
+    ctx->rows.clear();
+    GGML_UNUSED(n_outputs_max_per_seq);
+    if (ctx->grammar && (!ctx->vocab || ctx->vocab->n_tokens() == 0 || ctx->vocab->n_tokens() > INT32_MAX)) {
+        return false;
+    }
+    return llama_sampler_backend_support(smpl, buft);
+}
+
+static void llama_sampler_grammar_backend_apply(
+        llama_sampler * smpl, ggml_context * ctx, ggml_cgraph * gf, llama_sampler_data * data) {
+    GGML_UNUSED(gf);
+    auto * sctx = (llama_sampler_grammar *) smpl->ctx;
+    if (!sctx->grammar) {
+        return;
+    }
+
+    GGML_ASSERT(data->sampled == nullptr && "grammar must precede token selection");
+    GGML_ASSERT(data->logits->ne[1] == 1 && ggml_is_matrix(data->logits));
+    const size_t row = sctx->bindings.size();
+    sctx->bindings.push_back({});
+    if (row < sctx->rows.size() && !sctx->prepared_rows[sctx->rows[row]].usable) {
+        data->skip = true;
+        return;
+    }
+    auto & binding = sctx->bindings.back();
+    const int64_t n_words = (int64_t(sctx->vocab->n_tokens()) + 31)/32;
+    // Each graph row owns its slots, so preparing another row cannot evict a live mask.
+    const int64_t n_slots = std::max<int64_t>(1, std::min<int64_t>(8, (1024*1024)/(n_words*sizeof(int32_t))));
+    binding.cache.resize(n_slots);
+    binding.payload = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, n_words*n_slots);
+    ggml_set_name(binding.payload, "grammar_mask_payload");
+    ggml_set_output(binding.payload);
+    binding.desc = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 4);
+    ggml_set_name(binding.desc, "grammar_mask_desc");
+    ggml_set_output(binding.desc);
+
+    data->logits = ggml_token_mask(ctx, data->logits, data->candidates, binding.payload, binding.desc);
+    data->probs = nullptr;
+}
+
+static llama_sampler_grammar::packed_mask llama_sampler_grammar_pack_mask(std::vector<uint32_t> words, int32_t n_vocab) {
+    llama_sampler_grammar::packed_mask mask;
+    int32_t n_allowed = 0;
+    for (const auto word : words) {
+        n_allowed += std::bitset<32>(word).count();
+    }
+
+    mask.materialized = true;
+    mask.desc = { GGML_TOKEN_MASK_BITSET, (int32_t) words.size(), 0, n_vocab };
+    if (n_allowed == 0 || n_allowed == n_vocab) {
+        mask.desc[0] = n_allowed == 0 ? GGML_TOKEN_MASK_NONE : GGML_TOKEN_MASK_ALL;
+        mask.desc[1] = 0;
+    } else if (std::min(n_allowed, n_vocab - n_allowed) < (int32_t) words.size()) {
+        const bool allow_ids = n_allowed <= n_vocab - n_allowed;
+        mask.payload.reserve(allow_ids ? n_allowed : n_vocab - n_allowed);
+        for (size_t i = 0; i < words.size(); ++i) {
+            uint32_t word = allow_ids ? words[i] : ~words[i];
+            if (i + 1 == words.size() && n_vocab % 32) {
+                word &= (uint32_t(1) << (n_vocab % 32)) - 1;
+            }
+            while (word) {
+#if defined(_MSC_VER)
+                unsigned long bit;
+                _BitScanForward(&bit, word);
+#else
+                const int bit = __builtin_ctz(word);
+#endif
+                mask.payload.push_back(int32_t(32*i + bit));
+                word &= word - 1;
+            }
+        }
+        mask.desc[0] = allow_ids ? GGML_TOKEN_MASK_ALLOW_IDS : GGML_TOKEN_MASK_DENY_IDS;
+        mask.desc[1] = mask.payload.size();
+    }
+    if (mask.desc[0] == GGML_TOKEN_MASK_BITSET) {
+        mask.payload = std::move(words);
+    }
+    return mask;
+}
+
+static void llama_sampler_grammar_prepare_mask(llama_sampler_grammar * ctx) {
+    if (ctx->prepared_generation == ctx->state_generation) {
+        return;
+    }
+    ctx->mask = llama_sampler_grammar_pack_mask(llama_grammar_get_allowed_tokens(*ctx->grammar), ctx->vocab->n_tokens());
+    ctx->mask_stacks = ctx->grammar->stacks;
+    ctx->mask_partial_utf8 = ctx->grammar->partial_utf8;
+    ctx->mask_awaiting_trigger = ctx->grammar->awaiting_trigger;
+    ctx->prepared_generation = ctx->state_generation;
+}
+
+static bool llama_sampler_grammar_prepare_rows_impl(llama_sampler * smpl, const llama_sampler_row * rows, size_t n_rows, bool materialize) {
+    auto * ctx = (llama_sampler_grammar *) smpl->ctx;
+    ctx->rows.clear();
+    if (!ctx->grammar) {
+        return true;
+    }
+    if (n_rows && !rows) {
+        return false;
+    }
+    for (size_t i = 0; i < n_rows; ++i) {
+        const auto & row = rows[i];
+        if (row.type < LLAMA_SAMPLER_PREFIX_COMMITTED || row.type > LLAMA_SAMPLER_PREFIX_TREE ||
+                (row.type == LLAMA_SAMPLER_PREFIX_COMMITTED && row.n_prefix != 0) ||
+                (row.n_prefix && !row.prefix)) {
+            ctx->rows.clear();
+            return false;
+        }
+    }
+
+    if (ctx->rows_generation == ctx->state_generation) {
+        for (size_t i = 0; i < n_rows; ++i) {
+            const auto & row = rows[i];
+            auto it = std::find_if(ctx->prepared_rows.begin(), ctx->prepared_rows.end(), [&](const llama_sampler_grammar::prepared_row & cached) {
+                return cached.idx == row.idx && cached.type == row.type && cached.prefix.size() == row.n_prefix &&
+                        (row.n_prefix == 0 || std::equal(cached.prefix.begin(), cached.prefix.end(), row.prefix));
+            });
+            if (it == ctx->prepared_rows.end()) {
+                break;
+            }
+            ctx->rows.push_back(it - ctx->prepared_rows.begin());
+        }
+        if (ctx->rows.size() == n_rows) {
+            if (materialize) {
+                for (const auto index : ctx->rows) {
+                    auto & cached = ctx->prepared_rows[index];
+                    if (cached.usable && !cached.mask.materialized) {
+                        cached.mask = llama_sampler_grammar_pack_mask(llama_grammar_get_allowed_tokens(*cached.state), ctx->vocab->n_tokens());
+                        cached.usable = cached.mask.desc[0] != GGML_TOKEN_MASK_NONE;
+                    }
+                }
+            }
+            return true;
+        }
+        ctx->rows.clear();
+    }
+    ctx->prepared_rows.clear();
+    ctx->rows_generation = ctx->state_generation;
+    std::unique_ptr<llama_grammar, decltype(&llama_grammar_free_impl)> linear(nullptr, llama_grammar_free_impl);
+    const llama_sampler_row * previous = nullptr;
+    bool linear_usable = true;
+    for (size_t i = 0; i < n_rows; ++i) {
+        const auto & row = rows[i];
+        std::unique_ptr<llama_grammar, decltype(&llama_grammar_free_impl)> clone(nullptr, llama_grammar_free_impl);
+        auto * state = ctx->grammar;
+        size_t start = 0;
+        bool usable = true;
+        if (row.type == LLAMA_SAMPLER_PREFIX_LINEAR && row.n_prefix) {
+            if (linear && previous && previous->n_prefix <= row.n_prefix &&
+                    std::equal(previous->prefix, previous->prefix + previous->n_prefix, row.prefix)) {
+                start = previous->n_prefix;
+                usable = linear_usable;
+            } else {
+                linear.reset(llama_grammar_clone_impl(*ctx->grammar));
+            }
+            state = linear.get();
+        } else if (row.n_prefix) {
+            clone.reset(llama_grammar_clone_impl(*ctx->grammar));
+            state = clone.get();
+        }
+        for (size_t j = start; usable && j < row.n_prefix; ++j) {
+            const auto token = row.prefix[j];
+            if (token < 0 || uint32_t(token) >= ctx->vocab->n_tokens()) {
+                usable = false;
+                break;
+            }
+            llama_token_data candidate = { token, 0.0f, 0.0f };
+            llama_token_data_array cur = { &candidate, 1, -1, false };
+            llama_grammar_apply_impl(*state, &cur);
+            if (candidate.logit == -INFINITY || ctx->vocab->is_eog(token)) {
+                usable = false;
+                break;
+            }
+            try {
+                llama_grammar_accept_impl(*state, token);
+            } catch (const std::runtime_error &) {
+                usable = false;
+                break;
+            }
+        }
+        if (row.type == LLAMA_SAMPLER_PREFIX_LINEAR) {
+            if (!row.n_prefix) {
+                linear.reset();
+            }
+            previous = &row;
+            linear_usable = usable;
+        }
+        llama_sampler_grammar::packed_mask mask;
+        if (usable && materialize) {
+            if (row.n_prefix == 0) {
+                llama_sampler_grammar_prepare_mask(ctx);
+                mask = ctx->mask;
+            } else {
+                mask = llama_sampler_grammar_pack_mask(llama_grammar_get_allowed_tokens(*state), ctx->vocab->n_tokens());
+            }
+            usable = mask.desc[0] != GGML_TOKEN_MASK_NONE;
+        }
+        llama_sampler_grammar::prepared_row cached = {row.idx, row.type, {}, std::move(mask), usable};
+        if (usable && !materialize) {
+            cached.state.reset(llama_grammar_clone_impl(*state));
+        }
+        if (row.n_prefix) {
+            cached.prefix.assign(row.prefix, row.prefix + row.n_prefix);
+        }
+        ctx->rows.push_back(ctx->prepared_rows.size());
+        ctx->prepared_rows.push_back(std::move(cached));
+    }
+    return true;
+}
+
+static bool llama_sampler_grammar_backend_prepare(llama_sampler * smpl, const llama_sampler_row * rows, size_t n_rows) {
+    return llama_sampler_grammar_prepare_rows_impl(smpl, rows, n_rows, true);
+}
+
+static bool llama_sampler_grammar_backend_row_usable(const llama_sampler * smpl, size_t row) {
+    const auto * ctx = (const llama_sampler_grammar *) smpl->ctx;
+    return row >= ctx->rows.size() || ctx->prepared_rows[ctx->rows[row]].usable;
+}
+
+static void llama_sampler_grammar_backend_set_input(llama_sampler * smpl, ggml_backend_sched_t sched) {
+    auto * ctx = (llama_sampler_grammar *) smpl->ctx;
+    for (size_t row = 0; row < ctx->bindings.size(); ++row) {
+        auto & binding = ctx->bindings[row];
+        if (!binding.payload) {
+            continue;
+        }
+        const bool provisional = row < ctx->rows.size();
+        if (!provisional) {
+            llama_sampler_grammar_prepare_mask(ctx);
+        }
+        if (provisional) {
+            auto & cached = ctx->prepared_rows[ctx->rows[row]];
+            if (cached.usable && !cached.mask.materialized) {
+                cached.mask = llama_sampler_grammar_pack_mask(llama_grammar_get_allowed_tokens(*cached.state), ctx->vocab->n_tokens());
+                cached.usable = cached.mask.desc[0] != GGML_TOKEN_MASK_NONE;
+            }
+        }
+        const auto & mask = provisional ? ctx->prepared_rows[ctx->rows[row]].mask : ctx->mask;
+        GGML_ASSERT(mask.materialized);
+        const void * payload = mask.payload.data();
+        const size_t size = mask.payload.size()*sizeof(uint32_t);
+        size_t slot = 0;
+        bool hit = false;
+        for (size_t i = 0; i < binding.cache.size(); ++i) {
+            const auto & entry = binding.cache[i];
+            if (entry.used && entry.desc == mask.desc && entry.payload.size()*sizeof(uint32_t) == size &&
+                    (size == 0 || std::memcmp(entry.payload.data(), payload, size) == 0)) {
+                slot = i;
+                hit = true;
+                break;
+            }
+            if (entry.used < binding.cache[slot].used) {
+                slot = i;
+            }
+        }
+        auto & entry = binding.cache[slot];
+        const int64_t n_words = (int64_t(ctx->vocab->n_tokens()) + 31)/32;
+        auto desc = mask.desc;
+        desc[2] = int32_t(slot*n_words);
+        const bool set_desc = !binding.desc_set || *binding.last_desc != desc;
+        if ((!hit && size) || set_desc) {
+            if (binding.uploaded) {
+                ggml_backend_event_synchronize(binding.uploaded.get());
+            }
+        }
+        if (!hit) {
+            entry.desc = mask.desc;
+            entry.payload.resize(mask.desc[1]);
+            if (size) {
+                std::memcpy(entry.payload.data(), payload, size);
+            }
+        }
+        entry.used = ++binding.clock;
+        if (set_desc) {
+            *binding.last_desc = desc;
+            binding.desc_set = true;
+        }
+        if ((!hit && size) || set_desc) {
+            auto * backend = sched ? ggml_backend_sched_get_tensor_backend(sched, binding.payload) : nullptr;
+            if (backend && ggml_backend_sched_get_tensor_backend(sched, binding.desc) != backend) {
+                backend = nullptr;
+            }
+            if (backend && !binding.uploaded) {
+                binding.uploaded.reset(ggml_backend_event_new(ggml_backend_get_device(backend)));
+            }
+            const bool async = backend && binding.uploaded;
+            if (!async && !hit && size && set_desc) {
+                std::vector<uint32_t> upload(desc.size() + entry.payload.size());
+                std::memcpy(upload.data(), desc.data(), sizeof(desc));
+                std::memcpy(upload.data() + desc.size(), entry.payload.data(), size);
+                ggml_tensor * tensors[] = {binding.payload, binding.desc};
+                const size_t offsets[] = {size_t(desc[2])*sizeof(int32_t), 0};
+                const size_t sizes[] = {size, sizeof(desc)};
+                const size_t data_offsets[] = {sizeof(desc), 0};
+                ggml_backend_tensor_set_n(tensors, upload.data(), offsets, sizes, data_offsets, 2);
+                continue;
+            }
+            if (!hit && size) {
+                if (async) {
+                    ggml_backend_tensor_set_async(backend, binding.payload, entry.payload.data(), size_t(desc[2])*sizeof(int32_t), size);
+                } else {
+                    ggml_backend_tensor_set(binding.payload, entry.payload.data(), size_t(desc[2])*sizeof(int32_t), size);
+                }
+            }
+            if (set_desc) {
+                if (async) {
+                    ggml_backend_tensor_set_async(backend, binding.desc, binding.last_desc->data(), 0, sizeof(desc));
+                } else {
+                    ggml_backend_tensor_set(binding.desc, binding.last_desc->data(), 0, sizeof(desc));
+                }
+            }
+            if (async) {
+                ggml_backend_event_record(binding.uploaded.get(), backend);
+            }
+        }
+    }
+}
+
+static void llama_sampler_grammar_backend_reset(llama_sampler * smpl) {
+    auto * ctx = (llama_sampler_grammar *) smpl->ctx;
+    ctx->bindings.clear();
+}
+
+static void llama_sampler_grammar_copy_state(const llama_sampler * src, llama_sampler * dst) {
+    const auto * src_ctx = (const llama_sampler_grammar *) src->ctx;
+    auto * dst_ctx = (llama_sampler_grammar *) dst->ctx;
+    GGML_ASSERT(src_ctx->vocab == dst_ctx->vocab && src_ctx->grammar_str == dst_ctx->grammar_str &&
+                src_ctx->grammar_root == dst_ctx->grammar_root);
+
+    auto * grammar = src_ctx->grammar ? llama_grammar_clone_impl(*src_ctx->grammar) : nullptr;
+    llama_grammar_free_impl(dst_ctx->grammar);
+    dst_ctx->grammar = grammar;
+    dst_ctx->rows.clear();
+    dst_ctx->prepared_rows.clear();
+    ++dst_ctx->state_generation;
+}
+
 static struct llama_sampler_i llama_sampler_grammar_i = {
     /* .name              = */ llama_sampler_grammar_name,
     /* .accept            = */ llama_sampler_grammar_accept_impl,
@@ -2760,13 +3241,36 @@ static struct llama_sampler_i llama_sampler_grammar_i = {
     /* .reset             = */ llama_sampler_grammar_reset,
     /* .clone             = */ llama_sampler_grammar_clone,
     /* .free              = */ llama_sampler_grammar_free,
-    /* .backend_init      = */ nullptr,
+    /* .backend_init      = */ llama_sampler_grammar_backend_init,
     /* .backend_accept    = */ nullptr,
-    /* .backend_apply     = */ nullptr,
-    /* .backend_set_input = */ nullptr,
-    /* .backend_reset     = */ nullptr,
-    /* .copy_state        = */ nullptr,
+    /* .backend_apply     = */ llama_sampler_grammar_backend_apply,
+    /* .backend_set_input = */ llama_sampler_grammar_backend_set_input,
+    /* .backend_reset     = */ llama_sampler_grammar_backend_reset,
+    /* .copy_state        = */ llama_sampler_grammar_copy_state,
+    /* .backend_prepare   = */ llama_sampler_grammar_backend_prepare,
+    /* .backend_row_usable = */ llama_sampler_grammar_backend_row_usable,
 };
+
+static int64_t llama_sampler_backend_probe_n_vocab(const llama_sampler * sampler) {
+    if (sampler->iface == &llama_sampler_grammar_i) {
+        const auto * ctx = (const llama_sampler_grammar *) sampler->ctx;
+        return ctx->grammar && ctx->vocab ? ctx->vocab->n_tokens() : 0;
+    }
+    int64_t n_vocab = 0;
+    if (sampler->iface == &llama_sampler_chain_i) {
+        const auto * chain = (const llama_sampler_chain *) sampler->ctx;
+        for (const auto & entry : chain->samplers) {
+            if (!entry.is_backend) {
+                break;
+            }
+            const int64_t n = llama_sampler_backend_probe_n_vocab(entry.ptr);
+            if (n > 0) {
+                n_vocab = n_vocab > 0 ? std::min(n_vocab, n) : n;
+            }
+        }
+    }
+    return n_vocab;
+}
 
 static struct llama_sampler * llama_sampler_init_grammar_impl(
         const struct llama_vocab * vocab,
@@ -3093,7 +3597,7 @@ static void llama_sampler_penalties_backend_apply(
     }
 }
 
-static void llama_sampler_penalties_backend_set_input(struct llama_sampler * smpl) {
+static void llama_sampler_penalties_backend_set_input(struct llama_sampler * smpl, ggml_backend_sched_t ) {
     auto * sctx = (llama_sampler_penalties *) smpl->ctx;
 
     if (!sctx->inp_token_ids || !sctx->inp_counts || sctx->n_max <= 0 || sctx->n_vocab <= 0) {
@@ -3973,7 +4477,7 @@ static void llama_sampler_logit_bias_backend_apply(
     data->logits = ggml_add(ctx, data->logits, cur);
 }
 
-static void llama_sampler_logit_bias_backend_set_input(struct llama_sampler * smpl) {
+static void llama_sampler_logit_bias_backend_set_input(struct llama_sampler * smpl, ggml_backend_sched_t ) {
     auto * sctx = (llama_sampler_logit_bias *) smpl->ctx;
     if (sctx->logit_bias.empty()) {
         return;
@@ -4378,4 +4882,33 @@ void llama_perf_sampler_reset(struct llama_sampler * chain) {
 
     ctx->t_sample_us = 0;
     ctx->n_sample    = 0;
+}
+
+bool llama_sampler_grammar_prepare_rows(llama_sampler * grammar, const llama_sampler_row * rows, size_t n_rows, bool mask) {
+    if (grammar->iface == &llama_sampler_grammar_i) {
+        const bool committed = n_rows == 1 && rows && rows[0].type == LLAMA_SAMPLER_PREFIX_COMMITTED && rows[0].n_prefix == 0;
+        return llama_sampler_grammar_prepare_rows_impl(grammar, rows, n_rows, mask || !committed);
+    }
+    return !grammar->iface->backend_prepare || grammar->iface->backend_prepare(grammar, rows, n_rows);
+}
+
+bool llama_sampler_backend_can_retry(const llama_sampler * sampler) {
+    if (sampler->iface != &llama_sampler_chain_i) {
+        return false;
+    }
+    const auto * chain = (const llama_sampler_chain *) sampler->ctx;
+    if (!chain->is_init || chain->samplers.size() < 2) {
+        return false;
+    }
+    for (size_t i = 1; i < chain->samplers.size(); ++i) {
+        const auto & entry = chain->samplers[i];
+        const auto * iface = entry.ptr->iface;
+        if (!entry.is_backend || (iface != &llama_sampler_empty_i && iface != &llama_sampler_dist_i && iface != &llama_sampler_greedy_i &&
+                iface != &llama_sampler_top_k_i && iface != &llama_sampler_top_p_i && iface != &llama_sampler_min_p_i &&
+                iface != &llama_sampler_temp_i && iface != &llama_sampler_temp_ext_i &&
+                iface != &llama_sampler_penalties_i && iface != &llama_sampler_logit_bias_i)) {
+            return false;
+        }
+    }
+    return true;
 }

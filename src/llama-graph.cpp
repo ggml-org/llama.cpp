@@ -1379,7 +1379,7 @@ void llm_graph_input_sampling::set_input(const llama_ubatch * ubatch) {
         auto & sampler = samplers[seq_id];
 
         if (sampler->iface->backend_set_input) {
-            sampler->iface->backend_set_input(sampler);
+            sampler->iface->backend_set_input(sampler, sched);
         }
     }
 }
@@ -1392,6 +1392,12 @@ bool llm_graph_input_sampling::can_reuse(const llm_graph_params & params) {
     for (const auto & [seq_id, sampler] : params.samplers) {
         if (samplers[seq_id] != sampler) {
             return false;
+        }
+        const auto & rows = usable.at(seq_id);
+        for (size_t row = 0; row < rows.size(); ++row) {
+            if (rows[row] != llama_sampler_backend_row_usable(sampler, row)) {
+                return false;
+            }
         }
     }
 
@@ -4435,7 +4441,12 @@ void llm_graph_context::build_sampling() const {
     std::array<ggml_tensor *, 2> outs;
     outs[0] = res->t_logits;
 
-    auto inp_sampling = std::make_unique<llm_graph_input_sampling>(samplers);
+    auto inp_sampling = std::make_unique<llm_graph_input_sampling>(samplers, sched);
+    for (const auto & entry : samplers) {
+        for (uint32_t row = 0; row < cparams.n_outputs_max_per_seq; ++row) {
+            inp_sampling->usable[entry.first].push_back(llama_sampler_backend_row_usable(entry.second, row));
+        }
+    }
     res->add_input(std::move(inp_sampling));
 
     std::map<llama_seq_id, std::vector<uint32_t>> sampling_rows;
@@ -4484,10 +4495,16 @@ void llm_graph_context::build_sampling() const {
                 /*.probs        =*/ nullptr,
                 /*.sampled      =*/ nullptr,
                 /*.candidates   =*/ nullptr,
+                /*.skip         =*/ false,
+                /*.inactive     =*/ !active,
             };
 
             assert(sampler->iface->backend_apply);
             sampler->iface->backend_apply(sampler, ctx0, gf, &data);
+
+            if (data.skip) {
+                continue;
+            }
 
             if (data.sampled     != nullptr) { res->t_sampling_all.push_back(data.sampled);     }
             if (data.probs       != nullptr) { res->t_sampling_all.push_back(data.probs);       }

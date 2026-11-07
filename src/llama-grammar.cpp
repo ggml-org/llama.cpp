@@ -33,15 +33,13 @@ static std::pair<uint32_t, const char *> decode_utf8(const char * src) {
     return std::make_pair(value, pos);
 }
 
-static std::pair<std::vector<uint32_t>, llama_partial_utf8> decode_utf8(
+static llama_partial_utf8 decode_utf8(
         const std::string & src,
-        llama_partial_utf8 partial_start) {
+        llama_partial_utf8 partial_start,
+        std::vector<uint32_t> & code_points) {
     static const int      lookup[] = { 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 2, 2, 3, 4 };
     const char          * pos      = src.c_str();
-    std::vector<uint32_t> code_points;
-
-    // common english strings have the same number of codepoints and bytes. `+ 1` for the terminating 0.
-    code_points.reserve(src.size() + 1);
+    const size_t start = code_points.size();
     uint32_t value    = partial_start.value;
     int      n_remain = partial_start.n_remain;
 
@@ -51,7 +49,7 @@ static std::pair<std::vector<uint32_t>, llama_partial_utf8> decode_utf8(
         if ((next_byte >> 6) != 2) {
             // invalid sequence, abort
             code_points.push_back(0);
-            return std::make_pair(std::move(code_points), llama_partial_utf8{ 0, -1 });
+            return { 0, -1 };
         }
         value = (value << 6) + (next_byte & 0x3F);
         ++pos;
@@ -70,9 +68,9 @@ static std::pair<std::vector<uint32_t>, llama_partial_utf8> decode_utf8(
 
         if (n_remain < 0) {
             // invalid sequence, abort
-            code_points.clear();
+            code_points.resize(start);
             code_points.push_back(0);
-            return std::make_pair(std::move(code_points), llama_partial_utf8{ 0, n_remain });
+            return { 0, n_remain };
         }
 
         uint8_t mask  = (1 << (7 - n_remain)) - 1;
@@ -90,7 +88,33 @@ static std::pair<std::vector<uint32_t>, llama_partial_utf8> decode_utf8(
     }
     code_points.push_back(0);
 
-    return std::make_pair(std::move(code_points), llama_partial_utf8{ value, n_remain });
+    return { value, n_remain };
+}
+
+void llama_grammar::candidate_storage::clear() {
+    candidates.clear();
+    offsets.clear();
+    code_points.clear();
+}
+
+void llama_grammar::candidate_storage::add(size_t index, llama_token id, const std::string & piece, llama_partial_utf8 partial_utf8) {
+    offsets.push_back(code_points.size());
+    const auto partial = decode_utf8(piece, partial_utf8, code_points);
+    candidates.push_back({ index, nullptr, partial, id });
+}
+
+void llama_grammar::candidate_storage::set_pointers() {
+    for (size_t i = 0; i < candidates.size(); ++i) {
+        candidates[i].code_points = code_points.data() + offsets[i];
+    }
+}
+
+void llama_grammar::init_rule_positions() {
+    for (size_t ir = 0; ir < rules->size(); ++ir) {
+        for (size_t ie = 0; ie < (*rules)[ir].size(); ++ie) {
+            rule_positions.emplace(&(*rules)[ir][ie], std::make_pair(ir, ie));
+        }
+    }
 }
 
 static bool is_digit_char(char c) {
@@ -801,7 +825,8 @@ static std::pair<bool, const llama_grammar_element *> llama_grammar_match_char(
 // asserts that pos is pointing to a char range element
 static bool llama_grammar_match_partial_char(
         const llama_grammar_element * pos,
-        const llama_partial_utf8      partial_utf8) {
+        const llama_partial_utf8      partial_utf8,
+        bool                          allow_overlong = false) {
     bool is_positive_char = pos->type == LLAMA_GRETYPE_CHAR || pos->type == LLAMA_GRETYPE_CHAR_ANY;
     GGML_ASSERT(is_positive_char || pos->type == LLAMA_GRETYPE_CHAR_NOT);
 
@@ -809,7 +834,7 @@ static bool llama_grammar_match_partial_char(
     int      n_remain      = partial_utf8.n_remain;
 
     // invalid sequence or 7-bit char split across 2 bytes (overlong)
-    if (n_remain < 0 || (n_remain == 1 && partial_value < 2)) {
+    if (n_remain < 0 || (!allow_overlong && n_remain == 1 && partial_value < 2)) {
         return false;
     }
 
@@ -817,7 +842,7 @@ static bool llama_grammar_match_partial_char(
     uint32_t low  = partial_value << (n_remain * 6);
     uint32_t high = low | ((1 << (n_remain * 6)) - 1);
 
-    if (low == 0) {
+    if (low == 0 && !allow_overlong) {
         if (n_remain == 2) {
             low = 1 << 11;
         } else if (n_remain == 3) {
@@ -864,10 +889,11 @@ static bool llama_grammar_match_token(
 
 // transforms a grammar pushdown stack into N possible stacks, all ending
 // at a character range (terminal element)
-static void llama_grammar_advance_stack(
+static bool llama_grammar_advance_stack(
         const llama_grammar_rules  & rules,
         const llama_grammar_stack  & stack,
-        llama_grammar_stacks & new_stacks) {
+        llama_grammar_stacks & new_stacks,
+        size_t * budget = nullptr) {
     std::vector<llama_grammar_stack> todo;
     todo.push_back(stack);
 
@@ -882,6 +908,12 @@ static void llama_grammar_advance_stack(
     std::set<llama_grammar_stack, decltype(stack_cmp)> seen(stack_cmp);
 
     while (!todo.empty()) {
+        if (budget) {
+            if (todo.back().size() >= *budget) {
+                return false;
+            }
+            *budget -= todo.back().size() + 1;
+        }
         llama_grammar_stack curr_stack_candidate = std::move(todo.back());
         todo.pop_back();
 
@@ -915,6 +947,12 @@ static void llama_grammar_advance_stack(
                     // if alternate is nonempty, add to stack
                     next_stack.push_back(subpos);
                 }
+                if (budget) {
+                    if (next_stack.size() >= *budget) {
+                        return false;
+                    }
+                    *budget -= next_stack.size() + 1;
+                }
                 todo.push_back(std::move(next_stack));
                 while (!llama_grammar_is_end_of_sequence(subpos)) {
                     // scan to end of alternate def
@@ -946,6 +984,7 @@ static void llama_grammar_advance_stack(
             GGML_ABORT("fatal error");
         }
     }
+    return true;
 }
 
 // Left-factor grammar rules to reduce redundant parallel stacks.
@@ -1194,14 +1233,15 @@ static void llama_grammar_accept_chr(
 }
 
 void llama_grammar_accept(struct llama_grammar * grammar, uint32_t chr) {
-    llama_grammar_stacks stacks_new;
+    auto & stacks_new = grammar->accept_scratch.stacks_new;
+    stacks_new.clear();
     stacks_new.reserve(grammar->stacks.size());
 
     for (const auto & stack : grammar->stacks) {
         llama_grammar_accept_chr(*grammar, stack, chr, stacks_new);
     }
 
-    grammar->stacks = std::move(stacks_new);
+    grammar->stacks.swap(stacks_new);
 }
 
 // checks the code point at depth of each candidate (an index into the input) against the stack
@@ -1423,7 +1463,7 @@ struct llama_grammar * llama_grammar_init_impl(
     // Important: vec_rules has to be moved here, not copied, because stacks contains
     // pointers to elements of vec_rules. If vec_rules were copied into llama_grammar
     // then the pointers would be invalidated when the local vec_rules goes out of scope.
-    return new llama_grammar {
+    auto * result = new llama_grammar {
         vocab,
         std::make_shared<const llama_grammar_rules>(std::move(vec_rules)),
         std::move(stacks),
@@ -1434,7 +1474,10 @@ struct llama_grammar * llama_grammar_init_impl(
         /* .trigger_buffer_positions = */ {},
         /* .trigger_tokens = */           {},
         /* .trigger_patterns = */         {},
+        /* .mask_cache = */               {},
     };
+    result->init_rule_positions();
+    return result;
 }
 
 struct llama_grammar * llama_grammar_init_impl(
@@ -1538,7 +1581,7 @@ struct llama_grammar * llama_grammar_init_impl(
     // Important: vec_rules has to be moved here, not copied, because stacks contains
     // pointers to elements of vec_rules. If vec_rules were copied into llama_grammar
     // then the pointers would be invalidated when the local vec_rules goes out of scope.
-    return new llama_grammar {
+    auto * result = new llama_grammar {
         vocab,
         std::make_shared<const llama_grammar_rules>(std::move(vec_rules)),
         std::move(stacks),
@@ -1549,7 +1592,10 @@ struct llama_grammar * llama_grammar_init_impl(
         /* .trigger_buffer_positions = */ {},
         std::move(vec_trigger_tokens),
         std::move(vec_trigger_patterns),
+        /* .mask_cache = */               {},
     };
+    result->init_rule_positions();
+    return result;
 }
 
 void llama_grammar_free_impl(struct llama_grammar * grammar) {
@@ -1561,7 +1607,309 @@ void llama_grammar_free_impl(struct llama_grammar * grammar) {
 }
 
 struct llama_grammar * llama_grammar_clone_impl(const struct llama_grammar & grammar) {
-    return new llama_grammar(grammar);
+    auto * result = new llama_grammar(grammar);
+    result->mask_cache = {};
+    result->scratch = {};
+    result->accept_scratch = {};
+    return result;
+}
+
+bool llama_grammar_mask_cache::key::operator==(const key & other) const {
+    return program == other.program && vocab == other.vocab && n_vocab == other.n_vocab &&
+           partial_utf8.value == other.partial_utf8.value && partial_utf8.n_remain == other.partial_utf8.n_remain &&
+           enabled == other.enabled && stacks == other.stacks;
+}
+
+static bool llama_grammar_mask_cache_key(const llama_grammar & grammar, size_t max_words, llama_grammar_mask_cache::key & key) {
+    key.program = grammar.rules.get();
+    key.vocab = grammar.vocab;
+    key.n_vocab = grammar.vocab->n_tokens();
+    key.partial_utf8 = grammar.partial_utf8;
+    if (key.partial_utf8.n_remain == 0) {
+        key.partial_utf8.value = 0;
+    }
+    key.enabled = !grammar.awaiting_trigger;
+
+    size_t n_words = 0;
+    for (const auto & stack : grammar.stacks) {
+        if (n_words == max_words || stack.size() > (max_words - n_words - 1) / 2) {
+            return false;
+        }
+        n_words += 1 + 2 * stack.size();
+    }
+
+    std::vector<std::vector<size_t>> stacks;
+    stacks.reserve(grammar.stacks.size());
+    for (const auto & stack : grammar.stacks) {
+        std::vector<size_t> positions;
+        positions.reserve(2 * stack.size());
+        for (const auto * pos : stack) {
+            const auto it = grammar.rule_positions.find(pos);
+            GGML_ASSERT(it != grammar.rule_positions.end());
+            positions.push_back(it->second.first);
+            positions.push_back(it->second.second);
+        }
+        stacks.push_back(std::move(positions));
+    }
+    std::sort(stacks.begin(), stacks.end());
+    stacks.erase(std::unique(stacks.begin(), stacks.end()), stacks.end());
+
+    key.stacks.reserve(n_words);
+    for (const auto & stack : stacks) {
+        key.stacks.push_back(stack.size() / 2);
+        key.stacks.insert(key.stacks.end(), stack.begin(), stack.end());
+    }
+    return true;
+}
+
+bool llama_grammar_get_allowed_tokens_trie(const llama_grammar & grammar, std::vector<uint32_t> & mask, size_t max_work) {
+    if (grammar.awaiting_trigger || grammar.stacks.empty()) {
+        return false;
+    }
+    for (const auto & rule : *grammar.rules) {
+        for (const auto & element : rule) {
+            if (max_work == 0) {
+                return false;
+            }
+            --max_work;
+            if (element.type == LLAMA_GRETYPE_TOKEN || element.type == LLAMA_GRETYPE_TOKEN_NOT) {
+                return false;
+            }
+        }
+    }
+    const auto * trie = grammar.vocab->get_grammar_trie();
+    if (!trie) {
+        return false;
+    }
+
+    const uint32_t n_vocab = grammar.vocab->n_tokens();
+    mask.assign(n_vocab / 32 + (n_vocab % 32 != 0), 0);
+    auto allow = [&](llama_token id) { mask[id / 32] |= uint32_t(1) << (id % 32); };
+    for (const auto & stack : grammar.stacks) {
+        if (stack.empty()) {
+            for (const auto id : trie->eog) {
+                allow(id);
+            }
+            break;
+        }
+    }
+
+    struct state {
+        llama_grammar_stacks stacks;
+        llama_partial_utf8 partial;
+        bool strict;  // Only the continuation of a previous token validates continuation bytes.
+        bool nul = false;
+        bool stopped = false; // A decoded zero terminates the match, but decoding continues.
+    };
+    struct level {
+        uint32_t child;
+        state current;
+    };
+    for (const auto & stack : grammar.stacks) {
+        if (stack.size() >= max_work) {
+            return false;
+        }
+        max_work -= stack.size() + 1;
+    }
+    std::vector<level> levels;
+    levels.push_back({ trie->nodes[0].child, { grammar.stacks, grammar.partial_utf8, grammar.partial_utf8.n_remain > 0 } });
+    while (!levels.empty()) {
+        auto & parent = levels.back();
+        if (parent.child == llama_vocab_trie::none) {
+            levels.pop_back();
+            continue;
+        }
+        const auto & node = trie->nodes[parent.child];
+        parent.child = node.sibling;
+        size_t words = 1;
+        for (const auto & stack : parent.current.stacks) {
+            if (stack.size() >= max_work || words > max_work - stack.size() - 1) {
+                return false;
+            }
+            words += stack.size() + 1;
+        }
+        if (words > max_work) {
+            return false;
+        }
+        max_work -= words;
+        state next = parent.current;
+        if (!next.nul) {
+            const uint8_t byte = node.byte;
+            if (byte == 0) {
+                next.nul = true;
+            } else {
+                if (next.partial.n_remain > 0) {
+                    if (next.strict && (byte >> 6) != 2) {
+                        continue;
+                    }
+                    next.partial.value = (next.partial.value << 6) + (byte & 0x3f);
+                    --next.partial.n_remain;
+                } else {
+                    static const int lookup[] = { 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 2, 2, 3, 4 };
+                    next.partial.n_remain = lookup[byte >> 4] - 1;
+                    if (next.partial.n_remain < 0) {
+                        continue;
+                    }
+                    next.partial.value = byte & ((1 << (7 - next.partial.n_remain)) - 1);
+                }
+                if (next.partial.n_remain == 0) {
+                    next.strict = false;
+                    if (next.partial.value == 0) {
+                        next.stopped = true;
+                    }
+                    if (!next.stopped) {
+                        llama_grammar_stacks after;
+                        for (const auto & stack : next.stacks) {
+                            if (stack.empty()) {
+                                continue;
+                            }
+                            const auto match = llama_grammar_match_char(stack.back(), next.partial.value);
+                            if (!match.first) {
+                                continue;
+                            }
+                            llama_grammar_stack remaining(stack.begin(), stack.end() - 1);
+                            if (!llama_grammar_is_end_of_sequence(match.second)) {
+                                remaining.push_back(match.second);
+                            }
+                            if (!llama_grammar_advance_stack(*grammar.rules, remaining, after, &max_work)) {
+                                return false;
+                            }
+                        }
+                        next.stacks = std::move(after);
+                        if (next.stacks.empty()) {
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!next.nul && !next.stopped && next.partial.n_remain > 0 && next.partial.value != 0 &&
+                next.partial.value <= (UINT32_MAX >> (6 * next.partial.n_remain))) {
+            bool viable = false;
+            for (const auto & stack : next.stacks) {
+                if (!stack.empty() && (stack.back()->type == LLAMA_GRETYPE_CHAR_NOT ||
+                        llama_grammar_match_partial_char(stack.back(), next.partial, true))) {
+                    viable = true;
+                    break;
+                }
+            }
+            if (!viable) {
+                continue;
+            }
+        }
+
+        if (node.terminal != llama_vocab_trie::none) {
+            bool valid = false;
+            for (const auto & stack : next.stacks) {
+                if (next.partial.n_remain == 0 || (!stack.empty() &&
+                        llama_grammar_match_partial_char(stack.back(), next.partial))) {
+                    valid = true;
+                    break;
+                }
+            }
+            if (valid) {
+                for (uint32_t terminal = node.terminal; terminal != llama_vocab_trie::none; terminal = trie->terminals[terminal].next) {
+                    if (max_work == 0) {
+                        return false;
+                    }
+                    --max_work;
+                    allow(trie->terminals[terminal].id);
+                }
+            }
+        }
+        levels.push_back({ node.child, std::move(next) });
+    }
+    return true;
+}
+
+static std::vector<uint32_t> llama_grammar_compute_allowed_tokens(const llama_grammar & grammar) {
+    const uint32_t n_vocab = grammar.vocab->n_tokens();
+    std::vector<uint32_t> mask(n_vocab / 32 + (n_vocab % 32 != 0), UINT32_MAX);
+    if (n_vocab % 32 != 0) {
+        mask.back() = (uint32_t(1) << (n_vocab % 32)) - 1;
+    }
+    if (grammar.awaiting_trigger) {
+        return mask;
+    }
+
+    bool allow_eog = false;
+    for (const auto & stack : grammar.stacks) {
+        if (stack.empty()) {
+            allow_eog = true;
+            break;
+        }
+    }
+
+    auto & scratch = grammar.scratch;
+    scratch.clear();
+    scratch.candidates.reserve(n_vocab);
+    scratch.offsets.reserve(n_vocab);
+
+    for (uint32_t i = 0; i < n_vocab; ++i) {
+        const llama_token id = static_cast<llama_token>(i);
+        const std::string & piece = grammar.vocab->token_to_piece(id);
+        if (grammar.vocab->is_eog(id)) {
+            if (!allow_eog) {
+                mask[i / 32] &= ~(uint32_t(1) << (i % 32));
+            }
+        } else if (piece.empty() || piece[0] == 0) {
+            mask[i / 32] &= ~(uint32_t(1) << (i % 32));
+        } else {
+            scratch.add(i, id, piece, grammar.partial_utf8);
+        }
+    }
+
+    scratch.set_pointers();
+    const auto rejects = llama_grammar_reject_candidates(*grammar.rules, grammar.stacks, scratch.candidates);
+    for (const auto & reject : rejects) {
+        mask[reject.index / 32] &= ~(uint32_t(1) << (reject.index % 32));
+    }
+    return mask;
+}
+
+std::vector<uint32_t> llama_grammar_get_allowed_tokens(const llama_grammar & grammar) {
+    GGML_ASSERT(grammar.vocab != nullptr);
+    auto & cache = grammar.mask_cache;
+    while (!cache.entries.empty() && (cache.entries.size() > cache.max_entries || cache.bytes > cache.max_bytes)) {
+        cache.bytes -= cache.entries.back().bytes;
+        cache.entries.pop_back();
+    }
+
+    const size_t mask_bytes = (grammar.vocab->n_tokens() / 32 + (grammar.vocab->n_tokens() % 32 != 0)) * sizeof(uint32_t);
+    const size_t overhead = sizeof(llama_grammar_mask_cache::entry) + 2 * sizeof(void *);
+    llama_grammar_mask_cache::key key;
+    const bool cacheable = cache.max_entries > 0 && cache.max_bytes >= overhead &&
+        mask_bytes <= cache.max_bytes - overhead &&
+        llama_grammar_mask_cache_key(grammar, (cache.max_bytes - overhead - mask_bytes) / sizeof(size_t), key);
+
+    if (cacheable) {
+        for (auto it = cache.entries.begin(); it != cache.entries.end(); ++it) {
+            if (it->state == key) {
+                ++cache.hits;
+                cache.entries.splice(cache.entries.begin(), cache.entries, it);
+                return cache.entries.front().mask;
+            }
+        }
+    }
+
+    ++cache.misses;
+    std::vector<uint32_t> mask;
+    if (!llama_grammar_get_allowed_tokens_trie(grammar, mask)) {
+        mask = llama_grammar_compute_allowed_tokens(grammar);
+    }
+    if (cacheable) {
+        const size_t bytes = overhead + key.stacks.capacity() * sizeof(size_t) + mask_bytes;
+        if (bytes <= cache.max_bytes) {
+            while (!cache.entries.empty() && (cache.entries.size() >= cache.max_entries || bytes > cache.max_bytes - cache.bytes)) {
+                cache.bytes -= cache.entries.back().bytes;
+                cache.entries.pop_back();
+            }
+            cache.entries.push_front({ std::move(key), mask, bytes });
+            cache.bytes += bytes;
+        }
+    }
+    return mask;
 }
 
 void llama_grammar_apply_impl(const struct llama_grammar & grammar, llama_token_data_array * cur_p) {
@@ -1579,11 +1927,11 @@ void llama_grammar_apply_impl(const struct llama_grammar & grammar, llama_token_
         }
     }
 
-    std::vector<std::pair<std::vector<uint32_t>, llama_partial_utf8>> candidates_decoded;
-    candidates_decoded.reserve(cur_p->size);
+    auto & scratch = grammar.scratch;
+    scratch.clear();
 
-    llama_grammar_candidates candidates_grammar;
-    candidates_grammar.reserve(cur_p->size);
+    scratch.candidates.reserve(cur_p->size);
+    scratch.offsets.reserve(cur_p->size);
 
     for (size_t i = 0; i < cur_p->size; ++i) {
         const llama_token id      = cur_p->data[i].id;
@@ -1596,12 +1944,12 @@ void llama_grammar_apply_impl(const struct llama_grammar & grammar, llama_token_
         } else if (piece.empty() || piece[0] == 0) {
             cur_p->data[i].logit = -INFINITY;
         } else {
-            candidates_decoded.push_back(decode_utf8(piece, grammar.partial_utf8));
-            candidates_grammar.push_back({ i, candidates_decoded.back().first.data(), candidates_decoded.back().second, id });
+            scratch.add(i, id, piece, grammar.partial_utf8);
         }
     }
 
-    const auto rejects = llama_grammar_reject_candidates(*grammar.rules, grammar.stacks, candidates_grammar);
+    scratch.set_pointers();
+    const auto rejects = llama_grammar_reject_candidates(*grammar.rules, grammar.stacks, scratch.candidates);
     for (const auto & reject : rejects) {
         cur_p->data[reject.index].logit = -INFINITY;
     }
@@ -1668,14 +2016,15 @@ void llama_grammar_accept_impl(struct llama_grammar & grammar, llama_token token
 
 void llama_grammar_accept_str(struct llama_grammar & grammar, const std::string & piece) {
     // Note terminating 0 in decoded string
-    const auto   decoded     = decode_utf8(piece, grammar.partial_utf8);
-    const auto & code_points = decoded.first;
+    auto & code_points = grammar.accept_scratch.code_points;
+    code_points.clear();
+    const auto partial_utf8 = decode_utf8(piece, grammar.partial_utf8, code_points);
 
     for (auto it = code_points.begin(), end = code_points.end() - 1; it != end; ++it) {
         llama_grammar_accept(&grammar, *it);
     }
 
-    grammar.partial_utf8 = decoded.second;
+    grammar.partial_utf8 = partial_utf8;
     if (grammar.stacks.empty()) {
         throw std::runtime_error("Unexpected empty grammar stack after accepting piece: " + piece);
     }
@@ -1683,10 +2032,13 @@ void llama_grammar_accept_str(struct llama_grammar & grammar, const std::string 
 
 void llama_grammar_accept_token(struct llama_grammar & grammar, llama_token token, const std::string & piece) {
     // Note terminating 0 in decoded string
-    const auto   decoded     = decode_utf8(piece, grammar.partial_utf8);
-    const auto & code_points = decoded.first;
+    auto & scratch = grammar.accept_scratch;
+    auto & code_points = scratch.code_points;
+    code_points.clear();
+    const auto partial_utf8 = decode_utf8(piece, grammar.partial_utf8, code_points);
 
-    llama_grammar_stacks stacks_new;
+    auto & stacks_new = scratch.stacks_new;
+    stacks_new.clear();
     stacks_new.reserve(grammar.stacks.size());
 
     for (const auto & stack : grammar.stacks) {
@@ -1705,16 +2057,19 @@ void llama_grammar_accept_token(struct llama_grammar & grammar, llama_token toke
                 llama_grammar_advance_stack(*grammar.rules, new_stack, stacks_new);
             }
         } else {
-            llama_grammar_stacks current_stacks = {stack};
+            auto & current_stacks = scratch.current_stacks;
+            current_stacks.resize(1);
+            current_stacks[0] = stack;
 
             for (auto it = code_points.begin(), end = code_points.end() - 1; it != end; ++it) {
-                llama_grammar_stacks next_stacks;
+                auto & next_stacks = scratch.next_stacks;
+                next_stacks.clear();
 
                 for (const auto & cur_stack : current_stacks) {
                     llama_grammar_accept_chr(grammar, cur_stack, *it, next_stacks);
                 }
 
-                current_stacks = std::move(next_stacks);
+                current_stacks.swap(next_stacks);
                 if (current_stacks.empty()) {
                     break;
                 }
@@ -1728,8 +2083,8 @@ void llama_grammar_accept_token(struct llama_grammar & grammar, llama_token toke
         }
     }
 
-    grammar.stacks = std::move(stacks_new);
-    grammar.partial_utf8 = decoded.second;
+    grammar.stacks.swap(stacks_new);
+    grammar.partial_utf8 = partial_utf8;
 
     if (grammar.stacks.empty()) {
         throw std::runtime_error("Unexpected empty grammar stack after accepting piece: " + piece + " (" + std::to_string(token) + ")");

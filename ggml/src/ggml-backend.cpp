@@ -2207,6 +2207,65 @@ static void ggml_backend_sched_prefetch_inputs(ggml_backend_sched_t sched, int s
     }
 }
 
+static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, struct ggml_backend_sched_split * split, bool host_weights) {
+    std::vector<ggml_tensor *> tensors;
+    std::vector<size_t> offsets;
+    std::vector<size_t> sizes;
+    std::vector<size_t> data_offsets;
+    std::vector<uint8_t> data;
+
+    auto flush = [&]() {
+        if (tensors.empty()) {
+            return;
+        }
+        const int backend_id = split->backend_id;
+        if (sched->events[backend_id][sched->cur_copy] != NULL) {
+            ggml_backend_event_synchronize(sched->events[backend_id][sched->cur_copy]);
+        } else {
+            ggml_backend_synchronize(sched->backends[backend_id]);
+        }
+        ggml_backend_tensor_set_n(tensors.data(), data.data(), offsets.data(), sizes.data(), data_offsets.data(), tensors.size());
+        tensors.clear();
+        offsets.clear();
+        sizes.clear();
+        data_offsets.clear();
+        data.clear();
+    };
+
+    for (int i = 0; i < split->n_inputs; ++i) {
+        auto * input = split->inputs[i];
+        if (!sched->hv_tensor_requires_copy[hash_id(input)] || ggml_backend_sched_is_host_weight(input) != host_weights) {
+            continue;
+        }
+        if ((input->flags & GGML_TENSOR_FLAG_INPUT) && ggml_backend_buffer_is_host(input->buffer)) {
+            auto * dst = tensor_copy(input, split->backend_id, sched->cur_copy);
+            if (!tensors.empty() && ggml_backend_buffer_get_type(dst->buffer) != ggml_backend_buffer_get_type(tensors.back()->buffer)) {
+                flush();
+            }
+            const size_t size = ggml_nbytes(input);
+            const size_t offset = data.size();
+            GGML_ASSERT(size <= SIZE_MAX - offset);
+            if (offset + size > 1024*1024) {
+                flush();
+                ggml_backend_sched_copy_input(sched, split, input);
+                continue;
+            }
+            data.resize(offset + size);
+            if (size) {
+                memcpy(data.data() + offset, input->data, size);
+            }
+            tensors.push_back(dst);
+            offsets.push_back(0);
+            sizes.push_back(size);
+            data_offsets.push_back(offset);
+        } else {
+            flush();
+            ggml_backend_sched_copy_input(sched, split, input);
+        }
+    }
+    flush();
+}
+
 static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t sched) {
     GGML_ASSERT(sched);
     struct ggml_backend_sched_split * splits = sched->splits;
@@ -2230,21 +2289,11 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
         // copy the input tensors to the split backend
         // the weights in host memory are copied last, so that the copy callback can read the other inputs of the split
-        for (int input_id = 0; input_id < split->n_inputs; input_id++) {
-            struct ggml_tensor * input = split->inputs[input_id];
-            if (!ggml_backend_sched_is_host_weight(input) && sched->hv_tensor_requires_copy[hash_id(input)]) {
-                ggml_backend_sched_copy_input(sched, split, input);
-            }
-        }
+        ggml_backend_sched_copy_inputs(sched, split, false);
         // after the copies above, which may read host memory reused by the copies of the next split
         // before the weights, whose copy callback may queue large uploads
         ggml_backend_sched_prefetch_inputs(sched, split_id);
-        for (int input_id = 0; input_id < split->n_inputs; input_id++) {
-            struct ggml_tensor * input = split->inputs[input_id];
-            if (ggml_backend_sched_is_host_weight(input) && sched->hv_tensor_requires_copy[hash_id(input)]) {
-                ggml_backend_sched_copy_input(sched, split, input);
-            }
-        }
+        ggml_backend_sched_copy_inputs(sched, split, true);
 
         if (!sched->callback_eval) {
             enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &split->graph);

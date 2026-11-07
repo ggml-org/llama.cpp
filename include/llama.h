@@ -463,8 +463,15 @@ extern "C" {
         float bias;
     } llama_logit_bias;
 
+    enum llama_sampler_output {
+        LLAMA_SAMPLER_OUTPUT_TOKEN      = 0,
+        LLAMA_SAMPLER_OUTPUT_CANDIDATES = 1 << 0,
+        LLAMA_SAMPLER_OUTPUT_RAW        = 1 << 1,
+    };
+
     typedef struct llama_sampler_chain_params {
         bool no_perf; // whether to measure performance timings
+        uint32_t output_flags; // llama_sampler_output flags for backend readback
     } llama_sampler_chain_params;
 
     // used in chat template
@@ -1118,6 +1125,8 @@ extern "C" {
     // returns NULL for invalid ids.
     LLAMA_API float * llama_get_logits_ith(struct llama_context * ctx, int32_t i);
 
+    LLAMA_API float * llama_get_logits_ith_raw(struct llama_context * ctx, int32_t i);
+
     // Get all output token embeddings.
     // when pooling_type == LLAMA_POOLING_TYPE_NONE or when using a generative model,
     // the embeddings for which llama_batch.logits[i] != 0 are stored contiguously
@@ -1372,11 +1381,20 @@ extern "C" {
 
     typedef void * llama_sampler_context_t;
 
+    struct llama_sampler_row;
+
     struct llama_sampler_data {
         struct ggml_tensor * logits;
         struct ggml_tensor * probs;
         struct ggml_tensor * sampled;
         struct ggml_tensor * candidates;
+#ifdef __cplusplus
+        bool skip = false; // unusable provisional prefix; do not execute this sampling branch
+        bool inactive = false; // graph padding, not an output row
+#else
+        bool skip;
+        bool inactive;
+#endif
     };
 
     // user code can implement the interface below in order to create custom llama_sampler
@@ -1412,8 +1430,8 @@ extern "C" {
                 struct ggml_cgraph        * gf,
                 struct llama_sampler_data * data);
 
-        // called before graph execution to set inputs for the current ubatch
-        void (*backend_set_input)(struct llama_sampler * smpl);
+        // called before graph execution; sched may be NULL for synchronous input uploads
+        void (*backend_set_input)(struct llama_sampler * smpl, ggml_backend_sched_t sched);
 
         // called before rebuilding a sampling graph to clear any internal sampler state
         void (*backend_reset)(struct llama_sampler * smpl);
@@ -1421,6 +1439,15 @@ extern "C" {
         // copy mutable state from src into dst while keeping dst's references to the current sampling graph
         // src and dst must have the same type and configuration
         void (*copy_state)(const struct llama_sampler * src, struct llama_sampler * dst);
+
+        // Prepare provisional states in graph-row order, without advancing committed history.
+#ifdef __cplusplus
+        bool (*backend_prepare)(struct llama_sampler * smpl, const struct llama_sampler_row * rows, size_t n_rows) = nullptr;
+        bool (*backend_row_usable)(const struct llama_sampler * smpl, size_t row) = nullptr;
+#else
+        bool (*backend_prepare)(struct llama_sampler * smpl, const struct llama_sampler_row * rows, size_t n_rows);
+        bool (*backend_row_usable)(const struct llama_sampler * smpl, size_t row);
+#endif
     };
 
     struct llama_sampler {
@@ -1428,6 +1455,8 @@ extern "C" {
 
         llama_sampler_context_t ctx;
     };
+
+    LLAMA_API bool llama_sampler_apply_grammar(struct llama_sampler * grammar, struct llama_context * ctx, int32_t idx, float * logits);
 
     // [EXPERIMENTAL]
     // attach a sampler to the context

@@ -1,0 +1,604 @@
+{
+    "description": "Sampler fixture adapted from Syndatis tools; code_search is a representative project search schema. These definitions do not execute tools.",
+    "tools": [
+        {
+            "type": "function",
+            "function": {
+                "name": "fs_read",
+                "description": "Read a file or an inclusive line range. Use character windows for very long lines; use fs_search to locate content and fs_glob to locate files.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Absolute or project-relative file path."
+                        },
+                        "start_line": {
+                            "type": "integer",
+                            "description": "First line, starting at 1."
+                        },
+                        "end_line": {
+                            "type": "integer",
+                            "description": "Last line, inclusive."
+                        },
+                        "start_char": {
+                            "type": "integer",
+                            "description": "First UTF-16 character offset, starting at 0."
+                        },
+                        "max_chars": {
+                            "type": "integer",
+                            "description": "Maximum characters in the window."
+                        },
+                        "max_bytes": {
+                            "type": "integer",
+                            "description": "Maximum bytes for a full-file read."
+                        },
+                        "encoding": {
+                            "type": "string",
+                            "description": "Text encoding, or base64 for binary files."
+                        }
+                    },
+                    "required": [
+                        "path"
+                    ],
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "fs_write",
+                "description": "Create or overwrite a complete file. To change part of an existing file use fs_edit. Parent directories require create_dirs; large reductions require allow_shrink.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "File path to write."
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "Complete file contents."
+                        },
+                        "create_dirs": {
+                            "type": "boolean",
+                            "description": "Create missing parent directories."
+                        },
+                        "allow_shrink": {
+                            "type": "boolean",
+                            "description": "Allow replacing a large file with much smaller contents."
+                        }
+                    },
+                    "required": [
+                        "path",
+                        "content"
+                    ],
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "fs_edit",
+                "description": "Replace an exact substring in an existing file. The old text must occur exactly once unless replace_all is true.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "File path to edit."
+                        },
+                        "old_string": {
+                            "type": "string",
+                            "description": "Exact text to replace."
+                        },
+                        "new_string": {
+                            "type": "string",
+                            "description": "Replacement text."
+                        },
+                        "replace_all": {
+                            "type": "boolean",
+                            "description": "Replace all occurrences."
+                        }
+                    },
+                    "required": [
+                        "path",
+                        "old_string",
+                        "new_string"
+                    ],
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "fs_search",
+                "description": "Search a regular expression inside one specific file and return matches with context lines. Use fs_glob to find files by name.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Specific file to search."
+                        },
+                        "pattern": {
+                            "type": "string",
+                            "description": "Regular expression body or /pattern/flags literal."
+                        },
+                        "context_lines": {
+                            "type": "integer",
+                            "description": "Context lines on each side."
+                        },
+                        "max_matches": {
+                            "type": "integer",
+                            "description": "Maximum matches to return."
+                        }
+                    },
+                    "required": [
+                        "path",
+                        "pattern"
+                    ],
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "fs_glob",
+                "description": "Find files and directories by path pattern. Supports *, **, ?, and character classes. Use this to explore layout before reading files.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "pattern": {
+                            "type": "string",
+                            "description": "Project-relative glob pattern."
+                        },
+                        "cwd": {
+                            "type": "string",
+                            "description": "Directory to resolve the pattern against."
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "description": "Maximum paths to return."
+                        }
+                    },
+                    "required": [
+                        "pattern"
+                    ],
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "shell_exec",
+                "description": "Execute a shell command with pipes, redirects and builtins. Optionally set a working directory, timeout and extra environment variables.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "Command to execute."
+                        },
+                        "cwd": {
+                            "type": "string",
+                            "description": "Working directory."
+                        },
+                        "timeout_ms": {
+                            "type": "integer",
+                            "description": "Time limit in milliseconds."
+                        },
+                        "env": {
+                            "type": "object",
+                            "description": "Additional string environment variables.",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "required": [
+                        "command"
+                    ],
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "show_structure",
+                "description": "Parse a source file and render a hierarchical outline of named declarations with their kinds and line ranges.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "file": {
+                            "type": "string",
+                            "description": "Source file path."
+                        }
+                    },
+                    "required": [
+                        "file"
+                    ],
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "list_symbols",
+                "description": "Return named declarations in a source file as a flat list with names, kinds, line ranges and enclosing containers.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "file": {
+                            "type": "string",
+                            "description": "Source file path."
+                        }
+                    },
+                    "required": [
+                        "file"
+                    ],
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "find_symbol",
+                "description": "Find a declaration by its exact case-sensitive name in a source file or directory. Search recursively unless disabled.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Exact bare symbol name."
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": "File or directory to search."
+                        },
+                        "recursive": {
+                            "type": "boolean",
+                            "description": "Walk subdirectories."
+                        },
+                        "language": {
+                            "type": "string",
+                            "description": "Optional parser language."
+                        }
+                    },
+                    "required": [
+                        "name",
+                        "path"
+                    ],
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "task_list",
+                "description": "Read the persistent project task tree, including statuses and progress notes. Optional filters retain ancestor tasks for context.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "status": {
+                            "type": "array",
+                            "description": "Statuses to include.",
+                            "items": {
+                                "type": "string",
+                                "enum": [
+                                    "pending",
+                                    "started",
+                                    "done",
+                                    "cancelled",
+                                    "obsoleted"
+                                ]
+                            }
+                        },
+                        "root_id": {
+                            "type": "string",
+                            "description": "Root task of a subtree."
+                        },
+                        "notes": {
+                            "type": "string",
+                            "description": "Amount of note history.",
+                            "enum": [
+                                "none",
+                                "latest",
+                                "all"
+                            ]
+                        }
+                    },
+                    "required": [],
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "task_add",
+                "description": "Add one or more pending tasks as siblings in the specified order. Set parent_id to add subtasks.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "titles": {
+                            "type": "array",
+                            "description": "Short task titles.",
+                            "items": {
+                                "type": "string"
+                            }
+                        },
+                        "parent_id": {
+                            "type": "string",
+                            "description": "Optional parent task id."
+                        }
+                    },
+                    "required": [
+                        "titles"
+                    ],
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "task_set_status",
+                "description": "Set a task status and optionally append a progress note. Cascade applies the change to every descendant.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "description": "Task id."
+                        },
+                        "status": {
+                            "type": "string",
+                            "description": "New status.",
+                            "enum": [
+                                "pending",
+                                "started",
+                                "done",
+                                "cancelled",
+                                "obsoleted"
+                            ]
+                        },
+                        "note": {
+                            "type": "string",
+                            "description": "Optional progress note."
+                        },
+                        "cascade": {
+                            "type": "boolean",
+                            "description": "Apply to descendants."
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "status"
+                    ],
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "task_note",
+                "description": "Append a timestamped progress note without changing task status. Record findings, attempts or blockers.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "description": "Task id."
+                        },
+                        "note": {
+                            "type": "string",
+                            "description": "Progress note to append."
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "note"
+                    ],
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "task_move",
+                "description": "Move a task and its subtree under another task, preserving note history. Omit parent_id to move to the top level.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "description": "Task id to move."
+                        },
+                        "parent_id": {
+                            "type": "string",
+                            "description": "New parent id, or empty for top level."
+                        }
+                    },
+                    "required": [
+                        "id"
+                    ],
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "code_search",
+                "description": "Search source code across a project by query with optional path and language filters. Return matching locations and context.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Code or text query."
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": "Optional search root."
+                        },
+                        "language": {
+                            "type": "string",
+                            "description": "Optional language filter."
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "description": "Maximum matches."
+                        }
+                    },
+                    "required": [
+                        "query"
+                    ],
+                    "additionalProperties": false
+                }
+            }
+        }
+    ],
+    "examples": [
+        {
+            "name": "fs_read",
+            "arguments": {
+                "path": "src/llama-sampler.cpp",
+                "start_line": 2800,
+                "end_line": 2850
+            }
+        },
+        {
+            "name": "fs_write",
+            "arguments": {
+                "path": "tests/example.txt",
+                "content": "line one\nline two\n",
+                "create_dirs": true,
+                "allow_shrink": false
+            }
+        },
+        {
+            "name": "fs_edit",
+            "arguments": {
+                "path": "src/example.cpp",
+                "old_string": "return false;",
+                "new_string": "return true;",
+                "replace_all": false
+            }
+        },
+        {
+            "name": "fs_search",
+            "arguments": {
+                "path": "src/llama-sampler.cpp",
+                "pattern": "backend_.*grammar",
+                "context_lines": 3,
+                "max_matches": 20
+            }
+        },
+        {
+            "name": "fs_glob",
+            "arguments": {
+                "pattern": "src/**/*.cpp",
+                "cwd": ".",
+                "max_results": 100
+            }
+        },
+        {
+            "name": "shell_exec",
+            "arguments": {
+                "command": "rg -n \"grammar\" src",
+                "cwd": ".",
+                "timeout_ms": 1000,
+                "env": {
+                    "LC_ALL": "C"
+                }
+            }
+        },
+        {
+            "name": "show_structure",
+            "arguments": {
+                "file": "src/llama-sampler.cpp"
+            }
+        },
+        {
+            "name": "list_symbols",
+            "arguments": {
+                "file": "src/llama-grammar.cpp"
+            }
+        },
+        {
+            "name": "find_symbol",
+            "arguments": {
+                "name": "llama_sampler_init_grammar",
+                "path": "src",
+                "recursive": true,
+                "language": "cpp"
+            }
+        },
+        {
+            "name": "task_list",
+            "arguments": {
+                "status": [
+                    "pending",
+                    "started"
+                ],
+                "root_id": "t1",
+                "notes": "latest"
+            }
+        },
+        {
+            "name": "task_add",
+            "arguments": {
+                "titles": [
+                    "Inspect sampler",
+                    "Run benchmark"
+                ],
+                "parent_id": "t1"
+            }
+        },
+        {
+            "name": "task_set_status",
+            "arguments": {
+                "id": "t2",
+                "status": "started",
+                "note": "Checking CPU and backend grammar paths.",
+                "cascade": false
+            }
+        },
+        {
+            "name": "task_note",
+            "arguments": {
+                "id": "t2",
+                "note": "Escapes: \"quoted\", backslash \\, newline\nUTF-8: caf\u00e9."
+            }
+        },
+        {
+            "name": "task_move",
+            "arguments": {
+                "id": "t3",
+                "parent_id": "t1"
+            }
+        },
+        {
+            "name": "code_search",
+            "arguments": {
+                "query": "backend_set_input",
+                "path": "src",
+                "language": "cpp",
+                "max_results": 25
+            }
+        }
+    ]
+}

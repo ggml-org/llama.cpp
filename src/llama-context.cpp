@@ -634,6 +634,8 @@ llama_context::~llama_context() {
     // wait for any pending asynchronous copies into the output buffers before they are freed
     synchronize();
 
+    sampler_retries.clear();
+
     // when training, ggml_opt allocates extra buffers through the scheduler, so the sizes no longer match the expectation
     if (!model.no_alloc() && !opt_ctx) {
         for (size_t i = 0; i < backend_ptrs.size(); ++i) {
@@ -958,6 +960,8 @@ void llama_context::synchronize() {
     }
 
     ggml_backend_sched_synchronize(sched.get());
+    outputs_ready = true;
+    retained_logits_pending = false;
 
     // FIXME: if multiple single tokens are evaluated without a synchronization,
     // the stats will be added to the prompt evaluation stats
@@ -996,6 +1000,12 @@ const llama_cparams & llama_context::get_cparams() const {
 
 ggml_backend_sched_t llama_context::get_sched() const {
     return sched.get();
+}
+
+void llama_context::synchronize_outputs() {
+    if (!outputs_ready) {
+        synchronize();
+    }
 }
 
 uint32_t llama_context::n_ctx() const {
@@ -1095,6 +1105,9 @@ enum llama_pooling_type llama_context::pooling_type() const {
 float * llama_context::get_logits() {
     output_reorder();
 
+    for (size_t i = 0; i < logits_retained.size(); ++i) {
+        load_retained_logits(i);
+    }
     return logits.data;
 }
 
@@ -1136,6 +1149,7 @@ float * llama_context::get_logits_ith(int32_t i) {
         }
 
         const int64_t j = output_resolve_row(i);
+        load_retained_logits(j);
         return logits.data + j*model.vocab.n_tokens();
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: invalid logits id %d, reason: %s\n", __func__, i, err.what());
@@ -1145,6 +1159,179 @@ float * llama_context::get_logits_ith(int32_t i) {
         return nullptr;
 #endif
     }
+}
+
+void llama_context::retain_logits(ggml_tensor * tensor, uint32_t row, uint32_t output_row) {
+    auto & retained = logits_retained[output_row];
+    auto * backend = ggml_backend_sched_get_tensor_backend(sched.get(), tensor);
+    auto * buft = ggml_backend_get_default_buffer_type(backend);
+    const int64_t n_vocab = model.vocab.n_tokens();
+    if (!retained.buffer || retained.backend != backend) {
+        retained.buffer.reset();
+        retained.ctx.reset(ggml_init({ 2*ggml_tensor_overhead(), nullptr, true }));
+        if (!retained.ctx) {
+            throw std::runtime_error("failed to allocate retained logits context");
+        }
+        retained.tensor = ggml_new_tensor_1d(retained.ctx.get(), GGML_TYPE_F32, n_vocab);
+        ggml_set_name(retained.tensor, "logits_retained");
+        retained.buffer.reset(ggml_backend_alloc_ctx_tensors_from_buft(retained.ctx.get(), buft));
+        if (!retained.buffer) {
+            throw std::runtime_error("failed to allocate retained logits buffer");
+        }
+        retained.backend = backend;
+    }
+    retained.source_ctx.reset(ggml_init({ ggml_tensor_overhead(), nullptr, true }));
+    if (!retained.source_ctx) {
+        throw std::runtime_error("failed to allocate retained logits view");
+    }
+    auto * view = ggml_view_1d(retained.source_ctx.get(), tensor, n_vocab, row*tensor->nb[1]);
+    if (ggml_backend_view_init(view) != GGML_STATUS_SUCCESS) {
+        throw std::runtime_error("failed to initialize retained logits view");
+    }
+    ggml_backend_tensor_copy_async(backend, backend, view, retained.tensor);
+    retained_logits_pending = true;
+    retained.valid = true;
+    retained.host_loaded = false;
+}
+
+void llama_context::synchronize_retained_logits() {
+    if (!retained_logits_pending) {
+        return;
+    }
+    std::vector<ggml_backend_t> backends;
+    for (const auto & retained : logits_retained) {
+        if (retained.valid && std::find(backends.begin(), backends.end(), retained.backend) == backends.end()) {
+            ggml_backend_synchronize(retained.backend);
+            backends.push_back(retained.backend);
+        }
+    }
+    retained_logits_pending = false;
+}
+
+void llama_context::load_retained_logits(size_t row) {
+    if (row < logits_retained.size()) {
+        auto & retained = logits_retained[row];
+        if (retained.valid && !retained.host_loaded) {
+            ggml_backend_tensor_get(retained.tensor, logits.data + row*model.vocab.n_tokens(), 0, ggml_nbytes(retained.tensor));
+            retained.host_loaded = true;
+        }
+    }
+}
+
+bool llama_context::apply_grammar(llama_sampler * grammar, int32_t idx, float * logits_out) {
+    output_reorder();
+    const size_t row = output_resolve_row(idx);
+    if (row >= logits_retained.size() || !logits_retained[row].valid || !grammar ||
+            !grammar->iface->backend_init || !grammar->iface->backend_apply || !grammar->iface->backend_set_input) {
+        return false;
+    }
+    auto & retained = logits_retained[row];
+    std::unique_ptr<llama_sampler, decltype(&llama_sampler_free)> mask(llama_sampler_clone(grammar), llama_sampler_free);
+    auto * buft = ggml_backend_buffer_get_type(retained.buffer.get());
+    if (!mask->iface->backend_init(mask.get(), buft, 1)) {
+        return false;
+    }
+    const size_t max_nodes = 64;
+    ggml_context_ptr ctx(ggml_init({ max_nodes*ggml_tensor_overhead() + ggml_graph_overhead_custom(max_nodes, false), nullptr, true }));
+    if (!ctx) {
+        return false;
+    }
+    auto * gf = ggml_new_graph_custom(ctx.get(), max_nodes, false);
+    llama_sampler_data data = { retained.tensor, nullptr, nullptr, nullptr };
+    mask->iface->backend_apply(mask.get(), ctx.get(), gf, &data);
+    ggml_build_forward_expand(gf, data.logits);
+    ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), buft));
+    if (!buffer) {
+        return false;
+    }
+    mask->iface->backend_set_input(mask.get(), nullptr);
+    if (ggml_backend_graph_compute(retained.backend, gf) != GGML_STATUS_SUCCESS) {
+        throw std::runtime_error("backend grammar mask failed");
+    }
+    ggml_backend_tensor_get(data.logits, logits_out, 0, ggml_nbytes(data.logits));
+    return true;
+}
+
+bool llama_context::sample_retry(llama_sampler * grammar, llama_sampler * chain, int32_t idx, llama_token & token) {
+    output_reorder();
+    const size_t row = output_resolve_row(idx);
+    if (cparams.n_outputs_max_per_seq != 1 || row >= logits_retained.size() || !grammar ||
+            !grammar->iface->backend_init || !grammar->iface->backend_apply || !grammar->iface->backend_set_input ||
+            !llama_sampler_backend_can_retry(chain)) {
+        return false;
+    }
+    auto & retained = logits_retained[row];
+    if (!retained.valid || !retained.committed || retained.sampler != chain) {
+        return false;
+    }
+    std::vector<llama_sampler *> sources;
+    for (int i = 1; i < llama_sampler_chain_n(chain); ++i) {
+        sources.push_back(llama_sampler_chain_get(chain, i));
+    }
+    auto & retry = sampler_retries[chain];
+    if (!retry.graph || retry.backend != retained.backend || retry.sources != sources || retry.source_grammar != grammar) {
+        retry = {};
+        retry.grammar.reset(llama_sampler_clone(grammar));
+        retry.chain.reset(llama_sampler_chain_init(llama_sampler_chain_default_params()));
+        for (auto * source : sources) {
+            llama_sampler_chain_add(retry.chain.get(), llama_sampler_clone(source));
+        }
+        auto * buft = ggml_backend_buffer_get_type(retained.buffer.get());
+        if (!retry.grammar->iface->backend_init(retry.grammar.get(), buft, 1) ||
+                !retry.chain->iface->backend_init(retry.chain.get(), buft, 1)) {
+            retry = {};
+            return false;
+        }
+        const size_t max_nodes = llama_sampler_backend_n_nodes(retry.chain.get()) + 64;
+        retry.ctx.reset(ggml_init({max_nodes*ggml_tensor_overhead() + ggml_graph_overhead_custom(max_nodes, false), nullptr, true}));
+        if (!retry.ctx) {
+            retry = {};
+            return false;
+        }
+        retry.graph = ggml_new_graph_custom(retry.ctx.get(), max_nodes, false);
+        retry.logits = ggml_new_tensor_1d(retry.ctx.get(), GGML_TYPE_F32, model.vocab.n_tokens());
+        ggml_set_input(retry.logits);
+        llama_sampler_data data = {retry.logits, nullptr, nullptr, nullptr};
+        retry.grammar->iface->backend_apply(retry.grammar.get(), retry.ctx.get(), retry.graph, &data);
+        retry.chain->iface->backend_apply(retry.chain.get(), retry.ctx.get(), retry.graph, &data);
+        if (!data.sampled || data.skip) {
+            retry = {};
+            return false;
+        }
+        retry.sampled = data.sampled;
+        ggml_build_forward_expand(retry.graph, retry.sampled);
+        retry.buffer.reset(ggml_backend_alloc_ctx_tensors_from_buft(retry.ctx.get(), buft));
+        if (!retry.buffer) {
+            retry = {};
+            return false;
+        }
+        retry.backend = retained.backend;
+        retry.source_grammar = grammar;
+        retry.sources = sources;
+    }
+    llama_sampler_copy(grammar, retry.grammar.get());
+    const llama_sampler_row description = {idx, LLAMA_SAMPLER_PREFIX_COMMITTED, nullptr, 0};
+    if (!llama_sampler_grammar_prepare_rows(retry.grammar.get(), &description, 1, true)) {
+        return false;
+    }
+    if (!llama_sampler_backend_row_usable(retry.grammar.get(), 0)) {
+        token = LLAMA_TOKEN_NULL;
+        return true;
+    }
+    for (size_t i = 0; i < sources.size(); ++i) {
+        llama_sampler_copy(sources[i], llama_sampler_chain_get(retry.chain.get(), i));
+    }
+    ggml_backend_tensor_copy(retained.tensor, retry.logits);
+    retry.grammar->iface->backend_set_input(retry.grammar.get(), nullptr);
+    retry.chain->iface->backend_set_input(retry.chain.get(), nullptr);
+    if (ggml_backend_graph_compute(retained.backend, retry.graph) != GGML_STATUS_SUCCESS) {
+        throw std::runtime_error("backend grammar retry failed");
+    }
+    ggml_backend_tensor_get(retry.sampled, &token, 0, sizeof(token));
+    for (size_t i = 0; i < sources.size(); ++i) {
+        llama_sampler_copy(llama_sampler_chain_get(retry.chain.get(), i), sources[i]);
+    }
+    return true;
 }
 
 float * llama_context::get_embeddings() {
@@ -1718,6 +1905,10 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
         return false;
     }
 
+    if (auto it = sampling.samplers.find(seq_id); it != sampling.samplers.end()) {
+        sampler_retries.erase(it->second);
+    }
+
     const bool can_offload =
         sampler &&
         sampler->iface->backend_init &&
@@ -1815,6 +2006,10 @@ bool llama_context::set_adapter_cvec(
 }
 
 llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
+    if (ggml_backend_sched_get_n_splits(sched.get()) > 1) {
+        synchronize_retained_logits();
+    }
+
     if (mctx && !mctx->apply()) {
         LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
         ret = GGML_STATUS_FAILED;
@@ -1840,6 +2035,7 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
 
         n_reused++;
     } else {
+        synchronize_retained_logits();
         gf_res_prev_active = nullptr;
         res->reset();
 
@@ -2092,14 +2288,15 @@ static void copy_tensor_async_rows(
     size_t stride,
     uint32_t row_offset,
     ggml_backend_sched_t sched,
-    std::vector<uint32_t> * counts = nullptr) {
+    std::vector<uint32_t> * counts = nullptr,
+    const std::vector<bool> * required = nullptr) {
     if (!dst.has_data()) {
         return;
     }
 
     for (size_t i = 0; i < tensors.size(); ++i) {
         auto * tensor = tensors[i];
-        if (tensor == nullptr) {
+        if (tensor == nullptr || (required && !(*required)[i])) {
             continue;
         }
 
@@ -2137,7 +2334,39 @@ static bool needs_raw_logits(const llama_ubatch & ubatch, const std::map<llama_s
     return false; // all sequences use backend sampling
 }
 
+bool llama_context::prepare_sampler(llama_seq_id seq_id, const llama_sampler_row * rows, size_t n_rows) {
+    if (!sampling.samplers.count(seq_id) || n_rows > cparams.n_batch || (n_rows && !rows)) {
+        return false;
+    }
+    std::vector<sampling_info::row_prefix> owned;
+    std::unordered_set<int32_t> indices;
+    for (size_t i = 0; i < n_rows; ++i) {
+        const auto & row = rows[i];
+        if (row.idx < 0 || uint32_t(row.idx) >= cparams.n_batch || !indices.insert(row.idx).second ||
+                row.type < LLAMA_SAMPLER_PREFIX_COMMITTED || row.type > LLAMA_SAMPLER_PREFIX_TREE ||
+                row.n_prefix > cparams.n_ctx || (row.n_prefix && !row.prefix) ||
+                (row.type == LLAMA_SAMPLER_PREFIX_COMMITTED && row.n_prefix)) {
+            return false;
+        }
+        owned.push_back({row.idx, row.type, {}});
+        if (row.n_prefix) {
+            owned.back().prefix.assign(row.prefix, row.prefix + row.n_prefix);
+        }
+    }
+    sampling.pending[seq_id] = std::move(owned);
+    return true;
+}
+
+bool llama_context::sampler_row_usable(int32_t idx) {
+    output_reorder();
+    const int64_t row = output_resolve_row(idx);
+    return row >= 0 && (sampling.usable.empty() ||
+            (size_t(row) < sampling.usable.size() && sampling.usable[row]));
+}
+
 int llama_context::decode(const llama_batch_ext & batch_inp) {
+    auto prefixes = std::move(sampling.pending);
+    sampling.pending.clear();
     if (!memory) {
         LLAMA_LOG_DEBUG("%s: cannot decode batches with this context (calling encode() instead)\n", __func__);
         return encode(batch_inp);
@@ -2189,6 +2418,15 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
                 continue;
             }
 
+            if (tok.seq_ids.size() > 1) {
+                for (auto seq_id : tok.seq_ids) {
+                    if (sampling.samplers.count(seq_id)) {
+                        LLAMA_LOG_ERROR("%s: backend sampling does not support shared-sequence output tokens\n", __func__);
+                        return -1;
+                    }
+                }
+            }
+
             for (auto seq_id : tok.seq_ids) {
                 if (seq_id < 0 || (uint32_t) seq_id >= n_seq_max) {
                     continue;
@@ -2204,6 +2442,47 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
                     return -1;
                 }
             }
+        }
+    }
+
+    std::map<llama_seq_id, std::vector<llama_sampler_row>> prepared;
+    for (const auto & entry : sampling.samplers) {
+        const auto seq_id = entry.first;
+        auto supplied = prefixes.find(seq_id);
+        for (size_t i = 0; i < batch_inp.tokens.size(); ++i) {
+            const auto & token = batch_inp.tokens[i];
+            if ((!output_all && !token.output) || !token.seq_ids.count(seq_id)) {
+                continue;
+            }
+            llama_sampler_row row = {int32_t(i), LLAMA_SAMPLER_PREFIX_COMMITTED, nullptr, 0};
+            if (supplied != prefixes.end()) {
+                const auto & descriptions = supplied->second;
+                auto it = std::find_if(descriptions.begin(), descriptions.end(), [i](const sampling_info::row_prefix & p) {
+                    return p.idx == int32_t(i);
+                });
+                if (it == descriptions.end()) {
+                    LLAMA_LOG_ERROR("%s: missing sampler prefix for batch index %zu\n", __func__, i);
+                    return -1;
+                }
+                row.type = it->type;
+                row.prefix = it->prefix.data();
+                row.n_prefix = it->prefix.size();
+            }
+            prepared[seq_id].push_back(row);
+        }
+        auto & rows = prepared[seq_id];
+        if (supplied != prefixes.end() && supplied->second.size() != rows.size()) {
+            LLAMA_LOG_ERROR("%s: sampler prefixes do not match output rows\n", __func__);
+            return -1;
+        }
+        if (supplied == prefixes.end() && rows.size() > 1) {
+            for (auto & row : rows) {
+                row.type = LLAMA_SAMPLER_PREFIX_UNSPECIFIED;
+            }
+        }
+        if (!llama_sampler_backend_prepare(entry.second, rows.data(), rows.size())) {
+            LLAMA_LOG_ERROR("%s: backend grammar needs explicit output-row prefixes before decode\n", __func__);
+            return -1;
         }
     }
 
@@ -2346,6 +2625,29 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
     do {
         const auto & ubatch = mctx->get_ubatch();
 
+        for (const auto & entry : sampling.samplers) {
+            const auto & all = prepared[entry.first];
+            std::vector<llama_sampler_row> rows;
+            for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+                if (!ubatch.output[i] || ubatch.seq_id[i][0] != entry.first) {
+                    continue;
+                }
+                const int32_t idx = ubatch.data->batch_idxs[i];
+                auto it = std::find_if(all.begin(), all.end(), [idx](const llama_sampler_row & row) { return row.idx == idx; });
+                GGML_ASSERT(it != all.end());
+                rows.push_back(*it);
+            }
+            if (n_tokens_prev == 0 && rows.size() == all.size() &&
+                    std::equal(rows.begin(), rows.end(), all.begin(), [](const llama_sampler_row & a, const llama_sampler_row & b) {
+                        return a.idx == b.idx;
+                    })) {
+                continue;
+            }
+            if (!llama_sampler_backend_prepare(entry.second, rows.data(), rows.size())) {
+                return -1;
+            }
+        }
+
         // count the outputs in this ubatch
         {
             int32_t n_outputs_new = 0;
@@ -2422,6 +2724,28 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
                 GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
                 GGML_ASSERT((n_outputs_prev + n_outputs)*n_vocab <= (int64_t) logits.size);
                 ggml_backend_tensor_get_async(backend_res, t_logits, logits_out, 0, n_outputs*n_vocab*sizeof(float));
+            }
+        }
+
+        if (t_logits && n_outputs > 0 && has_samplers) {
+            uint32_t row = 0;
+            for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+                if (!ubatch.output[i]) {
+                    continue;
+                }
+                for (int32_t j = 0; j < ubatch.n_seq_id[i]; ++j) {
+                    auto it = sampling.samplers.find(ubatch.seq_id[i][j]);
+                    if (it != sampling.samplers.end() &&
+                            (llama_sampler_output_flags(it->second) & LLAMA_SAMPLER_OUTPUT_RAW)) {
+                        retain_logits(t_logits, row, n_outputs_prev + row);
+                        auto & retained = logits_retained[n_outputs_prev + row];
+                        const auto & rows = prepared[ubatch.seq_id[i][j]];
+                        retained.sampler = it->second;
+                        retained.committed = rows.size() == 1 && rows[0].type == LLAMA_SAMPLER_PREFIX_COMMITTED;
+                        break;
+                    }
+                }
+                ++row;
             }
         }
 
@@ -2519,11 +2843,29 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
         if (has_samplers) {
             const auto stride = n_vocab;
 
+            std::vector<bool> candidates(n_outputs, true);
+            uint32_t row = 0;
+            std::map<llama_seq_id, size_t> sequence_rows;
+            for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+                if (!ubatch.output[i]) {
+                    continue;
+                }
+                const auto seq_id = ubatch.seq_id[i][0];
+                auto it = sampling.samplers.find(ubatch.seq_id[i][0]);
+                if (it != sampling.samplers.end()) {
+                    sampling.usable[n_outputs_prev + row] = llama_sampler_backend_row_usable(it->second, sequence_rows[seq_id]++);
+                }
+                if (it != sampling.samplers.end() && res->t_sampled[row]) {
+                    candidates[row] = llama_sampler_output_flags(it->second) & LLAMA_SAMPLER_OUTPUT_CANDIDATES;
+                }
+                ++row;
+            }
+
             // async copy the sampling data from the backend to the host
             copy_tensor_async_rows(res->t_sampled,        sampling.sampled,    1,      n_outputs_prev, sched.get());
-            copy_tensor_async_rows(res->t_sampled_logits, sampling.logits,     stride, n_outputs_prev, sched.get(), &sampling.logits_count);
-            copy_tensor_async_rows(res->t_sampled_probs,  sampling.probs,      stride, n_outputs_prev, sched.get(), &sampling.probs_count);
-            copy_tensor_async_rows(res->t_candidates,     sampling.candidates, stride, n_outputs_prev, sched.get(), &sampling.candidates_count);
+            copy_tensor_async_rows(res->t_sampled_logits, sampling.logits,     stride, n_outputs_prev, sched.get(), &sampling.logits_count, &candidates);
+            copy_tensor_async_rows(res->t_sampled_probs,  sampling.probs,      stride, n_outputs_prev, sched.get(), &sampling.probs_count, &candidates);
+            copy_tensor_async_rows(res->t_candidates,     sampling.candidates, stride, n_outputs_prev, sched.get(), &sampling.candidates_count, &candidates);
         }
 
         n_outputs_prev += n_outputs;
@@ -2615,6 +2957,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
 //
 
 uint32_t llama_context::output_reserve(int32_t n_outputs) {
+    synchronize_retained_logits();
     const auto & hparams = model.hparams;
     const auto & vocab   = model.vocab;
 
@@ -2653,6 +2996,14 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
         if (enabled && !cparams.embeddings_layer_inp_dev) {
             embd_layer_inp_float_count += (size_t) n_embd * n_batch;
         }
+    }
+
+    logits_retained.resize(n_outputs);
+    for (auto & retained : logits_retained) {
+        retained.valid = false;
+        retained.host_loaded = false;
+        retained.sampler = nullptr;
+        retained.committed = false;
     }
 
     // Allocate backend sampling output buffers if there are backend samplers configured.
@@ -2746,6 +3097,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
         // The count vectors keep track of the actual number of logits/probs/candidates
         // copied from the backend for each output row.
 
+        sampling.usable.assign(n_outputs_max, 1);
         sampling.logits_count.resize(n_outputs_max);
         sampling.probs_count.resize(n_outputs_max);
         sampling.candidates_count.resize(n_outputs_max);
@@ -2761,6 +3113,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
         sampling.sampled    = {nullptr, 0};
         sampling.candidates = {nullptr, 0};
 
+        sampling.usable.clear();
         sampling.logits_count.clear();
         sampling.probs_count.clear();
         sampling.candidates_count.clear();
@@ -2860,6 +3213,10 @@ void llama_context::output_reorder() {
                 std::swap(sampling.candidates.data[i0*n_vocab + k], sampling.candidates.data[i1*n_vocab + k]);
             }
 
+            if (!logits_retained.empty()) {
+                std::swap(logits_retained[i0], logits_retained[i1]);
+            }
+            std::swap(sampling.usable[i0], sampling.usable[i1]);
             std::swap(sampling.sampled.data[i0],     sampling.sampled.data[i1]);
             std::swap(sampling.logits_count[i0],     sampling.logits_count[i1]);
             std::swap(sampling.probs_count[i0],      sampling.probs_count[i1]);
@@ -3010,6 +3367,8 @@ static void ubatch_prepare_reserve(
 
 ggml_cgraph * llama_context::graph_reserve(
         uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only, size_t * sizes) {
+    synchronize_retained_logits();
+
     LLAMA_LOG_DEBUG("%s: reserving a graph for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
     GGML_ASSERT(n_outputs >= 1);
 
@@ -3141,6 +3500,7 @@ ggml_status llama_context::graph_compute(
 
     copy_experts.reset();
 
+    outputs_ready = false;
     auto status = ggml_backend_sched_graph_compute_async(sched.get(), gf);
     if (status != GGML_STATUS_SUCCESS) {
         LLAMA_LOG_ERROR("%s: ggml_backend_sched_graph_compute_async failed with error %d\n", __func__, status);
@@ -4683,13 +5043,13 @@ void llama_synchronize(llama_context * ctx) {
 }
 
 float * llama_get_logits(llama_context * ctx) {
-    ctx->synchronize();
+    ctx->synchronize_outputs();
 
     return ctx->get_logits();
 }
 
 float * llama_get_logits_ith(llama_context * ctx, int32_t i) {
-    ctx->synchronize();
+    ctx->synchronize_outputs();
 
     float * res = nullptr;
 
@@ -4700,6 +5060,11 @@ float * llama_get_logits_ith(llama_context * ctx, int32_t i) {
     }
 
     return res;
+}
+
+float * llama_get_logits_ith_raw(llama_context * ctx, int32_t i) {
+    ctx->synchronize_outputs();
+    return ctx->get_logits_ith(i);
 }
 
 float * llama_get_embeddings(llama_context * ctx) {
@@ -4782,48 +5147,67 @@ float * llama_get_embeddings_layer_inp(llama_context * ctx, uint32_t lid) {
     return ctx->get_embeddings_layer_inp(lid);
 }
 
+bool llama_sampler_sample_retry(llama_context * ctx, llama_sampler * grammar, llama_sampler * chain, int32_t idx, llama_token * token) {
+    ctx->synchronize_outputs();
+    return token && ctx->sample_retry(grammar, chain, idx, *token);
+}
+
+bool llama_sampler_apply_grammar(llama_sampler * grammar, llama_context * ctx, int32_t idx, float * logits) {
+    ctx->synchronize_outputs();
+    return ctx->apply_grammar(grammar, idx, logits);
+}
+
+bool llama_sampler_prepare(llama_context * ctx, llama_seq_id seq_id, const llama_sampler_row * rows, size_t n_rows) {
+    return ctx->prepare_sampler(seq_id, rows, n_rows);
+}
+
+bool llama_sampler_row_usable(llama_context * ctx, int32_t idx) {
+    ctx->synchronize_outputs();
+    return ctx->sampler_row_usable(idx);
+}
+
 bool llama_set_sampler(llama_context * ctx, llama_seq_id seq_id, llama_sampler * smpl) {
     return ctx->set_sampler(seq_id, smpl);
 }
 
 llama_token llama_get_sampled_token_ith(llama_context * ctx, int32_t i) {
-    ctx->synchronize();
+    ctx->synchronize_outputs();
 
     return ctx->get_sampled_token_ith(i);
 }
 
 float * llama_get_sampled_probs_ith(llama_context * ctx, int32_t i) {
-    ctx->synchronize();
+    ctx->synchronize_outputs();
 
     return ctx->get_sampled_probs_ith(i);
 }
 
 float * llama_get_sampled_logits_ith(llama_context * ctx, int32_t i) {
-    ctx->synchronize();
+    ctx->synchronize_outputs();
 
     return ctx->get_sampled_logits_ith(i);
 }
 
 llama_token * llama_get_sampled_candidates_ith(llama_context * ctx, int32_t i) {
-    ctx->synchronize();
+    ctx->synchronize_outputs();
 
     return const_cast<llama_token *>(ctx->get_sampled_candidates_ith(i));
 }
 
 uint32_t llama_get_sampled_candidates_count_ith(llama_context * ctx, int32_t i) {
-    ctx->synchronize();
+    ctx->synchronize_outputs();
 
     return static_cast<uint32_t>(ctx->get_sampled_candidates_count(i));
 }
 
 uint32_t llama_get_sampled_logits_count_ith(llama_context * ctx, int32_t i) {
-    ctx->synchronize();
+    ctx->synchronize_outputs();
 
     return static_cast<uint32_t>(ctx->get_sampled_logits_count(i));
 }
 
 uint32_t llama_get_sampled_probs_count_ith(llama_context * ctx, int32_t i) {
-    ctx->synchronize();
+    ctx->synchronize_outputs();
 
     return static_cast<uint32_t>(ctx->get_sampled_probs_count(i));
 }

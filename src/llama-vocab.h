@@ -87,6 +87,26 @@ enum llama_metaspace_prepend_scheme {
 struct LLM_KV;
 struct llama_model_loader;
 
+struct llama_vocab_trie {
+    static constexpr uint32_t none = UINT32_MAX;
+
+    struct node {
+        uint32_t child = none;
+        uint32_t sibling = none;
+        uint32_t terminal = none;
+        uint8_t byte = 0;
+    };
+
+    struct terminal {
+        llama_token id;
+        uint32_t next;
+    };
+
+    std::vector<node> nodes;
+    std::vector<terminal> terminals;
+    std::vector<llama_token> eog;
+};
+
 struct llama_vocab {
     struct token_data {
         std::string      text;
@@ -201,6 +221,8 @@ struct llama_vocab {
 
     // use cached data
     const std::string & token_to_piece(llama_token token) const;
+
+    const llama_vocab_trie * get_grammar_trie() const;
 
     int32_t detokenize(
             const llama_token * tokens,

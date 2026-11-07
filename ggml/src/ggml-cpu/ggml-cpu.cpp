@@ -4,6 +4,7 @@
 #include "repack.h"
 #include "traits.h"
 #include "ggml-impl.h"
+#include "ggml-token-mask.h"
 #include "amx/amx.h"
 
 #include <cctype>
@@ -472,6 +473,9 @@ static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const st
         }
         case GGML_OP_IM2COL_BACK:
             return src0->type == GGML_TYPE_F32 && (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16);
+        case GGML_OP_TOKEN_MASK:
+            return ggml_token_mask_valid_layout(op->src[0], op->src[1], op->src[2], op->src[3]) &&
+                op->type == GGML_TYPE_F32 && ggml_are_same_shape(op, op->src[0]) && ggml_is_contiguous(op);
         case GGML_OP_GET_ROWS_BACK:
             return src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16;
         case GGML_OP_OUT_PROD:

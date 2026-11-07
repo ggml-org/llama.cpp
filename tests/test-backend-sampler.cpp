@@ -1,8 +1,14 @@
 #include "ggml.h"
+#include "ggml-cpp.h"
 #include "llama.h"
 #include "llama-cpp.h"
 #include "common.h"
 #include "sampling.h"
+#include "../src/llama-ext.h"
+#include "../src/llama-context.h"
+#include "../ggml/src/ggml-backend-impl.h"
+
+#include <array>
 
 #ifdef NDEBUG
 #undef NDEBUG
@@ -29,7 +35,13 @@ struct test_args {
 
 struct test_params {
     llama_model_ptr model;
+    ggml_backend_dev_t device = nullptr;
 };
+
+static ggml_backend_dev_t sampling_test_gpu() {
+    auto * device = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
+    return device ? device : ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU);
+}
 
 static llama_model_ptr load_model(const test_args & args) {
     auto mparams = llama_model_default_params();
@@ -38,7 +50,7 @@ static llama_model_ptr load_model(const test_args & args) {
 
     if (args.device != "auto") {
         if (args.device == "gpu") {
-            devs[0] = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
+            devs[0] = sampling_test_gpu();
 
             if (devs[0] == nullptr) {
                 fprintf(stderr, "Error: GPU requested but not available\n");
@@ -1381,6 +1393,726 @@ static void compare_masking_penalties_logits(
     GGML_ASSERT(stats.n_mismatch == 0);
 }
 
+static std::vector<llama_token> grammar_test_tokens(const llama_vocab * vocab) {
+    std::vector<llama_token> tokens;
+    for (llama_token id = 0; id < llama_vocab_n_tokens(vocab) && tokens.size() < 3; ++id) {
+        const auto piece = common_token_to_piece(vocab, id);
+        if (!llama_vocab_is_eog(vocab, id) && !piece.empty() && piece[0] != 0) {
+            tokens.push_back(id);
+        }
+    }
+    GGML_ASSERT(tokens.size() == 3);
+    return tokens;
+}
+
+static std::string grammar_token(llama_token token) {
+    return "<[" + std::to_string(token) + "]>";
+}
+
+static bool grammar_test_supported(const test_params & params) {
+    const auto * vocab = llama_model_get_vocab(params.model.get());
+    llama_sampler_ptr sampler(llama_sampler_init_grammar(vocab, "root ::= .", "root"));
+    if (!sampler->iface->backend_init(sampler.get(), ggml_backend_dev_buffer_type(params.device), 1)) {
+        printf("Skipping backend grammar test: TOKEN_MASK unsupported on %s\n", ggml_backend_dev_name(params.device));
+        return false;
+    }
+    return true;
+}
+
+struct grammar_test_graph {
+    llama_sampler * sampler;
+    ggml_backend_t backend;
+    ggml_context_ptr ctx;
+    ggml_backend_buffer_ptr buffer;
+    ggml_backend_ptr cpu;
+    ggml_backend_sched_ptr sched;
+    ggml_cgraph * graph;
+    ggml_tensor * logits;
+    llama_sampler_data data;
+    std::vector<llama_token_data> input;
+
+    grammar_test_graph(llama_sampler * sampler, ggml_backend_t backend, int32_t n_vocab,
+            const std::vector<llama_token> & candidates = {}, bool scheduled = false, bool parallel = false) : sampler(sampler), backend(backend) {
+        sampler->iface->backend_reset(sampler);
+        ggml_init_params params = { 64*ggml_tensor_overhead() + ggml_graph_overhead(), nullptr, true };
+        ctx.reset(ggml_init(params));
+        GGML_ASSERT(ctx);
+        graph = ggml_new_graph(ctx.get());
+        const int64_t n = candidates.empty() ? n_vocab : candidates.size();
+        logits = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, n);
+        ggml_set_input(logits);
+        ggml_set_output(logits);
+        ggml_tensor * ids = candidates.empty() ? nullptr : ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, n);
+        data = { logits, ggml_soft_max(ctx.get(), logits), nullptr, ids };
+        sampler->iface->backend_apply(sampler, ctx.get(), graph, &data);
+        GGML_ASSERT(data.candidates == ids);
+        GGML_ASSERT(data.probs == nullptr);
+        GGML_ASSERT(data.sampled == nullptr);
+        ggml_build_forward_expand(graph, data.logits);
+        if (scheduled) {
+            if (ggml_backend_dev_type(ggml_backend_get_device(backend)) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+                cpu.reset(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr));
+                GGML_ASSERT(cpu);
+            }
+            ggml_backend_t backends[] = {backend, cpu.get()};
+            sched.reset(ggml_backend_sched_new(backends, nullptr, cpu ? 2 : 1, GGML_DEFAULT_GRAPH_SIZE, parallel, true));
+            GGML_ASSERT(sched);
+            ggml_backend_sched_set_tensor_backend(sched.get(), logits, backend);
+            GGML_ASSERT(ggml_backend_sched_alloc_graph(sched.get(), graph));
+        } else {
+            buffer.reset(ggml_backend_alloc_ctx_tensors(ctx.get(), backend));
+            GGML_ASSERT(buffer);
+        }
+
+        std::vector<float> values(n);
+        for (int64_t i = 0; i < n; ++i) {
+            values[i] = float(i % 19) - 9.0f;
+            input.push_back({ ids ? candidates[i] : (llama_token) i, values[i], 0.0f });
+        }
+        ggml_backend_tensor_set(logits, values.data(), 0, values.size()*sizeof(float));
+        if (ids) {
+            ggml_backend_tensor_set(ids, candidates.data(), 0, candidates.size()*sizeof(llama_token));
+        }
+    }
+
+    ~grammar_test_graph() {
+        sampler->iface->backend_reset(sampler);
+    }
+
+    void check(llama_sampler * reference) {
+        auto expected = input;
+        llama_token_data_array cur = { expected.data(), expected.size(), -1, false };
+        llama_sampler_apply(reference, &cur);
+        sampler->iface->backend_set_input(sampler, sched.get());
+        compute();
+        std::vector<float> actual(input.size()), original(input.size());
+        ggml_backend_tensor_get(data.logits, actual.data(), 0, actual.size()*sizeof(float));
+        ggml_backend_tensor_get(logits, original.data(), 0, original.size()*sizeof(float));
+        for (size_t i = 0; i < actual.size(); ++i) {
+            GGML_ASSERT(actual[i] == expected[i].logit);
+            GGML_ASSERT(original[i] == input[i].logit);
+        }
+    }
+
+    void compute() {
+        const auto status = sched ? ggml_backend_sched_graph_compute(sched.get(), graph) : ggml_backend_graph_compute(backend, graph);
+        GGML_ASSERT(status == GGML_STATUS_SUCCESS);
+    }
+};
+
+struct grammar_mask_upload_counter {
+    ggml_backend_t backend;
+    ggml_backend_buffer_t buffer;
+    ggml_tensor * payload;
+    decltype(ggml_backend_buffer_i::set_tensor) set_tensor;
+    decltype(ggml_backend_buffer_i::set_tensor_n) set_tensor_n;
+    decltype(ggml_backend_i::set_tensor_async) set_tensor_async;
+    size_t uploads = 0;
+    size_t batches = 0;
+    size_t descriptors = 0;
+    size_t payload_bytes = 0;
+    static grammar_mask_upload_counter * active;
+
+    grammar_mask_upload_counter(ggml_backend_t backend, ggml_tensor * payload)
+        : backend(backend), buffer(payload->buffer), payload(payload), set_tensor(buffer->iface.set_tensor),
+          set_tensor_n(buffer->iface.set_tensor_n), set_tensor_async(backend->iface.set_tensor_async) {
+        GGML_ASSERT(!active);
+        active = this;
+        buffer->iface.set_tensor = [](ggml_backend_buffer_t buffer, ggml_tensor * tensor,
+                                     const void * data, size_t offset, size_t size) {
+            active->count(tensor, size);
+            active->set_tensor(buffer, tensor, data, offset, size);
+        };
+        if (set_tensor_n) {
+            buffer->iface.set_tensor_n = [](ggml_backend_buffer_t buffer, ggml_tensor * const * tensors,
+                                           const void * const * data, const size_t * offsets, const size_t * sizes, size_t n) {
+                ++active->batches;
+                for (size_t i = 0; i < n; ++i) {
+                    active->count(tensors[i], sizes[i]);
+                }
+                active->set_tensor_n(buffer, tensors, data, offsets, sizes, n);
+            };
+        }
+        if (set_tensor_async) {
+            backend->iface.set_tensor_async = [](ggml_backend_t backend, ggml_tensor * tensor,
+                                                const void * data, size_t offset, size_t size) {
+                active->count(tensor, size);
+                active->set_tensor_async(backend, tensor, data, offset, size);
+            };
+        }
+    }
+
+    void count(ggml_tensor * tensor, size_t size) {
+        if (tensor == payload) {
+            ++uploads;
+            payload_bytes += size;
+        } else {
+            ++descriptors;
+        }
+    }
+
+    ~grammar_mask_upload_counter() {
+        buffer->iface.set_tensor = set_tensor;
+        buffer->iface.set_tensor_n = set_tensor_n;
+        backend->iface.set_tensor_async = set_tensor_async;
+        active = nullptr;
+    }
+};
+
+grammar_mask_upload_counter * grammar_mask_upload_counter::active = nullptr;
+
+struct grammar_async_upload_counter {
+    ggml_backend_t backend;
+    decltype(ggml_backend_i::set_tensor_async) set_tensor_async;
+    size_t uploads = 0;
+    static grammar_async_upload_counter * active;
+
+    grammar_async_upload_counter(ggml_backend_t backend) : backend(backend), set_tensor_async(backend->iface.set_tensor_async) {
+        GGML_ASSERT(!active);
+        active = this;
+        if (set_tensor_async) {
+            backend->iface.set_tensor_async = [](ggml_backend_t backend, ggml_tensor * tensor,
+                                                 const void * data, size_t offset, size_t size) {
+                ++active->uploads;
+                active->set_tensor_async(backend, tensor, data, offset, size);
+            };
+        }
+    }
+
+    ~grammar_async_upload_counter() {
+        backend->iface.set_tensor_async = set_tensor_async;
+        active = nullptr;
+    }
+};
+
+grammar_async_upload_counter * grammar_async_upload_counter::active = nullptr;
+
+static void test_grammar_async_upload(const test_params & params) {
+    if (!grammar_test_supported(params)) {
+        return;
+    }
+    const auto * vocab = llama_model_get_vocab(params.model.get());
+    const int32_t n_vocab = llama_vocab_n_tokens(vocab);
+    const auto tokens = grammar_test_tokens(vocab);
+    std::string rule = "root ::= ";
+    for (int i = 0; i < 20; ++i) {
+        rule += grammar_token(tokens[i % tokens.size()]) + " ";
+    }
+    ggml_backend_ptr backend(ggml_backend_dev_init(params.device, nullptr));
+    GGML_ASSERT(backend);
+    llama_sampler_ptr sampler(llama_sampler_init_grammar(vocab, rule.c_str(), "root"));
+    llama_sampler_ptr reference(llama_sampler_clone(sampler.get()));
+    GGML_ASSERT(sampler->iface->backend_init(sampler.get(), ggml_backend_get_default_buffer_type(backend.get()), 1));
+    grammar_async_upload_counter counter(backend.get());
+    {
+        grammar_test_graph graph(sampler.get(), backend.get(), n_vocab, {}, true);
+        for (int i = 0; i < 20; ++i) {
+            sampler->iface->backend_set_input(sampler.get(), graph.sched.get());
+            GGML_ASSERT(ggml_backend_sched_graph_compute_async(graph.sched.get(), graph.graph) == GGML_STATUS_SUCCESS);
+            llama_sampler_accept(sampler.get(), tokens[i % tokens.size()]);
+            llama_sampler_accept(reference.get(), tokens[i % tokens.size()]);
+        }
+        graph.check(reference.get());
+        llama_sampler_reset(sampler.get());
+        sampler->iface->backend_set_input(sampler.get(), graph.sched.get());
+        sampler->iface->backend_reset(sampler.get());
+    }
+    if (counter.set_tensor_async) {
+        GGML_ASSERT(counter.uploads > 20);
+    }
+    llama_sampler_reset(sampler.get());
+    llama_sampler_reset(reference.get());
+    {
+        grammar_test_graph graph(sampler.get(), backend.get(), n_vocab, {}, true);
+        graph.check(reference.get());
+    }
+
+    const auto a = common_tokenize(vocab, "a", false, true);
+    const auto b = common_tokenize(vocab, "b", false, true);
+    GGML_ASSERT(a.size() == 1 && b.size() == 1);
+    const auto c = common_tokenize(vocab, "c", false, true);
+    GGML_ASSERT(c.size() == 1);
+    sampler.reset(llama_sampler_init_grammar(vocab, "root ::= [ac]* \"b\"", "root"));
+    reference.reset(llama_sampler_clone(sampler.get()));
+    GGML_ASSERT(sampler->iface->backend_init(sampler.get(), ggml_backend_get_default_buffer_type(backend.get()), 1));
+    {
+        grammar_test_graph graph(sampler.get(), backend.get(), n_vocab, {}, true);
+        for (int i = 0; i < 16; ++i) {
+            graph.check(reference.get());
+            const llama_token token = i % 2 ? a[0] : c[0];
+            llama_sampler_accept(sampler.get(), token);
+            llama_sampler_accept(reference.get(), token);
+        }
+        llama_sampler_accept(sampler.get(), b[0]);
+        llama_sampler_accept(reference.get(), b[0]);
+        graph.check(reference.get());
+    }
+    printf("backend grammar async upload, pending reset and unchanged state test PASSED\n");
+}
+
+static void test_grammar_resident_cache(const test_params & params) {
+    if (!grammar_test_supported(params)) {
+        return;
+    }
+    const auto * vocab = llama_model_get_vocab(params.model.get());
+    const int32_t n_vocab = llama_vocab_n_tokens(vocab);
+    const int64_t n_words = (int64_t(n_vocab) + 31)/32;
+    std::vector<llama_token> tokens;
+    for (llama_token id = 0; id < n_vocab && tokens.size() < 10; ++id) {
+        const auto piece = common_token_to_piece(vocab, id);
+        if (!llama_vocab_is_eog(vocab, id) && !piece.empty() && piece[0] != 0) {
+            tokens.push_back(id);
+        }
+    }
+    GGML_ASSERT(tokens.size() == 10);
+    std::string rule = "root ::= ";
+    for (auto token : tokens) {
+        rule += grammar_token(token) + " ";
+    }
+    llama_sampler_ptr sampler(llama_sampler_init_grammar(vocab, rule.c_str(), "root"));
+    llama_sampler_ptr reference(llama_sampler_clone(sampler.get()));
+    std::vector<llama_sampler_ptr> states;
+    for (auto token : tokens) {
+        states.emplace_back(llama_sampler_clone(reference.get()));
+        llama_sampler_accept(reference.get(), token);
+    }
+    ggml_backend_ptr backend(ggml_backend_dev_init(params.device, nullptr));
+    GGML_ASSERT(backend);
+    GGML_ASSERT(sampler->iface->backend_init(sampler.get(), ggml_backend_get_default_buffer_type(backend.get()), 1));
+    for (int mode = 0; mode < 3; ++mode) {
+        llama_sampler_copy(states[0].get(), sampler.get());
+        grammar_test_graph graph(sampler.get(), backend.get(), n_vocab, {}, mode != 0, mode == 2);
+        auto * payload = graph.data.logits->src[2];
+        auto * descriptor = graph.data.logits->src[3];
+        if (graph.sched) {
+            GGML_ASSERT(ggml_backend_sched_get_tensor_backend(graph.sched.get(), payload) == backend.get());
+            GGML_ASSERT(ggml_backend_sched_get_tensor_backend(graph.sched.get(), descriptor) == backend.get());
+            GGML_ASSERT(ggml_backend_sched_get_n_splits(graph.sched.get()) == 1);
+        }
+        grammar_mask_upload_counter counter(backend.get(), payload);
+        const size_t capacity = payload->ne[0]/n_words;
+        GGML_ASSERT(capacity >= 2 && capacity <= 8);
+        const auto check_state = [&](size_t state, size_t slot) {
+            llama_sampler_copy(states[state].get(), sampler.get());
+            graph.check(states[state].get());
+            std::array<int32_t, 4> desc;
+            ggml_backend_tensor_get(descriptor, desc.data(), 0, sizeof(desc));
+            GGML_ASSERT(desc[2] == int64_t(slot)*n_words);
+        };
+        for (size_t i = 0; i < capacity; ++i) {
+            check_state(i, i);
+        }
+        GGML_ASSERT(counter.uploads == capacity);
+        if (mode == 0 && counter.set_tensor_n) {
+            GGML_ASSERT(counter.batches == capacity);
+        }
+        const size_t payload_bytes = counter.payload_bytes;
+        GGML_ASSERT(payload_bytes <= capacity*n_words*sizeof(int32_t));
+        graph.check(states[capacity - 1].get());
+        GGML_ASSERT(counter.uploads == capacity && counter.descriptors == capacity);
+        GGML_ASSERT(counter.payload_bytes == payload_bytes);
+        check_state(0, 0);
+        GGML_ASSERT(counter.uploads == capacity);
+        check_state(capacity, 1);
+        GGML_ASSERT(counter.uploads == capacity + 1);
+        check_state(0, 0);
+        GGML_ASSERT(counter.uploads == capacity + 1);
+        check_state(1, 2);
+        GGML_ASSERT(counter.uploads == capacity + 2);
+        printf("grammar mask cache mode %d: %zu payload uploads, %zu bytes; unchanged hit uploads 0 bytes\n",
+                mode, counter.uploads, counter.payload_bytes);
+        llama_sampler_reset(sampler.get());
+        graph.check(states[0].get());
+        std::array<int32_t, 4> desc;
+        ggml_backend_tensor_get(descriptor, desc.data(), 0, sizeof(desc));
+        GGML_ASSERT(desc[2] == 0);
+        const llama_sampler_row missing = {0, LLAMA_SAMPLER_PREFIX_LINEAR, nullptr, 1};
+        GGML_ASSERT(!sampler->iface->backend_prepare(sampler.get(), &missing, 1));
+        GGML_ASSERT(!sampler->iface->backend_prepare(sampler.get(), nullptr, 1));
+    }
+    {
+        grammar_test_graph graph(sampler.get(), backend.get(), n_vocab, {}, true);
+        grammar_mask_upload_counter counter(backend.get(), graph.data.logits->src[2]);
+        graph.check(states[0].get());
+        GGML_ASSERT(counter.uploads == 1 && counter.descriptors == 1);
+        std::array<int32_t, 4> desc;
+        ggml_backend_tensor_get(graph.data.logits->src[3], desc.data(), 0, sizeof(desc));
+        GGML_ASSERT(desc[2] == 0);
+    }
+    printf("backend grammar resident cache hit, LRU eviction, reset and rebuild test PASSED\n");
+}
+
+#ifdef LLAMA_USE_LLGUIDANCE
+static void test_llguidance_backend(const test_params & params) {
+    const auto * vocab = llama_model_get_vocab(params.model.get());
+    const int32_t n_vocab = llama_vocab_n_tokens(vocab);
+    const auto make_grammar = [&]() {
+        llama_sampler_ptr result(llama_sampler_init_llg(vocab, "lark", "start: /[ab]/ /[bc]/ /[cd]/"));
+        GGML_ASSERT(result);
+        return result;
+    };
+    const auto a = common_tokenize(vocab, "a", false, true);
+    const auto b = common_tokenize(vocab, "b", false, true);
+    const auto z = common_tokenize(vocab, "z", false, true);
+    GGML_ASSERT(a.size() == 1 && b.size() == 1 && z.size() == 1);
+    ggml_backend_ptr backend(ggml_backend_dev_init(params.device, nullptr));
+    GGML_ASSERT(backend);
+    const auto buft = ggml_backend_get_default_buffer_type(backend.get());
+    auto source = make_grammar();
+    auto reference = make_grammar();
+    GGML_ASSERT(source->iface->backend_init(source.get(), buft, 4));
+    {
+        grammar_test_graph graph(source.get(), backend.get(), n_vocab);
+        graph.check(reference.get());
+        graph.check(reference.get());
+        llama_sampler_accept(source.get(), a[0]);
+        llama_sampler_accept(reference.get(), a[0]);
+        graph.check(reference.get());
+    }
+    llama_sampler_ptr clone(llama_sampler_clone(source.get()));
+    {
+        grammar_test_graph graph(clone.get(), backend.get(), n_vocab, {z[0], b[0], a[0], b[0], -1, n_vocab});
+        graph.check(reference.get());
+    }
+    auto destination = make_grammar();
+    {
+        grammar_test_graph graph(destination.get(), backend.get(), n_vocab);
+        llama_sampler_copy(source.get(), destination.get());
+        graph.check(reference.get());
+        llama_sampler_accept(source.get(), b[0]);
+        graph.check(reference.get());
+        llama_sampler_reset(destination.get());
+        llama_sampler_reset(reference.get());
+        graph.check(reference.get());
+    }
+    {
+        grammar_test_graph rebuilt(destination.get(), backend.get(), n_vocab);
+        rebuilt.check(reference.get());
+    }
+    const llama_sampler_row valid = {0, LLAMA_SAMPLER_PREFIX_LINEAR, a.data(), a.size()};
+    GGML_ASSERT(destination->iface->backend_prepare(destination.get(), &valid, 1));
+    GGML_ASSERT(destination->iface->backend_row_usable(destination.get(), 0));
+    {
+        auto provisional = make_grammar();
+        llama_sampler_accept(provisional.get(), a[0]);
+        grammar_test_graph graph(destination.get(), backend.get(), n_vocab);
+        graph.check(provisional.get());
+    }
+    const llama_sampler_row invalid = {0, LLAMA_SAMPLER_PREFIX_TREE, z.data(), z.size()};
+    GGML_ASSERT(destination->iface->backend_prepare(destination.get(), &invalid, 1));
+    GGML_ASSERT(!destination->iface->backend_row_usable(destination.get(), 0));
+    const llama_sampler_row missing = {0, LLAMA_SAMPLER_PREFIX_LINEAR, nullptr, 1};
+    GGML_ASSERT(!destination->iface->backend_prepare(destination.get(), &missing, 1));
+    GGML_ASSERT(!destination->iface->backend_prepare(destination.get(), nullptr, 1));
+    GGML_ASSERT(destination->iface->backend_prepare(destination.get(), nullptr, 0));
+    {
+        grammar_test_graph graph(destination.get(), backend.get(), n_vocab);
+        graph.check(reference.get());
+    }
+    source.reset();
+    {
+        auto expected = make_grammar();
+        llama_sampler_accept(expected.get(), a[0]);
+        grammar_test_graph graph(clone.get(), backend.get(), n_vocab);
+        graph.check(expected.get());
+    }
+    auto broken = make_grammar();
+    bool failed = false;
+    try {
+        llama_sampler_accept(broken.get(), z[0]);
+    } catch (const std::runtime_error &) {
+        failed = true;
+    }
+    GGML_ASSERT(failed);
+    llama_sampler_ptr broken_clone(llama_sampler_clone(broken.get()));
+    llama_sampler_copy(broken.get(), destination.get());
+    for (auto * sampler : {broken.get(), broken_clone.get(), destination.get()}) {
+        failed = false;
+        try {
+            grammar_test_graph graph(sampler, backend.get(), n_vocab);
+            sampler->iface->backend_set_input(sampler, nullptr);
+        } catch (const std::runtime_error &) {
+            failed = true;
+        }
+        GGML_ASSERT(failed);
+        failed = false;
+        llama_token_data value = {a[0], 17.0f, 0.0f};
+        llama_token_data_array cur = {&value, 1, -1, false};
+        try {
+            llama_sampler_apply(sampler, &cur);
+        } catch (const std::runtime_error &) {
+            failed = true;
+        }
+        GGML_ASSERT(failed);
+        failed = false;
+        try {
+            llama_sampler_reset(sampler);
+        } catch (const std::runtime_error &) {
+            failed = true;
+        }
+        GGML_ASSERT(failed);
+    }
+    GGML_ASSERT(!llama_sampler_init_llg(vocab, "lark", "start: ("));
+    printf("llguidance backend masks, lifecycle, provisional rows and errors test PASSED\n");
+}
+#endif
+
+static void test_grammar_lifecycle(const test_params & params) {
+    if (!grammar_test_supported(params)) {
+        return;
+    }
+    const auto * vocab = llama_model_get_vocab(params.model.get());
+    const int32_t n_vocab = llama_vocab_n_tokens(vocab);
+    const auto tokens = grammar_test_tokens(vocab);
+    const std::string grammar = "root ::= " + grammar_token(tokens[0]) + " " +
+        grammar_token(tokens[1]) + " " + grammar_token(tokens[2]);
+    const auto make_grammar = [&]() {
+        return llama_sampler_ptr(llama_sampler_init_grammar(vocab, grammar.c_str(), "root"));
+    };
+    ggml_backend_ptr backend(ggml_backend_dev_init(params.device, nullptr));
+    GGML_ASSERT(backend);
+    const auto buft = ggml_backend_get_default_buffer_type(backend.get());
+    auto source = make_grammar();
+    auto reference = make_grammar();
+    const llama_sampler_row invalid = {0, LLAMA_SAMPLER_PREFIX_LINEAR, &tokens[1], 1};
+    GGML_ASSERT(source->iface->backend_prepare(source.get(), &invalid, 1));
+    GGML_ASSERT(!source->iface->backend_row_usable(source.get(), 0));
+    GGML_ASSERT(source->iface->backend_init(source.get(), buft, 2));
+    GGML_ASSERT(source->iface->backend_row_usable(source.get(), 0));
+    GGML_ASSERT(source->iface->backend_init(source.get(), buft, 1));
+    source->iface->backend_set_input(source.get(), nullptr);
+    {
+        grammar_test_graph graph(source.get(), backend.get(), n_vocab);
+        graph.check(reference.get());
+        graph.check(reference.get());
+        llama_sampler_accept(source.get(), tokens[0]);
+        llama_sampler_accept(reference.get(), tokens[0]);
+        graph.check(reference.get());
+    }
+
+    llama_sampler_ptr cloned(llama_sampler_clone(source.get()));
+    GGML_ASSERT(cloned->iface->backend_init(cloned.get(), buft, 1));
+    {
+        grammar_test_graph graph(cloned.get(), backend.get(), n_vocab,
+                { tokens[2], tokens[0], tokens[0], tokens[1] });
+        graph.check(reference.get());
+        llama_sampler_accept(cloned.get(), tokens[1]);
+        llama_sampler_ptr advanced(llama_sampler_clone(reference.get()));
+        llama_sampler_accept(advanced.get(), tokens[1]);
+        graph.check(advanced.get());
+    }
+
+    auto destination = make_grammar();
+    GGML_ASSERT(destination->iface->backend_init(destination.get(), buft, 1));
+    {
+        grammar_test_graph graph(destination.get(), backend.get(), n_vocab);
+        auto initial = make_grammar();
+        graph.check(initial.get());
+        auto * destination_ctx = destination->ctx;
+        llama_sampler_copy(source.get(), destination.get());
+        GGML_ASSERT(destination->ctx == destination_ctx);
+        source.reset();
+        graph.check(reference.get());
+        llama_sampler_accept(destination.get(), tokens[1]);
+        llama_sampler_accept(reference.get(), tokens[1]);
+        graph.check(reference.get());
+    }
+    {
+        grammar_test_graph rebuilt(destination.get(), backend.get(), n_vocab);
+        rebuilt.check(reference.get());
+        llama_sampler_reset(destination.get());
+        llama_sampler_reset(reference.get());
+        rebuilt.check(reference.get());
+    }
+
+    for (const char * rule : { "root ::= [a-z]+", "root ::= .+" }) {
+        llama_sampler_ptr sampler(llama_sampler_init_grammar(vocab, rule, "root"));
+        llama_sampler_ptr cpu(llama_sampler_clone(sampler.get()));
+        GGML_ASSERT(sampler->iface->backend_init(sampler.get(), buft, 1));
+        grammar_test_graph graph(sampler.get(), backend.get(), n_vocab);
+        graph.check(cpu.get());
+    }
+
+    const auto make_lazy = [&]() {
+        return llama_sampler_ptr(llama_sampler_init_grammar_lazy_patterns(vocab, grammar.c_str(), "root",
+                    nullptr, 0, tokens.data(), 1));
+    };
+    auto lazy = make_lazy();
+    auto lazy_cpu = make_lazy();
+    GGML_ASSERT(lazy->iface->backend_init(lazy.get(), buft, 1));
+    {
+        grammar_test_graph graph(lazy.get(), backend.get(), n_vocab);
+        graph.check(lazy_cpu.get());
+        llama_sampler_accept(lazy.get(), tokens[2]);
+        llama_sampler_accept(lazy_cpu.get(), tokens[2]);
+        graph.check(lazy_cpu.get());
+        llama_sampler_ptr snapshot(llama_sampler_clone(lazy.get()));
+        llama_sampler_accept(lazy.get(), tokens[0]);
+        llama_sampler_accept(lazy_cpu.get(), tokens[0]);
+        graph.check(lazy_cpu.get());
+        llama_sampler_copy(snapshot.get(), lazy.get());
+        lazy_cpu = make_lazy();
+        llama_sampler_accept(lazy_cpu.get(), tokens[2]);
+        graph.check(lazy_cpu.get());
+        llama_sampler_accept(lazy.get(), tokens[0]);
+        llama_sampler_accept(lazy_cpu.get(), tokens[0]);
+        graph.check(lazy_cpu.get());
+        llama_sampler_reset(lazy.get());
+        llama_sampler_reset(lazy_cpu.get());
+        graph.check(lazy_cpu.get());
+    }
+
+    const std::string trigger_word = common_token_to_piece(vocab, tokens[0]) + common_token_to_piece(vocab, tokens[1]);
+    std::string pattern = "[\\s\\S]*?(";
+    for (char c : trigger_word) {
+        if (std::strchr(".^$|()*+?[]{}\\", c)) {
+            pattern += '\\';
+        }
+        pattern += c;
+    }
+    pattern += ")[\\s\\S]*";
+    const char * trigger = pattern.c_str();
+    const auto make_regex = [&]() {
+        return llama_sampler_ptr(llama_sampler_init_grammar_lazy_patterns(vocab, grammar.c_str(), "root", &trigger, 1, nullptr, 0));
+    };
+    auto regex = make_regex();
+    auto regex_cpu = make_regex();
+    GGML_ASSERT(regex->iface->backend_init(regex.get(), buft, 1));
+    {
+        grammar_test_graph graph(regex.get(), backend.get(), n_vocab);
+        llama_sampler_accept(regex.get(), tokens[0]);
+        llama_sampler_accept(regex_cpu.get(), tokens[0]);
+        graph.check(regex_cpu.get());
+        llama_sampler_ptr pending(llama_sampler_clone(regex.get()));
+        llama_sampler_accept(regex.get(), tokens[1]);
+        llama_sampler_accept(regex_cpu.get(), tokens[1]);
+        graph.check(regex_cpu.get());
+        llama_sampler_ptr triggered(llama_sampler_clone(regex.get()));
+        llama_sampler_copy(pending.get(), regex.get());
+        regex_cpu = make_regex();
+        llama_sampler_accept(regex_cpu.get(), tokens[0]);
+        graph.check(regex_cpu.get());
+        llama_sampler_accept(regex.get(), tokens[1]);
+        llama_sampler_accept(regex_cpu.get(), tokens[1]);
+        graph.check(regex_cpu.get());
+        llama_sampler_reset(regex.get());
+        llama_sampler_copy(triggered.get(), regex.get());
+        triggered.reset();
+        graph.check(regex_cpu.get());
+    }
+    printf("backend grammar lifecycle test PASSED\n");
+}
+
+static void test_grammar(const test_params & params) {
+    if (!grammar_test_supported(params)) {
+        return;
+    }
+    const auto * vocab = llama_model_get_vocab(params.model.get());
+    const auto tokens = grammar_test_tokens(vocab);
+    const std::string grammar = "root ::= (" + grammar_token(tokens[0]) + " | " + grammar_token(tokens[1]) + ")+";
+    const auto raw = decode_raw_logits(params, "Hello");
+    for (bool cpu_suffix : { false, true }) {
+        auto add_prefix = [&](llama_sampler * chain) {
+            llama_sampler_chain_add(chain, llama_sampler_init_grammar(vocab, grammar.c_str(), "root"));
+            llama_sampler_chain_add(chain, llama_sampler_init_temp(0.75f));
+        };
+        auto add_samplers = [&](llama_sampler * chain) {
+            add_prefix(chain);
+            if (cpu_suffix) {
+                llama_sampler_chain_add(chain, llama_sampler_init_top_n_sigma(1.0f));
+                llama_sampler_chain_add(chain, llama_sampler_init_greedy());
+            }
+        };
+        auto cpu = make_sampler_chain(add_samplers, [](llama_sampler *) {});
+        auto cpu_prefix = make_sampler_chain(add_prefix, [](llama_sampler *) {});
+        auto backend = make_sampler_chain(add_samplers, [](llama_sampler *) {});
+        std::vector<llama_sampler_seq_config> configs = {{ 0, backend.get() }};
+        test_context ctx(params, configs);
+        GGML_ASSERT(ctx.decode({{ 0, "Hello" }}));
+        const int32_t idx = ctx.idx_for_seq(0);
+        const auto expected = apply_cpu_sampler(raw, cpu.get());
+        const auto expected_prefix = apply_cpu_sampler(raw, cpu_prefix.get());
+        const uint32_t count = llama_get_sampled_logits_count_ith(ctx.ctx.get(), idx);
+        GGML_ASSERT(count == raw.size());
+        const float * actual = llama_get_sampled_logits_ith(ctx.ctx.get(), idx);
+        for (uint32_t i = 0; i < count; ++i) {
+            if (std::isinf(expected_prefix[i].logit)) {
+                GGML_ASSERT(actual[i] == expected_prefix[i].logit);
+            } else {
+                GGML_ASSERT(fabsf(actual[i] - expected_prefix[i].logit) < 1e-3f);
+            }
+        }
+        GGML_ASSERT(llama_get_sampled_token_ith(ctx.ctx.get(), idx) == LLAMA_TOKEN_NULL);
+        if (cpu_suffix) {
+            const llama_token token = llama_sampler_sample(backend.get(), ctx.ctx.get(), idx);
+            const auto best = std::max_element(expected.begin(), expected.end(),
+                    [](const llama_token_data & a, const llama_token_data & b) { return a.logit < b.logit; });
+            GGML_ASSERT(token == best->id);
+        }
+    }
+    printf("backend grammar and CPU suffix test PASSED\n");
+}
+
+static void test_grammar_multi_sequence(const test_params & params) {
+    if (!grammar_test_supported(params)) {
+        return;
+    }
+    const auto * vocab = llama_model_get_vocab(params.model.get());
+    const auto tokens = grammar_test_tokens(vocab);
+    std::vector<llama_sampler_ptr> chains;
+    std::vector<llama_sampler_seq_config> configs;
+    for (int i = 0; i < 3; ++i) {
+        llama_sampler_ptr chain(llama_sampler_chain_init(llama_sampler_chain_default_params()));
+        const std::string term = grammar_token(tokens[i]);
+        const std::string grammar = "root ::= " + term + " " + term + " " + term;
+        llama_sampler_chain_add(chain.get(), llama_sampler_init_grammar(vocab, grammar.c_str(), "root"));
+        llama_sampler_chain_add(chain.get(), llama_sampler_init_greedy());
+        configs.push_back({ i, chain.get() });
+        chains.push_back(std::move(chain));
+    }
+    test_context ctx(params, configs, 3, 3, 2);
+    for (const std::vector<int> & order : { std::vector<int>{ 2, 0 }, { 1 }, { 0, 2, 1 } }) {
+        common_batch batch(ctx.ctx.get());
+        for (int seq : order) {
+            batch.add(llama_vocab_bos(vocab), ctx.seq_positions[seq]++, seq, true);
+        }
+        GGML_ASSERT(llama_process(ctx.ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0);
+        for (size_t row = 0; row < order.size(); ++row) {
+            const int seq = order[row];
+            const llama_token token = llama_sampler_sample(chains[seq].get(), ctx.ctx.get(), row);
+            GGML_ASSERT(token == tokens[seq]);
+        }
+    }
+    printf("backend different sequence grammars test PASSED\n");
+}
+
+static void test_grammar_fallback(const test_params & params) {
+    const auto * vocab = llama_model_get_vocab(params.model.get());
+    const auto tokens = grammar_test_tokens(vocab);
+    const std::string grammar = "root ::= " + grammar_token(tokens[0]) + " " + grammar_token(tokens[1]);
+    llama_sampler_ptr chain(llama_sampler_chain_init(llama_sampler_chain_default_params()));
+    llama_sampler_chain_add(chain.get(), llama_sampler_init_temp(0.75f));
+    llama_sampler_chain_add(chain.get(), llama_sampler_init_grammar(vocab, grammar.c_str(), "root"));
+    llama_sampler_chain_add(chain.get(), llama_sampler_init_greedy());
+    std::vector<llama_sampler_seq_config> configs = {{ 0, chain.get() }};
+    test_context ctx(params, configs, 1, 2, 0, 2);
+    common_batch batch(ctx.ctx.get());
+    for (int i = 0; i < 2; ++i) {
+        batch.add(llama_vocab_bos(vocab), i, 0, true);
+    }
+    GGML_ASSERT(llama_process(ctx.ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) == -1);
+    llama_sampler_row rows[] = {
+        {0, LLAMA_SAMPLER_PREFIX_LINEAR, nullptr, 0},
+        {1, LLAMA_SAMPLER_PREFIX_LINEAR, tokens.data(), 1},
+    };
+    GGML_ASSERT(llama_sampler_prepare(ctx.ctx.get(), 0, rows, 2));
+    GGML_ASSERT(llama_process(ctx.ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0);
+    for (int row = 0; row < 2; ++row) {
+        GGML_ASSERT(llama_sampler_sample(chain.get(), ctx.ctx.get(), row) == tokens[row]);
+    }
+    printf("backend grammar explicit multi-output prefix requirement test PASSED\n");
+}
+
 static void test_penalties(const test_params & params) {
     printf("Testing backend penalties (repeat + freq + presence)\n");
     compare_penalties_logits(params, 64, 1.1f, 0.5f, 0.25f, "Hello Hello world");
@@ -2060,6 +2792,931 @@ static void test_multi_output_cpu_suffix(const test_params & params) {
     printf("backend multi-output CPU suffix test PASSED\n");
 }
 
+static common_params_sampling common_grammar_params(const std::string & grammar) {
+    common_params_sampling sp;
+    sp.grammar = { COMMON_GRAMMAR_TYPE_USER, grammar };
+    sp.grammar_first = true;
+    sp.backend_sampling = true;
+    sp.seed = 1234;
+    sp.temp = 0.0f;
+    sp.samplers = { COMMON_SAMPLER_TYPE_TEMPERATURE };
+    return sp;
+}
+
+static void test_grammar_common(const test_params & params) {
+    if (!grammar_test_supported(params)) {
+        return;
+    }
+    const auto tokens = grammar_test_tokens(llama_model_get_vocab(params.model.get()));
+    const std::string grammar = "root ::= (" + grammar_token(tokens[0]) + " | " + grammar_token(tokens[1]) + ")+";
+    for (bool cpu_suffix : { false, true }) {
+        auto sp = common_grammar_params(grammar);
+        sp.logit_bias = {{tokens[2], 1000.0f}, {tokens[0], 100.0f}};
+        if (cpu_suffix) {
+            sp.samplers.insert(sp.samplers.begin(), COMMON_SAMPLER_TYPE_TOP_N_SIGMA);
+            sp.top_n_sigma = 1.0f;
+        }
+        common_sampler_ptr sampler(common_sampler_init(params.model.get(), sp));
+        GGML_ASSERT(sp.backend_sampling);
+        auto reference_params = sp;
+        reference_params.backend_sampling = false;
+        common_sampler_ptr reference(common_sampler_init(params.model.get(), reference_params));
+        std::vector<llama_sampler_seq_config> configs = {{0, common_sampler_get(sampler.get())}};
+        std::vector<llama_sampler_seq_config> no_configs;
+        test_context ctx(params, configs);
+        test_context cpu(params, no_configs);
+        GGML_ASSERT(ctx.decode({{0, "Hello"}}));
+        GGML_ASSERT(cpu.decode({{0, "Hello"}}));
+        for (int i = 0; i < 3; ++i) {
+            const int idx = ctx.idx_for_seq(0);
+            GGML_ASSERT((llama_get_sampled_token_ith(ctx.ctx.get(), idx) == LLAMA_TOKEN_NULL) == cpu_suffix);
+            const auto actual = common_sampler_sample(sampler.get(), ctx.ctx.get(), idx);
+            const auto expected = common_sampler_sample(reference.get(), cpu.ctx.get(), cpu.idx_for_seq(0));
+            GGML_ASSERT(actual == expected && actual == tokens[0]);
+            common_sampler_accept(sampler.get(), actual, true);
+            common_sampler_accept(reference.get(), expected, true);
+            GGML_ASSERT(ctx.decode_token(actual));
+            GGML_ASSERT(cpu.decode_token(expected));
+        }
+    }
+    printf("common grammar-first backend and CPU suffix test PASSED\n");
+}
+
+#ifdef LLAMA_USE_LLGUIDANCE
+static void test_llguidance_prepared_rows(const test_params & params) {
+    const auto * vocab = llama_model_get_vocab(params.model.get());
+    const auto a = common_tokenize(vocab, "a", false, true);
+    const auto z = common_tokenize(vocab, "z", false, true);
+    GGML_ASSERT(a.size() == 1 && z.size() == 1);
+    auto cp = llama_sampler_chain_default_params();
+    cp.output_flags = LLAMA_SAMPLER_OUTPUT_CANDIDATES;
+    llama_sampler_ptr chain(llama_sampler_chain_init(cp));
+    auto * grammar = llama_sampler_init_llg(vocab, "lark", "start: /[ab]/ /[bc]/ /[cd]/");
+    GGML_ASSERT(grammar);
+    llama_sampler_chain_add(chain.get(), grammar);
+    llama_sampler_chain_add(chain.get(), llama_sampler_init_dist(1234));
+    std::vector<llama_sampler_seq_config> configs = {{0, chain.get()}};
+    test_context ctx(params, configs, 1, 3, 2, 3);
+    const llama_sampler_row rows[] = {
+        {2, LLAMA_SAMPLER_PREFIX_TREE, z.data(), z.size()},
+        {1, LLAMA_SAMPLER_PREFIX_TEACHER_FORCED, a.data(), a.size()},
+        {0, LLAMA_SAMPLER_PREFIX_COMMITTED, nullptr, 0},
+    };
+    for (int round = 0; round < 2; ++round) {
+        GGML_ASSERT(llama_sampler_prepare(ctx.ctx.get(), 0, rows, 3));
+        common_batch batch(ctx.ctx.get());
+        for (int i = 0; i < 3; ++i) {
+            batch.add(a[0], round*3 + i, 0, true);
+        }
+        GGML_ASSERT(llama_process(ctx.ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0);
+        for (int i = 0; i < 3; ++i) {
+            GGML_ASSERT(llama_sampler_row_usable(ctx.ctx.get(), i) == (i != 2));
+            if (i == 2) {
+                GGML_ASSERT(llama_get_sampled_token_ith(ctx.ctx.get(), i) == LLAMA_TOKEN_NULL);
+                continue;
+            }
+            llama_sampler_ptr reference(llama_sampler_clone(grammar));
+            if (i == 1) {
+                llama_sampler_accept(reference.get(), a[0]);
+            }
+            std::vector<llama_token_data> values(llama_vocab_n_tokens(vocab));
+            for (size_t id = 0; id < values.size(); ++id) {
+                values[id] = {llama_token(id), 0.0f, 0.0f};
+            }
+            llama_token_data_array cur = {values.data(), values.size(), -1, false};
+            llama_sampler_apply(reference.get(), &cur);
+            const auto * logits = llama_get_sampled_logits_ith(ctx.ctx.get(), i);
+            GGML_ASSERT(logits && llama_get_sampled_logits_count_ith(ctx.ctx.get(), i) == values.size());
+            for (size_t id = 0; id < values.size(); ++id) {
+                GGML_ASSERT((logits[id] != -INFINITY) == (values[id].logit != -INFINITY));
+            }
+        }
+    }
+    printf("llguidance prepared row masks, rollback and ubatch splitting test PASSED\n");
+}
+
+static void test_llguidance_common(const test_params & params) {
+    const auto * vocab = llama_model_get_vocab(params.model.get());
+    const auto a = common_tokenize(vocab, "a", false, true);
+    const auto z = common_tokenize(vocab, "z", false, true);
+    GGML_ASSERT(a.size() == 1 && z.size() == 1);
+    for (bool first : {false, true}) {
+        auto sp = common_grammar_params("%llguidance {}\nstart: /[ab]+/");
+        sp.grammar_first = first;
+        sp.logit_bias = {{z[0], 1000.0f}, {a[0], 100.0f}};
+        common_sampler_ptr sampler(common_sampler_init(params.model.get(), sp));
+        GGML_ASSERT(sp.backend_sampling);
+        auto rp = sp;
+        rp.backend_sampling = false;
+        common_sampler_ptr reference(common_sampler_init(params.model.get(), rp));
+        std::vector<llama_sampler_seq_config> configs = {{0, common_sampler_get(sampler.get())}};
+        std::vector<llama_sampler_seq_config> none;
+        test_context ctx(params, configs);
+        test_context cpu(params, none);
+        GGML_ASSERT(ctx.decode({{0, "Hello"}}));
+        GGML_ASSERT(cpu.decode({{0, "Hello"}}));
+        for (int i = 0; i < 3; ++i) {
+            const auto actual = common_sampler_sample(sampler.get(), ctx.ctx.get(), ctx.idx_for_seq(0));
+            const auto expected = common_sampler_sample(reference.get(), cpu.ctx.get(), cpu.idx_for_seq(0));
+            GGML_ASSERT(actual == expected && actual == a[0]);
+            common_sampler_accept(sampler.get(), actual, true);
+            common_sampler_accept(reference.get(), expected, true);
+            GGML_ASSERT(ctx.decode_token(actual));
+            GGML_ASSERT(cpu.decode_token(expected));
+        }
+        common_sampler_ptr clone(common_sampler_clone(sampler.get()));
+        const auto actual = common_sampler_sample(sampler.get(), ctx.ctx.get(), ctx.idx_for_seq(0));
+        const auto cloned = common_sampler_sample(clone.get(), ctx.ctx.get(), ctx.idx_for_seq(0));
+        GGML_ASSERT(actual == cloned);
+    }
+    printf("llguidance common grammar-first and rejection-policy test PASSED\n");
+}
+#endif
+
+static void test_grammar_common_lifecycle(const test_params & params) {
+    if (!grammar_test_supported(params)) {
+        return;
+    }
+    const auto * vocab = llama_model_get_vocab(params.model.get());
+    const int32_t n_vocab = llama_vocab_n_tokens(vocab);
+    const auto tokens = grammar_test_tokens(vocab);
+    const std::string grammar = "root ::= " + grammar_token(tokens[0]) + " " + grammar_token(tokens[1]) + " " + grammar_token(tokens[2]);
+    auto sp = common_grammar_params(grammar);
+    common_sampler_ptr source(common_sampler_init(params.model.get(), sp));
+    common_sampler_ptr destination(common_sampler_init(params.model.get(), sp));
+    llama_sampler_ptr reference(llama_sampler_init_grammar(vocab, grammar.c_str(), "root"));
+    ggml_backend_ptr backend(ggml_backend_dev_init(params.device, nullptr));
+    const auto buft = ggml_backend_get_default_buffer_type(backend.get());
+    auto adapter = [](common_sampler * s) { return llama_sampler_chain_get(common_sampler_get(s), 0); };
+    auto * dst_adapter = adapter(destination.get());
+    GGML_ASSERT(dst_adapter->iface->backend_init(dst_adapter, buft, 1));
+    common_sampler_ptr cloned;
+    {
+        grammar_test_graph graph(dst_adapter, backend.get(), n_vocab);
+        graph.check(reference.get());
+        common_sampler_accept(source.get(), tokens[2], false);
+        common_sampler_accept(source.get(), tokens[0], true);
+        llama_sampler_accept(reference.get(), tokens[0]);
+        cloned.reset(common_sampler_clone(source.get()));
+        common_sampler_copy(source.get(), destination.get());
+        source.reset();
+        graph.check(reference.get());
+        common_sampler_accept(destination.get(), tokens[2], false);
+        graph.check(reference.get());
+        common_sampler_reset(destination.get());
+        graph.check(reference.get());
+        common_sampler_accept(destination.get(), tokens[1], true);
+        llama_sampler_accept(reference.get(), tokens[1]);
+        graph.check(reference.get());
+    }
+    {
+        grammar_test_graph rebuilt(dst_adapter, backend.get(), n_vocab);
+        rebuilt.check(reference.get());
+        common_sampler_copy(cloned.get(), destination.get());
+        llama_sampler_reset(reference.get());
+        llama_sampler_accept(reference.get(), tokens[0]);
+        rebuilt.check(reference.get());
+    }
+    destination.reset();
+    auto * clone_adapter = adapter(cloned.get());
+    GGML_ASSERT(clone_adapter->iface->backend_init(clone_adapter, buft, 1));
+    {
+        grammar_test_graph graph(clone_adapter, backend.get(), n_vocab);
+        graph.check(reference.get());
+        common_sampler_accept(cloned.get(), tokens[1], true);
+        llama_sampler_accept(reference.get(), tokens[1]);
+        graph.check(reference.get());
+    }
+    printf("common grammar clone/copy, prompt acceptance and rebuild test PASSED\n");
+}
+
+static void test_grammar_common_prompt(const test_params & params) {
+    if (!grammar_test_supported(params)) {
+        return;
+    }
+    const auto * vocab = llama_model_get_vocab(params.model.get());
+    const auto tokens = grammar_test_tokens(vocab);
+    const std::string prompt = " Hello";
+    const auto prefill = common_tokenize(vocab, prompt, false, true);
+    GGML_ASSERT(!prefill.empty());
+    std::string grammar = "root ::= ";
+    for (auto token : prefill) {
+        grammar += grammar_token(token) + " ";
+    }
+    grammar += grammar_token(tokens[0]);
+    ggml_backend_ptr backend(ggml_backend_dev_init(params.device, nullptr));
+    for (auto type : { COMMON_GRAMMAR_TYPE_USER, COMMON_GRAMMAR_TYPE_OUTPUT_FORMAT, COMMON_GRAMMAR_TYPE_TOOL_CALLS }) {
+        for (bool lazy : { false, true }) {
+            auto sp = common_grammar_params(grammar);
+            sp.grammar.type = type;
+            sp.generation_prompt = prompt;
+            sp.grammar_lazy = lazy;
+            sp.grammar_triggers = {{ COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN, "", prefill[0] }};
+            common_sampler_ptr sampler(common_sampler_init(params.model.get(), sp));
+            llama_sampler_ptr reference(lazy ?
+                llama_sampler_init_grammar_lazy_patterns(vocab, grammar.c_str(), "root", nullptr, 0, prefill.data(), 1) :
+                llama_sampler_init_grammar(vocab, grammar.c_str(), "root"));
+            if (!lazy && type != COMMON_GRAMMAR_TYPE_USER) {
+                for (auto token : prefill) {
+                    llama_sampler_accept(reference.get(), token);
+                }
+            }
+            auto * adapter = llama_sampler_chain_get(common_sampler_get(sampler.get()), 0);
+            GGML_ASSERT(adapter->iface->backend_init(adapter, ggml_backend_get_default_buffer_type(backend.get()), 1));
+            grammar_test_graph graph(adapter, backend.get(), llama_vocab_n_tokens(vocab));
+            graph.check(reference.get());
+            common_sampler_accept(sampler.get(), prefill[0], false);
+            graph.check(reference.get());
+            if (lazy) {
+                common_sampler_accept(sampler.get(), prefill[0], true);
+                llama_sampler_accept(reference.get(), prefill[0]);
+                graph.check(reference.get());
+            }
+        }
+    }
+    printf("common grammar generation-prompt prefill and lazy trigger test PASSED\n");
+}
+
+static void test_grammar_common_policy(const test_params & params) {
+    const auto * vocab = llama_model_get_vocab(params.model.get());
+    const auto tokens = grammar_test_tokens(vocab);
+    const std::string grammar = "root ::= " + grammar_token(tokens[0]) + "+";
+    auto sp = common_grammar_params(grammar);
+    sp.grammar_first = false;
+    sp.samplers = { COMMON_SAMPLER_TYPE_TOP_K, COMMON_SAMPLER_TYPE_TEMPERATURE };
+    sp.top_k = 1;
+    sp.logit_bias = {{tokens[2], 1000.0f}, {tokens[0], 100.0f}};
+    common_sampler_ptr rejection(common_sampler_init(params.model.get(), sp));
+    GGML_ASSERT(sp.backend_sampling);
+    std::vector<llama_sampler_seq_config> no_configs;
+    test_context cpu(params, no_configs);
+    GGML_ASSERT(cpu.decode({{0, "Hello"}}));
+    const auto raw = decode_raw_logits(params, "Hello");
+    auto proposal = apply_cpu_sampler(raw, common_sampler_get(rejection.get()));
+    GGML_ASSERT(proposal.size() == 1 && proposal[0].id == tokens[2]);
+    GGML_ASSERT(common_sampler_sample(rejection.get(), cpu.ctx.get(), cpu.idx_for_seq(0)) == tokens[0]);
+    GGML_ASSERT(common_sampler_sample(rejection.get(), cpu.ctx.get(), cpu.idx_for_seq(0), true) == tokens[0]);
+
+    auto budget = common_grammar_params(grammar);
+    budget.reasoning_budget_start = {tokens[1]};
+    budget.reasoning_budget_end = {{tokens[2]}};
+    budget.reasoning_budget_tokens = 1;
+    common_sampler_ptr restricted(common_sampler_init(params.model.get(), budget));
+    GGML_ASSERT(!budget.backend_sampling);
+
+    if (grammar_test_supported(params)) {
+        auto eligible = common_grammar_params(grammar);
+        common_sampler_ptr sampler(common_sampler_init(params.model.get(), eligible));
+        std::vector<llama_sampler_seq_config> configs = {{0, common_sampler_get(sampler.get())}};
+        test_context fallback(params, configs, 1, 0, 0, 2);
+        GGML_ASSERT(fallback.decode({{0, "Hello"}}));
+        GGML_ASSERT(llama_get_sampled_token_ith(fallback.ctx.get(), fallback.idx_for_seq(0)) == tokens[0]);
+        GGML_ASSERT(common_sampler_sample(sampler.get(), fallback.ctx.get(), fallback.idx_for_seq(0)) == tokens[0]);
+        common_sampler_ptr shared(common_sampler_init(params.model.get(), eligible));
+        configs = {{0, common_sampler_get(shared.get())}};
+        test_context shared_ctx(params, configs, 2);
+        common_batch batch(shared_ctx.ctx.get());
+        batch.add(tokens[0], 0, std::vector<llama_seq_id>{0, 1}, true);
+        GGML_ASSERT(llama_process(shared_ctx.ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) == -1);
+    }
+    printf("common rejection policy, reasoning budget and output-contract fallback test PASSED\n");
+}
+
+static void check_chain_continuation(common_sampler * actual, common_sampler * expected) {
+    llama_sampler_ptr a(llama_sampler_clone(common_sampler_get(actual)));
+    llama_sampler_ptr b(llama_sampler_clone(common_sampler_get(expected)));
+    for (int draw = 0; draw < 32; ++draw) {
+        llama_token_data da[] = {{0, 0.0f, 0.0f}, {1, 0.0f, 0.0f}, {2, 0.0f, 0.0f}};
+        llama_token_data db[] = {{0, 0.0f, 0.0f}, {1, 0.0f, 0.0f}, {2, 0.0f, 0.0f}};
+        llama_token_data_array ca = { da, 3, -1, false };
+        llama_token_data_array cb = { db, 3, -1, false };
+        auto * sa = llama_sampler_chain_get(a.get(), llama_sampler_chain_n(a.get()) - 1);
+        auto * sb = llama_sampler_chain_get(b.get(), llama_sampler_chain_n(b.get()) - 1);
+        llama_sampler_apply(sa, &ca);
+        llama_sampler_apply(sb, &cb);
+        GGML_ASSERT(ca.selected == cb.selected);
+    }
+}
+
+static void test_grammar_compatibility(const test_params & params) {
+    if (!grammar_test_supported(params)) {
+        return;
+    }
+    const auto * vocab = llama_model_get_vocab(params.model.get());
+    const auto tokens = grammar_test_tokens(vocab);
+    const std::string grammar = "root ::= (" + grammar_token(tokens[0]) + " | " + grammar_token(tokens[1]) + ")+";
+    for (bool suffix : {false, true}) {
+        for (bool late_first : {false, true}) {
+            for (int n_probs : {0, 4}) {
+                auto sp = common_grammar_params(grammar);
+                sp.grammar_first = false;
+                sp.n_probs = n_probs;
+                sp.temp = 1.0f;
+                sp.top_k = 1;
+                sp.penalty_repeat = 1.2f;
+                sp.logit_bias = {{tokens[2], 1000.0f}, {tokens[0], 100.0f}, {tokens[1], 99.0f}};
+                sp.samplers = {COMMON_SAMPLER_TYPE_PENALTIES, COMMON_SAMPLER_TYPE_TOP_K, COMMON_SAMPLER_TYPE_TEMPERATURE};
+                if (suffix) {
+                    sp.samplers.insert(sp.samplers.begin(), COMMON_SAMPLER_TYPE_TOP_N_SIGMA);
+                    sp.top_n_sigma = 1000.0f;
+                }
+                common_sampler_ptr sampler(common_sampler_init(params.model.get(), sp));
+                auto rp = sp;
+                rp.backend_sampling = false;
+                common_sampler_ptr reference(common_sampler_init(params.model.get(), rp));
+                std::vector<llama_sampler_seq_config> configs = {{0, common_sampler_get(sampler.get())}};
+                std::vector<llama_sampler_seq_config> empty;
+                test_context backend(params, configs);
+                test_context cpu(params, empty);
+                GGML_ASSERT(backend.decode({{0, "Hello"}}));
+                GGML_ASSERT(cpu.decode({{0, "Hello"}}));
+                for (int step = 0; step < 3; ++step) {
+                    const auto idx = backend.idx_for_seq(0);
+                    const auto proposal = llama_get_sampled_token_ith(backend.ctx.get(), idx);
+                    GGML_ASSERT(proposal == (suffix ? LLAMA_TOKEN_NULL : tokens[2]));
+                    if (!suffix && n_probs == 0) {
+                        GGML_ASSERT(llama_get_sampled_logits_count_ith(backend.ctx.get(), idx) == 0);
+                        GGML_ASSERT(llama_get_sampled_probs_count_ith(backend.ctx.get(), idx) == 0);
+                        GGML_ASSERT(llama_get_sampled_candidates_count_ith(backend.ctx.get(), idx) == 0);
+                    }
+                    llama_sampler_ptr mask(llama_sampler_init_grammar(vocab, grammar.c_str(), "root"));
+                    std::vector<float> filtered(llama_vocab_n_tokens(vocab));
+                    GGML_ASSERT(llama_sampler_apply_grammar(mask.get(), backend.ctx.get(), idx, filtered.data()));
+                    GGML_ASSERT(filtered[tokens[2]] == -INFINITY);
+                    const auto * raw = llama_get_logits_ith_raw(backend.ctx.get(), idx);
+                    GGML_ASSERT(std::isfinite(raw[tokens[2]]));
+                    GGML_ASSERT(filtered[tokens[0]] == raw[tokens[0]]);
+                    const auto actual = common_sampler_sample(sampler.get(), backend.ctx.get(), idx, late_first);
+                    const auto expected = common_sampler_sample(reference.get(), cpu.ctx.get(), cpu.idx_for_seq(0), late_first);
+                    GGML_ASSERT(actual == expected && actual != tokens[2]);
+                    check_chain_continuation(sampler.get(), reference.get());
+                    const auto * ca = common_sampler_get_candidates(sampler.get(), false);
+                    const auto * cb = common_sampler_get_candidates(reference.get(), false);
+                    GGML_ASSERT(ca->size == cb->size && ca->selected == cb->selected);
+                    GGML_ASSERT(ca->data[ca->selected].id == cb->data[cb->selected].id);
+                    if (suffix || late_first || n_probs > 0) {
+                        GGML_ASSERT(std::fabs(ca->data[ca->selected].logit - cb->data[cb->selected].logit) < 1e-4f);
+                    }
+                    GGML_ASSERT(std::fabs(ca->data[ca->selected].p - cb->data[cb->selected].p) < 1e-6f);
+                    common_sampler_accept(sampler.get(), actual, true);
+                    common_sampler_accept(reference.get(), expected, true);
+                    common_sampler_ptr cloned(common_sampler_clone(sampler.get()));
+                    common_sampler_ptr copied(common_sampler_init(params.model.get(), sp));
+                    common_sampler_copy(sampler.get(), copied.get());
+                    check_chain_continuation(cloned.get(), copied.get());
+                    GGML_ASSERT(backend.decode_token(actual));
+                    GGML_ASSERT(cpu.decode_token(expected));
+                }
+            }
+        }
+    }
+    printf("compatibility full-logit retry, late policy, RNG and state test PASSED\n");
+}
+
+struct sampling_sync_counter {
+    ggml_backend_t backend;
+    decltype(ggml_backend_i::synchronize) synchronize;
+    decltype(ggml_backend_i::cpy_tensor_async) copy;
+    size_t calls = 0;
+    size_t retained_copies = 0;
+    static sampling_sync_counter * active;
+
+    sampling_sync_counter(ggml_backend_t backend) : backend(backend), synchronize(backend->iface.synchronize),
+        copy(backend->iface.cpy_tensor_async) {
+        GGML_ASSERT(!active);
+        active = this;
+        backend->iface.synchronize = [](ggml_backend_t backend) {
+            ++active->calls;
+            if (active->synchronize) {
+                active->synchronize(backend);
+            }
+        };
+        if (copy) {
+            backend->iface.cpy_tensor_async = [](ggml_backend_t src_backend, ggml_backend_t dst_backend,
+                                                const ggml_tensor * src, ggml_tensor * dst) {
+                if (std::strcmp(dst->name, "logits_retained") == 0) {
+                    GGML_ASSERT(src_backend == dst_backend);
+                    ++active->retained_copies;
+                }
+                return active->copy(src_backend, dst_backend, src, dst);
+            };
+        }
+    }
+
+    ~sampling_sync_counter() {
+        backend->iface.cpy_tensor_async = copy;
+        backend->iface.synchronize = synchronize;
+        active = nullptr;
+    }
+};
+
+sampling_sync_counter * sampling_sync_counter::active = nullptr;
+
+struct retry_graph_counter {
+    ggml_backend_t backend;
+    decltype(ggml_backend_i::graph_compute) compute;
+    ggml_cgraph * retry = nullptr;
+    size_t calls = 0;
+    static retry_graph_counter * active;
+
+    retry_graph_counter(ggml_backend_t backend) : backend(backend), compute(backend->iface.graph_compute) {
+        GGML_ASSERT(!active);
+        active = this;
+        backend->iface.graph_compute = [](ggml_backend_t backend, ggml_cgraph * graph) {
+            bool mask = false;
+            for (int i = 0; i < ggml_graph_n_nodes(graph); ++i) {
+                mask = mask || ggml_graph_node(graph, i)->op == GGML_OP_TOKEN_MASK;
+            }
+            if (mask) {
+                auto * result = ggml_graph_node(graph, ggml_graph_n_nodes(graph) - 1);
+                GGML_ASSERT(result->type == GGML_TYPE_I32 && ggml_nelements(result) == 1);
+                GGML_ASSERT(!active->retry || active->retry == graph);
+                active->retry = graph;
+                ++active->calls;
+            }
+            return active->compute(backend, graph);
+        };
+    }
+
+    ~retry_graph_counter() {
+        backend->iface.graph_compute = compute;
+        active = nullptr;
+    }
+};
+
+retry_graph_counter * retry_graph_counter::active = nullptr;
+
+static void test_grammar_proposal_retry(const test_params & params) {
+    if (!grammar_test_supported(params)) {
+        return;
+    }
+    const auto * vocab = llama_model_get_vocab(params.model.get());
+    const auto tokens = grammar_test_tokens(vocab);
+    for (int mode : {0, 1, 2}) {
+        const std::string grammar = "root ::= (" + grammar_token(tokens[0]) + " | " + grammar_token(tokens[1]) + ")+";
+        for (bool rejected : {false, true}) {
+            auto sp = common_grammar_params(grammar);
+            sp.grammar_first = false;
+            sp.temp = mode == 1 ? 0.0f : mode == 2 ? 0.7f : 1.0f;
+            sp.top_k = mode == 2 ? 4 : 1;
+            sp.samplers = {COMMON_SAMPLER_TYPE_PENALTIES, COMMON_SAMPLER_TYPE_TOP_K, COMMON_SAMPLER_TYPE_TEMPERATURE};
+            if (mode == 2) {
+                sp.samplers = {COMMON_SAMPLER_TYPE_PENALTIES, COMMON_SAMPLER_TYPE_TOP_K, COMMON_SAMPLER_TYPE_TOP_P,
+                               COMMON_SAMPLER_TYPE_MIN_P, COMMON_SAMPLER_TYPE_TEMPERATURE};
+                sp.top_p = 0.9f;
+                sp.min_p = 0.05f;
+            }
+            sp.penalty_repeat = 1.2f;
+            sp.logit_bias = {{tokens[0], 100.0f}, {tokens[2], rejected ? 1000.0f : -1000.0f}};
+            if (mode == 2) {
+                sp.logit_bias.push_back({tokens[1], 99.0f});
+            }
+            common_sampler_ptr sampler(common_sampler_init(params.model.get(), sp));
+            auto rp = sp;
+            rp.backend_sampling = false;
+            common_sampler_ptr reference(common_sampler_init(params.model.get(), rp));
+            std::vector<llama_sampler_seq_config> configs = {{0, common_sampler_get(sampler.get())}};
+            std::vector<llama_sampler_seq_config> empty;
+            test_context backend(params, configs);
+            test_context cpu(params, empty);
+            retry_graph_counter counter(ggml_backend_sched_get_backend(backend.ctx->get_sched(), 0));
+            GGML_ASSERT(backend.decode({{0, "Hello"}}));
+            GGML_ASSERT(cpu.decode({{0, "Hello"}}));
+            for (int step = 0; step < 6; ++step) {
+                const size_t before = counter.calls;
+                const auto idx = backend.idx_for_seq(0);
+                const auto proposal = llama_get_sampled_token_ith(backend.ctx.get(), idx);
+                GGML_ASSERT(rejected ? proposal == tokens[2] : proposal == tokens[0] || proposal == tokens[1]);
+                const auto actual = common_sampler_sample(sampler.get(), backend.ctx.get(), idx);
+                const auto expected = common_sampler_sample(reference.get(), cpu.ctx.get(), cpu.idx_for_seq(0));
+                GGML_ASSERT(actual == expected && (actual == tokens[0] || actual == tokens[1]));
+                GGML_ASSERT(counter.calls == before + (rejected ? 1 : 0));
+                check_chain_continuation(sampler.get(), reference.get());
+                const auto * raw = llama_get_logits_ith_raw(backend.ctx.get(), idx);
+                GGML_ASSERT(raw && std::isfinite(raw[tokens[2]]));
+                common_sampler_accept(sampler.get(), actual, true);
+                common_sampler_accept(reference.get(), expected, true);
+                check_chain_continuation(sampler.get(), reference.get());
+                if (step == 2) {
+                    common_sampler_reset(sampler.get());
+                    common_sampler_reset(reference.get());
+                }
+                const size_t after = counter.calls;
+                GGML_ASSERT(backend.decode_token(actual));
+                GGML_ASSERT(cpu.decode_token(expected));
+                GGML_ASSERT(counter.calls == after);
+            }
+            GGML_ASSERT(counter.calls == (rejected ? 6 : 0));
+        }
+    }
+    const std::string impossible = "root ::= " + grammar_token(llama_vocab_n_tokens(vocab));
+    llama_sampler_ptr mask(llama_sampler_init_grammar(vocab, impossible.c_str(), "root"));
+    GGML_ASSERT(mask);
+    const llama_sampler_row row = {0, LLAMA_SAMPLER_PREFIX_COMMITTED, nullptr, 0};
+    GGML_ASSERT(llama_sampler_grammar_prepare_rows(mask.get(), &row, 1, false));
+    GGML_ASSERT(mask->iface->backend_row_usable(mask.get(), 0));
+    GGML_ASSERT(llama_sampler_grammar_prepare_rows(mask.get(), &row, 1, true));
+    GGML_ASSERT(!mask->iface->backend_row_usable(mask.get(), 0));
+    for (int reporting : {0, 4}) {
+        for (bool suffix : {false, true}) {
+            for (bool late_first : {false, true}) {
+                auto sp = common_grammar_params(impossible);
+                sp.grammar_first = false;
+                sp.n_probs = reporting;
+                if (suffix) {
+                    sp.samplers.insert(sp.samplers.begin(), COMMON_SAMPLER_TYPE_TOP_N_SIGMA);
+                    sp.top_n_sigma = 1.0f;
+                }
+                common_sampler_ptr sampler(common_sampler_init(params.model.get(), sp));
+                std::vector<llama_sampler_seq_config> configs = {{0, common_sampler_get(sampler.get())}};
+                test_context backend(params, configs);
+                GGML_ASSERT(backend.decode({{0, "Hello"}}));
+                GGML_ASSERT(common_sampler_sample(sampler.get(), backend.ctx.get(), backend.idx_for_seq(0), late_first) == LLAMA_TOKEN_NULL);
+            }
+        }
+    }
+
+    printf("lazy proposal, cached device retry, reset and distinct RNG draws test PASSED\n");
+}
+
+static void test_sampling_output_transfers(const test_params & params) {
+    const auto * vocab = llama_model_get_vocab(params.model.get());
+    for (uint32_t flags : {uint32_t(LLAMA_SAMPLER_OUTPUT_TOKEN), uint32_t(LLAMA_SAMPLER_OUTPUT_CANDIDATES),
+                           uint32_t(LLAMA_SAMPLER_OUTPUT_RAW), uint32_t(LLAMA_SAMPLER_OUTPUT_CANDIDATES | LLAMA_SAMPLER_OUTPUT_RAW)}) {
+        auto cp = llama_sampler_chain_default_params();
+        cp.output_flags = flags;
+        llama_sampler_ptr chain(llama_sampler_chain_init(cp));
+        llama_sampler_chain_add(chain.get(), llama_sampler_init_dist(1234));
+        std::vector<llama_sampler_seq_config> configs = {{0, chain.get()}};
+        test_context ctx(params, configs);
+        sampling_sync_counter counter(ggml_backend_sched_get_backend(ctx.ctx->get_sched(), 0));
+        GGML_ASSERT(ctx.decode({{0, "Hello"}}));
+        if (counter.copy && (flags & LLAMA_SAMPLER_OUTPUT_RAW)) {
+            GGML_ASSERT(counter.retained_copies == 1);
+        }
+        counter.calls = 0;
+        const auto idx = ctx.idx_for_seq(0);
+        GGML_ASSERT(llama_get_sampled_token_ith(ctx.ctx.get(), idx) != LLAMA_TOKEN_NULL);
+        const auto count = flags & LLAMA_SAMPLER_OUTPUT_CANDIDATES ? llama_vocab_n_tokens(vocab) : 0;
+        GGML_ASSERT(llama_get_sampled_logits_count_ith(ctx.ctx.get(), idx) == uint32_t(count));
+        GGML_ASSERT(llama_get_sampled_probs_count_ith(ctx.ctx.get(), idx) == uint32_t(count));
+        GGML_ASSERT(llama_get_sampled_candidates_count_ith(ctx.ctx.get(), idx) == 0);
+        if (flags & LLAMA_SAMPLER_OUTPUT_RAW) {
+            const auto raw = decode_raw_logits(params, "Hello");
+            const auto * actual = llama_get_logits_ith_raw(ctx.ctx.get(), idx);
+            for (size_t i = 0; i < raw.size(); ++i) {
+                GGML_ASSERT(std::fabs(actual[i] - raw[i]) < 1e-5f);
+            }
+        }
+        GGML_ASSERT(counter.calls == 1);
+        GGML_ASSERT(ctx.decode_token(llama_vocab_bos(vocab)));
+        const size_t before_read = counter.calls;
+        GGML_ASSERT(llama_get_sampled_token_ith(ctx.ctx.get(), 0) != LLAMA_TOKEN_NULL);
+        GGML_ASSERT(counter.calls == before_read + 1);
+        llama_get_sampled_logits_count_ith(ctx.ctx.get(), 0);
+        llama_get_sampled_probs_count_ith(ctx.ctx.get(), 0);
+        GGML_ASSERT(counter.calls == before_read + 1);
+    }
+    for (bool need_candidates : {false, true}) {
+        common_params_sampling sp;
+        sp.backend_sampling = true;
+        sp.backend_sampling_candidates = need_candidates;
+        sp.samplers = {COMMON_SAMPLER_TYPE_TEMPERATURE};
+        sp.temp = 1.0f;
+        common_sampler_ptr sampler(common_sampler_init(params.model.get(), sp));
+        std::vector<llama_sampler_seq_config> configs = {{0, common_sampler_get(sampler.get())}};
+        test_context ctx(params, configs);
+        GGML_ASSERT(ctx.decode({{0, "Hello"}}));
+        sampling_sync_counter counter(ggml_backend_sched_get_backend(ctx.ctx->get_sched(), 0));
+        llama_get_sampled_token_ith(ctx.ctx.get(), ctx.idx_for_seq(0));
+        common_sampler_sample(sampler.get(), ctx.ctx.get(), ctx.idx_for_seq(0));
+        GGML_ASSERT(counter.calls == 1);
+        common_sampler_sample(sampler.get(), ctx.ctx.get(), ctx.idx_for_seq(0));
+        GGML_ASSERT(counter.calls == 1);
+        GGML_ASSERT(ctx.decode_token(llama_vocab_bos(vocab)));
+        const size_t before_read = counter.calls;
+        common_sampler_sample(sampler.get(), ctx.ctx.get(), 0);
+        GGML_ASSERT(counter.calls == before_read + 1);
+        common_sampler_sample(sampler.get(), ctx.ctx.get(), 0);
+        GGML_ASSERT(counter.calls == before_read + 1);
+        const auto * candidates = common_sampler_get_candidates(sampler.get(), false);
+        GGML_ASSERT(candidates->size == (need_candidates ? size_t(llama_vocab_n_tokens(vocab)) : 1));
+        GGML_ASSERT(candidates->selected >= 0);
+    }
+    {
+        common_params_sampling sp;
+        sp.backend_sampling = true;
+        sp.samplers = {COMMON_SAMPLER_TYPE_TEMPERATURE};
+        common_sampler_ptr a(common_sampler_init(params.model.get(), sp));
+        common_sampler_ptr b(common_sampler_init(params.model.get(), sp));
+        std::vector<llama_sampler_seq_config> configs = {{0, common_sampler_get(a.get())}, {1, common_sampler_get(b.get())}};
+        test_context ctx(params, configs, 2);
+        GGML_ASSERT(ctx.decode({{1, "Hello"}, {0, "Hello"}}));
+        sampling_sync_counter counter(ggml_backend_sched_get_backend(ctx.ctx->get_sched(), 0));
+        for (int repeat = 0; repeat < 2; ++repeat) {
+            GGML_ASSERT(common_sampler_sample(b.get(), ctx.ctx.get(), ctx.idx_for_seq(1)) != LLAMA_TOKEN_NULL);
+            GGML_ASSERT(common_sampler_sample(a.get(), ctx.ctx.get(), ctx.idx_for_seq(0)) != LLAMA_TOKEN_NULL);
+            GGML_ASSERT(counter.calls == 1);
+        }
+    }
+    const auto raw = decode_raw_logits(params, "Hello");
+    auto cp = llama_sampler_chain_default_params();
+    cp.output_flags = LLAMA_SAMPLER_OUTPUT_RAW;
+    llama_sampler_ptr a(llama_sampler_chain_init(cp));
+    llama_sampler_ptr b(llama_sampler_chain_init(cp));
+    llama_sampler_chain_add(a.get(), llama_sampler_init_dist(1234));
+    llama_sampler_chain_add(b.get(), llama_sampler_init_dist(5678));
+    std::vector<llama_sampler_seq_config> configs = {{0, a.get()}, {1, b.get()}};
+    test_context ctx(params, configs, 2, 0, 2);
+    GGML_ASSERT(ctx.decode({{0, "Hello"}, {1, "Hello"}}));
+    GGML_ASSERT(llama_set_sampler(ctx.ctx.get(), 1, nullptr));
+    GGML_ASSERT(llama_graph_reserve(ctx.ctx.get(), 4, 2, 2));
+    for (int seq : {1, 0}) {
+        const auto * actual = llama_get_logits_ith_raw(ctx.ctx.get(), ctx.idx_for_seq(seq));
+        for (size_t i = 0; i < raw.size(); ++i) {
+            GGML_ASSERT(std::fabs(actual[i] - raw[i]) < 1e-5f);
+        }
+    }
+    printf("selected-token transfer suppression and retained raw output test PASSED\n");
+}
+
+static void test_grammar_prepared_rows(const test_params & params) {
+    if (!grammar_test_supported(params)) {
+        return;
+    }
+    const auto * vocab = llama_model_get_vocab(params.model.get());
+    const auto tokens = grammar_test_tokens(vocab);
+    const std::string grammar = "root ::= " + grammar_token(tokens[0]) + " " + grammar_token(tokens[1]);
+    {
+        llama_sampler_ptr sampler(llama_sampler_init_grammar(vocab, grammar.c_str(), "root"));
+        ggml_backend_ptr backend(ggml_backend_dev_init(params.device, nullptr));
+        GGML_ASSERT(backend);
+        GGML_ASSERT(sampler->iface->backend_init(sampler.get(), ggml_backend_get_default_buffer_type(backend.get()), 2));
+        llama_token prefix = tokens[0];
+        const llama_sampler_row rows[] = {
+            {7, LLAMA_SAMPLER_PREFIX_LINEAR, &prefix, 1},
+            {3, LLAMA_SAMPLER_PREFIX_COMMITTED, nullptr, 0},
+        };
+        GGML_ASSERT(sampler->iface->backend_prepare(sampler.get(), rows, 2));
+        for (int index : {1, 0, 1}) {
+            GGML_ASSERT(sampler->iface->backend_prepare(sampler.get(), nullptr, 0));
+            GGML_ASSERT(sampler->iface->backend_prepare(sampler.get(), &rows[index], 1));
+            llama_sampler_ptr reference(llama_sampler_init_grammar(vocab, grammar.c_str(), "root"));
+            if (index == 0) {
+                llama_sampler_accept(reference.get(), prefix);
+            }
+            grammar_test_graph graph(sampler.get(), backend.get(), llama_vocab_n_tokens(vocab));
+            graph.check(reference.get());
+        }
+        prefix = tokens[1];
+        GGML_ASSERT(sampler->iface->backend_prepare(sampler.get(), rows, 1));
+        GGML_ASSERT(!sampler->iface->backend_row_usable(sampler.get(), 0));
+        prefix = tokens[0];
+        GGML_ASSERT(sampler->iface->backend_prepare(sampler.get(), rows, 1));
+        GGML_ASSERT(sampler->iface->backend_row_usable(sampler.get(), 0));
+        llama_sampler_accept(sampler.get(), prefix);
+        GGML_ASSERT(sampler->iface->backend_prepare(sampler.get(), rows, 1));
+        GGML_ASSERT(!sampler->iface->backend_row_usable(sampler.get(), 0));
+        llama_sampler_reset(sampler.get());
+        GGML_ASSERT(sampler->iface->backend_prepare(sampler.get(), rows, 1));
+        GGML_ASSERT(sampler->iface->backend_row_usable(sampler.get(), 0));
+    }
+    for (bool lazy : {false, true}) {
+        const std::string repeated = "root ::= (" + grammar_token(tokens[0]) + " " + grammar_token(tokens[1]) + ")+";
+        llama_sampler_ptr sampler(lazy ?
+                llama_sampler_init_grammar_lazy_patterns(vocab, repeated.c_str(), "root", nullptr, 0, &tokens[0], 1) :
+                llama_sampler_init_grammar(vocab, repeated.c_str(), "root"));
+        ggml_backend_ptr backend(ggml_backend_dev_init(params.device, nullptr));
+        GGML_ASSERT(backend);
+        GGML_ASSERT(sampler->iface->backend_init(sampler.get(), ggml_backend_get_default_buffer_type(backend.get()), 16));
+        const std::vector<llama_tokens> prefixes = {
+            {}, {tokens[0]}, {tokens[0], tokens[1]}, {tokens[0], tokens[1], tokens[0]},
+            {tokens[0], tokens[1], tokens[0], tokens[0]},
+            {tokens[0], tokens[1], tokens[0], tokens[0], tokens[1]},
+            {tokens[0], tokens[1], tokens[0], tokens[1]},
+            {tokens[0]}, {tokens[1]}, {}, {-1}, {-1, tokens[0]},
+            {llama_vocab_n_tokens(vocab)}, {llama_vocab_eos(vocab)},
+        };
+        std::vector<llama_sampler_row> rows;
+        for (size_t i = 0; i < prefixes.size(); ++i) {
+            rows.push_back({int32_t(i), LLAMA_SAMPLER_PREFIX_LINEAR, prefixes[i].data(), prefixes[i].size()});
+        }
+        GGML_ASSERT(sampler->iface->backend_prepare(sampler.get(), rows.data(), rows.size()));
+        for (size_t i = 0; i < rows.size(); ++i) {
+            llama_sampler_ptr reference(llama_sampler_clone(sampler.get()));
+            bool usable = true;
+            for (auto token : prefixes[i]) {
+                if (token < 0 || token >= llama_vocab_n_tokens(vocab) || llama_vocab_is_eog(vocab, token)) {
+                    usable = false;
+                    break;
+                }
+                llama_token_data value = {token, 0.0f, 0.0f};
+                llama_token_data_array cur = {&value, 1, -1, false};
+                llama_sampler_apply(reference.get(), &cur);
+                if (value.logit == -INFINITY) {
+                    usable = false;
+                    break;
+                }
+                llama_sampler_accept(reference.get(), token);
+            }
+            GGML_ASSERT(sampler->iface->backend_prepare(sampler.get(), &rows[i], 1));
+            GGML_ASSERT(sampler->iface->backend_row_usable(sampler.get(), 0) == usable);
+            if (usable) {
+                grammar_test_graph graph(sampler.get(), backend.get(), llama_vocab_n_tokens(vocab));
+                graph.check(reference.get());
+            }
+        }
+    }
+    for (bool lazy : {false, true}) {
+        std::vector<llama_sampler_ptr> chains;
+        std::vector<llama_sampler *> grammars;
+        std::vector<llama_sampler_seq_config> configs;
+        const std::string active_grammar = lazy ? "root ::= " + grammar_token(tokens[2]) + " " + grammar_token(tokens[0]) + " " + grammar_token(tokens[1]) : grammar;
+        for (int seq = 0; seq < 2; ++seq) {
+            llama_sampler_ptr chain(llama_sampler_chain_init(llama_sampler_chain_default_params()));
+            auto * grmr = lazy ? llama_sampler_init_grammar_lazy_patterns(vocab, active_grammar.c_str(), "root", nullptr, 0, &tokens[2], 1) :
+                                llama_sampler_init_grammar(vocab, active_grammar.c_str(), "root");
+            grammars.push_back(grmr);
+            llama_sampler_chain_add(chain.get(), grmr);
+            llama_sampler_chain_add(chain.get(), llama_sampler_init_dist(1234));
+            configs.push_back({seq, chain.get()});
+            chains.push_back(std::move(chain));
+        }
+        test_context ctx(params, configs, 2, 4, 2, 2);
+        llama_sampler_row bad = {-1, LLAMA_SAMPLER_PREFIX_LINEAR, nullptr, 0};
+        GGML_ASSERT(!llama_sampler_prepare(ctx.ctx.get(), 0, &bad, 1));
+        bad = {0, LLAMA_SAMPLER_PREFIX_LINEAR, nullptr, 1};
+        GGML_ASSERT(!llama_sampler_prepare(ctx.ctx.get(), 0, &bad, 1));
+        bad = {0, LLAMA_SAMPLER_PREFIX_LINEAR, tokens.data(), size_t(-1)};
+        GGML_ASSERT(!llama_sampler_prepare(ctx.ctx.get(), 0, &bad, 1));
+        const llama_sampler_row duplicates[] = {{1, LLAMA_SAMPLER_PREFIX_LINEAR, nullptr, 0}, {1, LLAMA_SAMPLER_PREFIX_LINEAR, nullptr, 0}};
+        GGML_ASSERT(!llama_sampler_prepare(ctx.ctx.get(), 0, duplicates, 2));
+        std::vector<llama_tokens> prefixes = lazy ?
+            std::vector<llama_tokens>{{tokens[2]}, {}, {tokens[2], tokens[0]}, {tokens[2], tokens[1]}} :
+            std::vector<llama_tokens>{{tokens[0]}, {}, {}, {tokens[1]}};
+        for (int round = 0; round < 2; ++round) {
+            common_batch batch(ctx.ctx.get());
+            batch.add(llama_vocab_bos(vocab), round*2, 1, true);
+            batch.add(llama_vocab_bos(vocab), round*2, 0, true);
+            batch.add(tokens[0], round*2 + 1, 1, true);
+            batch.add(tokens[0], round*2 + 1, 0, true);
+            for (int seq = 0; seq < 2; ++seq) {
+                std::vector<llama_sampler_row> rows;
+                for (int idx : seq == 0 ? std::vector<int>{3, 1} : std::vector<int>{2, 0}) {
+                    rows.push_back({idx, seq == 0 ? LLAMA_SAMPLER_PREFIX_TEACHER_FORCED : LLAMA_SAMPLER_PREFIX_TREE,
+                            prefixes[idx].data(), prefixes[idx].size()});
+                }
+                GGML_ASSERT(llama_sampler_prepare(ctx.ctx.get(), seq, rows.data(), rows.size()));
+            }
+            GGML_ASSERT(llama_process(ctx.ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0);
+            for (int idx = 0; idx < 4; ++idx) {
+                const int seq = idx % 2 == 0 ? 1 : 0;
+                GGML_ASSERT(llama_sampler_row_usable(ctx.ctx.get(), idx) == (idx != 3));
+                if (idx == 3) {
+                    GGML_ASSERT(llama_get_sampled_token_ith(ctx.ctx.get(), idx) == LLAMA_TOKEN_NULL);
+                    GGML_ASSERT(llama_get_sampled_logits_count_ith(ctx.ctx.get(), idx) == 0);
+                    GGML_ASSERT(llama_sampler_sample(chains[seq].get(), ctx.ctx.get(), idx) == LLAMA_TOKEN_NULL);
+                    continue;
+                }
+                llama_sampler_ptr reference(llama_sampler_clone(grammars[seq]));
+                for (auto token : prefixes[idx]) {
+                    llama_sampler_accept(reference.get(), token);
+                }
+                std::vector<llama_token_data> values(llama_vocab_n_tokens(vocab));
+                for (size_t token = 0; token < values.size(); ++token) {
+                    values[token] = {llama_token(token), 0.0f, 0.0f};
+                }
+                llama_token_data_array cur = {values.data(), values.size(), -1, false};
+                llama_sampler_apply(reference.get(), &cur);
+                const float * actual = llama_get_sampled_logits_ith(ctx.ctx.get(), idx);
+                GGML_ASSERT(actual && llama_get_sampled_logits_count_ith(ctx.ctx.get(), idx) == values.size());
+                for (size_t token = 0; token < values.size(); ++token) {
+                    GGML_ASSERT((actual[token] != -INFINITY) == (values[token].logit != -INFINITY));
+                }
+            }
+            for (auto * grmr : grammars) {
+                llama_token_data value = {tokens[0], 0.0f, 0.0f};
+                llama_token_data_array cur = {&value, 1, -1, false};
+                llama_sampler_apply(grmr, &cur);
+                GGML_ASSERT(value.logit == 0.0f);
+            }
+            GGML_ASSERT(llama_process(ctx.ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) == -1);
+            std::swap(prefixes[0], prefixes[2]);
+        }
+        for (const auto & chain : chains) {
+            llama_sampler_ptr actual(llama_sampler_clone(llama_sampler_chain_get(chain.get(), 1)));
+            llama_sampler_ptr expected(llama_sampler_init_dist(1234));
+            for (int draw = 0; draw < 32; ++draw) {
+                llama_token_data a[] = {{0, 0.0f, 0.0f}, {1, 0.0f, 0.0f}};
+                llama_token_data b[] = {{0, 0.0f, 0.0f}, {1, 0.0f, 0.0f}};
+                llama_token_data_array ca = {a, 2, -1, false};
+                llama_token_data_array cb = {b, 2, -1, false};
+                llama_sampler_apply(actual.get(), &ca);
+                llama_sampler_apply(expected.get(), &cb);
+                GGML_ASSERT(ca.selected == cb.selected);
+            }
+        }
+    }
+    printf("prepared row identity, teacher/tree masks, trigger rollback and ubatch mapping test PASSED\n");
+}
+
+static void test_grammar_speculative(const test_params & params) {
+    if (!grammar_test_supported(params)) {
+        return;
+    }
+    const auto * vocab = llama_model_get_vocab(params.model.get());
+    const auto tokens = grammar_test_tokens(vocab);
+    const auto eog = llama_vocab_eos(vocab);
+    GGML_ASSERT(llama_vocab_is_eog(vocab, eog));
+    for (bool first : {true, false}) {
+        for (bool late : {false, true}) {
+            if (first && late) {
+                continue;
+            }
+            for (int scenario = 0; scenario < 6; ++scenario) {
+                if (scenario == 5 && (first || late)) {
+                    continue;
+                }
+                for (bool rejection : {false, true}) {
+                    const bool stop = scenario == 3 || scenario == 4;
+                    const std::string grammar = "root ::= " + grammar_token(tokens[0]) + (stop ? "" :
+                            " " + grammar_token(tokens[1]) + " " + grammar_token(tokens[0]));
+                    auto sp = common_grammar_params(grammar);
+                    sp.grammar_first = first;
+                    sp.backend_sampling_candidates = rejection;
+                    sp.temp = 1.0f;
+                    sp.top_k = 1;
+                    sp.samplers = {COMMON_SAMPLER_TYPE_TOP_K, COMMON_SAMPLER_TYPE_TEMPERATURE};
+                    sp.logit_bias = {{tokens[2], 1000.0f}, {tokens[0], 100.0f}, {tokens[1], 99.0f}};
+                    if (scenario == 5) {
+                        sp.logit_bias = {{tokens[0], 1000.0f}, {tokens[1], 99.0f}, {tokens[2], -1000.0f}};
+                    }
+                    common_sampler_ptr sampler(common_sampler_init(params.model.get(), sp));
+                    auto rp = sp;
+                    rp.backend_sampling = false;
+                    common_sampler_ptr reference(common_sampler_init(params.model.get(), rp));
+                    std::vector<llama_sampler_seq_config> configs = {{0, common_sampler_get(sampler.get())}};
+                    std::vector<llama_sampler_seq_config> empty;
+                    test_context ctx(params, configs, 1, 4, 2, 4);
+                    test_context cpu(params, empty, 1, 4, 2, 4);
+                    llama_tokens draft = {tokens[0], tokens[1]};
+                    if (scenario == 1) { draft[1] = tokens[2]; }
+                    if (scenario == 2) { draft[0] = tokens[2]; }
+                    if (scenario == 3) { draft = {tokens[0], eog}; }
+                    if (scenario == 4) { draft = {tokens[0], eog, tokens[1]}; }
+                    std::vector<int> idxs;
+                    common_batch batch(ctx.ctx.get());
+                    common_batch batch_cpu(cpu.ctx.get());
+                    for (size_t i = 0; i <= draft.size(); ++i) {
+                        const auto input = i == 0 ? llama_vocab_bos(vocab) : draft[i - 1];
+                        idxs.push_back(i);
+                        batch.add(input, i, 0, true);
+                        batch_cpu.add(input, i, 0, true);
+                    }
+                    GGML_ASSERT(common_sampler_prepare(ctx.ctx.get(), 0, idxs, draft, 0, batch.size()));
+                    GGML_ASSERT(llama_process(ctx.ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0);
+                    GGML_ASSERT(llama_process(cpu.ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch_cpu.get()) == 0);
+                    if (scenario == 1 || stop) {
+                        GGML_ASSERT(!llama_sampler_row_usable(ctx.ctx.get(), 2));
+                    }
+                    if (scenario == 2) {
+                        GGML_ASSERT(!llama_sampler_row_usable(ctx.ctx.get(), 1));
+                    }
+                    auto verify = [&](common_sampler * target, llama_context * context) {
+                        if (!rejection) {
+                            return common_sampler_sample_and_accept_n(target, context, idxs, draft, late);
+                        }
+                        std::vector<std::vector<llama_token_data>> q;
+                        for (auto token : draft) {
+                            q.push_back({{token, 0.0f, 1.0f}});
+                        }
+                        return common_sampler_sample_and_accept_n_rejection(target, context, idxs, draft, q, late);
+                    };
+                    const auto actual = verify(sampler.get(), ctx.ctx.get());
+                    const auto expected = verify(reference.get(), cpu.ctx.get());
+                    GGML_ASSERT(actual == expected);
+                    GGML_ASSERT(actual.size() == size_t(scenario == 0 || scenario == 5 ? 3 : scenario == 2 ? 1 : 2));
+                    check_chain_continuation(sampler.get(), reference.get());
+                    ctx.seq_positions[0] = batch.size();
+                    cpu.seq_positions[0] = batch.size();
+                    GGML_ASSERT(ctx.decode_token(actual.back()));
+                    GGML_ASSERT(cpu.decode_token(expected.back()));
+                    if (!stop) {
+                        const auto next = common_sampler_sample(sampler.get(), ctx.ctx.get(), -1, late);
+                        const auto next_cpu = common_sampler_sample(reference.get(), cpu.ctx.get(), -1, late);
+                        GGML_ASSERT(next == next_cpu);
+                        common_sampler_accept(sampler.get(), next, true);
+                        common_sampler_accept(reference.get(), next_cpu, true);
+                        check_chain_continuation(sampler.get(), reference.get());
+                    }
+                }
+            }
+        }
+    }
+    printf("speculative acceptance, mismatch, EOG, retry/late-policy RNG and continuation test PASSED\n");
+}
+
+
 struct backend_test_case {
     std::string name;
     void (*fn)(const test_params &);
@@ -2079,6 +3736,26 @@ static const backend_test_case BACKEND_TESTS[] = {
     { "test_min_p",                  test_min_p,                  true },
     { "test_logit_bias",             test_logit_bias,             true },
     { "test_penalties",              test_penalties,              true },
+    { "test_grammar",                test_grammar,                true },
+#ifdef LLAMA_USE_LLGUIDANCE
+    { "test_llguidance_backend", test_llguidance_backend, true },
+    { "test_llguidance_common", test_llguidance_common, true },
+    { "test_llguidance_prepared_rows", test_llguidance_prepared_rows, true },
+#endif
+    { "test_grammar_resident_cache", test_grammar_resident_cache, true },
+    { "test_grammar_async_upload", test_grammar_async_upload, true },
+    { "test_grammar_lifecycle",      test_grammar_lifecycle,      true },
+    { "test_grammar_multi_sequence", test_grammar_multi_sequence, true },
+    { "test_grammar_prepared_rows", test_grammar_prepared_rows, true },
+    { "test_grammar_speculative", test_grammar_speculative, true },
+    { "test_grammar_fallback",       test_grammar_fallback,       true },
+    { "test_grammar_compatibility", test_grammar_compatibility, true },
+    { "test_sampling_output_transfers", test_sampling_output_transfers, true },
+    { "test_grammar_proposal_retry", test_grammar_proposal_retry, true },
+    { "test_grammar_common",           test_grammar_common,           true },
+    { "test_grammar_common_lifecycle", test_grammar_common_lifecycle, true },
+    { "test_grammar_common_prompt",    test_grammar_common_prompt,    true },
+    { "test_grammar_common_policy",    test_grammar_common_policy,    true },
     // multiple sequences
     { "test_multi_sequence",         test_multi_sequence,         true },
     { "test_dist",                   test_dist,                   true },
@@ -2233,6 +3910,13 @@ int main(int argc, char ** argv) {
     test_params params = {
         /*.model =*/ load_model(args),
     };
+    if (!params.model) {
+        return EXIT_FAILURE;
+    }
+    params.device = args.device == "cpu" ? nullptr : sampling_test_gpu();
+    if (!params.device) {
+        params.device = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    }
 
     const std::vector<const backend_test_case *> tests = collect_tests_to_run(args.test);
     if (!tests.empty()) {

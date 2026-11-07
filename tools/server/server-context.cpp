@@ -2059,6 +2059,7 @@ private:
         // initialize samplers
         if (task.need_sampling()) {
             try {
+                task.params.sampling.backend_sampling_candidates = spec != nullptr;
                 slot.smpl.reset(common_sampler_init(model_tgt, task.params.sampling));
             } catch (std::exception & e) {
                 std::string err_msg = std::string("Failed to initialize samplers: ") + e.what();
@@ -4714,6 +4715,11 @@ private:
         // note: the sync is done here too, so that the wait is also covered by the yield
         int ret = 0;
         queue_tasks.yield_to_queue([&]() {
+            for (auto & slot : slots) {
+                if (!slot.spec_i_batch.empty() && slot.task && slot.task->params.sampling.backend_sampling) {
+                    common_sampler_prepare(ctx_tgt, slot.id, slot.spec_i_batch, slot.spec_draft, off, batch.view.size());
+                }
+            }
             ret = llama_process(ctx_tgt, LLAMA_PROCESS_TYPE_DECODE, batch.view.get());
             if (ret == 0 && has_output) {
                 llama_synchronize(ctx_tgt);
