@@ -6,7 +6,7 @@
 #include "htp-vtcm.h"
 
 struct htp_set_rows_kernel_params {
-    uint32_t n_threads;
+    uint32_t n_hvx;
     uint32_t total_tasks;
     uint32_t vtcm_size;
 };
@@ -16,8 +16,8 @@ struct htp_set_rows_vtcm_layout {
     size_t off_src0;
     size_t off_dst;
 
-    size_t src0_bytes_per_thread;
-    size_t dst_bytes_per_thread;
+    size_t src0_bytes_per_hvx;
+    size_t dst_bytes_per_hvx;
 
     size_t src0_spad_half_size;
     size_t dst_spad_half_size;
@@ -27,7 +27,7 @@ static inline void htp_set_rows_vtcm_layout_build(
     struct htp_set_rows_vtcm_layout * L,
     int dst_type,
     uint32_t ne00,
-    uint32_t n_threads) {
+    uint32_t n_hvx) {
 
     size_t src0_row_size = ne00 * sizeof(float);
     size_t dst_row_size  = htp_tensor_get_row_size(dst_type, ne00);
@@ -38,12 +38,12 @@ static inline void htp_set_rows_vtcm_layout_build(
     L->src0_spad_half_size = src0_row_size_aligned;
     L->dst_spad_half_size  = dst_row_size_aligned;
 
-    L->src0_bytes_per_thread = src0_row_size_aligned * 2;
-    L->dst_bytes_per_thread  = dst_row_size_aligned * 2;
+    L->src0_bytes_per_hvx = src0_row_size_aligned * 2;
+    L->dst_bytes_per_hvx  = dst_row_size_aligned * 2;
 
     size_t off = 0;
-    VTCM_LAYOUT_ALLOC(off, off_src0, L->src0_bytes_per_thread * n_threads);
-    VTCM_LAYOUT_ALLOC(off, off_dst,  L->dst_bytes_per_thread  * n_threads);
+    VTCM_LAYOUT_ALLOC(off, off_src0, L->src0_bytes_per_hvx * n_hvx);
+    VTCM_LAYOUT_ALLOC(off, off_dst,  L->dst_bytes_per_hvx  * n_hvx);
     L->total_bytes = off;
 }
 

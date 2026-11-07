@@ -14,7 +14,7 @@
 #include "ggml-common.h"
 #include "htp-ctx.h"
 #include "hex-common.h"
-#include "hex-profile.h"
+#include "htp-trace.h"
 #include "htp-ops.h"
 #include "htp-tensor.h"
 #include "roll-ops.h"
@@ -25,7 +25,7 @@ struct htp_roll_context {
 
     uint32_t row_start;
     uint32_t nrows;
-    uint32_t nrows_per_thread;
+    uint32_t nrows_per_hvx;
 };
 
 static inline uint32_t htp_roll_wrap(int32_t i, uint32_t ne) {
@@ -199,19 +199,19 @@ static int roll_dma_f32_strided(struct htp_ops_context * octx) {
     return HTP_STATUS_OK;
 }
 
-static void roll_thread_f32(unsigned int nth, unsigned int ith, void * data) {
+static void roll_thread_f32(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     struct htp_roll_context * rctx = (struct htp_roll_context *) data;
     struct htp_ops_context * octx = rctx->octx;
 
     htp_roll_preamble;
 
-    const uint32_t row_start = rctx->row_start + rctx->nrows_per_thread * ith;
-    const uint32_t row_end   = MIN(row_start + rctx->nrows_per_thread, rctx->row_start + rctx->nrows);
+    const uint32_t row_start = rctx->row_start + rctx->nrows_per_hvx * ith;
+    const uint32_t row_end   = MIN(row_start + rctx->nrows_per_hvx, rctx->row_start + rctx->nrows);
     if (row_start >= row_end) {
         return;
     }
 
-    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+    struct htp_thread_trace * tr = th->trace;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, row_start);
 
     for (uint32_t row = row_start; row < row_end; row++) {
@@ -275,20 +275,20 @@ int execute_op_roll_f32(struct htp_ops_context * octx) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
-    if (!htp_ops_context_set_n_threads(octx, MIN(kparams->n_threads, nrows))) {
+    if (!htp_ops_context_set_n_hvx(octx, MIN(kparams->n_hvx, nrows))) {
         return HTP_STATUS_INVAL_PARAMS;
     }
 
-    const uint32_t n_threads = octx->n_threads;
+    const uint32_t n_hvx = octx->n_hvx;
     struct htp_roll_context rctx = {
         .octx             = octx,
         .kparams          = kparams,
         .row_start        = row_start,
         .nrows            = nrows,
-        .nrows_per_thread = fastdiv(nrows + n_threads - 1, &octx->n_threads_div),
+        .nrows_per_hvx    = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div),
     };
 
-    work_queue_run(octx->ctx->work_queue, roll_thread_f32, &rctx, n_threads);
+    work_queue_run(octx->ctx->hvx_queue, roll_thread_f32, &rctx, n_hvx);
 
     return HTP_STATUS_OK;
 }

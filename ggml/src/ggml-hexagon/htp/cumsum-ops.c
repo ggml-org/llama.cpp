@@ -8,7 +8,7 @@
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
 #include "hex-common.h"
-#include "hex-profile.h"
+#include "htp-trace.h"
 #include "htp-ctx.h"
 #include "htp-ops.h"
 #include "htp-tensor.h"
@@ -48,7 +48,7 @@ struct htp_cumsum_context {
     size_t          dst_row_size;
     size_t          src_row_size_aligned;
     size_t          dst_row_size_aligned;
-    uint32_t        rows_per_thread;
+    uint32_t        rows_per_hvx;
     uint32_t        total_rows;
     uint32_t        row_start;
 };
@@ -57,7 +57,7 @@ struct htp_cumsum_context {
     struct htp_cumsum_context * cctx = (struct htp_cumsum_context *) data; \
     struct htp_ops_context *    octx = cctx->octx;                         \
     htp_cumsum_tensors_preamble;                                           \
-    dma_queue * dma_q = octx->ctx->dma[ith];
+    dma_queue * dma_q = th->dma_q;
 
 // ---------------------------------------------------------------------------
 // HVX prefix scan helpers
@@ -118,11 +118,11 @@ static inline void hvx_cumsum_row_f32(const float * restrict src, float * restri
 // Per thread worker: Double-buffered DMA
 // ---------------------------------------------------------------------------
 
-static void cumsum_thread_f32_dma(unsigned int nth, unsigned int ith, void * data) {
+static void cumsum_thread_f32_dma(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     htp_cumsum_preamble;
 
-    const uint32_t ir0 = cctx->row_start + cctx->rows_per_thread * ith;
-    const uint32_t ir1 = MIN(ir0 + cctx->rows_per_thread, cctx->row_start + cctx->total_rows);
+    const uint32_t ir0 = cctx->row_start + cctx->rows_per_hvx * ith;
+    const uint32_t ir1 = MIN(ir0 + cctx->rows_per_hvx, cctx->row_start + cctx->total_rows);
 
     if (ir0 >= ir1) {
         return;
@@ -151,7 +151,7 @@ static void cumsum_thread_f32_dma(unsigned int nth, unsigned int ith, void * dat
                        src_row_size_aligned, src_row_size, src_row_size, 1);
     }
 
-    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+    struct htp_thread_trace * tr = th->trace;
 
     for (uint32_t ir = ir0; ir < ir1; ir++) {
         float * dst_spad_row = (float *) dma_queue_pop(dma_q).src;
@@ -184,16 +184,16 @@ static void cumsum_thread_f32_dma(unsigned int nth, unsigned int ith, void * dat
 // Per thread worker: Direct HVX (no DMA)
 // ---------------------------------------------------------------------------
 
-static void cumsum_thread_f32(unsigned int nth, unsigned int ith, void * data) {
+static void cumsum_thread_f32(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     htp_cumsum_preamble;
 
     const uint8_t * src_data = (const uint8_t *) src0->data;
     uint8_t *       dst_data = (uint8_t *) dst->data;
 
-    const uint32_t ir0 = cctx->row_start + cctx->rows_per_thread * ith;
-    const uint32_t ir1 = MIN(ir0 + cctx->rows_per_thread, cctx->row_start + cctx->total_rows);
+    const uint32_t ir0 = cctx->row_start + cctx->rows_per_hvx * ith;
+    const uint32_t ir1 = MIN(ir0 + cctx->rows_per_hvx, cctx->row_start + cctx->total_rows);
 
-    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+    struct htp_thread_trace * tr = th->trace;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir0);
 
     for (uint32_t ir = ir0; ir < ir1; ir++) {
@@ -234,11 +234,11 @@ int op_cumsum_f32(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
     }
 
-    if (!htp_ops_context_set_n_threads(octx, MIN(kparams->n_threads, nrows))) {
+    if (!htp_ops_context_set_n_hvx(octx, MIN(kparams->n_hvx, nrows))) {
         return HTP_STATUS_INVAL_PARAMS;
     }
 
-    const uint32_t n_threads = octx->n_threads;
+    const uint32_t n_hvx = octx->n_hvx;
 
     if (!kparams->use_dma && (htp_tensor_is_extended(src0) || htp_tensor_is_extended(dst))) {
         return HTP_STATUS_NO_SUPPORT;
@@ -246,12 +246,12 @@ int op_cumsum_f32(struct htp_ops_context * octx) {
 
     struct htp_cumsum_vtcm_layout layout = { 0 };
     if (kparams->use_dma) {
-        htp_cumsum_vtcm_layout_build(&layout, src_row_size, dst_row_size, n_threads);
+        htp_cumsum_vtcm_layout_build(&layout, src_row_size, dst_row_size, n_hvx);
 
-        octx->src0_spad.size_per_thread = layout.src0_bytes_per_thread;
-        octx->dst_spad.size_per_thread  = layout.dst_bytes_per_thread;
-        octx->src0_spad.size = n_threads * layout.src0_bytes_per_thread;
-        octx->dst_spad.size  = n_threads * layout.dst_bytes_per_thread;
+        octx->src0_spad.size_per_hvx = layout.src0_bytes_per_hvx;
+        octx->dst_spad.size_per_hvx  = layout.dst_bytes_per_hvx;
+        octx->src0_spad.size = n_hvx * layout.src0_bytes_per_hvx;
+        octx->dst_spad.size  = n_hvx * layout.dst_bytes_per_hvx;
         octx->src0_spad.data = VTCM_LAYOUT_PTR(uint8_t, octx->ctx->vtcm_base, layout.off_src0);
         octx->dst_spad.data  = VTCM_LAYOUT_PTR(uint8_t, octx->ctx->vtcm_base, layout.off_dst);
         octx->src0_spad.src  = NULL;
@@ -264,15 +264,15 @@ int op_cumsum_f32(struct htp_ops_context * octx) {
         .dst_row_size         = dst_row_size,
         .src_row_size_aligned = layout.src_row_size_aligned,
         .dst_row_size_aligned = layout.dst_row_size_aligned,
-        .rows_per_thread      = fastdiv(nrows + n_threads - 1, &octx->n_threads_div),
+        .rows_per_hvx         = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div),
         .total_rows           = nrows,
         .row_start            = row_start,
     };
 
     if (kparams->use_dma) {
-        work_queue_run(octx->ctx->work_queue, cumsum_thread_f32_dma, &cctx, n_threads);
+        work_queue_run(octx->ctx->hvx_queue, cumsum_thread_f32_dma, &cctx, n_hvx);
     } else {
-        work_queue_run(octx->ctx->work_queue, cumsum_thread_f32, &cctx, n_threads);
+        work_queue_run(octx->ctx->hvx_queue, cumsum_thread_f32, &cctx, n_hvx);
     }
 
     return HTP_STATUS_OK;

@@ -20,6 +20,7 @@
 #include <string.h>
 #include <stdatomic.h>
 
+#include "htp-thread.h"
 #include "hex-utils.h"
 #include "dma-queue.h"
 #include "hmx-queue.h"
@@ -32,7 +33,7 @@
 #include "htp-ops.h"
 #include "htp_iface.h"
 #include "work-queue.h"
-#include "hex-profile.h"
+#include "htp-trace.h"
 #include "allreduce-ops.h"
 #include "dsv4-hc-ops.h"
 #include "htp-fence.h"
@@ -43,8 +44,7 @@
 #define WORK_QUEUE_STACK_SIZE  16384
 #define MAIN_THREAD_STACK_SIZE 32768
 
-_Static_assert(WORK_QUEUE_MAX_N_THREADS >= HTP_MAX_NTHREADS,
-               "work-queue thread cap must be >= HTP_MAX_NTHREADS");
+atomic_uint htp_thread_count = 0;
 
 struct htp_handle {
     struct htp_context * ctx;
@@ -491,16 +491,22 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
     qurt_sysenv_max_hthreads_t hw_threads;
     qurt_sysenv_get_max_hw_threads(&hw_threads);
     uint32_t hw_nhvx = (qurt_hvx_get_units() >> 8) & 0xFF;
+    uint32_t hw_nth  = hw_threads.max_hthreads;
+    if (hw_nth > HTP_MAX_NTHREADS) {
+        hw_nth = HTP_MAX_NTHREADS;
+    }
 
     if (n_hvx == 0) {
         n_hvx = hw_nhvx;
     }
-    if (n_hvx > hw_threads.max_hthreads) {
-        n_hvx = hw_threads.max_hthreads;
+    if (n_hvx > HTP_MAX_NHVX) {
+        n_hvx = HTP_MAX_NHVX;
     }
-    if (n_hvx > HTP_MAX_NTHREADS) {
-        n_hvx = HTP_MAX_NTHREADS;
+    if (n_hvx > hw_nth - 1) {
+        n_hvx = hw_nth - 1;
     }
+
+    uint32_t n_threads = hw_nth;
 
     // layout segments of our contiguous block
 
@@ -520,13 +526,13 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
     size_t wq_align  = work_queue_alignof();
     size_t offset_wq = hex_align_up(offset, wq_align);
     size_t size_wq   = work_queue_sizeof(n_hvx, WORK_QUEUE_CAPACITY, WORK_QUEUE_STACK_SIZE);
-    offset = offset_wq + size_wq;
+    offset           = offset_wq + size_wq;
 
     // 4. dma_queue
     size_t dma_align = dma_queue_alignof();
     size_t offset_dma = hex_align_up(offset, dma_align);
     size_t size_dma = 0;
-    for (uint32_t i = 0; i < n_hvx; i++) {
+    for (uint32_t i = 0; i < n_threads; i++) {
         size_dma  = hex_align_up(size_dma, dma_queue_alignof());
         size_dma += dma_queue_sizeof(256);
     }
@@ -657,16 +663,9 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
     }
 #endif
 
-    ctx->hmx_enabled = n_hmx;
-    ctx->hmx_queue   = NULL;
-    if (n_hmx) {
-        void * hmx_ptr = (void *) ((uintptr_t) block + offset_hmx);
-        ctx->hmx_queue = hmx_queue_init(hmx_ptr, HMX_QUEUE_CAPACITY, HMX_QUEUE_STACK_SIZE, ctx->vtcm_rctx, &ctx->trace[HTP_MAX_NTHREADS]);
-    }
-    FARF(HIGH, "HMX %s (n_hmx=%d)", ctx->hmx_enabled ? "enabled" : "disabled", n_hmx);
-
-    ctx->n_threads = n_hvx;
-    ctx->n_threads_div = init_fastdiv_values(ctx->n_threads);
+    ctx->n_threads = n_threads;
+    ctx->n_hvx     = n_hvx;
+    ctx->n_hvx_div = init_fastdiv_values(ctx->n_hvx);
 
     // Initialize DMA queues
     uint8_t * dma_ptr_curr = (uint8_t *) ((uintptr_t) block + offset_dma);
@@ -681,8 +680,18 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
     ctx->ddr_spad_size = HTP_DDR_SPAD_SIZE;
     ctx->ddr_spad_base = memalign(128, ctx->ddr_spad_size);
 
+    htp_thread_reset();
+
     void * wq_ptr = (void *) ((uintptr_t) block + offset_wq);
-    ctx->work_queue = work_queue_init(wq_ptr, n_hvx, WORK_QUEUE_CAPACITY, WORK_QUEUE_STACK_SIZE);
+    ctx->hvx_queue = work_queue_init(wq_ptr, n_hvx, WORK_QUEUE_CAPACITY, WORK_QUEUE_STACK_SIZE, ctx->dma, ctx->trace);
+
+    ctx->hmx_enabled = n_hmx;
+    ctx->hmx_queue   = NULL;
+    if (n_hmx) {
+        void * hmx_ptr = (void *) ((uintptr_t) block + offset_hmx);
+        ctx->hmx_queue = hmx_queue_init(hmx_ptr, HMX_QUEUE_CAPACITY, HMX_QUEUE_STACK_SIZE, ctx->vtcm_rctx, ctx->dma, ctx->trace);
+    }
+    FARF(HIGH, "HMX %s (n_hmx=%d)", ctx->hmx_enabled ? "enabled" : "disabled", n_hmx);
 
     ctx->main_stack = NULL;
     ctx->main_thread = 0;
@@ -708,7 +717,7 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
     }
 
     FARF(HIGH, "session %u started: n-hvx %u vtcm-size %zu vtcm-rctx %u n-threads %u thread-id %d thread-prio %d \n",
-         sess_id, hw_nhvx, ctx->vtcm_size, ctx->vtcm_rctx, ctx->n_threads, ctx->thread_id, ctx->thread_prio);
+         sess_id, ctx->n_hvx, ctx->vtcm_size, ctx->vtcm_rctx, ctx->n_threads, ctx->thread_id, ctx->thread_prio);
 
     return AEE_SUCCESS;
 }
@@ -733,7 +742,7 @@ AEEResult htp_iface_stop(remote_handle64 handle) {
         return err;
     }
 
-    work_queue_free(ctx->work_queue);
+    work_queue_free(ctx->hvx_queue);
 
     for (int i = 0; i < ctx->n_threads; i++) {
         dma_queue_free(ctx->dma[i]);
@@ -769,16 +778,20 @@ AEEResult htp_iface_hwinfo(remote_handle64 handle, uint32_t * n_threads, uint32_
     qurt_sysenv_get_max_hw_threads(&hw_threads);
     uint32_t hw_nhvx = (qurt_hvx_get_units() >> 8) & 0xFF;
 
-    uint32_t n_hvx_val = hw_nhvx;
-    if (n_hvx_val > hw_threads.max_hthreads) {
-        n_hvx_val = hw_threads.max_hthreads;
-    }
-    if (n_hvx_val > HTP_MAX_NTHREADS) {
-        n_hvx_val = HTP_MAX_NTHREADS;
+    uint32_t n_threads_val = hw_threads.max_hthreads;
+    if (n_threads_val > HTP_MAX_NTHREADS) {
+        n_threads_val = HTP_MAX_NTHREADS;
     }
 
-    // for now we force n_threads == n_hvx
-    *n_threads = n_hvx_val;
+    uint32_t n_hvx_val = hw_nhvx;
+    if (n_hvx_val > HTP_MAX_NHVX) {
+        n_hvx_val = HTP_MAX_NHVX;
+    }
+    if (n_hvx_val > n_threads_val - 1) {
+        n_hvx_val = n_threads_val - 1;
+    }
+
+    *n_threads = n_threads_val;
     *n_hvx     = n_hvx_val;
     *n_hmx     = 1;
 
@@ -1227,10 +1240,10 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_buf_desc * bufs
                        struct htp_tensor * tens, uint32_t idx, struct htp_op_desc * op) {
     memcpy(octx->op_params,     op->params, sizeof(octx->op_params));
     memcpy(octx->kernel_params, op->kernel_params, sizeof(octx->kernel_params));
-    octx->flags         = op->flags;
-    octx->op            = op->opcode;
-    octx->n_threads     = octx->ctx->n_threads;
-    octx->n_threads_div = octx->ctx->n_threads_div;
+    octx->flags     = op->flags;
+    octx->op        = op->opcode;
+    octx->n_hvx     = octx->ctx->n_hvx;
+    octx->n_hvx_div = octx->ctx->n_hvx_div;
 
     FARF(HIGH, "proc-op #%u: opcode %u flags 0x%x", idx, octx->op, octx->flags);
 
@@ -1292,7 +1305,7 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
     const uint32_t t_size = sizeof(struct htp_tensor)    * n_tens;
     const uint32_t o_size = sizeof(struct htp_op_desc)   * n_ops;
     const uint32_t p_size = sizeof(struct htp_prof_desc) * n_ops;
-    const uint32_t tr_size = (HTP_MAX_NTHREADS + 1) * req->n_traces * sizeof(struct htp_trace_desc);
+    const uint32_t tr_size = ctx->n_threads * req->n_traces * sizeof(struct htp_trace_desc);
 
     if (dbuf->size < b_size + t_size + o_size + p_size + tr_size) {
         FARF(ERROR, "invalid opbatch memory block size %u (req %u)", dbuf->size, b_size + t_size + o_size + p_size + tr_size);
@@ -1315,7 +1328,7 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
     memset(ctx->trace, 0, sizeof(ctx->trace));
     if (ctx->profiler == HTP_PROF_TRACE) {
         struct htp_trace_desc * trace_events = (struct htp_trace_desc *) (m_ptr + p_size);
-        for (int t = 0; t <= HTP_MAX_NTHREADS; t++) {
+        for (uint32_t t = 0; t < ctx->n_threads; t++) {
             ctx->trace[t].events     = &trace_events[t * req->n_traces];
             ctx->trace[t].max_events = req->n_traces;
         }
@@ -1339,7 +1352,7 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
 
     mdev_group_init(ctx, req);
 
-    work_queue_wakeup(ctx->work_queue);
+    work_queue_wakeup(ctx->hvx_queue);
     if (ctx->hmx_queue) {
         hmx_queue_wakeup(ctx->hmx_queue);
     }
@@ -1372,7 +1385,7 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
         hmx_queue_suspend(ctx->hmx_queue);
         hmx_queue_flush(ctx->hmx_queue);
     }
-    work_queue_suspend(ctx->work_queue);
+    work_queue_suspend(ctx->hvx_queue);
 
     // Flush remaining dirty tensors at the end of the batch
     htp_trace_event_start(&ctx->trace[0], HTP_TRACE_EVT_L2FLUSH, 0);
@@ -1395,7 +1408,7 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
     rsp.cycles_stop  = batch_prof.cycles_stop;
 
     if (ctx->profiler == HTP_PROF_TRACE) {
-        for (int t = 0; t <= HTP_MAX_NTHREADS; t++) {
+        for (uint32_t t = 0; t < ctx->n_threads; t++) {
             rsp.n_traces[t] = ctx->trace[t].count;
         }
     }

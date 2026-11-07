@@ -255,7 +255,7 @@ Writing high-performance operators for Hexagon requires following specific guide
 ### Tracing Instrumentation
 
 - All kernels must include trace events for performance profiling and timeline visualization in Perfetto
-  ([`hex-profile.h`](../../../ggml/src/ggml-hexagon/htp/hex-profile.h)).
+  ([`htp-trace.h`](../../../ggml/src/ggml-hexagon/htp/htp-trace.h)).
 - Surround compute sections with `htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) info)` and
   `htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) info)`.
 - Use specific event types for major phases:
