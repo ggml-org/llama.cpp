@@ -307,8 +307,23 @@ static void common_params_fit_impl(
 
             dmds_t measured;
             try {
+                common_fit_log_scope log_scope(log_level);
+                llama_model_params mparams_main = *mparams;
+                mparams_main.no_alloc  = true;
+                mparams_main.load_mode = LLAMA_LOAD_MODE_NONE;
+                llama_model_ptr model_main(llama_model_load_from_file(path_model, mparams_main));
+                if (!model_main) {
+                    throw std::runtime_error("failed to load the main model");
+                }
+                llama_context_ptr ctx_main(llama_init_from_model(model_main.get(), *cparams));
+                if (!ctx_main) {
+                    throw std::runtime_error("failed to create llama_context for the main model");
+                }
+
+                llama_context_params cparams_extra = *extra->cparams;
+                cparams_extra.ctx_other = ctx_main.get();
                 measured = common_get_device_memory_data_impl(
-                    extra->path_model, extra->mparams, extra->cparams, devs_extra, ngl_extra, nsk_extra, nct_extra, nex_extra, log_level);
+                    extra->path_model, extra->mparams, &cparams_extra, devs_extra, ngl_extra, nsk_extra, nct_extra, nex_extra, log_level);
             } catch (const std::runtime_error & e) {
                 // the extra model is optional, fit the main model alone rather than giving up
                 LOG_WRN("%s: failed to measure the memory of the extra model, fitting without it: %s\n", __func__, e.what());
