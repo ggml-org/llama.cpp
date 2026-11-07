@@ -269,42 +269,6 @@ static void ifft(const mtmd_audio_cache & cache, float * in, int N, float * out)
     fft_impl<true, false>(cache, in, N, out);
 }
 
-void mtmd_audio_stft_op(ggml_tensor * dst, int ith, int nth, void * userdata) {
-    const auto & params = *(const mtmd_audio_mel_config *) userdata;
-    const auto & cache  = *params.cache;
-
-    const float * samples    = (const float *) dst->src[0]->data;
-    const float * window     = (const float *) dst->src[1]->data;
-    const int     n_fft_bins = params.n_fft_bins;
-    const int     frame_size = (n_fft_bins - 1) * 2;
-    const int     frame_step = params.hop_length;
-
-    GGML_ASSERT(dst->ne[0] == 2 * n_fft_bins);
-    GGML_ASSERT(dst->src[1]->ne[0] == frame_size);
-    GGML_ASSERT(cache.sin_vals.size() == cache.cos_vals.size());
-
-    std::vector<float> fft_in(frame_size * 2, 0.0);
-    std::vector<float> fft_out(frame_size * 2 * 2 * 2);
-
-    for (int64_t i = ith; i < dst->ne[1]; i += nth) {
-        const float * frame = samples + i * frame_step;
-
-        // apply Hann window (~10% faster)
-        for (int j = 0; j < frame_size; j++) {
-            fft_in[j] = window[j] * frame[j];
-        }
-
-        // FFT
-        fft(cache, fft_in.data(), frame_size, fft_out.data());
-
-        float * row = (float *) ((char *) dst->data + i * dst->nb[1]);
-        for (int j = 0; j < n_fft_bins; j++) {
-            row[j]              = fft_out[2 * j + 0];
-            row[n_fft_bins + j] = fft_out[2 * j + 1];
-        }
-    }
-}
-
 static void mtmd_audio_fill_entries(std::vector<mtmd_audio_mel> & mels, bool shape_only, std::vector<clip_image_f32> & entries) {
     entries.clear();
     for (auto & mel : mels) {

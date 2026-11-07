@@ -492,10 +492,12 @@ MAKE_TEST(test_audio_preprocessor_conformer) {
     };
 
     ggml_backend_ptr backend(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr));
+    ggml_backend_t backends[] = { backend.get() };
+    ggml_backend_sched_ptr sched(ggml_backend_sched_new(backends, nullptr, 1, 256, false, true));
 
     // the result must not depend on the number of threads
     for (int n_threads : { 1, 4, 7 }) {
-        mtmd_audio_preprocessor_conformer preproc(hparams, backend.get());
+        mtmd_audio_preprocessor_conformer preproc(hparams, sched.get());
         preproc.mel_config.n_threads = n_threads;
         preproc.initialize();
         mtmd_audio_preproc_out out = preproc.preprocess(samples.data(), samples.size());
@@ -527,8 +529,10 @@ MAKE_TEST(test_audio_preprocessor_threads) {
     }
 
     ggml_backend_ptr backend(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr));
+    ggml_backend_t backends[] = { backend.get() };
+    ggml_backend_sched_ptr sched(ggml_backend_sched_new(backends, nullptr, 1, 256, false, true));
 
-    mtmd_audio_preprocessor_conformer preproc(hparams, backend.get());
+    mtmd_audio_preprocessor_conformer preproc(hparams, sched.get());
     preproc.initialize();
     // tokenize only gets the shapes, encode must get the same ones
     mtmd_audio_preproc_out ref = preproc.preprocess(samples.data(), samples.size());
@@ -563,9 +567,11 @@ MAKE_TEST(test_audio_log_mel_blocks) {
     cache.fill_mel_filterbank_matrix(n_mel, n_fft, 16000);
 
     ggml_backend_ptr backend(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr));
+    ggml_backend_t backends[] = { backend.get() };
+    ggml_backend_sched_ptr sched(ggml_backend_sched_new(backends, nullptr, 1, 256, false, true));
 
     mtmd_audio_mel_config config;
-    config.backend_cpu = backend.get();
+    config.sched       = sched.get();
     config.n_threads   = 2;
     config.n_mel       = n_mel;
     config.n_fft_bins  = 1 + n_fft / 2;

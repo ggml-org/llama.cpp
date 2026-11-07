@@ -72,14 +72,9 @@ struct mtmd_audio_mel_config {
     bool    std_eps_after_sqrt = false;  // std + eps instead of sqrt(var + eps)
     int     n_threads        = 1;
 
-    const mtmd_audio_cache * cache       = nullptr;
-    ggml_backend_t           backend_cpu = nullptr;
+    const mtmd_audio_cache * cache = nullptr;
+    ggml_backend_sched_t     sched = nullptr;
 };
-
-// ggml_custom op: windowed FFT of each frame, dst[:, i] = { re[0..n_fft_bins), im[0..n_fft_bins) } of frame i
-// src[0] is the waveform, src[1] the window, userdata the mtmd_audio_mel_config
-// TODO: replace by a ggml op
-void mtmd_audio_stft_op(ggml_tensor * dst, int ith, int nth, void * userdata);
 
 struct mtmd_audio_preproc_out {
     std::vector<clip_image_f32> entries; // one per chunk, empty on failure
@@ -95,10 +90,10 @@ struct mtmd_audio_preprocessor {
     mtmd_audio_mel_config mel_config; // filled by initialize() of the preprocessors that use the log-mel graph
 
     mtmd_audio_preprocessor(const clip_ctx * ctx): hparams(*clip_get_hparams(ctx)) {
-        mel_config.backend_cpu = clip_get_backend_cpu(ctx);
+        mel_config.sched = clip_get_sched(ctx);
     }
-    mtmd_audio_preprocessor(const clip_hparams & hparams, ggml_backend_t backend_cpu): hparams(hparams) {
-        mel_config.backend_cpu = backend_cpu;
+    mtmd_audio_preprocessor(const clip_hparams & hparams, ggml_backend_sched_t sched): hparams(hparams) {
+        mel_config.sched = sched;
     }
 
     // mel_config points to the cache of this instance
@@ -111,7 +106,7 @@ struct mtmd_audio_preprocessor {
     // entries have the final shapes, but no data if needs_compute()
     mtmd_audio_preproc_out preprocess(const float * samples, size_t n_samples) const;
 
-    // run it on the thread that encodes, it uses mel_config.backend_cpu
+    // run it on the thread that encodes, it uses mel_config.sched
     bool compute(mtmd_audio_preproc_out & out) const;
 
   protected:
@@ -136,7 +131,7 @@ struct mtmd_audio_preprocessor_muse_spark_audio : mtmd_audio_preprocessor {
 
 struct mtmd_audio_preprocessor_conformer : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_conformer(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
-    mtmd_audio_preprocessor_conformer(const clip_hparams & hparams, ggml_backend_t backend_cpu) : mtmd_audio_preprocessor(hparams, backend_cpu) {}
+    mtmd_audio_preprocessor_conformer(const clip_hparams & hparams, ggml_backend_sched_t sched) : mtmd_audio_preprocessor(hparams, sched) {}
     void initialize() override;
     bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
 

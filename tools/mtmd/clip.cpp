@@ -5655,19 +5655,74 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
     return n_patches;
 }
 
-ggml_backend_t clip_get_backend_cpu(const struct clip_ctx * ctx) {
-    return ctx->backend_cpu;
+ggml_backend_sched_t clip_get_sched(const struct clip_ctx * ctx) {
+    return ctx->sched.get();
+}
+
+// TODO: remove this and use ggml_mul_mat with GGML_PREC_F32 once all backends honor it for F32 x F32, then the
+//       log-mel graph can run on GPU too
+// same as ggml_mul_mat for 2D F32 tensors, but in F32 on CPU: some GPU backends round the inputs to F16 or TF32, and the
+// quiet bins of a spectrum next to the loud ones do not survive it
+static void mtmd_mul_mat_prec_op(ggml_tensor * dst, int ith, int nth, void * /*userdata*/) {
+    const ggml_tensor * a = dst->src[0];
+    const ggml_tensor * b = dst->src[1];
+    const int64_t n_k = a->ne[0];
+
+    for (int64_t n = ith; n < b->ne[1]; n += nth) {
+        const float * b_row = (const float *) ((const char *) b->data + n * b->nb[1]);
+        float * dst_row = (float *) ((char *) dst->data + n * dst->nb[1]);
+        for (int64_t m = 0; m < a->ne[1]; m++) {
+            const float * a_row = (const float *) ((const char *) a->data + m * a->nb[1]);
+            // independent partial sums, so that the compiler can vectorize the loop
+            float acc[16] = {};
+            int64_t k = 0;
+            for (; k + 16 <= n_k; k += 16) {
+                for (int l = 0; l < 16; l++) {
+                    acc[l] += a_row[k + l] * b_row[k + l];
+                }
+            }
+            float sum = 0.0f;
+            for (; k < n_k; k++) {
+                sum += a_row[k] * b_row[k];
+            }
+            for (int l = 0; l < 16; l++) {
+                sum += acc[l];
+            }
+            dst_row[m] = sum;
+        }
+    }
+}
+
+static ggml_tensor * mtmd_mul_mat_prec(ggml_context * ctx, ggml_tensor * a, ggml_tensor * b) {
+    GGML_ASSERT(a->type == GGML_TYPE_F32 && b->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_n_dims(a) <= 2 && ggml_n_dims(b) <= 2 && a->ne[0] == b->ne[0]);
+    GGML_ASSERT(a->nb[0] == sizeof(float) && b->nb[0] == sizeof(float));
+    ggml_tensor * args[] = { a, b };
+    return ggml_custom_4d(ctx, GGML_TYPE_F32, a->ne[1], b->ne[1], 1, 1, args, 2, mtmd_mul_mat_prec_op, GGML_N_TASKS_MAX, nullptr);
 }
 
 bool clip_audio_log_mel(const mtmd_audio_mel_config & config, const float * samples, const float * window, int64_t n_frames, float * out) {
-    ggml_backend_t backend_cpu = config.backend_cpu;
+    ggml_backend_sched_t sched = config.sched;
+    ggml_backend_t backend_cpu = ggml_backend_sched_get_backend(sched, ggml_backend_sched_get_n_backends(sched) - 1);
     clip_backend_cpu_set_n_threads(backend_cpu, std::max(1, config.n_threads));
 
-    const auto &  filters    = config.cache->filters.data;
+    const auto &  cache      = *config.cache;
+    const auto &  filters    = cache.filters.data;
     const int64_t n_fft_bins = config.n_fft_bins;
     const int64_t frame_size = (n_fft_bins - 1) * 2;
     const int64_t n_mel      = config.n_mel;
     GGML_ASSERT(filters.size() == (size_t) (n_mel * n_fft_bins));
+    GGML_ASSERT(cache.cos_vals.size() == (size_t) frame_size && cache.sin_vals.size() == (size_t) frame_size);
+
+    // DFT matrix with the window folded in, the first n_fft_bins rows give the real part
+    std::vector<float> dft((size_t) 2 * n_fft_bins * frame_size);
+    for (int64_t k = 0; k < n_fft_bins; k++) {
+        for (int64_t j = 0; j < frame_size; j++) {
+            const int64_t q = (j * k) % frame_size;
+            dft[k * frame_size + j]                = window[j] * cache.cos_vals[q];
+            dft[(k + n_fft_bins) * frame_size + j] = window[j] * cache.sin_vals[q];
+        }
+    }
 
     // the spectrum is several times larger than the result, so long audio is processed in blocks
     const int64_t n_frames_max = 8192;
@@ -5676,7 +5731,7 @@ bool clip_audio_log_mel(const mtmd_audio_mel_config & config, const float * samp
         const int64_t n_cur = std::min(n_frames_max, n_frames - off);
 
         ggml_init_params params = {
-            /*.mem_size   =*/ ggml_tensor_overhead() * 16 + ggml_graph_overhead(),
+            /*.mem_size   =*/ ggml_tensor_overhead() * 32 + ggml_graph_overhead(),
             /*.mem_buffer =*/ nullptr,
             /*.no_alloc   =*/ true,
         };
@@ -5684,15 +5739,14 @@ bool clip_audio_log_mel(const mtmd_audio_mel_config & config, const float * samp
         ggml_context * ctx0 = ctx_ptr.get();
 
         ggml_tensor * inp_samples = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, (n_cur - 1) * config.hop_length + frame_size);
-        ggml_tensor * inp_window  = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, frame_size);
+        ggml_tensor * inp_dft     = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, frame_size, 2 * n_fft_bins);
         ggml_tensor * inp_filters = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_fft_bins, n_mel);
         ggml_set_input(inp_samples);
-        ggml_set_input(inp_window);
+        ggml_set_input(inp_dft);
         ggml_set_input(inp_filters);
 
-        ggml_tensor * args[] = { inp_samples, inp_window };
-        ggml_tensor * cur = ggml_custom_4d(ctx0, GGML_TYPE_F32, 2 * n_fft_bins, n_cur, 1, 1, args, 2,
-                                           mtmd_audio_stft_op, GGML_N_TASKS_MAX, (void *) &config);
+        ggml_tensor * cur = ggml_cont(ctx0, ggml_view_2d(ctx0, inp_samples, frame_size, n_cur, config.hop_length * ggml_element_size(inp_samples), 0));
+        cur = mtmd_mul_mat_prec(ctx0, inp_dft, cur); // [2 * n_fft_bins, n_cur]
 
         cur = ggml_sqr(ctx0, cur);
         cur = ggml_add(ctx0,
@@ -5702,7 +5756,7 @@ bool clip_audio_log_mel(const mtmd_audio_mel_config & config, const float * samp
             cur = ggml_sqrt(ctx0, cur);
         }
 
-        cur = ggml_mul_mat(ctx0, cur, inp_filters); // [n_cur, n_mel]
+        cur = mtmd_mul_mat_prec(ctx0, cur, inp_filters); // [n_cur, n_mel]
         cur = config.mel_floor_add
             ? ggml_scale_bias(ctx0, cur, 1.0f, config.mel_floor)
             : ggml_clamp(ctx0, cur, config.mel_floor, FLT_MAX);
@@ -5715,19 +5769,19 @@ bool clip_audio_log_mel(const mtmd_audio_mel_config & config, const float * samp
         ggml_cgraph * gf = ggml_new_graph(ctx0);
         ggml_build_forward_expand(gf, cur);
 
-        ggml_gallocr_ptr galloc(ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend_cpu)));
-        if (!ggml_gallocr_alloc_graph(galloc.get(), gf)) {
+        ggml_backend_sched_reset(sched);
+        if (!ggml_backend_sched_alloc_graph(sched, gf)) {
             LOG_ERR("%s: failed to allocate compute graph\n", __func__);
             return false;
         }
 
         ggml_backend_tensor_set(inp_samples, samples + off * config.hop_length, 0, ggml_nbytes(inp_samples));
-        ggml_backend_tensor_set(inp_window,  window,                            0, ggml_nbytes(inp_window));
+        ggml_backend_tensor_set(inp_dft,     dft.data(),                        0, ggml_nbytes(inp_dft));
         ggml_backend_tensor_set(inp_filters, filters.data(),                    0, ggml_nbytes(inp_filters));
 
-        auto status = ggml_backend_graph_compute(backend_cpu, gf);
+        auto status = ggml_backend_sched_graph_compute(sched, gf);
         if (status != GGML_STATUS_SUCCESS) {
-            LOG_ERR("%s: ggml_backend_graph_compute failed with error %d\n", __func__, status);
+            LOG_ERR("%s: ggml_backend_sched_graph_compute failed with error %d\n", __func__, status);
             return false;
         }
 
