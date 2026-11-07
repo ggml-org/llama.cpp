@@ -2003,7 +2003,7 @@ class TextModel(ModelBase):
         toktypes: list[int] = []
 
         from transformers import AutoTokenizer, PreTrainedTokenizerFast
-        
+
         if self.hparams.get("model_type") == "gpt_oss":
             tokenizer = PreTrainedTokenizerFast.from_pretrained(self.dir_model)
         else:
