@@ -2198,10 +2198,13 @@ static int ggml_cuda_fattn_mma_f16_fused_q_switch() {
 }
 
 // Prototype scope: fused q8_0/q4_0 dequant in the multi-stage pipeline of the DKQ=DV=256, ncols2=8 kernels.
+// K and V qualify independently, so mixed pairs like K q8_0 + V q4_0 use each side's own dequant template.
 static bool ggml_cuda_fattn_mma_f16_fused_q_supported(
         const ggml_tensor * K, const ggml_tensor * V, const int DKQ, const int DV, const int ncols2, const int nstages) {
+    const bool q_K = K->type == GGML_TYPE_Q8_0 || K->type == GGML_TYPE_Q4_0;
+    const bool q_V = V->type == GGML_TYPE_Q8_0 || V->type == GGML_TYPE_Q4_0;
     return DKQ == 256 && DV == 256 && ncols2 == 8 && nstages > 1
-        && K->type == V->type && (K->type == GGML_TYPE_Q8_0 || K->type == GGML_TYPE_Q4_0)
+        && q_K && q_V
         && K->nb[1] % 16 == 0 && K->nb[2] % 16 == 0 && K->nb[3] % 16 == 0
         && V->nb[1] % 16 == 0 && V->nb[2] % 16 == 0 && V->nb[3] % 16 == 0
         && (uintptr_t) K->data % 16 == 0 && (uintptr_t) V->data % 16 == 0;
@@ -2316,26 +2319,44 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
         }
     }
 
-    const ggml_type fused_type = fused_q_candidate && !use_sparse ? K->type : GGML_TYPE_F16;
+    const bool fused_q = fused_q_candidate && !use_sparse;
+    const int fused_K = fused_q ? (K->type == GGML_TYPE_Q4_0 ? FATTN_MMA_FUSED_Q4_0 : FATTN_MMA_FUSED_Q8_0) : FATTN_MMA_FUSED_NONE;
+    const int fused_V = fused_q ? (V->type == GGML_TYPE_Q4_0 ? FATTN_MMA_FUSED_Q4_0 : FATTN_MMA_FUSED_Q8_0) : FATTN_MMA_FUSED_NONE;
     if constexpr (DKQ == 256 && DV == 256 && ncols2 == 8) {
         // routing pin for tests: with GGML_CUDA_FATTN_MMA_FUSED=2 supported dense ops must reach the fused kernels
-        if (ggml_cuda_fattn_mma_f16_fused_q_switch() == 2 && !use_sparse && !fused_q_candidate &&
-                K->type == V->type && (K->type == GGML_TYPE_Q8_0 || K->type == GGML_TYPE_Q4_0)) {
+        const bool q_K = K->type == GGML_TYPE_Q8_0 || K->type == GGML_TYPE_Q4_0;
+        const bool q_V = V->type == GGML_TYPE_Q8_0 || V->type == GGML_TYPE_Q4_0;
+        if (ggml_cuda_fattn_mma_f16_fused_q_switch() == 2 && !use_sparse && !fused_q_candidate && q_K && q_V) {
             GGML_ABORT("GGML_CUDA_FATTN_MMA_FUSED=2 but the fused dequant path does not apply");
         }
     }
-    if (fused_type != GGML_TYPE_F16) {
+    if (fused_q) {
         if constexpr (DKQ == 256 && DV == 256 && ncols2 == 8) {
-            if (fused_type == GGML_TYPE_Q4_0) {
-                nbytes_shared_total += nbatch_fa * (DKQ/32) * FATTN_MMA_Q4_0_BLOCK_BYTES; // raw q4_0 staging area
-                fattn_kernel = logit_softcap == 0.0f ?
-                    flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, false, V_is_K_view, false, FATTN_MMA_FUSED_Q4_0, FATTN_MMA_FUSED_Q4_0> :
-                    flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, true,  V_is_K_view, false, FATTN_MMA_FUSED_Q4_0, FATTN_MMA_FUSED_Q4_0>;
+            // One linear staging area is reused by the K and V loads in turn, so it is sized by whichever side needs more bytes.
+            const size_t nbytes_stage_K = nbatch_fa * (DKQ/32) * (fused_K == FATTN_MMA_FUSED_Q4_0 ? FATTN_MMA_Q4_0_BLOCK_BYTES : FATTN_MMA_Q8_0_BLOCK_BYTES);
+            const size_t nbytes_stage_V = nbatch_fa * (DV/32)  * (fused_V == FATTN_MMA_FUSED_Q4_0 ? FATTN_MMA_Q4_0_BLOCK_BYTES : FATTN_MMA_Q8_0_BLOCK_BYTES);
+            nbytes_shared_total += std::max(nbytes_stage_K, nbytes_stage_V); // raw quantized staging area
+
+            if (fused_K == FATTN_MMA_FUSED_Q8_0) {
+                if (fused_V == FATTN_MMA_FUSED_Q8_0) {
+                    fattn_kernel = logit_softcap == 0.0f ?
+                        flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, false, V_is_K_view, false, FATTN_MMA_FUSED_Q8_0, FATTN_MMA_FUSED_Q8_0> :
+                        flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, true,  V_is_K_view, false, FATTN_MMA_FUSED_Q8_0, FATTN_MMA_FUSED_Q8_0>;
+                } else {
+                    fattn_kernel = logit_softcap == 0.0f ?
+                        flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, false, V_is_K_view, false, FATTN_MMA_FUSED_Q8_0, FATTN_MMA_FUSED_Q4_0> :
+                        flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, true,  V_is_K_view, false, FATTN_MMA_FUSED_Q8_0, FATTN_MMA_FUSED_Q4_0>;
+                }
             } else {
-                nbytes_shared_total += nbatch_fa * (DKQ/32) * FATTN_MMA_Q8_0_BLOCK_BYTES; // raw q8_0 staging area
-                fattn_kernel = logit_softcap == 0.0f ?
-                    flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, false, V_is_K_view, false, FATTN_MMA_FUSED_Q8_0, FATTN_MMA_FUSED_Q8_0> :
-                    flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, true,  V_is_K_view, false, FATTN_MMA_FUSED_Q8_0, FATTN_MMA_FUSED_Q8_0>;
+                if (fused_V == FATTN_MMA_FUSED_Q8_0) {
+                    fattn_kernel = logit_softcap == 0.0f ?
+                        flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, false, V_is_K_view, false, FATTN_MMA_FUSED_Q4_0, FATTN_MMA_FUSED_Q8_0> :
+                        flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, true,  V_is_K_view, false, FATTN_MMA_FUSED_Q4_0, FATTN_MMA_FUSED_Q8_0>;
+                } else {
+                    fattn_kernel = logit_softcap == 0.0f ?
+                        flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, false, V_is_K_view, false, FATTN_MMA_FUSED_Q4_0, FATTN_MMA_FUSED_Q4_0> :
+                        flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, true,  V_is_K_view, false, FATTN_MMA_FUSED_Q4_0, FATTN_MMA_FUSED_Q4_0>;
+                }
             }
 
             // Keyed on the kernel address, one raise per (variant, device): the attribute is per-function.
@@ -2349,7 +2370,7 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
 
     const bool async_kv_preload = nstages == 2 && !use_sparse;
     launch_fattn<DV, ncols1, ncols2>
-        (ctx, dst, fattn_kernel, nwarps, nbytes_shared_total, nbatch_fa, fused_type == GGML_TYPE_F16, fused_type == GGML_TYPE_F16, true, use_sparse, warp_size_host, async_kv_preload);
+        (ctx, dst, fattn_kernel, nwarps, nbytes_shared_total, nbatch_fa, !fused_q, !fused_q, true, use_sparse, warp_size_host, async_kv_preload);
 }
 
 
