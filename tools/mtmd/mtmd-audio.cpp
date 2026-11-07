@@ -623,7 +623,9 @@ bool mtmd_audio_preprocessor_whisper::preprocess(const float *                 s
     }
     const size_t frames_per_chunk = 3000;
     GGML_ASSERT((size_t) out_full.n_len > frames_per_chunk);
-    for (size_t off = 0; off < (size_t) out_full.n_len; off += frames_per_chunk) {
+    // Round up so a partial audio frame is not discarded with the padding.
+    const size_t n_audio_frames = (n_samples - 1) / (size_t) params.hop_length + 1;
+    for (size_t off = 0; off < n_audio_frames; off += frames_per_chunk) {
         int64_t n_len = std::min((int64_t)frames_per_chunk, out_full.n_len - (int64_t)off);
         if (n_len < (int64_t)frames_per_chunk) {
             break;  // last incomplete chunk will always be a padded chunk, safe to ignore
