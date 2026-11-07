@@ -982,6 +982,8 @@ static void llama_grammar_left_factor(llama_grammar_rules & rules) {
     };
 
     const size_t n_rules_original = rules.size();
+    // Original rules factor at most once; generated rules do not resolve references.
+    // Each new suffix removes a non-empty prefix.
     bool changed = true;
     while (changed) {
         changed = false;
