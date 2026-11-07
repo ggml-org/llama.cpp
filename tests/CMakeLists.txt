@@ -422,3 +422,8 @@ if (TARGET gguf-model-data)
     target_link_libraries(test-export-graph-ops PRIVATE gguf-model-data)
     target_compile_definitions(test-export-graph-ops PRIVATE LLAMA_HF_FETCH)
 endif()
+
+if (GGML_CUDA)
+    llama_build(test-cuda-upload-stream.cpp LINK ggml ggml-cuda)
+    llama_test(test-cuda-upload-stream NAME test-cuda-upload-stream LABEL cuda)
+endif()
