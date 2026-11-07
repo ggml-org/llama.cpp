@@ -323,6 +323,11 @@ private:
     // decode output (2-dimensional array: [n_outputs][n_vocab])
     buffer_view<float> logits = {nullptr, 0};
 
+    // per logits row: its row in the logits of the last ubatch while it is still on the device, -1 when the host row is current
+    std::vector<int32_t> logits_deferred;
+
+    void logits_fetch_deferred(int64_t row);
+
     // embeddings output (2-dimensional array: [n_outputs][n_embd])
     // populated only when pooling_type == LLAMA_POOLING_TYPE_NONE
     buffer_view<float> embd = {nullptr, 0};
