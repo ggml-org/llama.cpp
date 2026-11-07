@@ -3,6 +3,7 @@
 #include "llama-cpp.h"
 #include "common.h"
 #include "sampling.h"
+#include "../src/llama-ext.h"
 
 #ifdef NDEBUG
 #undef NDEBUG
@@ -1582,6 +1583,88 @@ static void test_set_sampler(const test_params & params) {
     printf("backend set sampler test PASSED\n");
 }
 
+static void test_sampler_buffer_reuse(const test_params & params) {
+    const auto make_chain = [](bool larger) {
+        llama_sampler_ptr chain(llama_sampler_chain_init(llama_sampler_chain_default_params()));
+        if (larger) {
+            llama_sampler_chain_add(chain.get(), llama_sampler_init_temp(0.75f));
+        }
+        llama_sampler_chain_add(chain.get(), llama_sampler_init_top_k(20));
+        llama_sampler_chain_add(chain.get(), llama_sampler_init_greedy());
+        return chain;
+    };
+
+    auto sampler0 = make_chain(false);
+    auto sampler1 = make_chain(false);
+    std::vector<llama_sampler_seq_config> configs = {
+        { 0, sampler0.get() },
+        { 1, sampler1.get() },
+    };
+    test_context test_ctx(params, configs, 2);
+    auto * ctx = test_ctx.ctx.get();
+    GGML_ASSERT(test_ctx.decode({{ 0, "Hello" }, { 1, "Hello" }}));
+
+    const auto sampled = [&](llama_seq_id seq) {
+        const auto token = llama_get_sampled_token_ith(ctx, test_ctx.idx_for_seq(seq));
+        GGML_ASSERT(token >= 0 && token < test_ctx.n_vocab);
+        return token;
+    };
+    auto token0 = sampled(0);
+    auto token1 = sampled(1);
+
+    // Removing a sampler must not discard already-reserved compute capacity.
+    const auto before = llama_get_memory_breakdown(ctx);
+    GGML_ASSERT(llama_set_sampler(ctx, 0, nullptr));
+    sampler0.reset();
+    GGML_ASSERT(test_ctx.decode_tokens({{ 1, token1 }}));
+    token1 = sampled(1);
+    const auto after = llama_get_memory_breakdown(ctx);
+    for (const auto & [buft, data] : before) {
+        if (data.compute == 0) {
+            continue;
+        }
+        const auto it = after.find(buft);
+        GGML_ASSERT(it != after.end());
+        printf("compute capacity %s: %zu -> %zu\n", ggml_backend_buft_name(buft), data.compute, it->second.compute);
+        GGML_ASSERT(it->second.compute >= data.compute);
+    }
+
+    // A fresh request can reuse the vacated sequence with a new sampler object.
+    sampler0 = make_chain(false);
+    GGML_ASSERT(llama_set_sampler(ctx, 0, sampler0.get()));
+    GGML_ASSERT(test_ctx.decode_tokens({{ 0, token0 }, { 1, token1 }}));
+    token0 = sampled(0);
+    token1 = sampled(1);
+
+    // Exercise a larger sampler graph, then remove all backend samplers.
+    GGML_ASSERT(llama_set_sampler(ctx, 0, nullptr));
+    sampler0 = make_chain(true);
+    GGML_ASSERT(llama_set_sampler(ctx, 0, sampler0.get()));
+    GGML_ASSERT(test_ctx.decode_tokens({{ 0, token0 }, { 1, token1 }}));
+    token0 = sampled(0);
+    token1 = sampled(1);
+    const auto grown = llama_get_memory_breakdown(ctx);
+
+    GGML_ASSERT(llama_set_sampler(ctx, 0, nullptr));
+    GGML_ASSERT(llama_set_sampler(ctx, 1, nullptr));
+    sampler0.reset();
+    sampler1.reset();
+    GGML_ASSERT(test_ctx.decode_tokens({{ 0, token0 }, { 1, token1 }}));
+    llama_synchronize(ctx);
+    const auto cleared = llama_get_memory_breakdown(ctx);
+    for (const auto & [buft, data] : grown) {
+        if (data.compute > 0) {
+            GGML_ASSERT(cleared.at(buft).compute >= data.compute);
+        }
+    }
+    for (llama_seq_id seq = 0; seq < 2; ++seq) {
+        const int idx = test_ctx.idx_for_seq(seq);
+        GGML_ASSERT(llama_get_sampled_token_ith(ctx, idx) == LLAMA_TOKEN_NULL);
+        GGML_ASSERT(llama_get_logits_ith(ctx, idx) != nullptr);
+    }
+    printf("backend sampler buffer reuse test PASSED\n");
+}
+
 static void test_cpu_mixed(const test_params & params) {
     // Sequence 0 uses backend sampling
     struct llama_sampler_chain_params chain_params_0 = llama_sampler_chain_default_params();
@@ -2086,6 +2169,7 @@ static const backend_test_case BACKEND_TESTS[] = {
     { "test_mixed",                  test_mixed,                  true },
     { "test_cpu_mixed",              test_cpu_mixed,              true },
     { "test_set_sampler",            test_set_sampler,            true },
+    { "test_sampler_buffer_reuse",   test_sampler_buffer_reuse,   true },
     // multiple outputs per sequence
     { "test_multi_output_limit",                  test_multi_output_limit,               true },
     { "test_multi_output_multi_sequence_dist",    test_multi_output_multi_sequence_dist, true },
@@ -2180,6 +2264,7 @@ static std::vector<const backend_test_case *> collect_tests_to_run(const std::st
             // TODO: remove this when https://github.com/ggml-org/llama.cpp/pull/26592 is merged
             if (test.name == "test_penalties"                   ||
                 test.name == "test_set_sampler"                 ||
+                test.name == "test_sampler_buffer_reuse"        ||
                 test.name == "test_mixed"                       ||
                 test.name == "test_top_p"                       ||
                 test.name == "test_multi_output_sampling_chain" ||
