@@ -195,7 +195,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     target_link_libraries(test-chat PRIVATE server-context)
     llama_build_and_test(test-server-component.cpp  LABEL behavior)
     target_include_directories(test-server-component PRIVATE ${PROJECT_SOURCE_DIR}/tools/server)
-    target_link_libraries(test-server-component PRIVATE server-context)
+    target_link_libraries(test-server-component PRIVATE llama-server-impl)
     llama_build_and_test(test-json-schema-to-grammar.cpp  LABEL behavior)
 
     if (NOT GGML_BACKEND_DL)

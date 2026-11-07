@@ -3,10 +3,14 @@
 #include "../tools/server/server-common.h"
 #include "../tools/server/server-decision.h"
 #include "../tools/server/server-schema.h"
+#include "../tools/server/server-models.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <random>
 #include <regex>
 #include <string>
 #include <thread>
@@ -665,6 +669,141 @@ static void test_glob_match(testing & t) {
     });
 }
 
+//
+// router mode: server_models with presets only, no child process is spawned
+//
+
+struct server_models_test {
+    static std::mutex & mutex(server_models & models) { return models.mutex; }
+};
+
+// a temp dir with a preset file and an empty model cache, removed on exit
+struct router_fixture {
+    std::filesystem::path dir;
+    common_params params;
+
+    router_fixture(const std::string & ini, int models_max) {
+        dir = std::filesystem::temp_directory_path() / ("test-server-router-" + std::to_string(std::random_device{}()));
+        std::filesystem::create_directories(dir / "cache");
+        std::ofstream(dir / "presets.ini") << ini;
+        // the cache path is resolved once per process, so the first fixture wins; it only has to be empty
+#ifdef _WIN32
+        _putenv_s("LLAMA_CACHE", (dir / "cache").string().c_str());
+#else
+        setenv("LLAMA_CACHE", (dir / "cache").string().c_str(), 0);
+#endif
+        params.models_preset = (dir / "presets.ini").string();
+        params.models_max    = models_max;
+    }
+
+    ~router_fixture() {
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
+    }
+
+    std::unique_ptr<server_models> make() {
+        static char   arg0[] = "llama-server";
+        static char * argv[] = { arg0, nullptr };
+        return std::make_unique<server_models>(params, 1, argv);
+    }
+};
+
+static const char * router_ini =
+    "version = 1\n"
+    "[model-a]\n"
+    "model = /nonexistent/a.gguf\n"
+    "alias = a1, a2\n"
+    "tags = small\n"
+    "[model-b]\n"
+    "model = /nonexistent/b.gguf\n";
+
+static void test_router_presets(testing & t) {
+    router_fixture fx(router_ini, 4);
+    auto models = fx.make();
+
+    t.assert_true("has model-a", models->has_model("model-a"));
+    t.assert_true("has alias", models->has_model("a2"));
+    t.assert_true("unknown", !models->has_model("model-c"));
+
+    auto meta = models->get_meta("a1");
+    t.assert_true("alias resolves", meta.has_value() && meta->name == "model-a");
+    t.assert_true("tags", meta->tags == std::set<std::string>({"small"}));
+    t.assert_equal("source", std::string("preset"), server_model_source_to_string(meta->source));
+    t.assert_true("unloaded", meta->status == SERVER_MODEL_STATUS_UNLOADED);
+}
+
+static void test_router_sched(testing & t) {
+    router_fixture fx(router_ini, 1);
+    auto models = fx.make();
+
+    // a separate scheduler over the same mapping, only its queue is used here
+    server_models_sched sched(*models);
+
+    models->update_status("model-a", {SERVER_MODEL_STATUS_LOADED});
+
+    std::unique_lock<std::mutex> lk(server_models_test::mutex(*models));
+    sched.join(lk, "model-b");
+    sched.join(lk, "model-b");
+    t.assert_true("no capacity", !sched.has_capacity(lk));
+    t.assert_true("claim blocked", !sched.try_claim(lk, "model-b"));
+    t.assert_equal("victim is the idle model", std::string("model-a"), sched.pick_victim(lk));
+    lk.unlock();
+
+    models->update_status("model-a", {SERVER_MODEL_STATUS_UNLOADED});
+
+    lk.lock();
+    t.assert_true("claimed", sched.try_claim(lk, "model-b"));
+    t.assert_true("claimed once", !sched.try_claim(lk, "model-b"));
+    sched.leave(lk, "model-b");
+    t.assert_true("one waiter left", !sched.queue_empty(lk));
+    sched.leave(lk, "model-b");
+    t.assert_true("queue empty", sched.queue_empty(lk));
+}
+
+static void test_router_memory_json(testing & t) {
+    server_model_memory mem;
+    mem.n_ctx = 4096;
+    mem.devices.push_back({"device", "Metal", 100, 50, 10, 20, 30});
+    mem.devices.push_back({"host",   "Host",  0,   0,  1,  2,  3});
+
+    const server_model_memory back = server_model_memory::from_json(mem.to_json());
+    t.assert_equal("n_ctx", (uint32_t) 4096, back.n_ctx);
+    t.assert_equal("devices", (size_t) 2, back.devices.size());
+    t.assert_equal("device self", (size_t) 60, back.devices[0].self());
+    t.assert_equal("device total", (size_t) 100, back.devices[0].total);
+    t.assert_true("host is not a device", !back.devices[1].is_device());
+
+    bool thrown = false;
+    try {
+        server_model_memory::from_json(json{{"devices", json::array()}});
+    } catch (const std::exception &) {
+        thrown = true;
+    }
+    t.assert_true("missing n_ctx throws", thrown);
+}
+
+static void test_router_conv_tracker(testing & t) {
+    decltype(server_models::conv_models) tracker;
+    t.assert_equal("empty conv id", (uint64_t) 0, tracker.remember("", "m"));
+
+    const uint64_t t1 = tracker.remember("c", "m1");
+    t.assert_true("alive", tracker.alive("c", t1));
+    t.assert_true("lookup", tracker.lookup("c") == std::optional<std::string>("m1"));
+
+    const uint64_t t2 = tracker.remember("c", "m2");
+    t.assert_true("replaced", !tracker.alive("c", t1) && tracker.alive("c", t2));
+
+    tracker.forget("c");
+    t.assert_true("forgotten", !tracker.alive("c", t2) && !tracker.lookup("c").has_value());
+}
+
+static void test_router(testing & t) {
+    t.test("presets",      test_router_presets);
+    t.test("sched",        test_router_sched);
+    t.test("memory_json",  test_router_memory_json);
+    t.test("conv_tracker", test_router_conv_tracker);
+}
+
 int main(int argc, char ** argv) {
     testing t;
 
@@ -690,6 +829,7 @@ int main(int argc, char ** argv) {
     t.test("decision_depth",  test_decision_depth);
     t.test("glob_match",      test_glob_match);
     t.test("dry_sequence_breakers", test_dry_sequence_breakers);
+    t.test("router",          test_router);
 
     return t.summary();
 }

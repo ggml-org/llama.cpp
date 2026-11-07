@@ -164,6 +164,7 @@ struct server_models {
     friend struct server_models_routes;
     friend struct server_models_sched;
     friend struct server_monitor;
+    friend struct server_models_test; // tests/test-server-component.cpp
 
 private:
     struct instance_t {
