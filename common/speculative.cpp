@@ -74,6 +74,7 @@ static void spec_retune(
 const std::map<std::string, common_speculative_type> common_speculative_type_from_name_map = {
     {"none",          COMMON_SPECULATIVE_TYPE_NONE},
     {"draft-simple",  COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE},
+    {"draft-self",    COMMON_SPECULATIVE_TYPE_DRAFT_SELF},
     {"draft-eagle3",  COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3},
     {"draft-mtp",     COMMON_SPECULATIVE_TYPE_DRAFT_MTP},
     {"draft-dflash",  COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH},
@@ -215,6 +216,108 @@ struct common_speculative_impl {
     // (optional) serialize/restore per-seq internal state (e.g. eagle3's deferred boundary).
     virtual bool get_state(llama_seq_id /*seq_id*/, std::vector<uint8_t> & /*data*/) const { return false; }
     virtual void set_state(llama_seq_id /*seq_id*/, const std::vector<uint8_t> & /*data*/) {}
+};
+
+struct common_speculative_impl_draft_self : public common_speculative_impl {
+    llama_context * ctx;
+
+    common_speculative_impl_draft_self(const common_params_speculative & params, uint32_t n_seq)
+        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_SELF, n_seq, params.draft.n_max)
+        , ctx(params.draft.ctx_tgt)
+    {
+        if (!ctx) {
+            throw std::runtime_error("draft-self requires an explicit target context (use llama-speculative-simple)");
+        }
+        if (n_seq != 1 || params.draft.ctx_dft ||
+                params.has_dft() || params.draft.probabilistic) {
+            throw std::runtime_error("draft-self requires one target sequence and prefix matching without a draft model");
+        }
+
+        n_max = std::min<int64_t>(n_max, (int64_t) llama_n_ubatch(ctx) - 1);
+        if (n_max < 1 || llama_vocab_mask(llama_model_get_vocab(llama_get_model(ctx))) == LLAMA_TOKEN_NULL) {
+            throw std::runtime_error("draft-self requires a mask token and room for an anchor and a candidate");
+        }
+
+        const auto * model = llama_get_model(ctx);
+        if (!llama_get_memory(ctx) || llama_get_ctx_other(ctx) ||
+                llama_model_n_swa(model) || llama_model_has_encoder(model) || llama_model_is_recurrent(model)) {
+            throw std::runtime_error("incompatible self-draft target");
+        }
+    }
+
+    void begin(llama_seq_id, const llama_tokens &) override {}
+    bool process(const common_batch &) override { return true; }
+    void accept(llama_seq_id, uint16_t, bool) override {}
+
+    void draft(common_speculative_draft_params_vec & dparams) override {
+        auto & dp = dparams[0];
+        if (!dp.drafting) {
+            return;
+        }
+        auto & result = *dp.result;
+        if (dp.result_q) {
+            dp.result_q->clear();
+        }
+        int32_t n = dp.n_max < 0 ? n_max : std::min(n_max, dp.n_max);
+        n = (int32_t) std::min<int64_t>(n, (int64_t) llama_n_ctx_seq(ctx) - dp.pos0 - 1);
+        if (n < 1) {
+            return;
+        }
+
+        // Append only at the end of the verified prefix so rollback can remove the entire preview.
+        const auto mem = llama_get_memory(ctx);
+        if (!llama_get_causal_attn(ctx) || llama_n_seq_max(ctx) != 1 ||
+                dp.pos0 != (int64_t) llama_memory_seq_pos_max(mem, 0) + 1) {
+            return;
+        }
+
+        common_batch batch(ctx);
+        const auto mask = llama_vocab_mask(llama_model_get_vocab(llama_get_model(ctx)));
+        batch.add(dp.id_last, dp.pos0, 0, true);
+        for (int32_t i = 1; i <= n; ++i) {
+            batch.add(mask, dp.pos0 + i, 0, true);
+        }
+
+        // The non-causal pass predicts all masks together and writes temporary KV entries for the whole block.
+        // Wait for it to finish before removing those entries, including the anchor the verifier will decode again.
+        auto * block = batch.get();
+        const auto rollback = [&]() {
+            llama_synchronize(ctx);
+            llama_set_causal_attn(ctx, true);
+            if (!llama_memory_seq_rm(mem, 0, dp.pos0, -1)) {
+                throw std::runtime_error("could not remove the self-draft suffix");
+            }
+        };
+
+        llama_synchronize(ctx);
+        llama_set_causal_attn(ctx, false);
+        int ret;
+        try {
+            ret = llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, block);
+        } catch (...) {
+            rollback();
+            throw;
+        }
+        // A failed or aborted decode can also leave a partial suffix.
+        rollback();
+        if (ret != 0) {
+            SPC_WRN("preview failed with status %d\n", ret);
+            return;
+        }
+
+        // Removing KV entries preserves the output rows. Row 0 is the anchor, rows 1..n hold the proposals.
+        const int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(ctx)));
+        for (int32_t i = 1; i <= n; ++i) {
+            llama_token id = llama_get_sampled_token_ith(ctx, i);
+            if (id == LLAMA_TOKEN_NULL) {
+                const auto * logits = llama_get_logits_ith(ctx, i);
+                const auto n_sampled = llama_get_sampled_logits_count_ith(ctx, i);
+                const auto best = std::max_element(logits, logits + (n_sampled ? n_sampled : n_vocab)) - logits;
+                id = n_sampled ? llama_get_sampled_candidates_ith(ctx, i)[best] : (llama_token) best;
+            }
+            result.push_back(id);
+        }
+    }
 };
 
 struct common_speculative_impl_draft_simple : public common_speculative_impl {
@@ -2475,7 +2578,10 @@ const char * common_speculative_all_types_str() {
         std::vector<common_speculative_type> types;
         types.reserve(COMMON_SPECULATIVE_TYPE_COUNT);
         for (int i = 0; i < COMMON_SPECULATIVE_TYPE_COUNT; i++) {
-            types.push_back((common_speculative_type) i);
+            // TODO: allow llama-server to select draft-self.
+            if (i != COMMON_SPECULATIVE_TYPE_DRAFT_SELF) {
+                types.push_back((common_speculative_type) i);
+            }
         }
         return common_speculative_type_name_str(types);
     }();
@@ -2486,6 +2592,7 @@ std::string common_speculative_type_to_str(common_speculative_type type) {
     switch (type) {
         case COMMON_SPECULATIVE_TYPE_NONE:          return "none";
         case COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE:  return "draft-simple";
+        case COMMON_SPECULATIVE_TYPE_DRAFT_SELF:    return "draft-self";
         case COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3:  return "draft-eagle3";
         case COMMON_SPECULATIVE_TYPE_DRAFT_MTP:     return "draft-mtp";
         case COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH:  return "draft-dflash";
@@ -2577,6 +2684,7 @@ int32_t common_speculative_n_max(const common_params_speculative * spec) {
     for (const auto type : spec->types) {
         switch (type) {
             case COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE:
+            case COMMON_SPECULATIVE_TYPE_DRAFT_SELF:
             case COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3:
             case COMMON_SPECULATIVE_TYPE_DRAFT_MTP:
             case COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH:
@@ -2875,7 +2983,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         };
 
         // when adding a new type - update here the logic above
-        static_assert(COMMON_SPECULATIVE_TYPE_COUNT == 11);
+        static_assert(COMMON_SPECULATIVE_TYPE_COUNT == 12);
 
         // this list here defines the priority of the speculators
         // the one with highest priority are listed first
@@ -2886,6 +2994,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         add_config_if_enabled(COMMON_SPECULATIVE_TYPE_NGRAM_CACHE);
 
         add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE);
+        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_SELF);
         add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3, params.draft.ctx_dft != nullptr);
         add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_MTP,    params.draft.ctx_dft != nullptr);
         add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH, params.draft.ctx_dft != nullptr);
@@ -2900,6 +3009,10 @@ common_speculative * common_speculative_init(common_params_speculative & params,
                 break;
             case COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE: {
                 impls.push_back(std::make_unique<common_speculative_impl_draft_simple>(config.params, n_seq));
+                break;
+            }
+            case COMMON_SPECULATIVE_TYPE_DRAFT_SELF: {
+                impls.push_back(std::make_unique<common_speculative_impl_draft_self>(config.params, n_seq));
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3: {
