@@ -6144,7 +6144,7 @@ void server_routes::init_routes() {
     };
 
     // realtime transcription over websocket, modeled after the OpenAI realtime API
-    // audio is PCM16 mono at the model sample rate, sent as base64 in input_audio_buffer.append events
+    // audio is PCM16 mono, sent as base64 in input_audio_buffer.append events and resampled to the model rate
     // input_audio_buffer.commit with "final": true ends the input, closing the socket also ends it
     this->ws_realtime = [this](const server_http_req & req, server_http_context::ws_conn & conn) {
         auto send_event = [&conn](json ev) {
@@ -6178,12 +6178,13 @@ void server_routes::init_routes() {
         }
 
         const std::string session_id = "sess_" + random_string();
-        const json session_config = json {
+        server_realtime_audio_in audio_in(mtmd_get_audio_sample_rate(ctx_server.mctx));
+        json session_config = json {
             {"id",     session_id},
             {"object", "realtime.transcription_session"},
             {"type",   "transcription"},
             {"audio",  {{"input", {
-                {"format",          {{"type", "audio/pcm"}, {"rate", mtmd_get_audio_sample_rate(ctx_server.mctx)}}},
+                {"format",          {{"type", "audio/pcm"}, {"rate", audio_in.rate}}},
                 {"transcription",   {{"model", meta->model_name}}},
                 {"turn_detection",  nullptr},
                 {"noise_reduction", nullptr},
@@ -6259,6 +6260,12 @@ void server_routes::init_routes() {
                 }
                 const std::string type = json_value(ev, "type", std::string());
                 if (type == "session.update" || type == "transcription_session.update") {
+                    std::string err;
+                    if (!audio_in.update(json_value(ev, "session", json::object()), err)) {
+                        send_error_event(err, "invalid_request_error");
+                        continue;
+                    }
+                    session_config["audio"]["input"]["format"]["rate"] = audio_in.rate;
                     send_event(json {{"type", "session.updated"}, {"session", session_config}});
                 } else if (type == "input_audio_buffer.append") {
                     std::string pcm;
@@ -6268,13 +6275,7 @@ void server_routes::init_routes() {
                         send_error_event("invalid base64 audio", "invalid_request_error");
                         continue;
                     }
-                    std::vector<float> samples(pcm.size() / 2);
-                    for (size_t i = 0; i < samples.size(); i++) {
-                        int16_t v;
-                        memcpy(&v, pcm.data() + 2 * i, sizeof(v));
-                        samples[i] = v / 32768.0f;
-                    }
-                    if (!post_control(SERVER_CONTROL_ACTION_AUDIO_APPEND, std::move(samples))) {
+                    if (!post_control(SERVER_CONTROL_ACTION_AUDIO_APPEND, audio_in.decode(pcm))) {
                         break;
                     }
                 } else if (type == "input_audio_buffer.commit") {

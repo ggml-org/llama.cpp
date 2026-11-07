@@ -10,6 +10,7 @@
 #include "sampling.h"
 
 #include <deque>
+#include <memory>
 #include <set>
 #include <string>
 #include <vector>
@@ -28,6 +29,29 @@ struct server_realtime_deps {
     mtmd_context *                 mctx;
     const mtmd_helper_cap &        cap;
     const llama_vocab *            vocab;
+};
+
+// the input audio of a realtime session: PCM16 mono, resampled to the model rate
+// the rate defaults to 24 kHz like OpenAI's audio/pcm, session.audio.input.format.rate sets it before the first audio
+struct server_realtime_audio_in {
+    explicit server_realtime_audio_in(int32_t model_rate) : model_rate(model_rate) {}
+
+    int32_t rate = 24000;
+
+    // reads the rate of a session.update, false with err if it can't be used
+    bool update(const json & session, std::string & err);
+
+    // PCM16 bytes to PCM F32 at the model rate
+    std::vector<float> decode(const std::string & pcm);
+
+private:
+    struct resampler_deleter {
+        void operator()(mtmd_helper_resampler * rs) const { mtmd_helper_resampler_free(rs); }
+    };
+
+    int32_t model_rate;
+    bool    started = false;
+    std::unique_ptr<mtmd_helper_resampler, resampler_deleter> resampler;
 };
 
 // a realtime conversation over websocket, for models that answer after the audio (e.g. LFM3-Audio):
