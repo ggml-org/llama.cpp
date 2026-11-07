@@ -214,6 +214,10 @@ common_chat_params common_chat_params_init_gemma4(const common_chat_template &  
             auto response_format = p.literal("```json") <<
                 p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema)) <<
                 p.literal("```");
+            if (!inputs.enable_thinking) {
+                auto prompt_thought = p.optional(p.literal("<|channel>thought") + p.optional(p.space()) + p.literal("<channel|>"));
+                return start + prompt_thought + response_format;
+            }
             return start + p.optional(thought) + response_format;
         }
 

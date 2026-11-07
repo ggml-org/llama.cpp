@@ -3050,6 +3050,59 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_content("<|channel>thought\nI'm\nthinking<channel|>Hello, world!\nWhat's up?")
             .run();
 
+        {
+            const std::string answer_schema = R"({"type":"object","properties":{"answer":{"type":"integer"}},"required":["answer"]})";
+
+            // JSON schema with thinking enabled
+            tst.test(
+                    "<|channel>thought\nI'm thinking<channel|>```json\n{\"answer\": 42}\n```")
+                .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+                .enable_thinking(true)
+                .json_schema(answer_schema)
+                .expect_reasoning("I'm thinking")
+                .expect_content("{\"answer\": 42}")
+                .run();
+
+            // JSON schema with thinking disabled: accepts direct JSON response
+            tst.test(
+                    "```json\n{\"answer\": 42}\n```")
+                .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+                .enable_thinking(false)
+                .json_schema(answer_schema)
+                .expect_content("{\"answer\": 42}")
+                .run();
+
+            // Direct grammar verification: ensure schema grammar rejects reasoning when enable_thinking is false
+            {
+                auto tmpls = read_templates(tst.template_path());
+                common_chat_session_params sp;
+                common_chat_templates_inputs in;
+                in.messages = { message_user };
+                in.enable_thinking = false;
+                in.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+                in.json_schema = answer_schema;
+                common_chat_session s(tmpls.get(), nullptr, in, sp);
+
+                // Direct grammar verification: ensure schema grammar rejects reasoning when enable_thinking is false.
+                // Each match_string consumes grammar state in-place via llama_grammar_accept,
+                // so a fresh grammar instance is built for each test case.
+                auto grammar = build_grammar(s.grammar());
+                GGML_ASSERT(grammar != nullptr);
+
+                // Direct JSON response must be accepted
+                GGML_ASSERT(match_string("<|turn>model\n```json\n{\"answer\": 42}\n```", grammar.get()));
+
+                // Prefilled empty thought channel followed by JSON must be accepted
+                auto grammar_empty_thought = build_grammar(s.grammar());
+                GGML_ASSERT(match_string("<|turn>model\n<|channel>thought\n<channel|>```json\n{\"answer\": 42}\n```", grammar_empty_thought.get()));
+
+                // Thought channel with reasoning must be rejected when enable_thinking is false
+                auto grammar_with_reasoning = build_grammar(s.grammar());
+                bool accepted_reasoning = match_string("<|turn>model\n<|channel>thought\nI'm thinking<channel|>```json\n{\"answer\": 42}\n```", grammar_with_reasoning.get());
+                GGML_ASSERT(!accepted_reasoning && "Gemma 4 schema grammar must reject thought channel with reasoning when enable_thinking is false");
+            }
+        }
+
         // Simple tool call with string argument
         tst.test(
                 "<|tool_call>call:get_time{city:<|\"|>London<|\"|>}<tool_call|>")
