@@ -283,6 +283,10 @@ static size_t g_scratch_offset = 0;
   (void)bad_arch; // suppress unused function warning
 }
 
+// thread-local cache of the currently selected device, kept in sync by
+// ggml_sycl_set_device and ggml_sycl_set_main_device.
+extern thread_local int g_sycl_current_device_id;
+
 int get_current_device_id();
 
 inline int ggml_sycl_get_device() {
@@ -290,16 +294,12 @@ inline int ggml_sycl_get_device() {
 }
 
 inline dpct::err0 ggml_sycl_set_device(const int device) try {
-  int current_device_id;
-  SYCL_CHECK(CHECK_TRY_ERROR(current_device_id = get_current_device_id()));
-
-  // GGML_SYCL_DEBUG("ggml_sycl_set_device device_id=%d,
-  // current_device_id=%d\n", device, current_device);
-  if (device == current_device_id) {
+  if (device == g_sycl_current_device_id) {
     return 0;
   }
-
-  return CHECK_TRY_ERROR(dpct::select_device(device));
+  dpct::err0 err = CHECK_TRY_ERROR(dpct::select_device(device));
+  g_sycl_current_device_id = device;
+  return err;
 } catch (sycl::exception const& exc) {
   std::cerr << exc.what() << "Exception caught at file:" << __FILE__
             << ", line:" << __LINE__ << std::endl;

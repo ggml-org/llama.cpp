@@ -19,8 +19,14 @@
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
 
+thread_local int g_sycl_current_device_id = -1;
+
 int get_current_device_id() {
-  return dpct::dev_mgr::instance().current_device_id();
+  if (g_sycl_current_device_id >= 0) {
+    return g_sycl_current_device_id;
+  }
+  g_sycl_current_device_id = (int) dpct::dev_mgr::instance().current_device_id();
+  return g_sycl_current_device_id;
 }
 
 void* ggml_sycl_host_malloc(size_t size) try {
