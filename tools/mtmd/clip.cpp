@@ -5448,8 +5448,8 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
                     n_patches = n_len / proj_stack_factor;
                 }
 
-                // whisper downscales input token by half after conv1d
-                n_patches /= 2;
+                // conv1d stride 2 rounds up; stack-frame projectors always get 3000 frames and keep their count
+                n_patches = ctx->model.audio_has_stack_frames() ? n_patches / 2 : (n_patches + 1) / 2;
 
                 if (ctx->model.audio_has_avgpool()) {
                     // divide by 2 because of nn.AvgPool1d(2, stride=2)

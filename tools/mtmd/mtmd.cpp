@@ -1107,7 +1107,7 @@ struct mtmd_context {
                     // <|audio_bos|> ... (embeddings) ... <|audio_eos|>
                     aud_beg = "<|audio_bos|>";
                     aud_end = "<|audio_eos|>";
-                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_whisper>(ctx_a);
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_whisper>(ctx_a, /* trim_to_input */ true);
                 } break;
             case PROJECTOR_TYPE_MUSE_SPARK_AUDIO:
                 {
