@@ -56,8 +56,10 @@
 
 // Decode (q1) MQ kernels: when DK_VEC <= FA_SG each lane owns exactly one Q
 // quartet for the entire KV sweep, so Q lives in registers instead of a
-// staging LDS array (drops the array and the entry barrier).
-#if (DK/4) <= FA_SG
+// staging LDS array (drops the array and the entry barrier). The array holds
+// MQ_GQA quartets per lane, so wider groups only get it when the host asks
+// (-D FA_Q1_Q_REG): at MQ_GQA 6 or 8 it costs the kernel its widest workgroup.
+#if (DK/4) <= FA_SG && (!defined(MQ_GQA) || MQ_GQA <= 4)
 #define FA_Q1_Q_REG 1
 #endif
 
