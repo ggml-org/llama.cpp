@@ -34128,12 +34128,12 @@ static void moe_router_reoerder(ggml_backend_t backend, const ggml_tensor * src,
     CL_CHECK(clReleaseMemObject(emap_buf));
 }
 
-// Use the per-token MoE GEMV instead of the tiled expert GEMM for small batches (spec/MTP
-// verify, 2..4-way multi-slot decode). The GEMV costs one weight pass per token, the GEMM
-// pads every expert to a 32-token tile, so the GEMV wins while tokens rarely share an
-// expert. Default on for X2E up to 4 tokens while 2 * tokens * used < experts.
+// Use the per-token MoE GEMV instead of the tiled expert GEMM for small batches.
+// The GEMV costs one weight pass per token, the GEMM pads every expert to a
+// 32-token tile, so the GEMV wins while tokens rarely share an expert.
+// Default on for X2E up to 4 tokens while 2 * tokens * used < experts.
 // GGML_OPENCL_MOE_GEMV_MAX_TOK overrides with a plain token limit (1 = decode only).
-static bool ggml_cl_moe_gemv_batch(const ggml_backend_opencl_context * backend_ctx, int n_tokens, int n_used, int n_expert) {
+static bool use_adreno_moe_gemv_small_batch(const ggml_backend_opencl_context * backend_ctx, int n_tokens, int n_used, int n_expert) {
     if (n_tokens <= 1) {
         return true;
     }
@@ -34274,7 +34274,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                 size_t local_size[3] = {64, 2, 1};
                 size_t global_size[3] = {64, 2, 1};
 
-                if (ggml_cl_moe_gemv_batch(backend_ctx, ne12, ne20, ne02)) { // for gemv
+                if (use_adreno_moe_gemv_small_batch(backend_ctx, ne12, ne20, ne02)) { // for gemv
                     kernel = backend_ctx->kernel_gemv_moe_q4_0_f32_ns;
 
                     cl_mem src1_sub_buffer, buf_src1_image, buf_src2;
@@ -34586,7 +34586,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                 size_t local_size[3] = {64, 2, 1};
                 size_t global_size[3] = {64, 2, 1};
 
-                if (ggml_cl_moe_gemv_batch(backend_ctx, ne12, ne20, ne02)) { // for gemv
+                if (use_adreno_moe_gemv_small_batch(backend_ctx, ne12, ne20, ne02)) { // for gemv
                     kernel = backend_ctx->kernel_gemv_moe_q4_1_f32_ns;
 
                     cl_mem src1_sub_buffer, buf_src1_image, buf_src2;
@@ -34775,7 +34775,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                 size_t local_size[3] = {64, 2, 1};
                 size_t global_size[3] = {64, 2, 1};
 
-                if (ggml_cl_moe_gemv_batch(backend_ctx, ne12, ne20, ne02)) { // for gemv
+                if (use_adreno_moe_gemv_small_batch(backend_ctx, ne12, ne20, ne02)) { // for gemv
                     kernel = backend_ctx->kernel_gemv_moe_q5_0_f32_ns;
 
                     cl_mem src1_sub_buffer, buf_src1_image, buf_src2;
@@ -35031,7 +35031,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                 size_t local_size[3] = {64, 2, 1};
                 size_t global_size[3] = {64, 2, 1};
 
-                if (ggml_cl_moe_gemv_batch(backend_ctx, ne12, ne20, ne02)) { // for gemv
+                if (use_adreno_moe_gemv_small_batch(backend_ctx, ne12, ne20, ne02)) { // for gemv
                     kernel = backend_ctx->kernel_gemv_moe_q5_1_f32_ns;
 
                     cl_mem src1_sub_buffer, buf_src1_image, buf_src2;
@@ -35466,7 +35466,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                 size_t local_size[3] = {64, 2, 1};
                 size_t global_size[3] = {64, 2, 1};
 
-                if (ggml_cl_moe_gemv_batch(backend_ctx, ne12, ne20, ne02)) { // for gemv
+                if (use_adreno_moe_gemv_small_batch(backend_ctx, ne12, ne20, ne02)) { // for gemv
                     kernel = backend_ctx->kernel_gemv_moe_q4_k_f32_ns;
 
                     // Weight-as-texture MoE decode GEMV
@@ -35739,7 +35739,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                 size_t local_size[3] = {64, 2, 1};
                 size_t global_size[3] = {64, 2, 1};
 
-                if (ggml_cl_moe_gemv_batch(backend_ctx, ne12, ne20, ne02)) { // for gemv
+                if (use_adreno_moe_gemv_small_batch(backend_ctx, ne12, ne20, ne02)) { // for gemv
                     kernel = backend_ctx->kernel_gemv_moe_q5_k_f32_ns;
 
                     cl_mem src1_sub_buffer, buf_src1_image, buf_src2;
@@ -35999,7 +35999,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                 size_t local_size[3] = {64, 2, 1};
                 size_t global_size[3] = {64, 2, 1};
 
-                if (ggml_cl_moe_gemv_batch(backend_ctx, ne12, ne20, ne02)) { // for gemv
+                if (use_adreno_moe_gemv_small_batch(backend_ctx, ne12, ne20, ne02)) { // for gemv
                     kernel = backend_ctx->kernel_gemv_moe_q6_k_f32_ns;
 
                     cl_mem src1_sub_buffer, buf_src1_image, buf_src2;
