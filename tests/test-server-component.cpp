@@ -728,7 +728,8 @@ static void test_pcm_f32_to_s16(testing & t) {
         return (int) v;
     };
 
-    const std::string bytes = pcm_f32_to_s16({0.0f, 1.0f, -1.0f, 0.5f, 2.0f, -2.0f});
+    const std::vector<float> samples = {0.0f, 1.0f, -1.0f, 0.5f, 2.0f, -2.0f};
+    const std::string bytes = pcm_f32_to_s16(samples.data(), samples.size());
     t.assert_equal("size",           (size_t) 12, bytes.size());
     t.assert_equal("zero",           0,      sample(bytes, 0));
     t.assert_equal("max",            32767,  sample(bytes, 1));
@@ -736,7 +737,7 @@ static void test_pcm_f32_to_s16(testing & t) {
     t.assert_equal("rounds",         16384,  sample(bytes, 3));
     t.assert_equal("clamps above",   32767,  sample(bytes, 4));
     t.assert_equal("clamps below",   -32767, sample(bytes, 5));
-    t.assert_true ("empty",          pcm_f32_to_s16({}).empty());
+    t.assert_true ("empty",          pcm_f32_to_s16(nullptr, 0).empty());
 }
 
 int main(int argc, char ** argv) {

@@ -5737,6 +5737,25 @@ json server_routes::get_model_info() const {
     return get_res_model_info(*meta);
 }
 
+// body of /tts and /v1/audio/speech; multipart form fields arrive as strings, the numeric and boolean params get their types back
+static json parse_tts_body(const server_http_req & req) {
+    json body = json::parse(req.body);
+    for (const char * k : { "top_k", "n_predict", "max_tokens", "seed" }) {
+        if (body.contains(k) && body[k].is_string()) {
+            body[k] = std::stoll(body[k].get<std::string>());
+        }
+    }
+    for (const char * k : { "top_p", "repeat_penalty", "speed" }) {
+        if (body.contains(k) && body[k].is_string()) {
+            body[k] = std::stof(body[k].get<std::string>());
+        }
+    }
+    if (body.contains("stream") && body["stream"].is_string()) {
+        body["stream"] = body["stream"] == "true";
+    }
+    return body;
+}
+
 void server_routes::init_routes() {
     // IMPORTANT: all lambda functions must start with create_response()
     // this is to ensure that the server_res_generator can handle sleeping case correctly
@@ -6460,11 +6479,11 @@ void server_routes::init_routes() {
     };
 
     this->post_tts = [this](const server_http_req & req) {
-        return handle_tts_impl(req, json::parse(req.body));
+        return handle_tts_impl(req, parse_tts_body(req));
     };
 
     this->post_speech_oai = [this](const server_http_req & req) {
-        json body = convert_speech_to_tts(json::parse(req.body));
+        json body = convert_speech_to_tts(parse_tts_body(req));
         SRV_DBG("%s\n", "Request converted: OpenAI Speech -> TTS");
         SRV_DBG("converted request: %s\n", body.dump().c_str());
         return handle_tts_impl(req, std::move(body));
@@ -6986,13 +7005,6 @@ std::unique_ptr<server_res_generator> server_routes::handle_rerank_impl(const se
     return res;
 }
 
-// raw float32 samples of a TTS result to signed 16-bit
-static std::string tts_audio_to_pcm16(const std::string & audio) {
-    std::vector<float> samples(audio.size() / sizeof(float));
-    memcpy(samples.data(), audio.data(), samples.size() * sizeof(float));
-    return pcm_f32_to_s16(samples);
-}
-
 std::unique_ptr<server_res_generator> server_routes::handle_tts_impl(const server_http_req & req, json body) {
     auto res = create_response();
     res->set_req(&req); // will also set spipe if needed
@@ -7003,21 +7015,6 @@ std::unique_ptr<server_res_generator> server_routes::handle_tts_impl(const serve
     }
 
     const auto info = mtmd_gen_audio_get_info(ctx_server.mctx);
-
-    // multipart form fields arrive as strings, correct the types of the numeric and boolean params
-    for (const char * k : { "top_k", "n_predict", "max_tokens", "seed" }) {
-        if (body.contains(k) && body[k].is_string()) {
-            body[k] = std::stoll(body[k].get<std::string>());
-        }
-    }
-    for (const char * k : { "top_p", "repeat_penalty" }) {
-        if (body.contains(k) && body[k].is_string()) {
-            body[k] = std::stof(body[k].get<std::string>());
-        }
-    }
-    if (body.contains("stream") && body["stream"].is_string()) {
-        body["stream"] = body["stream"] == "true";
-    }
 
     std::string prompt = json_value(body, "input", json_value(body, "prompt", std::string()));
     if (prompt.empty()) {
@@ -7121,7 +7118,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_tts_impl(const serve
 
     // the pipeline outputs float32 samples
     auto take_audio = [pcm16](server_task_result_tts * tts_res) {
-        return pcm16 ? tts_audio_to_pcm16(tts_res->audio) : std::move(tts_res->audio);
+        const std::string & audio = tts_res->audio;
+        return pcm16 ? pcm_f32_to_s16((const float *) audio.data(), audio.size() / sizeof(float)) : std::move(tts_res->audio);
     };
 
     if (!stream) {

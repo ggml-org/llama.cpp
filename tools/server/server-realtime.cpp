@@ -682,7 +682,7 @@ struct realtime_conversation {
     //
 
     static std::string encode_pcm16(const std::vector<float> & samples) {
-        return base64::encode(pcm_f32_to_s16(samples));
+        return base64::encode(pcm_f32_to_s16(samples.data(), samples.size()));
     }
 
     // the message item of the response is added with its first delta
