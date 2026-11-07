@@ -15,8 +15,9 @@ and from the Storybook by `npm run export:design-system`. The how of the app's o
 AI that is personal and private: the model runs on a device you already own (a phone, a laptop, a desktop), your
 conversations stay on it, and it works offline, without an account. Open models on the hardware people already
 have put it within reach of anyone, and a server one person runs can be shared by many. Nothing comes
-pre-installed: the apps suggest models that fit the device and keep every other setting one step away. We say all
-of this by showing it, never by preaching it, and point at no one. The reasons are in Storybook's **Philosophy**.
+pre-installed: the apps make the first choices for people starting out, recommending a model that fits the device,
+and leave every setting open to power users. We say all of this by showing it, never by preaching it, and point at
+no one. The reasons are in Storybook's **Philosophy**.
 
 ### Voice
 

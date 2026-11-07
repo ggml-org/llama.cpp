@@ -22,7 +22,7 @@
 
 ## Personal and private
 
-The model runs on a device you already own: your phone, laptop or desktop. It is yours to choose, set up and keep, and it runs the way you configured it.
+The model runs on a device you already own: your phone, laptop or desktop. It starts with sensible choices made for you, and every one of them can be changed if you want to.
 
 Your conversations stay on that device, and everything works offline, without an account. There is nothing to sign in to and nothing to send, so what you ask stays private and secure by default. That is what personal AI means here.
 
@@ -40,15 +40,17 @@ Access to AI should be as open as access to information: available to anyone, wh
 	<Reach />
 </Figure>
 
-## Simple by default
+## Simple by default, powerful on request
 
-Running a model used to take a terminal and terms like GGUF, quantization and speculative decoding. Most people want help with a letter, a photo or a question, and need none of that.
+Running a model used to take a terminal and terms like GGUF, quantization and speculative decoding. Most people want help with a letter, a photo or a question, and need none of that. Others want to tune every part. Both should feel at home.
 
-Nothing comes pre-installed. The Llama app suggests models that fit your device and recommends one above the rest: small enough for any device, and able to read, see and hear. You choose; the app downloads your choice from Hugging Face and keeps the server running.
+For someone starting out, the choices are made in advance. Nothing comes pre-installed: the Llama app suggests models that fit the device and recommends one above the rest, small enough for any device and able to read, see and hear. One click downloads it from Hugging Face, and the app keeps the server running.
 
-Managing models is the native apps' job, so people rarely have to think about it. In Llama Chat, the model manager and Discover are for power users and should stay off until someone turns them on; anyone else should find a model by name in the global search, next to their conversations and projects.
+For a power user, nothing is held back: any model and quant, sampling, penalties, system prompts, custom recipes and the server's own options. They are one step away rather than on the first screen.
 
-Sampling, penalties, system prompts, custom recipes and every other setting stay available, one step away rather than on the first screen. Where exactly to draw that line is still open.
+Managing models is the native apps' job, so most people rarely have to think about it. In Llama Chat, the model manager and Discover are power-user features, off until someone turns them on; anyone else finds a model by name in the global search, next to their conversations and projects.
+
+Where exactly to draw the line between the two is still open.
 
 <Figure n={3} caption="The first run with Llama for Mac, in four frames from the real app and Llama Chat. Nothing comes pre-installed; settings wait until someone asks.">
 	<Storyboard />
@@ -88,7 +90,7 @@ We say what the product does, with real numbers, and show the real product. No h
 
 ## In practice
 
-- **Product:** a suggested model and sensible defaults, with advanced settings one step away. It always shows which model runs on which server, needs no account and works offline.
+- **Product:** choices made in advance for people starting out, and every setting for those who want it. It always shows which model runs on which server, needs no account and works offline.
 - **Design:** neutral, so the conversation stands out, and open, so anyone can restyle it.
 - **Communications:** the real app, real figures and the same plain voice.
 
