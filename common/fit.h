@@ -104,6 +104,7 @@ common_device_memory_data_vec common_get_device_memory_data(
          const llama_context_params * cparams,
     std::vector<ggml_backend_dev_t> & devs,
                            uint32_t & hp_ngl,
+                           uint32_t & hp_ngl_skip,
                            uint32_t & hp_n_ctx_train,
                            uint32_t & hp_n_expert,
                      ggml_log_level   log_level);

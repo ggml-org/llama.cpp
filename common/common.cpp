@@ -895,27 +895,7 @@ bool fs_validate_filename(const std::string & filename, bool allow_subdirs) {
     return true;
 }
 
-#include <iostream>
-
-
 #ifdef _WIN32
-std::wstring utf8_to_wstring(const std::string & str) {
-    if (str.empty()) {
-        return std::wstring();
-    }
-
-    int size = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.size(), NULL, 0);
-
-    if (size <= 0) {
-        return std::wstring();
-    }
-
-    std::wstring wstr(size, 0);
-    MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.size(), &wstr[0], size);
-
-    return wstr;
-}
-
 std::string wstring_to_utf8(const std::wstring & str) {
     if (str.empty()) {
         return std::string();
@@ -1331,6 +1311,12 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
         cparams.n_outputs_max_per_seq = 1;
 
         LOG_INF("%s", "decision model reads the embeddings output, enabling embedding mode\n");
+    }
+
+    if (llama_model_classifier_free_guidance(model)) {
+        params.kv_unified   = true;
+        cparams.kv_unified  = true;
+        cparams.n_seq_max  *= 2;
     }
 
     // embeddings need the whole batch in one ubatch, so n_batch must not be larger than n_ubatch
@@ -1772,7 +1758,8 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.type_k = params.cache_type_k;
     cparams.type_v = params.cache_type_v;
 
-    cparams.moe_cache_size = params.moe_cache_size;
+    cparams.moe_cache_size      = params.moe_cache_size;
+    cparams.moe_cache_cpu_share = params.moe_cache_cpu_share;
 
     return cparams;
 }

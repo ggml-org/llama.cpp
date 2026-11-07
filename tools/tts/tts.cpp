@@ -69,11 +69,6 @@ int main(int argc, char ** argv) {
     // always enable embd, so that we can pass hidden states to the audio generation helper
     params.embedding = true;
 
-    // for chatterbox multilingual: its cfg pairs slot i with sequence n_parallel + i in a unified kv cache
-    // TODO: this applies to every model, find a better way for a pipeline to request extra sequences
-    params.n_parallel *= 2;
-    params.kv_unified  = true;
-
     llama_backend_init();
     llama_numa_init(params.numa);
 
