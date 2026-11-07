@@ -284,7 +284,25 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2(ggml_backend_cuda_con
     }
 
     if (use_gqa_opt && gqa_ratio > 4) {
-        ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 8>(ctx, dst);
+        // For large batches use the ncols2 with the least head padding, ties go to the larger ncols2.
+        // The sparse variants only exist for ncols2 == 8.
+        int ncols2 = 8;
+        if (GGML_CUDA_CC_IS_NVIDIA(cc) && Q->ne[1] >= 32 && ggml_get_op_params_i32(dst, 4) == 0) {
+            const auto padded = [&](const int n) { return (gqa_ratio + n - 1) / n * n; };
+            for (const int n : {4, 2}) {
+                if (padded(n) < padded(ncols2)) {
+                    ncols2 = n;
+                }
+            }
+        }
+
+        if (ncols2 == 2) {
+            ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 2>(ctx, dst);
+        } else if (ncols2 == 4) {
+            ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 4>(ctx, dst);
+        } else {
+            ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 8>(ctx, dst);
+        }
         return;
     }
 
