@@ -126,6 +126,7 @@
 #define FC_LIGHTNING_INDEXER           2200
 #define FC_MUL_MV_MMA                  2300
 #define FC_TOP_K_MASK                  2400
+#define FC_GROUP_NORM                  2500
 
 // op-specific constants
 #define OP_FLASH_ATTN_EXT_NQPSG 8
@@ -677,6 +678,10 @@ typedef struct {
     uint64_t nb00;
     uint64_t nb01;
     uint64_t nb02;
+    uint64_t nb03;
+    uint64_t nb1;
+    uint64_t nb2;
+    uint64_t nb3;
     int32_t  ngrp;
     float    eps;
 } ggml_metal_kargs_group_norm;
