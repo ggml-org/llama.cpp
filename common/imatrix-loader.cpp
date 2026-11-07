@@ -117,14 +117,32 @@ bool common_imatrix_load(const std::string & fname, common_imatrix & imatrix) {
     imatrix.chunk_size    = chunk_size_key  != -1 ? gguf_get_val_u32(ctx_gguf, chunk_size_key) : 0;
     imatrix.n_layer_nextn = nextn_key       != -1 ? gguf_get_val_u32(ctx_gguf, nextn_key) : 0;
 
+    const int64_t schema_idx = gguf_find_key(ctx_gguf, LLM_KV_IMATRIX_STATS_SCHEMA);
+    if (schema_idx != -1 && gguf_get_kv_type(ctx_gguf, schema_idx) == GGUF_TYPE_ARRAY &&
+        gguf_get_arr_type(ctx_gguf, schema_idx) == GGUF_TYPE_STRING) {
+        const int64_t n_schema = gguf_get_arr_n(ctx_gguf, schema_idx);
+        imatrix.stats_schema.resize(n_schema);
+        for (int64_t i = 0; i < n_schema; ++i) { imatrix.stats_schema[i] = gguf_get_arr_str(ctx_gguf, schema_idx, i); }
+    } else {
+        if (schema_idx != -1) {
+            LOG_WRN("%s: %s in %s is not an array of strings, using the default order\n", __func__, LLM_KV_IMATRIX_STATS_SCHEMA, fname.c_str());
+        }
+
+        imatrix.stats_schema = {
+            "sum_sq", "mean", "elements", "std_deviation", "skewness", "kurtosis", "gain", "h_norm", "l2_dist", "cossim", "pearson", "covariance",
+        };
+    }
+
     const std::string in_sum_suffix{ ".in_sum" };
     const std::string in_sum2_suffix{ ".in_sum2" };
     const std::string counts_suffix{ ".counts" };
+    const std::string stats_suffix{ ".stats" };
 
     struct sum_tensors {
         struct ggml_tensor * in_sum  = nullptr;
         struct ggml_tensor * in_sum2 = nullptr;
         struct ggml_tensor * counts  = nullptr;
+        struct ggml_tensor * stats  = nullptr;
     };
 
     std::map<std::string, sum_tensors> sums_counts_for;
@@ -138,6 +156,8 @@ bool common_imatrix_load(const std::string & fname, common_imatrix & imatrix) {
             sums_counts_for[std::move(name)].in_sum2 = cur;
         } else if (string_remove_suffix(name, counts_suffix)) {
             sums_counts_for[std::move(name)].counts = cur;
+        } else if (string_remove_suffix(name, stats_suffix)) {
+            sums_counts_for[std::move(name)].stats = cur;
         }
     }
 
@@ -146,6 +166,7 @@ bool common_imatrix_load(const std::string & fname, common_imatrix & imatrix) {
         const struct ggml_tensor * in_sum  = sc.second.in_sum;
         const struct ggml_tensor * in_sum2 = sc.second.in_sum2;
         const struct ggml_tensor * counts  = sc.second.counts;
+        const struct ggml_tensor * stats  = sc.second.stats;
 
         if (!in_sum2 || !counts || (in_sum != nullptr && ggml_nelements(in_sum) != ggml_nelements(in_sum2))) {
             LOG_ERR("%s: mismatched sums and counts for %s\n", __func__, name.c_str());
@@ -181,6 +202,12 @@ bool common_imatrix_load(const std::string & fname, common_imatrix & imatrix) {
             for (int64_t j = 0; j < nval; ++j) {
                 e.activations[j] = ((const float *) in_sum->data)[j];
             }
+        }
+
+        if (stats && stats->type == GGML_TYPE_F32) {
+            const int64_t n_stats = ggml_nelements(stats);
+            e.stats.resize(n_stats);
+            for (int64_t j = 0; j < n_stats; ++j) { e.stats[j] = ((const float *) stats->data)[j]; }
         }
     }
 
