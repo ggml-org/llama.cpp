@@ -1,0 +1,29 @@
+[[docs:funcstructs:ggml-cpu.c]]
+== ggml-cpu.c
+
+
+[[docs:funcstructs:ggml-cpu.c:ggml_compute_forward]]
+=== ggml_compute_forward
+
+Signature:
+[.codebit]#`static void ggml_compute_forward(struct ggml_compute_params * params, struct ggml_tensor * tensor)`#
+
+Calls a specific computation function depending on the tensor's operation. (ex: [.codebit]#`ggml_compute_forward_add(...)`#, [.codebit]#`ggml_compute_forward_mul(...)`#)
+
+
+[[docs:funcstructs:ggml-cpu.c:ggml_graph_compute_thread]]
+=== ggml_graph_compute_thread
+
+Signature:
+[.codebit]#`static thread_ret_t ggml_graph_compute_thread(void * data)`#
+
+Calls [.codebit]#`ggml_compute_forward(...)`# on each node in the [.codebit]#`+((struct ggml_compute_state *)data)->threadpool->cgraph+`#. Also handles thread abortion.
+
+
+[[docs:funcstructs:ggml-cpu.c:ggml_graph_compute]]
+=== ggml_graph_compute
+
+Signature:
+[.codebit]#`enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cplan * cplan)`#
+
+Calls [.codebit]#`ggml_cpu_init()`#, then adjusts [.codebit]#`+cplan->threadpool+`# (of type [.codebit]#`struct ggml_threadpool`#) if needed and uses it to call [.codebit]#`ggml_graph_compute_thread(...)`# for each worker thread.
