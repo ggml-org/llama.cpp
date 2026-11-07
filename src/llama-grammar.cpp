@@ -514,7 +514,7 @@ const char * llama_grammar_parser::parse_sequence(
         }
 
         uint32_t last_rec_rule_id = 0;
-        auto n_opt = no_max ? 1 : max_times - min_times;
+        auto n_opt = no_max ? 1 : (max_times > min_times ? max_times - min_times : 0); // guard: max_times < min_times underflows uint64 -> unbounded alloc (DoS)
 
         llama_grammar_rule rec_rule(prev_rule);
         for (uint64_t i = 0; i < n_opt; i++) {
