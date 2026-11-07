@@ -8946,6 +8946,43 @@ struct test_flash_attn_ext : public test_case {
     }
 };
 
+struct test_flash_attn_ext_mask_boundary : public test_flash_attn_ext {
+    const int64_t past;
+    const bool finite_bias;
+    const bool empty_first;
+    const int64_t first;
+
+    test_flash_attn_ext_mask_boundary(int64_t hs, int64_t past, bool finite_bias, float max_bias = 0.0f,
+                                     int64_t nb = 31, bool mask = true, int64_t batch = 1, bool empty_first = false,
+                                     int64_t kv = 768, int64_t first = 0)
+        : test_flash_attn_ext(hs, hs, 4, {4, batch}, kv, nb, mask, false, max_bias, 0.0f,
+                              GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 2, 1, 3}),
+          past(past), finite_bias(finite_bias), empty_first(empty_first), first(first) {}
+
+    std::string vars() override {
+        return test_flash_attn_ext::vars() + ",mask_boundary=1," + VARS_TO_STR4(past, finite_bias, empty_first, first);
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        test_flash_attn_ext::initialize_tensors(ctx);
+        auto * m = ggml_get_tensor(ctx, "m");
+        if (!m) {
+            return;
+        }
+        std::vector<ggml_fp16_t> data(ggml_nelements(m));
+        for (int64_t batch = 0; batch < m->ne[3]; ++batch) {
+            for (int64_t row = 0; row < nb; ++row) {
+                for (int64_t col = 0; col < kv; ++col) {
+                    const bool excluded = col < first || col > past + row - 64 * batch || (empty_first && row == 0);
+                    const float bias = finite_bias ? 0.2f * std::sin(float(col + 17 * batch) * 0.03f) : 0.0f;
+                    data[(batch * nb + row) * kv + col] = ggml_fp32_to_fp16(excluded ? -INFINITY : bias);
+                }
+            }
+        }
+        ggml_backend_tensor_set(m, data.data(), 0, data.size() * sizeof(ggml_fp16_t));
+    }
+};
+
 // large Q values, so the online softmax has to rescale the partial results
 struct test_flash_attn_ext_large_logits : public test_flash_attn_ext {
     static constexpr int q_range = 20;
@@ -12530,6 +12567,29 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {11, 22, 33, 44}, 1, 2, 3, 4, 5, 6, 7, 8, tfrm, circular));
             test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {11, 22, 33, 44}, 0, 2, 0, 4, 0, 6, 0, 8, tfrm, circular));
         }
+    }
+
+    // Queries before and across a KV tile boundary leave entire tiles masked.
+    for (int hs : {72, 128, 256}) {
+        for (int past : {480, 496, 512}) {
+            for (bool finite_bias : {false, true}) {
+                for (float max_bias : {0.0f, 8.0f}) {
+                    test_cases.emplace_back(new test_flash_attn_ext_mask_boundary(hs, past, finite_bias, max_bias));
+                }
+            }
+        }
+    }
+    for (int nb : {1, 32, 64}) {
+        test_cases.emplace_back(new test_flash_attn_ext_mask_boundary(128, 496, true, 0.0f, nb));
+    }
+    test_cases.emplace_back(new test_flash_attn_ext_mask_boundary(256, 496, false, 0.0f, 31, false));
+    test_cases.emplace_back(new test_flash_attn_ext_mask_boundary(128, 496, true, 0.0f, 31, true, 2));
+    test_cases.emplace_back(new test_flash_attn_ext_mask_boundary(128, 496, true, 8.0f, 31, true, 2));
+    test_cases.emplace_back(new test_flash_attn_ext_mask_boundary(128, 496, true, 0.0f, 31, true, 1, true));
+    for (float max_bias : {0.0f, 8.0f}) {
+        test_cases.emplace_back(new test_flash_attn_ext_mask_boundary(128, 767, true, max_bias));
+        // Only keys beyond the old nextTokens window are visible.
+        test_cases.emplace_back(new test_flash_attn_ext_mask_boundary(64, 65536, true, max_bias, 2, true, 1, false, 65792, 65536));
     }
 
     // prefill-shaped cases with long KV (nb >= 32, kv >= 1024): covers the
