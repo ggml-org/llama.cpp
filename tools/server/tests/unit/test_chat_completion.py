@@ -287,6 +287,46 @@ def test_completion_with_json_schema(jinja: bool, json_schema: dict, n_predicted
     assert match_regex(re_content, choice["message"]["content"]), f'Expected {re_content}, got {choice["message"]["content"]}'
 
 
+@pytest.mark.parametrize("skip_chat_parsing", [False, True])
+def test_completion_with_server_json_schema(skip_chat_parsing: bool):
+    # a schema given on the command line (--json-schema) is a plain json_schema_to_grammar grammar:
+    # it does not contain the template's generation prompt, so the chat endpoint must not prefill it
+    # with the generation prompt tokens (issue #29006)
+    global server
+    server.jinja = True
+    server.json_schema = '{"const": "42"}'
+    server.skip_chat_parsing = skip_chat_parsing
+    server.start()
+    res = server.make_request("POST", "/chat/completions", data={
+        "max_tokens": 6,
+        "messages": [
+            {"role": "user", "content": "Write an example"},
+        ],
+    })
+    assert res.status_code == 200, res.body
+    choice = res.body["choices"][0]
+    assert match_regex("\"42\"", choice["message"]["content"]), choice["message"]["content"]
+
+
+def test_completion_with_json_schema_skip_chat_parsing():
+    # with --skip-chat-parsing the template does not wrap the request json_schema either,
+    # so it reaches the sampler as a plain output-format grammar (issue #29006)
+    global server
+    server.jinja = True
+    server.skip_chat_parsing = True
+    server.start()
+    res = server.make_request("POST", "/chat/completions", data={
+        "max_tokens": 6,
+        "messages": [
+            {"role": "user", "content": "Write an example"},
+        ],
+        "json_schema": {"const": "42"},
+    })
+    assert res.status_code == 200, res.body
+    choice = res.body["choices"][0]
+    assert match_regex("\"42\"", choice["message"]["content"]), choice["message"]["content"]
+
+
 @pytest.mark.parametrize("jinja,grammar,n_predicted,re_content", [
     (False, 'root ::= "a"{5,5}', 6, "a{5,5}"),
     (True, 'root ::= "a"{5,5}', 6, "a{5,5}"),
