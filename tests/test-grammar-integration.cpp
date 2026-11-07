@@ -925,6 +925,133 @@ static void test_custom_root_symbol_check() {
 }
 
 static void test_json_schema() {
+    test_schema("enum with pattern sibling",
+        R"({"type":"string","pattern":"^[A-Z]{3}$","enum":["ABC","abc"]})",
+        {R"("ABC")"}, {R"("abc")"});
+    test_schema("enum pattern checks decoded newline",
+        R"({"pattern":"^\\n$","enum":["\n","x"]})",
+        {R"("\n")"}, {R"("x")"});
+    test_schema("enum pattern checks decoded quote",
+        R"({"pattern":"^\"$","enum":["\"","x"]})",
+        {R"("\"")"}, {R"("x")"});
+    test_schema("enum with empty pattern match",
+        R"({"pattern":"^$","enum":["","x"]})",
+        {R"("")"}, {R"("x")"});
+    test_schema("escaped dot does not reject line separator candidate",
+        R"({"pattern":"^\\.$","enum":[".","\u2028"]})",
+        {R"(".")"}, {u8"\"\u2028\""});
+    test_schema("enum with grouped pattern alternatives",
+        R"({"pattern":"^(a|b)$","enum":["a","b","c"]})",
+        {R"("a")", R"("b")"}, {R"("c")"});
+    test_schema("enum with numeric bounds siblings",
+        R"({"type":"integer","minimum":0,"maximum":100,"enum":[5,500]})",
+        {"5"}, {"500"});
+    test_schema("pattern does not constrain numeric enum values",
+        R"({"enum":[5,6],"pattern":"unanchored"})",
+        {"5", "6"}, {R"("unanchored")"});
+    test_schema("enum with exclusive bounds",
+        R"({"exclusiveMinimum":-1,"exclusiveMaximum":1,"enum":[-1,0,1]})",
+        {"0"}, {"-1", "1"});
+    test_schema("enum with pattern and maxLength siblings",
+        R"({"pattern":"^[A-Z]+$","maxLength":3,"enum":["ABC","ABCD","abc"]})",
+        {R"("ABC")"}, {R"("ABCD")", R"("abc")"});
+    test_schema("enum with type and length siblings",
+        R"({"type":"string","minLength":2,"maxLength":3,"enum":["a","ab","abcd",2]})",
+        {R"("ab")"}, {R"("a")", R"("abcd")", "2"});
+    test_schema("enum with type alternatives",
+        R"({"type":["string","integer"],"enum":["x",2,false]})",
+        {R"("x")", "2"}, {"false"});
+    test_schema("enum with exact multipleOf sibling",
+        R"({"enum":[-0.3,-0.31,0,0.3,0.31,0.4],"multipleOf":0.1})",
+        {"-0.3", "0", "0.3", "0.4"}, {"-0.31", "0.31"});
+    test_schema("enum with large integer bound",
+        R"({"type":"integer","maximum":9007199254740992,"enum":[9007199254740992,9007199254740993]})",
+        {"9007199254740992"}, {"9007199254740993"});
+    test_schema("enum with large integer multipleOf",
+        R"({"enum":[9007199254740992,9007199254740993],"multipleOf":2})",
+        {"9007199254740992"}, {"9007199254740993"});
+    test_schema("enum with Unicode length and pattern",
+        R"({"type":"string","pattern":"^.$","maxLength":1,"enum":["\u00e9","\ud83d\ude00","ab"]})",
+        {u8"\"\u00e9\"", u8"\"\U0001F600\""}, {R"("ab")"});
+    test_schema("const with numeric bounds siblings",
+        R"({"const":5,"minimum":0,"maximum":10})",
+        {"5"}, {"0", "10"});
+    test_schema("non-applicable structural siblings leave numeric enum unchanged",
+        R"({"enum":[5],"properties":{"x":{"const":1}},"items":{"const":2}})",
+        {"5"}, {"6"});
+    test_schema("object enum keeps prior structural behavior",
+        R"({"enum":[{"x":1}],"required":["x"]})",
+        {R"({"x":1})"}, {R"({"x":2})"});
+    test_schema("array enum keeps prior structural behavior",
+        R"({"enum":[[1]],"minItems":1})",
+        {"[1]"}, {"[2]"});
+    test_schema("const with reference keeps prior dispatch",
+        R"({"const":5,"$ref":"#/$defs/limit","$defs":{"limit":{"const":5}}})",
+        {"5"}, {"6"});
+    test_schema("enum with anyOf keeps prior dispatch",
+        R"({"enum":[5],"anyOf":[{"const":5}]})",
+        {"5"}, {"6"});
+    test_schema("impossible enum branch in anyOf",
+        R"({"anyOf":[{"enum":["abc"],"pattern":"^[A-Z]+$"},{"const":"ok"}]})",
+        {R"("ok")"}, {R"("abc")"});
+    test_schema("impossible enum branch in nested allOf",
+        R"({"anyOf":[{"allOf":[{"enum":["abc"],"pattern":"^[A-Z]+$"},{"type":"object"}]},{"const":"ok"}]})",
+        {R"("ok")"}, {R"("abc")", "{}"});
+    test_schema("impossible referenced enum branch in allOf",
+        R"({"$defs":{"bad":{"enum":["abc"],"pattern":"^[A-Z]+$"}},"anyOf":[{"allOf":[{"$ref":"#/$defs/bad"},{"type":"object"}]},{"const":"ok"}]})",
+        {R"("ok")"}, {R"("abc")", "{}"});
+    for (const char * schema : {
+        R"({"const":500,"maximum":100})",
+        R"({"enum":["abc"],"pattern":"^[A-Z]+$"})",
+        R"({"enum":["a"],"pattern":"a"})",
+        R"({"pattern":"^\\U00000041$","enum":["A","U00000041"]})",
+        R"({"allOf":[{"enum":["abc"],"pattern":"^[A-Z]+$"},{"type":"object"}]})"
+    }) {
+        bool failed = false;
+        try {
+            json_schema_to_grammar(json::parse(schema), true);
+        } catch (const std::invalid_argument &) {
+            failed = true;
+        }
+        assert(failed);
+    }
+    json refs = {{"leaf", json::parse(R"({"enum":["abc"],"pattern":"^[A-Z]+$"})")}};
+    std::string ref = "#/$defs/leaf";
+    for (int i = 0; i < 28; ++i) {
+        std::string name = "level" + std::to_string(i);
+        refs[name] = {{"anyOf", json::array({json{{"$ref", ref}}, json{{"$ref", ref}}})}};
+        ref = "#/$defs/" + name;
+    }
+    json repeated_refs = {{"$defs", refs}, {"allOf", json::array({json{{"$ref", ref}}, json{{"type", "object"}}})}};
+    bool rejected_repeated_refs = false;
+    try {
+        json_schema_to_grammar(repeated_refs, true);
+    } catch (const std::invalid_argument & err) {
+        rejected_repeated_refs = std::string(err.what()).find("No enum or const values") != std::string::npos;
+    }
+    assert(rejected_repeated_refs);
+    bool rejected_surrogate = false;
+    try {
+        json_schema_to_grammar(json::parse(R"({"pattern":"^\\ud83d\\ude00$","enum":["\ud83d\ude00","a"]})"), true);
+    } catch (const std::invalid_argument & err) {
+        rejected_surrogate = std::string(err.what()).find("surrogate escape") != std::string::npos;
+    }
+    assert(rejected_surrogate);
+    bool rejected_alternatives = false;
+    try {
+        json_schema_to_grammar(json::parse(R"({"pattern":"^a|b$","enum":["ax","b"]})"), true);
+    } catch (const std::invalid_argument & err) {
+        rejected_alternatives = std::string(err.what()).find("top-level alternatives") != std::string::npos;
+    }
+    assert(rejected_alternatives);
+    bool rejected_line_separator = false;
+    try {
+        json_schema_to_grammar(json::parse(R"({"pattern":"^.$","enum":["\u2028","a"]})"), true);
+    } catch (const std::invalid_argument & err) {
+        rejected_line_separator = std::string(err.what()).find("line separator") != std::string::npos;
+    }
+    assert(rejected_line_separator);
+
     // Note that this is similar to the regular grammar tests,
     //  but we convert each json schema to a grammar before parsing.
     // Otherwise, this test structure is the same.
