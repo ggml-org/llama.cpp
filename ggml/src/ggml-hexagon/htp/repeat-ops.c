@@ -5,8 +5,7 @@
 #include <HAP_farf.h>
 #include <HAP_perf.h>
 
-#include <string.h>
-
+#include "dma-copy.h"
 #include "hvx-utils.h"
 
 #define GGML_COMMON_DECL_C
@@ -66,6 +65,7 @@ static void repeat_job_per_thread(unsigned int nth, unsigned int ith, void * dat
         return;
     }
 
+    dma_queue * dma_q = octx->ctx->dma[ith];
     struct htp_thread_trace * tr = &octx->ctx->trace[ith];
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, row_start);
 
@@ -81,16 +81,17 @@ static void repeat_job_per_thread(unsigned int nth, unsigned int ith, void * dat
         const uint32_t k2 = fastmodulo(i2, ne02, &kparams->div_ne02);
         const uint32_t k3 = fastmodulo(i3, ne03, &kparams->div_ne03);
 
-        const uint8_t * src_row = (const uint8_t *) src->data + k1 * nb01 + k2 * nb02 + k3 * nb03;
-        uint8_t * dst_base      = (uint8_t *) dst->data + i1 * nb1 + i2 * nb2 + i3 * nb3;
+        const dma_addr_t src_row = src->data + k1 * nb01 + k2 * nb02 + k3 * nb03;
+        dma_addr_t dst_base      = dst->data + i1 * nb1 + i2 * nb2 + i3 * nb3;
 
         // Tile along dimension 0
         for (uint32_t i0 = 0; i0 < nr0; i0++) {
-            uint8_t * dst_ptr = dst_base + i0 * ne00 * nb0;
-            memcpy(dst_ptr, src_row, row_bytes);
+            dma_addr_t dst_ptr = dst_base + i0 * ne00 * nb0;
+            dma_cpy_sametype_reshape_contig(dma_q, dst_ptr, src_row, row_bytes);
         }
     }
 
+    dma_queue_flush(dma_q);
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, row_start);
 
     FARF(HIGH, "repeat %d/%d: (%ux%ux%ux%u) -> (%ux%ux%ux%u) rows %u:%u\n",
