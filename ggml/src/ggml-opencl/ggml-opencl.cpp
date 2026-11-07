@@ -11506,6 +11506,13 @@ static bool use_fa_bin_kernels_prefill(const ggml_backend_opencl_context * backe
     const int dk = q->ne[0];
     const int dv = v->ne[0];
 
+    // do not choose bin FA kernels to avoid repacking the KV cache for small
+    // verify batches on X2
+    if (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E && is_mixed &&
+        (dk == 256 || dk == 512) && n_q <= 4) {
+        return false;
+    }
+
     constexpr bool prefill_only = true;
 
     return (backend_ctx->gpu_family == GPU_FAMILY::ADRENO &&
