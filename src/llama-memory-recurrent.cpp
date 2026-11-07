@@ -1344,8 +1344,27 @@ int32_t llama_memory_recurrent_context::get_rs_z() const {
     return is_full ? 0 : mem->rs_z;
 }
 
+bool llama_memory_recurrent_context::get_rs_in_place() const {
+    // rollback snapshots, zeroed states and extra states go through the gather
+    if (is_full || mem->n_rs_seq != 0 || mem->rs_z >= 0 || mem->n != get_ubatch().n_seqs) {
+        return false;
+    }
+
+    for (uint32_t i = 0; i < mem->n; ++i) {
+        if (s_copy(i) != (int32_t) (mem->head + i)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 uint32_t llama_memory_recurrent_context::get_size() const {
     return mem->size;
+}
+
+uint32_t llama_memory_recurrent_context::get_n_rs_seq() const {
+    return mem->n_rs_seq;
 }
 
 ggml_tensor * llama_memory_recurrent_context::get_r_l(int32_t il) const {
