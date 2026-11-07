@@ -2874,7 +2874,8 @@ struct llama_sampler_penalties : public llama_sampler_backend {
 
     // backend graph inputs
     ggml_tensor * inp_token_ids = nullptr;
-    ggml_tensor * inp_counts    = nullptr;
+    ggml_tensor * inp_counts    = nullptr; // candidates path
+    ggml_tensor * inp_coefs     = nullptr; // direct path: [n_max, 3] = pos scale, neg scale, offset
 
     // backend helpers
     int32_t n_max   = 0;
@@ -2882,9 +2883,10 @@ struct llama_sampler_penalties : public llama_sampler_backend {
 
     std::vector<int32_t> host_token_ids;
     std::vector<int32_t> host_counts;
+    std::vector<float>   host_coefs;
 
     void copy_state(const llama_sampler_penalties & src) {
-        // note: inp_token_ids/inp_counts belong to the current sampling graph
+        // note: inp_token_ids/inp_counts/inp_coefs belong to the current sampling graph
         prev        = src.prev;
         token_count = src.token_count;
     }
@@ -3056,37 +3058,63 @@ static void llama_sampler_penalties_backend_apply(
     ggml_set_name(sctx->inp_token_ids, "penalties_token_ids");
     ggml_set_input(sctx->inp_token_ids);
 
-    sctx->inp_counts = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, sctx->n_max);
-    ggml_set_name(sctx->inp_counts, "penalties_counts");
-    ggml_set_input(sctx->inp_counts);
-
     if ((int32_t) sctx->host_token_ids.size() != sctx->n_max) {
         sctx->host_token_ids.assign(sctx->n_max, 0);
         sctx->host_counts.assign(sctx->n_max, 0);
+        sctx->host_coefs.assign(3*sctx->n_max, 0.0f);
     }
 
     // flatten
     ggml_tensor * logits = ggml_reshape_1d(ctx, data->logits, ggml_nelements(data->logits));
+
+    if (!sctx->has_candidates) {
+        // logits are indexed by token id: penalize the history entries in place
+        // y = x*(x > 0 ? pos_scale : neg_scale) - offset, coefs are set on the host per entry
+        // the CUDA backend fuses this exact op sequence into one kernel
+        sctx->inp_coefs = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, sctx->n_max, 3);
+        ggml_set_name(sctx->inp_coefs, "penalties_coefs");
+        ggml_set_input(sctx->inp_coefs);
+
+        // views of a host input are uploaded one by one, so view a device copy instead
+        ggml_tensor * coefs = ggml_cont(ctx, sctx->inp_coefs);
+
+        const size_t nb_row = ggml_row_size(GGML_TYPE_F32, sctx->n_max);
+        ggml_tensor * pos_scale = ggml_view_2d(ctx, coefs, 1, sctx->n_max, sizeof(float), 0*nb_row);
+        ggml_tensor * neg_scale = ggml_view_2d(ctx, coefs, 1, sctx->n_max, sizeof(float), 1*nb_row);
+        ggml_tensor * offset    = ggml_view_2d(ctx, coefs, 1, sctx->n_max, sizeof(float), 2*nb_row);
+
+        ggml_tensor * logits_rows = ggml_reshape_2d(ctx, logits, 1, ggml_nelements(logits));
+        ggml_tensor * x   = ggml_get_rows(ctx, logits_rows, sctx->inp_token_ids);
+        ggml_tensor * pos = ggml_step(ctx, x);
+        ggml_tensor * neg = ggml_scale_bias(ctx, pos, -1.0f, 1.0f);
+
+        // the masks select a coefficient, so -INF logits never meet a zero factor
+        ggml_tensor * scale = ggml_add(ctx, ggml_mul(ctx, pos, pos_scale), ggml_mul(ctx, neg, neg_scale));
+        ggml_tensor * penalized = ggml_sub(ctx, ggml_mul(ctx, x, scale), offset);
+
+        logits_rows = ggml_set_rows(ctx, logits_rows, penalized, sctx->inp_token_ids);
+        data->logits = ggml_reshape_1d(ctx, logits_rows, ggml_nelements(logits));
+        return;
+    }
+
+    sctx->inp_counts = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, sctx->n_max);
+    ggml_set_name(sctx->inp_counts, "penalties_counts");
+    ggml_set_input(sctx->inp_counts);
+
     ggml_tensor * gathered = logits;
     ggml_tensor * counts_f32 = ggml_cast(ctx, sctx->inp_counts, GGML_TYPE_F32);
 
-    if (sctx->has_candidates) {
-        ggml_tensor * candidates = ggml_reshape_1d(
-                ctx, data->candidates, ggml_nelements(data->candidates));
-        const int64_t n_candidates = candidates->ne[0];
-        GGML_ASSERT(n_candidates == ggml_nelements(logits));
+    ggml_tensor * candidates = ggml_reshape_1d(
+            ctx, data->candidates, ggml_nelements(data->candidates));
+    const int64_t n_candidates = candidates->ne[0];
+    GGML_ASSERT(n_candidates == ggml_nelements(logits));
 
-        ggml_tensor * counts_rows = ggml_fill(
-                ctx, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, sctx->n_vocab), 0.0f);
-        ggml_tensor * scatter_rows = ggml_reshape_2d(ctx, counts_f32, 1, sctx->n_max);
-        counts_rows = ggml_set_rows(ctx, counts_rows, scatter_rows, sctx->inp_token_ids);
-        counts_f32 = ggml_get_rows(ctx, counts_rows, candidates);
-        counts_f32 = ggml_reshape_1d(ctx, counts_f32, n_candidates);
-    } else {
-        ggml_tensor * logits_rows = ggml_reshape_2d(ctx, logits, 1, ggml_nelements(logits));
-        gathered = ggml_get_rows(ctx, logits_rows, sctx->inp_token_ids);
-        gathered = ggml_reshape_1d(ctx, gathered, sctx->n_max);
-    }
+    ggml_tensor * counts_rows = ggml_fill(
+            ctx, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, sctx->n_vocab), 0.0f);
+    ggml_tensor * scatter_rows = ggml_reshape_2d(ctx, counts_f32, 1, sctx->n_max);
+    counts_rows = ggml_set_rows(ctx, counts_rows, scatter_rows, sctx->inp_token_ids);
+    counts_f32 = ggml_get_rows(ctx, counts_rows, candidates);
+    counts_f32 = ggml_reshape_1d(ctx, counts_f32, n_candidates);
 
     ggml_tensor * active_mask = ggml_step(ctx, counts_f32);
     ggml_tensor * inactive_mask = ggml_sub(ctx, ggml_fill(ctx, active_mask, 1.0f), active_mask);
@@ -3117,20 +3145,13 @@ static void llama_sampler_penalties_backend_apply(
         penalized = ggml_sub(ctx, penalized, penalty_present);
     }
 
-    if (sctx->has_candidates) {
-        data->logits = penalized;
-    } else {
-        ggml_tensor * logits_rows = ggml_reshape_2d(ctx, logits, 1, ggml_nelements(logits));
-        ggml_tensor * scatter_rows = ggml_reshape_2d(ctx, penalized, 1, sctx->n_max);
-        logits_rows = ggml_set_rows(ctx, logits_rows, scatter_rows, sctx->inp_token_ids);
-        data->logits = ggml_reshape_1d(ctx, logits_rows, ggml_nelements(logits));
-    }
+    data->logits = penalized;
 }
 
 static void llama_sampler_penalties_backend_set_input(struct llama_sampler * smpl) {
     auto * sctx = (llama_sampler_penalties *) smpl->ctx;
 
-    if (!sctx->inp_token_ids || !sctx->inp_counts || sctx->n_max <= 0 || sctx->n_vocab <= 0) {
+    if (!sctx->inp_token_ids || (!sctx->inp_counts && !sctx->inp_coefs) || sctx->n_max <= 0 || sctx->n_vocab <= 0) {
         return;
     }
 
@@ -3183,13 +3204,33 @@ static void llama_sampler_penalties_backend_set_input(struct llama_sampler * smp
     }
 
     ggml_backend_tensor_set(sctx->inp_token_ids, sctx->host_token_ids.data(), 0, sctx->n_max * sizeof(int32_t));
-    ggml_backend_tensor_set(sctx->inp_counts,    sctx->host_counts.data(),    0, sctx->n_max * sizeof(int32_t));
+
+    if (sctx->inp_counts) {
+        ggml_backend_tensor_set(sctx->inp_counts, sctx->host_counts.data(), 0, sctx->n_max * sizeof(int32_t));
+        return;
+    }
+
+    // padding entries get the identity: scale 1, offset 0
+    float * pos_scale = sctx->host_coefs.data();
+    float * neg_scale = pos_scale + sctx->n_max;
+    float * offset    = neg_scale + sctx->n_max;
+
+    for (int32_t i = 0; i < sctx->n_max; ++i) {
+        const int32_t count = sctx->host_counts[i];
+
+        pos_scale[i] = count > 0 ? 1.0f/sctx->penalty_repeat : 1.0f;
+        neg_scale[i] = count > 0 ? sctx->penalty_repeat      : 1.0f;
+        offset   [i] = float(count) * sctx->penalty_freq + float(count > 0) * sctx->penalty_present;
+    }
+
+    ggml_backend_tensor_set(sctx->inp_coefs, sctx->host_coefs.data(), 0, 3 * sctx->n_max * sizeof(float));
 }
 
 static void llama_sampler_penalties_backend_reset(struct llama_sampler * smpl) {
     auto * sctx = (llama_sampler_penalties *) smpl->ctx;
     sctx->inp_token_ids = nullptr;
     sctx->inp_counts    = nullptr;
+    sctx->inp_coefs     = nullptr;
 }
 
 static struct llama_sampler_i llama_sampler_penalties_i = {
