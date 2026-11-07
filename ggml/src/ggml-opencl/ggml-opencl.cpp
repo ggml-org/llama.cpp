@@ -856,6 +856,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_sigmoid_f32_nc, kernel_sigmoid_f16_nc;
     cl_kernel kernel_tri;
     cl_kernel kernel_fill;
+    cl_kernel kernel_arange;
     cl_kernel kernel_clamp, kernel_clamp_nc;
     cl_kernel kernel_geglu, kernel_reglu, kernel_swiglu, kernel_swiglu_oai, kernel_swiglu_clamp, kernel_geglu_erf,
               kernel_geglu_quick, kernel_geglu_f16, kernel_reglu_f16, kernel_swiglu_f16, kernel_swiglu_clamp_f16,
@@ -1110,7 +1111,7 @@ struct ggml_backend_opencl_context {
     size_t local_dsv4_hc_pre = 0;
     size_t local_dsv4_hc_post[2] = {};
     cl_kernel kernel_cumsum_blk, kernel_cumsum_add;
-    cl_kernel kernel_repeat_f32;
+    cl_kernel kernel_repeat_f32, kernel_repeat_f16, kernel_repeat_i32;
     cl_kernel kernel_pad;
     cl_kernel kernel_tanh_f32, kernel_tanh_f32_4, kernel_tanh_f32_nc;
     cl_kernel kernel_tanh_f16, kernel_tanh_f16_4, kernel_tanh_f16_nc;
@@ -2043,6 +2044,24 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
         CL_CHECK((backend_ctx->kernel_fill = clCreateKernel(prog, "kernel_fill_f32", &err), err));
+        GGML_LOG_CONT(".");
+
+        CL_CHECK(clReleaseProgram(prog));
+    }
+
+    // arange
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "arange.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("arange.cl");
+#endif
+        cl_program prog =
+            build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
+
+        CL_CHECK((backend_ctx->kernel_arange = clCreateKernel(prog, "kernel_arange_f32", &err), err));
         GGML_LOG_CONT(".");
 
         CL_CHECK(clReleaseProgram(prog));
@@ -4345,6 +4364,8 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
         CL_CHECK((backend_ctx->kernel_repeat_f32 = clCreateKernel(prog, "kernel_repeat_f32", &err), err));
+        CL_CHECK((backend_ctx->kernel_repeat_f16 = clCreateKernel(prog, "kernel_repeat_f16", &err), err));
+        CL_CHECK((backend_ctx->kernel_repeat_i32 = clCreateKernel(prog, "kernel_repeat_i32", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -11790,6 +11811,8 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
             return op->type == GGML_TYPE_F32 && ggml_is_contiguous(op);
         case GGML_OP_FILL:
             return op->type == GGML_TYPE_F32 && ggml_is_contiguous(op);
+        case GGML_OP_ARANGE:
+            return op->type == GGML_TYPE_F32;
         case GGML_OP_CLAMP:
             return op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_SOFT_MAX:
@@ -11800,7 +11823,16 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
         case GGML_OP_L2_NORM:
             return ggml_is_contiguous_rows(op->src[0]);
         case GGML_OP_REPEAT:
-            return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32; // Assuming F32 for now, can be expanded
+            switch (op->type) {
+                case GGML_TYPE_F32:
+                case GGML_TYPE_F16:
+                case GGML_TYPE_I32:
+                case GGML_TYPE_I16:
+                case GGML_TYPE_BF16:
+                    return op->src[0]->type == op->type;
+                default:
+                    return false;
+            }
         case GGML_OP_PAD:
             // TODO: add circular padding support for opencl, see https://github.com/ggml-org/llama.cpp/pull/16985
             if (ggml_get_op_params_i32(op, 8) != 0) {
@@ -19582,6 +19614,40 @@ static void ggml_cl_fill(ggml_backend_t backend, const ggml_tensor * src0, const
     backend_ctx->enqueue_ndrange_kernel(kernel, 1, global_work_size, local_work_size, dst);
 }
 
+static void ggml_cl_arange(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    GGML_ASSERT(dst);
+    GGML_ASSERT(dst->extra);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+
+    UNUSED(src0);
+    UNUSED(src1);
+
+    ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
+
+    ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
+    cl_ulong offsetd = extrad->offset + dst->view_offs;
+
+    float start;
+    float step;
+    memcpy(&start, (float *) dst->op_params + 0, sizeof(float));
+    memcpy(&step,  (float *) dst->op_params + 2, sizeof(float));
+
+    const int n = dst->ne[0];
+
+    cl_kernel kernel = backend_ctx->kernel_arange;
+
+    CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extrad->data_device));
+    CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong), &offsetd));
+    CL_CHECK(clSetKernelArg(kernel, 2, sizeof(int),      &n));
+    CL_CHECK(clSetKernelArg(kernel, 3, sizeof(float),    &start));
+    CL_CHECK(clSetKernelArg(kernel, 4, sizeof(float),    &step));
+
+    size_t local_work_size[1] = { 64 };
+    size_t global_work_size[1] = { ((size_t)n + local_work_size[0] - 1) / local_work_size[0] * local_work_size[0] };
+
+    backend_ctx->enqueue_ndrange_kernel(kernel, 1, global_work_size, local_work_size, dst);
+}
+
 static void ggml_cl_clamp(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     GGML_ASSERT(src0);
     GGML_ASSERT(src0->extra);
@@ -20819,7 +20885,22 @@ static void ggml_cl_repeat(ggml_backend_t backend, const ggml_tensor * src0, con
     const cl_ulong nb2 = dst->nb[2];
     const cl_ulong nb3 = dst->nb[3];
 
-    cl_kernel kernel = backend_ctx->kernel_repeat_f32;
+    cl_kernel kernel;
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            kernel = backend_ctx->kernel_repeat_f32;
+            break;
+        case GGML_TYPE_F16:
+        case GGML_TYPE_I16:
+        case GGML_TYPE_BF16:
+            kernel = backend_ctx->kernel_repeat_f16;
+            break;
+        case GGML_TYPE_I32:
+            kernel = backend_ctx->kernel_repeat_i32;
+            break;
+        default:
+            GGML_ABORT("unsupported type");
+    }
 
     CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->data_device));
     CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong), &offset0));
@@ -38622,6 +38703,12 @@ bool ggml_cl_compute_forward(ggml_backend_t backend, struct ggml_tensor * tensor
                 return false;
             }
             func = ggml_cl_fill;
+            break;
+        case GGML_OP_ARANGE:
+            if (!any_on_device) {
+                return false;
+            }
+            func = ggml_cl_arange;
             break;
         case GGML_OP_CLAMP:
             if (!any_on_device) {
