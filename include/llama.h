@@ -1064,6 +1064,9 @@ extern "C" {
                                                int32_t   idx,
                                      struct llama_embd   embd);
 
+    // Query the expected state embedding row width for this batch (0 if the context takes no state)
+    LLAMA_API size_t llama_batch_ext_get_n_embd_state(const struct llama_batch_ext * batch);
+
     // Set if output embeddings should be available for the token at index idx in the batch
     // Note: for now, this is equivalent to setting the output logits
     LLAMA_API bool llama_batch_ext_set_output_embd(
