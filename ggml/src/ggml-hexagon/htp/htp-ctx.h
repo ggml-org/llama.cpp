@@ -17,14 +17,6 @@
 #include <stdbool.h>
 #include <string.h>
 
-#ifndef HTP_MAX_NTHREADS
-#define HTP_MAX_NTHREADS 12
-#endif
-
-#ifndef HTP_MAX_NHVX
-#define HTP_MAX_NHVX 8
-#endif
-
 #define HTP_MAX_MMAPS 64
 
 // Memory mapping

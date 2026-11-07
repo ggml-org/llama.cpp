@@ -463,7 +463,7 @@ struct htp_sort_chunk_ctx {
     size_t                                phase1_slot_size;
     float *                               merge_values;
     int32_t *                             merge_indices;
-    uint32_t                              real_count[HTP_MAX_NHVX];
+    uint32_t                              real_count[HTP_OP_MAX_NHVX];
 };
 
 static void htp_sort_chunk_job(const htp_thread_t * th, unsigned int n, unsigned int i, void * data) {

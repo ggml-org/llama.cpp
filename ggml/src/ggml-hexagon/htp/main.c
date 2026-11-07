@@ -1305,7 +1305,7 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
     const uint32_t t_size = sizeof(struct htp_tensor)    * n_tens;
     const uint32_t o_size = sizeof(struct htp_op_desc)   * n_ops;
     const uint32_t p_size = sizeof(struct htp_prof_desc) * n_ops;
-    const uint32_t tr_size = HTP_MAX_NTHREADS * req->n_traces * sizeof(struct htp_trace_desc);
+    const uint32_t tr_size = ctx->n_threads * req->n_traces * sizeof(struct htp_trace_desc);
 
     if (dbuf->size < b_size + t_size + o_size + p_size + tr_size) {
         FARF(ERROR, "invalid opbatch memory block size %u (req %u)", dbuf->size, b_size + t_size + o_size + p_size + tr_size);
@@ -1328,7 +1328,7 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
     memset(ctx->trace, 0, sizeof(ctx->trace));
     if (ctx->profiler == HTP_PROF_TRACE) {
         struct htp_trace_desc * trace_events = (struct htp_trace_desc *) (m_ptr + p_size);
-        for (int t = 0; t < HTP_MAX_NTHREADS; t++) {
+        for (uint32_t t = 0; t < ctx->n_threads; t++) {
             ctx->trace[t].events     = &trace_events[t * req->n_traces];
             ctx->trace[t].max_events = req->n_traces;
         }
@@ -1408,7 +1408,7 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
     rsp.cycles_stop  = batch_prof.cycles_stop;
 
     if (ctx->profiler == HTP_PROF_TRACE) {
-        for (int t = 0; t < HTP_MAX_NTHREADS; t++) {
+        for (uint32_t t = 0; t < ctx->n_threads; t++) {
             rsp.n_traces[t] = ctx->trace[t].count;
         }
     }

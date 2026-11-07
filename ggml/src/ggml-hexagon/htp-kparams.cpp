@@ -2009,13 +2009,13 @@ static bool htp_kparams_solve_sum_rows(
 
     if (op->op == GGML_OP_SUM) {
         const uint32_t total_elems = (uint32_t) ggml_nelements(src0);
-        const uint32_t n_hvx   = (total_elems >= 1024) ? (std::min)(max_hvx_sess, (uint32_t) HTP_MAX_NTHREADS) : 1;
+        const uint32_t n_hvx       = (total_elems >= 1024) ? max_hvx_sess : 1;
         const uint32_t raw_chunk   = (total_elems + n_hvx - 1) / n_hvx;
 
         kparams->n_hvx        = n_hvx;
         kparams->elems_per_hvx = hex_round_up(raw_chunk, 32);
     } else if (op->op == GGML_OP_ARGMAX && src0_nrows <= 1) {
-        const uint32_t n_hvx = (ne00 >= 1024) ? (std::min)(max_hvx_sess, (uint32_t) HTP_MAX_NTHREADS) : 1;
+        const uint32_t n_hvx     = (ne00 >= 1024) ? max_hvx_sess : 1;
         const uint32_t raw_chunk = (ne00 + n_hvx - 1) / n_hvx;
 
         kparams->n_hvx        = n_hvx;

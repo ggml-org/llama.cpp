@@ -242,10 +242,11 @@ static void ggml_hexagon_dump_batch_prof(const char * sess_name, const htp_opbat
 
     char evt_str[256] = "----";
     if (opt_profile == 3) {
-        snprintf(evt_str, sizeof(evt_str), "evt-cnt %u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u",
+        static_assert(HTP_OP_MAX_NTHREADS == 10, "current implementation assumes 10 trace counters");
+        snprintf(evt_str, sizeof(evt_str), "evt-cnt %u,%u,%u,%u,%u,%u,%u,%u,%u,%u",
                 rsp.n_traces[0], rsp.n_traces[1], rsp.n_traces[2], rsp.n_traces[3],
                 rsp.n_traces[4], rsp.n_traces[5], rsp.n_traces[6], rsp.n_traces[7],
-                rsp.n_traces[8], rsp.n_traces[9], rsp.n_traces[10], rsp.n_traces[11]);
+                rsp.n_traces[8], rsp.n_traces[9]);
     }
 
     GGML_LOG_DEBUG("ggml-hex: %s profile-op OPBATCH|----|n-ops %u|%s|----|----|usec %u cycles %llu start %llu mhz %.1f\n",
@@ -253,16 +254,11 @@ static void ggml_hexagon_dump_batch_prof(const char * sess_name, const htp_opbat
 }
 
 static void ggml_hexagon_dump_trace_events(const char * sess_name, const htp_opbatch_rsp & rsp,
-                                           const htp_trace_desc * trace_events, uint32_t n_traces) {
+                                           const htp_trace_desc * trace_events, uint32_t n_threads, uint32_t n_traces) {
     if (opt_profile == 3 && trace_events) {
-        uint32_t valid_cnt[HTP_MAX_NTHREADS] = {0};
-        for (uint32_t t = 0; t < HTP_MAX_NTHREADS; t++) {
-            uint32_t count = rsp.n_traces[t];
-            valid_cnt[t] = count > n_traces ? n_traces : count;
-        }
-
-        for (uint32_t t = 0; t < HTP_MAX_NTHREADS; t++) {
-            for (uint32_t idx = 0; idx < valid_cnt[t]; idx++) {
+        for (uint32_t t = 0; t < n_threads; t++) {
+            uint32_t count = std::min(rsp.n_traces[t], n_traces);
+            for (uint32_t idx = 0; idx < count; idx++) {
                 const auto & e = trace_events[t * n_traces + idx];
                 bool is_stop = (e.info & 0x8000) != 0;
                 uint16_t info = e.info & 0x7FFF;
@@ -1547,7 +1543,7 @@ struct ggml_hexagon_opqueue {
 
         size_t tr_size = 0;
         if (opt_profile == 3) {
-            tr_size = HTP_MAX_NTHREADS * opt_optrace * sizeof(htp_trace_desc);
+            tr_size = sess->n_threads * opt_optrace * sizeof(htp_trace_desc);
         }
 
         shm_blk_size = sizeof(htp_buf_desc)  * n_bufs    +
@@ -1602,7 +1598,7 @@ struct ggml_hexagon_opqueue {
         size_t tr_size = 0;
         if (opt_profile == 3) {
             req.n_traces = opt_optrace;
-            tr_size = HTP_MAX_NTHREADS * req.n_traces * sizeof(htp_trace_desc);
+            tr_size = shm_buf->sess->n_threads * req.n_traces * sizeof(htp_trace_desc);
         } else {
             req.n_traces = 0;
         }
@@ -1657,7 +1653,7 @@ struct ggml_hexagon_opqueue {
         uint32_t n_traces = 0;
         if (opt_profile == 3) {
             n_traces = opt_optrace;
-            tr_size = HTP_MAX_NTHREADS * n_traces * sizeof(htp_trace_desc);
+            tr_size = shm_buf->sess->n_threads * n_traces * sizeof(htp_trace_desc);
         }
 
         const size_t m_size = b_size + t_size + o_size + p_size + tr_size;
@@ -1686,7 +1682,7 @@ struct ggml_hexagon_opqueue {
                 ggml_hexagon_dump_op_prof(shm_buf->sess->c_name(), ops[i], pd[i]);
             }
 
-            ggml_hexagon_dump_trace_events(shm_buf->sess->c_name(), rsp, trace_events, n_traces);
+            ggml_hexagon_dump_trace_events(shm_buf->sess->c_name(), rsp, trace_events, shm_buf->sess->n_threads, n_traces);
         }
     }
 };
@@ -2162,8 +2158,8 @@ void ggml_hexagon_session::allocate(const ggml_hexagon_device_config & config) n
         unsigned long long hw_vtcm_size = 0;
         int hw_err = htp_iface_hwinfo(this->handle, &hw_n_threads, &hw_n_hvx, &hw_n_hmx, &hw_vtcm_size);
         if (hw_err == 0) {
-            this->n_threads          = (std::min)((uint32_t) HTP_MAX_NTHREADS, (uint32_t) hw_n_threads);
-            const uint32_t max_n_hvx = (std::min)({this->n_threads - 1, (uint32_t) hw_n_hvx, (uint32_t) HTP_MAX_NHVX});
+            this->n_threads          = (std::min)((uint32_t) HTP_OP_MAX_NTHREADS, (uint32_t) hw_n_threads);
+            const uint32_t max_n_hvx = (std::min)({this->n_threads - 1, (uint32_t) hw_n_hvx, (uint32_t) HTP_OP_MAX_NHVX});
             this->n_hvx              = opt_nhvx > 0 ? (uint32_t) (std::min)(opt_nhvx, (size_t) max_n_hvx) : max_n_hvx;
             this->n_hmx              = (opt_nhmx != 0) ? (uint32_t)hw_n_hmx : 0;
             this->vtcm_size          = (uint64_t)hw_vtcm_size;
@@ -2178,8 +2174,8 @@ void ggml_hexagon_session::allocate(const ggml_hexagon_device_config & config) n
                           (unsigned long long)(this->vtcm_size / (1024 * 1024)));
         } else {
             GGML_LOG_WARN("ggml-hex: %s failed to query hwinfo (0x%x), using defaults\n", this->c_name(), hw_err);
-            this->n_threads          = (std::min)(8u, (uint32_t) HTP_MAX_NTHREADS);
-            const uint32_t max_n_hvx = (std::min)(this->n_threads - 1, (uint32_t) HTP_MAX_NHVX);
+            this->n_threads          = (std::min)(8u, (uint32_t) HTP_OP_MAX_NTHREADS);
+            const uint32_t max_n_hvx = (std::min)(this->n_threads - 1, (uint32_t) HTP_OP_MAX_NHVX);
             this->n_hvx              = opt_nhvx > 0 ? (uint32_t) (std::min)(opt_nhvx, (size_t) max_n_hvx) : (std::min)(4u, max_n_hvx);
             this->n_hmx              = (opt_nhmx != 0) ? 1 : 0;
             this->vtcm_size          = opt_vtcm_size > 0 ? opt_vtcm_size : 8 * 1024 * 1024;
