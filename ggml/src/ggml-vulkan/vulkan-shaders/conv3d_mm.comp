@@ -112,6 +112,8 @@ const uint warps_M     = BS_K / WM;
 const uint warps_N     = BS_NPQ / WN;
 #endif
 
+layout(constant_id = 22) const uint split_k = 1;
+
 // without padding, ID_idx/IH_idx/IW_idx are in bounds by construction
 const bool dhw_in_bounds = (p0 == 0) && (p1 == 0) && (p2 == 0);
 
@@ -170,8 +172,11 @@ D,R,S=KD,KH,KW
 Z,P,Q=OD,OH,OW
 */
 
-uint32_t B_idx_K   = gl_WorkGroupID.x;
+// Packing splits into the low bits would avoid runtime division, but adjacent channel tiles give better input cache reuse.
+uint32_t B_idx_K   = split_k > 1 ? gl_WorkGroupID.x % splitWork(K, BS_K) : gl_WorkGroupID.x;
+uint32_t B_idx_split = split_k > 1 ? gl_WorkGroupID.x / splitWork(K, BS_K) : 0;
 uint32_t B_idx_NPQ = gl_WorkGroupID.y + gl_WorkGroupID.z * 512;
+uint32_t split_offset = B_idx_split * K * NPQ;
 
 uint32_t T_y = tid / NT_NPQ;
 uint32_t T_x = tid % NT_NPQ;
@@ -219,7 +224,7 @@ ACC_TYPE perElemOpStore(const in uint32_t r, const in uint32_t c, const in ACC_T
     split_npq(NPQ_idx, N_idx, OD_idx, OH_idx, OW_idx);
     uint32_t dst_idx = OW_idx + OH_idx * p.nb1 + OD_idx * p.nb2 + (N_idx * p.OC + K_idx) * p.nb3;
     if (aligned != 0 || (K_idx < K && NPQ_idx < NPQ)) {
-        dst_data[dst_idx + p.dst_offset] = D_TYPE(elem);
+        dst_data[dst_idx + p.dst_offset + split_offset] = D_TYPE(elem);
     }
     return elem;
 }
@@ -249,7 +254,11 @@ void main() {
     }
 #endif
     /* Advance block in CRS dim */
-    [[dont_unroll]] for (uint32_t B_idx_CRS = 0; B_idx_CRS < NB_CRS; B_idx_CRS++) {
+    const uint32_t crs_count = NB_CRS / split_k;
+    const uint32_t crs_extra = NB_CRS % split_k;
+    const uint32_t crs_begin = B_idx_split * crs_count + min(B_idx_split, crs_extra);
+    const uint32_t crs_end = crs_begin + crs_count + uint32_t(B_idx_split < crs_extra);
+    [[dont_unroll]] for (uint32_t B_idx_CRS = crs_begin; B_idx_CRS < crs_end; B_idx_CRS++) {
         uint32_t CRS_idx_a = B_idx_CRS * BS_CRS + Ac;
         uint32_t IC_idx_a;
         uint32_t KD_idx_a;
@@ -398,7 +407,7 @@ void main() {
             split_npq(NPQ_idx, N_idx, OD_idx, OH_idx, OW_idx);
             uint32_t dst_idx = OW_idx + OH_idx * p.nb1 + OD_idx * p.nb2 + (N_idx * p.OC + K_idx) * p.nb3;
             if (aligned != 0 || (K_idx < K && NPQ_idx < NPQ)) {
-                dst_data[dst_idx + p.dst_offset] = D_TYPE(Csh[k_local * Csh_stride + npq_thread]);
+                dst_data[dst_idx + p.dst_offset + split_offset] = D_TYPE(Csh[k_local * Csh_stride + npq_thread]);
             }
         }
     }
@@ -420,7 +429,7 @@ void main() {
                 split_npq(NPQ_idx, N_idx, OD_idx, OH_idx, OW_idx);
                 uint32_t dst_idx = OW_idx + OH_idx * p.nb1 + OD_idx * p.nb2 + (N_idx * p.OC + K_idx) * p.nb3;
                 if (aligned != 0 || (K_idx < K && NPQ_idx < NPQ)) {
-                    dst_data[dst_idx + p.dst_offset] = D_TYPE(regC[T_ly][T_lx]);
+                    dst_data[dst_idx + p.dst_offset + split_offset] = D_TYPE(regC[T_ly][T_lx]);
                 }
             }
         }
