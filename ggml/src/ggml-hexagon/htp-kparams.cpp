@@ -286,7 +286,7 @@ static bool htp_flash_attn_is_hmx_eligible(
     const struct ggml_tensor * v,
     const struct ggml_tensor * sinks
 ) {
-    if (htp_session_n_hmx(sess) == 0 || opt_fa_select < 2) {
+    if (htp_session_n_hmx(sess) == 0 || opt_fa_select < 2 || !htp_session_hmx_fp16(sess)) {
         return false;
     }
 
@@ -558,7 +558,7 @@ static bool htp_kparams_solve_gated_delta_net(
     const size_t   vtcm_size  = htp_session_vtcm_size(sess);
 
     const bool can_use_hmx = (opt_gdn_select >= 2) &&
-                             (htp_session_n_hmx(sess) > 0) &&
+                             (htp_session_n_hmx(sess) > 0) && htp_session_hmx_fp16(sess) &&
                              (S_v % 64 == 0) &&
                              (n_tokens >= HTP_GDN_MIN_TOKENS) &&
                              (g->ne[0] == 1) &&
@@ -904,7 +904,8 @@ static bool htp_kparams_solve_matmul_impl(
     const bool   is_batched   = (ne02 * ne03 > 1 || ne12 * ne13 > 1);
     const size_t vtcm_budget  = htp_session_vtcm_size(sess);
 
-    const bool hmx_enabled = (htp_session_n_hmx(sess) > 0) && (opt_mm_select >= 2);
+    const bool hmx_enabled = (htp_session_n_hmx(sess) > 0) && (opt_mm_select >= 2) &&
+                             (htp_session_hmx_fp16(sess) || (wtype == GGML_TYPE_Q4_0 && !is_matmul_id));
     if (hmx_enabled && htp_matmul_is_hmx_eligible(src0, src1, dst, is_matmul_id, is_batched)) {
         if (htp_kparams_solve_hmx_mm(sess, src0, src1, dst, wtype, ne00_padded, ne01_tiled, ne02, ne11, ne12, ne11_padded, is_matmul_id, is_batched, src2_size, vtcm_budget, kparams)) {
             goto finalize;
@@ -1117,7 +1118,7 @@ bool htp_kparams_solve_mmnx(
     const int  ne01_tiled  = hex_round_up(ne01, 32);
     const bool is_batched  = (ne02 * ne03 > 1 || ne12 * ne13 > 1);
 
-    const bool hmx_enabled = (n_hmx > 0) && (opt_mm_select >= 2);
+    const bool hmx_enabled = (n_hmx > 0) && (opt_mm_select >= 2) && (htp_session_hmx_fp16(sess) || wtype == GGML_TYPE_Q4_0);
     if (hmx_enabled && htp_matmul_is_hmx_eligible(src0, act, nullptr, false, is_batched)) {
         if (htp_kparams_solve_hmx_mm(sess, src0, act, nullptr, wtype, ne00_padded, ne01_tiled, ne02, ne11, ne12, ne11_padded, false, is_batched, 0, vtcm_budget, kparams)) {
             kparams->n_weights = n_weights;
@@ -3819,7 +3820,7 @@ static bool htp_kparams_conv2d_win(
     const struct ggml_tensor * dst,
     struct htp_conv2d_kernel_params * kp
 ) {
-    if (htp_session_n_hmx(sess) == 0) {
+    if (htp_session_n_hmx(sess) == 0 || !htp_session_hmx_fp16(sess)) {
         return false;
     }
 
@@ -4125,7 +4126,7 @@ static bool htp_kparams_conv2d_tiled(
     const struct ggml_tensor * dst,
     struct htp_conv2d_kernel_params * kp
 ) {
-    if (htp_session_n_hmx(sess) == 0) {
+    if (htp_session_n_hmx(sess) == 0 || !htp_session_hmx_fp16(sess)) {
         return false;
     }
 
@@ -5071,7 +5072,7 @@ static bool htp_kparams_solve_lightning_indexer_impl(
     kparams->div_n_head = init_fastdiv_values(n_head);
     kparams->div_m_ne3  = init_fastdiv_values((uint32_t) m->ne[3]);
 
-    if (opt_li_select >= 2 && htp_session_n_hmx(sess) > 0 && D % HMX_FP16_TILE_N_COLS == 0) {
+    if (opt_li_select >= 2 && htp_session_n_hmx(sess) > 0 && htp_session_hmx_fp16(sess) && D % HMX_FP16_TILE_N_COLS == 0) {
         const uint32_t n_threads = htp_session_n_threads(sess);
         const uint32_t n_stream  = q->ne[3];
         const uint32_t n_dot     = D / HMX_FP16_TILE_N_COLS;
