@@ -3,11 +3,13 @@
 #include "clip-model.h"
 #include "clip-graph.h"
 #include "models/models.h"
+#include "mtmd-audio.h"
 
 #include "ggml.h"
 #include "ggml-cpp.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
+#include "ggml-cpu.h"
 #include "gguf.h"
 
 #include <algorithm>
@@ -17,6 +19,7 @@
 #include <cstring>
 #include <fstream>
 #include <map>
+#include <memory>
 #include <random>
 #include <stdexcept>
 #include <unordered_set>
@@ -144,6 +147,38 @@ static void clip_image_convert_f32_to_u8(const clip_image_f32& src, clip_image_u
 #endif
 
 
+// ggml_backend_cpu_set_n_threads(backend_cpu, n_threads);
+static void clip_backend_cpu_set_n_threads(ggml_backend_t backend_cpu, int n_threads) {
+    ggml_backend_dev_t dev = ggml_backend_get_device(backend_cpu);
+    ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
+    if (reg) {
+        auto ggml_backend_set_n_threads_fn = (ggml_backend_set_n_threads_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads");
+        if (ggml_backend_set_n_threads_fn) {
+            ggml_backend_set_n_threads_fn(backend_cpu, n_threads);
+        }
+    }
+}
+
+static std::shared_ptr<ggml_threadpool> clip_threadpool_init(int n_threads) {
+    ggml_backend_dev_t dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
+    if (!reg || n_threads < 2) {
+        return nullptr;
+    }
+    auto * new_fn  = (decltype(ggml_threadpool_new) *)  ggml_backend_reg_get_proc_address(reg, "ggml_threadpool_new");
+    auto * free_fn = (decltype(ggml_threadpool_free) *) ggml_backend_reg_get_proc_address(reg, "ggml_threadpool_free");
+    if (!new_fn || !free_fn) {
+        return nullptr;
+    }
+    ggml_threadpool_params tpp = ggml_threadpool_params_default(n_threads);
+    tpp.poll = 0; // the pool is idle most of the time, don't take CPU away from the text model
+    ggml_threadpool_t threadpool = new_fn(&tpp);
+    if (!threadpool) {
+        throw std::runtime_error("failed to create threadpool");
+    }
+    return std::shared_ptr<ggml_threadpool>(threadpool, free_fn);
+}
+
 struct clip_ctx {
     clip_model model;
 
@@ -154,6 +189,8 @@ struct clip_ctx {
 
     std::vector<ggml_backend_t> backend_ptrs;
     std::vector<ggml_backend_buffer_type_t> backend_buft;
+
+    std::shared_ptr<ggml_threadpool> threadpool; // shared by the contexts of a model
 
     ggml_backend_t backend = nullptr;
     ggml_backend_t backend_cpu = nullptr;
@@ -174,12 +211,19 @@ struct clip_ctx {
 
     bool support_batch = false;
 
-    clip_ctx(clip_context_params & ctx_params) {
+    clip_ctx(clip_context_params & ctx_params, std::shared_ptr<ggml_threadpool> threadpool) : threadpool(std::move(threadpool)) {
         flash_attn_type = ctx_params.flash_attn_type;
         no_alloc = ctx_params.no_alloc;
         backend_cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
         if (!backend_cpu) {
             throw std::runtime_error("failed to initialize CPU backend");
+        }
+        if (this->threadpool) {
+            ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend_cpu));
+            auto * set_threadpool_fn = (decltype(ggml_backend_cpu_set_threadpool) *) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cpu_set_threadpool");
+            if (set_threadpool_fn) {
+                set_threadpool_fn(backend_cpu, this->threadpool.get());
+            }
         }
         if (ctx_params.use_gpu) {
             if (ctx_params.device != nullptr) {
@@ -5100,6 +5144,9 @@ struct clip_init_result clip_init(const char * fname, struct clip_context_params
     clip_ctx * ctx_audio = nullptr;
     clip_ctx * ctx_gen_audio = nullptr;
 
+    // no_alloc only measures memory, nothing is computed
+    std::shared_ptr<ggml_threadpool> threadpool = clip_threadpool_init(ctx_params.no_alloc ? 1 : ctx_params.n_threads);
+
     try {
         clip_model_loader loader(fname,
             /* skip_tensors */ false,
@@ -5108,7 +5155,7 @@ struct clip_init_result clip_init(const char * fname, struct clip_context_params
         bool skip_audio = false;
 
         if (loader.has_vision) {
-            ctx_vision = new clip_ctx(ctx_params);
+            ctx_vision = new clip_ctx(ctx_params, threadpool);
             loader.load_hparams(ctx_vision->model, CLIP_MODALITY_VISION);
             loader.load_tensors(*ctx_vision);
             loader.init_ctx(*ctx_vision);
@@ -5122,7 +5169,7 @@ struct clip_init_result clip_init(const char * fname, struct clip_context_params
         }
 
         if (loader.has_audio && !skip_audio) {
-            ctx_audio = new clip_ctx(ctx_params);
+            ctx_audio = new clip_ctx(ctx_params, threadpool);
             loader.load_hparams(ctx_audio->model, CLIP_MODALITY_AUDIO);
             loader.load_tensors(*ctx_audio);
             loader.init_ctx(*ctx_audio);
@@ -5132,7 +5179,7 @@ struct clip_init_result clip_init(const char * fname, struct clip_context_params
         }
 
         if (loader.has_gen_audio) {
-            ctx_gen_audio = new clip_ctx(ctx_params);
+            ctx_gen_audio = new clip_ctx(ctx_params, threadpool);
             loader.load_hparams(ctx_gen_audio->model, CLIP_MODALITY_GEN_AUDIO);
             // TODO: CUDA has no flash attention kernel for the depthformer head dim 32, enable it once it does
             if (ctx_gen_audio->model.proj_type == PROJECTOR_TYPE_LFM3A_GEN && ctx_gen_audio->flash_attn_type == CLIP_FLASH_ATTN_TYPE_AUTO) {
@@ -5606,6 +5653,90 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
     n_patches += (int) clip_suffix_rows(img->suffix_type).size();
 
     return n_patches;
+}
+
+ggml_backend_t clip_get_backend_cpu(const struct clip_ctx * ctx) {
+    return ctx->backend_cpu;
+}
+
+bool clip_audio_log_mel(const mtmd_audio_mel_config & config, const float * samples, const float * window, int64_t n_frames, float * out) {
+    ggml_backend_t backend_cpu = config.backend_cpu;
+    clip_backend_cpu_set_n_threads(backend_cpu, std::max(1, config.n_threads));
+
+    const auto &  filters    = config.cache->filters.data;
+    const int64_t n_fft_bins = config.n_fft_bins;
+    const int64_t frame_size = (n_fft_bins - 1) * 2;
+    const int64_t n_mel      = config.n_mel;
+    GGML_ASSERT(filters.size() == (size_t) (n_mel * n_fft_bins));
+
+    // the spectrum is several times larger than the result, so long audio is processed in blocks
+    const int64_t n_frames_max = 8192;
+
+    for (int64_t off = 0; off < n_frames; off += n_frames_max) {
+        const int64_t n_cur = std::min(n_frames_max, n_frames - off);
+
+        ggml_init_params params = {
+            /*.mem_size   =*/ ggml_tensor_overhead() * 16 + ggml_graph_overhead(),
+            /*.mem_buffer =*/ nullptr,
+            /*.no_alloc   =*/ true,
+        };
+        ggml_context_ptr ctx_ptr(ggml_init(params));
+        ggml_context * ctx0 = ctx_ptr.get();
+
+        ggml_tensor * inp_samples = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, (n_cur - 1) * config.hop_length + frame_size);
+        ggml_tensor * inp_window  = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, frame_size);
+        ggml_tensor * inp_filters = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_fft_bins, n_mel);
+        ggml_set_input(inp_samples);
+        ggml_set_input(inp_window);
+        ggml_set_input(inp_filters);
+
+        ggml_tensor * args[] = { inp_samples, inp_window };
+        ggml_tensor * cur = ggml_custom_4d(ctx0, GGML_TYPE_F32, 2 * n_fft_bins, n_cur, 1, 1, args, 2,
+                                           mtmd_audio_stft_op, GGML_N_TASKS_MAX, (void *) &config);
+
+        cur = ggml_sqr(ctx0, cur);
+        cur = ggml_add(ctx0,
+                ggml_view_2d(ctx0, cur, n_fft_bins, n_cur, cur->nb[1], 0),
+                ggml_view_2d(ctx0, cur, n_fft_bins, n_cur, cur->nb[1], n_fft_bins * ggml_element_size(cur)));
+        if (config.use_magnitude) {
+            cur = ggml_sqrt(ctx0, cur);
+        }
+
+        cur = ggml_mul_mat(ctx0, cur, inp_filters); // [n_cur, n_mel]
+        cur = config.mel_floor_add
+            ? ggml_scale_bias(ctx0, cur, 1.0f, config.mel_floor)
+            : ggml_clamp(ctx0, cur, config.mel_floor, FLT_MAX);
+        cur = ggml_log(ctx0, cur);
+        if (!config.use_natural_log) {
+            cur = ggml_scale(ctx0, cur, 1.0f / logf(10.0f));
+        }
+        ggml_set_output(cur);
+
+        ggml_cgraph * gf = ggml_new_graph(ctx0);
+        ggml_build_forward_expand(gf, cur);
+
+        ggml_gallocr_ptr galloc(ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend_cpu)));
+        if (!ggml_gallocr_alloc_graph(galloc.get(), gf)) {
+            LOG_ERR("%s: failed to allocate compute graph\n", __func__);
+            return false;
+        }
+
+        ggml_backend_tensor_set(inp_samples, samples + off * config.hop_length, 0, ggml_nbytes(inp_samples));
+        ggml_backend_tensor_set(inp_window,  window,                            0, ggml_nbytes(inp_window));
+        ggml_backend_tensor_set(inp_filters, filters.data(),                    0, ggml_nbytes(inp_filters));
+
+        auto status = ggml_backend_graph_compute(backend_cpu, gf);
+        if (status != GGML_STATUS_SUCCESS) {
+            LOG_ERR("%s: ggml_backend_graph_compute failed with error %d\n", __func__, status);
+            return false;
+        }
+
+        for (int64_t j = 0; j < n_mel; j++) {
+            ggml_backend_tensor_get(cur, out + j * n_frames + off, j * cur->nb[1], n_cur * ggml_element_size(cur));
+        }
+    }
+
+    return true;
 }
 
 bool clip_image_encode(struct clip_ctx * ctx, int n_threads, const clip_image_f32 * img, std::vector<float> & out_vec) {
@@ -7520,15 +7651,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
             GGML_ABORT("Unknown projector type");
     }
 
-    // ggml_backend_cpu_set_n_threads(ctx->backend_cpu, n_threads);
-    ggml_backend_dev_t dev = ggml_backend_get_device(ctx->backend_cpu);
-    ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
-    if (reg) {
-        auto ggml_backend_set_n_threads_fn = (ggml_backend_set_n_threads_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads");
-        if (ggml_backend_set_n_threads_fn) {
-            ggml_backend_set_n_threads_fn(ctx->backend_cpu, params->n_threads);
-        }
-    }
+    clip_backend_cpu_set_n_threads(ctx->backend_cpu, params->n_threads);
 
     auto status = ggml_backend_sched_graph_compute(ctx->sched.get(), gf);
     if (status != GGML_STATUS_SUCCESS) {
