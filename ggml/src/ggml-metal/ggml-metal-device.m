@@ -1696,7 +1696,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
             return has_simdgroup_reduction && (ggml_is_contiguous_rows(op->src[0]));
         case GGML_OP_ROPE:
         case GGML_OP_ROPE_BACK:
-            return true;
+            return ggml_rope_get_truncate(op);
         case GGML_OP_IM2COL:
             return ggml_is_contiguous(op->src[1]) && op->src[1]->type == GGML_TYPE_F32 && (op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_F32);
         case GGML_OP_CONV_2D:
@@ -1727,6 +1727,39 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_ROLL:
             return ggml_is_contiguous(op->src[0]);
         case GGML_OP_FLASH_ATTN_EXT:
+            // K/V row lists (ggml_flash_attn_ext_rows): one list of cache rows per q slice
+            if (op->src[5] != NULL) {
+                const struct ggml_tensor * kv_rows = op->src[5];
+
+                if (kv_rows->type != GGML_TYPE_I32 ||
+                    !ggml_is_contiguous(kv_rows) ||
+                    kv_rows->ne[2] != 1 || kv_rows->ne[3] != 1 ||
+                    kv_rows->ne[1] != op->src[0]->ne[3] ||
+                    !op->src[3] || op->src[1]->ne[3] != 1 || op->src[2]->ne[3] != 1) {
+                    return false;
+                }
+
+                // the non-vec kernels attend over a contiguous F16 copy of the referenced rows:
+                // - F16 K/V is gathered directly
+                // - quantized K/V is first dequantized with kernel_flash_attn_ext_kv_*_f16
+                // - other types keep attending to the whole cache (dense mask)
+                switch (op->src[1]->type) {
+                    case GGML_TYPE_F16:
+                    case GGML_TYPE_Q4_0:
+                    case GGML_TYPE_Q4_1:
+                    case GGML_TYPE_Q5_0:
+                    case GGML_TYPE_Q5_1:
+                    case GGML_TYPE_Q8_0:
+                        break;
+                    default:
+                        return false;
+                }
+
+                // the row gather copies F16 values in groups of 4
+                if (op->src[2]->ne[0] % 4 != 0) {
+                    return false;
+                }
+            }
             // for new head sizes, add checks here
             if (op->src[0]->ne[0] != 32 &&
                 op->src[0]->ne[0] != 40 &&
@@ -2106,19 +2139,11 @@ static void ggml_metal_buffer_rset_free(ggml_metal_buffer_t buf) {
 static void * ggml_metal_host_malloc(size_t n) {
     void * data = NULL;
 
-#if TARGET_OS_OSX
     kern_return_t err = vm_allocate((vm_map_t) mach_task_self(), (void *) &data, n, VM_FLAGS_ANYWHERE);
     if (err != KERN_SUCCESS) {
         GGML_LOG_ERROR("%s: error: vm_allocate failed\n", __func__);
         return NULL;
     }
-#else
-    const int result = posix_memalign((void **) &data, sysconf(_SC_PAGESIZE), n);
-    if (result != 0) {
-        GGML_LOG_ERROR("%s: error: posix_memalign failed\n", __func__);
-        return NULL;
-    }
-#endif
 
     return data;
 }
@@ -2300,11 +2325,7 @@ void ggml_metal_buffer_free(ggml_metal_buffer_t buf) {
     }
 
     if (buf->is_shared && buf->owned) {
-#if TARGET_OS_OSX
         vm_deallocate((vm_map_t)mach_task_self(), (vm_address_t)buf->all_data, buf->all_size);
-#else
-        free(buf->all_data);
-#endif
     }
 
     free(buf);
