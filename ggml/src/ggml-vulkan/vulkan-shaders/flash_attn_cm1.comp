@@ -22,6 +22,9 @@
 #include "flash_attn_dequant.glsl"
 #endif
 
+// query tokens per GQA row tile; 1 = one token per tile
+layout (constant_id = 16) const uint32_t GQA_TOK = 1;
+
 // These need to be supported N,M values for a MatBc x MatBr x 16 coopmatmuladd
 const uint32_t MatBr = 16;
 const uint32_t MatBc = 16;
@@ -62,6 +65,17 @@ shared O_TYPEV4 pvsh[MatBc * osh_stride];
 
 shared ACC_TYPE slope[Br];
 
+// GQA_TOK > 1: tile row r holds token gqa_iq1 * GQA_TOK + r / gqa_ratio and head iq2 + r % gqa_ratio
+uint32_t row_tok(const in uint32_t r) {
+    return gqa_iq1 * GQA_TOK + r / p.gqa_ratio;
+}
+uint32_t row_head(const in uint32_t r) {
+    return iq2 + r % p.gqa_ratio;
+}
+bool row_valid(const in uint32_t r) {
+    return r < N && row_tok(r) < p.ne2;
+}
+
 void main() {
 #ifdef NEEDS_INIT_IQ_SHMEM
     if (fa_type_needs_shmem(FaTypeK) || fa_type_needs_shmem(FaTypeV)) {
@@ -97,7 +111,13 @@ void main() {
         uint32_t r = (idx + tid) / (HSK / 4);
         if (r < Br && d < HSK / 4 &&
             i * Br + r < N) {
-            Qf[r * qstride + d] = FLOAT_TYPEV4(data_qv4[q_offset / 4 + (i * Br + r) * q_stride / 4 + d] * p.scale);
+            if (GQA_TOK > 1) {
+                if (row_valid(r)) {
+                    Qf[r * qstride + d] = FLOAT_TYPEV4(data_qv4[(row_tok(r) * p.nb01 + (row_head(r) * p.nb02 + iq3 * p.nb03) / 4) / 4 + d] * p.scale);
+                }
+            } else {
+                Qf[r * qstride + d] = FLOAT_TYPEV4(data_qv4[q_offset / 4 + (i * Br + r) * q_stride / 4 + d] * p.scale);
+            }
         }
     }
     barrier();
@@ -139,10 +159,18 @@ void main() {
     // FaBlockBytesK/V == 2 for f16 (sizeof f16) and == 16 for f32 (vec4) and == ggml block size for quants.
     uint32_t k_offset = (ik2*p.nb12 + ik3*p.nb13) / FaBlockBytesK;
     uint32_t v_offset = (iv2*p.nb22 + iv3*p.nb23) / FaBlockBytesV;
-    uint32_t m_offset = gqa_iq1*KV;
+    uint32_t m_offset = (GQA_TOK > 1 ? 0u : gqa_iq1)*KV;
     if (p.nem2 != 1 || p.nem3 != 1) {
         m_offset += ((iq3 % p.nem3) * p.nem2 + (iq2 % p.nem2)) * p.nem1 * KV;
         mo_offset += ((iq3 % p.nem3) * p.nem2 + (iq2 % p.nem2)) * CEIL_DIV(p.nem1, Br) * mo_stride;
+    }
+
+    // GQA_TOK > 1: mask row of each row in this thread's 4-row mask group (the group is tid % (Br / 4) for every idx)
+    uint32_t fold_m_offset[4];
+    if (GQA_TOK > 1) {
+        [[unroll]] for (uint32_t k = 0; k < 4; ++k) {
+            fold_m_offset[k] = m_offset + min(row_tok((tid % (Br / 4)) * 4 + k), p.nem1 - 1) * KV;
+        }
     }
 
     uint32_t mask_opt = 0;
@@ -180,7 +208,13 @@ void main() {
                         bool kv_active = fa_kv_index(j * Bc + c, kcol);
                         if (kv_active) {
                             f16vec4 m;
-                            if (USE_SPARSE) {
+                            if (GQA_TOK > 1) {
+                                m = f16vec4(data_m[fold_m_offset[0] + (j * Bc + c)],
+                                            data_m[fold_m_offset[1] + (j * Bc + c)],
+                                            data_m[fold_m_offset[2] + (j * Bc + c)],
+                                            data_m[fold_m_offset[3] + (j * Bc + c)]);
+                                max_mask = max(max(max(max(max_mask, float(m[0])), float(m[1])), float(m[2])), float(m[3]));
+                            } else if (USE_SPARSE) {
                                 // sparse is gqa-gated (m_stride == 0): all four rows share the value
                                 FLOAT_TYPE mv = FLOAT_TYPE(data_m[m_offset + kcol]);
                                 m = f16vec4(mv);
@@ -550,7 +584,7 @@ void main() {
     // If there is split_k, then the split_k resolve shader does the final
     // division by L. Store the intermediate O value and per-row m and L values.
     if (p.k_num > 1) {
-        if (p.gqa_ratio > 1) {
+        if (p.gqa_ratio > 1 && GQA_TOK == 1) {
             // note: O and Q have swapped coord 1,2.
             uint32_t o_offset = HSV * p.ne1 * (split_k_index + p.k_num * (gqa_iq1 + p.ne2 * iq3)) / 4;
 
@@ -575,22 +609,24 @@ void main() {
         } else {
             [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
                 const uint row = tile_row(r);
-                const uint global_row = i * Br + row;
+                const uint global_row = GQA_TOK > 1 ? row_tok(row) : i * Br + row;
+                const uint head = GQA_TOK > 1 ? row_head(row) : iq2;
+                const bool row_ok = GQA_TOK > 1 ? row_valid(row) : global_row < N;
 
-                if (global_row < N) {
+                if (row_ok) {
                     uint32_t o_offset = HSV * p.ne1 * (split_k_index + p.k_num * (global_row + p.ne2 * iq3)) / 4;
 
                     [[unroll]] for (uint32_t d0 = 0; d0 < HSV / 4; d0 += threads_per_rowgroup) {
                         const uint d = d0 + col_tid;
                         if (d >= HSV/4) break;
-                        data_ov4[o_offset + iq2 * HSV/4 + d] = D_TYPEV4(Of[r][d/threads_per_rowgroup]);
+                        data_ov4[o_offset + head * HSV/4 + d] = D_TYPEV4(Of[r][d/threads_per_rowgroup]);
                     }
                 }
 
-                if (global_row < N && col_tid == 0) {
+                if (row_ok && col_tid == 0) {
                     uint32_t lm_offset = HSV * p.ne1 * p.k_num * p.ne2 * p.ne3 + p.ne1 * 2 * (split_k_index + p.k_num * (global_row + p.ne2 * iq3));
-                    data_o[lm_offset + iq2] = D_TYPE(Lf[r]);
-                    data_o[lm_offset + p.ne1 + iq2] = D_TYPE(Mf[r]);
+                    data_o[lm_offset + head] = D_TYPE(Lf[r]);
+                    data_o[lm_offset + p.ne1 + head] = D_TYPE(Mf[r]);
                 }
             }
         }
@@ -635,9 +671,9 @@ void main() {
         }
     }
 
-    uint32_t o_offset = (gqa_iq1*p.ne1*HSV + iq3*p.ne2*p.ne1*HSV) / 4;
+    uint32_t o_offset = ((GQA_TOK > 1 ? 0u : gqa_iq1)*p.ne1*HSV + iq3*p.ne2*p.ne1*HSV) / 4;
 
-    if (p.gqa_ratio > 1) {
+    if (p.gqa_ratio > 1 && GQA_TOK == 1) {
         [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
             if (tile_row(r) < N) {
                 [[unroll]] for (uint32_t d0 = 0; d0 < HSV / 4; d0 += threads_per_rowgroup) {
@@ -650,12 +686,15 @@ void main() {
         }
     } else {
         [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
-            if (i * Br + tile_row(r) < N) {
+            const uint row = tile_row(r);
+            const uint global_row = GQA_TOK > 1 ? row_tok(row) : i * Br + row;
+            const uint head = GQA_TOK > 1 ? row_head(row) : iq2;
+            if (GQA_TOK > 1 ? row_valid(row) : global_row < N) {
                 [[unroll]] for (uint32_t d0 = 0; d0 < HSV / 4; d0 += threads_per_rowgroup) {
                     const uint d = d0 + col_tid;
                     if (d >= HSV / 4) break;
                     const uint d_local = d0 / threads_per_rowgroup;
-                    data_ov4[o_offset + (iq2 * HSV + (i * Br + tile_row(r)) * p.ne1 * HSV) / 4 + d] = D_TYPEV4(Of[r][d_local]);
+                    data_ov4[o_offset + (head * HSV + global_row * p.ne1 * HSV) / 4 + d] = D_TYPEV4(Of[r][d_local]);
                 }
             }
         }
