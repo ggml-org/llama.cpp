@@ -240,14 +240,21 @@ static const char * cu_get_error_str(CUresult err) {
 #define CU_CHECK(err) CUDA_CHECK_GEN(err, CUDA_SUCCESS, cu_get_error_str)
 #endif
 
+// Kernel attributes belong to the CUDA context. ggml_backend_release_device_memory() can destroy
+// and recreate that context, so state that outlives it is keyed by this generation.
+uint64_t ggml_cuda_context_generation();
+
 #if !defined(GGML_USE_HIP)
 #    define CUDA_SET_SHARED_MEMORY_LIMIT(kernel, nbytes)                                                       \
         do {                                                                                                   \
-            static bool shared_memory_limit_raised[GGML_CUDA_MAX_DEVICES] = { false };                         \
-            const int   id                                                = ggml_cuda_get_device();            \
-            if (!shared_memory_limit_raised[id]) {                                                             \
+            static bool     shared_memory_limit_raised[GGML_CUDA_MAX_DEVICES] = { false };                     \
+            static uint64_t shared_memory_limit_generation[GGML_CUDA_MAX_DEVICES] = { 0 };                     \
+            const int      id         = ggml_cuda_get_device();                                                \
+            const uint64_t generation = ggml_cuda_context_generation();                                        \
+            if (!shared_memory_limit_raised[id] || shared_memory_limit_generation[id] != generation) {         \
                 CUDA_CHECK(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, nbytes)); \
-                shared_memory_limit_raised[id] = true;                                                         \
+                shared_memory_limit_raised[id]     = true;                                                     \
+                shared_memory_limit_generation[id] = generation;                                               \
             }                                                                                                  \
         } while (0)
 #else

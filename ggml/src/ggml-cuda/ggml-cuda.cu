@@ -437,6 +437,25 @@ const ggml_cuda_device_info & ggml_cuda_info() {
     return info;
 }
 
+static std::atomic<uint64_t> g_cuda_context_generation{0};
+
+uint64_t ggml_cuda_context_generation() {
+    return g_cuda_context_generation.load(std::memory_order_relaxed);
+}
+
+// Called after the primary context of a device was destroyed: per-context state has to be
+// re-established before the next context is created.
+static void ggml_cuda_reset_context_state(int device) {
+    g_cuda_context_generation.fetch_add(1, std::memory_order_relaxed);
+
+    // cudaSetDeviceFlags() is per-context state; re-arm the cc12.1 spinning schedule that
+    // ggml_cuda_init() applies.
+    if (ggml_cuda_info().devices[device].cc == GGML_CUDA_CC_DGX_SPARK) {
+        ggml_cuda_set_device(device);
+        CUDA_CHECK(cudaSetDeviceFlags(cudaDeviceScheduleSpin));
+    }
+}
+
 // #define DEBUG_CUDA_MALLOC
 
 // buffer pool for cuda (legacy)
@@ -6531,7 +6550,17 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t 
     GGML_UNUSED(reg);
 }
 
+static void ggml_backend_cuda_release_device_memory(ggml_backend_dev_t dev) {
+    ggml_backend_cuda_device_context * ctx = (ggml_backend_cuda_device_context *) dev->context;
+    ggml_cuda_set_device(ctx->device);
+    CUDA_CHECK(cudaDeviceReset());
+    ggml_cuda_reset_context_state(ctx->device);
+}
+
 static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
+    if (strcmp(name, "ggml_backend_release_device_memory") == 0) {
+        return (void *) ggml_backend_cuda_release_device_memory;
+    }
     GGML_UNUSED(reg);
     if (strcmp(name, "ggml_backend_comm_init") == 0) {
         return (void *)ggml_backend_cuda_comm_init;

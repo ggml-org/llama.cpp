@@ -2928,7 +2928,8 @@ static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const
 }
 
 void ggml_backend_rpc_start_server(const char * endpoint, const char * cache_dir,
-                                   size_t n_threads, size_t n_devices, ggml_backend_dev_t * devices) {
+                                   size_t n_threads, size_t n_devices, ggml_backend_dev_t * devices,
+                                   bool release_after_client) {
     if (n_devices == 0 || devices == nullptr) {
         LOG_ERROR("Invalid arguments to ggml_backend_rpc_start_server\n");
         return;
@@ -2947,19 +2948,30 @@ void ggml_backend_rpc_start_server(const char * endpoint, const char * cache_dir
         ggml_backend_dev_memory(dev, &free, &total);
         LOG_INFO("  %s: %s (%zu MiB, %zu MiB free)\n", ggml_backend_dev_name(dev), ggml_backend_dev_description(dev),
                  total / 1024 / 1024, free / 1024 / 1024);
-        auto backend = ggml_backend_dev_init(dev, nullptr);
-        if (!backend) {
-            LOG_ERROR("Failed to create backend for device %s\n", dev->iface.get_name(dev));
-            return;
-        }
-        backends.push_back(backend);
-        ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
-        if (reg) {
-            auto ggml_backend_set_n_threads_fn = (ggml_backend_set_n_threads_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads");
-            if (ggml_backend_set_n_threads_fn) {
-                ggml_backend_set_n_threads_fn(backend, n_threads);
+    }
+
+    auto init_backends = [&]() -> bool {
+        for (size_t i = 0; i < n_devices; i++) {
+            auto dev = devices[i];
+            auto backend = ggml_backend_dev_init(dev, nullptr);
+            if (!backend) {
+                LOG_ERROR("Failed to create backend for device %s\n", dev->iface.get_name(dev));
+                return false;
+            }
+            backends.push_back(backend);
+            ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
+            if (reg) {
+                auto ggml_backend_set_n_threads_fn = (ggml_backend_set_n_threads_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads");
+                if (ggml_backend_set_n_threads_fn) {
+                    ggml_backend_set_n_threads_fn(backend, n_threads);
+                }
             }
         }
+        return true;
+    };
+
+    if (!init_backends()) {
+        return;
     }
 
     std::string host;
@@ -2989,8 +3001,28 @@ void ggml_backend_rpc_start_server(const char * endpoint, const char * cache_dir
             return;
         }
         LOG_INFO("Accepted client connection\n");
+        if (backends.empty() && !init_backends()) {
+            return;
+        }
         rpc_serve_client(backends, cache_dir, client_socket);
         LOG_INFO("Client connection closed\n");
+        if (release_after_client) {
+            for (auto backend : backends) {
+                ggml_backend_free(backend);
+            }
+            backends.clear();
+            for (size_t i = 0; i < n_devices; i++) {
+                ggml_backend_reg_t reg = devices[i] ? ggml_backend_dev_backend_reg(devices[i]) : nullptr;
+                if (!reg) {
+                    continue;
+                }
+                auto release_fn = (void (*)(ggml_backend_dev_t)) ggml_backend_reg_get_proc_address(reg, "ggml_backend_release_device_memory");
+                if (release_fn) {
+                    release_fn(devices[i]);
+                }
+            }
+            LOG_INFO("Released device memory; the backend is re-created on the next connection\n");
+        }
     }
     rpc_transport_shutdown();
     for (auto backend : backends) {

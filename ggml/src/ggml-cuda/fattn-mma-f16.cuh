@@ -2070,19 +2070,25 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
                 fattn_kernel = flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, use_logit_softcap, V_is_K_view, use_sparse_kernel>;
                 use_sparse = true;
 
-                static bool shared_memory_limit_raised[GGML_CUDA_MAX_DEVICES] = {false};
-                if (!shared_memory_limit_raised[id]) {
+                static bool     shared_memory_limit_raised[GGML_CUDA_MAX_DEVICES] = {false};
+                static uint64_t shared_memory_limit_generation[GGML_CUDA_MAX_DEVICES] = {0};
+                const uint64_t generation = ggml_cuda_context_generation();
+                if (!shared_memory_limit_raised[id] || shared_memory_limit_generation[id] != generation) {
                     CUDA_CHECK(cudaFuncSetAttribute(reinterpret_cast<fattn_kernel_ptr_t>(fattn_kernel), cudaFuncAttributeMaxDynamicSharedMemorySize, nbytes_shared_total));
-                    shared_memory_limit_raised[id] = true;
+                    shared_memory_limit_raised[id]     = true;
+                    shared_memory_limit_generation[id] = generation;
                 }
             } else {
                 constexpr bool use_sparse_kernel = false;
                 fattn_kernel = flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, use_logit_softcap, V_is_K_view, use_sparse_kernel>;
 
-                static bool shared_memory_limit_raised[GGML_CUDA_MAX_DEVICES] = {false};
-                if (!shared_memory_limit_raised[id]) {
+                static bool     shared_memory_limit_raised[GGML_CUDA_MAX_DEVICES] = {false};
+                static uint64_t shared_memory_limit_generation[GGML_CUDA_MAX_DEVICES] = {0};
+                const uint64_t generation = ggml_cuda_context_generation();
+                if (!shared_memory_limit_raised[id] || shared_memory_limit_generation[id] != generation) {
                     CUDA_CHECK(cudaFuncSetAttribute(reinterpret_cast<fattn_kernel_ptr_t>(fattn_kernel), cudaFuncAttributeMaxDynamicSharedMemorySize, nbytes_shared_total));
-                    shared_memory_limit_raised[id] = true;
+                    shared_memory_limit_raised[id]     = true;
+                    shared_memory_limit_generation[id] = generation;
                 }
             }
         } else
@@ -2091,10 +2097,13 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
             constexpr bool use_sparse_kernel = false;
             fattn_kernel = flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, use_logit_softcap, V_is_K_view, use_sparse_kernel>;
 
-            static bool shared_memory_limit_raised[GGML_CUDA_MAX_DEVICES] = {false};
-            if (!shared_memory_limit_raised[id]) {
+            static bool     shared_memory_limit_raised[GGML_CUDA_MAX_DEVICES] = {false};
+            static uint64_t shared_memory_limit_generation[GGML_CUDA_MAX_DEVICES] = {0};
+            const uint64_t generation = ggml_cuda_context_generation();
+            if (!shared_memory_limit_raised[id] || shared_memory_limit_generation[id] != generation) {
                 CUDA_CHECK(cudaFuncSetAttribute(reinterpret_cast<fattn_kernel_ptr_t>(fattn_kernel), cudaFuncAttributeMaxDynamicSharedMemorySize, nbytes_shared_total));
-                shared_memory_limit_raised[id] = true;
+                shared_memory_limit_raised[id]     = true;
+                shared_memory_limit_generation[id] = generation;
             }
         }
     } else {
@@ -2102,10 +2111,13 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
         constexpr bool use_sparse_kernel = false;
         fattn_kernel = flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, use_logit_softcap, V_is_K_view, use_sparse_kernel>;
 
-        static bool shared_memory_limit_raised[GGML_CUDA_MAX_DEVICES] = {false};
-        if (!shared_memory_limit_raised[id]) {
+        static bool     shared_memory_limit_raised[GGML_CUDA_MAX_DEVICES] = {false};
+        static uint64_t shared_memory_limit_generation[GGML_CUDA_MAX_DEVICES] = {0};
+        const uint64_t generation = ggml_cuda_context_generation();
+        if (!shared_memory_limit_raised[id] || shared_memory_limit_generation[id] != generation) {
             CUDA_CHECK(cudaFuncSetAttribute(reinterpret_cast<fattn_kernel_ptr_t>(fattn_kernel), cudaFuncAttributeMaxDynamicSharedMemorySize, nbytes_shared_total));
-            shared_memory_limit_raised[id] = true;
+            shared_memory_limit_raised[id]     = true;
+            shared_memory_limit_generation[id] = generation;
         }
     }
 
