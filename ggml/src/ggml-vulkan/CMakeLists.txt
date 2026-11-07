@@ -43,7 +43,17 @@ function(test_shader_extension_support EXTENSION_NAME TEST_SHADER_FILE RESULT_VA
     )
 
     if (${glslc_error} MATCHES ".*extension not supported: ${EXTENSION_NAME}.*")
-        message(STATUS "${EXTENSION_NAME} not supported by glslc")
+        # This is not fatal, but it silently compiles out a whole GPU code path. For
+        # GL_EXT_integer_dot_product in particular that disables the integer-dot MMVQ
+        # mat-vec shaders, so every quantized model falls back to the slower dequantize
+        # mat-vec -- a large token-generation slowdown (observed ~10x on an Arc Pro B70
+        # with a 1.72-bit model) with no other indication. Warn loudly and point at the
+        # cause so it is diagnosable.
+        message(WARNING
+            "${EXTENSION_NAME} is not supported by glslc (${Vulkan_GLSLC_EXECUTABLE}); "
+            "the associated Vulkan shader path (${RESULT_VARIABLE}) will be DISABLED. "
+            "If this is GL_EXT_integer_dot_product, quantized mat-vec loses the MMVQ path "
+            "and falls back to the slower dequantize path. Upgrade shaderc/glslc to enable it.")
         set(${RESULT_VARIABLE} OFF PARENT_SCOPE)
     else()
         message(STATUS "${EXTENSION_NAME} supported by glslc")
