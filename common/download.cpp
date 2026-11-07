@@ -7,6 +7,7 @@
 #include "file-lock.h"
 #include "hf-cache.h"
 #include "json.h"
+#include "ms-cache.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -578,14 +579,15 @@ static int extract_quant_bits(const std::string & filename) {
     return std::stoi(split.tag.substr(pos));
 }
 
-static hf_cache::hf_files get_split_files(const hf_cache::hf_files & files,
-                                          const hf_cache::hf_file  & file) {
+template <class File>
+static std::vector<File> get_split_files(const std::vector<File> & files,
+                                         const File              & file) {
     auto split = get_gguf_split_info(file.path);
 
     if (split.count <= 1) {
         return {file};
     }
-    hf_cache::hf_files result;
+    std::vector<File> result;
 
     for (const auto & f : files) {
         auto split_f = get_gguf_split_info(f.path);
@@ -599,11 +601,12 @@ static hf_cache::hf_files get_split_files(const hf_cache::hf_files & files,
 // pick the best sibling GGUF whose filename contains `keyword` (e.g. "mmproj" / "mtp"),
 // preferring deeper shared directory prefix with the model, then exact `tag` match,
 // then closest quantization to the tag when given, or to the model otherwise
-static hf_cache::hf_file find_best_sibling(const hf_cache::hf_files & files,
-                                           const std::string        & model,
-                                           const std::string        & keyword,
-                                           const std::string        & tag = "") {
-    hf_cache::hf_file best;
+template <class File>
+static File find_best_sibling(const std::vector<File> & files,
+                              const std::string       & model,
+                              const std::string       & keyword,
+                              const std::string       & tag = "") {
+    File best;
     size_t best_depth = 0;
     int best_diff = 0;
     bool best_exact = false;
@@ -713,6 +716,33 @@ std::vector<common_download_partial> common_download_plan_partials(const common_
     return out;
 }
 
+template <class File>
+static File find_best_mmproj(const std::vector<File> & files,
+                             const std::string       & model) {
+    return find_best_sibling(files, model, "mmproj");
+}
+
+template <class File>
+static File find_best_mtp(const std::vector<File> & files,
+                          const std::string       & model,
+                          const std::string       & tag = "") {
+    return find_best_sibling(files, model, "mtp-", tag);
+}
+
+template <class File>
+static File find_best_eagle3(const std::vector<File> & files,
+                             const std::string       & model,
+                             const std::string       & tag = "") {
+    return find_best_sibling(files, model, "eagle3-", tag);
+}
+
+template <class File>
+static File find_best_dflash(const std::vector<File> & files,
+                             const std::string       & model,
+                             const std::string       & tag = "") {
+    return find_best_sibling(files, model, "dflash-", tag);
+}
+
 // true when `name` carries the keyword of a sidecar kind
 static bool name_is_sidecar(const std::string & name) {
     for (const auto & s : sidecars) {
@@ -721,6 +751,13 @@ static bool name_is_sidecar(const std::string & name) {
         }
     }
     return false;
+}
+
+template <class File>
+static File find_best_dspark(const std::vector<File> & files,
+                             const std::string       & model,
+                             const std::string       & tag = "") {
+    return find_best_sibling(files, model, "dspark-", tag);
 }
 
 static bool gguf_filename_is_model(const std::string & filepath) {
@@ -736,8 +773,9 @@ static bool gguf_filename_is_model(const std::string & filepath) {
     return filename.find("imatrix") == std::string::npos && !name_is_sidecar(filename);
 }
 
-static hf_cache::hf_file find_best_model(const hf_cache::hf_files & files,
-                                         const std::string        & tag) {
+template <class File>
+static File find_best_model(const std::vector<File> & files,
+                            const std::string       & tag) {
     std::vector<std::string> tags;
 
     if (!tag.empty()) {
@@ -777,7 +815,8 @@ static hf_cache::hf_file find_best_model(const hf_cache::hf_files & files,
     return {};
 }
 
-static void list_available_gguf_files(const hf_cache::hf_files & files) {
+template <class File>
+static void list_available_gguf_files(const std::vector<File> & files) {
     LOG_INF("Available GGUF files:\n");
     for (const auto & f : files) {
         if (string_ends_with(f.path, ".gguf")) {
@@ -865,12 +904,87 @@ common_download_hf_plan common_download_get_hf_plan(const common_params_model & 
     return plan;
 }
 
+common_download_ms_plan common_download_get_ms_plan(const common_params_model & model, const common_download_opts & opts) {
+    common_download_ms_plan plan;
+    ms_cache::ms_files all;
+
+    auto [repo, tag] = common_download_split_repo_tag(model.ms_repo);
+
+    if (!opts.offline) {
+        all = ms_cache::get_repo_files(repo, opts.bearer_token);
+    }
+    if (all.empty()) {
+        all = ms_cache::get_cached_files(repo);
+    }
+    if (all.empty()) {
+        return plan;
+    }
+
+    ms_cache::ms_file primary;
+
+    if (!model.hf_file.empty()) {
+        for (const auto & f : all) {
+            if (f.path == model.hf_file) {
+                primary = f;
+                break;
+            }
+        }
+        if (primary.path.empty()) {
+            LOG_ERR("%s: file '%s' not found in repository\n", __func__, model.hf_file.c_str());
+            list_available_gguf_files(all);
+            return plan;
+        }
+    } else {
+        primary = find_best_model(all, tag);
+        // a requested draft can resolve on its own, without a full model of the same tag
+        const bool want_draft = std::any_of(sidecars.begin(), sidecars.end(), [&opts](const common_download_sidecar & s) {
+            return s.draft && opts.*s.opt;
+        });
+        if (primary.path.empty() && !want_draft) {
+            LOG_ERR("%s: no GGUF files found in repository %s\n", __func__, repo.c_str());
+            list_available_gguf_files(all);
+            return plan;
+        }
+    }
+
+    if (!primary.path.empty()) {
+        plan.primary = primary;
+        plan.model_files = get_split_files(all, primary);
+    }
+
+    // a draft resolves at the tag, the mmproj pairs with the model
+    if (opts.download_mmproj) {
+        plan.mmproj = find_best_mmproj(all, primary.path);
+    }
+    if (opts.download_mtp) {
+        plan.mtp = find_best_mtp(all, primary.path, tag);
+    }
+    if (opts.download_dflash) {
+        plan.dflash = find_best_dflash(all, primary.path, tag);
+    }
+    if (opts.download_eagle3) {
+        plan.eagle3 = find_best_eagle3(all, primary.path, tag);
+    }
+    if (opts.download_dspark) {
+        plan.dspark = find_best_dspark(all, primary.path, tag);
+    }
+
+    const bool has_draft = !plan.mtp.local_path.empty() || !plan.dflash.local_path.empty()
+                        || !plan.eagle3.local_path.empty() || !plan.dspark.local_path.empty();
+    if (primary.path.empty() && !has_draft) {
+        LOG_ERR("%s: no GGUF files found in repository %s\n", __func__, repo.c_str());
+        list_available_gguf_files(all);
+    }
+
+    return plan;
+}
+
 void common_download_run_tasks(const std::vector<common_download_task> & tasks) {
     std::vector<std::future<int>> futures;
     for (const auto & task : tasks) {
         futures.push_back(std::async(std::launch::async,
             [&task]() {
-                return common_download_file_single(task.url, task.local_path, task.opts, task.is_hf, task.lock_path, task.alt_path);
+                return common_download_file_single(task.url, task.local_path, task.opts, task.is_hf || task.is_ms, task.lock_path, task.alt_path);
             }
         ));
     }
@@ -1039,8 +1153,25 @@ std::vector<common_cached_model_info> common_list_cached_models() {
         if (!is_listed_model(split)) {
             continue;
         }
-        if (seen.insert(f.repo_id + ":" + split.tag).second) {
-            result.push_back({f.repo_id, split.tag});
+        if (seen.insert("hf:" + f.repo_id + ":" + split.tag).second) {
+            result.push_back({f.repo_id, split.tag, "hf"});
+        }
+    }
+
+    auto ms_files = ms_cache::get_cached_files();
+
+    for (const auto & f : ms_files) {
+        auto split = get_gguf_split_info(f.path);
+        if (split.index != 1 || split.tag.empty() ||
+            split.prefix.find("mmproj")  != std::string::npos ||
+            split.prefix.find("mtp-")    != std::string::npos ||
+            split.prefix.find("eagle3-") != std::string::npos ||
+            split.prefix.find("dflash-") != std::string::npos ||
+            split.prefix.find("dspark-") != std::string::npos) {
+            continue;
+        }
+        if (seen.insert("ms:" + f.repo_id + ":" + split.tag).second) {
+            result.push_back({f.repo_id, split.tag, "ms"});
         }
     }
 
@@ -1111,7 +1242,10 @@ bool common_download_remove(const std::string & hf_repo_with_tag) {
     auto [repo_id, tag] = common_download_split_repo_tag(hf_repo_with_tag);
 
     if (tag.empty()) {
-        return hf_cache::remove_cached_repo(repo_id);
+        if (hf_cache::remove_cached_repo(repo_id)) {
+            return true;
+        }
+        return ms_cache::remove_cached_repo(repo_id);
     }
 
     std::string tag_upper = tag;
@@ -1121,17 +1255,48 @@ bool common_download_remove(const std::string & hf_repo_with_tag) {
 
     auto files = hf_cache::get_cached_files(repo_id);
     if (files.empty()) {
-        return false;
+        // MS cache: remove the snapshot entries whose tag matches
+        auto ms_files = ms_cache::get_cached_files(repo_id);
+        if (ms_files.empty()) {
+            return false;
+        }
+        std::vector<fs::path> to_remove;
+        for (const auto & f : ms_files) {
+            auto split = get_gguf_split_info(f.path);
+            if (split.tag == tag_upper) {
+                to_remove.emplace_back(f.local_path);
+            }
+        }
+        if (to_remove.empty()) {
+            return false;
+        }
+        return remove_snapshot_entries(repo_id, to_remove);
     }
 
     // collect snapshot entries whose tag matches, but a file another tag loads stays
     const auto used = files_in_use(repo_id, tag_upper);
 
     std::vector<fs::path> to_remove;
+    bool hf_has_tag = false;
     for (const auto & f : files) {
         auto split = get_gguf_split_info(f.path);
-        if (split.tag == tag_upper && used.find(f.local_path) == used.end()) {
+        if (split.tag != tag_upper) {
+            continue;
+        }
+        hf_has_tag = true;
+        if (used.find(f.local_path) == used.end()) {
             to_remove.emplace_back(f.local_path);
+        }
+    }
+
+    // HF has no file of this tag: fall back to the MS cache
+    if (!hf_has_tag) {
+        auto ms_files = ms_cache::get_cached_files(repo_id);
+        for (const auto & f : ms_files) {
+            auto split = get_gguf_split_info(f.path);
+            if (split.tag == tag_upper) {
+                to_remove.emplace_back(f.local_path);
+            }
         }
     }
 
@@ -1172,17 +1337,22 @@ static bool remove_snapshot_entries(const std::string & repo_id, const std::vect
     }
 
     // collect blobs still referenced by remaining snapshot entries
+    // (check both caches: entries removed may live in the MS cache)
     std::unordered_set<std::string> still_referenced;
-    for (const auto & f : hf_cache::get_cached_files(repo_id)) {
-        fs::path p(f.local_path);
-        std::error_code ec;
-        if (fs::is_symlink(p, ec)) {
-            auto target = fs::read_symlink(p, ec);
-            if (!ec) {
-                still_referenced.insert((p.parent_path() / target).lexically_normal().string());
+    auto collect_refs = [&still_referenced](const auto & files) {
+        for (const auto & f : files) {
+            fs::path p(f.local_path);
+            std::error_code ec;
+            if (fs::is_symlink(p, ec)) {
+                auto target = fs::read_symlink(p, ec);
+                if (!ec) {
+                    still_referenced.insert((p.parent_path() / target).lexically_normal().string());
+                }
             }
         }
-    }
+    };
+    collect_refs(hf_cache::get_cached_files(repo_id));
+    collect_refs(ms_cache::get_cached_files(repo_id));
 
     // remove orphaned blobs
     for (const auto & blob : blobs_to_check) {

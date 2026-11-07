@@ -107,6 +107,7 @@ static server_role_type server_role_detect(const common_params & params, server_
     // a server given no model is a router
     const bool has_model = !params.model.path.empty()
                         || !params.model.hf_repo.empty()
+                        || !params.model.ms_repo.empty()
                         || !params.model.docker_repo.empty();
     return has_model ? SERVER_ROLE_INSTANCE : SERVER_ROLE_ROUTER;
 }
@@ -736,7 +737,7 @@ static int server_run(common_params & params, int argc, char ** argv, server_rol
     common_models_handler models_handler;
 
     // -hf may name a preset repo, which makes this a router: settle that before deciding the role
-    if (opts.resolve_model && !params.model.hf_repo.empty()) {
+    if (opts.resolve_model && (!params.model.hf_repo.empty() || !params.model.ms_repo.empty())) {
         try {
             models_handler = common_models_handler_init(params, LLAMA_EXAMPLE_SERVER);
             if (common_models_handler_is_preset_repo(models_handler)) {
