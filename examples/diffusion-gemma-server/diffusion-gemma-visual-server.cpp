@@ -79,7 +79,7 @@ static bool vis_step_callback(int32_t step, int32_t total_steps, const llama_tok
     const int64_t t0 = ggml_time_us();
     std::vector<llama_token> canvas(tokens + d->n_input, tokens + n_tokens);
     const std::string text = common_detokenize(d->vocab, canvas, /*special*/ false);
-    fprintf(d->out, "F %d %d %d %s\n", d->block, step, total_steps, common_json::make(text).dump().c_str());
+    fprintf(d->out, "F %d %d %d %s\n", d->block, step, total_steps, common_json::make(text).dump_safe().c_str());
     fflush(d->out);
     d->viz_us += ggml_time_us() - t0;
     return true;
@@ -365,7 +365,7 @@ int main(int argc, char ** argv) {
             answer.insert(answer.end(), canvas, canvas + cut);
             // special=true: keep the <|channel> markers so the client can split out the reasoning
             const std::string answer_text = common_detokenize(vocab, answer, /*special*/ true);
-            printf("C %d %s\n", b, common_json::make(answer_text).dump().c_str()); fflush(stdout);
+            printf("C %d %s\n", b, common_json::make(answer_text).dump_safe().c_str()); fflush(stdout);
             total_viz_us += ggml_time_us() - tc0;
 
             if (cut < (size_t) canvas_length) break;                 // eog / repetition loop: answer complete
