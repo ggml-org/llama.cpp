@@ -12,6 +12,7 @@
 #include <vector>
 #include <memory>
 #include <csignal>  // raise(SIGTRAP)
+#include <thread>
 #include <unistd.h>
 
 static void ggml_zdnn_compute_forward_mul_mat(
@@ -85,6 +86,15 @@ static enum ggml_status ggml_zdnn_graph_compute(ggml_backend_t backend, ggml_cgr
     GGML_UNUSED(ctx_dev);
 }
 
+static int64_t ggml_zdnn_mul_mat_min_batch(ggml_type type, int32_t n_threads) {
+    switch (type) {
+        case GGML_TYPE_Q8_0:
+            return std::max<int64_t>(1, n_threads - 2);
+        default:
+            return 1;
+    }
+}
+
 static bool ggml_zdnn_supports_op(const ggml_backend_zdnn_device_context * ctx_dev, const ggml_tensor * op) {
     switch (op->op) {
         case GGML_OP_NONE:
@@ -110,6 +120,11 @@ static bool ggml_zdnn_supports_op(const ggml_backend_zdnn_device_context * ctx_d
                     weights->view_src != nullptr ||
                     ne0 > max_batch || ne1 > max_batch || ne10 > max_batch) {
                         return false;
+                }
+
+                // offload smaller batches to the CPU
+                if (ne1 < ggml_zdnn_mul_mat_min_batch(weights->type, ctx_dev->n_threads)) {
+                    return false;
                 }
 
                 switch (weights->type) {
@@ -150,6 +165,7 @@ static ggml_backend_zdnn_device_context g_ggml_ctx_dev_main = {
     /* .has_parmblkformat_0   = */ false,
     /* .has_parmblkformat_1   = */ false,
     /* .max_size              = */ 0,
+    /* .n_threads             = */ 1,
     /* .name                  = */ "",
 };
 
@@ -164,6 +180,8 @@ static int ggml_backend_zdnn_device_acq(ggml_backend_zdnn_device_context * ctx) 
         ctx->has_parmblkformat_0 = zdnn_is_nnpa_parmblk_fmt_installed(1, NNPA_PARMBLKFORMAT_0);
         ctx->has_parmblkformat_1 = zdnn_is_nnpa_parmblk_fmt_installed(1, NNPA_PARMBLKFORMAT_1);
         ctx->max_size = zdnn_get_nnpa_max_dim_idx_size();
+        // llama.cpp uses every core by default, and splits the first graph before it sets the threads
+        ctx->n_threads = std::max<int32_t>(1, (int32_t)std::thread::hardware_concurrency());
         strncpy(ctx->name, GGML_ZDNN_NAME, sizeof(ctx->name) - 1);
     }
 
@@ -452,8 +470,7 @@ static size_t ggml_backend_zdnn_buffer_type_get_alignment(ggml_backend_buffer_ty
 }
 
 static bool ggml_backend_zdnn_buffer_type_is_host(ggml_backend_buffer_type_t buft) {
-    /* while it resides in host memory, additional transformation is needed */
-    return false;
+    return true;
 
     GGML_UNUSED(buft);
 }
@@ -673,6 +690,9 @@ static void ggml_backend_zdnn_set_n_threads(ggml_backend_t backend, int n_thread
 
     ggml_backend_zdnn_context * ctx = (ggml_backend_zdnn_context *)backend->context;
     ctx->n_threads = n_threads;
+
+    ggml_backend_zdnn_device_context * ctx_dev = (ggml_backend_zdnn_device_context *)backend->device->context;
+    ctx_dev->n_threads = n_threads;
 }
 
 static void * ggml_backend_zdnn_get_proc_address(ggml_backend_reg_t reg, const char * name) {
