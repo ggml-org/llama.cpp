@@ -12002,7 +12002,7 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
             return false;
         case GGML_OP_MUL_MAT_ID:
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
-            if (ggml_get_op_params_i32(op, 3) == GGML_PREC_F32 &&
+            if ((ggml_get_op_params_i32(op, 3) == GGML_PREC_BF16 || ggml_get_op_params_i32(op, 3) == GGML_PREC_F32) &&
                 use_adreno_moe_kernels(backend_ctx, op->src[0])) {
                 return false;
             }
