@@ -45,6 +45,7 @@ std::pair<std::string, std::string> common_download_split_repo_tag(const std::st
 struct common_cached_model_info {
     std::string repo;
     std::string tag;
+    std::string hf_file;
     std::string to_string() const {
         return repo + ":" + tag;
     }
