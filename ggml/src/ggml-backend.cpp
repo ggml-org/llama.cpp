@@ -72,7 +72,7 @@ static ggml_backend_buft_alloc_buffer_n_plan_t ggml_backend_buft_alloc_buffer_n_
         }
 
         // flush the current buffer if adding this tensor would exceed max_size
-        if (cur_buf_size > 0 && (cur_buf_size + this_size) > max_size) {
+        if (this_size > 0 && cur_buf_size > 0 && (cur_buf_size + this_size) > max_size) {
             plan.push_back({ cur_buf_size, first, i });
             cur_buf_size = this_size;
             first        = i;
