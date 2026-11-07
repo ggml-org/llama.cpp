@@ -3056,9 +3056,12 @@ struct clip_model_loader {
                 } break;
             case PROJECTOR_TYPE_MAGEVL:
                 {
-                    ggml_tensor * rope_freqs = get_tensor(TN_ROPE_FREQS);
-                    for (auto & layer : model.layers) {
-                        layer.rope_freqs = rope_freqs;
+                    // d_head rope factors: the first half drives the even outputs, the second half the odd ones
+                    model.rope_freqs = get_tensor(TN_ROPE_FREQS);
+                    const int d_head = hparams.n_head > 0 ? hparams.n_embd / hparams.n_head : 0;
+                    if (d_head <= 0 || d_head * hparams.n_head != hparams.n_embd || d_head % 32 != 0 ||
+                            model.rope_freqs->type != GGML_TYPE_F32 || ggml_nelements(model.rope_freqs) != d_head) {
+                        throw std::runtime_error(string_format("%s: hparams do not match the tensor shapes\n", __func__));
                     }
                     model.mm_0_w = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
                     model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"));

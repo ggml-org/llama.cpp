@@ -14,9 +14,9 @@ ggml_cgraph * clip_graph_magevl::build() {
     ggml_set_input(positions);
 
     // a pair uses 2 angles: even outputs come from one rope, odd outputs from the other
-    auto add_pos = [&](ggml_tensor * cur, const clip_layer & layer) {
-        ggml_tensor * freqs_a = ggml_view_1d(ctx0, layer.rope_freqs, n_pair, 0);
-        ggml_tensor * freqs_b = ggml_view_1d(ctx0, layer.rope_freqs, n_pair, ggml_row_size(layer.rope_freqs->type, n_pair));
+    auto add_pos = [&](ggml_tensor * cur, const clip_layer &) {
+        ggml_tensor * freqs_a = ggml_view_1d(ctx0, model.rope_freqs, n_pair, 0);
+        ggml_tensor * freqs_b = ggml_view_1d(ctx0, model.rope_freqs, n_pair, ggml_row_size(model.rope_freqs->type, n_pair));
 
         ggml_tensor * rope_a = ggml_rope_multi(ctx0, cur, positions, freqs_a, d_head, sections,
                 GGML_ROPE_TYPE_MROPE, 32768, 1.0f, 1.0f, 0.0f, 1.0f, 32.0f, 1.0f);
