@@ -3,6 +3,7 @@
 #include "json-schema.h"
 #include "json.h"
 
+#include <cstddef>
 #include <functional>
 #include <string>
 
@@ -16,6 +17,9 @@ struct common_grammar_builder {
 
 struct common_grammar_options {
     bool dotall = false;
+    // any-order object rules: grammar states per object, and for the whole grammar
+    size_t max_object_states = 1024;
+    size_t max_total_states  = 4096;
 };
 
 std::string gbnf_format_literal(const std::string & literal);

@@ -33,7 +33,7 @@ LLGuidance adheres closely to the JSON Schema specification. For example:
 
 - `additionalProperties` defaults to `true`, unlike current grammars, though you can set `"additionalProperties": false` if needed.
 - any whitespace is allowed.
-- The definition order in the `"properties": {}` object is maintained, regardless of whether properties are required (current grammars always puts required properties first).
+- The definition order in the `"properties": {}` object is maintained, regardless of whether properties are required (current grammars accept them in any order).
 
 Unsupported schemas result in an error message—no keywords are silently ignored.
 

@@ -204,6 +204,7 @@ Here is also a list of known limitations (contributions welcome):
 
 - `additionalProperties` defaults to `false` (produces faster grammars + reduces hallucinations).
 - `"additionalProperties": true` may produce keys that contain unescaped newlines.
+- Object properties are accepted in any order. Objects with up to 10 properties allow each key once; in larger objects (or once a grammar has used its budget) some optional keys are only counted, so one of them may repeat while the total number of keys stays bounded, and when there are too many required properties to track they keep the declared order.
 - Unsupported features are skipped silently. It is currently advised to use the command-line Python converter (see above) to see any warnings, and to inspect the resulting grammar / test it w/ [llama-gbnf-validator](../examples/gbnf-validator/gbnf-validator.cpp).
 - Can't mix `properties` w/ `anyOf` / `oneOf` in the same type (https://github.com/ggml-org/llama.cpp/issues/7703)
 - [prefixItems](https://json-schema.org/draft/2020-12/json-schema-core#name-prefixitems) is broken (but [items](https://json-schema.org/draft/2020-12/json-schema-core#name-items) works)

@@ -192,6 +192,14 @@ static void test_schema(const std::string & test_desc, const std::string & schem
     test(test_desc + ". Schema: " + schema_str, json_schema_to_grammar(json::parse(schema_str), true), passing_strings, failing_strings);
 }
 
+static void test_schema_with_budget(const std::string & test_desc, const std::string & schema_str, size_t max_object_states, size_t max_total_states, const std::vector<std::string> & passing_strings, const std::vector<std::string> & failing_strings) {
+    auto doc = common_chat_schema_from_json(json::parse(schema_str));
+    common_grammar_options options;
+    options.max_object_states = max_object_states;
+    options.max_total_states = max_total_states;
+    test(test_desc + ". Schema: " + schema_str, build_grammar([&](const common_grammar_builder & builder) { builder.add_schema("root", *doc.root); }, options), passing_strings, failing_strings);
+}
+
 static void test_simple_grammar() {
     test_schema(
         "min 0",
@@ -1284,14 +1292,11 @@ static void test_json_schema() {
             // "By extension, even an empty object is valid"
             R"""({})""",
             R"""({ "number": 1600, "street_name": "Pennsylvania", "street_type": "Avenue" })""",
+            R"""({ "street_name": "Pennsylvania", "number": 1600 })""",
         },
         // Failing strings
         {
             // Change datatype from number to string
-            R"""({ "number": "1600", "street_name": "Pennsylvania", "street_type":"Avenue"})""",
-            // Reorder properties
-            R"""({ "street_name": "Pennsylvania", "number": 1600 })""",
-            // Reorder properties
             R"""({ "number": "1600", "street_name": "Pennsylvania", "street_type":"Avenue"})""",
             // "Additional properties default to false for generation, even though the spec says true.
             R"""({ "number": 1600, "street_name": "Pennsylvania", "street_type":"Avenue", "direction":"NW"})""",
@@ -1347,19 +1352,18 @@ static void test_json_schema() {
             // "By default, providing additional properties is valid"
             R"""({ "number": 1600, "street_name": "Pennsylvania", "street_type":"Avenue", "direction":"NW"})""",
             R"""({ "number": 1600, "street_name": "Pennsylvania", "street_type": "Avenue" })""",
+            R"""({ "street_name": "Pennsylvania", "number": 1600, "street_type":"Avenue"})""",
         },
         // Failing strings
         {
             // Change datatype from number to string
             R"""({ "number": "1600", "street_name": "Pennsylvania", "street_type":"Avenue"})""",
-            // Reorder properties
-            R"""({ "street_name": "Pennsylvania", "number": 1600, "street_type":"Avenue"})""",
         }
     );
 
     // Additional properties: false
     test_schema(
-        "required + optional props each in original order",
+        "required + optional props in any order",
         // Schema
         R"""({
             "type": "object",
@@ -1378,18 +1382,17 @@ static void test_json_schema() {
             R"""({ "number": 1600, "street_name": "Pennsylvania", "street_type":"Avenue"})""",
             // Spaces are permitted around enum values
             R"""({ "number": 1600, "street_name": "Pennsylvania", "street_type": "Avenue" })""",
+            R"""({ "street_type": "Avenue", "number": 1600 })""",
         },
         // Failing strings
         {
-            // Reorder properties
-            R"""({ "street_type": "Avenue", "number": 1600 })""",
             // Add "direction"
             R"""({ "number": 1600, "street_name": "Pennsylvania", "street_type": "Avenue", "direction": "NW" })""",
         }
     );
 
     test_schema(
-        "required + optional props each in original order",
+        "required + optional props in any order",
         // Schema
         R"""({
             "properties": {
@@ -1406,13 +1409,13 @@ static void test_json_schema() {
             R"""({"b": "foo", "a": "bar"})""",
             R"""({"b":"foo","a":"bar","d":"qux"})""",
             R"""({"b":"foo", "a":"bar", "d":"qux", "c":"baz"})""",
+            R"""({"a": "foo", "b": "bar"})""",
+            R"""({"a":"foo", "b":"bar", "c":"baz", "d":"qux"})""",
         },
         // Failing strings
         {
-            R"""({"a": "foo", "b": "bar"})""",
             R"""({"b": "bar"})""",
             R"""({"a": "foo", "c": "baz"})""",
-            R"""({"a":"foo", "b":"bar", "c":"baz", "d":"qux"})""",
         }
     );
 
@@ -1472,18 +1475,18 @@ static void test_json_schema() {
             R"""({"productId": 1, "productName": "A green door", "price": 12.50})""",
             R"""({"productId": 1, "productName": "A green door", "price": 12.50, "tags": ["home", "green"]})""",
             R"""({"productId": 1, "productName": "A green door", "price": 12.50, "tags": ["home", "green"], "dimensions": {"length": 785, "width": 250.5, "height": -0.359}})""",
+            R"""({"productName": "A green door", "price": 12.50, "productId": 1})""",
+            R"""({"productId": 1, "productName": "A green door", "price": 12.50, "dimensions": {"length": 785, "width": 250.5, "height": -0.359}, "tags": ["home", "green"]})""",
         },
         // Failing strings
         {
             R"""({})""", // Missing all required properties
-            R"""({"productName": "A green door", "price": 12.50, "productId": 1})""", // Out of order properties
             // TODO: The following line should fail, but currently it passes. `exclusiveMinimum` is not supported, as it would likely be too difficult to implement.
             //  Perhaps special checks for minimum and maximum values of 0 could be added (since that's relatively easy to do with grammars), but anything else would likely be too complex.
             // R"""({"productId": 1, "productName": "A green door", "price": -12.50})""",
             R"""({"productId": 1, "productName": "A green door"})""", // Missing required property (price)
             R"""({"productName": "A green door", "price": 12.50})""", // Missing required property (productId)
             R"""({"productId": 1, "productName": "A green door", "price": 12.50, "tags": []})""", // tags is empty, but minItems is 1
-            R"""({"productId": 1, "productName": "A green door", "price": 12.50, "dimensions": {"length": 785, "width": 250.5, "height": -0.359}, "tags": ["home", "green"]})""", // Tags and dimensions are out of order
             // TODO: The following line should fail, but currently it passes. `uniqueItems` is not supported, as it would likely be too difficult to implement.
             // R"""({"productId": 1, "productName": "A green door", "price": 12.50, "tags": ["home", "green", "home"]})""",
         }
@@ -1509,6 +1512,236 @@ static void test_json_schema() {
     );
 }
 
+static void test_json_schema_any_order() {
+    test_schema(
+        "properties in any order: 14 properties, 2 required, additional allowed",
+        R"""({
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"}, "column_type": {"type": "string"}, "drop": {"type": "boolean"},
+                "expr": {"type": "string"}, "dtype": {"type": "string"}, "sampler_type": {"type": "string"},
+                "params": {"type": "object"}, "code_lang": {"type": "string"}, "scores": {"type": "array"},
+                "output_format": {"type": "object"}, "prompt": {"type": "string"}, "model_alias": {"type": "string"},
+                "system_prompt": {"type": "string"}, "extract_reasoning_content": {"type": "boolean"}
+            },
+            "required": ["name", "column_type"],
+            "additionalProperties": true
+        })""",
+        {
+            R"""({"name": "n", "column_type": "expression", "expr": "0", "dtype": "int"})""",
+            R"""({"name": "n", "column_type": "expression", "dtype": "int", "expr": "0"})""",
+            R"""({"column_type": "llm-text", "model_alias": "m", "prompt": "p", "name": "q"})""",
+            R"""({"name": "n", "column_type": "x", "extract_reasoning_content": true, "other": 1})""",
+        },
+        {
+            R"""({"name": "n"})""",
+            R"""({"name": "n", "name": "m", "column_type": "x"})""",
+            R"""({"name": "n", "column_type": "x", "prompt": 1})""",
+            R"""({"name": "n", "column_type": "x", "expr": "0", "dtype": "int", "expr": "0"})""",
+            R"""({"name": "n", "column_type": "x",})""",
+            R"""({"name": "n", "column_type": "x", "prompt": "p", "prompt": "p", "prompt": "p", "prompt": "p", "prompt": "p", "prompt": "p", "prompt": "p", "prompt": "p"})""",
+        });
+
+    test_schema(
+        "10 properties: every key at most once, in any order",
+        R"""({
+            "type": "object",
+            "properties": {
+                "sku": {"type": "string"}, "title": {"type": "string"}, "price": {"type": "number"}, "brand": {"type": "string"},
+                "color": {"type": "string"}, "weight_kg": {"type": "number"}, "in_stock": {"type": "boolean"},
+                "tags": {"type": "array", "items": {"type": "string"}}, "rating": {"type": "number"}, "warranty_years": {"type": "integer"}
+            },
+            "required": ["sku", "title", "price"],
+            "additionalProperties": false
+        })""",
+        {
+            R"""({"brand": "b", "sku": "s", "rating": 4.9, "title": "t", "warranty_years": 2, "tags": [], "price": 1})""",
+        },
+        {
+            R"""({"sku": "s", "title": "t", "price": 1, "rating": 4.9, "rating": 4.9})""",
+            R"""({"sku": "s", "title": "t", "price": 1, "tags": [], "in_stock": true, "tags": []})""",
+        });
+
+    test_schema_with_budget(
+        "over budget: keys past the tracked ones are counted, so a repeated key cannot loop",
+        R"""({"type": "object", "properties": {"a": {}, "b": {}, "c": {}, "d": {}, "e": {}}})""",
+        16, 16,
+        {
+            R"""({"e": 1, "d": 1, "c": 1, "b": 1, "a": 1})""",
+        },
+        {
+            R"""({"a": 1, "a": 1})""",
+            R"""({"e": 1, "e": 1, "e": 1, "e": 1})""",
+        });
+
+    test_schema(
+        "6 required properties and 1 optional, each at most once; additional keys may repeat",
+        R"""({
+            "type": "object",
+            "properties": {"a": {}, "b": {}, "c": {}, "d": {}, "e": {}, "f": {}, "g": {}},
+            "required": ["a", "b", "c", "d", "e", "f"],
+            "additionalProperties": true
+        })""",
+        {
+            R"""({"f": 1, "e": 1, "d": 1, "c": 1, "b": 1, "a": 1})""",
+            R"""({"g": 1, "a": 1, "b": 1, "x": 1, "c": 1, "d": 1, "e": 1, "f": 1, "x": 2})""",
+        },
+        {
+            R"""({"a": 1, "b": 1, "c": 1, "d": 1, "e": 1})""",
+            R"""({"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1, "a": 1})""",
+            R"""({"g": 1, "a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1})""",
+        });
+
+    test_schema_with_budget(
+        "too many required properties to track keep the declared order",
+        R"""({"type": "object", "properties": {"a": {}, "b": {}, "c": {}, "d": {}, "e": {}}, "required": ["a", "b", "c", "d"]})""",
+        16, 16,
+        {
+            R"""({"a": 1, "b": 1, "c": 1, "d": 1})""",
+            R"""({"e": 1, "a": 1, "b": 1, "c": 1, "d": 1})""",
+        },
+        {
+            R"""({"b": 1, "a": 1, "c": 1, "d": 1})""",
+            R"""({"a": 1, "b": 1, "c": 1})""",
+            R"""({"e": 1, "a": 1, "b": 1, "c": 1, "d": 1, "e": 1})""",
+        });
+
+    test_schema_with_budget(
+        "past the grammar-wide total, later objects only count their keys",
+        R"""({
+            "type": "object",
+            "properties": {
+                "x": {"type": "object", "properties": {"a": {}, "b": {}, "c": {}}},
+                "y": {"type": "object", "properties": {"a": {}, "b": {}, "c": {}}}
+            },
+            "required": ["x", "y"]
+        })""",
+        16, 10,
+        {
+            R"""({"x": {"c": 1, "b": 1, "a": 1}, "y": {"c": 1, "a": 1, "c": 1}})""",
+        },
+        {
+            R"""({"x": {"a": 1, "a": 1}, "y": {}})""",
+            R"""({"x": {}, "y": {"a": 1, "b": 1, "c": 1, "a": 1}})""",
+        });
+
+    test_schema(
+        "property names that clash with generated rule names",
+        R"""({
+            "type": "object",
+            "properties": {
+                "rest-0": {"type": "object", "properties": {"x": {"type": "integer"}}, "required": ["x"]},
+                "rest-1": {"type": "object", "properties": {"y": {"type": "string"}}, "required": ["y"]},
+                "free-kv": {"type": "object", "properties": {"z": {"type": "boolean"}}, "required": ["z"]}
+            },
+            "required": ["rest-1"],
+            "additionalProperties": true
+        })""",
+        {
+            R"""({"free-kv": {"z": true}, "rest-1": {"y": "s"}, "rest-0": {"x": 1}})""",
+            R"""({"other": 1, "rest-0": {"x": 1}, "other": 2, "rest-1": {"y": "s"}})""",
+        },
+        {
+            R"""({"rest-0": {"x": 1}})""",
+            R"""({"rest-1": {"x": 1}})""",
+            R"""({"rest-1": {"y": "s"}, "free-kv": {"y": "s"}})""",
+            R"""({"rest-1": {"y": "s"}, "rest-1": {"y": "t"}})""",
+        });
+
+    test_schema(
+        "allOf components that repeat a property",
+        R"""({"allOf": [{"type": "object", "properties": {"a": {"type": "integer"}}}, {"type": "object", "properties": {"a": {"type": "integer"}}}]})""",
+        {
+            R"""({"a": 1})""",
+        },
+        {
+            R"""({"a": 1, "a": 1})""",
+        });
+
+    test_schema(
+        "allOf property schema from a required component wins over an anyOf alternative",
+        R"""({
+            "allOf": [
+                {"anyOf": [{"type": "object", "properties": {"a": {"type": "string"}}}, {"type": "object", "properties": {"b": {"type": "boolean"}}}]},
+                {"type": "object", "properties": {"a": {"type": "integer"}}, "required": ["a"]}
+            ]
+        })""",
+        {
+            R"""({"a": 1, "b": true})""",
+        },
+        {
+            R"""({"a": "s"})""",
+            R"""({"b": true})""",
+        });
+}
+
+static void test_json_schema_refs_by_target() {
+    auto doc_a = common_chat_schema_from_json(json::parse(R"""({
+        "type": "object",
+        "properties": {"x": {"$ref": "#/$defs/D"}},
+        "required": ["x"],
+        "$defs": {"D": {"type": "object", "properties": {"a": {"type": "integer"}}, "required": ["a"]}}
+    })"""));
+    auto doc_b = common_chat_schema_from_json(json::parse(R"""({
+        "type": "object",
+        "properties": {"x": {"$ref": "#/$defs/D"}},
+        "required": ["x"],
+        "$defs": {"D": {"type": "object", "properties": {"b": {"type": "string"}}, "required": ["b"]}}
+    })"""));
+    auto grammar = build_grammar([&](const common_grammar_builder & builder) {
+        auto a = builder.add_schema("tool-a", *doc_a.root);
+        auto b = builder.add_schema("tool-b", *doc_b.root);
+        builder.add_rule("root", "\"A\" " + a + " | \"B\" " + b);
+    });
+    test("same $defs name with different targets in two documents", grammar,
+        {
+            R"""(A{"x": {"a": 1}})""",
+            R"""(B{"x": {"b": "s"}})""",
+        },
+        {
+            R"""(A{"x": {"b": "s"}})""",
+            R"""(B{"x": {"a": 1}})""",
+        });
+
+    test_schema(
+        "$defs names that format to the same rule name, with a self reference",
+        R"""({
+            "type": "object",
+            "properties": {"r": {"$ref": "#/$defs/a_b"}},
+            "required": ["r"],
+            "$defs": {
+                "a_b": {"type": "object", "properties": {"k": {"type": "boolean"}, "child": {"$ref": "#/$defs/a.b"}, "self": {"$ref": "#/$defs/a_b"}}, "required": ["k"]},
+                "a.b": {"type": "object", "properties": {"q": {"type": "integer"}}, "required": ["q"]}
+            }
+        })""",
+        {
+            R"""({"r": {"self": {"k": false, "self": {"k": true, "child": {"q": 2}}}, "k": true}})""",
+        },
+        {
+            R"""({"r": {"k": true, "self": {"q": 1}}})""",
+            R"""({"r": {"k": true, "child": {"k": true}}})""",
+        });
+
+    test_schema(
+        "nested rule that formats to the reserved $ref name",
+        R"""({
+            "type": "object",
+            "properties": {"r": {"$ref": "#/$defs/a-b"}},
+            "required": ["r"],
+            "$defs": {
+                "a-b": {"type": "object", "properties": {"x": {"$ref": "#/$defs/a"}, "self": {"$ref": "#/$defs/a-b"}}},
+                "a": {"type": "object", "properties": {"b": {"enum": ["v"]}}}
+            }
+        })""",
+        {
+            R"""({"r": {"self": {"self": {}}, "x": {}}})""",
+        },
+        {
+            R"""({"r": {"self": "v"}})""",
+            R"""({"r": {"x": "v"}})""",
+        });
+}
+
 int main() {
     fprintf(stdout, "Running grammar integration tests...\n");
     test_simple_grammar();
@@ -1521,6 +1754,8 @@ int main() {
     test_failure_missing_root_symbol();
     test_custom_root_symbol_check();
     test_json_schema();
+    test_json_schema_any_order();
+    test_json_schema_refs_by_target();
     fprintf(stdout, "All tests passed.\n");
     return 0;
 }
