@@ -2968,6 +2968,11 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         return nullptr;
     }
 
+    if (params.draft.probabilistic && params.draft.p_min > 0.0f) {
+        LOG_WRN("%s: --spec-draft-p-min %.2f stops sampled drafts early, consider setting it to 0 with --spec-draft-sampling probabilistic\n",
+                __func__, (double) params.draft.p_min);
+    }
+
     common_speculative_ptr result(new common_speculative {
         /* .dparams     = */ common_speculative_draft_params_vec(n_seq),
         /* .impls       = */ std::move(impls),
