@@ -479,6 +479,10 @@ static void test_top_k(const test_params & params) {
     llama_token token = llama_sampler_sample(chain.get(), test_ctx.ctx.get(), batch_idx);
     GGML_ASSERT(token >= 0 && token < test_ctx.n_vocab);
 
+    llama_sampler_ptr greedy(llama_sampler_init_greedy());
+    const auto expected = candidates[std::max_element(logits, logits + n_logits) - logits];
+    GGML_ASSERT(llama_sampler_sample(greedy.get(), test_ctx.ctx.get(), batch_idx) == expected);
+
     printf("backend top-k hybrid sampling test PASSED\n");
 }
 
@@ -725,6 +729,12 @@ static void test_top_p(const test_params & params) {
     const std::string token_str = test_ctx.token_to_piece(token, false);
     printf("top-p cpu sampled token id:%d, string: '%s'\n", token, token_str.c_str());
     GGML_ASSERT(token >= 0 && token < test_ctx.n_vocab);
+
+    llama_sampler_ptr greedy(llama_sampler_init_greedy());
+    llama_sampler_ptr greedy_reference(llama_sampler_chain_init(llama_sampler_chain_default_params()));
+    llama_sampler_chain_add(greedy_reference.get(), llama_sampler_init_greedy());
+    GGML_ASSERT(llama_sampler_sample(greedy.get(), test_ctx.ctx.get(), batch_idx) ==
+                llama_sampler_sample(greedy_reference.get(), test_ctx.ctx.get(), batch_idx));
 
     // Decode and sample 10 more tokens
     for (int i = 0; i < 10; i++) {
@@ -2060,6 +2070,41 @@ static void test_multi_output_cpu_suffix(const test_params & params) {
     printf("backend multi-output CPU suffix test PASSED\n");
 }
 
+static void test_greedy_cpu_logits(const test_params & params) {
+    std::vector<llama_sampler_seq_config> configs;
+    test_context test_ctx(params, configs, 2, 2);
+    GGML_ASSERT(test_ctx.decode({{0, "Hello"}, {1, "There"}}));
+    GGML_ASSERT(test_ctx.n_vocab > 2);
+    llama_sampler_ptr greedy(llama_sampler_init_greedy());
+    llama_sampler_ptr reference(llama_sampler_chain_init(llama_sampler_chain_default_params()));
+    llama_sampler_chain_add(reference.get(), llama_sampler_init_greedy());
+    for (int idx : {test_ctx.idx_for_seq(0), test_ctx.idx_for_seq(1), -1}) {
+        float * logits = llama_get_logits_ith(test_ctx.ctx.get(), idx);
+        GGML_ASSERT(logits);
+        auto check = [&](llama_token expected) {
+            GGML_ASSERT(llama_sampler_sample(greedy.get(), test_ctx.ctx.get(), idx) == expected);
+            GGML_ASSERT(llama_sampler_sample(reference.get(), test_ctx.ctx.get(), idx) == expected);
+        };
+
+        std::fill(logits, logits + test_ctx.n_vocab, -INFINITY);
+        check(0);
+        logits[test_ctx.n_vocab - 1] = INFINITY;
+        check(test_ctx.n_vocab - 1);
+        logits[1] = INFINITY;
+        check(1);
+        logits[0] = NAN;
+        check(0);
+        logits[0] = -INFINITY;
+        logits[1] = NAN;
+        check(test_ctx.n_vocab - 1);
+        std::fill(logits, logits + test_ctx.n_vocab, -1.0f);
+        logits[0] = -0.0f;
+        logits[1] = 0.0f;
+        check(0);
+    }
+    printf("CPU greedy raw-logit tie and nonfinite test PASSED\n");
+}
+
 struct backend_test_case {
     std::string name;
     void (*fn)(const test_params &);
@@ -2069,6 +2114,7 @@ struct backend_test_case {
 // note: test names are "test_<suffix>" and match the function implementing them
 static const backend_test_case BACKEND_TESTS[] = {
     // single sampler
+    { "test_greedy_cpu_logits",      test_greedy_cpu_logits,      true },
     { "test_greedy",                 test_greedy,                 true },
     { "test_greedy_filtered",        test_greedy_filtered,        true },
     { "test_greedy_filtered_common", test_greedy_filtered_common, true },
