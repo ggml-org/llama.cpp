@@ -93,7 +93,7 @@ jobs:
           save: true
 
   gpu-rocm:
-    runs-on: [self-hosted, Linux, AMD]
+    runs-on: [self-hosted, Linux, X64, strix-halo, devlab-dispatch]
 
     steps:
       - name: Clone
