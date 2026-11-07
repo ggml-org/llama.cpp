@@ -28,8 +28,7 @@
 		MERMAID_WRAPPER_CLASS,
 		SETTINGS_KEYS,
 		SVG,
-		TOGGLE_SOURCE_BTN_CLASS,
-		UI_DATA_ATTRS
+		TOGGLE_SOURCE_BTN_CLASS
 	} from '$lib/constants';
 	import { BooleanString, ColorMode, UrlProtocol } from '$lib/enums';
 	import { createStickToBottom } from '$lib/hooks/use-stick-to-bottom.svelte';
@@ -39,6 +38,7 @@
 		copyCodeToClipboard,
 		copyToClipboard,
 		getImageErrorFallbackHtml,
+		loadHighlightTheme,
 		preprocessLaTeX,
 		splitGluedClosingCodeFences
 	} from '$lib/utils';
@@ -47,8 +47,6 @@
 	import { mountSvgShadow } from '$lib/utils/svg-shadow';
 	import DOMPurify from 'dompurify';
 	import type { Root as HastRoot, RootContent as HastRootContent } from 'hast';
-	import githubLightCss from 'highlight.js/styles/github.css?inline';
-	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
 	import type { Root as MdastRoot } from 'mdast';
 	import { mode } from 'mode-watcher';
 	import { onDestroy, tick } from 'svelte';
@@ -153,27 +151,6 @@
 		for (const button of previewButtons) {
 			button.removeEventListener('click', handlePreviewClick);
 		}
-	}
-
-	/**
-	 * Loads the appropriate highlight.js theme based on dark/light mode.
-	 * One shared style element for every markdown block, mirroring
-	 * SyntaxHighlightedCode.svelte. The old per-instance copies duplicated the
-	 * full theme CSS once per rendered message, which grows without bound in
-	 * long conversations.
-	 * @param isDark - Whether to load the dark theme (true) or light theme (false)
-	 */
-	function loadHighlightTheme(isDark: boolean) {
-		document
-			.querySelectorAll(`style[${UI_DATA_ATTRS.HIGHLIGHT_THEME_PREVIEW}]`)
-			.forEach((style) => style.remove());
-
-		const style = document.createElement('style');
-
-		style.setAttribute(UI_DATA_ATTRS.HIGHLIGHT_THEME_PREVIEW, BooleanString.TRUE);
-		style.textContent = isDark ? githubDarkCss : githubLightCss;
-
-		document.head.appendChild(style);
 	}
 
 	/**

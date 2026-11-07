@@ -45,21 +45,21 @@
 	args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]' }}
 	name="Default"
 	play={async ({ canvas, userEvent }) => {
-		const textarea = await canvas.findByRole('textbox');
+		const editor = await canvas.findByRole('textbox');
 		const submitButton = await canvas.findByRole('button', { name: 'Send' });
 
 		// Expect the input to be focused after the component is mounted
-		await expect(textarea).toHaveFocus();
+		await expect(editor).toHaveFocus();
 
 		// Expect the submit button to be disabled
 		await expect(submitButton).toBeDisabled();
 
 		const text = 'What is the meaning of life?';
 
-		await userEvent.clear(textarea);
-		await userEvent.type(textarea, text);
+		await userEvent.clear(editor);
+		await userEvent.type(editor, text);
 
-		await expect(textarea).toHaveValue(text);
+		await expect(editor).toHaveTextContent(text);
 
 		const fileInput = document.querySelector('input[type="file"]');
 
