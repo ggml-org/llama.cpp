@@ -5144,10 +5144,12 @@ struct clip_init_result clip_init(const char * fname, struct clip_context_params
     clip_ctx * ctx_audio = nullptr;
     clip_ctx * ctx_gen_audio = nullptr;
 
-    // no_alloc only measures memory, nothing is computed
-    std::shared_ptr<ggml_threadpool> threadpool = clip_threadpool_init(ctx_params.no_alloc ? 1 : ctx_params.n_threads);
+    std::shared_ptr<ggml_threadpool> threadpool;
 
     try {
+        // no_alloc only measures memory, nothing is computed
+        threadpool = clip_threadpool_init(ctx_params.no_alloc ? 1 : ctx_params.n_threads);
+
         clip_model_loader loader(fname,
             /* skip_tensors */ false,
             ctx_params.progress_callback,
@@ -5659,10 +5661,8 @@ ggml_backend_sched_t clip_get_sched(const struct clip_ctx * ctx) {
     return ctx->sched.get();
 }
 
-// TODO: remove this and use ggml_mul_mat with GGML_PREC_F32 once all backends honor it for F32 x F32, then the
-//       log-mel graph can run on GPU too
-// same as ggml_mul_mat for 2D F32 tensors, but in F32 on CPU: some GPU backends round the inputs to F16 or TF32, and the
-// quiet bins of a spectrum next to the loud ones do not survive it
+// TODO: remove this and use ggml_mul_mat with GGML_PREC_F32 once all backends honor it for F32 x F32
+// ggml_mul_mat for 2D F32 tensors, always in F32 on CPU: some GPU backends round the inputs to F16 or TF32, which loses the quiet bins of a spectrum
 static void mtmd_mul_mat_prec_op(ggml_tensor * dst, int ith, int nth, void * /*userdata*/) {
     const ggml_tensor * a = dst->src[0];
     const ggml_tensor * b = dst->src[1];

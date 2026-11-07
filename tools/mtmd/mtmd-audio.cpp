@@ -305,6 +305,7 @@ bool mtmd_audio_preprocessor::compute(mtmd_audio_preproc_out & out) const {
         return false;
     }
     mtmd_audio_fill_entries(mels, false, out.entries);
+    out.samples = {};
     return true;
 }
 

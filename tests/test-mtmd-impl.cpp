@@ -555,6 +555,66 @@ MAKE_TEST(test_audio_preprocessor_threads) {
     }
 }
 
+MAKE_TEST(test_audio_log_mel_precision) {
+    const int n_mel    = 80;
+    const int n_fft    = 400;
+    const int hop      = 160;
+    const int n_frames = 200;
+
+    mtmd_audio_cache cache;
+    cache.fill_sin_cos_table(n_fft);
+    cache.fill_hann_window(n_fft, true);
+    cache.fill_mel_filterbank_matrix(n_mel, n_fft, 16000);
+
+    ggml_backend_ptr backend(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr));
+    ggml_backend_t backends[] = { backend.get() };
+    ggml_backend_sched_ptr sched(ggml_backend_sched_new(backends, nullptr, 1, 256, false, true));
+
+    mtmd_audio_mel_config config;
+    config.sched      = sched.get();
+    config.n_threads  = 2;
+    config.n_mel      = n_mel;
+    config.n_fft_bins = 1 + n_fft / 2;
+    config.hop_length = hop;
+    config.cache      = &cache;
+
+    // a loud tone next to a 74 dB weaker one: rounding the DFT inputs to F16 or TF32 loses the weak one
+    const double pi = 3.14159265358979323846;
+    std::vector<float> samples((size_t) (n_frames - 1) * hop + n_fft);
+    for (size_t i = 0; i < samples.size(); i++) {
+        samples[i] = (float) (0.5 * std::sin(2 * pi * 200 * i / 16000) + 1e-4 * std::sin(2 * pi * 6000 * i / 16000));
+    }
+
+    std::vector<float> out((size_t) n_frames * n_mel);
+    if (!t.assert_true("log mel", clip_audio_log_mel(config, samples.data(), cache.hann_window.data(), n_frames, out.data()))) {
+        return;
+    }
+
+    const int n_bins = n_fft / 2 + 1;
+    double max_diff = 0.0;
+    std::vector<double> power(n_bins);
+    for (int i = 0; i < n_frames; i++) {
+        for (int k = 0; k < n_bins; k++) {
+            double re = 0.0, im = 0.0;
+            for (int j = 0; j < n_fft; j++) {
+                const double x = (double) cache.hann_window[j] * samples[(size_t) i * hop + j];
+                re += x * std::cos(2 * pi * j * k / n_fft);
+                im -= x * std::sin(2 * pi * j * k / n_fft);
+            }
+            power[k] = re * re + im * im;
+        }
+        for (int m = 0; m < n_mel; m++) {
+            double sum = 0.0;
+            for (int k = 0; k < n_bins; k++) {
+                sum += power[k] * cache.filters.data[(size_t) m * n_bins + k];
+            }
+            const double expected = std::log10(std::max(sum, (double) config.mel_floor));
+            max_diff = std::max(max_diff, std::fabs(expected - out[(size_t) m * n_frames + i]));
+        }
+    }
+    t.assert_true("max_diff = " + std::to_string(max_diff), max_diff < 0.05);
+}
+
 MAKE_TEST(test_audio_log_mel_blocks) {
     const int n_mel    = 80;
     const int n_fft    = 400;
@@ -584,7 +644,7 @@ MAKE_TEST(test_audio_log_mel_blocks) {
     }
 
     // frames are independent: the frames around the seam must not change when computed on their own
-    // not bit-exact, x86 matmul kernels round differently depending on the shape
+    // not bit-exact, matmul kernels may round differently depending on the shape
     const int off   = 8192 - 50;
     const int n_sub = n_frames - off;
     std::vector<float> all((size_t) n_frames * n_mel);
