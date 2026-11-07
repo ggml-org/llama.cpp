@@ -2071,56 +2071,89 @@ ggml_tensor * rpc_server::create_node(uint64_t id,
                                       struct ggml_context * ctx,
                                       const std::unordered_map<uint64_t, const rpc_tensor*> & tensor_ptrs,
                                       std::unordered_map<uint64_t, struct ggml_tensor*> & tensor_map) {
-    if (tensor_map.find(id) != tensor_map.end()) {
-        return tensor_map[id];
-    }
-    // Safely find the tensor pointer
-    auto it_ptr = tensor_ptrs.find(id);
-    if (it_ptr == tensor_ptrs.end()) {
-        return nullptr;
-    }
-    const rpc_tensor * tensor = it_ptr->second;
+    // iterative two-pass traversal instead of recursion: a malicious peer can
+    // send a graph with a very deep src chain, and the recursive version would
+    // exhaust the stack and crash the server. pass 1 creates the ggml_tensor
+    // for every reachable id, pass 2 wires up src and view_src pointers.
+    std::vector<uint64_t> worklist = { id };
+    std::vector<uint64_t> created;
+    std::unordered_set<uint64_t> seen;
 
-    struct ggml_tensor * result = deserialize_tensor(ctx, tensor);
-    if (result == nullptr) {
-        return nullptr;
-    }
-    if (result->buffer == nullptr && result->data != nullptr) {
-        LOG_ERROR("[%s] invalid data ptr\n", __func__);
-        return nullptr;
-    }
-    tensor_map[id] = result;
-    for (int i = 0; i < GGML_MAX_SRC; i++) {
-        // Check if the source ID is 0 before calling create_node recursively
-        if (tensor->src[i] == 0) {
-            result->src[i] = nullptr;
-        } else {
-            result->src[i] = create_node(tensor->src[i], ctx, tensor_ptrs, tensor_map);
-            // If the recursive call failed for a non-zero ID, propagate the error
-            if (result->src[i] == nullptr) {
-                LOG_ERROR("[%s] failed to create source node %d (src_id=%" PRIu64 ") for node id %" PRIu64 "\n",
-                               __func__, i, tensor->src[i], id);
-                // Must return nullptr to signal failure up the call stack
-                return nullptr;
-            }
+    while (!worklist.empty()) {
+        const uint64_t cur = worklist.back();
+        worklist.pop_back();
+        if (cur == 0 || tensor_map.count(cur) != 0 || !seen.insert(cur).second) {
+            // already created (earlier in this call or by a previous node)
+            continue;
         }
-    }
-
-    // Handle view_src similarly
-    if (tensor->view_src == 0) {
-        result->view_src = nullptr;
-    } else {
-        result->view_src = create_node(tensor->view_src, ctx, tensor_ptrs, tensor_map);
-        // If the recursive call failed for a non-zero ID, propagate the error
-        if (result->view_src == nullptr) {
-            LOG_ERROR("[%s] failed to create view_src node (view_src_id=%" PRIu64 ") for node id %" PRIu64 "\n",
-                           __func__, tensor->view_src, id);
-            // Must return nullptr to signal failure up the call stack
+        // Safely find the tensor pointer
+        auto it_ptr = tensor_ptrs.find(cur);
+        if (it_ptr == tensor_ptrs.end()) {
             return nullptr;
         }
+        struct ggml_tensor * result = deserialize_tensor(ctx, it_ptr->second);
+        if (result == nullptr) {
+            return nullptr;
+        }
+        if (result->buffer == nullptr && result->data != nullptr) {
+            LOG_ERROR("[%s] invalid data ptr\n", __func__);
+            return nullptr;
+        }
+        tensor_map[cur] = result;
+        created.push_back(cur);
+        for (int i = 0; i < GGML_MAX_SRC; i++) {
+            if (it_ptr->second->src[i] != 0) {
+                worklist.push_back(it_ptr->second->src[i]);
+            }
+        }
+        if (it_ptr->second->view_src != 0) {
+            worklist.push_back(it_ptr->second->view_src);
+        }
     }
-    result->view_offs = tensor->view_offs;
-    return result;
+
+    // pass 2: all reachable nodes exist now, so src/view_src pointers can be
+    // assigned without recursion (also handles cycles)
+    for (const uint64_t cur : created) {
+        const rpc_tensor * tensor = tensor_ptrs.at(cur);
+        struct ggml_tensor * result = tensor_map.at(cur);
+        bool ok = true;
+        for (int i = 0; ok && i < GGML_MAX_SRC; i++) {
+            if (tensor->src[i] == 0) {
+                result->src[i] = nullptr;
+                continue;
+            }
+            auto it_src = tensor_map.find(tensor->src[i]);
+            if (it_src == tensor_map.end() || it_src->second == nullptr) {
+                LOG_ERROR("[%s] failed to create source node %d (src_id=%" PRIu64 ") for node id %" PRIu64 "\n",
+                               __func__, i, tensor->src[i], cur);
+                ok = false;
+                break;
+            }
+            result->src[i] = it_src->second;
+        }
+        if (ok) {
+            if (tensor->view_src == 0) {
+                result->view_src = nullptr;
+            } else {
+                auto it_view = tensor_map.find(tensor->view_src);
+                if (it_view == tensor_map.end() || it_view->second == nullptr) {
+                    LOG_ERROR("[%s] failed to create view_src node (view_src_id=%" PRIu64 ") for node id %" PRIu64 "\n",
+                                   __func__, tensor->view_src, cur);
+                    ok = false;
+                } else {
+                    result->view_src = it_view->second;
+                }
+            }
+        }
+        if (!ok) {
+            // Must return nullptr to signal failure to the caller
+            return nullptr;
+        }
+        result->view_offs = tensor->view_offs;
+    }
+
+    auto it_res = tensor_map.find(id);
+    return it_res != tensor_map.end() ? it_res->second : nullptr;
 }
 
 bool rpc_server::graph_compute(const std::vector<uint8_t> & input) {
