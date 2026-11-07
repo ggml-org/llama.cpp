@@ -15,6 +15,9 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
     if (ml.get_key(LLM_KV_HIDDEN_ACT, hidden_act, false)) {
         if (hidden_act == "gelu" || hidden_act == "gelu_pytorch_tanh") {
             hparams.llm_ffn_op = LLM_FFN_GELU;
+        } else if (hidden_act == "swigluoai") {
+            // alpha and limit are checked by the converter
+            hparams.llm_ffn_op = LLM_FFN_SWIGLU_OAI_MOE;
         } else if (hidden_act != "silu") {
             throw std::runtime_error("unsupported DFlash hidden activation: " + hidden_act);
         }
