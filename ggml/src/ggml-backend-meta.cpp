@@ -1961,6 +1961,14 @@ static void ggml_backend_meta_free(ggml_backend_t backend) {
     delete backend;
 }
 
+bool ggml_backend_meta_can_batch_input(ggml_backend_t backend, const ggml_tensor * tensor) {
+    if (!ggml_backend_is_meta(backend) || !ggml_is_contiguous(tensor) || !ggml_backend_buffer_is_meta(tensor->buffer)) {
+        return false;
+    }
+    const auto split_state = ggml_backend_meta_get_split_state(tensor, false);
+    return split_state.axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED && split_state.n_segments == 1 && split_state.nr[0] == 1;
+}
+
 static void ggml_backend_meta_set_tensor_async(ggml_backend_t backend, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     const size_t n_backends = ggml_backend_meta_n_backends(backend);
     GGML_ASSERT(offset == 0);

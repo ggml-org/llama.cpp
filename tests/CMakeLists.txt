@@ -414,7 +414,7 @@ if (NOT LLAMA_USE_SYSTEM_GGML)
     llama_build_and_test(test-gguf.cpp  LABEL behavior  LINK ggml)
 
     # Needs non-public ggml{,-backend}-impl.h
-    llama_build_and_test(test-alloc.cpp  LABEL "behavior backend"  LINK ggml)
+    llama_build_and_test(test-alloc.cpp  LABEL "main behavior backend"  LINK ggml)
 endif()
 
 llama_build(test-export-graph-ops.cpp)
