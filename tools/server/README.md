@@ -596,7 +596,7 @@ These words will not be included in the completion, so make sure to add them to 
 
 `cache_prompt`: Re-use KV cache from a previous request if possible. This way the common prefix does not have to be re-processed, only the suffix that differs between the requests. Because (depending on the backend) the logits are **not** guaranteed to be bit-for-bit identical for different batch sizes (prompt processing vs. token generation) enabling this option can cause nondeterministic results. Default: `true`
 
-`return_tokens`: Return the raw generated token ids in the `tokens` field. Otherwise `tokens` remains empty. Default: `false`
+`return_tokens`: Return the raw generated token ids in the `tokens` field. Streaming responses include token ids regardless of this option. Default: `false`
 
 `samplers`: The order the samplers should be applied in. An array of strings representing sampler type names. If a sampler is not set, it will not be used. If a sampler is specified more than once, it will be applied multiple times. Default: `["dry", "top_k", "typ_p", "top_p", "min_p", "xtc", "temperature"]` - these are all the available values.
 
@@ -606,7 +606,7 @@ These words will not be included in the completion, so make sure to add them to 
 
 `sse_ping_interval`: Interval in seconds between SSE comment pings emitted while the stream stays silent, keeping the connection observable during long prompt processing. Overrides the server `--sse-ping-interval` setting for this request, `-1` disables pings. Default: server setting
 
-`post_sampling_probs`: Returns the probabilities of top `n_probs` tokens after applying sampling chain.
+`post_sampling_probs`: Returns the probabilities of top `n_probs` tokens after applying sampling chain. Probability values are not supported with speculative decoding; records still follow generated token ids, but accepted draft tokens have empty `top_probs` and their `prob` values must not be used.
 
 `response_fields`: A list of response fields, for example: `"response_fields": ["content", "generation_settings/n_predict"]`. If the specified field is missing, it will simply be omitted from the response without triggering an error. Note that fields with a slash will be unnested; for example, `generation_settings/n_predict` will move the field `n_predict` from the `generation_settings` object to the root of the response and give it a new name.
 
@@ -614,15 +614,15 @@ These words will not be included in the completion, so make sure to add them to 
 
 **Response format**
 
-- Note: In streaming mode (`stream`), only `content`, `tokens` and `stop` will be returned until end of completion. Responses are sent using the [Server-sent events](https://html.spec.whatwg.org/multipage/server-sent-events.html) standard. Note: the browser's `EventSource` interface cannot be used due to its lack of `POST` request support.
+- Note: In streaming mode (`stream`), responses include `content`, `tokens`, `stop`, and probability records when requested. Responses are sent using the [Server-sent events](https://html.spec.whatwg.org/multipage/server-sent-events.html) standard. Note: the browser's `EventSource` interface cannot be used due to its lack of `POST` request support.
 
-- `completion_probabilities`: An array of token probabilities for each completion. The array's length is `n_predict`. Each item in the array has a nested array `top_logprobs`. It contains at **maximum** `n_probs` elements:
+- `completion_probabilities`: Probability records requested by `n_probs`, in generated-token order. Records follow `tokens`, including generated tokens whose text is removed by a stop string or indentation limit. They are not trimmed to match `content`, so their length need not equal `n_predict`. In streaming mode, each response contains records for its token ids, including any unsent records in the final response. Progress events have no token records. In non-streaming mode, `return_tokens: false` hides `tokens` but does not hide requested probability records. The same generated-token rule applies to OpenAI-compatible completion and chat `logprobs`. Each item has a nested array `top_logprobs` with at **maximum** `n_probs` elements:
   ```
   {
     "content": "<the generated completion text>",
     "tokens": [ generated token ids if requested ],
     ...
-    "probs": [
+    "completion_probabilities": [
       {
         "id": <token id>,
         "logprob": float,
@@ -666,8 +666,9 @@ These words will not be included in the completion, so make sure to add them to 
       - `prob`: token probability, with the value between 0.0 and 1.0
     - Number of elements in `top_probs` may be less than `n_probs`
 
-- `content`: Completion result as a string (excluding `stopping_word` if any). In case of streaming mode, will contain the next token as a string.
-- `tokens`: Same as `content` but represented as raw token ids. Only populated if `"return_tokens": true` or `"stream": true` in the request.
+- OpenAI-compatible chat streams may emit an empty `delta` with `logprobs` when probability records are available without visible text.
+- `content`: Completion result as a string (excluding `stopping_word` if any). In streaming mode, contains the next text chunk, which can span several tokens or be empty.
+- `tokens`: Raw generated token ids, including tokens whose text is removed from `content` by a stop string or indentation limit. Only populated if `"return_tokens": true` or `"stream": true` in the request.
 - `stop`: Boolean for use with `stream` to check whether the generation has stopped (Note: This is not related to stopping words array `stop` from input options)
 - `generation_settings`: The provided options above excluding `prompt` but including `n_ctx`, `model`. These options may differ from the original ones in some way (e.g. bad values filtered out, strings converted to tokens, etc.).
 - `model`: The model alias (for model path, please use `/props` endpoint)

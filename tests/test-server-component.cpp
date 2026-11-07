@@ -665,6 +665,65 @@ static void test_glob_match(testing & t) {
     });
 }
 
+static void test_completion_probabilities(testing & t) {
+    const std::vector<completion_token_output> probs = {
+        {10, 0.5f, "\xE2", {{10, "\xE2", 0.5f}}},
+        {11, 0.25f, "\x82", {{11, "\x82", 0.25f}}},
+    };
+
+    for (bool post_sampling : {false, true}) {
+        const json expected = completion_token_output::probs_vector_to_json(probs, post_sampling);
+        t.assert_true("first raw byte", expected[0]["bytes"] == json::array({0xE2}));
+        t.assert_true("second raw byte", expected[1]["bytes"] == json::array({0x82}));
+        t.assert_true("probability mode", expected[0].contains(post_sampling ? "prob" : "logprob"));
+
+        server_task_result_cmpl_partial partial{};
+        partial.n_decoded = 2;
+        partial.tokens = {10, 11};
+        partial.probs_output = probs;
+        partial.post_sampling_probs = post_sampling;
+        t.assert_true("native partial", partial.to_json_non_oaicompat()["completion_probabilities"] == expected);
+        t.assert_true("text partial", partial.to_json_oaicompat()["choices"][0]["logprobs"]["content"] == expected);
+        auto chat = partial.to_json_oaicompat_chat();
+        t.assert_equal("textless chat delta", (size_t) 1, chat.size());
+        t.assert_true("textless chat probabilities", chat[0]["choices"][0]["logprobs"]["content"] == expected);
+
+        common_chat_msg_diff first;
+        first.content_delta = "a";
+        common_chat_msg_diff second;
+        second.content_delta = "b";
+        partial.oaicompat_msg_diffs = {first, second};
+        chat = partial.to_json_oaicompat_chat();
+        t.assert_equal("two chat deltas", (size_t) 2, chat.size());
+        t.assert_true("probabilities attached once", !chat[0]["choices"][0].contains("logprobs"));
+        t.assert_true("last chat delta", chat[1]["choices"][0]["logprobs"]["content"] == expected);
+
+        server_task_result_cmpl_final final{};
+        final.stream = true;
+        final.include_usage = true;
+        final.tokens = {10, 11};
+        final.probs_output = probs;
+        final.post_sampling_probs = post_sampling;
+        t.assert_true("native final tail", final.to_json_non_oaicompat()["completion_probabilities"] == expected);
+        t.assert_true("text final tail", final.to_json_oaicompat()["choices"][0]["logprobs"]["content"] == expected);
+        chat = final.to_json_oaicompat_chat_stream();
+        t.assert_equal("finish and usage", (size_t) 2, chat.size());
+        t.assert_true("finish tail", chat[0]["choices"][0]["logprobs"]["content"] == expected);
+        t.assert_true("usage has no choices", chat[1]["choices"].empty());
+
+        partial.probs_output.clear();
+        final.probs_output.clear();
+        t.assert_true("no partial probabilities", !partial.to_json_non_oaicompat().contains("completion_probabilities"));
+        t.assert_true("no final probabilities", !final.to_json_non_oaicompat().contains("completion_probabilities"));
+        t.assert_true("no text partial probabilities", partial.to_json_oaicompat()["choices"][0]["logprobs"].is_null());
+        t.assert_true("no text final probabilities", final.to_json_oaicompat()["choices"][0]["logprobs"].is_null());
+        partial.oaicompat_msg_diffs.clear();
+        t.assert_true("no empty chat delta without probabilities", partial.to_json_oaicompat_chat().empty());
+        chat = final.to_json_oaicompat_chat_stream();
+        t.assert_true("no chat final probabilities", !chat[0]["choices"][0].contains("logprobs"));
+    }
+}
+
 int main(int argc, char ** argv) {
     testing t;
 
@@ -690,6 +749,7 @@ int main(int argc, char ** argv) {
     t.test("decision_depth",  test_decision_depth);
     t.test("glob_match",      test_glob_match);
     t.test("dry_sequence_breakers", test_dry_sequence_breakers);
+    t.test("completion_probabilities", test_completion_probabilities);
 
     return t.summary();
 }

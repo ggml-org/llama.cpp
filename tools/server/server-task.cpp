@@ -348,7 +348,7 @@ json server_task_result_cmpl_final::to_json_non_oaicompat() {
         {"tokens_cached",       n_tokens_cached},
         {"timings",             stats.to_json()},
     };
-    if (!stream && !probs_output.empty()) {
+    if (!probs_output.empty()) {
         res["completion_probabilities"] = completion_token_output::probs_vector_to_json(probs_output, post_sampling_probs);
     }
     return response_fields.empty() ? res : json_get_nested_values(response_fields, res);
@@ -366,7 +366,7 @@ json server_task_result_cmpl_final::usage_json_oaicompat() {
 json server_task_result_cmpl_final::to_json_oaicompat() {
     std::time_t t = std::time(0);
     json logprobs = json(nullptr); // OAI default to null
-    if (!stream && probs_output.size() > 0) {
+    if (!probs_output.empty()) {
         logprobs = json{
             {"content", completion_token_output::probs_vector_to_json(probs_output, post_sampling_probs)},
         };
@@ -490,6 +490,12 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
         {"system_fingerprint", std::string(llama_build_info())},
         {"object",             "chat.completion.chunk"},
     });
+
+    if (!probs_output.empty()) {
+        deltas.back()["choices"][0]["logprobs"] = json {
+            {"content", completion_token_output::probs_vector_to_json(probs_output, post_sampling_probs)},
+        };
+    }
 
     if (include_usage) {
         // OpenAI API spec for chat.completion.chunks specifies an empty `choices` array for the last chunk when including usage
@@ -1067,8 +1073,8 @@ json server_task_result_cmpl_partial::to_json_non_oaicompat() {
     if (is_progress) {
         res["prompt_progress"] = progress.to_json();
     }
-    if (!prob_output.probs.empty()) {
-        res["completion_probabilities"] = completion_token_output::probs_vector_to_json({prob_output}, post_sampling_probs);
+    if (!probs_output.empty()) {
+        res["completion_probabilities"] = completion_token_output::probs_vector_to_json(probs_output, post_sampling_probs);
     }
     return res;
 }
@@ -1076,9 +1082,9 @@ json server_task_result_cmpl_partial::to_json_non_oaicompat() {
 json server_task_result_cmpl_partial::to_json_oaicompat() {
     std::time_t t = std::time(0);
     json logprobs = json(nullptr); // OAI default to null
-    if (prob_output.probs.size() > 0) {
+    if (!probs_output.empty()) {
         logprobs = json{
-            {"content", completion_token_output::probs_vector_to_json({prob_output}, post_sampling_probs)},
+            {"content", completion_token_output::probs_vector_to_json(probs_output, post_sampling_probs)},
         };
     }
     json res = json {
@@ -1145,13 +1151,17 @@ json server_task_result_cmpl_partial::to_json_oaicompat_chat() {
         add_delta(server_chat_msg_diff_to_json_oaicompat(diff));
     }
 
+    if (deltas.empty() && !probs_output.empty()) {
+        add_delta(json::object());
+    }
+
     if (!deltas.empty()) {
         auto & last_json = deltas[deltas.size() - 1];
         GGML_ASSERT(last_json.at("choices").size() >= 1);
 
-        if (prob_output.probs.size() > 0) {
+        if (!probs_output.empty()) {
             last_json.at("choices").at(0)["logprobs"] = json {
-                {"content", completion_token_output::probs_vector_to_json({prob_output}, post_sampling_probs)},
+                {"content", completion_token_output::probs_vector_to_json(probs_output, post_sampling_probs)},
             };
         }
 
