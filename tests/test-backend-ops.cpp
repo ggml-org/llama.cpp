@@ -4248,6 +4248,52 @@ struct test_add_rms_norm : public test_case {
     }
 };
 
+// GGML_OP_ADD + GGML_OP_RMS_NORM + GGML_OP_MUL (fused operation)
+struct test_add_rms_norm_mul : public test_case {
+    const std::array<int64_t, 4> ne;
+    const float                  eps;
+
+    ggml_tensor * sum = nullptr;
+    ggml_tensor * out = nullptr;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "ADD_RMS_NORM_MUL";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::vector<ggml_tensor *> fusion_test_nodes() override { return { sum, out }; }
+
+    std::string vars() override { return VARS_TO_STR2(ne, eps); }
+
+    test_add_rms_norm_mul(std::array<int64_t, 4> ne = { 4096, 1, 1, 1 }, float eps = 1e-6f) : ne(ne), eps(eps) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
+        ggml_tensor * b = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
+        ggml_tensor * w = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ne[0]);
+        ggml_set_name(a, "a");
+        ggml_set_name(b, "b");
+        ggml_set_name(w, "w");
+
+        sum = ggml_add(ctx, a, b);
+        ggml_set_name(sum, "sum");
+        ggml_tensor * normed = ggml_mul(ctx, ggml_rms_norm(ctx, sum, eps), w);
+        ggml_set_name(normed, "normed");
+
+        out = ggml_add(ctx, normed, sum);
+        ggml_set_name(out, "out");
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            init_tensor_uniform(t, -10.f, 10.f);
+        }
+    }
+};
+
 // GGML_OP_UNARY(RELU) + GGML_OP_SQR (fused operation)
 struct test_relu_sqr : public test_case {
     const ggml_type type;
@@ -11333,6 +11379,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, {n, 1, 1, 1}, 1e-6f, false, multi_add));
         }
         test_cases.emplace_back(new test_add_rms_norm(GGML_TYPE_F32, {n, 1, 1, 1}, 1e-6f, false));
+    }
+    // decode-shaped residual rows: below, at and above the fused path's limits, odd row counts, batches
+    for (int64_t n : { 1020, 1024, 4096, 5120, 8192, 8196, 16384 }) {
+        for (int64_t rows : { 1, 3, 4 }) {
+            test_cases.emplace_back(new test_add_rms_norm_mul({ n, rows, 1, 1 }, 1e-6f));
+        }
+        test_cases.emplace_back(new test_add_rms_norm_mul({ n, 2, 3, 1 }, 1e-6f));
     }
     for (uint32_t n : {64, 1025}) {
         test_cases.emplace_back(new test_add_add(GGML_TYPE_F32, GGML_TYPE_F32, { n, 5, 4, 3 }, false, false));
