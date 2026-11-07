@@ -164,6 +164,11 @@
               }
               // lib.optionalAttrs (system == "x86_64-linux") {
                 rocm = config.legacyPackages.llamaPackagesRocm.llama-cpp;
+
+                sycl = config.packages.default.override {
+                  useSycl = true;
+                  syclToolkit = pkgs.intel-oneapi-toolkit;
+                };
               };
 
             # Packages exposed in `.#checks` will be built by the CI and by
