@@ -276,9 +276,9 @@ struct common_params_sampling {
     };
 
     common_grammar                      grammar;          // optional grammar constraint (user / output-format / tool-calls)
-    std::string                         json_schema;      // schema the output-format grammar was built from, applied through the chat template
     bool                                grammar_lazy = false;
     std::vector<common_grammar_trigger> grammar_triggers; // optional triggers (for lazy grammars)
+    std::string                         json_schema;      // schema the output-format grammar was built from, applied through the chat template
     std::set<llama_token>               preserved_tokens;
 
     std::vector<llama_logit_bias> logit_bias;     // logit biases to apply
