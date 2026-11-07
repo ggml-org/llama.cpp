@@ -1986,7 +1986,6 @@ struct llama_model_granite_swa : public llama_model_base {
             const int           il);
     };
 
-    llama_rope_params get_rope_params(const llama_cparams & cparams, int il) const override;
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 
