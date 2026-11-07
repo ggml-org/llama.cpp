@@ -831,8 +831,8 @@ ggml_tensor * clip_graph::build_attn(
         v = ggml_cont(ctx0, v);
 
         ggml_tensor * kq = ggml_mul_mat(ctx0, k, q);
-        // F32 may not needed for vision encoders?
-        // ggml_prec_set_acc(kq, GGML_PREC_F32);
+        // TODO: this most likely requires GGML_PREC_BF16, but will enable it later to avoid scope-creep
+        // ggml_prec_set_acc(kq, GGML_PREC_BF16);
 
         kq = ggml_soft_max_ext(ctx0, kq, kq_mask, kq_scale, 0.0f);
         if (sinks != nullptr) {
