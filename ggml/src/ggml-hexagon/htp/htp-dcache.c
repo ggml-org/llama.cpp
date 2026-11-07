@@ -15,7 +15,7 @@ struct l2flush_range {
     uint32_t start;       // line-aligned start address
     uint32_t end;         // line-aligned end address
     uint32_t block_first; // global block index of this range's first block
-    uint32_t n_blocks;    // number of HEX_L2_BLOCK_SIZE chunks (last may be partial)
+    uint32_t n_blocks;    // number of HTP_DCACHE_BLOCK_SIZE chunks (last may be partial)
 };
 
 struct l2flush_multi_task {
@@ -61,8 +61,8 @@ static void l2flush_multi_worker(const htp_thread_t * th, unsigned int n, unsign
             continue;
         }
 
-        const uint32_t s = rg->start + (lo - rb_first) * HEX_L2_BLOCK_SIZE;
-        uint32_t       e = rg->start + (hi - rb_first) * HEX_L2_BLOCK_SIZE;
+        const uint32_t s = rg->start + (lo - rb_first) * HTP_DCACHE_BLOCK_SIZE;
+        uint32_t       e = rg->start + (hi - rb_first) * HTP_DCACHE_BLOCK_SIZE;
         if (e > rg->end) {
             e = rg->end;
         }
@@ -162,7 +162,7 @@ void htp_dcache_mark_dirty_tensors(struct htp_context * ctx, const struct htp_te
         total_evict_size += r->end - r->start;
     }
 
-    if (total_evict_size > HEX_L2_FLUSH_ALL_THRESHOLD) {
+    if (total_evict_size > HTP_DCACHE_FLUSH_ALL_THRESHOLD) {
         flush_all_dcache(ctx);
         for (uint32_t i = 0; i < n_pending; i++) {
             struct htp_dirty_range * r = &ctx->dirty_ranges[i];
@@ -173,7 +173,7 @@ void htp_dcache_mark_dirty_tensors(struct htp_context * ctx, const struct htp_te
         return;
     }
 
-    if (total_evict_size > HEX_L2_FLUSH_WQ_THRESHOLD && ctx->n_hvx > 1 && n_evict <= HTP_MAX_DIRTY_RANGES) {
+    if (total_evict_size > HTP_DCACHE_FLUSH_WQ_THRESHOLD && ctx->n_hvx > 1 && n_evict <= HTP_MAX_DIRTY_RANGES) {
         struct l2flush_multi_task task;
         task.n_ranges = n_evict;
 
@@ -186,7 +186,7 @@ void htp_dcache_mark_dirty_tensors(struct htp_context * ctx, const struct htp_te
             rg->start = hex_align_down((size_t) r->start, HEX_L2_LINE_SIZE);
             rg->end   = hex_align_up((size_t) r->end, HEX_L2_LINE_SIZE);
             rg->block_first = block_acc;
-            rg->n_blocks = (rg->end - rg->start + HEX_L2_BLOCK_SIZE - 1) / HEX_L2_BLOCK_SIZE;
+            rg->n_blocks = (rg->end - rg->start + HTP_DCACHE_BLOCK_SIZE - 1) / HTP_DCACHE_BLOCK_SIZE;
             block_acc += rg->n_blocks;
         }
 
@@ -268,7 +268,7 @@ static inline bool is_tensor_dirty(struct htp_context * ctx, const struct htp_te
 }
 
 static void flush_dirty_ranges(struct htp_context * ctx, const struct htp_dirty_range * ranges, uint32_t n_ranges, uint64_t total_dirty) {
-    if (total_dirty >= HEX_L2_FLUSH_WQ_THRESHOLD && ctx->n_hvx > 1) {
+    if (total_dirty >= HTP_DCACHE_FLUSH_WQ_THRESHOLD && ctx->n_hvx > 1) {
         struct l2flush_multi_task task;
         task.n_ranges = n_ranges;
 
@@ -279,7 +279,7 @@ static void flush_dirty_ranges(struct htp_context * ctx, const struct htp_dirty_
             rg->start = hex_align_down((size_t) r->start, HEX_L2_LINE_SIZE);
             rg->end   = hex_align_up((size_t) r->end, HEX_L2_LINE_SIZE);
             rg->block_first = block_acc;
-            rg->n_blocks = (rg->end - rg->start + HEX_L2_BLOCK_SIZE - 1) / HEX_L2_BLOCK_SIZE;
+            rg->n_blocks = (rg->end - rg->start + HTP_DCACHE_BLOCK_SIZE - 1) / HTP_DCACHE_BLOCK_SIZE;
             block_acc += rg->n_blocks;
         }
 
@@ -316,7 +316,7 @@ void htp_dcache_flush_dirty_ranges(struct htp_context * ctx) {
         return;
     }
 
-    if (total_dirty > HEX_L2_FLUSH_ALL_THRESHOLD) {
+    if (total_dirty > HTP_DCACHE_FLUSH_ALL_THRESHOLD) {
         flush_all_dcache(ctx);
         return;
     }
@@ -345,7 +345,7 @@ void htp_dcache_flush_dirty_tensors(struct htp_context * ctx, const struct htp_t
         return;
     }
 
-    if (total_dirty > HEX_L2_FLUSH_ALL_THRESHOLD) {
+    if (total_dirty > HTP_DCACHE_FLUSH_ALL_THRESHOLD) {
         flush_all_dcache(ctx);
         return;
     }
