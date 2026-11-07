@@ -157,6 +157,30 @@ static bool fuse_rms_norm_mul(const ggml_hexagon_session * sess, htp_opnode & pr
     return true;
 }
 
+// post-norm residual: dst = rms_norm(x) * w + r
+static bool fuse_rms_norm_mul_add(const ggml_hexagon_session * sess, htp_opnode & prev, const htp_opnode & cur) {
+    if (prev.opcode != HTP_OP_RMS_NORM_MUL) return false;
+
+    const ggml_tensor * r = nullptr;
+    if (!htp_match_consumer(prev, cur, /*commutative=*/ true, &r)) return false;
+
+    const ggml_tensor * src0   = prev.src0();
+    const ggml_tensor * weight = prev.inputs[1];
+    const ggml_tensor * dst    = cur.dst();
+    if (!ggml_are_same_layout(src0, r)) return false;
+    if (htp_inputs_overlap_unsafe(prev, dst, r)) return false;
+
+    struct htp_unary_kernel_params kparams;
+    if (!htp_kparams_solve_rms_norm_mul_add(sess, src0, weight, dst, &kparams)) return false;
+
+    prev.opcode = HTP_OP_RMS_NORM_MUL_ADD;
+    prev.inputs.push_back(r);
+    prev.outputs[0] = dst;
+    prev.fused.push_back(cur.node);
+    prev.set_kparams(kparams);
+    return true;
+}
+
 static bool fuse_rms_norm_scale(const ggml_hexagon_session * sess, htp_opnode & prev, const htp_opnode & cur) {
     GGML_UNUSED(sess);
     if (prev.opcode != HTP_OP_RMS_NORM && prev.opcode != HTP_OP_RMS_NORM_MUL) return false;
@@ -620,6 +644,7 @@ bool htp_fusion_try_fuse(const struct ggml_hexagon_session * sess, struct htp_op
         case HTP_OP_ADD:
             return (htp_fusion_enabled(HTP_FUSE_ALLREDUCE_ADD) && fuse_allreduce_add(sess, prev, cur)) ||
                    (htp_fusion_enabled(HTP_FUSE_MUL_MAT_ADD)   && fuse_mul_mat_add(sess, prev, cur))   ||
+                   (htp_fusion_enabled(HTP_FUSE_RMS_NORM_MUL_ADD) && fuse_rms_norm_mul_add(sess, prev, cur)) ||
                    (htp_fusion_enabled(HTP_FUSE_BINARY_NX)     && fuse_binary_nx(sess, prev, cur));
         case HTP_OP_MUL:
             return (htp_fusion_enabled(HTP_FUSE_RMS_NORM_MUL)   && fuse_rms_norm_mul(sess, prev, cur))   ||

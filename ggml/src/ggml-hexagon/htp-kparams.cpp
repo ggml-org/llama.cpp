@@ -1583,11 +1583,15 @@ static bool htp_kparams_solve_unary_impl(
 
     kparams->n_threads = n_threads;
 
-    const bool broadcast_weight = (op == HTP_OP_RMS_NORM_MUL) && (src1->ne[1] * src1->ne[2] * src1->ne[3] == 1);
+    const bool has_weight       = (op == HTP_OP_RMS_NORM_MUL || op == HTP_OP_RMS_NORM_MUL_ADD);
+    const bool broadcast_weight = has_weight && (src1->ne[1] * src1->ne[2] * src1->ne[3] == 1);
+    if (op == HTP_OP_RMS_NORM_MUL_ADD && !broadcast_weight) {
+        return false;
+    }
     kparams->broadcast_weight   = broadcast_weight;
 
     const bool     src0_contig           = ggml_is_contiguous_1(src0);
-    const bool     src1_contig           = (op == HTP_OP_RMS_NORM_MUL && !broadcast_weight) ? ggml_is_contiguous_1(src1) : true;
+    const bool     src1_contig           = (has_weight && !broadcast_weight) ? ggml_is_contiguous_1(src1) : true;
     const uint32_t src0_nrows_per_thread = (src0_nrows + n_threads - 1) / n_threads;
     const uint32_t min_block_rows        = (uint32_t) (std::max<size_t>(1, 2048 / dst_data_row_size));
     uint32_t       max_block             = (src0_contig && src1_contig) ? src0_nrows : (uint32_t) src0->ne[1];
@@ -1603,7 +1607,7 @@ static bool htp_kparams_solve_unary_impl(
     uint32_t vtcm_row_per_thread = 0;
 
     htp_unary_solve_layout(&L, op, src0->ne[0], dst->ne[0],
-                           op == HTP_OP_RMS_NORM_MUL ? src1->ne[0] : 0,
+                           has_weight ? src1->ne[0] : 0,
                            max_block, broadcast_weight, n_threads, vtcm_size, elem_size,
                            &col_tile, &vtcm_row_per_thread);
 
@@ -1640,6 +1644,16 @@ bool htp_kparams_solve_rms_norm_mul(
     struct htp_unary_kernel_params * kparams
 ) {
     return htp_kparams_solve_unary_impl(sess, HTP_OP_RMS_NORM_MUL, src0, src1, dst, kparams);
+}
+
+bool htp_kparams_solve_rms_norm_mul_add(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * src0,
+    const struct ggml_tensor * src1,
+    const struct ggml_tensor * dst,
+    struct htp_unary_kernel_params * kparams
+) {
+    return htp_kparams_solve_unary_impl(sess, HTP_OP_RMS_NORM_MUL_ADD, src0, src1, dst, kparams);
 }
 
 bool htp_kparams_solve_repeat_get_rows(
