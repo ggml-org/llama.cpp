@@ -377,6 +377,7 @@ private:
 
     ggml_backend_sched_ptr sched;
 
+    size_t sched_max_nodes = 0;
     bool sched_need_reserve = true;
 
     // whether the reserve graph has a logits tensor, set in sched_reserve()
