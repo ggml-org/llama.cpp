@@ -58,6 +58,31 @@ static bool save_cache_state(llama_context * ctx, const std::string & path, cons
     return saved && !error;
 }
 
+static bool load_cache_state(llama_context * ctx, const std::string & path, const std::vector<llama_token> & metadata) {
+    std::vector<llama_token> loaded(metadata.size());
+    size_t n_loaded = 0;
+    return llama_state_load_file(ctx, path.c_str(), loaded.data(), loaded.size(), &n_loaded) &&
+        n_loaded == metadata.size() && loaded == metadata;
+}
+
+static bool check_cache_has_warm_up_state(llama_memory_t mem, int n_idle, int chunk_size) {
+    int positions[KVU_CACHE_N_IDLE_SEQ] = {};
+    for (int filled = 0; filled < n_idle;) {
+        for (int seq = 0; seq < KVU_CACHE_N_IDLE_SEQ && filled < n_idle; ++seq) {
+            const int count = std::min(chunk_size, n_idle - filled);
+            positions[seq] += count;
+            filled += count;
+        }
+    }
+    for (int seq = 0; seq < KVU_CACHE_N_IDLE_SEQ; ++seq) {
+        if (llama_memory_seq_pos_max(mem, seq) != positions[seq] - 1) {
+            LOG_ERR("scattered idle sequence %d has an unexpected end position\n", seq);
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool invalid_shape(const std::vector<int> & values) {
     return values.empty() || *std::min_element(values.begin(), values.end()) <= 0;
 }
@@ -194,7 +219,6 @@ int llama_batched_bench(int argc, char ** argv) {
         LOG("|%6s-|-%6s-|-%4s-|-%6s-|-%8s-|-%8s-|-%8s-|-%8s-|-%8s-|-%8s-|\n", "------", "------", "----", "------", "--------", "--------", "--------", "--------", "--------", "--------");
     }
 
-    std::vector<int> saved_idle_counts;
     for (        int i_pp = 0; i_pp < (int) n_pp.size(); ++i_pp) {
         for (    int i_tg = 0; i_tg < (int) n_tg.size(); ++i_tg) {
             for (int i_pl = 0; i_pl < (int) n_pl.size(); ++i_pl) {
@@ -220,47 +244,48 @@ int llama_batched_bench(int argc, char ** argv) {
                         LOG_ERR("cannot inspect scattered KV session: %s\n", state_path.c_str());
                         return 1;
                     }
-                    if (state_exists && std::find(saved_idle_counts.begin(), saved_idle_counts.end(), n_idle) == saved_idle_counts.end()) {
-                        LOG_ERR("scattered KV session already exists: %s\n", state_path.c_str());
-                        return 1;
-                    }
                 }
                 llama_memory_clear(mem, false);
                 if (kvu_cache_state) {
                     const int chunk_size = std::max(1, std::min(KVU_CACHE_SCATTER_CHUNK_MAX, n_idle/16));
-                    int positions[KVU_CACHE_N_IDLE_SEQ] = {};
-                    std::mt19937 idle_rng(1);
-                    std::uniform_int_distribution<int32_t> idle_token(0, n_vocab - 1);
-
-                    LOG_INF("warming unified KV cache: %d idle tokens\n", n_idle);
-                    for (int filled = 0; filled < n_idle;) {
-                        for (int seq = 0; seq < KVU_CACHE_N_IDLE_SEQ && filled < n_idle; ++seq) {
-                            const int count = std::min(chunk_size, n_idle - filled);
-                            batch.clear();
-                            for (int i = 0; i < count; ++i) {
-                                batch.add(idle_token(idle_rng), positions[seq]++, seq, false);
-                            }
-                            if (!decode_helper(ctx, batch, ctx_params.n_batch, false)) {
-                                LOG_ERR("failed to fill scattered idle KV cache\n");
-                                return 1;
-                            }
-                            filled += count;
-                        }
-                    }
-                    llama_synchronize(ctx);
-                    for (int seq = 0; seq < KVU_CACHE_N_IDLE_SEQ; ++seq) {
-                        if (llama_memory_seq_pos_max(mem, seq) != positions[seq] - 1) {
-                            LOG_ERR("scattered idle sequence %d has an unexpected end position\n", seq);
+                    const auto metadata = cache_state_metadata(model, ctx_params);
+                    if (state_exists) {
+                        if (!load_cache_state(ctx, state_path, metadata)) {
+                            LOG_ERR("failed to load or verify scattered KV session: %s\n", state_path.c_str());
                             return 1;
                         }
+                    } else {
+                        int positions[KVU_CACHE_N_IDLE_SEQ] = {};
+                        std::mt19937 idle_rng(1);
+                        std::uniform_int_distribution<int32_t> idle_token(0, n_vocab - 1);
+
+                        LOG_INF("warming unified KV cache: %d idle tokens\n", n_idle);
+                        for (int filled = 0; filled < n_idle;) {
+                            for (int seq = 0; seq < KVU_CACHE_N_IDLE_SEQ && filled < n_idle; ++seq) {
+                                const int count = std::min(chunk_size, n_idle - filled);
+                                batch.clear();
+                                for (int i = 0; i < count; ++i) {
+                                    batch.add(idle_token(idle_rng), positions[seq]++, seq, false);
+                                }
+                                if (!decode_helper(ctx, batch, ctx_params.n_batch, false)) {
+                                    LOG_ERR("failed to fill scattered idle KV cache\n");
+                                    return 1;
+                                }
+                                filled += count;
+                            }
+                        }
+                        llama_synchronize(ctx);
                     }
-                    if (!state_exists) {
-                        const auto metadata = cache_state_metadata(model, ctx_params);
+                    if (!check_cache_has_warm_up_state(mem, n_idle, chunk_size)) {
+                        return 1;
+                    }
+                    if (state_exists) {
+                        LOG_INF("loaded scattered KV session: %s\n", state_path.c_str());
+                    } else {
                         if (!save_cache_state(ctx, state_path, metadata)) {
                             LOG_ERR("failed to save scattered KV session: %s\n", state_path.c_str());
                             return 1;
                         }
-                        saved_idle_counts.push_back(n_idle);
                         LOG_INF("saved scattered KV session: %s\n", state_path.c_str());
                     }
                 }
