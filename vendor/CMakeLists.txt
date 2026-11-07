@@ -9,3 +9,8 @@ add_subdirectory(stb)
 if (LLAMA_BUILD_COMMON)
     add_subdirectory(cpp-httplib)
 endif()
+
+# only used by ggml-cuda
+if (GGML_CUDA_FATBIN_PACK)
+    add_subdirectory(zstd)
+endif()

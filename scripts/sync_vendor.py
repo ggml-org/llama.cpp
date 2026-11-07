@@ -2,10 +2,14 @@
 
 import urllib.request
 import os
+import shutil
 import sys
 import subprocess
+import tarfile
+import tempfile
 
 HTTPLIB_VERSION = "refs/tags/v0.65.0"
+ZSTD_VERSION    = "1.5.7"
 
 # used by examples/gguf-hash, these repos have no release tag, so we pin a commit
 XXHASH_COMMIT      = "9f465f1ea932d6ad9a26cd77496311ffa544cd68"
@@ -43,6 +47,8 @@ vendor = {
 
     f"https://raw.githubusercontent.com/jb55/rotate-bits.h/{ROTATE_BITS_COMMIT}/rotate-bits.h": "vendor/hash/rotate-bits/rotate-bits.h",
     f"https://raw.githubusercontent.com/jb55/rotate-bits.h/{ROTATE_BITS_COMMIT}/LICENSE.md":   "vendor/hash/rotate-bits/LICENSE.md",
+
+    f"https://raw.githubusercontent.com/facebook/zstd/refs/tags/v{ZSTD_VERSION}/LICENSE": "vendor/zstd/LICENSE",
 }
 
 # local changes kept on top of the upstream sources
@@ -145,3 +151,24 @@ except Exception as e:
 finally:
     os.remove("split.py")
     os.remove("httplib.h")
+
+# zstddeclib.c is not in the zstd repo, it is generated from the sources of the tag
+print("Generating zstddeclib.c...") # noqa: NP100
+try:
+    with tempfile.TemporaryDirectory() as tmp:
+        archive = os.path.join(tmp, "zstd.tar.gz")
+        urllib.request.urlretrieve(f"https://github.com/facebook/zstd/archive/refs/tags/v{ZSTD_VERSION}.tar.gz", archive)
+        with tarfile.open(archive) as tar:
+            tar.extractall(tmp, filter="data")
+        combine_dir = os.path.join(tmp, f"zstd-{ZSTD_VERSION}", "build", "single_file_libs")
+        subprocess.check_call([
+            sys.executable, "combine.py",
+            "-r", "../../lib",
+            "-x", "legacy/zstd_legacy.h",
+            "-o", "zstddeclib.c",
+            "zstddeclib-in.c"
+        ], cwd=combine_dir)
+        shutil.copyfile(os.path.join(combine_dir, "zstddeclib.c"), "vendor/zstd/zstddeclib.c")
+except Exception as e:
+    print(f"Error: {e}") # noqa: NP100
+    sys.exit(1)
