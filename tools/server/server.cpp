@@ -186,6 +186,8 @@ static void server_register_routes(server_http_context & ctx_http, server_routes
     ctx_http.post("/v1/audio/transcriptions",  ex_wrapper(routes.post_transcriptions_oai));
     ctx_http.post("/audio/transcriptions",     ex_wrapper(routes.post_transcriptions_oai));
     ctx_http.post("/tts",                      ex_wrapper(routes.post_tts));
+    ctx_http.post("/v1/audio/speech",          ex_wrapper(routes.post_speech_oai));
+    ctx_http.post("/audio/speech",             ex_wrapper(routes.post_speech_oai));
     ctx_http.ws  ("/v1/realtime",              routes.ws_realtime);
     ctx_http.post("/v1/messages",              ex_wrapper(routes.post_anthropic_messages)); // anthropic messages API
     ctx_http.post("/infill",                   ex_wrapper(routes.post_infill));
@@ -504,6 +506,7 @@ static int server_run_router(common_params & params, int argc, char ** argv, con
     routes.post_responses_oai          = models_routes->proxy_post;
     routes.post_transcriptions_oai     = models_routes->proxy_post;
     routes.post_tts                    = models_routes->proxy_post;
+    routes.post_speech_oai             = models_routes->proxy_post;
     routes.ws_realtime                 = models_routes->proxy_ws;
     routes.post_anthropic_messages     = models_routes->proxy_post;
     routes.post_anthropic_count_tokens = models_routes->proxy_post;
