@@ -307,6 +307,50 @@ static void dequantize_row_q4_K_cuda(const void * vx, dst_t * y, const int64_t k
     dequantize_block_q4_K<<<nb, 32, 0, stream>>>(vx, y);
 }
 
+// non-contiguous dequantize for K-quants: resolves the row strides s01/s02/s03 (in block units).
+// One block per quantized block per row; the K-quant dequantizers are __forceinline__, so we
+// instantiate the kernel per type via macro instead of passing a function pointer.
+#define GGML_CUDA_DEFINE_DEQUANTIZE_K_NC(SUFFIX, DEQ_FN, N_THREADS)                              \
+    template<typename dst_t>                                                                     \
+    static __global__ void dequantize_block_##SUFFIX##_nc(                                      \
+            const void * __restrict__ vx, dst_t * __restrict__ y,                               \
+            const int64_t ne00, const int64_t ne01, const int64_t ne0203, const uint3 ne02,     \
+            const int64_t s01, const int64_t s02, const int64_t s03) {                          \
+        const int64_t nb_per_row = ne00 / QK_K;                                                 \
+        const int64_t ib0 = blockIdx.x;                                                         \
+        if (ib0 >= nb_per_row) {                                                                 \
+            return;                                                                              \
+        }                                                                                        \
+        for (int64_t i01 = blockIdx.y; i01 < ne01; i01 += gridDim.y) {                          \
+            for (int64_t i0203 = blockIdx.z; i0203 < ne0203; i0203 += gridDim.z) {              \
+                const uint2 dm = fast_div_modulo((uint32_t) i0203, ne02);                       \
+                const int64_t i02 = dm.y;                                                       \
+                const int64_t i03 = dm.x;                                                       \
+                const int64_t ib = i03*s03 + i02*s02 + i01*s01 + ib0;                          \
+                const int64_t iy = (i0203*ne01 + i01)*ne00 + ib0*QK_K;                          \
+                DEQ_FN(vx, ib, y + iy, threadIdx.x);                                            \
+            }                                                                                    \
+        }                                                                                        \
+    }                                                                                            \
+    template<typename dst_t>                                                                     \
+    static void dequantize_row_##SUFFIX##_nc_cuda(const void * vx, dst_t * y,                   \
+            const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,     \
+            const int64_t s01, const int64_t s02, const int64_t s03, cudaStream_t stream) {     \
+        const int64_t ne0203 = ne02*ne03;                                                       \
+        const uint3 ne02_fdv = init_fastdiv_values(ne02);                                      \
+        const int64_t nb_per_row = ne00 / QK_K;                                                \
+        const dim3 num_blocks((int) nb_per_row, (int) std::min(ne01, (int64_t) 65535),          \
+                              (int) std::min(ne0203, (int64_t) 65535));                         \
+        dequantize_block_##SUFFIX##_nc<dst_t><<<num_blocks, N_THREADS, 0, stream>>>(            \
+            vx, y, ne00, ne01, ne0203, ne02_fdv, s01, s02, s03);                               \
+    }
+
+GGML_CUDA_DEFINE_DEQUANTIZE_K_NC(q2_K, dequantize_q2_K<dst_t>, 64)
+GGML_CUDA_DEFINE_DEQUANTIZE_K_NC(q3_K, dequantize_q3_K<dst_t>, 64)
+GGML_CUDA_DEFINE_DEQUANTIZE_K_NC(q4_K, dequantize_q4_K<dst_t>, 32)
+GGML_CUDA_DEFINE_DEQUANTIZE_K_NC(q5_K, dequantize_q5_K<dst_t>, 64)
+GGML_CUDA_DEFINE_DEQUANTIZE_K_NC(q6_K, dequantize_q6_K<dst_t>, 64)
+
 template<typename dst_t>
 static void dequantize_row_q5_K_cuda(const void * vx, dst_t * y, const int64_t k, cudaStream_t stream) {
     const int nb = k / QK_K;
@@ -687,6 +731,16 @@ to_fp16_nc_cuda_t ggml_get_to_fp16_nc_cuda(ggml_type type) {
             return dequantize_block_cuda<QK8_0, QR8_0, dequantize_q8_0>;
         case GGML_TYPE_BF16:
             return convert_unary_cuda<nv_bfloat16>;
+        case GGML_TYPE_Q2_K:
+            return dequantize_row_q2_K_nc_cuda<half>;
+        case GGML_TYPE_Q3_K:
+            return dequantize_row_q3_K_nc_cuda<half>;
+        case GGML_TYPE_Q4_K:
+            return dequantize_row_q4_K_nc_cuda<half>;
+        case GGML_TYPE_Q5_K:
+            return dequantize_row_q5_K_nc_cuda<half>;
+        case GGML_TYPE_Q6_K:
+            return dequantize_row_q6_K_nc_cuda<half>;
         default:
             return nullptr;
     }
@@ -712,6 +766,16 @@ to_bf16_nc_cuda_t ggml_get_to_bf16_nc_cuda(ggml_type type) {
             return dequantize_block_cuda<QK8_0, QR8_0, dequantize_q8_0>;
         case GGML_TYPE_F16:
             return convert_unary_cuda<half, nv_bfloat16>;
+        case GGML_TYPE_Q2_K:
+            return dequantize_row_q2_K_nc_cuda<nv_bfloat16>;
+        case GGML_TYPE_Q3_K:
+            return dequantize_row_q3_K_nc_cuda<nv_bfloat16>;
+        case GGML_TYPE_Q4_K:
+            return dequantize_row_q4_K_nc_cuda<nv_bfloat16>;
+        case GGML_TYPE_Q5_K:
+            return dequantize_row_q5_K_nc_cuda<nv_bfloat16>;
+        case GGML_TYPE_Q6_K:
+            return dequantize_row_q6_K_nc_cuda<nv_bfloat16>;
         default:
             return nullptr;
     }
@@ -737,6 +801,16 @@ to_fp32_nc_cuda_t ggml_get_to_fp32_nc_cuda(ggml_type type) {
             return dequantize_block_cuda<QK8_0, QR8_0, dequantize_q8_0>;
         case GGML_TYPE_BF16:
             return convert_unary_cuda<nv_bfloat16, float>;
+        case GGML_TYPE_Q2_K:
+            return dequantize_row_q2_K_nc_cuda<float>;
+        case GGML_TYPE_Q3_K:
+            return dequantize_row_q3_K_nc_cuda<float>;
+        case GGML_TYPE_Q4_K:
+            return dequantize_row_q4_K_nc_cuda<float>;
+        case GGML_TYPE_Q5_K:
+            return dequantize_row_q5_K_nc_cuda<float>;
+        case GGML_TYPE_Q6_K:
+            return dequantize_row_q6_K_nc_cuda<float>;
         default:
             return nullptr;
     }

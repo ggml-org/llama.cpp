@@ -396,14 +396,18 @@ static bool ggml_cuda_cpy_as_memcpy_2d(const ggml_tensor * src0, const ggml_tens
         return false;
     }
 
-    // grow the contiguous prefix block shared by both tensors
-    size_t block_nb = ggml_element_size(src0);
+    // grow the contiguous prefix block shared by both tensors.
+    // For block-quantized types the "element size" is fractional (bytes-per-block / block),
+    // so walk in units of whole blocks (type_size) and count blocks in the first dim.
+    const int64_t blck_size = ggml_blck_size(src0->type);
+    size_t block_nb = ggml_type_size(src0->type);
     int d = 0;
     for (; d < GGML_MAX_DIMS; ++d) {
+        const size_t ne_d = (d == 0) ? (size_t)(src0->ne[d] / blck_size) : (size_t) src0->ne[d];
         if (src0->nb[d] != block_nb || src1->nb[d] != block_nb) {
             break;
         }
-        block_nb *= src0->ne[d];
+        block_nb *= ne_d;
     }
 
     // d == 0: nothing contiguous; d == GGML_MAX_DIMS: fully contiguous (handled by memcpy)
