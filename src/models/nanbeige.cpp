@@ -122,7 +122,7 @@ llama_model_nanbeige::graph::graph(const llm_graph_params & params) :
             cb(Vcur, "Vcur", il);
 
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
+                    model.layers[il].wo, model.layers[il].wo_b,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
             cb(cur, "attn_out", il);
         }
@@ -139,9 +139,9 @@ llama_model_nanbeige::graph::graph(const llm_graph_params & params) :
         cb(cur, "ffn_norm", il);
 
         cur = build_ffn(cur,
-                model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   model.layers[il].ffn_up_s,
-                model.layers[il].ffn_gate, model.layers[il].ffn_gate_b, model.layers[il].ffn_gate_s,
-                model.layers[il].ffn_down, model.layers[il].ffn_down_b, model.layers[il].ffn_down_s,
+                model.layers[il].ffn_up,   model.layers[il].ffn_up_b,
+                model.layers[il].ffn_gate, model.layers[il].ffn_gate_b,
+                model.layers[il].ffn_down, model.layers[il].ffn_down_b,
                 NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
         cb(cur, "ffn_out", il);
 
@@ -169,7 +169,7 @@ llama_model_nanbeige::graph::graph(const llm_graph_params & params) :
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 }

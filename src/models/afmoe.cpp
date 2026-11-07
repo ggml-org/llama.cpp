@@ -163,7 +163,7 @@ llama_model_afmoe::graph::graph(const llm_graph_params & params) : llm_graph_con
             cb(Kcur, "Kcur_rope", il);
 
             cur = build_attn(inp_attn,
-                    NULL, NULL, NULL,  // wo will be applied after gating
+                    NULL, NULL,  // wo will be applied after gating
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
             cb(cur, "attn_out", il);
 
@@ -174,7 +174,7 @@ llama_model_afmoe::graph::graph(const llm_graph_params & params) : llm_graph_con
             cb(cur, "attn_gated", il);
 
             // now apply output projection
-            cur = build_lora_mm(model.layers[il].wo, cur, model.layers[il].wo_s);
+            cur = build_lora_mm(model.layers[il].wo, cur);
             cb(cur, "attn_o_proj", il);
         }
 
@@ -218,9 +218,9 @@ llama_model_afmoe::graph::graph(const llm_graph_params & params) : llm_graph_con
             // shared expert
             if (hparams.n_expert_shared > 0) {
                 ggml_tensor * ffn_shexp = build_ffn(cur,
-                        model.layers[il].ffn_up_shexp,   NULL, NULL,
-                        model.layers[il].ffn_gate_shexp, NULL, NULL,
-                        model.layers[il].ffn_down_shexp, NULL, NULL,
+                        model.layers[il].ffn_up_shexp,   NULL,
+                        model.layers[il].ffn_gate_shexp, NULL,
+                        model.layers[il].ffn_down_shexp, NULL,
                         NULL,
                         LLM_FFN_SILU, LLM_FFN_PAR, il);
                 cb(ffn_shexp, "ffn_shexp", il);
@@ -233,9 +233,9 @@ llama_model_afmoe::graph::graph(const llm_graph_params & params) : llm_graph_con
         } else {
             // dense layer
             cur = build_ffn(cur,
-                    model.layers[il].ffn_up,   NULL, NULL,
-                    model.layers[il].ffn_gate, NULL, NULL,
-                    model.layers[il].ffn_down, NULL, NULL,
+                    model.layers[il].ffn_up,   NULL,
+                    model.layers[il].ffn_gate, NULL,
+                    model.layers[il].ffn_down, NULL,
                     NULL,
                     LLM_FFN_SILU, LLM_FFN_PAR, il);
             cb(cur, "ffn_out", il);
@@ -265,7 +265,7 @@ llama_model_afmoe::graph::graph(const llm_graph_params & params) : llm_graph_con
     res->t_embd = cur;
 
     // lm_head
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 }

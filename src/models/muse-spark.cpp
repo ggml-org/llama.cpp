@@ -122,7 +122,7 @@ llama_model_muse_spark::graph::graph(const llm_graph_params & params)
             cb(Kcur, "Kcur_rope", il);
 
             cur = build_attn(inp_attn,
-                    NULL, NULL, NULL,
+                    NULL, NULL,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
             cb(cur, "attn_out", il);
 
@@ -137,7 +137,7 @@ llama_model_muse_spark::graph::graph(const llm_graph_params & params)
             cur = ggml_mul(ctx0, cur, gate);
             cb(cur, "attn_gated", il);
 
-            cur = build_lora_mm(model.layers[il].wo, cur, model.layers[il].wo_s);
+            cur = build_lora_mm(model.layers[il].wo, cur);
             cb(cur, "attn_o_proj", il);
         }
 
@@ -180,7 +180,7 @@ llama_model_muse_spark::graph::graph(const llm_graph_params & params)
                 (llama_expert_gating_func_type) hparams.expert_gating_func,
                 il,
                 router_logits,
-                nullptr, nullptr, nullptr, nullptr, nullptr,
+                nullptr, nullptr,
                 model.layers[il].ffn_post_exp_norm, hparams.f_post_norm_eps);
         cb(moe_out, "ffn_moe_out", il);
 
@@ -207,7 +207,7 @@ llama_model_muse_spark::graph::graph(const llm_graph_params & params)
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
     cur = ggml_scale(ctx0, cur, hparams.f_logit_scale);
 
     if (hparams.f_final_logit_softcapping) {

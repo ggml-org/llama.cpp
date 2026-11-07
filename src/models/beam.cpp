@@ -167,7 +167,7 @@ llama_model_beam::graph::graph(const llm_graph_params & params) : llm_graph_cont
             }
 
             cur = build_attn(inp_attn,
-                    NULL, NULL, NULL, // o_proj is applied after the gate
+                    NULL, NULL, // o_proj is applied after the gate
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
             cb(cur, "attn_out", il);
 
@@ -182,7 +182,7 @@ llama_model_beam::graph::graph(const llm_graph_params & params) : llm_graph_cont
             cur = ggml_mul(ctx0, cur, gate);
             cb(cur, "attn_gated", il);
 
-            cur = build_lora_mm(layer.wo, cur, layer.wo_s);
+            cur = build_lora_mm(layer.wo, cur);
             cb(cur, "attn_o_proj", il);
         }
 
@@ -203,9 +203,9 @@ llama_model_beam::graph::graph(const llm_graph_params & params) : llm_graph_cont
 
         if ((uint32_t) il < hparams.n_layer_dense_lead) {
             cur = build_ffn(cur,
-                    layer.ffn_up,   NULL, NULL,
-                    layer.ffn_gate, NULL, NULL,
-                    layer.ffn_down, NULL, NULL,
+                    layer.ffn_up,   NULL,
+                    layer.ffn_gate, NULL,
+                    layer.ffn_down, NULL,
                     NULL,
                     LLM_FFN_SILU, LLM_FFN_PAR, il);
             cb(cur, "ffn_out", il);
@@ -242,7 +242,7 @@ llama_model_beam::graph::graph(const llm_graph_params & params) : llm_graph_cont
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
 
     if (hparams.f_final_logit_softcapping != 0.0f) {
         cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_final_logit_softcapping);

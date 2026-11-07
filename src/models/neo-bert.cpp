@@ -78,7 +78,7 @@ llama_model_neo_bert::graph::graph(const llm_graph_params & params) : llm_graph_
             cb(Vcur, "Vcur", il);
 
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, nullptr, model.layers[il].wo_s,
+                    model.layers[il].wo, nullptr,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             cb(cur, "kqv_out", il);
         }
@@ -101,9 +101,9 @@ llama_model_neo_bert::graph::graph(const llm_graph_params & params) : llm_graph_
         // feed-forward network
         cur = build_ffn(cur,
                 model.layers[il].ffn_up,
-                NULL, NULL, NULL, NULL, NULL,
-                model.layers[il].ffn_down,
                 NULL, NULL, NULL,
+                model.layers[il].ffn_down,
+                NULL, NULL,
                 LLM_FFN_SWIGLU, LLM_FFN_SEQ, il);
 
         // attentions bypass the intermediate layer

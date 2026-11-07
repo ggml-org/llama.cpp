@@ -397,6 +397,10 @@ static bool ggml_backend_blas_device_supports_op(ggml_backend_dev_t dev, const s
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * src1 = op->src[1];
 
+    if (ggml_get_src_scale(op, 0)) {
+        return false;
+    }
+
     switch (op->op) {
         case GGML_OP_NONE:
         case GGML_OP_RESHAPE:

@@ -2121,7 +2121,7 @@ ggml_tensor * llama_kv_cache::build_rope_shift(
     const int64_t n_embd_head_k = hparams.n_embd_head_k(il);
     const int64_t n_cells       = ggml_nelements(k)/n_embd_k_gqa;
 
-    if (!ggml_is_quantized(k->type) && k->type != GGML_TYPE_F8_E4M3 && !rot && !rp.k_norm) {
+    if (!ggml_is_quantized(k->type) && !ggml_needs_scale(k->type) && !rot && !rp.k_norm) {
         // we rotate only the n_rot dimensions
         ggml_tensor * k_rope =
             ggml_view_3d(ctx, k,
