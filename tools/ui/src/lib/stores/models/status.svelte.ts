@@ -21,6 +21,7 @@ import {
 } from '$lib/enums';
 import { HuggingFaceService } from '$lib/services/huggingface.service';
 import { ModelsService } from '$lib/services/models.service';
+import { PreferencesService } from '$lib/services/preferences.service';
 import type { ModelPropsManager } from '$lib/stores/models/props.svelte';
 // direct imports between stores, not via the barrel, to avoid circular deps
 import { serverStore } from '$lib/stores/server.svelte';
@@ -281,7 +282,7 @@ export class ModelStatusManager {
 	constructor(private host: ModelStatusHost) {
 		// the paused-ids registry moved to the server's unfinished-downloads record;
 		// drop the key this store used to persist
-		if (browser) localStorage.removeItem(`${STORAGE_APP_NAME}.pausedModelDownloads`);
+		if (browser) PreferencesService.removeItem(`${STORAGE_APP_NAME}.pausedModelDownloads`);
 	}
 
 	/**

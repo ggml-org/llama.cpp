@@ -1,5 +1,6 @@
 // direct imports, not via the barrel, to avoid circular deps
 import { conversationsStore } from './conversations/index.svelte';
+import { modelsStore } from './models/index.svelte';
 import { permissionsStore } from './permissions.svelte';
 import { settingsStore } from './settings/index.svelte';
 import { tabsStore } from './tabs.svelte';
@@ -7,7 +8,9 @@ import { toolsStore } from './tools.svelte';
 import { versionStore } from './version.svelte';
 import { browser } from '$app/environment';
 import { MigrationService } from '$lib/services/migration.service';
+import { StorageModeService } from '$lib/services/storage-mode.service';
 import { validateApiKey } from '$lib/utils/api-key-validation';
+import { toast } from 'svelte-sonner';
 
 let startup: Promise<void> | null = null;
 
@@ -29,6 +32,17 @@ export function initStores(): Promise<void> {
 		await MigrationService.runAllMigrations();
 
 		void requestPersistentStorage();
+
+		const chosen = StorageModeService.chosenAdapter;
+		const active = await StorageModeService.activate(() => toast.error('Failed to save settings'));
+
+		if (active) {
+			// these read user data while being constructed, before the mode was known
+			modelsStore.reloadPersisted();
+			conversationsStore.preferences.resetPending();
+		} else if (chosen) {
+			toast.warning(`${chosen.name} storage is unavailable, using this browser's storage`);
+		}
 
 		settingsStore.initialize();
 		permissionsStore.initialize();

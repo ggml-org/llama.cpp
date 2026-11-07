@@ -20,6 +20,7 @@ import {
 import { ReasoningEffort, ServerModelSource, ServerModelStatus } from '$lib/enums';
 import { HuggingFaceService } from '$lib/services/huggingface.service';
 import { ModelsService } from '$lib/services/models.service';
+import { PreferencesService } from '$lib/services/preferences.service';
 // direct imports between stores, not via the barrel, to avoid circular deps
 import { conversationsStore } from '$lib/stores/conversations/index.svelte';
 import { type ModelPropsHost, ModelPropsManager } from '$lib/stores/models/props.svelte';
@@ -46,7 +47,7 @@ function loadHiddenModels(): Set<string> {
 	if (!browser) return new SvelteSet<string>();
 
 	try {
-		const raw = localStorage.getItem(HIDDEN_MODELS_LOCALSTORAGE_KEY);
+		const raw = PreferencesService.getItem(HIDDEN_MODELS_LOCALSTORAGE_KEY);
 
 		return raw ? new SvelteSet(JSON.parse(raw) as string[]) : new SvelteSet<string>();
 	} catch {
@@ -59,7 +60,7 @@ function loadGroupOpenState(): SvelteMap<string, boolean> {
 	if (!browser) return new SvelteMap<string, boolean>();
 
 	try {
-		const raw = localStorage.getItem(MODEL_GROUP_OPEN_LOCALSTORAGE_KEY);
+		const raw = PreferencesService.getItem(MODEL_GROUP_OPEN_LOCALSTORAGE_KEY);
 		const parsed = raw ? (JSON.parse(raw) as unknown) : null;
 		const entries =
 			parsed && typeof parsed === 'object' ? Object.entries(parsed as Record<string, unknown>) : [];
@@ -77,7 +78,7 @@ function loadRecentModels(): string[] {
 	if (!browser) return [];
 
 	try {
-		const raw = localStorage.getItem(RECENT_MODELS_LOCALSTORAGE_KEY);
+		const raw = PreferencesService.getItem(RECENT_MODELS_LOCALSTORAGE_KEY);
 
 		if (!raw) return [];
 
@@ -427,6 +428,13 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		return this.isModelLoaded(modelId) && !this._status.isOperationInProgress(modelId);
 	}
 
+	/** Re-read the persisted user lists, once startup has chosen where they are stored. */
+	reloadPersisted(): void {
+		this.favoriteModelIds = this.loadFavoritesFromStorage();
+		this.hiddenModelIds = loadHiddenModels();
+		this.recentModelIds = loadRecentModels();
+	}
+
 	/**
 	 * Why the router would refuse to delete a model from disk, or null when it can.
 	 * Only a model from the HF cache is removable; a server that does not report
@@ -544,7 +552,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		this.favoriteModelIds = next;
 
 		try {
-			localStorage.setItem(FAVORITE_MODELS_LOCALSTORAGE_KEY, JSON.stringify([...next]));
+			PreferencesService.setItem(FAVORITE_MODELS_LOCALSTORAGE_KEY, JSON.stringify([...next]));
 		} catch {
 			toast.error('Failed to save favorite models to local storage');
 		}
@@ -573,7 +581,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		this.groupOpenState = next;
 
 		try {
-			localStorage.setItem(
+			PreferencesService.setItem(
 				MODEL_GROUP_OPEN_LOCALSTORAGE_KEY,
 				JSON.stringify(Object.fromEntries(next))
 			);
@@ -606,7 +614,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		this.hiddenModelIds = next;
 
 		try {
-			localStorage.setItem(HIDDEN_MODELS_LOCALSTORAGE_KEY, JSON.stringify([...next]));
+			PreferencesService.setItem(HIDDEN_MODELS_LOCALSTORAGE_KEY, JSON.stringify([...next]));
 		} catch {
 			toast.error('Failed to save hidden models to local storage');
 		}
@@ -704,7 +712,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 
 	private loadFavoritesFromStorage(): Set<string> {
 		try {
-			const raw = localStorage.getItem(FAVORITE_MODELS_LOCALSTORAGE_KEY);
+			const raw = PreferencesService.getItem(FAVORITE_MODELS_LOCALSTORAGE_KEY);
 
 			return raw ? new Set(JSON.parse(raw) as string[]) : new Set();
 		} catch {
@@ -724,7 +732,10 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		if (!browser) return;
 
 		try {
-			localStorage.setItem(RECENT_MODELS_LOCALSTORAGE_KEY, JSON.stringify(this.recentModelIds));
+			PreferencesService.setItem(
+				RECENT_MODELS_LOCALSTORAGE_KEY,
+				JSON.stringify(this.recentModelIds)
+			);
 		} catch {
 			console.warn('[ModelsStore] Failed to persist the recently used models');
 		}

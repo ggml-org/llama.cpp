@@ -18,6 +18,7 @@
 		SETTINGS_SECTION_SLUGS
 	} from '$lib/constants';
 	import { ColorMode } from '$lib/enums/ui.enums';
+	import { StorageModeService } from '$lib/services';
 	import { modelsStore, serverStore, settingsStore } from '$lib/stores';
 	import type { SettingsSection, SettingsSectionTitle } from '$lib/types';
 	import { setMode } from 'mode-watcher';
@@ -197,7 +198,11 @@
 				</div>
 
 				<div class="mt-8 border-t border-border/30 pt-6 pb-6">
-					<p class="text-xs text-muted-foreground">Settings are saved in browser's localStorage</p>
+					<p class="text-xs text-muted-foreground">
+						{StorageModeService.activeAdapter
+							? `Settings are saved on ${StorageModeService.activeAdapter.name}`
+							: "Settings are saved in browser's localStorage"}
+					</p>
 				</div>
 			</div>
 

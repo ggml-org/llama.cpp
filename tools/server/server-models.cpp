@@ -277,6 +277,9 @@ static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
     preset.unset_option("LLAMA_ARG_MODELS_AUTOLOAD");
     preset.unset_option("LLAMA_ARG_CONNECT");
     preset.unset_option("LLAMA_ARG_CONNECT_CODE");
+    // UI storage is served by the router only
+    preset.unset_option("LLAMA_ARG_UI_STORAGE");
+    preset.unset_option("LLAMA_ARG_UI_STORAGE_DIR");
     if (unset_model_args) {
         preset.unset_option("LLAMA_ARG_MODEL");
         preset.unset_option("LLAMA_ARG_MMPROJ");
@@ -2039,6 +2042,7 @@ void server_models_routes::init_routes() {
                 {"ui_settings",          ui_settings},
                 {"build_info",           std::string(llama_build_info())},
                 {"cors_proxy_enabled",   params.ui_mcp_proxy},
+                {"ui_storage",           params.ui_storage},
             };
             if (!params.server_connect_code.empty()) {
                 props["connect_code"] = params.server_connect_code;

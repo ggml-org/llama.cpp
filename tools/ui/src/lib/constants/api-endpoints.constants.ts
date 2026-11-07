@@ -19,6 +19,12 @@ export const API_SLOTS = {
 	LIST: './slots'
 };
 
+// conversations and settings kept on the server, requires the --ui-storage flag
+export const API_STORAGE = {
+	CONVERSATIONS: './storage/conversations',
+	SETTINGS: './storage/settings'
+};
+
 export const API_TOOLS = {
 	EXECUTE: '/tools',
 	LIST: '/tools'

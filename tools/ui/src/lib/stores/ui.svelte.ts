@@ -18,6 +18,7 @@ import {
 	SIDEBAR_MIN_WIDTH,
 	SIDEBAR_WIDTH_LOCALSTORAGE_KEY
 } from '$lib/constants';
+import { PreferencesService } from '$lib/services/preferences.service';
 import { deviceStore } from '$lib/stores/device.svelte';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
 import { remToPx } from '$lib/utils/css';
@@ -71,7 +72,7 @@ class UiStore {
 		// a phone opens the sidebar as an overlay, which is no layout to restore
 		if (!browser || deviceStore.isMobile) return;
 
-		localStorage.setItem(SIDEBAR_EXPANDED_LOCALSTORAGE_KEY, String(expanded));
+		PreferencesService.setItem(SIDEBAR_EXPANDED_LOCALSTORAGE_KEY, String(expanded));
 	}
 
 	/** Close the model details drawer. */
@@ -130,22 +131,22 @@ class UiStore {
 		if (!browser) return;
 
 		if (width === null) {
-			localStorage.removeItem(SIDEBAR_WIDTH_LOCALSTORAGE_KEY);
+			PreferencesService.removeItem(SIDEBAR_WIDTH_LOCALSTORAGE_KEY);
 		} else {
-			localStorage.setItem(SIDEBAR_WIDTH_LOCALSTORAGE_KEY, String(width));
+			PreferencesService.setItem(SIDEBAR_WIDTH_LOCALSTORAGE_KEY, String(width));
 		}
 	}
 
 	private loadSidebarExpanded(): boolean {
 		if (!browser || deviceStore.isMobile) return false;
 
-		return localStorage.getItem(SIDEBAR_EXPANDED_LOCALSTORAGE_KEY) === 'true';
+		return PreferencesService.getItem(SIDEBAR_EXPANDED_LOCALSTORAGE_KEY) === 'true';
 	}
 
 	private loadSidebarWidth(): number | null {
 		if (!browser) return null;
 
-		const width = Number(localStorage.getItem(SIDEBAR_WIDTH_LOCALSTORAGE_KEY));
+		const width = Number(PreferencesService.getItem(SIDEBAR_WIDTH_LOCALSTORAGE_KEY));
 
 		if (!Number.isFinite(width) || width <= 0) return null;
 

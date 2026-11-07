@@ -148,3 +148,34 @@ export type ExportedConversation = {
 };
 
 export type ExportedConversations = ExportedConversation | ExportedConversation[];
+
+/**
+ * Row-level storage for conversations and messages. Implementations only read
+ * and write rows; tree rules live in DatabaseService and utils/conversation-tree.
+ */
+export interface StorageBackend {
+	/** Runs `fn` atomically; backend calls made inside it join the same transaction. */
+	transaction<T>(fn: () => Promise<T>): Promise<T>;
+
+	/** All conversations, most recently modified first. */
+	listConversations(): Promise<DatabaseConversation[]>;
+	/** One entry per id, `undefined` where the conversation does not exist. */
+	getConversations(ids: string[]): Promise<(DatabaseConversation | undefined)[]>;
+	/** Fails if a conversation with the same id exists. */
+	addConversation(conv: DatabaseConversation): Promise<void>;
+	putConversations(convs: DatabaseConversation[]): Promise<void>;
+	/** Shallow-merges `updates` into the row; a no-op when it does not exist. */
+	updateConversation(id: string, updates: Partial<Omit<DatabaseConversation, 'id'>>): Promise<void>;
+	/** Deletes the conversations together with all of their messages. */
+	deleteConversations(ids: string[]): Promise<void>;
+
+	getMessage(id: string): Promise<DatabaseMessage | undefined>;
+	/** Messages of the given conversations, in no guaranteed order. */
+	getMessages(convIds: string[]): Promise<DatabaseMessage[]>;
+	/** Fails if a message with the same id exists. */
+	addMessages(messages: DatabaseMessage[]): Promise<void>;
+	putMessages(messages: DatabaseMessage[]): Promise<void>;
+	/** Shallow-merges `updates` into the row; a no-op when it does not exist. */
+	updateMessage(id: string, updates: Partial<Omit<DatabaseMessage, 'id'>>): Promise<void>;
+	deleteMessages(ids: string[]): Promise<void>;
+}

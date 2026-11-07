@@ -1,5 +1,11 @@
+import { PreferencesService } from './preferences.service';
 import { browser } from '$app/environment';
-import { CONFIG_LOCALSTORAGE_KEY, USER_OVERRIDES_LOCALSTORAGE_KEY } from '$lib/constants';
+import {
+	API_KEY_LOCALSTORAGE_KEY,
+	CONFIG_LOCALSTORAGE_KEY,
+	SETTINGS_KEYS,
+	USER_OVERRIDES_LOCALSTORAGE_KEY
+} from '$lib/constants';
 
 /**
  * SettingsService - localStorage persistence layer for settings
@@ -27,11 +33,19 @@ export class SettingsService {
 		}
 
 		try {
-			const storedConfigRaw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
+			const storedConfigRaw = PreferencesService.getItem(CONFIG_LOCALSTORAGE_KEY);
 			const isFirstVisit = storedConfigRaw === null;
 			const config = JSON.parse(storedConfigRaw || '{}') as Record<string, unknown>;
+
+			// with the config on the server, the API key stays in this browser
+			if (PreferencesService.isRemote) {
+				const apiKey = PreferencesService.getItem(API_KEY_LOCALSTORAGE_KEY);
+
+				if (apiKey) config[SETTINGS_KEYS.API_KEY] = apiKey;
+			}
+
 			const userOverrides = JSON.parse(
-				localStorage.getItem(USER_OVERRIDES_LOCALSTORAGE_KEY) || '[]'
+				PreferencesService.getItem(USER_OVERRIDES_LOCALSTORAGE_KEY) || '[]'
 			) as string[];
 
 			return { config, isFirstVisit, userOverrides };
@@ -49,10 +63,10 @@ export class SettingsService {
 	static migrateLegacyTheme(): string | null {
 		if (!browser) return null;
 
-		const legacyTheme = localStorage.getItem('theme');
+		const legacyTheme = PreferencesService.getItem('theme');
 
 		if (legacyTheme) {
-			localStorage.removeItem('theme');
+			PreferencesService.removeItem('theme');
 
 			return legacyTheme;
 		}
@@ -67,8 +81,20 @@ export class SettingsService {
 		if (!browser) return;
 
 		try {
-			localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify(config));
-			localStorage.setItem(USER_OVERRIDES_LOCALSTORAGE_KEY, JSON.stringify(userOverrides));
+			if (PreferencesService.isRemote) {
+				const { [SETTINGS_KEYS.API_KEY]: apiKey, ...shared } = config;
+
+				if (typeof apiKey === 'string' && apiKey) {
+					PreferencesService.setItem(API_KEY_LOCALSTORAGE_KEY, apiKey);
+				} else {
+					PreferencesService.removeItem(API_KEY_LOCALSTORAGE_KEY);
+				}
+
+				config = shared;
+			}
+
+			PreferencesService.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify(config));
+			PreferencesService.setItem(USER_OVERRIDES_LOCALSTORAGE_KEY, JSON.stringify(userOverrides));
 		} catch (error) {
 			console.error('Failed to save config to localStorage:', error);
 		}

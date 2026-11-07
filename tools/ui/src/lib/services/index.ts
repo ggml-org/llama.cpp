@@ -60,16 +60,17 @@
 export { ChatService } from './chat.service';
 
 /**
- * **DatabaseService** - IndexedDB persistence layer via Dexie ORM
+ * **DatabaseService** - persistence layer for conversations and messages
  *
- * Provides stateless data access for conversations and messages using IndexedDB.
- * Handles all low-level storage operations including branching tree structures,
- * cascade deletions, and transaction safety for multi-table operations.
+ * Provides stateless data access for conversations and messages on top of a
+ * row-level `StorageBackend` (IndexedDB via Dexie by default, see idb-backend.ts).
+ * Handles branching tree structures, cascade deletions, and transaction safety
+ * for multi-table operations; the pure tree rules live in utils/conversation-tree.
  *
  * **Architecture & Relationships (bottom to top):**
- * - **DatabaseService** (this class): Stateless IndexedDB operations
- *   - Lowest layer — direct Dexie/IndexedDB communication
- *   - Pure CRUD operations without business logic
+ * - **StorageBackend** (IdbBackend): row reads and writes, transactions
+ *
+ * - **DatabaseService** (this class): Stateless tree-aware operations
  *   - Handles branching tree structure (parent-child relationships)
  *   - Provides transaction safety for multi-table operations
  *
@@ -359,3 +360,27 @@ export { MigrationService } from './migration.service';
  * @see settingsStore in stores/settings/index.svelte.ts - reactive state + business logic
  */
 export { SettingsService } from './settings.service';
+
+/**
+ * **PreferencesService** - single access point for persisted key/value preferences
+ *
+ * Mirrors the localStorage API and classifies each key as the user's own data
+ * or device-local UI state, so a later storage backend can sync only the former.
+ *
+ * @see USER_PREFERENCE_KEYS in constants/storage.constants.ts - the user data keys
+ */
+export { PreferencesService } from './preferences.service';
+
+/**
+ * **StorageModeService** - chooses where conversations and user settings live
+ *
+ * This browser (IndexedDB + localStorage) by default, or a storage adapter the
+ * user switched to: llama-server with --ui-storage, or one added in
+ * $lib/storage-adapters. Activated once at startup, switching copies this
+ * browser's data and reloads the app.
+ *
+ * - **StorageAdapter**: a remote document store, one document per conversation
+ * - **DocumentStoreBackend**: StorageBackend over an adapter, see document-store-backend.ts
+ */
+export { DocumentStoreBackend } from './document-store-backend';
+export { StorageModeService } from './storage-mode.service';
