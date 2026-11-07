@@ -43,6 +43,7 @@
 #define cublasHandle_t hipblasHandle_t
 #define cublasSetMathMode(handle, mode) CUBLAS_STATUS_SUCCESS
 #define cublasSetStream hipblasSetStream
+#define cublasSetWorkspace hipblasSetWorkspace
 #define cublasSgemm hipblasSgemm
 #define cublasSgemmBatched hipblasSgemmBatched
 #define cublasSgemmStridedBatched hipblasSgemmStridedBatched
