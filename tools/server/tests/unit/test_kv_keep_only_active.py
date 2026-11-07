@@ -113,3 +113,99 @@ def test_disabled_with_flag():
     })
     assert res.status_code == 200
     assert "__TEST_TAG_CACHE_IDLE_SLOT__" not in log.drain()
+
+
+@pytest.mark.parametrize("cache_ram", [0, 100])
+def test_lru_cache_miss_clears_victim(cache_ram):
+    global server
+    server.cache_ram = cache_ram
+    server.kv_unified = False
+    server.start()
+    log = LogReader(server.log_path)
+    log.drain()
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": LONG_PROMPT,
+        "id_slot": 0,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+    log.drain()
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": (
+            "A database transaction must remain atomic when two clients "
+            "update unrelated account records at the same time."
+        ),
+        "id_slot": 1,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+    log.drain()
+
+    request = {
+        "prompt": (
+            "Quantum mechanics describes particles with wave functions "
+            "and predicts measurement probabilities from their amplitudes."
+        ),
+        "cache_prompt": True,
+        "return_tokens": True,
+        "n_predict": 4,
+        "seed": 42,
+        "temperature": 0.0,
+    }
+    res = server.make_request("POST", "/completion", data=request)
+    assert res.status_code == 200
+    assert res.body["id_slot"] == 0
+    assert res.body["timings"]["cache_n"] == 0
+    lru_prompt_n = res.body["timings"]["prompt_n"]
+    lru_tokens = res.body["tokens"]
+    lru_content = res.body["content"]
+
+    output = log.drain()
+    assert "selected slot by LRU" in output
+    assert "clearing prompt with" in output
+
+    server.stop()
+    server = ServerPreset.tinyllama2()
+    server.n_slots = 1
+    server.n_predict = 4
+    server.temperature = 0.0
+    server.kv_unified = False
+    server.start()
+
+    res = server.make_request("POST", "/completion", data=request)
+    assert res.status_code == 200
+    assert res.body["timings"]["cache_n"] == 0
+    assert res.body["timings"]["prompt_n"] == lru_prompt_n
+    assert res.body["tokens"] == lru_tokens
+    assert res.body["content"] == lru_content
+
+
+def test_live_lcp_cache_miss_keeps_slot():
+    global server
+    server.n_slots = 1
+    server.kv_unified = False
+    server.start()
+    log = LogReader(server.log_path)
+    log.drain()
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": " ".join([LONG_PROMPT] * 2) + " Extra words ensure a prompt-cache update.",
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+    log.drain()
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": LONG_PROMPT,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+    assert res.body["timings"]["cache_n"] > 0
+    assert res.body["timings"]["prompt_n"] == 1
+
+    output = log.drain()
+    assert "selected slot by LCP similarity" in output
+    assert "updating prompt cache" in output
+    assert "clearing prompt with" not in output

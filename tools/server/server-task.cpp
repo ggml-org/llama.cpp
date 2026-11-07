@@ -1835,7 +1835,11 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
     return &states.back();
 }
 
-bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot) {
+server_prompt_cache_load_result server_prompt_cache::load(server_prompt &       prompt,
+                                                          const server_tokens & tokens_new,
+                                                          llama_context *       ctx_tgt,
+                                                          llama_context *       ctx_dft,
+                                                          int32_t               id_slot) {
     const int lcp_best = prompt.tokens.get_common_prefix(tokens_new);
 
     float f_keep_best = prompt.tokens.size() > 0 ? float(lcp_best) / prompt.tokens.size() : -1.0f; // empty slot: any cache entry wins
@@ -1878,7 +1882,7 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
             if (n != size) {
                 SRV_ERR("failed to restore state with size %zu\n", size);
 
-                return false;
+                return SERVER_PROMPT_CACHE_LOAD_RESULT_FAILED;
             }
 
             data.clear();
@@ -1896,7 +1900,7 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
                 if (n != size) {
                     SRV_WRN("failed to restore state with size %zu\n", size);
 
-                    return false;
+                    return SERVER_PROMPT_CACHE_LOAD_RESULT_FAILED;
                 }
 
                 data.clear();
@@ -1907,9 +1911,11 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
         prompt = std::move(it_best->prompt);
 
         states.erase(it_best);
+
+        return SERVER_PROMPT_CACHE_LOAD_RESULT_RESTORED;
     }
 
-    return true;
+    return SERVER_PROMPT_CACHE_LOAD_RESULT_NO_MATCH;
 }
 
 void server_prompt_cache::update() {
