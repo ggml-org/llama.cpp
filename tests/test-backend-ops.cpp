@@ -6754,9 +6754,10 @@ struct test_col2im_1d : public test_case {
     const int64_t T_in; // input length (number of columns)
     const int s0;       // stride
     const int p0;       // padding cropped from both sides
+    const bool view;
 
     std::string vars() override {
-        return VARS_TO_STR6(type, K, OC, T_in, s0, p0);
+        return VARS_TO_STR7(type, K, OC, T_in, s0, p0, view);
     }
 
     double max_nmse_err() override {
@@ -6765,11 +6766,17 @@ struct test_col2im_1d : public test_case {
 
     test_col2im_1d(ggml_type type = GGML_TYPE_F32,
             int64_t K = 4, int64_t OC = 3, int64_t T_in = 7,
-            int s0 = 2, int p0 = 0)
-        : type(type), K(K), OC(OC), T_in(T_in), s0(s0), p0(p0) {}
+            int s0 = 2, int p0 = 0, bool view = false)
+        : type(type), K(K), OC(OC), T_in(T_in), s0(s0), p0(p0), view(view) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * cols = ggml_new_tensor_2d(ctx, type, K*OC, T_in);
+        ggml_tensor * cols;
+        if (view) {
+            ggml_tensor * base = ggml_new_tensor_1d(ctx, type, K * OC * T_in + 1);
+            cols = ggml_view_2d(ctx, base, K * OC, T_in, K * OC * ggml_type_size(type), ggml_type_size(type));
+        } else {
+            cols = ggml_new_tensor_2d(ctx, type, K * OC, T_in);
+        }
         ggml_set_name(cols, "cols");
 
         ggml_tensor * out = ggml_col2im_1d(ctx, cols, s0, (int) OC, p0);
@@ -10950,6 +10957,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_col2im_1d(type, 16, 1, 197, 8, 0));   // OC = 1, mono output stage
         test_cases.emplace_back(new test_col2im_1d(type, 1, 5, 13, 3, 0));     // K = 1 with stride > 1, sparse scatter
         test_cases.emplace_back(new test_col2im_1d(type, 8, 2, 3, 2, 5));      // cropping eats most of the signal, T_out = 2
+    }
+
+    test_cases.emplace_back(new test_col2im_1d(GGML_TYPE_F32, 5, 3, 17, 2, 1, true));
+    for (int64_t n : {255, 256, 257, 16777217}) {
+        test_cases.emplace_back(new test_col2im_1d(GGML_TYPE_F32, 1, 1, n, 1, 0));
     }
 
     for (ggml_type kernel_type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
