@@ -77,6 +77,10 @@
 #define UNUSED GGML_UNUSED
 #define SWAP(x, y, T) do { T SWAP = x; (x) = y; (y) = SWAP; } while (0)
 
+// Minimum tensor size (in bytes) to trigger 1D dimension splitting across threads
+#define GGML_CPU_SPLIT_1D_MIN_BYTES_COMPUTE (16 * 1024)
+#define GGML_CPU_SPLIT_1D_MIN_BYTES_STREAM  (64 * 1024)
+
 // precomputed f32 table for f16 (256 KB) (simd-mappings.h)
 float ggml_table_f32_f16[1 << 16];
 
@@ -1751,6 +1755,150 @@ static void ggml_compute_forward_mul_mat_id(
 
 /////////////////////////////////
 
+static bool ggml_cpu_op_is_compute_heavy(const struct ggml_tensor * tensor) {
+    switch (tensor->op) {
+        case GGML_OP_LOG:
+        case GGML_OP_SIN:
+        case GGML_OP_COS:
+            return true;
+        case GGML_OP_UNARY:
+            switch (ggml_get_unary_op(tensor)) {
+                case GGML_UNARY_OP_TANH:
+                case GGML_UNARY_OP_ELU:
+                case GGML_UNARY_OP_SIGMOID:
+                case GGML_UNARY_OP_GELU:
+                case GGML_UNARY_OP_GELU_ERF:
+                case GGML_UNARY_OP_GELU_QUICK:
+                case GGML_UNARY_OP_SILU:
+                case GGML_UNARY_OP_HARDSWISH:
+                case GGML_UNARY_OP_HARDSIGMOID:
+                case GGML_UNARY_OP_EXP:
+                case GGML_UNARY_OP_SOFTPLUS:
+                case GGML_UNARY_OP_EXPM1:
+                case GGML_UNARY_OP_XIELU:
+                    return true;
+                default:
+                    return false;
+            }
+        default:
+            return false;
+    }
+}
+
+static size_t ggml_cpu_split_1d_min_bytes(const struct ggml_tensor * tensor) {
+    return ggml_cpu_op_is_compute_heavy(tensor) ? GGML_CPU_SPLIT_1D_MIN_BYTES_COMPUTE
+                                                : GGML_CPU_SPLIT_1D_MIN_BYTES_STREAM;
+}
+
+static bool ggml_cpu_can_split_1d(const struct ggml_tensor * t, int nth, size_t min_elem_size, size_t min_row_size, int * out_k) {
+    if (nth <= 1) {
+        return false;
+    }
+    const int64_t nrows = ggml_nrows(t);
+    if (nrows >= nth) {
+        return false;
+    }
+    if (!ggml_is_contiguous(t)) {
+        return false;
+    }
+    const int64_t ne0 = t->ne[0];
+    const size_t row_size = (size_t) ne0 * min_elem_size;
+    if (row_size < min_row_size) {
+        return false;
+    }
+    const size_t vec_elems = 64 / min_elem_size;
+    int k = (int) ((nth * 4 + nrows - 1) / nrows);
+    if ((int64_t) k > (int64_t) (row_size / 1024)) {
+        k = (int) (row_size / 1024);
+    }
+    while (k > 1 && ne0 % (k * vec_elems) != 0) {
+        k--;
+    }
+    if (k > 1) {
+        *out_k = k;
+        return true;
+    }
+    return false;
+}
+
+static void ggml_cpu_split_tensor_1d(struct ggml_tensor * dst, const struct ggml_tensor * src, int k) {
+    *dst = *src;
+    const size_t elem_size = ggml_type_size(src->type);
+    dst->ne[0] /= k;
+    dst->ne[1] *= k;
+    dst->nb[0]  = elem_size;
+    dst->nb[1]  = dst->ne[0] * elem_size;
+    dst->nb[2]  = dst->nb[1] * dst->ne[1];
+    dst->nb[3]  = dst->nb[2] * dst->ne[2];
+}
+
+static void ggml_cpu_compute_forward_unary(struct ggml_compute_params * params, struct ggml_tensor * tensor) {
+    struct ggml_tensor tensor_c;
+    struct ggml_tensor src0_c;
+    struct ggml_tensor * target = tensor;
+    int k = 1;
+
+    if (tensor->src[0] &&
+        ggml_are_same_shape(tensor->src[0], tensor) &&
+        ggml_is_contiguous(tensor->src[0])) {
+        const size_t min_elem_size = MIN(ggml_type_size(tensor->src[0]->type), ggml_type_size(tensor->type));
+        const size_t min_bytes = ggml_cpu_split_1d_min_bytes(tensor);
+        if (ggml_cpu_can_split_1d(tensor, params->nth, min_elem_size, min_bytes, &k)) {
+            ggml_cpu_split_tensor_1d(&tensor_c, tensor, k);
+            ggml_cpu_split_tensor_1d(&src0_c, tensor->src[0], k);
+            tensor_c.src[0] = &src0_c;
+            target = &tensor_c;
+        }
+    }
+
+    switch (tensor->op) {
+        case GGML_OP_UNARY: ggml_compute_forward_unary(params, target); break;
+        case GGML_OP_SCALE: ggml_compute_forward_scale(params, target); break;
+        case GGML_OP_CLAMP: ggml_compute_forward_clamp(params, target); break;
+        case GGML_OP_SQR:   ggml_compute_forward_sqr(params, target); break;
+        case GGML_OP_SQRT:  ggml_compute_forward_sqrt(params, target); break;
+        case GGML_OP_LOG:   ggml_compute_forward_log(params, target); break;
+        case GGML_OP_SIN:   ggml_compute_forward_sin(params, target); break;
+        case GGML_OP_COS:   ggml_compute_forward_cos(params, target); break;
+        default: GGML_ABORT("fatal error");
+    }
+}
+
+static void ggml_cpu_compute_forward_binary(struct ggml_compute_params * params, struct ggml_tensor * tensor) {
+    struct ggml_tensor tensor_c;
+    struct ggml_tensor src0_c;
+    struct ggml_tensor src1_c;
+    struct ggml_tensor * target = tensor;
+    int k = 1;
+
+    if (tensor->src[0] && tensor->src[1] &&
+        !ggml_is_quantized(tensor->src[0]->type) &&
+        ggml_are_same_shape(tensor->src[0], tensor) &&
+        ggml_are_same_shape(tensor->src[0], tensor->src[1]) &&
+        ggml_is_contiguous(tensor->src[0]) &&
+        ggml_is_contiguous(tensor->src[1])) {
+        const size_t min_elem_size = MIN(ggml_type_size(tensor->src[0]->type),
+                                     MIN(ggml_type_size(tensor->src[1]->type), ggml_type_size(tensor->type)));
+        const size_t min_bytes = ggml_cpu_split_1d_min_bytes(tensor);
+        if (ggml_cpu_can_split_1d(tensor, params->nth, min_elem_size, min_bytes, &k)) {
+            ggml_cpu_split_tensor_1d(&tensor_c, tensor, k);
+            ggml_cpu_split_tensor_1d(&src0_c, tensor->src[0], k);
+            ggml_cpu_split_tensor_1d(&src1_c, tensor->src[1], k);
+            tensor_c.src[0] = &src0_c;
+            tensor_c.src[1] = &src1_c;
+            target = &tensor_c;
+        }
+    }
+
+    switch (tensor->op) {
+        case GGML_OP_ADD: ggml_compute_forward_add(params, target); break;
+        case GGML_OP_SUB: ggml_compute_forward_sub(params, target); break;
+        case GGML_OP_MUL: ggml_compute_forward_mul(params, target); break;
+        case GGML_OP_DIV: ggml_compute_forward_div(params, target); break;
+        default: GGML_ABORT("fatal error");
+    }
+}
+
 static void ggml_compute_forward(struct ggml_compute_params * params, struct ggml_tensor * tensor) {
     GGML_ASSERT(params);
 
@@ -1769,8 +1917,11 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
                 ggml_compute_forward_dup(params, tensor);
             } break;
         case GGML_OP_ADD:
+        case GGML_OP_SUB:
+        case GGML_OP_MUL:
+        case GGML_OP_DIV:
             {
-                ggml_compute_forward_add(params, tensor);
+                ggml_cpu_compute_forward_binary(params, tensor);
             } break;
         case GGML_OP_ADD_ID:
             {
@@ -1784,37 +1935,16 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_acc(params, tensor);
             } break;
-        case GGML_OP_SUB:
-            {
-                ggml_compute_forward_sub(params, tensor);
-            } break;
-        case GGML_OP_MUL:
-            {
-                ggml_compute_forward_mul(params, tensor);
-            } break;
-        case GGML_OP_DIV:
-            {
-                ggml_compute_forward_div(params, tensor);
-            } break;
+        case GGML_OP_UNARY:
+        case GGML_OP_SCALE:
+        case GGML_OP_CLAMP:
         case GGML_OP_SQR:
-            {
-                ggml_compute_forward_sqr(params, tensor);
-            } break;
         case GGML_OP_SQRT:
-            {
-                ggml_compute_forward_sqrt(params, tensor);
-            } break;
         case GGML_OP_LOG:
-            {
-                ggml_compute_forward_log(params, tensor);
-            } break;
         case GGML_OP_SIN:
-            {
-                ggml_compute_forward_sin(params, tensor);
-            } break;
         case GGML_OP_COS:
             {
-                ggml_compute_forward_cos(params, tensor);
+                ggml_cpu_compute_forward_unary(params, tensor);
             } break;
         case GGML_OP_SUM:
             {
@@ -1888,10 +2018,6 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_out_prod(params, tensor);
             } break;
-        case GGML_OP_SCALE:
-            {
-                ggml_compute_forward_scale(params, tensor);
-            } break;
         case GGML_OP_SET:
             {
                 ggml_compute_forward_set(params, tensor);
@@ -1943,10 +2069,6 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
         case GGML_OP_ROPE_BACK:
             {
                 ggml_compute_forward_rope_back(params, tensor);
-            } break;
-        case GGML_OP_CLAMP:
-            {
-                ggml_compute_forward_clamp(params, tensor);
             } break;
         case GGML_OP_CONV_TRANSPOSE_1D:
             {
@@ -2066,10 +2188,6 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
         case GGML_OP_WIN_UNPART:
             {
                 ggml_compute_forward_win_unpart(params, tensor);
-            } break;
-        case GGML_OP_UNARY:
-            {
-                ggml_compute_forward_unary(params, tensor);
             } break;
         case GGML_OP_GLU:
             {
@@ -2284,15 +2402,18 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_CUMSUM:
         case GGML_OP_TRI:
         case GGML_OP_FILL:
+        case GGML_OP_SUB:
             {
                 n_tasks = n_threads;
             } break;
-        case GGML_OP_SUB:
         case GGML_OP_SQR:
         case GGML_OP_SQRT:
         case GGML_OP_LOG:
         case GGML_OP_SIN:
         case GGML_OP_COS:
+            {
+                n_tasks = (ggml_nbytes(node) >= ggml_cpu_split_1d_min_bytes(node)) ? n_threads : 1;
+            } break;
         case GGML_OP_SUM:
         case GGML_OP_SUM_ROWS:
         case GGML_OP_MEAN:
@@ -2336,7 +2457,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
                 case GGML_UNARY_OP_ROUND:
                 case GGML_UNARY_OP_TRUNC:
                     {
-                        n_tasks = 1;
+                        n_tasks = (ggml_nbytes(node) >= ggml_cpu_split_1d_min_bytes(node)) ? n_threads : 1;
                     } break;
 
                 case GGML_UNARY_OP_GELU:
@@ -2391,6 +2512,9 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
                 n_tasks = 1;
             } break;
         case GGML_OP_SCALE:
+            {
+                n_tasks = (ggml_nbytes(node) >= ggml_cpu_split_1d_min_bytes(node)) ? n_threads : 1;
+            } break;
         case GGML_OP_SET:
         case GGML_OP_RESHAPE:
         case GGML_OP_VIEW:
@@ -2412,7 +2536,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
             } break;
         case GGML_OP_CLAMP:
             {
-                n_tasks = 1; //TODO
+                n_tasks = (ggml_nbytes(node) >= ggml_cpu_split_1d_min_bytes(node)) ? n_threads : 1;
             } break;
         case GGML_OP_SOFT_MAX:
             {
