@@ -1491,6 +1491,66 @@ static void test_all(const std::string & title, std::function<void(const TestCas
 
     test({
         SUCCESS,
+        "regexp with maxLength on a repeated character class",
+        R"""({
+            "type": "string",
+            "pattern": "^[a-z]+$",
+            "maxLength": 4
+        })""",
+        R"""(
+            root ::= "\"" (root-1{1,4}) "\""
+            root-1 ::= [a-z]
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "regexp with min and max length on a repeated character class",
+        R"""({
+            "type": "string",
+            "pattern": "^[A-Z]+$",
+            "minLength": 2,
+            "maxLength": 3
+        })""",
+        R"""(
+            root ::= "\"" (root-1{2,3}) "\""
+            root-1 ::= [A-Z]
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "regexp with maxLength tighter than an inline quantifier",
+        R"""({
+            "type": "string",
+            "pattern": "^[0-9]{2,5}$",
+            "maxLength": 4
+        })""",
+        R"""(
+            root ::= "\"" (root-1{2,4}) "\""
+            root-1 ::= [0-9]
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "regexp with maxLength on a multi-char literal with a trailing quantifier is left unchanged",
+        R"""({
+            "type": "string",
+            "pattern": "^ab+$",
+            "maxLength": 3
+        })""",
+        R"""(
+            root ::= "\"" ("a" "b"+) "\""
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
         "regexp with escaped hyphen outside a character class",
         R"""({
             "type": "string",

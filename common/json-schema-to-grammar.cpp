@@ -352,6 +352,180 @@ static size_t gbnf_escape_length(const std::string & pattern, size_t pos) {
     return 2 + n_hex;
 }
 
+// fixed width of a single regex atom (no top-level alternation or unbounded quantifiers)
+static int fixed_regex_atom_width(const std::string & atom) {
+    if (atom.empty()) {
+        return -1;
+    }
+    if (atom[0] == '[') {
+        size_t i = 1;
+        while (i < atom.size()) {
+            if (atom[i] == '\\') {
+                if (i + 1 >= atom.size()) {
+                    return -1;
+                }
+                i += 2;
+            } else if (atom[i] == ']') {
+                break;
+            } else {
+                i++;
+            }
+        }
+        if (i >= atom.size() || atom[i] != ']' || i + 1 != atom.size()) {
+            return -1;
+        }
+        return 1;
+    }
+    if (atom.compare(0, 3, "(?:") == 0 && atom.back() == ')') {
+        return fixed_regex_atom_width(atom.substr(3, atom.size() - 4));
+    }
+    if (atom[0] == '(' && atom.back() == ')') {
+        const std::string inner = atom.substr(1, atom.size() - 2);
+        if (inner.find('|') != std::string::npos) {
+            return -1;
+        }
+        return fixed_regex_atom_width(inner);
+    }
+    int width = 0;
+    for (size_t i = 0; i < atom.size();) {
+        if (atom[i] == '\\') {
+            if (i + 1 >= atom.size()) {
+                return -1;
+            }
+            i += 2;
+            width++;
+        } else {
+            if (std::string("|()[]{}*+?^$").find(atom[i]) != std::string::npos) {
+                return -1;
+            }
+            width++;
+            i++;
+        }
+    }
+    return width;
+}
+
+static std::string format_regex_quantifier(int min_times, int max_times) {
+    const bool has_max = max_times != std::numeric_limits<int>::max();
+    if (min_times == 0 && !has_max) {
+        return "*";
+    }
+    if (min_times == 1 && !has_max) {
+        return "+";
+    }
+    if (min_times == 0 && max_times == 1) {
+        return "?";
+    }
+    if (min_times == max_times) {
+        return "{" + std::to_string(min_times) + "}";
+    }
+    return "{" + std::to_string(min_times) + "," + (has_max ? std::to_string(max_times) : "") + "}";
+}
+
+static bool parse_trailing_regex_quantifier(std::string & body, int & min_times, int & max_times) {
+    if (body.empty()) {
+        return false;
+    }
+    const char last = body.back();
+    if (last == '+') {
+        body.pop_back();
+        min_times = 1;
+        max_times = std::numeric_limits<int>::max();
+        return true;
+    }
+    if (last == '*') {
+        body.pop_back();
+        min_times = 0;
+        max_times = std::numeric_limits<int>::max();
+        return true;
+    }
+    if (last == '?') {
+        body.pop_back();
+        min_times = 0;
+        max_times = 1;
+        return true;
+    }
+    if (last == '}') {
+        const size_t open = body.rfind('{');
+        if (open == std::string::npos) {
+            return false;
+        }
+        const std::string inside = body.substr(open + 1, body.size() - open - 2);
+        body = body.substr(0, open);
+        const auto nums = string_split(inside, ",");
+        if (nums.size() != 1 && nums.size() != 2) {
+            return false;
+        }
+        try {
+            if (nums.size() == 1) {
+                min_times = max_times = std::stoi(nums[0]);
+            } else {
+                min_times = nums[0].empty() ? 0 : std::stoi(nums[0]);
+                max_times = nums[1].empty() ? std::numeric_limits<int>::max() : std::stoi(nums[1]);
+            }
+        } catch (const std::logic_error &) {
+            return false;
+        }
+        return true;
+    }
+    min_times = 1;
+    max_times = 1;
+    return true;
+}
+
+// intersect JSON Schema minLength/maxLength into a fully-anchored pattern when it is a single fixed-width atom with a quantifier
+static bool try_intersect_pattern_length_bounds(std::string & pattern, int min_length, int max_length) {
+    const int schema_max = max_length < 0 ? std::numeric_limits<int>::max() : max_length;
+
+    if (pattern.size() < 2 || pattern.front() != '^' || pattern.back() != '$') {
+        return false;
+    }
+
+    std::string body = pattern.substr(1, pattern.size() - 2);
+    int rep_min = 0;
+    int rep_max = 0;
+    const size_t body_len = body.size();
+    if (!parse_trailing_regex_quantifier(body, rep_min, rep_max)) {
+        return false;
+    }
+    const bool has_quantifier = body.size() != body_len;
+    // a trailing quantifier binds to the last atom only, so a multi-char literal body cannot be scaled
+    if (has_quantifier && body.size() > 1 && body[0] != '[' && body[0] != '(' && !(body[0] == '\\' && body.size() == 2)) {
+        return false;
+    }
+
+    const int unit_width = fixed_regex_atom_width(body);
+    if (unit_width <= 0) {
+        return false;
+    }
+
+    const int pattern_min = rep_min * unit_width;
+    const int pattern_max = rep_max == std::numeric_limits<int>::max()
+        ? std::numeric_limits<int>::max()
+        : rep_max * unit_width;
+
+    const int eff_min = std::max(pattern_min, min_length);
+    const int eff_max = std::min(pattern_max, schema_max);
+    if (eff_min > eff_max) {
+        return false;
+    }
+
+    if (eff_min == pattern_min && eff_max == pattern_max) {
+        return true;
+    }
+
+    const int new_rep_min = (eff_min + unit_width - 1) / unit_width;
+    const int new_rep_max = eff_max == std::numeric_limits<int>::max()
+        ? std::numeric_limits<int>::max()
+        : eff_max / unit_width;
+    if (new_rep_min > new_rep_max) {
+        return false;
+    }
+
+    pattern = "^" + body + format_regex_quantifier(new_rep_min, new_rep_max) + "$";
+    return true;
+}
+
 class common_chat_schema_converter {
 private:
     friend std::string build_grammar(const std::function<void(const common_grammar_builder &)> & cb, const common_grammar_options & options);
@@ -965,7 +1139,13 @@ public:
             case common_chat_schema::KIND_STRING: {
                 const auto & str = as<common_chat_schema_string>(schema);
                 if (!str.pattern.empty()) {
-                    return _visit_pattern(str.pattern, rule_name);
+                    std::string pattern = str.pattern;
+                    const bool has_length = str.min_length > 0 || str.max_length >= 0;
+                    if (has_length && !try_intersect_pattern_length_bounds(pattern, str.min_length, str.max_length)) {
+                        _warnings.push_back(
+                            "pattern combined with minLength/maxLength is not fully supported; ignoring minLength/maxLength");
+                    }
+                    return _visit_pattern(pattern, rule_name);
                 }
                 if (str.format == common_chat_schema::FORMAT_UUID) {
                     return _visit_primitive(rule_name, "uuid");
