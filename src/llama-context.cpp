@@ -3053,6 +3053,7 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
             trace_cached += (size_t) n * expert_size;
             if (next < e) {
                 ggml_backend_tensor_set_async(backend, dst, (const uint8_t *) src->data + next*expert_size, next*expert_size, (e - next)*expert_size);
+                trace_bytes += (size_t) (e - next) * expert_size;
             }
             e   += n;
             next = e;
@@ -3064,6 +3065,7 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
         const size_t size    = (last + 1 - next)*expert_size + padding;
         if (size > 0) {
             ggml_backend_tensor_set_async(backend, dst, (const uint8_t *) src->data + offset, offset, size);
+            trace_bytes += size;
         }
 
         first = last + 1;
