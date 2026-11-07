@@ -527,6 +527,7 @@ struct server_metrics {
 
     uint64_t n_decode     = 0;
     uint64_t n_busy_slots = 0;
+    uint64_t n_prefill_budget_steps = 0;
 
     uint64_t n_draft_tokens      = 0; // Total draft tokens generated
     uint64_t n_draft_accepted    = 0; // Draft tokens actually accepted

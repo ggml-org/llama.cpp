@@ -225,6 +225,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--metrics` | enable prometheus compatible metrics endpoint (default: disabled)<br/>(env: LLAMA_ARG_ENDPOINT_METRICS) |
 | `--props` | enable changing global properties via POST /props (default: disabled)<br/>(env: LLAMA_ARG_ENDPOINT_PROPS) |
 | `--slots, --no-slots` | expose slots monitoring endpoint (default: enabled)<br/>(env: LLAMA_ARG_ENDPOINT_SLOTS) |
+| `--prefill-budget-busy N` | while a slot is generating, process at most N prompt tokens per server step, shortest pending prompt first, so a long prompt does not stall the slots that are generating; 0 = disabled (default: 0)<br/>(env: LLAMA_ARG_PREFILL_BUDGET_BUSY) |
 | `--slot-save-path PATH` | path to save slot kv cache (default: disabled)<br/>(env: LLAMA_ARG_SLOT_SAVE_PATH) |
 | `--media-path PATH` | directory for loading local media files; files can be accessed via file:// URLs using relative paths (default: disabled) |
 | `--models-dir PATH` | directory containing models for the router server (default: disabled)<br/>(env: LLAMA_ARG_MODELS_DIR) |

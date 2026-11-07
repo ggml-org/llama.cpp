@@ -708,6 +708,7 @@ struct common_params {
     bool log_json = false;
 
     std::string slot_save_path;
+    int32_t prefill_budget_busy = 0; // max prompt tokens per server step while a slot generates (0 = disabled)
     std::string media_path; // path to directory for loading media files
 
     float slot_prompt_similarity = 0.1f;
