@@ -95,6 +95,14 @@ static void fill_ssm_a(std::vector<float> & dst, const char * name, const tensor
     }
 }
 
+// RoPE factors divide the frequencies, a value close to 0 gives angles too large for F32 sin/cos to stay accurate
+static void fill_rope_factors(std::vector<float> & dst, const char * name, const tensor_data_params & params) {
+    fill_normal(dst, name, params);
+    for (float & v : dst) {
+        v = 1.0f + fabsf(v);
+    }
+}
+
 // a norm preserving residual gate holds alpha^2 + beta^2 == 1, and the conversion resolves both from one raw weight
 // the alpha and the beta of a block share that weight, so the key drops the suffix and keeps the block
 static void fill_resid_gate(std::vector<float> & dst, const char * name, const tensor_data_params & params) {
@@ -116,9 +124,11 @@ static void fill_exp_probs_b(std::vector<float> & dst, const char *, const tenso
 
 // a tensor whose values hold a property of their own, matched on a substring of its name, first match wins
 static const struct { const char * match; tensor_filler fill; } TENSOR_FILLERS[] = {
-    { "ssm_a",       fill_ssm_a       },
-    { "_resid_",     fill_resid_gate  },
-    { "exp_probs_b", fill_exp_probs_b },
+    { "ssm_a",        fill_ssm_a        },
+    { "_resid_",      fill_resid_gate   },
+    { "exp_probs_b",  fill_exp_probs_b  },
+    { "rope_freqs",   fill_rope_factors },
+    { "rope_factors", fill_rope_factors },
 };
 
 static void set_tensor_data(struct ggml_tensor * tensor, void * userdata) {
@@ -157,6 +167,7 @@ static void usage(char ** argv) {
     LOG("  -o, --out <dir>          Save generated test models to <dir> instead of running backend tests\n");
     LOG("  -v <N>                   Set log verbosity level\n");
     LOG("  -b, --backend <backend>  Run only on the given backend device\n");
+    LOG("  --kv-shift               Check K-shift against a decode at the shifted positions (CPU only)\n");
     LOG("  -h, --help               Show this help message\n\n");
     LOG("Examples:\n");
     LOG("  %s\n", argv[0]);
@@ -227,7 +238,7 @@ struct kv_writer {
     }
 };
 
-static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const uint32_t n_layer_min = 0) {
     gguf_context_ptr ret(gguf_init_empty());
     kv_writer ms(arch, ret.get());
     const uint32_t n_ctx = 256;
@@ -267,7 +278,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         n_layer = 6;
     } else if (arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_LAGUNA) {
         n_embd = 160; // exercise per-head tensor split granularity with head size 80
-    } else if (arch == LLM_ARCH_QWEN3 || arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_AFMOE) {
+    } else if (arch == LLM_ARCH_QWEN3 || arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_AFMOE || arch == LLM_ARCH_RICURSIVE) {
         n_head = 4;
     } else if (arch == LLM_ARCH_LIMITE) {
         n_head  = 4;
@@ -279,18 +290,26 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
             || arch == LLM_ARCH_KIMI_LINEAR
             || arch == LLM_ARCH_BAILINGMOE3
             || arch == LLM_ARCH_KIMI_K3
-            || arch == LLM_ARCH_GLM5_NEXT
+            || arch == LLM_ARCH_KIMI_K31
             || arch == LLM_ARCH_MISTRAL4
             || arch == LLM_ARCH_MISTRAL_LARGE4
-            || arch == LLM_ARCH_HY_V4) {
+            || arch == LLM_ARCH_HY_V4
+            || arch == LLM_ARCH_XING4_0) {
         n_embd = 128;
         n_head = 1;
         n_ff   = 192;
         if (arch == LLM_ARCH_MISTRAL_LARGE4) {
             n_layer = 4; // cover NoPE, shared indexer and KV sharing layers
         }
+    } else if (arch == LLM_ARCH_GLM5_NEXT) {
+        // several heads so that -sm tensor can split them and the MLA flash attention has GQA > 1
+        n_embd = 128;
+        n_head = 16;
+        n_ff   = 192;
     } else if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
         n_layer = 3;
+    } else if (arch == LLM_ARCH_METIS16) {
+        n_layer = 4; // 2 passes over 2 physical layers, one attention and one Mamba-2
     } else if (arch == LLM_ARCH_CHAMELEON) {
         n_vocab = 10240;
     } else if (arch == LLM_ARCH_QWEN3TTS) {
@@ -304,7 +323,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     if (arch == LLM_ARCH_QWEN3) {
         n_head_kv = 1; // MQA coverage
     } else if (arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_MUSE_SPARK || arch == LLM_ARCH_AFMOE || arch == LLM_ARCH_MAION_CODER ||
-            arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_LIMITE || arch == LLM_ARCH_GEMMA4) {
+            arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_LIMITE || arch == LLM_ARCH_GEMMA4 || arch == LLM_ARCH_RICURSIVE) {
         n_head_kv = 2; // GQA coverage
     }
     if (arch == LLM_ARCH_BEAM) {
@@ -312,6 +331,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         n_head_kv = 2;
         n_layer   = 4;
     }
+    n_layer = std::max(n_layer, n_layer_min);
     const uint32_t n_embd_head = n_embd / n_head;
 
     ms.add_kv(LLM_KV_GENERAL_ARCHITECTURE,      llama_arch_name(arch));
@@ -346,7 +366,8 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
 
     if (arch == LLM_ARCH_PLAMO2 || arch == LLM_ARCH_JAMBA || arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE ||
             arch == LLM_ARCH_GRANITE_HYBRID || arch == LLM_ARCH_LFM2 || arch == LLM_ARCH_LFM2MOE || arch == LLM_ARCH_LFM3 ||
-            arch == LLM_ARCH_KIMI_LINEAR || arch == LLM_ARCH_BAILINGMOE3 || arch == LLM_ARCH_KIMI_K3 || arch == LLM_ARCH_GLM5_NEXT
+            arch == LLM_ARCH_KIMI_LINEAR || arch == LLM_ARCH_BAILINGMOE3 || arch == LLM_ARCH_KIMI_K3 || arch == LLM_ARCH_KIMI_K31 ||
+            arch == LLM_ARCH_GLM5_NEXT
             ) {
         GGML_ASSERT(n_layer >= 2);
         std::vector<uint32_t> n_head_per_layer;
@@ -357,10 +378,23 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         // GLM5 next KDA heads come from the uniform head count, only head_count_kv is per layer.
         if (arch == LLM_ARCH_GLM5_NEXT) {
             ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head);
+            // the MLA cache holds one latent head
+            for (uint32_t & n : n_head_per_layer) {
+                n = std::min(n, uint32_t(1));
+            }
         } else {
             ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head_per_layer);
         }
         ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, n_head_per_layer);
+    } else if (arch == LLM_ARCH_METIS16) {
+        // the layer types repeat in every pass
+        std::vector<uint32_t> n_head_kv_per_layer;
+        n_head_kv_per_layer.reserve(n_layer);
+        for (uint32_t il = 0; il < n_layer; il++) {
+            n_head_kv_per_layer.push_back(il % 2 == 0 ? n_head_kv : 0);
+        }
+        ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head);
+        ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, n_head_kv_per_layer);
     } else {
         ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head);
         ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, (arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_DEEPSEEK41) ? uint32_t(1) : n_head_kv);
@@ -378,10 +412,12 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
             || arch == LLM_ARCH_KIMI_LINEAR
             || arch == LLM_ARCH_BAILINGMOE3
             || arch == LLM_ARCH_KIMI_K3
+            || arch == LLM_ARCH_KIMI_K31
             || arch == LLM_ARCH_GLM5_NEXT
             || arch == LLM_ARCH_HY_V4
             || arch == LLM_ARCH_MISTRAL4
-            || arch == LLM_ARCH_MISTRAL_LARGE4) {
+            || arch == LLM_ARCH_MISTRAL_LARGE4
+            || arch == LLM_ARCH_XING4_0) {
         // GLM5 next MLA is nope only, the cache row is the compressed latent alone.
         ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH,       arch == LLM_ARCH_GLM5_NEXT ? uint32_t(512) : uint32_t(576));
         ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH,     uint32_t(512));
@@ -411,6 +447,13 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     if (arch == LLM_ARCH_SENSENOVA_U1) {
         ms.add_kv(LLM_KV_ROPE_FREQ_BASE_SPATIAL, 10000.0f);
     }
+
+    if (arch == LLM_ARCH_XING4_0) {
+        // Manifold-Constrained Hyper-Connections (MHC) multi-residual-stream blocks
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_COUNT,               uint32_t(4));
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, uint32_t(20));
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_EPSILON,             1e-6f);
+    }
     ms.add_kv(LLM_KV_ATTENTION_CLAMP_KQV,              1.0f);
     ms.add_kv(LLM_KV_ATTENTION_LAYERNORM_EPS,          1e-5f);
     ms.add_kv(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,      1e-5f);
@@ -423,13 +466,6 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
 
     if (arch == LLM_ARCH_MAION_CODER) {
         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, std::vector<uint32_t>{1, 1, 0, 0});
-    } else if (arch == LLM_ARCH_BEAM) {
-        std::vector<uint32_t> pattern;
-        pattern.reserve(n_layer);
-        for (uint32_t il = 0; il < n_layer; il++) {
-            pattern.push_back(il % 2);
-        }
-        ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, pattern);
     } else if (arch == LLM_ARCH_GEMMA4) {
         ms.add_kv(LLM_KV_EMBEDDING_LENGTH_PER_LAYER,      n_embd/2);
         ms.add_kv(LLM_KV_ATTENTION_SHARED_KV_LAYERS,      uint32_t(5));
@@ -445,7 +481,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, pattern);
     } else if (arch == LLM_ARCH_COHERE2MOE || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_SPARK2_5 ||
             arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_MUSE_SPARK || arch == LLM_ARCH_GRANITE_SWA || arch == LLM_ARCH_DOTS3NOTE ||
-            arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_MAPLE || arch == LLM_ARCH_FLINT) {
+            arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_MAPLE || arch == LLM_ARCH_FLINT || arch == LLM_ARCH_BEAM || arch == LLM_ARCH_RICURSIVE) {
         std::vector<uint32_t> pattern;
         pattern.reserve(n_layer);
         for (uint32_t il = 0; il < n_layer; il++) {
@@ -615,6 +651,28 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ms.add_kv(LLM_KV_SWIGLU_CLAMP_EXP, 7.0f);
     }
 
+    if (arch == LLM_ARCH_RICURSIVE) {
+        std::vector<float> swiglu_clamp;
+        swiglu_clamp.reserve(n_layer);
+        for (uint32_t il = 0; il < n_layer; il++) {
+            // the random weight scales keep the FFN activations small, a small limit still clamps so the roundtrip checks the per-layer values
+            swiglu_clamp.push_back(il % 3 == 1 ? 0.0f : 1e-3f);
+        }
+        ms.add_kv(LLM_KV_EMBEDDING_SCALE, 16.0f);
+        ms.add_kv(LLM_KV_SWIGLU_CLAMP,    swiglu_clamp);
+    }
+
+    if (arch == LLM_ARCH_METIS16) {
+        ms.add_kv(LLM_KV_METIS_PASS_COUNT,               uint32_t(2));
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_COUNT,         uint32_t(4));
+        ms.add_kv(LLM_KV_METIS_MEMORY_LENGTH,            uint32_t(64));
+        ms.add_kv(LLM_KV_METIS_ROUTE_LENGTH,             uint32_t(32));
+        ms.add_kv(LLM_KV_ATTENTION_PASS_LORA_RANK,       uint32_t(8));
+        ms.add_kv(LLM_KV_METIS_CONTINUATION_LOGIT_LIMIT, 4.0f);
+        ms.add_kv(LLM_KV_SSM_NORM_EPS,                   1e-5f);
+        ms.add_kv(LLM_KV_MOE_LATENT_SIZE,                n_embd/2);
+    }
+
     if (arch == LLM_ARCH_LIMITE) {
         ms.add_kv(LLM_KV_ATTENTION_SCALE,             0.1f);
         ms.add_kv(LLM_KV_ATTENTION_XSA_EPS,           1e-4f);
@@ -646,7 +704,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ms.add_kv(LLM_KV_EXPERT_LATENT_LENGTH,       n_ff);
         ms.add_kv(LLM_KV_INTERLEAVE_MOE_LAYER_STEP,  uint32_t(2));
         // with more experts than a ubatch uses, the copy of the used experts in host memory skips some of them
-        ms.add_kv(LLM_KV_EXPERT_COUNT,               uint32_t(host_experts_test(arch) ? 64 : 2));
+        ms.add_kv(LLM_KV_EXPERT_COUNT,               uint32_t(host_experts_test(arch) ? 64 : arch == LLM_ARCH_CLOVER_MOE ? 4 : 2));
         ms.add_kv(LLM_KV_EXPERT_USED_COUNT,          uint32_t(2));
         ms.add_kv(LLM_KV_EXPERT_SHARED_COUNT,        uint32_t(1));
 
@@ -696,7 +754,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     ms.add_kv(LLM_KV_XIELU_ALPHA_P,             1.0f);
     ms.add_kv(LLM_KV_XIELU_BETA,                1.0f);
     ms.add_kv(LLM_KV_XIELU_EPS,                 1.0e-7f);
-    ms.add_kv(LLM_KV_SSM_INNER_SIZE,            arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN4EXP ? 256 : 2*n_embd);
+    ms.add_kv(LLM_KV_SSM_INNER_SIZE,            arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_CLOVER_MOE ? 256 : 2*n_embd);
     ms.add_kv(LLM_KV_SSM_CONV_KERNEL,           uint32_t(4));
     ms.add_kv(LLM_KV_SSM_STATE_SIZE,            uint32_t(128));
     ms.add_kv(LLM_KV_SSM_TIME_STEP_RANK,        n_head);
@@ -705,8 +763,14 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     ms.add_kv(LLM_KV_KDA_SAFE_GATE,             true);
     ms.add_kv(LLM_KV_KDA_GATE_LOWER_BOUND,      -5.0f);
     if (arch == LLM_ARCH_BAILINGMOE3) {
-        ms.add_kv(LLM_KV_SWIGLU_CLAMP_EXP,   std::vector<float>({0.0f, 4.0f}));
-        ms.add_kv(LLM_KV_SWIGLU_CLAMP_SHEXP, std::vector<float>({0.0f, 5.0f}));
+        std::vector<float> clamp_exp;
+        std::vector<float> clamp_shexp;
+        for (uint32_t il = 0; il < n_layer; il++) {
+            clamp_exp  .push_back(il % 2 ? 4.0f : 0.0f);
+            clamp_shexp.push_back(il % 2 ? 5.0f : 0.0f);
+        }
+        ms.add_kv(LLM_KV_SWIGLU_CLAMP_EXP,   clamp_exp);
+        ms.add_kv(LLM_KV_SWIGLU_CLAMP_SHEXP, clamp_shexp);
     }
     ms.add_kv(LLM_KV_WKV_HEAD_SIZE,               n_embd/n_head);
     ms.add_kv(LLM_KV_SHORTCONV_L_CACHE,           uint32_t(3));
@@ -923,6 +987,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_QWEN3NEXT:
         case LLM_ARCH_QWEN3VLMOE:
         case LLM_ARCH_QWEN35MOE:
+        case LLM_ARCH_CLOVER_MOE:
         case LLM_ARCH_QWEN4EXP:
         case LLM_ARCH_PHIMOE:
         case LLM_ARCH_DBRX:
@@ -934,6 +999,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_DOTS3NOTE:
         case LLM_ARCH_DEEPSEEK4:
         case LLM_ARCH_DEEPSEEK41:
+        case LLM_ARCH_XING4_0:
         case LLM_ARCH_GLM4_MOE:
         case LLM_ARCH_GLM_DSA:
         case LLM_ARCH_EXAONE_MOE:
@@ -961,6 +1027,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_MIMO2:
         case LLM_ARCH_KIMI_LINEAR:
         case LLM_ARCH_KIMI_K3:
+        case LLM_ARCH_KIMI_K31:
         case LLM_ARCH_GLM5_NEXT:
         case LLM_ARCH_STEP35:
         case LLM_ARCH_MISTRAL4:
@@ -970,6 +1037,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_MAPLE:
         case LLM_ARCH_MUSE_SPARK:
         case LLM_ARCH_KOLIBRI1:
+        case LLM_ARCH_METIS16:
             return true;
         default:
             return false;
@@ -1390,6 +1458,319 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
     return all_ok ? 0 : 1;
 }
 
+struct kv_shift_move {
+    llama_pos p0;
+    llama_pos p1;
+    llama_pos delta;
+};
+
+static void decode_range(llama_context * lctx, const llama_token * tokens, uint32_t n_tokens, llama_pos pos0, llama_seq_id seq_id, bool output) {
+    common_batch batch(lctx);
+    for (uint32_t i = 0; i < n_tokens; i++) {
+        batch.add(tokens[i], pos0 + i, seq_id, output || i == n_tokens - 1);
+    }
+    if (llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
+        throw std::runtime_error("failed to decode batch");
+    }
+}
+
+// the raw attention scores of each layer are linear in K, unlike the logits they do not depend on how sharp the attention is
+struct kq_capture {
+    bool active = false;
+    std::vector<std::pair<std::string, std::vector<float>>> data;
+};
+
+// the scores are compared cell by cell, so the cells of the probe must match: prefix and probe fit in the SWA window,
+// otherwise the probe can reuse a masked SWA cell in one run and not in the other
+static bool kq_capture_cb(struct ggml_tensor * t, bool ask, void * user_data) {
+    kq_capture * cap = (kq_capture *) user_data;
+    const char * name = ggml_get_name(t);
+    const bool want = cap->active && t->type == GGML_TYPE_F32 && ggml_is_contiguous(t) &&
+        (strncmp(name, "kq-", 3) == 0 || strncmp(name, "indexer_kq-", 11) == 0 || strncmp(name, "indexer_score-", 14) == 0);
+    if (ask) {
+        return want;
+    }
+    if (want) {
+        std::vector<float> buf(ggml_nelements(t));
+        ggml_backend_tensor_get(t, buf.data(), 0, ggml_nbytes(t));
+        auto it = std::find_if(cap->data.begin(), cap->data.end(), [&](const auto & e) { return e.first == name; });
+        if (it == cap->data.end()) {
+            cap->data.emplace_back(name, std::move(buf));
+        } else {
+            it->second = std::move(buf);
+        }
+    }
+    return true;
+}
+
+struct kq_diff {
+    double      worst = 0.0;
+    std::string first_bad; // first tensor above the threshold, later layers can inherit its error through Q
+    std::string bad;       // all tensors above the threshold, with their nmse
+};
+
+static kq_diff compare_kq(const std::vector<std::pair<std::string, std::vector<float>>> & ref,
+                          const std::vector<std::pair<std::string, std::vector<float>>> & cur, double thold) {
+    if (ref.size() != cur.size()) {
+        throw std::runtime_error("kq tensor count mismatch");
+    }
+    kq_diff res;
+    for (size_t i = 0; i < ref.size(); i++) {
+        if (ref[i].first != cur[i].first || ref[i].second.size() != cur[i].second.size()) {
+            throw std::runtime_error("kq tensor mismatch: " + ref[i].first);
+        }
+        double mse_a_b = 0.0;
+        double mse_a_0 = 0.0;
+        for (size_t j = 0; j < ref[i].second.size(); j++) {
+            const double a = ref[i].second[j];
+            const double b = cur[i].second[j];
+            // masked rows may hold -inf in both
+            if (!std::isfinite(a) && a == b) {
+                continue;
+            }
+            mse_a_b += (a - b)*(a - b);
+            mse_a_0 += a*a;
+        }
+        const double val = mse_a_b == 0.0 ? 0.0 : mse_a_0 == 0.0 ? INFINITY : mse_a_b/mse_a_0;
+        res.worst = std::max(res.worst, std::isnan(val) ? INFINITY : val);
+        if (!(val <= thold)) {
+            if (res.first_bad.empty()) {
+                res.first_bad = ref[i].first;
+            }
+            char buf[64];
+            snprintf(buf, sizeof(buf), " %s=%.1e", ref[i].first.c_str(), val);
+            res.bad += buf;
+        }
+    }
+    return res;
+}
+
+// decodes the prefix at pos_prefix, applies each step of moves with its own K-shift and returns the logits of the probe at pos_probe
+static std::vector<float> get_logits_kv_shift(
+        llama_model * model, llama_context * lctx, kq_capture & cap, const std::vector<llama_token> & prefix, const std::vector<llama_token> & probe,
+        llama_pos pos_prefix, const std::vector<std::vector<kv_shift_move>> & steps, llama_pos pos_probe) {
+    const uint32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
+    llama_memory_t mem = llama_get_memory(lctx);
+
+    cap.data.clear();
+    llama_memory_clear(mem, true);
+    decode_range(lctx, prefix.data(), prefix.size(), pos_prefix, 0, false);
+
+    for (size_t i = 0; i < steps.size(); i++) {
+        for (const kv_shift_move & mv : steps[i]) {
+            llama_memory_seq_add(mem, 0, mv.p0, mv.p1, mv.delta);
+        }
+        // there is no public API to apply a pending shift, a decode of a throwaway token in seq 1 does it
+        if (i + 1 < steps.size()) {
+            decode_range(lctx, probe.data(), 1, 0, 1, false);
+            llama_memory_seq_rm(mem, 1, -1, -1);
+        }
+    }
+
+    cap.active = true;
+    decode_range(lctx, probe.data(), probe.size(), pos_probe, 0, true);
+    cap.active = false;
+
+    std::vector<float> ret;
+    ret.reserve(probe.size()*n_vocab);
+    for (uint32_t i = 0; i < probe.size(); i++) {
+        const float * logits_ith = llama_get_logits_ith(lctx, i);
+        ret.insert(ret.end(), logits_ith, logits_ith + n_vocab);
+    }
+    return ret;
+}
+
+// a K-shift is correct if decoding at [d, d+n) and shifting by -d gives the same probe logits as decoding at [0, n)
+static int test_kv_shift(const std::string & arch_filter, const size_t seed, const float stdev, const int verbosity) {
+    struct user_data_t {
+        struct {
+            ggml_log_callback callback;
+            void * user_data;
+        } log_old;
+
+        int verbosity;
+
+        user_data_t(int verbosity) : verbosity(verbosity) {
+            llama_log_get(&log_old.callback, &log_old.user_data);
+        }
+    };
+    user_data_t ud(verbosity);
+
+    llama_log_set([](ggml_log_level level, const char * text, void * user_data) {
+        const user_data_t * ud = (const user_data_t *) user_data;
+        int verbosity = common_log_get_verbosity(level);
+        if (verbosity <= ud->verbosity) {
+            ud->log_old.callback(level, text, ud->log_old.user_data);
+        }
+    }, &ud);
+
+    // n_prefix + n_probe stays below the fixture SWA window (n_ctx/8 = 32)
+    const uint32_t  n_prefix = 20;
+    const uint32_t  n_probe  = 8;
+    const llama_pos d        = 64;
+    const llama_pos gap      = 4;
+
+    const std::vector<llama_token> tokens = get_tokens(n_prefix + n_probe, 128, seed);
+    const std::vector<llama_token> prefix(tokens.begin(), tokens.begin() + n_prefix);
+    const std::vector<llama_token> probe (tokens.begin() + n_prefix, tokens.end());
+
+    const std::vector<std::vector<kv_shift_move>> steps_shift  = { { { d, d + (llama_pos) n_prefix, -d } } };
+    const std::vector<std::vector<kv_shift_move>> steps_shift2 = { { { d, d + (llama_pos) n_prefix, -d/2 } }, { { d/2, d/2 + (llama_pos) n_prefix, -d/2 } } };
+    // control: the second half of the prefix ends up gap positions too far, which tells if the probe is sensitive to K positions at all
+    const std::vector<std::vector<kv_shift_move>> steps_ctrl   = { {
+        { d,                           d + (llama_pos) n_prefix/2, -d       },
+        { d + (llama_pos) n_prefix/2,  d + (llama_pos) n_prefix,   -d + gap },
+    } };
+
+    size_t max_arch_name_length = 0;
+    for (const llm_arch & arch : llama_arch_all()) {
+        max_arch_name_length = std::max(max_arch_name_length, strlen(llama_arch_name(arch)));
+    }
+    const std::string template_row = "|%" + std::to_string(max_arch_name_length) + "s|%6s|%10s|%10s|%10s|%10s|%s\n";
+
+    size_t n_tests  = 0;
+    size_t n_failed = 0;
+    common_log_flush(common_log_main());
+    LOG(template_row.c_str(), "Model arch.", "Config", "Shift kq", "Shift2 kq", "Logits", "Control kq", "Status");
+
+    for (const llm_arch & arch : llama_arch_all()) {
+        if (arch == LLM_ARCH_UNKNOWN || !arch_matches(arch_filter, arch) || !arch_supported(arch)) {
+            continue;
+        }
+        if (arch == LLM_ARCH_EAGLE3 || arch == LLM_ARCH_DFLASH || arch == LLM_ARCH_GEMMA4_ASSISTANT) {
+            continue;
+        }
+        const bool encode = arch == LLM_ARCH_T5 || arch == LLM_ARCH_DREAM || arch == LLM_ARCH_LLADA || arch == LLM_ARCH_LLADA_MOE || arch == LLM_ARCH_RND1;
+        if (encode) {
+            continue;
+        }
+        for (bool moe : {false, true}) {
+            if (moe && !moe_implemented(arch)) {
+                continue;
+            }
+            if (!moe && moe_mandatory(arch)) {
+                continue;
+            }
+            const char * config_name = moe ? "MoE" : "Dense";
+
+            // the attention scale depends on the absolute position, so the hidden states of the prefix do too
+            const double thold = arch == LLM_ARCH_MISTRAL_LARGE4 ? 1e-4 : 1e-6;
+
+            // at least 4 layers, so that "every 4th layer" patterns (NoPE, full attention) are covered
+            // exaone4 is SWA only with 64 layers, smallthinker always ropes with 4
+            const uint32_t n_layer_min = arch == LLM_ARCH_EXAONE4 ? 64 : arch == LLM_ARCH_SMALLTHINKER ? 8 : 4;
+            gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe, n_layer_min);
+            // different bases, so that a shift using the wrong one is caught
+            gguf_set_val_f32(gguf_ctx.get(), llama_arch_kv_name(arch, LLM_KV_ROPE_FREQ_BASE).c_str(),     20000.0f);
+            gguf_set_val_f32(gguf_ctx.get(), llama_arch_kv_name(arch, LLM_KV_ROPE_FREQ_BASE_SWA).c_str(), 10000.0f);
+            if (arch == LLM_ARCH_BAILINGMOE3) {
+                GGML_ASSERT(gguf_remove_key(gguf_ctx.get(), "bailingmoe3.kda.safe_gate") >= 0);
+            }
+
+            llama_model_ptr model;
+            try {
+                model = get_model(gguf_ctx.get(), nullptr, seed, stdev, {});
+            } catch (const std::exception & err) {
+                LOG(template_row.c_str(), llama_arch_name(arch), config_name, "", "", "", "", "\033[1;31mERROR\033[0m (model load)");
+                n_tests++;
+                n_failed++;
+                continue;
+            }
+            // absolute position embeddings are not translation invariant, the comparison does not hold
+            if (llama_model_rope_type(model.get()) == LLAMA_ROPE_TYPE_NONE) {
+                LOG(template_row.c_str(), llama_arch_name(arch), config_name, "", "", "", "", "\033[1;33mSKIP\033[0m (no rope)");
+                continue;
+            }
+
+            LOG("|%*s|%6s|", (int) max_arch_name_length, llama_arch_name(arch), config_name);
+            fflush(stdout);
+
+            llama_context_params ctx_params = llama_context_default_params();
+            ctx_params.n_ctx           = 0;
+            ctx_params.n_threads       = 4;
+            ctx_params.n_threads_batch = 4;
+            ctx_params.n_seq_max       = 2;
+            ctx_params.kv_unified      = true;
+            ctx_params.type_k          = GGML_TYPE_F32;
+            ctx_params.type_v          = GGML_TYPE_F32;
+            ctx_params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+            // differs from the SWA default, so that a shift using the wrong scale is caught
+            ctx_params.rope_scaling_type = LLAMA_ROPE_SCALING_TYPE_LINEAR;
+            ctx_params.rope_freq_scale   = 0.5f;
+            kq_capture cap;
+            ctx_params.cb_eval           = kq_capture_cb;
+            ctx_params.cb_eval_user_data = &cap;
+
+            ud.verbosity = LOG_LEVEL_OUTPUT;
+            llama_context_ptr lctx(llama_init_from_model(model.get(), ctx_params));
+            ud.verbosity = verbosity;
+            if (!lctx) {
+                LOG("%10s|%10s|%10s|%10s|\033[1;33mSKIP\033[0m (context)\n", "", "", "", "");
+                continue;
+            }
+            llama_memory_t mem = llama_get_memory(lctx.get());
+            if (mem == nullptr || !llama_memory_can_shift(mem)) {
+                LOG("%10s|%10s|%10s|%10s|\033[1;33mSKIP\033[0m (no shift)\n", "", "", "", "");
+                continue;
+            }
+
+            std::string status;
+            char shift_str[16]  = "";
+            char shift2_str[16] = "";
+            char logits_str[16] = "";
+            char ctrl_str[16]   = "";
+            n_tests++;
+            try {
+                const std::vector<float> logits_ref = get_logits_kv_shift(model.get(), lctx.get(), cap, prefix, probe, 0, {}, n_prefix);
+                const auto kq_ref = cap.data;
+                if (verbosity >= LOG_LEVEL_INFO) {
+                    for (const auto & e : kq_ref) {
+                        LOG("[%s: %zu] ", e.first.c_str(), e.second.size());
+                    }
+                }
+                const std::vector<float> logits_shift = get_logits_kv_shift(model.get(), lctx.get(), cap, prefix, probe, d, steps_shift, n_prefix);
+                const kq_diff diff_shift = compare_kq(kq_ref, cap.data, thold);
+                get_logits_kv_shift(model.get(), lctx.get(), cap, prefix, probe, d, steps_shift2, n_prefix);
+                const kq_diff diff_shift2 = compare_kq(kq_ref, cap.data, thold);
+                const std::vector<float> logits_ctrl = get_logits_kv_shift(model.get(), lctx.get(), cap, prefix, probe, d, steps_ctrl, n_prefix + gap);
+                const kq_diff diff_ctrl = compare_kq(kq_ref, cap.data, thold);
+
+                const double nmse_logits = nmse(logits_ref, logits_shift);
+                snprintf(shift_str,  sizeof(shift_str),  "%.2e", diff_shift.worst);
+                snprintf(shift2_str, sizeof(shift2_str), "%.2e", diff_shift2.worst);
+                snprintf(logits_str, sizeof(logits_str), "%.2e", nmse_logits);
+                snprintf(ctrl_str,   sizeof(ctrl_str),   "%.2e", diff_ctrl.worst);
+
+                if (kq_ref.empty()) {
+                    status = "\033[1;33mSKIP\033[0m (no kq captured)";
+                } else if (!diff_shift.first_bad.empty() || !diff_shift2.first_bad.empty()) {
+                    n_failed++;
+                    status = "\033[1;31mFAIL\033[0m" + (diff_shift.bad.empty() ? " x2:" + diff_shift2.bad : diff_shift.bad);
+                } else if (!(diff_ctrl.worst > 10*thold)) {
+                    status = "\033[1;33mOK\033[0m (low sensitivity)";
+                } else {
+                    status = "\033[1;32mOK\033[0m";
+                }
+            } catch (const std::exception & err) {
+                n_failed++;
+                status = std::string("\033[1;31mERROR\033[0m (") + err.what() + ")";
+            }
+            LOG("%10s|%10s|%10s|%10s|%s\n", shift_str, shift2_str, logits_str, ctrl_str, status.c_str());
+        }
+    }
+
+    if (n_tests == 0) {
+        LOG("Summary: no tests executed\n");
+    } else if (n_failed == 0) {
+        LOG("Summary: all %zu test(s) passed\n", n_tests);
+    } else {
+        LOG("Summary: %zu test(s) executed, %zu failed\n", n_tests, n_failed);
+    }
+
+    llama_log_set(ud.log_old.callback, ud.log_old.user_data);
+    return n_failed == 0 ? 0 : 1;
+}
+
 int main(int argc, char ** argv) {
     // init the logger at max verbosity. filter with a custom callback respecting the user-configure verbosity
     common_log_set_verbosity_thold(LOG_LEVEL_DEBUG);
@@ -1403,6 +1784,7 @@ int main(int argc, char ** argv) {
     float stdev = 0.1f;
     std::string out;
     const char * target_backend = nullptr;
+    bool kv_shift = false;
 
     int verbosity = LOG_LEVEL_ERROR;
 
@@ -1470,6 +1852,8 @@ int main(int argc, char ** argv) {
                 usage(argv);
                 return 1;
             }
+        } else if (strcmp(argv[i], "--kv-shift") == 0) {
+            kv_shift = true;
         } else {
             LOG_ERR("%s: unknown argument: %s\n", __func__, argv[i]);
             usage(argv);
@@ -1487,6 +1871,9 @@ int main(int argc, char ** argv) {
     try {
         if (!out.empty()) {
             return save_models(arch_filter, seed, stdev, verbosity, out);
+        }
+        if (kv_shift) {
+            return test_kv_shift(arch_filter, seed, stdev, verbosity);
         }
         return test_backends(arch_filter, seed, stdev, verbosity, target_backend);
     } catch (const std::exception & err) {
