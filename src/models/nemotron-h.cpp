@@ -196,10 +196,10 @@ void llama_model_nemotron_h::load_arch_tensors(llama_model_loader & ml) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_nemotron_h::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_nemotron_h::graph::graph(const llama_model & model, const llm_graph_params & params) :
+llama_model_nemotron_h::graph::graph(const llm_graph_params & params) :
     llm_build_mamba_base(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
@@ -226,12 +226,12 @@ llama_model_nemotron_h::graph::graph(const llama_model & model, const llm_graph_
 
         if (hparams.is_recr(il)) {
             // ssm layer //
-            cur = build_mamba2_layer(inp->get_recr(), cur, model, ubatch, il);
+            cur = build_mamba2_layer(inp->get_recr(), cur, ubatch, il);
         } else if (hparams.n_ff(il) == 0) {
             // attention layer //
-            cur = build_attention_layer(cur, inp->get_attn(), model, n_embd_head, il);
+            cur = build_attention_layer(cur, inp->get_attn(), n_embd_head, il);
         } else {
-            cur = build_ffn_layer(cur, model, il);
+            cur = build_ffn_layer(cur, il);
         }
 
         if (il == n_layer - 1 && crop_before_nextn(inp_out_ids) && !extract_final_inp) {
@@ -277,8 +277,7 @@ llama_model_nemotron_h::graph::graph(const llama_model & model, const llm_graph_
 
 ggml_tensor * llama_model_nemotron_h::graph::build_attention_layer(ggml_tensor *             cur,
                                                           llm_graph_input_attn_kv * inp_attn,
-                                                          const llama_model &       model,
-                                                                int64_t             n_embd_head,
+                                                          int64_t             n_embd_head,
                                                                 int                 il) {
     auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur, n_embd_head, hparams.n_head(il), hparams.n_head_kv(il), il);
 
@@ -291,7 +290,7 @@ ggml_tensor * llama_model_nemotron_h::graph::build_attention_layer(ggml_tensor *
     return cur;
 }
 
-ggml_tensor * llama_model_nemotron_h::graph::build_ffn_layer(ggml_tensor * cur, const llama_model & model, int il) {
+ggml_tensor * llama_model_nemotron_h::graph::build_ffn_layer(ggml_tensor * cur, int il) {
     if (model.layers[il].ffn_gate_inp == nullptr) {
         cur = build_ffn(cur,
                 model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   model.layers[il].ffn_up_s,

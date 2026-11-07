@@ -5,11 +5,13 @@
 #include "htp/binary-ops.h"
 #include "htp/cumsum-ops.h"
 #include "htp/diag-ops.h"
+#include "htp/dsv4-hc-ops.h"
 #include "htp/fill-ops.h"
 #include "htp/flash-attn-ops.h"
 #include "htp/gated-delta-net-ops.h"
 #include "htp/get-rows-ops.h"
 #include "htp/glu-ops.h"
+#include "htp/lightning-indexer-ops.h"
 #include "htp/matmul-ops.h"
 #include "htp/pad-ops.h"
 #include "htp/repeat-ops.h"
@@ -18,6 +20,7 @@
 #include "htp/solve-tri-ops.h"
 #include "htp/ssm-conv.h"
 #include "htp/sum-rows-ops.h"
+#include "htp/top-k-mask-ops.h"
 #include "htp/unary-ops.h"
 #include "htp/upscale-ops.h"
 
@@ -185,6 +188,22 @@ static std::string format_kernel_params(const htp_opnode & node) {
         const char * path = (kparams->kernel_type == HTP_GDN_KERNEL_HMX_CHUNKED) ? "hmx-chunked" : "hvx-recurrent";
         snprintf(str, max_size, "%s-%s vtcm %u", path, kparams->kda ? "kda" : "scalar",
                  (unsigned int) kparams->vtcm_size);
+    } else if (node.opcode == HTP_OP_DSV4_HC_PRE) {
+        const auto * kparams = node.kparams<htp_dsv4_hc_pre_kernel_params>();
+        const char * ktype_str = kparams->kernel_type == HTP_DSV4_HC_PRE_KERNEL_GATED ? "gated" : "plain";
+        snprintf(str, max_size, "%s nth %u vtcm %u", ktype_str,
+                 (unsigned int) kparams->n_threads, (unsigned int) kparams->vtcm_size);
+    } else if (node.opcode == HTP_OP_DSV4_HC_POST) {
+        const auto * kparams = node.kparams<htp_dsv4_hc_post_kernel_params>();
+        const char * ktype_str = kparams->kernel_type == HTP_DSV4_HC_POST_KERNEL_COMB ? "comb" : "identity";
+        snprintf(str, max_size, "%s nth %u vtcm %u", ktype_str,
+                 (unsigned int) kparams->n_threads, (unsigned int) kparams->vtcm_size);
+    } else if (node.opcode == HTP_OP_LIGHTNING_INDEXER) {
+        const auto * kparams = node.kparams<htp_lid_kernel_params>();
+        snprintf(str, max_size, "%s tok %u bc %u nth %u vtcm %u",
+                 kparams->kernel_type == HTP_LID_KERNEL_HMX ? "hmx" : "hvx",
+                 (unsigned int) kparams->n_tokens_tile, (unsigned int) kparams->kv_block,
+                 (unsigned int) kparams->n_threads, (unsigned int) kparams->vtcm_size);
     } else if (node.opcode == HTP_OP_MUL || node.opcode == HTP_OP_ADD || node.opcode == HTP_OP_ADD_ID ||
                node.opcode == HTP_OP_SUB || node.opcode == HTP_OP_DIV) {
         const auto * kparams = node.kparams<htp_binary_kernel_params>();
@@ -213,6 +232,14 @@ static std::string format_kernel_params(const htp_opnode & node) {
     } else if (node.opcode == HTP_OP_CUMSUM) {
         const auto * kparams = node.kparams<htp_cumsum_kernel_params>();
         snprintf(str, max_size, "%s nth %d vtcm %u", kparams->use_dma ? "dma" : "hvx", (int) kparams->n_threads, (unsigned int) kparams->vtcm_size);
+    } else if (node.opcode == HTP_OP_TOP_K_MASK) {
+        const auto * kparams = node.kparams<htp_top_k_mask_kernel_params>();
+        const char * ktype_str = "?";
+        switch (kparams->kernel_type) {
+            case HTP_TOP_K_MASK_KERNEL_ROWS:  ktype_str = "rows"; break;
+            case HTP_TOP_K_MASK_KERNEL_PICKS: ktype_str = "picks"; break;
+        }
+        snprintf(str, max_size, "%s nth %d tile %u x%u vtcm %u", ktype_str, (int) kparams->n_threads, (unsigned int) kparams->tile_cols, (unsigned int) kparams->n_col_tiles, (unsigned int) kparams->vtcm_size);
     } else if (node.opcode == HTP_OP_FILL) {
         const auto * kparams = node.kparams<htp_fill_kernel_params>();
         snprintf(str, max_size, "%s nth %d", kparams->kernel_type == HTP_FILL_KERNEL_CONTIGUOUS ? "contig" : "strided", (int) kparams->n_threads);

@@ -167,6 +167,8 @@ class ModelBase:
         self._fusable_qkv_weight_layers: set[int] = set()
         self._fusable_qkv_bias_layers: set[int] = set()
         self.hparams = ModelBase.load_hparams(self.dir_model, self.is_mistral_format) if hparams is None else hparams
+        # source tensor name to filtered tensor name mapping.
+        self._source_tensor_names: dict[str, str | None] = {}
         self.model_tensors = self.index_tensors(remote_hf_model_id=remote_hf_model_id)
         self.metadata_override = metadata_override
         self.model_name = model_name
@@ -225,21 +227,25 @@ class ModelBase:
         tensors: dict[str, Callable[[], Tensor]] = {}
 
         if remote_hf_model_id is not None:
-            is_safetensors = True
-
             logger.info(f"Using remote model with HuggingFace id: {remote_hf_model_id}")
             remote_tensors = gguf.utility.SafetensorRemote.get_list_tensors_hf_model(remote_hf_model_id)
             for name, remote_tensor in remote_tensors.items():
                 data_gen = lambda r=remote_tensor: LazyTorchTensor.from_remote_tensor(r)  # noqa: E731
-                if titem := self.filter_tensors((name, data_gen)):
+                titem = self.filter_tensors((name, data_gen))
+                self._source_tensor_names[name] = titem[0] if titem else None
+                if titem:
                     tname, tgen = titem
                     tensors[tname] = tgen
 
             return tensors
 
-        prefix = "model" if not self.is_mistral_format else "consolidated"
+        return self.index_local_tensors("model" if not self.is_mistral_format else "consolidated")
+
+    # index the local "<prefix>*.safetensors" files (or pytorch_model*.bin), through filter_tensors
+    def index_local_tensors(self, prefix: str) -> dict[str, Callable[[], Tensor]]:
+        tensors: dict[str, Callable[[], Tensor]] = {}
         part_names: list[str] = ModelBase.get_model_part_names(self.dir_model, prefix, ".safetensors")
-        is_safetensors: bool = len(part_names) > 0 or (not self.is_mistral_format and (self.dir_model / "model.safetensors.index.json").is_file())
+        is_safetensors: bool = len(part_names) > 0 or (not self.is_mistral_format and (self.dir_model / f"{prefix}.safetensors.index.json").is_file())
         if not is_safetensors:
             part_names = ModelBase.get_model_part_names(self.dir_model, "pytorch_model", ".bin")
 
@@ -247,7 +253,7 @@ class ModelBase:
         tensor_names_from_parts: set[str] = set()
 
         if not self.is_mistral_format:
-            index_name = "model.safetensors" if is_safetensors else "pytorch_model.bin"
+            index_name = f"{prefix}.safetensors" if is_safetensors else "pytorch_model.bin"
             index_name += ".index.json"
             index_file = self.dir_model / index_name
 
@@ -292,7 +298,9 @@ class ModelBase:
                             data_gen = lambda data=data_torch: LazyTorchTensor.from_eager(data)  # noqa: E731
                         else:
                             data_gen = lambda data=data_torch: data  # noqa: E731
-                    if titem := self.filter_tensors((name, data_gen)):
+                    titem = self.filter_tensors((name, data_gen))
+                    self._source_tensor_names[name] = titem[0] if titem else None
+                    if titem:
                         tname, tgen = titem
                         tensors[tname] = tgen
 
@@ -492,7 +500,7 @@ class ModelBase:
                         s = self.model_tensors[name]
                         self.model_tensors[weight_name] = lambda w=w, s=s: dequant_bitnet(w(), s())
                         tensors_to_remove.append(name)
-            elif quant_method == "fp8":
+            elif quant_method in ("fp8", "bsgemm-moe"):  # bsgemm-moe: drama-3, same block layout
                 block_size = quant_config.get("weight_block_size")
                 for name in self.model_tensors.keys():
                     if name.endswith("_scale_inv"):
@@ -1277,6 +1285,7 @@ class ModelBase:
         expert_scales: dict[tuple[int, str], list[tuple[int, float]]] = {}
         expert_input_scales: dict[tuple[int, str], list[tuple[int, float]]] = {}
         expert_shapes: dict[tuple[int, str], list[int]] = {}
+        expert_names: dict[tuple[int, str], str] = {}
         n_experts = self.find_hparam(["num_local_experts", "num_experts", "n_routed_experts"], optional=True) or 0
         consumed: list[str] = []
 
@@ -1325,6 +1334,7 @@ class ModelBase:
                     expert_scales[key] = []
                     expert_input_scales[key] = []
                     expert_shapes[key] = shape
+                    expert_names[key] = name
                 expert_blocks[key].append((expert_id, raw.copy()))
                 # Collect per-expert scale2 (scalar per expert)
                 expert_scales[key].append((expert_id, float(scale2.float().sum())))
@@ -1333,13 +1343,13 @@ class ModelBase:
 
                 # Flush when all experts for this (layer, proj) are collected
                 if n_experts > 0 and len(expert_blocks[key]) >= n_experts:
-                    self._flush_nvfp4_experts(key, expert_blocks, expert_scales, expert_input_scales, expert_shapes, bid, proj_type)
+                    self._flush_nvfp4_experts(key, expert_blocks, expert_scales, expert_input_scales, expert_shapes, expert_names, bid, proj_type)
             else:
                 self._repack_nvfp4(name, weight, scale, scale2, input_scale)
 
         # Flush any remaining experts (fallback if n_experts was unknown)
         for bid, proj_type in list(expert_blocks.keys()):
-            self._flush_nvfp4_experts((bid, proj_type), expert_blocks, expert_scales, expert_input_scales, expert_shapes, bid, proj_type)
+            self._flush_nvfp4_experts((bid, proj_type), expert_blocks, expert_scales, expert_input_scales, expert_shapes, expert_names, bid, proj_type)
 
         # Remove consumed tensors so get_tensors/modify_tensors won't see them
         for name in consumed:
@@ -1350,7 +1360,7 @@ class ModelBase:
             if name.endswith((".k_scale", ".v_scale")):
                 del self.model_tensors[name]
 
-    def _flush_nvfp4_experts(self, key, expert_blocks, expert_scales, expert_input_scales, expert_shapes, bid, proj_type):
+    def _flush_nvfp4_experts(self, key, expert_blocks, expert_scales, expert_input_scales, expert_shapes, expert_names, bid, proj_type):
         experts = expert_blocks.pop(key)
         scales = expert_scales.pop(key)
         input_scales = expert_input_scales.pop(key)
@@ -1362,7 +1372,7 @@ class ModelBase:
         new_name = self.map_tensor_name(merged_name)
         logger.info(f"Repacked {new_name} with shape [{len(experts)}, {shape[0]}, {shape[1]}] and quantization NVFP4")
         self.gguf_writer.add_tensor(new_name, merged, raw_dtype=gguf.GGMLQuantizationType.NVFP4)
-        self._tag_prec_a4(merged_name, new_name)
+        self._tag_prec_a4(expert_names.pop(key), new_name)
 
         scales.sort(key=lambda x: x[0])
         self._write_scales_tensor(new_name.replace(".weight", ".scale"), [s[1] for s in scales])
@@ -1413,18 +1423,25 @@ class ModelBase:
         # Per-tensor NVFP4 precision.
         self._nvfp4_layer_algo = {}
         if quant_layers:
-            # store all possible module paths and assert if a quantized layer is not in the model
-            modules: set[str] = set()
-            for name in self.model_tensors:
-                while name := name.rpartition(".")[0]:
-                    modules.add(name)
-
-            for layer_name, entry in quant_layers.items():
-                if not isinstance(entry, dict):
+            # quantized_layers keys are module paths in the source checkpoint, not tensor names
+            # resolve each source tensor to the closest quantized_layers parent and record the algo under its filtered name for _tag_prec_a4
+            layer_algo = {k: v.get("quant_algo") for k, v in quant_layers.items() if isinstance(v, dict)}
+            matched: set[str] = set()
+            for src_name, filtered_name in self._source_tensor_names.items():
+                module = src_name
+                while module := module.rpartition(".")[0]:
+                    if module in layer_algo:
+                        break
+                if not module:
                     continue
-                if titem := self.filter_tensors((layer_name, lambda: torch.empty(0))):
-                    assert titem[0] in modules, f"quantized_layers entry {layer_name!r} is not in the model tensors"
-                    self._nvfp4_layer_algo[titem[0]] = entry.get("quant_algo")
+
+                matched.add(module)
+                # filter_tensors may drop a tensors so we need to check for that here.
+                if filtered_name is not None:
+                    self._nvfp4_layer_algo[filtered_name.removesuffix(".weight").removesuffix(".bias")] = layer_algo[module]
+
+            unmatched = layer_algo.keys() - matched
+            assert not unmatched, f"quantized_layers entries not in the model tensors: {sorted(unmatched)}"
 
         # NVFP4 weights are repacked and written directly to gguf_writer.
         # This must run before dequant_model so NVFP4 tensors are removed
@@ -2113,6 +2130,9 @@ class TextModel(ModelBase):
             res = "jina-v2-de"
         if chkhsh == "0fe1cf6eda062318a1af7270f3331a85c539a01778ff948e24388e949c5282f4":
             # ref: https://huggingface.co/evilfreelancer/ruGPT3XL
+            res = "gpt-2"
+        if chkhsh == "df1bc34a6366466bcb36a9a1b1cc0afdb08cfe21c9250602c930f159085390a9":
+            # ref: https://huggingface.co/Lernex/Metis-1.6-Logos
             res = "gpt-2"
         if chkhsh == "9e454714343b69b99b71795c1d27a68c2a1d15dab111f4d353109f966af29da7":
             # ref: https://huggingface.co/LiquidAI/LFM2.5-8B-A1B
@@ -3384,7 +3404,7 @@ def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> st
     # Kimi-K3's text_config reports "KimiLinearForCausalLM", which is the older
     # Kimi-Linear-48B architecture and cannot load K3 (no attention residuals,
     # latent MoE, situ, ...). Route on the top-level architecture instead.
-    if model_type == ModelType.TEXT and arch in ("NEOChatModel", "StepVLForConditionalGeneration", "Sarashina2VisionForCausalLM", "Exaone4_5_ForConditionalGeneration", "Step3p7ForConditionalGeneration", "KimiK3ForConditionalGeneration"):
+    if model_type == ModelType.TEXT and arch in ("NEOChatModel", "StepVLForConditionalGeneration", "Sarashina2VisionForCausalLM", "Exaone4_5_ForConditionalGeneration", "Step3p7ForConditionalGeneration", "KimiK3ForConditionalGeneration", "KimiK31ForConditionalGeneration", "Nemotron3_5TranscribeForConditionalGeneration"):
         return arch
 
     # if "architectures" is found in the sub-config, use that instead

@@ -209,6 +209,7 @@ struct llama_hparams {
     uint32_t ssm_d_state = 0;
     uint32_t ssm_dt_rank = 0;
     uint32_t ssm_n_group = 0;
+    float    ssm_norm_eps = 0.0f; // 0 = use f_norm_rms_eps
 
     // for MiniMax-Text-01 linear attention
     uint32_t n_embd_head_la = 0;
@@ -229,6 +230,13 @@ struct llama_hparams {
     uint32_t n_hrm_h_cycles = 0;
     uint32_t n_hrm_l_cycles = 0;
     bool     hrm_prefix_lm = false;
+
+    // metis16 (passes over shared layers, depth memory)
+    uint32_t metis_n_pass         = 0;
+    uint32_t metis_n_mem          = 0;
+    uint32_t metis_n_route        = 0;
+    uint32_t metis_pass_lora_rank = 0;
+    float    metis_cont_limit     = 0.0f;
 
     // limite
     float    f_xsa_eps = 0.0f;
@@ -295,6 +303,9 @@ struct llama_hparams {
 
     // realtime models: number of tokens the output lags behind the audio input
     uint32_t n_tokens_delay          = 0;
+
+    // each sequence is paired with an unconditional one
+    bool     classifier_free_guidance = false;
 
     // gemma3n altup
     uint32_t n_altup      = 4; // altup_num_inputs
@@ -423,6 +434,7 @@ struct llama_hparams {
     // Step35: optional per-layer clamps for (Swi)GLU
     std::array<float, LLAMA_MAX_LAYERS> swiglu_clamp_exp; // clamping for expert FFN
     std::array<float, LLAMA_MAX_LAYERS> swiglu_clamp_shexp; // shared expert
+    std::array<float, LLAMA_MAX_LAYERS> swiglu_clamp;       // dense FFN
 
     // this value n_pattern means that every nth layer is dense (i.e. non-SWA)
     // dense_first means whether the pattern is start with a dense layer
