@@ -122,6 +122,8 @@ if [ ! -z ${GG_BUILD_VULKAN} ]; then
         MACOS_RUNNER_CUSTOM_SPIRV_HEADERS_LOCATION="${MACOS_RUNNER_CUSTOM_VULKAN_CMAKE_LOCATION}/SPIRV-Headers/SPIRV-HeadersConfig.cmake"
         if [[ -f "${MACOS_RUNNER_CUSTOM_SPIRV_HEADERS_LOCATION}" || -h "${MACOS_RUNNER_CUSTOM_SPIRV_HEADERS_LOCATION}" ]]; then
             CMAKE_EXTRA="${CMAKE_EXTRA} -DSPIRV-Headers_DIR=${MACOS_RUNNER_CUSTOM_VULKAN_CMAKE_LOCATION}/SPIRV-Headers"
+            # SPIRV-Headers walks up three directories and appends /include, yielding /usr/local/lib/include; the extra vulkan/ level likely breaks its prefix calculation.
+            CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_VULKAN_SPIRV_INCLUDE_DIR=/usr/local/include"
         fi
     fi
 
