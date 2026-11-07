@@ -1785,6 +1785,12 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
     const int64_t r2 = ne12/ne02;
     const int64_t r3 = ne13/ne03;
 
+    // GGML_PREC_F32 on src1 rules out TF32, which rounds src1 to a 10 bit mantissa
+    const bool src1_prec_f32 = compute_type == GGML_TYPE_F32 && ggml_prec_get_src(dst, 1) == GGML_PREC_F32;
+    if (src1_prec_f32) {
+        CUBLAS_CHECK(cublasSetMathMode(cublas_h, CUBLAS_DEFAULT_MATH));
+    }
+
     // Theoretically cublasGemmStridedBatchedEx would always work, even for a single matrix.
     // However, for some old NVIDIA and AMD GPUs the strided/Ex GEMM is much slower,
     //     probably because the internal kernel selection logic is suboptimal.
@@ -1860,6 +1866,11 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
                 CUBLAS_GEMM_DEFAULT_TENSOR_OP));
     }
 
+    // revert to standard mode from common.cuh
+    if (src1_prec_f32) {
+        CUBLAS_CHECK(cublasSetMathMode(cublas_h, CUBLAS_TF32_TENSOR_OP_MATH));
+    }
+
     // Convert output back to F32 if needed
     if (cu_data_type != CUDA_R_32F) {
         const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(traits::ggml_type_val);
@@ -1884,9 +1895,10 @@ static void ggml_cuda_mul_mat_cublas(ggml_backend_cuda_context & ctx, const ggml
         }
     }
     // F16 is the only compute type that can not satisfy a request for BF16
+    // GGML_PREC_F32 on src1 keeps src1 in F32, so only the F32 compute type satisfies it
     if (prec == GGML_PREC_BF16 && compute_type == GGML_TYPE_F16) {
         compute_type = fast_bf16_hardware_available(cc) ? GGML_TYPE_BF16 : GGML_TYPE_F32;
-    } else if (prec == GGML_PREC_F32) {
+    } else if (prec == GGML_PREC_F32 || ggml_prec_get_src(dst, 1) == GGML_PREC_F32) {
         compute_type = GGML_TYPE_F32;
     }
 
@@ -2300,7 +2312,9 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         ggml_cuda_mul_mat_vec_f(ctx, src1, src0, nullptr, &dst_vec);
         return;
     }
-    if (ggml_cuda_should_use_mmf(src0->type, cc, warp_size, src0->ne, src0->nb, ne11, /*mul_mat_id =*/ false)) {
+    // GGML_PREC_F32 on src1 rules out MMF, whose tensor core tiles round src1 to TF32 or F16
+    if (ggml_prec_get_src(dst, 1) != GGML_PREC_F32 &&
+            ggml_cuda_should_use_mmf(src0->type, cc, warp_size, src0->ne, src0->nb, ne11, /*mul_mat_id =*/ false)) {
         ggml_cuda_mul_mat_f(ctx, src0, src1, nullptr, dst);
         return;
     }
