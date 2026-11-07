@@ -48,7 +48,6 @@ static inline int nearest_int(float fval) {
 
 extern "C" {
 
-#if defined __riscv_zvfh
 void ggml_quantize_mat_q8_0_4x1_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
     assert(QK8_0 == 32);
     assert(k % QK8_0 == 0);
@@ -87,6 +86,7 @@ void ggml_quantize_mat_q8_0_4x1_generic(const float * GGML_RESTRICT x, void * GG
     }
 }
 
+#if defined __riscv_zvfh
 void ggml_quantize_mat_q8_K_4x1_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
     assert(QK_K == 256);
     assert(k % QK_K == 0);
@@ -339,13 +339,13 @@ template <> void ggml_quantize_mat_t<8, GGML_TYPE_Q8_K>(const float * GGML_RESTR
     ggml_quantize_mat_q8_K_4x8(x, vy, n_per_row);
 }
 
-#if defined __riscv_zvfh
 template <> void ggml_quantize_mat_t<1, GGML_TYPE_Q8_0>(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t nrow, int64_t n_per_row) {
     assert(nrow == 4);
     UNUSED(nrow);
     ggml_quantize_mat_q8_0_4x1(x, vy, n_per_row);
 }
 
+#if defined __riscv_zvfh
 template <> void ggml_quantize_mat_t<1, GGML_TYPE_Q8_K>(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t nrow, int64_t n_per_row) {
     assert(nrow == 4);
     UNUSED(nrow);
@@ -1492,8 +1492,6 @@ void ggml_gemv_q1_0_4x8_q8_0_generic(int                        n,
     }
 }
 
-// Only enable these for RISC-V.
-#if defined __riscv_zvfh
 void ggml_gemv_q4_0_16x1_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK8_0;
     const int nb = n / qk;
@@ -1538,6 +1536,8 @@ void ggml_gemv_q4_0_16x1_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs,
     }
 }
 
+// Only enable these for RISC-V.
+#if defined __riscv_zvfh
 void ggml_gemv_q4_K_16x1_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK_K;
     const int nb = n / qk;
@@ -2680,8 +2680,6 @@ void ggml_gemm_q1_0_4x8_q8_0_generic(int                        n,
     }
 }
 
-// Only enable these for RISC-V.
-#if defined __riscv_zvfh
 void ggml_gemm_q4_0_16x1_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK8_0;
     const int nb = n / qk;
@@ -2736,6 +2734,8 @@ void ggml_gemm_q4_0_16x1_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs,
     }
 }
 
+// Only enable these for RISC-V.
+#if defined __riscv_zvfh
 void ggml_gemm_q4_K_16x1_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK_K;
     const int nb = n / qk;
@@ -4315,11 +4315,11 @@ template <> int repack<block_q8_0, 8, 4>(struct ggml_tensor * t, const void * da
     return repack_q8_0_to_q8_0_4_bl(t, 8, data, data_size);
 }
 
-#if defined __riscv_zvfh
 template <> int repack<block_q4_0, 1, 16>(struct ggml_tensor * t, const void * data, size_t data_size) {
     return repack_q4_0_to_q4_0_16_bl(t, 1, data, data_size);
 }
 
+#if defined __riscv_zvfh
 template <> int repack<block_q4_K, 1, 16>(struct ggml_tensor * t, const void * data, size_t data_size) {
     return repack_q4_K_to_q4_K_16_bl(t, 1, data, data_size);
 }
@@ -4420,11 +4420,11 @@ template <> void gemv<block_q8_0, 8, 4, GGML_TYPE_Q8_0>(int n, float * s, size_t
     ggml_gemv_q8_0_4x8_q8_0(n, s, bs, vx, vy, nr, nc);
 }
 
-#if defined __riscv_zvfh
 template <> void gemv<block_q4_0, 1, 16, GGML_TYPE_Q8_0>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemv_q4_0_16x1_q8_0(n, s, bs, vx, vy, nr, nc);
 }
 
+#if defined __riscv_zvfh
 template <> void gemv<block_q4_K, 1, 16, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemv_q4_K_16x1_q8_K(n, s, bs, vx, vy, nr, nc);
 }
@@ -4525,11 +4525,11 @@ template <> void gemm<block_q8_0, 8, 4, GGML_TYPE_Q8_0>(int n, float * s, size_t
     ggml_gemm_q8_0_4x8_q8_0(n, s, bs, vx, vy, nr, nc);
 }
 
-#if defined __riscv_zvfh
 template <> void gemm<block_q4_0, 1, 16, GGML_TYPE_Q8_0>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemm_q4_0_16x1_q8_0(n, s, bs, vx, vy, nr, nc);
 }
 
+#if defined __riscv_zvfh
 template <> void gemm<block_q4_K, 1, 16, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemm_q4_K_16x1_q8_K(n, s, bs, vx, vy, nr, nc);
 }
@@ -4968,8 +4968,8 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
     //
     // These implement outer-product style matrix multiplication kernels with
     // an interleave of 1.
-#if defined __riscv_zvfh
     static const ggml::cpu::repack::tensor_traits<block_q4_0, 1, 16, GGML_TYPE_Q8_0> q4_0_16x1_q8_0;
+#if defined __riscv_zvfh
     static const ggml::cpu::repack::tensor_traits<block_q4_K, 1, 16, GGML_TYPE_Q8_K> q4_K_16x1_q8_K;
     static const ggml::cpu::repack::tensor_traits<block_iq4_nl, 1, 16, GGML_TYPE_Q8_0> iq4_nl_16x1_q8_0;
     static const ggml::cpu::repack::tensor_traits<block_q8_0, 1, 16, GGML_TYPE_Q8_0> q8_0_16x1_q8_0;
@@ -4998,15 +4998,16 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
             }
         }
         if (ggml_cpu_has_riscv_v()) {
-            #if defined __riscv_zvfh
-            switch (__riscv_vlenb() * 8) {
-                case 128:  { break; } // TODO
+            switch (ggml_cpu_get_rvv_vlen() * 8) {
+                case 128:  // TODO
                 case 256:  { if (cur->ne[1] % 16 == 0) { return &q4_0_16x1_q8_0; } break; }
                 case 512:  { break; } // TODO
                 case 1024: { break; } // TODO
-                default:   { return nullptr; }
+                default:   { break; } // fall into backup layout
             }
-            #endif
+            if (cur->ne[1] % 8 == 0) {  // backup
+                return &q4_0_8x8_q8_0;
+            }
         }
     } else if (cur->type == GGML_TYPE_Q4_K) {
         if (ggml_cpu_has_avx2()) {
