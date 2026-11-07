@@ -377,6 +377,50 @@ void ggml_vec_dot_f16(int n, float * GGML_RESTRICT s, size_t bs, ggml_fp16_t * G
     *s = sumf;
 }
 
+void ggml_vec_dot_f16_f32(int n, float * GGML_RESTRICT s, size_t bs, const ggml_fp16_t * GGML_RESTRICT x, size_t bx, const float * GGML_RESTRICT y, size_t by, int nrc) {
+    assert(nrc == 1);
+    GGML_UNUSED(nrc);
+    GGML_UNUSED(bx);
+    GGML_UNUSED(by);
+    GGML_UNUSED(bs);
+
+    ggml_float sumf = 0.0;
+
+#if defined(GGML_SIMD)
+    // convert chunks of x to F32 and reuse the F32 SIMD dot
+    // TODO: convert F16 to F32 in-register and fuse the dot (needs a new SIMD macro); also avoid the per-chunk call overhead for tiny k
+    float tx[64];
+    int i = 0;
+    for (; i + 64 <= n; i += 64) {
+        const ggml_fp16_t * GGML_RESTRICT xr = x + i;
+        float * GGML_RESTRICT tr = tx;
+        for (int j = 0; j < 64; ++j) {
+            tr[j] = GGML_CPU_FP16_TO_FP32(xr[j]);
+        }
+        float v;
+        ggml_vec_dot_f32(64, &v, 0, tx, 0, y + i, 0, 1);
+        sumf += v;
+    }
+    if (i < n) {
+        const int nr = n - i;
+        const ggml_fp16_t * GGML_RESTRICT xr = x + i;
+        float * GGML_RESTRICT tr = tx;
+        for (int j = 0; j < nr; ++j) {
+            tr[j] = GGML_CPU_FP16_TO_FP32(xr[j]);
+        }
+        float v;
+        ggml_vec_dot_f32(nr, &v, 0, tx, 0, y + i, 0, 1);
+        sumf += v;
+    }
+#else
+    for (int i = 0; i < n; ++i) {
+        sumf += (ggml_float)(GGML_CPU_FP16_TO_FP32(x[i])*y[i]);
+    }
+#endif
+
+    *s = sumf;
+}
+
 void ggml_vec_silu_f32(const int n, float * y, const float * x) {
     int i = 0;
 #if defined(__AVX512F__) && defined(__AVX512DQ__)
