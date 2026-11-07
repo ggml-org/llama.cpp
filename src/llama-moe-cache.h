@@ -13,17 +13,23 @@ struct llama_model;
 class llama_moe_cache {
 public:
     // backends are all the backends of the context, each GPU gets its own cache of the given size for the layers assigned to it
-    llama_moe_cache(const llama_model & model, bool no_alloc, const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_type_t> & bufts, size_t size);
+    // cpu_share is the share of the misses computed on the CPU instead of uploaded
+    llama_moe_cache(const llama_model & model, bool no_alloc, const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_type_t> & bufts, size_t size, float cpu_share);
     ~llama_moe_cache();
 
     // the device that caches layer il
     ggml_backend_t backend(int32_t il) const;
 
     // the slot map of layer il, if its experts can be read from the cache for n_tokens tokens, nullptr otherwise
-    ggml_tensor * get_slot_map(int32_t il, int64_t n_tokens, int64_t n_expert_used) const;
+    // cpu_part: the graph computes the misses in the CPU map of the layer (see get_cpu_map)
+    ggml_tensor * get_slot_map(int32_t il, int64_t n_tokens, int64_t n_expert_used, bool cpu_part) const;
 
     // the experts of w in the cache, nullptr if w is not cached
     ggml_tensor * get_experts(const ggml_tensor * w) const;
+
+    // the experts of layer il computed on the CPU: I32 [1, n_expert] in host memory, e for these experts, -1 for the others
+    // nullptr if no misses of layer il are computed on the CPU for ubatches of n_tokens tokens
+    ggml_tensor * get_cpu_map(int32_t il, int64_t n_tokens) const;
 
     // ggml_backend_sched copy callback, returns false if src is not a slot map
     bool copy(ggml_backend_t backend, const ggml_tensor * src, ggml_tensor * dst, ggml_cgraph * graph);
