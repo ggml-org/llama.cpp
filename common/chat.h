@@ -269,6 +269,7 @@ struct common_chat_templates_inputs {
     // Parameters below only supported when use_jinja is true
     std::vector<common_chat_tool>         tools;
     common_chat_tool_choice               tool_choice         = COMMON_CHAT_TOOL_CHOICE_AUTO;
+    std::string                           tool_choice_function;
     bool                                  parallel_tool_calls = false;
     common_reasoning_format               reasoning_format    = COMMON_REASONING_FORMAT_NONE; // TODO: refactor this to "bool enable_thinking"
     bool                                  enable_thinking     = true;
@@ -452,7 +453,7 @@ class common_chat_session {
 const char *            common_reasoning_format_name(common_reasoning_format format);
 common_reasoning_format common_reasoning_format_from_name(const std::string & format);
 
-common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::string & tool_choice);
+common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const common_json & tool_choice, std::string * tool_choice_function = nullptr);
 
 bool common_chat_templates_support_enable_thinking(const common_chat_templates * chat_templates);
 
