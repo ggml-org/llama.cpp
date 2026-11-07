@@ -33,7 +33,7 @@
 #include "htp-ops.h"
 #include "htp_iface.h"
 #include "work-queue.h"
-#include "hex-profile.h"
+#include "htp-trace.h"
 #include "allreduce-ops.h"
 #include "dsv4-hc-ops.h"
 #include "htp-fence.h"

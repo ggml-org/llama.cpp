@@ -5,7 +5,7 @@
 #include "hmx-queue.h"
 #include "htp-dcache.h"
 #include "htp-ops.h"
-#include "hex-profile.h"
+#include "htp-trace.h"
 #include "work-queue.h"
 #include "hex-fastdiv.h"
 

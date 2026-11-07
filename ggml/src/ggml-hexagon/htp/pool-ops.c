@@ -5,7 +5,7 @@
 
 #include "hex-common.h"
 #include "dma-queue.h"
-#include "hex-profile.h"
+#include "htp-trace.h"
 #include "htp-ctx.h"
 #include "htp-ops.h"
 #include "htp-tensor.h"

@@ -14,7 +14,7 @@
 
 #include "dma-queue.h"
 #include "hex-fastdiv.h"
-#include "hex-profile.h"
+#include "htp-trace.h"
 #include "hmx-queue.h"
 #include "hmx-utils.h"
 #include "hvx-utils.h"

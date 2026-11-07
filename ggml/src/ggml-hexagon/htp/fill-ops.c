@@ -6,7 +6,7 @@
 #include <string.h>
 
 #include "hex-common.h"
-#include "hex-profile.h"
+#include "htp-trace.h"
 
 #include "hvx-copy.h"
 #include "hvx-utils.h"

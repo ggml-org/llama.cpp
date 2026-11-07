@@ -21,7 +21,7 @@
 #include "htp-ops.h"
 #include "htp-tensor.h"
 #include "htp-vtcm.h"
-#include "hex-profile.h"
+#include "htp-trace.h"
 
 struct htp_unary_context;
 

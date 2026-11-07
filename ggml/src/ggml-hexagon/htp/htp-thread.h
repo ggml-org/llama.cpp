@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #include "dma-queue.h"
-#include "hex-profile.h"
+#include "htp-trace.h"
 
 typedef struct {
     unsigned int              tid;
@@ -23,9 +23,7 @@ static inline unsigned int htp_thread_alloc_id(void) {
     return atomic_fetch_add_explicit(&htp_thread_count, 1, memory_order_relaxed);
 }
 
-static inline void htp_thread_init(htp_thread_t *            th,
-                                   dma_queue_t *             dma,
-                                   struct htp_thread_trace * trace) {
+static inline void htp_thread_init(htp_thread_t * th, dma_queue_t * dma, struct htp_thread_trace * trace) {
     unsigned int tid = htp_thread_alloc_id();
     th->tid   = tid;
     th->dma_q = dma   ? dma[tid]    : NULL;

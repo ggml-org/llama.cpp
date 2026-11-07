@@ -3,7 +3,7 @@
 #include <assert.h>
 
 #include "hex-common.h"
-#include "hex-profile.h"
+#include "htp-trace.h"
 #include "hvx-utils.h"
 #include "dma-queue.h"
 #include "htp-ctx.h"

@@ -6,7 +6,7 @@
 #include <string.h>
 
 #include "dma-queue.h"
-#include "hex-profile.h"
+#include "htp-trace.h"
 #include "hvx-utils.h"
 #include "hvx-copy.h"
 #include "htp-vtcm.h"

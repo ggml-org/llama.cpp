@@ -3,7 +3,7 @@
 #include "hex-common.h"
 #include "dma-copy.h"
 #include "hex-fastdiv.h"
-#include "hex-profile.h"
+#include "htp-trace.h"
 #include "hexagon_protos.h"
 #include "hexagon_types.h"
 #include "htp-ctx.h"

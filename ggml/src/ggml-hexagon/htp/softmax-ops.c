@@ -13,7 +13,7 @@
 #include "hvx-utils.h"
 #include "hex-fastdiv.h"
 #include "hex-common.h"
-#include "hex-profile.h"
+#include "htp-trace.h"
 
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"

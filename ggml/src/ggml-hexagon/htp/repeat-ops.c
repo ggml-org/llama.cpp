@@ -13,7 +13,7 @@
 #include "ggml-common.h"
 #include "htp-ctx.h"
 #include "hex-common.h"
-#include "hex-profile.h"
+#include "htp-trace.h"
 #include "htp-ops.h"
 #include "htp-tensor.h"
 #include "repeat-ops.h"

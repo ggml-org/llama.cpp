@@ -7,7 +7,7 @@
 #include "hex-common.h"
 #include "hex-utils.h"
 #include "hex-fastdiv.h"
-#include "hex-profile.h"
+#include "htp-trace.h"
 #include "htp-ctx.h"
 #include "work-queue.h"
 

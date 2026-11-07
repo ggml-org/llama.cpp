@@ -11,7 +11,7 @@
 #include <HAP_farf.h>
 
 #include "hex-utils.h"
-#include "hex-profile.h"
+#include "htp-trace.h"
 #include "htp-thread.h"
 
 #ifdef __cplusplus

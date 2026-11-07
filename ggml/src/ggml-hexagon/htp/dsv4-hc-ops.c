@@ -9,7 +9,7 @@
 
 #include "dma-queue.h"
 #include "hex-common.h"
-#include "hex-profile.h"
+#include "htp-trace.h"
 #include "htp-ctx.h"
 #include "htp-tensor.h"
 #include "hvx-utils.h"

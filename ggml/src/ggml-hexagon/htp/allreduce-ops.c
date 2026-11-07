@@ -15,7 +15,7 @@
 #include "hvx-utils.h"
 #include "htp-tensor.h"
 #include "dma-queue.h"
-#include "hex-profile.h"
+#include "htp-trace.h"
 #include "allreduce-ops.h"
 #include "htp-fence.h"
 

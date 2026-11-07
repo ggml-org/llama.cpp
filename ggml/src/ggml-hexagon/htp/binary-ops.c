@@ -14,7 +14,7 @@
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
 #include "hex-common.h"
-#include "hex-profile.h"
+#include "htp-trace.h"
 #include "binary-ops.h"
 #include "htp-ctx.h"
 #include "htp-ops.h"
