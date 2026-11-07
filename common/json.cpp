@@ -336,6 +336,14 @@ void common_json::insert(const common_json & vals) {
     });
 }
 
+void common_json::insert_before(const common_json & vals) {
+    guard([&] {
+        ordered_json & self = as_json(this);
+
+        self.insert(self.begin(), to_json(vals));
+    });
+}
+
 std::string common_json::dump(int indent) const {
     return guard([&] { return as_json(this).dump(indent); });
 }
