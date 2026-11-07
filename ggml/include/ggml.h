@@ -1778,28 +1778,35 @@ extern "C" {
         struct ggml_tensor      * a);
 
     // set elements above the diagonal to -INF
-    GGML_API struct ggml_tensor * ggml_diag_mask_inf(
+    // deprecated: use ggml_tri + ggml_fill instead. ggml_tri has no diagonal offset, so n_past is limited to 0 and
+    // -1, and unlike this function it requires a contiguous F32 square matrix
+    GGML_DEPRECATED(GGML_API struct ggml_tensor * ggml_diag_mask_inf(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
-            int                   n_past);
+            int                   n_past),
+            "use ggml_tri + ggml_fill instead");
 
     // in-place, returns view(a)
-    GGML_API struct ggml_tensor * ggml_diag_mask_inf_inplace(
+    GGML_DEPRECATED(GGML_API struct ggml_tensor * ggml_diag_mask_inf_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
-            int                   n_past);
+            int                   n_past),
+            "use ggml_tri + ggml_fill instead");
 
     // set elements above the diagonal to 0
-    GGML_API struct ggml_tensor * ggml_diag_mask_zero(
+    // deprecated: use ggml_tri instead, see ggml_diag_mask_inf above for the restrictions
+    GGML_DEPRECATED(GGML_API struct ggml_tensor * ggml_diag_mask_zero(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
-            int                   n_past);
+            int                   n_past),
+            "use ggml_tri instead");
 
     // in-place, returns view(a)
-    GGML_API struct ggml_tensor * ggml_diag_mask_zero_inplace(
+    GGML_DEPRECATED(GGML_API struct ggml_tensor * ggml_diag_mask_zero_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
-            int                   n_past);
+            int                   n_past),
+            "use ggml_tri instead");
 
     GGML_API struct ggml_tensor * ggml_clamp(
             struct ggml_context * ctx,
