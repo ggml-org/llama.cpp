@@ -167,6 +167,22 @@ static inline __device__ void ggml_cuda_swap(T & a, T & b) {
     b = tmp;
 }
 
+// true if ia sorts after ib; padded indices sink to the end, ties break to the lower index (matches CPU cmp_argsort)
+template<ggml_sort_order order>
+static inline __device__ bool argsort_ranks_after(const float * x_row, int ia, int ib, int ncols) {
+    const bool a_pad = ia >= ncols;
+    const bool b_pad = ib >= ncols;
+    if (a_pad || b_pad) {
+        return a_pad && (!b_pad || ia > ib);
+    }
+    const float xa = x_row[ia];
+    const float xb = x_row[ib];
+    if (xa != xb) {
+        return order == GGML_SORT_ORDER_ASC ? (xa > xb) : (xa < xb);
+    }
+    return ia > ib;
+}
+
 // One compare-exchange of the bitonic network at (k, j) for column col.
 template<ggml_sort_order order>
 static inline __device__ void bitonic_step(const float * x_row, int * dst_row, const int ncols, const int col, const int k, const int j) {
@@ -175,19 +191,11 @@ static inline __device__ void bitonic_step(const float * x_row, int * dst_row, c
         return;
     }
     if ((col & k) == 0) {
-        if (dst_row[col] >= ncols ||
-            (dst_row[ixj] < ncols && (order == GGML_SORT_ORDER_ASC ?
-                x_row[dst_row[col]] > x_row[dst_row[ixj]] :
-                x_row[dst_row[col]] < x_row[dst_row[ixj]]))
-        ) {
+        if (argsort_ranks_after<order>(x_row, dst_row[col], dst_row[ixj], ncols)) {
             ggml_cuda_swap(dst_row[col], dst_row[ixj]);
         }
     } else {
-        if (dst_row[ixj] >= ncols ||
-            (dst_row[col] < ncols && (order == GGML_SORT_ORDER_ASC ?
-                x_row[dst_row[col]] < x_row[dst_row[ixj]] :
-                x_row[dst_row[col]] > x_row[dst_row[ixj]]))
-        ) {
+        if (argsort_ranks_after<order>(x_row, dst_row[ixj], dst_row[col], ncols)) {
             ggml_cuda_swap(dst_row[col], dst_row[ixj]);
         }
     }

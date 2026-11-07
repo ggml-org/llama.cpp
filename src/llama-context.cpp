@@ -404,6 +404,11 @@ llama_context::llama_context(
             LLAMA_LOG_INFO("%s: LLAMA_KV_ROWS_DISABLE set, disabling kv_rows\n", __func__);
             cparams.auto_fkvr = false;
         }
+
+        // the banded op and the kq_b fallback index the KQ mask by cell, not by kv_rows
+        if (model.arch == LLM_ARCH_INKLING) {
+            cparams.auto_fkvr = false;
+        }
     }
 
     // initialized later
@@ -4328,6 +4333,13 @@ llama_context * llama_init_from_model(
 
     if ((model->hparams.is_mla() || model->arch == LLM_ARCH_DEEPSEEK4 || model->arch == LLM_ARCH_DEEPSEEK41) && params.type_k != params.type_v) {
         LLAMA_LOG_ERROR("%s: model does not support different K (%s) and V (%s) cache types\n", __func__, ggml_type_name(params.type_k), ggml_type_name(params.type_v));
+        return nullptr;
+    }
+
+    // quantized V forces the dense path, which transposes V - invalid for a block-quantized tensor
+    if (model->arch == LLM_ARCH_INKLING && ggml_is_quantized(params.type_v)) {
+        LLAMA_LOG_ERROR("%s: model does not support a quantized V cache (%s)\n",
+            __func__, ggml_type_name(params.type_v));
         return nullptr;
     }
 
