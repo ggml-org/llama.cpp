@@ -33,7 +33,7 @@ ggml_cgraph * clip_graph_llava::build() {
 
     // concat class_embeddings and patch_embeddings
     if (model.class_embedding) {
-        inp = ggml_concat(ctx0, inp, model.class_embedding, 1);
+        inp = ggml_concat(ctx0, model.class_embedding, inp, 1);
     }
 
     ggml_tensor * positions = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pos);
