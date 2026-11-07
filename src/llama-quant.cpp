@@ -371,6 +371,11 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
         quantize &= name.find("hc_")            == std::string::npos;
     }
 
+    // kail: keep the controller/router path in original type (small, reduction dims are not quant-friendly)
+    if (arch == LLM_ARCH_KAIL) {
+        quantize &= name.find("attn_ctrl_")  == std::string::npos;
+        quantize &= name.find("attn_temp")   == std::string::npos;
+        quantize &= name.find("ffn_router_") == std::string::npos;
     // kimi-k31: the indexer picks the top-k cells, so keep its projections accurate
     if (arch == LLM_ARCH_KIMI_K31) {
         quantize &= name.find("indexer.attn_q_b") == std::string::npos;

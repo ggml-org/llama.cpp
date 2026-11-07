@@ -15,10 +15,13 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
+#include <chrono>
 #include <filesystem>
 #include <memory>
 #include <random>
 #include <regex>
+#include <fstream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -805,6 +808,80 @@ static std::string get_tmp_gguf_path() {
     return (std::filesystem::temp_directory_path() / ("test-llama-archs-" + std::to_string(++id) + ".gguf")).string();
 }
 
+static bool test_kail_output_head(const llama_model * model) {
+    const auto temp_dir = std::filesystem::temp_directory_path() /
+        ("llama-test-kail-output-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    if (!std::filesystem::create_directory(temp_dir)) {
+        LOG_ERR("%s: failed to create temporary directory\n", __func__);
+        return false;
+    }
+    struct temp_dir_cleanup {
+        std::filesystem::path path;
+        ~temp_dir_cleanup() {
+            std::error_code ec;
+            std::filesystem::remove_all(path, ec);
+        }
+    } cleanup{temp_dir};
+
+    const auto path = temp_dir / "kail.gguf";
+    llama_model_save_to_file(model, path.string().c_str());
+
+    auto params = llama_model_default_params();
+    params.n_gpu_layers = 0;
+    params.progress_callback = silent_model_load_progress;
+    llama_model_ptr valid(llama_model_load_from_file(path.string().c_str(), params));
+    if (!valid) {
+        LOG_ERR("%s: valid KailA GGUF failed to load\n", __func__);
+        return false;
+    }
+    valid.reset();
+
+    std::fstream file(path, std::ios::binary | std::ios::in | std::ios::out);
+    if (!file) {
+        LOG_ERR("%s: failed to open temporary KailA GGUF\n", __func__);
+        return false;
+    }
+    const std::string data((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    const size_t output_pos = data.find("output.weight");
+    if (output_pos == std::string::npos) {
+        LOG_ERR("%s: output.weight not found in generated KailA GGUF\n", __func__);
+        return false;
+    }
+    file.clear();
+    file.seekp((std::streamoff) output_pos);
+    file.put('x');
+    file.flush();
+    if (!file) {
+        LOG_ERR("%s: failed to remove output.weight from temporary KailA GGUF\n", __func__);
+        return false;
+    }
+    file.close();
+
+    struct log_capture {
+        ggml_log_callback previous_callback;
+        void * previous_user_data;
+        std::string text;
+    } capture{};
+    llama_log_get(&capture.previous_callback, &capture.previous_user_data);
+    llama_log_set([](ggml_log_level level, const char * text, void * user_data) {
+        auto * capture = (log_capture *) user_data;
+        capture->text += text;
+        if (capture->previous_callback) {
+            capture->previous_callback(level, text, capture->previous_user_data);
+        }
+    }, &capture);
+    llama_model_ptr missing(llama_model_load_from_file(path.string().c_str(), params));
+    llama_log_set(capture.previous_callback, capture.previous_user_data);
+
+    if (missing || capture.text.find("output.weight") == std::string::npos) {
+        LOG_ERR("%s: missing output.weight was not rejected with the expected diagnostic\n", __func__);
+        return false;
+    }
+
+    LOG_INF("%s: valid GGUF loads and missing output.weight is rejected\n", __func__);
+    return true;
+}
+
 static llama_model_ptr get_model(
         struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const float stdev,
         const std::vector<ggml_backend_dev_t> & devs,
@@ -1160,6 +1237,9 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
             }
             gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe);
             llama_model_ptr model = get_model(gguf_ctx.get(), nullptr, seed, stdev, {});
+            if (arch == LLM_ARCH_KAIL && !test_kail_output_head(model.get())) {
+                return 1;
+            }
             const std::string path = dir + "/" + llama_arch_name(arch) + (moe ? "-moe.gguf" : "-dense.gguf");
             LOG_INF("%s: '%s %s' -> %s ...", __func__, llama_arch_name(arch), moe ? "MoE" : "dense", path.c_str());
             llama_model_save_to_file(model.get(), path.c_str());
