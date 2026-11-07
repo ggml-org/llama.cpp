@@ -8,8 +8,12 @@
 #include <cinttypes>
 #include <clocale>
 #include <cstdio>
+#include <random>
 #include <string>
 #include <vector>
+
+#define KVU_CACHE_N_IDLE_SEQ 4
+#define KVU_CACHE_SCATTER_CHUNK_MAX 2048
 
 static bool invalid_shape(const std::vector<int> & values) {
     return values.empty() || *std::min_element(values.begin(), values.end()) <= 0;
@@ -75,7 +79,12 @@ int llama_batched_bench(int argc, char ** argv) {
     llama_context_params ctx_params = common_context_params_to_llama(params);
 
     // ensure enough sequences are available
-    ctx_params.n_seq_max = n_pl.empty() ? 1 : *std::max_element(n_pl.begin(), n_pl.end());
+    const int max_pl = *std::max_element(n_pl.begin(), n_pl.end());
+    if (params.kv_unified && size_t(max_pl) + KVU_CACHE_N_IDLE_SEQ > llama_max_parallel_sequences()) {
+        LOG_ERR("unified KV warming supports at most %zu timed sequences\n", llama_max_parallel_sequences() - KVU_CACHE_N_IDLE_SEQ);
+        return 1;
+    }
+    ctx_params.n_seq_max = max_pl + (params.kv_unified ? KVU_CACHE_N_IDLE_SEQ : 0);
 
     llama_context_ptr ctx_owner(llama_init_from_model(model, ctx_params));
     llama_context * ctx = ctx_owner.get();
@@ -150,15 +159,45 @@ int llama_batched_bench(int argc, char ** argv) {
                     continue;
                 }
 
-                batch.clear();
+                const int seq_offset = params.kv_unified ? KVU_CACHE_N_IDLE_SEQ : 0;
+                llama_memory_clear(mem, false);
+                if (params.kv_unified) {
+                    const int n_idle = n_kv_max - int(n_kv);
+                    const int chunk_size = std::max(1, std::min(KVU_CACHE_SCATTER_CHUNK_MAX, n_idle/16));
+                    int positions[KVU_CACHE_N_IDLE_SEQ] = {};
+                    std::mt19937 idle_rng(1);
+                    std::uniform_int_distribution<int32_t> idle_token(0, n_vocab - 1);
 
-                for (int j = 0; j < (is_pp_shared ? 1 : pl); ++j) {
-                    for (int i = 0; i < pp; ++i) {
-                        batch.add(get_token_rand(), i, j, i == pp - 1);
+                    LOG_INF("warming unified KV cache: %d idle tokens\n", n_idle);
+                    for (int filled = 0; filled < n_idle;) {
+                        for (int seq = 0; seq < KVU_CACHE_N_IDLE_SEQ && filled < n_idle; ++seq) {
+                            const int count = std::min(chunk_size, n_idle - filled);
+                            batch.clear();
+                            for (int i = 0; i < count; ++i) {
+                                batch.add(idle_token(idle_rng), positions[seq]++, seq, false);
+                            }
+                            if (!decode_helper(ctx, batch, ctx_params.n_batch, false)) {
+                                LOG_ERR("failed to fill scattered idle KV cache\n");
+                                return 1;
+                            }
+                            filled += count;
+                        }
+                    }
+                    llama_synchronize(ctx);
+                    for (int seq = 0; seq < KVU_CACHE_N_IDLE_SEQ; ++seq) {
+                        if (llama_memory_seq_pos_max(mem, seq) != positions[seq] - 1) {
+                            LOG_ERR("scattered idle sequence %d has an unexpected end position\n", seq);
+                            return 1;
+                        }
                     }
                 }
 
-                llama_memory_clear(mem, false);
+                batch.clear();
+                for (int j = 0; j < (is_pp_shared ? 1 : pl); ++j) {
+                    for (int i = 0; i < pp; ++i) {
+                        batch.add(get_token_rand(), i, seq_offset + j, i == pp - 1);
+                    }
+                }
 
                 const auto t_pp_start = ggml_time_us();
 
@@ -173,18 +212,18 @@ int llama_batched_bench(int argc, char ** argv) {
 
                 if (is_pp_shared) {
                     for (int32_t i = 1; i < pl; ++i) {
-                        llama_memory_seq_cp(mem, 0, i, -1, -1);
+                        llama_memory_seq_cp(mem, seq_offset, seq_offset + i, -1, -1);
                     }
 
                     if (!params.kv_unified) {
                         // run one dummy token to apply the memory copy
                         batch.clear();
-                        batch.add(get_token_rand(), pp + 0, 0, true);
+                        batch.add(get_token_rand(), pp + 0, seq_offset, true);
                         if (!decode_helper(ctx, batch, ctx_params.n_batch, true)) {
                             LOG_ERR("%s: llama_decode() failed\n", __func__);
                             return 1;
                         }
-                        llama_memory_seq_rm(mem, 0, pp, -1);
+                        llama_memory_seq_rm(mem, seq_offset, pp, -1);
                     }
                 }
 
@@ -197,7 +236,7 @@ int llama_batched_bench(int argc, char ** argv) {
                         for (int i = 0; i < tg; ++i) {
                             batch.clear();
 
-                            batch.add(get_token_rand(), pp + i, j, true);
+                            batch.add(get_token_rand(), pp + i, seq_offset + j, true);
 
                             if (!decode_helper(ctx, batch, ctx_params.n_batch, true)) {
                                 LOG_ERR("%s: llama_decode() failed\n", __func__);
@@ -212,7 +251,7 @@ int llama_batched_bench(int argc, char ** argv) {
                         batch.clear();
 
                         for (int j = 0; j < pl; ++j) {
-                            batch.add(get_token_rand(), pp + i, j, true);
+                            batch.add(get_token_rand(), pp + i, seq_offset + j, true);
                         }
 
                         if (!decode_helper(ctx, batch, ctx_params.n_batch, true)) {
