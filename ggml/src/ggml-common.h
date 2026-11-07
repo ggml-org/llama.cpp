@@ -333,7 +333,7 @@ typedef struct {
         ggml_half2 dm;
     } GGML_COMMON_AGGR_U;
     uint8_t scales[K_SCALE_SIZE]; // scales and mins, quantized with 6 bits
-    uint8_t qs[QK_K/2];           // 4--bit quants
+    uint8_t qs[QK_K/2];           // 4-bit quants
 } block_q4_K;
 static_assert(sizeof(block_q4_K) == 2*sizeof(ggml_half) + K_SCALE_SIZE + QK_K/2, "wrong q4_K block size/padding");
 
