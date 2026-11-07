@@ -313,6 +313,33 @@ static void test(void) {
     assert(params.lora_adapters[2].path == "file3\"3\".gguf");
     assert(params.lora_adapters[3].path == "file4\".gguf");
 
+    {
+        std::string ts_exact;
+        for (size_t i = 0; i < llama_max_devices(); ++i) {
+            ts_exact += (i > 0 ? "," : "") + std::to_string(i + 1);
+        }
+        common_params p_ts;
+        argv = {"binary_name", "-m", "model.gguf", "-ts", ts_exact};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), p_ts, LLAMA_EXAMPLE_COMMON));
+        for (size_t i = 0; i < llama_max_devices(); ++i) {
+            assert(p_ts.tensor_split[i] == static_cast<float>(i + 1));
+        }
+
+        common_params p_fitt;
+        argv = {"binary_name", "-m", "model.gguf", "-fitt", ts_exact};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), p_fitt, LLAMA_EXAMPLE_COMMON));
+        for (size_t i = 0; i < llama_max_devices(); ++i) {
+            assert(p_fitt.fit_params_target[i] == static_cast<size_t>(i + 1) * 1024 * 1024);
+        }
+
+        std::string ts_too_many = ts_exact + ",99";
+        argv = {"binary_name", "-m", "model.gguf", "-ts", ts_too_many};
+        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), p_ts, LLAMA_EXAMPLE_COMMON));
+
+        argv = {"binary_name", "-m", "model.gguf", "-fitt", ts_too_many};
+        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), p_fitt, LLAMA_EXAMPLE_COMMON));
+    }
+
 // skip this part on windows, because setenv is not supported
 #ifdef _WIN32
     printf("test-arg-parser: skip on windows build\n");
