@@ -1750,6 +1750,63 @@ json server_decision_context::format_answer(const server_decision_question & que
 // shared prompt prefix
 //
 
+std::vector<std::shared_ptr<std::vector<float>>> server_decision_share_images(std::vector<server_task> & tasks) {
+    std::vector<std::shared_ptr<std::vector<float>>> buffers;
+    if (tasks.size() == 1 && tasks[0].child_tasks.empty()) {
+        return buffers;
+    }
+
+    using image_key = std::pair<std::vector<char>, size_t>;
+    std::map<image_key, std::vector<std::pair<server_task *, size_t>>> uses;
+    auto collect = [&](server_task & task, size_t n_shared) {
+        if (!task.tokens.has_mtmd) {
+            return;
+        }
+        std::map<std::string, size_t> ordinals;
+        for (size_t idx = 0; idx < task.tokens.size(); idx++) {
+            if (task.tokens[idx] != LLAMA_TOKEN_NULL) {
+                continue;
+            }
+            const auto * chunk = task.tokens.find_chunk(idx).get();
+            const size_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk);
+            const char * id = mtmd_input_chunk_get_id(chunk);
+            if (mtmd_input_chunk_get_type(chunk) == MTMD_INPUT_CHUNK_TYPE_IMAGE && id && id[0]) {
+                // Slices can have the same ID and shape. Count them even inside a shared prefix.
+                const size_t ordinal = ordinals[id]++;
+                if (idx >= n_shared) {
+                    size_t size = 0;
+                    if (mtmd_input_chunk_save(chunk, nullptr, 0, &size) != 0) {
+                        throw std::runtime_error("failed to identify decision image chunk");
+                    }
+                    std::vector<char> metadata(size);
+                    if (mtmd_input_chunk_save(chunk, metadata.data(), metadata.size(), nullptr) != 0) {
+                        throw std::runtime_error("failed to identify decision image chunk");
+                    }
+                    uses[{std::move(metadata), ordinal}].push_back({&task, idx});
+                }
+            }
+            idx += n_tokens - 1;
+        }
+    };
+    for (auto & task : tasks) {
+        collect(task, 0);
+        for (auto & child : task.child_tasks) {
+            collect(child, task.n_tokens_shared);
+        }
+    }
+    for (auto & entry : uses) {
+        if (entry.second.size() < 2) {
+            continue;
+        }
+        auto buffer = std::make_shared<std::vector<float>>();
+        for (auto & use : entry.second) {
+            use.first->decision.image_embd[use.second] = buffer;
+        }
+        buffers.push_back(std::move(buffer));
+    }
+    return buffers;
+}
+
 std::vector<server_task> server_decision_group_tasks(std::vector<server_task> && tasks, size_t n_slots) {
     n_slots = std::max(n_slots, (size_t) 1);
 

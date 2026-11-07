@@ -163,6 +163,106 @@ static void test_server_tokens(testing & t) {
     t.test("clone",         test_server_tokens_clone);
 }
 
+static void test_decision_image_sharing(testing & t) {
+    mtmd::input_chunks chunks(mtmd_test_create_input_chunks());
+    const auto * image = chunks[1];
+    const size_t n_image = mtmd_input_chunk_get_n_tokens(image);
+    auto make_task = [&](size_t n_text, size_t n_images) {
+        server_task task(SERVER_TASK_TYPE_DECISION);
+        task.tokens = server_tokens(llama_tokens(n_text, 1), true);
+        for (size_t i = 0; i < n_images; i++) {
+            task.tokens.push_back(image);
+        }
+        return task;
+    };
+
+    t.test("positions and slices", [&](testing & t) {
+        std::vector<server_task> tasks;
+        tasks.push_back(make_task(3, 2));
+        tasks.push_back(make_task(9, 2));
+        auto buffers = server_decision_share_images(tasks);
+        t.assert_equal("two distinct slices", (size_t) 2, buffers.size());
+        auto first = tasks[0].decision.get_image_embd(3);
+        auto second = tasks[0].decision.get_image_embd(3 + n_image);
+        t.assert_true("same slice at different token positions", first == tasks[1].decision.get_image_embd(9));
+        t.assert_true("second slice at different token positions", second == tasks[1].decision.get_image_embd(9 + n_image));
+        t.assert_true("same ID and shape do not alias slices", first != second);
+        first->assign({1.0f, 2.0f});
+        second->assign({3.0f, 4.0f});
+        t.assert_equal("first slice output", 1.0f, tasks[1].decision.get_image_embd(9)->at(0));
+        t.assert_equal("second slice output", 3.0f, tasks[1].decision.get_image_embd(9 + n_image)->at(0));
+    });
+
+    t.test("request lifetime", [&](testing & t) {
+        std::vector<server_task> a, b;
+        a.push_back(make_task(0, 1));
+        a.push_back(make_task(0, 1));
+        b.push_back(make_task(0, 1));
+        b.push_back(make_task(0, 1));
+        auto buffers_a = server_decision_share_images(a);
+        auto buffers_b = server_decision_share_images(b);
+        t.assert_true("requests do not share", a[0].decision.get_image_embd(0) != b[0].decision.get_image_embd(0));
+        auto in_flight = a[0].decision.get_image_embd(0);
+        buffers_a.clear();
+        t.assert_true("in-flight work keeps data alive", a[1].decision.get_image_embd(0) == in_flight);
+        in_flight.reset();
+        t.assert_true("retained tasks do not keep data alive", !a[0].decision.get_image_embd(0));
+        t.assert_true("other request is alive", !!b[0].decision.get_image_embd(0));
+    });
+
+    t.test("image identity and order", [&](testing & t) {
+        size_t size = 0;
+        mtmd_input_chunk_save(image, nullptr, 0, &size);
+        std::string data(size, '\0');
+        mtmd_input_chunk_save(image, &data[0], size, nullptr);
+        const size_t id_pos = data.find("image_1");
+        t.assert_true("test image has an ID", id_pos != std::string::npos);
+        data[id_pos + 6] = '2';
+        mtmd::input_chunk_ptr other(mtmd_input_chunk_load(data.data(), data.size()));
+        std::vector<server_task> tasks;
+        tasks.push_back(make_task(0, 1));
+        tasks[0].tokens.push_back(other.get());
+        tasks.push_back(make_task(7, 0));
+        tasks[1].tokens.push_back(other.get());
+        tasks[1].tokens.push_back(image);
+        auto buffers = server_decision_share_images(tasks);
+        t.assert_equal("two images", (size_t) 2, buffers.size());
+        t.assert_true("image A follows its identity", tasks[0].decision.get_image_embd(0) == tasks[1].decision.get_image_embd(7 + n_image));
+        t.assert_true("image B follows its identity", tasks[0].decision.get_image_embd(n_image) == tasks[1].decision.get_image_embd(7));
+        t.assert_true("different images do not alias", tasks[0].decision.get_image_embd(0) != tasks[1].decision.get_image_embd(7));
+    });
+
+    t.test("single and joint task", [&](testing & t) {
+        std::vector<server_task> tasks;
+        tasks.push_back(make_task(0, 2));
+        auto buffers = server_decision_share_images(tasks);
+        t.assert_true("no buffers for one forward pass", buffers.empty());
+        t.assert_true("no per-task lookup entries", tasks[0].decision.image_embd.empty());
+    });
+
+    t.test("shared prefix", [&](testing & t) {
+        std::vector<server_task> tasks;
+        tasks.push_back(make_task(3, 1));
+        tasks[0].n_tokens_shared = 3 + n_image;
+        tasks[0].child_tasks.push_back(make_task(3, 1));
+        auto buffers = server_decision_share_images(tasks);
+        t.assert_true("prefix images are already processed once", buffers.empty());
+        t.assert_true("parent needs no feature buffer", tasks[0].decision.image_embd.empty());
+        t.assert_true("child needs no feature buffer", tasks[0].child_tasks[0].decision.image_embd.empty());
+    });
+
+    t.test("slice ordinal after shared prefix", [&](testing & t) {
+        std::vector<server_task> tasks;
+        tasks.push_back(make_task(0, 2));
+        tasks[0].n_tokens_shared = n_image;
+        tasks[0].child_tasks.push_back(make_task(0, 2));
+        auto buffers = server_decision_share_images(tasks);
+        t.assert_equal("only suffix needs features", (size_t) 1, buffers.size());
+        t.assert_true("prefix is skipped", !tasks[0].child_tasks[0].decision.get_image_embd(0));
+        t.assert_true("suffix keeps its ordinal", tasks[0].decision.get_image_embd(n_image) == tasks[0].child_tasks[0].decision.get_image_embd(n_image));
+    });
+}
+
 //
 // string / json helpers
 //
@@ -678,6 +778,7 @@ int main(int argc, char ** argv) {
     }
 
     t.test("server_tokens", test_server_tokens);
+    t.test("decision_image_sharing", test_decision_image_sharing);
     t.test("utf8",          test_utf8);
     t.test("sse",           test_sse);
     t.test("json_helpers",  test_json_helpers);
