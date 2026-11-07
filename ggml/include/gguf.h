@@ -125,6 +125,10 @@ extern "C" {
     // get ith C string from array with given key_id
     GGML_API const char * gguf_get_arr_str (const struct gguf_context * ctx, int64_t key_id, size_t i);
 
+    // get length of the ith C string from array with given key_id, excluding the terminating NUL
+    // for a non-array string KV pair, use i = 0
+    GGML_API size_t       gguf_get_arr_str_len(const struct gguf_context * ctx, int64_t key_id, size_t i);
+
     GGML_API int64_t         gguf_get_n_tensors    (const struct gguf_context * ctx);
     GGML_API int64_t         gguf_find_tensor      (const struct gguf_context * ctx, const char * name); // returns -1 if the tensor is not found
     GGML_API size_t          gguf_get_tensor_offset(const struct gguf_context * ctx, int64_t tensor_id);
