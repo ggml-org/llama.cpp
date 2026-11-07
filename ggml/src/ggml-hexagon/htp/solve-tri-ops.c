@@ -242,7 +242,7 @@ int op_solve_tri(struct htp_ops_context * octx) {
         struct htp_solve_tri_context sctx = {
             .octx            = octx,
             .kparams         = kparams,
-            .jobs_per_hvx = fastdiv(njobs + n_hvx - 1, &octx->n_hvx_div),
+            .jobs_per_hvx    = fastdiv(njobs + n_hvx - 1, &octx->n_hvx_div),
             .total_jobs      = njobs,
             .job_start       = job_start,
             .k_chunks        = k_chunks,
@@ -276,7 +276,7 @@ int op_solve_tri(struct htp_ops_context * octx) {
         struct htp_solve_tri_context sctx = {
             .octx            = octx,
             .kparams         = kparams,
-            .jobs_per_hvx = fastdiv(njobs + n_hvx - 1, &octx->n_hvx_div),
+            .jobs_per_hvx    = fastdiv(njobs + n_hvx - 1, &octx->n_hvx_div),
             .total_jobs      = njobs,
             .job_start       = job_start,
             .k_chunks        = k_chunks,

@@ -64,8 +64,8 @@ struct htp_mm_kernel_params {
     uint8_t  unused;             // reserved
     uint8_t  n_hmx;              // 1 = use HMX, 0 = use HVX
 
-    uint8_t  n_hvx;          // Number of threads to spawn
-    uint8_t  n_act_hvx;      // Number of threads for activation preparation
+    uint8_t  n_hvx;              // Number of threads to spawn
+    uint8_t  n_act_hvx;          // Number of threads for activation preparation
     uint8_t  n_prefetch;         // Prefetch lookahead buffers/rows in VTCM
     uint8_t  n_weights;          // Number of weights for fused NX
 
@@ -459,7 +459,7 @@ static inline void htp_mm_hvx_vtcm_layout_build(
         const uint32_t aligned_tile_size = htp_tensor_get_tile_padded_size(wtype);
         const uint32_t n_k_tiles         = (ne10 + htp_tensor_get_tile_k(wtype) - 1) / htp_tensor_get_tile_k(wtype);
         const uint32_t tile_row_size     = n_k_tiles * aligned_tile_size;
-        size_t src0_sz_per_hvx        = htp_mm_round_up(n_prefetch * tile_row_size, 256);
+        size_t src0_sz_per_hvx           = htp_mm_round_up(n_prefetch * tile_row_size, 256);
 
         act_sz = htp_mm_round_up(act_row_size_tiled * act_nrows, 256);
 

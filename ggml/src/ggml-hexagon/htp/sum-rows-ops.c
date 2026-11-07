@@ -58,7 +58,7 @@ struct sum_rows_context {
 static void sum_rows_thread_f32(const htp_thread_t * th, unsigned int nth, unsigned int ith, void *data) {
     const struct sum_rows_context * smctx = (const struct sum_rows_context *) data;
 
-    const uint32_t rows_per_hvx = smctx->rows_per_hvx;
+    const uint32_t rows_per_hvx    = smctx->rows_per_hvx;
     const uint32_t total_rows      = smctx->total_rows;
 
     const uint32_t start_row = rows_per_hvx * ith;
@@ -131,7 +131,7 @@ int op_sum_rows(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
     }
 
-    const uint32_t n_hvx       = octx->n_hvx;
+    const uint32_t n_hvx        = octx->n_hvx;
     const uint32_t rows_per_hvx = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div);
 
     struct sum_rows_context smctx = {
@@ -141,7 +141,7 @@ int op_sum_rows(struct htp_ops_context * octx) {
         .ne00            = ne00,
         .src_stride      = nb01,
         .dst_stride      = nb1,
-        .rows_per_hvx = rows_per_hvx,
+        .rows_per_hvx    = rows_per_hvx,
         .total_rows      = nrows,
     };
 
@@ -210,14 +210,14 @@ int op_sum(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
     }
 
-    const uint32_t n_hvx        = octx->n_hvx;
+    const uint32_t n_hvx         = octx->n_hvx;
     const uint32_t elems_per_hvx = kparams->elems_per_hvx;
 
     struct sum_context sctx = {
         .octx             = octx,
         .src_data         = (const float *) src0->data,
         .total_elems      = total_elems,
-        .elems_per_hvx = elems_per_hvx,
+        .elems_per_hvx    = elems_per_hvx,
     };
 
     work_queue_run(octx->ctx->hvx_queue, sum_thread_f32, &sctx, n_hvx);
@@ -350,7 +350,7 @@ int op_argmax(struct htp_ops_context * octx) {
             return HTP_STATUS_OK;
         }
 
-        const uint32_t n_hvx        = octx->n_hvx;
+        const uint32_t n_hvx         = octx->n_hvx;
         const uint32_t elems_per_hvx = kparams->elems_per_hvx;
 
         struct argmax_context actx = {
@@ -362,8 +362,8 @@ int op_argmax(struct htp_ops_context * octx) {
             .dst_stride       = dst->nb[0] > 0 ? (uint32_t) dst->nb[0] : (uint32_t) sizeof(int32_t),
             .row_start        = 0,
             .nrows            = 1,
-            .rows_per_hvx  = 1,
-            .elems_per_hvx = elems_per_hvx,
+            .rows_per_hvx     = 1,
+            .elems_per_hvx    = elems_per_hvx,
         };
 
         work_queue_run(octx->ctx->hvx_queue, argmax_thread_single_row, &actx, n_hvx);
@@ -397,7 +397,7 @@ int op_argmax(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
     }
 
-    const uint32_t n_hvx       = octx->n_hvx;
+    const uint32_t n_hvx        = octx->n_hvx;
     const uint32_t rows_per_hvx = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div);
 
     struct argmax_context actx = {
@@ -409,8 +409,8 @@ int op_argmax(struct htp_ops_context * octx) {
         .dst_stride       = dst->nb[0] > 0 ? (uint32_t) dst->nb[0] : (uint32_t) sizeof(int32_t),
         .row_start        = row_start,
         .nrows            = nrows,
-        .rows_per_hvx  = rows_per_hvx,
-        .elems_per_hvx = 0,
+        .rows_per_hvx     = rows_per_hvx,
+        .elems_per_hvx    = 0,
     };
 
     work_queue_run(octx->ctx->hvx_queue, argmax_thread_multi_row, &actx, n_hvx);

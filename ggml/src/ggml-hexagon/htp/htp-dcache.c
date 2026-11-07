@@ -190,8 +190,8 @@ void htp_dcache_mark_dirty_tensors(struct htp_context * ctx, const struct htp_te
             block_acc += rg->n_blocks;
         }
 
-        task.total_blocks    = block_acc;
-        task.blocks_per_hvx  = fastdiv(block_acc + ctx->n_hvx - 1, &ctx->n_hvx_div);
+        task.total_blocks   = block_acc;
+        task.blocks_per_hvx = fastdiv(block_acc + ctx->n_hvx - 1, &ctx->n_hvx_div);
 
         work_queue_run(ctx->hvx_queue, l2flush_multi_worker, &task, ctx->n_hvx);
     } else {
@@ -283,8 +283,8 @@ static void flush_dirty_ranges(struct htp_context * ctx, const struct htp_dirty_
             block_acc += rg->n_blocks;
         }
 
-        task.total_blocks    = block_acc;
-        task.blocks_per_hvx  = fastdiv(block_acc + ctx->n_hvx - 1, &ctx->n_hvx_div);
+        task.total_blocks   = block_acc;
+        task.blocks_per_hvx = fastdiv(block_acc + ctx->n_hvx - 1, &ctx->n_hvx_div);
 
         work_queue_run(ctx->hvx_queue, l2flush_multi_worker, &task, ctx->n_hvx);
     } else {

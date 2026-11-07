@@ -65,82 +65,83 @@ struct htp_copy_context {
     const uint32_t  nb2 = dst->nb[2];             \
     const uint32_t  nb3 = dst->nb[3];
 
-#define DEFINE_CPY_RESHAPE(NAME, ELEM_TYPE, ELEM_SIZE)                                                              \
-static void cpy_thread_##NAME##_reshape(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) { \
-    struct htp_copy_context * ct = (struct htp_copy_context *) data;                                                \
-    struct htp_ops_context * octx = ct->octx;                                                                       \
-    cpy_preamble;                                                                                                   \
-    const uint32_t th_nelem = ct->elem_per_hvx;                                                                     \
-    const uint32_t th_start = ct->elem_start + ith * th_nelem;                                                      \
-    const uint32_t th_end   = MIN(th_start + th_nelem, ct->elem_start + ct->nelem);                                 \
-    if (th_start >= th_end) return;                                                                                 \
-                                                                                                                    \
-    dma_queue * dma_q = th->dma_q;                                                                                  \
-                                                                                                                    \
-    const uint32_t ne01_ne00      = ne01 * ne00;                                                                    \
-    const uint32_t ne02_ne01_ne00 = ne02 * ne01_ne00;                                                               \
-    const uint32_t ne1_ne0        = ne1 * ne0;                                                                      \
-    const uint32_t ne2_ne1_ne0    = ne2 * ne1_ne0;                                                                  \
-                                                                                                                    \
-    const struct htp_copy_reshape_params * rsh = &ct->kparams->u.reshape;                                           \
-    uint32_t e = th_start;                                                                                          \
-    uint32_t i13 = fastdiv(e, &rsh->div_ne2_ne1_ne0);                                                               \
-    uint32_t rem = e - i13 * ne2_ne1_ne0;                                                                           \
-    uint32_t i12 = fastdiv(rem, &rsh->div_ne1_ne0);                                                                 \
-    uint32_t rem2 = rem - i12 * ne1_ne0;                                                                            \
-    uint32_t i11 = fastdiv(rem2, &rsh->div_ne0);                                                                    \
-    uint32_t i10 = rem2 - i11 * ne0;                                                                                \
-                                                                                                                    \
-    uint32_t i03 = fastdiv(e, &rsh->div_ne02_ne01_ne00);                                                            \
-    uint32_t rem_s = e - i03 * ne02_ne01_ne00;                                                                      \
-    uint32_t i02 = fastdiv(rem_s, &rsh->div_ne01_ne00);                                                             \
-    uint32_t rem2_s = rem_s - i02 * ne01_ne00;                                                                      \
-    uint32_t i01 = fastdiv(rem2_s, &rsh->div_ne00);                                                                 \
-    uint32_t i00 = rem2_s - i01 * ne00;                                                                             \
-                                                                                                                    \
-    dma_addr_t dst_addr  = dst->data  + i10*nb0  + i11*nb1  + i12*nb2  + i13*nb3;                                   \
-    dma_addr_t src0_addr = src0->data + i00*nb00 + i01*nb01 + i02*nb02 + i03*nb03;                                  \
-                                                                                                                    \
-    const bool rows_contig = (nb00 == ELEM_SIZE) && (nb0 == ELEM_SIZE);                                             \
-                                                                                                                    \
-    while (e < th_end) {                                                                                            \
-        const uint32_t run = MIN(MIN(ne00 - i00, ne0 - i10), th_end - e);                                           \
-        if (rows_contig) {                                                                                          \
-            dma_cpy_sametype_reshape_contig(dma_q, dst_addr, src0_addr, run * ELEM_SIZE);                           \
-        } else {                                                                                                    \
-            dma_cpy_push_2d_chunked(dma_q, dst_addr, src0_addr, nb0, nb00, ELEM_SIZE, run);                         \
-        }                                                                                                           \
-        e += run;                                                                                                   \
-                                                                                                                    \
-        dst_addr += run * nb0;                                                                                      \
-        i10      += run;                                                                                            \
-        if (i10 == ne0) {                                                                                           \
-            i10 = 0;                                                                                                \
-            if (++i11 == ne1) {                                                                                     \
-                i11 = 0;                                                                                            \
-                if (++i12 == ne2) {                                                                                 \
-                    i12 = 0;                                                                                        \
-                    i13++;                                                                                          \
-                }                                                                                                   \
-            }                                                                                                       \
-            dst_addr = dst->data + i11*nb1 + i12*nb2 + i13*nb3;                                                     \
-        }                                                                                                           \
-                                                                                                                    \
-        src0_addr += run * nb00;                                                                                    \
-        i00       += run;                                                                                           \
-        if (i00 == ne00) {                                                                                          \
-            i00 = 0;                                                                                                \
-            if (++i01 == ne01) {                                                                                    \
-                i01 = 0;                                                                                            \
-                if (++i02 == ne02) {                                                                                \
-                    i02 = 0;                                                                                        \
-                    i03++;                                                                                          \
-                }                                                                                                   \
-            }                                                                                                       \
-            src0_addr = src0->data + i01*nb01 + i02*nb02 + i03*nb03;                                                \
-        }                                                                                                           \
-    }                                                                                                               \
-    dma_queue_flush(dma_q);                                                                                         \
+#define DEFINE_CPY_RESHAPE(NAME, ELEM_TYPE, ELEM_SIZE)                                                \
+static void cpy_thread_##NAME##_reshape(const htp_thread_t * th, unsigned int nth, unsigned int ith,  \
+                                        void * data) {                                                \
+    struct htp_copy_context * ct = (struct htp_copy_context *) data;                                  \
+    struct htp_ops_context * octx = ct->octx;                                                         \
+    cpy_preamble;                                                                                     \
+    const uint32_t th_nelem = ct->elem_per_hvx;                                                       \
+    const uint32_t th_start = ct->elem_start + ith * th_nelem;                                        \
+    const uint32_t th_end   = MIN(th_start + th_nelem, ct->elem_start + ct->nelem);                   \
+    if (th_start >= th_end) return;                                                                   \
+                                                                                                      \
+    dma_queue * dma_q = th->dma_q;                                                                    \
+                                                                                                      \
+    const uint32_t ne01_ne00      = ne01 * ne00;                                                      \
+    const uint32_t ne02_ne01_ne00 = ne02 * ne01_ne00;                                                 \
+    const uint32_t ne1_ne0        = ne1 * ne0;                                                        \
+    const uint32_t ne2_ne1_ne0    = ne2 * ne1_ne0;                                                    \
+                                                                                                      \
+    const struct htp_copy_reshape_params * rsh = &ct->kparams->u.reshape;                             \
+    uint32_t e = th_start;                                                                            \
+    uint32_t i13 = fastdiv(e, &rsh->div_ne2_ne1_ne0);                                                 \
+    uint32_t rem = e - i13 * ne2_ne1_ne0;                                                             \
+    uint32_t i12 = fastdiv(rem, &rsh->div_ne1_ne0);                                                   \
+    uint32_t rem2 = rem - i12 * ne1_ne0;                                                              \
+    uint32_t i11 = fastdiv(rem2, &rsh->div_ne0);                                                      \
+    uint32_t i10 = rem2 - i11 * ne0;                                                                  \
+                                                                                                      \
+    uint32_t i03 = fastdiv(e, &rsh->div_ne02_ne01_ne00);                                              \
+    uint32_t rem_s = e - i03 * ne02_ne01_ne00;                                                        \
+    uint32_t i02 = fastdiv(rem_s, &rsh->div_ne01_ne00);                                               \
+    uint32_t rem2_s = rem_s - i02 * ne01_ne00;                                                        \
+    uint32_t i01 = fastdiv(rem2_s, &rsh->div_ne00);                                                   \
+    uint32_t i00 = rem2_s - i01 * ne00;                                                               \
+                                                                                                      \
+    dma_addr_t dst_addr  = dst->data  + i10*nb0  + i11*nb1  + i12*nb2  + i13*nb3;                     \
+    dma_addr_t src0_addr = src0->data + i00*nb00 + i01*nb01 + i02*nb02 + i03*nb03;                    \
+                                                                                                      \
+    const bool rows_contig = (nb00 == ELEM_SIZE) && (nb0 == ELEM_SIZE);                               \
+                                                                                                      \
+    while (e < th_end) {                                                                              \
+        const uint32_t run = MIN(MIN(ne00 - i00, ne0 - i10), th_end - e);                             \
+        if (rows_contig) {                                                                            \
+            dma_cpy_sametype_reshape_contig(dma_q, dst_addr, src0_addr, run * ELEM_SIZE);             \
+        } else {                                                                                      \
+            dma_cpy_push_2d_chunked(dma_q, dst_addr, src0_addr, nb0, nb00, ELEM_SIZE, run);           \
+        }                                                                                             \
+        e += run;                                                                                     \
+                                                                                                      \
+        dst_addr += run * nb0;                                                                        \
+        i10      += run;                                                                              \
+        if (i10 == ne0) {                                                                             \
+            i10 = 0;                                                                                  \
+            if (++i11 == ne1) {                                                                       \
+                i11 = 0;                                                                              \
+                if (++i12 == ne2) {                                                                   \
+                    i12 = 0;                                                                          \
+                    i13++;                                                                            \
+                }                                                                                     \
+            }                                                                                         \
+            dst_addr = dst->data + i11*nb1 + i12*nb2 + i13*nb3;                                       \
+        }                                                                                             \
+                                                                                                      \
+        src0_addr += run * nb00;                                                                      \
+        i00       += run;                                                                             \
+        if (i00 == ne00) {                                                                            \
+            i00 = 0;                                                                                  \
+            if (++i01 == ne01) {                                                                      \
+                i01 = 0;                                                                              \
+                if (++i02 == ne02) {                                                                  \
+                    i02 = 0;                                                                          \
+                    i03++;                                                                            \
+                }                                                                                     \
+            }                                                                                         \
+            src0_addr = src0->data + i01*nb01 + i02*nb02 + i03*nb03;                                  \
+        }                                                                                             \
+    }                                                                                                 \
+    dma_queue_flush(dma_q);                                                                           \
 }
 
 DEFINE_CPY_RESHAPE(f32,  float, 4)
@@ -331,78 +332,79 @@ static void cpy_thread_transpose(const htp_thread_t * th, unsigned int nth, unsi
     dma_queue_flush(dma_q);
 }
 
-#define DEFINE_CPY_CONVERT_SAMESHAPE(NAME, CONV_FUNC)                                                                 \
-static void cpy_thread_##NAME##_sameshape(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) { \
-    struct htp_copy_context * ct = (struct htp_copy_context *) data;                                                  \
-    struct htp_ops_context * octx = ct->octx;                                                                         \
-    cpy_preamble;                                                                                                     \
-                                                                                                                      \
-    const uint32_t dr  = ct->src0_nrows_per_hvx;                                                                      \
-    const uint32_t ir0 = ct->row_start + dr * ith;                                                                    \
-    const uint32_t ir1 = MIN(ir0 + dr, ct->row_start + ct->nrows);                                                    \
-    if (ir0 >= ir1) return;                                                                                           \
-                                                                                                                      \
-    dma_queue * dma_q = th->dma_q;                                                                                    \
-    struct htp_thread_trace * tr = th->trace;                                                                         \
-                                                                                                                      \
-    const struct htp_copy_convert_params * cvt = &ct->kparams->u.convert;                                             \
-    const struct htp_copy_convert_vtcm_layout * L = &ct->layout;                                                      \
-    const uint32_t src0_buf_size   = L->src0_buf_size;                                                                \
-    const uint32_t dst_buf_size    = L->dst_buf_size;                                                                 \
-    const uint32_t src0_row_stride = L->src0_row_stride;                                                              \
-    const uint32_t dst_row_stride  = L->dst_row_stride;                                                               \
-    const uint32_t blk_rows        = L->blk_rows;                                                                     \
-    uint8_t * vtcm_src0_base = ct->vtcm_src0 + ith * L->spad0_size_per_hvx;                                           \
-    uint8_t * vtcm_dst_base  = ct->vtcm_dst  + ith * L->spad1_size_per_hvx;                                           \
-    const uint32_t src0_row_size = ne00 * ct->kparams->src0_type_size;                                                \
-    const uint32_t dst_row_size  = ne00 * ct->kparams->dst_type_size;                                                 \
-                                                                                                                      \
-    const uint32_t ne02_ne01 = ne02 * ne01;                                                                           \
-    uint32_t i03 = fastdiv(ir0, &cvt->div_ne02_ne01);                                                                 \
-    uint32_t rem = ir0 - i03 * ne02_ne01;                                                                             \
-    uint32_t i02 = fastdiv(rem, &cvt->div_ne01);                                                                      \
-    uint32_t i01 = rem - i02 * ne01;                                                                                  \
-                                                                                                                      \
-    struct cpy_row_cursor f = { ir0, i01, i02, i03 };                                                                 \
-    struct cpy_row_cursor c = f;                                                                                      \
-                                                                                                                      \
-    for (uint32_t b = 0; b < 2 && f.r < ir1; ++b) {                                                                   \
-        uint8_t * src_spad = vtcm_src0_base + b * src0_buf_size;                                                      \
-        uint8_t * dst_spad = vtcm_dst_base  + b * dst_buf_size;                                                       \
-        const uint32_t nr = MIN(blk_rows, MIN(ne01 - f.i01, ir1 - f.r));                                              \
-        dma_addr_t f_src0_addr = src0->data + f.i01*nb01 + f.i02*nb02 + f.i03*nb03;                                   \
-        dma_queue_push(dma_q, dma_make_data(dst->data, dst_spad),                                                     \
-                       dst_row_size, dst_buf_size, dst_row_size, 0);                                                  \
-        dma_queue_push(dma_q, dma_make_data(src_spad, f_src0_addr),                                                   \
-                       src0_row_stride, nb01, src0_row_size, nr);                                                     \
-        cpy_cursor_advance(&f, nr, ne01, ne02);                                                                       \
-    }                                                                                                                 \
-                                                                                                                      \
-    for (uint32_t blk = 0; c.r < ir1; ++blk) {                                                                        \
-        const uint32_t nr = MIN(blk_rows, MIN(ne01 - c.i01, ir1 - c.r));                                              \
-        uint8_t * dst_spad = (uint8_t *) (uintptr_t) dma_queue_pop(dma_q).src;                                        \
-        uint8_t * src_spad = (uint8_t *) (uintptr_t) dma_queue_pop(dma_q).dst;                                        \
-                                                                                                                      \
-        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) blk);                                            \
-        for (uint32_t r = 0; r < nr; ++r) {                                                                           \
-            CONV_FUNC(dst_spad + r * dst_row_stride, src_spad + r * src0_row_stride, ne00);                           \
-        }                                                                                                             \
-        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) blk);                                             \
-                                                                                                                      \
-        dma_addr_t c_dst_addr = dst->data + c.i01*nb1 + c.i02*nb2 + c.i03*nb3;                                        \
-        dma_queue_push(dma_q, dma_make_data(c_dst_addr, dst_spad),                                                    \
-                       nb1, dst_row_stride, dst_row_size, nr);                                                        \
-        cpy_cursor_advance(&c, nr, ne01, ne02);                                                                       \
-                                                                                                                      \
-        if (f.r < ir1) {                                                                                              \
-            const uint32_t fnr = MIN(blk_rows, MIN(ne01 - f.i01, ir1 - f.r));                                         \
-            dma_addr_t f_src0_addr = src0->data + f.i01*nb01 + f.i02*nb02 + f.i03*nb03;                               \
-            dma_queue_push(dma_q, dma_make_data(src_spad, f_src0_addr),                                               \
-                           src0_row_stride, nb01, src0_row_size, fnr);                                                \
-            cpy_cursor_advance(&f, fnr, ne01, ne02);                                                                  \
-        }                                                                                                             \
-    }                                                                                                                 \
-    dma_queue_flush(dma_q);                                                                                           \
+#define DEFINE_CPY_CONVERT_SAMESHAPE(NAME, CONV_FUNC)                                        \
+static void cpy_thread_##NAME##_sameshape(const htp_thread_t * th, unsigned int nth,         \
+                                          unsigned int ith, void * data) {                   \
+    struct htp_copy_context * ct = (struct htp_copy_context *) data;                         \
+    struct htp_ops_context * octx = ct->octx;                                                \
+    cpy_preamble;                                                                            \
+                                                                                             \
+    const uint32_t dr  = ct->src0_nrows_per_hvx;                                             \
+    const uint32_t ir0 = ct->row_start + dr * ith;                                           \
+    const uint32_t ir1 = MIN(ir0 + dr, ct->row_start + ct->nrows);                           \
+    if (ir0 >= ir1) return;                                                                  \
+                                                                                             \
+    dma_queue * dma_q = th->dma_q;                                                           \
+    struct htp_thread_trace * tr = th->trace;                                                \
+                                                                                             \
+    const struct htp_copy_convert_params * cvt = &ct->kparams->u.convert;                    \
+    const struct htp_copy_convert_vtcm_layout * L = &ct->layout;                             \
+    const uint32_t src0_buf_size   = L->src0_buf_size;                                       \
+    const uint32_t dst_buf_size    = L->dst_buf_size;                                        \
+    const uint32_t src0_row_stride = L->src0_row_stride;                                     \
+    const uint32_t dst_row_stride  = L->dst_row_stride;                                      \
+    const uint32_t blk_rows        = L->blk_rows;                                            \
+    uint8_t * vtcm_src0_base = ct->vtcm_src0 + ith * L->spad0_size_per_hvx;                  \
+    uint8_t * vtcm_dst_base  = ct->vtcm_dst  + ith * L->spad1_size_per_hvx;                  \
+    const uint32_t src0_row_size = ne00 * ct->kparams->src0_type_size;                       \
+    const uint32_t dst_row_size  = ne00 * ct->kparams->dst_type_size;                        \
+                                                                                             \
+    const uint32_t ne02_ne01 = ne02 * ne01;                                                  \
+    uint32_t i03 = fastdiv(ir0, &cvt->div_ne02_ne01);                                        \
+    uint32_t rem = ir0 - i03 * ne02_ne01;                                                    \
+    uint32_t i02 = fastdiv(rem, &cvt->div_ne01);                                             \
+    uint32_t i01 = rem - i02 * ne01;                                                         \
+                                                                                             \
+    struct cpy_row_cursor f = { ir0, i01, i02, i03 };                                        \
+    struct cpy_row_cursor c = f;                                                             \
+                                                                                             \
+    for (uint32_t b = 0; b < 2 && f.r < ir1; ++b) {                                          \
+        uint8_t * src_spad = vtcm_src0_base + b * src0_buf_size;                             \
+        uint8_t * dst_spad = vtcm_dst_base  + b * dst_buf_size;                              \
+        const uint32_t nr = MIN(blk_rows, MIN(ne01 - f.i01, ir1 - f.r));                     \
+        dma_addr_t f_src0_addr = src0->data + f.i01*nb01 + f.i02*nb02 + f.i03*nb03;          \
+        dma_queue_push(dma_q, dma_make_data(dst->data, dst_spad),                            \
+                       dst_row_size, dst_buf_size, dst_row_size, 0);                         \
+        dma_queue_push(dma_q, dma_make_data(src_spad, f_src0_addr),                          \
+                       src0_row_stride, nb01, src0_row_size, nr);                            \
+        cpy_cursor_advance(&f, nr, ne01, ne02);                                              \
+    }                                                                                        \
+                                                                                             \
+    for (uint32_t blk = 0; c.r < ir1; ++blk) {                                               \
+        const uint32_t nr = MIN(blk_rows, MIN(ne01 - c.i01, ir1 - c.r));                     \
+        uint8_t * dst_spad = (uint8_t *) (uintptr_t) dma_queue_pop(dma_q).src;               \
+        uint8_t * src_spad = (uint8_t *) (uintptr_t) dma_queue_pop(dma_q).dst;               \
+                                                                                             \
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) blk);                   \
+        for (uint32_t r = 0; r < nr; ++r) {                                                  \
+            CONV_FUNC(dst_spad + r * dst_row_stride, src_spad + r * src0_row_stride, ne00);  \
+        }                                                                                    \
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) blk);                    \
+                                                                                             \
+        dma_addr_t c_dst_addr = dst->data + c.i01*nb1 + c.i02*nb2 + c.i03*nb3;               \
+        dma_queue_push(dma_q, dma_make_data(c_dst_addr, dst_spad),                           \
+                       nb1, dst_row_stride, dst_row_size, nr);                               \
+        cpy_cursor_advance(&c, nr, ne01, ne02);                                              \
+                                                                                             \
+        if (f.r < ir1) {                                                                     \
+            const uint32_t fnr = MIN(blk_rows, MIN(ne01 - f.i01, ir1 - f.r));                \
+            dma_addr_t f_src0_addr = src0->data + f.i01*nb01 + f.i02*nb02 + f.i03*nb03;      \
+            dma_queue_push(dma_q, dma_make_data(src_spad, f_src0_addr),                      \
+                           src0_row_stride, nb01, src0_row_size, fnr);                       \
+            cpy_cursor_advance(&f, fnr, ne01, ne02);                                         \
+        }                                                                                    \
+    }                                                                                        \
+    dma_queue_flush(dma_q);                                                                  \
 }
 
 DEFINE_CPY_CONVERT_SAMESHAPE(f16_f32, hvx_copy_f16_f32_aa)

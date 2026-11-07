@@ -153,8 +153,8 @@ static inline void htp_conv2d_dw_vtcm_layout_build(
 ) {
     L->src_spad_half_size   = hex_round_up(max_src_bytes + 256, 128);
     L->dst_spad_half_size   = hex_round_up(max_dst_bytes + 128, 128);
-    L->src_bytes_per_hvx = 2 * L->src_spad_half_size;
-    L->dst_bytes_per_hvx = 2 * L->dst_spad_half_size;
+    L->src_bytes_per_hvx    = 2 * L->src_spad_half_size;
+    L->dst_bytes_per_hvx    = 2 * L->dst_spad_half_size;
 
     size_t off = 0;
     VTCM_LAYOUT_ALLOC(off, off_w, hex_round_up(w_size, 128));

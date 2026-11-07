@@ -37,7 +37,7 @@ struct htp_allreduce_kernel_params {
     int32_t n_ranks;
     int32_t n_hvx;
     int32_t block_elems;          // 1D: block_elems, 2D: block_rows
-    int32_t elems_per_hvx;     // 1D: nelem_per_hvx, 2D: nrows_per_hvx
+    int32_t elems_per_hvx;        // 1D: nelem_per_hvx, 2D: nrows_per_hvx
     int32_t vtcm_size_per_hvx;
     int32_t vtcm_size;
     int32_t ne0;

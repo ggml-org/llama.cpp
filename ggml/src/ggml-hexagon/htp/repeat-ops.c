@@ -146,7 +146,7 @@ int op_repeat(struct htp_ops_context * octx) {
     struct htp_repeat_context rctx = {
         .octx             = octx,
         .kparams          = kparams,
-        .nrows_per_hvx = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div),
+        .nrows_per_hvx    = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div),
         .total_dst_rows   = nrows,
         .row_start        = row_start,
         .type_size        = type_size,

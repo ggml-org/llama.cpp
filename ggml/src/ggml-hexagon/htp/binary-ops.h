@@ -223,10 +223,10 @@ static inline bool htp_binary_solve_chunked(
                                : target_chunk_elems;
     const uint32_t chunk_bytes  = hex_round_up(chunk_size * elem_size, 128);
     const uint32_t total_chunks = (total_elems + chunk_size - 1) / chunk_size;
-    const uint32_t n_hvx    = (total_chunks >= 2) ? (max_hvx < total_chunks ? max_hvx : total_chunks) : 1;
+    const uint32_t n_hvx        = (total_chunks >= 2) ? (max_hvx < total_chunks ? max_hvx : total_chunks) : 1;
 
     kparams->kernel_type           = HTP_BINARY_KERNEL_CHUNKED;
-    kparams->n_hvx             = n_hvx;
+    kparams->n_hvx                 = n_hvx;
     kparams->n_srcs                = (uint8_t) n_srcs;
     kparams->rows_per_buffer       = 1;
     kparams->src1_row_size_aligned = is_scalar ? 0 : kparams->src0_row_size_aligned;

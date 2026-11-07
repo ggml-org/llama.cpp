@@ -48,7 +48,7 @@ static inline void htp_sort_vtcm_layout_build(
     L->chunk_elems = chunk_elems;
     L->n_chunks    = n_chunks;
     L->merge_elems = merge_elems;
-    L->n_hvx   = n_hvx;
+    L->n_hvx       = n_hvx;
     L->n_slots     = n_slots;
 
     const size_t values_size  = ((chunk_elems * sizeof(float)) + 127) & ~127;

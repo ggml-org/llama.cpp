@@ -25,16 +25,16 @@ struct htp_im2col_context {
 
     uint32_t pe_row_base;                          // first output row index assigned to this dev (DMA path)
     uint32_t pe_nrows;                             // number of output rows assigned to this dev (DMA path)
-    uint32_t pe_rows_per_hvx;                   // output rows per worker
-    uint32_t pe_blocks_per_hvx;                 // output-col blocks per worker (blocked DMA path)
+    uint32_t pe_rows_per_hvx;                      // output rows per worker
+    uint32_t pe_blocks_per_hvx;                    // output-col blocks per worker (blocked DMA path)
     uint32_t pe_src_row_bytes;                     // one output row's source, rounded 256
     uint32_t pe_dst_row_bytes;                     // one output row's dst: OW*patch_stride*2, rounded 256
 
     // Patch-embed DMA path VTCM ping-pong.
     uint8_t * pe_vtcm_src;                         // base of the 2x src buffers region
     uint8_t * pe_vtcm_dst;                         // base of the 2x dst buffers region
-    uint32_t  pe_src_size_per_hvx;              // 2 * pe_src_row_bytes
-    uint32_t  pe_dst_size_per_hvx;              // 2 * pe_dst_row_bytes
+    uint32_t  pe_src_size_per_hvx;                 // 2 * pe_src_row_bytes
+    uint32_t  pe_dst_size_per_hvx;                 // 2 * pe_dst_row_bytes
 
     uint32_t pe_owb;                               // output-col block size
     uint32_t pe_wb;                                // staged source window width
@@ -963,14 +963,14 @@ int op_im2col(struct htp_ops_context * octx) {
     ictx.octx                   = octx;
     ictx.pe_row_base            = row_base;
     ictx.pe_nrows               = nrows;
-    ictx.pe_rows_per_hvx     = fastdiv(nrows + pth - 1, &octx->n_hvx_div);
-    ictx.pe_blocks_per_hvx   = fastdiv(nwork + pth - 1, &octx->n_hvx_div);
+    ictx.pe_rows_per_hvx        = fastdiv(nrows + pth - 1, &octx->n_hvx_div);
+    ictx.pe_blocks_per_hvx      = fastdiv(nwork + pth - 1, &octx->n_hvx_div);
     ictx.pe_src_row_bytes       = kparams->src_row_bytes;
     ictx.pe_dst_row_bytes       = kparams->dst_row_bytes;
     ictx.pe_vtcm_src            = VTCM_LAYOUT_PTR(uint8_t, base, layout.off_src);
     ictx.pe_vtcm_dst            = VTCM_LAYOUT_PTR(uint8_t, base, layout.off_dst);
-    ictx.pe_src_size_per_hvx = layout.src_bytes_per_hvx;
-    ictx.pe_dst_size_per_hvx = layout.dst_bytes_per_hvx;
+    ictx.pe_src_size_per_hvx    = layout.src_bytes_per_hvx;
+    ictx.pe_dst_size_per_hvx    = layout.dst_bytes_per_hvx;
     ictx.pe_owb                 = kparams->owb;
     ictx.pe_wb                  = kparams->wb;
     ictx.pe_nbpr                = kparams->nbpr;
@@ -1063,13 +1063,13 @@ int op_im2col_3d(struct htp_ops_context * octx) {
     ictx.octx                   = octx;
     ictx.pe_row_base            = row_base;
     ictx.pe_nrows               = nrows;
-    ictx.pe_rows_per_hvx     = fastdiv(nrows + pth - 1, &octx->n_hvx_div);
+    ictx.pe_rows_per_hvx        = fastdiv(nrows + pth - 1, &octx->n_hvx_div);
     ictx.pe_src_row_bytes       = kparams->src_row_bytes;
     ictx.pe_dst_row_bytes       = kparams->dst_row_bytes;
     ictx.pe_vtcm_src            = VTCM_LAYOUT_PTR(uint8_t, base, layout.off_src);
     ictx.pe_vtcm_dst            = VTCM_LAYOUT_PTR(uint8_t, base, layout.off_dst);
-    ictx.pe_src_size_per_hvx = layout.src_bytes_per_hvx;
-    ictx.pe_dst_size_per_hvx = layout.dst_bytes_per_hvx;
+    ictx.pe_src_size_per_hvx    = layout.src_bytes_per_hvx;
+    ictx.pe_dst_size_per_hvx    = layout.dst_bytes_per_hvx;
     ictx.pe_owb                 = kparams->owb;
     ictx.pe_wb                  = kparams->wb;
     ictx.pe_nbpr                = kparams->nbpr;

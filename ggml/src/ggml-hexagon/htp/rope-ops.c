@@ -745,7 +745,7 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
 
     rctx.octx                  = octx;
     rctx.vtcm_base             = VTCM_LAYOUT_PTR(uint8_t, octx->ctx->vtcm_base, layout.off_spad);
-    rctx.spad_per_hvx       = layout.bytes_per_hvx;
+    rctx.spad_per_hvx          = layout.bytes_per_hvx;
     rctx.theta_cache_offset    = layout.theta_cache_size_aligned;
 
     if (src2) {
@@ -790,7 +790,7 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
     rctx.src0_nrows            = nrows;
     rctx.nrows                 = nrows;
     rctx.row_start             = row_start;
-    rctx.src0_nrows_per_hvx = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div);
+    rctx.src0_nrows_per_hvx    = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div);
     rctx.div_ne2_ne1           = kparams->div_ne2_ne1;
     rctx.div_ne1               = kparams->div_ne1;
 

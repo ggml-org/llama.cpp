@@ -210,7 +210,7 @@ static void ssm_conv_thread_f32_decode(const htp_thread_t * th, unsigned int nth
         return;
     }
 
-    const uint32_t d_inner_per_hvx = ir1 - ir0;
+    const uint32_t d_inner_per_hvx    = ir1 - ir0;
     const uint32_t d_inner_stride     = hex_round_up(d_inner_per_hvx, VLEN_FP32);
     const uint32_t d_inner_tile       = scctx->d_inner_tile;
 
@@ -250,14 +250,14 @@ static void ssm_conv_thread_f32_decode(const htp_thread_t * th, unsigned int nth
 
     #define SSM_CONV_DECODE_PUSH_FETCH(c)                                                         \
         do {                                                                                      \
-            const uint32_t   cur_tile_n = MIN(d_inner_tile, d_inner_per_hvx - tile_off_fetch); \
+            const uint32_t   cur_tile_n = MIN(d_inner_tile, d_inner_per_hvx - tile_off_fetch);    \
             const dma_addr_t fetch_ddr  = src0->data + s_fetch * src0_stride_seq_bytes +          \
                                           (ir0 + tile_off_fetch) * src0_stride_inner_bytes;       \
             dma_queue_push(dma_q,                                                                 \
                            dma_make_data((uint8_t *) src0_tile_raw[(c) & 1], fetch_ddr),          \
                            row_bytes, src0_stride_inner_bytes, row_bytes, cur_tile_n);            \
             tile_off_fetch += d_inner_tile;                                                       \
-            if (tile_off_fetch >= d_inner_per_hvx) {                                           \
+            if (tile_off_fetch >= d_inner_per_hvx) {                                              \
                 tile_off_fetch = 0;                                                               \
                 s_fetch++;                                                                        \
             }                                                                                     \
@@ -373,7 +373,7 @@ static void ssm_conv_thread_f32_prefill(const htp_thread_t * th, unsigned int nt
         return;
     }
 
-    const uint32_t d_inner_per_hvx = ir1 - ir0;
+    const uint32_t d_inner_per_hvx    = ir1 - ir0;
     const uint32_t d_inner_stride     = hex_round_up(d_inner_per_hvx, VLEN_FP32);
     const uint32_t d_inner_tile       = scctx->d_inner_tile;
 
@@ -416,14 +416,14 @@ static void ssm_conv_thread_f32_prefill(const htp_thread_t * th, unsigned int nt
     // Two fetches run ahead, so the queue order is F0 F1 W0 F2 W1 ... and pops follow it.
     #define SSM_CONV_PUSH_FETCH(c)                                                                \
         do {                                                                                      \
-            const uint32_t   cur_tile_n = MIN(d_inner_tile, d_inner_per_hvx - tile_off_fetch); \
+            const uint32_t   cur_tile_n = MIN(d_inner_tile, d_inner_per_hvx - tile_off_fetch);    \
             const dma_addr_t fetch_ddr  = src0->data + s_fetch * src0_stride_seq_bytes +          \
                                           (ir0 + tile_off_fetch) * src0_stride_inner_bytes;       \
             dma_queue_push(dma_q,                                                                 \
                            dma_make_data((uint8_t *) src0_tile_raw[(c) & 1], fetch_ddr),          \
                            raw_stride_bytes, src0_stride_inner_bytes, row_bytes, cur_tile_n);     \
             tile_off_fetch += d_inner_tile;                                                       \
-            if (tile_off_fetch >= d_inner_per_hvx) {                                           \
+            if (tile_off_fetch >= d_inner_per_hvx) {                                              \
                 tile_off_fetch = 0;                                                               \
                 s_fetch++;                                                                        \
             }                                                                                     \
@@ -586,8 +586,8 @@ int op_ssm_conv_f32(struct htp_ops_context * octx) {
         return HTP_STATUS_VTCM_TOO_SMALL;
     }
 
-    const uint32_t n_hvx          = octx->n_hvx;
-    const uint32_t raw_rpt            = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div);
+    const uint32_t n_hvx           = octx->n_hvx;
+    const uint32_t raw_rpt         = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div);
     const uint32_t d_inner_per_hvx = hex_round_up(raw_rpt, VLEN_FP32);
 
     struct htp_ssm_conv_vtcm_layout L;
@@ -613,7 +613,7 @@ int op_ssm_conv_f32(struct htp_ops_context * octx) {
     struct htp_ssm_conv_context scctx = {
         .octx             = octx,
         .kparams          = kparams,
-        .nrows_per_hvx = d_inner_per_hvx,
+        .nrows_per_hvx    = d_inner_per_hvx,
         .d_inner_tile     = kparams->d_inner_tile,
         .row_start        = row_start,
         .nrows            = nrows,

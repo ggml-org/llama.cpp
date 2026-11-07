@@ -3251,7 +3251,7 @@ int op_conv_2d_dw(struct htp_ops_context * octx) {
         .compute_fn       = conv2d_dw_kernels[kp->kernel_type][kp->is_f16 ? 1 : 0],
         .task_start       = task_start,
         .task_count       = task_count,
-        .tasks_per_hvx = tasks_per_hvx,
+        .tasks_per_hvx    = tasks_per_hvx,
     };
 
     work_queue_run(octx->ctx->hvx_queue, conv2d_dw_dma_thread, &ctx, nth);

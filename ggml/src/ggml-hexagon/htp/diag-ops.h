@@ -24,8 +24,8 @@ static inline void htp_diag_vtcm_layout_build(
 ) {
     L->src_batch_size_aligned = hex_round_up(src_batch_size, 128);
     L->dst_row_size_aligned   = hex_round_up(dst_row_size, 128);
-    L->src0_bytes_per_hvx  = L->src_batch_size_aligned;
-    L->dst_bytes_per_hvx   = L->dst_row_size_aligned;
+    L->src0_bytes_per_hvx     = L->src_batch_size_aligned;
+    L->dst_bytes_per_hvx      = L->dst_row_size_aligned;
 
     size_t off = 0;
     VTCM_LAYOUT_ALLOC(off, off_src0, L->src0_bytes_per_hvx * n_hvx);

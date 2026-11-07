@@ -285,7 +285,7 @@ int execute_op_roll_f32(struct htp_ops_context * octx) {
         .kparams          = kparams,
         .row_start        = row_start,
         .nrows            = nrows,
-        .nrows_per_hvx = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div),
+        .nrows_per_hvx    = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div),
     };
 
     work_queue_run(octx->ctx->hvx_queue, roll_thread_f32, &rctx, n_hvx);

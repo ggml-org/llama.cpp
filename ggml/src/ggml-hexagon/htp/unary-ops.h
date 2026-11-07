@@ -195,7 +195,7 @@ static inline void htp_unary_solve_layout(
         }
     } else {
         vtcm_size_per_row   = 2 * (src0_row_size_aligned + dst_row_size_aligned);
-        vtcm_row_per_hvx = vtcm_size / (n_hvx * vtcm_size_per_row);
+        vtcm_row_per_hvx    = vtcm_size / (n_hvx * vtcm_size_per_row);
     }
 
     if (max_block > 0 && vtcm_row_per_hvx > max_block) {

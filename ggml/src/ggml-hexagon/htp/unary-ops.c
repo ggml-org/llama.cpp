@@ -1673,7 +1673,7 @@ static void unary_thread_tiled(const htp_thread_t * th, unsigned int nth, unsign
 
     htp_unary_preamble;
 
-    const uint32_t src0_nrows_per_hvx = uctx->src0_nrows_per_hvx;
+    const uint32_t src0_nrows_per_hvx    = uctx->src0_nrows_per_hvx;
     const uint32_t col_tile              = uctx->col_tile;
 
     const uint32_t src0_nrows     = uctx->src0_nrows;
@@ -1784,7 +1784,7 @@ static void unary_thread_tiled_tri_f32(const htp_thread_t * th, unsigned int nth
 
     htp_unary_preamble;
 
-    const uint32_t src0_nrows_per_hvx = uctx->src0_nrows_per_hvx;
+    const uint32_t src0_nrows_per_hvx    = uctx->src0_nrows_per_hvx;
     const int32_t * op_params            = octx->op_params;
     const uint32_t col_tile              = uctx->col_tile;
 
@@ -1994,7 +1994,7 @@ static int execute_op_unary(struct htp_ops_context * octx) {
     struct htp_unary_context uctx = {
         .octx                  = octx,
         .kparams               = kparams,
-        .src0_nrows_per_hvx = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div),
+        .src0_nrows_per_hvx    = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div),
         .src0_nrows            = nrows,
         .row_start             = row_start,
 

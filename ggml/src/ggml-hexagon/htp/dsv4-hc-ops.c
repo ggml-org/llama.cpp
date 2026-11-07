@@ -325,14 +325,14 @@ int op_dsv4_hc_pre(struct htp_ops_context * octx) {
     uint32_t token_start     = 0;
     uint32_t n_tokens        = x->ne[2];
     uint32_t total_jobs      = kparams->total_jobs;
-    uint32_t jobs_per_hvx = kparams->jobs_per_hvx;
+    uint32_t jobs_per_hvx    = kparams->jobs_per_hvx;
     if (octx->ctx->mdev.count > 1) {
         const bool can_split = htp_tensor_mdev_data_aligned(dst) && ((dst->nb[1] & (HTP_TENSOR_MDEV_LINE_SIZE - 1)) == 0);
         const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(n_tokens, can_split ? 1 : 0, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
         token_start     = range.start;
         n_tokens        = range.count;
         total_jobs      = n_tokens * kparams->n_chunks;
-        jobs_per_hvx = fastdiv(total_jobs + n_hvx - 1, &kparams->div_n_hvx);
+        jobs_per_hvx    = fastdiv(total_jobs + n_hvx - 1, &kparams->div_n_hvx);
     }
 
     if (n_tokens == 0) {
@@ -348,7 +348,7 @@ int op_dsv4_hc_pre(struct htp_ops_context * octx) {
         .token_start      = token_start,
         .n_chunks         = kparams->n_chunks,
         .total_jobs       = total_jobs,
-        .jobs_per_hvx  = jobs_per_hvx,
+        .jobs_per_hvx     = jobs_per_hvx,
         .scale            = scale,
         .vtcm             = (uint8_t *) octx->ctx->vtcm_base,
         .dma_block_chunks = kparams->dma_block_chunks,
@@ -635,14 +635,14 @@ int op_dsv4_hc_post(struct htp_ops_context * octx) {
     uint32_t token_start     = 0;
     uint32_t n_tokens        = x->ne[1];
     uint32_t total_jobs      = kparams->total_jobs;
-    uint32_t jobs_per_hvx = kparams->jobs_per_hvx;
+    uint32_t jobs_per_hvx    = kparams->jobs_per_hvx;
     if (octx->ctx->mdev.count > 1) {
         const bool can_split = htp_tensor_mdev_data_aligned(dst) && ((dst->nb[2] & (HTP_TENSOR_MDEV_LINE_SIZE - 1)) == 0);
         const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(n_tokens, can_split ? 1 : 0, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
         token_start     = range.start;
         n_tokens        = range.count;
         total_jobs      = n_tokens * kparams->n_chunks;
-        jobs_per_hvx = fastdiv(total_jobs + n_hvx - 1, &kparams->div_n_hvx);
+        jobs_per_hvx    = fastdiv(total_jobs + n_hvx - 1, &kparams->div_n_hvx);
     }
 
     if (n_tokens == 0) {
@@ -654,7 +654,7 @@ int op_dsv4_hc_post(struct htp_ops_context * octx) {
         .kparams         = kparams,
         .token_start     = token_start,
         .total_jobs      = total_jobs,
-        .jobs_per_hvx = jobs_per_hvx,
+        .jobs_per_hvx    = jobs_per_hvx,
         .vtcm            = (uint8_t *) octx->ctx->vtcm_base,
     };
 

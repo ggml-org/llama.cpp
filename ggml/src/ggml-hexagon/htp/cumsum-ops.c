@@ -264,7 +264,7 @@ int op_cumsum_f32(struct htp_ops_context * octx) {
         .dst_row_size         = dst_row_size,
         .src_row_size_aligned = layout.src_row_size_aligned,
         .dst_row_size_aligned = layout.dst_row_size_aligned,
-        .rows_per_hvx      = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div),
+        .rows_per_hvx         = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div),
         .total_rows           = nrows,
         .row_start            = row_start,
     };

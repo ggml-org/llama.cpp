@@ -71,8 +71,8 @@ static inline void htp_get_rows_vtcm_layout_build(
 
         L->src0_spad_half_size   = (src0_row_size + 255) & ~255;
         L->dst_spad_half_size    = (ne00 * sizeof(float) + 255) & ~255;
-        L->src0_bytes_per_hvx = 2 * L->src0_spad_half_size;
-        L->dst_bytes_per_hvx  = 2 * L->dst_spad_half_size;
+        L->src0_bytes_per_hvx    = 2 * L->src0_spad_half_size;
+        L->dst_bytes_per_hvx     = 2 * L->dst_spad_half_size;
     }
 
     size_t off = 0;

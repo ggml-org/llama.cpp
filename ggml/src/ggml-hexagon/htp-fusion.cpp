@@ -546,7 +546,7 @@ static bool fuse_binary_nx(const ggml_hexagon_session * sess, htp_opnode & prev,
 
         const uint32_t total_elems = (uint32_t) ggml_nelements(src0);
         const uint32_t elem_size   = (uint32_t) ggml_type_size(src0->type);
-        const uint32_t max_hvx = htp_session_n_hvx(sess);
+        const uint32_t max_hvx     = htp_session_n_hvx(sess);
         if (!htp_binary_solve_chunked(&L, &kparams, total_elems, elem_size, max_hvx, n_srcs, false, vtcm_size)) {
             return false;
         }

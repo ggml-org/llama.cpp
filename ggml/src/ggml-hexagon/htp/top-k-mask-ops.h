@@ -116,7 +116,7 @@ struct htp_top_k_mask_kernel_params {
             } m;
         } rows;
         struct {
-            uint32_t picks_per_hvx;                   // per virtual worker, multiple of the lanes of one vector
+            uint32_t picks_per_hvx;                      // per virtual worker, multiple of the lanes of one vector
             uint16_t blocks_slice_u, top_slice_u, extra_slice_u, score_slice_u, flags_slice_u; // per virtual worker slices
         } picks;
     } u;

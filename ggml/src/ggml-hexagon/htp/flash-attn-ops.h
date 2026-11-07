@@ -46,7 +46,7 @@ struct htp_fa_kernel_params {
     uint8_t  kernel_type;        // enum htp_fa_kernel_type
     uint8_t  head_split;         // 1 = partition by KV heads in multicore, 0 = token partition
     uint8_t  flags;              // HTP_FA_FLAG_*
-    uint8_t  n_hvx;          // Number of threads to run
+    uint8_t  n_hvx;              // Number of threads to run
 
     // Common parameters
     uint16_t Br;
@@ -366,7 +366,7 @@ static inline int hmx_fa_find_chunk_size(size_t * Br_out,
                 // This Bc fits for this Br!
                 const size_t q_blocks       = (qo_len + Br - 1) / Br;
                 const size_t kv_blocks      = (kv_len + Bc - 1) / Bc;
-                const size_t actual_hvx = (kv_blocks >= 3 && n_hvx >= 2) ? n_hvx : 1;
+                const size_t actual_hvx     = (kv_blocks >= 3 && n_hvx >= 2) ? n_hvx : 1;
                 const size_t n_rows_g       = Br * gqa_factor;
                 const size_t n_row_vec_cnt  = (n_rows_g + 63) / 64;
                 const size_t n_use          = n_row_vec_cnt < actual_hvx ? n_row_vec_cnt : actual_hvx;

@@ -135,7 +135,7 @@ int op_fill(struct htp_ops_context * octx) {
     struct htp_fill_context fctx = {
         .octx             = octx,
         .kparams          = kparams,
-        .nrows_per_hvx = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div),
+        .nrows_per_hvx    = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div),
         .total_rows       = nrows,
         .row_start        = row_start,
         .elem_size        = kparams->elem_size,

@@ -31,8 +31,8 @@ static inline void htp_pad_vtcm_layout_build(
 ) {
     L->src_row_size_aligned  = hex_round_up(src_row_size, 128);
     L->dst_row_size_aligned  = hex_round_up(dst_row_size, 128);
-    L->src0_bytes_per_hvx = 2 * L->src_row_size_aligned;
-    L->dst_bytes_per_hvx  = 2 * L->dst_row_size_aligned;
+    L->src0_bytes_per_hvx    = 2 * L->src_row_size_aligned;
+    L->dst_bytes_per_hvx     = 2 * L->dst_row_size_aligned;
 
     size_t off = 0;
     VTCM_LAYOUT_ALLOC(off, off_src0, L->src0_bytes_per_hvx * n_hvx);

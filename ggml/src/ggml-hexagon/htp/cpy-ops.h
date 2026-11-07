@@ -108,8 +108,8 @@ static inline void htp_copy_convert_vtcm_layout_build(
     L->blk_rows              = blk_rows;
     L->src0_buf_size         = blk_rows * src0_row_stride;
     L->dst_buf_size          = blk_rows * dst_row_stride;
-    L->spad0_size_per_hvx = 2 * L->src0_buf_size;
-    L->spad1_size_per_hvx = 2 * L->dst_buf_size;
+    L->spad0_size_per_hvx    = 2 * L->src0_buf_size;
+    L->spad1_size_per_hvx    = 2 * L->dst_buf_size;
 
     size_t off = 0;
     VTCM_LAYOUT_ALLOC(off, off_src0, (size_t) n_hvx * L->spad0_size_per_hvx);

@@ -946,7 +946,7 @@ int op_upscale(struct htp_ops_context * octx) {
         .lut_y              = lut_y,
         .chunk_start        = chunk_start,
         .chunk_count        = chunk_count,
-        .chunks_per_hvx  = chunks_per_hvx,
+        .chunks_per_hvx     = chunks_per_hvx,
     };
 
     htp_upscale_vtcm_layout_build(&ctx.layout, src_x, src_y, dst_x, dst_y,

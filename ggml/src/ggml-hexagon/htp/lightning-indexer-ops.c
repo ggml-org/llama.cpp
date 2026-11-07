@@ -1529,7 +1529,7 @@ static int lid_hmx_run(struct htp_ops_context * octx, const struct htp_lid_kerne
     const uint32_t D         = q->ne[0];
     const uint32_t n_head    = q->ne[1];
     const uint32_t n_stream  = q->ne[3];
-    const uint32_t n_hvx = kparams->n_hvx;
+    const uint32_t n_hvx     = kparams->n_hvx;
     const uint32_t n_qsets   = kparams->n_qsets;
 
     struct htp_lid_hmx_context hctx;
@@ -1686,7 +1686,7 @@ int op_lightning_indexer(struct htp_ops_context * octx) {
     lctx.octx              = octx;
     lctx.kp                = kparams;
     lctx.n_blocks          = kparams->n_kv_blocks;
-    lctx.blocks_per_hvx = kparams->blocks_per_hvx;
+    lctx.blocks_per_hvx    = kparams->blocks_per_hvx;
 
     htp_lid_vtcm_layout_build(&lctx.L, q->ne[0], q->ne[1], kparams->n_tokens_tile, kparams->n_hvx, kparams->k_row_size);
 
@@ -1703,7 +1703,7 @@ int op_lightning_indexer(struct htp_ops_context * octx) {
     const uint32_t n_tokens  = q->ne[2];
     const uint32_t n_stream  = q->ne[3];
     const uint32_t n_tile    = kparams->n_tokens_tile;
-    const uint32_t n_hvx = kparams->n_hvx;
+    const uint32_t n_hvx     = kparams->n_hvx;
 
     for (uint32_t is = 0; is < n_stream; ++is) {
         lctx.is  = is;

@@ -38,103 +38,104 @@ struct htp_allreduce_context {
     uint8_t * res_spad_base;
 };
 
-#define DEFINE_ALLREDUCE_THREAD_DMA_1D(SUFFIX, TYPE, HVX_ADD_FN, HAS_ADD)                                                \
-static void allreduce_thread_dma_1d_##SUFFIX(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) { \
-    struct htp_allreduce_context * actx = (struct htp_allreduce_context *) data;                                         \
-    struct htp_ops_context * octx = actx->octx;                                                                          \
-                                                                                                                         \
-    const uint32_t n_ranks     = actx->n_ranks;                                                                          \
-    const uint32_t n_dsts      = actx->n_dsts;                                                                           \
-    const uint32_t block_elems = actx->block_elems;                                                                      \
-                                                                                                                         \
-    const uint32_t dr  = actx->elems_per_hvx;                                                                            \
-    const uint32_t ir0 = actx->rank_elem_start + dr * ith;                                                               \
-    const uint32_t ir1 = MIN(ir0 + dr, actx->rank_elem_start + actx->rank_nelem);                                        \
-    if (ir0 >= ir1) return;                                                                                              \
-                                                                                                                         \
-    struct htp_thread_trace * tr = th->trace;                                                                            \
-    dma_queue * dma_q = th->dma_q;                                                                                       \
-                                                                                                                         \
-    const size_t vtcm_hvx_offset = ith * actx->vtcm_size_per_hvx;                                                        \
-    uint8_t * dst_spad_base = actx->dst_spad_base + vtcm_hvx_offset;                                                     \
-    uint8_t * res_spad_base = HAS_ADD ? (actx->res_spad_base + vtcm_hvx_offset) : NULL;                                  \
-                                                                                                                         \
-    const size_t spad_half = actx->vtcm_size_per_hvx / 2;                                                                \
-    uint32_t ir_prefetch = ir0;                                                                                          \
-    int spad_idx = 0;                                                                                                    \
-                                                                                                                         \
-    for (int k = 0; k < 2 && ir_prefetch < ir1; k++) {                                                                   \
-        uint32_t cur_elems = MIN(block_elems, ir1 - ir_prefetch);                                                        \
-        size_t   cur_bytes = cur_elems * sizeof(TYPE);                                                                   \
-        uint8_t * d_spad = dst_spad_base + spad_idx * spad_half;                                                         \
-        for (uint32_t d = 0; d < n_dsts; d++) {                                                                          \
-            dma_addr_t d_ddr = octx->dsts[d]->data + ir_prefetch * sizeof(TYPE);                                         \
-            dma_queue_push(dma_q, dma_make_data(d_ddr, d_spad), cur_bytes, cur_bytes, cur_bytes, 0);                     \
-        }                                                                                                                \
-        for (uint32_t s = 0; s < n_ranks; s++) {                                                                         \
-            uint8_t * s_spad = actx->src_spad_base[s] + vtcm_hvx_offset + spad_idx * spad_half;                          \
-            const dma_addr_t s_ddr = octx->src[s]->data + ir_prefetch * sizeof(TYPE);                                    \
-            dma_queue_push(dma_q, dma_make_data(s_spad, s_ddr), cur_bytes, cur_bytes, cur_bytes, 1);                     \
-        }                                                                                                                \
-        if (HAS_ADD) {                                                                                                   \
-            uint8_t * r_spad = res_spad_base + spad_idx * spad_half;                                                     \
-            const dma_addr_t r_ddr = octx->src[2 * n_ranks]->data + ir_prefetch * sizeof(TYPE);                          \
-            dma_queue_push(dma_q, dma_make_data(r_spad, r_ddr), cur_bytes, cur_bytes, cur_bytes, 1);                     \
-        }                                                                                                                \
-        ir_prefetch += cur_elems;                                                                                        \
-        spad_idx ^= 1;                                                                                                   \
-    }                                                                                                                    \
-                                                                                                                         \
-    int comp_spad_idx = 0;                                                                                               \
-    for (uint32_t ir = ir0; ir < ir1; ) {                                                                                \
-        uint32_t cur_elems = MIN(block_elems, ir1 - ir);                                                                 \
-        size_t   cur_bytes = cur_elems * sizeof(TYPE);                                                                   \
-        for (uint32_t d = 0; d < n_dsts; d++) {                                                                          \
-            dma_queue_pop(dma_q);                                                                                        \
-        }                                                                                                                \
-        for (uint32_t s = 0; s < n_ranks; s++) {                                                                         \
-            dma_queue_pop(dma_q);                                                                                        \
-        }                                                                                                                \
-        if (HAS_ADD) {                                                                                                   \
-            dma_queue_pop(dma_q);                                                                                        \
-        }                                                                                                                \
-        uint8_t * d_spad  = dst_spad_base + comp_spad_idx * spad_half;                                                   \
-        uint8_t * s0_spad = actx->src_spad_base[0] + vtcm_hvx_offset + comp_spad_idx * spad_half;                        \
-        uint8_t * s1_spad = actx->src_spad_base[1] + vtcm_hvx_offset + comp_spad_idx * spad_half;                        \
-        uint8_t * r_spad  = HAS_ADD ? (res_spad_base + comp_spad_idx * spad_half) : NULL;                                \
-        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);                                                \
-        HVX_ADD_FN(d_spad, s0_spad, s1_spad, cur_elems);                                                                 \
-        for (uint32_t s = 2; s < n_ranks; s++) {                                                                         \
-            uint8_t * ss_spad = actx->src_spad_base[s] + vtcm_hvx_offset + comp_spad_idx * spad_half;                    \
-            HVX_ADD_FN(d_spad, d_spad, ss_spad, cur_elems);                                                              \
-        }                                                                                                                \
-        if (HAS_ADD) {                                                                                                   \
-            HVX_ADD_FN(d_spad, d_spad, r_spad, cur_elems);                                                               \
-        }                                                                                                                \
-        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);                                                 \
-        for (uint32_t d = 0; d < n_dsts; d++) {                                                                          \
-            dma_addr_t d_ddr = octx->dsts[d]->data + ir * sizeof(TYPE);                                                  \
-            dma_queue_push(dma_q, dma_make_data(d_ddr, d_spad), cur_bytes, cur_bytes, cur_bytes, 1);                     \
-        }                                                                                                                \
-        if (ir_prefetch < ir1) {                                                                                         \
-            uint32_t next_elems = MIN(block_elems, ir1 - ir_prefetch);                                                   \
-            size_t   next_bytes = next_elems * sizeof(TYPE);                                                             \
-            for (uint32_t s = 0; s < n_ranks; s++) {                                                                     \
-                uint8_t * s_spad = actx->src_spad_base[s] + vtcm_hvx_offset + comp_spad_idx * spad_half;                 \
-                const dma_addr_t s_next = octx->src[s]->data + ir_prefetch * sizeof(TYPE);                               \
-                dma_queue_push(dma_q, dma_make_data(s_spad, s_next), next_bytes, next_bytes, next_bytes, 1);             \
-            }                                                                                                            \
-            if (HAS_ADD) {                                                                                               \
-                uint8_t * r_spad_next = res_spad_base + comp_spad_idx * spad_half;                                       \
-                const dma_addr_t r_next = octx->src[2 * n_ranks]->data + ir_prefetch * sizeof(TYPE);                     \
-                dma_queue_push(dma_q, dma_make_data(r_spad_next, r_next), next_bytes, next_bytes, next_bytes, 1);        \
-            }                                                                                                            \
-            ir_prefetch += next_elems;                                                                                   \
-        }                                                                                                                \
-        comp_spad_idx ^= 1;                                                                                              \
-        ir += cur_elems;                                                                                                 \
-    }                                                                                                                    \
-    dma_queue_flush(dma_q);                                                                                              \
+#define DEFINE_ALLREDUCE_THREAD_DMA_1D(SUFFIX, TYPE, HVX_ADD_FN, HAS_ADD)                                         \
+static void allreduce_thread_dma_1d_##SUFFIX(const htp_thread_t * th, unsigned int nth, unsigned int ith,         \
+                                             void * data) {                                                       \
+    struct htp_allreduce_context * actx = (struct htp_allreduce_context *) data;                                  \
+    struct htp_ops_context * octx = actx->octx;                                                                   \
+                                                                                                                  \
+    const uint32_t n_ranks     = actx->n_ranks;                                                                   \
+    const uint32_t n_dsts      = actx->n_dsts;                                                                    \
+    const uint32_t block_elems = actx->block_elems;                                                               \
+                                                                                                                  \
+    const uint32_t dr  = actx->elems_per_hvx;                                                                     \
+    const uint32_t ir0 = actx->rank_elem_start + dr * ith;                                                        \
+    const uint32_t ir1 = MIN(ir0 + dr, actx->rank_elem_start + actx->rank_nelem);                                 \
+    if (ir0 >= ir1) return;                                                                                       \
+                                                                                                                  \
+    struct htp_thread_trace * tr = th->trace;                                                                     \
+    dma_queue * dma_q = th->dma_q;                                                                                \
+                                                                                                                  \
+    const size_t vtcm_hvx_offset = ith * actx->vtcm_size_per_hvx;                                                 \
+    uint8_t * dst_spad_base = actx->dst_spad_base + vtcm_hvx_offset;                                              \
+    uint8_t * res_spad_base = HAS_ADD ? (actx->res_spad_base + vtcm_hvx_offset) : NULL;                           \
+                                                                                                                  \
+    const size_t spad_half = actx->vtcm_size_per_hvx / 2;                                                         \
+    uint32_t ir_prefetch = ir0;                                                                                   \
+    int spad_idx = 0;                                                                                             \
+                                                                                                                  \
+    for (int k = 0; k < 2 && ir_prefetch < ir1; k++) {                                                            \
+        uint32_t cur_elems = MIN(block_elems, ir1 - ir_prefetch);                                                 \
+        size_t   cur_bytes = cur_elems * sizeof(TYPE);                                                            \
+        uint8_t * d_spad = dst_spad_base + spad_idx * spad_half;                                                  \
+        for (uint32_t d = 0; d < n_dsts; d++) {                                                                   \
+            dma_addr_t d_ddr = octx->dsts[d]->data + ir_prefetch * sizeof(TYPE);                                  \
+            dma_queue_push(dma_q, dma_make_data(d_ddr, d_spad), cur_bytes, cur_bytes, cur_bytes, 0);              \
+        }                                                                                                         \
+        for (uint32_t s = 0; s < n_ranks; s++) {                                                                  \
+            uint8_t * s_spad = actx->src_spad_base[s] + vtcm_hvx_offset + spad_idx * spad_half;                   \
+            const dma_addr_t s_ddr = octx->src[s]->data + ir_prefetch * sizeof(TYPE);                             \
+            dma_queue_push(dma_q, dma_make_data(s_spad, s_ddr), cur_bytes, cur_bytes, cur_bytes, 1);              \
+        }                                                                                                         \
+        if (HAS_ADD) {                                                                                            \
+            uint8_t * r_spad = res_spad_base + spad_idx * spad_half;                                              \
+            const dma_addr_t r_ddr = octx->src[2 * n_ranks]->data + ir_prefetch * sizeof(TYPE);                   \
+            dma_queue_push(dma_q, dma_make_data(r_spad, r_ddr), cur_bytes, cur_bytes, cur_bytes, 1);              \
+        }                                                                                                         \
+        ir_prefetch += cur_elems;                                                                                 \
+        spad_idx ^= 1;                                                                                            \
+    }                                                                                                             \
+                                                                                                                  \
+    int comp_spad_idx = 0;                                                                                        \
+    for (uint32_t ir = ir0; ir < ir1; ) {                                                                         \
+        uint32_t cur_elems = MIN(block_elems, ir1 - ir);                                                          \
+        size_t   cur_bytes = cur_elems * sizeof(TYPE);                                                            \
+        for (uint32_t d = 0; d < n_dsts; d++) {                                                                   \
+            dma_queue_pop(dma_q);                                                                                 \
+        }                                                                                                         \
+        for (uint32_t s = 0; s < n_ranks; s++) {                                                                  \
+            dma_queue_pop(dma_q);                                                                                 \
+        }                                                                                                         \
+        if (HAS_ADD) {                                                                                            \
+            dma_queue_pop(dma_q);                                                                                 \
+        }                                                                                                         \
+        uint8_t * d_spad  = dst_spad_base + comp_spad_idx * spad_half;                                            \
+        uint8_t * s0_spad = actx->src_spad_base[0] + vtcm_hvx_offset + comp_spad_idx * spad_half;                 \
+        uint8_t * s1_spad = actx->src_spad_base[1] + vtcm_hvx_offset + comp_spad_idx * spad_half;                 \
+        uint8_t * r_spad  = HAS_ADD ? (res_spad_base + comp_spad_idx * spad_half) : NULL;                         \
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);                                         \
+        HVX_ADD_FN(d_spad, s0_spad, s1_spad, cur_elems);                                                          \
+        for (uint32_t s = 2; s < n_ranks; s++) {                                                                  \
+            uint8_t * ss_spad = actx->src_spad_base[s] + vtcm_hvx_offset + comp_spad_idx * spad_half;             \
+            HVX_ADD_FN(d_spad, d_spad, ss_spad, cur_elems);                                                       \
+        }                                                                                                         \
+        if (HAS_ADD) {                                                                                            \
+            HVX_ADD_FN(d_spad, d_spad, r_spad, cur_elems);                                                        \
+        }                                                                                                         \
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);                                          \
+        for (uint32_t d = 0; d < n_dsts; d++) {                                                                   \
+            dma_addr_t d_ddr = octx->dsts[d]->data + ir * sizeof(TYPE);                                           \
+            dma_queue_push(dma_q, dma_make_data(d_ddr, d_spad), cur_bytes, cur_bytes, cur_bytes, 1);              \
+        }                                                                                                         \
+        if (ir_prefetch < ir1) {                                                                                  \
+            uint32_t next_elems = MIN(block_elems, ir1 - ir_prefetch);                                            \
+            size_t   next_bytes = next_elems * sizeof(TYPE);                                                      \
+            for (uint32_t s = 0; s < n_ranks; s++) {                                                              \
+                uint8_t * s_spad = actx->src_spad_base[s] + vtcm_hvx_offset + comp_spad_idx * spad_half;          \
+                const dma_addr_t s_next = octx->src[s]->data + ir_prefetch * sizeof(TYPE);                        \
+                dma_queue_push(dma_q, dma_make_data(s_spad, s_next), next_bytes, next_bytes, next_bytes, 1);      \
+            }                                                                                                     \
+            if (HAS_ADD) {                                                                                        \
+                uint8_t * r_spad_next = res_spad_base + comp_spad_idx * spad_half;                                \
+                const dma_addr_t r_next = octx->src[2 * n_ranks]->data + ir_prefetch * sizeof(TYPE);              \
+                dma_queue_push(dma_q, dma_make_data(r_spad_next, r_next), next_bytes, next_bytes, next_bytes, 1); \
+            }                                                                                                     \
+            ir_prefetch += next_elems;                                                                            \
+        }                                                                                                         \
+        comp_spad_idx ^= 1;                                                                                       \
+        ir += cur_elems;                                                                                          \
+    }                                                                                                             \
+    dma_queue_flush(dma_q);                                                                                       \
 }
 
 DEFINE_ALLREDUCE_THREAD_DMA_1D(f16,     __fp16, hvx_add_f16_aaa, 0)

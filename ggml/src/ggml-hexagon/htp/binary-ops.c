@@ -478,8 +478,8 @@ static void binary_thread_vector_row_broadcast(const htp_thread_t * th, unsigned
     htp_binary_preamble;
 
     const uint32_t row_size_bytes = bctx->row_size_bytes;
-    const uint32_t start_row  = bctx->row_start + bctx->nrows_per_hvx * ith;
-    const uint32_t end_row    = MIN(start_row + bctx->nrows_per_hvx, bctx->row_start + bctx->total_rows);
+    const uint32_t start_row = bctx->row_start + bctx->nrows_per_hvx * ith;
+    const uint32_t end_row   = MIN(start_row + bctx->nrows_per_hvx, bctx->row_start + bctx->total_rows);
     if (start_row >= end_row) return;
 
     FARF(HIGH, "binary-row-bcast: %d/%d (%u:%u) row-size %u (%u)",
@@ -561,8 +561,8 @@ static void binary_thread_vector_complex(const htp_thread_t * th, unsigned int n
     htp_binary_preamble;
 
     const uint32_t row_size_bytes = bctx->row_size_bytes;
-    const uint32_t start_row  = bctx->row_start + bctx->nrows_per_hvx * ith;
-    const uint32_t end_row    = MIN(start_row + bctx->nrows_per_hvx, bctx->row_start + bctx->total_rows);
+    const uint32_t start_row = bctx->row_start + bctx->nrows_per_hvx * ith;
+    const uint32_t end_row   = MIN(start_row + bctx->nrows_per_hvx, bctx->row_start + bctx->total_rows);
     if (start_row >= end_row) return;
 
     FARF(HIGH, "binary-complex: %d/%d (%u:%u) row-size %u (%u)",
@@ -652,8 +652,8 @@ static void binary_thread_element_repeat(const htp_thread_t * th, unsigned int n
     htp_binary_preamble;
 
     const uint32_t row_size_bytes = bctx->row_size_bytes;
-    const uint32_t start_row  = bctx->row_start + bctx->nrows_per_hvx * ith;
-    const uint32_t end_row    = MIN(start_row + bctx->nrows_per_hvx, bctx->row_start + bctx->total_rows);
+    const uint32_t start_row = bctx->row_start + bctx->nrows_per_hvx * ith;
+    const uint32_t end_row   = MIN(start_row + bctx->nrows_per_hvx, bctx->row_start + bctx->total_rows);
     if (start_row >= end_row) return;
 
     const struct htp_binary_vtcm_layout * layout = &bctx->vtcm_layout;
@@ -1128,7 +1128,7 @@ static int execute_op_binary(struct htp_ops_context * octx) {
             .elem_start          = elem_start,
             .nelem               = nelem,
             .chunk_size          = chunk_size,
-            .chunks_per_hvx   = chunks_per_hvx,
+            .chunks_per_hvx      = chunks_per_hvx,
             .total_chunks        = total_chunks,
             .n_srcs              = n_srcs,
             .is_scalar           = is_scalar,
@@ -1336,7 +1336,7 @@ static int execute_op_binary(struct htp_ops_context * octx) {
     }
 
     bctx.octx                  = octx;
-    bctx.nrows_per_hvx      = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div);
+    bctx.nrows_per_hvx         = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div);
     bctx.total_rows            = nrows;
     bctx.row_start             = row_start;
     bctx.n_srcs                = n_srcs;

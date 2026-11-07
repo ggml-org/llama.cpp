@@ -296,7 +296,7 @@ static void softmax_thread_dma(const htp_thread_t * th, unsigned int nth, unsign
     struct htp_thread_trace * tr = th->trace;
 
     const uint32_t src0_nrows            = smctx->nrows;
-    const uint32_t src0_nrows_per_hvx = smctx->src0_nrows_per_hvx;
+    const uint32_t src0_nrows_per_hvx    = smctx->src0_nrows_per_hvx;
 
     const uint32_t src0_start_row = smctx->row_start + src0_nrows_per_hvx * ith;
     const uint32_t src0_end_row   = MIN(src0_start_row + src0_nrows_per_hvx, smctx->row_start + src0_nrows);
@@ -367,7 +367,7 @@ static void softmax_thread_mask_dma(const htp_thread_t * th, unsigned int nth, u
     struct htp_thread_trace * tr = th->trace;
 
     const uint32_t src0_nrows            = smctx->nrows;
-    const uint32_t src0_nrows_per_hvx = smctx->src0_nrows_per_hvx;
+    const uint32_t src0_nrows_per_hvx    = smctx->src0_nrows_per_hvx;
 
     const uint32_t src0_start_row = smctx->row_start + src0_nrows_per_hvx * ith;
     const uint32_t src0_end_row   = MIN(src0_start_row + src0_nrows_per_hvx, smctx->row_start + src0_nrows);
@@ -580,7 +580,7 @@ static int execute_op_softmax_f32(struct htp_ops_context * octx) {
         .div_ne12              = kparams->div_ne12,
         .div_ne13              = kparams->div_ne13,
 
-        .src0_nrows_per_hvx = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div),
+        .src0_nrows_per_hvx    = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div),
         .row_start             = row_start,
         .nrows                 = nrows,
     };

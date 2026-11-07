@@ -70,8 +70,8 @@ static inline void htp_pool_vtcm_layout_build(
     L->dst_plane_bytes      = dst_x * dst_y * sizeof(float);
     L->src_spad_half_size   = hex_round_up(L->src_plane_bytes + 256, 128);
     L->dst_spad_half_size   = hex_round_up(L->dst_plane_bytes, 128);
-    L->src_bytes_per_hvx = 2 * L->src_spad_half_size;
-    L->dst_bytes_per_hvx = 2 * L->dst_spad_half_size;
+    L->src_bytes_per_hvx    = 2 * L->src_spad_half_size;
+    L->dst_bytes_per_hvx    = 2 * L->dst_spad_half_size;
 
     size_t off = 0;
     VTCM_LAYOUT_ALLOC(off, off_src, L->src_bytes_per_hvx * n_hvx);

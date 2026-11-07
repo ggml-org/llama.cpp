@@ -58,7 +58,7 @@ static inline void htp_glu_vtcm_layout_build(
     const size_t row_size_aligned = hex_round_up(dst_row_size, 128);
 
     L->row_size_aligned      = row_size_aligned;
-    L->vtcm_row_per_hvx   = vtcm_row_per_hvx;
+    L->vtcm_row_per_hvx      = vtcm_row_per_hvx;
     L->block                 = vtcm_row_per_hvx >> 1;
 
     L->src0_bytes_per_hvx = row_size_aligned * vtcm_row_per_hvx;

@@ -722,11 +722,11 @@ static void sigglu_f16(const _Float16 * restrict src0,
 }
 
 #define DEFINE_GLU_PER_THREAD(TYPE, SUFFIX)                                                                            \
-    static void glu_##SUFFIX##_per_hvx(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {                           \
+    static void glu_##SUFFIX##_per_hvx(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {     \
         struct htp_glu_context * gctx = (struct htp_glu_context *) data;                                               \
         htp_glu_preamble;                                                                                              \
                                                                                                                        \
-        struct htp_thread_trace * tr = th->trace;                          \
+        struct htp_thread_trace * tr = th->trace;                                                                      \
                                                                                                                        \
         size_t src0_row_size = gctx->src0_row_size;                                                                    \
         size_t src1_row_size = gctx->src1_row_size;                                                                    \
@@ -736,10 +736,10 @@ static void sigglu_f16(const _Float16 * restrict src0,
         size_t src1_row_stride = gctx->src1_row_stride;                                                                \
                                                                                                                        \
         const uint32_t src0_nrows            = gctx->src0_nrows;                                                       \
-        const uint32_t src0_nrows_per_hvx = gctx->src0_nrows_per_hvx;                                            \
+        const uint32_t src0_nrows_per_hvx    = gctx->src0_nrows_per_hvx;                                               \
                                                                                                                        \
-        const uint32_t src0_start_row = gctx->row_start + src0_nrows_per_hvx * ith;                                 \
-        const uint32_t src0_end_row   = MIN(src0_start_row + src0_nrows_per_hvx, gctx->row_start + src0_nrows);     \
+        const uint32_t src0_start_row = gctx->row_start + src0_nrows_per_hvx * ith;                                    \
+        const uint32_t src0_end_row   = MIN(src0_start_row + src0_nrows_per_hvx, gctx->row_start + src0_nrows);        \
                                                                                                                        \
         /* no work for this thread */                                                                                  \
         if (src0_start_row >= src0_end_row) {                                                                          \
@@ -754,9 +754,9 @@ static void sigglu_f16(const _Float16 * restrict src0,
         const size_t src1_row_size_aligned = gctx->src1_row_size_aligned;                                              \
         const size_t dst_row_size_aligned  = gctx->dst_row_size_aligned;                                               \
                                                                                                                        \
-        uint8_t * restrict src0_spad_data = gctx->vtcm_src0 + (ith * gctx->vtcm_src0_size_per_hvx);                 \
-        uint8_t * restrict src1_spad_data = gctx->vtcm_src1 + (ith * gctx->vtcm_src1_size_per_hvx);                 \
-        uint8_t * restrict dst_spad_data  = gctx->vtcm_dst  + (ith * gctx->vtcm_dst_size_per_hvx);                  \
+        uint8_t * restrict src0_spad_data = gctx->vtcm_src0 + (ith * gctx->vtcm_src0_size_per_hvx);                    \
+        uint8_t * restrict src1_spad_data = gctx->vtcm_src1 + (ith * gctx->vtcm_src1_size_per_hvx);                    \
+        uint8_t * restrict dst_spad_data  = gctx->vtcm_dst  + (ith * gctx->vtcm_dst_size_per_hvx);                     \
                                                                                                                        \
         size_t src0_spad_half_size = gctx->src0_spad_half_size;                                                        \
         size_t src1_spad_half_size = gctx->src1_spad_half_size;                                                        \
@@ -764,7 +764,7 @@ static void sigglu_f16(const _Float16 * restrict src0,
                                                                                                                        \
         const int BLOCK = gctx->block;                                                                                 \
                                                                                                                        \
-        dma_queue * dma_q = th->dma_q;                                                                 \
+        dma_queue * dma_q = th->dma_q;                                                                                 \
         glu_compute_##SUFFIX##_fn_t compute = (glu_compute_##SUFFIX##_fn_t) gctx->compute;                             \
                                                                                                                        \
         for (uint32_t ir = src0_start_row, spad_idx = 0; ir < src0_end_row && spad_idx < 2; ir += BLOCK, spad_idx++) { \

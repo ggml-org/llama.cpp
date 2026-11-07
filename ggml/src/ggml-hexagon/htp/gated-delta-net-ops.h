@@ -155,7 +155,7 @@ static inline void htp_gdn_hmx_vtcm_layout_build(
 ) {
     memset(L, 0, sizeof(*L));
     L->n_heads_batch = n_heads_batch;
-    L->n_hvx     = n_hvx;
+    L->n_hvx         = n_hvx;
     L->pipeline      = pipeline;
 
     const size_t bh = (size_t) n_heads_batch;

@@ -345,13 +345,13 @@ static int concat_transposed(struct htp_ops_context * octx, const struct htp_con
     cctx.octx                  = octx;
     cctx.spad0_base            = VTCM_LAYOUT_PTR(uint8_t, vtcm_base, layout.off_spad0);
     cctx.spad1_base            = VTCM_LAYOUT_PTR(uint8_t, vtcm_base, layout.off_spad1);
-    cctx.spad0_size_per_hvx = layout.src0_spad_size_per_hvx;
-    cctx.spad1_size_per_hvx = layout.src1_spad_size_per_hvx;
+    cctx.spad0_size_per_hvx    = layout.src0_spad_size_per_hvx;
+    cctx.spad1_size_per_hvx    = layout.src1_spad_size_per_hvx;
     cctx.row_start             = row_start;
     cctx.nrows                 = nrows;
     cctx.nplanes               = dst->ne[2] * dst->ne[3];
     cctx.div_ne2               = kparams->u.transposed.div_ne2;
-    cctx.nrows_per_hvx      = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div);
+    cctx.nrows_per_hvx         = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div);
 
     work_queue_func_t worker_func = (type_size == 4) ? concat_2d_f32_transposed : concat_2d_f16_transposed;
     work_queue_run(octx->ctx->hvx_queue, worker_func, &cctx, n_hvx);

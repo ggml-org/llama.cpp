@@ -136,7 +136,7 @@ struct htp_pad_context {
                                                                                      \
     const size_t type_size = pctx->type_size;                                        \
                                                                                      \
-    const uint32_t row_start = pctx->row_start + pctx->nrows_per_hvx * ith;       \
+    const uint32_t row_start = pctx->row_start + pctx->nrows_per_hvx * ith;          \
     const uint32_t row_end   = MIN(row_start + pctx->nrows_per_hvx, pctx->row_start + pctx->total_dst_rows);
 
 
@@ -146,8 +146,8 @@ struct htp_pad_context {
     const size_t dst_row_size         = pctx->dst_row_size;                                 \
     const size_t dst_row_size_aligned = pctx->dst_row_size_aligned;                         \
                                                                                             \
-    uint8_t * src_spad_base = octx->src0_spad.data + ith * octx->src0_spad.size_per_hvx; \
-    uint8_t * dst_spad_base = octx->dst_spad.data  + ith * octx->dst_spad.size_per_hvx;  \
+    uint8_t * src_spad_base = octx->src0_spad.data + ith * octx->src0_spad.size_per_hvx;    \
+    uint8_t * dst_spad_base = octx->dst_spad.data  + ith * octx->dst_spad.size_per_hvx;     \
                                                                                             \
     dma_queue * dma_q = th->dma_q;
 
@@ -552,7 +552,7 @@ int op_pad(struct htp_ops_context * octx) {
         .lp1 = lp1, .rp1 = rp1,
         .lp2 = lp2, .rp2 = rp2,
         .lp3 = lp3, .rp3 = rp3,
-        .nrows_per_hvx     = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div),
+        .nrows_per_hvx        = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div),
         .total_dst_rows       = nrows,
         .row_start            = row_start,
         .type_size            = type_size,

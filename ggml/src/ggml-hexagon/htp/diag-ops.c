@@ -211,7 +211,7 @@ int op_diag_f32(struct htp_ops_context * octx) {
         .dst_row_size           = dst_row_size,
         .src_batch_size_aligned = layout.src_batch_size_aligned,
         .dst_row_size_aligned   = layout.dst_row_size_aligned,
-        .batches_per_hvx     = fastdiv(nbatches + n_hvx - 1, &octx->n_hvx_div),
+        .batches_per_hvx        = fastdiv(nbatches + n_hvx - 1, &octx->n_hvx_div),
         .total_batches          = nbatches,
         .batch_start            = batch_start,
     };

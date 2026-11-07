@@ -64,119 +64,118 @@ struct set_rows_context {
     uint32_t tasks_per_hvx;
 };
 
-#define SET_ROWS_THREAD_DMA_FN(TYPE_NAME, IDX_TYPE, COMPUTE_EXPR)                                                                   \
-static void set_rows_thread_dma_##TYPE_NAME##_##IDX_TYPE(const htp_thread_t * th, unsigned int nth, unsigned int ith, void *data) { \
-    struct set_rows_context * srctx = (struct set_rows_context *)data;                                                              \
-    struct htp_ops_context * octx = srctx->octx;                                                                                    \
-    const struct htp_set_rows_kernel_params * kparams = srctx->kparams;                                                             \
-    set_rows_preamble;                                                                                                              \
-    struct htp_thread_trace * tr = th->trace;                                                                                       \
-    const uint32_t dr  = srctx->tasks_per_hvx;                                                                                      \
-    const uint32_t ir0 = srctx->task_start + dr * ith;                                                                              \
-    if (ir0 >= srctx->task_start + srctx->tasks) {                                                                                  \
-        return;                                                                                                                     \
-    }                                                                                                                               \
-    const uint32_t ir1 = MIN(ir0 + dr, srctx->task_start + srctx->tasks);                                                           \
-    dma_queue * dma_q = th->dma_q;                                                                                                  \
-    const struct htp_set_rows_vtcm_layout * vtcm_layout = &srctx->vtcm_layout;                                                      \
-    uint8_t * vtcm_src0 = VTCM_LAYOUT_PTR(uint8_t, srctx->vtcm_base, vtcm_layout->off_src0) +                                       \
-                          ith * vtcm_layout->src0_bytes_per_hvx;                                                                    \
-    uint8_t * vtcm_dst  = VTCM_LAYOUT_PTR(uint8_t, srctx->vtcm_base, vtcm_layout->off_dst) +                                        \
-                          ith * vtcm_layout->dst_bytes_per_hvx;                                                                     \
-    const uint32_t src0_row_size = ne00 * sizeof(float);                                                                            \
-    const uint32_t dst_row_size  = htp_tensor_get_row_size(octx->dst->type, ne00);                                                  \
-    const uint32_t nrows_per_hvx = ir1 - ir0;                                                                                       \
-    const uint32_t total_steps   = ne03 * ne02 * nrows_per_hvx;                                                                     \
-    uint32_t pi_step             = 0;                                                                                               \
-    uint32_t pi02                = 0;                                                                                               \
-    uint32_t pi03                = 0;                                                                                               \
-    for (uint32_t step = 0, spad_idx = 0; step < total_steps && spad_idx < 2; ++step, spad_idx++) {                                 \
-        uint32_t i = ir0 + pi_step;                                                                                                 \
-        const dma_addr_t src0_data = octx->src[0]->data + i*nb01 + pi02*nb02 + pi03*nb03;                                           \
-        dma_queue_push(dma_q,                                                                                                       \
-                       dma_make_data(octx->dst->data,                                                                               \
-                                     vtcm_dst + spad_idx * vtcm_layout->dst_spad_half_size),                                        \
-                       dst_row_size, vtcm_layout->dst_spad_half_size, dst_row_size, 0);                                             \
-        dma_queue_push(dma_q,                                                                                                       \
-                       dma_make_data(vtcm_src0 + spad_idx * vtcm_layout->src0_spad_half_size,                                       \
-                                     src0_data),                                                                                    \
-                       vtcm_layout->src0_spad_half_size, src0_row_size, src0_row_size, 1);                                          \
-        pi_step++;                                                                                                                  \
-        if (pi_step == nrows_per_hvx) {                                                                                             \
-            pi_step = 0;                                                                                                            \
-            pi02++;                                                                                                                 \
-            if (pi02 == ne02) {                                                                                                     \
-                pi02 = 0;                                                                                                           \
-                pi03++;                                                                                                             \
-            }                                                                                                                       \
-        }                                                                                                                           \
-    }                                                                                                                               \
-    uint32_t ci_step = 0;                                                                                                           \
-    uint32_t ci02 = 0;                                                                                                              \
-    uint32_t ci03 = 0;                                                                                                              \
-    uint32_t ci11_base = 0;                                                                                                         \
-    uint32_t ci12_base = 0;                                                                                                         \
-    for (uint32_t step = 0; step < total_steps; ++step) {                                                                           \
-        void * dst_spad = (void *) dma_queue_pop(dma_q).src;                                                                        \
-        void * src_spad = (void *) dma_queue_pop(dma_q).dst;                                                                        \
-        uint32_t i = ir0 + ci_step;                                                                                                 \
-        const uintptr_t src1_addr = octx->src[1]->data + i*nb10 + ci11_base*nb11 + ci12_base*nb12;                                  \
-        const IDX_TYPE i1 = *(const IDX_TYPE *)src1_addr;                                                                           \
-        const bool valid_i1 = ((uint64_t)i1 < (uint64_t)ne1);                                                                       \
-        const uint32_t target_i1 = (uint32_t)i1;                                                                                    \
-        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, step);                                                                    \
-        if (valid_i1) {                                                                                                             \
-            COMPUTE_EXPR;                                                                                                           \
-        }                                                                                                                           \
-        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, step);                                                                     \
-        if (valid_i1) {                                                                                                             \
-            const dma_addr_t dst_data = octx->dst->data + target_i1*nb1 + ci02*nb2 + ci03*nb3;                                      \
-            dma_queue_push(dma_q,                                                                                                   \
-                           dma_make_data(dst_data, dst_spad),                                                                       \
-                           dst_row_size, vtcm_layout->dst_spad_half_size, dst_row_size, 1);                                         \
-        } else {                                                                                                                    \
-            dma_queue_push(dma_q,                                                                                                   \
-                           dma_make_data(octx->dst->data, dst_spad),                                                                \
-                           dst_row_size, vtcm_layout->dst_spad_half_size, dst_row_size, 0);                                         \
-        }                                                                                                                           \
-        const uint32_t next_step = step + 2;                                                                                        \
-        if (next_step < total_steps) {                                                                                              \
-            uint32_t ni = ir0 + pi_step;                                                                                            \
-            const dma_addr_t psrc0_data = octx->src[0]->data + ni*nb01 + pi02*nb02 + pi03*nb03;                                     \
-            dma_queue_push(dma_q,                                                                                                   \
-                           dma_make_data(src_spad, psrc0_data),                                                                     \
-                           vtcm_layout->src0_spad_half_size, src0_row_size, src0_row_size, 1);                                      \
-        }                                                                                                                           \
-        if (next_step < total_steps) {                                                                                              \
-            pi_step++;                                                                                                              \
-            if (pi_step == nrows_per_hvx) {                                                                                         \
-                pi_step = 0;                                                                                                        \
-                pi02++;                                                                                                             \
-                if (pi02 == ne02) {                                                                                                 \
-                    pi02 = 0;                                                                                                       \
-                    pi03++;                                                                                                         \
-                }                                                                                                                   \
-            }                                                                                                                       \
-        }                                                                                                                           \
-        ci_step++;                                                                                                                  \
-        if (ci_step == nrows_per_hvx) {                                                                                             \
-            ci_step = 0;                                                                                                            \
-            ci02++;                                                                                                                 \
-            ci11_base++;                                                                                                            \
-            if (ci11_base == ne11) {                                                                                                \
-                ci11_base = 0;                                                                                                      \
-            }                                                                                                                       \
-            if (ci02 == ne02) {                                                                                                     \
-                ci02 = 0;                                                                                                           \
-                ci03++;                                                                                                             \
-                ci12_base++;                                                                                                        \
-                if (ci12_base == ne12) {                                                                                            \
-                    ci12_base = 0;                                                                                                  \
-                }                                                                                                                   \
-            }                                                                                                                       \
-        }                                                                                                                           \
-    }                                                                                                                               \
-    dma_queue_flush(dma_q);                                                                                                         \
+#define SET_ROWS_THREAD_DMA_FN(TYPE_NAME, IDX_TYPE, COMPUTE_EXPR)                                                \
+static void set_rows_thread_dma_##TYPE_NAME##_##IDX_TYPE(const htp_thread_t * th, unsigned int nth,              \
+                                                         unsigned int ith, void *data) {                         \
+    struct set_rows_context * srctx = (struct set_rows_context *)data;                                           \
+    struct htp_ops_context * octx = srctx->octx;                                                                 \
+    const struct htp_set_rows_kernel_params * kparams = srctx->kparams;                                          \
+    set_rows_preamble;                                                                                           \
+    struct htp_thread_trace * tr = th->trace;                                                                    \
+    const uint32_t dr  = srctx->tasks_per_hvx;                                                                   \
+    const uint32_t ir0 = srctx->task_start + dr * ith;                                                           \
+    if (ir0 >= srctx->task_start + srctx->tasks) {                                                               \
+        return;                                                                                                  \
+    }                                                                                                            \
+    const uint32_t ir1 = MIN(ir0 + dr, srctx->task_start + srctx->tasks);                                        \
+    dma_queue * dma_q = th->dma_q;                                                                               \
+    const struct htp_set_rows_vtcm_layout * vtcm_layout = &srctx->vtcm_layout;                                   \
+    uint8_t * vtcm_src0 = VTCM_LAYOUT_PTR(uint8_t, srctx->vtcm_base, vtcm_layout->off_src0) +                    \
+                          ith * vtcm_layout->src0_bytes_per_hvx;                                                 \
+    uint8_t * vtcm_dst  = VTCM_LAYOUT_PTR(uint8_t, srctx->vtcm_base, vtcm_layout->off_dst) +                     \
+                          ith * vtcm_layout->dst_bytes_per_hvx;                                                  \
+    const uint32_t src0_row_size = ne00 * sizeof(float);                                                         \
+    const uint32_t dst_row_size  = htp_tensor_get_row_size(octx->dst->type, ne00);                               \
+    const uint32_t nrows_per_hvx = ir1 - ir0;                                                                    \
+    const uint32_t total_steps = ne03 * ne02 * nrows_per_hvx;                                                    \
+    uint32_t pi_step = 0;                                                                                        \
+    uint32_t pi02 = 0;                                                                                           \
+    uint32_t pi03 = 0;                                                                                           \
+    for (uint32_t step = 0, spad_idx = 0; step < total_steps && spad_idx < 2; ++step, spad_idx++) {              \
+        uint32_t i = ir0 + pi_step;                                                                              \
+        const dma_addr_t src0_data = octx->src[0]->data + i*nb01 + pi02*nb02 + pi03*nb03;                        \
+        dma_queue_push(dma_q,                                                                                    \
+                       dma_make_data(octx->dst->data,                                                            \
+                                     vtcm_dst + spad_idx * vtcm_layout->dst_spad_half_size),                     \
+                       dst_row_size, vtcm_layout->dst_spad_half_size, dst_row_size, 0);                          \
+        dma_queue_push(dma_q,                                                                                    \
+                       dma_make_data(vtcm_src0 + spad_idx * vtcm_layout->src0_spad_half_size,                    \
+                                     src0_data),                                                                 \
+                       vtcm_layout->src0_spad_half_size, src0_row_size, src0_row_size, 1);                       \
+        pi_step++;                                                                                               \
+        if (pi_step == nrows_per_hvx) {                                                                          \
+            pi_step = 0;                                                                                         \
+            pi02++;                                                                                              \
+            if (pi02 == ne02) {                                                                                  \
+                pi02 = 0;                                                                                        \
+                pi03++;                                                                                          \
+            }                                                                                                    \
+        }                                                                                                        \
+    }                                                                                                            \
+    uint32_t ci_step = 0;                                                                                        \
+    uint32_t ci02 = 0;                                                                                           \
+    uint32_t ci03 = 0;                                                                                           \
+    uint32_t ci11_base = 0;                                                                                      \
+    uint32_t ci12_base = 0;                                                                                      \
+    for (uint32_t step = 0; step < total_steps; ++step) {                                                        \
+        void * dst_spad = (void *) dma_queue_pop(dma_q).src;                                                     \
+        void * src_spad = (void *) dma_queue_pop(dma_q).dst;                                                     \
+        uint32_t i = ir0 + ci_step;                                                                              \
+        const uintptr_t src1_addr = octx->src[1]->data + i*nb10 + ci11_base*nb11 + ci12_base*nb12;               \
+        const IDX_TYPE i1 = *(const IDX_TYPE *)src1_addr;                                                        \
+        const bool valid_i1 = ((uint64_t)i1 < (uint64_t)ne1);                                                    \
+        const uint32_t target_i1 = (uint32_t)i1;                                                                 \
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, step);                                                 \
+        if (valid_i1) {                                                                                          \
+            COMPUTE_EXPR;                                                                                        \
+        }                                                                                                        \
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, step);                                                  \
+        if (valid_i1) {                                                                                          \
+            const dma_addr_t dst_data = octx->dst->data + target_i1*nb1 + ci02*nb2 + ci03*nb3;                   \
+            dma_queue_push(dma_q,                                                                                \
+                           dma_make_data(dst_data, dst_spad),                                                    \
+                           dst_row_size, vtcm_layout->dst_spad_half_size, dst_row_size, 1);                      \
+        } else {                                                                                                 \
+            dma_queue_push(dma_q,                                                                                \
+                           dma_make_data(octx->dst->data, dst_spad),                                             \
+                           dst_row_size, vtcm_layout->dst_spad_half_size, dst_row_size, 0);                      \
+        }                                                                                                        \
+        const uint32_t next_step = step + 2;                                                                     \
+        if (next_step < total_steps) {                                                                           \
+            uint32_t ni = ir0 + pi_step;                                                                         \
+            const dma_addr_t psrc0_data = octx->src[0]->data + ni*nb01 + pi02*nb02 + pi03*nb03;                  \
+            dma_queue_push(dma_q,                                                                                \
+                           dma_make_data(src_spad, psrc0_data),                                                  \
+                           vtcm_layout->src0_spad_half_size, src0_row_size, src0_row_size, 1);                   \
+            pi_step++;                                                                                           \
+            if (pi_step == nrows_per_hvx) {                                                                      \
+                pi_step = 0;                                                                                     \
+                pi02++;                                                                                          \
+                if (pi02 == ne02) {                                                                              \
+                    pi02 = 0;                                                                                    \
+                    pi03++;                                                                                      \
+                }                                                                                                \
+            }                                                                                                    \
+        }                                                                                                        \
+        ci_step++;                                                                                               \
+        if (ci_step == nrows_per_hvx) {                                                                          \
+            ci_step = 0;                                                                                         \
+            ci02++;                                                                                              \
+            ci11_base++;                                                                                         \
+            if (ci11_base == ne11) {                                                                             \
+                ci11_base = 0;                                                                                   \
+            }                                                                                                    \
+            if (ci02 == ne02) {                                                                                  \
+                ci02 = 0;                                                                                        \
+                ci03++;                                                                                          \
+                ci12_base++;                                                                                     \
+                if (ci12_base == ne12) {                                                                         \
+                    ci12_base = 0;                                                                               \
+                }                                                                                                \
+            }                                                                                                    \
+        }                                                                                                        \
+    }                                                                                                            \
+    dma_queue_flush(dma_q);                                                                                      \
 }
 
 SET_ROWS_THREAD_DMA_FN(f32,  int32_t, { hvx_copy_f32_uu((uint8_t *)dst_spad, (const uint8_t *)src_spad, ne00); })

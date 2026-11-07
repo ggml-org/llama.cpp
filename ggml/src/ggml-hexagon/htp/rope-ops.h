@@ -47,7 +47,7 @@ static inline void htp_rope_vtcm_layout_build(
     L->src0_row_size_aligned     = src0_row_size_aligned;
     L->theta_cache_size_aligned  = theta_cache_size_aligned;
     L->freq_factors_size_aligned = freq_factors_size_aligned;
-    L->bytes_per_hvx          = theta_cache_size_aligned + HTP_ROPE_SPAD_NROWS * src0_row_size_aligned;
+    L->bytes_per_hvx             = theta_cache_size_aligned + HTP_ROPE_SPAD_NROWS * src0_row_size_aligned;
 
     size_t off = 0;
     VTCM_LAYOUT_ALLOC(off, off_spad, L->bytes_per_hvx * n_hvx);
