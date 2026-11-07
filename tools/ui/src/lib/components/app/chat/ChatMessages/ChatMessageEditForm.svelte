@@ -65,9 +65,6 @@
 
 			editCtx.save();
 		}
-
-		saveWithoutRegenerate = false;
-		branchAfterEdit = false;
 	}
 
 	function handleAttachmentRemove(index: number) {

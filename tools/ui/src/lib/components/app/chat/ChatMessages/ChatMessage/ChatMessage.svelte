@@ -376,6 +376,8 @@
 		} else if (message.role === MessageRole.USER) {
 			const finalExtras = await getMergedExtras();
 
+			if (finalExtras === null) return;
+
 			chatActions.editWithBranching(message, editedContent.trim(), finalExtras);
 		} else {
 			// For assistant messages, preserve exact content including trailing whitespace
@@ -393,6 +395,8 @@
 			// For user messages, trim to avoid accidental whitespace
 			const finalExtras = await getMergedExtras();
 
+			if (finalExtras === null) return;
+
 			chatActions.editUserMessagePreserveResponses(message, editedContent.trim(), finalExtras);
 		}
 
@@ -400,16 +404,17 @@
 		editedUploadedFiles = [];
 	}
 
-	async function getMergedExtras(): Promise<DatabaseMessageExtra[]> {
+	async function getMergedExtras(): Promise<DatabaseMessageExtra[] | null> {
 		if (editedUploadedFiles.length === 0) {
 			return editedExtras;
 		}
 
 		const plainFiles = $state.snapshot(editedUploadedFiles);
 		const result = await parseFilesToMessageExtras(plainFiles);
-		const newExtras = result?.extras || [];
 
-		return [...editedExtras, ...newExtras];
+		if (result.failedFiles.length > 0) return null;
+
+		return [...editedExtras, ...result.extras];
 	}
 
 	function handleShowDeleteDialogChange(show: boolean) {

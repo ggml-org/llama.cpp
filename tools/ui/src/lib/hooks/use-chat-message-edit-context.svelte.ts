@@ -32,9 +32,10 @@ export function useChatMessageEditContext(options: UseChatMessageEditContextOpti
 		if (editedUploadedFiles.length > 0) {
 			const plainFiles = $state.snapshot(editedUploadedFiles);
 			const result = await parseFilesToMessageExtras(plainFiles);
-			const newExtras = result?.extras || [];
 
-			finalExtras = [...finalExtras, ...newExtras];
+			if (result.failedFiles.length > 0) return;
+
+			finalExtras = [...finalExtras, ...result.extras];
 		}
 
 		options.onSave(trimmed, finalExtras.length > 0 ? finalExtras : undefined);
