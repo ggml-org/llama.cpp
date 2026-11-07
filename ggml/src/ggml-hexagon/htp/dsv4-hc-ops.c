@@ -363,7 +363,7 @@ int op_dsv4_hc_pre(struct htp_ops_context * octx) {
         default: return HTP_STATUS_INVAL_PARAMS;
     }
 
-    FARF(HIGH, "dsv4-hc-pre: (%ux%ux%u) -> (%ux%u) : ktype %u tokens %u:%u nth %u\n",
+    FARF(HIGH, "dsv4-hc-pre: (%ux%ux%u) -> (%ux%u) : ktype %u tokens %u:%u nhvx %u\n",
          x->ne[0], x->ne[1], x->ne[2], dst->ne[0], dst->ne[1], kparams->kernel_type,
          token_start, token_start + n_tokens, n_hvx);
 
@@ -665,7 +665,7 @@ int op_dsv4_hc_post(struct htp_ops_context * octx) {
         default: return HTP_STATUS_INVAL_PARAMS;
     }
 
-    FARF(HIGH, "dsv4-hc-post: (%ux%u) (%ux%ux%u) -> (%ux%ux%u) : ktype %u tokens %u:%u nth %u\n",
+    FARF(HIGH, "dsv4-hc-post: (%ux%u) (%ux%ux%u) -> (%ux%ux%u) : ktype %u tokens %u:%u nhvx %u\n",
          x->ne[0], x->ne[1], residual->ne[0], residual->ne[1], residual->ne[2],
          dst->ne[0], dst->ne[1], dst->ne[2], kparams->kernel_type,
          token_start, token_start + n_tokens, n_hvx);
