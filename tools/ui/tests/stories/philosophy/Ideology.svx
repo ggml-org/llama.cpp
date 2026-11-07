@@ -70,9 +70,11 @@ Between a person and the AI are three layers, and they are different kinds of th
 
 - **Model:** the weights. They are research output, closer to science than to a product: on their own they have no user and no interface, and everything else is built on them. That is why they stay open; closing them would hold back everything built on top.
 - **Inference:** the engine and the server that run the model. Elsewhere this layer is a provider's API, with its terms and its monitoring. In the Llama stack it is llama-server on your own hardware, or on a server someone you trust shares, so you are the provider.
-- **Application:** where AI meets people and their work. This is where what the AI does has real effects, so this is where care and responsibility belong.
+- **Application:** where AI meets people and their work. This is where what the AI does has real effects, so this is where most of the responsibility lies.
 
-It is the difference between steel and a car: you test the car on the road, not the steel at the mill.
+It is the difference between steel and a car, as [Clément Delangue put it](https://x.com/ClementDelangue/status/2084992457674990033): you test the car on the road, not the steel at the mill.
+
+So the application is the layer that most needs to be built in the open: its code public, its behaviour tested and judged by the people who use it, and anyone free to change it. That is why Llama Chat and Llama UI are open source.
 
 The **harness**, the agentic loop and the tools it can call, bridges the application and inference: the loop runs in the app, and its tools run in the app or in llama-server.
 

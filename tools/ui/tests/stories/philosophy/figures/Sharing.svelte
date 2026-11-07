@@ -1,86 +1,162 @@
 <!--
-	Shared: one server run by one person, used by the people around it (a family, a team, a lab, a
-	neighbourhood), each with their own devices. Drawn as a hub; the shared server is the cinder node.
+	Shared: one server run by one person, used by the people around it (a family, a team, a lab, a neighbourhood), each
+	on their own machines. Drawn with the communications motifs: the shared server in the middle, the groups around it
+	with a laptop or a workstation each, joined to it by dashed lines. The motifs read their inks from the --p-*
+	variables, set here from the theme so they follow light and dark.
 -->
 <script lang="ts">
+	import Laptop from '../../brand/communications/posts/motifs/Laptop.svelte';
+	import Server from '../../brand/communications/posts/motifs/Server.svelte';
+	import WorkstationLarge from '../../brand/communications/posts/motifs/WorkstationLarge.svelte';
+	import WorkstationSmall from '../../brand/communications/posts/motifs/WorkstationSmall.svelte';
+
 	const groups = [
-		{ devices: 3, name: 'A family', x: 90, y: 60 },
-		{ devices: 5, name: 'A team', x: 550, y: 60 },
-		{ devices: 4, name: 'A lab', x: 90, y: 250 },
-		{ devices: 6, name: 'A neighbourhood', x: 550, y: 250 }
+		{ machine: Laptop, name: 'A family', on: 'Laptops and phones', side: 'left' },
+		{ machine: WorkstationSmall, name: 'A team', on: 'Desktops at work', side: 'right' },
+		{ machine: WorkstationLarge, name: 'A lab', on: 'Workstations and notebooks', side: 'left' },
+		{ machine: Laptop, name: 'A neighbourhood', on: 'Whatever people have', side: 'right' }
 	];
-	const hub = { x: 320, y: 155 };
 </script>
 
-<svg
-	aria-label="One shared server and the people who use it"
-	class="hub"
-	role="img"
-	viewBox="0 0 640 310"
->
-	{#each groups as g (g.name)}
-		<line x1={hub.x} x2={g.x} y1={hub.y} y2={g.y} />
+<div class="sharing">
+	<div class="hub">
+		<div class="motif big"><Server /></div>
+
+		<b>One server</b>
+
+		<span class="mono">llama-server</span>
+	</div>
+
+	{#each groups as group, i (group.name)}
+		<div class={['group card-surface rounded-card', group.side, `g${i}`]}>
+			<div class="motif"><group.machine /></div>
+
+			<div class="text">
+				<b>{group.name}</b>
+
+				<span>{group.on}</span>
+			</div>
+		</div>
 	{/each}
-
-	{#each groups as g (g.name)}
-		<g transform="translate({g.x} {g.y})">
-			<rect class="node" height="56" rx="12" width="150" x="-75" y="-28" />
-
-			<text class="name" text-anchor="middle" y="-4">{g.name}</text>
-
-			{#each Array(g.devices) as _, i (i)}
-				<circle class="device" cx={(i - (g.devices - 1) / 2) * 14} cy="14" r="4" />
-			{/each}
-		</g>
-	{/each}
-
-	<g transform="translate({hub.x} {hub.y})">
-		<rect class="server" height="70" rx="14" width="170" x="-85" y="-35" />
-
-		<text class="name light" text-anchor="middle" y="-6">One server</text>
-
-		<text class="mono" text-anchor="middle" y="16">llama-server</text>
-	</g>
-</svg>
+</div>
 
 <style>
+	.sharing {
+		--p-base: var(--surface-page);
+		--p-ink: var(--fg-default);
+		--p-muted: var(--figure-muted);
+		--p-inset: color-mix(in oklab, var(--fg-default) 6%, transparent);
+		position: relative;
+		display: grid;
+		grid-template-areas:
+			'g0 hub g1'
+			'g2 hub g3';
+		grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr) minmax(0, 1fr);
+		gap: 12px 40px;
+		align-items: center;
+	}
+
 	.hub {
-		display: block;
-		width: 100%;
-		height: auto;
+		display: grid;
+		grid-area: hub;
+		justify-items: center;
+		gap: 2px;
+		padding: 12px;
+		border-radius: 16px;
+		background: var(--surface-page);
 	}
 
-	line {
-		stroke: var(--line-default);
-		stroke-width: 2;
-		stroke-dasharray: 6 6;
+	.g0 {
+		grid-area: g0;
 	}
 
-	.node {
-		fill: var(--surface-page);
-		stroke: var(--line-default);
-		stroke-width: 1.5;
+	.g1 {
+		grid-area: g1;
 	}
 
-	.server {
-		fill: var(--art-cinder);
+	.g2 {
+		grid-area: g2;
 	}
 
-	.name {
-		fill: var(--fg-default);
-		font: 600 15px var(--font-sans);
+	.g3 {
+		grid-area: g3;
 	}
 
-	.light {
-		fill: #111111;
+	.group {
+		position: relative;
+		display: grid;
+		grid-template-columns: 72px minmax(0, 1fr);
+		gap: 10px;
+		align-items: center;
+		padding: 10px 12px;
+	}
+
+	/* the dashed line from each group across the gap to the server */
+	.group::after {
+		position: absolute;
+		top: 50%;
+		width: 40px;
+		border-top: 2px dashed var(--line-default);
+		content: '';
+	}
+
+	.left::after {
+		left: 100%;
+	}
+
+	.right::after {
+		right: 100%;
+	}
+
+	.motif {
+		aspect-ratio: 4 / 3;
+	}
+
+	.motif.big {
+		width: min(100%, 220px);
+	}
+
+	.text {
+		display: grid;
+		gap: 2px;
+	}
+
+	b {
+		font-size: 15px;
+		font-weight: 600;
+	}
+
+	.text span {
+		color: var(--figure-muted);
+		font-size: 12px;
+		line-height: 1.4;
 	}
 
 	.mono {
-		fill: #111111;
+		color: var(--art-cinder);
 		font: 500 12px var(--mono);
 	}
 
-	.device {
-		fill: var(--figure-muted);
+	@media (width < 720px) {
+		.sharing {
+			grid-template-areas: 'hub hub' 'g0 g1' 'g2 g3';
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+			gap: 8px;
+			align-items: stretch;
+		}
+
+		.group {
+			grid-template-columns: minmax(0, 1fr);
+			align-content: start;
+			justify-items: start;
+		}
+
+		.motif {
+			width: 72px;
+		}
+
+		.group::after {
+			display: none;
+		}
 	}
 </style>
