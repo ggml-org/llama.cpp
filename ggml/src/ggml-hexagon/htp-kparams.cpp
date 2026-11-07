@@ -50,17 +50,22 @@ htp_op_code htp_op_remap(const struct ggml_tensor * t) {
         case GGML_OP_ROPE:            return HTP_OP_ROPE;
         case GGML_OP_REPEAT:          return HTP_OP_REPEAT;
         case GGML_OP_CUMSUM:          return HTP_OP_CUMSUM;
+        case GGML_OP_TOP_K_MASK:      return HTP_OP_TOP_K_MASK;
         case GGML_OP_FILL:            return HTP_OP_FILL;
         case GGML_OP_DIAG:            return HTP_OP_DIAG;
         case GGML_OP_SOLVE_TRI:       return HTP_OP_SOLVE_TRI;
+        case GGML_OP_DSV4_HC_PRE:     return HTP_OP_DSV4_HC_PRE;
+        case GGML_OP_DSV4_HC_POST:    return HTP_OP_DSV4_HC_POST;
         case GGML_OP_TRI:             return HTP_OP_TRI;
         case GGML_OP_PAD:             return HTP_OP_PAD;
         case GGML_OP_IM2COL:          return HTP_OP_IM2COL;
         case GGML_OP_IM2COL_3D:       return HTP_OP_IM2COL_3D;
         case GGML_OP_CONV_2D:         return HTP_OP_CONV_2D;
         case GGML_OP_CONV_2D_DW:      return HTP_OP_CONV_2D_DW;
+        case GGML_OP_CONV_3D:         return HTP_OP_CONV_3D;
         case GGML_OP_ROLL:            return HTP_OP_ROLL;
         case GGML_OP_UPSCALE:         return HTP_OP_UPSCALE;
+        case GGML_OP_LIGHTNING_INDEXER: return HTP_OP_LIGHTNING_INDEXER;
 
         case GGML_OP_UNARY:
             switch (ggml_get_unary_op(t)) {
@@ -348,6 +353,11 @@ static bool htp_kparams_solve_flash_attn(
         return false;
     }
 
+    // K/V row lists (ggml_flash_attn_ext_rows) are not supported
+    if (op->src[5] != nullptr) {
+        return false;
+    }
+
     memset(kparams, 0, sizeof(*kparams));
 
     const struct ggml_tensor * q     = op->src[0];
@@ -619,7 +629,7 @@ static bool htp_matmul_is_hmx_eligible(
         return false;
     }
 
-    if (!htp_is_hmx_weight_type((ggml_type) wtype)) {
+    if (!htp_is_tiled_weight_type((ggml_type) wtype)) {
         return false;
     }
 
@@ -627,7 +637,7 @@ static bool htp_matmul_is_hmx_eligible(
         return false;
     }
 
-    const bool is_tiled = htp_tensor_is_tiled(src0);
+    const bool is_tiled = ggml_hexagon_tensor_will_tile(src0);
     if (ggml_is_quantized((ggml_type) wtype) && !is_tiled) {
         return false;
     }
@@ -665,7 +675,7 @@ static bool htp_kparams_solve_hmx_mm(
     size_t vtcm_budget,
     struct htp_mm_kernel_params * kparams
 ) {
-    const bool     is_tiled          = htp_tensor_is_tiled(src0);
+    const bool     is_tiled          = ggml_hexagon_tensor_will_tile(src0);
     const int      aligned_tile_size = is_tiled ? htp_tensor_get_tile_padded_size(wtype) : 0;
     const int      n_threads         = (int) htp_session_n_threads(sess);
     const uint32_t mdev_count        = htp_session_mdev_count(sess);
@@ -884,7 +894,7 @@ static bool htp_kparams_solve_matmul_impl(
     const int ne12 = src1->ne[2];
     const int ne13 = src1->ne[3];
 
-    const bool is_tiled    = htp_tensor_is_tiled(src0);
+    const bool is_tiled    = ggml_hexagon_tensor_will_tile(src0);
     const int  wtype       = (is_tiled && (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_BF16)) ? GGML_TYPE_F16 : src0->type;
     const int  ne00_padded = is_tiled ? hex_round_up(ne00, htp_tensor_get_tile_k(wtype)) : ne00;
     const int  ne11_padded = hex_round_up(ne11, 32);
@@ -1100,7 +1110,7 @@ bool htp_kparams_solve_mmnx(
     const int ne12 = act->ne[2];
     const int ne13 = act->ne[3];
 
-    const bool is_tiled    = htp_tensor_is_tiled(src0);
+    const bool is_tiled    = ggml_hexagon_tensor_will_tile(src0);
     const int  wtype       = (is_tiled && (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_BF16)) ? GGML_TYPE_F16 : src0->type;
     const int  ne00_padded = is_tiled ? hex_round_up(ne00, 32) : ne00;
     const int  ne11_padded = hex_round_up(ne11, 32);
@@ -1573,11 +1583,15 @@ static bool htp_kparams_solve_unary_impl(
 
     kparams->n_threads = n_threads;
 
-    const bool broadcast_weight = (op == HTP_OP_RMS_NORM_MUL) && (src1->ne[1] * src1->ne[2] * src1->ne[3] == 1);
+    const bool has_weight       = (op == HTP_OP_RMS_NORM_MUL || op == HTP_OP_RMS_NORM_MUL_ADD);
+    const bool broadcast_weight = has_weight && (src1->ne[1] * src1->ne[2] * src1->ne[3] == 1);
+    if (op == HTP_OP_RMS_NORM_MUL_ADD && !broadcast_weight) {
+        return false;
+    }
     kparams->broadcast_weight   = broadcast_weight;
 
     const bool     src0_contig           = ggml_is_contiguous_1(src0);
-    const bool     src1_contig           = (op == HTP_OP_RMS_NORM_MUL && !broadcast_weight) ? ggml_is_contiguous_1(src1) : true;
+    const bool     src1_contig           = (has_weight && !broadcast_weight) ? ggml_is_contiguous_1(src1) : true;
     const uint32_t src0_nrows_per_thread = (src0_nrows + n_threads - 1) / n_threads;
     const uint32_t min_block_rows        = (uint32_t) (std::max<size_t>(1, 2048 / dst_data_row_size));
     uint32_t       max_block             = (src0_contig && src1_contig) ? src0_nrows : (uint32_t) src0->ne[1];
@@ -1593,7 +1607,7 @@ static bool htp_kparams_solve_unary_impl(
     uint32_t vtcm_row_per_thread = 0;
 
     htp_unary_solve_layout(&L, op, src0->ne[0], dst->ne[0],
-                           op == HTP_OP_RMS_NORM_MUL ? src1->ne[0] : 0,
+                           has_weight ? src1->ne[0] : 0,
                            max_block, broadcast_weight, n_threads, vtcm_size, elem_size,
                            &col_tile, &vtcm_row_per_thread);
 
@@ -1630,6 +1644,16 @@ bool htp_kparams_solve_rms_norm_mul(
     struct htp_unary_kernel_params * kparams
 ) {
     return htp_kparams_solve_unary_impl(sess, HTP_OP_RMS_NORM_MUL, src0, src1, dst, kparams);
+}
+
+bool htp_kparams_solve_rms_norm_mul_add(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * src0,
+    const struct ggml_tensor * src1,
+    const struct ggml_tensor * dst,
+    struct htp_unary_kernel_params * kparams
+) {
+    return htp_kparams_solve_unary_impl(sess, HTP_OP_RMS_NORM_MUL_ADD, src0, src1, dst, kparams);
 }
 
 bool htp_kparams_solve_repeat_get_rows(
@@ -1674,7 +1698,7 @@ bool htp_kparams_solve_repeat_get_rows(
     const uint32_t ne12 = src1->ne[2];
     const uint32_t nr   = ne10 * ne11 * ne12;
 
-    const bool tiled = htp_tensor_is_tiled(src0);
+    const bool tiled = ggml_hexagon_tensor_is_tiled(src0);
     const int  wtype = (tiled && (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_BF16)) ? GGML_TYPE_F16 : src0->type;
 
     if (tiled) {
@@ -1864,6 +1888,10 @@ static bool htp_kparams_solve_rope(
     const struct ggml_tensor * src1 = op->src[1];
     const struct ggml_tensor * src2 = op->src[2];
     const struct ggml_tensor * dst  = op;
+
+    if (!ggml_rope_get_truncate(op)) {
+        return false;
+    }
 
     if (!ggml_are_same_shape(src0, dst)) {
         return false;
@@ -2655,6 +2683,129 @@ static bool htp_kparams_solve_concat(
     return false;
 }
 
+// Permuted copy with strided dim 0 (e.g. channel-first <-> channel-last)
+static bool htp_kparams_solve_cpy_transpose(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * src0,
+    const struct ggml_tensor * dst,
+    uint32_t type_size,
+    struct htp_copy_kernel_params * kparams) {
+
+    // View contiguous dst with src shape to support CPY with reshape
+    const bool dst_cont = ggml_is_contiguous(dst);
+    if (!dst_cont && !ggml_are_same_shape(src0, dst)) {
+        return false;
+    }
+
+    // Drop size-1 dims and merge dims adjacent in both tensors
+    size_t ne[GGML_MAX_DIMS];
+    size_t nbs[GGML_MAX_DIMS];
+    size_t nbd[GGML_MAX_DIMS];
+    size_t dst_stride = type_size;
+    int    n          = 0;
+    for (int d = 0; d < GGML_MAX_DIMS; d++) {
+        const size_t sd = dst_cont ? dst_stride : dst->nb[d];
+        dst_stride *= (size_t) src0->ne[d];
+        if (src0->ne[d] == 1) {
+            continue;
+        }
+        if (n > 0 && src0->nb[d] == nbs[n - 1] * ne[n - 1] && sd == nbd[n - 1] * ne[n - 1]) {
+            ne[n - 1] *= (size_t) src0->ne[d];
+            continue;
+        }
+        ne[n]  = (size_t) src0->ne[d];
+        nbs[n] = src0->nb[d];
+        nbd[n] = sd;
+        n++;
+    }
+
+    // Fold leading dense dim into element block
+    size_t es = type_size;
+    for (int i = 0; i < n; i++) {
+        if (nbs[i] == type_size && nbd[i] == type_size) {
+            es *= ne[i];
+            for (int j = i; j + 1 < n; j++) {
+                ne[j]  = ne[j + 1];
+                nbs[j] = nbs[j + 1];
+                nbd[j] = nbd[j + 1];
+            }
+            n--;
+            break;
+        }
+    }
+    if (es > 128 || (es & (es - 1)) != 0) {
+        return false;
+    }
+
+    // Transpose axes: dim a dense in dst, dim k dense in src
+    int a = -1;
+    int k = -1;
+    for (int i = 0; i < n; i++) {
+        if (a < 0 && nbd[i] == es) {
+            a = i;
+        }
+        if (k < 0 && nbs[i] == es) {
+            k = i;
+        }
+    }
+    if (a < 0 || k < 0 || a == k) {
+        return false;
+    }
+
+    struct htp_copy_transpose_params tp = {};
+    tp.elem_size = (uint8_t) es;
+    tp.ne[0]     = (uint32_t) ne[a];
+    tp.ne[1]     = (uint32_t) ne[k];
+    tp.ne[2]     = 1;
+    tp.src_nb[0] = (uint32_t) nbs[a];
+    tp.dst_nb[0] = (uint32_t) nbd[k];
+    tp.packed    = nbd[k] == ne[a] * es && ne[a] * es < 128 && 128 % (ne[a] * es) == 0;
+
+    size_t ne3 = 1;
+    int    m   = 0;
+    for (int i = 0; i < n; i++) {
+        if (i == a || i == k) {
+            continue;
+        }
+        if (m == 0) {
+            tp.ne[2] = (uint32_t) ne[i];
+        } else {
+            ne3 = ne[i];
+        }
+        tp.src_nb[1 + m] = (uint32_t) nbs[i];
+        tp.dst_nb[1 + m] = (uint32_t) nbd[i];
+        m++;
+    }
+
+    const uint32_t n_threads = htp_session_n_threads(sess);
+    const size_t   vtcm_size = htp_session_vtcm_size(sess);
+    uint64_t       vtcm      = 0;
+    for (uint32_t blk_bytes = HTP_COPY_TRANSPOSE_BLK_BYTES; ; blk_bytes /= 2) {
+        if (!htp_copy_transpose_layout_build(&tp, blk_bytes)) {
+            return false;
+        }
+        vtcm = (uint64_t) n_threads * 2 * (tp.in_buf_size + tp.out_buf_size);
+        if (vtcm <= vtcm_size) {
+            break;
+        }
+    }
+
+    const uint64_t total_tiles = (uint64_t) tp.n0b * tp.nkb * tp.ne[2] * ne3;
+    if (total_tiles > UINT32_MAX) {
+        return false;
+    }
+    tp.total_tiles = (uint32_t) total_tiles;
+    tp.div_nkb     = init_fastdiv_values(tp.nkb);
+    tp.div_n0b     = init_fastdiv_values(tp.n0b);
+    tp.div_ne2     = init_fastdiv_values(tp.ne[2]);
+
+    kparams->kernel_type = HTP_COPY_KERNEL_TRANSPOSE;
+    kparams->n_threads   = (uint8_t) n_threads;
+    kparams->vtcm_size   = (uint32_t) vtcm;
+    kparams->u.transpose = tp;
+    return true;
+}
+
 static bool htp_kparams_solve_cpy(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op,
@@ -2750,6 +2901,10 @@ static bool htp_kparams_solve_cpy(
                 kparams->vtcm_size   = kparams->u.gather.slice * n_threads;
                 return true;
             }
+        }
+
+        if (htp_kparams_solve_cpy_transpose(sess, src0, dst, src_type_size, kparams)) {
+            return true;
         }
 
         if (sameshape) {
@@ -3268,6 +3423,194 @@ static bool htp_kparams_solve_cumsum(
     return true;
 }
 
+// Shrink until the layout fits: halve tile_cols down to 1024 columns, then drop threads. False below the VTCM floor.
+static bool htp_top_k_mask_search(struct htp_top_k_mask_vtcm_layout * L, const struct htp_top_k_mask_shape * S, uint32_t kernel_type,
+                                  size_t vtcm_size, uint32_t * n_threads, uint32_t * tile_cols) {
+    const uint32_t min_cols = 1024;
+    while (true) {
+        htp_top_k_mask_vtcm_layout_build(L, S, kernel_type, *n_threads, *tile_cols);
+        if (L->total_bytes <= vtcm_size) {
+            return true;
+        }
+        if (*tile_cols > min_cols) {
+            *tile_cols = (std::max)(min_cols, (uint32_t) hex_round_up(*tile_cols / 2, 64));
+        } else if (*n_threads > 1) {
+            (*n_threads)--;
+        } else {
+            return false;
+        }
+    }
+}
+
+// Row r of t (same ne[1..3] as dst) is at r * nb[1]: the NPU needs one stride per input.
+// A mask broadcasts by i mod ne: its rows are dense above nb[1], the divisors and dst ne[1..2] fit 16 bits.
+static bool htp_top_k_mask_mask_ok(const struct ggml_tensor * m, const struct ggml_tensor * dst) {
+    return m->ne[1] <= UINT16_MAX && m->ne[2] <= UINT16_MAX && m->ne[3] <= UINT16_MAX && dst->ne[1] <= UINT16_MAX && dst->ne[2] <= UINT16_MAX &&
+           (m->ne[2] == 1 || m->nb[2] == m->nb[1] * m->ne[1]) &&
+           (m->ne[3] == 1 || m->nb[3] == m->nb[1] * m->ne[1] * m->ne[2]);
+}
+
+static bool htp_top_k_mask_row_flat(const struct ggml_tensor * t, const struct ggml_tensor * dst) {
+    return t->ne[1] == dst->ne[1] && t->ne[2] == dst->ne[2] && t->ne[3] == dst->ne[3] &&
+           (t->ne[2] == 1 || t->nb[2] == t->nb[1] * t->ne[1]) &&
+           (t->ne[3] == 1 || t->nb[3] == t->nb[1] * t->ne[1] * t->ne[2]);
+}
+
+static bool htp_kparams_solve_top_k_mask(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * op,
+    struct htp_top_k_mask_kernel_params * kparams
+) {
+    memset(kparams, 0, sizeof(*kparams));
+
+    const struct ggml_tensor * mask   = op->src[0];
+    const struct ggml_tensor * top_k  = op->src[1];
+    const struct ggml_tensor * score  = op->src[2];
+    const struct ggml_tensor * blocks = op->src[3];
+    const struct ggml_tensor * extra  = op->src[4];
+    const struct ggml_tensor * dst    = op;
+
+    if ((mask->type != GGML_TYPE_F16 && mask->type != GGML_TYPE_F32) || dst->type != mask->type) {
+        return false;
+    }
+    const size_t elem_size = ggml_type_size(dst->type);
+    if (mask->nb[0] != elem_size || dst->nb[0] != elem_size || !ggml_is_contiguous(dst)) {
+        return false;
+    }
+    if (top_k->type != GGML_TYPE_I32 || top_k->nb[0] != 4) {
+        return false;
+    }
+    if (score && (score->type != GGML_TYPE_F32 || score->nb[0] != 4)) {
+        return false;
+    }
+    if (extra && (extra->type != GGML_TYPE_I32 || extra->nb[0] != 4)) {
+        return false;
+    }
+    // flat row addressing: inputs follow the dst rows, a mask with more than one row too
+    if (!htp_top_k_mask_row_flat(top_k, dst) || (score && !htp_top_k_mask_row_flat(score, dst)) ||
+        (extra && !htp_top_k_mask_row_flat(extra, dst)) || (ggml_nrows(mask) > 1 && !htp_top_k_mask_mask_ok(mask, dst))) {
+        return false;
+    }
+    // the kernel scales block ids by blocks->nb[1] with a 16-bit vector multiply
+    if (blocks && (blocks->type != GGML_TYPE_I32 || blocks->nb[0] != 4 || blocks->nb[1] != (size_t) blocks->ne[0] * 4 || blocks->nb[1] > INT16_MAX)) {
+        return false;
+    }
+
+    struct htp_top_k_mask_shape S = {};
+    S.n_kv          = (uint32_t) dst->ne[0];
+    S.elem_size     = (uint32_t) elem_size;
+    S.n_top         = (uint32_t) top_k->ne[0];
+    S.n_blk         = blocks ? (uint32_t) blocks->ne[0] : 0;
+    S.n_pick        = (uint32_t) (blocks ? blocks->ne[1] : score ? score->ne[0] : dst->ne[0]);
+    S.n_extra       = extra ? (uint32_t) extra->ne[0] : 0;
+    const uint32_t total_rows = (uint32_t) ggml_nrows(dst);
+    S.has_score     = score  ? 1 : 0;
+    S.has_blocks    = blocks ? 1 : 0;
+    S.mask_resident = ggml_nrows(mask) == 1 ? 1 : 0;
+
+    // empty inputs would give out-of-range gathers and zero-length DMA rows: leave them to the CPU
+    if (S.n_kv == 0 || total_rows == 0 || S.n_pick == 0 || S.n_top == 0 || (blocks && S.n_blk == 0) || (extra && S.n_extra == 0)) {
+        return false;
+    }
+
+    // PICKS for one row with a resident mask when its single row tile fits, ROWS otherwise
+    const uint32_t sess_threads = (std::max)(1u, htp_session_n_threads(sess));
+    const size_t   vtcm_size    = htp_session_vtcm_size(sess);
+
+    uint32_t kernel_type = HTP_TOP_K_MASK_KERNEL_ROWS;
+    uint32_t n_threads   = sess_threads;
+    uint32_t tile_cols   = 0;
+
+    struct htp_top_k_mask_vtcm_layout L;
+    bool found = false;
+    if (total_rows == 1 && S.mask_resident && sess_threads > 1) {
+        kernel_type = HTP_TOP_K_MASK_KERNEL_PICKS;
+        tile_cols   = hex_round_up(S.n_kv, 64);
+        htp_top_k_mask_vtcm_layout_build(&L, &S, kernel_type, n_threads, tile_cols);
+        found       = L.total_bytes <= vtcm_size;
+    }
+    if (!found) {
+        kernel_type = HTP_TOP_K_MASK_KERNEL_ROWS;
+        n_threads   = (std::max)(1u, (std::min)(sess_threads, total_rows));
+        tile_cols   = hex_round_up(S.n_kv, 64);
+        found       = htp_top_k_mask_search(&L, &S, kernel_type, vtcm_size, &n_threads, &tile_cols);
+    }
+    if (!found) {
+        return false;
+    }
+
+    // compact kernel_params fields: sizes and offsets in HTP_TOP_K_MASK_UNIT bytes as u16, all multiples of the unit
+    const uint64_t off_extra = htp_top_k_mask_rowin_off_extra(S.n_top);
+    const uint64_t off_score = htp_top_k_mask_rowin_off_score(S.n_top, S.n_extra);
+    const uint64_t u16_max   = (uint64_t) UINT16_MAX * HTP_TOP_K_MASK_UNIT;
+    if (L.rowin_bytes > u16_max || L.tile_bytes > u16_max || off_extra > u16_max || off_score > u16_max || L.off_scratch > u16_max) {
+        return false;
+    }
+    const auto units = [](uint64_t bytes) { return (uint16_t) (bytes / HTP_TOP_K_MASK_UNIT); };
+
+    kparams->n_threads    = (uint8_t) n_threads;
+    kparams->kernel_type  = (uint8_t) kernel_type;
+    kparams->flags        = (dst->type == GGML_TYPE_F16 ? HTP_TOP_K_MASK_F16 : 0) |
+                            (score  ? HTP_TOP_K_MASK_HAS_SCORE  : 0) |
+                            (blocks ? HTP_TOP_K_MASK_HAS_BLOCKS : 0) |
+                            (extra  ? HTP_TOP_K_MASK_HAS_EXTRA  : 0) |
+                            (S.mask_resident ? HTP_TOP_K_MASK_MASK_RESIDENT : 0);
+    kparams->elem_size    = (uint8_t) elem_size;
+    kparams->vtcm_size    = (uint32_t) L.total_bytes;
+    kparams->n_kv         = S.n_kv;
+    kparams->n_top        = S.n_top;
+    kparams->n_pick       = S.n_pick;
+    kparams->n_extra      = S.n_extra;
+    kparams->ninf         = dst->type == GGML_TYPE_F16 ? 0xfc00fc00u : 0xff800000u;
+    kparams->blocks_bytes = (uint32_t) L.blocks_bytes;
+    kparams->score_bytes  = score ? S.n_pick * 4 : 0;
+    kparams->tile_cols    = tile_cols;
+    kparams->n_col_tiles  = (S.n_kv + tile_cols - 1) / tile_cols;
+    kparams->n_blk        = (uint16_t) S.n_blk;
+    kparams->blocks_nb1   = (uint16_t) (blocks ? blocks->nb[1] : 0);
+    kparams->off_blocks_u  = units(L.off_blocks);
+    kparams->off_mask_u    = units(L.off_mask);
+    kparams->off_rowin_u   = units(L.off_rowin);
+    kparams->off_tiles_u   = units(L.off_tiles);
+    kparams->off_mtiles_u  = units(L.off_mtiles);
+    kparams->off_scratch_u = units(L.off_scratch);
+    kparams->rowin_units     = units(L.rowin_bytes);
+    kparams->tile_units      = units(L.tile_bytes);
+    kparams->off_extra_units = units(off_extra);
+    kparams->off_score_units = units(off_score);
+
+    if (kernel_type == HTP_TOP_K_MASK_KERNEL_PICKS) {
+        // per thread slices of the static copies and of the flag clear, a multiple of the unit
+        const auto slice = [&](uint64_t n) { return units(hex_round_up((n + n_threads - 1) / n_threads, HTP_TOP_K_MASK_UNIT)); };
+        kparams->u.picks.picks_per_thread = (uint32_t) hex_round_up((S.n_top + n_threads - 1) / n_threads, 32);
+        kparams->u.picks.blocks_slice_u   = slice(L.blocks_bytes);
+        kparams->u.picks.top_slice_u      = slice((uint64_t) S.n_top * 4);
+        kparams->u.picks.extra_slice_u    = slice((uint64_t) S.n_extra * 4);
+        kparams->u.picks.score_slice_u    = slice(kparams->score_bytes);
+        kparams->u.picks.flags_slice_u    = slice(L.tile_bytes);
+    } else {
+        kparams->u.rows.total_rows       = total_rows;
+        kparams->u.rows.rs_top           = (uint32_t) top_k->nb[1];
+        kparams->u.rows.rs_extra         = extra ? (uint32_t) extra->nb[1] : 0;
+        kparams->u.rows.rs_score         = score ? (uint32_t) score->nb[1] : 0;
+        kparams->u.rows.rs_dst           = (uint32_t) dst->nb[1];
+        kparams->u.rows.mask_nb1         = (uint32_t) mask->nb[1];
+        if (S.mask_resident) {
+            kparams->u.rows.m.mask_bytes = (uint32_t) L.mask_bytes;
+        } else {
+            const int64_t d[5] = { dst->ne[1], dst->ne[2], mask->ne[1], mask->ne[2], mask->ne[3] };
+            for (int k = 0; k < 5; k++) {
+                const struct fastdiv_values fd = init_fastdiv_values((uint32_t) d[k]);
+                kparams->u.rows.m.dec.mp[k] = fd.mp;
+                kparams->u.rows.m.dec.l[k]  = (uint8_t) fd.l;
+                kparams->u.rows.m.dec.ne[k] = (uint16_t) d[k];
+            }
+        }
+    }
+
+    return true;
+}
+
 static bool htp_kparams_solve_fill(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op,
@@ -3616,6 +3959,84 @@ static bool htp_kparams_conv2d_win(
         }
     }
 
+    uint32_t n_threads = nth;
+    // Keep the fold schedule, where output traffic can dominate input packing.
+    if (!fold && rt_block < n_rt && ct > 0 && nth > 0) {
+        const uint32_t old_rt  = rt_block;
+        const uint32_t ct_max  = (std::min)((std::min)((std::max)(4 * halo, (n_tiles + 3) / 4), 512u), n_tiles);
+        const size_t   budget  = htp_session_vtcm_size(sess);
+        // Approximate chunk overhead in input crouton work units.
+        const size_t   c_chunk = 8;
+        const uint32_t tail    = n_tiles % ct;
+        const size_t   work =
+            (size_t) (n_tiles / ct) * ((ct + halo + nth - 1) / nth) + (tail ? (tail + halo + nth - 1) / nth : 0);
+        size_t best_cost =
+            (size_t) ((n_rt + rt_block - 1) / rt_block) * (n_cc * work + c_chunk * (n_tiles / ct + (tail != 0)));
+        bool found = false;
+
+        // Keep output DMA segments. Try larger kernel blocks to avoid rebuilding input croutons.
+        for (uint32_t rb = n_rt; rb > old_rt && !found; rb = (rb + 1) / 2) {
+            for (uint32_t nt = nth; nt > 0; nt /= 2) {
+                for (uint32_t sb = 8; sb > 0; sb /= 2) {
+                    const size_t input_stage = hex_round_up(cwhn ? (size_t) sb * 32 * Cin * sizeof(float) + 256 : (size_t) n_ch * sb * 32 * sizeof(float), 128);
+                    const size_t scratch = hex_round_up(
+                        (std::max)(2 * input_stage + (size_t) HTP_CONV2D_WIN_OBUF * 32 * seg_t * 32 * sizeof(float),
+                                   wscr),
+                        tile);
+                    if (n_cc == 0 || n_wt > budget / tile / n_cc / rb || halo > budget / tile / n_cc ||
+                        scratch > budget / nt) {
+                        continue;
+                    }
+                    const size_t weights = (size_t) rb * n_wt * n_cc * tile;
+                    htp_conv2d_vtcm_layout fixed;
+                    htp_conv2d_vtcm_layout_build(&fixed, rb, weights, (size_t) n_cc * halo * tile, 0, scratch, nt);
+                    if (fixed.total_bytes >= budget) {
+                        continue;
+                    }
+                    const size_t   per_ct        = 2 * ((size_t) n_cc + rb) * tile;
+                    const uint32_t cap           = (uint32_t) (std::min)((size_t) ct_max, (budget - fixed.total_bytes) / per_ct);
+                    const uint32_t aligned       = (cap + halo) / nt * nt;
+                    const uint32_t candidates[2] = { cap, aligned > halo ? aligned - halo : 0 };
+                    for (uint32_t i = 0; i < 2; i++) {
+                        const uint32_t candidate = candidates[i];
+                        if (candidate == 0 || (i > 0 && candidate == cap)) {
+                            continue;
+                        }
+                        if (hex_round_up((size_t) T * sizeof(uint32_t), 128) + 2 * hex_round_up((size_t) candidate, 128) > HTP_DDR_SPAD_SIZE) {
+                            continue;
+                        }
+                        const uint32_t rem        = n_tiles % candidate;
+                        const size_t   input_work = (size_t) (n_tiles / candidate) * ((candidate + halo + nt - 1) / nt) + (rem ? (rem + halo + nt - 1) / nt : 0);
+                        const size_t   chunks     = n_tiles / candidate + (rem != 0);
+                        const size_t   cost       = (size_t) ((n_rt + rb - 1) / rb) * (n_cc * input_work + c_chunk * chunks);
+                        if (cost < best_cost) {
+                            const size_t input  = (size_t) n_cc * (candidate + halo) * tile;
+                            const size_t output = (size_t) rb * candidate * tile;
+                            htp_conv2d_vtcm_layout L;
+                            htp_conv2d_vtcm_layout_build(&L, rb, weights, input, output, scratch, nt);
+                            if (L.total_bytes > budget) {
+                                continue;
+                            }
+                            found     = true;
+                            best_cost = cost;
+                            rt_block  = rb;
+                            ct        = candidate;
+                            seg_b     = sb;
+                            n_threads = nt;
+                            stage     = input_stage;
+                            thr       = scratch;
+                            act       = input;
+                            out       = output;
+                            w_size    = weights;
+                            total     = L.total_bytes;
+                            n_bc      = candidate + halo;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     if (hex_round_up((size_t) T * sizeof(uint32_t), 128) + 2 * hex_round_up((size_t) ct, 128) > HTP_DDR_SPAD_SIZE) {
         return false;
     }
@@ -3626,7 +4047,7 @@ static bool htp_kparams_conv2d_win(
     const uint32_t n_cs = (32 + CS - 1) / CS;
 
     kp->kernel_type        = (uint8_t) HTP_CONV2D_KERNEL_HMX_WINDOW;
-    kp->n_threads          = (uint8_t) nth;
+    kp->n_threads          = (uint8_t) n_threads;
     kp->cwhn               = cwhn ? 1 : 0;
     kp->w_kmajor           = !w_rows ? 1 : 0;
     kp->n_row_tiles        = n_rt;
@@ -3654,6 +4075,50 @@ static bool htp_kparams_conv2d_win(
     return true;
 }
 
+struct htp_conv_norm_geom {
+    uint32_t KW, KH, Cin, Cout;
+    uint32_t OW, OH, N;
+    int32_t  s0, d0;
+    size_t   es;
+    bool     is3d;
+};
+
+static bool htp_conv_normalize_geom(const struct ggml_tensor * dst, struct htp_conv_norm_geom * g) {
+    const struct ggml_tensor * src0 = dst->src[0];
+    const bool is3d = dst->op == GGML_OP_CONV_3D;
+    const int32_t s0 = ggml_get_op_params_i32(dst, 0);
+    const int32_t d0 = ggml_get_op_params_i32(dst, is3d ? 6 : 4);
+
+    const int64_t kh_w  = is3d ? src0->ne[2] * src0->ne[1] : src0->ne[1];
+    const int64_t cin_w = is3d ? ggml_get_op_params_i32(dst, 9) : src0->ne[2];
+    const int64_t oh_w  = is3d ? dst->ne[2] * dst->ne[1] : dst->ne[1];
+    const int64_t n_w   = is3d ? ggml_get_op_params_i32(dst, 10) : dst->ne[3];
+    const int64_t k_w   = src0->ne[0] * kh_w * cin_w;
+    const int64_t ct_w  = n_w * oh_w * ((dst->ne[0] + 31) / 32);
+
+    if (kh_w < 1 || kh_w > 255 || k_w < 1 || k_w > (1 << 24) || ct_w < 1 || ct_w > UINT32_MAX) {
+        return false;
+    }
+    if (s0 <= 0 || d0 <= 0 || dst->nb[0] != sizeof(float)) {
+        return false;
+    }
+
+    *g = {
+        /* .KW   = */ (uint32_t) src0->ne[0],
+        /* .KH   = */ (uint32_t) kh_w,
+        /* .Cin  = */ (uint32_t) cin_w,
+        /* .Cout = */ (uint32_t) (is3d ? ggml_get_op_params_i32(dst, 11) : src0->ne[3]),
+        /* .OW   = */ (uint32_t) dst->ne[0],
+        /* .OH   = */ (uint32_t) oh_w,
+        /* .N    = */ (uint32_t) n_w,
+        /* .s0   = */ s0,
+        /* .d0   = */ d0,
+        /* .es   = */ ggml_type_size(src0->type),
+        /* .is3d = */ is3d,
+    };
+    return true;
+}
+
 // Tiled implicit GEMM, MMA on HMX if available, else HVX
 static bool htp_kparams_conv2d_tiled(
     const struct ggml_hexagon_session * sess,
@@ -3664,92 +4129,129 @@ static bool htp_kparams_conv2d_tiled(
         return false;
     }
 
-    const struct ggml_tensor * src0 = dst->src[0];
-    const struct ggml_tensor * src1 = dst->src[1];
-    const int32_t s0 = ggml_get_op_params_i32(dst, 0);
-    const int32_t d0 = ggml_get_op_params_i32(dst, 4);
-
-    const uint32_t KW   = src0->ne[0];
-    const uint32_t KH   = src0->ne[1];
-    const uint32_t Cin  = src0->ne[2];
-    const uint32_t Cout = src0->ne[3];
-    const uint32_t OW   = dst->ne[0];
-    const uint32_t OH   = dst->ne[1];
-    const uint32_t N    = dst->ne[3];
-    const size_t   es   = ggml_type_size(src0->type);
-
-    if (s0 != 1 || dst->nb[0] != sizeof(float)) {
+    struct htp_conv_norm_geom g;
+    if (!htp_conv_normalize_geom(dst, &g)) {
         return false;
     }
 
+    const struct ggml_tensor * src0 = dst->src[0];
+    const struct ggml_tensor * src1 = dst->src[1];
+
     // kernel k order must match the staged input: (cin, kh, kw) for WHCN input, (kh, kw, cin) for CWHN input.
     // Kernel is either k-contiguous rows per cout (WHCN only) or cout-contiguous with a uniform k stride.
-    const bool   whcn   = src1->nb[0] == sizeof(float);
-    const bool   cwhn   = !whcn && src1->nb[2] == sizeof(float) && src1->nb[0] == Cin * sizeof(float);
-    const bool   co_c   = Cout == 1 || src0->nb[3] == es;
-    const bool   w_rows = whcn && src0->nb[0] == es && (KH == 1 || src0->nb[1] == KW * es) && (Cin == 1 || src0->nb[2] == KW * KH * es);
+    const bool   whcn   = g.is3d || src1->nb[0] == sizeof(float);
+    const bool   cwhn   = !whcn && src1->nb[2] == sizeof(float) && src1->nb[0] == g.Cin * sizeof(float);
+    const bool   co_c   = g.Cout == 1 || src0->nb[3] == g.es;
+    const bool   w_rows = g.is3d || (whcn && src0->nb[0] == g.es && (g.KH == 1 || src0->nb[1] == g.KW * g.es) && (g.Cin == 1 || src0->nb[2] == g.KW * g.KH * g.es));
     const size_t ks     = whcn ? src0->nb[0] : src0->nb[2];
     bool         kmajor = false;
     if (whcn) {
-        kmajor = co_c && ks >= Cout * es && (KH == 1 || src0->nb[1] == KW * ks) && (Cin == 1 || src0->nb[2] == KW * KH * ks);
+        kmajor = co_c && ks >= g.Cout * g.es && (g.KH == 1 || src0->nb[1] == g.KW * ks) && (g.Cin == 1 || src0->nb[2] == g.KW * g.KH * ks);
     } else if (cwhn) {
-        kmajor = co_c && ks >= Cout * es && src0->nb[0] == Cin * ks && (KH == 1 || src0->nb[1] == KW * Cin * ks);
+        kmajor = co_c && ks >= g.Cout * g.es && src0->nb[0] == g.Cin * ks && (g.KH == 1 || src0->nb[1] == g.KW * g.Cin * ks);
     }
     if (!w_rows && !kmajor) {
         return false;
     }
     kmajor = kmajor && !w_rows;
 
-    const uint32_t K     = KW * KH * Cin;
-    const uint32_t kg    = !cwhn ? K : d0 == 1 ? KW * Cin : Cin;
+    const uint32_t K     = g.KW * g.KH * g.Cin;
+    const uint32_t kg    = !cwhn ? K : g.d0 == 1 ? g.KW * g.Cin : g.Cin;
     const uint32_t n_grp = K / kg;
     const uint32_t kg_p  = hex_round_up(kg, 32);
     const uint32_t k_pad = hex_round_up(n_grp * kg_p, 64);
     const uint32_t n_kt  = k_pad / 32;
-    const uint32_t n_rt  = (Cout + 31) / 32;
-    const uint32_t n_owt = (OW + 31) / 32;
-    const uint32_t n_ct  = N * OH * n_owt;
+    const uint32_t n_rt  = (g.Cout + 31) / 32;
+    const uint32_t n_owt = (g.OW + 31) / 32;
+    const uint32_t n_ct  = g.N * g.OH * n_owt;
     const uint32_t wk    = (std::min)(k_pad, 512u);
-    const uint32_t nth   = htp_session_n_threads(sess);
+    const uint32_t max_threads = htp_session_n_threads(sess);
     const size_t   tile  = 2048;
 
     uint32_t rt_block = n_rt;
-    uint32_t ct       = (std::min)(n_ct, 64u);
-    uint32_t seg      = (std::min)(8u, n_owt);
+    uint32_t ct       = 0;
+    uint32_t seg      = 0;
+    uint32_t nth      = 0;
     uint32_t n_stage  = 1;
     uint32_t sr       = 0;
-    size_t   stage = 0, ostage = 0, prow = 0, wpack = 0;
-    size_t   w_size = 0, act_size = 0, out_size = 0, thr_size = 0, total = 0;
+    size_t       stage     = 0, thr_size = 0;
+    size_t       best_cost = SIZE_MAX;
+    const size_t wpack     = kmajor ? 2 * (size_t) wk * 64 * sizeof(float) + 96 * 128 : 2 * (size_t) 32 * wk * (sizeof(float) + sizeof(uint16_t));
+    const size_t budget    = htp_session_vtcm_size(sess);
+    // Approximate chunk overhead in patch K-tile work units.
+    const size_t c_chunk   = 8;
 
-    while (true) {
-        const uint32_t wb = 32 * seg + (KW - 1) * d0;
-        sr     = cwhn ? hex_round_up(wb * Cin, 64) : hex_round_up(wb, 32);
-        stage  = cwhn ? (size_t) KH * sr * sizeof(float) : (size_t) Cin * KH * sr * sizeof(float);
-        ostage = 2 * 32 * (size_t) seg * 32 * sizeof(float);
-        prow   = cwhn ? stage / 2 + 256 + 64 * 128 : 0;
-        wpack  = kmajor ? 2 * (size_t) wk * 64 * sizeof(float) + 96 * 128 : 2 * (size_t) 32 * wk * (sizeof(float) + sizeof(uint16_t));
-        thr_size = hex_round_up((std::max)(stage + ostage + prow, wpack), tile);
-        w_size   = (size_t) rt_block * n_kt * tile;
-        act_size = (size_t) ct * n_kt * tile;
-        out_size = (size_t) rt_block * ct * tile;
-        struct htp_conv2d_vtcm_layout L;
-        htp_conv2d_vtcm_layout_build(&L, rt_block, w_size, act_size, out_size, thr_size, nth);
-        total    = L.total_bytes;
-        if (total <= htp_session_vtcm_size(sess)) {
-            break;
-        }
-        if (ct > 8) {
-            ct /= 2;
-        } else if (seg > 1) {
-            seg--;
-        } else if (rt_block > 1) {
-            rt_block = (rt_block + 1) / 2;
-        } else if (ct > 1) {
-            ct /= 2;
-        } else {
-            return false;
+    // Keep the kernel resident to avoid regenerating the input for each rt block.
+    // Balance patch work per thread and chunk overhead before reducing rt.
+    for (uint32_t rb = n_rt; rb > 0 && ct == 0; rb = rb > 1 ? (rb + 1) / 2 : 0) {
+        for (uint32_t nt = max_threads; nt > 0; nt /= 2) {
+            for (uint32_t sg = (std::min)(8u, n_owt); sg > 0; --sg) {
+                // Keep the unused final stride lane for full-vector loads during packing.
+                const uint64_t wb = (uint64_t) 32 * sg * g.s0 + (uint64_t) (g.KW - 1) * g.d0;
+                if (wb > budget / sizeof(float) || wb > INT32_MAX) {
+                    continue;
+                }
+                const uint64_t width = cwhn ? wb * g.Cin : wb;
+                if (width > budget / sizeof(float) || width > UINT32_MAX - 63) {
+                    continue;
+                }
+                const uint32_t row  = hex_round_up((uint32_t) width, cwhn ? 64 : 32);
+                const uint64_t rows = cwhn ? g.KH : (uint64_t) g.Cin * g.KH;
+                if (rows > budget / ((uint64_t) row * sizeof(float))) {
+                    continue;
+                }
+                const size_t input_stage  = cwhn ? (size_t) g.KH * row * sizeof(float) : (size_t) g.Cin * g.KH * row * sizeof(float);
+                const size_t output_stage = 2 * 32 * (size_t) sg * 32 * sizeof(float);
+                const size_t transpose    = cwhn ? input_stage / 2 + 256 + 64 * 128 : 0;
+                const size_t scratch      = hex_round_up((std::max)(input_stage + output_stage + transpose, wpack), tile);
+                htp_conv2d_vtcm_layout fixed;
+                htp_conv2d_vtcm_layout_build(&fixed, rb, (size_t) rb * n_kt * tile, 0, 0, scratch, nt);
+                if (fixed.total_bytes >= budget) {
+                    continue;
+                }
+
+                // Each spatial tile adds two activation tiles and two output tiles per rt.
+                const size_t   per_ct        = 2 * ((size_t) n_kt + rb) * tile;
+                const uint32_t nc            = (uint32_t) (std::min)((size_t) (std::min)(n_ct, 64u), (budget - fixed.total_bytes) / per_ct);
+                const uint32_t candidates[2] = { nc, nc / nt * nt };
+                for (uint32_t i = 0; i < 2; i++) {
+                    const uint32_t candidate = candidates[i];
+                    if (candidate == 0 || (i > 0 && candidate == candidates[0])) {
+                        continue;
+                    }
+                    const uint32_t per_thread = (candidate + nt - 1) / nt;
+                    if (sg > per_thread) {
+                        continue;
+                    }
+                    const size_t work   = (size_t) (n_ct / candidate) * per_thread + (n_ct % candidate + nt - 1) / nt;
+                    const size_t chunks = n_ct / candidate + (n_ct % candidate != 0);
+                    const size_t cost   = work * n_kt + c_chunk * chunks;
+                    if (cost < best_cost) {
+                        best_cost = cost;
+                        rt_block  = rb;
+                        ct        = candidate;
+                        seg       = sg;
+                        nth       = nt;
+                        sr        = row;
+                        stage     = input_stage;
+                        thr_size  = scratch;
+                    }
+                }
+            }
         }
     }
+    if (ct == 0) {
+        return false;
+    }
+
+    const size_t w_size   = (size_t) rt_block * n_kt * tile;
+    const size_t act_size = (size_t) ct * n_kt * tile;
+    const size_t out_size = (size_t) rt_block * ct * tile;
+    const size_t ostage   = 2 * 32 * (size_t) seg * 32 * sizeof(float);
+    const size_t prow     = cwhn ? stage / 2 + 256 + 64 * 128 : 0;
+    struct htp_conv2d_vtcm_layout L;
+    htp_conv2d_vtcm_layout_build(&L, rt_block, w_size, act_size, out_size, thr_size, nth);
+    size_t total = L.total_bytes;
 
     // Second stage buffer: DMA of the next segment overlaps HVX pack of this one.
     // Skip large stages. They already fill VTCM, and the extra DMA slows HMX.
@@ -3757,7 +4259,7 @@ static bool htp_kparams_conv2d_tiled(
         const size_t thr2 = hex_round_up((std::max)(2 * stage + ostage + prow, wpack), tile);
         struct htp_conv2d_vtcm_layout L2;
         htp_conv2d_vtcm_layout_build(&L2, rt_block, w_size, act_size, out_size, thr2, nth);
-        if (stage <= 128 * 1024 && L2.total_bytes <= htp_session_vtcm_size(sess)) {
+        if (stage <= 128 * 1024 && 2 * g.KH <= 255 && L2.total_bytes <= htp_session_vtcm_size(sess)) {
             n_stage  = 2;
             thr_size = thr2;
             total    = L2.total_bytes;
@@ -3786,7 +4288,9 @@ static bool htp_kparams_conv2d_tiled(
     kp->tiled.n_stage      = n_stage;
     kp->tiled.wk_chunk     = wk;
     kp->tiled.div_ow_tiles = init_fastdiv_values(n_owt);
-    kp->tiled.div_oh       = init_fastdiv_values(OH);
+    kp->tiled.div_oh       = init_fastdiv_values(g.OH);
+    kp->tiled.div_khr      = init_fastdiv_values(src0->ne[1]);
+    kp->tiled.div_ohr      = init_fastdiv_values(dst->ne[1]);
     return true;
 }
 
@@ -3834,6 +4338,10 @@ static bool htp_kparams_solve_conv2d(
     const int32_t p1 = ggml_get_op_params_i32(op, 3);
     const int32_t d0 = ggml_get_op_params_i32(op, 4);
     const int32_t d1 = ggml_get_op_params_i32(op, 5);
+
+    if (s0 <= 0 || s1 <= 0 || d0 <= 0 || d1 <= 0) {
+        return false;
+    }
 
     const int64_t ow = (src1->ne[0] + 2 * p0 - d0 * (src0->ne[0] - 1) - 1) / s0 + 1;
     const int64_t oh = (src1->ne[1] + 2 * p1 - d1 * (src0->ne[1] - 1) - 1) / s1 + 1;
@@ -4009,6 +4517,663 @@ static bool htp_kparams_solve_conv2d_dw(
     return true;
 }
 
+static bool htp_kparams_solve_conv3d(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * op,
+    struct htp_conv2d_kernel_params * kparams
+) {
+    memset(kparams, 0, sizeof(*kparams));
+
+    const struct ggml_tensor * src0 = op->src[0];
+    const struct ggml_tensor * src1 = op->src[1];
+    const struct ggml_tensor * dst  = op;
+
+    if ((src0->type != GGML_TYPE_F16 && src0->type != GGML_TYPE_F32) ||
+        src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    const int32_t IC = ggml_get_op_params_i32(op, 9);
+    const int32_t N  = ggml_get_op_params_i32(op, 10);
+    const int32_t OC = ggml_get_op_params_i32(op, 11);
+    if (IC <= 0 || N <= 0 || OC <= 0 || src0->ne[3] != (int64_t) IC * OC || src1->ne[3] != (int64_t) IC * N ||
+        dst->ne[3] != (int64_t) OC * N) {
+        return false;
+    }
+
+    for (int i = 0; i < 3; i++) {
+        const int32_t s = ggml_get_op_params_i32(op, i);
+        const int32_t p = ggml_get_op_params_i32(op, 3 + i);
+        const int32_t d = ggml_get_op_params_i32(op, 6 + i);
+        if (s <= 0 || d <= 0 || p < 0 || src0->ne[i] <= 0) {
+            return false;
+        }
+        const int64_t o = (src1->ne[i] + 2 * p - d * (src0->ne[i] - 1) - 1) / s + 1;
+        if (o != dst->ne[i]) {
+            return false;
+        }
+    }
+
+    const size_t es     = ggml_type_size(src0->type);
+    const bool   w_rows = src0->nb[0] == es && src0->nb[1] == src0->ne[0] * es && src0->nb[2] == src0->ne[1] * src0->nb[1] &&
+                          ((int64_t) IC * OC == 1 || src0->nb[3] == src0->ne[2] * src0->nb[2]);
+    if (!w_rows || src1->nb[0] != sizeof(float) || dst->nb[2] != dst->ne[1] * dst->nb[1]) {
+        return false;
+    }
+
+    const int64_t total_rows = dst->ne[1] * dst->ne[2] * dst->ne[3];
+    if (total_rows > UINT32_MAX) {
+        return false;
+    }
+    kparams->total_rows = (uint32_t) total_rows;
+    kparams->n_threads  = total_rows == 0 ? 1 : (std::min)((uint32_t) htp_session_n_threads(sess), (uint32_t) total_rows);
+
+    return htp_kparams_conv2d_tiled(sess, op, kparams);
+}
+
+static bool htp_dsv4_hc_pre_can_collapse(
+    const struct ggml_tensor * x,
+    const struct ggml_tensor * weights,
+    const struct ggml_tensor * dst
+) {
+    if (!x || !weights || !dst) {
+        return false;
+    }
+    if (x->type != GGML_TYPE_F32 || weights->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (x->nb[0] != sizeof(float) || weights->nb[0] != sizeof(float) || dst->nb[0] != sizeof(float)) {
+        return false;
+    }
+    if (x->ne[1] != 4 || dst->ne[0] != x->ne[0]) {
+        return false;
+    }
+
+    const bool gated = ggml_get_op_params_i32(dst, 1) != 0;
+    const int64_t x_tokens = x->ne[2] * x->ne[3];
+    const int64_t d_tokens = dst->ne[1] * dst->ne[2] * dst->ne[3];
+    const int64_t w_tokens = gated ? (weights->ne[2] * weights->ne[3]) : (weights->ne[1] * weights->ne[2] * weights->ne[3]);
+
+    if (x_tokens != d_tokens || x_tokens != w_tokens) {
+        return false;
+    }
+
+    if (x->ne[3] == 1 && dst->ne[2] == 1 && dst->ne[3] == 1 &&
+        (gated ? (weights->ne[3] == 1) : (weights->ne[2] == 1 && weights->ne[3] == 1))) {
+        return false;
+    }
+
+    if (x->ne[3] > 1 && x->nb[3] != x->ne[2] * x->nb[2]) return false;
+
+    if (dst->ne[2] > 1 && dst->nb[2] != dst->ne[1] * dst->nb[1]) return false;
+    if (dst->ne[3] > 1 && dst->nb[3] != dst->ne[2] * dst->nb[2]) return false;
+
+    if (gated) {
+        if (weights->ne[3] > 1 && weights->nb[3] != weights->ne[2] * weights->nb[2]) return false;
+    } else {
+        if (weights->ne[2] > 1 && weights->nb[2] != weights->ne[1] * weights->nb[1]) return false;
+        if (weights->ne[3] > 1 && weights->nb[3] != weights->ne[2] * weights->nb[2]) return false;
+    }
+
+    return true;
+}
+
+static void htp_dsv4_hc_pre_collapse_tensors(
+    const struct ggml_tensor * x,
+    const struct ggml_tensor * weights,
+    const struct ggml_tensor * dst,
+    struct ggml_tensor * x_c,
+    struct ggml_tensor * w_c,
+    struct ggml_tensor * d_c
+) {
+    const int64_t n_tokens = x->ne[2] * x->ne[3];
+    const bool gated = ggml_get_op_params_i32(dst, 1) != 0;
+
+    *x_c = *x;
+    x_c->ne[2] = n_tokens;
+    x_c->ne[3] = 1;
+    x_c->nb[3] = x_c->ne[2] * x_c->nb[2];
+
+    *d_c = *dst;
+    d_c->ne[1] = n_tokens;
+    d_c->ne[2] = 1;
+    d_c->ne[3] = 1;
+    d_c->nb[2] = d_c->ne[1] * d_c->nb[1];
+    d_c->nb[3] = d_c->nb[2];
+
+    *w_c = *weights;
+    if (gated) {
+        w_c->ne[2] = n_tokens;
+        w_c->ne[3] = 1;
+        w_c->nb[3] = w_c->ne[2] * w_c->nb[2];
+    } else {
+        w_c->ne[1] = n_tokens;
+        w_c->ne[2] = 1;
+        w_c->ne[3] = 1;
+        w_c->nb[2] = w_c->ne[1] * w_c->nb[1];
+        w_c->nb[3] = w_c->nb[2];
+    }
+}
+
+static bool htp_kparams_solve_dsv4_hc_pre_impl(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * x,
+    const struct ggml_tensor * weights,
+    const struct ggml_tensor * dst,
+    struct htp_dsv4_hc_pre_kernel_params * kparams
+) {
+    memset(kparams, 0, sizeof(*kparams));
+
+    if (x->type != GGML_TYPE_F32 || weights->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (x->ne[1] != 4 || x->ne[3] != 1) {
+        return false;
+    }
+    if (x->ne[0] % HTP_DSV4_HC_CHUNK_ELEMS != 0) {
+        return false;
+    }
+    if (dst->ne[0] != x->ne[0] || dst->ne[1] != x->ne[2] || dst->ne[2] != 1 || dst->ne[3] != 1) {
+        return false;
+    }
+    if (x->nb[0] != sizeof(float) || weights->nb[0] != sizeof(float) || dst->nb[0] != sizeof(float)) {
+        return false;
+    }
+    if (ggml_is_permuted(x) || ggml_is_permuted(weights) || ggml_is_permuted(dst)) {
+        return false;
+    }
+
+    const bool gated = ggml_get_op_params_i32(dst, 1) != 0;
+    if (gated) {
+        if (weights->ne[0] != x->ne[0] || weights->ne[1] != x->ne[1] || weights->ne[2] != x->ne[2] || weights->ne[3] != 1) {
+            return false;
+        }
+    } else {
+        if (weights->ne[0] != x->ne[1] || weights->ne[1] != x->ne[2] || weights->ne[2] != 1 || weights->ne[3] != 1) {
+            return false;
+        }
+    }
+
+    const uint32_t n_tokens = (uint32_t) x->ne[2];
+    kparams->kernel_type    = gated ? HTP_DSV4_HC_PRE_KERNEL_GATED : HTP_DSV4_HC_PRE_KERNEL_PLAIN;
+
+    kparams->n_chunks   = ((uint32_t) x->ne[0] + HTP_DSV4_HC_CHUNK_ELEMS - 1) / HTP_DSV4_HC_CHUNK_ELEMS;
+    kparams->total_jobs = n_tokens * kparams->n_chunks;
+    if (kparams->total_jobs == 0) {
+        return true;
+    }
+    kparams->n_threads       = (std::min)(htp_session_n_threads(sess), kparams->total_jobs);
+    kparams->jobs_per_thread = (kparams->total_jobs + kparams->n_threads - 1) / kparams->n_threads;
+
+    const size_t vtcm_budget = htp_session_vtcm_size(sess);
+    const uint32_t n_rows    = gated ? HTP_DSV4_HC_PRE_GATED_ROWS : HTP_DSV4_HC_PRE_PLAIN_ROWS;
+    uint32_t block_chunks    = (std::min)((uint32_t) HTP_DSV4_HC_MAX_CHUNKS, kparams->n_chunks);
+    while (block_chunks > 16) {
+        const uint32_t stride = block_chunks * 128;
+        const uint32_t buf_sz = n_rows * stride;
+        if (2 * buf_sz * kparams->n_threads <= vtcm_budget) {
+            break;
+        }
+        block_chunks /= 2;
+    }
+
+    kparams->dma_block_chunks = block_chunks;
+    kparams->dma_row_stride   = block_chunks * 128;
+    kparams->dma_buffer_size  = n_rows * kparams->dma_row_stride;
+    kparams->vtcm_size        = 2 * kparams->dma_buffer_size * kparams->n_threads;
+    if (kparams->vtcm_size > vtcm_budget) {
+        return false;
+    }
+
+    kparams->div_n_chunks  = init_fastdiv_values(kparams->n_chunks);
+    kparams->div_n_threads = init_fastdiv_values(kparams->n_threads);
+
+    return true;
+}
+
+static inline bool htp_kparams_solve_dsv4_hc_pre(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * op,
+    struct htp_dsv4_hc_pre_kernel_params * kparams
+) {
+    if (htp_dsv4_hc_pre_can_collapse(op->src[0], op->src[1], op)) {
+        struct ggml_tensor x_c, w_c, d_c;
+        htp_dsv4_hc_pre_collapse_tensors(op->src[0], op->src[1], op, &x_c, &w_c, &d_c);
+        return htp_kparams_solve_dsv4_hc_pre_impl(sess, &x_c, &w_c, &d_c, kparams);
+    }
+    return htp_kparams_solve_dsv4_hc_pre_impl(sess, op->src[0], op->src[1], op, kparams);
+}
+
+static bool htp_dsv4_hc_post_can_collapse(
+    const struct ggml_tensor * x,
+    const struct ggml_tensor * residual,
+    const struct ggml_tensor * post,
+    const struct ggml_tensor * comb,
+    const struct ggml_tensor * dst
+) {
+    if (!x || !residual || !post || !dst) {
+        return false;
+    }
+    if (x->type != GGML_TYPE_F32 || residual->type != GGML_TYPE_F32 || post->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (comb && comb->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (x->nb[0] != sizeof(float) || residual->nb[0] != sizeof(float) || post->nb[0] != sizeof(float) || dst->nb[0] != sizeof(float)) {
+        return false;
+    }
+    if (comb && comb->nb[0] != sizeof(float)) {
+        return false;
+    }
+    if (residual->ne[0] != x->ne[0] || residual->ne[1] != 4 || dst->ne[0] != x->ne[0] || dst->ne[1] != 4 || post->ne[0] != 4) {
+        return false;
+    }
+    if (comb && (comb->ne[0] != 4 || comb->ne[1] != 4)) {
+        return false;
+    }
+
+    const int64_t x_tokens = x->ne[1] * x->ne[2] * x->ne[3];
+    const int64_t r_tokens = residual->ne[2] * residual->ne[3];
+    const int64_t p_tokens = post->ne[1] * post->ne[2] * post->ne[3];
+    const int64_t d_tokens = dst->ne[2] * dst->ne[3];
+    if (x_tokens != r_tokens || x_tokens != p_tokens || x_tokens != d_tokens) {
+        return false;
+    }
+    if (comb && (comb->ne[2] * comb->ne[3] != x_tokens)) {
+        return false;
+    }
+
+    if (x->ne[2] == 1 && x->ne[3] == 1 &&
+        residual->ne[3] == 1 &&
+        post->ne[2] == 1 && post->ne[3] == 1 &&
+        dst->ne[3] == 1 &&
+        (!comb || comb->ne[3] == 1)) {
+        return false;
+    }
+
+    if (x->ne[2] > 1 && x->nb[2] != x->ne[1] * x->nb[1]) return false;
+    if (x->ne[3] > 1 && x->nb[3] != x->ne[2] * x->nb[2]) return false;
+
+    if (residual->ne[3] > 1 && residual->nb[3] != residual->ne[2] * residual->nb[2]) return false;
+    if (dst->ne[3] > 1 && dst->nb[3] != dst->ne[2] * dst->nb[2]) return false;
+
+    if (post->ne[2] > 1 && post->nb[2] != post->ne[1] * post->nb[1]) return false;
+    if (post->ne[3] > 1 && post->nb[3] != post->ne[2] * post->nb[2]) return false;
+
+    if (comb && comb->ne[3] > 1 && comb->nb[3] != comb->ne[2] * comb->nb[2]) return false;
+
+    return true;
+}
+
+static void htp_dsv4_hc_post_collapse_tensors(
+    const struct ggml_tensor * x,
+    const struct ggml_tensor * residual,
+    const struct ggml_tensor * post,
+    const struct ggml_tensor * comb,
+    const struct ggml_tensor * dst,
+    struct ggml_tensor * x_c,
+    struct ggml_tensor * r_c,
+    struct ggml_tensor * p_c,
+    struct ggml_tensor * c_c,
+    struct ggml_tensor * d_c
+) {
+    const int64_t n_tokens = x->ne[1] * x->ne[2] * x->ne[3];
+
+    *x_c = *x;
+    x_c->ne[1] = n_tokens;
+    x_c->ne[2] = 1;
+    x_c->ne[3] = 1;
+    x_c->nb[2] = x_c->ne[1] * x_c->nb[1];
+    x_c->nb[3] = x_c->nb[2];
+
+    *r_c = *residual;
+    r_c->ne[2] = n_tokens;
+    r_c->ne[3] = 1;
+    r_c->nb[3] = r_c->ne[2] * r_c->nb[2];
+
+    *d_c = *dst;
+    d_c->ne[2] = n_tokens;
+    d_c->ne[3] = 1;
+    d_c->nb[3] = d_c->ne[2] * d_c->nb[2];
+
+    *p_c = *post;
+    p_c->ne[1] = n_tokens;
+    p_c->ne[2] = 1;
+    p_c->ne[3] = 1;
+    p_c->nb[2] = p_c->ne[1] * p_c->nb[1];
+    p_c->nb[3] = p_c->nb[2];
+
+    if (comb && c_c) {
+        *c_c = *comb;
+        c_c->ne[2] = n_tokens;
+        c_c->ne[3] = 1;
+        c_c->nb[3] = c_c->ne[2] * c_c->nb[2];
+    }
+}
+
+static bool htp_kparams_solve_dsv4_hc_post_impl(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * x,
+    const struct ggml_tensor * residual,
+    const struct ggml_tensor * post,
+    const struct ggml_tensor * comb,
+    const struct ggml_tensor * dst,
+    struct htp_dsv4_hc_post_kernel_params * kparams
+) {
+    memset(kparams, 0, sizeof(*kparams));
+
+    if (x->type != GGML_TYPE_F32 || residual->type != GGML_TYPE_F32 || post->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (comb && comb->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (x->ne[2] != 1 || x->ne[3] != 1) {
+        return false;
+    }
+    if (x->ne[0] % HTP_DSV4_HC_CHUNK_ELEMS != 0) {
+        return false;
+    }
+    if (residual->ne[0] != x->ne[0] || residual->ne[1] != 4 || residual->ne[2] != x->ne[1] || residual->ne[3] != 1) {
+        return false;
+    }
+    if (post->ne[0] != 4 || post->ne[1] != x->ne[1] || post->ne[2] != 1 || post->ne[3] != 1) {
+        return false;
+    }
+    if (comb && (comb->ne[0] != 4 || comb->ne[1] != 4 || comb->ne[2] != x->ne[1] || comb->ne[3] != 1)) {
+        return false;
+    }
+    if (dst->ne[0] != x->ne[0] || dst->ne[1] != 4 || dst->ne[2] != x->ne[1] || dst->ne[3] != 1) {
+        return false;
+    }
+    if (x->nb[0] != sizeof(float) || residual->nb[0] != sizeof(float) || post->nb[0] != sizeof(float) || dst->nb[0] != sizeof(float)) {
+        return false;
+    }
+    if (comb && comb->nb[0] != sizeof(float)) {
+        return false;
+    }
+    if (ggml_is_permuted(x) || ggml_is_permuted(residual) || ggml_is_permuted(post) || ggml_is_permuted(dst) || (comb && ggml_is_permuted(comb))) {
+        return false;
+    }
+
+    const uint32_t n_tokens = (uint32_t) x->ne[1];
+
+    kparams->has_comb    = comb != nullptr;
+    kparams->kernel_type = kparams->has_comb ? HTP_DSV4_HC_POST_KERNEL_COMB : HTP_DSV4_HC_POST_KERNEL_IDENTITY;
+    kparams->n_chunks    = ((uint32_t) x->ne[0] + HTP_DSV4_HC_CHUNK_ELEMS - 1) / HTP_DSV4_HC_CHUNK_ELEMS;
+    kparams->total_jobs  = n_tokens * kparams->n_chunks;
+    if (kparams->total_jobs == 0) {
+        return true;
+    }
+    kparams->n_threads       = (std::min)(htp_session_n_threads(sess), kparams->total_jobs);
+    kparams->jobs_per_thread = (kparams->total_jobs + kparams->n_threads - 1) / kparams->n_threads;
+
+    const size_t vtcm_budget = htp_session_vtcm_size(sess);
+    uint32_t block_chunks    = (std::min)((uint32_t) HTP_DSV4_HC_MAX_CHUNKS, kparams->n_chunks);
+    while (block_chunks > 16) {
+        const uint32_t stride = block_chunks * 128;
+        const uint32_t buf_sz = HTP_DSV4_HC_POST_ROWS * stride;
+        if (2 * buf_sz * kparams->n_threads <= vtcm_budget) {
+            break;
+        }
+        block_chunks /= 2;
+    }
+
+    kparams->dma_block_chunks = block_chunks;
+    kparams->dma_row_stride   = block_chunks * 128;
+    kparams->dma_buffer_size  = HTP_DSV4_HC_POST_ROWS * kparams->dma_row_stride;
+    kparams->vtcm_size        = 2 * kparams->dma_buffer_size * kparams->n_threads;
+    if (kparams->vtcm_size > vtcm_budget) {
+        return false;
+    }
+
+    kparams->div_n_chunks  = init_fastdiv_values(kparams->n_chunks);
+    kparams->div_n_threads = init_fastdiv_values(kparams->n_threads);
+
+    return true;
+}
+
+static inline bool htp_kparams_solve_dsv4_hc_post(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * op,
+    struct htp_dsv4_hc_post_kernel_params * kparams
+) {
+    if (htp_dsv4_hc_post_can_collapse(op->src[0], op->src[1], op->src[2], op->src[3], op)) {
+        struct ggml_tensor x_c, r_c, p_c, c_c, d_c;
+        htp_dsv4_hc_post_collapse_tensors(op->src[0], op->src[1], op->src[2], op->src[3], op, &x_c, &r_c, &p_c, op->src[3] ? &c_c : nullptr, &d_c);
+        return htp_kparams_solve_dsv4_hc_post_impl(sess, &x_c, &r_c, &p_c, op->src[3] ? &c_c : nullptr, &d_c, kparams);
+    }
+    return htp_kparams_solve_dsv4_hc_post_impl(sess, op->src[0], op->src[1], op->src[2], op->src[3], op, kparams);
+}
+
+static bool htp_lightning_indexer_can_collapse(
+    const struct ggml_tensor * q,
+    const struct ggml_tensor * k,
+    const struct ggml_tensor * w,
+    const struct ggml_tensor * m,
+    const struct ggml_tensor * dst
+) {
+    if (!q || !k || !w || !m || !dst) {
+        return false;
+    }
+
+    // 2D K normalization: ne[1] is n_kv, ne[2] is 1
+    const bool can_collapse_k = (k->ne[1] > 1 && k->ne[2] == 1);
+
+    // Stream-to-token collapse across q, w, dst (and m)
+    bool can_collapse_stream = false;
+    if (q->ne[3] > 1 && k->ne[3] == 1) {
+        const bool q_ok = (q->nb[3] == (size_t) q->ne[2] * q->nb[2]);
+        const bool dst_ok = (dst->ne[3] == q->ne[3] && dst->ne[2] == 1 && dst->ne[1] == q->ne[2] &&
+                             dst->nb[3] == (size_t) dst->ne[1] * dst->nb[1]);
+        const bool w_ok = (w->ne[3] == q->ne[3] && w->ne[2] == 1 && w->ne[1] == q->ne[2] &&
+                           w->nb[3] == (size_t) w->ne[1] * w->nb[1]) ||
+                          (w->ne[3] == 1 && w->ne[1] == q->ne[2] * q->ne[3]);
+        const bool m_ok = (m->ne[3] == q->ne[3] && m->ne[2] == 1 && m->ne[1] == q->ne[2] &&
+                           m->nb[3] == (size_t) m->ne[1] * m->nb[1]) ||
+                          (m->ne[3] == 1 && m->ne[1] == q->ne[2] * q->ne[3]);
+        can_collapse_stream = q_ok && dst_ok && w_ok && m_ok;
+    }
+
+    return can_collapse_k || can_collapse_stream;
+}
+
+static void htp_lightning_indexer_collapse_tensors(
+    const struct ggml_tensor * q,
+    const struct ggml_tensor * k,
+    const struct ggml_tensor * w,
+    const struct ggml_tensor * m,
+    const struct ggml_tensor * dst,
+    struct ggml_tensor * q_c,
+    struct ggml_tensor * k_c,
+    struct ggml_tensor * w_c,
+    struct ggml_tensor * m_c,
+    struct ggml_tensor * dst_c
+) {
+    *q_c   = *q;
+    *k_c   = *k;
+    *w_c   = *w;
+    *m_c   = *m;
+    *dst_c = *dst;
+
+    if (k->ne[1] > 1 && k->ne[2] == 1) {
+        k_c->ne[2] = k->ne[1];
+        k_c->ne[1] = 1;
+        k_c->nb[1] = k->nb[1];
+        k_c->nb[2] = k->nb[1];
+        k_c->nb[3] = k->nb[2];
+    }
+
+    if (q->ne[3] > 1 && k->ne[3] == 1) {
+        const int64_t n_tokens_collapsed = (int64_t) q->ne[2] * q->ne[3];
+
+        q_c->ne[2] = n_tokens_collapsed;
+        q_c->ne[3] = 1;
+        q_c->nb[3] = (size_t) q_c->ne[2] * q_c->nb[2];
+
+        if (w->ne[3] == q->ne[3]) {
+            w_c->ne[1] = n_tokens_collapsed;
+            w_c->ne[3] = 1;
+            w_c->nb[2] = (size_t) w_c->ne[1] * w_c->nb[1];
+            w_c->nb[3] = w_c->nb[2];
+        }
+
+        dst_c->ne[1] = n_tokens_collapsed;
+        dst_c->ne[3] = 1;
+        dst_c->nb[2] = (size_t) dst_c->ne[1] * dst_c->nb[1];
+        dst_c->nb[3] = dst_c->nb[2];
+
+        if (m->ne[3] == q->ne[3] && m->ne[1] == q->ne[2]) {
+            m_c->ne[1] = n_tokens_collapsed;
+            m_c->ne[3] = 1;
+            m_c->nb[2] = (size_t) m_c->ne[1] * m_c->nb[1];
+            m_c->nb[3] = m_c->nb[2];
+        }
+    }
+}
+
+static bool htp_kparams_solve_lightning_indexer_impl(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * q,
+    const struct ggml_tensor * k,
+    const struct ggml_tensor * w,
+    const struct ggml_tensor * m,
+    const struct ggml_tensor * op,
+    struct htp_lid_kernel_params * kparams
+) {
+    if (opt_li_select < 1) {
+        return false;
+    }
+
+    if (k->type != GGML_TYPE_F32 && k->type != GGML_TYPE_F16 && k->type != GGML_TYPE_Q8_0 && k->type != GGML_TYPE_Q4_0) {
+        return false;
+    }
+
+    if (q->ne[0] % 32 != 0 ||
+        !ggml_is_contiguous_rows(q) || !ggml_is_contiguous_rows(k) ||
+        !ggml_is_contiguous_rows(w) || !ggml_is_contiguous_rows(m) ||
+        !ggml_is_contiguous_rows(op)) {
+        return false;
+    }
+
+    const uint32_t n_kv_blocks = (k->ne[2] + HTP_LID_KV_BLOCK - 1) / HTP_LID_KV_BLOCK;
+    if (n_kv_blocks == 0 || q->ne[2] == 0) {
+        return false;
+    }
+
+    const uint32_t D          = q->ne[0];
+    const uint32_t n_head     = q->ne[1];
+    const uint32_t n_tokens   = q->ne[2];
+    const size_t   k_row_size = ggml_row_size(k->type, D);
+
+    kparams->k_row_size = (uint32_t) k_row_size;
+    kparams->div_n_head = init_fastdiv_values(n_head);
+    kparams->div_m_ne3  = init_fastdiv_values((uint32_t) m->ne[3]);
+
+    if (opt_li_select >= 2 && htp_session_n_hmx(sess) > 0 && D % HMX_FP16_TILE_N_COLS == 0) {
+        const uint32_t n_threads = htp_session_n_threads(sess);
+        const uint32_t n_stream  = q->ne[3];
+        const uint32_t n_dot     = D / HMX_FP16_TILE_N_COLS;
+
+        auto vtcm_usage = [&](uint32_t n_tok, uint32_t kv_block, uint32_t n_qsets) {
+            return htp_lid_hmx_compute_vtcm_usage(D, n_head, n_tok, kv_block, n_qsets, n_threads, k_row_size);
+        };
+
+        uint32_t n_tok = (std::min)(n_tokens, (uint32_t) HTP_LID_HMX_TOKENS_MAX);
+        while (n_tok > 32 && vtcm_usage(n_tok, 64, 1) > htp_session_vtcm_size(sess)) {
+            n_tok /= 2;
+        }
+
+        uint32_t n_qsets = n_tok == n_tokens ? (std::min)(n_stream, (uint32_t) HTP_LID_HMX_MAX_QSETS) : 1;
+        while (n_qsets > 1 && vtcm_usage(n_tok, 64, n_qsets) > htp_session_vtcm_size(sess)) {
+            n_qsets /= 2;
+        }
+
+        uint32_t n_qbuf = 1;
+        if (n_qsets == 1 && n_head >= 16 && n_stream * ((n_tokens + n_tok - 1) / n_tok) > 1) {
+            uint32_t nt2 = n_tok;
+            while (nt2 > 32 && vtcm_usage(nt2, 64, 2) > htp_session_vtcm_size(sess)) {
+                nt2 /= 2;
+            }
+            const size_t q_bytes = (size_t) nt2 * n_head * D * sizeof(float);
+            const size_t k_bytes = (size_t) k->ne[2] * ggml_row_size(k->type, D);
+            if (vtcm_usage(nt2, 64, 2) <= htp_session_vtcm_size(sess) && q_bytes >= k_bytes) {
+                n_tok  = nt2;
+                n_qbuf = 2;
+            }
+        }
+
+        const uint32_t n_ch   = (n_tok * n_head + 31) / 32;
+        const uint32_t kv_seg = hex_round_up(k->ne[2], 64);
+        const uint32_t n_rows = n_qsets * kv_seg;
+        const uint32_t bc_max = n_rows <= 512 ? n_rows : (std::max)(256u, n_rows / 4);
+        uint32_t kv_block = 64;
+        while (kv_block < HTP_LID_HMX_KV_BLOCK_MAX && kv_block < bc_max && (kv_block / 32) * n_ch * (n_dot + 1) < 256 &&
+               vtcm_usage(n_tok, kv_block * 2, n_qsets * n_qbuf) <= htp_session_vtcm_size(sess)) {
+            kv_block *= 2;
+        }
+
+        const size_t vtcm_size = vtcm_usage(n_tok, kv_block, n_qsets * n_qbuf);
+        if (vtcm_size <= htp_session_vtcm_size(sess)) {
+            const uint32_t n_tt = (n_tokens + n_tok - 1) / n_tok;
+            kparams->kernel_type       = HTP_LID_KERNEL_HMX;
+            kparams->n_threads         = n_threads;
+            kparams->n_tokens_tile     = n_tok;
+            kparams->n_kv_blocks       = (n_rows + kv_block - 1) / kv_block;
+            kparams->blocks_per_thread = 0;
+            kparams->kv_block          = kv_block;
+            kparams->n_qsets           = n_qsets;
+            kparams->n_qbuf            = n_qbuf;
+            kparams->kv_seg            = kv_seg;
+            kparams->n_tt              = n_tt;
+            kparams->vtcm_size         = (uint32_t) vtcm_size;
+            kparams->div_kv_seg        = init_fastdiv_values(kv_seg);
+            kparams->div_n_tt          = init_fastdiv_values(n_tt);
+            kparams->div_n_ch          = init_fastdiv_values(n_ch);
+            return true;
+        }
+    }
+
+    const uint32_t n_threads = (std::min)(htp_session_n_threads(sess), n_kv_blocks);
+    uint32_t n_tok = (std::min)((uint32_t) q->ne[2], (uint32_t) HTP_LID_TOKENS_MAX);
+    while (n_tok > 1 && htp_lid_compute_vtcm_usage(D, n_head, n_tok, n_threads, k_row_size) > htp_session_vtcm_size(sess)) {
+        n_tok /= 2;
+    }
+
+    const size_t vtcm_size = htp_lid_compute_vtcm_usage(D, n_head, n_tok, n_threads, k_row_size);
+    if (vtcm_size > htp_session_vtcm_size(sess)) {
+        return false;
+    }
+
+    kparams->kernel_type       = HTP_LID_KERNEL_HVX;
+    kparams->n_threads         = n_threads;
+    kparams->n_tokens_tile     = n_tok;
+    kparams->n_kv_blocks       = n_kv_blocks;
+    kparams->blocks_per_thread = (n_kv_blocks + n_threads - 1) / n_threads;
+    kparams->kv_block          = HTP_LID_KV_BLOCK;
+    kparams->n_qsets           = 1;
+    kparams->n_qbuf            = 1;
+    kparams->kv_seg            = 0;
+    kparams->n_tt              = 0;
+    kparams->vtcm_size         = (uint32_t) vtcm_size;
+
+    return true;
+}
+
+static bool htp_kparams_solve_lightning_indexer(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * op,
+    struct htp_lid_kernel_params * kparams
+) {
+    if (htp_lightning_indexer_can_collapse(op->src[0], op->src[1], op->src[2], op->src[3], op)) {
+        struct ggml_tensor q_c, k_c, w_c, m_c, d_c;
+        htp_lightning_indexer_collapse_tensors(op->src[0], op->src[1], op->src[2], op->src[3], op,
+                                               &q_c, &k_c, &w_c, &m_c, &d_c);
+        return htp_kparams_solve_lightning_indexer_impl(sess, &q_c, &k_c, &w_c, &m_c, &d_c, kparams);
+    }
+    return htp_kparams_solve_lightning_indexer_impl(sess, op->src[0], op->src[1], op->src[2], op->src[3], op, kparams);
+}
 template <auto SolveFn>
 static inline bool htp_kparams_invoke(
     const struct ggml_hexagon_session * sess,
@@ -4120,6 +5285,70 @@ void htp_opnode_collapse(const struct ggml_hexagon_session * sess, htp_opnode & 
         }
         return;
     }
+
+    if (node.opcode == HTP_OP_DSV4_HC_PRE) {
+        if (node.inputs.size() < 2 || !node.inputs[0] || !node.inputs[1] || node.outputs.empty() || !node.outputs[0]) {
+            return;
+        }
+        const struct ggml_tensor * x       = node.inputs[0];
+        const struct ggml_tensor * weights = node.inputs[1];
+        const struct ggml_tensor * dst     = node.outputs[0];
+
+        if (htp_dsv4_hc_pre_can_collapse(x, weights, dst)) {
+            struct ggml_tensor x_c, w_c, d_c;
+            htp_dsv4_hc_pre_collapse_tensors(x, weights, dst, &x_c, &w_c, &d_c);
+            node.inputs[0]  = node.add_dummy(x_c);
+            node.inputs[1]  = node.add_dummy(w_c);
+            node.outputs[0] = node.add_dummy(d_c);
+        }
+        return;
+    }
+
+    if (node.opcode == HTP_OP_DSV4_HC_POST) {
+        if (node.inputs.size() < 3 || !node.inputs[0] || !node.inputs[1] || !node.inputs[2] || node.outputs.empty() || !node.outputs[0]) {
+            return;
+        }
+        const struct ggml_tensor * x        = node.inputs[0];
+        const struct ggml_tensor * residual = node.inputs[1];
+        const struct ggml_tensor * post     = node.inputs[2];
+        const struct ggml_tensor * comb     = node.inputs.size() > 3 ? node.inputs[3] : nullptr;
+        const struct ggml_tensor * dst      = node.outputs[0];
+
+        if (htp_dsv4_hc_post_can_collapse(x, residual, post, comb, dst)) {
+            struct ggml_tensor x_c, r_c, p_c, c_c, d_c;
+            htp_dsv4_hc_post_collapse_tensors(x, residual, post, comb, dst, &x_c, &r_c, &p_c, comb ? &c_c : nullptr, &d_c);
+            node.inputs[0]  = node.add_dummy(x_c);
+            node.inputs[1]  = node.add_dummy(r_c);
+            node.inputs[2]  = node.add_dummy(p_c);
+            if (comb) {
+                node.inputs[3] = node.add_dummy(c_c);
+            }
+            node.outputs[0] = node.add_dummy(d_c);
+        }
+        return;
+    }
+
+    if (node.opcode == HTP_OP_LIGHTNING_INDEXER) {
+        if (node.inputs.size() < 4 || !node.inputs[0] || !node.inputs[1] || !node.inputs[2] || !node.inputs[3] || node.outputs.empty() || !node.outputs[0]) {
+            return;
+        }
+        const struct ggml_tensor * q   = node.inputs[0];
+        const struct ggml_tensor * k   = node.inputs[1];
+        const struct ggml_tensor * w   = node.inputs[2];
+        const struct ggml_tensor * m   = node.inputs[3];
+        const struct ggml_tensor * dst = node.outputs[0];
+
+        if (htp_lightning_indexer_can_collapse(q, k, w, m, dst)) {
+            struct ggml_tensor q_c, k_c, w_c, m_c, d_c;
+            htp_lightning_indexer_collapse_tensors(q, k, w, m, dst, &q_c, &k_c, &w_c, &m_c, &d_c);
+            node.inputs[0]  = node.add_dummy(q_c);
+            node.inputs[1]  = node.add_dummy(k_c);
+            node.inputs[2]  = node.add_dummy(w_c);
+            node.inputs[3]  = node.add_dummy(m_c);
+            node.outputs[0] = node.add_dummy(d_c);
+        }
+        return;
+    }
 }
 
 bool htp_kparams_solve(
@@ -4151,6 +5380,19 @@ bool htp_kparams_solve(
     }
     if (node.opcode == HTP_OP_UPSCALE) {
         return htp_kparams_solve_upscale(sess, src0, dst, node.kparams<htp_upscale_kernel_params>());
+    }
+    if (node.opcode == HTP_OP_DSV4_HC_PRE) {
+        return htp_kparams_solve_dsv4_hc_pre_impl(sess, src0, src1, dst, node.kparams<htp_dsv4_hc_pre_kernel_params>());
+    }
+    if (node.opcode == HTP_OP_DSV4_HC_POST) {
+        const ggml_tensor * src2 = node.inputs.size() > 2 ? node.inputs[2] : nullptr;
+        const ggml_tensor * src3 = node.inputs.size() > 3 ? node.inputs[3] : nullptr;
+        return htp_kparams_solve_dsv4_hc_post_impl(sess, src0, src1, src2, src3, dst, node.kparams<htp_dsv4_hc_post_kernel_params>());
+    }
+    if (node.opcode == HTP_OP_LIGHTNING_INDEXER) {
+        const ggml_tensor * src2 = node.inputs.size() > 2 ? node.inputs[2] : nullptr;
+        const ggml_tensor * src3 = node.inputs.size() > 3 ? node.inputs[3] : nullptr;
+        return htp_kparams_solve_lightning_indexer_impl(sess, src0, src1, src2, src3, dst, node.kparams<htp_lid_kernel_params>());
     }
 
     return htp_kparams_solve(sess, node.node, node.kernel_params);
@@ -4233,6 +5475,9 @@ bool htp_kparams_solve(
         case HTP_OP_CONV_2D_DW:
             return htp_kparams_invoke<htp_kparams_solve_conv2d_dw>(sess, op, kparams);
 
+        case HTP_OP_CONV_3D:
+            return htp_kparams_invoke<htp_kparams_solve_conv3d>(sess, op, kparams);
+
         case HTP_OP_SUM_ROWS:
         case HTP_OP_SUM:
         case HTP_OP_ARGMAX:
@@ -4247,17 +5492,29 @@ bool htp_kparams_solve(
         case HTP_OP_CUMSUM:
             return htp_kparams_invoke<htp_kparams_solve_cumsum>(sess, op, kparams);
 
+        case HTP_OP_TOP_K_MASK:
+            return htp_kparams_invoke<htp_kparams_solve_top_k_mask>(sess, op, kparams);
+
         case HTP_OP_FILL:
             return htp_kparams_invoke<htp_kparams_solve_fill>(sess, op, kparams);
 
         case HTP_OP_ROLL:
             return htp_kparams_invoke<htp_kparams_solve_roll>(sess, op, kparams);
 
+        case HTP_OP_LIGHTNING_INDEXER:
+            return htp_kparams_invoke<htp_kparams_solve_lightning_indexer>(sess, op, kparams);
+
         case HTP_OP_DIAG:
             return htp_kparams_invoke<htp_kparams_solve_diag>(sess, op, kparams);
 
         case HTP_OP_SOLVE_TRI:
             return htp_kparams_invoke<htp_kparams_solve_solve_tri>(sess, op, kparams);
+
+        case HTP_OP_DSV4_HC_PRE:
+            return htp_kparams_invoke<htp_kparams_solve_dsv4_hc_pre>(sess, op, kparams);
+
+        case HTP_OP_DSV4_HC_POST:
+            return htp_kparams_invoke<htp_kparams_solve_dsv4_hc_post>(sess, op, kparams);
 
         default:
             if (htp_op_is_unary(opcode)) {

@@ -343,3 +343,33 @@ class KimiK3Model(TextModel):
             return
 
         yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("KimiK31ForConditionalGeneration")
+@ModelBase.example("moonshotai/Kimi-K3.1-Pro")
+class KimiK31Model(KimiK3Model):
+    """
+    Kimi-K3.1: K3 with the full-attention MLA layers replaced by gated DSA.
+
+    The tensor set is K3's plus a lightning indexer per full-attention layer,
+    and `dsa_config` adds the attention.indexer.* metadata.
+    """
+
+    model_arch = gguf.MODEL_ARCH.KIMI_K31
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        # --- DSA indexer ---
+        dsa = self.hparams["dsa_config"]
+        dsa_layers = dsa["dsa_layers"]
+        # the layer lists are 1-indexed, like linear_attn_config's
+        assert sorted(dsa_layers) == sorted(self.hparams["linear_attn_config"]["full_attn_layers"]), \
+            "every full-attention layer is expected to own a DSA indexer"
+        self.gguf_writer.add_indexer_head_count(dsa["index_num_heads"])
+        self.gguf_writer.add_indexer_key_length(dsa["index_head_dim"])
+        self.gguf_writer.add_indexer_top_k(dsa["index_topk"])
+        self.gguf_writer.add_indexer_types([(il + 1) in dsa_layers
+                                            for il in range(self.hparams["num_hidden_layers"])])
+        # eps of the indexer key LayerNorm; the config declares no separate value
+        self.gguf_writer.add_layer_norm_eps(dsa.get("index_norm_eps", self.hparams["rms_norm_eps"]))
