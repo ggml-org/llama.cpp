@@ -1593,11 +1593,11 @@ Models that write the text while they listen use this endpoint: Voxtral Realtime
 
 Live ASR models can also hold a conversation, so they transcribe live only in sessions opened with `/v1/realtime?intent=transcription`, as OpenAI transcription sessions are; other sessions are a [realtime conversation](#realtime-conversation).
 
-Audio must be PCM16, mono, at the model sample rate. The sample rate is returned in `session.created` as `audio.input.format.rate`. Each `input_audio_buffer.append` carries a base64-encoded chunk of PCM16 samples.
+Audio must be PCM16 mono. Its sample rate is 24000 Hz, like OpenAI's `audio/pcm`, unless the client sets another one, from 8000 to 192000 Hz, in `audio.input.format.rate` of a `session.update` before the first audio. The server resamples the audio to the model sample rate. Each `input_audio_buffer.append` carries a base64-encoded chunk of PCM16 samples.
 
 *Client events:*
 
-- `session.update`: accepted for compatibility, the server replies with `session.updated`. If `session.audio.input.format.rate` is set to a rate other than the model sample rate, the server replies with an `error` instead
+- `session.update`: `audio.input.format.rate` sets the input sample rate, the server replies with `session.updated`
 - `input_audio_buffer.append`: `audio` holds base64 PCM16 samples
 - `input_audio_buffer.commit`: flushes the audio received so far, so the words still held back by the model's delay are produced. The server replies with `input_audio_buffer.committed` and starts a new item. With `"final": true`, the input ends instead and the last item is completed once the stream drains.
 - `input_audio_buffer.clear`: accepted for compatibility, audio already sent cannot be discarded
@@ -1616,7 +1616,7 @@ The `completed` event of a commit includes the words held back by the model's de
 
 #### Realtime conversation
 
-Models that answer after the audio, like LFM3-Audio and LFM3-Omni, hold a conversation on the same endpoint (with an `asr` template, unless the session is opened with `?intent=transcription`). The audio is prefilled as it arrives, so the response starts right after the last chunk. Audio input is PCM16 mono at the model sample rate (`audio.input.format.rate` of `session.created`), audio output is PCM16 mono at `audio.output.format.rate`.
+Models that answer after the audio, like LFM3-Audio and LFM3-Omni, hold a conversation on the same endpoint (with an `asr` template, unless the session is opened with `?intent=transcription`). The audio is prefilled as it arrives, so the response starts right after the last chunk. Audio input is PCM16 mono at `audio.input.format.rate`, 24000 Hz unless the client sets it, as for transcription. Audio output is PCM16 mono at `audio.output.format.rate`.
 
 `session.type` selects the session, it can be changed with `session.update` before the first audio or message:
 
@@ -1625,7 +1625,7 @@ Models that answer after the audio, like LFM3-Audio and LFM3-Omni, hold a conver
 
 *Client events:*
 
-- `session.update`: `type`, `instructions` (the system prompt, before the first audio or message), `output_modalities`, `max_output_tokens` (an integer or `"inf"`, the default), `tools` (functions with `name`, `description` and `parameters`, before the first audio or message) and `tool_choice` (`"auto"`, the default, `"none"` or `"required"`)
+- `session.update`: `type`, `instructions` (the system prompt, before the first audio or message), `output_modalities`, `max_output_tokens` (an integer or `"inf"`, the default), `tools` (functions with `name`, `description` and `parameters`, before the first audio or message) and `tool_choice` (`"auto"`, the default, `"none"` or `"required"`) and `audio.input.format.rate` (before the first audio)
 - `input_audio_buffer.append`: `audio` holds base64 PCM16 samples
 - `input_audio_buffer.commit`: ends the audio of the user turn, in a transcription session the transcript follows
 - `conversation.item.create`: a user message with `input_text` content, or a `function_call_output` with the `call_id` and `output` of a tool call of the last response

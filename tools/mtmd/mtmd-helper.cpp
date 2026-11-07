@@ -360,6 +360,54 @@ static bool decode_audio_from_buf(const unsigned char * buf_in, size_t len, int 
 
 } // namespace audio_helpers
 
+struct mtmd_helper_resampler {
+    ma_resampler       rs;
+    std::vector<float> out;
+};
+
+mtmd_helper_resampler * mtmd_helper_resampler_init(int32_t rate_in, int32_t rate_out) {
+    if (rate_in <= 0 || rate_out <= 0) {
+        return nullptr;
+    }
+    auto * res = new mtmd_helper_resampler();
+    ma_resampler_config config = ma_resampler_config_init(ma_format_f32, 1, rate_in, rate_out, ma_resample_algorithm_linear);
+    if (ma_resampler_init(&config, nullptr, &res->rs) != MA_SUCCESS) {
+        delete res;
+        return nullptr;
+    }
+    return res;
+}
+
+void mtmd_helper_resampler_free(mtmd_helper_resampler * rs) {
+    if (rs) {
+        ma_resampler_uninit(&rs->rs, nullptr);
+        delete rs;
+    }
+}
+
+const float * mtmd_helper_resampler_process(mtmd_helper_resampler * rs, const float * in, size_t n_in, size_t * n_out) {
+    ma_uint64 n_expected = 0;
+    ma_resampler_get_expected_output_frame_count(&rs->rs, n_in, &n_expected);
+    rs->out.resize(n_expected + 16);
+    size_t n_read    = 0;
+    size_t n_written = 0;
+    while (n_read < n_in) {
+        if (n_written == rs->out.size()) {
+            rs->out.resize(2 * rs->out.size());
+        }
+        ma_uint64 frames_in  = n_in - n_read;
+        ma_uint64 frames_out = rs->out.size() - n_written;
+        if (ma_resampler_process_pcm_frames(&rs->rs, in + n_read, &frames_in, rs->out.data() + n_written, &frames_out) != MA_SUCCESS ||
+            (frames_in == 0 && frames_out == 0)) {
+            break;
+        }
+        n_read    += frames_in;
+        n_written += frames_out;
+    }
+    *n_out = n_written;
+    return rs->out.data();
+}
+
 static bool is_webp_file(const unsigned char * buf, size_t len) {
     // WEBP ref: https://developers.google.com/speed/webp/docs/riff_container
     return len >= 12 && memcmp(buf, "RIFF", 4) == 0 && memcmp(buf + 8, "WEBP", 4) == 0;
