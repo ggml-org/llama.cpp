@@ -2164,11 +2164,7 @@ void ggml_hexagon_session::allocate(const ggml_hexagon_device_config & config) n
 
     // 2. Fallback to absolute path in URI
     if (err != AEE_SUCCESS && !lib_dir.empty()) {
-        std::string abs_prefix = "file://";
-        if (lib_dir.front() != '/' && lib_dir.front() != '\\') {
-            abs_prefix += "/";
-        }
-        abs_prefix += lib_dir;
+        std::string abs_prefix = "file:///" + lib_dir;
         if (abs_prefix.back() != '/' && abs_prefix.back() != '\\') {
             abs_prefix += "/";
         }
