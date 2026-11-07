@@ -131,15 +131,9 @@ endif()
 # POSIX conformance
 #
 
-# clock_gettime came in POSIX.1b (1993)
-# CLOCK_MONOTONIC came in POSIX.1-2001 / SUSv3 as optional
-# posix_memalign came in POSIX.1-2001 / SUSv3
-# M_PI is an XSI extension since POSIX.1-2001 / SUSv3, came in XPG1 (1985)
-
-# Somehow in OpenBSD whenever POSIX conformance is specified
-# some string functions rely on locale_t availability,
-# which was introduced in POSIX.1-2008, forcing us to go higher
-if (CMAKE_SYSTEM_NAME MATCHES "OpenBSD")
+# POSIX.1-2001 with XSI extensions provides clock_gettime, CLOCK_MONOTONIC, posix_memalign and M_PI.
+# OpenBSD needs POSIX.1-2008 for locale_t. FreeBSD needs it for F_DUPFD_CLOEXEC and strnlen.
+if (CMAKE_SYSTEM_NAME MATCHES "OpenBSD|FreeBSD")
     add_compile_definitions(_XOPEN_SOURCE=700)
 elseif (CMAKE_SYSTEM_NAME MATCHES "AIX")
     # Don't define _XOPEN_SOURCE.  We need _ALL_SOURCE, which is the default,
