@@ -216,6 +216,12 @@ set_target_properties(ggml-base PROPERTIES
 configure_file(ggml-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/ggml-version.h @ONLY)
 
 target_include_directories(ggml-base PRIVATE . ${CMAKE_CURRENT_BINARY_DIR})
+
+# icx/icpx default to -fp-model=fast, which contracts and reassociates the reference quantizers, so their output
+# depends on the compiler; keep ggml-base IEEE-exact so the CPU reference matches gcc/clang builds
+if (CMAKE_C_COMPILER_ID STREQUAL "IntelLLVM")
+    target_compile_options(ggml-base PRIVATE -fp-model=precise)
+endif()
 if (GGML_BACKEND_DL)
     target_compile_definitions(ggml-base PUBLIC GGML_BACKEND_DL)
 endif()
