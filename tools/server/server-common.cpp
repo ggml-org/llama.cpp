@@ -2059,7 +2059,17 @@ FILE * server_reserve_stdout() {
     SetStdHandle(STD_OUTPUT_HANDLE, GetStdHandle(STD_ERROR_HANDLE));
     FILE * f = _fdopen(fd, "w");
 #else
+#ifdef F_DUPFD_CLOEXEC
     int fd = fcntl(fileno(stdout), F_DUPFD_CLOEXEC, 0);
+#else
+    // fallback for systems without F_DUPFD_CLOEXEC (e.g. older macOS / POSIX.1-2001 systems)
+    // note: unlike F_DUPFD_CLOEXEC, this is not atomic, so there is a small window
+    //       in which a concurrent fork()+exec() could inherit the descriptor
+    int fd = dup(fileno(stdout));
+    if (fd >= 0) {
+        fcntl(fd, F_SETFD, fcntl(fd, F_GETFD, 0) | FD_CLOEXEC);
+    }
+#endif
     GGML_ASSERT(fd >= 0);
     dup2(fileno(stderr), fileno(stdout));
     FILE * f = fdopen(fd, "w");
