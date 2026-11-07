@@ -83,8 +83,18 @@ kernel void kernel_gemm_moe_mxfp4_q8_1_dp4a(
 
     const uint ne00_u = ne00 >> 2;   // ne00 in uint (int8x4) units
 
+#ifdef MOE_LM_PAD
+    __local uint sh_qa_store[TILESIZE_N * 8 + 2 * MOE_LM_PAD];
+    __local uint (*sh_qa)[8] = (__local uint (*)[8])(sh_qa_store + 2 * MOE_LM_PAD);
+#else
     __local uint sh_qa[TILESIZE_N][8]; // 32 tokens x 8 uints (32 int8) = 1 KiB
+#endif
+#ifdef MOE_LM_PAD
+    __local half sh_d_store[TILESIZE_N + 4 * MOE_LM_PAD];
+    __local half * sh_d = sh_d_store + 4 * MOE_LM_PAD;
+#else
     __local half sh_d[TILESIZE_N];
+#endif
 
     // Real token count for this tile.
     // Real tokens are packed contiguously at the tile start; padded slots hold

@@ -47,7 +47,9 @@ __kernel void kernel_gemv_moe_q4_k_f32_ns(
     ulong                   offsetd,
     int                     ne00,
     int                     ne01,
-    int                     ne11
+    int                     ne11,
+    int                     ne20,
+    int                     ids_stride
 ) {
     uint i01  = get_global_id(0);
     uint i20  = get_global_id(2);
@@ -58,9 +60,11 @@ __kernel void kernel_gemv_moe_q4_k_f32_ns(
         return;
     }
 
-    uint i11 = i20 % ne11;
+    // i20 runs over n_tokens x n_expert_used routings; src1 has ne11 = 1 (shared input)
+    // or ne20 rows per token
+    uint i11 = (i20 / ne20) * ne11 + (i20 % ne20) % ne11;
 
-    uint expert_id = src2[i20];
+    uint expert_id = src2[(i20 / ne20) * ids_stride + i20 % ne20];
     if ((int)expert_id == -1) { // skipped slot, the dst row is zeroed by kernel_moe_zero_dst
         return;
     }
@@ -169,7 +173,9 @@ __kernel void kernel_gemv_moe_q4_k_f32_ns_wimg(
     ulong                   offsetd,
     int                     ne00,
     int                     ne01,
-    int                     ne11
+    int                     ne11,
+    int                     ne20,
+    int                     ids_stride
 ) {
     uint i01  = get_global_id(0);
     uint i20  = get_global_id(2);
@@ -180,9 +186,11 @@ __kernel void kernel_gemv_moe_q4_k_f32_ns_wimg(
         return;
     }
 
-    uint i11 = i20 % ne11;
+    // i20 runs over n_tokens x n_expert_used routings; src1 has ne11 = 1 (shared input)
+    // or ne20 rows per token
+    uint i11 = (i20 / ne20) * ne11 + (i20 % ne20) % ne11;
 
-    uint expert_id = src2[i20];
+    uint expert_id = src2[(i20 / ne20) * ids_stride + i20 % ne20];
     if ((int)expert_id == -1) { // skipped slot, the dst row is zeroed by kernel_moe_zero_dst
         return;
     }
