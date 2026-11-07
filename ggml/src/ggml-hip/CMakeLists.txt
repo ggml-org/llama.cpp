@@ -117,6 +117,15 @@ if (GGML_HIP_EXPORT_METRICS)
     set(CMAKE_HIP_FLAGS "${CMAKE_HIP_FLAGS} -Rpass-analysis=kernel-resource-usage --save-temps")
 endif()
 
+# Fast math for HIP, like CUDA's -use_fast_math.
+# -fno-finite-math-only is mandatory to avoid breaking ggml's INFINITY masking and produces NaNs.
+# -fno-associative-math is mandatory to avoid FMA accumulation reorder which lead to mmvf and mmvq regressions.
+# Could not use `-ffast-math -fno-finite-math-only -fno-associative-math` (see https://github.com/ROCm/llvm-project/issues/5242)
+# Workaround is to mimic `-ffast-math` options with `-fno-math-errno -fno-rounding-math` enabled.
+# By default `-funsafe-math-optimizations` already enable: -fapprox-func, -fassociative-math, -freciprocal-math, -fno-signed-zeros, -fno-trapping-math, -ffp-contract=fast
+# `-ffinite-math-only` is false by default and not enable by `-funsafe-math-optimizations`
+set(CMAKE_HIP_FLAGS "${CMAKE_HIP_FLAGS} -funsafe-math-optimizations -fno-associative-math -fno-math-errno -fno-rounding-math")
+
 if (NOT GGML_CUDA_FA)
     add_compile_definitions(GGML_CUDA_NO_FA)
 endif()
