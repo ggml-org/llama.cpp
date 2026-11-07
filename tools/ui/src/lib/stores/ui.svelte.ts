@@ -28,8 +28,11 @@ class UiStore {
 
 	/** Repo the Discover dialog selects when it opens, set by a model row. */
 	discoverModelFocus = $state<string | null>(null);
+
 	/** Open state of the Discover dialog. */
 	discoverModelsOpen = $state(false);
+	/** Whether the main chat form is expanded into its large editor. */
+	isComposerExpanded = $state(false);
 
 	/** Set while the user drags the sidebar edge, so width transitions can step aside. */
 	isSidebarResizing = $state(false);

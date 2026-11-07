@@ -18,10 +18,10 @@
 	args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]' }}
 	name="AddButtonSingleTabStop"
 	play={async ({ canvas, userEvent }) => {
-		const textarea = await canvas.findByRole('textbox');
+		const editor = await canvas.findByRole('textbox');
 
-		await userEvent.clear(textarea);
-		await userEvent.type(textarea, 'What is the meaning of life?');
+		await userEvent.clear(editor);
+		await userEvent.type(editor, 'What is the meaning of life?');
 
 		const trigger = await canvas.findByRole('button', { name: ATTACHMENT_TOOLTIP_TEXT });
 

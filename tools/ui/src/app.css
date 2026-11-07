@@ -78,6 +78,8 @@
 	--chat-form-area-height: 8rem;
 	--chat-form-area-offset: 2rem;
 	--chat-form-padding-top: 6rem;
+	/* the chat form card holding one line of text, as it rests on a new chat */
+	--chat-form-collapsed-height: 6.375rem;
 	--max-message-height: max(24rem, min(80dvh, calc(100dvh - var(--chat-form-area-height) - 12rem)));
 }
 
@@ -172,6 +174,22 @@
 		@apply bg-background text-foreground antialiased;
 		scrollbar-width: thin;
 		scrollbar-gutter: stable;
+	}
+
+	/* While the chat form is a full-screen sheet on a phone, the page around it takes
+	   the sheet's fill (the translucent card over the page, made solid): iOS paints
+	   the installed app's status bar and home indicator areas, and Safari tints its
+	   bars, from this background, so the sheet reaches the screen's edges */
+	@media (width < 48rem) {
+		html[data-chat-form-sheet],
+		html[data-chat-form-sheet] body {
+			background-color: color-mix(in oklab, var(--muted) 60%, var(--background));
+		}
+
+		html.dark[data-chat-form-sheet],
+		html.dark[data-chat-form-sheet] body {
+			background-color: color-mix(in oklab, var(--muted) 75%, var(--background));
+		}
 	}
 
 	/* no elastic bounce past the ends of the page: it drags the sticky and
