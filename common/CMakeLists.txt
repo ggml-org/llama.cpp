@@ -52,6 +52,7 @@ endif()
 #
 
 set(TARGET llama-common)
+set(LLAMA_COMMON_LIB "-lllama-common")
 
 include(parsers/sources.cmake)
 

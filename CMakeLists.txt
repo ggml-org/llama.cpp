@@ -217,6 +217,7 @@ if (LLAMA_USE_SYSTEM_GGML)
     message(STATUS "Using system-provided libggml, skipping ggml build")
     find_package(ggml REQUIRED)
     add_library(ggml ALIAS ggml::ggml)
+    set(GGML_REQUIRES "ggml")
 endif()
 
 if (NOT TARGET ggml AND NOT LLAMA_USE_SYSTEM_GGML)
