@@ -357,6 +357,31 @@ llama_build(test-backend-ops.cpp LINK ggml Threads::Threads)
 
 llama_build_and_test(test-backend-tensor.cpp LINK ggml)
 
+if (WIN32 AND GGML_BACKEND_DL)
+    add_library(test-backend-dl-error-fixture MODULE test-backend-dl-error-fixture.cpp)
+    target_compile_features(test-backend-dl-error-fixture PRIVATE cxx_std_17)
+    target_include_directories(test-backend-dl-error-fixture PRIVATE ${PROJECT_SOURCE_DIR}/ggml/include ${PROJECT_SOURCE_DIR}/ggml/src)
+    set_target_properties(test-backend-dl-error-fixture PROPERTIES
+        PREFIX ""
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
+        LIBRARY_OUTPUT_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+    if (LLAMA_TESTS_INSTALL)
+        install(TARGETS test-backend-dl-error-fixture
+            LIBRARY DESTINATION ${CMAKE_INSTALL_BINDIR}
+            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    endif()
+
+    llama_build_and_test(test-backend-dl-error.cpp ${PROJECT_SOURCE_DIR}/ggml/src/ggml-backend-dl.cpp
+        LABEL "main backend" LINK ggml Threads::Threads)
+    target_include_directories(test-backend-dl-error PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src)
+    target_compile_definitions(test-backend-dl-error PRIVATE
+        GGML_TEST_DL_ERROR_FIXTURE="$<TARGET_FILE_NAME:test-backend-dl-error-fixture>")
+    add_dependencies(test-backend-dl-error test-backend-dl-error-fixture)
+    if (GGML_CPU)
+        target_compile_definitions(test-backend-dl-error PRIVATE GGML_TEST_CPU)
+    endif()
+endif()
+
 llama_build_and_test(test-tiled-mulmat.cpp  LABEL "main behavior backend"  LINK ggml)
 llama_build_and_test(test-model-load-cancel.cpp LABEL "model behavior")
 llama_build_and_test(test-autorelease.cpp       LABEL "model behavior")
