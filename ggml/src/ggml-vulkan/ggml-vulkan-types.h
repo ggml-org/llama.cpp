@@ -433,6 +433,21 @@ struct vk_fa_pipeline_state {
     }
 };
 
+struct vk_xe_fa_pipeline_state {
+    uint32_t HSK, HSV;
+    uint32_t gqa_ratio;
+    uint32_t decode_n;
+    bool unaligned_seq_len;
+    bool unaligned_q;
+    bool partial_row_mask;
+    bool multi_head_mask;
+
+    bool operator<(const vk_xe_fa_pipeline_state &b) const {
+        return std::tie(HSK, HSV, gqa_ratio, decode_n, unaligned_seq_len, unaligned_q, partial_row_mask, multi_head_mask) <
+               std::tie(b.HSK, b.HSV, b.gqa_ratio, b.decode_n, b.unaligned_seq_len, b.unaligned_q, b.partial_row_mask, b.multi_head_mask);
+    }
+};
+
 struct vk_conv2d_pipeline_state {
     vk_conv2d_pipeline_state(uint32_t s0, uint32_t s1, uint32_t p0, uint32_t p1, uint32_t d0, uint32_t d1, uint32_t KW, uint32_t KH, uint32_t aligned)
         : s0(s0), s1(s1), p0(p0), p1(p1), d0(d0), d1(d1), KW(KW), KH(KH), aligned(aligned) {}
@@ -1005,7 +1020,8 @@ struct vk_device_struct {
     bool fa_sparse_compact_use_subgroups;
 
     vk_pipeline pipeline_flash_attn_split_k_reduce;
-    std::map<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>, std::pair<vk_pipeline, vk_pipeline>> pipeline_xe_fa_decode_dual_phases;
+    std::map<vk_xe_fa_pipeline_state, std::pair<vk_pipeline, vk_pipeline>> pipeline_xe_fa_decode_dual_phases;
+    std::map<vk_xe_fa_pipeline_state, vk_pipeline> pipeline_xe_fa_prefill;
     vk_pipeline pipeline_count_experts;
 
     // [2] is for whether to take n_experts from spec constant (0) or push constant (1)
@@ -1027,6 +1043,7 @@ struct vk_device_struct {
     bool disable_host_visible_vidmem;
     bool allow_sysmem_fallback;
     bool disable_graph_optimize;
+    bool xe_fa_support {};
 
     std::unique_ptr<vk_memory_logger> memory_logger;
 
