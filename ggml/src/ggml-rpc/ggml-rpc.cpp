@@ -3055,10 +3055,7 @@ static ggml_backend_buffer_type_t ggml_backend_rpc_device_get_buffer_type(ggml_b
 
 static bool ggml_backend_rpc_device_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
     GGML_UNUSED(dev);
-    if ((op->op == GGML_OP_ROPE || op->op == GGML_OP_ROPE_BACK) &&
-        !ggml_rope_get_truncate(op)) {
-        return false;
-    }
+    GGML_UNUSED(op);
     //TODO: call the remote backend and cache the results
     return true;
 }
