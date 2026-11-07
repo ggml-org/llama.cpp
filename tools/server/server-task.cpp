@@ -734,7 +734,11 @@ json server_task_result_cmpl_final::to_json_oaicompat_asr() {
 json server_task_result_cmpl_final::to_json_anthropic() {
     std::string stop_reason = "max_tokens";
     if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
-        stop_reason = oaicompat_msg.tool_calls.empty() ? "end_turn" : "tool_use";
+        if (!oaicompat_msg.tool_calls.empty()) {
+            stop_reason = "tool_use";
+        } else {
+            stop_reason = stop == STOP_TYPE_WORD ? "stop_sequence" : "end_turn";
+        }
     }
 
     json content_blocks = json::array();
@@ -802,7 +806,11 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
 
     std::string stop_reason = "max_tokens";
     if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
-        stop_reason = oaicompat_msg.tool_calls.empty() ? "end_turn" : "tool_use";
+        if (!oaicompat_msg.tool_calls.empty()) {
+            stop_reason = "tool_use";
+        } else {
+            stop_reason = stop == STOP_TYPE_WORD ? "stop_sequence" : "end_turn";
+        }
     }
 
     bool has_thinking = !oaicompat_msg.reasoning_content.empty();
