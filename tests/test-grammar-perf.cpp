@@ -244,7 +244,7 @@ static std::vector<tool_def> make_tools(int n) {
         {{"id", "string"}, {"verbose", "boolean"}},
         {{"name", "string"}, {"description", "string"}, {"priority", "integer"}, {"active", "boolean"}},
         {{"id", "string"}, {"field", "string"}, {"value", "string"}},
-        {{"id", "string"}},
+        {{"id", "string"}, {"score", "number"}},
     };
 
     std::vector<tool_def> tools;
@@ -480,7 +480,7 @@ int main() {
 
     long rss_end = get_peak_rss_kb();
     fprintf(stderr, "\n--- Memory ---\n");
-    fprintf(stderr, "  Peak RSS: %ld KB (delta from start: %ld KB)\n", rss_end, rss_end - rss_start);
+    fprintf(stderr, "  Peak RSS: %ld KB (peak increase: %ld KB)\n", rss_end, rss_end - rss_start);
 
     fprintf(stderr, "\n=== Benchmark complete ===\n");
     return 0;
