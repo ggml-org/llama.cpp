@@ -72,6 +72,12 @@ target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
 find_package(Threads REQUIRED)
 target_link_libraries(llama PUBLIC ggml PRIVATE Threads::Threads)
 
+if (LLAMA_WEIGHT_CACHE)
+    target_sources(llama PRIVATE llama-weight-cache.cpp)
+    target_compile_definitions(llama PRIVATE LLAMA_WEIGHT_CACHE)
+    target_include_directories(llama PRIVATE ../vendor/hash/xxhash)
+endif()
+
 if (BUILD_SHARED_LIBS)
     set_target_properties(llama PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_compile_definitions(llama PRIVATE LLAMA_BUILD)

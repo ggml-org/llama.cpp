@@ -362,6 +362,11 @@ llama_build_and_test(test-model-load-cancel.cpp LABEL "model behavior")
 llama_build_and_test(test-autorelease.cpp       LABEL "model behavior")
 llama_build_and_test(test-backend-sampler.cpp   LABEL "model behavior backend")
 
+if (LLAMA_WEIGHT_CACHE AND GGML_CPU_KLEIDIAI AND NOT WIN32)
+    llama_build_and_test(test-weight-cache.cpp LABEL "model" ARGS -m "${MODEL_DEST}" -c "${CMAKE_CURRENT_BINARY_DIR}/weight-cache-test")
+    set_tests_properties(test-weight-cache PROPERTIES FIXTURES_REQUIRED test-download-model)
+endif()
+
 if (APPLE)
     llama_build(test-rset-release.cpp)
     llama_build_and_test(test-host-buffer-release.cpp LINK ggml)
