@@ -2002,8 +2002,12 @@ class TextModel(ModelBase):
         tokens: list[str] = []
         toktypes: list[int] = []
 
-        from transformers import AutoTokenizer
-        tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+        from transformers import AutoTokenizer, PreTrainedTokenizerFast
+        
+        if self.hparams.get("model_type") == "gpt_oss":
+            tokenizer = PreTrainedTokenizerFast.from_pretrained(self.dir_model)
+        else:
+            tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
         vocab_size = self.hparams.get("vocab_size", len(tokenizer.vocab))  # ty: ignore[unresolved-attribute]
         assert max(tokenizer.vocab.values()) < vocab_size  # ty: ignore[unresolved-attribute]
 
