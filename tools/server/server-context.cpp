@@ -5475,6 +5475,24 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
             dynamic_cast<server_task_result_cmpl_final*>  (first_result.get()) != nullptr
         );
 
+        // Responses SSE events carry a stream-wide sequence number; assign
+        // them here, where every streamed chunk of this response passes.
+        auto resp_seq = std::make_shared<size_t>(0);
+        auto number_resp_events = [resp_seq](json & events) {
+            auto number_one = [resp_seq](json & item) {
+                if (item.is_object() && item.contains("data") && item.at("data").is_object()) {
+                    item["data"]["sequence_number"] = ++(*resp_seq);
+                }
+            };
+            if (events.is_array()) {
+                for (auto & item : events) {
+                    number_one(item);
+                }
+            } else {
+                number_one(events);
+            }
+        };
+
         // next responses are streamed
         // to be sent immediately
         json first_result_json = first_result->to_json();
@@ -5483,13 +5501,14 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
         } else if (res_type == TASK_RESPONSE_TYPE_ANTHROPIC) {
             res->data = format_anthropic_sse(first_result_json);
         } else if (res_type == TASK_RESPONSE_TYPE_OAI_RESP) {
+            number_resp_events(first_result_json);
             res->data = format_oai_resp_sse(first_result_json);
         } else {
             res->data = format_oai_sse(first_result_json);
         }
         res->status = 200;
         res->content_type = "text/event-stream";
-        res->set_next([res_this = res.get(), res_type, sse_ping_interval](std::string & output) -> bool {
+        res->set_next([res_this = res.get(), res_type, sse_ping_interval, resp_seq, number_resp_events](std::string & output) mutable -> bool {
             static auto format_error = [](task_response_type res_type, const json & res_json) {
                 if (res_type == TASK_RESPONSE_TYPE_ANTHROPIC) {
                     return format_anthropic_sse({
@@ -5578,6 +5597,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                     if (res_type == TASK_RESPONSE_TYPE_ANTHROPIC) {
                         output = format_anthropic_sse(res_json);
                     } else if (res_type == TASK_RESPONSE_TYPE_OAI_RESP) {
+                        number_resp_events(res_json);
                         output = format_oai_resp_sse(res_json);
                     } else {
                         output = format_oai_sse(res_json);

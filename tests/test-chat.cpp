@@ -2043,6 +2043,90 @@ static void test_convert_responses_to_chatcmpl() {
 
         assert_equals(false, result.contains("tools"));
     }
+
+    // Test namespaced Responses tools are flattened to ns_{namespace}___{tool}
+    {
+        json input = json::parse(R"({
+            "input": "Hello",
+            "model": "test-model",
+            "tools": [
+                {
+                    "type": "namespace",
+                    "name": "browser",
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "click",
+                            "description": "Click an element",
+                            "parameters": {"type": "object", "properties": {}}
+                        },
+                        {
+                            "type": "web_search"
+                        },
+                        {
+                            "type": "function",
+                            "name": "navigate",
+                            "description": "Navigate to a URL",
+                            "parameters": {"type": "object", "properties": {}}
+                        }
+                    ]
+                },
+                {
+                    "type": "function",
+                    "name": "get_weather",
+                    "description": "Get weather for a location",
+                    "parameters": {"type": "object", "properties": {}}
+                }
+            ]
+        })");
+
+        json result = server_chat_convert_responses_to_chatcmpl(input);
+
+        assert_equals(true, result.contains("tools"));
+        assert_equals((size_t)3, result.at("tools").size());
+        assert_equals(std::string("ns_browser___click"), result.at("tools")[0].at("function").at("name").get<std::string>());
+        assert_equals(std::string("ns_browser___navigate"), result.at("tools")[1].at("function").at("name").get<std::string>());
+        assert_equals(std::string("get_weather"), result.at("tools")[2].at("function").at("name").get<std::string>());
+    }
+
+    // Test a function_call input item with a namespace flattens the same way
+    {
+        json input = json::parse(R"({
+            "input": [
+                {
+                    "type": "function_call",
+                    "namespace": "browser",
+                    "name": "click",
+                    "arguments": "{}",
+                    "call_id": "call_1"
+                }
+            ],
+            "model": "test-model"
+        })");
+
+        json result = server_chat_convert_responses_to_chatcmpl(input);
+
+        const auto & calls = result.at("messages")[0].at("tool_calls");
+        assert_equals(std::string("ns_browser___click"), calls[0].at("function").at("name").get<std::string>());
+    }
+
+    // Test tool name flatten/split round-trip
+    {
+        assert_equals(std::string("read_file"), server_chat_responses_tool_name("", "read_file"));
+        assert_equals(std::string("ns_muse___read_file"), server_chat_responses_tool_name("muse", "read_file"));
+
+        const auto plain = server_chat_responses_split_tool_name("read_file");
+        assert_equals(std::string(""), plain.first);
+        assert_equals(std::string("read_file"), plain.second);
+
+        const auto flat = server_chat_responses_split_tool_name("ns_muse___read_file");
+        assert_equals(std::string("muse"), flat.first);
+        assert_equals(std::string("read_file"), flat.second);
+
+        const auto no_sep = server_chat_responses_split_tool_name("ns_muse");
+        assert_equals(std::string(""), no_sep.first);
+        assert_equals(std::string("ns_muse"), no_sep.second);
+    }
 }
 
 // Shared LFM2 parser cases - all variants use one output format and parser
