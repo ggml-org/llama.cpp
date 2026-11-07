@@ -2418,8 +2418,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     const std::array<ggml_tensor *, 4> exps = { up_exps, gate_exps, down_exps, gate_up_exps };
     const bool can_cpu_share = !weight_before_ffn && loras->empty() &&
         std::none_of(exps.begin(), exps.end(), [&](ggml_tensor * w) { return w != nullptr && hdmd != nullptr && hdmd->rot.count(w) > 0; });
-    ggml_tensor * cpu_ids = nullptr; // [n_expert_used, n_tokens], the misses computed from the host experts, -1 for the other experts
-    ggml_tensor * slots   = build_moe_cache_slots(selected_experts, up_exps, gate_exps, down_exps, gate_up_exps, can_cpu_share ? &cpu_ids : nullptr, il);
+    const llm_graph_moe_cache_slots cache = build_moe_cache_slots(selected_experts, up_exps, gate_exps, down_exps, gate_up_exps, can_cpu_share, il);
 
     cur = ggml_reshape_3d(ctx0, cur, n_embd, 1, n_tokens);
 
@@ -2592,12 +2591,12 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         return experts;
     };
 
-    ggml_tensor * experts = build_experts(cur, selected_experts, slots, true);
-    if (cpu_ids != nullptr) {
+    ggml_tensor * experts = build_experts(cur, selected_experts, cache.slots, true);
+    if (cache.cpu_ids != nullptr) {
         // the cached experts and the misses computed from the host experts, each reads the others as zero
         // the cached experts come first in the graph, so that they are computed while the misses are
         ggml_build_forward_expand(gf, experts);
-        experts = ggml_add(ctx0, experts, build_experts(cur, selected_experts, cpu_ids, false));
+        experts = ggml_add(ctx0, experts, build_experts(cur, selected_experts, cache.cpu_ids, false));
         cb(experts, "ffn_moe_down_merged", il);
     }
 
@@ -2658,26 +2657,26 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     return moe_out;
 }
 
-ggml_tensor * llm_graph_context::build_moe_cache_slots(
+llm_graph_moe_cache_slots llm_graph_context::build_moe_cache_slots(
          ggml_tensor * selected_experts,
          ggml_tensor * up_exps,
          ggml_tensor * gate_exps,
          ggml_tensor * down_exps,
          ggml_tensor * gate_up_exps,
-         ggml_tensor ** cpu_ids,
+                bool   cpu_part,
                  int   il) const {
     if (moe_cache == nullptr) {
-        return nullptr;
+        return { nullptr, nullptr };
     }
 
-    ggml_tensor * cpu_map  = cpu_ids != nullptr ? moe_cache->get_cpu_map(il, selected_experts->ne[1]) : nullptr;
+    ggml_tensor * cpu_map  = cpu_part ? moe_cache->get_cpu_map(il, selected_experts->ne[1]) : nullptr;
     ggml_tensor * slot_map = moe_cache->get_slot_map(il, selected_experts->ne[1], selected_experts->ne[0], cpu_map != nullptr);
     if (slot_map == nullptr) {
-        return nullptr;
+        return { nullptr, nullptr };
     }
     for (ggml_tensor * w : { up_exps, gate_exps, down_exps, gate_up_exps }) {
         if (w != nullptr && moe_cache->get_experts(w) == nullptr) {
-            return nullptr;
+            return { nullptr, nullptr };
         }
     }
 
@@ -2691,7 +2690,7 @@ ggml_tensor * llm_graph_context::build_moe_cache_slots(
     // the callback reads the selected experts, uploads the missing ones and updates the slot map
     ggml_tensor * slots = ggml_get_rows(ctx0, slot_map, ids); // [1, n_expert_used*n_tokens]
     if (!ggml_backend_supports_op(moe_cache->backend(il), slots)) {
-        return nullptr;
+        return { nullptr, nullptr };
     }
     ggml_backend_sched_set_tensor_backend(sched, slots, moe_cache->backend(il));
     cb(slots, "ffn_moe_slots", il);
@@ -2700,12 +2699,13 @@ ggml_tensor * llm_graph_context::build_moe_cache_slots(
     ggml_build_forward_expand(gf, slots);
 
     // the misses computed from the host experts, read after the lookup has picked them
+    ggml_tensor * cpu_ids = nullptr;
     if (cpu_map != nullptr) {
-        *cpu_ids = ggml_get_rows(ctx0, cpu_map, ids); // [1, n_expert_used*n_tokens]
-        *cpu_ids = ggml_reshape_2d(ctx0, *cpu_ids, selected_experts->ne[0], selected_experts->ne[1]);
+        cpu_ids = ggml_get_rows(ctx0, cpu_map, ids); // [1, n_expert_used*n_tokens]
+        cpu_ids = ggml_reshape_2d(ctx0, cpu_ids, selected_experts->ne[0], selected_experts->ne[1]);
     }
 
-    return ggml_reshape_2d(ctx0, slots, selected_experts->ne[0], selected_experts->ne[1]); // [n_expert_used, n_tokens]
+    return { ggml_reshape_2d(ctx0, slots, selected_experts->ne[0], selected_experts->ne[1]), cpu_ids };
 }
 
 // input embeddings with optional lora

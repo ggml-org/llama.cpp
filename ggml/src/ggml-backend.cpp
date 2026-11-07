@@ -2152,7 +2152,7 @@ static void ggml_backend_sched_prefetch_inputs(ggml_backend_sched_t sched, int s
     struct ggml_backend_sched_split * next  = &sched->splits[split_id + 1];
     const int backend_id = split->backend_id;
     ggml_backend_t backend = sched->backends[backend_id];
-    if (next->backend_id == backend_id || backend->iface.get_tensor_async == NULL) {
+    if (backend->iface.get_tensor_async == NULL) {
         return;
     }
 
