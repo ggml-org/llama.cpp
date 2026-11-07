@@ -250,7 +250,7 @@ def reflow_c_line(content: str, max_len: int) -> Optional[List[str]]:
                     lines[-1] = cand
                 else:
                     lines.append(f"{cont_indent}{seg}")
-            if len(lines) > 1 and all(len(l) <= max_len for l in lines):
+            if len(lines) > 1 and all(len(line) <= max_len for line in lines):
                 return lines
 
     # 2. Try splitting after top-level binary operators (+, -, &&, ||) or assignment (=)
@@ -282,7 +282,7 @@ def reflow_c_line(content: str, max_len: int) -> Optional[List[str]]:
                     lines[-1] = cand
                 else:
                     lines.append(f"{cont_indent}{seg}")
-            if len(lines) > 1 and all(len(l) <= max_len for l in lines):
+            if len(lines) > 1 and all(len(line) <= max_len for line in lines):
                 return lines
 
     return None

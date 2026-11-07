@@ -433,7 +433,7 @@ def generate_perfetto_trace(filtered_ops, trace_events, output_path):
     time_mappers = {dev: DeviceTimeMapper(dev, filtered_ops) for dev in unique_devices}
 
     # Process events
-    completed_events = []
+    completed_events: List[Dict[str, Any]] = []
     if trace_events:
         trace_events = sorted(trace_events, key=lambda e: e['unwrapped_cycles'])
 
