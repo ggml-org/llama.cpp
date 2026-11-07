@@ -37,8 +37,13 @@ uint32_t unicode_cpt_from_utf8(const std::string & utf8, size_t & offset) {
     if (!(utf8[offset + 0] & 0x40)) {
         throw std::invalid_argument("invalid character");
     }
+
+    auto is_not_cont = [&](size_t pos) {
+        return (utf8[offset + pos] & 0xc0) != 0x80;
+    };
+
     if (!(utf8[offset + 0] & 0x20)) {
-        if (offset + 1 >= utf8.size() || ! ((utf8[offset + 1] & 0xc0) == 0x80)) {
+        if (offset + 1 >= utf8.size() || is_not_cont(1)) {
             throw std::invalid_argument("invalid character");
         }
         auto result = ((utf8[offset + 0] & 0x1f) << 6) | (utf8[offset + 1] & 0x3f);
@@ -49,7 +54,7 @@ uint32_t unicode_cpt_from_utf8(const std::string & utf8, size_t & offset) {
         return result;
     }
     if (!(utf8[offset + 0] & 0x10)) {
-        if (offset + 2 >= utf8.size() || ! ((utf8[offset + 1] & 0xc0) == 0x80) || ! ((utf8[offset + 2] & 0xc0) == 0x80)) {
+        if (offset + 2 >= utf8.size() || is_not_cont(1) || is_not_cont(2)) {
             throw std::invalid_argument("invalid character");
         }
         auto result = ((utf8[offset + 0] & 0x0f) << 12) | ((utf8[offset + 1] & 0x3f) << 6) | (utf8[offset + 2] & 0x3f);
@@ -60,7 +65,7 @@ uint32_t unicode_cpt_from_utf8(const std::string & utf8, size_t & offset) {
         return result;
     }
     if (!(utf8[offset + 0] & 0x08)) {
-        if (offset + 3 >= utf8.size() || ! ((utf8[offset + 1] & 0xc0) == 0x80) || ! ((utf8[offset + 2] & 0xc0) == 0x80) || !((utf8[offset + 3] & 0xc0) == 0x80)) {
+        if (offset + 3 >= utf8.size() || is_not_cont(1) || is_not_cont(2) || is_not_cont(3)) {
             throw std::invalid_argument("invalid character");
         }
         auto result = ((utf8[offset + 0] & 0x07) << 18) | ((utf8[offset + 1] & 0x3f) << 12) | ((utf8[offset + 2] & 0x3f) << 6) | (utf8[offset + 3] & 0x3f);
