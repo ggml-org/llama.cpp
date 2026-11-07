@@ -31,7 +31,7 @@
 
 The character lives in three places: the icon, the details of the type and one accent colour. Everything else is neutral, so an app built on Llama UI can add its own colour or logo without undoing ours.
 
-<Figure n={1} caption="Real controls as Llama UI ships them, then re-coloured through a few component tokens. Nothing else changes.">
+<Figure n={1} caption="Real controls as Llama UI ships them, then made to look like GitHub’s and macOS’s: the colours through the component tokens, the sizes and corners through a few CSS rules. The components stay the same.">
 	<Restyle />
 </Figure>
 
