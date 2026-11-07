@@ -69,3 +69,36 @@ def test_mcp_proxy_no_content():
         target.shutdown()
         target.server_close()
 
+
+def test_mcp_proxy_not_found_does_not_crash():
+    # note: see issue #27187
+    class NotFoundHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(404)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, format, *args):
+            pass
+
+    target = ThreadingHTTPServer(("127.0.0.1", 0), NotFoundHandler)
+    target_thread = threading.Thread(target=target.serve_forever, daemon=True)
+    target_thread.start()
+
+    try:
+        global server
+        server.ui_mcp_proxy = True
+        server.start()
+
+        url = f"http://{server.server_host}:{server.server_port}/cors-proxy?url=http://127.0.0.1:{target.server_port}/"
+        try:
+            requests.get(url, timeout=DEFAULT_REQUEST_TIMEOUT)
+        except requests.exceptions.RequestException:
+            pass
+
+        res = server.make_request("GET", "/health")
+        assert res.status_code == 200
+    finally:
+        target.shutdown()
+        target.server_close()
+
