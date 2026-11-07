@@ -1,3 +1,5 @@
+find_package(Threads REQUIRED)
+
 llama_add_compile_flags()
 
 # Optional args:
@@ -352,7 +354,7 @@ if (GGML_METAL AND NOT GGML_BACKEND_DL)
     target_include_directories(test-metal-graph-optimize PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src ${PROJECT_SOURCE_DIR}/ggml/src/ggml-metal)
 endif()
 
-llama_build(test-backend-ops.cpp LINK ggml)
+llama_build(test-backend-ops.cpp LINK ggml Threads::Threads)
 
 llama_build_and_test(test-backend-tensor.cpp LINK ggml)
 
@@ -363,6 +365,7 @@ llama_build_and_test(test-backend-sampler.cpp   LABEL "model behavior backend")
 
 if (APPLE)
     llama_build(test-rset-release.cpp)
+    llama_build_and_test(test-host-buffer-release.cpp LINK ggml)
 endif()
 
 if (NOT GGML_BACKEND_DL AND GGML_CPU)

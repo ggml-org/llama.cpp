@@ -39,7 +39,7 @@ void llama_model_vllm_decision2::load_arch_tensors(llama_model_loader & ml) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_vllm_decision2::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
 // output rows read by the head: the last token of each option span and the last token of the question span
@@ -127,13 +127,13 @@ public:
     const size_t n_options;
 };
 
-llama_model_vllm_decision2::graph::graph(const llama_model & model_base, const llm_graph_params & params) :
-    llama_model_qwen3::graph(params, no_build()), model(static_cast<const llama_model_vllm_decision2 &>(model_base)) {
+llama_model_vllm_decision2::graph::graph(const llm_graph_params & params) :
+    llama_model_qwen3::graph(params, no_build()), model(static_cast<const llama_model_vllm_decision2 &>(*params.model)) {
     auto inp_decision_ptr = std::make_unique<input_decision>(ubatch);
     auto * inp_decision   = inp_decision_ptr.get();
     res->add_input(std::move(inp_decision_ptr));
 
-    ggml_tensor * cur = build_backbone(model);
+    ggml_tensor * cur = build_backbone();
 
     // the head is always evaluated, so that the graph has the same nodes for every batch
     cur = build_head(cur, inp_decision);

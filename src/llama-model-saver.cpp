@@ -210,6 +210,8 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_MOE_LATENT_SIZE,                   hparams.moe_latent_size);
     add_kv(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp);
     add_kv(LLM_KV_EXPERT_CHUNK_FEED_FORWARD_LENGTH,  hparams.n_ff_chexp);
+    add_kv(LLM_KV_SWIGLU_CLAMP, std::vector<float>(
+            hparams.swiglu_clamp.begin(), hparams.swiglu_clamp.begin() + hparams.n_layer_all));
     add_kv(LLM_KV_SWIGLU_CLAMP_EXP, std::vector<float>(
             hparams.swiglu_clamp_exp.begin(), hparams.swiglu_clamp_exp.begin() + hparams.n_layer_all));
     add_kv(LLM_KV_SWIGLU_CLAMP_SHEXP, std::vector<float>(
@@ -247,6 +249,10 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_HRM_H_CYCLES,                      hparams.n_hrm_h_cycles);
     add_kv(LLM_KV_HRM_L_CYCLES,                      hparams.n_hrm_l_cycles);
     add_kv(LLM_KV_HRM_PREFIX_LM,                     hparams.hrm_prefix_lm);
+    add_kv(LLM_KV_METIS_PASS_COUNT,                  hparams.metis_n_pass);
+    add_kv(LLM_KV_METIS_MEMORY_LENGTH,               hparams.metis_n_mem);
+    add_kv(LLM_KV_METIS_ROUTE_LENGTH,                hparams.metis_n_route);
+    add_kv(LLM_KV_METIS_CONTINUATION_LOGIT_LIMIT,    hparams.metis_cont_limit);
     if (hparams.final_logit_sigmoid_capping[0] != 0.0f) {
         add_kv(LLM_KV_FINAL_LOGIT_SIGMOID_CAPPING, std::vector<float>(
                 hparams.final_logit_sigmoid_capping.begin(), hparams.final_logit_sigmoid_capping.end()));
@@ -323,8 +329,9 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_ATTENTION_RECURRENT_LAYERS,        hparams.is_recr_impl, true);
     add_kv(LLM_KV_ATTENTION_OUTPUT_GROUP_COUNT,      hparams.dsv4_o_group_count);
     add_kv(LLM_KV_ATTENTION_OUTPUT_LORA_RANK,        hparams.dsv4_o_lora_rank);
+    add_kv(LLM_KV_ATTENTION_PASS_LORA_RANK,          hparams.metis_pass_lora_rank);
     add_kv(LLM_KV_ATTENTION_COMPRESS_ROPE_FREQ_BASE, hparams.dsv4_compress_rope_base);
-    if (model->arch == LLM_ARCH_DEEPSEEK4 || hparams.dsv4_hc_mult > 0) {
+    if (model->arch == LLM_ARCH_DEEPSEEK4 || (hparams.dsv4_hc_mult > 0 && model->arch != LLM_ARCH_XING4_0)) {
         // the loader requires one compress ratio per layer, including nextn layers
         const std::vector<uint32_t> compress_ratios(
                 hparams.dsv4_compress_ratios.begin(), hparams.dsv4_compress_ratios.begin() + hparams.n_layer_all);
@@ -419,6 +426,7 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_SSM_TIME_STEP_RANK,                hparams.ssm_dt_rank);
     add_kv(LLM_KV_SSM_GROUP_COUNT,                   hparams.ssm_n_group);
     add_kv(LLM_KV_SSM_DT_B_C_RMS,                    hparams.ssm_dt_b_c_rms);
+    add_kv(LLM_KV_SSM_NORM_EPS,                      hparams.ssm_norm_eps);
 
     add_kv(LLM_KV_KDA_HEAD_DIM,                      hparams.n_embd_head_kda);
     add_kv(LLM_KV_KDA_SAFE_GATE,                     hparams.kda_safe_gate);
@@ -521,6 +529,32 @@ void llama_model_saver::add_tensors_from_model() {
     add_tensor(model->cls_out_b);
     add_tensor(model->cls_norm);
     add_tensor(model->hrm_z_l_init);
+    add_tensor(model->stream_embd);
+    add_tensor(model->depth_mem_state_write);
+    add_tensor(model->depth_mem_meta_write);
+    add_tensor(model->depth_mem_entry_bias);
+    add_tensor(model->depth_mem_query);
+    add_tensor(model->depth_mem_query_b);
+    add_tensor(model->depth_mem_key);
+    add_tensor(model->depth_mem_key_b);
+    add_tensor(model->depth_mem_value);
+    add_tensor(model->depth_mem_value_b);
+    add_tensor(model->depth_mem_out);
+    add_tensor(model->depth_mem_out_b);
+    add_tensor(model->depth_mem_route_state);
+    add_tensor(model->depth_mem_route_retr);
+    add_tensor(model->depth_mem_route_diff);
+    add_tensor(model->depth_mem_route_hist);
+    add_tensor(model->depth_mem_route_b);
+    add_tensor(model->depth_mem_stream_gate);
+    add_tensor(model->depth_mem_stream_gate_b);
+    add_tensor(model->cont_hidden_state);
+    add_tensor(model->cont_hidden_retr);
+    add_tensor(model->cont_hidden_diff);
+    add_tensor(model->cont_hidden_route);
+    add_tensor(model->cont_hidden_b);
+    add_tensor(model->cont_output);
+    add_tensor(model->cont_output_b);
     add_tensor(model->hc_head_fn);
     add_tensor(model->hc_head_base);
     add_tensor(model->hc_head_scale);

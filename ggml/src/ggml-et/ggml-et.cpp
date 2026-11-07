@@ -1069,7 +1069,7 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 const bool zero_rot_offset  = ggml_get_op_params_i32(op, 15) == 0;
 
                 supported =
-                    zero_view_offset && zero_rot_offset && ndims <= 512 &&
+                    ggml_rope_get_truncate(op) && zero_view_offset && zero_rot_offset && ndims <= 512 &&
                     (is_normal || (is_neox && ndims % 16 == 0) || (is_imrope && ndims % 16 == 0 && has_sections));
             } else {
                 supported = false;
@@ -1273,7 +1273,7 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_FLASH_ATTN_EXT:
             if (op->type == GGML_TYPE_F32 && op->src[0] && op->src[0]->type == GGML_TYPE_F32 && op->src[1] &&
                 (op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_F16) && op->src[2] &&
-                (op->src[2]->type == GGML_TYPE_F32 || op->src[2]->type == GGML_TYPE_F16) && op->src[4] == nullptr &&
+                (op->src[2]->type == GGML_TYPE_F32 || op->src[2]->type == GGML_TYPE_F16) && op->src[4] == nullptr && op->src[5] == nullptr &&
                 ggml_is_contiguous_rows(op) && ggml_is_contiguous_rows(op->src[0])) {
                 float max_bias      = 0.0f;
                 float logit_softcap = 0.0f;
