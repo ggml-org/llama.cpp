@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <cerrno>
 #include <algorithm>
+#include <memory>
 
 #ifdef __has_include
     #if __has_include(<unistd.h>)
@@ -262,6 +263,49 @@ struct llama_file::impl {
         }
     }
 
+#ifdef __linux__
+    bool use_bounce = false;
+    std::unique_ptr<void, decltype(&free)> bounce{nullptr, &free};
+    static constexpr size_t bounce_size = 64ull << 20;
+
+    // direct IO read into an aligned private buffer, then copy to ptr
+    void read_bounce(void * ptr, size_t len) {
+        if (!bounce) {
+            void * b = nullptr;
+            if (posix_memalign(&b, std::max<size_t>(alignment, 4096), bounce_size) != 0) {
+                throw std::runtime_error("bounce buffer allocation failed");
+            }
+            bounce.reset(b);
+        }
+        size_t done = 0;
+        while (done < len) {
+            const size_t want = std::min(bounce_size, len - done);
+            size_t got = 0;
+            while (got < want) {
+                const ssize_t ret = ::read(fd, (char *) bounce.get() + got, want - got);
+                if (ret == -1) {
+                    if (errno == EINTR) {
+                        continue;
+                    }
+                    throw std::runtime_error(format("read error: %s", strerror(errno)));
+                }
+                if (ret == 0) {
+                    off_t pos = lseek(fd, 0, SEEK_CUR);
+                    if (pos != -1 && (size_t) pos == size) {
+                        std::memset((char *) bounce.get() + got, 0, want - got);
+                        got = want;
+                        break;
+                    }
+                    throw std::runtime_error("unexpectedly reached end of file");
+                }
+                got += (size_t) ret;
+            }
+            std::memcpy((char *) ptr + done, bounce.get(), want);
+            done += want;
+        }
+    }
+#endif
+
     void read_raw_unsafe(void * ptr, size_t len) {
         if (len == 0) {
             return;
@@ -279,6 +323,10 @@ struct llama_file::impl {
                 throw std::runtime_error("unexpectedly reached end of file");
             }
         } else {
+            if (use_bounce) {
+                read_bounce(ptr, len);
+                return;
+            }
             size_t bytes_read = 0;
             while (bytes_read < len) {
                 const size_t to_read = len - bytes_read;
@@ -289,6 +337,13 @@ struct llama_file::impl {
                         continue;  // Interrupted by signal, retry
                     }
                     // Fallback to std::fread in case the DMA controller cannot access the buffer
+                    // LLAMA_DIO_BOUNCE=1: keep direct IO, read through a normal buffer (pinned GPU staging memory gives EFAULT)
+                    if (errno == EFAULT && bytes_read == 0 && getenv("LLAMA_DIO_BOUNCE") && atoi(getenv("LLAMA_DIO_BOUNCE"))) {
+                        LLAMA_LOG_WARN("%s: direct IO into this buffer failed (%s), using a bounce buffer\n", __func__, strerror(errno));
+                        use_bounce = true;
+                        read_bounce(ptr, len);
+                        return;
+                    }
                     if (errno == EFAULT || errno == EINVAL) {
                         LLAMA_LOG_WARN("%s: Falling back to buffered IO due to %s\n", __func__, strerror(errno));
                         auto curr_off = tell();

@@ -5745,11 +5745,15 @@ static bool ggml_sycl_mul_mat_id_mmvq_fused(
     const ggml_tensor_extra_gpu * src0_extra =
         static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
     const bool use_reorder = src0_extra && src0_extra->optimized_feature.reorder;
+    // GGML_SYCL_Q2_0_FAST: Q2_0 expert kernel v2 (block pairs), reads SoA q8_1 activations
+    const bool q2_0_fast = !use_reorder && src0->type == GGML_TYPE_Q2_0 && ggml_sycl_q2_0_fast_enabled() &&
+                           (ne10 / QK2_0) % 2 == 0 && src0->nb[1] % 4 == 0 && src0->nb[2] % 4 == 0 &&
+                           ((uintptr_t) src0->data) % 4 == 0;
 
     ggml_sycl_pool_alloc<char> src1_q8_alloc(ctx.pool(),
         (size_t) ne11 * src1_padded_cols * sizeof(block_q8_1) / QK8_1);
     char * src1_ddq = src1_q8_alloc.get();
-    if (use_reorder) {
+    if (use_reorder || q2_0_fast) {
         quantize_row_q8_1_sycl<quantize_and_reorder_q8_1_soa>(
             (const float *) src1->data, src1_ddq, (int) ne10, (int) ne11,
             src1_padded_cols, stream);
@@ -5762,6 +5766,15 @@ static bool ggml_sycl_mul_mat_id_mmvq_fused(
     const size_t bytes_per_qrow = (size_t) src1_padded_cols * sizeof(block_q8_1) / QK8_1;
     const size_t src1_row_stride = (ne11 == 1) ? 0 : bytes_per_qrow;
 
+    if (q2_0_fast) {
+        ggml_sycl_mul_mat_vec_q2_0_fast_id(
+            src0->data, src1_ddq, (const int32_t *) ids->data,
+            (float *) dst->data, (int) ne10, nrows, n_experts_used,
+            /*expert_weight_stride=*/ src0->nb[2],
+            /*dst_row_stride=*/ dst->nb[1],
+            src1_row_stride, stream);
+        return true;
+    }
     if (use_reorder) {
         return ggml_sycl_mul_mat_vec_q_id_reorder(
             src0->type, src0->data, src1_ddq, (const int32_t *) ids->data,
@@ -5837,6 +5850,40 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
     if (ne12 == 1) {
         if (ggml_sycl_mul_mat_id_mmvq_fused(ctx, src0, src1, ids, dst)) {
             return;
+        }
+    }
+
+    // Small-batch MoE (e.g. MTP verification, 2..N tokens): run the one-token fused path once per
+    // token instead of copying the expert ids to the host and waiting for the queue. Each token's row
+    // goes through exactly the one-token kernel, so it is bit-identical to a single-token step.
+    // Off unless GGML_SYCL_MMID_SMALL_BATCH=N (max tokens) is set.
+    {
+        static const int64_t mmid_small_batch = [] {
+            const char * e = getenv("GGML_SYCL_MMID_SMALL_BATCH");
+            return e ? (int64_t) atoi(e) : (int64_t) 0;
+        }();
+        if (ne12 > 1 && ne12 <= mmid_small_batch && ids->ne[1] == ne12) {
+            bool ok = true;
+            for (int64_t t = 0; t < ne12 && ok; ++t) {
+                ggml_tensor src1_t = *src1;
+                src1_t.data  = (char *) src1->data + t * src1->nb[2];
+                src1_t.ne[2] = 1;
+                ggml_tensor ids_t = *ids;
+                ids_t.data  = (char *) ids->data + t * ids->nb[1];
+                ids_t.ne[1] = 1;
+                ggml_tensor dst_t = *dst;
+                dst_t.data  = (char *) dst->data + t * dst->nb[2];
+                dst_t.ne[2] = 1;
+                dst_t.src[0] = const_cast<ggml_tensor *>(src0);
+                dst_t.src[1] = &src1_t;
+                dst_t.src[2] = &ids_t;
+                ok = ggml_sycl_mul_mat_id_mmvq_fused(ctx, src0, &src1_t, &ids_t, &dst_t);
+                // all slices share type and shape, so only the first can refuse; nothing written then
+                GGML_ASSERT(ok || t == 0);
+            }
+            if (ok) {
+                return;
+            }
         }
     }
     GGML_ASSERT(ggml_sycl_mul_mat_id_needs_sync(dst));

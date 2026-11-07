@@ -1536,6 +1536,16 @@ struct test_case {
             }
 
             double err = ud->tc->err(f1.data(), f2.data(), f1.size());
+            // GGML_TEST_PRINT_ERR: print the error of MUL_MAT_ID results even when the test passes (local diagnostic)
+            if (getenv("GGML_TEST_PRINT_ERR") != nullptr && t1->op == GGML_OP_MUL_MAT_ID) {
+                double max_diff = 0.0;
+                double max_abs  = 0.0;
+                for (size_t i = 0; i < f1.size(); i++) {
+                    max_diff = std::max(max_diff, (double) std::fabs(f1[i] - f2[i]));
+                    max_abs  = std::max(max_abs,  (double) std::fabs(f2[i]));
+                }
+                printf("[ERR nmse=%.3e maxdiff/maxabs=%.3e] ", err, max_diff / max_abs);
+            }
             if (err > ud->tc->max_err(ud->backend1)) {
                 printf("[%s] ERR = %.9f > %.9f ", ggml_op_desc(t1), err, ud->tc->max_err(ud->backend1));
                 //for (int i = 0; i < (int) f1.size(); i++) {
@@ -12408,6 +12418,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // Q2_0 fast-kernel checks (patch_q2_0_fast.py)
+    for (int k : {640, 2560, 128, 192}) {
+        for (int m : {640, 2560, 37}) {
+            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q2_0, GGML_TYPE_F32, m, 1, k, {1, 1}, {1, 1}));
+        }
+        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q2_0, GGML_TYPE_F32, 32, 10, false, 640, 1, k));
+        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q2_0, GGML_TYPE_F32, 32, 10, false, 2560, 1, k));
+        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q2_0, GGML_TYPE_F32, 32, 10, false, 640, 4, k));
+    }
+
     return test_cases;
 }
 #ifdef _MSC_VER
@@ -12935,6 +12955,26 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         test_cases.emplace_back(new test_l2_norm_batch(GGML_TYPE_F32, { n, 16, 16, 1 }, 4, 1e-12f, true));
     }
 
+
+    // Qwen3.8-Flash-Next decode shapes (added by add_perf_shapes.py)
+    // ggml shapes: hc_*_down [10240,320] -> m=320 k=10240; hc_*_up [320,10240] -> m=10240 k=320;
+    // ffn_gate_inp [2560,512] -> m=512 k=2560; experts gate/up [2560,640,512], down [640,2560,512]; n=1 decode, n=6 MTP verify
+    for (ggml_type t : {GGML_TYPE_BF16, GGML_TYPE_F16, GGML_TYPE_Q8_0}) {
+        for (int bs : {1, 6}) {
+            test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32,   320, bs, 10240, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 10240, bs,   320, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32,   512, bs,  2560, {1, 1}, {1, 1}));
+        }
+    }
+    for (int bs : {1, 2, 4, 6, 8}) {
+        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q2_0, GGML_TYPE_F32, 512, 10, false,  640, bs, 2560));
+        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q2_0, GGML_TYPE_F32, 512, 10, false, 2560, bs,  640));
+    }
+    for (ggml_type t : {GGML_TYPE_Q2_0, GGML_TYPE_Q3_K, GGML_TYPE_IQ4_XS}) {
+        for (int bs : {1, 6}) {
+            test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 10240, bs, 2560, {1, 1}, {1, 1}));
+        }
+    }
 
     return test_cases;
 }

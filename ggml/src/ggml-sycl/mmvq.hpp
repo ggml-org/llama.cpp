@@ -117,4 +117,11 @@ bool ggml_sycl_mul_mat_vec_q_glu_plain(
     int                stride_col_dst,       // floats between output columns in dst
     dpct::queue_ptr    stream);
 
+// Q2_0 expert kernel v2 (GGML_SYCL_Q2_0_FAST=1). vy: src1 quantized with quantize_and_reorder_q8_1_soa.
+bool ggml_sycl_q2_0_fast_enabled();
+void ggml_sycl_mul_mat_vec_q2_0_fast_id(const void * vx_base, const void * vy, const int32_t * ids_dev,
+                                        float * dst_base, int ncols, int nrows, int n_experts_used,
+                                        size_t expert_weight_stride, size_t dst_row_stride,
+                                        size_t src1_row_stride, dpct::queue_ptr stream);
+
 #endif // GGML_SYCL_MMVQ_HPP

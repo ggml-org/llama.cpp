@@ -1,3 +1,5 @@
+#include <unistd.h>
+#include <cstring>
 #include "mmvq.hpp"
 
 #include "ggml.h"
@@ -3746,4 +3748,152 @@ bool ggml_sycl_mul_mat_vec_q_glu_reorder(enum ggml_type src0_type, enum ggml_glu
         default:
             return false;
     }
+}
+
+
+// =============================================================================================
+// Q2_0 expert kernel v2 (GGML_SYCL_Q2_0_FAST=1): block pairs, dword weight loads, SoA activations.
+// =============================================================================================
+bool ggml_sycl_q2_0_fast_enabled() {
+    // 0 = off, 1 = on, 2 = on while /tmp/q2_0_fast exists (q2_0_fast_file: A/B inside one launch)
+    static const int mode = [] {
+        const char * e = getenv("GGML_SYCL_Q2_0_FAST");
+        if (e == nullptr) return 0;
+        if (strcmp(e, "file") == 0) return 2;
+        return atoi(e) != 0 ? 1 : 0;
+    }();
+    if (mode == 2) {
+        return access("/tmp/q2_0_fast", F_OK) == 0;
+    }
+    return mode == 1;
+}
+
+// 4 x 2-bit weights of one byte (LSB first) -> 4 int8 lanes
+static __dpct_inline__ int q2v2_spread(uint32_t b) {
+    uint32_t x = (b | (b << 12)) & 0x000F000Fu;
+    x          = (x | (x << 6)) & 0x03030303u;
+    return (int) x;
+}
+
+// 16 weights (one qs dword) against 16 int8 activations
+static __dpct_inline__ int q2v2_dot16(const uint32_t v, const sycl::int4 & u, int s) {
+    s = dpct::dp4a(q2v2_spread(v & 0xFFu),         u.x(), s);
+    s = dpct::dp4a(q2v2_spread((v >> 8) & 0xFFu),  u.y(), s);
+    s = dpct::dp4a(q2v2_spread((v >> 16) & 0xFFu), u.z(), s);
+    s = dpct::dp4a(q2v2_spread(v >> 24),           u.w(), s);
+    return s;
+}
+
+// Two consecutive block_q2_0 (36 bytes, 4-byte aligned) against 128 SoA q8_1 activations and their 4 ds values.
+// Bytes: [d0 | qs0 (16) | d1 | qs1 (16)]; w[0] = d0 + qs0[0..1], w[4] = qs0[14..15] + d1, w[5..8] = qs1.
+static __dpct_inline__ float q2v2_pair_dot(const uint32_t * __restrict__ wq, const int8_t * __restrict__ aq,
+                                           const sycl::half2 * __restrict__ ads) {
+    uint32_t w[9];
+#pragma unroll
+    for (int i = 0; i < 9; ++i) {
+        w[i] = wq[i];
+    }
+    uint32_t q[8];
+#pragma unroll
+    for (int j = 0; j < 4; ++j) {
+        q[j]     = (w[j] >> 16) | (w[j + 1] << 16);
+        q[4 + j] = w[5 + j];
+    }
+    const float d0 = (float) sycl::bit_cast<sycl::half>((uint16_t) (w[0] & 0xFFFFu));
+    const float d1 = (float) sycl::bit_cast<sycl::half>((uint16_t) (w[4] >> 16));
+
+    const sycl::int4 * a4  = reinterpret_cast<const sycl::int4 *>(aq);
+    float              sum = 0.0f;
+#pragma unroll
+    for (int hb = 0; hb < 4; ++hb) {               // the four q8_1 blocks of 32 weights
+        int s = q2v2_dot16(q[2 * hb], a4[2 * hb], 0);
+        s     = q2v2_dot16(q[2 * hb + 1], a4[2 * hb + 1], s);
+        const sycl::float2 ds = ads[hb].convert<float, sycl::rounding_mode::automatic>();
+        sum += (hb < 2 ? d0 : d1) * (s * ds.x() - ds.y());   // (q - 1) * a = q * a - a
+    }
+    return sum;
+}
+
+template <int LPR>
+static void mul_mat_vec_q2v2_moe(const void * __restrict__ vx_base, const void * __restrict__ vy_base,
+                                 float * __restrict__ dst_base, const int32_t * __restrict__ ids_dev,
+                                 const int ncols, const int nrows, const size_t expert_weight_stride,
+                                 const size_t dst_row_stride, const size_t src1_row_stride,
+                                 const sycl::nd_item<3> & it) {
+    constexpr int RPS        = WARP_SIZE / LPR;   // rows per sub-group
+    const int     expert_idx = it.get_group(1);
+    const int     i02        = ids_dev[expert_idx];
+
+    const uint8_t * vx  = (const uint8_t *) vx_base + (size_t) i02 * expert_weight_stride;
+    const int8_t *  vy  = (const int8_t *) vy_base + (size_t) expert_idx * src1_row_stride;
+    float *         dst = (float *) ((char *) dst_base + (size_t) expert_idx * dst_row_stride);
+
+    const auto sg   = it.get_sub_group();
+    const int  lane = sg.get_local_linear_id();
+    const int  sgid = it.get_group(2) * sg.get_group_linear_range() + sg.get_group_linear_id();
+    const int  row  = sgid * RPS + lane / LPR;
+    const int  l    = lane % LPR;
+
+    const int           bpr = ncols / QK2_0;
+    const int           ppr = bpr / 2;
+    const sycl::half2 * ds  = reinterpret_cast<const sycl::half2 *>(vy + ncols);   // SoA: [qs (ncols)][ds]
+    float               sum = 0.0f;
+    if (row < nrows) {
+        const uint32_t * wrow = reinterpret_cast<const uint32_t *>(vx + (size_t) row * bpr * sizeof(block_q2_0));
+        for (int p = l; p < ppr; p += LPR) {
+            sum += q2v2_pair_dot(wrow + 9 * p, vy + 128 * p, ds + 4 * p);
+        }
+    }
+    // every lane takes part in the shuffles (no early return above)
+#pragma unroll
+    for (int mask = LPR / 2; mask > 0; mask >>= 1) {
+        sum += dpct::permute_sub_group_by_xor(sg, sum, mask);
+    }
+    if (l == 0 && row < nrows) {
+        dst[row] = sum;
+    }
+}
+
+template <int LPR>
+static void launch_mul_mat_vec_q2v2_moe(const void * vx_base, const void * vy, const int32_t * ids_dev,
+                                        float * dst_base, const int ncols, const int nrows,
+                                        const int n_experts_used, const size_t expert_weight_stride,
+                                        const size_t dst_row_stride, const size_t src1_row_stride,
+                                        dpct::queue_ptr stream) {
+    constexpr int        NSG    = 4;   // sub-groups per work-group
+    constexpr int        RPS    = WARP_SIZE / LPR;
+    const int            groups = (nrows + RPS * NSG - 1) / (RPS * NSG);
+    const sycl::range<3> block_nums(1, (unsigned) n_experts_used, (unsigned) groups);
+    const sycl::range<3> block_dims(1, 1, NSG * WARP_SIZE);
+    stream->submit([&](sycl::handler & cgh) {
+        cgh.parallel_for(sycl::nd_range<3>(block_nums * block_dims, block_dims),
+                         [=](sycl::nd_item<3> it) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                             mul_mat_vec_q2v2_moe<LPR>(vx_base, vy, dst_base, ids_dev, ncols, nrows,
+                                                       expert_weight_stride, dst_row_stride, src1_row_stride, it);
+                         });
+    });
+}
+
+// vy: src1 quantized with quantize_and_reorder_q8_1_soa. Caller checks: (ncols / QK2_0) even, rows and expert
+// slices 4-byte aligned.
+void ggml_sycl_mul_mat_vec_q2_0_fast_id(const void * vx_base, const void * vy, const int32_t * ids_dev,
+                                        float * dst_base, int ncols, int nrows, int n_experts_used,
+                                        size_t expert_weight_stride, size_t dst_row_stride,
+                                        size_t src1_row_stride, dpct::queue_ptr stream) {
+    const int ppr = ncols / QK2_0 / 2;
+    int       lpr = 1;
+    while (lpr * 2 <= WARP_SIZE && ppr % (lpr * 2) == 0 && ppr / (lpr * 2) >= 2) {
+        lpr *= 2;
+    }
+#define Q2V2(L) launch_mul_mat_vec_q2v2_moe<L>(vx_base, vy, ids_dev, dst_base, ncols, nrows, n_experts_used, \
+                                               expert_weight_stride, dst_row_stride, src1_row_stride, stream)
+    switch (lpr) {
+        case 1:  Q2V2(1);  break;
+        case 2:  Q2V2(2);  break;
+        case 4:  Q2V2(4);  break;
+        case 8:  Q2V2(8);  break;
+        case 16: Q2V2(16); break;
+        default: Q2V2(WARP_SIZE); break;
+    }
+#undef Q2V2
 }
