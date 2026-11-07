@@ -22,7 +22,6 @@
 #include <regex>
 #include <queue>
 #include <deque>
-#include <filesystem>
 #include <algorithm>
 #include <cmath>
 #include <initializer_list>
@@ -67,59 +66,6 @@
 using intvec  = std::vector<int>;
 using uintvec = std::vector<unsigned int>;
 using u32vec  = std::vector<uint32_t>;
-
-// Directory of the HTP skel as an ASCII path with a trailing '\', or empty if it cannot be resolved.
-// The skel is next to this module or in ../lib. Non-ASCII directories use the 8.3 short name.
-static std::string htp_skel_dir(unsigned int arch) {
-#ifdef _WIN32
-    namespace fs = std::filesystem;
-
-    HMODULE hm = nullptr;
-    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                            (LPCWSTR) &htp_skel_dir, &hm)) {
-        return {};
-    }
-
-    std::wstring buf(32768, L'\0');
-    DWORD        n = GetModuleFileNameW(hm, &buf[0], (DWORD) buf.size());
-    if (n == 0 || n >= buf.size()) {
-        return {};
-    }
-    buf.resize(n);
-
-    const fs::path mod_dir = fs::path(buf).parent_path();
-    const fs::path skel    = "libggml-htp-v" + std::to_string(arch) + ".so";
-
-    auto is_ascii = [](const std::wstring & s) {
-        return std::all_of(s.begin(), s.end(), [](wchar_t c) { return c < 0x80; });
-    };
-
-    for (const fs::path & d : { mod_dir, mod_dir / ".." / "lib" }) {
-        std::error_code ec;
-        if (!fs::is_regular_file(d / skel, ec)) {
-            continue;
-        }
-
-        std::wstring dir = d.lexically_normal().wstring();
-        if (!is_ascii(dir)) {
-            std::wstring sp(32768, L'\0');
-            DWORD        m = GetShortPathNameW(dir.c_str(), &sp[0], (DWORD) sp.size());
-            if (m == 0 || m >= sp.size()) {
-            return {};
-            }
-            sp.resize(m);
-            if (!is_ascii(sp)) {
-                return {};
-            }
-            dir = sp;
-        }
-        return std::string(dir.begin(), dir.end()) + "\\";
-    }
-#else
-    GGML_UNUSED(arch);
-#endif
-    return {};
-}
 
 #define GGML_HEXAGON_MAX_SESSIONS          16
 
@@ -2171,7 +2117,6 @@ void ggml_hexagon_session::allocate(const ggml_hexagon_device_config & config) n
         }
     }
 
-    // Open a session for the skel at `prefix` ("file:///" or "file:///<dir>")
     auto open_session = [&](const std::string & prefix, std::string & uri_out) -> int {
         const std::string htp_uri = prefix + "libggml-htp-v" + std::to_string(opt_arch) +
                                     ".so?htp_iface_skel_handle_invoke&_modver=1.0";
@@ -2192,30 +2137,62 @@ void ggml_hexagon_session::allocate(const ggml_hexagon_device_config & config) n
             snprintf(session_uri.data(), session_uri.size(), "%s&_dom=%s&_session=%u",
                      htp_uri.c_str(), dom_name.c_str(), this->session_id);
 
-            GGML_LOG_WARN("ggml-hex: %s failed to get URI (physical %d, virtual %d) : error 0x%x. Falling back to single session URI: %s\n",
-                          this->c_name(), phys_idx, virt_idx, err, session_uri.data());
+            HEX_VERBOSE("ggml-hex: %s failed to get URI (physical %d, virtual %d) : error 0x%x. Falling back to single session URI: %s\n",
+                        this->c_name(), phys_idx, virt_idx, err, session_uri.data());
         }
 
         uri_out = session_uri.data();
         return htp_iface_open(session_uri.data(), &this->handle);
     };
 
-    // Open session
-    // Prefer the absolute skel path: a bare name depends on the library search path of the process
-    const std::string skel_dir = htp_skel_dir(opt_arch);
+    const std::string lib_dir = htp_lib_dir();
 
     std::string session_uri;
-    int         err = AEE_EFAILED;
-    if (!skel_dir.empty()) {
-        err = open_session("file:///" + skel_dir, session_uri);
-        if (err != AEE_SUCCESS) {
-            GGML_LOG_WARN("ggml-hex: %s failed to open session : uri %s error 0x%x. Retrying with bare skel name\n",
-                          this->c_name(), session_uri.c_str(), err);
+    int err = AEE_EFAILED;
+
+    // 1. Try configuring DSP search path via FASTRPC_MANAGE_DSP_LIBRARY_PATH
+    if (!lib_dir.empty()) {
+        int sp_err = htpdrv_set_dsp_search_path(this->domain_id, lib_dir, this->c_name());
+        if (sp_err == AEE_SUCCESS) {
+            err = open_session("file:///", session_uri);
+            if (err != AEE_SUCCESS) {
+                HEX_VERBOSE("ggml-hex: %s failed to open session with search path : uri %s error 0x%x\n",
+                            this->c_name(), session_uri.c_str(), err);
+            }
         }
     }
-    if (err != AEE_SUCCESS) {
+
+    // 2. Fallback to absolute path in URI
+    if (err != AEE_SUCCESS && !lib_dir.empty()) {
+        std::string abs_prefix = "file://";
+        if (lib_dir.front() != '/' && lib_dir.front() != '\\') {
+            abs_prefix += "/";
+        }
+        abs_prefix += lib_dir;
+        if (abs_prefix.back() != '/' && abs_prefix.back() != '\\') {
+            abs_prefix += "/";
+        }
+
+        HEX_VERBOSE("ggml-hex: %s trying absolute path fallback: %s\n", this->c_name(), abs_prefix.c_str());
+        err = open_session(abs_prefix, session_uri);
+        if (err != AEE_SUCCESS) {
+            HEX_VERBOSE("ggml-hex: %s failed to open session with absolute path : uri %s error 0x%x\n",
+                        this->c_name(), session_uri.c_str(), err);
+        }
+    }
+
+    // 3. Fallback to process environment variables
+    if (err != AEE_SUCCESS && !lib_dir.empty()) {
+        HEX_VERBOSE("ggml-hex: %s falling back to process env for DSP search path\n", this->c_name());
+        htpdrv_set_dsp_env_path(lib_dir, this->c_name());
         err = open_session("file:///", session_uri);
     }
+
+    // Bare name attempt if lib_dir is empty and nothing was tried yet
+    if (err != AEE_SUCCESS && lib_dir.empty()) {
+        err = open_session("file:///", session_uri);
+    }
+
     if (err != AEE_SUCCESS) {
         GGML_LOG_ERROR("ggml-hex: %s failed to open session : uri %s error 0x%x\n", this->c_name(), session_uri.c_str(), err);
         throw std::runtime_error("ggml-hex: failed to open session (see log for details)");
@@ -3422,8 +3399,8 @@ static void ggml_hexagon_discover_devices() {
             discovery_supported = true;
             const int n_domains = std::min(domain_info.sys.num_domains, (int) domains.size());
             for (int i = 0; i < n_domains; i++) {
-                GGML_LOG_INFO("ggml-hex: FASTRPC_GET_DOMAINS[%d]: type %d id %d name '%s' status %d instance-id %d\n",
-                              i, (int) domains[i].type, domains[i].id, domains[i].name, domains[i].status, domains[i].instance_id);
+                HEX_VERBOSE("ggml-hex: FASTRPC_GET_DOMAINS[%d]: type %d id %d name '%s' status %d instance-id %d\n",
+                            i, (int) domains[i].type, domains[i].id, domains[i].name, domains[i].status, domains[i].instance_id);
                 if (domains[i].type != FASTRPC_NSP) {
                     GGML_LOG_DEBUG("ggml-hex:   skipping non-CDSP domain (type=%d)\n", (int) domains[i].type);
                     continue;
@@ -3437,10 +3414,10 @@ static void ggml_hexagon_discover_devices() {
                               domains[i].instance_id, domains[i].id, domains[i].name);
             }
         } else {
-            GGML_LOG_WARN("ggml-hex: FASTRPC_GET_DOMAINS fetch failed (0x%x), using static CDSP domains\n", (unsigned) err);
+            HEX_VERBOSE("ggml-hex: FASTRPC_GET_DOMAINS fetch failed (0x%x), using static CDSP domains\n", (unsigned) err);
         }
     } else if (err != AEE_SUCCESS) {
-        GGML_LOG_DEBUG("ggml-hex: FASTRPC_GET_DOMAINS query failed (0x%x), using static CDSP domains\n", (unsigned) err);
+        HEX_VERBOSE("ggml-hex: FASTRPC_GET_DOMAINS query failed (0x%x), using static CDSP domains\n", (unsigned) err);
     }
 
     // Populate domain IDs and names for all configured devices
