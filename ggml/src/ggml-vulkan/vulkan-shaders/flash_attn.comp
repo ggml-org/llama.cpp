@@ -95,13 +95,13 @@ void main() {
     const uint32_t col_tid = (gl_LocalInvocationIndex % threads_per_rowgroup) / D_split;
 
     if (LIMIT_OCCUPANCY_SHMEM > 0) {
-        // This just exists to avoid the occupancy_limiter array getting optimized out
-        occupancy_limiter[tid] = vec4(tid);
-
+        // Runtime-dependent index, otherwise RADV forwards the store and drops the array
+        const uint32_t li = (gl_WorkGroupID.x * gl_WorkGroupSize.x + tid) % LIMIT_OCCUPANCY_SHMEM;
+        occupancy_limiter[li] = vec4(tid);
         barrier();
-
-        if (occupancy_limiter[tid] == vec4(99999.0)) {
-            data_ov4[0] = D_TYPEV4(occupancy_limiter[tid]);
+        const uint32_t lr = (li + 1) % LIMIT_OCCUPANCY_SHMEM;
+        if (occupancy_limiter[lr] == vec4(99999.0)) {
+            data_ov4[0] = D_TYPEV4(occupancy_limiter[lr]);
         }
     }
 
@@ -154,8 +154,6 @@ void main() {
 
     float Lf[rows_per_thread], Mf[rows_per_thread];
 
-    // Use -FLT_MAX/2 rather than -inf to reduce the possibility of NaNs, e.g. when computing Mold-M.
-    const float NEG_FLT_MAX_OVER_2 = uintBitsToFloat(0xFEFFFFFF);
 
     [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
         Lf[r] = 0;
@@ -220,7 +218,11 @@ void main() {
                             masksh[c * masksh_stride + r] = m;
                             max_mask = max(max_mask, float(m));
                         } else {
+#if defined(FLOAT16)
+                            masksh[c * masksh_stride + r] = USE_SPARSE ? FLOAT_TYPE(NEG_FLT16_MAX) : FLOAT_TYPE(0);
+#else
                             masksh[c * masksh_stride + r] = USE_SPARSE ? FLOAT_TYPE(NEG_FLT_MAX_OVER_2) : FLOAT_TYPE(0);
+#endif
                         }
                     }
                 }
