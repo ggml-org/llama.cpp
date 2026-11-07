@@ -5,6 +5,8 @@
 
 import subprocess
 import os
+import http.client
+import socket
 
 TMP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tmp")
 import re
@@ -45,6 +47,18 @@ class ServerError(Exception):
     def __init__(self, code, body):
         self.code = code
         self.body = body
+
+
+class _UnixHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, sock_path: str, timeout: float | None = None):
+        super().__init__("localhost", timeout=timeout)
+        self.sock_path = sock_path
+
+    def connect(self):
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(self.timeout)
+        sock.connect(self.sock_path)
+        self.sock = sock
 
 
 class ServerProcess:
@@ -129,6 +143,8 @@ class ServerProcess:
     mcp_servers_json: str | None = None
     cors_origins: str | None = None
     llama_cache: str | None = None
+    service_sock: str | None = None
+    config_dir: str | None = None  # where the service keeps its lock file
 
     # session variables
     process: subprocess.Popen | None = None
@@ -151,6 +167,10 @@ class ServerProcess:
             env["LLAMA_CACHE"] = self.llama_cache
         elif "LLAMA_CACHE" not in os.environ:
             env["LLAMA_CACHE"] = "tmp"
+        if self.config_dir is not None:
+            os.makedirs(self.config_dir, exist_ok=True)
+            env["XDG_CONFIG_HOME"] = os.path.abspath(self.config_dir)
+            env["APPDATA"] = os.path.abspath(self.config_dir)
         if self.external_server:
             print(f"[external_server]: Assuming external server running on {self.server_host}:{self.server_port}")
             return
@@ -193,6 +213,8 @@ class ServerProcess:
             server_args.extend(["--models-memory-margin", self.models_memory_margin])
         if self.models_preset:
             server_args.extend(["--models-preset", self.models_preset])
+        if self.service_sock:
+            server_args.extend(["--service-sock", self.service_sock])
         if self.cors_origins:
             server_args.extend(["--cors-origins", self.cors_origins])
         if self.n_batch:
@@ -422,6 +444,32 @@ class ServerProcess:
         else:
             result.body = None
         print("Response from server", json.dumps(result.body, indent=2))
+        return result
+
+    def make_sock_request(
+        self,
+        method: str,
+        path: str,
+        data: dict | None = None,
+        timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
+    ) -> ServerResponse:
+        """ a request over the service UNIX socket (--service-sock) """
+        assert self.service_sock is not None
+        conn = _UnixHTTPConnection(self.service_sock, timeout=timeout)
+        body = json.dumps(data).encode() if data is not None else None
+        headers = {"Content-Type": "application/json"} if body is not None else {}
+        conn.request(method, path, body=body, headers=headers)
+        response = conn.getresponse()
+        result = ServerResponse()
+        result.headers = dict(response.getheaders())
+        result.status_code = response.status
+        text = response.read().decode("utf-8")
+        conn.close()
+        try:
+            result.body = json.loads(text)
+        except JSONDecodeError:
+            result.body = text
+        print("Response from service socket", json.dumps(result.body, indent=2))
         return result
 
     def make_stream_request(

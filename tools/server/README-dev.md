@@ -291,6 +291,20 @@ The flow for downloading a new model:
 - If a stop request comes in, the router asks the child process to stop (same mechanism as running a model in child process)
 - Otherwise, upon completion, we call `load_models()` to refresh the list of models
 
+### Service socket (`llama service`)
+
+The service is the router with a second `server_http_context` bound to a UNIX socket (`--service-sock`, see `server-service.{h,cpp}`). The socket gets the same routes as the TCP port, minus the API key, plus `/service/*`. Only the socket serves those, so "spawn a process with these arguments" is reachable by the local user alone: the socket file inherits the permissions of the config directory.
+
+`POST /service/spawn` goes to `server_models::spawn()`:
+- the args are parsed with `common_preset_context::load_from_args()`, the router-reserved options are dropped (`ROUTER_RESERVED_ARGS`), and the result is merged over the router's own args, so the request wins
+- the model is registered with `SERVER_MODEL_SOURCE_SPAWNED`, which pins it: `pick_victim()` skips it, a reload keeps it while it runs, and `ensure_model_ready()` fails fast when every slot is held by a pinned model (`server_models_sched::starved()`)
+- if an entry of that name exists (for ex. the cached model), it is kept in `instance_t::shadow` and restored by `on_child_exit()`
+- the cwd and the whitelisted env of the request are stored in the meta (`spawn_cwd`, `spawn_env`) and applied by `load()`, so a later autoload of the same entry runs it the same way
+
+Each child's stderr lines go through `server_models::on_child_log()` into a `server_log_ring` (one per instance, 2000 lines), which `GET /service/logs` drains.
+
+`llama service start` spawns `llama service run --detached` with `common_subproc` and waits for the lock file. The detached process calls `setsid()` (POSIX) and redirects its stdio to `service.log` before running `llama_server()`; on Windows `subprocess_option_no_window` keeps it off the console. `service.lock` is held with `common_file_lock` for the life of the process: it decides which process is the service before anything binds, and the OS releases it when the process dies, so a crash or a reused pid never blocks the next start. The lock file `service.json` (pid, host, port, sock, build, args) only describes the running service: it is written once the listeners are up and removed by `clean_up()`; `llama service stop` posts `/service/stop`, waits for `service.lock` to be released and kills the pid after 30 s.
+
 ### Sleep mode
 
 Sleep mode was initially introduced in PR [#18228](https://github.com/ggml-org/llama.cpp/pull/18228). The main idea is to have:
