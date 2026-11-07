@@ -148,6 +148,12 @@ static const llm_fused_op_probe llm_fused_op_gdn_ch_probe = {
     /*.n_tokens_per_seq =*/ 16,
 };
 
+static const llm_fused_op_probe llm_fused_op_gdn_replay_probe = {
+    /*.op               =*/ LLM_FUSED_OP_GDN_REPLAY,
+    /*.name             =*/ "fused Gated Delta Net (replay)",
+    /*.n_tokens_per_seq =*/ 2,
+};
+
 static const llm_fused_op_probe llm_fused_op_lid_probe = {
     /*.op               =*/ LLM_FUSED_OP_LIGHTNING_INDEXER,
     /*.name             =*/ "Lightning Indexer",
@@ -206,6 +212,25 @@ llama_context::llama_context(
         LLAMA_LOG_DEBUG("%s: n_rs_seq=%u requested but model does not support recurrent partial rollback; clamping to 0\n",
                         __func__, cparams.n_rs_seq);
         cparams.n_rs_seq = 0;
+    }
+
+    // [EXPERIMENTAL] deferred commit for delta-net: keep one state and the inputs of the last ubatch
+    // LLAMA_RS_REPLAY=1: replay in the gdn op where the devices support it, else in the graph; 2: always in the graph
+    cparams.rs_replay       = false;
+    cparams.rs_replay_fused = false;
+    cparams.auto_frep       = false;
+    if (cparams.n_rs_seq > 0) {
+        const char * env = getenv("LLAMA_RS_REPLAY");
+        const bool supported = model.arch == LLM_ARCH_QWEN35 || model.arch == LLM_ARCH_QWEN35MOE || model.arch == LLM_ARCH_QWEN3NEXT ||
+                               model.arch == LLM_ARCH_QWEN4EXP;
+        cparams.rs_replay = env && atoi(env) != 0 && supported;
+        if (cparams.rs_replay && model.split_mode() == LLAMA_SPLIT_MODE_TENSOR && model.arch == LLM_ARCH_QWEN3NEXT) {
+            // its conv channels split in two segments, which the channels-first replay conv history cannot keep
+            LLAMA_LOG_WARN("%s: LLAMA_RS_REPLAY is not supported for qwen3next with SPLIT_MODE_TENSOR, using snapshots\n", __func__);
+            cparams.rs_replay = false;
+        }
+        // resolved in resolve_fused_ops()
+        cparams.auto_frep = cparams.rs_replay && atoi(env) == 1;
     }
 
     cparams.n_threads               = params.n_threads;
@@ -449,6 +474,7 @@ llama_context::llama_context(
     LLAMA_LOG_INFO("%s: freq_base             = %.1f\n", __func__, cparams.rope_freq_base);
     LLAMA_LOG_INFO("%s: freq_scale            = %g\n",   __func__, cparams.rope_freq_scale);
     LLAMA_LOG_INFO("%s: n_rs_seq              = %u\n",   __func__, cparams.n_rs_seq);
+    LLAMA_LOG_INFO("%s: rs_replay             = %s\n",   __func__, cparams.rs_replay ? "true" : "false");
     LLAMA_LOG_INFO("%s: n_outputs_max         = %u\n",   __func__, cparams.n_outputs_max);
     LLAMA_LOG_INFO("%s: n_outputs_max_per_seq = %u\n",   __func__, cparams.n_outputs_max_per_seq);
 
@@ -726,6 +752,14 @@ void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint3
         resolve(llm_fused_op_gdn_ar_probe, cparams.fused_gdn_ar);
         resolve(llm_fused_op_gdn_ch_probe, cparams.fused_gdn_ch);
         cparams.auto_fgdn = false;
+    }
+
+    // a device without the replay in its gdn op falls back to the replay in the graph
+    if (cparams.auto_frep) {
+        LLAMA_LOG_INFO("%s: resolving fused Gated Delta Net replay support:\n", func);
+        cparams.rs_replay_fused = cparams.fused_gdn_ar && cparams.fused_gdn_ch;
+        resolve(llm_fused_op_gdn_replay_probe, cparams.rs_replay_fused);
+        cparams.auto_frep = false;
     }
 
     if (cparams.auto_flid) {

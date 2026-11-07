@@ -396,7 +396,7 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
     GGML_ASSERT(s->ne[0] == S_v && s->ne[1] == S_v && s->ne[2] == H_v      && s->ne[3] == n_seqs);
 
     // K=1: output carries the final state only. state s is 4D [S_v, S_v, H_v, n_seqs].
-    ggml_tensor * result = ggml_gated_delta_net(ctx0, q, k, v, g, b, s, /*K=*/1);
+    ggml_tensor * result = ggml_gated_delta_net(ctx0, q, k, v, g, b, s, nullptr, nullptr, nullptr, nullptr, /*K=*/1, false);
     if (n_tokens == 1) {
         res->add_fused_node({LLM_FUSED_OP_GDN_AR, result, il});
     } else {
@@ -452,6 +452,10 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
         int                  il) {
     const int64_t n_seqs = ubatch.n_seqs;
 
+    if (cparams.rs_replay) {
+        return build_conv_state_replay(inp, conv_states_all, qkv_mixed, conv_kernel_size - 1, conv_channels, il);
+    }
+
     ggml_tensor * conv_states = build_rs(inp, conv_states_all, hparams.n_embd_r(), n_seqs);
     cb(conv_states, "conv_states", il);
 
@@ -469,6 +473,184 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
     return conv_input;
 }
 
+// [TAG_RECURRENT_REPLAY]
+// rs_replay keeps one committed state per seq plus the inputs of the last ubatch when it is short enough to be rolled
+// back (2 <= n_seq_tokens <= n_rs_seq + 1). The next ubatch first replays the pending tokens that seq_rm kept, commits
+// the result and then runs its own tokens. Must match the rule in llama_memory_recurrent::find_slot.
+// Every ubatch builds the same nodes, with or without pending tokens, so the allocation planned at reserve time
+// stays valid and the scheduler never re-plans.
+static bool rs_replay_keep(const llama_cparams & cparams, int64_t n_seq_tokens) {
+    return n_seq_tokens >= 2 && n_seq_tokens <= (int64_t) cparams.n_rs_seq + 1;
+}
+
+ggml_tensor * llm_build_delta_net_base::build_conv_state_replay(
+        llm_graph_input_rs * inp,
+        ggml_tensor *        conv_states_all,
+        ggml_tensor *        x,
+        int64_t              n_conv,
+        int64_t              channels,
+        int                  il) {
+    const auto * mctx_cur = inp->mctx;
+
+    const auto kv_head = mctx_cur->get_head();
+
+    const int64_t n_hist       = n_conv + cparams.n_rs_seq + 1;
+    const int64_t n_seqs       = ubatch.n_seqs;
+    const int64_t n_seq_tokens = ubatch.n_seq_tokens;
+
+    GGML_ASSERT(conv_states_all->ne[0] == channels*n_hist);
+    GGML_ASSERT(x->ne[0] == channels && x->ne[1] == n_seq_tokens && x->ne[2] == n_seqs);
+    GGML_ASSERT(n_conv <= inp->n_conv);
+
+    // channels first: [window | pending]
+    ggml_tensor * hist = build_rs(inp, conv_states_all, conv_states_all->ne[0], n_seqs);
+    hist = ggml_reshape_3d(ctx0, hist, channels, n_hist, n_seqs);
+    cb(hist, "conv_hist", il);
+
+    // the column table is sized for the widest window of the model
+    ggml_tensor * win_cols = ggml_view_2d(ctx0, inp->rep_cols, n_conv, n_seqs, inp->rep_cols->nb[1], 0);
+
+    // [channels, n_conv + n_seq_tokens]: the window after the kept pending tokens, then the new tokens
+    // (built channels first, a transposed concat is much slower than a concat and a transpose)
+    ggml_tensor * cols = ggml_concat(ctx0, ggml_get_rows(ctx0, hist, win_cols), x, 1);
+
+    ggml_tensor * conv_input = ggml_cont(ctx0, ggml_transpose(ctx0, cols));
+    cb(conv_input, "conv_input", il);
+
+    // keep: the new tokens stay pending behind the committed window, else commit the last n_conv columns
+    const int64_t n_dst = rs_replay_keep(cparams, n_seq_tokens) ? n_conv + n_seq_tokens : n_conv;
+
+    ggml_tensor * tail = ggml_view_3d(ctx0, cols, channels, n_dst, n_seqs, cols->nb[1], cols->nb[2],
+            (n_conv + n_seq_tokens - n_dst)*cols->nb[1]);
+    // the rows as [channels, n_hist, cells], so that the view of the ubatch cells keeps their strides (-sm tensor)
+    ggml_tensor * hist_all = ggml_reshape_3d(ctx0, conv_states_all, channels, n_hist, conv_states_all->ne[1]);
+    ggml_tensor * hist_dst = ggml_view_3d(ctx0, hist_all, channels, n_dst, n_seqs, hist_all->nb[1], hist_all->nb[2],
+            kv_head*hist_all->nb[2]);
+    ggml_build_forward_expand(gf, ggml_cpy(ctx0, tail, hist_dst));
+
+    return conv_input;
+}
+
+ggml_tensor * llm_build_delta_net_base::build_recurrent_attn_replay(
+        llm_graph_input_rs * inp,
+        ggml_tensor *        ssm_states_all,
+        ggml_tensor *        q,
+        ggml_tensor *        k,
+        ggml_tensor *        v,
+        ggml_tensor *        g,
+        ggml_tensor *        b,
+        ggml_tensor *        s,
+        int                  il) {
+    const auto * mctx_cur = inp->mctx;
+
+    const auto kv_head = mctx_cur->get_head();
+
+    const int64_t n_pend       = cparams.n_rs_seq + 1;
+    const int64_t n_seqs       = ubatch.n_seqs;
+    const int64_t n_seq_tokens = ubatch.n_seq_tokens;
+
+    const int64_t S_k = k->ne[0];
+    const int64_t H_k = k->ne[1];
+    const int64_t S_v = v->ne[0];
+    const int64_t H_v = v->ne[1];
+    const int64_t g0  = g->ne[0];
+
+    const size_t row_size = ggml_row_size(ssm_states_all->type, hparams.n_embd_s());
+
+    // the pending inputs of the cells: k [S_k, H_k, n_pend], v [S_v, H_v, n_pend], gb [g0, H_v, 2*n_pend] (the gates,
+    // then the betas). The views of the ubatch cells keep the strides of these 4D views, so that -sm tensor can split
+    // them by heads
+    ggml_tensor * spk  = mctx_cur->get_spk_l(il);
+    ggml_tensor * spv  = mctx_cur->get_spv_l(il);
+    ggml_tensor * spgb = mctx_cur->get_spgb_l(il);
+
+    ggml_tensor * ck  = ggml_reshape_4d(ctx0, spk,  S_k, H_k,   n_pend, spk->ne[1]);
+    ggml_tensor * cv  = ggml_reshape_4d(ctx0, spv,  S_v, H_v,   n_pend, spv->ne[1]);
+    ggml_tensor * cgb = ggml_reshape_4d(ctx0, spgb, g0,  H_v, 2*n_pend, spgb->ne[1]);
+
+    const auto gather = [&](ggml_tensor * rows, ggml_tensor * c) {
+        return ggml_reshape_4d(ctx0, build_rs(inp, rows, rows->ne[0], n_seqs), c->ne[0], c->ne[1], c->ne[2], n_seqs);
+    };
+
+    ggml_tensor * pk  = gather(spk,  ck);
+    ggml_tensor * pv  = gather(spv,  cv);
+    ggml_tensor * pgb = gather(spgb, cgb);
+
+    const bool keep = rs_replay_keep(cparams, n_seq_tokens);
+
+    ggml_tensor * state_dst = ggml_view_2d(ctx0, ssm_states_all, hparams.n_embd_s(), n_seqs, ssm_states_all->nb[1], kv_head*row_size);
+
+    // store the inputs of the new tokens as pending; only used when keep, a longer ubatch stores its first n_pend tokens
+    const auto store_inputs = [&]() {
+        const int64_t n_st = std::min(n_seq_tokens, n_pend);
+
+        const auto store = [&](ggml_tensor * x, ggml_tensor * c, int64_t t0) {
+            ggml_tensor * x_st = ggml_view_4d(ctx0, x, x->ne[0], x->ne[1], n_st, n_seqs, x->nb[1], x->nb[2], x->nb[3], 0);
+            ggml_tensor * dst  = ggml_view_4d(ctx0, c, x->ne[0], x->ne[1], n_st, n_seqs, c->nb[1], c->nb[2], c->nb[3],
+                    kv_head*c->nb[3] + t0*c->nb[2]);
+            ggml_build_forward_expand(gf, ggml_cpy(ctx0, x_st, dst));
+        };
+
+        store(k, ck,  0);
+        store(v, cv,  0);
+        store(g, cgb, 0);
+        store(b, cgb, n_pend);
+    };
+
+    // replay inside the gdn op of the new tokens
+    if (cparams.rs_replay_fused) {
+        ggml_tensor * result = ggml_gated_delta_net(ctx0, q, k, v, g, b, s, pk, pv, pgb, inp->rep_n, 1, keep);
+        res->add_fused_node({LLM_FUSED_OP_GDN_REPLAY, result, il});
+
+        ggml_tensor * output = ggml_view_4d(ctx0, result, S_v, H_v, n_seq_tokens, n_seqs,
+                ggml_row_size(result->type, S_v),
+                ggml_row_size(result->type, S_v*H_v),
+                ggml_row_size(result->type, S_v*H_v*n_seq_tokens), 0);
+        cb(output, "attn_output", il);
+
+        // keep: the state after the replay, else the final state
+        ggml_tensor * new_state = ggml_view_2d(ctx0, result, hparams.n_embd_s(), n_seqs,
+                ggml_row_size(result->type, hparams.n_embd_s()),
+                ggml_row_size(result->type, S_v*H_v*n_seq_tokens*n_seqs));
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0, new_state, state_dst));
+
+        store_inputs();
+
+        return output;
+    }
+
+    // dropped and unused slots get beta = 0 and no decay, so they do not change the state
+    ggml_tensor * pg = ggml_mul(ctx0, ggml_view_4d(ctx0, pgb, g0, H_v, n_pend, n_seqs, pgb->nb[1], pgb->nb[2], pgb->nb[3], 0),
+            inp->rep_mask);
+    ggml_tensor * pb = ggml_mul(ctx0, ggml_view_4d(ctx0, pgb, 1, H_v, n_pend, n_seqs, pgb->nb[1], pgb->nb[2], pgb->nb[3],
+            n_pend*pgb->nb[2]), inp->rep_mask);
+
+    // the new tokens start from the replayed state
+    auto rep = build_delta_net(pk, pk, pv, pg, pb, s, il);
+    cb(rep.second, "rep_state", il);
+
+    auto attn_out = build_delta_net(q, k, v, g, b, rep.second, il);
+    ggml_tensor * output = attn_out.first;
+    cb(output, "attn_output", il);
+
+    // keep: commit the replayed state, the new tokens stay pending; else the final state. The gdn is expanded first
+    // and the replayed state is read through a new view of the replay result, so that both cases have the same nodes
+    // in the same order with the same kind of sources
+    ggml_build_forward_expand(gf, output);
+
+    ggml_tensor * new_state = attn_out.second;
+    if (keep) {
+        ggml_tensor * rep_res = rep.second->view_src ? rep.second->view_src : rep.second;
+        new_state = ggml_view_4d(ctx0, rep_res, rep.second->ne[0], rep.second->ne[1], rep.second->ne[2], rep.second->ne[3],
+                rep.second->nb[1], rep.second->nb[2], rep.second->nb[3], rep.second->view_offs);
+    }
+    ggml_build_forward_expand(gf, ggml_cpy(ctx0, new_state, state_dst));
+
+    store_inputs();
+
+    return output;
+}
+
 ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
         llm_graph_input_rs * inp,
         ggml_tensor *        ssm_states_all,
@@ -482,6 +664,10 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
     const auto * mctx_cur   = inp->mctx;
     const auto   kv_head    = mctx_cur->get_head();
     const uint32_t mem_size = mctx_cur->get_size();
+
+    if (cparams.rs_replay) {
+        return build_recurrent_attn_replay(inp, ssm_states_all, q, k, v, g, b, s, il);
+    }
 
     const int64_t S_v          = s->ne[0];
     const int64_t H_v          = s->ne[2];
@@ -509,7 +695,7 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
     const int64_t K = cparams.n_rs_seq + 1;
 
     // state s is 4D [S_v, S_v, H_v, n_seqs]; K snapshot slots are written into the output.
-    ggml_tensor * gdn_out = ggml_gated_delta_net(ctx0, q, k, v, g, b, s, K);
+    ggml_tensor * gdn_out = ggml_gated_delta_net(ctx0, q, k, v, g, b, s, nullptr, nullptr, nullptr, nullptr, K, false);
     if (n_seq_tokens > 1) {
         res->add_fused_node({LLM_FUSED_OP_GDN_CH, gdn_out, il});
     } else {

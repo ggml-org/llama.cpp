@@ -59,6 +59,7 @@ llama_memory_hybrid_iswa::llama_memory_hybrid_iswa(
         rs_size,
         n_seq_max,
         n_rs_seq,
+        false,
         filter_recr == nullptr ?
             [&](int32_t il) { return hparams.is_recr(il); }
             : filter_recr

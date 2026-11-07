@@ -3291,6 +3291,47 @@ static int ggml_cuda_try_gdn_cache_fusion(
 
     fused_state_cpy.data        = (float *) dst->data; // rollback group 0 (newest)
     fused_state_cpy.slot_stride = K > 1 ? (int64_t) (dst->nb[2] / sizeof(float)) : 0;
+
+    // rs_replay: the next 4 real nodes may store the k, v, g, beta inputs into the pending rows
+    if (gdn->src[6] != nullptr && gdn->src[3]->ne[0] == 1) {
+        int    j = node_idx + skip + 1;
+        int    skip_in = skip;
+        float * in_dst[4];
+        int64_t in_nb2[4];
+        int64_t in_nb3[4];
+        int i = 0;
+        for (; i < 4 && j < cgraph->n_nodes; ++j) {
+            const ggml_tensor * n = cgraph->nodes[j];
+            if (ggml_cuda_is_view_or_noop(n)) {
+                continue;
+            }
+            const ggml_tensor * in = gdn->src[1 + i];
+            const ggml_tensor * d  = n->src[1];
+            // the cpy reads the whole input, directly or through a view of the same data
+            const ggml_tensor * s0 = n->src[0];
+            const bool whole_in = s0 == in || (s0 != nullptr && s0->data == in->data && ggml_are_same_shape(s0, in) &&
+                                               ggml_are_same_stride(s0, in));
+            if (n->op != GGML_OP_CPY || (n->flags & GGML_TENSOR_FLAG_OUTPUT) || !whole_in ||
+                d->type != GGML_TYPE_F32 || d->data == nullptr || !ggml_are_same_shape(d, in) ||
+                d->nb[0] != sizeof(float) || d->nb[1] != d->ne[0]*sizeof(float) || d->nb[2] != d->ne[0]*d->ne[1]*sizeof(float)) {
+                break;
+            }
+            in_dst[i] = (float *) d->data;
+            in_nb2[i] = d->nb[2] / sizeof(float);
+            in_nb3[i] = d->nb[3] / sizeof(float);
+            skip_in   = j - node_idx;
+            ++i;
+        }
+        if (i == 4) {
+            for (int c = 0; c < 4; ++c) {
+                fused_state_cpy.in_dst[c] = in_dst[c];
+                fused_state_cpy.in_nb2[c] = in_nb2[c];
+                fused_state_cpy.in_nb3[c] = in_nb3[c];
+            }
+            skip = skip_in;
+        }
+    }
+
     return skip;
 }
 

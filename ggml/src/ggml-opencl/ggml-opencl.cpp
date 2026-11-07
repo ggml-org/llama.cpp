@@ -11873,6 +11873,10 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                 if (op->src[0]->type != GGML_TYPE_F32 || op->type != GGML_TYPE_F32) {
                     return false;
                 }
+                // replay of pending tokens (op param 1) is not implemented
+                if (ggml_get_op_params_i32(op, 1) != 0) {
+                    return false;
+                }
                 const int64_t S_v = op->src[2]->ne[0];
                 return S_v == 16 || S_v == 32 || S_v == 64 || S_v == 128;
             }
