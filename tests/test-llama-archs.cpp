@@ -818,6 +818,7 @@ static llama_model_ptr get_model(
     model_params.devices = devs_copy.data();
     model_params.split_mode = split_mode;
     model_params.tensor_buft_overrides = tensor_buft_overrides;
+    model_params.load_mtp = true; // llama_model_init_from_user cannot skip the nextn layers
 
     tensor_data_params tensor_params = { seed, stdev };
     llama_model_ptr model(gguf_ctx != nullptr ?
@@ -972,6 +973,92 @@ static bool check_causal_attn_toggle(
         }
     }
 
+    return ok;
+}
+
+// archs whose MTP graph only stores K/V when no output is requested (the draft catch-up)
+static bool mtp_kv_store_only(const llm_arch arch) {
+    return arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN3NEXT;
+}
+
+// the model fixture with one nextn (MTP) block after the trunk layers
+static gguf_context_ptr get_gguf_ctx_mtp(const llm_arch arch, const bool moe) {
+    gguf_context_ptr ret = get_gguf_ctx(arch, moe);
+    const std::string key_block_count = llama_arch_kv_name(arch, LLM_KV_BLOCK_COUNT);
+    const int64_t kid = gguf_find_key(ret.get(), key_block_count.c_str());
+    GGML_ASSERT(kid >= 0);
+    gguf_set_val_u32(ret.get(), key_block_count.c_str(), gguf_get_val_u32(ret.get(), kid) + 1);
+    gguf_set_val_u32(ret.get(), llama_arch_kv_name(arch, LLM_KV_NEXTN_PREDICT_LAYERS).c_str(), 1);
+    return ret;
+}
+
+// one MTP catch-up batch on a new MTP context, returns the KV state of seq 0 and the number of computed graph nodes
+static std::vector<uint8_t> get_mtp_catchup_state(
+        llama_model * model, const std::vector<llama_token> & tokens, const std::vector<float> & h, const ggml_type type_kv,
+        const bool output, size_t & n_nodes) {
+    llama_context_params ctx_params = llama_context_default_params();
+    ctx_params.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+    ctx_params.n_ctx = 0;
+    ctx_params.n_ubatch = 64;
+    ctx_params.n_threads = 4;
+    ctx_params.n_threads_batch = 4;
+    ctx_params.type_k = type_kv;
+    ctx_params.type_v = type_kv;
+    ctx_params.cb_eval = [](struct ggml_tensor * /*t*/, bool ask, void * user_data) {
+        if (ask) {
+            (*(size_t *) user_data)++;
+        }
+        return false;
+    };
+    ctx_params.cb_eval_user_data = &n_nodes;
+    n_nodes = 0;
+
+    llama_context_ptr lctx(llama_init_from_model(model, ctx_params));
+    if (!lctx) {
+        throw std::runtime_error("failed to create MTP context");
+    }
+    llama_set_embeddings_nextn(lctx.get(), true, /*masked*/ true);
+
+    const size_t n_embd = llama_model_n_embd_out(model);
+    common_batch batch(lctx.get());
+    for (uint32_t pos = 0; pos < tokens.size(); pos++) {
+        const int32_t idx = batch.add(tokens[pos], pos, 0, output);
+        batch.set_embd_state(idx, { h.data() + pos*n_embd, 1, n_embd });
+    }
+    if (llama_process(lctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
+        throw std::runtime_error("failed to decode MTP batch");
+    }
+
+    std::vector<uint8_t> state(llama_state_seq_get_size(lctx.get(), 0));
+    llama_state_seq_get_data(lctx.get(), state.data(), state.size(), 0);
+    return state;
+}
+
+// a catch-up batch without outputs must store the same K/V as the full graph, with fewer nodes
+static bool check_mtp_catchup(
+        llama_model * model, const std::vector<llama_token> & tokens, const size_t seed, const float stdev) {
+    std::vector<float> h(llama_model_n_embd_out(model)*tokens.size());
+    std::mt19937 gen(seed);
+    std::normal_distribution<float> dis(0.0f, stdev);
+    for (float & v : h) {
+        v = dis(gen);
+    }
+
+    bool ok = true;
+    for (const ggml_type type_kv : { GGML_TYPE_F16, GGML_TYPE_Q8_0 }) {
+        size_t n_nodes_full = 0;
+        size_t n_nodes_kv   = 0;
+        const std::vector<uint8_t> state_full = get_mtp_catchup_state(model, tokens, h, type_kv, true,  n_nodes_full);
+        const std::vector<uint8_t> state_kv   = get_mtp_catchup_state(model, tokens, h, type_kv, false, n_nodes_kv);
+        if (state_kv != state_full) {
+            LOG_ERR("%s: %s: the KV state differs from the full graph\n", __func__, ggml_type_name(type_kv));
+            ok = false;
+        }
+        if (n_nodes_kv >= n_nodes_full) {
+            LOG_ERR("%s: %s: %zu nodes without outputs, %zu with outputs\n", __func__, ggml_type_name(type_kv), n_nodes_kv, n_nodes_full);
+            ok = false;
+        }
+    }
     return ok;
 }
 
@@ -1276,15 +1363,15 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
         max_arch_name_length = std::max(max_arch_name_length, strlen(llama_arch_name(arch)));
     }
 
-    const std::string template_header  = std::string("|%" + std::to_string(max_arch_name_length) + "s|%") + std::to_string(max_device_label_length) + "s|%6s|%15s|%9s|%15s|\n";
+    const std::string template_header  = std::string("|%" + std::to_string(max_arch_name_length) + "s|%") + std::to_string(max_device_label_length) + "s|%6s|%15s|%9s|%15s|%12s|\n";
     const std::string template_row_cfg = std::string("|%" + std::to_string(max_arch_name_length) + "s|%") + std::to_string(max_device_label_length) + "s|%6s|";
-    const std::string template_row_res = "%15s %10s|%20s|%15s %10s|\n";
+    const std::string template_row_res = "%15s %10s|%20s|%15s %10s|%23s|\n";
 
     bool all_ok = true;
     size_t n_tests = 0;
     size_t n_failed = 0;
     common_log_flush(common_log_main());
-    LOG(template_header.c_str(), "Model arch.", "Device", "Config", "NMSE vs. CPU", "Roundtrip", "Mixed batch");
+    LOG(template_header.c_str(), "Model arch.", "Device", "Config", "NMSE vs. CPU", "Roundtrip", "Mixed batch", "MTP catch-up");
     LOG("|");
     for (size_t i = 0; i < max_arch_name_length; i++) {
         LOG("-");
@@ -1293,7 +1380,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
     for (size_t i = 0; i < max_device_label_length; i++) {
         LOG("-");
     }
-    LOG("|------|---------------|---------|---------------|\n");
+    LOG("|------|---------------|---------|---------------|------------|\n");
     for (const llm_arch & arch : llama_arch_all()) {
         if (arch == LLM_ARCH_UNKNOWN) {
             continue;
@@ -1335,6 +1422,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                 std::string status_nmse      = "\033[1;33mSKIP\033[0m";
                 std::string status_roundtrip = "\033[1;33mSKIP\033[0m";
                 std::string status_mixed     = "\033[1;33mSKIP\033[0m";
+                std::string status_mtp       = "\033[1;33mSKIP\033[0m";
                 char nmse_str[12] = {0};
                 char mixed_str[12] = {0};
 
@@ -1430,6 +1518,16 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                         fclose(file);
                         std::filesystem::remove(path);
                     }
+
+                    if (mtp_kv_store_only(arch) && (dc.split_mode != LLAMA_SPLIT_MODE_TENSOR || llama_arch_supports_sm_tensor(arch))) {
+                        status_mtp = "\033[1;32mOK\033[0m";
+                        gguf_context_ptr gguf_ctx_mtp = get_gguf_ctx_mtp(arch, moe);
+                        llama_model_ptr model_mtp = get_model(gguf_ctx_mtp.get(), nullptr, seed, stdev, dc.devs, dc.split_mode, overrides);
+                        if (!check_mtp_catchup(model_mtp.get(), tokens, seed, stdev)) {
+                            test_ok = false;
+                            status_mtp = "\033[1;31mFAIL\033[0m";
+                        }
+                    }
                 }
 
                 if (test_executed) {
@@ -1441,7 +1539,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                 }
 
                 // log the results for this test case
-                LOG(template_row_res.c_str(), status_nmse.c_str(), nmse_str, status_roundtrip.c_str(), status_mixed.c_str(), mixed_str);
+                LOG(template_row_res.c_str(), status_nmse.c_str(), nmse_str, status_roundtrip.c_str(), status_mixed.c_str(), mixed_str, status_mtp.c_str());
             }
         }
     }
