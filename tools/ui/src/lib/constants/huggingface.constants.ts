@@ -43,6 +43,7 @@ export const HF_MODEL_LIST_EXPAND: readonly string[] = [
 export const HF_MAIN_BRANCH = 'main';
 export const HF_README_FILENAME = 'README.md';
 export const HF_RAW_PATH = 'raw';
+export const HF_RESOLVE_PATH = 'resolve';
 export const HF_TREE_PATH = 'tree';
 
 // Pagination
@@ -128,6 +129,13 @@ export const HF_MODALITY_PIPELINE_TAGS: Readonly<
 
 /** Filename token marking an mmproj sidecar sibling (unlocks vision / audio). */
 export const HF_MMPROJ_FILENAME_TOKEN = 'mmproj';
+
+/** Bytes read from the start of an mmproj to reach its metadata, which comes before the tensors. */
+export const HF_MMPROJ_HEADER_BYTES = 65_536;
+
+/** mmproj metadata keys saying which encoders it carries (tools/mtmd/clip-impl.h). */
+export const GGUF_KEY_HAS_VISION_ENCODER = 'clip.has_vision_encoder';
+export const GGUF_KEY_HAS_AUDIO_ENCODER = 'clip.has_audio_encoder';
 
 export const HF_TASK_TAGS: readonly string[] = [
 	'audio-classification',

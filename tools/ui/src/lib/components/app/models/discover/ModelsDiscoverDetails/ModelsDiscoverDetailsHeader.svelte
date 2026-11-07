@@ -16,13 +16,23 @@
 		gguf?: HfModelGguf;
 		baseModels: string[];
 		licenseTag: string | null;
+		hasAudio: boolean;
 		hasVision: boolean;
 		hasTools: boolean;
 		hasReasoning: boolean;
 	}
 
-	let { baseModels, details, gguf, hasReasoning, hasTools, hasVision, licenseTag, modelId }: Props =
-		$props();
+	let {
+		baseModels,
+		details,
+		gguf,
+		hasAudio,
+		hasReasoning,
+		hasTools,
+		hasVision,
+		licenseTag,
+		modelId
+	}: Props = $props();
 
 	// Avatar shows the base model's org (e.g. the Qwen logo for a ggml-org GGUF)
 	// with the quant org as a corner badge when they differ.
@@ -50,7 +60,7 @@
 					<ModelCapabilityIcons
 						gapClass="gap-2"
 						iconSize="h-4 w-4"
-						modalities={{ audio: false, video: false, vision: hasVision }}
+						modalities={{ audio: hasAudio, video: false, vision: hasVision }}
 						supportsThinking={hasReasoning}
 						supportsToolUse={hasTools}
 					/>

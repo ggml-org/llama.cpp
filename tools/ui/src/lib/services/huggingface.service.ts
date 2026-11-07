@@ -1,4 +1,9 @@
-import { PATH_SEPARATOR, SETTINGS_KEYS } from '$lib/constants';
+import {
+	GGUF_KEY_HAS_AUDIO_ENCODER,
+	GGUF_KEY_HAS_VISION_ENCODER,
+	PATH_SEPARATOR,
+	SETTINGS_KEYS
+} from '$lib/constants';
 import {
 	BYTE,
 	BYTE_LABEL,
@@ -31,12 +36,14 @@ import {
 	HF_LINK_NEXT_REGEX,
 	HF_MAIN_BRANCH,
 	HF_MAX_LIMIT,
+	HF_MMPROJ_HEADER_BYTES,
 	HF_MODEL_LIST_EXPAND,
 	HF_PARAM_COUNT_REGEX,
 	HF_QUANT_PRECISION_REGEX,
 	HF_RAW_PATH,
 	HF_README_FILENAME,
 	HF_RECURSIVE_TREE_PARAM,
+	HF_RESOLVE_PATH,
 	HF_RETRY_ATTEMPTS,
 	HF_RETRY_DELAY_MS,
 	HF_SAFETENSORS_TAG,
@@ -74,7 +81,7 @@ import type {
 	HfModelSearchParams,
 	HfModelSibling
 } from '$lib/types/huggingface';
-import { sidecarFromFileToken } from '$lib/utils';
+import { readGgufMetadata, sidecarFromFileToken } from '$lib/utils';
 import { SvelteMap } from 'svelte/reactivity';
 
 /** Fetch failure carrying the HTTP status, so retry logic tests the code instead of the message. */
@@ -106,6 +113,14 @@ export class HuggingFaceService {
 	private static detailsCache = new SvelteMap<string, HfModelDetailInfo | null>();
 
 	private static detailsPending = new Map<string, Promise<HfModelDetailInfo | null>>();
+
+	// Encoders an mmproj carries, keyed by repo id: its header never changes, so one read per session.
+	private static mmprojEncodersCache = new SvelteMap<string, { audio: boolean; vision: boolean }>();
+
+	private static mmprojEncodersPending = new Map<
+		string,
+		Promise<{ audio: boolean; vision: boolean } | null>
+	>();
 
 	/**
 	 * Map of quant token to its average bit-depth in bits-per-weight (bpw).
@@ -158,6 +173,11 @@ export class HuggingFaceService {
 		const [hfRepoId] = modelId.split(MODEL_ID.QUANTIZATION_SEPARATOR);
 
 		return HuggingFaceService.detailsCache.get(hfRepoId);
+	}
+
+	/** Encoders a repo's mmproj carries, if it has been read this session. */
+	static cachedMmprojEncoders(modelId: string): { audio: boolean; vision: boolean } | undefined {
+		return HuggingFaceService.mmprojEncodersCache.get(modelId);
 	}
 
 	// GGUF Model Browsing
@@ -540,6 +560,57 @@ export class HuggingFaceService {
 		})();
 
 		HuggingFaceService.detailsPending.set(modelId, promise);
+
+		return promise;
+	}
+
+	/**
+	 * Which encoders a repo's mmproj carries, from the metadata at the start of the file: a ranged read of its
+	 * first bytes, so the file itself is never downloaded. The pipeline tag can't say this: omni models are
+	 * `any-to-any`, and their audio encoder lives in the same mmproj as the vision one. Null when the read fails.
+	 */
+	static getMmprojEncoders(
+		modelId: string,
+		mmprojPath: string
+	): Promise<{ audio: boolean; vision: boolean } | null> {
+		if (!HuggingFaceService.isEnabled()) return Promise.resolve(null);
+
+		const cached = HuggingFaceService.mmprojEncodersCache.get(modelId);
+
+		if (cached) return Promise.resolve(cached);
+
+		const pending = HuggingFaceService.mmprojEncodersPending.get(modelId);
+
+		if (pending) return pending;
+
+		// Do not encode the modelId, it contains slashes for author/name
+		const url = `${HF_BASE_URL}${PATH_SEPARATOR}${modelId}${PATH_SEPARATOR}${HF_RESOLVE_PATH}${PATH_SEPARATOR}${HF_MAIN_BRANCH}${PATH_SEPARATOR}${mmprojPath}`;
+		const promise = (async () => {
+			const response = await fetch(url, {
+				headers: { Range: `bytes=0-${HF_MMPROJ_HEADER_BYTES - 1}` }
+			});
+
+			if (!response.ok) throw new Error(`Failed to read ${mmprojPath}: ${response.status}`);
+
+			const metadata = readGgufMetadata(await response.arrayBuffer());
+			const encoders = {
+				audio: metadata.get(GGUF_KEY_HAS_AUDIO_ENCODER) === true,
+				vision: metadata.get(GGUF_KEY_HAS_VISION_ENCODER) === true
+			};
+
+			HuggingFaceService.mmprojEncodersCache.set(modelId, encoders);
+
+			return encoders;
+		})()
+			.catch((error: unknown) => {
+				// not cached: a rate limited or failed read should retry on the next mount
+				console.error(`Error reading the mmproj of ${modelId}:`, error);
+
+				return null;
+			})
+			.finally(() => HuggingFaceService.mmprojEncodersPending.delete(modelId));
+
+		HuggingFaceService.mmprojEncodersPending.set(modelId, promise);
 
 		return promise;
 	}
