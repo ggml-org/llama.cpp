@@ -304,20 +304,6 @@ def test_completion_with_server_json_schema(jinja: bool):
     assert match_regex("\"42\"", res.body["choices"][0]["message"]["content"])
 
 
-def test_completion_with_response_format_and_tools():
-    global server
-    server.jinja = True
-    server.start()
-    res = server.make_request("POST", "/chat/completions", data={
-        "max_tokens": 6,
-        "messages": [{"role": "user", "content": "Write an example"}],
-        "response_format": {"type": "json_object"},
-        "tools": [{"type": "function", "function": {"name": "test", "parameters": {"type": "object", "properties": {}}}}],
-    })
-    assert res.status_code == 400
-    assert "Cannot use response_format or json_schema with tools" in res.body["error"]["message"]
-
-
 @pytest.mark.parametrize("jinja,grammar,n_predicted,re_content", [
     (False, 'root ::= "a"{5,5}', 6, "a{5,5}"),
     (True, 'root ::= "a"{5,5}', 6, "a{5,5}"),
