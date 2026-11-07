@@ -1216,6 +1216,58 @@ static std::vector<size_t> unicode_regex_split_custom_newlines(const std::string
     return bpe_offsets;
 }
 
+// regex: (?:\r?\n)+(?:[^\r\n]|\r(?!\n))*|(?:[^\r\n]|\r(?!\n))+
+// same pieces as Split("(?:\r?\n)+(?!\r?\n)") with behavior MergedWithNext:
+// a new piece starts at each run of \n and \r\n, a lone \r stays in its piece
+static std::vector<size_t> unicode_regex_split_custom_newlines_merged(const std::string & text, const std::vector<size_t> & offsets) {
+    std::vector<size_t> bpe_offsets;
+    bpe_offsets.reserve(offsets.size());
+
+    const auto cpts = unicode_cpts_from_utf8(text);
+
+    size_t start = 0;
+    for (auto offset : offsets) {
+        const size_t offset_ini = start;
+        const size_t offset_end = start + offset;
+        assert(offset_end <= cpts.size());
+        start = offset_end;
+
+        // length of the newline (\n or \r\n) at pos, 0 if there is none
+        auto _newline_len = [&] (const size_t pos) -> size_t {
+            if (cpts[pos] == '\n') {
+                return 1;
+            }
+            if (cpts[pos] == '\r' && pos + 1 < offset_end && cpts[pos + 1] == '\n') {
+                return 2;
+            }
+            return 0;
+        };
+
+        size_t piece_start = offset_ini;
+        size_t pos = offset_ini;
+        while (pos < offset_end) {
+            size_t len = _newline_len(pos);
+            if (len == 0) {
+                pos++;
+                continue;
+            }
+            if (pos > piece_start) {
+                bpe_offsets.push_back(pos - piece_start);
+                piece_start = pos;
+            }
+            while (len > 0) {
+                pos += len;
+                len = pos < offset_end ? _newline_len(pos) : 0;
+            }
+        }
+        if (pos > piece_start) {
+            bpe_offsets.push_back(pos - piece_start);
+        }
+    }
+
+    return bpe_offsets;
+}
+
 static std::vector<size_t> unicode_regex_split_custom(const std::string & text, const std::string & regex_expr, const std::vector<size_t> & offsets) {
     std::vector<size_t> bpe_offsets;
 
@@ -1244,6 +1296,8 @@ static std::vector<size_t> unicode_regex_split_custom(const std::string & text, 
         bpe_offsets = unicode_regex_split_custom_afmoe(text, offsets);
     } else if (regex_expr == "[^\\n]+|[\\n]+") {
         bpe_offsets = unicode_regex_split_custom_newlines(text, offsets);
+    } else if (regex_expr == "(?:\\r?\\n)+(?:[^\\r\\n]|\\r(?!\\n))*|(?:[^\\r\\n]|\\r(?!\\n))+") {
+        bpe_offsets = unicode_regex_split_custom_newlines_merged(text, offsets);
     } else if (regex_expr == "\\d{1,3}(?=(?:\\d{3})*\\b)") {
         // tiny_aya digit grouping pattern from tokenizer.json:
         //   {"type": "Split", "pattern": {"Regex": "\\d{1,3}(?=(?:\\d{3})*\\b)"}, "behavior": "Isolated"}
