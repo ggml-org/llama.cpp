@@ -21,7 +21,6 @@ import urllib.request
 
 logger = logging.getLogger("moe-cache-tune")
 
-MASK64 = (1 << 64) - 1
 MAX_BATCH = 32  # llama_moe_cache::impl::max_batch
 SHARES = [0.0, 0.5, 0.8, 0.9, 0.95, 0.98]
 CALIB_SHARES = [0.0, 0.5, 0.95]
@@ -212,8 +211,8 @@ class ClassLRU:
             raise RuntimeError("no MoE cache victim")
         return res
 
-    def plan(self, il, ids, n_used, n_zero, n_cpu, rng):
-        """returns (uploaded, computed on the CPU, rng)"""
+    def plan(self, il, ids, n_used, n_zero, n_cpu):
+        """returns (uploaded, computed on the CPU)"""
         self.seen_gen += 1
         seen, gen = self.seen, self.seen_gen
         uniq = []
@@ -236,13 +235,11 @@ class ClassLRU:
             else:
                 misses.append(e)
 
+        # the misses with the lowest CRF go to the CPU
         n_c = min(n_cpu(len(misses)), len(misses))
-        for i in range(n_c):
-            rng = (rng * 6364136223846793005 + 1442695040888963407) & MASK64
-            j = i + (rng >> 33) % (len(misses) - i)
-            misses[i], misses[j] = misses[j], misses[i]
         n_cpu_done = 0
         if n_c > 0:
+            misses.sort(key=lambda e: (self.crf[il * self.n_expert + e], e))
             # distinct zero slots per token, a miss without one is uploaded
             token_zero = [0] * n_tokens
             n_keep = n_c
@@ -278,7 +275,7 @@ class ClassLRU:
             slots[e] = s
             self.move(s, self.class_of(key))
         self.clock[il] += n_tokens
-        return len(misses), n_cpu_done, rng
+        return len(misses), n_cpu_done
 
 
 def replay(trace, size_mib, share, skip_tokens):
@@ -295,7 +292,6 @@ def replay(trace, size_mib, share, skip_tokens):
 
     first = min(il for il, _, _ in records)
     acc = [0] * n_layer
-    rng = 0x853c49e6748fea9b
     tokens = seen = up = cpu = 0
     for il, n_used, ids in records:
         n_tokens = len(ids) // n_used
@@ -315,7 +311,7 @@ def replay(trace, size_mib, share, skip_tokens):
             acc[il] = v & 0xFFFF
             return v >> 16
 
-        n_fill, n_c, rng = c.plan(il, ids, n_used, n_zero, n_cpu, rng)
+        n_fill, n_c = c.plan(il, ids, n_used, n_zero, n_cpu)
         if count:
             up += n_fill * g.expert_bytes
             cpu += n_c * g.expert_bytes
