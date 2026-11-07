@@ -1576,6 +1576,18 @@ std::string server_task_result_metrics::to_metrics() {
             "Number of prompt tokens reused from the cache",
             (double) metrics.n_prompt_cached
         }, {
+            "slot_attach_total",
+            "Number of prompts started from the KV cells of another slot (--slot-attach)",
+            (double) metrics.n_slot_attach
+        }, {
+            "slot_attach_tokens_total",
+            "Number of prompt tokens attached from another slot, included in prompt_tokens_cached_total",
+            (double) metrics.n_slot_attach_tokens
+        }, {
+            "slot_attach_checkpoints_total",
+            "Number of checkpoints created where a prompt diverges from a known prompt (--slot-attach, recurrent and hybrid models)",
+            (double) metrics.n_slot_attach_ckpt
+        }, {
             "prompt_seconds_total",
             "Total time spent processing prompts",
             metrics.prompt.time / 1.e6
@@ -1835,7 +1847,7 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
     return &states.back();
 }
 
-bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot) {
+std::list<server_prompt_cache_state>::iterator server_prompt_cache::find(const server_prompt & prompt, const server_tokens & tokens_new) {
     const int lcp_best = prompt.tokens.get_common_prefix(tokens_new);
 
     float f_keep_best = prompt.tokens.size() > 0 ? float(lcp_best) / prompt.tokens.size() : -1.0f; // empty slot: any cache entry wins
@@ -1869,7 +1881,13 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
 
     if (it_best != states.end()) {
         SRV_TRC(" - found better prompt with f_keep = %.3f, f_sim = %.3f\n", f_keep_best, f_sim_best);
+    }
 
+    return it_best;
+}
+
+bool server_prompt_cache::load(std::list<server_prompt_cache_state>::iterator it_best, server_prompt & prompt, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot) {
+    if (it_best != states.end()) {
         {
             auto & data = it_best->data.main;
 
