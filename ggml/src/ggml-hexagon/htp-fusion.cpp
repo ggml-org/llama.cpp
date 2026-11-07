@@ -239,11 +239,11 @@ static bool fuse_mul_mat_add(const ggml_hexagon_session * sess, htp_opnode & pre
     if (kparams.n_hmx > 0 && orig_kparams->n_hmx > 0) {
         if (kparams.m_chunk < orig_kparams->m_chunk ||
             kparams.n_chunk < orig_kparams->n_chunk ||
-            kparams.n_act_threads < orig_kparams->n_act_threads) {
-            HEX_VERBOSE("ggml-hex: %s skip MUL_MAT_ADD fusion: HMX efficiency reduced (m %d->%d, n %d->%d, th %d->%d)\n",
+            kparams.n_act_hvx < orig_kparams->n_act_hvx) {
+            HEX_VERBOSE("ggml-hex: %s skip MUL_MAT_ADD fusion: HMX efficiency reduced (m %d->%d, n %d->%d, hvx %d->%d)\n",
                         htp_session_name(sess), orig_kparams->m_chunk, kparams.m_chunk,
                         orig_kparams->n_chunk, kparams.n_chunk,
-                        orig_kparams->n_act_threads, kparams.n_act_threads);
+                        orig_kparams->n_act_hvx, kparams.n_act_hvx);
             return false;
         }
     }
@@ -546,8 +546,8 @@ static bool fuse_binary_nx(const ggml_hexagon_session * sess, htp_opnode & prev,
 
         const uint32_t total_elems = (uint32_t) ggml_nelements(src0);
         const uint32_t elem_size   = (uint32_t) ggml_type_size(src0->type);
-        const uint32_t max_threads = htp_session_n_threads(sess);
-        if (!htp_binary_solve_chunked(&L, &kparams, total_elems, elem_size, max_threads, n_srcs, false, vtcm_size)) {
+        const uint32_t max_hvx     = htp_session_n_hvx(sess);
+        if (!htp_binary_solve_chunked(&L, &kparams, total_elems, elem_size, max_hvx, n_srcs, false, vtcm_size)) {
             return false;
         }
     }
