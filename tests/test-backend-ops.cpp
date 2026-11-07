@@ -1218,10 +1218,14 @@ static bool op_filter_entry_matches(std::string_view entry, std::string_view op_
     return std::regex_search(op_name.data(), op_name.data() + op_name.size(), re);
 }
 
+static bool backend_is_cuda(ggml_backend_t backend) {
+    const char * name = ggml_backend_reg_name(ggml_backend_dev_backend_reg(ggml_backend_get_device(backend)));
+    return strcmp(name, "CUDA") == 0 || strcmp(name, "ROCm") == 0 || strcmp(name, "MUSA") == 0;
+}
+
 // TODO: [TAG_MUL_MAT_ID_SKIP] see https://github.com/ggml-org/llama.cpp/pull/26631
 static bool backend_lacks_skipped_ids(ggml_backend_t backend, ggml_cgraph * gf) {
-    const char * name = ggml_backend_reg_name(ggml_backend_dev_backend_reg(ggml_backend_get_device(backend)));
-    if (strcmp(name, "CUDA") != 0 && strcmp(name, "ROCm") != 0 && strcmp(name, "MUSA") != 0) {
+    if (!backend_is_cuda(backend)) {
         return false;
     }
     for (int i = 0; i < ggml_graph_n_nodes(gf); i++) {
@@ -1339,6 +1343,12 @@ struct test_case {
     virtual bool run_whole_graph() { return false; }
     virtual std::vector<ggml_tensor *> fusion_test_nodes() { return {}; }
     virtual bool use_weight_context() { return false; }
+
+    // report the test as not supported on this backend
+    virtual bool skip_backend(ggml_backend_t backend) {
+        GGML_UNUSED(backend);
+        return false;
+    }
 
     ggml_cgraph * gf = nullptr;
     ggml_cgraph * gb = nullptr;
@@ -1523,7 +1533,7 @@ struct test_case {
         }
 
         // TODO: [TAG_MUL_MAT_ID_SKIP] @ngxson : remove this once CUDA implements mul_mat_id with -1 = skipped
-        if (backend_lacks_skipped_ids(backend1, gf)) {
+        if (backend_lacks_skipped_ids(backend1, gf) || skip_backend(backend1)) {
             test_result result(ggml_backend_name(backend1), current_op_name, vars(), "test", false, false, "not supported");
             print_test_result_locked(output_printer, result);
             return test_status_t::NOT_SUPPORTED;
@@ -5639,6 +5649,42 @@ struct test_mul_mat_w4a8 : public test_mul_mat {
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
         return "MUL_MAT_W4A8";
+    }
+};
+
+// GGML_PREC_F32 on src1: the implementation can not convert src1 down to F16
+// F32 x F32 uses src1 values outside of the F16 range and a tolerance that F16 tiles can not meet
+// F16 x F32 uses the default range and tolerance because the CPU reference converts src1 to F16
+struct test_mul_mat_prec_src1 : public test_mul_mat {
+    test_mul_mat_prec_src1(ggml_type type_a = GGML_TYPE_F32, int64_t m = 64, int64_t n = 32, int64_t k = 256,
+            std::array<int64_t, 2> bs = {1, 1},
+            std::array<int64_t, 2> nr = {1, 1})
+        : test_mul_mat(type_a, GGML_TYPE_F32, m, n, k, bs, nr) {}
+    double max_nmse_err() override {
+        return type_a == GGML_TYPE_F32 ? 1e-10 : test_mul_mat::max_nmse_err();
+    }
+    // TODO: remove this once CUDA respects GGML_PREC_F32 on src1 for MUL_MAT (it uses TF32 on Ampere and newer)
+    bool skip_backend(ggml_backend_t backend) override {
+        return backend_is_cuda(backend);
+    }
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * out = test_mul_mat::build_graph(ctx);
+        ggml_prec_set_src(out, GGML_PREC_F32, 1);
+        return out;
+    }
+    void initialize_tensors(ggml_context * ctx) override {
+        const float b_max = type_a == GGML_TYPE_F32 ? 1e6f : 1.0f;
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "b") == 0) {
+                init_tensor_uniform(t, -b_max, b_max);
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MUL_MAT_PREC_SRC1";
     }
 };
 
@@ -11497,6 +11543,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F16, 1024, 7, 1024));  // many rows
 
     // FP4 activation precision (default = native W4A4, src1 GGML_PREC_Q8 = W4A8)
+    // src1 precision: few-row paths, aligned tiles, partial tiles (K and output), broadcast batches
+    for (ggml_type type_a : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+        test_cases.emplace_back(new test_mul_mat_prec_src1(type_a,  64,   1, 256));
+        test_cases.emplace_back(new test_mul_mat_prec_src1(type_a,  64,   8, 256));
+        test_cases.emplace_back(new test_mul_mat_prec_src1(type_a,  64,  32, 256));
+        test_cases.emplace_back(new test_mul_mat_prec_src1(type_a, 128, 512, 512));
+        test_cases.emplace_back(new test_mul_mat_prec_src1(type_a,  67,  33, 100));
+        test_cases.emplace_back(new test_mul_mat_prec_src1(type_a,  64,  32, 256, {2, 3}, {2, 1}));
+    }
+
     test_cases.emplace_back(new test_mul_mat_w4a8(GGML_TYPE_NVFP4, GGML_TYPE_F32, 32,  1, 256));
     test_cases.emplace_back(new test_mul_mat_w4a8(GGML_TYPE_NVFP4, GGML_TYPE_F32, 32, 32, 256));
     test_cases.emplace_back(new test_mul_mat_w4a8(GGML_TYPE_NVFP4, GGML_TYPE_F32, 64, 16, 512));
