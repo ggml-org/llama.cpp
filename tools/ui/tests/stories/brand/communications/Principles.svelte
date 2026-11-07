@@ -15,7 +15,7 @@
 		],
 		[
 			'Simple first',
-			'Lead with what people do: a letter, a photo, a question. GGUF, quants and flags belong to pieces about the engine.'
+			'Lead with what people do: a letter, a photo, a question, and the one click that starts it. GGUF, quants and flags belong to pieces for power users.'
 		],
 		[
 			'The real thing',

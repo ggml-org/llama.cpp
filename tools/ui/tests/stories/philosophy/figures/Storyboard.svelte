@@ -85,7 +85,9 @@
 			</div>
 		</div>
 
-		<p class="note">Sampling, penalties and every other setting, one step away in Settings.</p>
+		<p class="note">
+			Sampling, penalties and every other setting, there in Settings for whoever wants them.
+		</p>
 	</li>
 </ol>
 

@@ -48,7 +48,7 @@
 
 		<h3>Simple by default</h3>
 
-		<p>Nothing pre-installed; every setting one step away.</p>
+		<p>Choices made for you to start; every setting when you want it.</p>
 	</section>
 
 	<section class="principle card-surface rounded-card">
