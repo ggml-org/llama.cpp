@@ -696,9 +696,11 @@ These words will not be included in the completion, so make sure to add them to 
 
 `with_pieces`: (Optional) Boolean indicating whether to return token pieces along with IDs.  Default: `false`
 
+`batch`: (Optional) Boolean indicating whether each element of `content` is tokenized as a separate sequence. Requires `content` to be an array of strings. When `false`, an array `content` is tokenized into one merged token array.  Default: `false`
+
 **Response:**
 
-Returns a JSON object with a `tokens` field containing the tokenization result. The `tokens` array contains either just token IDs or objects with `id` and `piece` fields, depending on the `with_pieces` parameter. The piece field is a string if the piece is valid unicode or a list of bytes otherwise.
+Returns a JSON object with a `tokens` field containing the tokenization result. The `tokens` array contains either just token IDs or objects with `id` and `piece` fields, depending on the `with_pieces` parameter. The piece field is a string if the piece is valid unicode or a list of bytes otherwise. With `batch` set to `true`, `tokens` becomes an array with one entry per input sequence.
 
 
 If `with_pieces` is `false`:
@@ -725,6 +727,22 @@ With input 'á' (utf8 hex: C3 A1) on tinyllama/stories260k
   "tokens": [
     {"id": 198, "piece": [195]}, // hex C3
     {"id": 164, "piece": [161]} // hex A1
+  ]
+}
+```
+
+If `batch` is `true`, each input string is tokenized on its own and `tokens` holds one array per sequence. Special tokens such as `BOS` are then added per sequence, subject to `add_special`:
+```json
+{
+  "content": ["Hello", "world"],
+  "batch": true
+}
+```
+```json
+{
+  "tokens": [
+    [123],
+    [456]
   ]
 }
 ```

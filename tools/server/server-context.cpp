@@ -6400,10 +6400,14 @@ void server_routes::init_routes() {
             const bool add_special = json_value(body, "add_special", false);
             const bool parse_special = json_value(body, "parse_special", true);
             const bool with_pieces = json_value(body, "with_pieces", false);
+            const bool batch = json_value(body, "batch", false);
 
-            llama_tokens tokens = tokenize_mixed(ctx_server.vocab, body.at("content"), add_special, parse_special);
+            auto encode_tokens = [this, with_pieces](const llama_tokens & tokens) {
+                if (!with_pieces) {
+                    return json(tokens);
+                }
 
-            if (with_pieces) {
+                json result = json::array();
                 for (const auto& token : tokens) {
                     std::string piece = common_token_to_piece(ctx_server.vocab, token);
                     json piece_json;
@@ -6419,13 +6423,31 @@ void server_routes::init_routes() {
                         }
                     }
 
-                    tokens_response.push_back({
+                    result.push_back({
                         {"id", token},
                         {"piece", piece_json}
                     });
                 }
+                return result;
+            };
+
+            if (batch) {
+                const auto & content = body.at("content");
+                if (!content.is_array()) {
+                    res->error(format_error_response("\"content\" must be an array when batch is true", ERROR_TYPE_INVALID_REQUEST));
+                    return res;
+                }
+                for (const auto & item : content) {
+                    if (!item.is_string()) {
+                        res->error(format_error_response("when batch is true, each element of \"content\" must be a string", ERROR_TYPE_INVALID_REQUEST));
+                        return res;
+                    }
+                    // tokenize each element separately so add_special applies per sequence
+                    tokens_response.push_back(encode_tokens(tokenize_mixed(ctx_server.vocab, item, add_special, parse_special)));
+                }
             } else {
-                tokens_response = tokens;
+                llama_tokens tokens = tokenize_mixed(ctx_server.vocab, body.at("content"), add_special, parse_special);
+                tokens_response = encode_tokens(tokens);
             }
         }
 
