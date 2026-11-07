@@ -2,6 +2,8 @@
 
 List of GGML operations and backend support status.
 
+The CUDA backend, including HIP builds, supports `IQ4_NL` GET_ROWS for valid row widths divisible by its 32-value quantization block. `I32` index views can have an element-aligned leading stride, including transposed views.
+
 ## How to add a backend to this table:
 
 1. Run `test-backend-ops support --output csv` with your backend name and redirect output to a csv file in `docs/ops/` (e.g., `docs/ops/CUDA.csv`)
