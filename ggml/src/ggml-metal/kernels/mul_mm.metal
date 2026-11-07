@@ -145,14 +145,15 @@ kernel void kernel_mul_mm(
     cT.store(tD);
 }
 
-#else
+#endif // GGML_METAL_HAS_TENSOR
 
+// always available: matmul2d does not keep F32 precision for float inputs, so the prec_f32 kernels can not use it
 template<
     typename S0, typename S0_4x4, typename S0_8x8,
     typename S1, typename S1_2x4, typename S1_8x8,
     typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread S0_4x4 &),
     typename T0, typename T0_4x4, typename T1, typename T1_2x4>
-kernel void kernel_mul_mm(
+kernel void kernel_mul_mm_sg(
         constant ggml_metal_kargs_mul_mm & args,
         device const char * src0,
         device const char * src1,
@@ -162,15 +163,15 @@ kernel void kernel_mul_mm(
         ushort tiitg[[thread_index_in_threadgroup]],
         ushort sgitg[[simdgroup_index_in_threadgroup]]) {
 
-    threadgroup S0 * sa = (threadgroup S0 *)(shmem);
-    threadgroup S1 * sb = (threadgroup S1 *)(shmem + 4096);
-
     constexpr int NR0 = 64;
     constexpr int NR1 = 32;
 
     constexpr int NK  = 32;
     constexpr int NL0 = NK/16;
     constexpr int NL1 = NK/8;
+
+    threadgroup S0 * sa = (threadgroup S0 *)(shmem);
+    threadgroup S1 * sb = (threadgroup S1 *)(shmem + NR0*NK*sizeof(S0));
 
     const int im = tgpig.z;
     const int r0 = tgpig.y*NR0;
@@ -362,7 +363,9 @@ kernel void kernel_mul_mm(
     }
 }
 
-#endif // GGML_METAL_HAS_TENSOR
+#ifndef GGML_METAL_HAS_TENSOR
+#define kernel_mul_mm kernel_mul_mm_sg
+#endif
 
 template<short ne20> // n_expert_used
 kernel void kernel_mul_mm_id_map0(
@@ -894,6 +897,9 @@ typedef decltype(kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, 
 
 template [[host_name("kernel_mul_mm_f32_f32")]]     kernel mul_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   float4x4,      1,     dequantize_f32,     float,  float4x4,  float, float2x4>;
 template [[host_name("kernel_mul_mm_f16_f32")]]     kernel mul_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   half4x4,       1,     dequantize_f16,     half,   half4x4,   float, float2x4>;
+// src1 is kept in F32, see ggml_metal_op_mul_mat_src1_prec_f32()
+template [[host_name("kernel_mul_mm_f32_f32_prec_f32")]] kernel mul_mm_t kernel_mul_mm_sg<float, float4x4, simdgroup_float8x8, float, float2x4, simdgroup_float8x8, float4x4, 1, dequantize_f32, float, float4x4, float, float2x4>;
+template [[host_name("kernel_mul_mm_f16_f32_prec_f32")]] kernel mul_mm_t kernel_mul_mm_sg<half,  half4x4,  simdgroup_half8x8,  float, float2x4, simdgroup_float8x8, half4x4,  1, dequantize_f16, half,  half4x4,  float, float2x4>;
 #if defined(GGML_METAL_HAS_BF16)
 template [[host_name("kernel_mul_mm_bf16_f32")]]    kernel mul_mm_t kernel_mul_mm<bfloat, bfloat4x4, simdgroup_bfloat8x8, bfloat, bfloat2x4, simdgroup_bfloat8x8, bfloat4x4,     1,     dequantize_bf16,    bfloat, bfloat4x4, float,  float2x4>;
 template [[host_name("kernel_mul_mm_bf16_bf16")]]   kernel mul_mm_t kernel_mul_mm<bfloat, bfloat4x4, simdgroup_bfloat8x8, bfloat, bfloat2x4, simdgroup_bfloat8x8, bfloat4x4,     1,     dequantize_bf16,    bfloat, bfloat4x4, bfloat, bfloat2x4>;

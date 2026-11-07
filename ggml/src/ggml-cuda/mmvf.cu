@@ -651,7 +651,9 @@ void ggml_cuda_mul_mat_vec_f(ggml_backend_cuda_context & ctx, const ggml_tensor 
     GGML_ASSERT(        nb0        == ts_dst);
 
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
-    const enum ggml_prec prec = fast_fp16_available(cc) ? ggml_prec(dst->op_params[0]) : GGML_PREC_F32;
+    // GGML_PREC_F32 on src1 rules out the F16 path, which rounds src1 to F16
+    const enum ggml_prec prec = fast_fp16_available(cc) && ggml_prec_get_src(dst, 1) != GGML_PREC_F32 ?
+        ggml_prec(dst->op_params[0]) : GGML_PREC_F32;
 
     const float   * src1_d =       (const float   *) src1->data;
     const int32_t *  ids_d = ids ? (const int32_t *)  ids->data : nullptr;
@@ -743,7 +745,9 @@ void ggml_cuda_op_mul_mat_vec_f(
 
     const int id = ggml_cuda_get_device();
     const int cc = ggml_cuda_info().devices[id].cc;
-    const enum ggml_prec prec = fast_fp16_available(cc) ? ggml_prec(dst->op_params[0]) : GGML_PREC_F32;
+    // GGML_PREC_F32 on src1 rules out the F16 path, which rounds src1 to F16
+    const enum ggml_prec prec = fast_fp16_available(cc) && ggml_prec_get_src(dst, 1) != GGML_PREC_F32 ?
+        ggml_prec(dst->op_params[0]) : GGML_PREC_F32;
 
     // ggml_cuda_op provides single, contiguous matrices
     const int64_t stride_row         = ne00;
