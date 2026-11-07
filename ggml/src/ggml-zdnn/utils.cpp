@@ -1,4 +1,5 @@
 #include "ggml.h"
+#include "ggml-backend-impl.h"
 #include "utils.hpp"
 
 #include <algorithm>
@@ -144,7 +145,14 @@ void ggml_zdnn_load_tensor_q(ggml_backend_zdnn_buffer * buffer, const ggml_tenso
     ZDNN_CHECK(zdnn_transform_quantized_ztensor(&buffer->ztensor, false, -127, 127, q.data()));
 }
 
-void ggml_zdnn_init_tensor(ggml_backend_zdnn_buffer * buffer, const ggml_tensor * tensor) {
+// ggml allows a larger allocation only for these tensors, the others keep a ztensor allocated by zDNN
+bool ggml_zdnn_ztensor_in_alloc(const ggml_tensor * tensor) {
+    return ggml_op_is_empty(tensor->op) || ggml_is_quantized(tensor->type) || ggml_op_alloc_size_may_expand(tensor->op);
+}
+
+void ggml_zdnn_init_tensor_desc(zdnn_tensor_desc & pre_tfm_desc,
+                                zdnn_tensor_desc & tfm_desc,
+                          const ggml_tensor      * tensor) {
     if (ggml_is_quantized(tensor->type)) {
         GGML_ASSERT(ggml_is_matrix(tensor));
 
@@ -157,26 +165,19 @@ void ggml_zdnn_init_tensor(ggml_backend_zdnn_buffer * buffer, const ggml_tensor 
             zdnn_init_pre_transformed_desc(
                 ZDNN_3DS,
                 INT8,
-                &buffer->pre_tfm_desc,
+                &pre_tfm_desc,
                 n_groups, gs, tensor->ne[1]
             );
-
-            buffer->scales.resize(n_groups * tensor->ne[1]);
         } else {
             zdnn_init_pre_transformed_desc(
                 ZDNN_2D,
                 INT8,
-                &buffer->pre_tfm_desc,
+                &pre_tfm_desc,
                 tensor->ne[0], tensor->ne[1]
             );
-
-            buffer->scales.resize(tensor->ne[1]);
         }
 
-        buffer->channel_scales.resize(tensor->ne[0]);
-
-        ZDNN_CHECK(zdnn_generate_quantized_transformed_desc(&buffer->pre_tfm_desc, QUANTIZED_WEIGHTS_INT8, &buffer->tfm_desc));
-        ZDNN_CHECK(zdnn_init_quantized_ztensor_with_malloc(&buffer->pre_tfm_desc, &buffer->tfm_desc, 1.0f, 0.0f, &buffer->ztensor));
+        ZDNN_CHECK(zdnn_generate_quantized_transformed_desc(&pre_tfm_desc, QUANTIZED_WEIGHTS_INT8, &tfm_desc));
         return;
     }
 
@@ -186,7 +187,7 @@ void ggml_zdnn_init_tensor(ggml_backend_zdnn_buffer * buffer, const ggml_tensor 
                 zdnn_init_pre_transformed_desc(
                     ZDNN_2D,
                     ggml_zdnn_type_mapping(tensor->type),
-                    &buffer->pre_tfm_desc,
+                    &pre_tfm_desc,
                     tensor->ne[1], tensor->ne[0]
                 );
             } break;
@@ -200,7 +201,7 @@ void ggml_zdnn_init_tensor(ggml_backend_zdnn_buffer * buffer, const ggml_tensor 
                 zdnn_init_pre_transformed_desc(
                     ZDNN_NHWC,
                     ggml_zdnn_type_mapping(tensor->type),
-                    &buffer->pre_tfm_desc,
+                    &pre_tfm_desc,
                     tensor->ne[3], tensor->ne[2], tensor->ne[1], tensor->ne[0]
                 );
 
@@ -210,6 +211,27 @@ void ggml_zdnn_init_tensor(ggml_backend_zdnn_buffer * buffer, const ggml_tensor 
             } break;
     }
 
-    ZDNN_CHECK(zdnn_generate_transformed_desc(&buffer->pre_tfm_desc, &buffer->tfm_desc));
-    ZDNN_CHECK(zdnn_init_ztensor_with_malloc(&buffer->pre_tfm_desc, &buffer->tfm_desc, &buffer->ztensor));
+    ZDNN_CHECK(zdnn_generate_transformed_desc(&pre_tfm_desc, &tfm_desc));
+}
+
+void ggml_zdnn_init_tensor(ggml_backend_zdnn_buffer * buffer, const ggml_tensor * tensor) {
+    ggml_zdnn_init_tensor_desc(buffer->pre_tfm_desc, buffer->tfm_desc, tensor);
+
+    if (ggml_is_quantized(tensor->type)) {
+        const bool stacked = buffer->pre_tfm_desc.layout == ZDNN_3DS;
+
+        buffer->scales.resize((stacked ? buffer->pre_tfm_desc.dim3 : 1) * tensor->ne[1]);
+        buffer->channel_scales.resize(tensor->ne[0]);
+
+        zdnn_init_quantized_ztensor(&buffer->pre_tfm_desc, &buffer->tfm_desc, 1.0f, 0.0f, &buffer->ztensor);
+    } else if (ggml_zdnn_ztensor_in_alloc(tensor)) {
+        zdnn_init_ztensor(&buffer->pre_tfm_desc, &buffer->tfm_desc, &buffer->ztensor);
+    } else {
+        ZDNN_CHECK(zdnn_init_ztensor_with_malloc(&buffer->pre_tfm_desc, &buffer->tfm_desc, &buffer->ztensor));
+        return;
+    }
+
+    // the ztensor uses the memory after the tensor data, see ggml_backend_zdnn_buffer_type_get_alloc_size
+    buffer->ztensor.buffer      = (void *)GGML_PAD((uintptr_t)tensor->data + ggml_nbytes(tensor), GGML_ZDNN_ZTENSOR_ALIGN);
+    buffer->ztensor.buffer_size = zdnn_getsize_ztensor(&buffer->tfm_desc);
 }

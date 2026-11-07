@@ -16,8 +16,9 @@
 #include <utility>
 #include <vector>
 
-#define GGML_ZDNN_NAME    "zDNN"
-#define GGML_ZDNN_VERSION ZDNN_VERNUM
+#define GGML_ZDNN_NAME          "zDNN"
+#define GGML_ZDNN_VERSION       ZDNN_VERNUM
+#define GGML_ZDNN_ZTENSOR_ALIGN 4096
 
 #define ZDNN_CHECK(stmt)                \
     do {                                \
