@@ -2,9 +2,13 @@
 
 #include "mtmd-audio.h"
 #include "mtmd-helper.h"
+#include "mtmd-helper-video.h"
 #include "mtmd-image.h"
 #include "mtmd-internal.h"
 
+#include <algorithm>
+#include <chrono>
+#include <filesystem>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -401,6 +405,184 @@ static std::string video_sequence_to_str(testing & t, mtmd_helper_video_seq & vi
     return out;
 }
 
+#ifdef MTMD_VIDEO
+MAKE_TEST(test_video_missing_decoder) {
+    std::string errors;
+    struct log_guard {
+        log_guard(std::string & errors) {
+            mtmd_helper_log_set([](ggml_log_level, const char * text, void * data) {
+                static_cast<std::string *>(data)->append(text);
+            }, &errors);
+        }
+        ~log_guard() {
+            mtmd_helper_log_set([](ggml_log_level level, const char * text, void *) {
+                if (level != GGML_LOG_LEVEL_DEBUG) fputs(text, stderr);
+            }, nullptr);
+        }
+    } guard(errors);
+
+    // The directory does not exist; no model or external decoder is required.
+    const auto directory = std::filesystem::temp_directory_path() /
+        ("mtmd-missing-decoder-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    if (!t.assert_true("fixture directory absent", !std::filesystem::exists(directory))) return;
+    const std::string path = directory.string();
+    auto params = mtmd_helper_video_init_params_default();
+    params.ffmpeg_bin_dir = path.c_str();
+    const unsigned char data[] = { 1, 2, 3 };
+    mtmd_helper_video * video = mtmd_helper_video_init_from_buf(nullptr, data, sizeof(data), params);
+    t.assert_true("missing decoder rejects input", video == nullptr);
+    mtmd_helper_video_free(video);
+    t.assert_true("names actual executable", errors.find("ffprobe") != std::string::npos);
+    t.assert_true("explains launch failure", errors.find("executable not found") != std::string::npos);
+    t.assert_true("names existing directory flag", errors.find("--video-ffmpeg-dir DIR") != std::string::npos);
+    t.assert_true("does not misdiagnose media", errors.find("valid video dimensions") == std::string::npos);
+}
+#endif
+
+MAKE_TEST(test_video_sequence_empty) {
+    test_video_source video(0);
+    video.configure({ MTMD_VIDEO_TEMPLATE_DEFAULT, 0.0f, 0, 0, 0 }, { 2, 2, 2.0f, -1 }, 0.0f);
+    video.src_alive = true;
+    video.prompt_start.clear();
+
+    mtmd_bitmap * bitmap = nullptr;
+    char * text = nullptr;
+    t.assert_equal("empty video is an error", -2, video.read_next(&bitmap, &text));
+    t.assert_true("no bitmap on failure", bitmap == nullptr);
+    t.assert_true("no text on failure", text == nullptr);
+}
+
+
+#ifdef MTMD_VIDEO
+static std::string test_executable;
+
+MAKE_TEST(test_video_decoder_output) {
+    using result = mtmd_helper_subprocess::frame_result;
+    // Full frames must not hide a later decoder failure; EOF in a frame is corruption.
+    const std::vector<std::tuple<int, int, int, result>> cases = {
+        { 0, 0, 0, result::eof }, { 0, 7, 0, result::error },
+        { 5, 0, 0, result::error }, { 5, 7, 0, result::error },
+        { 12, 0, 1, result::eof }, { 12, 7, 1, result::error },
+        { 24, 0, 2, result::eof }, { 24, 7, 2, result::error },
+    };
+    for (const auto & [bytes, exit_code, frames, expected] : cases) {
+        const std::string n_bytes = std::to_string(bytes);
+        const std::string status = std::to_string(exit_code);
+        const char * command[] = { test_executable.c_str(), "--mtmd-child", n_bytes.c_str(), status.c_str(), "1048576", nullptr };
+        // The feeder's input must outlive the process owner's destructor too.
+        const std::vector<uint8_t> input(1024 * 1024, 1);
+        mtmd_helper_subprocess child;
+        const int ret = child.start(command, subprocess_option_inherit_environment);
+        if (!t.assert_equal("start child", 0, ret)) {
+            continue;
+        }
+        // More than a pipe can hold. The child deliberately does not consume it.
+        child.start_feeder(input);
+        std::vector<uint8_t> frame(12);
+        for (int i = 0; i < frames; i++) {
+            t.assert_equal("complete frame", (int) result::frame, (int) child.read_frame(frame));
+            t.assert_true("frame bytes", std::all_of(frame.begin(), frame.end(), [](uint8_t v) { return v == 42; }));
+        }
+        t.assert_equal("terminal result for " + n_bytes + " bytes, exit " + status,
+            (int) expected, (int) child.read_frame(frame));
+        // A failed ownership assertion must not run stop() on a reaped POSIX child.
+        if (!t.assert_true("child released", !child.created && !child.alive && !child.feeder.joinable() && !child.stderr_reader.joinable())) {
+            std::abort();
+        }
+        child.stop();
+    }
+}
+
+MAKE_TEST(test_video_decoder_indexed_finish) {
+    for (const int exit_code : { 0, 7 }) {
+        const std::string status = std::to_string(exit_code);
+        const char * command[] = { test_executable.c_str(), "--mtmd-child", "24", status.c_str(), "1048576", nullptr };
+        mtmd_helper_subprocess child;
+        if (!t.assert_equal("start child", 0,
+                child.start(command, subprocess_option_inherit_environment))) {
+            continue;
+        }
+        std::vector<uint8_t> frame(12);
+        for (int i = 0; i < 2; i++) {
+            t.assert_equal("selected frame", (int) mtmd_helper_subprocess::frame_result::frame,
+                (int) child.read_frame(frame));
+        }
+        t.assert_equal("exit after selected frames", exit_code, child.finish());
+        if (!t.assert_true("child released", !child.created && !child.alive && !child.stderr_reader.joinable())) std::abort();
+        child.stop();
+    }
+}
+
+MAKE_TEST(test_video_decoder_cancel) {
+    const char * command[] = { test_executable.c_str(), "--mtmd-read-stdin", nullptr };
+    const std::vector<uint8_t> input(1024 * 1024, 1);
+    mtmd_helper_subprocess child;
+    if (!t.assert_equal("start child", 0,
+            child.start(command, subprocess_option_inherit_environment))) {
+        return;
+    }
+    child.start_feeder(input);
+    child.stop();
+    t.assert_true("cancel releases child and feeder", !child.created && !child.alive && !child.feeder.joinable() && !child.stderr_reader.joinable());
+    child.stop();
+}
+#endif
+
+MAKE_TEST(test_video_sequence_errors) {
+    struct source : test_video_source {
+        bool fail;
+        int finished = 0;
+        source(int n, bool fail) : test_video_source(n), fail(fail) {}
+        bool read_raw_frame() override {
+            const bool ok = test_video_source::read_raw_frame();
+            if (!ok) src_error = fail;
+            return ok;
+        }
+        bool finish_raw_frames() override {
+            finished++;
+            return !fail;
+        }
+    };
+    // Generic EOF, failures before/after frames, and indexed completion are separate paths.
+    for (const bool indexed : { false, true }) {
+        for (const bool fail : { false, true }) {
+            for (const int n : { 0, 1, 2 }) {
+                source video(n, fail);
+                video.configure({ MTMD_VIDEO_TEMPLATE_DEFAULT, 0.0f, 0, 0, 0 }, { 2, 2, 2.0f, -1 }, 0.0f);
+                video.src_alive = true;
+                video.prompt_start.clear();
+                video.timestamp_interval_ms = 0;
+                if (indexed) video.frame_indices = { 0, 1 };
+                mtmd_bitmap * bitmap = nullptr;
+                char * text = nullptr;
+                int ret;
+                int emitted = 0;
+                while ((ret = video.read_next(&bitmap, &text)) == 0) {
+                    emitted++;
+                    mtmd_bitmap_free(bitmap);
+                    free(text);
+                }
+                const int expected = fail || n == 0 || (indexed && n < 2) ? -2 : -1;
+                t.assert_equal("terminal status", expected, ret);
+                t.assert_equal("emitted frames", n, emitted);
+                t.assert_true("no terminal output", bitmap == nullptr && text == nullptr);
+                t.assert_equal("stable terminal status", expected, video.read_next(&bitmap, &text));
+                t.assert_equal("indexed finalization once", indexed && n == 2 ? 1 : 0, video.finished);
+            }
+        }
+    }
+
+    source skipping(1, true);
+    skipping.configure({ MTMD_VIDEO_TEMPLATE_DEFAULT, 0.0f, 0, 0, 0 }, { 2, 2, 2.0f, -1 }, 0.0f);
+    skipping.frame_indices = { 1 };
+    skipping.src_alive = true;
+    skipping.prompt_start.clear();
+    mtmd_bitmap * bitmap = nullptr;
+    char * text = nullptr;
+    t.assert_equal("failure while skipping to selected frame", -2, skipping.read_next(&bitmap, &text));
+    t.assert_true("no skipped-frame output", bitmap == nullptr && text == nullptr);
+}
+
 MAKE_TEST(test_video_sequence_qwen3vl) {
     clip_hparams hparams;
     hparams.patch_size = 16;
@@ -507,6 +689,23 @@ MAKE_TEST(test_audio_preprocessor_conformer) {
 //
 
 int main(int argc, char ** argv) {
+#ifdef MTMD_VIDEO
+    if (argc == 2 && std::string(argv[1]) == "--mtmd-read-stdin") {
+        while (getchar() != EOF) {}
+        return 0;
+    }
+    if ((argc == 4 || argc == 5) && std::string(argv[1]) == "--mtmd-child") {
+        const std::vector<uint8_t> bytes(std::stoi(argv[2]), 42);
+        fwrite(bytes.data(), 1, bytes.size(), stdout);
+        fflush(stdout);
+        if (argc == 5) {
+            const std::vector<uint8_t> errors(std::stoi(argv[4]), 43);
+            fwrite(errors.data(), 1, errors.size(), stderr);
+        }
+        return std::stoi(argv[3]);
+    }
+    test_executable = argv[0];
+#endif
     testing t(std::cout);
     t.verbose = true;
 
