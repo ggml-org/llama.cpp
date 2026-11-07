@@ -1,27 +1,20 @@
 <script lang="ts">
+	import MenuActionsList from './MenuActionsList.svelte';
 	import { KeyboardShortcutInfo } from '$lib/components/app';
 	import * as Drawer from '$lib/components/ui/drawer';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { Separator } from '$lib/components/ui/separator';
 	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { MenuKind } from '$lib/enums';
 	import { deviceStore } from '$lib/stores';
+	import type { MenuAction } from '$lib/types';
 	import type { Component } from 'svelte';
-
-	interface ActionItem {
-		icon: Component;
-		label: string;
-		onclick: (event: Event) => void;
-		variant?: 'default' | 'destructive';
-		disabled?: boolean;
-		shortcut?: string[];
-		separator?: boolean;
-	}
 
 	interface Props {
 		triggerIcon: Component;
 		triggerTooltip?: string;
 		triggerClass?: string;
-		actions: ActionItem[];
+		actions: MenuAction[];
 		align?: 'start' | 'center' | 'end';
 		open?: boolean;
 	}
@@ -39,7 +32,7 @@
 	// row is a touch target of its own
 	let isMobile = $derived(deviceStore.isMobile);
 
-	function runAction(action: ActionItem, event: Event) {
+	function runAction(action: MenuAction, event: Event) {
 		open = false;
 
 		// let the drawer close before an action that moves the focus, such as a confirm dialog
@@ -88,7 +81,14 @@
 					>
 						{@render iconComponent(action.icon, 'h-4 w-4 shrink-0')}
 
-						<span class="flex-1">{action.label}</span>
+						<span class="flex flex-1 flex-col">
+							{action.label}
+
+							<!-- a phone has no hover, so the hint sits under the label -->
+							{#if action.tooltip}
+								<span class="text-xs text-muted-foreground">{action.tooltip}</span>
+							{/if}
+						</span>
 
 						{#if action.shortcut}
 							<KeyboardShortcutInfo keys={action.shortcut} variant={action.variant} />
@@ -126,30 +126,7 @@
 		</Tooltip.Root>
 
 		<DropdownMenu.Content {align} class="z-[999999] w-48">
-			{#each actions as action, index (action.label)}
-				{#if action.separator && index > 0}
-					<DropdownMenu.Separator />
-				{/if}
-
-				<DropdownMenu.Item
-					class="flex items-center justify-between hover:[&>kbd]:opacity-100"
-					disabled={action.disabled}
-					onclick={action.onclick}
-					variant={action.variant}
-				>
-					<div class="flex items-center gap-2">
-						{@render iconComponent(
-							action.icon,
-							`h-4 w-4 ${action.variant === 'destructive' ? 'text-destructive' : ''}`
-						)}
-						{action.label}
-					</div>
-
-					{#if action.shortcut}
-						<KeyboardShortcutInfo keys={action.shortcut} variant={action.variant} />
-					{/if}
-				</DropdownMenu.Item>
-			{/each}
+			<MenuActionsList {actions} kind={MenuKind.DROPDOWN} />
 		</DropdownMenu.Content>
 	</DropdownMenu.Root>
 {/if}

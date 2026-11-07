@@ -185,19 +185,17 @@ void llama_model_glm5_next::load_arch_tensors(llama_model_loader & ml) {
 
 std::unique_ptr<llm_graph_context> llama_model_glm5_next::build_arch_graph(const llm_graph_params & params) const {
     if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
-        return std::make_unique<graph_mtp>(*this, params);
+        return std::make_unique<graph_mtp>(params);
     }
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
 // Causal conv1d over one of Q/K/V
-static ggml_tensor * glm5_conv1d(ggml_cgraph * gf, ggml_context * ctx0,
-                                 ggml_tensor * conv_states_all, ggml_tensor * conv_state_all,
-                                 int64_t qkv, ggml_tensor * x, ggml_tensor * proj_w, ggml_tensor * conv_w,
-                                 int64_t d_conv, int64_t head_dim, int64_t n_head,
-                                 int64_t n_seq_tokens, int64_t n_seqs, int64_t n_tokens, int64_t kv_head,
-                                 int64_t mem_size, int64_t K_rs) {
-    const int64_t d_inner         = head_dim * n_head;
+ggml_tensor * llama_model_glm5_next::graph::build_kda_conv1d(
+        llm_graph_input_rs * inp_rs, ggml_tensor * conv_states_all, ggml_tensor * conv_state_all,
+        int64_t qkv, ggml_tensor * x, ggml_tensor * proj_w, ggml_tensor * conv_w,
+        int64_t d_conv, int64_t head_dim, int64_t n_head_kda, int64_t n_seq_tokens, int64_t n_seqs) {
+    const int64_t d_inner         = head_dim * n_head_kda;
     const int64_t conv_state_size = (d_conv - 1) * d_inner;
     const int64_t n_embd_r_total  = 3 * conv_state_size;
 
@@ -210,26 +208,15 @@ static ggml_tensor * glm5_conv1d(ggml_cgraph * gf, ggml_context * ctx0,
     ggml_tensor * x_3d   = ggml_reshape_3d(ctx0, x_proj, d_inner, n_seq_tokens, n_seqs);
     ggml_tensor * conv_x = ggml_concat(ctx0, conv_state_x, ggml_transpose(ctx0, x_3d), 0);
 
-    // group s holds the conv window s tokens back.
-    // [TAG_RECURRENT_ROLLBACK_SPLITS]: the last K_rs tokens must share one ubatch.
-    for (int64_t s = 0; s < K_rs; ++s) {
-        const int64_t s_idx = std::max<int64_t>(0, n_seq_tokens - s);
-        ggml_tensor * conv_x_s = ggml_view_3d(ctx0, conv_x, d_conv - 1, d_inner, n_seqs,
-            conv_x->nb[1], conv_x->nb[2], s_idx * conv_x->nb[0]);
-        ggml_build_forward_expand(gf,
-            ggml_cpy(ctx0, conv_x_s,
-                ggml_view_3d(ctx0, conv_states_all, d_conv - 1, d_inner, n_seqs,
-                    (d_conv - 1)   * ggml_element_size(conv_states_all),
-                    n_embd_r_total * ggml_element_size(conv_states_all),
-                    ((s * mem_size + kv_head) * n_embd_r_total + qkv * conv_state_size) * ggml_element_size(conv_states_all))));
-    }
+    build_conv_state_store(inp_rs, conv_states_all, conv_x, d_conv - 1,
+        ggml_row_size(conv_states_all->type, qkv * conv_state_size));
 
     ggml_tensor * conv_weight = ggml_reshape_2d(ctx0, conv_w, d_conv, d_inner);
     ggml_tensor * Xcur = ggml_ssm_conv(ctx0, conv_x, conv_weight);
     Xcur = ggml_reshape_2d(ctx0, Xcur, d_inner, n_tokens);
     Xcur = ggml_silu(ctx0, Xcur);
 
-    return ggml_reshape_4d(ctx0, Xcur, head_dim, n_head, n_seq_tokens, n_seqs);
+    return ggml_reshape_4d(ctx0, Xcur, head_dim, n_head_kda, n_seq_tokens, n_seqs);
 }
 
 
@@ -537,12 +524,12 @@ ggml_tensor * llama_model_glm5_next::graph::build_hc_post(
 }
 
 // construct the graph helpers without building the trunk, so graph_mtp can reuse them
-llama_model_glm5_next::graph::graph(const llama_model & model, const llm_graph_params & params, no_build) :
-    llm_build_delta_net_base(params), model(model) {
+llama_model_glm5_next::graph::graph(const llm_graph_params & params, no_build) :
+    llm_build_delta_net_base(params) {
 }
 
-llama_model_glm5_next::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params) :
-    graph(model, params, no_build{}) {
+llama_model_glm5_next::graph_mtp::graph_mtp(const llm_graph_params & params) :
+    graph(params, no_build{}) {
 
     GGML_ASSERT(hparams.n_layer_nextn > 0 && "GLM5-Next MTP requires n_layer_nextn > 0");
     GGML_ASSERT(hparams.n_layer_nextn == 1 && "GLM5-Next MTP currently supports a single NextN block");
@@ -671,8 +658,8 @@ llama_model_glm5_next::graph_mtp::graph_mtp(const llama_model & model, const llm
     res->t_logits = cur;
 }
 
-llama_model_glm5_next::graph::graph(const llama_model & model, const llm_graph_params & params) :
-    llm_build_delta_net_base(params), model(model) {
+llama_model_glm5_next::graph::graph(const llm_graph_params & params) :
+    llm_build_delta_net_base(params) {
 
     ggml_tensor * cur;
 
@@ -812,17 +799,13 @@ ggml_tensor * llama_model_glm5_next::graph::build_kda_layer(
         int64_t d_inner, int64_t n_seq_tokens, int64_t n_seqs, int il) {
 
     const auto * mctx_cur = inp_rs->mctx;
-    const auto   kv_head  = mctx_cur->get_head();
 
     ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
     ggml_tensor * conv_state_all  = build_rs(inp_rs, conv_states_all, hparams.n_embd_r(), n_seqs);
 
-    const int64_t mem_size = mctx_cur->get_size();
-    const int64_t K_rs     = (int64_t) cparams.n_rs_seq + 1;
-
-    ggml_tensor * Qcur = glm5_conv1d(gf, ctx0, conv_states_all, conv_state_all, 0, cur, layer.wq, layer.ssm_q_conv, d_conv, head_dim, n_head_kda, n_seq_tokens, n_seqs, n_tokens, kv_head, mem_size, K_rs);
-    ggml_tensor * Kcur = glm5_conv1d(gf, ctx0, conv_states_all, conv_state_all, 1, cur, layer.wk, layer.ssm_k_conv, d_conv, head_dim, n_head_kda, n_seq_tokens, n_seqs, n_tokens, kv_head, mem_size, K_rs);
-    ggml_tensor * Vcur = glm5_conv1d(gf, ctx0, conv_states_all, conv_state_all, 2, cur, layer.wv, layer.ssm_v_conv, d_conv, head_dim, n_head_kda, n_seq_tokens, n_seqs, n_tokens, kv_head, mem_size, K_rs);
+    ggml_tensor * Qcur = build_kda_conv1d(inp_rs, conv_states_all, conv_state_all, 0, cur, layer.wq, layer.ssm_q_conv, d_conv, head_dim, n_head_kda, n_seq_tokens, n_seqs);
+    ggml_tensor * Kcur = build_kda_conv1d(inp_rs, conv_states_all, conv_state_all, 1, cur, layer.wk, layer.ssm_k_conv, d_conv, head_dim, n_head_kda, n_seq_tokens, n_seqs);
+    ggml_tensor * Vcur = build_kda_conv1d(inp_rs, conv_states_all, conv_state_all, 2, cur, layer.wv, layer.ssm_v_conv, d_conv, head_dim, n_head_kda, n_seq_tokens, n_seqs);
     cb(Qcur, "kda_q_conv", il);
     cb(Kcur, "kda_k_conv", il);
     cb(Vcur, "kda_v_conv", il);
@@ -1096,7 +1079,7 @@ llama_model_glm5_next::graph::build_dsa_layer(
 
     cb(sel, "kq_mask_dsa", il);
 
-    ggml_tensor * out = build_attn_mha(q_absorbed, k, v, nullptr, sel, nullptr, layer.wv_b, inp_kpool->n_sel, kq_scale, il);
+    ggml_tensor * out = build_attn_mha(q_absorbed, k, v, nullptr, sel, nullptr, nullptr, layer.wv_b, inp_kpool->n_sel, kq_scale, il);
     cb(out, "kqv_out", il);
 
     out = ggml_mul_mat(ctx0, layer.wo, out);
