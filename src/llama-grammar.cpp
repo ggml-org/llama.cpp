@@ -955,9 +955,9 @@ static void llama_grammar_advance_stack(
 // prefix so the parser processes it once instead of N times.
 //
 // Handles two cases:
-// 1. Inline common prefix: rule = "ab1" | "ab2" → rule = "ab" rule', rule' = "1" | "2"
+// 1. Inline common prefix: rule = "ab1" | "ab2" -> rule = "ab" rule', rule' = "1" | "2"
 // 2. Cross-rule prefix: rule = A | B | C where A,B,C start with same elements
-//    → rule = common_prefix rule', rule' = A_suffix | B_suffix | C_suffix
+//    -> rule = common_prefix rule', rule' = A_suffix | B_suffix | C_suffix
 static void llama_grammar_left_factor(llama_grammar_rules & rules) {
     auto elem_eq = [](const llama_grammar_element & a, const llama_grammar_element & b) {
         return a.type == b.type && a.value == b.value;

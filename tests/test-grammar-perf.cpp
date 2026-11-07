@@ -91,7 +91,7 @@ static bool match_string(const std::string & input, llama_grammar * grammar) {
 }
 
 // ---------------------------------------------------------------------------
-// Grammar generation — 50 tool schemas with parallel tool calls
+// Grammar generation - 50 tool schemas with parallel tool calls
 // ---------------------------------------------------------------------------
 
 // Each tool has: name, 2-4 typed parameters (string/integer/boolean/number).
