@@ -10,7 +10,7 @@
 			here: 'Llama Chat, Llama for Mac and Windows',
 			name: 'Application',
 			what: 'The UI and UX people work with, and the agentic loop that calls tools.',
-			yours: 'Your conversations kept where you are; only the tools you added'
+			yours: 'Open source, so anyone can read, test and change it; your conversations stay with you'
 		},
 		{
 			here: 'ggml, libllama and llama-server',
