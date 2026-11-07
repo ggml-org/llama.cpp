@@ -3324,6 +3324,11 @@ static int ggml_cuda_try_ssm_scan_cache_fusion(
         return 0;
     }
 
+    // SSD uses F32 running state; its FP16 cache copy must remain separate.
+    if (s->type != GGML_TYPE_F32 && n_tok > 128) {
+        return 0;
+    }
+
     const int64_t n_written = std::min<int64_t>(n_tok, K);
     const size_t  tail_off  = ggml_row_size(GGML_TYPE_F32, ggml_nelements(x));
 
@@ -3354,16 +3359,39 @@ static int ggml_cuda_try_ssm_scan_cache_fusion(
         return 0;
     }
 
+    // The fused kernel does not write the tail; only Y views may read the scan after the copy.
+    for (int j = node_idx + skip + 1; j < cgraph->n_nodes; ++j) {
+        const ggml_tensor * n = cgraph->nodes[j];
+        const bool reads_y = n->view_src == ssm && n->view_offs <= tail_off && ggml_nbytes(n) <= tail_off - n->view_offs;
+        if (n->view_src == ssm && !reads_y) {
+            return 0;
+        }
+        for (const ggml_tensor * input : n->src) {
+            const bool reads_tail_view = input && input->view_src == ssm &&
+                (input->view_offs > tail_off || ggml_nbytes(input) > tail_off - input->view_offs);
+            if (input == src || reads_tail_view || (input == ssm && !reads_y)) {
+                return 0;
+            }
+        }
+    }
+
     // dst is the [D, n_seqs, n_written] cache view; require nb[1] == D, the per-seq stride the kernel takes from src0->nb[3]
     const std::array<int64_t, GGML_MAX_DIMS> expected_ne = { D, n_seqs, n_written, 1 };
-    if (dst->op != GGML_OP_VIEW || dst->type != GGML_TYPE_F32 || dst->data == nullptr ||
+    if (dst->op != GGML_OP_VIEW || dst->type != s->type || dst->data == nullptr ||
         !std::equal(expected_ne.begin(), expected_ne.end(), dst->ne) ||
-        dst->nb[0] != ggml_type_size(GGML_TYPE_F32) || dst->nb[1] != (size_t) ggml_row_size(GGML_TYPE_F32, D)) {
+        dst->nb[0] != ggml_type_size(s->type) || dst->nb[1] != (size_t) ggml_row_size(s->type, D)) {
         return 0;
     }
 
-    fused_state_cpy.data        = (float *) dst->data; // rollback slot 0 (newest)
-    fused_state_cpy.slot_stride = K > 1 ? (int64_t) (dst->nb[2] / sizeof(float)) : 0;
+    // Aliased writes must preserve row boundaries so one warp cannot overwrite another warp's input state.
+    const size_t row_bytes = ggml_row_size(s->type, D);
+    if (row_bytes == 0 || (uintptr_t) s->data % row_bytes != (uintptr_t) dst->data % row_bytes ||
+        (n_written > 1 && (dst->nb[2] < row_bytes || dst->nb[2] % row_bytes != 0))) {
+        return 0;
+    }
+
+    fused_state_cpy.data        = dst->data; // rollback slot 0 (newest)
+    fused_state_cpy.slot_stride = K > 1 ? (int64_t) (dst->nb[2] / ggml_type_size(s->type)) : 0;
     return skip;
 }
 
@@ -6250,6 +6278,10 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_SSM_SCAN: {
             const int32_t K = ggml_get_op_params_i32(op, 0);
 
+            if ((op->src[0]->type != GGML_TYPE_F32 && op->src[0]->type != GGML_TYPE_F16) || op->type != GGML_TYPE_F32) {
+                return false;
+            }
+
             if (op->src[3]->ne[0] == 1) {
                 // Mamba2
                 // (kernel only supports (d_state == 96 || d_state == 128 || d_state == 256) && d_head % 16 == 0)
@@ -6262,7 +6294,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
 
                 // Mamba
                 // (kernel only supports d_state == 16, d_head == 1, n_head % 128 == 0, n_group == 1)
-                return op->src[0]->ne[0] == 16 && op->src[0]->ne[1] == 1 && op->src[0]->ne[2] % 128 == 0 && op->src[4]->ne[1] == 1;
+                return op->src[0]->type == GGML_TYPE_F32 && op->src[0]->ne[0] == 16 && op->src[0]->ne[1] == 1 && op->src[0]->ne[2] % 128 == 0 && op->src[4]->ne[1] == 1;
             }
         }
         case GGML_OP_SSM_CONV: {

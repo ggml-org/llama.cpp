@@ -1030,6 +1030,17 @@ ggml_backend_buffer_t ggml_backend_dev_buffer_from_host_ptr(ggml_backend_dev_t d
 
 bool ggml_backend_dev_supports_op(ggml_backend_dev_t device, const struct ggml_tensor * op) {
     GGML_ASSERT(device);
+    // FP16 SSM state is currently supported only by CPU and CUDA.
+    if (op->op == GGML_OP_SSM_SCAN && op->src[0]->type == GGML_TYPE_F16) {
+        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(device);
+        if (reg == nullptr) {
+            return false;
+        }
+        const char * name = ggml_backend_reg_name(reg);
+        if (strcmp(name, "CPU") != 0 && strcmp(name, "CUDA") != 0) {
+            return false;
+        }
+    }
     return device->iface.supports_op(device, op);
 }
 
