@@ -211,6 +211,29 @@ struct vk_op_dsv4_hc_post_push_constants {
     float    gate_scale_out;
 };
 
+struct vk_op_top_k_mask_push_constants {
+    uint32_t n_kv;
+    uint32_t n_top;
+    uint32_t n_pick;
+    uint32_t n_blk;
+    uint32_t n_extra;
+    uint32_t has_score;
+    uint32_t ninf;
+
+    uint32_t ne1; uint32_t ne2;
+
+    uint32_t m1; uint32_t m2; uint32_t m3;
+    uint32_t nbm1; uint32_t nbm2; uint32_t nbm3;
+    uint32_t nbd1; uint32_t nbd2; uint32_t nbd3;
+
+    uint32_t m_offset;
+    uint32_t k_offset;
+    uint32_t s_offset;
+    uint32_t b_offset;
+    uint32_t e_offset;
+    uint32_t d_offset;
+};
+
 struct vk_op_count_experts_push_constants {
     uint32_t ne00;
     uint32_t ne01;
@@ -967,6 +990,18 @@ template <> inline void init_pushconst_tensor_offsets(ggml_backend_vk_context * 
     p.p_offset = get_misalign_bytes(ctx, src2) / ggml_type_size(src2->type);
     p.c_offset = src3 ? get_misalign_bytes(ctx, src3) / ggml_type_size(src3->type) : 0;
     p.d_offset = get_misalign_bytes(ctx, dst)  / ggml_type_size(dst->type);
+}
+
+// the fifth source, extra, comes from dst
+template <> inline void init_pushconst_tensor_offsets(ggml_backend_vk_context * ctx, vk_op_top_k_mask_push_constants &p, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * src2, const ggml_tensor * src3, ggml_tensor * dst) {
+    const ggml_tensor * extra = dst->src[4];
+
+    p.m_offset = get_misalign_bytes(ctx, src0) / ggml_type_size(src0->type);
+    p.k_offset = get_misalign_bytes(ctx, src1) / ggml_type_size(src1->type);
+    p.s_offset = src2  ? get_misalign_bytes(ctx, src2)  / ggml_type_size(src2->type)  : 0;
+    p.b_offset = src3  ? get_misalign_bytes(ctx, src3)  / ggml_type_size(src3->type)  : 0;
+    p.e_offset = extra ? get_misalign_bytes(ctx, extra) / ggml_type_size(extra->type) : 0;
+    p.d_offset = get_misalign_bytes(ctx, dst) / ggml_type_size(dst->type);
 }
 
 template <typename T> size_t push_constant_size(const T &t) {
