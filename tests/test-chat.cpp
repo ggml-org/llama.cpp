@@ -8268,6 +8268,125 @@ static void test_chat_json_depth() {
     assert_equals(true, rejected([&] { common_chat_templates_apply(tmpls.get(), json_schema); }));
 }
 
+static void test_media_content_transport() {
+    LOG_DBG("%s\n", __func__);
+
+    const auto make_options = [] {
+        server_chat_params opt{};
+        opt.use_jinja = true;
+        opt.reasoning_format = COMMON_REASONING_FORMAT_NONE;
+        opt.allow_image = true;
+        opt.allow_audio = true;
+        opt.allow_video = true;
+        opt.tmpls = common_chat_templates_init(
+            nullptr, "{% for message in messages %}{{ message.content }}{% endfor %}");
+        return opt;
+    };
+    const auto message = [](const json & content) {
+        return json{{"role", "user"}, {"content", content}};
+    };
+    const auto media = [](const std::string & type, const std::string & key, const std::string & data) {
+        return json{{"type", type}, {type, {{key, data}}}};
+    };
+    const auto parse = [](json & body, const server_chat_params & opt, std::vector<raw_buffer> & files) {
+        common_chat_session session;
+        return oaicompat_chat_params_parse(nullptr, body, opt, files, session);
+    };
+
+    const std::string marker = get_media_marker();
+    const raw_buffer first = {1, 2, 3};
+    for (const std::string type : {"input_video", "video_url"}) {
+        for (const std::string key : {"data", "url"}) {
+            for (const std::string payload : {"AQID", "data:video/mp4;base64,AQID"}) {
+                auto opt = make_options();
+                opt.allow_image = false;
+                opt.allow_audio = false;
+                json body = {{"messages", json::array({message(json::array({media(type, key, payload)}))})}};
+                std::vector<raw_buffer> files;
+                const auto params = parse(body, opt, files);
+                assert_equals<size_t>(1, files.size());
+                assert_equals(true, files[0] == first);
+                assert_equals(marker, params.at("prompt").get<std::string>());
+                const auto & part = body.at("messages")[0].at("content")[0];
+                assert_equals(std::string("media_marker"), part.at("type").get<std::string>());
+                assert_equals(false, part.contains("input_video"));
+                assert_equals(false, part.contains("video_url"));
+            }
+        }
+    }
+
+    // Byte order and prompt markers must agree across kinds, text, and messages.
+    {
+        auto opt = make_options();
+        json body = {{"messages", json::array({
+            message(json::array({
+                json{{"type", "text"}, {"text", "a"}},
+                media("image_url", "url", "data:image/png;base64,AQID"),
+                json{{"type", "text"}, {"text", "b"}},
+                media("input_audio", "data", "data:audio/wav;base64,BAUG"),
+                json{{"type", "text"}, {"text", "c"}},
+                media("video_url", "url", "data:video/mp4;base64,BwgJ"),
+                json{{"type", "text"}, {"text", "d"}},
+            })),
+            message(json::array({
+                json{{"type", "text"}, {"text", "e"}},
+                media("input_audio", "url", "CgsM"),
+                json{{"type", "text"}, {"text", "f"}},
+            })),
+        })}};
+        std::vector<raw_buffer> files;
+        const auto params = parse(body, opt, files);
+        const std::vector<raw_buffer> expected = {{1, 2, 3}, {4, 5, 6}, {7, 8, 9}, {10, 11, 12}};
+        assert_equals(true, files == expected);
+        assert_equals("a" + marker + "b" + marker + "c" + marker + "de" + marker + "f",
+                      params.at("prompt").get<std::string>());
+        assert_equals(false, body.at("messages")[0].at("content")[3].contains("input_audio"));
+        assert_equals(false, body.at("messages")[1].at("content")[1].contains("input_audio"));
+    }
+
+    // The capability guard must run before the invalid payload is decoded.
+    for (const std::string type : {"image_url", "input_audio", "input_video", "video_url"}) {
+        auto opt = make_options();
+        const bool image = type == "image_url";
+        const bool audio = type == "input_audio";
+        opt.allow_image = !image;
+        opt.allow_audio = !audio;
+        opt.allow_video = image || audio;
+        json body = {{"messages", json::array({message(json::array({media(type, image ? "url" : "data", "!")}))})}};
+        std::vector<raw_buffer> files;
+        std::string error;
+        try {
+            parse(body, opt, files);
+        } catch (const std::runtime_error & e) {
+            error = e.what();
+        }
+        assert_contains(error, std::string(image ? "image" : audio ? "audio" : "video") + " input is not supported");
+        assert_equals<size_t>(0, files.size());
+    }
+
+    for (const std::string payload : {
+            "data:video/mp4;base64", "data:application/octet-stream;base64,AQID", "data:video/mp4,AQID"}) {
+        auto opt = make_options();
+        json body = {{"messages", json::array({message(json::array({media("input_video", "data", payload)}))})}};
+        std::vector<raw_buffer> files;
+        bool rejected = false;
+        try {
+            parse(body, opt, files);
+        } catch (const std::invalid_argument &) {
+            rejected = true;
+        }
+        assert_equals(true, rejected);
+        assert_equals<size_t>(0, files.size());
+    }
+
+    auto opt = make_options();
+    opt.allow_image = opt.allow_audio = opt.allow_video = false;
+    json body = {{"messages", json::array({message("plain text")})}};
+    std::vector<raw_buffer> files;
+    assert_equals(std::string("plain text"), parse(body, opt, files).at("prompt").get<std::string>());
+    assert_equals<size_t>(0, files.size());
+}
+
 static void test_reasoning_budget_tokens_per_request() {
     LOG_DBG("%s\n", __func__);
     // Use Qwen3 template which has <think>...</think> reasoning markers.
@@ -8536,6 +8655,7 @@ int main(int argc, char ** argv) {
         test_prompt_parts();
         test_chat_session();
         test_chat_json_depth();
+        test_media_content_transport();
         test_reasoning_budget_tokens_per_request();
         test_reasoning_budget_message_per_request();
         test_template_output_peg_parsers(detailed_debug);
