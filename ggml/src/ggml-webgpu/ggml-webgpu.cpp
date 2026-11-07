@@ -2759,6 +2759,47 @@ static std::optional<webgpu_encoded_op> ggml_webgpu_rms_norm_mul(webgpu_context 
     return ggml_backend_webgpu_build(ctx, pipeline, params, entries, wg_x, wg_y);
 }
 
+static webgpu_encoded_op ggml_webgpu_group_norm(webgpu_context & ctx, ggml_tensor * src, ggml_tensor * dst) {
+    const size_t          src_type_size = ggml_type_size(src->type);
+    const size_t          dst_type_size = ggml_type_size(dst->type);
+    const uint32_t        num_groups    = (uint32_t) ggml_get_op_params_i32(dst, 0);
+    std::vector<uint32_t> params        = {
+        (uint32_t) src->ne[0],
+        (uint32_t) src->ne[1],
+        (uint32_t) src->ne[2],
+        (uint32_t) src->ne[3],
+        num_groups,
+        ggml_webgpu_u32_from_f32(ggml_get_op_params_f32(dst, 1)),
+        (uint32_t) (src->nb[1] / src_type_size),
+        (uint32_t) (src->nb[0] / src_type_size),
+        (uint32_t) (src->nb[2] / src_type_size),
+        (uint32_t) (src->nb[3] / src_type_size),
+        (uint32_t) (dst->nb[1] / dst_type_size),
+        (uint32_t) (dst->nb[0] / dst_type_size),
+        (uint32_t) (dst->nb[2] / dst_type_size),
+        (uint32_t) (dst->nb[3] / dst_type_size),
+        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src) / src_type_size),
+        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst) / dst_type_size),
+    };
+
+    ggml_webgpu_shader_lib_context shader_lib_ctx = {};
+    shader_lib_ctx.src0                           = src;
+    shader_lib_ctx.dst                            = dst;
+    shader_lib_ctx.max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
+    webgpu_pipeline pipeline   = ctx->shader_lib->get_group_norm_pipeline(shader_lib_ctx);
+    auto *          decisions  = static_cast<ggml_webgpu_generic_shader_decisions *>(pipeline.context.get());
+
+    std::vector<wgpu::BindGroupEntry> entries = { ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src) };
+    if (!decisions->inplace) {
+        entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, 1, dst));
+    }
+    uint32_t wg_x;
+    uint32_t wg_y;
+    compute_2d_workgroups(num_groups * (uint32_t) src->ne[3],
+                          ctx->global_ctx->capabilities.limits.maxComputeWorkgroupsPerDimension, wg_x, wg_y);
+    return ggml_backend_webgpu_build(ctx, pipeline, params, entries, wg_x, wg_y);
+}
+
 static webgpu_encoded_op ggml_webgpu_row_norm(webgpu_context & ctx, ggml_tensor * src, ggml_tensor * dst) {
     std::vector<uint32_t> params = {
         (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src) / ggml_type_size(src->type)),
@@ -3487,6 +3528,8 @@ static std::optional<webgpu_encoded_op> ggml_webgpu_encode(webgpu_context ctx,
             return ggml_webgpu_concat(ctx, src0, src1, node);
         case GGML_OP_REPEAT:
             return ggml_webgpu_repeat(ctx, src0, node);
+        case GGML_OP_GROUP_NORM:
+            return ggml_webgpu_group_norm(ctx, src0, node);
         case GGML_OP_RMS_NORM:
             if (ggml_webgpu_can_fuse_rms_norm_mul(cgraph, node_idx)) {
                 num_encoded_ops        = 2;
@@ -4926,6 +4969,18 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                     capabilities.limits.maxComputeWorkgroupStorageSize, q_tile, kv_granularity, (uint32_t) src0->ne[0],
                     (uint32_t) src2->ne[0], op->src[3] != nullptr, kv_direct);
                 supports_op = max_kv_tile > 0;
+                break;
+            }
+        case GGML_OP_GROUP_NORM:
+            {
+                bool           valid_type     = (src0->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32) ||
+                                                (src0->type == GGML_TYPE_F16 && op->type == GGML_TYPE_F16);
+                // One workgroup per normalization group within each batch item.
+                const uint64_t num_workgroups = uint64_t(ggml_get_op_params_i32(op, 0)) * uint64_t(src0->ne[3]);
+                const uint64_t max_per_dim =
+                    ctx->webgpu_global_ctx->capabilities.limits.maxComputeWorkgroupsPerDimension;
+                const bool dispatch_fits = num_workgroups <= max_per_dim * max_per_dim;
+                supports_op              = valid_type && dispatch_fits;
                 break;
             }
         case GGML_OP_RMS_NORM:
