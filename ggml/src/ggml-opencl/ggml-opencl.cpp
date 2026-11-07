@@ -12071,6 +12071,9 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                 (!op->src[3] || op->src[3]->type == GGML_TYPE_I32) &&
                 (!op->src[4] || op->src[4]->type == GGML_TYPE_I32);
         case GGML_OP_ARGSORT: {
+            if (!ggml_is_contiguous(op->src[0])) {
+                return false;
+            }
             load_cl_kernels_argsort(backend_ctx);
 
             cl_kernel kernel = backend_ctx->kernel_argsort_f32_i32;
