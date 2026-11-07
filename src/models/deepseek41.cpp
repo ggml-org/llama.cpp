@@ -650,7 +650,7 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
 
         // few queries per stream: attend over [window | top-k rows of the query], one FA stream per query; same keys and mask as dense, different key order
         const bool gather = sparse && cparams.flash_attn && raw_mask->type == GGML_TYPE_F16 && ci.kq_mask->type == GGML_TYPE_F16 &&
-                ((n_stream == 1 && nt <= 32) || nt == n_stream);
+                ((n_stream == 1 && nt <= LLAMA_DSV41_GATHER_MAX_TOKENS) || nt == n_stream);
 
         if (gather) {
             // ggml_top_k returns the rows in no fixed order and FA sums the keys in that order: sort them so the result is deterministic

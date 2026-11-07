@@ -12,6 +12,7 @@
 #define LLAMA_MAX_EXPERTS 1024 // Kimi K3
 #define LLAMA_MAX_PLE_NGRAM 8  // qwen4exp, deepseek41 (all hash modules)
 #define LLAMA_MAX_PLE_HEADS 64 // qwen4exp, deepseek41 (all hash modules)
+#define LLAMA_DSV41_GATHER_MAX_TOKENS 32 // deepseek41 with FA uses the gather path up to this ubatch size
 
 enum llama_expert_gating_func_type {
     LLAMA_EXPERT_GATING_FUNC_TYPE_NONE           = 0,
