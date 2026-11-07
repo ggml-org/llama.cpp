@@ -3258,6 +3258,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_BENCH, LLAMA_EXAMPLE_PARALLEL}));
     add_opt(common_arg(
+        {"--kvu-cache-state"}, "FNAME",
+        "save or load scattered unified KV sessions at FNAME.idleN (requires -kvu)",
+        [](common_params & params, const std::string & value) {
+            if (value.empty()) {
+                throw std::invalid_argument("--kvu-cache-state needs a file path");
+            }
+            params.batched_bench_kvu_cache_state = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_BENCH}));
+    add_opt(common_arg(
         {"-npp"}, "n0,n1,...",
         "number of prompt tokens",
         [](common_params & params, const std::string & value) {
