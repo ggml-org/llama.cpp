@@ -15,11 +15,22 @@
 #define USE_CUDA_GRAPH_CLUSTER_CHECK
 #endif
 
+#ifdef USE_CUDA_GRAPH_CLUSTER_CHECK
+// cluster dims of a clustered kernel node
+struct ggml_cuda_graph_cluster {
+    size_t   node;
+    uint32_t x, y, z;
+
+    bool operator==(const ggml_cuda_graph_cluster & other) const {
+        return node == other.node && x == other.x && y == other.y && z == other.z;
+    }
+};
+#endif
+
 struct ggml_cuda_graph_instance {
     cudaGraphExec_t handle = nullptr;
 #ifdef USE_CUDA_GRAPH_CLUSTER_CHECK
-    // (node, x, y, z) of the clustered kernel nodes
-    std::vector<uint32_t> clusters;
+    std::vector<ggml_cuda_graph_cluster> clusters;
 #endif
 
     operator cudaGraphExec_t() const { return handle; }
