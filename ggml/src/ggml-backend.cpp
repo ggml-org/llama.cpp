@@ -2231,6 +2231,15 @@ ggml_backend_sched_t ggml_backend_sched_new(
 
     sched->n_backends = n_backends;
     sched->n_copies = parallel ? GGML_SCHED_MAX_COPIES : 1;
+    // allow 2+ staging copies on a single device; with per-copy events this overlaps
+    // the upload of the next graph with the compute of the current one
+    if (!parallel) {
+        static const int sched_copies = []() {
+            const char * env = getenv("GGML_SCHED_COPIES");
+            return env ? std::atoi(env) : 1;
+        }();
+        sched->n_copies = std::max(1, std::min((int) GGML_SCHED_MAX_COPIES, sched_copies));
+    }
 
     // initialize hash table
     // FIXME: needs to be size*2 to account for leafs (do it in graph_split instead)

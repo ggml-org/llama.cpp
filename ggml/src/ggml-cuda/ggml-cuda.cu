@@ -749,6 +749,17 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
     if (copy_event != nullptr) {
         CUDA_CHECK(cudaEventDestroy(copy_event));
     }
+    if (up_stream != nullptr) {
+        CUDA_CHECK(cudaStreamDestroy(up_stream));
+    }
+    for (int i = 0; i < n_up_events; ++i) {
+        if (up_events[i] != nullptr) {
+            CUDA_CHECK(cudaEventDestroy(up_events[i]));
+        }
+    }
+    if (up_wait_event != nullptr) {
+        CUDA_CHECK(cudaEventDestroy(up_wait_event));
+    }
     for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
         for (int j = 0; j < GGML_CUDA_MAX_STREAMS; ++j) {
             if (streams[i][j] != nullptr) {
@@ -2897,7 +2908,36 @@ static void ggml_backend_cuda_set_tensor_async(ggml_backend_t backend, ggml_tens
 
     GGML_ASSERT(buf->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device) && "unsupported buffer type");
 
-    CUDA_CHECK(cudaMemcpyAsync((char *) tensor->data + offset, data, size, cudaMemcpyHostToDevice, cuda_ctx->stream()));
+    static const bool upload_stream = std::getenv("GGML_CUDA_UPLOAD_STREAM") != nullptr;
+    if (!upload_stream) {
+        CUDA_CHECK(cudaMemcpyAsync((char *) tensor->data + offset, data, size, cudaMemcpyHostToDevice, cuda_ctx->stream()));
+        return;
+    }
+
+    ggml_cuda_set_device(cuda_ctx->device);
+    if (cuda_ctx->up_stream == nullptr) {
+        CUDA_CHECK(cudaStreamCreateWithFlags(&cuda_ctx->up_stream, cudaStreamNonBlocking));
+        CUDA_CHECK(cudaEventCreateWithFlags(&cuda_ctx->up_wait_event, cudaEventDisableTiming));
+        for (int i = 0; i < ggml_backend_cuda_context::n_up_events; ++i) {
+            CUDA_CHECK(cudaEventCreateWithFlags(&cuda_ctx->up_events[i], cudaEventDisableTiming));
+        }
+    }
+    // the scheduler has already made the main stream wait for the previous use of this
+    // staging buffer; inherit that boundary instead of holding a scheduler event pointer
+    CUDA_CHECK(cudaEventRecord(cuda_ctx->up_wait_event, cuda_ctx->stream()));
+    CUDA_CHECK(cudaStreamWaitEvent(cuda_ctx->up_stream, cuda_ctx->up_wait_event, 0));
+
+    cudaEvent_t ev = cuda_ctx->up_events[cuda_ctx->up_event_idx];
+    cuda_ctx->up_event_idx = (cuda_ctx->up_event_idx + 1) % ggml_backend_cuda_context::n_up_events;
+    const cudaError_t ev_state = cudaEventQuery(ev);
+    if (ev_state == cudaErrorNotReady) {
+        CUDA_CHECK(cudaEventSynchronize(ev));
+    } else {
+        CUDA_CHECK(ev_state);
+    }
+    CUDA_CHECK(cudaMemcpyAsync((char *) tensor->data + offset, data, size, cudaMemcpyHostToDevice, cuda_ctx->up_stream));
+    CUDA_CHECK(cudaEventRecord(ev, cuda_ctx->up_stream));
+    CUDA_CHECK(cudaStreamWaitEvent(cuda_ctx->stream(), ev, 0));
 }
 
 static void ggml_backend_cuda_get_tensor_async(ggml_backend_t backend, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
