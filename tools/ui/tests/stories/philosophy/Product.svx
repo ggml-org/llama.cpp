@@ -1,7 +1,6 @@
 <!--
 	How the products fit together (Philosophy › Product): the Llama stack, the line between Llama UI and the apps, the
-	three layers in it, and how Llama Chat ships. The most important parts of the Llama Suite planning pages
-	(Llama UI Stack, One build, three channels); the roadmap and the app concepts stay there for now. Set in Editorial.
+	three layers in it, and how Llama Chat ships. The Architecture pages go into each in detail. Set in Editorial.
 -->
 
 <script>
@@ -42,6 +41,8 @@ Components take data in and report what the user did. State and calls to the ser
 	<Rule />
 </Figure>
 
+*Architecture › Stack* draws the whole stack and the repo layout; *Architecture › Chat* shows where each part of Llama Chat lands.
+
 ## Across the three layers
 
 - **Application:** Llama Chat, Llama for Mac and Windows, or your own app. Ours never assume a cloud account and always show which model runs, and where. Llama UI is a library for building apps, not a layer: an app can use the layers below without it.
@@ -55,7 +56,7 @@ Components take data in and report what the user did. State and calls to the ser
 
 ## Simple first, depth on request
 
-Nothing comes pre-installed. On the first run, the Llama app suggests models that fit the device and recommends one: small enough for any device, and able to read, see and hear. Once you choose, the app downloads the model and runs llama-server, with no terminal. Llama Chat opens on a conversation, not on settings. Every other model and server setting sits behind a disclosure, with a short explanation where a term needs one.
+Nothing comes pre-installed. On the first run, the Llama app suggests models that fit the device and recommends one: small enough for any device, and able to read, see and hear. One click downloads it and runs llama-server, with no terminal. Llama Chat opens on a conversation, not on settings. For power users, every model and server setting is there behind a disclosure, with a short explanation where a term needs one, and the model manager and Discover can be turned on in Llama Chat.
 
 ## One build, three channels
 
@@ -65,6 +66,4 @@ Llama Chat is a static app (HTML, JavaScript and CSS), built once per release. T
 	<Channels />
 </Figure>
 
-The app will tell where it runs at runtime, with no build flags: if its own origin answers as llama.cpp, it runs bundled; otherwise it asks for a server.
-
-<p class="colophon">After the Llama Suite planning pages: Llama UI Stack, and One build, three channels.</p>
+The app will tell where it runs at runtime, with no build flags: if its own origin answers as llama.cpp, it runs bundled; otherwise it asks for a server. *Architecture › Channels* compares the three, with the `npx` command and the release flow.
