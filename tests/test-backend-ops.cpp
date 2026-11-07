@@ -13914,19 +13914,19 @@ static bool run_fa_vec_slice(ggml_backend_t backend, ggml_backend_t backend_cpu,
     return n_fail == 0;
 }
 
-// Reads a tensor back with ggml_backend_tensor_get_async into host memory whose address and/or
-// size is not a multiple of the page size (e.g. a logits row), and checks that only the requested
-// bytes are written. Metal used to assert here on macOS 12/13 (#16266).
-static bool run_get_tensor_async_unaligned(ggml_backend_t backend) {
+// Copies a tensor to and from host memory whose address or size is not a multiple of the page size
+// (for example a logits row). Checks that only the requested bytes change.
+// Metal used to assert here on macOS 12/13 (#16266).
+static bool run_tensor_copy_unaligned(ggml_backend_t backend) {
     if (ggml_backend_dev_type(ggml_backend_get_device(backend)) == GGML_BACKEND_DEVICE_TYPE_CPU) {
         return true;
     }
 
-    printf("Running get_tensor_async unaligned host memory tests\n");
+    printf("Running unaligned host memory copy tests\n");
 
-    const int64_t n      = 248320;  // n_vocab of Qwen3.5, nbytes is not a page multiple
-    const size_t  pad    = 65536;   // >= any page size, used to page-align the host buffer
-    const uint8_t guard  = 0xA5;
+    const int64_t n     = 248320; // n_vocab of Qwen3.5, nbytes is not a page multiple
+    const size_t  pad   = 65536;  // >= any page size, used to page-align the host buffer
+    const uint8_t guard = 0xA5;
 
     ggml_init_params params = { ggml_tensor_overhead(), nullptr, true };
     ggml_context_ptr ctx(ggml_init(params));
@@ -13939,44 +13939,100 @@ static bool run_get_tensor_async_unaligned(ggml_backend_t backend) {
 
     const size_t nbytes = ggml_nbytes(t);
     std::vector<uint8_t> ref(nbytes);
+    std::vector<uint8_t> payload(nbytes);
     for (size_t i = 0; i < nbytes; ++i) {
-        ref[i] = (uint8_t) ((i * 2654435761u) >> 13);
+        ref[i]     = (uint8_t) ((i * 2654435761u) >> 13);
+        payload[i] = (uint8_t) ((i * 2246822519u) >> 13);
     }
     ggml_backend_tensor_set(t, ref.data(), 0, nbytes);
 
-    struct { size_t dst_offs, src_offs, size; } cases[] = {
-        { 0,     0,    nbytes      },  // page-aligned address, odd size
-        { 12,    0,    nbytes - 64 },  // unaligned address
-        { 16376, 4000, 16          },  // small read crossing a page boundary
+    struct { size_t host_offs, tensor_offs, size; } cases[] = {
+        { 0,     0,    nbytes      }, // page-aligned address, odd size
+        { 12,    0,    nbytes - 64 }, // unaligned address
+        { 16376, 4000, 16          }, // small transfer crossing a page boundary
+    };
+
+    const auto align_ptr = [pad](std::vector<uint8_t> & mem) {
+        return (uint8_t *) (((uintptr_t) mem.data() + pad - 1) & ~(uintptr_t) (pad - 1));
     };
 
     std::vector<uint8_t> host(nbytes + 3*pad);
-    uint8_t * base = (uint8_t *) (((uintptr_t) host.data() + pad - 1) & ~(uintptr_t) (pad - 1));
+    uint8_t * base = align_ptr(host);
 
-    int n_fail = 0;
-    for (const auto & c : cases) {
-        std::fill(host.begin(), host.end(), guard);
-        uint8_t * dst = base + c.dst_offs;
-
-        ggml_backend_tensor_get_async(backend, t, dst, c.src_offs, c.size);
-        ggml_backend_synchronize(backend);
-
-        bool ok = memcmp(dst, ref.data() + c.src_offs, c.size) == 0;
-        for (size_t i = 0; ok && i < host.size(); ++i) {
-            const uint8_t * p = host.data() + i;
-            if ((p < dst || p >= dst + c.size) && *p != guard) {
-                ok = false;
+    const auto guard_ok = [&](const std::vector<uint8_t> & mem, const uint8_t * dst, size_t size) {
+        for (size_t i = 0; i < mem.size(); ++i) {
+            const uint8_t * p = mem.data() + i;
+            if ((p < dst || p >= dst + size) && *p != guard) {
+                return false;
             }
         }
+        return true;
+    };
+
+    const auto run_gets = [&](bool async_copy) {
+        int n_fail = 0;
+        for (const auto & c : cases) {
+            std::fill(host.begin(), host.end(), guard);
+            uint8_t * dst = base + c.host_offs;
+
+            if (async_copy) {
+                ggml_backend_tensor_get_async(backend, t, dst, c.tensor_offs, c.size);
+                ggml_backend_synchronize(backend);
+            } else {
+                ggml_backend_tensor_get(t, dst, c.tensor_offs, c.size);
+            }
+
+            const bool ok = memcmp(dst, ref.data() + c.tensor_offs, c.size) == 0 && guard_ok(host, dst, c.size);
+            if (!ok) {
+                printf("  FAIL %s: host_offs=%zu tensor_offs=%zu size=%zu\n",
+                        async_copy ? "get_tensor_async" : "get_tensor", c.host_offs, c.tensor_offs, c.size);
+                n_fail++;
+            }
+        }
+
+        printf("  %s unaligned: %zu cases run, %d failed\n",
+                async_copy ? "get_tensor_async" : "get_tensor", sizeof(cases)/sizeof(cases[0]), n_fail);
+        return n_fail == 0;
+    };
+
+    const bool async_ok = run_gets(true);
+    const bool get_ok   = run_gets(false);
+
+    std::vector<uint8_t> back(nbytes + 2*pad);
+    uint8_t * back_base = align_ptr(back);
+
+    int n_fail_set = 0;
+    for (const auto & c : cases) {
+        ggml_backend_tensor_set(t, ref.data(), 0, nbytes);
+
+        std::fill(host.begin(), host.end(), guard);
+        uint8_t * src = base + c.host_offs;
+        memcpy(src, payload.data() + c.tensor_offs, c.size);
+
+        ggml_backend_tensor_set(t, src, c.tensor_offs, c.size);
+
+        std::fill(back.begin(), back.end(), guard);
+        ggml_backend_tensor_get(t, back_base, 0, nbytes);
+
+        bool data_ok = memcmp(back_base + c.tensor_offs, payload.data() + c.tensor_offs, c.size) == 0;
+        if (data_ok && c.tensor_offs > 0 && memcmp(back_base, ref.data(), c.tensor_offs) != 0) {
+            data_ok = false;
+        }
+        const size_t tail = c.tensor_offs + c.size;
+        if (data_ok && tail < nbytes && memcmp(back_base + tail, ref.data() + tail, nbytes - tail) != 0) {
+            data_ok = false;
+        }
+
+        const bool ok = data_ok && guard_ok(host, src, c.size) && guard_ok(back, back_base, nbytes);
         if (!ok) {
-            printf("  FAIL get_tensor_async: dst_offs=%zu src_offs=%zu size=%zu\n", c.dst_offs, c.src_offs, c.size);
-            n_fail++;
+            printf("  FAIL set_tensor: host_offs=%zu tensor_offs=%zu size=%zu\n", c.host_offs, c.tensor_offs, c.size);
+            n_fail_set++;
         }
     }
 
-    printf("  get_tensor_async unaligned: %zu cases run, %d failed\n", sizeof(cases)/sizeof(cases[0]), n_fail);
+    printf("  set_tensor unaligned: %zu cases run, %d failed\n", sizeof(cases)/sizeof(cases[0]), n_fail_set);
 
-    return n_fail == 0;
+    return async_ok && get_ok && n_fail_set == 0;
 }
 
 static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mode mode, const char * op_names_filter, const char * params_filter,
@@ -14117,9 +14173,9 @@ static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mo
         output_printer->print_failed_tests(failed_tests);
 
         const bool slice_ok = run_fa_vec_slice(backend, backend_cpu.get(), op_names_filter);
-        const bool async_ok = run_get_tensor_async_unaligned(backend);
+        const bool copy_ok  = run_tensor_copy_unaligned(backend);
 
-        return n_ok == tests_run && slice_ok && async_ok;
+        return n_ok == tests_run && slice_ok && copy_ok;
     }
 
     if (mode == MODE_GRAD) {

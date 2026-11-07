@@ -1400,6 +1400,23 @@ void * ggml_metal_device_get_obj(ggml_metal_device_t dev) {
     return dev->mtl_device;
 }
 
+void * ggml_metal_device_wrap_host(ggml_metal_device_t dev, void * ptr, size_t size, size_t * offs) {
+    // newBufferWithBytesNoCopy needs a page-aligned pointer and, on macOS 12/13, a page-multiple length.
+    // Round the range out to whole pages. Those pages are already mapped. Copy size bytes at *offs. (#16266)
+    const size_t size_page = sysconf(_SC_PAGESIZE);
+    const size_t mis = (uintptr_t) ptr % size_page;
+    void * base = (uint8_t *) ptr - mis;
+    const size_t len = ((mis + size + size_page - 1) / size_page) * size_page;
+
+    *offs = mis;
+
+    id<MTLDevice> device = ggml_metal_device_get_obj(dev);
+    return [device newBufferWithBytesNoCopy:base
+                                     length:len
+                                    options:MTLResourceStorageModeShared
+                                deallocator:nil];
+}
+
 void * ggml_metal_device_get_queue(ggml_metal_device_t dev) {
     return dev->mtl_queue;
 }
@@ -2376,10 +2393,8 @@ void ggml_metal_buffer_set_tensor(ggml_metal_buffer_t buf, struct ggml_tensor * 
     @autoreleasepool {
         // src
         void * data_ptr = (void *)(uintptr_t) data; // "const cast" the src data
-        id<MTLBuffer> buf_src = [buf->dev->mtl_device newBufferWithBytesNoCopy:data_ptr
-                                                               length:size
-                                                              options:MTLResourceStorageModeShared
-                                                          deallocator:nil];
+        size_t src_offs = 0;
+        id<MTLBuffer> buf_src = ggml_metal_device_wrap_host(buf->dev, data_ptr, size, &src_offs);
 
         GGML_ASSERT(buf_src);
 
@@ -2397,7 +2412,7 @@ void ggml_metal_buffer_set_tensor(ggml_metal_buffer_t buf, struct ggml_tensor * 
             id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
 
             [encoder copyFromBuffer:buf_src
-                       sourceOffset:0
+                       sourceOffset:src_offs
                            toBuffer:bid_dst.metal
                   destinationOffset:bid_dst.offs
                                size:size];
@@ -2435,10 +2450,8 @@ void ggml_metal_buffer_get_tensor(ggml_metal_buffer_t buf, const struct ggml_ten
         bid_src.offs += offset;
 
         // dst
-        id<MTLBuffer> buf_dst = [buf->dev->mtl_device newBufferWithBytesNoCopy:data
-                                                               length:size
-                                                              options:MTLResourceStorageModeShared
-                                                          deallocator:nil];
+        size_t dst_offs = 0;
+        id<MTLBuffer> buf_dst = ggml_metal_device_wrap_host(buf->dev, data, size, &dst_offs);
 
         GGML_ASSERT(buf_dst);
 
@@ -2450,7 +2463,7 @@ void ggml_metal_buffer_get_tensor(ggml_metal_buffer_t buf, const struct ggml_ten
             [encoder copyFromBuffer:bid_src.metal
                        sourceOffset:bid_src.offs
                            toBuffer:buf_dst
-                  destinationOffset:0
+                  destinationOffset:dst_offs
                                size:size];
 
             [encoder endEncoding];
