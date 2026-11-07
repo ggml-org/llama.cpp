@@ -40,7 +40,6 @@ struct htp_ssm_scan_kernel_params {
     uint32_t group_units;
     uint32_t units_per_seq;
     uint32_t total_units;
-    uint32_t units_per_thread;
     uint32_t heads_per_thread;
 
     uint32_t state_slot_bytes;

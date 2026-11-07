@@ -2370,7 +2370,6 @@ static bool htp_kparams_solve_ssm_scan(
     kparams->units_per_seq   = (uint32_t) units_per_seq;
     kparams->total_units     = (uint32_t) total_units;
     kparams->n_threads       = (uint16_t) (std::max)(1U, (std::min)(sess_threads, kparams->total_units));
-    kparams->units_per_thread = (kparams->total_units + kparams->n_threads - 1) / kparams->n_threads;
     kparams->heads_per_thread = (kparams->n_head + kparams->n_threads - 1) / kparams->n_threads;
 
     const bool layout_valid = htp_ssm_scan_vtcm_layout_build(
@@ -2395,7 +2394,6 @@ static bool htp_kparams_solve_ssm_scan(
     if (!use_vtcm) {
         kparams->n_threads        = (uint16_t) (std::max)(1U, (std::min)(sess_threads, kparams->n_head));
         kparams->heads_per_thread = (kparams->n_head + kparams->n_threads - 1) / kparams->n_threads;
-        kparams->units_per_thread = kparams->heads_per_thread;
         final_layout_valid = htp_ssm_scan_vtcm_layout_build(
             &layout, kparams->d_state, kparams->row_tile, kparams->token_tile, kparams->n_threads) &&
             layout.state_slot_bytes <= UINT32_MAX && layout.xy_row_stride <= UINT32_MAX &&

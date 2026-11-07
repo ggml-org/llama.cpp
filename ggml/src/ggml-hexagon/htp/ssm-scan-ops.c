@@ -16,6 +16,9 @@ struct htp_ssm_scan_context {
     struct htp_ssm_scan_vtcm_layout           layout;
     dma_addr_t                                y_bytes;
     uint32_t                                  heads_per_thread;
+    uint32_t                                  unit_start;
+    uint32_t                                  nunits;
+    uint32_t                                  units_per_thread;
 };
 
 struct htp_ssm_scan_unit {
@@ -243,14 +246,8 @@ static void ssm_scan_thread_mamba2_vtcm(unsigned int nth, unsigned int ith, void
     struct htp_ops_context *                  octx            = scctx->octx;
     const struct htp_ssm_scan_kernel_params * kparams         = scctx->kparams;
     const struct htp_ssm_scan_vtcm_layout *   layout          = &scctx->layout;
-    const uint64_t                            unit_start_wide = (uint64_t) ith * kparams->units_per_thread;
-
-    if (unit_start_wide >= kparams->total_units) {
-        return;
-    }
-
-    const uint32_t unit_start = (uint32_t) unit_start_wide;
-    const uint32_t unit_end   = unit_start + MIN(kparams->units_per_thread, kparams->total_units - unit_start);
+    const uint32_t                            unit_start      = scctx->unit_start + scctx->units_per_thread * ith;
+    const uint32_t                            unit_end        = MIN(unit_start + scctx->units_per_thread, scctx->unit_start + scctx->nunits);
 
     if (unit_start >= unit_end) {
         return;
@@ -324,7 +321,11 @@ static void ssm_scan_thread_mamba2_vtcm(unsigned int nth, unsigned int ith, void
             return;
         }
     }
-    dma_queue_flush(dma_q);
+
+    // Trailing packages hold the final y and state write-backs and zero-row input dummies.
+    for (uint32_t i = 0; i < prime * SSM_SCAN_DECODE_PACKAGE_SIZE; ++i) {
+        dma_queue_pop(dma_q);
+    }
 
     (void) nth;
 }
@@ -541,12 +542,8 @@ static void ssm_scan_thread_mamba2_vtcm_prefill(unsigned int nth, unsigned int i
     struct htp_ops_context *                  octx            = scctx->octx;
     const struct htp_ssm_scan_kernel_params * kparams         = scctx->kparams;
     const struct htp_ssm_scan_vtcm_layout *   layout          = &scctx->layout;
-    const uint64_t                            unit_start_wide = (uint64_t) ith * kparams->units_per_thread;
-    if (unit_start_wide >= kparams->total_units) {
-        return;
-    }
-    const uint32_t unit_start = (uint32_t) unit_start_wide;
-    const uint32_t unit_end   = unit_start + MIN(kparams->units_per_thread, kparams->total_units - unit_start);
+    const uint32_t                            unit_start      = scctx->unit_start + scctx->units_per_thread * ith;
+    const uint32_t                            unit_end        = MIN(unit_start + scctx->units_per_thread, scctx->unit_start + scctx->nunits);
     if (unit_start >= unit_end) {
         return;
     }
@@ -732,7 +729,8 @@ static void ssm_scan_thread_mamba2_vtcm_prefill(unsigned int nth, unsigned int i
     (void) nth;
 }
 
-static inline float ssm_scan_mamba2_hvx(float * restrict next, const float * restrict prev,
+// next and prev may alias: the state is updated in place after the first token.
+static inline float ssm_scan_mamba2_hvx(float * next, const float * prev,
         const float * restrict B, const float * restrict C, float dA, float x_dt, uint32_t d_state) {
     HVX_Vector       acc   = Q6_V_vzero();
     const HVX_Vector vdA   = hvx_vec_splat_f32(dA);
@@ -742,9 +740,9 @@ static inline float ssm_scan_mamba2_hvx(float * restrict next, const float * res
     for (; i + VLEN_FP32 <= d_state; i += VLEN_FP32) {
         const HVX_Vector state      = hvx_vmemu(prev + i);
         const HVX_Vector next_state = hvx_vec_add_f32_f32(
-            hvx_vec_mul_f32_f32(state, vdA), hvx_vec_mul_f32_f32(hvx_vmem(B + i), vx_dt));
+            hvx_vec_mul_f32_f32(state, vdA), hvx_vec_mul_f32_f32(hvx_vmemu(B + i), vx_dt));
         hvx_vmemu(next + i)         = next_state;
-        acc = hvx_vec_add_f32_f32(acc, hvx_vec_mul_f32_f32(next_state, hvx_vmem(C + i)));
+        acc = hvx_vec_add_f32_f32(acc, hvx_vec_mul_f32_f32(next_state, hvx_vmemu(C + i)));
     }
 
     float sum;
@@ -758,9 +756,9 @@ static inline float ssm_scan_mamba2_hvx(float * restrict next, const float * res
     return sum;
 }
 
-static inline void ssm_scan_mamba2_hvx4(float * restrict next0, float * restrict next1,
-        float * restrict next2, float * restrict next3, const float * restrict prev0,
-        const float * restrict prev1, const float * restrict prev2, const float * restrict prev3,
+static inline void ssm_scan_mamba2_hvx4(float * next0, float * next1,
+        float * next2, float * next3, const float * prev0,
+        const float * prev1, const float * prev2, const float * prev3,
         const float * restrict B, const float * restrict C, float dA, const float * x_dt,
         uint32_t d_state, float * restrict sums) {
     HVX_Vector       acc0 = Q6_V_vzero();
@@ -774,8 +772,8 @@ static inline void ssm_scan_mamba2_hvx4(float * restrict next0, float * restrict
     const HVX_Vector vx3  = hvx_vec_splat_f32(x_dt[3]);
 
     for (uint32_t i = 0; i < d_state; i += VLEN_FP32) {
-        const HVX_Vector b = hvx_vmem(B + i);
-        const HVX_Vector c = hvx_vmem(C + i);
+        const HVX_Vector b = hvx_vmemu(B + i);
+        const HVX_Vector c = hvx_vmemu(C + i);
         const HVX_Vector out0 = hvx_vec_add_f32_f32(hvx_vec_mul_f32_f32(hvx_vmemu(prev0 + i), vdA), hvx_vec_mul_f32_f32(b, vx0));
         const HVX_Vector out1 = hvx_vec_add_f32_f32(hvx_vec_mul_f32_f32(hvx_vmemu(prev1 + i), vdA), hvx_vec_mul_f32_f32(b, vx1));
         const HVX_Vector out2 = hvx_vec_add_f32_f32(hvx_vec_mul_f32_f32(hvx_vmemu(prev2 + i), vdA), hvx_vec_mul_f32_f32(b, vx2));
@@ -911,6 +909,7 @@ static int op_ssm_scan_f32(struct htp_ops_context * octx) {
     const struct htp_tensor * x   = octx->src[1];
     const struct htp_tensor * B   = octx->src[4];
     const struct htp_tensor * ids = octx->src[6];
+    const struct htp_tensor * dst = octx->dst;
 
     const struct htp_ssm_scan_kernel_params * kparams =
         (const struct htp_ssm_scan_kernel_params *) octx->kernel_params;
@@ -924,6 +923,23 @@ static int op_ssm_scan_f32(struct htp_ops_context * octx) {
         return HTP_STATUS_INVAL_PARAMS;
     }
 
+    const bool use_vtcm = kparams->kernel_type == HTP_SSM_SCAN_KERNEL_MAMBA2_VTCM;
+
+    // ids is read through a scalar pointer; the fallback uses direct pointers for all tensors.
+    if (htp_tensor_is_extended(ids)) {
+        return HTP_STATUS_NO_SUPPORT;
+    }
+    if (!use_vtcm) {
+        for (int i = 0; i < 7; i++) {
+            if (htp_tensor_is_extended(octx->src[i])) {
+                return HTP_STATUS_NO_SUPPORT;
+            }
+        }
+        if (htp_tensor_is_extended(dst)) {
+            return HTP_STATUS_NO_SUPPORT;
+        }
+    }
+
     const int32_t * ids_data = (const int32_t *) ids->data;
     for (uint32_t q = 0; q < x->ne[3]; ++q) {
         if (ids_data[q] < 0 || (uint32_t) ids_data[q] >= s->ne[3]) {
@@ -933,18 +949,38 @@ static int op_ssm_scan_f32(struct htp_ops_context * octx) {
     if (octx->flags & HTP_OPFLAGS_STUB) {
         return HTP_STATUS_OK;
     }
-    if (!htp_ops_context_set_n_threads(octx, kparams->n_threads)) {
+
+    uint32_t unit_start = 0;
+    uint32_t nunits     = kparams->total_units;
+
+    if (octx->ctx->mdev.count > 1) {
+        // VTCM path writes y by DMA and state in row blocks of 128-byte multiples. Fallback writes y by HVX: keep it on device 0.
+        const uint32_t units_per_chunk = use_vtcm && htp_tensor_mdev_data_aligned(dst) ? 1 : 0;
+        const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(
+            nunits, units_per_chunk, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
+        unit_start = range.start;
+        nunits     = range.count;
+    }
+
+    if (nunits == 0) {
+        return HTP_STATUS_OK;
+    }
+
+    if (!htp_ops_context_set_n_threads(octx, use_vtcm ? MIN(kparams->n_threads, nunits) : kparams->n_threads)) {
         return HTP_STATUS_INVAL_PARAMS;
     }
 
     struct htp_ssm_scan_context scctx = {
-        .octx    = octx,
-        .kparams = kparams,
-        .y_bytes = (size_t) kparams->head_dim * kparams->n_head * kparams->n_tokens * kparams->n_seqs * sizeof(float),
+        .octx             = octx,
+        .kparams          = kparams,
+        .y_bytes          = (size_t) kparams->head_dim * kparams->n_head * kparams->n_tokens * kparams->n_seqs * sizeof(float),
         .heads_per_thread = kparams->heads_per_thread,
+        .unit_start       = unit_start,
+        .nunits           = nunits,
+        .units_per_thread = fastdiv(nunits + octx->n_threads - 1, &octx->n_threads_div),
     };
 
-    if (kparams->kernel_type == HTP_SSM_SCAN_KERNEL_MAMBA2_VTCM) {
+    if (use_vtcm) {
         if (kparams->token_tile == 0 || kparams->token_tile > VLEN_FP32 ||
             !htp_ssm_scan_vtcm_layout_build(&scctx.layout, kparams->d_state, kparams->row_tile,
                                              kparams->token_tile, kparams->n_threads) ||
