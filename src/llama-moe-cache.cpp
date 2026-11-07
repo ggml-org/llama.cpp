@@ -623,7 +623,7 @@ struct llama_moe_cache::impl {
         GGML_ASSERT(lookup != nullptr);
 
         // the selected experts must be computed in an earlier split
-        // the scheduler starts a new split at the lookup because it reads a host weight, but only if the split already has inputs
+        // the scheduler starts a new split at the lookup because it reads a host weight, unless the lookup is the first node of its split
         const ggml_tensor * sel = lookup->src[1];
         for (int i = 0; i < n_nodes; ++i) {
             const ggml_tensor * node = ggml_graph_node(graph, i);
