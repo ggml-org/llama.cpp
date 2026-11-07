@@ -4,14 +4,13 @@
 #include "convert.cuh"
 
 static __device__ __forceinline__ int best_index_int8(int n, const int8_t * val, float x) {
-    if (x <= val[0]) return 0;
-    if (x >= val[n-1]) return n-1;
-    int ml = 0, mu = n-1;
-    while (mu-ml > 1) {
-        int mav = (ml+mu)/2;
-        if (x < val[mav]) mu = mav; else ml = mav;
+    const float x2 = x + x;
+    int idx = 0;
+    for (int step = n >> 1; step > 0; step >>= 1) {
+        const int j = idx + step;
+        idx = (x2 >= (float)(val[j-1] + val[j])) ? j : idx;
     }
-    return x - val[mu-1] < val[mu] - x ? mu-1 : mu;
+    return idx;
 }
 
 static __device__ void quantize_f32_q4_0_block(const float * __restrict__ x, block_q4_0 * __restrict__ y) {
@@ -153,6 +152,83 @@ static __device__ void quantize_f32_q8_0_block(const float * __restrict__ x, blo
     }
 }
 
+static __device__ void quantize_f32_iq2_nl_block(const float * __restrict__ x, block_iq2_nl * __restrict__ y) {
+    float amax = 0.0f;
+    float vmax = 0.0f;
+
+    for (int j = 0; j < QK2_NL; ++j) {
+        const float v = x[j];
+        if (amax < fabsf(v)) {
+            amax = fabsf(v);
+            vmax = v;
+        }
+    }
+
+    float d = vmax / kvalues_iq2nl[0];
+    const float id = d ? 1.0f/d : 0.0f;
+
+    uint8_t L[QK2_NL];
+    float sumqx = 0, sumq2 = 0;
+    for (int j = 0; j < QK2_NL; ++j) {
+        const uint8_t l = best_index_int8(4, kvalues_iq2nl, x[j]*id);
+        L[j] = l;
+        const float v = kvalues_iq2nl[l];
+        const float w = x[j]*x[j];
+        sumqx += w*v*x[j];
+        sumq2 += w*v*v;
+    }
+
+    // 2-bit packing; qs[j] holds elements j, j+8, j+16, j+24
+    for (int j = 0; j < QK2_NL/4; ++j) {
+        y->qs[j] = (L[j] & 3) | ((L[j + QK2_NL/4] & 3) << 2) |
+                   ((L[j + 2*(QK2_NL/4)] & 3) << 4) | ((L[j + 3*(QK2_NL/4)] & 3) << 6);
+    }
+
+    y->d = sumq2 > 0 ? sumqx/sumq2 : d;
+}
+
+static __device__ void quantize_f32_iq3_nl_block(const float * __restrict__ x, block_iq3_nl * __restrict__ y) {
+    float amax = 0.0f;
+    float vmax = 0.0f;
+
+    for (int j = 0; j < QK3_NL; ++j) {
+        const float v = x[j];
+        if (amax < fabsf(v)) {
+            amax = fabsf(v);
+            vmax = v;
+        }
+    }
+
+    float d = vmax / kvalues_iq3nl[0];
+    const float id = d ? 1.0f/d : 0.0f;
+
+    uint8_t L[QK3_NL];
+    float sumqx = 0, sumq2 = 0;
+    for (int j = 0; j < QK3_NL; ++j) {
+        const uint8_t l = best_index_int8(8, kvalues_iq3nl, x[j]*id);
+        L[j] = l;
+        const float v = kvalues_iq3nl[l];
+        const float w = x[j]*x[j];
+        sumqx += w*v*x[j];
+        sumq2 += w*v*v;
+    }
+
+    // 3-bit packing; low 2 bits in qs (j, j+8, j+16, j+24), high bit transposed into qh
+    for (int j = 0; j < QK3_NL/4; ++j) {
+        y->qs[j] = (L[j] & 3) | ((L[j + QK3_NL/4] & 3) << 2) |
+                   ((L[j + 2*(QK3_NL/4)] & 3) << 4) | ((L[j + 3*(QK3_NL/4)] & 3) << 6);
+    }
+    for (int g = 0; g < 4; ++g) {
+        uint8_t h = 0;
+        for (int j = 0; j < QK3_NL/4; ++j) {
+            h |= ((L[j + g*(QK3_NL/4)] >> 2) & 1) << j;
+        }
+        y->qh[g] = h;
+    }
+
+    y->d = sumq2 > 0 ? sumqx/sumq2 : d;
+}
+
 static __device__ void quantize_f32_iq4_nl_block(const float * __restrict__ x, block_iq4_nl * __restrict__ y) {
     float amax = 0.0f;
     float vmax = 0.0f;
@@ -205,6 +281,14 @@ static __device__ void cpy_blck_f32_q5_1(const char * cxi, char * cdsti) {
 
 static __device__ void cpy_blck_f32_q8_0(const char * cxi, char * cdsti) {
     quantize_f32_q8_0_block((const float *)cxi, (block_q8_0 *)cdsti);
+}
+
+static __device__ void cpy_blck_f32_iq2_nl(const char * cxi, char * cdsti) {
+    quantize_f32_iq2_nl_block((const float *)cxi, (block_iq2_nl *)cdsti);
+}
+
+static __device__ void cpy_blck_f32_iq3_nl(const char * cxi, char * cdsti) {
+    quantize_f32_iq3_nl_block((const float *)cxi, (block_iq3_nl *)cdsti);
 }
 
 static __device__ void cpy_blck_f32_iq4_nl(const char * cxi, char * cdsti) {
