@@ -1036,62 +1036,12 @@ static void llama_grammar_left_factor(llama_grammar_rules & rules) {
             }
 
             if (!all_single_refs) {
-                // Inline-only factoring
-                size_t prefix_len = 0;
-                bool prefix_match = true;
-                while (prefix_match) {
-                    const auto & first = alt_ranges[0];
-                    if (first.first + prefix_len >= first.second) {
-                        break;
-                    }
-                    const auto & ref_elem = rule[first.first + prefix_len];
-                    for (size_t ai = 1; ai < alt_ranges.size(); ai++) {
-                        const auto & alt = alt_ranges[ai];
-                        if (alt.first + prefix_len >= alt.second ||
-                            !elem_eq(rule[alt.first + prefix_len], ref_elem)) {
-                            prefix_match = false;
-                            break;
-                        }
-                    }
-                    if (prefix_match) {
-                        prefix_len++;
-                    }
+                resolved.clear();
+                for (const auto & [astart, aend] : alt_ranges) {
+                    resolved.push_back({ri, astart, aend});
                 }
-
-                for (const auto & alt : alt_ranges) {
-                    prefix_len = trim_prefix(rule, alt.first, prefix_len);
-                }
-                if (prefix_len == 0) {
-                    continue;
-                }
-
-                uint32_t suffix_rule_id = static_cast<uint32_t>(rules.size());
-                llama_grammar_rule suffix_rule;
-                for (size_t ai = 0; ai < alt_ranges.size(); ai++) {
-                    if (ai > 0) {
-                        suffix_rule.push_back({LLAMA_GRETYPE_ALT, 0});
-                    }
-                    const auto & alt = alt_ranges[ai];
-                    for (size_t j = alt.first + prefix_len; j < alt.second; j++) {
-                        suffix_rule.push_back(rule[j]);
-                    }
-                }
-                suffix_rule.push_back({LLAMA_GRETYPE_END, 0});
-
-                llama_grammar_rule new_rule;
-                for (size_t j = 0; j < prefix_len; j++) {
-                    new_rule.push_back(rule[alt_ranges[0].first + j]);
-                }
-                new_rule.push_back({LLAMA_GRETYPE_RULE_REF, suffix_rule_id});
-                new_rule.push_back({LLAMA_GRETYPE_END, 0});
-
-                rules.push_back(std::move(suffix_rule));
-                rules[ri] = std::move(new_rule);
-                changed = true;
-                continue;
             }
 
-            // Cross-rule factoring: all alternates are single RULE_REFs to single-alternate rules.
             size_t prefix_len = 0;
             bool prefix_match = true;
             while (prefix_match) {
