@@ -1424,7 +1424,6 @@ void llm_graph_result::reset() {
     inputs.clear();
     fused_nodes.clear();
     hdmd_inputs.clear();
-    cpu_parts.clear();
 
     buf_compute_meta.resize(ggml_tensor_overhead()*max_nodes + ggml_graph_overhead_custom(max_nodes, false));
 
@@ -1528,10 +1527,6 @@ llm_graph_input_i * llm_graph_result::add_input(llm_graph_input_ptr input) {
 
 void llm_graph_result::add_fused_node(llm_graph_fused_node result) {
     fused_nodes.push_back(result);
-}
-
-void llm_graph_result::add_cpu_part(const ggml_tensor * lookup, int32_t n_used, std::vector<const ggml_tensor *> inputs) {
-    cpu_parts.push_back({ lookup, n_used, std::move(inputs) });
 }
 
 ggml_tensor * llm_graph_result::get_hdmd_input(const ggml_tensor * cur, const ggml_tensor * rot) const {
@@ -2418,29 +2413,15 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     //call early so that topk-moe can be used
     ggml_build_forward_expand(gf, weights);
 
-    // the experts of host-resident layers may be read from the MoE cache
-    ggml_tensor * slots = build_moe_cache_slots(selected_experts, up_exps, gate_exps, down_exps, gate_up_exps, il);
+    // the experts of host-resident layers may be read from the MoE cache, and part of the misses computed from the host experts
+    // the CPU part does not support weights before the FFN, LoRAs or rotated experts
+    const std::array<ggml_tensor *, 4> exps = { up_exps, gate_exps, down_exps, gate_up_exps };
+    const bool can_cpu_share = !weight_before_ffn && loras->empty() &&
+        std::none_of(exps.begin(), exps.end(), [&](ggml_tensor * w) { return w != nullptr && hdmd != nullptr && hdmd->rot.count(w) > 0; });
+    ggml_tensor * cpu_ids = nullptr; // [n_expert_used, n_tokens], the misses computed from the host experts, -1 for the other experts
+    ggml_tensor * slots   = build_moe_cache_slots(selected_experts, up_exps, gate_exps, down_exps, gate_up_exps, can_cpu_share ? &cpu_ids : nullptr, il);
 
     cur = ggml_reshape_3d(ctx0, cur, n_embd, 1, n_tokens);
-
-    // part of the misses of the MoE cache can be computed on the CPU, from the host experts
-    ggml_tensor * cpu_ids = nullptr; // [n_expert_used, n_tokens], -1 for the experts computed on the device
-    ggml_tensor * sel2d   = nullptr;
-    ggml_tensor * lookup  = slots != nullptr ? slots->view_src : nullptr; // see build_moe_cache_slots
-    const std::array<ggml_tensor *, 4> exps = { up_exps, gate_exps, down_exps, gate_up_exps };
-    if (slots != nullptr) {
-        ggml_tensor * sel = lookup->src[1];
-        // the CPU part does not support weights before the FFN, LoRAs or rotated experts
-        const bool can_cpu_share = !weight_before_ffn && loras->empty() &&
-            std::none_of(exps.begin(), exps.end(), [&](ggml_tensor * w) { return w != nullptr && hdmd != nullptr && hdmd->rot.count(w) > 0; });
-        if (moe_cache->cpu_share() > 0.0f && can_cpu_share) {
-            cpu_ids = ggml_get_rows(ctx0, moe_cache->get_cpu_map(il), sel); // [1, n_expert_used*n_tokens]
-            cpu_ids = ggml_reshape_2d(ctx0, cpu_ids, n_expert_used, n_tokens);
-            sel2d   = ggml_reshape_2d(ctx0, sel, n_expert_used, n_tokens);
-        } else {
-            res->add_cpu_part(lookup, n_expert_used, {});
-        }
-    }
 
     if (weight_before_ffn) {
         // repeat cur to [n_embd, n_expert_used, n_tokens]
@@ -2611,29 +2592,12 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         return experts;
     };
 
-    ggml_tensor * experts = nullptr;
-    if (cpu_ids == nullptr) {
-        experts = build_experts(cur, selected_experts, slots, true);
-    } else {
-        // the device computes the cached experts and the CPU the misses left to it, each reads the others as zero
-        ggml_tensor * experts_dev = build_experts(cur, selected_experts, slots, true);
-        ggml_build_forward_expand(gf, experts_dev);
-
-        // the CPU part comes after the slot lookup, whose copy callback fills the CPU map and reads the inputs of the CPU part
-        const int n_nodes_dev = ggml_graph_n_nodes(gf);
-        ggml_tensor * experts_cpu = build_experts(cur, sel2d, cpu_ids, false);
-        ggml_build_forward_expand(gf, experts_cpu);
-        for (int i = n_nodes_dev; i < ggml_graph_n_nodes(gf); ++i) {
-            ggml_tensor * node = ggml_graph_node(gf, i);
-            if (node->view_src == nullptr) {
-                ggml_backend_sched_set_tensor_backend(sched, node, backend_cpu);
-            }
-        }
-
-        res->add_cpu_part(lookup, n_expert_used, { lookup->src[1], cur });
-
-        experts = ggml_add(ctx0, experts_dev, experts_cpu);
-        ggml_backend_sched_set_tensor_backend(sched, experts, moe_cache->backend(il));
+    ggml_tensor * experts = build_experts(cur, selected_experts, slots, true);
+    if (cpu_ids != nullptr) {
+        // the cached experts and the misses computed from the host experts, each reads the others as zero
+        // the cached experts come first in the graph, so that they are computed while the misses are
+        ggml_build_forward_expand(gf, experts);
+        experts = ggml_add(ctx0, experts, build_experts(cur, selected_experts, cpu_ids, false));
         cb(experts, "ffn_moe_down_merged", il);
     }
 
@@ -2700,12 +2664,14 @@ ggml_tensor * llm_graph_context::build_moe_cache_slots(
          ggml_tensor * gate_exps,
          ggml_tensor * down_exps,
          ggml_tensor * gate_up_exps,
+         ggml_tensor ** cpu_ids,
                  int   il) const {
     if (moe_cache == nullptr) {
         return nullptr;
     }
 
-    ggml_tensor * slot_map = moe_cache->get_slot_map(il, selected_experts->ne[1], selected_experts->ne[0]);
+    ggml_tensor * cpu_map  = cpu_ids != nullptr ? moe_cache->get_cpu_map(il, selected_experts->ne[1]) : nullptr;
+    ggml_tensor * slot_map = moe_cache->get_slot_map(il, selected_experts->ne[1], selected_experts->ne[0], cpu_map != nullptr);
     if (slot_map == nullptr) {
         return nullptr;
     }
@@ -2732,6 +2698,12 @@ ggml_tensor * llm_graph_context::build_moe_cache_slots(
 
     // add the lookup now: the transform of a Hadamard-folded expert reads host weights and would start its split first
     ggml_build_forward_expand(gf, slots);
+
+    // the misses computed from the host experts, read after the lookup has picked them
+    if (cpu_map != nullptr) {
+        *cpu_ids = ggml_get_rows(ctx0, cpu_map, ids); // [1, n_expert_used*n_tokens]
+        *cpu_ids = ggml_reshape_2d(ctx0, *cpu_ids, selected_experts->ne[0], selected_experts->ne[1]);
+    }
 
     return ggml_reshape_2d(ctx0, slots, selected_experts->ne[0], selected_experts->ne[1]); // [n_expert_used, n_tokens]
 }

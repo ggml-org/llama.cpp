@@ -1738,13 +1738,6 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
     }
 
-    // update the MoE cache with the CPU parts accumulated during the graph build
-    if (moe_cache) {
-        for (const auto & cpu_part : res->get_cpu_parts()) {
-            moe_cache->set_cpu_part(cpu_part.lookup, cpu_part.n_used, cpu_part.inputs);
-        }
-    }
-
     const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
     if (status != GGML_STATUS_SUCCESS) {
         LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
@@ -2980,9 +2973,6 @@ ggml_status llama_context::graph_compute(
     }
 
     copy_experts.reset();
-    if (moe_cache) {
-        moe_cache->begin();
-    }
 
     auto status = ggml_backend_sched_graph_compute_async(sched.get(), gf);
     if (status != GGML_STATUS_SUCCESS) {
@@ -2997,14 +2987,9 @@ ggml_status llama_context::graph_compute(
 bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor * src, ggml_tensor * dst, ggml_cgraph * graph, void * user_data) {
     auto * lctx = static_cast<llama_context *>(user_data);
 
-    // the slot maps of the MoE cache and the inputs of its CPU part
+    // the slot maps of the MoE cache
     if (lctx->moe_cache && lctx->moe_cache->copy(backend, src, dst, graph)) {
         return true;
-    }
-
-    if (src->buffer == nullptr || !ggml_backend_buffer_is_host(src->buffer) ||
-        ggml_backend_buffer_get_usage(src->buffer) != GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
-        return false;
     }
 
     auto & st = lctx->copy_experts;
