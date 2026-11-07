@@ -196,6 +196,9 @@ public:
     llama_token operator[](size_t index) { return tokens[index]; }
     const llama_token& operator[](size_t index) const { return tokens[index]; }
 
+    // true if any media chunk is present (has_mtmd only says that the server has a multimodal projector)
+    bool has_media() const { return !map_idx_to_media.empty(); }
+
     server_tokens(mtmd::input_chunks & mtmd_chunks, bool has_mtmd);
     server_tokens(const llama_tokens & tokens, bool has_mtmd);
 
