@@ -3,10 +3,17 @@
 #include "server-http.h"
 #include "server-queue.h"
 
+#include <algorithm>
 #include <chrono>
 #include <memory>
 #include <utility>
 #include <shared_mutex>
+
+// History:
+//
+// 2026-09-14 Ralph Holland - Djeti AI.
+//    SSE buffer eviction revised to evict whole SSE records,
+//    which prevents a split of an UTF8 character.
 
 enum class stream_read_status {
     OK,
@@ -119,32 +126,51 @@ stream_session::stream_session(std::string conversation_id_, size_t max_bytes_)
     buffer.reserve(64 * 1024);
 }
 
+// SSE eviction policy revised:
+//  - records are 0x0a-terminated; we only ever strip whole records
+//  - a lost prefix is signalled to clients via the GET /v1/stream 400
+//    (OFFSET_LOST, "Stream offset lost, please restart") + prefix_dropped;
+//    readers resuming from a valid offset never see the dropped bytes
+//  - each eviction is logged per-append at DEBUG (verbosity 5) so the
+//    diagnostic record of a flood stays available without reading as a fault
 bool stream_session::append(const char * data, size_t len) {
     if (len == 0) {
         return true;
     }
-    {
-        std::lock_guard<std::mutex> lock(mu);
-        if (done) {
-            return false;
-        }
-        if (len >= cap_bytes) {
-            // single chunk bigger than the cap, keep only the tail that fits
-            size_t skip = len - cap_bytes;
-            prefix_dropped += buffer.size() + skip;
-            buffer.clear();
-            buffer.insert(buffer.end(), data + skip, data + len);
-        } else {
-            size_t needed = buffer.size() + len;
-            if (needed > cap_bytes) {
-                size_t to_drop = needed - cap_bytes;
-                buffer.erase(buffer.begin(), buffer.begin() + to_drop);
-                prefix_dropped += to_drop;
-            }
-            buffer.insert(buffer.end(), data, data + len);
-        }
+
+    // note: mutex taken
+    std::lock_guard<std::mutex> lock(mu);
+    if (done) {
+        return false;
     }
+
+    bool     fits    = len <= cap_bytes;
+    size_t   evicted = 0;
+
+    // strip whole records (through the next 0x0a) until the new record fits
+    while (buffer.size() + len > cap_bytes && !buffer.empty()) {
+        auto it   = std::find(buffer.begin(), buffer.end(), (char)0x0a);
+        size_t drop = (it == buffer.end())
+                   ? (size_t)(buffer.end() - buffer.begin())   // no 0x0a: drop the rest
+                   : (size_t)(it - buffer.begin()) + 1;        // include the 0x0a
+        buffer.erase(buffer.begin(), buffer.begin() + drop);
+        evicted += drop;
+    }
+
+    prefix_dropped += evicted;
+
+    if (fits) {
+        buffer.insert(buffer.end(), data, data + len); // append data
+    }
+    // else: pathological, record too big for the cap; nothing was stored
+
     cv.notify_all();
+
+    if (evicted) {
+        SRV_DBG("stream session %s: evicting %zu bytes from front\n",
+                  conversation_id.c_str(), evicted );
+    }
+
     return true;
 }
 
@@ -169,6 +195,8 @@ stream_read_status stream_session::read_from(size_t offset,
             return stream_read_status::OK;
         }
         if (offset < prefix_dropped) {
+            SRV_ERR("stream session %s: reader at offset %zu but prefix_dropped = %zu, returning OFFSET_LOST\n",
+                    conversation_id.c_str(), offset, prefix_dropped);
             return stream_read_status::OFFSET_LOST;
         }
         size_t logical_end = prefix_dropped + buffer.size();
@@ -248,6 +276,8 @@ stream_session_ptr stream_session_manager::create_or_replace(const std::string &
         }
     }
     if (previous) {
+        SRV_INF("stream session %s: replacing existing session (cancelling in-flight stream, was done=%d)\n",
+                conversation_id.c_str(), previous->is_done() ? 1 : 0);
         previous->cancel();
         previous->finalize();
     }
