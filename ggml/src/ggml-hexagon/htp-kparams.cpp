@@ -944,7 +944,7 @@ static bool htp_matmul_check_types(
         if (src1->type != GGML_TYPE_F32 || !src2 || src2->type != GGML_TYPE_I32) {
             return false;
         }
-        if (ggml_get_op_params_i32(dst, 3) == GGML_PREC_F32) {
+        if (ggml_get_op_params_i32(dst, 3) == GGML_PREC_BF16 || ggml_get_op_params_i32(dst, 3) == GGML_PREC_F32) {
             return false;
         }
         switch (src0->type) {
