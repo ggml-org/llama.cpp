@@ -3091,8 +3091,8 @@ static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx
 }
 
 #ifdef USE_CUDA_GRAPH_CLUSTER_CHECK
-static std::vector<uint32_t> ggml_cuda_graph_get_clusters(cudaGraph_t cuda_graph, int device) {
-    std::vector<uint32_t> clusters;
+static std::vector<ggml_cuda_graph_cluster> ggml_cuda_graph_get_clusters(cudaGraph_t cuda_graph, int device) {
+    std::vector<ggml_cuda_graph_cluster> clusters;
     static const bool runtime_affected = [] {
         int version = 0;
         CUDA_CHECK(cudaRuntimeGetVersion(&version));
@@ -3113,12 +3113,9 @@ static std::vector<uint32_t> ggml_cuda_graph_get_clusters(cudaGraph_t cuda_graph
             continue;
         }
         cudaLaunchAttributeValue val = {};
-        if (cudaGraphKernelNodeGetAttribute(nodes[i], cudaLaunchAttributeClusterDimension, &val) != cudaSuccess) {
-            (void) cudaGetLastError();
-            continue;
-        }
+        CUDA_CHECK(cudaGraphKernelNodeGetAttribute(nodes[i], cudaLaunchAttributeClusterDimension, &val));
         if (val.clusterDim.x * val.clusterDim.y * val.clusterDim.z > 1) {
-            clusters.insert(clusters.end(), { (uint32_t) i, val.clusterDim.x, val.clusterDim.y, val.clusterDim.z });
+            clusters.push_back({ i, val.clusterDim.x, val.clusterDim.y, val.clusterDim.z });
         }
     }
     return clusters;
@@ -3127,7 +3124,7 @@ static std::vector<uint32_t> ggml_cuda_graph_get_clusters(cudaGraph_t cuda_graph
 
 static void ggml_cuda_graph_update_executable(ggml_cuda_graph_instance & instance, cudaGraph_t cuda_graph, int device) {
 #ifdef USE_CUDA_GRAPH_CLUSTER_CHECK
-    std::vector<uint32_t> clusters = ggml_cuda_graph_get_clusters(cuda_graph, device);
+    std::vector<ggml_cuda_graph_cluster> clusters = ggml_cuda_graph_get_clusters(cuda_graph, device);
     if (instance.clusters != clusters) {
         if (ggml_cuda_graph_debug_enabled()) {
             GGML_LOG_DEBUG("%s: cluster dims changed, re-instantiating CUDA graph\n", __func__);
