@@ -98,7 +98,7 @@ class GGMLQuants:
             self.libggml.ggml_bf16_to_fp32_row(tensor.ctypes.data_as(ctypes.POINTER(ctypes.c_uint16)), result.ctypes.data_as(c_float_p), result.size)
         else:
             lw_qname = qtype.name.lower()
-            if lw_qname[-1] == "k":
+            if lw_qname[-1] == "k" and not lw_qname.startswith("jq"):
                 lw_qname = lw_qname[:-1] + "K"
             dequant_func: ctypes._NamedFuncPointer = getattr(self.libggml, "dequantize_row_" + lw_qname)
             dequant_func(tensor.ctypes.data_as(ctypes.c_void_p), result.ctypes.data_as(c_float_p), result.size)
