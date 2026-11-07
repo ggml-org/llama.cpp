@@ -636,8 +636,22 @@ struct llama_mmap::impl {
     }
 
     void unmap_fragment(size_t first, size_t last) {
-        GGML_UNUSED(first);
-        GGML_UNUSED(last);
+        // a view cannot be partially unmapped on Windows, so drop the pages from the working set instead
+        // (VirtualUnlock on pages that are not locked removes them and fails with ERROR_NOT_LOCKED)
+        SYSTEM_INFO si;
+        GetSystemInfo(&si);
+        const size_t page_size = si.dwPageSize;
+        first = (first + page_size - 1) & ~(page_size - 1);
+        last  = std::min(last, size) & ~(page_size - 1);
+        if (last <= first) {
+            return;
+        }
+        if (!VirtualUnlock((char *) addr + first, last - first)) {
+            const DWORD error = GetLastError();
+            if (error != ERROR_NOT_LOCKED) {
+                LLAMA_LOG_WARN("warning: VirtualUnlock failed: %s\n", llama_format_win_err(error).c_str());
+            }
+        }
     }
 
     ~impl() {
