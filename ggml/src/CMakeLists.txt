@@ -619,7 +619,7 @@ foreach (target ggml-base ggml)
     target_compile_features   (${target} PRIVATE c_std_11 cxx_std_17) # don't bump
 endforeach()
 
-target_link_libraries(ggml-base PRIVATE Threads::Threads)
+target_link_libraries(ggml-base PUBLIC Threads::Threads)
 
 if (DEFINED MATH_LIBRARY)
     target_link_libraries(ggml-base PRIVATE ${MATH_LIBRARY})
