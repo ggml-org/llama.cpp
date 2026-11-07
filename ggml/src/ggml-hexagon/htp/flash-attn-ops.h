@@ -157,7 +157,7 @@ static inline void hmx_fa_vtcm_layout_build(struct hmx_fa_vtcm_layout * L,
                                             size_t gqa_factor, size_t DK, size_t DV,
                                             size_t Br, size_t Bc, size_t n_threads,
                                             bool pipeline, bool is_q_fp32,
-                                            bool has_sinks, size_t n_heads) {
+                                            bool has_sinks, size_t n_heads, bool mask_per_head) {
     const size_t g_br         = hex_align_up(gqa_factor * Br, HMX_FP16_TILE_N_ROWS);
     const size_t q_tile_size  = hex_align_up(g_br * DK   * sizeof(__fp16), HTP_FA_HMX_TILE_SIZE);
     const size_t o_tile_size  = hex_align_up(g_br * DV   * sizeof(__fp16), HTP_FA_HMX_TILE_SIZE);
@@ -178,7 +178,8 @@ static inline void hmx_fa_vtcm_layout_build(struct hmx_fa_vtcm_layout * L,
     const size_t row_vec_size = hex_align_up(Bc   * sizeof(__fp16), 256);
     const size_t m_line_size  = hex_align_up(Bc   * sizeof(__fp16), 128);
     const size_t m_buf_slot   = hex_align_up(Br * m_line_size, 256);
-    const size_t m_buf_size   = m_buf_slot * HMX_FA_DMA_CACHE_SIZE;
+    const size_t m_buf_slots  = mask_per_head ? 2 * gqa_factor : HMX_FA_DMA_CACHE_SIZE;
+    const size_t m_buf_size   = m_buf_slot * m_buf_slots;
     const size_t slopes_size  = hex_align_up(g_br * sizeof(__fp16), 128);
     const size_t sinks_size   = hex_round_up(n_heads * sizeof(float), 128);
 
@@ -251,9 +252,9 @@ static inline void hmx_fa_vtcm_layout_build(struct hmx_fa_vtcm_layout * L,
 }
 
 // Exact VTCM usage for a given (gqa_factor, DK, DV, Br, Bc) configuration.
-static inline size_t hmx_fa_compute_vtcm_usage(size_t gqa_factor, size_t DK, size_t DV, size_t Br, size_t Bc, size_t n_threads, bool pipeline, bool is_q_fp32, bool has_sinks, size_t n_heads) {
+static inline size_t hmx_fa_compute_vtcm_usage(size_t gqa_factor, size_t DK, size_t DV, size_t Br, size_t Bc, size_t n_threads, bool pipeline, bool is_q_fp32, bool has_sinks, size_t n_heads, bool mask_per_head) {
     struct hmx_fa_vtcm_layout L;
-    hmx_fa_vtcm_layout_build(&L, gqa_factor, DK, DV, Br, Bc, n_threads, pipeline, is_q_fp32, has_sinks, n_heads);
+    hmx_fa_vtcm_layout_build(&L, gqa_factor, DK, DV, Br, Bc, n_threads, pipeline, is_q_fp32, has_sinks, n_heads, mask_per_head);
     return L.total_bytes;
 }
 
@@ -333,7 +334,8 @@ static inline int hmx_fa_find_chunk_size(size_t * Br_out,
                                          bool     is_q_fp32,
                                          bool     has_sinks,
                                          size_t   n_heads,
-                                         size_t   q_split) {
+                                         size_t   q_split,
+                                         bool     mask_per_head) {
     const size_t T       = HMX_FP16_TILE_N_ROWS;  // 32
     const size_t br_unit = hmx_ceil_div(T, gqa_factor);
     const size_t bc_unit = HMX_FP16_TILE_N_COLS * 2;  // 64
@@ -361,7 +363,7 @@ static inline int hmx_fa_find_chunk_size(size_t * Br_out,
     for (size_t Br = Br_max; Br >= br_unit; Br -= br_unit) {
         // Try all Bc candidates from Bc_limit down to bc_unit
         for (size_t Bc = Bc_limit; Bc >= bc_unit; Bc -= bc_unit) {
-            size_t vtcm_needed = hmx_fa_compute_vtcm_usage(gqa_factor, DK, DV, Br, Bc, n_threads, can_pipeline, is_q_fp32, has_sinks, n_heads);
+            size_t vtcm_needed = hmx_fa_compute_vtcm_usage(gqa_factor, DK, DV, Br, Bc, n_threads, can_pipeline, is_q_fp32, has_sinks, n_heads, mask_per_head);
             if (vtcm_needed <= vtcm_budget) {
                 // This Bc fits for this Br!
                 const size_t q_blocks       = (qo_len + Br - 1) / Br;

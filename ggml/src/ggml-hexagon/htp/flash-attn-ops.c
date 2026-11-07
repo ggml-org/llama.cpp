@@ -180,6 +180,7 @@ struct hmx_fa_context {
     __fp16 *     ddr_slopes;           // ALiBi slopes staging buffer in DDR [g_br]
     size_t       row_buf_stride;       // HVX vectors per row buffer (Bc/64)
     size_t       mask_buf_row_stride;  // elements (__fp16) per row in mask buffer
+    size_t       mask_buf_gqa_stride;
     size_t       q_tile_bytes;
     size_t       k_tile_bytes;
     size_t       o_tile_bytes;
@@ -1947,6 +1948,7 @@ static void fa_push_mask_dma_gqa(
     uint32_t                  m_line_bytes,
     uint32_t                  kv_rows,
     uint32_t                  n_rows_q,
+    uint32_t                  buf_idx,
     struct hmx_fa_context *   factx
 ) {
     for (uint32_t g = 0; g < G; ++g) {
@@ -1954,7 +1956,7 @@ static void fa_push_mask_dma_gqa(
         const uint32_t im2 = fastmodulo(h_idx, mask->ne[2], &factx->src3_div2);
         const dma_addr_t ms_src = mask->data + q_start * mask->nb[1] +
                                   im2 * mask->nb[2] + im3 * mask->nb[3] + kv_start * sizeof(__fp16);
-        uint8_t * ms_dst = (uint8_t *) factx->vtcm_mask_buf + g * m_line_bytes;
+        uint8_t * ms_dst = (uint8_t *) (factx->vtcm_mask_buf + buf_idx * factx->mask_buf_gqa_stride) + g * m_line_bytes;
         dma_queue_push(dma_q, dma_make_data(ms_dst, ms_src), G * m_line_bytes, mask->nb[1], kv_rows * sizeof(__fp16), n_rows_q);
     }
 }
@@ -1981,7 +1983,7 @@ static inline void fa_prefetch_block(dma_queue * dma_q, const struct htp_tensor 
             const dma_addr_t ms_src = mask->data + q_start * mask->nb[1] + im3 * mask->nb[3] + prefetch_start * sizeof(__fp16);
             dma_cache_fa_push(dma_q, factx->m_cache, ms_src, m_line_bytes, mask->nb[1], prefetch_rows * sizeof(__fp16), n_rows_q);
         } else {
-            fa_push_mask_dma_gqa(dma_q, mask, q_start, im3, prefetch_start, kv_head, G, m_line_bytes, prefetch_rows, n_rows_q, factx);
+            fa_push_mask_dma_gqa(dma_q, mask, q_start, im3, prefetch_start, kv_head, G, m_line_bytes, prefetch_rows, n_rows_q, prefetch_buf, factx);
         }
     }
 }
@@ -2147,7 +2149,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     // Build the VTCM layout once (shared with the host estimator) and place every
     // scratch buffer at its computed offset. Padded head dims size the HMX tiles.
     struct hmx_fa_vtcm_layout L;
-    hmx_fa_vtcm_layout_build(&L, G, DK_pad, DV_pad, Br, Bc, n_threads, pipeline, factx.is_q_fp32, factx.sinks != NULL, factx.n_heads);
+    hmx_fa_vtcm_layout_build(&L, G, DK_pad, DV_pad, Br, Bc, n_threads, pipeline, factx.is_q_fp32, factx.sinks != NULL, factx.n_heads, mask != NULL && !factx.mask_broadcast);
 
     if (L.total_bytes > ctx->vtcm_size) {
         return HTP_STATUS_VTCM_TOO_SMALL;
@@ -2184,6 +2186,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     factx.vtcm_hmx_scales_qk  = VTCM_LAYOUT_PTR(uint8_t, base, L.off_hmx_scales_qk);
     factx.vtcm_mask_buf       = VTCM_LAYOUT_PTR(__fp16, base, L.off_mask_buf);
     factx.mask_buf_row_stride = L.mask_buf_row_stride;
+    factx.mask_buf_gqa_stride = L.m_buf_slot_bytes * G / sizeof(__fp16);
     factx.q_tile_bytes        = L.q_tile_bytes;
     factx.k_tile_bytes        = L.k_tile_bytes;
     factx.o_tile_bytes        = L.o_tile_bytes;
@@ -2304,7 +2307,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                                 const dma_addr_t ms_src = mask->data + q_start * mask->nb[1] + im3 * mask->nb[3] + b0_start * sizeof(__fp16);
                                 dma_cache_fa_push(dma_q, factx.m_cache, ms_src, m_line_bytes, mask->nb[1], b0_rows * sizeof(__fp16), n_rows_q);
                             } else {
-                                fa_push_mask_dma_gqa(dma_q, mask, q_start, im3, b0_start, kv_head, G, m_line_bytes, b0_rows, n_rows_q, &factx);
+                                fa_push_mask_dma_gqa(dma_q, mask, q_start, im3, b0_start, kv_head, G, m_line_bytes, b0_rows, n_rows_q, 0, &factx);
                             }
                         }
                     }
@@ -2373,7 +2376,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                                 current_mask_vtcm = (__fp16 *) dma_queue_pop(dma_q).dst;
                             } else {
                                 fa_pop_mask_dma_gqa(dma_q, G);
-                                current_mask_vtcm = factx.vtcm_mask_buf;
+                                current_mask_vtcm = factx.vtcm_mask_buf + buf_idx * factx.mask_buf_gqa_stride;
                             }
                         }
 
@@ -2505,7 +2508,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                                 const dma_addr_t ms_src = mask->data + q_start * mask->nb[1] + im3 * mask->nb[3] + kv_start * sizeof(__fp16);
                                 dma_cache_fa_push(dma_q, factx.m_cache, ms_src, m_line_bytes, mask->nb[1], kv_rows * sizeof(__fp16), n_rows_q);
                             } else {
-                                fa_push_mask_dma_gqa(dma_q, mask, q_start, im3, kv_start, kv_head, G, m_line_bytes, kv_rows, n_rows_q, &factx);
+                                fa_push_mask_dma_gqa(dma_q, mask, q_start, im3, kv_start, kv_head, G, m_line_bytes, kv_rows, n_rows_q, 0, &factx);
                             }
                         }
 
@@ -2629,7 +2632,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                                 const dma_addr_t ms_src = mask->data + q_start * mask->nb[1] + im3 * mask->nb[3] + b0_start * sizeof(__fp16);
                                 dma_cache_fa_push(dma_q, factx.m_cache, ms_src, m_line_bytes, mask->nb[1], b0_rows * sizeof(__fp16), n_rows_q);
                             } else {
-                                fa_push_mask_dma_gqa(dma_q, mask, q_start, im3, b0_start, next_kv_head, G, m_line_bytes, b0_rows, n_rows_q, &factx);
+                                fa_push_mask_dma_gqa(dma_q, mask, q_start, im3, b0_start, next_kv_head, G, m_line_bytes, b0_rows, n_rows_q, 0, &factx);
                             }
                         }
                     }

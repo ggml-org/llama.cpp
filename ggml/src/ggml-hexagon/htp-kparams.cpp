@@ -434,7 +434,8 @@ static bool htp_kparams_solve_flash_attn(
         const uint32_t DK_pad = hex_round_up(DK, 64);
         const uint32_t DV_pad = hex_round_up(DV, 64);
         size_t Br = 0, Bc = 0;
-        int ret = hmx_fa_find_chunk_size(&Br, &Bc, G, DK_pad, DV_pad, neq1, nek1, vtcm_size, n_threads, (q->type == GGML_TYPE_F32), sinks != nullptr, n_head, fa_team_size);
+        const bool mask_per_head = mask != nullptr && mask->ne[2] != 1;
+        int ret = hmx_fa_find_chunk_size(&Br, &Bc, G, DK_pad, DV_pad, neq1, nek1, vtcm_size, n_threads, (q->type == GGML_TYPE_F32), sinks != nullptr, n_head, fa_team_size, mask_per_head);
         if (ret == 0) {
             kparams->kernel_type = HTP_FA_KERNEL_HMX;
             if (logit_softcap == 0.0f) {
@@ -450,7 +451,7 @@ static bool htp_kparams_solve_flash_attn(
             kparams->n_threads           = (kparams->n_kv_blocks >= 3 && n_threads >= 2) ? n_threads : 1;
             kparams->u.hmx.g_br          = hex_align_up(G * Br, 32);
             kparams->u.hmx.pipeline      = (kparams->n_kv_blocks >= 3 && n_threads >= 2) ? 1 : 0;
-            kparams->vtcm_size           = hmx_fa_compute_vtcm_usage(G, DK_pad, DV_pad, Br, Bc, kparams->n_threads, kparams->u.hmx.pipeline != 0, (q->type == GGML_TYPE_F32), sinks != nullptr, n_head);
+            kparams->vtcm_size           = hmx_fa_compute_vtcm_usage(G, DK_pad, DV_pad, Br, Bc, kparams->n_threads, kparams->u.hmx.pipeline != 0, (q->type == GGML_TYPE_F32), sinks != nullptr, n_head, mask_per_head);
             kparams->u.hmx.mask_broadcast = (mask != nullptr && mask->ne[2] == 1) ? 1 : 0;
             kparams->u.hmx.div_G         = init_fastdiv_values(G);
             if (mask) {
