@@ -17,10 +17,12 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const browserBaseConfig: any = {
 	enabled: true,
 	instances: [{ browser: 'chromium' }],
+	// CI runs the bundled Chromium without its sandbox, which the runners can't start;
+	// locally, the installed (auto-updated) Chrome with its sandbox on, see playwright.config.ts
 	provider: playwright({
-		launchOptions: {
-			args: ['--no-sandbox']
-		}
+		launchOptions: process.env.CI
+			? { args: ['--no-sandbox'] }
+			: { channel: 'chrome', chromiumSandbox: true }
 	})
 };
 

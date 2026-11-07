@@ -325,10 +325,14 @@ on 4 physical NPUs, or `--devices 'HTP0[0-1:0],HTP1[0-1:1]'` on 2 physical NPUs 
   Controls the number of HVX hardware threads to use. The default is all (actual number varies depending on the hardware version).
 
 - `GGML_HEXAGON_VTCM_SIZE=0`
-  Overrides the VTCM size used by each session. Accepts `K`, `M` and `G` suffixes; a plain number is in MB. The default (0) uses the size the hardware reports. Values above the hardware size will fail to start the session.
+  Overrides the VTCM size used by each session. Accepts `K`, `M` and `G` suffixes; a plain number is in MB.
+  The default (0) uses the size the hardware reports. Values above the hardware size will fail to start the session.
 
-- `GGML_HEXAGON_HOSTBUF=1` (default: 0, disabled)
-  Enables allocating host buffers for debugging. By default, host buffers are disabled.
+- `GGML_HEXAGON_HOSTBUF=0` (default: 1, enabled)
+  Controls host buffer (`HTP*-HOST`) allocation in shared FastRPC memory to avoid host-device tensor copies.
+  CPU-assigned weights (input embeddings like `token_embd` and `per_layer_token_embd`, and tensors overridden with `-ot ...=CPU`)
+  are placed in host buffers as well. On older drivers/FW, large models can run out of IOVA space when these are mapped.
+  Pass `--no-host` to keep CPU-assigned weights in regular CPU memory (`-ot ...=CPU` alone is not sufficient).
 
 - `GGML_HEXAGON_DMA64=0` (default: enabled on v81+)
   Disables 64-bit DMA for model weights. Set to `1` to enable it explicitly on a supported architecture.
