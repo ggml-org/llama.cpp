@@ -84,10 +84,19 @@ class GptOssModel(TextModel):
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         name, gen = item
-
+    
+        # Normalize alternate GPT-OSS MXFP4 tensor naming.
+        if "mlp.experts." in name:
+            for proj in ("down_proj", "gate_up_proj"):
+                name = name.replace(
+                    f"{proj}_blocks_blocks", f"{proj}_blocks"
+                ).replace(
+                    f"{proj}_blocks_scales", f"{proj}_scales"
+                )
+    
         if "sinks" in name:
             name += ".weight"
-
+    
         return super().filter_tensors((name, gen))
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
