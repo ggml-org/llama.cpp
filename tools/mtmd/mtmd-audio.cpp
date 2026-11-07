@@ -4,7 +4,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <thread>
 #include <vector>
 #include <fstream>
 #include <algorithm>
@@ -270,100 +269,44 @@ static void ifft(const mtmd_audio_cache & cache, float * in, int N, float * out)
     fft_impl<true, false>(cache, in, N, out);
 }
 
-struct filter_params {
-    int64_t n_mel;
-    int64_t n_fft_bins;
-    int32_t hann_window_size;
-    int32_t hop_length;
-    int32_t sample_rate;
-    bool    no_padding      = false;
-    bool    center_padding  = false;
-    float   preemph         = 0.f;
-    bool    use_natural_log = false;
-    bool    norm_per_feature = false;
-    bool    use_magnitude   = false;  // |X| instead of |X|^2
-    float   mel_floor       = 5.960464477539063e-08f;
-    bool    mel_floor_add   = false;  // log(x + floor) instead of log(max(x, floor))
-    bool    std_eps_after_sqrt = false;  // std + eps instead of sqrt(var + eps)
-};
-
-static void log_mel_spectrogram_worker_thread(int                        ith,
-                                              const float *              hann,
-                                              const std::vector<float> & samples,
-                                              int                        n_samples,
-                                              int                        frame_size,
-                                              int                        frame_step,
-                                              int                        n_threads,
-                                              const filter_params &      params,
-                                              const mtmd_audio_cache &   cache,
-                                              mtmd_audio_mel &           out) {
-    std::vector<float> fft_in(frame_size * 2, 0.0);
-    std::vector<float> fft_out(frame_size * 2 * 2 * 2);
-
-    int64_t n_fft_bins = params.n_fft_bins;
-    int64_t i = ith;
-
-    const auto & filters = cache.filters;
-
-    // make sure n_fft == 1 + (WHISPER_N_FFT / 2), bin_0 to bin_nyquist
-    GGML_ASSERT(n_fft_bins == 1 + (frame_size / 2));
-    GGML_ASSERT(cache.sin_vals.size() == cache.cos_vals.size());
-    // calculate FFT only when fft_in are not all zero
-    for (; i < std::min((int64_t)(n_samples / frame_step + 1), out.n_len); i += n_threads) {
-        const int64_t offset = i * frame_step;
-
-        // apply Hann window (~10% faster)
-        const int valid_len = std::min(frame_size, std::max(0, n_samples - (int)offset));
-        for (int j = 0; j < valid_len; j++) {
-            fft_in[j] = hann[j] * samples[offset + j];
+static void mtmd_audio_fill_entries(std::vector<mtmd_audio_mel> & mels, bool shape_only, std::vector<clip_image_f32> & entries) {
+    entries.clear();
+    for (auto & mel : mels) {
+        GGML_ASSERT(mel.n_len <= INT32_MAX && mel.n_len >= 0);
+        GGML_ASSERT(mel.n_mel <= INT32_MAX && mel.n_mel >= 0);
+        clip_image_f32 entry;
+        entry.set_size({(int) mel.n_len, (int) mel.n_mel}, shape_only || mel.data.empty(), /* is_audio */ true);
+        if (!entry.is_placeholder()) {
+            entry.cpy_buf(mel.data);
         }
+        entries.push_back(std::move(entry));
+    }
+}
 
-        // fill the rest with zeros
-        if (valid_len < frame_size) {
-            std::fill(fft_in.begin() + valid_len, fft_in.end(), 0.0);
-        }
-
-        // FFT
-        fft(cache, fft_in.data(), frame_size, fft_out.data());
-
-        // Calculate modulus^2 (power) or modulus (magnitude)
-        for (int j = 0; j < n_fft_bins; j++) {
-            float power = (fft_out[2 * j + 0] * fft_out[2 * j + 0] + fft_out[2 * j + 1] * fft_out[2 * j + 1]);
-            fft_out[j] = params.use_magnitude ? sqrtf(power) : power;
-        }
-
-        // mel spectrogram
-        for (int64_t j = 0; j < out.n_mel; j++) {
-            double sum = 0.0;
-            // unroll loop (suggested by GH user @lunixbochs)
-            int k = 0;
-            for (k = 0; k < n_fft_bins - 3; k += 4) {
-                size_t idx = size_t(j) * size_t(n_fft_bins) + size_t(k);
-                sum +=
-                        fft_out[k + 0] * filters.data[idx + 0] +
-                        fft_out[k + 1] * filters.data[idx + 1] +
-                        fft_out[k + 2] * filters.data[idx + 2] +
-                        fft_out[k + 3] * filters.data[idx + 3];
-            }
-            // handle n_fft remainder
-            for (; k < n_fft_bins; k++) {
-                sum += fft_out[k] * filters.data[(size_t)j * n_fft_bins + k];
-            }
-            sum = params.mel_floor_add ? sum + (double)params.mel_floor : std::max(sum, (double)params.mel_floor);
-            sum = params.use_natural_log
-                ? log(sum)
-                : log10(sum);
-            out.data[(size_t)j * out.n_len + i] = sum;
+mtmd_audio_preproc_out mtmd_audio_preprocessor::preprocess(const float * samples, size_t n_samples) const {
+    mtmd_audio_preproc_out out;
+    const bool deferred = mel_config.cache != nullptr;
+    std::vector<mtmd_audio_mel> mels;
+    if (process(samples, n_samples, mels, deferred)) {
+        mtmd_audio_fill_entries(mels, deferred, out.entries);
+        if (deferred) {
+            out.samples.assign(samples, samples + n_samples);
         }
     }
+    return out;
+}
 
-    // Otherwise fft_out are all zero
-    double sum = params.use_natural_log ? log(1e-10) : log10(1e-10);
-    for (; i < out.n_len; i += n_threads) {
-        for (int64_t j = 0; j < out.n_mel; j++) {
-            out.data[(size_t)j * out.n_len + i] = sum;
-        }
+bool mtmd_audio_preprocessor::compute(mtmd_audio_preproc_out & out) const {
+    if (!out.needs_compute()) {
+        return true;
     }
+    std::vector<mtmd_audio_mel> mels;
+    if (!process(out.samples.data(), out.samples.size(), mels, false)) {
+        return false;
+    }
+    mtmd_audio_fill_entries(mels, false, out.entries);
+    out.samples = {};
+    return true;
 }
 
 void mtmd_audio_log_mel_frame(const mtmd_audio_cache & cache, const float * samples, int n_fft, int n_mel, float * out) {
@@ -395,14 +338,15 @@ void mtmd_audio_log_mel_frame(const mtmd_audio_cache & cache, const float * samp
 static bool log_mel_spectrogram(
         const float * samples,
         const int     n_samples_in,
-        const int     n_threads,
-        const filter_params & params,
-        const mtmd_audio_cache & cache,
+        const mtmd_audio_mel_config & params,
+        const bool    shape_only,
         mtmd_audio_mel & out) {
     //const int64_t t_start_us = ggml_time_us();
 
     out.n_len_org = n_samples_in;
     int n_samples = n_samples_in;
+
+    const auto & cache = *params.cache;
 
     // Hann window
     const float * hann       = cache.hann_window.data();
@@ -486,20 +430,8 @@ static bool log_mel_spectrogram(
     }
     out.data.resize(total_size);
 
-    {
-        std::vector<std::thread> workers(n_threads - 1);
-        for (int iw = 0; iw < n_threads - 1; ++iw) {
-            workers[iw] =
-                std::thread(log_mel_spectrogram_worker_thread, iw + 1, hann, std::cref(samples_padded), n_samples,
-                            frame_size, frame_step, n_threads, std::cref(params), std::cref(cache), std::ref(out));
-        }
-
-        // main thread
-        log_mel_spectrogram_worker_thread(0, hann, samples_padded, n_samples, frame_size, frame_step, n_threads, params,
-                                          cache, out);
-        for (int iw = 0; iw < n_threads - 1; ++iw) {
-            workers[iw].join();
-        }
+    if (!shape_only && !clip_audio_log_mel(params, samples_padded.data(), hann, out.n_len, out.data.data())) {
+        return false;
     }
 
     const int64_t effective_n_len = n_samples_in / frame_step;
@@ -572,11 +504,23 @@ void mtmd_audio_preprocessor_whisper::initialize() {
     cache.fill_sin_cos_table(hparams.audio_n_fft);
     cache.fill_hann_window(hparams.audio_window_len, true);
     cache.fill_mel_filterbank_matrix(hparams.n_mel_bins, hparams.audio_n_fft, hparams.audio_sample_rate);
+
+    mel_config.n_mel            = hparams.n_mel_bins;
+    mel_config.n_fft_bins       = 1 + (hparams.audio_n_fft / 2);
+    mel_config.hann_window_size = hparams.audio_window_len;
+    mel_config.hop_length       = hparams.audio_hop_len;
+    mel_config.sample_rate      = hparams.audio_sample_rate;
+    mel_config.center_padding   = false;
+    mel_config.preemph          = 0.0f;  // disabled
+    mel_config.use_natural_log  = false;
+    mel_config.norm_per_feature = false;
+    mel_config.cache            = &cache;
 }
 
-bool mtmd_audio_preprocessor_whisper::preprocess(const float *                 samples,
-                                                 size_t                        n_samples,
-                                                 std::vector<mtmd_audio_mel> & output) const {
+bool mtmd_audio_preprocessor_whisper::process(const float *                 samples,
+                                              size_t                        n_samples,
+                                              std::vector<mtmd_audio_mel> & output,
+                                              bool                          shape_only) const {
     if (n_samples == 0) {
         // empty audio
         return false;
@@ -592,26 +536,13 @@ bool mtmd_audio_preprocessor_whisper::preprocess(const float *                 s
         n_samples = smpl.size();
     }
 
-    filter_params params;
-    params.n_mel            = hparams.n_mel_bins;
-    params.n_fft_bins       = 1 + (hparams.audio_n_fft / 2);
-    params.hann_window_size = hparams.audio_window_len;
-    params.hop_length       = hparams.audio_hop_len;
-    params.sample_rate      = hparams.audio_sample_rate;
-    params.center_padding   = false;
-    params.preemph          = 0.0f;  // disabled
-    params.use_natural_log  = false;
-    params.norm_per_feature = false;
-
     // make sure the cache is initialized
     GGML_ASSERT(!cache.sin_vals.empty());
     GGML_ASSERT(!cache.cos_vals.empty());
     GGML_ASSERT(!cache.filters.data.empty());
 
     mtmd_audio_mel out_full;
-    bool           ok = log_mel_spectrogram(samples, n_samples,
-                                            4,  // n_threads
-                                            params, cache, out_full);
+    bool           ok = log_mel_spectrogram(samples, n_samples, mel_config, shape_only, out_full);
     if (!ok) {
         return false;
     }
@@ -660,11 +591,21 @@ void mtmd_audio_preprocessor_qwen3a::initialize() {
     cache.fill_sin_cos_table(hparams.audio_n_fft);
     cache.fill_hann_window(hparams.audio_window_len, true);
     cache.fill_mel_filterbank_matrix(hparams.n_mel_bins, hparams.audio_n_fft, hparams.audio_sample_rate);
+
+    mel_config.n_mel            = hparams.n_mel_bins;
+    mel_config.n_fft_bins       = 1 + (hparams.audio_n_fft / 2);
+    mel_config.hann_window_size = hparams.audio_window_len;
+    mel_config.hop_length       = hparams.audio_hop_len;
+    mel_config.sample_rate      = hparams.audio_sample_rate;
+    mel_config.no_padding       = true; // reflection padding applied in preprocess()
+    mel_config.use_natural_log  = false; // log10
+    mel_config.cache            = &cache;
 }
 
-bool mtmd_audio_preprocessor_qwen3a::preprocess(const float *                 samples,
-                                                 size_t                        n_samples,
-                                                 std::vector<mtmd_audio_mel> & output) const {
+bool mtmd_audio_preprocessor_qwen3a::process(const float *                 samples,
+                                              size_t                        n_samples,
+                                              std::vector<mtmd_audio_mel> & output,
+                                              bool                          shape_only) const {
     if (n_samples == 0) {
         return false;
     }
@@ -689,17 +630,8 @@ bool mtmd_audio_preprocessor_qwen3a::preprocess(const float *                 sa
         padded[n_samples + pad + i] = (src >= 0) ? samples[src] : 0.0f;
     }
 
-    filter_params params;
-    params.n_mel            = hparams.n_mel_bins;
-    params.n_fft_bins       = 1 + (hparams.audio_n_fft / 2);
-    params.hann_window_size = hparams.audio_window_len;
-    params.hop_length       = hparams.audio_hop_len;
-    params.sample_rate      = hparams.audio_sample_rate;
-    params.no_padding       = true; // reflection padding already applied above
-    params.use_natural_log  = false; // log10
-
     mtmd_audio_mel mel_full;
-    bool ok = log_mel_spectrogram(padded.data(), (int)padded.size(), 4, params, cache, mel_full);
+    bool ok = log_mel_spectrogram(padded.data(), (int)padded.size(), mel_config, shape_only, mel_full);
     if (!ok) {
         return false;
     }
@@ -762,11 +694,21 @@ void mtmd_audio_preprocessor_dots3note::initialize() {
     cache.fill_sin_cos_table(hparams.audio_n_fft);
     cache.fill_hann_window(hparams.audio_window_len, true);
     cache.fill_mel_filterbank_matrix(hparams.n_mel_bins, hparams.audio_n_fft, hparams.audio_sample_rate);
+
+    mel_config.n_mel            = hparams.n_mel_bins;
+    mel_config.n_fft_bins       = 1 + (hparams.audio_n_fft / 2);
+    mel_config.hann_window_size = hparams.audio_window_len;
+    mel_config.hop_length       = hparams.audio_hop_len;
+    mel_config.sample_rate      = hparams.audio_sample_rate;
+    mel_config.no_padding       = true; // padding applied in preprocess()
+    mel_config.use_natural_log  = false;
+    mel_config.cache            = &cache;
 }
 
-bool mtmd_audio_preprocessor_dots3note::preprocess(const float *                 samples,
-                                                   size_t                        n_samples,
-                                                   std::vector<mtmd_audio_mel> & output) const {
+bool mtmd_audio_preprocessor_dots3note::process(const float *                 samples,
+                                                size_t                        n_samples,
+                                                std::vector<mtmd_audio_mel> & output,
+                                                bool                          shape_only) const {
     if (n_samples == 0) {
         return false;
     }
@@ -803,17 +745,8 @@ bool mtmd_audio_preprocessor_dots3note::preprocess(const float *                
             }
         }
 
-        filter_params params;
-        params.n_mel            = hparams.n_mel_bins;
-        params.n_fft_bins       = 1 + (hparams.audio_n_fft / 2);
-        params.hann_window_size = hparams.audio_window_len;
-        params.hop_length       = hop;
-        params.sample_rate      = hparams.audio_sample_rate;
-        params.no_padding       = true; // padding already applied above
-        params.use_natural_log  = false;
-
         mtmd_audio_mel mel_full;
-        if (!log_mel_spectrogram(padded.data(), (int) padded.size(), 4, params, cache, mel_full)) {
+        if (!log_mel_spectrogram(padded.data(), (int) padded.size(), mel_config, shape_only, mel_full)) {
             return false;
         }
         GGML_ASSERT(mel_full.n_len >= n_valid);
@@ -862,11 +795,24 @@ void mtmd_audio_preprocessor_mimo_audio::initialize() {
         /*scale=*/ 1.0f,
         /*use_htk=*/ true
     );
+
+    mel_config.n_mel            = hparams.n_mel_bins;
+    mel_config.n_fft_bins       = 1 + (hparams.audio_n_fft / 2);
+    mel_config.hann_window_size = hparams.audio_window_len;
+    mel_config.hop_length       = hparams.audio_hop_len;
+    mel_config.sample_rate      = hparams.audio_sample_rate;
+    mel_config.no_padding       = true; // reflect padding applied in preprocess()
+    mel_config.use_natural_log  = true;
+    mel_config.use_magnitude    = true;
+    mel_config.mel_floor        = 1e-7f;
+    mel_config.norm_per_feature = false;
+    mel_config.cache            = &cache;
 }
 
-bool mtmd_audio_preprocessor_mimo_audio::preprocess(const float *                 samples,
-                                                    size_t                        n_samples,
-                                                    std::vector<mtmd_audio_mel> & output) const {
+bool mtmd_audio_preprocessor_mimo_audio::process(const float *                 samples,
+                                                 size_t                        n_samples,
+                                                 std::vector<mtmd_audio_mel> & output,
+                                                 bool                          shape_only) const {
     if (n_samples == 0) {
         return false;
     }
@@ -888,20 +834,8 @@ bool mtmd_audio_preprocessor_mimo_audio::preprocess(const float *               
         padded[n_samples + pad + i] = (src >= 0) ? samples[src] : 0.0f;
     }
 
-    filter_params params;
-    params.n_mel            = hparams.n_mel_bins;
-    params.n_fft_bins       = 1 + (hparams.audio_n_fft / 2);
-    params.hann_window_size = hparams.audio_window_len;
-    params.hop_length       = hparams.audio_hop_len;
-    params.sample_rate      = hparams.audio_sample_rate;
-    params.no_padding       = true; // reflect padding already applied above
-    params.use_natural_log  = true;
-    params.use_magnitude    = true;
-    params.mel_floor        = 1e-7f;
-    params.norm_per_feature = false;
-
     mtmd_audio_mel out;
-    bool ok = log_mel_spectrogram(padded.data(), (int)padded.size(), 4, params, cache, out);
+    bool ok = log_mel_spectrogram(padded.data(), (int)padded.size(), mel_config, shape_only, out);
     if (!ok) {
         return false;
     }
@@ -921,11 +855,23 @@ void mtmd_audio_preprocessor_qwen3tts_spk::initialize() {
     cache.fill_sin_cos_table(hparams.audio_n_fft);
     cache.fill_hann_window(hparams.audio_window_len, true);
     cache.fill_mel_filterbank_matrix(hparams.n_mel_bins, hparams.audio_n_fft, hparams.audio_sample_rate);
+
+    mel_config.n_mel            = hparams.n_mel_bins;
+    mel_config.n_fft_bins       = 1 + (hparams.audio_n_fft / 2);
+    mel_config.hann_window_size = hparams.audio_window_len;
+    mel_config.hop_length       = hparams.audio_hop_len;
+    mel_config.sample_rate      = hparams.audio_sample_rate;
+    mel_config.no_padding       = true; // reflect padding applied in preprocess()
+    mel_config.use_natural_log  = true;
+    mel_config.use_magnitude    = true;
+    mel_config.mel_floor        = 1e-5f;
+    mel_config.cache            = &cache;
 }
 
-bool mtmd_audio_preprocessor_qwen3tts_spk::preprocess(const float *                 samples,
-                                                      size_t                        n_samples,
-                                                      std::vector<mtmd_audio_mel> & output) const {
+bool mtmd_audio_preprocessor_qwen3tts_spk::process(const float *                 samples,
+                                                   size_t                        n_samples,
+                                                   std::vector<mtmd_audio_mel> & output,
+                                                   bool                          shape_only) const {
     if (n_samples == 0) {
         return false;
     }
@@ -949,19 +895,8 @@ bool mtmd_audio_preprocessor_qwen3tts_spk::preprocess(const float *             
         padded[n_samples + pad + i] = samples[n_samples - 2 - i];
     }
 
-    filter_params params;
-    params.n_mel            = hparams.n_mel_bins;
-    params.n_fft_bins       = 1 + (hparams.audio_n_fft / 2);
-    params.hann_window_size = hparams.audio_window_len;
-    params.hop_length       = hparams.audio_hop_len;
-    params.sample_rate      = hparams.audio_sample_rate;
-    params.no_padding       = true; // reflect padding already applied above
-    params.use_natural_log  = true;
-    params.use_magnitude    = true;
-    params.mel_floor        = 1e-5f;
-
     mtmd_audio_mel out;
-    bool ok = log_mel_spectrogram(padded.data(), (int) padded.size(), 4, params, cache, out);
+    bool ok = log_mel_spectrogram(padded.data(), (int) padded.size(), mel_config, shape_only, out);
     if (!ok) {
         return false;
     }
@@ -1294,9 +1229,10 @@ void mtmd_audio_preprocessor_chatterbox_ref::initialize() {
     matcha_cache.fill_mel_filterbank_matrix(80, 1920, 24000, 0.0f, 8000.0f);
 }
 
-bool mtmd_audio_preprocessor_chatterbox_ref::preprocess(const float *                 samples,
-                                                        size_t                        n_samples,
-                                                        std::vector<mtmd_audio_mel> & output) const {
+bool mtmd_audio_preprocessor_chatterbox_ref::process(const float *                 samples,
+                                                     size_t                        n_samples,
+                                                     std::vector<mtmd_audio_mel> & output,
+                                                     bool /*shape_only*/) const {
     output.clear();
     const int sr = (int) hparams.audio_sample_rate;
 
@@ -1453,28 +1389,29 @@ void mtmd_audio_preprocessor_conformer::initialize() {
     // NeMo uses a symmetric window: torch.hann_window(periodic=False)
     cache.fill_hann_window(hparams.audio_window_len, false);
     cache.fill_mel_filterbank_matrix(hparams.n_mel_bins, hparams.audio_n_fft, hparams.audio_sample_rate);
+
+    mel_config.n_mel            = hparams.n_mel_bins;
+    mel_config.n_fft_bins       = 1 + (hparams.audio_n_fft / 2);
+    mel_config.hann_window_size = hparams.audio_window_len;
+    mel_config.hop_length       = hparams.audio_hop_len;
+    mel_config.sample_rate      = hparams.audio_sample_rate;
+    mel_config.center_padding   = true;
+    mel_config.preemph          = 0.97f;
+    mel_config.use_natural_log  = true;
+    mel_config.norm_per_feature = true;
+    mel_config.mel_floor_add    = true;
+    mel_config.std_eps_after_sqrt = true;
+    mel_config.cache            = &cache;
 }
 
-bool mtmd_audio_preprocessor_conformer::preprocess(const float *                 samples,
-                                                   size_t                        n_samples,
-                                                   std::vector<mtmd_audio_mel> & output) const {
+bool mtmd_audio_preprocessor_conformer::process(const float *                 samples,
+                                                size_t                        n_samples,
+                                                std::vector<mtmd_audio_mel> & output,
+                                                bool                          shape_only) const {
     // empty audio
     if (n_samples == 0) {
         return false;
     }
-
-    filter_params params;
-    params.n_mel            = hparams.n_mel_bins;
-    params.n_fft_bins       = 1 + (hparams.audio_n_fft / 2);
-    params.hann_window_size = hparams.audio_window_len;
-    params.hop_length       = hparams.audio_hop_len;
-    params.sample_rate      = hparams.audio_sample_rate;
-    params.center_padding   = true;
-    params.preemph          = 0.97f;
-    params.use_natural_log  = true;
-    params.norm_per_feature = true;
-    params.mel_floor_add    = true;
-    params.std_eps_after_sqrt = true;
 
     // make sure the cache is initialized
     GGML_ASSERT(!cache.sin_vals.empty());
@@ -1482,9 +1419,7 @@ bool mtmd_audio_preprocessor_conformer::preprocess(const float *                
     GGML_ASSERT(!cache.filters.data.empty());
 
     mtmd_audio_mel out_full;
-    bool           ok = log_mel_spectrogram(samples, n_samples,
-                                            4,  // n_threads
-                                            params, cache, out_full);
+    bool           ok = log_mel_spectrogram(samples, n_samples, mel_config, shape_only, out_full);
     if (!ok) {
         return false;
     }
@@ -1497,9 +1432,10 @@ bool mtmd_audio_preprocessor_conformer::preprocess(const float *                
 // mtmd_audio_preprocessor_d1omni
 //
 
-bool mtmd_audio_preprocessor_d1omni::preprocess(const float *                 samples,
-                                                size_t                        n_samples,
-                                                std::vector<mtmd_audio_mel> & output) const {
+bool mtmd_audio_preprocessor_d1omni::process(const float *                 samples,
+                                             size_t                        n_samples,
+                                             std::vector<mtmd_audio_mel> & output,
+                                             bool                          shape_only) const {
     if (n_samples == 0) {
         return false;
     }
@@ -1509,7 +1445,7 @@ bool mtmd_audio_preprocessor_d1omni::preprocess(const float *                 sa
     std::vector<float> buf(samples, samples + std::min(n_samples, n_max));
     buf.resize(std::max(buf.size(), n_min), 0.0f);
 
-    if (!mtmd_audio_preprocessor_conformer::preprocess(buf.data(), buf.size(), output)) {
+    if (!mtmd_audio_preprocessor_conformer::process(buf.data(), buf.size(), output, shape_only)) {
         return false;
     }
 
@@ -1537,11 +1473,21 @@ void mtmd_audio_preprocessor_lfm3a::initialize() {
     cache.fill_sin_cos_table(hparams.audio_n_fft);
     cache.fill_hann_window(hparams.audio_window_len, true);
     cache.fill_mel_filterbank_matrix(hparams.n_mel_bins, hparams.audio_n_fft, hparams.audio_sample_rate);
+
+    mel_config.n_mel            = hparams.n_mel_bins;
+    mel_config.n_fft_bins       = 1 + (hparams.audio_n_fft / 2);
+    mel_config.hann_window_size = hparams.audio_window_len;
+    mel_config.hop_length       = hparams.audio_hop_len;
+    mel_config.sample_rate      = hparams.audio_sample_rate;
+    mel_config.no_padding       = true;
+    mel_config.mel_floor        = 1e-12f; // log10 floor of -12
+    mel_config.cache            = &cache;
 }
 
-bool mtmd_audio_preprocessor_lfm3a::preprocess(const float *                 samples,
-                                               size_t                        n_samples,
-                                               std::vector<mtmd_audio_mel> & output) const {
+bool mtmd_audio_preprocessor_lfm3a::process(const float *                 samples,
+                                            size_t                        n_samples,
+                                            std::vector<mtmd_audio_mel> & output,
+                                            bool                          shape_only) const {
     if (n_samples == 0) {
         return false;
     }
@@ -1557,21 +1503,12 @@ bool mtmd_audio_preprocessor_lfm3a::preprocess(const float *                 sam
     std::vector<float> padded(samples, samples + n_samples);
     padded.resize(n_padded, 0.0f);
 
-    filter_params params;
-    params.n_mel            = hparams.n_mel_bins;
-    params.n_fft_bins       = 1 + (hparams.audio_n_fft / 2);
-    params.hann_window_size = hparams.audio_window_len;
-    params.hop_length       = hparams.audio_hop_len;
-    params.sample_rate      = hparams.audio_sample_rate;
-    params.no_padding       = true;
-    params.mel_floor        = 1e-12f; // log10 floor of -12
-
     GGML_ASSERT(!cache.sin_vals.empty());
     GGML_ASSERT(!cache.cos_vals.empty());
     GGML_ASSERT(!cache.filters.data.empty());
 
     mtmd_audio_mel out;
-    bool ok = log_mel_spectrogram(padded.data(), (int) padded.size(), 4, params, cache, out);
+    bool ok = log_mel_spectrogram(padded.data(), (int) padded.size(), mel_config, shape_only, out);
     if (!ok) {
         return false;
     }
@@ -1594,11 +1531,25 @@ void mtmd_audio_preprocessor_granite_speech::initialize() {
     cache.fill_mel_filterbank_matrix(
         hparams.n_mel_bins / 2, hparams.audio_n_fft, hparams.audio_sample_rate,
         0.0f, -1.0f, false, 1.0f, true);
+
+    mel_config.n_mel            = hparams.n_mel_bins / 2;
+    mel_config.n_fft_bins       = 1 + (hparams.audio_n_fft / 2);
+    mel_config.hann_window_size = hparams.audio_window_len;
+    mel_config.hop_length       = hparams.audio_hop_len;
+    mel_config.sample_rate      = hparams.audio_sample_rate;
+    mel_config.no_padding       = true;
+    mel_config.center_padding   = false;
+    mel_config.preemph          = 0.0f;
+    mel_config.use_natural_log  = false;
+    mel_config.norm_per_feature = false;
+    mel_config.mel_floor        = 1e-10f;
+    mel_config.cache            = &cache;
 }
 
-bool mtmd_audio_preprocessor_granite_speech::preprocess(const float *                 samples,
-                                                        size_t                        n_samples,
-                                                        std::vector<mtmd_audio_mel> & output) const {
+bool mtmd_audio_preprocessor_granite_speech::process(const float *                 samples,
+                                                     size_t                        n_samples,
+                                                     std::vector<mtmd_audio_mel> & output,
+                                                     bool                          shape_only) const {
     if (n_samples == 0) {
         return false;
     }
@@ -1629,21 +1580,8 @@ bool mtmd_audio_preprocessor_granite_speech::preprocess(const float *           
         padded[pad + (int)n_samples + i] = samples[src];
     }
 
-    filter_params params;
-    params.n_mel            = hparams.n_mel_bins / 2;
-    params.n_fft_bins       = 1 + (n_fft / 2);
-    params.hann_window_size = hparams.audio_window_len;
-    params.hop_length       = hparams.audio_hop_len;
-    params.sample_rate      = hparams.audio_sample_rate;
-    params.no_padding       = true;
-    params.center_padding   = false;
-    params.preemph          = 0.0f;
-    params.use_natural_log  = false;
-    params.norm_per_feature = false;
-    params.mel_floor        = 1e-10f;
-
     mtmd_audio_mel mel;
-    if (!log_mel_spectrogram(padded.data(), n_padded, 4, params, cache, mel)) {
+    if (!log_mel_spectrogram(padded.data(), n_padded, mel_config, shape_only, mel)) {
         return false;
     }
 
@@ -1708,11 +1646,26 @@ void mtmd_audio_preprocessor_gemma4a::initialize() {
         /*scale=*/ 1.0f,
         /*use_htk=*/ true
     );
+
+    mel_config.n_mel            = hparams.n_mel_bins;
+    mel_config.n_fft_bins       = 1 + (hparams.audio_n_fft / 2);
+    mel_config.hann_window_size = hparams.audio_n_fft; // window is zero-padded to FFT size
+    mel_config.hop_length       = hparams.audio_hop_len;
+    mel_config.sample_rate      = hparams.audio_sample_rate;
+    mel_config.no_padding       = true;
+    mel_config.center_padding   = false;
+    mel_config.preemph          = 0.0f;
+    mel_config.use_natural_log  = true;
+    mel_config.use_magnitude    = true;
+    mel_config.mel_floor        = 0.001f;
+    mel_config.norm_per_feature = false;
+    mel_config.cache            = &cache;
 }
 
-bool mtmd_audio_preprocessor_gemma4a::preprocess(const float *                 samples,
-                                                  size_t                        n_samples,
-                                                  std::vector<mtmd_audio_mel> & output) const {
+bool mtmd_audio_preprocessor_gemma4a::process(const float *                 samples,
+                                               size_t                        n_samples,
+                                               std::vector<mtmd_audio_mel> & output,
+                                               bool                          shape_only) const {
     if (n_samples == 0) {
         return false;
     }
@@ -1720,20 +1673,6 @@ bool mtmd_audio_preprocessor_gemma4a::preprocess(const float *                 s
     GGML_ASSERT(!cache.sin_vals.empty());
     GGML_ASSERT(!cache.cos_vals.empty());
     GGML_ASSERT(!cache.filters.data.empty());
-
-    filter_params params;
-    params.n_mel            = hparams.n_mel_bins;
-    params.n_fft_bins       = 1 + (hparams.audio_n_fft / 2);
-    params.hann_window_size = hparams.audio_n_fft; // window is zero-padded to FFT size
-    params.hop_length       = hparams.audio_hop_len;
-    params.sample_rate      = hparams.audio_sample_rate;
-    params.no_padding       = true;
-    params.center_padding   = false;
-    params.preemph          = 0.0f;
-    params.use_natural_log  = true;
-    params.use_magnitude    = true;
-    params.mel_floor        = 0.001f;
-    params.norm_per_feature = false;
 
     // Split into 30-second chunks (model context limit, ~750 tokens each)
     const size_t chunk_samples = 30 * hparams.audio_sample_rate;
@@ -1754,7 +1693,7 @@ bool mtmd_audio_preprocessor_gemma4a::preprocess(const float *                 s
         std::copy(chunk_ptr, chunk_ptr + chunk_len, padded_samples.data() + pad_left);
 
         mtmd_audio_mel out_chunk;
-        bool ok = log_mel_spectrogram(padded_samples.data(), padded_samples.size(), 4, params, cache, out_chunk);
+        bool ok = log_mel_spectrogram(padded_samples.data(), padded_samples.size(), mel_config, shape_only, out_chunk);
         if (!ok) {
             return false;
         }
@@ -1772,79 +1711,6 @@ bool mtmd_audio_preprocessor_gemma4a::preprocess(const float *                 s
 // mtmd_audio_preprocessor_parakeet implementation
 //
 
-void mtmd_audio_preprocessor_parakeet::worker_thread(
-                             int   ith,
-                     const float * window_func,
-                             int   window_size,
-        const std::vector<float> & samples,
-                             int   n_samples,
-                             int   frame_size,
-                             int   frame_step,
-                             int   n_threads,
-                             int   n_fft_bins,
-          const mtmd_audio_cache & cache,
-                  mtmd_audio_mel & mel) {
-    std::vector<float> fft_in(frame_size * 2, 0.0);
-    std::vector<float> fft_out(frame_size * 2 * 2 * 2);
-
-    int n_fb = n_fft_bins;
-    int i = ith;
-
-    GGML_ASSERT(n_fb == 1 + (frame_size / 2));
-
-    const double eps = 5.960464477539063e-08;
-
-    for (; i < std::min(n_samples / frame_step + 1, (int) mel.n_len); i += n_threads) {
-        const int offset = i * frame_step;
-        const int window_pad_left = (frame_size - window_size) / 2;
-
-        // Zero-pad left.
-        std::fill(fft_in.begin(), fft_in.begin() + window_pad_left, 0.0f);
-
-        // Apply windowed samples in the center.
-        const int n_to_process = std::min({window_size, n_samples - offset});
-        for (int j = 0; j < n_to_process; j++) {
-            fft_in[window_pad_left + j] = window_func[j] * samples[offset + window_pad_left + j];
-        }
-
-        // Zero-pad right.
-        std::fill(fft_in.begin() + window_pad_left + n_to_process, fft_in.begin() + frame_size, 0.0f);
-
-        // FFT.
-        fft(cache, fft_in.data(), frame_size, fft_out.data());
-
-        // Calculate modulus^2 of complex numbers.
-        for (int j = 0; j < n_fb; j++) {
-            fft_out[j] = (fft_out[2 * j + 0] * fft_out[2 * j + 0] + fft_out[2 * j + 1] * fft_out[2 * j + 1]);
-        }
-
-        // mel spectrogram.
-        for (int j = 0; j < mel.n_mel; j++) {
-            double sum = 0.0;
-            int k = 0;
-            for (k = 0; k < n_fb - 3; k += 4) {
-                sum +=
-                    fft_out[k + 0] * cache.filters.data[j * n_fb + k + 0] +
-                    fft_out[k + 1] * cache.filters.data[j * n_fb + k + 1] +
-                    fft_out[k + 2] * cache.filters.data[j * n_fb + k + 2] +
-                    fft_out[k + 3] * cache.filters.data[j * n_fb + k + 3];
-            }
-            for (; k < n_fb; k++) {
-                sum += fft_out[k] * cache.filters.data[j * n_fb + k];
-            }
-            mel.data[j * mel.n_len + i] = std::log(sum + eps);
-        }
-    }
-
-    // Otherwise fft_out are all zero.
-    const double empty_sum = std::log(eps);
-    for (; i < mel.n_len; i += n_threads) {
-        for (int j = 0; j < mel.n_mel; j++) {
-            mel.data[j * mel.n_len + i] = empty_sum;
-        }
-    }
-}
-
 void mtmd_audio_preprocessor_parakeet::initialize() {
     cache.fill_sin_cos_table(hparams.audio_n_fft);
 
@@ -1857,25 +1723,25 @@ void mtmd_audio_preprocessor_parakeet::initialize() {
     GGML_ASSERT(hparams.window.size() == (size_t)hparams.audio_window_len);
     GGML_ASSERT(hparams.window.size() <= (size_t) hparams.audio_n_fft);
     cache.hann_window = hparams.window;
+
+    mel_config.n_mel            = hparams.n_mel_bins;
+    mel_config.n_fft_bins       = 1 + (hparams.audio_n_fft / 2);
+    mel_config.hann_window_size = hparams.audio_window_len;
+    mel_config.hop_length       = hparams.audio_hop_len;
+    mel_config.sample_rate      = hparams.audio_sample_rate;
+    mel_config.no_padding       = true; // preemphasis and padding already applied in log_mel()
+    mel_config.use_natural_log  = true;
+    mel_config.mel_floor_add    = true;
+    mel_config.cache            = &cache;
 }
 
 // log-mel without normalization
-void mtmd_audio_preprocessor_parakeet::log_mel(const float * samples, size_t n_samples_in, mtmd_audio_mel & out_full) const {
-    filter_params params;
-    params.n_mel            = hparams.n_mel_bins;
-    params.n_fft_bins       = 1 + (hparams.audio_n_fft / 2);
-    params.hann_window_size = hparams.audio_window_len;
-    params.hop_length       = hparams.audio_hop_len;
-    params.sample_rate      = hparams.audio_sample_rate;
-
+bool mtmd_audio_preprocessor_parakeet::log_mel(const float * samples, size_t n_samples_in, mtmd_audio_mel & out_full, bool shape_only) const {
     GGML_ASSERT(!cache.sin_vals.empty());
     GGML_ASSERT(!cache.cos_vals.empty());
     GGML_ASSERT(!cache.filters.data.empty());
 
-    const float * window_func = cache.hann_window.data();
-    const int     window_size = params.hann_window_size;
-    const int     frame_size  = (params.n_fft_bins - 1) * 2;
-    const int     frame_step  = params.hop_length;
+    const int frame_size = (mel_config.n_fft_bins - 1) * 2;
 
     // Apply preemphasis filter (high-pass): x[i] = x[i] - 0.97 * x[i-1]
     std::vector<float> samples_preprocessed(samples, samples + n_samples_in);
@@ -1891,55 +1757,25 @@ void mtmd_audio_preprocessor_parakeet::log_mel(const float * samples, size_t n_s
     std::vector<float> samples_padded(n_samples_in + 2 * pad, 0.0f);
     std::copy(samples_preprocessed.begin(), samples_preprocessed.end(), samples_padded.begin() + pad);
 
-    out_full.n_mel = params.n_mel;
-    out_full.n_len = (samples_padded.size() - frame_size) / frame_step + 1;
+    if (!log_mel_spectrogram(samples_padded.data(), (int) samples_padded.size(), mel_config, shape_only, out_full)) {
+        return false;
+    }
     out_full.n_len_org = out_full.n_len;
-    out_full.data.resize(out_full.n_mel * out_full.n_len);
-
-    const int n_threads = 4;
-    std::vector<std::thread> workers(n_threads - 1);
-    for (int iw = 0; iw < n_threads - 1; ++iw) {
-        workers[iw] = std::thread(
-            worker_thread, iw + 1,
-            window_func,
-            window_size,
-            std::cref(samples_padded),
-            samples_padded.size(),
-            frame_size,
-            frame_step,
-            n_threads,
-            params.n_fft_bins,
-            std::cref(cache),
-            std::ref(out_full)
-        );
-    }
-
-    worker_thread(0,
-            window_func,
-            window_size,
-            samples_padded,
-            samples_padded.size(),
-            frame_size,
-            frame_step,
-            n_threads,
-            params.n_fft_bins,
-            cache,
-            out_full);
-
-    for (int iw = 0; iw < n_threads - 1; ++iw) {
-        workers[iw].join();
-    }
+    return true;
 }
 
-bool mtmd_audio_preprocessor_parakeet::preprocess(const float * samples,
-                                                       size_t   n_samples_in,
-                                  std::vector<mtmd_audio_mel> & output) const {
+bool mtmd_audio_preprocessor_parakeet::process(const float * samples,
+                                                    size_t   n_samples_in,
+                               std::vector<mtmd_audio_mel> & output,
+                               bool                          shape_only) const {
     if (n_samples_in == 0) {
         return false;
     }
 
     mtmd_audio_mel out_full;
-    log_mel(samples, n_samples_in, out_full);
+    if (!log_mel(samples, n_samples_in, out_full, shape_only)) {
+        return false;
+    }
 
     // Per-feature normalization (only on valid frames)
     {
@@ -1980,15 +1816,18 @@ bool mtmd_audio_preprocessor_parakeet::preprocess(const float * samples,
 // mtmd_audio_preprocessor_nemotron_transcribe implementation
 //
 
-bool mtmd_audio_preprocessor_nemotron_transcribe::preprocess(const float *                 samples,
-                                                             size_t                        n_samples,
-                                                             std::vector<mtmd_audio_mel> & output) const {
+bool mtmd_audio_preprocessor_nemotron_transcribe::process(const float *                 samples,
+                                                          size_t                        n_samples,
+                                                          std::vector<mtmd_audio_mel> & output,
+                                                          bool                          shape_only) const {
     if (n_samples < (size_t) hparams.audio_n_fft) {
         return false;
     }
 
     mtmd_audio_mel mel;
-    log_mel(samples, n_samples, mel);
+    if (!log_mel(samples, n_samples, mel, shape_only)) {
+        return false;
+    }
 
     // frames past n_samples / hop are padding (NeMo get_seq_len); kept raw, encode_windows normalizes them for ASR
     const int64_t n_frames = n_samples / hparams.audio_hop_len;
@@ -2010,9 +1849,10 @@ void mtmd_audio_preprocessor_gemma4ua::initialize() {
     // no-op: no FFT or filterbank needed
 }
 
-bool mtmd_audio_preprocessor_gemma4ua::preprocess(const float *                 samples,
-                                                   size_t                        n_samples,
-                                                   std::vector<mtmd_audio_mel> & output) const {
+bool mtmd_audio_preprocessor_gemma4ua::process(const float *                 samples,
+                                                size_t                        n_samples,
+                                                std::vector<mtmd_audio_mel> & output,
+                                                bool /*shape_only*/) const {
     if (n_samples == 0) {
         return false;
     }
@@ -2151,9 +1991,10 @@ std::vector<float> mtmd_audio_streaming_istft::flush() {
 // the samples are handed over as a single-row "mel", to reuse the normal chunk path
 //
 
-bool mtmd_audio_preprocessor_pockettts::preprocess(const float *                 samples,
-                                                   size_t                        n_samples,
-                                                   std::vector<mtmd_audio_mel> & output) const {
+bool mtmd_audio_preprocessor_pockettts::process(const float *                 samples,
+                                                size_t                        n_samples,
+                                                std::vector<mtmd_audio_mel> & output,
+                                                bool /*shape_only*/) const {
     // the encoder needs whole frames, see pad_for_conv1d() in the reference
     const int64_t frame_size = (int64_t) hparams.mimi_downsample * 120;
     if (n_samples == 0 || frame_size <= 0) {
@@ -2183,10 +2024,11 @@ bool mtmd_audio_preprocessor_pockettts::preprocess(const float *                
 }
 
 // Muse Spark reads the raw waveform: pass the samples through, zero padded to a whole number of embeddings
-bool mtmd_audio_preprocessor_muse_spark_audio::preprocess(
-        const float * samples,
-        size_t n_samples,
-        std::vector<mtmd_audio_mel> & output) const {
+bool mtmd_audio_preprocessor_muse_spark_audio::process(
+     const float * samples,
+     size_t n_samples,
+     std::vector<mtmd_audio_mel> & output,
+     bool /*shape_only*/) const {
     const int64_t fold     = hparams.audio_samples_per_token();
     const int64_t n_padded = ((int64_t) n_samples + fold - 1) / fold * fold;
 

@@ -348,10 +348,14 @@ struct mtmd_image_tokens {
 };
 using mtmd_image_tokens_ptr = std::unique_ptr<mtmd_image_tokens>;
 
+// the mel of a clip is computed by its first encode, its chunks share the result
+using mtmd_audio_source_ptr = std::shared_ptr<mtmd_audio_preproc_out>;
+
 // an audio track split across chunks (e.g. the soundtrack of a video): it is encoded once, as one clip, and every
 // chunk takes its rows of it
 struct mtmd_audio_track {
     clip_image_f32_batch batch_f32; // the mel of the whole track
+    mtmd_audio_source_ptr source;
     uint32_t n_tokens = 0;
     std::vector<float> embd;        // filled by the first encode
     std::shared_ptr<const clip_gen_ref> gen_ref; // gen-side reference of a predefined voice, if any
@@ -362,12 +366,18 @@ struct mtmd_audio_tokens {
     clip_image_f32_batch batch_f32; // preprocessed image patches
     std::string id; // optional user-defined ID, useful for KV cache tracking
 
+    mtmd_audio_source_ptr source; // if set, batch_f32 has the shape of the mel of chunk source_idx
+    uint32_t source_idx = 0;
+
     // a slice of a track: the rows [row_begin, row_begin + n_tokens) of it, batch_f32 is unused
     std::shared_ptr<mtmd_audio_track> track;
     uint32_t row_begin = 0;
 
     // true if one of entries in batch_f32 is a placeholder
     bool is_placeholder() const {
+        if (source || (track && track->source)) {
+            return false;
+        }
         if (track && track->batch_f32.entries.empty()) {
             return track->embd.empty(); // a voice: its rows are not serialized
         }
@@ -384,6 +394,8 @@ struct mtmd_audio_tokens {
             n_tokens,
             batch_f32.clone(),
             id,
+            source,
+            source_idx,
             track,
             row_begin,
         };
@@ -413,6 +425,7 @@ struct mtmd_audio_tokens {
             track->n_tokens = ser.read<uint32_t>();
             track->batch_f32.deserialize(ser);
         }
+        source.reset();
     }
 };
 using mtmd_audio_tokens_ptr = std::unique_ptr<mtmd_audio_tokens>;
@@ -682,6 +695,7 @@ struct mtmd_context {
             /* no_alloc          */ no_alloc,
             /* progress_callback */ ctx_params.progress_callback,
             /* progress_callback_user_data */ ctx_params.progress_callback_user_data,
+            /* n_threads                   */ ctx_params.n_threads,
         };
 
         auto res = clip_init(mmproj_fname, ctx_clip_params);
@@ -1216,6 +1230,7 @@ struct mtmd_context {
 
         // initialize audio preprocessor
         if (audio_preproc) {
+            audio_preproc->mel_config.n_threads = n_threads;
             audio_preproc->initialize();
         }
     }
@@ -1840,7 +1855,7 @@ struct mtmd_tokenizer {
             GGML_ASSERT(ctx->audio_preproc != nullptr);
 
             // preprocess audio
-            std::vector<mtmd_audio_mel> mel_spec_chunks;
+            auto source = std::make_shared<mtmd_audio_preproc_out>();
             {
                 std::vector<float> dummy;
                 const float * samples = nullptr;
@@ -1864,8 +1879,8 @@ struct mtmd_tokenizer {
                     LOG_ERR("%s: this model takes audio input only via mtmd_audio_stream\n", __func__);
                     return 2;
                 }
-                bool ok = ctx->audio_preproc->preprocess(samples, n_samples, mel_spec_chunks);
-                if (!ok) {
+                *source = ctx->audio_preproc->preprocess(samples, n_samples);
+                if (source->entries.empty()) {
                     LOG_ERR("Unable to preprocess audio\n");
                     return 2;
                 }
@@ -1873,22 +1888,14 @@ struct mtmd_tokenizer {
 
             // one chunk for the five entries of a chatterbox clip, one token per talker conditioning row
             if (clip_get_projector_type(ctx->ctx_a) == PROJECTOR_TYPE_CHATTERBOX_SPKENC) {
-                GGML_ASSERT(mel_spec_chunks.size() == 5);
+                GGML_ASSERT(source->entries.size() == 5);
                 // mtl: spkr, perceiver query rows, emotion; turbo: spkr, t3 speech tokens
                 const size_t n_query  = clip_cbx_read_tensor(ctx->ctx_a, "a.cenc.perceiver.pre_attention_query", nullptr, 0) / ctx->n_embd_out();
-                const size_t n_tokens = cbx_is_mtl(ctx->ctx_a) ? 2 + n_query : 1 + (size_t) mel_spec_chunks[2].n_len / 4;
+                const size_t n_tokens = cbx_is_mtl(ctx->ctx_a) ? 2 + n_query : 1 + (size_t) source->entries[2].nx() / 4;
 
                 clip_image_f32_batch batch_f32;
                 batch_f32.is_audio = true;
-                for (auto & mel_spec : mel_spec_chunks) {
-                    GGML_ASSERT(mel_spec.n_len <= INT32_MAX && mel_spec.n_len >= 0);
-                    GGML_ASSERT(mel_spec.n_mel <= INT32_MAX && mel_spec.n_mel >= 0);
-                    clip_image_f32 mel_f32;
-                    mel_f32.set_size({(int) mel_spec.n_len, (int) mel_spec.n_mel},
-                                     mel_spec.data.empty(), /* is_audio */ true);
-                    mel_f32.cpy_buf(mel_spec.data);
-                    batch_f32.entries.push_back(std::move(mel_f32));
-                }
+                batch_f32.entries  = std::move(source->entries);
 
                 mtmd_audio_tokens_ptr audio_tokens(new mtmd_audio_tokens);
                 audio_tokens->n_tokens  = (uint32_t) n_tokens;
@@ -1905,17 +1912,8 @@ struct mtmd_tokenizer {
             } else
             // consider each mel_spec as a separate audio chunk
             // TODO: maybe support batching, but this may come with memory cost
-            for (auto & mel_spec : mel_spec_chunks) {
-                const bool is_placeholder = mel_spec.data.empty();
-
-                // Validate dimensions fit in clip_image_size (int)
-                GGML_ASSERT(mel_spec.n_len <= INT32_MAX && mel_spec.n_len >= 0);
-                GGML_ASSERT(mel_spec.n_mel <= INT32_MAX && mel_spec.n_mel >= 0);
-                clip_image_f32 mel_f32;
-                mel_f32.set_size(
-                    {(int)mel_spec.n_len, (int)mel_spec.n_mel},
-                    is_placeholder, /* is_audio */ true);
-                mel_f32.cpy_buf(mel_spec.data);
+            for (size_t i = 0; i < source->entries.size(); i++) {
+                clip_image_f32 mel_f32 = source->entries[i];
 
                 size_t n_tokens = clip_n_output_tokens(ctx->ctx_a, &mel_f32);
 
@@ -1927,6 +1925,10 @@ struct mtmd_tokenizer {
                 audio_tokens->n_tokens = n_tokens;
                 audio_tokens->batch_f32 = std::move(batch_f32);
                 audio_tokens->id = bitmap->id; // optional
+                if (source->needs_compute()) {
+                    audio_tokens->source = source;
+                    audio_tokens->source_idx = (uint32_t) i;
+                }
 
                 LOG_DBG("audio_tokens->n_tokens = %d\n", audio_tokens->n_tokens);
 
@@ -1984,16 +1986,21 @@ struct mtmd_tokenizer {
                     samples.insert(samples.end(), data, data + piece->nx);
                 }
             }
-            std::vector<mtmd_audio_mel> mels;
-            if (!ctx->audio_preproc || !ctx->audio_preproc->preprocess(samples.data(), samples.size(), mels) || mels.size() != 1) {
+            if (!ctx->audio_preproc) {
                 LOG_ERR("%s: unable to preprocess the soundtrack\n", __func__);
                 return 2;
             }
-            clip_image_f32 mel_f32;
-            mel_f32.set_size({(int) mels[0].n_len, (int) mels[0].n_mel}, mels[0].data.empty(), /* is_audio */ true);
-            mel_f32.cpy_buf(mels[0].data);
+            auto source = std::make_shared<mtmd_audio_preproc_out>(ctx->audio_preproc->preprocess(samples.data(), samples.size()));
+            if (source->entries.size() != 1) {
+                LOG_ERR("%s: unable to preprocess the soundtrack\n", __func__);
+                return 2;
+            }
+            clip_image_f32 mel_f32 = source->entries[0];
             st.track = std::make_shared<mtmd_audio_track>();
             st.track->n_tokens = clip_n_output_tokens(ctx->ctx_a, &mel_f32);
+            if (source->needs_compute()) {
+                st.track->source = source;
+            }
             st.track->batch_f32.is_audio = true;
             st.track->batch_f32.entries.push_back(std::move(mel_f32));
         }
@@ -2250,6 +2257,19 @@ static int32_t mtmd_encode_impl(mtmd_context * ctx, const mtmd_image_tokens * im
 
 static int32_t cbx_ref_encode(mtmd_context * ctx, const mtmd_audio_tokens * audio_tokens, std::vector<float> & out_embd);
 
+static bool mtmd_audio_batch_encode(mtmd_context * ctx, const clip_image_f32_batch & batch_f32, mtmd_audio_preproc_out * source, uint32_t idx, std::vector<float> & out_embd) {
+    clip_image_f32_batch batch = batch_f32.clone();
+    if (source) {
+        if (!ctx->audio_preproc->compute(*source)) {
+            LOG_ERR("%s: unable to compute the mel\n", __func__);
+            return false;
+        }
+        GGML_ASSERT(idx < source->entries.size());
+        batch.entries[0] = source->entries[idx];
+    }
+    return clip_image_batch_encode(ctx->ctx_a, ctx->n_threads, &batch, out_embd);
+}
+
 static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk * chunk, std::vector<float> & out_embd) {
     ctx->gen_ref = {}; // see mtmd_gen_state_set_ref()
     if (chunk->type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
@@ -2287,7 +2307,7 @@ static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk
         if (track) {
             if (track->embd.empty()) {
                 track->embd.resize((size_t) track->n_tokens * ctx->n_embd_out());
-                if (!clip_image_batch_encode(ctx->ctx_a, ctx->n_threads, &track->batch_f32, track->embd)) {
+                if (!mtmd_audio_batch_encode(ctx, track->batch_f32, track->source.get(), 0, track->embd)) {
                     track->embd.clear();
                     return 1;
                 }
@@ -2305,11 +2325,7 @@ static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk
             return cbx_ref_encode(ctx, chunk->tokens_audio.get(), out_embd);
         }
         out_embd.resize((size_t)chunk->tokens_audio->n_tokens * ctx->n_embd_out());
-        bool ok = clip_image_batch_encode(
-            ctx->ctx_a,
-            ctx->n_threads,
-            &chunk->tokens_audio->batch_f32,
-            out_embd);
+        bool ok = mtmd_audio_batch_encode(ctx, chunk->tokens_audio->batch_f32, chunk->tokens_audio->source.get(), chunk->tokens_audio->source_idx, out_embd);
         return ok ? 0 : 1;
     }
 
@@ -3885,21 +3901,21 @@ void mtmd_debug_preprocess_audio(mtmd_context * ctx, const std::vector<float> & 
         LOG_ERR("%s: model does not support audio input\n", __func__);
         return;
     }
-    std::vector<mtmd_audio_mel> mel_spec_chunks;
-    bool ok = ctx->audio_preproc->preprocess(samples.data(), samples.size(), mel_spec_chunks);
-    if (!ok) {
+    mtmd_audio_preproc_out out = ctx->audio_preproc->preprocess(samples.data(), samples.size());
+    if (out.entries.empty() || !ctx->audio_preproc->compute(out)) {
         LOG_ERR("%s: failed to preprocess audio\n", __func__);
         return;
     }
-    LOG_INF("%s: preprocessed audio to %zu mel spec chunks\n", __func__, mel_spec_chunks.size());
-    for (size_t i = 0; i < mel_spec_chunks.size(); i++) {
-        LOG_INF("%s: mel spec chunk %zu has n_len=%d, n_mel=%d\n", __func__, i, mel_spec_chunks[i].n_len, mel_spec_chunks[i].n_mel);
+    LOG_INF("%s: preprocessed audio to %zu mel spec chunks\n", __func__, out.entries.size());
+    for (size_t i = 0; i < out.entries.size(); i++) {
+        const auto & mel = out.entries[i];
+        const auto & data = mel.get_ro_buf();
+        LOG_INF("%s: mel spec chunk %zu has n_len=%d, n_mel=%d\n", __func__, i, mel.nx(), mel.ny());
 
         // dump mel entries: data is stored as [n_mel][n_len] (mel-major)
-        const auto & mel = mel_spec_chunks[i];
-        for (int m = 0; m < mel.n_mel; m++) {
-            for (int t = 0; t < mel.n_len; t++) {
-                LOG_INF("mel[%zu][m=%d][t=%d] = %f\n", i, m, t, mel.data[m * mel.n_len + t]);
+        for (int m = 0; m < mel.ny(); m++) {
+            for (int t = 0; t < mel.nx(); t++) {
+                LOG_INF("mel[%zu][m=%d][t=%d] = %f\n", i, m, t, data[(size_t) m * mel.nx() + t]);
             }
         }
     }
@@ -4450,16 +4466,17 @@ static bool mtmd_audio_stream_compute_mel(mtmd_audio_stream_lfm3a * s) {
     }
     const int64_t start = s->n_frames * s->hop - s->buf_pos;
     const size_t  len   = (size_t) (s->win + (n_new - 1) * s->hop);
-    std::vector<mtmd_audio_mel> mel_chunks;
-    if (!s->ctx->audio_preproc->preprocess(s->buf.data() + start, len, mel_chunks) || mel_chunks.size() != 1) {
+    mtmd_audio_preproc_out out = s->ctx->audio_preproc->preprocess(s->buf.data() + start, len);
+    if (out.entries.size() != 1 || !s->ctx->audio_preproc->compute(out)) {
         LOG_ERR("%s: unable to preprocess audio\n", __func__);
         return false;
     }
-    const auto & mel = mel_chunks[0];
-    GGML_ASSERT(mel.n_len == n_new && mel.n_mel == s->n_mel);
+    const auto & mel = out.entries[0];
+    const auto & data = mel.get_ro_buf();
+    GGML_ASSERT(mel.nx() == n_new && mel.ny() == s->n_mel);
     for (int64_t t = 0; t < n_new; t++) {
         for (int m = 0; m < s->n_mel; m++) {
-            s->mel.push_back(mel.data[(size_t) m * mel.n_len + t]);
+            s->mel.push_back(data[(size_t) m * mel.nx() + t]);
         }
     }
     s->n_frames = n_total;
