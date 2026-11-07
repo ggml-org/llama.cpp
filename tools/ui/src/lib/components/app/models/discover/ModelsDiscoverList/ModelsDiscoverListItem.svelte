@@ -96,19 +96,28 @@
 
 	let supportsToolUse = $derived(detectToolUseSupport(model.gguf?.chat_template ?? ''));
 
+	let mmprojPath = $derived(
+		model.siblings?.find((s) => s.rfilename.toLowerCase().includes(HF_MMPROJ_FILENAME_TOKEN))
+			?.rfilename
+	);
+
 	// Modalities derived from HF metadata: vision from an mmproj sidecar or a
-	// multimodal pipeline tag, audio/video from their pipeline tags.
+	// multimodal pipeline tag, audio from its pipeline tags or an audio encoder in
+	// the mmproj, video from its pipeline tags.
 	let modalities = $derived.by<ModelModalities>(() => {
 		const tag = model.pipeline_tag ?? '';
-		const vision =
-			HF_MODALITY_PIPELINE_TAGS.vision.includes(tag) ||
-			Boolean(
-				model.siblings?.some((s) => s.rfilename.toLowerCase().includes(HF_MMPROJ_FILENAME_TOKEN))
-			);
-		const audio = HF_MODALITY_PIPELINE_TAGS.audio.includes(tag);
+		const vision = HF_MODALITY_PIPELINE_TAGS.vision.includes(tag) || Boolean(mmprojPath);
+		const audio =
+			HF_MODALITY_PIPELINE_TAGS.audio.includes(tag) ||
+			HuggingFaceService.cachedMmprojEncoders(model.id)?.audio === true;
 		const video = HF_MODALITY_PIPELINE_TAGS.video.includes(tag);
 
 		return { audio, video, vision };
+	});
+
+	// the mmproj's header says whether it also hears; read once per repo
+	$effect(() => {
+		if (mmprojPath) void HuggingFaceService.getMmprojEncoders(model.id, mmprojPath);
 	});
 
 	// Draft sidecars (mtp, dflash, dspark, eagle3) the repo offers, badged with no

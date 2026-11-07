@@ -3,7 +3,7 @@
 	import ModelsDiscoverDetailsHeader from './ModelsDiscoverDetailsHeader.svelte';
 	import ModelsDiscoverDetailsReadme from './ModelsDiscoverDetailsReadme.svelte';
 	import ModelsDiscoverDetailsSkeleton from './ModelsDiscoverDetailsSkeleton.svelte';
-	import { OTHER_BIT_DEPTH } from '$lib/constants';
+	import { HF_MODALITY_PIPELINE_TAGS, OTHER_BIT_DEPTH } from '$lib/constants';
 	import { ModelAuxSidecar } from '$lib/enums';
 	import { HuggingFaceService } from '$lib/services';
 	import type { HfModelDetailInfo, HfModelSibling, ModelBitDepthRow } from '$lib/types';
@@ -37,14 +37,23 @@
 
 	// Capabilities derived from HF metadata. Vision comes from an mmproj sidecar
 	// or a multimodal pipeline tag; tool use / reasoning from the chat template.
-	let hasMmproj = $derived(
-		files.some(
+	let mmprojPath = $derived(
+		files.find(
 			(f) => HuggingFaceService.extractQuantMeta(f.path)?.sidecar === ModelAuxSidecar.MMPROJ
-		)
+		)?.path
 	);
-	let hasVision = $derived(hasMmproj || details?.pipeline_tag === 'image-text-to-text');
+	let hasVision = $derived(Boolean(mmprojPath) || details?.pipeline_tag === 'image-text-to-text');
+	// audio from its pipeline tags, or an audio encoder in the mmproj (omni models are any-to-any)
+	let hasAudio = $derived(
+		HF_MODALITY_PIPELINE_TAGS.audio.includes(details?.pipeline_tag ?? '') ||
+			HuggingFaceService.cachedMmprojEncoders(modelId)?.audio === true
+	);
 	let hasTools = $derived(detectToolUseSupport(gguf?.chat_template ?? ''));
 	let hasReasoning = $derived(detectThinkingSupport(gguf?.chat_template ?? ''));
+
+	$effect(() => {
+		if (mmprojPath) void HuggingFaceService.getMmprojEncoders(modelId, mmprojPath);
+	});
 
 	let bitDepthRows = $derived.by<ModelBitDepthRow[]>(() => {
 		const rows = new SvelteMap<number, HfModelSibling[]>();
@@ -82,6 +91,7 @@
 			{baseModels}
 			{details}
 			{gguf}
+			{hasAudio}
 			{hasReasoning}
 			{hasTools}
 			{hasVision}
