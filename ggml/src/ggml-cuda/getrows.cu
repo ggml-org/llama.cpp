@@ -13,7 +13,7 @@ static __global__ void k_get_rows(
 
     ggml_cuda_pdl_sync();
     for (int64_t z = blockIdx.z; z < ne11*(int64_t)ne12_fdv.z; z += gridDim.z) {
-        for (int64_t i00 = 2*(blockIdx.y*blockDim.x + threadIdx.x); i00 < ne00; i00 += gridDim.y*blockDim.x) {
+        for (int64_t i00 = 2*(blockIdx.y*blockDim.x + threadIdx.x); i00 < ne00; i00 += 2*gridDim.y*blockDim.x) {
             // The x and y dimensions of the grid are swapped because the maximum allowed grid size for x is higher.
             const int i10 =  blockIdx.x;
             const uint2 dm  = fast_div_modulo((uint32_t)z, ne12_fdv);
@@ -402,6 +402,10 @@ static void ggml_cuda_get_rows_switch_src0_type(
             break;
         case GGML_TYPE_MXFP4:
             get_rows_cuda_kq<32, dst_t, dequantize_mxfp4<dst_t>>(src0_d, src1_d, dst_d,
+                ne00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb1, nb2, nb3, stream);
+            break;
+        case GGML_TYPE_NVFP4:
+            get_rows_cuda_q<QK_NVFP4_SUB, QR_NVFP4, dequantize_nvfp4>(src0_d, src1_d, dst_d,
                 ne00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb1, nb2, nb3, stream);
             break;
         default:

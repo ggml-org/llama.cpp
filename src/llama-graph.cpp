@@ -1584,6 +1584,8 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     moe_cache        (params.moe_cache),
     prec_policy      (params.prec_policy),
     hdmd             (params.hdmd),
+    tok_embd         (params.tok_embd),
+    tok_embd_s       (params.tok_embd_s),
     layer_inp_dev    (params.layer_inp_dev),
     layer_inp_src    (params.layer_inp_src),
     samplers         (params.samplers),
@@ -2740,6 +2742,10 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd, float to
     // TODO: when lora is active, this is likely going to cause issues similar to https://github.com/ggml-org/llama.cpp/pull/30160
     //       need to add lora tests and refactor the logic to make the lora GET_ROWS go at the front of the graph
     auto build_tok = [&](ggml_tensor * cur, ggml_tensor * ids) {
+        if (tok_embd_s && tok_embd == this->tok_embd) {
+            cur = ggml_mul(ctx0, cur, tok_embd_s);
+        }
+
         // a Hadamard-latent table stores rotated rows: restore the primal basis, h = s * (H z)
         if (hdmd) {
             if (const auto it = hdmd->inv.find(tok_embd); it != hdmd->inv.end()) {

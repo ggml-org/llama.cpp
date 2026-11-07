@@ -65,6 +65,13 @@ void llama_model_nemotron_h::load_arch_tensors(llama_model_loader & ml) {
 
     // embeddings
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
+    if (ml.get_weight(tn(LLM_TENSOR_TOKEN_EMBD, "scale").str().c_str()) ||
+            gguf_find_tensor(ml.metadata, tn(LLM_TENSOR_TOKEN_EMBD, "scale").str().c_str()) >= 0) {
+        tok_embd_s = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "scale"), {1}, TENSOR_NOT_REQUIRED);
+    }
+    if (tok_embd_s && tok_embd_s->type != GGML_TYPE_F32) {
+        throw std::runtime_error("token embedding scale must be F32");
+    }
 
     // output
     {

@@ -10491,8 +10491,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
 
     test_cases.emplace_back(new test_get_rows(GGML_TYPE_F32, 1, 8, 2, 1, 1, false));
+    for (ggml_type type : {GGML_TYPE_NVFP4, GGML_TYPE_Q8_0}) {
+        test_cases.emplace_back(new test_get_rows(type, 576, 5, 12, 3, 2, true, true));
+    }
     for (ggml_type type : {GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K,
-                          GGML_TYPE_IQ3_XXS, GGML_TYPE_IQ3_S}) {
+                          GGML_TYPE_IQ3_XXS, GGML_TYPE_IQ3_S, GGML_TYPE_NVFP4}) {
         test_cases.emplace_back(new test_get_rows_after_mul_mat(type));
     }
     for (ggml_type type : {GGML_TYPE_IQ3_XXS, GGML_TYPE_IQ3_S}) {
