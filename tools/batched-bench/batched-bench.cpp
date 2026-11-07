@@ -1,5 +1,6 @@
 #include "arg.h"
 #include "common.h"
+#include "file-lock.h"
 #include "log.h"
 #include "llama.h"
 #include "llama-cpp.h"
@@ -8,12 +9,54 @@
 #include <cinttypes>
 #include <clocale>
 #include <cstdio>
+#include <filesystem>
 #include <random>
 #include <string>
+#include <system_error>
 #include <vector>
 
 #define KVU_CACHE_N_IDLE_SEQ 4
 #define KVU_CACHE_SCATTER_CHUNK_MAX 2048
+
+static std::string cache_state_path(const std::string & path, int n_idle) {
+    return path + ".idle" + std::to_string(n_idle);
+}
+
+static std::vector<llama_token> cache_state_metadata(const llama_model * model, const llama_context_params & ctx_params) {
+    const int32_t name_length = llama_model_meta_val_str(model, "general.name", nullptr, 0);
+    std::string name;
+    if (name_length > 0) {
+        std::vector<char> value(size_t(name_length) + 1);
+        llama_model_meta_val_str(model, "general.name", value.data(), value.size());
+        name.assign(value.data(), name_length);
+    }
+
+    std::vector<llama_token> metadata = {
+        int32_t(ctx_params.type_k),
+        int32_t(ctx_params.type_v),
+        int32_t(name.size()),
+    };
+    for (unsigned char byte : name) {
+        metadata.push_back(byte);
+    }
+    return metadata;
+}
+
+static bool save_cache_state(llama_context * ctx, const std::string & path, const std::vector<llama_token> & metadata) {
+    common_file_lock lock(path + ".lock");
+    if (!lock.acquire([] { return false; })) {
+        return false;
+    }
+    std::error_code error;
+    if (std::filesystem::exists(path, error) || error) {
+        return false;
+    }
+    const std::string temp = path + ".tmp";
+    const bool saved = llama_state_save_file(ctx, temp.c_str(), metadata.data(), metadata.size()) &&
+        std::rename(temp.c_str(), path.c_str()) == 0;
+    std::filesystem::remove(temp, error);
+    return saved && !error;
+}
 
 static bool invalid_shape(const std::vector<int> & values) {
     return values.empty() || *std::min_element(values.begin(), values.end()) <= 0;
@@ -53,9 +96,14 @@ int llama_batched_bench(int argc, char ** argv) {
     std::vector<int> n_pp = params.n_pp;
     std::vector<int> n_tg = params.n_tg;
     std::vector<int> n_pl = params.n_pl;
+    const bool kvu_cache_state = !params.batched_bench_kvu_cache_state.empty();
 
     if (invalid_shape(n_pp) || invalid_shape(n_tg) || invalid_shape(n_pl)) {
         LOG_ERR("benchmark needs positive PP, TG, and parallel prompt counts\n");
+        return 1;
+    }
+    if (kvu_cache_state && !params.kv_unified) {
+        LOG_ERR("--kvu-cache-state needs unified KV\n");
         return 1;
     }
 
@@ -80,11 +128,11 @@ int llama_batched_bench(int argc, char ** argv) {
 
     // ensure enough sequences are available
     const int max_pl = *std::max_element(n_pl.begin(), n_pl.end());
-    if (params.kv_unified && size_t(max_pl) + KVU_CACHE_N_IDLE_SEQ > llama_max_parallel_sequences()) {
+    if (kvu_cache_state && size_t(max_pl) + KVU_CACHE_N_IDLE_SEQ > llama_max_parallel_sequences()) {
         LOG_ERR("unified KV warming supports at most %zu timed sequences\n", llama_max_parallel_sequences() - KVU_CACHE_N_IDLE_SEQ);
         return 1;
     }
-    ctx_params.n_seq_max = max_pl + (params.kv_unified ? KVU_CACHE_N_IDLE_SEQ : 0);
+    ctx_params.n_seq_max = max_pl + (kvu_cache_state ? KVU_CACHE_N_IDLE_SEQ : 0);
 
     llama_context_ptr ctx_owner(llama_init_from_model(model, ctx_params));
     llama_context * ctx = ctx_owner.get();
@@ -146,6 +194,7 @@ int llama_batched_bench(int argc, char ** argv) {
         LOG("|%6s-|-%6s-|-%4s-|-%6s-|-%8s-|-%8s-|-%8s-|-%8s-|-%8s-|-%8s-|\n", "------", "------", "----", "------", "--------", "--------", "--------", "--------", "--------", "--------");
     }
 
+    std::vector<int> saved_idle_counts;
     for (        int i_pp = 0; i_pp < (int) n_pp.size(); ++i_pp) {
         for (    int i_tg = 0; i_tg < (int) n_tg.size(); ++i_tg) {
             for (int i_pl = 0; i_pl < (int) n_pl.size(); ++i_pl) {
@@ -159,10 +208,25 @@ int llama_batched_bench(int argc, char ** argv) {
                     continue;
                 }
 
-                const int seq_offset = params.kv_unified ? KVU_CACHE_N_IDLE_SEQ : 0;
+                const int seq_offset = kvu_cache_state ? KVU_CACHE_N_IDLE_SEQ : 0;
+                const int n_idle = n_kv_max - int(n_kv);
+                std::string state_path;
+                bool state_exists = false;
+                if (kvu_cache_state) {
+                    state_path = cache_state_path(params.batched_bench_kvu_cache_state, n_idle);
+                    std::error_code error;
+                    state_exists = std::filesystem::exists(state_path, error);
+                    if (error) {
+                        LOG_ERR("cannot inspect scattered KV session: %s\n", state_path.c_str());
+                        return 1;
+                    }
+                    if (state_exists && std::find(saved_idle_counts.begin(), saved_idle_counts.end(), n_idle) == saved_idle_counts.end()) {
+                        LOG_ERR("scattered KV session already exists: %s\n", state_path.c_str());
+                        return 1;
+                    }
+                }
                 llama_memory_clear(mem, false);
-                if (params.kv_unified) {
-                    const int n_idle = n_kv_max - int(n_kv);
+                if (kvu_cache_state) {
                     const int chunk_size = std::max(1, std::min(KVU_CACHE_SCATTER_CHUNK_MAX, n_idle/16));
                     int positions[KVU_CACHE_N_IDLE_SEQ] = {};
                     std::mt19937 idle_rng(1);
@@ -189,6 +253,15 @@ int llama_batched_bench(int argc, char ** argv) {
                             LOG_ERR("scattered idle sequence %d has an unexpected end position\n", seq);
                             return 1;
                         }
+                    }
+                    if (!state_exists) {
+                        const auto metadata = cache_state_metadata(model, ctx_params);
+                        if (!save_cache_state(ctx, state_path, metadata)) {
+                            LOG_ERR("failed to save scattered KV session: %s\n", state_path.c_str());
+                            return 1;
+                        }
+                        saved_idle_counts.push_back(n_idle);
+                        LOG_INF("saved scattered KV session: %s\n", state_path.c_str());
                     }
                 }
 
