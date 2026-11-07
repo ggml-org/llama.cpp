@@ -34,6 +34,7 @@
 #include "json.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdint>
 #include <cstdlib>
@@ -169,7 +170,8 @@ int main(int argc, char ** argv) {
         c.n_batch = (uint32_t) n;
         // chunked causal prefill: keep n_head*chunk*n_kv under 2^31 (CUDA softcap is 32-bit indexed)
         const int chunk = (int) std::clamp<int64_t>((int64_t(1) << 30) / (int64_t(n_head) * n), 256, 2048);
-        c.n_ubatch = (uint32_t) std::min(n, chunk);
+        // without the prompt-KV store (split over GPUs) each step encodes [prompt | canvas] as one ubatch
+        c.n_ubatch = (uint32_t) (one_gpu ? std::min(n, chunk) : n);
         c.n_outputs_max = (uint32_t) canvas_length;   // only the canvas rows need logits
         c.no_perf = true;
         c.flash_attn_type = fa_on ? LLAMA_FLASH_ATTN_TYPE_ENABLED : LLAMA_FLASH_ATTN_TYPE_DISABLED;
@@ -182,7 +184,10 @@ int main(int argc, char ** argv) {
     // layers landed. llama_init_from_model returns null on OOM (graph_reserve throws), so probing is safe.
     const int n_ctx_train = (int) llama_model_n_ctx_train(model);
     const int floor_ctx   = std::max((int) canvas_length * 4, 2048);
-    const int auto_ceil   = n_ctx_train > 0 ? std::min(n_ctx_train, 65536) : 65536;
+    // split: that single ubatch spans the whole context, so hold n_head*n^2 to the same 2^30 bound
+    const int split_ceil  = (int) std::sqrt((double) (int64_t(1) << 30) / n_head);
+    const int auto_ceil   = std::min(n_ctx_train > 0 ? std::min(n_ctx_train, 65536) : 65536,
+                                     one_gpu ? 65536 : split_ceil);
     const int cands[] = {65536, 49152, 40960, 32768, 24576, 20480, 16384, 12288, 8192, 6144, 4096, 2048};
 
     // VRAM budget (where NGL asks the model to live) and RAM budget (where it spills if it overflows VRAM).
@@ -229,7 +234,7 @@ int main(int argc, char ** argv) {
     llama_context * ctx = nullptr;
     const char * reason = "auto";
 
-    if (MAXTOK_ENV > 0) {   // explicit budget: honour exactly if it fits, else degrade through the probe
+    if (MAXTOK_ENV > 0 && (one_gpu || MAXTOK_ENV <= split_ceil)) {   // explicit budget: honour exactly if it fits, else degrade through the probe
         const double sc = (double) n_head * (double) MAXTOK_ENV * (double) MAXTOK_ENV * 4.0;
         const size_t budget = std::max(v_free, ram_budget);
         if (!budget || sc <= (double) budget * 0.9) {
