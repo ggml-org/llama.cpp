@@ -128,6 +128,10 @@ if (CUDAToolkit_FOUND)
     endif()
     if (GGML_CUDA_MMQ_SM90)
         set(SM90_CHECK_FLAGS "-DCMAKE_CUDA_ARCHITECTURES=90" "-DCMAKE_CUDA_STANDARD=17")
+        set(SM90_CHECK_OPTIONS "")
+        if (MSVC)
+            list(APPEND SM90_CHECK_OPTIONS "-Xcompiler=/Zc:preprocessor")
+        endif()
         if (GGML_CUDA_CCCL_VERSION)
             list(APPEND SM90_CHECK_FLAGS "-DINCLUDE_DIRECTORIES:STRING=${cccl_SOURCE_DIR}/libcudacxx/include")
         endif()
@@ -151,6 +155,7 @@ int main() { return 0; }
             "${CMAKE_CURRENT_BINARY_DIR}/sm90-ptx-check"
             "${CMAKE_CURRENT_BINARY_DIR}/sm90-ptx-check.cu"
             CMAKE_FLAGS ${SM90_CHECK_FLAGS}
+            COMPILE_DEFINITIONS ${SM90_CHECK_OPTIONS}
             LINK_LIBRARIES CUDA::cudart)
         if (NOT GGML_CUDA_MMQ_SM90_WRAPPERS)
             set(GGML_CUDA_MMQ_SM90 OFF)
