@@ -1,4 +1,5 @@
 #include "mtmd-audio.h"
+#include "mtmd-subcontext.h"
 
 #include <cfloat>
 #include <cmath>
@@ -269,12 +270,12 @@ static void ifft(const mtmd_audio_cache & cache, float * in, int N, float * out)
     fft_impl<true, false>(cache, in, N, out);
 }
 
-static void mtmd_audio_fill_entries(std::vector<mtmd_audio_mel> & mels, bool shape_only, std::vector<clip_image_f32> & entries) {
+static void mtmd_audio_fill_entries(std::vector<mtmd_audio_mel> & mels, bool shape_only, std::vector<mtmd_image_f32> & entries) {
     entries.clear();
     for (auto & mel : mels) {
         GGML_ASSERT(mel.n_len <= INT32_MAX && mel.n_len >= 0);
         GGML_ASSERT(mel.n_mel <= INT32_MAX && mel.n_mel >= 0);
-        clip_image_f32 entry;
+        mtmd_image_f32 entry;
         entry.set_size({(int) mel.n_len, (int) mel.n_mel}, shape_only || mel.data.empty(), /* is_audio */ true);
         if (!entry.is_placeholder()) {
             entry.cpy_buf(mel.data);
@@ -430,7 +431,7 @@ static bool log_mel_spectrogram(
     }
     out.data.resize(total_size);
 
-    if (!shape_only && !clip_audio_log_mel(params, samples_padded.data(), hann, out.n_len, out.data.data())) {
+    if (!shape_only && !mtmd_audio_log_mel(params, samples_padded.data(), hann, out.n_len, out.data.data())) {
         return false;
     }
 
@@ -547,7 +548,7 @@ bool mtmd_audio_preprocessor_whisper::process(const float *                 samp
         return false;
     }
 
-    // because the cgraph in clip.cpp only accepts 3000 frames each, we need to split the mel
+    // because the cgraph only accepts 3000 frames each, we need to split the mel
     // we always expect the mel to have 3000 silent frames at the end
     if (DEBUG) {
         printf("output: n_mel = %d, n_len = %d\n", (int) out_full.n_mel, (int) out_full.n_len);
@@ -2002,10 +2003,10 @@ bool mtmd_audio_preprocessor_pockettts::process(const float *                 sa
     }
 
     // the mimi transformer mask is dense, so cost is quadratic in the reference length
-    const int64_t max_samples = (int64_t) clip_hparams::pockettts_max_spk_seconds * hparams.audio_sample_rate;
+    const int64_t max_samples = (int64_t) mtmd_hparams::pockettts_max_spk_seconds * hparams.audio_sample_rate;
     if ((int64_t) n_samples > max_samples) {
         LOG_WRN("%s: speaker reference is %.1f s, truncating to the first %d s\n", __func__,
-                (double) n_samples / hparams.audio_sample_rate, clip_hparams::pockettts_max_spk_seconds);
+                (double) n_samples / hparams.audio_sample_rate, mtmd_hparams::pockettts_max_spk_seconds);
         n_samples = (size_t) max_samples;
     }
 

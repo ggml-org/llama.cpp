@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ggml.h"
-#include "clip-model.h"
+#include "mtmd-model.h"
 
 #include <vector>
 #include <string>
@@ -9,18 +9,18 @@
 #define MTMD_INTERNAL_HEADER
 
 struct mtmd_image_preproc_out {
-    std::vector<clip_image_f32> entries;
+    std::vector<mtmd_image_f32> entries;
     // grid size is required for llava-uhd style models
 
-    clip_image_f32 overview; // overview image (downscaled image)
+    mtmd_image_f32 overview; // overview image (downscaled image)
     int grid_x = 0;
     int grid_y = 0;
 
-    void append(const clip_hparams & hparams, const clip_image_u8 & img, bool normalized = true);
-    void append(const clip_hparams & hparams, const std::vector<clip_image_u8> & imgs, bool normalized = true);
-    void append(const clip_hparams & hparams, clip_image_f32 & img, bool normalized = true);
+    void append(const mtmd_hparams & hparams, const mtmd_image_u8 & img, bool normalized = true);
+    void append(const mtmd_hparams & hparams, const std::vector<mtmd_image_u8> & imgs, bool normalized = true);
+    void append(const mtmd_hparams & hparams, mtmd_image_f32 & img, bool normalized = true);
 
-    void append_overview(const clip_hparams & hparams, const clip_image_u8 & img, bool normalized = true);
+    void append_overview(const mtmd_hparams & hparams, const mtmd_image_u8 & img, bool normalized = true);
     bool has_overview() const {
         return overview.nx() > 0 || overview.ny() > 0;
     }
@@ -28,17 +28,17 @@ struct mtmd_image_preproc_out {
 
 // base class, models must inherit from this class
 struct mtmd_image_preprocessor {
-    const clip_hparams & hparams;
+    const mtmd_hparams & hparams;
 
-    mtmd_image_preprocessor(const clip_ctx * ctx): hparams(*clip_get_hparams(ctx)) {}
-    mtmd_image_preprocessor(const clip_hparams & hparams): hparams(hparams) {}
+    mtmd_image_preprocessor(const mtmd_model * model): hparams(model->hparams) {}
+    mtmd_image_preprocessor(const mtmd_hparams & hparams): hparams(hparams) {}
 
     virtual ~mtmd_image_preprocessor() = default;
-    virtual mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const = 0;
+    virtual mtmd_image_preproc_out preprocess(const mtmd_image_u8 & img) const = 0;
     // frames of a video, which the video helper may have already sized
-    virtual mtmd_image_preproc_out preprocess_video_frame(const clip_image_u8 & img) const { return preprocess(img); }
+    virtual mtmd_image_preproc_out preprocess_video_frame(const mtmd_image_u8 & img) const { return preprocess(img); }
     // frame size of a video with n_frames sampled frames, as the reference video processor; false if none
-    virtual bool get_video_frame_size(int /*n_frames*/, int /*width*/, int /*height*/, clip_image_size & /*out*/) const { return false; }
+    virtual bool get_video_frame_size(int /*n_frames*/, int /*width*/, int /*height*/, mtmd_image_size & /*out*/) const { return false; }
 };
 
 /**
@@ -63,30 +63,30 @@ struct mtmd_image_preprocessor {
  * NOTE: for the ordering of overview, set "ov_img_first" on the mtmd_context
  */
 struct mtmd_image_preprocessor_llava_uhd : mtmd_image_preprocessor {
-    mtmd_image_preprocessor_llava_uhd(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
-    mtmd_image_preprocessor_llava_uhd(const clip_hparams & hparams) : mtmd_image_preprocessor(hparams) {}
-    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
+    mtmd_image_preprocessor_llava_uhd(const mtmd_model * model) : mtmd_image_preprocessor(model) {}
+    mtmd_image_preprocessor_llava_uhd(const mtmd_hparams & hparams) : mtmd_image_preprocessor(hparams) {}
+    mtmd_image_preproc_out preprocess(const mtmd_image_u8 & img) const override;
 
     struct slice_coordinates {
         int x;
         int y;
-        clip_image_size size;
+        mtmd_image_size size;
     };
 
     struct slice_instructions {
-        clip_image_size overview_size; // size of downscaled image
-        clip_image_size refined_size;  // size of image right before slicing (must be multiple of slice size)
-        clip_image_size grid_size;     // grid_size.width * grid_size.height = number of slices
+        mtmd_image_size overview_size; // size of downscaled image
+        mtmd_image_size refined_size;  // size of image right before slicing (must be multiple of slice size)
+        mtmd_image_size grid_size;     // grid_size.width * grid_size.height = number of slices
         std::vector<slice_coordinates> slices;
     };
 
-    virtual slice_instructions get_slice_instructions(const clip_image_size & original_size) const;
+    virtual slice_instructions get_slice_instructions(const mtmd_image_size & original_size) const;
 
     struct slice_output {
-        clip_image_u8 overview;
-        std::vector<clip_image_u8> slices;
+        mtmd_image_u8 overview;
+        std::vector<mtmd_image_u8> slices;
     };
-    slice_output slice_image(const clip_image_u8 & img, const slice_instructions & inst) const;
+    slice_output slice_image(const mtmd_image_u8 & img, const slice_instructions & inst) const;
 
 protected:
     // align slices to a multiple of the merger factor (integer merger tokens per slice)
@@ -100,7 +100,7 @@ protected:
         return static_cast<int>(std::round(v));
     }
 
-    clip_image_size get_best_resize(const clip_image_size & original_size, int scale_resolution, int patch_size, bool allow_upscale = false) const;
+    mtmd_image_size get_best_resize(const mtmd_image_size & original_size, int scale_resolution, int patch_size, bool allow_upscale = false) const;
 
     /**
      * Selects the best resolution from a list of possible resolutions based on the original size.
@@ -117,68 +117,68 @@ protected:
      * @param possible_resolutions A list of possible resolutions
      * @return The best fit resolution
      */
-    clip_image_size select_best_resolution(const clip_image_size & original_size, const std::vector<clip_image_size> & possible_resolutions) const;
+    mtmd_image_size select_best_resolution(const mtmd_image_size & original_size, const std::vector<mtmd_image_size> & possible_resolutions) const;
 
 private:
-    clip_image_size resize_maintain_aspect_ratio(const clip_image_size & orig, const clip_image_size & target_max) const;
+    mtmd_image_size resize_maintain_aspect_ratio(const mtmd_image_size & orig, const mtmd_image_size & target_max) const;
     int ensure_divide(int length, int patch_size) const;
-    clip_image_size get_refine_size(const clip_image_size & original_size, const clip_image_size & grid, int scale_resolution, int patch_size, bool allow_upscale = false) const;
-    clip_image_size get_best_grid(const int max_slice_nums, const int multiple, const float log_ratio) const;
+    mtmd_image_size get_refine_size(const mtmd_image_size & original_size, const mtmd_image_size & grid, int scale_resolution, int patch_size, bool allow_upscale = false) const;
+    mtmd_image_size get_best_grid(const int max_slice_nums, const int multiple, const float log_ratio) const;
 };
 
 // downscale or upscale the input image to fixed size
 struct mtmd_image_preprocessor_fixed_size : mtmd_image_preprocessor {
-    mtmd_image_preprocessor_fixed_size(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
-    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
+    mtmd_image_preprocessor_fixed_size(const mtmd_model * model) : mtmd_image_preprocessor(model) {}
+    mtmd_image_preproc_out preprocess(const mtmd_image_u8 & img) const override;
 };
 
 // resize image to multiple of patch_size*n_merge, while preserving aspect ratio
 // if image_resize_pad is true, the resized image will be padded, otherwise it will be either stretched or center-cropped depending on image_resize_pad
 // this is used by models with native support for dynamic image size, for example: Qwen-VL, Pixtral, Kimi-VL, etc
 struct mtmd_image_preprocessor_dyn_size : mtmd_image_preprocessor {
-    mtmd_image_preprocessor_dyn_size(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
-    mtmd_image_preprocessor_dyn_size(const clip_hparams & hparams) : mtmd_image_preprocessor(hparams) {}
-    static clip_image_size get_target_size(const clip_hparams & hparams, const clip_image_size & original_size);
-    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
-    virtual clip_image_size target_size(const clip_image_size & original_size) const { return get_target_size(hparams, original_size); }
+    mtmd_image_preprocessor_dyn_size(const mtmd_model * model) : mtmd_image_preprocessor(model) {}
+    mtmd_image_preprocessor_dyn_size(const mtmd_hparams & hparams) : mtmd_image_preprocessor(hparams) {}
+    static mtmd_image_size get_target_size(const mtmd_hparams & hparams, const mtmd_image_size & original_size);
+    mtmd_image_preproc_out preprocess(const mtmd_image_u8 & img) const override;
+    virtual mtmd_image_size target_size(const mtmd_image_size & original_size) const { return get_target_size(hparams, original_size); }
 };
 
 // Qwen3-VL, same as dyn_size for images, video frames are sized as Qwen3VLVideoProcessor
 struct mtmd_image_preprocessor_qwen3vl : mtmd_image_preprocessor_dyn_size {
     using mtmd_image_preprocessor_dyn_size::mtmd_image_preprocessor_dyn_size;
     // the video helper sizes the frames (get_video_frame_size), they are only snapped to the grid
-    mtmd_image_preproc_out preprocess_video_frame(const clip_image_u8 & img) const override;
-    bool get_video_frame_size(int n_frames, int width, int height, clip_image_size & out) const override;
+    mtmd_image_preproc_out preprocess_video_frame(const mtmd_image_u8 & img) const override;
+    bool get_video_frame_size(int n_frames, int width, int height, mtmd_image_size & out) const override;
 
-    mtmd_image_preproc_out resize_to(const clip_image_u8 & img, const clip_image_size & size) const;
+    mtmd_image_preproc_out resize_to(const mtmd_image_u8 & img, const mtmd_image_size & size) const;
     // with temporal_factor > 1 it is the Qwen3-VL video variant over n_frames
-    static clip_image_size smart_resize(int width, int height, int factor, int64_t min_pixels, int64_t max_pixels,
+    static mtmd_image_size smart_resize(int width, int height, int factor, int64_t min_pixels, int64_t max_pixels,
                                         int n_frames = 1, int temporal_factor = 1);
 };
 
 // LFM3-VL, same as qwen3vl but images are sized exactly as the transformers Qwen2-VL smart_resize
 struct mtmd_image_preprocessor_lfm3vl : mtmd_image_preprocessor_qwen3vl {
     using mtmd_image_preprocessor_qwen3vl::mtmd_image_preprocessor_qwen3vl;
-    clip_image_size target_size(const clip_image_size & original_size) const override;
+    mtmd_image_size target_size(const mtmd_image_size & original_size) const override;
 };
 
 // GLM 5.3 flash, similar to dyn_size, but each edge is aligned up to patch_size*n_merge, and max budget is met by a search over the height with the width scaled proportionally
 struct mtmd_image_preprocessor_glm5v : mtmd_image_preprocessor {
-    mtmd_image_preprocessor_glm5v(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
-    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
+    mtmd_image_preprocessor_glm5v(const mtmd_model * model) : mtmd_image_preprocessor(model) {}
+    mtmd_image_preproc_out preprocess(const mtmd_image_u8 & img) const override;
 };
 
 // similar to mtmd_image_preprocessor_dyn_size, but cap the longest edge at hparams.image_longest_edge, while preserving aspect ratio
 struct mtmd_image_preprocessor_longest_edge : mtmd_image_preprocessor {
-    mtmd_image_preprocessor_longest_edge(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
-    static clip_image_size get_target_size(const clip_hparams & hparams, const clip_image_size & original_size);
-    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
+    mtmd_image_preprocessor_longest_edge(const mtmd_model * model) : mtmd_image_preprocessor(model) {}
+    static mtmd_image_size get_target_size(const mtmd_hparams & hparams, const mtmd_image_size & original_size);
+    mtmd_image_preproc_out preprocess(const mtmd_image_u8 & img) const override;
 };
 
 // ref: inference/image_processor.py in the HF repo (DeepSeek-V4-Flash-Vision)
 struct mtmd_image_preprocessor_deepseek4v : mtmd_image_preprocessor {
-    mtmd_image_preprocessor_deepseek4v(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
-    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
+    mtmd_image_preprocessor_deepseek4v(const mtmd_model * model) : mtmd_image_preprocessor(model) {}
+    mtmd_image_preproc_out preprocess(const mtmd_image_u8 & img) const override;
 
 private:
     struct grid_info {
@@ -193,8 +193,8 @@ private:
 
 // ref: inference/image_processor.py in the HF repo (DeepSeek-V4.1-Flash): plan_image_grid / load_image
 struct mtmd_image_preprocessor_deepseek41v : mtmd_image_preprocessor {
-    mtmd_image_preprocessor_deepseek41v(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
-    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
+    mtmd_image_preprocessor_deepseek41v(const mtmd_model * model) : mtmd_image_preprocessor(model) {}
+    mtmd_image_preproc_out preprocess(const mtmd_image_u8 & img) const override;
     // target pixel size (multiples of patch_size) for an image of the given size, exposed for tests
     static void plan_grid(int width, int height, int p, int r, int max_n_token, int min_pixels,
                           int & best_width, int & best_height);
@@ -203,7 +203,7 @@ struct mtmd_image_preprocessor_deepseek41v : mtmd_image_preprocessor {
 // custom llava-uhd slicing logic for MiniCPM-V
 struct mtmd_image_preprocessor_minicpmv : mtmd_image_preprocessor_llava_uhd {
     using mtmd_image_preprocessor_llava_uhd::mtmd_image_preprocessor_llava_uhd;
-    slice_instructions get_slice_instructions(const clip_image_size & original_size) const override;
+    slice_instructions get_slice_instructions(const mtmd_image_size & original_size) const override;
 
 protected:
     // always patch_size * 4, even in 4x mode (the 2x2 vit_merger slot stays)
@@ -242,50 +242,50 @@ protected:
 // ref: https://github.com/huggingface/transformers/blob/v5.1.0/src/transformers/models/lfm2_vl/image_processing_lfm2_vl_fast.py
 struct mtmd_image_preprocessor_lfm2 : mtmd_image_preprocessor_llava_uhd {
     using mtmd_image_preprocessor_llava_uhd::mtmd_image_preprocessor_llava_uhd;
-    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
-    slice_instructions get_slice_instructions(const clip_image_size & original_size) const override;
+    mtmd_image_preproc_out preprocess(const mtmd_image_u8 & img) const override;
+    slice_instructions get_slice_instructions(const mtmd_image_size & original_size) const override;
 
-    static bool should_tile(const clip_hparams & hparams, const clip_image_size & original_size);
-    static clip_image_size smart_resize(const clip_hparams & hparams, const clip_image_size & original_size);
-    static clip_image_size get_grid_layout(const clip_hparams & hparams, int height, int width);
+    static bool should_tile(const mtmd_hparams & hparams, const mtmd_image_size & original_size);
+    static mtmd_image_size smart_resize(const mtmd_hparams & hparams, const mtmd_image_size & original_size);
+    static mtmd_image_size get_grid_layout(const mtmd_hparams & hparams, int height, int width);
 
 private:
-    static clip_image_size find_closest_aspect_ratio(
-            const clip_hparams & hparams,
+    static mtmd_image_size find_closest_aspect_ratio(
+            const mtmd_hparams & hparams,
             double aspect_ratio,
-            const std::vector<clip_image_size> & target_ratios,
+            const std::vector<mtmd_image_size> & target_ratios,
             int width, int height);
-    static std::vector<clip_image_size> get_target_ratios(const clip_hparams & hparams);
+    static std::vector<mtmd_image_size> get_target_ratios(const mtmd_hparams & hparams);
 };
 
 struct mtmd_image_preprocessor_idefics3 : mtmd_image_preprocessor_llava_uhd {
-    mtmd_image_preprocessor_idefics3(const clip_ctx * ctx) : mtmd_image_preprocessor_llava_uhd(ctx) {}
-    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
+    mtmd_image_preprocessor_idefics3(const mtmd_model * model) : mtmd_image_preprocessor_llava_uhd(model) {}
+    mtmd_image_preproc_out preprocess(const mtmd_image_u8 & img) const override;
 };
 
 struct mtmd_image_preprocessor_internvl : mtmd_image_preprocessor_llava_uhd {
-    mtmd_image_preprocessor_internvl(const clip_ctx * ctx) : mtmd_image_preprocessor_llava_uhd(ctx) {}
-    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
+    mtmd_image_preprocessor_internvl(const mtmd_model * model) : mtmd_image_preprocessor_llava_uhd(model) {}
+    mtmd_image_preproc_out preprocess(const mtmd_image_u8 & img) const override;
 };
 
 // stretch the image to a grid of tiles, add a thumbnail if there is more than 1 tile
 // ref: https://github.com/huggingface/transformers/blob/main/src/transformers/models/cohere2_vision/image_processing_cohere2_vision.py
 struct mtmd_image_preprocessor_cohere2v : mtmd_image_preprocessor_llava_uhd {
-    mtmd_image_preprocessor_cohere2v(const clip_ctx * ctx) : mtmd_image_preprocessor_llava_uhd(ctx) {}
-    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
-    slice_instructions get_slice_instructions(const clip_image_size & original_size) const override;
+    mtmd_image_preprocessor_cohere2v(const mtmd_model * model) : mtmd_image_preprocessor_llava_uhd(model) {}
+    mtmd_image_preproc_out preprocess(const mtmd_image_u8 & img) const override;
+    slice_instructions get_slice_instructions(const mtmd_image_size & original_size) const override;
 };
 
 // DeepSeek-OCR (v1/v2) global view + optional local tile grid
 struct mtmd_image_preprocessor_deepseekocr : mtmd_image_preprocessor {
-    mtmd_image_preprocessor_deepseekocr(const clip_ctx * ctx)
-        : mtmd_image_preprocessor(ctx),
-            fuse_row(clip_get_projector_type(ctx) == PROJECTOR_TYPE_DEEPSEEKOCR),
+    mtmd_image_preprocessor_deepseekocr(const mtmd_model * model)
+        : mtmd_image_preprocessor(model),
+            fuse_row(model->proj_type == PROJECTOR_TYPE_DEEPSEEKOCR),
           base_size(hparams.image_size),
           tile_size(hparams.preproc_tile_size),
           min_tiles(hparams.preproc_min_tiles),
           max_tiles(hparams.preproc_max_tiles) {}
-    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
+    mtmd_image_preproc_out preprocess(const mtmd_image_u8 & img) const override;
 
 private:
     bool fuse_row; // v1 fuses a tile-row into one image; v2 keeps tiles separate
@@ -294,19 +294,19 @@ private:
     int min_tiles;
     int max_tiles;
 
-    std::vector<clip_image_size> get_target_ratios() const;
-    clip_image_size find_closest_aspect_ratio(
+    std::vector<mtmd_image_size> get_target_ratios() const;
+    mtmd_image_size find_closest_aspect_ratio(
             float aspect_ratio,
-            const std::vector<clip_image_size> & target_ratios,
+            const std::vector<mtmd_image_size> & target_ratios,
             int width, int height) const;
 };
 
 // custom image preprocessing for Step3VL
 // ref: https://huggingface.co/stepfun-ai/Step3-VL-10B/blob/main/processing_step3.py
 struct mtmd_image_preprocessor_step3vl : mtmd_image_preprocessor_llava_uhd {
-    mtmd_image_preprocessor_step3vl(const clip_ctx * ctx) : mtmd_image_preprocessor_llava_uhd(ctx) {}
-    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
-    static slice_instructions build_slice_instructions(const clip_hparams & params, const clip_image_size & prepared_size);
+    mtmd_image_preprocessor_step3vl(const mtmd_model * model) : mtmd_image_preprocessor_llava_uhd(model) {}
+    mtmd_image_preproc_out preprocess(const mtmd_image_u8 & img) const override;
+    static slice_instructions build_slice_instructions(const mtmd_hparams & params, const mtmd_image_size & prepared_size);
 
 private:
     static constexpr int   default_image_longest_edge = 3024;
@@ -316,33 +316,33 @@ private:
     static constexpr float crop_rounding_threshold    = 0.2f;
 
     void img_u8_resize_bilinear_to_f32(
-            const clip_image_u8 & src,
-            clip_image_f32 & dst,
+            const mtmd_image_u8 & src,
+            mtmd_image_f32 & dst,
             int target_width,
             int target_height,
             const float mean[3],
             const float std[3]) const;
-    static int get_image_longest_edge(const clip_hparams & params);
-    static int determine_window_size(const clip_hparams & params, int longer, int shorter);
+    static int get_image_longest_edge(const mtmd_hparams & params);
+    static int determine_window_size(const mtmd_hparams & params, int longer, int shorter);
     static int calc_crop_extent(int length, int window_size);
     static std::vector<int> calc_grid(int length, int window_size);
-    static clip_image_u8 prepare_image(const clip_image_u8 & img, const clip_hparams & params);
-    static clip_image_u8 crop_with_black_padding(const clip_image_u8 & image, int x, int y, int w, int h);
+    static mtmd_image_u8 prepare_image(const mtmd_image_u8 & img, const mtmd_hparams & params);
+    static mtmd_image_u8 crop_with_black_padding(const mtmd_image_u8 & image, int x, int y, int w, int h);
 };
 
 struct mtmd_image_preprocessor_youtuvl : mtmd_image_preprocessor {
-    mtmd_image_preprocessor_youtuvl(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
-    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
+    mtmd_image_preprocessor_youtuvl(const mtmd_model * model) : mtmd_image_preprocessor(model) {}
+    mtmd_image_preproc_out preprocess(const mtmd_image_u8 & img) const override;
 };
 
-// llava-next "anyres": stacks the overview and all tiles into one image, assembled by clip in a single graph
+// llava-next "anyres": stacks the overview and all tiles into one image, assembled in a single graph
 struct mtmd_image_preprocessor_granite : mtmd_image_preprocessor_llava_uhd {
-    mtmd_image_preprocessor_granite(const clip_ctx * ctx) : mtmd_image_preprocessor_llava_uhd(ctx) {}
-    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
+    mtmd_image_preprocessor_granite(const mtmd_model * model) : mtmd_image_preprocessor_llava_uhd(model) {}
+    mtmd_image_preproc_out preprocess(const mtmd_image_u8 & img) const override;
 };
 
 // pick the patch grid closest to the input aspect ratio under the per-image token cap, stretch-resize.
 struct mtmd_image_preprocessor_muse_glimmer : mtmd_image_preprocessor {
-    mtmd_image_preprocessor_muse_glimmer(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
-    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) const override;
+    mtmd_image_preprocessor_muse_glimmer(const mtmd_model * model) : mtmd_image_preprocessor(model) {}
+    mtmd_image_preproc_out preprocess(const mtmd_image_u8 & img) const override;
 };

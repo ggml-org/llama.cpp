@@ -3,7 +3,7 @@
 // Chatterbox generation graphs: flow encoder, cfm estimator, s3 tokenizer and hift vocoder
 
 // x [C, T]: y = W x + b with torch Linear weights stored as [in, out]
-ggml_tensor * clip_graph_chatterbox_base::cbx_linear(ggml_tensor * w, ggml_tensor * b, ggml_tensor * x) const {
+ggml_tensor * mtmd_graph_chatterbox_base::cbx_linear(ggml_tensor * w, ggml_tensor * b, ggml_tensor * x) const {
     ggml_tensor * y = ggml_mul_mat(ctx0, w, x);
     if (b) {
         y = ggml_add(ctx0, y, b);
@@ -12,7 +12,7 @@ ggml_tensor * clip_graph_chatterbox_base::cbx_linear(ggml_tensor * w, ggml_tenso
 }
 
 // conv1d over time with asymmetric zero padding: x [C, T] -> [OC, T_out], kernel [K, IC, OC]
-ggml_tensor * clip_graph_chatterbox_base::cbx_conv1d(ggml_tensor * k, ggml_tensor * b, ggml_tensor * x,
+ggml_tensor * mtmd_graph_chatterbox_base::cbx_conv1d(ggml_tensor * k, ggml_tensor * b, ggml_tensor * x,
                                                      int stride, int pad_l, int pad_r) const {
     ggml_tensor * xt = ggml_cont(ctx0, ggml_transpose(ctx0, x)); // [T, C]
     if (pad_l > 0) {
@@ -34,7 +34,7 @@ ggml_tensor * clip_graph_chatterbox_base::cbx_conv1d(ggml_tensor * k, ggml_tenso
 }
 
 // x [C, T] -> symmetric-padded dilated conv -> [OC, T]
-ggml_tensor * clip_graph_chatterbox_base::cbx_conv1d_dil(ggml_tensor * k, ggml_tensor * b, ggml_tensor * x,
+ggml_tensor * mtmd_graph_chatterbox_base::cbx_conv1d_dil(ggml_tensor * k, ggml_tensor * b, ggml_tensor * x,
                                                          int pad, int dil) const {
     ggml_tensor * xt = ggml_cont(ctx0, ggml_transpose(ctx0, x));
     ggml_tensor * y = ggml_conv_1d(ctx0, k, xt, 1, pad, dil);
@@ -61,7 +61,7 @@ static ggml_tensor * cbx_rel_shift(ggml_context * ctx0, ggml_tensor * bd, int T)
 }
 
 // espnet rel-pos self attention block, pre-norm, x [512, T], pos [512, 2T-1]
-ggml_tensor * clip_graph_chatterbox::enc_layer(const clip_chatterbox::enc_layer & l, ggml_tensor * x,
+ggml_tensor * mtmd_graph_chatterbox::enc_layer(const mtmd_chatterbox::enc_layer & l, ggml_tensor * x,
                                                ggml_tensor * pos, int T) {
     const int n_head = 8;
     const int d_head = 64;
@@ -121,14 +121,14 @@ static ggml_tensor * cbx_mish(ggml_context * ctx0, ggml_tensor * x) {
 }
 
 // causal block: conv k3 left-padded, layer norm over channels, mish; x [C, T]
-ggml_tensor * clip_graph_chatterbox::causal_block(const clip_chatterbox::causal_block & b, ggml_tensor * x) {
+ggml_tensor * mtmd_graph_chatterbox::causal_block(const mtmd_chatterbox::causal_block & b, ggml_tensor * x) {
     x = cbx_conv1d(b.conv_w, b.conv_b, x, 1, (int) b.conv_w->ne[0] - 1, 0);
     x = build_norm(x, b.norm_w, b.norm_b, NORM_TYPE_NORMAL, 1e-5f, -1);
     return cbx_mish(ctx0, x);
 }
 
 // resnet block with time conditioning; x [C, T], temb [1024]
-ggml_tensor * clip_graph_chatterbox::resnet(const clip_chatterbox::resnet & r, ggml_tensor * x, ggml_tensor * temb) {
+ggml_tensor * mtmd_graph_chatterbox::resnet(const mtmd_chatterbox::resnet & r, ggml_tensor * x, ggml_tensor * temb) {
     ggml_tensor * h = causal_block(r.block1, x);
     ggml_tensor * tproj = cbx_linear(r.mlp_w, r.mlp_b, cbx_mish(ctx0, temb));
     h = ggml_add(ctx0, h, tproj); // broadcast [256, 1] over T
@@ -138,7 +138,7 @@ ggml_tensor * clip_graph_chatterbox::resnet(const clip_chatterbox::resnet & r, g
 }
 
 // diffusers-style transformer block, full attention; x [256, T]
-ggml_tensor * clip_graph_chatterbox::tfm_block(const clip_chatterbox::tfm_block & b, ggml_tensor * x) {
+ggml_tensor * mtmd_graph_chatterbox::tfm_block(const mtmd_chatterbox::tfm_block & b, ggml_tensor * x) {
     const int n_head = 8;
     const int d_head = 64;
     const int T = (int) x->ne[1];
@@ -157,7 +157,7 @@ ggml_tensor * clip_graph_chatterbox::tfm_block(const clip_chatterbox::tfm_block 
 }
 
 // one estimator evaluation; x_noise, mu, cond [80, T], spks [80], temb [1024]
-ggml_tensor * clip_graph_chatterbox::estimator(ggml_tensor * x_noise, ggml_tensor * mu, ggml_tensor * spks,
+ggml_tensor * mtmd_graph_chatterbox::estimator(ggml_tensor * x_noise, ggml_tensor * mu, ggml_tensor * spks,
                                                ggml_tensor * cond, ggml_tensor * temb, int T) {
     const auto & c = model.cbx;
 
@@ -199,7 +199,7 @@ ggml_tensor * clip_graph_chatterbox::estimator(ggml_tensor * x_noise, ggml_tenso
 }
 
 // s3 tokenizer encoder: log-mel [T, 128] -> fsq code [8, T / 4], rounded to base 3 tokens on the host
-ggml_cgraph * clip_graph_chatterbox::build_s3tok(int T) {
+ggml_cgraph * mtmd_graph_chatterbox::build_s3tok(int T) {
     const auto & c = model.cbx;
     const int n_head = 20;
     const int d_head = 64;
@@ -261,14 +261,14 @@ ggml_cgraph * clip_graph_chatterbox::build_s3tok(int T) {
     return gf;
 }
 
-ggml_cgraph * clip_graph_chatterbox::build() {
-    if (gen_process == CLIP_GEN_PROCESS_TTS_VOCODE) {
+ggml_cgraph * mtmd_graph_chatterbox::build() {
+    if (gen_process == MTMD_SUBCTX_GEN_PROCESS_TTS_VOCODE) {
         return build_vocoder(vocode_n_mel, vocode_n_stft);
     }
-    if (gen_process == CLIP_GEN_PROCESS_TOKENIZE) {
+    if (gen_process == MTMD_SUBCTX_GEN_PROCESS_TOKENIZE) {
         return build_s3tok(img.nx());
     }
-    if (gen_process != CLIP_GEN_PROCESS_TTS) {
+    if (gen_process != MTMD_SUBCTX_GEN_PROCESS_TTS) {
         // load-time buffer sizing path
         ggml_tensor * inp = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
         ggml_set_name(inp, "inp_stub");
@@ -355,7 +355,7 @@ ggml_cgraph * clip_graph_chatterbox::build() {
     const bool meanflow = c.time_embed_mixer_w != nullptr;
     const int n_steps = meanflow ? 2 : 10;
 
-    // span points, same schedule as the host side sinusoid fill in clip.cpp
+    // span points, same schedule as the host side sinusoid fill in mtmd-subcontext.cpp
     float span[11];
     for (int i = 0; i <= n_steps; i++) {
         const float u = (float) i / n_steps;
@@ -454,7 +454,7 @@ static ggml_tensor * cbx_snake(ggml_context * ctx0, ggml_tensor * x, ggml_tensor
 }
 
 // hifigan-snake resblock; kernels with dilations 1/3/5 on convs1, 1 on convs2
-ggml_tensor * clip_graph_chatterbox::hift_resblock(const clip_chatterbox::hift_res & r, ggml_tensor * x) {
+ggml_tensor * mtmd_graph_chatterbox::hift_resblock(const mtmd_chatterbox::hift_res & r, ggml_tensor * x) {
     static const int dil[3] = {1, 3, 5};
     for (size_t j = 0; j < r.units.size(); j++) {
         const auto & u = r.units[j];
@@ -471,7 +471,7 @@ ggml_tensor * clip_graph_chatterbox::hift_resblock(const clip_chatterbox::hift_r
 }
 
 // mel [80, T] + source stft [18, T_stft] -> conv_post output [18, T_stft2]
-ggml_cgraph * clip_graph_chatterbox::build_vocoder(int n_mel, int n_stft) {
+ggml_cgraph * mtmd_graph_chatterbox::build_vocoder(int n_mel, int n_stft) {
     const auto & c = model.cbx;
 
     ggml_tensor * mel = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 80, n_mel);
