@@ -1,6 +1,7 @@
 <!--
-	Roster: a headline with a motif beside it, the lede and chips, then a labelled row of cards. The cards are
-	the layout's content: models in a drop, features in a release. They go one, two or three across with the format.
+	Roster: a headline, the lede with a motif beside it and the chips under them (on a wide format, the motif beside
+	the whole block), then a labelled row of cards. The cards are the layout's content: models in a drop, features in
+	a release. They go one, two or three across with the format.
 -->
 <script lang="ts">
 	import HeadlineBlock from '../posts/HeadlineBlock.svelte';
@@ -58,6 +59,29 @@
 	.motif {
 		grid-column: 5 / -1;
 		align-self: stretch;
+	}
+	/* on a square or tall format with a lede, the headline and the chips take the full width, so neither wraps more
+	   than it must, and the lede goes between them beside the motif (4.5u high at the least): the block's parts are
+	   laid out in this grid, at the text stack's rhythm. Without a lede, the motif stays beside the block */
+	:global(:is(.shape-square, .shape-tall)) .top:has(:global(.t-lede)):not(.plain) {
+		row-gap: var(--stack);
+	}
+	:global(:is(.shape-square, .shape-tall))
+		.top:has(:global(.t-lede)):not(.plain)
+		> :global(.block) {
+		display: contents;
+	}
+	:global(:is(.shape-square, .shape-tall))
+		.top:has(:global(.t-lede)):not(.plain)
+		:global(:is(.t-headline, .chips)) {
+		grid-column: 1 / -1;
+	}
+	:global(:is(.shape-square, .shape-tall)) .top:has(:global(.t-lede)):not(.plain) :global(.t-lede) {
+		grid-column: 1 / span 4;
+	}
+	:global(:is(.shape-square, .shape-tall)) .top:has(:global(.t-lede)) .motif {
+		grid-row: 2;
+		min-height: calc(var(--u) * 4.5);
 	}
 	.t-label {
 		margin-top: auto;

@@ -43,7 +43,7 @@
 	.chips {
 		display: flex;
 		flex-wrap: wrap;
-		gap: calc(var(--u) * 0.28);
+		gap: calc(var(--u) * 0.2);
 		margin-top: calc(var(--stack-after) - var(--stack));
 	}
 </style>
