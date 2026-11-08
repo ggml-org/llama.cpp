@@ -366,7 +366,8 @@ struct moe_cache_lsq {
     }
 };
 
-// auto CPU share: picks off (no CPU part) or one of the levels for the next ubatches
+// auto CPU share: picks off (no CPU part) or 0.95 for the next ubatches
+// the share levels between 0.7 and 0.98 differ by a few percent, less than the error of the fits, so only off and on are compared
 // each level has a ghost, tag-only caches that replay the selected experts at that share from the start,
 // so the ghost gives the upload and CPU bytes of each ubatch as if the cache had always used that level
 // the cost of a level = its bytes, priced by least squares fits of the measured ubatch times:
@@ -375,14 +376,13 @@ struct moe_cache_lsq {
 // F = B_on - B_off is the fixed cost of the CPU part; the on fit needs uploads and CPU bytes that do not rise together,
 // so each ubatch uploads half or 1.5x the upload fraction of the level, at random
 struct moe_cache_ctl {
-    static constexpr int   n_level = 6;
-    static constexpr float levels[n_level] = { 0.0f, 0.7f, 0.8f, 0.9f, 0.95f, 0.98f };
-    static constexpr int   level_start = 4;
+    static constexpr int   n_level = 2;
+    static constexpr float levels[n_level] = { 0.0f, 0.95f };
+    static constexpr int   level_start = 1;
 
     static constexpr double lambda      = 1.0 - 1.0/512; // forgetting of the fits, per ubatch
     static constexpr double ema_a       = 1.0/128;       // of the ghost bytes
-    static constexpr double gain_min    = 0.02;          // of the ubatch time, to change the level
-    static constexpr double gain_min_part = 0.05;        // of the ubatch time, to add or remove the CPU part
+    static constexpr double gain_min    = 0.05;          // of the ubatch time, to change the level
     static constexpr int    n_dwell     = 128;           // ubatches between changes
     static constexpr int    n_skip      = 2;             // ubatches not fitted after a change of the CPU part (graph rebuild)
     static constexpr int    n_probe     = 48;            // ubatches off to fit B_off
@@ -593,8 +593,7 @@ struct moe_cache_ctl {
             }
             LLAMA_LOG_CONT(" us\n");
         }
-        const bool part = (levels[best] > 0.0) != (levels[cur] > 0.0);
-        if (best != cur && n_full - last_change >= n_dwell && c[best] + (part ? gain_min_part : gain_min)*ema_t < c[cur]) {
+        if (best != cur && n_full - last_change >= n_dwell && c[best] + gain_min*ema_t < c[cur]) {
             LLAMA_LOG_INFO("moe-cache auto: share %.2f -> %.2f\n", levels[cur], levels[best]);
             set_level(best);
         }
