@@ -447,7 +447,7 @@ struct mmid_row_mapping {
     int32_t i2;
 };
 
-struct ggml_sycl_gg_tile {
+struct ggml_sycl_grouped_gemm_tile {
     int32_t expert;
     int32_t n0;
     int32_t n1;
@@ -556,7 +556,7 @@ struct ggml_backend_sycl_context {
     std::unique_ptr<ggml_sycl_pool> host_pools[GGML_SYCL_MAX_DEVICES];
 
     std::vector<mmid_row_mapping> mmid_row_mapping_host;
-    std::vector<ggml_sycl_gg_tile> mmid_tile_schedule_host;
+    std::vector<ggml_sycl_grouped_gemm_tile> mmid_tile_schedule_host;
 
     static std::unique_ptr<ggml_sycl_pool> new_pool_for_device(queue_ptr qptr, int device);
 

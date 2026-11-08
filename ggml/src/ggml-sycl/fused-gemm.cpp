@@ -821,7 +821,7 @@ static void fused_dequant_gemm_tile(
     const int b0, const int n0, const int n1,
     sycl::local_accessor<typename S::tsa, 1> tile_a,
     sycl::local_accessor<float, 1> tile_c,
-    const sycl::nd_item<2> & item, ggml_sycl_gg_rows dst_rows = {}) {
+    const sycl::nd_item<2> & item, ggml_sycl_grouped_gemm_rows dst_rows = {}) {
     if constexpr (fg_built<S::SG>()) {
         using EA = typename S::EA;
         using TA = typename S::ta;
@@ -962,17 +962,18 @@ static void fused_dequant_gemm_launch(const void * src0, const typename S::tsb *
 // grouped: work-group (t, mt) is tile t of the schedule; its B columns sit at t * BN
 template <typename S, typename block_q_t, bool reordered>
 static void grouped_dequant_gemm_launch(const char * src0_dd, const size_t expert_stride,
-                                        const ggml_sycl_gg_tile * tiles_ptr, const typename S::tsb * packed, float * dst,
-                                        const int M, const int Npad, const int K, const int64_t n_tiles,
-                                        const int64_t groups_m, dpct::queue_ptr stream, ggml_sycl_gg_rows dst_rows = {}) {
+                                        const ggml_sycl_grouped_gemm_tile * tiles_ptr, const typename S::tsb * packed,
+                                        float * dst, const int M, const int Npad, const int K, const int64_t n_tiles,
+                                        const int64_t groups_m, dpct::queue_ptr stream,
+                                        ggml_sycl_grouped_gemm_rows dst_rows = {}) {
     stream->submit([&](sycl::handler & cgh) {
         sycl::local_accessor<typename S::tsa, 1> tile_a(FG_KSPLIT * S::SG_ROWS * FG_BK, cgh);
         sycl::local_accessor<float, 1>          tile_c(FG_KSPLIT * S::SG_ROWS * S::BN, cgh);
         cgh.parallel_for(
             sycl::nd_range<2>(sycl::range<2>(n_tiles, groups_m * S::WG_SIZE), sycl::range<2>(1, S::WG_SIZE)),
             [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(S::SG)]] {
-                const int               t    = item.get_group(0);
-                const ggml_sycl_gg_tile tile = tiles_ptr[t];
+                const int                         t    = item.get_group(0);
+                const ggml_sycl_grouped_gemm_tile tile = tiles_ptr[t];
                 if (tile.n0 == tile.n1) {
                     return;
                 }
@@ -986,17 +987,17 @@ static void grouped_dequant_gemm_launch(const char * src0_dd, const size_t exper
 // src1 f32 rows -> packed [K/V][n_tiles*BN][V], tile t holds its rows [n0, n1) at columns t*BN..,
 // zero past n1. The column runs fastest so a sub-group writes one contiguous run.
 template <typename S>
-static void grouped_gemm_pack_b(const float * y, typename S::tsb * packed, const ggml_sycl_gg_tile * tiles, int Npad,
-                                int K, dpct::queue_ptr stream) {
+static void grouped_gemm_pack_b(const float * y, typename S::tsb * packed, const ggml_sycl_grouped_gemm_tile * tiles,
+                                int Npad, int K, dpct::queue_ptr stream) {
     using E        = typename S::EB;
     constexpr int V = S::VNNI;
     const int kqs   = K / V;
     stream->parallel_for(sycl::range<1>((size_t) Npad * kqs), [=](sycl::id<1> id) {
-        const size_t idx = id[0];
-        const int    kq  = idx / Npad;
-        const int    n   = idx - (size_t) kq * Npad;
-        const ggml_sycl_gg_tile tile = tiles[n / S::BN];
-        const int    row = tile.n0 + n % S::BN;
+        const size_t                      idx  = id[0];
+        const int                         kq   = idx / Npad;
+        const int                         n    = idx - (size_t) kq * Npad;
+        const ggml_sycl_grouped_gemm_tile tile = tiles[n / S::BN];
+        const int                         row  = tile.n0 + n % S::BN;
         // one guarded load run per work-item, as a per-element select costs ~1.5% prefill
         typename S::tsb vals[V] = {};
         if (row < tile.n1) {
@@ -1125,7 +1126,7 @@ bool ggml_sycl_fused_dequant_gemm(ggml_type src0_type, bool src0_reordered, cons
 template <typename S>
 static bool fg_grouped_run(ggml_type src0_type, bool reordered, const void * src0_base, size_t expert_stride,
                            const float * src1, float * dst, const int64_t * expert_row_offsets, int64_t n_as, int64_t M,
-                           int64_t K, std::vector<ggml_sycl_gg_tile> & tiles, ggml_sycl_pool & pool,
+                           int64_t K, std::vector<ggml_sycl_grouped_gemm_tile> & tiles, ggml_sycl_pool & pool,
                            dpct::queue_ptr stream) {
     // the host knows every slice, so it lays out the work-groups: no search on the device
     tiles.clear();
@@ -1141,15 +1142,16 @@ static bool fg_grouped_run(ggml_type src0_type, bool reordered, const void * src
 
     const int64_t max_tiles = grouped_gemm_max_tiles(expert_row_offsets[n_as], n_as, S::BN);
     GGML_ASSERT(n_tiles <= max_tiles);
-    ggml_sycl_pool_alloc<ggml_sycl_gg_tile> tiles_dev(pool, max_tiles);
-    SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(tiles_dev.get(), tiles.data(), n_tiles * sizeof(ggml_sycl_gg_tile))));
+    ggml_sycl_pool_alloc<ggml_sycl_grouped_gemm_tile> tiles_dev(pool, max_tiles);
+    SYCL_CHECK(CHECK_TRY_ERROR(
+        stream->memcpy(tiles_dev.get(), tiles.data(), n_tiles * sizeof(ggml_sycl_grouped_gemm_tile))));
 
     ggml_sycl_pool_alloc<typename S::tsb> packed_b(pool, (size_t) K * max_tiles * S::BN);
     grouped_gemm_pack_b<S>(src1, packed_b.get(), tiles_dev.get(), Npad, (int) K, stream);
 
-    const typename S::tsb *   packed    = packed_b.get();
-    const ggml_sycl_gg_tile * tiles_ptr = tiles_dev.get();
-    const char *              src0_dd   = (const char *) src0_base;
+    const typename S::tsb *             packed    = packed_b.get();
+    const ggml_sycl_grouped_gemm_tile * tiles_ptr = tiles_dev.get();
+    const char *                        src0_dd   = (const char *) src0_base;
     return fg_visit_type(src0_type, reordered, [&](auto tag) {
         using T = decltype(tag);
         grouped_dequant_gemm_launch<S, typename T::type, T::reordered>(src0_dd, expert_stride, tiles_ptr, packed, dst,
@@ -1161,7 +1163,7 @@ static bool fg_grouped_run(ggml_type src0_type, bool reordered, const void * src
 bool ggml_sycl_grouped_dequant_gemm(ggml_type src0_type, bool reordered, const void * src0_base, size_t expert_stride,
                                     const float * src1, int32_t src1_prec, float * dst,
                                     const int64_t * expert_row_offsets, int64_t n_as, int64_t M, int64_t K,
-                                    int64_t total_rows, std::vector<ggml_sycl_gg_tile> & tiles,
+                                    int64_t total_rows, std::vector<ggml_sycl_grouped_gemm_tile> & tiles,
                                     ggml_sycl_pool & pool, dpct::queue_ptr stream) {
     int64_t n_active = 0;
     for (int64_t e = 0; e < n_as; ++e) {
@@ -1195,7 +1197,8 @@ using mmid_sched_atomic = sycl::atomic_ref<uint32_t, sycl::memory_order::relaxed
 
 bool ggml_sycl_build_mmid_schedule(const int32_t * ids_dev, size_t ids_token_stride, int64_t n_as, int64_t n_ids,
                                    int64_t n_tokens, int64_t n_tiles_max, mmid_row_mapping * row_mapping,
-                                   ggml_sycl_gg_tile * tiles, uint32_t * expert_offsets, dpct::queue_ptr stream) {
+                                   ggml_sycl_grouped_gemm_tile * tiles, uint32_t * expert_offsets,
+                                   dpct::queue_ptr stream) {
     if (n_as <= 0 || n_as > GGML_SYCL_MMID_SCHED_MAX_EXPERTS || n_ids <= 0 || n_tokens <= 0 || n_ids > INT32_MAX / n_tokens) {
         return false;
     }
@@ -1299,9 +1302,10 @@ bool ggml_sycl_build_mmid_schedule(const int32_t * ids_dev, size_t ids_token_str
 
 template <typename S>
 static bool fg_grouped_device_run(ggml_type src0_type, bool reordered, const void * src0_base, size_t expert_stride,
-                                   ggml_sycl_gg_rows src1, ggml_sycl_gg_rows dst, const int32_t * ids_dev,
-                                   size_t ids_token_stride, int64_t n_as, int64_t n_ids, int64_t n_tokens,
-                                   int64_t M, int64_t K, ggml_sycl_pool & pool, dpct::queue_ptr stream) {
+                                   ggml_sycl_grouped_gemm_rows src1, ggml_sycl_grouped_gemm_rows dst,
+                                   const int32_t * ids_dev, size_t ids_token_stride, int64_t n_as, int64_t n_ids,
+                                   int64_t n_tokens, int64_t M, int64_t K, ggml_sycl_pool & pool,
+                                   dpct::queue_ptr stream) {
     if constexpr (S::BN != GGML_SYCL_FG_BN) {
         return false;
     } else {
@@ -1312,7 +1316,7 @@ static bool fg_grouped_device_run(ggml_type src0_type, bool reordered, const voi
         }
         const int Npad = (int) (max_tiles * S::BN);
         ggml_sycl_pool_alloc<mmid_row_mapping> rows(pool, total_rows);
-        ggml_sycl_pool_alloc<ggml_sycl_gg_tile> tiles(pool, max_tiles);
+        ggml_sycl_pool_alloc<ggml_sycl_grouped_gemm_tile> tiles(pool, max_tiles);
         ggml_sycl_pool_alloc<uint32_t> offsets(pool, n_as + 1);
         if (!ggml_sycl_build_mmid_schedule(ids_dev, ids_token_stride, n_as, n_ids, n_tokens, max_tiles,
                                            rows.get(), tiles.get(), offsets.get(), stream)) {
@@ -1321,7 +1325,7 @@ static bool fg_grouped_device_run(ggml_type src0_type, bool reordered, const voi
         src1.map = rows.get();
         dst.map = rows.get();
         ggml_sycl_pool_alloc<typename S::tsb> packed_b(pool, (size_t) K * Npad);
-        const ggml_sycl_gg_tile * tile_ptr = tiles.get();
+        const ggml_sycl_grouped_gemm_tile * tile_ptr = tiles.get();
         typename S::tsb * packed = packed_b.get();
         using E = typename S::EB;
         constexpr int V = S::VNNI;
@@ -1329,7 +1333,7 @@ static bool fg_grouped_device_run(ggml_type src0_type, bool reordered, const voi
             const size_t idx = id[0];
             const int kq = idx / Npad;
             const int n = idx - (size_t) kq * Npad;
-            const ggml_sycl_gg_tile tile = tile_ptr[n / S::BN];
+            const ggml_sycl_grouped_gemm_tile tile = tile_ptr[n / S::BN];
             const int row = tile.n0 + n % S::BN;
             typename S::tsb vals[V] = {};
             if (row < tile.n1) {
@@ -1389,10 +1393,11 @@ bool ggml_sycl_grouped_dequant_gemm_device_supported(ggml_type src0_type, bool r
 }
 
 bool ggml_sycl_grouped_dequant_gemm_device(ggml_type src0_type, bool reordered, const void * src0_base,
-                                           size_t expert_stride, const ggml_sycl_gg_rows & src1, int32_t src1_prec,
-                                           const ggml_sycl_gg_rows & dst, const int32_t * ids_dev,
-                                           size_t ids_token_stride, int64_t n_as, int64_t n_ids, int64_t n_tokens,
-                                           int64_t M, int64_t K, ggml_sycl_pool & pool, dpct::queue_ptr stream) {
+                                           size_t expert_stride, const ggml_sycl_grouped_gemm_rows & src1,
+                                           int32_t src1_prec, const ggml_sycl_grouped_gemm_rows & dst,
+                                           const int32_t * ids_dev, size_t ids_token_stride, int64_t n_as,
+                                           int64_t n_ids, int64_t n_tokens, int64_t M, int64_t K, ggml_sycl_pool & pool,
+                                           dpct::queue_ptr stream) {
     if (src1.ne1 <= 0 || dst.ne1 <= 0 ||
         !ggml_sycl_grouped_dequant_gemm_device_supported(src0_type, reordered, src1_prec, n_as, n_ids,
                                                         n_tokens, M, K, stream)) {

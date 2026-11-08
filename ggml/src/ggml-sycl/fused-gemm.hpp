@@ -5,7 +5,7 @@
 
 
 // Routed row n is at base + (map[n].i1 % ne1)*nb1 + map[n].i2*nb2.
-struct ggml_sycl_gg_rows {
+struct ggml_sycl_grouped_gemm_rows {
     char *                   base;
     const mmid_row_mapping * map;
     int64_t                  ne1;
@@ -98,13 +98,14 @@ bool ggml_sycl_fused_dequant_gemm(ggml_type src0_type, bool src0_reordered, cons
 bool ggml_sycl_grouped_dequant_gemm(ggml_type src0_type, bool reordered, const void * src0_base, size_t expert_stride,
                                     const float * src1, int32_t src1_prec, float * dst,
                                     const int64_t * expert_row_offsets, int64_t n_as, int64_t M, int64_t K,
-                                    int64_t total_rows, std::vector<ggml_sycl_gg_tile> & tiles,
+                                    int64_t total_rows, std::vector<ggml_sycl_grouped_gemm_tile> & tiles,
                                     ggml_sycl_pool & pool, dpct::queue_ptr stream);
 
 // Build routing and tile tables on the device; unused tile slots are empty.
 bool ggml_sycl_build_mmid_schedule(const int32_t * ids_dev, size_t ids_token_stride, int64_t n_as, int64_t n_ids,
                                    int64_t n_tokens, int64_t n_tiles_max, mmid_row_mapping * row_mapping,
-                                   ggml_sycl_gg_tile * tiles, uint32_t * expert_offsets, dpct::queue_ptr stream);
+                                   ggml_sycl_grouped_gemm_tile * tiles, uint32_t * expert_offsets,
+                                   dpct::queue_ptr stream);
 
 bool ggml_sycl_grouped_dequant_gemm_device_supported(ggml_type src0_type, bool reordered, int32_t src1_prec,
                                                       int64_t n_as, int64_t n_ids, int64_t n_tokens,
@@ -112,9 +113,10 @@ bool ggml_sycl_grouped_dequant_gemm_device_supported(ggml_type src0_type, bool r
 
 // Returns false before queuing work when the type, shape, layout or device is unsupported.
 bool ggml_sycl_grouped_dequant_gemm_device(ggml_type src0_type, bool reordered, const void * src0_base,
-                                           size_t expert_stride, const ggml_sycl_gg_rows & src1, int32_t src1_prec,
-                                           const ggml_sycl_gg_rows & dst, const int32_t * ids_dev,
-                                           size_t ids_token_stride, int64_t n_as, int64_t n_ids, int64_t n_tokens,
-                                           int64_t M, int64_t K, ggml_sycl_pool & pool, dpct::queue_ptr stream);
+                                           size_t expert_stride, const ggml_sycl_grouped_gemm_rows & src1,
+                                           int32_t src1_prec, const ggml_sycl_grouped_gemm_rows & dst,
+                                           const int32_t * ids_dev, size_t ids_token_stride, int64_t n_as,
+                                           int64_t n_ids, int64_t n_tokens, int64_t M, int64_t K, ggml_sycl_pool & pool,
+                                           dpct::queue_ptr stream);
 
 #endif // GGML_SYCL_FUSED_GEMM_HPP
