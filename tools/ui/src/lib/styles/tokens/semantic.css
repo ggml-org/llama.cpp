@@ -117,6 +117,10 @@
 	--elevation-inset: inset 0 1px 2px var(--field-shade);
 	--elevation-pressed: inset 0 1px 2px var(--black-a12);
 	--elevation-tooltip: var(--elevation-surface);
+	/* the hairline an elevated surface carries as the last layer of its shadow (elevated-*, matte-float), so its edge
+	   melts into the shadow instead of sitting beside it as a border that reads washed out */
+	--elevation-ring: var(--black-a5);
+	--elevation-ring-width: 1px;
 	--blur-surface: var(--length-24);
 	--blur-control: var(--length-12);
 }
@@ -210,14 +214,17 @@
 		0 6px 16px -10px rgb(0 0 0 / 0.35);
 	--elevation-faint: 0 2px 4px rgb(0 0 0 / 0.175), 0 0.5px 1.5px rgb(0 0 0 / 0.21);
 	--elevation-pressed: inset 0 1px 2px var(--black-a40);
+	/* a black hairline vanishes on a dark page; the ring paints on the page behind the surface, so white needs 18% to
+	   stay lighter than a raised surface's own colour */
+	--elevation-ring: var(--white-a18);
 }
 
 /*
- * Tailwind's shadow-{size} scale, smooth but as tight as upstream's: shadow-plugin's unprefixed import (loaded
- * before these tokens, for its smooth-shadow-ring utilities and ring colour) maps the scale onto stacks that spread
- * far past it (its shadow-sm reaches about 65px), so this scale takes the place of its own. Each step is a few soft
- * layers whose reach matches Tailwind's default for the same step: xs about 3px, sm 5px, md 10px, lg 20px, xl 38px,
- * 2xl 64px.
+ * Tailwind's shadow-{size} scale, smooth: each step is a few soft layers rather than one hard one, the closest the
+ * darkest and smallest, each further layer about twice the offset and blur and fainter, the far ones pulled in with a
+ * negative spread. Stacked like that, the shadow fades out the way light does instead of ending in a visible blur
+ * edge. Each step reaches about as far as Tailwind's default for it, so the shadows stay as close as upstream's:
+ * xs about 3px, sm 5px, md 10px, lg 20px, xl 38px, 2xl 64px. The elevation tokens above are built the same way.
  */
 @theme {
 	--shadow-xs: 0 0.5px 1px rgb(0 0 0 / 0.04), 0 1px 2px rgb(0 0 0 / 0.03);
