@@ -22782,8 +22782,9 @@ static bool ggml_cl_flash_attn_decompose(ggml_backend_t backend, const ggml_tens
         return false;
     }
 
-    // Prefill only, f32 Q, f16 KV, single stream.
-    if (n_q < 2) {
+    // image GEMMs need at least 32 queries
+    // keep small verify batches on fused FA to avoid the V transpose
+    if (n_q < 32) {
         return false;
     }
     if (q->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32 ||
