@@ -272,8 +272,10 @@
 		white-space: pre-line;
 		text-wrap: balance;
 	}
-	/* larger and darker than a post's lede: the Store shows screenshots at about a third of their size */
+	/* larger and darker than a post's lede, and as wide as the text: the Store shows screenshots at about a third of
+	   their size */
 	.text :global(.t-lede) {
+		max-width: none;
 		margin: 0;
 		color: color-mix(in srgb, var(--p-ink) 78%, transparent);
 		font-size: calc(var(--u) * 0.9);

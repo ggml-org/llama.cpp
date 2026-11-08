@@ -289,7 +289,10 @@ export interface AgentsCopy {
 	url: string;
 }
 
-/** Llama serving agents, after Merve's post: the endpoint any agent can point at, and how four of them connect */
+/**
+ * Llama serving agents, after Merve's post: the endpoint any agent can point at, and how four of them connect. Her
+ * lede's last sentence (personal agents connect during onboarding) is left to the Hermes card, which says it
+ */
 export const agentsPost: AgentsCopy = {
 	agents: [
 		{ name: 'OpenClaw', note: 'OpenAI-compatible API' },
@@ -301,7 +304,7 @@ export const agentsPost: AgentsCopy = {
 	endpoint: ':9931/v1',
 	footer: ['By the llama.cpp team and Hugging Face', 'Free · Open source · Works offline'],
 	headline: 'Any agent.\nOn your computer.',
-	lede: 'Llama serves open models at an OpenAI-compatible endpoint. Point your coding agent at it and keep working, even offline. Personal agents connect during onboarding.',
+	lede: 'Llama serves open models at an OpenAI-compatible endpoint. Point your coding agent at it and keep working, even offline.',
 	url: 'llama.app/docs/agents'
 };
 

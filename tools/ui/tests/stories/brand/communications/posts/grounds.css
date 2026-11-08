@@ -103,7 +103,9 @@
 	line-height: 1.4;
 	text-wrap: pretty;
 }
+/* a lede keeps to about 50 characters a line, so it doesn't run up to what stands beside it */
 :where(.ground) :where(.t-lede) {
+	max-width: calc(var(--u) * 17);
 	margin: 0;
 	color: var(--p-muted);
 	font-size: calc(var(--u) * 0.72);

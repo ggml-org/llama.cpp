@@ -65,7 +65,8 @@ Sizes are multiples of the format's unit `u` (see Grid):
 | Mono     | 0.5u  | Llama Mono, commands and data.                                       |
 
 The text stack keeps one rhythm in every layout: a label 0.6u over its headline, the headline 1.2u over its lede,
-and 1.6u from the lede to what follows it (a command, chips, a caption). Space it by these, not by eye.
+and 1.6u from the lede to what follows it (a command, chips, a caption). Space it by these, not by eye. A lede keeps
+to 17u at most (about 50 characters a line), so it never runs up to a motif or diagram beside it.
 
 ## Colour
 
