@@ -222,6 +222,8 @@ if (GGML_SYCL_TARGET STREQUAL "INTEL")
     # -Xs hands it to ocloc as a command-line flag, which fails the device link.
     if (NOT GGML_SYCL_DEVICE_ARCH)
         target_link_options(ggml-sycl PRIVATE -Xs -ze-intel-greater-than-4GB-buffer-required)
+    else()
+        message(STATUS "Passing -ze-intel-greater-than-4GB-buffer-required to ocloc via -options for spir64_gen AOT")
     endif()
 
     # Link against Intel oneMKL
@@ -254,12 +256,12 @@ if (GGML_SYCL_DEVICE_ARCH)
     # 128 to 256, and a server built with it hung on its first request, so IGC picks the size per
     # kernel from its register pressure instead (ESIMD kernels too; -ze-opt-large-grf-kernel does not
     # reach them).
-    set(_ggml_sycl_aot_backend
+    set(GGML_SYCL_AOT_BACKEND_OPTIONS
         "-device ${GGML_SYCL_DEVICE_ARCH} -options '-ze-intel-greater-than-4GB-buffer-required -ze-opt-enable-auto-large-GRF-mode'")
     target_compile_options(
         ggml-sycl PRIVATE
         -fsycl-targets=spir64_gen
-        "SHELL:-Xsycl-target-backend=spir64_gen \"${_ggml_sycl_aot_backend}\""
+        "SHELL:-Xsycl-target-backend=spir64_gen \"${GGML_SYCL_AOT_BACKEND_OPTIONS}\""
     )
 
     # Pass through parallel job (process) count for parallelising the
@@ -274,7 +276,7 @@ if (GGML_SYCL_DEVICE_ARCH)
     target_link_options(
         ggml-sycl PRIVATE
         -fsycl-targets=spir64_gen
-        "SHELL:-Xsycl-target-backend=spir64_gen \"${_ggml_sycl_aot_backend}\""
+        "SHELL:-Xsycl-target-backend=spir64_gen \"${GGML_SYCL_AOT_BACKEND_OPTIONS}\""
         -fsycl-max-parallel-link-jobs=${GGML_SYCL_MAX_PARALLEL_LINK_JOBS}
     )
 
