@@ -1430,6 +1430,7 @@ void llm_graph_result::reset() {
     t_embd        = nullptr;
     t_embd_pooled = nullptr;
     t_h_nextn     = nullptr;
+    t_sampling    = nullptr;
 
     t_layer_inp.resize(LLAMA_MAX_LAYERS + 1);
     std::fill(t_layer_inp.begin(), t_layer_inp.end(), nullptr);
@@ -4467,6 +4468,7 @@ void llm_graph_context::build_sampling() const {
 
     // the padding row gives the chains without a row of the ubatch a valid input, even with no output at all
     ggml_tensor * logits_t = ggml_pad(ctx0, res->t_logits, 0, 1, 0, 0);
+    res->t_sampling = logits_t;
 
     for (const auto & entry : samplers) {
         if (entry.second->iface->backend_reset) {

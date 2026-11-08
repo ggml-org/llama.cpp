@@ -242,6 +242,10 @@ struct common_sampler {
     // for rejection sampling; independent of the draft, or the target distribution is not preserved
     std::mt19937 rng;
 
+    // grammar rejections of the proposed token and the time spent resampling them
+    int32_t n_reject = 0;
+    int64_t t_reject_us = 0;
+
     void reset() {
         prev.clear();
 
@@ -618,6 +622,10 @@ void common_sampler_free(struct common_sampler * gsmpl) {
         return;
     }
 
+    if (gsmpl->grmr) {
+        LOG_DBG("%s: grammar rejections = %d, resample time = %.3f ms\n", __func__, gsmpl->n_reject, gsmpl->t_reject_us/1000.0);
+    }
+
     llama_sampler_free(gsmpl->chain);
     llama_sampler_free(gsmpl->grmr);
     llama_sampler_free(gsmpl->rbudget);
@@ -881,6 +889,14 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
 
     // resampling:
     // if the token is not valid, sample again, but first apply the grammar sampler and then the sampling chain
+    struct reject_timer {
+        common_sampler * gsmpl;
+        int64_t t_start_us = ggml_time_us();
+        ~reject_timer() {
+            gsmpl->n_reject++;
+            gsmpl->t_reject_us += ggml_time_us() - t_start_us;
+        }
+    } timer = { gsmpl };
     if (adapter && adapter->backend && backend_selected && gsmpl->params.n_probs == 0 &&
             !gsmpl->params.backend_sampling_candidates && llama_sampler_sample_retry(ctx, grmr, chain, idx, &id)) {
         adapter->replay = true;

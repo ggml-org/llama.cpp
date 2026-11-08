@@ -9,6 +9,8 @@
 #include <bitset>
 #include <cstdint>
 #include <cstdlib>
+#include <thread>
+#include <atomic>
 #include <set>
 #include <numeric>
 #include <stdexcept>
@@ -1329,13 +1331,89 @@ static bool llama_grammar_reject_step(
     return true;
 }
 
-// the candidates that no stack accepts, each stack narrows the rejects of the previous one
-// no recursion: a level per code point, a token from the GGUF can be long
+static std::vector<uint32_t> llama_grammar_reject_indices(
+        const llama_grammar_rules      & rules,
+        const llama_grammar_stacks     & stacks,
+        const llama_grammar_candidates & candidates,
+        std::vector<uint32_t>            all);
+
 static llama_grammar_candidates llama_grammar_reject_candidates(
         const llama_grammar_rules      & rules,
         const llama_grammar_stacks     & stacks,
         const llama_grammar_candidates & candidates) {
     GGML_ASSERT(!stacks.empty()); // REVIEW
+
+    std::vector<uint32_t> all(candidates.size());
+    std::iota(all.begin(), all.end(), 0u);
+
+    llama_grammar_candidates rejects;
+    for (const uint32_t i : llama_grammar_reject_indices(rules, stacks, candidates, std::move(all))) {
+        rejects.push_back(candidates[i]);
+    }
+    return rejects;
+}
+
+static int llama_grammar_scan_threads() {
+    static const int n_threads = [] {
+        if (const char * env = getenv("LLAMA_GRAMMAR_THREADS")) {
+            return std::max(1, atoi(env));
+        }
+        return (int) std::clamp(std::thread::hardware_concurrency() / 2, 1u, 8u);
+    }();
+    return n_threads;
+}
+
+// llama_grammar_reject_candidates over chunks of the candidates on several threads, for full-vocabulary scans
+static llama_grammar_candidates llama_grammar_reject_candidates_mt(
+        const llama_grammar_rules      & rules,
+        const llama_grammar_stacks     & stacks,
+        const llama_grammar_candidates & candidates) {
+    const int n_threads = llama_grammar_scan_threads();
+    if (n_threads <= 1 || candidates.size() < 16384) {
+        return llama_grammar_reject_candidates(rules, stacks, candidates);
+    }
+    GGML_ASSERT(!stacks.empty());
+
+    // more chunks than threads balance the cost, which varies along the vocabulary
+    const size_t n_chunks = 4 * (size_t) n_threads;
+    const size_t chunk = (candidates.size() + n_chunks - 1) / n_chunks;
+    std::vector<std::vector<uint32_t>> results(n_chunks);
+    std::atomic<size_t> next{0};
+    const auto worker = [&] {
+        for (size_t c = next++; c < n_chunks; c = next++) {
+            const size_t begin = std::min(candidates.size(), c * chunk);
+            const size_t end = std::min(candidates.size(), begin + chunk);
+            std::vector<uint32_t> subset(end - begin);
+            std::iota(subset.begin(), subset.end(), uint32_t(begin));
+            results[c] = llama_grammar_reject_indices(rules, stacks, candidates, std::move(subset));
+        }
+    };
+    std::vector<std::thread> threads;
+    threads.reserve(n_threads - 1);
+    for (int t = 1; t < n_threads; ++t) {
+        threads.emplace_back(worker);
+    }
+    worker();
+    for (auto & thread : threads) {
+        thread.join();
+    }
+
+    llama_grammar_candidates rejects;
+    for (const auto & result : results) {
+        for (const uint32_t i : result) {
+            rejects.push_back(candidates[i]);
+        }
+    }
+    return rejects;
+}
+
+// the candidates among `all` that no stack accepts, each stack narrows the rejects of the previous one
+// no recursion: a level per code point, a token from the GGUF can be long
+static std::vector<uint32_t> llama_grammar_reject_indices(
+        const llama_grammar_rules      & rules,
+        const llama_grammar_stacks     & stacks,
+        const llama_grammar_candidates & candidates,
+        std::vector<uint32_t>            all) {
 
     // a level checks the candidates that reach its code point against its stacks in turn
     struct level {
@@ -1344,9 +1422,6 @@ static llama_grammar_candidates llama_grammar_reject_candidates(
         std::vector<uint32_t> cur;     // the candidates rejected by stacks[0, i)
         std::vector<uint32_t> rejects; // the rejects of stacks[i] at this code point
     };
-
-    std::vector<uint32_t> all(candidates.size());
-    std::iota(all.begin(), all.end(), 0u);
 
     std::vector<level> levels;
     levels.push_back({ stacks, 0, std::move(all), {} });
@@ -1383,12 +1458,7 @@ static llama_grammar_candidates llama_grammar_reject_candidates(
         levels.push_back({ std::move(next_stacks), 0, std::move(next), {} });
     }
 
-    llama_grammar_candidates rejects;
-    rejects.reserve(levels[0].cur.size());
-    for (const uint32_t i : levels[0].cur) {
-        rejects.push_back(candidates[i]);
-    }
-    return rejects;
+    return std::move(levels[0].cur);
 }
 
 llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
@@ -1486,6 +1556,73 @@ struct llama_grammar * llama_grammar_init_impl(
     return result;
 }
 
+// Parsed programs and their mask caches, interned by vocab, grammar text and root, so that requests with the same grammar
+// skip parsing and reuse masks: the cache key identifies the program by address.
+struct llama_grammar_program {
+    const llama_vocab * vocab;
+    std::string text;
+    std::string root;
+    std::shared_ptr<const llama_grammar_rules> rules;
+    std::shared_ptr<const llama_grammar::rule_position_map> rule_positions;
+    llama_grammar_stacks stacks_initial;
+    std::shared_ptr<llama_grammar_mask_cache> mask_cache;
+    uint64_t used = 0;
+};
+
+static constexpr size_t LLAMA_GRAMMAR_MAX_PROGRAMS = 8;
+
+static std::mutex & llama_grammar_programs_mutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+static std::vector<llama_grammar_program> & llama_grammar_programs() {
+    static std::vector<llama_grammar_program> programs;
+    return programs;
+}
+
+static uint64_t llama_grammar_programs_clock = 0;
+
+static bool llama_grammar_programs_disabled() {
+    static const bool disabled = getenv("LLAMA_GRAMMAR_NO_INTERN") != nullptr;
+    return disabled;
+}
+
+static bool llama_grammar_program_find(const llama_vocab * vocab, const char * text, const char * root, llama_grammar_program & out) {
+    if (llama_grammar_programs_disabled()) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(llama_grammar_programs_mutex());
+    for (auto & program : llama_grammar_programs()) {
+        if (program.vocab == vocab && program.root == root && program.text == text) {
+            program.used = ++llama_grammar_programs_clock;
+            out = program;
+            return true;
+        }
+    }
+    return false;
+}
+
+static void llama_grammar_program_add(llama_grammar_program program) {
+    if (llama_grammar_programs_disabled()) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(llama_grammar_programs_mutex());
+    auto & programs = llama_grammar_programs();
+    if (programs.size() >= LLAMA_GRAMMAR_MAX_PROGRAMS) {
+        auto victim = std::min_element(programs.begin(), programs.end(), [](const auto & a, const auto & b) { return a.used < b.used; });
+        programs.erase(victim);
+    }
+    program.used = ++llama_grammar_programs_clock;
+    programs.push_back(std::move(program));
+}
+
+void llama_grammar_programs_drop(const llama_vocab * vocab) {
+    std::lock_guard<std::mutex> lock(llama_grammar_programs_mutex());
+    auto & programs = llama_grammar_programs();
+    programs.erase(std::remove_if(programs.begin(), programs.end(), [vocab](const auto & p) { return p.vocab == vocab; }), programs.end());
+}
+
 struct llama_grammar * llama_grammar_init_impl(
         const struct llama_vocab * vocab,
                       const char * grammar_str,
@@ -1495,6 +1632,41 @@ struct llama_grammar * llama_grammar_init_impl(
                             size_t num_trigger_patterns,
                const llama_token * trigger_tokens,
                             size_t num_trigger_tokens) {
+    std::vector<llama_token>    vec_trigger_tokens;
+    std::vector<llama_grammar_trigger_pattern> vec_trigger_patterns;
+    for (size_t i = 0; i < num_trigger_tokens; i++) {
+        GGML_ASSERT(trigger_tokens != nullptr);
+        vec_trigger_tokens.push_back(trigger_tokens[i]);
+    }
+    for (size_t i = 0; i < num_trigger_patterns; i++) {
+        GGML_ASSERT(trigger_patterns != nullptr);
+        auto & trigger = vec_trigger_patterns.emplace_back();
+        trigger.pattern = trigger_patterns[i];
+        trigger.regex = std::regex(trigger.pattern);
+    }
+
+    const auto make_grammar = [&](const llama_grammar_program & program) {
+        auto * result = new llama_grammar;
+        result->vocab = vocab;
+        result->rules = program.rules;
+        result->rule_positions = program.rule_positions;
+        result->stacks = program.stacks_initial;
+        result->stacks_initial = program.stacks_initial;
+        result->lazy = lazy;
+        result->awaiting_trigger = lazy;
+        result->trigger_tokens = std::move(vec_trigger_tokens);
+        result->trigger_patterns = std::move(vec_trigger_patterns);
+        result->mask_cache = program.mask_cache;
+        return result;
+    };
+
+    {
+        llama_grammar_program program;
+        if (vocab && llama_grammar_program_find(vocab, grammar_str, grammar_root, program)) {
+            return make_grammar(program);
+        }
+    }
+
     llama_grammar_parser parser(vocab);
 
     // if there is a grammar, parse it
@@ -1571,34 +1743,21 @@ struct llama_grammar * llama_grammar_init_impl(
         }
     } while (true);
 
-    std::vector<llama_token>    vec_trigger_tokens;
-    std::vector<llama_grammar_trigger_pattern> vec_trigger_patterns;
-    for (size_t i = 0; i < num_trigger_tokens; i++) {
-        GGML_ASSERT(trigger_tokens != nullptr);
-        vec_trigger_tokens.push_back(trigger_tokens[i]);
-    }
-    for (size_t i = 0; i < num_trigger_patterns; i++) {
-        GGML_ASSERT(trigger_patterns != nullptr);
-        auto & trigger = vec_trigger_patterns.emplace_back();
-        trigger.pattern = trigger_patterns[i];
-        trigger.regex = std::regex(trigger.pattern);
-    }
-
     // Important: vec_rules has to be moved here, not copied, because stacks contains
     // pointers to elements of vec_rules. If vec_rules were copied into llama_grammar
     // then the pointers would be invalidated when the local vec_rules goes out of scope.
-    auto * result = new llama_grammar;
-    result->vocab = vocab;
-    result->rules = std::make_shared<const llama_grammar_rules>(std::move(vec_rules));
-    result->rule_positions = llama_grammar_index_rules(*result->rules);
-    result->stacks = std::move(stacks);
-    result->stacks_initial = result->stacks;
-    result->lazy = lazy;
-    result->awaiting_trigger = lazy;
-    result->trigger_tokens = std::move(vec_trigger_tokens);
-    result->trigger_patterns = std::move(vec_trigger_patterns);
-    result->mask_cache = std::make_shared<llama_grammar_mask_cache>();
-    return result;
+    llama_grammar_program program;
+    program.vocab = vocab;
+    program.text = grammar_str;
+    program.root = grammar_root;
+    program.rules = std::make_shared<const llama_grammar_rules>(std::move(vec_rules));
+    program.rule_positions = llama_grammar_index_rules(*program.rules);
+    program.stacks_initial = std::move(stacks);
+    program.mask_cache = std::make_shared<llama_grammar_mask_cache>();
+    if (vocab) {
+        llama_grammar_program_add(program);
+    }
+    return make_grammar(program);
 }
 
 void llama_grammar_free_impl(struct llama_grammar * grammar) {
@@ -1970,7 +2129,7 @@ static std::vector<uint32_t> llama_grammar_compute_allowed_tokens(const llama_gr
         for (size_t i = 0; i < mask.size(); ++i) {
             mask[i] &= ~(decoded->unusable[i] | (allow_eog ? 0 : decoded->eog[i]));
         }
-        const auto rejects = llama_grammar_reject_candidates(*grammar.rules, grammar.stacks, decoded->candidates);
+        const auto rejects = llama_grammar_reject_candidates_mt(*grammar.rules, grammar.stacks, decoded->candidates);
         for (const auto & reject : rejects) {
             mask[reject.index / 32] &= ~(uint32_t(1) << (reject.index % 32));
         }
@@ -1997,14 +2156,41 @@ static std::vector<uint32_t> llama_grammar_compute_allowed_tokens(const llama_gr
     }
 
     scratch.set_pointers();
-    const auto rejects = llama_grammar_reject_candidates(*grammar.rules, grammar.stacks, scratch.candidates);
+    const auto rejects = llama_grammar_reject_candidates_mt(*grammar.rules, grammar.stacks, scratch.candidates);
     for (const auto & reject : rejects) {
         mask[reject.index / 32] &= ~(uint32_t(1) << (reject.index % 32));
     }
     return mask;
 }
 
+static bool llama_grammar_get_allowed_packed_impl(const llama_grammar & grammar, bool cached_only, llama_grammar_mask_packed & result);
+
+// a negated character class on top of a stack, as in the body of a JSON string, accepts most of the vocabulary:
+// the trie walk would exhaust its budget before the exact scan runs anyway
+static bool llama_grammar_is_wide(const llama_grammar & grammar) {
+    static const bool disabled = getenv("LLAMA_GRAMMAR_TRIE_WIDE") != nullptr;
+    if (disabled) {
+        return false;
+    }
+    for (const auto & stack : grammar.stacks) {
+        if (!stack.empty() && stack.back()->type == LLAMA_GRETYPE_CHAR_NOT) {
+            return true;
+        }
+    }
+    return false;
+}
+
 llama_grammar_mask_packed llama_grammar_get_allowed_packed(const llama_grammar & grammar) {
+    llama_grammar_mask_packed result;
+    llama_grammar_get_allowed_packed_impl(grammar, false, result);
+    return result;
+}
+
+bool llama_grammar_get_allowed_packed_cached(const llama_grammar & grammar, llama_grammar_mask_packed & result) {
+    return llama_grammar_get_allowed_packed_impl(grammar, true, result);
+}
+
+static bool llama_grammar_get_allowed_packed_impl(const llama_grammar & grammar, bool cached_only, llama_grammar_mask_packed & result) {
     GGML_ASSERT(grammar.vocab != nullptr);
     GGML_ASSERT(grammar.mask_cache != nullptr);
     auto & cache = *grammar.mask_cache;
@@ -2032,18 +2218,30 @@ llama_grammar_mask_packed llama_grammar_get_allowed_packed(const llama_grammar &
                 auto & entry = cache.entries[it->second];
                 entry.used = ++cache.clock;
                 ++cache.hits;
-                return { entry.kind, n_vocab, entry.payload };
+                result = { entry.kind, n_vocab, entry.payload };
+                return true;
             }
+        }
+        if (cached_only) {
+            return false;
         }
         ++cache.misses;
     }
 
+    const int64_t t_start_us = ggml_time_us();
     std::vector<uint32_t> words;
-    if (!llama_grammar_get_allowed_tokens_trie(grammar, words)) {
+    const bool trie = !llama_grammar_is_wide(grammar) && llama_grammar_get_allowed_tokens_trie(grammar, words);
+    if (!trie) {
         words = llama_grammar_compute_allowed_tokens(grammar);
     }
     auto packed = llama_grammar_mask_pack(std::move(words), n_vocab);
+    const int64_t t_miss_us = ggml_time_us() - t_start_us;
 
+    {
+        std::lock_guard<std::mutex> lock(cache.mutex);
+        cache.t_miss_us += t_miss_us;
+        cache.scans += !trie;
+    }
     if (cacheable) {
         std::lock_guard<std::mutex> lock(cache.mutex);
         const size_t bytes = overhead + key.stacks.capacity() * sizeof(size_t) +
@@ -2057,7 +2255,8 @@ llama_grammar_mask_packed llama_grammar_get_allowed_packed(const llama_grammar &
             cache.bytes += bytes;
         }
     }
-    return packed;
+    result = std::move(packed);
+    return true;
 }
 
 std::vector<uint32_t> llama_grammar_get_allowed_tokens(const llama_grammar & grammar) {
@@ -2099,7 +2298,7 @@ void llama_grammar_apply_impl(const struct llama_grammar & grammar, llama_token_
                     cur_p->data[i].logit = -INFINITY;
                 }
             }
-            const auto rejects = llama_grammar_reject_candidates(*grammar.rules, grammar.stacks, decoded->candidates);
+            const auto rejects = llama_grammar_reject_candidates_mt(*grammar.rules, grammar.stacks, decoded->candidates);
             for (const auto & reject : rejects) {
                 cur_p->data[reject.index].logit = -INFINITY;
             }
@@ -2135,7 +2334,7 @@ void llama_grammar_apply_impl(const struct llama_grammar & grammar, llama_token_
         scratch.set_pointers();
     }
 
-    const auto rejects = llama_grammar_reject_candidates(*grammar.rules, grammar.stacks, scratch.candidates);
+    const auto rejects = llama_grammar_reject_candidates_mt(*grammar.rules, grammar.stacks, scratch.candidates);
     for (const auto & reject : rejects) {
         cur_p->data[reject.index].logit = -INFINITY;
     }

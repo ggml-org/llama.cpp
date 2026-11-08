@@ -1227,6 +1227,10 @@ struct ggml_backend_sched {
     ggml_backend_sched_eval_callback callback_eval;
     void * callback_eval_user_data;
 
+    struct ggml_tensor * barrier_node;
+    ggml_backend_sched_barrier_callback barrier_callback;
+    void * barrier_user_data;
+
     ggml_backend_sched_copy_callback callback_copy;
     void * callback_copy_user_data;
 
@@ -2272,6 +2276,28 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
     int prev_backend_id = -1;
 
+    // one-shot barrier: locate the node, or fall back to running the callback before the first split
+    ggml_backend_sched_barrier_callback barrier_callback = sched->barrier_callback;
+    void * barrier_user_data = sched->barrier_user_data;
+    int barrier_split = 0;
+    int barrier_node = 0;
+    if (barrier_callback && sched->barrier_node) {
+        bool found = false;
+        for (int split_id = 0; split_id < sched->n_splits && !found; split_id++) {
+            for (int j = 0; j < splits[split_id].graph.n_nodes; j++) {
+                if (splits[split_id].graph.nodes[j] == sched->barrier_node) {
+                    barrier_split = split_id;
+                    barrier_node = j;
+                    found = true;
+                    break;
+                }
+            }
+        }
+    }
+    sched->barrier_node = NULL;
+    sched->barrier_callback = NULL;
+    sched->barrier_user_data = NULL;
+
     for (int split_id = 0; split_id < sched->n_splits; split_id++) {
         struct ggml_backend_sched_split * split = &splits[split_id];
         int split_backend_id = split->backend_id;
@@ -2294,6 +2320,30 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         // before the weights, whose copy callback may queue large uploads
         ggml_backend_sched_prefetch_inputs(sched, split_id);
         ggml_backend_sched_copy_inputs(sched, split, true);
+
+        if (barrier_callback && split_id == barrier_split) {
+            if (barrier_node > 0 && !sched->callback_eval) {
+                struct ggml_cgraph gv = ggml_graph_view(&split->graph, 0, barrier_node);
+                enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &gv);
+                if (ec != GGML_STATUS_SUCCESS) {
+                    return ec;
+                }
+                barrier_callback(barrier_user_data);
+                barrier_callback = NULL;
+                gv = ggml_graph_view(&split->graph, barrier_node, split->graph.n_nodes);
+                ec = ggml_backend_graph_compute_async(split_backend, &gv);
+                if (ec != GGML_STATUS_SUCCESS) {
+                    return ec;
+                }
+                if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
+                    ggml_backend_event_record(sched->events[split_backend_id][sched->cur_copy], split_backend);
+                }
+                prev_backend_id = split_backend_id;
+                continue;
+            }
+            barrier_callback(barrier_user_data);
+            barrier_callback = NULL;
+        }
 
         if (!sched->callback_eval) {
             enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &split->graph);
@@ -2550,6 +2600,13 @@ void ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backe
     GGML_ASSERT(sched);
     sched->callback_eval = callback;
     sched->callback_eval_user_data = user_data;
+}
+
+void ggml_backend_sched_set_barrier(ggml_backend_sched_t sched, struct ggml_tensor * node, ggml_backend_sched_barrier_callback callback, void * user_data) {
+    GGML_ASSERT(sched);
+    sched->barrier_node = node;
+    sched->barrier_callback = callback;
+    sched->barrier_user_data = user_data;
 }
 
 void ggml_backend_sched_set_copy_callback(ggml_backend_sched_t sched, ggml_backend_sched_copy_callback callback, void * user_data) {

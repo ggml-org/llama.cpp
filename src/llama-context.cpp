@@ -1911,12 +1911,15 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
     }
 
     // Discard graphs before the caller can free the old sampler or reuse its address.
+    // Clear the results in place: freeing them would drop their graph metadata buffers, which the next graph reallocates.
     synchronize();
     if (sched) {
         ggml_backend_sched_reset(sched.get());
     }
     for (auto & res : gf_res_prev) {
-        res.reset();
+        if (res) {
+            res->reset();
+        }
     }
     if (gf_res_reserve) {
         gf_res_reserve->reset();
@@ -2087,17 +2090,28 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         gf_res_prev_active = res;
     }
 
+    // grammar masks depend only on the grammar state: build and upload them while the device computes the model
+    const bool overlap = res->t_sampling && !sampling.samplers.empty() && !cparams.cb_eval && llama_sampler_backend_overlap_enabled();
+
     // set the input data for the input tensors
     {
         //const auto t_start_us = ggml_time_us();
 
+        llama_sampler_backend_set_defer(overlap);
         // FIXME this call causes a crash if any model inputs were not used in the graph and were therefore not allocated
         res->set_inputs(&ubatch);
+        llama_sampler_backend_set_defer(false);
 
         //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
     }
 
+    if (llama_sampler_backend_has_deferred()) {
+        ggml_backend_sched_set_barrier(sched.get(), res->t_sampling, [](void *) { llama_sampler_backend_flush_deferred(); }, nullptr);
+    }
+
     const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
+    // the barrier is not reached when the compute fails early
+    llama_sampler_backend_flush_deferred();
     if (status != GGML_STATUS_SUCCESS) {
         LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
         ret = status;
@@ -2504,7 +2518,10 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
                 row.type = LLAMA_SAMPLER_PREFIX_UNSPECIFIED;
             }
         }
-        if (!llama_sampler_backend_prepare(entry.second, rows.data(), rows.size())) {
+        llama_sampler_backend_set_lazy(llama_sampler_backend_overlap_enabled());
+        const bool ok = llama_sampler_backend_prepare(entry.second, rows.data(), rows.size());
+        llama_sampler_backend_set_lazy(false);
+        if (!ok) {
             LLAMA_LOG_ERROR("%s: backend grammar needs explicit output-row prefixes before decode\n", __func__);
             return -1;
         }
@@ -2667,7 +2684,10 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
                     })) {
                 continue;
             }
-            if (!llama_sampler_backend_prepare(entry.second, rows.data(), rows.size())) {
+            llama_sampler_backend_set_lazy(llama_sampler_backend_overlap_enabled());
+            const bool ok = llama_sampler_backend_prepare(entry.second, rows.data(), rows.size());
+            llama_sampler_backend_set_lazy(false);
+            if (!ok) {
                 return -1;
             }
         }

@@ -849,6 +849,8 @@ static void llama_sampler_chain_backend_accept(
     }
 }
 
+static std::pair<size_t, size_t> llama_sampler_chain_greedy_skip(const llama_sampler_chain * chain);
+
 static void llama_sampler_chain_backend_apply(
           struct llama_sampler      * smpl,
           struct ggml_context       * ctx,
@@ -858,9 +860,14 @@ static void llama_sampler_chain_backend_apply(
 
     GGML_ASSERT(chain->is_init && "llama_sampler_chain_backend_init() not called");
 
-    for (auto & smpl : chain->samplers) {
+    const auto skipped = llama_sampler_chain_greedy_skip(chain);
+    for (size_t i = 0; i < chain->samplers.size(); ++i) {
+        auto & smpl = chain->samplers[i];
         if (!smpl.is_backend) {
             break;
+        }
+        if (i >= skipped.first && i < skipped.second) {
+            continue;
         }
 
         if (smpl.ptr->iface->backend_apply) {
@@ -2798,6 +2805,30 @@ struct llama_sampler * llama_sampler_init_mirostat_v2(uint32_t seed, float tau, 
     );
 }
 
+static thread_local bool llama_sampler_lazy_prepare = false;
+static thread_local bool llama_sampler_defer_inputs = false;
+static thread_local std::vector<std::pair<llama_sampler *, ggml_backend_sched_t>> llama_sampler_deferred_inputs;
+
+bool llama_sampler_backend_overlap_enabled() {
+    static const bool enabled = getenv("LLAMA_SAMPLER_NO_OVERLAP") == nullptr;
+    return enabled;
+}
+
+void llama_sampler_backend_set_lazy(bool lazy) {
+    llama_sampler_lazy_prepare = lazy;
+}
+
+void llama_sampler_backend_set_defer(bool defer) {
+    if (defer) {
+        llama_sampler_deferred_inputs.clear();
+    }
+    llama_sampler_defer_inputs = defer;
+}
+
+bool llama_sampler_backend_has_deferred() {
+    return !llama_sampler_deferred_inputs.empty();
+}
+
 // grammar
 
 struct llama_sampler_grammar {
@@ -2853,6 +2884,13 @@ struct llama_sampler_grammar {
     std::vector<size_t> rows = {};
     uint64_t rows_generation = 0;
 
+    // mask cache counters when this sampler was created, to log what it used; unset for clones
+    bool stats = false;
+    size_t stats_hits = 0;
+    size_t stats_misses = 0;
+    size_t stats_scans = 0;
+    int64_t stats_miss_us = 0;
+    size_t n_deferred = 0;
 };
 
 static const char * llama_sampler_grammar_name(const struct llama_sampler * /*smpl*/) {
@@ -2931,6 +2969,14 @@ static struct llama_sampler * llama_sampler_grammar_clone(const struct llama_sam
 static void llama_sampler_grammar_free(struct llama_sampler * smpl) {
     const auto * ctx = (llama_sampler_grammar *) smpl->ctx;
 
+    if (ctx->grammar && ctx->stats) {
+        auto & cache = *ctx->grammar->mask_cache;
+        std::lock_guard<std::mutex> lock(cache.mutex);
+        LLAMA_LOG_DEBUG("%s: grammar mask cache: hits = %zu, misses = %zu (scan %zu), miss time = %.3f ms, entries = %zu, bytes = %zu, deferred = %zu\n", __func__,
+                cache.hits - ctx->stats_hits, cache.misses - ctx->stats_misses, cache.scans - ctx->stats_scans,
+                (cache.t_miss_us - ctx->stats_miss_us)/1000.0, cache.entries.size(), cache.bytes, ctx->n_deferred);
+    }
+
     if (ctx->grammar) {
         llama_grammar_free_impl(ctx->grammar);
     }
@@ -2990,6 +3036,17 @@ static llama_sampler_grammar::packed_mask llama_sampler_grammar_materialize(llam
     return mask;
 }
 
+static bool llama_sampler_grammar_materialize_cached(llama_sampler_grammar * ctx, const llama_grammar & state, llama_sampler_grammar::packed_mask & mask) {
+    llama_grammar_mask_packed packed;
+    if (!llama_grammar_get_allowed_packed_cached(state, packed)) {
+        return false;
+    }
+    mask.materialized = true;
+    mask.desc = { packed.kind, packed.payload ? (int32_t) packed.payload->size() : 0, 0, (int32_t) ctx->vocab->n_tokens() };
+    mask.payload = std::move(packed.payload);
+    return true;
+}
+
 static void llama_sampler_grammar_prepare_mask(llama_sampler_grammar * ctx) {
     if (ctx->prepared_generation == ctx->state_generation) {
         return;
@@ -3003,6 +3060,8 @@ static void llama_sampler_grammar_prepare_mask(llama_sampler_grammar * ctx) {
 
 static bool llama_sampler_grammar_prepare_rows_impl(llama_sampler * smpl, const llama_sampler_row * rows, size_t n_rows, bool materialize) {
     auto * ctx = (llama_sampler_grammar *) smpl->ctx;
+    // the masks are then built by backend_set_input
+    materialize = materialize && !llama_sampler_lazy_prepare;
     ctx->rows.clear();
     if (!ctx->grammar) {
         return true;
@@ -3037,7 +3096,12 @@ static bool llama_sampler_grammar_prepare_rows_impl(llama_sampler * smpl, const 
                 for (const auto index : ctx->rows) {
                     auto & cached = ctx->prepared_rows[index];
                     if (cached.usable && !cached.mask.materialized) {
-                        cached.mask = llama_sampler_grammar_materialize(ctx, *cached.state);
+                        if (cached.state) {
+                            cached.mask = llama_sampler_grammar_materialize(ctx, *cached.state);
+                        } else {
+                            llama_sampler_grammar_prepare_mask(ctx);
+                            cached.mask = ctx->mask;
+                        }
                         cached.usable = cached.mask.desc[0] != GGML_TOKEN_MASK_NONE;
                     }
                 }
@@ -3108,7 +3172,7 @@ static bool llama_sampler_grammar_prepare_rows_impl(llama_sampler * smpl, const 
             usable = mask.desc[0] != GGML_TOKEN_MASK_NONE;
         }
         llama_sampler_grammar::prepared_row cached = {row.idx, row.type, {}, std::move(mask), usable};
-        if (usable && !materialize) {
+        if (usable && !materialize && row.n_prefix) {
             cached.state.reset(llama_grammar_clone_impl(*state));
         }
         if (row.n_prefix) {
@@ -3129,7 +3193,7 @@ static bool llama_sampler_grammar_backend_row_usable(const llama_sampler * smpl,
     return row >= ctx->rows.size() || ctx->prepared_rows[ctx->rows[row]].usable;
 }
 
-static void llama_sampler_grammar_backend_set_input(llama_sampler * smpl, ggml_backend_sched_t sched) {
+static void llama_sampler_grammar_backend_set_input_now(llama_sampler * smpl, ggml_backend_sched_t sched) {
     auto * ctx = (llama_sampler_grammar *) smpl->ctx;
     for (size_t row = 0; row < ctx->bindings.size(); ++row) {
         auto & binding = ctx->bindings[row];
@@ -3143,7 +3207,13 @@ static void llama_sampler_grammar_backend_set_input(llama_sampler * smpl, ggml_b
         if (provisional) {
             auto & cached = ctx->prepared_rows[ctx->rows[row]];
             if (cached.usable && !cached.mask.materialized) {
-                cached.mask = llama_sampler_grammar_materialize(ctx, *cached.state);
+                if (cached.state) {
+                    cached.mask = llama_sampler_grammar_materialize(ctx, *cached.state);
+                } else {
+                    // a row without a prefix samples from the committed state
+                    llama_sampler_grammar_prepare_mask(ctx);
+                    cached.mask = ctx->mask;
+                }
                 cached.usable = cached.mask.desc[0] != GGML_TOKEN_MASK_NONE;
             }
         }
@@ -3226,9 +3296,67 @@ static void llama_sampler_grammar_backend_set_input(llama_sampler * smpl, ggml_b
     }
 }
 
+static void llama_sampler_grammar_backend_set_input(llama_sampler * smpl, ggml_backend_sched_t sched) {
+    auto * ctx = (llama_sampler_grammar *) smpl->ctx;
+    // a mask in host memory may be copied to the device before the barrier, so only device masks are deferred
+    bool defer = llama_sampler_defer_inputs && sched;
+    for (const auto & binding : ctx->bindings) {
+        if (defer && binding.payload && (!binding.payload->buffer || ggml_backend_buffer_is_host(binding.payload->buffer) ||
+                !binding.desc->buffer || ggml_backend_buffer_is_host(binding.desc->buffer))) {
+            defer = false;
+        }
+    }
+    // masks already in the cache cost less than splitting the graph, so only misses are deferred
+    bool miss = false;
+    for (size_t row = 0; defer && row < ctx->bindings.size(); ++row) {
+        if (!ctx->bindings[row].payload) {
+            continue;
+        }
+        if (row < ctx->rows.size()) {
+            auto & cached = ctx->prepared_rows[ctx->rows[row]];
+            if (!cached.usable || cached.mask.materialized) {
+                continue;
+            }
+            if (cached.state) {
+                if (llama_sampler_grammar_materialize_cached(ctx, *cached.state, cached.mask)) {
+                    cached.usable = cached.mask.desc[0] != GGML_TOKEN_MASK_NONE;
+                } else {
+                    miss = true;
+                }
+                continue;
+            }
+        }
+        if (ctx->prepared_generation != ctx->state_generation) {
+            if (llama_sampler_grammar_materialize_cached(ctx, *ctx->grammar, ctx->mask)) {
+                ctx->mask_stacks = ctx->grammar->stacks;
+                ctx->mask_partial_utf8 = ctx->grammar->partial_utf8;
+                ctx->mask_awaiting_trigger = ctx->grammar->awaiting_trigger;
+                ctx->prepared_generation = ctx->state_generation;
+            } else {
+                miss = true;
+            }
+        }
+    }
+    defer = defer && miss;
+    if (defer) {
+        ctx->n_deferred++;
+        llama_sampler_deferred_inputs.emplace_back(smpl, sched);
+        return;
+    }
+    llama_sampler_grammar_backend_set_input_now(smpl, sched);
+}
+
 static void llama_sampler_grammar_backend_reset(llama_sampler * smpl) {
     auto * ctx = (llama_sampler_grammar *) smpl->ctx;
     ctx->bindings.clear();
+}
+
+void llama_sampler_backend_flush_deferred() {
+    auto deferred = std::move(llama_sampler_deferred_inputs);
+    llama_sampler_deferred_inputs.clear();
+    for (const auto & [smpl, sched] : deferred) {
+        llama_sampler_grammar_backend_set_input_now(smpl, sched);
+    }
 }
 
 static void llama_sampler_grammar_copy_state(const llama_sampler * src, llama_sampler * dst) {
@@ -3305,6 +3433,15 @@ static struct llama_sampler * llama_sampler_init_grammar_impl(
         if (!ctx->grammar) {
             delete ctx;
             return nullptr;
+        }
+        {
+            auto & cache = *ctx->grammar->mask_cache;
+            std::lock_guard<std::mutex> lock(cache.mutex);
+            ctx->stats = true;
+            ctx->stats_hits = cache.hits;
+            ctx->stats_misses = cache.misses;
+            ctx->stats_scans = cache.scans;
+            ctx->stats_miss_us = cache.t_miss_us;
         }
     } else {
         *ctx = {
@@ -4922,4 +5059,36 @@ bool llama_sampler_backend_can_retry(const llama_sampler * sampler) {
         }
     }
     return true;
+}
+
+// The samplers [first, second) of the backend part of a token-only chain that cannot change the token a final greedy sampler selects,
+// because each keeps the most probable token and the order: greedy then takes the argmax of the logits they receive.
+// The samplers before them, as the grammar, logit biases or penalties, change the logits and are kept.
+static std::pair<size_t, size_t> llama_sampler_chain_greedy_skip(const llama_sampler_chain * chain) {
+    static const bool disabled = getenv("LLAMA_SAMPLER_NO_GREEDY_COLLAPSE") != nullptr;
+    size_t n_backend = 0;
+    while (n_backend < chain->samplers.size() && chain->samplers[n_backend].is_backend) {
+        ++n_backend;
+    }
+    // the filtered candidates are part of the output
+    if (disabled || (chain->params.output_flags & LLAMA_SAMPLER_OUTPUT_CANDIDATES) ||
+            n_backend == 0 || chain->samplers[n_backend - 1].ptr->iface != &llama_sampler_greedy_i) {
+        return { 0, 0 };
+    }
+    size_t first = n_backend - 1;
+    while (first > 0) {
+        const auto * iface = chain->samplers[first - 1].ptr->iface;
+        const bool keeps_argmax =
+            iface == &llama_sampler_empty_i ||
+            iface == &llama_sampler_top_k_i ||
+            iface == &llama_sampler_top_p_i ||
+            iface == &llama_sampler_min_p_i ||
+            iface == &llama_sampler_temp_i ||
+            iface == &llama_sampler_temp_ext_i;
+        if (!keeps_argmax) {
+            break;
+        }
+        --first;
+    }
+    return { first, n_backend - 1 };
 }

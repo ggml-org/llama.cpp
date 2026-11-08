@@ -2380,14 +2380,16 @@ static void test_sampler_reservation(const test_params & params) {
         cp.output_flags = flags;
         llama_sampler_ptr chain(llama_sampler_chain_init(cp));
         const auto rule = "root ::= " + grammar_token(token);
-        llama_sampler_chain_add(chain.get(), llama_sampler_init_grammar(vocab, rule.c_str(), "root"));
+        // greedy selection drops samplers that keep the argmax from the graph: temp goes before the grammar,
+        // and top-k, which must follow it, before a dist selector (the grammar allows a single token)
         if (temp) {
             llama_sampler_chain_add(chain.get(), llama_sampler_init_temp(0.75f));
         }
+        llama_sampler_chain_add(chain.get(), llama_sampler_init_grammar(vocab, rule.c_str(), "root"));
         if (top_k) {
             llama_sampler_chain_add(chain.get(), llama_sampler_init_top_k(top_k));
         }
-        llama_sampler_chain_add(chain.get(), llama_sampler_init_greedy());
+        llama_sampler_chain_add(chain.get(), top_k ? llama_sampler_init_dist(1234) : llama_sampler_init_greedy());
         return chain;
     };
 

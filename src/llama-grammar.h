@@ -179,6 +179,8 @@ struct llama_grammar_mask_cache {
     size_t bytes = 0;
     size_t hits = 0;
     size_t misses = 0;
+    size_t scans = 0;      // misses the trie could not finish, resolved by the exact scan
+    int64_t t_miss_us = 0; // time spent building masks on misses
     uint64_t clock = 0;
     std::vector<entry> entries;
     std::unordered_map<uint64_t, size_t> index; // key hash -> position in entries
@@ -263,6 +265,9 @@ struct llama_grammar * llama_grammar_init_impl(
 
 void llama_grammar_free_impl(struct llama_grammar * grammar);
 
+// forget the interned grammars of a vocab that is being destroyed
+void llama_grammar_programs_drop(const struct llama_vocab * vocab);
+
 struct llama_grammar * llama_grammar_clone_impl(const struct llama_grammar & grammar);
 
 void llama_grammar_reset_impl(struct llama_grammar & grammar);
@@ -275,6 +280,9 @@ void llama_grammar_apply_impl(
 std::vector<uint32_t> llama_grammar_get_allowed_tokens(const llama_grammar & grammar);
 
 llama_grammar_mask_packed llama_grammar_get_allowed_packed(const llama_grammar & grammar);
+
+// the mask from the cache, without building it on a miss
+bool llama_grammar_get_allowed_packed_cached(const llama_grammar & grammar, llama_grammar_mask_packed & result);
 
 bool llama_grammar_get_allowed_tokens_trie(const llama_grammar & grammar, std::vector<uint32_t> & mask, size_t max_work = 256 * 1024);
 

@@ -82,6 +82,7 @@ struct options {
     float min_p = 0.05f;
     double eval_us = 0.0;
     bool logits_copy = true;
+    bool output_candidates = true; // chain output flags; the server samples greedy chains with token-only output
     bool jsonl_steps = true;
     int n_gpu_layers = 99;
     uint64_t seed = 1234;
@@ -90,6 +91,7 @@ struct options {
 static llama_sampler_ptr make_chain(const options & opt) {
     auto params = llama_sampler_chain_default_params();
     params.no_perf = true;
+    params.output_flags = opt.output_candidates ? LLAMA_SAMPLER_OUTPUT_CANDIDATES : LLAMA_SAMPLER_OUTPUT_TOKEN;
     llama_sampler_ptr chain(llama_sampler_chain_init(params));
     if (opt.top_k > 0) {
         llama_sampler_chain_add(chain.get(), llama_sampler_init_top_k(opt.top_k));
@@ -710,6 +712,7 @@ static void usage(const char * exe) {
             "  --paths LIST         cpu-scan,cpu-trie,backend (default all)\n"
             "  --top-k N --top-p P --min-p P   chain before greedy (default 40, 0.95, 0.05; 0/1/0 disables)\n"
             "  --eval-us US         simulated model evaluation per step, busy wait (default 0)\n"
+            "  --output token|candidates  backend chain output flags (default candidates; the server uses token for greedy)\n"
             "  --logits-copy on|off host paths copy logits out of the backend buffer (default on)\n"
             "  --replay FILE        replay saved model logits instead of synthetic logits\n"
             "  --dump-logits FILE   run the model teacher-forced over the trace and save its logits\n"
@@ -762,6 +765,7 @@ static options parse(int argc, char ** argv, bool & help) {
         else if (arg == "--min-p")        { opt.min_p = std::stof(value); }
         else if (arg == "--eval-us")      { opt.eval_us = std::stod(value); require(opt.eval_us >= 0, "--eval-us must be >= 0"); }
         else if (arg == "--logits-copy")  { opt.logits_copy = on_off(value); }
+        else if (arg == "--output")       { require(value == "token" || value == "candidates", "--output must be token or candidates"); opt.output_candidates = value == "candidates"; }
         else if (arg == "--seed")         { opt.seed = std::stoull(value); }
         else if (arg == "--rates") {
             opt.rates.clear();

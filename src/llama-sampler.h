@@ -45,6 +45,15 @@ bool llama_sampler_backend_can_retry(const llama_sampler * sampler);
 bool llama_sampler_backend_prepare(llama_sampler * sampler, const llama_sampler_row * rows, size_t n_rows);
 bool llama_sampler_backend_row_usable(const llama_sampler * sampler, size_t row);
 
+// Overlap of grammar masks with the forward pass, on the calling thread:
+// while lazy, backend_prepare validates rows without building their masks;
+// while deferring, grammar samplers queue their backend_set_input until llama_sampler_backend_flush_deferred.
+bool llama_sampler_backend_overlap_enabled();
+void llama_sampler_backend_set_lazy(bool lazy);
+void llama_sampler_backend_set_defer(bool defer);
+bool llama_sampler_backend_has_deferred();
+void llama_sampler_backend_flush_deferred();
+
 struct llama_sampler * llama_sampler_init_dry_testing(
         float   dry_multiplier,
         float   dry_base,
