@@ -5708,6 +5708,40 @@ struct test_mul_mat_prec_src1_bf16 : public test_mul_mat {
     }
 };
 
+// src1 GGML_PREC_F32: the implementation can not convert src1 or the F32 src0 tiles down to F16 or TF32
+struct test_mul_mat_prec_src1_f32 : public test_mul_mat {
+    test_mul_mat_prec_src1_f32(ggml_type type_a = GGML_TYPE_F32, int64_t m = 64, int64_t n = 32, int64_t k = 256,
+            std::array<int64_t, 2> bs = {1, 1},
+            std::array<int64_t, 2> nr = {1, 1})
+        : test_mul_mat(type_a, GGML_TYPE_F32, m, n, k, bs, nr) {}
+    double max_nmse_err() override {
+        return type_a == GGML_TYPE_F32 ? 1e-10 : test_mul_mat::max_nmse_err();
+    }
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * out = test_mul_mat::build_graph(ctx);
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->op == GGML_OP_MUL_MAT) {
+                ggml_prec_set_src(t, GGML_PREC_F32, 1);
+            }
+        }
+        return out;
+    }
+    void initialize_tensors(ggml_context * ctx) override {
+        const float b_max = type_a == GGML_TYPE_F32 ? 1e6f : 1.0f;
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "b") == 0) {
+                init_tensor_uniform(t, -b_max, b_max);
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MUL_MAT_PREC_SRC1_F32";
+    }
+};
+
 // FP4 native W4A4 path (default precision)
 struct test_mul_mat_w4a4 : public test_mul_mat {
     test_mul_mat_w4a4(ggml_type type_a = GGML_TYPE_NVFP4, ggml_type type_b = GGML_TYPE_F32,
@@ -11675,6 +11709,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_mul_mat_prec_src1_bf16(type_a, 128, 512, 512));
         test_cases.emplace_back(new test_mul_mat_prec_src1_bf16(type_a,  67,  33, k_partial));
         test_cases.emplace_back(new test_mul_mat_prec_src1_bf16(type_a,  64,  32, 256, {2, 3}, {2, 1}));
+    }
+
+    // src1 precision: same shapes with GGML_PREC_F32, which the backends must not round down to F16 or TF32
+    for (ggml_type type_a : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+        test_cases.emplace_back(new test_mul_mat_prec_src1_f32(type_a,  64,   1, 256));
+        test_cases.emplace_back(new test_mul_mat_prec_src1_f32(type_a,  64,   8, 256));
+        test_cases.emplace_back(new test_mul_mat_prec_src1_f32(type_a,  64,  32, 256));
+        test_cases.emplace_back(new test_mul_mat_prec_src1_f32(type_a, 128, 512, 512));
+        test_cases.emplace_back(new test_mul_mat_prec_src1_f32(type_a,  67,  33, 100));
+        test_cases.emplace_back(new test_mul_mat_prec_src1_f32(type_a,  64,  32, 256, {2, 3}, {2, 1}));
     }
 
     // FP4 activation precision (default = native W4A4, src1 GGML_PREC_Q8 = W4A8)
