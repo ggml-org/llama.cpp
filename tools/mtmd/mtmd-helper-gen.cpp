@@ -193,6 +193,10 @@ public:
     int32_t set_input(const mtmd_helper_gen_audio_inp * inp) override {
         reset();
         seq_id = inp->seq_id;
+        if (!llama_memory_seq_rm(llama_get_memory(lctx), seq_id, 0, -1)) {
+            LOG_ERR("mtmd_helper_gen_audio: cannot reset Qwen3-TTS sequence\n");
+            return 1;
+        }
 
         if (!ensure_cache()) {
             return 1;
@@ -214,8 +218,7 @@ public:
 
         const int n_e = n_embd;
         auto row = [&](llama_token t) {
-            return std::vector<float>(tok_embd.begin() + (size_t) t * n_e,
-                                       tok_embd.begin() + (size_t) (t + 1) * n_e);
+            return get_tok_embd_row(t);
         };
         auto sum_row = [&](llama_token a, llama_token b) {
             std::vector<float> va = row(a), vb = row(b);
@@ -425,6 +428,20 @@ public:
     }
 
 private:
+    std::vector<float> get_tok_embd_row(llama_token token) {
+        const auto cached = tok_embd_rows.find(token);
+        if (cached != tok_embd_rows.end()) {
+            return cached->second;
+        }
+
+        std::vector<float> row((size_t) n_embd);
+        if (llama_model_get_tok_embd_rows(model, &token, 1, row.data()) != (uint32_t) n_embd) {
+            throw std::runtime_error("mtmd_helper_gen_audio: token embedding row read failed");
+        }
+        tok_embd_rows.emplace(token, row);
+        return row;
+    }
+
     bool ensure_cache() {
         if (specials_ok) {
             return true;
@@ -450,11 +467,6 @@ private:
         const uint32_t n_tok_embd = llama_model_get_tok_embd(model, nullptr);
         if (n_tok_embd == 0) {
             LOG_ERR("mtmd_helper_gen_audio: model has no token embeddings\n");
-            return false;
-        }
-        tok_embd.resize(n_tok_embd);
-        if (llama_model_get_tok_embd(model, tok_embd.data()) != n_tok_embd) {
-            LOG_ERR("mtmd_helper_gen_audio: token embedding copy failed\n");
             return false;
         }
         specials_ok = true;
@@ -492,7 +504,7 @@ private:
     llama_token tts_pad    = LLAMA_TOKEN_NULL;
     llama_token tts_bos    = LLAMA_TOKEN_NULL;
     llama_token tts_eos    = LLAMA_TOKEN_NULL;
-    std::vector<float> tok_embd; // whole token embedding matrix, n_vocab * n_embd
+    std::unordered_map<llama_token, std::vector<float>> tok_embd_rows;
 
     // must match hparams.wav_tfm_swa hardcoded in clip.cpp
     size_t window_frames = 72;
