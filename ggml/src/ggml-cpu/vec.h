@@ -69,6 +69,13 @@ extern ggml_fp16_t ggml_table_gelu_quick_f16[1 << 16];
 
 void ggml_vec_dot_f32(int n, float * GGML_RESTRICT s, size_t bs, const float * GGML_RESTRICT x, size_t bx, const float * GGML_RESTRICT y, size_t by, int nrc);
 void ggml_vec_dot_bf16(int n, float * GGML_RESTRICT s, size_t bs, ggml_bf16_t * GGML_RESTRICT x, size_t bx, ggml_bf16_t * GGML_RESTRICT y, size_t by, int nrc);
+void ggml_vec_dot_bf16_f32(int n, float * GGML_RESTRICT s, size_t bs, const ggml_bf16_t * GGML_RESTRICT x, size_t bx, const float * GGML_RESTRICT y, size_t by, int nrc);
+
+// x86 CPUs without native BF16 dot instructions: keep activations in F32 for BF16 weights
+#if (defined(__AVX512F__) || defined(__AVX2__)) && !defined(__AVX512BF16__)
+#define GGML_CPU_BF16_F32_ACT 1
+#endif
+
 void ggml_vec_dot_f16(int n, float * GGML_RESTRICT s, size_t bs, ggml_fp16_t * GGML_RESTRICT x, size_t bx, ggml_fp16_t * GGML_RESTRICT y, size_t by, int nrc);
 
 void ggml_vec_silu_f32(const int n, float * y, const float * x);

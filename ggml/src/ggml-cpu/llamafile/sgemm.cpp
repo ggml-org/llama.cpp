@@ -3998,11 +3998,25 @@ bool llamafile_sgemm(const struct ggml_compute_params * params, int64_t m, int64
                 (float *)C, ldc};
             return tb.matmul(m, n);
         }
+        if (Btype == GGML_TYPE_F32) {
+            tinyBLAS<16, __m512, __m512, ggml_bf16_t, float, float> tb{ params, k,
+                (const ggml_bf16_t *)A, lda,
+                (const float *)B, ldb,
+                (float *)C, ldc};
+            return tb.matmul(m, n);
+        }
 #elif defined(__AVX2__)
         if (Btype == GGML_TYPE_BF16) {
             tinyBLAS<8, __m256, __m256, ggml_bf16_t, ggml_bf16_t, float> tb{ params, k,
                 (const ggml_bf16_t *)A, lda,
                 (const ggml_bf16_t *)B, ldb,
+                (float *)C, ldc};
+            return tb.matmul(m, n);
+        }
+        if (Btype == GGML_TYPE_F32) {
+            tinyBLAS<8, __m256, __m256, ggml_bf16_t, float, float> tb{ params, k,
+                (const ggml_bf16_t *)A, lda,
+                (const float *)B, ldb,
                 (float *)C, ldc};
             return tb.matmul(m, n);
         }

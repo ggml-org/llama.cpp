@@ -259,7 +259,64 @@ void ggml_vec_dot_bf16(int n, float * GGML_RESTRICT s, size_t bs, ggml_bf16_t * 
                              GGML_BF16_TO_FP32(y[i]));
     }
     *s = sumf;
+
 }
+
+
+#if defined(__AVX512F__)
+static inline __m512 ggml_bf16x16_to_f32(const ggml_bf16_t * p) {
+    return _mm512_castsi512_ps(_mm512_slli_epi32(_mm512_cvtepu16_epi32(_mm256_loadu_si256((const __m256i *) p)), 16));
+}
+#elif defined(__AVX2__)
+static inline __m256 ggml_bf16x8_to_f32(const ggml_bf16_t * p) {
+    return _mm256_castsi256_ps(_mm256_slli_epi32(_mm256_cvtepu16_epi32(_mm_loadu_si128((const __m128i *) p)), 16));
+}
+#endif
+
+// x is BF16 (weights), y is F32 (activations): y is read directly, no per-row conversion
+void ggml_vec_dot_bf16_f32(int n, float * GGML_RESTRICT s, size_t bs, const ggml_bf16_t * GGML_RESTRICT x, size_t bx, const float * GGML_RESTRICT y, size_t by, int nrc) {
+    assert(nrc == 1);
+    GGML_UNUSED(nrc);
+    GGML_UNUSED(bx);
+    GGML_UNUSED(by);
+    GGML_UNUSED(bs);
+
+    int i = 0;
+    ggml_float sumf = 0;
+
+#if defined(__AVX512F__)
+    __m512 c1 = _mm512_setzero_ps();
+    __m512 c2 = _mm512_setzero_ps();
+    for (; i + 32 <= n; i += 32) {
+        c1 = _mm512_fmadd_ps(ggml_bf16x16_to_f32(x + i),      _mm512_loadu_ps(y + i),      c1);
+        c2 = _mm512_fmadd_ps(ggml_bf16x16_to_f32(x + i + 16), _mm512_loadu_ps(y + i + 16), c2);
+    }
+    sumf += (ggml_float) _mm512_reduce_add_ps(_mm512_add_ps(c1, c2));
+#elif defined(__AVX2__)
+    __m256 c1 = _mm256_setzero_ps();
+    __m256 c2 = _mm256_setzero_ps();
+    __m256 c3 = _mm256_setzero_ps();
+    __m256 c4 = _mm256_setzero_ps();
+    for (; i + 32 <= n; i += 32) {
+        c1 = _mm256_fmadd_ps(ggml_bf16x8_to_f32(x + i),      _mm256_loadu_ps(y + i),      c1);
+        c2 = _mm256_fmadd_ps(ggml_bf16x8_to_f32(x + i +  8), _mm256_loadu_ps(y + i +  8), c2);
+        c3 = _mm256_fmadd_ps(ggml_bf16x8_to_f32(x + i + 16), _mm256_loadu_ps(y + i + 16), c3);
+        c4 = _mm256_fmadd_ps(ggml_bf16x8_to_f32(x + i + 24), _mm256_loadu_ps(y + i + 24), c4);
+    }
+    __m256 c  = _mm256_add_ps(_mm256_add_ps(c1, c2), _mm256_add_ps(c3, c4));
+    __m128 lo = _mm_add_ps(_mm256_castps256_ps128(c), _mm256_extractf128_ps(c, 1));
+    lo = _mm_add_ps(lo, _mm_movehl_ps(lo, lo));
+    lo = _mm_add_ss(lo, _mm_movehdup_ps(lo));
+    sumf += (ggml_float) _mm_cvtss_f32(lo);
+#endif
+
+    for (; i < n; ++i) {
+        sumf += (ggml_float)(GGML_BF16_TO_FP32(x[i]) * y[i]);
+    }
+
+    *s = sumf;
+}
+
 
 void ggml_vec_dot_f16(int n, float * GGML_RESTRICT s, size_t bs, ggml_fp16_t * GGML_RESTRICT x, size_t bx, ggml_fp16_t * GGML_RESTRICT y, size_t by, int nrc) {
     assert(nrc == 1);
