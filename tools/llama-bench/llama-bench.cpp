@@ -60,22 +60,36 @@ public:
         return val;
     }
 
+    static uint64_t get_max_range() {
+        static uint64_t cached_mr = 0;
+        if (cached_mr == 0) {
+            cached_mr = read_uj("/sys/class/powercap/intel-rapl/intel-rapl:0/max_energy_range_uj");
+            if (cached_mr == 0) {
+                cached_mr = 262143328850ULL;
+            }
+        }
+        return cached_mr;
+    }
+
     static rapl_reading sample() {
         rapl_reading r;
-        uint64_t pkg = read_uj("/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj");
-        if (pkg > 0) {
-            r.pkg_uj = pkg;
-            r.valid  = true;
+        for (int pkg_idx = 0; pkg_idx < 8; ++pkg_idx) {
+            char pkg_path[128];
+            snprintf(pkg_path, sizeof(pkg_path), "/sys/class/powercap/intel-rapl/intel-rapl:%d/energy_uj", pkg_idx);
+            uint64_t pkg = read_uj(pkg_path);
+            if (pkg == 0) break;
+            r.pkg_uj += pkg;
+            r.valid = true;
             for (int sub = 0; sub < 4; ++sub) {
                 char name_path[128];
-                snprintf(name_path, sizeof(name_path), "/sys/class/powercap/intel-rapl/intel-rapl:0/intel-rapl:0:%d/name", sub);
+                snprintf(name_path, sizeof(name_path), "/sys/class/powercap/intel-rapl/intel-rapl:%d/intel-rapl:%d:%d/name", pkg_idx, pkg_idx, sub);
                 FILE * fn = fopen(name_path, "r");
                 if (fn) {
                     char name_buf[32] = {0};
                     if (fscanf(fn, "%31s", name_buf) == 1 && strcmp(name_buf, "dram") == 0) {
                         char energy_path[128];
-                        snprintf(energy_path, sizeof(energy_path), "/sys/class/powercap/intel-rapl/intel-rapl:0/intel-rapl:0:%d/energy_uj", sub);
-                        r.dram_uj = read_uj(energy_path);
+                        snprintf(energy_path, sizeof(energy_path), "/sys/class/powercap/intel-rapl/intel-rapl:%d/intel-rapl:%d:%d/energy_uj", pkg_idx, pkg_idx, sub);
+                        r.dram_uj += read_uj(energy_path);
                     }
                     fclose(fn);
                 }
@@ -86,14 +100,14 @@ public:
 
     static double compute_joules(const rapl_reading & before, const rapl_reading & after) {
         if (!before.valid || !after.valid) return 0.0;
-        const uint64_t max_range = 262143328850ULL;
+        uint64_t max_range = get_max_range();
         uint64_t delta_uj = (after.pkg_uj >= before.pkg_uj) ? (after.pkg_uj - before.pkg_uj) : ((after.pkg_uj + max_range) - before.pkg_uj);
         return (double) delta_uj / 1e6;
     }
 
     static double compute_dram_joules(const rapl_reading & before, const rapl_reading & after) {
         if (!before.valid || !after.valid || before.dram_uj == 0 || after.dram_uj == 0) return 0.0;
-        const uint64_t max_range = 262143328850ULL;
+        uint64_t max_range = get_max_range();
         uint64_t delta_uj = (after.dram_uj >= before.dram_uj) ? (after.dram_uj - before.dram_uj) : ((after.dram_uj + max_range) - before.dram_uj);
         return (double) delta_uj / 1e6;
     }
@@ -1659,7 +1673,7 @@ struct test {
         double pkg = avg_joules();
         double dram = avg_dram_joules();
         if (pkg <= 0.0 || dram <= 0.0) return 0.0;
-        return (dram / pkg) * 100.0;
+        return (dram / (pkg + dram)) * 100.0;
     }
 
     static std::string get_backend() {
@@ -2411,6 +2425,19 @@ int llama_bench(int argc, char ** argv) {
     ggml_backend_load_all();
 
     cmd_params params = parse_cmd_params(argc, argv);
+
+    if (params.energy) {
+#if !defined(__linux__)
+        fprintf(stderr, "%s: warning: energy telemetry (-e) is only supported on Linux via RAPL sysfs\n", __func__);
+        params.energy = false;
+#else
+        rapl_reading check = rapl_monitor::sample();
+        if (!check.valid) {
+            fprintf(stderr, "%s: warning: RAPL sysfs interface (/sys/class/powercap/intel-rapl) is not accessible; energy telemetry disabled\n", __func__);
+            params.energy = false;
+        }
+#endif
+    }
 
     auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
     if (!cpu_dev) {
