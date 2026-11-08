@@ -66,15 +66,17 @@
 <style>
 	.diagram {
 		display: grid;
-		grid-template-columns: auto minmax(0, 1fr) minmax(0, calc(var(--u) * 8));
+		grid-template-columns: auto minmax(0, 1fr) minmax(0, calc(var(--u) * 10.4));
 		align-items: stretch;
 		width: 100%;
 		height: 100%;
 	}
-	/* the icon on the cards' middle; its name and endpoint hang under it, so they don't move it off centre */
+	/* the icon on the cards' middle, a little in from the text beside it; its name and endpoint hang under it, so
+	   they don't move it off centre */
 	.hub {
 		position: relative;
 		align-self: center;
+		margin-left: calc(var(--u) * 0.8);
 	}
 	.caption {
 		position: absolute;
@@ -88,14 +90,14 @@
 		white-space: nowrap;
 	}
 	.name {
-		font-size: calc(var(--u) * 0.62);
+		font-size: calc(var(--u) * 0.84);
 		font-weight: 700;
 		letter-spacing: -0.02em;
 		line-height: 1;
 	}
 	.endpoint {
 		color: var(--p-muted);
-		font: 400 calc(var(--u) * 0.45) / 1 var(--mono);
+		font: 400 calc(var(--u) * 0.58) / 1 var(--mono);
 	}
 	/* the lines start half a unit off the icon's edge and end at the cards' edge */
 	.links {
@@ -150,14 +152,14 @@
 		margin: 0;
 	}
 	.agent {
-		font-size: calc(var(--u) * 0.8);
+		font-size: calc(var(--u) * 1);
 		font-weight: 700;
 		letter-spacing: -0.02em;
 		line-height: 1;
 	}
 	.note {
 		color: var(--p-muted);
-		font: 400 calc(var(--u) * 0.45) / 1.3 var(--mono);
+		font: 400 calc(var(--u) * 0.58) / 1.3 var(--mono);
 		text-wrap: balance;
 	}
 </style>

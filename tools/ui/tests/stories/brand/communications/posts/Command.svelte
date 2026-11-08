@@ -12,7 +12,7 @@
 		size?: number;
 	}
 
-	let { command, prompt = true, size = 0.6 }: Props = $props();
+	let { command, prompt = true, size = 0.66 }: Props = $props();
 </script>
 
 <pre style:--s="calc(var(--u) * {size})" class="terminal">{#if prompt}<span class="prompt"
@@ -21,12 +21,12 @@
 <style>
 	.terminal {
 		margin: 0;
-		padding: calc(var(--s) * 0.6) calc(var(--s) * 1);
+		padding: calc(var(--s) * 0.55) calc(var(--s) * 1);
 		border: 2px solid var(--p-line);
 		border-radius: calc(var(--s) * 0.55);
 		background: var(--p-inset);
 		color: var(--p-ink);
-		font: 400 var(--s) / 1.5 var(--mono);
+		font: 400 var(--s) / 1.4 var(--mono);
 		white-space: pre;
 	}
 	.prompt {

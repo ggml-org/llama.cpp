@@ -11,7 +11,7 @@
 	--mono: 'Llama Mono', var(--font-mono);
 	background: var(--p-bg);
 	color: var(--p-ink);
-	font: 400 calc(var(--u) * 0.55) / 1.4 var(--sans);
+	font: 400 calc(var(--u) * 0.62) / 1.4 var(--sans);
 	/* figures, meta lines and repo ids keep their columns */
 	font-variant-numeric: tabular-nums;
 	/* the text stack's rhythm, in every layout: a label to its headline, a headline to its lede, and the lede to what
@@ -93,23 +93,23 @@
 :where(.ground) :where(.t-label) {
 	margin: 0;
 	color: var(--p-muted);
-	font: 500 calc(var(--u) * 0.48) / 1 var(--mono);
+	font: 500 calc(var(--u) * 0.54) / 1 var(--mono);
 	letter-spacing: 0.12em;
 	text-transform: uppercase;
 }
 :where(.ground) :where(.t-body) {
 	margin: 0;
-	font-size: calc(var(--u) * 0.55);
+	font-size: calc(var(--u) * 0.62);
 	line-height: 1.4;
 	text-wrap: pretty;
 }
-/* a lede keeps to about 50 characters a line, so it doesn't run up to what stands beside it */
+/* a lede keeps to about 40 characters a line, so it doesn't run up to what stands beside it */
 :where(.ground) :where(.t-lede) {
 	max-width: calc(var(--u) * 17);
 	margin: 0;
 	color: var(--p-muted);
-	font-size: calc(var(--u) * 0.72);
-	line-height: 1.35;
+	font-size: calc(var(--u) * 0.84);
+	line-height: 1.3;
 	text-wrap: pretty;
 }
 :where(.ground) :where(.t-headline, .t-display, .t-figure) {
@@ -136,7 +136,7 @@
 }
 :where(.ground) :where(.t-mono) {
 	margin: 0;
-	font: 400 calc(var(--u) * 0.5) / 1.2 var(--mono);
+	font: 400 calc(var(--u) * 0.58) / 1.2 var(--mono);
 }
 
 /* a box a motif fills: the SVG takes the box's size, whatever the format, rather than growing with its width */

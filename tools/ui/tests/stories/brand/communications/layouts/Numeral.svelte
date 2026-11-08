@@ -25,7 +25,7 @@
 	const g = $derived(grid(FORMATS[format]));
 	// the figure's size in units, less on a format too low for it (a billboard is 16 units high)
 	const figure = $derived(
-		Math.min({ square: 7, tall: 9, wide: 8 }[g.shape], FORMATS[format].height / g.unit - 10)
+		Math.min({ square: 6, tall: 9, wide: 8 }[g.shape], FORMATS[format].height / g.unit - 10)
 	);
 </script>
 
@@ -59,14 +59,14 @@
 		display: grid;
 		flex: 1;
 		grid-template-rows: 1fr auto;
-		gap: calc(var(--u) * 1.5);
+		gap: calc(var(--u) * 1.2);
 		margin-block: calc(var(--u) * 1.5);
 	}
 	.figure {
 		position: relative;
 		display: grid;
 		align-items: end;
-		padding: calc(var(--u) * 1) 0 0;
+		padding: calc(var(--u) * 0.5) 0 0;
 	}
 	.field {
 		position: absolute;
