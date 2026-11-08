@@ -728,7 +728,7 @@ ggml_backend_reg_t ggml_backend_zdnn_reg(void) {
 
     {
         g_ggml_backend_zdnn_reg = {
-            /* .api_version = */ GGML_ZDNN_VERSION,
+            /* .api_version = */ GGML_BACKEND_API_VERSION,
             /* .iface       = */ ggml_backend_zdnn_reg_i,
             /* .context     = */ NULL
         };
