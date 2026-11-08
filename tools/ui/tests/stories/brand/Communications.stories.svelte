@@ -2,9 +2,13 @@
 	import StateGallery from '../helpers/StateGallery.svelte';
 	import StateGalleryItem from '../helpers/StateGalleryItem.svelte';
 	import Receipt from './communications/layouts/Receipt.svelte';
+	import Statement from './communications/layouts/Statement.svelte';
+	import AgentsDiagram from './communications/posts/AgentsDiagram.svelte';
 	import LinkPreview from './communications/posts/LinkPreview.svelte';
 	import ModelDropPost from './communications/posts/ModelDropPost.svelte';
 	import {
+		type AgentsCopy,
+		agentsPost,
 		FORMATS,
 		linkPreview,
 		type LinkPreviewCopy,
@@ -19,7 +23,8 @@
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 
 	// Communications' applications: key visuals with real copy, the pieces that ship. Model drop is a Roster, What's new
-	// a Bulletin, llama.app's link preview a Product, llama.cpp's a Statement and the open models poster a Receipt. The copy is in the controls
+	// a Bulletin, llama.app's link preview a Product, llama.cpp's a Statement, Agents a Statement with the agents
+	// diagram for its motif (after Merve's post) and the open models poster a Receipt. The copy is in the controls
 	const { Story } = defineMeta({
 		parameters: {
 			controls: { disable: true },
@@ -108,6 +113,34 @@
 						/>
 					</StateGalleryItem>
 				{/each}
+			{/each}
+		</StateGallery>
+	{/snippet}
+</Story>
+
+<Story args={{ ...agentsPost, overlay: false }} name="Agents" parameters={editable}>
+	{#snippet template(args)}
+		{@const copy = args as AgentsCopy & { overlay: boolean }}
+		<StateGallery minItemWidth="28rem">
+			{#each tones as tone (tone)}
+				<StateGalleryItem label="Landscape 16:9, {tone}" note="Statement · {size('landscape')}">
+					<Statement
+						command={copy.command}
+						footer={copy.footer}
+						format="landscape"
+						header={{ brand: 'Llama', url: copy.url }}
+						headline={copy.headline}
+						lede={copy.lede}
+						overlay={copy.overlay}
+						prompt={false}
+						{tone}
+					>
+						{#snippet motif()}<AgentsDiagram
+								agents={copy.agents}
+								endpoint={copy.endpoint}
+							/>{/snippet}
+					</Statement>
+				</StateGalleryItem>
 			{/each}
 		</StateGallery>
 	{/snippet}

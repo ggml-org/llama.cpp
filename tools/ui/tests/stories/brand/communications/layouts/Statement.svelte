@@ -13,12 +13,15 @@
 
 	interface Props extends LayoutProps {
 		command?: string;
+		/** the command's `$`; off for a line of config */
+		prompt?: boolean;
 		headline: string;
 		lede?: string;
 		motif?: Snippet;
 	}
 
-	let { command, footer, format, header, headline, lede, motif, overlay, tone }: Props = $props();
+	let { command, footer, format, header, headline, lede, motif, overlay, prompt, tone }: Props =
+		$props();
 </script>
 
 <PostFrame
@@ -37,7 +40,7 @@
 
 			{#if lede}<p class="t-lede">{lede}</p>{/if}
 
-			{#if command}<Command {command} />{/if}
+			{#if command}<Command {command} {prompt} />{/if}
 		</div>
 	</div>
 
@@ -55,12 +58,12 @@
 	}
 	.text {
 		display: grid;
-		gap: calc(var(--u) * 0.8);
+		gap: var(--stack);
 		justify-items: start;
 		align-self: end;
 	}
 	.text :global(.terminal) {
-		margin-top: calc(var(--u) * 0.4);
+		margin-top: calc(var(--stack-after) - var(--stack));
 	}
 
 	:global(.shape-wide) .body {

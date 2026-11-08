@@ -67,10 +67,11 @@
 		display: flex;
 		flex-direction: column;
 		align-items: flex-start;
-		gap: calc(var(--u) * 0.9);
+		gap: var(--stack);
 	}
+	/* 2.1u under the header */
 	.text :global(.t-display) {
-		margin-top: calc(var(--u) * 1.2);
+		margin-top: calc(var(--u) * 2.1 - var(--stack));
 	}
 	.caption {
 		margin: auto 0 0;

@@ -132,6 +132,12 @@ const LOGO_FILES = [
 	['lockup/llama-cpp', 'logo-llama-cpp-light-bg.svg'],
 	['lockup/llama-cpp', 'logo-llama-cpp-dark-bg.svg']
 ];
+// the app icon, for Llama as a thing in a piece: the macOS icon cropped to its tile, named as the other logos are (its
+// sources are named for the Mac's mode, so the ink tile for light grounds is the dark one)
+const APP_ICONS = [
+	['app/apple/macos-1024x1024-dark.svg', 'app-icon-light.svg'],
+	['app/apple/macos-1024x1024-light.svg', 'app-icon-dark.svg']
+];
 
 function tokens() {
 	const primitives = fs.readFileSync(
@@ -359,7 +365,7 @@ function readme(examples) {
 ## In this system
 
 - **Logos** (assets): the icon, the Llama lockup and the llama.cpp lockup, each for light and dark grounds, with
-  and without their own ground. Use them as they are.
+  and without their own ground, and the app icon for light and dark grounds. Use them as they are.
 - **Motifs** (assets): every motif as an SVG for light grounds (ink #111111) and dark ones (ink #fafafa), with its
   one cinder detail; quantised blocks and the dot grid as images.
 - **Components**: one per key visual (${KEY_VISUALS.map((k) => k.name).join(', ')}), each with its guidelines and
@@ -754,9 +760,20 @@ if (args[0] === 'index') {
 	for (const [dir, file] of LOGO_FILES)
 		write(`assets/Logos/${file}`, fs.readFileSync(path.join(ROOT, LOGOS, dir, file)));
 
+	for (const [source, file] of APP_ICONS)
+		write(
+			`assets/Logos/${file}`,
+			fs
+				.readFileSync(path.join(ROOT, LOGOS, source), 'utf8')
+				.replace(
+					'width="1024" height="1024" viewBox="0 0 1024 1024"',
+					'width="824" height="824" viewBox="100 100 824 824"'
+				)
+		);
+
 	write(
 		'assets/Logos/README.md',
-		'# Logos\n\nThe icon and the two lockups, as they are: `-light` is the ink mark for light grounds, `-dark` the light mark for dark grounds, `-bg` with its own ground. Llama goes on any ground; llama.cpp on light and dark only. Never redraw, recolour or outline them.\n'
+		'# Logos\n\nThe icon and the two lockups, as they are: `-light` is the ink mark for light grounds, `-dark` the light mark for dark grounds, `-bg` with its own ground. Llama goes on any ground; llama.cpp on light and dark only. Never redraw, recolour or outline them.\n\nThe app icon (`app-icon-light.svg`, `app-icon-dark.svg`) is for Llama as a thing in a piece, such as a node in a diagram: the tile as the app ships it, its corners at 22.5% of its side and the icon at 67% of it, optically centred. Use it at about 2.4u with at least 1u clear round it; never draw a square round the icon instead.\n'
 	);
 	write(
 		'assets/Motifs/README.md',
