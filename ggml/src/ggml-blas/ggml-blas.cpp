@@ -330,6 +330,8 @@ static const char * ggml_backend_blas_device_get_description(ggml_backend_dev_t 
         return "Accelerate";
     #elif defined(GGML_BLAS_USE_MKL)
         return "MKL";
+    #elif defined(GGML_BLAS_USE_AOCL)
+        return "AOCL-BLAS";
     #elif defined(GGML_BLAS_USE_BLIS)
         return "BLIS";
     #elif defined(GGML_BLAS_USE_NVPL)
@@ -367,6 +369,7 @@ static void ggml_backend_blas_device_get_props(ggml_backend_dev_t dev, struct gg
         /* .host_buffer           = */ false,
         /* .buffer_from_host_ptr  = */ true,
         /* .events                = */ false,
+        /* .mmap_support          = */ true,
     };
 }
 

@@ -58,7 +58,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--outtype", type=str, choices=["f32", "f16", "bf16", "q8_0", "tq1_0", "tq2_0", "auto"], default="auto",
-        help="output format - use f32 for float32, f16 for float16, bf16 for bfloat16, q8_0 for Q8_0, tq1_0 or tq2_0 for ternary, and auto for the highest-fidelity 16-bit float type",
+        help="output format - use f32 for float32, f16 for float16, bf16 for bfloat16, q8_0 for Q8_0, tq1_0 or tq2_0 for ternary, and auto to preserve supported FP8 weights and otherwise select the highest-fidelity 16-bit float type",
     )
     parser.add_argument(
         "--bigendian", action="store_true",
@@ -122,8 +122,12 @@ def parse_args() -> argparse.Namespace:
         help="Export only the multi-token prediction (MTP) head as a separate GGUF, suitable for use as a speculative draft. An 'mtp-' prefix will be added to the output file name.",
     )
     parser.add_argument(
-        "--no-mtp", action="store_true",
-        help="Exclude the multi-token prediction (MTP) head from the converted GGUF. Pair with --mtp on a second run to publish trunk and MTP as two files. Note: the split form duplicates embeddings, but even though the bundled default is more space-efficient overall, this allows differing quantization which may be more performant.",
+        "--no-nextn", "--no-mtp", dest="no_mtp", action="store_true",
+        help="Exclude NextN speculative draft tensors from the converted GGUF. Pair with --mtp or --dspark on a second run to publish target and draft as two files.",
+    )
+    parser.add_argument(
+        "--dspark", action="store_true",
+        help="Export only the DeepSeek-V4 or Mistral Large 4 DSpark draft tensors as a separate GGUF.",
     )
     parser.add_argument(
         "--mistral-format", action="store_true",
@@ -153,6 +157,10 @@ def parse_args() -> argparse.Namespace:
         help="Store tensors dequantized from FP8 as Q8_0 instead of BF16/F16.",
     )
 
+    parser.add_argument(
+        "--fuse-qkv", action="store_true",
+        help="Fuse separate Q, K, V weight tensors into a single QKV tensor.",
+    )
     parser.add_argument(
         "--target-model-dir", type=str, default=None,
         help=(
@@ -247,6 +255,9 @@ def main() -> None:
             assert hparams.get("vision_encoder") is not None, "This model does not support multimodal"
             from conversion.pixtral import PixtralModel
             model_class = PixtralModel
+        elif hparams.get("moe") is not None and hparams.get("dsa") is not None:
+            from conversion.mistral4 import MistralLarge4Model
+            model_class = MistralLarge4Model
         elif hparams.get("moe") is not None:
             from conversion.mistral import MistralMoeModel
             model_class = MistralMoeModel
@@ -254,13 +265,30 @@ def main() -> None:
             from conversion.mistral import MistralModel
             model_class = MistralModel
 
-        if args.mtp and args.no_mtp:
-            logger.error("--mtp and --no-mtp are mutually exclusive")
+        if sum((args.mtp, args.no_mtp, args.dspark)) > 1:
+            logger.error("--mtp, --no-nextn, and --dspark are mutually exclusive")
             sys.exit(1)
+
+        if args.dspark:
+            if is_mistral_format or model_architecture == "MistralLarge4ForConditionalGeneration":
+                if model_class.__name__ != "MistralLarge4Model":
+                    logger.error("--dspark is only supported for Mistral Large 4 among Mistral-format models")
+                    sys.exit(1)
+                from conversion.mistral4 import MistralLarge4DSparkModel
+                model_class = MistralLarge4DSparkModel
+            elif model_architecture not in ("DeepseekV4ForCausalLM", "DeepseekV41ForCausalLM"):
+                logger.error("--dspark is only supported for DeepseekV4ForCausalLM, DeepseekV41ForCausalLM and Mistral Large 4")
+                sys.exit(1)
+            elif model_architecture == "DeepseekV41ForCausalLM":
+                from conversion.deepseek41 import DeepseekV41DSparkModel
+                model_class = DeepseekV41DSparkModel
+            else:
+                from conversion.deepseek import DeepseekV4DSparkModel
+                model_class = DeepseekV4DSparkModel
 
         if args.mtp or args.no_mtp:
             if not model_class.supports_mtp_export:
-                logger.error("--mtp / --no-mtp are not supported for %s", model_architecture)
+                logger.error("--mtp / --no-nextn are not supported for %s", model_architecture)
                 sys.exit(1)
             if args.no_mtp:
                 model_class.no_mtp = True
@@ -279,6 +307,7 @@ def main() -> None:
                                      target_model_dir=Path(args.target_model_dir) if args.target_model_dir else None,
                                      fuse_gate_up_exps=args.fuse_gate_up_exps,
                                      fp8_as_q8=args.fp8_as_q8,
+                                     fuse_qkv=args.fuse_qkv,
                                      )
 
         if args.vocab_only:

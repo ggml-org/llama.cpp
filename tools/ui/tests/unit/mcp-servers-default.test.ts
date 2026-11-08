@@ -1,5 +1,5 @@
+import { SETTINGS_KEYS } from '$lib/constants';
 import { describe, expect, it } from 'vitest';
-import { SETTINGS_KEYS } from '$lib/constants/settings-keys';
 
 /**
  * Default-value policy for the `MCP_SERVERS` setting.
@@ -12,7 +12,7 @@ import { SETTINGS_KEYS } from '$lib/constants/settings-keys';
  */
 describe('MCP_SERVERS default value', () => {
 	it('does not preload any servers in the MCP_SERVERS setting default', async () => {
-		const { SETTING_CONFIG_DEFAULT } = await import('$lib/constants/settings-registry');
+		const { SETTING_CONFIG_DEFAULT } = await import('$lib/constants');
 
 		expect(SETTING_CONFIG_DEFAULT[SETTINGS_KEYS.MCP_SERVERS]).toBe('[]');
 	}, 15000);

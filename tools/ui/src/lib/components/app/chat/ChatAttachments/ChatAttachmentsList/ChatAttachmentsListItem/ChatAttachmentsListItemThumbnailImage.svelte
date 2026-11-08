@@ -1,12 +1,13 @@
 <script lang="ts">
-	import { ActionIcon } from '$lib/components/app';
 	import { X } from '@lucide/svelte';
+	import { ActionIcon } from '$lib/components/app';
 
 	interface Props {
 		class?: string;
 		height?: string;
 		id: string;
 		imageClass?: string;
+		label?: string;
 		onclick?: (event?: MouseEvent) => void;
 		onRemove?: (id: string) => void;
 		name: string;
@@ -20,9 +21,10 @@
 		height = 'h-16',
 		id,
 		imageClass = '',
+		label,
+		name,
 		onclick,
 		onRemove,
-		name,
 		preview,
 		readonly = false,
 		width = 'w-auto'
@@ -30,11 +32,11 @@
 </script>
 
 {#snippet image()}
-	<img src={preview} alt={name} class="{height} {width} cursor-pointer object-cover {imageClass}" />
+	<img alt={name} class="{height} {width} cursor-pointer object-cover {imageClass}" src={preview} />
 {/snippet}
 
 <div
-	class="group relative overflow-hidden rounded-lg bg-muted shadow-lg dark:border dark:border-muted {className}"
+	class="group relative min-w-0 overflow-hidden rounded-lg bg-muted shadow-lg dark:border dark:border-muted {className}"
 >
 	{#if onclick}
 		<button
@@ -47,6 +49,14 @@
 		</button>
 	{:else}
 		{@render image()}
+	{/if}
+
+	{#if label}
+		<span
+			class="pointer-events-none absolute bottom-1 left-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white"
+		>
+			{label}
+		</span>
 	{/if}
 
 	{#if !readonly}

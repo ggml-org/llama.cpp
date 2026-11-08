@@ -34,6 +34,14 @@ kernel void kernel_add_id(
 
     global float * dst_row  = (global float *)((global char *)dst  + i1*nb1 + i2*nb2);
     global float * src0_row = (global float *)((global char *)src0 + i1*nb01 + i2*nb02);
+
+    if (i11 == -1) { // skipped slot, add nothing
+        for (int i0 = get_local_id(0); i0 < ne0; i0 += get_local_size(0)) {
+            dst_row[i0] = src0_row[i0];
+        }
+        return;
+    }
+
     global float * src1_row = (global float *)((global char *)src1 + i11*nb11);
 
     for (int i0 = get_local_id(0); i0 < ne0; i0 += get_local_size(0)) {

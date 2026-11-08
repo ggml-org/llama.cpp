@@ -1,16 +1,16 @@
-import { toast } from 'svelte-sonner';
 import { AttachmentType } from '$lib/enums';
 import type {
+	ClipboardAttachment,
+	ClipboardMcpPromptAttachment,
+	ClipboardTextAttachment,
 	DatabaseMessageExtra,
-	DatabaseMessageExtraTextFile,
 	DatabaseMessageExtraLegacyContext,
 	DatabaseMessageExtraMcpPrompt,
 	DatabaseMessageExtraMcpResource,
-	ClipboardTextAttachment,
-	ClipboardMcpPromptAttachment,
-	ClipboardAttachment,
+	DatabaseMessageExtraTextFile,
 	ParsedClipboardContent
 } from '$lib/types';
+import { toast } from 'svelte-sonner';
 
 /**
  * Copy text to clipboard with toast notification
@@ -30,11 +30,13 @@ export async function copyToClipboard(
 		if (navigator.clipboard && navigator.clipboard.writeText) {
 			await navigator.clipboard.writeText(text);
 			toast.success(successMessage);
+
 			return true;
 		}
 
 		// Fallback for non-secure contexts
 		const textArea = document.createElement('textarea');
+
 		textArea.value = text;
 		textArea.style.position = 'fixed';
 		textArea.style.left = '-999999px';
@@ -44,10 +46,12 @@ export async function copyToClipboard(
 		textArea.select();
 
 		const successful = document.execCommand('copy');
+
 		document.body.removeChild(textArea);
 
 		if (successful) {
 			toast.success(successMessage);
+
 			return true;
 		} else {
 			throw new Error('execCommand failed');
@@ -55,6 +59,7 @@ export async function copyToClipboard(
 	} catch (error) {
 		console.error('Failed to copy to clipboard:', error);
 		toast.error(errorMessage);
+
 		return false;
 	}
 }
@@ -127,28 +132,32 @@ export function formatMessageForClipboard(
 
 	if (asPlainText) {
 		const parts = [content];
+
 		for (const att of textAttachments) {
 			parts.push(att.content);
 		}
+
 		return parts.join('\n\n');
 	}
 
 	const clipboardAttachments: ClipboardAttachment[] = textAttachments.map((att) => {
 		if (att.type === AttachmentType.MCP_PROMPT) {
 			const mcpAtt = att as DatabaseMessageExtraMcpPrompt;
+
 			return {
-				type: AttachmentType.MCP_PROMPT,
-				name: mcpAtt.name,
-				serverName: mcpAtt.serverName,
-				promptName: mcpAtt.promptName,
+				arguments: mcpAtt.arguments,
 				content: mcpAtt.content,
-				arguments: mcpAtt.arguments
+				name: mcpAtt.name,
+				promptName: mcpAtt.promptName,
+				serverName: mcpAtt.serverName,
+				type: AttachmentType.MCP_PROMPT
 			} as ClipboardMcpPromptAttachment;
 		}
+
 		return {
-			type: AttachmentType.TEXT,
+			content: att.content,
 			name: att.name,
-			content: att.content
+			type: AttachmentType.TEXT
 		} as ClipboardTextAttachment;
 	});
 
@@ -164,9 +173,9 @@ export function formatMessageForClipboard(
  */
 export function parseClipboardContent(clipboardText: string): ParsedClipboardContent {
 	const defaultResult: ParsedClipboardContent = {
+		mcpPromptAttachments: [],
 		message: clipboardText,
-		textAttachments: [],
-		mcpPromptAttachments: []
+		textAttachments: []
 	};
 
 	if (!clipboardText.startsWith('"')) {
@@ -182,16 +191,19 @@ export function parseClipboardContent(clipboardText: string): ParsedClipboardCon
 
 			if (escaped) {
 				escaped = false;
+
 				continue;
 			}
 
 			if (char === '\\') {
 				escaped = true;
+
 				continue;
 			}
 
 			if (char === '"') {
 				stringEndIndex = i;
+
 				break;
 			}
 		}
@@ -202,45 +214,43 @@ export function parseClipboardContent(clipboardText: string): ParsedClipboardCon
 
 		const jsonStringPart = clipboardText.substring(0, stringEndIndex + 1);
 		const remainingPart = clipboardText.substring(stringEndIndex + 1).trim();
-
 		const message = JSON.parse(jsonStringPart) as string;
 
 		if (!remainingPart || !remainingPart.startsWith('[')) {
 			return {
+				mcpPromptAttachments: [],
 				message,
-				textAttachments: [],
-				mcpPromptAttachments: []
+				textAttachments: []
 			};
 		}
 
 		const attachments = JSON.parse(remainingPart) as unknown[];
-
 		const validTextAttachments: ClipboardTextAttachment[] = [];
 		const validMcpPromptAttachments: ClipboardMcpPromptAttachment[] = [];
 
 		for (const att of attachments) {
 			if (isValidMcpPromptAttachment(att)) {
 				validMcpPromptAttachments.push({
-					type: AttachmentType.MCP_PROMPT,
-					name: att.name,
-					serverName: att.serverName,
-					promptName: att.promptName,
+					arguments: att.arguments,
 					content: att.content,
-					arguments: att.arguments
+					name: att.name,
+					promptName: att.promptName,
+					serverName: att.serverName,
+					type: AttachmentType.MCP_PROMPT
 				});
 			} else if (isValidTextAttachment(att)) {
 				validTextAttachments.push({
-					type: AttachmentType.TEXT,
+					content: att.content,
 					name: att.name,
-					content: att.content
+					type: AttachmentType.TEXT
 				});
 			}
 		}
 
 		return {
+			mcpPromptAttachments: validMcpPromptAttachments,
 			message,
-			textAttachments: validTextAttachments,
-			mcpPromptAttachments: validMcpPromptAttachments
+			textAttachments: validTextAttachments
 		};
 	} catch {
 		return defaultResult;
@@ -307,5 +317,6 @@ export function hasClipboardAttachments(clipboardText: string): boolean {
 	}
 
 	const parsed = parseClipboardContent(clipboardText);
+
 	return parsed.textAttachments.length > 0 || parsed.mcpPromptAttachments.length > 0;
 }

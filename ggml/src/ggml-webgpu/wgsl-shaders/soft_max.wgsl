@@ -27,7 +27,6 @@ struct Params {
     stride_dst3: u32,
 
     // shape of src0/dst
-    ne: u32,
     ne0: u32,
     ne1: u32,
     ne2: u32,
@@ -43,71 +42,38 @@ struct Params {
     m1: f32,
 };
 
-@group(0) @binding(0)
+#define SRC_BINDING 0
+@group(0) @binding(SRC_BINDING)
 var<storage, read_write> src: array<f32>;
 
 #ifdef HAS_MASK
-#ifdef HAS_SINK
-@group(0) @binding(1)
+#define MASK_BINDING SRC_BINDING + 1
+@group(0) @binding(MASK_BINDING)
 var<storage, read_write> mask: array<MaskType>;
-@group(0) @binding(2)
-var<storage, read_write> sinks: array<f32>;
-
-#ifdef INPLACE
-@group(0) @binding(3)
-var<uniform> params: Params;
-
 #else
-@group(0) @binding(3)
-var<storage, read_write> dst: array<f32>;
-@group(0) @binding(4)
-var<uniform> params: Params;
+#define MASK_BINDING SRC_BINDING
 #endif
 
-#else
-@group(0) @binding(1)
-var<storage, read_write> mask: array<MaskType>;
-
-#ifdef INPLACE
-@group(0) @binding(2)
-var<uniform> params: Params;
-
-#else
-@group(0) @binding(2)
-var<storage, read_write> dst: array<f32>;
-@group(0) @binding(3)
-var<uniform> params: Params;
-#endif
-#endif
-
-#else
 #ifdef HAS_SINK
-@group(0) @binding(1)
+#define SINKS_BINDING MASK_BINDING + 1
+@group(0) @binding(SINKS_BINDING)
 var<storage, read_write> sinks: array<f32>;
+#else
+#define SINKS_BINDING MASK_BINDING
+#endif
+
+#define DST_BINDING SINKS_BINDING + 1
+@group(0) @binding(DST_BINDING)
+var<storage, read_write> dst: array<f32>;
 
 #ifdef INPLACE
-@group(0) @binding(2)
-var<uniform> params: Params;
-
+#define PARAMS_BINDING DST_BINDING
 #else
-@group(0) @binding(2)
-var<storage, read_write> dst: array<f32>;
-@group(0) @binding(3)
-var<uniform> params: Params;
+#define PARAMS_BINDING (DST_BINDING + 1)
 #endif
 
-#else
-#ifdef INPLACE
-@group(0) @binding(1)
+@group(0) @binding(PARAMS_BINDING)
 var<uniform> params: Params;
-#else
-@group(0) @binding(1)
-var<storage, read_write> dst: array<f32>;
-@group(0) @binding(2)
-var<uniform> params: Params;
-#endif
-#endif
-#endif
 
 #ifdef INPLACE
 fn inter_value(i: u32) -> f32 {
@@ -158,9 +124,10 @@ var<workgroup> scratch: array<f32, WG_SIZE>;
 
 @compute @workgroup_size(WG_SIZE)
 fn main(@builtin(workgroup_id) wid: vec3<u32>,
+        @builtin(num_workgroups) num_wg: vec3<u32>,
         @builtin(local_invocation_id) lid: vec3<u32>) {
 
-    var i = wid.x;
+    var i = wid.x + wid.y * num_wg.x;
     let i3 = i / (params.ne2 * params.ne1);
     i = i % (params.ne2 * params.ne1);
     let i2 = i / params.ne1;
@@ -242,4 +209,3 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
         col += WG_SIZE;
     }
 }
-

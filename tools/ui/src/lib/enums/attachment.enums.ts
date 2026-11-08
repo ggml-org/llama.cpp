@@ -4,12 +4,12 @@
 export enum AttachmentType {
 	AUDIO = 'AUDIO',
 	IMAGE = 'IMAGE',
-	VIDEO = 'VIDEO',
+	LEGACY_CONTEXT = 'context', // Legacy attachment type for backward compatibility
 	MCP_PROMPT = 'MCP_PROMPT',
 	MCP_RESOURCE = 'MCP_RESOURCE',
 	PDF = 'PDF',
 	TEXT = 'TEXT',
-	LEGACY_CONTEXT = 'context' // Legacy attachment type for backward compatibility
+	VIDEO = 'VIDEO'
 }
 
 /**
@@ -17,14 +17,12 @@ export enum AttachmentType {
  * Used to select which file upload or attachment action is triggered.
  */
 export enum AttachmentMenuItemId {
-	IMAGES = 'images',
 	AUDIO = 'audio',
-	VIDEO = 'video',
-	TEXT = 'text',
+	IMAGES = 'images',
 	PDF = 'pdf',
 	SYSTEM_MESSAGE = 'system-message',
-	MCP_PROMPT = 'mcp-prompt',
-	MCP_RESOURCES = 'mcp-resources'
+	TEXT = 'text',
+	VIDEO = 'video'
 }
 
 /**
@@ -32,9 +30,9 @@ export enum AttachmentMenuItemId {
  */
 export enum AttachmentItemEnabledWhen {
 	ALWAYS = 'always',
-	HAS_VISION_MODALITY = 'hasVisionModality',
 	HAS_AUDIO_MODALITY = 'hasAudioModality',
-	HAS_VIDEO_MODALITY = 'hasVideoModality'
+	HAS_VIDEO_MODALITY = 'hasVideoModality',
+	HAS_VISION_MODALITY = 'hasVisionModality'
 }
 
 /**
@@ -42,15 +40,15 @@ export enum AttachmentItemEnabledWhen {
  */
 export enum AttachmentAction {
 	FILE_UPLOAD = 'onFileUpload',
-	SYSTEM_PROMPT_CLICK = 'onSystemPromptClick',
-	MCP_PROMPT_CLICK = 'onMcpPromptClick',
-	MCP_RESOURCES_CLICK = 'onMcpResourcesClick'
+	SYSTEM_PROMPT_CLICK = 'onSystemPromptClick'
 }
 
 /**
- * Visibility conditions for attachment menu items.
+ * Human-readable labels used when embedding attachments in outgoing messages.
  */
-export enum AttachmentItemVisibleWhen {
-	HAS_MCP_PROMPTS_SUPPORT = 'hasMcpPromptsSupport',
-	HAS_MCP_RESOURCES_SUPPORT = 'hasMcpResourcesSupport'
+export enum AttachmentLabel {
+	FILE = 'File',
+	MCP_PROMPT = 'MCP Prompt',
+	MCP_RESOURCE = 'MCP Resource',
+	PDF_FILE = 'PDF File'
 }

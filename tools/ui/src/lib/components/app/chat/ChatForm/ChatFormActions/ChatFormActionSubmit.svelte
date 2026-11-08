@@ -17,16 +17,17 @@
 
 {#snippet submitButton(props = {})}
 	<Button
-		type="submit"
-		disabled={isDisabled}
 		class={[
 			'md:h-8 md:w-8 h-9 w-9 rounded-full p-0',
 			showErrorState &&
 				'bg-red-400/10 text-red-400 hover:bg-red-400/20 hover:text-red-400 disabled:opacity-100'
 		]}
+		disabled={isDisabled}
+		type="submit"
 		{...props}
 	>
 		<span class="sr-only">Send</span>
+
 		<ArrowUp class="h-12 w-12" />
 	</Button>
 {/snippet}

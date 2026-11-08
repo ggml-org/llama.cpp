@@ -116,7 +116,7 @@ in inline assembler.
 Most kernels are very naive with lots of low hanging fruits left:
 
 > [!IMPORTANT]
-> Several assembly instructions emmited by the compiler are not implemented
+> Several assembly instructions emitted by the compiler are not implemented
 > in hardware and software emulation in firmware is not ready yet.
 > Eventually firmware will transparently trap unimplemented instructions
 > and will emulate them inside exception handler. Until then, kernel
@@ -138,12 +138,12 @@ Most kernels are very naive with lots of low hanging fruits left:
 > kernel build process. Feel free to take ideas/code from there or try linking
 > it in.
 
-Before commiting any changes to operations and/or kernels, don't forget
+Before committing any changes to operations and/or kernels, don't forget
 to update supported ops reports (instructions at `docs/ops.md`).
 
 When logging is enabled (e.g. by setting `--log-file` cli param),
 each compute kernel run outputs a line with
-pipe-delimited key-value pairs containing kernel level performance infomation.
+pipe-delimited key-value pairs containing kernel level performance information.
 Line is prefixed with `ET_PERF`:
 
 ```
@@ -160,7 +160,7 @@ to `GGML_ET_PROFILE/et_runtime_trace.json` and `GGML_ET_PROFILE/kernel_map` on e
 
 ### Uberkernel
 
-The in-knernel implementaiton of device dispatch/kernel fusion. The ET SDK has a non-trivial op-to-op gap. `Uberkernel` (name taken from the original Esperanto AI's compiler)
+The in-kernel implementation of device dispatch/kernel fusion. The ET SDK has a non-trivial op-to-op gap. `Uberkernel` (name taken from the original Esperanto AI's compiler)
 dispatches multiple already existing kernel implementations with device side synchronization. Due to the processor's design, there is no natural memory visibility
 horizon between sub-kernel invocations. This makes uberkernel much more difficult to develop and debug. Currently Uberkerel is hidden begind the
 `GGML_ET_UBERKERNEL` environment variable and is disabled by default. Setting it to 1 enables it and provides significant performance improvements but is only

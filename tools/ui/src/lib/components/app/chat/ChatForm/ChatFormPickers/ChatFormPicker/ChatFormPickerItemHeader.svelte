@@ -1,7 +1,7 @@
 <script lang="ts">
-	import type { Snippet } from 'svelte';
+	import { mcpStore } from '$lib/stores';
 	import type { MCPServerSettingsEntry } from '$lib/types';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import type { Snippet } from 'svelte';
 
 	interface Props {
 		server: MCPServerSettingsEntry | undefined;
@@ -12,7 +12,7 @@
 		subtitle?: Snippet;
 	}
 
-	let { server, serverLabel, title, description, titleExtra, subtitle }: Props = $props();
+	let { description, server, serverLabel, subtitle, title, titleExtra }: Props = $props();
 
 	let faviconUrl = $derived(server ? mcpStore.getServerFavicon(server.id) : null);
 </script>
@@ -21,12 +21,12 @@
 	<div class="mb-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
 		{#if faviconUrl}
 			<img
-				src={faviconUrl}
 				alt=""
 				class="h-3 w-3 shrink-0 rounded-sm"
 				onerror={(e) => {
 					(e.currentTarget as HTMLImageElement).style.display = 'none';
 				}}
+				src={faviconUrl}
 			/>
 		{/if}
 

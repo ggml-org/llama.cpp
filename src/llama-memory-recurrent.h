@@ -18,6 +18,7 @@ class llama_memory_recurrent : public llama_memory_i {
 public:
     llama_memory_recurrent(
             const llama_model & model,
+                         bool   no_alloc,
                     ggml_type   type_r,
                     ggml_type   type_s,
                          bool   offload,
@@ -91,6 +92,10 @@ public:
         int32_t   src0 = -1; // like src, but only used when setting the inputs (allowing to copy once)
         int32_t   tail = -1;
 
+        // largest rollback whose snapshot the last ubatch guarantees: a ubatch of n <= n_rs_seq + 1 tokens
+        // writes snapshots 0..n-1, a longer one only guarantees the final state (ggml_gated_delta_net)
+        uint32_t rs_max = 0;
+
         std::set<llama_seq_id> seq_id;
 
         bool has_seq_id(const llama_seq_id & id) const {
@@ -111,6 +116,8 @@ public:
     // per layer
     std::vector<ggml_tensor *> r_l;
     std::vector<ggml_tensor *> s_l;
+    // a second conv history that must stay replicated across devices, so it cannot share the r row
+    std::vector<ggml_tensor *> p_l;
 
 private:
     //const llama_model & model;
@@ -118,19 +125,25 @@ private:
 
     const uint32_t n_seq_max = 1;
 
-    // ggml contexts for the KV cache along with the allocated backend buffers:
-    std::vector<std::pair<ggml_context_ptr, ggml_backend_buffer_ptr>> ctxs_bufs;
+    // ggml contexts for the RS cache along with the allocated backend buffers:
+    llama_memory_bufs ctxs_bufs;
+
+    // true if no layers - can happen if the layer filter removes all layers
+    bool is_empty() const;
 
     size_t total_size() const;
 
     size_t size_r_bytes() const;
     size_t size_s_bytes() const;
+    size_t size_p_bytes() const;
 
     void state_write_meta(llama_io_write_i & io, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges, llama_seq_id seq_id = -1) const;
     void state_write_data(llama_io_write_i & io, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges) const;
 
     bool state_read_meta(llama_io_read_i & io, uint32_t cell_count, llama_seq_id dest_seq_id = -1);
     bool state_read_data(llama_io_read_i & io, uint32_t cell_count);
+
+    void state_clear(llama_seq_id seq_id, uint32_t cell_head, uint32_t cell_count);
 };
 
 class llama_memory_recurrent_context : public llama_memory_context_i {
@@ -170,6 +183,7 @@ public:
 
     ggml_tensor * get_r_l(int32_t il) const;
     ggml_tensor * get_s_l(int32_t il) const;
+    ggml_tensor * get_p_l(int32_t il) const;
 
     int32_t s_copy(int i) const;
 

@@ -15,6 +15,7 @@
 #endif
 
 #include "types.glsl"
+#include "utils.glsl"
 
 // shape notation: [dim(N), ..., dim(0)] -- stride(dim(j)) >= stride(dim(i)) if i > j
 layout(binding = 0) readonly buffer A {
@@ -60,6 +61,11 @@ layout(push_constant) uniform parameter {
     uint32_t OWmp;   uint32_t OWL;
     uint32_t OWOHmp; uint32_t OWOHL;
     uint32_t OWOHODmp; uint32_t OWOHODL;
+
+    // element offsets for misaligned buffer bindings
+    uint32_t knl_offset;
+    uint32_t src_offset;
+    uint32_t dst_offset;
 }
 
 p;
@@ -178,14 +184,6 @@ uint32_t       Br    = tid / BS_NPQ;
 uint32_t       Bc    = tid % BS_NPQ;
 const uint32_t BrpWg = WG_SIZE / BS_NPQ;
 
-// see init_fastdiv_values in ggml-vulkan.cpp
-uint fastdiv(uint n, uint mp, uint L) {
-    uint msbs, lsbs;
-    // msbs = mulhi(n, mp)
-    umulExtended(n, mp, msbs, lsbs);
-    return (msbs + n) >> L;
-}
-
 void split_crs(uint32_t crs_idx, out uint32_t ic, out uint32_t kd, out uint32_t kh, out uint32_t kw) {
     const uint32_t KHKW = KH * KW;
     const uint32_t KDKHKW = KD * KHKW;
@@ -221,7 +219,7 @@ ACC_TYPE perElemOpStore(const in uint32_t r, const in uint32_t c, const in ACC_T
     split_npq(NPQ_idx, N_idx, OD_idx, OH_idx, OW_idx);
     uint32_t dst_idx = OW_idx + OH_idx * p.nb1 + OD_idx * p.nb2 + (N_idx * p.OC + K_idx) * p.nb3;
     if (aligned != 0 || (K_idx < K && NPQ_idx < NPQ)) {
-        dst_data[dst_idx] = D_TYPE(elem);
+        dst_data[dst_idx + p.dst_offset] = D_TYPE(elem);
     }
     return elem;
 }
@@ -268,7 +266,7 @@ void main() {
             if (aligned == 0) {
                 knl_idx = min(knl_idx, K * CRS - 1);
             }
-            float    val     = knl_data[knl_idx];
+            float val = knl_data[knl_idx + p.knl_offset];
             if (aligned == 0 && (K_idx >= K || CRS_idx_a >= CRS)) {
                 val = 0.0;
             }
@@ -301,7 +299,7 @@ void main() {
             if (aligned == 0 || !dhw_in_bounds) {
                 src_idx = min(src_idx, p.IC * p.N * p.IW * p.IH * p.ID - 1);
             }
-            float val = src_data[src_idx];
+            float val = src_data[src_idx + p.src_offset];
             bool oob = false;
             if (aligned == 0 && (CRS_idx_b >= CRS || NPQ_idx >= NPQ)) {
                 oob = true;
@@ -400,7 +398,7 @@ void main() {
             split_npq(NPQ_idx, N_idx, OD_idx, OH_idx, OW_idx);
             uint32_t dst_idx = OW_idx + OH_idx * p.nb1 + OD_idx * p.nb2 + (N_idx * p.OC + K_idx) * p.nb3;
             if (aligned != 0 || (K_idx < K && NPQ_idx < NPQ)) {
-                dst_data[dst_idx] = D_TYPE(Csh[k_local * Csh_stride + npq_thread]);
+                dst_data[dst_idx + p.dst_offset] = D_TYPE(Csh[k_local * Csh_stride + npq_thread]);
             }
         }
     }
@@ -422,7 +420,7 @@ void main() {
                 split_npq(NPQ_idx, N_idx, OD_idx, OH_idx, OW_idx);
                 uint32_t dst_idx = OW_idx + OH_idx * p.nb1 + OD_idx * p.nb2 + (N_idx * p.OC + K_idx) * p.nb3;
                 if (aligned != 0 || (K_idx < K && NPQ_idx < NPQ)) {
-                    dst_data[dst_idx] = D_TYPE(regC[T_ly][T_lx]);
+                    dst_data[dst_idx + p.dst_offset] = D_TYPE(regC[T_ly][T_lx]);
                 }
             }
         }

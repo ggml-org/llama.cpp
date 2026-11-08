@@ -1,101 +1,94 @@
 <script lang="ts">
+	import ChatScreenActionScrollDown from './ChatScreenActionScrollDown.svelte';
+	import ChatScreenDialogsAndAlerts from './ChatScreenDialogsAndAlerts.svelte';
+	import ChatScreenGreeting from './ChatScreenGreeting.svelte';
+	import { disableScrollHandling, onNavigate } from '$app/navigation';
 	import { page } from '$app/state';
 	import {
-		ChatScreenForm,
 		ChatMessages,
 		ChatScreenDragOverlay,
+		ChatScreenForm,
+		ChatScreenServerError,
 		ChatScreenStreamResumeStatus,
-		ServerLoadingSplash,
-		ChatScreenServerError
+		ServerLoadingSplash
 	} from '$lib/components/app';
-	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
+	import {
+		CHAT_FORM_MOVE_IN_EASING,
+		CHAT_FORM_MOVE_IN_MS,
+		CHAT_FORM_MOVE_OUT_EASING,
+		CHAT_FORM_MOVE_OUT_MS,
+		CHAT_FORM_MOVE_SHIFT_PX,
+		CHAT_FORM_MOVE_TO_BOTTOM_IN_MS,
+		CHAT_FORM_MOVE_TO_BOTTOM_OUT_MS,
+		ROUTES
+	} from '$lib/constants';
 	import { useChatScreenActiveModel } from '$lib/hooks/use-chat-screen-active-model.svelte';
 	import { useChatScreenDragAndDrop } from '$lib/hooks/use-chat-screen-drag-and-drop.svelte';
 	import { useChatScreenFileUpload } from '$lib/hooks/use-chat-screen-file-upload.svelte';
-	import { useChatScreenScroll } from '$lib/hooks/use-chat-screen-scroll.svelte';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
-	import { device } from '$lib/stores/device.svelte';
-	import { isMobile } from '$lib/stores/viewport.svelte';
+	import { createStickToBottom } from '$lib/hooks/use-stick-to-bottom.svelte';
 	import {
 		chatStore,
-		errorDialog,
-		isLoading,
-		isChatStreaming,
-		isEditing
-	} from '$lib/stores/chat.svelte';
-	import {
 		conversationsStore,
-		activeMessages,
-		activeConversation
-	} from '$lib/stores/conversations.svelte';
-	import { config } from '$lib/stores/settings.svelte';
-	import { serverLoading, serverError } from '$lib/stores/server.svelte';
+		deviceStore,
+		serverStore,
+		settingsStore
+	} from '$lib/stores';
 	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
-	import { onDestroy, onMount } from 'svelte';
-	import ChatScreenGreeting from './ChatScreenGreeting.svelte';
-	import ChatScreenActionScrollDown from './ChatScreenActionScrollDown.svelte';
-	import ChatScreenDialogsAndAlerts from './ChatScreenDialogsAndAlerts.svelte';
-	import { ROUTES } from '$lib/constants';
+	import { tick, untrack } from 'svelte';
 
 	let { showCenteredEmpty = false } = $props();
 
-	let disableAutoScroll = $derived(Boolean(config().disableAutoScroll) || isMobile.current);
-	let isMobileUserScrolledUp = $state(false);
-	let mobileScrollDownHint = $state(false);
-	let mobileScrollDownHintLockedUntil = $state(0);
 	let emptyFileNames = $state<string[]>([]);
-	let initialMessage = $state('');
 	let showDeleteDialog = $state(false);
 	let showEmptyFileDialog = $state(false);
 	let isEmpty = $derived(
-		showCenteredEmpty && !activeConversation() && activeMessages().length === 0 && !isLoading()
+		showCenteredEmpty && conversationsStore.activeMessages.length === 0 && !chatStore.isLoading
 	);
-	let activeErrorDialog = $derived(errorDialog());
-	let isServerLoading = $derived(serverLoading());
-	let hasPropsError = $derived(!!serverError());
-	let isCurrentConversationLoading = $derived(isLoading() || isChatStreaming());
+	// where the form is drawn: follows `isEmpty` once the form has faded out
+	let isFormCentered = $state(untrack(() => isEmpty));
+	let isFormMoving = false;
+	let formWrapper: HTMLElement | undefined = $state();
+	let activeErrorDialog = $derived(chatStore.errorDialogState);
+	let isServerLoading = $derived(serverStore.loading);
+	let hasPropsError = $derived(!!serverStore.error);
+	let isCurrentConversationLoading = $derived(chatStore.isLoading || chatStore.isStreaming());
 	let chatFormBottomPosition = $derived.by(() => {
-		if (!isMobile.current) return '1rem';
-		if (device.isStandalone) return '1.5rem';
-		if (device.isIOSSafari) return '0.25rem';
+		if (!deviceStore.isMobile) return '1rem';
+
+		if (deviceStore.isStandalone) return '1.5rem';
+
+		if (deviceStore.isIOSSafari) return '0.25rem';
+
 		return '0.5rem';
 	});
 
-	const autoScroll = createAutoScrollController();
-	const scroll = useChatScreenScroll(autoScroll);
+	// The page is the scroller: it follows new content while the reader sits at
+	// the bottom, and otherwise leaves their position alone.
+	const stick = createStickToBottom();
+	let stickPin: HTMLDivElement | undefined = $state();
 	const activeModel = useChatScreenActiveModel();
 	const fileUpload = useChatScreenFileUpload({
+		activeModelId: () => activeModel.activeModelId,
 		capabilities: () => ({
-			hasVision: activeModel.hasVisionModality,
 			hasAudio: activeModel.hasAudioModality,
-			hasVideo: activeModel.hasVideoModality
-		}),
-		activeModelId: () => activeModel.activeModelId
+			hasVideo: activeModel.hasVideoModality,
+			hasVision: activeModel.hasVisionModality
+		})
 	});
 	const dragAndDrop = useChatScreenDragAndDrop({
 		onDrop: fileUpload.handleFileUpload
 	});
 	const { handleKeydown } = useKeyboardShortcuts({
 		deleteActiveConversation: () => {
-			if (activeConversation()) {
+			if (conversationsStore.activeConversation) {
 				showDeleteDialog = true;
 			}
 		}
 	});
 
-	function handleMobileScroll() {
-		if (!isMobile.current) return;
-
-		const container = scroll.chatScrollContainer;
-		if (!container) return;
-
-		const distanceFromBottom =
-			container.scrollHeight - container.clientHeight - container.scrollTop;
-		isMobileUserScrolledUp = distanceFromBottom > 300;
-	}
-
 	async function handleDeleteConfirm() {
-		const conversation = activeConversation();
+		const conversation = conversationsStore.activeConversation;
 
 		if (conversation) {
 			await conversationsStore.deleteConversation(conversation.id);
@@ -113,62 +106,101 @@
 		if (result?.emptyFiles && result.emptyFiles.length > 0) {
 			emptyFileNames = result.emptyFiles;
 			showEmptyFileDialog = true;
+
 			if (files) {
 				const emptyFileNamesSet = new Set(result.emptyFiles);
+
 				fileUpload.uploadedFiles = fileUpload.uploadedFiles.filter(
 					(file) => !emptyFileNamesSet.has(file.name)
 				);
 			}
+
 			return false;
 		}
 
-		handleSendLikeScroll();
+		// Sending re-arms following: the reply streams in under the message.
+		stick.scrollToBottom();
 
 		await chatStore.sendMessage(message, result?.extras);
+
 		return true;
 	}
 
-	function handleSendLikeScroll() {
-		if (!isMobile.current) {
-			autoScroll.enable();
-		}
+	let lastScrolledConversationId: string | null = null;
 
-		setTimeout(() => {
-			const container = scroll.chatScrollContainer;
-			if (!container) return;
+	// Every navigation lands anew: this screen outlives its routes, so coming
+	// back to the conversation it last landed on (via the new-chat screen)
+	// must not count as already landed. The landing also owns the scroll
+	// position, so SvelteKit's own reset (or restore, on back/forward) would
+	// only move the previous conversation, still on screen, to its top.
+	onNavigate((navigation) => {
+		lastScrolledConversationId = null;
 
-			const lastUserBubble = container.querySelector(
-				'.chat-message:nth-last-child(2) .chat-message-user .chat-message-user-bubble'
-			) as HTMLElement | null;
+		if (navigation.to?.params?.id) disableScrollHandling();
+	});
 
-			if (isMobile.current) {
-				// Keep the last user message bubble just above the input on mobile
-				const bubbleHeight = lastUserBubble?.scrollHeight ?? 0;
-				const baseHeight = container.scrollHeight - innerHeight;
+	// Lands at the bottom of a conversation the first time its messages render.
+	// The resize observer keeps it there while the list settles (lazy rows,
+	// syntax highlighting, images) without polling for a stable height.
+	async function handleMessagesReady(messageCount: number) {
+		if (messageCount === 0) return;
 
-				container.scrollTo({
-					top: bubbleHeight > 0 ? baseHeight - bubbleHeight : baseHeight,
-					behavior: 'smooth'
-				});
-			} else if (lastUserBubble) {
-				// On desktop, place the last user message near the top of the viewport
-				const topPadding = 24;
-				const bubbleRect = lastUserBubble.getBoundingClientRect();
-				container.scrollTo({
-					top: Math.max(0, container.scrollTop + bubbleRect.top - topPadding),
-					behavior: 'smooth'
-				});
-			} else {
-				autoScroll.scrollToBottom();
-			}
-		}, 100);
+		const id = conversationsStore.activeConversation?.id ?? null;
 
-		if (isMobile.current) {
-			autoScroll.setDisabled(disableAutoScroll);
-			mobileScrollDownHint = true;
-			mobileScrollDownHintLockedUntil = Date.now() + 500;
-		}
+		if (!id || id === lastScrolledConversationId) return;
+
+		lastScrolledConversationId = id;
+		await tick();
+		stick.scrollToBottom();
 	}
+
+	/**
+	 * Moves the form between its centered and bottom positions: it fades out
+	 * where it is, drifting toward where it goes, and fades
+	 * back in from the other side once it is there. Reduced motion keeps only
+	 * the fade. Re-reads `isEmpty` after each move, so a flip back mid-move
+	 * ends where the screen is.
+	 */
+	async function moveForm() {
+		if (isFormMoving) return;
+
+		isFormMoving = true;
+
+		while (formWrapper && isFormCentered !== isEmpty) {
+			const toCenter = isEmpty;
+			const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+			const shift = reduceMotion ? 0 : (toCenter ? -1 : 1) * CHAT_FORM_MOVE_SHIFT_PX;
+			const shown = { opacity: 1, transform: 'translateY(0)' };
+			// `transform` composes with the `translate` that centers the form
+			const leave = formWrapper.animate(
+				[shown, { opacity: 0, transform: `translateY(${shift}px)` }],
+				{
+					duration: toCenter ? CHAT_FORM_MOVE_OUT_MS : CHAT_FORM_MOVE_TO_BOTTOM_OUT_MS,
+					easing: CHAT_FORM_MOVE_OUT_EASING,
+					fill: 'forwards'
+				}
+			);
+
+			await leave.finished.catch(() => {});
+
+			isFormCentered = toCenter;
+			await tick();
+
+			// cancelled in the same frame the entry starts, so it never flashes
+			leave.cancel();
+			formWrapper?.animate([{ opacity: 0, transform: `translateY(${-shift}px)` }, shown], {
+				duration: toCenter ? CHAT_FORM_MOVE_IN_MS : CHAT_FORM_MOVE_TO_BOTTOM_IN_MS,
+				easing: CHAT_FORM_MOVE_IN_EASING
+			});
+		}
+
+		isFormCentered = isEmpty;
+		isFormMoving = false;
+	}
+
+	$effect(() => {
+		if (isEmpty !== isFormCentered) untrack(() => void moveForm());
+	});
 
 	function handleErrorDialogOpenChange(open: boolean) {
 		if (!open) {
@@ -177,66 +209,32 @@
 	}
 
 	async function handleSystemPromptAdd(draft: { message: string; files: ChatUploadedFile[] }) {
-		if (draft.message || draft.files.length > 0) {
-			chatStore.savePendingDraft(draft.message, draft.files);
-		}
-		await chatStore.addSystemPrompt();
+		await chatStore.addSystemPrompt(draft);
 	}
 
 	$effect(() => {
-		const shouldDisableAutoScroll =
-			config().disableAutoScroll || (isMobile.current && isCurrentConversationLoading);
-		autoScroll.setDisabled(shouldDisableAutoScroll);
-		if (!shouldDisableAutoScroll) {
-			autoScroll.enable();
-		}
+		stick.setEnabled(!settingsStore.config.disableAutoScroll);
 	});
 
-	onMount(() => {
-		const pendingDraft = chatStore.consumePendingDraft();
-		if (pendingDraft) {
-			initialMessage = pendingDraft.message;
-			fileUpload.uploadedFiles = pendingDraft.files;
-		}
+	$effect(() => {
+		stick.attach(document.documentElement, document.body, stickPin);
 
-		autoScroll.startObserving();
-
-		if (!disableAutoScroll) {
-			autoScroll.enable();
-		}
-
-		if (isMobile.current && isCurrentConversationLoading) {
-			mobileScrollDownHint = true;
-			mobileScrollDownHintLockedUntil = Date.now() + 500;
-		}
-
-		handleMobileScroll();
+		return () => stick.detach();
 	});
-
-	onDestroy(() => autoScroll.destroy());
 </script>
 
 {#if dragAndDrop.isDragOver}
 	<ChatScreenDragOverlay />
 {/if}
 
-<svelte:window
-	onkeydown={handleKeydown}
-	onscroll={(e) => {
-		scroll.handleScroll(e);
-		handleMobileScroll();
-		if (e.isTrusted && Date.now() > mobileScrollDownHintLockedUntil) {
-			mobileScrollDownHint = false;
-		}
-	}}
-/>
+<svelte:window onkeydown={handleKeydown} onscroll={() => stick.handleScroll()} />
 
 {#if isServerLoading}
 	<ServerLoadingSplash />
 {:else}
 	<div
-		class="chat-screen flex grow flex-col min-h-[calc(100dvh-1rem)] md:min-h-full px-4 md:py-0 pt-12 pb-48 md:pb-4"
 		style:--chat-form-bottom-position={chatFormBottomPosition}
+		class="chat-screen flex grow flex-col min-h-[calc(100dvh-1rem)] md:min-h-[calc(100dvh-var(--chat-tabs-offset,0px))] px-4 md:py-0 pt-12 pb-48 md:pb-4"
 		ondragenter={dragAndDrop.dragHandlers.dragenter}
 		ondragleave={dragAndDrop.dragHandlers.dragleave}
 		ondragover={dragAndDrop.dragHandlers.dragover}
@@ -245,26 +243,35 @@
 	>
 		{#if !isEmpty}
 			<ChatMessages
-				messages={activeMessages()}
-				onUserAction={() => {
-					handleSendLikeScroll();
-				}}
+				messages={conversationsStore.activeMessages}
+				onMessagesReady={handleMessagesReady}
 			/>
 		{/if}
 
+		<!-- the scroll anchor that keeps the page at its bottom, see createStickToBottom -->
+		<div bind:this={stickPin} aria-hidden="true" class="stick-to-bottom-pin"></div>
+
 		<div
+			bind:this={formWrapper}
+			style:padding-top="var(--chat-form-padding-top)"
 			class={[
-				'pointer-events-none md:sticky fixed  mt-auto transition-all duration-200',
-				device.isStandalone
+				// moves between the centered (empty chat) and bottomed positions with
+				// a fade, see moveForm. Its height in the page is the same in both
+				// (the padding stays, the desktop greeting floats above the form),
+				// so the messages never shift while it moves
+				'pointer-events-none md:sticky fixed mt-auto',
+				deviceStore.isStandalone
 					? 'bottom-6 right-4 left-4'
-					: device.isIOSSafari
+					: deviceStore.isIOSSafari
 						? 'bottom-1 left-2 right-2'
 						: 'bottom-2 right-2 left-2',
-				isEmpty ? 'md:bottom-[calc(50dvh-7rem)] 2xl:bottom-[calc(50dvh-4rem)]' : 'md:bottom-4'
+				'md:bottom-4',
+				isFormCentered
+					? 'md:translate-y-[calc(-50dvh+7rem)] 2xl:translate-y-[calc(-50dvh+4rem)]'
+					: ''
 			]}
-			style:padding-top={!isEmpty ? 'var(--chat-form-padding-top)' : undefined}
 		>
-			<ChatScreenGreeting {isEmpty} />
+			<ChatScreenGreeting isEmpty={isFormCentered} />
 
 			<ChatScreenServerError />
 
@@ -273,41 +280,32 @@
 			{/if}
 
 			<div class="pointer-events-none flex flex-col gap-6 items-center w-full">
-				{#if (isMobile.current ? mobileScrollDownHint || isMobileUserScrolledUp : autoScroll.userScrolledUp) && page.url.hash.includes(ROUTES.CHAT) && page.params.id}
-					<ChatScreenActionScrollDown
-						onclick={() => {
-							mobileScrollDownHint = false;
-							scroll.chatScrollContainer?.scrollTo({
-								top: scroll.chatScrollContainer.scrollHeight,
-								behavior: 'smooth'
-							});
-						}}
-					/>
+				{#if !stick.atBottom && page.url.hash.includes(ROUTES.CHAT) && page.params.id}
+					<ChatScreenActionScrollDown onclick={() => stick.scrollToBottom('smooth')} />
 				{/if}
 			</div>
 
 			<ChatScreenForm
+				bind:uploadedFiles={fileUpload.uploadedFiles}
 				class="pointer-events-auto conversation-chat-form"
-				disabled={hasPropsError || isEditing()}
-				{initialMessage}
+				disabled={hasPropsError || chatStore.isEditing()}
 				isLoading={isCurrentConversationLoading}
 				onFileRemove={fileUpload.handleFileRemove}
 				onFileUpload={fileUpload.handleFileUpload}
 				onSend={handleSendMessage}
 				onStop={() => chatStore.stopGeneration()}
 				onSystemPromptAdd={handleSystemPromptAdd}
-				bind:uploadedFiles={fileUpload.uploadedFiles}
 			/>
 		</div>
 	</div>
 {/if}
 
 <ChatScreenDialogsAndAlerts
-	{showDeleteDialog}
-	{handleDeleteConfirm}
-	{showEmptyFileDialog}
-	{emptyFileNames}
 	{activeErrorDialog}
-	{handleErrorDialogOpenChange}
+	{emptyFileNames}
 	{fileUpload}
+	{handleDeleteConfirm}
+	{handleErrorDialogOpenChange}
+	{showDeleteDialog}
+	{showEmptyFileDialog}
 />

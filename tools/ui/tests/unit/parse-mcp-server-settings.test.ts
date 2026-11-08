@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { MCP_SERVER_ID_PREFIX } from '$lib/constants';
 import { parseMcpServerSettings } from '$lib/utils/mcp';
-import { MCP_SERVER_ID_PREFIX } from '$lib/constants/mcp';
+import { describe, expect, it, vi } from 'vitest';
 
 /**
  * Tests for the mcpServers settings parser.
@@ -36,7 +36,7 @@ describe('parseMcpServerSettings', () => {
 
 	it('drops entries with no parseable id and substitutes a stable fallback', () => {
 		const parsed = parseMcpServerSettings(
-			JSON.stringify([{ url: 'https://a.test', enabled: true }, { url: 'https://b.test' }])
+			JSON.stringify([{ enabled: true, url: 'https://a.test' }, { url: 'https://b.test' }])
 		);
 
 		expect(parsed).toHaveLength(2);
@@ -64,7 +64,7 @@ describe('parseMcpServerSettings', () => {
 		// making the Settings value a no-op for existing servers. The
 		// parser drops the field so the global applies live everywhere.
 		const parsed = parseMcpServerSettings(
-			JSON.stringify([{ id: 'a', url: 'https://a.test', requestTimeoutSeconds: 45 }])
+			JSON.stringify([{ id: 'a', requestTimeoutSeconds: 45, url: 'https://a.test' }])
 		);
 
 		expect(parsed[0]).not.toHaveProperty('requestTimeoutSeconds');
@@ -73,8 +73,8 @@ describe('parseMcpServerSettings', () => {
 	it('treats whitespace-only headers strings as undefined', () => {
 		const parsed = parseMcpServerSettings(
 			JSON.stringify([
-				{ id: 'a', url: 'https://a.test', headers: '   ' },
-				{ id: 'b', url: 'https://b.test', headers: '{"X-Foo":"bar"}' }
+				{ headers: '   ', id: 'a', url: 'https://a.test' },
+				{ headers: '{"X-Foo":"bar"}', id: 'b', url: 'https://b.test' }
 			])
 		);
 
@@ -87,8 +87,8 @@ describe('parseMcpServerSettings', () => {
 		const parsed = parseMcpServerSettings(
 			JSON.stringify([
 				{ id: 'a', url: 'https://a.test' },
-				{ id: 'b', url: 'https://b.test', enabled: true },
-				{ id: 'c', url: 'https://c.test', enabled: false },
+				{ enabled: true, id: 'b', url: 'https://b.test' },
+				{ enabled: false, id: 'c', url: 'https://c.test' },
 				{ id: 'd', url: 'https://d.test', useProxy: true }
 			])
 		);
@@ -107,8 +107,8 @@ describe('parseMcpServerSettings', () => {
 		// contain disabled entries.
 		const parsed = parseMcpServerSettings(
 			JSON.stringify([
-				{ id: 'on', url: 'https://on.test', enabled: true },
-				{ id: 'off', url: 'https://off.test', enabled: false }
+				{ enabled: true, id: 'on', url: 'https://on.test' },
+				{ enabled: false, id: 'off', url: 'https://off.test' }
 			])
 		);
 
@@ -122,7 +122,6 @@ describe('parseMcpServerSettings', () => {
 			{ id: 'alpha', url: 'https://a.test' },
 			{ id: 'beta', url: 'https://b.test' }
 		];
-
 		const parsed = parseMcpServerSettings(JSON.stringify(source));
 
 		expect(parsed.map((entry) => entry.id)).toEqual(['gamma', 'alpha', 'beta']);
@@ -131,7 +130,7 @@ describe('parseMcpServerSettings', () => {
 	it('passes non-string raw input through the JSON-equality path', () => {
 		const parsed = parseMcpServerSettings([
 			{ id: 'a', url: 'https://a.test' },
-			{ id: 'b', url: 'https://b.test', enabled: true }
+			{ enabled: true, id: 'b', url: 'https://b.test' }
 		]);
 
 		expect(parsed).toHaveLength(2);

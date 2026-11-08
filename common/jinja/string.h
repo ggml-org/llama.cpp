@@ -47,7 +47,7 @@ struct string {
     // mark this string as input if other has ALL parts as input
     void mark_input_based_on(const string & other);
 
-    string append(const string & other);
+    string & append(const string & other);
 
     // in-place transformations
 

@@ -11,6 +11,7 @@ from .base import MmprojModel, ModelBase, gguf
 
 
 @ModelBase.register("KimiVLForConditionalGeneration")
+@ModelBase.example("moonshotai/Kimi-VL-A3B-Instruct")
 class KimiVLModel(MmprojModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -52,6 +53,7 @@ class KimiVLModel(MmprojModel):
 
 
 @ModelBase.register("KimiK25ForConditionalGeneration")
+@ModelBase.example("moonshotai/Kimi-K2.5")
 class KimiK25Model(MmprojModel):
     """Kimi-K2.5 with MoonViT3d vision encoder"""
 
@@ -150,5 +152,22 @@ class KimiK25Model(MmprojModel):
             name = name.replace(".proj.0.", ".proj.linear_1.")
         elif "mm_projector.proj.2." in name:
             name = name.replace(".proj.2.", ".proj.linear_2.")
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("Glm5vForConditionalGeneration")
+# [TAG_HF_EXAMPLE_MISSING]
+class Glm5vModel(KimiK25Model):
+    """GLM-5.2-Vision MoonViT3d encoder and projector
+
+    Uses the same vision encoder and projector as Kimi-K2.5, so it reuses the
+    kimik25 projector type. The image begin/end tokens differ, but they are
+    resolved at runtime from the text model vocab.
+    """
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.startswith("mm_projector.linear_"):
+            name = name.replace("mm_projector.linear_", "mm_projector.proj.linear_", 1)
 
         yield from super().modify_tensors(data_torch, name, bid)

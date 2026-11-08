@@ -33,11 +33,21 @@ void llama_model_granite::load_arch_hparams(llama_model_loader & ml) {
     // Granite uses rope_finetuned as a switch for rope, so default to true
     bool rope_finetuned = true;
     ml.get_key(LLM_KV_ROPE_SCALING_FINETUNED, rope_finetuned, false);
-    hparams.rope_finetuned = rope_finetuned;
+    hparams.rope_finetuned = rope_finetuned; // needed for round trip save
+    std::fill(hparams.rope_pattern.begin(), hparams.rope_pattern.end(), rope_finetuned);
 
     switch (hparams.n_layer()) {
         case 32: type = LLM_TYPE_3B; break;
-        case 40: type = LLM_TYPE_3B; break;
+        case 40: {
+            switch (hparams.n_embd) {
+                case 2048: type = LLM_TYPE_2B; break;
+                case 2560: type = LLM_TYPE_3B; break;
+                case 4096: type = LLM_TYPE_8B; break;
+                default: type = LLM_TYPE_UNKNOWN;
+            }
+            break;
+        }
+        case 64: type = LLM_TYPE_30B; break;
         // Add additional layer/vocab/etc checks here for other model sizes
         default: type = LLM_TYPE_UNKNOWN;
     }
@@ -107,13 +117,10 @@ void llama_model_granite::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_granite::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_granite::graph::graph(
-    const llama_model & model,
-    const llm_graph_params & params)
-    : llm_graph_context(params) {
+llama_model_granite::graph::graph(const llm_graph_params & params) : llm_graph_context(params) {
 
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
@@ -127,7 +134,7 @@ llama_model_granite::graph::graph(
 
     // inp_pos - built only if rope enabled
     ggml_tensor * inp_pos = nullptr;
-    if (hparams.rope_finetuned) {
+    if (hparams.has_rope(0)) {
         inp_pos = build_inp_pos();
     }
     auto * inp_attn = build_attn_inp_kv();
@@ -149,6 +156,8 @@ llama_model_granite::graph::graph(
             cb(inpL, "deepstack_in", il);
         }
 
+        res->t_layer_inp[il] = inpL;
+
         ggml_tensor * inpSA = inpL;
 
         // norm
@@ -160,14 +169,14 @@ llama_model_granite::graph::graph(
         // self-attention
         cur = build_attention_layer(
             cur, inp_pos, inp_attn,
-            model, n_embd_head, il);
+            n_embd_head, il);
 
         if (il == n_layer - 1 && inp_out_ids) {
             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
         // ffn
-        cur = build_layer_ffn(cur, inpSA, model, il);
+        cur = build_layer_ffn(cur, inpSA, il);
 
         // input for next layer
         inpL = cur;
@@ -188,36 +197,20 @@ llama_model_granite::graph::graph(
     cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_logit_scale);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }
 
 ggml_tensor * llama_model_granite::graph::build_attention_layer(
           ggml_tensor             * cur,
           ggml_tensor             * inp_pos,
           llm_graph_input_attn_kv * inp_attn,
-    const llama_model             & model,
     const int64_t                 n_embd_head,
     const int                     il) {
 
     auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
             n_embd_head, hparams.n_head(il), hparams.n_head_kv(il), il);
 
-    const bool use_rope = hparams.rope_finetuned;
-    if (use_rope) {
-        ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
-        Qcur = ggml_rope_ext(
-                ctx0, Qcur, inp_pos, rope_factors,
-                n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                ext_factor, attn_factor, beta_fast, beta_slow
-                );
-
-        Kcur = ggml_rope_ext(
-                ctx0, Kcur, inp_pos, rope_factors,
-                n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                ext_factor, attn_factor, beta_fast, beta_slow
-                );
-    }
+    Qcur = build_rope(Qcur, inp_pos, il);
+    Kcur = build_rope(Kcur, inp_pos, il);
 
     cb(Qcur, "Qcur", il);
     cb(Kcur, "Kcur", il);
@@ -234,7 +227,6 @@ ggml_tensor * llama_model_granite::graph::build_attention_layer(
 ggml_tensor * llama_model_granite::graph::build_layer_ffn(
           ggml_tensor       * cur,
           ggml_tensor       * inpSA,
-    const llama_model       & model,
     const int                 il) {
 
     // For Granite architectures - scale residual

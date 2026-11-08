@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
 import { getJpegOrientationFromDataURL, isJpegMimeType } from '$lib/utils/jpeg-orientation';
+import { describe, expect, it } from 'vitest';
 
 // Builds the TIFF payload of an APP1 segment holding a single IFD0 entry
 function buildTiff(littleEndian: boolean, tag: number, value: number): number[] {
@@ -36,6 +36,7 @@ function buildJpegDataURL(tiff: number[] | null, prependApp0 = false): string {
 	if (tiff) {
 		const payload = [0x45, 0x78, 0x69, 0x66, 0x00, 0x00, ...tiff];
 		const length = payload.length + 2;
+
 		bytes.push(0xff, 0xe1, length >> 8, length & 0xff, ...payload);
 	}
 
@@ -74,11 +75,13 @@ describe('getJpegOrientationFromDataURL', () => {
 
 	it('returns 1 for a payload that is not a JPEG', () => {
 		const png = btoa(String.fromCharCode(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a));
+
 		expect(getJpegOrientationFromDataURL(`data:image/png;base64,${png}`)).toBe(1);
 	});
 
 	it('returns 1 for a truncated payload', () => {
 		const truncated = btoa(String.fromCharCode(0xff, 0xd8, 0xff));
+
 		expect(getJpegOrientationFromDataURL(`data:image/jpeg;base64,${truncated}`)).toBe(1);
 	});
 

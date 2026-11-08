@@ -1,11 +1,12 @@
-import { describe, expect, it } from 'vitest';
 import { parseSseJsonStream } from '$lib/utils/sse';
+import { describe, expect, it } from 'vitest';
 
 function makeSseResponse(events: string[]): Response {
 	const body = events.join('\n\n') + '\n\n';
+
 	return new Response(body, {
-		status: 200,
-		headers: { 'content-type': 'text/event-stream' }
+		headers: { 'content-type': 'text/event-stream' },
+		status: 200
 	});
 }
 
@@ -13,6 +14,7 @@ describe('parseSseJsonStream', () => {
 	it('yields parsed data for each record', async () => {
 		const response = makeSseResponse(['data: {"chunk": "a"}', 'data: {"chunk": "b"}']);
 		const collected: unknown[] = [];
+
 		for await (const ev of parseSseJsonStream(response)) {
 			collected.push(ev.data);
 		}
@@ -26,6 +28,7 @@ describe('parseSseJsonStream', () => {
 			'data: {"chunk": "after-done"}'
 		]);
 		const collected: unknown[] = [];
+
 		for await (const ev of parseSseJsonStream(response)) {
 			collected.push(ev.data);
 		}
@@ -39,6 +42,7 @@ describe('parseSseJsonStream', () => {
 			'data: {"chunk": "also-ok"}'
 		]);
 		const collected: unknown[] = [];
+
 		for await (const ev of parseSseJsonStream(response)) {
 			collected.push(ev.data);
 		}
@@ -50,16 +54,18 @@ describe('parseSseJsonStream', () => {
 		const stream = new ReadableStream<Uint8Array>({
 			start(controller) {
 				const enc = new TextEncoder();
+
 				controller.enqueue(enc.encode(full.slice(0, full.length / 2)));
 				controller.enqueue(enc.encode(full.slice(full.length / 2)));
 				controller.close();
 			}
 		});
 		const response = new Response(stream, {
-			status: 200,
-			headers: { 'content-type': 'text/event-stream' }
+			headers: { 'content-type': 'text/event-stream' },
+			status: 200
 		});
 		const collected: unknown[] = [];
+
 		for await (const ev of parseSseJsonStream(response)) {
 			collected.push(ev.data);
 		}
@@ -69,6 +75,7 @@ describe('parseSseJsonStream', () => {
 	it('returns immediately if response has no body', async () => {
 		const response = new Response(null, { status: 200 });
 		const collected: unknown[] = [];
+
 		for await (const ev of parseSseJsonStream(response)) {
 			collected.push(ev.data);
 		}

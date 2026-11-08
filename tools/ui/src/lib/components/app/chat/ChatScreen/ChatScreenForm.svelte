@@ -2,14 +2,13 @@
 	import { afterNavigate } from '$app/navigation';
 	import { page } from '$app/state';
 	import { ChatForm } from '$lib/components/app';
-	import { isMobile } from '$lib/stores/viewport.svelte';
-	import { onMount } from 'svelte';
 	import { useDraftMessages } from '$lib/hooks/use-draft-messages.svelte';
+	import { deviceStore } from '$lib/stores';
+	import { onMount } from 'svelte';
 
 	interface Props {
 		class?: string;
 		disabled?: boolean;
-		initialMessage?: string;
 		isLoading?: boolean;
 		onFileRemove?: (fileId: string) => void;
 		onFileUpload?: (files: File[]) => void;
@@ -22,7 +21,6 @@
 	let {
 		class: className,
 		disabled = false,
-		initialMessage = '',
 		isLoading = false,
 		onFileRemove,
 		onFileUpload,
@@ -33,6 +31,7 @@
 	}: Props = $props();
 
 	let chatFormRef: ChatForm | undefined = $state(undefined);
+
 	let formWrapperEl: HTMLDivElement | undefined = $state();
 	let chatId = $derived(page.params.id as string | undefined);
 
@@ -40,16 +39,19 @@
 		if (!formWrapperEl) return;
 
 		const formEl = formWrapperEl.querySelector('form') as HTMLElement | null;
+
 		if (!formEl) return;
 
 		const updateHeight = () => {
 			const height = Math.round(formEl.getBoundingClientRect().height);
+
 			document.documentElement.style.setProperty('--chat-form-height', `${height}px`);
 		};
 
 		updateHeight();
 
 		const resizeObserver = new ResizeObserver(updateHeight);
+
 		resizeObserver.observe(formEl);
 
 		return () => {
@@ -58,17 +60,15 @@
 		};
 	});
 	let hasLoadingAttachments = $derived(uploadedFiles.some((f) => f.isLoading));
-	let message = $derived(initialMessage);
+	let message = $state('');
 	let previousIsLoading = $derived(isLoading);
-	let previousInitialMessage = $derived(initialMessage);
 
 	const { clearDraft } = useDraftMessages({
 		getChatId: () => chatId,
-		getMessage: () => message,
 		getFiles: () => uploadedFiles,
-		setMessage: (m) => (message = m),
+		getMessage: () => message,
 		setFiles: (f) => (uploadedFiles = f),
-		getInitialMessage: () => initialMessage
+		setMessage: (m) => (message = m)
 	});
 
 	function handleFilesAdd(files: File[]) {
@@ -99,50 +99,52 @@
 	}
 
 	function handleSystemPromptClick() {
-		onSystemPromptAdd?.({ message, files: uploadedFiles });
+		onSystemPromptAdd?.({ files: uploadedFiles, message });
 	}
 
 	function handleUploadedFileRemove(fileId: string) {
 		onFileRemove?.(fileId);
 	}
 
+	// Auto-focus must not steal focus already claimed elsewhere (e.g. the system
+	// message editor opened just before a navigation)
+	function focusFormUnlessCaptured() {
+		const active = document.activeElement;
+
+		if (active instanceof HTMLTextAreaElement || active instanceof HTMLInputElement) return;
+
+		chatFormRef?.focus();
+	}
+
 	onMount(() => {
-		if (!isMobile.current) {
-			setTimeout(() => chatFormRef?.focus(), 100);
+		if (!deviceStore.isMobile) {
+			setTimeout(focusFormUnlessCaptured, 100);
 		}
 	});
 
 	afterNavigate((navigation) => {
-		if (navigation?.from != null && !isMobile.current) {
-			setTimeout(() => chatFormRef?.focus(), 100);
-		}
-	});
-
-	$effect(() => {
-		if (initialMessage !== previousInitialMessage) {
-			message = initialMessage;
-			previousInitialMessage = initialMessage;
+		if (navigation?.from != null && !deviceStore.isMobile) {
+			setTimeout(focusFormUnlessCaptured, 100);
 		}
 	});
 
 	$effect(() => {
 		if (previousIsLoading && !isLoading) {
-			setTimeout(() => chatFormRef?.focus(), 10);
+			setTimeout(focusFormUnlessCaptured, 10);
 		}
 
 		previousIsLoading = isLoading;
 	});
 </script>
 
-<div class="chat-screen-form-wrapper" bind:this={formWrapperEl}>
+<div bind:this={formWrapperEl} class="chat-screen-form-wrapper">
 	<ChatForm
-		class="mx-auto max-w-3xl {className}"
 		bind:this={chatFormRef}
-		bind:value={message}
 		bind:uploadedFiles
+		bind:value={message}
+		class="mx-auto max-w-3xl {className}"
 		{disabled}
 		{isLoading}
-		showMcpPromptButton
 		onFilesAdd={handleFilesAdd}
 		{onStop}
 		onSubmit={handleSubmit}

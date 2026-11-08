@@ -1,8 +1,10 @@
 <script lang="ts">
-	import { XCircle } from '@lucide/svelte';
-	import { type AgenticSection } from '$lib/utils';
 	import { parseFileGlobSearchMeta } from './parsers/file-glob-search';
 	import ToolCallBlock from './ToolCallBlock.svelte';
+	import { XCircle } from '@lucide/svelte';
+	import { toolsStore } from '$lib/stores';
+	import type { AgenticSection } from '$lib/types';
+	import { abbreviateHome } from '$lib/utils';
 
 	interface Props {
 		section: AgenticSection;
@@ -11,22 +13,28 @@
 		onToggle?: () => void;
 	}
 
-	let { section, open, isStreaming, onToggle }: Props = $props();
+	let { isStreaming, onToggle, open, section }: Props = $props();
 
 	const fileGlobMeta = $derived(parseFileGlobSearchMeta(section));
+	const home = $derived(toolsStore.serverHome);
 </script>
 
-<ToolCallBlock {section} {open} {isStreaming} meta={fileGlobMeta} {onToggle}>
+<ToolCallBlock {isStreaming} meta={fileGlobMeta} {onToggle} {open} {section}>
 	{#snippet titleSnippet()}
 		{#if fileGlobMeta}
 			<span class="text-muted-foreground"
 				>{fileGlobMeta.include === '**' ? 'List files' : 'Search files'}&nbsp;</span
 			>
+
 			{#if fileGlobMeta.include !== '**'}
 				<span class="font-mono">{fileGlobMeta.include}</span>
 			{/if}
+
 			<span class="text-muted-foreground">&nbsp;in&nbsp;</span>
-			<span class="font-mono">{fileGlobMeta.path}</span>
+
+			<span class="font-mono" title={fileGlobMeta.path}
+				>{abbreviateHome(fileGlobMeta.path, home)}</span
+			>
 		{/if}
 	{/snippet}
 
@@ -40,6 +48,7 @@
 				class="flex items-start gap-2 rounded bg-red-500/10 p-2 text-xs text-red-600 italic dark:text-red-400"
 			>
 				<XCircle class="mt-0.5 h-3 w-3 shrink-0" />
+
 				<span>{meta.errorMessage}</span>
 			</div>
 		{:else if meta && meta.matches.length > 0}
@@ -48,11 +57,13 @@
 					<div class="font-mono text-[11px] leading-relaxed whitespace-pre-wrap">{match}</div>
 				{/each}
 			</div>
+
 			<div class="mt-1.5 text-xs text-muted-foreground/70 italic">
 				Total matches: <span class="font-mono">{meta.totalMatches ?? meta.matches.length}</span>
 			</div>
 		{:else}
 			<div class="text-xs text-muted-foreground/70 italic">No matches</div>
+
 			<div class="mt-1.5 text-xs text-muted-foreground/70 italic">
 				Total matches: <span class="font-mono">{meta?.totalMatches ?? 0}</span>
 			</div>

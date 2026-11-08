@@ -369,7 +369,7 @@ def save_output(path: str, args: argparse.Namespace, samples: list[Sample], resu
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run SPEED-Bench against an OpenAI-compatible llama-server.")
-    parser.add_argument("--url", default="localhost:8080", help="Server URL, for example localhost:8080 or http://localhost:8080/v1")
+    parser.add_argument("--url", default="localhost:9931", help="Server URL, for example localhost:9931 or http://localhost:9931/v1")
     parser.add_argument("--model", default=None, help="Optional model name to send in OpenAI requests")
     parser.add_argument("--bench", default="qualitative", help="SPEED-Bench config to run, for example qualitative or throughput_1k")
     parser.add_argument("--category", default="all", help="Category to run within the selected bench; use all for no category filter")

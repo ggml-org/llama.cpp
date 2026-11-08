@@ -6,8 +6,37 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* shadcn components key their orientation styles off these, toggle-group among them */
+@custom-variant data-horizontal (&[data-orientation='horizontal']);
+@custom-variant data-vertical (&[data-orientation='vertical']);
+
+/*
+ * Tailwind v4 dropped the pointer cursor from buttons. Every control a user can
+ * press gets it back, and anything disabled keeps the cursor its own class asks for.
+ */
+@layer base {
+	button:not(:disabled),
+	[role='button']:not([data-disabled]),
+	[role='checkbox']:not([data-disabled]),
+	[role='combobox']:not([data-disabled]),
+	[role='menuitem']:not([data-disabled]),
+	[role='menuitemcheckbox']:not([data-disabled]),
+	[role='menuitemradio']:not([data-disabled]),
+	[role='option']:not([data-disabled]),
+	[role='radio']:not([data-disabled]),
+	[role='switch']:not([data-disabled]),
+	[role='tab']:not([data-disabled]),
+	label[for],
+	select,
+	summary {
+		cursor: pointer;
+	}
+}
+
 :root {
 	--radius: 0.625rem;
+	/* expanded desktop sidebar width, overridden once the user drags its edge */
+	--sidebar-width: 18rem;
 	--background: oklch(1 0 0);
 	--foreground: oklch(0.145 0 0);
 	--card: oklch(1 0 0);
@@ -140,9 +169,26 @@
 	}
 
 	body {
-		@apply bg-background text-foreground;
+		@apply bg-background text-foreground antialiased;
 		scrollbar-width: thin;
 		scrollbar-gutter: stable;
+	}
+
+	/* no elastic bounce past the ends of the page: it drags the sticky and
+	   fixed bars (tab bar, chat form) along and they jump back on release */
+	html,
+	body {
+		overscroll-behavior: none;
+	}
+
+	/* same for dialogs, whose panels and lists scroll on their own with sticky
+	   headers and footers. Scroll containers only: Firefox treats an
+	   overflow-hidden box (truncated text) as one, and with `none` it would
+	   keep the wheel from reaching the list around it */
+	:is([role='dialog'], [role='alertdialog']),
+	:is([role='dialog'], [role='alertdialog'])
+		:is(.overflow-auto, .overflow-y-auto, [data-slot='scroll-area-viewport']) {
+		overscroll-behavior: none;
 	}
 
 	/* Global scrollbar styling - visible only on hover */
@@ -194,6 +240,17 @@
 		scrollbar-width: none;
 	}
 
+	/* Fade at the top edge of the chat, under the tab bar or a sticky header */
+	.chat-top-fade {
+		background: linear-gradient(
+			to bottom,
+			color-mix(in srgb, var(--background) 100%, transparent) 25%,
+			color-mix(in srgb, var(--background) 80%, transparent) 50%,
+			color-mix(in srgb, var(--background) 40%, transparent) 75%,
+			transparent 100%
+		);
+	}
+
 	.shimmer-text {
 		background: linear-gradient(
 			90deg,
@@ -224,4 +281,23 @@
 
 .mermaidTooltip {
 	display: none !important;
+}
+
+/*
+ * While the page sticks to its bottom, the pin after the messages is its only
+ * scroll anchor, so the browser keeps the bottom in place as content above it
+ * grows or realizes its size. Browsers without overflow-anchor (WebKit) never
+ * get the attribute, see createStickToBottom.
+ */
+[data-stick-to-bottom] * {
+	overflow-anchor: none;
+}
+
+[data-stick-to-bottom] *:has(.stick-to-bottom-pin),
+[data-stick-to-bottom] .stick-to-bottom-pin {
+	overflow-anchor: auto;
+}
+
+.stick-to-bottom-pin {
+	height: 1px;
 }

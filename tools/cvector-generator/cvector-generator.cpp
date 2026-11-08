@@ -346,7 +346,8 @@ static bool cb_eval(struct ggml_tensor * t, bool ask, void * user_data) {
 
 static bool get_hidden_layers(llama_context * ctx, std::vector<llama_token> & tokens) {
     llama_memory_clear(llama_get_memory(ctx), true);
-    if (llama_decode(ctx, llama_batch_get_one(tokens.data(), tokens.size()))) {
+    common_batch batch = common_batch_get_one(ctx, tokens);
+    if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
         fprintf(stderr, "%s : failed to eval\n", __func__);
         return false;
     }
@@ -421,7 +422,7 @@ int main(int argc, char ** argv) {
     params.cb_eval_user_data = &cb_data;
     params.warmup = false;
 
-    llama_print_build_info();
+    llama_print_build_info(llama_version());
     llama_backend_init();
     llama_numa_init(params.numa);
 

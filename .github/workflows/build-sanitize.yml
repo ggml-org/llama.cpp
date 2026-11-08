@@ -15,6 +15,16 @@ on:
       '**/*.cpp'
     ]
 
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths: [
+      '.github/workflows/build-sanitize.yml'
+    ]
+
+cache-mode: none
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true
@@ -28,35 +38,43 @@ env:
 
 jobs:
   ctest:
-    runs-on: [self-hosted, X64, CPU, Linux]
-
     continue-on-error: true
 
     strategy:
       matrix:
-        sanitizer: [ADDRESS, THREAD, UNDEFINED]
+        include:
+        - sanitizer: ADDRESS
+          machine: ubuntu-26.04
+        - sanitizer: THREAD
+          machine: ubuntu-26.04
+        - sanitizer: UNDEFINED
+          machine: ubuntu-26.04
+
+    runs-on: ${{ matrix.machine }}
 
     steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
 
-      # with UNDEFINED sanitizer, we have to build in Debug to avoid GCC 13 false-positive warnings
-      - name: Build (undefined)
-        id: cmake_build_undefined
-        if: ${{ matrix.sanitizer == 'UNDEFINED' }}
-        run: |
-          cmake -B build \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DLLAMA_FATAL_WARNINGS=ON \
-            -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
-            -DGGML_SANITIZE_${{ matrix.sanitizer }}=ON
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
+        with:
+          restore: false
+          save: false
 
-          cmake --build build --config Debug -j $(nproc)
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
+        with:
+          key: ctest-sanitizer-${{ matrix.sanitizer }}
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
 
       - name: Build
         id: cmake_build
-        if: ${{ matrix.sanitizer == 'ADDRESS' }}
+        if: ${{ matrix.sanitizer == 'ADDRESS' || matrix.sanitizer == 'UNDEFINED' }}
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
@@ -77,10 +95,20 @@ jobs:
 
           cmake --build build --config RelWithDebInfo -j $(nproc)
 
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: ctest-sanitizer-${{ matrix.sanitizer }}
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true
+
       - name: Test
         id: cmake_test
-        # skip run in Debug - very slow
-        if: ${{ matrix.sanitizer != 'UNDEFINED' }}
         run: |
           cd build
           ctest -L main -E tokenizer --verbose --timeout 900

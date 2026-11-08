@@ -1,4 +1,4 @@
-<script lang="ts" generics="TMeta">
+<script generics="TMeta" lang="ts">
 	// Generic chrome shell shared by every per-tool block under
 	// `ChatMessageToolCall/`. Owns:
 	//   - the collapsible wrapper (defaults to CollapsibleContentBlock;
@@ -11,12 +11,12 @@
 
 	import { Loader2, Wrench } from '@lucide/svelte';
 	import { CollapsibleContentBlock } from '$lib/components/app';
-	import { ICON_CLASS_DEFAULT, ICON_CLASS_SPIN } from '$lib/constants/css-classes';
+	import { ICON_CLASS_DEFAULT, ICON_CLASS_SPIN } from '$lib/constants';
 	import { AgenticSectionType } from '$lib/enums';
-	import { getBuiltinToolUi } from '$lib/constants/built-in-tools';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { mcpStore } from '$lib/stores';
+	import type { AgenticSection, ToolUiEntry } from '$lib/types';
+	import { getToolUi } from '$lib/utils';
 	import type { Component, Snippet } from 'svelte';
-	import type { AgenticSection, BuiltinToolUiEntry } from '$lib/utils';
 
 	type ToolCallBlockMetaWithError = TMeta & { errorMessage?: string };
 
@@ -25,6 +25,7 @@
 		isPending: boolean;
 		isStreamingCall: boolean;
 		isCodeStreaming: boolean;
+		isInterrupted: boolean;
 	}
 
 	interface Props {
@@ -51,6 +52,12 @@
 		 */
 		spinIconWhenActive?: boolean;
 		/**
+		 * Treat an empty result as interrupted too. For tools that create
+		 * their result message before running (`exec_shell_command`), so a
+		 * stop mid-run leaves an empty result rather than none.
+		 */
+		emptyResultIsInterrupted?: boolean;
+		/**
 		 * Wrapper component that renders the title row and the body
 		 * children. Defaults to CollapsibleContentBlock;
 		 * `exec_shell_command` uses CollapsibleTerminalBlock for its
@@ -64,25 +71,33 @@
 	}
 
 	let {
-		section,
-		open,
+		children,
+		emptyResultIsInterrupted = false,
+		extraLiveStreaming = false,
 		isStreaming,
 		meta,
-		extraLiveStreaming = false,
+		onToggle,
+		open,
+		section,
 		spinIconWhenActive = false,
-		wrapper: Wrapper = CollapsibleContentBlock,
 		title,
 		titleSnippet,
-		onToggle,
-		children
+		wrapper: Wrapper = CollapsibleContentBlock
 	}: Props = $props();
 
 	const isPending = $derived(section.type === AgenticSectionType.TOOL_CALL_PENDING);
 	const isStreamingCall = $derived(section.type === AgenticSectionType.TOOL_CALL_STREAMING);
 	const showSpinner = $derived(isPending || (isStreamingCall && isStreaming) || extraLiveStreaming);
 	const isCodeStreaming = $derived(isStreaming && (isPending || isStreamingCall));
+	// A finished call with no result was stopped before it returned (user
+	// abort, or the page went away mid-execution).
+	const isInterrupted = $derived(
+		section.type === AgenticSectionType.TOOL_CALL &&
+			(section.toolResult === undefined || (emptyResultIsInterrupted && !section.toolResult)) &&
+			!showSpinner
+	);
 
-	const toolUi: BuiltinToolUiEntry | null = $derived(getBuiltinToolUi(section.toolName));
+	const toolUi: ToolUiEntry | null = $derived(getToolUi(section.toolName));
 	const toolIcon: Component = $derived(
 		spinIconWhenActive && showSpinner ? Loader2 : (toolUi?.icon ?? Wrench)
 	);
@@ -98,11 +113,17 @@
 		showSpinner || (toolUi?.icon ?? null) || !mcpServerFavicon ? null : mcpServerFavicon
 	);
 
+	// No subtitle while the call is in flight - the spinner already
+	// signals activity; only terminal states get a pill.
 	function subtitleFor(errorMessage?: string): string | undefined {
-		if (extraLiveStreaming) return 'streaming...';
-		if (showSpinner) return 'executing...';
+		if (showSpinner) return undefined;
+
 		if (errorMessage) return 'failed';
+
 		if (isStreamingCall && !isStreaming) return 'incomplete';
+
+		if (isInterrupted) return 'interrupted';
+
 		return undefined;
 	}
 
@@ -110,20 +131,21 @@
 </script>
 
 <Wrapper
-	{open}
 	class="my-2"
 	icon={toolIcon}
 	iconClass={toolIconClass}
 	{iconUrl}
+	{onToggle}
+	{open}
+	{subtitle}
 	{title}
 	{titleSnippet}
-	{subtitle}
-	{onToggle}
 >
 	{@render children(meta, {
-		isStreaming,
+		isCodeStreaming,
+		isInterrupted,
 		isPending,
-		isStreamingCall,
-		isCodeStreaming
+		isStreaming,
+		isStreamingCall
 	})}
 </Wrapper>

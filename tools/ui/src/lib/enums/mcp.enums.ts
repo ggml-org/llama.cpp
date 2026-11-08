@@ -2,61 +2,61 @@
  * Connection lifecycle phases for MCP protocol
  */
 export enum MCPConnectionPhase {
-	IDLE = 'idle',
-	TRANSPORT_CREATING = 'transport_creating',
-	TRANSPORT_READY = 'transport_ready',
-	INITIALIZING = 'initializing',
 	CAPABILITIES_EXCHANGED = 'capabilities_exchanged',
-	LISTING_TOOLS = 'listing_tools',
 	CONNECTED = 'connected',
+	DISCONNECTED = 'disconnected',
 	ERROR = 'error',
-	DISCONNECTED = 'disconnected'
+	IDLE = 'idle',
+	INITIALIZING = 'initializing',
+	LISTING_TOOLS = 'listing_tools',
+	TRANSPORT_CREATING = 'transport_creating',
+	TRANSPORT_READY = 'transport_ready'
 }
 
 /**
  * Log level for connection events
  */
 export enum MCPLogLevel {
+	ERROR = 'error',
 	INFO = 'info',
-	WARN = 'warn',
-	ERROR = 'error'
+	WARN = 'warn'
 }
 
 /**
  * Transport types for MCP connections
  */
 export enum MCPTransportType {
-	WEBSOCKET = 'websocket',
+	SSE = 'sse',
 	STREAMABLE_HTTP = 'streamable_http',
-	SSE = 'sse'
+	WEBSOCKET = 'websocket'
 }
 
 /**
  * Health check status for MCP servers
  */
 export enum HealthCheckStatus {
-	IDLE = 'idle',
 	CONNECTING = 'connecting',
-	SUCCESS = 'success',
-	ERROR = 'error'
+	ERROR = 'error',
+	IDLE = 'idle',
+	SUCCESS = 'success'
 }
 
 /**
  * Content types for MCP tool results
  */
 export enum MCPContentType {
-	TEXT = 'text',
 	IMAGE = 'image',
-	RESOURCE = 'resource'
+	RESOURCE = 'resource',
+	TEXT = 'text'
 }
 
 /**
  * JSON Schema types used in MCP tool definitions
  */
 export enum JsonSchemaType {
+	NUMBER = 'number',
 	OBJECT = 'object',
-	STRING = 'string',
-	NUMBER = 'number'
+	STRING = 'string'
 }
 
 /**

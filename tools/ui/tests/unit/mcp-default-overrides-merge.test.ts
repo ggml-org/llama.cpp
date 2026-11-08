@@ -1,16 +1,16 @@
+import { CONFIG_LOCALSTORAGE_KEY, STORAGE_APP_NAME } from '$lib/constants';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { STORAGE_APP_NAME, CONFIG_LOCALSTORAGE_KEY } from '$lib/constants';
 
 // node env unit project has no DOM, install a minimal localStorage backed by a Map
 beforeAll(() => {
 	const store = new Map<string, string>();
 	const polyfill: Storage = {
-		get length() {
-			return store.size;
-		},
 		clear: () => store.clear(),
 		getItem: (k) => (store.has(k) ? store.get(k)! : null),
 		key: (i) => Array.from(store.keys())[i] ?? null,
+		get length() {
+			return store.size;
+		},
 		removeItem: (k) => {
 			store.delete(k);
 		},
@@ -18,6 +18,7 @@ beforeAll(() => {
 			store.set(k, String(v));
 		}
 	};
+
 	(globalThis as unknown as { localStorage: Storage }).localStorage = polyfill;
 });
 
@@ -45,6 +46,7 @@ describe('mcp-default-overrides-merge-v1 migration', () => {
 
 	async function runMigrations() {
 		const { MigrationService } = await import('$lib/services/migration.service');
+
 		await MigrationService.runAllMigrations();
 	}
 
@@ -60,13 +62,13 @@ describe('mcp-default-overrides-merge-v1 migration', () => {
 
 	it('applies matching overrides onto mcpServers[i].enabled and preserves the legacy key', async () => {
 		writeConfig({
-			mcpServers: JSON.stringify([
-				{ id: 'exa', enabled: false, url: 'https://mcp.exa.ai/mcp' },
-				{ id: 'hf', enabled: false, url: 'https://huggingface.co/mcp' }
-			]),
 			[MCP_DEFAULT_OVERRIDES_KEY]: JSON.stringify([
-				{ serverId: 'exa', enabled: true },
-				{ serverId: 'hf', enabled: false }
+				{ enabled: true, serverId: 'exa' },
+				{ enabled: false, serverId: 'hf' }
+			]),
+			mcpServers: JSON.stringify([
+				{ enabled: false, id: 'exa', url: 'https://mcp.exa.ai/mcp' },
+				{ enabled: false, id: 'hf', url: 'https://huggingface.co/mcp' }
 			])
 		});
 
@@ -85,11 +87,11 @@ describe('mcp-default-overrides-merge-v1 migration', () => {
 
 	it('skips override ids that do not match any configured server', async () => {
 		writeConfig({
-			mcpServers: JSON.stringify([{ id: 'exa', enabled: false, url: 'https://mcp.exa.ai/mcp' }]),
 			[MCP_DEFAULT_OVERRIDES_KEY]: JSON.stringify([
-				{ serverId: 'orphan', enabled: true },
-				{ serverId: 'exa', enabled: true }
-			])
+				{ enabled: true, serverId: 'orphan' },
+				{ enabled: true, serverId: 'exa' }
+			]),
+			mcpServers: JSON.stringify([{ enabled: false, id: 'exa', url: 'https://mcp.exa.ai/mcp' }])
 		});
 
 		await runMigrations();
@@ -107,7 +109,7 @@ describe('mcp-default-overrides-merge-v1 migration', () => {
 
 	it('is a no-op when there are no legacy overrides', async () => {
 		writeConfig({
-			mcpServers: JSON.stringify([{ id: 'exa', enabled: true, url: 'https://mcp.exa.ai/mcp' }])
+			mcpServers: JSON.stringify([{ enabled: true, id: 'exa', url: 'https://mcp.exa.ai/mcp' }])
 		});
 
 		await runMigrations();
@@ -124,25 +126,26 @@ describe('mcp-default-overrides-merge-v1 migration', () => {
 
 	it('does not rewrite mcpServers when override.enabled already matches', async () => {
 		const originalServers = JSON.stringify([
-			{ id: 'exa', enabled: true, url: 'https://mcp.exa.ai/mcp' }
+			{ enabled: true, id: 'exa', url: 'https://mcp.exa.ai/mcp' }
 		]);
 
 		writeConfig({
-			mcpServers: originalServers,
-			[MCP_DEFAULT_OVERRIDES_KEY]: JSON.stringify([{ serverId: 'exa', enabled: true }])
+			[MCP_DEFAULT_OVERRIDES_KEY]: JSON.stringify([{ enabled: true, serverId: 'exa' }]),
+			mcpServers: originalServers
 		});
 
 		await runMigrations();
 
 		const after = readConfig();
+
 		expect(after.mcpServers).toBe(originalServers);
 		expect(MCP_DEFAULT_OVERRIDES_KEY in after).toBe(true);
 	});
 
 	it('records itself as completed so subsequent loads do not re-run', async () => {
 		writeConfig({
-			mcpServers: JSON.stringify([{ id: 'exa', enabled: false, url: 'https://mcp.exa.ai/mcp' }]),
-			[MCP_DEFAULT_OVERRIDES_KEY]: JSON.stringify([{ serverId: 'exa', enabled: true }])
+			[MCP_DEFAULT_OVERRIDES_KEY]: JSON.stringify([{ enabled: true, serverId: 'exa' }]),
+			mcpServers: JSON.stringify([{ enabled: false, id: 'exa', url: 'https://mcp.exa.ai/mcp' }])
 		});
 
 		const { MigrationService } = await import('$lib/services/migration.service');
@@ -150,8 +153,10 @@ describe('mcp-default-overrides-merge-v1 migration', () => {
 		await MigrationService.runAllMigrations();
 
 		const stateRaw = localStorage.getItem(MIGRATION_STATE_KEY);
+
 		expect(stateRaw).not.toBeNull();
 		const state = JSON.parse(stateRaw!) as { completed: string[]; failed: string[] };
+
 		expect(state.completed).toContain('mcp-default-overrides-merge-v1');
 		expect(state.failed).not.toContain('mcp-default-overrides-merge-v1');
 	});

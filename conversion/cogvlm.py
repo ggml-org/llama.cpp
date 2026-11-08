@@ -11,6 +11,7 @@ from .llama import LlamaModel
 
 
 @ModelBase.register("CogVLMForCausalLM")
+@ModelBase.example("THUDM/cogvlm2-llama3-chat-19B", "THUDM/cogvlm-chat-hf")
 class CogVLMVisionModel(MmprojModel):
 
     def set_gguf_parameters(self):
@@ -29,5 +30,6 @@ class CogVLMVisionModel(MmprojModel):
 
 
 @ModelBase.register("CogVLMForCausalLM")
+@ModelBase.example("THUDM/cogvlm2-llama3-chat-19B", "THUDM/cogvlm-chat-hf")
 class CogVLMModel(LlamaModel):
     model_arch = gguf.MODEL_ARCH.COGVLM

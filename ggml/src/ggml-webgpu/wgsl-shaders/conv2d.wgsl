@@ -2,25 +2,11 @@
 enable f16;
 
 @group(0) @binding(0)
-#if defined(WEIGHT_F32)
-var<storage, read_write> weights: array<f32>;
-#elif defined(WEIGHT_F16)
-var<storage, read_write> weights: array<f16>;
-#endif
-
+var<storage, read_write> weights: array<WEIGHT_TYPE>;
 @group(0) @binding(1)
-#if defined(INPUT_F32)
-var<storage, read_write> input: array<f32>;
-#elif defined(INPUT_F16)
-var<storage, read_write> input: array<f16>;
-#endif
-
+var<storage, read_write> input: array<INPUT_TYPE>;
 @group(0) @binding(2)
-#if defined(OUTPUT_F32)
-var<storage, read_write> output: array<f32>;
-#elif defined(OUTPUT_F16)
-var<storage, read_write> output: array<f16>;
-#endif
+var<storage, read_write> output: array<OUTPUT_TYPE>;
 
 struct Params {
     offset_w: u32,
@@ -49,30 +35,6 @@ struct Params {
 
 @group(0) @binding(3)
 var<uniform> params: Params;
-
-fn load_weight(idx: u32) -> f32 {
-    #if defined(WEIGHT_F32)
-        return weights[idx];
-    #elif defined(WEIGHT_F16)
-        return f32(weights[idx]);
-    #endif
-}
-
-fn load_input(idx: u32) -> f32 {
-    #if defined(INPUT_F32)
-        return input[idx];
-    #elif defined(INPUT_F16)
-        return f32(input[idx]);
-    #endif
-}
-
-fn store_output(idx: u32, val: f32) {
-    #if defined(OUTPUT_F32)
-        output[idx] = val;
-    #elif defined(OUTPUT_F16)
-        output[idx] = f16(val);
-    #endif
-}
 
 fn ceil_div_u32(x: u32, y: u32) -> u32 {
     return (x + y - 1) / y;
@@ -136,7 +98,7 @@ fn main(
     // entire receptive field is out of bounds
     if (kw_begin >= kw_end || kh_begin >= kh_end) {
         let out_idx = params.offset_o + ow * params.so0 + oh * params.so1 + oc * params.so2 + n * params.so3;
-        store_output(out_idx, 0.0);
+        output[out_idx] = OUTPUT_TYPE(0.0);
         return;
     }
 
@@ -155,11 +117,11 @@ fn main(
                 let iw = u32(ow_base + i32(kw * params.d0));
                 let w_idx = w_row_base + kw * params.sw0;
                 let in_idx = in_row_base + iw * params.si0;
-                sum += load_weight(w_idx) * load_input(in_idx);
+                sum += f32(weights[w_idx]) * f32(input[in_idx]);
             }
         }
     }
 
     let out_idx = params.offset_o + ow * params.so0 + oh * params.so1 + oc * params.so2 + n * params.so3;
-    store_output(out_idx, sum);
+    output[out_idx] = OUTPUT_TYPE(sum);
 }

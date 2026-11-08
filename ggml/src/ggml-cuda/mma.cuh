@@ -76,11 +76,11 @@ namespace ggml_cuda_mma {
         // For the A/C matrices this means I major == row major, J major == column major.
         // For the B matrix this means I major == column major, J major == row major.
         // MIRRORED == Each data value is held exactly once per thread subgroup.
-        DATA_LAYOUT_I_MAJOR           =  0, // Always used for Turing, Ampere, Ada Lovelace, consumer Blackwell, matrix A&B for RDNA4 and CDNA.
-        DATA_LAYOUT_J_MAJOR           = 10, // Matrix C for CDNA and RDNA4, int and float matrix C for RDNA3.
+        DATA_LAYOUT_I_MAJOR           =  0, // Always used for Turing, Ampere, Ada Lovelace, consumer Blackwell, matrix A&B for WMMA128 and CDNA.
+        DATA_LAYOUT_J_MAJOR           = 10, // Matrix C for CDNA and WMMA128, int and float matrix C for WMMA256.
         DATA_LAYOUT_I_MAJOR_MIRRORED  = 20, // Volta, matrix A&B for RDNA3.
         DATA_LAYOUT_J_MAJOR_MIRRORED  = 30,
-        DATA_LAYOUT_I_MAJOR_SCRAMBLED = 40, // Scrambled matrix C for faster transposition (RDNA4/CDNA), convert to float to unscramble.
+        DATA_LAYOUT_I_MAJOR_SCRAMBLED = 40, // Scrambled matrix C for faster transposition (WMMA128/CDNA), convert to float to unscramble.
     };
     // Implemented mma combinations are:
     //   - (I_MAJOR, I_MAJOR)          -> I_MAJOR
@@ -88,11 +88,11 @@ namespace ggml_cuda_mma {
     //   - (I_MAJOR, J_MAJOR_MIRRORED) -> I_MAJOR
 
     static constexpr __device__ data_layout get_input_data_layout() {
-#if defined(RDNA3) || defined(VOLTA_MMA_AVAILABLE)
+#if defined(AMD_WMMA_256B_AVAILABLE) || defined(VOLTA_MMA_AVAILABLE)
         return DATA_LAYOUT_I_MAJOR_MIRRORED;
 #else
         return DATA_LAYOUT_I_MAJOR;
-#endif // defined(RDNA3) || defined(VOLTA_MMA_AVAILABLE)
+#endif // defined(AMD_WMMA_256B_AVAILABLE) || defined(VOLTA_MMA_AVAILABLE)
     }
 
     template <int I_, int J_, typename T, data_layout ds_=DATA_LAYOUT_I_MAJOR>
@@ -201,7 +201,7 @@ namespace ggml_cuda_mma {
 
         static __device__ __forceinline__ int get_j(const int l) {
             if constexpr (I == 16 && J == 16) {
-#if defined(RDNA3)
+#if defined(AMD_WMMA_256B_AVAILABLE)
                 if constexpr (std::is_same_v<T, float> || std::is_same_v<T, int>) {
                     // matrix C
                     return 2 * l + (threadIdx.x / 16);
@@ -210,11 +210,11 @@ namespace ggml_cuda_mma {
                     return l;
                 }
 #else
-                // matrix C is the transposed matrix A&B on RDNA4
+                // matrix C is the transposed matrix A&B on WMMA128
                 return ne * (threadIdx.x / 16) + l;
-#endif // defined(RDNA3)
+#endif // defined(AMD_WMMA_256B_AVAILABLE)
             } else if constexpr (I == 16 && J == 8) {
-                // mmq input for RDNA4
+                // mmq input for WMMA128
                 return ne * (threadIdx.x / 16) + l;
             } else if constexpr (I == 16 && J == 4) {
                 return ne * (threadIdx.x / 16) + l;
@@ -573,7 +573,7 @@ namespace ggml_cuda_mma {
         static constexpr int         I  = I_;
         static constexpr int         J  = J_;
         static constexpr data_layout dl = DATA_LAYOUT_I_MAJOR_MIRRORED;
-#if defined(RDNA3)
+#if defined(AMD_WMMA_256B_AVAILABLE)
         static constexpr int         ne = tile<I_, J_, float, DATA_LAYOUT_I_MAJOR_MIRRORED>::ne;
 
         half2 x[ne] = {{0.0f, 0.0f}};
@@ -616,7 +616,7 @@ namespace ggml_cuda_mma {
                 return -1;
             }
         }
-#endif // defined(RDNA3)
+#endif // defined(AMD_WMMA_256B_AVAILABLE)
     };
 
     template <int I_, int J_>
@@ -694,7 +694,7 @@ namespace ggml_cuda_mma {
     };
 
     static __device__ __forceinline__ tile<16, 16, half2, DATA_LAYOUT_I_MAJOR> unscramble(const tile<16, 16, half2, DATA_LAYOUT_I_MAJOR_SCRAMBLED> & t) {
-#if defined(AMD_MFMA_AVAILABLE) || (defined(AMD_WMMA_AVAILABLE) && defined(RDNA4))
+#if defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_128B_AVAILABLE)
         tile<16, 16, half2, DATA_LAYOUT_I_MAJOR> ret;
 #pragma unroll
         for (int l0 = 0; l0 < t.ne/2; ++l0) {
@@ -705,7 +705,7 @@ namespace ggml_cuda_mma {
 #else
         NO_DEVICE_CODE;
         GGML_UNUSED(t);
-#endif // defined(AMD_MFMA_AVAILABLE) || (defined(AMD_WMMA_AVAILABLE) && defined(RDNA4))
+#endif // defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_128B_AVAILABLE)
     }
 
 #if defined(TURING_MMA_AVAILABLE)
@@ -726,7 +726,7 @@ namespace ggml_cuda_mma {
 
         return ret;
     }
-#elif defined(AMD_WMMA_AVAILABLE) && defined(RDNA3)
+#elif defined(AMD_WMMA_256B_AVAILABLE)
     static __device__ __forceinline__ tile<16, 8, half2, DATA_LAYOUT_I_MAJOR_MIRRORED> get_half2(
             const tile<16, 16, float, DATA_LAYOUT_I_MAJOR> & tile_float) {
         tile<16, 8, half2, DATA_LAYOUT_I_MAJOR_MIRRORED> ret;
@@ -780,6 +780,29 @@ namespace ggml_cuda_mma {
         for (int l = 0; l < t.ne; ++l) {
             t.x[l] = xs0[t.get_i(l)*stride + t.get_j(l)];
         }
+    }
+
+    template <int stride, typename T>
+    static __device__ __forceinline__ uint32_t swizzle(const uint32_t offset, const uint32_t i) {
+        static_assert(sizeof(T) <= 4, "unsupported type size");
+        constexpr int stride_bytes = stride*sizeof(T);
+        static_assert(stride_bytes % 16 == 0, "bad stride");
+        constexpr uint32_t shift = sizeof(T) == 1 ? 4 : (sizeof(T) == 2 ? 3 : 2);
+        if (stride_bytes % 32 != 0) {
+            return offset; // Equivalent to padding with 16 bytes.
+        }
+        if (stride_bytes % 64 != 0) {
+            return offset ^ (((i / 4) % 2) << shift);
+        }
+        if (stride_bytes % 128 != 0) {
+            return offset ^ (((i / 2) % 4) << shift);
+        }
+        return offset ^ ((i % 8) << shift);
+    }
+
+    template <int stride, typename T>
+    static __device__ __forceinline__ T * swizzle(T * ptr, const uint32_t offset, const uint32_t i) {
+        return ptr + swizzle<stride, T>(offset, i);
     }
 
     template <typename T>
@@ -865,10 +888,15 @@ namespace ggml_cuda_mma {
 
     static __device__ __forceinline__ void load_ldmatrix(
             tile<8, 4, half2, DATA_LAYOUT_J_MAJOR_MIRRORED> & t, const half2 * __restrict__ xs0, const int stride) {
+#ifdef VOLTA_MMA_AVAILABLE
 #pragma unroll
         for (int l0 = 0; l0 < t.ne; l0 += 2) {
             ggml_cuda_memcpy_1<2*sizeof(half2)>(t.x + l0, xs0 + t.get_i(l0)*stride + t.get_j(l0));
         }
+#else
+        GGML_UNUSED_VARS(t, xs0, stride);
+        NO_DEVICE_CODE;
+#endif // VOLTA_MMA_AVAILABLE
     }
 
     static __device__ __forceinline__ void load_ldmatrix(
@@ -915,6 +943,128 @@ namespace ggml_cuda_mma {
         GGML_UNUSED_VARS(t, xs0, stride);
         NO_DEVICE_CODE;
 #endif // TURING_MMA_AVAILABLE
+    }
+
+    template <int stride, int I, int J, typename T, data_layout dl>
+    static __device__ __forceinline__ void load_ldmatrix_swizzled(
+            tile<I, J, T, dl> & t, const T * __restrict__ xs0, const int offset) {
+#if defined(TURING_MMA_AVAILABLE)
+        static_assert(I == 8 || I == 16, "bad tile width");
+        static_assert(J ==  8, "bad tile height");
+        const int i = threadIdx.x % t.I;
+        const int j = ((threadIdx.x / t.I) * (t.J / 2)) % t.J;
+        int offset_ij = offset + i * stride + j;
+        offset_ij = swizzle<stride, T>(offset_ij, i);
+        int * xi = (int *) t.x;
+        if constexpr (I == 16) {
+            asm volatile("ldmatrix.sync.aligned.m8n8.x4.b16 {%0, %1, %2, %3}, [%4];"
+                : "=r"(xi[0]), "=r"(xi[1]), "=r"(xi[2]), "=r"(xi[3])
+                : "l"(xs0 + offset_ij));
+        } else {
+            asm volatile("ldmatrix.sync.aligned.m8n8.x2.b16 {%0, %1}, [%2];"
+                : "=r"(xi[0]), "=r"(xi[1])
+                : "l"(xs0 + offset_ij));
+        }
+#elif defined(VOLTA_MMA_AVAILABLE)
+#pragma unroll
+        for (int o = 0; o < t.ne; o += 4) {
+            const int offset_ij = offset + t.get_i(o) * stride + o;
+            ggml_cuda_memcpy_1<4*sizeof(T)>(t.x + o, swizzle<stride>(xs0, offset_ij, t.get_i(o)));
+        }
+#elif defined(AMD_WMMA_AVAILABLE)
+#ifdef RDNA3
+        static_assert(dl == DATA_LAYOUT_I_MAJOR_MIRRORED, "bad data layout");
+        static_assert(sizeof(t.x) == 32, "bad ne");
+        static_assert(I == 16, "bad tile width");
+        static_assert(J ==  8, "bad tile height");
+#pragma unroll
+        for (int o = 0; o < 8; o += 4) {
+            const int offset_ij = offset + t.get_i(0) * stride + o;
+            ggml_cuda_memcpy_1<16>(t.x + o, swizzle<stride>(xs0, offset_ij, t.get_i(0)));
+        }
+#else
+        static_assert(dl == DATA_LAYOUT_I_MAJOR, "bad data layout");
+        static_assert(sizeof(t.x) == 16, "bad ne");
+        const int offset_ij = offset + t.get_i(0)*stride + t.get_j(0);
+        ggml_cuda_memcpy_1<16>(t.x, swizzle<stride>(xs0, offset_ij, t.get_i(0)));
+#endif // RDNA3
+#elif defined(AMD_MFMA_AVAILABLE)
+        static_assert(sizeof(t.x) == 8, "bad ne");
+        const int offset_ij = offset + t.get_i(0)*stride + t.get_j(0);
+        ggml_cuda_memcpy_1<8>(t.x, swizzle<stride>(xs0, offset_ij, t.get_i(0)));
+#else
+        GGML_UNUSED_VARS(t, xs0, offset);
+        NO_DEVICE_CODE;
+#endif // defined(TURING_MMA_AVAILABLE)
+    }
+
+    template <int stride>
+    static __device__ __forceinline__ void load_ldmatrix_swizzled(
+            tile<8, 4, half2, DATA_LAYOUT_J_MAJOR_MIRRORED> & t, const half2 * __restrict__ xs0, const int offset) {
+#ifdef VOLTA_MMA_AVAILABLE
+#pragma unroll
+        for (int l0 = 0; l0 < t.ne; l0 += 2) {
+            const int offset_ij = offset + t.get_i(l0)*stride + t.get_j(l0);
+            ggml_cuda_memcpy_1<2*sizeof(half2)>(t.x + l0, swizzle<stride>(xs0, offset_ij, t.get_i(l0)));
+        }
+#else
+        GGML_UNUSED_VARS(t, xs0, offset);
+        NO_DEVICE_CODE;
+#endif // VOLTA_MMA_AVAILABLE
+    }
+
+    template <int stride, int I, typename T, data_layout dl>
+    static __device__ __forceinline__ void load_ldmatrix_trans_swizzled(
+            tile<I, 8, T, dl> & t, const T * __restrict__ xs0, const int offset) {
+#if defined(TURING_MMA_AVAILABLE)
+        static_assert(I == 8 || I == 16, "bad tile width");
+        static_assert(dl == DATA_LAYOUT_I_MAJOR, "bad data layout");
+        const int i = threadIdx.x % 16;
+        const int j = I == 16 ? (threadIdx.x / 16) * (t.J / 2) : 0;
+        int offset_ij = offset + i * stride + j;
+        offset_ij = swizzle<stride, T>(offset_ij, i);
+        int * xi = (int *) t.x;
+        if constexpr (I == 16) {
+            asm volatile("ldmatrix.sync.aligned.m8n8.x4.trans.b16 {%0, %1, %2, %3}, [%4];"
+                : "=r"(xi[0]), "=r"(xi[2]), "=r"(xi[1]), "=r"(xi[3])
+                : "l"(xs0 + offset_ij));
+        } else {
+            asm volatile("ldmatrix.sync.aligned.m8n8.x2.trans.b16 {%0, %1}, [%2];"
+                : "=r"(xi[0]), "=r"(xi[1])
+                : "l"(xs0 + offset_ij));
+        }
+#elif defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
+        static_assert(dl == DATA_LAYOUT_I_MAJOR || dl == DATA_LAYOUT_I_MAJOR_MIRRORED, "bad data layout");
+        if constexpr (I == 32) {
+#pragma unroll
+            for (int l0 = 0; l0 < t.ne/2; ++l0) {
+                half2 tmp[2];
+#pragma unroll
+                for (int o = 0; o < 2; ++o) {
+                    const int j = 2*t.get_j(l0) + o;
+                    int offset_ij = offset + j*stride + t.get_i(l0)/2;
+                    offset_ij = swizzle<stride, T>(offset_ij, j);
+                    tmp[o] = xs0[offset_ij];
+                }
+
+                t.x[l0]          =  __lows2half2(tmp[0], tmp[1]);
+                t.x[l0 + t.ne/2] = __highs2half2(tmp[0], tmp[1]);
+            }
+        } else {
+            half * xh = (half *) t.x;
+#pragma unroll
+            for (int l = 0; l < t.ne; ++l) {
+#pragma unroll
+                for (int o = 0; o < 2; ++o) {
+                    const int j = 2*t.get_j(l) + o;
+                    xh[2*l + o] = ((const half *) xs0)[swizzle<2*stride, half>(2*offset + j*(2*stride) + t.get_i(l), j)];
+                }
+            }
+        }
+#else
+        GGML_UNUSED_VARS(t, xs0, offset);
+        NO_DEVICE_CODE;
+#endif // defined(TURING_MMA_AVAILABLE)
     }
 
     static __device__ __forceinline__ void mma(
@@ -1021,7 +1171,7 @@ namespace ggml_cuda_mma {
             : "r"(Axi[2]), "r"(Axi[3]), "r"(Bxi[3]));
 #endif // __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
 #elif defined(AMD_WMMA_AVAILABLE)
-#if defined(RDNA4)
+#if defined(AMD_WMMA_128B_AVAILABLE)
         using halfx8_t = __attribute__((ext_vector_type(8))) _Float16;
         halfx8_t& acc_frag = reinterpret_cast<halfx8_t&>(D.x[0]);
         const halfx8_t& a_frag = reinterpret_cast<const halfx8_t&>(A.x[0]);
@@ -1030,7 +1180,7 @@ namespace ggml_cuda_mma {
 #else
         GGML_UNUSED_VARS(D, A, B);
         NO_DEVICE_CODE;
-#endif // defined(RDNA4)
+#endif // defined(AMD_WMMA_128B_AVAILABLE)
 #elif defined(AMD_MFMA_AVAILABLE)
         // MFMA: FP16 input, FP32 accumulate, convert back to half2.
         using halfx4_t = __attribute__((ext_vector_type(4))) _Float16;
@@ -1068,7 +1218,7 @@ namespace ggml_cuda_mma {
     static __device__ __forceinline__ void mma(
             tile<16, 16, half2, DATA_LAYOUT_I_MAJOR_SCRAMBLED> & D, const tile<32, 8, half2, DATA_LAYOUT_I_MAJOR> & A,
             const tile<16, 8, half2, DATA_LAYOUT_I_MAJOR> & B) {
-#if defined(AMD_MFMA_AVAILABLE) || (defined(AMD_WMMA_AVAILABLE) && defined(RDNA4))
+#if defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_128B_AVAILABLE)
         tile<16, 8, half2>       * D16 = (tile<16, 8, half2>       *) &D;
         const tile<16, 8, half2> * A16 = (const tile<16, 8, half2> *) &A;
         mma(D16[0], A16[0], B);
@@ -1076,7 +1226,7 @@ namespace ggml_cuda_mma {
 #else
         GGML_UNUSED_VARS(D, A, B);
         NO_DEVICE_CODE;
-#endif // defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE) && defined(RDNA4)
+#endif // defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_128B_AVAILABLE)
     }
 
     template <data_layout dl_ab, data_layout dl_d>
@@ -1223,14 +1373,14 @@ namespace ggml_cuda_mma {
             : "r"(Axi[2]), "r"(Axi[3]), "r"(Bxi[3]));
 #endif // __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
 #elif defined(AMD_WMMA_AVAILABLE)
-#if defined(RDNA4)
+#if defined(AMD_WMMA_128B_AVAILABLE)
         using halfx8_t = __attribute__((ext_vector_type(8))) _Float16;
         using floatx8_t = __attribute__((ext_vector_type(8))) float;
         floatx8_t& acc_frag = reinterpret_cast<floatx8_t&>(D.x[0]);
         const halfx8_t& a_frag = reinterpret_cast<const halfx8_t&>(A.x[0]);
         const halfx8_t& b_frag = reinterpret_cast<const halfx8_t&>(B.x[0]);
         acc_frag = __builtin_amdgcn_wmma_f32_16x16x16_f16_w32_gfx12(a_frag, b_frag, acc_frag);
-#elif defined(RDNA3)
+#elif defined(AMD_WMMA_256B_AVAILABLE)
         using halfx16_t = __attribute__((ext_vector_type(16))) _Float16;
         using floatx8_t = __attribute__((ext_vector_type(8))) float;
         floatx8_t& acc_frag = reinterpret_cast<floatx8_t&>(D.x[0]);
@@ -1240,7 +1390,7 @@ namespace ggml_cuda_mma {
 #else
         GGML_UNUSED_VARS(D, A, B);
         NO_DEVICE_CODE;
-#endif // RDNA4
+#endif // AMD_WMMA_128B_AVAILABLE
 #elif defined(AMD_MFMA_AVAILABLE)
         using halfx4_t = __attribute__((ext_vector_type(4))) _Float16;
         using floatx4_t = __attribute__((ext_vector_type(4))) float;
@@ -1258,15 +1408,15 @@ namespace ggml_cuda_mma {
     static __device__ __forceinline__ void mma(
             tile<16, 16, float, dl_d> & D, const tile<16, 8, nv_bfloat162, dl_ab> & A, const tile<16, 8, nv_bfloat162, dl_ab> & B) {
 #if defined(AMD_WMMA_AVAILABLE)
-#if defined(RDNA4)
-        using bf16x8_t = __attribute__((ext_vector_type(8))) __bf16;
+#if defined(AMD_WMMA_128B_AVAILABLE)
+        using bf16x8_t = __attribute__((ext_vector_type(8))) short;
         using floatx8_t = __attribute__((ext_vector_type(8))) float;
         floatx8_t& acc_frag = reinterpret_cast<floatx8_t&>(D.x[0]);
         const bf16x8_t& a_frag = reinterpret_cast<const bf16x8_t&>(A.x[0]);
         const bf16x8_t& b_frag = reinterpret_cast<const bf16x8_t&>(B.x[0]);
         acc_frag = __builtin_amdgcn_wmma_f32_16x16x16_bf16_w32_gfx12(a_frag, b_frag, acc_frag);
-#elif defined(RDNA3)
-        using bf16x16_t = __attribute__((ext_vector_type(16))) __bf16;
+#elif defined(AMD_WMMA_256B_AVAILABLE)
+        using bf16x16_t = __attribute__((ext_vector_type(16))) short;
         using floatx8_t = __attribute__((ext_vector_type(8))) float;
         floatx8_t& acc_frag = reinterpret_cast<floatx8_t&>(D.x[0]);
         const bf16x16_t& a_frag = reinterpret_cast<const bf16x16_t&>(A.x[0]);
@@ -1275,7 +1425,7 @@ namespace ggml_cuda_mma {
 #else
         GGML_UNUSED_VARS(D, A, B);
         NO_DEVICE_CODE;
-#endif // defined(RDNA4)
+#endif // defined(AMD_WMMA_128B_AVAILABLE)
 #elif defined(AMD_MFMA_AVAILABLE)
         using floatx4_t = __attribute__((ext_vector_type(4))) float;
         floatx4_t& acc_frag = reinterpret_cast<floatx4_t&>(D.x[0]);
@@ -1317,19 +1467,19 @@ namespace ggml_cuda_mma {
 #elif defined(AMD_WMMA_AVAILABLE)
         using int32x8_t = __attribute__((__vector_size__(8 * sizeof(int)))) int;
         int32x8_t * acc = (int32x8_t *) D.x;
-#if defined(RDNA4)
+#if defined(AMD_WMMA_128B_AVAILABLE)
         using int32x2_t = __attribute__((__vector_size__(2 * sizeof(int)))) int;
         int32x2_t * a_vec = (int32x2_t *) A.x;
         int32x2_t * b_vec = (int32x2_t *) B.x;
         acc[0] = __builtin_amdgcn_wmma_i32_16x16x16_iu8_w32_gfx12(true, a_vec[0], true, b_vec[0], acc[0], true);
         acc[0] = __builtin_amdgcn_wmma_i32_16x16x16_iu8_w32_gfx12(true, a_vec[1], true, b_vec[1], acc[0], true);
-#elif defined(RDNA3)
+#elif defined(AMD_WMMA_256B_AVAILABLE)
         using int32x4_t = __attribute__((__vector_size__(4 * sizeof(int)))) int;
         int32x4_t * a_vec = (int32x4_t *) A.x;
         int32x4_t * b_vec = (int32x4_t *) B.x;
         acc[0] = __builtin_amdgcn_wmma_i32_16x16x16_iu8_w32(true, a_vec[0], true, b_vec[0], acc[0], true);
         acc[0] = __builtin_amdgcn_wmma_i32_16x16x16_iu8_w32(true, a_vec[1], true, b_vec[1], acc[0], true);
-#endif // RDNA4
+#endif // AMD_WMMA_128B_AVAILABLE
 #else
         GGML_UNUSED_VARS(D, A, B);
         NO_DEVICE_CODE;
@@ -1406,7 +1556,7 @@ namespace ggml_cuda_mma {
     static __device__ __forceinline__ void mma(
             tile<16, 16, half2, DATA_LAYOUT_I_MAJOR> & D, const tile<32,  8, half2, DATA_LAYOUT_I_MAJOR_MIRRORED> & A,
             const tile<16,  8, half2, DATA_LAYOUT_I_MAJOR_MIRRORED> & B) {
-#if defined(AMD_WMMA_AVAILABLE) && defined(RDNA3)
+#if defined(AMD_WMMA_256B_AVAILABLE)
         using halfx16_t = __attribute__((ext_vector_type(16))) _Float16;
         halfx16_t       * xD = (halfx16_t       *) D.x;
         const halfx16_t * xA = (const halfx16_t *) A.x;
@@ -1435,17 +1585,17 @@ namespace ggml_cuda_mma {
 #elif defined(AMD_WMMA_AVAILABLE)
         using int32x8_t = __attribute__((__vector_size__(8 * sizeof(int)))) int;
         int32x8_t * acc = (int32x8_t *) D.x;
-#if defined(RDNA4)
+#if defined(AMD_WMMA_128B_AVAILABLE)
         using int32x2_t = __attribute__((__vector_size__(2 * sizeof(int)))) int;
         int32x2_t * a_vec = (int32x2_t *) A.x;
         int32x2_t * b_vec = (int32x2_t *) B.x;
         acc[0] = __builtin_amdgcn_wmma_i32_16x16x16_iu8_w32_gfx12(true, a_vec[0], true, b_vec[0], acc[0], false);
-#elif defined(RDNA3)
+#elif defined(AMD_WMMA_256B_AVAILABLE)
         using int32x4_t = __attribute__((__vector_size__(4 * sizeof(int)))) int;
         int32x4_t * a_vec = (int32x4_t *) A.x;
         int32x4_t * b_vec = (int32x4_t *) B.x;
         acc[0] = __builtin_amdgcn_wmma_i32_16x16x16_iu8_w32(true, a_vec[0], true, b_vec[0], acc[0], false);
-#endif // RDNA4
+#endif // AMD_WMMA_128B_AVAILABLE
 #else
         GGML_UNUSED(D);
         GGML_UNUSED(A);

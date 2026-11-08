@@ -1,6 +1,6 @@
 <script lang="ts">
-	import type { ColorLevel } from './context-gauge';
 	import { colorLevelTextClass } from './context-gauge';
+	import type { ColorLevel } from '$lib/enums';
 
 	interface Props {
 		percent: number | null;
@@ -8,17 +8,18 @@
 		size?: 'sm' | 'md';
 	}
 
-	let { percent, level, size = 'sm' }: Props = $props();
+	let { level, percent, size = 'sm' }: Props = $props();
 
-	const RADIUS = 11;
-	const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
+	// the md dial fills its box: the ring would sit inside a padding ring otherwise
+	const RADIUS = $derived(size === 'md' ? 13 : 11);
+	const CIRCUMFERENCE = $derived(2 * Math.PI * RADIUS);
 
 	const strokeLevelClass = $derived(colorLevelTextClass(level));
 	const dimensions = $derived(size === 'md' ? 'h-6 w-6' : 'h-5 w-5');
 	const strokeWidth = $derived(size === 'md' ? 4 : 3);
 </script>
 
-<svg viewBox="0 0 32 32" fill="none" class={dimensions}>
+<svg class={dimensions} fill="none" viewBox="0 0 32 32">
 	<circle
 		cx="16"
 		cy="16"
@@ -29,15 +30,15 @@
 	/>
 
 	<circle
+		class="transition-colors duration-300 {strokeLevelClass}"
 		cx="16"
 		cy="16"
 		r={RADIUS}
-		class="transition-colors duration-300 {strokeLevelClass}"
 		stroke="currentColor"
-		stroke-width={strokeWidth}
-		stroke-linecap="round"
 		stroke-dasharray={CIRCUMFERENCE}
 		stroke-dashoffset={percent !== null ? CIRCUMFERENCE * (1 - percent / 100) : CIRCUMFERENCE}
+		stroke-linecap="round"
+		stroke-width={strokeWidth}
 		transform="rotate(-90 16 16)"
 	/>
 </svg>

@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { ModelBadge, ModelsSelectorDropdown } from '$lib/components/app';
-	import { copyToClipboard } from '$lib/utils';
-	import { modelsStore } from '$lib/stores/models.svelte';
+	import { ModelBadge, ModelsSelector } from '$lib/components/app';
 	import { ServerModelStatus } from '$lib/enums';
+	import { modelsStore } from '$lib/stores';
+	import { copyToClipboard } from '$lib/utils';
 
 	interface Props {
 		displayedModel: string | null;
@@ -11,9 +11,7 @@
 		onRegenerate: (modelOverride?: string) => void;
 	}
 
-	let { displayedModel, isRouter, isLoading, onRegenerate }: Props = $props();
-
-	let pendingModel = $state<string | null>(null);
+	let { displayedModel, isLoading, isRouter, onRegenerate }: Props = $props();
 
 	function handleCopyModel() {
 		void copyToClipboard(displayedModel ?? '');
@@ -21,23 +19,20 @@
 </script>
 
 {#if isRouter}
-	<ModelsSelectorDropdown
-		currentModel={pendingModel ?? displayedModel}
+	<ModelsSelector
+		currentModel={displayedModel}
 		disabled={isLoading}
 		onModelChange={async (modelId: string, modelName: string) => {
 			const status = modelsStore.getModelStatus(modelId);
 
+			// the picker's own selection applies before this resolves, so a model
+			// that is not loaded yet gets its load request in first
 			if (status !== ServerModelStatus.LOADED) {
-				pendingModel = modelId;
-
-				try {
-					await modelsStore.loadModel(modelId);
-				} finally {
-					pendingModel = null;
-				}
+				await modelsStore.status.load(modelId);
 			}
 
 			onRegenerate(modelName);
+
 			return true;
 		}}
 	/>

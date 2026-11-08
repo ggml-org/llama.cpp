@@ -1,31 +1,36 @@
 import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
-	testDir: 'tests/e2e',
-	testMatch: ['**/*.e2e.ts'],
-	timeout: 30000,
 	expect: {
 		timeout: 5000
 	},
-	fullyParallel: true,
 	forbidOnly: !!process.env.CI,
-	retries: process.env.CI ? 2 : 0,
-	workers: process.env.CI ? 1 : undefined,
+	fullyParallel: true,
+	projects: [
+		{
+			name: 'chromium',
+			use: {
+				...devices['Desktop Chrome'],
+				// locally, the installed (auto-updated) Chrome with its sandbox on: the bundled
+				// Chromium lags behind security fixes and Playwright disables its sandbox by default
+				...(process.env.CI ? {} : { channel: 'chrome', launchOptions: { chromiumSandbox: true } })
+			}
+		}
+	],
 	reporter: 'line',
+	retries: process.env.CI ? 2 : 0,
+	testDir: 'tests/e2e',
+	testMatch: ['**/*.e2e.ts'],
+	timeout: 30000,
 	use: {
 		baseURL: 'http://localhost:8181',
 		trace: 'on-first-retry'
 	},
-	projects: [
-		{
-			name: 'chromium',
-			use: { ...devices['Desktop Chrome'] }
-		}
-	],
 	webServer: {
 		command: 'npm run build && npx http-server ./dist -p 8181',
 		port: 8181,
-		timeout: 120000,
-		reuseExistingServer: !process.env.CI
-	}
+		reuseExistingServer: !process.env.CI,
+		timeout: 120000
+	},
+	workers: process.env.CI ? 1 : undefined
 });

@@ -1,14 +1,18 @@
-import { goto } from '$app/navigation';
+import { page } from '$app/state';
+import { NEW_CHAT_TAB_ID } from '$lib/constants';
 import { KeyboardKey } from '$lib/enums';
-import { ROUTES } from '$lib/constants/routes';
+import { conversationsStore, settingsStore, tabsStore } from '$lib/stores';
 
 interface KeyboardShortcutsCallbacks {
-	activateSearchMode?: () => void;
 	editActiveConversation?: () => void;
-	onSearchActivated?: () => void;
 	deleteActiveConversation?: () => void;
 	navigateToPrevConversation?: () => void;
 	navigateToNextConversation?: () => void;
+	navigateToPrevTab?: () => void;
+	navigateToNextTab?: () => void;
+	openModelsManager?: () => void;
+	openSearch?: () => void;
+	openSettings?: () => void;
 	toggleSidebar?: () => void;
 }
 
@@ -18,8 +22,12 @@ export function useKeyboardShortcuts(callbacks: KeyboardShortcutsCallbacks) {
 
 		if (isCmdOrCtrl && event.key === KeyboardKey.K_LOWER) {
 			event.preventDefault();
-			callbacks.activateSearchMode?.();
-			callbacks.onSearchActivated?.();
+			callbacks.openSearch?.();
+		}
+
+		if (isCmdOrCtrl && event.key === KeyboardKey.COMMA) {
+			event.preventDefault();
+			callbacks.openSettings?.();
 		}
 
 		if (isCmdOrCtrl && event.key === KeyboardKey.B_LOWER) {
@@ -34,12 +42,43 @@ export function useKeyboardShortcuts(callbacks: KeyboardShortcutsCallbacks) {
 		) {
 			event.preventDefault();
 
-			goto(ROUTES.NEW_CHAT);
+			void conversationsStore.openNewChat();
+		}
+
+		if (
+			isCmdOrCtrl &&
+			event.shiftKey &&
+			(event.key === KeyboardKey.M_LOWER || event.key === KeyboardKey.M_UPPER)
+		) {
+			event.preventDefault();
+			callbacks.openModelsManager?.();
 		}
 
 		if (event.shiftKey && isCmdOrCtrl && event.key === KeyboardKey.E_UPPER) {
 			event.preventDefault();
 			callbacks.editActiveConversation?.();
+		}
+
+		if (
+			event.shiftKey &&
+			isCmdOrCtrl &&
+			(event.key === KeyboardKey.X_LOWER || event.key === KeyboardKey.X_UPPER)
+		) {
+			// several components register this shortcut; only let the first handler
+			// act so the synchronous navigation does not cascade-close every tab
+			if (event.defaultPrevented) return;
+
+			// close-tab only makes sense with conversation tabs enabled
+			if (!settingsStore.config.conversationTabs) return;
+
+			event.preventDefault();
+
+			const activeId =
+				page.params.id ?? (page.route.id === '/(chat)' ? NEW_CHAT_TAB_ID : undefined);
+
+			if (activeId) {
+				void tabsStore.close(activeId, true);
+			}
 		}
 
 		if (
@@ -59,6 +98,16 @@ export function useKeyboardShortcuts(callbacks: KeyboardShortcutsCallbacks) {
 		if (isCmdOrCtrl && event.shiftKey && event.key === KeyboardKey.ARROW_DOWN) {
 			event.preventDefault();
 			callbacks.navigateToNextConversation?.();
+		}
+
+		if (isCmdOrCtrl && event.altKey && event.shiftKey && event.code === KeyboardKey.BRACKET_LEFT) {
+			event.preventDefault();
+			callbacks.navigateToPrevTab?.();
+		}
+
+		if (isCmdOrCtrl && event.altKey && event.shiftKey && event.code === KeyboardKey.BRACKET_RIGHT) {
+			event.preventDefault();
+			callbacks.navigateToNextTab?.();
 		}
 	}
 

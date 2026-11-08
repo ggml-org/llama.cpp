@@ -33,6 +33,8 @@ layout(push_constant) uniform PushConstants {
     uint d_head;
     uint n_group;
     uint n_tok;
+    uint n_seq;
+    uint K;
 };
 
 float softplus(float x) {
@@ -113,6 +115,14 @@ void main() {
 
         if (lane == 0) {
             d[y_base_idx + i * stride_y] = state_sum;
+        }
+
+        const uint slot = n_tok - 1u - i;
+        if (slot > 0u && slot < K) {
+            const uint snapshot_base_idx = s_base_idx + slot * n_seq * (nb03 / 4u);
+            [[unroll]] for (uint j = 0; j < c_factor; j++) {
+                d[snapshot_base_idx + SUBGROUP_SIZE * j + lane] = state[j];
+            }
         }
     }
 

@@ -142,3 +142,117 @@ kernel void kernel_gemm_noshuffle_q6_k_q8_1_dp4a(
     }
 #undef NGROUPS
 }
+
+// Stage each 32-K activation block as two uint4 values.
+__attribute__((qcom_wave_pair_mode(1)))
+kernel void kernel_gemm_noshuffle_q6_k_q8_1_dp4a_act_vload4(
+        __global const ushort * src0_ql,
+        __global const uchar  * src0_qh,
+        __global const ushort * src0_s,
+        __global const half   * src0_d,
+        __global const uint   * src1_qa,
+        __global const half   * src1_da,
+        __global       float  * dst,
+        ulong  offsetd,
+        int    m,
+        int    n_no_padding,
+        int    k
+) {
+    dst = (global float *)((global char *)dst + offsetd);
+
+    const uint lid = get_local_id(0);
+    const uint block_id_m = get_global_id(1);
+    const uint block_id_n = get_global_id(2);
+
+    const uint row      = block_id_m * 64 + lid;
+    const uint col_base = block_id_n * TILESIZE_N;
+    const bool row_valid = row < (uint)m;
+    const uint rrow     = row_valid ? row : 0;
+
+    const uint k_u = (uint)k >> 2;
+    const uint k_b = (uint)k >> 5;
+
+    __local uint4 sh_qa4[TILESIZE_N][2];
+    __local half sh_d[TILESIZE_N];
+
+#define NGROUPS (TILESIZE_N / 4)
+    float4 acc[NGROUPS];
+    #pragma unroll
+    for (int g = 0; g < NGROUPS; ++g) {
+        acc[g] = (float4)(0.0f);
+    }
+
+    for (uint step = 0; step < (uint)k; step += 32) {
+        const uint sub    = step >> 5;
+        const uint sb_idx = step / QK_K;
+
+        const float dd = (float)src0_d[rrow + sb_idx * m];
+        const char2 sc = as_char2(src0_s[rrow + sub * m]);
+        const float scale0 = dd * (float)sc.s0;
+        const float scale1 = dd * (float)sc.s1;
+
+        const uint wbase = rrow + (step >> 2) * (uint)m;
+        uint qw[8];
+        #pragma unroll
+        for (int u = 0; u < 8; ++u) {
+            const uint o  = wbase + (uint)u * (uint)m;
+            qw[u] = SIGN6(EXP4((uint)src0_ql[o]) | EXP2((uint)src0_qh[o]));
+        }
+
+        for (uint idx = lid; idx < TILESIZE_N * 2; idx += 64) {
+            const uint t = idx >> 1;
+            const uint v = idx & 1;
+            const uint c = col_base + t;
+            sh_qa4[t][v] = (c < (uint)n_no_padding)
+                         ? vload4(0, src1_qa + c * k_u + (step >> 2) + (v << 2))
+                         : (uint4)(0u);
+        }
+        if (lid < TILESIZE_N) {
+            const uint c = col_base + lid;
+            sh_d[lid] = (c < (uint)n_no_padding) ? src1_da[c * k_b + sub] : (half)0;
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+
+        #pragma unroll
+        for (int g = 0; g < NGROUPS; ++g) {
+            const int b = g * 4;
+            float4 rf;
+            #define DOT_TOK(j) { \
+                const uint4 a0 = sh_qa4[b + (j)][0]; \
+                const uint4 a1 = sh_qa4[b + (j)][1]; \
+                const int raw1 = dot4_q8a(qw[0], qw[1], qw[2], qw[3], a0.x, a0.y, a0.z, a0.w); \
+                const int raw2 = dot4_q8a(qw[4], qw[5], qw[6], qw[7], a1.x, a1.y, a1.z, a1.w); \
+                rf.s##j = scale0 * (float)raw1 + scale1 * (float)raw2; \
+            }
+            DOT_TOK(0); DOT_TOK(1); DOT_TOK(2); DOT_TOK(3);
+            #undef DOT_TOK
+            const float4 ad = (float4)((float)sh_d[b+0], (float)sh_d[b+1], (float)sh_d[b+2], (float)sh_d[b+3]);
+            acc[g] += ad * rf;
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+
+    if (!row_valid) {
+        return;
+    }
+
+    #pragma unroll
+    for (int g = 0; g < NGROUPS; ++g) {
+        const uint b = (uint)(g * 4);
+        const float4 a = acc[g];
+        const uint c0 = col_base + b;
+        if (c0 + 0 < (uint)n_no_padding) {
+            dst[(c0 + 0) * (uint)m + row] = a.s0;
+        }
+        if (c0 + 1 < (uint)n_no_padding) {
+            dst[(c0 + 1) * (uint)m + row] = a.s1;
+        }
+        if (c0 + 2 < (uint)n_no_padding) {
+            dst[(c0 + 2) * (uint)m + row] = a.s2;
+        }
+        if (c0 + 3 < (uint)n_no_padding) {
+            dst[(c0 + 3) * (uint)m + row] = a.s3;
+        }
+    }
+#undef NGROUPS
+}

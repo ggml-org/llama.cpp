@@ -21,7 +21,10 @@ if (MUSAToolkit_FOUND)
     message(STATUS "MUSA Toolkit found")
 
     if (NOT DEFINED MUSA_ARCHITECTURES)
-        set(MUSA_ARCHITECTURES "21;22;31")
+        set(MUSA_ARCHITECTURES "22;31")
+    endif()
+    if ("21" IN_LIST MUSA_ARCHITECTURES)
+        message(WARNING "MUSA architecture 21 (MTT S70, MTT S80, MTT S3000) is deprecated and no longer tested")
     endif()
     message(STATUS "Using MUSA architectures: ${MUSA_ARCHITECTURES}")
 
@@ -43,17 +46,8 @@ if (MUSAToolkit_FOUND)
         add_compile_definitions(GGML_MUSA_MUDNN_COPY)
     endif()
 
-    if (GGML_CUDA_FA_ALL_QUANTS)
-        file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-vec*.cu")
-        list(APPEND GGML_SOURCES_MUSA ${SRCS})
-        add_compile_definitions(GGML_CUDA_FA_ALL_QUANTS)
-    else()
-        list(APPEND GGML_SOURCES_MUSA
-            ../ggml-cuda/template-instances/fattn-vec-instance-f16-f16.cu
-            ../ggml-cuda/template-instances/fattn-vec-instance-q4_0-q4_0.cu
-            ../ggml-cuda/template-instances/fattn-vec-instance-q8_0-q8_0.cu
-            ../ggml-cuda/template-instances/fattn-vec-instance-bf16-bf16.cu)
-    endif()
+    ggml_cuda_fattn_vec_instances(${CMAKE_CURRENT_SOURCE_DIR}/../ggml-cuda SRCS)
+    list(APPEND GGML_SOURCES_MUSA ${SRCS})
 
     set_source_files_properties(${GGML_SOURCES_MUSA} PROPERTIES LANGUAGE CXX)
     foreach(SOURCE ${GGML_SOURCES_MUSA})
@@ -75,7 +69,6 @@ if (MUSAToolkit_FOUND)
     endif()
 
     add_compile_definitions(GGML_USE_MUSA)
-    add_compile_definitions(GGML_CUDA_PEER_MAX_BATCH_SIZE=${GGML_CUDA_PEER_MAX_BATCH_SIZE})
 
     if (GGML_MUSA_GRAPHS)
         add_compile_definitions(GGML_MUSA_GRAPHS)

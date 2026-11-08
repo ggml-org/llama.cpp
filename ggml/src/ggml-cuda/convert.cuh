@@ -45,11 +45,11 @@ template<typename dst_t, typename src_t>
 #ifdef GGML_USE_HIP
         return make_float2(__bfloat162float(__low2bfloat16(x)), __bfloat162float(__high2bfloat16(x)));
 #else
-#if __CUDA_ARCH__ >= 800
+#if !defined(GGML_USE_MUSA) && __CUDA_ARCH__ >= 800
         return __bfloat1622float2(x);
 #else
         return make_float2(__bfloat162float(x.x), __bfloat162float(x.y));
-#endif // __CUDA_ARCH__ >= 800
+#endif // !defined(GGML_USE_MUSA) && __CUDA_ARCH__ >= 800
 #endif // GGML_USE_HIP
     } else if constexpr(std::is_same_v<src_t, float2> && std::is_same_v<dst_t, nv_bfloat162>) {
         // bypass compile error on cuda 12.0.1

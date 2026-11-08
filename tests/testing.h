@@ -1,7 +1,5 @@
 #pragma once
 
-#include "common.h"
-
 #include <chrono>
 #include <exception>
 #include <iostream>
@@ -21,6 +19,11 @@ struct testing {
     int failures = 0;
     int unnamed = 0;
     int exceptions = 0;
+    int skipped = 0;
+
+    // set by skip(), read by the innermost test()
+    bool skip_current = false;
+    std::string skip_reason;
 
     static constexpr std::size_t status_column = 80;
 
@@ -34,7 +37,14 @@ struct testing {
     }
 
     std::string full_name() const {
-        return string_join(stack, ".");
+        std::string name;
+        for (std::size_t i = 0; i < stack.size(); ++i) {
+            if (i != 0) {
+                name += ".";
+            }
+            name += stack[i];
+        }
+        return name;
     }
 
     void log(const std::string & msg) {
@@ -78,7 +88,12 @@ struct testing {
         }
     }
 
-    void print_result(const std::string &label, int new_failures, int new_assertions, const std::string &extra = "") const {
+    void skip(const std::string &reason = "") {
+        skip_current = true;
+        skip_reason  = reason;
+    }
+
+    void print_result(const std::string &label, int new_failures, int new_assertions, const std::string &extra = "", bool was_skipped = false) const {
         std::string line = indent() + label;
 
         std::string details;
@@ -101,7 +116,7 @@ struct testing {
             line += " (" + details + ")";
         }
 
-        std::string status = (new_failures == 0) ? "[PASS]" : "[FAIL]";
+        std::string status = new_failures != 0 ? "[FAIL]" : (was_skipped ? "[SKIP]" : "[PASS]");
 
         if (line.size() + 1 < status_column) {
             line.append(status_column - line.size(), ' ');
@@ -126,12 +141,26 @@ struct testing {
         int before_failures   = failures;
         int before_assertions = assertions;
 
+        // do not let a skipped subtest also mark its parent as skipped
+        bool        outer_skip        = skip_current;
+        std::string outer_skip_reason = skip_reason;
+        skip_current = false;
+        skip_reason.clear();
+
         run_with_exceptions([&] { f(*this); }, "test");
 
         int new_failures   = failures   - before_failures;
         int new_assertions = assertions - before_assertions;
 
-        print_result(name, new_failures, new_assertions);
+        bool was_skipped = skip_current && new_failures == 0;
+        if (was_skipped) {
+            ++skipped;
+        }
+
+        print_result(name, new_failures, new_assertions, was_skipped ? skip_reason : "", was_skipped);
+
+        skip_current = outer_skip;
+        skip_reason  = outer_skip_reason;
 
         stack.pop_back();
     }
@@ -238,6 +267,7 @@ struct testing {
         out << "assertions : " << assertions << "\n";
         out << "failures   : " << failures << "\n";
         out << "exceptions : " << exceptions << "\n";
+        out << "skipped    : " << skipped << "\n";
         return failures == 0 ? 0 : 1;
     }
 };

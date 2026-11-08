@@ -70,6 +70,8 @@ static void write_table(std::ostringstream & ss, std::vector<common_arg *> & opt
 
 static void write_help(std::ostringstream & ss, const md_file & md) {
     common_params params;
+    params.is_gen_docs = true;
+
     auto ctx_arg = common_params_parser_init(params, md.ex);
 
     std::vector<common_arg *> common_options;

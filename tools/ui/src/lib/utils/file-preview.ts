@@ -16,11 +16,13 @@ export function getFileTypeLabel(input: string | undefined): string {
 	// Handle MIME types (contains '/')
 	if (input.includes('/')) {
 		const subtype = input.split('/').pop();
+
 		if (subtype) {
 			// Handle special cases like 'vnd.ms-excel' → 'EXCEL'
 			if (subtype.includes('.')) {
 				return subtype.split('.').pop()?.toUpperCase() || 'FILE';
 			}
+
 			return subtype.toUpperCase();
 		}
 	}
@@ -28,6 +30,7 @@ export function getFileTypeLabel(input: string | undefined): string {
 	// Handle file names (contains '.')
 	if (input.includes('.')) {
 		const ext = input.split('.').pop();
+
 		if (ext) return ext.toUpperCase();
 	}
 

@@ -1,13 +1,15 @@
+import { isServerDecodableAudio } from './audio-format';
+import { convertToWav, createAudioFile } from './audio-recording';
+import { heicFileToJpegDataURL, isHeicMimeType } from './heic-to-jpeg';
+import { convertPDFToText } from './pdf-processing';
 import { isSvgMimeType, svgBase64UrlToPngDataURL } from './svg-to-png';
 import { isWebpMimeType, webpBase64UrlToPngDataURL } from './webp-to-png';
-import { heicFileToJpegDataURL, isHeicMimeType } from './heic-to-jpeg';
-import { FileTypeCategory } from '$lib/enums';
 import { SETTINGS_KEYS } from '$lib/constants';
-import { modelsStore } from '$lib/stores/models.svelte';
-import { settingsStore } from '$lib/stores/settings.svelte';
-import { toast } from 'svelte-sonner';
+import { FileExtensionAudio, FileTypeCategory, MimeTypeAudio } from '$lib/enums';
+import { modelsStore } from '$lib/stores/models/index.svelte';
+import { settingsStore } from '$lib/stores/settings/index.svelte';
 import { getFileTypeCategory } from '$lib/utils';
-import { convertPDFToText } from './pdf-processing';
+import { toast } from 'svelte-sonner';
 
 /**
  * Read a file as a data URL (base64 encoded)
@@ -17,6 +19,7 @@ import { convertPDFToText } from './pdf-processing';
 function readFileAsDataURL(file: File): Promise<string> {
 	return new Promise((resolve, reject) => {
 		const reader = new FileReader();
+
 		reader.onload = () => resolve(reader.result as string);
 		reader.onerror = () => reject(reader.error);
 		reader.readAsDataURL(file);
@@ -31,6 +34,7 @@ function readFileAsDataURL(file: File): Promise<string> {
 function readFileAsUTF8(file: File): Promise<string> {
 	return new Promise((resolve, reject) => {
 		const reader = new FileReader();
+
 		reader.onload = () => resolve(reader.result as string);
 		reader.onerror = () => reject(reader.error);
 		reader.readAsText(file);
@@ -58,11 +62,11 @@ export async function processFilesToChatUploaded(
 	for (const file of files) {
 		const id = Date.now().toString() + Math.random().toString(36).substr(2, 9);
 		const base: ChatUploadedFile = {
+			file,
 			id,
 			name: file.name,
 			size: file.size,
-			type: file.type,
-			file
+			type: file.type
 		};
 
 		try {
@@ -87,6 +91,7 @@ export async function processFilesToChatUploaded(
 						preview = await heicFileToJpegDataURL(file);
 					} catch (err) {
 						console.error('Failed to convert HEIC to PNG:', err);
+
 						continue;
 					}
 				}
@@ -96,6 +101,7 @@ export async function processFilesToChatUploaded(
 				// Extract text content from PDF for preview
 				try {
 					const textContent = await convertPDFToText(file);
+
 					results.push({ ...base, textContent });
 				} catch (err) {
 					console.warn('Failed to extract text from PDF, adding without content:', err);
@@ -104,12 +110,12 @@ export async function processFilesToChatUploaded(
 
 				// Show suggestion toast if vision model is available but PDF as image is disabled
 				const hasVisionSupport = activeModelId
-					? modelsStore.modelSupportsVision(activeModelId)
+					? modelsStore.props.modelSupportsVision(activeModelId)
 					: false;
 				const currentConfig = settingsStore.config;
+
 				if (hasVisionSupport && !currentConfig.pdfAsImage) {
 					toast.info(`You can enable parsing PDF as images with vision models.`, {
-						duration: 8000,
 						action: {
 							label: 'Enable PDF as Images',
 							onClick: () => {
@@ -118,21 +124,50 @@ export async function processFilesToChatUploaded(
 									duration: 3000
 								});
 							}
-						}
+						},
+						duration: 8000
 					});
 				}
 			} else if (getFileTypeCategory(file.type) === FileTypeCategory.AUDIO) {
+				let audioFile = file;
+
+				// Server only decodes WAV and MP3, so convert other audio (OGG, WEBM, MP4) to WAV in the browser
+				if (!isServerDecodableAudio(file.type)) {
+					const wavBlob = await convertToWav(file);
+
+					if (wavBlob.type !== MimeTypeAudio.WAV) {
+						toast.error(`Failed to decode audio file ${file.name}`);
+
+						continue;
+					}
+
+					audioFile = createAudioFile(
+						wavBlob,
+						file.name.replace(/\.[^.]*$/, '') + FileExtensionAudio.WAV
+					);
+				}
+
 				// Generate preview URL for audio files
-				const preview = await readFileAsDataURL(file);
-				results.push({ ...base, preview });
+				const preview = await readFileAsDataURL(audioFile);
+
+				results.push({
+					...base,
+					file: audioFile,
+					name: audioFile.name,
+					preview,
+					size: audioFile.size,
+					type: audioFile.type
+				});
 			} else if (getFileTypeCategory(file.type) === FileTypeCategory.VIDEO) {
 				// Generate preview URL for video files
 				const preview = await readFileAsDataURL(file);
+
 				results.push({ ...base, preview });
 			} else {
 				// Fallback: treat unknown files as text
 				try {
 					const textContent = await readFileAsUTF8(file);
+
 					results.push({ ...base, textContent });
 				} catch (err) {
 					console.warn('Failed to read file as text, adding without content:', err);

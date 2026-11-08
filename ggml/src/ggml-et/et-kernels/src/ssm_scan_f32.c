@@ -12,7 +12,8 @@ struct ggml_et_ssm_scan_params {
     struct ggml_tensor src4;  // B:   [d_state, n_group, n_seq_tokens, n_seqs]
     struct ggml_tensor src5;  // C:   [d_state, n_group, n_seq_tokens, n_seqs]
     struct ggml_tensor src6;  // ids: [n_seqs] i32
-    struct ggml_tensor dst;   // packed [y, final_state]
+    struct ggml_tensor dst;   // packed [y, states]
+    int32_t            K;
 };
 
 static inline float softplus_f32(float x) {
@@ -72,6 +73,7 @@ int entry_point(struct ggml_et_ssm_scan_params * params, void * env) {
     const int64_t n_seq_tokens = src1->ne[2];
     const int64_t n_seqs       = src1->ne[3];
     const int64_t y_elems      = src1->ne[0] * src1->ne[1] * src1->ne[2] * src1->ne[3];
+    const int64_t K            = params->K;
 
     if (src0->nb[0] != sizeof(float) || src1->nb[0] != sizeof(float) || src2->nb[0] != sizeof(float) ||
         src3->nb[0] != sizeof(float) || src4->nb[0] != sizeof(float) || src5->nb[0] != sizeof(float) ||
@@ -79,7 +81,7 @@ int entry_point(struct ggml_et_ssm_scan_params * params, void * env) {
         return -1;
     }
 
-    if (n_group <= 0 || n_head % n_group != 0) {
+    if (K < 1 || n_group <= 0 || n_head % n_group != 0) {
         return -1;
     }
 
@@ -258,6 +260,15 @@ int entry_point(struct ggml_et_ssm_scan_params * params, void * env) {
                         const float st         = prev_state * dA + B_row[state_idx] * x_dt;
                         state_dst[state_idx]   = st;
                         sumf += st * C_row[state_idx];
+                    }
+
+                    const int64_t slot = n_seq_tokens - 1 - token_idx;
+                    if (slot > 0 && slot < K) {
+                        float * state_snapshot =
+                            (float *) ((char *) state_dst + (size_t) slot * n_seqs * src0->nb[3]);
+                        for (int64_t i = 0; i < d_state; ++i) {
+                            state_snapshot[i] = state_dst[i];
+                        }
                     }
 
                     dst_data[seq_idx * (n_seq_tokens * n_head * head_dim) + token_idx * (n_head * head_dim) +

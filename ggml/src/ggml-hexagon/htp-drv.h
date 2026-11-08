@@ -116,6 +116,14 @@ HTPDRV_API domain * htpdrv_get_domain(int domain_id);
  */
 HTPDRV_API int htpdrv_get_arch(int domain, int * arch);
 
+HTPDRV_API int remote_system_request(system_req_payload * req);
+
 #ifdef __cplusplus
 }
+
+#include <string>
+
+std::string htp_lib_dir();
+int         htpdrv_set_dsp_search_path(int domain_id, const std::string & path, const char * dev_name = nullptr);
+void        htpdrv_set_dsp_env_path(const std::string & path, const char * dev_name = nullptr);
 #endif

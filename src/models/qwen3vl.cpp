@@ -16,11 +16,17 @@ void llama_model_qwen3vl::load_arch_hparams(llama_model_loader & ml) {
 void llama_model_qwen3vl::load_arch_tensors(llama_model_loader &) {
     LLAMA_LOAD_LOCALS;
 
+    int64_t n_vocab_out = n_vocab;
+    if (arch == LLM_ARCH_QWEN3TTS) {
+        // [TAG_LLAMA_N_VOCAB_OUT]
+        n_vocab_out = 3072;
+    }
+
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
     // output
     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
-    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab_out}, TENSOR_NOT_REQUIRED);
     // if output is NULL, init from the input tok embed
     if (output == NULL) {
         output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
@@ -48,10 +54,10 @@ void llama_model_qwen3vl::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_qwen3vl::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_qwen3vl::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_qwen3vl::graph::graph(const llm_graph_params & params) : llm_graph_context(params) {
     const size_t n_deepstack_layers = hparams.n_deepstack_layers;
 
     const int64_t n_embd      = hparams.n_embd;
@@ -64,9 +70,6 @@ llama_model_qwen3vl::graph::graph(const llama_model & model, const llm_graph_par
     ggml_tensor * inpL;
 
     inpL = build_inp_embd(model.tok_embd);
-
-    int sections[4];
-    std::copy(std::begin(hparams.rope_sections), std::begin(hparams.rope_sections) + 4, sections);
 
     // inp_pos - contains the positions
     ggml_tensor * inp_pos = build_inp_pos();
@@ -93,20 +96,12 @@ llama_model_qwen3vl::graph::graph(const llama_model & model, const llm_graph_par
             Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, il);
             cb(Qcur, "Qcur_normed", il);
 
-            Qcur = ggml_rope_multi(
-                    ctx0, Qcur, inp_pos, nullptr,
-                    n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow
-                    );
+            Qcur = build_rope(Qcur, inp_pos, il);
 
             Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, il);
             cb(Kcur, "Kcur_normed", il);
 
-            Kcur = ggml_rope_multi(
-                    ctx0, Kcur, inp_pos, nullptr,
-                    n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow
-                    );
+            Kcur = build_rope(Kcur, inp_pos, il);
 
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);
@@ -166,8 +161,24 @@ llama_model_qwen3vl::graph::graph(const llama_model & model, const llm_graph_par
     // lm_head
     cur = build_lora_mm(model.output, cur, model.output_s);
 
+    int64_t n_vocab_in  = model.tok_embd->ne[1];
+    int64_t n_vocab_out = model.output->ne[1];
+    if (n_vocab_in > n_vocab_out) {
+        // case: Qwen3TTS model with codec_head as output
+        GGML_ASSERT(model.output_norm);
+        int64_t pad = n_vocab_in - n_vocab_out;
+
+        // using this trick to get a scalar -inf tensor to pad the output
+        ggml_tensor * neg_inf = ggml_scale_bias(ctx0,
+                ggml_view_1d(ctx0, model.output_norm, 1, 0),
+                0.0f, -INFINITY);
+        neg_inf = ggml_repeat_4d(ctx0, neg_inf, pad, cur->ne[1], 1, 1);
+        cur = ggml_concat(ctx0, neg_inf, cur, 0); // [padded .. n_vocab_out, n_stream]
+
+    } else if (n_vocab_in < n_vocab_out) {
+        GGML_ABORT("invalid case");
+    }
+
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }

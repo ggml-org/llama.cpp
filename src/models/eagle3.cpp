@@ -28,6 +28,10 @@ void llama_model_eagle3::load_arch_hparams(llama_model_loader & ml) {
         LLAMA_LOG_INFO("%s: EAGLE3gnorm_before_residual = true\n", __func__);
     }
 
+    // eagle3 norm_before_fc (optional, default false)
+    // compatible with eagle3.1 (e.g. nvidia/gpt-oss-120b-Eagle3-v3)
+    ml.get_key(LLM_KV_NORM_BEFORE_FC, hparams.norm_before_fc, false);
+
     type = LLM_TYPE_UNKNOWN;
 }
 
@@ -52,6 +56,11 @@ void llama_model_eagle3::load_arch_tensors(llama_model_loader &) {
 
     // Feature fusion layer: projects 3 target layers to draft hidden size
     fc = create_tensor(tn(LLM_TENSOR_FC, "weight"), {n_embd_inp, n_embd}, 0);
+
+    // RMSNorm on the fused target features (input to fc), only when norm_before_fc is set.
+    if (hparams.norm_before_fc) {
+        output_norm_enc = create_tensor(tn(LLM_TENSOR_ENC_OUTPUT_NORM, "weight"), {n_embd_inp}, 0);
+    }
 
     // Output layer (uses draft vocab size)
     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
@@ -91,18 +100,6 @@ void llama_model_eagle3::load_arch_tensors(llama_model_loader &) {
     }
 }
 
-std::unique_ptr<llm_graph_context> llama_model_eagle3::build_arch_graph(const llm_graph_params & params) const {
-    switch (params.gtype) {
-        case LLM_GRAPH_TYPE_ENCODER:
-            return std::make_unique<graph<true>>(*this, params);
-        case LLM_GRAPH_TYPE_DEFAULT:
-        case LLM_GRAPH_TYPE_DECODER:
-            return std::make_unique<graph<false>>(*this, params);
-        default:
-            GGML_ABORT("invalid graph type");
-    };
-}
-
 template <>
 ggml_tensor * llama_model_eagle3::graph<true>::build_inp_embd_enc() const {
     ggml_tensor * cur = nullptr;
@@ -125,10 +122,16 @@ ggml_tensor * llama_model_eagle3::graph<true>::build_inp_embd_enc() const {
 // Input: target_features e.g. [12288, n_tokens] from target model layers low, middle, high
 // Output: g_embeddings e.g. [4096, n_tokens] stored in context
 template <>
-llama_model_eagle3::graph<true>::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_eagle3::graph<true>::graph(const llm_graph_params & params) : llm_graph_context(params) {
     ggml_tensor * cur = nullptr;
 
     cur = build_inp_embd_enc();
+
+    // RMSNorm on the fused target features before fc
+    if (hparams.norm_before_fc) {
+        cur = build_norm(cur, model.output_norm_enc, NULL, LLM_NORM_RMS, -1);
+        cb(cur, "enc_input_norm", -1);
+    }
 
     // Feature fusion layer
     cur = build_lora_mm(model.fc, cur);
@@ -146,7 +149,7 @@ llama_model_eagle3::graph<true>::graph(const llama_model & model, const llm_grap
 // Input: draft tokens + g_embeddings from encoder
 // Output: draft logits
 template <>
-llama_model_eagle3::graph<false>::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_eagle3::graph<false>::graph(const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
@@ -231,20 +234,9 @@ llama_model_eagle3::graph<false>::graph(const llama_model & model, const llm_gra
         Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
         Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
-        // rope freq factors, returns nullptr if not available
-        ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
-
         // RoPE
-        Qcur = ggml_rope_ext(
-                ctx0, Qcur, inp_pos, rope_factors,
-                n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                ext_factor, attn_factor, beta_fast, beta_slow
-                );
-        Kcur = ggml_rope_ext(
-                ctx0, Kcur, inp_pos, rope_factors,
-                n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                ext_factor, attn_factor, beta_fast, beta_slow
-                );
+        Qcur = build_rope(Qcur, inp_pos, il);
+        Kcur = build_rope(Kcur, inp_pos, il);
 
         cb(Qcur, "Qcur_rope", il);
         cb(Kcur, "Kcur_rope", il);
@@ -318,6 +310,16 @@ llama_model_eagle3::graph<false>::graph(const llama_model & model, const llm_gra
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;
+}
 
-    ggml_build_forward_expand(gf, cur);
+std::unique_ptr<llm_graph_context> llama_model_eagle3::build_arch_graph(const llm_graph_params & params) const {
+    switch (params.gtype) {
+        case LLM_GRAPH_TYPE_ENCODER:
+            return std::make_unique<graph<true>>(params);
+        case LLM_GRAPH_TYPE_DEFAULT:
+        case LLM_GRAPH_TYPE_DECODER:
+            return std::make_unique<graph<false>>(params);
+        default:
+            GGML_ABORT("invalid graph type");
+    };
 }

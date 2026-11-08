@@ -12,6 +12,11 @@ void llama_model_baichuan::load_arch_hparams(llama_model_loader & ml) {
         // TODO: become GGUF KV parameter
         hparams.f_max_alibi_bias = 8.0f;
     }
+
+    // only the 7B uses RoPE
+    if (type != LLM_TYPE_7B) {
+        std::fill(hparams.rope_pattern.begin(), hparams.rope_pattern.end(), 0);
+    }
 }
 
 void llama_model_baichuan::load_arch_tensors(llama_model_loader &) {
@@ -40,10 +45,10 @@ void llama_model_baichuan::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_baichuan::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_baichuan::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_baichuan::graph::graph(const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
@@ -74,25 +79,8 @@ llama_model_baichuan::graph::graph(const llama_model & model, const llm_graph_pa
             auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
                     n_embd_head, n_head, n_head_kv, il);
 
-            switch (model.type) {
-                case LLM_TYPE_7B:
-                    Qcur = ggml_rope_ext(
-                            ctx0, Qcur, inp_pos, nullptr,
-                            n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                            ext_factor, attn_factor, beta_fast, beta_slow
-                            );
-                    Kcur = ggml_rope_ext(
-                            ctx0, Kcur, inp_pos, nullptr,
-                            n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                            ext_factor, attn_factor, beta_fast, beta_slow
-                            );
-                    break;
-                case LLM_TYPE_13B:
-                case LLM_TYPE_UNKNOWN:
-                    break;
-                default:
-                    GGML_ABORT("fatal error");
-            }
+            Qcur = build_rope(Qcur, inp_pos, il);
+            Kcur = build_rope(Kcur, inp_pos, il);
 
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);
@@ -150,6 +138,4 @@ llama_model_baichuan::graph::graph(const llama_model & model, const llm_graph_pa
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }

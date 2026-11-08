@@ -21,17 +21,17 @@
 	}
 
 	let {
-		open = $bindable(false),
+		children,
 		class: className = '',
 		icon: IconComponent,
 		iconClass = ICON_CLASS_DEFAULT,
 		iconUrl = null,
-		title = '',
-		titleSnippet,
-		subtitle,
-		shimmerTitle = false,
 		onToggle,
-		children
+		open = $bindable(false),
+		shimmerTitle = false,
+		subtitle,
+		title = '',
+		titleSnippet
 	}: Props = $props();
 
 	function hideBrokenIcon(event: Event) {
@@ -40,12 +40,12 @@
 </script>
 
 <Collapsible.Root
-	{open}
+	class={cn('group/collapsible', 'overflow-hidden rounded-md', className)}
 	onOpenChange={(value) => {
 		open = value;
 		onToggle?.();
 	}}
-	class={cn('group/collapsible', 'overflow-hidden rounded-md', className)}
+	{open}
 	style="background: var(--code-background); border: 1px solid color-mix(in oklch, var(--border) 30%, transparent);"
 >
 	<Collapsible.Trigger
@@ -57,16 +57,21 @@
 		<div class="flex min-w-0 items-start gap-2 text-muted-foreground">
 			{#if iconUrl}
 				<img
-					src={iconUrl}
 					alt=""
 					class={cn('shrink-0 rounded-sm mt-0.5', iconClass)}
 					onerror={hideBrokenIcon}
+					src={iconUrl}
 				/>
 			{:else if IconComponent}
 				<IconComponent class={cn('shrink-0 text-muted-foreground/60 mt-0.5', iconClass)} />
 			{/if}
 
-			<span class={cn('text-sm font-medium', shimmerTitle ? 'shimmer-text' : 'text-foreground/80')}>
+			<span
+				class={cn(
+					'min-w-0 overflow-x-auto text-sm font-medium',
+					shimmerTitle ? 'shimmer-text' : 'text-foreground/80'
+				)}
+			>
 				{#if titleSnippet}
 					{@render titleSnippet()}
 				{:else}
@@ -90,8 +95,20 @@
 	</Collapsible.Trigger>
 
 	<Collapsible.Content>
-		<div class="p-3 pt-1">
-			{@render children()}
-		</div>
+		<!-- See CollapsibleContentBlock: bits-ui keeps closed content mounted, which
+		     makes a collapsed tool result re-render on every streamed token. -->
+		{#if open}
+			<div class="terminal-body p-3 pt-1">
+				{@render children()}
+			</div>
+		{/if}
 	</Collapsible.Content>
 </Collapsible.Root>
+
+<style>
+	/* A body that renders no element (exec block while its args stream)
+	   must not leave its padding as a gap under the title. */
+	.terminal-body:not(:has(*)) {
+		padding: 0;
+	}
+</style>

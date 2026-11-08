@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
 import { parseHeadersToArray, serializeHeaders } from '$lib/utils/headers';
+import { describe, expect, it } from 'vitest';
 
 /**
  * Tests for the header serialization helpers used by the MCP server form
@@ -72,7 +72,7 @@ describe('serializeHeaders', () => {
 
 		// Object key order follows insertion order in modern JS engines, so
 		// the serialized JSON writes keys in our input order.
-		expect(JSON.parse(serialized)).toEqual({ 'X-C': '3', 'X-A': '1', 'X-B': '2' });
+		expect(JSON.parse(serialized)).toEqual({ 'X-A': '1', 'X-B': '2', 'X-C': '3' });
 	});
 });
 
@@ -82,7 +82,6 @@ describe('parseHeadersToArray / serializeHeaders roundtrip', () => {
 			'Content-Type': 'application/json',
 			'X-Trace-Id': 'abc-123'
 		});
-
 		const roundtrip = serializeHeaders(parseHeadersToArray(original));
 
 		expect(JSON.parse(roundtrip)).toEqual(JSON.parse(original));
@@ -102,7 +101,6 @@ describe('parseHeadersToArray / serializeHeaders roundtrip', () => {
 
 	it('preserves upstream keys untouched (does not lowercase them)', () => {
 		const upperCased = '{"Authorization":"Bearer xyz"}';
-
 		const parsed = parseHeadersToArray(upperCased);
 
 		expect(parsed).toEqual([{ key: 'Authorization', value: 'Bearer xyz' }]);
@@ -117,7 +115,6 @@ describe('parseHeadersToArray / serializeHeaders roundtrip', () => {
 			{ key: 'X-Trace-Id', value: 'abc-123' },
 			{ key: 'Authorization', value: 'Bearer super-secret' }
 		];
-
 		const serialized = serializeHeaders(pairs);
 
 		expect(serialized).toBe('{"X-Trace-Id":"abc-123","Authorization":"Bearer super-secret"}');
