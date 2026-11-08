@@ -363,7 +363,7 @@ common_chat_params common_chat_params_init_gemma4(const common_chat_template &  
                 auto args = p.ref("gemma4-dict");
                 try {
                     auto doc = common_chat_schema_from_json(common_chat_tool_parameters(function));
-                    if (dynamic_cast<const common_chat_schema_object *>(doc.root.get())) {
+                    if (doc.root->kind() == common_chat_schema::KIND_OBJECT) {
                         args = gemma4_schema_parser(p, "tool-" + std::to_string(tool_index) + "-args").visit(*doc.root);
                     }
                 } catch (const std::exception & e) {
