@@ -3043,14 +3043,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_COMMON}).set_env("LLAMA_ARG_SHARD"));
     add_opt(common_arg(
-        {"-isnm", "--ignore-shard-num-mismatch"},
-        {"--no-ignore-shard-num-mismatch"},
-        "load only the given model files in order, without auto-discovery or split metadata checks (default: disabled)",
-        [](common_params & params, bool value) {
-            params.ignore_shard_num_mismatch = value;
-        }
-    ).set_examples({LLAMA_EXAMPLE_COMMON}).set_env("LLAMA_ARG_IGNORE_SHARD_NUM_MISMATCH"));
-    add_opt(common_arg(
         {"-mu", "--model-url"}, "MODEL_URL",
         "model download url (default: unused)",
         [](common_params & params, const std::string & value) {

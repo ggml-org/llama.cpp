@@ -264,15 +264,6 @@ static void test(void) {
         assert(parse_shards({"--shard", "a.gguf", "--shard", "b.gguf", "--shard", "c.gguf"}) == three);
         assert(parse_shards({"--ple", "p.gguf"}) == parse_shards({"--shard", "p.gguf"}));
     }
-    {
-        common_params shard_params;
-        assert(!common_model_params_to_llama(shard_params).ignore_shard_num_mismatch);
-        for (const auto & option : {"-isnm", "--ignore-shard-num-mismatch", "--no-ignore-shard-num-mismatch"}) {
-            argv = {"binary_name", "-m", "model_file.gguf", option};
-            assert(common_params_parse(argv.size(), list_str_to_char(argv).data(), shard_params, LLAMA_EXAMPLE_COMMON));
-            assert(common_model_params_to_llama(shard_params).ignore_shard_num_mismatch == (std::string(option) != "--no-ignore-shard-num-mismatch"));
-        }
-    }
 
     argv = {"binary_name", "-t", "1234"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));

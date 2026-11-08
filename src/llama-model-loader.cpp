@@ -546,8 +546,7 @@ llama_model_loader::llama_model_loader(
         bool no_alloc,
         bool load_mtp,
         const llama_model_kv_override * param_overrides_p,
-        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p,
-        bool ignore_shard_num_mismatch)
+        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p)
         : metadata(meta), set_tensor_data(set_tensor_data), set_tensor_data_ud(set_tensor_data_ud) {
     int trace = 0;
     if (getenv("LLAMA_TRACE")) {
@@ -602,9 +601,7 @@ llama_model_loader::llama_model_loader(
         uint16_t n_split = 0;
         size_t n_backbone = 1;
         const std::string kv_split_no = llm_kv(LLM_KV_SPLIT_NO);
-        if (!ignore_shard_num_mismatch) {
-            get_key(llm_kv(LLM_KV_SPLIT_COUNT), n_split, false);
-        }
+        get_key(llm_kv(LLM_KV_SPLIT_COUNT), n_split, false);
 
         if (n_split > 1) {
             uint16_t idx = 0;
@@ -635,8 +632,33 @@ llama_model_loader::llama_model_loader(
             throw std::runtime_error("too many model files");
         }
         const bool has_extras = paths.size() > n_backbone;
+
+        // special case for PLE-only GGUFs: no need to follow the exact split numbering (allow flexibility)
+        // ref: https://github.com/ggml-org/llama.cpp/pull/31185
+        auto is_ple_only = [](const gguf_context * ctx) {
+            return gguf_get_n_tensors(ctx) == 1 && std::strcmp(gguf_get_tensor_name(ctx, 0), "per_layer_token_embd.weight") == 0;
+        };
+        bool skip_shard_order_validation = false;
+        for (size_t idx = n_backbone; idx < paths.size(); idx++) {
+            struct gguf_init_params probe_params = {
+                /*.no_alloc = */ true,
+                /*.ctx      = */ nullptr,
+            };
+            gguf_context_ptr probe { gguf_init_from_file(paths[idx].c_str(), probe_params) };
+            skip_shard_order_validation |= probe && is_ple_only(probe.get());
+        }
+
         for (size_t idx = 1; idx < paths.size(); idx++) {
             const char * fname_split = paths[idx].c_str();
+            if (skip_shard_order_validation && idx < n_backbone) {
+                FILE * f = ggml_fopen(fname_split, "rb");
+                if (f == nullptr) {
+                    LLAMA_LOG_INFO("%s: skipping missing GGUF split %s, per-layer embedding table given separately\n", __func__, fname_split);
+                    continue;
+                }
+                fclose(f);
+            }
+            ctx = nullptr; // still owned by contexts, not set by gguf on failure
             struct gguf_init_params split_params = {
                 /*.no_alloc = */ true,
                 /*.ctx      = */ &ctx,
@@ -647,7 +669,7 @@ llama_model_loader::llama_model_loader(
                 throw std::runtime_error(format("%s: failed to load GGUF split from %s", __func__, fname_split));
             }
 
-            if (!ignore_shard_num_mismatch && idx < n_backbone) {
+            if (idx < n_backbone) {
                 const int kid = gguf_find_key(ctx_gguf.get(), kv_split_no.c_str());
                 if (kid < 0) {
                     throw std::runtime_error(format("missing key %s in GGUF split %s", kv_split_no.c_str(), fname_split));
@@ -658,6 +680,10 @@ llama_model_loader::llama_model_loader(
                 const uint16_t idx_gguf = gguf_get_val_u16(ctx_gguf.get(), kid);
                 if (idx_gguf != idx) {
                     throw std::runtime_error(format("invalid split file idx: %d (file: %s), expected %zu", idx_gguf, fname_split, idx));
+                }
+                if (skip_shard_order_validation && is_ple_only(ctx_gguf.get())) {
+                    LLAMA_LOG_INFO("%s: skipping GGUF split %s, per-layer embedding table given separately\n", __func__, fname_split);
+                    continue;
                 }
             } else {
                 const bool numbered = gguf_find_key(ctx_gguf.get(), kv_split_no.c_str()) >= 0 ||
@@ -670,6 +696,8 @@ llama_model_loader::llama_model_loader(
             files.emplace_back(new llama_file(fname_split, "rb", use_direct_io));
             contexts.emplace_back(std::move(ctx_ptr));
 
+            // skipped splits are not in files, so idx != file index
+            const uint16_t file_idx = files.size() - 1;
             for (ggml_tensor * cur = ggml_get_first_tensor(ctx); cur; cur = ggml_get_next_tensor(ctx, cur)) {
                 const std::string tensor_name = cur->name;
                 if (weights_map.find(tensor_name) != weights_map.end()) {
@@ -677,11 +705,11 @@ llama_model_loader::llama_model_loader(
                 }
                 n_elements += ggml_nelements(cur);
                 n_bytes    += ggml_nbytes(cur);
-                weights_map.emplace(tensor_name, llama_tensor_weight(files.back().get(), idx, ctx_gguf.get(), cur));
+                weights_map.emplace(tensor_name, llama_tensor_weight(files.back().get(), file_idx, ctx_gguf.get(), cur));
             }
         }
 
-        if (!ignore_shard_num_mismatch && (n_split > 1 || has_extras)) {
+        if (n_split > 1 || has_extras) {
             int declared_tensors = gguf_get_n_tensors(metadata);
             get_key(llm_kv(LLM_KV_SPLIT_TENSORS_COUNT), declared_tensors, n_split > 1 && !has_extras);
             if (declared_tensors != (int) weights_map.size()) {
@@ -691,8 +719,8 @@ llama_model_loader::llama_model_loader(
                 LLAMA_LOG_INFO("%s: using %zu registered tensors instead of %d declared tensors\n", __func__, weights_map.size(), declared_tensors);
             }
         }
-        if (paths.size() > 1) {
-            LLAMA_LOG_INFO("%s: additional %zu GGUFs metadata loaded.\n", __func__, paths.size() - 1);
+        if (files.size() > 1) {
+            LLAMA_LOG_INFO("%s: additional %zu GGUFs metadata loaded.\n", __func__, files.size() - 1);
         }
     } else if (file != nullptr) {
         struct ggml_context * ctx = NULL;
