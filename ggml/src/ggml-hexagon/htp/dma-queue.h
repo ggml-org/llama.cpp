@@ -368,17 +368,7 @@ static inline bool dma_queue_push_single_2d(dma_queue * q, dma_data ddata, size_
     return dma_ring_push_single_2d(q->ring0, ddata, dst_stride, src_stride, row_size, nrows);
 }
 
-static inline bool dma_queue_push_single_2d_ordered(dma_queue * q, dma_data ddata, size_t dst_stride,
-        size_t src_stride, size_t row_size, size_t nrows) {
-#if __HVX_ARCH__ < 75
-    if (nrows > DMA_MAX_NROWS || row_size > DMA_MAX_SIZE_16B ||
-        src_stride > DMA_MAX_STRIDE_16B || dst_stride > DMA_MAX_STRIDE_16B) {
-#else
-    if (nrows > DMA_MAX_NROWS || row_size > DMA_MAX_SIZE_24B ||
-        src_stride > DMA_MAX_STRIDE_24B || dst_stride > DMA_MAX_STRIDE_24B) {
-#endif
-        return false;
-    }
+static inline bool dma_queue_push_single_2d_ordered(dma_queue * q, dma_data ddata, size_t dst_stride, size_t src_stride, size_t row_size, size_t nrows) {
     return dma_ring_push_single_2d_ordered(q->ring0, ddata, dst_stride, src_stride, row_size, nrows, true);
 }
 

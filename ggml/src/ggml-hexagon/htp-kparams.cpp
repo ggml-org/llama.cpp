@@ -2251,181 +2251,85 @@ static bool htp_kparams_solve_ssm_scan(
 ) {
     memset(kparams, 0, sizeof(*kparams));
 
-    const struct ggml_tensor * s   = op->src[0];
-    const struct ggml_tensor * x   = op->src[1];
-    const struct ggml_tensor * dt  = op->src[2];
-    const struct ggml_tensor * A   = op->src[3];
-    const struct ggml_tensor * B   = op->src[4];
-    const struct ggml_tensor * C   = op->src[5];
-    const struct ggml_tensor * ids = op->src[6];
+    const struct ggml_tensor * s  = op->src[0];
+    const struct ggml_tensor * x  = op->src[1];
+    const struct ggml_tensor * dt = op->src[2];
+    const struct ggml_tensor * A  = op->src[3];
+    const struct ggml_tensor * B  = op->src[4];
+    const struct ggml_tensor * C  = op->src[5];
 
-    if (!s || !x || !dt || !A || !B || !C || !ids) {
-        return false;
-    }
-    if (s->type != GGML_TYPE_F32 || x->type != GGML_TYPE_F32 || dt->type != GGML_TYPE_F32 ||
-        A->type != GGML_TYPE_F32 || B->type != GGML_TYPE_F32 || C->type != GGML_TYPE_F32 ||
-        ids->type != GGML_TYPE_I32 || op->type != GGML_TYPE_F32) {
+    if (s->type != GGML_TYPE_F32 || x->type != GGML_TYPE_F32 || dt->type != GGML_TYPE_F32 || A->type != GGML_TYPE_F32 ||
+        B->type != GGML_TYPE_F32 || C->type != GGML_TYPE_F32 || op->type != GGML_TYPE_F32) {
         return false;
     }
 
-    const int64_t d_state  = s->ne[0];
-    const int64_t head_dim = x->ne[0];
-    const int64_t n_head   = x->ne[1];
-    const int64_t n_tokens = x->ne[2];
-    const int64_t n_seqs   = x->ne[3];
-    const int64_t n_group  = B->ne[1];
-    const int32_t K        = ggml_get_op_params_i32(op, 0);
+    const uint32_t d_state  = (uint32_t) s->ne[0];
+    const uint32_t head_dim = (uint32_t) x->ne[0];
+    const uint32_t n_head   = (uint32_t) x->ne[1];
+    const uint32_t n_tokens = (uint32_t) x->ne[2];
+    const uint32_t n_seqs   = (uint32_t) x->ne[3];
+    const uint32_t n_group  = (uint32_t) B->ne[1];
+    const uint32_t K        = (uint32_t) ggml_get_op_params_i32(op, 0);
 
-    if (d_state < 1 || head_dim < 1 || n_head < 1 || n_tokens < 1 || n_seqs < 1 || n_group < 1 || K < 1 ||
-        d_state > UINT32_MAX || head_dim > UINT32_MAX || n_head > UINT32_MAX || n_tokens > UINT32_MAX ||
-        n_seqs > UINT32_MAX || n_group > UINT32_MAX || s->ne[3] > UINT32_MAX || n_head % n_group != 0 ||
-        s->ne[1] != head_dim || s->ne[2] != n_head || s->ne[3] < n_seqs) {
-        return false;
-    }
-    if (dt->ne[0] != n_head || dt->ne[1] != n_tokens || dt->ne[2] != n_seqs || dt->ne[3] != 1 ||
-        A->ne[1] != n_head || A->ne[2] != 1 || A->ne[3] != 1 || (A->ne[0] != 1 && A->ne[0] != d_state) ||
-        !ggml_are_same_shape(B, C) || B->ne[0] != d_state || B->ne[2] != n_tokens || B->ne[3] != n_seqs ||
-        ids->ne[0] != n_seqs || ids->ne[1] != 1 || ids->ne[2] != 1 || ids->ne[3] != 1 ||
-        (A->ne[0] != 1 && K != 1)) {
+    if (n_head % n_group != 0) {
         return false;
     }
 
-    size_t x_row_bytes;
-    size_t x_token_bytes;
-    size_t B_row_bytes;
-    size_t B_token_bytes;
-    size_t C_row_bytes;
-    size_t C_token_bytes;
-    if (hex_mul_overflow((size_t) head_dim, sizeof(float), &x_row_bytes) ||
-        hex_mul_overflow((size_t) n_head, x_row_bytes, &x_token_bytes) ||
-        hex_mul_overflow((size_t) d_state, sizeof(float), &B_row_bytes) ||
-        hex_mul_overflow((size_t) n_group, B_row_bytes, &B_token_bytes) ||
-        hex_mul_overflow((size_t) d_state, sizeof(float), &C_row_bytes) ||
-        hex_mul_overflow((size_t) n_group, C_row_bytes, &C_token_bytes)) {
-        return false;
-    }
-    if (!ggml_is_contiguous(s) || !ggml_is_contiguous(dt) || !ggml_is_contiguous(A) || !ggml_is_contiguous(op) ||
-        s->nb[0] != sizeof(float) || x->nb[0] != sizeof(float) || dt->nb[0] != sizeof(float) ||
-        A->nb[0] != sizeof(float) || B->nb[0] != sizeof(float) || C->nb[0] != sizeof(float) ||
-        ids->nb[0] != sizeof(int32_t) || x->nb[1] != x_row_bytes || B->nb[1] != B_row_bytes || C->nb[1] != C_row_bytes ||
-        x->nb[2] < x_token_bytes || B->nb[2] < B_token_bytes || C->nb[2] < C_token_bytes) {
-        return false;
-    }
-
-    const uint64_t heads_per_group = (uint64_t) n_head / n_group;
-    const uint64_t n_row_blocks = ((uint64_t) head_dim + HTP_SSM_SCAN_ROW_TILE_DEFAULT - 1) / HTP_SSM_SCAN_ROW_TILE_DEFAULT;
-    if (heads_per_group > UINT32_MAX || n_row_blocks > UINT32_MAX ||
-        heads_per_group * n_row_blocks > UINT32_MAX ||
-        (uint64_t) n_group * heads_per_group * n_row_blocks > UINT32_MAX ||
-        (uint64_t) n_seqs * n_group * heads_per_group * n_row_blocks > UINT32_MAX) {
-        return false;
-    }
-
-    size_t x_elements;
-    size_t state_elements;
-    size_t output_elements;
-    size_t output_bytes;
-    if (hex_mul_overflow((size_t) head_dim, (size_t) n_head, &x_elements) ||
-        hex_mul_overflow(x_elements, (size_t) n_tokens, &x_elements) ||
-        hex_mul_overflow(x_elements, (size_t) n_seqs, &x_elements) ||
-        hex_mul_overflow((size_t) d_state, (size_t) head_dim, &state_elements) ||
-        hex_mul_overflow(state_elements, (size_t) n_head, &state_elements) ||
-        hex_mul_overflow(state_elements, (size_t) n_seqs, &state_elements) ||
-        hex_mul_overflow(state_elements, (size_t) K, &state_elements) ||
-        hex_add_overflow(x_elements, state_elements, &output_elements) || output_elements > INT64_MAX ||
-        hex_mul_overflow(output_elements, sizeof(float), &output_bytes)) {
-        return false;
-    }
-    if (op->ne[0] != (int64_t) output_elements || op->ne[1] != 1 || op->ne[2] != 1 || op->ne[3] != 1 ||
-        op->nb[0] != sizeof(float) || ggml_nbytes(op) != output_bytes) {
-        return false;
-    }
-
-    struct htp_ssm_scan_vtcm_layout layout;
-    const uint32_t token_tile_check = (std::min)((uint32_t) n_tokens, HTP_SSM_SCAN_TOKEN_TILE_DEFAULT);
-    if (!htp_ssm_scan_vtcm_layout_build(&layout, (uint32_t) d_state, HTP_SSM_SCAN_ROW_TILE_DEFAULT, token_tile_check, 1)) {
+    const uint32_t n_row_blocks = (head_dim + HTP_SSM_SCAN_ROW_TILE_DEFAULT - 1) / HTP_SSM_SCAN_ROW_TILE_DEFAULT;
+    const uint64_t total_units  = (uint64_t) n_seqs * n_head * n_row_blocks;
+    if (total_units > UINT32_MAX) {
         return false;
     }
 
     const uint32_t sess_threads = htp_session_n_threads(sess);
-    const size_t   sess_vtcm    = htp_session_vtcm_size(sess);
 
-    kparams->row_tile   = HTP_SSM_SCAN_ROW_TILE_DEFAULT;
-    kparams->d_state    = (uint32_t) s->ne[0];
-    kparams->head_dim   = (uint32_t) x->ne[0];
-    kparams->n_head     = (uint32_t) x->ne[1];
-    kparams->n_group    = (uint32_t) B->ne[1];
-    kparams->n_tokens   = (uint32_t) x->ne[2];
-    kparams->n_seqs     = (uint32_t) x->ne[3];
-    kparams->K          = (uint32_t) K;
-    kparams->token_tile = (uint16_t) (std::max)(1U, (std::min)(kparams->n_tokens, HTP_SSM_SCAN_TOKEN_TILE_DEFAULT));
-
-    const uint64_t group_units   = heads_per_group * n_row_blocks;
-    const uint64_t units_per_seq = (uint64_t) kparams->n_group * group_units;
-    const uint64_t total_units   = (uint64_t) kparams->n_seqs * units_per_seq;
-
-    kparams->heads_per_group = (uint32_t) heads_per_group;
-    kparams->n_row_blocks    = (uint32_t) n_row_blocks;
-    kparams->group_units     = (uint32_t) group_units;
-    kparams->units_per_seq   = (uint32_t) units_per_seq;
+    kparams->row_tile        = HTP_SSM_SCAN_ROW_TILE_DEFAULT;
+    kparams->token_tile      = (uint16_t) (std::min)(n_tokens, HTP_SSM_SCAN_TOKEN_TILE_DEFAULT);
+    kparams->d_state         = d_state;
+    kparams->head_dim        = head_dim;
+    kparams->n_head          = n_head;
+    kparams->n_tokens        = n_tokens;
+    kparams->n_seqs          = n_seqs;
+    kparams->K               = K;
+    kparams->heads_per_group = n_head / n_group;
+    kparams->n_row_blocks    = n_row_blocks;
+    kparams->group_units     = kparams->heads_per_group * n_row_blocks;
+    kparams->units_per_seq   = n_head * n_row_blocks;
     kparams->total_units     = (uint32_t) total_units;
-    kparams->n_threads       = (uint16_t) (std::max)(1U, (std::min)(sess_threads, kparams->total_units));
-    kparams->heads_per_thread = (kparams->n_head + kparams->n_threads - 1) / kparams->n_threads;
+    kparams->n_threads       = (uint16_t) (std::min)(sess_threads, kparams->total_units);
 
-    const bool layout_valid = htp_ssm_scan_vtcm_layout_build(
-        &layout, kparams->d_state, kparams->row_tile, kparams->token_tile, kparams->n_threads);
+    struct htp_ssm_scan_vtcm_layout layout;
+    htp_ssm_scan_vtcm_layout_build(&layout, d_state, kparams->row_tile, kparams->token_tile, kparams->n_threads);
 
-    const bool layout_fits_u32 = layout_valid && layout.state_slot_bytes <= UINT32_MAX && layout.xy_row_stride <= UINT32_MAX &&
-                                 layout.bytes_per_thread <= UINT32_MAX && layout.total_bytes <= UINT32_MAX;
     // Fixed DMA packages need one native descriptor per push. Use v73 16-bit field limits on all targets.
-    const uint64_t dma_max_16b    = 0xFFFFu;
-    const uint64_t y_token_stride = (uint64_t) kparams->n_head * kparams->head_dim * sizeof(float);
-    const bool dma_fits_16b = layout_valid && (uint64_t) kparams->d_state * sizeof(float) <= dma_max_16b &&
-                              layout.xy_row_stride <= dma_max_16b && (uint64_t) s->nb[1] <= dma_max_16b &&
-                              (kparams->n_tokens == 1 ||
-                               (y_token_stride <= dma_max_16b && (uint64_t) x->nb[2] <= dma_max_16b &&
-                                (uint64_t) dt->nb[1] <= dma_max_16b && (uint64_t) B->nb[2] <= dma_max_16b &&
-                                (uint64_t) C->nb[2] <= dma_max_16b));
-    const bool use_vtcm = layout_fits_u32 && dma_fits_16b && A->ne[0] == 1 && kparams->K == 1 && kparams->d_state % 32 == 0 &&
-                          kparams->head_dim % 4 == 0 && layout.total_bytes <= sess_vtcm;
-    kparams->kernel_type = use_vtcm ? HTP_SSM_SCAN_KERNEL_MAMBA2_VTCM : HTP_SSM_SCAN_KERNEL_FALLBACK;
+    const size_t dma_max        = 0xFFFF;
+    const size_t y_token_stride = (size_t) n_head * head_dim * sizeof(float);
+    const bool   dma_fits_16b   = d_state * sizeof(float) <= dma_max && layout.xy_row_stride <= dma_max &&
+                                  (n_tokens == 1 || (y_token_stride <= dma_max && x->nb[2] <= dma_max && dt->nb[1] <= dma_max &&
+                                                     B->nb[2] <= dma_max && C->nb[2] <= dma_max));
 
-    bool final_layout_valid = layout_fits_u32;
-    if (!use_vtcm) {
-        kparams->n_threads        = (uint16_t) (std::max)(1U, (std::min)(sess_threads, kparams->n_head));
-        kparams->heads_per_thread = (kparams->n_head + kparams->n_threads - 1) / kparams->n_threads;
-        final_layout_valid = htp_ssm_scan_vtcm_layout_build(
-            &layout, kparams->d_state, kparams->row_tile, kparams->token_tile, kparams->n_threads) &&
-            layout.state_slot_bytes <= UINT32_MAX && layout.xy_row_stride <= UINT32_MAX &&
-            layout.bytes_per_thread <= UINT32_MAX && layout.total_bytes <= UINT32_MAX;
+    const bool use_vtcm = A->ne[0] == 1 && K == 1 && d_state % 32 == 0 && head_dim % 4 == 0 && dma_fits_16b &&
+                          layout.total_bytes <= htp_session_vtcm_size(sess);
+
+    if (use_vtcm) {
+        kparams->kernel_type     = HTP_SSM_SCAN_KERNEL_MAMBA2_VTCM;
+        kparams->vtcm_per_thread = (uint32_t) layout.bytes_per_thread;
+        kparams->vtcm_size       = (uint32_t) layout.total_bytes;
+    } else {
+        kparams->kernel_type = HTP_SSM_SCAN_KERNEL_FALLBACK;
+        kparams->n_threads   = (uint16_t) (std::min)(sess_threads, n_head);
     }
 
-    if (final_layout_valid) {
-        kparams->state_slot_bytes = (uint32_t) layout.state_slot_bytes;
-        kparams->xy_row_stride    = (uint32_t) layout.xy_row_stride;
-        kparams->vtcm_per_thread  = (uint32_t) layout.bytes_per_thread;
-        kparams->vtcm_size        = (uint32_t) layout.total_bytes;
-    }
-
-    size_t state_bytes;
-    const bool state_size_valid = !hex_mul_overflow(kparams->d_state, kparams->head_dim, &state_bytes) &&
-                                  !hex_mul_overflow(state_bytes, kparams->n_head, &state_bytes) &&
-                                  !hex_mul_overflow(state_bytes, kparams->n_seqs, &state_bytes) &&
-                                  !hex_mul_overflow(state_bytes, sizeof(float), &state_bytes);
-    size_t y_bytes;
-    const bool y_size_valid = !hex_mul_overflow(kparams->head_dim, kparams->n_head, &y_bytes) &&
-                              !hex_mul_overflow(y_bytes, kparams->n_tokens, &y_bytes) &&
-                              !hex_mul_overflow(y_bytes, kparams->n_seqs, &y_bytes) &&
-                              !hex_mul_overflow(y_bytes, sizeof(float), &y_bytes);
     // Direct HVX is faster for state streams up to the measured 4 MiB crossover.
     // Keep DMA y output and cached state output on separate cache lines.
-    kparams->decode_state_io = state_size_valid && y_size_valid && state_bytes <= 4U * 1024U * 1024U &&
-        y_bytes % 128 == 0 ? HTP_SSM_SCAN_STATE_IO_HVX : HTP_SSM_SCAN_STATE_IO_DMA;
+    const uint64_t state_bytes = (uint64_t) d_state * head_dim * n_head * n_seqs * sizeof(float);
+    const uint64_t y_bytes     = (uint64_t) head_dim * n_head * n_tokens * n_seqs * sizeof(float);
+    kparams->decode_state_io   = state_bytes <= 4U * 1024U * 1024U && y_bytes % 128 == 0 ? HTP_SSM_SCAN_STATE_IO_HVX : HTP_SSM_SCAN_STATE_IO_DMA;
 
-    if (kparams->units_per_seq > 0)   kparams->div_units_per_seq   = init_fastdiv_values(kparams->units_per_seq);
-    if (kparams->group_units > 0)     kparams->div_group_units     = init_fastdiv_values(kparams->group_units);
-    if (kparams->n_row_blocks > 0)    kparams->div_n_row_blocks    = init_fastdiv_values(kparams->n_row_blocks);
-    if (kparams->heads_per_group > 0) kparams->div_heads_per_group = init_fastdiv_values(kparams->heads_per_group);
+    kparams->div_units_per_seq   = init_fastdiv_values(kparams->units_per_seq);
+    kparams->div_group_units     = init_fastdiv_values(kparams->group_units);
+    kparams->div_n_row_blocks    = init_fastdiv_values(kparams->n_row_blocks);
+    kparams->div_heads_per_group = init_fastdiv_values(kparams->heads_per_group);
 
     return true;
 }
