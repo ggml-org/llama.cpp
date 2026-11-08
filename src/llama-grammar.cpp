@@ -2448,7 +2448,7 @@ static std::shared_ptr<llama_grammar_gpu_tensor> llama_grammar_gpu_upload_vocab(
 
 std::shared_ptr<llama_grammar_gpu_context> llama_grammar_gpu_init(ggml_backend_buffer_type_t buft, const llama_grammar * grammar) {
     const char * enabled = getenv("LLAMA_GRAMMAR_GPU_MASK");
-    if (enabled && strcmp(enabled, "0") == 0) { return nullptr; }
+    if (!enabled || strcmp(enabled, "1") != 0) { return nullptr; }
     const auto dev = ggml_backend_buft_get_device(buft);
     if (!dev) { return nullptr; }
     const auto reg = ggml_backend_dev_backend_reg(dev);
