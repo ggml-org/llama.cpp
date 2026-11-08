@@ -5,8 +5,8 @@
 
 <script>
 	import Figure from './Figure.svelte';
+	import Decided from './figures/Decided.svelte';
 	import Layers from './figures/Layers.svelte';
-	import Paths from './figures/Paths.svelte';
 	import Machine from './figures/Machine.svelte';
 	import Reach from './figures/Reach.svelte';
 	import Sharing from './figures/Sharing.svelte';
@@ -45,8 +45,8 @@ Access to AI should be as open as access to information: available to anyone, wh
 
 Most people want help with a letter, a photo or a question, not a lesson in GGUF and quantization. Others want to tune every part. Both should feel at home.
 
-<Figure n={3} caption="Two ways in. Starting out, the choices are made for you; for a power user, nothing is held back.">
-	<Paths />
+<Figure n={3} caption="An everyday question, and what the app decided so it could just work. Each decision is a setting a power user can change.">
+	<Decided />
 </Figure>
 
 Nothing comes pre-installed. The first run is a recommendation and one click, and Llama Chat opens on a conversation, not on settings.
