@@ -3141,6 +3141,52 @@ static webgpu_encoded_op ggml_webgpu_argmax(webgpu_context & ctx, ggml_tensor * 
     return ggml_backend_webgpu_build(ctx, pipeline, params, entries, wg_x);
 }
 
+static webgpu_encoded_op ggml_webgpu_count_equal(webgpu_context & ctx,
+                                                 ggml_tensor *    src0,
+                                                 ggml_tensor *    src1,
+                                                 ggml_tensor *    dst) {
+    const uint32_t                    ne         = ggml_nelements(src0);
+    const uint32_t                    offset_dst = ggml_webgpu_tensor_misalignment(ctx, dst);
+    std::vector<webgpu_dispatch_desc> dispatches;
+    // Reset both words of the I64 result before accumulating partial counts.
+    dispatches.push_back({
+        ctx->global_ctx->memset_pipeline,
+        { offset_dst, sizeof(int64_t), 0 },
+        { ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, dst) },
+        { 1, 1 }
+    });
+
+    if (ne == 0) {
+        return ggml_backend_webgpu_build_multi(ctx, dispatches);
+    }
+
+    const bool      src_overlap = ggml_webgpu_tensor_binding_overlap(ctx->global_ctx, src0, src1);
+    webgpu_pipeline pipeline    = ctx->shader_lib->get_count_equal_pipeline(src_overlap);
+
+    uint32_t                          offset_src0 = ggml_webgpu_tensor_misalignment(ctx, src0) / sizeof(int32_t);
+    uint32_t                          offset_src1 = ggml_webgpu_tensor_misalignment(ctx, src1) / sizeof(int32_t);
+    std::vector<wgpu::BindGroupEntry> entries;
+    if (src_overlap) {
+        const ggml_webgpu_merged_binding_range range = ggml_webgpu_tensor_merged_binding_range(ctx, { src0, src1 });
+        offset_src0                                  = ggml_webgpu_tensor_merged_element_offset(src0, range);
+        offset_src1                                  = ggml_webgpu_tensor_merged_element_offset(src1, range);
+        entries.push_back(ggml_webgpu_make_bind_group_entry(0, ggml_webgpu_tensor_buf(src0), range.offset, range.size));
+    } else {
+        entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src0));
+        entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, 1, src1));
+    }
+    entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, entries.size(), dst));
+    std::vector<uint32_t> params = { offset_src0, offset_src1, offset_dst / (uint32_t) sizeof(uint32_t), ne };
+    uint32_t              wg_x;
+    uint32_t              wg_y;
+    const uint32_t        total_wg = CEIL_DIV(ne, GGML_WEBGPU_COUNT_EQUAL_WG_SIZE);
+    compute_2d_workgroups(total_wg, ctx->global_ctx->capabilities.limits.maxComputeWorkgroupsPerDimension, wg_x, wg_y);
+    dispatches.push_back({
+        pipeline, std::move(params), std::move(entries), { wg_x, wg_y }
+    });
+    return ggml_backend_webgpu_build_multi(ctx, dispatches);
+}
+
 static webgpu_encoded_op ggml_webgpu_argsort(webgpu_context & ctx, ggml_tensor * src, ggml_tensor * dst) {
     bool is_top_k = dst->op == GGML_OP_TOP_K;
 
@@ -3580,6 +3626,8 @@ static std::optional<webgpu_encoded_op> ggml_webgpu_encode(webgpu_context ctx,
             return ggml_webgpu_arange(ctx, node);
         case GGML_OP_PAD:
             return ggml_webgpu_pad(ctx, src0, node);
+        case GGML_OP_COUNT_EQUAL:
+            return ggml_webgpu_count_equal(ctx, src0, src1, node);
         case GGML_OP_ARGMAX:
             return ggml_webgpu_argmax(ctx, src0, node);
         case GGML_OP_ARGSORT:
@@ -4904,7 +4952,7 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                 default:
                     break;
             }
-            if (ggml_get_op_params_i32(op, 3) == GGML_PREC_F32) {
+            if (ggml_get_op_params_i32(op, 3) == GGML_PREC_BF16 || ggml_get_op_params_i32(op, 3) == GGML_PREC_F32) {
                 supports_op = false;
             }
             break;
@@ -5130,6 +5178,10 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
             break;
         case GGML_OP_SUM:
             supports_op = op->type == GGML_TYPE_F32 && src0->type == op->type && ggml_is_contiguously_allocated(src0);
+            break;
+        case GGML_OP_COUNT_EQUAL:
+            supports_op = src0->type == GGML_TYPE_I32 && src1->type == GGML_TYPE_I32 && ggml_is_contiguous(src0) &&
+                          ggml_is_contiguous(src1);
             break;
         case GGML_OP_SUM_ROWS:
         case GGML_OP_MEAN:

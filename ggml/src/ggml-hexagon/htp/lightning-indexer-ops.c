@@ -6,7 +6,7 @@
 #include <string.h>
 
 #include "dma-queue.h"
-#include "hex-profile.h"
+#include "htp-trace.h"
 #include "hvx-utils.h"
 #include "hvx-copy.h"
 #include "htp-vtcm.h"
@@ -30,7 +30,7 @@ struct htp_lid_context {
     const struct htp_lid_kernel_params * kp;
 
     uint32_t n_blocks;
-    uint32_t blocks_per_thread;
+    uint32_t blocks_per_hvx;
 
     // current stream and token tile
     uint32_t is;
@@ -72,7 +72,7 @@ static inline void lid_prep_push_step(dma_queue * dma_q, const struct htp_lid_co
 
 // Splat every Q element (f16) and every head weight (f32) into a full vector.
 // Work is split over (token, head) pairs.
-static void lid_prep_thread(unsigned int nth, unsigned int ith, void * data) {
+static void lid_prep_thread(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     struct htp_lid_context *       lctx = (struct htp_lid_context *) data;
     const struct htp_ops_context * octx = lctx->octx;
     const struct htp_tensor *      q    = octx->src[0];
@@ -83,9 +83,9 @@ static void lid_prep_thread(unsigned int nth, unsigned int ith, void * data) {
     const uint32_t D      = q->ne[0];
     const uint32_t n_head = q->ne[1];
 
-    // nth is min(n_threads, n_items): the same chunk as a split over n_threads
+    // nth is min(n_hvx, n_items): the same chunk as a split over n_hvx
     const uint32_t n_items = lctx->nt * n_head;
-    const uint32_t chunk   = fastdiv(n_items + octx->n_threads - 1, &octx->n_threads_div);
+    const uint32_t chunk   = fastdiv(n_items + octx->n_hvx - 1, &octx->n_hvx_div);
     const uint32_t i0      = ith * chunk;
     const uint32_t i1      = MIN(i0 + chunk, n_items);
 
@@ -93,8 +93,8 @@ static void lid_prep_thread(unsigned int nth, unsigned int ith, void * data) {
         return;
     }
 
-    struct htp_thread_trace * tr    = &octx->ctx->trace[ith];
-    dma_queue *               dma_q = octx->ctx->dma[ith];
+    struct htp_thread_trace * tr    = th->trace;
+    dma_queue *               dma_q = th->dma_q;
 
     const uint32_t w_row_size = hex_round_up(n_head * sizeof(float), 128);
     const size_t   qs_size    = n_head * L->size_qs_row;
@@ -506,7 +506,7 @@ static inline void lid_compute_row2(float * restrict o0,
 }
 
 // Each thread owns a range of kv blocks and streams K / mask in, output out (HTP_LID_N_BUF buffers)
-static void lid_compute_thread(unsigned int nth, unsigned int ith, void * data) {
+static void lid_compute_thread(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     struct htp_lid_context *       lctx = (struct htp_lid_context *) data;
     const struct htp_ops_context * octx = lctx->octx;
     const struct htp_tensor *      q    = octx->src[0];
@@ -514,8 +514,8 @@ static void lid_compute_thread(unsigned int nth, unsigned int ith, void * data) 
     const struct htp_tensor *      m    = octx->src[3];
     const struct htp_tensor *      dst  = octx->dst;
 
-    const uint32_t b0 = lctx->blocks_per_thread * ith;
-    const uint32_t b1 = MIN(b0 + lctx->blocks_per_thread, lctx->n_blocks);
+    const uint32_t b0 = lctx->blocks_per_hvx * ith;
+    const uint32_t b1 = MIN(b0 + lctx->blocks_per_hvx, lctx->n_blocks);
 
     if (b0 >= b1) {
         return;
@@ -556,8 +556,8 @@ static void lid_compute_thread(unsigned int nth, unsigned int ith, void * data) 
     HVX_Vector *     sc     = kt_t1 + HTP_LID_KV_BLOCK;
     const HVX_Vector g_offs = hvx_vec_gather_offsets_h(L->size_k_raw_row);
 
-    struct htp_thread_trace * tr    = &octx->ctx->trace[ith];
-    dma_queue *               dma_q = octx->ctx->dma[ith];
+    struct htp_thread_trace * tr    = th->trace;
+    dma_queue *               dma_q = th->dma_q;
 
     for (uint32_t b = b0, i = 0; b < b1 && i < HTP_LID_N_BUF; ++b, ++i) {
         const uint32_t kv0 = b * HTP_LID_KV_BLOCK;
@@ -796,7 +796,7 @@ static inline void lid_hmx_dot(const __fp16 * a, const __fp16 * b, uint32_t n) {
 }
 
 // Per segment: channel tile outer, row tile inner, one bias load per channel tile. S holds [n_rt][n_sg] tiles.
-static void lid_hmx_worker(void * data) {
+static void lid_hmx_worker(const htp_thread_t * th, void * data) {
     const lid_hmx_job_t * job = (const lid_hmx_job_t *) data;
 
     const size_t   dot_stride = (size_t) job->n_dot * HMX_FP16_TILE_N_ELMS;
@@ -837,7 +837,7 @@ static void lid_hmx_worker(void * data) {
 
 // Thread slices: K rows by row pairs of the padded block, mask / output rows by token.
 // Block 0 is prepped together with Q: its K rows go to the threads without Q work.
-// K rows are split only in stages on all n_threads threads.
+// K rows are split only in stages on all n_hvx threads.
 static inline void lid_hmx_rows(const struct htp_lid_hmx_context * hctx, uint32_t ith, uint32_t nth, uint32_t g, uint32_t n_rows,
                                 uint32_t * r0, uint32_t * r1) {
     uint32_t per;
@@ -849,22 +849,22 @@ static inline void lid_hmx_rows(const struct htp_lid_hmx_context * hctx, uint32_
         ith -= hctx->n_qthr;
         per = (n_rows + nth - hctx->n_qthr - 1) / (nth - hctx->n_qthr);
     } else {
-        per = fastdiv(n_rows + hctx->octx->n_threads - 1, &hctx->octx->n_threads_div);
+        per = fastdiv(n_rows + hctx->octx->n_hvx - 1, &hctx->octx->n_hvx_div);
     }
     per = hex_round_up(per, 2);
     *r0 = MIN(ith * per, n_rows);
     *r1 = MIN(*r0 + per, n_rows);
 }
 
-// Split over n_threads; a stage on one thread has one token, which this split also gives to thread 0
+// Split over n_hvx; a stage on one thread has one token, which this split also gives to thread 0
 static inline void lid_hmx_toks(const struct htp_lid_hmx_context * hctx, uint32_t ith, uint32_t nt, uint32_t * t0, uint32_t * t1) {
-    const uint32_t per = fastdiv(nt + hctx->octx->n_threads - 1, &hctx->octx->n_threads_div);
+    const uint32_t per = fastdiv(nt + hctx->octx->n_hvx - 1, &hctx->octx->n_hvx_div);
     *t0 = MIN(ith * per, nt);
     *t1 = MIN((ith + 1) * per, nt);
 }
 
 // Push (or only count, push == false) the K row and mask DMAs of block g for this thread, one per segment
-static uint32_t lid_hmx_in(const struct htp_lid_hmx_context * hctx, uint32_t ith, uint32_t nth, uint32_t g, bool push) {
+static uint32_t lid_hmx_in(const struct htp_lid_hmx_context * hctx, const htp_thread_t * th, uint32_t ith, uint32_t nth, uint32_t g, bool push) {
     const struct htp_ops_context * octx = hctx->octx;
     const struct htp_tensor *      k    = octx->src[1];
     const struct htp_tensor *      m    = octx->src[3];
@@ -878,7 +878,7 @@ static uint32_t lid_hmx_in(const struct htp_lid_hmx_context * hctx, uint32_t ith
     lid_hmx_rows(hctx, ith, nth, g, n_rows, &r0, &r1);
     lid_hmx_toks(hctx, ith, hctx->nt_run, &ta, &tb);
 
-    dma_queue *    dma_q      = octx->ctx->dma[ith];
+    dma_queue *    dma_q      = th->dma_q;
     const uint32_t k_row_size = hctx->kp->k_row_size;
 
     uint32_t n = 0;
@@ -907,8 +907,8 @@ static uint32_t lid_hmx_in(const struct htp_lid_hmx_context * hctx, uint32_t ith
     return n;
 }
 
-static inline uint32_t lid_hmx_push_in(const struct htp_lid_hmx_context * hctx, uint32_t ith, uint32_t nth, uint32_t g) {
-    return lid_hmx_in(hctx, ith, nth, g, true);
+static inline uint32_t lid_hmx_push_in(const struct htp_lid_hmx_context * hctx, const htp_thread_t * th, uint32_t ith, uint32_t nth, uint32_t g) {
+    return lid_hmx_in(hctx, th, ith, nth, g, true);
 }
 
 // Row pair (a, b) quants of two blocks (64 values each, bytes 0..63) to the two tile vectors, scaled by s0, s1
@@ -1066,7 +1066,7 @@ static __attribute__((noinline)) void lid_hmx_prep_k(const struct htp_lid_hmx_co
 }
 
 // O column of each token (64 kv per gather) + mask -> f32 rows, then one DMA out per segment
-static __attribute__((noinline)) void lid_hmx_extract(const struct htp_lid_hmx_context * hctx, uint32_t ith, uint32_t nth, uint32_t g) {
+static __attribute__((noinline)) void lid_hmx_extract(const struct htp_lid_hmx_context * hctx, const htp_thread_t * th, uint32_t ith, uint32_t nth, uint32_t g) {
     const struct htp_ops_context * octx = hctx->octx;
     const struct htp_tensor *      dst  = octx->dst;
     const struct htp_lid_hmx_vtcm_layout * L = &hctx->L;
@@ -1081,7 +1081,7 @@ static __attribute__((noinline)) void lid_hmx_extract(const struct htp_lid_hmx_c
     uint32_t           n_rows;
     const uint32_t     n_seg = lid_hmx_segs(hctx, g, seg, &n_rows);
 
-    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+    struct htp_thread_trace * tr = th->trace;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_O_PROC, (uint16_t) g);
 
     const uint32_t n_u = hctx->n_u_run;
@@ -1138,7 +1138,7 @@ static __attribute__((noinline)) void lid_hmx_extract(const struct htp_lid_hmx_c
         }
 
         const struct lid_hmx_set S = hctx->sets[seg[i].set];
-        dma_queue_push(octx->ctx->dma[ith],
+        dma_queue_push(th->dma_q,
                        dma_make_data(dst->data + S.is * dst->nb[3] + (S.t0 + ta) * dst->nb[1] + seg[i].kv0 * sizeof(float),
                                      o_buf + ta * L->size_o_row + seg[i].x0 * sizeof(float)),
                        dst->nb[1], L->size_o_row, seg[i].nv * sizeof(float), tb - ta);
@@ -1159,15 +1159,15 @@ static inline uint32_t lid_hmx_n_out(const struct htp_lid_hmx_context * hctx, ui
     return lid_hmx_segs(hctx, g, seg, &n_rows);
 }
 
-static __attribute__((noinline)) void lid_hmx_q_chunk(const struct htp_lid_hmx_context * hctx, uint32_t ith, uint32_t nth);
+static __attribute__((noinline)) void lid_hmx_q_chunk(const struct htp_lid_hmx_context * hctx, const htp_thread_t * th, uint32_t ith, uint32_t nth);
 
 // Pipeline stage g (HMX runs block g meanwhile): prep block g + 1, extract block g - 1
-static void lid_hmx_stage(const struct htp_lid_hmx_context * hctx, uint32_t ith, uint32_t nth) {
+static void lid_hmx_stage(const struct htp_lid_hmx_context * hctx, const htp_thread_t * th, uint32_t ith, uint32_t nth) {
     const int32_t g = hctx->g;
     const int32_t n = (int32_t) hctx->n_blocks;
 
-    struct htp_thread_trace * tr    = &hctx->octx->ctx->trace[ith];
-    dma_queue *               dma_q = hctx->octx->ctx->dma[ith];
+    struct htp_thread_trace * tr    = th->trace;
+    dma_queue *               dma_q = th->dma_q;
 
     // FIFO order per thread: OUT(g - 3), IN(g + 1), OUT(g - 2). When this stage preps next run Q, also pop
     // OUT(g - 2) so the queue is empty for the Q DMAs; else leave it in flight for one more stage.
@@ -1178,7 +1178,7 @@ static void lid_hmx_stage(const struct htp_lid_hmx_context * hctx, uint32_t ith,
         n_pop += lid_hmx_n_out(hctx, ith, nth, g - 3);
     }
     if (g >= 0 && g + 1 < n) {
-        n_pop += lid_hmx_in(hctx, ith, nth, g + 1, false);
+        n_pop += lid_hmx_in(hctx, th, ith, nth, g + 1, false);
     }
     if (lag == 2 && g - 2 >= 0) {
         n_pop += lid_hmx_n_out(hctx, ith, nth, g - 2);
@@ -1189,11 +1189,11 @@ static void lid_hmx_stage(const struct htp_lid_hmx_context * hctx, uint32_t ith,
 
     if (hctx->nx_on && g >= 0) {
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_PREP, (uint16_t) g);
-        lid_hmx_q_chunk(hctx, ith, nth);
+        lid_hmx_q_chunk(hctx, th, ith, nth);
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_PREP, (uint16_t) g);
     }
     if (g + 2 < n) {
-        lid_hmx_push_in(hctx, ith, nth, g + 2);
+        lid_hmx_push_in(hctx, th, ith, nth, g + 2);
     }
     if (g + 1 < n) {
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_W_PREP, (uint16_t) (g + 1));
@@ -1201,7 +1201,7 @@ static void lid_hmx_stage(const struct htp_lid_hmx_context * hctx, uint32_t ith,
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_W_PREP, (uint16_t) (g + 1));
     }
     if (g - 1 >= 0) {
-        lid_hmx_extract(hctx, ith, nth, g - 1);
+        lid_hmx_extract(hctx, th, ith, nth, g - 1);
     }
     if (g == n) {
         uint32_t n_tail = lid_hmx_n_out(hctx, ith, nth, n - 1);
@@ -1214,8 +1214,8 @@ static void lid_hmx_stage(const struct htp_lid_hmx_context * hctx, uint32_t ith,
     }
 }
 
-static void lid_hmx_stage_thread(unsigned int nth, unsigned int ith, void * data) {
-    lid_hmx_stage((const struct htp_lid_hmx_context *) data, ith, nth);
+static void lid_hmx_stage_thread(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
+    lid_hmx_stage((const struct htp_lid_hmx_context *) data, th, ith, nth);
 }
 
 // Push the Q rows of channel tile c of set S, one DMA per token. Returns the number of DMA descriptors.
@@ -1361,19 +1361,19 @@ static inline uint32_t lid_hmx_q_chunk_push(const struct htp_lid_hmx_context * h
 }
 
 // Stage g share of the next run's Q prep (the DMA queue of the thread is empty here)
-static __attribute__((noinline)) void lid_hmx_q_chunk(const struct htp_lid_hmx_context * hctx, uint32_t ith, uint32_t nth) {
+static __attribute__((noinline)) void lid_hmx_q_chunk(const struct htp_lid_hmx_context * hctx, const htp_thread_t * th, uint32_t ith, uint32_t nth) {
     const struct htp_ops_context * octx = hctx->octx;
     const struct htp_lid_hmx_vtcm_layout * L = &hctx->L;
 
     const uint32_t n_tot  = hctx->nx_n_run * L->n_ch;
     const uint32_t a      = fastdiv(hctx->g * n_tot, &hctx->nx_stg_div);
     const uint32_t b      = fastdiv((hctx->g + 1) * n_tot, &hctx->nx_stg_div);
-    const uint32_t per    = fastdiv(b - a + octx->n_threads - 1, &octx->n_threads_div);
+    const uint32_t per    = fastdiv(b - a + octx->n_hvx - 1, &octx->n_hvx_div);
     const uint32_t gc0    = MIN(a + ith * per, b);
     const uint32_t gc1    = MIN(gc0 + per, b);
     const uint32_t qb     = hctx->qbuf ^ 1;
 
-    dma_queue * dma_q = octx->ctx->dma[ith];
+    dma_queue * dma_q = th->dma_q;
     uint8_t *   qs[2];
     qs[0] = hctx->qs + ith * L->size_qs;
     qs[1] = qs[0] + 32 * L->size_qs_row;
@@ -1422,7 +1422,7 @@ static __attribute__((noinline)) void lid_hmx_q_chunk(const struct htp_lid_hmx_c
 
 // Q rows to weight tiles, per channel scales |w| and G tiles for all sets of the run, then stage -1 (prep block 0).
 // Q work goes to the first threads (thread 0 starts first), the K rows of block 0 to the others.
-static void lid_hmx_qprep_thread(unsigned int nth, unsigned int ith, void * data) {
+static void lid_hmx_qprep_thread(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     struct htp_lid_hmx_context *   hctx = (struct htp_lid_hmx_context *) data;
     const struct htp_ops_context * octx = hctx->octx;
     const struct htp_tensor *      q    = octx->src[0];
@@ -1431,11 +1431,11 @@ static void lid_hmx_qprep_thread(unsigned int nth, unsigned int ith, void * data
 
     const uint32_t nh = q->ne[1];
 
-    struct htp_thread_trace * tr    = &octx->ctx->trace[ith];
-    dma_queue *               dma_q = octx->ctx->dma[ith];
+    struct htp_thread_trace * tr    = th->trace;
+    dma_queue *               dma_q = th->dma_q;
 
     const uint32_t n_tot = hctx->n_run * L->n_ch;
-    const uint32_t per   = fastdiv(n_tot + octx->n_threads - 1, &octx->n_threads_div);
+    const uint32_t per   = fastdiv(n_tot + octx->n_hvx - 1, &octx->n_hvx_div);
     const uint32_t gc0   = MIN(ith * per, n_tot);
     const uint32_t gc1   = MIN(gc0 + per, n_tot);
 
@@ -1470,7 +1470,7 @@ static void lid_hmx_qprep_thread(unsigned int nth, unsigned int ith, void * data
         n_dma += lid_hmx_push_q(hctx, dma_q, qs, &S, first - set * L->n_ch);
     }
 
-    uint32_t n_in = lid_hmx_push_in(hctx, ith, nth, 0);
+    uint32_t n_in = lid_hmx_push_in(hctx, th, ith, nth, 0);
 
     for (uint32_t i = 0; i < n_dma; ++i) {
         dma_queue_pop(dma_q);
@@ -1509,18 +1509,18 @@ static void lid_hmx_qprep_thread(unsigned int nth, unsigned int ith, void * data
         dma_queue_pop(dma_q);
     }
 
-    lid_hmx_stage(hctx, ith, nth);
+    lid_hmx_stage(hctx, th, ith, nth);
 }
 
 // Run start when its Q was prepped in the previous run: block 0 K and mask, then stage -1
-static void lid_hmx_first_thread(unsigned int nth, unsigned int ith, void * data) {
+static void lid_hmx_first_thread(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     const struct htp_lid_hmx_context * hctx = (const struct htp_lid_hmx_context *) data;
 
-    const uint32_t n_in = lid_hmx_push_in(hctx, ith, nth, 0);
+    const uint32_t n_in = lid_hmx_push_in(hctx, th, ith, nth, 0);
     for (uint32_t i = 0; i < n_in; ++i) {
-        dma_queue_pop(hctx->octx->ctx->dma[ith]);
+        dma_queue_pop(th->dma_q);
     }
-    lid_hmx_stage(hctx, ith, nth);
+    lid_hmx_stage(hctx, th, ith, nth);
 }
 
 static int lid_hmx_run(struct htp_ops_context * octx, const struct htp_lid_kernel_params * kparams) {
@@ -1529,7 +1529,7 @@ static int lid_hmx_run(struct htp_ops_context * octx, const struct htp_lid_kerne
     const uint32_t D         = q->ne[0];
     const uint32_t n_head    = q->ne[1];
     const uint32_t n_stream  = q->ne[3];
-    const uint32_t n_threads = kparams->n_threads;
+    const uint32_t n_hvx     = kparams->n_hvx;
     const uint32_t n_qsets   = kparams->n_qsets;
 
     struct htp_lid_hmx_context hctx;
@@ -1541,7 +1541,7 @@ static int lid_hmx_run(struct htp_ops_context * octx, const struct htp_lid_kerne
     hctx.n_tile  = kparams->n_tokens_tile;
     hctx.n_tt    = kparams->n_tt;
     hctx.n_qsets = n_qsets;
-    htp_lid_hmx_vtcm_layout_build(&hctx.L, D, n_head, hctx.n_tile, hctx.Bc, n_qsets * kparams->n_qbuf, n_threads,
+    htp_lid_hmx_vtcm_layout_build(&hctx.L, D, n_head, hctx.n_tile, hctx.Bc, n_qsets * kparams->n_qbuf, n_hvx,
                                   kparams->k_row_size);
 
     uint8_t * const base = octx->ctx->vtcm_base;
@@ -1588,7 +1588,7 @@ static int lid_hmx_run(struct htp_ops_context * octx, const struct htp_lid_kerne
 
         const int32_t  n     = (int32_t) hctx.n_blocks;
         const uint32_t n_tot = hctx.n_run * L->n_ch;
-        const uint32_t per   = fastdiv(n_tot + n_threads - 1, &octx->n_threads_div);
+        const uint32_t per   = fastdiv(n_tot + n_hvx - 1, &octx->n_hvx_div);
 
         hctx.n_qthr = (n_tot + per - 1) / per;
         hctx.g      = -1;
@@ -1597,9 +1597,9 @@ static int lid_hmx_run(struct htp_ops_context * octx, const struct htp_lid_kerne
         if (q_ready) {
             hctx.n_qthr = 0;
             hctx.nx_on  = false;
-            work_queue_run(octx->ctx->work_queue, lid_hmx_first_thread, &hctx, n_threads);
+            work_queue_run(octx->ctx->hvx_queue, lid_hmx_first_thread, &hctx, n_hvx);
         } else {
-            work_queue_run(octx->ctx->work_queue, lid_hmx_qprep_thread, &hctx, n_threads);
+            work_queue_run(octx->ctx->hvx_queue, lid_hmx_qprep_thread, &hctx, n_hvx);
         }
 
         // with two Q buffers the stages of this run prep the Q of the next one
@@ -1644,7 +1644,7 @@ static int lid_hmx_run(struct htp_ops_context * octx, const struct htp_lid_kerne
             // stage g has work only if there is a next block, a previous one or next run Q work
             hctx.g = g;
             if (g + 1 < n || g >= 1 || hctx.nx_on) {
-                work_queue_run(octx->ctx->work_queue, lid_hmx_stage_thread, &hctx, n_threads);
+                work_queue_run(octx->ctx->hvx_queue, lid_hmx_stage_thread, &hctx, n_hvx);
             }
 
             hmx_queue_pop(hmx_q);
@@ -1652,8 +1652,8 @@ static int lid_hmx_run(struct htp_ops_context * octx, const struct htp_lid_kerne
 
         // last stage only extracts; with one token only thread 0 has work (same token split for nth 1)
         hctx.g = n;
-        const uint32_t n_last = hctx.nt_run == 1 && !hctx.nx_on ? 1 : n_threads;
-        work_queue_run(octx->ctx->work_queue, lid_hmx_stage_thread, &hctx, n_last);
+        const uint32_t n_last = hctx.nt_run == 1 && !hctx.nx_on ? 1 : n_hvx;
+        work_queue_run(octx->ctx->hvx_queue, lid_hmx_stage_thread, &hctx, n_last);
     }
 
     return HTP_STATUS_OK;
@@ -1674,7 +1674,7 @@ int op_lightning_indexer(struct htp_ops_context * octx) {
         return HTP_STATUS_VTCM_TOO_SMALL;
     }
 
-    if (!htp_ops_context_set_n_threads(octx, kparams->n_threads)) {
+    if (!htp_ops_context_set_n_hvx(octx, kparams->n_hvx)) {
         return HTP_STATUS_INVAL_PARAMS;
     }
 
@@ -1686,9 +1686,9 @@ int op_lightning_indexer(struct htp_ops_context * octx) {
     lctx.octx              = octx;
     lctx.kp                = kparams;
     lctx.n_blocks          = kparams->n_kv_blocks;
-    lctx.blocks_per_thread = kparams->blocks_per_thread;
+    lctx.blocks_per_hvx    = kparams->blocks_per_hvx;
 
-    htp_lid_vtcm_layout_build(&lctx.L, q->ne[0], q->ne[1], kparams->n_tokens_tile, kparams->n_threads, kparams->k_row_size);
+    htp_lid_vtcm_layout_build(&lctx.L, q->ne[0], q->ne[1], kparams->n_tokens_tile, kparams->n_hvx, kparams->k_row_size);
 
     uint8_t * const base = octx->ctx->vtcm_base;
 
@@ -1703,7 +1703,7 @@ int op_lightning_indexer(struct htp_ops_context * octx) {
     const uint32_t n_tokens  = q->ne[2];
     const uint32_t n_stream  = q->ne[3];
     const uint32_t n_tile    = kparams->n_tokens_tile;
-    const uint32_t n_threads = kparams->n_threads;
+    const uint32_t n_hvx     = kparams->n_hvx;
 
     for (uint32_t is = 0; is < n_stream; ++is) {
         lctx.is  = is;
@@ -1713,8 +1713,8 @@ int op_lightning_indexer(struct htp_ops_context * octx) {
             lctx.t0 = t0;
             lctx.nt = MIN(n_tile, n_tokens - t0);
 
-            work_queue_run(octx->ctx->work_queue, lid_prep_thread, &lctx, MIN(n_threads, lctx.nt * q->ne[1]));
-            work_queue_run(octx->ctx->work_queue, lid_compute_thread, &lctx, n_threads);
+            work_queue_run(octx->ctx->hvx_queue, lid_prep_thread, &lctx, MIN(n_hvx, lctx.nt * q->ne[1]));
+            work_queue_run(octx->ctx->hvx_queue, lid_compute_thread, &lctx, n_hvx);
         }
     }
 

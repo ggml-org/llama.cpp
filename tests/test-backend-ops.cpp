@@ -442,7 +442,11 @@ static std::string var_to_str(ggml_type type) {
 }
 
 static std::string var_to_str(ggml_prec prec) {
-    return prec == GGML_PREC_F32 ? "f32" : "def";
+    switch (prec) {
+        case GGML_PREC_F32:  return "f32";
+        case GGML_PREC_BF16: return "bf16";
+        default:             return "def";
+    }
 }
 
 static std::string var_to_str(ggml_op_pool pool) {
@@ -3102,14 +3106,15 @@ struct test_argmax : public test_case {
 struct test_count_equal : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne;
+    const bool same_src;
 
     std::string vars() override {
-        return VARS_TO_STR2(type, ne);
+        return VARS_TO_STR3(type, ne, same_src);
     }
 
     test_count_equal(ggml_type type = GGML_TYPE_F32,
-            std::array<int64_t, 4> ne = {4, 500, 1, 1})
-        : type(type), ne(ne) {}
+            std::array<int64_t, 4> ne = {4, 500, 1, 1}, bool same_src = false)
+        : type(type), ne(ne), same_src(same_src) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
@@ -3124,7 +3129,7 @@ struct test_count_equal : public test_case {
         ggml_tensor * b_argmax = ggml_argmax(ctx, b);
         ggml_set_name(b_argmax, "b_argmax");
 
-        ggml_tensor * out = ggml_count_equal(ctx, a_argmax, b_argmax);
+        ggml_tensor * out = ggml_count_equal(ctx, a_argmax, same_src ? a_argmax : b_argmax);
         ggml_set_name(out, "out");
 
         return out;
@@ -10959,8 +10964,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_conv_transpose_2d({10, 10, 9, 2}, {3, 3, 1, 9}, 2, kernel_type)); // for multiple batches
     }
 
-    test_cases.emplace_back(new test_count_equal(GGML_TYPE_F32, {4,  500, 1, 1}));
-    test_cases.emplace_back(new test_count_equal(GGML_TYPE_F32, {4, 5000, 1, 1}));
+    for (bool same_src : {false, true}) {
+        test_cases.emplace_back(new test_count_equal(GGML_TYPE_F32, {4,  500, 1, 1}, same_src));
+        test_cases.emplace_back(new test_count_equal(GGML_TYPE_F32, {4, 5000, 1, 1}, same_src));
+    }
 
     test_cases.emplace_back(new test_argmax(GGML_TYPE_F32, {32,    1, 1, 1}));
     test_cases.emplace_back(new test_argmax(GGML_TYPE_F32, {32,  513, 1, 1}));
@@ -12584,8 +12591,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                                         for (int kv : { 113, 512, 1024, }) {
                                             if (nr2 != 1 && kv != 512) continue;
                                             for (int nb : { 1, 3, 32, 75, }) {
-                                                for (ggml_prec prec : {GGML_PREC_F32, GGML_PREC_DEFAULT}) {
-                                                    if (hsk != 128 && prec == GGML_PREC_DEFAULT) continue;
+                                                for (ggml_prec prec : {GGML_PREC_F32, GGML_PREC_BF16, GGML_PREC_DEFAULT}) {
+                                                    if (hsk != 128 && prec != GGML_PREC_F32) continue;
                                                     for (ggml_type type_KV : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0, GGML_TYPE_Q5_1, GGML_TYPE_Q5_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0, GGML_TYPE_IQ4_NL}) {
                                                         if (type_KV != GGML_TYPE_F16 && hsk != 64 && hsk != 72) continue;
                                                         // DeepSeek MLA: the V cache is a sub-view of the K cache
@@ -13228,6 +13235,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {256, 256, 20, 1}, false, false, GGML_TYPE_F32, {1, 1}, 1.0f, 0.0f));
     test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {64, 64, 20, 1}, false, false, GGML_TYPE_F32, {1, 1}, 1.0f, 0.0f));
     test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {77, 64, 20, 1}, false, false, GGML_TYPE_F32, {1, 1}, 1.0f, 0.0f));
+
+    for (int64_t n : {256, 1024}) {
+        test_cases.emplace_back(new test_count_equal(GGML_TYPE_F32, {4, n, 1, 1}));
+    }
 
     test_cases.emplace_back(new test_argmax(GGML_TYPE_F32, {32, 10, 1, 1}));
     test_cases.emplace_back(new test_argmax(GGML_TYPE_F32, {1024, 10, 1, 1}));
