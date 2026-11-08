@@ -1,6 +1,6 @@
 #include "transport-apple.h"
 #include "transport.h"
-#include "ggml-impl.h"
+#include "log.h"
 
 #include <infiniband/verbs.h>
 
@@ -199,6 +199,7 @@ static bool rdma_library_present() {
 // address, i.e. the one cabled to the peer.
 std::unique_ptr<apple_rdma> apple_rdma::probe(int fd, const uint8_t * target_gid, uint8_t * caps) {
     if (!rdma_library_present()) {
+        LOG_DBG2("[RDMA(Apple)] librdma.dylib not present, continuing with TCP\n");
         return nullptr;
     }
     int ndev = 0;
@@ -224,7 +225,10 @@ std::unique_ptr<apple_rdma> apple_rdma::probe(int fd, const uint8_t * target_gid
         break;
     }
     ibv_free_device_list(devs);
-    if (!ctx) return nullptr;
+    if (!ctx) {
+        LOG_DBG2("[RDMA(Apple)] no RDMA device matched the connection address, continuing with TCP\n");
+        return nullptr;
+    }
 
     std::unique_ptr<impl> c(new impl());
     c->fd  = fd;
@@ -286,7 +290,7 @@ std::unique_ptr<apple_rdma> apple_rdma::probe(int fd, const uint8_t * target_gid
     memcpy(rc.gid, gid.raw, RDMA_GID_SIZE);
     memcpy(caps, &rc, sizeof(rc));
 
-    GGML_LOG_INFO("RDMA(Apple/UC) probed: dev=%s port=%u gid=%d qpn=%u lid=%u mtu=%d ring=%d x %zu KiB\n",
+    LOG_INFO("RDMA(Apple/UC) probed: dev=%s port=%u gid=%d qpn=%u lid=%u mtu=%d ring=%d x %zu KiB\n",
                   matched.c_str(), port, gid_idx, c->qpn, (unsigned)pa.lid, 128 << c->path_mtu,
                   RDMA_NBUF, RDMA_STRIDE / 1024);
     return std::unique_ptr<apple_rdma>(new apple_rdma(std::move(c)));
@@ -317,7 +321,7 @@ bool apple_rdma::activate(const uint8_t * caps) {
         memcpy(&a.ah_attr.grh.dgid, rc.gid, RDMA_GID_SIZE);
         if (ibv_modify_qp(c->qp, &a,
                 IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU | IBV_QP_DEST_QPN | IBV_QP_RQ_PSN) != 0) {
-            GGML_LOG_ERROR("RDMA(Apple/UC) RTR failed: %s\n", strerror(errno));
+            LOG_ERROR("RDMA(Apple/UC) RTR failed: %s\n", strerror(errno));
             ok = false;
         }
     }
@@ -326,7 +330,7 @@ bool apple_rdma::activate(const uint8_t * caps) {
         a.qp_state = IBV_QPS_RTS;
         a.sq_psn   = RDMA_PSN;
         if (ibv_modify_qp(c->qp, &a, IBV_QP_STATE | IBV_QP_SQ_PSN) != 0) {
-            GGML_LOG_ERROR("RDMA(Apple/UC) RTS failed: %s\n", strerror(errno));
+            LOG_ERROR("RDMA(Apple/UC) RTS failed: %s\n", strerror(errno));
             ok = false;
         }
     }
@@ -334,7 +338,7 @@ bool apple_rdma::activate(const uint8_t * caps) {
     // Recvs are posted only now: the controller starts processing them at RTR.
     for (int i = 0; ok && i < RDMA_NBUF; i++) {
         if (!c->post_recv(i)) {
-            GGML_LOG_ERROR("RDMA(Apple/UC) post_recv %d/%d failed\n", i, RDMA_NBUF);
+            LOG_ERROR("RDMA(Apple/UC) post_recv %d/%d failed\n", i, RDMA_NBUF);
             ok = false;
         }
     }
@@ -350,7 +354,7 @@ bool apple_rdma::activate(const uint8_t * caps) {
         return false;
     }
 
-    GGML_LOG_INFO("RDMA(Apple/UC) activated: qpn=%u->%u mtu=%d rx_depth=%d\n",
+    LOG_INFO("RDMA(Apple/UC) activated: qpn=%u->%u mtu=%d rx_depth=%d\n",
                   c->qpn, rc.qpn, 128 << c->path_mtu, RDMA_NBUF);
     return true;
 }
@@ -360,20 +364,20 @@ bool apple_rdma::activate(const uint8_t * caps) {
 int apple_rdma::impl::progress() {
     struct ibv_wc wc[RDMA_NBUF * 2];
     int n = ibv_poll_cq(cq, RDMA_NBUF * 2, wc);
-    if (n < 0) { GGML_LOG_ERROR("RDMA(Apple/UC) poll_cq failed\n"); broken = true; return -1; }
+    if (n < 0) { LOG_ERROR("RDMA(Apple/UC) poll_cq failed\n"); broken = true; return -1; }
     for (int j = 0; j < n; j++) {
         uint64_t id = wc[j].wr_id;
         bool is_recv = (id & RDMA_RECV_WR) != 0;
         if (wc[j].status != IBV_WC_SUCCESS) {
-            GGML_LOG_ERROR("RDMA(Apple/UC) %s wc error: status=%d\n", is_recv ? "recv" : "send", wc[j].status);
+            LOG_ERROR("RDMA(Apple/UC) %s wc error: status=%d\n", is_recv ? "recv" : "send", wc[j].status);
             broken = true;
             return -1;
         }
         if (is_recv) {
             int b = (int)(id & RDMA_WR_IDX_MASK);
             const rdma_seg_hdr * h = (const rdma_seg_hdr *)(recv_mem + (size_t)b * RDMA_STRIDE);
-            if (h->magic != RDMA_SEG_MAGIC) { GGML_LOG_ERROR("RDMA(Apple/UC) bad frame magic\n"); broken = true; return -1; }
-            if (h->len > RDMA_PAYLOAD) { GGML_LOG_ERROR("RDMA(Apple/UC) frame len %u exceeds payload\n", h->len); broken = true; return -1; }
+            if (h->magic != RDMA_SEG_MAGIC) { LOG_ERROR("RDMA(Apple/UC) bad frame magic\n"); broken = true; return -1; }
+            if (h->len > RDMA_PAYLOAD) { LOG_ERROR("RDMA(Apple/UC) frame len %u exceeds payload\n", h->len); broken = true; return -1; }
             int slot = (inq_head + inq_count) % RDMA_NBUF;
             inq[slot].buf  = b;
             inq[slot].off  = 0;

@@ -132,6 +132,55 @@ def test_slot_restore_legacy_token_list():
     assert res.body["timings"]["prompt_n"] == 6  # only the different part is processed
 
 
+# the slot file carries the live draft state: a restored slot drafts like a slot that was never saved
+def test_slot_restore_draft_state():
+    global server
+    server.model_draft_hf_repo = server.model_hf_repo
+    server.spec_type = "draft-simple"
+    server.start()
+
+    prompt = "What is the capital of France?"
+    turn = {}
+    for id_slot in [0, 1]:
+        res = server.make_request("POST", "/completion", data={
+            "prompt": prompt,
+            "n_predict": 16,
+            "id_slot": id_slot,
+            "cache_prompt": True,
+        })
+        assert res.status_code == 200
+        turn[id_slot] = res.body["content"]
+    assert turn[0] == turn[1]
+
+    res = server.make_request("POST", "/slots/0?action=save", data={
+        "filename": "draft_slot0.bin",
+    })
+    assert res.status_code == 200
+
+    res = server.make_request("POST", "/slots/0?action=erase")
+    assert res.status_code == 200
+
+    res = server.make_request("POST", "/slots/0?action=restore", data={
+        "filename": "draft_slot0.bin",
+    })
+    assert res.status_code == 200
+
+    timings = {}
+    for id_slot in [0, 1]:
+        res = server.make_request("POST", "/completion", data={
+            "prompt": prompt + turn[id_slot] + " And",
+            "n_predict": 32,
+            "id_slot": id_slot,
+            "cache_prompt": True,
+        })
+        assert res.status_code == 200
+        timings[id_slot] = res.body["timings"]
+
+    assert timings[0]["prompt_n"] == timings[1]["prompt_n"]
+    assert timings[0]["draft_n_accepted"] > 0
+    assert timings[0]["draft_n"]          == timings[1]["draft_n"]
+    assert timings[0]["draft_n_accepted"] == timings[1]["draft_n_accepted"]
+
 
 def test_slot_erase():
     global server
@@ -789,3 +838,89 @@ def test_slot_restore_checkpoints_draft_kv_type_change(swa_server, ctkd_restore)
     })
     assert res.status_code == 200
     assert res.body["timings"]["prompt_n"] == n_live
+
+
+# a SWA window smaller than the prompt, so a saved state holds only the cells inside the window
+@pytest.fixture
+def swa_window_server(tmp_path):
+    swa = ServerPreset.tinygemma3()
+    swa.override_kv = "gemma3.attention.sliding_window=int:64"
+    swa.slot_save_path = str(tmp_path)
+    swa.temperature = 0.0
+    swa.n_predict = 8
+    return swa
+
+
+SWA_PROMPT = "The quick brown fox jumps over the lazy dog. " * 30
+
+
+def tokenize(server, text):
+    res = server.make_request("POST", "/tokenize", data={"content": text})
+    assert res.status_code == 200
+    return res.body["tokens"]
+
+
+# the first turn and the exact token continuation of it, so the next turn extends the saved state
+def swa_turns(server, id_slot):
+    res = server.make_request("POST", "/completion", data={
+        "prompt": tokenize(server, SWA_PROMPT),
+        "id_slot": id_slot,
+        "cache_prompt": True,
+        "return_tokens": True,
+    })
+    assert res.status_code == 200
+    return tokenize(server, SWA_PROMPT) + res.body["tokens"] + tokenize(server, " The end.")
+
+
+def swa_next(server, id_slot, prompt):
+    res = server.make_request("POST", "/completion", data={
+        "prompt": prompt,
+        "id_slot": id_slot,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+    return res.body["timings"]
+
+
+# a restored SWA state holds the window the next token needs, so it is reused as is
+def test_slot_restore_swa_window(swa_window_server):
+    server = swa_window_server
+    server.cache_ram = 0
+    server.start()
+
+    prompt = {id_slot: swa_turns(server, id_slot) for id_slot in [0, 1]}
+    assert prompt[0] == prompt[1]
+
+    res = server.make_request("POST", "/slots/0?action=save", data={"filename": "swa_slot0.bin"})
+    assert res.status_code == 200
+    res = server.make_request("POST", "/slots/0?action=erase")
+    assert res.status_code == 200
+    res = server.make_request("POST", "/slots/0?action=restore", data={"filename": "swa_slot0.bin"})
+    assert res.status_code == 200
+
+    timings = {id_slot: swa_next(server, id_slot, prompt[id_slot]) for id_slot in [0, 1]}
+
+    assert timings[0]["cache_n"]  == timings[1]["cache_n"]
+    assert timings[0]["prompt_n"] == timings[1]["prompt_n"]
+
+
+# a SWA state loaded back from the RAM prompt cache is reused as is
+def test_prompt_cache_swa_window(swa_window_server):
+    server = swa_window_server
+    server.n_slots = 1
+
+    def run(other_prompt_first):
+        server.start()
+        prompt = swa_turns(server, 0)
+        if other_prompt_first:
+            res = server.make_request("POST", "/completion", data={"prompt": "Once upon a time " * 60, "cache_prompt": True})
+            assert res.status_code == 200
+        timings = swa_next(server, 0, prompt)
+        server.stop()
+        return timings
+
+    direct = run(False)
+    cached = run(True)
+
+    assert cached["cache_n"]  == direct["cache_n"]
+    assert cached["prompt_n"] == direct["prompt_n"]

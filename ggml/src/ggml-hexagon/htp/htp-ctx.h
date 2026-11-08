@@ -3,23 +3,21 @@
 
 #include "dma-queue.h"
 #include "hmx-queue.h"
+#include "htp-dcache.h"
 #include "htp-ops.h"
-#include "hex-profile.h"
+#include "htp-trace.h"
 #include "work-queue.h"
 #include "hex-fastdiv.h"
 
 #include <assert.h>
 #include <dspqueue.h>
 #include <stdatomic.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <string.h>
 
-#ifndef HTP_MAX_NTHREADS
-#define HTP_MAX_NTHREADS 10
-#endif
-
-#define HTP_MAX_MMAPS        64
-#define HTP_MAX_DIRTY_RANGES 64
+#define HTP_MAX_MMAPS 64
 
 // Memory mapping
 struct htp_mmap {
@@ -29,18 +27,13 @@ struct htp_mmap {
     uint32_t flags;
 };
 
-struct htp_dirty_range {
-    uint32_t start;
-    uint32_t end;
-};
-
 // Scratchpad state
 struct htp_spad {
     const struct htp_tensor * src;             // original src of the data (for reuse)
     uint8_t *                 data;            // pointer to an area in vtcm
     uint32_t                  stride;          // stride used inside this spad
     uint32_t                  size;            // total size
-    uint32_t                  size_per_thread; // size per thread
+    uint32_t                  size_per_hvx;    // size per hvx
 };
 
 struct htp_mdev_group {
@@ -71,14 +64,18 @@ struct htp_ops_context {
     // TODO convert these to an array
     struct htp_spad src0_spad;
     struct htp_spad src1_spad;
-    struct htp_spad src2_spad;
-    struct htp_spad src3_spad;
     struct htp_spad dst_spad;
 
     uint32_t              flags;
-    uint32_t              n_threads;
-    struct fastdiv_values n_threads_div;
+    uint32_t              n_hvx;
+    struct fastdiv_values n_hvx_div;
     int                   status;
+
+    // Must stay last: not cleared by htp_ops_context_reset(), ops init the caches they use
+    union {
+        dma_cache_dm dma_cache_dm[HTP_MAX_NHVX];
+        dma_cache_fa dma_cache_fa[HTP_MAX_NHVX];
+    } __attribute__((aligned(128)));
 };
 
 // Main context for htp DSP backend
@@ -87,12 +84,13 @@ struct htp_context {
 
     struct htp_mmap        mmap[HTP_MAX_MMAPS];
     dma_queue_t            dma[HTP_MAX_NTHREADS];
-    struct htp_thread_trace trace[HTP_MAX_NTHREADS + 1];
-    work_queue_t           work_queue;
+    struct htp_thread_trace trace[HTP_MAX_NTHREADS];
+    work_queue_t           hvx_queue;
     hmx_queue_t            hmx_queue;
 
     uint32_t               n_threads;
-    struct fastdiv_values  n_threads_div;
+    uint32_t               n_hvx;
+    struct fastdiv_values  n_hvx_div;
 
     int                    thread_id;
     int                    thread_prio;
@@ -123,19 +121,39 @@ struct htp_context {
     size_t                 footprint;
 };
 
-static inline bool htp_ops_context_set_n_threads(struct htp_ops_context * octx, uint32_t n_threads) {
-    if (n_threads == 0 || n_threads > octx->ctx->n_threads) {
+static inline void htp_ops_context_reset(struct htp_ops_context * octx, struct htp_context * ctx) {
+    memset(octx, 0, offsetof(struct htp_ops_context, dma_cache_dm));
+    octx->ctx       = ctx;
+    octx->n_hvx     = ctx->n_hvx;
+    octx->n_hvx_div = ctx->n_hvx_div;
+}
+
+static inline bool htp_ops_context_set_n_hvx_div(
+        struct htp_ops_context * octx,
+        uint32_t n_hvx,
+        struct fastdiv_values n_hvx_div) {
+    if (n_hvx == 0 || n_hvx > octx->ctx->n_hvx) {
         return false;
     }
 
-    if (n_threads != octx->n_threads) {
-        octx->n_threads = n_threads;
-        octx->n_threads_div = n_threads == octx->ctx->n_threads
-            ? octx->ctx->n_threads_div
-            : init_fastdiv_values(n_threads);
-    }
+    octx->n_hvx     = n_hvx;
+    octx->n_hvx_div = n_hvx_div;
 
     return true;
+}
+
+static inline bool htp_ops_context_set_n_hvx(struct htp_ops_context * octx, uint32_t n_hvx) {
+    if (n_hvx == 0 || n_hvx > octx->ctx->n_hvx) {
+        return false;
+    }
+    if (n_hvx == octx->n_hvx) {
+        return true;
+    }
+
+    const struct fastdiv_values n_hvx_div = n_hvx == octx->ctx->n_hvx
+        ? octx->ctx->n_hvx_div
+        : init_fastdiv_values(n_hvx);
+    return htp_ops_context_set_n_hvx_div(octx, n_hvx, n_hvx_div);
 }
 
 static inline void htp_ops_context_set_status(struct htp_ops_context * octx, int status) {
@@ -153,7 +171,7 @@ int op_unary(struct htp_ops_context * octx);
 int op_sum(struct htp_ops_context * octx);
 int op_sum_rows(struct htp_ops_context * octx);
 int op_argmax(struct htp_ops_context * octx);
-int op_activations(struct htp_ops_context * octx);
+int op_glu(struct htp_ops_context * octx);
 int op_softmax(struct htp_ops_context * octx);
 int op_add_id(struct htp_ops_context * octx);
 int op_rope(struct htp_ops_context * octx);
@@ -166,6 +184,7 @@ int op_argsort(struct htp_ops_context * octx);
 int op_top_k(struct htp_ops_context * octx);
 int op_ssm_conv(struct htp_ops_context * octx);
 int op_cumsum(struct htp_ops_context * octx);
+int op_top_k_mask(struct htp_ops_context * octx);
 int op_fill(struct htp_ops_context * octx);
 int op_concat(struct htp_ops_context * octx);
 int op_diag(struct htp_ops_context * octx);
@@ -173,9 +192,14 @@ int op_solve_tri(struct htp_ops_context * octx);
 int op_gated_delta_net(struct htp_ops_context * octx);
 int op_pad(struct htp_ops_context * octx);
 int op_im2col(struct htp_ops_context * octx);
+int op_im2col_3d(struct htp_ops_context * octx);
+int op_conv_2d(struct htp_ops_context * octx);
+int op_conv_2d_dw(struct htp_ops_context * octx);
 int op_pool_2d(struct htp_ops_context * octx);
 int op_pool_1d(struct htp_ops_context * octx);
 int op_allreduce(struct htp_ops_context * octx);
 int op_roll(struct htp_ops_context * octx);
+int op_upscale(struct htp_ops_context * octx);
+int op_lightning_indexer(struct htp_ops_context * octx);
 
 #endif /* HTP_CTX_H */

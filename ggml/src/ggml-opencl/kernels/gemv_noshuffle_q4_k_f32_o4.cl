@@ -231,8 +231,9 @@ kernel void kernel_gemv_noshuffle_q4_k_f32_o4(
 
     // Two consecutive pair-indices (each the same access pattern the 2-output
     // kernel uses); together they cover 4 consecutive output rows.
-    uint gid_a = gid * 2;
-    uint gid_b = gid * 2 + 1;
+    // Keep tail lanes active for subgroup ops, but read valid weight pairs.
+    uint gid_a = min(gid * 2,     (uint)(ne01 / 2) - 1u);
+    uint gid_b = min(gid * 2 + 1, (uint)(ne01 / 2) - 1u);
 
     uint K = ne00;
     uint M = ne01;

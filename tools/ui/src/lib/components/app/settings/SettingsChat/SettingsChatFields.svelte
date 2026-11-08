@@ -22,6 +22,13 @@
 
 	let { fields, localConfig, onConfigChange, onThemeChange }: Props = $props();
 
+	// discover needs the hub metadata reads, so its checkbox is read-only while discover is on
+	let hubLocked = $derived(Boolean(localConfig[SETTINGS_KEYS.ENABLE_DISCOVER_MODELS]));
+
+	function isLockedField(key: string): boolean {
+		return hubLocked && key === SETTINGS_KEYS.USE_HUGGING_FACE_HUB;
+	}
+
 	let currentModelParams = $derived.by(() => {
 		void modelsStore.props.cacheVersion;
 
@@ -301,13 +308,18 @@
 					<Checkbox
 						checked={Boolean(localConfig[field.key])}
 						class="mt-1"
+						disabled={isLockedField(field.key)}
 						id={field.key}
 						onCheckedChange={(checked) => onConfigChange(field.key, checked)}
 					/>
 
 					<div class="space-y-1">
 						<label
-							class="flex cursor-pointer items-center gap-1.5 pt-1 pb-0.5 text-sm leading-none font-medium"
+							class="flex items-center gap-1.5 pt-1 pb-0.5 text-sm leading-none font-medium {isLockedField(
+								field.key
+							)
+								? 'cursor-default opacity-80'
+								: 'cursor-pointer'}"
 							for={field.key}
 						>
 							{field.label}

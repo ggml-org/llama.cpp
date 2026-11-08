@@ -122,10 +122,13 @@ def test_systemone_invalid_request(data: dict):
     assert "error" in res.body
 
 
-def test_systemone_shared_prompt():
+def test_systemone_shared_prompt(tmp_path):
     global server
     server = ServerPreset.tinyopenjev()
+    server.n_slots = len(TEST_QUESTIONS)
     server.server_metrics = True
+    server.debug = True
+    server.log_path = str(tmp_path / "server.log")
     server.start()
     res = server.make_request("POST", "/v1/systemone", data={
         "state": TEST_STATE,
@@ -139,8 +142,19 @@ def test_systemone_shared_prompt():
     assert n_cached % 2 == 0
     assert n_processed + n_cached == res.body["usage"]["input_tokens"]
 
-    # with one slot the prompt cannot be shared, the answers must be the same
+    # the next request takes an empty slot as parent, so child slot 0 has a lower id than the parent
+    res_next = server.make_request("POST", "/v1/systemone", data={
+        "state": "Unrelated follow-up case: " * 10,
+        "questions": TEST_QUESTIONS,
+    })
+    assert res_next.status_code == 200
+
+    # in each request, each child waits for the parent during 1 batch only
     server.stop()
+    with open(server.log_path) as f:
+        assert f.read().count("__TEST_TAG_WAIT_PARENT_SLOT__") == 2 * (len(TEST_QUESTIONS) - 1)
+
+    # with one slot the prompt cannot be shared, the answers must be the same
     server = ServerPreset.tinyopenjev()
     server.n_slots = 1
     server.start()
@@ -156,6 +170,70 @@ def test_systemone_shared_prompt():
         for key in probs_shared:
             assert abs(probs_shared[key] - probs_single[key]) < 0.01
     assert abs(res.body["answers"]["angry"]["noul"] - res_single.body["answers"]["angry"]["noul"]) < 0.01
+
+
+@pytest.mark.parametrize("cache_ram", [None, 100])
+def test_systemone_prompt_cache(cache_ram, tmp_path):
+    global server
+    server.n_slots = 1
+    server.cache_ram = cache_ram
+    server.debug = True
+    server.log_path = str(tmp_path / "server.log")
+    server.start()
+
+    # the third request comes back to the state of the first one
+    for state in ["Ticket A: " + TEST_STATE, "Ticket B: " + TEST_STATE * 2, "Ticket A: " + TEST_STATE]:
+        res = server.make_request("POST", "/v1/systemone", data={
+            "state": state,
+            "questions": TEST_QUESTIONS,
+        })
+        assert res.status_code == 200
+
+    server.stop()
+
+    with open(server.log_path) as f:
+        log = f.read()
+    # the prompt cache is opt-in for decision models, and restores their states once enabled
+    assert ("__TEST_TAG_CACHE_IDLE_SLOTS_ENABLED__" in log) == (cache_ram is not None)
+    assert ("__TEST_TAG_PROMPT_CACHE_RESTORE__" in log) == (cache_ram is not None)
+
+
+def test_systemone_prompt_cache_child_slots(tmp_path):
+    global server
+    server = ServerPreset.tinyopenjev()
+    server.n_slots = len(TEST_QUESTIONS)
+    server.cache_ram = 100
+    server.debug = True
+    server.log_path = str(tmp_path / "server.log")
+    server.start()
+
+    states = [
+        "My parcel shows delivered but it never arrived at my door.",
+        "The app crashes every time I open the settings page.",
+        "Please close my account and delete all my personal data.",
+    ]
+    angry = {"angry": TEST_QUESTIONS["angry"]}
+
+    def decide(state, questions):
+        res = server.make_request("POST", "/v1/systemone", data={"state": state, "questions": questions})
+        assert res.status_code == 200
+
+    # one state per slot, then a request whose child tasks take every slot
+    for state in states:
+        decide(state, angry)
+    decide(TEST_STATE, TEST_QUESTIONS)
+
+    with open(server.log_path) as f:
+        n_restored = f.read().count("__TEST_TAG_PROMPT_CACHE_FULL_RESTORE__")
+
+    # every overwritten state comes back whole from the prompt cache
+    for state in states:
+        decide(state, angry)
+
+    server.stop()
+
+    with open(server.log_path) as f:
+        assert f.read().count("__TEST_TAG_PROMPT_CACHE_FULL_RESTORE__") == n_restored + len(states)
 
 
 def test_systemone_images():

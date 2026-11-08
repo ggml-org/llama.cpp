@@ -118,6 +118,17 @@ static inline HVX_Vector hvx_vec_step_f32(HVX_Vector v) {
     return Q6_V_vmux_QVV(q, one, zero);
 }
 
+static inline HVX_Vector hvx_vec_sgn_f32(HVX_Vector v) {
+    const HVX_Vector zero       = Q6_V_vzero();
+    const HVX_Vector one        = hvx_vec_splat_f32(1.0f);
+    const HVX_Vector sign_mask  = Q6_V_vsplat_R(0x80000000);
+    const HVX_Vector mag        = hvx_vec_abs_f32(v);
+    const HVX_Vector signed_one = Q6_V_vor_VV(one, Q6_V_vand_VV(v, sign_mask));
+    // The ordered magnitude comparison maps NaN and both signed zeros to zero.
+    const HVX_VectorPred nonzero = Q6_Q_vcmp_gt_VsfVsf(mag, zero);
+    return Q6_V_vmux_QVV(nonzero, signed_one, zero);
+}
+
 static inline HVX_Vector hvx_vec_step_f16(HVX_Vector v) {
     const HVX_Vector zero = Q6_V_vzero();
     const HVX_Vector one  = hvx_vec_splat_f16((_Float16) 1.0f);

@@ -118,12 +118,12 @@ void llama_model_glm4_moe::load_arch_tensors(llama_model_loader & ml) {
 
 std::unique_ptr<llm_graph_context> llama_model_glm4_moe::build_arch_graph(const llm_graph_params & params) const {
     if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
-        return std::make_unique<graph_mtp>(*this, params);
+        return std::make_unique<graph_mtp>(params);
     }
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_glm4_moe::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params)
+llama_model_glm4_moe::graph_mtp::graph_mtp(const llm_graph_params & params)
     : llm_graph_context(params) {
     GGML_ASSERT(hparams.n_layer_nextn > 0 && "GLM4_MOE MTP requires n_layer_nextn > 0");
     GGML_ASSERT(hparams.n_layer_nextn == 1 && "GLM4_MOE MTP currently only supports a single MTP block");
@@ -143,7 +143,7 @@ llama_model_glm4_moe::graph_mtp::graph_mtp(const llama_model & model, const llm_
     GGML_ASSERT(layer.nextn.hnorm   && "MTP block missing nextn.hnorm");
     GGML_ASSERT(layer.ffn_gate_inp  && "MTP block missing ffn_gate_inp");
 
-    auto inp = std::make_unique<llm_graph_input_embd_h>(hparams.n_embd);
+    auto inp = std::make_unique<llm_graph_input_embd_h>(hparams.n_embd_inp(), hparams.n_embd);
 
     inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
     ggml_set_input(inp->tokens);
@@ -203,13 +203,8 @@ llama_model_glm4_moe::graph_mtp::graph_mtp(const llama_model & model, const llm_
         cb(Kcur, "mtp_Kcur_normed", il);
     }
 
-    Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot,
-            rope_type, n_ctx_orig, freq_base, freq_scale,
-            ext_factor, attn_factor, beta_fast, beta_slow);
-
-    Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_rot,
-            rope_type, n_ctx_orig, freq_base, freq_scale,
-            ext_factor, attn_factor, beta_fast, beta_slow);
+    Qcur = build_rope(Qcur, inp_pos, il);
+    Kcur = build_rope(Kcur, inp_pos, il);
 
     cb(Qcur, "mtp_Qcur", il);
     cb(Kcur, "mtp_Kcur", il);
@@ -280,16 +275,12 @@ llama_model_glm4_moe::graph_mtp::graph_mtp(const llama_model & model, const llm_
     cb(cur, "result_output", -1);
 
     res->t_logits = cur;
-    ggml_build_forward_expand(gf, cur);
 }
 
-llama_model_glm4_moe::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_glm4_moe::graph::graph(const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
-
-    int sections[4];
-    std::copy(std::begin(hparams.rope_sections), std::begin(hparams.rope_sections) + 4, sections);
 
     ggml_tensor * cur;
     ggml_tensor * inpL;
@@ -332,24 +323,9 @@ llama_model_glm4_moe::graph::graph(const llama_model & model, const llm_graph_pa
                 cb(Kcur, "Kcur_normed", il);
             }
 
-            if (use_mrope) {
-                Qcur = ggml_rope_multi(ctx0, Qcur, inp_pos, nullptr,
-                            n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale,
-                            ext_factor, attn_factor, beta_fast, beta_slow);
-
-                Kcur = ggml_rope_multi(ctx0, Kcur, inp_pos, nullptr,
-                            n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale,
-                            ext_factor, attn_factor, beta_fast, beta_slow);
-            } else {
-                // Normal RoPE
-                Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot,
-                                    rope_type, n_ctx_orig, freq_base, freq_scale,
-                                    ext_factor, attn_factor, beta_fast, beta_slow);
-
-                Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_rot,
-                                    rope_type, n_ctx_orig, freq_base, freq_scale,
-                                    ext_factor, attn_factor, beta_fast, beta_slow);
-            }
+            // Normal RoPE
+            Qcur = build_rope(Qcur, inp_pos, il);
+            Kcur = build_rope(Kcur, inp_pos, il);
 
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);
@@ -434,6 +410,4 @@ llama_model_glm4_moe::graph::graph(const llama_model & model, const llm_graph_pa
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }

@@ -95,10 +95,20 @@ static void test(void) {
         common_params base;
         base.n_parallel = 4;
         base.n_outputs_max_per_seq = 8;
+        base.n_ubatch = 512;
 
-        const auto draft = common_base_params_to_speculative(base);
-        assert(draft.n_outputs_max == 4);
-        assert(draft.n_outputs_max_per_seq == 1);
+        {
+            const auto draft = common_base_params_to_speculative(base);
+            assert(draft.n_outputs_max == 4);
+            assert(draft.n_outputs_max_per_seq == 1);
+            assert(draft.n_ubatch == 512); // inherits the target by default
+        }
+
+        base.speculative.draft.n_ubatch = 8;
+        {
+            const auto draft = common_base_params_to_speculative(base);
+            assert(draft.n_ubatch == 8);
+        }
     }
 
     printf("test-arg-parser: make sure there is no duplicated arguments in any examples\n\n");

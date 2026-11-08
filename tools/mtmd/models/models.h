@@ -2,6 +2,7 @@
 
 #include "../clip-graph.h"
 
+#include <functional>
 #include <map>
 #include <string>
 #include <utility>
@@ -29,6 +30,22 @@ struct clip_graph_gemma4uv : clip_graph {
     ggml_cgraph * build() override;
 };
 
+struct clip_graph_nemotron_transcribe : clip_graph {
+    const clip_enc_state * state; // nullptr during warmup
+    clip_graph_nemotron_transcribe(clip_ctx * ctx, const clip_image_f32 & img, const clip_enc_state * state)
+        : clip_graph(ctx, img), state(state) {}
+    ggml_cgraph * build() override;
+    ggml_tensor * build_spk_encoder(ggml_tensor * cur, ggml_tensor * pos);
+
+    // one recording: encodes its windows in turn, carrying the speaker state between them
+    static bool encode_windows(clip_ctx * ctx, const clip_model & model, clip_encode_params * params);
+
+    // NeMo ParallelExpertEncoder online defaults, in output frames: 40 s windows with 4 s of context on each side
+    static constexpr int window_core  = 500;
+    static constexpr int window_left  = 50;
+    static constexpr int window_right = 50;
+};
+
 struct clip_graph_pixtral : clip_graph {
     clip_graph_pixtral(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
@@ -42,11 +59,25 @@ struct clip_graph_deepseek4v : clip_graph {
 struct clip_graph_qwen2vl : clip_graph {
     clip_graph_qwen2vl(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
-    ggml_tensor * build_inp_with_temporal_merge();
 };
 
 struct clip_graph_qwen3vl : clip_graph_qwen2vl {
     clip_graph_qwen3vl(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph_qwen2vl(ctx, img) {}
+    ggml_cgraph * build() override;
+};
+
+struct clip_graph_magevl : clip_graph {
+    clip_graph_magevl(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+};
+
+struct clip_graph_sensenova_u1 : clip_graph {
+    clip_graph_sensenova_u1(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+};
+
+struct clip_graph_lfm3vl : clip_graph {
+    clip_graph_lfm3vl(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
@@ -109,6 +140,12 @@ struct clip_graph_nemotron_v2_vl : clip_graph {
     ggml_cgraph * build() override;
 };
 
+struct clip_graph_nemotron_omni : clip_graph {
+    clip_graph_nemotron_omni(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+    ggml_tensor * build_inp_with_temporal_merge();
+};
+
 struct clip_graph_llama4 : clip_graph {
     clip_graph_llama4(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
@@ -149,6 +186,13 @@ struct clip_graph_whisper_enc : clip_graph {
     ggml_cgraph * build() override;
 };
 
+// causal whisper-like encoder with a sliding window KV cache (voxtral realtime)
+struct clip_graph_voxtral_rt : clip_graph {
+    clip_enc_state * state; // nullptr during warmup, the cache is then a graph input
+    clip_graph_voxtral_rt(clip_ctx * ctx, const clip_image_f32 & img, clip_enc_state * state) : clip_graph(ctx, img), state(state) {}
+    ggml_cgraph * build() override;
+};
+
 struct clip_graph_deepseekocr : clip_graph {
     clip_graph_deepseekocr(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
@@ -167,8 +211,65 @@ struct clip_graph_conformer : clip_graph {
     ggml_cgraph * build() override;
 };
 
+// builders shared by the chatterbox gen and spkenc graphs, defined in chatterbox-gen.cpp
+struct clip_graph_chatterbox_base : clip_graph {
+    using clip_graph::clip_graph;
+
+  protected:
+    ggml_tensor * cbx_linear(ggml_tensor * w, ggml_tensor * b, ggml_tensor * x) const;
+    ggml_tensor * cbx_conv1d(ggml_tensor * k, ggml_tensor * b, ggml_tensor * x,
+                             int stride, int pad_l, int pad_r) const;
+    ggml_tensor * cbx_conv1d_dil(ggml_tensor * k, ggml_tensor * b, ggml_tensor * x,
+                                 int pad, int dil) const;
+};
+
+struct clip_graph_chatterbox_spkenc : clip_graph_chatterbox_base {
+    clip_graph_chatterbox_spkenc(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph_chatterbox_base(ctx, img) {}
+    ggml_cgraph * build() override;
+
+  private:
+    ggml_tensor * bn1d(const clip_chatterbox::bn & n, ggml_tensor * x);
+    ggml_tensor * bn2d_relu(const clip_chatterbox::bn & n, ggml_tensor * x);
+    ggml_tensor * res2d(const clip_chatterbox::spk_res2d & r, ggml_tensor * x, int stride);
+    ggml_tensor * cam_layer(const clip_chatterbox::spk_cam_layer & l, ggml_tensor * x, int dil, ggml_tensor * segfix);
+};
+
+struct clip_graph_chatterbox : clip_graph_chatterbox_base {
+    clip_gen_process_type gen_process = CLIP_GEN_PROCESS_GEN_CODE;
+    int n_tokens = 0;
+    int n_prompt_mel  = 0;
+    int vocode_n_mel  = 0;
+    int vocode_n_stft = 0;
+    clip_graph_chatterbox(clip_ctx * ctx, const clip_image_f32 & img, clip_gen_process_type gen_process, int n_tokens,
+                          int n_prompt_mel, int vocode_n_mel, int vocode_n_stft)
+        : clip_graph_chatterbox_base(ctx, img), gen_process(gen_process), n_tokens(n_tokens), n_prompt_mel(n_prompt_mel),
+          vocode_n_mel(vocode_n_mel), vocode_n_stft(vocode_n_stft) {}
+    ggml_cgraph * build() override;
+
+  private:
+    ggml_tensor * enc_layer(const clip_chatterbox::enc_layer & l, ggml_tensor * x, ggml_tensor * pos, int T);
+    ggml_tensor * causal_block(const clip_chatterbox::causal_block & b, ggml_tensor * x);
+    ggml_tensor * resnet(const clip_chatterbox::resnet & r, ggml_tensor * x, ggml_tensor * temb);
+    ggml_tensor * tfm_block(const clip_chatterbox::tfm_block & b, ggml_tensor * x);
+    ggml_tensor * estimator(ggml_tensor * x_noise, ggml_tensor * mu, ggml_tensor * spks,
+                            ggml_tensor * cond, ggml_tensor * temb, int T);
+    ggml_tensor * hift_resblock(const clip_chatterbox::hift_res & r, ggml_tensor * x);
+    ggml_cgraph * build_s3tok(int T);
+    ggml_cgraph * build_vocoder(int n_mel, int n_stft);
+};
+
+struct clip_graph_lfm3a : clip_graph {
+    clip_graph_lfm3a(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+};
+
 struct clip_graph_granite_speech : clip_graph {
     clip_graph_granite_speech(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+};
+
+struct clip_graph_muse_spark_audio : clip_graph {
+    clip_graph_muse_spark_audio(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
@@ -328,6 +429,9 @@ struct clip_graph_qwen3tts_gen : clip_graph {
         ggml_tensor * convnext_block(ggml_tensor * x, const clip_code2wav::upsample_block & blk, const std::string & state_prefix) const;
         ggml_tensor * dac_res_unit(ggml_tensor * x, const clip_code2wav::dac_res & res, int dilation, const std::string & state_name) const;
 
+        // drama3: erf GELU in ConvNeXt, not the tanh approximation
+        bool gelu_erf = false;
+
         // inp_codes [1, n_codes] I32 -> this frame's audio samples [n_samples] F32, clamped to [-1, 1]
         ggml_tensor * decode(ggml_tensor * inp_codes) const;
     };
@@ -391,11 +495,84 @@ struct c2w_state_slot {
     std::string name;
     int64_t     ne0;
     int64_t     ne1;
+    bool        in_place = false; // graph writes the slot directly, no state_in/state_out copy
 };
 std::vector<c2w_state_slot> list_c2w_state_slots(const clip_hparams & hparams, const clip_model & model);
 
+// drama3: tower KV slots, then list_c2w_state_slots()
+std::vector<c2w_state_slot> list_drama3_state_slots(const clip_hparams & hparams, const clip_model & model);
+
 // same, for the streaming mimi decoder (pocket-tts GEN_WAV)
 std::vector<c2w_state_slot> list_pockettts_state_slots(const clip_hparams & hparams, const clip_model & model);
+
+//
+// drama3 generation:
+// GEN_CODE = one codebook tower row, each layer attends over the whole sequence (KV in gen state)
+// GEN_WAV  = Fish DAC decoder, frames -> PCM
+//
+struct clip_graph_drama3_gen : clip_graph {
+    clip_graph_drama3_gen(clip_ctx * ctx, const clip_image_f32 & img, clip_gen_process_type gen_process, clip_gen_state * gen_state,
+                          int n_frames, int top_k, float top_p, float temp)
+        : clip_graph(ctx, img), gen_process(gen_process), gen_state(gen_state), n_frames(n_frames), top_k(top_k), top_p(top_p), temp(temp) {}
+    ggml_cgraph * build() override;
+
+    // tower KV rows, shared by the prompt and the generated frames
+    static constexpr int n_pos_max = 4096;
+
+    clip_gen_process_type gen_process;
+    clip_gen_state * gen_state; // nullptr on buffer reserve
+    int   n_frames;             // GEN_WAV only
+    int   top_k;
+    float top_p;
+    float temp;
+
+    ggml_cgraph * build_tower();
+    ggml_cgraph * build_codec();
+    ggml_tensor * tower_layer(ggml_tensor * x, int il, ggml_tensor * code, ggml_tensor * mask, ggml_tensor * extra,
+                              ggml_tensor * inp_pos, ggml_tensor * k_slot, ggml_tensor * v_slot, int pos);
+};
+
+struct clip_graph_soprano : clip_graph {
+    clip_graph_soprano(clip_ctx * ctx, const clip_image_f32 & img, int n_frames) : clip_graph(ctx, img), n_frames(n_frames) {}
+    ggml_cgraph * build() override;
+    static void decode_spectrum(const clip_model & model, const std::vector<float> & spectrum, std::vector<float> & pcm);
+    // SopranoDecoder default
+    static constexpr int upscale = 4;
+    int n_frames;
+};
+
+//
+// LFM3-Audio generation:
+// GEN_CODE = one MaskGIT pass of the depthformer, or only the feedback embedding once all codes are known
+// GEN_WAV  = liquid-codec decoder, a window of frames -> polar STFT frames
+//
+struct clip_graph_lfm3a_gen : clip_graph {
+    clip_graph_lfm3a_gen(clip_ctx * ctx, const clip_image_f32 & img, clip_gen_process_type gen_process, bool all_known, int n_frames)
+        : clip_graph(ctx, img), gen_process(gen_process), all_known(all_known), n_frames(n_frames) {}
+    ggml_cgraph * build() override;
+
+    clip_gen_process_type gen_process;
+    bool all_known; // GEN_CODE only
+    int  n_frames;  // GEN_WAV only
+
+    ggml_tensor * build_gen_code();
+    ggml_tensor * build_gen_wav();
+
+    ggml_tensor * build_lfm_layer(ggml_tensor * inpL, const clip_layer & layer, float eps, int il,
+                                  const std::function<ggml_tensor *(ggml_tensor *)> & op);
+    ggml_tensor * build_lfm_attn(ggml_tensor * cur, const clip_layer & layer, int n_head, int n_head_kv,
+                                 float eps, float rope_theta, int il, ggml_tensor * inp_pos,
+                                 ggml_tensor * kq_mask, ggml_tensor * k_cache, ggml_tensor * v_cache,
+                                 ggml_tensor ** k_all, ggml_tensor ** v_all);
+    ggml_tensor * build_lfm_conv(ggml_tensor * cur, const clip_layer & layer, int il,
+                                 ggml_tensor * conv_state, ggml_tensor ** conv_state_out);
+};
+
+// state slots of the streaming codec decoder (lfm3a_gen GEN_WAV)
+std::vector<c2w_state_slot> list_lfm3a_gen_state_slots(const clip_hparams & hparams, const clip_model & model);
+
+// state slots of the streaming LFM3-Audio encoder (lfm3a)
+std::vector<c2w_state_slot> list_lfm3a_state_slots(const clip_hparams & hparams, const clip_model & model);
 
 struct clip_graph_kimik25 : clip_graph {
     clip_graph_kimik25(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}

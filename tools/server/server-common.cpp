@@ -9,13 +9,16 @@
 
 #include "server-common.h"
 
+#include <filesystem>
 #include <random>
 #include <sstream>
 #include <fstream>
 #include <limits>
 #include <cstring>
 #include <type_traits>
+#include <atomic>
 #include <chrono>
+#include <iostream>
 #include <thread>
 
 #ifdef _WIN32
@@ -32,6 +35,60 @@
 #include <poll.h>
 #include <unistd.h>
 #endif
+
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#   define NOMINMAX
+#endif
+#include <windows.h>
+#elif defined(__APPLE__) && defined(__MACH__)
+#include <mach-o/dyld.h>
+#include <limits.h>
+#else
+#include <unistd.h>
+#endif
+
+std::filesystem::path get_server_exec_path() {
+#if defined(_WIN32)
+    wchar_t buf[32768] = { 0 };  // Large buffer to handle long paths
+    DWORD len = GetModuleFileNameW(nullptr, buf, _countof(buf));
+    if (len == 0 || len >= _countof(buf)) {
+        throw std::runtime_error("GetModuleFileNameW failed or path too long");
+    }
+    return std::filesystem::path(buf);
+#elif defined(__APPLE__) && defined(__MACH__)
+    char small_path[PATH_MAX];
+    uint32_t size = sizeof(small_path);
+
+    if (_NSGetExecutablePath(small_path, &size) == 0) {
+        // resolve any symlinks to get absolute path
+        try {
+            return std::filesystem::canonical(std::filesystem::path(small_path));
+        } catch (...) {
+            return std::filesystem::path(small_path);
+        }
+    } else {
+        // buffer was too small, allocate required size and call again
+        std::vector<char> buf(size);
+        if (_NSGetExecutablePath(buf.data(), &size) == 0) {
+            try {
+                return std::filesystem::canonical(std::filesystem::path(buf.data()));
+            } catch (...) {
+                return std::filesystem::path(buf.data());
+            }
+        }
+        throw std::runtime_error("_NSGetExecutablePath failed after buffer resize");
+    }
+#else
+    char path[FILENAME_MAX];
+    ssize_t count = readlink("/proc/self/exe", path, FILENAME_MAX);
+    if (count <= 0) {
+        throw std::runtime_error("failed to resolve /proc/self/exe");
+    }
+    return std::filesystem::path(std::string(path, count));
+#endif
+}
 
 json format_error_response(const std::string & message, const enum error_type type) {
     std::string type_str;
@@ -147,7 +204,8 @@ const char * get_media_marker() {
 // model output modalities
 //
 
-std::vector<std::string> server_model_output_modalities(common_decision_type decision_type) {
+std::vector<std::string> server_model_output_modalities(common_decision_type decision_type, bool has_cap_chat, bool has_cap_tts) {
+    std::vector<std::string> out;
     switch (decision_type) {
         case COMMON_DECISION_TYPE_OPENJEV:
         case COMMON_DECISION_TYPE_LEV:
@@ -156,13 +214,35 @@ std::vector<std::string> server_model_output_modalities(common_decision_type dec
         case COMMON_DECISION_TYPE_LAYA:
         case COMMON_DECISION_TYPE_CLEF:
         case COMMON_DECISION_TYPE_PPLX_DECIDER:
+        case COMMON_DECISION_TYPE_VLLM_DECISION2:
+        case COMMON_DECISION_TYPE_VLLM_D3:
         case COMMON_DECISION_TYPE_LFM2_D1:
         case COMMON_DECISION_TYPE_LFM2_D1_OMNI:
-            return {"decisions"};
+        case COMMON_DECISION_TYPE_H2O_LIGHTNING:
+        case COMMON_DECISION_TYPE_MINICPM_OCR_JEV:
+        case COMMON_DECISION_TYPE_LFM3_D1:
+        case COMMON_DECISION_TYPE_LFM3_D1_OMNI:
+            out = {"decisions"};
+            break;
+        case COMMON_DECISION_TYPE_GRANITE_SWITCH:
+            out = {"text", "decisions"};
+            break;
         default:
-            // fallback when there is no decision type or the metadata is bad
-            return {"text"};
+            // a tts-only model cannot generate text
+            if (has_cap_chat || !has_cap_tts) {
+                // fallback when there is no decision type or the metadata is bad
+                out = {"text"};
+            }
+            break;
     }
+    if (has_cap_tts) {
+        out.push_back("audio");
+    }
+    return out;
+}
+
+std::vector<std::string> server_model_output_modalities(const llama_model * model, bool has_cap_chat, bool has_cap_tts) {
+    return server_model_output_modalities(common_get_decision_type(model), has_cap_chat, has_cap_tts);
 }
 
 json server_model_architecture_json(
@@ -1190,7 +1270,6 @@ void handle_media(
         out_files.push_back(decoded_data);
     }
 }
-
 // load media files from an OAI content array, then replace each media part with a media marker text part
 static void oaicompat_content_load_media(json & content, const server_chat_params & opt, std::vector<raw_buffer> & out_files) {
     for (auto & p : content) {
@@ -1239,7 +1318,7 @@ static void oaicompat_content_load_media(json & content, const server_chat_param
             p.erase("input_video");
             p.erase("video_url");
 
-        } else if (type != "text") {
+        } else if (type != "text" && type != "tool_reference") {
             throw std::invalid_argument("unsupported content[].type");
         }
     }
@@ -1261,14 +1340,17 @@ server_tokens tokenize_oai_content_array(const llama_vocab * vocab, mtmd_context
     if (files.empty()) {
         return server_tokens(common_tokenize(vocab, prompt, add_special, parse_special), false);
     }
+
     return process_mtmd_prompt(mctx, prompt, files, init_opt);
 }
 
 // used by /chat/completions endpoint
 json oaicompat_chat_params_parse(
+    const llama_vocab * vocab,
     json & body, /* openai api json semantics */
     const server_chat_params & opt,
-    std::vector<raw_buffer> & out_files)
+    std::vector<raw_buffer> & out_files,
+    common_chat_session & out_session)
 {
     json llama_params;
 
@@ -1362,7 +1444,7 @@ json oaicompat_chat_params_parse(
     inputs.json_schema            = json_schema.is_null() ? "" : json_schema.dump();
     inputs.grammar                = grammar;
     inputs.use_jinja              = opt.use_jinja;
-    inputs.parallel_tool_calls    = json_value(body, "parallel_tool_calls", caps["supports_parallel_tool_calls"]);
+    inputs.parallel_tool_calls    = json_value(body, "parallel_tool_calls", caps.at("supports_parallel_tool_calls").get<bool>());
     inputs.add_generation_prompt  = json_value(body, "add_generation_prompt", true);
     inputs.continue_final_message = body.contains("continue_final_message") ?
         common_chat_continuation_parse(body.at("continue_final_message")) :
@@ -1393,7 +1475,6 @@ json oaicompat_chat_params_parse(
         if (body.contains("grammar")) {
             throw std::invalid_argument("Cannot use custom grammar constraints with tools.");
         }
-        llama_params["parse_tool_calls"] = true;
     }
 
     // merge the template args provided from command line with the args provided in the user request
@@ -1427,31 +1508,11 @@ json oaicompat_chat_params_parse(
     inputs.force_pure_content = opt.force_pure_content;
 
     // Apply chat template to the list of messages
-    auto chat_params = common_chat_templates_apply(opt.tmpls.get(), inputs);
+    common_chat_session_params session_params;
+    session_params.echo = json_value(body, "echo", false);
+    out_session = common_chat_session(opt.tmpls.get(), vocab, inputs, session_params);
 
-    llama_params["chat_format"] = static_cast<int>(chat_params.format);
-    llama_params["prompt"]      = chat_params.prompt;
-    if (!chat_params.grammar.empty()) {
-        llama_params["grammar"]      = chat_params.grammar;
-        llama_params["grammar_type"] = std::string("tool_calls");
-    }
-    llama_params["grammar_lazy"] = chat_params.grammar_lazy;
-    auto grammar_triggers        = json::array();
-    for (const auto & trigger : chat_params.grammar_triggers) {
-        server_grammar_trigger ct(trigger);
-        grammar_triggers.push_back(ct.to_json());
-    }
-    llama_params["grammar_triggers"]  = grammar_triggers;
-    llama_params["preserved_tokens"]  = chat_params.preserved_tokens;
-    llama_params["generation_prompt"] = chat_params.generation_prompt;
-    for (const auto & stop : chat_params.additional_stops) {
-        llama_params["stop"].push_back(stop);
-    }
-    if (!chat_params.parser.empty()) {
-        llama_params["chat_parser"] = chat_params.parser;
-    }
-
-    llama_params["message_delimiters"] = chat_params.message_delimiters.to_json();
+    llama_params["prompt"] = out_session.prompt().str();
 
     // Reasoning budget: pass parameters through to sampling layer
     {
@@ -1461,10 +1522,10 @@ json oaicompat_chat_params_parse(
             reasoning_budget = opt.reasoning_budget;
         }
 
-        if (!chat_params.thinking_end_tags.empty()) {
+        if (!out_session.thinking_end_tags().empty()) {
             llama_params["reasoning_budget_tokens"] = reasoning_budget;
-            llama_params["reasoning_budget_start_tag"] = chat_params.thinking_start_tag;
-            llama_params["reasoning_budget_end_tags"] = chat_params.thinking_end_tags;
+            llama_params["reasoning_budget_start_tag"] = out_session.thinking_start_tag();
+            llama_params["reasoning_budget_end_tags"] = out_session.thinking_end_tags();
             llama_params["reasoning_budget_message"] = json_value(body, "reasoning_budget_message", opt.reasoning_budget_message);
             llama_params["reasoning_control"] = json_value(body, "reasoning_control", false);
         }
@@ -1489,6 +1550,15 @@ json oaicompat_chat_params_parse(
         if (!llama_params.contains(item.key()) || item.key() == "n_predict") {
             llama_params[item.key()] = item.value();
         }
+    }
+
+    // the session owns these, the server applies them with server_task::apply_chat_session()
+    for (const char * key : { "grammar_lazy", "grammar_triggers", "preserved_tokens" }) {
+        llama_params.erase(key);
+    }
+    if (!out_session.grammar().empty()) {
+        llama_params.erase("grammar");
+        llama_params.erase("json_schema");
     }
 
     return llama_params;
@@ -1880,24 +1950,73 @@ llama_tokens format_prompt_infill(
     return embd_inp;
 }
 
+std::string format_rerank_template(
+        const std::string & tmpl,
+        const std::string & query,
+        const std::string & doc) {
+    std::string prompt;
+    prompt.reserve(tmpl.size());
+    for (size_t pos = 0; pos < tmpl.size();) {
+        if (tmpl.compare(pos, 7, "{query}") == 0) {
+            prompt += query;
+            pos += 7;
+        } else if (tmpl.compare(pos, 10, "{document}") == 0) {
+            prompt += doc;
+            pos += 10;
+        } else {
+            prompt += tmpl[pos++];
+        }
+    }
+    return prompt;
+}
+
 server_tokens format_prompt_rerank(
         const struct llama_model * model,
         const struct llama_vocab * vocab,
         mtmd_context * mctx,
         const std::string & query,
         const std::string & doc,
+        const std::vector<raw_buffer> & query_files,
+        const std::vector<raw_buffer> & doc_files,
         const mtmd_helper_init_opt & init_opt) {
     server_tokens result = {};
+
+    // media must be spliced through the mtmd pipeline
+    if ((!query_files.empty() || !doc_files.empty()) && mctx == nullptr) {
+        throw std::invalid_argument("multimodal rerank input requires --mmproj");
+    }
 
     const char * rerank_prompt = llama_model_chat_template(model, "rerank");
 
     if (rerank_prompt != nullptr) {
-        std::string prompt = rerank_prompt;
-        string_replace_all(prompt, "{query}"   , query);
-        string_replace_all(prompt, "{document}", doc  );
-        server_tokens tokens = tokenize_input_subprompt(vocab, mctx, prompt, false, true, init_opt);
-        result.push_back(tokens);
+        // multimodal: append one media marker per image (arrays already flattened by caller)
+        std::string q = query;
+        for (size_t i = 0; i < query_files.size(); i++) {
+            q += get_media_marker();
+        }
+        std::string d = doc;
+        for (size_t i = 0; i < doc_files.size(); i++) {
+            d += get_media_marker();
+        }
+
+        std::string prompt = format_rerank_template(rerank_prompt, q, d);
+
+        if (query_files.empty() && doc_files.empty()) {
+            server_tokens tokens = tokenize_input_subprompt(vocab, mctx, prompt, false, true, init_opt);
+            result.push_back(tokens);
+        } else {
+            // process_mtmd_prompt returns a complete mtmd server_tokens; return it directly
+            // (push_back into a non-mtmd result would hit the NULL placeholder tokens)
+            std::vector<raw_buffer> files;
+            files.insert(files.end(), query_files.begin(), query_files.end());
+            files.insert(files.end(), doc_files.begin(),   doc_files.end());
+            return process_mtmd_prompt(mctx, prompt, files, init_opt);
+        }
     } else {
+        if (!query_files.empty() || !doc_files.empty()) {
+            throw std::invalid_argument("multimodal rerank input requires a model with a rerank chat template");
+        }
+
         // Get EOS token - use SEP token as fallback if EOS is not available
         server_tokens query_tokens = tokenize_input_subprompt(vocab, mctx, query, false, false, init_opt);
         server_tokens doc_tokens   = tokenize_input_subprompt(vocab, mctx, doc,   false, false, init_opt);
@@ -2095,4 +2214,65 @@ void server_subproc::waiter::wait(const std::vector<server_subproc *> & procs, s
         }
     }
 #endif
+}
+
+//
+// server_role
+//
+
+server_role::server_role() {
+    if (is_managed_by_router()) {
+        cmd_out = server_reserve_stdout();
+    }
+}
+
+server_role::~server_role() {
+    if (cmd_out) {
+        fclose(cmd_out);
+    }
+}
+
+bool server_role::is_managed_by_router() {
+    return std::getenv(SERVER_ENV_ROUTER_PORT) != nullptr;
+}
+
+server_role_type server_role::get_role() {
+    const char * role = std::getenv(SERVER_ENV_CHILD_ROLE);
+    return server_role_type_from_str(role ? role : "");
+}
+
+std::thread server_role::setup(const std::function<void(int)> & shutdown_handler) {
+    // setup thread for monitoring stdin
+    return std::thread([shutdown_handler]() {
+        // wait for EOF on stdin
+        SRV_INF("%s", "child server monitoring thread started, waiting for EOF on stdin...\n");
+        bool eof = false;
+        while (true) {
+            std::string line;
+            if (!std::getline(std::cin, line)) {
+                // EOF detected, that means the router server is unexpectedly exit or killed
+                eof = true;
+                break;
+            }
+            if (line.find(CMD_ROUTER_TO_CHILD_EXIT) != std::string::npos) {
+                SRV_INF("%s", "exit command received, exiting...\n");
+                shutdown_handler(0);
+                break;
+            }
+        }
+        if (eof) {
+            SRV_INF("%s", "EOF on stdin detected, forcing shutdown...\n");
+            exit(1);
+        }
+    });
+}
+
+void server_role::notify_to_router(const std::string & state, const json & payload) {
+    json data = {
+        {"state", state},
+        {"payload", payload},
+    };
+    std::lock_guard<std::mutex> lk(mtx_stdout);
+    fprintf(cmd_out, "%s%s\n", CMD_CHILD_TO_ROUTER_STATE, safe_json_to_str(data).c_str());
+    fflush(cmd_out);
 }

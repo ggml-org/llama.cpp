@@ -638,6 +638,9 @@ static const ggml_backend_buffer_i ggml_backend_openvino_buffer_interface = {
     /* .cpy_tensor      = */ ggml_backend_openvino_buffer_cpy_tensor,
     /* .clear           = */ ggml_backend_openvino_buffer_clear,
     /* .reset           = */ NULL,
+    /* .set_tensor_n    = */ NULL,
+    /* .get_tensor_n    = */ NULL,
+    /* .cpy_tensor_n    = */ NULL,
 };
 
 // Buffer type interface functions
@@ -1446,6 +1449,10 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         if (op->type == GGML_TYPE_BF16) {
             return {false, "SCALE with BF16 type is not supported"};
         }
+        // The result is copied back densely, so an in-place SCALE on a strided view would be written wrongly.
+        if (op->view_src != nullptr && !ggml_is_contiguous(op)) {
+            return {false, "SCALE in place on a non-contiguous view is not supported"};
+        }
         break;
     }
     case GGML_OP_ADD_ID: {
@@ -1511,6 +1518,11 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         // affecting non-gemma3n models such as Llama-3.2.
         if (fabsf(scale - 1.0f) < 1e-6f && is_gemma3n_flash_attn_pattern(op)) {
             return {false, "FLASH_ATTN_EXT gemma3n pattern on GPU is not supported"};
+        }
+
+        // K/V row lists (ggml_flash_attn_ext_rows) are not supported
+        if (op->src[5] != nullptr) {
+            return {false, "FLASH_ATTN_EXT with K/V row lists is not supported"};
         }
 
         if (op->src[4] != nullptr) {
@@ -1624,6 +1636,9 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         break;
     }
     case GGML_OP_ROPE: {
+        if (!ggml_rope_get_truncate(op)) {
+            return {false, "ROPE without YaRN truncation is not supported"};
+        }
         if (op->view_src != nullptr && !ggml_is_contiguous(op->src[0])) {
             return {false, "ROPE on VIEW / non-contiguous input is not supported"};
         }

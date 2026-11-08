@@ -7,23 +7,98 @@
  * {@link ModelsStore.status}; tracks which conversations use which models.
  */
 
-import { FAVORITE_MODELS_LOCALSTORAGE_KEY } from '$lib/constants';
-import { ServerModelStatus } from '$lib/enums';
+import { browser } from '$app/environment';
+import {
+	FAVORITE_MODELS_LOCALSTORAGE_KEY,
+	HIDDEN_MODELS_LOCALSTORAGE_KEY,
+	MODEL_GROUP_OPEN_LOCALSTORAGE_KEY,
+	MODEL_REMOVE_BLOCKED_FALLBACK,
+	MODEL_REMOVE_BLOCKED_REASONS,
+	RECENT_MODEL_LIMIT,
+	RECENT_MODELS_LOCALSTORAGE_KEY
+} from '$lib/constants';
+import { ReasoningEffort, ServerModelSource, ServerModelStatus } from '$lib/enums';
+import { HuggingFaceService } from '$lib/services/huggingface.service';
 import { ModelsService } from '$lib/services/models.service';
 // direct imports between stores, not via the barrel, to avoid circular deps
 import { conversationsStore } from '$lib/stores/conversations/index.svelte';
 import { type ModelPropsHost, ModelPropsManager } from '$lib/stores/models/props.svelte';
 import { type ModelStatusHost, ModelStatusManager } from '$lib/stores/models/status.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
+import type { ApiModelDataEntry } from '$lib/types';
+import type { ParsedModelId } from '$lib/types/models';
 import { getConversationModel } from '$lib/utils/conversation-utils';
-import { SvelteSet } from 'svelte/reactivity';
+import { repoOf } from '$lib/utils/model-names';
+import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
+
+/** Group open states kept before the oldest ones fall off; the map only ever grows. */
+const MAX_GROUP_OPEN_ENTRIES = 200;
+/**
+ * Repos whose Hub details are prefetched on load. The Hub rate limits an
+ * unauthenticated client aggressively, so the warm slice stays far below the
+ * list window and the rest of the rows fetch as they scroll near the viewport.
+ */
+const HUB_WARM_LIMIT = 12;
+
+/** Models kept out of the selector. */
+function loadHiddenModels(): Set<string> {
+	if (!browser) return new SvelteSet<string>();
+
+	try {
+		const raw = localStorage.getItem(HIDDEN_MODELS_LOCALSTORAGE_KEY);
+
+		return raw ? new SvelteSet(JSON.parse(raw) as string[]) : new SvelteSet<string>();
+	} catch {
+		return new SvelteSet<string>();
+	}
+}
+
+/** Open state the user set for a section or family of the model lists. */
+function loadGroupOpenState(): SvelteMap<string, boolean> {
+	if (!browser) return new SvelteMap<string, boolean>();
+
+	try {
+		const raw = localStorage.getItem(MODEL_GROUP_OPEN_LOCALSTORAGE_KEY);
+		const parsed = raw ? (JSON.parse(raw) as unknown) : null;
+		const entries =
+			parsed && typeof parsed === 'object' ? Object.entries(parsed as Record<string, unknown>) : [];
+
+		return new SvelteMap(
+			entries.filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean')
+		);
+	} catch {
+		return new SvelteMap<string, boolean>();
+	}
+}
+
+/** Recently used backend-qualified ids, most recent first. */
+function loadRecentModels(): string[] {
+	if (!browser) return [];
+
+	try {
+		const raw = localStorage.getItem(RECENT_MODELS_LOCALSTORAGE_KEY);
+
+		if (!raw) return [];
+
+		const parsed = JSON.parse(raw) as unknown;
+
+		return Array.isArray(parsed)
+			? parsed.filter((id): id is string => typeof id === 'string').slice(0, RECENT_MODEL_LIMIT)
+			: [];
+	} catch {
+		return [];
+	}
+}
 
 class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	error = $state<string | null>(null);
 	favoriteModelIds = $state<Set<string>>(this.loadFavoritesFromStorage());
+	groupOpenState = $state<SvelteMap<string, boolean>>(loadGroupOpenState());
+	hiddenModelIds = $state<Set<string>>(loadHiddenModels());
 	loading = $state(false);
 	models = $state<ModelOption[]>([]);
+	recentModelIds = $state<string[]>(loadRecentModels());
 	routerModels = $state<ApiModelDataEntry[]>([]);
 	selectedModelId = $state<string | null>(null);
 	selectedModelName = $state<string | null>(null);
@@ -36,7 +111,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	/** Load/unload operations and the /models/sse status feed, composed here. */
 	private _status = new ModelStatusManager(this);
 
-	// Dedup concurrent fetch() callers — all awaiters share the same inflight promise.
+	// every caller awaits the same inflight promise
 	// Without this, ?model=<name> URL handler races an in-progress fetch and sees an empty list.
 	private inflightFetch: Promise<void> | null = null;
 
@@ -119,17 +194,36 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		this.selectedModelName = null;
 	}
 
+	/** Family keys folded away under one section, for a list that restores them. */
+	collapsedGroupsUnder(prefix: string): string[] {
+		const head = `${prefix}-`;
+
+		return [...this.groupOpenState]
+			.filter(([id, open]) => !open && id.startsWith(head))
+			.map(([id]) => id.slice(head.length));
+	}
+
 	/**
 	 * Auto-selects the first available model if none is selected.
 	 * Prioritizes:
 	 * 1. Model from active conversation's last assistant response (if loaded)
 	 * 2. Model from active conversation's last assistant response (if not loaded)
-	 * 3. First loaded model (not from active conversation)
-	 * 4. A favorite model
-	 * 5. First available model
+	 * 3. A model that is loading
+	 * 4. First loaded model (not from active conversation)
+	 * 5. A favorite model
+	 * 6. First available model
+	 *
+	 * A chat without a model of its own also trades an idle selection for a
+	 * model that is loading.
 	 */
 	async ensureFirstModelSelected(): Promise<void> {
-		if (this.selectedModelName) return;
+		if (this.selectedModelName) {
+			const loadingModel = this.getLoadingModelToPreselect();
+
+			if (loadingModel) await this.selectModelById(loadingModel.id);
+
+			return;
+		}
 
 		const availableModels = this.getVisibleModels();
 
@@ -152,6 +246,15 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			}
 		}
 
+		// a model that is loading is the one the user is waiting for
+		const loadingModel = availableModels.find((m) => this.isModelLoading(m.model));
+
+		if (loadingModel) {
+			await this.selectModelById(loadingModel.id);
+
+			return;
+		}
+
 		// Try a loaded model first
 		const loadedModel = availableModels.find((m) => this.isModelLoaded(m.model));
 
@@ -162,11 +265,14 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			return;
 		}
 
-		// Try loading a favorite model
+		// favorites are shared across backends, so a stored id may belong to another one
 		const favorite = this.favoriteModelIds.values().next()?.value;
+		const favoriteOption = favorite
+			? availableModels.find((m) => m.id === favorite || m.model === favorite)
+			: undefined;
 
-		if (favorite) {
-			await this.selectModelById(favorite);
+		if (favoriteOption) {
+			await this.selectModelById(favoriteOption.id);
 
 			return;
 		}
@@ -204,9 +310,13 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			const response = await ModelsService.list();
 
 			this.routerModels = response.data;
+			// a download an earlier run left unfinished is listed as incomplete, and
+			// is offered as paused until it is resumed
+			this._status.syncPausedDownloads();
 			// keep the selector options in sync: a downloaded / deleted model shows
 			// up here too, not only in the router model rows
 			this.models = this.buildModelOptions(response);
+			this.warmHubDetails();
 			await this.props.fetchModalitiesForLoadedModels();
 
 			const visible = this.getVisibleModels();
@@ -234,6 +344,20 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	}
 
 	/**
+	 * The loading model a chat without a model of its own should switch to: none
+	 * while the current selection is loaded or loading itself.
+	 */
+	getLoadingModelToPreselect(): ModelOption | null {
+		if (this.getModelFromLastAssistantResponse()) return null;
+
+		const selected = this.selectedModelName;
+
+		if (selected && (this.isModelLoaded(selected) || this.isModelLoading(selected))) return null;
+
+		return this.getVisibleModels().find((m) => this.isModelLoading(m.model)) ?? null;
+	}
+
+	/**
 	 * Gets the model name from the last assistant message in the active conversation.
 	 * Used by both the chat page and settings page to maintain model consistency.
 	 */
@@ -254,7 +378,17 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	getModelStatus(modelId: string): ServerModelStatus | null {
 		const model = this.routerModels.find((m) => m.id === modelId);
 
-		return model?.status.value ?? null;
+		return (model?.status?.value as ServerModelStatus) ?? null;
+	}
+
+	/**
+	 * Models the selector lists: not flagged out of the UI (ui === false) and not
+	 * hidden by the user, so an automatic pick never lands on one it doesn't show.
+	 */
+	getVisibleModels(): ModelOption[] {
+		return this.models.filter(
+			(option) => this.props.getModelProps(option.model)?.ui !== false && !this.isHidden(option.id)
+		);
 	}
 
 	hasModel(modelName: string): boolean {
@@ -265,19 +399,62 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		return this.favoriteModelIds.has(modelId);
 	}
 
-	isModelLoaded(modelId: string): boolean {
-		const model = this.routerModels.find((m) => m.id === modelId);
+	isGroupOpen(id: string, fallbackOpen: boolean): boolean {
+		return this.groupOpenState.get(id) ?? fallbackOpen;
+	}
 
+	isHidden(modelId: string): boolean {
+		return this.hiddenModelIds.has(modelId);
+	}
+
+	isModelLoaded(modelId: string): boolean {
+		const status = this.getModelStatus(modelId);
+
+		return status === ServerModelStatus.LOADED || status === ServerModelStatus.SLEEPING;
+	}
+
+	/** Loading on the server, or a load this client started that has not finished yet. */
+	isModelLoading(modelId: string): boolean {
+		// an unload raises the same in-progress flag, but the model stays loaded until it ends
 		return (
-			model?.status.value === ServerModelStatus.LOADED ||
-			model?.status.value === ServerModelStatus.SLEEPING
+			this.getModelStatus(modelId) === ServerModelStatus.LOADING ||
+			(this._status.isOperationInProgress(modelId) && !this.isModelLoaded(modelId))
 		);
 	}
 
-	async selectModelById(modelId: string): Promise<void> {
+	/** Loaded, or sleeping, and not mid-operation: what a row shows as running. */
+	isModelRunning(modelId: string): boolean {
+		return this.isModelLoaded(modelId) && !this._status.isOperationInProgress(modelId);
+	}
+
+	/**
+	 * Why the router would refuse to delete a model from disk, or null when it can.
+	 * Only a model from the HF cache is removable; a server that does not report
+	 * `can_remove` is let through and answers for itself.
+	 */
+	removeBlockedReason(modelId: string): string | null {
+		const model = this.routerModels.find((m) => m.id === modelId);
+
+		if (!model || model.can_remove !== false) return null;
+
+		if (model.source && model.source !== ServerModelSource.CACHE) {
+			return MODEL_REMOVE_BLOCKED_REASONS[model.source];
+		}
+
+		return MODEL_REMOVE_BLOCKED_FALLBACK;
+	}
+
+	/**
+	 * Select a model. `recordRecent` keeps automatic picks out of the recency list.
+	 */
+	async selectModelById(modelId: string, options?: { recordRecent?: boolean }): Promise<void> {
 		if (!modelId || this.updating) return;
 
-		if (this.selectedModelId === modelId) return;
+		if (this.selectedModelId === modelId) {
+			if (options?.recordRecent) this.recordRecentModel(modelId);
+
+			return;
+		}
 
 		const option = this.models.find((model) => model.id === modelId);
 
@@ -289,6 +466,15 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		try {
 			this.selectedModelId = option.id;
 			this.selectedModelName = option.model;
+
+			if (options?.recordRecent) this.recordRecentModel(modelId);
+
+			// reasoning levels belong to the model that answered: another model in the chat starts at Default
+			const conversationModel = getConversationModel(conversationsStore.activeMessages);
+
+			if (conversationModel && conversationModel !== option.model) {
+				void conversationsStore.preferences.setReasoningEffort(ReasoningEffort.DEFAULT);
+			}
 		} finally {
 			this.updating = false;
 		}
@@ -301,19 +487,31 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		const option = this.models.find((model) => model.model === modelName);
 
 		if (option) {
-			this.selectedModelId = option.id;
-			this.selectedModelName = option.model;
+			// the updating guard inside selectModelById cannot refuse this call: that
+			// call is the only one that raises the flag, and it clears it before it returns
+			void this.selectModelById(option.id);
 		}
 	}
 
 	/**
-	 * Auto-selects the model from the last assistant response if available and loaded.
+	 * Auto-selects the model from the last assistant response if available and loaded,
+	 * or a loading model when the conversation has no model yet.
 	 * Returns true if a model was selected, false otherwise.
 	 */
 	async selectModelFromLastAssistantResponse(): Promise<boolean> {
 		const lastModel = this.getModelFromLastAssistantResponse();
 
-		if (!lastModel || this.selectedModelName === lastModel) return false;
+		if (!lastModel) {
+			const loadingModel = this.getLoadingModelToPreselect();
+
+			if (!loadingModel) return false;
+
+			await this.selectModelById(loadingModel.id);
+
+			return true;
+		}
+
+		if (this.selectedModelName === lastModel) return false;
 
 		const matchingModel = this.models.find((option) => option.model === lastModel);
 
@@ -331,20 +529,16 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		}
 	}
 
-	toDisplayName(id: string): string {
-		const segments = id.split(/\\|\//);
-		const candidate = segments.pop();
-
-		return candidate && candidate.trim().length > 0 ? candidate : id;
-	}
-
-	toggleFavorite(modelId: string): void {
+	/** Add or remove several models at once, e.g. every quant of a family. */
+	setFavorites(modelIds: string[], favorite: boolean): void {
 		const next = new SvelteSet(this.favoriteModelIds);
 
-		if (next.has(modelId)) {
-			next.delete(modelId);
-		} else {
-			next.add(modelId);
+		for (const modelId of modelIds) {
+			if (favorite) {
+				next.add(modelId);
+			} else {
+				next.delete(modelId);
+			}
 		}
 
 		this.favoriteModelIds = next;
@@ -353,6 +547,91 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			localStorage.setItem(FAVORITE_MODELS_LOCALSTORAGE_KEY, JSON.stringify([...next]));
 		} catch {
 			toast.error('Failed to save favorite models to local storage');
+		}
+	}
+
+	/** Persist one family of a section, e.g. a folded `Qwen` under the local models. */
+	setGroupCollapsed(prefix: string, key: string, collapsed: boolean): void {
+		this.setGroupOpen(`${prefix}-${key}`, !collapsed);
+	}
+
+	setGroupOpen(id: string, open: boolean): void {
+		const next = new SvelteMap(this.groupOpenState);
+
+		// re-set moves the id to the end, so the oldest states fall off first
+		next.delete(id);
+		next.set(id, open);
+
+		while (next.size > MAX_GROUP_OPEN_ENTRIES) {
+			const oldest = next.keys().next();
+
+			if (oldest.done) break;
+
+			next.delete(oldest.value);
+		}
+
+		this.groupOpenState = next;
+
+		try {
+			localStorage.setItem(
+				MODEL_GROUP_OPEN_LOCALSTORAGE_KEY,
+				JSON.stringify(Object.fromEntries(next))
+			);
+		} catch {
+			toast.error('Failed to save the model list state to local storage');
+		}
+	}
+
+	toDisplayName(id: string): string {
+		const segments = id.split(/\\|\//);
+		const candidate = segments.pop();
+
+		return candidate && candidate.trim().length > 0 ? candidate : id;
+	}
+
+	toggleFavorite(modelId: string): void {
+		this.setFavorites([modelId], !this.favoriteModelIds.has(modelId));
+	}
+
+	/** Models hidden from the selector stay in the manager, flagged and unhideable. */
+	toggleHidden(modelId: string): void {
+		const next = new SvelteSet(this.hiddenModelIds);
+
+		if (next.has(modelId)) {
+			next.delete(modelId);
+		} else {
+			next.add(modelId);
+		}
+
+		this.hiddenModelIds = next;
+
+		try {
+			localStorage.setItem(HIDDEN_MODELS_LOCALSTORAGE_KEY, JSON.stringify([...next]));
+		} catch {
+			toast.error('Failed to save hidden models to local storage');
+		}
+	}
+
+	/**
+	 * Warm the Hub record of the local repos, so a list can read the context and size
+	 * the server reports only once a model is loaded.
+	 */
+	warmHubDetails(): void {
+		if (!HuggingFaceService.isEnabled()) return;
+
+		const repos: string[] = [];
+
+		for (const option of this.models) {
+			const repo = repoOf(option.model);
+
+			if (repo?.includes('/') && !repos.includes(repo)) repos.push(repo);
+		}
+
+		// the Hub rate limits aggressively and an unauthenticated burst of requests
+		// leaves every detail uncached for a retry on the next mount, so warm only the
+		// rows the lists show at rest and let the rest arrive near the viewport
+		for (const repo of repos.slice(0, HUB_WARM_LIMIT)) {
+			void HuggingFaceService.getDetails(repo).catch(() => {});
 		}
 	}
 
@@ -365,18 +644,25 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		const entries: {
 			details?: ApiModelsListResponse['models'][number];
 			item: ApiModelDataEntry;
+			parsed: ParsedModelId;
 		}[] = response.data.map((item: ApiModelDataEntry, index: number) => ({
 			details: response.models?.[index],
-			item
+			item,
+			parsed: ModelsService.parseModelId(item.id)
 		}));
 
 		return (
 			entries
-				// sidecar entries mark downloaded sidecar files, not loadable models
-				.filter(({ item }) => !ModelsService.isSidecarEntry(item.id))
-				// in-flight downloads are not usable models yet; the selector tracks
-				// them in its "Download in progress" section instead
-				.filter(({ item }) => item.status?.value !== ServerModelStatus.DOWNLOADING)
+				// a models dir can still name an entry after a projector file, which is
+				// no loadable model
+				.filter(({ parsed }) => !parsed.sidecar)
+				// in-flight and unfinished downloads are not usable models yet; the
+				// selector tracks them in its "Download in progress" section instead
+				.filter(
+					({ item }) =>
+						item.status?.value !== ServerModelStatus.DOWNLOADING &&
+						item.status?.value !== ServerModelStatus.INCOMPLETE
+				)
 				.map(({ details, item }) => {
 					const rawCapabilities = Array.isArray(details?.capabilities) ? details?.capabilities : [];
 					const displayNameSource =
@@ -388,8 +674,16 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 						capabilities: rawCapabilities.filter((value: unknown): value is string =>
 							Boolean(value)
 						),
+						// 0 is the server's way of leaving the trained context unknown; a
+						// model-mode listing reports it as meta.n_ctx_train instead
+						contextLength:
+							item.context_length ||
+							(typeof item.meta?.n_ctx_train === 'number' && item.meta.n_ctx_train > 0
+								? item.meta.n_ctx_train
+								: undefined),
 						description: details?.description,
 						details: details?.details,
+						draftSidecars: this._status.getDraftSidecars(modelId),
 						id: item.id,
 						meta: item.meta ?? null,
 						modalities: this.props.buildArchitectureModalities(item.architecture),
@@ -401,18 +695,11 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 				})
 		);
 	}
-
 	/** Fetch models in MODEL mode (single model, standard OpenAI-compatible). */
 	private async fetchModelModeInternal(): Promise<ModelOption[]> {
 		const response = await ModelsService.list();
 
 		return this.buildModelOptions(response);
-	}
-	/**
-	 * Filter to models visible in the UI (ui !== false).
-	 */
-	private getVisibleModels(): ModelOption[] {
-		return this.models.filter((option) => this.props.getModelProps(option.model)?.ui !== false);
 	}
 
 	private loadFavoritesFromStorage(): Set<string> {
@@ -424,6 +711,22 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			toast.error('Failed to load favorite models from local storage');
 
 			return new Set();
+		}
+	}
+
+	/** Move a model to the front of the recently used list. */
+	private recordRecentModel(qualifiedId: string): void {
+		this.recentModelIds = [
+			qualifiedId,
+			...this.recentModelIds.filter((id) => id !== qualifiedId)
+		].slice(0, RECENT_MODEL_LIMIT);
+
+		if (!browser) return;
+
+		try {
+			localStorage.setItem(RECENT_MODELS_LOCALSTORAGE_KEY, JSON.stringify(this.recentModelIds));
+		} catch {
+			console.warn('[ModelsStore] Failed to persist the recently used models');
 		}
 	}
 

@@ -46,17 +46,54 @@ env:
 
 jobs:
   cpu-x64-high-perf:
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: hf-jobs-cpu-upgrade:ubuntu26_04
+
+    # note: this runner has 8 CPUs, but std::thread::hardware_concurrency reports the cores of the
+    #   host (https://github.com/ggml-org/llama.cpp/pull/31439#issuecomment-6683386059)
+    env:
+      TEST_ARG_HARDWARE_CONCURRENCY: 8
+      TEST_ARG_PARALLEL_WORKERS: 4
 
     steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
 
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential cmake libssl-dev time unzip wget python3 python3-venv python3-dev
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
+        with:
+          restore: false
+          save: false
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        with:
+          key: self-hosted-cpu-x64-high-perf
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
+
       - name: Test
         id: ggml-ci
         run: |
-          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ~/results/llama.cpp/$RUNNER_NAME ~/mnt/llama.cpp
+
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: self-hosted-cpu-x64-high-perf
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true
 
   cpu-arm64-high-perf-graviton4:
     runs-on: ah-ubuntu_24_04-c8g_8x

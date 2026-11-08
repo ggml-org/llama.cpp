@@ -90,7 +90,7 @@ void llama_model_minimax_m3::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_minimax_m3::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
 class llm_graph_input_msa : public llm_graph_input_i {
@@ -207,7 +207,7 @@ ggml_tensor * llama_model_minimax_m3::graph::build_attn_msa_fa(
     return ggml_reshape_2d(ctx0, o, D*HQ, T);
 }
 
-llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_minimax_m3::graph::graph(const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
     const auto & mm = static_cast<const llama_model_minimax_m3 &>(model);
 
@@ -262,7 +262,7 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
     if (msa_enabled) {
         const auto * mctx_msa = static_cast<const llama_kv_cache_msa_context *>(mctx);
 
-        msa_kqm = inp_attn->get_kq_mask();
+        msa_kqm = inp_attn->self_attn_mask.raw;
         n_kv  = msa_kqm->ne[0];
         n_tps = msa_kqm->ne[1];        // tokens per stream
         ns    = msa_kqm->ne[3];        // streams in this ubatch
@@ -318,14 +318,8 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
             cb(Kcur, "Kcur_normed", il);
 
             // partial rotary: only the first n_rot dims are rotated
-            Qcur = ggml_rope_ext(
-                ctx0, Qcur, inp_pos, nullptr,
-                n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                ext_factor, attn_factor, beta_fast, beta_slow);
-            Kcur = ggml_rope_ext(
-                ctx0, Kcur, inp_pos, nullptr,
-                n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                ext_factor, attn_factor, beta_fast, beta_slow);
+            Qcur = build_rope(Qcur, inp_pos, il);
+            Kcur = build_rope(Kcur, inp_pos, il);
 
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);
@@ -347,10 +341,8 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
                 ik = ggml_reshape_3d(ctx0, ik, n_idx_dim, 1,  n_tokens);
                 iq = build_norm(iq, model.layers[il].index_q_norm, NULL, LLM_NORM_RMS, il);  // +1 baked
                 ik = build_norm(ik, model.layers[il].index_k_norm, NULL, LLM_NORM_RMS, il);
-                iq = ggml_rope_ext(ctx0, iq, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig,
-                                   freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
-                ik = ggml_rope_ext(ctx0, ik, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig,
-                                   freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+                iq = build_rope(iq, inp_pos, il);
+                ik = build_rope(ik, inp_pos, il);
 
                 const auto * mctx_msa_l = static_cast<const llama_kv_cache_msa_context *>(mctx);
                 const auto * mctx_cur = mctx_msa_l->get_base();
@@ -358,12 +350,12 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
                 ggml_build_forward_expand(gf, mctx_idx->cpy_k(ctx0, ik, inp_attn->get_k_idxs_idx(), il));
                 ggml_tensor * ik_kv = mctx_idx->get_k(ctx0, il);
 
-                if (inp_attn->self_k_rot) {
-                    Qcur = llama_mul_mat_hadamard(ctx0, Qcur, inp_attn->self_k_rot);
-                    Kcur = llama_mul_mat_hadamard(ctx0, Kcur, inp_attn->self_k_rot);
+                if (inp_attn->self_k_rot[il]) {
+                    Qcur = llama_mul_mat_hadamard(ctx0, Qcur, inp_attn->self_k_rot[il]);
+                    Kcur = llama_mul_mat_hadamard(ctx0, Kcur, inp_attn->self_k_rot[il]);
                 }
-                if (inp_attn->self_v_rot) {
-                    Vcur = llama_mul_mat_hadamard(ctx0, Vcur, inp_attn->self_v_rot);
+                if (inp_attn->self_v_rot[il]) {
+                    Vcur = llama_mul_mat_hadamard(ctx0, Vcur, inp_attn->self_v_rot[il]);
                 }
 
                 // Main branch: store K/V, take cache views
@@ -526,8 +518,8 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
                         cur = ggml_concat(ctx0, cur, outs[st], 1);
                     }
                 }
-                if (inp_attn->self_v_rot) {
-                    cur = llama_mul_mat_hadamard(ctx0, cur, inp_attn->self_v_rot);
+                if (inp_attn->self_v_rot[il]) {
+                    cur = llama_mul_mat_hadamard(ctx0, cur, inp_attn->self_v_rot[il]);
                 }
                 cb(cur, "kqv_out", il);
                 if (model.layers[il].wo) {
@@ -550,9 +542,9 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
         if ((uint32_t) il < hparams.n_layer_dense_lead) {
             // leading dense FFN (swigluoai)
             cur = build_ffn(cur,
-                    model.layers[il].ffn_up,   NULL, NULL,
-                    model.layers[il].ffn_gate, NULL, NULL,
-                    model.layers[il].ffn_down, NULL, NULL,
+                    model.layers[il].ffn_up,   NULL, model.layers[il].ffn_up_s,
+                    model.layers[il].ffn_gate, NULL, model.layers[il].ffn_gate_s,
+                    model.layers[il].ffn_down, NULL, model.layers[il].ffn_down_s,
                     NULL,
                     LLM_FFN_SWIGLU_OAI_MOE, LLM_FFN_PAR, il);
             cb(cur, "ffn_out", il);
@@ -568,14 +560,17 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
                     LLM_FFN_SWIGLU_OAI_MOE, hparams.expert_weights_norm,
                     hparams.expert_weights_scale,
                     (llama_expert_gating_func_type) hparams.expert_gating_func,
-                    il);
+                    il, nullptr, nullptr,
+                    model.layers[il].ffn_up_exps_s,
+                    model.layers[il].ffn_gate_exps_s,
+                    model.layers[il].ffn_down_exps_s);
             cb(moe_out, "ffn_moe_out", il);
 
             // shared expert (swigluoai)
             ggml_tensor * ffn_shexp = build_ffn(cur,
-                    model.layers[il].ffn_up_shexp,   NULL, NULL,
-                    model.layers[il].ffn_gate_shexp, NULL, NULL,
-                    model.layers[il].ffn_down_shexp, NULL, NULL,
+                    model.layers[il].ffn_up_shexp,   NULL, model.layers[il].ffn_up_shexp_s,
+                    model.layers[il].ffn_gate_shexp, NULL, model.layers[il].ffn_gate_shexp_s,
+                    model.layers[il].ffn_down_shexp, NULL, model.layers[il].ffn_down_shexp_s,
                     NULL,
                     LLM_FFN_SWIGLU_OAI_MOE, LLM_FFN_PAR, il);
             cb(ffn_shexp, "ffn_shexp", il);
@@ -603,6 +598,4 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
     cur = build_lora_mm(model.output, cur, model.output_s);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }
