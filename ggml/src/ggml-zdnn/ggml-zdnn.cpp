@@ -115,6 +115,10 @@ static bool ggml_zdnn_supports_op(const ggml_backend_zdnn_device_context * ctx_d
 
                 const int64_t max_batch = ctx_dev->max_size;
 
+                if (ggml_prec_get_src(op, 1) == GGML_PREC_BF16 || ggml_prec_get_src(op, 1) == GGML_PREC_F32) {
+                    return false;
+                }
+
                 if (!ggml_is_matrix(weights) || !ggml_is_matrix(inputs) ||
                     !ggml_is_contiguous(weights) || !ggml_is_contiguous(inputs) ||
                     weights->view_src != nullptr ||
