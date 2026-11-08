@@ -60,7 +60,7 @@ struct htp_copy_kernel_params {
     uint8_t  kernel_type;
     uint8_t  src0_type_size;
     uint8_t  dst_type_size;
-    uint8_t  n_threads;
+    uint8_t  n_hvx;
 
     uint32_t total_elems;
     uint32_t total_rows;
@@ -88,8 +88,8 @@ struct htp_copy_convert_vtcm_layout {
     uint32_t blk_rows;
     uint32_t src0_buf_size;
     uint32_t dst_buf_size;
-    uint32_t spad0_size_per_thread;
-    uint32_t spad1_size_per_thread;
+    uint32_t spad0_size_per_hvx;
+    uint32_t spad1_size_per_hvx;
 };
 
 static inline void htp_copy_convert_vtcm_layout_build(
@@ -98,7 +98,7 @@ static inline void htp_copy_convert_vtcm_layout_build(
     uint32_t src_type_size,
     uint32_t dst_type_size,
     uint32_t blk_rows,
-    uint32_t n_threads) {
+    uint32_t n_hvx) {
 
     const uint32_t src0_row_stride = hex_round_up(ne00 * src_type_size, 256);
     const uint32_t dst_row_stride  = hex_round_up(ne00 * dst_type_size, 256);
@@ -108,12 +108,12 @@ static inline void htp_copy_convert_vtcm_layout_build(
     L->blk_rows              = blk_rows;
     L->src0_buf_size         = blk_rows * src0_row_stride;
     L->dst_buf_size          = blk_rows * dst_row_stride;
-    L->spad0_size_per_thread = 2 * L->src0_buf_size;
-    L->spad1_size_per_thread = 2 * L->dst_buf_size;
+    L->spad0_size_per_hvx    = 2 * L->src0_buf_size;
+    L->spad1_size_per_hvx    = 2 * L->dst_buf_size;
 
     size_t off = 0;
-    VTCM_LAYOUT_ALLOC(off, off_src0, (size_t) n_threads * L->spad0_size_per_thread);
-    VTCM_LAYOUT_ALLOC(off, off_dst,  (size_t) n_threads * L->spad1_size_per_thread);
+    VTCM_LAYOUT_ALLOC(off, off_src0, (size_t) n_hvx * L->spad0_size_per_hvx);
+    VTCM_LAYOUT_ALLOC(off, off_dst,  (size_t) n_hvx * L->spad1_size_per_hvx);
     L->total_bytes = off;
 }
 
@@ -124,7 +124,7 @@ static inline void htp_copy_convert_solve_layout(
     uint32_t ne01,
     uint32_t src_type_size,
     uint32_t dst_type_size,
-    uint32_t n_threads) {
+    uint32_t n_hvx) {
 
     const uint32_t src0_row_stride = hex_round_up(ne00 * src_type_size, 256);
     const uint32_t dst_row_stride  = hex_round_up(ne00 * dst_type_size, 256);
@@ -138,7 +138,7 @@ static inline void htp_copy_convert_solve_layout(
         blk_rows = 1;
     }
 
-    htp_copy_convert_vtcm_layout_build(layout, ne00, src_type_size, dst_type_size, blk_rows, n_threads);
+    htp_copy_convert_vtcm_layout_build(layout, ne00, src_type_size, dst_type_size, blk_rows, n_hvx);
 }
 
 #define HTP_COPY_TRANSPOSE_BLK_BYTES (64 * 1024)

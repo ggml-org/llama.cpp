@@ -127,6 +127,7 @@
 #define TN_PATCH_EMBD      "v.patch_embd.weight"  // not rename tensor with ".0" postfix for backward compat
 #define TN_PATCH_EMBD_1    "v.patch_embd.weight.1"
 #define TN_PATCH_BIAS      "v.patch_embd.bias"
+#define TN_ROPE_FREQS      "v.rope_freqs.weight"
 #define TN_NORM_EMBD       "v.norm_embd.%s"
 #define TN_PATCH_NORM      "v.patch_norm.%d.%s"
 #define TN_ATTN_QKV        "%s.blk.%d.attn_qkv.%s"
@@ -593,6 +594,7 @@ enum projector_type {
     PROJECTOR_TYPE_GRANITE_SPEECH,
     PROJECTOR_TYPE_NEMOTRON_TRANSCRIBE,
     PROJECTOR_TYPE_MIMOVL,
+    PROJECTOR_TYPE_MAGEVL,
     PROJECTOR_TYPE_MINIMAX_M3,
     PROJECTOR_TYPE_GRANITE4_VISION,
     PROJECTOR_TYPE_MIMO_AUDIO,
@@ -677,6 +679,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_GRANITE_SPEECH,    "granite_speech"},
     { PROJECTOR_TYPE_NEMOTRON_TRANSCRIBE, "nemotron_transcribe"},
     { PROJECTOR_TYPE_MIMOVL,            "mimovl"},
+    { PROJECTOR_TYPE_MAGEVL,            "magevl"},
     { PROJECTOR_TYPE_MINIMAX_M3,        "minimax_m3"},
     { PROJECTOR_TYPE_GRANITE4_VISION,   "granite4_vision"},
     { PROJECTOR_TYPE_MIMO_AUDIO,        "mimo_audio"},

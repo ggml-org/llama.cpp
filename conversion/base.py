@@ -3404,7 +3404,7 @@ def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> st
     # Kimi-K3's text_config reports "KimiLinearForCausalLM", which is the older
     # Kimi-Linear-48B architecture and cannot load K3 (no attention residuals,
     # latent MoE, situ, ...). Route on the top-level architecture instead.
-    if model_type == ModelType.TEXT and arch in ("NEOChatModel", "StepVLForConditionalGeneration", "Sarashina2VisionForCausalLM", "Exaone4_5_ForConditionalGeneration", "Step3p7ForConditionalGeneration", "KimiK3ForConditionalGeneration", "Nemotron3_5TranscribeForConditionalGeneration"):
+    if model_type == ModelType.TEXT and arch in ("NEOChatModel", "StepVLForConditionalGeneration", "Sarashina2VisionForCausalLM", "Exaone4_5_ForConditionalGeneration", "Step3p7ForConditionalGeneration", "KimiK3ForConditionalGeneration", "KimiK31ForConditionalGeneration", "Nemotron3_5TranscribeForConditionalGeneration"):
         return arch
 
     # if "architectures" is found in the sub-config, use that instead
@@ -3412,6 +3412,9 @@ def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> st
         arch = text_config["architectures"][0]
     elif model_type == ModelType.MMPROJ and vision_config.get("architectures") is not None:
         arch = vision_config["architectures"][0]
+    # some models (llava_onevision2) only declare the architecture inside text_config
+    if arch is None and text_config.get("architectures") is not None:
+        arch = text_config["architectures"][0]
     if arch is None:
         raise ValueError("Failed to detect model architecture")
     return arch

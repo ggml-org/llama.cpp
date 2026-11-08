@@ -71,6 +71,7 @@ set(GGML_OPENCL_KERNELS
     lightning_indexer
     tri
     fill
+    arange
     fwht
     clamp
     cpy

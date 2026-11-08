@@ -16,7 +16,7 @@ enum htp_get_rows_kernel_type {
 
 struct htp_get_rows_kernel_params {
     uint8_t  kernel_type;
-    uint32_t n_threads;
+    uint32_t n_hvx;
     uint32_t total_tasks;
     uint32_t vtcm_size;
 
@@ -34,8 +34,8 @@ struct htp_get_rows_vtcm_layout {
     size_t off_src0;
     size_t off_dst;
 
-    size_t src0_bytes_per_thread;
-    size_t dst_bytes_per_thread;
+    size_t src0_bytes_per_hvx;
+    size_t dst_bytes_per_hvx;
 
     size_t src0_spad_half_size;
     size_t dst_spad_half_size;
@@ -48,7 +48,7 @@ static inline void htp_get_rows_vtcm_layout_build(
     uint32_t ne00,
     uint32_t total_tasks,
     int idx_type,
-    uint32_t n_threads) {
+    uint32_t n_hvx) {
 
     memset(L, 0, sizeof(*L));
 
@@ -71,14 +71,14 @@ static inline void htp_get_rows_vtcm_layout_build(
 
         L->src0_spad_half_size   = (src0_row_size + 255) & ~255;
         L->dst_spad_half_size    = (ne00 * sizeof(float) + 255) & ~255;
-        L->src0_bytes_per_thread = 2 * L->src0_spad_half_size;
-        L->dst_bytes_per_thread  = 2 * L->dst_spad_half_size;
+        L->src0_bytes_per_hvx    = 2 * L->src0_spad_half_size;
+        L->dst_bytes_per_hvx     = 2 * L->dst_spad_half_size;
     }
 
     size_t off = 0;
     VTCM_LAYOUT_ALLOC(off, off_src1, src1_alloc_bytes);
-    VTCM_LAYOUT_ALLOC(off, off_src0, L->src0_bytes_per_thread * n_threads);
-    VTCM_LAYOUT_ALLOC(off, off_dst,  L->dst_bytes_per_thread  * n_threads);
+    VTCM_LAYOUT_ALLOC(off, off_src0, L->src0_bytes_per_hvx * n_hvx);
+    VTCM_LAYOUT_ALLOC(off, off_dst,  L->dst_bytes_per_hvx  * n_hvx);
     L->total_bytes = off;
 }
 

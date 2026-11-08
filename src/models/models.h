@@ -2961,6 +2961,53 @@ struct llama_model_kimi_k3 : public llama_model_base {
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 
+// Kimi-K3.1: Kimi-K3 with a lightning indexer and top-k sparse attention on the full-attention layers
+struct llama_model_kimi_k31 : public llama_model_base {
+    llama_model_kimi_k31(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    struct graph : public llm_build_delta_net_base {
+        graph(const llm_graph_params & params);
+
+        // Cross-layer residual attention (kimi-k3's `_apply_attn_res`).
+        ggml_tensor * resi_stack = nullptr;
+
+        void          res_push(ggml_tensor * cur, int64_t n_embd, int64_t n_tokens);
+        ggml_tensor * res_mix(ggml_tensor * cur, ggml_tensor * score_w,
+                              int64_t n_tokens, int il);
+
+        ggml_tensor * build_kda_conv1d(llm_graph_input_rs * inp_rs,
+                                       ggml_tensor * conv_states_all, ggml_tensor * conv_state_all,
+                                       int64_t qkv, ggml_tensor * x, ggml_tensor * proj_w, ggml_tensor * conv_w,
+                                       int64_t d_conv, int64_t head_dim, int64_t n_head_kda,
+                                       int64_t n_seq_tokens, int64_t n_seqs);
+
+        ggml_tensor * build_kda_layer(ggml_tensor * cur, const llama_layer & layer,
+                                      llm_graph_input_rs * inp_rs,
+                                      int64_t d_conv, int64_t head_dim, int64_t n_head_kda,
+                                      int64_t d_inner, int64_t n_seq_tokens, int64_t n_seqs, int il);
+
+        struct dsa_out {
+            ggml_tensor * out;
+            ggml_tensor * sel;
+        };
+
+        dsa_out build_dsa_layer(ggml_tensor * cur, const llama_layer & layer,
+                                const llama_kv_cache_context * mctx_idx,
+                                llm_graph_input_attn_k * inp_attn,
+                                ggml_tensor * prev_sel,
+                                int64_t n_embd_head_k_mla, int64_t kv_lora_rank,
+                                int64_t n_embd_head_qk_rope,
+                                int64_t n_embd_head_qk_nope, float kq_scale, int il);
+
+        ggml_tensor * build_latent_moe(ggml_tensor * cur, const llama_layer & layer,
+                                       int64_t n_embd_latent, int il);
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
 struct llama_model_glm5_next : public llama_model_base {
     llama_model_glm5_next(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;

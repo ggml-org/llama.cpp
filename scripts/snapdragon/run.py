@@ -40,6 +40,7 @@ MANAGED_ENV_NAMES = (
     "GGML_HEXAGON_ETM",
     "GGML_HEXAGON_ARCH",
     "GGML_HEXAGON_OPTRACE",
+    "GGML_HEXAGON_LIBHTP_DIR",
     "GGML_OPENCL_PLATFORM",
     "GGML_OPENCL_DEVICE",
     "GGML_OPENCL_OPFILTER",
@@ -50,23 +51,9 @@ MANAGED_ENV_NAMES = (
     "GGML_OPENCL_ADRENO_XMEM_GEMM",
     "GGML_OPENCL_ADRENO_USE_LARGE_BUFFER",
     "GGML_SCHED_DEBUG",
-    "ADSP_LIBRARY_PATH",
-    "CDSP_LIBRARY_PATH",
-    "CDSP1_LIBRARY_PATH",
-    "CDSP2_LIBRARY_PATH",
-    "CDSP3_LIBRARY_PATH",
     "MTMD_BACKEND_DEVICE",
     "D",
     "DEVICE",
-)
-
-
-DSP_LIBRARY_ENV_NAMES = (
-    "ADSP_LIBRARY_PATH",
-    "CDSP_LIBRARY_PATH",
-    "CDSP1_LIBRARY_PATH",
-    "CDSP2_LIBRARY_PATH",
-    "CDSP3_LIBRARY_PATH",
 )
 
 
@@ -112,10 +99,7 @@ def default_target_dir(target_type, target_transport, home_dir):
 
 
 def library_env_parts(lib_dir):
-    env_parts = [f"LD_LIBRARY_PATH={lib_dir}"]
-    for name in DSP_LIBRARY_ENV_NAMES:
-        env_parts.append(f"{name}={lib_dir}")
-    return env_parts
+    return [f"LD_LIBRARY_PATH={lib_dir}"]
 
 
 def adb_root(adb_base):
@@ -242,6 +226,7 @@ def main():
     parser.add_argument("--hex-ar-scatter", help="Enable (1) or disable (0) reduce-scatter for fused ALLREDUCE+ADD (GGML_HEXAGON_AR_SCATTER)")
     parser.add_argument("--hex-etm", help="Enable Embedded Trace Macrocell hardware tracing / trace logging (GGML_HEXAGON_ETM)")
     parser.add_argument("--hex-arch", help="Target Hexagon NPU architecture version override (v73, v75, v79, v81, etc.) (GGML_HEXAGON_ARCH)")
+    parser.add_argument("--hex-libhtp-dir", default=os.environ.get("GGML_HEXAGON_LIBHTP_DIR"), help="Directory containing libggml-htp-v<arch>.so (GGML_HEXAGON_LIBHTP_DIR)")
     parser.add_argument("--hex-optrace", help="Trace buffer size in number of records (GGML_HEXAGON_OPTRACE)")
 
     # OpenCL specific parameters
@@ -396,6 +381,7 @@ def main():
     set_env("GGML_HEXAGON_AR_SCATTER", args.hex_ar_scatter)
     set_env("GGML_HEXAGON_ETM", args.hex_etm)
     set_env("GGML_HEXAGON_ARCH", args.hex_arch)
+    set_env("GGML_HEXAGON_LIBHTP_DIR", args.hex_libhtp_dir)
     set_env("GGML_HEXAGON_OPTRACE", args.hex_optrace)
     set_env("MTMD_BACKEND_DEVICE", args.mtmd_device)
 
@@ -572,8 +558,6 @@ def main():
 
         for k in MANAGED_ENV_NAMES:
             local_env.pop(k, None)
-        for name in DSP_LIBRARY_ENV_NAMES:
-            local_env[name] = lib_dir
         for k, v in env_vars.items():
             local_env[k] = v
 

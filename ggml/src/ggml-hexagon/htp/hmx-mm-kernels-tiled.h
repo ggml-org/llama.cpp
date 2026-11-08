@@ -18,8 +18,6 @@ typedef struct tiled_dequantize_state tiled_dequantize_state_t;
 typedef void (*tiled_dequant_task_fn_t)(const tiled_dequantize_state_t * state, uint32_t start_tile, uint32_t end_tile);
 
 struct tiled_dequantize_state {
-    struct htp_context      * ctx;
-    struct htp_thread_trace * traces;
     __fp16                  * dst;
     const uint8_t           * src;
     tiled_dequant_task_fn_t   task_fn;
@@ -1235,7 +1233,6 @@ typedef struct {
     uint32_t       dst_stride;  // DDR row stride
     uint32_t       src2_stride; // DDR row stride for residual
     uint32_t       dst_cols;    // Actual output columns
-    struct htp_thread_trace * traces;
 } output_transfer_task_state_t;
 
 // activations : fp32 -> fp16

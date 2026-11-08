@@ -31,6 +31,7 @@ static __global__ void lightning_indexer_kernel_mma(
     constexpr int WAVE_SIZE = ggml_cuda_get_physical_warp_size();
     constexpr int THREADS_PER_BLOCK = WARPS_PER_BLOCK * WAVE_SIZE;
     constexpr int N_EMBD_PADDED = N_EMBD + 8;
+    constexpr int K_VECS_PADDED = K_VECS_PER_BLOCK + 8;
     constexpr int HEAD_CHUNK    = MMA_DIM;
     constexpr int N_HEAD_CHUNKS = N_HEAD / HEAD_CHUNK;
     constexpr int N_KV_TILES    = K_VECS_PER_BLOCK / MMA_DIM;
@@ -60,7 +61,7 @@ static __global__ void lightning_indexer_kernel_mma(
     __shared__ float w_shared[N_HEAD];
     __shared__ half  q_shared[2][HEAD_CHUNK][N_EMBD_PADDED];
     __shared__ half  k_shared[K_VECS_PER_BLOCK][N_EMBD_PADDED];
-    __shared__ float qk_chunk[HEAD_CHUNK][K_VECS_PER_BLOCK];
+    __shared__ float qk_chunk[HEAD_CHUNK][K_VECS_PADDED];
     __shared__ float score_shared[K_VECS_PER_BLOCK];
 
     for (int i = tid; i < N_HEAD; i += THREADS_PER_BLOCK) {
@@ -105,10 +106,8 @@ static __global__ void lightning_indexer_kernel_mma(
         const int i_head  = i / (N_EMBD / 4);
         const int i_embd4 = i % (N_EMBD / 4);
         const float4 q = *(const float4 *) (q_base + i_head*nbq1 + i_embd4*sizeof(float4));
-        q_shared[0][i_head][i_embd4*4 + 0] = (half) q.x;
-        q_shared[0][i_head][i_embd4*4 + 1] = (half) q.y;
-        q_shared[0][i_head][i_embd4*4 + 2] = (half) q.z;
-        q_shared[0][i_head][i_embd4*4 + 3] = (half) q.w;
+        const half2 qh[2] = {make_half2(q.x, q.y), make_half2(q.z, q.w)};
+        ggml_cuda_memcpy_1<sizeof(qh)>(&q_shared[0][i_head][i_embd4*4], qh);
     }
 
     __syncthreads();
@@ -155,10 +154,8 @@ static __global__ void lightning_indexer_kernel_mma(
             for (int i = tid, j = 0; i < N_Q_CHUNK_VEC; i += THREADS_PER_BLOCK, ++j) {
                 const int i_head  = i / (N_EMBD / 4);
                 const int i_embd4 = i % (N_EMBD / 4);
-                q_shared[nbuf][i_head][i_embd4*4 + 0] = (half) q_next[j].x;
-                q_shared[nbuf][i_head][i_embd4*4 + 1] = (half) q_next[j].y;
-                q_shared[nbuf][i_head][i_embd4*4 + 2] = (half) q_next[j].z;
-                q_shared[nbuf][i_head][i_embd4*4 + 3] = (half) q_next[j].w;
+                const half2 qh[2] = {make_half2(q_next[j].x, q_next[j].y), make_half2(q_next[j].z, q_next[j].w)};
+                ggml_cuda_memcpy_1<sizeof(qh)>(&q_shared[nbuf][i_head][i_embd4*4], qh);
             }
         }
 

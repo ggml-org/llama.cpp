@@ -43,7 +43,7 @@ struct htp_upscale_kernel_params {
     float    invscale0;
     float    invscale1;
 
-    uint32_t n_threads;
+    uint32_t n_hvx;
     uint32_t chunks_per_group;
 
     uint32_t dst_nrows_per_chunk;
@@ -103,10 +103,10 @@ struct htp_upscale_vtcm_layout {
     size_t   off_dst;
     size_t   off_r;
     size_t   off_gather;
-    size_t   src_bytes_per_thread;
-    size_t   dst_bytes_per_thread;
-    size_t   r_bytes_per_thread;
-    size_t   gather_bytes_per_thread;
+    size_t   src_bytes_per_hvx;
+    size_t   dst_bytes_per_hvx;
+    size_t   r_bytes_per_hvx;
+    size_t   gather_bytes_per_hvx;
     size_t   src_spad_half_size;
     size_t   dst_spad_half_size;
     uint32_t max_src_chunk_rows;
@@ -122,7 +122,7 @@ static inline void htp_upscale_vtcm_layout_build(
     uint32_t dst_chunk_rows,
     float    inv_sf1,
     float    filter_radius1,
-    uint32_t n_threads
+    uint32_t n_hvx
 ) {
     uint32_t max_src_rows;
     if (dst_chunk_rows >= dst_y) {
@@ -142,16 +142,16 @@ static inline void htp_upscale_vtcm_layout_build(
     L->dst_chunk_rows          = dst_chunk_rows;
     L->src_spad_half_size      = hex_round_up(src_chunk_bytes + 256, 128);
     L->dst_spad_half_size      = hex_round_up(dst_chunk_bytes, 128);
-    L->src_bytes_per_thread    = 2 * L->src_spad_half_size;
-    L->dst_bytes_per_thread    = 2 * L->dst_spad_half_size;
-    L->r_bytes_per_thread      = hex_round_up(src_x * sizeof(float), 128);
-    L->gather_bytes_per_thread = 256;
+    L->src_bytes_per_hvx       = 2 * L->src_spad_half_size;
+    L->dst_bytes_per_hvx       = 2 * L->dst_spad_half_size;
+    L->r_bytes_per_hvx         = hex_round_up(src_x * sizeof(float), 128);
+    L->gather_bytes_per_hvx    = 256;
 
     size_t off = 0;
-    VTCM_LAYOUT_ALLOC(off, off_src,    L->src_bytes_per_thread * n_threads);
-    VTCM_LAYOUT_ALLOC(off, off_dst,    L->dst_bytes_per_thread * n_threads);
-    VTCM_LAYOUT_ALLOC(off, off_r,      L->r_bytes_per_thread   * n_threads);
-    VTCM_LAYOUT_ALLOC(off, off_gather, L->gather_bytes_per_thread * n_threads);
+    VTCM_LAYOUT_ALLOC(off, off_src,    L->src_bytes_per_hvx * n_hvx);
+    VTCM_LAYOUT_ALLOC(off, off_dst,    L->dst_bytes_per_hvx * n_hvx);
+    VTCM_LAYOUT_ALLOC(off, off_r,      L->r_bytes_per_hvx   * n_hvx);
+    VTCM_LAYOUT_ALLOC(off, off_gather, L->gather_bytes_per_hvx * n_hvx);
     L->total_bytes = off;
 }
 
@@ -163,13 +163,13 @@ static inline bool htp_upscale_solve_layout(
     uint32_t dst_y,
     float    inv_sf1,
     float    filter_radius1,
-    uint32_t n_threads,
+    uint32_t n_hvx,
     size_t   vtcm_budget,
     uint32_t * out_dst_chunk_rows
 ) {
     // 1. Try full plane
     uint32_t chunk_rows = dst_y;
-    htp_upscale_vtcm_layout_build(layout, src_x, src_y, dst_x, dst_y, chunk_rows, inv_sf1, filter_radius1, n_threads);
+    htp_upscale_vtcm_layout_build(layout, src_x, src_y, dst_x, dst_y, chunk_rows, inv_sf1, filter_radius1, n_hvx);
     if (layout->total_bytes <= vtcm_budget) {
         *out_dst_chunk_rows = chunk_rows;
         return true;
@@ -179,7 +179,7 @@ static inline bool htp_upscale_solve_layout(
     chunk_rows = 64;
     while (chunk_rows > 1) {
         if (chunk_rows < dst_y) {
-            htp_upscale_vtcm_layout_build(layout, src_x, src_y, dst_x, dst_y, chunk_rows, inv_sf1, filter_radius1, n_threads);
+            htp_upscale_vtcm_layout_build(layout, src_x, src_y, dst_x, dst_y, chunk_rows, inv_sf1, filter_radius1, n_hvx);
             if (layout->total_bytes <= vtcm_budget) {
                 *out_dst_chunk_rows = chunk_rows;
                 return true;
@@ -190,7 +190,7 @@ static inline bool htp_upscale_solve_layout(
 
     // 3. Fallback to 1 row
     chunk_rows = 1;
-    htp_upscale_vtcm_layout_build(layout, src_x, src_y, dst_x, dst_y, chunk_rows, inv_sf1, filter_radius1, n_threads);
+    htp_upscale_vtcm_layout_build(layout, src_x, src_y, dst_x, dst_y, chunk_rows, inv_sf1, filter_radius1, n_hvx);
     if (layout->total_bytes <= vtcm_budget) {
         *out_dst_chunk_rows = chunk_rows;
         return true;

@@ -27,6 +27,7 @@
 #define GGML_WEBGPU_KV_SEQ_PAD                       256u
 
 #define GGML_WEBGPU_ARGSORT_MERGE_MAX_WG_SIZE 512u
+#define GGML_WEBGPU_COUNT_EQUAL_WG_SIZE       256u
 
 // Matrix multiplication parameters
 
@@ -247,6 +248,31 @@ struct ggml_webgpu_get_rows_pipeline_key_hash {
         size_t seed = 0;
         ggml_webgpu_hash_combine(seed, key.src_type);
         ggml_webgpu_hash_combine(seed, key.vectorized);
+        return seed;
+    }
+};
+
+/** Group Norm **/
+
+struct ggml_webgpu_group_norm_pipeline_key {
+    ggml_type src_type;
+    ggml_type dst_type;
+    bool      inplace;
+    uint32_t  wg_size;
+
+    bool operator==(const ggml_webgpu_group_norm_pipeline_key & other) const {
+        return src_type == other.src_type && dst_type == other.dst_type && inplace == other.inplace &&
+               wg_size == other.wg_size;
+    }
+};
+
+struct ggml_webgpu_group_norm_pipeline_key_hash {
+    size_t operator()(const ggml_webgpu_group_norm_pipeline_key & key) const {
+        size_t seed = 0;
+        ggml_webgpu_hash_combine(seed, key.src_type);
+        ggml_webgpu_hash_combine(seed, key.dst_type);
+        ggml_webgpu_hash_combine(seed, key.inplace);
+        ggml_webgpu_hash_combine(seed, key.wg_size);
         return seed;
     }
 };
@@ -1225,6 +1251,9 @@ inline bool ggml_webgpu_can_use_mmvq(const ggml_tensor * src0,
 }
 
 class ggml_webgpu_shader_lib {
+    std::unordered_map<ggml_webgpu_group_norm_pipeline_key, webgpu_pipeline, ggml_webgpu_group_norm_pipeline_key_hash>
+        group_norm_pipelines;
+
     wgpu::Device           device;
     pre_wgsl::Preprocessor preprocessor;
 
@@ -1234,6 +1263,7 @@ class ggml_webgpu_shader_lib {
     std::unordered_map<int, webgpu_pipeline> argsort_merge_pipelines;  // key is order
     std::unordered_map<int, webgpu_pipeline> cumsum_pipelines;         // key is fixed, no variants yet
     std::unordered_map<int, webgpu_pipeline> arange_pipelines;         // key is fixed, no variants yet
+    std::unordered_map<int, webgpu_pipeline> count_equal_pipelines;    // key is src_overlap
     std::unordered_map<ggml_webgpu_row_norm_pipeline_key, webgpu_pipeline, ggml_webgpu_row_norm_pipeline_key_hash>
         row_norm_pipelines;                                            // op/inplace
 
@@ -1318,6 +1348,21 @@ class ggml_webgpu_shader_lib {
   public:
     ggml_webgpu_shader_lib(wgpu::Device device) { this->device = device; }
 
+    webgpu_pipeline get_count_equal_pipeline(bool src_overlap) {
+        const int key = src_overlap;
+        auto      it  = count_equal_pipelines.find(key);
+        if (it != count_equal_pipelines.end()) {
+            return it->second;
+        }
+        std::vector<std::string> defines = { "WG_SIZE=" + std::to_string(GGML_WEBGPU_COUNT_EQUAL_WG_SIZE) };
+        if (src_overlap) {
+            defines.push_back("SRC_OVERLAP");
+        }
+        auto processed             = preprocessor.preprocess(wgsl_count_equal, defines);
+        count_equal_pipelines[key] = ggml_webgpu_create_pipeline(device, processed, "count_equal");
+        return count_equal_pipelines[key];
+    }
+
     webgpu_pipeline get_sum_rows_pipeline(const ggml_webgpu_shader_lib_context & context) {
         const bool mean = context.dst->op == GGML_OP_MEAN;
         auto       it   = sum_rows_pipelines.find(mean);
@@ -1333,6 +1378,40 @@ class ggml_webgpu_shader_lib {
         auto processed           = preprocessor.preprocess(wgsl_sum_rows, defines);
         sum_rows_pipelines[mean] = ggml_webgpu_create_pipeline(device, processed, mean ? "mean" : "sum_rows");
         return sum_rows_pipelines[mean];
+    }
+
+    webgpu_pipeline get_group_norm_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        const ggml_webgpu_group_norm_pipeline_key key = {
+            context.src0->type,
+            context.dst->type,
+            ggml_webgpu_tensor_equal(context.src0, context.dst),
+            std::min(context.max_wg_size, 128u),
+        };
+        auto it = group_norm_pipelines.find(key);
+        if (it != group_norm_pipelines.end()) {
+            return it->second;
+        }
+
+        std::vector<std::string> defines = {
+            "WG_SIZE=" + std::to_string(key.wg_size),
+            key.src_type == GGML_TYPE_F16 ? "SRC_F16" : "SRC_F32",
+            key.dst_type == GGML_TYPE_F16 ? "DST_F16" : "DST_F32",
+        };
+        std::string variant =
+            std::string("group_norm_src_") + ggml_type_name(key.src_type) + "_dst_" + ggml_type_name(key.dst_type);
+        if (key.inplace) {
+            GGML_ASSERT(key.src_type == key.dst_type);
+            defines.push_back("INPLACE");
+            variant += "_inplace";
+        }
+        auto processed            = preprocessor.preprocess(wgsl_group_norm, defines);
+        auto decisions            = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+        decisions->wg_size        = key.wg_size;
+        decisions->inplace        = key.inplace;
+        auto pipeline             = ggml_webgpu_create_pipeline(device, processed, variant);
+        pipeline.context          = decisions;
+        group_norm_pipelines[key] = pipeline;
+        return pipeline;
     }
 
     webgpu_pipeline get_row_norm_pipeline(const ggml_webgpu_shader_lib_context & context) {

@@ -16,8 +16,8 @@
 
 // internal structure kept in thread-local storage per instance of work queue
 typedef struct {
-    work_queue_t  queue;
-    unsigned int  id;
+    htp_thread_t th;
+    work_queue_t queue;
 } worker_context_t;
 
 struct work_queue_task_s {
@@ -35,15 +35,15 @@ struct work_queue_s {
     uint32_t           idx_mask;
     uint32_t           capacity;
 
-    qurt_thread_t      thread[WORK_QUEUE_MAX_N_THREADS];   // thread ID's of the workers
-    worker_context_t   context[WORK_QUEUE_MAX_N_THREADS];  // worker contexts
-    void *             stack[WORK_QUEUE_MAX_N_THREADS];    // thread stack pointers
-    unsigned int       n_threads;                          // total threads (workers + main)
-    unsigned int       n_workers;                          // number of active threads (just workers)
+    qurt_thread_t      thread[HTP_MAX_NTHREADS];   // thread ID's of the workers
+    worker_context_t   context[HTP_MAX_NTHREADS];  // worker contexts (0 = main, 1..n_workers = workers)
+    void *             stack[HTP_MAX_NTHREADS];    // thread stack pointers
+    unsigned int       n_threads;                  // total threads (workers + main)
+    unsigned int       n_workers;                  // number of active threads (just workers)
 
-    atomic_uint        active;                             // workers are polling/active
-    atomic_bool        killed;                             // threads need to exit
-    bool               external_mem;                       // memory owned externally
+    atomic_uint        active;                     // workers are polling/active
+    atomic_bool        killed;                     // threads need to exit
+    bool               external_mem;               // memory owned externally
 
     struct work_queue_task_s queue[] __attribute__((aligned(HEX_L2_LINE_SIZE)));
 };
@@ -51,8 +51,9 @@ struct work_queue_s {
 static void work_queue_thread(void * context) {
     worker_context_t * me = (worker_context_t *) context;
     work_queue_t       q  = me->queue;
+    unsigned int       id = (unsigned int) (me - q->context);
 
-    FARF(HIGH, "work-queue: thread %u started", me->id);
+    FARF(HIGH, "work-queue: thread %u (tid %u) started", id, me->th.tid);
 
     unsigned int prev_seqn = 0;
 
@@ -62,6 +63,7 @@ static void work_queue_thread(void * context) {
             if (atomic_load_explicit(&q->active, memory_order_relaxed)) {
                 hex_pause();
             } else {
+                qurt_hvx_unlock();
                 qurt_futex_wait(&q->active, 0);
             }
             continue;
@@ -77,9 +79,8 @@ static void work_queue_thread(void * context) {
             struct work_queue_task_s * task = &q->queue[ir];
 
             unsigned int n = task->n_threads;
-            unsigned int i = me->id;
-            if (i < n) {
-                task->func(n, i, task->data);
+            if (id < n) {
+                task->func(&me->th, n, id, task->data);
 
                 atomic_fetch_sub_explicit(&task->barrier, 1, memory_order_release);
             } else {
@@ -92,10 +93,15 @@ static void work_queue_thread(void * context) {
         }
     }
 
-    FARF(HIGH, "work-queue: thread %u stopped", me->id);
+    FARF(HIGH, "work-queue: thread %u (tid %u) stopped", id, me->th.tid);
 }
 
-bool work_queue_run_async(work_queue_t q, work_queue_func_t func, void * data, unsigned int n) {
+bool work_queue_run(work_queue_t q, work_queue_func_t func, void * data, unsigned int n) {
+    if (n <= 1) {
+        func(&q->context[0].th, n, 0, data);
+        return true;
+    }
+
     if (n > q->n_threads) {
         FARF(ERROR, "work-queue: invalid number of jobs %u for n-threads %u", n, q->n_threads);
         return false;
@@ -121,7 +127,7 @@ bool work_queue_run_async(work_queue_t q, work_queue_func_t func, void * data, u
     atomic_fetch_add_explicit(&q->seqn, 1, memory_order_release);
 
     // main thread runs job #0
-    func(n, 0, data);
+    func(&q->context[0].th, n, 0, data);
 
     atomic_fetch_sub_explicit(&task->barrier, 1, memory_order_release);
 
@@ -148,7 +154,7 @@ size_t work_queue_alignof(void) {
     return 4096;
 }
 
-work_queue_t work_queue_init(void * ptr, uint32_t n_threads, uint32_t capacity, uint32_t stack_size) {
+work_queue_t work_queue_init(void * ptr, uint32_t n_threads, uint32_t capacity, uint32_t stack_size, dma_queue_t * dma, struct htp_thread_trace * trace) {
     capacity = hex_ceil_pow2(capacity);
     uint32_t n_workers = n_threads > 1 ? n_threads - 1 : 0;
     unsigned char * mem_blob = (unsigned char *) ptr;
@@ -161,11 +167,14 @@ work_queue_t work_queue_init(void * ptr, uint32_t n_threads, uint32_t capacity, 
     q->external_mem = true;
     q->capacity = capacity;
 
+    for (unsigned int i = 0; i < n_threads; i++) {
+        htp_thread_init(&q->context[i].th, dma, trace);
+        q->context[i].queue = q;
+    }
+
     for (unsigned int i = 0; i < n_workers; i++) {
         q->stack[i]  = mem_blob; mem_blob += stack_size;
         q->thread[i] = 0;
-        q->context[i].id    = i + 1;
-        q->context[i].queue = q;
     }
 
     atomic_init(&q->idx_read,  0);
@@ -190,7 +199,7 @@ work_queue_t work_queue_init(void * ptr, uint32_t n_threads, uint32_t capacity, 
         qurt_thread_attr_set_stack_size(&attr, stack_size);
 
         char thread_name[32];
-        snprintf(thread_name, sizeof(thread_name), "work-queue:%u", i);
+        snprintf(thread_name, sizeof(thread_name), "work-queue:%u", i + 1);
         qurt_thread_attr_set_name(&attr, thread_name);
 
         // set up priority - by default, match the creating thread's prio
@@ -204,7 +213,7 @@ work_queue_t work_queue_init(void * ptr, uint32_t n_threads, uint32_t capacity, 
 
         qurt_thread_attr_set_priority(&attr, prio);
 
-        int err = qurt_thread_create(&q->thread[i], &attr, work_queue_thread, (void *) &q->context[i]);
+        int err = qurt_thread_create(&q->thread[i], &attr, work_queue_thread, (void *) &q->context[i + 1]);
         if (err) {
             FARF(ERROR, "Could not launch worker threads!");
             work_queue_free(q);

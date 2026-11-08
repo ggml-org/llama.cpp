@@ -348,7 +348,8 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
     }
 
     if (is_tool_id && current_tool) {
-        auto text = trim_trailing_space(node.text);
+        auto sanitized = node.sanitized_text();
+        auto text      = trim_trailing_space(sanitized);
         if (text.size() >= 2 && text.front() == '"' && text.back() == '"') {
             text = text.substr(1, text.size() - 2);
         }
@@ -401,7 +402,7 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
     }
 
     if ((is_arg_value || is_arg_string_value) && current_tool) {
-        std::string value_content = std::string(node.text);
+        std::string value_content = node.sanitized_text();
 
         std::string value_to_add;
         if (value_content.empty() && is_arg_string_value) {
@@ -978,7 +979,7 @@ static std::string gemma4_to_json(const common_peg_ast_arena & arena, common_peg
     }
 
     if (node.rule == "gemma4-string-content") {
-        return escape_json_string_inner(std::string(node.text));
+        return escape_json_string_inner(node.sanitized_text());
     }
 
     if (node.rule == "gemma4-string") {
@@ -1195,7 +1196,7 @@ static std::string minimax_m3_value_to_json(const common_peg_ast_arena & arena, 
     }
 
     if (node.tag == common_chat_peg_builder::TOOL_ARG_STRING_VALUE) {
-        return "\"" + escape_json_string_inner(std::string(node.text)) + (closed ? "\"" : "");
+        return "\"" + escape_json_string_inner(node.sanitized_text()) + (closed ? "\"" : "");
     }
 
     // Numbers and booleans are written verbatim by the template
