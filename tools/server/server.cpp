@@ -171,6 +171,7 @@ static void server_register_routes(server_http_context & ctx_http, server_routes
     ctx_http.get ("/health",                   ex_wrapper(routes.get_health)); // public endpoint (no API key check)
     ctx_http.get ("/v1/health",                ex_wrapper(routes.get_health)); // public endpoint (no API key check)
     ctx_http.get ("/metrics",                  ex_wrapper(routes.get_metrics));
+    ctx_http.get ("/memory",                   ex_wrapper(routes.get_memory));
     ctx_http.get ("/props",                    ex_wrapper(routes.get_props));
     ctx_http.post("/props",                    ex_wrapper(routes.post_props));
     ctx_http.get ("/models",                   ex_wrapper(routes.get_models));
@@ -496,6 +497,7 @@ static int server_run_router(common_params & params, int argc, char ** argv, con
     // proxy handlers
     // note: routes.get_health stays the same
     routes.get_metrics                 = models_routes->proxy_get;
+    routes.get_memory                  = models_routes->proxy_get;
     routes.post_props                  = models_routes->proxy_post;
     routes.post_completions            = models_routes->proxy_post;
     routes.post_completions_oai        = models_routes->proxy_post;
