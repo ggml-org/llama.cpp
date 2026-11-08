@@ -5981,7 +5981,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                 const int cc_dev = ggml_cuda_info().devices[dev_ctx->device].cc;
                 const bool f32_src1_ok = GGML_CUDA_CC_IS_NVIDIA(cc_dev) && cc_dev < GGML_CUDA_CC_AMPERE;
                 const enum ggml_prec prec_src1 = ggml_prec_get_src(op, 1);
-                if (prec_src1 == GGML_PREC_F32 && (op->op == GGML_OP_MUL_MAT_ID || !f32_src1_ok)) {
+                if (prec_src1 == GGML_PREC_F32 && (op->op == GGML_OP_MUL_MAT_ID || !f32_src1_ok || a->type != GGML_TYPE_F32)) {
                     return false;
                 }
                 if (prec_src1 == GGML_PREC_BF16 && (op->op == GGML_OP_MUL_MAT_ID || a->type != GGML_TYPE_F32)) {
