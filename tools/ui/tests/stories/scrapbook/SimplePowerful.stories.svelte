@@ -1,13 +1,14 @@
 <script lang="ts" module>
 	import Editorial from '../philosophy/Editorial.svelte';
 	import Figure from '../philosophy/Figure.svelte';
-	import Decided from './simple-powerful/Decided.svelte';
+	import Decided from '../philosophy/figures/Decided.svelte';
 	import Depth from './simple-powerful/Depth.svelte';
 	import PlainWords from './simple-powerful/PlainWords.svelte';
 	import SameScreen from './simple-powerful/SameScreen.svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 
-	// proposals for Ideology's "Simple by default, powerful on request" figure, each set as it would sit on the page
+	// proposals for Ideology's "Simple by default, powerful on request" figure, each set as it would sit on the page;
+	// C was chosen and lives with Ideology's figures
 	const { Story } = defineMeta({
 		parameters: {
 			controls: { disable: true },

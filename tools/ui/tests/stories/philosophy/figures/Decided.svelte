@@ -1,5 +1,5 @@
 <!--
-	Proposal C · Decided for you: an everyday conversation on top (a photo of a letter and a question about it), and
+	Simple by default, powerful on request (Ideology), chosen from the Scrapbook's proposals: an everyday conversation on top (a photo of a letter and a question about it), and
 	under it, with the lid lifted, what the app decided so it could just work: each decision in plain words, with the
 	exact setting a power user can change beside it.
 -->
