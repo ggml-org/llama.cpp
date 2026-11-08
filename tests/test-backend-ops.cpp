@@ -5715,7 +5715,7 @@ struct test_mul_mat_prec_src1_f32 : public test_mul_mat {
             std::array<int64_t, 2> nr = {1, 1})
         : test_mul_mat(type_a, GGML_TYPE_F32, m, n, k, bs, nr) {}
     double max_nmse_err() override {
-        return type_a == GGML_TYPE_F32 ? 1e-10 : test_mul_mat::max_nmse_err();
+        return 1e-10;
     }
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * out = test_mul_mat::build_graph(ctx);
@@ -5727,10 +5727,9 @@ struct test_mul_mat_prec_src1_f32 : public test_mul_mat {
         return out;
     }
     void initialize_tensors(ggml_context * ctx) override {
-        const float b_max = type_a == GGML_TYPE_F32 ? 1e6f : 1.0f;
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
             if (strcmp(t->name, "b") == 0) {
-                init_tensor_uniform(t, -b_max, b_max);
+                init_tensor_uniform(t, -1e6f, 1e6f);
             } else {
                 init_tensor_uniform(t);
             }
