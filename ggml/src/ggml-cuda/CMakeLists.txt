@@ -115,6 +115,47 @@ if (CUDAToolkit_FOUND)
     list(APPEND GGML_HEADERS_CUDA "../../include/ggml-cuda.h")
 
     file(GLOB   GGML_SOURCES_CUDA "*.cu")
+    list(REMOVE_ITEM GGML_SOURCES_CUDA "${CMAKE_CURRENT_SOURCE_DIR}/mmq-sm90.cu")
+
+    set(GGML_CUDA_MMQ_SM90 OFF)
+    if (CMAKE_CUDA_COMPILER_ID STREQUAL "NVIDIA" AND CUDAToolkit_VERSION VERSION_GREATER_EQUAL "12.4"
+            AND NOT GGML_CUDA_FORCE_MMQ AND NOT GGML_CUDA_FORCE_CUBLAS)
+        foreach(ARCH IN LISTS CMAKE_CUDA_ARCHITECTURES)
+            if (ARCH MATCHES "^90a?(-real|-virtual)?$")
+                set(GGML_CUDA_MMQ_SM90 ON)
+            endif()
+        endforeach()
+    endif()
+    if (GGML_CUDA_MMQ_SM90)
+        set(SM90_CHECK_FLAGS "-DCMAKE_CUDA_ARCHITECTURES=90" "-DCMAKE_CUDA_STANDARD=17")
+        if (GGML_CUDA_CCCL_VERSION)
+            list(APPEND SM90_CHECK_FLAGS "-DINCLUDE_DIRECTORIES:STRING=${cccl_SOURCE_DIR}/libcudacxx/include")
+        endif()
+        file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/sm90-ptx-check.cu" [[
+#include <cstdint>
+#include <cuda/ptx>
+__global__ void check(uint64_t * barrier, void * tile, const void * map) {
+    const int32_t coordinates[] = {0, 0};
+    cuda::ptx::mbarrier_init(barrier, 1);
+    cuda::ptx::mbarrier_arrive_expect_tx(
+        cuda::ptx::sem_release, cuda::ptx::scope_cta, cuda::ptx::space_shared, barrier, 16);
+    cuda::ptx::cp_async_bulk_tensor(
+        cuda::ptx::space_cluster, cuda::ptx::space_global, tile, map, coordinates, barrier);
+    cuda::ptx::mbarrier_try_wait_parity(barrier, 0);
+    cuda::ptx::fence_proxy_async(cuda::ptx::space_shared);
+    cuda::ptx::fence_mbarrier_init(cuda::ptx::sem_release, cuda::ptx::scope_cluster);
+}
+int main() { return 0; }
+]])
+        try_compile(GGML_CUDA_MMQ_SM90_WRAPPERS
+            "${CMAKE_CURRENT_BINARY_DIR}/sm90-ptx-check"
+            "${CMAKE_CURRENT_BINARY_DIR}/sm90-ptx-check.cu"
+            CMAKE_FLAGS ${SM90_CHECK_FLAGS}
+            LINK_LIBRARIES CUDA::cudart)
+        if (NOT GGML_CUDA_MMQ_SM90_WRAPPERS)
+            set(GGML_CUDA_MMQ_SM90 OFF)
+        endif()
+    endif()
     file(GLOB   SRCS "template-instances/fattn-tile*.cu")
     list(APPEND GGML_SOURCES_CUDA ${SRCS})
     file(GLOB   SRCS "template-instances/fattn-mma*.cu")
@@ -175,7 +216,7 @@ if (CUDAToolkit_FOUND)
         target_link_libraries(ggml-cuda PRIVATE CUDA::cudart CUDA::cublas)
     endif()
 
-    if (GGML_CUDA_NO_VMM)
+    if (GGML_CUDA_NO_VMM AND NOT GGML_CUDA_MMQ_SM90)
         # No VMM requested, no need to link directly with the cuda driver lib (libcuda.so)
     else()
         target_link_libraries(ggml-cuda PRIVATE CUDA::cuda_driver)
@@ -263,6 +304,28 @@ if (CUDAToolkit_FOUND)
     endif()
 
     target_compile_options(ggml-cuda PRIVATE "$<$<COMPILE_LANGUAGE:CUDA>:${CUDA_FLAGS}>")
+
+    if (GGML_CUDA_MMQ_SM90)
+        # WGMMA requires sm_90a. Keep the backend's other architecture targets unchanged.
+        add_library(ggml-cuda-sm90 OBJECT mmq-sm90.cu)
+        set_target_properties(ggml-cuda-sm90 PROPERTIES CUDA_ARCHITECTURES OFF POSITION_INDEPENDENT_CODE ON)
+        target_link_libraries(ggml-cuda-sm90 PRIVATE ggml-base CUDA::cudart)
+        if (GGML_CUDA_CCCL_VERSION)
+            target_link_libraries(ggml-cuda-sm90 PRIVATE CCCL::CCCL)
+        endif()
+        if (GGML_CUDA_NCCL AND NCCL_FOUND)
+            target_link_libraries(ggml-cuda-sm90 PRIVATE NCCL::NCCL)
+        endif()
+        target_include_directories(ggml-cuda-sm90 PRIVATE ..)
+        target_compile_definitions(ggml-cuda-sm90 PRIVATE GGML_CUDA_MMQ_SM90)
+        target_compile_definitions(ggml-cuda PRIVATE GGML_CUDA_MMQ_SM90)
+        set(SM90_FLAGS ${CUDA_FLAGS})
+        # Preserve the tested FP16 operand conversion and subnormal handling.
+        list(REMOVE_ITEM SM90_FLAGS -use_fast_math)
+        list(APPEND SM90_FLAGS --generate-code=arch=compute_90a,code=sm_90a --expt-relaxed-constexpr)
+        target_compile_options(ggml-cuda-sm90 PRIVATE "$<$<COMPILE_LANGUAGE:CUDA>:${SM90_FLAGS}>")
+        target_sources(ggml-cuda PRIVATE $<TARGET_OBJECTS:ggml-cuda-sm90>)
+    endif()
 else()
     message(FATAL_ERROR "CUDA Toolkit not found")
 endif()

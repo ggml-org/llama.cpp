@@ -231,7 +231,7 @@ void ggml_cuda_error(const char * stmt, const char * func, const char * file, in
 #define NCCL_CHECK(err) CUDA_CHECK_GEN(err, ncclSuccess, ncclGetErrorString)
 #endif // GGML_USE_NCCL
 
-#if !defined(GGML_USE_HIP) && !defined(GGML_CUDA_NO_VMM)
+#if !defined(GGML_USE_HIP) && (!defined(GGML_CUDA_NO_VMM) || defined(GGML_CUDA_MMQ_SM90))
 static const char * cu_get_error_str(CUresult err) {
     const char * err_str;
     cuGetErrorString(err, &err_str);

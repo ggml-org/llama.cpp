@@ -32,6 +32,7 @@
 #include "ggml-cuda/im2col.cuh"
 #include "ggml-cuda/mmf.cuh"
 #include "ggml-cuda/mmq.cuh"
+#include "ggml-cuda/mmq-sm90.cuh"
 #include "ggml-cuda/mmvf.cuh"
 #include "ggml-cuda/mmvq.cuh"
 #include "ggml-cuda/moe-weighted-reduction.cuh"
@@ -2242,6 +2243,14 @@ static bool ggml_cuda_should_fuse_mul_mat_q(const ggml_tensor * up, const ggml_t
         return false;
     }
 
+#ifdef GGML_CUDA_MMQ_SM90
+    if (up->op == GGML_OP_MUL_MAT && gate->op == GGML_OP_MUL_MAT && !up_scale && !gate_scale &&
+            ggml_cuda_should_use_mmq_q6_k_sm90(device, up->src[0], up->src[1], up) &&
+            ggml_cuda_should_use_mmq_q6_k_sm90(device, gate->src[0], gate->src[1], gate)) {
+        return false;
+    }
+#endif
+
     // The batch size checks are done here, not in ggml_cuda_mul_mat_q_fusion_matches.
     const ggml_tensor * x_up = up->src[0];
     const ggml_tensor * y    = up->src[1];
@@ -2304,6 +2313,11 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         ggml_cuda_mul_mat_f(ctx, src0, src1, nullptr, dst);
         return;
     }
+#ifdef GGML_CUDA_MMQ_SM90
+    if (ggml_cuda_mul_mat_q6_k_sm90(ctx, src0, src1, dst)) {
+        return;
+    }
+#endif
     if (ggml_cuda_should_use_mmvq(src0->type, cc, ne11)) {
         ggml_cuda_mul_mat_vec_q(ctx, src0, src1, nullptr, dst);
         return;

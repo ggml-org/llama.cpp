@@ -11628,6 +11628,18 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_mul_mat(type_a,    GGML_TYPE_F32, 16,  8, 16*256, { 1,  1}, {1, 1}));
     }
 
+    for (int64_t n : {256, 257}) {
+        test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q6_K, GGML_GLU_OP_SWIGLU, 12288, n, 4096,
+            false, 1, 1, false, false, true, false, {1, 1}));
+    }
+
+    // Hopper Q6_K prefill geometries and adjacent token counts that use fallback.
+    for (int64_t n : {255, 256, 257, 512, 1024, 2048}) {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q6_K, GGML_TYPE_F32, 12288, n, 4096, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q6_K, GGML_TYPE_F32, 4096, n, 12288, {1, 1}, {1, 1}));
+    }
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q6_K, GGML_TYPE_F32, 12288, 256, 4096, {1, 1}, {1, 1}, {0, 1, 2, 3}, 4352));
+
     // Multi-column MMVQ coverage for the Q4_K weight-reuse path and a Q5_K control.
     for (ggml_type type_a : { GGML_TYPE_Q4_K, GGML_TYPE_Q5_K }) {
         for (int n = 1; n <= 8; ++n) {
