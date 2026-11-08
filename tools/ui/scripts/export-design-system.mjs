@@ -76,19 +76,20 @@ const KEY_VISUALS = [
 		shape: [
 			'Header: the icon, a Mono kicker (who it is from), the URL.',
 			'Headline (2u) across the width on square and tall formats, the lede under it beside the motif, the use cases as outline chips across the width; on wide ones, the block over eight columns with the motif beside it. Without a lede, the motif sits beside the headline. When the header has no room for the URL 2u clear of the kicker, it goes beside the label over the cards.',
-			'A Mono label, then the cards: one across on tall formats, two on square, three on wide; the leading item tagged in cinder.'
+			'A Mono label, then the cards: one across on tall formats, two on square, three on wide; the leading item tagged in cinder.',
+			'On Instagram and LinkedIn formats a model drop is a carousel: this as the cover, with a row per model (its name and tag) in place of the cards, then one slide per model with its card large.'
 		],
 		stories: ['communications-key-visuals--roster', 'communications-applications--model-drop'],
 		summary:
 			'Roster presents several items of one kind: a headline with a motif, chips, then a row of cards.',
-		use: 'A model drop, a set of new features, several models at once.'
+		use: 'A model drop, a set of new features, several models at once; as a carousel on square and tall formats.'
 	},
 	{
 		name: 'Bulletin',
 		shape: [
 			'Header: the lockup and a pill with a cinder dot (“New today”).',
 			'Headline (2u) with the lede beside it on wide formats.',
-			'A lead item (a family card, a chart) and a column of others (cards, stat cards); the footer.'
+			'A lead item (a family card, a chart) and a column of others (cards, stat cards): beside the lead on square and wide formats, under it on tall ones; the footer.'
 		],
 		stories: ['communications-key-visuals--bulletin', 'communications-applications--what-s-new'],
 		summary:

@@ -11,7 +11,7 @@
 		variant?: 'accent' | 'outline' | 'solid';
 	}
 
-	let { children, size = 0.5, variant = 'outline' }: Props = $props();
+	let { children, size = 0.54, variant = 'outline' }: Props = $props();
 </script>
 
 <span style:--s="calc(var(--u) * {size})" class="chip {variant}">{@render children()}</span>

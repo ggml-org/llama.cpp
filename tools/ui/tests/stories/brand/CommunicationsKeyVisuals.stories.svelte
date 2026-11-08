@@ -107,8 +107,9 @@
 						{#snippet motif()}<BranchMotif />{/snippet}
 
 						{#snippet cards()}
+							<!-- one image: the cards leave their repo ids to the link -->
 							{#each modelDrop.models.slice(0, format === 'story' ? 1 : 2) as model (model.name)}<ModelCard
-									{model}
+									model={{ ...model, repo: undefined }}
 									size={0.85}
 								/>{/each}
 						{/snippet}
@@ -139,7 +140,13 @@
 						{/snippet}
 
 						{#snippet side()}
-							<StatCard accent label="tok/s" value="142" /><StatCard label="GB" value="4.6" />
+							<!-- on the square the two sit stacked beside the curve, a little smaller -->
+							<StatCard
+								accent
+								label="tok/s"
+								size={format === 'square' ? 1.8 : 2.4}
+								value="142"
+							/><StatCard label="GB" size={format === 'square' ? 1.8 : 2.4} value="4.6" />
 						{/snippet}
 					</Bulletin>
 				</StateGalleryItem>
