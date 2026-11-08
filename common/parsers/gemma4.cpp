@@ -11,19 +11,35 @@ namespace {
 
 using gemma4 = common_chat_peg_gemma4_mapper;
 
+struct depth_guard {
+    int & depth;
+    depth_guard(int & depth) : depth(depth) {
+        if (++depth > COMMON_RECURSIVE_LIMIT) {
+            throw std::invalid_argument("JSON schema is nested more than " + std::to_string(COMMON_RECURSIVE_LIMIT) + " levels deep");
+        }
+    }
+    ~depth_guard() { depth--; }
+};
+
 // Gemma 4 uses different delimiters and cannot leverage the json-schema-to-grammar implementation.
 // This implements a subset to enforce properties.
 class gemma4_schema_parser {
     common_chat_peg_builder & p_;
+    std::string               root_;
+    int                       depth_ = 0;
 
     std::map<const common_chat_schema *, std::string> refs_;
 
   public:
-    explicit gemma4_schema_parser(common_chat_peg_builder & p) : p_(p) {}
+    gemma4_schema_parser(common_chat_peg_builder & p, std::string root) : p_(p), root_(std::move(root)) {}
 
+    common_peg_parser visit(const common_chat_schema & node) { return visit(node, root_); }
+
+  private:
     common_peg_parser visit(const common_chat_schema & node, const std::string & name) {
+        depth_guard guard(depth_);
         switch (node.kind()) {
-            case common_chat_schema::KIND_REF:    return visit_ref(node.as<common_chat_schema_ref>(), name);
+            case common_chat_schema::KIND_REF:    return visit_ref(node.as<common_chat_schema_ref>());
             case common_chat_schema::KIND_ANY_OF: return visit_any_of(node.as<common_chat_schema_any_of>(), name);
             case common_chat_schema::KIND_ALL_OF: return visit_all_of(node.as<common_chat_schema_all_of>(), name);
             case common_chat_schema::KIND_ARRAY:  return visit_array(node.as<common_chat_schema_array>(), name);
@@ -33,7 +49,6 @@ class gemma4_schema_parser {
         }
     }
 
-  private:
     // Whether a schema contributes a shape of its own, as opposed to accepting any value.
     static bool shaped(const common_chat_schema & node) {
         switch (node.kind()) {
@@ -88,7 +103,7 @@ class gemma4_schema_parser {
         return p_.tag(gemma4::DICT_KEY, alts + p_.literal(":"));
     }
 
-    common_peg_parser visit_ref(const common_chat_schema_ref & ref, const std::string & name) {
+    common_peg_parser visit_ref(const common_chat_schema_ref & ref) {
         if (!ref.target) {
             return p_.ref("gemma4-value");
         }
@@ -96,8 +111,10 @@ class gemma4_schema_parser {
         if (it != refs_.end()) {
             return p_.ref(it->second);
         }
-        refs_[ref.target] = gbnf_format_rule_name(name);
-        return p_.rule(name, [&]() { return visit(*ref.target, name + "-value"); });
+        // A target reached from several places gets one rule, named by the order it was first seen.
+        auto rule = root_ + "-ref-" + std::to_string(refs_.size());
+        refs_[ref.target] = rule;
+        return p_.rule(rule, [&]() { return visit(*ref.target, rule + "-value"); });
     }
 
     // Shaped alternatives are tried first, then anything else collapses into one generic value.
@@ -335,7 +352,7 @@ common_chat_params common_chat_params_init_gemma4(const common_chat_template &  
                 try {
                     auto doc = common_chat_schema_from_json(common_chat_tool_parameters(function));
                     if (dynamic_cast<const common_chat_schema_object *>(doc.root.get())) {
-                        args = gemma4_schema_parser(p).visit(*doc.root, "tool-" + std::to_string(tool_index) + "-args");
+                        args = gemma4_schema_parser(p, "tool-" + std::to_string(tool_index) + "-args").visit(*doc.root);
                     }
                 } catch (const std::exception & e) {
                     LOG_WRN("%s: tool %s uses the generic argument parser: %s\n", __func__, name.c_str(), e.what());
