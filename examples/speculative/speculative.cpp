@@ -103,6 +103,9 @@ int main(int argc, char ** argv) {
     params.cpuparams_batch.n_threads = params.speculative.draft.cpuparams_batch.n_threads;
     params.tensor_buft_overrides     = params.speculative.draft.tensor_buft_overrides;
 
+    // the MoE cache is only used by the target context
+    params.moe_cache_size = 0;
+
     auto llama_init_dft = common_init_from_params(params);
 
     model_dft = llama_init_dft->model();
