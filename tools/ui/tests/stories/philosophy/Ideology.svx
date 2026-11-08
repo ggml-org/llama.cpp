@@ -6,6 +6,7 @@
 <script>
 	import Figure from './Figure.svelte';
 	import Layers from './figures/Layers.svelte';
+	import Paths from './figures/Paths.svelte';
 	import Machine from './figures/Machine.svelte';
 	import Reach from './figures/Reach.svelte';
 	import Sharing from './figures/Sharing.svelte';
@@ -42,25 +43,25 @@ Access to AI should be as open as access to information: available to anyone, wh
 
 ## Simple by default, powerful on request
 
-Running a model used to take a terminal and terms like GGUF, quantization and speculative decoding. Most people want help with a letter, a photo or a question, and need none of that. Others want to tune every part. Both should feel at home.
+Most people want help with a letter, a photo or a question, not a lesson in GGUF and quantization. Others want to tune every part. Both should feel at home.
 
-For someone starting out, the choices are made in advance. Nothing comes pre-installed: the Llama app suggests models that fit the device and recommends one above the rest, small enough for any device and able to read, see and hear. One click downloads it from Hugging Face, and the app keeps the server running.
+<Figure n={3} caption="Two ways in. Starting out, the choices are made for you; for a power user, nothing is held back.">
+	<Paths />
+</Figure>
 
-For a power user, nothing is held back: any model and quant, sampling, penalties, system prompts, custom recipes and the server's own options. They are one step away rather than on the first screen.
+Nothing comes pre-installed. The first run is a recommendation and one click, and Llama Chat opens on a conversation, not on settings.
 
-Managing models is the native apps' job, so most people rarely have to think about it. In Llama Chat, the model manager and Discover are power-user features, off until someone turns them on; anyone else finds a model by name in the global search, next to their conversations and projects.
-
-Where exactly to draw the line between the two is still open.
-
-<Figure n={3} caption="The first run with Llama for Mac, in four frames from the real app and Llama Chat. Nothing comes pre-installed; settings wait until someone asks.">
+<Figure n={4} caption="The first run with Llama for Mac, in four frames from the real app and Llama Chat. Nothing comes pre-installed; settings wait until someone asks.">
 	<Storyboard />
 </Figure>
+
+Where exactly the line between the two sits is still open.
 
 ## Shared
 
 A server doesn't have to sit next to the person using it, or serve only one. Your phone can use the model on your Mac; one machine can serve a family or an office; a few together can be opened to anyone. People without the hardware can use it too.
 
-<Figure n={4} caption="Four setups, from one person to the internet. In each, one machine runs the model and others use it from their own devices.">
+<Figure n={5} caption="Four setups, from one person to the internet. In each, one machine runs the model and others use it from their own devices.">
 	<Sharing />
 </Figure>
 
@@ -78,7 +79,7 @@ So the application is the layer that most needs to be built in the open: its cod
 
 The **harness**, the agentic loop and the tools it can call, bridges the application and inference: the loop runs in the app, and its tools run in the app or in llama-server.
 
-<Figure n={5} caption="The three layers, from the one people use down to the weights, with the Llama part on each.">
+<Figure n={6} caption="The three layers, from the one people use down to the weights, with the Llama part on each.">
 	<Layers />
 </Figure>
 
@@ -86,7 +87,7 @@ The **harness**, the agentic loop and the tools it can call, bridges the applica
 
 We say what the product does, with real numbers, and show the real product. No hype, no fear, no superlatives.
 
-<Figure n={6} caption="What we write, and what we don't.">
+<Figure n={7} caption="What we write, and what we don't.">
 	<Voice />
 </Figure>
 
@@ -96,7 +97,7 @@ We say what the product does, with real numbers, and show the real product. No h
 - **Design:** neutral, so the conversation stands out, and open, so anyone can restyle it.
 - **Communications:** the real app, real figures and the same plain voice.
 
-<Figure n={7} caption="A model row as the app shows it, the greys with one accent, and llama.app's link preview.">
+<Figure n={8} caption="A model row as the app shows it, the greys with one accent, and llama.app's link preview.">
 	<Shows />
 </Figure>
 
