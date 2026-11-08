@@ -12,6 +12,7 @@ static constexpr bool is_arithmetic_v() {
 #ifdef GGML_SYCL_HAS_BF16
         || std::is_same_v<T, sycl::ext::oneapi::bfloat16>
 #endif
+        || std::is_same_v<T, ggml_fp8_e4m3_t>
         ;
 }
 }
@@ -33,6 +34,19 @@ inline void convert<sycl::half, sycl::ext::oneapi::bfloat16>(const char* src, ch
     *reinterpret_cast<sycl::ext::oneapi::bfloat16*>(dst) = sycl::ext::oneapi::bfloat16(tmp);
 }
 #endif
+
+// ggml_fp8_e4m3_t is a struct; sycl::vec::convert cannot target it, so route through float.
+template<>
+inline void convert<float, ggml_fp8_e4m3_t>(const char* src, char* dst) {
+    *reinterpret_cast<ggml_fp8_e4m3_t*>(dst) = { ggml_fp32_to_f8_e4m3(*reinterpret_cast<const float*>(src)) };
+}
+
+template<>
+inline void convert<sycl::half, ggml_fp8_e4m3_t>(const char* src, char* dst) {
+    const float tmp = sycl::vec<sycl::half, 1>(*reinterpret_cast<const sycl::half*>(src))
+                          .template convert<float, sycl::rounding_mode::automatic>()[0];
+    *reinterpret_cast<ggml_fp8_e4m3_t*>(dst) = { ggml_fp32_to_f8_e4m3(tmp) };
+}
 
 template <typename TIn, typename TIdx, typename blockType, int qk, cpy_kernel_t cpyblck>
 static void set_rows_sycl_q(const char * __restrict__ src0_d,
@@ -355,6 +369,19 @@ static void set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor * s
             );
             break;
 #endif
+        case GGML_TYPE_F8_E4M3:
+            dpct::has_capability_or_fail(stream->get_device(), { sycl::aspect::fp16 });
+            set_rows_sycl<TIn, TIdx, ggml_fp8_e4m3_t>(
+                src0_d, src1_d, (char *)dst->data,
+                ne00, ne01, ne02, ne03,
+                ne11, ne12,
+                nb01, nb02, nb03,
+                nb10, nb11, nb12,
+                nb1, nb2, nb3,
+                sizeof(TIn), sizeof(ggml_fp8_e4m3_t),
+                stream
+            );
+            break;
         case GGML_TYPE_Q8_0:
             set_rows_sycl_q<TIn, TIdx, block_q8_0, QK8_0, cpy_blck_f32_q8_0>(
                 src0_d, src1_d, (block_q8_0 *) dst->data, ne00, ne01, ne02, ne03,
