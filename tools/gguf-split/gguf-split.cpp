@@ -425,6 +425,7 @@ static void gguf_merge(const split_params & split_params) {
     auto * ctx_out = gguf_init_empty();
 
     std::vector<uint8_t> read_data;
+    const char * skip_name = getenv("GGUF_SKIP_TENSOR"); // extraction patch: пропустить тензор
     std::vector<ggml_context *> ctx_metas;
     std::vector<gguf_context *> ctx_ggufs;
 
@@ -513,6 +514,7 @@ static void gguf_merge(const split_params & split_params) {
         for (int i_tensor = 0; i_tensor < n_tensors; i_tensor++) {
             const char * t_name = gguf_get_tensor_name(ctx_gguf, i_tensor);
             struct ggml_tensor * t = ggml_get_tensor(ctx_meta, t_name);
+            if (skip_name != nullptr && strcmp(t_name, skip_name) == 0) { continue; }
             gguf_add_tensor(ctx_out, t);
         }
         total_tensors += n_tensors;
@@ -561,6 +563,7 @@ static void gguf_merge(const split_params & split_params) {
         auto n_tensors = gguf_get_n_tensors(ctx_gguf);
         for (int i_tensor = 0; i_tensor < n_tensors; i_tensor++) {
             const char * t_name = gguf_get_tensor_name(ctx_gguf, i_tensor);
+            if (skip_name != nullptr && strcmp(t_name, skip_name) == 0) { continue; }
             struct ggml_tensor * t = ggml_get_tensor(ctx_meta, t_name);
 
             auto n_bytes = ggml_nbytes(t);
