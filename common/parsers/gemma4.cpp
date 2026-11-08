@@ -91,8 +91,10 @@ class gemma4_schema_parser {
 
         auto alts = p_.choice();
         if (!key.empty() && key.find_first_of(":}") == std::string::npos && std::string("'\"<").find(key[0]) == std::string::npos) {
+            // Check if key is unambiguous
             alts |= name();
         }
+        // Gemma 4 may emit keys in its string delimiters or quotes
         alts |= p_.literal("<|\"|>") + name() + p_.literal("<|\"|>");
         if (key.find('\'') == std::string::npos) {
             alts |= p_.literal("'") + name() + p_.literal("'");
@@ -174,7 +176,8 @@ class gemma4_schema_parser {
         for (const auto & prop : node.properties) {
             props.push_back(&prop);
         }
-        // jinja's dictsort compares keys case-insensitively
+
+        // The Gemma 4 jinja template sorts properties, so our rules need to match.
         auto lower = [](const std::string & s) {
             std::string out = s;
             for (auto & c : out) {
@@ -193,9 +196,6 @@ class gemma4_schema_parser {
             return p_.rule(name, p_.tag(gemma4::DICT, p_.literal("{") + ws + p_.literal("}")));
         }
 
-        // Members are chained from the back. rest(i) accepts members i.. after a member was
-        // already written, so each one carries its comma, and first(i) accepts members i..
-        // when nothing was written yet. Optional members are skipped in place.
         std::optional<common_peg_parser> rest;
         std::optional<common_peg_parser> first;
         if (node.additional_properties) {
@@ -204,7 +204,9 @@ class gemma4_schema_parser {
             first   = p_.optional(kv + *rest);
         }
 
-        auto then_rest = [&](const common_peg_parser & parser) { return rest ? parser + *rest : parser; };
+        auto then_rest = [&](const common_peg_parser & parser) {
+            return rest ? parser + *rest : parser;
+        };
 
         for (size_t i = props.size(); i-- > 0;) {
             const auto & prop = *props[i];
