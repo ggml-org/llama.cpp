@@ -31,8 +31,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ubuntu-24-virtgpu:
-    runs-on: ${{ 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+  ubuntu-26-virtgpu:
+    runs-on: ${{ 'ubuntu-26.04-arm' || 'ubuntu-26.04' }}
 
     steps:
       - name: Clone
