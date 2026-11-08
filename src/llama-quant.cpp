@@ -1340,8 +1340,20 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                     if (it == imatrix_data->end()) {
                         LLAMA_LOG_INFO("\n====== %s: did not find weights for %s\n", __func__, tensor->name);
                     } else {
-                        if (it->second.size() == (size_t)tensor->ne[0]*tensor->ne[2]*tensor->ne[3]) {
+                        const size_t im_want = (size_t)tensor->ne[0]*tensor->ne[2]*tensor->ne[3];
+                        if (it->second.size() == im_want) {
                             imatrix = it->second.data();
+                        } else if (it->second.size() > im_want && it->second.size() % im_want == 0) {
+                            // patch: imatrix entries accumulated across n_seq parallel sequences (size = k*ne0*ne2).
+                            // Aggregate by summation into per-channel stats; uniform xk scaling is harmless for weighting.
+                            const size_t k = it->second.size() / im_want;
+                            std::vector<float> rb(im_want, 0.0f);
+                            for (size_t i = 0; i < it->second.size(); ++i) rb[i % im_want] += it->second[i];
+                            LLAMA_LOG_INFO("\n====== %s: rebinned imatrix %zu -> %zu (x%zu seq) for %s\n", __func__,
+                                    it->second.size(), im_want, k, tensor->name);
+                            static thread_local std::vector<float> imatrix_rebin_buf;
+                            imatrix_rebin_buf = std::move(rb);
+                            imatrix = imatrix_rebin_buf.data();
                         } else {
                             LLAMA_LOG_INFO("\n====== %s: imatrix size %d is different from tensor size %d for %s\n", __func__,
                                     int(it->second.size()), int(tensor->ne[0]*tensor->ne[2]*tensor->ne[3]), tensor->name);
