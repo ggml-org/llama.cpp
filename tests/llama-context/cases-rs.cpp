@@ -487,6 +487,54 @@ struct case_shared_seq_reserve : ctx_test {
     }
 };
 
+// a recurrent state is cleared for a new sequence; a cell that holds NaN must not stay NaN after the clear
+struct case_nan_clear : ctx_test {
+    test_group group() const override { return TEST_GROUP_RS; }
+
+    const char * name() const override { return "nan_clear"; }
+
+    const char * description() const override {
+        return "a new sequence in a cache filled with NaN decodes finite logits";
+    }
+
+    // the case sets its own fill
+    bool uses_fill() const override { return false; }
+
+    std::string skip_reason(model_run & mr) const override {
+        if (!llama_model_is_recurrent(mr.model) || llama_model_is_hybrid(mr.model)) {
+            return "a NaN fill would also reach the attention cache";
+        }
+
+        return ctx_test::skip_reason(mr);
+    }
+
+    case_result run(model_run & mr) const override {
+        const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(mr.model));
+
+        ctx_opts opts;
+        opts.fill = 0xff; // every float is NaN
+
+        llama_context_ptr ctx = make_ctx(mr.model, mr.params, opts);
+        if (!ctx) {
+            return case_result::fail();
+        }
+
+        CTX_REQUIRE(decode_gen(ctx.get(), n_vocab, 0, 0, 8), "decode failed");
+        CTX_REQUIRE(decode_one(ctx.get(), gen_token(n_vocab, 0, 8), 8), "decode failed");
+
+        const float * logits = llama_get_logits_ith(ctx.get(), -1);
+        CTX_REQUIRE(logits != nullptr, "missing logits");
+
+        bool finite = true;
+        for (int i = 0; i < n_vocab; ++i) {
+            finite = finite && std::isfinite(logits[i]);
+        }
+        CTX_REQUIRE(finite, "non-finite logit after the state was cleared");
+
+        return case_result::pass();
+    }
+};
+
 std::vector<ctx_test_ptr> make_rs_cases() {
     std::vector<ctx_test_ptr> cases;
 
@@ -494,6 +542,7 @@ std::vector<ctx_test_ptr> make_rs_cases() {
     cases.push_back(std::make_unique<case_rollback_bound>());
     cases.push_back(std::make_unique<case_multi_seq_split_replay>());
     cases.push_back(std::make_unique<case_shared_seq_reserve>());
+    cases.push_back(std::make_unique<case_nan_clear>());
 
     return cases;
 }
