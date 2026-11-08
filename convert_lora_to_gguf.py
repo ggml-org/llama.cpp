@@ -9,7 +9,7 @@ import argparse
 import os
 import sys
 import json
-from math import prod
+from math import prod, sqrt
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator, Sequence, SupportsIndex, cast
 from transformers import AutoConfig, AutoTokenizer
@@ -529,6 +529,11 @@ if __name__ == '__main__':
                     yield (dest_name + ".lora_b", lora_b)
 
         alpha: float = lparams["lora_alpha"]
+        if lparams.get("use_rslora", False):
+            # rsLoRA scale is alpha / sqrt(r), llama.cpp uses alpha / r
+            if lparams.get("rank_pattern"):
+                logger.warning("use_rslora with rank_pattern: the scale is only exact for modules with rank r")
+            alpha *= sqrt(lparams["r"])
 
         model_instance = LoraModel(
             dir_base_model,
