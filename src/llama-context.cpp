@@ -788,7 +788,15 @@ void llama_context::sched_new(const sched_params & params) {
 }
 
 void llama_context::sched_reserve() {
-    if (!sched_need_reserve) {
+    bool same_samplers = sampling.samplers.size() == sched_sampler_config.size();
+    for (const auto & [seq_id, sampler] : sampling.samplers) {
+        const auto it = sched_sampler_config.find(seq_id);
+        if (it == sched_sampler_config.end() || it->second != llama_sampler_backend_graph_config(sampler)) {
+            same_samplers = false;
+            break;
+        }
+    }
+    if (!sched_need_reserve && same_samplers) {
         return;
     }
 
@@ -952,6 +960,11 @@ void llama_context::sched_reserve() {
 
     LLAMA_LOG_INFO("%s: reserve took %.2f ms, sched copies = %d\n",
             __func__, (t_end_us - t_start_us)/1000.0, ggml_backend_sched_get_n_copies(sched.get()));
+
+    sched_sampler_config.clear();
+    for (const auto & [seq_id, sampler] : sampling.samplers) {
+        sched_sampler_config[seq_id] = llama_sampler_backend_graph_config(sampler);
+    }
 }
 
 void llama_context::synchronize() {
@@ -1892,21 +1905,40 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
 
     LLAMA_LOG_DEBUG("%s: seq_id = %d, sampler = %p\n", __func__, (int) seq_id, (void *) sampler);
 
+    auto previous = sampling.samplers.find(seq_id);
+    if (previous != sampling.samplers.end() && previous->second == sampler) {
+        return true;
+    }
+
+    // Discard graphs before the caller can free the old sampler or reuse its address.
+    synchronize();
+    if (sched) {
+        ggml_backend_sched_reset(sched.get());
+    }
+    for (auto & res : gf_res_prev) {
+        res.reset();
+    }
+    if (gf_res_reserve) {
+        gf_res_reserve->reset();
+    }
+    gf_res_prev_active = nullptr;
+    if (previous != sampling.samplers.end()) {
+        sampler_retries.erase(previous->second);
+        for (auto & retained : logits_retained) {
+            if (retained.sampler == previous->second) {
+                retained.sampler = nullptr;
+            }
+        }
+    }
+
     if (sampler && model.split_mode() == LLAMA_SPLIT_MODE_TENSOR) {
         static bool warned = false;
         if (!warned) {
             LLAMA_LOG_WARN("%s: backend sampling not supported with SPLIT_MODE_TENSOR; using CPU\n", __func__);
             warned = true;
         }
-        if (sampling.samplers.count(seq_id) > 0) {
-            sched_need_reserve = true;
-        }
         sampling.samplers.erase(seq_id);
         return false;
-    }
-
-    if (auto it = sampling.samplers.find(seq_id); it != sampling.samplers.end()) {
-        sampler_retries.erase(it->second);
     }
 
     const bool can_offload =
@@ -1922,17 +1954,11 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
 
         sampling.samplers[seq_id] = sampler;
 
-        sched_need_reserve = true;
-
         return true;
     }
 
     if (sampler && !can_offload) {
         LLAMA_LOG_WARN("%s: sampler '%s' for seq_id = %d, cannot be offloaded to the backend\n", __func__, llama_sampler_name(sampler), seq_id);
-
-        if (sampling.samplers.count(seq_id) > 0) {
-            sched_need_reserve = true;
-        }
 
         sampling.samplers.erase(seq_id);
 
@@ -1940,8 +1966,6 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
     }
 
     sampling.samplers.erase(seq_id);
-
-    sched_need_reserve = true;
 
     return true;
 }

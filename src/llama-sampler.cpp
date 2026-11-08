@@ -648,6 +648,49 @@ static uint32_t llama_sampler_backend_probe_n_nodes(const llama_sampler_backend_
     return std::max<uint32_t>(ggml_graph_n_nodes(probe.gf), n_tensors);
 }
 
+static std::vector<uint64_t> llama_sampler_backend_probe_config(const llama_sampler_backend_probe & probe) {
+    std::vector<const ggml_tensor *> tensors;
+    std::unordered_map<const ggml_tensor *, uint64_t> ids = {{nullptr, 0}};
+    const auto add = [&](const ggml_tensor * tensor) {
+        if (tensor && ids.emplace(tensor, ids.size()).second) {
+            tensors.push_back(tensor);
+        }
+    };
+    for (auto * tensor = ggml_get_first_tensor(probe.ctx.get()); tensor;
+            tensor = ggml_get_next_tensor(probe.ctx.get(), tensor)) {
+        add(tensor);
+    }
+    for (size_t i = 0; i < tensors.size(); ++i) {
+        add(tensors[i]->view_src);
+        for (auto * src : tensors[i]->src) {
+            add(src);
+        }
+    }
+
+    // Compare metadata and edges, without retaining sampler-owned tensor pointers.
+    std::vector<uint64_t> config = {tensors.size()};
+    for (auto * tensor : tensors) {
+        config.push_back(tensor->type);
+        config.push_back(tensor->op);
+        config.push_back(tensor->flags);
+        config.insert(config.end(), tensor->ne, tensor->ne + GGML_MAX_DIMS);
+        config.insert(config.end(), tensor->nb, tensor->nb + GGML_MAX_DIMS);
+        config.insert(config.end(), std::begin(tensor->op_params), std::end(tensor->op_params));
+        config.push_back(tensor->view_offs);
+        config.push_back(ids.at(tensor->view_src));
+        config.push_back(reinterpret_cast<uintptr_t>(tensor->buffer ? ggml_backend_buffer_get_type(tensor->buffer) : nullptr));
+        config.push_back(tensor->buffer ? ggml_backend_buffer_get_usage(tensor->buffer) : GGML_BACKEND_BUFFER_USAGE_ANY);
+        for (auto * src : tensor->src) {
+            config.push_back(ids.at(src));
+        }
+    }
+    config.push_back(ggml_graph_n_nodes(probe.gf));
+    for (int i = 0; i < ggml_graph_n_nodes(probe.gf); ++i) {
+        config.push_back(ids.at(ggml_graph_node(probe.gf, i)));
+    }
+    return config;
+}
+
 // check if all ggml ops used by the sampler are supported by the backend
 static bool llama_sampler_backend_support(
         llama_sampler              * smpl,
@@ -780,6 +823,10 @@ static bool llama_sampler_chain_backend_init(
 
     auto probe = llama_sampler_backend_probe_graph(smpl, 128*1024, GGML_DEFAULT_GRAPH_SIZE, false);
     chain->n_nodes = llama_sampler_backend_probe_n_nodes(probe);
+    chain->graph_config = llama_sampler_backend_probe_config(probe);
+    chain->graph_config.push_back(reinterpret_cast<uintptr_t>(buft));
+    chain->graph_config.push_back(n_outputs_max_per_seq);
+    chain->graph_config.push_back(chain->params.output_flags);
 
     return res;
 }
@@ -923,6 +970,7 @@ struct llama_sampler * llama_sampler_chain_init(struct llama_sampler_chain_param
             /* .params               = */ params,
             /* .is_init              = */ false,
             /* .n_nodes              = */ 0,
+            /* .graph_config         = */ {},
             /* .samplers             = */ {},
             /* .cur                  = */ {},
             /* .t_sample_us          = */ 0,
@@ -944,6 +992,13 @@ uint32_t llama_sampler_backend_n_nodes(const llama_sampler * sampler) {
     GGML_ASSERT(chain->is_init);
 
     return chain->n_nodes;
+}
+
+const std::vector<uint64_t> & llama_sampler_backend_graph_config(const llama_sampler * sampler) {
+    GGML_ASSERT(sampler->iface == &llama_sampler_chain_i);
+    const auto * chain = (const llama_sampler_chain *) sampler->ctx;
+    GGML_ASSERT(chain->is_init);
+    return chain->graph_config;
 }
 
 llama_token llama_sampler_sample(struct llama_sampler * smpl, struct llama_context * ctx, int32_t idx) {

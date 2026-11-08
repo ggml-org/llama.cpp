@@ -437,6 +437,7 @@ private:
     sched_params sched_params_cur;
 
     bool sched_need_reserve = true;
+    std::map<llama_seq_id, std::vector<uint64_t>> sched_sampler_config;
     bool outputs_ready = false;
 
     // whether the reserve graph has a logits tensor, set in sched_reserve()

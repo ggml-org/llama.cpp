@@ -17,6 +17,8 @@ struct llama_sampler_chain {
 
     uint32_t n_nodes = 0;
 
+    std::vector<uint64_t> graph_config;
+
     struct info {
         bool is_backend;
 
@@ -36,6 +38,7 @@ struct llama_sampler_chain {
 };
 
 uint32_t llama_sampler_backend_n_nodes(const llama_sampler * sampler);
+const std::vector<uint64_t> & llama_sampler_backend_graph_config(const llama_sampler * sampler);
 uint32_t llama_sampler_output_flags(const llama_sampler * sampler);
 void llama_sampler_backend_begin(llama_sampler * sampler);
 bool llama_sampler_backend_can_retry(const llama_sampler * sampler);

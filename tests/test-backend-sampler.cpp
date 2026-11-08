@@ -2346,6 +2346,120 @@ static void test_set_sampler(const test_params & params) {
     printf("backend set sampler test PASSED\n");
 }
 
+static void test_sampler_reservation(const test_params & params) {
+    if (!grammar_test_supported(params)) {
+        return;
+    }
+    struct reserve_counter {
+        ggml_log_callback callback;
+        void * user_data;
+        size_t count = 0;
+
+        reserve_counter() {
+            llama_log_get(&callback, &user_data);
+            llama_log_set([](ggml_log_level level, const char * text, void * data) {
+                auto * self = (reserve_counter *) data;
+                if (strstr(text, "sched_reserve: reserving ...")) {
+                    ++self->count;
+                }
+                if (self->callback) {
+                    self->callback(level, text, self->user_data);
+                }
+            }, this);
+        }
+
+        ~reserve_counter() {
+            llama_log_set(callback, user_data);
+        }
+    } counter;
+
+    const auto * vocab = llama_model_get_vocab(params.model.get());
+    const auto tokens = grammar_test_tokens(vocab);
+    const auto make_chain = [&](llama_token token, bool temp = false, uint32_t flags = 0, int32_t top_k = 0) {
+        auto cp = llama_sampler_chain_default_params();
+        cp.output_flags = flags;
+        llama_sampler_ptr chain(llama_sampler_chain_init(cp));
+        const auto rule = "root ::= " + grammar_token(token);
+        llama_sampler_chain_add(chain.get(), llama_sampler_init_grammar(vocab, rule.c_str(), "root"));
+        if (temp) {
+            llama_sampler_chain_add(chain.get(), llama_sampler_init_temp(0.75f));
+        }
+        if (top_k) {
+            llama_sampler_chain_add(chain.get(), llama_sampler_init_top_k(top_k));
+        }
+        llama_sampler_chain_add(chain.get(), llama_sampler_init_greedy());
+        return chain;
+    };
+
+    for (uint32_t capacity : {1u, 2u}) {
+        auto chain = make_chain(tokens[0]);
+        std::vector<llama_sampler_seq_config> configs = {{0, chain.get()}};
+        test_context ctx(params, configs, 2, 0, 0, capacity);
+        const auto decode = [&](llama_seq_id seq, llama_token expected) {
+            GGML_ASSERT(ctx.decode_token(tokens[0], seq));
+            GGML_ASSERT(llama_get_sampled_token_ith(ctx.ctx.get(), ctx.idx_for_seq(seq)) == expected);
+        };
+        decode(0, tokens[0]);
+        size_t reserved = counter.count;
+        GGML_ASSERT(llama_set_sampler(ctx.ctx.get(), 0, chain.get()));
+        decode(0, tokens[0]);
+        GGML_ASSERT(counter.count == reserved);
+
+        auto replacement = make_chain(tokens[1]);
+        GGML_ASSERT(llama_set_sampler(ctx.ctx.get(), 0, replacement.get()));
+        chain.reset();
+        decode(0, tokens[1]);
+        GGML_ASSERT(counter.count == reserved);
+
+        // Detach while work is pending, then free the sampler before the next request.
+        GGML_ASSERT(ctx.decode_token(tokens[0]));
+        GGML_ASSERT(llama_set_sampler(ctx.ctx.get(), 0, nullptr));
+        replacement.reset();
+        chain = make_chain(tokens[2]);
+        GGML_ASSERT(llama_set_sampler(ctx.ctx.get(), 0, chain.get()));
+        decode(0, tokens[2]);
+        GGML_ASSERT(counter.count == reserved);
+
+        replacement = make_chain(tokens[0], true);
+        GGML_ASSERT(llama_set_sampler(ctx.ctx.get(), 0, replacement.get()));
+        chain.reset();
+        decode(0, tokens[0]);
+        GGML_ASSERT(counter.count == ++reserved);
+
+        chain = make_chain(tokens[1], true, LLAMA_SAMPLER_OUTPUT_RAW);
+        GGML_ASSERT(llama_set_sampler(ctx.ctx.get(), 0, chain.get()));
+        replacement.reset();
+        decode(0, tokens[1]);
+        GGML_ASSERT(counter.count == ++reserved);
+
+        replacement = make_chain(tokens[0], true, LLAMA_SAMPLER_OUTPUT_RAW, 8);
+        GGML_ASSERT(llama_set_sampler(ctx.ctx.get(), 0, replacement.get()));
+        chain.reset();
+        decode(0, tokens[0]);
+        GGML_ASSERT(counter.count == ++reserved);
+
+        // Changing k changes tensor capacity without changing the operation count.
+        chain = make_chain(tokens[1], true, LLAMA_SAMPLER_OUTPUT_RAW, 16);
+        GGML_ASSERT(llama_set_sampler(ctx.ctx.get(), 0, chain.get()));
+        replacement.reset();
+        decode(0, tokens[1]);
+        GGML_ASSERT(counter.count == ++reserved);
+
+        GGML_ASSERT(llama_set_sampler(ctx.ctx.get(), 0, nullptr));
+        replacement = make_chain(tokens[2], true, LLAMA_SAMPLER_OUTPUT_RAW, 16);
+        GGML_ASSERT(llama_set_sampler(ctx.ctx.get(), 1, replacement.get()));
+        chain.reset();
+        decode(1, tokens[2]);
+        GGML_ASSERT(counter.count == ++reserved);
+
+        GGML_ASSERT(llama_set_sampler(ctx.ctx.get(), 1, nullptr));
+        replacement.reset();
+        decode(1, LLAMA_TOKEN_NULL);
+        GGML_ASSERT(counter.count == ++reserved);
+        printf("sampler reservation reuse and invalidation (capacity %u) PASSED\n", capacity);
+    }
+}
+
 static void test_cpu_mixed(const test_params & params) {
     // Sequence 0 uses backend sampling
     struct llama_sampler_chain_params chain_params_0 = llama_sampler_chain_default_params();
@@ -3796,6 +3910,7 @@ static const backend_test_case BACKEND_TESTS[] = {
     { "test_mixed",                  test_mixed,                  true },
     { "test_cpu_mixed",              test_cpu_mixed,              true },
     { "test_set_sampler",            test_set_sampler,            true },
+    { "test_sampler_reservation",    test_sampler_reservation,    true },
     // multiple outputs per sequence
     { "test_multi_output_limit",                  test_multi_output_limit,               true },
     { "test_multi_output_multi_sequence_dist",    test_multi_output_multi_sequence_dist, true },
