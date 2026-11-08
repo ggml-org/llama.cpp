@@ -2,8 +2,7 @@
 
 #include "ggml.h"
 #include "ggml-backend.h"
-#include "clip-model.h"
-#include "clip-impl.h"
+#include "mtmd-model.h"
 
 #include <cstdint>
 #include <vector>
@@ -77,7 +76,7 @@ struct mtmd_audio_mel_config {
 };
 
 struct mtmd_audio_preproc_out {
-    std::vector<clip_image_f32> entries; // one per chunk, empty on failure
+    std::vector<mtmd_image_f32> entries; // one per chunk, empty on failure
     std::vector<float> samples;          // input of compute(), empty if entries already hold the data
 
     bool needs_compute() const {
@@ -86,13 +85,12 @@ struct mtmd_audio_preproc_out {
 };
 
 struct mtmd_audio_preprocessor {
-    const clip_hparams & hparams;
+    const mtmd_hparams & hparams;
     mtmd_audio_mel_config mel_config; // filled by initialize() of the preprocessors that use the log-mel graph
 
-    mtmd_audio_preprocessor(const clip_ctx * ctx): hparams(*clip_get_hparams(ctx)) {
-        mel_config.sched = clip_get_sched(ctx);
-    }
-    mtmd_audio_preprocessor(const clip_hparams & hparams, ggml_backend_sched_t sched): hparams(hparams) {
+    // mel_config.sched must be set before the first compute(), see mtmd_context::init_audio()
+    mtmd_audio_preprocessor(const mtmd_model * model): hparams(model->hparams) {}
+    mtmd_audio_preprocessor(const mtmd_hparams & hparams, ggml_backend_sched_t sched): hparams(hparams) {
         mel_config.sched = sched;
     }
 
@@ -115,7 +113,7 @@ struct mtmd_audio_preprocessor {
 };
 
 struct mtmd_audio_preprocessor_whisper : mtmd_audio_preprocessor {
-    mtmd_audio_preprocessor_whisper(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
+    mtmd_audio_preprocessor_whisper(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
     void initialize() override;
     bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
 
@@ -124,14 +122,14 @@ struct mtmd_audio_preprocessor_whisper : mtmd_audio_preprocessor {
 };
 
 struct mtmd_audio_preprocessor_muse_spark_audio : mtmd_audio_preprocessor {
-    mtmd_audio_preprocessor_muse_spark_audio(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
+    mtmd_audio_preprocessor_muse_spark_audio(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
     void initialize() override {}
     bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
 };
 
 struct mtmd_audio_preprocessor_conformer : mtmd_audio_preprocessor {
-    mtmd_audio_preprocessor_conformer(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
-    mtmd_audio_preprocessor_conformer(const clip_hparams & hparams, ggml_backend_sched_t sched) : mtmd_audio_preprocessor(hparams, sched) {}
+    mtmd_audio_preprocessor_conformer(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
+    mtmd_audio_preprocessor_conformer(const mtmd_hparams & hparams, ggml_backend_sched_t sched) : mtmd_audio_preprocessor(hparams, sched) {}
     void initialize() override;
     bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
 
@@ -146,7 +144,7 @@ struct mtmd_audio_preprocessor_d1omni : mtmd_audio_preprocessor_conformer {
 };
 
 struct mtmd_audio_preprocessor_lfm3a : mtmd_audio_preprocessor {
-    mtmd_audio_preprocessor_lfm3a(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
+    mtmd_audio_preprocessor_lfm3a(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
     void initialize() override;
     bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
 
@@ -155,7 +153,7 @@ struct mtmd_audio_preprocessor_lfm3a : mtmd_audio_preprocessor {
 };
 
 struct mtmd_audio_preprocessor_granite_speech : mtmd_audio_preprocessor {
-    mtmd_audio_preprocessor_granite_speech(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
+    mtmd_audio_preprocessor_granite_speech(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
     void initialize() override;
     bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
 
@@ -164,7 +162,7 @@ struct mtmd_audio_preprocessor_granite_speech : mtmd_audio_preprocessor {
 };
 
 struct mtmd_audio_preprocessor_gemma4a : mtmd_audio_preprocessor {
-    mtmd_audio_preprocessor_gemma4a(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
+    mtmd_audio_preprocessor_gemma4a(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
     void initialize() override;
     bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
 
@@ -173,13 +171,13 @@ struct mtmd_audio_preprocessor_gemma4a : mtmd_audio_preprocessor {
 };
 
 struct mtmd_audio_preprocessor_gemma4ua : mtmd_audio_preprocessor {
-    mtmd_audio_preprocessor_gemma4ua(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
+    mtmd_audio_preprocessor_gemma4ua(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
     void initialize() override;
     bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
 };
 
 struct mtmd_audio_preprocessor_qwen3a : mtmd_audio_preprocessor {
-    mtmd_audio_preprocessor_qwen3a(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
+    mtmd_audio_preprocessor_qwen3a(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
     void initialize() override;
     bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
 
@@ -188,7 +186,7 @@ struct mtmd_audio_preprocessor_qwen3a : mtmd_audio_preprocessor {
 };
 
 struct mtmd_audio_preprocessor_dots3note : mtmd_audio_preprocessor {
-    mtmd_audio_preprocessor_dots3note(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
+    mtmd_audio_preprocessor_dots3note(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
     void initialize() override;
     bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
 
@@ -197,7 +195,7 @@ struct mtmd_audio_preprocessor_dots3note : mtmd_audio_preprocessor {
 };
 
 struct mtmd_audio_preprocessor_mimo_audio : mtmd_audio_preprocessor {
-    mtmd_audio_preprocessor_mimo_audio(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
+    mtmd_audio_preprocessor_mimo_audio(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
     void initialize() override;
     bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
 
@@ -206,7 +204,7 @@ struct mtmd_audio_preprocessor_mimo_audio : mtmd_audio_preprocessor {
 };
 
 struct mtmd_audio_preprocessor_qwen3tts_spk : mtmd_audio_preprocessor {
-    mtmd_audio_preprocessor_qwen3tts_spk(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
+    mtmd_audio_preprocessor_qwen3tts_spk(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
     void initialize() override;
     bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
 
@@ -216,7 +214,7 @@ struct mtmd_audio_preprocessor_qwen3tts_spk : mtmd_audio_preprocessor {
 
 // mimi convolves the waveform directly, so this only pads it to a whole number of frames
 struct mtmd_audio_preprocessor_pockettts : mtmd_audio_preprocessor {
-    mtmd_audio_preprocessor_pockettts(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
+    mtmd_audio_preprocessor_pockettts(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
     void initialize() override {}
     bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
 };
@@ -229,7 +227,7 @@ struct mtmd_audio_preprocessor_pockettts : mtmd_audio_preprocessor {
 //   4: voice encoder power mel         [n_frames x 40]  (frame major, trimmed, partial grid)
 // turbo loudness-normalizes the clip to -27 LUFS and caps the t3 clip at 15 s instead of 6 s
 struct mtmd_audio_preprocessor_chatterbox_ref : mtmd_audio_preprocessor {
-    mtmd_audio_preprocessor_chatterbox_ref(const clip_ctx * ctx, bool is_mtl) : mtmd_audio_preprocessor(ctx), is_mtl(is_mtl) {}
+    mtmd_audio_preprocessor_chatterbox_ref(const mtmd_model * model, bool is_mtl) : mtmd_audio_preprocessor(model), is_mtl(is_mtl) {}
     void initialize() override;
     bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
 
@@ -242,7 +240,7 @@ struct mtmd_audio_preprocessor_chatterbox_ref : mtmd_audio_preprocessor {
 };
 
 struct mtmd_audio_preprocessor_parakeet : mtmd_audio_preprocessor {
-    mtmd_audio_preprocessor_parakeet(clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) { }
+    mtmd_audio_preprocessor_parakeet(const mtmd_model * model) : mtmd_audio_preprocessor(model) { }
     void initialize() override;
     bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
 
@@ -255,7 +253,7 @@ struct mtmd_audio_preprocessor_parakeet : mtmd_audio_preprocessor {
 
 // one chunk per recording: the raw log-mel of its valid frames
 struct mtmd_audio_preprocessor_nemotron_transcribe : mtmd_audio_preprocessor_parakeet {
-    mtmd_audio_preprocessor_nemotron_transcribe(clip_ctx * ctx) : mtmd_audio_preprocessor_parakeet(ctx) { }
+    mtmd_audio_preprocessor_nemotron_transcribe(const mtmd_model * model) : mtmd_audio_preprocessor_parakeet(model) { }
     bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
 };
 

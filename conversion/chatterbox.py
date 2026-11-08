@@ -355,7 +355,7 @@ class ChatterboxMmprojModel(MmprojModel):
     def set_gguf_parameters(self):
         self.gguf_writer.add_file_type(self.ftype)
 
-        # speaker encoder, the front-end hparams are hard-coded in clip.cpp
+        # speaker encoder, the front-end hparams are hard-coded in tools/mtmd
         self.gguf_writer.add_clip_has_audio_encoder(True)
         self.gguf_writer.add_clip_audio_projector_type(gguf.VisionProjectorType.CHATTERBOX_SPKENC)
         self.gguf_writer.add_audio_projection_dim(80)

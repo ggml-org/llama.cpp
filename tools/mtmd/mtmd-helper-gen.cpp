@@ -494,7 +494,7 @@ private:
     llama_token tts_eos    = LLAMA_TOKEN_NULL;
     std::vector<float> tok_embd; // whole token embedding matrix, n_vocab * n_embd
 
-    // must match hparams.wav_tfm_swa hardcoded in clip.cpp
+    // must match hparams.wav_tfm_swa hardcoded in mtmd-model.cpp
     size_t window_frames = 72;
 
     // per-generation state, cleared by reset()
@@ -2291,7 +2291,7 @@ private:
     // repetition-aware sampling: if a semantic draw repeats one of the last ras_window main tokens, draw again with fixed settings
     static constexpr size_t ras_window = 16;
     static constexpr size_t n_cb       = 10;
-    // codebook tower KV rows (clip_graph_drama3_gen::n_pos_max): one per prompt row but the last, one per frame
+    // codebook tower KV rows (mtmd_graph_drama3_gen::n_pos_max): one per prompt row but the last, one per frame
     static constexpr size_t n_tower_rows = 4096;
     // frames per codec call when streaming (0.33 s)
     static constexpr size_t stream_frames = 7;
