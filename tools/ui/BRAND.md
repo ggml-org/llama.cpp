@@ -126,7 +126,8 @@ wide ones 12, with a gutter of ½u.
 ## Building blocks
 
 - **Header**: the lockup (or the icon before a Mono kicker), an optional pill with a cinder dot, the URL in Mono at
-  the right.
+  the right, at least 2u from the kicker or pill. When the row can't hold that, the URL goes beside the label of what
+  it points to (as a model drop's catalog URL beside its cards), or into the footer.
 - **Footer**: who it is from on the left, the promise on the right, in muted ink.
 - **Chips**: Mono pills. Outline for use cases, solid for a tag, cinder once.
 - **Figure**: a big number with a Mono label under it.
@@ -179,4 +180,7 @@ phone that scanned it. It claims nothing about telemetry: the Mac app reports cr
 - Llama Sans for words, Llama Mono for code and data.
 - Keep everything inside the margin and the safe area; nothing touches the edge except a product shot that runs
   off it on purpose.
+- Separate runs of text on one line keep at least 2u apart (items of one list, such as a card's figures, at least
+  1u), so they never read as one line, and nothing runs into the header or footer. When they can't, move one of them
+  to its own place rather than squeezing them together.
 - No gradients other than the two skies, no glows, no drop shadows on type, no emoji, no stock photography.

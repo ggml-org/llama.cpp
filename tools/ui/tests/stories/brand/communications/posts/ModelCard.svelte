@@ -108,7 +108,8 @@
 	.stats {
 		display: flex;
 		flex-wrap: wrap;
-		gap: 0.3em 1.4em;
+		/* a unit at the least between figures, so two of them never read as one line */
+		gap: 0.3em calc(var(--u) * 1.2);
 		color: var(--p-ink);
 		font-size: calc(var(--s) * 0.48);
 		line-height: 1.2;
@@ -125,6 +126,8 @@
 		font-size: calc(var(--s) * 0.56);
 		line-height: 1.35;
 		text-wrap: pretty;
+		/* in a card taller than its content, the meta or repo below it goes to the card's foot */
+		margin-bottom: auto;
 	}
 	.inset .description {
 		color: var(--p-muted);

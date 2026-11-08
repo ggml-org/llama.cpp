@@ -1,7 +1,8 @@
 <!--
 	Roster: a headline, the lede with a motif beside it and the chips under them (on a wide format, the motif beside
-	the whole block), then a labelled row of cards. The cards are the layout's content: models in a drop, features in
-	a release. They go one, two or three across with the format.
+	the whole block), then a labelled row of cards, with a URL beside the label when the header has no room for it.
+	The cards are the layout's content: models in a drop, features in a release. They go one, two or three across
+	with the format.
 -->
 <script lang="ts">
 	import HeadlineBlock from '../posts/HeadlineBlock.svelte';
@@ -18,12 +19,26 @@
 		headline: string;
 		/** the label over the cards */
 		label?: string;
+		/** a URL at the right of the label row, for where the cards come from */
+		link?: string;
 		lede?: string;
 		motif?: Snippet;
 	}
 
-	let { cards, chips, footer, format, header, headline, label, lede, motif, overlay, tone }: Props =
-		$props();
+	let {
+		cards,
+		chips,
+		footer,
+		format,
+		header,
+		headline,
+		label,
+		lede,
+		link,
+		motif,
+		overlay,
+		tone
+	}: Props = $props();
 </script>
 
 <PostFrame format={FORMATS[format]} label="Roster, {FORMATS[format].name}, {tone}" {overlay} {tone}>
@@ -35,7 +50,13 @@
 		{#if motif}<div class="motif fill">{@render motif()}</div>{/if}
 	</div>
 
-	{#if label}<p class="t-label">{label}</p>{/if}
+	{#if label}
+		<div class="label">
+			<p class="t-label">{label}</p>
+
+			{#if link}<span class="link">{link}</span>{/if}
+		</div>
+	{/if}
 
 	<div class="cards">{@render cards()}</div>
 
@@ -83,10 +104,19 @@
 		grid-row: 2;
 		min-height: calc(var(--u) * 4.5);
 	}
-	.t-label {
+	.label {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: calc(var(--u) * 2);
 		margin-top: auto;
 		padding-top: calc(var(--u) * 0.8);
 		margin-bottom: calc(var(--u) * 0.45);
+	}
+	/* the URL in the header's type, beside the label of what it links to */
+	.link {
+		color: var(--p-ink);
+		font: 400 calc(var(--u) * 0.6) / 1 var(--mono);
 	}
 	.cards {
 		display: grid;

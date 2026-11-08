@@ -64,11 +64,13 @@
 		grid-auto-flow: column;
 	}
 
+	/* a wide format is short: a unit over the grid, as on a Statement, and less between its rows */
 	:global(.shape-wide) .grid {
 		grid-template-rows: auto minmax(0, 1fr);
 		grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
 		align-items: center;
-		row-gap: calc(var(--u) * 1);
+		row-gap: calc(var(--u) * 0.8);
+		margin-top: calc(var(--u) * 1);
 	}
 	:global(.shape-wide) .t-headline {
 		grid-column: 1 / 8;
@@ -80,6 +82,10 @@
 	:global(.shape-wide) .lead {
 		grid-column: 1 / 8;
 		align-self: stretch;
+	}
+	/* with no lede beside the headline, the side column runs from the headline's top to the lead's bottom */
+	:global(.shape-wide) .grid:not(:has(.t-lede)) .side {
+		grid-row: 1 / span 2;
 	}
 	:global(.shape-wide) .side {
 		grid-column: 8 / -1;
