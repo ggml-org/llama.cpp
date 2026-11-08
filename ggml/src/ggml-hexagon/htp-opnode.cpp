@@ -187,11 +187,7 @@ static std::string format_kernel_params(const htp_opnode & node) {
         const auto * kparams = node.kparams<htp_ssm_scan_kernel_params>();
         const char * path = "fallback";
         if (kparams->kernel_type == HTP_SSM_SCAN_KERNEL_MAMBA2_VTCM) {
-            if (kparams->n_tokens > 1) {
-                path = "vtcm-prefill";
-            } else {
-                path = kparams->decode_state_io == HTP_SSM_SCAN_STATE_IO_HVX ? "vtcm-decode-hvx" : "vtcm-decode-dma";
-            }
+            path = kparams->n_tokens > 1 ? "vtcm-prefill" : "vtcm-decode";
         }
         snprintf(str, max_size, "%s nth %u vtcm %u", path, (unsigned int) kparams->n_threads,
                  (unsigned int) kparams->vtcm_size);

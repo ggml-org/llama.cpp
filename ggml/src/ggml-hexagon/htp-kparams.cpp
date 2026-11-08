@@ -2320,12 +2320,6 @@ static bool htp_kparams_solve_ssm_scan(
         kparams->n_threads   = (uint16_t) (std::min)(sess_threads, n_head);
     }
 
-    // Direct HVX is faster for state streams up to the measured 4 MiB crossover.
-    // Keep DMA y output and cached state output on separate cache lines.
-    const uint64_t state_bytes = (uint64_t) d_state * head_dim * n_head * n_seqs * sizeof(float);
-    const uint64_t y_bytes     = (uint64_t) head_dim * n_head * n_tokens * n_seqs * sizeof(float);
-    kparams->decode_state_io   = state_bytes <= 4U * 1024U * 1024U && y_bytes % 128 == 0 ? HTP_SSM_SCAN_STATE_IO_HVX : HTP_SSM_SCAN_STATE_IO_DMA;
-
     kparams->div_units_per_seq   = init_fastdiv_values(kparams->units_per_seq);
     kparams->div_group_units     = init_fastdiv_values(kparams->group_units);
     kparams->div_n_row_blocks    = init_fastdiv_values(kparams->n_row_blocks);

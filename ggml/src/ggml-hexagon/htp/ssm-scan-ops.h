@@ -15,14 +15,8 @@ enum htp_ssm_scan_kernel_type {
     HTP_SSM_SCAN_KERNEL_MAMBA2_VTCM = 1,
 };
 
-enum htp_ssm_scan_state_io {
-    HTP_SSM_SCAN_STATE_IO_DMA = 0,
-    HTP_SSM_SCAN_STATE_IO_HVX = 1,
-};
-
 struct htp_ssm_scan_kernel_params {
     uint8_t  kernel_type;
-    uint8_t  decode_state_io;
     uint16_t row_tile;
     uint16_t token_tile;
     uint16_t n_threads;
