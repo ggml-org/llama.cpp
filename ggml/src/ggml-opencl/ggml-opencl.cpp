@@ -11499,6 +11499,12 @@ static bool use_fa_bin_kernels_prefill(const ggml_backend_opencl_context * backe
 
     constexpr bool prefill_only = true;
 
+    // q8_0 K/V at DK=512 gives wrong results here when V differs from K (f16 K/V is correct).
+    // Decline it, as this backend does without the kernel library.
+    if (is_q8_0 && dk == 512) {
+        return false;
+    }
+
     return (backend_ctx->gpu_family == GPU_FAMILY::ADRENO &&
             (is_mixed || is_q8_0) && (dk == dv)
             && (dk == 64 || dk == 128 || dk == 256 || dk == 512)
