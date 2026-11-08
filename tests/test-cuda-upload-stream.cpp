@@ -59,7 +59,7 @@ int main() {
         return 0;
     }
 
-    ggml_backend_buffer_t buf = ggml_backend_alloc_buffer(buft, N);
+    ggml_backend_buffer_t buf = ggml_backend_buft_alloc_buffer(buft, N);
     if (buf == nullptr) {
         printf("FAIL: buffer alloc\n");
         ggml_backend_free(backend);
