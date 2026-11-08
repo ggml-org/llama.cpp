@@ -2414,6 +2414,9 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     //call early so that topk-moe can be used
     ggml_build_forward_expand(gf, weights);
 
+    // compute the expert input before the slot lookup, so that the scheduler prefetches it for the CPU part (the router can read a different tensor)
+    ggml_build_forward_expand(gf, cur);
+
     // the experts of host-resident layers may be read from the MoE cache, and part of the misses computed from the host experts
     // the CPU part does not support weights before the FFN, LoRAs or rotated experts
     const std::array<ggml_tensor *, 4> exps = { up_exps, gate_exps, down_exps, gate_up_exps };
