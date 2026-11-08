@@ -2117,34 +2117,80 @@ void ggml_hexagon_session::allocate(const ggml_hexagon_device_config & config) n
         }
     }
 
-    char session_uri[256];
-    {
-        char htp_uri[256];
-        snprintf(htp_uri, sizeof(htp_uri), "file:///libggml-htp-v%u.so?htp_iface_skel_handle_invoke&_modver=1.0", opt_arch);
+    auto open_session = [&](const std::string & prefix, std::string & uri_out) -> int {
+        const std::string htp_uri = prefix + "libggml-htp-v" + std::to_string(opt_arch) +
+                                    ".so?htp_iface_skel_handle_invoke&_modver=1.0";
+
+        std::vector<char> session_uri(htp_uri.size() + 256);
 
         struct remote_rpc_get_uri u = {};
         u.session_id      = this->session_id;
         u.domain_name     = const_cast<char *>(dom_name.c_str());
         u.domain_name_len = dom_name.size();
-        u.module_uri      = const_cast<char *>(htp_uri);
-        u.module_uri_len  = strlen(htp_uri);
-        u.uri             = session_uri;
-        u.uri_len         = sizeof(session_uri);
+        u.module_uri      = const_cast<char *>(htp_uri.c_str());
+        u.module_uri_len  = htp_uri.size();
+        u.uri             = session_uri.data();
+        u.uri_len         = session_uri.size();
 
         int err = remote_session_control(FASTRPC_GET_URI, (void *) &u, sizeof(u));
         if (err != AEE_SUCCESS) {
-            snprintf(session_uri, sizeof(session_uri), "%s&_dom=%s&_session=%u",
-                     htp_uri, dom_name.c_str(), this->session_id);
+            snprintf(session_uri.data(), session_uri.size(), "%s&_dom=%s&_session=%u",
+                     htp_uri.c_str(), dom_name.c_str(), this->session_id);
 
-            GGML_LOG_WARN("ggml-hex: %s failed to get URI (physical %d, virtual %d) : error 0x%x. Falling back to single session URI: %s\n",
-                          this->c_name(), phys_idx, virt_idx, err, session_uri);
+            HEX_VERBOSE("ggml-hex: %s failed to get URI (physical %d, virtual %d) : error 0x%x. Falling back to single session URI: %s\n",
+                        this->c_name(), phys_idx, virt_idx, err, session_uri.data());
+        }
+
+        uri_out = session_uri.data();
+        return htp_iface_open(session_uri.data(), &this->handle);
+    };
+
+    const std::string lib_dir = htp_lib_dir();
+
+    std::string session_uri;
+    int err = AEE_EFAILED;
+
+    // 1. Try opening session with absolute path in URI
+    if (!lib_dir.empty()) {
+        std::string abs_prefix = "file:///" + lib_dir;
+        if (abs_prefix.back() != '/' && abs_prefix.back() != '\\') {
+            abs_prefix += "/";
+        }
+
+        HEX_VERBOSE("ggml-hex: %s trying absolute path URI: %s\n", this->c_name(), abs_prefix.c_str());
+        err = open_session(abs_prefix, session_uri);
+        if (err != AEE_SUCCESS) {
+            HEX_VERBOSE("ggml-hex: %s failed to open session with absolute path : uri %s error 0x%x\n",
+                        this->c_name(), session_uri.c_str(), err);
         }
     }
 
-    // Open session
-    int err = htp_iface_open(session_uri, &this->handle);
+    // 2. Fallback to DSP search path via FASTRPC_MANAGE_DSP_LIBRARY_PATH
+    if (err != AEE_SUCCESS && !lib_dir.empty()) {
+        int sp_err = htpdrv_set_dsp_search_path(this->domain_id, lib_dir, this->c_name());
+        if (sp_err == AEE_SUCCESS) {
+            err = open_session("file:///", session_uri);
+            if (err != AEE_SUCCESS) {
+                HEX_VERBOSE("ggml-hex: %s failed to open session with search path : uri %s error 0x%x\n",
+                            this->c_name(), session_uri.c_str(), err);
+            }
+        }
+    }
+
+    // 3. Fallback to process environment variables
+    if (err != AEE_SUCCESS && !lib_dir.empty()) {
+        HEX_VERBOSE("ggml-hex: %s falling back to process env for DSP search path\n", this->c_name());
+        htpdrv_set_dsp_env_path(lib_dir, this->c_name());
+        err = open_session("file:///", session_uri);
+    }
+
+    // Bare name attempt if lib_dir is empty and nothing was tried yet
+    if (err != AEE_SUCCESS && lib_dir.empty()) {
+        err = open_session("file:///", session_uri);
+    }
+
     if (err != AEE_SUCCESS) {
-        GGML_LOG_ERROR("ggml-hex: %s failed to open session : uri %s error 0x%x\n", this->c_name(), session_uri, err);
+        GGML_LOG_ERROR("ggml-hex: %s failed to open session : uri %s error 0x%x\n", this->c_name(), session_uri.c_str(), err);
         throw std::runtime_error("ggml-hex: failed to open session (see log for details)");
     }
 
@@ -2194,7 +2240,7 @@ void ggml_hexagon_session::allocate(const ggml_hexagon_device_config & config) n
     }
 
     GGML_LOG_INFO("ggml-hex: %s new session : session-id %d domain-id %d uri %s handle 0x%lx\n", this->c_name(),
-                  this->session_id, this->domain_id, session_uri, (unsigned long) this->handle);
+                  this->session_id, this->domain_id, session_uri.c_str(), (unsigned long) this->handle);
 
     const size_t req_q_size = (sizeof(htp_opbatch_req) * opt_opqueue * 2) + 1024;
     const size_t rsp_q_size = (sizeof(htp_opbatch_rsp) * opt_opqueue * 2) + 1024;
@@ -3349,8 +3395,8 @@ static void ggml_hexagon_discover_devices() {
             discovery_supported = true;
             const int n_domains = std::min(domain_info.sys.num_domains, (int) domains.size());
             for (int i = 0; i < n_domains; i++) {
-                GGML_LOG_INFO("ggml-hex: FASTRPC_GET_DOMAINS[%d]: type %d id %d name '%s' status %d instance-id %d\n",
-                              i, (int) domains[i].type, domains[i].id, domains[i].name, domains[i].status, domains[i].instance_id);
+                HEX_VERBOSE("ggml-hex: FASTRPC_GET_DOMAINS[%d]: type %d id %d name '%s' status %d instance-id %d\n",
+                            i, (int) domains[i].type, domains[i].id, domains[i].name, domains[i].status, domains[i].instance_id);
                 if (domains[i].type != FASTRPC_NSP) {
                     GGML_LOG_DEBUG("ggml-hex:   skipping non-CDSP domain (type=%d)\n", (int) domains[i].type);
                     continue;
@@ -3364,10 +3410,10 @@ static void ggml_hexagon_discover_devices() {
                               domains[i].instance_id, domains[i].id, domains[i].name);
             }
         } else {
-            GGML_LOG_WARN("ggml-hex: FASTRPC_GET_DOMAINS fetch failed (0x%x), using static CDSP domains\n", (unsigned) err);
+            HEX_VERBOSE("ggml-hex: FASTRPC_GET_DOMAINS fetch failed (0x%x), using static CDSP domains\n", (unsigned) err);
         }
     } else if (err != AEE_SUCCESS) {
-        GGML_LOG_DEBUG("ggml-hex: FASTRPC_GET_DOMAINS query failed (0x%x), using static CDSP domains\n", (unsigned) err);
+        HEX_VERBOSE("ggml-hex: FASTRPC_GET_DOMAINS query failed (0x%x), using static CDSP domains\n", (unsigned) err);
     }
 
     // Populate domain IDs and names for all configured devices
