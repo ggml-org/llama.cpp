@@ -42,6 +42,64 @@ static uint64_t get_time_ns() {
     return std::chrono::nanoseconds(clock::now().time_since_epoch()).count();
 }
 
+#if defined(__linux__)
+struct rapl_reading {
+    uint64_t pkg_uj  = 0;
+    uint64_t dram_uj = 0;
+    bool     valid   = false;
+};
+
+class rapl_monitor {
+public:
+    static uint64_t read_uj(const char * path) {
+        FILE * f = fopen(path, "r");
+        if (!f) return 0;
+        uint64_t val = 0;
+        if (fscanf(f, "%" PRIu64, &val) != 1) val = 0;
+        fclose(f);
+        return val;
+    }
+
+    static rapl_reading sample() {
+        rapl_reading r;
+        uint64_t pkg = read_uj("/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj");
+        if (pkg > 0) {
+            r.pkg_uj = pkg;
+            r.valid  = true;
+            for (int sub = 0; sub < 4; ++sub) {
+                char name_path[128];
+                snprintf(name_path, sizeof(name_path), "/sys/class/powercap/intel-rapl/intel-rapl:0/intel-rapl:0:%d/name", sub);
+                FILE * fn = fopen(name_path, "r");
+                if (fn) {
+                    char name_buf[32] = {0};
+                    if (fscanf(fn, "%31s", name_buf) == 1 && strcmp(name_buf, "dram") == 0) {
+                        char energy_path[128];
+                        snprintf(energy_path, sizeof(energy_path), "/sys/class/powercap/intel-rapl/intel-rapl:0/intel-rapl:0:%d/energy_uj", sub);
+                        r.dram_uj = read_uj(energy_path);
+                    }
+                    fclose(fn);
+                }
+            }
+        }
+        return r;
+    }
+
+    static double compute_joules(const rapl_reading & before, const rapl_reading & after) {
+        if (!before.valid || !after.valid) return 0.0;
+        const uint64_t max_range = 262143328850ULL;
+        uint64_t delta_uj = (after.pkg_uj >= before.pkg_uj) ? (after.pkg_uj - before.pkg_uj) : ((after.pkg_uj + max_range) - before.pkg_uj);
+        return (double) delta_uj / 1e6;
+    }
+
+    static double compute_dram_joules(const rapl_reading & before, const rapl_reading & after) {
+        if (!before.valid || !after.valid || before.dram_uj == 0 || after.dram_uj == 0) return 0.0;
+        const uint64_t max_range = 262143328850ULL;
+        uint64_t delta_uj = (after.dram_uj >= before.dram_uj) ? (after.dram_uj - before.dram_uj) : ((after.dram_uj + max_range) - before.dram_uj);
+        return (double) delta_uj / 1e6;
+    }
+};
+#endif
+
 static bool tensor_buft_override_equal(const llama_model_tensor_buft_override& a, const llama_model_tensor_buft_override& b) {
     if (a.pattern != b.pattern) {
         // cString comparison that may be null
@@ -376,6 +434,7 @@ struct cmd_params {
     bool                             no_warmup;
     output_formats                   output_format;
     output_formats                   output_format_stderr;
+    bool                             energy;
 };
 
 static const cmd_params cmd_params_defaults = {
@@ -422,6 +481,7 @@ static const cmd_params cmd_params_defaults = {
     /* no_warmup            */ false,
     /* output_format        */ MARKDOWN,
     /* output_format_stderr */ NONE,
+    /* energy               */ false,
 };
 
 static void print_usage(int /* argc */, char ** argv) {
@@ -440,6 +500,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -v, --verbose                               verbose output\n");
     printf("  --progress                                  print test progress indicators\n");
     printf("  --no-warmup                                 skip warmup runs before benchmarking\n");
+    printf("  -e, --energy                                measure package/DRAM energy consumption via RAPL (Linux only)\n");
     printf("  -fitt, --fit-target <MiB>                   fit model to device memory with this margin per device in MiB (default: off)\n");
     printf("  -fitc, --fit-ctx <n>                        minimum ctx size for --fit-target (default: 0)\n");
     if (llama_supports_rpc()) {
@@ -539,6 +600,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     params.progress             = cmd_params_defaults.progress;
     params.no_warmup            = cmd_params_defaults.no_warmup;
     params.offline              = cmd_params_defaults.offline;
+    params.energy               = cmd_params_defaults.energy;
 
     if (const char * env = getenv("HF_TOKEN")) {
         params.hf_token = env;
@@ -1056,6 +1118,8 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 params.progress = true;
             } else if (arg == "--no-warmup") {
                 params.no_warmup = true;
+            } else if (arg == "-e" || arg == "--energy" || arg == "-pe" || arg == "--print-energy") {
+                params.energy = true;
             } else if (arg == "-fitt" || arg == "--fit-target") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1510,6 +1574,8 @@ struct test {
     int                      n_depth;
     std::string              test_time;
     std::vector<uint64_t>    samples_ns;
+    std::vector<double>      samples_joules;
+    std::vector<double>      samples_dram_joules;
 
     test(const cmd_params_instance & inst, const llama_model * lmodel, const llama_context * ctx) :
         cpu_info(get_cpu_info()),
@@ -1573,6 +1639,29 @@ struct test {
 
     double stdev_ts() const { return ::stdev(get_ts()); }
 
+    double avg_joules() const { return samples_joules.empty() ? 0.0 : ::avg(samples_joules); }
+    double stdev_joules() const { return samples_joules.empty() ? 0.0 : ::stdev(samples_joules); }
+    double avg_dram_joules() const { return samples_dram_joules.empty() ? 0.0 : ::avg(samples_dram_joules); }
+
+    double avg_j_tok() const {
+        int n_tokens = n_prompt + n_gen;
+        if (n_tokens <= 0 || samples_joules.empty()) return 0.0;
+        return avg_joules() / n_tokens;
+    }
+
+    double avg_watts() const {
+        uint64_t ns = avg_ns();
+        if (ns == 0 || samples_joules.empty()) return 0.0;
+        return avg_joules() / ((double) ns / 1e9);
+    }
+
+    double dram_percent() const {
+        double pkg = avg_joules();
+        double dram = avg_dram_joules();
+        if (pkg <= 0.0 || dram <= 0.0) return 0.0;
+        return (dram / pkg) * 100.0;
+    }
+
     static std::string get_backend() {
         std::vector<std::string> backends;
         bool                     rpc_used = false;
@@ -1606,7 +1695,8 @@ struct test {
             "embeddings",
             "no_op_offload",  "no_host",        "repack",        "fit_target",    "fit_min_ctx",
             "n_prompt",       "n_gen",          "n_depth",
-            "test_time",      "avg_ns",         "stddev_ns",     "avg_ts",         "stddev_ts"
+            "test_time",      "avg_ns",         "stddev_ns",     "avg_ts",         "stddev_ts",
+            "avg_joules",     "avg_j_tok",      "avg_watts",     "dram_percent"
         };
         return fields;
     }
@@ -1625,7 +1715,7 @@ struct test {
             field == "embeddings" || field == "no_host" || field == "repack") {
             return BOOL;
         }
-        if (field == "avg_ts" || field == "stddev_ts") {
+        if (field == "avg_ts" || field == "stddev_ts" || field == "avg_joules" || field == "avg_j_tok" || field == "avg_watts" || field == "dram_percent") {
             return FLOAT;
         }
         if (field == "load_mode" || field == "lazy_mode") {
@@ -1712,7 +1802,11 @@ struct test {
                                             std::to_string(avg_ns()),
                                             std::to_string(stdev_ns()),
                                             std::to_string(avg_ts()),
-                                            std::to_string(stdev_ts()) };
+                                            std::to_string(stdev_ts()),
+                                            std::to_string(avg_joules()),
+                                            std::to_string(avg_j_tok()),
+                                            std::to_string(avg_watts()),
+                                            std::to_string(dram_percent()) };
         return values;
     }
 
@@ -1899,6 +1993,18 @@ struct markdown_printer : public printer {
         if (field == "repack") {
             return 3;
         }
+        if (field == "joules") {
+            return 10;
+        }
+        if (field == "j_tok") {
+            return 12;
+        }
+        if (field == "watts") {
+            return 9;
+        }
+        if (field == "dram_pct") {
+            return 8;
+        }
 
         int width = std::max((int) field.length(), 10);
 
@@ -1953,6 +2059,18 @@ struct markdown_printer : public printer {
         }
         if (field == "fit_min_ctx") {
             return "fitc";
+        }
+        if (field == "joules") {
+            return "energy";
+        }
+        if (field == "j_tok") {
+            return "J/token";
+        }
+        if (field == "watts") {
+            return "avg_W";
+        }
+        if (field == "dram_pct") {
+            return "DRAM %";
         }
         return field;
     }
@@ -2043,6 +2161,12 @@ struct markdown_printer : public printer {
         }
         fields.emplace_back("test");
         fields.emplace_back("t/s");
+        if (params.energy) {
+            fields.emplace_back("joules");
+            fields.emplace_back("j_tok");
+            fields.emplace_back("watts");
+            fields.emplace_back("dram_pct");
+        }
 
         fprintf(fout, "|");
         for (const auto & field : fields) {
@@ -2097,6 +2221,22 @@ struct markdown_printer : public printer {
                 value = buf;
             } else if (field == "t/s") {
                 snprintf(buf, sizeof(buf), "%.2f ± %.2f", t.avg_ts(), t.stdev_ts());
+                value = buf;
+            } else if (field == "joules") {
+                snprintf(buf, sizeof(buf), "%.3f J", t.avg_joules());
+                value = buf;
+            } else if (field == "j_tok") {
+                snprintf(buf, sizeof(buf), "%.4f", t.avg_j_tok());
+                value = buf;
+            } else if (field == "watts") {
+                snprintf(buf, sizeof(buf), "%.2f W", t.avg_watts());
+                value = buf;
+            } else if (field == "dram_pct") {
+                if (t.dram_percent() > 0.0) {
+                    snprintf(buf, sizeof(buf), "%.1f%%", t.dram_percent());
+                } else {
+                    snprintf(buf, sizeof(buf), "N/A");
+                }
                 value = buf;
             } else if (vmap.find(field) != vmap.end()) {
                 value = vmap.at(field);
@@ -2481,6 +2621,12 @@ int llama_bench(int argc, char ** argv) {
                 }
             }
 
+#if defined(__linux__)
+            rapl_reading rapl_start;
+            if (params.energy) {
+                rapl_start = rapl_monitor::sample();
+            }
+#endif
             uint64_t t_start = get_time_ns();
 
             if (t.n_prompt > 0) {
@@ -2512,6 +2658,13 @@ int llama_bench(int argc, char ** argv) {
 
             uint64_t t_ns = get_time_ns() - t_start;
             t.samples_ns.push_back(t_ns);
+#if defined(__linux__)
+            if (params.energy) {
+                rapl_reading rapl_end = rapl_monitor::sample();
+                t.samples_joules.push_back(rapl_monitor::compute_joules(rapl_start, rapl_end));
+                t.samples_dram_joules.push_back(rapl_monitor::compute_dram_joules(rapl_start, rapl_end));
+            }
+#endif
         }
 
         if (p) {
