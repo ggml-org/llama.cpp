@@ -75,7 +75,7 @@ const KEY_VISUALS = [
 		name: 'Roster',
 		shape: [
 			'Header: the icon, a Mono kicker (who it is from), the URL.',
-			'Headline (2u) over four columns with a motif beside it; the lede and use cases as outline chips.',
+			'Headline (2u) across the width on square and tall formats, the lede under it beside the motif, the use cases as outline chips across the width; on wide ones, the block over eight columns with the motif beside it. Without a lede, the motif sits beside the headline.',
 			'A Mono label, then the cards: one across on tall formats, two on square, three on wide; the leading item tagged in cinder.'
 		],
 		stories: ['communications-key-visuals--roster', 'communications-applications--model-drop'],
