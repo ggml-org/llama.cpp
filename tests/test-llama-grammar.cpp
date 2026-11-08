@@ -101,8 +101,6 @@ static bool mask_allows(const std::vector<uint32_t> & mask, llama_token token) {
     return (mask[token / 32] & (uint32_t(1) << (token % 32))) != 0;
 }
 
-static std::shared_ptr<llama_grammar_gpu_context> gpu_context;
-static size_t gpu_masks = 0, gpu_fallbacks = 0;
 static size_t trie_masks = 0;
 static size_t fallback_masks = 0;
 
@@ -149,23 +147,6 @@ static std::vector<uint32_t> check_mask(const llama_grammar & grammar) {
             assert(false);
         }
     }
-    if (gpu_context) {
-        std::shared_ptr<llama_grammar_gpu_mask> device;
-        const auto status = llama_grammar_gpu_compute(*gpu_context, grammar, device);
-        if (status == GGML_GRAMMAR_NEED_CPU) {
-            assert(!device);
-            ++gpu_fallbacks;
-        } else {
-            assert(device);
-            std::vector<uint32_t> actual(mask.size());
-            ggml_backend_tensor_get(device->tensor, actual.data(), 0, actual.size()*4);
-            assert(actual == mask);
-            const bool any = std::any_of(mask.begin(), mask.end(), [](uint32_t word) { return word != 0; });
-            assert(status == (any ? GGML_GRAMMAR_OK : GGML_GRAMMAR_NO_VALID_TOKEN));
-            ++gpu_masks;
-        }
-    }
-
     assert(grammar.stacks == stacks);
     assert(grammar.partial_utf8.value == partial_utf8.value && grammar.partial_utf8.n_remain == partial_utf8.n_remain);
     assert(grammar.trigger_buffer == trigger_buffer && grammar.awaiting_trigger == awaiting_trigger);
@@ -623,147 +604,19 @@ static void test_backend_mask_representations() {
     }
 }
 
-static void test_gpu_cache_collision() {
-    if (!gpu_context) { return; }
-    auto dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
-    if (!dev) { dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU); }
-    ggml_backend_ptr backend(ggml_backend_dev_init(dev, nullptr));
-    auto compute = reinterpret_cast<ggml_backend_grammar_compute>(ggml_backend_reg_get_proc_address(
-        ggml_backend_dev_backend_reg(dev), "ggml_backend_grammar_compute"));
-    assert(backend && compute);
-    ggml_context_ptr ctx(ggml_init({7*ggml_tensor_overhead(), nullptr, true}));
-    std::vector<uint32_t> program(sizeof(ggml_grammar_program_header)/4);
-    ggml_grammar_program_header ph = {{1, 0}, 1, 0, uint32_t(program.size()), 0, 0, uint32_t(program.size() + 4)};
-    const ggml_grammar_op op = {LLAMA_GRETYPE_CHAR, 0, 1, GGML_GRAMMAR_NONE};
-    program.resize(program.size() + 6);
-    std::memcpy(program.data(), &ph, sizeof(ph));
-    std::memcpy(program.data() + ph.ops, &op, sizeof(op));
-    program[ph.ranges] = program[ph.ranges + 1] = 'a';
-    ggml_grammar_vocab_header vh = {{2, 0}, 2, 2, uint32_t(sizeof(vh)/4), 0, 0, 0, {}};
-    std::fill(std::begin(vh.roots), std::end(vh.roots), GGML_GRAMMAR_NONE);
-    vh.roots['a'] = 1;
-    vh.terminals = vh.nodes + 8;
-    vh.tokens = vh.terminals + 2;
-    std::vector<uint32_t> vocab(vh.tokens + 6, 0);
-    const ggml_grammar_node nodes[] = {{1, GGML_GRAMMAR_NONE, GGML_GRAMMAR_NONE, 0},
-        {GGML_GRAMMAR_NONE, GGML_GRAMMAR_NONE, 0, 'a'}};
-    const ggml_grammar_terminal terminal = {0, GGML_GRAMMAR_NONE};
-    const ggml_grammar_token tokens[] = {{0, 1, 0}, {1, 0, 1}};
-    std::memcpy(vocab.data(), &vh, sizeof(vh));
-    std::memcpy(vocab.data() + vh.nodes, nodes, sizeof(nodes));
-    std::memcpy(vocab.data() + vh.terminals, &terminal, sizeof(terminal));
-    std::memcpy(vocab.data() + vh.tokens, tokens, sizeof(tokens));
-    std::vector<uint32_t> key(GGML_GRAMMAR_KEY_WORDS, 0);
-    key[0] = key[4] = key[7] = key[8] = 1;
-    key[2] = 2;
-    uint32_t hash = 2166136261u;
-    for (auto word : key) { hash = (hash ^ word)*16777619u; }
-    const size_t stride = 4 + GGML_GRAMMAR_KEY_WORDS + 1;
-    std::vector<uint32_t> cache(stride*GGML_GRAMMAR_SETS*GGML_GRAMMAR_WAYS, 0);
-    const size_t set = (hash % GGML_GRAMMAR_SETS)*GGML_GRAMMAR_WAYS*stride;
-    for (int way = 0; way < GGML_GRAMMAR_WAYS; ++way) {
-        auto * slot = cache.data() + set + way*stride;
-        slot[0] = 1;
-        slot[1] = hash;
-        slot[2] = GGML_GRAMMAR_OK;
-        std::copy(key.begin(), key.end(), slot + 4);
-        slot[4 + 5] = way + 42;
-        slot[4 + GGML_GRAMMAR_KEY_WORDS] = 2;
-    }
-    auto * p = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, program.size());
-    auto * v = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, vocab.size());
-    auto * k = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, key.size());
-    auto * scratch = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, sizeof(ggml_grammar_worker)*GGML_GRAMMAR_WORKERS/4);
-    auto * c = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, cache.size());
-    auto * mask = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, 1);
-    auto * status = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, 4);
-    ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(), backend.get()));
-    assert(buffer);
-    ggml_backend_tensor_set(p, program.data(), 0, program.size()*4);
-    ggml_backend_tensor_set(v, vocab.data(), 0, vocab.size()*4);
-    ggml_backend_tensor_set(k, key.data(), 0, key.size()*4);
-    ggml_backend_tensor_set(c, cache.data(), 0, cache.size()*4);
-    for (uint32_t work : {0u, 1024u}) {
-        uint32_t result[4] = {0, 0, work, 0};
-        ggml_backend_tensor_set(status, result, 0, sizeof(result));
-        assert(compute(backend.get(), p, v, k, scratch, c, mask, status));
-        ggml_backend_tensor_get(status, result, 0, sizeof(result));
-        assert(!result[1]);
-        assert(result[0] == (work ? GGML_GRAMMAR_OK : GGML_GRAMMAR_NEED_CPU));
-        uint32_t actual;
-        ggml_backend_tensor_get(mask, &actual, 0, sizeof(actual));
-        assert(actual == (work ? 1u : 0u));
-    }
-    std::copy(key.begin(), key.end(), cache.data() + set + 4);
-    cache[set] = 0;
-    ggml_backend_tensor_set(c, cache.data(), 0, cache.size()*4);
-    uint32_t result[4] = {0, 0, 1024, 0};
-    ggml_backend_tensor_set(status, result, 0, sizeof(result));
-    assert(compute(backend.get(), p, v, k, scratch, c, mask, status));
-    ggml_backend_tensor_get(status, result, 0, sizeof(result));
-    assert(result[0] == GGML_GRAMMAR_OK && !result[1]);
-    result[1] = result[2] = 0;
-    ggml_backend_tensor_set(status, result, 0, sizeof(result));
-    assert(compute(backend.get(), p, v, k, scratch, c, mask, status));
-    ggml_backend_tensor_get(status, result, 0, sizeof(result));
-    assert(result[0] == GGML_GRAMMAR_OK && result[1]);
-}
-
-static void test_gpu_bounds_and_cache(const mask_vocab & fixture) {
-    if (!gpu_context) { return; }
-    auto grammar = make_grammar(fixture.vocab, "root ::= [a-z] [a-z]?");
-    std::shared_ptr<llama_grammar_gpu_mask> mask;
-    assert(llama_grammar_gpu_compute(*gpu_context, *grammar, mask, 0) == GGML_GRAMMAR_NEED_CPU && !mask);
-    assert(llama_grammar_gpu_compute(*gpu_context, *grammar, mask) == GGML_GRAMMAR_OK);
-    auto retained = mask;
-    assert(llama_grammar_gpu_compute(*gpu_context, *grammar, mask, 0) == GGML_GRAMMAR_OK);
-    auto clone = grammar_ptr(llama_grammar_clone_impl(*grammar), llama_grammar_free_impl);
-    std::reverse(clone->stacks.begin(), clone->stacks.end());
-    assert(llama_grammar_gpu_compute(*gpu_context, *clone, mask, 0) == GGML_GRAMMAR_OK);
-    const auto initial = check_mask(*grammar);
-    for (uint32_t value = 2; value < 24; ++value) {
-        clone->partial_utf8 = {value, 1};
-        check_mask(*clone);
-    }
-    std::vector<uint32_t> saved(initial.size());
-    ggml_backend_tensor_get(retained->tensor, saved.data(), 0, saved.size()*4);
-    assert(saved == initial);
-    grammar->stacks[0].resize(GGML_GRAMMAR_DEPTH + 1, grammar->stacks[0].back());
-    assert(llama_grammar_gpu_compute(*gpu_context, *grammar, mask) == GGML_GRAMMAR_NEED_CPU && !mask);
-    grammar = make_grammar(fixture.vocab, "root ::= \"a\"*");
-    assert(llama_grammar_gpu_compute(*gpu_context, *grammar, mask) == GGML_GRAMMAR_NEED_CPU && !mask);
-    grammar = make_grammar(fixture.vocab, "root ::= \"\\U0010ffff\"");
-    grammar->stacks.clear();
-    assert(llama_grammar_gpu_compute(*gpu_context, *grammar, mask) == GGML_GRAMMAR_NO_VALID_TOKEN);
-    grammar = make_grammar(fixture.vocab, "root ::= \"ab\"");
-    assert(llama_grammar_gpu_compute(*gpu_context, *grammar, mask) == GGML_GRAMMAR_OK);
-    check_mask(*grammar);
-}
-
-int main(int argc, char ** argv)
+int main()
 {
-    if (argc == 2 && std::string(argv[1]) == "--gpu") {
-        ggml_backend_load_all();
-        auto dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
-        if (!dev) { dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU); }
-        assert(dev);
-        gpu_context = llama_grammar_gpu_init(ggml_backend_dev_buffer_type(dev));
-        assert(gpu_context);
-    }
+    assert(!llama_grammar_gpu_init(nullptr));
     test_candidate_storage();
     test_backend_mask_representations();
     const mask_vocab fixture;
     test_allowed_tokens(fixture);
     test_mask_utf8(fixture);
-    test_gpu_bounds_and_cache(fixture);
-    test_gpu_cache_collision();
     test_mask_lazy(fixture);
     test_mask_cache(fixture);
     test_trie_boundaries(fixture);
     test_trie_shared_vocab();
     test_trie_preprocessing_limit();
-    if (gpu_context) { assert(gpu_masks > 50 && gpu_fallbacks > 0); }
-    printf("GPU masks: %zu accelerated, %zu fallback\n", gpu_masks, gpu_fallbacks);
     printf("Differential masks: %zu accelerated, %zu fallback\n", trie_masks, fallback_masks);
 
     llama_grammar_parser parsed_grammar;

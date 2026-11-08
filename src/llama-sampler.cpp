@@ -2753,14 +2753,12 @@ struct llama_sampler_grammar {
 
     struct llama_grammar * grammar;
 
-    std::shared_ptr<llama_grammar_gpu_context> gpu = {};
     uint64_t state_generation = 1;
     uint64_t prepared_generation = 0;
     struct packed_mask {
         bool materialized = false;
         std::array<int32_t, 4> desc = {};
         std::shared_ptr<const std::vector<uint32_t>> payload; // shared with the grammar mask cache
-        std::shared_ptr<llama_grammar_gpu_mask> device;
     };
     packed_mask mask = {};
     llama_grammar_stacks mask_stacks = {};
@@ -2893,7 +2891,6 @@ static bool llama_sampler_grammar_backend_init(
     if (ctx->grammar && (!ctx->vocab || ctx->vocab->n_tokens() == 0 || ctx->vocab->n_tokens() > INT32_MAX)) {
         return false;
     }
-    ctx->gpu = ctx->grammar ? llama_grammar_gpu_init(buft, ctx->grammar) : nullptr;
     return llama_sampler_backend_support(smpl, buft);
 }
 
@@ -2930,19 +2927,6 @@ static void llama_sampler_grammar_backend_apply(
 }
 
 static llama_sampler_grammar::packed_mask llama_sampler_grammar_materialize(llama_sampler_grammar * ctx, const llama_grammar & state) {
-    if (ctx->gpu) {
-        std::shared_ptr<llama_grammar_gpu_mask> device;
-        const auto status = llama_grammar_gpu_compute(*ctx->gpu, state, device);
-        if (status != GGML_GRAMMAR_NEED_CPU) {
-            llama_sampler_grammar::packed_mask mask;
-            mask.materialized = true;
-            const int32_t n_vocab = ctx->vocab->n_tokens();
-            mask.desc = {status == GGML_GRAMMAR_NO_VALID_TOKEN ? GGML_TOKEN_MASK_NONE : GGML_TOKEN_MASK_BITSET,
-                status == GGML_GRAMMAR_NO_VALID_TOKEN ? 0 : int32_t((int64_t(n_vocab) + 31)/32), 0, n_vocab};
-            mask.device = std::move(device);
-            return mask;
-        }
-    }
     auto packed = llama_grammar_get_allowed_packed(state);
     llama_sampler_grammar::packed_mask mask;
     mask.materialized = true;
@@ -3110,21 +3094,6 @@ static void llama_sampler_grammar_backend_set_input(llama_sampler * smpl, ggml_b
         }
         const auto & mask = provisional ? ctx->prepared_rows[ctx->rows[row]].mask : ctx->mask;
         GGML_ASSERT(mask.materialized);
-        if (mask.device) {
-            if (binding.uploaded) { ggml_backend_event_synchronize(binding.uploaded.get()); }
-            const size_t size = size_t(mask.desc[1])*sizeof(uint32_t);
-            if (size) {
-                ggml_init_params params = {ggml_tensor_overhead(), nullptr, true};
-                ggml_context_ptr view_ctx(ggml_init(params));
-                auto * dst = ggml_view_1d(view_ctx.get(), binding.payload, mask.desc[1], 0);
-                GGML_ASSERT(ggml_backend_view_init(dst) == GGML_STATUS_SUCCESS);
-                ggml_backend_tensor_copy(mask.device->tensor, dst);
-            }
-            ggml_backend_tensor_set(binding.desc, mask.desc.data(), 0, sizeof(mask.desc));
-            binding.desc_set = false;
-            for (auto & entry : binding.cache) { entry.used = 0; }
-            continue;
-        }
         const void * payload = mask.payload ? (const void *) mask.payload->data() : nullptr;
         const size_t size = mask.payload ? mask.payload->size()*sizeof(uint32_t) : 0;
         size_t slot = 0;

@@ -88,7 +88,6 @@ struct LLM_KV;
 struct llama_model_loader;
 
 struct llama_vocab_trie {
-    uint64_t generation = 0;
     static constexpr uint32_t none = UINT32_MAX;
 
     struct node {

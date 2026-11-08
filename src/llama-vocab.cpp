@@ -1,5 +1,4 @@
 #include "llama-vocab.h"
-#include <atomic>
 
 #include "ggml.h"
 #include "gguf.h"
@@ -4442,9 +4441,7 @@ const llama_vocab_trie * llama_vocab::get_grammar_trie() const {
         n_nodes += piece.size();
     }
 
-    static std::atomic<uint64_t> next_generation {1};
     auto trie = std::make_unique<llama_vocab_trie>();
-    trie->generation = next_generation.fetch_add(1);
     trie->nodes.reserve(n_nodes);
     trie->terminals.reserve(n_vocab);
     trie->eog.reserve(n_vocab);

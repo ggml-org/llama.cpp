@@ -90,7 +90,7 @@ Every component is inside the per-step time. `retry_*` components run only on re
 
 All paths also have `eval` (the simulated model evaluation from `--eval-us`, a busy wait) and `reset` (grammar reset when the replay wraps around). The decode graph reads the model logits from a device tensor directly. The retry graph owns its input and runs without a scheduler, like `sample_retry`. Host candidate construction is not a separate backend step: the backend path reads back a single token.
 
-`--logits-copy off` removes `logits_d2h` from the host paths, modelling logits that are already in host memory. By default the backend builds masks on the host (`mask_source=host`). `--device-mask on` allows the GPU grammar prototype, if the backend exposes `ggml_backend_grammar_compute`; this sets `LLAMA_GRAMMAR_GPU_MASK`, which `llama_grammar_gpu_init` reads.
+`--logits-copy off` removes `logits_d2h` from the host paths, modelling logits that are already in host memory. The backend builds grammar masks on the host (`mask_source=host`) and applies them through the backend sampling graph.
 
 ## Inputs
 

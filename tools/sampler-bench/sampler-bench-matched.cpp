@@ -82,7 +82,6 @@ struct options {
     float min_p = 0.05f;
     double eval_us = 0.0;
     bool logits_copy = true;
-    bool device_mask = false;
     bool jsonl_steps = true;
     int n_gpu_layers = 99;
     uint64_t seed = 1234;
@@ -712,7 +711,6 @@ static void usage(const char * exe) {
             "  --top-k N --top-p P --min-p P   chain before greedy (default 40, 0.95, 0.05; 0/1/0 disables)\n"
             "  --eval-us US         simulated model evaluation per step, busy wait (default 0)\n"
             "  --logits-copy on|off host paths copy logits out of the backend buffer (default on)\n"
-            "  --device-mask on|off allow the backend to build grammar masks on the device (default off)\n"
             "  --replay FILE        replay saved model logits instead of synthetic logits\n"
             "  --dump-logits FILE   run the model teacher-forced over the trace and save its logits\n"
             "  -ngl N               GPU layers for --dump-logits (default 99)\n"
@@ -764,7 +762,6 @@ static options parse(int argc, char ** argv, bool & help) {
         else if (arg == "--min-p")        { opt.min_p = std::stof(value); }
         else if (arg == "--eval-us")      { opt.eval_us = std::stod(value); require(opt.eval_us >= 0, "--eval-us must be >= 0"); }
         else if (arg == "--logits-copy")  { opt.logits_copy = on_off(value); }
-        else if (arg == "--device-mask")  { opt.device_mask = on_off(value); }
         else if (arg == "--seed")         { opt.seed = std::stoull(value); }
         else if (arg == "--rates") {
             opt.rates.clear();
@@ -801,7 +798,6 @@ static int run(int argc, char ** argv) {
         return 0;
     }
     require(!opt.model_path.empty(), "provide -m MODEL");
-    setenv("LLAMA_GRAMMAR_GPU_MASK", opt.device_mask ? "1" : "0", 1);
 
     const common_json fixture = load_fixture(opt.tools_path);
     const std::string grammar = json_schema_to_grammar(make_schema(fixture.at("tools")), true);
@@ -855,7 +851,6 @@ static int run(int argc, char ** argv) {
     if (auto set_threads = reinterpret_cast<ggml_backend_set_n_threads_t>(ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads"))) {
         set_threads(backend.get(), 1);
     }
-    const bool device_mask = opt.device_mask && ggml_backend_reg_get_proc_address(reg, "ggml_backend_grammar_compute");
 
     logits_env env(backend.get(), n_vocab, opt.logits_copy);
     std::vector<float> base(n_vocab);
@@ -880,7 +875,7 @@ static int run(int argc, char ** argv) {
 
     printf("backend=%s chain=\"%s\" mask_source=%s logits_copy=%s eval_us=%g steps=%d repetitions=%d mode=%s\n",
             ggml_backend_dev_name(device), chain_description(opt).c_str(),
-            device_mask ? "device (GPU grammar prototype)" : "host (trie/cache/fallback)",
+            "host (trie/cache/fallback)",
             opt.logits_copy ? "on" : "off", opt.eval_us, opt.steps, opt.repetitions,
             replaying ? ("replay " + opt.replay_path).c_str() : "synthetic");
 
@@ -1073,7 +1068,7 @@ static int run(int argc, char ** argv) {
             common_json line = {
                 {"type", "summary"}, {"mode", replaying ? "replay" : "synthetic"}, {"rate", std::max(s.rate, 0.0)},
                 {"policy", policy_names[s.pol]}, {"path", path_names[s.kind]}, {"device", ggml_backend_dev_name(device)},
-                {"chain", chain_description(opt)}, {"mask_source", device_mask ? "device" : "host"},
+                {"chain", chain_description(opt)}, {"mask_source", "host"},
                 {"logits_copy", opt.logits_copy}, {"eval_us", opt.eval_us}, {"steps", s.steps},
                 {"repetitions", opt.repetitions}, {"mean_us", s.mean}, {"rep_sd_us", s.rep_sd}, {"rep_means_us", s.rep_means},
                 {"p50_us", s.p50}, {"p99_us", s.p99}, {"tok_s", 1e6/s.mean}, {"retries", s.retries},

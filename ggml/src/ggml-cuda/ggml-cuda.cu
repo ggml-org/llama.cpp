@@ -31,7 +31,6 @@
 #include "ggml-cuda/fwht.cuh"
 #include "ggml-cuda/getrows.cuh"
 #include "ggml-cuda/token-mask.cuh"
-#include "ggml-cuda/grammar.cuh"
 #include "ggml-token-mask.h"
 #include "ggml-cuda/im2col.cuh"
 #include "ggml-cuda/mmf.cuh"
@@ -6863,17 +6862,8 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t 
     GGML_UNUSED(reg);
 }
 
-static bool ggml_backend_cuda_grammar_compute(ggml_backend_t backend, const ggml_tensor * program, const ggml_tensor * vocab,
-        const ggml_tensor * state, ggml_tensor * scratch, ggml_tensor * cache, ggml_tensor * mask, ggml_tensor * status) {
-    if (!ggml_backend_is_cuda(backend)) { return false; }
-    return ggml_cuda_grammar_compute(*static_cast<ggml_backend_cuda_context *>(backend->context), program, vocab, state, scratch, cache, mask, status);
-}
-
 static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
     GGML_UNUSED(reg);
-    if (strcmp(name, "ggml_backend_grammar_compute") == 0) {
-        return (void *) ggml_backend_cuda_grammar_compute;
-    }
     if (strcmp(name, "ggml_backend_comm_init") == 0) {
         return (void *)ggml_backend_cuda_comm_init;
     }

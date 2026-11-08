@@ -5,23 +5,15 @@
 #include <map>
 #include <memory>
 #include <mutex>
-#include "../ggml/src/ggml-grammar.h"
+#include "ggml-backend.h"
 #include <regex>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 struct llama_vocab;
-struct llama_grammar_gpu_program;
 struct llama_grammar_gpu_context;
-struct llama_grammar_gpu_mask {
-    std::shared_ptr<void> storage;
-    ggml_tensor * tensor = nullptr;
-};
 std::shared_ptr<llama_grammar_gpu_context> llama_grammar_gpu_init(ggml_backend_buffer_type_t buft, const struct llama_grammar * grammar = nullptr);
-ggml_grammar_status llama_grammar_gpu_compute(llama_grammar_gpu_context & ctx, const struct llama_grammar & grammar,
-        std::shared_ptr<llama_grammar_gpu_mask> & mask, uint32_t max_work = 256 * 1024);
-
 
 // grammar element type
 enum llama_gretype {
@@ -227,8 +219,6 @@ struct llama_grammar {
 
     // Shared with clones: entries are keyed by the complete grammar state, so any clone of the same program may reuse them. Guarded by its own mutex.
     std::shared_ptr<llama_grammar_mask_cache> mask_cache;
-    mutable std::shared_ptr<const llama_grammar_gpu_program> gpu_program;
-    mutable bool gpu_program_attempted = false;
 
     struct candidate_storage {
         llama_grammar_candidates candidates;
