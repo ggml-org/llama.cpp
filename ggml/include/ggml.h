@@ -1519,6 +1519,7 @@ extern "C" {
     // note: this op has undefined behaviour if a given `a` is referenced more than once for a given `b`
     //       (i.e. duplicate experts per token are not guaranteed to be supported in all backends)
     // TODO: add backend support: https://github.com/ggml-org/llama.cpp/pull/29998#issuecomment-6153742533
+    // the CPU backend skips negative ids, their rows of the result are zero
     GGML_API struct ggml_tensor * ggml_mul_mat_id(
             struct ggml_context * ctx,
             struct ggml_tensor  * as,
@@ -2034,10 +2035,6 @@ extern "C" {
             float                 beta_slow),
         "use ggml_rope_ext_inplace instead");
 
-    // compute correction dims for YaRN RoPE scaling
-    GGML_API void ggml_rope_yarn_corr_dims(
-        int n_dims, int n_ctx_orig, float freq_base, float beta_fast, float beta_slow, float dims[2]);
-
     // rotary position embedding backward, i.e compute dx from dy
     // a - dy
     GGML_API struct ggml_tensor * ggml_rope_ext_back(
@@ -2079,6 +2076,11 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_rope_set_offset(
             struct ggml_tensor  * a,
             int                   n_offs);
+
+    // control rounding of YaRN correction bounds (default: true)
+    GGML_API struct ggml_tensor * ggml_rope_set_truncate(
+            struct ggml_tensor * a,
+            bool                 truncate);
 
     // im2col
     // converts data into a format that effectively results in a convolution when combined with matrix multiplication

@@ -25,7 +25,7 @@ static ggml_tensor * mul_channel_weight(
     return ggml_mul(ctx0, x_whcb, w4);
 }
 
-ggml_tensor * clip_graph_yasa2::layer_norm_channels(ggml_tensor * inp, ggml_tensor * w, ggml_tensor * b, float eps) {
+ggml_tensor * mtmd_graph_yasa2::layer_norm_channels(ggml_tensor * inp, ggml_tensor * w, ggml_tensor * b, float eps) {
     // Match HF ConvNextLayerNorm(channels_first):
     // u = mean_c(x), s = mean_c((x-u)^2), x = (x-u)/sqrt(s+eps)
     // cast back to input dtype before affine.
@@ -48,7 +48,7 @@ ggml_tensor * clip_graph_yasa2::layer_norm_channels(ggml_tensor * inp, ggml_tens
     return xhat;
 }
 
-ggml_tensor * clip_graph_yasa2::convnext_grn(ggml_tensor * inp, ggml_tensor * w, ggml_tensor * b) {
+ggml_tensor * mtmd_graph_yasa2::convnext_grn(ggml_tensor * inp, ggml_tensor * w, ggml_tensor * b) {
     // Exact ConvNeXtV2 GRN:
     // Gx = ||x||_2 over spatial dims (W,H), Nx = Gx / (mean_c(Gx) + eps)
     // y  = w * (x * Nx) + b + x
@@ -78,7 +78,7 @@ ggml_tensor * clip_graph_yasa2::convnext_grn(ggml_tensor * inp, ggml_tensor * w,
     return ggml_add(ctx0, inp, xnx);
 }
 
-ggml_cgraph * clip_graph_yasa2::build() {
+ggml_cgraph * mtmd_graph_yasa2::build() {
     ggml_tensor * cur = build_inp_raw();
 
     // Patch embedding Conv2d(kernel=4, stride=4)
