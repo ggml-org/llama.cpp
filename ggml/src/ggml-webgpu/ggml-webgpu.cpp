@@ -4904,7 +4904,7 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                 default:
                     break;
             }
-            if (ggml_get_op_params_i32(op, 3) == GGML_PREC_F32) {
+            if (ggml_get_op_params_i32(op, 3) == GGML_PREC_BF16 || ggml_get_op_params_i32(op, 3) == GGML_PREC_F32) {
                 supports_op = false;
             }
             break;

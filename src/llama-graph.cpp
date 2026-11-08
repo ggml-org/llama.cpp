@@ -2172,8 +2172,8 @@ ggml_tensor * llm_graph_context::build_ffn(
     if (down) {
         cur = build_lora_mm(down, cur);
         if (arch == LLM_ARCH_GLM4 || arch == LLM_ARCH_GLM4_MOE || arch == LLM_ARCH_JAIS2) {
-            // GLM4, GLM4_MOE, and JAIS2 seem to have numerical issues with half-precision accumulators
-            ggml_prec_set_acc(cur, GGML_PREC_F32);
+            // GLM4, GLM4_MOE, and JAIS2 have numerical issues with F16 accumulators
+            ggml_prec_set_acc(cur, GGML_PREC_BF16);
         }
     }
 
@@ -2278,6 +2278,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     if (probs_in == nullptr) {
         logits = build_lora_mm(gate_inp, cur); // [n_expert, n_tokens]
         if (gating_op == LLAMA_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS) {
+            // the reference computes the router in F32: https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash/blob/60d8d70770c6776ff598c94bb586a859a38244f1/inference/model.py#L565
             ggml_prec_set_acc(logits, GGML_PREC_F32);
         }
         cb(logits, "ffn_moe_logits", il);
@@ -3112,9 +3113,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         ggml_tensor * kq = ggml_mul_mat(ctx0, k, q);
         cb(kq, "kq", il);
 
-        // note: this op tends to require high floating point range
-        //       while for some models F16 is enough, for others it is not, so we default to F32 here
-        ggml_prec_set_acc(kq, GGML_PREC_F32);
+        ggml_prec_set_acc(kq, GGML_PREC_BF16);
 
         if (model.arch == LLM_ARCH_GROK) {
             // need to do the following:
@@ -3365,9 +3364,9 @@ ggml_tensor * llm_graph_context::build_attn(
 
     if (wo) {
         if (arch == LLM_ARCH_GLM4 || arch == LLM_ARCH_GLM4_MOE || arch == LLM_ARCH_JAIS2) {
-            // GLM4, GLM4_MOE, and JAIS2 seem to have numerical issues with half-precision accumulators
+            // GLM4, GLM4_MOE, and JAIS2 have numerical issues with F16 accumulators
             cur = build_lora_mm(wo, cur);
-            ggml_prec_set_acc(cur, GGML_PREC_F32);
+            ggml_prec_set_acc(cur, GGML_PREC_BF16);
             if (wo_s) {
                 cur = ggml_mul(ctx0, cur, wo_s);
             }
@@ -3454,9 +3453,9 @@ ggml_tensor * llm_graph_context::build_attn(
 
     if (wo) {
         if (arch == LLM_ARCH_GLM4 || arch == LLM_ARCH_GLM4_MOE) {
-            // GLM4 and GLM4_MOE seem to have numerical issues with half-precision accumulators
+            // GLM4 and GLM4_MOE have numerical issues with F16 accumulators
             cur = build_lora_mm(wo, cur);
-            ggml_prec_set_acc(cur, GGML_PREC_F32);
+            ggml_prec_set_acc(cur, GGML_PREC_BF16);
             if (wo_s) {
                 cur = ggml_mul(ctx0, cur, wo_s);
             }

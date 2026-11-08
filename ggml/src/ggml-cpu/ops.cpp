@@ -9591,6 +9591,7 @@ void ggml_compute_forward_flash_attn_ext(
     switch (dst->op_params[3]) {
         case GGML_PREC_DEFAULT:
         case GGML_PREC_F32:
+        case GGML_PREC_BF16:
             {
                 // uses F32 accumulators
                 ggml_compute_forward_flash_attn_ext_f16(params, dst);
