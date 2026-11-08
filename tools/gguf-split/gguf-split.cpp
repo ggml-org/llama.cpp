@@ -565,20 +565,29 @@ static void gguf_merge(const split_params & split_params) {
 
             auto n_bytes = ggml_nbytes(t);
 
-            if (read_data.size() < n_bytes) {
-                read_data.resize(n_bytes);
+            // streaming patch: big tensors (engram 200+ GB) must not be materialized in RAM
+            constexpr uint64_t stream_chunk = 256ull * 1024 * 1024;
+            const uint64_t buf_size = n_bytes < stream_chunk ? n_bytes : stream_chunk;
+            if (read_data.size() < buf_size) {
+                read_data.resize(buf_size);
             }
 
             auto offset = gguf_get_data_offset(ctx_gguf) + gguf_get_tensor_offset(ctx_gguf, i_tensor);
             f_input.seekg(offset);
-            f_input.read((char *)read_data.data(), n_bytes);
-            if (!f_input) {
-                fprintf(stderr, "%s: failed to read %zu bytes at offset %zu, input file may be truncated\n", __func__, n_bytes, offset);
-                exit(EXIT_FAILURE);
+            for (uint64_t remaining = n_bytes; remaining > 0; ) {
+                const uint64_t to_copy = remaining < buf_size ? remaining : buf_size;
+                f_input.read((char *)read_data.data(), to_copy);
+                if (!f_input) {
+                    fprintf(stderr, "%s: failed to read %zu bytes at offset %zu, input file may be truncated\n", __func__, (size_t)to_copy, (size_t)offset);
+                    exit(EXIT_FAILURE);
+                }
+                if (!split_params.dry_run) {
+                    fout.write((const char *)read_data.data(), to_copy);
+                }
+                remaining -= to_copy;
             }
             if (!split_params.dry_run) {
-                // write tensor data + padding
-                fout.write((const char *)read_data.data(), n_bytes);
+                // write padding
                 zeros(fout, GGML_PAD(n_bytes, GGUF_DEFAULT_ALIGNMENT) - n_bytes);
             }
         }
