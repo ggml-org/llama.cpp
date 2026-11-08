@@ -4909,6 +4909,9 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                     default:
                         break;
                 }
+                if (ggml_prec_get_src(op, 1) == GGML_PREC_BF16 || ggml_prec_get_src(op, 1) == GGML_PREC_F32) {
+                    supports_op = false;
+                }
                 break;
             }
         case GGML_OP_MUL_MAT_ID:

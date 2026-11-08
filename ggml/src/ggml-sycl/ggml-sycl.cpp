@@ -7321,6 +7321,11 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
                     return false;
                 }
 
+                if (op->op == GGML_OP_MUL_MAT &&
+                    (ggml_prec_get_src(op, 1) == GGML_PREC_BF16 || ggml_prec_get_src(op, 1) == GGML_PREC_F32)) {
+                    return false;
+                }
+
                 return true;
             }
         case GGML_OP_OUT_PROD:

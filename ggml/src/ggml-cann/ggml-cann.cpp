@@ -2446,6 +2446,9 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
             break;
         case GGML_OP_MUL_MAT:
             {
+                if (ggml_prec_get_src(op, 1) == GGML_PREC_BF16 || ggml_prec_get_src(op, 1) == GGML_PREC_F32) {
+                    return false;
+                }
                 switch (op->src[0]->type) {
 #ifndef ASCEND_310P
                     case GGML_TYPE_BF16:

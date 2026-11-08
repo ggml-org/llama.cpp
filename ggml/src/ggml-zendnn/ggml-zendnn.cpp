@@ -720,6 +720,10 @@ static bool ggml_backend_zendnn_device_supports_op(ggml_backend_dev_t dev, const
                 return false;
             }
 
+            if (ggml_prec_get_src(op, 1) == GGML_PREC_BF16 || ggml_prec_get_src(op, 1) == GGML_PREC_F32) {
+                return false;
+            }
+
             if (ggml_zendnn_adaptive_fallback_enabled()) {
                 const int64_t K = inputs->ne[0];
                 const int64_t N = (inputs->ne[1]*inputs->ne[2]*inputs->ne[3]);

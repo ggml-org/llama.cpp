@@ -941,6 +941,9 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                         op->nb[1] == op->ne[0] * sizeof(float);
             break;
         case GGML_OP_MUL_MAT:
+            if (ggml_prec_get_src(op, 1) == GGML_PREC_BF16 || ggml_prec_get_src(op, 1) == GGML_PREC_F32) {
+                break;
+            }
             // Support Q8_0 x F32 -> F32, F16 x F32 -> F32, F16 x F16 -> F32, and F32 x F32 -> F32 matrix multiplication
             // Stride requirements: first dimension must be contiguous for all tensors
             if (op->type == GGML_TYPE_F32 &&

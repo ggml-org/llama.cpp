@@ -1581,6 +1581,9 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         break;
     }
     case GGML_OP_MUL_MAT: {
+        if (ggml_prec_get_src(op, 1) == GGML_PREC_BF16 || ggml_prec_get_src(op, 1) == GGML_PREC_F32) {
+            return {false, "MUL_MAT with a BF16 or F32 src1 precision is not supported"};
+        }
         if (ggml_openvino_is_gpu() && op->src[0] != nullptr && op->src[1] != nullptr &&
             ggml_is_quantized(op->src[0]->type) && strcmp(op->src[0]->name, "a") == 0 &&
             strcmp(op->src[1]->name, "b") == 0 && op->src[0]->ne[1] == 1 && op->src[1]->ne[1] == 64 &&

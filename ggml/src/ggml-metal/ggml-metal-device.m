@@ -1522,6 +1522,10 @@ static bool ggml_metal_supports_mul_mat_op(
         return false;
     }
 
+    if (ggml_prec_get_src(op, 1) == GGML_PREC_BF16 || ggml_prec_get_src(op, 1) == GGML_PREC_F32) {
+        return false;
+    }
+
     if (op->src[1]->type != GGML_TYPE_F16) {
         return true;
     }
