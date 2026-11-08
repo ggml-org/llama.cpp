@@ -601,11 +601,19 @@ void htpdrv_set_dsp_env_path(const std::string & path, const char * dev_name) {
 
     const char * name = dev_name ? dev_name : "driver";
     HEX_VERBOSE("ggml-hex: %s setting DSP search path via process env to %s\n", name, clean_path.c_str());
+
+    static const char * const env_names[] = {
+        "ADSP_LIBRARY_PATH",
+        "CDSP_LIBRARY_PATH",
+        "CDSP1_LIBRARY_PATH",
+        "CDSP2_LIBRARY_PATH",
+        "CDSP3_LIBRARY_PATH",
+    };
+    for (const char * env_name : env_names) {
 #ifdef _WIN32
-    SetEnvironmentVariableA("ADSP_LIBRARY_PATH", clean_path.c_str());
-    SetEnvironmentVariableA("CDSP_LIBRARY_PATH", clean_path.c_str());
+        SetEnvironmentVariableA(env_name, clean_path.c_str());
 #else
-    setenv("ADSP_LIBRARY_PATH", clean_path.c_str(), 1);
-    setenv("CDSP_LIBRARY_PATH", clean_path.c_str(), 1);
+        setenv(env_name, clean_path.c_str(), 1);
 #endif
+    }
 }
