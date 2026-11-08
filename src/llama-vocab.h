@@ -88,6 +88,7 @@ struct LLM_KV;
 struct llama_model_loader;
 
 struct llama_vocab_trie {
+    uint64_t generation = 0;
     static constexpr uint32_t none = UINT32_MAX;
 
     struct node {
@@ -223,6 +224,8 @@ struct llama_vocab {
     const std::string & token_to_piece(llama_token token) const;
 
     const llama_vocab_trie * get_grammar_trie() const;
+
+    const struct llama_vocab_decoded * get_grammar_decoded() const;
 
     int32_t detokenize(
             const llama_token * tokens,

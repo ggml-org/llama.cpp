@@ -6,10 +6,16 @@
 
 #include <cmath>
 #include <algorithm>
+#include <bitset>
 #include <cstdint>
+#include <cstdlib>
 #include <set>
 #include <numeric>
 #include <stdexcept>
+#include "ggml-cpp.h"
+#include <atomic>
+#include <cstring>
+#include <mutex>
 
 #define MAX_REPETITION_THRESHOLD 2000
 #define GRAMMAR_RECURSIVE_LIMIT 256
@@ -91,6 +97,13 @@ static llama_partial_utf8 decode_utf8(
     return { value, n_remain };
 }
 
+llama_partial_utf8 llama_grammar_decode_utf8(
+        const std::string & src,
+        llama_partial_utf8 partial_start,
+        std::vector<uint32_t> & code_points) {
+    return decode_utf8(src, partial_start, code_points);
+}
+
 void llama_grammar::candidate_storage::clear() {
     candidates.clear();
     offsets.clear();
@@ -109,12 +122,14 @@ void llama_grammar::candidate_storage::set_pointers() {
     }
 }
 
-void llama_grammar::init_rule_positions() {
-    for (size_t ir = 0; ir < rules->size(); ++ir) {
-        for (size_t ie = 0; ie < (*rules)[ir].size(); ++ie) {
-            rule_positions.emplace(&(*rules)[ir][ie], std::make_pair(ir, ie));
+static std::shared_ptr<const llama_grammar::rule_position_map> llama_grammar_index_rules(const llama_grammar_rules & rules) {
+    auto positions = std::make_shared<llama_grammar::rule_position_map>();
+    for (size_t ir = 0; ir < rules.size(); ++ir) {
+        for (size_t ie = 0; ie < rules[ir].size(); ++ie) {
+            positions->emplace(&rules[ir][ie], std::make_pair(ir, ie));
         }
     }
+    return positions;
 }
 
 static bool is_digit_char(char c) {
@@ -1463,20 +1478,13 @@ struct llama_grammar * llama_grammar_init_impl(
     // Important: vec_rules has to be moved here, not copied, because stacks contains
     // pointers to elements of vec_rules. If vec_rules were copied into llama_grammar
     // then the pointers would be invalidated when the local vec_rules goes out of scope.
-    auto * result = new llama_grammar {
-        vocab,
-        std::make_shared<const llama_grammar_rules>(std::move(vec_rules)),
-        std::move(stacks),
-        /* .partial_utf8 = */             {},
-        /* .lazy = */                     false,
-        /* .awaiting_trigger = */         false,
-        /* .trigger_buffer = */           "",
-        /* .trigger_buffer_positions = */ {},
-        /* .trigger_tokens = */           {},
-        /* .trigger_patterns = */         {},
-        /* .mask_cache = */               {},
-    };
-    result->init_rule_positions();
+    auto * result = new llama_grammar;
+    result->vocab = vocab;
+    result->rules = std::make_shared<const llama_grammar_rules>(std::move(vec_rules));
+    result->rule_positions = llama_grammar_index_rules(*result->rules);
+    result->stacks = std::move(stacks);
+    result->stacks_initial = result->stacks;
+    result->mask_cache = std::make_shared<llama_grammar_mask_cache>();
     return result;
 }
 
@@ -1581,20 +1589,17 @@ struct llama_grammar * llama_grammar_init_impl(
     // Important: vec_rules has to be moved here, not copied, because stacks contains
     // pointers to elements of vec_rules. If vec_rules were copied into llama_grammar
     // then the pointers would be invalidated when the local vec_rules goes out of scope.
-    auto * result = new llama_grammar {
-        vocab,
-        std::make_shared<const llama_grammar_rules>(std::move(vec_rules)),
-        std::move(stacks),
-        /* .partial_utf8 = */             {},
-        /* .lazy = */                     lazy,
-        /* .awaiting_trigger = */         lazy,
-        /* .trigger_buffer = */           "",
-        /* .trigger_buffer_positions = */ {},
-        std::move(vec_trigger_tokens),
-        std::move(vec_trigger_patterns),
-        /* .mask_cache = */               {},
-    };
-    result->init_rule_positions();
+    auto * result = new llama_grammar;
+    result->vocab = vocab;
+    result->rules = std::make_shared<const llama_grammar_rules>(std::move(vec_rules));
+    result->rule_positions = llama_grammar_index_rules(*result->rules);
+    result->stacks = std::move(stacks);
+    result->stacks_initial = result->stacks;
+    result->lazy = lazy;
+    result->awaiting_trigger = lazy;
+    result->trigger_tokens = std::move(vec_trigger_tokens);
+    result->trigger_patterns = std::move(vec_trigger_patterns);
+    result->mask_cache = std::make_shared<llama_grammar_mask_cache>();
     return result;
 }
 
@@ -1606,12 +1611,22 @@ void llama_grammar_free_impl(struct llama_grammar * grammar) {
     delete grammar;
 }
 
+static std::shared_ptr<const llama_grammar_gpu_program> llama_grammar_gpu_lower(const llama_grammar & grammar);
+
 struct llama_grammar * llama_grammar_clone_impl(const struct llama_grammar & grammar) {
+    if (grammar.vocab) { llama_grammar_gpu_lower(grammar); }
     auto * result = new llama_grammar(grammar);
-    result->mask_cache = {};
     result->scratch = {};
     result->accept_scratch = {};
     return result;
+}
+
+void llama_grammar_reset_impl(struct llama_grammar & grammar) {
+    grammar.stacks = grammar.stacks_initial;
+    grammar.partial_utf8 = {0, 0};
+    grammar.awaiting_trigger = grammar.lazy;
+    grammar.trigger_buffer.clear();
+    grammar.trigger_buffer_positions.clear();
 }
 
 bool llama_grammar_mask_cache::key::operator==(const key & other) const {
@@ -1644,8 +1659,8 @@ static bool llama_grammar_mask_cache_key(const llama_grammar & grammar, size_t m
         std::vector<size_t> positions;
         positions.reserve(2 * stack.size());
         for (const auto * pos : stack) {
-            const auto it = grammar.rule_positions.find(pos);
-            GGML_ASSERT(it != grammar.rule_positions.end());
+            const auto it = grammar.rule_positions->find(pos);
+            GGML_ASSERT(it != grammar.rule_positions->end());
             positions.push_back(it->second.first);
             positions.push_back(it->second.second);
         }
@@ -1654,12 +1669,126 @@ static bool llama_grammar_mask_cache_key(const llama_grammar & grammar, size_t m
     std::sort(stacks.begin(), stacks.end());
     stacks.erase(std::unique(stacks.begin(), stacks.end()), stacks.end());
 
+    key.stacks.clear();
     key.stacks.reserve(n_words);
     for (const auto & stack : stacks) {
         key.stacks.push_back(stack.size() / 2);
         key.stacks.insert(key.stacks.end(), stack.begin(), stack.end());
     }
     return true;
+}
+
+static uint64_t llama_grammar_mask_cache_hash(const llama_grammar_mask_cache::key & key) {
+    uint64_t h = 1469598103934665603ull;
+    const auto mix = [&h](uint64_t v) {
+        h = (h ^ v) * 1099511628211ull;
+    };
+    mix((uintptr_t) key.program);
+    mix((uintptr_t) key.vocab);
+    mix(key.n_vocab);
+    mix((uint64_t(key.partial_utf8.value) << 8) | uint8_t(key.partial_utf8.n_remain));
+    mix(key.enabled);
+    for (const auto word : key.stacks) {
+        mix(word);
+    }
+    return h;
+}
+
+// evict the least recently used entry
+static void llama_grammar_mask_cache_evict(llama_grammar_mask_cache & cache) {
+    GGML_ASSERT(!cache.entries.empty());
+    size_t victim = 0;
+    for (size_t i = 1; i < cache.entries.size(); ++i) {
+        if (cache.entries[i].used < cache.entries[victim].used) {
+            victim = i;
+        }
+    }
+    auto & entry = cache.entries[victim];
+    cache.bytes -= entry.bytes;
+    auto it = cache.index.find(entry.hash);
+    if (it != cache.index.end() && it->second == victim) {
+        cache.index.erase(it);
+    }
+    if (victim + 1 != cache.entries.size()) {
+        entry = std::move(cache.entries.back());
+        auto moved = cache.index.find(entry.hash);
+        if (moved != cache.index.end() && moved->second == cache.entries.size() - 1) {
+            moved->second = victim;
+        }
+    }
+    cache.entries.pop_back();
+}
+
+static llama_grammar_mask_packed llama_grammar_mask_pack(std::vector<uint32_t> words, uint32_t n_vocab) {
+    llama_grammar_mask_packed packed;
+    packed.n_vocab = n_vocab;
+    int64_t n_allowed = 0;
+    for (const auto word : words) {
+        n_allowed += std::bitset<32>(word).count();
+    }
+    if (n_allowed == 0 || n_allowed == n_vocab) {
+        packed.kind = n_allowed == 0 ? GGML_TOKEN_MASK_NONE : GGML_TOKEN_MASK_ALL;
+        return packed;
+    }
+    if (std::min<int64_t>(n_allowed, n_vocab - n_allowed) < (int64_t) words.size()) {
+        const bool allow_ids = n_allowed <= n_vocab - n_allowed;
+        auto ids = std::make_shared<std::vector<uint32_t>>();
+        ids->reserve(allow_ids ? n_allowed : n_vocab - n_allowed);
+        for (size_t i = 0; i < words.size(); ++i) {
+            uint32_t word = allow_ids ? words[i] : ~words[i];
+            if (i + 1 == words.size() && n_vocab % 32) {
+                word &= (uint32_t(1) << (n_vocab % 32)) - 1;
+            }
+            while (word) {
+#if defined(_MSC_VER)
+                unsigned long bit;
+                _BitScanForward(&bit, word);
+#else
+                const int bit = __builtin_ctz(word);
+#endif
+                ids->push_back(uint32_t(32*i + bit));
+                word &= word - 1;
+            }
+        }
+        packed.kind = allow_ids ? GGML_TOKEN_MASK_ALLOW_IDS : GGML_TOKEN_MASK_DENY_IDS;
+        packed.payload = std::move(ids);
+        return packed;
+    }
+    packed.kind = GGML_TOKEN_MASK_BITSET;
+    packed.payload = std::make_shared<const std::vector<uint32_t>>(std::move(words));
+    return packed;
+}
+
+static std::vector<uint32_t> llama_grammar_mask_expand(const llama_grammar_mask_packed & packed) {
+    const uint32_t n_vocab = packed.n_vocab;
+    std::vector<uint32_t> mask(n_vocab / 32 + (n_vocab % 32 != 0), 0);
+    switch (packed.kind) {
+        case GGML_TOKEN_MASK_NONE:
+            break;
+        case GGML_TOKEN_MASK_ALL:
+        case GGML_TOKEN_MASK_DENY_IDS:
+            std::fill(mask.begin(), mask.end(), UINT32_MAX);
+            if (n_vocab % 32 != 0) {
+                mask.back() = (uint32_t(1) << (n_vocab % 32)) - 1;
+            }
+            if (packed.kind == GGML_TOKEN_MASK_DENY_IDS) {
+                for (const auto id : *packed.payload) {
+                    mask[id / 32] &= ~(uint32_t(1) << (id % 32));
+                }
+            }
+            break;
+        case GGML_TOKEN_MASK_ALLOW_IDS:
+            for (const auto id : *packed.payload) {
+                mask[id / 32] |= uint32_t(1) << (id % 32);
+            }
+            break;
+        case GGML_TOKEN_MASK_BITSET:
+            mask = *packed.payload;
+            break;
+        default:
+            GGML_ABORT("invalid packed mask kind");
+    }
+    return mask;
 }
 
 bool llama_grammar_get_allowed_tokens_trie(const llama_grammar & grammar, std::vector<uint32_t> & mask, size_t max_work) {
@@ -1841,6 +1970,18 @@ static std::vector<uint32_t> llama_grammar_compute_allowed_tokens(const llama_gr
         }
     }
 
+    const auto * decoded = grammar.partial_utf8.n_remain == 0 ? grammar.vocab->get_grammar_decoded() : nullptr;
+    if (decoded) {
+        for (size_t i = 0; i < mask.size(); ++i) {
+            mask[i] &= ~(decoded->unusable[i] | (allow_eog ? 0 : decoded->eog[i]));
+        }
+        const auto rejects = llama_grammar_reject_candidates(*grammar.rules, grammar.stacks, decoded->candidates);
+        for (const auto & reject : rejects) {
+            mask[reject.index / 32] &= ~(uint32_t(1) << (reject.index % 32));
+        }
+        return mask;
+    }
+
     auto & scratch = grammar.scratch;
     scratch.clear();
     scratch.candidates.reserve(n_vocab);
@@ -1868,48 +2009,64 @@ static std::vector<uint32_t> llama_grammar_compute_allowed_tokens(const llama_gr
     return mask;
 }
 
-std::vector<uint32_t> llama_grammar_get_allowed_tokens(const llama_grammar & grammar) {
+llama_grammar_mask_packed llama_grammar_get_allowed_packed(const llama_grammar & grammar) {
     GGML_ASSERT(grammar.vocab != nullptr);
-    auto & cache = grammar.mask_cache;
-    while (!cache.entries.empty() && (cache.entries.size() > cache.max_entries || cache.bytes > cache.max_bytes)) {
-        cache.bytes -= cache.entries.back().bytes;
-        cache.entries.pop_back();
-    }
+    GGML_ASSERT(grammar.mask_cache != nullptr);
+    auto & cache = *grammar.mask_cache;
+    const uint32_t n_vocab = grammar.vocab->n_tokens();
 
-    const size_t mask_bytes = (grammar.vocab->n_tokens() / 32 + (grammar.vocab->n_tokens() % 32 != 0)) * sizeof(uint32_t);
-    const size_t overhead = sizeof(llama_grammar_mask_cache::entry) + 2 * sizeof(void *);
+    // the packed payload never exceeds the bitset, so the bitset size bounds an entry's payload
+    const size_t mask_bytes = (n_vocab / 32 + (n_vocab % 32 != 0)) * sizeof(uint32_t);
+    const size_t overhead = sizeof(llama_grammar_mask_cache::entry) + sizeof(std::vector<uint32_t>) + 2 * sizeof(void *);
+
     llama_grammar_mask_cache::key key;
-    const bool cacheable = cache.max_entries > 0 && cache.max_bytes >= overhead &&
-        mask_bytes <= cache.max_bytes - overhead &&
-        llama_grammar_mask_cache_key(grammar, (cache.max_bytes - overhead - mask_bytes) / sizeof(size_t), key);
-
-    if (cacheable) {
-        for (auto it = cache.entries.begin(); it != cache.entries.end(); ++it) {
-            if (it->state == key) {
+    uint64_t hash = 0;
+    bool cacheable = false;
+    {
+        std::lock_guard<std::mutex> lock(cache.mutex);
+        while (!cache.entries.empty() && (cache.entries.size() > cache.max_entries || cache.bytes > cache.max_bytes)) {
+            llama_grammar_mask_cache_evict(cache);
+        }
+        cacheable = cache.max_entries > 0 && cache.max_bytes >= overhead &&
+            mask_bytes <= cache.max_bytes - overhead &&
+            llama_grammar_mask_cache_key(grammar, (cache.max_bytes - overhead - mask_bytes) / sizeof(size_t), key);
+        if (cacheable) {
+            hash = llama_grammar_mask_cache_hash(key);
+            const auto it = cache.index.find(hash);
+            if (it != cache.index.end() && cache.entries[it->second].state == key) {
+                auto & entry = cache.entries[it->second];
+                entry.used = ++cache.clock;
                 ++cache.hits;
-                cache.entries.splice(cache.entries.begin(), cache.entries, it);
-                return cache.entries.front().mask;
+                return { entry.kind, n_vocab, entry.payload };
             }
         }
+        ++cache.misses;
     }
 
-    ++cache.misses;
-    std::vector<uint32_t> mask;
-    if (!llama_grammar_get_allowed_tokens_trie(grammar, mask)) {
-        mask = llama_grammar_compute_allowed_tokens(grammar);
+    std::vector<uint32_t> words;
+    if (!llama_grammar_get_allowed_tokens_trie(grammar, words)) {
+        words = llama_grammar_compute_allowed_tokens(grammar);
     }
+    auto packed = llama_grammar_mask_pack(std::move(words), n_vocab);
+
     if (cacheable) {
-        const size_t bytes = overhead + key.stacks.capacity() * sizeof(size_t) + mask_bytes;
+        std::lock_guard<std::mutex> lock(cache.mutex);
+        const size_t bytes = overhead + key.stacks.capacity() * sizeof(size_t) +
+            (packed.payload ? packed.payload->capacity() * sizeof(uint32_t) : 0);
         if (bytes <= cache.max_bytes) {
             while (!cache.entries.empty() && (cache.entries.size() >= cache.max_entries || bytes > cache.max_bytes - cache.bytes)) {
-                cache.bytes -= cache.entries.back().bytes;
-                cache.entries.pop_back();
+                llama_grammar_mask_cache_evict(cache);
             }
-            cache.entries.push_front({ std::move(key), mask, bytes });
+            cache.index[hash] = cache.entries.size();
+            cache.entries.push_back({ std::move(key), hash, ++cache.clock, packed.kind, packed.payload, bytes });
             cache.bytes += bytes;
         }
     }
-    return mask;
+    return packed;
+}
+
+std::vector<uint32_t> llama_grammar_get_allowed_tokens(const llama_grammar & grammar) {
+    return llama_grammar_mask_expand(llama_grammar_get_allowed_packed(grammar));
 }
 
 void llama_grammar_apply_impl(const struct llama_grammar & grammar, llama_token_data_array * cur_p) {
@@ -1933,22 +2090,56 @@ void llama_grammar_apply_impl(const struct llama_grammar & grammar, llama_token_
     scratch.candidates.reserve(cur_p->size);
     scratch.offsets.reserve(cur_p->size);
 
-    for (size_t i = 0; i < cur_p->size; ++i) {
-        const llama_token id      = cur_p->data[i].id;
-        const std::string & piece = grammar.vocab->token_to_piece(id);
-
-        if (grammar.vocab->is_eog(id)) {
-            if (!allow_eog) {
-                cur_p->data[i].logit = -INFINITY;
-            }
-        } else if (piece.empty() || piece[0] == 0) {
-            cur_p->data[i].logit = -INFINITY;
-        } else {
-            scratch.add(i, id, piece, grammar.partial_utf8);
+    const auto * decoded = grammar.partial_utf8.n_remain == 0 && cur_p->size >= 1024 ?
+            grammar.vocab->get_grammar_decoded() : nullptr;
+    if (decoded) {
+        bool identity = cur_p->size == decoded->candidate_index.size();
+        for (size_t i = 0; identity && i < cur_p->size; ++i) {
+            identity = cur_p->data[i].id == (llama_token) i;
         }
+        if (identity) {
+            for (size_t i = 0; i < cur_p->size; ++i) {
+                const uint32_t word = decoded->unusable[i / 32] | (allow_eog ? 0 : decoded->eog[i / 32]);
+                if ((word >> (i % 32)) & 1) {
+                    cur_p->data[i].logit = -INFINITY;
+                }
+            }
+            const auto rejects = llama_grammar_reject_candidates(*grammar.rules, grammar.stacks, decoded->candidates);
+            for (const auto & reject : rejects) {
+                cur_p->data[reject.index].logit = -INFINITY;
+            }
+            return;
+        }
+        for (size_t i = 0; i < cur_p->size; ++i) {
+            const llama_token id = cur_p->data[i].id;
+            const auto position = decoded->candidate_index[id];
+            if (position == llama_vocab_decoded::none) {
+                if (!allow_eog || !((decoded->eog[id / 32] >> (id % 32)) & 1)) {
+                    cur_p->data[i].logit = -INFINITY;
+                }
+            } else {
+                const auto & candidate = decoded->candidates[position];
+                scratch.candidates.push_back({ i, candidate.code_points, candidate.partial_utf8, id });
+            }
+        }
+    } else {
+        for (size_t i = 0; i < cur_p->size; ++i) {
+            const llama_token id      = cur_p->data[i].id;
+            const std::string & piece = grammar.vocab->token_to_piece(id);
+
+            if (grammar.vocab->is_eog(id)) {
+                if (!allow_eog) {
+                    cur_p->data[i].logit = -INFINITY;
+                }
+            } else if (piece.empty() || piece[0] == 0) {
+                cur_p->data[i].logit = -INFINITY;
+            } else {
+                scratch.add(i, id, piece, grammar.partial_utf8);
+            }
+        }
+        scratch.set_pointers();
     }
 
-    scratch.set_pointers();
     const auto rejects = llama_grammar_reject_candidates(*grammar.rules, grammar.stacks, scratch.candidates);
     for (const auto & reject : rejects) {
         cur_p->data[reject.index].logit = -INFINITY;
@@ -2091,3 +2282,250 @@ void llama_grammar_accept_token(struct llama_grammar & grammar, llama_token toke
     }
 }
 
+struct llama_grammar_gpu_tensor {
+    ggml_context_ptr ctx;
+    ggml_backend_buffer_ptr buffer;
+    ggml_tensor * tensor;
+
+    llama_grammar_gpu_tensor(ggml_backend_t backend, size_t words) {
+        ctx.reset(ggml_init({ggml_tensor_overhead(), nullptr, true}));
+        if (!ctx) { throw std::bad_alloc(); }
+        tensor = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, words);
+        buffer.reset(ggml_backend_alloc_ctx_tensors(ctx.get(), backend));
+        if (!buffer) { throw std::bad_alloc(); }
+    }
+};
+
+struct llama_grammar_gpu_program {
+    uint64_t id;
+    std::vector<uint32_t> words;
+    std::vector<uint32_t> offsets;
+};
+
+struct llama_grammar_gpu_context {
+    ggml_backend_ptr backend;
+    ggml_backend_grammar_compute compute;
+    std::shared_ptr<const llama_grammar_gpu_program> program;
+    std::shared_ptr<llama_grammar_gpu_tensor> program_device, vocab_device;
+    std::unique_ptr<llama_grammar_gpu_tensor> state, scratch, cache, status;
+    uint32_t n_vocab = 0;
+    uint64_t vocab_generation = 0;
+};
+
+static uint64_t llama_grammar_gpu_identity() {
+    static std::atomic<uint64_t> next {1};
+    return next.fetch_add(1);
+}
+
+template<typename T> static uint32_t llama_grammar_gpu_append(std::vector<uint32_t> & words, const std::vector<T> & data) {
+    static_assert(sizeof(T) % sizeof(uint32_t) == 0, "wire alignment");
+    const uint32_t offset = words.size();
+    const size_t size = data.size()*sizeof(T)/sizeof(uint32_t);
+    words.resize(words.size() + size);
+    if (size) { std::memcpy(words.data() + offset, data.data(), size*sizeof(uint32_t)); }
+    return offset;
+}
+
+static std::shared_ptr<const llama_grammar_gpu_program> llama_grammar_gpu_lower(const llama_grammar & grammar) {
+    if (grammar.gpu_program_attempted) { return grammar.gpu_program; }
+    grammar.gpu_program_attempted = true;
+    auto program = std::make_shared<llama_grammar_gpu_program>();
+    const size_t limit = 1024 * 1024;
+    size_t n_ops = 0;
+    for (const auto & rule : *grammar.rules) {
+        if (rule.empty() || rule.size() > limit - n_ops || rule.back().type != LLAMA_GRETYPE_END) { return nullptr; }
+        program->offsets.push_back(n_ops);
+        n_ops += rule.size();
+        for (const auto & e : rule) {
+            if (e.type == LLAMA_GRETYPE_TOKEN || e.type == LLAMA_GRETYPE_TOKEN_NOT) { return nullptr; }
+        }
+    }
+    if (!n_ops) { return nullptr; }
+    static_assert(uint32_t(LLAMA_GRETYPE_END) == GGML_GRAMMAR_END && uint32_t(LLAMA_GRETYPE_ALT) == GGML_GRAMMAR_ALT &&
+        uint32_t(LLAMA_GRETYPE_RULE_REF) == GGML_GRAMMAR_RULE_REF && uint32_t(LLAMA_GRETYPE_CHAR) == GGML_GRAMMAR_CHAR &&
+        uint32_t(LLAMA_GRETYPE_CHAR_NOT) == GGML_GRAMMAR_CHAR_NOT && uint32_t(LLAMA_GRETYPE_CHAR_ANY) == GGML_GRAMMAR_CHAR_ANY, "grammar wire opcodes");
+    std::vector<ggml_grammar_op> ops(n_ops);
+    std::vector<ggml_grammar_rule> rules;
+    std::vector<uint32_t> alts;
+    std::vector<ggml_grammar_range> ranges;
+    for (size_t ri = 0; ri < grammar.rules->size(); ++ri) {
+        const auto & rule = (*grammar.rules)[ri];
+        ggml_grammar_rule lowered = {uint32_t(alts.size()), 0};
+        alts.push_back(program->offsets[ri]);
+        ++lowered.count;
+        for (size_t i = 0; i < rule.size(); ++i) {
+            auto & op = ops[program->offsets[ri] + i];
+            op = {uint32_t(rule[i].type), rule[i].value, 0, GGML_GRAMMAR_NONE};
+            size_t next = i + 1;
+            if (rule[i].type == LLAMA_GRETYPE_ALT) {
+                if (next >= rule.size()) { return nullptr; }
+                alts.push_back(program->offsets[ri] + next);
+                ++lowered.count;
+            } else if (rule[i].type == LLAMA_GRETYPE_RULE_REF) {
+                if (rule[i].value >= grammar.rules->size()) { return nullptr; }
+            } else if (rule[i].type == LLAMA_GRETYPE_CHAR || rule[i].type == LLAMA_GRETYPE_CHAR_NOT ||
+                       rule[i].type == LLAMA_GRETYPE_CHAR_ANY) {
+                op.value = ranges.size();
+                size_t j = i;
+                do {
+                    if (j + 1 >= rule.size()) { return nullptr; }
+                    const uint32_t low = rule[j].value;
+                    uint32_t high = low;
+                    if (rule[j + 1].type == LLAMA_GRETYPE_CHAR_RNG_UPPER) { high = rule[++j].value; }
+                    ranges.push_back({low, high});
+                    ++op.count;
+                    ++j;
+                } while (j < rule.size() && rule[j].type == LLAMA_GRETYPE_CHAR_ALT);
+                if (op.count > 32) { return nullptr; }
+                next = j;
+            }
+            if (next < rule.size() && rule[next].type != LLAMA_GRETYPE_END && rule[next].type != LLAMA_GRETYPE_ALT) {
+                op.next = program->offsets[ri] + next;
+            }
+        }
+        rules.push_back(lowered);
+    }
+    program->id = llama_grammar_gpu_identity();
+    ggml_grammar_program_header header = {{uint32_t(program->id), uint32_t(program->id >> 32)}, uint32_t(n_ops),
+        uint32_t(rules.size()), 0, 0, 0, 0};
+    program->words.resize(sizeof(header)/4);
+    header.ops = llama_grammar_gpu_append(program->words, ops);
+    header.rules = llama_grammar_gpu_append(program->words, rules);
+    header.alts = llama_grammar_gpu_append(program->words, alts);
+    header.ranges = llama_grammar_gpu_append(program->words, ranges);
+    std::memcpy(program->words.data(), &header, sizeof(header));
+    grammar.gpu_program = program;
+    return program;
+}
+
+static std::shared_ptr<llama_grammar_gpu_tensor> llama_grammar_gpu_upload_vocab(ggml_backend_t backend, const llama_vocab & vocab) {
+    static std::mutex mutex;
+    static std::map<std::pair<uint64_t, ggml_backend_dev_t>, std::weak_ptr<llama_grammar_gpu_tensor>> uploads;
+    std::lock_guard<std::mutex> lock(mutex);
+    for (auto it = uploads.begin(); it != uploads.end();) {
+        if (it->second.expired()) { it = uploads.erase(it); } else { ++it; }
+    }
+    const auto * trie = vocab.get_grammar_trie();
+    if (!trie || trie->nodes.size() > 4*1024*1024 || vocab.n_tokens() > 1024*1024) { return nullptr; }
+    const auto key = std::make_pair(trie->generation, ggml_backend_get_device(backend));
+    if (auto hit = uploads[key].lock()) { return hit; }
+    const uint64_t id = trie->generation;
+    ggml_grammar_vocab_header header = {{uint32_t(id), uint32_t(id >> 32)}, vocab.n_tokens(), uint32_t(trie->nodes.size()), 0, 0, 0, 0, {}};
+    std::fill(std::begin(header.roots), std::end(header.roots), GGML_GRAMMAR_NONE);
+    for (uint32_t child = trie->nodes[0].child; child != llama_vocab_trie::none; child = trie->nodes[child].sibling) {
+        header.roots[trie->nodes[child].byte] = child;
+    }
+    std::vector<ggml_grammar_node> nodes;
+    for (const auto & node : trie->nodes) { nodes.push_back({node.child, node.sibling, node.terminal, node.byte}); }
+    std::vector<ggml_grammar_terminal> terminals;
+    for (const auto & t : trie->terminals) { terminals.push_back({uint32_t(t.id), t.next}); }
+    std::vector<ggml_grammar_token> tokens;
+    std::vector<uint32_t> bytes;
+    size_t n_bytes = 0;
+    for (uint32_t i = 0; i < vocab.n_tokens(); ++i) {
+        const auto & piece = vocab.token_to_piece(i);
+        if (piece.size() > 64*1024*1024 - n_bytes) { return nullptr; }
+        tokens.push_back({uint32_t(n_bytes), uint32_t(piece.size()), (vocab.is_eog(i) ? uint32_t(GGML_GRAMMAR_EOG) : 0u) |
+            (vocab.is_control(i) || vocab.is_unknown(i) ? uint32_t(GGML_GRAMMAR_SPECIAL) : 0u)});
+        n_bytes += piece.size();
+    }
+    bytes.resize((n_bytes + 3)/4, 0);
+    for (uint32_t i = 0; i < vocab.n_tokens(); ++i) {
+        const auto & piece = vocab.token_to_piece(i);
+        if (!piece.empty()) { std::memcpy(reinterpret_cast<char *>(bytes.data()) + tokens[i].offset, piece.data(), piece.size()); }
+    }
+    std::vector<uint32_t> words(sizeof(header)/4);
+    header.nodes = llama_grammar_gpu_append(words, nodes);
+    header.terminals = llama_grammar_gpu_append(words, terminals);
+    header.tokens = llama_grammar_gpu_append(words, tokens);
+    header.bytes = llama_grammar_gpu_append(words, bytes);
+    std::memcpy(words.data(), &header, sizeof(header));
+    auto tensor = std::make_shared<llama_grammar_gpu_tensor>(backend, words.size());
+    ggml_backend_tensor_set(tensor->tensor, words.data(), 0, words.size()*4);
+    uploads[key] = tensor;
+    return tensor;
+}
+
+std::shared_ptr<llama_grammar_gpu_context> llama_grammar_gpu_init(ggml_backend_buffer_type_t buft, const llama_grammar * grammar) {
+    const char * enabled = getenv("LLAMA_GRAMMAR_GPU_MASK");
+    if (enabled && strcmp(enabled, "0") == 0) { return nullptr; }
+    const auto dev = ggml_backend_buft_get_device(buft);
+    if (!dev) { return nullptr; }
+    const auto reg = ggml_backend_dev_backend_reg(dev);
+    auto compute = reinterpret_cast<ggml_backend_grammar_compute>(ggml_backend_reg_get_proc_address(reg, "ggml_backend_grammar_compute"));
+    if (!compute) { return nullptr; }
+    try {
+        if (grammar && !llama_grammar_gpu_lower(*grammar)) { return nullptr; }
+        auto ctx = std::make_shared<llama_grammar_gpu_context>();
+        ctx->compute = compute;
+        ctx->backend.reset(ggml_backend_dev_init(dev, nullptr));
+        if (!ctx->backend) { return nullptr; }
+        ctx->state.reset(new llama_grammar_gpu_tensor(ctx->backend.get(), GGML_GRAMMAR_KEY_WORDS));
+        ctx->scratch.reset(new llama_grammar_gpu_tensor(ctx->backend.get(), (sizeof(ggml_grammar_worker)*GGML_GRAMMAR_WORKERS + 3)/4));
+        ctx->status.reset(new llama_grammar_gpu_tensor(ctx->backend.get(), 4));
+        return ctx;
+    } catch (const std::bad_alloc &) { return nullptr; }
+}
+
+ggml_grammar_status llama_grammar_gpu_compute(llama_grammar_gpu_context & ctx, const llama_grammar & grammar,
+        std::shared_ptr<llama_grammar_gpu_mask> & mask, uint32_t max_work) {
+    mask.reset();
+    if (!grammar.vocab || !grammar.vocab->n_tokens() || grammar.awaiting_trigger || grammar.partial_utf8.n_remain < 0 || grammar.partial_utf8.n_remain > 3) {
+        return GGML_GRAMMAR_NEED_CPU;
+    }
+    try {
+        auto program = llama_grammar_gpu_lower(grammar);
+        if (!program || grammar.stacks.size() > GGML_GRAMMAR_STACKS) { return GGML_GRAMMAR_NEED_CPU; }
+        std::vector<std::vector<uint32_t>> stacks;
+        for (const auto & stack : grammar.stacks) {
+            if (stack.size() > GGML_GRAMMAR_DEPTH) { return GGML_GRAMMAR_NEED_CPU; }
+            std::vector<uint32_t> frames;
+            frames.push_back(stack.size());
+            for (auto * pos : stack) {
+                const auto found = grammar.rule_positions->find(pos);
+                if (found == grammar.rule_positions->end()) { return GGML_GRAMMAR_NEED_CPU; }
+                frames.push_back(program->offsets[found->second.first] + found->second.second);
+            }
+            stacks.push_back(std::move(frames));
+        }
+        std::sort(stacks.begin(), stacks.end());
+        stacks.erase(std::unique(stacks.begin(), stacks.end()), stacks.end());
+        const auto * trie = grammar.vocab->get_grammar_trie();
+        if (!trie) { return GGML_GRAMMAR_NEED_CPU; }
+        if (ctx.program != program || ctx.vocab_generation != trie->generation) {
+            auto program_device = std::make_shared<llama_grammar_gpu_tensor>(ctx.backend.get(), program->words.size());
+            ggml_backend_tensor_set(program_device->tensor, program->words.data(), 0, program->words.size()*4);
+            auto vocab_device = llama_grammar_gpu_upload_vocab(ctx.backend.get(), *grammar.vocab);
+            if (!vocab_device) { return GGML_GRAMMAR_NEED_CPU; }
+            const uint32_t n_vocab = grammar.vocab->n_tokens();
+            const size_t n_words = (size_t(n_vocab) + 31)/32;
+            if (n_words*4*GGML_GRAMMAR_SETS*GGML_GRAMMAR_WAYS > 8*1024*1024) { return GGML_GRAMMAR_NEED_CPU; }
+            auto cache = std::make_unique<llama_grammar_gpu_tensor>(ctx.backend.get(),
+                GGML_GRAMMAR_SETS*GGML_GRAMMAR_WAYS*(4 + GGML_GRAMMAR_KEY_WORDS + n_words));
+            ggml_backend_buffer_clear(cache->buffer.get(), 0);
+            ctx.program_device = std::move(program_device);
+            ctx.vocab_device = std::move(vocab_device);
+            ctx.cache = std::move(cache);
+            ctx.n_vocab = n_vocab;
+            ctx.program = program;
+            ctx.vocab_generation = trie->generation;
+        }
+        const uint32_t vocab_id[2] = {uint32_t(trie->generation), uint32_t(trie->generation >> 32)};
+        std::vector<uint32_t> key = {uint32_t(program->id), uint32_t(program->id >> 32), vocab_id[0], vocab_id[1], 1,
+            grammar.partial_utf8.n_remain ? grammar.partial_utf8.value : 0, uint32_t(grammar.partial_utf8.n_remain), uint32_t(stacks.size())};
+        for (const auto & stack : stacks) { key.insert(key.end(), stack.begin(), stack.end()); }
+        key.resize(GGML_GRAMMAR_KEY_WORDS, 0);
+        ggml_backend_tensor_set(ctx.state->tensor, key.data(), 0, key.size()*4);
+        uint32_t status[4] = {GGML_GRAMMAR_OK, 0, max_work, 0};
+        ggml_backend_tensor_set(ctx.status->tensor, status, 0, sizeof(status));
+        auto result = std::make_shared<llama_grammar_gpu_tensor>(ctx.backend.get(), (size_t(ctx.n_vocab) + 31)/32);
+        if (!ctx.compute(ctx.backend.get(), ctx.program_device->tensor, ctx.vocab_device->tensor, ctx.state->tensor,
+                ctx.scratch->tensor, ctx.cache->tensor, result->tensor, ctx.status->tensor)) { return GGML_GRAMMAR_NEED_CPU; }
+        ggml_backend_tensor_get(ctx.status->tensor, status, 0, sizeof(status));
+        if (status[0] != GGML_GRAMMAR_OK && status[0] != GGML_GRAMMAR_NO_VALID_TOKEN) { return GGML_GRAMMAR_NEED_CPU; }
+        mask = std::make_shared<llama_grammar_gpu_mask>();
+        mask->storage = result;
+        mask->tensor = result->tensor;
+        return ggml_grammar_status(status[0]);
+    } catch (const std::bad_alloc &) { return GGML_GRAMMAR_NEED_CPU; }
+}

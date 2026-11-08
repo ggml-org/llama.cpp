@@ -1,7 +1,9 @@
 #include "llama-vocab.h"
+#include <atomic>
 
 #include "ggml.h"
 #include "gguf.h"
+#include "llama-grammar.h"
 #include "llama-impl.h"
 #include "llama-model-loader.h"
 
@@ -2151,6 +2153,8 @@ struct llama_vocab::impl {
     std::mutex grammar_trie_mutex;
     std::unique_ptr<llama_vocab_trie> grammar_trie;
     bool grammar_trie_attempted = false;
+    std::mutex grammar_decoded_mutex;
+    std::unique_ptr<llama_vocab_decoded> grammar_decoded;
     struct pair_hash {
         size_t operator()(const std::pair<std::string, std::string> & p) const {
             return std::hash<std::string>{}(p.first) ^  //create some hash for pair
@@ -4369,7 +4373,51 @@ llama_vocab::~llama_vocab() = default;
 void llama_vocab::load(llama_model_loader & ml, const LLM_KV & kv) {
     pimpl->grammar_trie.reset();
     pimpl->grammar_trie_attempted = false;
+    pimpl->grammar_decoded.reset();
     pimpl->load(ml, kv);
+}
+
+const llama_vocab_decoded * llama_vocab::get_grammar_decoded() const {
+    std::lock_guard<std::mutex> lock(pimpl->grammar_decoded_mutex);
+    if (pimpl->grammar_decoded) {
+        return pimpl->grammar_decoded.get();
+    }
+
+    const uint32_t n_vocab = n_tokens();
+    const size_t n_words = n_vocab / 32 + (n_vocab % 32 != 0);
+    auto decoded = std::make_unique<llama_vocab_decoded>();
+    decoded->candidate_index.assign(n_vocab, llama_vocab_decoded::none);
+    decoded->eog.assign(n_words, 0);
+    decoded->unusable.assign(n_words, 0);
+
+    size_t piece_bytes = 0;
+    for (uint32_t id = 0; id < n_vocab; ++id) {
+        piece_bytes += token_to_piece(id).size();
+    }
+    decoded->code_points.reserve(piece_bytes + n_vocab);
+    decoded->candidates.reserve(n_vocab);
+    std::vector<size_t> offsets;
+    offsets.reserve(n_vocab);
+
+    for (uint32_t id = 0; id < n_vocab; ++id) {
+        const std::string & piece = token_to_piece(id);
+        if (is_eog(id)) {
+            decoded->eog[id / 32] |= uint32_t(1) << (id % 32);
+        } else if (piece.empty() || piece[0] == 0) {
+            decoded->unusable[id / 32] |= uint32_t(1) << (id % 32);
+        } else {
+            decoded->candidate_index[id] = decoded->candidates.size();
+            offsets.push_back(decoded->code_points.size());
+            const auto partial = llama_grammar_decode_utf8(piece, {0, 0}, decoded->code_points);
+            decoded->candidates.push_back({ id, nullptr, partial, static_cast<llama_token>(id) });
+        }
+    }
+    for (size_t i = 0; i < decoded->candidates.size(); ++i) {
+        decoded->candidates[i].code_points = decoded->code_points.data() + offsets[i];
+    }
+
+    pimpl->grammar_decoded = std::move(decoded);
+    return pimpl->grammar_decoded.get();
 }
 
 const llama_vocab_trie * llama_vocab::get_grammar_trie() const {
@@ -4394,7 +4442,9 @@ const llama_vocab_trie * llama_vocab::get_grammar_trie() const {
         n_nodes += piece.size();
     }
 
+    static std::atomic<uint64_t> next_generation {1};
     auto trie = std::make_unique<llama_vocab_trie>();
+    trie->generation = next_generation.fetch_add(1);
     trie->nodes.reserve(n_nodes);
     trie->terminals.reserve(n_vocab);
     trie->eog.reserve(n_vocab);

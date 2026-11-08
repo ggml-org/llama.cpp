@@ -2,15 +2,26 @@
 
 #include "llama.h"
 
-#include <list>
 #include <map>
 #include <memory>
+#include <mutex>
+#include "../ggml/src/ggml-grammar.h"
 #include <regex>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 struct llama_vocab;
+struct llama_grammar_gpu_program;
+struct llama_grammar_gpu_context;
+struct llama_grammar_gpu_mask {
+    std::shared_ptr<void> storage;
+    ggml_tensor * tensor = nullptr;
+};
+std::shared_ptr<llama_grammar_gpu_context> llama_grammar_gpu_init(ggml_backend_buffer_type_t buft, const struct llama_grammar * grammar = nullptr);
+ggml_grammar_status llama_grammar_gpu_compute(llama_grammar_gpu_context & ctx, const struct llama_grammar & grammar,
+        std::shared_ptr<llama_grammar_gpu_mask> & mask, uint32_t max_work = 256 * 1024);
+
 
 // grammar element type
 enum llama_gretype {
@@ -71,6 +82,21 @@ using llama_grammar_rules      = std::vector<llama_grammar_rule>;
 using llama_grammar_stacks     = std::vector<llama_grammar_stack>;
 using llama_grammar_candidates = std::vector<llama_grammar_candidate>;
 
+struct llama_vocab_decoded {
+    static constexpr uint32_t none = UINT32_MAX;
+
+    std::vector<uint32_t> code_points;      // arena: each candidate's code points, 0-terminated
+    llama_grammar_candidates candidates;    // one entry per usable token; index == token id
+    std::vector<uint32_t> candidate_index;  // per token id: position in candidates, or none
+    std::vector<uint32_t> eog;              // bitset of EOG tokens
+    std::vector<uint32_t> unusable;         // bitset of tokens with empty or NUL-leading pieces
+};
+
+llama_partial_utf8 llama_grammar_decode_utf8(
+        const std::string & src,
+        llama_partial_utf8 partial_start,
+        std::vector<uint32_t> & code_points);
+
 // TODO: remove, needed for tests atm
 const llama_grammar_rules  & llama_grammar_get_rules (const struct llama_grammar * grammar);
       llama_grammar_stacks & llama_grammar_get_stacks(      struct llama_grammar * grammar);
@@ -128,13 +154,19 @@ struct llama_grammar_trigger_pattern {
     size_t find(const std::string & input) const;
 };
 
+struct llama_grammar_mask_packed {
+    int32_t kind = GGML_TOKEN_MASK_NONE; // ggml_token_mask_mode
+    uint32_t n_vocab = 0;
+    std::shared_ptr<const std::vector<uint32_t>> payload; // ids or bitset words; null for ALL/NONE
+};
+
 struct llama_grammar_mask_cache {
     struct key {
-        const llama_grammar_rules * program;
-        const llama_vocab * vocab;
-        uint32_t n_vocab;
-        llama_partial_utf8 partial_utf8;
-        bool enabled;
+        const void * program = nullptr; // shared rules identity
+        const llama_vocab * vocab = nullptr;
+        uint32_t n_vocab = 0;
+        llama_partial_utf8 partial_utf8 = {0, 0};
+        bool enabled = false;
         // Sorted unique stacks: frame count followed by (rule index, element offset) pairs.
         std::vector<size_t> stacks;
 
@@ -143,30 +175,43 @@ struct llama_grammar_mask_cache {
 
     struct entry {
         key state;
-        std::vector<uint32_t> mask;
-        size_t bytes;
+        uint64_t hash = 0;
+        uint64_t used = 0; // clock value of the last hit
+        int32_t kind = GGML_TOKEN_MASK_NONE;
+        std::shared_ptr<const std::vector<uint32_t>> payload;
+        size_t bytes = 0;
     };
 
-    size_t max_entries = 128;
+    size_t max_entries = 4096;
     size_t max_bytes = 8 * 1024 * 1024;
     size_t bytes = 0;
     size_t hits = 0;
     size_t misses = 0;
-    std::list<entry> entries;
+    uint64_t clock = 0;
+    std::vector<entry> entries;
+    std::unordered_map<uint64_t, size_t> index; // key hash -> position in entries
+    std::mutex mutex;                           // the cache is shared by clones
 };
 
 struct llama_grammar {
     // maintain a list of llama_tokens and their positions in the trigger_buffer
     using token_pos = std::pair<llama_token, std::pair<size_t, size_t>>;
 
-    // note: allow null vocab for testing (not great)
-    const llama_vocab * vocab;
+    using rule_position_map = std::unordered_map<const llama_grammar_element *, std::pair<size_t, size_t>>;
 
-    const std::shared_ptr<const llama_grammar_rules> rules;
+    // note: allow null vocab for testing (not great)
+    const llama_vocab * vocab = nullptr;
+
+    // The program is immutable after construction and shared with clones, so stack pointers stay valid across clones and the mask cache can identify the program by address.
+    std::shared_ptr<const llama_grammar_rules> rules;
+    // element pointer -> (rule index, element offset), shared with clones
+    std::shared_ptr<const rule_position_map>   rule_positions;
+
     llama_grammar_stacks stacks;
+    llama_grammar_stacks stacks_initial; // the root state, restored by llama_grammar_reset_impl
 
     // buffer for partially generated UTF-8 sequence from accepted tokens
-    llama_partial_utf8 partial_utf8;
+    llama_partial_utf8 partial_utf8 = {0, 0};
 
     // lazy grammars wait for trigger words or tokens before constraining the sampling.
     // we still have trigger_tokens for non-lazy grammars to force printing of special trigger tokens.
@@ -180,11 +225,10 @@ struct llama_grammar {
                              trigger_patterns;         // Regular expressions that trigger a lazy grammar. Must be a full match of the entire generated
                                                        // string, and the grammar will be given the string from the first match group onwards.
 
-    // Cache ownership binds program identity to this grammar; clones start with an empty cache.
-    mutable llama_grammar_mask_cache mask_cache;
-
-    std::unordered_map<const llama_grammar_element *, std::pair<size_t, size_t>> rule_positions = {};
-    void init_rule_positions();
+    // Shared with clones: entries are keyed by the complete grammar state, so any clone of the same program may reuse them. Guarded by its own mutex.
+    std::shared_ptr<llama_grammar_mask_cache> mask_cache;
+    mutable std::shared_ptr<const llama_grammar_gpu_program> gpu_program;
+    mutable bool gpu_program_attempted = false;
 
     struct candidate_storage {
         llama_grammar_candidates candidates;
@@ -231,12 +275,16 @@ void llama_grammar_free_impl(struct llama_grammar * grammar);
 
 struct llama_grammar * llama_grammar_clone_impl(const struct llama_grammar & grammar);
 
+void llama_grammar_reset_impl(struct llama_grammar & grammar);
+
 // TODO: move the API below as member functions of llama_grammar
 void llama_grammar_apply_impl(
         const struct llama_grammar & grammar,
             llama_token_data_array * cur_p);
 
 std::vector<uint32_t> llama_grammar_get_allowed_tokens(const llama_grammar & grammar);
+
+llama_grammar_mask_packed llama_grammar_get_allowed_packed(const llama_grammar & grammar);
 
 bool llama_grammar_get_allowed_tokens_trie(const llama_grammar & grammar, std::vector<uint32_t> & mask, size_t max_work = 256 * 1024);
 

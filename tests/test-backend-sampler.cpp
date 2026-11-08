@@ -2053,6 +2053,39 @@ static void test_grammar(const test_params & params) {
     printf("backend grammar and CPU suffix test PASSED\n");
 }
 
+static void test_grammar_gpu_bounds(const test_params & params) {
+    if (!grammar_test_supported(params)) { return; }
+    const auto * vocab = llama_model_get_vocab(params.model.get());
+    ggml_backend_ptr backend(ggml_backend_dev_init(params.device, nullptr));
+    const bool gpu = ggml_backend_reg_get_proc_address(ggml_backend_dev_backend_reg(params.device), "ggml_backend_grammar_compute") != nullptr;
+    std::string ambiguous = "root ::= \"a\" tail\ntail ::= ";
+    for (int i = 0; i < 33; ++i) {
+        char literal[32];
+        snprintf(literal, sizeof(literal), "\"\\u%04xb\"", 0x100 + i);
+        if (i) { ambiguous += " | "; }
+        ambiguous += literal;
+    }
+    std::string deep;
+    for (int i = 0; i < 18; ++i) {
+        const std::string name = i ? "r" + std::to_string(i) : "root";
+        deep += name + " ::= r" + std::to_string(i + 1) + " \"b\"\n";
+    }
+    deep += "r18 ::= \"a\"";
+    const std::vector<std::pair<std::string, bool>> cases = {{"root ::= \"ab\"?", true}, {ambiguous, false}, {deep, false}};
+    for (const auto & item : cases) {
+        llama_sampler_ptr sampler(llama_sampler_init_grammar(vocab, item.first.c_str(), "root"));
+        llama_sampler_ptr reference(llama_sampler_clone(sampler.get()));
+        GGML_ASSERT(sampler && reference);
+        GGML_ASSERT(sampler->iface->backend_init(sampler.get(), ggml_backend_get_default_buffer_type(backend.get()), 1));
+        grammar_test_graph graph(sampler.get(), backend.get(), llama_vocab_n_tokens(vocab));
+        graph.check(reference.get());
+        int32_t desc[4];
+        ggml_backend_tensor_get(graph.data.logits->src[3], desc, 0, sizeof(desc));
+        GGML_ASSERT(desc[0] == (gpu && item.second ? GGML_TOKEN_MASK_BITSET : GGML_TOKEN_MASK_ALLOW_IDS));
+    }
+    printf("character grammar device bitset and exact overflow fallback test PASSED\n");
+}
+
 static void test_grammar_multi_sequence(const test_params & params) {
     if (!grammar_test_supported(params)) {
         return;
@@ -3737,6 +3770,7 @@ static const backend_test_case BACKEND_TESTS[] = {
     { "test_logit_bias",             test_logit_bias,             true },
     { "test_penalties",              test_penalties,              true },
     { "test_grammar",                test_grammar,                true },
+    { "test_grammar_gpu_bounds",     test_grammar_gpu_bounds,      true },
 #ifdef LLAMA_USE_LLGUIDANCE
     { "test_llguidance_backend", test_llguidance_backend, true },
     { "test_llguidance_common", test_llguidance_common, true },

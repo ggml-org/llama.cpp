@@ -2753,12 +2753,14 @@ struct llama_sampler_grammar {
 
     struct llama_grammar * grammar;
 
+    std::shared_ptr<llama_grammar_gpu_context> gpu = {};
     uint64_t state_generation = 1;
     uint64_t prepared_generation = 0;
     struct packed_mask {
         bool materialized = false;
         std::array<int32_t, 4> desc = {};
-        std::vector<uint32_t> payload;
+        std::shared_ptr<const std::vector<uint32_t>> payload; // shared with the grammar mask cache
+        std::shared_ptr<llama_grammar_gpu_mask> device;
     };
     packed_mask mask = {};
     llama_grammar_stacks mask_stacks = {};
@@ -2778,7 +2780,7 @@ struct llama_sampler_grammar {
         bool desc_set = false;
         struct entry {
             std::array<int32_t, 4> desc = {};
-            std::vector<uint32_t> payload;
+            std::shared_ptr<const std::vector<uint32_t>> payload;
             uint64_t used = 0;
         };
         std::vector<entry> cache;
@@ -2846,18 +2848,7 @@ static void llama_sampler_grammar_reset(struct llama_sampler * smpl) {
         return;
     }
 
-    std::vector<const char *>  trigger_patterns_c;
-    trigger_patterns_c.reserve(ctx->grammar->trigger_patterns.size());
-    for (auto & trigger_pattern : ctx->grammar->trigger_patterns) {
-        trigger_patterns_c.push_back(trigger_pattern.pattern.c_str());
-    }
-
-    auto * grammar_new = llama_grammar_init_impl(ctx->grammar->vocab, ctx->grammar_str.c_str(), ctx->grammar_root.c_str(),
-                                                 ctx->grammar->lazy, trigger_patterns_c.data(), trigger_patterns_c.size(),
-                                                 ctx->grammar->trigger_tokens.data(), ctx->grammar->trigger_tokens.size());
-
-    llama_grammar_free_impl(ctx->grammar);
-    ctx->grammar = grammar_new;
+    llama_grammar_reset_impl(*ctx->grammar);
     ctx->rows.clear();
     ctx->prepared_rows.clear();
     ++ctx->state_generation;
@@ -2902,6 +2893,7 @@ static bool llama_sampler_grammar_backend_init(
     if (ctx->grammar && (!ctx->vocab || ctx->vocab->n_tokens() == 0 || ctx->vocab->n_tokens() > INT32_MAX)) {
         return false;
     }
+    ctx->gpu = ctx->grammar ? llama_grammar_gpu_init(buft, ctx->grammar) : nullptr;
     return llama_sampler_backend_support(smpl, buft);
 }
 
@@ -2937,43 +2929,25 @@ static void llama_sampler_grammar_backend_apply(
     data->probs = nullptr;
 }
 
-static llama_sampler_grammar::packed_mask llama_sampler_grammar_pack_mask(std::vector<uint32_t> words, int32_t n_vocab) {
-    llama_sampler_grammar::packed_mask mask;
-    int32_t n_allowed = 0;
-    for (const auto word : words) {
-        n_allowed += std::bitset<32>(word).count();
-    }
-
-    mask.materialized = true;
-    mask.desc = { GGML_TOKEN_MASK_BITSET, (int32_t) words.size(), 0, n_vocab };
-    if (n_allowed == 0 || n_allowed == n_vocab) {
-        mask.desc[0] = n_allowed == 0 ? GGML_TOKEN_MASK_NONE : GGML_TOKEN_MASK_ALL;
-        mask.desc[1] = 0;
-    } else if (std::min(n_allowed, n_vocab - n_allowed) < (int32_t) words.size()) {
-        const bool allow_ids = n_allowed <= n_vocab - n_allowed;
-        mask.payload.reserve(allow_ids ? n_allowed : n_vocab - n_allowed);
-        for (size_t i = 0; i < words.size(); ++i) {
-            uint32_t word = allow_ids ? words[i] : ~words[i];
-            if (i + 1 == words.size() && n_vocab % 32) {
-                word &= (uint32_t(1) << (n_vocab % 32)) - 1;
-            }
-            while (word) {
-#if defined(_MSC_VER)
-                unsigned long bit;
-                _BitScanForward(&bit, word);
-#else
-                const int bit = __builtin_ctz(word);
-#endif
-                mask.payload.push_back(int32_t(32*i + bit));
-                word &= word - 1;
-            }
+static llama_sampler_grammar::packed_mask llama_sampler_grammar_materialize(llama_sampler_grammar * ctx, const llama_grammar & state) {
+    if (ctx->gpu) {
+        std::shared_ptr<llama_grammar_gpu_mask> device;
+        const auto status = llama_grammar_gpu_compute(*ctx->gpu, state, device);
+        if (status != GGML_GRAMMAR_NEED_CPU) {
+            llama_sampler_grammar::packed_mask mask;
+            mask.materialized = true;
+            const int32_t n_vocab = ctx->vocab->n_tokens();
+            mask.desc = {status == GGML_GRAMMAR_NO_VALID_TOKEN ? GGML_TOKEN_MASK_NONE : GGML_TOKEN_MASK_BITSET,
+                status == GGML_GRAMMAR_NO_VALID_TOKEN ? 0 : int32_t((int64_t(n_vocab) + 31)/32), 0, n_vocab};
+            mask.device = std::move(device);
+            return mask;
         }
-        mask.desc[0] = allow_ids ? GGML_TOKEN_MASK_ALLOW_IDS : GGML_TOKEN_MASK_DENY_IDS;
-        mask.desc[1] = mask.payload.size();
     }
-    if (mask.desc[0] == GGML_TOKEN_MASK_BITSET) {
-        mask.payload = std::move(words);
-    }
+    auto packed = llama_grammar_get_allowed_packed(state);
+    llama_sampler_grammar::packed_mask mask;
+    mask.materialized = true;
+    mask.desc = { packed.kind, packed.payload ? (int32_t) packed.payload->size() : 0, 0, (int32_t) ctx->vocab->n_tokens() };
+    mask.payload = std::move(packed.payload);
     return mask;
 }
 
@@ -2981,7 +2955,7 @@ static void llama_sampler_grammar_prepare_mask(llama_sampler_grammar * ctx) {
     if (ctx->prepared_generation == ctx->state_generation) {
         return;
     }
-    ctx->mask = llama_sampler_grammar_pack_mask(llama_grammar_get_allowed_tokens(*ctx->grammar), ctx->vocab->n_tokens());
+    ctx->mask = llama_sampler_grammar_materialize(ctx, *ctx->grammar);
     ctx->mask_stacks = ctx->grammar->stacks;
     ctx->mask_partial_utf8 = ctx->grammar->partial_utf8;
     ctx->mask_awaiting_trigger = ctx->grammar->awaiting_trigger;
@@ -3024,7 +2998,7 @@ static bool llama_sampler_grammar_prepare_rows_impl(llama_sampler * smpl, const 
                 for (const auto index : ctx->rows) {
                     auto & cached = ctx->prepared_rows[index];
                     if (cached.usable && !cached.mask.materialized) {
-                        cached.mask = llama_sampler_grammar_pack_mask(llama_grammar_get_allowed_tokens(*cached.state), ctx->vocab->n_tokens());
+                        cached.mask = llama_sampler_grammar_materialize(ctx, *cached.state);
                         cached.usable = cached.mask.desc[0] != GGML_TOKEN_MASK_NONE;
                     }
                 }
@@ -3090,7 +3064,7 @@ static bool llama_sampler_grammar_prepare_rows_impl(llama_sampler * smpl, const 
                 llama_sampler_grammar_prepare_mask(ctx);
                 mask = ctx->mask;
             } else {
-                mask = llama_sampler_grammar_pack_mask(llama_grammar_get_allowed_tokens(*state), ctx->vocab->n_tokens());
+                mask = llama_sampler_grammar_materialize(ctx, *state);
             }
             usable = mask.desc[0] != GGML_TOKEN_MASK_NONE;
         }
@@ -3130,20 +3104,36 @@ static void llama_sampler_grammar_backend_set_input(llama_sampler * smpl, ggml_b
         if (provisional) {
             auto & cached = ctx->prepared_rows[ctx->rows[row]];
             if (cached.usable && !cached.mask.materialized) {
-                cached.mask = llama_sampler_grammar_pack_mask(llama_grammar_get_allowed_tokens(*cached.state), ctx->vocab->n_tokens());
+                cached.mask = llama_sampler_grammar_materialize(ctx, *cached.state);
                 cached.usable = cached.mask.desc[0] != GGML_TOKEN_MASK_NONE;
             }
         }
         const auto & mask = provisional ? ctx->prepared_rows[ctx->rows[row]].mask : ctx->mask;
         GGML_ASSERT(mask.materialized);
-        const void * payload = mask.payload.data();
-        const size_t size = mask.payload.size()*sizeof(uint32_t);
+        if (mask.device) {
+            if (binding.uploaded) { ggml_backend_event_synchronize(binding.uploaded.get()); }
+            const size_t size = size_t(mask.desc[1])*sizeof(uint32_t);
+            if (size) {
+                ggml_init_params params = {ggml_tensor_overhead(), nullptr, true};
+                ggml_context_ptr view_ctx(ggml_init(params));
+                auto * dst = ggml_view_1d(view_ctx.get(), binding.payload, mask.desc[1], 0);
+                GGML_ASSERT(ggml_backend_view_init(dst) == GGML_STATUS_SUCCESS);
+                ggml_backend_tensor_copy(mask.device->tensor, dst);
+            }
+            ggml_backend_tensor_set(binding.desc, mask.desc.data(), 0, sizeof(mask.desc));
+            binding.desc_set = false;
+            for (auto & entry : binding.cache) { entry.used = 0; }
+            continue;
+        }
+        const void * payload = mask.payload ? (const void *) mask.payload->data() : nullptr;
+        const size_t size = mask.payload ? mask.payload->size()*sizeof(uint32_t) : 0;
         size_t slot = 0;
         bool hit = false;
         for (size_t i = 0; i < binding.cache.size(); ++i) {
             const auto & entry = binding.cache[i];
-            if (entry.used && entry.desc == mask.desc && entry.payload.size()*sizeof(uint32_t) == size &&
-                    (size == 0 || std::memcmp(entry.payload.data(), payload, size) == 0)) {
+            const size_t entry_size = entry.payload ? entry.payload->size()*sizeof(uint32_t) : 0;
+            if (entry.used && entry.desc == mask.desc && entry_size == size &&
+                    (size == 0 || entry.payload == mask.payload || std::memcmp(entry.payload->data(), payload, size) == 0)) {
                 slot = i;
                 hit = true;
                 break;
@@ -3164,10 +3154,7 @@ static void llama_sampler_grammar_backend_set_input(llama_sampler * smpl, ggml_b
         }
         if (!hit) {
             entry.desc = mask.desc;
-            entry.payload.resize(mask.desc[1]);
-            if (size) {
-                std::memcpy(entry.payload.data(), payload, size);
-            }
+            entry.payload = mask.payload;
         }
         entry.used = ++binding.clock;
         if (set_desc) {
@@ -3184,9 +3171,9 @@ static void llama_sampler_grammar_backend_set_input(llama_sampler * smpl, ggml_b
             }
             const bool async = backend && binding.uploaded;
             if (!async && !hit && size && set_desc) {
-                std::vector<uint32_t> upload(desc.size() + entry.payload.size());
+                std::vector<uint32_t> upload(desc.size() + entry.payload->size());
                 std::memcpy(upload.data(), desc.data(), sizeof(desc));
-                std::memcpy(upload.data() + desc.size(), entry.payload.data(), size);
+                std::memcpy(upload.data() + desc.size(), entry.payload->data(), size);
                 ggml_tensor * tensors[] = {binding.payload, binding.desc};
                 const size_t offsets[] = {size_t(desc[2])*sizeof(int32_t), 0};
                 const size_t sizes[] = {size, sizeof(desc)};
@@ -3196,9 +3183,9 @@ static void llama_sampler_grammar_backend_set_input(llama_sampler * smpl, ggml_b
             }
             if (!hit && size) {
                 if (async) {
-                    ggml_backend_tensor_set_async(backend, binding.payload, entry.payload.data(), size_t(desc[2])*sizeof(int32_t), size);
+                    ggml_backend_tensor_set_async(backend, binding.payload, entry.payload->data(), size_t(desc[2])*sizeof(int32_t), size);
                 } else {
-                    ggml_backend_tensor_set(binding.payload, entry.payload.data(), size_t(desc[2])*sizeof(int32_t), size);
+                    ggml_backend_tensor_set(binding.payload, entry.payload->data(), size_t(desc[2])*sizeof(int32_t), size);
                 }
             }
             if (set_desc) {

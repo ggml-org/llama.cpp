@@ -1,7 +1,7 @@
 #include "llama.h"
 #include "llama-cpp.h"
 #include "ggml-cpp.h"
-#include "json-schema-to-grammar.h"
+#include "sampler-bench-common.h"
 
 #include <algorithm>
 #include <chrono>
@@ -16,53 +16,6 @@
 #include <vector>
 
 using bench_clock = std::chrono::steady_clock;
-
-static void require(bool ok, const std::string & message) {
-    if (!ok) {
-        throw std::runtime_error(message);
-    }
-}
-
-static void write_file(const std::string & path, const std::string & text) {
-    if (path.empty()) {
-        return;
-    }
-    std::ofstream out(path, std::ios::binary);
-    out << text;
-    require(out.good(), "cannot write " + path);
-}
-
-static common_json make_schema(const common_json & tools) {
-    common_json variants = common_json::array();
-    std::set<std::string> names;
-    for (const auto & tool : tools) {
-        const auto & fn = tool.at("function");
-        require(names.insert(fn.at("name").get<std::string>()).second, "duplicate tool name");
-        variants.push_back({
-            {"type", "object"},
-            {"description", fn.at("description")},
-            {"properties", {
-                {"name", {{"const", fn.at("name")}}},
-                {"arguments", fn.at("parameters")},
-            }},
-            {"required", common_json::array({"name", "arguments"})},
-            {"additionalProperties", false},
-        });
-    }
-    require(!variants.empty(), "tool list is empty");
-    return {{"type", "array"}, {"minItems", 1}, {"items", {{"oneOf", variants}}}};
-}
-
-static void check_coverage(const common_json & fixture) {
-    std::set<std::string> tools, examples;
-    for (const auto & tool : fixture.at("tools")) {
-        tools.insert(tool.at("function").at("name").get<std::string>());
-    }
-    for (const auto & call : fixture.at("examples")) {
-        examples.insert(call.at("name").get<std::string>());
-    }
-    require(tools == examples, "examples must cover every tool and contain no unknown tools");
-}
 
 struct trace_step {
     llama_token expected;
@@ -224,13 +177,6 @@ static void usage(const char * exe) {
             "Loads vocabulary only; replays synthetic logits, no model decode.\n", exe);
 }
 
-static int positive_int(const std::string & value) {
-    size_t end;
-    const int result = std::stoi(value, &end);
-    require(end == value.size() && result > 0, "expected a positive integer: " + value);
-    return result;
-}
-
 static int run(int argc, char ** argv) {
     std::string model_path, schema_path, grammar_path;
     std::string tools_path = "tools/test-grammar-tools.json";
@@ -259,11 +205,7 @@ static int run(int argc, char ** argv) {
         else if (arg == "--write-grammar") { grammar_path = value; }
         else { throw std::runtime_error("unknown argument " + arg); }
     }
-    std::ifstream input(tools_path);
-    require(input.good(), "cannot open " + tools_path + " (use --tools from another directory)");
-    const std::string fixture_text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
-    const common_json fixture = common_json::parse(fixture_text);
-    check_coverage(fixture);
+    const common_json fixture = load_fixture(tools_path);
     const common_json schema = make_schema(fixture.at("tools"));
     const std::string grammar = json_schema_to_grammar(schema, true);
     write_file(schema_path, schema.dump(4) + "\n");
