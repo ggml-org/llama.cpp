@@ -59,14 +59,18 @@ Sizes are multiples of the format's unit `u` (see Grid):
 | Display  | 3.2u  | Bold, line height 0.92, -0.035em. One statement, two to three lines. |
 | Headline | 2u    | Bold, line height 0.98, -0.02em.                                     |
 | Figure   | 5u    | Bold. One number that carries the piece.                             |
-| Lede     | 0.72u | Regular, in the ground's muted ink.                                  |
-| Body     | 0.55u | Regular, line height 1.4.                                            |
-| Label    | 0.48u | Llama Mono Medium, uppercase, 0.12em tracking, muted.                |
-| Mono     | 0.5u  | Llama Mono, commands and data.                                       |
+| Lede     | 0.84u | Regular, in the ground's muted ink, line height 1.3.                 |
+| Body     | 0.62u | Regular, line height 1.4.                                            |
+| Label    | 0.54u | Llama Mono Medium, uppercase, 0.12em tracking, muted.                |
+| Mono     | 0.58u | Llama Mono, commands and data.                                       |
+| Footer   | 0.58u | Who it is from and the promise, muted.                               |
 
 The text stack keeps one rhythm in every layout: a label 0.6u over its headline, the headline 1.2u over its lede,
 and 1.6u from the lede to what follows it (a command, chips, a caption). Space it by these, not by eye. A lede keeps
-to 17u at most (about 50 characters a line), so it never runs up to a motif or diagram beside it.
+to 17u at most (about 40 characters a line), so it never runs up to a motif or diagram beside it.
+
+Pieces are read on phones, at a quarter to a third of their size, so small text is never smaller than these: the
+footer, a card's details, a URL and a command at 0.58u or more, a kicker at 0.5u at the least. When a piece runs out of room, cut words or move the split between text and motif; don't shrink the type.
 
 ## Colour
 

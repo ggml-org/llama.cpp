@@ -51,8 +51,8 @@ const KEY_VISUALS = [
 		name: 'Statement',
 		shape: [
 			'Header: the lockup and the URL.',
-			'Display headline (3.2u), two or three lines; a lede (0.72u) under it; a command in Mono if it helps.',
-			'A motif fills the rest: beside the text on wide formats (columns 8 to 12), above it on square and tall ones.',
+			'Display headline (3.2u), two or three lines; a lede (0.84u) 1.2u under it; a command in Mono 1.6u under that if it helps.',
+			'A motif fills the rest: beside the text on wide formats (columns 8 to 12, or 7 to 12 for a diagram that needs the room), above it on square and tall ones.',
 			'Footer: who it is from, the promise.'
 		],
 		stories: ['communications-key-visuals--statement'],
@@ -266,28 +266,34 @@ function tokens() {
 				lineHeight: 0.85,
 				usage: 'Figure, 5u: one number that carries the piece.'
 			}),
-			style('lede', u, 0.72, {
+			style('lede', u, 0.84, {
 				fontWeight: 400,
-				lineHeight: 1.35,
-				usage: 'Lede, 0.72u, in muted ink.'
+				lineHeight: 1.3,
+				usage: 'Lede, 0.84u, in muted ink, at most 17u wide.'
 			}),
-			style('body', u, 0.55, {
+			style('body', u, 0.62, {
 				fontWeight: 400,
 				lineHeight: 1.4,
-				usage: 'Body, 0.55u: cards, notes, footers.'
+				usage: 'Body, 0.62u: cards and notes.'
 			}),
-			style('label', u, 0.48, {
+			style('footer', u, 0.58, {
+				fontWeight: 400,
+				lineHeight: 1.2,
+				usage:
+					'Footer, 0.58u: who it is from and the promise, muted. The smallest text people read, for phones.'
+			}),
+			style('label', u, 0.54, {
 				family: 'mono',
 				fontWeight: 500,
 				letterSpacing: '0.12em',
 				lineHeight: 1,
-				usage: 'Label, 0.48u: Llama Mono, uppercase, muted.'
+				usage: 'Label, 0.54u: Llama Mono, uppercase, muted.'
 			}),
-			style('mono', u, 0.5, {
+			style('mono', u, 0.58, {
 				family: 'mono',
 				fontWeight: 400,
 				lineHeight: 1.2,
-				usage: 'Mono, 0.5u: commands, URLs, repo ids, data.'
+				usage: 'Mono, 0.58u: commands, URLs, repo ids, data.'
 			})
 		]
 	});

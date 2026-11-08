@@ -60,19 +60,17 @@
 	.icon {
 		font: 700 calc(var(--s) * 1.4) / 1 var(--sans);
 	}
-	.kicker,
-	.url {
-		color: var(--p-muted);
-		font: 400 calc(var(--s) * 0.6) / 1 var(--mono);
-		letter-spacing: 0.06em;
-	}
+	/* the kicker a little smaller and less tracked than the URL, since it runs longer */
 	.kicker {
 		margin-left: calc(var(--s) * 0.2);
+		color: var(--p-muted);
+		font: 400 calc(var(--s) * 0.62) / 1 var(--mono);
+		letter-spacing: 0.02em;
 	}
 	.url {
 		margin-left: auto;
 		color: var(--p-ink);
-		letter-spacing: 0;
+		font: 400 calc(var(--s) * 0.76) / 1 var(--mono);
 	}
 	.rule {
 		align-self: stretch;
@@ -88,7 +86,7 @@
 		border: 2px solid var(--p-line);
 		border-radius: 999px;
 		color: var(--p-ink);
-		font: 500 calc(var(--s) * 0.5) / 1 var(--sans);
+		font: 500 calc(var(--s) * 0.68) / 1 var(--sans);
 	}
 	.dot {
 		width: calc(var(--s) * 0.22);

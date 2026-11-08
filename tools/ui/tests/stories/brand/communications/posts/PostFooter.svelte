@@ -6,7 +6,7 @@
 		size?: number;
 	}
 
-	let { left, right, size = 0.45 }: Props = $props();
+	let { left, right, size = 0.58 }: Props = $props();
 </script>
 
 <footer style:font-size="calc(var(--u) * {size})" class="row">

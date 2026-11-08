@@ -15,13 +15,26 @@
 		command?: string;
 		/** the command's `$`; off for a line of config */
 		prompt?: boolean;
+		/** on a wide format, the column the motif starts at (the text takes the ones before it) */
+		split?: number;
 		headline: string;
 		lede?: string;
 		motif?: Snippet;
 	}
 
-	let { command, footer, format, header, headline, lede, motif, overlay, prompt, tone }: Props =
-		$props();
+	let {
+		command,
+		footer,
+		format,
+		header,
+		headline,
+		lede,
+		motif,
+		overlay,
+		prompt,
+		split = 8,
+		tone
+	}: Props = $props();
 </script>
 
 <PostFrame
@@ -32,7 +45,7 @@
 >
 	<PostHeader {...header} />
 
-	<div class:plain={!motif} class="body">
+	<div class:plain={!motif} style:--split={split} class="body">
 		{#if motif}<div class="motif fill">{@render motif()}</div>{/if}
 
 		<div class="text">
@@ -66,16 +79,18 @@
 		margin-top: calc(var(--stack-after) - var(--stack));
 	}
 
+	/* a wide format is short: a unit over the text and a little less under it */
 	:global(.shape-wide) .body {
+		margin-block: calc(var(--u) * 1) calc(var(--u) * 0.8);
 		grid-template-rows: none;
 		grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
 		column-gap: var(--gutter);
 	}
 	:global(.shape-wide) .motif {
-		grid-area: 1 / 8 / 2 / -1;
+		grid-area: 1 / var(--split) / 2 / -1;
 	}
 	:global(.shape-wide) .text {
-		grid-area: 1 / 1 / 2 / 8;
+		grid-area: 1 / 1 / 2 / var(--split);
 	}
 	:global(.shape-wide) .plain .text {
 		grid-column: 1 / -1;

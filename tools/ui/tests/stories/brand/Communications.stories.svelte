@@ -133,6 +133,7 @@
 						lede={copy.lede}
 						overlay={copy.overlay}
 						prompt={false}
+						split={7}
 						{tone}
 					>
 						{#snippet motif()}<AgentsDiagram
