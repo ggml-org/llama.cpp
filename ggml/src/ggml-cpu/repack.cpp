@@ -4950,7 +4950,11 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
             #endif
         }
     } else if (cur->type == GGML_TYPE_MXFP4) {
+#if defined(__loongarch__)
+        if (ggml_cpu_has_avx2() || ggml_cpu_has_lasx()) {
+#else
         if (ggml_cpu_has_avx2()) {
+#endif
             if (cur->ne[1] % 8 == 0) {
                 return &mxfp4_8x8_q8_0;
             }

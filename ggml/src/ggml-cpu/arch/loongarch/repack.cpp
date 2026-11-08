@@ -612,6 +612,178 @@ void ggml_gemm_q4_1_8x8_q8_1(int                        n,
 }
 
 #if defined(__loongarch_asx)
+static inline __m256i lasx_fp4_values() {
+    return __lasx_xvilvl_d(__lasx_xvldrepl_d(kvalues_mxfp4, 8), __lasx_xvldrepl_d(kvalues_mxfp4, 0));
+}
+
+// Eight consecutive scale bytes become one scale per output column.
+static inline __m256i lasx_fp4_scale_bytes(const uint8_t * scales) {
+    const __m256i h = __lasx_xvsllwil_hu_bu(__lasx_xvldrepl_d(scales, 0), 0);
+    return __lasx_xvsllwil_wu_hu(__lasx_xvpermi_d(h, 0xd8), 0);
+}
+
+static inline __m256 lasx_mxfp4_scales(const uint8_t * scales) {
+    const __m256i e         = lasx_fp4_scale_bytes(scales);
+    const __m256i normal    = __lasx_xvslli_w(__lasx_xvsub_w(e, __lasx_xvreplgr2vr_w(1)), 23);
+    const __m256i subnormal = __lasx_xvsll_w(__lasx_xvreplgr2vr_w(0x00200000), e);
+    return (__m256) __lasx_xvbitsel_v(normal, subnormal, __lasx_xvslti_w(e, 2));
+}
+
+static inline __m256i lasx_fp4_dot(__m256i dot, __m256i b_lo, __m256i b_hi, __m256i a_lo, __m256i a_hi) {
+    dot = __lasx_xvmaddwev_h_b(dot, b_lo, a_lo);
+    dot = __lasx_xvmaddwod_h_b(dot, b_lo, a_lo);
+    dot = __lasx_xvmaddwev_h_b(dot, b_hi, a_hi);
+    return __lasx_xvmaddwod_h_b(dot, b_hi, a_hi);
+}
+
+static inline __m256i lasx_fp4_sum(__m256i cols_0_3, __m256i cols_4_7) {
+    // At most eight products per halfword: 8 * 12 * 128 = 12288.
+    cols_0_3 = __lasx_xvhaddw_w_h(cols_0_3, cols_0_3);
+    cols_4_7 = __lasx_xvhaddw_w_h(cols_4_7, cols_4_7);
+    return __lasx_xvpermi_d(
+        __lasx_xvadd_w(__lasx_xvpickev_w(cols_4_7, cols_0_3), __lasx_xvpickod_w(cols_4_7, cols_0_3)), 0xd8);
+}
+#endif
+
+void ggml_gemv_mxfp4_8x8_q8_0(int                        n,
+                              float * GGML_RESTRICT      s,
+                              size_t                     bs,
+                              const void * GGML_RESTRICT vx,
+                              const void * GGML_RESTRICT vy,
+                              int                        nr,
+                              int                        nc) {
+#if defined(__loongarch_asx)
+    assert(n % QK_MXFP4 == 0);
+    assert(nc % 8 == 0);
+    assert(nr == 1);
+    UNUSED(bs);
+    UNUSED(nr);
+
+    const __m256i      values = lasx_fp4_values();
+    const int          nb     = n / QK_MXFP4;
+    const block_q8_0 * a_ptr  = (const block_q8_0 *) vy;
+    for (int x = 0; x < nc / 8; x++) {
+        const block_mxfp4x8 * b_ptr = (const block_mxfp4x8 *) vx + x * nb;
+        __m256                sumf  = (__m256) __lasx_xvldi(0);
+        for (int l = 0; l < nb; l++) {
+            __m256i sum0 = __lasx_xvldi(0);
+            __m256i sum1 = __lasx_xvldi(0);
+            for (int k = 0; k < 2; k++) {
+                const __m256i a_lo  = __lasx_xvldrepl_d(a_ptr[l].qs + k * 8, 0);
+                const __m256i a_hi  = __lasx_xvldrepl_d(a_ptr[l].qs + k * 8, 16);
+                const __m256i b0    = __lasx_xvld(b_ptr[l].qs + k * 64, 0);
+                const __m256i b1    = __lasx_xvld(b_ptr[l].qs + k * 64, 32);
+                const __m256i b0_lo = __lasx_xvshuf_b(values, values, __lasx_xvandi_b(b0, 0x0f));
+                const __m256i b0_hi = __lasx_xvshuf_b(values, values, __lasx_xvsrli_b(b0, 4));
+                const __m256i b1_lo = __lasx_xvshuf_b(values, values, __lasx_xvandi_b(b1, 0x0f));
+                const __m256i b1_hi = __lasx_xvshuf_b(values, values, __lasx_xvsrli_b(b1, 4));
+                sum0                = lasx_fp4_dot(sum0, b0_lo, b0_hi, a_lo, a_hi);
+                sum1                = lasx_fp4_dot(sum1, b1_lo, b1_hi, a_lo, a_hi);
+            }
+            const __m256 a_d = __lasx_xvfcvtl_s_h(__lasx_xvldrepl_h(&a_ptr[l].d, 0));
+            const __m256 b_d = lasx_mxfp4_scales(b_ptr[l].e);
+            const __m256 dot = __lasx_xvffint_s_w(lasx_fp4_sum(sum0, sum1));
+            sumf             = __lasx_xvfmadd_s(dot, __lasx_xvfmul_s(a_d, b_d), sumf);
+        }
+        __lasx_xvst(sumf, s + x * 8, 0);
+    }
+#else
+    ggml_gemv_mxfp4_8x8_q8_0_generic(n, s, bs, vx, vy, nr, nc);
+#endif
+}
+
+void ggml_gemm_mxfp4_8x8_q8_0(int                        n,
+                              float * GGML_RESTRICT      s,
+                              size_t                     bs,
+                              const void * GGML_RESTRICT vx,
+                              const void * GGML_RESTRICT vy,
+                              int                        nr,
+                              int                        nc) {
+#if defined(__loongarch_asx)
+    assert(n % QK_MXFP4 == 0);
+    assert(nr % 4 == 0);
+    assert(nc % 8 == 0);
+
+    const __m256i values = lasx_fp4_values();
+    const int     nb     = n / QK_MXFP4;
+    for (int y = 0; y < nr / 4; y++) {
+        const block_q8_0x4 * a_ptr = (const block_q8_0x4 *) vy + y * nb;
+        for (int x = 0; x < nc / 8; x++) {
+            const block_mxfp4x8 * b_ptr = (const block_mxfp4x8 *) vx + x * nb;
+            __m256                sumf[4];
+            for (int m = 0; m < 4; m++) {
+                sumf[m] = (__m256) __lasx_xvldi(0);
+            }
+            for (int l = 0; l < nb; l++) {
+                __m256i sum0_0 = __lasx_xvldi(0);
+                __m256i sum0_1 = __lasx_xvldi(0);
+                __m256i sum0_2 = __lasx_xvldi(0);
+                __m256i sum0_3 = __lasx_xvldi(0);
+                __m256i sum1_0 = __lasx_xvldi(0);
+                __m256i sum1_1 = __lasx_xvldi(0);
+                __m256i sum1_2 = __lasx_xvldi(0);
+                __m256i sum1_3 = __lasx_xvldi(0);
+                for (int k = 0; k < 2; k++) {
+                    const __m256i a_lo = __lasx_xvld(a_ptr[l].qs + k * 32, 0);
+                    const __m256i a_hi = __lasx_xvld(a_ptr[l].qs + k * 32, 64);
+                    const __m256i b    = __lasx_xvld(b_ptr[l].qs + k * 64, 0);
+                    const __m256i b_lo = __lasx_xvshuf_b(values, values, __lasx_xvandi_b(b, 0x0f));
+                    const __m256i b_hi = __lasx_xvshuf_b(values, values, __lasx_xvsrli_b(b, 4));
+                    sum0_0 = lasx_fp4_dot(sum0_0, b_lo, b_hi, __lasx_xvreplve0_d(a_lo), __lasx_xvreplve0_d(a_hi));
+                    sum0_1 =
+                        lasx_fp4_dot(sum0_1, b_lo, b_hi, __lasx_xvpermi_d(a_lo, 0x55), __lasx_xvpermi_d(a_hi, 0x55));
+                    sum0_2 =
+                        lasx_fp4_dot(sum0_2, b_lo, b_hi, __lasx_xvpermi_d(a_lo, 0xaa), __lasx_xvpermi_d(a_hi, 0xaa));
+                    sum0_3 =
+                        lasx_fp4_dot(sum0_3, b_lo, b_hi, __lasx_xvpermi_d(a_lo, 0xff), __lasx_xvpermi_d(a_hi, 0xff));
+                }
+                for (int k = 0; k < 2; k++) {
+                    const __m256i a_lo = __lasx_xvld(a_ptr[l].qs + k * 32, 0);
+                    const __m256i a_hi = __lasx_xvld(a_ptr[l].qs + k * 32, 64);
+                    const __m256i b    = __lasx_xvld(b_ptr[l].qs + k * 64, 32);
+                    const __m256i b_lo = __lasx_xvshuf_b(values, values, __lasx_xvandi_b(b, 0x0f));
+                    const __m256i b_hi = __lasx_xvshuf_b(values, values, __lasx_xvsrli_b(b, 4));
+                    sum1_0 = lasx_fp4_dot(sum1_0, b_lo, b_hi, __lasx_xvreplve0_d(a_lo), __lasx_xvreplve0_d(a_hi));
+                    sum1_1 =
+                        lasx_fp4_dot(sum1_1, b_lo, b_hi, __lasx_xvpermi_d(a_lo, 0x55), __lasx_xvpermi_d(a_hi, 0x55));
+                    sum1_2 =
+                        lasx_fp4_dot(sum1_2, b_lo, b_hi, __lasx_xvpermi_d(a_lo, 0xaa), __lasx_xvpermi_d(a_hi, 0xaa));
+                    sum1_3 =
+                        lasx_fp4_dot(sum1_3, b_lo, b_hi, __lasx_xvpermi_d(a_lo, 0xff), __lasx_xvpermi_d(a_hi, 0xff));
+                }
+                const __m256 b_d = lasx_mxfp4_scales(b_ptr[l].e);
+                {
+                    const __m256 a_d = __lasx_xvfcvtl_s_h(__lasx_xvldrepl_h(a_ptr[l].d + 0, 0));
+                    const __m256 dot = __lasx_xvffint_s_w(lasx_fp4_sum(sum0_0, sum1_0));
+                    sumf[0]          = __lasx_xvfmadd_s(dot, __lasx_xvfmul_s(a_d, b_d), sumf[0]);
+                }
+                {
+                    const __m256 a_d = __lasx_xvfcvtl_s_h(__lasx_xvldrepl_h(a_ptr[l].d + 1, 0));
+                    const __m256 dot = __lasx_xvffint_s_w(lasx_fp4_sum(sum0_1, sum1_1));
+                    sumf[1]          = __lasx_xvfmadd_s(dot, __lasx_xvfmul_s(a_d, b_d), sumf[1]);
+                }
+                {
+                    const __m256 a_d = __lasx_xvfcvtl_s_h(__lasx_xvldrepl_h(a_ptr[l].d + 2, 0));
+                    const __m256 dot = __lasx_xvffint_s_w(lasx_fp4_sum(sum0_2, sum1_2));
+                    sumf[2]          = __lasx_xvfmadd_s(dot, __lasx_xvfmul_s(a_d, b_d), sumf[2]);
+                }
+                {
+                    const __m256 a_d = __lasx_xvfcvtl_s_h(__lasx_xvldrepl_h(a_ptr[l].d + 3, 0));
+                    const __m256 dot = __lasx_xvffint_s_w(lasx_fp4_sum(sum0_3, sum1_3));
+                    sumf[3]          = __lasx_xvfmadd_s(dot, __lasx_xvfmul_s(a_d, b_d), sumf[3]);
+                }
+            }
+            for (int m = 0; m < 4; m++) {
+                __lasx_xvst(sumf[m], s + (y * 4 + m) * bs + x * 8, 0);
+            }
+        }
+    }
+#else
+    ggml_gemm_mxfp4_8x8_q8_0_generic(n, s, bs, vx, vy, nr, nc);
+#endif
+}
+
+#if defined(__loongarch_asx)
 static inline __m256i lasx_iq4_xs_scales(const uint8_t * low, __m256i high, int ib) {
     __m256i lo       = __lasx_xvldrepl_d(low, 0);
     lo               = __lasx_xvsllwil_hu_bu(lo, 0);
