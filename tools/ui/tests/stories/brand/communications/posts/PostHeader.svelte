@@ -67,8 +67,10 @@
 		font: 400 calc(var(--s) * 0.62) / 1 var(--mono);
 		letter-spacing: 0.02em;
 	}
+	/* at least 2u from what is beside it, so two runs of text never read as one line */
 	.url {
 		margin-left: auto;
+		padding-left: calc(var(--u) * 2);
 		color: var(--p-ink);
 		font: 400 calc(var(--s) * 0.76) / 1 var(--mono);
 	}

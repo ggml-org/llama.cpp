@@ -1,7 +1,7 @@
 <!--
-	What's new, on the Bulletin key visual: the Llama lockup with a "new today" pill, the headline with the lede
-	beside it, a family of models in one card with its members inset, the other models with their figures in cinder,
-	and the footer.
+	What's new, on the Bulletin key visual: the Llama lockup with a "new today" pill, the headline, a family of models
+	in one card with its members inset, the other models with their figures in cinder beside them, and the footer. At
+	16:9 the lede is left out: the cards name every model it lists, and at phone sizes there is no room for both.
 -->
 <script lang="ts">
 	import Bulletin from '../layouts/Bulletin.svelte';
@@ -22,7 +22,6 @@
 	format="landscape"
 	header={{ brand: 'Llama', pill: copy.pill, url: copy.url }}
 	headline={copy.headline}
-	lede={copy.lede}
 	{overlay}
 	{tone}
 >

@@ -1,7 +1,8 @@
 <!--
 	A model drop, on the Roster key visual: the icon and who it is from, the headline with the decision tree beside it,
-	the lede, use cases as chips, and the new models as cards, the leading one tagged in cinder. Square drops the
-	lede and the chips, and the story keeps the leading model only.
+	the lede, use cases as chips, and the new models as cards, the leading one tagged in cinder, with the catalog's URL
+	beside their label (the long kicker leaves the header no room for it). Square drops the lede and the chips, and the
+	story keeps the leading model only.
 -->
 <script lang="ts">
 	import Roster from '../layouts/Roster.svelte';
@@ -24,10 +25,11 @@
 <Roster
 	chips={format === 'square' ? [] : copy.chips}
 	{format}
-	header={{ brand: 'icon', kicker: copy.kicker, url: copy.url }}
+	header={{ brand: 'icon', kicker: copy.kicker }}
 	headline={copy.headline}
 	label={copy.section}
 	lede={format === 'square' ? undefined : copy.lede}
+	link={copy.url}
 	{overlay}
 	{tone}
 >
