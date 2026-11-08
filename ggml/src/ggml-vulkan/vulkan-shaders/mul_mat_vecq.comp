@@ -22,6 +22,16 @@ layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 #error unimplemented
 #endif
 
+// Hoisting pays off when the per-block unpack is expensive (K-quants and
+// i-quants). For the legacy 4/8-bit types the unpack is already cheap and the
+// indexed a_tile array can spill on some drivers, so keep those on the base
+// per-column path.
+#if defined(DATA_A_QUANT_LEGACY) || defined(DATA_A_MXFP4)
+#define MMVQ_USE_HOIST 0
+#else
+#define MMVQ_USE_HOIST 1
+#endif
+
 uint a_offset, b_offset, d_offset;
 
 int32_t cache_b_qs[K_PER_ITER / 4];
@@ -30,6 +40,7 @@ vec2 cache_b_ds;
 #include "mul_mat_vecq_funcs.glsl"
 
 void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const uint num_rows, const uint col, const uint b_qs_idx) {
+#if MMVQ_USE_HOIST
     // Load and unpack the weight block once per row, then reuse it for all columns.
     a_tile a_tiles[NUM_ROWS];
     uint ibi = first_row*p.ncols;
@@ -38,6 +49,7 @@ void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const
         ibi += p.ncols;
         a_tiles[n] = load_a_tile(a_block_idx, b_qs_idx);
     }
+#endif
 
     [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
         // Preload data_b block
@@ -73,9 +85,18 @@ void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const
 #endif
 #endif
 
+#if MMVQ_USE_HOIST
         [[unroll]] for (uint n = 0; n < num_rows; ++n) {
             temp[j][n] += dot_a_tile(a_tiles[n]);
         }
+#else
+        uint ibi = first_row*p.ncols;
+        [[unroll]] for (uint n = 0; n < num_rows; ++n) {
+            const uint a_block_idx = (ibi + col)/QUANT_K_Q8_1 + a_offset;
+            ibi += p.ncols;
+            temp[j][n] += mmvq_dot_product(a_block_idx, b_qs_idx);
+        }
+#endif
     }
 }
 

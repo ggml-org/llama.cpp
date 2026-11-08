@@ -178,10 +178,18 @@ FLOAT_TYPE dot_a_tile(const a_tile t) {
     return mul_q8_1(q_sum, t.dm, cache_b_ds, 2);
 }
 #elif defined(DATA_A_QUANT_LEGACY) || defined(DATA_A_MXFP4)
+#if defined(DATA_A_Q4_1) || defined(DATA_A_Q5_1)
+#define A_TILE_DM_TYPE FLOAT_TYPEV2
+#else
+// Q4_0/Q5_0/Q8_0/MXFP4 only need the scale. Keeping a scalar here avoids
+// broadcasting it to a vec2 and carrying the unused component across the
+// column loop.
+#define A_TILE_DM_TYPE FLOAT_TYPE
+#endif
 struct a_tile {
     int32_t qs0;
     int32_t qs1;
-    FLOAT_TYPEV2 dm;
+    A_TILE_DM_TYPE dm;
 };
 
 a_tile load_a_tile(const uint ib_a, const uint iqs) {
@@ -194,7 +202,7 @@ a_tile load_a_tile(const uint ib_a, const uint iqs) {
     t.qs0 = repack(ib_a, iqs * 2);
     t.qs1 = repack(ib_a, iqs * 2 + 1);
 #endif
-    t.dm = FLOAT_TYPEV2(get_dm(ib_a));
+    t.dm = get_dm(ib_a);
     return t;
 }
 
@@ -204,12 +212,9 @@ FLOAT_TYPE dot_a_tile(const a_tile t) {
     q_sum += dotPacked4x8EXT(t.qs1, cache_b_qs[1]);
 
     // 2 quants per call => divide sums by 8/2 = 4
-#if defined(DATA_A_Q4_1) || defined(DATA_A_Q5_1)
     return mul_q8_1(q_sum, t.dm, cache_b_ds, 4);
-#else
-    return mul_q8_1(q_sum, t.dm.x, cache_b_ds, 4);
-#endif
 }
+#undef A_TILE_DM_TYPE
 #endif
 
 #if defined(DATA_A_Q2_K)
@@ -675,3 +680,9 @@ FLOAT_TYPE dot_a_tile(const a_tile t) {
     return sum;
 }
 #endif
+
+// Non-hoisted path (legacy 4/8-bit types): reproduce the base per-column
+// load+dot without an indexed a_tile array.
+FLOAT_TYPE mmvq_dot_product(const uint ib_a, const uint iqs) {
+    return dot_a_tile(load_a_tile(ib_a, iqs));
+}
