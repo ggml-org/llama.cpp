@@ -21,6 +21,55 @@ struct depth_guard {
     ~depth_guard() { depth--; }
 };
 
+// Gemma 4 value parsers
+void gemma4_value_rules(common_chat_peg_builder & p) {
+    // The tags are what gemma4_to_json() in the mapper reads, the rules may wrap them freely.
+    p.rule("gemma4-string", p.tag(gemma4::STRING, p.literal("<|\"|>") + p.tag(gemma4::STRING_CONTENT, p.until("<|\"|>")) + p.literal("<|\"|>")));
+
+    p.rule("gemma4-bool", p.tag(gemma4::BOOL, p.json_bool()));
+
+    p.rule("gemma4-null", p.tag(gemma4::NULL_, p.json_null()));
+
+    p.rule("gemma4-number", p.tag(gemma4::NUMBER, p.json_number()));
+
+    // Keys are bare in the template, but Gemma 4 occasionally wraps them in quotes
+    p.rule("gemma4-dict-key", p.tag(gemma4::DICT_KEY, p.choice({
+        p.literal("<|\"|>") + p.tag(gemma4::DICT_KEY_NAME, p.until("<|\"|>")) + p.literal("<|\"|>"),
+        p.literal("\"") + p.tag(gemma4::DICT_KEY_NAME, p.chars("[^\"]", 1, -1)) + p.literal("\""),
+        p.literal("'") + p.tag(gemma4::DICT_KEY_NAME, p.chars("[^']", 1, -1)) + p.literal("'"),
+        p.tag(gemma4::DICT_KEY_NAME, p.chars("[^:}]", 1, -1)),
+    }) + p.literal(":")));
+
+    p.rule("gemma4-dict-kv", p.tag(gemma4::DICT_KV, p.ref("gemma4-dict-key") + p.space() + p.ref("gemma4-value")));
+
+    p.rule("gemma4-dict", [&]() {
+        auto ws = p.space();
+        auto member = p.ref("gemma4-dict-kv");
+        auto members = p.sequence({member, p.zero_or_more(p.sequence({p.literal(","), ws, member}))});
+        return p.tag(gemma4::DICT, p.sequence({
+            p.literal("{"), ws,
+            p.choice({p.literal("}"), p.sequence({members, ws, p.literal("}")})})
+        }));
+    });
+
+    p.rule("gemma4-array", [&]() {
+        auto ws = p.space();
+        auto value = p.ref("gemma4-value");
+        auto elements = p.sequence({value, p.zero_or_more(p.sequence({p.literal(","), ws, value}))});
+        return p.tag(gemma4::ARRAY, p.sequence({
+            p.literal("["), ws,
+            p.choice({p.literal("]"), p.sequence({elements, ws, p.literal("]")})})
+        }));
+    });
+
+    p.rule("gemma4-value", [&]() {
+        return p.choice({
+            p.ref("gemma4-string"), p.ref("gemma4-dict"), p.ref("gemma4-array"),
+            p.ref("gemma4-number"), p.ref("gemma4-bool"), p.ref("gemma4-null")
+        });
+    });
+}
+
 // Gemma 4 uses different delimiters and cannot leverage the json-schema-to-grammar implementation.
 // This implements a subset to enforce properties.
 class gemma4_schema_parser {
@@ -301,46 +350,7 @@ common_chat_params common_chat_params_init_gemma4(const common_chat_template &  
         }
 
         if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
-            // Gemma4 tool calling syntax
-            // The tags are what gemma4_to_json() in the mapper reads, the rules may wrap them freely.
-            p.rule("gemma4-string", p.tag(gemma4::STRING,
-                p.literal("<|\"|>") + p.tag(gemma4::STRING_CONTENT, p.until("<|\"|>")) + p.literal("<|\"|>")));
-            p.rule("gemma4-bool", p.tag(gemma4::BOOL, p.json_bool()));
-            p.rule("gemma4-null", p.tag(gemma4::NULL_, p.json_null()));
-            p.rule("gemma4-number", p.tag(gemma4::NUMBER, p.json_number()));
-            // Keys are bare in the template, but models quote keys that are not identifiers
-            // with single or double quotes or the string delimiter.
-            p.rule("gemma4-dict-key", p.tag(gemma4::DICT_KEY, p.choice({
-                p.literal("<|\"|>") + p.tag(gemma4::DICT_KEY_NAME, p.until("<|\"|>")) + p.literal("<|\"|>"),
-                p.literal("\"") + p.tag(gemma4::DICT_KEY_NAME, p.chars("[^\"]", 1, -1)) + p.literal("\""),
-                p.literal("'") + p.tag(gemma4::DICT_KEY_NAME, p.chars("[^']", 1, -1)) + p.literal("'"),
-                p.tag(gemma4::DICT_KEY_NAME, p.chars("[^:}]", 1, -1)),
-            }) + p.literal(":")));
-            p.rule("gemma4-dict-kv", p.tag(gemma4::DICT_KV, p.ref("gemma4-dict-key") + p.space() + p.ref("gemma4-value")));
-            p.rule("gemma4-dict", [&]() {
-                auto ws = p.space();
-                auto member = p.ref("gemma4-dict-kv");
-                auto members = p.sequence({member, p.zero_or_more(p.sequence({p.literal(","), ws, member}))});
-                return p.tag(gemma4::DICT, p.sequence({
-                    p.literal("{"), ws,
-                    p.choice({p.literal("}"), p.sequence({members, ws, p.literal("}")})})
-                }));
-            });
-            p.rule("gemma4-array", [&]() {
-                auto ws = p.space();
-                auto value = p.ref("gemma4-value");
-                auto elements = p.sequence({value, p.zero_or_more(p.sequence({p.literal(","), ws, value}))});
-                return p.tag(gemma4::ARRAY, p.sequence({
-                    p.literal("["), ws,
-                    p.choice({p.literal("]"), p.sequence({elements, ws, p.literal("]")})})
-                }));
-            });
-            p.rule("gemma4-value", [&]() {
-                return p.choice({
-                    p.ref("gemma4-string"), p.ref("gemma4-dict"), p.ref("gemma4-array"),
-                    p.ref("gemma4-number"), p.ref("gemma4-bool"), p.ref("gemma4-null")
-                });
-            });
+            gemma4_value_rules(p);
 
             auto tool_choice = p.choice();
 
