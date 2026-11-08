@@ -69,7 +69,7 @@ echo   fp32      Build with FP32 precision ^(default^)
 echo   fp16      Build with FP16 precision ^(faster for long-prompt inference^)
 echo   ssl       Build with BoringSSL ^(default^)
 echo   nossl     Build without BoringSSL
-echo   --aot     Set SYCL AOT device architecture, e.g. arl-h,acm-g10,bmg-21 or bmg-21
+echo   --aot     Set SYCL AOT device architecture, e.g. arl-h,acm-g10,bmg-g21 or bmg-g21
 echo   --help    Print this help message
 IF "%ARG_ERROR%"=="1" exit /B 1
 exit /B 0
