@@ -40,7 +40,7 @@
 	const U = 28;
 	const tile = (width: number, height: number) => ({ height, name: 'Tile', width });
 	const rem = (px: number) => `${px / 16}rem`;
-	const header = tile(580, 420);
+	const header = tile(620, 420);
 	const chips = tile(352, 340);
 	const figures = tile(620, 440);
 	const motif = tile(340, 300);

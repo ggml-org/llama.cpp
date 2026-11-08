@@ -13,22 +13,28 @@
 
 	interface Props extends LayoutProps {
 		command?: string;
+		/** the command's type size in units, larger for a short line */
+		commandSize?: number;
 		/** the command's `$`; off for a line of config */
 		prompt?: boolean;
 		/** on a wide format, the column the motif starts at (the text takes the ones before it) */
 		split?: number;
 		headline: string;
 		lede?: string;
+		/** the lede's type size in units, larger than 0.84 for a phone, tracked and led tighter to fit */
+		ledeSize?: number;
 		motif?: Snippet;
 	}
 
 	let {
 		command,
+		commandSize,
 		footer,
 		format,
 		header,
 		headline,
 		lede,
+		ledeSize,
 		motif,
 		overlay,
 		prompt,
@@ -51,9 +57,9 @@
 		<div class="text">
 			<h2 class="t-display">{headline}</h2>
 
-			{#if lede}<p class="t-lede">{lede}</p>{/if}
+			{#if lede}<p style:--lede={ledeSize} class={['t-lede', { large: ledeSize }]}>{lede}</p>{/if}
 
-			{#if command}<Command {command} {prompt} />{/if}
+			{#if command}<Command {command} {prompt} size={commandSize} />{/if}
 		</div>
 	</div>
 
@@ -74,6 +80,13 @@
 		gap: var(--stack);
 		justify-items: start;
 		align-self: end;
+	}
+	/* a larger lede tracks and leads a little tighter, so it keeps its measure and its lines, balanced */
+	.t-lede.large {
+		font-size: calc(var(--u) * var(--lede));
+		line-height: 1.25;
+		letter-spacing: -0.015em;
+		text-wrap: balance;
 	}
 	.text :global(.terminal) {
 		margin-top: calc(var(--stack-after) - var(--stack));
