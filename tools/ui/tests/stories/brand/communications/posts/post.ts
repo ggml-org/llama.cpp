@@ -279,6 +279,32 @@ export const openModels: ReceiptCopy = {
 	title: 'Your AI bill, today'
 };
 
+export interface AgentsCopy {
+	agents: { name: string; note: string }[];
+	command: string;
+	endpoint: string;
+	footer: [string, string];
+	headline: string;
+	lede: string;
+	url: string;
+}
+
+/** Llama serving agents, after Merve's post: the endpoint any agent can point at, and how four of them connect */
+export const agentsPost: AgentsCopy = {
+	agents: [
+		{ name: 'OpenClaw', note: 'OpenAI-compatible API' },
+		{ name: 'Hermes', note: 'Set up during onboarding' },
+		{ name: 'Pi', note: '/login llama.cpp' },
+		{ name: 'Codex', note: '~/.codex/config.toml' }
+	],
+	command: 'base_url = "http://127.0.0.1:9931/v1"',
+	endpoint: ':9931/v1',
+	footer: ['By the llama.cpp team and Hugging Face', 'Free · Open source · Works offline'],
+	headline: 'Any agent.\nOn your computer.',
+	lede: 'Llama serves open models at an OpenAI-compatible endpoint. Point your coding agent at it and keep working, even offline. Personal agents connect during onboarding.',
+	url: 'llama.app/docs/agents'
+};
+
 export interface StoreLine {
 	headline: string;
 	lede?: string;

@@ -14,6 +14,11 @@
 	font: 400 calc(var(--u) * 0.55) / 1.4 var(--sans);
 	/* figures, meta lines and repo ids keep their columns */
 	font-variant-numeric: tabular-nums;
+	/* the text stack's rhythm, in every layout: a label to its headline, a headline to its lede, and the lede to what
+	   follows it (a command, chips, a caption) */
+	--stack-label: calc(var(--u) * 0.6);
+	--stack: calc(var(--u) * 1.2);
+	--stack-after: calc(var(--u) * 1.6);
 }
 
 .ground-light {

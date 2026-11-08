@@ -64,6 +64,9 @@ Sizes are multiples of the format's unit `u` (see Grid):
 | Label    | 0.48u | Llama Mono Medium, uppercase, 0.12em tracking, muted.                |
 | Mono     | 0.5u  | Llama Mono, commands and data.                                       |
 
+The text stack keeps one rhythm in every layout: a label 0.6u over its headline, the headline 1.2u over its lede,
+and 1.6u from the lede to what follows it (a command, chips, a caption). Space it by these, not by eye.
+
 ## Colour
 
 Communications are neutral by default. Colour comes from five grounds, the art colours for artwork, and one
@@ -115,7 +118,12 @@ wide ones 12, with a gutter of ½u.
 - **Footer**: who it is from on the left, the promise on the right, in muted ink.
 - **Chips**: Mono pills. Outline for use cases, solid for a tag, cinder once.
 - **Figure**: a big number with a Mono label under it.
-- **Command**: a terminal line in Mono with a cinder `$`, on the ground's inset, always on one line.
+- **Command**: a terminal line in Mono with a cinder `$`, on the ground's inset, always on one line. A line of config
+  or code goes without the `$`.
+- **App icon**: Llama as a thing in a piece (a node in a diagram, an app among apps), from the app icon file: the
+  tile as the app ships it, its corners at 22.5% of its side and the icon at 67% of it, optically centred, in the
+  ground's ink. Never a square drawn round the icon. About 2.4u, with at least 1u clear round it; its name and
+  address go under it, and lines to it start half a unit off its edge.
 - **Model card**: maker and purpose, name, a short description, figures in cinder, Mono facts and the repo id.
 - **Stat card**: a figure, its label and what it means.
 - **Product shot**: the real Llama app (its menu bar and panel), never a mock-up.

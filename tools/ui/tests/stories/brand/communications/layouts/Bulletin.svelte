@@ -52,7 +52,7 @@
 		margin-block: calc(var(--u) * 1.2) calc(var(--u) * 0.8);
 	}
 	.t-headline {
-		margin-bottom: calc(var(--u) * -0.2);
+		margin-bottom: calc(var(--stack) - var(--u) * 0.9);
 	}
 	.lead,
 	.side {

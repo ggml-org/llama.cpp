@@ -1,20 +1,22 @@
 <!--
 	A command in a terminal: the prompt in cinder, the command in Llama Mono, on the ground's inset. The one place a
 	piece shows code. It stays on one line, as typed, so the piece is laid out wide enough to hold it; the leading is
-	the terminal's, not the display type's.
+	the terminal's, not the display type's. A line of config or code goes without the prompt, and so without cinder.
 -->
 <script lang="ts">
 	interface Props {
 		command: string;
+		/** the `$` in cinder; off for a line of config or code */
+		prompt?: boolean;
 		/** the type size in units */
 		size?: number;
 	}
 
-	let { command, size = 0.6 }: Props = $props();
+	let { command, prompt = true, size = 0.6 }: Props = $props();
 </script>
 
-<pre style:--s="calc(var(--u) * {size})" class="terminal"><span class="prompt">$</span
-	> {command}</pre>
+<pre style:--s="calc(var(--u) * {size})" class="terminal">{#if prompt}<span class="prompt"
+			>$ </span>{/if}{command}</pre>
 
 <style>
 	.terminal {

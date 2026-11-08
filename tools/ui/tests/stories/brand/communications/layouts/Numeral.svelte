@@ -78,7 +78,7 @@
 	}
 	.text {
 		display: grid;
-		gap: calc(var(--u) * 0.8);
+		gap: var(--stack);
 	}
 
 	:global(.shape-wide) .body {

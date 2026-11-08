@@ -34,16 +34,16 @@
 <style>
 	.block {
 		display: grid;
-		gap: calc(var(--u) * 0.6);
+		gap: var(--stack);
 		justify-items: start;
 	}
 	.t-label {
-		margin-bottom: calc(var(--u) * 0.1);
+		margin-bottom: calc(var(--stack-label) - var(--stack));
 	}
 	.chips {
 		display: flex;
 		flex-wrap: wrap;
 		gap: calc(var(--u) * 0.28);
-		margin-top: calc(var(--u) * 0.1);
+		margin-top: calc(var(--stack-after) - var(--stack));
 	}
 </style>
