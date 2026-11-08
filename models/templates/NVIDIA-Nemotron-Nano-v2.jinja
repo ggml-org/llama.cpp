@@ -1,0 +1,162 @@
+{%- set ns = namespace(enable_thinking=true) -%}
+{%- for message in messages -%}
+  {%- set content = message['content'] -%}
+  {%- if message['role'] == 'user' or message['role'] == 'system' -%}
+    {%- if '/think' in content -%}
+      {%- set ns.enable_thinking = true -%}
+    {%- elif '/no_think' in content -%}
+      {%- set ns.enable_thinking = false -%}
+    {%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{%- if messages[0]['role'] != 'system' -%}
+  {%- set ns.non_tool_system_content = '' -%}
+  {{- '<SPECIAL_10>System
+' -}}
+{%- else -%}
+  {%- set ns.non_tool_system_content = (messages[0]['content'] | default('', true)).replace('/think', '').replace('/no_think', '').strip() -%}
+  {{- '<SPECIAL_10>System
+' + ns.non_tool_system_content }}
+{%- endif -%}
+
+{%- if tools -%}
+  {%- if ns.non_tool_system_content is defined and ns.non_tool_system_content != '' -%}
+    {{- '
+
+' -}}
+  {%- endif -%}
+  {{- 'You can use the following tools to assist the user if required:' -}}
+  {{- '
+<AVAILABLE_TOOLS>[' -}}
+  {%- for tool in tools -%}
+    {{- (tool.function if tool.function is defined else tool) | tojson -}}
+    {{- ', ' if not loop.last else '' -}}
+  {%- endfor -%}
+  {{- ']</AVAILABLE_TOOLS>
+
+' -}}
+  {{- 'If you decide to call any tool(s), use the following format:
+' -}}
+  {{- '<TOOLCALL>[{{"name": "tool_name1", "arguments": "tool_args1"}}, ' -}}
+  {{- '{{"name": "tool_name2", "arguments": "tool_args2"}}]</TOOLCALL>
+
+' -}}
+  {{- 'The user will execute tool-calls and return responses from tool(s) in this format:
+' -}}
+  {{- '<TOOL_RESPONSE>[{{"tool_response1"}}, {{"tool_response2"}}]</TOOL_RESPONSE>
+
+' -}}
+  {{- 'Based on the tool responses, you can call additional tools if needed, correct tool calls if any errors are found, or just respond to the user.' -}}
+{%- endif -%}
+{{- '
+
+' -}}
+{%- set messages = messages[1:] if messages[0]['role'] == 'system' else messages -%}
+{%- if messages[-1]['role'] == 'assistant' -%}
+  {%- set ns.last_turn_assistant_content = (messages[-1]['content'] | default('', true)).strip() -%}
+  {%- set ns.last_turn_assistant_tool_calls = messages[-1]['tool_calls'] if 'tool_calls' in messages[-1] else [] -%}
+  {%- set messages = messages[:-1] -%}
+{%- endif -%}
+
+{%- for message in messages %}
+  {%- set content = message['content'] %}
+  {%- if message['role'] == 'user' -%}
+    {{- '<SPECIAL_11>User
+' + (content | default('', true)).replace('/think', '').replace('/no_think', '').strip() + '
+' }}
+  {%- elif message['role'] == 'tool' -%}
+    {%- if loop.first or (messages[loop.index0 - 1].role != 'tool') -%}
+      {{- '<SPECIAL_11>User
+' + '<TOOL_RESPONSE>[' }}
+    {%- endif -%}
+    {{- message['content'] -}}
+    {{- ', ' if not loop.last and (messages[loop.index0 + 1].role == 'tool') else '' -}}
+    {%- if loop.last or (messages[loop.index0 + 1].role != 'tool') -%}
+      {{- ']</TOOL_RESPONSE>' -}}
+    {%- endif -%}
+  {%- elif message['role'] == 'assistant' -%}
+    {%- if content and '</think>' in content -%}
+      {%- set content = (content.split('</think>')[1] | default('', true)).strip() %}
+    {%- endif -%}
+    {{- '<SPECIAL_11>Assistant
+' + ((content | default('', true)).strip() if content is not none else '') }}
+    {%- if message.tool_calls -%}
+      {%- if (content | default('', true)).strip() != '' -%}
+        {{- '
+' -}}
+      {%- endif -%}
+      {{- '<TOOLCALL>[' -}}
+      {%- for call in message.tool_calls -%}
+        {%- set fn = call.function if call.function is defined else call -%}
+        {{- '{"name": "' + fn.name + '", "arguments": ' -}}
+        {%- if fn.arguments is string -%}
+          {{- fn.arguments -}}
+        {%- else -%}
+          {{- fn.arguments | tojson -}}
+        {%- endif -%}
+        {{- '}' + (', ' if not loop.last else '') -}}
+      {%- endfor -%}
+      {{- ']</TOOLCALL>' -}}
+    {%- endif -%}
+    {{- '
+<SPECIAL_12>
+' -}}
+  {%- endif -%}
+{%- endfor -%}
+
+{%- if add_generation_prompt -%}
+  {{- '<SPECIAL_11>Assistant
+' -}}
+  {%- if ns.enable_thinking is defined and ns.enable_thinking is false -%}
+    {{- '<think></think>' -}}
+  {%- else -%}
+    {{- '<think>
+' -}}
+  {%- endif -%}
+  {%- if ns.last_turn_assistant_content is defined and ns.last_turn_assistant_content != '' -%}
+    {{- ns.last_turn_assistant_content -}}
+  {%- endif -%}
+{%- else -%}
+  {%- if ns.last_turn_assistant_content is defined and ns.last_turn_assistant_content != '' -%}
+    {{- '<SPECIAL_11>Assistant
+' -}}
+    {%- if ns.enable_thinking is defined and ns.enable_thinking is false -%}
+      {{- '<think></think>' -}}
+    {%- else -%}
+      {{- '<think>
+' -}}
+    {%- endif -%}
+    {{- ns.last_turn_assistant_content -}}
+    {%- if continue_final_message is defined -%}
+      {%- if continue_final_message is false -%}
+        {{- '
+<SPECIAL_12>
+' -}}
+      {%- endif -%}
+    {%- else -%}
+      {{- '
+<SPECIAL_12>
+' -}}
+    {%- endif -%}
+  {%- endif -%}
+  {%- if ns.last_turn_assistant_tool_calls is defined and ns.last_turn_assistant_tool_calls | length > 0 -%}
+    {{- '<SPECIAL_11>Assistant
+' -}}
+    {{- '<TOOLCALL>[' -}}
+    {%- for call in ns.last_turn_assistant_tool_calls -%}
+      {%- set fn = call.function if call.function is defined else call -%}
+      {{- '{"name": "' + fn.name + '", "arguments": ' -}}
+      {%- if fn.arguments is string -%}
+        {{- fn.arguments -}}
+      {%- else -%}
+        {{- fn.arguments | tojson -}}
+      {%- endif -%}
+      {{- '}' + (', ' if not loop.last else '') -}}
+    {%- endfor -%}
+    {{- ']</TOOLCALL>' -}}
+    {{- '<SPECIAL_12>
+
+' -}}
+ {%- endif -%}
+{%- endif -%}

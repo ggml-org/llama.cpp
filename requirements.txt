@@ -1,0 +1,13 @@
+# These requirements include all dependencies for all top-level python scripts
+# for llama.cpp. Avoid adding packages here directly.
+#
+# Package versions must stay compatible across all top-level python scripts.
+#
+
+-r ./requirements/requirements-convert_legacy_llama.txt
+
+-r ./requirements/requirements-convert_hf_to_gguf.txt
+-r ./requirements/requirements-convert_hf_to_gguf_update.txt
+-r ./requirements/requirements-convert_llama_ggml_to_gguf.txt
+-r ./requirements/requirements-convert_lora_to_gguf.txt
+-r ./requirements/requirements-tool_bench.txt

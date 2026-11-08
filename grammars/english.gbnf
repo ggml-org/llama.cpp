@@ -1,0 +1,6 @@
+# note: this might be incomplete, mostly an example
+root        ::= en-char+ ([ \t\n] en-char+)*
+en-char     ::= letter | digit | punctuation
+letter      ::= [a-zA-Z]
+digit       ::= [0-9]
+punctuation ::= [!"#$%&'()*+,-./:;<=>?@[\\\]^_`{|}~]

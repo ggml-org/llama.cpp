@@ -1,0 +1,6 @@
+-r ../../requirements/requirements-convert_legacy_llama.txt
+--extra-index-url https://download.pytorch.org/whl/cpu
+pillow~=11.3.0
+
+torch==2.11.0 # check_requirements: ignore "=="
+torchvision==0.26.0; platform_machine != "s390x" # check_requirements: ignore "=="

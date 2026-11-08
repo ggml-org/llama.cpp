@@ -1,0 +1,679 @@
+#ifndef MTMD_H
+#define MTMD_H
+
+#include "ggml.h"
+#include "llama.h"
+
+#include <stddef.h>
+#include <stdint.h>
+#include <stdbool.h>
+
+#ifdef __cplusplus
+#include <map>
+#include <string>
+#include <vector>
+#include <cinttypes>
+#include <memory>
+#endif
+
+/**
+ * libmtmd: A library for multimodal support in llama.cpp.
+ *
+ * WARNING: This API is experimental and subject to many BREAKING CHANGES.
+ *          Issues related to API usage may receive lower priority support.
+ *
+ * For the usage, see an example in mtmd-cli.cpp
+ *
+ * For contributors:
+ * - Make sure the C API is aligned with the libllama C API (as in llama.h)
+ * - Do not include model name (e.g., qwen, gemma) in the API, use generic terms instead
+ * - Keep the API minimal, do not expose internal details unless necessary
+ *
+ * IMPORTANT: The mtmd module does NOT accept pull requests that are fully or predominantly AI-generated.
+ * We encourage human contributors to ensure the quality and reliability of the codebase.
+ */
+
+#ifdef LLAMA_SHARED
+#    if defined(_WIN32) && !defined(__MINGW32__)
+#        ifdef LLAMA_BUILD
+#            define MTMD_API __declspec(dllexport)
+#        else
+#            define MTMD_API __declspec(dllimport)
+#        endif
+#    else
+#        define MTMD_API __attribute__ ((visibility ("default")))
+#    endif
+#else
+#    define MTMD_API
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+enum mtmd_input_chunk_type {
+    MTMD_INPUT_CHUNK_TYPE_TEXT,
+    MTMD_INPUT_CHUNK_TYPE_IMAGE,
+    MTMD_INPUT_CHUNK_TYPE_AUDIO,
+    MTMD_INPUT_CHUNK_TYPE_COUNT, // for validation
+};
+
+// how the frames and timestamps of a video are laid out in the prompt
+enum mtmd_video_template {
+    MTMD_VIDEO_TEMPLATE_DEFAULT,   // "Video:" prefix, then a "[XmY.YYs]" timestamp every N ms
+    MTMD_VIDEO_TEMPLATE_LFM3,      // "<X.X seconds>" before every group of 2 frames
+    MTMD_VIDEO_TEMPLATE_LFM3_OMNI, // same as LFM3, then the soundtrack of each group, as an audio bitmap after its frames
+    MTMD_VIDEO_TEMPLATE_QWEN3VL,   // "<X.X seconds>" before every group of 2 frames, no markers around the whole video
+};
+
+// opaque types
+struct mtmd_context;
+struct mtmd_bitmap;
+struct mtmd_image_tokens;
+struct mtmd_input_chunk;
+struct mtmd_input_chunks;
+struct mtmd_batch;
+struct mtmd_gen_state;
+
+struct mtmd_input_text {
+    const char * text;
+    size_t text_len;
+    bool add_special;
+    bool parse_special;
+};
+
+struct mtmd_input_part {
+    // only text or bitmap can be set, not both
+    const struct mtmd_input_text * text;
+    const struct mtmd_bitmap * bitmap;
+};
+
+
+//
+// C API
+//
+
+typedef struct mtmd_context      mtmd_context;
+typedef struct mtmd_bitmap       mtmd_bitmap;
+typedef struct mtmd_image_tokens mtmd_image_tokens;
+typedef struct mtmd_input_chunk  mtmd_input_chunk;
+typedef struct mtmd_input_chunks mtmd_input_chunks;
+typedef struct mtmd_input_text   mtmd_input_text;
+typedef struct mtmd_input_part   mtmd_input_part;
+typedef struct mtmd_batch        mtmd_batch;
+typedef struct mtmd_gen_state    mtmd_gen_state;
+
+typedef bool (*mtmd_progress_callback)(float progress, void * user_data);
+
+struct mtmd_context_params {
+    bool use_gpu;
+    ggml_backend_dev_t device;
+    bool print_timings;
+    int n_threads;
+    const char * image_marker; // deprecated, use media_marker instead
+    const char * media_marker;
+    enum llama_flash_attn_type flash_attn_type;
+    bool warmup; // whether to run a warmup encode pass after initialization
+
+    // limit number of image tokens, only for vision models with dynamic resolution
+    int image_min_tokens; // minimum number of tokens for image input (default: read from metadata)
+    int image_max_tokens; // maximum number of tokens for image input (default: read from metadata)
+
+    // callback function passed over to mtmd proper
+    ggml_backend_sched_eval_callback cb_eval;
+    void * cb_eval_user_data;
+
+    // batching params
+    int32_t batch_max_tokens; // maximum number of output tokens in a batch
+                              // (note: this is not a hard-limit, the first image will always be added even if it exceeds this limit)
+                              // (default: 1024)
+
+    // Called with a progress value between 0.0 and 1.0. Pass NULL to disable.
+    // If the provided progress_callback returns true, model loading continues.
+    // If it returns false, model loading is immediately aborted.
+    mtmd_progress_callback progress_callback;
+    void * progress_callback_user_data;
+};
+
+MTMD_API const char * mtmd_default_marker(void);
+
+MTMD_API struct mtmd_context_params mtmd_context_params_default(void);
+
+// initialize the mtmd context
+// return nullptr on failure
+MTMD_API mtmd_context * mtmd_init_from_file(const char * mmproj_fname,
+                                            const struct llama_model * text_model,
+                                            const struct mtmd_context_params ctx_params);
+
+MTMD_API void mtmd_free(mtmd_context * ctx);
+
+// whether we need to set non-causal mask before llama_decode
+// if chunk is nullptr, we assume the default case where chunk is an image chunk
+MTMD_API bool mtmd_decode_use_non_causal(const mtmd_context * ctx, const mtmd_input_chunk * chunk);
+
+// whether the current model use M-RoPE for llama_decode
+MTMD_API bool mtmd_decode_use_mrope(const mtmd_context * ctx);
+
+// whether the current model supports vision input
+MTMD_API bool mtmd_support_vision(const mtmd_context * ctx);
+
+// whether the current model supports audio input
+MTMD_API bool mtmd_support_audio(const mtmd_context * ctx);
+
+// get audio sample rate in Hz, for example 16000 for Whisper
+// return -1 if audio is not supported
+MTMD_API int mtmd_get_audio_sample_rate(const mtmd_context * ctx);
+
+// recommended video input for the current model, given the source video
+// fields set to 0 mean "no preference, use the caller's default"
+struct mtmd_video_config {
+    enum mtmd_video_template tmpl;
+    float   fps;          // frame sampling rate
+    int32_t n_frames;     // number of frames to sample
+    int32_t frame_width;  // size to resize the frames to
+    int32_t frame_height;
+};
+// src_n_frames and src_fps can be <= 0 if unknown
+MTMD_API struct mtmd_video_config mtmd_get_video_config(const mtmd_context * ctx,
+                                                        int32_t src_width, int32_t src_height,
+                                                        int32_t src_n_frames, float src_fps);
+
+// get the current marker string
+MTMD_API const char * mtmd_get_marker(const mtmd_context * ctx);
+
+// mtmd_bitmap
+//
+// if bitmap is image:
+//     length of data must be nx * ny * 3
+//     the data is in RGBRGBRGB... format
+//     note: some video-capable models (i.e. qwen-vl) can merge consecutive bitmaps
+//           into one chunk; mtmd_tokenize() handles this, but remember to set
+//           mtmd_bitmap_set_mergeable(true) and mtmd_bitmap_set_is_video(true) for every frame
+// if bitmap is audio:
+//     length of data must be n_samples * sizeof(float)
+//     the data is in float format (PCM F32)
+// if bitmap is voice (see mtmd_gen_audio_get_voice()):
+//     nx = n_embd, ny = number of rows, data is F32 rows (can be empty), id is the voice name
+//
+// if data == nullptr:
+//     the bitmap is considered "empty", and will be treated as a placeholder for counting tokens
+//     you can pass the bitmap via mtmd_tokenize(), then call mtmd_*_get_n_tokens() to count the tokens
+//     note: passing a placeholder bitmap to mtmd_encode() will return an error
+MTMD_API mtmd_bitmap *         mtmd_bitmap_init           (uint32_t nx, uint32_t ny, const unsigned char * data);
+MTMD_API mtmd_bitmap *         mtmd_bitmap_init_from_audio(size_t n_samples,         const float         * data);
+MTMD_API uint32_t              mtmd_bitmap_get_nx     (const mtmd_bitmap * bitmap);
+MTMD_API uint32_t              mtmd_bitmap_get_ny     (const mtmd_bitmap * bitmap);
+MTMD_API const unsigned char * mtmd_bitmap_get_data   (const mtmd_bitmap * bitmap);
+MTMD_API size_t                mtmd_bitmap_get_n_bytes(const mtmd_bitmap * bitmap);
+MTMD_API bool                  mtmd_bitmap_is_audio   (const mtmd_bitmap * bitmap);
+MTMD_API bool                  mtmd_bitmap_is_voice   (const mtmd_bitmap * bitmap);
+MTMD_API void                  mtmd_bitmap_free       (mtmd_bitmap * bitmap);
+// bitmap ID is optional, but useful for KV cache tracking
+// these getters/setters are dedicated functions, so you can for example calculate the hash of the image based on mtmd_bitmap_get_data()
+MTMD_API const char * mtmd_bitmap_get_id(const mtmd_bitmap * bitmap);
+MTMD_API void         mtmd_bitmap_set_id(mtmd_bitmap * bitmap, const char * id);
+// if true, this bitmap can be merged (temporal merge) with an adjacent mergeable bitmap by certain video input models
+MTMD_API void         mtmd_bitmap_set_mergeable(mtmd_bitmap * bitmap, bool mergeable);
+// on a frame: video frames must be both mergeable and is_video
+// on a lazy bitmap: the expanded chunks are one video, wrapped by the model's video begin/end tokens
+//                   with MTMD_VIDEO_TEMPLATE_LFM3_OMNI, its audio bitmaps are the pieces of one soundtrack, in order
+MTMD_API void         mtmd_bitmap_set_is_video(mtmd_bitmap * bitmap, bool is_video);
+
+// mtmd_bitmap lazy
+//
+// this is a special bitmap that:
+// - does not hold the actual data
+// - can be expanded into one or more chunks (either media to text chunks)
+// user must provide a callback to fill in the data when mtmd_tokenize() is called
+// this is useful for large video inputs:
+// - allow reading video frame by frame, without loading the entire video into memory
+// - allow tracking the whole video with a single ID (for example, the file hash)
+
+// set (*out_bitmap) to non-nullptr to emit a bitmap chunk; it will be freed automatically
+// set (*out_text) to non-nullptr to emit a text chunk; it must be heap-allocated, null-terminated and will be freed automatically
+// either out_bitmap or out_text can be set, but not both
+// out_bitmap cannot be another lazy bitmap (no nested lazy allowed)
+// return value:
+//    0 on success
+//   -1 on EOF (signal to mtmd_tokenize to move on)
+//   -2 on error (signal to mtmd_tokenize to abort)
+typedef int(* mtmd_bitmap_lazy_callback)(
+    size_t chunk_idx,
+    void * user_data,
+    mtmd_bitmap ** out_bitmap,
+    char ** out_text);
+
+MTMD_API mtmd_bitmap * mtmd_bitmap_init_lazy(const mtmd_context * ctx,
+                                             const char * id, // usually set to file hash
+                                             void * user_data,
+                                             mtmd_bitmap_lazy_callback callback);
+
+// mtmd_input_chunks
+//
+// this is simply a list of mtmd_input_chunk
+// the elements can only be populated via mtmd_tokenize()
+MTMD_API mtmd_input_chunks *      mtmd_input_chunks_init(void);
+MTMD_API size_t                   mtmd_input_chunks_size(const mtmd_input_chunks * chunks);
+MTMD_API const mtmd_input_chunk * mtmd_input_chunks_get (const mtmd_input_chunks * chunks, size_t idx);
+MTMD_API void                     mtmd_input_chunks_free(mtmd_input_chunks * chunks);
+
+// mtmd_input_chunk
+//
+// the instance will be constructed via mtmd_tokenize()
+// it will be freed along with mtmd_input_chunks
+MTMD_API enum mtmd_input_chunk_type mtmd_input_chunk_get_type        (const mtmd_input_chunk * chunk);
+MTMD_API const llama_token *        mtmd_input_chunk_get_tokens_text (const mtmd_input_chunk * chunk, size_t * n_tokens_output);
+MTMD_API const mtmd_image_tokens *  mtmd_input_chunk_get_tokens_image(const mtmd_input_chunk * chunk);
+MTMD_API size_t                     mtmd_input_chunk_get_n_tokens    (const mtmd_input_chunk * chunk);
+// returns nullptr for ID on text chunk
+MTMD_API const char *               mtmd_input_chunk_get_id          (const mtmd_input_chunk * chunk);
+// number of temporal positions (equals to max(t,h,w) for M-RoPE; equals to n_tokens otherwise)
+MTMD_API llama_pos                  mtmd_input_chunk_get_n_pos       (const mtmd_input_chunk * chunk);
+
+// in case you want to use custom logic to handle the chunk (i.e. KV cache management)
+// you can move the chunk ownership to your own code by copying it
+// remember to free the chunk when you are done with it
+MTMD_API mtmd_input_chunk * mtmd_input_chunk_copy(const mtmd_input_chunk * chunk);
+MTMD_API void               mtmd_input_chunk_free(mtmd_input_chunk * chunk);
+
+// similar to mtmd_input_chunk_copy, but returns a placeholder chunk
+MTMD_API mtmd_input_chunk * mtmd_input_chunk_get_placeholder(const mtmd_input_chunk * chunk);
+
+// save/load an input chunk to/from a buffer (useful for KV save/load)
+// important: only chunk's metadata will be saved, the actual image/audio data will not be saved
+// the loaded chunk will always be a placeholder, cannot be used for mtmd_encode() or mtmd_batch_encode()
+// out_buf can be nullptr (to query expected_out_len)
+// returns 0 on success, non-zero on failure
+MTMD_API int32_t            mtmd_input_chunk_save(const mtmd_input_chunk * chunk, char * out_buf, size_t out_len, size_t * expected_out_len);
+// returns nullptr on failure
+MTMD_API mtmd_input_chunk * mtmd_input_chunk_load(const char * buf, size_t len);
+
+
+// mtmd_image_tokens
+//
+// the instance will be constructed via mtmd_tokenize()
+// it will be freed along with mtmd_input_chunk
+MTMD_API size_t       mtmd_image_tokens_get_n_tokens(const mtmd_image_tokens * image_tokens); // TODO: deprecate
+MTMD_API const char * mtmd_image_tokens_get_id      (const mtmd_image_tokens * image_tokens); // TODO: deprecate
+// number of temporal positions (equals to max(t,h,w) for M-RoPE; equals to n_tokens otherwise)
+MTMD_API llama_pos    mtmd_image_tokens_get_n_pos   (const mtmd_image_tokens * image_tokens); // TODO: deprecate
+
+DEPRECATED(MTMD_API size_t mtmd_image_tokens_get_nx(const mtmd_image_tokens * image_tokens),
+           "use mtmd_image_tokens_get_decoder_pos() instead");
+DEPRECATED(MTMD_API size_t mtmd_image_tokens_get_ny(const mtmd_image_tokens * image_tokens),
+           "use mtmd_image_tokens_get_decoder_pos() instead");
+
+struct mtmd_decoder_pos {
+    uint32_t t;
+    uint32_t x;
+    uint32_t y;
+    uint32_t z; // unused for now, reserved for future use
+};
+// get position for decoder attention, to be used by M-RoPE models
+// i is the index of the embedding token, ranging from 0 to mtmd_image_tokens_get_n_tokens() - 1
+// pos_0 is the absolute position of the first token
+// return relative position (for example, embedding 0 will have position (0, 0, 0); remember to adjust it to the current absolute position)
+MTMD_API struct mtmd_decoder_pos mtmd_image_tokens_get_decoder_pos(const mtmd_image_tokens * image_tokens, llama_pos pos_0, size_t i);
+
+// tokenize an input text prompt and a list of bitmaps (image/audio)
+// the prompt must have the input media marker (default: "<__media__>") in it
+// the default marker is defined by mtmd_default_marker()
+// the marker will be replaced with the media chunk
+// for example:
+//   "here is an image: <__media__>\ndescribe it in detail."
+//   this will gives 3 chunks:
+//   1. "here is an image: <start_of_image>"
+//   2. (image/audio tokens)
+//   3. "<end_of_image>\ndescribe it in detail."
+// number of bitmaps must be equal to the number of markers in the prompt
+// this function is thread-safe (shared ctx)
+// return values:
+//   0 on success
+//   1 on number of bitmaps not matching the number of markers
+//   2 on media preprocessing error
+MTMD_API int32_t mtmd_tokenize(const mtmd_context * ctx,
+                               mtmd_input_chunks * output,
+                               const mtmd_input_text * text,
+                               const mtmd_bitmap * const * bitmaps,
+                               size_t n_bitmaps);
+
+// same as mtmd_tokenize(), but takes an array of mtmd_input_part
+// use cases:
+// - when you don't want to use media markers (they will be tokenized as normal text)
+// - when you want to control parse_special for each text part
+// note: per-part add_special will be ignored
+// return 1 if a part has both text and bitmap set (or neither)
+MTMD_API int32_t mtmd_tokenize_from_parts(const mtmd_context * ctx,
+                                          mtmd_input_chunks * output,
+                                          const mtmd_input_part * const * parts,
+                                          size_t n_parts,
+                                          bool add_special);
+
+DEPRECATED(MTMD_API int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens),
+           "use mtmd_encode_chunk() instead");
+
+// text chunk will be ignored silently, only media chunk will be encoded
+// returns 0 on success
+// returns 1 on generic error
+MTMD_API int32_t mtmd_encode_chunk(mtmd_context * ctx,
+                                   const mtmd_input_chunk * chunk);
+
+// get output embeddings from the last encode pass
+// the reading size (in bytes) is equal to:
+// llama_model_n_embd_inp(model) * mtmd_input_chunk_get_n_tokens(chunk) * sizeof(float)
+MTMD_API float * mtmd_get_output_embd(mtmd_context * ctx);
+
+
+// batch encoding API
+// chunks are not owned by the batch, they will not be freed by mtmd_batch_free()
+// batch is valid for a given context, cannot be shared across contexts
+MTMD_API mtmd_batch * mtmd_batch_init(mtmd_context * ctx);
+MTMD_API void         mtmd_batch_free(mtmd_batch * batch);
+
+// only media chunks are allowed, text chunks will be rejected
+// returns 0 on success
+// returns 1 on generic error
+// returns 2 if the batch is too large (chunk won't be added)
+// returns 3 if it cannot be batched with the existing chunks in the batch
+MTMD_API int32_t mtmd_batch_add_chunk(mtmd_batch * batch, const mtmd_input_chunk * chunk);
+
+// returns 0 on success
+// returns 1 on generic error
+MTMD_API int32_t mtmd_batch_encode(mtmd_batch * batch);
+MTMD_API float * mtmd_batch_get_output_embd(mtmd_batch * batch, const mtmd_input_chunk * chunk);
+
+
+// Set callback for all future logging events.
+// If this is not called, or NULL is supplied, everything is output on stderr.
+MTMD_API void mtmd_log_set(ggml_log_callback log_callback, void * user_data);
+
+// EXPERIMENTAL API to get mmproj's capabilities without initializing the full context
+// This is only intended to be used by llama-server, breaking changes is expected
+struct mtmd_caps {
+    bool inp_vision;
+    bool inp_audio;
+    bool gen_audio;
+};
+MTMD_API struct mtmd_caps mtmd_get_cap_from_file(const char * mmproj_fname);
+
+/////////////////////////////////////////
+// EXPERIMENTAL API for realtime audio input, subjected to breaking changes
+//
+// a stream turns incoming PCM into decoder-ready embedding rows, one row per decoder position
+// it keeps the encoder state between calls, so audio can be fed as it arrives
+// how text tokens are mixed into the rows is a model detail hidden inside the stream
+// the text model given to mtmd_init_from_file() is required
+
+// whether the current model supports mtmd_audio_stream
+MTMD_API bool mtmd_support_audio_stream(const mtmd_context * ctx);
+
+struct mtmd_audio_stream;
+typedef struct mtmd_audio_stream mtmd_audio_stream;
+
+struct mtmd_audio_stream_params {
+    int32_t step_ms; // audio encoded per encoder call, rounded up to the model step (default: 320)
+
+    // tokens that open the stream, they go out with the first rows (default: none)
+    // with the prompt of its "asr" chat template, LFM3-Audio transcribes live
+    const llama_token * prompt;
+    size_t              n_prompt;
+};
+MTMD_API struct mtmd_audio_stream_params mtmd_audio_stream_params_default(void);
+
+// returns nullptr on failure
+MTMD_API mtmd_audio_stream * mtmd_audio_stream_init(mtmd_context * ctx, struct mtmd_audio_stream_params params);
+MTMD_API void                mtmd_audio_stream_free(mtmd_audio_stream * stream);
+
+// samples are PCM F32 at mtmd_get_audio_sample_rate()
+// returns 0 on success, 1 if the stream has ended
+MTMD_API int32_t mtmd_audio_stream_push(mtmd_audio_stream * stream, const float * samples, size_t n_samples);
+
+// pad the stream so that all pending rows can be produced
+// end = false: the stream stays open (use it on a pause, to get a partial transcript)
+// end = true:  no more push() is accepted
+// returns 0 on success, 1 if the stream has ended
+MTMD_API int32_t mtmd_audio_stream_flush(mtmd_audio_stream * stream, bool end);
+
+// produce the next decoder rows
+// last_token is the token sampled from the previous row, LLAMA_TOKEN_NULL before the first sample
+// return value:
+//   > 0 number of rows ready, read them with mtmd_audio_stream_get_output_embd()
+//   0   more audio is needed
+//   -1  end of stream, nothing more will be produced
+//   -2  error
+MTMD_API int32_t mtmd_audio_stream_step(mtmd_audio_stream * stream, llama_token last_token);
+
+// rows of the last step, the reading size (in bytes) is n_rows * llama_model_n_embd_inp(model) * sizeof(float)
+MTMD_API const float * mtmd_audio_stream_get_output_embd(const mtmd_audio_stream * stream);
+
+// true if the rows of the last step start a new sequence: the caller drops its sequence before decoding them
+MTMD_API bool mtmd_audio_stream_is_seq_start(const mtmd_audio_stream * stream);
+
+// audio rows whose text has been sampled (prefix rows included), step() updates it from last_token
+MTMD_API int64_t mtmd_audio_stream_get_n_rows(const mtmd_audio_stream * stream);
+
+// audio rows up to the end of the last flush
+// once get_n_rows() reaches it, the text of the flushed audio has been sampled
+MTMD_API int64_t mtmd_audio_stream_get_n_rows_flushed(const mtmd_audio_stream * stream);
+
+/////////////////////////////////////////
+// EXPERIMENTAL API for audio generation, subjected to breaking changes
+
+// represent the pipeline type
+enum mtmd_gen_audio_type {
+    MTMD_GEN_AUDIO_TYPE_NONE, // not supported
+    MTMD_GEN_AUDIO_TYPE_QWEN3TTS,
+    MTMD_GEN_AUDIO_TYPE_POCKETTTS,
+    MTMD_GEN_AUDIO_TYPE_SOPRANO,
+    MTMD_GEN_AUDIO_TYPE_LFM3A,
+    MTMD_GEN_AUDIO_TYPE_CHATTERBOX,
+    MTMD_GEN_AUDIO_TYPE_DRAMA3,
+};
+
+struct mtmd_gen_audio_info {
+    enum mtmd_gen_audio_type type;
+    int32_t sample_rate; // in Hz, for example 24000 for qwen3tts
+    const char * model_variant; // name of the weight variant, can be nullptr if not applicable
+    int32_t n_voices; // predefined voices, see mtmd_gen_audio_voice_name()
+};
+
+MTMD_API struct mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx);
+
+// read a named tensor of the gen audio model as F32, returns the element count (0 if not found), out may be null to query the size
+MTMD_API size_t mtmd_gen_audio_read_tensor(mtmd_context * ctx, const char * name, float * out, size_t n_max);
+// name of the idx-th predefined voice, nullptr when idx is out of range
+MTMD_API const char * mtmd_gen_audio_voice_name(const mtmd_context * ctx, int32_t idx);
+
+// predefined voice with this name as a voice bitmap, to pass as speaker reference
+// returns nullptr if there is no such voice, the caller must free it
+MTMD_API mtmd_bitmap * mtmd_gen_audio_get_voice(const mtmd_context * ctx, const char * name);
+
+
+enum mtmd_gen_process_type {
+    MTMD_GEN_PROCESS_TYPE_GEN_CODE, // h_state to semantic (codes, mel-spectrogram, etc.)
+    MTMD_GEN_PROCESS_TYPE_GEN_WAV,  // convert semantic to PCM audio
+                                    // for qwen3tts, this is code2wav
+                                    // for pocket-tts, this is mimi decoder
+                                    // for lfm3a, this is the codec decoder + ISTFT, n_codes == 0 flushes the tail
+};
+
+struct mtmd_gen_inp {
+    enum mtmd_gen_process_type type;
+
+    // for MTMD_GEN_PROCESS_TYPE_GEN_CODE
+    int32_t code0;  // the sampled codebook 0 entry from backbone
+    float * embd;   // the hidden state from backbone, must have n_text_embd elements
+    int32_t top_k;
+    float   top_p;
+    float   temp; // sampling temperature, or noise scale for flow-matching decoders
+    float   penalty_repeat; // repetition penalty of the sampled codes, <= 1 is off
+    int32_t penalty_last_n; // frames the repetition penalty looks back on
+
+    // for MTMD_GEN_PROCESS_TYPE_GEN_WAV
+    // pass either codes (discrete) or feats (continuous), depending on the pipeline
+    // lfm3a GEN_CODE also takes codes: the codes revealed so far, -1 for a masked codebook
+    int32_t * codes;
+    size_t    n_codes;
+    const float * feats;
+    size_t        n_feats;
+};
+
+struct mtmd_gen_out {
+    // note: output memory is owned by the state, valid until the next process() call with this state
+
+    // for MTMD_GEN_PROCESS_TYPE_GEN_CODE
+    const int32_t * codes;
+    size_t          n_codes;
+    const float * feats; // continuous counterpart of codes
+    size_t        n_feats;
+    const float * embd; // the generated hidden state, to be fed back to backbone
+                        // it must have n_text_embd elements
+    bool is_eos; // only set by pipelines having the EOS head inside mmproj
+
+    // for MTMD_GEN_PROCESS_TYPE_GEN_WAV
+    const float * audio;
+    size_t        n_samples;
+};
+
+struct mtmd_gen_state_params {
+    uint32_t seed; // UINT32_MAX for random
+};
+
+MTMD_API struct mtmd_gen_state_params mtmd_gen_state_params_default(void);
+
+// returns nullptr if the model does not support audio generation
+MTMD_API mtmd_gen_state * mtmd_gen_state_init(mtmd_context * ctx, struct mtmd_gen_state_params params);
+MTMD_API void             mtmd_gen_state_free(mtmd_gen_state * state);
+
+// clear the decoder state (cold start), keep the RNG stream
+MTMD_API void             mtmd_gen_state_reset(mtmd_gen_state * state);
+
+// copy the gen-side reference data of the last mtmd_encode_chunk() call into the state (speaker clip or predefined voice)
+// returns non-zero if the last encode produced no such data
+MTMD_API int32_t          mtmd_gen_state_set_ref(mtmd_context * ctx, mtmd_gen_state * state);
+
+// defaults tuned for the loaded pipeline, callers override only what they care about
+MTMD_API struct mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx);
+
+// run one step and update the state in place
+// the caller drives the backbone and collects the audio frames
+MTMD_API int32_t mtmd_gen_audio_process(mtmd_context * ctx,
+                                mtmd_gen_state * state,
+                                const struct mtmd_gen_inp * inp,
+                                struct mtmd_gen_out * out);
+
+/////////////////////////////////////////
+
+// test function, to be used in test-mtmd-c-api.c
+MTMD_API mtmd_input_chunks * mtmd_test_create_input_chunks(void);
+
+#ifdef __cplusplus
+} // extern "C"
+#endif
+
+// Get memory usage of the current model in bytes, per backend device
+// Note: this is an unstable API, used internally by fit_params; it WILL be removed or changed without deprecation
+#ifdef __cplusplus
+struct mtmd_memory_usage {
+    std::map<ggml_backend_dev_t, size_t> backend_mem_usage;
+    // for models that use non-causal attention, max_tokens must not exceed n_ubatch of llama_context
+    int image_max_tokens;
+    bool use_non_causal;
+};
+MTMD_API struct mtmd_memory_usage mtmd_get_memory_usage(
+    const char * mmproj_fname,
+    struct mtmd_context_params ctx_params);
+#endif
+
+//
+// C++ wrappers
+//
+
+#ifdef __cplusplus
+
+namespace mtmd {
+
+struct mtmd_context_deleter {
+    void operator()(mtmd_context * val) { mtmd_free(val); }
+};
+using context_ptr = std::unique_ptr<mtmd_context, mtmd_context_deleter>;
+
+struct mtmd_bitmap_deleter {
+    void operator()(mtmd_bitmap * val) { mtmd_bitmap_free(val); }
+};
+using bitmap_ptr = std::unique_ptr<mtmd_bitmap, mtmd_bitmap_deleter>;
+
+struct mtmd_input_chunks_deleter {
+    void operator()(mtmd_input_chunks * val) { mtmd_input_chunks_free(val); }
+};
+using input_chunks_ptr = std::unique_ptr<mtmd_input_chunks, mtmd_input_chunks_deleter>;
+
+struct mtmd_input_chunk_deleter {
+    void operator()(mtmd_input_chunk * val) { mtmd_input_chunk_free(val); }
+};
+using input_chunk_ptr = std::unique_ptr<mtmd_input_chunk, mtmd_input_chunk_deleter>;
+
+struct mtmd_batch_deleter {
+    void operator()(mtmd_batch * val) { mtmd_batch_free(val); }
+};
+using batch_ptr = std::unique_ptr<mtmd_batch, mtmd_batch_deleter>;
+
+struct mtmd_audio_stream_deleter {
+    void operator()(mtmd_audio_stream * val) { mtmd_audio_stream_free(val); }
+};
+using audio_stream_ptr = std::unique_ptr<mtmd_audio_stream, mtmd_audio_stream_deleter>;
+
+struct mtmd_gen_state_deleter {
+    void operator()(mtmd_gen_state * val) { mtmd_gen_state_free(val); }
+};
+using gen_state_ptr = std::unique_ptr<mtmd_gen_state, mtmd_gen_state_deleter>;
+
+struct bitmap {
+    bitmap_ptr ptr;
+    bitmap() : ptr(nullptr) {}
+    bitmap(mtmd_bitmap * bitmap) : ptr(bitmap) {}
+    bitmap(bitmap && other) noexcept : ptr(std::move(other.ptr)) {}
+    bitmap(uint32_t nx, uint32_t ny, const unsigned char * data) {
+        ptr.reset(mtmd_bitmap_init(nx, ny, data));
+    }
+    ~bitmap() = default;
+    uint32_t nx() const { return mtmd_bitmap_get_nx(ptr.get()); }
+    uint32_t ny() const { return mtmd_bitmap_get_ny(ptr.get()); }
+    const unsigned char * data() const { return mtmd_bitmap_get_data(ptr.get()); }
+    size_t n_bytes() const { return mtmd_bitmap_get_n_bytes(ptr.get()); }
+    std::string id() const { return mtmd_bitmap_get_id(ptr.get()); }
+    void set_id(const char * id) const { mtmd_bitmap_set_id(ptr.get(), id); }
+};
+
+struct bitmaps {
+    std::vector<bitmap> entries;
+    ~bitmaps() = default;
+    // return list of pointers to mtmd_bitmap
+    // example:
+    //   auto bitmaps_c_ptr = bitmaps.c_ptr();
+    //   int32_t res = mtmd_tokenize(... bitmaps_c_ptr.data(), bitmaps_c_ptr.size());
+    std::vector<const mtmd_bitmap *> c_ptr() {
+        std::vector<const mtmd_bitmap *> res(entries.size());
+        for (size_t i = 0; i < entries.size(); i++) {
+            res[i] = entries[i].ptr.get();
+        }
+        return res;
+    }
+};
+
+struct input_chunks {
+    input_chunks_ptr ptr;
+    input_chunks() = default;
+    input_chunks(mtmd_input_chunks * chunks) : ptr(chunks) {}
+    ~input_chunks() = default;
+    size_t size() const { return mtmd_input_chunks_size(ptr.get()); }
+    const mtmd_input_chunk * operator[](size_t idx) const {
+        return mtmd_input_chunks_get(ptr.get(), idx);
+    }
+};
+
+} // namespace mtmd
+
+#endif
+
+#endif

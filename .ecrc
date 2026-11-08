@@ -1,0 +1,6 @@
+{
+  "Exclude": ["^\\.gitmodules$", "stb_image\\.h", "examples/test-cmake/build/", "examples/test-cmake/build-subdir/"],
+  "Disable": {
+    "IndentSize": true
+  }
+}

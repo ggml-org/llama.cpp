@@ -1,0 +1,109 @@
+name: CI (apple)
+
+on:
+  workflow_dispatch: # allows manual triggering
+  push:
+    branches:
+      - master
+    paths: [
+      '.github/workflows/build-apple.yml',
+      '**/CMakeLists.txt',
+      '**/.cmake',
+      '**/*.h',
+      '**/*.hpp',
+      '**/*.c',
+      '**/*.cpp',
+      '**/*.swift',
+      '**/*.m',
+      '**/*.metal'
+    ]
+
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths: [
+      '.github/workflows/build-apple.yml',
+      'ggml/src/ggml-metal/**',
+      'ggml/src/ggml-rpc/**'
+    ]
+
+cache-mode: none
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  GGML_NLOOP: 3
+  GGML_N_THREADS: 1
+  GGML_SCHED_DEBUG_REALLOC: 1
+  LLAMA_ARG_LOG_COLORS: 1
+  LLAMA_ARG_LOG_PREFIX: 1
+  LLAMA_ARG_LOG_TIMESTAMPS: 1
+
+jobs:
+  macos-latest-arm64:
+    runs-on: macos-latest
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
+        with:
+          restore: false
+          save: false
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
+        with:
+          key: apple-arm64
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
+
+      - name: Build
+        id: cmake_build
+        run: |
+          sysctl -a
+          cmake -B build \
+            -DCMAKE_BUILD_RPATH="@loader_path" \
+            -DLLAMA_FATAL_WARNINGS=ON \
+            -DLLAMA_BUILD_BORINGSSL=ON \
+            -DGGML_METAL_EMBED_LIBRARY=OFF \
+            -DGGML_METAL_SHADER_DEBUG=ON \
+            -DGGML_RPC=ON \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3
+          time cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
+
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: apple-arm64
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true
+
+      - name: Check for leaks
+        run: |
+          cmd=(./build/bin/test-thread-safety -hf ggml-org/gemma-3-270m-qat-GGUF -ngl 99 -p "$(printf 'hello %.0s' {1..128})" -n 16 -c 512 -ub 32 -np 2 -t 2 -lv 1)
+          leaks -atExit -- "${cmd[@]}"
+          # Graphics devices are leaked by Metal in Apple code sometimes, so we ignore those leaks
+          OBJC_DEBUG_MISSING_POOLS=YES "${cmd[@]}" 2>&1 | awk '{ print } index($0, "autoreleased with no pool in place") && !/class [a-zA-Z0-9]+Device autoreleased/ { found = 1 } END { exit found }'
+
+      - name: Test
+        id: cmake_test
+        run: |
+          cd build
+          # Metal Paravirtual devices are difficult to support -> disable
+          # ref: https://github.com/ggml-org/llama.cpp/pull/19802#issuecomment-4013704023
+          ctest -L main -E "test-llama-archs|test-llama-context|test-speculative-rejection-sampling" --verbose --timeout 900
+

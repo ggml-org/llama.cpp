@@ -1,0 +1,49 @@
+#version 450
+
+#include "types.glsl"
+
+// Fused snake activation: y = x + sin(b * x)^2 * c
+//   data_a [ne0, ne1]   per element activation x    (A_TYPE)
+//   data_b [1,   ne1]   per channel multiplier      (float)
+//   data_c [1,   ne1]   per channel inverse scale   (float, precomputed as 1 / freq)
+//   data_d [ne0, ne1]   output y                    (D_TYPE)
+layout (binding = 0) readonly  buffer A {A_TYPE data_a[];};
+layout (binding = 1) readonly  buffer B {float  data_b[];};
+layout (binding = 2) readonly  buffer C {float  data_c[];};
+layout (binding = 3) writeonly buffer D {D_TYPE data_d[];};
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout (push_constant) uniform parameter {
+    uint32_t ne0;
+    uint32_t ne1;
+} p;
+
+// Load A_TYPE to float
+float load_val(uint32_t idx) {
+#if defined(DATA_A_BF16)
+    return bf16_to_fp32(uint32_t(data_a[idx]));
+#else
+    return float(data_a[idx]);
+#endif
+}
+
+// Store float as D_TYPE
+void store_val(uint32_t idx, float v) {
+#if defined(DATA_D_BF16)
+    data_d[idx] = D_TYPE(fp32_to_bf16(v));
+#else
+    data_d[idx] = D_TYPE(v);
+#endif
+}
+
+void main() {
+    const uint32_t i0 = gl_GlobalInvocationID.x;
+    const uint32_t i1 = gl_GlobalInvocationID.y;
+    if (i0 >= p.ne0 || i1 >= p.ne1) return;
+
+    const uint32_t idx = i0 + i1 * p.ne0;
+    const float xi = load_val(idx);
+    const float s  = sin(data_b[i1] * xi);
+    store_val(idx, xi + s * s * data_c[i1]);
+}

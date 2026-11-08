@@ -1,0 +1,57 @@
+name: CI (webgpu)
+
+on:
+  workflow_dispatch: # allows manual triggering
+  push:
+    branches:
+      - master
+    paths: [
+      '.github/workflows/build-webgpu.yml',
+      'ggml/src/ggml-webgpu/**'
+    ]
+
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths: [
+      '.github/workflows/build-webgpu.yml',
+      'ggml/src/ggml-webgpu/**'
+    ]
+
+cache-mode: none
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  GGML_NLOOP: 3
+  GGML_N_THREADS: 1
+  LLAMA_ARG_LOG_COLORS: 1
+  LLAMA_ARG_LOG_PREFIX: 1
+  LLAMA_ARG_LOG_TIMESTAMPS: 1
+
+jobs:
+  format:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v6
+
+      - name: Install clang-format 22
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key |
+            sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
+          sudo add-apt-repository -y \
+            "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-22 main"
+          sudo apt-get update
+          sudo apt-get install -y clang-format-22
+
+      - name: Check formatting
+        run: |
+          find ggml/src/ggml-webgpu \
+            -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \) \
+            -print0 |
+            xargs -0 clang-format-22 --dry-run --Werror

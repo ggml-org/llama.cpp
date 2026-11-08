@@ -1,0 +1,94 @@
+#version 450
+
+#if defined(USE_SUBGROUP)
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#endif
+
+#include "types.glsl"
+
+#extension GL_EXT_shader_16bit_storage : require
+
+layout(push_constant) uniform parameter {
+    uint IW; uint IH;
+    uint OW; uint OH;
+    uint OC;
+    uint pelements;
+    uint op;
+    int k0; int k1;
+    int s0; int s1;
+    int p0; int p1;
+} p;
+
+layout(constant_id = 0) const uint BLOCK_SIZE = 512;
+#define FLT_MAX 3.402823466e+38F
+#define OP_POOL_MAX 0u
+#define OP_POOL_AVG 1u
+
+layout (local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+layout(binding = 0) readonly buffer X {A_TYPE data_a[];};
+layout(binding = 1) writeonly buffer D {D_TYPE data_d[];};
+
+void main() {
+    const uint workgroup = gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x;
+#if defined(USE_SUBGROUP)
+    const uint idx = workgroup * gl_NumSubgroups + gl_SubgroupID;
+    const int lane = int(gl_SubgroupInvocationID);
+    const int step = int(gl_SubgroupSize);
+#else
+    const uint idx = workgroup * BLOCK_SIZE + gl_LocalInvocationID.x;
+    const int lane = 0;
+    const int step = 1;
+#endif
+    if (idx >= p.pelements) {
+        return;
+    }
+
+    const uint O_HW = p.OW * p.OH;
+
+    const uint nc = idx / O_HW;
+    const uint cur_oh = (idx % O_HW) / p.OW;
+    const uint cur_ow = (idx % O_HW) % p.OW;
+
+    const int start_h = int(cur_oh) * p.s0 - p.p0;
+    const int bh = max(start_h, 0);
+    const int eh = min(start_h + p.k0, int(p.IH));
+
+    const int start_w = int(cur_ow) * p.s1 - p.p1;
+    const int bw = max(start_w, 0);
+    const int ew = min(start_w + p.k1, int(p.IW));
+
+    const float scale = 1.0 / float(p.k0 * p.k1);
+    float res;
+
+    if (p.op == OP_POOL_AVG) {
+        res = 0.0;
+    } else if (p.op == OP_POOL_MAX) {
+        res = -FLT_MAX;
+    } else {
+        return;
+    }
+
+    #pragma unroll
+    for (int i = bh; i < eh; i++) {
+        #pragma unroll
+        for (int j = bw + lane; j < ew; j += step) {
+            const float cur = D_TYPE(data_a[nc * p.IH * p.IW + i * p.IW + j]);
+
+            if (p.op == OP_POOL_AVG) {
+                res += cur;
+            } else if (p.op == OP_POOL_MAX) {
+                res = max(res, cur);
+            }
+        }
+    }
+
+#if defined(USE_SUBGROUP)
+    res = p.op == OP_POOL_AVG ? subgroupAdd(res) : subgroupMax(res);
+    if (!subgroupElect()) {
+        return;
+    }
+#endif
+    data_d[idx] = p.op == OP_POOL_AVG ? res * scale : res;
+}

@@ -1,0 +1,5 @@
+set(TARGET llama-simple-chat)
+add_executable(${TARGET} simple-chat.cpp)
+install(TARGETS ${TARGET} RUNTIME)
+target_link_libraries(${TARGET} PRIVATE llama ${CMAKE_THREAD_LIBS_INIT})
+target_compile_features(${TARGET} PRIVATE cxx_std_17)

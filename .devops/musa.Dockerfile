@@ -1,0 +1,141 @@
+ARG UBUNTU_VERSION=22.04
+# This needs to generally match the container host's environment.
+# Target the MUSA build image
+ARG BASE_MUSA_DEV_CONTAINER=registry.mthreads.com/mcconline/musa_sdk:5.2.0-devel-ubuntu${UBUNTU_VERSION}-s5000
+
+ARG BASE_MUSA_RUN_CONTAINER=registry.mthreads.com/mcconline/musa_sdk:5.2.0-runtime-ubuntu${UBUNTU_VERSION}-s5000
+
+ARG BUILD_DATE=N/A
+ARG APP_VERSION=N/A
+ARG APP_REVISION=N/A
+
+ARG NODE_VERSION=24
+
+FROM docker.io/node:$NODE_VERSION AS web
+
+ARG APP_VERSION
+
+WORKDIR /app/tools/ui
+
+COPY tools/ui/package.json tools/ui/package-lock.json ./
+RUN npm ci
+
+COPY tools/ui/ ./
+RUN LLAMA_BUILD_NUMBER="$APP_VERSION" npm run build
+
+FROM ${BASE_MUSA_DEV_CONTAINER} AS build
+
+# MUSA architecture to build for (defaults to all supported archs)
+ARG MUSA_DOCKER_ARCH=default
+
+RUN apt-get update && \
+    apt-get install -y \
+    build-essential \
+    cmake \
+    python3 \
+    python3-pip \
+    git \
+    libssl-dev \
+    libgomp1 \
+    musa-mualg-5-2 \
+    musa-muthrust-5-2 \
+    libmthreads-compute
+
+WORKDIR /app
+
+COPY . .
+
+COPY --from=web /app/tools/ui/dist tools/ui/dist
+
+RUN if [ "${MUSA_DOCKER_ARCH}" != "default" ]; then \
+        export CMAKE_ARGS="-DMUSA_ARCHITECTURES=${MUSA_DOCKER_ARCH}"; \
+    fi && \
+    cmake -B build -DGGML_NATIVE=OFF -DGGML_MUSA=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DLLAMA_BUILD_TESTS=OFF ${CMAKE_ARGS} -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined . && \
+    cmake --build build --config Release -j$(nproc)
+
+RUN mkdir -p /app/lib && \
+    find build -name "*.so*" -exec cp -P {} /app/lib \;
+
+RUN mkdir -p /app/full \
+    && cp build/bin/* /app/full \
+    && cp *.py /app/full \
+    && cp -r conversion /app/full \
+    && cp -r gguf-py /app/full \
+    && cp -r requirements /app/full \
+    && cp requirements.txt /app/full \
+    && cp .devops/tools.sh /app/full/tools.sh
+
+## Base image
+FROM ${BASE_MUSA_RUN_CONTAINER} AS base
+
+ARG BUILD_DATE=N/A
+ARG APP_VERSION=N/A
+ARG APP_REVISION=N/A
+ARG IMAGE_URL=https://github.com/ggml-org/llama.cpp
+ARG IMAGE_SOURCE=https://github.com/ggml-org/llama.cpp
+LABEL org.opencontainers.image.created=$BUILD_DATE \
+      org.opencontainers.image.version=$APP_VERSION \
+      org.opencontainers.image.revision=$APP_REVISION \
+      org.opencontainers.image.title="llama.cpp" \
+      org.opencontainers.image.description="LLM inference in C/C++" \
+      org.opencontainers.image.url=$IMAGE_URL \
+      org.opencontainers.image.source=$IMAGE_SOURCE
+
+RUN apt-get update \
+    && apt-get install -y libgomp1 curl ffmpeg libmthreads-compute \
+    && apt autoremove -y \
+    && apt clean -y \
+    && rm -rf /tmp/* /var/tmp/* \
+    && find /var/cache/apt/archives /var/lib/apt/lists -not -name lock -type f -delete \
+    && find /var/cache -type f -delete
+
+# The MUSA runtime image does not register its library directory
+RUN echo "/usr/local/musa/lib" > /etc/ld.so.conf.d/musa-runtime.conf && ldconfig
+
+COPY --from=build /app/lib/ /app
+
+### Full
+FROM base AS full
+
+COPY --from=build /app/full /app
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y \
+    git \
+    python3 \
+    python3-pip \
+    && pip install --upgrade pip setuptools wheel \
+    && pip install -r requirements.txt \
+    && apt autoremove -y \
+    && apt clean -y \
+    && rm -rf /tmp/* /var/tmp/* \
+    && find /var/cache/apt/archives /var/lib/apt/lists -not -name lock -type f -delete \
+    && find /var/cache -type f -delete
+
+
+ENTRYPOINT ["/app/tools.sh"]
+
+### Light, CLI only
+FROM base AS light
+
+COPY --from=build /app/full/llama /app/full/llama-cli /app/full/llama-completion /app/
+
+WORKDIR /app
+
+ENTRYPOINT [ "/app/llama-cli" ]
+
+### Server, Server only
+FROM base AS server
+
+ENV LLAMA_ARG_HOST=0.0.0.0
+ENV LLAMA_ARG_PORT=8080
+
+COPY --from=build /app/full/llama /app/full/llama-server /app/
+
+WORKDIR /app
+
+HEALTHCHECK CMD [ "curl", "-f", "http://localhost:8080/health" ]
+
+ENTRYPOINT [ "/app/llama-server" ]

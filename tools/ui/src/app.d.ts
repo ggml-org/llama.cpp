@@ -1,0 +1,143 @@
+// See https://svelte.dev/docs/kit/types#app.d.ts
+// for information about these interfaces
+
+import 'vite-plugin-pwa/pwa-assets';
+import 'vite-plugin-pwa/svelte';
+import { ModelModality, ServerModelStatus, ServerRole } from '$lib/enums';
+// Import chat types from dedicated module
+import type {
+	// API types
+	ApiChatCompletionRequest,
+	ApiChatCompletionResponse,
+	ApiChatCompletionStreamChunk,
+	ApiChatCompletionToolCall,
+	ApiChatCompletionToolCallDelta,
+	ApiChatMessageContentPart,
+	ApiChatMessageData,
+	ApiContextSizeError,
+	ApiErrorResponse,
+	ApiLlamaCppServerProps,
+	ApiModelDataEntry,
+	ApiModelLoadStage,
+	ApiModelsDownloadRequest,
+	ApiModelsDownloadResponse,
+	ApiModelsListResponse,
+	ApiModelsLoadResponse,
+	ApiModelsSseData,
+	ApiModelsSseEvent,
+	ApiModelsSseProgress,
+	ApiModelsUnloadResponse,
+	ApiProcessingState,
+	ChatAttachmentDisplayItem,
+	// Chat types
+	ChatMessagePromptProgress,
+	ChatMessageSiblingInfo,
+	ChatMessageTimings,
+	ChatMessageType,
+	ChatRole,
+	ChatUploadedFile,
+	// Database types
+	DatabaseConversation,
+	DatabaseMessage,
+	DatabaseMessageExtra,
+	DatabaseMessageExtraAudioFile,
+	DatabaseMessageExtraImageFile,
+	DatabaseMessageExtraLegacyContext,
+	DatabaseMessageExtraPdfFile,
+	DatabaseMessageExtraTextFile,
+	DatabaseMessageExtraVideoFile,
+	ExportedConversation,
+	ExportedConversations,
+	ModelLoadProgress,
+	// Model types
+	ModelModalities,
+	ModelOption,
+	// Settings types
+	SettingsChatServiceOptions,
+	SettingsConfigType,
+	SettingsConfigValue,
+	SettingsFieldConfig
+} from '$lib/types';
+
+declare global {
+	// namespace App {
+	// interface Error {}
+	// interface Locals {}
+	// interface PageData {}
+	// interface PageState {}
+	// interface Platform {}
+	// }
+
+	export {
+		// API types
+		ApiChatCompletionRequest,
+		ApiChatCompletionResponse,
+		ApiChatCompletionStreamChunk,
+		ApiChatCompletionToolCall,
+		ApiChatCompletionToolCallDelta,
+		ApiChatMessageData,
+		ApiChatMessageContentPart,
+		ApiContextSizeError,
+		ApiErrorResponse,
+		ApiLlamaCppServerProps,
+		ApiModelDataEntry,
+		ApiModelLoadStage,
+		ModelDownloadProgress,
+		ApiModelsSseProgress,
+		ApiModelsSseData,
+		ApiModelsSseDownloadProgressData,
+		ApiModelsSseEvent,
+		ApiModelsListResponse,
+		ApiModelsLoadResponse,
+		ApiModelsDownloadRequest,
+		ApiModelsDownloadResponse,
+		ApiModelsUnloadResponse,
+		ApiProcessingState,
+		// Chat types
+		ChatAttachmentDisplayItem,
+		ChatMessagePromptProgress,
+		ChatMessageSiblingInfo,
+		ChatMessageTimings,
+		ChatMessageType,
+		ChatRole,
+		ChatUploadedFile,
+		// Database types
+		DatabaseConversation,
+		DatabaseMessage,
+		DatabaseMessageExtra,
+		DatabaseMessageExtraAudioFile,
+		DatabaseMessageExtraVideoFile,
+		DatabaseMessageExtraImageFile,
+		DatabaseMessageExtraTextFile,
+		DatabaseMessageExtraPdfFile,
+		DatabaseMessageExtraLegacyContext,
+		ExportedConversation,
+		ExportedConversations,
+		// Enum types
+		ModelModality,
+		ServerRole,
+		ServerModelStatus,
+		// Model types
+		ModelModalities,
+		ModelOption,
+		ModelLoadProgress,
+		// Settings types
+		SettingsChatServiceOptions,
+		SettingsConfigValue,
+		SettingsFieldConfig,
+		SettingsConfigType
+	};
+}
+
+declare global {
+	interface Window {
+		idxCodeBlock?: number;
+
+		// File System Access API - not in the DOM lib and unavailable in some browsers
+		showDirectoryPicker?: (options?: {
+			id?: string;
+			mode?: 'read' | 'readwrite';
+			startIn?: FileSystemHandle | string;
+		}) => Promise<FileSystemDirectoryHandle>;
+	}
+}

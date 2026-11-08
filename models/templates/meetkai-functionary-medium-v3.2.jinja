@@ -1,0 +1,287 @@
+{# version=v3.llama3 #}{%- macro append_new_param_info(param_declaration, comment_info, examples_info, depth) -%}
+    {%- set offset = "" -%}
+    {%- if depth >= 1 -%}
+        {%- set offset = "    " * depth -%}
+    {%- endif -%}
+    {%- if comment_info != "<|NONE|>" -%}
+        {{ "\n" + offset + comment_info }}
+        {%- if examples_info | length > 0 -%}
+            {# Append each example info #}
+            {%- for example in examples_info -%}
+                {{ "\n" + offset + "// " + example|string|replace("'", '"') }}
+            {%- endfor -%}
+        {%- endif -%}
+    {%- endif -%}
+    {{ "\n" + offset + param_declaration }}
+{%- endmacro -%}
+
+{%- macro convert_data_type(param_type) -%}
+    {%- if param_type == "integer" or param_type == "float" -%}
+        {{ "number" }}
+    {%- else -%}
+        {{ param_type }}
+    {%- endif -%}
+{%- endmacro -%}
+
+{%- macro get_param_type(param) -%}
+    {%- set param_type = "any" -%}
+
+    {%- if "type" in param -%}
+        {%- set raw_param_type = param["type"] -%}
+        {%- if raw_param_type is iterable and raw_param_type is not string -%}
+            {%- set param_type = raw_param_type | join(" | ") -%}
+        {%- else -%}
+            {%- set param_type = raw_param_type -%}
+        {%- endif -%}
+        {{ convert_data_type(param_type) }}
+    {%- elif "oneOf" in param -%}
+        {%- set one_of_types = param["oneOf"]|selectattr("type", "defined")|list -%}
+        {%- set one_of_types = one_of_types|map(attribute="type")|unique|list -%}
+        {{ convert_data_type(one_of_types | join(" | ")) }}
+    {%- endif -%}
+{%- endmacro -%}
+
+{%- macro get_format_param(param) -%}
+    {%- if "format" in param -%}
+        {{ param["format"] }}
+    {%- elif "oneOf" in param -%}
+        {%- set formats = [] -%}
+        {%- for item in param["oneOf"] -%}
+            {%- if "format" in item -%}
+                {%- if item["format"] == param["oneOf"][-1]["format"] -%}
+                    {{ item["format"] }}
+                {%- else -%}
+                    {{ item["format"] + " or "}}
+                {%- endif -%}
+            {%- endif -%}
+        {%- endfor -%}
+    {%- else -%}
+        {{ "<|NONE|>" }}
+    {%- endif -%}
+{%- endmacro -%}
+
+{%- macro get_param_info(param) -%}
+    {%- set param_type = param.get("type", "any") -%}
+    {%- set format_param = get_format_param(param) -%}
+
+    {%- if "description" in param or "default" in param or format_param != "<|NONE|>" or param["maximum"] or param["minimum"] or param["maxLength"] or param["minLength"] -%}
+        {{ "//" }}
+        {%- if "description" in param -%}
+            {%- set desc = param["description"] -%}
+            {%- if not desc.endswith(".") -%}
+                {%- set desc = desc + "." -%}
+            {%- endif -%}
+            {{ " " + desc }}
+        {%- endif -%}
+
+        {%- if "default" in param -%}
+            {%- set default_value = param["default"] -%}
+            {%- if param_type == "string" -%}
+                {%- set default_value = '"' ~ default_value ~ '"' -%}
+            {%- endif -%}
+            {{ " Default=" ~ default_value ~ "." }}
+        {%- endif -%}
+
+        {%- set format_param = get_format_param(param) -%}
+        {%- if format_param != "<|NONE|>" -%}
+            {{ " Format=" ~ format_param }}
+        {%- endif -%}
+
+        {%- for field, field_name in [("maximum", "Maximum"), ("minimum", "Minimum"), ("maxLength", "Maximum length"), ("minLength", "Minimum length")] -%}
+            {%- if field in param -%}
+                {{ " " + field_name ~ "=" ~ param[field] }}
+            {%- endif -%}
+        {%- endfor -%}
+    {%- else -%}
+        {{ "<|NONE|>"}}
+    {%- endif -%}
+{%- endmacro -%}
+
+{%- macro get_enum_option_str(enum_options) -%}
+    {%- for v in enum_options -%}
+        {%- if v is string -%}
+            {{ '"' + v + '"' }}
+        {%- else -%}
+            {{ v }}
+        {%- endif -%}
+        {%- if enum_options|length > 0 and v != enum_options[-1] -%}
+            {{ " | " }}
+        {%- endif -%}
+    {%- endfor -%}
+{%- endmacro -%}
+
+{%- macro get_array_typescript(param_name, param_dic, depth) -%}
+    {%- set offset = '' -%}
+    {%- if depth >= 1 -%}
+        {%- set offset = "    " * depth -%}
+    {%- endif -%}
+    {%- set items_info = param_dic.get('items', {}) -%}
+
+    {%- if items_info|length == 0 -%}
+        {%- if param_name -%}
+            {{ "\n" + offset + param_name + ": []" }}
+        {%- else -%}
+            {{ "\n" + offset + "[]" }}
+        {%- endif -%}
+    {%- else -%}
+        {%- set array_type = get_param_type(items_info) -%}
+        {%- if array_type == 'object' -%}
+            {%- if param_name -%}
+                {{ "\n" + offset + param_name + ": {" }}
+            {%- else -%}
+                {{ "\n" + offset + "{" }}
+            {%- endif -%}
+            {{ get_parameter_typescript(items_info.get('properties', {}), items_info.get('required', []), depth + 1) -}}
+            {{- "\n" + offset + "}[]" }}
+        {%- elif array_type == 'array' -%}
+            {%- set item_info = get_array_typescript(None, items_info, depth + 1) -%}
+            {%- if not param_name -%}
+                {{ "\n" + item_info + "[]" }}
+            {%- else -%}
+                {{ "\n" + offset + param_name + ": " + item_info|trim + "[]" }}
+            {%- endif -%}
+        {%- else -%}
+            {%- if 'enum' in items_info -%}
+                {%- set item_type = get_enum_option_str(items_info['enum']) -%}
+                {%- if param_name is none -%}
+                    {{ "(" + item_type + ")[]"}}
+                {%- else -%}
+                    {{ "\n" + offset + param_name + ": (" + item_type + ")[]" }}
+                {%- endif -%}
+            {%- else -%}
+                {%- if param_name is none -%}
+                    {{ "\n" + array_type + "[]" }}
+                {%- else -%}
+                    {{ "\n" + offset + param_name + ": " + array_type + "[]," }}
+                {%- endif -%}
+            {%- endif -%}
+        {%- endif -%}
+    {%- endif -%}
+{%- endmacro -%}
+
+{%- macro get_parameter_typescript(properties, required_params, depth=0) -%}
+    {%- set res = "" -%}
+    {%- for param_name, param in properties.items() -%}
+        {%- if param is mapping -%}
+            {%- set comment_info = get_param_info(param) -%}
+            {# Param Examples #}
+            {%- set examples_info = [] -%}
+            {%- if "examples" in param -%}
+                {%- set examples_info = ["Example " + param_name + ":"] -%}
+                {%- set examples_info = examples_info + param["examples"] -%}
+            {%- endif -%}
+
+            {# Param Name declaration #}
+            {%- set param_declaration = param_name -%}
+            {%- if required_params is iterable and param_name not in required_params -%}
+                {%- set param_declaration = param_declaration + "?" -%}
+            {%- endif -%}
+
+            {%- set param_type = get_param_type(param) -%}
+
+            {# Handle indentation based on depth #}
+            {%- set offset = "" -%}
+            {%- if depth >= 1 -%}
+                {%- set offset = "    " * depth -%}
+            {%- endif -%}
+
+            {%- if param_type == "object" -%}
+                {%- if comment_info != "<|NONE|>" -%}
+                    {{ "\n" + offset + comment_info }}
+                {%- endif -%}
+                {%- if examples_info|length > 0 -%}
+                    {%- for example in examples_info -%}
+                        {{ "\n" + offset + "// " + example|string|replace("'", '"') }}
+                    {%- endfor -%}
+                {%- endif -%}
+                {%- set param_declaration = param_declaration + ": {" -%}
+                {{ "\n" + offset + param_declaration -}}
+                {{- get_parameter_typescript(param.get("properties", {}), param.get("required", []), depth + 1) -}}
+                {{- "\n" + offset + "}," }}
+            {%- elif param_type == "array" -%}
+                {%- set item_info = param.get("items", {}) -%}
+                {%- if "type" not in item_info -%}
+                    {%- set param_declaration = param_declaration + ": []," -%}
+                    {{ append_new_param_info(param_declaration, comment_info, examples_info, depth) }}
+                {%- else -%}
+                    {%- if comment_info != "<|NONE|>" -%}
+                        {{ "\n" + offset + comment_info }}
+                    {%- endif -%}
+                    {%- if examples_info|length > 0 -%}
+                        {%- for example in examples_info -%}
+                            {{ "\n" + offset + "// " + example|string|replace("'", '"') }}
+                        {%- endfor -%}
+                    {%- endif -%}
+                    {%- set array_declaration = get_array_typescript(param_declaration, param, depth) -%}
+                    {%- if not array_declaration.endswith(",") -%}
+                        {%- set array_declaration = array_declaration + "," -%}
+                    {%- endif -%}
+                    {{ array_declaration}}
+                {%- endif -%}
+            {%- else -%}
+                {%- if "enum" in param -%}
+                    {%- set param_type = get_enum_option_str(param["enum"]) -%}
+                {%- endif -%}
+                {%- if "nullable" in param and param["nullable"] -%}
+                    {%- set param_type = param_type + " | null" -%}
+                {%- endif -%}
+                {%- set param_declaration = param_declaration + ": " + param_type + "," -%}
+                {{ append_new_param_info(param_declaration, comment_info, examples_info, depth) }}
+            {%- endif -%}
+        {%- endif -%}
+    {%- endfor -%}
+{%- endmacro -%}
+
+{%- macro generate_schema_from_functions(functions, namespace='functions') -%}
+    {{ "// Supported function definitions that should be called when necessary.\n" -}}
+    {{- "namespace " + namespace + " {\n\n" -}}
+
+    {%- for function in functions -%}
+        {%- if function.get("function") -%}
+            {%- set function = function.get("function") -%}
+        {%- endif -%}
+
+        {%- set function_name = function.get("name") -%}
+        {%- if function_name -%}
+            {%- set description = function.get('description', '') -%}
+            {%- set parameters = function.get('parameters', {}) -%}
+            {{- "// " + description + "\n" -}}
+            {{- "type " + function_name -}}
+            {%- if parameters and parameters.get("properties") -%}
+                {{- " = (_: {" -}}
+                {%- set required_params = parameters.get("required", []) -%}
+                {{ get_parameter_typescript(parameters.get("properties"), required_params, 0) -}}
+                {{- "\n}) => any;\n\n" }}
+            {%- else -%}
+                {{ " = () => any;\n\n" }}
+            {%- endif -%}
+        {%- endif -%}
+    {%- endfor -%}
+    {{ "} // namespace " + namespace }}
+{%- endmacro -%}
+{%- if not tools -%}
+    {%- set tools = [] -%}
+{%- endif -%}
+{{ bos_token + '<|start_header_id|>system<|end_header_id|>\n\nYou are capable of executing available function(s) if required.\nOnly execute function(s) when absolutely necessary.\nAsk for the required input to:recipient==all\nUse JSON for function arguments.\nRespond in this format:\n>>>${recipient}\n${content}\nAvailable functions:\n' + generate_schema_from_functions(tools) + '<|eot_id|>' -}}
+{%- if tools|length > 0 and tools|selectattr("type", "equalto", "code_interpreter")|list|length > 0 -%}
+    {{ '<|start_header_id|>system<|end_header_id|>\n\nWhen you send a message containing Python code to python, it will be executed in a stateful Jupyter notebook environment. python will respond with the output of the execution or time out after 60.0 seconds. The drive at \'/mnt/data\' can be used to save and persist user files.<|eot_id|>' }}
+{%- endif -%}
+{%- for message in messages -%}
+    {%- if message['role'] == 'user' or message['role'] == 'system' -%}
+        {{ '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n' + message['content'] + '<|eot_id|>' }}
+    {%- elif message['role'] == 'tool' -%}
+        {{ '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n' + message['content'] + '<|eot_id|>' }}
+    {%- else -%}
+        {{ '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n'}}
+        {%- if message['content'] -%}
+            {{ '>>>all\n' + message['content'] }}
+        {%- endif -%}
+        {%- if 'tool_calls' in message and message['tool_calls'] -%}
+            {%- for tool_call in message['tool_calls'] -%}
+                {{ '>>>' + tool_call['function']['name'] + '\n' + tool_call['function']['arguments'] }}
+            {%- endfor -%}
+        {%- endif -%}
+        {{ '<|eot_id|>' }}
+    {%- endif -%}
+{%- endfor -%}
+{% if add_generation_prompt %}{{ '<|start_header_id|>assistant<|end_header_id|>\n\n>>>' }}{% endif %}

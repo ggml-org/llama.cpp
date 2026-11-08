@@ -1,0 +1,380 @@
+<script lang="ts">
+	import {
+		Download,
+		GitBranch,
+		ListChecks,
+		Loader2,
+		MoreHorizontal,
+		PanelTopOpen,
+		Pencil,
+		Pin,
+		PinOff,
+		Square,
+		Trash2
+	} from '@lucide/svelte';
+	import { ContextMenuActions, DropdownMenuActions } from '$lib/components/app';
+	import { TruncatedText } from '$lib/components/app';
+	import { Checkbox } from '$lib/components/ui/checkbox';
+	import * as Tooltip from '$lib/components/ui/tooltip';
+	import {
+		FORK_TREE_DEPTH_PADDING,
+		ICON_CLASS_DEFAULT,
+		SHORTCUT_DELETE_CONVERSATION,
+		SHORTCUT_EDIT_CONVERSATION,
+		SHORTCUT_EXPORT_CONVERSATION,
+		UI_DATA_ATTRS
+	} from '$lib/constants';
+	import { RouterService } from '$lib/services/router.service';
+	import { chatStore, conversationsStore, settingsStore, tabsStore } from '$lib/stores';
+	import type { MenuAction } from '$lib/types';
+	import { onMount } from 'svelte';
+
+	interface Props {
+		isActive?: boolean;
+		depth?: number;
+		conversation: DatabaseConversation;
+		isSelectionMode?: boolean;
+		isSelected?: boolean;
+		onDelete?: (id: string) => void;
+		onEdit?: (id: string) => void;
+		onSelect?: (id: string) => void;
+		onStop?: (id: string) => void;
+		onToggleSelect?: (id: string) => void;
+		onEnterSelectionMode?: (id: string) => void;
+		onSelectionClick?: (id: string, options: { shiftKey: boolean }) => void;
+		onRowMouseDown?: (id: string, event: MouseEvent) => void;
+	}
+
+	let {
+		conversation,
+		depth = 0,
+		isActive = false,
+		isSelected = false,
+		isSelectionMode = false,
+		onDelete,
+		onEdit,
+		onEnterSelectionMode,
+		onRowMouseDown,
+		onSelect,
+		onSelectionClick,
+		onStop,
+		onToggleSelect
+	}: Props = $props();
+
+	let renderActionsDropdown = $state(false);
+	let dropdownOpen = $state(false);
+	let contextMenuOpen = $state(false);
+
+	let isLoading = $derived(chatStore.getAllLoadingChats().includes(conversation.id));
+
+	function handleEdit(event: Event) {
+		event.stopPropagation();
+		onEdit?.(conversation.id);
+	}
+
+	function handleDelete(event: Event) {
+		event.stopPropagation();
+		onDelete?.(conversation.id);
+	}
+
+	function handleStop(event: Event) {
+		event.stopPropagation();
+		onStop?.(conversation.id);
+	}
+
+	let canOpenInNewTab = $derived(Boolean(settingsStore.config.conversationTabs));
+
+	function openInNewTab() {
+		void tabsStore.openInNewTab(conversation.id);
+	}
+
+	// middle-click opens a background tab, like a link in a browser
+	function handleAuxClick(event: MouseEvent) {
+		if (event.button !== 1 || isSelectionMode || !canOpenInNewTab) return;
+
+		event.preventDefault();
+		openInNewTab();
+	}
+
+	// the "more actions" dropdown and the right-click menu offer the same actions; the
+	// shortcuts act on the active conversation, so only its row shows them
+	let actions = $derived<MenuAction[]>([
+		...(canOpenInNewTab
+			? [
+					{
+						icon: PanelTopOpen,
+						label: 'Open in new tab',
+						onclick: (e: Event) => {
+							e.stopPropagation();
+							openInNewTab();
+						}
+					}
+				]
+			: []),
+		{
+			icon: conversation.pinned ? PinOff : Pin,
+			label: conversation.pinned ? 'Unpin' : 'Pin',
+			onclick: (e: Event) => {
+				e.stopPropagation();
+				handleTogglePin();
+			},
+			separator: canOpenInNewTab
+		},
+		{
+			icon: Pencil,
+			label: 'Edit',
+			onclick: handleEdit,
+			shortcut: isActive ? SHORTCUT_EDIT_CONVERSATION : undefined
+		},
+		{
+			icon: Download,
+			label: 'Export',
+			onclick: (e: Event) => {
+				e.stopPropagation();
+				conversationsStore.downloadConversation(conversation.id);
+			},
+			shortcut: isActive ? SHORTCUT_EXPORT_CONVERSATION : undefined
+		},
+		{
+			icon: ListChecks,
+			label: 'Select',
+			onclick: handleEnterSelectionMode
+		},
+		{
+			icon: Trash2,
+			label: 'Delete',
+			onclick: handleDelete,
+			separator: true,
+			shortcut: isActive ? SHORTCUT_DELETE_CONVERSATION : undefined,
+			variant: 'destructive'
+		}
+	]);
+
+	function handleTogglePin() {
+		conversationsStore.toggleConversationPin(conversation.id);
+	}
+
+	function handleEnterSelectionMode(event: Event) {
+		event.stopPropagation();
+		onEnterSelectionMode?.(conversation.id);
+	}
+
+	function handleGlobalEditEvent(event: Event) {
+		const customEvent = event as CustomEvent<{ conversationId: string }>;
+
+		if (customEvent.detail.conversationId === conversation.id && isActive) {
+			handleEdit(event);
+		}
+	}
+
+	function handleMouseLeave() {
+		if (!dropdownOpen) {
+			renderActionsDropdown = false;
+		}
+	}
+
+	function handleMouseOver() {
+		if (isSelectionMode) return;
+
+		renderActionsDropdown = true;
+	}
+
+	function handleSelect(event: MouseEvent) {
+		if (isSelectionMode) {
+			onSelectionClick?.(conversation.id, { shiftKey: event.shiftKey });
+		} else if ((event.metaKey || event.ctrlKey) && canOpenInNewTab) {
+			openInNewTab();
+		} else {
+			onSelect?.(conversation.id);
+		}
+	}
+
+	function handleCheckboxClick(event: MouseEvent) {
+		event.stopPropagation();
+
+		if (isSelectionMode) {
+			onSelectionClick?.(conversation.id, { shiftKey: event.shiftKey });
+		} else {
+			onToggleSelect?.(conversation.id);
+		}
+	}
+
+	function handleRowMouseDown(event: MouseEvent) {
+		onRowMouseDown?.(conversation.id, event);
+	}
+
+	function handleCheckboxKeydown(event: KeyboardEvent) {
+		if (event.key !== ' ' && event.key !== 'Enter') return;
+
+		event.stopPropagation();
+		event.preventDefault();
+
+		if (isSelectionMode) {
+			onSelectionClick?.(conversation.id, { shiftKey: event.shiftKey });
+		} else {
+			onToggleSelect?.(conversation.id);
+		}
+	}
+
+	$effect(() => {
+		if (!dropdownOpen) {
+			renderActionsDropdown = false;
+		}
+	});
+
+	onMount(() => {
+		document.addEventListener('edit-active-conversation', handleGlobalEditEvent as EventListener);
+
+		return () => {
+			document.removeEventListener(
+				'edit-active-conversation',
+				handleGlobalEditEvent as EventListener
+			);
+		};
+	});
+</script>
+
+<ContextMenuActions bind:open={contextMenuOpen} {actions} disabled={isSelectionMode}>
+	<button
+		class="group flex min-h-9 w-full cursor-pointer items-center justify-between space-x-3 rounded-lg py-1.5 text-left transition-colors hover:bg-foreground/10 {isActive
+			? 'bg-foreground/5 text-accent-foreground'
+			: ''} {contextMenuOpen ? 'bg-foreground/10' : ''} {isSelected
+			? 'bg-primary/10 hover:bg-primary/15'
+			: ''} {isSelectionMode ? 'is-selection-mode' : ''} px-2"
+		{...{ [UI_DATA_ATTRS.CONVERSATION_ROW]: conversation.id }}
+		onauxclick={handleAuxClick}
+		onclick={(e) => handleSelect(e)}
+		onfocusin={handleMouseOver}
+		onfocusout={(e) => {
+			if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+				handleMouseLeave();
+			}
+		}}
+		onmousedown={(e) => handleRowMouseDown(e)}
+		onmouseleave={handleMouseLeave}
+		onmouseover={handleMouseOver}
+	>
+		<div
+			style:padding-left="{depth * FORK_TREE_DEPTH_PADDING}px"
+			class="flex min-w-0 flex-1 items-center gap-2"
+		>
+			{#if isSelectionMode}
+				<div
+					aria-checked={isSelected}
+					aria-label={isSelected ? `Deselect ${conversation.name}` : `Select ${conversation.name}`}
+					class="shrink-0"
+					onclick={(e) => handleCheckboxClick(e)}
+					onkeydown={handleCheckboxKeydown}
+					role="checkbox"
+					tabindex="-1"
+				>
+					<Checkbox
+						aria-label={isSelected
+							? `Deselect ${conversation.name}`
+							: `Select ${conversation.name}`}
+						checked={isSelected}
+					/>
+				</div>
+			{/if}
+
+			{#if depth > 0}
+				<Tooltip.Root>
+					<Tooltip.Trigger>
+						<!-- prevent another nested button element -->
+						{#snippet child({ props })}
+							<a
+								{...props}
+								class="flex shrink-0 items-center text-muted-foreground transition-colors hover:text-foreground"
+								href={RouterService.chat(conversation.forkedFromConversationId)}
+							>
+								<GitBranch class="h-3.5 w-3.5" />
+							</a>
+						{/snippet}
+					</Tooltip.Trigger>
+
+					<Tooltip.Content>
+						<p>See parent conversation</p>
+					</Tooltip.Content>
+				</Tooltip.Root>
+			{/if}
+
+			{#if isLoading}
+				<Tooltip.Root>
+					<Tooltip.Trigger>
+						<div
+							aria-label="Stop generation"
+							class="stop-button flex {ICON_CLASS_DEFAULT} shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground"
+							onclick={handleStop}
+							onkeydown={(e) => e.key === 'Enter' && handleStop(e)}
+							role="button"
+							tabindex="0"
+						>
+							<Loader2 class="loading-icon h-3.5 w-3.5 animate-spin" />
+
+							<Square class="stop-icon hidden h-3 w-3 fill-current text-destructive" />
+						</div>
+					</Tooltip.Trigger>
+
+					<Tooltip.Content>
+						<p>Stop generation</p>
+					</Tooltip.Content>
+				</Tooltip.Root>
+			{/if}
+
+			<TruncatedText class="text-sm font-medium" showTooltip={false} text={conversation.name} />
+		</div>
+
+		{#if !isSelectionMode && renderActionsDropdown}
+			<div class="actions flex items-center">
+				<DropdownMenuActions
+					bind:open={dropdownOpen}
+					{actions}
+					triggerIcon={MoreHorizontal}
+					triggerTooltip="More actions"
+				/>
+			</div>
+		{/if}
+	</button>
+</ContextMenuActions>
+
+<style>
+	button {
+		:global([data-slot='dropdown-menu-trigger']:not([data-state='open'])) {
+			opacity: 0;
+		}
+
+		&:is(:hover) :global([data-slot='dropdown-menu-trigger']),
+		&:focus-within :global([data-slot='dropdown-menu-trigger']) {
+			opacity: 1;
+		}
+		@media (max-width: 768px) {
+			:global([data-slot='dropdown-menu-trigger']) {
+				opacity: 1 !important;
+			}
+		}
+
+		&.is-selection-mode :global([data-slot='dropdown-menu-trigger']) {
+			display: none !important;
+		}
+
+		.stop-button {
+			:global(.stop-icon) {
+				display: none;
+			}
+
+			:global(.loading-icon) {
+				display: block;
+			}
+		}
+
+		&:is(:hover) .stop-button {
+			:global(.stop-icon) {
+				display: block;
+			}
+
+			:global(.loading-icon) {
+				display: none;
+			}
+		}
+	}
+</style>
