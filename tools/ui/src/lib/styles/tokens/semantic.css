@@ -98,17 +98,16 @@
 	--sheen-end: transparent;
 	--text-shadow-engraved: 0 1px 0 var(--white-a85);
 
-	/* elevation: shadow-plugin's smooth stacks (many soft layers rather than one hard one); a control keeps
-	   to three tight layers (nothing past 4px), so buttons sit close to the page */
+	/* elevation: smooth stacks (a few soft layers rather than one hard one) that reach no further than upstream's
+	   Tailwind shadows do: a surface about 20px, like shadow-lg, a raised one about 38px, like shadow-xl; a control
+	   keeps to three tight layers (nothing past 4px), so buttons sit close to the page */
 	--elevation-surface:
-		0 17.54px 23.39px rgb(0 0 0 / 0.04), 0 9.4px 12.5px rgb(0 0 0 / 0.03),
-		0 5.25px 7px rgb(0 0 0 / 0.02), 0 2.79px 3.72px -2px rgb(0 0 0 / 0.01),
-		0 1.16px 1.5px rgb(0 0 0 / 0.01);
+		0 1px 2px rgb(0 0 0 / 0.04), 0 3px 6px -2px rgb(0 0 0 / 0.05), 0 8px 16px -4px rgb(0 0 0 / 0.06);
 	--elevation-control:
 		0 0.5px 1px rgb(0 0 0 / 0.05), 0 1px 2px rgb(0 0 0 / 0.05), 0 2px 4px -1px rgb(0 0 0 / 0.05);
 	--elevation-raised:
-		0 25px 50px rgb(0 0 0 / 0.05), 0 12px 24px rgb(0 0 0 / 0.04), 0 6px 12px rgb(0 0 0 / 0.03),
-		0 3px 6px rgb(0 0 0 / 0.02), 0 1.5px 3px rgb(0 0 0 / 0.02);
+		0 2px 4px rgb(0 0 0 / 0.04), 0 6px 12px -3px rgb(0 0 0 / 0.06),
+		0 16px 28px -6px rgb(0 0 0 / 0.08);
 	/* softer steps: the chat form floats only a little, its shadow close and tight (smooth near layers, nothing
 	   reaching past 6px); a message bubble barely lifts */
 	--elevation-soft:
@@ -201,19 +200,39 @@
 
 	/* the same stacks, deeper, so they still read on a dark page */
 	--elevation-surface:
-		0 17.54px 23.39px rgb(0 0 0 / 0.28), 0 9.4px 12.5px rgb(0 0 0 / 0.21),
-		0 5.25px 7px rgb(0 0 0 / 0.14), 0 2.79px 3.72px -2px rgb(0 0 0 / 0.07),
-		0 1.16px 1.5px rgb(0 0 0 / 0.07);
+		0 1px 2px rgb(0 0 0 / 0.25), 0 3px 6px -2px rgb(0 0 0 / 0.25), 0 8px 16px -4px rgb(0 0 0 / 0.3);
 	--elevation-control:
 		0 0.5px 1px rgb(0 0 0 / 0.3), 0 1px 2px rgb(0 0 0 / 0.25), 0 2px 4px -1px rgb(0 0 0 / 0.25);
 	--elevation-raised:
-		0 25px 50px rgb(0 0 0 / 0.35), 0 12px 24px rgb(0 0 0 / 0.28), 0 6px 12px rgb(0 0 0 / 0.21),
-		0 3px 6px rgb(0 0 0 / 0.14), 0 1.5px 3px rgb(0 0 0 / 0.14);
+		0 2px 4px rgb(0 0 0 / 0.25), 0 6px 12px -3px rgb(0 0 0 / 0.3), 0 16px 28px -6px rgb(0 0 0 / 0.4);
 	--elevation-soft:
 		0 0.5px 1px rgb(0 0 0 / 0.25), 0 1px 3px rgb(0 0 0 / 0.25), 0 2px 6px -2px rgb(0 0 0 / 0.25),
 		0 6px 16px -10px rgb(0 0 0 / 0.35);
 	--elevation-faint: 0 2px 4px rgb(0 0 0 / 0.175), 0 0.5px 1.5px rgb(0 0 0 / 0.21);
 	--elevation-pressed: inset 0 1px 2px var(--black-a40);
+}
+
+/*
+ * Tailwind's shadow-{size} scale, smooth but as tight as upstream's: shadow-plugin's unprefixed import (loaded
+ * before these tokens, for its smooth-shadow-ring utilities and ring colour) maps the scale onto stacks that spread
+ * far past it (its shadow-sm reaches about 65px), so this scale takes the place of its own. Each step is a few soft
+ * layers whose reach matches Tailwind's default for the same step: xs about 3px, sm 5px, md 10px, lg 20px, xl 38px,
+ * 2xl 64px.
+ */
+@theme {
+	--shadow-xs: 0 0.5px 1px rgb(0 0 0 / 0.04), 0 1px 2px rgb(0 0 0 / 0.03);
+	--shadow-sm:
+		0 0.5px 1px rgb(0 0 0 / 0.04), 0 1px 2px rgb(0 0 0 / 0.04), 0 2px 4px -1px rgb(0 0 0 / 0.05);
+	--shadow-md:
+		0 1px 2px rgb(0 0 0 / 0.04), 0 2px 4px -1px rgb(0 0 0 / 0.05), 0 4px 8px -2px rgb(0 0 0 / 0.06);
+	--shadow-lg:
+		0 1px 2px rgb(0 0 0 / 0.04), 0 3px 6px -2px rgb(0 0 0 / 0.05), 0 8px 16px -4px rgb(0 0 0 / 0.07);
+	--shadow-xl:
+		0 2px 4px rgb(0 0 0 / 0.04), 0 6px 12px -3px rgb(0 0 0 / 0.06),
+		0 16px 28px -6px rgb(0 0 0 / 0.08);
+	--shadow-2xl:
+		0 4px 8px -2px rgb(0 0 0 / 0.05), 0 12px 24px -6px rgb(0 0 0 / 0.08),
+		0 28px 48px -12px rgb(0 0 0 / 0.14);
 }
 
 /* roles that do not change with the theme, exposed as Tailwind utilities */
