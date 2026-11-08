@@ -208,7 +208,7 @@ class NemotronNanoV2VLModel(MmprojModel):
         return name, gen
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # RADIO's pos_embed doesn't have .weight suffix, but clip.cpp expects it
+        # RADIO's pos_embed doesn't have .weight suffix, but mtmd expects it
         if "patch_generator.pos_embed" in name:
             # Downsample position embeddings for fixed 512x512 image size
             import torch.nn.functional as F

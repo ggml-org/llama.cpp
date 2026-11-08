@@ -30,7 +30,7 @@ struct htp_binary_kernel_params {
     uint8_t  is_scalar;
     uint8_t  pad[2];
 
-    uint32_t n_threads;
+    uint32_t n_hvx;
     uint32_t rows_per_buffer;
 
     uint32_t src0_row_size_aligned;
@@ -86,9 +86,9 @@ struct htp_binary_vtcm_layout {
     size_t off_src2;
     size_t off_dst;
 
-    size_t src0_bytes_per_thread;
-    size_t src1_bytes_per_thread;
-    size_t dst_bytes_per_thread;
+    size_t src0_bytes_per_hvx;
+    size_t src1_bytes_per_hvx;
+    size_t dst_bytes_per_hvx;
 
     size_t src0_spad_half_size;
     size_t src1_spad_half_size;
@@ -106,8 +106,8 @@ static inline void htp_binary_vtcm_layout_build(
 ) {
     memset(L, 0, sizeof(*L));
 
-    const uint32_t n_threads = kparams->n_threads;
-    if (n_threads == 0) {
+    const uint32_t n_hvx = kparams->n_hvx;
+    if (n_hvx == 0) {
         return;
     }
 
@@ -119,9 +119,9 @@ static inline void htp_binary_vtcm_layout_build(
             return;
         }
 
-        L->src0_bytes_per_thread = 2 * chunk_bytes;
-        L->src1_bytes_per_thread = kparams->is_scalar ? 0 : (2 * (n_srcs - 1) * chunk_bytes);
-        L->dst_bytes_per_thread  = 2 * chunk_bytes;
+        L->src0_bytes_per_hvx = 2 * chunk_bytes;
+        L->src1_bytes_per_hvx = kparams->is_scalar ? 0 : (2 * (n_srcs - 1) * chunk_bytes);
+        L->dst_bytes_per_hvx  = 2 * chunk_bytes;
 
         L->src0_spad_half_size = chunk_bytes;
         L->src1_spad_half_size = kparams->is_scalar ? 0 : chunk_bytes;
@@ -130,9 +130,9 @@ static inline void htp_binary_vtcm_layout_build(
         L->rows_per_buffer = 1;
         L->src1_size = 0;
 
-        const size_t src0_total = n_threads * L->src0_bytes_per_thread;
-        const size_t src1_total = kparams->is_scalar ? 128 : (n_threads * L->src1_bytes_per_thread);
-        const size_t dst_total  = n_threads * L->dst_bytes_per_thread;
+        const size_t src0_total = n_hvx * L->src0_bytes_per_hvx;
+        const size_t src1_total = kparams->is_scalar ? 128 : (n_hvx * L->src1_bytes_per_hvx);
+        const size_t dst_total  = n_hvx * L->dst_bytes_per_hvx;
 
         size_t off = 0;
         VTCM_LAYOUT_ALLOC(off, off_src0, src0_total);
@@ -158,7 +158,7 @@ static inline void htp_binary_vtcm_layout_build(
 
     const size_t rows_per_buffer = (kparams->rows_per_buffer > 0)
         ? kparams->rows_per_buffer
-        : (vtcm_size - static_vtcm_size) / (n_threads * spad_row_total);
+        : (vtcm_size - static_vtcm_size) / (n_hvx * spad_row_total);
     if (rows_per_buffer == 0) {
         return;
     }
@@ -167,24 +167,24 @@ static inline void htp_binary_vtcm_layout_build(
     L->src1_size = kparams->src1_size;
     L->src2_size = kparams->src2_size;
 
-    L->src0_bytes_per_thread = rows_per_buffer * 2 * kparams->src0_row_size_aligned;
-    L->dst_bytes_per_thread  = rows_per_buffer * 2 * kparams->dst_row_size_aligned;
-    L->src1_bytes_per_thread = (kparams->kernel_type == HTP_BINARY_KERNEL_SAME_SHAPE)
+    L->src0_bytes_per_hvx = rows_per_buffer * 2 * kparams->src0_row_size_aligned;
+    L->dst_bytes_per_hvx  = rows_per_buffer * 2 * kparams->dst_row_size_aligned;
+    L->src1_bytes_per_hvx = (kparams->kernel_type == HTP_BINARY_KERNEL_SAME_SHAPE)
         ? rows_per_buffer * 2 * (n_srcs - 1) * kparams->src1_row_size_aligned
         : 0;
 
-    L->src0_spad_half_size = L->src0_bytes_per_thread / 2;
+    L->src0_spad_half_size = L->src0_bytes_per_hvx / 2;
     L->src1_spad_half_size = (kparams->kernel_type == HTP_BINARY_KERNEL_SAME_SHAPE)
         ? rows_per_buffer * kparams->src1_row_size_aligned
         : 0;
-    L->dst_spad_half_size  = L->dst_bytes_per_thread / 2;
+    L->dst_spad_half_size  = L->dst_bytes_per_hvx / 2;
 
-    const size_t src0_total = n_threads * L->src0_bytes_per_thread;
+    const size_t src0_total = n_hvx * L->src0_bytes_per_hvx;
     const size_t src1_total = (kparams->src1_size > 0)
         ? kparams->src1_size
-        : n_threads * L->src1_bytes_per_thread;
+        : n_hvx * L->src1_bytes_per_hvx;
     const size_t src2_total = kparams->src2_size;
-    const size_t dst_total  = n_threads * L->dst_bytes_per_thread;
+    const size_t dst_total  = n_hvx * L->dst_bytes_per_hvx;
 
     size_t off = 0;
     VTCM_LAYOUT_ALLOC(off, off_src0, src0_total);
@@ -200,15 +200,15 @@ static inline bool htp_binary_solve_chunked(
     struct htp_binary_kernel_params * kparams,
     uint32_t total_elems,
     uint32_t elem_size,
-    uint32_t max_threads,
+    uint32_t max_hvx,
     uint32_t n_srcs,
     bool is_scalar,
     size_t vtcm_size
 ) {
     const size_t n_bufs = is_scalar ? 2 : (size_t) n_srcs + 1;
     const size_t scalar_bytes = is_scalar ? 128 : 0;
-    const size_t budget_per_buf = (max_threads > 0 && vtcm_size > scalar_bytes)
-        ? hex_align_down((vtcm_size - scalar_bytes) / (2 * max_threads * n_bufs), 128)
+    const size_t budget_per_buf = (max_hvx > 0 && vtcm_size > scalar_bytes)
+        ? hex_align_down((vtcm_size - scalar_bytes) / (2 * max_hvx * n_bufs), 128)
         : 0;
     const uint32_t max_chunk_bytes = (budget_per_buf > 0 && budget_per_buf < 32768) ? (uint32_t) budget_per_buf : 32768u;
     const uint32_t max_chunk_elems = max_chunk_bytes / elem_size;
@@ -217,16 +217,16 @@ static inline bool htp_binary_solve_chunked(
     }
 
     const uint32_t min_chunk_elems = 256 < max_chunk_elems ? 256 : max_chunk_elems;
-    const uint32_t target_chunk_elems = hex_round_up((total_elems + (2 * max_threads) - 1) / (2 * max_threads), 32);
+    const uint32_t target_chunk_elems = hex_round_up((total_elems + (2 * max_hvx) - 1) / (2 * max_hvx), 32);
     const uint32_t chunk_size  = (target_chunk_elems < min_chunk_elems) ? min_chunk_elems
                                : (target_chunk_elems > max_chunk_elems) ? max_chunk_elems
                                : target_chunk_elems;
     const uint32_t chunk_bytes  = hex_round_up(chunk_size * elem_size, 128);
     const uint32_t total_chunks = (total_elems + chunk_size - 1) / chunk_size;
-    const uint32_t n_threads    = (total_chunks >= 2) ? (max_threads < total_chunks ? max_threads : total_chunks) : 1;
+    const uint32_t n_hvx        = (total_chunks >= 2) ? (max_hvx < total_chunks ? max_hvx : total_chunks) : 1;
 
     kparams->kernel_type           = HTP_BINARY_KERNEL_CHUNKED;
-    kparams->n_threads             = n_threads;
+    kparams->n_hvx                 = n_hvx;
     kparams->n_srcs                = (uint8_t) n_srcs;
     kparams->rows_per_buffer       = 1;
     kparams->src1_row_size_aligned = is_scalar ? 0 : kparams->src0_row_size_aligned;

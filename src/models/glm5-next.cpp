@@ -185,9 +185,9 @@ void llama_model_glm5_next::load_arch_tensors(llama_model_loader & ml) {
 
 std::unique_ptr<llm_graph_context> llama_model_glm5_next::build_arch_graph(const llm_graph_params & params) const {
     if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
-        return std::make_unique<graph_mtp>(*this, params);
+        return std::make_unique<graph_mtp>(params);
     }
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
 // Causal conv1d over one of Q/K/V
@@ -524,12 +524,12 @@ ggml_tensor * llama_model_glm5_next::graph::build_hc_post(
 }
 
 // construct the graph helpers without building the trunk, so graph_mtp can reuse them
-llama_model_glm5_next::graph::graph(const llama_model & model, const llm_graph_params & params, no_build) :
-    llm_build_delta_net_base(params), model(model) {
+llama_model_glm5_next::graph::graph(const llm_graph_params & params, no_build) :
+    llm_build_delta_net_base(params) {
 }
 
-llama_model_glm5_next::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params) :
-    graph(model, params, no_build{}) {
+llama_model_glm5_next::graph_mtp::graph_mtp(const llm_graph_params & params) :
+    graph(params, no_build{}) {
 
     GGML_ASSERT(hparams.n_layer_nextn > 0 && "GLM5-Next MTP requires n_layer_nextn > 0");
     GGML_ASSERT(hparams.n_layer_nextn == 1 && "GLM5-Next MTP currently supports a single NextN block");
@@ -658,8 +658,8 @@ llama_model_glm5_next::graph_mtp::graph_mtp(const llama_model & model, const llm
     res->t_logits = cur;
 }
 
-llama_model_glm5_next::graph::graph(const llama_model & model, const llm_graph_params & params) :
-    llm_build_delta_net_base(params), model(model) {
+llama_model_glm5_next::graph::graph(const llm_graph_params & params) :
+    llm_build_delta_net_base(params) {
 
     ggml_tensor * cur;
 

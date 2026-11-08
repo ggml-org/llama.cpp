@@ -3754,7 +3754,7 @@ void gemm_kernel_i8mxfp4_m1(size_t          blk_len,
     using blk_type           = nrow_block_mxfp4<NB_COLS>;
 
     GGML_ASSERT(blk_len == K_TILE);
-    GGML_ASSERT(count_m == 1);
+    GGML_ASSERT(count_m >= 1);
     GGML_UNUSED(quant_b_zp);
 
     const size_t a_blk_stride  = q8_blk_size(blk_len, true);
@@ -3923,7 +3923,7 @@ void gemm_kernel_i8mxfp4_m1(size_t          blk_len,
                 :
                 : [BCK] "r"(cnt), [NBLKS] "r"(nblks), [pA] "r"(quant_a_ptr), [pB] "r"(QuantBDataPtr), [pC] "r"(CPtr)
                 : "cc", "memory", "t0", "t1", "t2", "t3", "t4", "f0", "s2", "s3", "s4", "s5", "s6", "s7", "v0", "v1",
-                  "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v16", "v17", "v18", "v19",
+                  "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19",
                   "v20", "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31");
         }
     }
@@ -3943,7 +3943,7 @@ void gemm_kernel_i8mxfp4_m4(size_t          blk_len,
     using blk_type           = nrow_block_mxfp4<NB_COLS>;
 
     GGML_ASSERT(blk_len == K_TILE);
-    GGML_ASSERT(count_m == 4);
+    GGML_ASSERT(count_m >= 4);
     GGML_UNUSED(quant_b_zp);
 
     const size_t a_blk_stride  = q8_blk_size(blk_len, true);
@@ -5687,20 +5687,10 @@ size_t gemm_kernel_i8mxfp4(size_t          blk_len,
                            size_t          k_blks,
                            size_t          ldc) {
     if (count_m >= 4) {
-#if 1
-        gemm_kernel_i8mxfp4_mrow_ref<4, 32>(blk_len, quant_a_ptr, quant_b_data, quant_b_zp, c_ptr, count_m, count_n,
-                                            k_blks, ldc);
-#else
         gemm_kernel_i8mxfp4_m4(blk_len, quant_a_ptr, quant_b_data, quant_b_zp, c_ptr, count_m, count_n, k_blks, ldc);
-#endif
         return 4;
     } else {
-#if 1
-        gemm_kernel_i8mxfp4_mrow_ref<1, 32>(blk_len, quant_a_ptr, quant_b_data, quant_b_zp, c_ptr, count_m, count_n,
-                                            k_blks, ldc);
-#else
         gemm_kernel_i8mxfp4_m1(blk_len, quant_a_ptr, quant_b_data, quant_b_zp, c_ptr, count_m, count_n, k_blks, ldc);
-#endif
         return 1;
     }
 }
