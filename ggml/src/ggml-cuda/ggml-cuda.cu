@@ -184,6 +184,11 @@ static int ggml_cuda_op_offload_min_batch() {
     return min_batch;
 }
 
+static bool ggml_cuda_upload_stream_enabled() {
+    static const bool enabled = ggml_cuda_env_flag("GGML_CUDA_UPLOAD_STREAM");
+    return enabled;
+}
+
 static cudaError_t ggml_cuda_device_malloc(void ** ptr, size_t size, int device) {
     ggml_cuda_set_device(device);
     cudaError_t err;
@@ -2908,8 +2913,7 @@ static void ggml_backend_cuda_set_tensor_async(ggml_backend_t backend, ggml_tens
 
     GGML_ASSERT(buf->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device) && "unsupported buffer type");
 
-    static const bool upload_stream = std::getenv("GGML_CUDA_UPLOAD_STREAM") != nullptr;
-    if (!upload_stream) {
+    if (!ggml_cuda_upload_stream_enabled()) {
         CUDA_CHECK(cudaMemcpyAsync((char *) tensor->data + offset, data, size, cudaMemcpyHostToDevice, cuda_ctx->stream()));
         return;
     }

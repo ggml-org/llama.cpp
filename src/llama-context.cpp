@@ -3027,10 +3027,6 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
         st.ids = ids;
     }
 
-    // GGML_MOE_TRACE: H2D bytes copied for this node (cached experts are D2D and not counted)
-    static const bool moe_trace = std::getenv("GGML_MOE_TRACE") != nullptr;
-    size_t trace_bytes = 0;
-    size_t trace_cached = 0;
     // group consecutive experts and copy them together
     for (int64_t first = 0; first < n_expert; ) {
         if (!st.used[first]) {
@@ -3050,10 +3046,8 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
                 e++;
                 continue;
             }
-            trace_cached += (size_t) n * expert_size;
             if (next < e) {
                 ggml_backend_tensor_set_async(backend, dst, (const uint8_t *) src->data + next*expert_size, next*expert_size, (e - next)*expert_size);
-                trace_bytes += (size_t) (e - next) * expert_size;
             }
             e   += n;
             next = e;
@@ -3065,16 +3059,11 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
         const size_t size    = (last + 1 - next)*expert_size + padding;
         if (size > 0) {
             ggml_backend_tensor_set_async(backend, dst, (const uint8_t *) src->data + offset, offset, size);
-            trace_bytes += size;
         }
 
         first = last + 1;
     }
 
-    if (moe_trace) {
-        fprintf(stderr, "moe-trace: node %p bytes %zu cached %zu\n", (const void *) src, trace_bytes, trace_cached);
-        fflush(stderr);
-    }
     return true;
 }
 

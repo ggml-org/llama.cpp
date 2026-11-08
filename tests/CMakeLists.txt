@@ -424,6 +424,6 @@ if (TARGET gguf-model-data)
 endif()
 
 if (GGML_CUDA)
-    llama_build(test-cuda-upload-stream.cpp LINK ggml ggml-cuda)
-    llama_test(test-cuda-upload-stream NAME test-cuda-upload-stream LABEL cuda)
+    llama_build(test-cuda-upload-stream.cpp LINK ggml)
+    llama_test(test-cuda-upload-stream NAME test-cuda-upload-stream)
 endif()
