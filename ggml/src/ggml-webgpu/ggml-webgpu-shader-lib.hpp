@@ -2030,7 +2030,7 @@ class ggml_webgpu_shader_lib {
 
     webgpu_pipeline get_pad_pipeline(const ggml_webgpu_shader_lib_context & context) {
         ggml_webgpu_pad_pipeline_key key = {};
-        key.circular                     = ggml_get_op_params_i32(context.dst, 8) != 0;
+        key.circular = context.dst->op == GGML_OP_ROLL || ggml_get_op_params_i32(context.dst, 8) != 0;
 
         auto it = pad_pipelines.find(key);
         if (it != pad_pipelines.end()) {

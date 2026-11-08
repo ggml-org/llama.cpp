@@ -938,16 +938,18 @@ static webgpu_encoded_op ggml_webgpu_pad(webgpu_context & ctx, ggml_tensor * src
         (uint32_t) dst->ne[1],
         (uint32_t) dst->ne[2],
         (uint32_t) dst->ne[3],
-        // Pad sizes
-        (uint32_t) ggml_get_op_params_i32(dst, 0),
-        (uint32_t) ggml_get_op_params_i32(dst, 1),
-        (uint32_t) ggml_get_op_params_i32(dst, 2),
-        (uint32_t) ggml_get_op_params_i32(dst, 3),
-        (uint32_t) ggml_get_op_params_i32(dst, 4),
-        (uint32_t) ggml_get_op_params_i32(dst, 5),
-        (uint32_t) ggml_get_op_params_i32(dst, 6),
-        (uint32_t) ggml_get_op_params_i32(dst, 7),
     };
+    for (int i = 0; i < 4; i++) {
+        if (dst->op == GGML_OP_ROLL) {
+            // Circular padding with unchanged dimensions implements a roll.
+            const int64_t shift = ggml_get_op_params_i32(dst, i);
+            params.push_back((uint32_t) (shift < 0 ? shift + src->ne[i] : shift));
+            params.push_back(0);
+        } else {
+            params.push_back((uint32_t) ggml_get_op_params_i32(dst, 2 * i));
+            params.push_back((uint32_t) ggml_get_op_params_i32(dst, 2 * i + 1));
+        }
+    }
 
     std::vector<wgpu::BindGroupEntry> entries = {
         ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src),
@@ -3578,6 +3580,7 @@ static std::optional<webgpu_encoded_op> ggml_webgpu_encode(webgpu_context ctx,
             }
         case GGML_OP_ARANGE:
             return ggml_webgpu_arange(ctx, node);
+        case GGML_OP_ROLL:
         case GGML_OP_PAD:
             return ggml_webgpu_pad(ctx, src0, node);
         case GGML_OP_ARGMAX:
@@ -5113,6 +5116,7 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
         case GGML_OP_ARANGE:
             supports_op = op->type == GGML_TYPE_F32 && ggml_is_contiguous(op);
             break;
+        case GGML_OP_ROLL:
         case GGML_OP_PAD:
             supports_op = op->type == GGML_TYPE_F32 && src0->type == GGML_TYPE_F32;
             break;
