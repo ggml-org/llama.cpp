@@ -253,7 +253,7 @@ struct llama_grammar * llama_grammar_init_impl(
         size_t n_rules,
         size_t start_rule_index);
 
-struct llama_grammar * llama_grammar_init_impl(
+LLAMA_API struct llama_grammar * llama_grammar_init_impl(
         const struct llama_vocab * vocab,
                       const char * grammar_str,
                       const char * grammar_root,
@@ -263,21 +263,21 @@ struct llama_grammar * llama_grammar_init_impl(
                const llama_token * trigger_tokens,
                             size_t num_trigger_tokens);
 
-void llama_grammar_free_impl(struct llama_grammar * grammar);
+LLAMA_API void llama_grammar_free_impl(struct llama_grammar * grammar);
 
 // forget the interned grammars of a vocab that is being destroyed
 void llama_grammar_programs_drop(const struct llama_vocab * vocab);
 
 struct llama_grammar * llama_grammar_clone_impl(const struct llama_grammar & grammar);
 
-void llama_grammar_reset_impl(struct llama_grammar & grammar);
+LLAMA_API void llama_grammar_reset_impl(struct llama_grammar & grammar);
 
 // TODO: move the API below as member functions of llama_grammar
-void llama_grammar_apply_impl(
+LLAMA_API void llama_grammar_apply_impl(
         const struct llama_grammar & grammar,
             llama_token_data_array * cur_p);
 
-std::vector<uint32_t> llama_grammar_get_allowed_tokens(const llama_grammar & grammar);
+LLAMA_API std::vector<uint32_t> llama_grammar_get_allowed_tokens(const llama_grammar & grammar);
 
 llama_grammar_mask_packed llama_grammar_get_allowed_packed(const llama_grammar & grammar);
 
@@ -286,7 +286,7 @@ bool llama_grammar_get_allowed_packed_cached(const llama_grammar & grammar, llam
 
 bool llama_grammar_get_allowed_tokens_trie(const llama_grammar & grammar, std::vector<uint32_t> & mask, size_t max_work = 256 * 1024);
 
-void llama_grammar_accept_impl(
+LLAMA_API void llama_grammar_accept_impl(
               struct llama_grammar & grammar,
                        llama_token   token);
 

@@ -25,7 +25,7 @@ static inline bool ggml_token_mask_valid_layout(
         desc->ne[1] == logits->ne[1];
 }
 
-#if defined(__CUDACC__) || defined(__HIPCC__)
+#if defined(__CUDACC__) || defined(__HIPCC__) || defined(__MUSACC__)
 #define GGML_TOKEN_MASK_HD __host__ __device__
 #else
 #define GGML_TOKEN_MASK_HD
