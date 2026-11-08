@@ -5708,6 +5708,27 @@ struct test_mul_mat_prec_src1_bf16 : public test_mul_mat {
     }
 };
 
+// src1 GGML_PREC_BF16 with src0 values outside the F16 range: the F32 src0 tiles must not be downcast to F16
+struct test_mul_mat_prec_src1_bf16_src0 : public test_mul_mat_prec_src1_bf16 {
+    test_mul_mat_prec_src1_bf16_src0(ggml_type type_a = GGML_TYPE_F32, int64_t m = 64, int64_t n = 32, int64_t k = 256,
+            std::array<int64_t, 2> bs = {1, 1},
+            std::array<int64_t, 2> nr = {1, 1})
+        : test_mul_mat_prec_src1_bf16(type_a, m, n, k, bs, nr) {}
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "a") == 0) {
+                init_tensor_uniform(t, -1e6f, 1e6f);
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MUL_MAT_PREC_SRC1_BF16_SRC0";
+    }
+};
+
 // src1 GGML_PREC_F32: the implementation can not convert src1 or the F32 src0 tiles down to F16 or TF32
 struct test_mul_mat_prec_src1_f32 : public test_mul_mat {
     test_mul_mat_prec_src1_f32(ggml_type type_a = GGML_TYPE_F32, int64_t m = 64, int64_t n = 32, int64_t k = 256,
@@ -11710,6 +11731,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_mul_mat_prec_src1_bf16(type_a,  67,  33, k_partial));
         test_cases.emplace_back(new test_mul_mat_prec_src1_bf16(type_a,  64,  32, 256, {2, 3}, {2, 1}));
     }
+
+    // src0 range: an F32 src0 must not be downcast to F16 when src1 requests BF16
+    test_cases.emplace_back(new test_mul_mat_prec_src1_bf16_src0(GGML_TYPE_F32,  64,   1, 256));
+    test_cases.emplace_back(new test_mul_mat_prec_src1_bf16_src0(GGML_TYPE_F32,  64,   8, 256));
+    test_cases.emplace_back(new test_mul_mat_prec_src1_bf16_src0(GGML_TYPE_F32,  64,  32, 256));
+    test_cases.emplace_back(new test_mul_mat_prec_src1_bf16_src0(GGML_TYPE_F32, 128, 512, 512));
+    test_cases.emplace_back(new test_mul_mat_prec_src1_bf16_src0(GGML_TYPE_F32,  67,  33, 100));
+    test_cases.emplace_back(new test_mul_mat_prec_src1_bf16_src0(GGML_TYPE_F32,  64,  32, 256, {2, 3}, {2, 1}));
 
     // src1 precision: same shapes with GGML_PREC_F32, which the backends must not round down to F16 or TF32
     for (ggml_type type_a : {GGML_TYPE_F32, GGML_TYPE_F16}) {
