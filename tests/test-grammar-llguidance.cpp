@@ -1144,6 +1144,17 @@ start: /[A-Z ]*/)";
     assert(cur[tok_arr.selected].id == tok_eos);
 }
 
+// llguidance ends a decode only on llama_vocab_eot(), so it must be "<|eot_id|>" and not "<|end_of_text|>"
+static void test_eot_token(void) {
+    const auto eot_ids = common_tokenize(vocab, "<|eot_id|>", false, true);
+    if (eot_ids.size() != 1) {
+        return; // vocab has no <|eot_id|>
+    }
+    fprintf(stderr, "Testing EOT token: llama_vocab_eot = %d, <|eot_id|> = %d\n",
+            llama_vocab_eot(vocab), eot_ids[0]);
+    assert(llama_vocab_eot(vocab) == eot_ids[0]);
+}
+
 int main(int argc, const char ** argv) {
     fprintf(stdout, "Running llguidance integration tests...\n");
 
@@ -1195,6 +1206,8 @@ int main(int argc, const char ** argv) {
     test_json_schema();
 
     test_sampler_chain();
+
+    test_eot_token();
 
     llama_free(ctx);
     llama_model_free(model);
