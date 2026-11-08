@@ -12056,7 +12056,7 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                        op->src[1]->ne[1] <= INT_MAX && op->ne[1] <= INT_MAX && op->ne[2] <= INT_MAX - 64;
             }
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
-            if ((ggml_get_op_params_i32(op, 3) == GGML_PREC_BF16 || ggml_get_op_params_i32(op, 3) == GGML_PREC_F32) &&
+            if ((ggml_prec_get_src(op, 1) == GGML_PREC_BF16 || ggml_prec_get_src(op, 1) == GGML_PREC_F32) &&
                 use_adreno_moe_kernels(backend_ctx, op->src[0])) {
                 return false;
             }

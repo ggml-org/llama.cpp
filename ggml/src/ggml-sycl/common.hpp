@@ -121,7 +121,7 @@ extern int g_ggml_sycl_dynamic_required_precision;
 // [TAG_GGML_PREC] src1 precision request of the MUL_MAT/MUL_MAT_ID op dst
 static inline int32_t ggml_sycl_src1_prec(const ggml_tensor * dst) {
     return g_ggml_sycl_dynamic_required_precision == GGML_SYCL_DYNAMIC_PRECISION_F16 ? GGML_PREC_UNDEFINED :
-                                                                                       dst->op_params[3];
+                                                                                       ggml_prec_get_src(dst, 1);
 }
 
 // [TAG_GGML_PREC] the library GEMM and dmmv may convert src1 of the MUL_MAT/MUL_MAT_ID op dst to f16

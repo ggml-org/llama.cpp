@@ -3310,7 +3310,7 @@ inline void ggml_sycl_op_mul_mat_sycl(
     // the f16 route converts src1 to f16 [TAG_GGML_PREC]
     use_fp16 = use_fp16 && ggml_sycl_src1_f16_ok(dst);
     if ((src0->type == GGML_TYPE_F16 || ggml_is_quantized(src0->type)) && use_fp16 && ggml_is_contiguous(src0) &&
-        row_diff == src0->ne[1] && dst->op_params[0] == GGML_PREC_DEFAULT) {
+        row_diff == src0->ne[1] && ggml_prec_get_acc(dst) == GGML_PREC_UNDEFINED) {
         ggml_sycl_pool_alloc<sycl::half> src1_as_f16(ctx.pool());
         if (src1->type != GGML_TYPE_F16) {
             scope_op_debug_print scope_dbg_print(__func__, "/to_fp16_sycl", dst, /*num_src=*/2,
@@ -6890,7 +6890,7 @@ static bool mul_mat_uses_onednn(int device, ggml_tensor * dst) {
 #endif
 #ifdef GGML_SYCL_F16
     if ((src0->type == GGML_TYPE_F16 || ggml_is_quantized(src0->type)) && ggml_is_contiguous(src0) &&
-        dst->op_params[0] == GGML_PREC_DEFAULT) {
+        ggml_prec_get_acc(dst) == GGML_PREC_UNDEFINED) {
         return true;
     }
 #endif
