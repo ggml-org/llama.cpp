@@ -79,31 +79,30 @@
 	--glass-shadow: var(--sidebar-shadow);
 }
 
-/* Elevated surfaces (cards, floating bars, thumbnails): an elevation token with the hairline ring baked in as its
-   last layer, like shadow-plugin's smooth-shadow-ring-*, but on our tokens, so the shadow deepens in dark mode. The
-   ring reads --smooth-ring-color (black 5%, white 18% in dark); tint it with smooth-ring-*. Never pair these with a
-   border: the ring is the edge. */
+/* Elevated surfaces (cards, floating bars, thumbnails): an elevation token with the hairline ring (--elevation-ring,
+   black 5%, white 18% in dark) baked in as its last layer, so the edge melts into the shadow and the shadow deepens
+   in dark mode. Never pair these with a border: the ring is the edge. */
 @utility elevated-control {
 	box-shadow:
 		var(--elevation-control),
-		0 0 0 var(--smooth-ring-width, 1px) var(--smooth-ring-color);
+		0 0 0 var(--elevation-ring-width) var(--elevation-ring);
 }
 
 @utility elevated-surface {
 	box-shadow:
 		var(--elevation-surface),
-		0 0 0 var(--smooth-ring-width, 1px) var(--smooth-ring-color);
+		0 0 0 var(--elevation-ring-width) var(--elevation-ring);
 }
 
 @utility elevated-raised {
 	box-shadow:
 		var(--elevation-raised),
-		0 0 0 var(--smooth-ring-width, 1px) var(--smooth-ring-color);
+		0 0 0 var(--elevation-ring-width) var(--elevation-ring);
 }
 
 /* Floating panel (menus, popovers, drawers): frosted fill, faint rim, lifted shadow. The edge is the hairline ring
-   baked into the shadow (as shadow-plugin's smooth-shadow-ring does), not the border, so the two never draw a double
-   edge; the border stays transparent so the panel keeps its size. */
+   baked into the shadow, not the border, so the two never draw a double edge; the border stays transparent so the
+   panel keeps its size. */
 @utility matte-float {
 	background-color: var(--float-background, var(--float-panel-background));
 	border-color: transparent;
@@ -112,7 +111,7 @@
 	box-shadow:
 		inset 0 0 0 1px var(--float-panel-highlight),
 		var(--float-panel-shadow),
-		0 0 0 var(--smooth-ring-width, 1px) var(--float-panel-edge);
+		0 0 0 var(--elevation-ring-width) var(--float-panel-edge);
 }
 
 /* Dialogs float over the page colour rather than the raised one. */

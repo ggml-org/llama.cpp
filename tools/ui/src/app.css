@@ -1,7 +1,4 @@
 @import 'tailwindcss';
-/* shadow-plugin for its smooth-shadow-ring utilities and ring colour; the shadow-{size} scale it also maps is replaced by
-   a tighter one in tokens/semantic.css */
-@import 'shadow-plugin/unprefixed';
 @source '.';
 /* stories may use classes the app does not, so tailwind scans them too */
 @source '../tests/stories';

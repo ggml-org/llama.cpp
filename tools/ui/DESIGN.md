@@ -873,9 +873,8 @@ matches the role of the surface instead of combining raw shadows.
   those slots at one component's tokens, so each component needs a single class.
 - **`matte-float`** and **`matte-float-modal`:** menus, popovers, select lists, hover cards
   and drawers, and dialogs over the page colour. An 86% opaque panel with blur, a faint edge
-  and a deeper shadow. The edge is a hairline ring baked into the shadow, as shadow-plugin's
-  `smooth-shadow-ring-*` draws it, never a border next to a shadow, which would read as a
-  double edge; the panel's border stays transparent so its size does not change. In light mode dialogs are solid white instead: over the dimmed page a
+  and a deeper shadow. The edge is a hairline ring baked into the shadow as its last layer,
+  never a border next to a shadow, which would read as a double edge; the panel's border stays transparent so its size does not change. In light mode dialogs are solid white instead: over the dimmed page a
   translucent white turns grey.
 - **`matte-key`:** buttons, selects, toggles and tabs. The matte finish: on top of the
   button's own fill it adds a light blur, a fill barely lighter at the top (`--key-sheen`, 12% white in light mode, 2% in dark)
@@ -889,10 +888,10 @@ matches the role of the surface instead of combining raw shadows.
   it is a frosted, translucent red (`red-500` at 58%) whose edge is a soft tint of the red, never
   a lighter rim.
 - **`elevated-control`**, **`elevated-surface`** and **`elevated-raised`:** cards, floating
-  bars and thumbnails. An elevation token with a 1px hairline ring baked in as its last layer,
-  like shadow-plugin's `smooth-shadow-ring-*` but on our tokens, so the shadow deepens in dark
-  mode. The ring reads `--smooth-ring-color`; tint it with `smooth-ring-*`. They replace a
-  border plus a shadow; never add a border to them.
+  bars and thumbnails. An elevation token with a hairline ring baked in as its last layer, so
+  the edge melts into the shadow and the shadow deepens in dark mode. The ring is
+  `--elevation-ring` (black 5%, white 18% in dark) at `--elevation-ring-width` (1px). They
+  replace a border plus a shadow; never add a border to them.
 - **`matte-well`:** inputs, textareas and checkboxes. A shallow inset shade so
   fields read as recessed.
 - **`matte-sheen`** and **`matte-sheen-solid`:** the user message bubble and badges. An
@@ -902,13 +901,17 @@ matches the role of the surface instead of combining raw shadows.
   an even hairline, with no glow.
 
 The elevation tokens are `elevation-surface`, `elevation-control`, `elevation-raised`,
-`elevation-inset` and `elevation-tooltip`. The drop shadows are shadow-plugin's smooth
-stacks, five or so soft layers instead of one hard one: `elevation-surface` is its `md`,
-`elevation-raised` its `lg`, and `elevation-control` three tight layers reaching no further than
-4px, so buttons and other controls sit close to the page. Two softer steps sit below them: `elevation-soft` for the chat form,
+`elevation-inset` and `elevation-tooltip`. The drop shadows are smooth stacks: a few soft
+layers instead of one hard one, the closest the darkest and smallest, each further layer about
+twice the offset and blur and fainter, the far ones pulled in with a negative spread, so the
+shadow fades out instead of ending in a visible edge. They stay as close as upstream's
+Tailwind shadows: `elevation-surface` reaches about 20px, like `shadow-lg`, `elevation-raised`
+about 38px, like `shadow-xl`, and `elevation-control` is three tight layers reaching no further
+than 4px, so buttons and other controls sit close to the page. Two softer steps sit below them: `elevation-soft` for the chat form,
 which floats only a little, and `elevation-faint` for the user message bubble, which barely
-lifts. Dark mode deepens the same stacks. The plugin is imported
-unprefixed, so Tailwind's own `shadow-xs` to `shadow-2xl` draw the smooth stacks too. Every
+lifts. Dark mode deepens the same stacks. Tailwind's own `shadow-xs` to `shadow-2xl` are
+built the same way (`tokens/semantic.css`), each reaching about as far as Tailwind's default for
+it. Every
 button carries `elevation-control` (`--button-shadow`); a ghost button only while hovered. Overlays behind dialogs are `surface-overlay`
 with a 2px blur.
 
