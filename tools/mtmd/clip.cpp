@@ -1686,6 +1686,7 @@ struct clip_model_loader {
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge);
                         get_u32(KEY_IMAGE_MIN_PIXELS, hparams.image_min_pixels);
                         get_u32(KEY_IMAGE_MAX_PIXELS, hparams.image_max_pixels);
+                        hparams.set_limit_image_tokens();
                         hparams.warmup_image_size = hparams.image_size;
                     } break;
                 case PROJECTOR_TYPE_PARAKEET:
@@ -1780,6 +1781,7 @@ struct clip_model_loader {
                         hparams.image_resize_algo = RESIZE_ALGO_BILINEAR;
                         get_u32(KEY_IMAGE_MIN_PIXELS, hparams.image_min_pixels);
                         get_u32(KEY_IMAGE_MAX_PIXELS, hparams.image_max_pixels);
+                        hparams.set_limit_image_tokens();
                         hparams.set_warmup_n_tokens(16*16);
                     } break;
                 case PROJECTOR_TYPE_PIXTRAL:
@@ -1828,6 +1830,7 @@ struct clip_model_loader {
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge);
                         get_u32(KEY_IMAGE_MIN_PIXELS, hparams.image_min_pixels);
                         get_u32(KEY_IMAGE_MAX_PIXELS, hparams.image_max_pixels);
+                        hparams.set_limit_image_tokens();
                         hparams.set_warmup_n_tokens(46*46); // avoid OOM on warmup
                     } break;
                 case PROJECTOR_TYPE_DOTS3NOTE_V:
@@ -1837,6 +1840,7 @@ struct clip_model_loader {
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge);
                         get_u32(KEY_IMAGE_MIN_PIXELS, hparams.image_min_pixels);
                         get_u32(KEY_IMAGE_MAX_PIXELS, hparams.image_max_pixels);
+                        hparams.set_limit_image_tokens();
                         get_u32(KEY_VISION_N_EXPERT_USED, hparams.n_expert_used);
                         hparams.set_warmup_n_tokens(46*46); // avoid OOM on warmup
                     } break;
@@ -1999,6 +2003,7 @@ struct clip_model_loader {
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge);
                         get_u32(KEY_IMAGE_MIN_PIXELS, hparams.image_min_pixels);
                         get_u32(KEY_IMAGE_MAX_PIXELS, hparams.image_max_pixels);
+                        hparams.set_limit_image_tokens();
                         hparams.set_warmup_n_tokens(46*46); // avoid OOM on warmup
                     } break;
                 case PROJECTOR_TYPE_SENSENOVA_U1:
@@ -2116,6 +2121,7 @@ struct clip_model_loader {
                         hparams.wa_pattern_mode.assign(pat.begin(), pat.end());
                         get_u32(KEY_IMAGE_MIN_PIXELS, hparams.image_min_pixels);
                         get_u32(KEY_IMAGE_MAX_PIXELS, hparams.image_max_pixels);
+                        hparams.set_limit_image_tokens();
                         hparams.set_warmup_n_tokens(46*46); // avoid OOM on warmup
                     } break;
                 case PROJECTOR_TYPE_STEP3VL:
@@ -2374,6 +2380,7 @@ struct clip_model_loader {
                         hparams.image_resize_algo = RESIZE_ALGO_BICUBIC;
                         get_u32(KEY_IMAGE_MIN_PIXELS, hparams.image_min_pixels);
                         get_u32(KEY_IMAGE_MAX_PIXELS, hparams.image_max_pixels);
+                        hparams.set_limit_image_tokens();
 
                         hparams.set_warmup_n_tokens(28*28); // avoid OOM on warmup
                     } break;
@@ -2455,6 +2462,7 @@ struct clip_model_loader {
                         get_u32(KEY_WIN_ATTN_PATTERN, hparams.n_wa_pattern, false);
                         get_u32(KEY_IMAGE_MIN_PIXELS, hparams.image_min_pixels);
                         get_u32(KEY_IMAGE_MAX_PIXELS, hparams.image_max_pixels);
+                        hparams.set_limit_image_tokens();
                         hparams.set_warmup_n_tokens(46 * 46);
                         if (hparams.rope_theta <= 0.0f) {
                             hparams.rope_theta = 10000.0f;
