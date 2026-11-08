@@ -11,12 +11,8 @@ namespace {
 
 using gemma4 = common_chat_peg_gemma4_mapper;
 
-// Parsers for a tool's arguments in the Gemma 4 call syntax, shaped by the parameter schema
-// rather than converted from it. Only the shape is enforced: object keys are accepted in
-// alphabetical order, since the template renders arguments through dictsort, optional keys are
-// skipped in place instead of being moved to the end, and nested objects and arrays are shaped
-// the same way. Every other value is accepted as written, so the schema guides the model without
-// forcing values it cannot see. The grammar is derived from these parsers like any other.
+// Gemma 4 uses different delimiters and cannot leverage the json-schema-to-grammar implementation.
+// This implements a subset to enforce properties.
 class gemma4_schema_parser {
     common_chat_peg_builder & p_;
 
@@ -27,12 +23,12 @@ class gemma4_schema_parser {
 
     common_peg_parser visit(const common_chat_schema & node, const std::string & name) {
         switch (node.kind()) {
-            case common_chat_schema::KIND_REF:    return visit_ref(static_cast<const common_chat_schema_ref &>(node), name);
-            case common_chat_schema::KIND_ANY_OF: return visit_any_of(static_cast<const common_chat_schema_any_of &>(node), name);
-            case common_chat_schema::KIND_ALL_OF: return visit_all_of(static_cast<const common_chat_schema_all_of &>(node), name);
-            case common_chat_schema::KIND_ARRAY:  return visit_array(static_cast<const common_chat_schema_array &>(node), name);
-            case common_chat_schema::KIND_TUPLE:  return visit_tuple(static_cast<const common_chat_schema_tuple &>(node), name);
-            case common_chat_schema::KIND_OBJECT: return visit_object(static_cast<const common_chat_schema_object &>(node), name);
+            case common_chat_schema::KIND_REF:    return visit_ref(node.as<common_chat_schema_ref>(), name);
+            case common_chat_schema::KIND_ANY_OF: return visit_any_of(node.as<common_chat_schema_any_of>(), name);
+            case common_chat_schema::KIND_ALL_OF: return visit_all_of(node.as<common_chat_schema_all_of>(), name);
+            case common_chat_schema::KIND_ARRAY:  return visit_array(node.as<common_chat_schema_array>(), name);
+            case common_chat_schema::KIND_TUPLE:  return visit_tuple(node.as<common_chat_schema_tuple>(), name);
+            case common_chat_schema::KIND_OBJECT: return visit_object(node.as<common_chat_schema_object>(), name);
             default:                              return p_.ref("gemma4-value");
         }
     }
@@ -42,16 +38,16 @@ class gemma4_schema_parser {
     static bool shaped(const common_chat_schema & node) {
         switch (node.kind()) {
             case common_chat_schema::KIND_REF:
-                return static_cast<const common_chat_schema_ref &>(node).target != nullptr;
+                return node.as<common_chat_schema_ref>().target != nullptr;
             case common_chat_schema::KIND_ANY_OF:
-                for (const auto & child : static_cast<const common_chat_schema_any_of &>(node).children) {
+                for (const auto & child : node.as<common_chat_schema_any_of>().children) {
                     if (shaped(*child)) {
                         return true;
                     }
                 }
                 return false;
             case common_chat_schema::KIND_ALL_OF: {
-                const auto & children = static_cast<const common_chat_schema_all_of &>(node).children;
+                const auto & children = node.as<common_chat_schema_all_of>().children;
                 return children.size() == 1 && shaped(*children[0]);
             }
             case common_chat_schema::KIND_ARRAY:
