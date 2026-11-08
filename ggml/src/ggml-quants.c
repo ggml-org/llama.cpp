@@ -3325,7 +3325,7 @@ static void iq2_neighbour_cache_init(iq2_neighbour_cache * cache, const float * 
     cache->pattern = -1;
     cache->sum_w = cache->sum_wx = cache->sum_wxx = cache->sum_w1 = cache->sum_w1x = cache->sum_w1xx = 0;
     for (int i = 0; i < 8; ++i) {
-        const double w = weight[i], x = xval[i], abs_w = fabs(w), abs_x = fabs(x);
+        const double w = (double)weight[i], x = (double)xval[i], abs_w = fabs(w), abs_x = fabs(x);
         cache->sum_w  += abs_w;     cache->sum_wx  += abs_w*abs_x;       cache->sum_wxx  += abs_w*abs_x*abs_x;
         cache->sum_w1 += 1 + abs_w; cache->sum_w1x += (1 + abs_w)*abs_x; cache->sum_w1xx += (1 + abs_w)*abs_x*abs_x;
         for (int q = 1; q < 8; q += 2) {
@@ -3344,7 +3344,7 @@ static int iq2_count_at_most(const double * GGML_RESTRICT values, int n, double 
 static int iq2_find_best_neighbour_cached(iq2_neighbour_cache * cache, int pattern, const uint16_t * GGML_RESTRICT neighbours, const uint64_t * GGML_RESTRICT grid,
         const float * GGML_RESTRICT xval, const float * GGML_RESTRICT weight, float scale, int8_t * GGML_RESTRICT L) {
     const int num_neighbors = neighbours[0];
-    const double scale_d = scale;
+    const double scale_d = (double)scale;
     const double max_level = 7*scale_d;
     // size of the numbers in the exact search, its rounding error is a multiple of 2^-24*size (+ size_subnormal for underflow)
     const double size           = max_level*max_level*cache->sum_w + 2*max_level*cache->sum_wx + cache->sum_wxx;
