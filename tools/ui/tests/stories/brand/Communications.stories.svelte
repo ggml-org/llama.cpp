@@ -126,11 +126,13 @@
 				<StateGalleryItem label="Landscape 16:9, {tone}" note="Statement · {size('landscape')}">
 					<Statement
 						command={copy.command}
+						commandSize={0.68}
 						footer={copy.footer}
 						format="landscape"
 						header={{ brand: 'Llama', url: copy.url }}
 						headline={copy.headline}
 						lede={copy.lede}
+						ledeSize={0.9}
 						overlay={copy.overlay}
 						prompt={false}
 						split={7}

@@ -51,7 +51,7 @@ const KEY_VISUALS = [
 		name: 'Statement',
 		shape: [
 			'Header: the lockup and the URL.',
-			'Display headline (3.2u), two or three lines; a lede (0.84u) 1.2u under it; a command in Mono 1.6u under that if it helps.',
+			'Display headline (3.2u), two or three lines; a lede (0.84u, or larger and tracked tighter for phones) 1.2u under it; a command in Mono 1.6u under that if it helps.',
 			'A motif fills the rest: beside the text on wide formats (columns 8 to 12, or 7 to 12 for a diagram that needs the room), above it on square and tall ones.',
 			'Footer: who it is from, the promise.'
 		],
@@ -269,7 +269,8 @@ function tokens() {
 			style('lede', u, 0.84, {
 				fontWeight: 400,
 				lineHeight: 1.3,
-				usage: 'Lede, 0.84u, in muted ink, at most 17u wide.'
+				usage:
+					'Lede, 0.84u, in muted ink, at most 17u wide; larger for phones (up to 1u) at -0.015em and line height 1.25.'
 			}),
 			style('body', u, 0.62, {
 				fontWeight: 400,

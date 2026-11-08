@@ -22,6 +22,7 @@ no one. The reasons are in Storybook's **Philosophy**.
 ### Voice
 
 - Plain words and real numbers. Short sentences. Name things the way people know them.
+- To the point and lean, without padding. Lean isn't terse: keep the words that give a line its life.
 - Calm and hopeful. No pride, no righteousness, no fear and no hype.
 - Show what the app does rather than mock the alternative.
 - Name model makers in words, never with their logos, except inside the real app where it shows them (its model
@@ -59,7 +60,7 @@ Sizes are multiples of the format's unit `u` (see Grid):
 | Display  | 3.2u  | Bold, line height 0.92, -0.035em. One statement, two to three lines. |
 | Headline | 2u    | Bold, line height 0.98, -0.02em.                                     |
 | Figure   | 5u    | Bold. One number that carries the piece.                             |
-| Lede     | 0.84u | Regular, in the ground's muted ink, line height 1.3.                 |
+| Lede     | 0.84u | Regular, muted ink, line height 1.3; larger for phones (see below).  |
 | Body     | 0.62u | Regular, line height 1.4.                                            |
 | Label    | 0.54u | Llama Mono Medium, uppercase, 0.12em tracking, muted.                |
 | Mono     | 0.58u | Llama Mono, commands and data.                                       |
@@ -70,7 +71,13 @@ and 1.6u from the lede to what follows it (a command, chips, a caption). Space i
 to 17u at most (about 40 characters a line), so it never runs up to a motif or diagram beside it.
 
 Pieces are read on phones, at a quarter to a third of their size, so small text is never smaller than these: the
-footer, a card's details, a URL and a command at 0.58u or more, a kicker at 0.5u at the least. When a piece runs out of room, cut words or move the split between text and motif; don't shrink the type.
+footer, a card's details, a URL and a command at 0.58u or more, a kicker at 0.5u at the least. When a piece runs
+out of room, tighten the tracking and leading first, then move the split between text and motif or cut padding;
+don't shrink the type.
+
+Type that has to hold more tracks tighter rather than shrinks: a lede set larger than 0.84u (up to 1u) at -0.015em
+and line height 1.25, a headline down to -0.035em, Mono at 0.6u and up at -0.02em to -0.03em. Never tighter than
+that, and never looser than the defaults.
 
 ## Colour
 
@@ -167,7 +174,7 @@ phone that scanned it. It claims nothing about telemetry: the Mac app reports cr
 
 - One accent per piece. If cinder is on the figure, it is not also on a chip.
 - Neutral grounds by default; the day and night skies for the product; sand for a warm, quiet piece.
-- Big type and few words. A piece says one thing.
+- Big type, to the point. A piece says one thing. When it doesn't fit, tighten the tracking before the type size.
 - The real product, the real commands and real numbers, never invented ones presented as real.
 - Llama Sans for words, Llama Mono for code and data.
 - Keep everything inside the margin and the safe area; nothing touches the edge except a product shot that runs

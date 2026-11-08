@@ -66,7 +66,7 @@
 <style>
 	.diagram {
 		display: grid;
-		grid-template-columns: auto minmax(0, 1fr) minmax(0, calc(var(--u) * 10.4));
+		grid-template-columns: auto minmax(0, 1fr) minmax(0, calc(var(--u) * 10.8));
 		align-items: stretch;
 		width: 100%;
 		height: 100%;
@@ -90,14 +90,15 @@
 		white-space: nowrap;
 	}
 	.name {
-		font-size: calc(var(--u) * 0.84);
+		font-size: calc(var(--u) * 0.96);
 		font-weight: 700;
 		letter-spacing: -0.02em;
 		line-height: 1;
 	}
 	.endpoint {
 		color: var(--p-muted);
-		font: 400 calc(var(--u) * 0.58) / 1 var(--mono);
+		font: 400 calc(var(--u) * 0.66) / 1 var(--mono);
+		letter-spacing: -0.03em;
 	}
 	/* the lines start half a unit off the icon's edge and end at the cards' edge */
 	.links {
@@ -152,14 +153,15 @@
 		margin: 0;
 	}
 	.agent {
-		font-size: calc(var(--u) * 1);
+		font-size: calc(var(--u) * 1.1);
 		font-weight: 700;
 		letter-spacing: -0.02em;
 		line-height: 1;
 	}
 	.note {
 		color: var(--p-muted);
-		font: 400 calc(var(--u) * 0.58) / 1.3 var(--mono);
+		font: 400 calc(var(--u) * 0.66) / 1.3 var(--mono);
+		letter-spacing: -0.03em;
 		text-wrap: balance;
 	}
 </style>

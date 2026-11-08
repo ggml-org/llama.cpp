@@ -28,6 +28,8 @@
 		color: var(--p-ink);
 		font: 400 var(--s) / 1.4 var(--mono);
 		white-space: pre;
+		/* tracked a little tighter, so a line of code holds at the larger sizes */
+		letter-spacing: -0.02em;
 	}
 	.prompt {
 		color: var(--art-cinder);

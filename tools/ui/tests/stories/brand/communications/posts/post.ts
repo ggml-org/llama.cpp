@@ -291,7 +291,8 @@ export interface AgentsCopy {
 
 /**
  * Llama serving agents, after Merve's post: the endpoint any agent can point at, and how four of them connect. Her
- * lede's last sentence (personal agents connect during onboarding) is left to the Hermes card, which says it
+ * copy, but for the lede's onboarding sentence, which the Hermes card says; it is set large for a phone and tracked
+ * tighter to fit
  */
 export const agentsPost: AgentsCopy = {
 	agents: [
