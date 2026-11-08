@@ -252,8 +252,7 @@ static void test(void) {
             assert(common_params_parse(args.size(), list_str_to_char(args).data(), shard_params, LLAMA_EXAMPLE_COMMON));
             auto paths = shard_params.model.get_paths();
             assert(paths.front() == "model_file.gguf");
-            assert(std::vector<std::string>(paths.begin() + 1, paths.end()) == shard_params.model.shards);
-            return shard_params.model.shards;
+            return std::vector<std::string>(paths.begin() + 1, paths.end());
         };
         assert(parse_shards({"--shard", "a.gguf"}) == std::vector<std::string>({"a.gguf"}));
         const std::vector<std::string> two = {"a.gguf", "b.gguf"};
@@ -263,6 +262,7 @@ static void test(void) {
         assert(parse_shards({"--shard", "a.gguf,b.gguf", "--shard", "c.gguf"}) == three);
         assert(parse_shards({"--shard", "a.gguf", "--shard", "b.gguf", "--shard", "c.gguf"}) == three);
         assert(parse_shards({"--ple", "p.gguf"}) == parse_shards({"--shard", "p.gguf"}));
+        assert(parse_shards({"--shard", "model_file.gguf,a.gguf,b.gguf,a.gguf"}) == two);
     }
 
     argv = {"binary_name", "-t", "1234"};

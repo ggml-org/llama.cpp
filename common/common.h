@@ -315,7 +315,11 @@ struct common_params_model {
 
     std::vector<std::string> get_paths() const {
         std::vector<std::string> paths = { path };
-        paths.insert(paths.end(), shards.begin(), shards.end());
+        for (const auto & shard : shards) {
+            if (std::find(paths.begin(), paths.end(), shard) == paths.end()) {
+                paths.push_back(shard);
+            }
+        }
         return paths;
     }
 
