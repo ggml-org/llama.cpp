@@ -69,12 +69,6 @@ bool ggml_sycl_flash_attn_ext_onednn_supported(const ggml_tensor * dst, bool use
             }
         }
     }
-    // The former Alchemist (dg2) block for head_dim == 64 traced back to oneDNN reporting
-    // wrong results for that shape (uxlfoundation/oneDNN#5510). The root cause turned out
-    // to be a Linux IGC compute-runtime regression, fixed in IGC 2.40, not a hardware or
-    // kernel defect. Re-validated on Arc A770 (dg2_g11): test-backend-ops FLASH_ATTN_EXT
-    // hsk=64 gives 1818/1818 OK, and llama-bench reports ~1.5x-2x faster prompt
-    // processing with the fused path. GGML_SYCL_FA_ONEDNN=0 remains the escape hatch.
     // Optional KV-length ceiling (GGML_SYCL_FA_ONEDNN_MAX_KV, 0 = unlimited). Escape hatch:
     // very long sequences make the fused SDPA slow enough to risk the xe driver watchdog on
     // some stacks; past the cap we fall back to the native FA kernel instead.
