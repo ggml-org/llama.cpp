@@ -64,6 +64,41 @@ static void cpy_1_i32_f32(const char * cxi, char * cdsti) {
     *dsti = (float) *xi;
 }
 
+static void cpy_1_f8_e4m3_f8_e4m3(const char * cxi, char * cdsti) {
+    const uint8_t *   xi   = (const uint8_t *) cxi;
+    uint8_t *         dsti = (uint8_t *) cdsti;
+
+    *dsti = *xi;
+}
+
+static void cpy_1_f8_e4m3_f32(const char * cxi, char * cdsti) {
+    const ggml_fp8_e4m3_t * xi   = (const ggml_fp8_e4m3_t *) cxi;
+    float *                 dsti = (float *) cdsti;
+
+    *dsti = ggml_f8_e4m3_to_fp32(xi->bits);
+}
+
+static void cpy_1_f32_f8_e4m3(const char * cxi, char * cdsti) {
+    const float *         xi   = (const float *) cxi;
+    ggml_fp8_e4m3_t *     dsti = (ggml_fp8_e4m3_t *) cdsti;
+
+    dsti->bits = ggml_fp32_to_f8_e4m3(*xi);
+}
+
+static void cpy_1_f8_e4m3_f16(const char * cxi, char * cdsti) {
+    const ggml_fp8_e4m3_t * xi   = (const ggml_fp8_e4m3_t *) cxi;
+    sycl::half *            dsti = (sycl::half *) cdsti;
+
+    *dsti = sycl::half(ggml_f8_e4m3_to_fp32(xi->bits));
+}
+
+static void cpy_1_f16_f8_e4m3(const char * cxi, char * cdsti) {
+    const sycl::half *    xi   = (const sycl::half *) cxi;
+    ggml_fp8_e4m3_t *     dsti = (ggml_fp8_e4m3_t *) cdsti;
+
+    dsti->bits = ggml_fp32_to_f8_e4m3(static_cast<float>(*xi));
+}
+
 #ifdef GGML_SYCL_HAS_BF16
 static void cpy_1_f32_bf16(const char * cxi, char * cdsti) {
     const float * xi   = (const float *) cxi;
@@ -98,6 +133,20 @@ static void cpy_1_bf16_f16(const char * cxi, char * cdsti) {
     sycl::half *            dsti = (sycl::half *) cdsti;
 
     *dsti = sycl::half(static_cast<float>(*xi));
+}
+
+static void cpy_1_f8_e4m3_bf16(const char * cxi, char * cdsti) {
+    const ggml_fp8_e4m3_t *         xi   = (const ggml_fp8_e4m3_t *) cxi;
+    sycl::ext::oneapi::bfloat16 *   dsti = (sycl::ext::oneapi::bfloat16 *) cdsti;
+
+    *dsti = sycl::ext::oneapi::bfloat16(ggml_f8_e4m3_to_fp32(xi->bits));
+}
+
+static void cpy_1_bf16_f8_e4m3(const char * cxi, char * cdsti) {
+    const sycl::ext::oneapi::bfloat16 * xi   = (const sycl::ext::oneapi::bfloat16 *) cxi;
+    ggml_fp8_e4m3_t *                   dsti = (ggml_fp8_e4m3_t *) cdsti;
+
+    dsti->bits = ggml_fp32_to_f8_e4m3(static_cast<float>(*xi));
 }
 #endif
 
@@ -340,6 +389,90 @@ static void ggml_cpy_i32_f32_sycl(const char * cx, char * cdst, const int ne, co
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
                 cpy_f32_f16<cpy_1_i32_f32>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
                                            nb10, nb11, nb12, nb13, item_ct1);
+            });
+    }
+}
+
+static void ggml_cpy_f8_e4m3_f8_e4m3_sycl(const char * cx, char * cdst, const int ne, const int ne00, const int ne01,
+                                          const int ne02, const int nb00, const int nb01, const int nb02, const int nb03,
+                                          const int ne10, const int ne11, const int ne12, const int nb10, const int nb11,
+                                          const int nb12, const int nb13, queue_ptr stream) {
+    const int num_blocks = (ne + SYCL_CPY_BLOCK_SIZE - 1) / SYCL_CPY_BLOCK_SIZE;
+    {
+        stream->parallel_for(
+            sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
+                              sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
+            [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
+                cpy_f32_f16<cpy_1_f8_e4m3_f8_e4m3>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
+                                                   nb10, nb11, nb12, nb13, item_ct1);
+            });
+    }
+}
+
+static void ggml_cpy_f8_e4m3_f32_sycl(const char * cx, char * cdst, const int ne, const int ne00, const int ne01,
+                                      const int ne02, const int nb00, const int nb01, const int nb02, const int nb03,
+                                      const int ne10, const int ne11, const int ne12, const int nb10, const int nb11,
+                                      const int nb12, const int nb13, queue_ptr stream) {
+    const int num_blocks = (ne + SYCL_CPY_BLOCK_SIZE - 1) / SYCL_CPY_BLOCK_SIZE;
+    {
+        stream->parallel_for(
+            sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
+                              sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
+            [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
+                cpy_f32_f16<cpy_1_f8_e4m3_f32>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
+                                               nb10, nb11, nb12, nb13, item_ct1);
+            });
+    }
+}
+
+static void ggml_cpy_f32_f8_e4m3_sycl(const char * cx, char * cdst, const int ne, const int ne00, const int ne01,
+                                      const int ne02, const int nb00, const int nb01, const int nb02, const int nb03,
+                                      const int ne10, const int ne11, const int ne12, const int nb10, const int nb11,
+                                      const int nb12, const int nb13, queue_ptr stream) {
+    const int num_blocks = (ne + SYCL_CPY_BLOCK_SIZE - 1) / SYCL_CPY_BLOCK_SIZE;
+    {
+        stream->parallel_for(
+            sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
+                              sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
+            [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
+                cpy_f32_f16<cpy_1_f32_f8_e4m3>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
+                                               nb10, nb11, nb12, nb13, item_ct1);
+            });
+    }
+}
+
+static void ggml_cpy_f8_e4m3_f16_sycl(const char * cx, char * cdst, const int ne, const int ne00, const int ne01,
+                                      const int ne02, const int nb00, const int nb01, const int nb02, const int nb03,
+                                      const int ne10, const int ne11, const int ne12, const int nb10, const int nb11,
+                                      const int nb12, const int nb13, queue_ptr stream) {
+    const int num_blocks = (ne + SYCL_CPY_BLOCK_SIZE - 1) / SYCL_CPY_BLOCK_SIZE;
+    {
+        dpct::has_capability_or_fail(stream->get_device(), { sycl::aspect::fp16 });
+
+        stream->parallel_for(
+            sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
+                              sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
+            [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
+                cpy_f32_f16<cpy_1_f8_e4m3_f16>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
+                                               nb10, nb11, nb12, nb13, item_ct1);
+            });
+    }
+}
+
+static void ggml_cpy_f16_f8_e4m3_sycl(const char * cx, char * cdst, const int ne, const int ne00, const int ne01,
+                                      const int ne02, const int nb00, const int nb01, const int nb02, const int nb03,
+                                      const int ne10, const int ne11, const int ne12, const int nb10, const int nb11,
+                                      const int nb12, const int nb13, queue_ptr stream) {
+    const int num_blocks = (ne + SYCL_CPY_BLOCK_SIZE - 1) / SYCL_CPY_BLOCK_SIZE;
+    {
+        dpct::has_capability_or_fail(stream->get_device(), { sycl::aspect::fp16 });
+
+        stream->parallel_for(
+            sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
+                              sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
+            [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
+                cpy_f32_f16<cpy_1_f16_f8_e4m3>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
+                                               nb10, nb11, nb12, nb13, item_ct1);
             });
     }
 }
@@ -1246,6 +1379,34 @@ static void ggml_cpy_bf16_f16_sycl(const char * cx, char * cdst, const int ne, c
                                            nb10, nb11, nb12, nb13, item_ct1);
         });
 }
+
+static void ggml_cpy_f8_e4m3_bf16_sycl(const char * cx, char * cdst, const int ne, const int ne00, const int ne01,
+                                       const int ne02, const int nb00, const int nb01, const int nb02, const int nb03,
+                                       const int ne10, const int ne11, const int ne12, const int nb10, const int nb11,
+                                       const int nb12, const int nb13, queue_ptr stream) {
+    const int num_blocks = (ne + SYCL_CPY_BLOCK_SIZE - 1) / SYCL_CPY_BLOCK_SIZE;
+    stream->parallel_for(
+        sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
+                          sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
+        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
+            cpy_f32_f16<cpy_1_f8_e4m3_bf16>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
+                                             nb10, nb11, nb12, nb13, item_ct1);
+        });
+}
+
+static void ggml_cpy_bf16_f8_e4m3_sycl(const char * cx, char * cdst, const int ne, const int ne00, const int ne01,
+                                       const int ne02, const int nb00, const int nb01, const int nb02, const int nb03,
+                                       const int ne10, const int ne11, const int ne12, const int nb10, const int nb11,
+                                       const int nb12, const int nb13, queue_ptr stream) {
+    const int num_blocks = (ne + SYCL_CPY_BLOCK_SIZE - 1) / SYCL_CPY_BLOCK_SIZE;
+    stream->parallel_for(
+        sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
+                          sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
+        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
+            cpy_f32_f16<cpy_1_bf16_f8_e4m3>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
+                                             nb10, nb11, nb12, nb13, item_ct1);
+        });
+}
 #endif
 
 void ggml_sycl_cpy(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1) try {
@@ -1418,6 +1579,29 @@ void ggml_sycl_cpy(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, co
     } else if (src0->type == GGML_TYPE_BF16 && src1->type == GGML_TYPE_F16) {
         ggml_cpy_bf16_f16_sycl(src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10,
                               nb11, nb12, nb13, main_stream);
+#endif
+    } else if (src0->type == GGML_TYPE_F8_E4M3 && src1->type == GGML_TYPE_F8_E4M3) {
+        ggml_cpy_f8_e4m3_f8_e4m3_sycl(src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10,
+                                      nb11, nb12, nb13, main_stream);
+    } else if (src0->type == GGML_TYPE_F8_E4M3 && src1->type == GGML_TYPE_F32) {
+        ggml_cpy_f8_e4m3_f32_sycl(src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10,
+                                  nb11, nb12, nb13, main_stream);
+    } else if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F8_E4M3) {
+        ggml_cpy_f32_f8_e4m3_sycl(src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10,
+                                  nb11, nb12, nb13, main_stream);
+    } else if (src0->type == GGML_TYPE_F8_E4M3 && src1->type == GGML_TYPE_F16) {
+        ggml_cpy_f8_e4m3_f16_sycl(src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10,
+                                  nb11, nb12, nb13, main_stream);
+    } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F8_E4M3) {
+        ggml_cpy_f16_f8_e4m3_sycl(src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10,
+                                  nb11, nb12, nb13, main_stream);
+#ifdef GGML_SYCL_HAS_BF16
+    } else if (src0->type == GGML_TYPE_F8_E4M3 && src1->type == GGML_TYPE_BF16) {
+        ggml_cpy_f8_e4m3_bf16_sycl(src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10,
+                                   nb11, nb12, nb13, main_stream);
+    } else if (src0->type == GGML_TYPE_BF16 && src1->type == GGML_TYPE_F8_E4M3) {
+        ggml_cpy_bf16_f8_e4m3_sycl(src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10,
+                                   nb11, nb12, nb13, main_stream);
 #endif
     } else {
         GGML_LOG_ERROR("%s: unsupported type combination (%s to %s)\n", __func__, ggml_type_name(src0->type),
