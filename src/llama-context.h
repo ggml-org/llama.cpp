@@ -8,7 +8,6 @@
 #include "llama-impl.h"
 #include "llama-memory.h"
 #include "llama-moe-cache.h"
-#include "llama-sampler.h"
 
 #include "ggml-cpp.h"
 #include "ggml-opt.h"

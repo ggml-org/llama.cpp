@@ -16,6 +16,7 @@
 #include "common.h"
 #include "fit.h"
 #include "llama.h"
+#include "../../src/llama-ext.h"
 #include "log.h"
 #include "sampling.h"
 #include "speculative.h"
@@ -70,7 +71,7 @@ static common_speculative_output_limits server_output_limits(const common_params
 // a checkpoint restore dropped tokens the target had accepted - re-accept them rather than verify again
 static std::vector<llama_token> server_accept_replay(
         common_sampler * smpl,
-        llama_context * ctx,
+        const llama_outputs * outputs,
         const std::vector<int32_t> & idxs,
         const llama_tokens & draft) {
     GGML_ASSERT(idxs.size() == draft.size() + 1);
@@ -80,12 +81,12 @@ static std::vector<llama_token> server_accept_replay(
 
     for (size_t i = 0; i < draft.size(); ++i) {
         // the token is discarded - the call is what advances the sampler over this position
-        common_sampler_sample(smpl, ctx, idxs[i]);
+        common_sampler_sample_from_outputs(smpl, outputs, idxs[i]);
         common_sampler_accept(smpl, draft[i], true);
         result.push_back(draft[i]);
     }
 
-    const llama_token id = common_sampler_sample(smpl, ctx, idxs[draft.size()]);
+    const llama_token id = common_sampler_sample_from_outputs(smpl, outputs, idxs[draft.size()]);
     common_sampler_accept(smpl, id, true);
     result.push_back(id);
 
@@ -96,7 +97,7 @@ static std::vector<llama_token> server_accept_replay(
 // on replay the draft was already accepted before a context checkpoint restore, so repeat the same decisions
 static std::vector<llama_token> server_sample_and_accept_synth(
         common_sampler * smpl,
-        llama_context * ctx,
+        const llama_outputs * outputs,
         const std::vector<int32_t> & idxs,
         const llama_tokens & draft,
         const std::vector<double> & synth_probs,
@@ -108,10 +109,10 @@ static std::vector<llama_token> server_sample_and_accept_synth(
     std::vector<llama_token> result;
     result.reserve(idxs.size());
 
-    const llama_vocab * vocab = llama_model_get_vocab(llama_get_model(ctx));
+    const llama_vocab * vocab = outputs->vocab;
     std::uniform_real_distribution<double> dist(0.0, 1.0);
     for (size_t i = 0; i < draft.size(); ++i) {
-        const llama_token id = common_sampler_sample(smpl, ctx, idxs[i]);
+        const llama_token id = common_sampler_sample_from_outputs(smpl, outputs, idxs[i]);
         const bool accept = is_replay || dist(rng) < synth_probs[i];
         // do not accept a drafted EOG token - it would end the generation early
         // on replay the last token is from the target and can be EOG, so skip this check
@@ -129,7 +130,7 @@ static std::vector<llama_token> server_sample_and_accept_synth(
         return result;
     }
 
-    const llama_token id = common_sampler_sample(smpl, ctx, idxs[draft.size()]);
+    const llama_token id = common_sampler_sample_from_outputs(smpl, outputs, idxs[draft.size()]);
     common_sampler_accept(smpl, id, true);
     result.push_back(id);
 
@@ -4838,6 +4839,7 @@ private:
                 slot.task->params.sampling.preserved_tokens.find(token) != slot.task->params.sampling.preserved_tokens.end();
         };
 
+        const llama_outputs * outputs = nullptr;
         iterate(slots, [&](server_slot & slot) {
             // optionally send prompt processing progress
             if (slot.state == SLOT_STATE_PROCESSING_PROMPT || slot.state == SLOT_STATE_DONE_PROMPT) {
@@ -4896,7 +4898,10 @@ private:
             llama_token id;
             {
                 scoped_timer timer(t_sampl, n_sampl);
-                id = common_sampler_sample(slot.smpl.get(), slot.ctx_tgt, tok_idx);
+                if (!outputs) {
+                    outputs = llama_get_outputs(ctx_tgt);
+                }
+                id = common_sampler_sample_from_outputs(slot.smpl.get(), outputs, tok_idx);
             }
 
             slot.i_batch = -1;
@@ -4963,18 +4968,22 @@ private:
                 // drafters that fill no distribution fall back here
                 const bool use_rejection = slot.use_spec_rejection() && !slot.spec_draft_q.empty();
 
+                if (!outputs) {
+                    outputs = llama_get_outputs(ctx_tgt);
+                }
+
                 std::vector<llama_token> accepted;
                 if (!synth_probs.empty()) {
                     // synthetic acceptance replaces verification entirely, so it comes first
                     accepted = server_sample_and_accept_synth(
-                            slot.smpl.get(), slot.ctx_tgt, spec_i_batch, slot.spec_draft,
+                            slot.smpl.get(), outputs, spec_i_batch, slot.spec_draft,
                             synth_probs, slot.spec_synth_rng, slot.spec_is_replay);
                 } else if (slot.spec_is_replay && slot.use_spec_rejection()) {
-                    accepted = server_accept_replay(slot.smpl.get(), slot.ctx_tgt, spec_i_batch, slot.spec_draft);
+                    accepted = server_accept_replay(slot.smpl.get(), outputs, spec_i_batch, slot.spec_draft);
                 } else if (use_rejection) {
-                    accepted = common_sampler_sample_and_accept_n_rejection(slot.smpl.get(), slot.ctx_tgt, spec_i_batch, slot.spec_draft, slot.spec_draft_q);
+                    accepted = common_sampler_sample_and_accept_n_rejection(slot.smpl.get(), outputs, spec_i_batch, slot.spec_draft, slot.spec_draft_q);
                 } else {
-                    accepted = common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, spec_i_batch, slot.spec_draft);
+                    accepted = common_sampler_sample_and_accept_n(slot.smpl.get(), outputs, spec_i_batch, slot.spec_draft);
                 }
 
                 GGML_ASSERT(accepted.size() >= 1);
