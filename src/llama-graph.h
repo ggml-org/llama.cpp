@@ -805,6 +805,7 @@ struct llm_graph_params {
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
     const llama_moe_cache        * moe_cache;
+    bool                           moe_cache_cpu_part;
 
     const llama_prec_policy * prec_policy = nullptr;
 
@@ -907,6 +908,7 @@ struct llm_graph_params {
             cparams.causal_attn             == other.cparams.causal_attn             &&
             layer_inp_dev == other.layer_inp_dev &&
             layer_inp_src == other.layer_inp_src &&
+            moe_cache_cpu_part == other.moe_cache_cpu_part &&
             model == other.model &&
             gtype == other.gtype &&
             cvec  == other.cvec  &&

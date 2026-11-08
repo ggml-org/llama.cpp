@@ -308,6 +308,307 @@ struct moe_cache_lru {
     }
 };
 
+// least squares fit of y = beta . x, with old samples weighted down by lambda per new sample
+struct moe_cache_lsq {
+    static constexpr int max_n = 3;
+
+    int    n = 0;
+    double a[max_n][max_n] = {};
+    double b[max_n] = {};
+    double n_eff = 0.0; // sum of the sample weights
+
+    void add(const double * x, double y, double lambda) {
+        for (int i = 0; i < n; ++i) {
+            for (int j = 0; j < n; ++j) {
+                a[i][j] = lambda*a[i][j] + x[i]*x[j];
+            }
+            b[i] = lambda*b[i] + x[i]*y;
+        }
+        n_eff = lambda*n_eff + 1.0;
+    }
+
+    // Gaussian elimination with partial pivoting, false if the samples do not determine beta
+    bool solve(double * beta) const {
+        double m[max_n][max_n + 1];
+        for (int i = 0; i < n; ++i) {
+            for (int j = 0; j < n; ++j) {
+                m[i][j] = a[i][j];
+            }
+            m[i][n] = b[i];
+        }
+        for (int c = 0; c < n; ++c) {
+            int p = c;
+            for (int r = c + 1; r < n; ++r) {
+                if (std::fabs(m[r][c]) > std::fabs(m[p][c])) {
+                    p = r;
+                }
+            }
+            if (std::fabs(m[p][c]) < 1e-9*std::max(1.0, std::fabs(a[c][c]))) {
+                return false;
+            }
+            for (int j = 0; j <= n; ++j) {
+                std::swap(m[c][j], m[p][j]);
+            }
+            for (int r = 0; r < n; ++r) {
+                if (r == c) {
+                    continue;
+                }
+                const double f = m[r][c]/m[c][c];
+                for (int j = c; j <= n; ++j) {
+                    m[r][j] -= f*m[c][j];
+                }
+            }
+        }
+        for (int i = 0; i < n; ++i) {
+            beta[i] = m[i][n]/m[i][i];
+        }
+        return true;
+    }
+};
+
+// auto CPU share: picks off (no CPU part) or one of the levels for the next ubatches
+// each level has a ghost, tag-only caches that replay the selected experts at that share from the start,
+// so the ghost gives the upload and CPU bytes of each ubatch as if the cache had always used that level
+// the cost of a level = its bytes, priced by least squares fits of the measured ubatch times:
+//   on:  t = B_on  + c_up*upload MiB + c_cpu*CPU MiB
+//   off: t = B_off + c_up_off*upload MiB
+// F = B_on - B_off is the fixed cost of the CPU part; the on fit needs uploads and CPU bytes that do not rise together,
+// so each ubatch uploads half or 1.5x the upload fraction of the level, at random
+struct moe_cache_ctl {
+    static constexpr int   n_level = 6;
+    static constexpr float levels[n_level] = { 0.0f, 0.7f, 0.8f, 0.9f, 0.95f, 0.98f };
+    static constexpr int   level_start = 4;
+
+    static constexpr double lambda      = 1.0 - 1.0/512; // forgetting of the fits, per ubatch
+    static constexpr double ema_a       = 1.0/128;       // of the ghost bytes
+    static constexpr double gain_min    = 0.02;          // of the ubatch time, to change the level
+    static constexpr double gain_min_part = 0.05;        // of the ubatch time, to add or remove the CPU part
+    static constexpr int    n_dwell     = 128;           // ubatches between changes
+    static constexpr int    n_skip      = 2;             // ubatches not fitted after a change of the CPU part (graph rebuild)
+    static constexpr int    n_probe     = 48;            // ubatches off to fit B_off
+    static constexpr int    probe_every = 4096;          // ubatches between probes
+    static constexpr int    n_fit_min   = 128;           // samples of the on fit before the first probe and decision
+    static constexpr int    log_every   = 256;
+
+    struct ghost {
+        std::vector<moe_cache_lru> lru;                // [n_group]
+        std::vector<std::vector<int32_t>> slot_maps;   // [n_layer] storage of the slot maps of lru
+        std::vector<uint32_t> acc;                     // [n_layer] carry of the share
+        double up  = 0.0; // MiB of the current ubatch
+        double cpu = 0.0;
+        double ema_up  = 0.0; // MiB per ubatch
+        double ema_cpu = 0.0;
+    };
+
+    std::vector<int32_t> group_of;     // [n_layer] group of the layer, -1 if not cached
+    std::vector<double>  expert_mib;   // [n_layer] MiB of one expert of the layer
+    ghost ghosts[n_level];
+
+    moe_cache_lsq fit_on;
+    moe_cache_lsq fit_off;
+
+    int     cur      = level_start;
+    int     back     = level_start; // level after the probe
+    int     probe    = 0;           // ubatches left off in the probe
+    int64_t n_ubatch = 0;           // small ubatches seen
+    int64_t n_full   = 0;           // small ubatches seen since the real cache is full
+    int64_t last_change = 0;
+    int64_t last_probe  = 0;
+    int     skip     = 0;
+
+    // the current ubatch: measured on the real cache
+    int64_t t_start  = -1;
+    int64_t n_tokens = 0;
+    bool    has_cpu  = false; // its graph has the CPU part
+    double  up  = 0.0;
+    double  cpu = 0.0;
+    bool    dither_up = false; // 1.5x the upload fraction, else 0.5x
+    double  ema_t = 0.0;       // us per 1-token ubatch
+    double  ghost_us = 0.0;    // replay time of the current ubatch
+    double  ema_ghost_us = 0.0;
+    uint64_t rng  = 0x9e3779b97f4a7c15ull;
+
+    std::vector<moe_cache_lru::fill> fills;
+    std::vector<moe_cache_lru::fill> cpu_fills;
+
+    void init(const std::vector<int32_t> & group_of, const std::vector<double> & expert_mib, const std::vector<std::pair<int32_t, int32_t>> & group_dims, size_t n_layer) {
+        this->group_of   = group_of;
+        this->expert_mib = expert_mib;
+        for (ghost & gh : ghosts) {
+            gh.lru.resize(group_dims.size());
+            for (size_t ig = 0; ig < group_dims.size(); ++ig) {
+                gh.lru[ig].init(n_layer, group_dims[ig].first, group_dims[ig].second);
+            }
+            gh.slot_maps.resize(n_layer);
+            gh.acc.assign(n_layer, 0);
+            for (size_t il = 0; il < n_layer; ++il) {
+                if (group_of[il] >= 0) {
+                    moe_cache_lru & lru = gh.lru[group_of[il]];
+                    gh.slot_maps[il].assign(lru.n_expert, lru.empty);
+                    lru.slot_map[il] = gh.slot_maps[il].data();
+                }
+            }
+        }
+        fit_on.n  = 3;
+        fit_off.n = 2;
+    }
+
+    // the CPU share of the real cache for this ubatch, in 1/65536
+    uint32_t share_q() const {
+        const double s = levels[cur];
+        if (s <= 0.0) {
+            return 0;
+        }
+        const double up_frac = (1.0 - s)*(dither_up ? 1.5 : 0.5);
+        return (uint32_t) std::lround(std::clamp(1.0 - up_frac, 0.0, 1.0)*65536.0);
+    }
+
+    // replay layer il of the ubatch on each ghost
+    void replay(int32_t il, const int32_t * ids, size_t n_ids, int64_t n_tok, int32_t n_used, int32_t n_zero) {
+        const int64_t t0 = ggml_time_us();
+        const int32_t ig = group_of[il];
+        for (int i = 0; i < n_level; ++i) {
+            ghost & gh = ghosts[i];
+            moe_cache_lru & lru = gh.lru[ig];
+            const uint32_t q = lru.n_filled == lru.n_slots ? (uint32_t) std::lround(levels[i]*65536.0) : 0;
+            uint32_t & acc = gh.acc[il];
+            auto n_cpu = [&](size_t n_miss) {
+                const uint64_t a = (uint64_t) n_miss*q + acc;
+                acc = a & 0xffff;
+                return (size_t) (a >> 16);
+            };
+            size_t n_hit = 0;
+            if (!lru.plan(il, ids, n_ids, n_tok, n_used, n_zero, n_cpu, false, fills, cpu_fills, n_hit)) {
+                continue;
+            }
+            gh.up  += fills.size()*expert_mib[il];
+            gh.cpu += cpu_fills.size()*expert_mib[il];
+        }
+        ghost_us += ggml_time_us() - t0;
+    }
+
+    void add_real(int32_t il, size_t n_up, size_t n_cpu) {
+        up  += n_up*expert_mib[il];
+        cpu += n_cpu*expert_mib[il];
+    }
+
+    double cost(int i, const double * on, const double * off) const {
+        const ghost & gh = ghosts[i];
+        if (levels[i] <= 0.0) {
+            return off[1]*gh.ema_up;
+        }
+        return on[0] - off[0] + on[1]*gh.ema_up + on[2]*gh.ema_cpu;
+    }
+
+    // the graphs of the next ubatches build the CPU part
+    bool cpu_part() const {
+        return levels[cur] > 0.0;
+    }
+
+    // a ubatch starts at t_us (the lookup of its first cached layer), with n_tok tokens
+    void start_ubatch(int64_t t_us, int64_t n_tok, bool has_cpu, bool full) {
+        if (t_start >= 0) {
+            end_ubatch((double) (t_us - t_start), full);
+        }
+        t_start  = t_us;
+        n_tokens = n_tok;
+        this->has_cpu = has_cpu;
+        up  = 0.0;
+        cpu = 0.0;
+        ghost_us = 0.0;
+        rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17;
+        dither_up = rng & 1;
+    }
+
+    void end_ubatch(double t, bool full) {
+        n_ubatch++;
+        for (ghost & gh : ghosts) {
+            gh.ema_up  = n_ubatch == 1 ? gh.up  : (1 - ema_a)*gh.ema_up  + ema_a*gh.up;
+            gh.ema_cpu = n_ubatch == 1 ? gh.cpu : (1 - ema_a)*gh.ema_cpu + ema_a*gh.cpu;
+            gh.up  = 0.0;
+            gh.cpu = 0.0;
+        }
+
+        // fit the 1-token ubatches, not the first ones after a graph rebuild, nor the ones with a prompt between them
+        const bool on = levels[cur] > 0.0;
+        if (n_tokens == 1 && full) {
+            if (skip > 0) {
+                skip--;
+            } else if (ema_t == 0.0 || t < 2.0*ema_t) {
+                ema_t = ema_t == 0.0 ? t : (1 - ema_a)*ema_t + ema_a*t;
+                ema_ghost_us = (1 - ema_a)*ema_ghost_us + ema_a*ghost_us;
+                if (has_cpu) {
+                    const double x[3] = { 1.0, up, cpu };
+                    fit_on.add(x, t, lambda);
+                } else {
+                    const double x[2] = { 1.0, up };
+                    fit_off.add(x, t, lambda);
+                }
+            }
+        }
+        if (!full) {
+            return;
+        }
+        n_full++;
+
+        if (probe > 0) {
+            if (--probe == 0) {
+                set_level(back);
+            }
+            return;
+        }
+        if (on && fit_on.n_eff >= n_fit_min && (last_probe == 0 || n_full - last_probe >= probe_every)) {
+            back  = cur;
+            probe = n_probe + n_skip;
+            last_probe = n_full;
+            set_level(0);
+            return;
+        }
+
+        double on_beta[3];
+        double off_beta[2];
+        if (fit_on.n_eff < n_fit_min || fit_off.n_eff < n_probe/2 || !fit_on.solve(on_beta) || !fit_off.solve(off_beta)) {
+            return;
+        }
+        // a negative price comes from noise, the bytes cost at least nothing
+        on_beta[1]  = std::max(0.0, on_beta[1]);
+        on_beta[2]  = std::max(0.0, on_beta[2]);
+        off_beta[1] = std::max(0.0, off_beta[1]);
+
+        double c[n_level];
+        for (int i = 0; i < n_level; ++i) {
+            c[i] = cost(i, on_beta, off_beta);
+        }
+        int best = cur;
+        for (int i = 0; i < n_level; ++i) {
+            if (c[i] < c[best]) {
+                best = i;
+            }
+        }
+        if (n_full % log_every == 0) {
+            LLAMA_LOG_INFO("moe-cache auto: share %.2f, F %.0f us, c_up %.1f us/MiB (off %.1f), c_cpu %.1f us/MiB, t %.0f us, ghosts %.0f us, cost vs share 0:",
+                levels[cur], on_beta[0] - off_beta[0], on_beta[1], off_beta[1], on_beta[2], ema_t, ema_ghost_us);
+            for (int i = 1; i < n_level; ++i) {
+                LLAMA_LOG_CONT(" %.2f %+.0f", levels[i], c[i] - c[0]);
+            }
+            LLAMA_LOG_CONT(" us\n");
+        }
+        const bool part = (levels[best] > 0.0) != (levels[cur] > 0.0);
+        if (best != cur && n_full - last_change >= n_dwell && c[best] + (part ? gain_min_part : gain_min)*ema_t < c[cur]) {
+            LLAMA_LOG_INFO("moe-cache auto: share %.2f -> %.2f\n", levels[cur], levels[best]);
+            set_level(best);
+        }
+    }
+
+    void set_level(int i) {
+        if ((levels[i] > 0.0) != (levels[cur] > 0.0)) {
+            skip = n_skip;
+        }
+        cur = i;
+        last_change = n_full;
+    }
+};
+
 // gate, up, down or gate_up, down
 static std::vector<ggml_tensor *> llama_moe_cache_layer_experts(const llama_layer & layer) {
     std::vector<ggml_tensor *> res;
@@ -329,6 +630,12 @@ static bool llama_moe_cache_same_layout(const std::vector<ggml_tensor *> & a, co
         }
     }
     return true;
+}
+
+// LLAMA_MOE_CACHE_AUTO=crf: auto is the older CRF admission instead of the controller, experiment
+static bool llama_moe_cache_auto_is_crf() {
+    const char * v = getenv("LLAMA_MOE_CACHE_AUTO");
+    return v != nullptr && strcmp(v, "crf") == 0;
 }
 
 static bool llama_moe_cache_is_host_weight(const ggml_tensor * t) {
@@ -412,7 +719,9 @@ struct llama_moe_cache::impl {
     FILE *   timing    = nullptr; // LLAMA_MOE_CACHE_TIMING: CSV of the host time of each ubatch and cached layer
     int64_t  n_ubatch  = 0;
     int32_t  il_last   = -1; // layer of the last slot lookup, a lookup of an earlier layer starts a new ubatch
-    bool     admit     = false; // cpu_share < 0 (auto): a miss goes to the CPU if its CRF is not higher than the decayed CRF of its victim
+    bool     admit     = false; // auto with LLAMA_MOE_CACHE_AUTO=crf: a miss goes to the CPU if its CRF is not higher than the decayed CRF of its victim
+    bool     ctl_on    = false; // auto: the controller picks the share
+    moe_cache_ctl ctl;
 
     // LLAMA_MOE_CACHE_TRACE: the selected experts of each slot lookup, for a simulator of the cache
     FILE * trace = nullptr;
@@ -426,7 +735,7 @@ struct llama_moe_cache::impl {
     ggml_context_ptr ctx_views;
 
     impl(const llama_model & model, bool no_alloc, const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_type_t> & bufts, size_t size, float cpu_share) :
-            n_expert_used(model.hparams.n_expert_used_max()), layers(model.layers.size()), cpu_share(cpu_share < 0.0f ? 1.0f : std::clamp(cpu_share, 0.0f, 1.0f)), admit(cpu_share < 0.0f) {
+            n_expert_used(model.hparams.n_expert_used_max()), layers(model.layers.size()), cpu_share(cpu_share < 0.0f ? 1.0f : std::clamp(cpu_share, 0.0f, 1.0f)), admit(cpu_share < 0.0f && llama_moe_cache_auto_is_crf()), ctl_on(cpu_share < 0.0f && !admit) {
         for (size_t i = 0; i < backends.size(); ++i) {
             const auto dev_type = ggml_backend_dev_type(ggml_backend_get_device(backends[i]));
             if (dev_type == GGML_BACKEND_DEVICE_TYPE_GPU || dev_type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
@@ -647,6 +956,9 @@ struct llama_moe_cache::impl {
                     }
                 }
             }
+            if (ctl_on) {
+                init_ctl();
+            }
         }
 
         // as weights, the ops that read the banks run on the device and the slot maps are copied with the copy callback
@@ -663,7 +975,7 @@ struct llama_moe_cache::impl {
                 continue;
             }
             LLAMA_LOG_INFO("%s: %10s MoE cache size = %8.2f MiB for %.2f MiB of host experts, CPU share %s\n", __func__,
-                ggml_backend_buft_name(d.buft), d.buf_size/1024.0/1024.0, d.host_bytes/1024.0/1024.0, admit ? format("auto (margin %g)", admit_margin).c_str() : format("%.0f%%", 100.0*cpu_share).c_str());
+                ggml_backend_buft_name(d.buft), d.buf_size/1024.0/1024.0, d.host_bytes/1024.0/1024.0, admit ? format("auto crf (margin %g)", admit_margin).c_str() : ctl_on ? "auto" : format("%.0f%%", 100.0*cpu_share).c_str());
             for (const group & g : groups) {
                 if (g.id == (int32_t) id) {
                     LLAMA_LOG_INFO("%s: %2zu layers, %s: %5d slots (%.1f%%, %.1f tokens worth)\n", __func__,
@@ -726,6 +1038,38 @@ struct llama_moe_cache::impl {
         }
     }
 
+    bool cpu_part() const {
+        return !ctl_on || ctl.cpu_part();
+    }
+
+    bool all_full() const {
+        for (const group & g : groups) {
+            if (g.lru.n_filled < g.lru.n_slots) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void init_ctl() {
+        std::vector<int32_t> group_of(layers.size(), -1);
+        std::vector<double>  expert_mib(layers.size(), 0.0);
+        for (size_t il = 0; il < layers.size(); ++il) {
+            if (layers[il].ig < 0) {
+                continue;
+            }
+            group_of[il] = layers[il].ig;
+            for (const ggml_tensor * w : layers[il].experts) {
+                expert_mib[il] += w->nb[2]/1024.0/1024.0;
+            }
+        }
+        std::vector<std::pair<int32_t, int32_t>> group_dims;
+        for (const group & g : groups) {
+            group_dims.emplace_back(g.n_slots > 0 ? (int32_t) g.ref[0]->ne[2] : 0, g.n_slots);
+        }
+        ctl.init(group_of, expert_mib, group_dims, layers.size());
+    }
+
     ggml_tensor * get_slot_map(int32_t il, int64_t n_tokens, int64_t n_expert_used, bool cpu_part) const {
         if (il < 0 || il >= (int32_t) layers.size() || layers[il].ig < 0) {
             return nullptr;
@@ -741,7 +1085,7 @@ struct llama_moe_cache::impl {
     }
 
     ggml_tensor * get_cpu_map(int32_t il, int64_t n_tokens) const {
-        if (il < 0 || il >= (int32_t) layers.size() || layers[il].cpu_map == nullptr) {
+        if (il < 0 || il >= (int32_t) layers.size() || layers[il].cpu_map == nullptr || !cpu_part()) {
             return nullptr;
         }
         // the scheduler would run the CPU part on a device that offloads such batches from host weights
@@ -805,9 +1149,10 @@ struct llama_moe_cache::impl {
         if (it == layer_of.end()) {
             return false;
         }
-        const int64_t t_enter = timing != nullptr ? ggml_time_us() : 0;
+        const int64_t t_enter = timing != nullptr || ctl_on ? ggml_time_us() : 0;
         const int32_t il      = it->second.first;
         const bool    has_cpu = it->second.second;
+        const bool new_ubatch = il <= il_last || il_last < 0;
         if (il <= il_last) {
             n_ubatch++;
         }
@@ -841,6 +1186,9 @@ struct llama_moe_cache::impl {
         GGML_ASSERT(sel->op == GGML_OP_RESHAPE); // of the [n_expert_used, n_tokens] ids, see build_moe_cache_slots
 
         const int32_t n_used = (int32_t) sel->src[0]->ne[0];
+        if (ctl_on && new_ubatch) {
+            ctl.start_ubatch(t_enter, sel->src[0]->ne[1], has_cpu, all_full());
+        }
 
         ids.resize(ggml_nelements(sel));
         ggml_backend_tensor_get_async(backend, sel, ids.data(), 0, ggml_nbytes(sel));
@@ -852,7 +1200,7 @@ struct llama_moe_cache::impl {
         }
 
         // part of the misses is computed on the CPU once the cache is full, the carry keeps the share right on average
-        const uint32_t share_q = has_cpu && !admit && g.lru.n_filled == g.lru.n_slots ? cpu_share_q : 0;
+        const uint32_t share_q = has_cpu && !admit && g.lru.n_filled == g.lru.n_slots ? (ctl_on ? ctl.share_q() : cpu_share_q) : 0;
         auto n_cpu = [&](size_t n_miss) {
             const uint64_t acc = (uint64_t) n_miss*share_q + l.cpu_acc;
             l.cpu_acc = acc & 0xffff;
@@ -901,6 +1249,12 @@ struct llama_moe_cache::impl {
         // the next copy synchronizes the backend before it changes the slot map again
         ggml_backend_tensor_set_async(backend, dst, l.slot_map->data, 0, ggml_nbytes(l.slot_map));
 
+        // after the uploads are queued, so the device does not wait for the ghosts
+        if (ctl_on) {
+            ctl.add_real(il, fills.size(), cpu.size());
+            ctl.replay(il, ids.data(), ids.size(), sel->src[0]->ne[1], n_used, n_zero);
+        }
+
         if (timing != nullptr) {
             size_t expert_bytes = 0;
             for (const ggml_tensor * w : l.experts) {
@@ -947,6 +1301,10 @@ ggml_tensor * llama_moe_cache::get_slot_map(int32_t il, int64_t n_tokens, int64_
 
 ggml_tensor * llama_moe_cache::get_experts(const ggml_tensor * w) const {
     return pimpl->get_experts(w);
+}
+
+bool llama_moe_cache::cpu_part() const {
+    return pimpl->cpu_part();
 }
 
 ggml_tensor * llama_moe_cache::get_cpu_map(int32_t il, int64_t n_tokens) const {

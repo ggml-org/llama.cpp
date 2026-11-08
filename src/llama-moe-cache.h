@@ -31,6 +31,9 @@ public:
     // nullptr if no misses of layer il are computed on the CPU for ubatches of n_tokens tokens
     ggml_tensor * get_cpu_map(int32_t il, int64_t n_tokens) const;
 
+    // the graphs build the CPU part, false while the auto share is off: a graph built with the other value cannot be reused
+    bool cpu_part() const;
+
     // ggml_backend_sched copy callback, returns false if src is not a slot map
     bool copy(ggml_backend_t backend, const ggml_tensor * src, ggml_tensor * dst, ggml_cgraph * graph);
 

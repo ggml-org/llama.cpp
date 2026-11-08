@@ -2923,6 +2923,7 @@ llm_graph_params llama_context::graph_params(
         /*.mctx        =*/ mctx,
         /*.cross       =*/ &cross,
         /*.moe_cache   =*/ moe_cache.get(),
+        /*.moe_cache_cpu_part =*/ moe_cache && moe_cache->cpu_part(),
         /*.prec_policy =*/ &model.prec_policy,
         /*.hdmd        =*/ model.hdmd.rot.empty() ? nullptr : &model.hdmd,
         /*.layer_inp_dev =*/ layer_inp_dev,
