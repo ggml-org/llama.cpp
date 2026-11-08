@@ -2,7 +2,7 @@
 
 // Muse Spark audio tower: a causal conv pyramid over the raw waveform, no attention and no spectrogram
 // each stage folds `patch` samples into the channel dim, projects, then runs `depth` residual blocks (depthwise causal conv, RMS norm, GELU MLP)
-ggml_cgraph * clip_graph_muse_spark_audio::build() {
+ggml_cgraph * mtmd_graph_muse_spark_audio::build() {
     const int kernel = hparams.audio_conv_kernel_size;
     const int n_stage = (int) hparams.audio_patch_sizes.size();
 

@@ -7,6 +7,7 @@ Please refer to [multimodal.md](../../docs/multimodal.md) for a broader context.
 In short:
 - `libmtmd` started as a wrapper around `libllava` / `clip.cpp`
 - Various components that used to be in `clip.cpp` are moved progressively to mtmd. For example, preprocessor is now part of mtmd
+- `clip.cpp` has since been split into `mtmd-model` (hparams and weights, one `mtmd_model` per modality), `mtmd-subcontext` (backends and compute, one `mtmd_subcontext` per modality) and `mtmd-graph` (graph builders, see `models/`). Only the GGUF format keeps the `clip.` name (metadata keys and the `clip` architecture), for compatibility with existing mmproj files
 
 ## Terminologies
 
@@ -14,6 +15,26 @@ In short:
 - bitmap: representing a raw input data, for example: RGB image, PCM audio
 - tiles / slices: for llava-uhd-style models, the preprocessor breaks a large input into smaller square images called tiles or slices
 - chunk: a mtmd_input_chunk represents a preprocessed input that can then be passed through `mtmd_encode()`
+
+## Structure
+
+Overview of the `libmtmd` structure:
+
+- `mtmd_context` (`mtmd.cpp`): the public handle
+    - `mtmd_models`: one mmproj file, loaded by `mtmd_model_load()`
+        - `mtmd_model` `v` / `a` / `gen_a` (`mtmd-model.h`): one per modality, holds hparams, weights (`ctx_data` + `buf`) and requirements
+    - `mtmd_subcontext` `ctx_v` / `ctx_a` / `ctx_gen_a` (`mtmd-subcontext.h`): one per model, holds a const ref to it
+        - backends + `sched`: GPU/CPU backends, compute buffers, resolved flash attn
+        - `mtmd_graph` (`mtmd-graph.h`, `models/`): built for each `encode()` call, temporary
+    - `mtmd_image_preprocessor` / `mtmd_audio_preprocessor` (`mtmd-image.h`, `mtmd-audio.h`): read the hparams of their model
+- `mtmd_gen_state` / `mtmd_audio_stream`: public, one per sequence / stream
+    - `mtmd_subctx_gen_state` / `mtmd_subctx_enc_state`: allocated on the backend of a subcontext, see `gen_state_init()` / `enc_state_init()`
+
+Rules of thumb:
+- `mtmd_model` is read-only once loaded. Anything that depends on the backend (scheduler, compute buffers, flash attn resolution, warmup) belongs to `mtmd_subcontext`
+- A model declares its runtime needs (e.g. `max_nodes`, `flash_attn_auto`) in `load_hparams`, the subcontext applies them
+- Models must outlive their subcontexts, `mtmd_context` declares `models` first for that reason
+- Backends are owned by each subcontext for now; they will move to `mtmd_context` so that subcontexts can share them
 
 ## Pipeline
 
@@ -67,21 +88,21 @@ Due to wide variety of audio generation pipelines, the `mtmd_gen_audio` system i
     - Backbone model should be converted to a normal text model (loadable via `libllama`)
         - If model used hard-coded embedding row ID, append them to token embeddings and assign token name for them (see `qwen3tts.py`)
         - If model have a specific output logits head for audio codes (usually semantic code), keep the head as-is and pad the logits at inference time (see `src/models/qwen3vl.cpp`)
-    - Sidecar models (code2wav, bigvgan, etc) must live inside the mmproj GGUF (but can be in different `clip_context` if necessary)
+    - Sidecar models (code2wav, bigvgan, etc) must live inside the mmproj GGUF (but can be in different `mtmd_subcontext` if necessary)
         - Note: it should use `ggml_build_forward_select` to select graphs if multiple graphs living in the same context
-    - Reuse existing GGUF metadata key name and tensor name whenever possible; think twice before adding extensive changes to GGUF writer. For example, Qwen3-TTS hard-code part of the hparams to `clip.cpp` as they won't likely to change.
+    - Reuse existing GGUF metadata key name and tensor name whenever possible; think twice before adding extensive changes to GGUF writer. For example, Qwen3-TTS hard-code part of the hparams in `mtmd-model.cpp` as they won't likely to change.
     - For tensor naming:
         - Prefixed with `a.*` for tensors used by speaker encoder pipeline
         - Prefixed with `a.gen.*` for generation stages (code / mel-spectrogram / PCM generation)
     - For GGUF metadata:
         - Reuse as many existing keys as possible
-        - In most cases, you can hard-code model configs in the model graph class, or in `clip_hparams`
+        - In most cases, you can hard-code model configs in the model graph class, or in `mtmd_hparams`
         - If some values need to be exposed to the `mtmd_helper` layer, hard-code them in `mtmd_helper` and distinguish by pipeline and `mtmd_gen_audio_info::model_variant` if necessary
         - Do NOT add new GGUF metadata or new fields to `mtmd_gen_audio_info` unless you can prove that you absolutely need them
 4. Make sure most of the changes happen inside `mtmd-helper-gen.cpp`. A good PR looks like this:
     - 10-20% changes is to add new backbone (text) model and conversion
     - 60% changes inside `mtmd-helper-gen.cpp`
-    - 10% changes inside `libmtmd` and `clip.cpp` systems
+    - 10% changes inside `libmtmd` core (`mtmd-model`, `mtmd-subcontext`, `models/`)
     - The rest downstream code (CLI, server) should have no changes at all
 5. Update usage documentation in `tools/tts/README.md`
 

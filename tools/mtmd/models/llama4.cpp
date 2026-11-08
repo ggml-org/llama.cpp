@@ -1,6 +1,6 @@
 #include "models.h"
 
-ggml_cgraph * clip_graph_llama4::build() {
+ggml_cgraph * mtmd_graph_llama4::build() {
     GGML_ASSERT(model.class_embedding != nullptr);
     GGML_ASSERT(model.position_embeddings != nullptr);
 
@@ -31,7 +31,7 @@ ggml_cgraph * clip_graph_llama4::build() {
     inp = ggml_concat(ctx0, inp, model.class_embedding, 1);
 
     // build ViT with 2D position embeddings
-    auto add_pos = [&](ggml_tensor * cur, const clip_layer &) {
+    auto add_pos = [&](ggml_tensor * cur, const mtmd_layer &) {
         // first half is X axis and second half is Y axis
         // ref: https://github.com/huggingface/transformers/blob/40a493c7ed4f19f08eadb0639cf26d49bfa5e180/src/transformers/models/llama4/modeling_llama4.py#L1312
         // ref: https://github.com/Blaizzy/mlx-vlm/blob/a57156aa87b33cca6e5ee6cfc14dd4ef8f611be6/mlx_vlm/models/llama4/vision.py#L441

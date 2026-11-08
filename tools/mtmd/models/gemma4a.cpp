@@ -1,5 +1,5 @@
 /**
- * Gemma 4 Audio Conformer Encoder (clip_graph_gemma4a)
+ * Gemma 4 Audio Conformer Encoder (mtmd_graph_gemma4a)
  *
  * Architecture: Conformer with dual half-step FFN, full self-attention
  * with sinusoidal RPE, depthwise light conv, and output projection.
@@ -8,7 +8,7 @@
 #include "models.h"
 #include <cmath>
 
-ggml_cgraph * clip_graph_gemma4a::build() {
+ggml_cgraph * mtmd_graph_gemma4a::build() {
     const float res_weight = 0.5f;
     const float norm_eps   = 1e-6f;
 
@@ -273,7 +273,7 @@ ggml_cgraph * clip_graph_gemma4a::build() {
     return gf;
 }
 
-ggml_tensor * clip_graph_gemma4a::build_mm(ggml_tensor * w, ggml_tensor * x) const {
+ggml_tensor * mtmd_graph_gemma4a::build_mm(ggml_tensor * w, ggml_tensor * x) const {
     auto it = model.clamp_info_map.find(w->name);
     if (it == model.clamp_info_map.end()) {
         return ggml_mul_mat(ctx0, w, x);

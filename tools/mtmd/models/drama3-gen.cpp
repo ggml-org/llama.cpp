@@ -7,13 +7,13 @@
 static constexpr int   DRAMA3_N_ROT      = 64;
 static constexpr float DRAMA3_ROPE_THETA = 1e7f;
 
-std::vector<c2w_state_slot> list_drama3_state_slots(const clip_hparams & hparams, const clip_model & model) {
+std::vector<c2w_state_slot> list_drama3_state_slots(const mtmd_hparams & hparams, const mtmd_model & model) {
     std::vector<c2w_state_slot> slots;
     slots.push_back({"tower_pos", 1, 1, true});
     for (size_t il = 0; il < model.layers.size(); il++) {
         const int64_t n_kv = model.layers[il].k_w->ne[1];
-        slots.push_back({"tower_k_" + std::to_string(il), n_kv, clip_graph_drama3_gen::n_pos_max, true});
-        slots.push_back({"tower_v_" + std::to_string(il), n_kv, clip_graph_drama3_gen::n_pos_max, true});
+        slots.push_back({"tower_k_" + std::to_string(il), n_kv, mtmd_graph_drama3_gen::n_pos_max, true});
+        slots.push_back({"tower_v_" + std::to_string(il), n_kv, mtmd_graph_drama3_gen::n_pos_max, true});
     }
     for (auto & slot : list_c2w_state_slots(hparams, model)) {
         slots.push_back(slot);
@@ -22,7 +22,7 @@ std::vector<c2w_state_slot> list_drama3_state_slots(const clip_hparams & hparams
 }
 
 // h_out = out_norm(Block(eh_proj([enorm(mask * E[code] + extra); hnorm(h_in)])))
-ggml_tensor * clip_graph_drama3_gen::tower_layer(ggml_tensor * x, int il, ggml_tensor * code, ggml_tensor * mask, ggml_tensor * extra,
+ggml_tensor * mtmd_graph_drama3_gen::tower_layer(ggml_tensor * x, int il, ggml_tensor * code, ggml_tensor * mask, ggml_tensor * extra,
                                                  ggml_tensor * inp_pos, ggml_tensor * k_slot, ggml_tensor * v_slot, int pos) {
     const auto & layer = model.layers[il];
     const auto & tl    = model.drama3_layers[il];
@@ -80,7 +80,7 @@ ggml_tensor * clip_graph_drama3_gen::tower_layer(ggml_tensor * x, int il, ggml_t
 }
 
 // one row: backbone hidden + next main code -> other codes of that frame + next backbone input
-ggml_cgraph * clip_graph_drama3_gen::build_tower() {
+ggml_cgraph * mtmd_graph_drama3_gen::build_tower() {
     const int     n_layer   = (int) model.layers.size();
     const int     n_heads   = (int) model.gen_code_head_w->ne[2]; // one per residual codebook
     const int     n_shared  = n_layer - n_heads;
@@ -141,7 +141,7 @@ ggml_cgraph * clip_graph_drama3_gen::build_tower() {
     ggml_tensor * extra  = ggml_cont(ctx0, ggml_transpose(ctx0, ggml_get_rows(ctx0, cb_all, inp_extra)));
     extra = ggml_mul(ctx0, ggml_reshape_2d(ctx0, ggml_sum_rows(ctx0, extra), n_embd_cb, 1), extra_on);
 
-    clip_graph_qwen3tts_gen::code_gen cg(*this, top_k, top_p);
+    mtmd_graph_qwen3tts_gen::code_gen cg(*this, top_k, top_p);
     ggml_tensor * out_codes = cg.cache_set(ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, 1, n_cb), 0, inp_code0);
 
     ggml_tensor * code = inp_code0;
@@ -183,7 +183,7 @@ ggml_cgraph * clip_graph_drama3_gen::build_tower() {
 }
 
 // frames -> PCM, qwen3tts code2wav blocks without pre_conv and tfm projections
-ggml_cgraph * clip_graph_drama3_gen::build_codec() {
+ggml_cgraph * mtmd_graph_drama3_gen::build_codec() {
     const auto & c2w = model.c2w;
     const int64_t n_cb = model.gen_code_embd_w->ne[2];
 
@@ -191,7 +191,7 @@ ggml_cgraph * clip_graph_drama3_gen::build_codec() {
     ggml_set_name(inp_codes, "inp_codes");
     ggml_set_input(inp_codes);
 
-    clip_graph_qwen3tts_gen::code2wav dec(*this);
+    mtmd_graph_qwen3tts_gen::code2wav dec(*this);
     dec.gelu_erf = true;
     for (const auto & slot : list_c2w_state_slots(hparams, model)) {
         ggml_tensor * t = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, slot.ne0, slot.ne1);
@@ -251,6 +251,6 @@ ggml_cgraph * clip_graph_drama3_gen::build_codec() {
     return gf;
 }
 
-ggml_cgraph * clip_graph_drama3_gen::build() {
-    return gen_process == CLIP_GEN_PROCESS_GEN_WAV ? build_codec() : build_tower();
+ggml_cgraph * mtmd_graph_drama3_gen::build() {
+    return gen_process == MTMD_SUBCTX_GEN_PROCESS_GEN_WAV ? build_codec() : build_tower();
 }
