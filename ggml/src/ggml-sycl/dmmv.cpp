@@ -261,6 +261,126 @@ static void convert_mul_mat_vec_bf16_sycl(const void *vx, const dfloat *y,
 }
 #endif
 
+#ifdef GGML_SYCL_DMMV_HAS_BF16
+// GGML_SYCL_BF16_FAST=1: BF16 mat-vec with 16-byte loads; S sub-groups share one row (split-K) for few-row shapes
+static inline float bf16_bits_to_f32(uint32_t bits) {
+    return sycl::bit_cast<float>(bits);
+}
+
+template <int S, int NC>
+static void mul_mat_vec_bf16_fast(const uint16_t * __restrict__ x, const float * __restrict__ y, float * __restrict__ dst,
+                                  const int ncols, const int nrows, const sycl::nd_item<1> & it, float * lsum) {
+    constexpr int SG = WARP_SIZE;
+    constexpr int R  = 16 / S; // rows per work-group of 16 sub-groups
+    const int sg_id  = it.get_local_id(0) / SG;
+    const int lane   = it.get_local_id(0) % SG;
+    const int part   = sg_id % S;
+    const int row    = it.get_group(0) * R + sg_id / S;
+
+    float sum[NC] = {};
+    if (row < nrows) {
+        const sycl::uint4 * xr = (const sycl::uint4 *) (x + (size_t) row * ncols);
+        const int nchunks = ncols / 8;
+        for (int c = part * SG + lane; c < nchunks; c += S * SG) {
+            const sycl::uint4 w = xr[c];
+            const float w0 = bf16_bits_to_f32(w.x() << 16), w1 = bf16_bits_to_f32(w.x() & 0xffff0000u);
+            const float w2 = bf16_bits_to_f32(w.y() << 16), w3 = bf16_bits_to_f32(w.y() & 0xffff0000u);
+            const float w4 = bf16_bits_to_f32(w.z() << 16), w5 = bf16_bits_to_f32(w.z() & 0xffff0000u);
+            const float w6 = bf16_bits_to_f32(w.w() << 16), w7 = bf16_bits_to_f32(w.w() & 0xffff0000u);
+#pragma unroll
+            for (int j = 0; j < NC; j++) {
+                const sycl::float4 * yv = (const sycl::float4 *) (y + (size_t) j * ncols);
+                const sycl::float4 y0 = yv[2 * c];
+                const sycl::float4 y1 = yv[2 * c + 1];
+                sum[j] += w0 * y0.x() + w1 * y0.y() + w2 * y0.z() + w3 * y0.w() +
+                          w4 * y1.x() + w5 * y1.y() + w6 * y1.z() + w7 * y1.w();
+            }
+        }
+    }
+#pragma unroll
+    for (int j = 0; j < NC; j++) {
+        sum[j] = sycl::reduce_over_group(it.get_sub_group(), sum[j], sycl::plus<float>());
+    }
+    if constexpr (S == 1) {
+        if (lane == 0 && row < nrows) {
+#pragma unroll
+            for (int j = 0; j < NC; j++) {
+                dst[(size_t) j * nrows + row] = sum[j];
+            }
+        }
+    } else {
+        if (lane == 0) {
+#pragma unroll
+            for (int j = 0; j < NC; j++) {
+                lsum[j * 16 + sg_id] = sum[j];
+            }
+        }
+        sycl::group_barrier(it.get_group());
+        if (part == 0 && lane == 0 && row < nrows) {
+#pragma unroll
+            for (int j = 0; j < NC; j++) {
+                float t = 0.0f;
+                for (int i = 0; i < S; i++) {
+                    t += lsum[j * 16 + sg_id + i];
+                }
+                dst[(size_t) j * nrows + row] = t;
+            }
+        }
+    }
+}
+
+template <int S, int NC>
+static void launch_mul_mat_vec_bf16_fast(const void * vx, const float * y, float * dst, int ncols, int nrows, dpct::queue_ptr stream) {
+    constexpr int R = 16 / S;
+    const int n_wg = (nrows + R - 1) / R;
+    stream->submit([&](sycl::handler & cgh) {
+        sycl::local_accessor<float, 1> lsum(sycl::range<1>(16 * NC), cgh);
+        cgh.parallel_for(sycl::nd_range<1>(sycl::range<1>((size_t) n_wg * 16 * WARP_SIZE), sycl::range<1>(16 * WARP_SIZE)),
+                         [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+            mul_mat_vec_bf16_fast<S, NC>((const uint16_t *) vx, y, dst, ncols, nrows, it,
+                                         lsum.get_multi_ptr<sycl::access::decorated::no>().get());
+        });
+    });
+}
+
+template <int NC>
+static void launch_mul_mat_vec_bf16_fast_s(int s, const void * vx, const float * y, float * dst, int ncols, int nrows, dpct::queue_ptr stream) {
+    switch (s) {
+        case 1:  launch_mul_mat_vec_bf16_fast<1, NC>(vx, y, dst, ncols, nrows, stream); break;
+        case 2:  launch_mul_mat_vec_bf16_fast<2, NC>(vx, y, dst, ncols, nrows, stream); break;
+        case 4:  launch_mul_mat_vec_bf16_fast<4, NC>(vx, y, dst, ncols, nrows, stream); break;
+        case 8:  launch_mul_mat_vec_bf16_fast<8, NC>(vx, y, dst, ncols, nrows, stream); break;
+        default: launch_mul_mat_vec_bf16_fast<16, NC>(vx, y, dst, ncols, nrows, stream); break;
+    }
+}
+
+// y: ncols x ncols_y floats (column j at y + j*ncols), dst: nrows x ncols_y; false if the fast path does not apply
+bool ggml_sycl_mul_mat_vec_bf16_fast(const void * vx, const float * y, float * dst, int ncols, int nrows, int ncols_y,
+                                     dpct::queue_ptr stream) {
+    static const bool enabled = getenv("GGML_SYCL_BF16_FAST") && atoi(getenv("GGML_SYCL_BF16_FAST")) != 0;
+    if (!enabled || ncols_y < 1 || ncols_y > 8 || ncols % 8 != 0 || ((uintptr_t) vx % 16) != 0 || ((uintptr_t) y % 16) != 0) {
+        return false;
+    }
+    // enough sub-groups to fill the GPU, but at least two 8-value chunks per lane
+    const int nchunks = ncols / 8;
+    int s = 1;
+    while (s < 16 && nrows * s < 2048 && nchunks >= 2 * s * WARP_SIZE) {
+        s *= 2;
+    }
+    switch (ncols_y) {
+        case 1:  launch_mul_mat_vec_bf16_fast_s<1>(s, vx, y, dst, ncols, nrows, stream); break;
+        case 2:  launch_mul_mat_vec_bf16_fast_s<2>(s, vx, y, dst, ncols, nrows, stream); break;
+        case 3:  launch_mul_mat_vec_bf16_fast_s<3>(s, vx, y, dst, ncols, nrows, stream); break;
+        case 4:  launch_mul_mat_vec_bf16_fast_s<4>(s, vx, y, dst, ncols, nrows, stream); break;
+        case 5:  launch_mul_mat_vec_bf16_fast_s<5>(s, vx, y, dst, ncols, nrows, stream); break;
+        case 6:  launch_mul_mat_vec_bf16_fast_s<6>(s, vx, y, dst, ncols, nrows, stream); break;
+        case 7:  launch_mul_mat_vec_bf16_fast_s<7>(s, vx, y, dst, ncols, nrows, stream); break;
+        default: launch_mul_mat_vec_bf16_fast_s<8>(s, vx, y, dst, ncols, nrows, stream); break;
+    }
+    return true;
+}
+#endif
+
 static void dequantize_mul_mat_vec_q2_k(const void *__restrict__ vx,
                                         const float *__restrict__ yy,
                                         float *__restrict__ dst,
@@ -2466,6 +2586,8 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
             break;
 #ifdef GGML_SYCL_DMMV_HAS_BF16
         case GGML_TYPE_BF16:
+            if (sizeof(dfloat) != sizeof(float) ||
+                !ggml_sycl_mul_mat_vec_bf16_fast(src0_dd_i, (const float *) src1_dfloat, dst_dd_i, ne00, row_diff, 1, stream))
             convert_mul_mat_vec_bf16_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
             break;
 #endif

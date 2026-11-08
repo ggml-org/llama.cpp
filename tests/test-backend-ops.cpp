@@ -12134,6 +12134,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // single head with quantized K (MMQ on Vulkan)
     test_cases.emplace_back(new test_flash_attn_ext(128, 128, 1, { 1, 1}, 8192, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, {0, 1, 2, 3}, true, false, 512));
     test_cases.emplace_back(new test_flash_attn_ext(128, 128, 1, { 1, 1}, 8192, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_1, GGML_TYPE_Q4_1, {0, 1, 2, 3}, true, false, 512));
+    // Qwen QSA MTP verify: several Q rows gather the union of their cells (GGML_SYCL_SPARSE_FA_ROWS)
+    for (int kv : {8192, 32768}) for (int nb : {2, 4, 6, 8}) {
+        test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {12, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false, 2048));
+    }
     // KV not a multiple of the compaction workgroup size.
     test_cases.emplace_back(new test_flash_attn_ext(128, 128, 1, { 8, 1}, 5003, 4, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false,  512));
 
@@ -12426,6 +12430,19 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q2_0, GGML_TYPE_F32, 32, 10, false, 640, 1, k));
         test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q2_0, GGML_TYPE_F32, 32, 10, false, 2560, 1, k));
         test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q2_0, GGML_TYPE_F32, 32, 10, false, 640, 4, k));
+    }
+
+    // BF16 mat-vec shapes of Qwen3.8 (GGML_SYCL_BF16_FAST): {m, k}
+    for (auto mk : std::vector<std::pair<int, int>>{{4, 10240}, {48, 2560}, {128, 2560}, {320, 10240}, {10240, 320}, {512, 2560}, {7, 72}}) {
+        for (int n : {1, 2, 3, 6, 8}) {
+            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32, mk.first, n, mk.second, {1, 1}, {1, 1}));
+        }
+    }
+
+    // Q2_0 expert shapes at prefill batch sizes (GGML_SYCL_XMX_Q2_0 grouped XMX path)
+    for (int n : {64, 512}) {
+        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q2_0, GGML_TYPE_F32, 128, 10, false,  640, n, 2560));
+        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q2_0, GGML_TYPE_F32, 128, 10, false, 2560, n,  640));
     }
 
     return test_cases;
@@ -12964,9 +12981,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
             test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32,   320, bs, 10240, {1, 1}, {1, 1}));
             test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 10240, bs,   320, {1, 1}, {1, 1}));
             test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32,   512, bs,  2560, {1, 1}, {1, 1}));
+            // few-row BF16 shapes: hc_*_inject [10240,4], ssm_alpha/beta [2560,48], indexer.k_proj [2560,128]
+            test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32,     4, bs, 10240, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32,    48, bs,  2560, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32,   128, bs,  2560, {1, 1}, {1, 1}));
         }
     }
-    for (int bs : {1, 2, 4, 6, 8}) {
+    for (int bs : {1, 2, 4, 6, 8, 512, 2048}) {
         test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q2_0, GGML_TYPE_F32, 512, 10, false,  640, bs, 2560));
         test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q2_0, GGML_TYPE_F32, 512, 10, false, 2560, bs,  640));
     }

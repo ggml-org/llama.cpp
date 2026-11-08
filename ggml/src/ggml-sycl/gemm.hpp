@@ -60,6 +60,18 @@ public:
 #ifdef GGML_SYCL_F16
         primitive_attr.set_fpmath_mode(dnnl::fpmath_mode::f16);
 #endif
+        // opt-in GGML_SYCL_DNNL_FPMATH=bf16|tf32: let f32 GEMMs use the XMX units (f32 accumulate)
+        static const int fpmath = [] {
+            const char * e = getenv("GGML_SYCL_DNNL_FPMATH");
+            if (e && strcmp(e, "bf16") == 0) return 1;
+            if (e && strcmp(e, "tf32") == 0) return 2;
+            return 0;
+        }();
+        if (fpmath == 1) {
+            primitive_attr.set_fpmath_mode(dnnl::fpmath_mode::bf16);
+        } else if (fpmath == 2) {
+            primitive_attr.set_fpmath_mode(dnnl::fpmath_mode::tf32);
+        }
 
         auto a_mem = dnnl::memory(a_in_md, eng, const_cast<void*>(a));
         auto b_mem = dnnl::memory(b_in_md, eng, const_cast<void*>(b));

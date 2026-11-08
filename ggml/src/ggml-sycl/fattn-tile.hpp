@@ -654,7 +654,7 @@ static __dpct_inline__ void flash_attn_tile_iter(T_vec_dot * const Q_tmp,
     }
 }
 
-template <int DKQ, int DV, int ncols1, int ncols2, bool use_logit_softcap, int warp_size>  // D == head size
+template <int DKQ, int DV, int ncols1, int ncols2, bool use_logit_softcap, int warp_size, bool skip_masked = false>  // D == head size
 /*
 The total declared local variable size in device function flash_attn_tile exceeds 128 bytes and may cause high register pressure. Consult with your hardware vendor to find the total register size available and adjust the code, or use smaller sub-group size to avoid high register pressure.
 */
@@ -861,10 +861,36 @@ static void flash_attn_tile(const char *  Q,
 
     // Main loop over KV cache:
     const int k_VKQ_max = KV_max ? KV_max[sequence * item_ct1.get_group_range(2) + item_ct1.get_group(2)] : ne11;
+
+    // skip_masked (GGML_SYCL_FA_SKIP_MASKED=1): a KV tile whose mask is -inf for all Q rows of this block adds
+    // exactly nothing, so its K/V loads and math are skipped (sparse attention masks most of the cache)
+    auto tile_masked = [&](const int k0) -> bool {
+        if constexpr (!skip_masked) {
+            return false;
+        }
+        if (!maskh) {
+            return false;
+        }
+        const int nthr = item_ct1.get_local_range(1) * item_ct1.get_local_range(2);
+        const int tid  = item_ct1.get_local_id(1) * item_ct1.get_local_range(2) + item_ct1.get_local_id(2);
+        bool live = false;
+        for (int idx = tid; idx < ncols1 * nbatch_fa; idx += nthr) {
+            const int k = k0 + idx % nbatch_fa;
+            if (k < k_VKQ_max) {
+                const int j = fastmodulo(col_Q_0 + idx / nbatch_fa, ne01);
+                live = live || (float) maskh[j * stride_mask + k] > -INFINITY;
+            }
+        }
+        return !sycl::any_of_group(item_ct1.get_group(), live);
+    };
     if (ncols2 == 1) {
         // Branch with out-of-bounds checks.
         int k_VKQ_0 = item_ct1.get_group(1) * nbatch_fa;
         while (k_VKQ_0 < k_VKQ_max - nbatch_fa) {
+            if (tile_masked(k_VKQ_0)) {
+                k_VKQ_0 += item_ct1.get_group_range(1) * nbatch_fa;
+                continue;
+            }
             constexpr bool oob_check = false;
             flash_attn_tile_iter<warp_size, nwarps, ncols1, ncols2, DKQ, DV, nbatch_fa, nbatch_K, use_logit_softcap,
                                  oob_check>(Q_tmp, K_h2, V_h2, maskh, ne01, logit_softcap, slope, KQ, KV_tmp, stride_K2,
@@ -872,7 +898,7 @@ static void flash_attn_tile(const char *  Q,
                                             KQ_max_new_shared);
             k_VKQ_0 += item_ct1.get_group_range(1) * nbatch_fa;
         }
-        if (k_VKQ_0 < k_VKQ_max) {
+        if (k_VKQ_0 < k_VKQ_max && !tile_masked(k_VKQ_0)) {
             constexpr bool oob_check = true;
             flash_attn_tile_iter<warp_size, nwarps, ncols1, ncols2, DKQ, DV, nbatch_fa, nbatch_K, use_logit_softcap,
                                  oob_check>(Q_tmp, K_h2, V_h2, maskh, ne01, logit_softcap, slope, KQ, KV_tmp, stride_K2,
@@ -883,6 +909,9 @@ static void flash_attn_tile(const char *  Q,
         // Branch without out-of-bounds checks.
         for (int k_VKQ_0 = item_ct1.get_group(1) * nbatch_fa; k_VKQ_0 < k_VKQ_max;
              k_VKQ_0 += item_ct1.get_group_range(1) * nbatch_fa) {
+            if (tile_masked(k_VKQ_0)) {
+                continue;
+            }
 
             constexpr bool oob_check = false;
             flash_attn_tile_iter<warp_size, nwarps, ncols1, ncols2, DKQ, DV, nbatch_fa, nbatch_K, use_logit_softcap,
@@ -1077,6 +1106,7 @@ static void launch_fattn_tile_switch_ncols1(ggml_backend_sycl_context & ctx, ggm
     const int warp_size = WARP_32_SIZE; //can't support WARP_16_SIZE
 
     constexpr size_t nbytes_shared = 0;
+    static const bool fattn_skip_masked = getenv("GGML_SYCL_FA_SKIP_MASKED") && atoi(getenv("GGML_SYCL_FA_SKIP_MASKED")) != 0;
 
     if (DV < 512 && Q->ne[1] < 32) {
         if constexpr (ncols2 <= 32) {
@@ -1084,6 +1114,12 @@ static void launch_fattn_tile_switch_ncols1(ggml_backend_sycl_context & ctx, ggm
                 constexpr int cols_per_block = 32;
                 const int nwarps    = ggml_sycl_fattn_tile_get_nthreads (DKQ, DV, cols_per_block, cc) / warp_size;
                 const int nbatch_fa = ggml_sycl_fattn_tile_get_nbatch_fa(DKQ, DV, cols_per_block, cc);
+                if (fattn_skip_masked) {
+                    launch_fattn<DV, cols_per_block/ncols2, ncols2,
+                        flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size, true>, warp_size>
+                        (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false);
+                    return;
+                }
                 launch_fattn<DV, cols_per_block/ncols2, ncols2,
                     flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size>, warp_size>
                     (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false);
@@ -1095,6 +1131,12 @@ static void launch_fattn_tile_switch_ncols1(ggml_backend_sycl_context & ctx, ggm
                 constexpr int cols_per_block = 16;
                 const int nwarps    = ggml_sycl_fattn_tile_get_nthreads (DKQ, DV, cols_per_block, cc) / warp_size;
                 const int nbatch_fa = ggml_sycl_fattn_tile_get_nbatch_fa(DKQ, DV, cols_per_block, cc);
+                if (fattn_skip_masked) {
+                    launch_fattn<DV, cols_per_block/ncols2, ncols2,
+                        flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size, true>, warp_size>
+                        (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false);
+                    return;
+                }
                 launch_fattn<DV, cols_per_block/ncols2, ncols2,
                     flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size>, warp_size>
                     (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false);
@@ -1106,6 +1148,12 @@ static void launch_fattn_tile_switch_ncols1(ggml_backend_sycl_context & ctx, ggm
                 constexpr int cols_per_block = 8;
                 const int nwarps    = ggml_sycl_fattn_tile_get_nthreads (DKQ, DV, cols_per_block, cc) / warp_size;
                 const int nbatch_fa = ggml_sycl_fattn_tile_get_nbatch_fa(DKQ, DV, cols_per_block, cc);
+                if (fattn_skip_masked) {
+                    launch_fattn<DV, cols_per_block/ncols2, ncols2,
+                        flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size, true>, warp_size>
+                        (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false);
+                    return;
+                }
                 launch_fattn<DV, cols_per_block/ncols2, ncols2,
                     flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size>, warp_size>
                     (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false);
@@ -1119,6 +1167,12 @@ static void launch_fattn_tile_switch_ncols1(ggml_backend_sycl_context & ctx, ggm
             constexpr int cols_per_block = 4;
             const int nwarps    = ggml_sycl_fattn_tile_get_nthreads (DKQ, DV, cols_per_block, cc) / warp_size;
             const int nbatch_fa = ggml_sycl_fattn_tile_get_nbatch_fa(DKQ, DV, cols_per_block, cc);
+            if (fattn_skip_masked) {
+                launch_fattn<DV, cols_per_block/ncols2, ncols2,
+                    flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size, true>, warp_size>
+                    (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false);
+                return;
+            }
             launch_fattn<DV, cols_per_block/ncols2, ncols2,
                 flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size>, warp_size>
                 (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false);
@@ -1130,6 +1184,12 @@ static void launch_fattn_tile_switch_ncols1(ggml_backend_sycl_context & ctx, ggm
         constexpr int cols_per_block = 2;
         const int nwarps    = ggml_sycl_fattn_tile_get_nthreads (DKQ, DV, cols_per_block, cc) / warp_size;
         const int nbatch_fa = ggml_sycl_fattn_tile_get_nbatch_fa(DKQ, DV, cols_per_block, cc);
+        if (fattn_skip_masked) {
+            launch_fattn<DV, cols_per_block/ncols2, ncols2,
+                flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size, true>, warp_size>
+                (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false);
+            return;
+        }
         launch_fattn<DV, cols_per_block/ncols2, ncols2,
             flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size>, warp_size>
             (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false);

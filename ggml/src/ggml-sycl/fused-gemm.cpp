@@ -414,6 +414,7 @@ template <> struct fg_block_traits<block_q8_0>    { static constexpr int qk = QK
 template <> struct fg_block_traits<block_q4_K>    { static constexpr int qk = QK_K; };
 template <> struct fg_block_traits<block_q5_K>    { static constexpr int qk = QK_K; };
 template <> struct fg_block_traits<block_q6_K>    { static constexpr int qk = QK_K; };
+template <> struct fg_block_traits<block_q2_0>    { static constexpr int qk = QK2_0; };
 
 // The A stages below are the dequantize_block_iq* kernels rewritten for one k step. There a
 // work-item handled one quarter (il) of one 32-wide sub-block (ib); here one lane produces the
@@ -676,6 +677,21 @@ static __dpct_inline__ void fg_stage_a(const block_q6_K * __restrict__ xrow, con
     fg_decode_q6_K<E>(blk->ql, blk->qh, blk->scales, (float) blk->d, ib, a);
 }
 
+// q2_0: 64 values per block, value j is bits 2*(j%4) of qs[j/4], weight (q - 1) * d.
+// k step kb is half kb % 2 of block kb / 2, i.e. bytes 8*(kb%2) .. +7.
+template <typename E>
+static __dpct_inline__ void fg_stage_a(const block_q2_0 * __restrict__ xrow, const int kb, typename E::pair * a) {
+    const block_q2_0 * blk = xrow + kb / 2;
+    const float        d   = (float) blk->d;
+    const uint8_t *    q   = blk->qs + 8 * (kb % 2);
+#pragma unroll
+    for (int b = 0; b < 8; ++b) {
+        const int v = q[b];
+        a[2 * b]     = E::make(d * (float) (((v >> 0) & 3) - 1), d * (float) (((v >> 2) & 3) - 1));
+        a[2 * b + 1] = E::make(d * (float) (((v >> 4) & 3) - 1), d * (float) (((v >> 6) & 3) - 1));
+    }
+}
+
 // Reorder (SoA) layout: each block field is one stream over the nblocks of the matrix (of the expert
 // slice for MUL_MAT_ID), in the order reorder_qw() writes them. Block ib holds k step kb.
 template <typename block_q_t> struct fg_soa {
@@ -933,7 +949,7 @@ static void grouped_gemm_pack_b(const float * y, typename S::tsb * packed, const
 // of a dense batch, and for these formats that costs more than the one dequantization of the library GEMM.
 template <typename T> static constexpr bool fg_plain_ok() {
     return !std::is_same_v<T, block_q8_0> && !std::is_same_v<T, block_q4_K> && !std::is_same_v<T, block_q5_K> &&
-           !std::is_same_v<T, block_q6_K>;
+           !std::is_same_v<T, block_q6_K> && !std::is_same_v<T, block_q2_0>;
 }
 
 template <typename T, bool R> struct fg_tag {
@@ -969,6 +985,7 @@ template <typename F> static bool fg_visit_type(ggml_type type, bool reordered, 
         case GGML_TYPE_Q4_K:    return fg_visit_layout<block_q4_K>(reordered, f);
         case GGML_TYPE_Q5_K:    return fg_visit_layout<block_q5_K>(reordered, f);
         case GGML_TYPE_Q6_K:    return fg_visit_layout<block_q6_K>(reordered, f);
+        case GGML_TYPE_Q2_0:    return fg_visit_layout<block_q2_0>(reordered, f);
         default:                return false;
     }
 }

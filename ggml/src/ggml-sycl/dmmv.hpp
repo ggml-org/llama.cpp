@@ -33,4 +33,8 @@ bool ggml_sycl_dequantize_mul_mat_vec_glu_reorder_esimd(
     const void * vx, const void * vgate, const float * y,
     float * dst, int ncols, int nrows, dpct::queue_ptr stream);
 
+// GGML_SYCL_BF16_FAST: BF16 x F32 for 1..8 contiguous columns; false if not applicable
+bool ggml_sycl_mul_mat_vec_bf16_fast(const void * vx, const float * y, float * dst, int ncols, int nrows, int ncols_y,
+                                     dpct::queue_ptr stream);
+
 #endif // GGML_SYCL_DMMV_HPP

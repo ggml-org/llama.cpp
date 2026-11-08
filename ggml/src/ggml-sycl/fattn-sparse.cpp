@@ -1,6 +1,7 @@
 #include "fattn.hpp"
 #include "fattn-sparse.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -25,13 +26,27 @@ static int sparse_fa_margin(void) {
     return g_ggml_sycl_sparse_fa_margin;
 }
 
+// GGML_SYCL_SPARSE_FA_ROWS: largest Q row count taken (default 1, single-token decode). With more rows
+// (MTP verify) the union of the rows' live cells is gathered; its size is bounded by rows * (n_kv_max +
+// margin), and the unused tail is fully masked, so set GGML_SYCL_FA_SKIP_MASKED=1 to skip it.
+static int sparse_fa_max_rows(void) {
+    static const int rows = [] {
+        const char * e = getenv("GGML_SYCL_SPARSE_FA_ROWS");
+        const int    v = e ? atoi(e) : 1;
+        return v < 1 ? 1 : (v > 8 ? 8 : v);
+    }();
+    return rows;
+}
+
 // Unordered output is fine: softmax over the selected set is permutation invariant.
 static void sparse_fa_compact_mask(sycl::queue * stream,
                                    const sycl::half * __restrict__ mask,
                                    int32_t * __restrict__ indices,
                                    int32_t * __restrict__ count,
                                    const int64_t n_kv,
-                                   const int64_t n_kv_g) {
+                                   const int64_t n_kv_g,
+                                   const int64_t n_rows,
+                                   const size_t mask_s1) {
     constexpr size_t WG = 256;
     const size_t global = (size_t) GGML_PAD(n_kv, (int64_t) WG);
 
@@ -39,7 +54,14 @@ static void sparse_fa_compact_mask(sycl::queue * stream,
         sycl::nd_range<1>(sycl::range<1>(global), sycl::range<1>(WG)),
         [=](sycl::nd_item<1> item) {
             const int64_t i = (int64_t) item.get_global_id(0);
-            if (i >= n_kv || !sycl::isfinite((float) mask[i])) {
+            if (i >= n_kv) {
+                return;
+            }
+            bool live = false;
+            for (int64_t r = 0; r < n_rows; ++r) {
+                live = live || sycl::isfinite((float) mask[(size_t) r * mask_s1 + i]);
+            }
+            if (!live) {
                 return;
             }
 
@@ -66,7 +88,8 @@ static void sparse_fa_gather_rows(sycl::queue * stream,
                                   const size_t src_nb1,
                                   const size_t src_nb2,
                                   const int64_t n_kv_g,
-                                  const int64_t n_head) {
+                                  const int64_t n_head,
+                                  const bool zero_all) {
     GGML_ASSERT(row_size % sizeof(uint32_t) == 0);
     const size_t words = row_size / sizeof(uint32_t);
 
@@ -80,8 +103,12 @@ static void sparse_fa_gather_rows(sycl::queue * stream,
             uint32_t * dst_row =
                 (uint32_t *) (dst + ((size_t) (h * n_kv_g + slot)) * row_size);
 
-            if (slot >= (int64_t) *count) {
-                dst_row[w] = 0;
+            const int64_t cnt = *count;
+            if (slot >= cnt) {
+                // zero only the tile the last live slot shares; later tiles are fully masked and skipped
+                if (zero_all || slot < cnt + 256) {
+                    dst_row[w] = 0;
+                }
                 return;
             }
 
@@ -138,7 +165,12 @@ static bool sparse_fa_applicable(const ggml_tensor * dst, int64_t & n_kv_g_out) 
     }
 
     // single-token decode only; prefill amortises the scan already
-    if (Q->ne[1] != 1) {
+    if (Q->ne[1] > sparse_fa_max_rows()) {
+        return false;
+    }
+    // several rows leave a fully masked tail that is neither zeroed nor computed: needs the tile skip
+    static const bool skip_masked = getenv("GGML_SYCL_FA_SKIP_MASKED") && atoi(getenv("GGML_SYCL_FA_SKIP_MASKED")) != 0;
+    if (Q->ne[1] > 1 && !skip_masked) {
         return false;
     }
     if (K->ne[3] != 1 || V->ne[3] != 1 || mask->ne[2] != 1 || mask->ne[3] != 1) {
@@ -162,9 +194,20 @@ static bool sparse_fa_applicable(const ggml_tensor * dst, int64_t & n_kv_g_out) 
         return false;
     }
 
-    const int64_t n_kv_g = GGML_PAD((int64_t) n_kv_max + sparse_fa_margin(), SPARSE_FA_PAD);
-    if (n_kv_g * SPARSE_FA_MIN_RATIO > K->ne[1]) {
-        return false;
+    const int64_t per_row = (int64_t) n_kv_max + sparse_fa_margin();
+    int64_t       n_kv_g;
+    if (Q->ne[1] == 1) {
+        n_kv_g = GGML_PAD(per_row, SPARSE_FA_PAD);
+        if (n_kv_g * SPARSE_FA_MIN_RATIO > K->ne[1]) {
+            return false;
+        }
+    } else {
+        // the union of the rows' live cells fits in the sum of the rows and in n_kv itself; only its
+        // actual size is computed, the masked tail is skipped
+        if (per_row * SPARSE_FA_MIN_RATIO > K->ne[1]) {
+            return false;
+        }
+        n_kv_g = std::min(GGML_PAD(Q->ne[1] * per_row, SPARSE_FA_PAD), GGML_PAD(K->ne[1], SPARSE_FA_PAD));
     }
 
     n_kv_g_out = n_kv_g;
@@ -184,6 +227,7 @@ bool ggml_sycl_flash_attn_ext_sparse(ggml_backend_sycl_context & ctx, ggml_tenso
     const int64_t n_kv     = K->ne[1];
     const int64_t n_head_k = K->ne[2];
     const int64_t n_rows_m = mask->ne[1];
+    const bool    zero_all = dst->src[0]->ne[1] == 1;
 
     const size_t k_row = ggml_row_size(K->type, K->ne[0]);
     const size_t v_row = ggml_row_size(V->type, V->ne[0]);
@@ -206,13 +250,14 @@ bool ggml_sycl_flash_attn_ext_sparse(ggml_backend_sycl_context & ctx, ggml_tenso
     stream->single_task([=]() { *d_cnt = 0; });
 
     sparse_fa_compact_mask(stream, (const sycl::half *) mask->data,
-                           d_idx, d_cnt, n_kv, n_kv_g);
+                           d_idx, d_cnt, n_kv, n_kv_g, dst->src[0]->ne[1],
+                           mask->nb[1] / sizeof(sycl::half));
 
     sparse_fa_gather_rows(stream, (const uint8_t *) K->data, d_K, d_idx, d_cnt,
-                          k_row, K->nb[1], K->nb[2], n_kv_g, n_head_k);
+                          k_row, K->nb[1], K->nb[2], n_kv_g, n_head_k, zero_all);
 
     sparse_fa_gather_rows(stream, (const uint8_t *) V->data, d_V, d_idx, d_cnt,
-                          v_row, V->nb[1], V->nb[2], n_kv_g, n_head_k);
+                          v_row, V->nb[1], V->nb[2], n_kv_g, n_head_k, zero_all);
 
     sparse_fa_gather_mask(stream, (const sycl::half *) mask->data, d_mask,
                           d_idx, d_cnt, n_kv_g, n_rows_m,

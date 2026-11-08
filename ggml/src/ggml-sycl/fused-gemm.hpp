@@ -14,6 +14,9 @@ constexpr bool ggml_sycl_fused_dequant_gemm_type_ok(ggml_type src0_type, int64_t
     if (src0_type == GGML_TYPE_IQ4_NL || src0_type == GGML_TYPE_Q8_0) {
         return K % 32 == 0;
     }
+    if (src0_type == GGML_TYPE_Q2_0) {
+        return K % QK2_0 == 0;
+    }
     const bool superblock =
            src0_type == GGML_TYPE_Q4_K ||
            src0_type == GGML_TYPE_Q5_K ||
@@ -60,6 +63,11 @@ inline bool ggml_sycl_xmx_gather_type_enabled(ggml_type src0_type) {
         case GGML_TYPE_Q4_K:    return (g_ggml_sycl_xmx_gather_types & GGML_SYCL_XMX_GATHER_Q4_K    ) != 0;
         case GGML_TYPE_Q5_K:    return (g_ggml_sycl_xmx_gather_types & GGML_SYCL_XMX_GATHER_Q5_K    ) != 0;
         case GGML_TYPE_Q6_K:    return (g_ggml_sycl_xmx_gather_types & GGML_SYCL_XMX_GATHER_Q6_K    ) != 0;
+        case GGML_TYPE_Q2_0: {
+            // opt-in (GGML_SYCL_XMX_Q2_0=1): grouped MoE prefill for Q2_0 experts
+            static const bool on = getenv("GGML_SYCL_XMX_Q2_0") && atoi(getenv("GGML_SYCL_XMX_Q2_0")) != 0;
+            return on;
+        }
         default:          return false;
     }
 }

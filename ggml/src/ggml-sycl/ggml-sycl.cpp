@@ -5273,6 +5273,15 @@ static bool can_use_mul_mat_q(const ggml_tensor * src0, const ggml_tensor * src1
     return src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
 }
 
+// GGML_SYCL_BF16_FAST: BF16 mat-mul with 2..8 contiguous F32 columns runs the fast kernel instead of oneDNN
+static bool ggml_sycl_bf16_fast_multi_ok(const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * dst) {
+    static const bool enabled = getenv("GGML_SYCL_BF16_FAST") && atoi(getenv("GGML_SYCL_BF16_FAST")) != 0;
+    return enabled && src0->type == GGML_TYPE_BF16 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
+           src1->ne[1] >= 2 && src1->ne[1] <= 8 && src0->ne[2] == 1 && src0->ne[3] == 1 && src1->ne[2] == 1 &&
+           src1->ne[3] == 1 && ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(dst) &&
+           src0->ne[0] % 8 == 0 && ((uintptr_t) src0->data % 16) == 0 && ((uintptr_t) src1->data % 16) == 0;
+}
+
 static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
 
@@ -5338,6 +5347,14 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
             use = use || !use_mul_mat_vec_q;
         }
         use_dequantize_mul_mat_vec = use_dequantize_mul_mat_vec && use;
+    }
+
+    // GGML_SYCL_BF16_FAST: 2..8 tokens (MTP verify) without the f32->bf16 conversion and gemm
+    if (!split && ggml_sycl_bf16_fast_multi_ok(src0, src1, dst)) {
+        const bool ok = ggml_sycl_mul_mat_vec_bf16_fast(src0->data, (const float *) src1->data, (float *) dst->data,
+                                                        src0->ne[0], src0->ne[1], src1->ne[1], ctx.stream());
+        GGML_ASSERT(ok);
+        return;
     }
 
     if (!split && src0->type == GGML_TYPE_F16 && ggml_is_permuted(src0) && ggml_is_permuted(src1) && src1->ne[1] == 1) {
@@ -5701,6 +5718,15 @@ __dpct_inline__ static void k_copy_dst_from_contiguous(
 }
 
 // returns true when ggml_sycl_mul_mat_id takes the fallback path that requires stream synchronization
+// GGML_SYCL_MMID_SMALL_BATCH=N: MUL_MAT_ID with 2..N tokens runs the one-token fused path once per token
+static int64_t ggml_sycl_mmid_small_batch() {
+    static const int64_t n = [] {
+        const char * e = getenv("GGML_SYCL_MMID_SMALL_BATCH");
+        return e ? (int64_t) atoi(e) : (int64_t) 0;
+    }();
+    return n;
+}
+
 static bool ggml_sycl_mul_mat_id_needs_sync(const ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
@@ -5710,13 +5736,16 @@ static bool ggml_sycl_mul_mat_id_needs_sync(const ggml_tensor * dst) {
     const int64_t ne11 = src1->ne[1];
     const int64_t ne12 = src1->ne[2];
 
-    if (ne12 != 1) return true;
+    // a small batch is checked as one of its per-token slices (same type, shape and layout)
+    const bool small_batch = ne12 > 1 && ne12 <= ggml_sycl_mmid_small_batch() && ids->ne[1] == ne12;
+
+    if (ne12 != 1 && !small_batch) return true;
     if (src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) return true;
     if (ne10 != src0->ne[0] || ne10 % QK8_1 != 0) return true;
-    if (!ggml_is_contiguous(src1)) return true;
+    if (small_batch ? (src1->nb[0] != ggml_type_size(src1->type) || src1->nb[1] != src1->nb[0] * ne10) : !ggml_is_contiguous(src1)) return true;
 
     const int64_t n_ids_per_group = ids->ne[0];
-    if (ids->ne[1] != 1) return true;
+    if (ids->ne[1] != 1 && !small_batch) return true;
     if (ne11 != 1 && ne11 != n_ids_per_group) return true;
 
     return !ggml_sycl_supports_mmvq_id(src0->type);
@@ -5858,11 +5887,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
     // goes through exactly the one-token kernel, so it is bit-identical to a single-token step.
     // Off unless GGML_SYCL_MMID_SMALL_BATCH=N (max tokens) is set.
     {
-        static const int64_t mmid_small_batch = [] {
-            const char * e = getenv("GGML_SYCL_MMID_SMALL_BATCH");
-            return e ? (int64_t) atoi(e) : (int64_t) 0;
-        }();
-        if (ne12 > 1 && ne12 <= mmid_small_batch && ids->ne[1] == ne12) {
+        if (ne12 > 1 && ne12 <= ggml_sycl_mmid_small_batch() && ids->ne[1] == ne12) {
             bool ok = true;
             for (int64_t t = 0; t < ne12 && ok; ++t) {
                 ggml_tensor src1_t = *src1;
@@ -6156,6 +6181,108 @@ catch (sycl::exception const &exc) {
   std::cerr << exc.what() << "Exception caught at file:" << __FILE__
             << ", line:" << __LINE__ << std::endl;
   std::exit(1);
+}
+
+
+// GGML_SYCL_TOP_K_MASK=1: fused sparse-attention mask (port of the CUDA kernel); one work-group per row: fill the row
+// with -inf, then copy the mask cells of the live picks and the extra cells
+static bool ggml_sycl_top_k_mask_enabled() {
+    static const bool enabled = getenv("GGML_SYCL_TOP_K_MASK") && atoi(getenv("GGML_SYCL_TOP_K_MASK")) != 0;
+    return enabled;
+}
+
+template <typename T>
+static void ggml_sycl_top_k_mask_impl(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    const ggml_tensor * mask   = dst->src[0];
+    const ggml_tensor * top_k  = dst->src[1];
+    const ggml_tensor * score  = dst->src[2];
+    const ggml_tensor * blocks = dst->src[3];
+    const ggml_tensor * extra  = dst->src[4];
+
+    GGML_ASSERT(dst->nb[0] == sizeof(T) && mask->nb[0] == sizeof(T));
+
+    const int64_t n_kv   = mask->ne[0];
+    const int64_t ne1    = dst->ne[1];
+    const int64_t ne2    = dst->ne[2];
+    const int64_t m1     = mask->ne[1], m2 = mask->ne[2], m3 = mask->ne[3];
+    const int64_t n_top  = top_k->ne[0];
+    const int64_t n_pick = blocks ? blocks->ne[1] : score ? score->ne[0] : n_kv;
+    const int64_t n_blk  = blocks ? blocks->ne[0] : 1;
+    const int64_t n_ext  = extra ? extra->ne[0] : 0;
+    const size_t  si = sizeof(int32_t), sf = sizeof(float);
+    const int64_t sm1 = mask->nb[1] / sizeof(T), sm2 = mask->nb[2] / sizeof(T), sm3 = mask->nb[3] / sizeof(T);
+    const int64_t sd1 = dst->nb[1] / sizeof(T),  sd2 = dst->nb[2] / sizeof(T),  sd3 = dst->nb[3] / sizeof(T);
+    const int64_t sk0 = top_k->nb[0] / si, sk1 = top_k->nb[1] / si, sk2 = top_k->nb[2] / si, sk3 = top_k->nb[3] / si;
+    const int64_t ss0 = score ? score->nb[0] / sf : 0, ss1 = score ? score->nb[1] / sf : 0;
+    const int64_t ss2 = score ? score->nb[2] / sf : 0, ss3 = score ? score->nb[3] / sf : 0;
+    const int64_t sb0 = blocks ? blocks->nb[0] / si : 0, sb1 = blocks ? blocks->nb[1] / si : 0;
+    const int64_t se0 = extra ? extra->nb[0] / si : 0, se1 = extra ? extra->nb[1] / si : 0;
+    const int64_t se2 = extra ? extra->nb[2] / si : 0, se3 = extra ? extra->nb[3] / si : 0;
+
+    const T       * mask_d   = (const T *) mask->data;
+    const int32_t * top_k_d  = (const int32_t *) top_k->data;
+    const float   * score_d  = score  ? (const float *)   score->data  : nullptr;
+    const int32_t * blocks_d = blocks ? (const int32_t *) blocks->data : nullptr;
+    const int32_t * extra_d  = extra  ? (const int32_t *) extra->data  : nullptr;
+    T             * dst_d    = (T *) dst->data;
+
+    constexpr int WG = 512;
+    const int64_t nrows = ggml_nrows(dst);
+    ctx.stream()->parallel_for(sycl::nd_range<1>(sycl::range<1>(nrows * WG), sycl::range<1>(WG)), [=](sycl::nd_item<1> it) {
+        const int64_t ir  = it.get_group(0);
+        const int64_t tid = it.get_local_id(0);
+        const int64_t i1 = ir % ne1;
+        const int64_t i2 = (ir / ne1) % ne2;
+        const int64_t i3 = ir / (ne1 * ne2);
+
+        const T       * mask_row  = mask_d + (i1 % m1) * sm1 + (i2 % m2) * sm2 + (i3 % m3) * sm3;
+        T             * dst_row   = dst_d + i1 * sd1 + i2 * sd2 + i3 * sd3;
+        const int32_t * top_k_row = top_k_d + i1 * sk1 + i2 * sk2 + i3 * sk3;
+
+        const T ninf = (T) -INFINITY;
+        for (int64_t i = tid; i < n_kv; i += WG) {
+            dst_row[i] = ninf;
+        }
+        sycl::group_barrier(it.get_group());
+
+        // one work-item per pick or extra cell; cells kept twice get the same value
+        for (int64_t i = tid; i < n_top + n_ext; i += WG) {
+            if (i >= n_top) {
+                const int32_t c = extra_d[(i - n_top) * se0 + i1 * se1 + i2 * se2 + i3 * se3];
+                if (c >= 0 && c < n_kv) {
+                    dst_row[c] = mask_row[c];
+                }
+                continue;
+            }
+            const int32_t p = top_k_row[i * sk0];
+            if (p < 0 || p >= n_pick) {
+                continue;
+            }
+            if (score_d && !(score_d[p * ss0 + i1 * ss1 + i2 * ss2 + i3 * ss3] > -INFINITY)) {
+                continue;
+            }
+            if (!blocks_d) {
+                if (p < n_kv) {
+                    dst_row[p] = mask_row[p];
+                }
+                continue;
+            }
+            for (int64_t k = 0; k < n_blk; ++k) {
+                const int32_t c = blocks_d[k * sb0 + p * sb1];
+                if (c >= 0 && c < n_kv) {
+                    dst_row[c] = mask_row[c];
+                }
+            }
+        }
+    });
+}
+
+static void ggml_sycl_op_top_k_mask(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    if (dst->type == GGML_TYPE_F16) {
+        ggml_sycl_top_k_mask_impl<sycl::half>(ctx, dst);
+    } else {
+        ggml_sycl_top_k_mask_impl<float>(ctx, dst);
+    }
 }
 
 static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct ggml_tensor * dst) try {
@@ -6472,6 +6599,9 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
             break;
         case GGML_OP_TOP_K:
             ggml_sycl_op_top_k(ctx, dst);
+            break;
+        case GGML_OP_TOP_K_MASK:
+            ggml_sycl_op_top_k_mask(ctx, dst);
             break;
         case GGML_OP_TIMESTEP_EMBEDDING:
             ggml_sycl_op_timestep_embedding(ctx, dst);
@@ -6949,6 +7079,9 @@ static bool mul_mat_uses_onednn(int device, ggml_tensor * dst) {
     // the branch order below follows ggml_sycl_op_mul_mat_sycl(); graphs are single device only, so
     // row_diff == src0->ne[1] and src1_ncols == src1->ne[1] there
 #if defined(GGML_SYCL_HAS_BF16)
+    if (ggml_sycl_bf16_fast_multi_ok(src0, src1, dst)) {
+        return false;
+    }
     if (src0->type == GGML_TYPE_BF16 && ggml_is_contiguous(src0)) {
         return true;
     }
@@ -7677,6 +7810,9 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
                 ggml_is_contiguous(src0) &&
                 k > 0 && k <= src0->ne[0];
         }
+        case GGML_OP_TOP_K_MASK:
+            return ggml_sycl_top_k_mask_enabled() && (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) &&
+                   op->src[0]->type == op->type && op->src[1]->type == GGML_TYPE_I32;
         case GGML_OP_POOL_2D:
         case GGML_OP_POOL_1D:
         case GGML_OP_ACC:
