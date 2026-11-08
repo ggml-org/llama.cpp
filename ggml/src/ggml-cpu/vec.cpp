@@ -387,7 +387,7 @@ void ggml_vec_dot_f16_f32(int n, float * GGML_RESTRICT s, size_t bs, const ggml_
     ggml_float sumf = 0.0;
     int i = 0;
 
-    // on AVX512 and AVX2, x is widened to F32 in-register and accumulated with F32 FMAs over 4 independent sums
+    // on AVX512 and AVX with F16C, x is widened to F32 in-register and accumulated in F32 over 4 independent sums
 #if defined(__AVX512F__)
     __m512 acc0 = _mm512_setzero_ps();
     __m512 acc1 = _mm512_setzero_ps();
@@ -403,19 +403,19 @@ void ggml_vec_dot_f16_f32(int n, float * GGML_RESTRICT s, size_t bs, const ggml_
         acc0 = _mm512_fmadd_ps(_mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)(x + i))), _mm512_loadu_ps(y + i), acc0);
     }
     sumf = _mm512_reduce_add_ps(_mm512_add_ps(_mm512_add_ps(acc0, acc1), _mm512_add_ps(acc2, acc3)));
-#elif defined(__AVX2__) && defined(__F16C__) && defined(__FMA__)
+#elif defined(__AVX__) && defined(__F16C__)
     __m256 acc0 = _mm256_setzero_ps();
     __m256 acc1 = _mm256_setzero_ps();
     __m256 acc2 = _mm256_setzero_ps();
     __m256 acc3 = _mm256_setzero_ps();
     for (; i + 32 <= n; i += 32) {
-        acc0 = _mm256_fmadd_ps(_mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(x + i +  0))), _mm256_loadu_ps(y + i +  0), acc0);
-        acc1 = _mm256_fmadd_ps(_mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(x + i +  8))), _mm256_loadu_ps(y + i +  8), acc1);
-        acc2 = _mm256_fmadd_ps(_mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(x + i + 16))), _mm256_loadu_ps(y + i + 16), acc2);
-        acc3 = _mm256_fmadd_ps(_mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(x + i + 24))), _mm256_loadu_ps(y + i + 24), acc3);
+        acc0 = GGML_F32x8_FMA(acc0, _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(x + i +  0))), _mm256_loadu_ps(y + i +  0));
+        acc1 = GGML_F32x8_FMA(acc1, _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(x + i +  8))), _mm256_loadu_ps(y + i +  8));
+        acc2 = GGML_F32x8_FMA(acc2, _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(x + i + 16))), _mm256_loadu_ps(y + i + 16));
+        acc3 = GGML_F32x8_FMA(acc3, _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(x + i + 24))), _mm256_loadu_ps(y + i + 24));
     }
     for (; i + 8 <= n; i += 8) {
-        acc0 = _mm256_fmadd_ps(_mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(x + i))), _mm256_loadu_ps(y + i), acc0);
+        acc0 = GGML_F32x8_FMA(acc0, _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(x + i))), _mm256_loadu_ps(y + i));
     }
     const __m256 acc = _mm256_add_ps(_mm256_add_ps(acc0, acc1), _mm256_add_ps(acc2, acc3));
     __m128 r = _mm_add_ps(_mm256_castps256_ps128(acc), _mm256_extractf128_ps(acc, 1));
