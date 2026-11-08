@@ -1,7 +1,9 @@
 <!--
 	What's new, on the Bulletin key visual: the Llama lockup with a "new today" pill, the headline, a family of models
 	in one card with its members inset, the other models with their figures in cinder beside them, and the footer. At
-	16:9 the lede is left out: the cards name every model it lists, and at phone sizes there is no room for both.
+	16:9 the lede is left out: the cards name every model it lists, and at phone sizes there is no room for both. The
+	cards keep their names, tags, figures and descriptions, and leave the repo ids to the link; the family's members
+	show their names and modalities, the family card itself saying what they are.
 -->
 <script lang="ts">
 	import Bulletin from '../layouts/Bulletin.svelte';
@@ -33,8 +35,8 @@
 		>
 			<div class="family">
 				{#each copy.family.models as model (model.name)}<ModelCard
-						{model}
-						size={0.75}
+						model={{ badge: model.badge, name: model.name }}
+						size={0.85}
 						variant="inset"
 					/>{/each}
 			</div>
@@ -42,7 +44,10 @@
 	{/snippet}
 
 	{#snippet side()}
-		{#each copy.models as model (model.name)}<ModelCard {model} size={0.75} />{/each}
+		{#each copy.models as model (model.name)}<ModelCard
+				model={{ ...model, repo: undefined }}
+				size={1}
+			/>{/each}
 	{/snippet}
 </Bulletin>
 

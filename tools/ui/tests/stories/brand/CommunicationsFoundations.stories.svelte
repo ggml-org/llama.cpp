@@ -33,12 +33,12 @@
 		[
 			't-lede',
 			'Lede',
-			'0.72 u',
+			'0.84 u',
 			'Run open models on your own hardware, from a laptop to a server.'
 		],
-		['t-body', 'Body', '0.55 u', 'Cards, notes and footers, in Llama Sans.'],
-		['t-label', 'Label', '0.48 u Mono', 'Fresh drops'],
-		['t-mono', 'Mono', '0.5 u Mono', 'ggml-org/gemma-4-E4B-it-GGUF · 4.59 GB']
+		['t-body', 'Body', '0.62 u', 'Cards and notes, in Llama Sans.'],
+		['t-label', 'Label', '0.54 u Mono', 'Fresh drops'],
+		['t-mono', 'Mono', '0.58 u Mono', 'ggml-org/gemma-4-E4B-it-GGUF · 4.59 GB']
 	];
 </script>
 

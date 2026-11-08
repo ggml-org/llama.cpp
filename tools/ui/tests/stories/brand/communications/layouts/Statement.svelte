@@ -51,7 +51,12 @@
 >
 	<PostHeader {...header} />
 
-	<div class:plain={!motif} style:--split={split} class="body">
+	<div
+		class:billboard={format === 'billboard'}
+		class:plain={!motif}
+		style:--split={split}
+		class="body"
+	>
 		{#if motif}<div class="motif fill">{@render motif()}</div>{/if}
 
 		<div class="text">
@@ -92,12 +97,26 @@
 		margin-top: calc(var(--stack-after) - var(--stack));
 	}
 
-	/* a wide format is short: a unit over the text and a little less under it */
+	/* a wide format is short: a unit over the text and a little less under it, and a billboard, 16 units high, less */
 	:global(.shape-wide) .body {
 		margin-block: calc(var(--u) * 1) calc(var(--u) * 0.8);
 		grid-template-rows: none;
 		grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
 		column-gap: var(--gutter);
+	}
+	/* a motif left less than 4.5 units of height is left out rather than shown as a speck: the box's font size is
+	   the unit, so the container query's em is one */
+	.motif {
+		container-type: size;
+		font-size: var(--u);
+	}
+	@container (max-height: 4.5em) {
+		.motif > :global(*) {
+			display: none;
+		}
+	}
+	:global(.shape-wide) .billboard {
+		margin-block: calc(var(--u) * 0.6);
 	}
 	:global(.shape-wide) .motif {
 		grid-area: 1 / var(--split) / 2 / -1;

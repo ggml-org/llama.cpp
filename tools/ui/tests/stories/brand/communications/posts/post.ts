@@ -160,7 +160,7 @@ export const modelDrop: ModelDropCopy = {
 			meta: ['9B', '6.6 GB Q4_K_M', 'Apache-2.0'],
 			name: 'd3-flash',
 			repo: 'ggml-org/vllm-d3-flash-GGUF',
-			tag: 'Jev Decision Index leader'
+			tag: 'Decision Index leader'
 		},
 		{
 			description:

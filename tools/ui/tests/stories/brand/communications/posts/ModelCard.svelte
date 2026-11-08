@@ -20,9 +20,16 @@
 	let { aside, children, model, size = 1, variant = 'card' }: Props = $props();
 </script>
 
+<!-- a repo id breaks after its owner, if it must break at all -->
+{#snippet repo(id: string)}{id.slice(0, id.indexOf('/') + 1)}<wbr />{id.slice(
+		id.indexOf('/') + 1
+	)}{/snippet}
+
 <article style:--s="calc(var(--u) * {size})" class="card {variant}">
 	{#if model.tag}
-		<PostChip size={size * 0.46} variant={model.accent ? 'accent' : 'solid'}>{model.tag}</PostChip>
+		<PostChip size={Math.max(size * 0.46, 0.54)} variant={model.accent ? 'accent' : 'solid'}
+			>{model.tag}</PostChip
+		>
 	{/if}
 
 	{#if model.about || aside}
@@ -45,12 +52,16 @@
 
 	{#if model.meta?.length || (model.repo && !model.stats?.length)}
 		<p class="meta">
-			{#if model.meta?.length}<span>{model.meta.join(' · ')}</span>{/if}
+			<!-- each fact kept whole, so a line only breaks between them -->
+			{#if model.meta?.length}<span
+					>{#each model.meta as fact, i (fact)}{i ? ' · ' : ''}<span class="fact">{fact}</span
+						>{/each}</span
+				>{/if}
 
-			{#if model.repo}<span>{model.repo}</span>{/if}
+			{#if model.repo}<span>{@render repo(model.repo)}</span>{/if}
 		</p>
 	{:else if model.repo}
-		<p class="repo">{model.repo}</p>
+		<p class="repo">{@render repo(model.repo)}</p>
 	{/if}
 
 	{#if children}{@render children()}{/if}
@@ -85,24 +96,29 @@
 		gap: 1em;
 		margin-bottom: calc(var(--s) * -0.25);
 		color: var(--p-muted);
-		font-size: calc(var(--s) * 0.44);
+		font-size: max(calc(var(--s) * 0.44), calc(var(--u) * 0.58));
 		line-height: 1.3;
 	}
+	/* a name never breaks: when the card is too narrow for it and its badge, the badge goes under it */
 	.name {
 		display: flex;
+		flex-wrap: wrap;
 		justify-content: space-between;
 		align-items: center;
 		align-self: stretch;
-		gap: 0.5em;
+		gap: 0.3em 0.5em;
 		font: 700 var(--s) / 1.1 var(--sans);
 		letter-spacing: -0.015em;
+	}
+	.name > span:first-child {
+		white-space: nowrap;
 	}
 	.badge {
 		padding: 0.3em 0.55em;
 		border-radius: 0.4em;
 		background: var(--p-inset);
 		color: var(--p-muted);
-		font: 400 calc(var(--s) * 0.4) / 1 var(--mono);
+		font: 400 max(calc(var(--s) * 0.4), calc(var(--u) * 0.5)) / 1 var(--mono);
 		letter-spacing: 0;
 	}
 	.stats {
@@ -111,7 +127,7 @@
 		/* a unit at the least between figures, so two of them never read as one line */
 		gap: 0.3em calc(var(--u) * 1.2);
 		color: var(--p-ink);
-		font-size: calc(var(--s) * 0.48);
+		font-size: max(calc(var(--s) * 0.48), calc(var(--u) * 0.58));
 		line-height: 1.2;
 	}
 	.stats b {
@@ -123,7 +139,7 @@
 	}
 	.description {
 		color: var(--p-ink);
-		font-size: calc(var(--s) * 0.56);
+		font-size: max(calc(var(--s) * 0.56), calc(var(--u) * 0.62));
 		line-height: 1.35;
 		text-wrap: pretty;
 		/* in a card taller than its content, the meta or repo below it goes to the card's foot */
@@ -137,7 +153,10 @@
 		gap: 0.45em;
 		margin-top: calc(var(--s) * 0.15);
 		color: var(--p-muted);
-		font: 400 calc(var(--s) * 0.42) / 1.1 var(--mono);
+		font: 400 max(calc(var(--s) * 0.42), calc(var(--u) * 0.58)) / 1.1 var(--mono);
+	}
+	.fact {
+		white-space: nowrap;
 	}
 	.repo {
 		align-self: stretch;
@@ -146,6 +165,6 @@
 		border-radius: 0.6em;
 		background: var(--p-inset);
 		color: var(--p-link);
-		font: 400 calc(var(--s) * 0.4) / 1 var(--mono);
+		font: 400 max(calc(var(--s) * 0.4), calc(var(--u) * 0.58)) / 1 var(--mono);
 	}
 </style>

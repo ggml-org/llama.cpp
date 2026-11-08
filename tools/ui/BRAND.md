@@ -137,12 +137,20 @@ wide ones 12, with a gutter of ½u.
   tile as the app ships it, its corners at 22.5% of its side and the icon at 67% of it, optically centred, in the
   ground's ink. Never a square drawn round the icon. About 2.4u, with at least 1u clear round it; its name and
   address go under it, and lines to it start half a unit off its edge.
-- **Model card**: maker and purpose, name, a short description, figures in cinder, Mono facts and the repo id.
+- **Model card**: maker and purpose, name, a short description, figures in cinder, Mono facts and the repo id. Its
+  small lines keep the phone sizes whatever the card's size (details 0.58u, description 0.62u, tags 0.5u); a name
+  never breaks (its badge goes under it), and a repo id breaks only after its owner. In a single image the repo id is
+  left to the link.
+- **Carousel**: on Instagram and LinkedIn (square, portrait, story), a piece with several items, such as a model
+  drop, is a cover and then one slide per item, since one image can't hold every item at a size a phone shows. The
+  cover has the headline, the lede and what is inside (a row per item: its name and tag); each slide has the same
+  header with its place (2 / 3) where the URL would be, and the item's card large.
 - **Stat card**: a figure, its label and what it means.
 - **Product shot**: the real Llama app (its menu bar and panel), never a mock-up.
 - **Motifs**: line drawings in the ground's ink with one cinder detail. Models and maths: decision tree (decision
   models), neural network, tensor, gradient descent, vector space. Charts and fields: curve, quantised blocks, dot
-  grid. Machines, each isometric or flat: GPU, laptop, small workstation, large workstation, server.
+  grid. Machines, each isometric or flat: GPU, laptop, small workstation, large workstation, server. A motif left
+  less than 4.5u of height is left out rather than drawn as a speck.
 
 ## Key visuals
 

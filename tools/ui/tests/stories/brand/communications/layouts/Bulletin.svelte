@@ -64,6 +64,27 @@
 		grid-auto-flow: column;
 	}
 
+	/* on a square format the lead and the side column sit side by side under the headline and lede, the side's items
+	   stacked: one under the other they would leave the lead no room */
+	:global(.shape-square) .grid {
+		grid-template-rows: auto auto minmax(0, 1fr);
+		grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
+	}
+	:global(.shape-square) :is(.t-headline, .t-lede) {
+		grid-column: 1 / -1;
+	}
+	:global(.shape-square) .lead {
+		grid-column: 1 / span 4;
+	}
+	:global(.shape-square) .side {
+		grid-column: 5 / -1;
+		grid-auto-flow: row;
+		grid-template-columns: minmax(0, 1fr);
+	}
+	:global(.shape-square) .grid:not(:has(.side)) .lead {
+		grid-column: 1 / -1;
+	}
+
 	/* a wide format is short: a unit over the grid, as on a Statement, and less between its rows */
 	:global(.shape-wide) .grid {
 		grid-template-rows: auto minmax(0, 1fr);

@@ -75,7 +75,7 @@
 	.title {
 		margin-bottom: calc(var(--u) * 0.25);
 		color: var(--p-muted);
-		font: 500 calc(var(--u) * 0.48) / 1 var(--mono);
+		font: 500 calc(var(--u) * 0.58) / 1 var(--mono);
 		letter-spacing: 0.12em;
 		text-transform: uppercase;
 	}

@@ -103,6 +103,10 @@
 	:global(.shape-wide) .text {
 		grid-column: 1 / 8;
 	}
+	/* a wide format is short: 1.5u under the header */
+	:global(.shape-wide) .text :global(.t-display) {
+		margin-top: calc(var(--u) * 1.5 - var(--stack));
+	}
 	:global(.shape-wide) .shot {
 		grid-column: 8 / -1;
 		align-self: start;

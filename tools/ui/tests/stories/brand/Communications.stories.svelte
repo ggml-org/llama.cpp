@@ -19,12 +19,14 @@
 		whatsNew,
 		type WhatsNewCopy
 	} from './communications/posts/post';
+	import Variants from './communications/posts/Variants.svelte';
 	import WhatsNewPost from './communications/posts/WhatsNewPost.svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 
-	// Communications' applications: key visuals with real copy, the pieces that ship. Model drop is a Roster, What's new
-	// a Bulletin, llama.app's link preview a Product, llama.cpp's a Statement, Agents a Statement with the agents
-	// diagram for its motif (after Merve's post) and the open models poster a Receipt. The copy is in the controls
+	// Communications' applications: key visuals with real copy, the pieces that ship. Model drop is a carousel (a Roster
+	// cover, then a slide per model), What's new a Bulletin, llama.app's link preview a Product, llama.cpp's a
+	// Statement, Agents a Statement with the agents diagram for its motif (after Merve's post) and the open models
+	// poster a Receipt. The copy is in the controls
 	const { Story } = defineMeta({
 		parameters: {
 			controls: { disable: true },
@@ -41,11 +43,23 @@
 <Story args={{ ...modelDrop, overlay: false }} name="Model drop" parameters={editable}>
 	{#snippet template(args)}
 		{@const copy = args as ModelDropCopy & { overlay: boolean }}
+		{@const slides = [
+			{ id: 'Cover', note: 'the headline and what is inside', slide: 0 },
+			...copy.models.map((m, i) => ({ id: m.name, note: 'its own slide', slide: i + 1 }))
+		]}
 		<StateGallery minItemWidth="20rem">
 			{#each ['portrait', 'square', 'story'] as const as format (format)}
 				{#each tones as tone (tone)}
-					<StateGalleryItem label="{FORMATS[format].name}, {tone}" note="Roster · {size(format)}">
-						<ModelDropPost {copy} {format} overlay={copy.overlay} {tone} />
+					<StateGalleryItem
+						full
+						label="{FORMATS[format].name}, {tone}"
+						note="A carousel · Roster · {size(format)}"
+					>
+						<Variants itemWidth="22rem" items={slides} label="The slides of the model drop">
+							{#snippet children(s)}
+								<ModelDropPost {copy} {format} overlay={copy.overlay} slide={s.slide} {tone} />
+							{/snippet}
+						</Variants>
 					</StateGalleryItem>
 				{/each}
 			{/each}
