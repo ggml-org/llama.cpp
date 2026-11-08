@@ -3412,6 +3412,9 @@ def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> st
         arch = text_config["architectures"][0]
     elif model_type == ModelType.MMPROJ and vision_config.get("architectures") is not None:
         arch = vision_config["architectures"][0]
+    # some models (llava_onevision2) only declare the architecture inside text_config
+    if arch is None and text_config.get("architectures") is not None:
+        arch = text_config["architectures"][0]
     if arch is None:
         raise ValueError("Failed to detect model architecture")
     return arch

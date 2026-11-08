@@ -60,6 +60,7 @@ struct clip_context_params {
     bool no_alloc;
     mtmd_progress_callback progress_callback;
     void * progress_callback_user_data;
+    int n_threads;
 };
 
 struct clip_init_result {
@@ -87,6 +88,13 @@ int clip_n_output_tokens_y(const clip_ctx * ctx, const clip_image_f32 * img);
 
 // this should be equal to the embedding dimension of the text model
 int clip_n_mmproj_embd(const struct clip_ctx * ctx);
+
+ggml_backend_sched_t clip_get_sched(const struct clip_ctx * ctx);
+
+// compute the log-mel of n_frames frames, the waveform must already be padded and window must hold one whole frame
+// out has the layout [n_frames, n_mel]; like the encoders, must not run at the same time as another pass on config.sched
+struct mtmd_audio_mel_config;
+bool clip_audio_log_mel(const mtmd_audio_mel_config & config, const float * samples, const float * window, int64_t n_frames, float * out);
 
 // TODO: remove clip_image_encode() and always use batched version
 bool clip_image_encode      (struct clip_ctx * ctx, int n_threads, const clip_image_f32 * img, std::vector<float> & out_vec);
