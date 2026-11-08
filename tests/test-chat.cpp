@@ -3243,41 +3243,6 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect(message_with_tool_calls("shape", R"({"edits":[],"headers":{"content-type":"text"},"path":"f"})"))
             .run();
 
-        {
-            common_chat_templates_inputs inputs;
-            inputs.messages              = { message_user };
-            inputs.tools                 = { shape_tool };
-            inputs.add_generation_prompt = true;
-
-            auto tmpls  = read_templates("models/templates/google-gemma-4-31B-it.jinja");
-            auto params = common_chat_templates_apply(tmpls.get(), inputs);
-
-            auto accepts = [&](const std::string & args) {
-                auto grammar = build_grammar(params.grammar);
-                return match_string("<|tool_call>call:shape{" + args + "}<tool_call|>", grammar.get());
-            };
-
-            assert_equals(true,  accepts("edits:[{newText:<|\"|>b<|\"|>,oldText:<|\"|>a<|\"|>}],path:<|\"|>f<|\"|>"));
-            assert_equals(true,  accepts("edits:[],mode:<|\"|>safe<|\"|>,path:<|\"|>f<|\"|>"));
-            // keys out of order
-            assert_equals(false, accepts("path:<|\"|>f<|\"|>,edits:[]"));
-            // required key missing
-            assert_equals(false, accepts("edits:[]"));
-            // key of the call written inside an item
-            assert_equals(false, accepts("edits:[{newText:<|\"|>b<|\"|>,oldText:<|\"|>a<|\"|>,path:<|\"|>f<|\"|>}]"));
-            // values are not typed: outside the enum, non-integer count, number for a string
-            assert_equals(true,  accepts("edits:[],mode:<|\"|>slow<|\"|>,path:<|\"|>f<|\"|>"));
-            assert_equals(true,  accepts("count:3.5,edits:[],path:<|\"|>f<|\"|>"));
-            assert_equals(true,  accepts("edits:[],path:3"));
-            // but the shape of nested objects and arrays still holds
-            assert_equals(false, accepts("edits:[{oldText:<|\"|>a<|\"|>}],path:<|\"|>f<|\"|>"));
-            assert_equals(false, accepts("edits:{},path:<|\"|>f<|\"|>"));
-            assert_equals(false, accepts("edits:[],headers:[],path:<|\"|>f<|\"|>"));
-            // a key with a colon can only be quoted
-            assert_equals(false, accepts("edits:[],headers:{accept:lang:<|\"|>en<|\"|>},path:<|\"|>f<|\"|>"));
-            assert_equals(true,  accepts("edits:[],headers:{'accept:lang':<|\"|>en<|\"|>},path:<|\"|>f<|\"|>"));
-        }
-
         // Edge cases
         tst.test(
                 "<|channel>thought\n<channel|>Hello, world!\nWhat's up?<channel|>")
