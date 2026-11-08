@@ -4,7 +4,7 @@
 // mimi encoder (SEANet + transformer + downsample), then flow_lm.speaker_proj_weight
 
 // pre-norm block with layer scale on both residual paths, see mimi_transformer.py
-ggml_tensor * clip_graph_pockettts_spkenc::tfm_layer_forward(ggml_tensor * cur, const clip_layer & layer, ggml_tensor * inp_pos, ggml_tensor * kq_mask, int il) const {
+ggml_tensor * mtmd_graph_pockettts_spkenc::tfm_layer_forward(ggml_tensor * cur, const mtmd_layer & layer, ggml_tensor * inp_pos, ggml_tensor * kq_mask, int il) const {
     ggml_tensor * inp = cur;
 
     cur = build_norm(cur, layer.ln_1_w, layer.ln_1_b, NORM_TYPE_NORMAL, eps, il);
@@ -36,12 +36,12 @@ ggml_tensor * clip_graph_pockettts_spkenc::tfm_layer_forward(ggml_tensor * cur, 
     return cur;
 }
 
-ggml_cgraph * clip_graph_pockettts_spkenc::build() {
+ggml_cgraph * mtmd_graph_pockettts_spkenc::build() {
     // the preprocessor hands over the waveform as a single-row "mel", already [n_samples, 1]
     ggml_tensor * inp_raw = build_inp_raw(1);
     ggml_tensor * cur = ggml_reshape_2d(ctx0, inp_raw, inp_raw->ne[0], inp_raw->ne[1]);
 
-    clip_graph_pockettts_seanet seanet(*this);
+    mtmd_graph_pockettts_seanet seanet(*this);
     cur = seanet.encode(cur);
     cb(cur, "mimi_enc", -1);
 
