@@ -3,9 +3,8 @@
 	ModelItemView, CatalogItemView, BrowseModelsRow, FooterView) in light mode, every size in points as the app sets it:
 	300 wide, rows inset 5 then 8, 40-point model rows with a 28-point round icon, 13 and 11-point system type at 85,
 	45 and 32% black. The header with the server's dot and address (and, with `network`, the QR code for phones), the
-	installed models with their chips, Recommended for your Mac with an Install button on each, Browse models on
-	Hugging Face with its logo, and the version with Settings and Quit. The models are small and medium ones from
-	llama.app's catalog; their logos are the app's own ModelLogos.
+	installed models with their chips, Recommended for your Mac, Browse models, and the version with Settings and
+	Quit. The models are small and medium ones from llama.app's catalog; their logos are the app's own ModelLogos.
 	`installed` and `recommended` replace the rows (none installed is the first launch, with a grey dot), and
 	`downloading` shows the first recommended row's download in progress.
 -->
@@ -22,13 +21,20 @@
 </script>
 
 <script lang="ts">
-	import hf from '../../../fixtures/assets/hf-logo.svg?raw';
 	import qr from './assets/qr-network.svg?raw';
 	import gemma from './logos/gemma.svg?raw';
 	import gpt from './logos/gpt.svg?raw';
 	import liquid from './logos/liquid.svg?raw';
 	import qwen from './logos/qwen.svg?raw';
-	import { ArrowUpRight, ChevronRight, Copy, Glasses, QrCode } from '@lucide/svelte';
+	import {
+		ArrowDown,
+		ArrowUpRight,
+		ChevronRight,
+		Copy,
+		Glasses,
+		LayoutGrid,
+		QrCode
+	} from '@lucide/svelte';
 
 	type Row = MacMenuRow;
 
@@ -121,7 +127,7 @@
 
 			<i class="progress"><i style:width="{progress * 100}%"></i></i>
 		{:else}
-			<span class="install">Install</span>
+			<ArrowDown class="trailing" size={14} strokeWidth={2} />
 		{/if}
 	</div>
 {/snippet}
@@ -164,12 +170,12 @@
 	<i class="separator"></i>
 
 	<div class="row model">
-		<span class="icon hf">{@html hf}</span>
+		<span class="icon"><LayoutGrid size={16} strokeWidth={1.75} /></span>
 
 		<span class="text">
 			<span class="title">Browse models</span>
 
-			<span class="subtitle">Full catalog on Hugging Face</span>
+			<span class="subtitle">Full catalog on the web</span>
 		</span>
 
 		<ArrowUpRight class="trailing" size={14} strokeWidth={2} />
@@ -274,21 +280,6 @@
 	.none {
 		color: var(--secondary);
 		font-size: 11px;
-	}
-	/* a recommended model's Install button, as a small macOS push button */
-	.install {
-		flex: none;
-		padding: 2px 9px;
-		border-radius: 999px;
-		background: var(--subtle);
-		box-shadow: inset 0 0 0 0.5px var(--border);
-		color: var(--primary);
-		font-size: 11px;
-		font-weight: 500;
-	}
-	.hf :global(svg) {
-		width: 18px;
-		height: 18px;
 	}
 	.percent {
 		color: var(--secondary);
