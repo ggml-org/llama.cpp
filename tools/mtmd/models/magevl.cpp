@@ -1,6 +1,6 @@
 #include "models.h"
 
-ggml_cgraph * clip_graph_magevl::build() {
+ggml_cgraph * mtmd_graph_magevl::build() {
     GGML_ASSERT(hparams.n_merge == 2);
 
     const int n_pair = d_head / 2;
@@ -14,7 +14,7 @@ ggml_cgraph * clip_graph_magevl::build() {
     ggml_set_input(positions);
 
     // a pair uses 2 angles: even outputs come from one rope, odd outputs from the other
-    auto add_pos = [&](ggml_tensor * cur, const clip_layer &) {
+    auto add_pos = [&](ggml_tensor * cur, const mtmd_layer &) {
         ggml_tensor * freqs_a = ggml_view_1d(ctx0, model.rope_freqs, n_pair, 0);
         ggml_tensor * freqs_b = ggml_view_1d(ctx0, model.rope_freqs, n_pair, ggml_row_size(model.rope_freqs->type, n_pair));
 

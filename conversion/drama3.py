@@ -77,7 +77,7 @@ class Drama3MmprojModel(MmprojModel):
         self.gguf_writer.add_gen_audio_head_count(cfg["n_head"])
         self.gguf_writer.add_gen_audio_head_count_kv(cfg["n_local_heads"])
         self.gguf_writer.add_gen_audio_attention_layernorm_eps(cfg["norm_eps"])
-        # other tower and codec hparams are hardcoded in clip.cpp
+        # other tower and codec hparams are hardcoded in tools/mtmd
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
