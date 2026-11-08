@@ -969,21 +969,15 @@ void common_chat_peg_gemma4_mapper::from_ast(const common_peg_ast_arena & arena,
 
 using gemma4 = common_chat_peg_gemma4_mapper;
 
-static bool gemma4_is_value(const common_peg_ast_node & node) {
-    return node.tag == gemma4::STRING || node.tag == gemma4::NUMBER || node.tag == gemma4::BOOL ||
-           node.tag == gemma4::NULL_ || node.tag == gemma4::ARRAY || node.tag == gemma4::DICT;
-}
-
-// Collects the nearest descendants satisfying pred, looking through the rules the parser
+// Collects the nearest descendants carrying tag, looking through the rules the parser
 // wraps around the tagged nodes.
-template <class Pred>
-static void gemma4_collect(const common_peg_ast_arena & arena, const common_peg_ast_node & node, const Pred & pred, std::vector<common_peg_ast_id> & out) {
+static void gemma4_collect(const common_peg_ast_arena & arena, const common_peg_ast_node & node, const std::string & tag, std::vector<common_peg_ast_id> & out) {
     for (auto child_id : node.children) {
         const auto & child = arena.get(child_id);
-        if (pred(child)) {
+        if (child.tag == tag) {
             out.push_back(child_id);
         } else {
-            gemma4_collect(arena, child, pred, out);
+            gemma4_collect(arena, child, tag, out);
         }
     }
 }
@@ -1015,15 +1009,12 @@ static std::string gemma4_to_json(const common_peg_ast_arena & arena, common_peg
     }
 
     if (node.tag == gemma4::ARRAY) {
-        std::vector<common_peg_ast_id> items;
-        gemma4_collect(arena, node, gemma4_is_value, items);
-
         std::string result = "[";
-        for (size_t i = 0; i < items.size(); i++) {
+        for (size_t i = 0; i < node.children.size(); i++) {
             if (i > 0) {
                 result += ',';
             }
-            result += gemma4_to_json(arena, items[i]);
+            result += gemma4_to_json(arena, node.children[i]);
         }
         if (!node.is_partial) {
             result += ']';
@@ -1046,7 +1037,7 @@ static std::string gemma4_to_json(const common_peg_ast_arena & arena, common_peg
 
     if (node.tag == gemma4::DICT) {
         std::vector<common_peg_ast_id> members;
-        gemma4_collect(arena, node, [](const common_peg_ast_node & n) { return n.tag == gemma4::DICT_KV; }, members);
+        gemma4_collect(arena, node, gemma4::DICT_KV, members);
 
         std::string result = "{";
         for (size_t i = 0; i < members.size(); i++) {
