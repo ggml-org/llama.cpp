@@ -65,7 +65,7 @@ struct llama_context {
     const llama_model   & get_model()   const;
     const llama_cparams & get_cparams() const;
 
-    ggml_backend_sched_t get_sched() const;
+    ggml_backend_sched_t get_sched() const { return sched.get(); }
 
     uint32_t n_ctx()     const;
     uint32_t n_ctx_seq() const;

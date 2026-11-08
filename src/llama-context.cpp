@@ -1011,10 +1011,6 @@ const llama_cparams & llama_context::get_cparams() const {
     return cparams;
 }
 
-ggml_backend_sched_t llama_context::get_sched() const {
-    return sched.get();
-}
-
 void llama_context::synchronize_outputs() {
     if (!outputs_ready) {
         synchronize();

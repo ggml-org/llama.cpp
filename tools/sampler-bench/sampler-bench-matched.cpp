@@ -691,8 +691,7 @@ struct cell_stats {
     std::vector<double> rep_means;
 };
 
-static double percentile(std::vector<double> v, double q) {
-    std::sort(v.begin(), v.end());
+static double percentile(const std::vector<double> & v, double q) {
     return v[std::min(v.size() - 1, size_t(q*(v.size() - 1) + 0.5))];
 }
 
@@ -964,6 +963,7 @@ static int run(int argc, char ** argv) {
                 }
             }
             s.mean = std::accumulate(totals.begin(), totals.end(), 0.0)/totals.size();
+            std::sort(totals.begin(), totals.end());
             s.p50 = percentile(totals, 0.5);
             s.p99 = percentile(totals, 0.99);
             s.rep_means = std::move(rep_means[ci]);

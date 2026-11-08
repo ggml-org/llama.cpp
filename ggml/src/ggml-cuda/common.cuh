@@ -113,7 +113,7 @@
 #define GGML_CUDA_CC_IS_QY2(cc)      (cc >= GGML_CUDA_CC_QY2 && cc < GGML_CUDA_CC_PH1)
 #define GGML_CUDA_CC_IS_PH1(cc)      (cc >= GGML_CUDA_CC_PH1)
 
-#if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA) || CUDART_VERSION >= 11070
+#if (defined(GGML_USE_HIP) && __has_include(<hipcub/hipcub.hpp>)) || defined(GGML_USE_MUSA) || CUDART_VERSION >= 11070
 #    define GGML_CUDA_USE_CUB
 #endif
 
