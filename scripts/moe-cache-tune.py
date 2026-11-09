@@ -481,11 +481,21 @@ def device_room(log):
     m = re.search(r"(\S+) MoE cache size =", log)
     if host == 0 or not m:
         sys.exit("no MoE cache: the experts must be in host memory (-cmoe, -ncmoe or -ot)")
-    free = {d: int(x) for d, x in re.findall(r"using device (\S+) \(.*- (\d+) MiB free", log)}
-    used = sum(float(x) for d, x in re.findall(r"(\S+) +(?:model|KV|RS|compute|output) +buffer size =\s+([0-9.]+) MiB", log) if d == m.group(1))
-    if m.group(1) not in free:
-        sys.exit(f"the free memory of {m.group(1)} is not in the log, pass --max-mib")
-    return host, m.group(1), free[m.group(1)], used
+    dev = m.group(1)
+    free, used = None, 0.0
+    for line in log.splitlines():
+        # the free memory a device reports already excludes everything loaded before the report,
+        # so with a draft model (-md) only its own buffers, the ones after the last report, count
+        m = re.search(rf"using device {re.escape(dev)} \(.*- (\d+) MiB free", line)
+        if m:
+            free, used = int(m.group(1)), 0.0
+            continue
+        m = re.search(rf"{re.escape(dev)} +(?:model|KV|RS|compute|output) +buffer size =\s+([0-9.]+) MiB", line)
+        if m:
+            used += float(m.group(1))
+    if free is None:
+        sys.exit(f"the free memory of {dev} is not in the log, pass --max-mib")
+    return host, dev, free, used
 
 
 def run_server(cmd, out, mib, share, n_predict, seed, label, warm):
