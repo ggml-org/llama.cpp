@@ -11,6 +11,7 @@ namespace op {
 #define GGML_OP_CONVERTER(op) OutputVector op(const NodeContext & context)
 
 GGML_OP_CONVERTER(translate_add);
+GGML_OP_CONVERTER(translate_arange);
 GGML_OP_CONVERTER(translate_cont);
 GGML_OP_CONVERTER(translate_concat);
 GGML_OP_CONVERTER(translate_add_id);

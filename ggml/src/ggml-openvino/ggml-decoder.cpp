@@ -107,7 +107,7 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph, std::map<std::string, std::sh
     m_naive = true;
     for (int i = 0; i < cgraph->n_nodes; ++i) {
         if ((cgraph->nodes[i]->op == GGML_OP_GATED_DELTA_NET && cgraph->nodes[i]->op_params[0] > 1) ||
-            is_sampling_view(cgraph->nodes[i])) {
+            is_sampling_view(cgraph->nodes[i]) || is_conv_state_snapshot_writeback(cgraph->nodes[i])) {
             std::tie(m_model_params, m_compute_params) = compute_llm_params(cgraph, false);
             add_extra_inputs();
             break;
@@ -139,7 +139,63 @@ bool is_same_shape(const ggml_tensor * a, const ggml_tensor * b) {
 bool is_conv_states_all_tensor(const ggml_tensor * tensor) {
     return tensor != nullptr && strncmp(tensor->name, "conv_states_all", strlen("conv_states_all")) == 0;
 }
+
+bool is_descending_snapshot_order(const ggml_tensor * order, int64_t capacity, int64_t windows) {
+    if (!order || order->op != GGML_OP_VIEW || capacity < 1 || windows < 1 || windows > capacity) {
+        return false;
+    }
+    const auto cast = order->src[0];
+    if (!cast || cast->op != GGML_OP_CPY || cast->type != GGML_TYPE_I32 || !cast->src[0] ||
+        cast->src[0]->op != GGML_OP_SCALE || !cast->src[0]->src[0] ||
+        cast->src[0]->src[0]->op != GGML_OP_ARANGE) {
+        return false;
+    }
+    float scale[2], range[3];
+    memcpy(scale, cast->src[0]->op_params, sizeof(scale));
+    memcpy(range, cast->src[0]->src[0]->op_params, sizeof(range));
+    return cast->ne[0] == capacity && scale[0] == -1 && scale[1] == capacity - 1 &&
+           range[0] == 0 && range[1] == capacity && range[2] == 1 &&
+           order->ne[0] == windows && ggml_is_contiguous(order) &&
+           order->view_offs == size_t(capacity - windows) * sizeof(int32_t);
+}
 }  // namespace
+
+bool GgmlOvDecoder::is_conv_state_snapshot_writeback(const ggml_tensor * node) {
+    if (!node || node->op != GGML_OP_SET_ROWS || !is_recurrent_cache(node->view_src) ||
+        !node->src[0] || node->src[0]->op != GGML_OP_VIEW || !node->src[0]->src[0] ||
+        node->src[0]->src[0]->op != GGML_OP_CONCAT || !node->src[2] || node->src[2]->op != GGML_OP_VIEW ||
+        node->src[2]->view_src != node->view_src) {
+        return false;
+    }
+    const auto source = node->src[0];
+    const auto concat = source->src[0];
+    const auto dest = node->src[2];
+    const auto cache = node->view_src;
+    const auto count = dest->ne[1];
+    if (!is_descending_snapshot_order(node->src[1], count, source->ne[1])) {
+        return false;
+    }
+    const size_t elem = ggml_type_size(cache->type);
+    const size_t row = cache->nb[1];
+    const int64_t tokens = concat->ne[0] - source->ne[0];
+    return (cache->type == GGML_TYPE_F32 || cache->type == GGML_TYPE_F16) &&
+           source->type == cache->type && dest->type == cache->type && ggml_is_contiguous(cache) &&
+           cache->ne[2] == 1 && cache->ne[3] == 1 && row > 0 && concat->op_params[0] == 0 &&
+           concat->ne[3] == 1 && concat->src[0] && source->ne[0] > 0 && source->ne[2] > 0 && source->ne[3] > 0 &&
+           size_t(source->ne[0]) <= row / elem &&
+           source->ne[0] == concat->src[0]->ne[0] &&
+           source->ne[2] == concat->ne[1] && source->ne[3] == concat->ne[2] &&
+           source->nb[0] == elem && source->nb[1] == elem && source->nb[2] == concat->nb[1] &&
+           source->nb[3] == concat->nb[2] && source->ne[1] == std::min(tokens, count) &&
+           source->view_offs == size_t(tokens - source->ne[1] + 1) * elem &&
+           dest->ne[0] == source->ne[0] && dest->ne[2] == source->ne[2] && dest->ne[3] == source->ne[3] &&
+           dest->nb[0] == elem && dest->nb[1] > 0 && dest->nb[1] % row == 0 &&
+           dest->nb[2] == size_t(source->ne[0]) * elem && dest->nb[3] == row &&
+           size_t(source->ne[2]) <= (row - dest->view_offs % row) / dest->nb[2] &&
+           size_t(count) <= size_t(cache->ne[1]) / (dest->nb[1] / row) &&
+           size_t(dest->ne[3]) <= dest->nb[1] / row &&
+           dest->view_offs / row <= dest->nb[1] / row - size_t(dest->ne[3]);
+}
 
 // MoE expert aggregation (build_moe_ffn in llama-graph.cpp): each expert plane is
 // `ggml_view_2d(experts, n_embd, n_tokens, experts->nb[2], i*experts->nb[1])` and the planes
@@ -527,6 +583,10 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
         break;
     }
     case GGML_OP_SET_ROWS: {
+        if (is_conv_state_snapshot_writeback(node)) {
+            op_case = 3;
+            break;
+        }
         // `-fa off` writes the V cache transposed, through a [1, n] reshape of the cache: one element per row
         if (node->src[2] != nullptr && node->src[2]->op == GGML_OP_RESHAPE && node->src[2]->ne[0] == 1 &&
             is_kvcache(node->src[2]->src[0], nullptr)) {
@@ -1223,6 +1283,18 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
             writeback.snapshot_stride = destination->nb[2] / destination->nb[1];
             compute_params.rs_writebacks[get_tensor_ov_name(cgraph, node)] = writeback;
         }
+        if (is_conv_state_snapshot_writeback(node)) {
+            const auto source = node->src[0];
+            const auto dest = node->src[2];
+            ComputeParams::RsWriteback writeback;
+            writeback.slot_begin = dest->view_offs / node->view_src->nb[1];
+            writeback.src_begin = source->view_offs / source->nb[0];
+            writeback.seq_count = dest->ne[3];
+            writeback.snapshot_stride = dest->nb[1] / node->view_src->nb[1];
+            writeback.window_count = source->ne[1];
+            compute_params.rs_writebacks[get_tensor_ov_name(cgraph, node)] = writeback;
+            compute_params.s_copy_active_slot_len = dest->ne[3];
+        }
         if (node->op == GGML_OP_SCALE && node->view_src != nullptr && is_recurrent_cache(node->view_src)) {
             if (model_params.n_rs_slots == -1) {
                 model_params.n_rs_slots = node->view_src->ne[1];
@@ -1617,6 +1689,9 @@ void GgmlOvDecoder::add_extra_inputs() {
             create_1d_input("rs_seq_count_" + node_name, writeback.seq_count);
             create_1d_input("rs_snapshot_stride_" + node_name, writeback.snapshot_stride);
         }
+        if (writeback.window_count >= 0) {
+            create_1d_input("rs_window_count_" + node_name, writeback.window_count);
+        }
     }
 #ifdef GGML_OPENVINO_HAS_CACHE_UPDATE
     m_compute_params.recurrent_controls.clear();
@@ -1649,14 +1724,21 @@ void GgmlOvDecoder::add_extra_inputs() {
             std::vector<int64_t> values;
             for (int j = i + 1; j < m_cgraph->n_nodes; ++j) {
                 const auto write = m_cgraph->nodes[j];
-                if (is_conv_state_writeback(write) && write->src[0]->src[0] == concat) {
+                if ((is_conv_state_writeback(write) || is_conv_state_snapshot_writeback(write)) &&
+                    write->src[0]->src[0] == concat) {
                     const auto it = m_compute_params.rs_writebacks.find(get_tensor_ov_name(m_cgraph, write));
                     if (it == m_compute_params.rs_writebacks.end()) {
                         values.clear();
                         break;
                     }
-                    values.push_back(it->second.src_begin);
-                    values.push_back(it->second.slot_begin);
+                    const auto & wb = it->second;
+                    const int64_t count = wb.window_count >= 0 ? wb.window_count : 1;
+                    for (int64_t w = 0; w < count; ++w) {
+                        values.push_back(wb.src_begin + w);
+                        values.push_back(wb.slot_begin + (count - 1 - w) *
+                                                          (wb.window_count >= 0 ? wb.snapshot_stride : 0));
+                    }
+                    break;
                 }
             }
             if (!values.empty()) {
@@ -2971,7 +3053,8 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
             break;
         case GGML_OP_SET_ROWS:
             // a cache write returns the cache; other rows writes keep the shape of their destination
-            m_node_dynamic_dims[node] = is_kvcache_write(node) ? -1 : m_node_dynamic_dims[node->src[2]];
+            m_node_dynamic_dims[node] = (is_kvcache_write(node) || is_conv_state_snapshot_writeback(node)) ?
+                                           -1 : m_node_dynamic_dims[node->src[2]];
             break;
         case GGML_OP_IM2COL: {
             m_node_dynamic_dims[node] = -1;

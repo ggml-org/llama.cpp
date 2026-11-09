@@ -34,6 +34,7 @@ std::unordered_map<std::string, CreatorFunction> get_supported_ops() {
     return {
         {"GGML_OP_ADD",             op::translate_add                              },
         {"GGML_OP_ADD_ID",          op::translate_add_id                           },
+        {"GGML_OP_ARANGE",          op::translate_arange                           },
         {"GGML_OP_CONCAT",          op::translate_concat                           },
         {"GGML_OP_CONT",            op::translate_cont                             },
         {"GGML_OP_DUP",             op::translate_cont                             },

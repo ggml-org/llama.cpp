@@ -119,22 +119,19 @@ struct ComputeParams {
     //      [ 18432,     0,     1,     1]            0: GET_ROWS    node_9
     //      [ 18432,     0,     1,     1]            1: VIEW        cache_r_l0 (view)
 
+    // Runtime writeback offsets are refreshed per batch. Convolution SET_ROWS also supplies overlapping window counts and snapshot plane strides.
     struct RsWriteback {
-        int64_t slot_begin = 0;  // first cache slot written by the CPY
-        int64_t src_begin = -1;  // first source column copied by a conv-state CPY
+        int64_t slot_begin = 0;  // first cache slot written
+        int64_t src_begin = -1;  // first source column of a conv-state window
         int64_t seq_count = -1;
         int64_t snapshot_stride = -1;
+        int64_t window_count = -1;
     };
 
     std::map<std::string, RsWriteback> rs_writebacks;
     std::map<std::string, int64_t> sampling_rows;
     std::map<std::string, int64_t> gdn_attention_rows;
     std::map<std::string, std::vector<int64_t>> recurrent_controls;
-    // Destination slot offset of each state cache writeback CPY node, keyed by node name. It
-    // changes with the batch (kv head, active sequence count) and, with rollback enabled
-    // (cparams.n_rs_seq > 0), the conv state is written back once per snapshot slot. Passed to the
-    // cached model as a runtime input. Dynamic models also receive the source-side offset; static
-    // models use a fixed end-anchored offset in the translator.
 };
 
 // defined below; declared here because GgmlOvDecoder uses it inline
@@ -591,6 +588,10 @@ public:
                node->src[0]->src[0]->op == GGML_OP_CONCAT && node->src[1] != nullptr &&
                node->src[1]->op == GGML_OP_VIEW && node->src[1]->view_src == node->view_src;
     }
+
+    // build_conv_state_store writes overlapping [history, window, channel, seq] windows into newest-first rollback planes.
+    // Match this layout separately from general SET_ROWS.
+    static bool is_conv_state_snapshot_writeback(const ggml_tensor * node);
 
     // SET_ROWS into a KV cache, directly or through the [1, n] reshape of the transposed V cache with `-fa off`.
     // Other SET_ROWS write rows of a compute tensor, e.g. the MoE expert-group mask

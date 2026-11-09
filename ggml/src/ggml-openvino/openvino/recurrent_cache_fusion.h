@@ -13,7 +13,6 @@ public:
 private:
     struct Group {
         int reset = -1, gather = -1, remainder = -1, concat = -1, compute = -1, writeback = -1;
-        std::vector<int> snapshots;
         std::string root_name;
         bool enabled = false;
         Output<Node> old_cache, conv;
