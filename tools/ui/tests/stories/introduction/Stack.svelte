@@ -1,13 +1,9 @@
 <!--
 	What this Storybook holds, as building blocks: the Llama Brand at the base, Llama UI built on it, Llama Chat built
 	from Llama UI, and the communications made from the brand and the app beside them. Llama Chat, the one people use,
-	carries the cinder mark; the brand carries the icon. Beside Llama Chat, a dashed, dimmed slot for the other apps
-	anyone can build on Llama UI.
+	carries the cinder mark; the brand carries the icon, typed as Llama Sans's lockup glyph. Beside Llama Chat, a
+	dashed, dimmed slot for the other apps anyone can build on Llama UI.
 -->
-<script lang="ts">
-	import { PATHS, SIZE } from '../brand/logo-showcase/lib/logo';
-</script>
-
 <div class="stack">
 	<div class="block chat card-surface rounded-card">
 		<span class="n">03</span>
@@ -40,13 +36,8 @@
 	<div class="block brand card-surface rounded-card">
 		<span class="n">01</span>
 
-		<h3>
-			<svg aria-hidden="true" class="icon" viewBox="0 0 {SIZE} {SIZE}">
-				{#each PATHS as d (d)}<path {d} />{/each}
-			</svg>
-
-			Llama Brand
-		</h3>
+		<!-- the lockup glyph, U+E002: Llama Sans's capital icon with the gap before the name built in -->
+		<h3>&#xE002;Llama Brand</h3>
 
 		<p>The icon, Llama Sans and Llama Mono, the colours</p>
 	</div>
@@ -96,12 +87,6 @@
 		grid-area: brand;
 	}
 
-	.brand h3 {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-	}
-
 	.comms {
 		grid-area: comms;
 		grid-template-columns: minmax(0, 1fr);
@@ -115,12 +100,6 @@
 	/* the one accent: the app people use */
 	.chat .n {
 		color: var(--art-cinder);
-	}
-
-	.icon {
-		width: 18px;
-		height: 18px;
-		fill: currentColor;
 	}
 
 	h3 {
