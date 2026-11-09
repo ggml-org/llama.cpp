@@ -1,6 +1,7 @@
 #include "set_rows.hpp"
 #include "cpy.hpp"
 
+#include "convert.hpp"
 #include "ggml-quants.h"
 
 #include <vector>
@@ -21,8 +22,13 @@ template<typename TIn, typename TOut>
 static inline std::enable_if_t<utils::is_arithmetic_v<TIn>() && utils::is_arithmetic_v<TOut>(), void>
 convert (const char* src, char* dst) {
     auto src_val = *reinterpret_cast<const TIn*>(src);
-    auto dst_val = sycl::vec<TIn, 1>(src_val).template convert<TOut, sycl::rounding_mode::automatic>()[0];
-   *reinterpret_cast<TOut*>(dst) = dst_val;
+    if constexpr (std::is_same_v<TIn, ggml_fp8_e4m3_t> || std::is_same_v<TOut, ggml_fp8_e4m3_t>) {
+        // sycl::vec does not support ggml_fp8_e4m3_t, so f8 uses ggml_sycl_cast
+        *reinterpret_cast<TOut*>(dst) = ggml_sycl_cast<TOut>(src_val);
+    } else {
+        auto dst_val = sycl::vec<TIn, 1>(src_val).template convert<TOut, sycl::rounding_mode::automatic>()[0];
+        *reinterpret_cast<TOut*>(dst) = dst_val;
+    }
 }
 
 #ifdef GGML_SYCL_HAS_BF16
@@ -34,19 +40,6 @@ inline void convert<sycl::half, sycl::ext::oneapi::bfloat16>(const char* src, ch
     *reinterpret_cast<sycl::ext::oneapi::bfloat16*>(dst) = sycl::ext::oneapi::bfloat16(tmp);
 }
 #endif
-
-// ggml_fp8_e4m3_t is a struct; sycl::vec::convert cannot target it, so route through float.
-template<>
-inline void convert<float, ggml_fp8_e4m3_t>(const char* src, char* dst) {
-    *reinterpret_cast<ggml_fp8_e4m3_t*>(dst) = { ggml_fp32_to_f8_e4m3(*reinterpret_cast<const float*>(src)) };
-}
-
-template<>
-inline void convert<sycl::half, ggml_fp8_e4m3_t>(const char* src, char* dst) {
-    const float tmp = sycl::vec<sycl::half, 1>(*reinterpret_cast<const sycl::half*>(src))
-                          .template convert<float, sycl::rounding_mode::automatic>()[0];
-    *reinterpret_cast<ggml_fp8_e4m3_t*>(dst) = { ggml_fp32_to_f8_e4m3(tmp) };
-}
 
 template <typename TIn, typename TIdx, typename blockType, int qk, cpy_kernel_t cpyblck>
 static void set_rows_sycl_q(const char * __restrict__ src0_d,
