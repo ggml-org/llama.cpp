@@ -1549,14 +1549,14 @@ struct ggml_hexagon_opqueue {
 
     std::vector<opvec>          op_cache;       // per batch op cache
 
-    static size_t size_of(size_t batch_size, size_t depth = 1) {
+    static size_t size_of(size_t batch_size, size_t n_threads, size_t depth = 1) {
         size_t n_bufs    = HTP_OP_MAX_BUFS;
         size_t n_ops     = batch_size;
         size_t n_tensors = std::min<size_t>(n_ops * 4 + HTP_OP_MAX_INPUTS + HTP_OP_MAX_OUTPUTS, HTP_OP_MAX_TENSORS);
 
         size_t tr_size = 0;
         if (opt_profile == 3) {
-            tr_size = sess->n_threads * opt_optrace * sizeof(htp_trace_desc);
+            tr_size = n_threads * opt_optrace * sizeof(htp_trace_desc);
         }
 
         size_t slot_size = sizeof(htp_buf_desc)  * n_bufs    +
@@ -1570,13 +1570,13 @@ struct ggml_hexagon_opqueue {
     ggml_hexagon_opqueue(ggml_hexagon_shared_buffer *shm_buf, size_t offset, size_t batch_size, size_t depth)
         : shm_buf(shm_buf),
           data(shm_buf->base() + offset),
-          slot_size(size_of(batch_size)),
+          slot_size(size_of(batch_size, shm_buf->sess->n_threads)),
           depth(depth) {
         op_cache.resize(depth);
 
         if (opt_verbose) {
             GGML_LOG_INFO("ggml-hex: %s allocated opqueue : batch-size %zu depth %zu shm-size %zu slot-size %zu\n",
-                    shm_buf->c_name(), batch_size, depth, size_of(batch_size, depth), slot_size);
+                    shm_buf->c_name(), batch_size, depth, size_of(batch_size, shm_buf->sess->n_threads, depth), slot_size);
         }
     }
 
@@ -2289,7 +2289,7 @@ void ggml_hexagon_session::allocate(const ggml_hexagon_device_config & config) n
 
     // Allocate buffers and state for op batching
     const size_t n_fences     = 512;
-    const size_t opq_size     = ggml_hexagon_opqueue::size_of(opt_opbatch, opt_opqueue);
+    const size_t opq_size     = ggml_hexagon_opqueue::size_of(opt_opbatch, this->n_threads, opt_opqueue);
     const size_t fence_offset = GGML_PAD(opq_size, HEX_L2_LINE_SIZE);
     const size_t fence_size   = ggml_hexagon_fence_buffer::size_of(n_fences);
 
