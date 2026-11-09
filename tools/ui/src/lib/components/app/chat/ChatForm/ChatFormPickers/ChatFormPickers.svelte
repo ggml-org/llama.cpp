@@ -1,15 +1,26 @@
 <script lang="ts">
-	import ChatFormMentionPicker from './ChatFormMentionPicker.svelte';
+	import ChatFormPickerCommand from './ChatFormPickerCommand.svelte';
 	import ChatFormPickerMcpPrompts from './ChatFormPickerMcpPrompts/ChatFormPickerMcpPrompts.svelte';
-	import type { FileMentionEntry, GetPromptResult, MCPPromptInfo } from '$lib/types';
+	import ChatFormPickerMention from './ChatFormPickerMention.svelte';
+	import type {
+		ChatFormCommand,
+		FileMentionEntry,
+		GetPromptResult,
+		MCPPromptInfo
+	} from '$lib/types';
 
 	interface Props {
+		isCommandPickerOpen?: boolean;
+		commandQuery?: string;
+		commands?: ChatFormCommand[];
 		isPromptPickerOpen?: boolean;
 		promptSearchQuery?: string;
 		isMentionPickerOpen?: boolean;
 		mentionQuery?: string;
 		mentionAnchor?: HTMLElement | null;
 		scopePath?: string | null;
+		onCommandPickerClose?: () => void;
+		onCommandSelect?: (command: ChatFormCommand) => void;
 		onPromptPickerClose?: () => void;
 		onMentionPickerClose?: () => void;
 		onMentionOpened?: () => void;
@@ -24,29 +35,36 @@
 	}
 
 	let {
-		isPromptPickerOpen,
-		promptSearchQuery,
+		commandQuery,
+		commands = [],
+		isCommandPickerOpen,
 		isMentionPickerOpen,
-		mentionQuery,
+		isPromptPickerOpen,
 		mentionAnchor,
-		scopePath,
-		onPromptPickerClose,
-		onMentionPickerClose,
+		mentionQuery,
+		onCommandPickerClose,
+		onCommandSelect,
 		onMentionOpened,
+		onMentionPickerClose,
 		onMentionSelect,
-		onPromptLoadStart,
 		onPromptLoadComplete,
-		onPromptLoadError
+		onPromptLoadError,
+		onPromptLoadStart,
+		onPromptPickerClose,
+		promptSearchQuery,
+		scopePath
 	}: Props = $props();
 
+	let commandPickerRef: ChatFormPickerCommand | undefined = $state(undefined);
 	let promptPickerRef: ChatFormPickerMcpPrompts | undefined = $state(undefined);
-	let mentionPickerRef: ChatFormMentionPicker | undefined = $state(undefined);
+	let mentionPickerRef: ChatFormPickerMention | undefined = $state(undefined);
 
-	/**
-	 * Delegates keyboard events to the active picker child.
-	 * Returns true if the event was handled.
-	 */
+	/** Delegate keyboard events to the active picker child; true if handled. */
 	export function handleKeydown(event: KeyboardEvent): boolean {
+		if (isCommandPickerOpen && commandPickerRef?.handleKeydown(event)) {
+			return true;
+		}
+
 		if (isPromptPickerOpen && promptPickerRef?.handleKeydown(event)) {
 			return true;
 		}
@@ -59,23 +77,32 @@
 	}
 </script>
 
+<ChatFormPickerCommand
+	bind:this={commandPickerRef}
+	{commands}
+	isOpen={isCommandPickerOpen ?? false}
+	onClose={onCommandPickerClose ?? (() => {})}
+	onSelect={onCommandSelect ?? (() => {})}
+	query={commandQuery ?? ''}
+/>
+
 <ChatFormPickerMcpPrompts
 	bind:this={promptPickerRef}
 	isOpen={isPromptPickerOpen}
-	searchQuery={promptSearchQuery}
 	onClose={onPromptPickerClose}
-	{onPromptLoadStart}
 	{onPromptLoadComplete}
 	{onPromptLoadError}
+	{onPromptLoadStart}
+	searchQuery={promptSearchQuery}
 />
 
-<ChatFormMentionPicker
+<ChatFormPickerMention
 	bind:this={mentionPickerRef}
-	isOpen={isMentionPickerOpen ?? false}
-	query={mentionQuery ?? ''}
 	customAnchor={mentionAnchor}
-	scopePath={scopePath ?? null}
+	isOpen={isMentionPickerOpen ?? false}
 	onClose={onMentionPickerClose ?? (() => {})}
 	onOpened={onMentionOpened}
 	onSelect={onMentionSelect ?? (() => {})}
+	query={mentionQuery ?? ''}
+	scopePath={scopePath ?? null}
 />

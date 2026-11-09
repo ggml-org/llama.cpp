@@ -1,70 +1,104 @@
 <script lang="ts">
 	import '../app.css';
-	import { base } from '$app/paths';
 	import { browser } from '$app/environment';
-	import { goto } from '$app/navigation';
+	import { afterNavigate, goto } from '$app/navigation';
+	import { base } from '$app/paths';
 	import { page } from '$app/state';
-	import { untrack } from 'svelte';
-	import { onMount } from 'svelte';
-
-	import { SidebarNavigation } from '$lib/components/app';
+	import { ActionIcon, MenuIcon, SidebarNavigation } from '$lib/components/app';
 	import { PwaMetaTags, PwaRefreshAlert } from '$lib/components/pwa';
-	import { pwaAssetsHead } from 'virtual:pwa-assets/head';
-
-	import { chatStore } from '$lib/stores/chat.svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { isRouterMode, serverStore } from '$lib/stores/server.svelte';
-	import { config, settingsStore } from '$lib/stores/settings.svelte';
-	import { ModeWatcher } from 'mode-watcher';
-	import { ROUTES } from '$lib/constants/routes';
-	import { RouterService } from '$lib/services/router.service';
-	import { Toaster } from 'svelte-sonner';
-	import { modelsStore } from '$lib/stores/models.svelte';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { AUTHORIZATION_HEADER, BEARER_PREFIX, TOOLTIP_DELAY_DURATION } from '$lib/constants';
-	import { FAVICON_PATHS, FAVICON_SELECTORS } from '$lib/constants/pwa';
+	import {
+		BOX_BORDER,
+		FAVICON_PATHS,
+		FAVICON_SELECTORS,
+		HEADERS,
+		MODELS_ROUTE_ID,
+		NEW_CHAT_TAB_ID,
+		ROUTES,
+		SETTINGS_KEYS,
+		TOOLTIP_DELAY_DURATION
+	} from '$lib/constants';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { usePwa } from '$lib/hooks/use-pwa.svelte';
-	import { conversations } from '$lib/stores/conversations.svelte';
-	import { isMobile } from '$lib/stores/viewport.svelte';
-	import { theme } from '$lib/stores/theme.svelte';
-	import { buildInfoStore } from '$lib/stores/build-info.svelte';
-
-	import { SETTINGS_KEYS } from '$lib/constants';
+	import { useSidebarReveal } from '$lib/hooks/use-sidebar-reveal.svelte';
+	import { RouterService } from '$lib/services/router.service';
+	import {
+		chatStore,
+		conversationsStore,
+		deviceStore,
+		mcpStore,
+		modelsStore,
+		serverStore,
+		settingsStore,
+		tabsStore,
+		uiStore,
+		versionStore
+	} from '$lib/stores';
+	import { initStores } from '$lib/stores/init';
+	import { hapticTap } from '$lib/utils';
+	import { ModeWatcher } from 'mode-watcher';
+	import { untrack } from 'svelte';
+	import { onMount } from 'svelte';
+	import { Toaster } from 'svelte-sonner';
+	import { pwaAssetsHead } from 'virtual:pwa-assets/head';
 
 	let { children } = $props();
+
+	// migrations and store startup, ordered explicitly instead of import side effects
+	void initStores();
+
 	let innerHeight = $state<number | undefined>();
 	let innerWidth = $state(browser ? window.innerWidth : 0);
 
-	let chatSidebar:
-		| {
-				activateSearchMode?: () => void;
-				editActiveConversation?: () => void;
-		  }
-		| undefined = $state();
+	let chatSidebar: { editActiveConversation?: () => void } | undefined = $state();
 
-	let showBuildVersion = $derived(config()[SETTINGS_KEYS.SHOW_BUILD_VERSION] as boolean);
+	let showBuildVersion = $derived(
+		settingsStore.config[SETTINGS_KEYS.SHOW_BUILD_VERSION] as boolean
+	);
 
 	// Keep the hook object intact: destructuring needRefreshByStorage reads the getter once and freezes it
 	const pwa = usePwa();
 	const { needRefresh, updateServiceWorker } = pwa;
 
 	function updateFavicon() {
-		const dark = theme.isSystemDark;
+		const dark = deviceStore.systemTheme.isDark;
 
 		let icoLink = document.querySelector(FAVICON_SELECTORS.ICO_48X48) as HTMLLinkElement | null;
+
 		if (icoLink) {
 			icoLink.href = dark ? FAVICON_PATHS.ICO_DARK : FAVICON_PATHS.ICO_LIGHT;
 		}
 
 		let svgLink = document.querySelector(FAVICON_SELECTORS.SVG_ANY) as HTMLLinkElement | null;
+
 		if (svgLink) {
 			svgLink.href = dark ? FAVICON_PATHS.SVG_DARK : FAVICON_PATHS.SVG_LIGHT;
 		}
 	}
 
+	function navigateToTab(direction: -1 | 1) {
+		// only makes sense with conversation tabs enabled
+		if (!settingsStore.config.conversationTabs) return;
+
+		const openTabs = tabsStore.openTabs;
+
+		if (openTabs.length === 0) return;
+
+		const activeId = page.params.id ?? NEW_CHAT_TAB_ID;
+		const idx = openTabs.indexOf(activeId);
+		// active tab not in list (e.g. a non-chat route): start from an edge
+		const targetIdx =
+			idx === -1
+				? direction === 1
+					? 0
+					: openTabs.length - 1
+				: (idx + direction + openTabs.length) % openTabs.length;
+
+		void tabsStore.activate(openTabs[targetIdx]);
+	}
+
 	function navigateToConversation(direction: -1 | 1) {
-		const allConvs = conversations();
+		const allConvs = conversationsStore.conversations;
 
 		if (allConvs.length === 0) return;
 
@@ -85,19 +119,45 @@
 		if (targetIdx >= 0 && targetIdx < allConvs.length) {
 			goto(RouterService.chat(allConvs[targetIdx].id));
 		} else {
-			goto(ROUTES.NEW_CHAT);
+			conversationsStore.openNewChat();
 		}
 	}
+
+	// the phone's menu key: opening the sidebar lands with a haptic tap, as a native drawer does
+	function toggleSidebar() {
+		if (!uiStore.isSidebarExpanded) hapticTap();
+
+		uiStore.isSidebarExpanded = !uiStore.isSidebarExpanded;
+	}
+
+	const sidebarReveal = useSidebarReveal();
+
+	const isRevealed = $derived(uiStore.isSidebarExpanded || sidebarReveal.dragOffset !== null);
+
+	// phone only: the page slides aside by the sidebar's width, or follows the finger mid-drag
+	const revealTransform = $derived.by(() => {
+		if (!deviceStore.isMobile) return undefined;
+
+		if (sidebarReveal.dragOffset !== null)
+			return `translate3d(${sidebarReveal.dragOffset}px, 0, 0)`;
+
+		return uiStore.isSidebarExpanded ? 'translateX(var(--sidebar-reveal))' : undefined;
+	});
+
+	// the models page returns to wherever it was reached from, by any kind of navigation
+	afterNavigate(() => uiStore.rememberModelsReturnRoute());
 
 	// Global keyboard shortcuts
 	const { handleKeydown } = useKeyboardShortcuts({
 		editActiveConversation: () => chatSidebar?.editActiveConversation?.(),
+		navigateToNextConversation: () => navigateToConversation(1),
+		navigateToNextTab: () => navigateToTab(1),
 		navigateToPrevConversation: () => navigateToConversation(-1),
-		navigateToNextConversation: () => navigateToConversation(1)
+		navigateToPrevTab: () => navigateToTab(-1)
 	});
 
 	function checkApiKey() {
-		const apiKey = config().apiKey;
+		const apiKey = settingsStore.config.apiKey;
 
 		// Without a stored key there is nothing to re-validate here; the keyless
 		// 401 case is handled by validateApiKey() at navigation time, and the
@@ -108,13 +168,15 @@
 
 		untrack(() => {
 			if (
-				(page.route.id === '/(chat)' || page.route.id === '/(chat)/chat/[id]') &&
+				(page.route.id === '/(chat)' ||
+					page.route.id === '/(chat)/chat/[id]' ||
+					page.route.id === MODELS_ROUTE_ID) &&
 				page.status !== 401 &&
 				page.status !== 403
 			) {
 				const headers: Record<string, string> = {
 					'Content-Type': 'application/json',
-					[AUTHORIZATION_HEADER]: `${BEARER_PREFIX}${apiKey.trim()}`
+					[HEADERS.AUTHORIZATION]: `${HEADERS.BEARER}${apiKey.trim()}`
 				};
 
 				fetch(`${base}/props`, { headers })
@@ -141,11 +203,12 @@
 	// or ended while it was hidden. snapshot only, no polling
 	function handleVisibilityChange() {
 		if (document.visibilityState !== 'visible') return;
+
 		void chatStore.syncRemoteRunningStreams();
 	}
 
 	$effect(() => {
-		void theme.isSystemDark;
+		void deviceStore.systemTheme.isDark;
 
 		updateFavicon();
 	});
@@ -175,7 +238,7 @@
 	// textContent keeps the value as text, never parsed as HTML
 	function customCss(node: HTMLStyleElement) {
 		$effect(() => {
-			node.textContent = (config().customCss as string | undefined) ?? '';
+			node.textContent = (settingsStore.config.customCss as string | undefined) ?? '';
 		});
 	}
 
@@ -184,7 +247,7 @@
 	let routerModelsFetched = false;
 
 	$effect(() => {
-		const isRouter = isRouterMode();
+		const isRouter = serverStore.isRouterMode;
 		const modelsCount = modelsStore.models.length;
 
 		// Only fetch router models once when we have models loaded and in router mode
@@ -200,14 +263,15 @@
 	// Live model status and load progress via the /models/sse feed (router mode)
 	$effect(() => {
 		if (!browser) return;
-		if (!isRouterMode()) return;
+
+		if (!serverStore.isRouterMode) return;
 
 		untrack(() => {
-			modelsStore.subscribeStatus();
+			modelsStore.status.subscribe();
 		});
 
 		return () => {
-			modelsStore.unsubscribeStatus();
+			modelsStore.status.unsubscribe();
 		};
 	});
 
@@ -224,7 +288,6 @@
 		if (!browser) return;
 
 		const mcpServers = mcpStore.getServers();
-
 		const serversWithUrls = mcpServers.filter((s) => s.url.trim());
 
 		if (serversWithUrls.length > 0) {
@@ -245,10 +308,10 @@
 
 <svelte:head>
 	{#if pwaAssetsHead.themeColor}
-		<meta name="theme-color" content={pwaAssetsHead.themeColor.content} />
+		<meta content={pwaAssetsHead.themeColor.content} name="theme-color" />
 	{/if}
 
-	{#if config().customCss}
+	{#if settingsStore.config.customCss}
 		<style use:customCss></style>
 	{/if}
 
@@ -259,40 +322,144 @@
 	<PwaMetaTags />
 </svelte:head>
 
-<svelte:window onkeydown={handleKeydown} bind:innerHeight bind:innerWidth />
+<svelte:window bind:innerHeight bind:innerWidth onkeydown={handleKeydown} />
 <svelte:document onvisibilitychange={handleVisibilityChange} />
 
 <Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
-	<div class="flex flex-col md:flex-row">
-		<SidebarNavigation
-			onSearchClick={() => {
-				if (isMobile.current) {
-					goto(ROUTES.SEARCH);
-				} else if (chatSidebar?.activateSearchMode) {
-					chatSidebar.activateSearchMode();
-				}
-			}}
-		/>
+	<!-- clip, not hide: the page slid aside for the phone sidebar must not widen the document,
+		 or iOS pans it sideways and leaves it stuck there -->
+	<div class="flex flex-col overflow-x-clip md:flex-row">
+		<SidebarNavigation />
 
-		<div class="flex-1">
+		<!-- min-w-0 lets the chat column shrink below its content width, so wide
+		     code blocks and tables scroll inside their own containers instead of
+		     stretching the page into a horizontal scrollbar -->
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<div
+			style:transform={revealTransform}
+			class={[
+				'min-w-0 flex-1',
+				deviceStore.isMobile && 'relative z-10 bg-background',
+				// the installed iOS app sizes the locked, slid page to the screen less its status bar,
+				// so it reaches down by that much more; locked, it cannot scroll by it
+				deviceStore.isMobile &&
+					(sidebarReveal.isRevealed ? 'min-h-[calc(100dvh+var(--safe-area-top))]' : 'min-h-dvh'),
+				deviceStore.isMobile &&
+					sidebarReveal.dragOffset === null &&
+					'transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]',
+				// slid aside: nothing inside scrolls or takes a tap, which lands on the page itself and
+				// closes the sidebar; forced on every descendant, as the fixed bars opt back into events
+				sidebarReveal.isRevealed && 'touch-none [&_*]:pointer-events-none!'
+			]}
+			onclickcapture={sidebarReveal.handleClickCapture}
+			onpointercancel={sidebarReveal.handlePointerUp}
+			onpointerdown={sidebarReveal.handlePointerDown}
+			onpointermove={sidebarReveal.handlePointerMove}
+			onpointerup={sidebarReveal.handlePointerUp}
+		>
+			<!-- the installed app's status bar sits over the page: what scrolls under it fades out -->
+			{#if deviceStore.isMobile}
+				<div
+					aria-hidden="true"
+					class="status-bar-fade sidebar-reveal-pin-top pointer-events-none fixed inset-x-0 top-0 z-20"
+				></div>
+
+				{#if deviceStore.isIOSSafari}
+					<div
+						aria-hidden="true"
+						class="status-bar-edge sidebar-reveal-pin-top fixed inset-x-0 top-0 z-20"
+					></div>
+
+					<!-- under the chat form, which keeps its taps where the two overlap -->
+					<div
+						aria-hidden="true"
+						class="screen-bottom-edge sidebar-reveal-pin-bottom fixed inset-x-0 bottom-0 z-[6]"
+					></div>
+				{/if}
+
+				<!-- over the content, under the chat form (see its wrapper in ChatScreen) -->
+				<div
+					aria-hidden="true"
+					class="screen-bottom-fade sidebar-reveal-pin-bottom pointer-events-none fixed inset-x-0 bottom-0 z-[5]"
+				></div>
+			{/if}
+
+			<!-- the phone sidebar sits under the page, so its toggle rides on the page -->
+			{#if deviceStore.isMobile && !page.url.hash.includes(ROUTES.SEARCH)}
+				<ActionIcon
+					ariaLabel={uiStore.isSidebarExpanded ? 'Collapse navigation' : 'Expand navigation'}
+					class="sidebar-reveal-pin-top fixed top-(--corner-control-top) left-4 z-20 transition-colors h-10 w-10 rounded-full bg-muted/60 border border-border/20 shadow-sm text-accent-foreground"
+					icon={MenuIcon}
+					iconSize="size-6"
+					onclick={toggleSidebar}
+					size="lg"
+				/>
+			{/if}
+
 			{@render children?.()}
 		</div>
+
+		<!-- frames the slid page as a rounded card; its corners are masked in the sidebar tint -->
+		{#if deviceStore.isMobile}
+			<!-- a soft shadow cast on the sidebar beside the slid page, so the two read apart. It lies
+			     above the frame below: the frame paints a band of the sidebar's tint around the page
+			     to round its corners, which would cut the shadow's inner part off at a hard edge. An
+			     outer shadow paints only outside its own rounded shape, so the page stays clear -->
+			<div
+				style:transform={revealTransform}
+				aria-hidden="true"
+				class={[
+					'pointer-events-none fixed inset-0 z-[25] rounded-[2.5rem]',
+					'shadow-[-0.5rem_0_2rem_-0.25rem_rgb(0_0_0/0.12)] dark:shadow-[-0.5rem_0_2rem_-0.25rem_rgb(0_0_0/0.45)]',
+					sidebarReveal.dragOffset === null &&
+						'transition-[transform,opacity] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]',
+					isRevealed
+						? 'opacity-100'
+						: 'opacity-0 [transition-delay:0ms,150ms] [transition-duration:300ms,150ms]'
+				]}
+			></div>
+
+			<div
+				style:transform={revealTransform}
+				aria-hidden="true"
+				class={[
+					'pointer-events-none fixed inset-0 z-20 overflow-hidden',
+					sidebarReveal.dragOffset === null &&
+						'transition-[transform,opacity] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]',
+					// on close the corners hold until the page is nearly home, then fade
+					isRevealed
+						? 'opacity-100'
+						: 'opacity-0 [transition-delay:0ms,150ms] [transition-duration:300ms,150ms]'
+				]}
+			>
+				<div
+					class="absolute inset-0 rounded-[2.5rem] shadow-[0_0_0_2.5rem_var(--sidebar-reveal-bg)] {BOX_BORDER}"
+				></div>
+			</div>
+		{/if}
 	</div>
 
 	<ModeWatcher />
 
-	<Toaster richColors />
+	<Toaster closeButton richColors />
+
+	<!-- a debug tool, kept with the tests and loaded on demand, so it stays out of the production bundle -->
+	{#if import.meta.env.DEV && import.meta.env.VITE_DEBUG}
+		{#await import('../../tests/debug/ViewportProbe.svelte') then { default: ViewportProbe }}
+			<ViewportProbe />
+		{/await}
+	{/if}
 </Tooltip.Provider>
 
 <!-- PWA update prompt + version -->
 <div class="fixed right-4 bottom-4 z-9999 flex flex-col items-end gap-1">
-	{#if showBuildVersion && buildInfoStore.value}
-		<span class="text-[10px] tabular-nums text-muted-foreground">{buildInfoStore.value}</span>
+	{#if showBuildVersion && versionStore.build}
+		<span class="text-[10px] tabular-nums text-muted-foreground">{versionStore.build}</span>
 	{/if}
 
 	<PwaRefreshAlert
-		needRefresh={$needRefresh || pwa.needRefreshByStorage}
 		forceReload={pwa.needRefreshByStorage}
+		needRefresh={$needRefresh || pwa.needRefreshByStorage}
 		{updateServiceWorker}
 	/>
 </div>

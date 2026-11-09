@@ -14,7 +14,7 @@
 		<Video class="mx-auto mb-4 h-16 w-16 text-white/50" />
 
 		{#if videoSrc}
-			<video controls class="mb-4 w-full" src={videoSrc}>
+			<video class="mb-4 w-full" controls src={videoSrc}>
 				<track kind="captions" src="" />
 				Your browser does not support the video element.
 			</video>

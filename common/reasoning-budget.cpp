@@ -136,7 +136,8 @@ static void common_reasoning_budget_accept(struct llama_sampler * smpl, llama_to
             // track the end sequence within forced_tokens so it is also reported on DONE
             const int32_t match = ctx->end_matcher.advance(token);
             ctx->force_pos++;
-            if (ctx->force_pos >= ctx->forced_tokens.size()) {
+            // an end tag that is already in the prompt (e.g. "<think></think>") also ends forcing
+            if (match >= 0 || ctx->force_pos >= ctx->forced_tokens.size()) {
                 ctx->state = REASONING_BUDGET_DONE;
                 ctx->end_match = match;
                 COM_TRC("%s", "forced sequence complete, done\n");
@@ -217,6 +218,8 @@ static struct llama_sampler_i common_reasoning_budget_i = {
     /* .backend_accept    = */ nullptr,
     /* .backend_apply     = */ nullptr,
     /* .backend_set_input = */ nullptr,
+    /* .backend_reset     = */ nullptr,
+    /* .copy_state        = */ nullptr,
 };
 
 static struct llama_sampler * common_reasoning_budget_clone(const struct llama_sampler * smpl) {

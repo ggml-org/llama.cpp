@@ -15,6 +15,7 @@ from .base import MmprojModel, ModelBase, TextModel, gguf
 
 
 @ModelBase.register("Ernie4_5_ForCausalLM", "Ernie4_5ForCausalLM")
+@ModelBase.example("baidu/ERNIE-4.5-0.3B-PT")
 class Ernie4_5Model(TextModel):
     model_arch = gguf.MODEL_ARCH.ERNIE4_5
 
@@ -73,6 +74,7 @@ class Ernie4_5Model(TextModel):
 
 
 @ModelBase.register("Ernie4_5_MoeForCausalLM")
+@ModelBase.example("baidu/ERNIE-4.5-21B-A3B-PT")
 class Ernie4_5MoeModel(Ernie4_5Model):
     model_arch = gguf.MODEL_ARCH.ERNIE4_5_MOE
     _experts: list[dict[str, Tensor]] | None = None
@@ -156,11 +158,13 @@ class Ernie4_5MoeModel(Ernie4_5Model):
 
 
 @ModelBase.register("PaddleOCRVLForConditionalGeneration")
+@ModelBase.example("PaddlePaddle/PaddleOCR-VL")
 class PaddleOCRModel(Ernie4_5Model):
     model_arch = gguf.MODEL_ARCH.PADDLEOCR
 
 
 @ModelBase.register("PaddleOCRVisionModel")
+@ModelBase.example("PaddlePaddle/PaddleOCR-VL")
 class PaddleOCRVisionModel(MmprojModel):
     # PaddleOCR-VL uses a modified version of Siglip
     min_pixels: int = 0

@@ -316,6 +316,23 @@ static void test_reasoning_budget_end_match() {
         llama_sampler_free(sampler);
     }
 
+    // budget=0 and the prompt already closes the block: the end tag ends forcing before the forced sequence
+    {
+        const std::vector<llama_tokens> end_nl = {{103, 101}, {101}};
+
+        auto * sampler = common_reasoning_budget_init(nullptr, start, end_nl, {103, 101}, 0, REASONING_BUDGET_IDLE);
+
+        llama_sampler_accept(sampler, 100); // FORCING
+        llama_sampler_accept(sampler, 101); // end tag from the prompt, DONE
+        GGML_ASSERT(common_reasoning_budget_get_state(sampler) == REASONING_BUDGET_DONE);
+
+        const llama_tokens * matched = common_reasoning_budget_get_end_match(sampler);
+        GGML_ASSERT(matched != nullptr);
+        GGML_ASSERT(*matched == llama_tokens({101}));
+
+        llama_sampler_free(sampler);
+    }
+
     // forced_tokens not ending with a known end sequence records nothing
     {
         auto * sampler = common_reasoning_budget_init(nullptr, start, end, {102}, 0, REASONING_BUDGET_FORCING);

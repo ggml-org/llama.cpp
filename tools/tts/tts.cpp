@@ -1,4 +1,5 @@
 #include "arg.h"
+#include "chat.h"
 #include "common.h"
 #include "sampling.h"
 #include "log.h"
@@ -36,7 +37,7 @@ static void print_usage(int, char ** argv) {
     LOG("\nexample usage:\n");
     LOG("\n    %s -m backbone.gguf -mm mmproj.gguf -p \"text to speak\" -o output.wav", argv[0]);
     LOG("\n    %s -hf user/model -p \"text to speak\" -o output.wav\n", argv[0]);
-    LOG("\nnote: --tts-lang and --tts-speaker-file may not be supported in all models");
+    LOG("\nnote: --tts-lang, --tts-voice and --tts-speaker-file may not be supported in all models");
     LOG("\n      use -n to limit the output length");
     LOG("\n      see tts/README.md for per-model usage notes");
     LOG("\n\n");
@@ -86,6 +87,7 @@ int main(int argc, char ** argv) {
 
     mtmd_context_params mtmd_params = mtmd_context_params_default();
     mtmd_params.use_gpu = params.mmproj_use_gpu;
+    mtmd_params.device  = params.mmproj_device;
     mtmd::context_ptr mctx(mtmd_init_from_file(params.mmproj.path.c_str(), model, mtmd_params));
     if (!mctx) {
         LOG_ERR("failed to load mmproj %s\n", params.mmproj.path.c_str());
@@ -102,7 +104,7 @@ int main(int argc, char ** argv) {
 
     mtmd::bitmap_ptr speaker_bitmap;
     if (!params.tts_speaker_file.empty()) {
-        auto wrapper = mtmd_helper_bitmap_init_from_file(mctx.get(), params.tts_speaker_file.c_str(), false);
+        auto wrapper = mtmd_helper_bitmap_init_from_file(mctx.get(), params.tts_speaker_file.c_str(), false, mtmd_helper_init_opt_default());
         if (!wrapper.bitmap) {
             LOG_ERR("failed to load speaker file %s\n", params.tts_speaker_file.c_str());
             return 1;
@@ -110,16 +112,49 @@ int main(int argc, char ** argv) {
         speaker_bitmap.reset(wrapper.bitmap);
     }
 
-    mtmd_helper::gen_audio gen(lctx, mctx.get());
-    mtmd_helper_gen_audio_inp inp{};
+    // a model with predefined voices needs one, the first by default; other models name the voice in the prompt
+    if (mtmd_gen_audio_get_info(mctx.get()).n_voices > 0 && (!params.tts_voice.empty() || !speaker_bitmap)) {
+        if (speaker_bitmap) {
+            LOG_ERR("--tts-voice and --tts-speaker-file cannot be used together\n");
+            return 1;
+        }
+        if (params.tts_voice.empty()) {
+            params.tts_voice = mtmd_gen_audio_voice_name(mctx.get(), 0);
+            LOG_WRN("no --tts-voice given, speaking with \"%s\"\n", params.tts_voice.c_str());
+        }
+        speaker_bitmap.reset(mtmd_gen_audio_get_voice(mctx.get(), params.tts_voice.c_str()));
+        if (!speaker_bitmap) {
+            LOG_ERR("unknown voice \"%s\", the model has:", params.tts_voice.c_str());
+            for (int32_t i = 0; const char * name = mtmd_gen_audio_voice_name(mctx.get(), i); i++) {
+                LOG(" %s", name);
+            }
+            LOG("\n");
+            return 1;
+        }
+    }
+
+    // a model with a "tts" chat template (e.g. LFM3-Audio) speaks the prompt rendered from it
+    auto tmpls = common_chat_templates_init(model, "");
+    std::string prompt = common_chat_get_tts_prompt(tmpls.get(), params.prompt, params.tts_lang, params.tts_voice);
+    if (prompt.empty()) {
+        prompt = params.prompt;
+    }
+
+    mtmd_helper::gen_audio gen;
+    gen.init(lctx, mctx.get());
+    mtmd_helper_gen_audio_inp inp = mtmd_helper_gen_audio_inp_default();
     inp.seq_id      = 0;
-    inp.prompt      = params.prompt.c_str();
-    inp.prompt_len  = params.prompt.size();
+    inp.prompt      = prompt.c_str();
+    inp.prompt_len  = prompt.size();
     inp.speaker_ref = speaker_bitmap.get();
     inp.lang        = params.tts_lang.c_str();
     inp.top_k       = params.sampling.top_k;
     inp.top_p       = params.sampling.top_p;
-    inp.out_type    = MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV;
+    inp.seed        = params.sampling.seed;
+    // without --temp the audio frames keep the model default, not the CLI default
+    if (params.sampling.user_sampling_config & common_params_sampling_config::COMMON_PARAMS_SAMPLING_CONFIG_TEMP) {
+        inp.temp    = params.sampling.temp;
+    }
 
     //
     // stage 1: process prompt via backbone model, generate semantic representation
@@ -143,8 +178,7 @@ int main(int argc, char ** argv) {
         }
     }
 
-    const llama_vocab * vocab = llama_model_get_vocab(model);
-
+    // note: some pipelines ignore this token and use the hidden state instead
     auto sample_semantic_code = [&]() -> llama_token {
         llama_token t = common_sampler_sample(smpl, lctx, -1);
         common_sampler_accept(smpl, t, true);
@@ -159,19 +193,24 @@ int main(int argc, char ** argv) {
     tts_timings timings;
     const int64_t t_gen_start_us = ggml_time_us();
 
-    for (; n_frames < max_new && !llama_vocab_is_eog(vocab, sampled); n_frames++) {
+    bool stop = false;
+    while (!stop && n_frames < max_new) {
         const float * h_next = nullptr;
 
         // stage 2+3: semantic --> acoustic details --> audio waveform
         //            step_gen() runs both stages and returns new h_state for next step
-        if (gen.step_gen(sampled, h_state, &h_next) != 0) {
+        if (gen.step_gen(sampled, h_state, &h_next, &stop) != 0) {
             LOG_ERR("step_gen failed at frame %d\n", n_frames);
             return 1;
         }
+        if (!h_next) {
+            break; // stopped without generating a frame
+        }
 
+        n_frames++;
         h_state = h_next;
         sampled = sample_semantic_code();
-        timings.report(n_frames + 1);
+        timings.report(n_frames);
     }
     const double t_gen_s = (ggml_time_us() - t_gen_start_us) / 1e6;
 
@@ -179,17 +218,20 @@ int main(int argc, char ** argv) {
     const char * data        = nullptr;
     size_t       data_len    = 0;
     int64_t      n_samples   = 0;
+    const int64_t t_wav_start_us = ggml_time_us();
     if (gen.get_output(&sample_rate, &data, &data_len, &n_samples) != 0) {
         LOG_ERR("get_output failed\n");
         return 1;
     }
+    const double t_wav_s = (ggml_time_us() - t_wav_start_us) / 1e6;
 
     LOG_INF("generated %d frames, %zu bytes of WAV audio (%d Hz)\n", n_frames, data_len, sample_rate);
 
     const double t_prompt_s = (t_gen_start_us - t_prompt_start_us) / 1e6;
-    const double t_total_s  = t_prompt_s + t_gen_s;
+    const double t_total_s  = t_prompt_s + t_gen_s + t_wav_s;
     const double audio_s    = sample_rate > 0 ? (double) n_samples / sample_rate : 0.0;
-    LOG_INF("timings: prompt eval %.2fs + generation %.2fs = total %.2fs\n", t_prompt_s, t_gen_s, t_total_s);
+    LOG_INF("timings: prompt eval %.2fs + generation %.2fs + vocoder %.2fs = total %.2fs\n",
+            t_prompt_s, t_gen_s, t_wav_s, t_total_s);
     LOG_INF("         output audio = %.2fs (audio time = %.2fx process time)\n", audio_s, t_total_s > 0 ? audio_s / t_total_s : 0.0);
     FILE * f = fopen(params.out_file.c_str(), "wb");
     if (!f) {

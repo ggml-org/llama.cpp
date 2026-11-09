@@ -17,6 +17,10 @@
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #endif
 
+#ifndef HEX_L2_LINE_SIZE
+#define HEX_L2_LINE_SIZE 128
+#endif
+
 static inline uint32_t hex_ceil_pow2(uint32_t x) {
     if (x <= 1) { return 1; }
     int p = 2;
@@ -75,6 +79,15 @@ static inline bool hex_add_overflow(size_t a, size_t b, size_t *out) {
     if (a > SIZE_MAX - b) return true;
     *out = a + b;
     return false;
+}
+
+static inline uint32_t hex_gcd_u32(uint32_t a, uint32_t b) {
+    while (b != 0) {
+        uint32_t t = b;
+        b = a % b;
+        a = t;
+    }
+    return a;
 }
 
 #endif // HEX_COMMON_H

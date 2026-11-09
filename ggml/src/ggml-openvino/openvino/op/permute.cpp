@@ -45,11 +45,22 @@ OutputVector translate_permute(const NodeContext & context) {
                 static_cast<int64_t>(perm_values.size() - 1 - input_axis);
         }
     }
-    auto perm = ov::op::v0::Constant::create(ov::element::i64, {4}, perm_values);
-
     if (op_case == 1 || context.is_stateful()) {
+        // The stateful path carries hidden-state tensors in a rank-3 layout (the
+        // leading batch dim is dropped, e.g. Gemma4's per-layer-embedding path). The
+        // perm above is rank-4; when the actual input is rank-3, drop the batch axis
+        // (perm[0], which is always the identity 0 here) and shift the rest down by 1
+        // so the transpose order matches the input rank.
+        std::vector<int64_t> perm_used = perm_values;
+        const auto & src_ps = src.get_partial_shape();
+        if (src_ps.rank().is_static() && src_ps.rank().get_length() == 3 && perm_values.size() == 4 &&
+            perm_values[0] == 0) {
+            perm_used = {perm_values[1] - 1, perm_values[2] - 1, perm_values[3] - 1};
+        }
+        auto perm = ov::op::v0::Constant::create(ov::element::i64, ov::Shape{perm_used.size()}, perm_used);
         res = std::make_shared<ov::op::v1::Transpose>(src, perm);
     } else if (op_case == 2) {
+        auto perm = ov::op::v0::Constant::create(ov::element::i64, {4}, perm_values);
         auto output_shape = context.get_output_shape().to_shape();
         auto n_heads = ov::op::v0::Constant::create(ov::element::i64, {1}, {output_shape[1]});
         auto head_size = ov::op::v0::Constant::create(ov::element::i64, {1}, {output_shape[3]});
@@ -68,6 +79,7 @@ OutputVector translate_permute(const NodeContext & context) {
         auto reshaped = std::make_shared<ov::op::v1::Reshape>(src, new_shape, true);
         res = std::make_shared<ov::op::v1::Transpose>(reshaped, perm);
     } else {
+        auto perm = ov::op::v0::Constant::create(ov::element::i64, {4}, perm_values);
         auto cache_shape = src.get_partial_shape();
         auto output_shape = context.get_output_shape().to_shape();
         int64_t head_size = output_shape[3];

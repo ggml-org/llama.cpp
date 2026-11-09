@@ -4,47 +4,20 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Card } from '$lib/components/ui/card';
 	import { INPUT_CLASSES } from '$lib/constants';
-	import { getMessageEditContext } from '$lib/contexts';
-	import { KeyboardKey, MessageRole } from '$lib/enums';
-	import { config } from '$lib/stores/settings.svelte';
+	import { getChatMessageEditContext } from '$lib/contexts';
+	import { KeyboardKey } from '$lib/enums';
+	import { settingsStore } from '$lib/stores';
 	import { autoResizeTextarea, isIMEComposing } from '$lib/utils';
 
 	interface Props {
 		class?: string;
 		message: DatabaseMessage;
-		siblingInfo?: ChatMessageSiblingInfo | null;
-		showDeleteDialog: boolean;
-		deletionInfo: {
-			totalCount: number;
-			userMessages: number;
-			assistantMessages: number;
-			messageTypes: string[];
-		} | null;
-		onCopy: () => void;
-		onEdit: () => void;
-		onDelete: () => void;
-		onConfirmDelete: () => void;
-		onNavigateToSibling?: (siblingId: string) => void;
-		onShowDeleteDialogChange: (show: boolean) => void;
 		textareaElement?: HTMLTextAreaElement;
 	}
 
-	let {
-		class: className = '',
-		message,
-		siblingInfo = null,
-		showDeleteDialog,
-		deletionInfo,
-		onCopy,
-		onEdit,
-		onDelete,
-		onConfirmDelete,
-		onNavigateToSibling,
-		onShowDeleteDialogChange,
-		textareaElement = $bindable()
-	}: Props = $props();
+	let { class: className = '', message, textareaElement = $bindable() }: Props = $props();
 
-	const editCtx = getMessageEditContext();
+	const editCtx = getChatMessageEditContext();
 
 	function handleEditKeydown(event: KeyboardEvent) {
 		if (event.key === KeyboardKey.ENTER && !event.shiftKey && !isIMEComposing(event)) {
@@ -64,7 +37,7 @@
 	let contentHeight = $state(0);
 
 	const MAX_HEIGHT = 200; // pixels
-	const currentConfig = config();
+	const currentConfig = settingsStore.config;
 
 	let showExpandButton = $derived(contentHeight > MAX_HEIGHT);
 
@@ -110,16 +83,16 @@
 	{#if editCtx.isEditing}
 		<div class="w-full max-w-[80%]">
 			<textarea
-				style="max-height: var(--max-message-height);"
 				bind:this={textareaElement}
-				value={editCtx.editedContent}
-				class="min-h-[60px] w-full resize-none rounded-2xl px-3 py-2 text-sm {INPUT_CLASSES}"
-				onkeydown={handleEditKeydown}
+				class="min-h-[60px] w-full resize-none rounded-2xl px-3 py-2 text-base md:text-sm {INPUT_CLASSES}"
 				oninput={(e) => {
 					autoResizeTextarea(e.currentTarget);
 					editCtx.setContent(e.currentTarget.value);
 				}}
+				onkeydown={handleEditKeydown}
 				placeholder="Edit system message..."
+				style="max-height: var(--max-message-height);"
+				value={editCtx.editedContent}
 			></textarea>
 
 			<div class="mt-2 flex justify-end gap-2">
@@ -131,8 +104,8 @@
 
 				<Button
 					class="h-8 px-3"
-					onclick={editCtx.save}
 					disabled={!editCtx.editedContent.trim()}
+					onclick={editCtx.save}
 					size="sm"
 				>
 					<Check class="mr-1 h-3 w-3" />
@@ -145,7 +118,7 @@
 		{#if message.content.trim()}
 			<div class="relative max-w-[80%]">
 				<button
-					class="group/expand w-full text-left {!isExpanded && showExpandButton
+					class="group/expand block w-full text-left {!isExpanded && showExpandButton
 						? 'cursor-pointer'
 						: 'cursor-auto'}"
 					onclick={showExpandButton && !isExpanded ? toggleExpand : undefined}
@@ -218,20 +191,7 @@
 
 		{#if message.timestamp}
 			<div class="max-w-[80%]">
-				<ChatMessageActionIcons
-					actionsPosition="right"
-					{deletionInfo}
-					justify="end"
-					{onConfirmDelete}
-					{onCopy}
-					{onDelete}
-					{onEdit}
-					{onNavigateToSibling}
-					{onShowDeleteDialogChange}
-					{siblingInfo}
-					{showDeleteDialog}
-					role={MessageRole.USER}
-				/>
+				<ChatMessageActionIcons actionsPosition="right" justify="end" />
 			</div>
 		{/if}
 	{/if}

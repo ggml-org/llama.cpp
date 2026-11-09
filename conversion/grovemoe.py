@@ -11,6 +11,7 @@ from .base import ModelBase, TextModel, gguf, logger
 
 
 @ModelBase.register("GroveMoeForCausalLM", "modeling_grove_moe.GroveMoeForCausalLM")
+@ModelBase.example("inclusionAI/GroveMoE-Inst")
 class GroveMoeModel(TextModel):
     model_arch = gguf.MODEL_ARCH.GROVEMOE
 

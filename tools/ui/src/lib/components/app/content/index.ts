@@ -32,6 +32,20 @@
 export { default as MarkdownContent } from './MarkdownContent/MarkdownContent.svelte';
 
 /**
+ * **MentionText** - Plain text with file mention badges
+ *
+ * Renders a message verbatim, turning only `[name](file://path)` links
+ * into the same badge chips the markdown path draws. Nothing else is
+ * interpreted, so pasted code keeps its `#` comments and underscores.
+ *
+ * @example
+ * ```svelte
+ * <span class="whitespace-pre-wrap"><MentionText content={message.content} /></span>
+ * ```
+ */
+export { default as MentionText } from './MentionText.svelte';
+
+/**
  * **SyntaxHighlightedCode** - Code syntax highlighting
  *
  * Renders code with syntax highlighting using highlight.js.

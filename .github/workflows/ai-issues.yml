@@ -4,6 +4,10 @@ on:
   issues:
     types: [opened]
 
+cache-mode: none
+permissions:
+  contents: read
+
 jobs:
   find-related:
     if: github.event.action == 'opened'

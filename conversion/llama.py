@@ -28,6 +28,8 @@ from .base import ModelBase, TextModel, gguf, logger
     "Eagle3DraftModel",
     "IQuestCoderForCausalLM",
     "LlamaModel")
+# [TAG_HF_EXAMPLE_GATED] meta-llama/Llama-3.2-1B-Instruct is gated
+@ModelBase.example("unsloth/Llama-3.2-1B-Instruct", "mistralai/Mistral-7B-Instruct-v0.3", "mistralai/Mixtral-8x7B-Instruct-v0.1")
 class LlamaModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LLAMA
     undo_permute = True
@@ -127,8 +129,9 @@ class LlamaModel(TextModel):
                 tokenizer_config_json = json.load(f)
                 if (add_prefix_space := tokenizer_config_json.get("add_prefix_space")) is not None:
                     self.gguf_writer.add_add_space_prefix(add_prefix_space)
-                if tokenizer_config_json.get("tokenizer_class") == "HybridDNATokenizer":
-                    return self._set_vocab_hybriddna()
+
+        if self._is_hybriddna():
+            return self._set_vocab_hybriddna()
 
         try:
             self._set_vocab_sentencepiece()
@@ -359,6 +362,7 @@ class LlamaModel(TextModel):
 
 
 @ModelBase.register("ArceeForCausalLM")
+@ModelBase.example("arcee-ai/AFM-4.5B")
 class ArceeModel(LlamaModel):
     model_arch = gguf.MODEL_ARCH.ARCEE
 
@@ -371,6 +375,8 @@ class ArceeModel(LlamaModel):
     "Llama4ForConditionalGeneration",
     "Llama4ForCausalLM",
 )
+# [TAG_HF_EXAMPLE_GATED] meta-llama/Llama-4-Scout-17B-16E-Instruct is gated
+@ModelBase.example("unsloth/Llama-4-Scout-17B-16E-Instruct")
 class Llama4Model(LlamaModel):
     model_arch = gguf.MODEL_ARCH.LLAMA4
     undo_permute = False
@@ -412,16 +418,19 @@ class Llama4Model(LlamaModel):
 
 
 @ModelBase.register("LlamaBidirectionalModel")
+@ModelBase.example("nvidia/llama-embed-nemotron-8b")
 class LlamaEmbedNemotronModel(LlamaModel):
     model_arch = gguf.MODEL_ARCH.LLAMA_EMBED
 
 
 @ModelBase.register("SmolLM3ForCausalLM")
+@ModelBase.example("HuggingFaceTB/SmolLM3-3B")
 class SmolLM3Model(LlamaModel):
     model_arch = gguf.MODEL_ARCH.SMOLLM3
 
 
 @ModelBase.register("ApertusForCausalLM")
+@ModelBase.example("swiss-ai/Apertus-8B-Instruct-2509")
 class ApertusModel(LlamaModel):
     model_arch = gguf.MODEL_ARCH.APERTUS
     undo_permute = False

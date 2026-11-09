@@ -161,7 +161,7 @@ lspci -n | grep -Eo '19e5:d[0-9a-f]{3}' | cut -d: -f2
 | FP16                   | Support | Support |
 | Q8_0                   | Support | Partial |
 | Q4_0                   | Support | Partial |
-| BF16                   | Support |         |
+| BF16                   | Support |    No   |
 
 > **310P note**
 > - `Q8_0`: data transform / buffer path is implemented, and `GET_ROWS` is supported, but quantized `MUL_MAT` / `MUL_MAT_ID` are not supported.
@@ -274,7 +274,9 @@ cmake --build build --config release
 
     **Notes**:
 
-      - CANN backend only supports FP16/Q4_0/Q8_0 models currently.
+      - On 910B the CANN backend supports FP16, BF16 and Q4_0/Q8_0 models. On 310P, BF16 is not
+        supported and quantized `MUL_MAT` / `MUL_MAT_ID` are not implemented, so only FP16 models
+        are supported (see [DataType Supports](#datatype-supports)).
 
 2. **Launch inference**
 
@@ -355,3 +357,7 @@ Enable ACL graph execution during the prefill stage, default is false. This opti
 ### GGML_CANN_OPERATOR_FUSION
 
 Enable operator fusion during computation, default is false. This option fuses compatible operators (e.g., ADD + RMS_NORM) to reduce overhead and improve performance.
+
+### GGML_CANN_NO_PINNED
+
+Disable pinned (host-locked) host buffers. When it is set (any value), `aclrtMallocHost` is not called: the CANN host buffer type allocates regular CPU memory instead and the backend reports no `host_buffer` capability, so host-side staging uses pageable memory. Use it when pinned host allocation fails, or when the pinned memory is needed by other processes on the host.

@@ -14,6 +14,7 @@ from .llama import LlamaModel
 
 @ModelBase.register("OlmoForCausalLM")
 @ModelBase.register("OLMoForCausalLM")
+@ModelBase.example("allenai/OLMo-1.7-7B-hf")
 class OlmoModel(TextModel):
     model_arch = gguf.MODEL_ARCH.OLMO
 
@@ -39,12 +40,14 @@ class OlmoModel(TextModel):
 
 
 @ModelBase.register("SeedOssForCausalLM")
+@ModelBase.example("ByteDance-Seed/Seed-OSS-36B-Instruct")
 class SeedOssModel(TextModel):
     model_arch = gguf.MODEL_ARCH.SEED_OSS
 
 
 @ModelBase.register("Olmo2ForCausalLM")
 @ModelBase.register("Olmo3ForCausalLM")
+@ModelBase.example("allenai/OLMo-2-1124-7B-Instruct", "allenai/Olmo-3-7B-Instruct")
 class Olmo2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.OLMO2
 
@@ -67,6 +70,7 @@ class Olmo2Model(TextModel):
 
 
 @ModelBase.register("OlmoeForCausalLM")
+@ModelBase.example("allenai/OLMoE-1B-7B-0924")
 class OlmoeModel(TextModel):
     model_arch = gguf.MODEL_ARCH.OLMOE
 

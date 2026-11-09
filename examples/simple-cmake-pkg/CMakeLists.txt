@@ -5,6 +5,9 @@ set(TARGET llama-simple-cmake-pkg)
 
 find_package(Llama REQUIRED)
 
+# Check that repeated package discovery does not redefine imported targets.
+find_package(Llama REQUIRED)
+
 add_executable(${TARGET} ${CMAKE_CURRENT_LIST_DIR}/../simple/simple.cpp)
 install(TARGETS ${TARGET} RUNTIME)
 target_link_libraries(${TARGET} PRIVATE llama ggml::all ${CMAKE_THREAD_LIBS_INIT})

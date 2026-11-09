@@ -1,6 +1,6 @@
+import McpServerFormWrapper from './components/McpServerFormWrapper.svelte';
 import { describe, expect, it } from 'vitest';
 import { render } from 'vitest-browser-svelte';
-import McpServerFormWrapper from './components/McpServerFormWrapper.svelte';
 
 const AUTHORIZATION_HEADER = 'Authorization';
 const BEARER_PREFIX = 'Bearer ';
@@ -48,9 +48,11 @@ describe('McpServerForm - Authorization / bearer UI', () => {
 		await screen.getByRole('switch', { name: /authorization/i }).click();
 
 		const token = 'super-secret';
+
 		await bearerInput(screen).fill(token);
 
 		const expected = JSON.stringify({ [AUTHORIZATION_HEADER]: `${BEARER_PREFIX}${token}` });
+
 		await expect
 			.element(capturedHeaders(screen))
 			.toHaveAttribute('data-captured-headers', expected);
@@ -58,10 +60,9 @@ describe('McpServerForm - Authorization / bearer UI', () => {
 
 	it('pre-existing Bearer header pre-fills the bearer input with the token stripped', async () => {
 		const existing = JSON.stringify({
-			'X-Trace-Id': 'abc',
-			[AUTHORIZATION_HEADER]: `${BEARER_PREFIX}preexisting`
+			[AUTHORIZATION_HEADER]: `${BEARER_PREFIX}preexisting`,
+			'X-Trace-Id': 'abc'
 		});
-
 		const screen = await render(McpServerFormWrapper, { headers: existing });
 
 		await expect.element(bearerInput(screen)).toBeVisible();
@@ -70,24 +71,24 @@ describe('McpServerForm - Authorization / bearer UI', () => {
 
 	it('non-Bearer Authorization is ignored by the dedicated UI and stays in the KV section', async () => {
 		const existing = JSON.stringify({ [AUTHORIZATION_HEADER]: 'Basic czNjcjpwYXNz' });
-
 		const screen = await render(McpServerFormWrapper, { headers: existing });
 
 		await expect.element(bearerInput(screen)).not.toBeInTheDocument();
 
 		const headerKeyInput = screen.getByPlaceholder('Header name');
+
 		await expect.element(headerKeyInput).toBeVisible();
 	});
 
 	it('engaging the token UI replaces a non-Bearer Authorization with the Bearer scheme', async () => {
 		const existing = JSON.stringify({ [AUTHORIZATION_HEADER]: 'Basic old' });
-
 		const screen = await render(McpServerFormWrapper, { headers: existing });
 
 		await screen.getByRole('switch', { name: /authorization/i }).click();
 		await bearerInput(screen).fill('new');
 
 		const expected = JSON.stringify({ [AUTHORIZATION_HEADER]: `${BEARER_PREFIX}new` });
+
 		await expect
 			.element(capturedHeaders(screen))
 			.toHaveAttribute('data-captured-headers', expected);
@@ -126,8 +127,8 @@ describe('McpServerForm - Authorization / bearer UI', () => {
 	it('does not surface Bearer Authorization in the KV section even when pre-existing', async () => {
 		const existing = JSON.stringify({ [AUTHORIZATION_HEADER]: `${BEARER_PREFIX}xyz` });
 		const screen = await render(McpServerFormWrapper, { headers: existing });
-
 		const headerKeyInput = screen.getByPlaceholder('Header name');
+
 		await expect.element(headerKeyInput).not.toBeInTheDocument();
 	});
 });

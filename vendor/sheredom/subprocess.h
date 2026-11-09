@@ -107,7 +107,8 @@ enum subprocess_error_e {
   subprocess_error_permission_denied = -5,
   subprocess_error_no_memory = -6,
   subprocess_error_pipe = -7,
-  subprocess_error_spawn = -8
+  subprocess_error_spawn = -8,
+  subprocess_error_not_supported = -9
 };
 
 #if defined(__cplusplus)
@@ -274,18 +275,72 @@ subprocess_weak int subprocess_alive(struct subprocess_s *const process);
 #include <unistd.h>
 #endif
 
+#if defined(__NetBSD__)
+#include <sys/param.h>
+#endif
+
+/* Which spelling of the chdir file action the platform provides, if any.
+   POSIX 2024 standardised posix_spawn_file_actions_addchdir; implementations
+   that shipped it earlier called it ..._np. macOS 26 and NetBSD 10 use the
+   standard name, glibc 2.29+, macOS 10.15+ and FreeBSD 13.1+ use the _np name,
+   and AIX, NetBSD 9 and older, and OpenBSD provide neither. */
+#if !defined(SUBPROCESS_ADDCHDIR_IS_POSIX)
+#if (defined(__APPLE__) && MAC_OS_X_VERSION_MIN_REQUIRED >= 260000) ||        \
+    (defined(__NetBSD__) && __NetBSD_Version__ >= 1000000000)
+#define SUBPROCESS_ADDCHDIR_IS_POSIX 1
+#else
+#define SUBPROCESS_ADDCHDIR_IS_POSIX 0
+#endif
+#endif
+
+/* Whether to launch the child with fork()+exec() instead of posix_spawn(),
+   for platforms with no posix_spawn_file_actions_addchdir under either
+   spelling: the child chdir()s before exec, and a close-on-exec pipe carries
+   exec's errno back. Define this yourself to force either implementation. */
+#if !defined(SUBPROCESS_SPAWN_VIA_FORK)
+#if defined(_AIX) || defined(__OpenBSD__) ||                                  \
+    (defined(__NetBSD__) && (__NetBSD_Version__ < 1000000000))
+#define SUBPROCESS_SPAWN_VIA_FORK 1
+#else
+#define SUBPROCESS_SPAWN_VIA_FORK 0
+#endif
+#endif
+
 /* Whether subprocess_create_ex can honour process_cwd. glibc only gained
-   posix_spawn_file_actions_addchdir_np in 2.29. Define this yourself to
-   override the detection, for instance on musl older than 1.1.24. */
+   posix_spawn_file_actions_addchdir_np in 2.29, and macOS in 10.15; the SDKs
+   mark it unavailable on iOS, tvOS and watchOS, where the undefined version
+   macro folds to 0 and so answers correctly. Define this yourself to override
+   the detection, for instance on musl older than 1.1.24. */
 #if !defined(SUBPROCESS_HAVE_CWD)
-#if defined(__GLIBC__)
+#if SUBPROCESS_SPAWN_VIA_FORK
+#define SUBPROCESS_HAVE_CWD 1
+#elif defined(__GLIBC__)
 #if __GLIBC_PREREQ(2, 29)
 #define SUBPROCESS_HAVE_CWD 1
 #else
 #define SUBPROCESS_HAVE_CWD 0
 #endif
+#elif defined(__APPLE__) && MAC_OS_X_VERSION_MIN_REQUIRED < 101500
+#define SUBPROCESS_HAVE_CWD 0
 #else
 #define SUBPROCESS_HAVE_CWD 1
+#endif
+#endif
+
+/* Whether a failed exec is reported back to the caller. The fork() path always
+   reports it through its error pipe. glibc's posix_spawn only started doing so
+   in 2.24; before that the child silently exits with 127. */
+#if !defined(SUBPROCESS_SPAWN_REPORTS_EXEC_ERRORS)
+#if SUBPROCESS_SPAWN_VIA_FORK
+#define SUBPROCESS_SPAWN_REPORTS_EXEC_ERRORS 1
+#elif defined(__GLIBC__)
+#if __GLIBC_PREREQ(2, 24)
+#define SUBPROCESS_SPAWN_REPORTS_EXEC_ERRORS 1
+#else
+#define SUBPROCESS_SPAWN_REPORTS_EXEC_ERRORS 0
+#endif
+#else
+#define SUBPROCESS_SPAWN_REPORTS_EXEC_ERRORS 1
 #endif
 #endif
 
@@ -323,6 +378,14 @@ typedef intptr_t subprocess_intptr_t;
 typedef size_t subprocess_size_t;
 #endif
 
+/* SIZE_T is ULONG_PTR, which is not size_t: on Win32 both are 32 bits wide but
+   unsigned long and unsigned int are still distinct types. */
+#ifdef _WIN64
+typedef subprocess_size_t subprocess_ulongptr_t;
+#else
+typedef unsigned long subprocess_ulongptr_t;
+#endif
+
 #ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wreserved-identifier"
@@ -332,6 +395,7 @@ typedef struct _PROCESS_INFORMATION *LPPROCESS_INFORMATION;
 typedef struct _SECURITY_ATTRIBUTES *LPSECURITY_ATTRIBUTES;
 typedef struct _STARTUPINFOW *LPSTARTUPINFOW;
 typedef struct _OVERLAPPED *LPOVERLAPPED;
+typedef struct _PROC_THREAD_ATTRIBUTE_LIST *LPPROC_THREAD_ATTRIBUTE_LIST;
 
 #ifdef __clang__
 #pragma clang diagnostic pop
@@ -383,6 +447,11 @@ struct subprocess_startup_info_s {
   void *hStdError;
 };
 
+struct subprocess_startup_info_ex_s {
+  struct subprocess_startup_info_s startupInfo;
+  void *attributeList;
+};
+
 struct subprocess_overlapped_s {
   uintptr_t Internal;
   uintptr_t InternalHigh;
@@ -432,6 +501,14 @@ __declspec(dllimport) int __stdcall CreateProcessW(
     const subprocess_wchar_t *, subprocess_wchar_t *, LPSECURITY_ATTRIBUTES,
     LPSECURITY_ATTRIBUTES, int, unsigned long, void *,
     const subprocess_wchar_t *, LPSTARTUPINFOW, LPPROCESS_INFORMATION);
+__declspec(dllimport) int __stdcall
+InitializeProcThreadAttributeList(LPPROC_THREAD_ATTRIBUTE_LIST, unsigned long,
+                                  unsigned long, subprocess_ulongptr_t *);
+__declspec(dllimport) int __stdcall UpdateProcThreadAttribute(
+    LPPROC_THREAD_ATTRIBUTE_LIST, unsigned long, subprocess_ulongptr_t, void *,
+    subprocess_ulongptr_t, void *, subprocess_ulongptr_t *);
+__declspec(dllimport) void __stdcall
+DeleteProcThreadAttributeList(LPPROC_THREAD_ATTRIBUTE_LIST);
 __declspec(dllimport) int __stdcall MultiByteToWideChar(
     unsigned int, unsigned long, const char *, int, subprocess_wchar_t *, int);
 __declspec(dllimport) int __stdcall CloseHandle(void *);
@@ -554,6 +631,8 @@ int subprocess_error_from_errno(int error) {
   case ENFILE:
   case ENOMEM:
     return subprocess_error_no_memory;
+  case ENOSYS:
+    return subprocess_error_not_supported;
   default:
     return subprocess_error_unknown;
   }
@@ -646,11 +725,103 @@ int subprocess_create_named_pipe_helper(void **rd, void **wr) {
 }
 #endif
 
+#if !defined(_WIN32)
+/* Move a pipe end off 0, 1 or 2. Duplicating a descriptor onto itself is a
+   no-op, so a pipe end already sitting on a standard descriptor would keep its
+   FD_CLOEXEC and be closed by exec, leaving the child without that stream. */
+static int subprocess_fds_above_std(int fds[2]) {
+  int fd_flags;
+  int index;
+  int moved;
+  int saved_errno;
+
+  for (index = 0; index < 2; index++) {
+    if (fds[index] > STDERR_FILENO) {
+      continue;
+    }
+
+    moved = fcntl(fds[index], F_DUPFD, STDERR_FILENO + 1);
+    if (-1 != moved) {
+      fd_flags = fcntl(moved, F_GETFD, 0);
+      if ((-1 == fd_flags) ||
+          (-1 == fcntl(moved, F_SETFD, fd_flags | FD_CLOEXEC))) {
+        saved_errno = errno;
+        close(moved);
+        errno = saved_errno;
+        moved = -1;
+      }
+    }
+
+    if (-1 == moved) {
+      saved_errno = errno;
+      close(fds[0]);
+      close(fds[1]);
+      fds[0] = -1;
+      fds[1] = -1;
+      errno = saved_errno;
+      return -1;
+    }
+
+    close(fds[index]);
+    fds[index] = moved;
+  }
+
+  return 0;
+}
+
+/* Create pipes with close-on-exec set so later subprocesses do not inherit
+   descriptors belonging to subprocesses which are already running. */
+static int subprocess_pipe_cloexec(int fds[2]) {
+  int fd_flags;
+  int index;
+  int saved_errno;
+
+#if defined(__linux__) || defined(__FreeBSD__) || defined(__NetBSD__) ||       \
+    defined(__OpenBSD__) || defined(__DragonFly__) ||                         \
+    (defined(__sun) && defined(__SVR4))
+  if (0 == pipe2(fds, O_CLOEXEC)) {
+    return subprocess_fds_above_std(fds);
+  }
+
+  /* Older kernels can lack pipe2 even when the C library declares it. */
+  if (ENOSYS != errno) {
+    return -1;
+  }
+#endif
+
+  if (0 != pipe(fds)) {
+    return -1;
+  }
+
+  for (index = 0; index < 2; index++) {
+    fd_flags = fcntl(fds[index], F_GETFD, 0);
+    if ((-1 == fd_flags) ||
+        (-1 == fcntl(fds[index], F_SETFD, fd_flags | FD_CLOEXEC))) {
+      saved_errno = errno;
+      close(fds[0]);
+      close(fds[1]);
+      fds[0] = -1;
+      fds[1] = -1;
+      errno = saved_errno;
+      return -1;
+    }
+  }
+
+  return subprocess_fds_above_std(fds);
+}
+#endif
+
 int subprocess_create(const char *const commandLine[], int options,
                       struct subprocess_s *const out_process) {
   return subprocess_create_ex(commandLine, options, SUBPROCESS_NULL,
                               SUBPROCESS_NULL, out_process);
 }
+
+#if SUBPROCESS_SPAWN_VIA_FORK
+/* Not every platform declares execvpe: AIX exports it from libc without ever
+   naming it in a header, and glibc hides it behind _GNU_SOURCE. */
+extern int execvpe(const char *, char *const *, char *const *);
+#endif
 
 int subprocess_create_ex(const char *const commandLine[], int options,
                          const char *const environment[],
@@ -671,6 +842,7 @@ int subprocess_create_ex(const char *const commandLine[], int options,
   subprocess_size_t bs_run;
   unsigned long flags = 0;
   unsigned long last_error = 0;
+  int attribute_list_initialized = 0;
   int result = subprocess_error_unknown;
   const unsigned int codePageUtf8 = 65001;
   const unsigned long mbErrInvalidChars = 0x00000008;
@@ -678,6 +850,8 @@ int subprocess_create_ex(const char *const commandLine[], int options,
   const unsigned long handleFlagInherit = 0x00000001;
   const unsigned long createNoWindow = 0x08000000;
   const unsigned long createUnicodeEnvironment = 0x00000400;
+  const unsigned long extendedStartupInfoPresent = 0x00080000;
+  const subprocess_size_t procThreadAttributeHandleList = 0x00020002;
   struct subprocess_subprocess_information_s processInfo = {SUBPROCESS_NULL,
                                                             SUBPROCESS_NULL, 0,
                                                             0};
@@ -685,6 +859,11 @@ int subprocess_create_ex(const char *const commandLine[], int options,
                                                     SUBPROCESS_NULL, 1};
   subprocess_wchar_t empty_environment[2] = {0, 0};
   subprocess_wchar_t *used_environment = SUBPROCESS_NULL;
+  subprocess_ulongptr_t attribute_list_size = 0;
+  subprocess_size_t inherited_handle_count = 0;
+  LPPROC_THREAD_ATTRIBUTE_LIST attribute_list = SUBPROCESS_NULL;
+  void *inherited_handles[3];
+  struct subprocess_startup_info_ex_s startInfoEx;
   struct subprocess_startup_info_s startInfo = {0,
                                                 SUBPROCESS_NULL,
                                                 SUBPROCESS_NULL,
@@ -1059,6 +1238,44 @@ int subprocess_create_ex(const char *const commandLine[], int options,
     }
   }
 
+  /* Restrict inheritance to this subprocess's standard streams. Without a
+     handle list, concurrent subprocess_create calls can inherit each other's
+     temporarily-inheritable child pipe handles. */
+  inherited_handles[inherited_handle_count++] = startInfo.hStdInput;
+  inherited_handles[inherited_handle_count++] = startInfo.hStdOutput;
+  if (startInfo.hStdError != startInfo.hStdOutput) {
+    inherited_handles[inherited_handle_count++] = startInfo.hStdError;
+  }
+
+  InitializeProcThreadAttributeList(SUBPROCESS_NULL, 1, 0,
+                                    &attribute_list_size);
+  if (0 == attribute_list_size) {
+    result = subprocess_error_spawn;
+    goto cleanup;
+  }
+
+  attribute_list = SUBPROCESS_PTR_CAST(LPPROC_THREAD_ATTRIBUTE_LIST,
+                                       _alloca(attribute_list_size));
+  if (!attribute_list || !InitializeProcThreadAttributeList(
+                             attribute_list, 1, 0, &attribute_list_size)) {
+    result = subprocess_error_spawn;
+    goto cleanup;
+  }
+  attribute_list_initialized = 1;
+
+  if (!UpdateProcThreadAttribute(
+          attribute_list, 0, procThreadAttributeHandleList, inherited_handles,
+          inherited_handle_count * sizeof(inherited_handles[0]),
+          SUBPROCESS_NULL, SUBPROCESS_NULL)) {
+    result = subprocess_error_spawn;
+    goto cleanup;
+  }
+
+  startInfoEx.startupInfo = startInfo;
+  startInfoEx.startupInfo.cb = sizeof(startInfoEx);
+  startInfoEx.attributeList = attribute_list;
+  flags |= extendedStartupInfoPresent;
+
   if (!CreateProcessW(
           SUBPROCESS_NULL,
           commandLineCombinedWide, // command line
@@ -1069,7 +1286,7 @@ int subprocess_create_ex(const char *const commandLine[], int options,
           used_environment,        // used environment
           process_cwd_wide,        // use specified current directory
           SUBPROCESS_PTR_CAST(LPSTARTUPINFOW,
-                              &startInfo), // STARTUPINFO pointer
+                              &startInfoEx), // STARTUPINFOEX pointer
           SUBPROCESS_PTR_CAST(LPPROCESS_INFORMATION, &processInfo))) {
     result = subprocess_error_from_windows_error(GetLastError());
     if (subprocess_error_unknown == result) {
@@ -1077,6 +1294,9 @@ int subprocess_create_ex(const char *const commandLine[], int options,
     }
     goto cleanup;
   }
+
+  DeleteProcThreadAttributeList(attribute_list);
+  attribute_list_initialized = 0;
 
   out_process->hProcess = processInfo.hProcess;
   processInfo.hProcess = SUBPROCESS_NULL;
@@ -1106,6 +1326,10 @@ int subprocess_create_ex(const char *const commandLine[], int options,
 
 cleanup:
   last_error = GetLastError();
+
+  if (attribute_list_initialized) {
+    DeleteProcThreadAttributeList(attribute_list);
+  }
 
   if (subprocess_error_unknown == result) {
     result = subprocess_error_from_windows_error(last_error);
@@ -1152,15 +1376,20 @@ cleanup:
   int stderrfd[2] = {-1, -1};
   int fd, fd_flags;
   int async_no_wait;
-  int actions_created = 0;
   int result = subprocess_error_unknown;
   int saved_errno = 0;
-  int posix_error;
   pid_t child = 0;
   extern char **environ;
   char *const empty_environment[1] = {SUBPROCESS_NULL};
-  posix_spawn_file_actions_t actions;
   char *const *used_environment;
+#if SUBPROCESS_SPAWN_VIA_FORK
+  /* Pipe used to relay the child's exec() errno back to the parent. */
+  int exec_errfd[2] = {-1, -1};
+#else
+  int actions_created = 0;
+  int posix_error;
+  posix_spawn_file_actions_t actions;
+#endif
 
   async_no_wait = subprocess_option_enable_async_no_wait ==
                   (options & subprocess_option_enable_async_no_wait);
@@ -1181,13 +1410,13 @@ cleanup:
 
   memset(out_process, 0, sizeof(*out_process));
 
-  if (0 != pipe(stdinfd)) {
+  if (0 != subprocess_pipe_cloexec(stdinfd)) {
     saved_errno = errno;
     result = subprocess_error_pipe;
     goto cleanup;
   }
 
-  if (0 != pipe(stdoutfd)) {
+  if (0 != subprocess_pipe_cloexec(stdoutfd)) {
     saved_errno = errno;
     result = subprocess_error_pipe;
     goto cleanup;
@@ -1195,7 +1424,7 @@ cleanup:
 
   if (subprocess_option_combined_stdout_stderr !=
       (options & subprocess_option_combined_stdout_stderr)) {
-    if (0 != pipe(stderrfd)) {
+    if (0 != subprocess_pipe_cloexec(stderrfd)) {
       saved_errno = errno;
       result = subprocess_error_pipe;
       goto cleanup;
@@ -1219,6 +1448,136 @@ cleanup:
     used_environment = empty_environment;
   }
 
+#if SUBPROCESS_SPAWN_VIA_FORK
+  /* fork()+exec() instead of posix_spawn, so the child can chdir() first.
+     exec_errfd[1] is close-on-exec: a successful exec closes it and the parent
+     reads EOF; a failed exec writes errno through it before _exit. */
+  if (0 != pipe(exec_errfd)) {
+    saved_errno = errno;
+    result = subprocess_error_pipe;
+    goto cleanup;
+  }
+
+  if (-1 == fcntl(exec_errfd[1], F_SETFD, FD_CLOEXEC)) {
+    saved_errno = errno;
+    result = subprocess_error_spawn;
+    goto cleanup;
+  }
+
+  child = fork();
+
+  if (child < 0) {
+    saved_errno = errno;
+    result = subprocess_error_spawn;
+    goto cleanup;
+  }
+
+  if (0 == child) {
+    /* Child. Everything below must stay async-signal-safe: after fork() in a
+       threaded process only such functions may be called before exec. */
+    int child_errno;
+
+    close(exec_errfd[0]);
+
+    if ((-1 == dup2(stdinfd[0], STDIN_FILENO)) ||
+        (-1 == dup2(stdoutfd[1], STDOUT_FILENO))) {
+      goto child_failed;
+    }
+
+    if (subprocess_option_combined_stdout_stderr ==
+        (options & subprocess_option_combined_stdout_stderr)) {
+      if (-1 == dup2(STDOUT_FILENO, STDERR_FILENO)) {
+        goto child_failed;
+      }
+    } else {
+      if (-1 == dup2(stderrfd[1], STDERR_FILENO)) {
+        goto child_failed;
+      }
+    }
+
+    /* The originals are only closed once they have been duplicated, so that a
+       pipe end that already sits on 0, 1 or 2 is not closed out from under us. */
+    if (stdinfd[0] > STDERR_FILENO) {
+      close(stdinfd[0]);
+    }
+    if (stdinfd[1] > STDERR_FILENO) {
+      close(stdinfd[1]);
+    }
+    if (stdoutfd[0] > STDERR_FILENO) {
+      close(stdoutfd[0]);
+    }
+    if (stdoutfd[1] > STDERR_FILENO) {
+      close(stdoutfd[1]);
+    }
+    if (stderrfd[0] > STDERR_FILENO) {
+      close(stderrfd[0]);
+    }
+    if (stderrfd[1] > STDERR_FILENO) {
+      close(stderrfd[1]);
+    }
+
+    if (process_cwd && (0 != chdir(process_cwd))) {
+      goto child_failed;
+    }
+
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wcast-qual"
+#pragma clang diagnostic ignored "-Wold-style-cast"
+#endif
+    if (subprocess_option_search_user_path ==
+        (options & subprocess_option_search_user_path)) {
+      execvpe(commandLine[0],
+              SUBPROCESS_CONST_CAST(char *const *, commandLine),
+              SUBPROCESS_CONST_CAST(char *const *, used_environment));
+    } else {
+      execve(commandLine[0],
+             SUBPROCESS_CONST_CAST(char *const *, commandLine),
+             SUBPROCESS_CONST_CAST(char *const *, used_environment));
+    }
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
+
+  child_failed:
+    child_errno = errno;
+    /* Nothing useful can be done if this write fails; the parent then sees EOF
+       and reports success, exactly as posix_spawn would without exec reporting. */
+    (void)!write(exec_errfd[1], &child_errno, sizeof(child_errno));
+    /* 127 is what POSIX requires posix_spawn's child to exit with when exec
+       fails, so both implementations look the same to a caller. */
+    _exit(127);
+  }
+
+  /* Parent. */
+  close(exec_errfd[1]);
+  exec_errfd[1] = -1;
+
+  {
+    int child_errno = 0;
+    ssize_t bytes_read;
+
+    do {
+      bytes_read = read(exec_errfd[0], &child_errno, sizeof(child_errno));
+    } while ((-1 == bytes_read) && (EINTR == errno));
+
+    close(exec_errfd[0]);
+    exec_errfd[0] = -1;
+
+    if (bytes_read == (ssize_t)sizeof(child_errno)) {
+      /* exec failed in the child. Reap it and surface the reason. */
+      while ((-1 == waitpid(child, SUBPROCESS_NULL, 0)) && (EINTR == errno)) {
+      }
+      child = 0;
+      saved_errno = child_errno;
+      result = subprocess_error_from_errno(child_errno);
+      if (subprocess_error_unknown == result) {
+        result = subprocess_error_spawn;
+      }
+      goto cleanup;
+    }
+  }
+#else
   posix_error = posix_spawn_file_actions_init(&actions);
   if (0 != posix_error) {
     saved_errno = posix_error;
@@ -1232,7 +1591,7 @@ cleanup:
 
   // Set working directory
   if (process_cwd) {
-#if defined(__NetBSD__) || (defined(__APPLE__) && MAC_OS_X_VERSION_MIN_REQUIRED >= 260000)
+#if SUBPROCESS_ADDCHDIR_IS_POSIX
     posix_error = posix_spawn_file_actions_addchdir(&actions, process_cwd);
 #elif !SUBPROCESS_HAVE_CWD
     posix_error = ENOSYS;
@@ -1358,6 +1717,17 @@ cleanup:
       goto cleanup;
     }
   } else {
+#if !SUBPROCESS_SPAWN_REPORTS_EXEC_ERRORS
+    /* posix_spawn cannot tell us the exec failed, so check up front */
+    if (0 != access(commandLine[0], X_OK)) {
+      saved_errno = errno;
+      result = subprocess_error_from_errno(saved_errno);
+      if (subprocess_error_unknown == result) {
+        result = subprocess_error_spawn;
+      }
+      goto cleanup;
+    }
+#endif
     posix_error = posix_spawn(&child, commandLine[0], &actions,
                               SUBPROCESS_NULL,
                               SUBPROCESS_CONST_CAST(char *const *, commandLine),
@@ -1374,6 +1744,7 @@ cleanup:
 #ifdef __clang__
 #pragma clang diagnostic pop
 #endif
+#endif /* SUBPROCESS_SPAWN_VIA_FORK */
 
   // Close the stdin read end
   close(stdinfd[0]);
@@ -1448,9 +1819,21 @@ cleanup:
     result = subprocess_error_from_errno(saved_errno);
   }
 
+#if SUBPROCESS_SPAWN_VIA_FORK
+  if (-1 != exec_errfd[0]) {
+    close(exec_errfd[0]);
+    exec_errfd[0] = -1;
+  }
+
+  if (-1 != exec_errfd[1]) {
+    close(exec_errfd[1]);
+    exec_errfd[1] = -1;
+  }
+#else
   if (actions_created) {
     posix_spawn_file_actions_destroy(&actions);
   }
+#endif
 
   if (0 != result) {
     if (child) {

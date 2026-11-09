@@ -6,18 +6,21 @@ cd $SCRIPT_DIR
 
 set -eu
 
-if [[ "${SLOW_TESTS:-0}" == 1 ]]; then
-    # Slow tests for tool calls need quite a few models ahead of time to avoid timing out.
-    python $SCRIPT_DIR/../../../scripts/fetch_server_test_models.py
+WORKERS="${PYTEST_WORKERS:-4}"
+
+if [ "${WORKERS}" -eq 1 ]; then
+    WORKER_FLAGS=""
+else
+    WORKER_FLAGS="-n ${WORKERS} --dist=worksteal"
 fi
 
 if [ $# -lt 1 ]
 then
     if [[ "${SLOW_TESTS:-0}" == 1 ]]; then
-        pytest -v -x
+        pytest --durations=30 -v -x ${WORKER_FLAGS}
     else
-        pytest -v -x -m "not slow"
+        pytest --durations=30 -v -x ${WORKER_FLAGS} -m "not slow"
     fi
 else
-    pytest "$@"
+    pytest --durations=30 ${WORKER_FLAGS} "$@"
 fi

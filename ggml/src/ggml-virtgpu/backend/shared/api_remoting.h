@@ -7,7 +7,7 @@
 #include <cstdint>
 
 #define APIR_PROTOCOL_MAJOR 0
-#define APIR_PROTOCOL_MINOR 1
+#define APIR_PROTOCOL_MINOR 2
 
 #define APIR_HANDSHAKE_MAGIC 0xab1e
 

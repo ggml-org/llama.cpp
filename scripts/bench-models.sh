@@ -22,8 +22,8 @@ if (( QUICK )); then
 fi
 
 if (( DIO )); then
-    ARGS_BB="${ARGS_BB} --no-mmap --direct-io"
-    ARGS_B="${ARGS_B} -mmp 0 -dio 1"
+    ARGS_BB="${ARGS_BB} --load-mode dio"
+    ARGS_B="${ARGS_B} --load-mode dio"
 fi
 
 run_model() {

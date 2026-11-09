@@ -10,24 +10,24 @@
 		onPreview?: (code: string, language: string) => void;
 	}
 
-	let { code, language, disabled = false, onPreview }: Props = $props();
+	let { code, disabled = false, language, onPreview }: Props = $props();
 
 	const showPreview = $derived(language?.toLowerCase() === FileTypeText.HTML);
 </script>
 
 <div class="code-block-actions">
 	<ActionIconCopyToClipboard
-		text={code}
-		canCopy={!disabled}
 		ariaLabel={disabled ? 'Code incomplete' : 'Copy code'}
+		canCopy={!disabled}
+		text={code}
 	/>
 
 	{#if showPreview}
 		<ActionIcon
-			icon={Eye}
-			tooltip={disabled ? 'Code incomplete' : 'Preview code'}
 			{disabled}
+			icon={Eye}
 			onclick={() => onPreview!(code, language)}
+			tooltip={disabled ? 'Code incomplete' : 'Preview code'}
 		/>
 	{/if}
 </div>

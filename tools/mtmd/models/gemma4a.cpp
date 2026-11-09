@@ -1,5 +1,5 @@
 /**
- * Gemma 4 Audio Conformer Encoder (clip_graph_gemma4a)
+ * Gemma 4 Audio Conformer Encoder (mtmd_graph_gemma4a)
  *
  * Architecture: Conformer with dual half-step FFN, full self-attention
  * with sinusoidal RPE, depthwise light conv, and output projection.
@@ -8,7 +8,7 @@
 #include "models.h"
 #include <cmath>
 
-ggml_cgraph * clip_graph_gemma4a::build() {
+ggml_cgraph * mtmd_graph_gemma4a::build() {
     const float res_weight = 0.5f;
     const float norm_eps   = 1e-6f;
 
@@ -117,14 +117,12 @@ ggml_cgraph * clip_graph_gemma4a::build() {
             Qcur = ggml_cont(ctx0, ggml_permute(ctx0, Qcur, 0, 3, 1, 2)); // [D, C, B, H]
 
             // K/V block context extraction via overlapping view:
-            // Pad to S*B elements, roll right by P to create left-padding,
+            // Left pad by P and right pad to S*B elements,
             // then view with stride C in the block dimension (overlapping windows).
             auto extract_blocks = [&](ggml_tensor * t) -> ggml_tensor * {
-                // [D, H, N] -> pad to S*B -> roll right by P -> cont (materialize)
+                // [D, H, N] -> left pad by P, right pad to S*B
                 const int64_t pad_kv = S * B - n_pos;
-                t = ggml_pad(ctx0, t, 0, 0, pad_kv, 0);     // [D, H, S*B]
-                t = ggml_roll(ctx0, t, 0, 0, P, 0);          // left-pad by P
-                t = ggml_cont(ctx0, t);                       // materialize roll (removes view offset)
+                t = ggml_pad_ext(ctx0, t, 0, 0, 0, 0, P, pad_kv - P, 0, 0); // [D, H, S*B]
                 // Overlapping view: stride for B dim is C positions, not S
                 // ne = [D, H, S, B], data_size = D*H*S*B*sizeof = source_nbytes (exact fit)
                 // nb1=D*sizeof, nb2=D*H*sizeof, nb3=C*D*H*sizeof (overlap: C < S)
@@ -219,9 +217,8 @@ ggml_cgraph * clip_graph_gemma4a::build() {
                 x = ggml_cont(ctx0, ggml_transpose(ctx0, x));
             }
 
-            // Causal depthwise Conv1D via ggml_ssm_conv (pad+roll for left-only padding).
-            x = ggml_pad(ctx0, x, 4, 0, 0, 0);
-            x = ggml_roll(ctx0, x, 4, 0, 0, 0);
+            // Causal depthwise Conv1D via ggml_ssm_conv, left padded only.
+            x = ggml_pad_ext(ctx0, x, 4, 0, 0, 0, 0, 0, 0, 0);
             x = ggml_ssm_conv(ctx0, x, layer.conv_dw_w);
             if (layer.conv_dw_b) {
                 x = ggml_add(ctx0, x, layer.conv_dw_b);
@@ -276,7 +273,7 @@ ggml_cgraph * clip_graph_gemma4a::build() {
     return gf;
 }
 
-ggml_tensor * clip_graph_gemma4a::build_mm(ggml_tensor * w, ggml_tensor * x) const {
+ggml_tensor * mtmd_graph_gemma4a::build_mm(ggml_tensor * w, ggml_tensor * x) const {
     auto it = model.clamp_info_map.find(w->name);
     if (it == model.clamp_info_map.end()) {
         return ggml_mul_mat(ctx0, w, x);

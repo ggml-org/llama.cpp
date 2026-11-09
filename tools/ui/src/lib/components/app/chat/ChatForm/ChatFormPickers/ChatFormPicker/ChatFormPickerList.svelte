@@ -1,9 +1,9 @@
-<script lang="ts" generics="T">
-	import type { Snippet } from 'svelte';
+<script generics="T" lang="ts">
 	import { SearchInput } from '$lib/components/app';
 	import ScrollArea from '$lib/components/ui/scroll-area/scroll-area.svelte';
+	import { CHAT_FORM_POPOVER_MAX_HEIGHT, UI_DATA_ATTRS } from '$lib/constants';
 	import { useScrollActiveRow } from '$lib/hooks/use-scroll-active-row.svelte';
-	import { CHAT_FORM_POPOVER_MAX_HEIGHT } from '$lib/constants';
+	import type { Snippet } from 'svelte';
 
 	interface Props {
 		items: T[];
@@ -28,22 +28,22 @@
 	}
 
 	let {
-		items,
-		isLoading,
-		selectedIndex,
-		searchQuery = $bindable(),
-		showSearchInput,
-		searchPlaceholder = 'Search...',
-		emptyMessage,
 		autofocus = false,
-		inputRef = $bindable(null),
-		onSearchClose,
-		itemKey,
-		item,
-		skeleton,
-		skeletonCount = 6,
+		emptyMessage,
 		footer,
-		scrollTrigger
+		inputRef = $bindable(null),
+		isLoading,
+		item,
+		itemKey,
+		items,
+		onSearchClose,
+		scrollTrigger,
+		searchPlaceholder = 'Search...',
+		searchQuery = $bindable(),
+		selectedIndex,
+		showSearchInput,
+		skeleton,
+		skeletonCount = 6
 	}: Props = $props();
 
 	let listContainer = $state<HTMLDivElement | null>(null);
@@ -55,11 +55,11 @@
 	// selectedIndex/items.length are untracked so hover and result replacement
 	// never re-fire the scroll; keyboard nav is the only path that bumps the trigger.
 	useScrollActiveRow({
-		getTrigger: () => scrollTrigger,
+		dataAttr: UI_DATA_ATTRS.PICKER_INDEX,
 		getContainer: () => listContainer,
-		getIndex: () => selectedIndex,
 		getCount: () => items.length,
-		dataIndex: 'picker'
+		getIndex: () => selectedIndex,
+		getTrigger: () => scrollTrigger
 	});
 </script>
 
@@ -67,11 +67,11 @@
 	{#if showSearchInput}
 		<div class="absolute top-0 right-0 left-0 z-10 p-2 pb-0">
 			<SearchInput
-				{autofocus}
-				placeholder={searchPlaceholder}
-				bind:value={searchQuery}
 				bind:ref={inputRef}
+				bind:value={searchQuery}
+				{autofocus}
 				onClose={onSearchClose}
+				placeholder={searchPlaceholder}
 			/>
 		</div>
 	{/if}
@@ -85,8 +85,10 @@
 					{#each { length: skeletonCount } as _, rowIndex (rowIndex)}
 						<div class="flex items-start gap-3 rounded-lg px-3 py-2">
 							<div class="mt-0.5 size-4 shrink-0 animate-pulse rounded-md bg-muted/60"></div>
+
 							<div class="flex min-w-0 flex-1 flex-col">
 								<div class="h-5 w-2/5 animate-pulse rounded-sm bg-muted/60"></div>
+
 								<div class="h-4 w-1/3 animate-pulse rounded-sm bg-muted/40"></div>
 							</div>
 						</div>

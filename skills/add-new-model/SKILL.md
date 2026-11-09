@@ -50,7 +50,7 @@ Skill-specific addition: before writing `src/models/<name>.cpp`, read at least 1
 
 ## Step 4 - Optional: multimodal encoder
 
-Only do this if the contributor flagged a vision/audio encoder in Step 0. Follow HOWTO-add-model.md section 4 and `docs/multimodal.md` for the actual touch points (`MmprojModel` subclass, `clip.cpp`, `mtmd.cpp`, encoder graph in `tools/mtmd/models`, etc.).
+Only do this if the contributor flagged a vision/audio encoder in Step 0. Follow HOWTO-add-model.md section 4 and `docs/multimodal.md` for the actual touch points (`MmprojModel` subclass, `mtmd-model.cpp`, `mtmd-subcontext.cpp`, `mtmd.cpp`, encoder graph in `tools/mtmd/models`, etc.).
 
 Skill-specific addition, and read this carefully: **whether the multimodal encoder can be bundled into the same PR as the base text-model support depends on how conventional the change is.** It's OK to bundle it if the encoder support is conventional - i.e. no new infra or logic is needed, it's just a new cgraph reusing existing preprocessing/projector machinery (e.g. siglip/pixtral/qwen with just a new projector). If it requires anything beyond that - a new preprocessor, non-standard projector logic, or changes to shared `libmtmd` infra/logic - STOP, tell the contributor this is non-conventional, and have them land the text model first with the encoder as a dedicated follow-up PR. Do not let this decision pass silently - call it out explicitly to the contributor before writing any `clip.cpp`/`mtmd.cpp` code.
 
@@ -66,7 +66,7 @@ These recur often enough in review comments on past add-model PRs that they're w
 - Optional hparams that are genuinely absent from some configs (e.g. a shared-expert count) should be read with an explicit optional/fallback accessor, not assumed present.
 - Hparams that are actually load-bearing (the model produces wrong output or crashes without them, e.g. `sliding_window_pattern`, norm-eps) must hard-error if missing, not silently fall back to a default.
 - Don't bake a default chat template into the C++ binary - inject it into the GGUF at conversion time instead, since one `llm_arch` can be reused by multiple fine-tunes with different templates, and a baked-in C++ default fails silently for those.
-- Before writing a dedicated tool-call/output parser, check whether the existing autoparser already handles the template (`llama-debug-template-parser <jinja>` shows what it detects).
+- Before writing a dedicated tool-call/output parser, check whether the existing autoparser already handles the template (`test-chat-auto-parser <jinja>` shows what it detects).
 - Marking a custom EOS/closing-tag token as `eot` at conversion time isn't always sufficient - in long/agentic generations a model can emit the closing sequence as literal text instead of the token, so generation never stops on EOG and raw text leaks past the parser. Verify this case, not just the token path.
 - If reusing or aliasing an existing pre-tokenizer for convenience, justify and test that choice explicitly - silent reuse is an easy source of subtle tokenizer bugs.
 - Watch for excessive graph splits caused by building per-layer view/index tensors inside the layer loop - hoist tensors that don't vary per layer out of the loop (relevant if you hit `GGML_SCHED_MAX_SPLIT_INPUTS`).

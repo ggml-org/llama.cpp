@@ -119,13 +119,15 @@ __kernel void flash_attn_f32(
     __local DATA_TYPE4 l_v[BLOCK_N][DV_VEC];
 
     for (int k_start = 0; k_start < n_kv; k_start += BLOCK_N) {
-#if FA_SG < 64
-        // WAR on l_k/l_v: threads with my_query_row >= n_q skip the compute below
-        // (continue) and would race ahead to reload the tiles while active threads
-        // still read them. A single 64-wide Adreno subgroup (WG == sg) runs lockstep
-        // and hides this; a WG that spans multiple narrower subgroups (Intel sg=32)
-        // corrupts the result. All threads reach this each iteration (no-op on the
-        // first), so it does not diverge with the continue. Compiled out at sg=64.
+#if WG_SIZE > FA_SG
+        // WAR on l_k/l_v: a thread that finishes the compute below early — either
+        // it skipped it (my_query_row >= n_q, the continue) or its subgroup simply
+        // ran ahead — wraps around and reloads the tiles while another subgroup is
+        // still reading them. Any WG that is exactly one lockstep subgroup
+        // (WG_SIZE == FA_SG) cannot diverge and hides this; a WG spanning multiple
+        // subgroups (Intel sg=32, or BLOCK_M > 64 on Adreno) corrupts the result.
+        // All threads reach this each iteration (no-op on the first), so it does
+        // not diverge with the continue. Compiled out when WG == one subgroup.
         barrier(CLK_LOCAL_MEM_FENCE);
 #endif
         for (int i = tid; i < BLOCK_N * DK_VEC; i += WG_SIZE) {
@@ -174,6 +176,12 @@ __kernel void flash_attn_f32(
             ACC_TYPE s1 = (dot_acc1.s0 + dot_acc1.s1 + dot_acc1.s2 + dot_acc1.s3) * scale;
             ACC_TYPE s2 = (dot_acc2.s0 + dot_acc2.s1 + dot_acc2.s2 + dot_acc2.s3) * scale;
             ACC_TYPE s3 = (dot_acc3.s0 + dot_acc3.s1 + dot_acc3.s2 + dot_acc3.s3) * scale;
+            if (logit_softcap > 0.0f) {
+                s0 = logit_softcap * tanh(s0 / logit_softcap);
+                s1 = logit_softcap * tanh(s1 / logit_softcap);
+                s2 = logit_softcap * tanh(s2 / logit_softcap);
+                s3 = logit_softcap * tanh(s3 / logit_softcap);
+            }
 
             if (is_causal) {
                 const int causal_limit = n_kv - n_q + my_query_row;
@@ -193,13 +201,6 @@ __kernel void flash_attn_f32(
                 if (k_row1 < n_kv) s1 += slope * (ACC_TYPE)mask_ptr[k_row1];
                 if (k_row2 < n_kv) s2 += slope * (ACC_TYPE)mask_ptr[k_row2];
                 if (k_row3 < n_kv) s3 += slope * (ACC_TYPE)mask_ptr[k_row3];
-            }
-
-            if (logit_softcap > 0.0f) {
-                s0 = logit_softcap * tanh(s0 / logit_softcap);
-                s1 = logit_softcap * tanh(s1 / logit_softcap);
-                s2 = logit_softcap * tanh(s2 / logit_softcap);
-                s3 = logit_softcap * tanh(s3 / logit_softcap);
             }
 
             const ACC_TYPE m_new      = max(m_i, max(max(s0, s1), max(s2, s3)));
@@ -330,12 +331,12 @@ __kernel void flash_attn_f32_q1(
             dot_acc = mad(q_priv[k], CONVERT_ACC4(k_ptr[k]), dot_acc);
         }
         ACC_TYPE score = (dot_acc.s0 + dot_acc.s1 + dot_acc.s2 + dot_acc.s3) * scale;
+        if (logit_softcap > 0.0f) {
+            score = logit_softcap * tanh(score / logit_softcap);
+        }
         if (mask_base != NULL) {
             const global MASK_DATA_TYPE* mask_ptr = (const global MASK_DATA_TYPE*)(mask_base);
             score += slope * (ACC_TYPE)mask_ptr[k_idx];
-        }
-        if (logit_softcap > 0.0f) {
-            score = logit_softcap * tanh(score / logit_softcap);
         }
         m_i = max(m_i, score);
     }
@@ -366,12 +367,12 @@ __kernel void flash_attn_f32_q1(
             dot_acc = mad(q_priv[k], CONVERT_ACC4(k_ptr[k]), dot_acc);
         }
         ACC_TYPE score = (dot_acc.s0 + dot_acc.s1 + dot_acc.s2 + dot_acc.s3) * scale;
+        if (logit_softcap > 0.0f) {
+            score = logit_softcap * tanh(score / logit_softcap);
+        }
         if (mask_base != NULL) {
             const global MASK_DATA_TYPE* mask_ptr = (const global MASK_DATA_TYPE*)(mask_base);
             score += slope * (ACC_TYPE)mask_ptr[k_idx];
-        }
-        if (logit_softcap > 0.0f) {
-            score = logit_softcap * tanh(score / logit_softcap);
         }
         const ACC_TYPE p = exp(score - m_final);
         l_i += p;

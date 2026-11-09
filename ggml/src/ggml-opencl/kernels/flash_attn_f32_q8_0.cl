@@ -232,13 +232,13 @@ __kernel void flash_attn_f32_q8_0_q1(
 #endif
         }
         score *= scale;
+        if (logit_softcap > 0.0f) {
+            score = logit_softcap * tanh(score / logit_softcap);
+        }
 
         if (mask_base != NULL) {
             const global MASK_DATA_TYPE* mask_ptr = (const global MASK_DATA_TYPE*)(mask_base);
             score += slope * (ACC_TYPE)mask_ptr[k_idx];
-        }
-        if (logit_softcap > 0.0f) {
-            score = logit_softcap * tanh(score / logit_softcap);
         }
 
         // Online softmax step.
@@ -437,13 +437,13 @@ __kernel void flash_attn_f32_q8_0_q1_vec(
         }
         ACC_TYPE dot_partial = dot4.s0 + dot4.s1 + dot4.s2 + dot4.s3;
         ACC_TYPE score = sub_group_reduce_add(dot_partial) * scale;
+        if (logit_softcap > 0.0f) {
+            score = logit_softcap * tanh(score / logit_softcap);
+        }
 
         if (mask_base != NULL) {
             const global MASK_DATA_TYPE * mask_ptr = (const global MASK_DATA_TYPE *) mask_base;
             score += slope * (ACC_TYPE) mask_ptr[k_idx];
-        }
-        if (logit_softcap > 0.0f) {
-            score = logit_softcap * tanh(score / logit_softcap);
         }
 
         const ACC_TYPE m_new      = max(m_i, score);
@@ -627,12 +627,12 @@ __kernel void flash_attn_f32_q8_0_q1_split(
 #endif
         }
         score *= scale;
+        if (logit_softcap > 0.0f) {
+            score = logit_softcap * tanh(score / logit_softcap);
+        }
         if (mask_base != NULL) {
             const global MASK_DATA_TYPE * mask_ptr = (const global MASK_DATA_TYPE *) (mask_base);
             score += slope * (ACC_TYPE) mask_ptr[k_idx];
-        }
-        if (logit_softcap > 0.0f) {
-            score = logit_softcap * tanh(score / logit_softcap);
         }
 
         // Online softmax step.
@@ -882,12 +882,12 @@ __kernel void flash_attn_f32_q8_0_q1_vec_mq_split(
         for (int h = 0; h < MQ_GQA; ++h) {
             const ACC_TYPE dot_partial = dot4[h].s0 + dot4[h].s1 + dot4[h].s2 + dot4[h].s3;
             ACC_TYPE s = sub_group_reduce_add(dot_partial) * scale;
+            if (logit_softcap > 0.0f) {
+                s = logit_softcap * tanh(s / logit_softcap);
+            }
             if (mask_base[h] != NULL) {
                 const global MASK_DATA_TYPE * mask_ptr = (const global MASK_DATA_TYPE *) mask_base[h];
                 s += slope[h] * (ACC_TYPE) mask_ptr[k_idx];
-            }
-            if (logit_softcap > 0.0f) {
-                s = logit_softcap * tanh(s / logit_softcap);
             }
             score[h] = s;
         }
@@ -1151,12 +1151,12 @@ __kernel void flash_attn_f32_q8_0_q1_vec_mq_split_c8(
                 s += sub_group_shuffle_xor(s, step);
             }
             s *= scale;
+            if (logit_softcap > 0.0f) {
+                s = logit_softcap * tanh(s / logit_softcap);
+            }
             if (mask_base[h] != NULL) {
                 const global MASK_DATA_TYPE * mask_ptr = (const global MASK_DATA_TYPE *) mask_base[h];
                 s += slope[h] * (ACC_TYPE) mask_ptr[k_safe];
-            }
-            if (logit_softcap > 0.0f) {
-                s = logit_softcap * tanh(s / logit_softcap);
             }
             score[h] = valid ? s : FA_M_INIT;
         }
@@ -1393,8 +1393,31 @@ __kernel void flash_attn_f32_q8_0(
     float slope = get_alibi_slope(max_bias, head_idx, n_head_log2, m0, m1);
 
 #ifdef FA_HAVE_INT_DOT
+// Accessors so the staging code is layout-agnostic.
+#ifdef FA_K_LDS_T
+#define FA_K_PACKED(ROW, IDX) l_k_packed[IDX][ROW]
+#define FA_K_SCALE(ROW, BLK)  l_k_scale[BLK][ROW]
+#else
+#define FA_K_PACKED(ROW, IDX) l_k_packed[ROW][IDX]
+#define FA_K_SCALE(ROW, BLK)  l_k_scale[ROW][BLK]
+#endif
+
+#ifdef FA_K_LDS_T
+    // K tile transposed: [block*8 + g][kv row] instead of [kv row][block*8 + g].
+    //
+    // The QK loop walks 4 KV rows at a time against the same (b, g), so in the original
+    // layout those 4 values are BLOCK_N*8 uints apart and cost 4 separate 32-bit local
+    // reads. Transposed they are adjacent, so they are one 128-bit read -- 4x fewer LDS
+    // issues for the same bytes and no extra registers. That matters because the QK loop
+    // is LDS-read-issue-bound: a wrong-math probe that kept every dp4a but cut the LDS
+    // reads ran the whole kernel 41% faster (18.51 -> 10.91 ms/op), and deleting QK
+    // outright only reached 10.88 -- i.e. essentially ALL of QK's cost is these reads.
+    __local uint  l_k_packed[DK_Q8_BLOCKS_PREFILL * 8][BLOCK_N];
+    __local float l_k_scale [DK_Q8_BLOCKS_PREFILL][BLOCK_N];
+#else
     __local uint  l_k_packed[BLOCK_N][DK_Q8_BLOCKS_PREFILL * 8];
     __local float l_k_scale [BLOCK_N][DK_Q8_BLOCKS_PREFILL];
+#endif
 #else
     __local half4 l_k[BLOCK_N][DK_VEC];
 #endif
@@ -1427,7 +1450,7 @@ __kernel void flash_attn_f32_q8_0(
                     const global char * blk_ptr = k_base + k_row_off + blk * Q8_0_BLOCK_SIZE;
                     const float df = (float) vload_half(0, (const global half *) blk_ptr);
                     const global uchar * qs = (const global uchar *)(blk_ptr + 2);
-                    l_k_scale[row][blk] = df;
+                    FA_K_SCALE(row, blk) = df;
                     #pragma unroll
                     for (int j = 0; j < 8; ++j) {
                         uint k_packed =
@@ -1435,12 +1458,12 @@ __kernel void flash_attn_f32_q8_0(
                              ((uint) qs[j*4 + 1]) <<  8 |
                              ((uint) qs[j*4 + 2]) << 16 |
                              ((uint) qs[j*4 + 3]) << 24;
-                        l_k_packed[row][blk * 8 + j] = k_packed;
+                        FA_K_PACKED(row, blk * 8 + j) = k_packed;
                     }
                 } else {
-                    l_k_scale[row][blk] = 0.0f;
+                    FA_K_SCALE(row, blk) = 0.0f;
                     #pragma unroll
-                    for (int j = 0; j < 8; ++j) l_k_packed[row][blk * 8 + j] = 0u;
+                    for (int j = 0; j < 8; ++j) FA_K_PACKED(row, blk * 8 + j) = 0u;
                 }
             }
 #else
@@ -1556,6 +1579,19 @@ __kernel void flash_attn_f32_q8_0(
                 for (int b_local = 0; b_local < SPLIT_DK_Q8_BLOCKS; ++b_local) {
                     const int b = k_blk_base + b_local;
                     int sum0 = 0, sum1 = 0, sum2 = 0, sum3 = 0;
+#if defined(FA_K_LDS_T)
+                    // The 4 KV rows are adjacent in the transposed tile, so each (b, g)
+                    // step is ONE 128-bit local read instead of four 32-bit ones.
+                    #pragma unroll
+                    for (int g = 0; g < 8; ++g) {
+                        const uint qp = q_packed_pf[b_local * 8 + g];
+                        const uint4 kq4 = vload4(0, &l_k_packed[b * 8 + g][j]);
+                        sum0 = dot_acc_sat_4x8packed_ss_int(qp, kq4.s0, sum0);
+                        sum1 = dot_acc_sat_4x8packed_ss_int(qp, kq4.s1, sum1);
+                        sum2 = dot_acc_sat_4x8packed_ss_int(qp, kq4.s2, sum2);
+                        sum3 = dot_acc_sat_4x8packed_ss_int(qp, kq4.s3, sum3);
+                    }
+#else
                     #pragma unroll
                     for (int g = 0; g < 8; ++g) {
                         const uint qp = q_packed_pf[b_local * 8 + g];
@@ -1564,11 +1600,20 @@ __kernel void flash_attn_f32_q8_0(
                         sum2 = dot_acc_sat_4x8packed_ss_int(qp, l_k_packed[j+2][b * 8 + g], sum2);
                         sum3 = dot_acc_sat_4x8packed_ss_int(qp, l_k_packed[j+3][b * 8 + g], sum3);
                     }
+#endif
                     const float qd = q_d_pf[b_local];
+#ifdef FA_K_LDS_T
+                    const float4 ks4 = vload4(0, &l_k_scale[b][j]);
+                    s0 += (float)sum0 * qd * ks4.s0;
+                    s1 += (float)sum1 * qd * ks4.s1;
+                    s2 += (float)sum2 * qd * ks4.s2;
+                    s3 += (float)sum3 * qd * ks4.s3;
+#else
                     s0 += (float)sum0 * qd * l_k_scale[j  ][b];
                     s1 += (float)sum1 * qd * l_k_scale[j+1][b];
                     s2 += (float)sum2 * qd * l_k_scale[j+2][b];
                     s3 += (float)sum3 * qd * l_k_scale[j+3][b];
+#endif
                 }
 #else
                 ACC_TYPE4 dot_acc0 = (ACC_TYPE4)(0.0f);
@@ -1607,9 +1652,15 @@ __kernel void flash_attn_f32_q8_0(
                     s2 = sub_group_shuffle(s2, tri_base + 0) + sub_group_shuffle(s2, tri_base + 1) + sub_group_shuffle(s2, tri_base + 2);
                     s3 = sub_group_shuffle(s3, tri_base + 0) + sub_group_shuffle(s3, tri_base + 1) + sub_group_shuffle(s3, tri_base + 2);
                 #endif
-                if (!query_valid) { s0 = FA_M_INIT; s1 = FA_M_INIT; s2 = FA_M_INIT; s3 = FA_M_INIT; }
 #endif
                 s0 *= scale; s1 *= scale; s2 *= scale; s3 *= scale;
+                if (logit_softcap > 0.0f) {
+                    s0 = logit_softcap * tanh(s0 / logit_softcap);
+                    s1 = logit_softcap * tanh(s1 / logit_softcap);
+                    s2 = logit_softcap * tanh(s2 / logit_softcap);
+                    s3 = logit_softcap * tanh(s3 / logit_softcap);
+                }
+                if (!query_valid) { s0 = FA_M_INIT; s1 = FA_M_INIT; s2 = FA_M_INIT; s3 = FA_M_INIT; }
 
                 if (is_causal) {
                     const int causal_limit = n_kv - n_q + my_query_row;
@@ -1630,12 +1681,6 @@ __kernel void flash_attn_f32_q8_0(
                     if (k_row1 < n_kv) s1 += slope * (ACC_TYPE) mask_ptr[k_row1];
                     if (k_row2 < n_kv) s2 += slope * (ACC_TYPE) mask_ptr[k_row2];
                     if (k_row3 < n_kv) s3 += slope * (ACC_TYPE) mask_ptr[k_row3];
-                }
-                if (logit_softcap > 0.0f) {
-                    s0 = logit_softcap * tanh(s0 / logit_softcap);
-                    s1 = logit_softcap * tanh(s1 / logit_softcap);
-                    s2 = logit_softcap * tanh(s2 / logit_softcap);
-                    s3 = logit_softcap * tanh(s3 / logit_softcap);
                 }
 
                 const ACC_TYPE m_new      = max(m_i, max(max(s0, s1), max(s2, s3)));

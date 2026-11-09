@@ -4,13 +4,10 @@
 #include "chat-peg-parser.h"
 #include "chat.h"
 #include "log.h"
-#include "nlohmann/json.hpp"
 #include "peg-parser.h"
 
 #include <cctype>
 #include <numeric>
-
-using json = nlohmann::ordered_json;
 
 std::string trim_whitespace(const std::string & str) {
     size_t start = 0;
@@ -325,7 +322,7 @@ std::string apply_template(const common_chat_template & tmpl, const template_par
     tmpl_params.extra_context["enable_thinking"] = params.enable_thinking;
 
     try {
-        return common_chat_template_direct_apply(tmpl, tmpl_params);
+        return common_chat_template_direct_apply(tmpl, tmpl_params).str();
     } catch (const std::exception & e) {
         LOG_DBG("Template application failed: %s\n", e.what());
         return ERR_TMPL;

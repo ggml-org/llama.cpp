@@ -127,6 +127,9 @@ class LoraTorchTensor:
         assert dim is None
         return self.shape
 
+    def dim(self) -> int:
+        return len(self.shape)
+
     def contiguous(self) -> LoraTorchTensor:
         return LoraTorchTensor(
             self._lora_A.contiguous(),

@@ -1,37 +1,32 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
-	import { Square, SkipForward } from '@lucide/svelte';
-	import { Button } from '$lib/components/ui/button';
-	import { ChatService } from '$lib/services';
+	import { SkipForward, Square } from '@lucide/svelte';
 	import {
-		ChatFormActionsAdd,
-		ChatFormActionModels,
+		ChatFormActionReasoning,
 		ChatFormActionRecord,
+		ChatFormActionsAdd,
 		ChatFormActionSubmit,
-		ChatFormContextGauge
+		ChatFormContextGauge,
+		ModelsSelector
 	} from '$lib/components/app';
-	import { FileTypeCategory, MessageRole } from '$lib/enums';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { config } from '$lib/stores/settings.svelte';
-	import { activeMessages, conversationsStore } from '$lib/stores/conversations.svelte';
-	import {
-		activeProcessingState,
-		isChatStreaming,
-		isLoading as chatIsLoading
-	} from '$lib/stores/chat.svelte';
+	import { Button } from '$lib/components/ui/button';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { setChatFormActionsContext } from '$lib/contexts';
+	import { FileTypeCategory } from '$lib/enums';
+	import { useChatFormModel } from '$lib/hooks/use-chat-form-model.svelte';
+	import { useShowContextGauge } from '$lib/hooks/use-context-gauge.svelte';
+	import { ChatService } from '$lib/services';
+	import { conversationsStore, deviceStore, settingsStore } from '$lib/stores';
 	import { getFileTypeCategory } from '$lib/utils';
-	import { goto } from '$app/navigation';
-	import { page } from '$app/state';
-	import { ROUTES } from '$lib/constants/routes';
 
 	interface Props {
 		canSend?: boolean;
-		canSubmit?: boolean;
 		class?: string;
 		disabled?: boolean;
 		isLoading?: boolean;
 		isReasoning?: boolean;
 		isRecording?: boolean;
+		/** Why the microphone can't record, shown on its button. */
+		micWarning?: string | null;
 		showAddButton?: boolean;
 		showModelSelector?: boolean;
 		uploadedFiles?: ChatUploadedFile[];
@@ -39,58 +34,52 @@
 		onMicClick?: () => void;
 		onStop?: () => void;
 		onSystemPromptClick?: () => void;
-		onMcpPromptClick?: () => void;
-		onMcpResourcesClick?: () => void;
+		onWorkingDirectoryClick?: () => void;
 	}
 
 	let {
 		canSend = false,
-		canSubmit = false,
 		class: className = '',
 		disabled = false,
 		isLoading = false,
 		isReasoning = false,
 		isRecording = false,
-		showAddButton = true,
-		showModelSelector = true,
-		uploadedFiles = [],
+		micWarning = null,
 		onFileUpload,
 		onMicClick,
 		onStop,
 		onSystemPromptClick,
-		onMcpPromptClick,
-		onMcpResourcesClick
+		onWorkingDirectoryClick,
+		showAddButton = true,
+		showModelSelector = true,
+		uploadedFiles = []
 	}: Props = $props();
 
-	let currentConfig = $derived(config());
+	let currentConfig = $derived(settingsStore.config);
 
-	let hasMcpPromptsSupport = $derived.by(() => {
-		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
+	const formModel = useChatFormModel();
 
-		return mcpStore.hasPromptsCapability(perChatOverrides);
+	let hasAudioModality = $derived(formModel.hasAudioModality);
+	let hasVideoModality = $derived(formModel.hasVideoModality);
+	let hasVisionModality = $derived(formModel.hasVisionModality);
+	let hasModelSelected = $derived(formModel.hasModelSelected);
+	let isSelectedModelInCache = $derived(formModel.isSelectedModelInCache);
+	let submitTooltip = $derived.by(() => {
+		if (!hasModelSelected) return 'Please select a model first';
+
+		if (!isSelectedModelInCache) return 'Selected model is not available, please select another';
+
+		return '';
 	});
-
-	let hasMcpResourcesSupport = $derived.by(() => {
-		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
-
-		return mcpStore.hasResourcesCapability(perChatOverrides);
-	});
-
-	let hasAudioModality = $state(false);
-	let hasVideoModality = $state(false);
-	let hasVisionModality = $state(false);
-	let hasModelSelected = $state(false);
-	let isSelectedModelInCache = $state(true);
-	let submitTooltip = $state('');
 
 	let hasAudioAttachments = $derived(
 		uploadedFiles.some((file) => getFileTypeCategory(file.type) === FileTypeCategory.AUDIO)
 	);
 	let shouldShowRecordButton = $derived(
-		hasAudioModality && !canSubmit && !hasAudioAttachments && currentConfig.autoMicOnEmpty
+		hasAudioModality && !canSend && !hasAudioAttachments && currentConfig.autoMicOnEmpty
 	);
 
-	let selectorModelRef: ChatFormActionModels | undefined = $state(undefined);
+	let selectorModelRef: ModelsSelector | undefined = $state(undefined);
 
 	export function openModelSelector() {
 		selectorModelRef?.open();
@@ -101,34 +90,30 @@
 		conversationsStore.activeMessages[conversationsStore.activeMessages.length - 1]
 	);
 
-	let hasProcessedTokens = $derived.by(() => {
-		if (!page.params.id) return false;
+	const showContextGauge = useShowContextGauge();
 
-		const messages = activeMessages() as DatabaseMessage[];
-		let totalHistoricalTokens = 0;
-		for (const m of messages) {
-			if (m.role !== MessageRole.ASSISTANT) continue;
-			const timings = m.timings;
-			if (!timings) continue;
-			const agenticLlm = timings.agentic?.llm;
-			if (agenticLlm?.prompt_n != null || agenticLlm?.predicted_n != null) {
-				totalHistoricalTokens += (agenticLlm?.prompt_n ?? 0) + (agenticLlm?.predicted_n ?? 0);
-			} else {
-				totalHistoricalTokens += (timings.prompt_n ?? 0) + (timings.predicted_n ?? 0);
-			}
+	setChatFormActionsContext({
+		get disabled() {
+			return disabled;
+		},
+		get hasAudioModality() {
+			return hasAudioModality;
+		},
+		get hasVideoModality() {
+			return hasVideoModality;
+		},
+		get hasVisionModality() {
+			return hasVisionModality;
+		},
+		get onFileUpload() {
+			return onFileUpload;
+		},
+		get onSystemPromptClick() {
+			return onSystemPromptClick;
+		},
+		get onWorkingDirectoryClick() {
+			return onWorkingDirectoryClick;
 		}
-		if (totalHistoricalTokens > 0) return true;
-
-		if (!chatIsLoading() && !isChatStreaming()) return false;
-
-		const processingState = activeProcessingState();
-		if (!processingState) return false;
-		const livePromptTokens = Math.max(
-			processingState.promptTokens ?? 0,
-			processingState.promptProgress?.processed ?? 0
-		);
-		const liveOutputTokens = processingState.outputTokensUsed ?? 0;
-		return livePromptTokens > 0 || liveOutputTokens > 0;
 	});
 </script>
 
@@ -138,51 +123,36 @@
 >
 	{#if showAddButton}
 		<div class="mr-auto flex items-center gap-2">
-			<ChatFormActionsAdd
-				{disabled}
-				{hasAudioModality}
-				{hasVideoModality}
-				{hasVisionModality}
-				{hasMcpPromptsSupport}
-				{hasMcpResourcesSupport}
-				{onFileUpload}
-				{onSystemPromptClick}
-				{onMcpPromptClick}
-				{onMcpResourcesClick}
-				onMcpSettingsClick={() => goto(ROUTES.MCP_SERVERS)}
-			/>
+			<ChatFormActionsAdd />
 		</div>
 	{/if}
 
 	<div class="flex items-center gap-1.5">
-		{#if hasProcessedTokens}
+		<!-- a phone shows the gauge pinned to the chat screen's top right instead -->
+		{#if showContextGauge.current && !deviceStore.isMobile}
 			<ChatFormContextGauge />
 		{/if}
 
 		{#if showModelSelector}
-			<ChatFormActionModels
-				{disabled}
+			<ChatFormActionReasoning />
+
+			<ModelsSelector
 				bind:this={selectorModelRef}
-				bind:hasAudioModality
-				bind:hasVideoModality
-				bind:hasVisionModality
-				bind:hasModelSelected
-				bind:isSelectedModelInCache
-				bind:submitTooltip
+				{disabled}
 				forceForegroundText
 				useGlobalSelection
 			/>
 		{/if}
 	</div>
 
-	{#if isReasoning}
+	{#if isReasoning && !canSend}
 		<Button
-			type="button"
-			variant="secondary"
+			class="group h-8 w-8 rounded-full p-0 max-md:h-9 max-md:w-9"
 			onclick={() =>
 				ChatService.stopReasoning(activeMessage?.completionId ?? '', activeMessage?.model)}
-			class="group h-8 w-8 rounded-full p-0"
 			title="Skip reasoning"
+			type="button"
+			variant="secondary"
 		>
 			<span class="sr-only">Skip reasoning</span>
 
@@ -192,12 +162,12 @@
 		</Button>
 	{/if}
 
-	{#if isLoading && !canSubmit}
+	{#if isLoading && !canSend}
 		<Button
+			class="group h-8 w-8 rounded-full p-0 max-md:h-9 max-md:w-9 hover:bg-destructive/10!"
+			onclick={onStop}
 			type="button"
 			variant="secondary"
-			onclick={onStop}
-			class="group h-8 w-8 rounded-full p-0 hover:bg-destructive/10!"
 		>
 			<span class="sr-only">Stop</span>
 
@@ -206,13 +176,20 @@
 			/>
 		</Button>
 	{:else if shouldShowRecordButton}
-		<ChatFormActionRecord {disabled} {hasAudioModality} {isLoading} {isRecording} {onMicClick} />
+		<ChatFormActionRecord
+			{disabled}
+			{hasAudioModality}
+			{isLoading}
+			{isRecording}
+			{micWarning}
+			{onMicClick}
+		/>
 	{:else}
 		<ChatFormActionSubmit
 			canSend={canSend && (showModelSelector ? hasModelSelected && isSelectedModelInCache : true)}
 			{disabled}
-			tooltipLabel={submitTooltip}
 			showErrorState={showModelSelector && hasModelSelected && !isSelectedModelInCache}
+			tooltipLabel={submitTooltip}
 		/>
 	{/if}
 </div>

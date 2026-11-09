@@ -1,3 +1,10 @@
+#ifndef SRC0
+#define SRC0 src0
+#endif
+#ifndef SRC1
+#define SRC1 src1
+#endif
+
 #ifdef U32_DEQUANT_HELPERS
 #define SRC0_TYPE u32
 
@@ -19,17 +26,23 @@ fn sbyte_of(v: u32, b: u32) -> i32 {
 fn inner_dot(src0_val: SRC0_TYPE, src1_val: SRC1_TYPE) -> f32 {
     return f32(dot(SRC1_TYPE(src0_val), src1_val));
 }
-#endif
+#endif // VEC
 
 #ifdef SCALAR
 #define VEC_SIZE 1u
 #define SRC0_TYPE SRC0_INNER_TYPE
 #define SRC1_TYPE SRC1_INNER_TYPE
 
+#ifdef TYPE_BF16
+fn inner_dot(src0_val: f32, src1_val: SRC1_TYPE) -> f32 {
+    return src0_val * f32(src1_val);
+}
+#else
 fn inner_dot(src0_val: SRC0_TYPE, src1_val: SRC1_TYPE) -> f32 {
     return f32(src0_val) * f32(src1_val);
 }
 #endif
+#endif // SCALAR
 
 #ifdef MUL_ACC_FLOAT
 fn accumulate_vec_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src1_idx_base: u32) -> array<array<f32, OUTPUTS_PER_WG>, NUM_COLS> {
@@ -43,13 +56,18 @@ fn accumulate_vec_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src
     for (var k = thread_id; k < k_vec; k += WG_SIZE) {
         var x_vals: array<SRC1_TYPE, NUM_COLS>;
         for (var col = 0u;col < NUM_COLS;col += 1) {
-            x_vals[col] = src1[src1_idx_base_vec + col * (params.stride_11 / VEC_SIZE) + k];
+            x_vals[col] = SRC1[src1_idx_base_vec + col * (params.stride_11 / VEC_SIZE) + k];
         }
         for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
             let output_row = row_base + row;
             if (output_row < params.m) {
                 let src0_idx = (src0_batch_offset + output_row * params.stride_01) / VEC_SIZE + k;
-                let w = src0[src0_idx];
+#if defined(TYPE_F16) || defined(TYPE_F32)
+                let w = SRC0[src0_idx];
+#endif
+#ifdef TYPE_BF16
+                let w = bf16_word_to_f32(SRC0[src0_idx / 2u], src0_idx & 1u);
+#endif
                 for (var col = 0u;col < NUM_COLS;col += 1) {
                     acc[col][row] += inner_dot(w, x_vals[col]);
                 }
@@ -76,7 +94,7 @@ fn accumulate_vec_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src
         var x_block: array<array<f32, ELEMS_PER_THREAD>, NUM_COLS>;
         for (var col = 0u; col < NUM_COLS;col += 1) {
             for (var i = 0u; i < ELEMS_PER_THREAD; i++) {
-                x_block[col][i] = f32(src1[x_base + col * params.stride_11 + i]);
+                x_block[col][i] = f32(SRC1[x_base + col * params.stride_11 + i]);
             }
         }
         for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
@@ -101,6 +119,46 @@ fn accumulate_vec_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src
 }
 #endif
 
+#ifdef MUL_ACC_Q2_0
+#define BLOCK_SIZE 64
+#define BLOCK_SIZE_BYTES 18
+#define THREADS_PER_BLOCK 4
+#define ELEMS_PER_THREAD (BLOCK_SIZE/THREADS_PER_BLOCK)
+fn accumulate_vec_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src1_idx_base: u32) -> array<array<f32, OUTPUTS_PER_WG>, NUM_COLS> {
+    var acc: array<array<f32, OUTPUTS_PER_WG>, NUM_COLS>;
+
+    let num_blocks = params.k / BLOCK_SIZE;
+    let thread_within_block = thread_id % THREADS_PER_BLOCK;
+    for (var block = thread_id / THREADS_PER_BLOCK; block < num_blocks; block += WG_SIZE / THREADS_PER_BLOCK) {
+        let x_base = src1_idx_base + block * BLOCK_SIZE + thread_within_block * ELEMS_PER_THREAD;
+        var x_block: array<array<f32, ELEMS_PER_THREAD>, NUM_COLS>;
+        for (var col = 0u; col < NUM_COLS; col++) {
+            for (var i = 0u; i < ELEMS_PER_THREAD; i++) {
+                x_block[col][i] = f32(SRC1[x_base + col * params.stride_11 + i]);
+            }
+        }
+        for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
+            let output_row = row_base + row;
+            if (output_row < params.m) {
+                let block_byte_base = (src0_batch_offset + output_row * params.stride_01 + block) * BLOCK_SIZE_BYTES;
+                let d = f32(load_f16_at_src0(block_byte_base));
+                let q_packed = load_u32_at_src0(block_byte_base + 2u + 4u * thread_within_block);
+                for (var col = 0u; col < NUM_COLS; col++) {
+                    var row_sum = 0.0;
+                    for (var i = 0u; i < ELEMS_PER_THREAD; i++) {
+                        let q = (q_packed >> (2u * i)) & 3u;
+                        row_sum += (f32(q) - 1.0) * x_block[col][i];
+                    }
+                    acc[col][row] += d * row_sum;
+                }
+            }
+        }
+    }
+
+    return acc;
+}
+#endif
+
 #ifdef MUL_ACC_Q4_0
 #define BLOCK_SIZE 32
 #define BLOCK_SIZE_BYTES 18
@@ -116,8 +174,8 @@ fn accumulate_vec_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src
         var x_block: array<array<f32, ELEMS_PER_THREAD>, NUM_COLS>;
         for (var col = 0u; col < NUM_COLS;col += 1) {
             for (var i = 0u; i < ELEMS_PER_THREAD / 2; i++) {
-                x_block[col][i]     = f32(src1[x_base + col * params.stride_11 + i]);
-                x_block[col][i + 4] = f32(src1[x_base + col * params.stride_11 + i + 16]);
+                x_block[col][i]     = f32(SRC1[x_base + col * params.stride_11 + i]);
+                x_block[col][i + 4] = f32(SRC1[x_base + col * params.stride_11 + i + 16]);
             }
         }
         for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
@@ -160,8 +218,8 @@ fn accumulate_vec_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src
         var x_block: array<array<f32, ELEMS_PER_THREAD>, NUM_COLS>;
         for (var col = 0u; col < NUM_COLS;col += 1) {
             for (var i = 0u; i < ELEMS_PER_THREAD / 2; i++) {
-                x_block[col][i]     = f32(src1[x_base + col * params.stride_11 + i]);
-                x_block[col][i + 4] = f32(src1[x_base + col * params.stride_11 + i + 16]);
+                x_block[col][i]     = f32(SRC1[x_base + col * params.stride_11 + i]);
+                x_block[col][i + 4] = f32(SRC1[x_base + col * params.stride_11 + i + 16]);
             }
         }
         for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
@@ -205,8 +263,8 @@ fn accumulate_vec_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src
         var x_block: array<array<f32, ELEMS_PER_THREAD>, NUM_COLS>;
         for (var col = 0u; col < NUM_COLS;col += 1) {
             for (var i = 0u; i < ELEMS_PER_THREAD / 2; i++) {
-                x_block[col][i]     = f32(src1[x_base + col * params.stride_11 + i]);
-                x_block[col][i + 4] = f32(src1[x_base + col * params.stride_11 + i + 16]);
+                x_block[col][i]     = f32(SRC1[x_base + col * params.stride_11 + i]);
+                x_block[col][i + 4] = f32(SRC1[x_base + col * params.stride_11 + i + 16]);
             }
         }
         for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
@@ -253,8 +311,8 @@ fn accumulate_vec_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src
         var x_block: array<array<f32, ELEMS_PER_THREAD>, NUM_COLS>;
         for (var col = 0u; col < NUM_COLS;col += 1) {
             for (var i = 0u; i < ELEMS_PER_THREAD / 2; i++) {
-                x_block[col][i]     = f32(src1[x_base + col * params.stride_11 + i]);
-                x_block[col][i + 4] = f32(src1[x_base + col * params.stride_11 + i + 16]);
+                x_block[col][i]     = f32(SRC1[x_base + col * params.stride_11 + i]);
+                x_block[col][i + 4] = f32(SRC1[x_base + col * params.stride_11 + i + 16]);
             }
         }
         for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
@@ -302,7 +360,7 @@ fn accumulate_vec_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src
         var x_block: array<array<f32, ELEMS_PER_THREAD>, NUM_COLS>;
         for (var col = 0u; col < NUM_COLS;col += 1) {
             for (var i = 0u; i < ELEMS_PER_THREAD; i++) {
-                x_block[col][i] = f32(src1[x_base + col * params.stride_11 + i]);
+                x_block[col][i] = f32(SRC1[x_base + col * params.stride_11 + i]);
             }
         }
         for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
@@ -347,7 +405,7 @@ fn accumulate_vec_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src
         var x_block: array<array<f32, ELEMS_PER_THREAD>, NUM_COLS>;
         for (var col = 0u; col < NUM_COLS;col += 1) {
             for (var i = 0u; i < ELEMS_PER_THREAD; i++) {
-                x_block[col][i] = f32(src1[x_base + col * params.stride_11 + i]);
+                x_block[col][i] = f32(SRC1[x_base + col * params.stride_11 + i]);
             }
         }
         for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
@@ -409,10 +467,10 @@ fn accumulate_vec_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src
         var x_block: array<array<f32, 16>, NUM_COLS>;
         for (var col = 0u; col < NUM_COLS;col += 1) {
             for (var i = 0u; i < 4u; i++) {
-                x_block[col][i]       = f32(src1[x_base + col * params.stride_11 + i]);
-                x_block[col][i + 4u]  = f32(src1[x_base + col * params.stride_11 + 32u + i]);
-                x_block[col][i + 8u]  = f32(src1[x_base + col * params.stride_11 + 64u + i]);
-                x_block[col][i + 12u] = f32(src1[x_base + col * params.stride_11 + 96u + i]);
+                x_block[col][i]       = f32(SRC1[x_base + col * params.stride_11 + i]);
+                x_block[col][i + 4u]  = f32(SRC1[x_base + col * params.stride_11 + 32u + i]);
+                x_block[col][i + 8u]  = f32(SRC1[x_base + col * params.stride_11 + 64u + i]);
+                x_block[col][i + 12u] = f32(SRC1[x_base + col * params.stride_11 + 96u + i]);
             }
         }
         for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
@@ -518,8 +576,8 @@ fn accumulate_vec_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src
         var x_block: array<array<f32, 16>, NUM_COLS>;
         for (var col = 0u; col < NUM_COLS;col += 1) {
             for (var i = 0u; i < 8u; i++) {
-                x_block[col][i] = f32(src1[x_base + col * params.stride_11 + i]);
-                x_block[col][i + 8u] = f32(src1[x_base + col * params.stride_11 + 32u + i]);
+                x_block[col][i] = f32(SRC1[x_base + col * params.stride_11 + i]);
+                x_block[col][i + 8u] = f32(SRC1[x_base + col * params.stride_11 + 32u + i]);
             }
         }
         for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
@@ -610,10 +668,10 @@ fn accumulate_vec_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src
         for (var col = 0u; col < NUM_COLS;col += 1) {
             let col_base = x_base + col * params.stride_11;
             for (var i = 0u; i < 4u; i++) {
-                x_block[col][i]       = f32(src1[col_base + i]);
-                x_block[col][i + 4u]  = f32(src1[col_base + 32u + i]);
-                x_block[col][i + 8u]  = f32(src1[col_base + 128u + i]);
-                x_block[col][i + 12u] = f32(src1[col_base + 160u + i]);
+                x_block[col][i]       = f32(SRC1[col_base + i]);
+                x_block[col][i + 4u]  = f32(SRC1[col_base + 32u + i]);
+                x_block[col][i + 8u]  = f32(SRC1[col_base + 128u + i]);
+                x_block[col][i + 12u] = f32(SRC1[col_base + 160u + i]);
             }
         }
 
@@ -713,10 +771,10 @@ fn accumulate_vec_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src
         for (var col = 0u; col < NUM_COLS;col += 1) {
             let col_base = x_base + col * params.stride_11;
             for (var i = 0u; i < 4u; i++) {
-                x_block[col][i]       = f32(src1[col_base + i]);
-                x_block[col][i + 4u]  = f32(src1[col_base + 32u + i]);
-                x_block[col][i + 8u]  = f32(src1[col_base + 128u + i]);
-                x_block[col][i + 12u] = f32(src1[col_base + 160u + i]);
+                x_block[col][i]       = f32(SRC1[col_base + i]);
+                x_block[col][i + 4u]  = f32(SRC1[col_base + 32u + i]);
+                x_block[col][i + 8u]  = f32(SRC1[col_base + 128u + i]);
+                x_block[col][i + 12u] = f32(SRC1[col_base + 160u + i]);
             }
         }
         for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
@@ -823,10 +881,10 @@ fn accumulate_vec_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src
         for (var col = 0u; col < NUM_COLS;col += 1) {
             let col_base = x_base + col * params.stride_11;
             for (var l = 0u; l < 4u; l++) {
-                x_block[col][l]       = f32(src1[col_base + l]);
-                x_block[col][l + 4u]  = f32(src1[col_base + 32u + l]);
-                x_block[col][l + 8u]  = f32(src1[col_base + 64u + l]);
-                x_block[col][l + 12u] = f32(src1[col_base + 96u + l]);
+                x_block[col][l]       = f32(SRC1[col_base + l]);
+                x_block[col][l + 4u]  = f32(SRC1[col_base + 32u + l]);
+                x_block[col][l + 8u]  = f32(SRC1[col_base + 64u + l]);
+                x_block[col][l + 12u] = f32(SRC1[col_base + 96u + l]);
             }
         }
         for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
@@ -899,7 +957,7 @@ fn accumulate_vec_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src
         var x_block: array<array<f32, 16>, NUM_COLS>;
         for (var col = 0u; col < NUM_COLS;col += 1) {
             for (var i = 0u; i < 16u; i++) {
-                x_block[col][i] = f32(src1[x_base + col * params.stride_11 + i]);
+                x_block[col][i] = f32(SRC1[x_base + col * params.stride_11 + i]);
             }
         }
         for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
@@ -960,7 +1018,7 @@ fn accumulate_vec_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src
         var x_block: array<array<f32, 16>, NUM_COLS>;
         for (var col = 0u; col < NUM_COLS;col += 1) {
             for (var i = 0u; i < 16u; i++) {
-                x_block[col][i] = f32(src1[x_base + col * params.stride_11 + i]);
+                x_block[col][i] = f32(SRC1[x_base + col * params.stride_11 + i]);
             }
         }
         for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
@@ -1039,7 +1097,7 @@ fn accumulate_vec_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src
         var x_block: array<array<f32, 16>, NUM_COLS>;
         for (var col = 0u; col < NUM_COLS;col += 1) {
             for (var i = 0u; i < 16u; i++) {
-                x_block[col][i] = f32(src1[x_base + col * params.stride_11 + i]);
+                x_block[col][i] = f32(SRC1[x_base + col * params.stride_11 + i]);
             }
         }
         for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
@@ -1101,7 +1159,7 @@ fn accumulate_vec_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src
         var x_block: array<array<f32, 16>, NUM_COLS>;
         for (var col = 0u; col < NUM_COLS;col += 1) {
             for (var i = 0u; i < 16u; i++) {
-                x_block[col][i] = f32(src1[x_base + col * params.stride_11 + i]);
+                x_block[col][i] = f32(SRC1[x_base + col * params.stride_11 + i]);
             }
         }
         for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
@@ -1168,7 +1226,7 @@ fn accumulate_vec_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src
         var x_block: array<array<f32, 16>, NUM_COLS>;
         for (var col = 0u; col < NUM_COLS;col += 1) {
             for (var i = 0u; i < 16u; i++) {
-                x_block[col][i] = f32(src1[x_base + col * params.stride_11 + i]);
+                x_block[col][i] = f32(SRC1[x_base + col * params.stride_11 + i]);
             }
         }
         for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
@@ -1234,7 +1292,7 @@ fn accumulate_vec_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src
         var x_block: array<array<f32, 16>, NUM_COLS>;
         for (var col = 0u; col < NUM_COLS;col += 1) {
             for (var i = 0u; i < 16u; i++) {
-                x_block[col][i] = f32(src1[x_base + col * params.stride_11 + i]);
+                x_block[col][i] = f32(SRC1[x_base + col * params.stride_11 + i]);
             }
         }
         for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
@@ -1302,7 +1360,7 @@ fn accumulate_vec_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src
         var x_block: array<array<f32, 16>, NUM_COLS>;
         for (var col = 0u; col < NUM_COLS;col += 1) {
             for (var i = 0u; i < 16u; i++) {
-                x_block[col][i] = f32(src1[x_base + col * params.stride_11 + i]);
+                x_block[col][i] = f32(SRC1[x_base + col * params.stride_11 + i]);
             }
         }
         for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
@@ -1367,8 +1425,8 @@ fn accumulate_vec_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src
         var x_block: array<array<f32, ELEMS_PER_THREAD>, NUM_COLS>;
         for (var col = 0u; col < NUM_COLS;col += 1) {
             for (var i = 0u; i < ELEMS_PER_THREAD / 2u; i++) {
-                x_block[col][i]     = f32(src1[x_base + col * params.stride_11 + i]);
-                x_block[col][i + 4u] = f32(src1[x_base + col * params.stride_11 + i + 16u]);
+                x_block[col][i]     = f32(SRC1[x_base + col * params.stride_11 + i]);
+                x_block[col][i + 4u] = f32(SRC1[x_base + col * params.stride_11 + i + 16u]);
             }
         }
         for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
@@ -1418,7 +1476,7 @@ fn accumulate_vec_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src
         var x_block: array<array<f32, 16>, NUM_COLS>;
         for (var col = 0u; col < NUM_COLS;col += 1) {
             for (var i = 0u; i < 16u; i++) {
-                x_block[col][i] = f32(src1[x_base + col * params.stride_11 + i]);
+                x_block[col][i] = f32(SRC1[x_base + col * params.stride_11 + i]);
             }
         }
         for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
@@ -1476,8 +1534,8 @@ fn accumulate_vec_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src
         var x_block: array<array<f32, ELEMS_PER_THREAD>, NUM_COLS>;
         for (var col = 0u; col < NUM_COLS;col += 1) {
             for (var i = 0u; i < ELEMS_PER_THREAD / 2; i++) {
-                x_block[col][i]     = f32(src1[x_base + col * params.stride_11 + i]);
-                x_block[col][i + 4] = f32(src1[x_base + col * params.stride_11 + i + 16]);
+                x_block[col][i]     = f32(SRC1[x_base + col * params.stride_11 + i]);
+                x_block[col][i + 4] = f32(SRC1[x_base + col * params.stride_11 + i + 16]);
             }
         }
         for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
@@ -1521,8 +1579,8 @@ fn accumulate_vec_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src
         var x_block: array<array<f32, ELEMS_PER_THREAD>, NUM_COLS>;
         for (var col = 0u; col < NUM_COLS;col += 1) {
             for (var i = 0u; i < ELEMS_PER_THREAD / 2; i++) {
-                x_block[col][i]     = f32(src1[x_base + col * params.stride_11 + i]);
-                x_block[col][i + 8] = f32(src1[x_base + col * params.stride_11 + i + 8]);
+                x_block[col][i]     = f32(SRC1[x_base + col * params.stride_11 + i]);
+                x_block[col][i + 8] = f32(SRC1[x_base + col * params.stride_11 + i + 8]);
             }
         }
         for (var row = 0u; row < OUTPUTS_PER_WG; row++) {

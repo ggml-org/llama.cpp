@@ -243,12 +243,13 @@ IBM VXE/VXE2 SIMD acceleration depends on the BLAS implementation. It is strongl
 | FP32       | ✅           | ✅    | ❓     |
 | FP16       | ✅           | ✅    | ❓     |
 | BF16       | ✅           | ✅    | ❓     |
+| Q1_0       | ✅           | ❓    | ❓     |
 | Q4_0       | ✅           | ❓    | ❓     |
 | Q4_1       | ✅           | ❓    | ❓     |
 | MXFP4      | ✅           | ❓    | ❓     |
 | Q5_0       | ✅           | ❓    | ❓     |
 | Q5_1       | ✅           | ❓    | ❓     |
-| Q8_0       | ✅           | ❓    | ❓     |
+| Q8_0       | ✅           | ✅    | ❓     |
 | Q2_K       | 🚫           | ❓    | ❓     |
 | Q3_K       | ✅           | ❓    | ❓     |
 | Q4_K       | ✅           | ❓    | ❓     |
@@ -265,11 +266,11 @@ IBM VXE/VXE2 SIMD acceleration depends on the BLAS implementation. It is strongl
 | IQ1_M      | 🚫           | ❓    | ❓     |
 | IQ4_NL     | ✅           | ❓    | ❓     |
 | IQ4_XS     | ✅           | ❓    | ❓     |
-| FP32->FP16 | 🚫           | ❓    | ❓     |
+| FP32->FP16 | ✅           | ❓    | ❓     |
 | FP16->FP32 | 🚫           | ❓    | ❓     |
 
 -   ✅ - acceleration available
 -   🚫 - acceleration unavailable, will still run using scalar implementation
 -   ❓ - acceleration unknown, please contribute if you can test it yourself
 
-Last Updated by **Aaron Teo (aaron.teo1@ibm.com)** on Feb 15, 2026.
+Last Updated by **Aaron Teo (aaron.teo1@ibm.com)** on Nov 3, 2026.

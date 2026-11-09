@@ -1,6 +1,6 @@
 #include "models.h"
 
-ggml_cgraph * clip_graph_glm4v::build() {
+ggml_cgraph * mtmd_graph_glm4v::build() {
     GGML_ASSERT(model.patch_bias != nullptr);
     GGML_ASSERT(model.class_embedding == nullptr);
 
@@ -41,8 +41,10 @@ ggml_cgraph * clip_graph_glm4v::build() {
     inp = ggml_add(ctx0, inp, model.patch_bias);
     cb(inp, "patch_bias", -1);
 
-    // pos-conv norm
-    inp = build_norm(inp, model.norm_embd_w, model.norm_embd_b, norm_t, eps, -1);
+    // pos-conv norm (absent in GLM-5.3-Flash)
+    if (model.norm_embd_w) {
+        inp = build_norm(inp, model.norm_embd_w, model.norm_embd_b, norm_t, eps, -1);
+    }
 
     ggml_tensor * learned_pos_embd = nullptr;
     // Note: GLM-OCR does not have learned position embeddings
@@ -61,7 +63,7 @@ ggml_cgraph * clip_graph_glm4v::build() {
         cb(learned_pos_embd, "learned_pos_embd", -1);
     }
 
-    auto add_pos = [&](ggml_tensor * cur, const clip_layer &) {
+    auto add_pos = [&](ggml_tensor * cur, const mtmd_layer &) {
         return ggml_rope_multi(
                     ctx0, cur, positions, nullptr,
                     d_head/2, mrope_sections, GGML_ROPE_TYPE_VISION,

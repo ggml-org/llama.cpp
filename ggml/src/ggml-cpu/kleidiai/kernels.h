@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
+// SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 // SPDX-License-Identifier: MIT
 //
 
@@ -12,7 +12,9 @@ enum cpu_feature {
     CPU_FEATURE_I8MM    = 2,
     CPU_FEATURE_SVE     = 4,
     CPU_FEATURE_SME     = 8,
-    CPU_FEATURE_SME2    = 16
+    CPU_FEATURE_SME2    = 16,
+    CPU_FEATURE_FP16    = 32,
+    CPU_FEATURE_SVEI8MM = 64
 };
 
 inline cpu_feature& operator|=(cpu_feature& lhs, cpu_feature rhs) {
@@ -32,7 +34,6 @@ struct kernel_info {
     size_t (*get_sr)(void);
 
     size_t (*get_dst_offset)(size_t m_idx, size_t n_idx, size_t stride);
-    size_t (*get_dst_size)(size_t m, size_t n);
 
     size_t (*get_lhs_offset_ex)(size_t m_idx, size_t k, size_t bl);
 
@@ -58,20 +59,11 @@ struct lhs_packing_info {
 
 enum rhs_repack_mode {
     RHS_REPACK_PER_KERNEL,
-    RHS_REPACK_SHARED,
     RHS_REPACK_SINGLE_ONLY,
 };
 
 struct rhs_packing_info {
-    size_t (*packed_stride)(size_t k, size_t nr, size_t kr, size_t bl);
-
-    void (*to_float)(const void *packed_data, int32_t row_idx, int64_t nc, float *out,
-                     size_t nr_pack, size_t packed_row_stride, size_t kr, size_t bl,
-                     size_t num_bytes_multiplier);
-
     size_t (*packed_size_ex)(size_t n, size_t k, size_t nr, size_t kr, size_t bl);
-
-    size_t (*packed_stride_ex)(size_t k, size_t nr, size_t kr, size_t bl);
 
     void (*pack_func_ex)(size_t num_groups, size_t n, size_t k, size_t nr, size_t kr, size_t sr, size_t bl,
         size_t rhs_stride, const void * rhs, const void * bias, const void * scale, void * rhs_packed, size_t extra_bytes, const void * params);
@@ -96,5 +88,6 @@ struct ggml_kleidiai_kernels {
 
 ggml_kleidiai_kernels * ggml_kleidiai_select_kernels(cpu_feature cpu_features, const ggml_tensor * tensor);
 ggml_kleidiai_kernels * ggml_kleidiai_select_kernels_q4_0(cpu_feature features);
+ggml_kleidiai_kernels * ggml_kleidiai_select_kernels_q4_k(cpu_feature features);
 ggml_kleidiai_kernels * ggml_kleidiai_select_kernels_q8_0(cpu_feature features);
 ggml_kleidiai_kernels * ggml_kleidiai_select_kernels_f32(cpu_feature features);

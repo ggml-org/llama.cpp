@@ -145,7 +145,7 @@ ENTRYPOINT ["/app/tools.sh"]
 # ==============================================================================
 FROM base AS light
 
-COPY --from=build /app/full/llama /app/full/llama-cli /app/full/llama-completion /app
+COPY --from=build /app/full/llama /app/full/llama-cli /app/full/llama-completion /app/
 
 ENTRYPOINT [ "/app/llama-cli" ]
 
@@ -155,8 +155,9 @@ ENTRYPOINT [ "/app/llama-cli" ]
 FROM base AS server
 
 ENV LLAMA_ARG_HOST=0.0.0.0
+ENV LLAMA_ARG_PORT=8080
 
-COPY --from=build /app/full/llama /app/full/llama-server /app
+COPY --from=build /app/full/llama /app/full/llama-server /app/
 
 HEALTHCHECK --interval=5m CMD [ "curl", "-f", "http://localhost:8080/health" ]
 

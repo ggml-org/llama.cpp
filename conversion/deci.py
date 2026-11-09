@@ -13,6 +13,7 @@ from .base import ModelBase, TextModel, gguf
 
 
 @ModelBase.register("DeciLMForCausalLM")
+@ModelBase.example("nvidia/Llama-3_1-Nemotron-51B-Instruct", "Deci/DeciLM-7B")
 class DeciModel(TextModel):
     model_arch = gguf.MODEL_ARCH.DECI
 

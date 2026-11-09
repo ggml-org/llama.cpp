@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from typing import Iterable, TYPE_CHECKING
+from typing import Callable, Iterable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -16,6 +16,7 @@ from .llama import LlamaModel
     "LlavaForConditionalGeneration", # pixtral
     "Mistral3ForConditionalGeneration", # mistral small 3.1
 )
+@ModelBase.example("mistral-community/pixtral-12b", "mistralai/Mistral-Small-3.1-24B-Instruct-2503")
 class LlavaVisionModel(MmprojModel):
     img_break_tok_id = -1
     use_break_tok = True
@@ -127,3 +128,24 @@ class LlavaVisionModel(MmprojModel):
             yield from super().modify_tensors(img_break_embd, name, bid)
 
         return # skip other tensors
+
+
+@ModelBase.register("Mistral3Model")
+@ModelBase.example("nvidia/Nemotron-3.5-Embed-1B-BF16")
+class Mistral3EmbeddingVisionModel(LlavaVisionModel):
+    def __init__(self, dir_model, *args, **kwargs):
+        hparams = ModelBase.load_hparams(dir_model, is_mistral_format=False)
+        text_config = hparams.get("text_config", hparams)
+        if text_config.get("is_causal") is not False:
+            raise NotImplementedError("Expected a Nemotron Embed model for Mistral3Model, but is_causal is not False")
+        super().__init__(dir_model, *args, **kwargs)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        if item[0].endswith("embed_tokens.weight"):
+            return ModelBase.filter_tensors(item)
+        return super().filter_tensors(item)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_vision_preproc_image_size(self.preprocessor_config["size"]["longest_edge"])

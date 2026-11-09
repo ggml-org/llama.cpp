@@ -1,12 +1,11 @@
 <script lang="ts">
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { mcpResources, mcpResourcesLoading } from '$lib/stores/mcp-resources.svelte';
-	import type { MCPServerResources, MCPResourceInfo, MCPResourceTemplateInfo } from '$lib/types';
-	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
-	import { parseResourcePath } from '$lib/utils';
-	import McpResourcesBrowserHeader from './McpResourcesBrowserHeader.svelte';
 	import McpResourcesBrowserEmptyState from './McpResourcesBrowserEmptyState.svelte';
+	import McpResourcesBrowserHeader from './McpResourcesBrowserHeader.svelte';
 	import McpResourcesBrowserServerItem from './McpResourcesBrowserServerItem.svelte';
+	import { mcpStore } from '$lib/stores';
+	import type { MCPResourceInfo, MCPResourceTemplateInfo, MCPServerResources } from '$lib/types';
+	import { parseResourcePath } from '$lib/utils';
+	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
 	interface Props {
 		onSelect?: (resource: MCPResourceInfo, shiftKey?: boolean) => void;
@@ -19,21 +18,21 @@
 	}
 
 	let {
-		onSelect,
-		onToggle,
-		onTemplateSelect,
-		selectedUris = new Set(),
-		selectedTemplateUri,
+		class: className,
 		expandToUri,
-		class: className
+		onSelect,
+		onTemplateSelect,
+		onToggle,
+		selectedTemplateUri,
+		selectedUris = new Set()
 	}: Props = $props();
 
 	let expandedServers = new SvelteSet<string>();
 	let expandedFolders = new SvelteSet<string>();
 	let searchQuery = $state('');
 
-	const resources = $derived(mcpResources());
-	const isLoading = $derived(mcpResourcesLoading());
+	const resources = $derived(mcpStore.resources.serverResources);
+	const isLoading = $derived(mcpStore.resources.isLoading);
 
 	const filteredResources = $derived.by(() => {
 		if (!searchQuery.trim()) {
@@ -51,7 +50,6 @@
 					serverName.toLowerCase().includes(query)
 				);
 			});
-
 			const filteredTemplates = serverRes.templates.filter((t) => {
 				return (
 					t.name?.toLowerCase().includes(query) ||
@@ -82,18 +80,23 @@
 	function autoExpandToResource(uri: string) {
 		for (const [serverName, serverRes] of resources.entries()) {
 			const resource = serverRes.resources.find((r) => r.uri === uri);
+
 			if (resource) {
 				expandedServers.add(serverName);
 
 				const pathParts = parseResourcePath(uri);
+
 				if (pathParts.length > 1) {
 					let currentPath = '';
+
 					for (let i = 0; i < pathParts.length - 1; i++) {
 						currentPath = `${currentPath}/${pathParts[i]}`;
 						const folderId = `${serverName}:${currentPath}`;
+
 						expandedFolders.add(folderId);
 					}
 				}
+
 				break;
 			}
 		}
@@ -134,18 +137,18 @@
 		{:else}
 			{#each [...filteredResources.entries()] as [serverName, serverRes] (serverName)}
 				<McpResourcesBrowserServerItem
+					{expandedFolders}
+					isExpanded={expandedServers.has(serverName as string)}
+					{onSelect}
+					{onTemplateSelect}
+					{onToggle}
+					onToggleFolder={toggleFolder}
+					onToggleServer={() => toggleServer(serverName as string)}
+					{searchQuery}
+					{selectedTemplateUri}
+					{selectedUris}
 					serverName={serverName as string}
 					serverRes={serverRes as MCPServerResources}
-					isExpanded={expandedServers.has(serverName as string)}
-					{selectedUris}
-					{selectedTemplateUri}
-					{expandedFolders}
-					onToggleServer={() => toggleServer(serverName as string)}
-					onToggleFolder={toggleFolder}
-					{onSelect}
-					{onToggle}
-					{onTemplateSelect}
-					{searchQuery}
 				/>
 			{/each}
 		{/if}
