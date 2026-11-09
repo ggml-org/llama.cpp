@@ -11,17 +11,23 @@
 #include <openvino/core/node_output.hpp>
 #include <openvino/core/type.hpp>
 #include <openvino/frontend/exception.hpp>
+#include <openvino/op/add.hpp>
 #include <openvino/op/broadcast.hpp>
 #include <openvino/op/concat.hpp>
 #include <openvino/op/constant.hpp>
 #include <openvino/op/convert.hpp>
+#include <openvino/op/divide.hpp>
 #include <openvino/op/gather.hpp>
+#include <openvino/op/mod.hpp>
+#include <openvino/op/multiply.hpp>
+#include <openvino/op/range.hpp>
 #include <openvino/op/reshape.hpp>
 #include <openvino/op/scatter_elements_update.hpp>
 #include <openvino/op/scatter_update.hpp>
 #include <openvino/op/shape_of.hpp>
 #include <openvino/op/slice.hpp>
 #include <openvino/op/squeeze.hpp>
+#include <openvino/op/subtract.hpp>
 #include <openvino/op/transpose.hpp>
 #include <openvino/op/unsqueeze.hpp>
 #include <vector>
@@ -31,8 +37,65 @@ namespace frontend {
 namespace ggml {
 namespace op {
 
+static OutputVector translate_conv_snapshots(const NodeContext & context) {
+    using namespace ov::op;
+    FRONT_END_OP_CONVERSION_CHECK(!context.is_static(), "Convolution snapshots require dynamic execution");
+    auto constant = [](std::initializer_list<size_t> shape, std::initializer_list<int64_t> values) {
+        return v0::Constant::create(element::i64, Shape(shape), std::vector<int64_t>(values));
+    };
+    const auto history = context.get_input_shape(0)[3].get_length();
+    const auto features = history * context.get_input_shape(0)[1].get_length();
+    const auto name = context.get_name();
+    auto count = context.get_input("rs_window_count_" + name);
+    auto seqs = context.get_input("rs_seq_count_" + name);
+    auto zero = constant({}, {0});
+    auto one = constant({}, {1});
+    auto range = [&](const Output<Node> & end) {
+        return std::make_shared<v4::Range>(zero, std::make_shared<v0::Squeeze>(end), one, element::i64);
+    };
+
+    // VIEW passes through conv_x; gather overlapping windows in [window, seq, channel, history] order.
+    // Return the full cache to preserve the in-place alias chain.
+    auto begin = context.get_input("rs_src_begin_" + name);
+    auto positions = range(std::make_shared<v1::Multiply>(count, constant({}, {history})));
+    auto columns = std::make_shared<v1::Add>(begin,
+        std::make_shared<v1::Add>(std::make_shared<v1::Divide>(positions, constant({}, {history})),
+                                 std::make_shared<v1::Mod>(positions, constant({}, {history}))));
+    auto column_matrix = std::make_shared<v1::Reshape>(columns, constant({2}, {-1, history}), false);
+    auto windows = std::make_shared<v8::Gather>(context.get_input(0), column_matrix, constant({}, {3}));
+    auto ordered = std::make_shared<v1::Transpose>(
+        std::make_shared<v0::Squeeze>(windows, constant({1}, {0})), constant({4}, {2, 0, 1, 3}));
+    Output<Node> updates = std::make_shared<v1::Reshape>(ordered, constant({4}, {1, 1, -1, features}), false);
+    updates = std::make_shared<v0::Convert>(updates, context.get_output_type());
+
+    auto row = range(std::make_shared<v1::Multiply>(count, seqs));
+    auto plane = std::make_shared<v1::Subtract>(std::make_shared<v1::Subtract>(count, one),
+                                               std::make_shared<v1::Divide>(row, seqs));
+    auto slots = std::make_shared<v1::Add>(context.get_input("rs_slot_begin_" + name),
+        std::make_shared<v1::Add>(std::make_shared<v1::Mod>(row, seqs),
+                                 std::make_shared<v1::Multiply>(plane,
+                                     context.get_input("rs_snapshot_stride_" + name))));
+    auto base = context.get_input(2);
+    const auto full_features = base.get_partial_shape()[3].get_length();
+    const auto feature_begin = (context.get_view_input_offset(2, 0) / context.get_output_type().size()) % full_features;
+    if (features != full_features) {
+        auto old_rows = std::make_shared<v8::Gather>(base, slots, constant({}, {2}));
+        auto head = std::make_shared<v8::Slice>(old_rows, constant({1}, {0}),
+            constant({1}, {int64_t(feature_begin)}), constant({1}, {1}), constant({1}, {3}));
+        auto tail = std::make_shared<v8::Slice>(old_rows, constant({1}, {int64_t(feature_begin) + features}),
+            constant({1}, {INT64_MAX}), constant({1}, {1}), constant({1}, {3}));
+        updates = std::make_shared<v0::Concat>(OutputVector{head, updates, tail}, 3);
+    }
+    auto result = std::make_shared<v3::ScatterUpdate>(base, slots, updates, constant({}, {2}));
+    return rename_outputs_with_suffix({result}, name);
+}
+
 OutputVector translate_set_rows(const NodeContext & context) {
     num_inputs_check(context, 3, 3);
+
+    if (context.get_op_case() == 3) {
+        return translate_conv_snapshots(context);
+    }
 
     auto data = process_view_input_new(context, 0);
     auto indices = process_view_input_new(context, 1);

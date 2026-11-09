@@ -1,6 +1,6 @@
 # Current Qwen GPU implementation
 
-On the input-inplace development branch, the default Qwen3.5/Qwen3.6 path is dynamic stateless execution with `RecurrentConvCacheUpdate`, `RecurrentGatedDeltaNetUpdate`, and stable pure-top-k MTP translation. It supports one or multiple slots and rollback. The implementation applies to `qwen35` and `qwen35moe`; the reference model is the UD Qwen3.6-35B-A3B MTP GGUF.
+The default Qwen3.5/Qwen3.6 path is dynamic stateless execution with `RecurrentConvCacheUpdate`, `RecurrentGatedDeltaNetUpdate`, and stable pure-top-k MTP translation. It supports one or multiple slots and rollback. The implementation applies to `qwen35` and `qwen35moe`; the reference model is the UD Qwen3.6-35B-A3B MTP GGUF.
 
 Build against the matching OpenVINO runtime/GPU plugin with single-output Update ops. Configure `GGML_OPENVINO_DEVICE=GPU`, native softplus, and the documented requantization policy. The cache translation revision is 15. Historical measurements retain their original source revisions.
 
@@ -22,6 +22,12 @@ Attention context capacity does not set recurrent-cache size. Each cache input P
 The GPU plugin uses two stages: first preserve required original rows in scratch while applying logical reset and precision rounding; then compute and perform ordered writes. This avoids overwriting a source before another destination has read it. Identity reorder sources need no scratch writes. In-place execution removes the spare full output bank, not every cache read or internal memory transaction.
 
 `RecurrentConvCacheUpdate` has nine inputs, including depthwise weights, and returns convolution `[1,B,T,C]`. `RecurrentGatedDeltaNetUpdate` returns attention and writes the newest `min(T,snapshot_count)` states into its cache input, newest first. Neither op returns a cache tensor.
+
+## Convolution cache stores
+
+`build_conv_state_store` emits one CPY for the final history when rollback is disabled. With rollback enabled, it emits one SET_ROWS from overlapping `[history, window, channel, sequence]` views into strided snapshot planes. Window starts advance in time while destination planes descend, so plane zero holds the newest history. The fixed ARANGE/scale/cast chain supplies this descending slot order.
+
+The backend recognizes this structure and refreshes source starts, cache heads, sequence counts, window counts and plane strides on every batch. Native fusion passes runtime `[source column, destination slot]` pairs to the existing convolution op; the pair-count dimension is dynamic. Functional translation gathers the same windows, scatters them into the full cache, and preserves unwritten slots and features. The native op spec is unchanged.
 
 ## Generic fallback and restrictions
 

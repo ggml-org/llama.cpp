@@ -1595,7 +1595,12 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
     }
     case GGML_OP_GET_ROWS:
     case GGML_OP_SET_ROWS: {
-        if (op->ne[3] != 1 && !GgmlOvDecoder::is_get_rows_batched_4d(op)) {
+        if (GgmlOvDecoder::is_conv_state_snapshot_writeback(op) &&
+            (ggml_openvino_is_npu() || ggml_openvino_getenv_int("GGML_OPENVINO_FORCE_STATIC"))) {
+            return {false, "convolution snapshots require dynamic execution"};
+        }
+        if (op->ne[3] != 1 && !GgmlOvDecoder::is_get_rows_batched_4d(op) &&
+            !GgmlOvDecoder::is_conv_state_snapshot_writeback(op)) {
             return {false, "GET_ROWS/SET_ROWS with ne[3] != 1 (ne[3]=" + std::to_string(op->ne[3]) + ") is not supported"};
         }
         if (op->op == GGML_OP_GET_ROWS && ggml_openvino_is_gpu() &&
@@ -2111,7 +2116,8 @@ static ggml_openvino_op_support ggml_backend_openvino_device_supports_op_impl(gg
         if (supported_types.find(src->type) == supported_types.end()) {
             return {false, "src[" + std::to_string(i) + "] type " + std::string(ggml_type_name(src->type)) + " is not supported"};
         }
-        if (!has_strides_on_element_grid(src) && !(i == 1 && GgmlOvDecoder::is_gdn_snapshot_writeback(op))) {
+        if (!has_strides_on_element_grid(src) && !(i == 1 && GgmlOvDecoder::is_gdn_snapshot_writeback(op)) &&
+            !(i == 2 && GgmlOvDecoder::is_conv_state_snapshot_writeback(op))) {
             return {false, "src[" + std::to_string(i) + "] strides are not multiples of each other"};
         }
         const bool is_supported_3d_moe_expert =

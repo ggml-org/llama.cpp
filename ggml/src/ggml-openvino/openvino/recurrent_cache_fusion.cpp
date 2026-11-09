@@ -65,8 +65,7 @@ RecurrentCacheFusion::RecurrentCacheFusion(const std::shared_ptr<GgmlDecoder> & 
         if (group.reset < 0) {
             continue;
         }
-        // Find the convolution CONCAT from the active prefix of this gather, then all
-        // its cache snapshot writes. No tensor names or captured token counts are used.
+        // build_conv_state_store emits one CPY without rollback or one SET_ROWS with rollback.
         for (int j = i + 1; j < graph->n_nodes; ++j) {
             const auto node = graph->nodes[j];
             if (node->op != GGML_OP_CONCAT || node->op_params[0] != 0 || !node->src[0] ||
@@ -79,17 +78,24 @@ RecurrentCacheFusion::RecurrentCacheFusion(const std::shared_ptr<GgmlDecoder> & 
                 group.concat = j;
                 for (int k = j + 1; k < graph->n_nodes; ++k) {
                     const auto write = graph->nodes[k];
-                    if (GgmlOvDecoder::is_conv_state_writeback(write) && write->view_src == root &&
-                        write->src[0]->src[0] == node && write->src[0]->ne[0] == node->src[0]->ne[0] &&
-                        write->src[0]->ne[1] == node->src[0]->ne[1]) {
-                        group.snapshots.push_back(k);
+                    const bool copy = GgmlOvDecoder::is_conv_state_writeback(write);
+                    const bool slots = GgmlOvDecoder::is_conv_state_snapshot_writeback(write);
+                    if ((copy || slots) && write->view_src == root && write->src[0]->src[0] == node &&
+                        write->src[0]->ne[0] == node->src[0]->ne[0] &&
+                        write->src[0]->ne[slots ? 2 : 1] == node->src[0]->ne[1] &&
+                        (slots ? write->src[2] : write->src[1])->view_offs % root->nb[1] == 0) {
+                        if (group.writeback >= 0) {
+                            group.writeback = -1;
+                            break;
+                        }
+                        group.writeback = k;
                     }
                 }
                 break;
             }
         }
         if (group.concat >= 0) {
-            if (group.snapshots.empty()) {
+            if (group.writeback < 0) {
                 continue;
             }
             for (int j = group.concat + 1; j < graph->n_nodes; ++j) {
@@ -142,8 +148,9 @@ RecurrentCacheFusion::RecurrentCacheFusion(const std::shared_ptr<GgmlDecoder> & 
         }
         bool complete = tensors->count("rs_slot_begin_" + decoder->get_op_name(i)) &&
                         tensors->count("rs_src_begin_" + decoder->get_op_name(i));
-        for (int snapshot : group.snapshots) {
-            const auto & name = decoder->get_op_name(snapshot);
+        if (group.concat >= 0) {
+            complete &= tensors->count("rs_windows_" + decoder->get_op_name(group.concat));
+            const auto & name = decoder->get_op_name(group.writeback);
             complete &= tensors->count("rs_slot_begin_" + name) && tensors->count("rs_src_begin_" + name);
         }
         for (int j = 0; j < graph->n_nodes && complete; ++j) {
@@ -156,14 +163,15 @@ RecurrentCacheFusion::RecurrentCacheFusion(const std::shared_ptr<GgmlDecoder> & 
                 }
                 const bool alias = node->op == GGML_OP_VIEW || node->op == GGML_OP_RESHAPE;
                 const bool matched_read = j == group.gather || j == group.reset;
-                const bool destination = node->op == GGML_OP_CPY && source == 1;
+                const bool destination = (node->op == GGML_OP_CPY && source == 1) ||
+                                         (GgmlOvDecoder::is_conv_state_snapshot_writeback(node) && source == 2);
                 if (!alias && !matched_read && !destination) {
                     complete = false;
                 }
             }
-            if (node->view_src == root && (node->op == GGML_OP_SCALE || node->op == GGML_OP_CPY) &&
-                j != group.reset && j != group.remainder && j != group.writeback &&
-                std::find(group.snapshots.begin(), group.snapshots.end(), j) == group.snapshots.end()) {
+            if (node->view_src == root &&
+                (node->op == GGML_OP_SCALE || node->op == GGML_OP_CPY || node->op == GGML_OP_SET_ROWS) &&
+                j != group.reset && j != group.remainder && j != group.writeback) {
                 complete = false;
             }
         }
@@ -189,11 +197,7 @@ RecurrentCacheFusion::RecurrentCacheFusion(const std::shared_ptr<GgmlDecoder> & 
                     complete = false;
                 }
                 if (group.concat >= 0 && input == graph->nodes[group.concat] && node != compute) {
-                    bool window = false;
-                    for (int snapshot : group.snapshots) {
-                        window |= node == graph->nodes[snapshot]->src[0];
-                    }
-                    complete &= window;
+                    complete &= node == graph->nodes[group.writeback]->src[0];
                 }
                 if (input == compute && group.concat < 0 && node->op != GGML_OP_VIEW) {
                     complete = false;
@@ -218,9 +222,6 @@ RecurrentCacheFusion::RecurrentCacheFusion(const std::shared_ptr<GgmlDecoder> & 
         m_nodes[group.compute] = id;
         if (group.writeback >= 0) {
             m_nodes[group.writeback] = id;
-        }
-        for (int n : group.snapshots) {
-            m_nodes[n] = id;
         }
         m_groups.push_back(std::move(group));
     }
@@ -282,16 +283,8 @@ OutputVector RecurrentCacheFusion::translate(int index, const NodeContext & cont
     }
     if (index == group.concat) {
         inputs.push_back(process_view_input_new(context, 1));
-        OutputVector windows;
-        for (int snapshot : group.snapshots) {
-            const auto name = m_decoder->get_op_name(snapshot);
-            auto window = std::make_shared<v0::Concat>(
-                OutputVector{context.get_input("rs_src_begin_" + name), context.get_input("rs_slot_begin_" + name)}, 0);
-            windows.push_back(std::make_shared<v1::Reshape>(window, constant({4}, {1, 1, 1, 2}), false));
-        }
-        inputs.push_back(context.has_input("rs_windows_" + context.get_name()) ?
-                             context.get_input("rs_windows_" + context.get_name()) :
-                             std::make_shared<v0::Concat>(windows, 2));
+        // Runtime pairs [source column, destination slot] cover the current CPY or SET_ROWS store.
+        inputs.push_back(context.get_input("rs_windows_" + context.get_name()));
         const auto history = context.get_input_shape(0)[3].get_length();
         NodeContext compute_context(m_decoder, m_tensors, group.compute);
         const auto channels = context.get_input_shape(0)[2].get_length();
