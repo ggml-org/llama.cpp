@@ -321,8 +321,10 @@
 	</button>
 {/if}
 
-{#snippet picker()}
-	<div class="p-2 min-h-22 flex flex-col justify-between">
+<!-- the drawer's version is roomier: the header's inset, rows spaced for a finger and
+     lined up with the search results, and text sized for a phone -->
+{#snippet picker(inDrawer: boolean)}
+	<div class={inDrawer ? 'flex flex-col gap-1 px-4' : 'p-2 min-h-22 flex flex-col justify-between'}>
 		<SearchInput
 			bind:ref={searchInputRef}
 			bind:value={query}
@@ -348,7 +350,12 @@
 
 		{#if pickerSupported && fileSearchEnabled}
 			<button
-				class="-mt-1 flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none hover:bg-accent hover:text-accent-foreground"
+				class={[
+					'flex cursor-pointer items-center outline-hidden select-none hover:bg-accent hover:text-accent-foreground',
+					inDrawer
+						? 'mt-1 gap-2 rounded-lg px-2 py-2.5 text-[15px]'
+						: '-mt-1 gap-2 rounded-sm px-2 py-1.5 text-sm'
+				]}
 				onclick={browseNative}
 				type="button"
 			>
@@ -359,9 +366,12 @@
 		{/if}
 
 		{#if homeBase && fileSearchEnabled}
-			<div aria-hidden="true" class="-mx-2 my-2 h-px bg-border/20"></div>
+			<div
+				aria-hidden="true"
+				class={['h-px', inDrawer ? 'my-1 bg-border/60' : '-mx-2 my-2 bg-border/20']}
+			></div>
 
-			<span class="px-2 py-1.5 font-mono text-[10px]">
+			<span class={['font-mono', inDrawer ? 'px-2 py-2 text-xs' : 'px-2 py-1.5 text-[10px]']}>
 				Searching in:
 
 				<span class="truncate text-muted-foreground/70" title={searchScope}
@@ -384,8 +394,8 @@
 				>
 			</Drawer.Header>
 
-			<div class="px-1.5 pb-safe-2">
-				{@render picker()}
+			<div class="pb-safe-4">
+				{@render picker(true)}
 			</div>
 		</Drawer.Content>
 	</Drawer.Root>
@@ -410,7 +420,7 @@
 			side="top"
 			sideOffset={12}
 		>
-			{@render picker()}
+			{@render picker(false)}
 		</Popover.Content>
 	</Popover.Root>
 {/if}
