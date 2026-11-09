@@ -1544,7 +1544,7 @@ static void test_json_schema_any_order() {
         });
 
     test_schema(
-        "10 properties: the first 8 at most once, the other 2 counted",
+        "10 properties: each at most once, the last 2 in declared order among themselves",
         R"""({
             "type": "object",
             "properties": {
@@ -1557,11 +1557,12 @@ static void test_json_schema_any_order() {
         })""",
         {
             R"""({"brand": "b", "sku": "s", "rating": 4.9, "title": "t", "warranty_years": 2, "tags": [], "price": 1})""",
-            R"""({"warranty_years": 2, "rating": 4.9, "tags": [], "in_stock": true, "weight_kg": 1, "color": "c", "brand": "b", "price": 1, "title": "t", "sku": "s"})""",
+            R"""({"rating": 4.9, "warranty_years": 2, "tags": [], "in_stock": true, "weight_kg": 1, "color": "c", "brand": "b", "price": 1, "title": "t", "sku": "s"})""",
         },
         {
             R"""({"sku": "s", "title": "t", "price": 1, "tags": [], "in_stock": true, "tags": []})""",
-            R"""({"sku": "s", "title": "t", "price": 1, "rating": 4.9, "warranty_years": 2, "rating": 4.9})""",
+            R"""({"sku": "s", "title": "t", "price": 1, "rating": 4.9, "rating": 4.9})""",
+            R"""({"sku": "s", "title": "t", "price": 1, "warranty_years": 2, "rating": 4.9})""",
             R"""({"sku": "s", "title": "t"})""",
         });
 

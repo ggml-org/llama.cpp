@@ -838,8 +838,8 @@ private:
     }
 
 
-    // keys in any order: the first ANY_ORDER_MAX_TRACKED_KEYS are seen at most once (one state per subset),
-    // the rest share a counter, so they may come in any order but cannot repeat without bound
+    // keys in any order: the first ANY_ORDER_MAX_TRACKED_KEYS are seen at most once (one state per subset);
+    // the rest are also seen at most once but keep their declared order among themselves (one state per position)
     std::string _build_any_order_object_rule(
         const std::vector<std::string> & required_props,
         const std::vector<std::string> & optional_props,
@@ -855,11 +855,6 @@ private:
         const bool ordered_required = n_required > ANY_ORDER_MAX_TRACKED_KEYS;
         const size_t n_tracked = ordered_required ? n_required : std::min(n_keys, ANY_ORDER_MAX_TRACKED_KEYS);
         const size_t n_untracked = n_keys - n_tracked;
-        std::vector<std::string> untracked_kvs;
-        for (size_t i = n_tracked; i < n_keys; i++) {
-            untracked_kvs.push_back(prop_kv_rule_names[keys[i]]);
-        }
-        const std::string untracked_kv = untracked_kvs.size() > 1 ? _add_rule(prefix + "untracked-kv", string_join(untracked_kvs, " | ")) : untracked_kvs.empty() ? "" : untracked_kvs[0];
 
         const size_t required_mask = ordered_required ? 0 : (size_t(1) << n_required) - 1;
         auto all_required = [&](size_t seen) {
@@ -874,7 +869,7 @@ private:
 
         std::map<std::pair<size_t, size_t>, std::string> rest_rules;
         std::function<std::string(size_t, size_t)> rest;
-        auto next_kvs = [&](size_t seen, size_t n_untracked_seen) {
+        auto next_kvs = [&](size_t seen, size_t next_untracked) {
             std::vector<std::string> alts;
             auto add = [&](const std::string & kv, size_t seen_after, size_t n_untracked_after) {
                 const std::string r = rest(seen_after, n_untracked_after);
@@ -882,34 +877,34 @@ private:
             };
             if (ordered_required) {
                 if (seen < n_required) {
-                    add(prop_kv_rule_names[keys[seen]], seen + 1, n_untracked_seen);
+                    add(prop_kv_rule_names[keys[seen]], seen + 1, next_untracked);
                 }
             } else {
                 for (size_t i = 0; i < n_tracked; i++) {
                     const size_t bit = size_t(1) << i;
                     if (!(seen & bit)) {
-                        add(prop_kv_rule_names[keys[i]], seen | bit, n_untracked_seen);
+                        add(prop_kv_rule_names[keys[i]], seen | bit, next_untracked);
                     }
                 }
             }
-            if (n_untracked_seen < n_untracked) {
-                add(untracked_kv, seen, n_untracked_seen + 1);
+            for (size_t j = next_untracked; j < n_untracked; j++) {
+                add(prop_kv_rule_names[keys[n_tracked + j]], seen, j + 1);
             }
             return alts;
         };
         // one "," then the next key, so only one stack waits for the comma
-        rest = [&](size_t seen, size_t n_untracked_seen) -> std::string {
-            const auto key = std::make_pair(seen, n_untracked_seen);
+        rest = [&](size_t seen, size_t next_untracked) -> std::string {
+            const auto key = std::make_pair(seen, next_untracked);
             auto it = rest_rules.find(key);
             if (it != rest_rules.end()) {
                 return it->second;
             }
-            if (all_tracked(seen) && n_untracked_seen == n_untracked) {
+            if (all_tracked(seen) && next_untracked == n_untracked) {
                 return rest_rules[key] = "";
             }
-            const std::string rule_name = _reserve_rule_name(prefix + "rest-" + std::to_string(seen) + (n_untracked == 0 ? "" : "-" + std::to_string(n_untracked_seen)));
+            const std::string rule_name = _reserve_rule_name(prefix + "rest-" + std::to_string(seen) + (n_untracked == 0 ? "" : "-" + std::to_string(next_untracked)));
             rest_rules[key] = rule_name;
-            const std::string body = "\",\" space " + group(next_kvs(seen, n_untracked_seen));
+            const std::string body = "\",\" space " + group(next_kvs(seen, next_untracked));
             _rules[rule_name] = all_required(seen) ? "( " + body + " )?" : body;
             return rule_name;
         };
