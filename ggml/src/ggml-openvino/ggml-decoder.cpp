@@ -1357,7 +1357,9 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
                 compute_params.rs_writebacks[get_tensor_ov_name(cgraph, node)] = writeback;
             }
             if (is_conv || is_gdn) {
-                compute_params.s_copy_active_slot_len = (int) dest_view->ne[1];
+                // One cache row per active sequence: [conv_state_size, n_seqs] (qwen35) or, with the q/k/v conv
+                // states packed in one row, [d_conv - 1, d_inner, n_seqs] (bailingmoe3), so count the rows spanned.
+                compute_params.s_copy_active_slot_len = (int) ((ggml_nbytes(dest_view) + row_bytes - 1) / row_bytes);
             }
         }
     }
@@ -2926,6 +2928,12 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
             // encodes which source dimension it indexes into, so it uniquely
             // identifies the dynamic dim even when two dims share the same size.
             m_node_dynamic_dims[node] = -1;
+            if (!m_model_params.has_rs_rollback && node->src[0]->op == GGML_OP_GATED_DELTA_NET) {
+                // The GDN translator publishes attention [S_v, H_v, n_tokens, n_seqs] and state directly under these
+                // VIEW names (get_output_names), not the packed [attention | state] the strides describe.
+                m_node_dynamic_dims[node] = node->view_offs == 0 ? 2 : -1;
+                break;
+            }
             if (m_node_dynamic_dims[node->src[0]] != -1) {
                 auto dynamic_dim_idx = m_node_dynamic_dims[node->src[0]];
                 auto dynamic_dim_value = node->src[0]->ne[dynamic_dim_idx];
