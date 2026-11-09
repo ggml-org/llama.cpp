@@ -28,7 +28,7 @@ OutputVector translate_scale(const NodeContext & context) {
 
     auto scale_node = std::make_shared<ov::op::v0::Constant>(ov::element::f32, ov::Shape{}, std::vector<float>{scale});
 
-    if (is_recurrent_cache_reset(context)) {
+    if (is_recurrent_cache_reset_case(context)) {
         return translate_recurrent_cache_reset(context);
     }
 

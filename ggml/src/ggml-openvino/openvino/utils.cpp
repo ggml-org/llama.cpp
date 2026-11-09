@@ -974,7 +974,7 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
     return current;
 }
 
-bool is_recurrent_cache_reset(const NodeContext & context) {
+bool is_recurrent_cache_reset_case(const NodeContext & context) {
     return context.get_op_case() == 2 || (context.get_op_case() == 1 && context.has_input("cache_rs_reset_len"));
 }
 

@@ -66,7 +66,7 @@ ov::Output<ov::Node> process_view_input(const NodeContext & context, int input_i
 
 ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int input_index);
 
-bool is_recurrent_cache_reset(const NodeContext & context);
+bool is_recurrent_cache_reset_case(const NodeContext & context);
 
 OutputVector translate_recurrent_cache_reset(const NodeContext & context);
 
