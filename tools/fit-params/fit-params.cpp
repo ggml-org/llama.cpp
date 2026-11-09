@@ -5,8 +5,12 @@
 #include "common.h"
 #include "fit.h"
 #include "log.h"
+#include "mtmd.h"
+#include "speculative.h"
 
+#include <algorithm>
 #include <cinttypes>
+#include <string>
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
@@ -31,10 +35,76 @@ int llama_fit_params(int argc, char ** argv) {
     auto cparams = common_context_params_to_llama(params);
 
     if (!params.fit_params_print) {
-        const common_params_fit_status status = common_fit_params(params.model.path.c_str(), &mparams, &cparams,
-                params.tensor_split, params.tensor_buft_overrides.data(), params.fit_params_target.data(), params.fit_params_min_ctx,
-                nullptr,
-                params.verbosity >= LOG_LEVEL_DEBUG ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
+        // #30442 — a multimodal projector shares the device memory of the config being fitted.
+        // Measure it the same way the server does for its own config and reserve it per device,
+        // so the fit leaves room for it (the projector is not a llama model, so it cannot be
+        // passed to common_fit_params as a common_fit_extra_model).
+        if (!params.mmproj.path.empty()) {
+            mtmd_context_params mmproj_cparams = mtmd_context_params_default();
+            mmproj_cparams.use_gpu          = params.mmproj_use_gpu;
+            mmproj_cparams.device           = params.mmproj_device;
+            mmproj_cparams.print_timings    = false;
+            mmproj_cparams.n_threads        = params.cpuparams.n_threads;
+            mmproj_cparams.flash_attn_type  = params.flash_attn_type;
+            mmproj_cparams.warmup           = params.warmup;
+            mmproj_cparams.image_min_tokens = params.image_min_tokens;
+            mmproj_cparams.image_max_tokens = params.image_max_tokens;
+            mmproj_cparams.batch_max_tokens = params.mtmd_batch_max_tokens;
+
+            const mtmd_memory_usage mmproj_usage = mtmd_get_memory_usage(params.mmproj.path.c_str(), mmproj_cparams);
+            if (mmproj_usage.backend_mem_usage.empty()) {
+                LOG_WRN("%s: failed to measure the memory of the projector '%s', fitting without it\n",
+                        __func__, params.mmproj.path.c_str());
+            }
+            for (const auto & [dev, size] : mmproj_usage.backend_mem_usage) {
+                for (size_t idev = 0; idev < ggml_backend_dev_count(); idev++) {
+                    if (ggml_backend_dev_get(idev) == dev) {
+                        if (idev < params.fit_params_target.size()) {
+                            LOG_INF("%s: reserving %" PRIu64 " MiB of device %s memory for the projector\n",
+                                    __func__, (uint64_t)(size / (1024 * 1024)), ggml_backend_dev_name(dev));
+                            params.fit_params_target[idev] += size;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        // #30424 — a speculative decoding config changes what has to fit: the draft model is
+        // measured alongside the target, and an MTP context runs on the weights of the main
+        // model. Fit them together, same as the server does for its own config estimate.
+        const bool has_draft = params.speculative.has_dft();
+        const bool spec_mtp = std::find(params.speculative.types.begin(), params.speculative.types.end(),
+                COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
+
+        common_params_fit_status status;
+        if (has_draft || spec_mtp) {
+            common_params params_dft = common_base_params_to_speculative(params);
+
+            auto mparams_dft = common_model_params_to_llama(params_dft);
+            auto cparams_dft = common_context_params_to_llama(params_dft);
+            if (spec_mtp) {
+                cparams_dft.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+            }
+            cparams_dft.n_rs_seq = 0;
+
+            const common_fit_extra_model extra = {
+                /*.path_model   =*/ params_dft.model.path.c_str(),
+                /*.mparams      =*/ &mparams_dft,
+                /*.cparams      =*/ &cparams_dft,
+                /*.shares_model =*/ !has_draft, // an MTP context runs on the weights of the main model
+            };
+
+            status = common_fit_params(params.model.path.c_str(), &mparams, &cparams,
+                    params.tensor_split, params.tensor_buft_overrides.data(), params.fit_params_target.data(), params.fit_params_min_ctx,
+                    &extra,
+                    params.verbosity >= LOG_LEVEL_DEBUG ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
+        } else {
+            status = common_fit_params(params.model.path.c_str(), &mparams, &cparams,
+                    params.tensor_split, params.tensor_buft_overrides.data(), params.fit_params_target.data(), params.fit_params_min_ctx,
+                    nullptr,
+                    params.verbosity >= LOG_LEVEL_DEBUG ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
+        }
         if (status != COMMON_PARAMS_FIT_STATUS_SUCCESS) {
             LOG_ERR("%s: failed to fit CLI arguments to free memory, exiting...\n", __func__);
             exit(1);
@@ -54,6 +124,19 @@ int llama_fit_params(int argc, char ** argv) {
                     printf(" -ts ");
                 }
                 printf("%s%" PRIu32, id > 0 ? "," : "", uint32_t(mparams.tensor_split[id]));
+            }
+        }
+
+        // #30424 — echo the speculative config so the printed line is a complete server config
+        if (has_draft && !params.speculative.draft.mparams.path.empty()) {
+            const std::string & draft_path = params.speculative.draft.mparams.path;
+            if (draft_path.find(' ') != std::string::npos) {
+                printf(" -md \"%s\"", draft_path.c_str());
+            } else {
+                printf(" -md %s", draft_path.c_str());
+            }
+            if (params.speculative.draft.n_gpu_layers >= 0) {
+                printf(" -ngld %d", params.speculative.draft.n_gpu_layers);
             }
         }
 
