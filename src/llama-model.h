@@ -242,6 +242,11 @@ struct llama_layer_nextn {
     struct ggml_tensor * hc_head_norm          = nullptr;
     struct ggml_tensor * hc_head_down          = nullptr;
     struct ggml_tensor * hc_head_up            = nullptr;
+
+    // ernie5_5: the MTP block's own mHC head (fn, base, scale as the trunk's)
+    struct ggml_tensor * hc_head_fn            = nullptr;
+    struct ggml_tensor * hc_head_base          = nullptr;
+    struct ggml_tensor * hc_head_scale         = nullptr;
 };
 
 struct llama_layer_switch_lora {
@@ -397,6 +402,7 @@ struct llama_layer {
     struct ggml_tensor * ffn_up_b   = nullptr; // b3
     struct ggml_tensor * ffn_act    = nullptr;
     struct ggml_tensor * ffn_exp_probs_b = nullptr;
+    struct ggml_tensor * ffn_exp_scale   = nullptr; // ernie5_5: per-expert routing weight scale
     struct ggml_tensor * ffn_exp_probs_b_vl = nullptr; // deepseek4 vision (bias for image tokens)
     struct ggml_tensor * ffn_gate_tid2eid = nullptr;
 
@@ -547,6 +553,7 @@ struct llama_layer {
 
     // openai-moe
     struct ggml_tensor * attn_sinks = nullptr;
+    struct ggml_tensor * attn_vha   = nullptr; // ernie5_5: head mix [n_head, n_head]
 
     // DeepSeek-V4
     struct ggml_tensor * attn_kv_norm = nullptr;

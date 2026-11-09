@@ -233,6 +233,18 @@ public:
     void set_input_k_idxs(ggml_tensor * dst) const;
     void set_input_attn_mask(const llm_attn_mask & attn_mask, const llama_ubatch * ubatch, bool causal_attn) const;
 
+    // the base (full context) half of kv_raw, used by the non-SWA layers of DSV4 hybrids (ERNIE 5.5 MLA layers)
+    uint32_t get_n_kv_full() const;
+    ggml_tensor * get_k_full(ggml_context * ctx, int32_t il) const;
+    ggml_tensor * cpy_k_full(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const;
+    ggml_tensor * build_input_k_idxs_full(ggml_context * ctx, const llama_ubatch & ubatch) const;
+    void set_input_k_idxs_full(ggml_tensor * dst, const llama_ubatch * ubatch) const;
+    void set_input_attn_mask_full(const llm_attn_mask & attn_mask, const llama_ubatch * ubatch, bool causal_attn) const;
+
+    // ERNIE 5.5 DSA indexer mask over the full half (F16): -inf for cells a query cannot see, +inf for the n_window
+    // newest it can (always selected), 0 for the older ones the top-k chooses from
+    void set_input_attn_mask_idx(ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t n_window) const;
+
     // token history of the raw (window) cells, for host-side n-gram hashing (deepseek41 Engram)
     void get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, std::vector<llama_token> & res) const;
 
@@ -248,6 +260,11 @@ private:
 
     const llama_memory_context_ptr ctx_base_mem;
     const llama_memory_context_ptr ctx_swa_mem;
+
+    // full-size view of the base half for graph reservation, when there is no ctx_base_mem
+    std::unique_ptr<llama_kv_cache_context> ctx_base_reserve;
+
+    const llama_kv_cache_context * get_base_ctx() const;
 
     uint32_t n_kv = 0;
 

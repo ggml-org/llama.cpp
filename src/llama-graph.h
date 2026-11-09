@@ -609,6 +609,14 @@ public:
 
     std::vector<ggml_tensor *> self_k_rot;
 
+    // the base (full context) half of the raw cache, only for DSV4 hybrids with non-SWA layers
+    ggml_tensor * self_k_idxs_full = nullptr; // I64 [n_batch]
+    llm_attn_mask self_attn_mask_full;
+
+    // ERNIE 5.5 DSA indexer mask over the full half, F16; only when it holds more than top_k + window cells
+    llm_attn_mask self_attn_mask_idx;
+    uint32_t      idx_n_window = 0;
+
     const llama_cparams cparams;
 
     const llama_kv_cache_dsv4_raw_context * mctx;

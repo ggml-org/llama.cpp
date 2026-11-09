@@ -354,6 +354,11 @@ struct llama_hparams {
     float    dsv4_hc_eps               = 0.0f;
     std::array<uint32_t, LLAMA_MAX_LAYERS> dsv4_compress_ratios;
 
+    // ERNIE 5.5 (DeepSeek-V4 hybrid): MLA layer head dims and the logit MultiMax
+    uint32_t ernie_mla_qk_nope = 0;
+    uint32_t ernie_mla_v       = 0;
+    std::array<float, 8> ernie_multimax = {}; // ranges[4], ts[4]
+
     // deepseek41
     std::array<int32_t, LLAMA_MAX_LAYERS> dsv41_kv_src;   // layer whose compressed KV this layer reads, -1 = none
     std::array<int32_t, LLAMA_MAX_LAYERS> dsv41_topk_src; // layer whose top-k this layer uses, -1 = none

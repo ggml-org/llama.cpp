@@ -1968,6 +1968,27 @@ void llama_kv_cache::set_input_attn_mask(const llm_attn_mask & attn_mask, const 
     }
 }
 
+void llama_kv_cache::set_input_attn_mask_f32(float * data, int64_t n_kv, int64_t n_stream, const llama_ubatch * ubatch,
+        uint32_t n_swa, llama_swa_type swa_type) const {
+    GGML_ASSERT(ubatch->n_tokens % n_stream == 0);
+
+    const args_set_input_attn_mask args = {
+        /*.hparams          =*/ hparams,
+        /*.ubatch           =*/ ubatch,
+        /*.v_cells          =*/ v_cells,
+        /*.seq_to_stream    =*/ seq_to_stream,
+        /*.n_swa            =*/ n_swa,
+        /*.swa_type         =*/ swa_type,
+        /*.n_kv             =*/ n_kv,
+        /*.n_stream         =*/ n_stream,
+        /*.n_tps            =*/ ubatch->n_tokens/n_stream,
+        /*.rows             =*/ nullptr,
+        /*.block_uniform    =*/ false,
+    };
+
+    set_input_attn_mask_impl<float>(args, data, true);
+}
+
 void llama_kv_cache::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const {
     const int64_t n_tokens = ubatch->n_tokens;
 
@@ -3087,6 +3108,11 @@ void llama_kv_cache_context::set_input_v_idxs(ggml_tensor * dst, const llama_uba
 
 void llama_kv_cache_context::set_input_attn_mask(const llm_attn_mask & attn_mask, const llama_ubatch * ubatch, bool causal_attn) const {
     kv->set_input_attn_mask(attn_mask, ubatch, causal_attn);
+}
+
+void llama_kv_cache_context::set_input_attn_mask_f32(float * data, int64_t n_kv, int64_t n_stream, const llama_ubatch * ubatch,
+        uint32_t n_swa, llama_swa_type swa_type) const {
+    kv->set_input_attn_mask_f32(data, n_kv, n_stream, ubatch, n_swa, swa_type);
 }
 
 void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const {

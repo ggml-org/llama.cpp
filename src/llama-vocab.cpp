@@ -334,6 +334,14 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                     "[!\"#$%&'()*+,\\-./:;<=>?@\\[\\\\\\]^_`{|}~][A-Za-z]+|[^\r\n\\p{L}\\p{P}\\p{S}]?[\\p{L}\\p{M}]+| ?[\\p{P}\\p{S}]+[\r\n]*|\\s*[\r\n]+|\\s+(?!\\S)|\\s+",
                 };
                 break;
+            case LLAMA_VOCAB_PRE_TYPE_ERNIE5:
+                // DeepSeek-V3 split, but numbers in right-aligned groups of 3 digits
+                regex_exprs = {
+                    "\\p{N}{1,3}(?=(?:\\p{N}{3})*(?!\\p{N}))",
+                    "[一-龥぀-ゟ゠-ヿ]+",
+                    "[!\"#$%&'()*+,\\-./:;<=>?@\\[\\\\\\]^_`{|}~][A-Za-z]+|[^\r\n\\p{L}\\p{P}\\p{S}]?[\\p{L}\\p{M}]+| ?[\\p{P}\\p{S}]+[\r\n]*|\\s*[\r\n]+|\\s+(?!\\S)|\\s+",
+                };
+                break;
             case LLAMA_VOCAB_PRE_TYPE_SPARK2_5:
                 regex_exprs = {
                     "\\p{N}{1,3}",
@@ -2720,6 +2728,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             } else if (
                 tokenizer_pre == "hy_v4") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_HY_V4;
+                clean_spaces = false;
+            } else if (
+                tokenizer_pre == "ernie5") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_ERNIE5;
                 clean_spaces = false;
             } else if (
                 tokenizer_pre == "joyai-llm") {

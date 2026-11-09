@@ -1111,6 +1111,18 @@ void llm_graph_input_dsv4_raw::set_input(const llama_ubatch * ubatch) {
     if (self_attn_mask.raw && self_attn_mask.raw->buffer) {
         mctx->set_input_attn_mask(self_attn_mask, ubatch, cparams.causal_attn);
     }
+
+    if (self_k_idxs_full && self_k_idxs_full->buffer) {
+        mctx->set_input_k_idxs_full(self_k_idxs_full, ubatch);
+    }
+
+    if (self_attn_mask_full.raw && self_attn_mask_full.raw->buffer) {
+        mctx->set_input_attn_mask_full(self_attn_mask_full, ubatch, cparams.causal_attn);
+    }
+
+    if (self_attn_mask_idx.raw && self_attn_mask_idx.raw->buffer) {
+        mctx->set_input_attn_mask_idx(self_attn_mask_idx.raw, ubatch, idx_n_window);
+    }
 }
 
 void llm_graph_input_dsv4::set_input(const llama_ubatch * ubatch) {
@@ -1148,6 +1160,15 @@ bool llm_graph_input_dsv4::can_reuse(const llm_graph_params & params) {
     }
     if (inp_raw->self_attn_mask.raw && inp_raw->self_attn_mask.raw->buffer) {
         res &= dsv4_can_reuse_raw_kq_mask(inp_raw->self_attn_mask.raw, raw_ctx, params.ubatch, n_stream);
+    }
+    if (inp_raw->self_k_idxs_full && inp_raw->self_k_idxs_full->buffer) {
+        res &= inp_raw->self_k_idxs_full->ne[0] == params.ubatch.n_tokens;
+    }
+    if (inp_raw->self_attn_mask_full.raw && inp_raw->self_attn_mask_full.raw->buffer) {
+        const ggml_tensor * kq_mask = inp_raw->self_attn_mask_full.raw;
+        res &= kq_mask->ne[0] == raw_ctx->get_n_kv_full();
+        res &= kq_mask->ne[1] == params.ubatch.n_tokens/n_stream;
+        res &= kq_mask->ne[3] == n_stream;
     }
 
     res &= dsv4_can_reuse_comp_input(inp_csa, plan_csa, params.ubatch.n_tokens, n_stream);
@@ -2159,7 +2180,19 @@ ggml_tensor * llm_graph_context::build_ffn(
                 cb(cur, "ffn_reglu", il);
             } break;
         case LLM_FFN_SITU:
-            GGML_ABORT("not yet supported");
+            {
+                // situ(gate, up) = beta*tanh(gate/beta)*sigmoid(gate) * lb*tanh(up/lb)
+                GGML_ASSERT(gate && type_gate == LLM_FFN_PAR);
+                const float beta = hparams.situ_beta;
+                const float lb   = hparams.situ_linear_beta;
+
+                ggml_tensor * act = ggml_scale(ctx0, ggml_tanh(ctx0, ggml_scale(ctx0, cur, 1.0f/beta)), beta);
+                cur = ggml_mul(ctx0, act, ggml_sigmoid(ctx0, cur));
+                if (lb > 0.0f) {
+                    tmp = ggml_scale(ctx0, ggml_tanh(ctx0, ggml_scale(ctx0, tmp, 1.0f/lb)), lb);
+                }
+                cb(cur, "ffn_situ", il);
+            } break;
         default:
             GGML_ABORT("fatal error");
     }
@@ -2308,6 +2341,12 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         case LLAMA_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS:
             {
                 probs = ggml_sqrt(ctx0, ggml_softplus(ctx0, logits)); // [n_expert, n_tokens]
+            } break;
+        case LLAMA_EXPERT_GATING_FUNC_TYPE_NONE:
+            {
+                // the caller passes finished routing probabilities
+                GGML_ASSERT(probs_in != nullptr);
+                probs = logits; // [n_expert, n_tokens]
             } break;
         default:
             GGML_ABORT("fatal error");
@@ -3963,6 +4002,34 @@ llm_graph_input_dsv4 * llm_graph_context::build_inp_dsv4() const {
 
     inp_raw->self_k_idxs = raw_ctx->build_input_k_idxs(ctx0, ubatch);
     inp_raw->self_attn_mask.raw = dsv4_build_raw_kq_mask(ctx0, raw_ctx, ubatch, cparams, n_stream);
+
+    // DSV4 hybrids keep their non-SWA layers (ERNIE 5.5 MLA) in the base half of the raw cache
+    bool has_full = false;
+    for (uint32_t il = 0; il < hparams.n_layer(); ++il) {
+        has_full = has_full || !hparams.is_swa(il);
+    }
+    if (has_full) {
+        const auto type = cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
+
+        inp_raw->self_k_idxs_full = raw_ctx->build_input_k_idxs_full(ctx0, ubatch);
+
+        GGML_ASSERT(ubatch.n_tokens % n_stream == 0);
+        ggml_tensor * kq_mask = ggml_new_tensor_4d(ctx0, type, raw_ctx->get_n_kv_full(), ubatch.n_tokens/n_stream, 1, n_stream);
+        ggml_set_input(kq_mask);
+        ggml_set_name(kq_mask, "attn_inp_kq_mask_full");
+        inp_raw->self_attn_mask_full.raw  = kq_mask;
+        inp_raw->self_attn_mask_full.n_kv = raw_ctx->get_n_kv_full();
+
+        // ERNIE 5.5 DSA: up to top_k + window cells the indexer would select them all, so attention stays dense
+        if (hparams.indexer_top_k > 0 && raw_ctx->get_n_kv_full() > hparams.indexer_top_k + hparams.n_swa) {
+            ggml_tensor * idx_mask = ggml_new_tensor_4d(ctx0, GGML_TYPE_F16, raw_ctx->get_n_kv_full(), ubatch.n_tokens/n_stream, 1, n_stream);
+            ggml_set_input(idx_mask);
+            ggml_set_name(idx_mask, "attn_inp_kq_mask_idx");
+            inp_raw->self_attn_mask_idx.raw  = idx_mask;
+            inp_raw->self_attn_mask_idx.n_kv = raw_ctx->get_n_kv_full();
+            inp_raw->idx_n_window = hparams.n_swa;
+        }
+    }
 
     inp_raw->self_k_rot = raw_ctx->get_k_rot();
     auto inp = std::make_unique<llm_graph_input_dsv4>(cparams, std::move(inp_raw), mctx_cur);

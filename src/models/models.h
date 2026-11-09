@@ -1278,6 +1278,12 @@ struct llama_model_deepseek4 : public llama_model_base {
         // mean over the hyper-connection streams: [n_embd, hc, n_tokens] -> [n_embd, n_tokens]
         ggml_tensor * build_hc_mean(ggml_tensor * x) const;
 
+        // mix the heads of x [n_embd_head, n_head, n_tokens] with mix [n_head, n_head] (ERNIE 5.5 VHA)
+        ggml_tensor * build_head_mix(
+                ggml_tensor * x,
+                ggml_tensor * mix,
+                int il) const;
+
         // all outputs of the hc mix builders:
         //   build_hc_pre   - cur is the collapsed input, post / comb feed build_hc_post
         //   build_hc_mixes - pre is the pre weights, post / comb feed build_hc_post
@@ -1303,6 +1309,13 @@ struct llama_model_deepseek4 : public llama_model_base {
         hc_mixes build_hc_mixes(
                 ggml_tensor * x,
                 ggml_tensor * hc_fn,
+                ggml_tensor * hc_scale,
+                ggml_tensor * hc_base,
+                int il) const;
+
+        // pre / post / comb from the raw mixes [(2 + hc)*hc, n_tokens]
+        hc_mixes build_hc_split_mixes(
+                ggml_tensor * mixes,
                 ggml_tensor * hc_scale,
                 ggml_tensor * hc_base,
                 int il) const;
@@ -1500,6 +1513,74 @@ struct llama_model_deepseek41 : public llama_model_deepseek4 {
         std::map<std::pair<int32_t, int32_t>, ggml_tensor *> gather_k_of;
         std::map<int32_t, ggml_tensor *> gather_sel_of;
         std::map<int32_t, ggml_tensor *> gather_mask_of;
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
+// ERNIE 5.5: DeepSeek-V4 HCA layers (plus an output gate and a VHA head mix) with MLA layers in between,
+// latent MoE with split-feature routing, situ activations and a MultiMax head
+struct llama_model_ernie5_5 : public llama_model_deepseek4 {
+    llama_model_ernie5_5(const struct llama_model_params & params) : llama_model_deepseek4(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    struct graph : public llama_model_deepseek4::graph {
+        graph(const llm_graph_params & params, no_build) : llama_model_deepseek4::graph(params, no_build{}) {}
+        graph(const llm_graph_params & params);
+
+        // hc mixes with the ERNIE pre-norm factor 1 / (sqrt(mean(x^2)) + eps)
+        hc_pre build_hc_pre_ernie(
+                ggml_tensor * x,
+                ggml_tensor * hc_fn,
+                ggml_tensor * hc_scale,
+                ggml_tensor * hc_base,
+                int il) const;
+
+        // an MLA layer's query, its cache row [kv latent | rope | indexer key], q_c (shared with the indexer) and
+        // the output gate
+        struct mla_qk {
+            ggml_tensor * q;
+            ggml_tensor * k;
+            ggml_tensor * q_c;
+            ggml_tensor * gate;
+        };
+        mla_qk build_mla_qk(ggml_tensor * cur, ggml_tensor * inp_pos, int il) const;
+
+        // the cells the lightning indexer picks: top_k of the older ones plus the window (idx_mask, see
+        // llama_kv_cache_dsv4_raw_context::set_input_attn_mask_idx)
+        ggml_tensor * build_mla_top_k(
+                ggml_tensor * cur,
+                ggml_tensor * q_c,
+                ggml_tensor * k,
+                ggml_tensor * idx_mask,
+                ggml_tensor * inp_pos,
+                int il) const;
+
+        // attention over the cache rows k, then VHA, gate and the output projection; n_kv_max > 0 bounds the cells
+        // kq_mask leaves visible per query (the indexer's selection), see ggml_flash_attn_ext_set_n_kv_max
+        ggml_tensor * build_mla_out(
+                ggml_tensor * q,
+                ggml_tensor * k,
+                ggml_tensor * kq_mask,
+                ggml_tensor * gate,
+                int64_t n_kv_max,
+                int il) const;
+
+        ggml_tensor * build_mla_attention(
+                llm_graph_input_dsv4 * inp_dsv4,
+                ggml_tensor * cur,
+                ggml_tensor * inp_pos,
+                int il) const;
+
+        ggml_tensor * build_latent_moe(ggml_tensor * cur, int il) const;
+
+        ggml_tensor * build_multimax(ggml_tensor * logits) const;
+    };
+
+    // the MTP draft block: an MLA layer on [enorm(e) | hnorm(h)], with its own mHC head; dense attention
+    struct graph_mtp : public graph {
+        graph_mtp(const llm_graph_params & params);
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
