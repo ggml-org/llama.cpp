@@ -23,7 +23,6 @@
 		toolMessages?: DatabaseMessage[];
 		onContinue?: () => void;
 		onRegenerate: (modelOverride?: string) => void;
-		textareaElement?: HTMLTextAreaElement;
 	}
 
 	let {
@@ -32,7 +31,6 @@
 		message,
 		onContinue,
 		onRegenerate,
-		textareaElement = $bindable(),
 		toolMessages = []
 	}: Props = $props();
 
