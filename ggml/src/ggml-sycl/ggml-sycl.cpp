@@ -6077,7 +6077,7 @@ static void ggml_sycl_set_main_device(const int main_device) try {
         return;
     }
     check_allow_gpu_index(main_device);
-    dpct::select_device(main_device);
+    SYCL_CHECK(ggml_sycl_set_device(main_device));
 
     if (g_ggml_sycl_debug) {
         dpct::device_info prop;
@@ -7572,7 +7572,6 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
         }
         case GGML_OP_ROPE:
         case GGML_OP_ROPE_BACK:
-            return ggml_rope_get_truncate(op);
         case GGML_OP_IM2COL:
         case GGML_OP_IM2COL_3D:
         case GGML_OP_UPSCALE:
