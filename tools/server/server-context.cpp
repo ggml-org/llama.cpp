@@ -6485,7 +6485,7 @@ void server_routes::init_routes() {
                 body[k] = std::stoll(body[k].get<std::string>());
             }
         }
-        for (const char * k : { "top_p", "repeat_penalty" }) {
+        for (const char * k : { "top_p", "temperature", "repeat_penalty" }) {
             if (body.contains(k) && body[k].is_string()) {
                 body[k] = std::stof(body[k].get<std::string>());
             }
@@ -6532,6 +6532,9 @@ void server_routes::init_routes() {
         }
         if (task.tts_inp.data.top_p > 0) {
             task.params.sampling.top_p = task.tts_inp.data.top_p;
+        }
+        if (task.tts_inp.data.temp >= 0) {
+            task.params.sampling.temp = task.tts_inp.data.temp;
         }
 
         // speaker reference: either an uploaded form file ("speaker_ref") or a base64 JSON field ("speaker_ref_b64")
