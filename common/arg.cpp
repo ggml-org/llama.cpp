@@ -2501,15 +2501,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.ppl_output_type = value;
         }
     ).set_examples({LLAMA_EXAMPLE_PERPLEXITY}));
-    add_opt(common_arg(
-        {"-dt", "--defrag-thold"}, "N",
-        string_format("KV cache defragmentation threshold (DEPRECATED)"),
-        [](common_params & params, const std::string & value) {
-            GGML_UNUSED(params);
-            GGML_UNUSED(value);
-            LOG_WRN("DEPRECATED: --defrag-thold is deprecated and no longer necessary to specify\n");
-        }
-    ).set_env("LLAMA_ARG_DEFRAG_THOLD"));
     if (ex == LLAMA_EXAMPLE_SERVER) {
         // this is to make sure this option appears in the server-specific section of the help message
         add_opt(common_arg(

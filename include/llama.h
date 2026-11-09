@@ -389,7 +389,6 @@ extern "C" {
         float    yarn_beta_fast;   // YaRN low correction dim
         float    yarn_beta_slow;   // YaRN high correction dim
         uint32_t yarn_orig_ctx;    // YaRN original context size
-        float    defrag_thold;     // [DEPRECATED] defragment the KV cache if holes/size > thold, <= 0 disabled (default)
 
         ggml_backend_sched_eval_callback cb_eval;
         void * cb_eval_user_data;
@@ -516,11 +515,6 @@ extern "C" {
                                    void * set_tensor_data_ud, // userdata for function
               struct llama_model_params   params);
 
-    DEPRECATED(LLAMA_API struct llama_model * llama_load_model_from_file(
-                             const char * path_model,
-              struct llama_model_params   params),
-            "use llama_model_load_from_file instead");
-
     // Load a model from a file
     // If the file is split into multiple parts, the file name must follow this pattern: <name>-%05d-of-%05d.gguf
     // If the split file name does not follow this pattern, use llama_model_load_from_splits
@@ -546,19 +540,11 @@ extern "C" {
             const struct llama_model * model,
                         const char * path_model);
 
-    DEPRECATED(LLAMA_API void llama_free_model(struct llama_model * model),
-            "use llama_model_free instead");
-
     LLAMA_API void llama_model_free(struct llama_model * model);
 
     LLAMA_API struct llama_context * llama_init_from_model(
                      struct llama_model * model,
             struct llama_context_params   params);
-
-    DEPRECATED(LLAMA_API struct llama_context * llama_new_context_with_model(
-                     struct llama_model * model,
-            struct llama_context_params   params),
-            "use llama_init_from_model instead");
 
     // Frees all allocated memory
     LLAMA_API void llama_free(struct llama_context * ctx);
@@ -583,13 +569,6 @@ extern "C" {
     LLAMA_API uint32_t llama_n_ubatch   (const struct llama_context * ctx);
     LLAMA_API uint32_t llama_n_seq_max  (const struct llama_context * ctx);
     LLAMA_API uint32_t llama_n_rs_seq   (const struct llama_context * ctx);
-
-    DEPRECATED(LLAMA_API int32_t llama_n_ctx_train(const struct llama_model * model), "use llama_model_n_ctx_train instead");
-    DEPRECATED(LLAMA_API int32_t llama_n_embd     (const struct llama_model * model), "use llama_model_n_embd instead");
-    DEPRECATED(LLAMA_API int32_t llama_n_layer    (const struct llama_model * model), "use llama_model_n_layer instead");
-    DEPRECATED(LLAMA_API int32_t llama_n_head     (const struct llama_model * model), "use llama_model_n_head instead");
-
-    DEPRECATED(LLAMA_API int32_t llama_n_vocab    (const struct llama_vocab * vocab), "use llama_vocab_n_tokens instead");
 
     LLAMA_API const struct llama_model * llama_get_model   (const struct llama_context * ctx);
     LLAMA_API           llama_memory_t   llama_get_memory  (const struct llama_context * ctx);
@@ -830,8 +809,6 @@ extern "C" {
     // (logits, embedding and memory)
     // Only use when saving the state, not when restoring it, otherwise the size may be too small.
     LLAMA_API size_t llama_state_get_size(struct llama_context * ctx);
-    LLAMA_API DEPRECATED(size_t llama_get_state_size(struct llama_context * ctx),
-        "use llama_state_get_size instead");
 
     // Copies the state to the specified destination address.
     // Destination needs to have allocated enough memory.
@@ -840,10 +817,6 @@ extern "C" {
             struct llama_context * ctx,
                          uint8_t * dst,
                           size_t   size);
-    LLAMA_API DEPRECATED(size_t llama_copy_state_data(
-            struct llama_context * ctx,
-                         uint8_t * dst),
-        "use llama_state_get_data instead");
 
     // Set the state reading from the specified address
     // Returns the number of bytes read
@@ -851,10 +824,6 @@ extern "C" {
             struct llama_context * ctx,
                    const uint8_t * src,
                           size_t   size);
-    LLAMA_API DEPRECATED(size_t llama_set_state_data(
-            struct llama_context * ctx,
-                   const uint8_t * src),
-        "use llama_state_set_data instead");
 
     // Save/load session file
     LLAMA_API bool llama_state_load_file(
@@ -863,25 +832,12 @@ extern "C" {
                      llama_token * tokens_out,
                           size_t   n_token_capacity,
                           size_t * n_token_count_out);
-    LLAMA_API DEPRECATED(bool llama_load_session_file(
-            struct llama_context * ctx,
-                      const char * path_session,
-                     llama_token * tokens_out,
-                          size_t   n_token_capacity,
-                          size_t * n_token_count_out),
-        "use llama_state_load_file instead");
 
     LLAMA_API bool llama_state_save_file(
             struct llama_context * ctx,
                       const char * path_session,
                const llama_token * tokens,
                           size_t   n_token_count);
-    LLAMA_API DEPRECATED(bool llama_save_session_file(
-            struct llama_context * ctx,
-                      const char * path_session,
-               const llama_token * tokens,
-                          size_t   n_token_count),
-        "use llama_state_save_file instead");
 
     // Get the exact size needed to copy the state of a single sequence
     LLAMA_API size_t llama_state_seq_get_size(
@@ -1230,31 +1186,6 @@ extern "C" {
     LLAMA_API llama_token llama_vocab_fim_rep(const struct llama_vocab * vocab);
     LLAMA_API llama_token llama_vocab_fim_sep(const struct llama_vocab * vocab);
 
-    DEPRECATED(LLAMA_API const char * llama_token_get_text(const struct llama_vocab * vocab, llama_token token), "use llama_vocab_get_text instead");
-    DEPRECATED(LLAMA_API float llama_token_get_score(const struct llama_vocab * vocab, llama_token token), "use llama_vocab_get_score instead");
-    DEPRECATED(LLAMA_API enum llama_token_attr llama_token_get_attr(const struct llama_vocab * vocab, llama_token token), "use llama_vocab_get_attr instead");
-    DEPRECATED(LLAMA_API bool llama_token_is_eog(const struct llama_vocab * vocab, llama_token token), "use llama_vocab_is_eog instead");
-    DEPRECATED(LLAMA_API bool llama_token_is_control(const struct llama_vocab * vocab, llama_token token), "use llama_vocab_is_control instead");
-    DEPRECATED(LLAMA_API llama_token llama_token_bos(const struct llama_vocab * vocab), "use llama_vocab_bos instead");
-    DEPRECATED(LLAMA_API llama_token llama_token_eos(const struct llama_vocab * vocab), "use llama_vocab_eos instead");
-    DEPRECATED(LLAMA_API llama_token llama_token_eot(const struct llama_vocab * vocab), "use llama_vocab_eot instead");
-    DEPRECATED(LLAMA_API llama_token llama_token_cls(const struct llama_vocab * vocab), "use llama_vocab_cls instead");
-    DEPRECATED(LLAMA_API llama_token llama_token_sep(const struct llama_vocab * vocab), "use llama_vocab_sep instead");
-    DEPRECATED(LLAMA_API llama_token llama_token_nl (const struct llama_vocab * vocab), "use llama_vocab_nl instead");
-    DEPRECATED(LLAMA_API llama_token llama_token_pad(const struct llama_vocab * vocab), "use llama_vocab_pad instead");
-    DEPRECATED(LLAMA_API bool llama_add_bos_token(const struct llama_vocab * vocab), "use llama_vocab_get_add_bos instead");
-    DEPRECATED(LLAMA_API bool llama_add_eos_token(const struct llama_vocab * vocab), "use llama_vocab_get_add_eos instead");
-    DEPRECATED(LLAMA_API llama_token llama_token_fim_pre(const struct llama_vocab * vocab), "use llama_vocab_fim_pre instead");
-    DEPRECATED(LLAMA_API llama_token llama_token_fim_suf(const struct llama_vocab * vocab), "use llama_vocab_fim_suf instead");
-    DEPRECATED(LLAMA_API llama_token llama_token_fim_mid(const struct llama_vocab * vocab), "use llama_vocab_fim_mid instead");
-    DEPRECATED(LLAMA_API llama_token llama_token_fim_pad(const struct llama_vocab * vocab), "use llama_vocab_fim_pad instead");
-    DEPRECATED(LLAMA_API llama_token llama_token_fim_rep(const struct llama_vocab * vocab), "use llama_vocab_fim_rep instead");
-    DEPRECATED(LLAMA_API llama_token llama_token_fim_sep(const struct llama_vocab * vocab), "use llama_vocab_fim_sep instead");
-
-    // CLS is equivalent to BOS
-    DEPRECATED(LLAMA_API llama_token llama_vocab_cls(const struct llama_vocab * vocab), // classification
-            "use llama_vocab_bos instead");
-
     //
     // Tokenization
     //
@@ -1525,17 +1456,6 @@ extern "C" {
             const struct llama_vocab * vocab,
                           const char * grammar_str,
                           const char * grammar_root);
-
-    DEPRECATED(LLAMA_API struct llama_sampler * llama_sampler_init_grammar_lazy(
-            const struct llama_vocab * vocab,
-                          const char * grammar_str,
-                          const char * grammar_root,
-                         const char ** trigger_words,
-                                size_t num_trigger_words,
-                   const llama_token * trigger_tokens,
-                                size_t num_trigger_tokens),
-        "use llama_sampler_init_grammar_lazy_patterns instead");
-
 
     /// @details Lazy grammar sampler, introduced in https://github.com/ggml-org/llama.cpp/pull/9639
     /// @param trigger_patterns A list of patterns that will trigger the grammar sampler. Pattern will be matched from the start of the generation output, and grammar sampler will be fed content starting from its first match group.

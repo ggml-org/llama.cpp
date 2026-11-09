@@ -3566,10 +3566,6 @@ const llama_vocab * llama_model_get_vocab(const llama_model * model) {
     return &model->vocab;
 }
 
-void llama_free_model(llama_model * model) {
-    llama_model_free(model);
-}
-
 void llama_model_free(llama_model * model) {
     delete model;
 }
@@ -3638,26 +3634,6 @@ const char * llama_model_decision_label(const struct llama_model * model, uint32
     }
 
     return nullptr;
-}
-
-// deprecated
-int32_t llama_n_ctx_train(const llama_model * model) {
-    return llama_model_n_ctx_train(model);
-}
-
-// deprecated
-int32_t llama_n_embd(const llama_model * model) {
-    return llama_model_n_embd(model);
-}
-
-// deprecated
-int32_t llama_n_layer(const llama_model * model) {
-    return llama_model_n_layer(model);
-}
-
-// deprecated
-int32_t llama_n_head(const llama_model * model) {
-    return llama_model_n_head(model);
 }
 
 llama_rope_type llama_model_rope_type(const llama_model * model) {

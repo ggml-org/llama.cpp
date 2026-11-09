@@ -4435,7 +4435,6 @@ llama_context_params llama_context_default_params() {
         /*.yarn_beta_fast              =*/ -1.0f,
         /*.yarn_beta_slow              =*/ -1.0f,
         /*.yarn_orig_ctx               =*/ 0,
-        /*.defrag_thold                =*/ -1.0f,
         /*.cb_eval                     =*/ nullptr,
         /*.cb_eval_user_data           =*/ nullptr,
         /*.type_k                      =*/ GGML_TYPE_F16,
@@ -4602,13 +4601,6 @@ llama_context * llama_init_from_model(
     }
 
     return nullptr;
-}
-
-// deprecated
-llama_context * llama_new_context_with_model(
-                 llama_model * model,
-        llama_context_params   params) {
-    return llama_init_from_model(model, params);
 }
 
 void llama_free(llama_context * ctx) {
@@ -4979,31 +4971,6 @@ bool llama_memory_can_shift(llama_memory_t mem) {
 }
 
 // llama state API
-
-// deprecated
-size_t llama_get_state_size(llama_context * ctx) {
-    return llama_state_get_size(ctx);
-}
-
-// deprecated
-size_t llama_copy_state_data(llama_context * ctx, uint8_t * dst) {
-    return llama_state_get_data(ctx, dst, -1);
-}
-
-// deprecated
-size_t llama_set_state_data(llama_context * ctx, const uint8_t * src) {
-    return llama_state_set_data(ctx, src, -1);
-}
-
-// deprecated
-bool llama_load_session_file(llama_context * ctx, const char * path_session, llama_token * tokens_out, size_t n_token_capacity, size_t * n_token_count_out) {
-    return llama_state_load_file(ctx, path_session, tokens_out, n_token_capacity, n_token_count_out);
-}
-
-// deprecated
-bool llama_save_session_file(llama_context * ctx, const char * path_session, const llama_token * tokens, size_t n_token_count) {
-    return llama_state_save_file(ctx, path_session, tokens, n_token_count);
-}
 
 // Returns the *actual* size of the state.
 // Intended to be used when saving to state to a buffer.
