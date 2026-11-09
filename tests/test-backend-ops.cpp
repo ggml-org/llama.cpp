@@ -5655,6 +5655,23 @@ struct test_mul_mat : public test_case {
     }
 };
 
+// small activations (Nemotron decode MoE inputs), so per-block q8 activation scales amax/127 fall below the fp16 normal min
+static constexpr float SMALL_A_RANGE = 0.004f;
+
+struct test_mul_mat_small_a : public test_mul_mat {
+    using test_mul_mat::test_mul_mat;
+    std::string vars() override { return test_mul_mat::vars() + ",small_a=1"; }
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "b") == 0) {
+                init_tensor_uniform(t, -SMALL_A_RANGE, SMALL_A_RANGE);
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
 // raw weights near the NVFP4 max with a small per-tensor scale (build_lora_mm w_s), so the unscaled product exceeds the fp16 max
 static constexpr float RAW_W_RANGE = 2000.0f;
 
@@ -6008,6 +6025,19 @@ struct test_mul_mat_id : public test_case {
 
     void reinit_perf_iter(ggml_context * ctx) override {
         init_mul_mat_id_ids(ctx, n_mats, skip);
+    }
+};
+
+struct test_mul_mat_id_small_a : public test_mul_mat_id {
+    using test_mul_mat_id::test_mul_mat_id;
+    std::string vars() override { return test_mul_mat_id::vars() + ",small_a=1"; }
+    void initialize_tensors(ggml_context * ctx) override {
+        test_mul_mat_id::initialize_tensors(ctx);
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "b") == 0) {
+                init_tensor_uniform(t, -SMALL_A_RANGE, SMALL_A_RANGE);
+            }
+        }
     }
 };
 
@@ -12220,6 +12250,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // IQ2_XXS experts, 9 used per token (Nemotron), plain and fused (MUL_MAT_ID_NX)
     for (int n : {1, 2, 16, 64}) {
         test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_IQ2_XXS, GGML_TYPE_F32, 16, 9, false, 64, n, 256));
+    }
+    // small activations through every HTP q8 quant path: row mode (n = 16) and block mode (n = 1, rows < n_hvx)
+    for (ggml_type type_a : {GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GGML_TYPE_MXFP4, GGML_TYPE_NVFP4, GGML_TYPE_IQ4_NL,
+                             GGML_TYPE_Q3_K, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K, GGML_TYPE_IQ2_XXS}) {
+        for (int n : {1, 16}) {
+            test_cases.emplace_back(new test_mul_mat_small_a(type_a, GGML_TYPE_F32, 64, n, 256, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat_id_small_a(type_a, GGML_TYPE_F32, 4, 2, false, 64, n, 256));
+        }
     }
     for (int n : {1, 16}) {
         for (uint32_t o : {2, 3}) {

@@ -2,6 +2,10 @@
 // on the same router logits, layer by layer, for one prompt.
 //
 //   llama-moe-route-check -m model.gguf -f prompt.txt -ngl 99 [-ub 1]
+//
+// Full MoE layer check: MOE_LAYER=<il,...> MOE_LAYER_DUMP=<file> saves the input (attn_norm) and output (l_out) of
+// those layers; a second run on CPU (-dev none) with MOE_LAYER_REF=<file> feeds the saved input to the same layers
+// and compares their output with the saved one. MOE_LAYER_PROBE=1 also saves and compares the layer intermediates.
 
 #include "arg.h"
 #include "common.h"
@@ -15,11 +19,20 @@
 #include <cmath>
 #include <cstring>
 #include <map>
+#include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
 // same clamp as build_moe_ffn
 static const float WEIGHTS_SUM_MIN = 6.103515625e-5f;
+// same as the MUL_MAT tolerance of test-backend-ops
+static const double LAYER_NMSE_MAX = 5e-4;
+// intermediates of the LatentMoE layer; the latent up output is l_out - ffn_shexp
+static const char * const LAYER_PROBES[] = {
+    "ffn_moe_up", "ffn_moe_relu_sqr", "ffn_moe_down", "ffn_moe_weighted", "ffn_moe_out", "ffn_up", "ffn_sqr(relu)", "ffn_shexp",
+};
+static const char * const LATENT_UP_PROBE = "latent_up";
 
 struct layer_stats {
     std::string buft;
@@ -34,6 +47,12 @@ struct layer_stats {
     float   max_w_diff  = 0.0f;
 };
 
+struct probe_stats {
+    double  err = 0.0, nrm_ref = 0.0, nrm_x = 0.0;
+    int64_t n = 0, zero_ref = 0, zero_x = 0, n_ub = 0, collapsed = 0;
+    float   amax_ref = 0.0f;
+};
+
 struct route_check {
     ggml_backend_t cpu = nullptr;
     std::vector<uint8_t> buf;
@@ -41,7 +60,162 @@ struct route_check {
     std::map<int, std::vector<float>>   logits;
     std::map<int, std::vector<float>>   bias;
     std::map<int, std::vector<int32_t>> argsort;
-    std::map<int, layer_stats>          stats;};
+    std::map<int, layer_stats>          stats;
+    // full layer check, per layer and ubatch
+    std::set<int> layers;
+    bool          ref = false;
+    std::map<int, std::vector<std::vector<float>>> inp, out;
+    std::map<int, size_t> n_inp, n_out;
+    double nmse_max = 0.0;
+    // intermediates by full tensor name, per ubatch
+    bool probe = false;
+    std::map<std::string, std::vector<std::vector<float>>> probes;
+    std::map<std::string, size_t> n_probe;
+    std::map<std::string, std::vector<float>> last_cpu;
+    std::map<std::string, std::vector<std::vector<float>>> cpu_probes;
+    std::map<std::string, probe_stats> pstats;
+};
+
+
+static void probe_add(probe_stats & s, const std::vector<float> & r, const std::vector<float> & x) {
+    double nx = 0.0;
+    for (size_t i = 0; i < r.size(); i++) {
+        const double d = (double) x[i] - r[i];
+        s.err      += d * d;
+        s.nrm_ref  += (double) r[i] * r[i];
+        nx         += (double) x[i] * x[i];
+        s.zero_ref += r[i] == 0.0f;
+        s.zero_x   += x[i] == 0.0f;
+        s.amax_ref  = std::max(s.amax_ref, std::fabs(r[i]));
+    }
+    s.nrm_x += nx;
+    s.n     += (int64_t) r.size();
+    s.n_ub++;
+    s.collapsed += nx == 0.0;
+}
+
+struct layer_out_stats {
+    double nmse = 0.0, max_abs = 0.0, worst_tok_nmse = 0.0, worst_rms_ref = 0.0, worst_rms_x = 0.0;
+    int64_t worst_tok = -1;
+};
+
+// reference r, test x, ne0 values per token
+static layer_out_stats compare_out(const std::vector<float> & r, const std::vector<float> & x, int64_t ne0) {
+    layer_out_stats s;
+    double err = 0.0, nrm = 0.0;
+    for (size_t t = 0; t < r.size() / ne0; t++) {
+        double te = 0.0, tn = 0.0, tx = 0.0;
+        for (int64_t i = 0; i < ne0; i++) {
+            const double d = (double) x[t * ne0 + i] - r[t * ne0 + i];
+            te += d * d;
+            tn += (double) r[t * ne0 + i] * r[t * ne0 + i];
+            tx += (double) x[t * ne0 + i] * x[t * ne0 + i];
+            s.max_abs = std::max(s.max_abs, std::fabs(d));
+        }
+        err += te;
+        nrm += tn;
+        const double tok_nmse = te / tn;
+        if (!(tok_nmse <= s.worst_tok_nmse)) {
+            s.worst_tok_nmse = tok_nmse;
+            s.worst_tok      = (int64_t) t;
+            s.worst_rms_ref  = std::sqrt(tn / ne0);
+            s.worst_rms_x    = std::sqrt(tx / ne0);
+        }
+    }
+    s.nmse = err / nrm;
+    return s;
+}
+
+static void write_vec(FILE * f, const std::vector<float> & v) {
+    const uint64_t n = v.size();
+    fwrite(&n, sizeof(n), 1, f);
+    fwrite(v.data(), sizeof(float), n, f);
+}
+
+static bool read_vec(FILE * f, std::vector<float> & v) {
+    uint64_t n;
+    if (fread(&n, sizeof(n), 1, f) != 1) {
+        return false;
+    }
+    v.resize(n);
+    return fread(v.data(), sizeof(float), n, f) == n;
+}
+
+static bool layers_save(const route_check & rc, const char * path) {
+    FILE * f = fopen(path, "wb");
+    if (!f) {
+        return false;
+    }
+    for (const auto & [il, outs] : rc.out) {
+        for (size_t k = 0; k < outs.size(); k++) {
+            const int32_t hdr[2] = { il, (int32_t) k };
+            fwrite(hdr, sizeof(hdr), 1, f);
+            write_vec(f, rc.inp.at(il)[k]);
+            write_vec(f, outs[k]);
+        }
+    }
+    fclose(f);
+    return true;
+}
+
+static bool layers_load(route_check & rc, const char * path) {
+    FILE * f = fopen(path, "rb");
+    if (!f) {
+        return false;
+    }
+    int32_t hdr[2];
+    while (fread(hdr, sizeof(hdr), 1, f) == 1) {
+        std::vector<float> in, out;
+        if (!read_vec(f, in) || !read_vec(f, out)) {
+            fclose(f);
+            return false;
+        }
+        rc.inp[hdr[0]].push_back(std::move(in));
+        rc.out[hdr[0]].push_back(std::move(out));
+    }
+    fclose(f);
+    return true;
+}
+
+static std::string probe_path(const char * path) {
+    return std::string(path) + ".probe";
+}
+
+static bool probes_save(const std::map<std::string, std::vector<std::vector<float>>> & probes, const char * path) {
+    FILE * f = fopen(probe_path(path).c_str(), "wb");
+    if (!f) {
+        return false;
+    }
+    for (const auto & [name, ubs] : probes) {
+        for (const auto & v : ubs) {
+            const uint32_t len = (uint32_t) name.size();
+            fwrite(&len, sizeof(len), 1, f);
+            fwrite(name.data(), 1, len, f);
+            write_vec(f, v);
+        }
+    }
+    fclose(f);
+    return true;
+}
+
+static bool probes_load(route_check & rc, const char * path) {
+    FILE * f = fopen(probe_path(path).c_str(), "rb");
+    if (!f) {
+        return false;
+    }
+    uint32_t len;
+    while (fread(&len, sizeof(len), 1, f) == 1) {
+        std::string name(len, '\0');
+        std::vector<float> v;
+        if (fread(name.data(), 1, len, f) != len || !read_vec(f, v)) {
+            fclose(f);
+            return false;
+        }
+        rc.probes[name].push_back(std::move(v));
+    }
+    fclose(f);
+    return true;
+}
 
 static bool split_name(const char * name, std::string & base, int & il) {
     const char * dash = strrchr(name, '-');
@@ -203,10 +377,69 @@ static bool route_cb(ggml_tensor * t, bool ask, void * user_data) {
     const bool debug = getenv("MOE_ROUTE_DEBUG") != nullptr;
     const bool want = base == "ffn_moe_logits" || base == "ffn_moe_probs_biased" || base == "ffn_moe_argsort" ||
                       base == "ffn_moe_weights_scaled" || (debug && base == "attn_norm");
+    const bool layer_io = rc->layers.count(il) && (base == "attn_norm" || base == "l_out");
+    const bool probe    = rc->probe && rc->layers.count(il) && t->view_src == nullptr && ggml_is_contiguous(t) &&
+                       std::any_of(std::begin(LAYER_PROBES), std::end(LAYER_PROBES), [&](const char * p) { return base == p; });
     if (ask) {
-        return want;
+        return want || layer_io || probe;
+    }
+    if (probe) {
+        GGML_ASSERT(t->type == GGML_TYPE_F32);
+        if (rc->ref) {
+            const auto & dev = rc->probes.at(t->name).at(rc->n_probe[t->name]++);
+            rc->last_cpu[t->name] = get_data<float>(t);
+            probe_add(rc->pstats[t->name], rc->last_cpu[t->name], dev);
+            rc->cpu_probes[t->name].push_back(rc->last_cpu[t->name]);
+        } else {
+            rc->probes[t->name].push_back(get_data<float>(t));
+        }
+        return true;
+    }
+    if (layer_io && base == "attn_norm") {
+        if (rc->ref) {
+            const auto & v = rc->inp.at(il).at(rc->n_inp[il]++);
+            GGML_ASSERT(v.size() == (size_t) ggml_nelements(t) && ggml_is_contiguous(t));
+            ggml_backend_tensor_set(t, v.data(), 0, ggml_nbytes(t));
+        } else {
+            rc->inp[il].push_back(get_data<float>(t));
+        }
+    }
+    if (layer_io && base == "l_out") {
+        if (rc->ref) {
+            const auto & dev = rc->out.at(il).at(rc->n_out[il]++);
+            const auto   cpu = get_data<float>(t);
+            GGML_ASSERT(dev.size() == cpu.size());
+            const layer_out_stats ls = compare_out(cpu, dev, t->ne[0]);
+            if (rc->probe) {
+                rc->cpu_probes[t->name].push_back(cpu);
+            }
+            const std::string shexp = "ffn_shexp-" + std::to_string(il);
+            if (rc->probe && rc->last_cpu.count(shexp)) {
+                const auto & dev_sh = rc->probes.at(shexp).at(rc->n_probe[shexp] - 1);
+                const auto & cpu_sh = rc->last_cpu.at(shexp);
+                std::vector<float> dev_up(dev.size()), cpu_up(cpu.size());
+                for (size_t i = 0; i < cpu.size(); i++) {
+                    dev_up[i] = dev[i] - dev_sh[i];
+                    cpu_up[i] = cpu[i] - cpu_sh[i];
+                }
+                probe_add(rc->pstats[std::string(LATENT_UP_PROBE) + "-" + std::to_string(il)], cpu_up, dev_up);
+            }
+            LOG("layer-check %3d ubatch %zu tokens %5lld: nmse %.3e max_abs %.3e worst token %lld nmse %.3e rms cpu %.3e dev %.3e -> %s\n",
+                il, rc->n_out[il] - 1, (long long) t->ne[1], ls.nmse, ls.max_abs, (long long) ls.worst_tok,
+                ls.worst_tok_nmse, ls.worst_rms_ref, ls.worst_rms_x, ls.nmse <= LAYER_NMSE_MAX ? "OK" : "FAIL");
+            rc->nmse_max = std::max(rc->nmse_max, ls.nmse);
+        } else {
+            rc->out[il].push_back(get_data<float>(t));
+            if (rc->probe) {
+                rc->probes[t->name].push_back(rc->out[il].back());
+            }
+        }
+        return true;
     }
     if (base == "attn_norm") {
+        if (!debug) {
+            return true;
+        }
         const auto x = get_data<float>(t);
         LOG("attn_norm-%d: op %s nan %lld/%zu\n", il, ggml_op_desc(t),
             (long long) std::count_if(x.begin(), x.end(), [](float v) { return std::isnan(v); }), x.size());
@@ -260,6 +493,22 @@ int main(int argc, char ** argv) {
     rc.cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
     GGML_ASSERT(rc.cpu);
 
+    const char * env_layers = getenv("MOE_LAYER");
+    const char * env_dump   = getenv("MOE_LAYER_DUMP");
+    const char * env_ref    = getenv("MOE_LAYER_REF");
+    if (env_layers) {
+        std::stringstream ss(env_layers);
+        for (std::string tok; std::getline(ss, tok, ',');) {
+            rc.layers.insert(std::stoi(tok));
+        }
+        rc.ref = env_ref != nullptr;
+        rc.probe = getenv("MOE_LAYER_PROBE") != nullptr;
+        if (rc.ref && (!layers_load(rc, env_ref) || (rc.probe && !probes_load(rc, env_ref)))) {
+            LOG_ERR("%s: cannot read %s\n", __func__, env_ref);
+            return 1;
+        }
+    }
+
     int n_nan_logged = 0;
     const char * dbg = getenv("MOE_ROUTE_DEBUG");
     params.cb_eval           = dbg && atoi(dbg) == 2 ? nan_cb : route_cb;
@@ -302,7 +551,36 @@ int main(int argc, char ** argv) {
     LOG("layers = %zu, tokens with a different expert set = %lld (ties %lld) -> %s\n", rc.stats.size(),
         (long long) n_bad, (long long) n_ties, rc.stats.empty() ? "NO MOE LAYERS SEEN" : n_bad ? "MISMATCH" : "MATCH");
 
+    bool layers_ok = true;
+    if (!rc.layers.empty()) {
+        if (rc.ref) {
+            size_t n_checked = 0;
+            for (const auto & [il, n] : rc.n_out) {
+                n_checked += n;
+            }
+            layers_ok = n_checked > 0 && rc.nmse_max <= LAYER_NMSE_MAX;
+            if (rc.probe) {
+                LOG("\n%-24s %8s %10s %10s %10s %10s %10s %10s\n", "probe", "ubatches", "nmse", "rms_cpu", "rms_dev",
+                    "amax_cpu", "zero_dev", "collapsed");
+                for (const auto & [name, ps] : rc.pstats) {
+                    LOG("%-24s %8lld %10.3e %10.3e %10.3e %10.3e %9.2f%% %10lld  (zero_cpu %.2f%%)\n", name.c_str(),
+                        (long long) ps.n_ub, ps.err / ps.nrm_ref, std::sqrt(ps.nrm_ref / ps.n), std::sqrt(ps.nrm_x / ps.n),
+                        ps.amax_ref, 100.0 * ps.zero_x / ps.n, (long long) ps.collapsed, 100.0 * ps.zero_ref / ps.n);
+                }
+            }
+            if (rc.probe && env_dump) {
+                LOG("layer-dump: cpu probes -> %s %s\n", probe_path(env_dump).c_str(),
+                    probes_save(rc.cpu_probes, env_dump) ? "saved" : "FAILED");
+            }
+            LOG("layer-check: %zu layer outputs, max nmse %.3e (limit %.1e) -> %s\n", n_checked, rc.nmse_max,
+                LAYER_NMSE_MAX, layers_ok ? "MATCH" : "MISMATCH");
+        } else if (env_dump) {
+            layers_ok = layers_save(rc, env_dump) && (!rc.probe || probes_save(rc.probes, env_dump));
+            LOG("layer-dump: %zu layers -> %s %s\n", rc.out.size(), env_dump, layers_ok ? "saved" : "FAILED");
+        }
+    }
+
     ggml_backend_free(rc.cpu);
     llama_backend_free();
-    return rc.stats.empty() || n_bad ? 1 : 0;
+    return rc.stats.empty() || n_bad || !layers_ok ? 1 : 0;
 }
