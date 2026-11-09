@@ -8835,8 +8835,6 @@ struct test_tri_special : public test_case {
     }
 
     void initialize_tensors(ggml_context * ctx) override {
-        // only the discarded cells get the awkward values: the kept ones stay finite. No NaN here --
-        // the harness rejects a NaN on either side, inputs included
         static const float discarded[] = { 0.0f, -0.0f, 1.0f, -1.0f, INFINITY, -INFINITY };
 
         int64_t k = 0;
