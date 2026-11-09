@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <vector>
 
 namespace spacemit_kernels {
 
