@@ -5629,6 +5629,31 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect(message_assist_call_thoughts)
             .run();
 
+        const std::string answer_schema = R"({"type":"object","properties":{"answer":{"type":"integer"}},"required":["answer"]})";
+
+        tst.test("I'm\nthinking</think>{\"answer\":42}")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .json_schema(answer_schema)
+            .expect_reasoning("I'm\nthinking")
+            .expect_content(R"({"answer":42})")
+            .run();
+
+        // the reasoning block of the generation prompt must still be accepted when it is not extracted
+        tst.test("{\"answer\":42}")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
+            .json_schema(answer_schema)
+            .expect_content(R"({"answer":42})")
+            .run();
+
+        tst.test("I'm\nthinking</think>{\"answer\":42}")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
+            .json_schema(answer_schema)
+            .expect_content(R"({"answer":42})")
+            .run();
+
         // a deferred tool is left out of <tools>, a tool_reference renders it, and its schema types the call
         const auto deferred_tools = common_chat_tools_parse_oaicompat(json::parse(R"([
             {"type": "function", "function": {"name": "tool_search", "description": "Search for tools",
@@ -6911,6 +6936,10 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
         // Basic content only - final channel
         tst.test("<|channel|>final<|message|>Hello, world!\nWhat's up?").expect(message_assist).run();
+
+        // Final channel with a constraint type, with and without <|constrain|> (#31520)
+        tst.test("<|channel|>final code<|message|>Hello, world!\nWhat's up?").expect(message_assist).run();
+        tst.test("<|channel|>final <|constrain|>json<|message|>Hello, world!\nWhat's up?").expect(message_assist).run();
 
         // Basic content only - commentary channel
         tst.test("<|channel|>commentary<|message|>Hello, world!\nWhat's up?").expect(message_assist).run();

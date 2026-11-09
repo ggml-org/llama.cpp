@@ -11,14 +11,14 @@
 //
 // each aligner row ends with a NEWLINE, an odd row count is padded with a full row of PADs
 // pairs of adjacent rows are interleaved column-wise ("N-layout")
-// the mapping is precomputed on CPU as the "layout_idx" input (see set_input in clip.cpp)
+// the mapping is precomputed on CPU as the "layout_idx" input (see set_input in mtmd-subcontext.cpp)
 //
 // ref: inference/vision.py and inference/image_processor.py in the HF repo
 //
 // DeepSeek-V4.1-Flash (deepseek41v) shares the encoder and aligner; its block is plain reading order
 //   [START] ([IMAGE]*n_llm_w [NEWLINE])*n_llm_h [END], no lead pads, no pad row, no IMAGE_PAD tensor
 
-ggml_cgraph * clip_graph_deepseek4v::build() {
+ggml_cgraph * mtmd_graph_deepseek4v::build() {
     const int n_merge = hparams.n_merge;
 
     // 2D input positions
@@ -27,7 +27,7 @@ ggml_cgraph * clip_graph_deepseek4v::build() {
     ggml_set_input(positions);
 
     int sections[4] = {d_head/4, d_head/4, 0, 0};
-    auto add_pos = [&](ggml_tensor * cur, const clip_layer &) {
+    auto add_pos = [&](ggml_tensor * cur, const mtmd_layer &) {
         return ggml_rope_multi(ctx0, cur, positions, nullptr,
             d_head/2, sections, GGML_ROPE_TYPE_VISION,
             0, hparams.rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
@@ -92,8 +92,8 @@ ggml_cgraph * clip_graph_deepseek4v::build() {
             }
         }
 
-        const int n_llm_w = CLIP_ALIGN(n_patches_x, n_merge) / n_merge;
-        const int n_llm_h = CLIP_ALIGN(n_patches_y, n_merge) / n_merge;
+        const int n_llm_w = MTMD_ALIGN(n_patches_x, n_merge) / n_merge;
+        const int n_llm_h = MTMD_ALIGN(n_patches_y, n_merge) / n_merge;
         const int n_out   = is_v41 ? dsv41_n_block_tokens(n_llm_w, n_llm_h)
                                    : dsv4_get_block_layout(n_llm_w, n_llm_h, img.lead_pad).n_out;
         GGML_ASSERT(n_grid == n_llm_w * n_llm_h);

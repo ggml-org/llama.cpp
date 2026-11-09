@@ -1,6 +1,6 @@
 #include "models.h"
 
-ggml_cgraph * clip_graph_step3vl::build() {
+ggml_cgraph * mtmd_graph_step3vl::build() {
     GGML_ASSERT(model.class_embedding == nullptr);
     GGML_ASSERT(model.patch_embeddings_0 != nullptr);
     GGML_ASSERT(model.position_embeddings != nullptr);
@@ -18,7 +18,7 @@ ggml_cgraph * clip_graph_step3vl::build() {
     ggml_tensor * inp = build_inp();
     ggml_tensor * learned_pos_embd = resize_position_embeddings();
 
-    auto add_pos = [&](ggml_tensor * cur, const clip_layer &) {
+    auto add_pos = [&](ggml_tensor * cur, const mtmd_layer &) {
         return build_rope_2d(ctx0, cur, pos_w, pos_h, hparams.rope_theta, false);
     };
 

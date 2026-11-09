@@ -352,14 +352,31 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     // do not quantize LFM3-VL's depthwise conv kernels, CONV_2D_DW takes F32 kernels
     quantize &= name.find("conv2d_spatial.weight") == std::string::npos;
 
-    // do not quantize LFM3-Audio's encoder convs and codec, the codec output does not survive quantization
+    // do not quantize LFM3-Audio's encoder convs, depthwise convs and the codec FSQ
     quantize &= name.rfind("a.conv1d.", 0) != 0;
     quantize &= name.find("conv_dw") == std::string::npos;
-    quantize &= name.rfind("a.gen.wav.", 0) != 0;
+    quantize &= name.rfind("a.gen.wav.quant.", 0) != 0;
 
     // do not quantize MiniMax's indexer projection weights, they are tiny
     quantize &= name.find("indexer.k_proj.weight") == std::string::npos;
     quantize &= name.find("indexer.q_proj.weight") == std::string::npos;
+
+    // metis16: small control tensors that steer every layer; the stream and hc_ tables (ne[0] = 4) would fall back to F16
+    if (arch == LLM_ARCH_METIS16) {
+        quantize &= name.rfind("depth_mem_", 0) == std::string::npos;
+        quantize &= name.rfind("cont_", 0)      == std::string::npos;
+        quantize &= name.find("stream_embd")    == std::string::npos;
+        quantize &= name.find("attn_pass_lora") == std::string::npos;
+        quantize &= name.find("ffn_exp_embd")   == std::string::npos;
+        quantize &= name.find("hc_")            == std::string::npos;
+    }
+
+    // kimi-k31: the indexer picks the top-k cells, so keep its projections accurate
+    if (arch == LLM_ARCH_KIMI_K31) {
+        quantize &= name.find("indexer.attn_q_b") == std::string::npos;
+        quantize &= name.find("indexer.attn_k")   == std::string::npos;
+        quantize &= name.find("indexer.proj")     == std::string::npos;
+    }
 
     // glm5-next
     if (arch == LLM_ARCH_GLM5_NEXT) {
@@ -377,6 +394,12 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
         quantize &= name.find("attn_kv_a_mqa.weight")    == std::string::npos;
         quantize &= name.find("attn_k_b.weight")         == std::string::npos;
         quantize &= name.find("attn_v_b.weight")         == std::string::npos;
+    }
+
+    // xing4_0: do not quantize the MHC hyper-connection gate matrices
+    // (the 1D hc_*_base / hc_*_scale tensors are already excluded by the n_dims < 2 rule)
+    if (arch == LLM_ARCH_XING4_0) {
+        quantize &= name.find("hc_") == std::string::npos;
     }
 
     // the decision head of vllm-decision2 is small and computed in F32
