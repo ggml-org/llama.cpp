@@ -12,6 +12,7 @@
 // Trie for matching multiple literals.
 // This is used in common_peg_until_parser and to build a GBNF exclusion grammar
 struct common_trie {
+    // A symbol is either a UTF-8 codepoint or a token
     struct symbol {
         enum kind_type : uint8_t { CODEPOINT, TOKEN };
 

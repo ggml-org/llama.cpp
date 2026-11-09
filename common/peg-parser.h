@@ -522,12 +522,8 @@ class common_peg_parser_builder {
     //   S -> .*
     common_peg_parser rest() { return until_one_of({}); }
 
-    // Matches content, then the first delimiter that starts where content stopped, then the rest of that
-    // branch (delimiter consumed). content must stop at a delimiter, e.g. until(D), or the parse fails.
-    // The grammar is built from the Aho-Corasick automaton of the delimiters: anything may go through until
-    // the first delimiter completes, and from there only the rest of its branch may follow, or nothing when
-    // the branch has no rest. With optional the parse and the grammar may also end before any delimiter completes.
-    // No two branches may share a delimiter.
+    // Matches content, then the first delimiter, then the rest of that delimiter's branch. No two branches may
+    // share a delimiter, and with optional the input may end before any delimiter.
     //   S -> C (D1 R1 | D2 R2 | ...)
     common_peg_parser through(const common_peg_parser & content, const std::vector<common_peg_until_branch> & branches, bool optional = false);
     common_peg_parser through(const common_peg_parser & content, std::initializer_list<common_peg_until_branch> branches, bool optional = false) { return through(content, std::vector<common_peg_until_branch>(branches), optional); }

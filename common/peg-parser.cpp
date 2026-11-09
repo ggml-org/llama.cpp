@@ -1774,9 +1774,7 @@ static std::string gbnf_ac_grammar(
                                     const std::function<std::string(size_t)> &)> & build_rule) {
     common_aho_corasick ac(trie);
 
-    // Without codepoints every step is a whole token, so anything else can go back to the start as
-    // one token. Otherwise text has to be matched a codepoint at a time, which also lets the text
-    // of a token in the alphabet through.
+    // With only tokens in the alphabet, the grammar can step a whole token at a time
     bool token_only = true;
     for (const auto & sym : ac.alphabet) {
         token_only = token_only && sym.is_token();
@@ -1873,10 +1871,12 @@ static std::string gbnf_excluding_grammar(const common_grammar_builder & builder
         });
 }
 
-// GBNF grammar matching everything up to and including the first occurrence of any pattern in the
-// trie, followed by the rest of the pattern. rests holds the rest rule name per pattern value, empty
-// when nothing follows. With optional every state may end, so the grammar also accepts text without
-// any match. Emits the Aho-Corasick automaton DFA and returns the start state rule name.
+// GBNF grammar matching up to the first pattern in the trie, then the rest rule of that pattern's value.
+// For the pattern "ab" with rest "x":
+//
+//   prefix    ::= [a] prefix-01 | [^a] prefix
+//   prefix-01 ::= [b] rest | [a] prefix-01 | [^ab] prefix
+//   rest      ::= "x"
 static std::string gbnf_including_grammar(const common_grammar_builder &   builder,
                                           const std::string &              prefix,
                                           const common_trie &              trie,
