@@ -103,6 +103,14 @@ static void fill_rope_factors(std::vector<float> & dst, const char * name, const
     }
 }
 
+// FFN act scales divide the activation, a value close to 0 overflows the F16 staging of the Metal mul-mat kernel
+static void fill_ffn_act(std::vector<float> & dst, const char * name, const tensor_data_params & params) {
+    fill_normal(dst, name, params);
+    for (float & v : dst) {
+        v = copysignf(1.0f + fabsf(v), v);
+    }
+}
+
 // a norm preserving residual gate holds alpha^2 + beta^2 == 1, and the conversion resolves both from one raw weight
 // the alpha and the beta of a block share that weight, so the key drops the suffix and keeps the block
 static void fill_resid_gate(std::vector<float> & dst, const char * name, const tensor_data_params & params) {
@@ -127,6 +135,7 @@ static const struct { const char * match; tensor_filler fill; } TENSOR_FILLERS[]
     { "ssm_a",        fill_ssm_a        },
     { "_resid_",      fill_resid_gate   },
     { "exp_probs_b",  fill_exp_probs_b  },
+    { "ffn.act",      fill_ffn_act      },
     { "rope_freqs",   fill_rope_factors },
     { "rope_factors", fill_rope_factors },
 };
