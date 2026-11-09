@@ -2,10 +2,10 @@
 #include <cstring>
 #include <cmath>
 
-// note: this is similar to clip_graph::resize_position_embeddings, major difference is having
+// note: this is similar to mtmd_graph::resize_position_embeddings, major difference is having
 // the w/h in ne[1] and ne[2] instead of assuming with sqrt. Could try storing the tensor in 2D instead
 // with a w*h? Also the permute is a bit different at (2, 1, 0, 3) instead of (2, 0, 1, 3).
-ggml_tensor * clip_graph_kimik25::resize_position_embeddings_3d(uint32_t interpolation_mode) {
+ggml_tensor * mtmd_graph_kimik25::resize_position_embeddings_3d(uint32_t interpolation_mode) {
     ggml_tensor * pos_embd = model.position_embeddings;
     const int height       = img.ny() / patch_size;
     const int width        = img.nx() / patch_size;
@@ -31,7 +31,7 @@ ggml_tensor * clip_graph_kimik25::resize_position_embeddings_3d(uint32_t interpo
     return pos_embd;
 }
 
-ggml_cgraph * clip_graph_kimik25::build() {
+ggml_cgraph * mtmd_graph_kimik25::build() {
     ggml_tensor * pos_h = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_patches);
     ggml_set_name(pos_h, "pos_h");
     ggml_set_input(pos_h);
@@ -44,7 +44,7 @@ ggml_cgraph * clip_graph_kimik25::build() {
 
     // Kimi-K2.5 uses interleaved 2D RoPE pattern natively, but
     // Q / K are permuted during conversion to use split format.
-    auto add_pos = [&](ggml_tensor * cur, const clip_layer &) {
+    auto add_pos = [&](ggml_tensor * cur, const mtmd_layer &) {
         cur = build_rope_2d(ctx0, cur, pos_w, pos_h, hparams.rope_theta, false);
         return cur;
     };

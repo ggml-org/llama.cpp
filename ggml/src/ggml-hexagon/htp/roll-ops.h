@@ -12,7 +12,7 @@ enum htp_roll_kernel_type {
 
 struct htp_roll_kernel_params {
     uint8_t  kernel_type;
-    uint32_t n_threads;
+    uint32_t n_hvx;
     uint32_t total_rows;
     uint32_t i0_src0;
     uint32_t n0;

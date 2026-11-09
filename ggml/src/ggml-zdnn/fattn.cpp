@@ -246,10 +246,4 @@ void ggml_zdnn_flash_attn_ext(ggml_backend_zdnn_context * ctx, ggml_tensor * dst
             memcpy((char *) dst->data + h*dst->nb[1] + iq*dst->nb[2], o_host + (h*n_q + iq)*d_v, d_v*sizeof(float));
         }
     }
-
-    // the result is written to dst->data directly, so the dst ztensor is stale
-    ggml_backend_zdnn_buffer * dst_extra = (ggml_backend_zdnn_buffer *) dst->extra;
-    if (dst_extra != nullptr) {
-        dst_extra->ztensor.is_transformed = false;
-    }
 }

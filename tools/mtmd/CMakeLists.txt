@@ -22,11 +22,13 @@ set(MTMD_CORE_SOURCES
     mtmd-helper-gen.cpp
     mtmd-helper-common.h
     mtmd-helper.h
-    clip.cpp
-    clip.h
-    clip-impl.h
-    clip-model.h
-    clip-graph.h
+    mtmd-model.cpp
+    mtmd-subcontext.cpp
+    mtmd-graph.cpp
+    mtmd-subcontext.h
+    mtmd-impl.h
+    mtmd-model.h
+    mtmd-graph.h
 )
 
 add_library(mtmd

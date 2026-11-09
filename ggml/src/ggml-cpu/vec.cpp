@@ -377,6 +377,85 @@ void ggml_vec_dot_f16(int n, float * GGML_RESTRICT s, size_t bs, ggml_fp16_t * G
     *s = sumf;
 }
 
+void ggml_vec_dot_f16_f32(int n, float * GGML_RESTRICT s, size_t bs, const ggml_fp16_t * GGML_RESTRICT x, size_t bx, const float * GGML_RESTRICT y, size_t by, int nrc) {
+    assert(nrc == 1);
+    GGML_UNUSED(nrc);
+    GGML_UNUSED(bx);
+    GGML_UNUSED(by);
+    GGML_UNUSED(bs);
+
+    ggml_float sumf = 0.0;
+    int i = 0;
+
+    // on AVX512 and AVX with F16C, x is widened to F32 in-register and accumulated in F32 over 4 independent sums
+#if defined(__AVX512F__)
+    __m512 acc0 = _mm512_setzero_ps();
+    __m512 acc1 = _mm512_setzero_ps();
+    __m512 acc2 = _mm512_setzero_ps();
+    __m512 acc3 = _mm512_setzero_ps();
+    for (; i + 64 <= n; i += 64) {
+        acc0 = _mm512_fmadd_ps(_mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)(x + i +  0))), _mm512_loadu_ps(y + i +  0), acc0);
+        acc1 = _mm512_fmadd_ps(_mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)(x + i + 16))), _mm512_loadu_ps(y + i + 16), acc1);
+        acc2 = _mm512_fmadd_ps(_mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)(x + i + 32))), _mm512_loadu_ps(y + i + 32), acc2);
+        acc3 = _mm512_fmadd_ps(_mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)(x + i + 48))), _mm512_loadu_ps(y + i + 48), acc3);
+    }
+    for (; i + 16 <= n; i += 16) {
+        acc0 = _mm512_fmadd_ps(_mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)(x + i))), _mm512_loadu_ps(y + i), acc0);
+    }
+    sumf = _mm512_reduce_add_ps(_mm512_add_ps(_mm512_add_ps(acc0, acc1), _mm512_add_ps(acc2, acc3)));
+#elif defined(__AVX__) && defined(__F16C__)
+    __m256 acc0 = _mm256_setzero_ps();
+    __m256 acc1 = _mm256_setzero_ps();
+    __m256 acc2 = _mm256_setzero_ps();
+    __m256 acc3 = _mm256_setzero_ps();
+    for (; i + 32 <= n; i += 32) {
+        acc0 = GGML_F32x8_FMA(acc0, _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(x + i +  0))), _mm256_loadu_ps(y + i +  0));
+        acc1 = GGML_F32x8_FMA(acc1, _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(x + i +  8))), _mm256_loadu_ps(y + i +  8));
+        acc2 = GGML_F32x8_FMA(acc2, _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(x + i + 16))), _mm256_loadu_ps(y + i + 16));
+        acc3 = GGML_F32x8_FMA(acc3, _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(x + i + 24))), _mm256_loadu_ps(y + i + 24));
+    }
+    for (; i + 8 <= n; i += 8) {
+        acc0 = GGML_F32x8_FMA(acc0, _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(x + i))), _mm256_loadu_ps(y + i));
+    }
+    const __m256 acc = _mm256_add_ps(_mm256_add_ps(acc0, acc1), _mm256_add_ps(acc2, acc3));
+    __m128 r = _mm_add_ps(_mm256_castps256_ps128(acc), _mm256_extractf128_ps(acc, 1));
+    r = _mm_add_ps(r, _mm_movehl_ps(r, r));
+    r = _mm_add_ss(r, _mm_movehdup_ps(r));
+    sumf = _mm_cvtss_f32(r);
+#elif defined(GGML_SIMD)
+    // convert chunks of x to F32 and reuse the F32 SIMD dot
+    // TODO: convert F16 to F32 in-register and fuse the dot (needs a new SIMD macro); also avoid the per-chunk call overhead for tiny k
+    float tx[64];
+    for (; i + 64 <= n; i += 64) {
+        const ggml_fp16_t * GGML_RESTRICT xr = x + i;
+        float * GGML_RESTRICT tr = tx;
+        for (int j = 0; j < 64; ++j) {
+            tr[j] = GGML_CPU_FP16_TO_FP32(xr[j]);
+        }
+        float v;
+        ggml_vec_dot_f32(64, &v, 0, tx, 0, y + i, 0, 1);
+        sumf += v;
+    }
+    if (i < n) {
+        const int nr = n - i;
+        const ggml_fp16_t * GGML_RESTRICT xr = x + i;
+        float * GGML_RESTRICT tr = tx;
+        for (int j = 0; j < nr; ++j) {
+            tr[j] = GGML_CPU_FP16_TO_FP32(xr[j]);
+        }
+        float v;
+        ggml_vec_dot_f32(nr, &v, 0, tx, 0, y + i, 0, 1);
+        sumf += v;
+        i = n;
+    }
+#endif
+    for (; i < n; ++i) {
+        sumf += (ggml_float)(GGML_CPU_FP16_TO_FP32(x[i])*y[i]);
+    }
+
+    *s = sumf;
+}
+
 void ggml_vec_silu_f32(const int n, float * y, const float * x) {
     int i = 0;
 #if defined(__AVX512F__) && defined(__AVX512DQ__)

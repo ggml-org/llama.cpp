@@ -2,9 +2,9 @@
 
 #include "ggml.h"
 #include "ggml-cpp.h"
-#include "clip.h"
-#include "clip-impl.h"
-#include "clip-model.h"
+#include "mtmd-subcontext.h"
+#include "mtmd-impl.h"
+#include "mtmd-model.h"
 
 #include <vector>
 #include <functional>
@@ -23,13 +23,13 @@ struct build_vit_opts {
     bool skip_post_ln = false;
 };
 
-struct clip_graph {
-    const clip_model & model;
-    const clip_hparams & hparams;
+struct mtmd_graph {
+    const mtmd_model & model;
+    const mtmd_hparams & hparams;
     projector_type proj_type;
 
-    const clip_image_f32 & img; // for backward compat
-    const clip_image_f32_batch * img_batch = nullptr;
+    const mtmd_image_f32 & img; // for backward compat
+    const mtmd_image_f32_batch * img_batch = nullptr;
 
     const int patch_size;
     const int n_patches_x;
@@ -43,7 +43,7 @@ struct clip_graph {
     const int n_mmproj_embd;
     const float eps;
     float kq_scale; // TODO: maybe move this to hparams
-    const clip_flash_attn_type flash_attn_type;
+    const mtmd_flash_attn_type flash_attn_type;
 
     // TODO [QWEN_VIDEO]: improve this in the future
     int n_batch = 1;
@@ -52,12 +52,12 @@ struct clip_graph {
     ggml_context * ctx0;
     ggml_cgraph * gf;
 
-    clip_graph(clip_ctx * ctx, const clip_image_f32 & img);
+    mtmd_graph(mtmd_subcontext * ctx, const mtmd_image_f32 & img);
 
     // build sub-graph, reuse buf from parent
-    clip_graph(const clip_graph & parent);
+    mtmd_graph(const mtmd_graph & parent);
 
-    virtual ~clip_graph() = default;
+    virtual ~mtmd_graph() = default;
     virtual ggml_cgraph * build() = 0;
 
     // wrapper around ggml_mul_mat, allow hooking (e.g. LoRA, clamping) depending on the model
@@ -74,7 +74,7 @@ struct clip_graph {
     //
     void cb(ggml_tensor * cur0, const char * name, int il) const;
 
-    const clip_image_f32 & get_img(size_t idx) const {
+    const mtmd_image_f32 & get_img(size_t idx) const {
         GGML_ASSERT(img_batch);
         GGML_ASSERT(idx < img_batch->entries.size());
         return img_batch->entries[idx];
@@ -92,7 +92,7 @@ struct clip_graph {
                 norm_type norm_t,
                 ffn_op_type ffn_t,
                 ggml_tensor * learned_pos_embd,
-                std::function<ggml_tensor *(ggml_tensor *, const clip_layer &)> add_pos,
+                std::function<ggml_tensor *(ggml_tensor *, const mtmd_layer &)> add_pos,
                 const build_vit_opts & opts = {});
 
     // build the input after conv2d (inp_raw --> patches)
@@ -130,7 +130,7 @@ struct clip_graph {
 
     ggml_tensor * build_moe_ffn(
             ggml_tensor * cur,
-            const clip_layer & layer,
+            const mtmd_layer & layer,
             ffn_op_type type_op,
             int il) const;
 
@@ -174,3 +174,11 @@ struct clip_graph {
     // append the separators of img.suffix_type after the image tokens
     ggml_tensor * build_suffix(ggml_tensor * cur);
 };
+
+static inline std::string get_attn_mask_name(int idx) {
+    return idx == 0 ? "attn_mask" : "attn_mask_" + std::to_string(idx);
+}
+
+// create the graph builder of the subcontext's projector, params is only needed by encode()
+std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const mtmd_image_f32_batch & imgs,
+                                                   const mtmd_subctx_encode_params * params = nullptr);
