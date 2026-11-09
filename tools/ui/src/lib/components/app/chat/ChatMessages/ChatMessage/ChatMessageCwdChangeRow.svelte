@@ -13,7 +13,7 @@
 </script>
 
 <div class="text-muted-foreground flex items-center gap-2 py-1.5 {className}">
-	<Folder class="text-muted-foreground/60 size-icon-sm shrink-0" />
+	<Folder class="text-muted-foreground/60 size-3.5 shrink-0" />
 
 	<span class="text-foreground/80 text-sm font-medium">Set working directory to&nbsp;</span>
 

@@ -448,7 +448,7 @@
 								class="flex shrink-0 items-center text-muted-foreground transition-colors hover:text-foreground"
 								href={RouterService.chat(conversation.forkedFromConversationId)}
 							>
-								<GitBranch class={isLarge ? 'size-icon-md' : 'size-icon-sm'} />
+								<GitBranch class={isLarge ? 'size-4' : 'size-3.5'} />
 							</a>
 						{/snippet}
 					</Tooltip.Trigger>
@@ -471,13 +471,13 @@
 							tabindex="0"
 						>
 							<Loader2
-								class="loading-icon {isLarge ? 'size-icon-md' : 'size-icon-sm'} animate-spin"
+								class="loading-icon {isLarge ? 'size-4' : 'size-3.5'} animate-spin"
 							/>
 
 							<Square
 								class="stop-icon hidden {isLarge
-									? 'size-icon-sm'
-									: 'size-icon-xs'} fill-current text-destructive"
+									? 'size-3.5'
+									: 'size-3'} fill-current text-destructive"
 							/>
 						</div>
 					</Tooltip.Trigger>

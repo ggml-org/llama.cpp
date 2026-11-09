@@ -19,7 +19,7 @@
 {#if info}
 	{#if info.path === null}
 		<div class="text-muted-foreground flex items-center gap-2 py-1.5 {className}">
-			<FolderX class="text-muted-foreground/60 size-icon-sm shrink-0" />
+			<FolderX class="text-muted-foreground/60 size-3.5 shrink-0" />
 
 			<span class="text-foreground/80 text-sm font-medium">Working directory cleared</span>
 		</div>

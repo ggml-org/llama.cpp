@@ -35,7 +35,7 @@
 		versionStore
 	} from '$lib/stores';
 	import { initStores } from '$lib/stores/init';
-	import { applySurfaceTheme, hapticTap, resolveTabView } from '$lib/utils';
+	import { hapticTap, resolveTabView } from '$lib/utils';
 	import { ModeWatcher } from 'mode-watcher';
 	import { untrack } from 'svelte';
 	import { onMount } from 'svelte';
@@ -53,10 +53,6 @@
 
 	let chatSidebar: { editActiveConversation?: () => void } | undefined = $state();
 
-	// the light surface theme (Paper or Matte) follows the saved setting
-	$effect(() => {
-		applySurfaceTheme(settingsStore.config[SETTINGS_KEYS.SURFACE_THEME]);
-	});
 
 	let showBuildVersion = $derived(
 		settingsStore.config[SETTINGS_KEYS.SHOW_BUILD_VERSION] as boolean
