@@ -72,7 +72,7 @@ common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & 
         auto content         = p.rule("message-content", p.until(p.token("<|end|>")));
         auto channel         = p.token("<|channel|>") + (p.literal("commentary") | p.literal("analysis"));
         auto constrain_type  = p.chars("[A-Za-z0-9_-]", 1, -1);
-        auto constraint      = p.optional(p.space() + p.optional(p.token("<|constrain|>")) + constrain_type);
+        auto constraint      = p.optional(p.chars("[ ]", 1, -1) + p.optional(p.token("<|constrain|>")) + constrain_type);
 
         // Occasionally, gpt-oss-20b will prefix channels with this commentary
         auto stray_commentary = p.optional(p.token("<|channel|>") + p.literal("commentary") + p.optional(p.literal(" to=assistant")));
@@ -115,11 +115,13 @@ common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & 
 
                 // recipient in role header
                 //   <|start|>assistant to=functions.NAME<|channel|>(commentary|analysis)[constraint]<|message|>ARGS
-                in_role |= p.rule("tool-" + std::to_string(tool_index) + "-in-role", func_name + channel + constraint + p.token("<|message|>") + args);
+                in_role |= p.rule("tool-" + std::to_string(tool_index) + "-in-role",
+                    p.atomic(func_name + channel + constraint + p.token("<|message|>")) + args);
 
                 // recipient in channel header
                 //   <|start|>assistant<|channel|>(commentary|analysis) to=functions.NAME[constraint]<|message|>ARGS
-                in_channel |= p.rule("tool-" + std::to_string(tool_index) + "-in-channel", func_name + constraint + p.token("<|message|>") + args);
+                in_channel |= p.rule("tool-" + std::to_string(tool_index) + "-in-channel",
+                    p.atomic(func_name + constraint + p.token("<|message|>")) + args);
             });
 
             // The recipient prefix is the trigger, so the grammar constrains the name that follows it

@@ -1205,10 +1205,15 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
                 while (msg_accum.tool_calls.size() <= diff.tool_call_index) {
                     msg_accum.tool_calls.push_back({ "", "", "" });
                 }
-                // Always update name and id from diff (may change during incremental parsing), but only if the delta
-                // actually contains them
+                // The name and id are set once the delta carries them; a name that was already set must not change,
+                // since clients concatenate name deltas
                 if (!diff.tool_call_delta.name.empty()) {
-                    msg_accum.tool_calls[diff.tool_call_index].name = diff.tool_call_delta.name;
+                    auto & name = msg_accum.tool_calls[diff.tool_call_index].name;
+                    if (!name.empty() && name != diff.tool_call_delta.name) {
+                        throw std::runtime_error("Tool call " + std::to_string(diff.tool_call_index) + " name changed from " +
+                                                 name + " to " + diff.tool_call_delta.name + " during incremental parsing");
+                    }
+                    name = diff.tool_call_delta.name;
                 }
                 if (!diff.tool_call_delta.id.empty()) {
                     msg_accum.tool_calls[diff.tool_call_index].id = diff.tool_call_delta.id;
@@ -7098,6 +7103,19 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .tools({ special_function_tool })
             .expect(message_assist_call)
             .expect_rules({ "tool-0-in-role", "tool-0-in-channel" })
+            .run();
+
+        // A tool whose name prefixes another's must not be reported while the header is still open
+        tst.test(" to=functions.special_function_with_opt<|channel|>analysis<|message|>{\"arg1\": 1}")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool, special_function_tool_with_optional_param })
+            .expect(simple_assist_msg("", "", "special_function_with_opt", "{\"arg1\": 1}"))
+            .run();
+
+        tst.test("<|channel|>commentary to=functions.special_function_with_opt<|message|>{\"arg1\": 1}")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool, special_function_tool_with_optional_param })
+            .expect(simple_assist_msg("", "", "special_function_with_opt", "{\"arg1\": 1}"))
             .run();
 
         // Required tool choice constrains from the first token instead of gating on a trigger
