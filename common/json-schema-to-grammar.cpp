@@ -360,11 +360,10 @@ private:
     size_t _max_total_states;
     size_t _states_used = 0;
     std::map<std::string, std::string> _rules;
-    std::map<const common_chat_schema *, std::string> _refs;
+    std::unordered_set<std::string> _refs_being_resolved;
     std::vector<std::string> _errors;
     std::vector<std::string> _warnings;
     int _depth = 0;
-    int _reserved_depth = -1;
 
     struct depth_guard {
         int & depth;
@@ -383,17 +382,12 @@ private:
 
     std::string _add_rule(const std::string & name, const std::string & rule) {
         std::string esc_name = gbnf_format_rule_name(name);
-        // a reserved (empty) name may only be filled by the $ref target's own rule, not by a nested rule that formats to the same name
-        auto is_free = [&](const std::string & key) {
-            auto it = _rules.find(key);
-            return it == _rules.end() || (it->second.empty() && _depth == _reserved_depth) || it->second == rule;
-        };
-        if (is_free(esc_name)) {
+        if (_rules.find(esc_name) == _rules.end() || _rules[esc_name] == rule) {
             _rules[esc_name] = rule;
             return esc_name;
         }
         int i = 0;
-        while (!is_free(esc_name + std::to_string(i))) {
+        while (_rules.find(esc_name + std::to_string(i)) != _rules.end() && _rules[esc_name + std::to_string(i)] != rule) {
             i++;
         }
         std::string key = esc_name + std::to_string(i);
@@ -728,28 +722,19 @@ private:
     }
 
     std::string _resolve_ref(const common_chat_schema_ref & schema) {
-        if (!schema.target) {
-            _errors.push_back("Unresolved $ref " + schema.ref);
-            return "";
+        auto it = schema.ref.find('#');
+        std::string ref_fragment = it != std::string::npos ? schema.ref.substr(it + 1) : schema.ref;
+        std::string ref_name = "ref" + gbnf_format_rule_name(ref_fragment);
+        if (_rules.find(ref_name) == _rules.end() && _refs_being_resolved.find(schema.ref) == _refs_being_resolved.end()) {
+            if (!schema.target) {
+                _errors.push_back("Unresolved $ref " + schema.ref);
+                return "";
+            }
+            _refs_being_resolved.insert(schema.ref);
+            ref_name = visit(*schema.target, ref_name);
+            _refs_being_resolved.erase(schema.ref);
         }
-        const auto * key = schema.target;
-        auto it = _refs.find(key);
-        if (it != _refs.end()) {
-            return it->second;
-        }
-        auto hash = schema.ref.find('#');
-        std::string ref_fragment = hash != std::string::npos ? schema.ref.substr(hash + 1) : schema.ref;
-        std::string ref_name = _reserve_rule_name("ref" + gbnf_format_rule_name(ref_fragment));
-        _refs[key] = ref_name;
-        const int prev_reserved_depth = _reserved_depth;
-        _reserved_depth = _depth + 1;
-        std::string rule = visit(*schema.target, ref_name);
-        _reserved_depth = prev_reserved_depth;
-        if (rule != ref_name && _rules[ref_name].empty()) {
-            // a primitive target returns its own rule and cannot refer to itself, so the reserved name is unused
-            _rules.erase(ref_name);
-        }
-        return _refs[key] = rule;
+        return ref_name;
     }
 
     std::string _build_object_rule(
@@ -934,7 +919,6 @@ public:
 
     std::string _visit_all_of(const common_chat_schema_all_of & schema, const std::string & name, const std::string & rule_name) {
         std::unordered_set<std::string> required;
-        std::unordered_set<std::string> prop_names;
         std::vector<std::pair<std::string, const common_chat_schema *>> properties;
         std::map<std::string, size_t> enum_values;
         std::function<void(const common_chat_schema &, bool, int)> add_component = [&](const common_chat_schema & comp, bool is_required, int depth) {
@@ -947,15 +931,7 @@ public:
                 }
             } else if (comp.kind() == common_chat_schema::KIND_OBJECT) {
                 for (const auto & prop : as<common_chat_schema_object>(comp).properties) {
-                    if (prop_names.insert(prop.name).second) {
-                        properties.emplace_back(prop.name, prop.schema.get());
-                    } else if (is_required && required.find(prop.name) == required.end()) {
-                        for (auto & p : properties) {
-                            if (p.first == prop.name) {
-                                p.second = prop.schema.get();
-                            }
-                        }
-                    }
+                    properties.emplace_back(prop.name, prop.schema.get());
                     if (is_required) {
                         required.insert(prop.name);
                     }
