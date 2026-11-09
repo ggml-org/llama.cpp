@@ -59,9 +59,11 @@ Where exactly the line between the two sits is still open.
 
 ## Shared
 
-A server doesn't have to sit next to the person using it, or serve only one. Your phone can use the model on your laptop; one machine can serve a family or an office; a few together can be opened to anyone. People without the hardware can use it too.
+Everything can stay on one device, fully local. It can also be shared, at home, at work or beyond. Your phone can pick up the conversations you started on your laptop; a home server can run bigger models for the whole family; an office can run one server for everyone who works there.
 
-<Figure n={5} caption="Four setups, from one person to the internet. In each, one machine runs the model and others use it from their own devices.">
+And compute can be shared with other people. Those who have the hardware can open it to those who don't, so they can use capable models too.
+
+<Figure n={5} caption="Four setups, from one person to anyone. In each, one machine runs the model and others use it from their own devices.">
 	<Sharing />
 </Figure>
 
