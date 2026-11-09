@@ -293,6 +293,66 @@ static std::string get_expected_description(const llama_grammar_rules & rules, c
     return result;
 }
 
+// Every text token shares one ID, the parsers and grammars only tell special tokens apart
+static constexpr llama_token FAKE_TEXT_TOKEN = 0;
+
+struct fake_token {
+    llama_token id;
+    std::string piece;
+};
+
+// Splits text into the special tokens it spells, longest first, and one text token per UTF-8 character.
+static std::vector<fake_token> fake_tokenize(const common_peg_tokens & specials, const std::string & text) {
+    std::vector<fake_token> result;
+    size_t pos = 0;
+    while (pos < text.size()) {
+        llama_token best     = LLAMA_TOKEN_NULL;
+        size_t      best_len = 0;
+        for (const auto & [piece, id] : specials.ids) {
+            if (piece.size() > best_len && text.compare(pos, piece.size(), piece) == 0) {
+                best     = id;
+                best_len = piece.size();
+            }
+        }
+        if (best != LLAMA_TOKEN_NULL) {
+            result.push_back({ best, text.substr(pos, best_len) });
+            pos += best_len;
+            continue;
+        }
+        size_t len = 1;
+        while (pos + len < text.size() && (static_cast<unsigned char>(text[pos + len]) & 0xC0) == 0x80) {
+            len++;
+        }
+        result.push_back({ FAKE_TEXT_TOKEN, text.substr(pos, len) });
+        pos += len;
+    }
+    return result;
+}
+
+// The tokens from byte offset pos on, a token that pos splits keeps the rest of its piece as text
+static std::vector<fake_token> fake_tokens_from(const std::vector<fake_token> & tokens, size_t pos) {
+    std::vector<fake_token> result;
+    size_t start = 0;
+    for (const auto & token : tokens) {
+        const size_t end = start + token.piece.size();
+        if (start >= pos) {
+            result.push_back(token);
+        } else if (end > pos) {
+            result.push_back({ FAKE_TEXT_TOKEN, token.piece.substr(pos - start) });
+        }
+        start = end;
+    }
+    return result;
+}
+
+static common_chat_input fake_input(const std::vector<fake_token> & tokens) {
+    common_chat_input input;
+    for (const auto & token : tokens) {
+        input.append(token.piece, token.id);
+    }
+    return input;
+}
+
 // Result of a detailed grammar match attempt
 struct grammar_match_result {
     bool        success            = false;  // Did the string fully match the grammar?
@@ -306,56 +366,49 @@ struct grammar_match_result {
     bool        incomplete = false;          // True if matched all input but grammar expects more
 };
 
-// Detailed version of match_string that returns failure information
-static grammar_match_result match_string_detailed(const std::string & input, llama_grammar * grammar) {
-    grammar_match_result result;
-    result.total_bytes = input.size();
+// Detailed version of match_string that returns failure information, accepting the input token by token
+static grammar_match_result match_string_detailed(const std::vector<fake_token> & tokens, llama_grammar * grammar) {
+    std::string input;
+    for (const auto & token : tokens) {
+        input += token.piece;
+    }
 
-    const auto cpts         = unicode_cpts_from_utf8(input);
-    result.total_codepoints = cpts.size();
+    grammar_match_result result;
+    result.total_bytes      = input.size();
+    result.total_codepoints = unicode_cpts_from_utf8(input).size();
 
     auto &       stacks_cur = llama_grammar_get_stacks(grammar);
     const auto & rules      = llama_grammar_get_rules(grammar);
 
     size_t byte_pos = 0;
+    size_t cpt_pos  = 0;
 
-    for (size_t i = 0; i < cpts.size(); i++) {
-        const auto & cpt = cpts[i];
-
+    for (const auto & token : tokens) {
         // Get expected before accepting (for error reporting)
         std::string expected_before = get_expected_description(rules, stacks_cur);
 
-        llama_grammar_accept(grammar, cpt);
-
-        // Calculate byte position for this codepoint
-        size_t cpt_bytes = 0;
-        if (cpt < 0x80) {
-            cpt_bytes = 1;
-        } else if (cpt < 0x800) {
-            cpt_bytes = 2;
-        } else if (cpt < 0x10000) {
-            cpt_bytes = 3;
-        } else {
-            cpt_bytes = 4;
-        }
-
-        if (stacks_cur.empty()) {
+        try {
+            llama_grammar_accept_token(*grammar, token.id, token.piece);
+        } catch (const std::runtime_error & /*e*/) {
             // Grammar failed to match at this point
             result.matched_bytes        = byte_pos;
-            result.matched_codepoints   = i;
+            result.matched_codepoints   = cpt_pos;
             result.matched_prefix       = input.substr(0, byte_pos);
-            result.failing_char         = format_codepoint(cpt);
+            result.failing_char         = token.id == FAKE_TEXT_TOKEN
+                                              ? format_codepoint(unicode_cpts_from_utf8(token.piece).at(0))
+                                              : token.piece + " (token " + std::to_string(token.id) + ")";
             result.expected_description = expected_before;
             result.incomplete           = false;
             return result;
         }
 
-        byte_pos += cpt_bytes;
+        byte_pos += token.piece.size();
+        cpt_pos  += unicode_cpts_from_utf8(token.piece).size();
     }
 
     // All input matched - check if grammar is complete
     result.matched_bytes      = input.size();
-    result.matched_codepoints = cpts.size();
+    result.matched_codepoints = result.total_codepoints;
     result.matched_prefix     = input;
 
     if (std::any_of(stacks_cur.begin(), stacks_cur.end(), [](const auto & stack) { return stack.empty(); })) {
@@ -1116,6 +1169,7 @@ static std::string g_template_filter;
 static bool g_force_reconstruction_test = false;
 
 static void test_peg_parser(common_chat_templates *                      tmpls,
+                            const common_peg_tokens &                    specials,
                             const std::function<void(peg_test_case &)> & init,
                             bool                                         detailed_debug) {
     // UTF-8-safe truncation helper (same as in test_parser_with_streaming)
@@ -1160,8 +1214,15 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
         tc.expect.role = "assistant";
     }
 
+    const bool tokenized = !specials.ids.empty();
+
     common_chat_session_params session_params;
     session_params.debug = detailed_debug;
+    if (tokenized) {
+        session_params.tokenize = [&](const std::string & text) {
+            return fake_input(fake_tokenize(specials, text));
+        };
+    }
     common_chat_session session(tmpls, nullptr, tc.params, session_params);
     const auto & parser = session.parser();
     common_params_sampling sampling;
@@ -1183,14 +1244,27 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
     common_chat_msg msg_prev;
     msg_accum.role = msg_prev.role = "assistant";
 
-    size_t fed = 0;
-    for (size_t i = 1; i <= tc.input.size(); ++i) {
-        auto            is_partial  = i < tc.input.size() || tc.is_partial;
-        // Use UTF-8 safe truncation to avoid corrupting multi-byte characters
-        size_t          safe_len    = utf8_truncate_safe_len(std::string_view(tc.input).substr(0, i));
-        common_chat_input chunk(tc.input.substr(fed, safe_len - fed));
-        fed = safe_len;
-        const common_chat_msg & msg_current = is_partial ? session.feed(chunk) : session.finish(chunk);
+    const auto input_tokens = fake_tokenize(specials, tc.input);
+
+    // A token arrives whole, so a special token is never split across chunks
+    std::vector<common_chat_input> chunks;
+    if (tokenized) {
+        for (const auto & token : input_tokens) {
+            chunks.push_back(fake_input({ token }));
+        }
+    } else {
+        size_t fed = 0;
+        for (size_t i = 1; i <= tc.input.size(); ++i) {
+            // Use UTF-8 safe truncation to avoid corrupting multi-byte characters
+            size_t safe_len = utf8_truncate_safe_len(std::string_view(tc.input).substr(0, i));
+            chunks.emplace_back(tc.input.substr(fed, safe_len - fed));
+            fed = safe_len;
+        }
+    }
+
+    for (size_t i = 0; i < chunks.size(); ++i) {
+        auto is_partial = i + 1 < chunks.size() || tc.is_partial;
+        const common_chat_msg & msg_current = is_partial ? session.feed(chunks[i]) : session.finish(chunks[i]);
 
         for (const auto & diff : common_chat_msg_diff::compute_diffs(msg_prev, msg_current)) {
             if (!diff.reasoning_content_delta.empty()) {
@@ -1401,9 +1475,10 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
         // sampler was already active before model output began — constrain from the
         // start of the model output (i.e. tc.input).
         std::string constrained = full_input;
+        size_t constrain_from = 0;
         bool grammar_triggered = false;
         if (earliest_trigger_pos != std::string::npos) {
-            auto constrain_from = std::max(earliest_trigger_pos, gen_prompt.size());
+            constrain_from = std::max(earliest_trigger_pos, gen_prompt.size());
             constrained = full_input.substr(constrain_from);
             grammar_triggered = true;
         } else if (!sampling.grammar_lazy) {
@@ -1413,7 +1488,9 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
 
         // Test the constrained portion against the grammar
         if (grammar_triggered && !tc.is_partial) {
-            auto result = match_string_detailed(constrained, grammar.get());
+            auto full_tokens = fake_tokenize(specials, gen_prompt);
+            full_tokens.insert(full_tokens.end(), input_tokens.begin(), input_tokens.end());
+            auto result = match_string_detailed(fake_tokens_from(full_tokens, constrain_from), grammar.get());
             if (!result.success) {
                 std::string error_msg;
                 if (result.incomplete) {
@@ -1502,6 +1579,7 @@ class peg_tester {
     common_chat_templates_ptr tmpls_;
     std::string               template_path_;
     bool                      detailed_debug_;
+    common_peg_tokens         specials_;
     friend class peg_test_builder;
 
   public:
@@ -1516,6 +1594,17 @@ class peg_tester {
         detailed_debug_(detailed_debug) {}
 
     const std::string & template_path() const { return template_path_; }
+
+    // Run every test a second time with these pieces as special tokens, as if the vocab defined them
+    peg_tester & specials(const std::vector<std::string> & pieces) {
+        llama_token id = FAKE_TEXT_TOKEN + 1;
+        for (const auto & piece : pieces) {
+            specials_.ids.emplace(piece, id);
+            specials_.tokens.emplace(id, common_peg_token{ piece, LLAMA_TOKEN_ATTR_CONTROL });
+            id++;
+        }
+        return *this;
+    }
 
     peg_test_builder test(const std::string & input);
 };
@@ -1633,7 +1722,15 @@ class peg_test_builder {
             }
         }
         LOG_INF("\n\x1b[38;5;126m[%s]\x1b[0m\n%s\n\n", tester_.template_path().c_str(), tc_.input.c_str());
-        test_peg_parser(tester_.tmpls_.get(), [this](peg_test_case & t) { t = tc_; }, tester_.detailed_debug_);
+        common_chat_templates_set_specials(tester_.tmpls_.get(), {});
+        test_peg_parser(tester_.tmpls_.get(), {}, [this](peg_test_case & t) { t = tc_; }, tester_.detailed_debug_);
+
+        if (!tester_.specials_.ids.empty()) {
+            LOG_INF("\x1b[38;5;126m[%s, tokenized]\x1b[0m\n\n", tester_.template_path().c_str());
+            common_chat_templates_set_specials(tester_.tmpls_.get(), tester_.specials_);
+            test_peg_parser(tester_.tmpls_.get(), tester_.specials_, [this](peg_test_case & t) { t = tc_; },
+                            tester_.detailed_debug_);
+        }
     }
 };
 
@@ -7063,6 +7160,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     // GPT-OSS format tests
     {
         auto tst = peg_tester("models/templates/openai-gpt-oss-120b.jinja", detailed_debug);
+        tst.specials({ "<|start|>", "<|end|>", "<|message|>", "<|channel|>", "<|constrain|>", "<|return|>", "<|call|>" });
 
         // Basic content only - final channel
         tst.test("<|channel|>final<|message|>Hello, world!\nWhat's up?").expect(message_assist).run();

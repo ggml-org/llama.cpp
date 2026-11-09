@@ -372,6 +372,9 @@ common_chat_templates_ptr common_chat_templates_init(const struct llama_model * 
                                                      const std::string &        bos_token_override = "",
                                                      const std::string &        eos_token_override = "");
 
+// override special tokens for testing
+void        common_chat_templates_set_specials(struct common_chat_templates * tmpls, common_peg_tokens specials);
+
 bool        common_chat_templates_was_explicit(const struct common_chat_templates * tmpls);
 std::string common_chat_templates_source(const struct common_chat_templates * tmpls, const std::string & variant = "");
 
@@ -397,6 +400,9 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena & src_parser, const
 struct common_chat_session_params {
     bool echo  = false; // include the assistant prefill in the output when continuing a message
     bool debug = false; // enable debug output for the PEG parser
+
+    // tokenize the generation prompt when there is no vocab for testing
+    std::function<common_chat_input(const std::string &)> tokenize;
 };
 
 class common_chat_session {

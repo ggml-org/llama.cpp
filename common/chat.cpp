@@ -801,6 +801,10 @@ void common_chat_templates_free(struct common_chat_templates * tmpls) {
     delete tmpls;
 }
 
+void common_chat_templates_set_specials(struct common_chat_templates * tmpls, common_peg_tokens specials) {
+    tmpls->specials = std::move(specials);
+}
+
 bool common_chat_templates_was_explicit(const struct common_chat_templates * tmpls) {
     return tmpls->has_explicit_template;
 }
@@ -1888,10 +1892,16 @@ common_chat_session::common_chat_session(const common_chat_templates *        tm
     thinking_ends          = std::move(applied.thinking_end_tags);
 
     parser_params.format            = applied.format;
-    parser_params.generation_prompt = vocab ? common_chat_input_tokenize(vocab, applied.generation_prompt)
-                                            : common_chat_input(applied.generation_prompt);
     parser_params.debug             = params.debug;
     parser_params.parser            = std::move(applied.parser);
+
+    if (vocab) {
+        parser_params.generation_prompt = common_chat_input_tokenize(vocab, applied.generation_prompt);
+    } else if (params.tokenize) {
+        parser_params.generation_prompt = params.tokenize(applied.generation_prompt);
+    } else {
+        parser_params.generation_prompt = common_chat_input(applied.generation_prompt);
+    }
 
     delimiters = std::move(applied.message_delimiters);
 
