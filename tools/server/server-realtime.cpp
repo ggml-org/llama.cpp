@@ -156,6 +156,7 @@ struct realtime_conversation {
     bool        tool_results = false; // tool results went in after the last response, the next one answers them
     int         n_turns   = 0;
     std::string next_header;       // text that goes in before the next user turn
+    mtmd_helper::resampler_ptr resampler; // input_rate -> model rate
 
     // the item or response the results belong to, shared with the result loop
     std::mutex  mutex;
@@ -362,12 +363,35 @@ struct realtime_conversation {
             memcpy(&v, pcm.data() + 2 * i, sizeof(v));
             samples[i] = v / 32768.0f;
         }
-        if (samples.empty() || !ensure_turn()) {
+        if (samples.empty()) {
+            return;
+        }
+        if (!resample(samples) || samples.empty() || !ensure_turn()) {
             return;
         }
         if (control(SERVER_CONTROL_ACTION_AUDIO_APPEND, {}, std::move(samples))) {
             has_audio = true;
         }
+    }
+
+    bool resample(std::vector<float> & samples) {
+        if (!resampler) {
+            resampler.reset(mtmd_helper_resampler_init(input_rate, mtmd_get_audio_sample_rate(deps.mctx)));
+            if (!resampler) {
+                send_error("failed to initialize the audio resampler", "server_error");
+                return false;
+            }
+        }
+        const float * out = nullptr;
+        const int64_t n   = mtmd_helper_resampler_process(resampler.get(), samples.data(), samples.size(), &out);
+        if (n < 0) {
+            send_error("failed to resample the audio", "server_error");
+            return false;
+        }
+        if (out != samples.data()) {
+            samples.assign(out, out + n);
+        }
+        return true;
     }
 
     // ends the audio of the open turn, it becomes a user item
@@ -623,8 +647,16 @@ struct realtime_conversation {
         }
         const json audio = session.value("audio", json::object());
         const json in    = audio.value("input", json::object());
-        if (in.contains("format") && in["format"].is_object() && json_value(in["format"], "rate", input_rate) != input_rate) {
-            send_error("session.update: the input audio must be PCM16 at " + std::to_string(input_rate) + " Hz");
+        if (in.contains("format") && in["format"].is_object()) {
+            const int rate = json_value(in["format"], "rate", input_rate);
+            if (rate < 8000 || rate > 192000) {
+                send_error("session.update: the input audio rate must be between 8000 and 192000 Hz");
+                return;
+            }
+            if (rate != input_rate) {
+                input_rate = rate;
+                resampler.reset();
+            }
         }
         if (in.contains("transcription") && in["transcription"].is_object()) {
             language = json_value(in["transcription"], "language", language);

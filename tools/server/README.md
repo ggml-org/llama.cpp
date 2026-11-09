@@ -1596,11 +1596,11 @@ Models that write the text while they listen use this endpoint: Voxtral Realtime
 
 Live ASR models can also hold a conversation, so they transcribe live only in sessions opened with `/v1/realtime?intent=transcription`, as OpenAI transcription sessions are; other sessions are a [realtime conversation](#realtime-conversation).
 
-Audio must be PCM16, mono, at the model sample rate. The sample rate is returned in `session.created` as `audio.input.format.rate`. Each `input_audio_buffer.append` carries a base64-encoded chunk of PCM16 samples.
+Audio must be PCM16, mono. By default it is at the model sample rate, returned in `session.created` as `audio.input.format.rate`. A client can send another rate (8000 to 192000 Hz) by setting `audio.input.format.rate` with `session.update`, the server then resamples it. Each `input_audio_buffer.append` carries a base64-encoded chunk of PCM16 samples.
 
 *Client events:*
 
-- `session.update`: accepted for compatibility, the server replies with `session.updated`
+- `session.update`: only `audio.input.format.rate` is used, the server replies with `session.updated`
 - `input_audio_buffer.append`: `audio` holds base64 PCM16 samples
 - `input_audio_buffer.commit`: flushes the audio received so far, so the words still held back by the model's delay are produced. The server replies with `input_audio_buffer.committed` and starts a new item. With `"final": true`, the input ends instead and the last item is completed once the stream drains.
 - `input_audio_buffer.clear`: accepted for compatibility, audio already sent cannot be discarded
@@ -1619,7 +1619,7 @@ Note that words held back by the model's delay at the time of a commit are attri
 
 #### Realtime conversation
 
-Models that answer after the audio, like LFM3-Audio and LFM3-Omni, hold a conversation on the same endpoint (with an `asr` template, unless the session is opened with `?intent=transcription`). The audio is prefilled as it arrives, so the response starts right after the last chunk. Audio input is PCM16 mono at the model sample rate (`audio.input.format.rate` of `session.created`), audio output is PCM16 mono at `audio.output.format.rate`.
+Models that answer after the audio, like LFM3-Audio and LFM3-Omni, hold a conversation on the same endpoint (with an `asr` template, unless the session is opened with `?intent=transcription`). The audio is prefilled as it arrives, so the response starts right after the last chunk. Audio input is PCM16 mono, by default at the model sample rate (`audio.input.format.rate` of `session.created`); another rate set with `session.update` is resampled by the server. Audio output is PCM16 mono at `audio.output.format.rate`.
 
 `session.type` selects the session, it can be changed with `session.update` before the first audio or message:
 
@@ -1628,7 +1628,7 @@ Models that answer after the audio, like LFM3-Audio and LFM3-Omni, hold a conver
 
 *Client events:*
 
-- `session.update`: `type`, `instructions` (the system prompt, before the first audio or message), `output_modalities`, `max_output_tokens` (an integer or `"inf"`, the default), `tools` (functions with `name`, `description` and `parameters`, before the first audio or message) and `tool_choice` (`"auto"`, the default, `"none"` or `"required"`)
+- `session.update`: `type`, `audio.input.format.rate` (8000 to 192000 Hz), `instructions` (the system prompt, before the first audio or message), `output_modalities`, `max_output_tokens` (an integer or `"inf"`, the default), `tools` (functions with `name`, `description` and `parameters`, before the first audio or message) and `tool_choice` (`"auto"`, the default, `"none"` or `"required"`)
 - `input_audio_buffer.append`: `audio` holds base64 PCM16 samples
 - `input_audio_buffer.commit`: ends the audio of the user turn, in a transcription session the transcript follows
 - `conversation.item.create`: a user message with `input_text` content, or a `function_call_output` with the `call_id` and `output` of a tool call of the last response

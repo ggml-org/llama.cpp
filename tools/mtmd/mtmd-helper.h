@@ -78,6 +78,19 @@ MTMD_API struct mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(
                     bool placeholder,
                     struct mtmd_helper_init_opt opt);
 
+// streaming resampler for raw mono F32 PCM (e.g. realtime input), to match mtmd_get_audio_sample_rate()
+// it keeps state between calls, use one per stream
+struct mtmd_helper_resampler;
+typedef struct mtmd_helper_resampler mtmd_helper_resampler;
+
+// returns NULL on failure
+MTMD_API mtmd_helper_resampler * mtmd_helper_resampler_init(int32_t rate_in, int32_t rate_out);
+MTMD_API void                    mtmd_helper_resampler_free(mtmd_helper_resampler * ctx);
+
+// *out is valid until the next call
+// returns the number of output samples (can be 0), < 0 on error
+MTMD_API int64_t mtmd_helper_resampler_process(mtmd_helper_resampler * ctx, const float * in, size_t n_in, const float ** out);
+
 // helper to count the total number of tokens from a list of chunks, useful to keep track of KV cache
 MTMD_API size_t mtmd_helper_get_n_tokens(const mtmd_input_chunks * chunks);
 
@@ -333,6 +346,12 @@ struct mtmd_helper_video_deleter {
     void operator()(mtmd_helper_video * val) { mtmd_helper_video_free(val); }
 };
 using video_ptr = std::unique_ptr<mtmd_helper_video, mtmd_helper_video_deleter>;
+
+// audio input-related C++ wrappers
+struct mtmd_helper_resampler_deleter {
+    void operator()(mtmd_helper_resampler * val) { mtmd_helper_resampler_free(val); }
+};
+using resampler_ptr = std::unique_ptr<mtmd_helper_resampler, mtmd_helper_resampler_deleter>;
 
 // audio generation-related C++ wrappers
 struct mtmd_helper_gen_audio_deleter {
