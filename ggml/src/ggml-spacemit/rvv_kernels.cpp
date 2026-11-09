@@ -3504,12 +3504,15 @@ static inline float rvv_gdn_fused_row_f32(float *            dst,
 }
 
 static inline float rvv_gdn_dot_f32(const float * x, const float * y, int64_t n) {
-    const size_t       vl   = __riscv_vsetvl_e32m8(n);
-    const vfloat32m8_t xv   = __riscv_vle32_v_f32m8(x, vl);
-    const vfloat32m8_t yv   = __riscv_vle32_v_f32m8(y, vl);
-    const vfloat32m8_t prod = __riscv_vfmul_vv_f32m8(xv, yv, vl);
-    vfloat32m1_t       sum  = __riscv_vfmv_v_f_f32m1(0.0f, 1);
-    sum                     = __riscv_vfredusum_vs_f32m8_f32m1(prod, sum, vl);
+    vfloat32m1_t sum = __riscv_vfmv_v_f_f32m1(0.0f, 1);
+    for (int64_t i = 0; i < n;) {
+        const size_t       vl   = __riscv_vsetvl_e32m8(n - i);
+        const vfloat32m8_t xv   = __riscv_vle32_v_f32m8(x + i, vl);
+        const vfloat32m8_t yv   = __riscv_vle32_v_f32m8(y + i, vl);
+        const vfloat32m8_t prod = __riscv_vfmul_vv_f32m8(xv, yv, vl);
+        sum                     = __riscv_vfredusum_vs_f32m8_f32m1(prod, sum, vl);
+        i += vl;
+    }
     return __riscv_vfmv_f_s_f32m1_f32(sum);
 }
 
@@ -3532,31 +3535,37 @@ static inline rvv_gdn_decay_dots_f32 rvv_gdn_decay_dots_f32_impl(float *       s
                                                                  const float * q,
                                                                  int64_t       n,
                                                                  bool          kda) {
-    const size_t vl = __riscv_vsetvl_e32m8(n);
-    vfloat32m8_t s  = __riscv_vle32_v_f32m8(state, vl);
-    if (kda) {
-        const vfloat32m8_t d = __riscv_vle32_v_f32m8(decay, vl);
-        s                    = __riscv_vfmul_vv_f32m8(s, d, vl);
-    } else {
-        s = __riscv_vfmul_vf_f32m8(s, decay_scalar, vl);
-    }
-    __riscv_vse32_v_f32m8(state, s, vl);
+    vfloat32m1_t sum_k = __riscv_vfmv_v_f_f32m1(0.0f, 1);
+    vfloat32m1_t sum_q = __riscv_vfmv_v_f_f32m1(0.0f, 1);
+    for (int64_t i = 0; i < n;) {
+        const size_t vl = __riscv_vsetvl_e32m8(n - i);
+        vfloat32m8_t s  = __riscv_vle32_v_f32m8(state + i, vl);
+        if (kda) {
+            const vfloat32m8_t d = __riscv_vle32_v_f32m8(decay + i, vl);
+            s                    = __riscv_vfmul_vv_f32m8(s, d, vl);
+        } else {
+            s = __riscv_vfmul_vf_f32m8(s, decay_scalar, vl);
+        }
+        __riscv_vse32_v_f32m8(state + i, s, vl);
 
-    const vfloat32m8_t kv    = __riscv_vle32_v_f32m8(k, vl);
-    const vfloat32m8_t qv    = __riscv_vle32_v_f32m8(q, vl);
-    vfloat32m1_t       sum_k = __riscv_vfmv_v_f_f32m1(0.0f, 1);
-    vfloat32m1_t       sum_q = __riscv_vfmv_v_f_f32m1(0.0f, 1);
-    sum_k                    = __riscv_vfredusum_vs_f32m8_f32m1(__riscv_vfmul_vv_f32m8(s, kv, vl), sum_k, vl);
-    sum_q                    = __riscv_vfredusum_vs_f32m8_f32m1(__riscv_vfmul_vv_f32m8(s, qv, vl), sum_q, vl);
+        const vfloat32m8_t kv = __riscv_vle32_v_f32m8(k + i, vl);
+        const vfloat32m8_t qv = __riscv_vle32_v_f32m8(q + i, vl);
+        sum_k                 = __riscv_vfredusum_vs_f32m8_f32m1(__riscv_vfmul_vv_f32m8(s, kv, vl), sum_k, vl);
+        sum_q                 = __riscv_vfredusum_vs_f32m8_f32m1(__riscv_vfmul_vv_f32m8(s, qv, vl), sum_q, vl);
+        i += vl;
+    }
     return { __riscv_vfmv_f_s_f32m1_f32(sum_k), __riscv_vfmv_f_s_f32m1_f32(sum_q) };
 }
 
 static inline void rvv_gdn_update_f32(float * state, const float * k, float delta, int64_t n) {
-    const size_t       vl = __riscv_vsetvl_e32m8(n);
-    vfloat32m8_t       s  = __riscv_vle32_v_f32m8(state, vl);
-    const vfloat32m8_t kv = __riscv_vle32_v_f32m8(k, vl);
-    s                     = __riscv_vfmacc_vf_f32m8(s, delta, kv, vl);
-    __riscv_vse32_v_f32m8(state, s, vl);
+    for (int64_t i = 0; i < n;) {
+        const size_t       vl = __riscv_vsetvl_e32m8(n - i);
+        vfloat32m8_t       s  = __riscv_vle32_v_f32m8(state + i, vl);
+        const vfloat32m8_t kv = __riscv_vle32_v_f32m8(k + i, vl);
+        s                     = __riscv_vfmacc_vf_f32m8(s, delta, kv, vl);
+        __riscv_vse32_v_f32m8(state + i, s, vl);
+        i += vl;
+    }
 }
 
 // Ported from ggml-cpu/spacemit (linpengt/qwen35-opt); the IME variant (off by default there) is not.
@@ -3896,7 +3905,7 @@ void forward_gated_delta_net(ggml::spacemit::context & ctx, ggml_tensor * op) {
     const int64_t n_tokens = src_v->ne[2];
     const int64_t n_seqs   = src_v->ne[3];
     const int64_t K        = ggml_get_op_params_i32(op, 0);
-    GGML_ASSERT(K >= 1 && S_v <= (int64_t) __riscv_vsetvlmax_e32m8());
+    GGML_ASSERT(K >= 1);
 
     const int64_t nr  = H * n_seqs;
     const int64_t dr  = (nr + ctx.nth - 1) / ctx.nth;
@@ -3952,7 +3961,9 @@ void forward_gated_delta_net(ggml::spacemit::context & ctx, ggml_tensor * op) {
     // state store keeps row loads pipelined, and with the chunk state L2
     // resident it already runs at the DRAM floor, so the fused form cannot win
     // there (measured crossover ~8 tokens; chunks are 64, or 16 with kda).
-    const bool         fused = n_tokens <= 4;
+    // The fused form keeps a whole row in registers; wider rows (e.g. S_v = 128
+    // at VLEN = 256) take the two-pass form, whose helpers strip-mine the row.
+    const bool         fused = n_tokens <= 4 && S_v <= (int64_t) __riscv_vsetvlmax_e32m8();
     // KDA needs the per-column decay vector for every state row; the fused
     // row update consumes it as a vector, so only this small buffer remains
     // of the reference implementation's scratch space.
