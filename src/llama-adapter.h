@@ -49,14 +49,11 @@ struct llama_adapter_lora_weight {
     ggml_tensor * a = nullptr;
     ggml_tensor * b = nullptr;
 
-    // alpha/rank factor already multiplied into b at load time (1 = not folded)
-    float b_scale = 1.0f;
-
-    // get actual scale based on rank and alpha, minus the part folded into b
+    // get actual scale based on rank and alpha
     float get_scale(float alpha, float adapter_scale) const {
         const float rank  = (float) b->ne[0];
         const float scale = alpha ? adapter_scale * alpha / rank : adapter_scale;
-        return scale / b_scale;
+        return scale;
     }
 
     llama_adapter_lora_weight() = default;

@@ -319,6 +319,10 @@ def parse_args() -> argparse.Namespace:
         help="trust remote code in the model",
     )
     parser.add_argument(
+        "--fold-scale", action="store_true",
+        help="multiply lora_b by alpha/rank and write alpha = 0, so llama.cpp needs no scale op at runtime",
+    )
+    parser.add_argument(
         "lora_path", type=Path,
         help="directory containing Hugging Face PEFT LoRA config (adapter_model.json) and weights (adapter_model.safetensors or adapter_model.bin)",
     )
@@ -411,13 +415,15 @@ if __name__ == '__main__':
             model_arch = model_class.model_arch
 
             lora_alpha: float
+            fold_scale: bool
 
-            def __init__(self, *args, dir_lora_model: Path, lora_alpha: float, **kwargs):
+            def __init__(self, *args, dir_lora_model: Path, lora_alpha: float, fold_scale: bool, **kwargs):
 
                 super().__init__(*args, **kwargs)
 
                 self.dir_model_card = dir_lora_model
                 self.lora_alpha = float(lora_alpha)
+                self.fold_scale = fold_scale
 
             def set_vocab(self):
                 pass
@@ -427,8 +433,10 @@ if __name__ == '__main__':
                 self.gguf_writer.add_string(gguf.Keys.Adapter.TYPE, "lora")
 
             def set_gguf_parameters(self):
-                logger.debug("GGUF KV: %s = %d", gguf.Keys.Adapter.LORA_ALPHA, self.lora_alpha)
-                self.gguf_writer.add_float32(gguf.Keys.Adapter.LORA_ALPHA, self.lora_alpha)
+                # alpha = 0 makes llama.cpp skip the alpha/rank scale (already in lora_b)
+                lora_alpha = 0.0 if self.fold_scale else self.lora_alpha
+                logger.debug("GGUF KV: %s = %d", gguf.Keys.Adapter.LORA_ALPHA, lora_alpha)
+                self.gguf_writer.add_float32(gguf.Keys.Adapter.LORA_ALPHA, lora_alpha)
                 alora_invocation_tokens = lparams.get("alora_invocation_tokens")
                 invocation_string = lparams.get("invocation_string")
                 if invocation_string and not alora_invocation_tokens:
@@ -525,6 +533,10 @@ if __name__ == '__main__':
                     if "token_embd.weight" in dest_name:
                         lora_a = lora_a.T
 
+                    # rank is the last dim of lora_b, the same rank llama.cpp uses for alpha/rank
+                    if self.fold_scale and self.lora_alpha:
+                        lora_b = (lora_b.to(torch.float32) * (self.lora_alpha / lora_b.shape[-1])).to(lora_b.dtype)
+
                     yield (dest_name + ".lora_a", lora_a)
                     yield (dest_name + ".lora_b", lora_b)
 
@@ -540,6 +552,7 @@ if __name__ == '__main__':
             dry_run=args.dry_run,
             dir_lora_model=dir_lora,
             lora_alpha=alpha,
+            fold_scale=args.fold_scale,
             hparams=hparams,
             remote_hf_model_id=base_model_id,
         )

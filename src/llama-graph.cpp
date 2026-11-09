@@ -1788,7 +1788,8 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
             continue;
         }
 
-        const float scale = lw->get_scale(lora.first->alpha, lora.second);
+        const float adapter_scale = lora.second;
+        const float scale = lw->get_scale(lora.first->alpha, adapter_scale);
 
         ggml_tensor * ab_cur = ggml_mul_mat_id(
                 ctx0, lw->b,
