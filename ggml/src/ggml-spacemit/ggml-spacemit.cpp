@@ -449,7 +449,19 @@ static void ggml_backend_spacemit_buffer_get_tensor(ggml_backend_buffer_t buffer
                                                      void *                data,
                                                      size_t                offset,
                                                      size_t                size) {
-    memcpy(data, (const char *) tensor->data + offset, size);
+    const size_t logical_size = ggml_nbytes(tensor);
+    GGML_ASSERT(offset <= logical_size && size <= logical_size - offset);
+    if (tensor->extra) {
+        if (offset == 0 && size == logical_size) {
+            ggml_riscv64_spacemit_unpack_tensor(tensor, data, size);
+        } else {
+            std::vector<uint8_t> logical_data(logical_size);
+            ggml_riscv64_spacemit_unpack_tensor(tensor, logical_data.data(), logical_size);
+            memcpy(data, logical_data.data() + offset, size);
+        }
+    } else {
+        memcpy(data, (const char *) tensor->data + offset, size);
+    }
     GGML_UNUSED(buffer);
 }
 

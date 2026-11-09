@@ -1,11 +1,14 @@
 #include "rvv_kernels.h"
 
 #include "common.h"
+#include "spacemit-env.h"
 #include "ggml.h"
 #include "string.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <vector>
 #include <cstdint>
 #include <stdexcept>
 #include <type_traits>
@@ -2126,7 +2129,7 @@ void quantize_a_nrow_i8k_ref(size_t blk_len, const float * a_ptr, size_t count_k
     }
 }
 
-void quantize_a_row_i8(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr) {
+void quantize_a_i8_r1(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr) {
     GGML_ASSERT(blk_len == 32);
     int64_t a_blk_stride = q8_blk_size(blk_len, true);
     size_t  vlenb        = __riscv_vlenb();
@@ -2194,7 +2197,7 @@ void quantize_a_row_i8(size_t blk_len, const float * a_ptr, size_t count_k, uint
     }
 }
 
-void quantize_a_4row_i8(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr) {
+void quantize_a_i8_r4(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr) {
     GGML_ASSERT(blk_len == 32);
     int64_t a_blk_stride        = q8_blk_size(blk_len, true);
     int64_t a_nrow_block_stride = a_blk_stride * 4;
@@ -2267,7 +2270,7 @@ void quantize_a_4row_i8(size_t blk_len, const float * a_ptr, size_t count_k, uin
     }
 }
 
-void quantize_a_row_i8_hp(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr) {
+void quantize_a_i8_r1_hp(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr) {
     constexpr size_t k_subblk_len = 32;
     GGML_ASSERT(blk_len == 256);
 
@@ -2378,7 +2381,7 @@ void quantize_a_row_i8_hp(size_t blk_len, const float * a_ptr, size_t count_k, u
     }
 }
 
-void quantize_a_4row_i8_hp(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr) {
+void quantize_a_i8_r4_hp(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr) {
     constexpr size_t k_subblk_len = 32;
     GGML_ASSERT(blk_len == 256);
 
@@ -2583,7 +2586,7 @@ void quantize_a_4row_i8_hp(size_t blk_len, const float * a_ptr, size_t count_k, 
     }
 }
 
-void quantize_a_row_i8k(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr) {
+void quantize_a_i8_r1_k(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr) {
     GGML_ASSERT(blk_len == 256);
     constexpr int64_t a_blk_stride = q8k_blk_size(256);
     constexpr int64_t a_sum_size   = 256 / 16;
@@ -2674,7 +2677,7 @@ void quantize_a_row_i8k(size_t blk_len, const float * a_ptr, size_t count_k, uin
     }
 }
 
-void quantize_a_4row_i8k(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr) {
+void quantize_a_i8_r4_k(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr) {
     GGML_ASSERT(blk_len == 256);
     constexpr int64_t a_blk_stride        = q8k_blk_size(256);
     constexpr int64_t a_nrow_block_stride = a_blk_stride * 4;
@@ -5407,3 +5410,174 @@ template void forward_concat<int32_t>(ggml::spacemit::context & ctx, ggml_tensor
 template void forward_concat<int16_t>(ggml::spacemit::context & ctx, ggml_tensor * op);
 
 }  // namespace spacemit_kernels::rvv
+
+namespace spacemit_kernels::rvv {
+
+void quantize_a_i8_r4_al(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr) {
+    GGML_ASSERT(blk_len == 32 && __riscv_vlenb() == 128);
+    for (size_t k = 0; k < count_k; k += blk_len, quant_a_ptr += q8_m4al_blk_size) {
+        float *   scale_a_ptr = reinterpret_cast<float *>(quant_a_ptr);
+        int16_t * a_sum_ptr   = reinterpret_cast<int16_t *>(quant_a_ptr + sizeof(float) * 4);
+        int8_t *  quant_a_blk = reinterpret_cast<int8_t *>(quant_a_ptr + q8_m4al_hdr_size);
+
+        for (size_t mi = 0; mi < 4; mi++) {
+            size_t       vl      = __riscv_vsetvl_e32m1(blk_len);
+            vfloat32m1_t v_a     = __riscv_vle32_v_f32m1(a_ptr + mi * count_k + k, vl);
+            vfloat32m1_t v_a_abs = __riscv_vfabs_v_f32m1(v_a, vl);
+
+            vfloat32m1_t tmp       = __riscv_vfmv_v_f_f32m1(0.0f, vl);
+            vfloat32m1_t v_a_max   = __riscv_vfredmax_vs_f32m1_f32m1(v_a_abs, tmp, vl);
+            float        max_abs_a = __riscv_vfmv_f_s_f32m1_f32(v_a_max);
+
+            float scale_a     = max_abs_a / ((1 << 7) - 1);
+            float rep_scale_a = scale_a ? 1.0f / scale_a : 0.0f;
+            scale_a_ptr[mi]   = scale_a;
+
+            vfloat32m1_t v_a_scale    = __riscv_vfmul_vf_f32m1(v_a, rep_scale_a, vl);
+            vint16mf2_t  v_a_quant    = __riscv_vfncvt_x_f_w_i16mf2(v_a_scale, vl);
+            vint8mf4_t   v_a_quant_i8 = __riscv_vncvt_x_x_w_i8mf4(v_a_quant, vl);
+
+            vint16m1_t tmp_sum = __riscv_vmv_v_x_i16m1(0, vl);
+            vint16m1_t v_a_sum = __riscv_vwredsum_vs_i8mf4_i16m1(v_a_quant_i8, tmp_sum, vl);
+            a_sum_ptr[mi]      = -__riscv_vmv_x_s_i16m1_i16(v_a_sum);
+
+            __riscv_vse8_v_i8mf4(quant_a_blk + mi * blk_len, v_a_quant_i8, vl);
+        }
+    }
+}
+
+void quantize_a_i8_r4_hp_al(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr) {
+    constexpr size_t k_subblk_len = 32;
+    constexpr size_t subblk_count = 256 / k_subblk_len;
+    constexpr size_t data_bytes   = subblk_count * 4 * k_subblk_len;
+    constexpr size_t old_stride   = q8_hp_blk_size(256, true, true) * 4;
+    constexpr size_t old_subblk   = q8_hp_blk_size(k_subblk_len, false, false) * 4;
+    constexpr size_t trailer      = old_stride - subblk_count * old_subblk;
+    static_assert(data_bytes + subblk_count * 8 == subblk_count * old_subblk, "trailer offset must not move");
+    GGML_ASSERT(blk_len == 256);
+
+    const float stable_factor = 0.1f;
+
+    if (__riscv_vlenb() == 128) {
+        float scale_temp[subblk_count];
+        for (size_t k = 0; k < count_k; k += blk_len, quant_a_ptr += q8_hp_m4al_blk_size) {
+            _Float16 * a_sum_ptr     = reinterpret_cast<_Float16 *>(quant_a_ptr + subblk_count * old_subblk);
+            _Float16 * scale_avg_ptr = reinterpret_cast<_Float16 *>(quant_a_ptr + old_stride - sizeof(_Float16) * 4);
+            float      scale_avg     = 0.0f;
+
+            for (size_t kk = 0; kk < subblk_count; ++kk) {
+                size_t       vl = __riscv_vsetvl_e32m1(k_subblk_len);
+                vfloat32m1_t v_max_abs =
+                    __riscv_vfabs_v_f32m1(__riscv_vle32_v_f32m1(a_ptr + k + kk * k_subblk_len, vl), vl);
+                for (size_t r = 1; r < 4; ++r) {
+                    vfloat32m1_t v = __riscv_vle32_v_f32m1(a_ptr + r * count_k + k + kk * k_subblk_len, vl);
+                    v_max_abs      = __riscv_vfmax_vv_f32m1(v_max_abs, __riscv_vfabs_v_f32m1(v, vl), vl);
+                }
+                vfloat32m1_t tmp       = __riscv_vfmv_v_f_f32m1(0.0f, vl);
+                vfloat32m1_t v_a_max   = __riscv_vfredmax_vs_f32m1_f32m1(v_max_abs, tmp, vl);
+                float        max_abs_a = __riscv_vfmv_f_s_f32m1_f32(v_a_max);
+
+                scale_temp[kk] = max_abs_a / ((1 << 7) - 1);
+                scale_avg += scale_temp[kk];
+            }
+
+            scale_avg /= subblk_count;
+            const float scale_factor = scale_avg ? stable_factor / scale_avg : 0.0f;
+            scale_avg_ptr[0]         = static_cast<_Float16>(scale_avg / stable_factor);
+
+            for (size_t kk = 0; kk < subblk_count; ++kk) {
+                _Float16 * scale_a_ptr = reinterpret_cast<_Float16 *>(quant_a_ptr + data_bytes + kk * 8);
+                int8_t *   quant_a_blk = reinterpret_cast<int8_t *>(quant_a_ptr + kk * 4 * k_subblk_len);
+
+                const float rep_scale_a = scale_temp[kk] ? 1.0f / scale_temp[kk] : 0.0f;
+                scale_a_ptr[0]          = static_cast<_Float16>(scale_temp[kk] * scale_factor);
+
+                for (size_t r = 0; r < 4; ++r) {
+                    size_t       vl = __riscv_vsetvl_e32m1(k_subblk_len);
+                    vfloat32m1_t v_a =
+                        __riscv_vle32_v_f32m1(a_ptr + r * count_k + k + kk * k_subblk_len, vl);
+                    vfloat32m1_t v_a_scale    = __riscv_vfmul_vf_f32m1(v_a, rep_scale_a, vl);
+                    vint16mf2_t  v_a_quant    = __riscv_vfncvt_x_f_w_i16mf2(v_a_scale, vl);
+                    vint8mf4_t   v_a_quant_i8 = __riscv_vncvt_x_x_w_i8mf4(v_a_quant, vl);
+
+                    vint16m1_t tmp_sum = __riscv_vmv_v_x_i16m1(0, vl);
+                    vint16m1_t v_a_sum = __riscv_vwredsum_vs_i8mf4_i16m1(v_a_quant_i8, tmp_sum, vl);
+                    a_sum_ptr[r * subblk_count + kk] =
+                        static_cast<_Float16>(-__riscv_vmv_x_s_i16m1_i16(v_a_sum)) * static_cast<_Float16>(8.0f);
+
+                    __riscv_vse8_v_i8mf4(quant_a_blk + r * k_subblk_len, v_a_quant_i8, vl);
+                }
+            }
+        }
+    } else {
+        uint8_t tmp[old_stride];
+        for (size_t k = 0; k < count_k; k += blk_len, quant_a_ptr += q8_hp_m4al_blk_size) {
+            float a_blk[4 * 256];
+            for (size_t r = 0; r < 4; ++r) {
+                memcpy(a_blk + r * 256, a_ptr + r * count_k + k, 256 * sizeof(float));
+            }
+            quantize_a_i8_r4_hp(blk_len, a_blk, 256, tmp);
+            for (size_t kk = 0; kk < subblk_count; ++kk) {
+                memcpy(quant_a_ptr + kk * 128, tmp + kk * old_subblk + 8, 128);
+                memcpy(quant_a_ptr + data_bytes + kk * 8, tmp + kk * old_subblk, 8);
+            }
+            memcpy(quant_a_ptr + subblk_count * old_subblk, tmp + subblk_count * old_subblk, trailer);
+        }
+    }
+}
+
+void quantize_a_i8_r8_hp(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr) {
+    constexpr size_t k_subblk_len = 32;
+    constexpr size_t subblk_count = 256 / k_subblk_len;
+    constexpr size_t a_scale_off  = 8 * 8 * k_subblk_len;  // FP16 scales follow all eight K32 payloads.
+    GGML_ASSERT(blk_len == 256);
+
+    const float stable_factor = 0.1f;
+    float       scale_temp[subblk_count];
+
+    for (size_t k = 0; k < count_k; k += blk_len, quant_a_ptr += q8_hp_m8_blk_size) {
+        _Float16 * scale_ptr = reinterpret_cast<_Float16 *>(quant_a_ptr + a_scale_off);
+        float      scale_avg = 0.0f;
+
+        for (size_t kk = 0; kk < subblk_count; ++kk) {
+            const size_t vl        = __riscv_vsetvl_e32m1(k_subblk_len);
+            vfloat32m1_t v_max_abs = __riscv_vfabs_v_f32m1(__riscv_vle32_v_f32m1(a_ptr + k + kk * k_subblk_len, vl), vl);
+            for (size_t r = 1; r < 8; ++r) {
+                vfloat32m1_t v = __riscv_vle32_v_f32m1(a_ptr + r * count_k + k + kk * k_subblk_len, vl);
+                v_max_abs      = __riscv_vfmax_vv_f32m1(v_max_abs, __riscv_vfabs_v_f32m1(v, vl), vl);
+            }
+            vfloat32m1_t v_a_max = __riscv_vfredmax_vs_f32m1_f32m1(v_max_abs, __riscv_vfmv_v_f_f32m1(0.0f, vl), vl);
+            scale_temp[kk]       = __riscv_vfmv_f_s_f32m1_f32(v_a_max) / ((1 << 7) - 1);
+            scale_avg += scale_temp[kk];
+        }
+
+        scale_avg /= subblk_count;
+        const float scale_factor = scale_avg ? stable_factor / scale_avg : 0.0f;
+        scale_ptr[8]             = static_cast<_Float16>(scale_avg / stable_factor);
+
+        for (size_t kk = 0; kk < subblk_count; ++kk) {
+            const float rep_scale_a = scale_temp[kk] ? 1.0f / scale_temp[kk] : 0.0f;
+            scale_ptr[kk]           = static_cast<_Float16>(scale_temp[kk] * scale_factor);
+            uint8_t * lo            = quant_a_ptr + kk * 256;
+            uint8_t * hi            = lo + 128;
+
+            for (size_t r = 0; r < 8; ++r) {
+                size_t       vl  = __riscv_vsetvl_e32m1(k_subblk_len);
+                vfloat32m1_t v_a = __riscv_vfmul_vf_f32m1(
+                    __riscv_vle32_v_f32m1(a_ptr + r * count_k + k + kk * k_subblk_len, vl), rep_scale_a, vl);
+                vuint32mf2_t x = __riscv_vreinterpret_v_u16mf2_u32mf2(
+                    __riscv_vreinterpret_v_i16mf2_u16mf2(__riscv_vfncvt_x_f_w_i16mf2(v_a, vl)));
+                vl             = __riscv_vsetvl_e32mf2(k_subblk_len / 2);
+                vuint32mf2_t l = __riscv_vor_vv_u32mf2(__riscv_vand_vx_u32mf2(x, 0xF, vl),
+                                                       __riscv_vand_vx_u32mf2(__riscv_vsrl_vx_u32mf2(x, 12, vl), 0xF0, vl), vl);
+                vuint32mf2_t h = __riscv_vor_vv_u32mf2(__riscv_vand_vx_u32mf2(__riscv_vsrl_vx_u32mf2(x, 4, vl), 0xF, vl),
+                                                       __riscv_vand_vx_u32mf2(__riscv_vsrl_vx_u32mf2(x, 16, vl), 0xF0, vl), vl);
+                __riscv_vse8_v_u8mf8(lo + r * 16, __riscv_vnsrl_wx_u8mf8(__riscv_vnsrl_wx_u16mf4(l, 0, vl), 0, vl), vl);
+                __riscv_vse8_v_u8mf8(hi + r * 16, __riscv_vnsrl_wx_u8mf8(__riscv_vnsrl_wx_u16mf4(h, 0, vl), 0, vl), vl);
+            }
+        }
+    }
+}
+
+}
+

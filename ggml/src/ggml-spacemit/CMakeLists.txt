@@ -50,6 +50,7 @@ ggml_add_backend_library(${TARGET_NAME}
     rvv_kernels.cpp
     scalar_kernels.cpp
     repack.cpp
+    spe_kernel_dispatch.cpp
     spacemit-context.h
     spacemit-fused.cpp
     spacemit-fused.h

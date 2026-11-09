@@ -6,7 +6,9 @@
 #include "ggml-common.h"
 #include "ggml-cpu.h"
 #include "ggml-impl.h"
+#include "ggml-quants.h"
 #include "ime_kernels.h"
+#include "rvv_kernels.h"
 
 #include <algorithm>
 #include <cassert>
@@ -692,6 +694,91 @@ static int repack_q4_0_to_q4_1_256_32_bl_ref(ggml_tensor *              t,
     GGML_UNUSED(data_size);
 }
 
+// Map Q4_K K32 scales/minima to the Q4_1 superblock layout, with min=-dmin*sub_min.
+static int repack_q4_k_to_q4_1_256_32_bl_ref(ggml_tensor *              t,
+                                             int                        interleave_block,
+                                             const void * GGML_RESTRICT data,
+                                             size_t                     data_size) {
+    GGML_ASSERT(t->type == GGML_TYPE_Q4_K);
+    GGML_ASSERT(interleave_block == 32);
+    GGML_ASSERT(QK_K / QK4_1 == 8);
+
+    constexpr int nrows_interleaved = 32;
+
+    block_q4_1x32x256 * dst = (block_q4_1x32x256 *) t->data;
+    const block_q4_K *  src = (const block_q4_K *) data;
+    block_q4_1          dst_tmp[32];
+    int                 nrow    = ggml_nrows(t);
+    int                 nblocks = t->ne[0] / QK_K;
+
+    if (t->ne[1] % nrows_interleaved != 0 || t->ne[0] % QK_K != 0) {
+        return -1;
+    }
+
+    for (int b = 0; b < nrow; b += nrows_interleaved) {
+        for (int64_t x = 0; x < nblocks; x++) {
+            for (int j = 0; j < 8; j++) {
+                for (int i = 0; i < nrows_interleaved; i++) {
+                    uint8_t     sc, m;
+                    const float d = GGML_FP16_TO_FP32(src[x + i * nblocks].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d);
+                    const float min =
+                        GGML_FP16_TO_FP32(src[x + i * nblocks].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.dmin);
+                    get_scale_min_k4(j, src[x + i * nblocks].scales, &sc, &m);
+                    const float d1 = d * sc;
+                    const float m1 = min * m;
+
+                    dst_tmp[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d = GGML_FP32_TO_FP16(d1);
+                    dst_tmp[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.m = GGML_FP32_TO_FP16(-m1);
+                    // src -> [b0, b32] [b1, b33] ... [b31, b63]
+                    // dst -> [b0, b16] [b1, b17] ... [b15, b31] [b32, b48] [b33, b49] ... [b47, b63]
+                    const uint8_t * q = src[x + i * nblocks].qs + (j / 2) * QK4_1;
+                    if (j % 2 == 0) {
+                        for (int ii = 0; ii < 16; ii++) {
+                            dst_tmp[i].qs[ii] = (q[ii] & 0x0F) | ((q[ii + 16] & 0x0F) << 4);
+                        }
+                    } else {
+                        for (int ii = 0; ii < 16; ii++) {
+                            dst_tmp[i].qs[ii] = ((q[ii] & 0xF0) >> 4) | (q[ii + 16] & 0xF0);
+                        }
+                    }
+                }
+
+                block_q4_0x32 * dst_block = &dst->blocks[j];
+                uint8_t *       dst_zp    = dst->zps + j * nrows_interleaved;
+
+                for (int i = 0; i < nrows_interleaved; i++) {
+                    float d   = GGML_FP16_TO_FP32(dst_tmp[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d);
+                    float m   = GGML_FP16_TO_FP32(dst_tmp[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.m);
+                    float mid = -std::nearbyintf(m / d);
+                    mid       = std::min(15.0f, std::max(0.0f, mid));
+
+                    dst_block->d[i] = GGML_FP32_TO_FP16(d);
+                    dst_zp[i]       = static_cast<uint8_t>(mid);
+                }
+
+                for (int i = 0; i < nrows_interleaved; i++) {
+                    for (int k = 0; k < QK4_1 / 4; k++) {
+                        dst_block->qs[i * QK4_1 / 2 + k] =
+                            (dst_tmp[i].qs[k * 2] & 0x0F) | ((dst_tmp[i].qs[k * 2 + 1] & 0x0F) << 4);
+                    }
+                }
+
+                for (int i = 0; i < nrows_interleaved; i++) {
+                    for (int k = 0; k < QK4_1 / 4; k++) {
+                        dst_block->qs[i * QK4_1 / 2 + QK4_1 / 4 + k] =
+                            ((dst_tmp[i].qs[k * 2] & 0xF0) >> 4) | (dst_tmp[i].qs[k * 2 + 1] & 0xF0);
+                    }
+                }
+            }
+            dst++;
+        }
+        src += nrows_interleaved * nblocks;
+    }
+    return 0;
+
+    GGML_UNUSED(data_size);
+}
+
 // RVV optimized version of repack_q4_0_to_q4_0_32_bl
 // Eliminates the intermediate dst_tmp buffer and vectorizes nibble repack.
 static int repack_q4_0_to_q4_0_32_bl(ggml_tensor *              t,
@@ -1315,8 +1402,7 @@ static int repack_q8_0_to_q8_0_32_bl(ggml_tensor *              t,
                                      int                        interleave_block,
                                      const void * GGML_RESTRICT data,
                                      size_t                     data_size) {
-    // Q5_0 tensors arrive here already converted to Q8_0 rows (repack_q5_0_to_q8_0_32)
-    GGML_ASSERT(t->type == GGML_TYPE_Q8_0 || t->type == GGML_TYPE_Q5_0);
+    GGML_ASSERT(t->type == GGML_TYPE_Q8_0 || t->type == GGML_TYPE_Q5_0 || t->type == GGML_TYPE_F32);
     GGML_ASSERT(interleave_block == 32);
 
     constexpr int nrows_interleaved = 32;
@@ -1379,91 +1465,6 @@ static int repack_q8_0_to_q8_0_32_bl(ggml_tensor *              t,
     return 0;
 
     GGML_UNUSED(data_size);
-}
-
-static void convert_mxfp4_to_5bit(const block_mxfp4 & src, spacemit_kernels::nrow_block_mxfp4<1> & dst) {
-    dst.e[0] = src.e;
-
-    // Decode all 32 mxfp4 values to signed integers via kvalues_mxfp4
-    int8_t vals[32];
-    for (int j = 0; j < QK_MXFP4 / 2; j++) {
-        vals[j]                = kvalues_mxfp4[src.qs[j] & 0xF];
-        vals[j + QK_MXFP4 / 2] = kvalues_mxfp4[src.qs[j] >> 4];
-    }
-
-    // vals [b0, b1, b2, b3, ..., b30, b31]
-    // Pack abs into qs with reorder: [b0,b1]..[b14,b15]..[b30,b31]
-    for (int j = 0; j < QK_MXFP4 / 2; j++) {
-        uint8_t lo0 = static_cast<uint8_t>(std::abs(vals[j * 2]));
-        uint8_t lo1 = static_cast<uint8_t>(std::abs(vals[j * 2 + 1]));
-        dst.qs[j]   = (lo0 & 0x0F) | ((lo1 & 0x0F) << 4);
-    }
-
-    // Pack sign bits into qh[4] (32 bits total, 1 bit per weight)
-    // reorder: [0,1,2,...,15,16,17,...,31] after the qs reorder above
-    uint32_t sign_bits = 0;
-    for (int j = 0; j < 32; j++) {
-        if (vals[j] < 0) {
-            sign_bits |= (1u << j);
-        }
-    }
-    memcpy(dst.qh, &sign_bits, 4);
-}
-
-static spacemit_kernels::nrow_block_mxfp4<32> make_block_mxfp4x32(spacemit_kernels::nrow_block_mxfp4<1> * in,
-                                                                  unsigned int blck_size_interleave) {
-    spacemit_kernels::nrow_block_mxfp4<32> out;
-    GGML_ASSERT(QK_MXFP4 / blck_size_interleave == 1);
-    GGML_UNUSED(blck_size_interleave);
-
-    for (int i = 0; i < 32; i++) {
-        out.e[i] = in[i].e[0];
-    }
-
-    // qs: copy per-row 16 bytes
-    for (int i = 0; i < 32; i++) {
-        memcpy(out.qs + i * 16, in[i].qs, 16);
-    }
-
-    // qh: copy per-row 4 bytes
-    for (int i = 0; i < 32; i++) {
-        memcpy(out.qh + i * 4, in[i].qh, 4);
-    }
-
-    return out;
-}
-
-static int repack_mxfp4_to_mxfp4_32_bl(ggml_tensor *              t,
-                                       int                        interleave_block,
-                                       const void * GGML_RESTRICT data,
-                                       size_t                     data_size) {
-    GGML_ASSERT(t->type == GGML_TYPE_MXFP4);
-    GGML_ASSERT(interleave_block == 32);
-
-    constexpr int nrows_interleaved = 32;
-
-    spacemit_kernels::nrow_block_mxfp4<32> * dst = (spacemit_kernels::nrow_block_mxfp4<32> *) t->data;
-    const block_mxfp4 *                      src = (const block_mxfp4 *) data;
-    spacemit_kernels::nrow_block_mxfp4<1>    dst_tmp[32];
-    int                                      nrow    = ggml_nrows(t);
-    int                                      nblocks = t->ne[0] / QK_MXFP4;
-
-    GGML_ASSERT(data_size == nrow * nblocks * sizeof(block_mxfp4));
-
-    if (t->ne[1] % nrows_interleaved != 0 || t->ne[0] % QK_MXFP4 != 0) {
-        return -1;
-    }
-
-    for (int b = 0; b < nrow; b += nrows_interleaved) {
-        for (int64_t x = 0; x < nblocks; x++) {
-            for (int i = 0; i < nrows_interleaved; i++) {
-                convert_mxfp4_to_5bit(src[x + i * nblocks], dst_tmp[i]);
-            }
-            *dst++ = make_block_mxfp4x32(dst_tmp, interleave_block);
-        }
-        src += nrows_interleaved * nblocks;
-    }
-    return 0;
 }
 
 static spacemit_kernels::nrow_block_q5_1<32> make_block_q5_1x32(spacemit_kernels::nrow_block_q5_1<1> * in,
@@ -1704,6 +1705,29 @@ static int repack_q5_k_to_q5_1_32_bl(ggml_tensor *              t,
 
 namespace ggml::cpu::riscv64_spacemit {
 
+static void q8_0x32_lane_arrange(ggml_tensor * t) {
+    block_q8_0x32 * blk = (block_q8_0x32 *) t->data;
+    const int64_t   n   = (ggml_nrows(t) + 31) / 32 * (t->ne[0] / QK8_0);
+    static_assert(sizeof(blk->qs) == 4 * 256, "q8_0x32 data is four 256B register pairs");
+    for (int64_t i = 0; i < n; i++) {
+        for (int p = 0; p < 4; p++) {
+            uint8_t * pair = blk[i].qs + p * 256;
+            uint8_t   tmp[256];
+            for (int o = 0; o < 16; o++) {
+                memcpy(tmp + o * 16, pair + ((o % 8) * 2 + o / 8) * 16, 16);
+            }
+            memcpy(pair, tmp, sizeof(tmp));
+        }
+    }
+}
+
+static int q8_0x32_finish(ggml_tensor * t, int ret) {
+    if (ret == 0) {
+        q8_0x32_lane_arrange(t);
+    }
+    return ret;
+}
+
 template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> int repack(ggml_tensor *, const void *, size_t);
 
 template <> int repack<block_q4_0, 32, 16>(ggml_tensor * t, const void * data, size_t data_size) {
@@ -1736,10 +1760,23 @@ template <> int repack<block_q4_0, 32, 32>(ggml_tensor * t, const void * data, s
 
 template <> int repack<block_q4_0, 256, 32>(ggml_tensor * t, const void * data, size_t data_size) {
 #if 1
-    return repack_q4_0_to_q4_0_256_32_bl_ref(t, 32, data, data_size);
+    int ret = repack_q4_0_to_q4_0_256_32_bl_ref(t, 32, data, data_size);
 #else
     //return repack_q4_0_to_q4_0_256_32_bl(t, 32, data, data_size);
 #endif
+    if (ret == 0) {
+        // MoE Q4_0 kernels consume signed nibbles: qs ^ 0x88 folds the fixed zero point into the dot.
+        block_q4_0x32x256 * dst = (block_q4_0x32x256 *) t->data;
+        const int64_t       n   = ggml_nrows(t) / 32 * (t->ne[0] / 256);
+        for (int64_t i = 0; i < n; i++) {
+            for (auto & blk : dst[i].blocks) {
+                for (auto & q : blk.qs) {
+                    q ^= 0x88;
+                }
+            }
+        }
+    }
+    return ret;
 }
 
 template <> int repack<block_q4_1, 32, 32>(ggml_tensor * t, const void * data, size_t data_size) {
@@ -1758,13 +1795,17 @@ template <> int repack<block_q4_1, 256, 32>(ggml_tensor * t, const void * data, 
 #endif
 }
 
+template <> int repack<block_q4_K, 256, 32>(ggml_tensor * t, const void * data, size_t data_size) {
+    return repack_q4_k_to_q4_1_256_32_bl_ref(t, 32, data, data_size);
+}
+
 template <> int repack<block_q4_K, 32, 32>(ggml_tensor * t, const void * data, size_t data_size) {
     return repack_q4_k_to_q4_1_32_bl(t, 32, data, data_size);
 }
 
 template <> int repack<block_q6_K, 32, 32>(ggml_tensor * t, const void * data, size_t data_size) {
 #if 1
-    return repack_q6_k_to_q8_0_32_bl_ref(t, 32, data, data_size);
+    return q8_0x32_finish(t, repack_q6_k_to_q8_0_32_bl_ref(t, 32, data, data_size));
 #else
     return repack_q6_k_to_q8_0_32_bl(t, 32, data, data_size);
 #endif
@@ -1791,19 +1832,59 @@ int repack_q5_0_to_q8_0_32(ggml_tensor * t, const void * data, size_t data_size)
             q8[i].qs[j + QK5_0 / 2] = (int8_t) (((src[i].qs[j] >> 4) | xh_1) - 16);
         }
     }
-    return repack_q8_0_to_q8_0_32_bl(t, 32, q8.data(), q8.size() * sizeof(block_q8_0));
+    return q8_0x32_finish(t, repack_q8_0_to_q8_0_32_bl(t, 32, q8.data(), q8.size() * sizeof(block_q8_0)));
+}
+
+int repack_f32_to_q8_0_32(ggml_tensor * t, const void * data, size_t data_size) {
+    GGML_ASSERT(t->type == GGML_TYPE_F32);
+    GGML_ASSERT(t->ne[0] % QK8_0 == 0);
+    const int64_t nrows = ggml_nrows(t);
+    GGML_ASSERT(data_size == (size_t) nrows * t->ne[0] * sizeof(float));
+    const int64_t           nb = t->ne[0] / QK8_0;
+    std::vector<block_q8_0> q8(nrows * nb);
+    for (int64_t r = 0; r < nrows; r++) {
+        quantize_row_q8_0_ref((const float *) data + r * t->ne[0], q8.data() + r * nb, t->ne[0]);
+    }
+    return q8_0x32_finish(t, repack_q8_0_to_q8_0_32_bl(t, 32, q8.data(), q8.size() * sizeof(block_q8_0)));
+}
+
+int unpack_q8_0_32_to_f32(const ggml_tensor * t, void * data, size_t data_size) {
+    const int64_t nrows = ggml_nrows(t);
+    if (t->type != GGML_TYPE_F32 || t->ne[0] % QK8_0 != 0 || t->ne[1] % 32 != 0 ||
+        data_size != static_cast<size_t>(nrows) * t->ne[0] * sizeof(float)) {
+        return -1;
+    }
+
+    const int64_t nblocks = t->ne[0] / QK8_0;
+    const auto * src = static_cast<const block_q8_0x32 *>(t->data);
+    auto * dst = static_cast<uint8_t *>(data);
+    for (int64_t n0 = 0; n0 < nrows; n0 += 32) {
+        for (int64_t kb = 0; kb < nblocks; ++kb) {
+            const auto & block = src[(n0 / 32) * nblocks + kb];
+            const auto * qs = reinterpret_cast<const int8_t *>(block.qs);
+            for (int row = 0; row < 32; ++row) {
+                const float d = GGML_FP16_TO_FP32(block.d[row]);
+                // Each group of eight rows stores its low K16 lanes before its high K16 lanes.
+                const size_t lane = (row / 8) * 256 + (row % 8) * 16;
+                uint8_t * out = dst + ((n0 + row) * t->ne[0] + kb * QK8_0) * sizeof(float);
+                for (int k = 0; k < 16; ++k) {
+                    const float lo = d * qs[lane + k];
+                    const float hi = d * qs[lane + 128 + k];
+                    memcpy(out + k * sizeof(float), &lo, sizeof(lo));
+                    memcpy(out + (k + 16) * sizeof(float), &hi, sizeof(hi));
+                }
+            }
+        }
+    }
+    return 0;
 }
 
 template <> int repack<block_q8_0, 32, 32>(ggml_tensor * t, const void * data, size_t data_size) {
 #if 1
-    return repack_q8_0_to_q8_0_32_bl_ref(t, 32, data, data_size);
+    return q8_0x32_finish(t, repack_q8_0_to_q8_0_32_bl_ref(t, 32, data, data_size));
 #else
     return repack_q8_0_to_q8_0_32_bl(t, 32, data, data_size);
 #endif
-}
-
-template <> int repack<block_mxfp4, 32, 32>(ggml_tensor * t, const void * data, size_t data_size) {
-    return repack_mxfp4_to_mxfp4_32_bl(t, 32, data, data_size);
 }
 
 template <> int repack<block_q5_0, 32, 32>(ggml_tensor * t, const void * data, size_t data_size) {
@@ -1816,6 +1897,217 @@ template <> int repack<block_q5_1, 32, 32>(ggml_tensor * t, const void * data, s
 
 template <> int repack<block_q5_K, 32, 32>(ggml_tensor * t, const void * data, size_t data_size) {
     return repack_q5_k_to_q5_1_32_bl(t, 32, data, data_size);
+}
+
+int repack_q4_0_to_q41(ggml_tensor * t, const void * data, size_t data_size) {
+    GGML_ASSERT(t->type == GGML_TYPE_Q4_0);
+
+    const int64_t ne00 = t->ne[0];  // K
+    const int64_t ne01 = t->ne[1];  // N
+    if (ne00 % 32 != 0 || ne01 % 32 != 0) {
+        return -1;
+    }
+
+    const int64_t kblocks = ne00 / 32;
+    const int64_t nrows = ggml_nrows(t);
+
+    if (data_size != static_cast<size_t>(nrows) * kblocks * sizeof(block_q4_0)) {
+        return -1;
+    }
+
+    auto                dst = reinterpret_cast<Q41Block<32, 32, 2> *>(t->data);
+    const block_q4_0 * src = reinterpret_cast<const block_q4_0 *>(data);
+
+    // Q41 blocks cover 32 rows x K32; preserve each row’s scale bits and set zp=8.
+    for (int64_t n0 = 0; n0 < nrows; n0 += 32) {
+        for (int64_t j = 0; j < kblocks; j++) {
+            Q41Block<32, 32, 2> & blk = dst[(n0 / 32) * kblocks + j];
+            memset(blk.zp, 8, sizeof(blk.zp));
+            for (int i = 0; i < 32; i++) {
+                const block_q4_0 & b = src[(n0 + i) * kblocks + j];
+                memcpy(&blk.scale[i], &b.d, sizeof(ggml_half));
+                // Convert split-half nibbles (p, p+16) to adjacent pairs (2p, 2p+1).
+                uint8_t e[32];
+                for (int p = 0; p < 16; p++) {
+                    e[p]      = static_cast<uint8_t>(b.qs[p] & 0x0F);
+                    e[p + 16] = static_cast<uint8_t>((b.qs[p] >> 4) & 0x0F);
+                }
+                uint8_t * q41row = reinterpret_cast<uint8_t *>(blk.data) + i * 16;
+                for (int p = 0; p < 16; p++) {
+                    q41row[p] = static_cast<uint8_t>((e[2 * p] & 0x0F) | ((e[2 * p + 1] & 0x0F) << 4));
+                }
+            }
+        }
+    }
+
+    return 0;
+}
+
+// Approximate offsets with uint8 zp, including values above 15; zero scale uses zp=0.
+static uint8_t q41_zero_point(float scale, float offset) {
+    if (scale == 0.0f) {
+        return 0;
+    }
+    const float zp = std::round(-offset / scale);
+    if (!(zp > 0.0f)) {
+        return 0;
+    }
+    return zp >= 255.0f ? 255 : static_cast<uint8_t>(zp);
+}
+
+int repack_q4_1_to_q41(ggml_tensor * t, const void * data, size_t data_size) {
+    GGML_ASSERT(t->type == GGML_TYPE_Q4_1);
+    const int64_t kblocks = t->ne[0] / QK4_1;
+    const int64_t nrows = ggml_nrows(t);
+    if (t->ne[0] % QK4_1 != 0 || t->ne[1] % 32 != 0 ||
+        data_size != static_cast<size_t>(nrows) * kblocks * sizeof(block_q4_1)) {
+        return -1;
+    }
+
+    auto * dst = reinterpret_cast<Q41Block<32, 32, 2> *>(t->data);
+    const auto * src = reinterpret_cast<const block_q4_1 *>(data);
+    for (int64_t n0 = 0; n0 < nrows; n0 += 32) {
+        for (int64_t j = 0; j < kblocks; ++j) {
+            auto & blk = dst[(n0 / 32) * kblocks + j];
+            for (int i = 0; i < 32; ++i) {
+                const auto & b = src[(n0 + i) * kblocks + j];
+                memcpy(&blk.scale[i], &b.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d, sizeof(ggml_half));
+                blk.zp[i] = q41_zero_point(
+                    GGML_FP16_TO_FP32(b.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d),
+                    GGML_FP16_TO_FP32(b.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.m));
+                uint8_t * row = reinterpret_cast<uint8_t *>(blk.data) + i * 16;
+                for (int p = 0; p < 8; ++p) {
+                    row[p] = (b.qs[2 * p] & 15) | ((b.qs[2 * p + 1] & 15) << 4);
+                    row[p + 8] = (b.qs[2 * p] >> 4) | (b.qs[2 * p + 1] & 0xf0);
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+// Q4_K folds each K32 scale into FP16 and rounds its offset to a saturated uint8 zp.
+int repack_q4_k_to_q41(ggml_tensor * t, const void * data, size_t data_size) {
+    GGML_ASSERT(t->type == GGML_TYPE_Q4_K);
+    const int64_t kblocks = t->ne[0] / 32;
+    const int64_t src_blocks = t->ne[0] / QK_K;
+    const int64_t nrows = ggml_nrows(t);
+    if (t->ne[0] % QK_K != 0 || t->ne[1] % 32 != 0 ||
+        data_size != static_cast<size_t>(nrows) * src_blocks * sizeof(block_q4_K)) {
+        return -1;
+    }
+
+    auto * dst = reinterpret_cast<Q41Block<32, 32, 2> *>(t->data);
+    const auto * src = reinterpret_cast<const block_q4_K *>(data);
+    for (int64_t n0 = 0; n0 < nrows; n0 += 32) {
+        for (int64_t j = 0; j < kblocks; ++j) {
+            auto & blk = dst[(n0 / 32) * kblocks + j];
+            const int sub = j % (QK_K / 32);
+            for (int i = 0; i < 32; ++i) {
+                const auto & b = src[(n0 + i) * src_blocks + j / (QK_K / 32)];
+                uint8_t sc, mn;
+                get_scale_min_k4(sub, b.scales, &sc, &mn);
+                const ggml_half d = GGML_FP32_TO_FP16(
+                    GGML_FP16_TO_FP32(b.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d) * sc);
+                const float offset = -GGML_FP16_TO_FP32(b.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.dmin) * mn;
+                memcpy(&blk.scale[i], &d, sizeof(d));
+                blk.zp[i] = q41_zero_point(GGML_FP16_TO_FP32(d), offset);
+                const uint8_t * qs = b.qs + (sub / 2) * 32;
+                const int shift = (sub % 2) * 4;
+                uint8_t * row = reinterpret_cast<uint8_t *>(blk.data) + i * 16;
+                for (int p = 0; p < 16; ++p) {
+                    row[p] = ((qs[2 * p] >> shift) & 15) | (((qs[2 * p + 1] >> shift) & 15) << 4);
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+int unpack_q41_to_q4_0_common(const ggml_tensor * t, void * data, size_t data_size) {
+    static_assert(sizeof(Q41Block<32, 32, 2>) == 608, "Q41Block layout changed");
+
+    const int64_t ne00 = t->ne[0];  // K
+    if (ne00 % 32 != 0 || t->ne[1] % 32 != 0) {
+        return -1;
+    }
+    if (t->type == GGML_TYPE_Q4_K && ne00 % QK_K != 0) {
+        return -1;
+    }
+
+    const int64_t kblocks = ne00 / 32;
+    const int64_t nrows = ggml_nrows(t);
+
+    const size_t block_size = t->type == GGML_TYPE_Q4_0 ? sizeof(block_q4_0)
+                               : t->type == GGML_TYPE_Q4_1 ? sizeof(block_q4_1)
+                                                            : sizeof(block_q4_K);
+    const int64_t src_blocks = t->type == GGML_TYPE_Q4_K ? kblocks / 8 : kblocks;
+    if (data_size != static_cast<size_t>(nrows) * src_blocks * block_size) {
+        return -1;
+    }
+
+    const Q41Block<32, 32, 2> * src = reinterpret_cast<const Q41Block<32, 32, 2> *>(t->data);
+
+    if (t->type == GGML_TYPE_Q4_K) {
+        // Q4_K cannot represent the Q41 grid exactly; reconstruct and requantize it.
+        block_q4_K * dst = reinterpret_cast<block_q4_K *>(data);
+        float        vals[QK_K];
+        for (int64_t n0 = 0; n0 < nrows; n0 += 32) {
+            for (int64_t jblk = 0; jblk < src_blocks; jblk++) {
+                for (int i = 0; i < 32; i++) {
+                    for (int jj = 0; jj < QK_K / 32; jj++) {
+                        const Q41Block<32, 32, 2> & blk = src[(n0 / 32) * kblocks + jblk * 8 + jj];
+                        ggml_half                s_h;
+                        memcpy(&s_h, &blk.scale[i], sizeof(s_h));
+                        const float    d    = GGML_FP16_TO_FP32(s_h);
+                        const uint8_t  zp   = blk.zp[i];
+                        const uint8_t * row = reinterpret_cast<const uint8_t *>(blk.data) + i * 16;
+                        for (int p = 0; p < 16; p++) {
+                            vals[jj * 32 + 2 * p]     = ((row[p] & 0x0F) - zp) * d;
+                            vals[jj * 32 + 2 * p + 1] = (((row[p] >> 4) & 0x0F) - zp) * d;
+                        }
+                    }
+                    quantize_row_q4_K_ref(vals, &dst[(n0 + i) * src_blocks + jblk], QK_K);
+                }
+            }
+        }
+        return 0;
+    }
+
+    block_q4_0 * dst0 = t->type == GGML_TYPE_Q4_0 ? reinterpret_cast<block_q4_0 *>(data) : nullptr;
+    block_q4_1 * dst1 = t->type == GGML_TYPE_Q4_1 ? reinterpret_cast<block_q4_1 *>(data) : nullptr;
+    for (int64_t n0 = 0; n0 < nrows; n0 += 32) {
+        for (int64_t j = 0; j < kblocks; j++) {
+            const Q41Block<32, 32, 2> & blk = src[(n0 / 32) * kblocks + j];
+            for (int i = 0; i < 32; i++) {
+                // Convert adjacent nibbles back to split-half order.
+                const uint8_t * row = reinterpret_cast<const uint8_t *>(blk.data) + i * 16;
+                uint8_t         e[32];
+                for (int p = 0; p < 16; p++) {
+                    e[2 * p]     = static_cast<uint8_t>(row[p] & 0x0F);
+                    e[2 * p + 1] = static_cast<uint8_t>((row[p] >> 4) & 0x0F);
+                }
+                uint8_t qs[16];
+                for (int p = 0; p < 16; p++) {
+                    qs[p] = static_cast<uint8_t>((e[p] & 0x0F) | ((e[p + 16] & 0x0F) << 4));
+                }
+                if (dst0 != nullptr) {
+                    block_q4_0 & b = dst0[(n0 + i) * kblocks + j];
+                    memcpy(&b.d, &blk.scale[i], sizeof(ggml_half));
+                    memcpy(b.qs, qs, sizeof(qs));
+                } else {
+                    block_q4_1 & b = dst1[(n0 + i) * kblocks + j];
+                    memcpy(&b.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d, &blk.scale[i], sizeof(ggml_half));
+                    memcpy(b.qs, qs, sizeof(qs));
+                    ggml_half s_h;
+                    memcpy(&s_h, &blk.scale[i], sizeof(s_h));
+                    b.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.m =
+                        GGML_FP32_TO_FP16(-blk.zp[i] * GGML_FP16_TO_FP32(s_h));
+                }
+            }
+        }
+    }
+    return 0;
 }
 
 }  // namespace ggml::cpu::riscv64_spacemit

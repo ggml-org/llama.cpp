@@ -94,7 +94,7 @@ namespace spacemit_kernels {
     "vse8.v             v31, (s1)                \n\t"
 
 namespace ime1 {
-void quantize_a_4row_i8(size_t BlkLen, const float * A, size_t CountK, uint8_t * QuantA) {
+void quantize_a_i8_r4(size_t BlkLen, const float * A, size_t CountK, uint8_t * QuantA) {
     constexpr float range_max_reciprocal = 1.0f / ((1 << 7) - 1);
     const float     fone                 = 1.0f;
 
@@ -154,7 +154,7 @@ void quantize_a_4row_i8(size_t BlkLen, const float * A, size_t CountK, uint8_t *
     }
 }
 
-void quantize_a_row_i8(size_t BlkLen, const float * A, size_t CountK, uint8_t * QuantA) {
+void quantize_a_i8_r1(size_t BlkLen, const float * A, size_t CountK, uint8_t * QuantA) {
     const float *   SRC                  = A;
     uint8_t *       DST                  = QuantA;
     constexpr float range_max_reciprocal = 1.0f / ((1 << 7) - 1);
@@ -994,16 +994,18 @@ void SQ4BitGemmM1Kernel_CompInt8_ScaleFp16_Impl(size_t          BlkLen,
 }  // namespace
 
 namespace ime1 {
-size_t gemm_kernel_i8i4(size_t          blk_len,
-                        const uint8_t * quant_a_ptr,
-                        const uint8_t * quant_b_data,
-                        const uint8_t * quant_b_zp,
-                        float *         c_ptr,
-                        size_t          count_m,
-                        size_t          count_n,
-                        size_t          k_blks,
-                        size_t          ldc) {
+size_t gemm_i8i4_k32(a_pack          ap,
+                    size_t          blk_len,
+                    const uint8_t * quant_a_ptr,
+                    const uint8_t * quant_b_data,
+                    const uint8_t * quant_b_zp,
+                    float *         c_ptr,
+                    size_t          count_m,
+                    size_t          count_n,
+                    size_t          k_blks,
+                    size_t          ldc) {
     if (count_m >= 4) {
+        GGML_ASSERT(ap == a_pack::r4);
         if (quant_b_zp != nullptr) {
             SQ4BitGemmM4Kernel_CompInt8_ScaleFp16_Impl<true>(blk_len, quant_a_ptr, quant_b_data, c_ptr, count_n, k_blks,
                                                              ldc);
@@ -1012,16 +1014,15 @@ size_t gemm_kernel_i8i4(size_t          blk_len,
                                                               k_blks, ldc);
         }
         return 4;
-    } else {
-        if (quant_b_zp != nullptr) {
-            SQ4BitGemmM1Kernel_CompInt8_ScaleFp16_Impl<true>(blk_len, quant_a_ptr, quant_b_data, c_ptr, count_n, k_blks,
-                                                             ldc);
-        } else {
-            SQ4BitGemmM1Kernel_CompInt8_ScaleFp16_Impl<false>(blk_len, quant_a_ptr, quant_b_data, c_ptr, count_n,
-                                                              k_blks, ldc);
-        }
-        return 1;
     }
+    if (quant_b_zp != nullptr) {
+        SQ4BitGemmM1Kernel_CompInt8_ScaleFp16_Impl<true>(blk_len, quant_a_ptr, quant_b_data, c_ptr, count_n, k_blks,
+                                                         ldc);
+    } else {
+        SQ4BitGemmM1Kernel_CompInt8_ScaleFp16_Impl<false>(blk_len, quant_a_ptr, quant_b_data, c_ptr, count_n,
+                                                          k_blks, ldc);
+    }
+    return 1;
 }
 }  // namespace ime1
 }  // namespace spacemit_kernels

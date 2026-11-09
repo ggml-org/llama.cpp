@@ -40,7 +40,28 @@ constexpr size_t q8k_blk_size(size_t blk_len) {
 
 using quantize_a_row_def = std::function<void(size_t, const float *, size_t, uint8_t *)>;
 
+// K256 A groups store eight K32 payloads followed by FP16 scales/sums.
+// m4_al metadata pads to 64B; m8 metadata pads to 128B.
+constexpr size_t q8_hp_m4al_blk_size =
+    (8 * 4 * 32 + 8 * 4 * sizeof(_Float16) + 4 * 8 * sizeof(_Float16) + 4 * sizeof(_Float16) + 63) / 64 * 64;
+constexpr size_t q8_hp_al_row_blk_size = q8_hp_m4al_blk_size / 4;
+constexpr size_t q8_hp_m8_blk_size    = (8 * 8 * 32 + 8 * sizeof(_Float16) + sizeof(_Float16) + 127) / 128 * 128;
+static_assert(q8_hp_m4al_blk_size == 1216, "m4al group layout");
+static_assert(q8_hp_m8_blk_size == 2176, "m8 group layout");
+
+constexpr size_t q8_hp_al_align = 128;
+
+// Q8_0 r4 groups: 64B of padded row scales/sums, then four 32B payload lanes.
+constexpr size_t q8_m4al_hdr_size     = (4 * (sizeof(float) + sizeof(int16_t)) + 63) / 64 * 64;
+constexpr size_t q8_m4al_blk_size     = q8_m4al_hdr_size + 4 * 32;
+constexpr size_t q8_m4al_row_blk_size = q8_m4al_blk_size / 4;
+static_assert(q8_m4al_hdr_size == 64 && q8_m4al_blk_size == 192, "i8i8 group layout");
+
 namespace rvv {
+void quantize_a_i8_r4_al(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr);
+void quantize_a_i8_r4_hp_al(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr);
+void quantize_a_i8_r8_hp(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr);
+
 void memcpy1d(void * dst, const void * src, int64_t size);
 
 void memcpy2d(void * dst, int64_t dst_stride, const void * src, int64_t src_stride, int64_t tile_rows, int64_t size);
@@ -122,17 +143,17 @@ template <typename T> void forward_repeat_nrows(ggml::spacemit::context & ctx, g
 
 template <typename T> void forward_repeat_dim1(ggml::spacemit::context & ctx, ggml_tensor * op);
 
-void quantize_a_row_i8(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr);
+void quantize_a_i8_r1(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr);
 
-void quantize_a_4row_i8(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr);
+void quantize_a_i8_r4(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr);
 
-void quantize_a_row_i8_hp(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr);
+void quantize_a_i8_r1_hp(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr);
 
-void quantize_a_4row_i8_hp(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr);
+void quantize_a_i8_r4_hp(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr);
 
-void quantize_a_row_i8k(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr);
+void quantize_a_i8_r1_k(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr);
 
-void quantize_a_4row_i8k(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr);
+void quantize_a_i8_r4_k(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr);
 
 }  // namespace rvv
 
