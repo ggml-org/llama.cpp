@@ -1272,6 +1272,10 @@ struct test_case {
         if (contains_f16 && strcmp(ggml_backend_reg_name(reg), "WebGPU") == 0) {
             return std::max(max_nmse_err(), 1e-6);
         }
+        // the ANE computes in fp16 only
+        if (strcmp(ggml_backend_reg_name(reg), "ANE") == 0) {
+            return std::max(max_nmse_err(), 5e-6);
+        }
         return max_nmse_err();
     }
 
