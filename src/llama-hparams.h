@@ -291,6 +291,8 @@ struct llama_hparams {
     uint32_t lilicorr_layers         = 0;
     float    lilicorr_vector_eps     = 0.0f;
     float    lilicorr_logit_scale    = 0.0f;
+    uint32_t dspine_head_topk        = 0;
+    float    dspine_eps              = 0.0f;
 
     // llama4 smallthinker
     uint32_t n_moe_layer_step        = 0;

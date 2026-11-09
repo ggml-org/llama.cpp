@@ -3587,7 +3587,7 @@ int32_t llama_model_n_layer_nextn(const llama_model * model) {
 }
 
 int32_t llama_model_dflash_selector_top_k(const llama_model * model) {
-    return model->hparams.dflash_selector_top_k;
+    return model->hparams.dflash_selector_top_k > 0 ? model->hparams.dflash_selector_top_k : model->hparams.dspine_head_topk;
 }
 
 int32_t llama_model_n_head(const llama_model * model) {

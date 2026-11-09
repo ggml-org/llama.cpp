@@ -911,6 +911,10 @@ class DFlashModel(Qwen3Model):
         causal = self.hparams.get("is_causal")
         if causal is None:
             causal = dflash_config.get("causal")
+        if (bridge := dflash_config.get("selected_prefix_code_bridge")) is not None:
+            self.gguf_writer.add_dspine_head_topk(self._dspine_head_topk())
+            self.gguf_writer.add_dspine_eps(float(bridge["eps"]))
+            causal = True
         if causal is not None:
             self.gguf_writer.add_causal_attention(bool(causal))
 
@@ -976,6 +980,75 @@ class DFlashModel(Qwen3Model):
         self.hparams["has_embed_tokens"] = True
         yield embedding_name, embeddings
 
+    def _dspine_head_topk(self) -> int:
+        # DSpine: DFlash + a code bridge after every layer + an exact-sender rewrite of the last write
+        cfg = self.hparams["dflash_config"]
+        n_layer = self.block_count
+
+        def require(cond: bool, msg: str) -> None:
+            if not cond:
+                raise ValueError(f"unsupported DSpine draft: {msg}")
+
+        require(cfg.get("draft_block_causal") is True and self.hparams.get("is_causal", True) is True, "the draft must be block-causal")
+        require(cfg.get("selected_prefix_terminal") is False, "terminal-corrected bridges are not supported")
+        require(not cfg.get("selected_prefix_terminal_residual_rank"), "terminal residuals are not supported")
+        require(cfg.get("selected_prefix_decode_mode") == "serial", "only the serial decode mode is supported")
+        require(cfg.get("selected_prefix_feature_writes") is True and cfg.get("selected_prefix_feature_write_mode") == "independent", "only independent feature writes are supported")
+        require(sorted(cfg.get("selected_prefix_feature_layers", [])) == list(range(1, n_layer + 1)), "every layer must write to the bridge")
+        require(not cfg.get("selected_prefix_feature_next_token_rows", False), "next-token rows are not supported")
+        require(cfg.get("selected_prefix_feature_reliability") is None, "reliability probes are not supported")
+        for key in ("selector_rank", "selector_top_k", "projector_type", "attention_sink_bias", "conv_kernel_size", "conv_group_size", "attention_value_scale"):
+            require(cfg.get(key) is None, f"'{key}' is not supported")
+        require(self.rope_parameters.get("rope_type", "default") == "default", "only default RoPE is supported")
+        require(float(self.rope_parameters.get("partial_rotary_factor") or 1.0) == 1.0, "partial RoPE is not supported")
+
+        widths: set[int] = set()
+        if (refine := cfg.get("selected_prefix_last_write_refine")) is not None:
+            require(refine.get("kind") == "exact_sender" and int(refine.get("version", 1)) == 1, "only the exact_sender v1 refinement is supported")
+            widths.add(int(refine["head_topk"]))
+        if (second := self.hparams.get("code_bridge_second_pass")) is not None:
+            require(second.get("mode") == "serial_table" and int(second.get("first_exact", -1)) == n_layer - 1, "only the serial_table second pass of the last layer is supported")
+            widths.add(int(second["head_topk"]))
+        require(len(widths) == 1, f"refinement head_topk is missing or inconsistent: {sorted(widths)}")
+        top_k = widths.pop()
+        require(2 <= top_k <= 64 and top_k & (top_k - 1) == 0, f"head_topk must be a power of two in [2, 64], got {top_k}")
+        return top_k
+
+    def _dspine_modify_tensors(self, data_torch: Tensor, name: str) -> Iterable[tuple[str, Tensor]]:
+        if name.endswith("_version"):
+            version = LazyTorchTensor.to_eager(data_torch)
+            if version.numel() != 1 or int(version.item()) != 1:
+                raise ValueError(f"unsupported DSpine checkpoint version {name!r}")
+            return
+
+        bridge = "model.selected_prefix_bridge."
+        short = name.removeprefix(bridge)
+        n_layer = self.block_count
+
+        if short == "out.weight":
+            # the terminal projection is unused by terminal-disabled bridges
+            if torch.count_nonzero(LazyTorchTensor.to_eager(data_torch)) != 0:
+                raise ValueError("DSpine terminal projection must be zero")
+            return
+        if short == "codebook":
+            yield from super().modify_tensors(data_torch, bridge + "codebook.weight", None)
+            return
+
+        # stacked per-layer weights -> one tensor per layer (the last layer reads with read_weight)
+        if short == "read_weight":
+            yield from super().modify_tensors(data_torch, f"model.layers.{n_layer - 1}.selected_prefix_bridge.read.weight", n_layer - 1)
+            return
+        if short in ("early_read_weights", "feature_write_weights"):
+            n_stack = n_layer - 1 if short == "early_read_weights" else n_layer
+            if data_torch.shape[0] != n_stack:
+                raise ValueError(f"DSpine {short} has {data_torch.shape[0]} layers, expected {n_stack}")
+            kind = "read" if short == "early_read_weights" else "write"
+            for il in range(n_stack):
+                yield from super().modify_tensors(data_torch[il], f"model.layers.{il}.selected_prefix_bridge.{kind}.weight", il)
+            return
+
+        yield from super().modify_tensors(data_torch, name, None)
+
     def _target_uses_mrope(self) -> bool:
         if self.target_model_dir is None:
             return False
@@ -1003,6 +1076,10 @@ class DFlashModel(Qwen3Model):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name == "model.embed_tokens.weight" and not self.hparams.get("has_embed_tokens", True):
+            return
+
+        if name.startswith("model.selected_prefix_bridge.") or name in ("model.draft_block_causal_version", "model.last_write_refine_version"):
+            yield from self._dspine_modify_tensors(data_torch, name)
             return
 
         # interleaved-rope checkpoints (rope_is_neox_style = false) -> NeoX layout: per head, even dims first then odd

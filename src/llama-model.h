@@ -419,6 +419,9 @@ struct llama_layer {
     struct ggml_tensor * lilicorr_mlp_2_b         = nullptr;
     struct ggml_tensor * lilicorr_mlp_2_s         = nullptr;
 
+    struct ggml_tensor * dspine_read  = nullptr;
+    struct ggml_tensor * dspine_write = nullptr;
+
     // mamba proj
     struct ggml_tensor * ssm_in  = nullptr;
     struct ggml_tensor * ssm_x   = nullptr;
@@ -918,6 +921,12 @@ struct llama_model {
     struct ggml_tensor * lilicorr_in_head_b           = nullptr;
     struct ggml_tensor * lilicorr_anchor_out_head     = nullptr;
     struct ggml_tensor * lilicorr_anchor_out_head_b   = nullptr;
+
+    struct ggml_tensor * dspine_codebook  = nullptr;
+    struct ggml_tensor * dspine_gate      = nullptr;
+    struct ggml_tensor * dspine_gate_b    = nullptr;
+    struct ggml_tensor * dspine_pred_gate = nullptr;
+    struct ggml_tensor * dspine_prev      = nullptr;
 
 
     // unified vector to store target-model extracted layer ids in eagle3, dflash, etc.

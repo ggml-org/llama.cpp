@@ -183,6 +183,7 @@ LLAMA_API llama_context * llama_get_ctx_other(struct llama_context * ctx);
 // model/context data extraction
 //
 
+// width of the candidate lattice in a DFlash draft's nextn output (DFlash2 selector, DSpine refinement), 0 if none
 LLAMA_API int32_t llama_model_dflash_selector_top_k(const struct llama_model * model);
 
 // returns pointer to the target-model layer indices

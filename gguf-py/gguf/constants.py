@@ -351,6 +351,10 @@ class Keys:
         VECTOR_EPS      = "lilicorr.vector_eps"
         LOGIT_SCALE     = "lilicorr.logit_scale"
 
+    class DSpine:
+        HEAD_TOPK = "{arch}.dspine.head_topk"
+        EPS       = "{arch}.dspine.eps"
+
     class PosNet:
         EMBEDDING_LENGTH = "{arch}.posnet.embedding_length"
         BLOCK_COUNT      = "{arch}.posnet.block_count"
@@ -1453,6 +1457,12 @@ class MODEL_TENSOR(IntEnum):
     LILICORR_OUT_HEAD             = auto()
     LILICORR_IN_HEAD              = auto()
     LILICORR_ANCHOR_OUT_HEAD      = auto()
+    DSPINE_CODEBOOK               = auto()
+    DSPINE_GATE                   = auto()
+    DSPINE_PRED_GATE              = auto()
+    DSPINE_PREV                   = auto()
+    DSPINE_READ                   = auto()
+    DSPINE_WRITE                  = auto()
     # lfm2 audio
     A_ENC_NORM_CONV        = auto()
     A_ENC_LINEAR_POS       = auto()
@@ -2412,6 +2422,12 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.LILICORR_OUT_HEAD:                     "lilicorr.out_head",
     MODEL_TENSOR.LILICORR_IN_HEAD:                      "lilicorr.in_head",
     MODEL_TENSOR.LILICORR_ANCHOR_OUT_HEAD:              "lilicorr.anchor_out_head",
+    MODEL_TENSOR.DSPINE_CODEBOOK:                       "dspine_codebook",
+    MODEL_TENSOR.DSPINE_GATE:                           "dspine_gate",
+    MODEL_TENSOR.DSPINE_PRED_GATE:                      "dspine_pred_gate",
+    MODEL_TENSOR.DSPINE_PREV:                           "dspine_prev",
+    MODEL_TENSOR.DSPINE_READ:                           "blk.{bid}.dspine_read",
+    MODEL_TENSOR.DSPINE_WRITE:                          "blk.{bid}.dspine_write",
     MODEL_TENSOR.D2T:                       "d2t",
     MODEL_TENSOR.ATTN_V_GATE:               "blk.{bid}.attn_v_gate",
     MODEL_TENSOR.ATTN_V_EXP:                "blk.{bid}.attn_v_exps",
@@ -6247,6 +6263,12 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.LILICORR_OUT_HEAD,
         MODEL_TENSOR.LILICORR_IN_HEAD,
         MODEL_TENSOR.LILICORR_ANCHOR_OUT_HEAD,
+        MODEL_TENSOR.DSPINE_CODEBOOK,
+        MODEL_TENSOR.DSPINE_GATE,
+        MODEL_TENSOR.DSPINE_PRED_GATE,
+        MODEL_TENSOR.DSPINE_PREV,
+        MODEL_TENSOR.DSPINE_READ,
+        MODEL_TENSOR.DSPINE_WRITE,
     ],
     MODEL_ARCH.MISTRAL4: [
         MODEL_TENSOR.TOKEN_EMBD,
