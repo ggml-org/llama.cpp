@@ -623,9 +623,7 @@ static __global__ void quantize_mmq_few_q8_1(
 
     // the 32 values of a sub-block are held by 8 threads
     float amax = fmaxf(fmaxf(fabsf(xi.x), fabsf(xi.y)), fmaxf(fabsf(xi.z), fabsf(xi.w)));
-    float sum  = xi.x + xi.y + xi.z + xi.w;
     amax = warp_reduce_max<8>(amax);
-    sum  = warp_reduce_sum<8>(sum);
 
     const float d_inv = 127.0f / amax;
     char4 q;
@@ -634,6 +632,12 @@ static __global__ void quantize_mmq_few_q8_1(
     q.z = roundf(xi.z*d_inv);
     q.w = roundf(xi.w*d_inv);
     const float d = 1.0f / d_inv;
+
+    // as in quantize_mmq_q8_1: the sum of the quantized values; the int warp_reduce_sum reduces the whole warp on Ampere+
+    [[maybe_unused]] float sum = 0.0f;
+    if constexpr (ds_layout != MMQ_Q8_1_DS_LAYOUT_D4) {
+        sum = d*warp_reduce_sum<8>(float(q.x + q.y + q.z + q.w));
+    }
 
     const int s = i0 % QK_K / QK8_1;          // sub-block
     const int k = i0 % QK8_1;                 // first value in sub-block
