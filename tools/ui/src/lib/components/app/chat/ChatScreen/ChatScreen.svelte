@@ -97,33 +97,30 @@
 		showDeleteDialog = false;
 	}
 
-	async function handleSendMessage(message: string, files?: ChatUploadedFile[]): Promise<boolean> {
-		const plainFiles = files ? $state.snapshot(files) : undefined;
-		const result = plainFiles
-			? await parseFilesToMessageExtras(plainFiles, activeModel.activeModelId ?? undefined)
-			: undefined;
+	async function handleSendMessage(
+		message: string,
+		files: ChatUploadedFile[],
+		onPrepared: (emptyFiles: string[]) => boolean
+	): Promise<void> {
+		const result = await parseFilesToMessageExtras(
+			$state.snapshot(files),
+			activeModel.activeModelId ?? undefined
+		);
 
-		if (result?.emptyFiles && result.emptyFiles.length > 0) {
+		if (result.failedFiles.length > 0) return;
+
+		if (!onPrepared(result.emptyFiles)) return;
+
+		if (result.emptyFiles.length > 0) {
 			emptyFileNames = result.emptyFiles;
 			showEmptyFileDialog = true;
 
-			if (files) {
-				const emptyFileNamesSet = new Set(result.emptyFiles);
-
-				fileUpload.uploadedFiles = fileUpload.uploadedFiles.filter(
-					(file) => !emptyFileNamesSet.has(file.name)
-				);
-			}
-
-			return false;
+			return;
 		}
 
 		// Sending re-arms following: the reply streams in under the message.
 		stick.scrollToBottom();
-
-		await chatStore.sendMessage(message, result?.extras);
-
-		return true;
+		await chatStore.sendMessage(message, result.extras);
 	}
 
 	let lastScrolledConversationId: string | null = null;
