@@ -1660,8 +1660,9 @@ bool llama_context::supports_state_row() const {
         return false;
     }
 
+    // the rows replace the host state rows, so they must have the width the graph takes for those
     const ggml_tensor * src = cparams.ctx_state_src ? cparams.ctx_state_src->get_h_nextn_dev() : nullptr;
-    if (src == nullptr || src->ne[0] != (int64_t) model.hparams.n_embd_out()) {
+    if (src == nullptr || src->ne[0] != (int64_t) llama_batch_ext_select_n_embd_state(cparams.ctx_type, model.hparams)) {
         return false;
     }
 

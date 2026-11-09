@@ -63,6 +63,11 @@ bool llama_batch_allocr::init(
     const bool has_row       = batch_inp.tokens[0].embd_row >= 0;
     const bool has_state_row = batch_inp.tokens[0].state_row >= 0;
 
+    if (has_state && has_state_row) {
+        LLAMA_LOG_ERROR("%s: the entries have a state embedding and a state row\n", __func__);
+        return false;
+    }
+
     for (int32_t i = 0; i < n_tok; ++i) {
         const bool is_tok = batch_inp.tokens[i].id != LLAMA_TOKEN_NULL;
         const bool is_emb = batch_inp.tokens[i].has_embd;
@@ -90,11 +95,6 @@ bool llama_batch_allocr::init(
 
         if ((batch_inp.tokens[i].state_row >= 0) != has_state_row) {
             LLAMA_LOG_ERROR("%s: all entries in the batch must have the same state row presence\n", __func__);
-            return false;
-        }
-
-        if (has_state && has_state_row) {
-            LLAMA_LOG_ERROR("%s: entry %d has a state embedding and a state row\n", __func__, i);
             return false;
         }
 

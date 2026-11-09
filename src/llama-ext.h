@@ -182,7 +182,7 @@ LLAMA_API llama_context * llama_get_ctx_other(struct llama_context * ctx);
 // Write the unmasked h_nextn rows (see llama_set_embeddings_nextn) of each decode to a device buffer
 // [n_embd_out, n_batch + n_seq_max] instead of host memory: row r < n_batch is the token at batch index r of the last decode,
 // row n_batch + s is free for the caller, e.g. for seq s (see llama_set_embeddings_nextn_rows()).
-// Returns false if the buffer cannot be used, the rows are then extracted to host memory as before.
+// Returns false if the buffer cannot be used, the rows are then extracted to host memory.
 LLAMA_API bool llama_set_embeddings_nextn_dev(struct llama_context * ctx, bool value);
 
 // Copy rows of the h_nextn device buffer to or from host memory, ordered after the last decode and its readers
