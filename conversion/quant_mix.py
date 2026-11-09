@@ -12,6 +12,7 @@ to the layer index for dense models.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import Enum
 
@@ -319,13 +320,18 @@ def _not_divisible(name: str, t: T) -> bool:
 
 
 def parse_tensor_type_spec(spec: str) -> tuple[str, T]:
-    """Parse one 'name=type' spec (name lowercased, type a ggml type name)."""
+    """Parse one 'name=type' spec. name is a regex pattern matched with re.search
+    (mirroring llama-quantize --tensor-type, which uses std::regex_search)."""
     if "=" not in spec:
         raise ValueError(f"malformed tensor type '{spec}' (expected name=type)")
     name, _, type_str = spec.partition("=")
     name = name.strip().lower()
     if not name:
         raise ValueError(f"missing tensor name in '{spec}'")
+    try:
+        re.compile(name)
+    except re.error as e:
+        raise ValueError(f"invalid tensor name regex '{name}' in '{spec}': {e}") from None
     type_str = type_str.strip()
     if not type_str:
         raise ValueError(f"missing quantization type in '{spec}'")
@@ -342,11 +348,10 @@ def parse_tensor_type_overrides(specs: list[str]) -> list[tuple[str, T]]:
 
 
 def match_override(overrides: list[tuple[str, T]], name: str) -> T | None:
-    """Return the type of the first override whose name is a substring of the (lowercased)
-    gguf tensor name, or None. Mirrors llama-quantize --tensor-type matching."""
-    name = name.lower()
+    """Return the type of the first override whose regex pattern matches the gguf tensor
+    name (re.search, mirroring llama-quantize's std::regex_search), or None."""
     for pattern, t in overrides:
-        if pattern in name:
+        if re.search(pattern, name):
             return t
     return None
 
