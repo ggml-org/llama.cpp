@@ -256,8 +256,12 @@ void mul_vec_q_n_f32_impl(
 
     float sumf[NR0] = {0.f};
 
-    const short ix = (tiisg/(NW/NQ));
-    const short il = (tiisg%(NW/NQ))*8;
+    // lanes that share one block, and blocks walked per round
+    constexpr short NLB = QK4_0/NQ;
+    constexpr short NBL = NW/NLB;
+
+    const short ix = tiisg/NLB;
+    const short il = (tiisg%NLB)*8;
 
     //const int ib0 = sgitg*NQ + ix;
     const int ib0 = ix;
@@ -269,7 +273,7 @@ void mul_vec_q_n_f32_impl(
 
     // each thread in a SIMD group deals with half a block.
     //for (int ib = ib0; ib < nb; ib += NSG*NQ) {
-    for (int ib = ib0; ib < nb; ib += NQ) {
+    for (int ib = ib0; ib < nb; ib += NBL) {
         float sumy[2] = { 0.f, 0.f };
 
         FOR_UNROLL (short i = 0; i < 8; i += 2) {
@@ -286,7 +290,7 @@ void mul_vec_q_n_f32_impl(
             sumf[row] += block_q_n_dot_y(ax[row] + ib, sumy[0] + sumy[1], yl, il);
         }
 
-        yb += QK4_0 * 16;
+        yb += QK4_0 * NBL;
         //yb += NSG*NQ*QK4_0;
     }
 
@@ -550,17 +554,21 @@ void kernel_mul_mv_q8_0_f32_impl(
 
     float sumf[NR0] = { 0.f };
 
-    const short ix = tiisg/(NW/NQ);
-    const short il = tiisg%(NW/NQ);
+    // lanes that share one block, and blocks walked per round
+    constexpr short NLB = QK8_0/NQ;
+    constexpr short NBL = NW/NLB;
 
-    const int ib0 = sgitg*NQ + ix;
+    const short ix = tiisg/NLB;
+    const short il = tiisg%NLB;
+
+    const int ib0 = sgitg*NBL + ix;
 
     float yl[NQ];
 
     device const float * yb = y + ib0*QK8_0 + il*NQ;
 
     // each thread in a SIMD group deals with NQ quants at a time
-    for (int ib = ib0; ib < nb; ib += NSG*NQ) {
+    for (int ib = ib0; ib < nb; ib += NSG*NBL) {
         for (short i = 0; i < NQ; ++i) {
             yl[i] = yb[i];
         }
@@ -576,7 +584,7 @@ void kernel_mul_mv_q8_0_f32_impl(
             sumf[row] += sumq*ax[row][ib].d;
         }
 
-        yb += NSG*NQ*QK8_0;
+        yb += NSG*NBL*QK8_0;
     }
 
     device float * dst_f32 = (device float *) dst + (uint64_t)im*args.ne0*args.ne1 + (uint64_t)r1*args.ne0;
@@ -965,16 +973,19 @@ void kernel_mul_mv_t_t_impl(
 
     float sumf[NR0] = { 0.f };
 
-    const short ix = tiisg/(NW/NF);
-    const short il = tiisg%(NW/NF);
+    constexpr short NLB = NB/NF;   // lanes that cooperate on one block
+    constexpr short NBL = NW/NLB;  // blocks per simdgroup
 
-    const int ib0 = sgitg*NF + ix;
+    const short ix = tiisg/NLB;
+    const short il = tiisg%NLB;
+
+    const int ib0 = sgitg*NBL + ix;
 
     T1 yl[NF];
 
     device const T1 * yb = y + (ib0*NB + il*NF);
 
-    for (int ib = ib0; ib < nb; ib += NSG*NF) {
+    for (int ib = ib0; ib < nb; ib += NSG*NBL) {
         for (short i = 0; i < NF; ++i) {
             yl[i] = yb[i];
         }
@@ -990,7 +1001,7 @@ void kernel_mul_mv_t_t_impl(
             sumf[row] += sumq;
         }
 
-        yb += NSG*NF*NW;
+        yb += NSG*NBL*NB;
     }
 
     for (int i = nb*NB + sgitg*NW + tiisg; i < args.ne00; i += NW*NSG) {
@@ -1090,16 +1101,19 @@ void kernel_mul_mv_t_t_4_impl(
 
     float sumf[NR0] = { 0.f };
 
-    const short ix = tiisg/(NW/NF);
-    const short il = tiisg%(NW/NF);
+    constexpr short NLB = NB/NF;   // lanes that cooperate on one block
+    constexpr short NBL = NW/NLB;  // blocks per simdgroup
 
-    const int ib0 = sgitg*NF + ix;
+    const short ix = tiisg/NLB;
+    const short il = tiisg%NLB;
+
+    const int ib0 = sgitg*NBL + ix;
 
     T14 yl4[NF4];
 
     device const T14 * yb4 = y4 + (ib0*NB + il*NF)/4;
 
-    for (int ib = ib0; ib < nb; ib += NSG*NF) {
+    for (int ib = ib0; ib < nb; ib += NSG*NBL) {
         for (short i = 0; i < NF4; ++i) {
             yl4[i] = yb4[i];
         }
@@ -1115,7 +1129,7 @@ void kernel_mul_mv_t_t_4_impl(
             sumf[row] += sumq;
         }
 
-        yb4 += NSG*NF*NW/4;
+        yb4 += NSG*NBL*NB/4;
     }
 
     for (int i = nb*NB + sgitg*NW + tiisg; i < args.ne00; i += NW*NSG) {
@@ -1277,7 +1291,7 @@ void kernel_mul_mv_q2_K_f32_impl(
 
     device const float * y4 = y + ix * QK_K + 128 * iq + 8 * ir;
 
-    for (int ib = ix; ib < nb; ib += 4) {
+    for (int ib = ix; ib < nb; ib += N_SIMDWIDTH/8) {
         float4 sumy = {0.f, 0.f, 0.f, 0.f};
         for (short i = 0; i < 8; ++i) {
             yl[i+ 0] = y4[i+ 0]; sumy[0] += yl[i+ 0];
@@ -1316,7 +1330,7 @@ void kernel_mul_mv_q2_K_f32_impl(
             dh += args.nb01/2;
         }
 
-        y4 += 4 * QK_K;
+        y4 += (N_SIMDWIDTH/8) * QK_K;
     }
 
     device float * dst_f32 = (device float *) dst + (uint64_t)im*args.ne0*args.ne1 + (uint64_t)r1*args.ne0;
@@ -1555,7 +1569,7 @@ void kernel_mul_mv_q4_K_f32_impl(
     uint16_t sc16[4];
     thread const uint8_t * sc8 = (thread const uint8_t *)sc16;
 
-    for (int ib = ix; ib < nb; ib += 4) {
+    for (int ib = ix; ib < nb; ib += N_SIMDWIDTH/8) {
         float4 sumy = {0.f, 0.f, 0.f, 0.f};
 
         for (short i = 0; i < 8; ++i) {
@@ -1602,7 +1616,7 @@ void kernel_mul_mv_q4_K_f32_impl(
             dh += args.nb01/2;
         }
 
-        y4 += 4 * QK_K;
+        y4 += (N_SIMDWIDTH/8) * QK_K;
     }
 
     device float * dst_f32 = (device float *) dst + (int64_t)im*args.ne0*args.ne1 + (int64_t)r1*args.ne0;
@@ -1627,6 +1641,7 @@ kernel void kernel_mul_mv_q4_K_f32(
 
     kernel_mul_mv_q4_K_f32_impl<N_R0_Q4_K, constant ggml_metal_kargs_mul_mv &>(args, src0, src1, dst, nullptr, tgpig, tiisg, sgitg);
 }
+
 
 template<int nr0, typename args_t>
 void kernel_mul_mv_q5_K_f32_impl(
@@ -1665,8 +1680,9 @@ void kernel_mul_mv_q5_K_f32_impl(
     constexpr uint16_t kmask2 = 0x0f0f;
     constexpr uint16_t kmask3 = 0xc0c0;
 
-    const short tid = tiisg/4;
-    const short ix  = tiisg%4;
+    constexpr short NIX = N_SIMDWIDTH/8;   // lanes that split the row over blocks
+    const short tid = tiisg/NIX;
+    const short ix  = tiisg%NIX;
     const short iq  = tid/4;
     const short ir  = tid%4;
 
@@ -1684,7 +1700,7 @@ void kernel_mul_mv_q5_K_f32_impl(
 
     device const float * y1 = yy + ix*QK_K + y_offset;
 
-    for (int i = ix; i < nb; i += 4) {
+    for (int i = ix; i < nb; i += NIX) {
         device const uint8_t * q1 = x[i].qs + q_offset;
         device const uint8_t * qh = x[i].qh + l0;
         device const half * dh = &x[i].d;
@@ -1733,7 +1749,7 @@ void kernel_mul_mv_q5_K_f32_impl(
             a  += args.nb01/2;
         }
 
-        y1 += 4 * QK_K;
+        y1 += NIX * QK_K;
     }
 
     device float * dst_f32 = (device float *) dst + (uint64_t)im*args.ne0*args.ne1 + (uint64_t)r1*args.ne0;
@@ -1797,8 +1813,9 @@ void kernel_mul_mv_q6_K_f32_impl(
 
     float yl[16];
 
-    const short tid = tiisg/2;
-    const short ix  = tiisg%2;
+    constexpr short NIX = N_SIMDWIDTH/16;  // lanes that split the row over blocks
+    const short tid = tiisg/NIX;
+    const short ix  = tiisg%NIX;
     const short ip  = tid/8;         // 0 or 1
     const short il  = tid%8;
     const short l0  = 4*il;
@@ -1808,7 +1825,7 @@ void kernel_mul_mv_q6_K_f32_impl(
     const short q_offset_l =  64*ip + l0;
     const short q_offset_h =  32*ip + l0;
 
-    for (int i = ix; i < nb; i += 2) {
+    for (int i = ix; i < nb; i += NIX) {
         device const uint8_t * q1 = x[i].ql + q_offset_l;
         device const uint8_t * q2 = q1 + 32;
         device const uint8_t * qh = x[i].qh + q_offset_h;

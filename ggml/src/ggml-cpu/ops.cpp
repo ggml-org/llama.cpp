@@ -12512,3 +12512,142 @@ void ggml_compute_forward_lightning_indexer(
         }
     }
 }
+
+// ---- sense nova loop: fused residual stream routers ----
+// sense nova loop residual stream routers, fused.
+//
+// The router is small but fiddly: an RMS norm over the two streams flattened together, eight
+// logits, two gates per stream, a gate per stream for the sublayer output, and a 2x2 mixing
+// matrix that twenty sinkhorn passes of row-then-column normalisation (in log space) turn into a
+// doubly stochastic one. Ninety six of those per token is a mountain of tiny graph nodes, so the
+// whole thing lives here as a single op.
+//
+// Inputs may be views (the streams come out of the merge op as two halves of one buffer), so rows
+// are addressed through nb[1] and nb[2]; elements inside a row are unit stride.
+
+void ggml_compute_forward_mhc_route(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
+    const struct ggml_tensor * a    = dst->src[0];
+    const struct ggml_tensor * b    = dst->src[1];
+    const struct ggml_tensor * w    = dst->src[2];
+    const struct ggml_tensor * bias = dst->src[3];
+
+    GGML_ASSERT(a->type == GGML_TYPE_F32 && b->type == GGML_TYPE_F32);
+    GGML_ASSERT(w->type == GGML_TYPE_F32 && bias->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_is_contiguous(w) && ggml_is_contiguous(bias));
+    GGML_ASSERT(ggml_is_contiguous(dst));
+    GGML_ASSERT(a->nb[0] == sizeof(float) && b->nb[0] == sizeof(float));
+
+    const int64_t d     = a->ne[0];
+    const int64_t n_tok = a->ne[1];
+    const int64_t n_str = a->ne[2];
+
+    GGML_ASSERT(b->ne[0] == d && b->ne[1] == n_tok && b->ne[2] == n_str);
+    GGML_ASSERT(w->ne[0] == 2*d && w->ne[1] == 8);
+
+    const float * pw    = (const float *) w->data;
+    const float * pbias = (const float *) bias->data;
+    float       * out   = (float *) dst->data;
+
+    const int sink_iters = 20;
+
+    for (int64_t s = 0; s < n_str; ++s) {
+        for (int64_t t = params->ith; t < n_tok; t += params->nth) {
+            const float * va = (const float *) ((const char *) a->data + t*a->nb[1] + s*a->nb[2]);
+            const float * vb = (const float *) ((const char *) b->data + t*b->nb[1] + s*b->nb[2]);
+            float       * po = out + t*(d + 6) + s*n_tok*(d + 6);
+
+            float ss = 0.0f;
+            for (int64_t i = 0; i < d; ++i) {
+                ss += va[i]*va[i] + vb[i]*vb[i];
+            }
+            const float rms = 1.0f/sqrtf(ss/(2.0f*d) + 1e-6f);
+
+            float lg[8];
+            for (int k = 0; k < 8; ++k) {
+                const float * wk = pw + k*2*d;
+                float acc = 0.0f;
+                for (int64_t i = 0; i < d; ++i) {
+                    acc += wk[i]*va[i] + wk[d + i]*vb[i];
+                }
+                lg[k] = acc*rms + pbias[k];
+            }
+
+            const float pre0  = 1.0f/(1.0f + expf(-lg[0]));
+            const float pre1  = 1.0f/(1.0f + expf(-lg[1]));
+            const float post0 = 2.0f/(1.0f + expf(-lg[2]));
+            const float post1 = 2.0f/(1.0f + expf(-lg[3]));
+
+            float m[2][2] = { { lg[4], lg[5] }, { lg[6], lg[7] } };
+            for (int it = 0; it < sink_iters; ++it) {
+                for (int r = 0; r < 2; ++r) {
+                    const float mx  = m[r][0] > m[r][1] ? m[r][0] : m[r][1];
+                    const float lse = mx + logf(expf(m[r][0] - mx) + expf(m[r][1] - mx));
+                    m[r][0] -= lse;
+                    m[r][1] -= lse;
+                }
+                for (int c = 0; c < 2; ++c) {
+                    const float mx  = m[0][c] > m[1][c] ? m[0][c] : m[1][c];
+                    const float lse = mx + logf(expf(m[0][c] - mx) + expf(m[1][c] - mx));
+                    m[0][c] -= lse;
+                    m[1][c] -= lse;
+                }
+            }
+
+            for (int64_t i = 0; i < d; ++i) {
+                po[i] = pre0*va[i] + pre1*vb[i];
+            }
+            po[d + 0] = post0;
+            po[d + 1] = post1;
+            po[d + 2] = expf(m[0][0]);
+            po[d + 3] = expf(m[0][1]);
+            po[d + 4] = expf(m[1][0]);
+            po[d + 5] = expf(m[1][1]);
+        }
+    }
+}
+
+void ggml_compute_forward_mhc_merge(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
+    const struct ggml_tensor * a      = dst->src[0];
+    const struct ggml_tensor * b      = dst->src[1];
+    const struct ggml_tensor * x      = dst->src[2];
+    const struct ggml_tensor * packed = dst->src[3];
+
+    GGML_ASSERT(a->type == GGML_TYPE_F32 && b->type == GGML_TYPE_F32);
+    GGML_ASSERT(x->type == GGML_TYPE_F32 && packed->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_is_contiguous(dst));
+    GGML_ASSERT(a->nb[0] == sizeof(float) && x->nb[0] == sizeof(float) && packed->nb[0] == sizeof(float));
+
+    const int64_t d     = a->ne[0];
+    const int64_t n_tok = a->ne[1];
+    const int64_t n_str = a->ne[2];
+
+    const float * pp  = (const float *) packed->data;
+    float       * out = (float *) dst->data;
+
+    for (int64_t s = 0; s < n_str; ++s) {
+        for (int64_t t = params->ith; t < n_tok; t += params->nth) {
+            const float * va = (const float *) ((const char *) a->data + t*a->nb[1] + s*a->nb[2]);
+            const float * vb = (const float *) ((const char *) b->data + t*b->nb[1] + s*b->nb[2]);
+            const float * vx = (const float *) ((const char *) x->data + t*x->nb[1] + s*x->nb[2]);
+            const float * vp = (const float *) ((const char *) packed->data + t*packed->nb[1] + s*packed->nb[2]);
+            float       * vo = out + t*2*d + s*n_tok*2*d;
+
+            const float post0 = vp[d + 0];
+            const float post1 = vp[d + 1];
+            const float m00   = vp[d + 2];
+            const float m01   = vp[d + 3];
+            const float m10   = vp[d + 4];
+            const float m11   = vp[d + 5];
+
+            for (int64_t i = 0; i < d; ++i) {
+                const float vav = va[i];
+                const float vbv = vb[i];
+                const float vxv = vx[i];
+                vo[i]     = m00*vav + m01*vbv + post0*vxv;
+                vo[d + i] = m10*vav + m11*vbv + post1*vxv;
+            }
+        }
+    }
+
+    GGML_UNUSED(pp);
+}

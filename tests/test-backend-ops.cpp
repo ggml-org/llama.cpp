@@ -1608,11 +1608,12 @@ struct test_case {
             double err = ud->tc->err(f1.data(), f2.data(), f1.size());
             if (err > ud->tc->max_err(ud->backend1)) {
                 printf("[%s] ERR = %.9f > %.9f ", ggml_op_desc(t1), err, ud->tc->max_err(ud->backend1));
-                //for (int i = 0; i < (int) f1.size(); i++) {
-                //    printf("%5d %9.6f %9.6f, diff = %9.6f\n", i, f1[i], f2[i], f1[i] - f2[i]);
-                //}
-                //printf("\n");
-                //exit(1);
+                if (getenv("GGML_TEST_DUMP") != nullptr) {
+                    printf("\n");
+                    for (int i = 0; i < (int) f1.size() && i < 64; i++) {
+                        printf("  %5d  %s=%9.6f  %s=%9.6f  diff=%9.6f\n", i, bn1, f1[i], bn2, f2[i], f1[i] - f2[i]);
+                    }
+                }
                 ud->ok = false;
             }
             return true;
@@ -11796,6 +11797,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 8192, 1, 5120, {128, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 8192, 512, 5120, {128, 1}, {1, 1}));
 #endif
+
+    // the shape a 1.7B model actually feeds the tiled q8_0 path (unbatched, n >= 32)
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 2048, 256, 2048, {1, 1}, {1, 1}));
 
     for (ggml_type type_a : all_types) {
         for (int i = 1; i < 10; ++i) {

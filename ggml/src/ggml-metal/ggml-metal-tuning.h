@@ -18,9 +18,16 @@ int fa_vec_ne11_bucket(int64_t ne11);
 int fa_vec_ne01_bucket(int64_t ne01);
 
 // NE baked into each (dk,dv) baseline instantiation in kernels/fa_vec_*.metal.
-// Hand-maintained mirror; keep in sync with those instantiations.
+// Hand-maintained mirror; keep in sync with those instantiations. The value depends on the
+// simdgroup width: NL = nw/NE must divide dk/4 and dv/4, so a 64-lane device needs a different
+// NE per pair than a 32-lane one.
 // The Metal test slice covers every legal config for dk=128 and dk=576.
-int fa_vec_baseline_ne(int dk, int dv);
+int fa_vec_baseline_ne(int dk, int dv, int nw = 32);
+
+// (dk,dv) pairs are validated by the caller against the instantiated set.
+// highest NE instantiated per simd width: the tuned variants are 32-lane only, other widths
+// instantiate the baseline config for every pair
+inline int fa_vec_max_ne(int nw) { return nw == 32 ? 4 : 16; }
 
 // Tuned table has two row kinds. Exact rows key a (ne11_b, ne01_b) bucket. Default rows
 // collapse ne11 over one ne01 domain: ne11_b == FA_VEC_NE11_DEFAULT and ne01_b holds the
@@ -51,12 +58,15 @@ struct fa_vec_entry_t {
     fa_vec_cfg_t cfg;
 };
 
-// legal NE values for a (dk,dv): NL = 32/NE, require (dk/4)%NL==0 && (dv/4)%NL==0.
+// legal NE values for a (dk,dv): NL = nw/NE, require (dk/4)%NL==0 && (dv/4)%NL==0.
 // single source shared by the offline tuner and test-backend-ops.
-inline std::vector<int> fa_vec_legal_ne(int dk, int dv) {
+inline std::vector<int> fa_vec_legal_ne(int dk, int dv, int nw = 32) {
     std::vector<int> r;
-    for (int ne : { 1, 2, 4 }) {
-        const int nl = 32 / ne;
+    for (int ne : { 1, 2, 4, 8, 16 }) {
+        if (ne > fa_vec_max_ne(nw)) {
+            continue;
+        }
+        const int nl = nw / ne;
         if ((dk / 4) % nl == 0 && (dv / 4) % nl == 0) {
             r.push_back(ne);
         }
@@ -67,9 +77,10 @@ inline std::vector<int> fa_vec_legal_ne(int dk, int dv) {
 // test/tune-only override; when set, fa_vec_pick returns it directly.
 void         fa_vec_set_override(fa_vec_cfg_t cfg);
 void         fa_vec_clear_override();
-fa_vec_cfg_t fa_vec_baseline_cfg(int dk, int dv);
+fa_vec_cfg_t fa_vec_baseline_cfg(int dk, int dv, int nw = 32);
 
 // Keyed by Apple GPU family; an untuned family matches no row and gets the baseline.
-fa_vec_cfg_t fa_vec_pick(int gpu_family, int dtype, int dk, int dv, int64_t ne11, int64_t ne01);
+// Only 32-lane devices consult the table; other widths always get the baseline config.
+fa_vec_cfg_t fa_vec_pick(int gpu_family, int dtype, int dk, int dv, int64_t ne11, int64_t ne01, int nw = 32);
 
 }  // namespace ggml_metal_tuning

@@ -414,6 +414,125 @@ static const std::vector<ggml_op> ops_topk_moe_sig_norm_scale_bias = {
     GGML_OP_RESHAPE, GGML_OP_SUM_ROWS, GGML_OP_SCALE, GGML_OP_DIV, GGML_OP_RESHAPE, GGML_OP_SCALE
 };
 
+// grouped routing as built by build_moe_ffn for DeepSeek-V3 style models with
+// sigmoid gating: sigmoid + bias, group top-2 scores, top-k groups, mask, final
+// top-k, then the routing weights (unbiased probs) with norm and scale.
+static const std::vector<ggml_op> ops_topk_moe_grouped = {
+    GGML_OP_UNARY,    GGML_OP_RESHAPE,  GGML_OP_ADD,      GGML_OP_RESHAPE, GGML_OP_RESHAPE,
+    GGML_OP_ARGSORT,  GGML_OP_VIEW,     GGML_OP_GET_ROWS, GGML_OP_RESHAPE, GGML_OP_SUM_ROWS,
+    GGML_OP_RESHAPE,  GGML_OP_ARGSORT,  GGML_OP_VIEW,     GGML_OP_GET_ROWS, GGML_OP_FILL,
+    GGML_OP_SET_ROWS, GGML_OP_RESHAPE,  GGML_OP_ARGSORT,  GGML_OP_VIEW,    GGML_OP_GET_ROWS,
+    GGML_OP_RESHAPE,  GGML_OP_SUM_ROWS, GGML_OP_CLAMP,    GGML_OP_DIV,     GGML_OP_RESHAPE,
+    GGML_OP_SCALE,
+};
+
+static bool ggml_metal_fusion_check_topk_moe_grouped(
+        const ggml_metal_fusion       * fusion,
+        const ggml_tensor * const     * nodes,
+        const ggml_cgraph             * gf,
+        const int                     * node_idxs,
+              int                       idx,
+              ggml_metal_fusion_mode    mode) {
+    GGML_UNUSED(mode);
+
+    // A/B switch for measuring the fusion in isolation
+    if (getenv("GGML_METAL_NO_ROUTE_FUSION") != nullptr) {
+        return false;
+    }
+
+    // the filtered chain: UNARY ADD ARGSORT GET_ROWS SUM_ROWS ARGSORT GET_ROWS FILL
+    // SET_ROWS ARGSORT GET_ROWS SUM_ROWS CLAMP DIV SCALE
+    GGML_ASSERT(fusion->ops.size() == 15);
+
+    // the raw span must match the builder's chain exactly, views included
+    const int raw_start = node_idxs[idx];
+    const int n_all     = (int) fusion->ops_all.size();
+    if (raw_start + n_all > gf->n_nodes) {
+        return false;
+    }
+
+    for (int i = 0; i < n_all; ++i) {
+        if (gf->nodes[raw_start + i]->op != fusion->ops_all[i]) {
+            return false;
+        }
+    }
+
+    const ggml_tensor * unary = nodes[0];
+    const ggml_tensor * add   = nodes[1];
+    const ggml_tensor * out   = nodes[14];
+
+    if (ggml_get_unary_op(unary) != GGML_UNARY_OP_SIGMOID) {
+        return false;
+    }
+
+    if (!unary->src[0] || !add->src[1]) {
+        return false;
+    }
+
+    const ggml_tensor * logits = unary->src[0];
+    const ggml_tensor * bias   = add->src[1];
+
+    if (!nodes[6]->src[1] || !nodes[9]->src[0] || !nodes[10]->src[1]) {
+        return false;
+    }
+
+    const ggml_tensor * ids = nodes[10]->src[1];
+
+    if (add->src[0] != unary) {
+        return false;
+    }
+
+    if (logits->type != GGML_TYPE_F32 || bias->type != GGML_TYPE_F32 || unary->type != GGML_TYPE_F32 ||
+        out->type != GGML_TYPE_F32 || ids->type != GGML_TYPE_I32) {
+        return false;
+    }
+
+    const int64_t n_expert = logits->ne[0];
+    const int64_t n_tok    = logits->ne[1];
+
+    if (logits->ne[2] != 1 || logits->ne[3] != 1) {
+        return false;
+    }
+
+    if (bias->ne[0] != n_expert || bias->ne[1] != 1 || bias->ne[2] != 1 || bias->ne[3] != 1) {
+        return false;
+    }
+
+    if (!ggml_is_contiguous(logits) || !ggml_is_contiguous(bias) || !ggml_is_contiguous(out)) {
+        return false;
+    }
+
+    const int64_t n_group    = nodes[4]->ne[1];
+    const int64_t n_grp_used = nodes[6]->src[1]->ne[0];
+    const int64_t n_used     = ids->ne[0];
+
+    if (n_group < 2 || n_group > 32) {
+        return false;
+    }
+
+    if (n_expert <= 0 || n_expert > 1024 || n_expert % n_group != 0 || n_expert / n_group < 2) {
+        return false;
+    }
+
+    if (n_grp_used < 1 || n_grp_used > n_group) {
+        return false;
+    }
+
+    if (n_used < 1 || n_used > 32 || n_used > n_expert) {
+        return false;
+    }
+
+    if (ids->nb[0] != sizeof(int32_t) || ids->nb[1] != sizeof(int32_t)*n_expert) {
+        return false;
+    }
+
+    if (out->ne[0] != 1 || out->ne[1] != n_used || out->ne[2] != n_tok || out->ne[3] != 1) {
+        return false;
+    }
+
+    return true;
+}
+
 static bool ggml_metal_fusion_check_topk_moe(
         const ggml_metal_fusion       * fusion,
         const ggml_tensor * const     * nodes,
@@ -865,54 +984,34 @@ static const std::vector<ggml_op> ops_moe_reduce_8 = {
 static const std::vector<ggml_op> ops_mul_mat_add = { GGML_OP_MUL_MAT, GGML_OP_ADD };
 
 static const std::vector<ggml_metal_fusion> ggml_metal_fusions = {
-    { GGML_METAL_FUSION_NORM_MUL,     ops_norm_mul,         {}, false, ggml_metal_fusion_check_norm },
-    { GGML_METAL_FUSION_NORM_MUL_ADD, ops_norm_mul_add,     {}, false, ggml_metal_fusion_check_norm },
-    { GGML_METAL_FUSION_NORM_SCALE,   ops_norm_scale,       {}, false, ggml_metal_fusion_check_norm },
-    { GGML_METAL_FUSION_NORM_MUL,     ops_rms_norm_mul,     {}, false, ggml_metal_fusion_check_norm },
-    { GGML_METAL_FUSION_NORM_MUL_ADD, ops_rms_norm_mul_add, {}, false, ggml_metal_fusion_check_norm },
-    { GGML_METAL_FUSION_NORM_SCALE,   ops_rms_norm_scale,   {}, false, ggml_metal_fusion_check_norm },
-
-    { GGML_METAL_FUSION_ADD_CHAIN, ops_add_2, {}, false, ggml_metal_fusion_check_add_chain },
-    { GGML_METAL_FUSION_ADD_CHAIN, ops_add_3, {}, false, ggml_metal_fusion_check_add_chain },
-    { GGML_METAL_FUSION_ADD_CHAIN, ops_add_4, {}, false, ggml_metal_fusion_check_add_chain },
-    { GGML_METAL_FUSION_ADD_CHAIN, ops_add_5, {}, false, ggml_metal_fusion_check_add_chain },
-    { GGML_METAL_FUSION_ADD_CHAIN, ops_add_6, {}, false, ggml_metal_fusion_check_add_chain },
-    { GGML_METAL_FUSION_ADD_CHAIN, ops_add_7, {}, false, ggml_metal_fusion_check_add_chain },
-
-    { GGML_METAL_FUSION_SNAKE, ops_snake, {}, false, ggml_metal_fusion_check_snake },
-
-    { GGML_METAL_FUSION_GDN_CACHE, ops_gdn_cache, {}, true, ggml_metal_fusion_check_gdn_cache },
-
-    { GGML_METAL_FUSION_TOPK_MOE, ops_topk_moe,                     {1}, true, ggml_metal_fusion_check_topk_moe },
-    { GGML_METAL_FUSION_TOPK_MOE, ops_topk_moe_scale,               {1}, true, ggml_metal_fusion_check_topk_moe },
-    { GGML_METAL_FUSION_TOPK_MOE, ops_topk_moe_norm,                {1}, true, ggml_metal_fusion_check_topk_moe },
-    { GGML_METAL_FUSION_TOPK_MOE, ops_topk_moe_norm_scale,          {1}, true, ggml_metal_fusion_check_topk_moe },
-    { GGML_METAL_FUSION_TOPK_MOE, ops_topk_moe_norm_bias,           {1}, true, ggml_metal_fusion_check_topk_moe },
-    { GGML_METAL_FUSION_TOPK_MOE, ops_topk_moe_norm_scale_bias,     {1}, true, ggml_metal_fusion_check_topk_moe },
-    { GGML_METAL_FUSION_TOPK_MOE, ops_topk_moe_sp,                  {3}, true, ggml_metal_fusion_check_topk_moe },
-    { GGML_METAL_FUSION_TOPK_MOE, ops_topk_moe_sp_scale,            {3}, true, ggml_metal_fusion_check_topk_moe },
-    { GGML_METAL_FUSION_TOPK_MOE, ops_topk_moe_sp_norm,             {3}, true, ggml_metal_fusion_check_topk_moe },
-    { GGML_METAL_FUSION_TOPK_MOE, ops_topk_moe_sp_norm_scale,       {3}, true, ggml_metal_fusion_check_topk_moe },
-    { GGML_METAL_FUSION_TOPK_MOE, ops_topk_moe_sp_norm_bias,        {3}, true, ggml_metal_fusion_check_topk_moe },
-    { GGML_METAL_FUSION_TOPK_MOE, ops_topk_moe_sp_norm_scale_bias,  {3}, true, ggml_metal_fusion_check_topk_moe },
-    { GGML_METAL_FUSION_TOPK_MOE, ops_topk_moe_sig,                 {2}, true, ggml_metal_fusion_check_topk_moe },
-    { GGML_METAL_FUSION_TOPK_MOE, ops_topk_moe_sig_scale,           {2}, true, ggml_metal_fusion_check_topk_moe },
-    { GGML_METAL_FUSION_TOPK_MOE, ops_topk_moe_sig_norm,            {2}, true, ggml_metal_fusion_check_topk_moe },
-    { GGML_METAL_FUSION_TOPK_MOE, ops_topk_moe_sig_norm_scale,      {2}, true, ggml_metal_fusion_check_topk_moe },
-    { GGML_METAL_FUSION_TOPK_MOE, ops_topk_moe_sig_norm_bias,       {2}, true, ggml_metal_fusion_check_topk_moe },
-    { GGML_METAL_FUSION_TOPK_MOE, ops_topk_moe_sig_norm_scale_bias, {2}, true, ggml_metal_fusion_check_topk_moe },
-
-    { GGML_METAL_FUSION_MOE_REDUCE, ops_moe_reduce_2, {}, true, ggml_metal_fusion_check_moe_reduce },
-    { GGML_METAL_FUSION_MOE_REDUCE, ops_moe_reduce_3, {}, true, ggml_metal_fusion_check_moe_reduce },
-    { GGML_METAL_FUSION_MOE_REDUCE, ops_moe_reduce_4, {}, true, ggml_metal_fusion_check_moe_reduce },
-    { GGML_METAL_FUSION_MOE_REDUCE, ops_moe_reduce_5, {}, true, ggml_metal_fusion_check_moe_reduce },
-    { GGML_METAL_FUSION_MOE_REDUCE, ops_moe_reduce_6, {}, true, ggml_metal_fusion_check_moe_reduce },
-    { GGML_METAL_FUSION_MOE_REDUCE, ops_moe_reduce_7, {}, true, ggml_metal_fusion_check_moe_reduce },
-    { GGML_METAL_FUSION_MOE_REDUCE, ops_moe_reduce_8, {}, true, ggml_metal_fusion_check_moe_reduce },
-
-    { GGML_METAL_FUSION_SSM_CONV_SILU, ops_ssm_conv_silu, {}, false, ggml_metal_fusion_check_ssm_conv_silu },
-
-    { GGML_METAL_FUSION_MUL_MAT_ADD, ops_mul_mat_add, {}, false, ggml_metal_fusion_check_mul_mat_add },
+    { GGML_METAL_FUSION_NORM_MUL,       ops_norm_mul,               {},     false, ggml_metal_fusion_check_norm },
+    { GGML_METAL_FUSION_NORM_MUL_ADD,   ops_norm_mul_add,           {},     false, ggml_metal_fusion_check_norm },
+    { GGML_METAL_FUSION_NORM_SCALE,     ops_norm_scale,             {},     false, ggml_metal_fusion_check_norm },
+    { GGML_METAL_FUSION_NORM_MUL,       ops_rms_norm_mul,           {},     false, ggml_metal_fusion_check_norm },
+    { GGML_METAL_FUSION_NORM_MUL_ADD,   ops_rms_norm_mul_add,       {},     false, ggml_metal_fusion_check_norm },
+    { GGML_METAL_FUSION_NORM_SCALE,     ops_rms_norm_scale,         {},     false, ggml_metal_fusion_check_norm },
+    { GGML_METAL_FUSION_ADD_CHAIN,      ops_add_2,                  {},     false, ggml_metal_fusion_check_add_chain },
+    { GGML_METAL_FUSION_ADD_CHAIN,      ops_add_3,                  {},     false, ggml_metal_fusion_check_add_chain },
+    { GGML_METAL_FUSION_ADD_CHAIN,      ops_add_4,                  {},     false, ggml_metal_fusion_check_add_chain },
+    { GGML_METAL_FUSION_ADD_CHAIN,      ops_add_5,                  {},     false, ggml_metal_fusion_check_add_chain },
+    { GGML_METAL_FUSION_ADD_CHAIN,      ops_add_6,                  {},     false, ggml_metal_fusion_check_add_chain },
+    { GGML_METAL_FUSION_ADD_CHAIN,      ops_add_7,                  {},     false, ggml_metal_fusion_check_add_chain },
+    { GGML_METAL_FUSION_SNAKE,          ops_snake,                  {},     false, ggml_metal_fusion_check_snake },
+    { GGML_METAL_FUSION_GDN_CACHE,      ops_gdn_cache,              {},     true,  ggml_metal_fusion_check_gdn_cache },
+    { GGML_METAL_FUSION_TOPK_MOE,       ops_topk_moe,               {1},    true,  ggml_metal_fusion_check_topk_moe },
+    { GGML_METAL_FUSION_TOPK_MOE,       ops_topk_moe_scale,         {1},    true,  ggml_metal_fusion_check_topk_moe },
+    { GGML_METAL_FUSION_TOPK_MOE,       ops_topk_moe_norm,          {1},    true,  ggml_metal_fusion_check_topk_moe },
+    { GGML_METAL_FUSION_TOPK_MOE,       ops_topk_moe_norm_scale,    {1},    true,  ggml_metal_fusion_check_topk_moe },
+    { GGML_METAL_FUSION_TOPK_MOE_GROUPED, ops_topk_moe_grouped,     {},     true,  ggml_metal_fusion_check_topk_moe_grouped },
+    { GGML_METAL_FUSION_MOE_REDUCE,     ops_moe_reduce_2,           {},     true,  ggml_metal_fusion_check_moe_reduce },
+    { GGML_METAL_FUSION_MOE_REDUCE,     ops_moe_reduce_3,           {},     true,  ggml_metal_fusion_check_moe_reduce },
+    { GGML_METAL_FUSION_MOE_REDUCE,     ops_moe_reduce_4,           {},     true,  ggml_metal_fusion_check_moe_reduce },
+    { GGML_METAL_FUSION_MOE_REDUCE,     ops_moe_reduce_5,           {},     true,  ggml_metal_fusion_check_moe_reduce },
+    { GGML_METAL_FUSION_MOE_REDUCE,     ops_moe_reduce_6,           {},     true,  ggml_metal_fusion_check_moe_reduce },
+    { GGML_METAL_FUSION_MOE_REDUCE,     ops_moe_reduce_7,           {},     true,  ggml_metal_fusion_check_moe_reduce },
+    { GGML_METAL_FUSION_MOE_REDUCE,     ops_moe_reduce_8,           {},     true,  ggml_metal_fusion_check_moe_reduce },
+    { GGML_METAL_FUSION_SSM_CONV_SILU,  ops_ssm_conv_silu,          {},     false, ggml_metal_fusion_check_ssm_conv_silu },
+    { GGML_METAL_FUSION_MUL_MAT_ADD,    ops_mul_mat_add,            {},     false, ggml_metal_fusion_check_mul_mat_add },
 };
 
 // ---- alloc deps -----------------------------------------------------------

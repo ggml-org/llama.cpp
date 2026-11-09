@@ -1086,6 +1086,8 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "FLASH_ATTN_BACK",
     "SSM_CONV",
     "SSM_SCAN",
+    "MHC_ROUTE",
+    "MHC_MERGE",
     "WIN_PART",
     "WIN_UNPART",
     "GET_REL_POS",
@@ -1117,7 +1119,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT != 102");
+static_assert(GGML_OP_COUNT == 104, "GGML_OP_COUNT != 104");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1202,6 +1204,8 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "flash_attn_back(x)",
     "ssm_conv(x)",
     "ssm_scan(x)",
+    "mhc_route(a, b, w, bias)",
+    "mhc_merge(a, b, x, packed)",
     "win_part(x)",
     "win_unpart(x)",
     "get_rel_pos(x)",
@@ -1233,7 +1237,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT != 102");
+static_assert(GGML_OP_COUNT == 104, "GGML_OP_COUNT != 104");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -5793,6 +5797,72 @@ struct ggml_tensor * ggml_ssm_conv(
     result->op     = GGML_OP_SSM_CONV;
     result->src[0] = sx;
     result->src[1] = c;
+
+    return result;
+}
+
+// ggml_mhc_route: gates + sinkhorn + pre-weighted branch in one node
+//
+//   packed = [ d + 6, n_tokens, n_streams ] where rows 0..d-1 are the routed branch input,
+//   rows d and d+1 are the two output gates, rows d+2..d+5 are the 2x2 mixing matrix.
+//   Keeping the gates in the same buffer saves a node and a copy per sublayer.
+
+struct ggml_tensor * ggml_mhc_route(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b,
+        struct ggml_tensor  * w,
+        struct ggml_tensor  * bias) {
+    GGML_ASSERT(a->nb[0] == sizeof(float));
+    GGML_ASSERT(b->nb[0] == sizeof(float));
+    GGML_ASSERT(a->type == GGML_TYPE_F32);
+    GGML_ASSERT(b->type == GGML_TYPE_F32);
+    GGML_ASSERT(w->type == GGML_TYPE_F32);
+    GGML_ASSERT(bias->type == GGML_TYPE_F32);
+    GGML_ASSERT(a->ne[0] == b->ne[0] && a->ne[1] == b->ne[1] && a->ne[2] == b->ne[2]);
+    GGML_ASSERT(w->ne[0] == 2*a->ne[0]);
+    GGML_ASSERT(w->ne[1] == 8);
+    GGML_ASSERT(bias->ne[0] == 8);
+
+    const int64_t d = a->ne[0];
+
+    struct ggml_tensor * result = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, d + 6, a->ne[1], a->ne[2]);
+
+    result->op     = GGML_OP_MHC_ROUTE;
+    result->src[0] = a;
+    result->src[1] = b;
+    result->src[2] = w;
+    result->src[3] = bias;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_mhc_merge(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b,
+        struct ggml_tensor  * x,
+        struct ggml_tensor  * packed) {
+    GGML_ASSERT(a->nb[0] == sizeof(float));
+    GGML_ASSERT(b->nb[0] == sizeof(float));
+    GGML_ASSERT(x->nb[0] == sizeof(float));
+    GGML_ASSERT(packed->nb[0] == sizeof(float));
+    GGML_ASSERT(a->type == GGML_TYPE_F32 && b->type == GGML_TYPE_F32);
+    GGML_ASSERT(x->type == GGML_TYPE_F32 && packed->type == GGML_TYPE_F32);
+    GGML_ASSERT(a->ne[0] == b->ne[0] && a->ne[0] == x->ne[0]);
+    GGML_ASSERT(a->ne[1] == x->ne[1] && a->ne[2] == x->ne[2]);
+    GGML_ASSERT(packed->ne[0] == a->ne[0] + 6);
+    GGML_ASSERT(packed->ne[1] == a->ne[1] && packed->ne[2] == a->ne[2]);
+
+    const int64_t d = a->ne[0];
+
+    struct ggml_tensor * result = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 2*d, a->ne[1], a->ne[2]);
+
+    result->op     = GGML_OP_MHC_MERGE;
+    result->src[0] = a;
+    result->src[1] = b;
+    result->src[2] = x;
+    result->src[3] = packed;
 
     return result;
 }

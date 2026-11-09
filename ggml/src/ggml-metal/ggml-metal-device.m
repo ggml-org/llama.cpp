@@ -1,4 +1,5 @@
 #import "ggml-metal-device.h"
+#import "ggml-metal-ops.h"
 #import "ggml-metal-fusion.h"
 
 #import "ggml-impl.h"
@@ -464,6 +465,11 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
 #if GGML_METAL_EMBED_LIBRARY
     [prep setObject:@"1" forKey:@"GGML_METAL_EMBED_LIBRARY"];
 #endif
+
+    const int simd_width = ggml_metal_device_get_props(dev)->simd_width;
+    if (simd_width > 0 && simd_width != 32) {
+        [prep setObject:[NSString stringWithFormat:@"%d", simd_width] forKey:@"N_SIMDWIDTH"];
+    }
 
 #if GGML_METAL_EMBED_LIBRARY
     GGML_LOG_INFO("%s: using embedded metal library\n", __func__);
@@ -1108,6 +1114,43 @@ const char * ggml_metal_device_id_token(enum ggml_metal_device_id id) {
     return "GGML_METAL_DEVICE_GENERIC";
 }
 
+
+// simdgroup width is a hardware property; Metal only exposes it inside a shader
+static int ggml_metal_device_probe_simd_width(id<MTLDevice> device) {
+    static const char * src =
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "kernel void probe_width(device uint * out [[buffer(0)]],\n"
+        "                        uint lane [[thread_index_in_threadgroup]],\n"
+        "                        uint w    [[threads_per_simdgroup]]) {\n"
+        "    if (lane == 0) out[0] = w;\n"
+        "}\n";
+    int res = 32;
+    NSError * error = nil;
+    id<MTLLibrary> lib = [device newLibraryWithSource:[NSString stringWithUTF8String:src] options:nil error:&error];
+    if (lib) {
+        id<MTLFunction> fn = [lib newFunctionWithName:@"probe_width"];
+        id<MTLComputePipelineState> pso = fn ? [device newComputePipelineStateWithFunction:fn error:&error] : nil;
+        if (pso) {
+            id<MTLBuffer> out = [device newBufferWithLength:16 options:MTLResourceStorageModeShared];
+            id<MTLCommandQueue> q = [device newCommandQueue];
+            id<MTLCommandBuffer> cb = [q commandBuffer];
+            id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
+            [enc setComputePipelineState:pso];
+            [enc setBuffer:out offset:0 atIndex:0];
+            [enc dispatchThreadgroups:MTLSizeMake(1,1,1) threadsPerThreadgroup:MTLSizeMake(64,1,1)];
+            [enc endEncoding];
+            [cb commit];
+            [cb waitUntilCompleted];
+            if (!cb.error) {
+                uint32_t w = ((uint32_t *) out.contents)[0];
+                if (w >= 8 && w <= 128) res = (int) w;
+            }
+        }
+    }
+    return res;
+}
+
 ggml_metal_device_t ggml_metal_device_init(int device, int n_devices) {
     ggml_metal_device_t dev = calloc(1, sizeof(struct ggml_metal_device));
 
@@ -1115,7 +1158,42 @@ ggml_metal_device_t ggml_metal_device_init(int device, int n_devices) {
 
     @autoreleasepool {
         if (dev->mtl_device == nil) {
-            dev->mtl_device = MTLCreateSystemDefaultDevice();
+            // Allow selecting specific Metal device by index
+            // Use GGML_METAL_DEVICE_INDEX env var, or fall back to device parameter
+            int device_index = device;
+            const char * env_idx = getenv("GGML_METAL_DEVICE_INDEX");
+            if (env_idx) {
+                device_index = atoi(env_idx);
+            }
+            
+            NSArray *devices = MTLCopyAllDevices();
+
+            // select by name when requested - the index of an eGPU shifts when it is unplugged
+            const char * env_name = getenv("GGML_METAL_DEVICE_NAME");
+            if (env_name != NULL) {
+                NSString * want = [NSString stringWithUTF8String:env_name];
+                for (NSUInteger i = 0; i < devices.count; i++) {
+                    NSString * have = [devices[i] name];
+                    if ([have rangeOfString:want options:NSCaseInsensitiveSearch].location != NSNotFound) {
+                        dev->mtl_device = devices[i];
+                        GGML_LOG_INFO("%s: selected device\"%s\" by name = %s\n", __func__, env_name, [have UTF8String]);
+                        break;
+                    }
+                }
+                if (dev->mtl_device == nil) {
+                    GGML_LOG_INFO("%s: no device matches \"%s\", falling back to the default\n", __func__, env_name);
+                }
+            }
+
+            if (dev->mtl_device == nil) {
+                if (device_index >= 0 && device_index < (int)devices.count) {
+                    dev->mtl_device = devices[device_index];
+                    GGML_LOG_INFO("%s: selected device[%d] = %s\n", __func__, device_index, [[dev->mtl_device name] UTF8String]);
+                } else {
+                    dev->mtl_device = MTLCreateSystemDefaultDevice();
+                    GGML_LOG_INFO("%s: fallback to default device = %s\n", __func__, [[dev->mtl_device name] UTF8String]);
+                }
+            }
 
             if (dev->mtl_device) {
                 dev->mtl_queue = [dev->mtl_device newCommandQueue];
@@ -1136,6 +1214,8 @@ ggml_metal_device_t ggml_metal_device_init(int device, int n_devices) {
                 dev->props.has_simdgroup_reduction |= [dev->mtl_device supportsFamily:MTLGPUFamilyMetal3_GGML];
 
                 dev->props.has_simdgroup_mm = [dev->mtl_device supportsFamily:MTLGPUFamilyApple7];
+
+                dev->props.simd_width = ggml_metal_device_probe_simd_width(dev->mtl_device);
                 dev->props.has_unified_memory = dev->mtl_device.hasUnifiedMemory;
 
                 dev->props.has_bfloat  = [dev->mtl_device supportsFamily:MTLGPUFamilyMetal3_GGML];
@@ -1269,10 +1349,11 @@ ggml_metal_device_t ggml_metal_device_init(int device, int n_devices) {
 #endif
 
                 dev->props.use_shared_buffers = dev->props.has_unified_memory;
-#if TARGET_OS_OSX && TARGET_CPU_X86_64
-                // In case of eGPU, shared memory may be preferable.
-                dev->props.use_shared_buffers |= [dev->mtl_device location] == MTLDeviceLocationExternal;
-#endif
+                // An external GPU used to be forced onto shared (host) buffers here.
+                // That makes the card read every weight over the bus on every token:
+                // a q5_K matvec measured 2.80 GFLOPS shared vs 113.7 GFLOPS in VRAM,
+                // and a decode step 1203 ms vs 51 ms. Discrete GPUs get private
+                // buffers; GGML_METAL_SHARED_BUFFERS_ENABLE still forces them back.
                 if (getenv("GGML_METAL_SHARED_BUFFERS_DISABLE") != NULL) {
                     dev->props.use_shared_buffers = false;
                 }
@@ -1549,6 +1630,31 @@ static bool ggml_metal_supports_mul_mat_op(
     return mm_path;
 }
 
+
+// on devices without simdgroup-reduction the kernels run with the real simdgroup
+// width; only the types ported for that width are allowed on MUL_MAT so far
+static bool ggml_metal_supports_mul_mat_wide(const struct ggml_tensor * op) {
+    if (op->src[1]->type != GGML_TYPE_F32) {
+        return false;
+    }
+    switch (op->src[0]->type) {
+        case GGML_TYPE_F32:
+        case GGML_TYPE_F16:
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_1:
+        case GGML_TYPE_Q5_0:
+        case GGML_TYPE_Q5_1:
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q6_K:
+        case GGML_TYPE_Q8_0:
+            return true;
+        default:
+            return false;
+    }
+}
+
 bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_tensor * op) {
     const bool has_simdgroup_mm        = dev->props.has_simdgroup_mm;
     const bool has_simdgroup_reduction = dev->props.has_simdgroup_reduction;
@@ -1693,6 +1799,9 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_CUMSUM:
         case GGML_OP_MEAN:
         case GGML_OP_SOFT_MAX:
+            // the reduce kernels use the device simdgroup width, so they do not need the
+            // simdgroup reduction hardware check (AMD eGPUs report that as false)
+            return (has_simdgroup_reduction || dev->props.simd_width > 0) && ggml_is_contiguous_rows(op->src[0]);
         case GGML_OP_L2_NORM:
             return has_simdgroup_reduction && ggml_is_contiguous_rows(op->src[0]);
         case GGML_OP_GROUP_NORM:
@@ -1709,7 +1818,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
             return has_simdgroup_reduction;
         case GGML_OP_NORM:
         case GGML_OP_RMS_NORM:
-            return has_simdgroup_reduction && (ggml_is_contiguous_rows(op->src[0]));
+            return (has_simdgroup_reduction || dev->props.simd_width > 0) && ggml_is_contiguous_rows(op->src[0]);
         case GGML_OP_ROPE:
         case GGML_OP_ROPE_BACK:
             return ggml_rope_get_truncate(op);
@@ -1742,6 +1851,19 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
             return true;
         case GGML_OP_ROLL:
             return ggml_is_contiguous(op->src[0]);
+        case GGML_OP_MHC_ROUTE:
+            // fused residual-stream routing: f32 only, contiguous inner dim
+            return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32 &&
+                   op->src[2]->type == GGML_TYPE_F32 && op->src[3]->type == GGML_TYPE_F32 &&
+                   ggml_is_contiguous(op) &&
+                   ggml_is_contiguous(op->src[2]) && ggml_is_contiguous(op->src[3]) &&
+                   op->src[0]->nb[0] == sizeof(float) && op->src[1]->nb[0] == sizeof(float);
+        case GGML_OP_MHC_MERGE:
+            return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32 &&
+                   op->src[2]->type == GGML_TYPE_F32 && op->src[3]->type == GGML_TYPE_F32 &&
+                   ggml_is_contiguous(op) &&
+                   op->src[0]->nb[0] == sizeof(float) && op->src[1]->nb[0] == sizeof(float) &&
+                   op->src[2]->nb[0] == sizeof(float) && op->src[3]->nb[0] == sizeof(float);
         case GGML_OP_FLASH_ATTN_EXT:
             // K/V row lists (ggml_flash_attn_ext_rows): one list of cache rows per q slice
             if (op->src[5] != NULL) {
@@ -1822,7 +1944,12 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 default:
                     return false;
             }
-            return has_simdgroup_mm; // TODO: over-restricted for vec-kernels
+            // the vec kernels need no simdgroup matrix, and they are instantiated per simd width,
+            // kv type and (dk,dv) pair, so availability is the real check here
+            if (ggml_metal_op_flash_attn_ext_vec_available(op, dev->props.simd_width, has_bfloat)) {
+                return true;
+            }
+            return has_simdgroup_mm;
         case GGML_OP_LIGHTNING_INDEXER:
             if (op->src[0]->ne[0] != OP_LIGHTNING_INDEXER_DK) {
                 return false;
@@ -1897,12 +2024,18 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_SSM_SCAN:
             return has_simdgroup_reduction;
         case GGML_OP_SSM_CONV:
-            return has_simdgroup_reduction;
+            // the ssm_conv kernels are scalar (no simdgroup ops), so any Metal device can run them
+            return op->src[0]->type == GGML_TYPE_F32 &&
+                   op->src[1]->type == GGML_TYPE_F32 &&
+                   ggml_is_contiguous(op->src[0]) &&
+                   ggml_is_contiguous(op->src[1]);
         case GGML_OP_RWKV_WKV6:
         case GGML_OP_RWKV_WKV7:
             return true;
         case GGML_OP_GATED_DELTA_NET:
-            return has_simdgroup_reduction && op->src[2]->ne[0] % 32 == 0;
+            // the kernel derives nsg from the real simd width; the gate must too,
+            // otherwise every non-Apple GPU keeps this op on the CPU
+            return op->src[2]->ne[0] % dev->props.simd_width == 0;
         case GGML_OP_SOLVE_TRI:
             return has_simdgroup_reduction && op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_MUL_MAT:
@@ -1915,12 +2048,18 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 ggml_metal_op_mul_mat_use_fwht(op, dev->props.max_theadgroup_memory_size)) {
                 return has_simdgroup_reduction;
             }
+            if (!has_simdgroup_reduction) {
+                return dev->props.simd_width > 0 && ggml_metal_supports_mul_mat_wide(op);
+            }
             return ggml_metal_supports_mul_mat_op(
                     has_simdgroup_reduction, op, true,
                     ggml_metal_op_mul_mat_use_mm(op, has_simdgroup_mm));
         case GGML_OP_MUL_MAT_ID:
             if (!ggml_metal_supports_mul_mat_src1_prec(op, dev->props.has_tensor)) {
                 return false;
+            }
+            if (!has_simdgroup_reduction) {
+                return dev->props.simd_width > 0 && ggml_metal_supports_mul_mat_wide(op);
             }
             return ggml_metal_supports_mul_mat_op(
                     has_simdgroup_reduction, op, false,
@@ -2195,6 +2334,10 @@ ggml_metal_buffer_t ggml_metal_buffer_init(ggml_metal_device_t dev, size_t size,
 
     res->owned = true;
 
+    if (size_aligned > 100u*1024u*1024u) {
+        fprintf(stderr, "METAL bigbuf size=%.0f MB is_shared=%d\n", size_aligned/1e6, (int) res->is_shared);
+    }
+
     res->n_buffers = 1;
 
     if (res->all_data != NULL) {
@@ -2246,6 +2389,9 @@ ggml_metal_buffer_t ggml_metal_buffer_map(ggml_metal_device_t dev, void * ptr, s
 
     res->is_shared = true;
     res->owned = false;
+    if (size > 100u*1024u*1024u) {
+        fprintf(stderr, "METAL bigbuf(nocopy) size=%.0f MB\n", size/1e6);
+    }
 
     res->n_buffers = 0;
 
@@ -2272,7 +2418,45 @@ ggml_metal_buffer_t ggml_metal_buffer_map(ggml_metal_device_t dev, void * ptr, s
         res->buffers[res->n_buffers].metal = nil;
 
         if (size_aligned > 0) {
-            res->buffers[res->n_buffers].metal = [res->dev->mtl_device newBufferWithBytesNoCopy:ptr length:size_aligned options:MTLResourceStorageModeShared deallocator:nil];
+            if (props_dev->use_shared_buffers) {
+                res->buffers[res->n_buffers].metal = [res->dev->mtl_device newBufferWithBytesNoCopy:ptr length:size_aligned options:MTLResourceStorageModeShared deallocator:nil];
+            } else {
+                // discrete gpu: put the mapped weights in vram once, in chunks
+                id<MTLBuffer> dst = [res->dev->mtl_device newBufferWithLength:size_aligned options:MTLResourceStorageModePrivate];
+                if (dst != nil) {
+                    const size_t chunk = 64u*1024u*1024u;
+                    const size_t n_stage = size_aligned < chunk ? size_aligned : chunk;
+                    id<MTLBuffer> stage = [res->dev->mtl_device newBufferWithLength:n_stage options:MTLResourceStorageModeShared];
+                    id<MTLCommandQueue> queue = [res->dev->mtl_device newCommandQueue];
+
+                    bool ok = stage != nil && queue != nil;
+                    for (size_t off = 0; ok && off < size_aligned; off += n_stage) {
+                        const size_t n = (off + n_stage <= size_aligned) ? n_stage : (size_aligned - off);
+                        memcpy(stage.contents, (const char *) ptr + off, n);
+
+                        id<MTLCommandBuffer> cb = [queue commandBuffer];
+                        id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
+                        [blit copyFromBuffer:stage sourceOffset:0 toBuffer:dst destinationOffset:off size:n];
+                        [blit endEncoding];
+                        [cb commit];
+                        [cb waitUntilCompleted];
+                        if (cb.status != MTLCommandBufferStatusCompleted) {
+                            ok = false;
+                        }
+                    }
+
+                    if (ok) {
+                        res->buffers[res->n_buffers].metal = dst;
+                        res->is_shared = false;
+                        GGML_LOG_INFO("%s: uploaded %.0f MB to vram\n", __func__, size_aligned/1e6);
+                    } else {
+                        GGML_LOG_ERROR("%s: vram upload failed, falling back to shared\n", __func__);
+                        res->buffers[res->n_buffers].metal = [res->dev->mtl_device newBufferWithBytesNoCopy:ptr length:size_aligned options:MTLResourceStorageModeShared deallocator:nil];
+                    }
+                } else {
+                    res->buffers[res->n_buffers].metal = [res->dev->mtl_device newBufferWithBytesNoCopy:ptr length:size_aligned options:MTLResourceStorageModeShared deallocator:nil];
+                }
+            }
 
             if (res->buffers[res->n_buffers].metal == nil) {
                 GGML_LOG_ERROR("%s: error: failed to allocate buffer, size = %8.2f MiB\n", __func__, size_aligned / 1024.0 / 1024.0);
@@ -2589,6 +2773,14 @@ void ggml_metal_buffer_get_tensor_n(ggml_metal_buffer_t buf, const struct ggml_t
                                                               options:MTLResourceStorageModeShared
                                                           deallocator:nil];
 
+        // AMD eGPU drivers return nil for newBufferWithBytesNoCopy on interior pointers
+        // (KV cache views), so fall back to a real buffer and copy the blit result out
+        const bool staging_fallback = buf_dst == nil;
+        if (staging_fallback) {
+            buf_dst = [buf->dev->mtl_device newBufferWithLength:max_data - min_data
+                                                        options:MTLResourceStorageModeShared];
+        }
+
         GGML_ASSERT(buf_dst);
 
         id<MTLCommandBuffer> cmd_buf = [buf->dev->mtl_queue commandBufferWithUnretainedReferences];
@@ -2618,6 +2810,15 @@ void ggml_metal_buffer_get_tensor_n(ggml_metal_buffer_t buf, const struct ggml_t
 
         [cmd_buf commit];
         [cmd_buf waitUntilCompleted];
+
+        if (staging_fallback) {
+            for (size_t i = 0; i < n_tensors; i++) {
+                if (sizes[i] == 0) {
+                    continue;
+                }
+                memcpy(data[i], (const char *) buf_dst.contents + ((uintptr_t) data[i] - min_data), sizes[i]);
+            }
+        }
 
         [buf_dst release];
     }

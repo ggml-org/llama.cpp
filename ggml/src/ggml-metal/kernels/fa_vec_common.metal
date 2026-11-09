@@ -14,6 +14,22 @@ constant int32_t FC_flash_attn_ext_vec_nsg  [[function_constant(FC_FLASH_ATTN_EX
 constant int32_t FC_flash_attn_ext_vec_nwg  [[function_constant(FC_FLASH_ATTN_EXT_VEC + 23)]];
 constant bool    FC_flash_attn_ext_vec_has_sparse [[function_constant(FC_FLASH_ATTN_EXT_VEC + 5)]];
 constant bool    FC_flash_attn_ext_vec_has_rows   [[function_constant(FC_FLASH_ATTN_EXT_VEC + 6)]];
+
+// NE (head elements per thread) for the baseline instantiation, derived from the simdgroup
+// width so that one instantiation list serves every width: NL = N_SIMDWIDTH/NE lanes split the
+// row over head blocks, so NL must divide both dk/4 and dv/4. Take the largest power-of-two NL
+// that divides them, capped at the width. ggml_metal_tuning::fa_vec_baseline_ne mirrors this.
+#define FA_VEC_NL(DK, DV) (                                                              \
+    (N_SIMDWIDTH >= 64 && ((DK)/4) % 64 == 0 && ((DV)/4) % 64 == 0) ? 64 :                \
+    (N_SIMDWIDTH >= 32 && ((DK)/4) % 32 == 0 && ((DV)/4) % 32 == 0) ? 32 :                \
+    ((DK)/4) % 16 == 0 && ((DV)/4) % 16 == 0 ? 16 :                                      \
+    ((DK)/4) %  8 == 0 && ((DV)/4) %  8 == 0 ?  8 :                                      \
+    ((DK)/4) %  4 == 0 && ((DV)/4) %  4 == 0 ?  4 :                                      \
+    ((DK)/4) %  2 == 0 && ((DV)/4) %  2 == 0 ?  2 : 1)
+
+#define FA_VEC_NE(DK, DV) (N_SIMDWIDTH / FA_VEC_NL(DK, DV))
+
+
 template<
     typename q4_t,  // query types in shared memory
     typename k4_t,  // key types in shared memory
@@ -32,7 +48,7 @@ template<
     short DV,       // V head size
     short NE = 4,   // head elements per thread
     short Q  = OP_FLASH_ATTN_EXT_VEC_NQPSG,  // queries per threadgroup
-    short C  = OP_FLASH_ATTN_EXT_VEC_NCPSG>  // cache items per threadgroup
+    short C  = N_SIMDWIDTH>  // cache items per simdgroup, indexed [qq*C + NE*tx + ty] with NE*tx+ty < N_SIMDWIDTH
 
 kernel void kernel_flash_attn_ext_vec(
         constant ggml_metal_kargs_flash_attn_ext_vec & args,
@@ -365,25 +381,25 @@ kernel void kernel_flash_attn_ext_vec(
                         if (NE == 1) {
                             mqk[qq][cc] = simd_sum(mqk[qq][cc]);
                         } else {
-                            // simdgroup reduce (NE = 4)
-                            // [ 0 ..  7] -> [ 0]
-                            // [ 8 .. 15] -> [ 8]
-                            // [16 .. 23] -> [16]
-                            // [24 .. 31] -> [24]
-                            if (NE <= 1) {
+                            // reduce over the NL lanes holding the partial dot products: the
+                            // distances are 1 .. NL/2, so they follow the simdgroup width
+                            if (NL >= 2) {
+                                mqk[qq][cc] += simd_shuffle_down(mqk[qq][cc], 1);
+                            }
+                            if (NL >= 4) {
+                                mqk[qq][cc] += simd_shuffle_down(mqk[qq][cc], 2);
+                            }
+                            if (NL >= 8) {
+                                mqk[qq][cc] += simd_shuffle_down(mqk[qq][cc], 4);
+                            }
+                            if (NL >= 16) {
+                                mqk[qq][cc] += simd_shuffle_down(mqk[qq][cc], 8);
+                            }
+                            if (NL >= 32) {
                                 mqk[qq][cc] += simd_shuffle_down(mqk[qq][cc], 16);
                             }
-                            if (NE <= 2) {
-                                mqk[qq][cc] += simd_shuffle_down(mqk[qq][cc],  8);
-                            }
-                            if (NE <= 4) {
-                                mqk[qq][cc] += simd_shuffle_down(mqk[qq][cc],  4);
-                            }
-                            if (NE <= 8) {
-                                mqk[qq][cc] += simd_shuffle_down(mqk[qq][cc],  2);
-                            }
-                            if (NE <= 16) {
-                                mqk[qq][cc] += simd_shuffle_down(mqk[qq][cc],  1);
+                            if (NL >= 64) {
+                                mqk[qq][cc] += simd_shuffle_down(mqk[qq][cc], 32);
                             }
 
                             // broadcast
@@ -518,39 +534,41 @@ kernel void kernel_flash_attn_ext_vec(
 
                 FOR_UNROLL (short qq = 0; qq < Q; ++qq) {
                     FOR_UNROLL (short ii = 0; ii < DV4/NL; ++ii) {
-                        if (NE > 1) {
-                            lo[qq][ii][0] += simd_shuffle_down(lo[qq][ii][0], 16);
-                            lo[qq][ii][1] += simd_shuffle_down(lo[qq][ii][1], 16);
-                            lo[qq][ii][2] += simd_shuffle_down(lo[qq][ii][2], 16);
-                            lo[qq][ii][3] += simd_shuffle_down(lo[qq][ii][3], 16);
+                        // fold the NE lane groups that hold the same head elements: the distances
+                        // are NL*2^k up to NW/2, so they scale with the simdgroup width
+                        if (NW/2 >= NL) {
+                            lo[qq][ii][0] += simd_shuffle_down(lo[qq][ii][0], NW/2);
+                            lo[qq][ii][1] += simd_shuffle_down(lo[qq][ii][1], NW/2);
+                            lo[qq][ii][2] += simd_shuffle_down(lo[qq][ii][2], NW/2);
+                            lo[qq][ii][3] += simd_shuffle_down(lo[qq][ii][3], NW/2);
                         }
 
-                        if (NE > 2) {
-                            lo[qq][ii][0] += simd_shuffle_down(lo[qq][ii][0],  8);
-                            lo[qq][ii][1] += simd_shuffle_down(lo[qq][ii][1],  8);
-                            lo[qq][ii][2] += simd_shuffle_down(lo[qq][ii][2],  8);
-                            lo[qq][ii][3] += simd_shuffle_down(lo[qq][ii][3],  8);
+                        if (NW/4 >= NL) {
+                            lo[qq][ii][0] += simd_shuffle_down(lo[qq][ii][0], NW/4);
+                            lo[qq][ii][1] += simd_shuffle_down(lo[qq][ii][1], NW/4);
+                            lo[qq][ii][2] += simd_shuffle_down(lo[qq][ii][2], NW/4);
+                            lo[qq][ii][3] += simd_shuffle_down(lo[qq][ii][3], NW/4);
                         }
 
-                        if (NE > 4) {
-                            lo[qq][ii][0] += simd_shuffle_down(lo[qq][ii][0],  4);
-                            lo[qq][ii][1] += simd_shuffle_down(lo[qq][ii][1],  4);
-                            lo[qq][ii][2] += simd_shuffle_down(lo[qq][ii][2],  4);
-                            lo[qq][ii][3] += simd_shuffle_down(lo[qq][ii][3],  4);
+                        if (NW/8 >= NL) {
+                            lo[qq][ii][0] += simd_shuffle_down(lo[qq][ii][0], NW/8);
+                            lo[qq][ii][1] += simd_shuffle_down(lo[qq][ii][1], NW/8);
+                            lo[qq][ii][2] += simd_shuffle_down(lo[qq][ii][2], NW/8);
+                            lo[qq][ii][3] += simd_shuffle_down(lo[qq][ii][3], NW/8);
                         }
 
-                        if (NE > 8) {
-                            lo[qq][ii][0] += simd_shuffle_down(lo[qq][ii][0],  2);
-                            lo[qq][ii][1] += simd_shuffle_down(lo[qq][ii][1],  2);
-                            lo[qq][ii][2] += simd_shuffle_down(lo[qq][ii][2],  2);
-                            lo[qq][ii][3] += simd_shuffle_down(lo[qq][ii][3],  2);
+                        if (NW/16 >= NL) {
+                            lo[qq][ii][0] += simd_shuffle_down(lo[qq][ii][0], NW/16);
+                            lo[qq][ii][1] += simd_shuffle_down(lo[qq][ii][1], NW/16);
+                            lo[qq][ii][2] += simd_shuffle_down(lo[qq][ii][2], NW/16);
+                            lo[qq][ii][3] += simd_shuffle_down(lo[qq][ii][3], NW/16);
                         }
 
-                        if (NE > 16) {
-                            lo[qq][ii][0] += simd_shuffle_down(lo[qq][ii][0],  1);
-                            lo[qq][ii][1] += simd_shuffle_down(lo[qq][ii][1],  1);
-                            lo[qq][ii][2] += simd_shuffle_down(lo[qq][ii][2],  1);
-                            lo[qq][ii][3] += simd_shuffle_down(lo[qq][ii][3],  1);
+                        if (NW/32 >= NL) {
+                            lo[qq][ii][0] += simd_shuffle_down(lo[qq][ii][0], NW/32);
+                            lo[qq][ii][1] += simd_shuffle_down(lo[qq][ii][1], NW/32);
+                            lo[qq][ii][2] += simd_shuffle_down(lo[qq][ii][2], NW/32);
+                            lo[qq][ii][3] += simd_shuffle_down(lo[qq][ii][3], NW/32);
                         }
                     }
                 }

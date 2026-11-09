@@ -2510,6 +2510,19 @@ void ggml_backend_sched_set_realloc_callback(ggml_backend_sched_t sched, ggml_ba
     sched->callback_realloc_user_data = user_data;
 }
 
+// TEMP instrumentation: dump graph splits (backend + op names)
+void ggml_backend_sched_dump_splits(ggml_backend_sched_t sched) {
+    fprintf(stderr, "SPLITS n=%d\n", sched->n_splits);
+    for (int s = 0; s < sched->n_splits; s++) {
+        const ggml_backend_sched_split & sp = sched->splits[s];
+        fprintf(stderr, "SPLIT %d backend=%s nodes=%d:", s, ggml_backend_name(sched->backends[sp.backend_id]), sp.graph.n_nodes);
+        for (int n = 0; n < sp.graph.n_nodes && n < 8; n++) {
+            fprintf(stderr, " %s", ggml_op_name(sp.graph.nodes[n]->op));
+        }
+        fprintf(stderr, "\n");
+    }
+}
+
 int ggml_backend_sched_get_n_splits(ggml_backend_sched_t sched) {
     GGML_ASSERT(sched);
     return sched->n_splits;

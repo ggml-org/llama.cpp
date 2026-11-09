@@ -768,10 +768,14 @@ static void ggml_backend_metal_device_get_props(ggml_backend_dev_t dev, ggml_bac
 
     ggml_backend_metal_device_get_memory(dev, &props->memory_free, &props->memory_total);
 
+    const ggml_metal_device_t ctx_dev = (ggml_metal_device_t) dev->context;
+
     props->caps = {
         /* .async                = */ true,
         /* .host_buffer          = */ false,
-        /* .buffer_from_host_ptr = */ true,
+        // mapping a file keeps the weights in host memory; when private buffers
+        // are in use the loader must copy instead, so do not advertise it
+        /* .buffer_from_host_ptr = */ ggml_metal_device_get_props(ctx_dev)->use_shared_buffers,
         /* .events               = */ true,
         /* .mmap_support         = */ true,
     };

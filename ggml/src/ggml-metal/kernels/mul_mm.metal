@@ -1016,3 +1016,349 @@ template [[host_name("kernel_mul_mm_id_iq1_m_f16")]]   kernel mul_mm_id kernel_m
 template [[host_name("kernel_mul_mm_id_iq4_nl_f16")]]  kernel mul_mm_id kernel_mul_mm_id<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_iq4_nl,  2,     dequantize_iq4_nl,  float,  float4x4,  half, half2x4>;
 template [[host_name("kernel_mul_mm_id_iq4_xs_f16")]]  kernel mul_mm_id kernel_mul_mm_id<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_iq4_xs,  QK_NL, dequantize_iq4_xs,  float,  float4x4,  half, half2x4>;
 template [[host_name("kernel_mul_mm_id_tq2_0_f16")]]   kernel mul_mm_id kernel_mul_mm_id<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_tq2_0,   QK_NL, dequantize_tq2_0,   float,  float4x4,  half, half2x4>;
+#include "common.h"
+#include "dequantize.h"
+
+// Tiled matrix-multiply for devices that have no simdgroup matrix (has_simdgroup_mm
+// false, e.g. AMD/Intel Macs). One threadgroup computes a TM x TN tile of the output,
+// staging a Q6_K row block of the weights in threadgroup memory so each weight is
+// dequantized once instead of once per output column.
+//
+//   dst[m, n] = sum_k src0[k, m] * src1[k, n]
+//
+// layout matches MUL_MAT: dst[m + n*ne0], src0 rows stride nb01 (Q6_K blocks of QK_K),
+// src1 rows stride nb11 (contiguous F32).
+
+#define TILED_TM 16
+#define TILED_TN 64
+#define TILED_BK 64
+#define TILED_NT 128
+
+// shared by the padded 64x64 tiled GEMMs (q4_K, q6_K)
+#define Q4K_TM 64
+#define Q4K_TN 64
+#define Q4K_BK 32
+#define Q4K_NT 256
+#define Q4K_SA (Q4K_BK + 1)   // padded: a dense 32-float row stride puts every lane on one bank
+#define Q4K_SB (Q4K_TN + 1)
+
+// one element of a Q4_K block: k in [0, QK_K)
+static inline float q4_K_at(device const block_q4_K * blk, int k) {
+    const int sub = k / 32;             // which of the 8 sub-blocks
+    const int l   = k % 32;
+
+    uint8_t sc, m;
+    if (sub < 4) {
+        sc = blk->scales[sub] & 63;
+        m  = blk->scales[sub + 4] & 63;
+    } else {
+        sc = (blk->scales[sub + 4] & 0x0F) | ((blk->scales[sub - 4] >> 6) << 4);
+        m  = (blk->scales[sub + 4] >>   4) | ((blk->scales[sub    ] >> 6) << 4);
+    }
+
+    const int qoff = (sub >> 1) * 32 + l;
+    const int v    = (sub & 1) ? (blk->qs[qoff] >> 4) : (blk->qs[qoff] & 0x0F);
+
+    return float(blk->d) * float(sc) * float(v) - float(blk->dmin) * float(m);
+}
+
+// one element of a Q6_K block: k in [0, QK_K)
+static inline float q6_K_at(device const block_q6_K * blk, int k) {
+    const int chunk = k / 128;          // Q6_K stores 128 values per half
+    const int off   = k % 128;
+    const int group = off / 32;         // which of q1..q4
+    const int l     = off % 32;
+    const int is    = l / 16;
+
+    device const uint8_t * ql = (device const uint8_t *) blk->ql + 64*chunk;
+    device const uint8_t * qh = (device const uint8_t *) blk->qh + 32*chunk;
+    device const int8_t  * sc = (device const int8_t  *) blk->scales + 8*chunk;
+
+    int q;
+    switch (group) {
+        case 0: q = (int)((ql[l] & 0x0F) | (((qh[l] >> 0) & 3) << 4)) - 32; break;
+        case 1: q = (int)((ql[l + 32] & 0x0F) | (((qh[l] >> 2) & 3) << 4)) - 32; break;
+        case 2: q = (int)((ql[l] >> 4) | (((qh[l] >> 4) & 3) << 4)) - 32; break;
+        default: q = (int)((ql[l + 32] >> 4) | (((qh[l] >> 6) & 3) << 4)) - 32; break;
+    }
+
+    return (float) blk->d * (float) sc[is + 2*group] * (float) q;
+}
+// tiled GEMM, q6_K weights. Same 64x64 padded design as q4_K; the per-element accessor keeps
+// the block decode in one place.
+kernel void kernel_mul_mat_q6_K_tiled(
+        constant ggml_metal_kargs_mul_mm & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        threadgroup  float * shmem,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort  tiitg[[thread_index_in_threadgroup]]) {
+    const int M = args.ne0;
+    const int N = args.ne1;
+    const int K = args.ne00;
+
+    const int m0 = tgpig.x * Q4K_TM;
+    const int n0 = tgpig.y * Q4K_TN;
+
+    const int tid = tiitg;
+    const int tx  = tid & 15;
+    const int ty  = tid >> 4;
+
+    threadgroup float * sa = shmem;
+    threadgroup float * sb = shmem + Q4K_TM*Q4K_SA;
+
+    float acc[4][4] = {};
+
+    for (int k0 = 0; k0 < K; k0 += Q4K_BK) {
+        {   // dequantized weight tile, 8 elements per thread
+            const int r  = tid >> 2;
+            const int e0 = (tid & 3) << 3;
+            const int mr = m0 + r;
+            float v[8];
+            if (mr < M) {
+                const int kb = k0 >> 8;
+                device const block_q6_K * blk =
+                    (device const block_q6_K *) (src0 + mr*args.nb01 + kb*sizeof(block_q6_K));
+                const int kk0 = (k0 & 255) + e0;   // accessor wants k inside the whole block
+                for (int i = 0; i < 8; ++i) v[i] = q6_K_at(blk, kk0 + i);
+            } else {
+                for (int i = 0; i < 8; ++i) v[i] = 0.f;
+            }
+            for (int i = 0; i < 8; ++i) sa[r*Q4K_SA + e0 + i] = v[i];
+        }
+        {   // activation tile, coalesced along k
+            for (int hh = 0; hh < 2; ++hh) {
+                const int nn = hh*32 + (tid >> 3);
+                const int kq = tid & 7;
+                const int n  = n0 + nn;
+                if (n < N) {
+                    device const float * row = (device const float *)(src1 + n*args.nb11);
+                    const float4 v = *(device const float4 *)(row + k0 + kq*4);
+                    sb[(kq*4+0)*Q4K_SB + nn] = v.x;
+                    sb[(kq*4+1)*Q4K_SB + nn] = v.y;
+                    sb[(kq*4+2)*Q4K_SB + nn] = v.z;
+                    sb[(kq*4+3)*Q4K_SB + nn] = v.w;
+                } else {
+                    for (int i = 0; i < 4; ++i) sb[(kq*4+i)*Q4K_SB + nn] = 0.f;
+                }
+            }
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        for (int k = 0; k < Q4K_BK; ++k) {
+            const float a0 = sa[(tx*4+0)*Q4K_SA + k], a1 = sa[(tx*4+1)*Q4K_SA + k];
+            const float a2 = sa[(tx*4+2)*Q4K_SA + k], a3 = sa[(tx*4+3)*Q4K_SA + k];
+            const float b0 = sb[k*Q4K_SB + ty*4+0], b1 = sb[k*Q4K_SB + ty*4+1];
+            const float b2 = sb[k*Q4K_SB + ty*4+2], b3 = sb[k*Q4K_SB + ty*4+3];
+            acc[0][0] += a0*b0; acc[0][1] += a0*b1; acc[0][2] += a0*b2; acc[0][3] += a0*b3;
+            acc[1][0] += a1*b0; acc[1][1] += a1*b1; acc[1][2] += a1*b2; acc[1][3] += a1*b3;
+            acc[2][0] += a2*b0; acc[2][1] += a2*b1; acc[2][2] += a2*b2; acc[2][3] += a2*b3;
+            acc[3][0] += a3*b0; acc[3][1] += a3*b1; acc[3][2] += a3*b2; acc[3][3] += a3*b3;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    for (int i = 0; i < 4; ++i) {
+        const int m = m0 + tx*4 + i;
+        if (m >= M) continue;
+        for (int j = 0; j < 4; ++j) {
+            const int n = n0 + ty*4 + j;
+            if (n < N) ((device float *) dst)[m + n*(int64_t) M] = acc[i][j];
+        }
+    }
+}
+
+// tiled GEMM, q8_0 weights. One q8_0 block is exactly Q4K_BK values, so each k-step is one block.
+kernel void kernel_mul_mat_q8_0_tiled(
+        constant ggml_metal_kargs_mul_mm & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        threadgroup  float * shmem,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort  tiitg[[thread_index_in_threadgroup]]) {
+    const int M = args.ne0;
+    const int N = args.ne1;
+    const int K = args.ne00;
+
+    const int m0 = tgpig.x * Q4K_TM;
+    const int n0 = tgpig.y * Q4K_TN;
+
+    const int tid = tiitg;
+    const int tx  = tid & 15;
+    const int ty  = tid >> 4;
+
+    threadgroup float * sa = shmem;
+    threadgroup float * sb = shmem + Q4K_TM*Q4K_SA;
+
+    float acc[4][4] = {};
+
+    for (int k0 = 0; k0 < K; k0 += Q4K_BK) {
+        {
+            const int r  = tid >> 2;
+            const int e0 = (tid & 3) << 3;
+            const int mr = m0 + r;
+            float v[8];
+            if (mr < M) {
+                const int kb = k0 >> 5;
+                device const block_q8_0 * blk =
+                    (device const block_q8_0 *) (src0 + mr*args.nb01 + kb*sizeof(block_q8_0));
+                const float d = float(blk->d);
+                for (int i = 0; i < 8; ++i) v[i] = d * float(blk->qs[e0 + i]);
+            } else {
+                for (int i = 0; i < 8; ++i) v[i] = 0.f;
+            }
+            for (int i = 0; i < 8; ++i) sa[r*Q4K_SA + e0 + i] = v[i];
+        }
+        {
+            for (int hh = 0; hh < 2; ++hh) {
+                const int nn = hh*32 + (tid >> 3);
+                const int kq = tid & 7;
+                const int n  = n0 + nn;
+                if (n < N) {
+                    device const float * row = (device const float *)(src1 + n*args.nb11);
+                    const float4 v = *(device const float4 *)(row + k0 + kq*4);
+                    sb[(kq*4+0)*Q4K_SB + nn] = v.x;
+                    sb[(kq*4+1)*Q4K_SB + nn] = v.y;
+                    sb[(kq*4+2)*Q4K_SB + nn] = v.z;
+                    sb[(kq*4+3)*Q4K_SB + nn] = v.w;
+                } else {
+                    for (int i = 0; i < 4; ++i) sb[(kq*4+i)*Q4K_SB + nn] = 0.f;
+                }
+            }
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        for (int k = 0; k < Q4K_BK; ++k) {
+            const float a0 = sa[(tx*4+0)*Q4K_SA + k], a1 = sa[(tx*4+1)*Q4K_SA + k];
+            const float a2 = sa[(tx*4+2)*Q4K_SA + k], a3 = sa[(tx*4+3)*Q4K_SA + k];
+            const float b0 = sb[k*Q4K_SB + ty*4+0], b1 = sb[k*Q4K_SB + ty*4+1];
+            const float b2 = sb[k*Q4K_SB + ty*4+2], b3 = sb[k*Q4K_SB + ty*4+3];
+            acc[0][0] += a0*b0; acc[0][1] += a0*b1; acc[0][2] += a0*b2; acc[0][3] += a0*b3;
+            acc[1][0] += a1*b0; acc[1][1] += a1*b1; acc[1][2] += a1*b2; acc[1][3] += a1*b3;
+            acc[2][0] += a2*b0; acc[2][1] += a2*b1; acc[2][2] += a2*b2; acc[2][3] += a2*b3;
+            acc[3][0] += a3*b0; acc[3][1] += a3*b1; acc[3][2] += a3*b2; acc[3][3] += a3*b3;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    for (int i = 0; i < 4; ++i) {
+        const int m = m0 + tx*4 + i;
+        if (m >= M) continue;
+        for (int j = 0; j < 4; ++j) {
+            const int n = n0 + ty*4 + j;
+            if (n < N) ((device float *) dst)[m + n*(int64_t) M] = acc[i][j];
+        }
+    }
+}
+
+// tiled GEMM, q4_K weights. 64x64 output tile, BK=32 == one q4_K sub-block, so each staged
+// slice has a single (scale, min) pair. 256 threads, 4x4 outputs each.
+
+kernel void kernel_mul_mat_q4_K_tiled(
+        constant ggml_metal_kargs_mul_mm & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        threadgroup  float * shmem,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort  tiitg[[thread_index_in_threadgroup]]) {
+    const int M = args.ne0;
+    const int N = args.ne1;
+    const int K = args.ne00;
+
+    const int m0 = tgpig.x * Q4K_TM;
+    const int n0 = tgpig.y * Q4K_TN;
+
+    const int tid = tiitg;
+    const int tx  = tid & 15;   // 4 output rows each
+    const int ty  = tid >> 4;   // 4 output cols each
+
+    threadgroup float * sa = shmem;                    // [Q4K_TM][Q4K_SA]
+    threadgroup float * sb = shmem + Q4K_TM*Q4K_SA;    // [Q4K_BK][Q4K_SB]
+
+    float acc[4][4] = {};
+
+    for (int k0 = 0; k0 < K; k0 += Q4K_BK) {
+        {   // stage the dequantized weight tile: 8 elements per thread
+            const int r  = tid >> 2;
+            const int e0 = (tid & 3) << 3;
+            const int mr = m0 + r;
+            float v[8];
+            if (mr < M) {
+                const int sub = (k0 & 255) >> 5;
+                const int kb  = k0 >> 8;
+                device const block_q4_K * blk =
+                    (device const block_q4_K *) (src0 + mr*args.nb01 + kb*sizeof(block_q4_K));
+                uint8_t sc, m;
+                if (sub < 4) {
+                    sc = blk->scales[sub] & 63;
+                    m  = blk->scales[sub + 4] & 63;
+                } else {
+                    sc = (blk->scales[sub + 4] & 0x0F) | ((blk->scales[sub - 4] >> 6) << 4);
+                    m  = (blk->scales[sub + 4] >>   4) | ((blk->scales[sub    ] >> 6) << 4);
+                }
+                const float dd = float(blk->d) * float(sc);
+                const float mm = float(blk->dmin) * float(m);
+                const int qoff = (sub >> 1) * 32;
+                const int nib  = sub & 1;
+                for (int i = 0; i < 8; ++i) {
+                    const int e = e0 + i;
+                    const uint8_t q = blk->qs[qoff + e];
+                    const int val = nib ? (q >> 4) : (q & 0x0F);
+                    v[i] = dd * float(val) - mm;
+                }
+            } else {
+                for (int i = 0; i < 8; ++i) v[i] = 0.f;
+            }
+            for (int i = 0; i < 8; ++i) sa[r*Q4K_SA + e0 + i] = v[i];
+        }
+        {   // activation tile [BK][TN]. Each token is a contiguous K-long row, so 8 threads
+            // share one row and read consecutive float4s: coalesced, no 57 KB stride per thread.
+            for (int hh = 0; hh < 2; ++hh) {
+                const int nn = hh*32 + (tid >> 3);     // 0..63
+                const int kq = tid & 7;                // 8 float4 == Q4K_BK floats
+                const int n  = n0 + nn;
+                if (n < N) {
+                    device const float * row = (device const float *)(src1 + n*args.nb11);
+                    const float4 v = *(device const float4 *)(row + k0 + kq*4);
+                    sb[(kq*4+0)*Q4K_SB + nn] = v.x;
+                    sb[(kq*4+1)*Q4K_SB + nn] = v.y;
+                    sb[(kq*4+2)*Q4K_SB + nn] = v.z;
+                    sb[(kq*4+3)*Q4K_SB + nn] = v.w;
+                } else {
+                    for (int i = 0; i < 4; ++i) sb[(kq*4+i)*Q4K_SB + nn] = 0.f;
+                }
+            }
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        for (int k = 0; k < Q4K_BK; ++k) {
+            const float a0 = sa[(tx*4+0)*Q4K_SA + k], a1 = sa[(tx*4+1)*Q4K_SA + k];
+            const float a2 = sa[(tx*4+2)*Q4K_SA + k], a3 = sa[(tx*4+3)*Q4K_SA + k];
+            const float b0 = sb[k*Q4K_SB + ty*4+0], b1 = sb[k*Q4K_SB + ty*4+1];
+            const float b2 = sb[k*Q4K_SB + ty*4+2], b3 = sb[k*Q4K_SB + ty*4+3];
+            acc[0][0] += a0*b0; acc[0][1] += a0*b1; acc[0][2] += a0*b2; acc[0][3] += a0*b3;
+            acc[1][0] += a1*b0; acc[1][1] += a1*b1; acc[1][2] += a1*b2; acc[1][3] += a1*b3;
+            acc[2][0] += a2*b0; acc[2][1] += a2*b1; acc[2][2] += a2*b2; acc[2][3] += a2*b3;
+            acc[3][0] += a3*b0; acc[3][1] += a3*b1; acc[3][2] += a3*b2; acc[3][3] += a3*b3;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    for (int i = 0; i < 4; ++i) {
+        const int m = m0 + tx*4 + i;
+        if (m >= M) continue;
+        for (int j = 0; j < 4; ++j) {
+            const int n = n0 + ty*4 + j;
+            if (n < N) ((device float *) dst)[m + n*(int64_t) M] = acc[i][j];
+        }
+    }
+}
