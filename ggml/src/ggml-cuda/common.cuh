@@ -19,7 +19,6 @@
 #define GGML_COMMON_IMPL_MUSA
 #endif
 #endif
-#include "ggml-common.h"
 
 #include <array>
 #include <algorithm>
@@ -38,6 +37,8 @@
 #else
 #include "vendors/cuda.h"
 #endif // defined(GGML_USE_HIP)
+
+#include "ggml-common.h"
 
 #define STRINGIZE_IMPL(...) #__VA_ARGS__
 #define STRINGIZE(...) STRINGIZE_IMPL(__VA_ARGS__)
