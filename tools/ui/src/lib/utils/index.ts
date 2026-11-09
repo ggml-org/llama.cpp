@@ -239,9 +239,6 @@ export {
 	type CommandDismissSnapshot
 } from './command-token';
 
-// Fenced code block detection (Enter adds a line inside a block instead of submitting)
-export { isOffsetInCodeBlock } from './code-fence';
-
 // Mention-badge visual contract (used by the chat form input / rehype
 // DOM paths that build the same chip without a Svelte mount)
 export {

@@ -2,7 +2,10 @@
 	import { fileMentionWidgets } from './mention-badge-widget';
 	import { EditorView } from '@codemirror/view';
 	import { MarkdownEditor } from '$lib/components/app';
+	import { SETTINGS_KEYS } from '$lib/constants';
 	import { deviceStore } from '$lib/stores';
+	import { settingsStore } from '$lib/stores/settings/index.svelte';
+	import { toolsStore } from '$lib/stores/tools.svelte';
 	import { onMount } from 'svelte';
 
 	interface Props {
@@ -26,6 +29,11 @@
 	}: Props = $props();
 
 	let editor: MarkdownEditor | undefined = $state();
+
+	// Rendered mention badges label paths by these, so the blocks render again on a change
+	let renderKey = $derived(
+		`${settingsStore.config[SETTINGS_KEYS.SHOW_FULL_PATH_IN_MENTIONS]}|${toolsStore.serverHome ?? ''}`
+	);
 
 	// The form gets the keys and pastes first: whatever it handles (submit, pickers,
 	// pasted files) never reaches the editor
@@ -67,6 +75,20 @@
 	export function setCaretOffset(offset: number) {
 		editor?.focusAt(offset);
 	}
+
+	/** Is the cursor in a code block, where Enter adds a line? */
+	export function isCaretInCodeBlock(): boolean {
+		return editor?.isCaretInCodeBlock() ?? false;
+	}
+
+	/** Replace the text as one undoable edit with the cursor at `caret` (e.g. a picked mention). */
+	export function replaceText(next: string, caret: number) {
+		if (editor) {
+			editor.replaceText(next, caret);
+		} else {
+			handleChange(next);
+		}
+	}
 </script>
 
 <div
@@ -83,6 +105,7 @@
 		{extensions}
 		onChange={handleChange}
 		{placeholder}
+		{renderKey}
 		value={value ?? ''}
 	/>
 </div>

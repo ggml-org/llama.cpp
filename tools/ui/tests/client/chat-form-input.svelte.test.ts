@@ -53,6 +53,17 @@ describe('ChatFormInput', () => {
 		expect(editor.state.doc.toString()).toBe(`see ${MENTION} ok`);
 	});
 
+	it('leaves a mention link in a code block as text', async () => {
+		const screen = render(ChatFormInput, { value: `~~~\n${MENTION}\n~~~` });
+		const editor = editorIn(screen.container);
+
+		editor.focus();
+		editor.dispatch({ selection: { anchor: 0 } });
+		await settle();
+
+		expect(screen.container.querySelector('.cm-content')?.textContent).toContain('file://');
+	});
+
 	it('steps over a mention badge as one unit', async () => {
 		const screen = render(ChatFormInput, { value: `a ${MENTION}` });
 		const editor = editorIn(screen.container);

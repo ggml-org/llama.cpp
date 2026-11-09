@@ -50,7 +50,6 @@
 		findMentionToken,
 		getConversationModel,
 		isIMEComposing,
-		isOffsetInCodeBlock,
 		parseClipboardContent,
 		uuid
 	} from '$lib/utils';
@@ -280,10 +279,11 @@
 			const isModifier = event.ctrlKey || event.metaKey;
 			const sendOnEnter = currentConfig.sendOnEnter !== false;
 
-			// Caret inside a fenced code block (closed, or still open
-			// while being typed): Enter adds a line, never submits -
-			// skipping submit lets the editor's own newline through.
-			if (!isModifier && isOffsetInCodeBlock(value ?? '', inputRef?.getCaretOffset() ?? 0)) {
+			// Caret inside a code block (``` or ~~~ fenced, closed or
+			// still open while being typed, or indented): Enter adds a
+			// line, never submits - skipping submit lets the editor's own
+			// newline through.
+			if (!isModifier && inputRef?.isCaretInCodeBlock()) {
 				return;
 			}
 
@@ -474,9 +474,8 @@
 
 		if (!built) return;
 
-		value = built.newValue;
-		onValueChange?.(built.newValue);
-		inputRef?.setCaretOffset(built.caretOffset);
+		// one undoable edit; the input reports the new value like typing
+		inputRef?.replaceText(built.newValue, built.caretOffset);
 	}
 
 	async function handleMicClick() {

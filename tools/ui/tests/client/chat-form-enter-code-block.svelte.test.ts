@@ -1,7 +1,7 @@
 // Guards the Enter-key contract of the chat form against the
-// fenced-code-block flow: while the caret sits inside a fenced
-// block region - closed, or still OPEN while the user is typing
-// one - plain Enter adds a line instead of submitting the message.
+// code-block flow: while the caret sits inside a code block - ```
+// or ~~~ fenced, closed or still OPEN while the user is typing one -
+// plain Enter adds a line instead of submitting the message.
 // The form gates submit; the editor then adds the line itself.
 
 import ChatFormTestWrapper from './components/ChatFormTestWrapper.svelte';
@@ -65,6 +65,46 @@ describe('ChatForm Enter in code blocks', () => {
 
 		expect(onSubmit).not.toHaveBeenCalled();
 		expect(editor.state.doc.toString()).toBe('```js\nconst a = 1;\n');
+	});
+
+	it('adds a line in a tilde-fenced block', async () => {
+		const onSubmit = vi.fn();
+		const { container } = render(ChatFormTestWrapper, { onSubmit });
+
+		await tick();
+
+		const editor = editorIn(container);
+
+		await userEvent.click(editor.contentDOM);
+		await userEvent.keyboard('~~~');
+		await tick();
+
+		await userEvent.keyboard('{Enter}');
+		await tick();
+
+		expect(onSubmit).not.toHaveBeenCalled();
+		expect(editor.state.doc.toString()).toBe('~~~\n');
+	});
+
+	it('submits right after a closing fence', async () => {
+		const onSubmit = vi.fn();
+		const { container } = render(ChatFormTestWrapper, { onSubmit });
+
+		await tick();
+
+		const editor = editorIn(container);
+
+		await userEvent.click(editor.contentDOM);
+		editor.dispatch({
+			changes: { from: 0, insert: '```\ncode\n```' },
+			selection: { anchor: '```\ncode\n```'.length }
+		});
+		await tick();
+
+		await userEvent.keyboard('{Enter}');
+		await tick();
+
+		expect(onSubmit).toHaveBeenCalledTimes(1);
 	});
 
 	it('submits when the caret is before the opening fence', async () => {

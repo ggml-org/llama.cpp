@@ -1,22 +1,34 @@
 <script lang="ts">
 	import '$lib/styles/katex-custom.scss';
-	import { markdownLivePreview, type MarkdownLivePreviewOptions } from './markdown-live-preview';
+	import MarkdownSurface from '../MarkdownContent/MarkdownSurface.svelte';
+	import {
+		markdownLivePreview,
+		markdownLivePreviewFocus,
+		type MarkdownLivePreviewOptions,
+		setRenderKey
+	} from './markdown-live-preview';
+	import { isInCodeBlock } from './markdown-syntax';
 	import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 	import {
 		insertNewlineContinueMarkup,
-		markdown,
 		markdownKeymap,
 		markdownLanguage
 	} from '@codemirror/lang-markdown';
-	import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
-	import { Compartment, EditorState, type Extension, Transaction } from '@codemirror/state';
+	import { HighlightStyle, LanguageSupport, syntaxHighlighting } from '@codemirror/language';
+	import {
+		Annotation,
+		Compartment,
+		EditorState,
+		type Extension,
+		Transaction
+	} from '@codemirror/state';
 	import { EditorView, keymap, placeholder as placeholderExt } from '@codemirror/view';
 	import { tags } from '@lezer/highlight';
-	import { DialogCodePreview } from '$lib/components/app';
+	import { DialogCodePreview, DialogMermaidPreview } from '$lib/components/app';
 	import { ColorMode } from '$lib/enums';
 	import { loadHighlightTheme } from '$lib/utils';
 	import { mode } from 'mode-watcher';
-	import { onDestroy, onMount } from 'svelte';
+	import { onDestroy, onMount, untrack } from 'svelte';
 
 	interface Props {
 		/** The editor's accessible name; the placeholder when not given. */
@@ -29,6 +41,8 @@
 		extensions?: Extension[];
 		onChange?: (value: string) => void;
 		placeholder?: string;
+		/** What the rendered blocks depend on besides their text, see MarkdownLivePreviewOptions. */
+		renderKey?: string;
 		value: string;
 	}
 
@@ -40,6 +54,7 @@
 		extensions = [],
 		onChange,
 		placeholder = '',
+		renderKey = '',
 		value
 	}: Props = $props();
 
@@ -59,47 +74,77 @@
 		{ fontFamily: 'var(--font-mono)', fontSize: '0.875rem', tag: tags.monospace }
 	]);
 
-	const editable = new Compartment();
+	// The markdown language alone: markdown() would also bring the html, css and
+	// javascript parsers (for html tag completion), which the editor doesn't use
+	const markdownSupport = new LanguageSupport(markdownLanguage);
 
-	let host: HTMLDivElement;
-	let view: EditorView | undefined = $state();
+	// Props can change after the editor is created: each lives in a compartment
+	const customCompartment = new Compartment();
+	const editableCompartment = new Compartment();
+	const labelsCompartment = new Compartment();
+	const previewCompartment = new Compartment();
+	// Marks the edits that bring the editor in line with `value`, which onChange skips
+	const valueSync = Annotation.define<boolean>();
+
+	let host: HTMLDivElement | undefined = $state();
+	let view: EditorView | undefined = $state.raw();
 	let previewCode = $state('');
 	let previewLanguage = $state('text');
 	let previewOpen = $state(false);
+	let diagramSvg = $state('');
+	let diagramOpen = $state(false);
+
+	function labels(): Extension {
+		return [
+			placeholderExt(placeholder),
+			// the content is a textbox with no name of its own otherwise
+			EditorView.contentAttributes.of({ 'aria-label': ariaLabel || placeholder })
+		];
+	}
+
+	function livePreview(): Extension {
+		return markdownLivePreview({
+			editingWidgets,
+			onPreviewCode: (code, language) => {
+				previewCode = code;
+				previewLanguage = language;
+				previewOpen = true;
+			},
+			onPreviewDiagram: (svgHtml) => {
+				diagramSvg = svgHtml;
+				diagramOpen = true;
+			},
+			renderKey: untrack(() => renderKey)
+		});
+	}
 
 	onMount(() => {
+		if (!host) return;
+
 		view = new EditorView({
 			parent: host,
 			state: EditorState.create({
 				doc: value,
 				extensions: [
-					...extensions,
+					customCompartment.of(extensions),
 					history(),
 					// Shift+Enter is a plain line break that still continues lists and quotes
 					keymap.of([{ key: 'Shift-Enter', run: insertNewlineContinueMarkup }]),
 					keymap.of([...markdownKeymap, ...defaultKeymap, ...historyKeymap]),
-					markdown({ base: markdownLanguage }),
+					markdownSupport,
 					syntaxHighlighting(rawMarkdownStyle),
-					markdownLivePreview({
-						editingWidgets,
-						onPreviewCode: (code, language) => {
-							previewCode = code;
-							previewLanguage = language;
-							previewOpen = true;
-						}
-					}),
-					editable.of(EditorView.editable.of(!disabled)),
+					markdownLivePreviewFocus,
+					previewCompartment.of(livePreview()),
+					editableCompartment.of(EditorView.editable.of(!disabled)),
 					EditorView.lineWrapping,
-					placeholderExt(placeholder),
-					// the content is a textbox with no name of its own otherwise
-					EditorView.contentAttributes.of({ 'aria-label': ariaLabel || placeholder }),
-					// Only report edits made by the user; syncs from `value` carry no user event
+					labelsCompartment.of(labels()),
+					// Report every edit but the ones syncing from `value`
 					EditorView.updateListener.of((update) => {
-						const fromUser = update.transactions.some(
-							(tr) => tr.annotation(Transaction.userEvent) !== undefined
+						const edited = update.transactions.some(
+							(tr) => tr.docChanged && !tr.annotation(valueSync)
 						);
 
-						if (update.docChanged && fromUser) onChange?.(update.state.doc.toString());
+						if (edited) onChange?.(update.state.doc.toString());
 					})
 				]
 			})
@@ -108,18 +153,12 @@
 
 	onDestroy(() => view?.destroy());
 
-	/**
-	 * Bring the editor in line with `value` (streamed tokens, mention inserts, a cleared
-	 * form, ...). Only the changed middle is replaced, so the viewport and the selection
-	 * around it survive; these edits stay out of the undo history.
-	 */
-	function syncValue(next: string) {
-		if (!view) return;
+	function reconfigure(compartment: Compartment, extension: Extension) {
+		untrack(() => view?.dispatch({ effects: compartment.reconfigure(extension) }));
+	}
 
-		const current = view.state.doc.toString();
-
-		if (next === current) return;
-
+	/** The single change that turns `current` into `next`: their differing middle. */
+	function changeBetween(current: string, next: string) {
 		let from = 0;
 
 		while (from < current.length && from < next.length && current[from] === next[from]) from++;
@@ -132,9 +171,24 @@
 			nextTo--;
 		}
 
+		return { from, insert: next.slice(from, nextTo), to: currentTo };
+	}
+
+	/**
+	 * Bring the editor in line with `value` (streamed tokens, a cleared form, ...). Only
+	 * the changed middle is replaced, so the viewport and the selection around it
+	 * survive; these edits stay out of the undo history and out of onChange.
+	 */
+	function syncValue(next: string) {
+		if (!view) return;
+
+		const current = view.state.doc.toString();
+
+		if (next === current) return;
+
 		view.dispatch({
-			annotations: Transaction.addToHistory.of(false),
-			changes: { from, insert: next.slice(from, nextTo), to: currentTo }
+			annotations: [Transaction.addToHistory.of(false), valueSync.of(true)],
+			changes: changeBetween(current, next)
 		});
 	}
 
@@ -143,7 +197,25 @@
 	});
 
 	$effect(() => {
-		view?.dispatch({ effects: editable.reconfigure(EditorView.editable.of(!disabled)) });
+		if (view) reconfigure(editableCompartment, EditorView.editable.of(!disabled));
+	});
+
+	$effect(() => {
+		if (view) reconfigure(labelsCompartment, labels());
+	});
+
+	$effect(() => {
+		if (view) reconfigure(customCompartment, extensions);
+	});
+
+	$effect(() => {
+		if (view) reconfigure(previewCompartment, livePreview());
+	});
+
+	$effect(() => {
+		const key = renderKey;
+
+		if (view) untrack(() => view?.dispatch({ effects: setRenderKey(key) }));
 	});
 
 	$effect(() => {
@@ -160,6 +232,11 @@
 		return view?.state.selection.main.head ?? 0;
 	}
 
+	/** Is the cursor in a code block (fenced, closed or still open, or indented)? */
+	export function isCaretInCodeBlock(): boolean {
+		return view ? isInCodeBlock(view.state, view.state.selection.main.head) : false;
+	}
+
 	/** Focus the editor with the cursor at `offset` (default: the end of the text). */
 	export function focusAt(offset?: number) {
 		if (!view) return;
@@ -173,13 +250,32 @@
 		view.focus();
 	}
 
+	/**
+	 * Replace the text with `next` as one edit the user can undo (e.g. a picked mention),
+	 * focused with the cursor at `caret`; onChange reports it like typing.
+	 */
+	export function replaceText(next: string, caret = next.length) {
+		if (!view) return;
+
+		const current = view.state.doc.toString();
+
+		view.dispatch({
+			changes: next === current ? undefined : changeBetween(current, next),
+			selection: { anchor: Math.min(caret, next.length) },
+			userEvent: 'input.complete'
+		});
+		view.focus();
+	}
+
 	export function focus() {
 		view?.focus();
 	}
 </script>
 
 <!-- markdown-content: rendered blocks get exactly the chat message styles -->
-<div bind:this={host} class="markdown-content {className}"></div>
+<div class={className}>
+	<MarkdownSurface bind:ref={host} />
+</div>
 
 <DialogCodePreview
 	code={previewCode}
@@ -188,9 +284,13 @@
 	open={previewOpen}
 />
 
-<style>
-	@import '../MarkdownContent/markdown-content.css';
+<DialogMermaidPreview
+	onOpenChange={(open) => (diagramOpen = open)}
+	open={diagramOpen}
+	svgHtml={diagramSvg}
+/>
 
+<style>
 	div :global(.cm-editor) {
 		background: transparent;
 		color: inherit;
@@ -262,5 +362,11 @@
 		padding-bottom: 0.75rem;
 		border-bottom: 1px solid color-mix(in oklch, var(--border) 30%, transparent);
 		border-radius: 0 0 0.75rem 0.75rem;
+	}
+
+	/* A link reference definition renders to nothing, so it stays raw and muted */
+	div :global(.cm-md-raw-definition) {
+		color: var(--muted-foreground);
+		font-size: 0.875rem;
 	}
 </style>
