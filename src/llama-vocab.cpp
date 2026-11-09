@@ -3828,36 +3828,32 @@ std::vector<llama_token> llama_vocab::impl::tokenize(
                 // tokenizer.encode('', add_special_tokens=True)  returns [1]
                 // tokenizer.encode('', add_special_tokens=False) returns []
 
-                // TODO: honor metaspace_prepend_scheme (add_space_prefix currently behaves like "always")
-                bool is_prev_special = true;  // prefix with space if first token
+                const bool prepend_first = metaspace_prepend_scheme == LLAMA_METASPACE_PREPEND_SCHEME_FIRST;
+                bool prepend_space = add_space_prefix;
 
                 if (add_special && add_bos) {
                     GGML_ASSERT(special_bos_id != LLAMA_TOKEN_NULL);
                     output.push_back(special_bos_id);
-                    is_prev_special = true;
                 }
 
                 for (const auto & fragment : fragment_buffer) {
                     if (fragment.type == FRAGMENT_BUFFER_VARIANT_TYPE_RAW_TEXT) {
-                        std::string text;
+                        std::string text = fragment.raw_text.substr(fragment.offset, fragment.length);
+                        llama_escape_whitespace(text);
 
-                        // prefix with space if previous is special
-                        if (add_space_prefix && is_prev_special) {
-                            text = ' ';
+                        if (prepend_space && (!prepend_first || text.rfind("\xE2\x96\x81", 0) != 0)) {
+                            text.insert(0, "\xE2\x96\x81");
                         }
-
-                        text += fragment.raw_text.substr(fragment.offset, fragment.length);
 
 #ifdef PRETOKENIZERDEBUG
                         LLAMA_LOG_WARN("TT: (%ld %ld %ld) '%s'\n", text.length(), fragment.offset, fragment.length, text.c_str());
 #endif
-                        llama_escape_whitespace(text);
                         llm_tokenizer_spm_session session(vocab);
                         session.tokenize(text, output);
-                        is_prev_special = false;
+                        prepend_space = false;
                     } else { // if (fragment.type == FRAGMENT_BUFFER_VARIANT_TYPE_TOKEN)
                         output.push_back(fragment.token);
-                        is_prev_special = true;
+                        prepend_space = add_space_prefix && !prepend_first;
                     }
                 }
 
@@ -4242,7 +4238,8 @@ int32_t llama_vocab::impl::detokenize(
 
     // Metaspace prepend_scheme "first": remove the leading space of the first rendered piece, so a skipped BOS does not consume it
     // TODO: honor metaspace_prepend_scheme for the other vocab types
-    bool remove_first_space = type == LLAMA_VOCAB_TYPE_BPE && metaspace_prepend_scheme == LLAMA_METASPACE_PREPEND_SCHEME_FIRST;
+    bool remove_first_space = (type == LLAMA_VOCAB_TYPE_BPE || type == LLAMA_VOCAB_TYPE_SPM) &&
+        metaspace_prepend_scheme == LLAMA_METASPACE_PREPEND_SCHEME_FIRST;
 
     for (int32_t i = 0; i < n_tokens; ++i) {
         GGML_ASSERT(avail >= 0);
