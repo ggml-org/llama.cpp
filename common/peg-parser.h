@@ -308,8 +308,7 @@ struct common_peg_until_parser {
     bool                                 include  = false; // consume the first delimiter and parse the rest of its branch
     bool                                 optional = false; // include only: may end before any delimiter completes
     common_peg_parser_id                 content  = COMMON_PEG_INVALID_PARSER_ID; // include only: parsed up to the delimiter
-    common_trie                          matcher;
-    std::vector<size_t>                  pattern_branch;   // branch of each matcher pattern
+    common_trie                          matcher;          // each pattern valued by its branch
 };
 
 struct common_peg_schema_parser {

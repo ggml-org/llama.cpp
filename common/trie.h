@@ -73,6 +73,13 @@ struct common_trie {
     // duplicates keep the first index)
     int32_t insert(const std::vector<symbol> & symbols);
 
+    // Child of node on a symbol, created if missing
+    size_t extend(size_t node, symbol ch);
+
+    // Mark node as the end of a pattern with a caller-chosen value, returns the value already there or
+    // value if the node had none. A trie should take its values either from here or from insert, not both
+    int32_t mark(size_t node, int32_t value);
+
   private:
     int32_t n_patterns = 0;
 

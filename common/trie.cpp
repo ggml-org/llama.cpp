@@ -79,22 +79,33 @@ int32_t common_trie::insert(const std::string & word) {
 int32_t common_trie::insert(const std::vector<symbol> & symbols) {
     size_t current = 0;
     for (symbol ch : symbols) {
-        if (ch.is_token()) {
-            tokens.insert((int32_t) ch.value);
-        }
-        auto it = nodes[current].children.find(ch);
-        if (it == nodes[current].children.end()) {
-            size_t child = create_node();
-            nodes[current].children[ch] = child;
-            current = child;
-        } else {
-            current = it->second;
-        }
+        current = extend(current, ch);
     }
-    if (nodes[current].pattern < 0) {
-        nodes[current].pattern = n_patterns++;
+    int32_t pattern = mark(current, n_patterns);
+    if (pattern == n_patterns) {
+        n_patterns++;
     }
-    return nodes[current].pattern;
+    return pattern;
+}
+
+size_t common_trie::extend(size_t node, symbol ch) {
+    if (ch.is_token()) {
+        tokens.insert((int32_t) ch.value);
+    }
+    auto it = nodes[node].children.find(ch);
+    if (it != nodes[node].children.end()) {
+        return it->second;
+    }
+    size_t child = create_node();
+    nodes[node].children[ch] = child;
+    return child;
+}
+
+int32_t common_trie::mark(size_t node, int32_t value) {
+    if (nodes[node].pattern < 0) {
+        nodes[node].pattern = value;
+    }
+    return nodes[node].pattern;
 }
 
 common_aho_corasick::common_aho_corasick(common_trie trie) : t(std::move(trie)) {
