@@ -974,7 +974,7 @@
 	<div
 		bind:this={cardEl}
 		class={[
-			'chat-form-surface group/chat-form relative flex shrink flex-col overflow-hidden rounded-(--chat-form-radius-compact) outline-none transition-[min-height,padding,border-radius,border-color,background-color] duration-400 ease-[var(--chat-form-resize-ease,cubic-bezier(0.3,1.12,0.5,1))] md:rounded-(--chat-form-radius)',
+			'bg-muted/60 dark:bg-muted/75 border border-border/30 shadow-sm backdrop-blur-md group/chat-form relative flex shrink flex-col overflow-hidden rounded-4xl md:rounded-3xl outline-none transition-[min-height,padding,border-radius,border-color,background-color] duration-400 ease-[var(--chat-form-resize-ease,cubic-bezier(0.3,1.12,0.5,1))] md:rounded-3xl',
 			// on a phone it moves by transform instead (see animateSheet); only its border,
 			// hidden on the sheet and clipped away while it moves, fades back in after
 			'max-md:transition-[border-color] max-md:duration-200',
