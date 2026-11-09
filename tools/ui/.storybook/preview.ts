@@ -39,12 +39,19 @@ const preview: Preview = {
 						['Overview', 'Icon', 'Usage', 'Assets', ['Logo', 'Social profiles', 'App icons']],
 						'Typography',
 						[
-							'Overview',
 							'Tester',
 							'Llama Sans',
-							['User Interface', 'Running text', 'Display', 'Glyphs'],
+							['Overview', 'User Interface', 'Running text', 'Display', 'Glyphs'],
 							'Llama Mono',
-							['Terminal', 'User Interface', 'Logs', 'Diff', 'llama.cpp logo', 'Key visuals']
+							[
+								'Overview',
+								'Terminal',
+								'User Interface',
+								'Logs',
+								'Diff',
+								'llama.cpp logo',
+								'Key visuals'
+							]
 						],
 						'Colors',
 						['Palette']

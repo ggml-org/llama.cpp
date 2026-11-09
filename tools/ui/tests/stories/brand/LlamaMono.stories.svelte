@@ -7,10 +7,11 @@
 	import MonoPage from './llama-mono/MonoPage.svelte';
 	import Terminal from './llama-mono/Terminal.svelte';
 	import OverviewFrame from './llama-sans/overview/OverviewFrame.svelte';
+	import TypographyOverview from './typography/TypographyOverview.svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 
-	// Llama Mono in use: the terminal, the user interface beside Llama Sans, logs and tables, diffs, the llama.cpp logo it
-	// sets, and its key visuals. The font itself is on the Typography overview's Mono tab
+	// Llama Mono: its overview, then in use: the terminal, the user interface beside Llama Sans, logs and tables, diffs, the llama.cpp logo it
+	// sets, and its key visuals.
 	const { Story } = defineMeta({
 		parameters: {
 			controls: { disable: true },
@@ -19,6 +20,12 @@
 		title: 'Brand/Typography/Llama Mono'
 	});
 </script>
+
+<Story asChild name="Overview">
+	<OverviewFrame>
+		<TypographyOverview variant="mono" />
+	</OverviewFrame>
+</Story>
 
 <Story asChild name="Terminal">
 	<OverviewFrame>

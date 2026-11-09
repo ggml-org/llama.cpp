@@ -2,11 +2,13 @@
 	import GlyphGrid from './llama-sans/lib/components/GlyphGrid.svelte';
 	import ShowcaseDisplay from './llama-sans/lib/components/ShowcaseDisplay.svelte';
 	import ShowcaseProse from './llama-sans/lib/components/ShowcaseProse.svelte';
+	import OverviewFrame from './llama-sans/overview/OverviewFrame.svelte';
 	import SpecimenFrame from './llama-sans/SpecimenFrame.svelte';
+	import TypographyOverview from './typography/TypographyOverview.svelte';
 	import UserInterface from './typography/UserInterface.svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 
-	// Llama Sans in use, from its UI optical size (opsz 16) to its Display one (opsz 40): the design system's own
+	// Llama Sans: its overview, then in use, from its UI optical size (opsz 16) to its Display one (opsz 40): the design system's own
 	// components, running text, headlines and large type, and every glyph, from the brand specimen
 	const { Story } = defineMeta({
 		parameters: {
@@ -16,6 +18,12 @@
 		title: 'Brand/Typography/Llama Sans'
 	});
 </script>
+
+<Story asChild name="Overview">
+	<OverviewFrame>
+		<TypographyOverview variant="sans" />
+	</OverviewFrame>
+</Story>
 
 <Story asChild name="User Interface">
 	<UserInterface />
