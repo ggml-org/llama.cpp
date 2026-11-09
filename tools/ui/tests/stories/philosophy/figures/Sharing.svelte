@@ -16,6 +16,8 @@
 
 	interface Setup {
 		clients: { icon: Component; name: string; note?: string }[];
+		/** the page's footnote on the line, for what is planned */
+		footnote?: number;
 		host: { count: number; machine: Component; name: string; note: string };
 		id: string;
 		link: string;
@@ -28,6 +30,7 @@
 			clients: [
 				{ icon: Smartphone, name: 'Smartphone', note: 'Llama Chat, added to the Home Screen' }
 			],
+			footnote: 1,
 			host: {
 				count: 1,
 				machine: Laptop,
@@ -131,7 +134,11 @@
 					</ul>
 				</div>
 
-				<p class="caption"><b>{setup.name}.</b> {setup.line}</p>
+				<p class="caption">
+					<b>{setup.name}.</b>
+
+					{setup.line}{#if setup.footnote}<sup>{setup.footnote}</sup>{/if}
+				</p>
 			</div>
 		</Tabs.Content>
 	{/each}

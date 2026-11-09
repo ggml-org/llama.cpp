@@ -59,13 +59,15 @@ Where exactly the line between the two sits is still open.
 
 ## Shared
 
-Everything can stay on one device, fully local. It can also be shared, at home, at work or beyond. Your phone can pick up the conversations you started on your laptop; a home server can run bigger models for the whole family; an office can run one server for everyone who works there.
+Everything can stay on one device, fully local. It can also be shared, at home, at work or beyond. Your phone can pick up the conversations you started on your laptop<sup>1</sup>; a home server can run bigger models for the whole family; an office can run one server for everyone who works there.
 
 And compute can be shared with other people. Those who have the hardware can open it to those who don't, so they can use capable models too.
 
 <Figure n={5} caption="Four setups, from one person to anyone. In each, one machine runs the model and others use it from their own devices.">
 	<Sharing />
 </Figure>
+
+<p class="note"><sup>1</sup> Planned. Picking up a conversation on another device needs sessions that persist on the server, and a way to reach them from an app that only connects to it.</p>
 
 ## Three layers
 
