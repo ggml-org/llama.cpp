@@ -1126,7 +1126,7 @@ bool server_realtime_slot::response_step() {
 }
 
 bool server_realtime_slot::update() {
-    llama_set_embeddings(ctx, true);
+    llama_set_embeddings(ctx, gen.valid());
 
     if (responding) {
         return response_step();
