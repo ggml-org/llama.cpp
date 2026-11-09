@@ -145,14 +145,27 @@ are emitted in the grammar. All trigger rules are added as alternations in the
 root rule. It is still necessary to define trigger patterns, as the parser has
 no interaction with the grammar sampling.
 
-When the trigger rules are built from a start and rest, `trigger_rule(name, start, rest)`,
-the lazy grammar scans for the starts instead: the root lets anything through
-until the start of a trigger rule completes and from there only the rest of that
-rule may follow, or it may end before any start completes. The sampler runs such a
-grammar from the first token, so `grammar_lazy` is false and no trigger
-patterns are needed. A start may only be a sequence of literals, tokens, and
-choices of them, possibly wrapped in tags and atomics, so `until()` over a
-choice of the starts matches content up to any of them.
+With `trigger_rule(name, start, rest)`, the grammar instead scans for a start and
+then constrains the rest. It runs from the first token, so `grammar_lazy` is false
+and no trigger patterns are needed. For example:
+
+```cpp
+auto ab = p.literal("ab");
+auto cd = p.literal("cd");
+return p.until(ab | cd) + (p.trigger_rule("one", ab, p.literal("x")) | p.trigger_rule("two", cd, p.literal("y")));
+```
+
+```
+root       ::= trigger
+trigger    ::= | [a] trigger-01 | [c] trigger-03 | [^ac] trigger
+trigger-01 ::= | [b] one-rest | [a] trigger-01 | [c] trigger-03 | [^abc] trigger
+trigger-03 ::= | [d] two-rest | [a] trigger-01 | [c] trigger-03 | [^acd] trigger
+one-rest   ::= "x"
+two-rest   ::= "y"
+```
+
+A start may only be a sequence of literals, tokens, and choices of them, possibly
+wrapped in tags and atomics.
 
 ### JSON Schema
 
