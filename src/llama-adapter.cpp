@@ -6,6 +6,7 @@
 
 #include <map>
 #include <cassert>
+#include <cmath>
 #include <cerrno>
 #include <cstring>
 #include <sstream>
@@ -413,11 +414,41 @@ static void llama_adapter_lora_init_impl(llama_model & model, FILE * file, llama
             gguf_file.read_raw(read_buf.data(), size);
             ggml_backend_tensor_set(dev, read_buf.data(), 0, size);
         };
+        // fold alpha/rank into an f16/f32 B when that is exact (a power of two that keeps every value finite),
+        // so the graph needs no SCALE op per adapted weight
+        auto fold_scale = [&](llama_adapter_lora_weight & dev) {
+            const float s = adapter.alpha ? adapter.alpha / (float) dev.b->ne[0] : 1.0f;
+            int exp;
+            if (s == 1.0f || std::frexp(s, &exp) != 0.5f || (dev.b->type != GGML_TYPE_F16 && dev.b->type != GGML_TYPE_F32)) {
+                return;
+            }
+            const int64_t n = ggml_nelements(dev.b);
+            if (dev.b->type == GGML_TYPE_F16) {
+                ggml_fp16_t * d = (ggml_fp16_t *) read_buf.data();
+                for (int64_t i = 0; i < n; i++) {
+                    const float v = ggml_fp16_to_fp32(d[i])*s;
+                    if (!std::isfinite(ggml_fp16_to_fp32(ggml_fp32_to_fp16(v)))) {
+                        return;
+                    }
+                }
+                for (int64_t i = 0; i < n; i++) {
+                    d[i] = ggml_fp32_to_fp16(ggml_fp16_to_fp32(d[i])*s);
+                }
+            } else {
+                float * d = (float *) read_buf.data();
+                for (int64_t i = 0; i < n; i++) {
+                    d[i] *= s;
+                }
+            }
+            ggml_backend_tensor_set(dev.b, read_buf.data(), 0, ggml_nbytes(dev.b));
+            dev.b_scale = s;
+        };
         for (auto & it : adapter.ab_map) {
             auto orig = ab_map[it.first];
-            auto dev  = it.second;
+            auto & dev = it.second;
             set_tensor(orig.a, dev.a);
             set_tensor(orig.b, dev.b);
+            fold_scale(dev);
         }
     }
 
