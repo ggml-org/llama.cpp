@@ -59,7 +59,7 @@ Where exactly the line between the two sits is still open.
 
 ## Shared
 
-A server doesn't have to sit next to the person using it, or serve only one. Your phone can use the model on your Mac; one machine can serve a family or an office; a few together can be opened to anyone. People without the hardware can use it too.
+A server doesn't have to sit next to the person using it, or serve only one. Your phone can use the model on your laptop; one machine can serve a family or an office; a few together can be opened to anyone. People without the hardware can use it too.
 
 <Figure n={5} caption="Four setups, from one person to the internet. In each, one machine runs the model and others use it from their own devices.">
 	<Sharing />

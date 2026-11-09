@@ -1,6 +1,6 @@
 <!--
-	Shared, as a slideshow of four setups, from one person to the internet: a MacBook running the Llama app, reached from
-	an iPhone through Llama Connect; a home server on a small workstation for the family; llama-server on an office
+	Shared, as a slideshow of four setups, from one person to the internet: a laptop running the Llama app, reached from
+	a smartphone through Llama Connect; a home server on a small workstation for the family; llama-server on an office
 	server for the people who work there; and a cluster of small workstations, two stacked, open to the internet. Each
 	slide draws the machine that runs the model with a communications motif, dashed lines to the devices that use it,
 	and how they connect. The tabs are Llama UI's own; the motifs read their inks from the --p-* variables, set here
@@ -25,12 +25,19 @@
 
 	const setups: Setup[] = [
 		{
-			clients: [{ icon: Smartphone, name: 'iPhone', note: 'Llama Chat, added to the Home Screen' }],
-			host: { count: 1, machine: Laptop, name: 'MacBook', note: 'The Llama app' },
+			clients: [
+				{ icon: Smartphone, name: 'Smartphone', note: 'Llama Chat, added to the Home Screen' }
+			],
+			host: {
+				count: 1,
+				machine: Laptop,
+				name: 'Laptop',
+				note: 'A MacBook with an M chip, or a laptop with an NVIDIA RTX Spark'
+			},
 			id: 'personal',
-			line: 'The Llama app runs on your MacBook; your iPhone opens Llama Chat as a web app and reaches it through Llama Connect.',
+			line: 'The Llama app runs on your laptop; your smartphone opens Llama Chat as a web app and reaches it through Llama Connect.',
 			link: 'Llama Connect',
-			name: 'Your Mac, from your phone'
+			name: 'Your laptop, from your phone'
 		},
 		{
 			clients: [
@@ -147,7 +154,6 @@
 	:global(.sharing [role='tablist']) {
 		justify-self: start;
 		max-width: 100%;
-		overflow-x: auto;
 	}
 
 	.n {
@@ -268,10 +274,33 @@
 		font-size: inherit;
 	}
 
-	/* the tabs keep only their numbers when the frame is too narrow for the names */
+	/* the tabs stay one row of names as the frame narrows: smaller and tighter first (the row takes 816px at 14px, 675
+	at 12), then two columns of names inside the same track, then one on a phone */
 	@container (width < 840px) {
-		.tab-name {
-			display: none;
+		:global(.sharing [role='tab']) {
+			padding-inline: 8px;
+			font-size: 12px;
+			letter-spacing: -0.01em;
+		}
+	}
+
+	@container (width < 690px) {
+		:global(.sharing [role='tablist']) {
+			display: grid;
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+			justify-self: stretch;
+			height: auto;
+		}
+
+		:global(.sharing [role='tab']) {
+			justify-content: start;
+			min-height: var(--height-control-md);
+		}
+	}
+
+	@container (width < 420px) {
+		:global(.sharing [role='tablist']) {
+			grid-template-columns: minmax(0, 1fr);
 		}
 	}
 
