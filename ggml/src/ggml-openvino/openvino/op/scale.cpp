@@ -2,15 +2,9 @@
 #include "../op_table.h"
 #include "../utils.h"
 
-#include <openvino/core/except.hpp>
 #include <openvino/op/add.hpp>
-#include <openvino/op/concat.hpp>
 #include <openvino/op/constant.hpp>
-#include <openvino/op/equal.hpp>
-#include <openvino/op/if.hpp>
 #include <openvino/op/multiply.hpp>
-#include <openvino/op/reshape.hpp>
-#include <openvino/op/slice.hpp>
 #include <vector>
 
 namespace ov {
