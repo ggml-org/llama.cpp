@@ -23,6 +23,7 @@
 #include <openvino/op/slice.hpp>
 #include <openvino/op/squeeze.hpp>
 #include <openvino/op/subtract.hpp>
+#include <openvino/op/unsqueeze.hpp>
 #include <vector>
 
 namespace ov {
@@ -236,6 +237,12 @@ OutputVector translate_cpy(const NodeContext & context) {
             if (context.get_view_input_size(0) > 0 && !context.is_static()) {
                 // build_rs gathers active and extra rows together. The remainder boundary moves
                 // with the active sequences, so do not capture the first batch's VIEW offset.
+
+                // gathered rows can be [1, rows, feature]; add the slot axis
+                const auto src_rank = src.get_partial_shape().rank();
+                if (src_rank.is_static() && src_rank.get_length() == 3) {
+                    src = std::make_shared<ov::op::v0::Unsqueeze>(src, zero);
+                }
                 src = std::make_shared<ov::op::v8::Slice>(src,
                     context.get_input("rs_src_begin_" + context.get_name()), int_max, one, axis);
             } else {
