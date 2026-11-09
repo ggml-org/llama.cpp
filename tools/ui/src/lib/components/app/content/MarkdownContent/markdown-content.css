@@ -132,8 +132,10 @@
 	word-break: break-all;
 }
 
-.markdown-content :global(a:hover) {
-	color: var(--primary);
+@media (hover: hover) and (pointer: fine) {
+	.markdown-content :global(a:hover) {
+		color: var(--primary);
+	}
 }
 
 /* Lists */
@@ -334,10 +336,12 @@ div.markdown-user-content :global(.table-wrapper) {
 	transition: all 0.2s ease;
 }
 
-.markdown-content :global(.copy-code-btn:hover),
-.markdown-content :global(.preview-code-btn:hover),
-.markdown-content :global(.toggle-source-btn:hover) {
-	transform: scale(1.05);
+@media (hover: hover) and (pointer: fine) {
+	.markdown-content :global(.copy-code-btn:hover),
+	.markdown-content :global(.preview-code-btn:hover),
+	.markdown-content :global(.toggle-source-btn:hover) {
+		transform: scale(1.05);
+	}
 }
 
 .markdown-content :global(.copy-code-btn:active),
@@ -366,8 +370,10 @@ div.markdown-user-content :global(.table-wrapper) {
 	text-decoration: none;
 }
 
-.markdown-content :global(.mention:hover) {
-	text-decoration: underline;
+@media (hover: hover) and (pointer: fine) {
+	.markdown-content :global(.mention:hover) {
+		text-decoration: underline;
+	}
 }
 
 .markdown-content :global(.hashtag) {
@@ -376,8 +382,10 @@ div.markdown-user-content :global(.table-wrapper) {
 	text-decoration: none;
 }
 
-.markdown-content :global(.hashtag:hover) {
-	text-decoration: underline;
+@media (hover: hover) and (pointer: fine) {
+	.markdown-content :global(.hashtag:hover) {
+		text-decoration: underline;
+	}
 }
 
 /* Advanced table enhancements */
@@ -385,15 +393,17 @@ div.markdown-user-content :global(.table-wrapper) {
 	transition: all 0.2s ease;
 }
 
-.markdown-content :global(table:hover) {
-	box-shadow:
-		0 4px 6px -1px rgb(0 0 0 / 0.1),
-		0 2px 4px -2px rgb(0 0 0 / 0.1);
-}
+@media (hover: hover) and (pointer: fine) {
+	.markdown-content :global(table:hover) {
+		box-shadow:
+			0 4px 6px -1px rgb(0 0 0 / 0.1),
+			0 2px 4px -2px rgb(0 0 0 / 0.1);
+	}
 
-.markdown-content :global(th:hover),
-.markdown-content :global(td:hover) {
-	background: var(--muted);
+	.markdown-content :global(th:hover),
+	.markdown-content :global(td:hover) {
+		background: var(--muted);
+	}
 }
 
 /* Disable hover effects when rendering user messages */
@@ -417,10 +427,12 @@ div.markdown-user-content :global(.table-wrapper) {
 	position: relative;
 }
 
-.markdown-content :global(blockquote:hover) {
-	border-left-width: 6px;
-	background: var(--muted);
-	transform: translateX(2px);
+@media (hover: hover) and (pointer: fine) {
+	.markdown-content :global(blockquote:hover) {
+		border-left-width: 6px;
+		background: var(--muted);
+		transform: translateX(2px);
+	}
 }
 
 .markdown-content :global(blockquote::before) {
@@ -539,7 +551,7 @@ div.markdown-user-content :global(.table-wrapper) {
 }
 
 /* Dark mode adjustments */
-@media (prefers-color-scheme: dark) {
+@media (prefers-color-scheme: dark) and (hover: hover) and (pointer: fine) {
 	.markdown-content :global(blockquote:hover) {
 		background: var(--muted);
 	}
@@ -589,9 +601,11 @@ div.markdown-user-content :global(.table-wrapper) {
 	transition: all 0.2s ease;
 }
 
-.markdown-content :global(.image-error-link:hover) {
-	background: var(--muted);
-	border-color: var(--primary);
+@media (hover: hover) and (pointer: fine) {
+	.markdown-content :global(.image-error-link:hover) {
+		background: var(--muted);
+		border-color: var(--primary);
+	}
 }
 
 /* Mermaid and svg blocks share the same block styling */
@@ -624,9 +638,11 @@ div.markdown-user-content :global(.table-wrapper) {
 	display: none;
 }
 
-.markdown-content :global(pre.mermaid:hover),
-.markdown-content :global(.svg-block:hover) {
-	opacity: 0.85;
+@media (hover: hover) and (pointer: fine) {
+	.markdown-content :global(pre.mermaid:hover),
+	.markdown-content :global(.svg-block:hover) {
+		opacity: 0.85;
+	}
 }
 
 .markdown-content :global(pre.mermaid svg) {

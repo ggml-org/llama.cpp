@@ -3,6 +3,7 @@
 		ChevronDown,
 		ChevronRight,
 		File,
+		Folder,
 		Image,
 		MessageSquare,
 		Mic,
@@ -17,7 +18,8 @@
 		ATTACHMENT_FILE_ITEMS,
 		ATTACHMENT_MENU_TEXT,
 		ATTACHMENT_MODALITY_TEXT,
-		ICON_CLASS_DEFAULT
+		ICON_CLASS_DEFAULT,
+		SET_WORKING_DIRECTORY_LABEL
 	} from '$lib/constants';
 	import { getChatFormActionsContext } from '$lib/contexts';
 	import { AttachmentAction, AttachmentItemEnabledWhen } from '$lib/enums/attachment.enums';
@@ -134,6 +136,21 @@
 
 					<span>{ATTACHMENT_MENU_TEXT.SYSTEM_MESSAGE}</span>
 				</button>
+
+				{#if chatFormActions.onWorkingDirectoryClick}
+					<button
+						class={itemClass}
+						onclick={() => {
+							drawerOpen = false;
+							chatFormActions.onWorkingDirectoryClick?.();
+						}}
+						type="button"
+					>
+						<Folder class="{ICON_CLASS_DEFAULT} shrink-0" />
+
+						<span>{SET_WORKING_DIRECTORY_LABEL}</span>
+					</button>
+				{/if}
 
 				{#if toolsPanel.totalToolCount > 0}
 					<Collapsible.Root onOpenChange={(open) => (toolsExpanded = open)} open={toolsExpanded}>

@@ -336,6 +336,13 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 			},
 			{
 				defaultValue: false,
+				help: 'Keep the organization name on a phone too, where the model selector is narrow. Applies only while the organization name is shown.',
+				key: SETTINGS_KEYS.SHOW_MODEL_ORG_NAME_ON_MOBILE,
+				label: 'Show organization name on mobile',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: false,
 				help: 'Display the current build version in the bottom-right corner of the interface.',
 				key: SETTINGS_KEYS.SHOW_BUILD_VERSION,
 				label: 'Show build version information',

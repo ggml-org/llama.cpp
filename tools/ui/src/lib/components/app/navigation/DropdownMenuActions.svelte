@@ -16,12 +16,15 @@
 		triggerClass?: string;
 		actions: MenuAction[];
 		align?: 'start' | 'center' | 'end';
+		/** Anchors the menu to this element instead of its trigger, and keeps it a menu on a phone too, for one opened by a press-and-hold. */
+		anchor?: HTMLElement | null;
 		open?: boolean;
 	}
 
 	let {
 		actions,
 		align = 'end',
+		anchor = null,
 		open = $bindable(false),
 		triggerClass = '',
 		triggerIcon,
@@ -30,7 +33,7 @@
 
 	// a phone shows the same actions in a drawer, where a thumb reaches them and every
 	// row is a touch target of its own
-	let isMobile = $derived(deviceStore.isMobile);
+	let isMobile = $derived(deviceStore.isMobile && !anchor);
 
 	function runAction(action: MenuAction, event: Event) {
 		open = false;
@@ -125,7 +128,7 @@
 			{/if}
 		</Tooltip.Root>
 
-		<DropdownMenu.Content {align} class="z-[999999] w-48">
+		<DropdownMenu.Content {align} class="z-[999999] w-48" customAnchor={anchor}>
 			<MenuActionsList {actions} kind={MenuKind.DROPDOWN} />
 		</DropdownMenu.Content>
 	</DropdownMenu.Root>

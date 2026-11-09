@@ -122,6 +122,31 @@ export const SIDEBAR_OVERSTRETCH_PX = 80;
 export const SIDEBAR_SETTLE_MS = 300;
 /** Duration of the sidebar's open and close slide, matching its `duration-200` transition. */
 export const SIDEBAR_TOGGLE_MS = 200;
+/** The sidebar's contents fading out while a phone's full-screen search covers them, and back in. */
+export const SIDEBAR_CONTENT_FADE_MS = 200;
+
+/** Phone sidebar reveal: the page slides aside by this share of the screen, up to the max width. */
+export const SIDEBAR_REVEAL_RATIO = 0.8;
+export const SIDEBAR_REVEAL_MAX_WIDTH = '20rem';
+/** Duration of the phone sidebar reveal, matching the page's `duration-300` slide. */
+export const SIDEBAR_REVEAL_MS = 300;
+/** Wait after a tap in the phone sidebar closes it, before the tap's page or dialog appears. */
+export const SIDEBAR_REVEAL_ACTION_DELAY_MS = 180;
+/** A swipe that starts this close to the left edge can open the phone sidebar. */
+export const SIDEBAR_REVEAL_EDGE_PX = 24;
+/** Movement before a reveal swipe locks to a horizontal drag. */
+export const SIDEBAR_REVEAL_SLOP_PX = 8;
+/** A rightward swipe this long from anywhere on the page opens the phone sidebar too. */
+export const SIDEBAR_REVEAL_SWIPE_PX = 16;
+/** Share of the reveal a drag must cover to open or close the phone sidebar when let go slowly. */
+export const SIDEBAR_REVEAL_COMMIT_RATIO = 0.3;
+/** Release speed past which a drag opens or closes the phone sidebar the way it was heading. */
+export const SIDEBAR_REVEAL_FLING_PX_PER_MS = 0.3;
+
+/** Hold time before a phone conversation row opens its action menu. */
+export const ROW_LONG_PRESS_MS = 450;
+/** Drift that cancels a row hold, so scrolling still works. */
+export const ROW_LONG_PRESS_SLOP_PX = 8;
 
 /** Max height for tool-result code blocks (json / source / diff / streaming code). */
 export const MAX_HEIGHT_CODE_BLOCK = '22rem';
@@ -153,3 +178,6 @@ export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 		tooltip: 'Settings'
 	}
 ];
+
+/** A light haptic tap's length where the browser vibrates (Android): a click, not a buzz. */
+export const HAPTIC_TAP_MS = 8;
