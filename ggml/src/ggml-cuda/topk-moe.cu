@@ -104,8 +104,8 @@ __device__ void group_mask_warp_inplace(float (&vals)[experts_per_thread], const
         }
 #pragma unroll
         for (int offset = warp_size / 2; offset > 0; offset >>= 1) {
-            const float o1 = __shfl_xor_sync(GGML_CUDA_FULL_LANE_MASK, top1, offset, warp_size);
-            const float o2 = __shfl_xor_sync(GGML_CUDA_FULL_LANE_MASK, top2, offset, warp_size);
+            const float o1 = __shfl_xor_sync(GGML_CUDA_FULL_THREAD_MASK, top1, offset, warp_size);
+            const float o2 = __shfl_xor_sync(GGML_CUDA_FULL_THREAD_MASK, top2, offset, warp_size);
             top2 = fmaxf(fminf(top1, o1), fmaxf(top2, o2));
             top1 = fmaxf(top1, o1);
         }
@@ -117,10 +117,10 @@ __device__ void group_mask_warp_inplace(float (&vals)[experts_per_thread], const
     // rank of each group, lower index wins ties
     int rank = 0;
     for (int g = 0; g < n_groups; g++) {
-        const float other = __shfl_sync(GGML_CUDA_FULL_LANE_MASK, score, g, warp_size);
+        const float other = __shfl_sync(GGML_CUDA_FULL_THREAD_MASK, score, g, warp_size);
         rank += other > score || (other == score && g < lane);
     }
-    const auto keep = __ballot_sync(GGML_CUDA_FULL_LANE_MASK, lane < n_groups && rank < n_group_used);
+    const auto keep = __ballot_sync(GGML_CUDA_FULL_THREAD_MASK, lane < n_groups && rank < n_group_used);
 
 #pragma unroll
     for (int i = 0; i < experts_per_thread; i++) {
@@ -282,9 +282,9 @@ __global__ void topk_moe_cuda(const float *         logits,
 
 #pragma unroll
             for (int mask = warp_size / 2; mask > 0; mask /= 2) {
-                const float val    = __shfl_xor_sync(GGML_CUDA_FULL_LANE_MASK, max_val, mask, warp_size);
-                const float val_s  = __shfl_xor_sync(GGML_CUDA_FULL_LANE_MASK, max_val_s, mask, warp_size);
-                const int   expert = __shfl_xor_sync(GGML_CUDA_FULL_LANE_MASK, max_expert, mask, warp_size);
+                const float val    = __shfl_xor_sync(GGML_CUDA_FULL_THREAD_MASK, max_val, mask, warp_size);
+                const float val_s  = __shfl_xor_sync(GGML_CUDA_FULL_THREAD_MASK, max_val_s, mask, warp_size);
+                const int   expert = __shfl_xor_sync(GGML_CUDA_FULL_THREAD_MASK, max_expert, mask, warp_size);
                 if (val_s > max_val_s || (val_s == max_val_s && expert < max_expert)) {
                     max_val    = val;
                     max_val_s  = val_s;
@@ -307,8 +307,8 @@ __global__ void topk_moe_cuda(const float *         logits,
 
 #pragma unroll
             for (int mask = warp_size / 2; mask > 0; mask /= 2) {
-                const float val    = __shfl_xor_sync(GGML_CUDA_FULL_LANE_MASK, max_val, mask, warp_size);
-                const int   expert = __shfl_xor_sync(GGML_CUDA_FULL_LANE_MASK, max_expert, mask, warp_size);
+                const float val    = __shfl_xor_sync(GGML_CUDA_FULL_THREAD_MASK, max_val, mask, warp_size);
+                const int   expert = __shfl_xor_sync(GGML_CUDA_FULL_THREAD_MASK, max_expert, mask, warp_size);
                 if (val > max_val || (val == max_val && expert < max_expert)) {
                     max_val    = val;
                     max_expert = expert;

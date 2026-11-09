@@ -8,7 +8,7 @@
 #include <cuda_fp16.h>
 #include <cstdint>
 
-typedef uint32_t ggml_cuda_lane_mask_t;
+typedef uint32_t ggml_cuda_thread_mask_t;
 
 #ifdef GGML_USE_NCCL
 #include <nccl.h>

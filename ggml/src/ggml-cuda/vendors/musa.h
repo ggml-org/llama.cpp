@@ -11,7 +11,7 @@
 #define __CUDA_ARCH__ 1300 // GGML_CUDA_CC_RUBIN
 #endif // __MUSA_ARCH__
 
-typedef uint32_t ggml_cuda_lane_mask_t;
+typedef uint32_t ggml_cuda_thread_mask_t;
 
 #define CUBLAS_COMPUTE_16F CUDA_R_16F
 #define CUBLAS_COMPUTE_32F CUDA_R_32F
