@@ -2,11 +2,17 @@
 
 #extension GL_EXT_control_flow_attributes : enable
 #extension GL_EXT_shader_16bit_storage : require
+#extension GL_KHR_shader_subgroup_basic : enable
+#extension GL_KHR_shader_subgroup_ballot : enable
+#extension GL_KHR_shader_subgroup_arithmetic : enable
 
 #include "types.glsl"
 
 layout(constant_id = 0) const int BLOCK_SIZE = 1024;
 layout(constant_id = 1) const int QSA = 0; // 1: fuse the qwen4 QSA indexer gather + f16 mask
+layout(constant_id = 2) const int SUBGROUP_SIZE = 32;
+
+const uint NUM_SUBGROUPS = BLOCK_SIZE / SUBGROUP_SIZE;
 
 layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
@@ -31,7 +37,8 @@ layout (push_constant) uniform parameter {
 shared uint histo[RADIX_SIZE];
 shared uint sh_bucket;
 shared uint sh_above;
-shared uint out_count;
+shared uint sg_above[NUM_SUBGROUPS]; // per subgroup: elements above the threshold, then their exclusive base
+shared uint sg_tied[NUM_SUBGROUPS];  // per subgroup: elements tied with the threshold, then their exclusive base
 
 // order-preserving float -> uint mapping
 uint f2ui(float x) {
@@ -58,8 +65,8 @@ float load(uint row, uint i, bool first) {
     if (QSA == 0) {
         return data_a[row * p.ncols + i];
     }
-    // materialize the scattered gather on the first pass and reuse it after; each
-    // invocation only touches its own scratch entries, so no barrier is needed
+    // materialize the scattered gather on the first pass and reuse it after
+    // every pass maps the columns to the invocations in the same way, so each invocation only touches its own scratch entries and no barrier is needed
     const uint off = row * p.ncols + i;
     if (first) {
         const float v = gather(row, i);
@@ -70,10 +77,17 @@ float load(uint row, uint i, bool first) {
 }
 
 // one workgroup per row: radix-select the K-th largest, then compact it plus enough ties
+// each subgroup owns a contiguous chunk of the row and its lanes interleave within the chunk to keep the accesses coalesced, so the kept elements are ranked in column order
 void topk(const uint row) {
     const uint tid = gl_LocalInvocationID.x;
     const uint ncols = p.ncols;
     const uint row_out = row * p.k;
+
+    const uint sg    = gl_SubgroupID;
+    const uint lane  = gl_SubgroupInvocationID;
+    const uint chunk = (ncols + NUM_SUBGROUPS - 1) / NUM_SUBGROUPS;
+    const uint lo    = sg * chunk;
+    const uint hi    = min(lo + chunk, ncols);
 
     uint prefix  = 0;     // fixed high bits of the threshold key
     uint desired = p.k;   // count still needed from the candidate range
@@ -87,7 +101,7 @@ void topk(const uint row) {
         const bool first     = (shift == 32 - RADIX_BITS);
         const uint hi_mask   = (shift + RADIX_BITS >= 32) ? 0u : (0xFFFFFFFFu << uint(shift + RADIX_BITS));
         const uint prefix_hi = prefix & hi_mask;
-        for (uint i = tid; i < ncols; i += BLOCK_SIZE) {
+        for (uint i = lo + lane; i < hi; i += SUBGROUP_SIZE) {
             const uint key = f2ui(load(row, i, first));
             if ((key & hi_mask) == prefix_hi) {
                 atomicAdd(histo[(key >> uint(shift)) & (RADIX_SIZE - 1)], 1u);
@@ -114,25 +128,83 @@ void topk(const uint row) {
         barrier();
     }
 
-    if (tid == 0) {
-        out_count = 0;
+    const uint threshold = prefix;
+
+    // per-lane counts, reduced to per-subgroup totals
+    uint ca = 0; // elements above the threshold in this lane
+    uint ct = 0; // elements tied with the threshold in this lane
+    for (uint i = lo + lane; i < hi; i += SUBGROUP_SIZE) {
+        const uint key = f2ui(load(row, i, false));
+        ca += key >  threshold ? 1u : 0u;
+        ct += key == threshold ? 1u : 0u;
+    }
+    const uint sa = subgroupAdd(ca);
+    const uint st = subgroupAdd(ct);
+    if (subgroupElect()) {
+        sg_above[sg] = sa;
+        sg_tied[sg]  = st;
     }
     barrier();
 
-    // emit everything above the threshold, then fill the rest from ties
-    const uint threshold = prefix;
-    for (uint i = tid; i < ncols; i += BLOCK_SIZE) {
-        if (f2ui(load(row, i, false)) > threshold) {
-            data_d[row_out + atomicAdd(out_count, 1u)] = int(i);
+    // the first subgroup turns the totals into exclusive bases, chunk by chunk
+    if (sg == 0) {
+        uint acc_a = 0;
+        uint acc_t = 0;
+        for (uint c0 = 0; c0 < NUM_SUBGROUPS; c0 += SUBGROUP_SIZE) {
+            const uint c = c0 + lane;
+            const uint a = c < NUM_SUBGROUPS ? sg_above[c] : 0u;
+            const uint t = c < NUM_SUBGROUPS ? sg_tied[c]  : 0u;
+            const uint ea = subgroupExclusiveAdd(a);
+            const uint et = subgroupExclusiveAdd(t);
+            if (c < NUM_SUBGROUPS) {
+                sg_above[c] = acc_a + ea;
+                sg_tied[c]  = acc_t + et;
+            }
+            acc_a += subgroupAdd(a);
+            acc_t += subgroupAdd(t);
+        }
+        if (lane == 0) {
+            sh_bucket = acc_a; // total above the threshold
+            sh_above  = acc_t; // total tied with the threshold
         }
     }
     barrier();
-    for (uint i = tid; i < ncols; i += BLOCK_SIZE) {
-        if (f2ui(load(row, i, false)) == threshold) {
-            const uint pos = atomicAdd(out_count, 1u);
-            if (pos < p.k) {
-                data_d[row_out + pos] = int(i);
+
+    const uint above_total = sh_bucket;
+    const uint tie_total   = sh_above;
+    const uint base_a      = sg_above[sg] + subgroupExclusiveAdd(ca);
+
+    // the lanes write their kept elements at lane-major ranks, which do not depend on the scheduling
+    // with more ties than remaining slots, the ties are ranked in column order with a ballot per step, so that the lowest tied columns are the ones kept
+    if (tie_total <= p.k - above_total) {
+        const uint base_t = above_total + sg_tied[sg] + subgroupExclusiveAdd(ct);
+        uint na = 0;
+        uint nt = 0;
+        for (uint i = lo + lane; i < hi; i += SUBGROUP_SIZE) {
+            const uint key = f2ui(load(row, i, false));
+            if (key > threshold) {
+                data_d[row_out + base_a + na++] = int(i);
+            } else if (key == threshold) {
+                data_d[row_out + base_t + nt++] = int(i);
             }
+        }
+    } else {
+        uint na = 0;
+        for (uint i = lo + lane; i < hi; i += SUBGROUP_SIZE) {
+            if (f2ui(load(row, i, false)) > threshold) {
+                data_d[row_out + base_a + na++] = int(i);
+            }
+        }
+        uint pos = above_total + sg_tied[sg]; // rank of the first tie of this step
+        for (uint i0 = lo; i0 < hi; i0 += SUBGROUP_SIZE) {
+            const uint i = i0 + lane;
+            const bool t = i < hi && f2ui(load(row, i, false)) == threshold;
+            const uvec4 b = subgroupBallot(t);
+            const uint r = pos + subgroupBallotExclusiveBitCount(b);
+            if (t && r < p.k) {
+                data_d[row_out + r] = int(i);
+            }
+            pos += subgroupBallotBitCount(b);
         }
     }
 }
