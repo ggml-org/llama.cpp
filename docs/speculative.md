@@ -74,9 +74,9 @@ llama-server -m Qwen3-4B.gguf -md Qwen3-4B-DFlash.gguf \
 
 `--spec-draft-n-max` is clamped to the draft model's trained block size.
 
-DFlash2, DSpark and LiliCorr drafts are DFlash backbones with a head on the block, and the head is read from the draft model.
+DFlash2, DSpark, LiliCorr and DSpine drafts are DFlash backbones with a head on the block, and the head is read from the draft model.
 `draft-dflash` runs each of them with the driver of its head.
-The other spec types must match the head of the draft model: `draft-dspark` needs the Markov head, `draft-dflash2` the candidate selector and `draft-lilicorr` the candidate scorer. On a mismatch, speculative decoding is not initialized.
+The other spec types must match the head of the draft model: `draft-dspark` needs the Markov head, `draft-dflash2` the candidate selector, `draft-lilicorr` the candidate scorer and `draft-dspine` the code bridge. On a mismatch, speculative decoding is not initialized.
 Without `--spec-type`, the type is detected from the draft model.
 
 See:
@@ -162,6 +162,29 @@ llama-server -m target.gguf -md LiliCorr.gguf --spec-type draft-lilicorr -fa on 
 See:
 
 - #30506
+
+### DSpine (`draft-dspine`)
+
+[DSpine](https://github.com/Tencent/DSpine) adds a _code bridge_ to the DFlash layers: each draft layer passes a code of the previous block position's token to the next position.
+The draft then rescores its top-k candidates per position (16 in both checkpoints) with the exact predecessor token, and the paths through the block are walked like the DFlash2 lattice.
+
+DSpine drafts (for example `tencent/Qwen3-8B-DSpine-b16` for `Qwen/Qwen3-8B` and `tencent/Qwen3.8-27B-DSpine-b16` for `Qwen/Qwen3.8-27B`) convert with `--target-model-dir`:
+
+```bash
+python convert_hf_to_gguf.py tencent/Qwen3-8B-DSpine-b16 \
+    --target-model-dir Qwen/Qwen3-8B --outtype bf16 --outfile Qwen3-8B-DSpine.gguf
+
+llama-server -m Qwen3-8B.gguf -md Qwen3-8B-DSpine.gguf \
+    --spec-type draft-dspine --spec-draft-n-max 15 -fa on --jinja
+```
+
+The draft ubatch (`--spec-draft-n-ubatch`, default `--ubatch-size`) must hold one block per parallel sequence, that is `-np * (--spec-draft-n-max + 1)` tokens.
+
+`--spec-draft-p-min` and `--spec-draft-sampling probabilistic` work as for DFlash2.
+
+See:
+
+- #31941
 
 ### n-gram Cache (`ngram-cache`)
 
@@ -273,7 +296,7 @@ Use exactly one of these options:
 ### General Speculative Parameters
 
 ```
---spec-type [none|draft-simple|draft-eagle3|draft-dflash|draft-dflash2|draft-dspark|draft-lilicorr|draft-mtp|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod]
+--spec-type [none|draft-simple|draft-eagle3|draft-dflash|draft-dflash2|draft-dspark|draft-dspine|draft-lilicorr|draft-mtp|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod]
                                         comma-separated list of types of speculative decoding to use
                                         (default: none)
                                         (env: LLAMA_ARG_SPEC_TYPE)

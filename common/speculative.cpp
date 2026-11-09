@@ -78,6 +78,7 @@ const std::map<std::string, common_speculative_type> common_speculative_type_fro
     {"draft-dspark",   COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK},
     {"draft-dflash2",  COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH2},
     {"draft-lilicorr", COMMON_SPECULATIVE_TYPE_DRAFT_LILICORR},
+    {"draft-dspine",   COMMON_SPECULATIVE_TYPE_DRAFT_DSPINE},
     {"ngram-simple",   COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE},
     {"ngram-map-k",    COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K},
     {"ngram-map-k4v",  COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V},
@@ -1496,7 +1497,7 @@ struct common_speculative_impl_draft_dspark final : public common_speculative_im
 };
 
 // DFlash2: walks the lattice of the selector over the top-k candidates of the block
-struct common_speculative_impl_draft_dflash2 final : public common_speculative_impl_draft_dflash {
+struct common_speculative_impl_draft_dflash2 : public common_speculative_impl_draft_dflash {
     int32_t selector_top_k = 0;
 
     // probabilistic drafting: one generator per sequence and the seed it was last seeded with (-1: reseed)
@@ -1504,13 +1505,25 @@ struct common_speculative_impl_draft_dflash2 final : public common_speculative_i
     std::vector<int64_t>      dflash2_seed;
 
     common_speculative_impl_draft_dflash2(const common_params_speculative & params, uint32_t n_seq)
-        : common_speculative_impl_draft_dflash(params, n_seq, COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH2)
+        : common_speculative_impl_draft_dflash2(params, n_seq, COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH2,
+                llama_model_dflash_selector_top_k(llama_get_model(params.draft.ctx_dft)))
     {
-        selector_top_k = llama_model_dflash_selector_top_k(llama_get_model(this->params.ctx_dft));
+        init_lattice();
+    }
+
+protected:
+    // for drafts that pack their own [top_k candidates, top_k x top_k scores] lattice for this walk
+    common_speculative_impl_draft_dflash2(const common_params_speculative & params, uint32_t n_seq,
+            common_speculative_type type, int32_t top_k)
+        : common_speculative_impl_draft_dflash(params, n_seq, type)
+        , selector_top_k(top_k)
+    {
         dflash2_rng.resize(n_seq);
         dflash2_seed.assign(n_seq, -1);
+    }
 
-        // DFlash2 reads its selector lattice from h_nextn and never consumes raw logits
+    // DFlash2 reads its selector lattice from h_nextn and never consumes raw logits
+    void init_lattice() {
         init({
             /* .n_draft_max      = */ block_size - 1,
             /* .backend_sampling = */ false,
@@ -1519,6 +1532,7 @@ struct common_speculative_impl_draft_dflash2 final : public common_speculative_i
         });
     }
 
+public:
     void begin(llama_seq_id seq_id, const llama_tokens & prompt) override {
         if (seq_id >= 0 && seq_id < (llama_seq_id) n_seq) {
             // reseed per request rather than per round, or two identical requests differ
@@ -1654,6 +1668,30 @@ struct common_speculative_impl_draft_dflash2 final : public common_speculative_i
                 }
             }
         }
+    }
+};
+
+// DSpine: the code bridge rescores the top-k candidates of the block into a lattice that DFlash2 walks
+struct common_speculative_impl_draft_dspine final : public common_speculative_impl_draft_dflash2 {
+    common_speculative_impl_draft_dspine(const common_params_speculative & params, uint32_t n_seq)
+        : common_speculative_impl_draft_dflash2(params, n_seq, COMMON_SPECULATIVE_TYPE_DRAFT_DSPINE, head_top_k(params))
+    {
+        // the code bridge and the lattice need whole blocks, so the blocks of all sequences must fit one draft ubatch
+        const int64_t n_block_tokens = std::min(this->params.n_max, block_size - 1) + 1;
+        if ((int64_t) n_seq * n_block_tokens > (int64_t) llama_n_ubatch(this->params.ctx_dft)) {
+            throw std::runtime_error("DSpine draft needs --spec-draft-n-ubatch >= n_parallel * (--spec-draft-n-max + 1)");
+        }
+
+        init_lattice();
+    }
+
+private:
+    static int32_t head_top_k(const common_params_speculative & params) {
+        char buf[16] = {};
+        if (llama_model_meta_val_str(llama_get_model(params.draft.ctx_dft), "dflash.dspine.head_topk", buf, sizeof(buf)) < 0) {
+            return 0;
+        }
+        return std::atoi(buf);
     }
 };
 
@@ -2810,6 +2848,7 @@ std::string common_speculative_type_to_str(common_speculative_type type) {
         case COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK:   return "draft-dspark";
         case COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH2:  return "draft-dflash2";
         case COMMON_SPECULATIVE_TYPE_DRAFT_LILICORR: return "draft-lilicorr";
+        case COMMON_SPECULATIVE_TYPE_DRAFT_DSPINE:   return "draft-dspine";
         case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:   return "ngram-simple";
         case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K:    return "ngram-map-k";
         case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V:  return "ngram-map-k4v";
@@ -2901,6 +2940,7 @@ int32_t common_speculative_n_max(const common_params_speculative * spec) {
             case COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK:
             case COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH2:
             case COMMON_SPECULATIVE_TYPE_DRAFT_LILICORR:
+            case COMMON_SPECULATIVE_TYPE_DRAFT_DSPINE:
                 n_max = std::max(n_max, std::max(0, spec->draft.n_max));
                 break;
             case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:
@@ -3075,7 +3115,8 @@ common_params common_base_params_to_speculative(const common_params & params) {
             return t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH  ||
                    t == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK  ||
                    t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH2 ||
-                   t == COMMON_SPECULATIVE_TYPE_DRAFT_LILICORR;
+                   t == COMMON_SPECULATIVE_TYPE_DRAFT_LILICORR ||
+                   t == COMMON_SPECULATIVE_TYPE_DRAFT_DSPINE;
         });
     if (has_block_draft) {
         // per-seq output positions: DFlash decodes anchor + n_max masks (n_max + 1); DSpark n_max -> +1 covers both
@@ -3194,9 +3235,10 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         // the DFlash family types share the draft context, so one run uses at most one of them
         const uint32_t dflash_configs = enabled_configs & (
                 (1u << COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH)  | (1u << COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK) |
-                (1u << COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH2) | (1u << COMMON_SPECULATIVE_TYPE_DRAFT_LILICORR));
+                (1u << COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH2) | (1u << COMMON_SPECULATIVE_TYPE_DRAFT_LILICORR) |
+                (1u << COMMON_SPECULATIVE_TYPE_DRAFT_DSPINE));
         if (dflash_configs & (dflash_configs - 1)) {
-            throw std::runtime_error("draft-dflash, draft-dflash2, draft-dspark and draft-lilicorr cannot be combined");
+            throw std::runtime_error("draft-dflash, draft-dflash2, draft-dspark, draft-lilicorr and draft-dspine cannot be combined");
         }
 
         auto add_config_if_enabled = [&](common_speculative_type type, bool available = true) {
@@ -3206,7 +3248,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         };
 
         // when adding a new type - update here the logic above
-        static_assert(COMMON_SPECULATIVE_TYPE_COUNT == 13);
+        static_assert(COMMON_SPECULATIVE_TYPE_COUNT == 14);
 
         // this list here defines the priority of the speculators
         // the one with highest priority are listed first
@@ -3223,6 +3265,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK,   params.draft.ctx_dft != nullptr);
         add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH2,  params.draft.ctx_dft != nullptr);
         add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_LILICORR, params.draft.ctx_dft != nullptr);
+        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_DSPINE,   params.draft.ctx_dft != nullptr);
     }
 
     std::vector<std::unique_ptr<common_speculative_impl>> impls = {};
@@ -3246,13 +3289,15 @@ common_speculative * common_speculative_init(common_params_speculative & params,
             case COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH:
             case COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK:
             case COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH2:
-            case COMMON_SPECULATIVE_TYPE_DRAFT_LILICORR: {
+            case COMMON_SPECULATIVE_TYPE_DRAFT_LILICORR:
+            case COMMON_SPECULATIVE_TYPE_DRAFT_DSPINE: {
                 common_speculative_type type_model = COMMON_SPECULATIVE_TYPE_NONE;
                 switch (llama_model_dflash_variant(llama_get_model(config.params.draft.ctx_dft))) {
                     case LLAMA_DFLASH_VARIANT_DFLASH:   type_model = COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH;   break;
                     case LLAMA_DFLASH_VARIANT_DFLASH2:  type_model = COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH2;  break;
                     case LLAMA_DFLASH_VARIANT_DSPARK:   type_model = COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK;   break;
                     case LLAMA_DFLASH_VARIANT_LILICORR: type_model = COMMON_SPECULATIVE_TYPE_DRAFT_LILICORR; break;
+                    case LLAMA_DFLASH_VARIANT_DSPINE:   type_model = COMMON_SPECULATIVE_TYPE_DRAFT_DSPINE;   break;
                     case LLAMA_DFLASH_VARIANT_NONE:     break;
                 }
                 if (type_model == COMMON_SPECULATIVE_TYPE_NONE) {
@@ -3275,6 +3320,9 @@ common_speculative * common_speculative_init(common_params_speculative & params,
                         break;
                     case COMMON_SPECULATIVE_TYPE_DRAFT_LILICORR:
                         impls.push_back(std::make_unique<common_speculative_impl_draft_lilicorr>(config.params, n_seq));
+                        break;
+                    case COMMON_SPECULATIVE_TYPE_DRAFT_DSPINE:
+                        impls.push_back(std::make_unique<common_speculative_impl_draft_dspine>(config.params, n_seq));
                         break;
                     default:
                         impls.push_back(std::make_unique<common_speculative_impl_draft_dflash>(config.params, n_seq));

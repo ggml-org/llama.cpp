@@ -235,6 +235,7 @@ extern "C" {
         LLAMA_DFLASH_VARIANT_DFLASH2  = 1,
         LLAMA_DFLASH_VARIANT_DSPARK   = 2,
         LLAMA_DFLASH_VARIANT_LILICORR = 3,
+        LLAMA_DFLASH_VARIANT_DSPINE   = 4,
     };
 
     // TODO: simplify (https://github.com/ggml-org/llama.cpp/pull/9294#pullrequestreview-2286561979)

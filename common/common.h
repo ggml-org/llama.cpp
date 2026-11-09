@@ -182,6 +182,7 @@ enum common_speculative_type {
     COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK,   // DSpark speculative decoding (DFlash + Markov head)
     COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH2,  // DFlash2 speculative decoding (DFlash + selector)
     COMMON_SPECULATIVE_TYPE_DRAFT_LILICORR, // LiliCorr speculative decoding (DFlash + scorer)
+    COMMON_SPECULATIVE_TYPE_DRAFT_DSPINE,   // DSpine speculative decoding (DFlash + code bridge)
     COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,   // simple self-speculative decoding based on n-grams
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,    // self-speculative decoding with n-gram keys only
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V,  // self-speculative decoding with n-gram keys and 4 m-gram values
@@ -421,7 +422,8 @@ struct common_params_speculative {
                    t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH  ||
                    t == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK  ||
                    t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH2 ||
-                   t == COMMON_SPECULATIVE_TYPE_DRAFT_LILICORR;
+                   t == COMMON_SPECULATIVE_TYPE_DRAFT_LILICORR ||
+                   t == COMMON_SPECULATIVE_TYPE_DRAFT_DSPINE;
         });
 
         return needs_rs_seq ? draft.n_max : 0u;
