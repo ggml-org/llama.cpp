@@ -1,7 +1,7 @@
 <!--
 	Shared, as a slideshow of four setups, from one person to the internet: a MacBook running the Llama app, reached from
 	an iPhone through Llama Connect; a home server on a small workstation for the family; llama-server on an office
-	server for the people who work there; and a cluster of small workstations open to the internet. Each slide draws the
+	server for the people who work there; and a cluster of small workstations, two stacked, open to the internet. Each slide draws the
 	machine that runs the model with a communications motif, dashed lines to the devices that use it, and how they
 	connect. The tabs and the arrows are Llama UI's own; the motifs read their inks from the --p-* variables, set here from
 	the theme so they follow light and dark.
@@ -72,7 +72,7 @@
 		{
 			clients: [{ icon: Globe, name: 'Anyone you let in', note: 'From anywhere' }],
 			host: {
-				count: 3,
+				count: 2,
 				machine: WorkstationSmall,
 				name: 'A cluster',
 				note: 'Home servers or workstations, together'
@@ -157,7 +157,9 @@
 </Tabs.Root>
 
 <style>
+	/* a grid item in the figure: let it shrink to the frame, the tabs scrolling inside it */
 	:global(.sharing) {
+		min-width: 0;
 		--p-base: var(--surface-page);
 		--p-ink: var(--fg-default);
 		--p-muted: var(--figure-muted);
@@ -221,13 +223,22 @@
 		aspect-ratio: 4 / 3;
 	}
 
-	/* three machines side by side, overlapping a little, as one cluster */
+	/* two machines stacked, as one cluster: both in one cell, the second raised by a box's height and drawn over the
+	first */
+	.cluster {
+		display: grid;
+		justify-items: center;
+		padding-top: 34px;
+	}
+
 	.cluster .motif {
-		width: min(34%, 120px);
+		grid-area: 1 / 1;
+		width: min(100%, 170px);
 	}
 
 	.cluster .motif + .motif {
-		margin-left: -6%;
+		z-index: 1;
+		transform: translateY(-34px);
 	}
 
 	b {
