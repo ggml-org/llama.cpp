@@ -112,7 +112,8 @@ export { default as DialogConfirmation } from './DialogConfirmation.svelte';
  * **DialogSearch** - Spotlight-style search over chats and sidebar actions
  *
  * Opens over the app with a focused input and a keyboard-driven result list:
- * arrow keys move the highlight, Enter opens, Escape closes. Desktop only; phones use the `/search` page.
+ * arrow keys move the highlight, Enter opens, Escape closes. A phone shows it full screen, like
+ * every dialog.
  */
 export { default as DialogSearch } from './DialogSearch.svelte';
 

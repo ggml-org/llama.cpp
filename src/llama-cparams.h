@@ -60,9 +60,11 @@ struct llama_cparams {
     bool training;           // set by llama_opt_init()
 
     size_t moe_cache_size;
+    float  moe_cache_cpu_share;
 
     std::vector<bool> embeddings_layer_inp; // [n_layer()] extract input embeddings for layer
     bool embeddings_layer_inp_dev; // write enabled layer inputs to a device buffer instead of host
+    bool embeddings_nextn_dev;     // write the unmasked h_nextn rows to a device buffer instead of host, see llama_set_embeddings_nextn_dev()
 
     enum llama_context_type ctx_type;
     enum llama_rope_scaling_type rope_scaling_type;
@@ -72,4 +74,7 @@ struct llama_cparams {
     void * cb_eval_user_data;
 
     llama_context * ctx_other;
+
+    // context whose h_nextn device buffer holds the state rows of a batch, see llama_set_embd_state_src()
+    llama_context * ctx_state_src;
 };

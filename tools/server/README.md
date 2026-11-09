@@ -81,6 +81,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-cmoe, --cpu-moe` | keep all Mixture of Experts (MoE) weights in the CPU<br/>(env: LLAMA_ARG_CPU_MOE) |
 | `-ncmoe, --n-cpu-moe N` | keep the Mixture of Experts (MoE) weights of the first N layers in the CPU<br/>(env: LLAMA_ARG_N_CPU_MOE) |
 | `--moe-cache-mib N` | GPU cache size in MiB for the MoE experts kept in the CPU. with multiple GPUs, it is split among them like the layers (--tensor-split) (default: 0, disabled)<br/>(env: LLAMA_ARG_MOE_CACHE_MIB) |
+| `--moe-cache-cpu-share F` | share of the MoE cache misses that the CPU computes from the host experts instead of uploading them to the GPU once the cache is full, from 0 to 1 (default: 0.00)<br/>(env: LLAMA_ARG_MOE_CACHE_CPU_SHARE) |
 | `-ncffn, --n-cpu-ffn N` | keep the dense FFN weights of the first N layers in the CPU<br/>(dense models; for MoE expert weights use --n-cpu-moe)<br/>(env: LLAMA_ARG_N_CPU_FFN) |
 | `-ngl, --gpu-layers, --n-gpu-layers N` | max. number of layers to store in VRAM, either an exact number, 'auto', or 'all' (default: auto)<br/>(env: LLAMA_ARG_N_GPU_LAYERS) |
 | `-sm, --split-mode {none,layer,row,tensor}` | how to split the model across multiple GPUs, one of:<br/>- none: use one GPU only<br/>- layer (default): split layers and KV across GPUs (pipelined)<br/>- row: split weight across GPUs by rows (parallelized)<br/>- tensor: split weights and KV across GPUs (parallelized, EXPERIMENTAL)<br/>(env: LLAMA_ARG_SPLIT_MODE) |
@@ -861,7 +862,9 @@ Returns raw audio bytes (`audio/wav` by default) rather than JSON. For more info
 
 `speaker_ref_b64`: Base64-encoded reference audio to clone the speaker's voice. Optional. Alternatively, upload the reference audio as a `speaker_ref` file field via `multipart/form-data` (see example below) - if both are provided, the uploaded file takes precedence. Rejected when the model has no voice encoder (e.g. Pocket TTS without voice cloning).
 
-`top_k`, `top_p`: Sampling params for the acoustic code predictor. Optional, model-dependent defaults apply.
+`top_k`, `top_p`: Sampling params for both the backbone sampler and the acoustic code predictor. Optional, `0` or absent keeps the server `--top-k`/`--top-p` for the backbone and the model defaults for the code predictor.
+
+`temperature`: Temperature for the backbone sampler and the audio frames, for models that support it. `0` is greedy sampling. Optional, absent keeps the server `--temp` for the backbone and the model defaults for the audio.
 
 `repeat_penalty`: Repetition penalty applied to the backbone sampler over the whole generation (default `1.05`). Without this, the backbone can loop and re-generate the same utterance.
 
@@ -1443,7 +1446,7 @@ Given a ChatML-formatted json description in `messages`, it returns the predicte
 
 See [OpenAI Chat Completions API documentation](https://platform.openai.com/docs/api-reference/chat). llama.cpp `/completion`-specific features such as `mirostat` are also supported.
 
-The `response_format` parameter supports both plain JSON output (e.g. `{"type": "json_object"}`) and schema-constrained JSON (e.g. `{"type": "json_object", "schema": {"type": "string", "minLength": 10, "maxLength": 100}}` or `{"type": "json_schema", "schema": {"properties": { "name": { "title": "Name",  "type": "string" }, "date": { "title": "Date",  "type": "string" }, "participants": { "items": {"type: "string" }, "title": "Participants",  "type": "string" } } } }`), similar to other OpenAI-inspired API providers.
+The `response_format` parameter supports both plain JSON output (e.g. `{"type": "json_object"}`) and schema-constrained JSON (e.g. `{"type": "json_object", "schema": {"type": "string", "minLength": 10, "maxLength": 100}}` or `{"type": "json_schema", "schema": {"properties": { "name": { "title": "Name",  "type": "string" }, "date": { "title": "Date",  "type": "string" }, "participants": { "items": {"type: "string" }, "title": "Participants",  "type": "string" } } } }`), similar to other OpenAI-inspired API providers. The OpenAI wrapper form `{"type": "json_schema", "json_schema": {"name": ..., "strict": ..., "schema": {...}}}` is also accepted.
 
 `chat_template_kwargs`: Allows sending additional parameters to the json templating system. For example: `{"enable_thinking": false}`
 
@@ -1593,11 +1596,11 @@ Models that write the text while they listen use this endpoint: Voxtral Realtime
 
 Live ASR models can also hold a conversation, so they transcribe live only in sessions opened with `/v1/realtime?intent=transcription`, as OpenAI transcription sessions are; other sessions are a [realtime conversation](#realtime-conversation).
 
-Audio must be PCM16, mono, at the model sample rate. The sample rate is returned in `session.created` as `audio.input.format.rate`. Each `input_audio_buffer.append` carries a base64-encoded chunk of PCM16 samples.
+Audio must be PCM16, mono. By default it is at the model sample rate, returned in `session.created` as `audio.input.format.rate`. A client can send another rate (8000 to 192000 Hz) by setting `audio.input.format.rate` with `session.update`, the server then resamples it. Each `input_audio_buffer.append` carries a base64-encoded chunk of PCM16 samples.
 
 *Client events:*
 
-- `session.update`: accepted for compatibility, the server replies with `session.updated`
+- `session.update`: only `audio.input.format.rate` is used, the server replies with `session.updated`
 - `input_audio_buffer.append`: `audio` holds base64 PCM16 samples
 - `input_audio_buffer.commit`: flushes the audio received so far, so the words still held back by the model's delay are produced. The server replies with `input_audio_buffer.committed` and starts a new item. With `"final": true`, the input ends instead and the last item is completed once the stream drains.
 - `input_audio_buffer.clear`: accepted for compatibility, audio already sent cannot be discarded
@@ -1616,7 +1619,7 @@ Note that words held back by the model's delay at the time of a commit are attri
 
 #### Realtime conversation
 
-Models that answer after the audio, like LFM3-Audio and LFM3-Omni, hold a conversation on the same endpoint (with an `asr` template, unless the session is opened with `?intent=transcription`). The audio is prefilled as it arrives, so the response starts right after the last chunk. Audio input is PCM16 mono at the model sample rate (`audio.input.format.rate` of `session.created`), audio output is PCM16 mono at `audio.output.format.rate`.
+Models that answer after the audio, like LFM3-Audio and LFM3-Omni, hold a conversation on the same endpoint (with an `asr` template, unless the session is opened with `?intent=transcription`). The audio is prefilled as it arrives, so the response starts right after the last chunk. Audio input is PCM16 mono, by default at the model sample rate (`audio.input.format.rate` of `session.created`); another rate set with `session.update` is resampled by the server. Audio output is PCM16 mono at `audio.output.format.rate`.
 
 `session.type` selects the session, it can be changed with `session.update` before the first audio or message:
 
@@ -1625,7 +1628,7 @@ Models that answer after the audio, like LFM3-Audio and LFM3-Omni, hold a conver
 
 *Client events:*
 
-- `session.update`: `type`, `instructions` (the system prompt, before the first audio or message), `output_modalities`, `max_output_tokens` (an integer or `"inf"`, the default), `tools` (functions with `name`, `description` and `parameters`, before the first audio or message) and `tool_choice` (`"auto"`, the default, `"none"` or `"required"`)
+- `session.update`: `type`, `audio.input.format.rate` (8000 to 192000 Hz), `instructions` (the system prompt, before the first audio or message), `output_modalities`, `max_output_tokens` (an integer or `"inf"`, the default), `tools` (functions with `name`, `description` and `parameters`, before the first audio or message) and `tool_choice` (`"auto"`, the default, `"none"` or `"required"`)
 - `input_audio_buffer.append`: `audio` holds base64 PCM16 samples
 - `input_audio_buffer.commit`: ends the audio of the user turn, in a transcription session the transcript follows
 - `conversation.item.create`: a user message with `input_text` content, or a `function_call_output` with the `call_id` and `output` of a tool call of the last response

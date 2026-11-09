@@ -1,6 +1,6 @@
 #include "models.h"
 
-ggml_cgraph * clip_graph_deepseekocr2::build() {
+ggml_cgraph * mtmd_graph_deepseekocr2::build() {
     GGML_ASSERT(hparams.n_head_kv > 0);
     GGML_ASSERT(n_head % hparams.n_head_kv == 0);
 
@@ -45,7 +45,7 @@ ggml_cgraph * clip_graph_deepseekocr2::build() {
 
         ggml_tensor * inp_pos = ggml_cast(ctx0, ggml_arange(ctx0, 0, seq_len, 1), GGML_TYPE_I32);
 
-        auto add_rope = [&](ggml_tensor * x, const clip_layer &) {
+        auto add_rope = [&](ggml_tensor * x, const mtmd_layer &) {
             return ggml_rope_ext(ctx0, x, inp_pos, nullptr, d_head,
                                  GGML_ROPE_TYPE_NEOX, 131072, 1000000, 1, 0, 1, 0, 0);
         };

@@ -3424,13 +3424,19 @@ private:
     }
 
     void iterate(std::vector<server_slot> & slots, std::function<void(server_slot &)> callback) {
-        for (auto & slot : slots) {
-            try {
-                callback(slot);
-            } catch (const std::exception & e) {
-                SLT_ERR(slot, "got exception: %s\n", e.what());
-                send_error(slot, std::string("got exception: ") + e.what(), ERROR_TYPE_SERVER);
-                slot.release();
+        for (int pass = 0; pass < 2; ++pass) {
+            for (auto & slot : slots) {
+                const bool is_child = slot.is_processing() && slot.task->is_child();
+                if (is_child != (pass == 1)) {
+                    continue;
+                }
+                try {
+                    callback(slot);
+                } catch (const std::exception & e) {
+                    SLT_ERR(slot, "got exception: %s\n", e.what());
+                    send_error(slot, std::string("got exception: ") + e.what(), ERROR_TYPE_SERVER);
+                    slot.release();
+                }
             }
         }
     }
@@ -4007,6 +4013,7 @@ private:
                 // check if this is a child slot
                 if (slot.state == SLOT_STATE_WAIT_OTHER) {
                     SLT_DBG(slot, "%s", "waiting for parent slot to complete\n");
+                    SLT_DBG(slot, "%s", "__TEST_TAG_WAIT_PARENT_SLOT__\n");
                     return;
                 }
 
@@ -5745,7 +5752,7 @@ static json parse_tts_body(const server_http_req & req) {
             body[k] = std::stoll(body[k].get<std::string>());
         }
     }
-    for (const char * k : { "top_p", "repeat_penalty", "speed" }) {
+    for (const char * k : { "top_p", "temperature", "repeat_penalty", "speed" }) {
         if (body.contains(k) && body[k].is_string()) {
             body[k] = std::stof(body[k].get<std::string>());
         }
@@ -6190,12 +6197,13 @@ void server_routes::init_routes() {
         }
 
         const std::string session_id = "sess_" + random_string();
-        const json session_config = json {
+        const int model_rate = mtmd_get_audio_sample_rate(ctx_server.mctx);
+        json session_config = json {
             {"id",     session_id},
             {"object", "realtime.transcription_session"},
             {"type",   "transcription"},
             {"audio",  {{"input", {
-                {"format",          {{"type", "audio/pcm"}, {"rate", mtmd_get_audio_sample_rate(ctx_server.mctx)}}},
+                {"format",          {{"type", "audio/pcm"}, {"rate", model_rate}}},
                 {"transcription",   {{"model", meta->model_name}}},
                 {"turn_detection",  nullptr},
                 {"noise_reduction", nullptr},
@@ -6260,6 +6268,8 @@ void server_routes::init_routes() {
         // client events are read on this thread, the transcript is sent from the thread below
         std::atomic<bool> input_ended{false};
         std::thread reader([&]() {
+            int                        input_rate = model_rate;
+            mtmd_helper::resampler_ptr resampler; // input_rate -> model_rate
             std::string msg;
             while (conn.read(msg) != 0) {
                 json ev;
@@ -6271,6 +6281,21 @@ void server_routes::init_routes() {
                 }
                 const std::string type = json_value(ev, "type", std::string());
                 if (type == "session.update" || type == "transcription_session.update") {
+                    const json session = json_value(ev, "session", json::object());
+                    const json audio   = session.is_object() ? session.value("audio", json::object()) : json::object();
+                    const json in      = audio.is_object() ? audio.value("input", json::object()) : json::object();
+                    if (in.is_object() && in.contains("format") && in["format"].is_object()) {
+                        const int rate = json_value(in["format"], "rate", input_rate);
+                        if (rate < 8000 || rate > 192000) {
+                            send_error_event("session.update: the input audio rate must be between 8000 and 192000 Hz", "invalid_request_error");
+                            continue;
+                        }
+                        if (rate != input_rate) {
+                            input_rate = rate;
+                            resampler.reset();
+                            session_config["audio"]["input"]["format"]["rate"] = rate;
+                        }
+                    }
                     send_event(json {{"type", "session.updated"}, {"session", session_config}});
                 } else if (type == "input_audio_buffer.append") {
                     std::string pcm;
@@ -6285,6 +6310,25 @@ void server_routes::init_routes() {
                         int16_t v;
                         memcpy(&v, pcm.data() + 2 * i, sizeof(v));
                         samples[i] = v / 32768.0f;
+                    }
+                    if (!resampler) {
+                        resampler.reset(mtmd_helper_resampler_init(input_rate, model_rate));
+                        if (!resampler) {
+                            send_error_event("failed to initialize the audio resampler", "server_error");
+                            break;
+                        }
+                    }
+                    const float * out = nullptr;
+                    const int64_t n   = mtmd_helper_resampler_process(resampler.get(), samples.data(), samples.size(), &out);
+                    if (n < 0) {
+                        send_error_event("failed to resample the audio", "server_error");
+                        break;
+                    }
+                    if (n == 0) {
+                        continue;
+                    }
+                    if (out != samples.data()) {
+                        samples.assign(out, out + n);
                     }
                     if (!post_control(SERVER_CONTROL_ACTION_AUDIO_APPEND, std::move(samples))) {
                         break;
@@ -7055,6 +7099,9 @@ std::unique_ptr<server_res_generator> server_routes::handle_tts_impl(const serve
     }
     if (task.tts_inp.data.top_p > 0) {
         task.params.sampling.top_p = task.tts_inp.data.top_p;
+    }
+    if (task.tts_inp.data.temp >= 0) {
+        task.params.sampling.temp = task.tts_inp.data.temp;
     }
 
     // speaker reference: either an uploaded form file ("speaker_ref") or a base64 JSON field ("speaker_ref_b64")

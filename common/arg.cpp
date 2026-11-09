@@ -2755,6 +2755,17 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_MOE_CACHE_MIB"));
     add_opt(common_arg(
+        {"--moe-cache-cpu-share"}, "F",
+        string_format("share of the MoE cache misses that the CPU computes from the host experts instead of uploading them to the GPU once the cache is full, from 0 to 1 (default: %.2f)", (double) params.moe_cache_cpu_share),
+        [](common_params & params, const std::string & value) {
+            const float share = std::stof(value);
+            if (share < 0.0f || share > 1.0f) {
+                throw std::invalid_argument("invalid value");
+            }
+            params.moe_cache_cpu_share = share;
+        }
+    ).set_env("LLAMA_ARG_MOE_CACHE_CPU_SHARE"));
+    add_opt(common_arg(
         {"-ncffn", "--n-cpu-ffn"}, "N",
         "keep the dense FFN weights of the first N layers in the CPU\n"
         "(dense models; for MoE expert weights use --n-cpu-moe)",
@@ -3021,6 +3032,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.model.path = value;
         }
     ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_EXPORT_LORA, LLAMA_EXAMPLE_DOWNLOAD, LLAMA_EXAMPLE_TOKENIZE}).set_env("LLAMA_ARG_MODEL"));
+    add_opt(common_arg(
+        {"--ple", "--shard"}, "FNAME,...",
+        "extra GGUF shards for the model, comma separated; may be given more than once\n"
+        "paths may live anywhere, including on different drives; --ple is an alias for --shard",
+        [](common_params & params, const std::string & value) {
+            for (const auto & item : parse_csv_row(value)) {
+                params.model.shards.push_back(item);
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_COMMON}).set_env("LLAMA_ARG_SHARD"));
     add_opt(common_arg(
         {"-mu", "--model-url"}, "MODEL_URL",
         "model download url (default: unused)",

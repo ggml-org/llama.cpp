@@ -103,6 +103,14 @@ static void fill_rope_factors(std::vector<float> & dst, const char * name, const
     }
 }
 
+// FFN act scales divide the activation, a value close to 0 overflows the F16 staging of the Metal mul-mat kernel
+static void fill_ffn_act(std::vector<float> & dst, const char * name, const tensor_data_params & params) {
+    fill_normal(dst, name, params);
+    for (float & v : dst) {
+        v = copysignf(1.0f + fabsf(v), v);
+    }
+}
+
 // a norm preserving residual gate holds alpha^2 + beta^2 == 1, and the conversion resolves both from one raw weight
 // the alpha and the beta of a block share that weight, so the key drops the suffix and keeps the block
 static void fill_resid_gate(std::vector<float> & dst, const char * name, const tensor_data_params & params) {
@@ -127,6 +135,7 @@ static const struct { const char * match; tensor_filler fill; } TENSOR_FILLERS[]
     { "ssm_a",        fill_ssm_a        },
     { "_resid_",      fill_resid_gate   },
     { "exp_probs_b",  fill_exp_probs_b  },
+    { "ffn.act",      fill_ffn_act      },
     { "rope_freqs",   fill_rope_factors },
     { "rope_factors", fill_rope_factors },
 };
@@ -290,6 +299,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
             || arch == LLM_ARCH_KIMI_LINEAR
             || arch == LLM_ARCH_BAILINGMOE3
             || arch == LLM_ARCH_KIMI_K3
+            || arch == LLM_ARCH_KIMI_K31
             || arch == LLM_ARCH_MISTRAL4
             || arch == LLM_ARCH_MISTRAL_LARGE4
             || arch == LLM_ARCH_HY_V4
@@ -365,7 +375,8 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
 
     if (arch == LLM_ARCH_PLAMO2 || arch == LLM_ARCH_JAMBA || arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE ||
             arch == LLM_ARCH_GRANITE_HYBRID || arch == LLM_ARCH_LFM2 || arch == LLM_ARCH_LFM2MOE || arch == LLM_ARCH_LFM3 ||
-            arch == LLM_ARCH_KIMI_LINEAR || arch == LLM_ARCH_BAILINGMOE3 || arch == LLM_ARCH_KIMI_K3 || arch == LLM_ARCH_GLM5_NEXT
+            arch == LLM_ARCH_KIMI_LINEAR || arch == LLM_ARCH_BAILINGMOE3 || arch == LLM_ARCH_KIMI_K3 || arch == LLM_ARCH_KIMI_K31 ||
+            arch == LLM_ARCH_GLM5_NEXT
             ) {
         GGML_ASSERT(n_layer >= 2);
         std::vector<uint32_t> n_head_per_layer;
@@ -410,6 +421,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
             || arch == LLM_ARCH_KIMI_LINEAR
             || arch == LLM_ARCH_BAILINGMOE3
             || arch == LLM_ARCH_KIMI_K3
+            || arch == LLM_ARCH_KIMI_K31
             || arch == LLM_ARCH_GLM5_NEXT
             || arch == LLM_ARCH_HY_V4
             || arch == LLM_ARCH_MISTRAL4
@@ -1024,6 +1036,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_MIMO2:
         case LLM_ARCH_KIMI_LINEAR:
         case LLM_ARCH_KIMI_K3:
+        case LLM_ARCH_KIMI_K31:
         case LLM_ARCH_GLM5_NEXT:
         case LLM_ARCH_STEP35:
         case LLM_ARCH_MISTRAL4:

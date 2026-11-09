@@ -302,7 +302,7 @@ class PocketTTSMmprojModel(MmprojModel):
         # voice-prompt encoder: mimi encoder + speaker_proj
         if self.has_audio_encoder:
             self.gguf_writer.add_clip_has_audio_encoder(True)
-            # note: the 24kHz sample rate is hardcoded on the clip.cpp side, like the other audio models
+            # note: the 24kHz sample rate is hardcoded on the mtmd side, like the other audio models
             self.gguf_writer.add_clip_audio_projector_type(gguf.VisionProjectorType.POCKETTTS_SPKENC)
             self.gguf_writer.add_audio_projection_dim(self.n_embd_text)
             self.gguf_writer.add_audio_block_count(self.hparams_audio["num_hidden_layers"])
@@ -314,7 +314,7 @@ class PocketTTSMmprojModel(MmprojModel):
             self.gguf_writer.add_audio_num_mel_bins(1)
 
         # generation: flow-matching decoder + mimi decoder
-        # the SEANet and flow net hparams are constant across the family, clip.cpp holds them
+        # the SEANet and flow net hparams are constant across the family, mtmd holds them
         self.gguf_writer.add_clip_has_gen_audio_encoder(True)
         self.gguf_writer.add_clip_gen_audio_projector_type(gguf.VisionProjectorType.POCKETTTS_GEN)
         self.gguf_writer.add_gen_audio_projection_dim(self.n_embd_text)

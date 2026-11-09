@@ -95,6 +95,14 @@ bool htp_kparams_solve_rms_norm_mul(
     struct htp_unary_kernel_params * kparams
 );
 
+bool htp_kparams_solve_rms_norm_mul_add(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * src0,
+    const struct ggml_tensor * src1,
+    const struct ggml_tensor * dst,
+    struct htp_unary_kernel_params * kparams
+);
+
 bool htp_kparams_solve_matmul_add(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * src0,

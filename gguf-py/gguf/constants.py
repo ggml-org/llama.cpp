@@ -589,7 +589,7 @@ class GGUFType:
 
 
 class MODEL_ARCH(IntEnum):
-    MMPROJ           = auto() # dummy arch for clip.cpp
+    MMPROJ           = auto() # dummy arch for mmproj
     LLAMA            = auto()
     LLAMA4           = auto()
     DECI             = auto()
@@ -752,6 +752,7 @@ class MODEL_ARCH(IntEnum):
     MAION_CODER      = auto()
     KIMI_LINEAR      = auto()
     KIMI_K3          = auto()
+    KIMI_K31         = auto()
     TALKIE           = auto()
     MELLUM           = auto()
     NANBEIGE         = auto()
@@ -1111,6 +1112,7 @@ class MODEL_TENSOR(IntEnum):
     V_ENC_EMBD_NORM      = auto()
     V_ENC_EMBD_PATCH_NORM = auto() # allow multiple norms in the same embd, e.g. for gemma4u
     V_ENC_EMBD_POS       = auto()
+    V_ENC_ROPE_FREQS     = auto()
     V_ENC_INPUT_NORM     = auto()
     V_ENC_ATTN_QKV       = auto()
     V_ENC_ATTN_Q         = auto()
@@ -1506,7 +1508,7 @@ class MODEL_TENSOR(IntEnum):
 
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
-    MODEL_ARCH.MMPROJ:           "clip", # dummy arch for clip.cpp
+    MODEL_ARCH.MMPROJ:           "clip", # dummy arch for mmproj files (tools/mtmd)
     MODEL_ARCH.LLAMA:            "llama",
     MODEL_ARCH.LLAMA4:           "llama4",
     MODEL_ARCH.DECI:             "deci",
@@ -1669,6 +1671,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.MAION_CODER:      "maion-coder",
     MODEL_ARCH.KIMI_LINEAR:      "kimi-linear",
     MODEL_ARCH.KIMI_K3:          "kimi-k3",
+    MODEL_ARCH.KIMI_K31:         "kimi-k31",
     MODEL_ARCH.TALKIE:           "talkie",
     MODEL_ARCH.MELLUM:           "mellum",
     MODEL_ARCH.NANBEIGE:         "nanbeige",
@@ -2024,6 +2027,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_ENC_EMBD_NORM:           "v.norm_embd",
     MODEL_TENSOR.V_ENC_EMBD_PATCH_NORM:     "v.patch_norm.{bid}",
     MODEL_TENSOR.V_ENC_EMBD_POS:            "v.position_embd",
+    MODEL_TENSOR.V_ENC_ROPE_FREQS:          "v.rope_freqs",
     MODEL_TENSOR.V_ENC_ATTN_QKV:            "v.blk.{bid}.attn_qkv",
     MODEL_TENSOR.V_ENC_ATTN_Q:              "v.blk.{bid}.attn_q",
     MODEL_TENSOR.V_ENC_ATTN_Q_NORM:         "v.blk.{bid}.attn_q_norm",
@@ -2196,14 +2200,14 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.A_GEN_CODE_EMBD:           "a.gen.code.embd",
     MODEL_TENSOR.A_GEN_CODE_HEAD:           "a.gen.code.head",
     MODEL_TENSOR.A_GEN_CODE_OUT_EMBD:       "a.gen.code.out_embd",
-    MODEL_TENSOR.A_GEN_CODE_ATTN_NORM:      "a.gen.code.blk.{bid}.ln1", # reuses the generic clip.cpp block loader (TN_LN_1)
+    MODEL_TENSOR.A_GEN_CODE_ATTN_NORM:      "a.gen.code.blk.{bid}.ln1", # reuses the generic mtmd block loader (TN_LN_1)
     MODEL_TENSOR.A_GEN_CODE_ATTN_Q:         "a.gen.code.blk.{bid}.attn_q",
     MODEL_TENSOR.A_GEN_CODE_ATTN_Q_NORM:    "a.gen.code.blk.{bid}.attn_q_norm",
     MODEL_TENSOR.A_GEN_CODE_ATTN_K:         "a.gen.code.blk.{bid}.attn_k",
     MODEL_TENSOR.A_GEN_CODE_ATTN_K_NORM:    "a.gen.code.blk.{bid}.attn_k_norm",
     MODEL_TENSOR.A_GEN_CODE_ATTN_V:         "a.gen.code.blk.{bid}.attn_v",
     MODEL_TENSOR.A_GEN_CODE_ATTN_OUT:       "a.gen.code.blk.{bid}.attn_out",
-    MODEL_TENSOR.A_GEN_CODE_FFN_NORM:       "a.gen.code.blk.{bid}.ln2", # reuses the generic clip.cpp block loader (TN_LN_2)
+    MODEL_TENSOR.A_GEN_CODE_FFN_NORM:       "a.gen.code.blk.{bid}.ln2", # reuses the generic mtmd block loader (TN_LN_2)
     MODEL_TENSOR.A_GEN_CODE_FFN_GATE:       "a.gen.code.blk.{bid}.ffn_gate",
     MODEL_TENSOR.A_GEN_CODE_FFN_UP:         "a.gen.code.blk.{bid}.ffn_up",
     MODEL_TENSOR.A_GEN_CODE_FFN_DOWN:       "a.gen.code.blk.{bid}.ffn_down",
@@ -2424,6 +2428,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_ENC_EMBD_NORM,
         MODEL_TENSOR.V_ENC_EMBD_PATCH_NORM,
         MODEL_TENSOR.V_ENC_EMBD_POS,
+        MODEL_TENSOR.V_ENC_ROPE_FREQS,
         MODEL_TENSOR.V_ENC_EMBD_IMGNL,
         MODEL_TENSOR.V_ENC_EMBD_VSEP,
         MODEL_TENSOR.V_TOK_EMBD_SEP,
@@ -6536,6 +6541,60 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_ROUTED_UP,
         MODEL_TENSOR.FFN_ROUTED_NORM,
     ],
+    MODEL_ARCH.KIMI_K31: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.OUTPUT_RES_SCORE,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_RES_SCORE,
+        MODEL_TENSOR.FFN_RES_SCORE,
+        # MLA + DSA indexer
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_GATE,
+        MODEL_TENSOR.ATTN_Q_A,
+        MODEL_TENSOR.ATTN_Q_B,
+        MODEL_TENSOR.ATTN_KV_A_MQA,
+        MODEL_TENSOR.ATTN_KV_B,
+        MODEL_TENSOR.ATTN_K_B,
+        MODEL_TENSOR.ATTN_V_B,
+        MODEL_TENSOR.ATTN_Q_A_NORM,
+        MODEL_TENSOR.ATTN_KV_A_NORM,
+        MODEL_TENSOR.INDEXER_ATTN_Q_B,
+        MODEL_TENSOR.INDEXER_ATTN_K,
+        MODEL_TENSOR.INDEXER_K_NORM,
+        MODEL_TENSOR.INDEXER_PROJ,
+        # KDA (linear-attention layers)
+        MODEL_TENSOR.SSM_CONV1D_Q,
+        MODEL_TENSOR.SSM_CONV1D_K,
+        MODEL_TENSOR.SSM_CONV1D_V,
+        MODEL_TENSOR.SSM_F_A,
+        MODEL_TENSOR.SSM_F_B,
+        MODEL_TENSOR.SSM_BETA,
+        MODEL_TENSOR.SSM_A,
+        MODEL_TENSOR.SSM_G,
+        MODEL_TENSOR.SSM_DT,
+        MODEL_TENSOR.SSM_NORM,
+        # FFN
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+        MODEL_TENSOR.FFN_ROUTED_DOWN,
+        MODEL_TENSOR.FFN_ROUTED_UP,
+        MODEL_TENSOR.FFN_ROUTED_NORM,
+    ],
     MODEL_ARCH.TALKIE: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT,
@@ -7021,6 +7080,7 @@ class VisionProjectorType:
     GRANITE_SPEECH = "granite_speech"  # audio
     NEMOTRON_TRANSCRIBE = "nemotron_transcribe"  # audio
     MIMOVL         = "mimovl"
+    MAGEVL         = "magevl"
     MIMO_AUDIO     = "mimo_audio"
     GRANITE4_VISION = "granite4_vision"
     MUSE_GLIMMER   = "muse-glimmer"
