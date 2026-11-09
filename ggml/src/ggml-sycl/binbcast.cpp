@@ -5,28 +5,8 @@
 #include <cstdint>
 #include <sycl/sycl.hpp>
 
+#include "convert.hpp"
 #include "ggml.h"
-
-// ggml_fp8_e4m3_t is a struct, so route f8 conversions through float.
-template <typename T>
-inline float to_f32_sycl(T x) {
-    return float(x);
-}
-
-template <>
-inline float to_f32_sycl<ggml_fp8_e4m3_t>(ggml_fp8_e4m3_t x) {
-    return ggml_f8_e4m3_to_fp32(x.bits);
-}
-
-template <typename T>
-inline T from_f32_sycl(float x) {
-    return T(x);
-}
-
-template <>
-inline ggml_fp8_e4m3_t from_f32_sycl<ggml_fp8_e4m3_t>(float x) {
-    return { ggml_fp32_to_f8_e4m3(x) };
-}
 
 template<float (*bin_op)(const float, const float), typename src0_t, typename src1_t, typename dst_t>
 static void k_bin_bcast(const src0_t * src0, const src1_t * src1, dst_t * dst,
@@ -66,7 +46,9 @@ static void k_bin_bcast(const src0_t * src0, const src1_t * src1, dst_t * dst,
     for (int i0 = i0s; i0 < ne0;
          i0 += item_ct1.get_local_range(2) * item_ct1.get_group_range(2)) {
         const int i10 = i0 % ne10;
-        dst_row[i0] = from_f32_sycl<dst_t>(bin_op(src0 ? to_f32_sycl(src0_row[i0*s00]) : 0.0f, to_f32_sycl(src1_row[i10*s10])));
+        const float a = src0 ? ggml_sycl_cast<float>(src0_row[i0*s00]) : 0.0f;
+        const float b = ggml_sycl_cast<float>(src1_row[i10*s10]);
+        dst_row[i0] = ggml_sycl_cast<dst_t>(bin_op(a, b));
     }
 }
 
@@ -104,7 +86,9 @@ static void k_bin_bcast_unravel(const src0_t * src0, const src1_t * src1, dst_t 
     dst_t * dst_row = dst + i_dst;
 
     const int i10 = i0 % ne10;
-    dst_row[i0] = from_f32_sycl<dst_t>(bin_op(src0 ? to_f32_sycl(src0_row[i0*s00]) : 0.0f, to_f32_sycl(src1_row[i10*s10])));
+    const float a = src0 ? ggml_sycl_cast<float>(src0_row[i0*s00]) : 0.0f;
+    const float b = ggml_sycl_cast<float>(src1_row[i10*s10]);
+    dst_row[i0] = ggml_sycl_cast<dst_t>(bin_op(a, b));
 }
 
 

@@ -626,7 +626,7 @@ static void convert_unary_nc(const void * __restrict__ vx, dst_t * __restrict__ 
 
 #pragma unroll
     for (int64_t i00 = global_id; i00 < ne00; i00 += work_group_size * item_ct1.get_group_range(2)) {
-        y[iy + i00] = static_cast<dst_t>(x[ix + i00]);
+        y[iy + i00] = ggml_sycl_cast<dst_t>(x[ix + i00]);
     }
 }
 
@@ -651,19 +651,6 @@ static void convert_unary_nc_sycl(const void * __restrict__ vx, dst_t * __restri
 template <typename src_t, typename dst_t>
 static void convert_unary_sycl(const void * vx, dst_t * y, const int64_t k, dpct::queue_ptr queue) {
     convert_unary_nc_sycl<src_t>(vx, y, k, 1, 1, 1, k, k, k, queue);
-}
-
-template <typename dst_t>
-static void convert_f8_e4m3_sycl(const void * vx, dst_t * y, const int64_t k, sycl::queue* queue) {
-    const ggml_fp8_e4m3_t * x = (const ggml_fp8_e4m3_t *) vx;
-    const int64_t num_blocks = ceil_div(k, SYCL_DEQUANTIZE_BLOCK_SIZE);
-    queue->parallel_for(sycl::nd_range<1>(num_blocks * SYCL_DEQUANTIZE_BLOCK_SIZE, SYCL_DEQUANTIZE_BLOCK_SIZE),
-                        [=](sycl::nd_item<1> item_ct1) {
-        const int64_t i = item_ct1.get_global_linear_id();
-        if (i < k) {
-            y[i] = static_cast<dst_t>(ggml_f8_e4m3_to_fp32(x[i].bits));
-        }
-    });
 }
 
 
@@ -781,7 +768,7 @@ static to_t_sycl_t<dst_t> ggml_get_dequant_sycl(ggml_type type, ggml_tensor * ds
             return convert_unary_sycl<sycl::ext::oneapi::bfloat16>;
 #endif
         case GGML_TYPE_F8_E4M3:
-            return convert_f8_e4m3_sycl<dst_t>;
+            return convert_unary_sycl<ggml_fp8_e4m3_t>;
         default:
             break;
     }

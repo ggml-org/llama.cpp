@@ -3,6 +3,7 @@
 #include <float.h>
 #include <vector>
 
+#include "convert.hpp"
 #include "dequantize.hpp"
 #include "ggml-sycl/common.hpp"
 #include "ggml-sycl/presets.hpp"
@@ -65,8 +66,8 @@ static void cpy_1_i32_f32(const char * cxi, char * cdsti) {
 }
 
 static void cpy_1_f8_e4m3_f8_e4m3(const char * cxi, char * cdsti) {
-    const uint8_t *   xi   = (const uint8_t *) cxi;
-    uint8_t *         dsti = (uint8_t *) cdsti;
+    const ggml_fp8_e4m3_t * xi   = (const ggml_fp8_e4m3_t *) cxi;
+    ggml_fp8_e4m3_t *       dsti = (ggml_fp8_e4m3_t *) cdsti;
 
     *dsti = *xi;
 }
@@ -75,28 +76,28 @@ static void cpy_1_f8_e4m3_f32(const char * cxi, char * cdsti) {
     const ggml_fp8_e4m3_t * xi   = (const ggml_fp8_e4m3_t *) cxi;
     float *                 dsti = (float *) cdsti;
 
-    *dsti = ggml_f8_e4m3_to_fp32(xi->bits);
+    *dsti = ggml_sycl_cast<float>(*xi);
 }
 
 static void cpy_1_f32_f8_e4m3(const char * cxi, char * cdsti) {
     const float *         xi   = (const float *) cxi;
     ggml_fp8_e4m3_t *     dsti = (ggml_fp8_e4m3_t *) cdsti;
 
-    dsti->bits = ggml_fp32_to_f8_e4m3(*xi);
+    *dsti = ggml_sycl_cast<ggml_fp8_e4m3_t>(*xi);
 }
 
 static void cpy_1_f8_e4m3_f16(const char * cxi, char * cdsti) {
     const ggml_fp8_e4m3_t * xi   = (const ggml_fp8_e4m3_t *) cxi;
     sycl::half *            dsti = (sycl::half *) cdsti;
 
-    *dsti = sycl::half(ggml_f8_e4m3_to_fp32(xi->bits));
+    *dsti = ggml_sycl_cast<sycl::half>(*xi);
 }
 
 static void cpy_1_f16_f8_e4m3(const char * cxi, char * cdsti) {
     const sycl::half *    xi   = (const sycl::half *) cxi;
     ggml_fp8_e4m3_t *     dsti = (ggml_fp8_e4m3_t *) cdsti;
 
-    dsti->bits = ggml_fp32_to_f8_e4m3(static_cast<float>(*xi));
+    *dsti = ggml_sycl_cast<ggml_fp8_e4m3_t>(*xi);
 }
 
 #ifdef GGML_SYCL_HAS_BF16
@@ -139,14 +140,14 @@ static void cpy_1_f8_e4m3_bf16(const char * cxi, char * cdsti) {
     const ggml_fp8_e4m3_t *         xi   = (const ggml_fp8_e4m3_t *) cxi;
     sycl::ext::oneapi::bfloat16 *   dsti = (sycl::ext::oneapi::bfloat16 *) cdsti;
 
-    *dsti = sycl::ext::oneapi::bfloat16(ggml_f8_e4m3_to_fp32(xi->bits));
+    *dsti = ggml_sycl_cast<sycl::ext::oneapi::bfloat16>(*xi);
 }
 
 static void cpy_1_bf16_f8_e4m3(const char * cxi, char * cdsti) {
     const sycl::ext::oneapi::bfloat16 * xi   = (const sycl::ext::oneapi::bfloat16 *) cxi;
     ggml_fp8_e4m3_t *                   dsti = (ggml_fp8_e4m3_t *) cdsti;
 
-    dsti->bits = ggml_fp32_to_f8_e4m3(static_cast<float>(*xi));
+    *dsti = ggml_sycl_cast<ggml_fp8_e4m3_t>(*xi);
 }
 #endif
 

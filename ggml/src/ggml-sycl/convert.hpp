@@ -40,6 +40,11 @@ template<typename dst_t, typename src_t>
  inline dst_t ggml_sycl_cast(src_t x) {
     if constexpr (std::is_same_v<dst_t, src_t>) {
         return x;
+    } else if constexpr (std::is_same_v<dst_t, ggml_fp8_e4m3_t>) {
+        // ggml_fp8_e4m3_t is a struct, so this branch comes before the float(x) paths
+        return { ggml_fp32_to_f8_e4m3(float(x)) };
+    } else if constexpr (std::is_same_v<src_t, ggml_fp8_e4m3_t>) {
+        return dst_t(ggml_f8_e4m3_to_fp32(x.bits));
 #ifdef GGML_SYCL_HAS_BF16
     } else if constexpr (std::is_same_v<dst_t, sycl::ext::oneapi::bfloat16>) {
         return sycl::ext::oneapi::bfloat16(float(x));
