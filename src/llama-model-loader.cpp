@@ -658,6 +658,7 @@ llama_model_loader::llama_model_loader(
         }
 
         size_t n_skipped = 0;
+        size_t n_backbone_files = 1;
         int n_backbone_tensors = gguf_get_n_tensors(metadata);
         for (size_t idx = 1; idx < paths.size(); idx++) {
             const char * fname_split = paths[idx].c_str();
@@ -681,6 +682,7 @@ llama_model_loader::llama_model_loader(
                 throw std::runtime_error(format("%s: failed to load GGUF split from %s", __func__, fname_split));
             }
 
+            bool allow_override_tensor = false;
             if (idx < n_backbone) {
                 const int kid = gguf_find_key(ctx_gguf.get(), kv_split_no.c_str());
                 if (kid < 0) {
@@ -700,6 +702,8 @@ llama_model_loader::llama_model_loader(
                 }
                 n_backbone_tensors += gguf_get_n_tensors(ctx_gguf.get());
             } else {
+                // an external PLE table replaces the one in the model, if any
+                allow_override_tensor = is_ple_only(ctx_gguf.get());
                 const bool numbered = gguf_find_key(ctx_gguf.get(), kv_split_no.c_str()) >= 0 ||
                     gguf_find_key(ctx_gguf.get(), llm_kv(LLM_KV_SPLIT_COUNT).c_str()) >= 0 ||
                     gguf_find_key(ctx_gguf.get(), llm_kv(LLM_KV_SPLIT_TENSORS_COUNT).c_str()) >= 0;
@@ -709,13 +713,24 @@ llama_model_loader::llama_model_loader(
 
             files.emplace_back(new llama_file(fname_split, "rb", use_direct_io));
             contexts.emplace_back(std::move(ctx_ptr));
+            if (idx < n_backbone) {
+                n_backbone_files = files.size();
+            }
 
             // skipped splits are not in files, so idx != file index
             const uint16_t file_idx = files.size() - 1;
             for (ggml_tensor * cur = ggml_get_first_tensor(ctx); cur; cur = ggml_get_next_tensor(ctx, cur)) {
                 const std::string tensor_name = cur->name;
-                if (weights_map.find(tensor_name) != weights_map.end()) {
-                    throw std::runtime_error(format("invalid model: tensor '%s' is duplicated", ggml_get_name(cur)));
+                auto it = weights_map.find(tensor_name);
+                if (it != weights_map.end()) {
+                    // only override tensors of the model, not of another extra shard
+                    if (!allow_override_tensor || it->second.idx >= n_backbone_files) {
+                        throw std::runtime_error(format("invalid model: tensor '%s' is duplicated", ggml_get_name(cur)));
+                    }
+                    LLAMA_LOG_INFO("%s: tensor '%s' overridden by %s\n", __func__, tensor_name.c_str(), fname_split);
+                    n_elements -= ggml_nelements(it->second.tensor);
+                    n_bytes    -= ggml_nbytes(it->second.tensor);
+                    weights_map.erase(it);
                 }
                 n_elements += ggml_nelements(cur);
                 n_bytes    += ggml_nbytes(cur);

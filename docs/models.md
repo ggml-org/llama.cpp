@@ -39,8 +39,8 @@ llama-cli -m model-no-ple.gguf --shard model-ple.gguf
 
 These modes are mutually exclusive and require a model with a PLE table, such as Qwen3.8 Flash Next or Gemma 4. They cannot be combined with vocabulary, multimodal projector, MTP-only, or DSpark-only export. `--no-ple` can be combined with `--no-mtp`.
 
-`--ple` is an alias for `--shard`. Extra shards can be comma separated or supplied with repeated options, for example `-m backbone.gguf --shard /fast/ple.gguf,/other/token-embd.gguf`. Paths may be on different drives. Tensor names must be unique across all files.
+`--ple` is an alias for `--shard`. Extra shards can be comma separated or supplied with repeated options, for example `-m backbone.gguf --shard /fast/ple.gguf,/other/token-embd.gguf`. Paths may be on different drives. Tensor names must be unique across all files, except for the PLE case below.
 
 A numbered backbone is auto-discovered and checked as usual; explicitly supplied paths outside that numbered set are appended as extra shards. Their split numbering is ignored, and the loader uses the actual combined tensor count. Paths already in the discovered set are loaded once. If the main filename does not follow the numbered naming scheme, an explicit backbone list must still match its declared split count and order.
 
-If an extra shard holds only `per_layer_token_embd.weight`, it replaces the PLE table of a numbered backbone: a backbone split that holds only that tensor is skipped, and it can be absent from disk. This lets one PLE file be shared across quants and releases, for example `-m model-Q4_K_M-00001-of-00003.gguf --shard /fast/ple-Q8_0.gguf`.
+If an extra shard holds only `per_layer_token_embd.weight`, it replaces the PLE table of the model. If the model already has the table, the extra shard overrides it. A backbone split that holds only that tensor is skipped, and it can be absent from disk. This lets one PLE file be shared across quants and releases, for example `-m model-Q4_K_M-00001-of-00003.gguf --shard /fast/ple-Q8_0.gguf`.
