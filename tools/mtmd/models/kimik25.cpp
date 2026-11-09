@@ -101,7 +101,7 @@ ggml_cgraph * mtmd_graph_kimik25::build() {
             model.mm_1_w, model.mm_1_b,
             nullptr, nullptr,
             model.mm_2_w, model.mm_2_b,
-            FFN_GELU,
+            FFN_GELU_ERF,
             -1);
 
         cb(cur, "proj_out", -1);

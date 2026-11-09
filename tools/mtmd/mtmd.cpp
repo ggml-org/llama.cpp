@@ -998,12 +998,13 @@ struct mtmd_context {
                         // <|begin_of_image|> ... (image embeddings) ... <|end_of_image|>
                         img_beg = "<|begin_of_image|>";
                         img_end = "<|end_of_image|>";
+                        image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(models.v.get());
                     } else {
                         // <|media_begin|> ... (image embeddings) ... <|media_end|>
                         img_beg = "<|media_begin|>";
                         img_end = "<|media_end|>";
+                        image_preproc = std::make_unique<mtmd_image_preprocessor_kimik25>(models.v.get());
                     }
-                    image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(models.v.get());
                 } break;
             case PROJECTOR_TYPE_KIMIK31:
                 {
@@ -1011,7 +1012,7 @@ struct mtmd_context {
                     img_beg = "<|media_begin|>";
                     img_end = "<|media_end|>";
                     img_beg_kimik31 = true;
-                    image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(models.v.get());
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_kimik25>(models.v.get());
                 } break;
             case PROJECTOR_TYPE_LIGHTONOCR:
                 {
