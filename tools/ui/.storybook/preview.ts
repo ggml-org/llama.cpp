@@ -50,7 +50,8 @@ const preview: Preview = {
 								'Logs',
 								'Diff',
 								'llama.cpp logo',
-								'Key visuals'
+								'Key visuals',
+								'Glyphs'
 							]
 						],
 						'Colors',

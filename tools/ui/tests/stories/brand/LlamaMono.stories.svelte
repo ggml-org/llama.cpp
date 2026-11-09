@@ -1,4 +1,5 @@
 <script lang="ts" module>
+	import glyphs from './llama-mono/data/glyphs.json';
 	import Diff from './llama-mono/Diff.svelte';
 	import KeyVisuals from './llama-mono/KeyVisuals.svelte';
 	import LlamaCppLogo from './llama-mono/LlamaCppLogo.svelte';
@@ -6,12 +7,14 @@
 	import MonoInterface from './llama-mono/MonoInterface.svelte';
 	import MonoPage from './llama-mono/MonoPage.svelte';
 	import Terminal from './llama-mono/Terminal.svelte';
+	import GlyphGrid from './llama-sans/lib/components/GlyphGrid.svelte';
+	import type { Specimen } from './llama-sans/lib/specimen';
 	import OverviewFrame from './llama-sans/overview/OverviewFrame.svelte';
 	import TypographyOverview from './typography/TypographyOverview.svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 
 	// Llama Mono: its overview, then in use: the terminal, the user interface beside Llama Sans, logs and tables, diffs, the llama.cpp logo it
-	// sets, and its key visuals.
+	// sets, and its key visuals, and every glyph.
 	const { Story } = defineMeta({
 		parameters: {
 			controls: { disable: true },
@@ -75,6 +78,18 @@
 			title="llama.cpp logo"
 		>
 			<LlamaCppLogo />
+		</MonoPage>
+	</OverviewFrame>
+</Story>
+
+<Story asChild name="Glyphs">
+	<OverviewFrame>
+		<MonoPage
+			intro="Every character in one cell, 600 units wide: the letters, figures, punctuation, the symbols code leans on, and the Llama icon. Each outline is exported from the font the design system ships."
+			kicker="Llama Mono · glyphs"
+			title="Glyphs"
+		>
+			<GlyphGrid comparing={false} grid={glyphs as unknown as Specimen['grid']} weight={400} />
 		</MonoPage>
 	</OverviewFrame>
 </Story>

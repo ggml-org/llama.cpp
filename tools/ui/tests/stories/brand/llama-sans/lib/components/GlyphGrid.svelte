@@ -1,10 +1,14 @@
 <script lang="ts">
-	import { specimen } from '../specimen';
+	import { type Specimen, specimen } from '../specimen';
 
-	// weight: a named weight with exported cells; comparing: show the earlier build's outlines
-	let { comparing, weight }: { weight: number; comparing: boolean } = $props();
+	// weight: a named weight with exported cells; comparing: show the earlier build's outlines; grid: another font's
+	// exported grid (Llama Mono's), in place of Llama Sans's
+	let {
+		comparing,
+		grid = specimen.grid,
+		weight
+	}: { comparing: boolean; grid?: Specimen['grid']; weight: number } = $props();
 
-	const { grid } = specimen;
 	const g = grid.guides;
 	const lines = [g.base, g.x, g.cap, g.asc, g.dsc];
 	const cells = $derived(grid.cells[String(weight)]);
