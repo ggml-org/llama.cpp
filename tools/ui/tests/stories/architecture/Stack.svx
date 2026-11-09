@@ -1,0 +1,79 @@
+<!--
+	Architecture › Stack: the architecture drawing, the line between Llama UI and the apps, the repo layout and what an
+	app built on the library looks like. Set in the Philosophy pages' Editorial, through Frame.svelte.
+-->
+
+<script>
+	import Cards from './lib/components/ui/Cards.svelte';
+	import Card from './lib/components/ui/Card.svelte';
+	import ArchitectureDiagram from './lib/components/stack/ArchitectureDiagram.svelte';
+	import Legend from './lib/components/stack/Legend.svelte';
+	import Rule from './lib/components/stack/Rule.svelte';
+	import RuleSide from './lib/components/stack/RuleSide.svelte';
+	import Note from './lib/components/stack/Note.svelte';
+</script>
+
+<p class="kicker">Architecture · Llama UI and the apps</p>
+
+# One library, many apps
+
+Llama UI is the design system and component library: UI and UX, no business logic. [Llama Chat](/chat/) is one application built on it, the WebUI we ship today. Other apps can follow on the same parts. The llama.app website uses the same library, so models look and behave the same everywhere. Splitting library from apps lets anyone build their own app on the Llama stack, and lets Chat ship in more places.
+
+<Legend />
+
+<ArchitectureDiagram />
+
+<Rule title="Llama UI draws and handles interaction. Apps decide what happens.">
+<RuleSide side="lib" title="In Llama UI">Components, design tokens and the logic inside them: multi-step flows, drag to reorder, keyboard navigation, validation as you type, formatting a file size, checking whether a model fits in memory.</RuleSide>
+<RuleSide side="app" title="In the apps">Talking to llama-server, storing conversations and notes, the agentic loop and tool permissions, managing models and servers. Components get data in and report what the user did out.</RuleSide>
+</Rule>
+
+<Cards cols={2}>
+<Card kicker="Repo layout" planned title="Promote the UI to a root folder">
+
+Today the library and the Chat app share one folder.
+
+```text
+today
+tools/ui/            lib + Chat, mixed
+
+proposed
+ui/
+├── lib/             @ggml/llama-ui
+│                    → ui.llama.app
+└── apps/
+    ├── chat/        @ggml/llama-chat
+    │                + npx llama-chat
+    │                → chat.llama.app
+    ├── <app>/       other apps of ours
+    └── <example>/   many, any use case
+```
+
+<Note>Stays in the llama.cpp repo. npm packages give outside projects a clean import without a separate GitHub repo. The llama.app website stays in <code>ggml-org/llama-pages</code> and installs <code>@ggml/llama-ui</code>.</Note>
+
+</Card>
+<Card kicker="Build your own app" title="A chat app is a composition">
+
+The library draws the parts and handles interaction. The app owns the state and talks to llama-server. Llama Chat is the polished version of this. Examples in `ui/apps` stay small and developer-facing.
+
+```svelte
+<!-- MyApp.svelte -->
+<script>
+  import { Thread, Composer, ModelPicker }
+    from '@ggml/llama-ui';      // UI + UX
+  import { listModels, send }
+    from './server';             // your logic
+
+  let model = $state();
+  let messages = $state([]);
+</script>
+
+<ModelPicker models={await listModels()} bind:value={model} />
+<Thread {messages} />
+<Composer onsubmit={(text) => send(model, text, messages)} />
+```
+
+<Note>Illustrative only. Component names and API are not final; the first example app in <code>ui/apps</code> would pin this down.</Note>
+
+</Card>
+</Cards>

@@ -1,0 +1,80 @@
+<!--
+	Architecture › Channels: how one build of Llama Chat ships bundled in llama-server, as npx llama-chat and at
+	chat.llama.app, how the three differ, and the release flow. Set in the Philosophy pages' Editorial, through Frame.svelte.
+-->
+
+<script>
+	import Callout from './lib/components/ui/Callout.svelte';
+	import ReleaseDiagram from './lib/components/channels/ReleaseDiagram.svelte';
+</script>
+
+<p class="kicker">Architecture · Distribution · <a href="/chat/">Llama Chat</a></p>
+
+# One build, three channels
+
+Llama Chat is a SvelteKit app built with `adapter-static`: plain HTML, JS and CSS in one `dist` folder. Each release builds it once and ships the same folder three ways. Only the thing serving it changes.
+
+<Callout title="npx llama-chat and chat.llama.app are the client only">
+They carry the UI and nothing else: no llama-server, no models, no inference. On first open they are connected to nothing; you add a llama-server by URL, or pair one, before you can chat. Only the bundled channel comes with its own server.
+</Callout>
+
+<ReleaseDiagram />
+
+## How the channels differ
+
+The app works out its mode at runtime: if same-origin `/props` answers as llama.cpp it runs bundled; otherwise it runs hosted and opens on "add or pair a server". No build flags.
+
+|  | Bundled in llama-server | npx llama-chat | chat.llama.app |
+| --- | --- | --- | --- |
+| Served by | llama-server, or `llama serve` in the macOS and Windows apps (the same server) | a static file server in the package (UI only) | the static host |
+| Origin | the server's own address | `http://localhost:<port>` | `https://chat.llama.app` |
+| Comes with a server | yes, it is the server | no: UI only, add a llama-server | no: UI only, add a llama-server |
+| Needs | llama-server, or a native app | Node | a browser |
+| Reaches servers | its own, same origin; others via Providers | localhost and plain `http://` LAN servers by URL | `https://` and localhost by URL; anything else by pairing |
+| Response headers | set in `server-http.cpp` | set by the CLI | what the host allows |
+| Chats stored | per server address | per localhost port | at chat.llama.app |
+| Best for | "I run llama-server" or a native app | a server elsewhere on my network, offline use | trying it with no install, phones, pairing |
+
+Why npx still matters next to the hosted site: an `https://` page cannot call a plain `http://` server on the LAN (browsers block it as mixed content). A page served from `http://localhost` can.
+
+## The npx command
+
+Bare `npx llama-chat` starts it. One job, no verb, like `npx serve` or `npx http-server`; a required `start` would turn many first runs into a help screen.
+
+```bash
+# serve and open the browser
+npx llama-chat
+
+# connect to a server on launch
+npx llama-chat --server http://192.168.1.20:8080
+
+# reachable from other devices, no browser
+npx llama-chat --host 0.0.0.0 --port 3000 --no-open
+```
+
+| Flag | Default | What it does |
+| --- | --- | --- |
+| `--server <url>` | none | Adds and selects that llama-server, so the UI starts connected. Without it, the UI opens on the add-server screen |
+| `--port <n>` | a fixed port | Fixed, so the origin and the chats stored under it stay the same between runs |
+| `--host <addr>` | `127.0.0.1` | `0.0.0.0` to open it to the LAN |
+| `--open` / `--no-open` | open | Opens the default browser once it listens |
+| `--version`, `--help` |  | As usual |
+
+- **Package:** unscoped `llama-chat` with `"bin": {"llama-chat": "./bin/cli.js"}`, so the command is short. `@ggml/llama-chat` stays the import name.
+- **What it runs:** a static file server (`node:http`) for `dist` and nothing else: no llama-server, no models, no Vite or SvelteKit. 404 for unknown paths: the hash router needs no fallback.
+- **Headers:** the same set llama-server sends, so the app behaves the same in both.
+- **Later verbs** (`doctor`, `update`) keep the bare command as the default; `start` is an accepted alias, not the documented form.
+
+## The hosted site
+
+The static `dist` deploys as is: relative paths and the hash router work at the domain root. The host sends the same response headers llama-server does, so the app behaves the same in every channel; hashed assets can be cached for good, while `sw.js`, the manifest and `version.json` are never cached.
+
+## Release flow
+
+One CI job per llama.cpp release, after the build:
+
+1. Upload `dist` to the Hugging Face bucket `ggml-org/llama-ui` (`b<build number>`), which llama-server's CMake build embeds.
+2. Publish `llama-chat` to npm: `dist` plus the CLI, versioned with the release.
+3. Deploy `dist` to chat.llama.app.
+
+chat.llama.app always runs the latest UI against servers of any version, so it needs feature detection through `/props` and a minimum-server-version message.

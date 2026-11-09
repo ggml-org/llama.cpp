@@ -1,0 +1,99 @@
+/*
+ * The Architecture pages. Their parts name colours and fonts themselves (--bg, --fg, --app, --lib …); here those
+ * point at Llama UI's tokens, and the pages' global styles are scoped to .architecture so no other story sees them.
+ * Diagram hues are the brand's art colours: apps in cinder, the library in the skies, the backend in grey.
+ */
+.architecture {
+	--bg: var(--surface-page);
+	--surface: var(--surface-raised);
+	--fg: var(--fg-default);
+	--muted: var(--fg-muted);
+	--line: var(--line-default);
+	--rule: var(--edge-rest-side);
+	--display: var(--font-sans);
+	--sans: var(--font-sans);
+	--mono: var(--font-mono);
+
+	/* apps, library, backends: a strong colour for lines and labels, a soft one for fills */
+	--app: color-mix(in oklab, var(--art-cinder) 80%, black);
+	--app-bg: color-mix(in oklab, var(--art-cinder) 12%, var(--surface-page));
+	--lib: var(--art-night-sky);
+	--lib-bg: color-mix(in oklab, var(--art-day-sky) 24%, var(--surface-page));
+	--be: var(--neutral-600);
+	--be-bg: var(--surface-muted);
+
+	font-size: 15px;
+	line-height: 1.6;
+}
+
+.dark .architecture {
+	--app: var(--art-cinder);
+	--app-bg: color-mix(in oklab, var(--art-cinder) 16%, var(--surface-page));
+	--lib: var(--art-day-sky);
+	--lib-bg: color-mix(in oklab, var(--art-night-sky) 55%, var(--surface-page));
+	--be: var(--neutral-300);
+}
+
+/* the Editorial's text column, a little wider for pages of tables and cards; every block that isn't running text
+   (cards, diagrams, tables) takes the wide column */
+.architecture .editorial.editorial {
+	--text: min(44rem, calc(100% - 32px));
+}
+.architecture .editorial > :not(p, ul, ol, h1, h2, h3, h4, blockquote, hr, .kicker, .lead) {
+	grid-column: wide;
+}
+.architecture .editorial > h3 {
+	font-size: 20px;
+	font-weight: 600;
+	margin-top: 32px;
+}
+.architecture .editorial > blockquote {
+	padding: 14px 18px;
+	border-left: 2px solid var(--art-cinder);
+	color: var(--fg-default);
+}
+
+/* tables in the Markdown: hairline rows, labels in Mono, scrolling sideways on a phone */
+.architecture .editorial > table {
+	display: block;
+	overflow-x: auto;
+	border-collapse: collapse;
+	font-size: 15px;
+	line-height: 1.5;
+}
+.architecture .editorial > table :is(th, td) {
+	min-width: 8rem;
+	padding: 10px 14px 10px 0;
+	border-bottom: 1px solid var(--line-default);
+	text-align: left;
+	vertical-align: top;
+}
+.architecture .editorial > table th {
+	color: var(--fg-muted);
+	font: 500 11px / 1.4 var(--font-mono);
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+}
+.architecture .editorial > table td:first-child {
+	font-weight: 600;
+}
+
+/* code blocks */
+.architecture pre {
+	margin: 0;
+	padding: 14px 16px;
+	overflow-x: auto;
+	border-radius: var(--radius-panel, 10px);
+	background: var(--surface-code);
+	font: 12.5px / 1.6 var(--font-mono);
+}
+.architecture pre code {
+	padding: 0;
+	background: none;
+	font-size: inherit;
+}
+
+/* links drawn in the diagrams underline only the text that says so, not the whole box */
+.architecture .editorial svg a {
+	text-decoration: none;
+}

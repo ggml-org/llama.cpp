@@ -1,0 +1,101 @@
+<!--
+	Architecture › Chat: Llama Chat as the reference app on Llama UI, its areas, how a message travels, its layers and
+	where each lands, and what it hands to the library. Set in the Philosophy pages' Editorial, through Frame.svelte.
+-->
+
+<script>
+	import Cards from './lib/components/ui/Cards.svelte';
+	import Card from './lib/components/ui/Card.svelte';
+	import MessageFlow from './lib/components/chat/MessageFlow.svelte';
+	import Layers from './lib/components/chat/Layers.svelte';
+	import Layer from './lib/components/chat/Layer.svelte';
+</script>
+
+<p class="kicker">Architecture · ui/apps/chat · <a href="/stack/">on the Llama UI stack</a></p>
+
+# Llama Chat
+
+<p class="lead">The first app on Llama UI, and the reference for the line between library and app. It runs local models through llama-server, with tools, MCP servers, projects, a prompt library, a models manager and several servers.</p>
+
+## Its areas
+
+<Cards>
+<Card title="Chat">
+
+`/chat/[id]`
+
+Tabs, branching, regenerate, reasoning blocks, right-click message actions, expandable composer.
+
+</Card>
+<Card title="Projects">
+
+`/projects/[id]`
+
+Instructions, context files, a working directory; chats inside.
+
+</Card>
+<Card title="Library">
+
+`/library`
+
+Prompts: reusable system messages.
+
+</Card>
+<Card title="Models">
+
+`/models`
+
+Manager, Discover from Hugging Face, downloads, configuration pane.
+
+</Card>
+<Card title="Servers">
+
+`/servers`
+
+llama.cpp servers by URL or paired by code/QR.
+
+</Card>
+<Card title="MCP · Settings · Search">
+
+`/mcp-servers …`
+
+MCP servers and resources, settings sections, conversation search.
+
+</Card>
+</Cards>
+
+## How a message travels
+
+The agentic loop lives in the browser. It streams from the active server and runs any tool the model calls: in the browser, on llama-server, or on an MCP server.
+
+<MessageFlow />
+
+## Layers in the code
+
+`tools/ui/src` runs one way: routes, components, hooks, stores, services, then storage or the server. Tags show where each layer lands: UI and UX go to `ui/lib`; everything that decides what happens stays in `ui/apps/chat`.
+
+<Layers>
+<Layer name="Routes" tag="ui/apps/chat" kind="new"><code>/</code> <code>/chat/[id]</code> <code>/projects/[projectId]/chat/[id]</code> <code>/library</code> <code>/models</code> <code>/servers</code> <code>/mcp-servers</code> <code>/settings</code> <code>/search</code></Layer>
+<Layer name="App components" tag="ui/apps/chat" kind="new">chat (ChatScreen, ChatForm, ChatMessages, ChatTabs), navigation, projects, models (manager, Discover, configuration), servers, mcp, settings, dialogs. Their presentational parts (model selector, model card, badges, quant rows) move to the library as Model UI.</Layer>
+<Layer name="UI components" tag="ui/lib" kind="reuse">shadcn-svelte on bits-ui: alert, button, card, context-menu, dialog, drawer, dropdown-menu, input, popover, select, switch, table, tabs, tooltip and more.</Layer>
+<Layer name="Hooks" tag="split" kind="mix">use-chat-screen-active-model, use-processing-state, use-context-gauge, use-models-selector, use-tools-panel. Interaction hooks go with their components; hooks that read app stores stay in the app.</Layer>
+<Layer name="Stores" tag="ui/apps/chat" kind="new">chat, conversations, agentic, tools, permissions, mcp, models, models-discover, servers, remote-access, projects, groups, prompts, tabs, settings.</Layer>
+<Layer name="Services" tag="ui/apps/chat" kind="new">chat, models, props, database, mcp, tools, sandbox, servers, huggingface, settings, conversation-transfer.</Layer>
+<Layer name="Styles" tag="ui/lib" kind="reuse">"Matte Glass" tokens in three tiers: primitives, semantic (light and dark), components. Documented in <code>DESIGN.md</code> and Storybook.</Layer>
+<Layer name="Storage + API" tag="outside" kind="ext">IndexedDB for conversations, projects, groups, prompts; localStorage for settings and permissions; llama-server <code>/v1</code>, <code>/props</code>, <code>/models</code>, <code>/tools</code>, <code>/slots</code>.</Layer>
+</Layers>
+
+## What Chat keeps, what it hands off
+
+<Cards cols={2}>
+<Card title="Keeps">All business logic: conversations, tabs, groups, search, the agentic loop with tools, MCP and permission gates, projects, the models manager, Discover, downloads, model configuration and Servers.</Card>
+<Card title="Gives the library">Presentation only: thread, composer, tool-call blocks, permission prompt, model selector, model card, capability badges. They take data in and report what the user did out.</Card>
+</Cards>
+
+## Parts other apps reuse
+
+<Cards>
+<Card title="Thread + composer">Any app with a conversation reuses the thread and composer, and the Markdown renderer and editor with them.</Card>
+<Card title="Tool-call UI">An app that runs its own loop shows tool calls and permission prompts with the same library components.</Card>
+<Card title="Model UI">The model selector, model card and badges serve every app and llama.app. Other apps call llama-server's OpenAI-compatible endpoints themselves; the full manager and Servers stay in Chat.</Card>
+</Cards>

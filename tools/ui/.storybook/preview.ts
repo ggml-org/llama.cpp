@@ -31,6 +31,8 @@ const preview: Preview = {
 					['Design guidelines', 'Brand guidelines'],
 					'Philosophy',
 					['Ideology', 'Product', 'Design'],
+					'Architecture',
+					['Stack', 'Chat', 'Channels'],
 					'Brand',
 					[
 						'Logo',
