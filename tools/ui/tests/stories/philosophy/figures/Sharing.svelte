@@ -1,25 +1,16 @@
 <!--
 	Shared, as a slideshow of four setups, from one person to the internet: a MacBook running the Llama app, reached from
 	an iPhone through Llama Connect; a home server on a small workstation for the family; llama-server on an office
-	server for the people who work there; and a cluster of small workstations, two stacked, open to the internet. Each slide draws the
-	machine that runs the model with a communications motif, dashed lines to the devices that use it, and how they
-	connect. The tabs and the arrows are Llama UI's own; the motifs read their inks from the --p-* variables, set here from
-	the theme so they follow light and dark.
+	server for the people who work there; and a cluster of small workstations, two stacked, open to the internet. Each
+	slide draws the machine that runs the model with a communications motif, dashed lines to the devices that use it,
+	and how they connect. The tabs are Llama UI's own; the motifs read their inks from the --p-* variables, set here
+	from the theme so they follow light and dark.
 -->
 <script lang="ts">
 	import Laptop from '../../brand/communications/posts/motifs/Laptop.svelte';
 	import Server from '../../brand/communications/posts/motifs/Server.svelte';
 	import WorkstationSmall from '../../brand/communications/posts/motifs/WorkstationSmall.svelte';
-	import {
-		ChevronLeft,
-		ChevronRight,
-		Globe,
-		Laptop as LaptopIcon,
-		Monitor,
-		Smartphone,
-		Tablet
-	} from '@lucide/svelte';
-	import { Button } from '$lib/components/ui/button';
+	import { Globe, Laptop as LaptopIcon, Monitor, Smartphone, Tablet } from '@lucide/svelte';
 	import * as Tabs from '$lib/components/ui/tabs';
 	import type { Component } from 'svelte';
 
@@ -85,35 +76,18 @@
 	];
 
 	let current = $state(setups[0].id);
-	const index = $derived(setups.findIndex((s) => s.id === current));
-
-	function step(by: number) {
-		current = setups[(index + by + setups.length) % setups.length].id;
-	}
 </script>
 
 <Tabs.Root bind:value={current} class="sharing">
-	<div class="bar">
-		<Tabs.List aria-label="Setups">
-			{#each setups as setup, i (setup.id)}
-				<Tabs.Trigger value={setup.id}>
-					<span class="n">0{i + 1}</span>
+	<Tabs.List aria-label="Setups">
+		{#each setups as setup, i (setup.id)}
+			<Tabs.Trigger value={setup.id}>
+				<span class="n">0{i + 1}</span>
 
-					<span class="tab-name">{setup.name}</span>
-				</Tabs.Trigger>
-			{/each}
-		</Tabs.List>
-
-		<div class="arrows">
-			<Button aria-label="Previous setup" onclick={() => step(-1)} size="icon" variant="outline">
-				<ChevronLeft aria-hidden="true" />
-			</Button>
-
-			<Button aria-label="Next setup" onclick={() => step(1)} size="icon" variant="outline">
-				<ChevronRight aria-hidden="true" />
-			</Button>
-		</div>
-	</div>
+				<span class="tab-name">{setup.name}</span>
+			</Tabs.Trigger>
+		{/each}
+	</Tabs.List>
 
 	{#each setups as setup (setup.id)}
 		<Tabs.Content value={setup.id}>
@@ -157,8 +131,10 @@
 </Tabs.Root>
 
 <style>
-	/* a grid item in the figure: let it shrink to the frame, the tabs scrolling inside it */
+	/* a grid item in the figure, one column as wide as the frame: the slides fit it and the tabs scroll inside it */
 	:global(.sharing) {
+		container-type: inline-size;
+		grid-template-columns: minmax(0, 1fr);
 		min-width: 0;
 		--p-base: var(--surface-page);
 		--p-ink: var(--fg-default);
@@ -168,21 +144,10 @@
 		gap: 12px;
 	}
 
-	.bar {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-	}
-
-	.bar :global([role='tablist']) {
-		flex: 1;
-		min-width: 0;
+	:global(.sharing [role='tablist']) {
+		justify-self: start;
+		max-width: 100%;
 		overflow-x: auto;
-	}
-
-	.arrows {
-		display: flex;
-		gap: 4px;
 	}
 
 	.n {
@@ -303,11 +268,14 @@
 		font-size: inherit;
 	}
 
-	@media (width < 720px) {
+	/* the tabs keep only their numbers when the frame is too narrow for the names */
+	@container (width < 840px) {
 		.tab-name {
 			display: none;
 		}
+	}
 
+	@media (width < 720px) {
 		.stage {
 			grid-template-columns: minmax(0, 1fr);
 			min-height: 0;
