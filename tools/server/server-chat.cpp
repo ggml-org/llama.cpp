@@ -598,6 +598,11 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
                 oai_body["tool_choice"] = "auto";
             } else if (type == "any" || type == "tool") {
                 oai_body["tool_choice"] = "required";
+            } else if (type == "none") {
+                oai_body["tool_choice"] = "none";
+            }
+            if (json_value(tc, "disable_parallel_tool_use", false)) {
+                oai_body["parallel_tool_calls"] = false;
             }
         }
     }
