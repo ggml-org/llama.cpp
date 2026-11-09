@@ -32,6 +32,7 @@
 
 	let currentSiblingInfo = $derived(siblingInfo);
 	let deleteDialogOpen = $derived(showDeleteDialog);
+	let forkDialogOpen = $state(false);
 	let rawOutputEnabled = $state(false);
 
 	useChatMessageEditContext({
@@ -63,8 +64,14 @@
 		setShowDeleteDialog: (show: boolean) => {
 			deleteDialogOpen = show;
 		},
+		setShowForkDialog: (show: boolean) => {
+			forkDialogOpen = show;
+		},
 		get showDeleteDialog() {
 			return deleteDialogOpen;
+		},
+		get showForkDialog() {
+			return forkDialogOpen;
 		},
 		get siblingInfo() {
 			return currentSiblingInfo;
