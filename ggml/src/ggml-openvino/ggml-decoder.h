@@ -409,7 +409,8 @@ public:
     }
 
     inline static bool is_recurrent_cache_reset(const ggml_tensor * node) {
-        return (node->op == GGML_OP_SCALE || node->op == GGML_OP_FILL) && is_recurrent_cache(node->view_src);
+        return (node->op == GGML_OP_SCALE || node->op == GGML_OP_FILL) && node->view_src != nullptr &&
+               is_recurrent_cache(node->view_src);
     }
 
     inline static bool is_cache(const ggml_tensor * tensor, const ggml_tensor * op) {
