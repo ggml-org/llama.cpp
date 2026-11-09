@@ -125,9 +125,9 @@ struct rpc_msg_hello_req {
     uint8_t conn_caps[RPC_CONN_CAPS_SIZE];
 };
 
-// server feature flags in rpc_msg_hello_rsp::flags; old servers send 0
+// server feature flags in rpc_msg_hello_rsp::flags
 enum rpc_server_flags : uint8_t {
-    RPC_SERVER_FLAG_CACHE = 1 << 0, // server has a local tensor cache (rpc-server -c)
+    RPC_SERVER_FLAG_SEND_TENSOR_HASH = 1 << 0, // client should try SET_TENSOR_HASH before sending tensor data
 };
 
 struct rpc_msg_hello_rsp {
@@ -437,7 +437,7 @@ static inline void rpc_cpu_relax() {
 // Performs HELLO handshake with transport auto-negotiation.
 // Advertises local capabilities via conn_caps; if the server responds with
 // matching capabilities, the socket is upgraded transparently.
-static bool negotiate_hello(const std::shared_ptr<socket_t> & sock, uint8_t & server_flags) {
+static bool negotiate_hello(const std::shared_ptr<socket_t> & sock, bool & send_tensor_hash) {
     rpc_msg_hello_req request = {};
     rpc_msg_hello_rsp response = {};
 
@@ -453,7 +453,7 @@ static bool negotiate_hello(const std::shared_ptr<socket_t> & sock, uint8_t & se
     }
 
     sock->update_caps(response.conn_caps);
-    server_flags = response.flags;
+    send_tensor_hash = response.flags & RPC_SERVER_FLAG_SEND_TENSOR_HASH;
     LOG_DBG("[%s] handshake ok: server version %d.%d.%d, transport: %s\n",
             __func__, response.major, response.minor, response.patch, sock->transport_name());
     return true;
@@ -516,10 +516,10 @@ public:
 
     void send(enum rpc_cmd cmd, std::shared_ptr<const void> input, size_t input_size);
     void send(enum rpc_cmd cmd, std::shared_ptr<const void> input, size_t input_size, void * output, size_t output_size);
+    // payload is sent after input without a copy, the call returns once it is sent
+    void send(enum rpc_cmd cmd, std::shared_ptr<const void> input, size_t input_size, const void * payload, size_t payload_size);
     void send_async(enum rpc_cmd cmd, std::shared_ptr<const void> input, size_t input_size);
     void send_async(enum rpc_cmd cmd, std::shared_ptr<const void> input, size_t input_size, void * output, size_t output_size);
-    // payload is sent after input without a copy, the call returns once it is sent
-    void send_payload(enum rpc_cmd cmd, std::shared_ptr<const void> input, size_t input_size, const void * payload, size_t payload_size);
 
     ggml_backend_event_t event_new(ggml_backend_dev_t dev);
     void event_free(ggml_backend_event_t event);
@@ -533,7 +533,7 @@ public:
     void start(const std::string & endpoint);
     void work();
 
-    bool server_has_cache() const { return server_flags & RPC_SERVER_FLAG_CACHE; }
+    bool get_send_tensor_hash() const { return send_tensor_hash; }
 
     ~rpc_dispatcher();
 
@@ -558,7 +558,7 @@ private:
     std::unordered_map<uint32_t, std::unordered_set<uint64_t>> graph_uids;
     rpc_msg_queue    queue;
     socket_ptr       sock;
-    uint8_t          server_flags = 0;
+    bool             send_tensor_hash = false;
     std::atomic_uint busy_spin_users = 0;
     std::atomic_bool running;
     std::thread      thread;
@@ -591,7 +591,7 @@ void rpc_dispatcher::send_async(enum rpc_cmd cmd, std::shared_ptr<const void> in
     GGML_ASSERT(queue.push(msg));
 }
 
-void rpc_dispatcher::send_payload(enum rpc_cmd cmd, std::shared_ptr<const void> input, size_t input_size, const void * payload, size_t payload_size) {
+void rpc_dispatcher::send(enum rpc_cmd cmd, std::shared_ptr<const void> input, size_t input_size, const void * payload, size_t payload_size) {
     auto msg = std::make_shared<rpc_msg>();
     msg->cmd = cmd;
     msg->input = input;
@@ -688,7 +688,7 @@ void rpc_dispatcher::start(const std::string & endpoint) {
     if (sock == nullptr) {
         GGML_ABORT("Failed to connect to %s\n", endpoint.c_str());
     }
-    if (!negotiate_hello(sock, server_flags)) {
+    if (!negotiate_hello(sock, send_tensor_hash)) {
         GGML_ABORT("RPC handshake failed for %s\n", endpoint.c_str());
     }
     LOG_DBG("[%s] connected to %s\n", __func__, endpoint.c_str());
@@ -883,9 +883,9 @@ static std::shared_ptr<uint8_t> serialize_set_tensor(const rpc_tensor & rpc_tens
 // compute-buffer inputs (the activations ggml_backend_sched copies between backends) must not
 // take this path, otherwise with `rpc-server -c` every ubatch above the threshold is written
 // to the cache directory and later served from there.
-// hashing is slow (~1 GB/s), so skip it when the server has no cache to look up.
+// hashing is slow (~1 GB/s), so only do it when the server asks for tensor hashes.
 static bool rpc_use_hash_cache(const rpc_dispatcher & dispatcher, const ggml_tensor * tensor, size_t size) {
-    return dispatcher.server_has_cache() && size > HASH_THRESHOLD && tensor->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
+    return dispatcher.get_send_tensor_hash() && size > HASH_THRESHOLD && tensor->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
 }
 
 static void ggml_backend_rpc_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
@@ -912,7 +912,7 @@ static void ggml_backend_rpc_buffer_set_tensor(ggml_backend_buffer_t buffer, ggm
     }
     size_t header_size;
     auto header = serialize_set_tensor(rpc_tensor, cache_flag, offset, nullptr, 0, header_size);
-    ctx->dispatcher->send_payload(RPC_CMD_SET_TENSOR, header, header_size, data, size);
+    ctx->dispatcher->send(RPC_CMD_SET_TENSOR, header, header_size, data, size);
 }
 
 static void ggml_backend_rpc_buffer_set_tensor_2d(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data,
@@ -1517,7 +1517,7 @@ void rpc_server::hello(rpc_msg_hello_rsp & response) {
     response.major = RPC_PROTO_MAJOR_VERSION;
     response.minor = RPC_PROTO_MINOR_VERSION;
     response.patch = RPC_PROTO_PATCH_VERSION;
-    response.flags = cache_dir ? RPC_SERVER_FLAG_CACHE : 0;
+    response.flags = cache_dir ? RPC_SERVER_FLAG_SEND_TENSOR_HASH : 0;
     LOG_DBG("[%s] version: %d.%d.%d\n", __func__, response.major, response.minor, response.patch);
 }
 
