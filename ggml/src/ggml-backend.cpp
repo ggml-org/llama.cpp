@@ -2213,9 +2213,16 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         int split_backend_id = split->backend_id;
         ggml_backend_t split_backend = sched->backends[split_backend_id];
 
+        // count the inputs that are copied, a split whose inputs are all skipped copies nothing
+        // copying an input waits for the previous split, so without a copy the split needs the sync below
+        int n_copied_inputs = 0;
+        for (int input_id = 0; input_id < split->n_inputs; input_id++) {
+            n_copied_inputs += sched->hv_tensor_requires_copy[hash_id(split->inputs[input_id])];
+        }
+
         // ensure the previous split's async work has completed before we start
         // this split, the allocator may have reused buffer regions across splits
-        if (split->n_inputs == 0 && prev_backend_id >= 0 && prev_backend_id != split_backend_id) {
+        if (n_copied_inputs == 0 && prev_backend_id >= 0 && prev_backend_id != split_backend_id) {
             if (sched->events[prev_backend_id][sched->cur_copy] != NULL) {
                 ggml_backend_event_synchronize(sched->events[prev_backend_id][sched->cur_copy]);
             } else {
