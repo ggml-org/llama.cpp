@@ -9708,10 +9708,10 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
         {
             const uint32_t total_workgroups = dst->op_params[0] * (uint32_t)src0->ne[3];
             const uint32_t groups_x = std::min(total_workgroups, ctx->device->properties.limits.maxComputeWorkGroupCount[0]);
-            const uint64_t groups_y_needed = (uint64_t(total_workgroups) + groups_x - 1) / groups_x;
+            const uint64_t groups_y_needed = CEIL_DIV(uint64_t(total_workgroups), groups_x);
             const uint32_t groups_y = std::min<uint64_t>(groups_y_needed, ctx->device->properties.limits.maxComputeWorkGroupCount[1]);
             const uint64_t groups_xy = uint64_t(groups_x) * groups_y;
-            elements = { groups_x, groups_y, uint32_t((uint64_t(total_workgroups) + groups_xy - 1) / groups_xy) };
+            elements = { groups_x, groups_y, uint32_t(CEIL_DIV(uint64_t(total_workgroups), groups_xy)) };
             GGML_ASSERT(elements[2] <= ctx->device->properties.limits.maxComputeWorkGroupCount[2]);
         } break;
     case GGML_OP_DIAG_MASK_INF:
