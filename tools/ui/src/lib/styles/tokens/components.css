@@ -60,12 +60,15 @@
 	--button-danger-background-hover: var(--action-danger-hover);
 	--button-danger-text: var(--fg-on-danger);
 	--button-danger-seam: color-mix(in oklch, var(--fg-on-danger) 25%, transparent);
-	--button-secondary-background: var(--surface-glass);
-	--button-secondary-background-hover: color-mix(in oklch, var(--surface-muted) 80%, transparent);
-	--button-secondary-border: color-mix(in oklch, var(--line-default) 30%, transparent);
-	--button-tertiary-background: var(--action-quiet);
-	--button-tertiary-background-hover: var(--action-quiet-hover);
-	--button-tertiary-border: var(--surface-muted);
+	/* secondary and tertiary in light: a translucent shade of black rather than a white or grey fill, so the key is a
+	   step darker than whatever it sits on -- the off-white page, a white panel (the chat form, a card) or Matte's white
+	   page -- and reads the same on each. Tertiary is the fainter step */
+	--button-secondary-background: var(--black-a5);
+	--button-secondary-background-hover: var(--black-a8);
+	--button-secondary-border: var(--black-a6);
+	--button-tertiary-background: var(--black-a3);
+	--button-tertiary-background-hover: var(--black-a6);
+	--button-tertiary-border: var(--black-a4);
 	--button-ghost-background-hover: var(--action-ghost-hover);
 	--button-outline-background: var(--field-background);
 	--button-outline-border: var(--line-control);
@@ -154,7 +157,12 @@
 }
 
 .dark {
+	/* in dark the keys stay frosted glass and quiet fills, lighter than the page */
+	--button-secondary-background: var(--surface-glass);
 	--button-secondary-background-hover: var(--surface-muted);
+	--button-tertiary-background: var(--action-quiet);
+	--button-tertiary-background-hover: var(--action-quiet-hover);
+	--button-tertiary-border: var(--surface-muted);
 	--button-secondary-border: color-mix(in oklch, var(--line-default) 20%, transparent);
 	--badge-secondary-background: color-mix(in oklch, var(--fg-default) 10%, transparent);
 	--badge-danger-background: var(--action-danger);
