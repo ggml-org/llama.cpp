@@ -1556,8 +1556,10 @@ bool llama_context::h_nextn_dev_alloc() {
         ev_h_nextn_read_recorded    = false;
     };
 
+    // __func__ inside the lambda would be "operator()"
+    const char * func = __func__;
     auto fail = [&](const char * why) {
-        LLAMA_LOG_WARN("%s: %s, extracting the h_nextn rows to host memory\n", __func__, why);
+        LLAMA_LOG_WARN("%s: %s, extracting the h_nextn rows to host memory\n", func, why);
         cparams.embeddings_nextn_dev = false;
         reset();
         return false;
