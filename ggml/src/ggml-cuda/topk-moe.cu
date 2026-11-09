@@ -131,7 +131,7 @@ __device__ void group_mask_warp_inplace(float (&vals)[experts_per_thread], const
     }
 }
 
-static constexpr int calc_experts_per_thread(int n_experts, int warp_size)
+static __device__ constexpr int calc_experts_per_thread(int n_experts, int warp_size)
 {
     if(n_experts <= warp_size) {
         return 1;
