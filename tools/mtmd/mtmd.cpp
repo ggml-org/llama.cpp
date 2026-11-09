@@ -1,4 +1,5 @@
 #include "mtmd-subcontext.h"
+#include "models/models.h"
 #include "mtmd-impl.h"
 #include "mtmd.h"
 #include "mtmd-internal.h"
@@ -4094,12 +4095,40 @@ struct mtmd_audio_stream_lfm3a : mtmd_audio_stream {
     int32_t step_live(llama_token last_token);
 };
 
+// Gemma 4: the encoder is causal
+struct mtmd_audio_stream_gemma4a : mtmd_audio_stream {
+    mtmd_subctx_enc_state * enc_state = nullptr;
+
+    int n_fft;
+    int win;
+    int pad_left;
+    int64_t seg_len;
+    int64_t seg_start = 0; // first sample of the current segment, n_frames counts its frames
+
+    std::vector<float> beg_rows;
+    std::vector<float> end_rows;
+    bool beg_done = false;
+    bool end_done = false;
+
+    ~mtmd_audio_stream_gemma4a() override {
+        delete enc_state;
+    }
+
+    bool    init(const mtmd_audio_stream_params & params) override;
+    int32_t flush(bool end) override;
+    int32_t step(llama_token last_token) override;
+
+    int64_t n_seg_frames(int64_t n, bool complete) const;
+    bool    compute_mel(int64_t n_seg, bool complete);
+    bool    encode(int n);
+};
+
 bool mtmd_support_audio_stream(const mtmd_context * ctx) {
     if (!ctx->ctx_a || !ctx->text_model) {
         return false;
     }
     const projector_type proj = ctx->ctx_a->model.proj_type;
-    return proj == PROJECTOR_TYPE_VOXTRAL_RT || proj == PROJECTOR_TYPE_LFM3A;
+    return proj == PROJECTOR_TYPE_VOXTRAL_RT || proj == PROJECTOR_TYPE_LFM3A || proj == PROJECTOR_TYPE_GEMMA4A;
 }
 
 mtmd_audio_stream_params mtmd_audio_stream_params_default(void) {
@@ -4121,6 +4150,7 @@ mtmd_audio_stream * mtmd_audio_stream_init(mtmd_context * ctx, mtmd_audio_stream
     switch (ctx->ctx_a->model.proj_type) {
         case PROJECTOR_TYPE_VOXTRAL_RT: s = std::make_unique<mtmd_audio_stream_voxtral_rt>(); break;
         case PROJECTOR_TYPE_LFM3A:      s = std::make_unique<mtmd_audio_stream_lfm3a>();      break;
+        case PROJECTOR_TYPE_GEMMA4A:    s = std::make_unique<mtmd_audio_stream_gemma4a>();    break;
         default:                        GGML_ABORT("unsupported projector");
     }
     s->ctx      = ctx;
@@ -4170,6 +4200,23 @@ bool mtmd_audio_stream_is_seq_start(const mtmd_audio_stream * s) {
     return s->seq_start;
 }
 
+
+// token embeddings of aud_beg / aud_end
+static bool mtmd_audio_stream_marker_rows(const mtmd_context * ctx, const std::string & text, std::vector<float> & rows) {
+    rows.clear();
+    if (text.empty()) {
+        return true;
+    }
+    const llama_vocab * vocab = llama_model_get_vocab(ctx->text_model);
+    std::vector<llama_token> tokens(text.size() + 4);
+    const int32_t n = llama_tokenize(vocab, text.c_str(), (int32_t) text.size(), tokens.data(), (int32_t) tokens.size(), false, true);
+    if (n <= 0) {
+        LOG_ERR("%s: cannot tokenize the audio marker %s\n", __func__, text.c_str());
+        return false;
+    }
+    rows.resize((size_t) n * ctx->n_embd_text);
+    return llama_model_get_tok_embd_rows(ctx->text_model, tokens.data(), n, rows.data()) != 0;
+}
 
 //
 // Voxtral Realtime
@@ -4432,20 +4479,7 @@ bool mtmd_audio_stream_lfm3a::init(const mtmd_audio_stream_params & params) {
     }
 
     // the markers the tokenizer puts around an audio clip go around the stream as well
-    const llama_vocab * vocab = llama_model_get_vocab(ctx->text_model);
-    auto marker_rows = [&](const std::string & text, std::vector<float> & rows) {
-        if (text.empty()) {
-            return true;
-        }
-        std::vector<llama_token> tokens(text.size() + 4);
-        const int32_t n = llama_tokenize(vocab, text.c_str(), (int32_t) text.size(), tokens.data(), (int32_t) tokens.size(), false, true);
-        if (n <= 0) {
-            return false;
-        }
-        rows.resize((size_t) n * n_embd);
-        return llama_model_get_tok_embd_rows(ctx->text_model, tokens.data(), n, rows.data()) != 0;
-    };
-    return marker_rows(ctx->aud_beg, beg_rows) && marker_rows(ctx->aud_end, end_rows);
+    return mtmd_audio_stream_marker_rows(ctx, ctx->aud_beg, beg_rows) && mtmd_audio_stream_marker_rows(ctx, ctx->aud_end, end_rows);
 }
 
 // end: pad the tail like mtmd_audio_preprocessor_lfm3a, so the rows match encoding the clip at once
@@ -4665,6 +4699,192 @@ int32_t mtmd_audio_stream_lfm3a::step_live(llama_token last_token) {
     n_seq_rows    += n_feed;
     n_rows        += n_feed;
     return (int32_t) (out.size() / n_embd);
+}
+
+//
+// Gemma 4
+//
+
+bool mtmd_audio_stream_gemma4a::init(const mtmd_audio_stream_params & params) {
+    const mtmd_hparams * hparams = &sctx->model.hparams;
+
+    if (params.n_prompt > 0) {
+        LOG_ERR("%s: Gemma 4 takes no prompt, its audio is a chat turn\n", __func__);
+        return false;
+    }
+    if (!ctx->audio_preproc || !ctx->audio_preproc->mel_config.cache) {
+        LOG_ERR("%s: the audio preprocessor is not initialized\n", __func__);
+        return false;
+    }
+
+    // one row per 4 mel frames (two stride-2 convs)
+    n_fft           = hparams->audio_n_fft;
+    win             = hparams->audio_window_len;
+    pad_left        = win / 2;
+    seg_len         = (int64_t) mtmd_audio_preprocessor_gemma4a::segment_seconds * hparams->audio_sample_rate;
+    frames_per_tok  = 4;
+    samples_per_tok = frames_per_tok * hop;
+
+    // whole attention blocks, so the rows match the offline path
+    const int n_step = (int) ((int64_t) params.step_ms * hparams->audio_sample_rate / 1000 / hop);
+    n_step_mel = MTMD_ALIGN(std::max(n_step, frames_per_tok), (int) mtmd_graph_gemma4a::chunk_size * frames_per_tok);
+
+    enc_state = sctx->enc_state_init(n_step_mel);
+    if (!enc_state) {
+        return false;
+    }
+
+    return mtmd_audio_stream_marker_rows(ctx, ctx->aud_beg, beg_rows) && mtmd_audio_stream_marker_rows(ctx, ctx->aud_end, end_rows);
+}
+
+// mel frames of a segment with n samples
+// complete: same count as mtmd_audio_preprocessor_gemma4a, otherwise: only frames with a full window
+int64_t mtmd_audio_stream_gemma4a::n_seg_frames(int64_t n, bool complete) const {
+    if (complete) {
+        return std::max<int64_t>(0, (n + pad_left - (win + 1)) / hop + 1);
+    }
+    return n + pad_left >= win + 1 ? (n + pad_left - (win + 1)) / hop + 1 : 0;
+}
+
+// frame k reads samples [k * hop - pad_left, k * hop - pad_left + n_fft) of the segment, zero outside of it
+// the window is zero past win, so the samples after the segment end do not count
+bool mtmd_audio_stream_gemma4a::compute_mel(int64_t n_seg, bool complete) {
+    const int64_t n_total = n_seg_frames(n_seg, complete);
+    const int64_t n_new   = n_total - n_frames;
+    if (n_new <= 0) {
+        return true;
+    }
+
+    const int64_t first = seg_start + n_frames * hop - pad_left;
+    std::vector<float> samples((size_t) ((n_new - 1) * hop + n_fft), 0.0f);
+    for (size_t j = 0; j < samples.size(); j++) {
+        const int64_t idx = first + (int64_t) j;
+        if (idx >= seg_start && idx < seg_start + n_seg) {
+            GGML_ASSERT(idx >= buf_pos && idx - buf_pos < (int64_t) buf.size());
+            samples[j] = buf[idx - buf_pos];
+        }
+    }
+
+    const mtmd_audio_mel_config & cfg = ctx->audio_preproc->mel_config;
+    std::vector<float> frames((size_t) n_new * n_mel);
+    if (!mtmd_audio_log_mel(cfg, samples.data(), cfg.cache->hann_window.data(), n_new, frames.data())) {
+        LOG_ERR("%s: unable to compute the mel spectrogram\n", __func__);
+        return false;
+    }
+    for (int64_t t = 0; t < n_new; t++) {
+        for (int m = 0; m < n_mel; m++) {
+            mel.push_back(frames[(size_t) m * n_new + t]);
+        }
+    }
+    n_frames = n_total;
+
+    // drop the samples no frame will need again
+    const int64_t keep_from = std::max(seg_start, seg_start + n_frames * hop - pad_left);
+    if (keep_from > buf_pos) {
+        buf.erase(buf.begin(), buf.begin() + (keep_from - buf_pos));
+        buf_pos = keep_from;
+    }
+    return true;
+}
+
+bool mtmd_audio_stream_gemma4a::encode(int n) {
+    std::vector<float> data((size_t) n_mel * n);
+    for (int m = 0; m < n_mel; m++) {
+        for (int t = 0; t < n; t++) {
+            data[(size_t) m * n + t] = mel[(size_t) t * n_mel + m];
+        }
+    }
+    mtmd_image_f32 img;
+    img.set_size({n, n_mel}, false, /* is_audio */ true);
+    img.cpy_buf(data);
+    const int n_out = sctx->model.n_output_tokens(&img);
+
+    mtmd_image_f32_batch batch;
+    batch.is_audio = true;
+    batch.entries.push_back(std::move(img));
+
+    std::vector<float> res((size_t) n_embd * n_out);
+    mtmd_subctx_encode_params params;
+    params.n_threads = ctx->n_threads;
+    params.imgs      = &batch;
+    params.out_embd  = &res;
+    params.enc_state = enc_state;
+    if (!sctx->encode(&params)) {
+        LOG_ERR("%s: failed to encode audio\n", __func__);
+        return false;
+    }
+    embd.insert(embd.end(), res.begin(), res.end());
+    mel.erase(mel.begin(), mel.begin() + (size_t) n * n_mel);
+    return true;
+}
+
+// no padding here, step() pads a segment once it is complete
+int32_t mtmd_audio_stream_gemma4a::flush(bool end) {
+    const int64_t n_full = n_samples / seg_len;
+    const int64_t n_rest = n_samples % seg_len;
+    const int64_t rows_full = (n_seg_frames(seg_len, true) + frames_per_tok - 1) / frames_per_tok;
+    const int64_t rows_rest = end ? (n_seg_frames(n_rest, true) + frames_per_tok - 1) / frames_per_tok
+                                  : n_seg_frames(n_rest, false) / frames_per_tok;
+    n_rows_flushed = n_full * rows_full + rows_rest;
+    pending_flush = true;
+    ended = end;
+    return 0;
+}
+
+int32_t mtmd_audio_stream_gemma4a::step(llama_token /* last_token */) {
+    const bool flush = pending_flush;
+    pending_flush = false;
+
+    // whole rows only, except at the end of a segment: a partial row puts its zero padding into the state
+    while (true) {
+        const int64_t seg_end  = seg_start + seg_len;
+        const int64_t n_seg    = std::min(n_samples, seg_end) - seg_start;
+        const bool    complete = n_samples >= seg_end || ended;
+        if (!compute_mel(n_seg, complete)) {
+            return -2;
+        }
+        const int n_avail = (int) (mel.size() / n_mel);
+        int n = n_avail;
+        if (!complete) {
+            n -= n % frames_per_tok;
+            if (!flush) {
+                n -= n % n_step_mel;
+            }
+        }
+        if (n > 0 && !encode(n)) {
+            return -2;
+        }
+        if (n_samples < seg_end) {
+            break;
+        }
+        // next segment starts from a zero state
+        seg_start = seg_end;
+        n_frames  = 0;
+        ggml_backend_buffer_clear(enc_state->buf.get(), 0);
+    }
+
+    // rows carry no text, all of them go out at once and last_token is not used
+    const int64_t n_avail = (int64_t) (embd.size() / n_embd);
+    out.clear();
+    if (n_avail > 0 || ended) {
+        if (!beg_done) {
+            beg_done = true;
+            out = beg_rows;
+        }
+        out.insert(out.end(), embd.begin(), embd.end());
+        embd.clear();
+        if (ended && !end_done) {
+            end_done = true;
+            out.insert(out.end(), end_rows.begin(), end_rows.end());
+        }
+    }
+    const int64_t n_out = (int64_t) (out.size() / n_embd);
+    if (n_out == 0) {
+        return ended ? -1 : 0;
+    }
+    n_rows      += n_out;
+    n_rows_done += n_avail; // the markers are not audio rows
+    return (int32_t) n_out;
 }
 
 int64_t mtmd_audio_stream_get_n_rows(const mtmd_audio_stream * s) {

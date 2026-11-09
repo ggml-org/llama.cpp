@@ -274,6 +274,10 @@ struct mtmd_graph_muse_spark_audio : mtmd_graph {
 };
 
 struct mtmd_graph_gemma4a : mtmd_graph {
+    // attention_chunk_size, attention_context_left - 1
+    static constexpr int64_t chunk_size = 12;
+    static constexpr int64_t max_past   = 12;
+
     mtmd_graph_gemma4a(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
     ggml_tensor * build_mm(ggml_tensor * w, ggml_tensor * x) const override;
@@ -573,6 +577,9 @@ std::vector<c2w_state_slot> list_lfm3a_gen_state_slots(const mtmd_hparams & hpar
 
 // state slots of the streaming LFM3-Audio encoder (lfm3a)
 std::vector<c2w_state_slot> list_lfm3a_state_slots(const mtmd_hparams & hparams, const mtmd_model & model);
+
+// state slots of the streaming Gemma 4 audio encoder (gemma4a)
+std::vector<c2w_state_slot> list_gemma4a_state_slots(const mtmd_hparams & hparams, const mtmd_model & model);
 
 struct mtmd_graph_kimik25 : mtmd_graph {
     mtmd_graph_kimik25(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
