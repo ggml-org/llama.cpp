@@ -62,6 +62,7 @@ struct server_http_req {
         }
         return def;
     }
+    bool is_application_json() const;
 };
 
 struct server_http_context {

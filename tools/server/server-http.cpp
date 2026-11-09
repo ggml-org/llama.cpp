@@ -862,6 +862,36 @@ static json parse_gcp_predict_response(const server_http_res_ptr & res) {
     }
 }
 
+static bool case_insensitive_equals(std::string_view a, std::string_view b) {
+    return a.length() == b.length() && std::equal(a.begin(), a.end(), b.begin(), b.end(), [](unsigned char value, unsigned char expected) {
+        return std::tolower(value) == std::tolower(expected);
+    });
+}
+
+static std::string normalize_content_type(std::string_view content_type) {
+    std::string_view::iterator start = std::find_if(content_type.begin(), content_type.end(), [](unsigned char c) {
+        return !std::isspace(c);
+    });
+    std::string_view::iterator stop = std::find_if(start, content_type.end(), [](unsigned char c) {
+        return c == ';' || std::isspace(c);
+    });
+    std::string result(start, stop);
+    std::transform(result.begin(), result.end(), result.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return result;
+}
+
+bool server_http_req::is_application_json() const {
+    auto entry = std::find_if(this->headers.begin(), this->headers.end(), [](std::map<std::string, std::string>::const_reference entry) {
+        return case_insensitive_equals(entry.first, "content-type");
+    });
+    if (entry == this->headers.end())
+        return false;
+    std::string normalized_content_type = normalize_content_type(entry->second);
+    return normalized_content_type == "application/json";
+}
+
 void server_http_context::register_gcp_compat() const {
     const gcp_params gcp;
 
@@ -893,6 +923,14 @@ void server_http_context::register_gcp_compat() const {
             return json {{"error", format_error_response(message, type)}};
         };
 
+        if (!req.is_application_json()) {
+            auto res = std::make_unique<server_http_res>();
+            res->status = 400;
+            res->content_type = "application/json; charset=utf-8";
+            res->data = safe_json_to_str({{"error", {{"message", "not acceptable"},
+                                                     {"type", "invalid_request_error"}}}});
+            return res;
+        }
         json data;
         try {
             data = json::parse(req.body);

@@ -2084,10 +2084,14 @@ void server_models_routes::init_routes() {
 
     this->proxy_post = [this](const server_http_req & req) {
         std::string method = "POST";
+        auto error_res = std::make_unique<server_http_res>();
+        if (!req.is_application_json()) {
+            res_err(error_res, format_error_response("not acceptable", ERROR_TYPE_INVALID_REQUEST));
+            return error_res;
+        }
         json body = json::parse(req.body);
         std::string name = json_value(body, "model", std::string());
         bool autoload = is_autoload(params, req);
-        auto error_res = std::make_unique<server_http_res>();
         if (!router_validate_model(name, models, autoload, error_res)) {
             return error_res;
         }
@@ -2115,6 +2119,10 @@ void server_models_routes::init_routes() {
 
     this->post_router_models_load = [this](const server_http_req & req) {
         auto res = std::make_unique<server_http_res>();
+        if (!req.is_application_json()) {
+            res_err(res, format_error_response("not acceptable", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
         json body = json::parse(req.body);
         std::string name = json_value(body, "model", std::string());
         auto meta = models.get_meta(name);
@@ -2263,6 +2271,10 @@ void server_models_routes::init_routes() {
 
     this->post_router_models_unload = [this](const server_http_req & req) {
         auto res = std::make_unique<server_http_res>();
+        if (!req.is_application_json()) {
+            res_err(res, format_error_response("not acceptable", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
         json body = json::parse(req.body);
         std::string name = json_value(body, "model", std::string());
         auto model = models.get_meta(name);
@@ -2300,6 +2312,10 @@ void server_models_routes::init_routes() {
     this->post_router_models = [this](const server_http_req & req) {
         auto res = std::make_unique<server_http_res>();
 
+        if (!req.is_application_json()) {
+            res_err(res, format_error_response("not acceptable", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
         json body = json::parse(req.body);
         std::string name = json_value(body, "model", std::string());
         if (name.empty()) {
@@ -2426,6 +2442,10 @@ void server_models_routes::init_routes() {
         // it owns, never lists anything else
         auto res = std::make_unique<server_http_res>();
         std::vector<std::string> requested;
+        if (!req.is_application_json()) {
+            res_err(res, format_error_response("not acceptable", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
         try {
             json body = json::parse(req.body);
             if (body.contains("conversation_ids") && body["conversation_ids"].is_array()) {

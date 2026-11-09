@@ -94,6 +94,7 @@ struct server_grammar_trigger {
     }
 };
 
+json make_not_acceptable_error();
 json format_error_response(const std::string & message, const enum error_type type);
 
 // path of the running llama-server binary, used to spawn siblings. throws on failure

@@ -243,3 +243,31 @@ def test_local_media_file(media_path, image_url, success,):
         assert res.status_code == 200
     else:
         assert res.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "content_type_key, content_type, expected_status",
+    [
+        ("content-type", "application/json", 200),
+        ("Content-Type", "application/json", 200),
+        ("Content-Type", "application/json; charset=UTF-8", 200),
+        ("content-type", "application/foo+json", 400),
+        ("content-type", "text/plain", 400),
+    ],
+)
+def test_tools_post_cross_site_protection(content_type_key, content_type, expected_status):
+    """POST /tools executes built-in tools on the host; cross-origin browser
+    requests and non-JSON bodies must be rejected (CSRF, issue: drive-by)."""
+    server = ServerPreset.tinyllama2()
+    server.server_tools = "exec_shell_command"
+    server.start()
+    headers = {
+        content_type_key: content_type
+    }
+    res = server.make_request("POST", "/tools", headers=headers, data={
+        "tool": "exec_shell_command",
+        "params": {"command": "echo csrf-guard-test"},
+    })
+    assert res.status_code == expected_status
+    if expected_status == 200:
+        assert "csrf-guard-test" in res.body.get("plain_text_response", "")

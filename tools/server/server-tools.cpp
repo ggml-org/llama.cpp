@@ -2077,6 +2077,13 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools,
 
     handle_post = [this](const server_http_req & req) -> server_http_res_ptr {
         auto res = std::make_unique<server_tools_res>();
+        if (!req.is_application_json()) {
+            res->status = 400;
+            res->content_type = "application/json; charset=utf-8";
+            res->data = safe_json_to_str({{"error", {{"message", "not acceptable"},
+                                                     {"type", "invalid_request_error"}}}});
+            return res;
+        }
         try {
             json body = json::parse(req.body);
             std::string tool_name = body.at("tool").get<std::string>();

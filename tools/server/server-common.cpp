@@ -90,6 +90,13 @@ std::filesystem::path get_server_exec_path() {
 #endif
 }
 
+json make_not_acceptable_error() {
+    return json {
+        {"code", 406},
+        {"message", "Not acceptable"},
+    };
+}
+
 json format_error_response(const std::string & message, const enum error_type type) {
     std::string type_str;
     int code = 500;
@@ -1270,6 +1277,7 @@ void handle_media(
         out_files.push_back(decoded_data);
     }
 }
+
 // load media files from an OAI content array, then replace each media part with a media marker text part
 static void oaicompat_content_load_media(json & content, const server_chat_params & opt, std::vector<raw_buffer> & out_files) {
     for (auto & p : content) {

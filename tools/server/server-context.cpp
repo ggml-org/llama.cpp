@@ -5940,6 +5940,11 @@ void server_routes::init_routes() {
             return res;
         }
 
+        if (!req.is_application_json()) {
+            res->error(make_not_acceptable_error());
+            return res;
+        }
+
         // validate input
         json data = json::parse(req.body);
         if (data.contains("prompt") && !data.at("prompt").is_string()) {
@@ -6003,6 +6008,10 @@ void server_routes::init_routes() {
     this->post_completions = [this](const server_http_req & req) {
         auto res = create_response();
         std::vector<raw_buffer> files; // dummy
+        if (!req.is_application_json()) {
+            res->error(make_not_acceptable_error());
+            return res;
+        }
         const json body = json::parse(req.body);
         return handle_completions_impl(
             req,
@@ -6015,6 +6024,10 @@ void server_routes::init_routes() {
     this->post_completions_oai = [this](const server_http_req & req) {
         auto res = create_response();
         std::vector<raw_buffer> files; // dummy
+        if (!req.is_application_json()) {
+            res->error(make_not_acceptable_error());
+            return res;
+        }
         const json body = json::parse(req.body);
         return handle_completions_impl(
             req,
@@ -6027,6 +6040,10 @@ void server_routes::init_routes() {
     this->post_chat_completions = [this](const server_http_req & req) {
         auto res = create_response();
         std::vector<raw_buffer> files;
+        if (!req.is_application_json()) {
+            res->error(make_not_acceptable_error());
+            return res;
+        }
         json body = json::parse(req.body);
         common_chat_session session;
         json body_parsed = oaicompat_chat_params_parse(
@@ -6050,6 +6067,10 @@ void server_routes::init_routes() {
 
     this->post_control = [this](const server_http_req & req) {
         auto res = create_response();
+        if (!req.is_application_json()) {
+            res->error(make_not_acceptable_error());
+            return res;
+        }
         const json body = json::parse(req.body);
 
         const std::string cmpl_id = json_value(body, "id", std::string());
@@ -6376,6 +6397,10 @@ void server_routes::init_routes() {
         auto res = create_response();
         std::vector<raw_buffer> files; // dummy, unused
         common_chat_session session;   // dummy, unused
+        if (!req.is_application_json()) {
+            res->error(make_not_acceptable_error());
+            return res;
+        }
         json body = json::parse(req.body);
         json data = oaicompat_chat_params_parse(
             ctx_server.vocab,
@@ -6401,6 +6426,10 @@ void server_routes::init_routes() {
 
     this->post_tokenize = [this](const server_http_req & req) {
         auto res = create_response();
+        if (!req.is_application_json()) {
+            res->error(make_not_acceptable_error());
+            return res;
+        }
         const json body = json::parse(req.body);
         json tokens_response = json::array();
         if (body.count("content") != 0) {
@@ -6442,6 +6471,10 @@ void server_routes::init_routes() {
 
     this->post_detokenize = [this](const server_http_req & req) {
         auto res = create_response();
+        if (!req.is_application_json()) {
+            res->error(make_not_acceptable_error());
+            return res;
+        }
         const json body = json::parse(req.body);
 
         std::string content;
@@ -6477,6 +6510,10 @@ void server_routes::init_routes() {
 
         const auto info = mtmd_gen_audio_get_info(ctx_server.mctx);
 
+        if (!req.is_application_json()) {
+            res->error(make_not_acceptable_error());
+            return res;
+        }
         json body = json::parse(req.body);
 
         // multipart form fields arrive as strings, correct the types of the numeric and boolean params
@@ -6669,7 +6706,10 @@ void server_routes::init_routes() {
             res->error(format_error_response("This model is not a decision model", ERROR_TYPE_NOT_SUPPORTED));
             return res;
         }
-
+        if (!req.is_application_json()) {
+            res->error(make_not_acceptable_error());
+            return res;
+        }
         const json body = json::parse(req.body);
         const auto questions = decision.parse_questions(body);
 
@@ -6778,6 +6818,10 @@ void server_routes::init_routes() {
 
     this->post_lora_adapters = [this](const server_http_req & req) {
         auto res = create_response();
+        if (!req.is_application_json()) {
+            res->error(make_not_acceptable_error());
+            return res;
+        }
         const json body = json::parse(req.body);
         if (!body.is_array()) {
             res->error(format_error_response("Request body must be an array", ERROR_TYPE_INVALID_REQUEST));
@@ -6813,6 +6857,10 @@ void server_routes::init_routes() {
 
 std::unique_ptr<server_res_generator> server_routes::handle_slots_save(const server_http_req & req, int id_slot) {
     auto res = create_response();
+    if (!req.is_application_json()) {
+        res->error(make_not_acceptable_error());
+        return res;
+    }
     const json request_data = json::parse(req.body);
     std::string filename = request_data.at("filename");
     if (!fs_validate_filename(filename)) {
@@ -6849,6 +6897,10 @@ std::unique_ptr<server_res_generator> server_routes::handle_slots_save(const ser
 
 std::unique_ptr<server_res_generator> server_routes::handle_slots_restore(const server_http_req & req, int id_slot) {
     auto res = create_response();
+    if (!req.is_application_json()) {
+        res->error(make_not_acceptable_error());
+        return res;
+    }
     const json request_data = json::parse(req.body);
     std::string filename = request_data.at("filename");
     if (!fs_validate_filename(filename)) {
@@ -6923,6 +6975,10 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
         return res;
     }
 
+    if (!req.is_application_json()) {
+        res->error(make_not_acceptable_error());
+        return res;
+    }
     const json body = json::parse(req.body);
 
     // for the shape of input/content, see tokenize_input_prompts()
@@ -7037,6 +7093,10 @@ std::unique_ptr<server_res_generator> server_routes::handle_rerank_impl(const se
         return res;
     }
 
+    if (!req.is_application_json()) {
+        res->error(make_not_acceptable_error());
+        return res;
+    }
     const json body = json::parse(req.body);
 
     // if true, use TEI API format, otherwise use Jina API format
@@ -7181,6 +7241,10 @@ std::unique_ptr<server_res_generator> server_routes::handle_rerank_impl(const se
 std::unique_ptr<server_res_generator> server_routes::handle_count_tokens(const server_http_req & req, task_response_type res_type) {
     auto res = create_response();
     std::vector<raw_buffer> files;
+    if (!req.is_application_json()) {
+        res->error(make_not_acceptable_error());
+        return res;
+    }
     json body = json::parse(req.body);
     bool is_oai = false;
 

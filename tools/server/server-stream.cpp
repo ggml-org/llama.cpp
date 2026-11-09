@@ -504,6 +504,11 @@ server_http_context::handler_t server_stream_make_lookup_handler() {
     return [](const server_http_req & req) -> server_http_res_ptr {
         // POST /v1/streams/lookup returns the matching sessions, only for ids the caller already
         // knows. each id matches the exact key and any "<id>::<model>" per model variant
+        if (!req.is_application_json()) {
+            auto res = std::make_unique<server_http_res>();
+            res->status = 406;
+            return res;
+        }
         std::vector<std::string> requested;
         try {
             json body = json::parse(req.body);
@@ -521,7 +526,7 @@ server_http_context::handler_t server_stream_make_lookup_handler() {
             auto res = std::make_unique<server_http_res>();
             res->status = 400;
             res->content_type = "application/json; charset=utf-8";
-            res->data = safe_json_to_str({{"error", {{"message", std::string("invalid body: ") + e.what()},
+            res->data = safe_json_to_str({{"error", {{"message", "not acceptable"},
                                                      {"type", "invalid_request_error"}}}});
             return res;
         }
