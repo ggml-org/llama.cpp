@@ -126,6 +126,7 @@
 #define FC_LIGHTNING_INDEXER           2200
 #define FC_MUL_MV_MMA                  2300
 #define FC_TOP_K_MASK                  2400
+#define FC_GROUP_NORM                  2500
 
 // op-specific constants
 #define OP_FLASH_ATTN_EXT_NQPSG 8
@@ -384,6 +385,19 @@ typedef struct {
     uint64_t nb3;
     int32_t  nblocks;
 } ggml_metal_kargs_flash_attn_ext_kv_f16;
+
+// gather the K/V cache rows referenced by the kv_rows lists into contiguous F16 buffers
+typedef struct {
+    int32_t  ne11;      // number of rows per list (n_kv_rows)
+    int32_t  ne_12_2;   // number of K/V heads
+    int32_t  ne10;      // DK
+    int32_t  ne20;      // DV, set to 0 to skip gathering V (V is a view of K)
+    uint64_t v_off;     // byte offset of the gathered V region in dst
+    uint64_t nb11;      // K source strides (ne13 = 1: the cache is shared by all streams)
+    uint64_t nb12;
+    uint64_t nb21;      // V source strides (ne23 = 1)
+    uint64_t nb22;
+} ggml_metal_kargs_flash_attn_ext_rows;
 
 typedef struct {
     int32_t  ne11;
@@ -664,6 +678,10 @@ typedef struct {
     uint64_t nb00;
     uint64_t nb01;
     uint64_t nb02;
+    uint64_t nb03;
+    uint64_t nb1;
+    uint64_t nb2;
+    uint64_t nb3;
     int32_t  ngrp;
     float    eps;
 } ggml_metal_kargs_group_norm;
@@ -1257,6 +1275,7 @@ typedef struct {
     uint64_t nb01;      // logits row stride
     uint64_t nb1_ids;   // ids row stride
     float    clamp;
+    float    bias;
     float    scale;
 } ggml_metal_kargs_topk_moe;
 

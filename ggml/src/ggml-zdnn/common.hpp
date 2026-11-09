@@ -16,8 +16,7 @@
 #include <utility>
 #include <vector>
 
-#define GGML_ZDNN_NAME    "zDNN"
-#define GGML_ZDNN_VERSION ZDNN_VERNUM
+#define GGML_ZDNN_NAME "zDNN"
 
 #define ZDNN_CHECK(stmt)                \
     do {                                \
@@ -33,6 +32,8 @@ struct ggml_backend_zdnn_device_context {
     bool has_parmblkformat_1;  // checks for z17
 
     size_t max_size;
+
+    int32_t n_threads;  // CPU threads
 
     char name[128];
 };
