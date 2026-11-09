@@ -521,19 +521,19 @@ private:
 
 // settings that only live in the reference's per-pack yaml, not in the checkpoint
 // the english packs share the same shapes and tokenizer, but disagree on these
-// all three are 0 / false when the pack does not tune them, the model default is then used
+// both are 0 / false when the pack does not tune them, the model default is then used
 struct pockettts_pack_settings {
-    float temp             = 0.0f;
-    int   frames_after_eos = 0;
-    bool  pad_short_text   = false;
+    int  frames_after_eos = 0;
+    bool pad_short_text   = false;
 };
 
 static pockettts_pack_settings pockettts_pack(const char * variant) {
     static const std::unordered_map<std::string, pockettts_pack_settings> packs = {
-        { "english",         { 0.3f, 0, false } },
-        { "english_2026-01", { 0.7f, 0, true  } },
-        { "english_2026-04", { 0.3f, 0, false } },
-        { "french_24l",      { 0.7f, 8, false } },
+        { "english",         { 0, false } },
+        { "english_2026-01", { 0, true  } },
+        { "english_2026-04", { 0, false } },
+        { "french_24l",      { 8, false } },
+        { "italian",         { 0, false } },
     };
     auto it = packs.find(variant ? variant : "");
     if (it == packs.end()) {
@@ -638,6 +638,7 @@ public:
         prompt_batch->set_position_normal(0, seq_id);
         prompt_pos = 0;
 
+        temp     = inp->temp;
         out_type = inp->out_type;
         stream   = inp->stream;
         if (!init_gen_state(inp->seed)) {
@@ -680,8 +681,8 @@ public:
         mtmd_gen_inp inp = mtmd_gen_inp_default(mctx);
         inp.type = MTMD_GEN_PROCESS_TYPE_GEN_CODE;
         inp.embd = const_cast<float *>(h_state_in);
-        if (pack.temp > 0.0f) {
-            inp.temp = pack.temp;
+        if (temp >= 0.0f) {
+            inp.temp = temp;
         }
         mtmd_gen_out out{};
         if (mtmd_gen_audio_process(mctx, gen_state.get(), &inp, &out) != 0) {
@@ -1016,6 +1017,7 @@ private:
     }
 
     pockettts_pack_settings pack;
+    float temp = -1.0f; // the caller's flow noise scale, < 0 for the model default
     bool specials_ok = false;
     llama_token bos_before_voice = LLAMA_TOKEN_NULL;
     llama_token audio_bos        = LLAMA_TOKEN_NULL;
@@ -1306,9 +1308,9 @@ public:
             return 1;
         }
 
-        // the sampling defaults of the model, the caller's top-k/top-p are not used
+        // the sampling defaults of the model, the caller can only override the temperature
         const mtmd_gen_inp def = mtmd_gen_inp_default(mctx);
-        temp        = def.temp;
+        temp        = inp->temp >= 0.0f ? inp->temp : def.temp;
         top_k       = def.top_k;
         rep_penalty = def.penalty_repeat;
         rep_window  = def.penalty_last_n;
@@ -2459,6 +2461,7 @@ struct mtmd_helper_gen_audio_inp mtmd_helper_gen_audio_inp_default(void) {
     mtmd_helper_gen_audio_inp inp{};
     inp.top_k    = 50;
     inp.top_p    = 1.0f;
+    inp.temp     = -1.0f; // model default
     inp.seed     = UINT32_MAX; // random
     inp.out_type = MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV;
     return inp;
