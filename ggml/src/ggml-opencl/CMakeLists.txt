@@ -322,6 +322,8 @@ set(GGML_OPENCL_KERNELS
     repeat
     mul_mat_f16_f32
     mul_mm_f16_f32_kq_kqv
+    mul_mm_f16_f32_kq_p8
+    mul_mm_q8_f32_kqv
     conv2d
     conv2d_f16_f32
     conv2_dw

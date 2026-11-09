@@ -228,3 +228,54 @@ kernel void kernel_fa_decompose_scale_rows_f32(
         row[i] *= r;
     }
 }
+
+// Merge the P8 block maxima and sums into F32 block scales and row sums.
+#ifdef ADRENO_GPU
+REQD_SUBGROUP_SIZE_64
+#endif
+kernel void kernel_fa_p8_fixup(
+        global float * bmax,
+        global float * bsum,
+        global float * dp,
+        global float * psums,
+        global char  * sinks,
+        ulong offset_sinks,
+        int has_sinks,
+        int nblk,
+        int row_blk,                // blocks per row of bmax/bsum/dp (the padded pitch), >= nblk
+        int N
+) {
+    const int n    = get_group_id(0);
+    const int head = get_group_id(1);
+    const uint row = (uint)head*(uint)N + (uint)n;
+    global float * bm = bmax + (size_t)row*row_blk;
+    global float * bs = bsum + (size_t)row*row_blk;
+    global float * dr = dp   + (size_t)row*row_blk;
+
+    float lmax = -INFINITY;
+    for (int b = get_local_id(0); b < nblk; b += get_local_size(0)) {
+        lmax = fmax(lmax, bm[b]);
+    }
+    float rowmax = sub_group_reduce_max(lmax);
+    float sink = 0.0f;
+    if (has_sinks) {
+        sink = ((global float *)(sinks + offset_sinks))[head];
+        rowmax = fmax(rowmax, sink);
+    }
+
+    float lsum = 0.0f;
+    for (int b = get_local_id(0); b < nblk; b += get_local_size(0)) {
+        const float m = bm[b];
+        // Use a finite sentinel: -cl-finite-math-only can remove infinity checks.
+        const float f = (m > -1.0e30f && rowmax > -1.0e30f) ? exp(m - rowmax) : 0.0f;
+        dr[b] = f / 255.0f;
+        lsum += bs[b]*f;
+    }
+    float sum = sub_group_reduce_add(lsum);
+    if (has_sinks && rowmax > -1.0e30f) {
+        sum += exp(sink - rowmax);
+    }
+    if (get_local_id(0) == 0) {
+        psums[row] = sum;
+    }
+}
