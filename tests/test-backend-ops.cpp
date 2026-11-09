@@ -3163,6 +3163,87 @@ struct test_argmax : public test_case {
     }
 };
 
+// GGML_OP_ROUND_NVFP4
+struct test_round_nvfp4 : public test_case {
+    const std::array<int64_t, 4> ne;
+    const bool permute; // rows that are not contiguous with each other
+
+    std::string vars() override {
+        return VARS_TO_STR2(ne, permute);
+    }
+
+    test_round_nvfp4(std::array<int64_t, 4> ne = {128, 12, 7, 2}, bool permute = false)
+        : ne(ne), permute(permute) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
+        ggml_set_name(a, "a");
+
+        if (permute) {
+            a = ggml_permute(ctx, a, 0, 2, 1, 3);
+            ggml_set_name(a, "a_permuted");
+        }
+
+        ggml_tensor * out = ggml_round_nvfp4(ctx, a);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        std::random_device rd;
+        std::default_random_engine rng(rd());
+        std::uniform_real_distribution<float> uniform(-1.0f, 1.0f);
+        std::uniform_int_distribution<int> exponent(-16, 12);
+        std::uniform_int_distribution<int> quarter(-28, 28);
+        std::uniform_int_distribution<int> mantissa(0, 7);
+        std::uniform_int_distribution<int> tie(0, 6);
+        std::uniform_int_distribution<int> nudge(-1, 1);
+        const float ties[] = {0.25f, 0.75f, 1.25f, 1.75f, 2.5f, 3.5f, 5.0f};
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            std::vector<float> data(ggml_nelements(t));
+            // the op rounds each group of 16 values to NVFP4: the scale of the group is amax/6 rounded to E4M3
+            // (E4M3 values: 2^-9 <= v <= 448), and each value/scale is rounded to the nearest E2M1 value
+            // {0, 0.5, 1, 1.5, 2, 3, 4, 6}, ties to even (0, 1, 2, 4)
+            // the result has to be bit-exact, so the data aims at the inputs where implementations can disagree
+            //
+            // the groups cycle through three kinds of values:
+            // - uniform: random values times a power of two from 2^-16 to 2^12, which takes the scale from
+            //   its floor through the subnormal and the normal E4M3 range up to its saturation
+            // - quarter steps: integer multiples of a quarter of that power of two, up to 7 times it, of both signs
+            //   the E2M1 values are 0.5, 1 or 2 apart, so all their midpoints (0.25, 0.75, 1.25, 1.75, 2.5, 3.5, 5)
+            //   are multiples of 0.25: whenever the scale of the group is a power of two itself, value/scale is
+            //   a multiple of 0.25 again and many values are exact E2M1 ties
+            //   at the subnormal end, amax/6 can also be an exact tie between two E4M3 scales
+            // - near ties: a scale s with a random 3-bit mantissa, pinned by a first value of 6*s, and 15 values
+            //   at an E2M1 tie times s, or one ulp above or below it
+            //   the neighbours fall to the adjacent E2M1 values only if value/scale keeps that ulp
+            //   s is an exact E4M3 value unless it is subnormal (below 2^-6), where it can be an E4M3 tie
+            for (size_t g = 0; g < data.size()/16; ++g) {
+                const float scale = ldexpf(1.0f, exponent(rng));
+                if (g % 3 == 2) {
+                    const float s = ldexpf(1.0f + mantissa(rng)/8.0f, exponent(rng)/2);
+                    data[g*16] = 6.0f*s;
+                    for (size_t j = 1; j < 16; ++j) {
+                        const float x = s*ties[tie(rng)];
+                        const int   n = nudge(rng);
+                        data[g*16 + j] = n == 0 ? x : nextafterf(x, n > 0 ? INFINITY : 0.0f);
+                    }
+                } else {
+                    for (size_t j = 0; j < 16; ++j) {
+                        data[g*16 + j] = scale * (g % 3 ? 0.25f*quarter(rng) : uniform(rng));
+                    }
+                }
+            }
+            ggml_backend_tensor_set(t, data.data(), 0, ggml_nbytes(t));
+        }
+    }
+
+    double max_nmse_err() override {
+        return 0.0;
+    }
+};
+
 // GGML_OP_COUNT_EQUAL
 struct test_count_equal : public test_case {
     const ggml_type type;
@@ -10816,6 +10897,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_dsv4_hc_post(4096, 1));             // DeepSeek-V4-Flash decode
     test_cases.emplace_back(new test_dsv4_hc_post(2560, 1, true, true)); // Qwen4-Exp decode
 
+    test_cases.emplace_back(new test_round_nvfp4());
+    test_cases.emplace_back(new test_round_nvfp4({128, 12, 7, 2}, true));
+    test_cases.emplace_back(new test_round_nvfp4({16, 1, 1, 1}));
+    test_cases.emplace_back(new test_round_nvfp4({512, 33, 1, 1}));
+
     for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
         // blocks with extra cells and scores (k-pool)
         test_cases.emplace_back(new test_top_k_mask(type));
@@ -13331,6 +13417,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {12, 1}, 8192, 64, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false,  512));
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 1, {12, 2}, 8192, 67, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false,  512));
 
+    // sparse attn (Kolibri-1.1 shape - gqa 12, top 2048 + 136 sink and recent keys)
+    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 4, {12, 1}, 8192,  1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false, 2184));
+    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 4, {12, 1}, 8192, 64, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false, 2184));
+    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 4, {12, 1}, 8192, 67, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false, 2184));
+
     // sparse mask + quantized cache
     test_cases.emplace_back(new test_flash_attn_ext(128, 128, 1, { 8, 1}, 4096,  1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, {0, 1, 2, 3}, true, false, 512));
     test_cases.emplace_back(new test_flash_attn_ext(128, 128, 1, { 8, 1}, 4096, 64, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, {0, 1, 2, 3}, true, false, 512));
@@ -13735,7 +13826,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // lightning_indexer
     for (int kv : { 256 }) {
         for (int bs : { 1, 512 }) {
-            for (int nh : { 4, 32, 64 }) {
+            for (int nh : { 4, 12, 32, 64 }) {
                 for (auto [ns, nm] : { std::pair{1, 1}, std::pair{4, 4}, std::pair{4, 1} }) {
                     for (ggml_type type_K : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0, GGML_TYPE_Q5_1, GGML_TYPE_Q5_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0, GGML_TYPE_IQ4_NL}) {
                         test_cases.emplace_back(new test_lightning_indexer(128, nh, kv, bs, ns, nm, type_K));
@@ -14111,8 +14202,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_flash_attn_ext(40, 40, 16, {1, 1}, 5776, 5776, false, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
 
     // Sparse flash attention (n_kv_max hint) decode across KV depths.
-    // Shapes: 576/512 DeepSeek MLA, 512/512 DeepSeek-V4/GLM-5.2, 256/256 gqa12 Qwen QSA.
+    // Shapes: 576/512 DeepSeek MLA, 512/512 DeepSeek-V4/GLM-5.2, 256/256 gqa12 Qwen QSA, 128/128 gqa12 Kolibri-1.1.
     for (int64_t kv : {4096, 16384, 32768}) {
+        test_cases.emplace_back(new test_flash_attn_ext(128, 128, 4, {12, 1}, kv, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false, 2184));
         test_cases.emplace_back(new test_flash_attn_ext(512, 512, 1, { 8, 1}, kv, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false,  512));
         test_cases.emplace_back(new test_flash_attn_ext(576, 512, 1, {16, 1}, kv, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, true,   512));
         test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {12, 1}, kv, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false, 2048));
@@ -14388,7 +14480,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     // lightning_indexer
     for (int kv : { 256, 4096, 65536 }) {
         for (int bs : { 1, 512, 2048 }) {
-            for (int nh : { 4, 32, 64 }) {
+            for (int nh : { 4, 12, 32, 64 }) {
                 for (int ns : { 1, 4 }) {
                     for (ggml_type type_K : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0, GGML_TYPE_Q5_1, GGML_TYPE_Q5_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0, GGML_TYPE_IQ4_NL}) {
                         test_cases.emplace_back(new test_lightning_indexer(128, nh, kv, bs, ns, ns, type_K));

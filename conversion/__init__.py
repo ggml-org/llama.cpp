@@ -160,6 +160,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "JinaEmbeddingsV5Model": "bert",
     "K2HorizonForCausalLM": "k2_horizon",
     "Kolibri1ForCausalLM": "kolibri1",
+    "Kolibri1_1ForCausalLM": "kolibri1",
     "KORMoForCausalLM": "qwen",
     "KimiK25ForConditionalGeneration": "deepseek",
     "KimiK3ForConditionalGeneration": "kimi_k3",

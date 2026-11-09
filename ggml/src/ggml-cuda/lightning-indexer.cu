@@ -501,6 +501,67 @@ static __global__ void lightning_indexer_kernel_tile(
         );                                                                                  \
     } else
 
+// too few heads for a wmma tile: the tile kernel shares the keys across the tokens of a batch,
+// a batch smaller than a token tile uses the vector kernel
+template <int64_t N_HEAD>
+static void lightning_indexer_few_heads(ggml_backend_cuda_context & ctx,
+        const ggml_tensor * q, const ggml_tensor * k, const ggml_tensor * w, const ggml_tensor * m, ggml_tensor * dst) {
+    GGML_TENSOR_LOCALS(size_t,  nbq,  q, nb)
+    GGML_TENSOR_LOCALS(size_t,  nbk,  k, nb)
+    GGML_TENSOR_LOCALS(size_t,  nbw,  w, nb)
+    GGML_TENSOR_LOCALS(int64_t, nem,  m, ne)
+    GGML_TENSOR_LOCALS(size_t,  nbm,  m, nb)
+    GGML_TENSOR_LOCALS(size_t,  nb, dst, nb)
+
+    const int n_batch  = q->ne[2];
+    const int n_stream = q->ne[3];
+    const int n_kv     = k->ne[2];
+
+    const float *   q_d = (const float *)   q->data;
+    const char  *   k_d = (const char  *)   k->data;
+    const float *   w_d = (const float *)   w->data;
+    const half  *   m_d = (const half  *)   m->data;
+    float       * dst_d = (      float *) dst->data;
+
+    if (n_batch >= LIGHTNING_INDEXER_TILE_TOKENS) {
+        constexpr int WARPS_PER_BLOCK = 8;
+        constexpr int K_VECS_PER_BLOCK = 64;
+
+        dim3 block(32, WARPS_PER_BLOCK);
+        int num_kv_blocks = (n_kv + (K_VECS_PER_BLOCK) - 1) / (K_VECS_PER_BLOCK);
+        int num_batch_blocks = (n_batch + LIGHTNING_INDEXER_TILE_TOKENS - 1) / LIGHTNING_INDEXER_TILE_TOKENS;
+        dim3 grid(num_kv_blocks, num_batch_blocks, n_stream);
+
+        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_tile, 128, N_HEAD, k, GGML_TYPE_F16)
+        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_tile, 128, N_HEAD, k, GGML_TYPE_Q4_0)
+        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_tile, 128, N_HEAD, k, GGML_TYPE_Q4_1)
+        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_tile, 128, N_HEAD, k, GGML_TYPE_Q5_0)
+        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_tile, 128, N_HEAD, k, GGML_TYPE_Q5_1)
+        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_tile, 128, N_HEAD, k, GGML_TYPE_Q8_0)
+        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_tile, 128, N_HEAD, k, GGML_TYPE_BF16)
+        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_tile, 128, N_HEAD, k, GGML_TYPE_F32)
+        GGML_ABORT("fatal error");
+    } else {
+        constexpr int K_VECS_PER_WARP = 8;
+        constexpr int WARPS_PER_BLOCK = 8;
+        constexpr int K_VECS_PER_BLOCK = K_VECS_PER_WARP * WARPS_PER_BLOCK;
+
+        dim3 block(32, WARPS_PER_BLOCK);
+        int num_kv_blocks = (n_kv + (K_VECS_PER_BLOCK) - 1) / (K_VECS_PER_BLOCK);
+        dim3 grid(num_kv_blocks, n_batch, n_stream);
+
+        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, N_HEAD, k, GGML_TYPE_F16)
+        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, N_HEAD, k, GGML_TYPE_Q4_0)
+        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, N_HEAD, k, GGML_TYPE_Q4_1)
+        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, N_HEAD, k, GGML_TYPE_Q5_0)
+        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, N_HEAD, k, GGML_TYPE_Q5_1)
+        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, N_HEAD, k, GGML_TYPE_Q8_0)
+        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, N_HEAD, k, GGML_TYPE_BF16)
+        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, N_HEAD, k, GGML_TYPE_F32)
+        GGML_ABORT("fatal error");
+    }
+}
+
 void ggml_cuda_lightning_indexer(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * q = dst->src[0];
     const ggml_tensor * k = dst->src[1];
@@ -622,44 +683,10 @@ void ggml_cuda_lightning_indexer(ggml_backend_cuda_context & ctx, ggml_tensor * 
             LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 32, k, GGML_TYPE_F32)
             GGML_ABORT("fatal error");
         }
-    } else if (n_embd == 128 && n_head == 4 && n_batch >= LIGHTNING_INDEXER_TILE_TOKENS) {
-        // too few heads for a wmma tile, the tile kernel shares the keys across the tokens
-        constexpr int WARPS_PER_BLOCK = 8;
-        constexpr int K_VECS_PER_BLOCK = 64;
-
-        dim3 block(32, WARPS_PER_BLOCK);
-        int num_kv_blocks = (n_kv + (K_VECS_PER_BLOCK) - 1) / (K_VECS_PER_BLOCK);
-        int num_batch_blocks = (n_batch + LIGHTNING_INDEXER_TILE_TOKENS - 1) / LIGHTNING_INDEXER_TILE_TOKENS;
-        dim3 grid(num_kv_blocks, num_batch_blocks, n_stream);
-
-        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_tile, 128, 4, k, GGML_TYPE_F16)
-        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_tile, 128, 4, k, GGML_TYPE_Q4_0)
-        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_tile, 128, 4, k, GGML_TYPE_Q4_1)
-        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_tile, 128, 4, k, GGML_TYPE_Q5_0)
-        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_tile, 128, 4, k, GGML_TYPE_Q5_1)
-        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_tile, 128, 4, k, GGML_TYPE_Q8_0)
-        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_tile, 128, 4, k, GGML_TYPE_BF16)
-        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_tile, 128, 4, k, GGML_TYPE_F32)
-        GGML_ABORT("fatal error");
     } else if (n_embd == 128 && n_head == 4) {
-        // a batch smaller than a token tile, use vector kernel
-        constexpr int K_VECS_PER_WARP = 8;
-        constexpr int WARPS_PER_BLOCK = 8;
-        constexpr int K_VECS_PER_BLOCK = K_VECS_PER_WARP * WARPS_PER_BLOCK;
-
-        dim3 block(32, WARPS_PER_BLOCK);
-        int num_kv_blocks = (n_kv + (K_VECS_PER_BLOCK) - 1) / (K_VECS_PER_BLOCK);
-        dim3 grid(num_kv_blocks, n_batch, n_stream);
-
-        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 4, k, GGML_TYPE_F16)
-        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 4, k, GGML_TYPE_Q4_0)
-        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 4, k, GGML_TYPE_Q4_1)
-        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 4, k, GGML_TYPE_Q5_0)
-        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 4, k, GGML_TYPE_Q5_1)
-        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 4, k, GGML_TYPE_Q8_0)
-        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 4, k, GGML_TYPE_BF16)
-        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 4, k, GGML_TYPE_F32)
-        GGML_ABORT("fatal error");
+        lightning_indexer_few_heads<4>(ctx, q, k, w, m, dst);
+    } else if (n_embd == 128 && n_head == 12) {
+        lightning_indexer_few_heads<12>(ctx, q, k, w, m, dst);
     } else {
         GGML_ABORT("fatal error");
     }
@@ -688,7 +715,7 @@ bool ggml_cuda_lightning_indexer_supported(int device, const ggml_tensor * dst) 
         return false;
     }
 
-    if (neq1 != 64 && neq1 != 32 && neq1 != 4) {
+    if (neq1 != 64 && neq1 != 32 && neq1 != 12 && neq1 != 4) {
         return false;
     }
 

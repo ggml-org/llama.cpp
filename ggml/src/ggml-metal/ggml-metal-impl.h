@@ -1356,6 +1356,19 @@ typedef struct {
 } ggml_metal_kargs_top_k_mask;
 
 typedef struct {
+    int64_t  n_groups;
+    int64_t  n_groups_row;
+    int64_t  ne01;
+    int64_t  ne02;
+    uint64_t nb01;
+    uint64_t nb02;
+    uint64_t nb03;
+    uint64_t nb1;
+    uint64_t nb2;
+    uint64_t nb3;
+} ggml_metal_kargs_round_nvfp4;
+
+typedef struct {
     int32_t  n_tokens;
     int32_t  n_iter;
     uint64_t nb_m0;

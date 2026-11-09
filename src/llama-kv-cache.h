@@ -423,6 +423,9 @@ public:
     ggml_type type_k() const;
     ggml_type type_v() const;
 
+    // cells of the stream holding seq_id, e.g., to fill inputs that depend on the position of each cell
+    const llama_kv_cells & get_cells(llama_seq_id seq_id) const;
+
     // get views of the current state of the cache
     ggml_tensor * get_k(ggml_context * ctx, int32_t il) const;
     ggml_tensor * get_v(ggml_context * ctx, int32_t il) const;

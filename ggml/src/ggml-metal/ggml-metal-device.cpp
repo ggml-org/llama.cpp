@@ -548,6 +548,19 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_top_k_mask(
     return res;
 }
 
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_round_nvfp4(ggml_metal_library_t lib, const ggml_tensor * op) {
+    GGML_ASSERT(op->op == GGML_OP_ROUND_NVFP4);
+
+    const char * name = "kernel_round_nvfp4_f32";
+
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+    if (!res.pipeline) {
+        res = ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
+    }
+
+    return res;
+}
+
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_dsv4_hc(ggml_metal_library_t lib, const ggml_tensor * op) {
     char name[256];
     const char * base = nullptr;

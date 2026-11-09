@@ -1895,6 +1895,11 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 (op->src[2] == NULL || op->src[2]->type == GGML_TYPE_F32) &&
                 (op->src[3] == NULL || op->src[3]->type == GGML_TYPE_I32) &&
                 (op->src[4] == NULL || op->src[4]->type == GGML_TYPE_I32);
+        case GGML_OP_ROUND_NVFP4:
+            return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
+                op->src[0]->nb[0] == ggml_type_size(op->src[0]->type) &&
+                op->nb[0] == ggml_type_size(op->type) &&
+                op->src[0]->ne[0] % 16 == 0;
         case GGML_OP_SSM_SCAN:
             return has_simdgroup_reduction;
         case GGML_OP_SSM_CONV:

@@ -1002,3 +1002,56 @@ typedef decltype(kernel_top_k_mask<float, float4>) kernel_top_k_mask_f_t;
 
 template [[host_name("kernel_top_k_mask_f16")]] kernel kernel_top_k_mask_h_t kernel_top_k_mask<half,  half4>;
 template [[host_name("kernel_top_k_mask_f32")]] kernel kernel_top_k_mask_f_t kernel_top_k_mask<float, float4>;
+
+// nearest E4M3 value of x > 0, ties to even, saturated at 448
+static inline float round_nvfp4_e4m3(float x) {
+    int e;
+    frexp(x, e);
+    // spacing of the 3 mantissa bits, subnormals below 2^-6 share the spacing 2^-9
+    const int s = max(e - 4, -9);
+    return min(ldexp(rint(ldexp(x, -s)), s), 448.0f);
+}
+
+// nearest E2M1 value of x, ties to even, saturated at 6
+static inline float round_nvfp4_e2m1(float x) {
+    const float ax = fabs(x);
+    const float r = ax <= 0.25f ? 0.0f : ax <  0.75f ? 0.5f : ax <= 1.25f ? 1.0f : ax <  1.75f ? 1.5f :
+                    ax <= 2.5f  ? 2.0f : ax <  3.5f  ? 3.0f : ax <= 5.0f  ? 4.0f : 6.0f;
+    return copysign(r, x);
+}
+
+// one thread per group of 16 values
+kernel void kernel_round_nvfp4_f32(
+        constant ggml_metal_kargs_round_nvfp4 & args,
+        device const char * src0,
+        device       char * dst,
+        uint tgpig[[threadgroup_position_in_grid]],
+        uint tpitg[[thread_position_in_threadgroup]],
+        uint   ntg[[threads_per_threadgroup]]) {
+    const int64_t ig = (int64_t) tgpig*ntg + tpitg;
+    if (ig >= args.n_groups) {
+        return;
+    }
+
+    const int64_t i0 = (ig % args.n_groups_row)*16;
+    const int64_t ir = ig / args.n_groups_row;
+    const int64_t i1 = ir % args.ne01;
+    const int64_t i2 = (ir / args.ne01) % args.ne02;
+    const int64_t i3 = ir / (args.ne01*args.ne02);
+
+    device const float * x = (device const float *) (src0 + i1*args.nb01 + i2*args.nb02 + i3*args.nb03) + i0;
+    device       float * y = (device       float *) (dst  + i1*args.nb1  + i2*args.nb2  + i3*args.nb3)  + i0;
+
+    float v[16];
+    float amax = 0.0f;
+    FOR_UNROLL (short j = 0; j < 16; ++j) {
+        v[j] = x[j];
+        amax = max(amax, fabs(v[j]));
+    }
+
+    // precise divisions: fast math would move values across the rounding ties
+    const float scale = round_nvfp4_e4m3(max(precise::divide(amax, 6.0f), 0.001953125f));
+    FOR_UNROLL (short j = 0; j < 16; ++j) {
+        y[j] = round_nvfp4_e2m1(precise::divide(v[j], scale))*scale;
+    }
+}

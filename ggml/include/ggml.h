@@ -413,6 +413,7 @@ extern "C" {
         GGML_OP_DSV4_HC_PRE,
         GGML_OP_DSV4_HC_POST,
         GGML_OP_TOP_K_MASK,
+        GGML_OP_ROUND_NVFP4,
 
         GGML_OP_UNARY,
 
@@ -2513,6 +2514,17 @@ extern "C" {
             struct ggml_tensor  * score,
             struct ggml_tensor  * blocks,
             struct ggml_tensor  * extra);
+
+    // round every group of 16 consecutive values of a row to NVFP4 and back to f32:
+    //   scale = e4m3(max(amax/6, 2^-9)), value = scale*e2m1(x/scale)
+    // both conversions round to nearest even and saturate, like the CUDA __nv_cvt_* intrinsics
+    //
+    // a:   [ne0, ne1, ne2, ne3] f32, ne0 % 16 == 0, contiguous rows
+    // res: [ne0, ne1, ne2, ne3] f32
+    //
+    GGML_API struct ggml_tensor * ggml_round_nvfp4(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
 
     // custom operators
 

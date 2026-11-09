@@ -11742,6 +11742,48 @@ void ggml_compute_forward_top_k_mask(
     }
 }
 
+// ggml_compute_forward_round_nvfp4
+
+// nearest E2M1 value of |x|, ties to even, saturated at 6
+static float round_e2m1(float x) {
+    const float ax = fabsf(x);
+    const float r = ax <= 0.25f ? 0.0f : ax <  0.75f ? 0.5f : ax <= 1.25f ? 1.0f : ax <  1.75f ? 1.5f :
+                    ax <= 2.5f  ? 2.0f : ax <  3.5f  ? 3.0f : ax <= 5.0f  ? 4.0f : 6.0f;
+    return copysignf(r, x);
+}
+
+void ggml_compute_forward_round_nvfp4(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(src0->nb[0] == sizeof(float) && dst->nb[0] == sizeof(float));
+
+    const int64_t ne0    = src0->ne[0];
+    const int64_t n_rows = ggml_nrows(src0);
+
+    for (int64_t ir = params->ith; ir < n_rows; ir += params->nth) {
+        const int64_t i1 = ir % src0->ne[1];
+        const int64_t i2 = (ir / src0->ne[1]) % src0->ne[2];
+        const int64_t i3 = ir / (src0->ne[1]*src0->ne[2]);
+
+        const float * x = (const float *) ((const char *) src0->data + i1*src0->nb[1] + i2*src0->nb[2] + i3*src0->nb[3]);
+        float       * y = (float       *) ((char       *)  dst->data + i1* dst->nb[1] + i2* dst->nb[2] + i3* dst->nb[3]);
+
+        for (int64_t i0 = 0; i0 < ne0; i0 += 16) {
+            float amax = 0.0f;
+            for (int j = 0; j < 16; ++j) {
+                amax = fmaxf(amax, fabsf(x[i0 + j]));
+            }
+            const float scale = ggml_f8_e4m3_to_fp32(ggml_fp32_to_f8_e4m3(fmaxf(amax / 6.0f, 0.001953125f)));
+            for (int j = 0; j < 16; ++j) {
+                y[i0 + j] = round_e2m1(x[i0 + j] / scale) * scale;
+            }
+        }
+    }
+}
+
 // ggml_compute_forward_rwkv_wkv7
 
 static void ggml_compute_forward_rwkv_wkv7_f32(
