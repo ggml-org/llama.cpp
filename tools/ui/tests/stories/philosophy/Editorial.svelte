@@ -125,6 +125,19 @@
 		font: 0.85em var(--mono);
 	}
 
+	/* a footnote marker, and the note it points to: small and muted, under the figure */
+	.editorial :global(sup) {
+		color: var(--art-cinder);
+		font: 500 0.75em var(--mono);
+		line-height: 0;
+	}
+
+	.editorial > :global(.note) {
+		color: var(--fg-muted);
+		font-size: 14px;
+		line-height: 1.5;
+	}
+
 	.editorial > :global(ul) {
 		padding-left: 1.2em;
 		list-style: disc;
