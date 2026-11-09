@@ -720,7 +720,7 @@
 	.ctx.hero {
 		min-height: 220px;
 	}
-	/* the cover's proportions: 3:1, the icon 20.8% of its height (520 of 2500), so the type is 7.1% of its width */
+	/* the cover's proportions: 3:1, the icon about 16% of its height, so the type is 5.4% of its width */
 	.ctx.banner {
 		justify-content: center;
 		aspect-ratio: 3;
@@ -728,7 +728,7 @@
 		border-radius: 0;
 	}
 	.ctx.banner .mark {
-		font-size: 7.1cqw;
+		font-size: 5.4cqw;
 	}
 	.ctx.banner.dark {
 		background: #111111;
