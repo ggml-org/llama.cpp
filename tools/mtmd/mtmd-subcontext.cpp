@@ -1483,14 +1483,14 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
                     // positions and mask are derived in-graph from the persisted counter
                     set_gen_state_in();
                 } else {
-                    // flow matching starts from gaussian noise, std = sqrt(temp)
+                    // flow matching starts from gaussian noise, std = sqrt(temp), no noise at temp 0
                     ggml_tensor * t = get_inp_tensor("inp_noise");
-                    // Config.default_temperature, for a caller that does not set one
-                    const float temp = params->temp > 0.0f ? params->temp : 0.7f;
-                    std::normal_distribution<float> dist(0.0f, std::sqrt(temp));
-                    std::vector<float> noise(ggml_nelements(t));
-                    for (auto & v : noise) {
-                        v = dist(params->gen_state->rng);
+                    std::vector<float> noise(ggml_nelements(t), 0.0f);
+                    if (params->temp > 0.0f) {
+                        std::normal_distribution<float> dist(0.0f, std::sqrt(params->temp));
+                        for (auto & v : noise) {
+                            v = dist(params->gen_state->rng);
+                        }
                     }
                     set_input_f32("inp_noise", noise);
                 }

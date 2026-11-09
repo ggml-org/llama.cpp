@@ -32,6 +32,7 @@ export { contextStatsStore } from './chat/context-stats.svelte';
 export { agenticStore } from './agentic/index.svelte';
 
 // CONVERSATIONS
+export { sidebarDragStore } from './sidebar-drag.svelte';
 export { conversationsStore } from './conversations/index.svelte';
 
 // MCP

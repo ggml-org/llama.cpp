@@ -36,6 +36,7 @@ typedef const void * (*get_adreno_bin_kernel_func_t)(
 #include <inttypes.h>
 #include <string.h>
 
+#include <climits>
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
