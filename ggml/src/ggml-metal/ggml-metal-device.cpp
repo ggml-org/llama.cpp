@@ -475,7 +475,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_soft_max(ggml_me
         res = ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
     }
 
-    res.smem = 32*sizeof(float);
+    res.smem = ggml_metal_device_get_props(ggml_metal_library_get_device(lib))->simd_width*sizeof(float);
 
     return res;
 }
@@ -755,11 +755,12 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_gated_delta_net(
     // replay of pending tokens, see ggml_gated_delta_net_ext
     const bool replay = op->src[6] != nullptr;
 
-    const int nsg = op->src[2]->ne[0]/32;
+    const int nw  = ggml_metal_device_get_props(ggml_metal_library_get_device(lib))->simd_width;
+    const int nsg = op->src[2]->ne[0]/nw;
 
     GGML_ASSERT(op->src[5]->type == GGML_TYPE_F32);
     GGML_ASSERT(op->ne[0] == ne20 * ne21);
-    GGML_ASSERT(ne20 % 32 == 0);
+    GGML_ASSERT(ne20 % nw == 0);
 
     snprintf(base, 256, "kernel_gated_delta_net_%s_%d", ggml_type_name(op->src[0]->type), nsg);
     snprintf(name, 256, "%s_ne20=%d_ne30=%d_K=%d_rep=%d", base, ne20, ne30, K, replay ? 1 : 0);
@@ -1074,7 +1075,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv(ggml_meta
                     nsg = std::min(4, (ne00 + 127) / 128);
                     nr0 = 2;
                     nr1 = 1;
-                    smem = 32*sizeof(float)*nr0;
+                    smem = ggml_metal_device_get_props(ggml_metal_library_get_device(lib))->simd_width*sizeof(float)*nr0;
                     suffix = ne00 % 4 == 0 ? "_4" : "";
                 }
             } break;
@@ -1387,7 +1388,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_id(ggml_m
                 nsg = std::min(4, (ne00 + 127) / 128);
                 nr0 = 2;
                 nr1 = 1;
-                smem = 32*sizeof(float)*nr0;
+                smem = ggml_metal_device_get_props(ggml_metal_library_get_device(lib))->simd_width*sizeof(float)*nr0;
                 suffix = ne00 % 4 == 0 ? "_4" : "";
             } break;
         case GGML_TYPE_Q1_0:
@@ -1800,6 +1801,63 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_topk_moe(
     return res;
 }
 
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_topk_moe_grouped(ggml_metal_library_t lib) {
+    const char * name = "kernel_topk_moe_grouped_f32";
+
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+    if (!res.pipeline) {
+        ggml_metal_cv_t cv = ggml_metal_cv_init();
+
+        res = ggml_metal_library_compile_pipeline(lib, name, name, cv);
+
+        ggml_metal_cv_free(cv);
+    }
+
+    return res;
+}
+
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mhc_route(ggml_metal_library_t lib) {
+    const char * name = "kernel_mhc_route";
+
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+    if (!res.pipeline) {
+        ggml_metal_cv_t cv = ggml_metal_cv_init();
+        res = ggml_metal_library_compile_pipeline(lib, name, name, cv);
+        ggml_metal_cv_free(cv);
+    }
+
+    return res;
+}
+
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mhc_merge(ggml_metal_library_t lib) {
+    const char * name = "kernel_mhc_merge";
+
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+    if (!res.pipeline) {
+        ggml_metal_cv_t cv = ggml_metal_cv_init();
+        res = ggml_metal_library_compile_pipeline(lib, name, name, cv);
+        ggml_metal_cv_free(cv);
+    }
+
+    return res;
+}
+
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mat_tiled(ggml_metal_library_t lib, enum ggml_type tsrc0) {
+    char name[128];
+    snprintf(name, sizeof(name), "kernel_mul_mat_%s_tiled", ggml_type_name(tsrc0));
+
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+    if (!res.pipeline) {
+        ggml_metal_cv_t cv = ggml_metal_cv_init();
+
+        res = ggml_metal_library_compile_pipeline(lib, name, name, cv);
+
+        ggml_metal_cv_free(cv);
+    }
+
+    return res;
+}
+
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_moe_reduce(ggml_metal_library_t lib, int32_t n_expert_used) {
     char base[256];
     char name[256];
@@ -2092,7 +2150,8 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_v
     const char * type = use_kv_f16 ? "f16" : ggml_type_name(op->src[1]->type);
 
     char qne_suffix[16] = {0};
-    if (!(nqpsg == 1 && ne == ggml_metal_tuning::fa_vec_baseline_ne(dk, dv))) {
+    const int nw = ggml_metal_device_get_props(ggml_metal_library_get_device(lib))->simd_width;
+    if (!(nqpsg == 1 && ne == ggml_metal_tuning::fa_vec_baseline_ne(dk, dv, nw))) {
         snprintf(qne_suffix, sizeof(qne_suffix), "_q%d_ne%d", nqpsg, ne);
     }
 
@@ -2356,7 +2415,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_norm(ggml_metal_
         ggml_metal_cv_free(cv);
     }
 
-    res.smem = 32*sizeof(float);
+    res.smem = ggml_metal_device_get_props(ggml_metal_library_get_device(lib))->simd_width*sizeof(float);
 
     return res;
 }
