@@ -352,13 +352,12 @@ static size_t gbnf_escape_length(const std::string & pattern, size_t pos) {
     return 2 + n_hex;
 }
 
+static constexpr size_t ANY_ORDER_MAX_TRACKED_KEYS = 8;
+
 class common_chat_schema_converter {
 private:
     friend std::string build_grammar(const std::function<void(const common_grammar_builder &)> & cb, const common_grammar_options & options);
     bool _dotall;
-    size_t _max_object_states;
-    size_t _max_total_states;
-    size_t _states_used = 0;
     std::map<std::string, std::string> _rules;
     std::unordered_set<std::string> _refs_being_resolved;
     std::vector<std::string> _errors;
@@ -781,39 +780,81 @@ private:
             return "\"{\" space \"}\"";
         }
 
-        const std::string prefix = name + (name.empty() ? "" : "-");
-        const size_t n_required = required_props.size();
-        std::vector<std::string> keys = required_props;
-        std::string additional_kv;
-        for (const auto & prop_name : optional_props) {
-            if (prop_name == "*") {
-                additional_kv = prop_kv_rule_names[prop_name];
-            } else {
-                keys.push_back(prop_name);
-            }
+        if (!additional_properties) {
+            return _build_any_order_object_rule(required_props, optional_props, prop_kv_rule_names, name);
         }
 
-        // a tracked key is seen at most once, which needs one state per subset of tracked keys;
-        // the rest share a counter, so they may come in any order but at most keys.size() - n_tracked times in total
-        // past the grammar-wide total, later objects still get a small budget
-        const size_t remaining = _max_total_states > _states_used ? _max_total_states - _states_used : 0;
-        const size_t budget = std::min(_max_object_states, std::max(_max_object_states / 16, remaining));
-        const size_t n_keys = keys.size();
-        size_t n_tracked = 0;
-        for (size_t k = std::min<size_t>(n_keys, 20); k > 0; k--) {
-            if ((size_t(1) << k) * (n_keys - k + 1) <= budget) {
-                n_tracked = k;
-                break;
+        std::string rule = "\"{\" space ";
+        for (size_t i = 0; i < required_props.size(); i++) {
+            if (i > 0) {
+                rule += " \",\" space ";
             }
+            rule += prop_kv_rule_names[required_props[i]];
         }
+
+        if (!optional_props.empty()) {
+            rule += " (";
+            if (!required_props.empty()) {
+                rule += " \",\" space ( ";
+            }
+
+            std::function<std::string(const std::vector<std::string> &, bool)> get_recursive_refs = [&](const std::vector<std::string> & ks, bool first_is_optional) {
+                std::string res;
+                if (ks.empty()) {
+                    return res;
+                }
+                const std::string& k = ks[0];
+                std::string kv_rule_name = prop_kv_rule_names[k];
+                std::string comma_ref = "( \",\" space " + kv_rule_name + " )";
+                if (first_is_optional) {
+                    res = comma_ref + (k == "*" ? "*" : "?");
+                } else {
+                    res = kv_rule_name + (k == "*" ? " " + comma_ref + "*" : "");
+                }
+                if (ks.size() > 1) {
+                    res += " " + _add_rule(
+                        name + (name.empty() ? "" : "-") + k + "-rest",
+                        get_recursive_refs(std::vector<std::string>(ks.begin() + 1, ks.end()), true)
+                    );
+                }
+                return res;
+            };
+
+            for (size_t i = 0; i < optional_props.size(); i++) {
+                if (i > 0) {
+                    rule += " | ";
+                }
+                rule += get_recursive_refs(std::vector<std::string>(optional_props.begin() + i, optional_props.end()), false);
+            }
+            if (!required_props.empty()) {
+                rule += " )";
+            }
+            rule += " )?";
+        }
+
+        rule += " space \"}\"";
+
+        return rule;
+    }
+
+
+    // keys in any order: the first ANY_ORDER_MAX_TRACKED_KEYS are seen at most once (one state per subset),
+    // the rest share a counter, so they may come in any order but cannot repeat without bound
+    std::string _build_any_order_object_rule(
+        const std::vector<std::string> & required_props,
+        const std::vector<std::string> & optional_props,
+        std::unordered_map<std::string, std::string> & prop_kv_rule_names,
+        const std::string & name)
+    {
+        const std::string prefix = name + (name.empty() ? "" : "-");
+        std::vector<std::string> keys = required_props;
+        keys.insert(keys.end(), optional_props.begin(), optional_props.end());
+        const size_t n_required = required_props.size();
+        const size_t n_keys = keys.size();
         // too many required keys to track as a set: they keep the declared order
-        const bool ordered_required = n_required > n_tracked;
-        if (ordered_required) {
-            n_tracked = n_required;
-        }
-        const std::vector<std::string> tracked(keys.begin(), keys.begin() + n_tracked);
+        const bool ordered_required = n_required > ANY_ORDER_MAX_TRACKED_KEYS;
+        const size_t n_tracked = ordered_required ? n_required : std::min(n_keys, ANY_ORDER_MAX_TRACKED_KEYS);
         const size_t n_untracked = n_keys - n_tracked;
-        _states_used += (ordered_required ? n_required + 1 : size_t(1) << n_tracked) * (n_untracked + 1);
         std::vector<std::string> untracked_kvs;
         for (size_t i = n_tracked; i < n_keys; i++) {
             untracked_kvs.push_back(prop_kv_rule_names[keys[i]]);
@@ -839,18 +880,15 @@ private:
                 const std::string r = rest(seen_after, n_untracked_after);
                 alts.push_back(kv + (r.empty() ? "" : " " + r));
             };
-            if (!additional_kv.empty()) {
-                add(additional_kv, seen, n_untracked_seen);
-            }
             if (ordered_required) {
                 if (seen < n_required) {
-                    add(prop_kv_rule_names[tracked[seen]], seen + 1, n_untracked_seen);
+                    add(prop_kv_rule_names[keys[seen]], seen + 1, n_untracked_seen);
                 }
             } else {
                 for (size_t i = 0; i < n_tracked; i++) {
                     const size_t bit = size_t(1) << i;
                     if (!(seen & bit)) {
-                        add(prop_kv_rule_names[tracked[i]], seen | bit, n_untracked_seen);
+                        add(prop_kv_rule_names[keys[i]], seen | bit, n_untracked_seen);
                     }
                 }
             }
@@ -866,7 +904,7 @@ private:
             if (it != rest_rules.end()) {
                 return it->second;
             }
-            if (additional_kv.empty() && all_tracked(seen) && n_untracked_seen == n_untracked) {
+            if (all_tracked(seen) && n_untracked_seen == n_untracked) {
                 return rest_rules[key] = "";
             }
             const std::string rule_name = _reserve_rule_name(prefix + "rest-" + std::to_string(seen) + (n_untracked == 0 ? "" : "-" + std::to_string(n_untracked_seen)));
@@ -901,7 +939,7 @@ private:
 
 public:
     explicit common_chat_schema_converter(const common_grammar_options & options)
-        : _dotall(options.dotall), _max_object_states(options.max_object_states), _max_total_states(options.max_total_states) {
+        : _dotall(options.dotall) {
         _rules["space"] = SPACE_RULE;
     }
 

@@ -192,14 +192,6 @@ static void test_schema(const std::string & test_desc, const std::string & schem
     test(test_desc + ". Schema: " + schema_str, json_schema_to_grammar(json::parse(schema_str), true), passing_strings, failing_strings);
 }
 
-static void test_schema_with_budget(const std::string & test_desc, const std::string & schema_str, size_t max_object_states, size_t max_total_states, const std::vector<std::string> & passing_strings, const std::vector<std::string> & failing_strings) {
-    auto doc = common_chat_schema_from_json(json::parse(schema_str));
-    common_grammar_options options;
-    options.max_object_states = max_object_states;
-    options.max_total_states = max_total_states;
-    test(test_desc + ". Schema: " + schema_str, build_grammar([&](const common_grammar_builder & builder) { builder.add_schema("root", *doc.root); }, options), passing_strings, failing_strings);
-}
-
 static void test_simple_grammar() {
     test_schema(
         "min 0",
@@ -1352,12 +1344,13 @@ static void test_json_schema() {
             // "By default, providing additional properties is valid"
             R"""({ "number": 1600, "street_name": "Pennsylvania", "street_type":"Avenue", "direction":"NW"})""",
             R"""({ "number": 1600, "street_name": "Pennsylvania", "street_type": "Avenue" })""",
-            R"""({ "street_name": "Pennsylvania", "number": 1600, "street_type":"Avenue"})""",
         },
         // Failing strings
         {
             // Change datatype from number to string
             R"""({ "number": "1600", "street_name": "Pennsylvania", "street_type":"Avenue"})""",
+            // Reorder properties
+            R"""({ "street_name": "Pennsylvania", "number": 1600, "street_type":"Avenue"})""",
         }
     );
 
@@ -1514,36 +1507,44 @@ static void test_json_schema() {
 
 static void test_json_schema_any_order() {
     test_schema(
-        "properties in any order: 14 properties, 2 required, additional allowed",
+        "closed object: properties in any order, each at most once",
         R"""({
             "type": "object",
-            "properties": {
-                "name": {"type": "string"}, "column_type": {"type": "string"}, "drop": {"type": "boolean"},
-                "expr": {"type": "string"}, "dtype": {"type": "string"}, "sampler_type": {"type": "string"},
-                "params": {"type": "object"}, "code_lang": {"type": "string"}, "scores": {"type": "array"},
-                "output_format": {"type": "object"}, "prompt": {"type": "string"}, "model_alias": {"type": "string"},
-                "system_prompt": {"type": "string"}, "extract_reasoning_content": {"type": "boolean"}
-            },
-            "required": ["name", "column_type"],
-            "additionalProperties": true
+            "properties": {"name": {"type": "string"}, "expr": {"type": "string"}, "dtype": {"type": "string"}, "drop": {"type": "boolean"}},
+            "required": ["name"],
+            "additionalProperties": false
         })""",
         {
-            R"""({"name": "n", "column_type": "expression", "expr": "0", "dtype": "int"})""",
-            R"""({"name": "n", "column_type": "expression", "dtype": "int", "expr": "0"})""",
-            R"""({"column_type": "llm-text", "model_alias": "m", "prompt": "p", "name": "q"})""",
-            R"""({"name": "n", "column_type": "x", "extract_reasoning_content": true, "other": 1})""",
+            R"""({"name": "n", "expr": "0", "dtype": "int"})""",
+            R"""({"dtype": "int", "drop": true, "name": "n", "expr": "0"})""",
+            R"""({"name": "n"})""",
         },
         {
-            R"""({"name": "n"})""",
-            R"""({"name": "n", "name": "m", "column_type": "x"})""",
-            R"""({"name": "n", "column_type": "x", "prompt": 1})""",
-            R"""({"name": "n", "column_type": "x", "expr": "0", "dtype": "int", "expr": "0"})""",
-            R"""({"name": "n", "column_type": "x",})""",
-            R"""({"name": "n", "column_type": "x", "prompt": "p", "prompt": "p", "prompt": "p", "prompt": "p", "prompt": "p", "prompt": "p", "prompt": "p", "prompt": "p"})""",
+            R"""({"expr": "0"})""",
+            R"""({"name": "n", "dtype": "int", "dtype": "int"})""",
+            R"""({"name": "n", "other": 1})""",
+            R"""({"name": "n", "drop": "yes"})""",
+            R"""({"name": "n",})""",
         });
 
     test_schema(
-        "10 properties: every key at most once, in any order",
+        "open object: properties keep the declared order",
+        R"""({
+            "type": "object",
+            "properties": {"name": {"type": "string"}, "expr": {"type": "string"}, "dtype": {"type": "string"}},
+            "required": ["name"],
+            "additionalProperties": true
+        })""",
+        {
+            R"""({"name": "n", "expr": "0", "dtype": "int"})""",
+            R"""({"name": "n", "dtype": "int", "other": 1})""",
+        },
+        {
+            R"""({"dtype": "int", "name": "n"})""",
+        });
+
+    test_schema(
+        "10 properties: the first 8 at most once, the other 2 counted",
         R"""({
             "type": "object",
             "properties": {
@@ -1556,73 +1557,30 @@ static void test_json_schema_any_order() {
         })""",
         {
             R"""({"brand": "b", "sku": "s", "rating": 4.9, "title": "t", "warranty_years": 2, "tags": [], "price": 1})""",
+            R"""({"warranty_years": 2, "rating": 4.9, "tags": [], "in_stock": true, "weight_kg": 1, "color": "c", "brand": "b", "price": 1, "title": "t", "sku": "s"})""",
         },
         {
-            R"""({"sku": "s", "title": "t", "price": 1, "rating": 4.9, "rating": 4.9})""",
             R"""({"sku": "s", "title": "t", "price": 1, "tags": [], "in_stock": true, "tags": []})""",
-        });
-
-    test_schema_with_budget(
-        "over budget: keys past the tracked ones are counted, so a repeated key cannot loop",
-        R"""({"type": "object", "properties": {"a": {}, "b": {}, "c": {}, "d": {}, "e": {}}})""",
-        16, 16,
-        {
-            R"""({"e": 1, "d": 1, "c": 1, "b": 1, "a": 1})""",
-        },
-        {
-            R"""({"a": 1, "a": 1})""",
-            R"""({"e": 1, "e": 1, "e": 1, "e": 1})""",
+            R"""({"sku": "s", "title": "t", "price": 1, "rating": 4.9, "warranty_years": 2, "rating": 4.9})""",
+            R"""({"sku": "s", "title": "t"})""",
         });
 
     test_schema(
-        "6 required properties and 1 optional, each at most once; additional keys may repeat",
+        "more than 8 required properties keep the declared order",
         R"""({
             "type": "object",
-            "properties": {"a": {}, "b": {}, "c": {}, "d": {}, "e": {}, "f": {}, "g": {}},
-            "required": ["a", "b", "c", "d", "e", "f"],
-            "additionalProperties": true
+            "properties": {"a": {}, "b": {}, "c": {}, "d": {}, "e": {}, "f": {}, "g": {}, "h": {}, "i": {}, "j": {}},
+            "required": ["a", "b", "c", "d", "e", "f", "g", "h", "i"],
+            "additionalProperties": false
         })""",
         {
-            R"""({"f": 1, "e": 1, "d": 1, "c": 1, "b": 1, "a": 1})""",
-            R"""({"g": 1, "a": 1, "b": 1, "x": 1, "c": 1, "d": 1, "e": 1, "f": 1, "x": 2})""",
+            R"""({"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1, "h": 1, "i": 1})""",
+            R"""({"j": 1, "a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1, "h": 1, "i": 1})""",
         },
         {
-            R"""({"a": 1, "b": 1, "c": 1, "d": 1, "e": 1})""",
-            R"""({"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1, "a": 1})""",
-            R"""({"g": 1, "a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1})""",
-        });
-
-    test_schema_with_budget(
-        "too many required properties to track keep the declared order",
-        R"""({"type": "object", "properties": {"a": {}, "b": {}, "c": {}, "d": {}, "e": {}}, "required": ["a", "b", "c", "d"]})""",
-        16, 16,
-        {
-            R"""({"a": 1, "b": 1, "c": 1, "d": 1})""",
-            R"""({"e": 1, "a": 1, "b": 1, "c": 1, "d": 1})""",
-        },
-        {
-            R"""({"b": 1, "a": 1, "c": 1, "d": 1})""",
-            R"""({"a": 1, "b": 1, "c": 1})""",
-            R"""({"e": 1, "a": 1, "b": 1, "c": 1, "d": 1, "e": 1})""",
-        });
-
-    test_schema_with_budget(
-        "past the grammar-wide total, later objects only count their keys",
-        R"""({
-            "type": "object",
-            "properties": {
-                "x": {"type": "object", "properties": {"a": {}, "b": {}, "c": {}}},
-                "y": {"type": "object", "properties": {"a": {}, "b": {}, "c": {}}}
-            },
-            "required": ["x", "y"]
-        })""",
-        16, 10,
-        {
-            R"""({"x": {"c": 1, "b": 1, "a": 1}, "y": {"c": 1, "a": 1, "c": 1}})""",
-        },
-        {
-            R"""({"x": {"a": 1, "a": 1}, "y": {}})""",
-            R"""({"x": {}, "y": {"a": 1, "b": 1, "c": 1, "a": 1}})""",
+            R"""({"b": 1, "a": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1, "h": 1, "i": 1})""",
+            R"""({"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1, "h": 1})""",
+            R"""({"j": 1, "a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1, "h": 1, "i": 1, "j": 1})""",
         });
 
     test_schema(
@@ -1632,22 +1590,19 @@ static void test_json_schema_any_order() {
             "properties": {
                 "rest-0": {"type": "object", "properties": {"x": {"type": "integer"}}, "required": ["x"]},
                 "rest-1": {"type": "object", "properties": {"y": {"type": "string"}}, "required": ["y"]},
-                "free-kv": {"type": "object", "properties": {"z": {"type": "boolean"}}, "required": ["z"]}
+                "untracked-kv": {"type": "object", "properties": {"z": {"type": "boolean"}}, "required": ["z"]}
             },
-            "required": ["rest-1"],
-            "additionalProperties": true
+            "required": ["rest-1"]
         })""",
         {
-            R"""({"free-kv": {"z": true}, "rest-1": {"y": "s"}, "rest-0": {"x": 1}})""",
-            R"""({"other": 1, "rest-0": {"x": 1}, "other": 2, "rest-1": {"y": "s"}})""",
+            R"""({"untracked-kv": {"z": true}, "rest-1": {"y": "s"}, "rest-0": {"x": 1}})""",
         },
         {
             R"""({"rest-0": {"x": 1}})""",
             R"""({"rest-1": {"x": 1}})""",
-            R"""({"rest-1": {"y": "s"}, "free-kv": {"y": "s"}})""",
+            R"""({"rest-1": {"y": "s"}, "untracked-kv": {"y": "s"}})""",
             R"""({"rest-1": {"y": "s"}, "rest-1": {"y": "t"}})""",
         });
-
 }
 
 int main() {
