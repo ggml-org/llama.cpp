@@ -19,6 +19,8 @@
 	import { onDestroy, onMount } from 'svelte';
 
 	interface Props {
+		/** The editor's accessible name; the placeholder when not given. */
+		ariaLabel?: string;
 		class?: string;
 		disabled?: boolean;
 		/** Widgets for the raw text of the block being edited, see MarkdownLivePreviewOptions. */
@@ -31,6 +33,7 @@
 	}
 
 	let {
+		ariaLabel,
 		class: className = '',
 		disabled = false,
 		editingWidgets,
@@ -88,6 +91,8 @@
 					editable.of(EditorView.editable.of(!disabled)),
 					EditorView.lineWrapping,
 					placeholderExt(placeholder),
+					// the content is a textbox with no name of its own otherwise
+					EditorView.contentAttributes.of({ 'aria-label': ariaLabel || placeholder }),
 					// Only report edits made by the user; syncs from `value` carry no user event
 					EditorView.updateListener.of((update) => {
 						const fromUser = update.transactions.some(
