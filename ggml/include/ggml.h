@@ -606,6 +606,8 @@ extern "C" {
 
         GGML_OP_GLU,
 
+        GGML_OP_SLEEP,
+
         GGML_OP_COUNT,
     };
 
@@ -2869,6 +2871,12 @@ extern "C" {
             ggml_custom_op_t      fun,
             int                   n_tasks,
             void                * userdata);
+
+    // Busy-wait operator for scheduling and backend testing.
+    GGML_API struct ggml_tensor * ggml_sleep(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,   // wait after this tensor has executed, return value is simply a full view of this tensor
+            int32_t               us); // amount of time to wait in microseconds
 
     // loss function
 
