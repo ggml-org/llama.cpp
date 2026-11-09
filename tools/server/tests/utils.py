@@ -696,6 +696,20 @@ class ServerPreset:
         return server
 
     @staticmethod
+    def tinylfm3omni() -> ServerProcess:
+        server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
+        # mmproj is already provided by HF registry API
+        server.model_hf_file = None
+        server.model_hf_repo = "ggml-org/tinyLFM3-Omni-for-testing-gguf:Q2_K"
+        server.model_alias = "tinylfm3omni"
+        server.n_ctx = 1024
+        server.n_batch = 512
+        server.n_slots = 1
+        server.seed = 42
+        return server
+
+    @staticmethod
     def router() -> ServerProcess:
         server = ServerProcess()
         server.offline = True # will be downloaded by load_all()

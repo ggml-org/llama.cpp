@@ -737,6 +737,42 @@ json convert_transcriptions_to_chatcmpl(
     return chatcmpl_body;
 }
 
+json convert_speech_to_tts(const json & inp_body) {
+    json tts_body = inp_body; // copy all fields
+
+    // a custom voice is given as {"id": "..."}
+    if (inp_body.contains("voice") && inp_body.at("voice").is_object()) {
+        tts_body["voice"] = json_value(inp_body.at("voice"), "id", std::string());
+    }
+
+    // the default of the OpenAI API is mp3, we have no encoder for it
+    const std::string response_format = json_value(inp_body, "response_format", std::string("wav"));
+    if (response_format == "pcm") {
+        tts_body["response_format"] = "pcm16"; // "pcm" is float32 in /tts
+    } else if (response_format == "wav") {
+        tts_body["response_format"] = "wav";
+    } else {
+        throw std::invalid_argument("Only 'wav' and 'pcm' response_format are supported for speech");
+    }
+
+    const std::string stream_format = json_value(inp_body, "stream_format", std::string());
+    if (stream_format == "audio") {
+        tts_body["stream"] = true;
+    } else if (!stream_format.empty()) {
+        throw std::invalid_argument("Only 'audio' stream_format is supported for speech");
+    }
+
+    if (json_value(inp_body, "speed", 1.0) != 1.0) {
+        throw std::invalid_argument("'speed' is not supported for speech");
+    }
+
+    if (!json_value(inp_body, "instructions", std::string()).empty()) {
+        SRV_WRN("%s", "'instructions' is not supported for speech and is ignored\n");
+    }
+
+    return tts_body;
+}
+
 llama_tokens server_chat_get_asr_prompt(const llama_model * model) {
     const char * src = llama_model_chat_template(model, "asr");
     if (src == nullptr) {
