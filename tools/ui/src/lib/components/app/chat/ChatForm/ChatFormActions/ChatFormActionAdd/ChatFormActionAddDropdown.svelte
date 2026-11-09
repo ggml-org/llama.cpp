@@ -15,6 +15,7 @@
 	import { getChatFormActionsContext } from '$lib/contexts';
 	import { AttachmentAction, AttachmentItemEnabledWhen } from '$lib/enums';
 	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
+	import { serverStore } from '$lib/stores';
 
 	interface Props {
 		class?: string;
@@ -137,6 +138,7 @@
 					suppressCloseAutoFocus = true;
 					chatFormActions.onSystemPromptClick?.();
 				}}
+				disabled={Boolean(serverStore.props?.system_prompt)}
 			>
 				<MessageSquare class={ICON_CLASS_DEFAULT} />
 
