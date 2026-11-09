@@ -4992,6 +4992,14 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
                 return &q4_0_4x4_q8_0;
             }
         }
+#if defined(__aarch64__)
+        // no dotprod (e.g. Cortex-A53): AArch64 only, on 32-bit ARM the 4x8 kernels run scalar code
+        if (ggml_cpu_has_neon() && !ggml_cpu_has_dotprod()) {
+            if (cur->ne[1] % 4 == 0) {
+                return &q4_0_4x8_q8_0;
+            }
+        }
+#endif
         if (ggml_cpu_has_vxe()) {
             if (cur->ne[1] % 4 == 0) {
                 return &q4_0_4x4_q8_0;
@@ -5118,6 +5126,14 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
                 return &q8_0_4x4_q8_0;
             }
         }
+#if defined(__aarch64__)
+        // no dotprod (e.g. Cortex-A53): AArch64 only, on 32-bit ARM the 4x8 kernels run scalar code
+        if (ggml_cpu_has_neon() && !ggml_cpu_has_dotprod()) {
+            if (cur->ne[1] % 4 == 0) {
+                return &q8_0_4x8_q8_0;
+            }
+        }
+#endif
         if (ggml_cpu_has_riscv_v()) {
             #if defined __riscv_zvfh
             switch (__riscv_vlenb() * 8) {
