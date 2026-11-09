@@ -501,8 +501,8 @@ struct case_nan_clear : ctx_test {
     bool uses_fill() const override { return false; }
 
     std::string skip_reason(model_run & mr) const override {
-        if (!llama_model_is_recurrent(mr.model) || llama_model_is_hybrid(mr.model)) {
-            return "a NaN fill would also reach the attention cache";
+        if (!llama_model_is_recurrent(mr.model) && !llama_model_is_hybrid(mr.model)) {
+            return "the model has no recurrent state";
         }
 
         return ctx_test::skip_reason(mr);
@@ -525,11 +525,9 @@ struct case_nan_clear : ctx_test {
         const float * logits = llama_get_logits_ith(ctx.get(), -1);
         CTX_REQUIRE(logits != nullptr, "missing logits");
 
-        bool finite = true;
         for (int i = 0; i < n_vocab; ++i) {
-            finite = finite && std::isfinite(logits[i]);
+            CTX_REQUIRE(std::isfinite(logits[i]), "non-finite logit after the state was cleared");
         }
-        CTX_REQUIRE(finite, "non-finite logit after the state was cleared");
 
         return case_result::pass();
     }
