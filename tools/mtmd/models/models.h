@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../clip-graph.h"
+#include "../mtmd-graph.h"
 
 #include <functional>
 #include <map>
@@ -13,32 +13,32 @@
  * We encourage human contributors to ensure the quality and reliability of the codebase.
  */
 
-struct clip_graph_siglip : clip_graph {
-    clip_graph_siglip(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_siglip : mtmd_graph {
+    mtmd_graph_siglip(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_gemma4v : clip_graph {
-    clip_graph_gemma4v(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_gemma4v : mtmd_graph {
+    mtmd_graph_gemma4v(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
     ggml_tensor * build_mm(ggml_tensor * w, ggml_tensor * x) const override;
     bool support_batch() const override { return true; }
 };
 
-struct clip_graph_gemma4uv : clip_graph {
-    clip_graph_gemma4uv(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_gemma4uv : mtmd_graph {
+    mtmd_graph_gemma4uv(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_nemotron_transcribe : clip_graph {
-    const clip_enc_state * state; // nullptr during warmup
-    clip_graph_nemotron_transcribe(clip_ctx * ctx, const clip_image_f32 & img, const clip_enc_state * state)
-        : clip_graph(ctx, img), state(state) {}
+struct mtmd_graph_nemotron_transcribe : mtmd_graph {
+    const mtmd_subctx_enc_state * state; // nullptr during warmup
+    mtmd_graph_nemotron_transcribe(mtmd_subcontext * ctx, const mtmd_image_f32 & img, const mtmd_subctx_enc_state * state)
+        : mtmd_graph(ctx, img), state(state) {}
     ggml_cgraph * build() override;
     ggml_tensor * build_spk_encoder(ggml_tensor * cur, ggml_tensor * pos);
 
     // one recording: encodes its windows in turn, carrying the speaker state between them
-    static bool encode_windows(clip_ctx * ctx, const clip_model & model, clip_encode_params * params);
+    static bool encode_windows(mtmd_subcontext * ctx, const mtmd_model & model, mtmd_subctx_encode_params * params);
 
     // NeMo ParallelExpertEncoder online defaults, in output frames: 40 s windows with 4 s of context on each side
     static constexpr int window_core  = 500;
@@ -46,49 +46,54 @@ struct clip_graph_nemotron_transcribe : clip_graph {
     static constexpr int window_right = 50;
 };
 
-struct clip_graph_pixtral : clip_graph {
-    clip_graph_pixtral(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_pixtral : mtmd_graph {
+    mtmd_graph_pixtral(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_deepseek4v : clip_graph {
-    clip_graph_deepseek4v(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_deepseek4v : mtmd_graph {
+    mtmd_graph_deepseek4v(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_qwen2vl : clip_graph {
-    clip_graph_qwen2vl(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_qwen2vl : mtmd_graph {
+    mtmd_graph_qwen2vl(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_qwen3vl : clip_graph_qwen2vl {
-    clip_graph_qwen3vl(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph_qwen2vl(ctx, img) {}
+struct mtmd_graph_qwen3vl : mtmd_graph_qwen2vl {
+    mtmd_graph_qwen3vl(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph_qwen2vl(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_sensenova_u1 : clip_graph {
-    clip_graph_sensenova_u1(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_magevl : mtmd_graph {
+    mtmd_graph_magevl(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_lfm3vl : clip_graph {
-    clip_graph_lfm3vl(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_sensenova_u1 : mtmd_graph {
+    mtmd_graph_sensenova_u1(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_ling3vl : clip_graph_qwen3vl {
-    clip_graph_ling3vl(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph_qwen3vl(ctx, img) {}
+struct mtmd_graph_lfm3vl : mtmd_graph {
+    mtmd_graph_lfm3vl(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_minimax_m3 : clip_graph {
-    clip_graph_minimax_m3(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_ling3vl : mtmd_graph_qwen3vl {
+    mtmd_graph_ling3vl(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph_qwen3vl(ctx, img) {}
+    ggml_cgraph * build() override;
+};
+
+struct mtmd_graph_minimax_m3 : mtmd_graph {
+    mtmd_graph_minimax_m3(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
     ggml_tensor * apply_rope(ggml_tensor * x, ggml_tensor * pos_h, ggml_tensor * pos_w);
 };
 
-struct clip_graph_mimovl : clip_graph {
-    clip_graph_mimovl(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_mimovl : mtmd_graph {
+    mtmd_graph_mimovl(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
     // Force F32 mat-mul accumulation to avoid F16 overflow in the FFN down-proj
     // when the mmproj is stored in F16 (the source weights are BF16; downcasting
@@ -96,119 +101,119 @@ struct clip_graph_mimovl : clip_graph {
     ggml_tensor * build_mm(ggml_tensor * w, ggml_tensor * x) const override;
 };
 
-struct clip_graph_step3vl : clip_graph {
-    clip_graph_step3vl(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_step3vl : mtmd_graph {
+    mtmd_graph_step3vl(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_youtuvl : clip_graph {
-    clip_graph_youtuvl(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_youtuvl : mtmd_graph {
+    mtmd_graph_youtuvl(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_yasa2 : clip_graph {
-    clip_graph_yasa2(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_yasa2 : mtmd_graph {
+    mtmd_graph_yasa2(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 
     ggml_tensor * layer_norm_channels(ggml_tensor * inp, ggml_tensor * w, ggml_tensor * b, float eps = 1e-6f);
     ggml_tensor * convnext_grn(ggml_tensor * inp, ggml_tensor * w, ggml_tensor * b);
 };
 
-struct clip_graph_minicpmv : clip_graph {
-    clip_graph_minicpmv(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_minicpmv : mtmd_graph {
+    mtmd_graph_minicpmv(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_minicpmv4_6 : clip_graph {
-    clip_graph_minicpmv4_6(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_minicpmv4_6 : mtmd_graph {
+    mtmd_graph_minicpmv4_6(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_internvl : clip_graph {
-    clip_graph_internvl(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_internvl : mtmd_graph {
+    mtmd_graph_internvl(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
     bool support_batch() const override { return true; }
 };
 
-struct clip_graph_nemotron_v2_vl : clip_graph {
-    clip_graph_nemotron_v2_vl(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_nemotron_v2_vl : mtmd_graph {
+    mtmd_graph_nemotron_v2_vl(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_nemotron_omni : clip_graph {
-    clip_graph_nemotron_omni(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_nemotron_omni : mtmd_graph {
+    mtmd_graph_nemotron_omni(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
     ggml_tensor * build_inp_with_temporal_merge();
 };
 
-struct clip_graph_llama4 : clip_graph {
-    clip_graph_llama4(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_llama4 : mtmd_graph {
+    mtmd_graph_llama4(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_kimivl : clip_graph {
-    clip_graph_kimivl(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_kimivl : mtmd_graph {
+    mtmd_graph_kimivl(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_paddleocr : clip_graph {
-    clip_graph_paddleocr(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_paddleocr : mtmd_graph {
+    mtmd_graph_paddleocr(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_dotsocr : clip_graph {
-    clip_graph_dotsocr(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_dotsocr : mtmd_graph {
+    mtmd_graph_dotsocr(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_dots3note_a : clip_graph {
-    clip_graph_dots3note_a(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_dots3note_a : mtmd_graph {
+    mtmd_graph_dots3note_a(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_cogvlm : clip_graph {
-    clip_graph_cogvlm(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_cogvlm : mtmd_graph {
+    mtmd_graph_cogvlm(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_llava : clip_graph {
-    clip_graph_llava(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_llava : mtmd_graph {
+    mtmd_graph_llava(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_whisper_enc : clip_graph {
-    clip_graph_whisper_enc(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_whisper_enc : mtmd_graph {
+    mtmd_graph_whisper_enc(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
 // causal whisper-like encoder with a sliding window KV cache (voxtral realtime)
-struct clip_graph_voxtral_rt : clip_graph {
-    clip_enc_state * state; // nullptr during warmup, the cache is then a graph input
-    clip_graph_voxtral_rt(clip_ctx * ctx, const clip_image_f32 & img, clip_enc_state * state) : clip_graph(ctx, img), state(state) {}
+struct mtmd_graph_voxtral_rt : mtmd_graph {
+    mtmd_subctx_enc_state * state; // nullptr during warmup, the cache is then a graph input
+    mtmd_graph_voxtral_rt(mtmd_subcontext * ctx, const mtmd_image_f32 & img, mtmd_subctx_enc_state * state) : mtmd_graph(ctx, img), state(state) {}
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_deepseekocr : clip_graph {
-    clip_graph_deepseekocr(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_deepseekocr : mtmd_graph {
+    mtmd_graph_deepseekocr(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
     ggml_tensor * build_sam(ggml_tensor * inp); // build the SAM model
     bool support_batch() const override { return true; }
 };
 
-struct clip_graph_deepseekocr2 : clip_graph_deepseekocr {
-    clip_graph_deepseekocr2(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph_deepseekocr(ctx, img) {}
+struct mtmd_graph_deepseekocr2 : mtmd_graph_deepseekocr {
+    mtmd_graph_deepseekocr2(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph_deepseekocr(ctx, img) {}
     ggml_cgraph * build() override; // reuses build_sam() from base
     bool support_batch() const override { return true; }
 };
 
-struct clip_graph_conformer : clip_graph {
-    clip_graph_conformer(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_conformer : mtmd_graph {
+    mtmd_graph_conformer(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
 // builders shared by the chatterbox gen and spkenc graphs, defined in chatterbox-gen.cpp
-struct clip_graph_chatterbox_base : clip_graph {
-    using clip_graph::clip_graph;
+struct mtmd_graph_chatterbox_base : mtmd_graph {
+    using mtmd_graph::mtmd_graph;
 
   protected:
     ggml_tensor * cbx_linear(ggml_tensor * w, ggml_tensor * b, ggml_tensor * x) const;
@@ -218,79 +223,79 @@ struct clip_graph_chatterbox_base : clip_graph {
                                  int pad, int dil) const;
 };
 
-struct clip_graph_chatterbox_spkenc : clip_graph_chatterbox_base {
-    clip_graph_chatterbox_spkenc(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph_chatterbox_base(ctx, img) {}
+struct mtmd_graph_chatterbox_spkenc : mtmd_graph_chatterbox_base {
+    mtmd_graph_chatterbox_spkenc(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph_chatterbox_base(ctx, img) {}
     ggml_cgraph * build() override;
 
   private:
-    ggml_tensor * bn1d(const clip_chatterbox::bn & n, ggml_tensor * x);
-    ggml_tensor * bn2d_relu(const clip_chatterbox::bn & n, ggml_tensor * x);
-    ggml_tensor * res2d(const clip_chatterbox::spk_res2d & r, ggml_tensor * x, int stride);
-    ggml_tensor * cam_layer(const clip_chatterbox::spk_cam_layer & l, ggml_tensor * x, int dil, ggml_tensor * segfix);
+    ggml_tensor * bn1d(const mtmd_chatterbox::bn & n, ggml_tensor * x);
+    ggml_tensor * bn2d_relu(const mtmd_chatterbox::bn & n, ggml_tensor * x);
+    ggml_tensor * res2d(const mtmd_chatterbox::spk_res2d & r, ggml_tensor * x, int stride);
+    ggml_tensor * cam_layer(const mtmd_chatterbox::spk_cam_layer & l, ggml_tensor * x, int dil, ggml_tensor * segfix);
 };
 
-struct clip_graph_chatterbox : clip_graph_chatterbox_base {
-    clip_gen_process_type gen_process = CLIP_GEN_PROCESS_GEN_CODE;
+struct mtmd_graph_chatterbox : mtmd_graph_chatterbox_base {
+    mtmd_subctx_gen_process gen_process = MTMD_SUBCTX_GEN_PROCESS_GEN_CODE;
     int n_tokens = 0;
     int n_prompt_mel  = 0;
     int vocode_n_mel  = 0;
     int vocode_n_stft = 0;
-    clip_graph_chatterbox(clip_ctx * ctx, const clip_image_f32 & img, clip_gen_process_type gen_process, int n_tokens,
+    mtmd_graph_chatterbox(mtmd_subcontext * ctx, const mtmd_image_f32 & img, mtmd_subctx_gen_process gen_process, int n_tokens,
                           int n_prompt_mel, int vocode_n_mel, int vocode_n_stft)
-        : clip_graph_chatterbox_base(ctx, img), gen_process(gen_process), n_tokens(n_tokens), n_prompt_mel(n_prompt_mel),
+        : mtmd_graph_chatterbox_base(ctx, img), gen_process(gen_process), n_tokens(n_tokens), n_prompt_mel(n_prompt_mel),
           vocode_n_mel(vocode_n_mel), vocode_n_stft(vocode_n_stft) {}
     ggml_cgraph * build() override;
 
   private:
-    ggml_tensor * enc_layer(const clip_chatterbox::enc_layer & l, ggml_tensor * x, ggml_tensor * pos, int T);
-    ggml_tensor * causal_block(const clip_chatterbox::causal_block & b, ggml_tensor * x);
-    ggml_tensor * resnet(const clip_chatterbox::resnet & r, ggml_tensor * x, ggml_tensor * temb);
-    ggml_tensor * tfm_block(const clip_chatterbox::tfm_block & b, ggml_tensor * x);
+    ggml_tensor * enc_layer(const mtmd_chatterbox::enc_layer & l, ggml_tensor * x, ggml_tensor * pos, int T);
+    ggml_tensor * causal_block(const mtmd_chatterbox::causal_block & b, ggml_tensor * x);
+    ggml_tensor * resnet(const mtmd_chatterbox::resnet & r, ggml_tensor * x, ggml_tensor * temb);
+    ggml_tensor * tfm_block(const mtmd_chatterbox::tfm_block & b, ggml_tensor * x);
     ggml_tensor * estimator(ggml_tensor * x_noise, ggml_tensor * mu, ggml_tensor * spks,
                             ggml_tensor * cond, ggml_tensor * temb, int T);
-    ggml_tensor * hift_resblock(const clip_chatterbox::hift_res & r, ggml_tensor * x);
+    ggml_tensor * hift_resblock(const mtmd_chatterbox::hift_res & r, ggml_tensor * x);
     ggml_cgraph * build_s3tok(int T);
     ggml_cgraph * build_vocoder(int n_mel, int n_stft);
 };
 
-struct clip_graph_lfm3a : clip_graph {
-    clip_graph_lfm3a(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_lfm3a : mtmd_graph {
+    mtmd_graph_lfm3a(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_granite_speech : clip_graph {
-    clip_graph_granite_speech(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_granite_speech : mtmd_graph {
+    mtmd_graph_granite_speech(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_muse_spark_audio : clip_graph {
-    clip_graph_muse_spark_audio(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_muse_spark_audio : mtmd_graph {
+    mtmd_graph_muse_spark_audio(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_gemma4a : clip_graph {
-    clip_graph_gemma4a(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_gemma4a : mtmd_graph {
+    mtmd_graph_gemma4a(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
     ggml_tensor * build_mm(ggml_tensor * w, ggml_tensor * x) const override;
 };
 
-struct clip_graph_gemma4ua : clip_graph {
-    clip_graph_gemma4ua(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_gemma4ua : mtmd_graph {
+    mtmd_graph_gemma4ua(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_glm4v : clip_graph {
-    clip_graph_glm4v(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_glm4v : mtmd_graph {
+    mtmd_graph_glm4v(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_hunyuanvl : clip_graph {
-    clip_graph_hunyuanvl(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_hunyuanvl : mtmd_graph {
+    mtmd_graph_hunyuanvl(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_mobilenetv5 : clip_graph {
-    clip_graph_mobilenetv5(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_mobilenetv5 : mtmd_graph {
+    mtmd_graph_mobilenetv5(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 
     ggml_tensor * rms_norm_2d(
@@ -322,34 +327,34 @@ struct clip_graph_mobilenetv5 : clip_graph {
         const mobilenetv5_block & block);
 };
 
-struct clip_graph_qwen3a : clip_graph {
-    clip_graph_qwen3a(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_qwen3a : mtmd_graph {
+    mtmd_graph_qwen3a(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_mimo_audio : clip_graph {
-    clip_graph_mimo_audio(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_mimo_audio : mtmd_graph {
+    mtmd_graph_mimo_audio(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_qwen3tts_spkenc : clip_graph {
-    clip_graph_qwen3tts_spkenc(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_qwen3tts_spkenc : mtmd_graph {
+    mtmd_graph_qwen3tts_spkenc(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 
     ggml_tensor * conv1d_same(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int dilation) const;
-    ggml_tensor * res2net(ggml_tensor * x, const clip_layer & layer, int dilation, int scale) const;
-    ggml_tensor * se_block(ggml_tensor * x, const clip_layer & layer) const;
-    ggml_tensor * se_res2net_block(ggml_tensor * x, const clip_layer & layer, int dilation, int scale) const;
+    ggml_tensor * res2net(ggml_tensor * x, const mtmd_layer & layer, int dilation, int scale) const;
+    ggml_tensor * se_block(ggml_tensor * x, const mtmd_layer & layer) const;
+    ggml_tensor * se_res2net_block(ggml_tensor * x, const mtmd_layer & layer, int dilation, int scale) const;
     ggml_tensor * attentive_stats_pool(ggml_tensor * x) const;
 };
 
-struct clip_graph_qwen3tts_gen : clip_graph {
-    clip_graph_qwen3tts_gen(clip_ctx * ctx, const clip_image_f32 & img, clip_gen_process_type gen_process, int top_k, float top_p)
-        : clip_graph(ctx, img), gen_process(gen_process), top_k(top_k), top_p(top_p) {}
+struct mtmd_graph_qwen3tts_gen : mtmd_graph {
+    mtmd_graph_qwen3tts_gen(mtmd_subcontext * ctx, const mtmd_image_f32 & img, mtmd_subctx_gen_process gen_process, int top_k, float top_p)
+        : mtmd_graph(ctx, img), gen_process(gen_process), top_k(top_k), top_p(top_p) {}
     ggml_cgraph * build() override;
 
     // which sub-graph build() constructs, fixed at graph-build time
-    clip_gen_process_type gen_process;
+    mtmd_subctx_gen_process gen_process;
 
     // sampling params, fixed at graph-build time (GEN_CODE only)
     int   top_k;
@@ -359,9 +364,9 @@ struct clip_graph_qwen3tts_gen : clip_graph {
     // code_gen: backbone hidden state + sampled code0 -> 16 RVQ codes
     // MTP-style code predictor, one token per codebook
     //
-    struct code_gen : clip_graph {
-        code_gen(const clip_graph & parent, int top_k, float top_p)
-            : clip_graph(parent), top_k(top_k), top_p(top_p) {}
+    struct code_gen : mtmd_graph {
+        code_gen(const mtmd_graph & parent, int top_k, float top_p)
+            : mtmd_graph(parent), top_k(top_k), top_p(top_p) {}
         ggml_cgraph * build() override { GGML_ABORT("call prefill()/step() instead"); }
 
         int   top_k;
@@ -376,7 +381,7 @@ struct clip_graph_qwen3tts_gen : clip_graph {
 
         ggml_tensor * layer_forward(
                 ggml_tensor * cur,
-                const clip_layer & layer,
+                const mtmd_layer & layer,
                 ggml_tensor * inp_pos,
                 ggml_tensor * kq_mask,
                 ggml_tensor *& k_cache_layer,
@@ -404,8 +409,8 @@ struct clip_graph_qwen3tts_gen : clip_graph {
     //
     // code2wav: RVQ codes -> raw PCM (quantizer + pre_conv + pre_transformer + upsample + DAC).
     //
-    struct code2wav : clip_graph {
-        code2wav(const clip_graph & parent) : clip_graph(parent) {}
+    struct code2wav : mtmd_graph {
+        code2wav(const mtmd_graph & parent) : mtmd_graph(parent) {}
         ggml_cgraph * build() override { GGML_ABORT("call decode() instead"); }
 
         // state_in: previous call's persisted state, by slot name (see list_c2w_state_slots())
@@ -420,9 +425,9 @@ struct clip_graph_qwen3tts_gen : clip_graph {
         ggml_tensor * snake(ggml_tensor * x, ggml_tensor * alpha, ggml_tensor * beta) const;
 
         ggml_tensor * quant_decode(ggml_tensor * inp_codes) const;
-        ggml_tensor * tfm_layer_forward(ggml_tensor * cur, const clip_layer & layer, int il) const;
-        ggml_tensor * convnext_block(ggml_tensor * x, const clip_code2wav::upsample_block & blk, const std::string & state_prefix) const;
-        ggml_tensor * dac_res_unit(ggml_tensor * x, const clip_code2wav::dac_res & res, int dilation, const std::string & state_name) const;
+        ggml_tensor * tfm_layer_forward(ggml_tensor * cur, const mtmd_layer & layer, int il) const;
+        ggml_tensor * convnext_block(ggml_tensor * x, const mtmd_code2wav::upsample_block & blk, const std::string & state_prefix) const;
+        ggml_tensor * dac_res_unit(ggml_tensor * x, const mtmd_code2wav::dac_res & res, int dilation, const std::string & state_name) const;
 
         // drama3: erf GELU in ConvNeXt, not the tanh approximation
         bool gelu_erf = false;
@@ -436,8 +441,8 @@ struct clip_graph_qwen3tts_gen : clip_graph {
 // pocket-tts: SEANet convolution stack, shared by the voice encoder and the mimi decoder.
 // stateless unless state_in is populated: convs then pad instead of carrying left-context.
 //
-struct clip_graph_pockettts_seanet : clip_graph {
-    clip_graph_pockettts_seanet(const clip_graph & parent) : clip_graph(parent) {}
+struct mtmd_graph_pockettts_seanet : mtmd_graph {
+    mtmd_graph_pockettts_seanet(const mtmd_graph & parent) : mtmd_graph(parent) {}
     ggml_cgraph * build() override { GGML_ABORT("call encode()/decode() instead"); }
 
     // per-call streaming state, keyed by slot name (see list_pockettts_state_slots)
@@ -448,7 +453,7 @@ struct clip_graph_pockettts_seanet : clip_graph {
                          bool pad_replicate = false, const std::string & state_name = "") const;
     ggml_tensor * conv_transpose1d(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int stride,
                                    const std::string & state_name = "") const;
-    ggml_tensor * res_unit(ggml_tensor * x, const clip_seanet::stage & stage, int dilation,
+    ggml_tensor * res_unit(ggml_tensor * x, const mtmd_seanet::stage & stage, int dilation,
                            const std::string & state_prefix = "") const;
 
     // x: [T, C] -> [T / hop, dim]
@@ -458,11 +463,11 @@ struct clip_graph_pockettts_seanet : clip_graph {
 };
 
 // mimi encoder + speaker_proj: reference waveform -> voice conditioning rows
-struct clip_graph_pockettts_spkenc : clip_graph {
-    clip_graph_pockettts_spkenc(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_pockettts_spkenc : mtmd_graph {
+    mtmd_graph_pockettts_spkenc(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 
-    ggml_tensor * tfm_layer_forward(ggml_tensor * cur, const clip_layer & layer, ggml_tensor * inp_pos, ggml_tensor * kq_mask, int il) const;
+    ggml_tensor * tfm_layer_forward(ggml_tensor * cur, const mtmd_layer & layer, ggml_tensor * inp_pos, ggml_tensor * kq_mask, int il) const;
 };
 
 //
@@ -470,18 +475,18 @@ struct clip_graph_pockettts_spkenc : clip_graph {
 // GEN_CODE = flow-matching decoder + end-of-speech head, one latent per call
 // GEN_WAV  = mimi decoder, a window of latents -> PCM
 //
-struct clip_graph_pockettts_gen : clip_graph {
-    clip_graph_pockettts_gen(clip_ctx * ctx, const clip_image_f32 & img, clip_gen_process_type gen_process, int n_step, int n_frames)
-        : clip_graph(ctx, img), gen_process(gen_process), n_step(n_step), n_frames(n_frames) {}
+struct mtmd_graph_pockettts_gen : mtmd_graph {
+    mtmd_graph_pockettts_gen(mtmd_subcontext * ctx, const mtmd_image_f32 & img, mtmd_subctx_gen_process gen_process, int n_step, int n_frames)
+        : mtmd_graph(ctx, img), gen_process(gen_process), n_step(n_step), n_frames(n_frames) {}
     ggml_cgraph * build() override;
 
-    clip_gen_process_type gen_process;
+    mtmd_subctx_gen_process gen_process;
     int n_step;   // lsd_decode steps, fixed at graph-build time
     int n_frames; // GEN_WAV only: number of latents to decode
 
     // AdaLN modulation: x * (1 + scale) + shift
     ggml_tensor * modulate(ggml_tensor * x, ggml_tensor * shift, ggml_tensor * scale) const;
-    ggml_tensor * time_embed(const clip_flow_net::time_embd & te, float t) const;
+    ggml_tensor * time_embed(const mtmd_flow_net::time_embd & te, float t) const;
     ggml_tensor * flow_forward(ggml_tensor * cond, ggml_tensor * x, float s, float t) const;
 };
 
@@ -492,30 +497,30 @@ struct c2w_state_slot {
     int64_t     ne1;
     bool        in_place = false; // graph writes the slot directly, no state_in/state_out copy
 };
-std::vector<c2w_state_slot> list_c2w_state_slots(const clip_hparams & hparams, const clip_model & model);
+std::vector<c2w_state_slot> list_c2w_state_slots(const mtmd_hparams & hparams, const mtmd_model & model);
 
 // drama3: tower KV slots, then list_c2w_state_slots()
-std::vector<c2w_state_slot> list_drama3_state_slots(const clip_hparams & hparams, const clip_model & model);
+std::vector<c2w_state_slot> list_drama3_state_slots(const mtmd_hparams & hparams, const mtmd_model & model);
 
 // same, for the streaming mimi decoder (pocket-tts GEN_WAV)
-std::vector<c2w_state_slot> list_pockettts_state_slots(const clip_hparams & hparams, const clip_model & model);
+std::vector<c2w_state_slot> list_pockettts_state_slots(const mtmd_hparams & hparams, const mtmd_model & model);
 
 //
 // drama3 generation:
 // GEN_CODE = one codebook tower row, each layer attends over the whole sequence (KV in gen state)
 // GEN_WAV  = Fish DAC decoder, frames -> PCM
 //
-struct clip_graph_drama3_gen : clip_graph {
-    clip_graph_drama3_gen(clip_ctx * ctx, const clip_image_f32 & img, clip_gen_process_type gen_process, clip_gen_state * gen_state,
+struct mtmd_graph_drama3_gen : mtmd_graph {
+    mtmd_graph_drama3_gen(mtmd_subcontext * ctx, const mtmd_image_f32 & img, mtmd_subctx_gen_process gen_process, mtmd_subctx_gen_state * gen_state,
                           int n_frames, int top_k, float top_p, float temp)
-        : clip_graph(ctx, img), gen_process(gen_process), gen_state(gen_state), n_frames(n_frames), top_k(top_k), top_p(top_p), temp(temp) {}
+        : mtmd_graph(ctx, img), gen_process(gen_process), gen_state(gen_state), n_frames(n_frames), top_k(top_k), top_p(top_p), temp(temp) {}
     ggml_cgraph * build() override;
 
     // tower KV rows, shared by the prompt and the generated frames
     static constexpr int n_pos_max = 4096;
 
-    clip_gen_process_type gen_process;
-    clip_gen_state * gen_state; // nullptr on buffer reserve
+    mtmd_subctx_gen_process gen_process;
+    mtmd_subctx_gen_state * gen_state; // nullptr on buffer reserve
     int   n_frames;             // GEN_WAV only
     int   top_k;
     float top_p;
@@ -527,10 +532,10 @@ struct clip_graph_drama3_gen : clip_graph {
                               ggml_tensor * inp_pos, ggml_tensor * k_slot, ggml_tensor * v_slot, int pos);
 };
 
-struct clip_graph_soprano : clip_graph {
-    clip_graph_soprano(clip_ctx * ctx, const clip_image_f32 & img, int n_frames) : clip_graph(ctx, img), n_frames(n_frames) {}
+struct mtmd_graph_soprano : mtmd_graph {
+    mtmd_graph_soprano(mtmd_subcontext * ctx, const mtmd_image_f32 & img, int n_frames) : mtmd_graph(ctx, img), n_frames(n_frames) {}
     ggml_cgraph * build() override;
-    static void decode_spectrum(const clip_model & model, const std::vector<float> & spectrum, std::vector<float> & pcm);
+    static void decode_spectrum(const mtmd_model & model, const std::vector<float> & spectrum, std::vector<float> & pcm);
     // SopranoDecoder default
     static constexpr int upscale = 4;
     int n_frames;
@@ -541,54 +546,54 @@ struct clip_graph_soprano : clip_graph {
 // GEN_CODE = one MaskGIT pass of the depthformer, or only the feedback embedding once all codes are known
 // GEN_WAV  = liquid-codec decoder, a window of frames -> polar STFT frames
 //
-struct clip_graph_lfm3a_gen : clip_graph {
-    clip_graph_lfm3a_gen(clip_ctx * ctx, const clip_image_f32 & img, clip_gen_process_type gen_process, bool all_known, int n_frames)
-        : clip_graph(ctx, img), gen_process(gen_process), all_known(all_known), n_frames(n_frames) {}
+struct mtmd_graph_lfm3a_gen : mtmd_graph {
+    mtmd_graph_lfm3a_gen(mtmd_subcontext * ctx, const mtmd_image_f32 & img, mtmd_subctx_gen_process gen_process, bool all_known, int n_frames)
+        : mtmd_graph(ctx, img), gen_process(gen_process), all_known(all_known), n_frames(n_frames) {}
     ggml_cgraph * build() override;
 
-    clip_gen_process_type gen_process;
+    mtmd_subctx_gen_process gen_process;
     bool all_known; // GEN_CODE only
     int  n_frames;  // GEN_WAV only
 
     ggml_tensor * build_gen_code();
     ggml_tensor * build_gen_wav();
 
-    ggml_tensor * build_lfm_layer(ggml_tensor * inpL, const clip_layer & layer, float eps, int il,
+    ggml_tensor * build_lfm_layer(ggml_tensor * inpL, const mtmd_layer & layer, float eps, int il,
                                   const std::function<ggml_tensor *(ggml_tensor *)> & op);
-    ggml_tensor * build_lfm_attn(ggml_tensor * cur, const clip_layer & layer, int n_head, int n_head_kv,
+    ggml_tensor * build_lfm_attn(ggml_tensor * cur, const mtmd_layer & layer, int n_head, int n_head_kv,
                                  float eps, float rope_theta, int il, ggml_tensor * inp_pos,
                                  ggml_tensor * kq_mask, ggml_tensor * k_cache, ggml_tensor * v_cache,
                                  ggml_tensor ** k_all, ggml_tensor ** v_all);
-    ggml_tensor * build_lfm_conv(ggml_tensor * cur, const clip_layer & layer, int il,
+    ggml_tensor * build_lfm_conv(ggml_tensor * cur, const mtmd_layer & layer, int il,
                                  ggml_tensor * conv_state, ggml_tensor ** conv_state_out);
 };
 
 // state slots of the streaming codec decoder (lfm3a_gen GEN_WAV)
-std::vector<c2w_state_slot> list_lfm3a_gen_state_slots(const clip_hparams & hparams, const clip_model & model);
+std::vector<c2w_state_slot> list_lfm3a_gen_state_slots(const mtmd_hparams & hparams, const mtmd_model & model);
 
 // state slots of the streaming LFM3-Audio encoder (lfm3a)
-std::vector<c2w_state_slot> list_lfm3a_state_slots(const clip_hparams & hparams, const clip_model & model);
+std::vector<c2w_state_slot> list_lfm3a_state_slots(const mtmd_hparams & hparams, const mtmd_model & model);
 
-struct clip_graph_kimik25 : clip_graph {
-    clip_graph_kimik25(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_kimik25 : mtmd_graph {
+    mtmd_graph_kimik25(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 
     ggml_tensor * resize_position_embeddings_3d(uint32_t interpolation_mode);
 };
 
-struct clip_graph_parakeet : clip_graph {
-    clip_graph_parakeet(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_parakeet : mtmd_graph {
+    mtmd_graph_parakeet(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_exaone4_5 : clip_graph {
-    clip_graph_exaone4_5(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_exaone4_5 : mtmd_graph {
+    mtmd_graph_exaone4_5(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_granite4_vision : clip_graph {
-    clip_graph_granite4_vision(clip_ctx * ctx, const clip_image_f32 & img)
-        : clip_graph(ctx, img),
+struct mtmd_graph_granite4_vision : mtmd_graph {
+    mtmd_graph_granite4_vision(mtmd_subcontext * ctx, const mtmd_image_f32 & img)
+        : mtmd_graph(ctx, img),
           anyres(img.anyres),
           n_tiles(img.ny() / img.nx()),
           tile_side(img.nx() / patch_size) {}
@@ -597,7 +602,7 @@ struct clip_graph_granite4_vision : clip_graph {
 
 private:
     // the input image is a stack of tiles on the Y axis: [overview, tile(0,0), tile(0,1), ...]
-    const clip_image_f32::anyres_info anyres;
+    const mtmd_image_f32::anyres_info anyres;
     const int n_tiles;
     const int tile_side; // patches per tile side
 
@@ -612,7 +617,7 @@ private:
     ggml_tensor * build_anyres_assembly(ggml_tensor * cur, int out_side);
 };
 
-struct clip_graph_muse_glimmer : clip_graph {
-    clip_graph_muse_glimmer(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct mtmd_graph_muse_glimmer : mtmd_graph {
+    mtmd_graph_muse_glimmer(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };

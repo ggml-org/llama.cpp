@@ -1,6 +1,6 @@
 #include "models.h"
 
-ggml_cgraph * clip_graph_minicpmv::build() {
+ggml_cgraph * mtmd_graph_minicpmv::build() {
     GGML_ASSERT(model.class_embedding == nullptr);
     const int n_pos       = n_patches;
     const int n_embd_proj = n_mmproj_embd;
@@ -113,7 +113,7 @@ ggml_cgraph * clip_graph_minicpmv::build() {
     return gf;
 }
 
-ggml_cgraph * clip_graph_minicpmv4_6::build() {
+ggml_cgraph * mtmd_graph_minicpmv4_6::build() {
     const bool is_4x = hparams.n_merge == 2;
     const int n_pos  = n_patches;
     const int half_h = n_patches_y / 2;
