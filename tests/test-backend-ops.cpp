@@ -6670,6 +6670,13 @@ struct test_rope : public test_case {
         }
     }
 
+    double max_nmse_err() override {
+        // the f32 rotation angle of a position below n_ctx carries a rounding error of up to n_ctx*FLT_EPSILON radians
+        // backends compute the angle with different rounding sequences, so their agreement is bounded by that error
+        const double eps_theta = n_ctx * FLT_EPSILON;
+        return std::max(test_case::max_nmse_err(), eps_theta * eps_theta);
+    }
+
     double max_maa_err() override {
         return 1e-3;
     }
