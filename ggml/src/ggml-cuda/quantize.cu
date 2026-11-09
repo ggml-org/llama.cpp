@@ -600,8 +600,8 @@ void quantize_mmq_q8_1_cuda(
     }
 }
 
-// Each thread quantizes 4 values of one column, see quantize.cuh for the layout.
-template <mmq_q8_1_ds_layout ds_layout>
+// Each thread quantizes 4 values of one column, see quantize.cuh for the layouts.
+template <mmq_q8_1_ds_layout ds_layout, bool wmma>
 static __global__ void quantize_mmq_few_q8_1(
         const float * x_ptr, void * vy_ptr, const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
         const int ne1, const int ne2) {
@@ -637,8 +637,24 @@ static __global__ void quantize_mmq_few_q8_1(
         sum = d*warp_reduce_sum<8>(float(q.x + q.y + q.z + q.w));
     }
 
-    const int s = i0 % QK_K / QK8_1;          // sub-block
-    const int k = i0 % QK8_1;                 // first value in sub-block
+    const int s = i0 % QK_K / QK8_1; // sub-block
+    const int k = i0 % QK8_1;        // first value in sub-block
+
+    if constexpr (wmma) {
+        const int m = blockIdx.x % MMQ_FEW_WMMA_NCOLS; // column in group
+        int4 * yg = vy + ((blockIdx.z*(ne00/QK_K) + i0/QK_K)*(gridDim.x/MMQ_FEW_WMMA_NCOLS) + blockIdx.x/MMQ_FEW_WMMA_NCOLS)*MMQ_FEW_WMMA_Q8_1_INT4;
+        ((int *) yg)[(s*MMQ_FEW_WMMA_NCOLS + m)*8 + k/4] = *(const int *) &q;
+        if (k == 0) {
+            int * ds = (int *) (yg + 8*MMQ_FEW_WMMA_NCOLS*2) + (s*2 + m % 2)*8 + m/2;
+            if constexpr (ds_layout == MMQ_Q8_1_DS_LAYOUT_D4) {
+                *(float *) ds = d;
+            } else {
+                *(half2 *) ds = make_half2(d, sum);
+            }
+        }
+        return;
+    }
+
     const int g = blockIdx.x % MMQ_FEW_NCOLS; // column in group
     int4 * yg = vy + ((blockIdx.z*(ne00/QK_K) + i0/QK_K)*(gridDim.x/MMQ_FEW_NCOLS) + blockIdx.x/MMQ_FEW_NCOLS)*MMQ_FEW_Q8_1_INT4;
     ((int *) (yg + (s/2)*WARP_SIZE + 4*g + (k % 16)/4))[2*(s % 2) + k/16] = *(const int *) &q;
@@ -652,27 +668,40 @@ static __global__ void quantize_mmq_few_q8_1(
     }
 }
 
-void quantize_mmq_few_q8_1_cuda(
+template <bool wmma>
+static void quantize_mmq_few_q8_1_launch(
         const float * x, void * vy, const mmq_q8_1_ds_layout ds_layout, const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
         const int64_t ne1, const int64_t ne2, const int64_t ne3, cudaStream_t stream) {
     GGML_ASSERT(ne00 % QK_K == 0);
 
     const int64_t block_num_y = (ne00 + 4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ - 1) / (4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ);
-    const dim3 num_blocks(GGML_PAD(ne1, MMQ_FEW_NCOLS), block_num_y, ne2*ne3);
+    const dim3 num_blocks(GGML_PAD(ne1, wmma ? MMQ_FEW_WMMA_NCOLS : MMQ_FEW_NCOLS), block_num_y, ne2*ne3);
     const dim3 block_size(CUDA_QUANTIZE_BLOCK_SIZE_MMQ, 1, 1);
     const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(num_blocks, block_size, 0, stream);
     switch (ds_layout) {
         case MMQ_Q8_1_DS_LAYOUT_D4:
-            ggml_cuda_kernel_launch(quantize_mmq_few_q8_1<MMQ_Q8_1_DS_LAYOUT_D4>, launch_params,
+            ggml_cuda_kernel_launch(quantize_mmq_few_q8_1<MMQ_Q8_1_DS_LAYOUT_D4, wmma>, launch_params,
                 x, vy, ne00, s01, s02, s03, (int) ne1, (int) ne2);
             break;
         case MMQ_Q8_1_DS_LAYOUT_DS4:
-            ggml_cuda_kernel_launch(quantize_mmq_few_q8_1<MMQ_Q8_1_DS_LAYOUT_DS4>, launch_params,
+            ggml_cuda_kernel_launch(quantize_mmq_few_q8_1<MMQ_Q8_1_DS_LAYOUT_DS4, wmma>, launch_params,
                 x, vy, ne00, s01, s02, s03, (int) ne1, (int) ne2);
             break;
         default:
             GGML_ABORT("fatal error");
     }
+}
+
+void quantize_mmq_few_q8_1_cuda(
+        const float * x, void * vy, const mmq_q8_1_ds_layout ds_layout, const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
+        const int64_t ne1, const int64_t ne2, const int64_t ne3, cudaStream_t stream) {
+    quantize_mmq_few_q8_1_launch<false>(x, vy, ds_layout, ne00, s01, s02, s03, ne1, ne2, ne3, stream);
+}
+
+void quantize_mmq_few_wmma_q8_1_cuda(
+        const float * x, void * vy, const mmq_q8_1_ds_layout ds_layout, const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
+        const int64_t ne1, const int64_t ne2, const int64_t ne3, cudaStream_t stream) {
+    quantize_mmq_few_q8_1_launch<true>(x, vy, ds_layout, ne00, s01, s02, s03, ne1, ne2, ne3, stream);
 }
 
 // scatter=true reuses the quant kernel: grid over tokens, ids = inverse map (token slot -> compact row)
