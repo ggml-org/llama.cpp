@@ -161,7 +161,7 @@ class MiniCPMV4_6VisionModel(MmprojModel):
             # In MiniCPM-V 4.6 `vision_config.image_size` (980) describes the SigLIP
             # positional embedding bucket grid (70 x 70), while the per-slice processing
             # resolution is the preprocessor's `scale_resolution` (typically 448).
-            # The CLIP loader in tools/mtmd/clip.cpp consumes `clip.vision.image_size`
+            # The mmproj loader in tools/mtmd/mtmd-model.cpp consumes `clip.vision.image_size`
             # as the slice size and warmup resolution, so report `scale_resolution` there
             # to match the upstream MiniCPMV4_6ImageProcessorPil slicing rules.
             scale_resolution = self.preprocessor_config.get(
@@ -173,7 +173,7 @@ class MiniCPMV4_6VisionModel(MmprojModel):
         super().set_gguf_parameters()
         assert self.hparams_vision is not None
 
-        # projector type string is consumed by clip_projector_type_from_string() in clip.cpp
+        # projector type string is consumed by projector_type_from_string() in tools/mtmd/mtmd-impl.h
         self.gguf_writer.add_clip_projector_type(self.projector_type)
 
         self.gguf_writer.add_vision_projector_scale_factor(
@@ -243,7 +243,7 @@ class MiniCPMV4_7VisionModel(MiniCPMV4_6VisionModel):
     projector_type = gguf.VisionProjectorType.MINICPMV4_7
     # MiniCPMV4_7ImageProcessorPil default
     default_scale_resolution = 448
-    # rows of v.tok_embd_sep, the order must match clip_suffix_rows() in clip-impl.h
+    # rows of v.tok_embd_sep, the order must match mtmd_suffix_rows() in tools/mtmd/mtmd-impl.h
     tok_embd_sep = ["</image>", "<slice>", "</slice>", "\n"]
 
     def get_downsample_mode(self) -> str:
@@ -272,3 +272,18 @@ class MiniCPMV4_7VisionModel(MiniCPMV4_6VisionModel):
             yield self.format_tensor_name(gguf.MODEL_TENSOR.V_TOK_EMBD_SEP, suffix=""), data_torch[ids]
             return
         yield from super().modify_tensors(data_torch, name, bid)
+
+
+# MiniCPM-OCR 1.0: the 4.6 stack with model_type minicpm_ocr.
+
+@ModelBase.register("MiniCPMOcrForConditionalGeneration")
+@ModelBase.example("openbmb/MiniCPM-OCR-1.0")
+class MiniCPMOCR1_0TextModel(MiniCPMV4_6TextModel):
+    model_arch = gguf.MODEL_ARCH.QWEN35
+    no_mtp = True
+
+
+@ModelBase.register("MiniCPMOcrForConditionalGeneration")
+@ModelBase.example("openbmb/MiniCPM-OCR-1.0")
+class MiniCPMOCR1_0VisionModel(MiniCPMV4_6VisionModel):
+    projector_type = gguf.VisionProjectorType.MINICPM_OCR_1_0

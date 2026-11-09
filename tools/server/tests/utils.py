@@ -29,7 +29,7 @@ from re import RegexFlag
 import wget
 
 
-DEFAULT_HTTP_TIMEOUT = 60
+DEFAULT_HTTP_TIMEOUT = 600
 
 # per-request timeout, a hung server fails the test instead of stalling the CI for hours
 DEFAULT_REQUEST_TIMEOUT = 600
@@ -94,6 +94,7 @@ class ServerProcess:
     api_key: str | None = None
     models_dir: str | None = None
     models_max: int | None = None
+    models_memory_margin: int | None = None
     models_preset: str | None = None
     no_models_autoload: bool | None = None
     lora_files: List[str] | None = None
@@ -102,6 +103,7 @@ class ServerProcess:
     spec_draft_n_min: int | None = None
     spec_draft_n_max: int | None = None
     spec_draft_n_ubatch: int | None = None
+    spec_draft_n_gpu_layer: int | None = None
     spec_synth_len: float | None = None
     spec_synth_rates: List[float] | None = None
     no_ui: bool | None = None
@@ -188,6 +190,8 @@ class ServerProcess:
             server_args.extend(["--models-dir", self.models_dir])
         if self.models_max is not None:
             server_args.extend(["--models-max", self.models_max])
+        if self.models_memory_margin is not None:
+            server_args.extend(["--models-memory-margin", self.models_memory_margin])
         if self.models_preset:
             server_args.extend(["--models-preset", self.models_preset])
         if self.cors_origins:
@@ -259,6 +263,8 @@ class ServerProcess:
             server_args.extend(["--spec-draft-n-min", self.spec_draft_n_min])
         if self.spec_draft_n_ubatch:
             server_args.extend(["--spec-draft-n-ubatch", self.spec_draft_n_ubatch])
+        if self.spec_draft_n_gpu_layer:
+            server_args.extend(["--spec-draft-ngl", self.spec_draft_n_gpu_layer])
         if self.spec_synth_len is not None:
             server_args.extend(["--spec-synth-len", self.spec_synth_len])
         if self.spec_synth_rates is not None:

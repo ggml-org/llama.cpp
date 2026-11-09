@@ -748,7 +748,7 @@ static inline void gdn_step_scalar_f32(
     }
 }
 
-static void gated_delta_net_f32_pp_thread(unsigned int nth, unsigned int ith, void * data) {
+static void gated_delta_net_f32_pp_thread(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     struct htp_gdn_context * gctx = (struct htp_gdn_context *) data;
     struct htp_ops_context * octx = gctx->octx;
     const struct htp_gdn_kernel_params * kparams = gctx->kparams;
@@ -777,10 +777,10 @@ static void gated_delta_net_f32_pp_thread(unsigned int nth, unsigned int ith, vo
     float * dst_base       = (float *) (uintptr_t) dst->data;
     float * state_out_base = dst_cache ? (float *) (uintptr_t) dst_cache->data : (dst_base + S_v * H * n_tokens * n_seqs);
 
-    dma_queue * dma_q = octx->ctx->dma[ith];
+    dma_queue * dma_q = th->dma_q;
     const struct htp_gdn_vtcm_layout * layout = &gctx->layout;
     float * s_work[2];
-    s_work[0] = (float *) (gctx->vtcm_base + layout->bytes_per_thread * ith);
+    s_work[0] = (float *) (gctx->vtcm_base + layout->bytes_per_hvx * ith);
     s_work[1] = s_work[0] + layout->state_aligned / sizeof(float);
 
     const struct fastdiv_values * fd_H   = &kparams->div_H;
@@ -817,7 +817,7 @@ static void gated_delta_net_f32_pp_thread(unsigned int nth, unsigned int ith, vo
         spad_idx ^= 1;
     }
 
-    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+    struct htp_thread_trace * tr = th->trace;
 
     int curr_spad_idx = 0;
     for (uint32_t ir = gctx->row_start + ith; ir < row_end; ir += nth) {
@@ -892,7 +892,7 @@ static void gated_delta_net_f32_pp_thread(unsigned int nth, unsigned int ith, vo
     dma_queue_flush(dma_q);
 }
 
-static void gated_delta_net_f32_tg_thread(unsigned int nth, unsigned int ith, void * data) {
+static void gated_delta_net_f32_tg_thread(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     struct htp_gdn_context * gctx = (struct htp_gdn_context *) data;
     struct htp_ops_context * octx = gctx->octx;
     const struct htp_gdn_kernel_params * kparams = gctx->kparams;
@@ -918,10 +918,10 @@ static void gated_delta_net_f32_tg_thread(unsigned int nth, unsigned int ith, vo
     const float scale = kparams->scale;
     float * dst_base  = (float *) (uintptr_t) dst->data;
 
-    dma_queue * dma_q = octx->ctx->dma[ith];
+    dma_queue * dma_q = th->dma_q;
     const struct htp_gdn_vtcm_layout * layout = &gctx->layout;
     float * s_work[2];
-    s_work[0] = (float *) (gctx->vtcm_base + layout->bytes_per_thread * ith);
+    s_work[0] = (float *) (gctx->vtcm_base + layout->bytes_per_hvx * ith);
     s_work[1] = s_work[0] + layout->state_aligned / sizeof(float);
 
     const struct fastdiv_values * fd_H   = &kparams->div_H;
@@ -957,7 +957,7 @@ static void gated_delta_net_f32_tg_thread(unsigned int nth, unsigned int ith, vo
         spad_idx ^= 1;
     }
 
-    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+    struct htp_thread_trace * tr = th->trace;
 
     int curr_spad_idx = 0;
     for (uint32_t ir = gctx->row_start + ith; ir < row_end; ir += nth) {
@@ -1031,7 +1031,7 @@ struct htp_gdn_hmx_gemm_task {
     uint8_t *      hmx_scales;
 };
 
-static void htp_gdn_hmx_gemm_worker(void * data) {
+static void htp_gdn_hmx_gemm_worker(const htp_thread_t * th, void * data) {
     struct htp_gdn_hmx_gemm_task * task = (struct htp_gdn_hmx_gemm_task *) data;
     asm volatile(HMX_SET_BIAS("%0") :: "r"((unsigned int)task->hmx_scales));
 
@@ -1456,9 +1456,10 @@ static inline void gdn_dma_push_chunk_gb(
     const dma_addr_t g_dma    = g->data + (uint64_t) iv3 * g->nb[3] + (uint64_t) t_chunk * g->nb[2] + (uint64_t) iv1 * g->nb[1];
     const dma_addr_t beta_dma = beta->data + (uint64_t) iv3 * beta->nb[3] + (uint64_t) t_chunk * beta->nb[2] + (uint64_t) iv1 * beta->nb[1];
     const uint32_t row_bytes  = n_batch * sizeof(float);
+    const uint32_t dst_stride = (n_batch > 1) ? row_bytes + sizeof(float) : row_bytes;
 
-    dma_queue_push(dma_q, dma_make_data(vtcm_g_raw, g_dma), row_bytes, g->nb[2], row_bytes, chunk_size);
-    dma_queue_push(dma_q, dma_make_data(vtcm_b_raw, beta_dma), row_bytes, beta->nb[2], row_bytes, chunk_size);
+    dma_queue_push(dma_q, dma_make_data(vtcm_g_raw, g_dma), dst_stride, g->nb[2], row_bytes, chunk_size);
+    dma_queue_push(dma_q, dma_make_data(vtcm_b_raw, beta_dma), dst_stride, beta->nb[2], row_bytes, chunk_size);
 }
 
 static inline void gdn_pack_s_col_tiles(
@@ -1622,7 +1623,7 @@ static inline void gdn_init_head_ptrs(
     head->rows_inv = VTCM_LAYOUT_PTR(HVX_Vector, vtcm_base, L->off_rows_inv + h * row_vecs_sz);
     head->rows_a   = VTCM_LAYOUT_PTR(HVX_Vector, vtcm_base, L->off_rows_a + h * row_vecs_sz);
 
-    head->vtcm_m   = VTCM_LAYOUT_PTR(HVX_Vector, vtcm_base, L->off_thread_scratch + h * (64 * 128));
+    head->vtcm_m   = VTCM_LAYOUT_PTR(HVX_Vector, vtcm_base, L->off_hvx_scratch + h * (64 * 128));
     head->vtcm_tmp = head->vtcm_m + 32;
 
     head->iv1 = base_iv1 + h;
@@ -1653,10 +1654,10 @@ struct htp_gdn_batch_context {
     const struct htp_gdn_kernel_params * kparams;
 };
 
-static void gdn_hvx_init_state_worker(unsigned int n, unsigned int i, void * data) {
+static void gdn_hvx_init_state_worker(const htp_thread_t * th, unsigned int n, unsigned int i, void * data) {
     (void) n;
     struct htp_gdn_batch_context * bctx = (struct htp_gdn_batch_context *) data;
-    struct htp_thread_trace * tr = &bctx->octx->ctx->trace[i];
+    struct htp_thread_trace * tr = th->trace;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, 0);
 
     struct htp_gdn_head_ptrs * head = &bctx->heads[i];
@@ -1689,10 +1690,10 @@ static inline HVX_Vector hvx_splat_last_f32(HVX_Vector v) {
     return hvx_vec_repl4(Q6_V_vror_VR(v, 124));
 }
 
-static void gdn_hvx_phase1a_worker(unsigned int n, unsigned int i, void * data) {
+static void gdn_hvx_phase1a_worker(const htp_thread_t * th, unsigned int n, unsigned int i, void * data) {
     (void) n;
     struct htp_gdn_batch_context * bctx = (struct htp_gdn_batch_context *) data;
-    struct htp_thread_trace * tr = &bctx->octx->ctx->trace[i];
+    struct htp_thread_trace * tr = th->trace;
     const uint16_t info = (uint16_t) bctx->c;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_GDN_PREP, info);
 
@@ -1707,19 +1708,16 @@ static void gdn_hvx_phase1a_worker(unsigned int n, unsigned int i, void * data) 
         hvx_vmem(head->b_f32[curr_buf] + 0)  = hvx_vmem(bctx->vtcm_b_raw + 0);
         hvx_vmem(head->b_f32[curr_buf] + 32) = hvx_vmem(bctx->vtcm_b_raw + 32);
     } else {
-        int32_t offsets[32] __attribute__((aligned(128)));
-        for (int k = 0; k < 32; ++k) {
-            offsets[k] = k * n_batch * sizeof(float);
-        }
-        HVX_Vector vv = *(const HVX_Vector *) offsets;
+        const uint32_t vtcm_stride = (n_batch + 1) * sizeof(float);
+        const HVX_Vector vv = hvx_vec_gather_offsets_w(vtcm_stride);
         const size_t rt_g = (size_t) ((const uint8_t *) bctx->vtcm_g_raw + i * sizeof(float));
         const size_t rt_b = (size_t) ((const uint8_t *) bctx->vtcm_b_raw + i * sizeof(float));
-        const size_t mu   = 64 * n_batch * sizeof(float);
+        const size_t mu   = 64 * vtcm_stride;
 
         Q6_vgather_ARMVw((HVX_Vector *) (head->g_f32[curr_buf] + 0),  rt_g, mu, vv);
-        Q6_vgather_ARMVw((HVX_Vector *) (head->g_f32[curr_buf] + 32), rt_g + 32 * n_batch * sizeof(float), mu, vv);
+        Q6_vgather_ARMVw((HVX_Vector *) (head->g_f32[curr_buf] + 32), rt_g + 32 * vtcm_stride, mu, vv);
         Q6_vgather_ARMVw((HVX_Vector *) (head->b_f32[curr_buf] + 0),  rt_b, mu, vv);
-        Q6_vgather_ARMVw((HVX_Vector *) (head->b_f32[curr_buf] + 32), rt_b + 32 * n_batch * sizeof(float), mu, vv);
+        Q6_vgather_ARMVw((HVX_Vector *) (head->b_f32[curr_buf] + 32), rt_b + 32 * vtcm_stride, mu, vv);
     }
 
     const uint32_t t_chunk = bctx->c * 64;
@@ -1765,10 +1763,10 @@ static void gdn_hvx_phase1a_worker(unsigned int n, unsigned int i, void * data) 
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_GDN_PREP, info);
 }
 
-static void gdn_hvx_phase1b_worker(unsigned int n, unsigned int i, void * data) {
+static void gdn_hvx_phase1b_worker(const htp_thread_t * th, unsigned int n, unsigned int i, void * data) {
     (void) n;
     struct htp_gdn_batch_context * bctx = (struct htp_gdn_batch_context *) data;
-    struct htp_thread_trace * tr = &bctx->octx->ctx->trace[i];
+    struct htp_thread_trace * tr = th->trace;
     const uint16_t info = (uint16_t) bctx->c;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_GDN_PREP, info);
 
@@ -1862,10 +1860,10 @@ static void gdn_hvx_phase1b_worker(unsigned int n, unsigned int i, void * data) 
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_GDN_PREP, info);
 }
 
-static void gdn_hvx_phase2_worker(unsigned int n, unsigned int i, void * data) {
+static void gdn_hvx_phase2_worker(const htp_thread_t * th, unsigned int n, unsigned int i, void * data) {
     (void) n;
     struct htp_gdn_batch_context * bctx = (struct htp_gdn_batch_context *) data;
-    struct htp_thread_trace * tr = &bctx->octx->ctx->trace[i];
+    struct htp_thread_trace * tr = th->trace;
     const uint16_t info = (uint16_t) bctx->c;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_GDN_SOLVE, info);
 
@@ -1886,10 +1884,10 @@ static void gdn_hvx_phase2_worker(unsigned int n, unsigned int i, void * data) {
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_GDN_SOLVE, info);
 }
 
-static void gdn_hvx_phase3_worker(unsigned int n, unsigned int i, void * data) {
+static void gdn_hvx_phase3_worker(const htp_thread_t * th, unsigned int n, unsigned int i, void * data) {
     (void) n;
     struct htp_gdn_batch_context * bctx = (struct htp_gdn_batch_context *) data;
-    struct htp_thread_trace * tr = &bctx->octx->ctx->trace[i];
+    struct htp_thread_trace * tr = th->trace;
     const uint16_t info = (uint16_t) bctx->c;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_GDN_V_PREP, info);
 
@@ -1930,10 +1928,10 @@ static void gdn_hvx_phase3_worker(unsigned int n, unsigned int i, void * data) {
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_GDN_V_PREP, info);
 }
 
-static void gdn_hvx_phase4_worker(unsigned int n, unsigned int i, void * data) {
+static void gdn_hvx_phase4_worker(const htp_thread_t * th, unsigned int n, unsigned int i, void * data) {
     (void) n;
     struct htp_gdn_batch_context * bctx = (struct htp_gdn_batch_context *) data;
-    struct htp_thread_trace * tr = &bctx->octx->ctx->trace[i];
+    struct htp_thread_trace * tr = th->trace;
     const uint16_t info = (uint16_t) bctx->c;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_GDN_D_PREP, info);
 
@@ -1961,10 +1959,10 @@ static void gdn_hvx_phase4_worker(unsigned int n, unsigned int i, void * data) {
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_GDN_D_PREP, info);
 }
 
-static void gdn_hvx_phase5_worker(unsigned int n, unsigned int i, void * data) {
+static void gdn_hvx_phase5_worker(const htp_thread_t * th, unsigned int n, unsigned int i, void * data) {
     (void) n;
     struct htp_gdn_batch_context * bctx = (struct htp_gdn_batch_context *) data;
-    struct htp_thread_trace * tr = &bctx->octx->ctx->trace[i];
+    struct htp_thread_trace * tr = th->trace;
     const uint16_t info = (uint16_t) bctx->c;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_GDN_OUT, info);
 
@@ -1986,10 +1984,10 @@ static void gdn_hvx_phase5_worker(unsigned int n, unsigned int i, void * data) {
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_GDN_OUT, info);
 }
 
-static void gdn_hvx_phase6_worker(unsigned int n, unsigned int i, void * data) {
+static void gdn_hvx_phase6_worker(const htp_thread_t * th, unsigned int n, unsigned int i, void * data) {
     (void) n;
     struct htp_gdn_batch_context * bctx = (struct htp_gdn_batch_context *) data;
-    struct htp_thread_trace * tr = &bctx->octx->ctx->trace[i];
+    struct htp_thread_trace * tr = th->trace;
     const uint16_t info = (uint16_t) bctx->c;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_GDN_STATE, info);
 
@@ -2042,7 +2040,7 @@ static int gated_delta_net_f32_hmx_chunked(
     const uint32_t n_sv_tiles = S_v / 32;
 
     struct htp_gdn_hmx_vtcm_layout L;
-    htp_gdn_hmx_vtcm_layout_build(&L, S_v, chunk_size, kparams->n_heads_batch, kparams->n_threads, kparams->pipeline != 0);
+    htp_gdn_hmx_vtcm_layout_build(&L, S_v, chunk_size, kparams->n_heads_batch, kparams->n_hvx, kparams->pipeline != 0);
 
     if (L.total_bytes > octx->ctx->vtcm_size) {
         return HTP_STATUS_VTCM_TOO_SMALL;
@@ -2064,7 +2062,7 @@ static int gated_delta_net_f32_hmx_chunked(
 
     hmx_queue_t  hmx_q = octx->ctx->hmx_queue;
     dma_queue *  dma_q = octx->ctx->dma[0];
-    work_queue_t wp    = octx->ctx->work_queue;
+    work_queue_t wp    = octx->ctx->hvx_queue;
 
     struct htp_gdn_head_ptrs heads[8];
     struct htp_gdn_hmx_gemm_task gemm_tasks[8][9];
@@ -2270,46 +2268,9 @@ static int gated_delta_net_f32_hmx_chunked(
 }
 
 int op_gated_delta_net(struct htp_ops_context * octx) {
-    const struct htp_tensor * q     = octx->src[0];
-    const struct htp_tensor * k     = octx->src[1];
-    const struct htp_tensor * v     = octx->src[2];
-    const struct htp_tensor * g     = octx->src[3];
-    const struct htp_tensor * beta  = octx->src[4];
-    const struct htp_tensor * state = octx->src[5];
-    const struct htp_tensor * dst   = octx->dst;
+    const struct htp_tensor * dst = octx->dst;
 
-    if (q->type != HTP_TYPE_F32 || k->type != HTP_TYPE_F32 || v->type != HTP_TYPE_F32 ||
-        g->type != HTP_TYPE_F32 || beta->type != HTP_TYPE_F32 || state->type != HTP_TYPE_F32 ||
-        dst->type != HTP_TYPE_F32) {
-        return HTP_STATUS_NO_SUPPORT;
-    }
-
-    const uint32_t S_v      = v->ne[0];
-    const uint32_t H        = v->ne[1];
-    const uint32_t n_tokens = v->ne[2];
-    const uint32_t n_seqs   = v->ne[3];
-    const uint32_t K        = octx->op_params[0];
-
-    if (S_v == 0 || S_v > HTP_GDN_MAX_SV || H == 0 || n_tokens == 0 || n_seqs == 0) {
-        return HTP_STATUS_NO_SUPPORT;
-    }
-    if ((g->ne[0] != 1 && g->ne[0] != S_v) || beta->ne[0] != 1) {
-        return HTP_STATUS_NO_SUPPORT;
-    }
-    if (q->ne[0] != S_v || k->ne[0] != S_v || q->ne[1] == 0 || k->ne[1] == 0 ||
-        q->ne[2] != n_tokens || k->ne[2] != n_tokens || q->ne[3] == 0 || k->ne[3] == 0 ||
-        (n_seqs % q->ne[3]) != 0 || (n_seqs % k->ne[3]) != 0) {
-        return HTP_STATUS_NO_SUPPORT;
-    }
-    // state holds s0 only: [S_v, S_v, H, n_seqs]
-    if (state->ne[0] != S_v || state->ne[1] != S_v || state->ne[2] != H || state->ne[3] != n_seqs) {
-        return HTP_STATUS_NO_SUPPORT;
-    }
-    if (dst->ne[0] != S_v * H || dst->ne[1] != n_tokens * n_seqs + S_v * n_seqs * K) {
-        return HTP_STATUS_NO_SUPPORT;
-    }
-
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 6; i++) {
         if (htp_tensor_is_extended(octx->src[i])) {
             return HTP_STATUS_NO_SUPPORT;
         }
@@ -2325,68 +2286,12 @@ int op_gated_delta_net(struct htp_ops_context * octx) {
     }
 
     const struct htp_gdn_kernel_params * kparams = (const struct htp_gdn_kernel_params *) octx->kernel_params;
-    struct htp_gdn_kernel_params kparams_local;
-    if (!kparams || kparams->S_v == 0) {
-        const uint32_t rq3 = n_seqs / q->ne[3];
-        const uint32_t rk3 = n_seqs / k->ne[3];
-        const uint32_t total_rows = H * n_seqs;
-        uint32_t n_threads = (total_rows < octx->n_threads) ? total_rows : octx->n_threads;
-        if (n_threads == 0) {
-            n_threads = 1;
-        }
-
-        memset(&kparams_local, 0, sizeof(kparams_local));
-        kparams_local.n_threads           = n_threads;
-        kparams_local.S_v                 = S_v;
-        kparams_local.H                   = H;
-        kparams_local.n_tokens            = n_tokens;
-        kparams_local.n_seqs              = n_seqs;
-        kparams_local.K                   = K;
-        kparams_local.total_rows          = total_rows;
-        kparams_local.rows_per_thread     = (total_rows + n_threads - 1) / n_threads;
-        const bool can_use_hmx = (octx->ctx->hmx_enabled) &&
-                                 (S_v % 64 == 0) &&
-                                 (n_tokens >= HTP_GDN_MIN_TOKENS) &&
-                                 (g->ne[0] == 1) &&
-                                 (K == 1);
-
-        struct htp_gdn_hmx_vtcm_layout hmx_layout_local;
-        struct htp_gdn_vtcm_layout hvx_layout_local;
-        uint32_t n_heads_batch = 1;
-
-        if (can_use_hmx && htp_gdn_hmx_solve_layout(&hmx_layout_local, S_v, HTP_GDN_CHUNK_SIZE, total_rows, octx->ctx->vtcm_size, n_threads, true, &n_heads_batch)) {
-            kparams_local.kernel_type     = HTP_GDN_KERNEL_HMX_CHUNKED;
-            kparams_local.pipeline        = hmx_layout_local.pipeline ? 1 : 0;
-            kparams_local.chunk_size      = HTP_GDN_CHUNK_SIZE;
-            kparams_local.n_chunks        = (n_tokens + HTP_GDN_CHUNK_SIZE - 1) / HTP_GDN_CHUNK_SIZE;
-            kparams_local.n_heads_batch   = (uint16_t) n_heads_batch;
-            kparams_local.vtcm_size       = (uint32_t) hmx_layout_local.total_bytes;
-            kparams_local.state_aligned   = (uint32_t) hmx_layout_local.state_f32_bytes;
-            kparams_local.vtcm_per_thread = (uint32_t) (hmx_layout_local.total_bytes / (n_threads > 0 ? n_threads : 1));
-        } else {
-            htp_gdn_vtcm_layout_build(&hvx_layout_local, S_v, n_threads);
-            kparams_local.kernel_type     = HTP_GDN_KERNEL_HVX_RECURRENT;
-            kparams_local.pipeline        = 0;
-            kparams_local.n_heads_batch   = 1;
-            kparams_local.state_aligned   = (uint32_t) hvx_layout_local.state_aligned;
-            kparams_local.vtcm_per_thread = (uint32_t) hvx_layout_local.bytes_per_thread;
-            kparams_local.vtcm_size       = (uint32_t) hvx_layout_local.total_bytes;
-        }
-        kparams_local.kda                 = (g->ne[0] == S_v) ? 1 : 0;
-        kparams_local.scale               = 1.0f / sqrtf((float) S_v);
-        kparams_local.state_seq_stride    = (uint32_t) (state->nb[3] / sizeof(float));
-        kparams_local.state_size_per_snap = S_v * S_v * H * n_seqs;
-
-        kparams_local.div_H         = init_fastdiv_values(H);
-        kparams_local.div_q1        = init_fastdiv_values(q->ne[1]);
-        kparams_local.div_k1        = init_fastdiv_values(k->ne[1]);
-        kparams_local.div_rq3       = init_fastdiv_values(rq3);
-        kparams_local.div_rk3       = init_fastdiv_values(rk3);
-        kparams_local.div_n_threads = init_fastdiv_values(n_threads);
-
-        kparams = &kparams_local;
+    if (!htp_ops_context_set_n_hvx(octx, kparams->n_hvx)) {
+        return HTP_STATUS_INVAL_PARAMS;
     }
 
+    const uint32_t S_v        = kparams->S_v;
+    const uint32_t n_tokens   = kparams->n_tokens;
     const uint32_t total_rows = kparams->total_rows;
     uint32_t row_start = 0;
     uint32_t nrows     = total_rows;
@@ -2416,34 +2321,34 @@ int op_gated_delta_net(struct htp_ops_context * octx) {
         return gated_delta_net_f32_hmx_chunked(octx, kparams, row_start, nrows);
     }
 
-    const uint32_t n_threads = (nrows < kparams->n_threads) ? nrows : kparams->n_threads;
+    const uint32_t n_hvx = (nrows < octx->n_hvx) ? nrows : octx->n_hvx;
 
     struct htp_gdn_context gctx;
     gctx.octx      = octx;
     gctx.kparams   = kparams;
     gctx.row_start = row_start;
     gctx.nrows     = nrows;
-    gctx.vtcm_base = octx->ctx->vtcm_base;
 
-    htp_gdn_vtcm_layout_build(&gctx.layout, S_v, n_threads);
+    htp_gdn_vtcm_layout_build(&gctx.layout, S_v, n_hvx);
+    gctx.vtcm_base = VTCM_LAYOUT_PTR(uint8_t, octx->ctx->vtcm_base, gctx.layout.off_state);
 
     if (gctx.layout.total_bytes > octx->ctx->vtcm_size) {
         return HTP_STATUS_VTCM_TOO_SMALL;
     }
 
     FARF(HIGH, "gated-delta-net-f32: q(%ux%ux%ux%u) k(%ux%ux%ux%u) v(%ux%ux%ux%u) state(%ux%ux%ux%u) -> (%ux%ux%ux%u) : "
-         "vtcm-size %zu n_threads %u\n",
-         q->ne[0], q->ne[1], q->ne[2], q->ne[3],
-         k->ne[0], k->ne[1], k->ne[2], k->ne[3],
-         v->ne[0], v->ne[1], v->ne[2], v->ne[3],
-         state->ne[0], state->ne[1], state->ne[2], state->ne[3],
+         "vtcm-size %zu n_hvx %u\n",
+         octx->src[0]->ne[0], octx->src[0]->ne[1], octx->src[0]->ne[2], octx->src[0]->ne[3],
+         octx->src[1]->ne[0], octx->src[1]->ne[1], octx->src[1]->ne[2], octx->src[1]->ne[3],
+         octx->src[2]->ne[0], octx->src[2]->ne[1], octx->src[2]->ne[2], octx->src[2]->ne[3],
+         octx->src[5]->ne[0], octx->src[5]->ne[1], octx->src[5]->ne[2], octx->src[5]->ne[3],
          dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
-         gctx.layout.total_bytes, n_threads);
+         gctx.layout.total_bytes, n_hvx);
 
     if (n_tokens == 1) {
-        work_queue_run(octx->ctx->work_queue, gated_delta_net_f32_tg_thread, &gctx, n_threads);
+        work_queue_run(octx->ctx->hvx_queue, gated_delta_net_f32_tg_thread, &gctx, n_hvx);
     } else {
-        work_queue_run(octx->ctx->work_queue, gated_delta_net_f32_pp_thread, &gctx, n_threads);
+        work_queue_run(octx->ctx->hvx_queue, gated_delta_net_f32_pp_thread, &gctx, n_hvx);
     }
 
     return HTP_STATUS_OK;

@@ -49,11 +49,19 @@ void llama_model_hunyuan_moe::load_arch_tensors(llama_model_loader &) {
     }
 }
 
-std::unique_ptr<llm_graph_context> llama_model_hunyuan_moe::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+llama_rope_params llama_model_hunyuan_moe::get_rope_params(const llama_cparams & cparams, int il) const {
+    auto res = llama_model::get_rope_params(cparams, il);
+
+    res.k_norm = layers[il].attn_k_norm;
+
+    return res;
 }
 
-llama_model_hunyuan_moe::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+std::unique_ptr<llm_graph_context> llama_model_hunyuan_moe::build_arch_graph(const llm_graph_params & params) const {
+    return std::make_unique<graph>(params);
+}
+
+llama_model_hunyuan_moe::graph::graph(const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
@@ -84,28 +92,17 @@ llama_model_hunyuan_moe::graph::graph(const llama_model & model, const llm_graph
 
         // self-attention
         {
-            // rope freq factors for llama3; may return nullptr for llama2 and other models
-            ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
-
             // compute Q and K and RoPE them
             auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
                     n_embd_head, n_head, n_head_kv, il);
 
-            Qcur = ggml_rope_ext(
-                    ctx0, Qcur, inp_pos, rope_factors,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow
-                    );
+            Qcur = build_rope(Qcur, inp_pos, il);
 
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);
             cb(Vcur, "Vcur", il);
 
-            Kcur = ggml_rope_ext(
-                    ctx0, Kcur, inp_pos, rope_factors,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow
-                    );
+            Kcur = build_rope(Kcur, inp_pos, il);
 
             Kcur = build_norm(Kcur,
                     model.layers[il].attn_k_norm, nullptr,

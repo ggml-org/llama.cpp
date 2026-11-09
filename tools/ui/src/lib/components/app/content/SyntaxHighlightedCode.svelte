@@ -140,10 +140,6 @@
 </div>
 
 <style>
-	.code-preview-wrapper {
-		overscroll-behavior: contain;
-	}
-
 	.code-preview-wrapper pre {
 		background: transparent;
 		padding: 0;

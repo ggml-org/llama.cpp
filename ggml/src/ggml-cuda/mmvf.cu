@@ -844,7 +844,7 @@ bool ggml_cuda_should_use_mmvf(enum ggml_type type, int cc, int warp_size, const
                     return ne11 <= MMVF_MAX_BATCH_SIZE;
                 }
                 if (fp16_mma_hardware_available(cc)) {
-                    if (GGML_CUDA_CC_IS_RDNA3(cc)) {
+                    if (GGML_CUDA_CC_IS_RDNA3(cc) || GGML_CUDA_CC_IS_RDNA4_M(cc)) {
                         return ne11 <= 3;
                     }
                     if (GGML_CUDA_CC_IS_RDNA4(cc)) {

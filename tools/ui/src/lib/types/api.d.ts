@@ -3,6 +3,7 @@ import type { ModelSidecar } from '$lib/constants';
 import type {
 	ContentPartType,
 	FileTypeAudio,
+	ServerModelSource,
 	ServerModelsSseEventType,
 	ServerModelStatus,
 	ServerRole
@@ -95,6 +96,10 @@ export interface ApiModelDataEntry {
 	path: string;
 	/** Current status of the model */
 	status: ApiModelStatus;
+	/** Where the router found the model: the HF cache, --models-dir or a preset */
+	source?: ServerModelSource;
+	/** Whether the router can delete the model's files (only cached models) */
+	can_remove?: boolean;
 	/** Alternative names that resolve to this model */
 	aliases?: string[];
 	/** Informational tags for this model */
@@ -284,6 +289,10 @@ export interface ApiLlamaCppServerProps {
 		video: boolean;
 	};
 	chat_template: string;
+	chat_template_caps?: {
+		/** reasoning_effort values the chat template renders distinctly, from lowest to highest */
+		reasoning_effort_levels?: string[];
+	};
 	bos_token: string;
 	eos_token: string;
 	build_info: string;
@@ -308,6 +317,7 @@ export interface ApiChatCompletionRequest {
 	tools?: ApiChatCompletionTool[];
 	// Reasoning parameters
 	reasoning_format?: string;
+	reasoning_effort?: string;
 	// Generation parameters
 	temperature?: number;
 	max_tokens?: number;

@@ -26,18 +26,19 @@ export enum SidebarAction {
 	MANAGE_MODELS = 'manage-models',
 	MCP = 'mcp',
 	NEW_CHAT = 'new-chat',
+	SEARCH = 'search',
 	SETTINGS = 'settings'
+}
+
+/** Kind of a sidebar conversation section, which can be dragged into another order. */
+export enum SidebarSectionKind {
+	PINNED = 'pinned',
+	RECENT = 'recent'
 }
 
 /**
  * MCP prompt display variant
  */
-/** View the models dialog renders. */
-export enum ModelsDialogView {
-	DISCOVER = 'discover',
-	MANAGE = 'manage'
-}
-
 export enum McpPromptVariant {
 	ATTACHMENT = 'attachment',
 	MESSAGE = 'message'
@@ -67,4 +68,12 @@ export enum ColorLevel {
 	NEUTRAL = 'neutral',
 	OK = 'ok',
 	WARNING = 'warning'
+}
+
+/**
+ * Which menu an item's actions render in.
+ */
+export enum MenuKind {
+	CONTEXT = 'context',
+	DROPDOWN = 'dropdown'
 }

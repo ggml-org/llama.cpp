@@ -39,6 +39,11 @@ class Mistral3Model(TextModel):
             self.gguf_writer.add_add_bos_token(False)
             self.gguf_writer.add_add_eos_token(False)
 
+        def get_vocab_base_pre(self, tokenizer) -> str:
+            if self.origin_hf_arch == "Mistral3Model":
+                return "nemotron-3.5-embed"
+            return super().get_vocab_base_pre(tokenizer)
+
         def set_gguf_parameters(self):
             super().set_gguf_parameters()
             self._try_set_pooling_type()

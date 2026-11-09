@@ -31,6 +31,8 @@
 #define DIRECTORY_SEPARATOR '/'
 #endif // _WIN32
 
+#define COMMON_RECURSIVE_LIMIT 128
+
 #define COM_DBG(fmt, ...) LOG_DBG("cmn  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
 #define COM_TRC(fmt, ...) LOG_TRC("cmn  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
 #define COM_INF(fmt, ...) LOG_INF("cmn  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
@@ -308,6 +310,18 @@ struct common_params_model {
     std::string hf_repo     = ""; // HF repo
     std::string hf_file     = ""; // HF file
     std::string docker_repo = ""; // Docker repo
+
+    std::vector<std::string> shards;
+
+    std::vector<std::string> get_paths() const {
+        std::vector<std::string> paths = { path };
+        for (const auto & shard : shards) {
+            if (std::find(paths.begin(), paths.end(), shard) == paths.end()) {
+                paths.push_back(shard);
+            }
+        }
+        return paths;
+    }
 
     std::string get_name() const {
         if (!hf_repo.empty()) {
@@ -595,7 +609,8 @@ struct common_params {
     ggml_type cache_type_k = GGML_TYPE_F16; // KV cache data type for the K
     ggml_type cache_type_v = GGML_TYPE_F16; // KV cache data type for the V
 
-    size_t moe_cache_size = 0; // GPU cache size in bytes for the MoE experts kept in the CPU, split among the GPUs like the layers
+    size_t moe_cache_size      = 0;    // GPU cache size in bytes for the MoE experts kept in the CPU, split among the GPUs like the layers
+    float  moe_cache_cpu_share = 0.0f; // share of the MoE cache misses computed on the CPU instead of uploaded
 
     common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
 
@@ -699,6 +714,7 @@ struct common_params {
     std::string models_dir    = "";     // directory containing models for the router server
     std::string models_preset = "";     // directory containing model presets for the router server
     int models_max = 4;                 // maximum number of models to load simultaneously
+    int models_memory_margin = 0;       // MiB of device memory to keep free when loading models (0 = no memory accounting)
     bool models_autoload = true;        // automatically load models when requested via the router server
     std::string models_preset_hf = "";  // show a warning about remote presets on router loaded (if not empty)
 
@@ -769,6 +785,7 @@ struct common_params {
 
     // TTS params
     std::string tts_lang = "";
+    std::string tts_voice = "";
     std::string tts_speaker_file = "";
 
     bool is_gen_docs = false; // whether we are running inside llama-gen-docs
@@ -902,12 +919,8 @@ bool glob_match(const std::string & pattern, const std::string & str);
 //
 
 #ifdef _WIN32
-std::wstring utf8_to_wstring(const std::string & str);
-std::string  wstring_to_utf8(const std::wstring & str);
+std::string wstring_to_utf8(const std::wstring & str);
 #endif
-
-// returns the path as a UTF-8 string, preserving its separators
-std::string fs_path_to_utf8(const std::filesystem::path & path);
 
 //
 // Environment utils
@@ -917,9 +930,6 @@ std::string fs_path_to_utf8(const std::filesystem::path & path);
 // and setting an empty value unsets the variable
 std::string common_get_env(const std::string & name);
 void        common_set_env(const std::string & name, const std::string & value);
-
-// reads a path from the environment, an unset variable gives an empty path
-std::filesystem::path common_get_path_from_env(const std::string & name);
 
 //
 // Filesystem utils
@@ -976,6 +986,9 @@ enum common_decision_type {
     COMMON_DECISION_TYPE_LFM2_D1_OMNI, // same as laya, other prompt layout
     COMMON_DECISION_TYPE_GRANITE_SWITCH, // same as openjev, run by the decision aLoRA of granite switch
     COMMON_DECISION_TYPE_H2O_LIGHTNING, // same as openjev, the labels are read after an answer prefill
+    COMMON_DECISION_TYPE_MINICPM_OCR_JEV, // one score per class, the pooled embeddings output of the last token
+    COMMON_DECISION_TYPE_LFM3_D1,       // same as lfm2-d1, non-causal, label codes A..Z then AA, AB..
+    COMMON_DECISION_TYPE_LFM3_D1_OMNI,  // same as lfm3-d1
     COMMON_DECISION_TYPE_UNKNOWN, // a decision model of a type that is not supported
 };
 
@@ -1014,6 +1027,11 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
 
 struct llama_model_params   common_model_params_to_llama  (      common_params & params);
 struct llama_context_params common_context_params_to_llama(const common_params & params);
+
+// apply --fit to mparams and cparams, no-op if params.fit_params is false
+void common_fit_apply(common_params & params, struct llama_model_params & mparams, struct llama_context_params & cparams);
+
+struct llama_model * common_model_load(const std::vector<std::string> & paths, const struct llama_model_params & mparams);
 
 // clear LoRA adapters from context, then apply new list of adapters
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora);
@@ -1089,6 +1107,8 @@ struct common_batch {
         llama_embd   state; // non-owning view of the data passed to set_embd_state(), data == NULL if none
         std::vector<llama_seq_id> seq_ids_extra; // see add_seq()
         int32_t      decision_order = 0; // see llama_batch_ext_set_decision_order()
+        int32_t      embd_row = -1; // see add_embd_row(), -1 if none
+        int32_t      state_row = -1; // see set_embd_state_row(), -1 if none
     };
 
     std::vector<token> tokens; // mirror of the entries, tokens[i] describes batch index i
@@ -1127,9 +1147,16 @@ struct common_batch {
     // attach a state embedding (e.g. the target hidden state for MTP) to the entry at idx, can only be set once per entry
     bool set_embd_state(int32_t idx, llama_embd state);
 
+    // the state of entry idx is row `row` of the h_nextn device buffer of the state source context, see llama_set_embd_state_src()
+    bool set_embd_state_row(int32_t idx, int32_t row);
+
     // add an embedding-only entry (no token id)
     // pos points to n_pos positions
     int32_t add_embd(llama_embd embd, const llama_pos * pos, llama_seq_id seq_id, bool output);
+
+    // add an entry whose embedding is row `row` of the layer input device buffer of the context's ctx_other
+    // pos points to n_pos positions
+    int32_t add_embd_row(int32_t row, const llama_pos * pos, llama_seq_id seq_id, bool output);
 
     int32_t size() const { return (int32_t) tokens.size(); }
 };
@@ -1227,8 +1254,9 @@ struct common_control_vector_load_info {
 };
 
 // Load control vectors, scale each by strength, and add them together.
+// Direction layer indices must be in [1, n_layer].
 // On error, returns {-1, empty}
-common_control_vector_data common_control_vector_load(const std::vector<common_control_vector_load_info> & load_infos);
+common_control_vector_data common_control_vector_load(const std::vector<common_control_vector_load_info> & load_infos, int32_t n_layer);
 
 //
 // Split utils
@@ -1280,6 +1308,20 @@ enum ggml_opt_optimizer_type common_opt_get_optimizer(const char *);
 // prompt utils
 //
 
+// leave default-inserted elements uninitialized; callers must fill them before use
+template <typename T>
+struct common_no_init_allocator : std::allocator<T> {
+    template <typename U> struct rebind { using other = common_no_init_allocator<U>; };
+
+    common_no_init_allocator() = default;
+    template <typename U> common_no_init_allocator(const common_no_init_allocator<U> &) {}
+
+    template <typename U> void construct(U * p) { ::new ((void *) p) U; }
+};
+
+// sequence state data, filled by llama_state_seq_get_data_ext()
+using common_state_data = std::vector<uint8_t, common_no_init_allocator<uint8_t>>;
+
 struct common_prompt_checkpoint {
     int64_t n_tokens;
 
@@ -1289,8 +1331,8 @@ struct common_prompt_checkpoint {
     llama_pos pos_min;
     llama_pos pos_max;
 
-    std::vector<uint8_t> data_tgt;
-    std::vector<uint8_t> data_dft;
+    common_state_data data_tgt;
+    common_state_data data_dft;
 
     // (optional) speculative-decoding implementation state stashed with the checkpoint
     // (e.g. eagle3's deferred-boundary g_embd row)

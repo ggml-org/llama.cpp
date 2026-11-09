@@ -2,7 +2,10 @@
 
 #include "../tools/server/server-common.h"
 #include "../tools/server/server-decision.h"
+#include "../tools/server/server-schema.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <regex>
 #include <string>
@@ -435,6 +438,233 @@ static void test_decision_escape(testing & t) {
     });
 }
 
+static void test_rerank_template(testing & t) {
+    struct test_case {
+        const char * name;
+        std::string tmpl;
+        std::string query;
+        std::string doc;
+        std::string expected;
+    };
+    const test_case cases[] = {
+        {"plain inputs", "Q: {query}\nD: {document}", "query", "doc", "Q: query\nD: doc"},
+        {"document placeholder in query", "Q: {query}\nD: {document}", "Explain {document}.", "doc", "Q: Explain {document}.\nD: doc"},
+        {"query placeholder in query", "{query}|{document}", "{query}", "doc", "{query}|doc"},
+        {"placeholders in both inputs", "{query}|{document}", "{query} {document}", "{query} {document}", "{query} {document}|{query} {document}"},
+        {"repeated placeholders", "{query}|{document}|{query}|{document}", "{document}", "doc", "{document}|doc|{document}|doc"},
+        {"adjacent reversed placeholders", "{document}{query}", "query", "doc", "docquery"},
+        {"query only", "{query}", "{document}", "doc", "{document}"},
+        {"document only", "{document}", "query", "{query}", "{query}"},
+        {"no placeholders", "fixed", "{document}", "{query}", "fixed"},
+        {"unknown and incomplete placeholders", "{unknown}|{query}|{document}|{query", "query", "doc", "{unknown}|query|doc|{query"},
+        {"nested braces", "{{query}}|{{document}}", "query", "doc", "{query}|{doc}"},
+        {"placeholder formed at boundary", "{query}ument}", "{doc", "doc", "{document}"},
+        {"empty inputs", "Q: {query}\nD: {document}", "", "", "Q: \nD: "},
+        {"empty template", "", "query", "doc", ""},
+    };
+    for (const auto & test : cases) {
+        t.assert_equal(test.name, test.expected, format_rerank_template(test.tmpl, test.query, test.doc));
+    }
+}
+
+//
+// server_decision_context::format_answer, 2 class scores (minicpm-ocr-jev)
+//
+
+static void test_decision_class_scores(testing & t) {
+    server_decision_context ctx;
+    ctx.type = COMMON_DECISION_TYPE_MINICPM_OCR_JEV;
+
+    const server_decision_question choice = {"q", SERVER_DECISION_QUESTION_CHOICE, json(), {{"0", json()}, {"1", json()}}};
+    const server_decision_question noul   = {"q", SERVER_DECISION_QUESTION_NOUL,   json(), {{"false", json()}, {"true", json()}}};
+
+    const std::vector<std::pair<float, float>> cases = {
+        {0.0f, 0.0f}, {-1.5f, 2.25f}, {3.0f, -0.5f}, {80.0f, -80.0f}, {1000.0f, 1001.0f},
+    };
+    for (const auto & [z0, z1] : cases) {
+        const double p1  = 1.0 / (1.0 + std::exp((double) z0 - (double) z1));
+        const json   a   = ctx.format_answer(choice, {{z0, z1}});
+        const double ap0 = a.at("probabilities").at("0").get<double>();
+        const double ap1 = a.at("probabilities").at("1").get<double>();
+        t.assert_true("p1", std::fabs(ap1 - p1) <= 1e-6);
+        t.assert_true("sum", std::fabs(ap0 + ap1 - 1.0) <= 1e-9);
+        // a tie picks the first class
+        t.assert_equal("choice", std::string(z1 > z0 ? "1" : "0"), a.at("choice").get<std::string>());
+        t.assert_true("confidence", std::fabs(a.at("confidence").get<double>() - (2.0 * std::max(ap0, ap1) - 1.0)) <= 1e-9);
+
+        const json n = ctx.format_answer(noul, {{z0, z1}});
+        t.assert_true("noul is p1", n.at("noul").get<double>() == ap1);
+    }
+
+    for (const float bad : {std::nanf(""), INFINITY}) {
+        bool thrown = false;
+        try {
+            ctx.format_answer(choice, {{bad, 0.0f}});
+        } catch (const std::exception &) {
+            thrown = true;
+        }
+        t.assert_true("nan or +inf", thrown);
+    }
+}
+
+//
+// server_decision_context::parse_questions / parse_state, the request checks of minicpm-ocr-jev
+//
+
+static void test_decision_ocr_jev_validation(testing & t) {
+    server_decision_context ctx;
+    ctx.type = COMMON_DECISION_TYPE_MINICPM_OCR_JEV;
+
+    // only base64-decoded, the image itself is not parsed here
+    const std::string image = "data:image/png;base64,AAAA";
+
+    const json choice = {
+        {"type",     "choice"},
+        {"criteria", json{{"0", nullptr}, {"1", nullptr}}},
+    };
+    const auto questions_of = [](const json & question) {
+        return json{{"state", "some OCR text"}, {"questions", json{{"q", question}}}};
+    };
+    const auto files_of = [&](size_t n) {
+        json files = json::array();
+        for (size_t i = 0; i < n; i++) {
+            files.push_back(image);
+        }
+        return json{{"state", "some OCR text"}, {"files", files}};
+    };
+
+    const auto reject_questions = [&](const char * name, const json & body, const std::string & expected) {
+        std::string error;
+        try {
+            ctx.parse_questions(body);
+        } catch (const std::invalid_argument & e) {
+            error = e.what();
+        }
+        t.assert_true(std::string(name) + ": " + error, error.find(expected) != std::string::npos);
+    };
+    const auto reject_state = [&](const char * name, const json & body, const std::string & expected) {
+        std::vector<raw_buffer> files;
+        std::string error;
+        try {
+            ctx.parse_state(body, files);
+        } catch (const std::invalid_argument & e) {
+            error = e.what();
+        }
+        t.assert_true(std::string(name) + ": " + error, error.find(expected) != std::string::npos);
+    };
+
+    reject_state("state is text", {{"state", 42}}, "\"state\" must be the OCR text");
+
+    // one fixed question, no instructions
+    reject_questions("one question", {{"state", "x"}, {"questions", json{{"a", choice}, {"b", choice}}}},
+        "answers exactly one question");
+    reject_questions("no instructions",
+        questions_of(json{{"type", "choice"}, {"instructions", "judge it"}, {"criteria", json{{"0", nullptr}, {"1", nullptr}}}}),
+        "\"instructions\" is not used by this model");
+
+    // the classes are fixed, so are the criteria
+    reject_questions("criteria are the classes",
+        questions_of(json{{"type", "choice"}, {"criteria", json{{"yes", nullptr}, {"no", nullptr}}}}),
+        "\"criteria\" must be {\"0\": null, \"1\": null}");
+    reject_questions("noul without criteria",
+        questions_of(json{{"type", "noul"}, {"criteria", json{{"false", "no"}, {"true", "yes"}}}}),
+        "\"criteria\" is not supported for a noul question");
+    reject_questions("choice or noul only",
+        questions_of(json{{"type", "score"}, {"criteria", json::array({"low", "high"})}}),
+        "only choice and noul questions are supported");
+
+    // the prompt has the original image, then the one rendered from the OCR text
+    reject_state("two images", files_of(1), "this model needs exactly 2 images");
+    reject_state("two images, three given", files_of(3), "this model needs exactly 2 images");
+}
+
+// server_decision_context: the recursive functions stop at RECURSIVE_LIMIT
+//
+
+static void test_decision_depth(testing & t) {
+    const auto prepare = [](size_t depth) {
+        server_decision_context ctx;
+        ctx.type = COMMON_DECISION_TYPE_H2O_LIGHTNING; // the state goes through decision_py_dump
+        std::string error;
+        try {
+            ctx.prepare_state(json::parse(std::string(depth, '[') + std::string(depth, ']')));
+        } catch (const std::invalid_argument & e) {
+            error = e.what();
+        }
+        return error;
+    };
+    t.test("state at the limit", [&](testing & t) {
+        const std::string error = prepare(128);
+        t.assert_true("accepted: " + error, error.empty());
+    });
+    t.test("deep state", [&](testing & t) {
+        const std::string error = prepare(1000);
+        t.assert_true("rejected as nested: " + error, error.find("nested more than 128 levels deep") != std::string::npos);
+    });
+}
+
+// DRY sequence breakers
+//
+
+static void test_dry_sequence_breakers(testing & t) {
+    common_params params_base;
+
+    const auto eval = [&](const json & data) {
+        return server_schema::eval_llama_cmpl_schema(nullptr, params_base, {}, data);
+    };
+
+    {
+        json data;
+        data["dry_sequence_breakers"] = json::array({"ab", "ab", "cd", "ab"});
+        const auto params = eval(data);
+        const std::vector<std::string> expected = {"ab", "cd"};
+        t.assert_true("duplicates removed, order kept", params.sampling.dry_sequence_breakers == expected);
+    }
+
+    {
+        std::vector<std::string> many;
+        for (int i = 0; i <= LLAMA_DRY_MAX_SEQ_BREAKERS; ++i) {
+            many.push_back("b" + std::to_string(i));
+        }
+        json data;
+        data["dry_sequence_breakers"] = many;
+
+        bool thrown = false;
+        try {
+            eval(data);
+        } catch (const std::exception &) {
+            thrown = true;
+        }
+        t.assert_true("more than the cap is rejected", thrown);
+    }
+}
+
+//
+// glob_match
+//
+
+static void test_glob_match(testing & t) {
+    t.test("patterns", [](testing & t) {
+        t.assert_true("literal", glob_match("src/main.cpp", "src/main.cpp"));
+        t.assert_true("star", glob_match("src/*.cpp", "src/main.cpp"));
+        t.assert_true("star stops at /", !glob_match("*.cpp", "src/main.cpp"));
+        t.assert_true("double star", glob_match("**/*.cpp", "a/b/c/main.cpp"));
+        t.assert_true("double star at end", glob_match("src/**", "src/a/b"));
+        t.assert_true("question mark", glob_match("ma?n.cpp", "main.cpp"));
+        t.assert_true("question mark not /", !glob_match("a?b", "a/b"));
+        t.assert_true("class", glob_match("[a-c]x", "bx"));
+        t.assert_true("negated class", !glob_match("[!a-c]x", "bx"));
+        t.assert_true("unclosed class", glob_match("[ab", "[ab"));
+        t.assert_true("mismatch", !glob_match("main.cpp", "main.c"));
+    });
+    t.test("long input", [](testing & t) {
+        const std::string path(100000, 'a');
+        t.assert_true("long literal", glob_match(path, path));
+        t.assert_true("long path", glob_match("**", path));
+        t.assert_true("too many wildcards", !glob_match(std::string(1000, '*'), "a"));
+    });
+}
+
 int main(int argc, char ** argv) {
     testing t;
 
@@ -454,6 +684,12 @@ int main(int argc, char ** argv) {
     t.test("lora_helpers",  test_lora_helpers);
     t.test("server_pipe",   test_server_pipe);
     t.test("decision_escape", test_decision_escape);
+    t.test("rerank_template", test_rerank_template);
+    t.test("decision_class_scores", test_decision_class_scores);
+    t.test("decision_ocr_jev_validation", test_decision_ocr_jev_validation);
+    t.test("decision_depth",  test_decision_depth);
+    t.test("glob_match",      test_glob_match);
+    t.test("dry_sequence_breakers", test_dry_sequence_breakers);
 
     return t.summary();
 }

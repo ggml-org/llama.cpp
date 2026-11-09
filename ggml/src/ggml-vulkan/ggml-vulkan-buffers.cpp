@@ -9,7 +9,11 @@ static void * portable_aligned_malloc(size_t align, size_t size) {
 #ifdef _WIN32
     return _aligned_malloc(size, align);
 #else
-    return std::aligned_alloc(align, size);
+    void * ptr = nullptr;
+    if (posix_memalign(&ptr, align, size) != 0) {
+        return nullptr;
+    }
+    return ptr;
 #endif
 }
 
@@ -225,7 +229,7 @@ vk_buffer ggml_vk_create_buffer_device(vk_device& device, size_t size) {
             buf = ggml_vk_create_buffer(device, size, {vk::MemoryPropertyFlagBits::eDeviceLocal | vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
                                                        vk::MemoryPropertyFlagBits::eDeviceLocal,
                                                        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent});
-        } else if (device->disable_host_visible_vidmem) {
+        } else if (!device->rebar || device->disable_host_visible_vidmem) {
             if (device->allow_sysmem_fallback) {
                 buf = ggml_vk_create_buffer(device, size, {vk::MemoryPropertyFlagBits::eDeviceLocal,
                                                            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent});
@@ -833,6 +837,9 @@ ggml_backend_buffer_i ggml_backend_vk_buffer_interface = {
     /* .cpy_tensor      = */ ggml_backend_vk_buffer_cpy_tensor,
     /* .clear           = */ ggml_backend_vk_buffer_clear,
     /* .reset           = */ NULL,
+    /* .set_tensor_n    = */ NULL,
+    /* .get_tensor_n    = */ NULL,
+    /* .cpy_tensor_n    = */ NULL,
 };
 
 vk_buffer ggml_vk_buffer_from_host_ptr(vk_device & device, void * ptr, size_t size) {

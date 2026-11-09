@@ -55,6 +55,8 @@ class SpecialVocab:
     normalizer_nfc: bool | None
     normalizer_lowercase: bool | None
     normalizer_strip_accents: bool | None
+    clean_spaces: bool | None
+    metaspace_prepend_scheme: str | None
 
     def __init__(
         self, path: str | os.PathLike[str], load_merges: bool = False,
@@ -70,6 +72,8 @@ class SpecialVocab:
         self.normalizer_nfc = None
         self.normalizer_lowercase = None
         self.normalizer_strip_accents = None
+        self.clean_spaces = None
+        self.metaspace_prepend_scheme = None
         if special_token_types is not None:
             self.special_token_types = special_token_types
         else:
@@ -120,6 +124,14 @@ class SpecialVocab:
             if not quiet:
                 logger.info(f'Setting normalizer_strip_accents to {self.normalizer_strip_accents}')
             gw.add_normalizer_strip_accents(self.normalizer_strip_accents)
+        if self.clean_spaces is not None:
+            if not quiet:
+                logger.info(f'Setting clean_spaces to {self.clean_spaces}')
+            gw.add_clean_spaces(self.clean_spaces)
+        if self.metaspace_prepend_scheme is not None:
+            if not quiet:
+                logger.info(f'Setting metaspace_prepend_scheme to {self.metaspace_prepend_scheme}')
+            gw.add_metaspace_prepend_scheme(self.metaspace_prepend_scheme)
 
     def _load(self, path: Path) -> None:
         self._try_load_from_tokenizer_json(path)
@@ -188,6 +200,16 @@ class SpecialVocab:
             for norm in normalizer.get('normalizers', []):
                 self._parse_normalizer(norm)
 
+    def _parse_pre_tokenizer(self, pre_tokenizer: dict) -> None:
+        # ref: https://huggingface.co/docs/tokenizers/api/pre-tokenizers
+        pre_tokenizer_type = pre_tokenizer.get('type')
+        if pre_tokenizer_type == 'Metaspace':
+            if 'prepend_scheme' in pre_tokenizer:
+                self.metaspace_prepend_scheme = pre_tokenizer['prepend_scheme']
+        elif pre_tokenizer_type == 'Sequence':
+            for pre in pre_tokenizer.get('pretokenizers', []):
+                self._parse_pre_tokenizer(pre)
+
     def _try_load_from_tokenizer_json(self, path: Path) -> bool:
         tokenizer = None
         tokenizer_file = path / 'tokenizer.json'
@@ -199,10 +221,12 @@ class SpecialVocab:
                 if isinstance(merges, list) and merges:
                     if isinstance(merges[0], str):
                         self.merges = merges
-                    elif isinstance(merges[0], list) and len(merges[0]) == 2 and isinstance(merges[0][0], str):
+                    elif isinstance(merges[0], list):
                         # New format since transformers 4.45 to support spaces in merges
                         # ref: https://github.com/ggml-org/llama.cpp/issues/9692
                         # TODO: internally store as the new format instead of converting to old
+                        if not all(isinstance(pair, list) and len(pair) == 2 and all(isinstance(s, str) for s in pair) for pair in merges):
+                            raise ValueError("Unknown tokenizer merges format")
                         if any(' ' in s for pair in merges for s in pair):
                             logger.warning(f'Spaces in merges detected, encoding as {chr(ord(" ") + 256)!r}')
                         self.merges = [
@@ -223,6 +247,8 @@ class SpecialVocab:
             # Parse normalizer configuration (e.g. Lowercase) into metadata
             if normalizer := tokenizer.get('normalizer'):
                 self._parse_normalizer(normalizer)
+            if pre_tokenizer := tokenizer.get('pre_tokenizer'):
+                self._parse_pre_tokenizer(pre_tokenizer)
             added_tokens = tokenizer.get('added_tokens', {})
         else:
             added_tokens = {}
@@ -326,25 +352,28 @@ class SpecialVocab:
                         continue
         if not tokenizer_config:
             return True
-        chat_template_alt = None
+        chat_template = tokenizer_config.get('chat_template')
         chat_template_json = path / 'chat_template.json'
         chat_template_jinja = path / 'chat_template.jinja'
         if chat_template_jinja.is_file():
             with open(chat_template_jinja, encoding = 'utf-8') as f:
-                chat_template_alt = f.read()
+                chat_template = f.read()
             if additional_templates := list((path / 'additional_chat_templates').glob('*.jinja')):
-                chat_template_alt = [{'name': 'default', 'template': chat_template_alt}]
+                chat_template = [{'name': 'default', 'template': chat_template}]
                 for template_path in additional_templates:
                     with open(template_path, encoding = 'utf-8') as fp:
-                        chat_template_alt.append({'name': template_path.stem, 'template': fp.read()})
+                        chat_template.append({'name': template_path.stem, 'template': fp.read()})
         elif chat_template_json.is_file():
             with open(chat_template_json, encoding = 'utf-8') as f:
-                chat_template_alt = json.load(f).get('chat_template')
-        chat_template = tokenizer_config.get('chat_template', chat_template_alt)
+                chat_template = json.load(f).get('chat_template')
         if chat_template is None or isinstance(chat_template, (str, list)):
             self.chat_template = chat_template
         else:
             logger.warning(f'Bad type for chat_template field in {tokenizer_config_file!r} - ignoring')
+        # decode clean-up of spaces before punctuation (transformers clean_up_tokenization_spaces)
+        clean_spaces = tokenizer_config.get('clean_up_tokenization_spaces')
+        if isinstance(clean_spaces, bool):
+            self.clean_spaces = clean_spaces
         for typ in self.special_token_types:
             add_entry = tokenizer_config.get(f'add_{typ}_token')
             if isinstance(add_entry, bool):

@@ -11,6 +11,8 @@
 //
 
 #include "common.hpp"
+#include <mutex>
+#include <unordered_map>
 #include <sycl/backend.hpp>
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
 #include <level_zero/ze_api.h>
@@ -19,8 +21,14 @@
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
 
+thread_local int g_sycl_current_device_id = -1;
+
 int get_current_device_id() {
-  return dpct::dev_mgr::instance().current_device_id();
+  if (g_sycl_current_device_id >= 0) {
+    return g_sycl_current_device_id;
+  }
+  g_sycl_current_device_id = static_cast<int>(dpct::dev_mgr::instance().current_device_id());
+  return g_sycl_current_device_id;
 }
 
 void* ggml_sycl_host_malloc(size_t size) try {
@@ -92,9 +100,16 @@ static bool ggml_sycl_use_level_zero_device_alloc(sycl::queue &q) {
 }
 #endif
 
+// Device bytes allocated through ggml_sycl_malloc_device, per device and per pointer
+static std::mutex g_ggml_sycl_dev_alloc_mutex;
+static std::unordered_map<void *, std::pair<int, size_t>> g_ggml_sycl_dev_allocs;
+static size_t g_ggml_sycl_dev_alloc_bytes[GGML_SYCL_MAX_DEVICES] = {};
+// free memory reported when we had nothing allocated (0 = not taken yet)
+static size_t g_ggml_sycl_dev_free_baseline[GGML_SYCL_MAX_DEVICES] = {};
+
 // Use Level Zero zeMemAllocDevice to avoid sycl::malloc_device triggering
 // DMA-buf/TTM system RAM staging in the xe kernel driver during multi-GPU inference.
-void * ggml_sycl_malloc_device(size_t size, sycl::queue &q, ggml_sycl_mem_type type) {
+static void * ggml_sycl_malloc_device_impl(size_t size, sycl::queue &q, ggml_sycl_mem_type type) {
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
     if (ggml_sycl_use_level_zero_device_alloc(q)) {
         void *ptr = nullptr;
@@ -134,8 +149,78 @@ void * ggml_sycl_malloc_device(size_t size, sycl::queue &q, ggml_sycl_mem_type t
     return ptr;
 }
 
+// caller holds g_ggml_sycl_dev_alloc_mutex
+static bool ggml_sycl_free_mem_enough(int device, size_t size, ggml_sycl_mem_type type) {
+    const size_t allocated = g_ggml_sycl_dev_alloc_bytes[device];
+
+    // TODO: remove once zeMemAllocDevice refuses allocations beyond VRAM on BMG
+    // (https://github.com/intel/compute-runtime/issues/1047). Only model/split buffers are checked.
+    const gpu_arch arch = ggml_sycl_info().devices[device].hw_info.arch;
+    const bool is_bmg   = arch == gpu_arch::intel_gpu_bmg_g21 || arch == gpu_arch::intel_gpu_bmg_g31;
+    const bool check    = g_ggml_sycl_bmg_vram_check && is_bmg && type == GGML_SYCL_MEM_BUFFER;
+    const bool trace    = type == GGML_SYCL_MEM_BUFFER && ggml_sycl_memtrace_enabled();
+    size_t free_mem = 0, total_mem = 0;
+    if (check || trace) {
+        sycl_get_mem_info(device, &free_mem, &total_mem);
+    }
+    if (trace) {
+        ggml_sycl_memtrace_report_device("before buffer alloc", device, free_mem, total_mem);
+    }
+    if (check) {
+        size_t & baseline = g_ggml_sycl_dev_free_baseline[device];
+        if (allocated == 0) {
+            baseline = free_mem;
+        }
+        // the drop in free memory since the baseline is ours once written, the rest of ours is not counted yet
+        const size_t written   = baseline > free_mem ? baseline - free_mem : 0;
+        const size_t unwritten = baseline && allocated > written ? allocated - written : 0;
+        const size_t usable    = free_mem > unwritten ? free_mem - unwritten : 0;
+        if (allocated + size > total_mem || size > usable) {
+            GGML_LOG_ERROR("%s: SYCL%d: cannot allocate %zu MiB: %zu MiB already allocated, %zu MiB usable "
+                           "(%zu MiB free of %zu MiB), set GGML_SYCL_BMG_VRAM_CHECK=0 to disable this check\n",
+                           __func__, device, size >> 20, allocated >> 20, usable >> 20, free_mem >> 20, total_mem >> 20);
+            return false;
+        }
+    }
+    return true;
+}
+
+static void ggml_sycl_dev_alloc_record(void * ptr, int device, size_t size) {
+    g_ggml_sycl_dev_allocs[ptr] = { device, size };
+    g_ggml_sycl_dev_alloc_bytes[device] += size;
+}
+
+void * ggml_sycl_malloc_device(size_t size, sycl::queue &q, ggml_sycl_mem_type type) {
+    const int device = (int) dpct::dev_mgr::instance().get_device_id(q.get_device());
+    GGML_ASSERT(device >= 0 && device < GGML_SYCL_MAX_DEVICES);
+
+    std::lock_guard<std::mutex> lock(g_ggml_sycl_dev_alloc_mutex);
+    if (!ggml_sycl_free_mem_enough(device, size, type)) {
+        ggml_sycl_memtrace_fail(type, size);
+        return nullptr;
+    }
+
+    void * ptr = ggml_sycl_malloc_device_impl(size, q, type);
+    if (ptr) {
+        ggml_sycl_dev_alloc_record(ptr, device, size);
+    }
+    return ptr;
+}
+
 void ggml_sycl_free_device(void *ptr, sycl::queue &q) {
     if (!ptr) return;
+    {
+        std::lock_guard<std::mutex> lock(g_ggml_sycl_dev_alloc_mutex);
+        auto it = g_ggml_sycl_dev_allocs.find(ptr);
+        if (it != g_ggml_sycl_dev_allocs.end()) {
+            const int device = it->second.first;
+            g_ggml_sycl_dev_alloc_bytes[device] -= it->second.second;
+            if (g_ggml_sycl_dev_alloc_bytes[device] == 0) {
+                g_ggml_sycl_dev_free_baseline[device] = 0;
+            }
+            g_ggml_sycl_dev_allocs.erase(it);
+        }
+    }
     ggml_sycl_memtrace_del(ptr);
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
     if (ggml_sycl_use_level_zero_device_alloc(q)) {

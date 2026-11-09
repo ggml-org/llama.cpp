@@ -13,7 +13,7 @@
 #include "hvx-utils.h"
 #include "hex-fastdiv.h"
 #include "hex-common.h"
-#include "hex-profile.h"
+#include "htp-trace.h"
 
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
@@ -38,9 +38,9 @@ struct htp_softmax_context {
     uint8_t * vtcm_src1;
     uint8_t * vtcm_dst;
 
-    uint32_t  vtcm_src0_size_per_thread;
-    uint32_t  vtcm_src1_size_per_thread;
-    uint32_t  vtcm_dst_size_per_thread;
+    uint32_t  vtcm_src0_size_per_hvx;
+    uint32_t  vtcm_src1_size_per_hvx;
+    uint32_t  vtcm_dst_size_per_hvx;
 
     uint32_t  src0_spad_half_size;
     uint32_t  src1_spad_half_size;
@@ -65,7 +65,7 @@ struct htp_softmax_context {
     struct fastdiv_values div_ne12;
     struct fastdiv_values div_ne13;
 
-    uint32_t src0_nrows_per_thread;
+    uint32_t src0_nrows_per_hvx;
     uint32_t row_start;
     uint32_t nrows;
 
@@ -287,19 +287,19 @@ static const softmax_compute_fn_t softmax_kernels[HTP_SOFTMAX_KERNEL_COUNT] = {
     [HTP_SOFTMAX_KERNEL_MASK_F16] = compute_fast_softmax_f32_mask_f16,
 };
 
-static void softmax_thread_dma(unsigned int nth, unsigned int ith, void * data) {
+static void softmax_thread_dma(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     (void) nth;
     const struct htp_softmax_context * smctx = (const struct htp_softmax_context *) data;
     struct htp_ops_context * octx = smctx->octx;
     const struct htp_tensor * src0 = octx->src[0];
     const struct htp_tensor * dst  = octx->dst;
-    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+    struct htp_thread_trace * tr = th->trace;
 
     const uint32_t src0_nrows            = smctx->nrows;
-    const uint32_t src0_nrows_per_thread = smctx->src0_nrows_per_thread;
+    const uint32_t src0_nrows_per_hvx    = smctx->src0_nrows_per_hvx;
 
-    const uint32_t src0_start_row = smctx->row_start + src0_nrows_per_thread * ith;
-    const uint32_t src0_end_row   = MIN(src0_start_row + src0_nrows_per_thread, smctx->row_start + src0_nrows);
+    const uint32_t src0_start_row = smctx->row_start + src0_nrows_per_hvx * ith;
+    const uint32_t src0_end_row   = MIN(src0_start_row + src0_nrows_per_hvx, smctx->row_start + src0_nrows);
 
     if (src0_start_row >= src0_end_row) {
         return;
@@ -311,13 +311,13 @@ static void softmax_thread_dma(unsigned int nth, unsigned int ith, void * data) 
     const size_t src0_row_size = src0->ne[0] * sizeof(float);
     const size_t dst_row_size  = src0->ne[0] * sizeof(float);
 
-    uint8_t * src0_vtcm_base = smctx->vtcm_src0 + (ith * smctx->vtcm_src0_size_per_thread);
-    uint8_t * dst_vtcm_base  = smctx->vtcm_dst  + (ith * smctx->vtcm_dst_size_per_thread);
+    uint8_t * src0_vtcm_base = smctx->vtcm_src0 + (ith * smctx->vtcm_src0_size_per_hvx);
+    uint8_t * dst_vtcm_base  = smctx->vtcm_dst  + (ith * smctx->vtcm_dst_size_per_hvx);
 
     const size_t src0_vtcm_half = smctx->src0_spad_half_size;
     const size_t dst_vtcm_half  = smctx->dst_spad_half_size;
 
-    dma_queue * dma_q = octx->ctx->dma[ith];
+    dma_queue * dma_q = th->dma_q;
 
     for (uint32_t r = src0_start_row, idx = 0; r < src0_end_row && idx < 2; r++, idx++) {
         dma_addr_t cur_dst  = data_dst  + r * dst_row_size;
@@ -357,20 +357,20 @@ static void softmax_thread_dma(unsigned int nth, unsigned int ith, void * data) 
     dma_queue_flush(dma_q);
 }
 
-static void softmax_thread_mask_dma(unsigned int nth, unsigned int ith, void * data) {
+static void softmax_thread_mask_dma(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     (void) nth;
     const struct htp_softmax_context * smctx = (const struct htp_softmax_context *) data;
     struct htp_ops_context * octx = smctx->octx;
     const struct htp_tensor * src0 = octx->src[0];
     const struct htp_tensor * src1 = octx->src[1];
     const struct htp_tensor * dst  = octx->dst;
-    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+    struct htp_thread_trace * tr = th->trace;
 
     const uint32_t src0_nrows            = smctx->nrows;
-    const uint32_t src0_nrows_per_thread = smctx->src0_nrows_per_thread;
+    const uint32_t src0_nrows_per_hvx    = smctx->src0_nrows_per_hvx;
 
-    const uint32_t src0_start_row = smctx->row_start + src0_nrows_per_thread * ith;
-    const uint32_t src0_end_row   = MIN(src0_start_row + src0_nrows_per_thread, smctx->row_start + src0_nrows);
+    const uint32_t src0_start_row = smctx->row_start + src0_nrows_per_hvx * ith;
+    const uint32_t src0_end_row   = MIN(src0_start_row + src0_nrows_per_hvx, smctx->row_start + src0_nrows);
 
     if (src0_start_row >= src0_end_row) {
         return;
@@ -384,9 +384,9 @@ static void softmax_thread_mask_dma(unsigned int nth, unsigned int ith, void * d
     const size_t dst_row_size  = src0->ne[0] * sizeof(float);
     const size_t mask_row_size = smctx->use_f16 ? (src1->ne[0] * sizeof(__fp16)) : (src1->ne[0] * sizeof(float));
 
-    uint8_t * src0_vtcm_base = smctx->vtcm_src0 + (ith * smctx->vtcm_src0_size_per_thread);
-    uint8_t * src1_vtcm_base = smctx->vtcm_src1 + (ith * smctx->vtcm_src1_size_per_thread);
-    uint8_t * dst_vtcm_base  = smctx->vtcm_dst  + (ith * smctx->vtcm_dst_size_per_thread);
+    uint8_t * src0_vtcm_base = smctx->vtcm_src0 + (ith * smctx->vtcm_src0_size_per_hvx);
+    uint8_t * src1_vtcm_base = smctx->vtcm_src1 + (ith * smctx->vtcm_src1_size_per_hvx);
+    uint8_t * dst_vtcm_base  = smctx->vtcm_dst  + (ith * smctx->vtcm_dst_size_per_hvx);
 
     const size_t src0_vtcm_half = smctx->src0_spad_half_size;
     const size_t src1_vtcm_half = smctx->src1_spad_half_size;
@@ -408,7 +408,7 @@ static void softmax_thread_mask_dma(unsigned int nth, unsigned int ith, void * d
     const struct fastdiv_values * div_ne12 = &smctx->div_ne12;
     const struct fastdiv_values * div_ne13 = &smctx->div_ne13;
 
-    dma_queue * dma_q = octx->ctx->dma[ith];
+    dma_queue * dma_q = th->dma_q;
 
     for (uint32_t r = src0_start_row, idx = 0; r < src0_end_row && idx < 2; r++, idx++) {
         dma_addr_t cur_dst  = data_dst  + r * dst_row_size;
@@ -492,11 +492,11 @@ static int execute_op_softmax_f32(struct htp_ops_context * octx) {
     const struct htp_softmax_kernel_params * kparams =
         (const struct htp_softmax_kernel_params *) octx->kernel_params;
 
-    if (!htp_ops_context_set_n_threads(octx, kparams->n_threads)) {
+    if (!htp_ops_context_set_n_hvx(octx, kparams->n_hvx)) {
         return HTP_STATUS_INVAL_PARAMS;
     }
 
-    if (kparams->kernel_id >= HTP_SOFTMAX_KERNEL_COUNT) {
+    if (kparams->kernel_type >= HTP_SOFTMAX_KERNEL_COUNT) {
         return HTP_STATUS_INVAL_PARAMS;
     }
 
@@ -520,8 +520,8 @@ static int execute_op_softmax_f32(struct htp_ops_context * octx) {
             src0_nrows, rows_per_chunk, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
         row_start = range.start;
         nrows     = range.count;
-        if (nrows < octx->n_threads) {
-            htp_ops_context_set_n_threads(octx, nrows ? nrows : 1);
+        if (nrows < octx->n_hvx) {
+            htp_ops_context_set_n_hvx(octx, nrows ? nrows : 1);
         }
     }
 
@@ -529,37 +529,41 @@ static int execute_op_softmax_f32(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
     }
 
-    const uint32_t n_threads = octx->n_threads;
+    const uint32_t n_hvx = octx->n_hvx;
     uint8_t * const vtcm_base = (uint8_t *) octx->ctx->vtcm_base;
 
-    const uint32_t off_src0 = 0;
-    const uint32_t off_dst  = off_src0 + kparams->vtcm_src0_size_per_thread * kparams->n_threads;
-    const uint32_t off_src1 = off_dst  + kparams->vtcm_dst_size_per_thread  * kparams->n_threads;
+    struct htp_softmax_vtcm_layout layout;
+    htp_softmax_vtcm_layout_build(&layout,
+                                  src0->ne[0],
+                                  kparams->use_src1 ? octx->src[1]->ne[0] : 0,
+                                  kparams->use_src1 != 0,
+                                  kparams->use_f16 != 0,
+                                  kparams->n_hvx);
 
     struct htp_softmax_context smctx = {
         .octx                  = octx,
         .kparams               = kparams,
-        .compute               = (void *) softmax_kernels[kparams->kernel_id],
+        .compute               = (void *) softmax_kernels[kparams->kernel_type],
 
         .data_src0             = src0->data,
         .data_src1             = kparams->use_src1 ? octx->src[1]->data : 0,
         .data_dst              = dst->data,
 
-        .vtcm_src0             = VTCM_LAYOUT_PTR(uint8_t, vtcm_base, off_src0),
-        .vtcm_dst              = VTCM_LAYOUT_PTR(uint8_t, vtcm_base, off_dst),
-        .vtcm_src1             = VTCM_LAYOUT_PTR_OPTIONAL(uint8_t, vtcm_base, off_src1, kparams->use_src1),
+        .vtcm_src0             = VTCM_LAYOUT_PTR(uint8_t, vtcm_base, layout.off_src0),
+        .vtcm_dst              = VTCM_LAYOUT_PTR(uint8_t, vtcm_base, layout.off_dst),
+        .vtcm_src1             = VTCM_LAYOUT_PTR_OPTIONAL(uint8_t, vtcm_base, layout.off_src1, kparams->use_src1),
 
-        .vtcm_src0_size_per_thread = kparams->vtcm_src0_size_per_thread,
-        .vtcm_src1_size_per_thread = kparams->vtcm_src1_size_per_thread,
-        .vtcm_dst_size_per_thread  = kparams->vtcm_dst_size_per_thread,
+        .vtcm_src0_size_per_hvx = (uint32_t) layout.src0_bytes_per_hvx,
+        .vtcm_src1_size_per_hvx = (uint32_t) layout.src1_bytes_per_hvx,
+        .vtcm_dst_size_per_hvx  = (uint32_t) layout.dst_bytes_per_hvx,
 
-        .src0_spad_half_size   = kparams->src0_spad_half_size,
-        .src1_spad_half_size   = kparams->src1_spad_half_size,
-        .dst_spad_half_size    = kparams->dst_spad_half_size,
+        .src0_spad_half_size   = (uint32_t) layout.src0_spad_half_size,
+        .src1_spad_half_size   = (uint32_t) layout.src1_spad_half_size,
+        .dst_spad_half_size    = (uint32_t) layout.dst_spad_half_size,
 
-        .src0_row_size_aligned = kparams->src0_row_size_aligned,
-        .src1_row_size_aligned = kparams->src1_row_size_aligned,
-        .dst_row_size_aligned  = kparams->dst_row_size_aligned,
+        .src0_row_size_aligned = (uint32_t) layout.src0_spad_half_size,
+        .src1_row_size_aligned = (uint32_t) layout.src1_spad_half_size,
+        .dst_row_size_aligned  = (uint32_t) layout.dst_spad_half_size,
 
         .use_f16               = kparams->use_f16 != 0,
 
@@ -576,7 +580,7 @@ static int execute_op_softmax_f32(struct htp_ops_context * octx) {
         .div_ne12              = kparams->div_ne12,
         .div_ne13              = kparams->div_ne13,
 
-        .src0_nrows_per_thread = fastdiv(nrows + n_threads - 1, &octx->n_threads_div),
+        .src0_nrows_per_hvx    = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div),
         .row_start             = row_start,
         .nrows                 = nrows,
     };
@@ -592,7 +596,7 @@ static int execute_op_softmax_f32(struct htp_ops_context * octx) {
     }
 
     work_queue_func_t task_func = kparams->use_src1 ? softmax_thread_mask_dma : softmax_thread_dma;
-    work_queue_run(octx->ctx->work_queue, task_func, &smctx, n_threads);
+    work_queue_run(octx->ctx->hvx_queue, task_func, &smctx, n_hvx);
 
     return HTP_STATUS_OK;
 }

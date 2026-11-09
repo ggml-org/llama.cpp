@@ -4,7 +4,7 @@
 	import * as Drawer from '$lib/components/ui/drawer';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { ICON_CLASS_DEFAULT, REASONING_EFFORT_LABELS } from '$lib/constants';
 	import { ReasoningEffort } from '$lib/enums';
 	import { useReasoningMenu } from '$lib/hooks/use-reasoning-menu.svelte';
 	import { deviceStore } from '$lib/stores';
@@ -30,13 +30,13 @@
 {#snippet triggerLabel()}
 	<span class="flex items-center gap-0.75 {reasoning.isOff ? 'text-muted-foreground' : ''}">
 		{#if reasoning.isOff}
-			<LightbulbOff class="size-3 max-md:size-4 shrink-0" />
+			<LightbulbOff class="size-3.25 max-md:size-4 shrink-0" />
 		{:else}
-			<Lightbulb class="size-3 max-md:size-4 shrink-0" />
+			<Lightbulb class="size-3.25 max-md:size-4 shrink-0" />
 		{/if}
 
 		{#if !isDefault}
-			<span class="capitalize">{reasoning.currentEffort}</span>
+			<span>{REASONING_EFFORT_LABELS[reasoning.currentEffort]}</span>
 		{/if}
 	</span>
 {/snippet}
@@ -102,9 +102,9 @@
 				<Button
 					{...props}
 					aria-label="Reasoning effort"
-					class="h-auto gap-1 rounded-sm bg-transparent! backdrop-blur-none! {isDefault
+					class="-mr-px h-6 min-w-6 gap-1 rounded-sm bg-transparent backdrop-blur-none! {isDefault
 						? 'px-1'
-						: 'px-1.75!'} py-1 text-xs hover:bg-transparent!"
+						: 'px-1.75!'} py-0 text-xs hover:bg-muted-foreground/15 data-[state=open]:bg-muted-foreground/15"
 					variant="ghost"
 				>
 					{@render triggerLabel()}

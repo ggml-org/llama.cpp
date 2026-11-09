@@ -6,7 +6,9 @@
 // we can remove it in the future when we figure out a better way to define inputs using jinja::value
 #include "json.h"
 
+#include <algorithm>
 #include <functional>
+#include <optional>
 #include <sstream>
 
 #define FILENAME "jinja-caps"
@@ -184,6 +186,10 @@ caps caps_get(jinja::program & prog) {
                     {
                         {"role", "user"},
                         {"content", json::array({
+                            {
+                                {"type", "text"},
+                                {"text", content_marker}
+                            }
                         })}
                     }
                 });
@@ -583,6 +589,58 @@ caps caps_get(jinja::program & prog) {
             result.supports_reasoning_effort = effort->stats.used;
         }
     );
+
+    if (result.supports_reasoning_effort) {
+        JJ_DEBUG("%s\n", ">>> Running capability check: reasoning effort levels");
+
+        static const std::vector<std::string> candidates = { "minimal", "low", "medium", "high", "xhigh", "max" };
+
+        // renders a single user turn with the given effort, nothing when the template raises
+        const auto render = [&](const std::string & effort) {
+            std::optional<std::string> rendered;
+            caps_try_execute(
+                prog,
+                [&]() {
+                    // messages
+                    return json::array({
+                        {
+                            {"role", "user"},
+                            {"content", "User message"}
+                        },
+                    });
+                },
+                [&](context & ctx) {
+                    ctx.set_val("enable_thinking", mk_val<value_bool>(true));
+                    caps_apply_reasoning_effort(ctx, effort);
+                },
+                nullptr, // tools_fn
+                [&](context &, bool success, value &, value &, const std::string & output) {
+                    if (success) {
+                        rendered = output;
+                    }
+                }
+            );
+            return rendered;
+        };
+
+        // an unknown level shows the render of the template fallback, a level that renders the same is not honored
+        // levels sharing a render are aliases and the highest one is kept
+        const auto unknown = render("REASONING_EFFORT_UNKNOWN");
+        std::vector<std::string> renders;
+        for (const auto & level : candidates) {
+            const auto rendered = render(level);
+            if (!rendered || rendered == unknown) {
+                continue;
+            }
+            const auto it = std::find(renders.begin(), renders.end(), *rendered);
+            if (it != renders.end()) {
+                result.reasoning_effort_levels[it - renders.begin()] = level;
+            } else {
+                renders.push_back(*rendered);
+                result.reasoning_effort_levels.push_back(level);
+            }
+        }
+    }
 
     JJ_DEBUG("%s\n", result.to_string().c_str());
 

@@ -14,8 +14,9 @@
 	import { KeyboardKey, ServerModelStatus } from '$lib/enums';
 	import { useChatFormModel } from '$lib/hooks/use-chat-form-model.svelte';
 	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
-	import { deviceStore, modelsStore, serverStore, settingsStore } from '$lib/stores';
+	import { deviceStore, modelsStore, serverStore, settingsStore, uiStore } from '$lib/stores';
 	import { type ModelItem, modelLoadFraction } from '$lib/utils';
+	import { untrack } from 'svelte';
 
 	interface Props {
 		/** Model to show, when the caller owns it, e.g. the model of one message. */
@@ -34,11 +35,15 @@
 		useGlobalSelection = false
 	}: Props = $props();
 
-	// one setting for every model id in the selector: the trigger and the rows
-	let showOrgName = $derived(settingsStore.config[SETTINGS_KEYS.SHOW_MODEL_ORG_NAME] ?? true);
-
 	// a phone opens the picker in a drawer, a desktop keeps the anchored dropdown
 	let isMobile = $derived(deviceStore.isMobile);
+
+	// one setting for every model id in the selector: the trigger and the rows. A phone, where
+	// the selector is narrow, drops it too unless its own setting keeps it
+	let showOrgName = $derived(
+		(settingsStore.config[SETTINGS_KEYS.SHOW_MODEL_ORG_NAME] ?? true) &&
+			(!isMobile || settingsStore.config[SETTINGS_KEYS.SHOW_MODEL_ORG_NAME_ON_MOBILE] === true)
+	);
 	let isOffline = $derived(!!serverStore.error);
 
 	let isOpen = $state(false);
@@ -164,6 +169,15 @@
 			}
 		}
 	}
+
+	// the details drawer's chat actions finish the pick, so an open picker closes too
+	$effect(() => {
+		if (!uiStore.modelsSelectorCloseSignal) return;
+
+		untrack(() => {
+			if (isOpen) ms.handleOpenChange(false);
+		});
+	});
 
 	// bits-ui auto-focuses the opened content, which can yank the page scroll: the
 	// content prevents that and this focuses the search input instead
