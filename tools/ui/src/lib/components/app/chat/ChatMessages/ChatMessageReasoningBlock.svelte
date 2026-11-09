@@ -153,7 +153,8 @@
 
 <style>
 	.reasoning-content.is-streaming {
-		max-height: 28rem;
+		/* page zoom shrinks the viewport, keep the box inside it */
+		max-height: min(28rem, 50dvh);
 		overflow-y: auto;
 		scrollbar-gutter: stable;
 		padding-right: 0.25rem;
