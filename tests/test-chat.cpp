@@ -1595,7 +1595,7 @@ class peg_tester {
 
     const std::string & template_path() const { return template_path_; }
 
-    // Run every test a second time with these pieces as special tokens, as if the vocab defined them
+    // Run the tests tokenized with these pieces as special tokens, as if the vocab defined them
     peg_tester & specials(const std::vector<std::string> & pieces) {
         llama_token id = FAKE_TEXT_TOKEN + 1;
         for (const auto & piece : pieces) {
@@ -1603,6 +1603,7 @@ class peg_tester {
             specials_.tokens.emplace(id, common_peg_token{ piece, LLAMA_TOKEN_ATTR_CONTROL });
             id++;
         }
+        common_chat_templates_set_specials(tmpls_.get(), specials_);
         return *this;
     }
 
@@ -1721,16 +1722,10 @@ class peg_test_builder {
                 return;
             }
         }
-        LOG_INF("\n\x1b[38;5;126m[%s]\x1b[0m\n%s\n\n", tester_.template_path().c_str(), tc_.input.c_str());
-        common_chat_templates_set_specials(tester_.tmpls_.get(), {});
-        test_peg_parser(tester_.tmpls_.get(), {}, [this](peg_test_case & t) { t = tc_; }, tester_.detailed_debug_);
-
-        if (!tester_.specials_.ids.empty()) {
-            LOG_INF("\n\x1b[38;5;126m[%s, tokenized]\x1b[0m\n%s\n\n", tester_.template_path().c_str(), tc_.input.c_str());
-            common_chat_templates_set_specials(tester_.tmpls_.get(), tester_.specials_);
-            test_peg_parser(tester_.tmpls_.get(), tester_.specials_, [this](peg_test_case & t) { t = tc_; },
-                            tester_.detailed_debug_);
-        }
+        LOG_INF("\n\x1b[38;5;126m[%s%s]\x1b[0m\n%s\n\n", tester_.template_path().c_str(),
+                tester_.specials_.ids.empty() ? "" : ", tokenized", tc_.input.c_str());
+        test_peg_parser(tester_.tmpls_.get(), tester_.specials_, [this](peg_test_case & t) { t = tc_; },
+                        tester_.detailed_debug_);
     }
 };
 
