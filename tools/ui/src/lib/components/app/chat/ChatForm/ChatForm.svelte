@@ -60,9 +60,12 @@
 		AudioRecorder,
 		convertToWav,
 		createAudioFile,
-		isAudioRecordingSupported
+		describeMicrophoneError,
+		isAudioRecordingSupported,
+		microphoneUnavailableReason
 	} from '$lib/utils/browser-only';
 	import { onMount } from 'svelte';
+	import { toast } from 'svelte-sonner';
 
 	interface Props {
 		// Data
@@ -135,6 +138,10 @@
 	// Audio Recording State
 	let isRecording = $state(false);
 	let recordingSupported = $state(false);
+	/** Why this page can't record at all (no HTTPS, no recorder), which no tap fixes. */
+	let micUnavailableReason = $state<string | null>(null);
+	/** Why the last start failed (denied, no microphone, busy); the next tap tries again. */
+	let micError = $state<string | null>(null);
 
 	// Invisible anchor at the form's top edge so the mention/WD popovers
 	// float above the box.
@@ -258,6 +265,7 @@
 
 	onMount(() => {
 		recordingSupported = isAudioRecordingSupported();
+		micUnavailableReason = microphoneUnavailableReason();
 		audioRecorder = new AudioRecorder();
 	});
 
@@ -531,6 +539,13 @@
 	}
 
 	async function handleMicClick() {
+		// a phone shows no tooltip on a tap, so the reason comes as a toast
+		if (micUnavailableReason) {
+			toast.error(micUnavailableReason);
+
+			return;
+		}
+
 		if (!audioRecorder || !recordingSupported) {
 			console.warn('Audio recording not supported');
 
@@ -552,8 +567,10 @@
 			try {
 				await audioRecorder.startRecording();
 				isRecording = true;
+				micError = null;
 			} catch (error) {
-				console.error('Failed to start recording:', error);
+				micError = describeMicrophoneError(error);
+				toast.error(micError);
 			}
 		}
 	}
@@ -651,6 +668,7 @@
 				{isLoading}
 				isReasoning={chatStore.isReasoning}
 				{isRecording}
+				micWarning={micUnavailableReason ?? micError}
 				onFileUpload={handleFileUpload}
 				onMicClick={handleMicClick}
 				{onStop}

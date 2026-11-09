@@ -25,6 +25,8 @@
 		isLoading?: boolean;
 		isReasoning?: boolean;
 		isRecording?: boolean;
+		/** Why the microphone can't record, shown on its button. */
+		micWarning?: string | null;
 		showAddButton?: boolean;
 		showModelSelector?: boolean;
 		uploadedFiles?: ChatUploadedFile[];
@@ -42,6 +44,7 @@
 		isLoading = false,
 		isReasoning = false,
 		isRecording = false,
+		micWarning = null,
 		onFileUpload,
 		onMicClick,
 		onStop,
@@ -173,7 +176,14 @@
 			/>
 		</Button>
 	{:else if shouldShowRecordButton}
-		<ChatFormActionRecord {disabled} {hasAudioModality} {isLoading} {isRecording} {onMicClick} />
+		<ChatFormActionRecord
+			{disabled}
+			{hasAudioModality}
+			{isLoading}
+			{isRecording}
+			{micWarning}
+			{onMicClick}
+		/>
 	{:else}
 		<ChatFormActionSubmit
 			canSend={canSend && (showModelSelector ? hasModelSelected && isSelectedModelInCache : true)}
