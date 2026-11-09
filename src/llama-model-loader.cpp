@@ -613,13 +613,22 @@ llama_model_loader::llama_model_loader(
             std::vector<char> prefix(llama_path_max(), 0);
             if (paths.empty() || llama_split_prefix(prefix.data(), prefix.size(), fname.c_str(), idx, n_split)) {
                 auto backbone = llama_get_list_splits(fname, idx, n_split);
-                auto combined = backbone;
+                auto file_name = [](const std::string & path) {
+                    return path.substr(path.find_last_of("/\\") + 1);
+                };
+                std::vector<std::string> extras;
                 for (const auto & path : paths) {
-                    if (std::find(backbone.begin(), backbone.end(), path) == backbone.end()) {
-                        combined.push_back(path);
+                    auto it = std::find_if(backbone.begin(), backbone.end(), [&](const std::string & b) {
+                        return file_name(b) == file_name(path);
+                    });
+                    if (it != backbone.end()) {
+                        *it = path; // given path wins, splits can be in different dirs
+                    } else {
+                        extras.push_back(path);
                     }
                 }
-                paths = std::move(combined);
+                paths = std::move(backbone);
+                paths.insert(paths.end(), extras.begin(), extras.end());
             } else if (paths.size() != n_split) {
                 throw std::runtime_error(format("invalid split count, given: %zu splits, but expected %d", paths.size(), n_split));
             }
@@ -648,12 +657,15 @@ llama_model_loader::llama_model_loader(
             skip_shard_order_validation |= probe && is_ple_only(probe.get());
         }
 
+        size_t n_skipped = 0;
+        int n_backbone_tensors = gguf_get_n_tensors(metadata);
         for (size_t idx = 1; idx < paths.size(); idx++) {
             const char * fname_split = paths[idx].c_str();
             if (skip_shard_order_validation && idx < n_backbone) {
                 FILE * f = ggml_fopen(fname_split, "rb");
                 if (f == nullptr) {
-                    LLAMA_LOG_INFO("%s: skipping missing GGUF split %s, per-layer embedding table given separately\n", __func__, fname_split);
+                    LLAMA_LOG_INFO("%s: GGUF split %s not found, assuming it only holds the per-layer embedding table\n", __func__, fname_split);
+                    n_skipped++;
                     continue;
                 }
                 fclose(f);
@@ -683,8 +695,10 @@ llama_model_loader::llama_model_loader(
                 }
                 if (skip_shard_order_validation && is_ple_only(ctx_gguf.get())) {
                     LLAMA_LOG_INFO("%s: skipping GGUF split %s, per-layer embedding table given separately\n", __func__, fname_split);
+                    n_skipped++;
                     continue;
                 }
+                n_backbone_tensors += gguf_get_n_tensors(ctx_gguf.get());
             } else {
                 const bool numbered = gguf_find_key(ctx_gguf.get(), kv_split_no.c_str()) >= 0 ||
                     gguf_find_key(ctx_gguf.get(), llm_kv(LLM_KV_SPLIT_COUNT).c_str()) >= 0 ||
@@ -709,6 +723,14 @@ llama_model_loader::llama_model_loader(
             }
         }
 
+        if (n_skipped > 0) {
+            // the external table can only replace one tensor of the numbered set
+            int declared_tensors = 0;
+            get_key(llm_kv(LLM_KV_SPLIT_TENSORS_COUNT), declared_tensors);
+            if (n_skipped != 1 || n_backbone_tensors + 1 != declared_tensors) {
+                throw std::runtime_error(format("incomplete model: %zu split(s) skipped, %d of %d tensors found in the split files", n_skipped, n_backbone_tensors, declared_tensors));
+            }
+        }
         if (n_split > 1 || has_extras) {
             int declared_tensors = gguf_get_n_tensors(metadata);
             get_key(llm_kv(LLM_KV_SPLIT_TENSORS_COUNT), declared_tensors, n_split > 1 && !has_extras);
