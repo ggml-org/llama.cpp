@@ -3,9 +3,9 @@
 	import IconUsage from './logo-usage/IconUsage.svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 
-	// the icon and the lockup in use, one case per story: the font's two glyphs, buttons, the two lockups in
-	// context, a download badge, running text, the web app's icons with the social avatars, with
-	// their proportions (the splash screens are UI/Foundations/Brand)
+	// the icon in use, one case per story: the font's glyphs, buttons, a download badge, running text, the web app's icons
+	// with the social avatars, with their proportions (the lockups are Brand/Logo/Lockup, the splash screens
+	// UI/Foundations/Brand)
 	const { Story } = defineMeta({
 		parameters: {
 			controls: { disable: true },
@@ -21,10 +21,6 @@
 
 <Story asChild name="Buttons">
 	<ShowcaseFrame><IconUsage section="buttons" /></ShowcaseFrame>
-</Story>
-
-<Story asChild name="Lockups">
-	<ShowcaseFrame><IconUsage section="context" /></ShowcaseFrame>
 </Story>
 
 <Story asChild name="Download badge">

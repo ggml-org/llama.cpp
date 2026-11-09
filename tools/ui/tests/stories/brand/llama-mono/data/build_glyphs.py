@@ -1,6 +1,6 @@
 """Llama Mono's glyph grid, exported from the design system's own font (src/lib/assets/fonts/LlamaMono.woff2) in the
-shape of the Llama Sans specimen's grid, so GlyphGrid draws both. Every cell is one advance wide, so the cells are
-too. The icon lockup (U+E002) is left out: it is wider than a cell. Run from tools/ui:
+shape of the Llama Sans specimen's grid, so GlyphGrid draws both, its cells as wide as Llama Sans's so the glyphs
+come out at the same size. The icon lockup (U+E002) is left out: it is wider than a cell. Run from tools/ui:
 
     uvx --with brotli --from fonttools python tests/stories/brand/llama-mono/data/build_glyphs.py
 """
@@ -16,6 +16,7 @@ from fontTools.varLib.instancer import instantiateVariableFont
 
 FONT = "src/lib/assets/fonts/LlamaMono.woff2"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "glyphs.json")
+SANS = "tests/stories/brand/llama-sans/lib/data/specimen.json"
 WEIGHT = 400
 GROUPS = [("Uppercase", "ABCDEFGHIJKLMNOPQRSTUVWXYZ"),
           ("Lowercase", "abcdefghijklmnopqrstuvwxyz"),
@@ -47,7 +48,8 @@ def main():
     asc, dsc = round(bounds(font, "l")[3]), round(bounds(font, "p")[1])
     top, bot = asc + 60, dsc - 40
     chars = [c for _, s in GROUPS for c in s]
-    vw = max(font["hmtx"][font.getBestCmap()[ord(c)]][0] for c in chars) + 60
+    with open(SANS) as f:
+        vw = json.load(f)["grid"]["width"]
 
     cells = []
     for c in chars:
