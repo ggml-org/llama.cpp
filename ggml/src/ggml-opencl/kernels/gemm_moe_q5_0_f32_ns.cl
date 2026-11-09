@@ -186,7 +186,12 @@ kernel void kernel_gemm_moe_q5_0_f32_ns(
 
     __private half16 reg_a;
     __private float32 reg_c = (float32)(0);
+#ifdef MOE_LM_PAD
+    __local half4 shared_b_store[128 + MOE_LM_PAD];
+    __local half4 * shared_b = shared_b_store + MOE_LM_PAD;
+#else
     __local half4 shared_b[128];
+#endif
 
     const ushort expert_id = src2_emap[block_id_n];
 
