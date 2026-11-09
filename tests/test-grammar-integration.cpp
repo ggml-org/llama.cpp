@@ -1606,6 +1606,27 @@ static void test_json_schema_any_order() {
         });
 }
 
+static void test_json_schema_any_order_many_keys() {
+    auto closed_object = [](int n_keys, bool required) {
+        json props = json::object();
+        json req = json::array();
+        for (int i = 0; i < n_keys; i++) {
+            props["k" + std::to_string(i)] = {{"type", "integer"}};
+            req.push_back("k" + std::to_string(i));
+        }
+        json schema = {{"type", "object"}, {"properties", props}, {"additionalProperties", false}};
+        if (required) {
+            schema["required"] = req;
+        }
+        return schema;
+    };
+    fprintf(stdout, "Testing any-order objects with many keys\n");
+    assert(!json_schema_to_grammar(closed_object(1000, true), true).empty());
+    const size_t size_50 = json_schema_to_grammar(closed_object(50, false), true).size();
+    const size_t size_100 = json_schema_to_grammar(closed_object(100, false), true).size();
+    assert(size_100 < 3 * size_50);
+}
+
 int main() {
     fprintf(stdout, "Running grammar integration tests...\n");
     test_simple_grammar();
@@ -1619,6 +1640,7 @@ int main() {
     test_custom_root_symbol_check();
     test_json_schema();
     test_json_schema_any_order();
+    test_json_schema_any_order_many_keys();
     fprintf(stdout, "All tests passed.\n");
     return 0;
 }

@@ -867,12 +867,41 @@ private:
             return alts.size() == 1 ? alts[0] : "( " + string_join(alts, " | ") + " )";
         };
 
-        std::map<std::pair<size_t, size_t>, std::string> rest_rules;
-        std::function<std::string(size_t, size_t)> rest;
+        // states are (tracked keys seen, next untracked key); every name is reserved first, so the bodies need no recursion
+        const size_t n_seen = ordered_required ? n_required + 1 : size_t(1) << n_tracked;
+        std::vector<std::string> rest_names(n_seen * (n_untracked + 1));
+        auto rest = [&](size_t seen, size_t next_untracked) -> const std::string & {
+            return rest_names[seen * (n_untracked + 1) + next_untracked];
+        };
+        for (size_t seen = 0; seen < n_seen; seen++) {
+            for (size_t p = 0; p <= n_untracked; p++) {
+                // the first key is inlined in the object rule, so (0, 0) has no rule
+                if (!(all_tracked(seen) && p == n_untracked) && !(seen == 0 && p == 0)) {
+                    rest_names[seen * (n_untracked + 1) + p] = _reserve_rule_name(prefix + "rest-" + std::to_string(seen) + (n_untracked == 0 ? "" : "-" + std::to_string(p)));
+                }
+            }
+        }
+        // untracked key j, or skip it for a later one: a chain, so each state lists the untracked keys once
+        std::vector<std::string> chain_names(n_seen * n_untracked);
+        for (size_t seen = 0; seen < n_seen; seen++) {
+            for (size_t j = 0; j < n_untracked; j++) {
+                chain_names[seen * n_untracked + j] = _reserve_rule_name(prefix + "untracked-" + std::to_string(seen) + "-" + std::to_string(j));
+            }
+        }
+        for (size_t seen = 0; seen < n_seen; seen++) {
+            for (size_t j = 0; j < n_untracked; j++) {
+                const std::string & r = rest(seen, j + 1);
+                std::string b = prop_kv_rule_names[keys[n_tracked + j]] + (r.empty() ? "" : " " + r);
+                if (j + 1 < n_untracked) {
+                    b += " | " + chain_names[seen * n_untracked + j + 1];
+                }
+                _rules[chain_names[seen * n_untracked + j]] = b;
+            }
+        }
         auto next_kvs = [&](size_t seen, size_t next_untracked) {
             std::vector<std::string> alts;
-            auto add = [&](const std::string & kv, size_t seen_after, size_t n_untracked_after) {
-                const std::string r = rest(seen_after, n_untracked_after);
+            auto add = [&](const std::string & kv, size_t seen_after, size_t next_after) {
+                const std::string & r = rest(seen_after, next_after);
                 alts.push_back(kv + (r.empty() ? "" : " " + r));
             };
             if (ordered_required) {
@@ -887,27 +916,22 @@ private:
                     }
                 }
             }
-            for (size_t j = next_untracked; j < n_untracked; j++) {
-                add(prop_kv_rule_names[keys[n_tracked + j]], seen, j + 1);
+            if (next_untracked < n_untracked) {
+                alts.push_back(chain_names[seen * n_untracked + next_untracked]);
             }
             return alts;
         };
         // one "," then the next key, so only one stack waits for the comma
-        rest = [&](size_t seen, size_t next_untracked) -> std::string {
-            const auto key = std::make_pair(seen, next_untracked);
-            auto it = rest_rules.find(key);
-            if (it != rest_rules.end()) {
-                return it->second;
+        for (size_t seen = 0; seen < n_seen; seen++) {
+            for (size_t p = 0; p <= n_untracked; p++) {
+                const std::string & name = rest(seen, p);
+                if (name.empty()) {
+                    continue;
+                }
+                const std::string b = "\",\" space " + group(next_kvs(seen, p));
+                _rules[name] = all_required(seen) ? "( " + b + " )?" : b;
             }
-            if (all_tracked(seen) && next_untracked == n_untracked) {
-                return rest_rules[key] = "";
-            }
-            const std::string rule_name = _reserve_rule_name(prefix + "rest-" + std::to_string(seen) + (n_untracked == 0 ? "" : "-" + std::to_string(next_untracked)));
-            rest_rules[key] = rule_name;
-            const std::string body = "\",\" space " + group(next_kvs(seen, next_untracked));
-            _rules[rule_name] = all_required(seen) ? "( " + body + " )?" : body;
-            return rule_name;
-        };
+        }
 
         const auto firsts = next_kvs(0, 0);
         return "\"{\" space " + (all_required(0) ? "( " + string_join(firsts, " | ") + " )?" : group(firsts)) + " space \"}\"";
