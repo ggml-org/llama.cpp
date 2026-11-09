@@ -296,6 +296,14 @@ set_tests_properties(test-llama-archs-qsa-chunk PROPERTIES
     ENVIRONMENT "LLAMA_QSA_CHUNK=24"
 )
 
+# the query chunks match the unsplit attention on the CPU
+llama_test(
+    test-llama-archs
+    NAME test-llama-archs-qsa-chunk-match
+    LABEL main
+    ARGS -a "qwen4exp" --qsa-chunk 24 -d 0.3
+)
+
 llama_test(
     test-llama-context
     NAME test-llama-context-qsa-chunk

@@ -713,10 +713,10 @@ ggml_tensor * llama_model_qwen4exp::graph::build_norm_gated(
 }
 
 // query tokens per QSA chunk, LLAMA_QSA_CHUNK overrides it for tests, 0 disables the split
+// read at each graph build, so that one process can compare contexts with different chunk sizes
 static int64_t qwen4exp_qsa_chunk_n() {
-    static const char * env = getenv("LLAMA_QSA_CHUNK");
-    static const int64_t n_chunk = env ? std::max<int64_t>(0, atoll(env)) : 2048;
-    return n_chunk;
+    const char * env = getenv("LLAMA_QSA_CHUNK");
+    return env ? std::max<int64_t>(0, atoll(env)) : 2048;
 }
 
 // the query chunks {t0, n} of the QSA: the selection mask of a chunk is [n_kv, n], so split large ubatches
