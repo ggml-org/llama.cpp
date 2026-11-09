@@ -22,6 +22,7 @@
 #include <memory>
 #include <random>
 #include <stdexcept>
+#include <optional>
 #include <unordered_set>
 #include <vector>
 #include <cinttypes>
@@ -4913,7 +4914,13 @@ struct clip_model_loader {
         if (ctx_clip.flash_attn_type == CLIP_FLASH_ATTN_TYPE_AUTO) {
             // try to enable flash attention to see if it's supported
             ctx_clip.flash_attn_type = CLIP_FLASH_ATTN_TYPE_ENABLED;
-            info = reserve_compute_meta(ctx_clip, batch);
+            {
+                auto info_opt = reserve_compute_meta(ctx_clip, batch);
+                if (!info_opt) {
+                    throw std::runtime_error("clip: failed to reserve compute buffers");
+                }
+                info = *info_opt;
+            }
             if (!info.fattn && info.fattn_op) {
                 auto op = info.fattn_op;
                 LOG_WRN("%s: *****************************************************************\n", __func__);
@@ -4932,10 +4939,16 @@ struct clip_model_loader {
                 LOG_WRN("%s: please report this on github as an issue\n", __func__);
                 LOG_WRN("%s: *****************************************************************\n", __func__);
                 ctx_clip.flash_attn_type = CLIP_FLASH_ATTN_TYPE_DISABLED;
-                reserve_compute_meta(ctx_clip, batch);
+                if (!reserve_compute_meta(ctx_clip, batch)) {
+                    throw std::runtime_error("clip: failed to reserve compute buffers");
+                }
             }
         } else {
-            info = reserve_compute_meta(ctx_clip, batch);
+            auto info_opt = reserve_compute_meta(ctx_clip, batch);
+            if (!info_opt) {
+                throw std::runtime_error("clip: failed to reserve compute buffers");
+            }
+            info = *info_opt;
             if (!info.fattn && ctx_clip.flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED) {
                 LOG_WRN("%s: flash attention is not supported by the current backend; falling back to CPU (performance will be degraded)\n", __func__);
             }
@@ -4975,9 +4988,14 @@ struct clip_model_loader {
     }
 
     // only initialize backend buffers, but do not allocate them yet
-    static support_info_graph reserve_compute_meta(clip_ctx & ctx_clip, const clip_image_f32_batch & batch) {
+    // returns nullopt when the compute buffers could not be allocated (eg. not enough VRAM);
+    // the caller must treat that as fatal instead of using the null buffers
+    static std::optional<support_info_graph> reserve_compute_meta(clip_ctx & ctx_clip, const clip_image_f32_batch & batch) {
         ggml_cgraph * gf = clip_get_graph_builder(&ctx_clip, batch)->build();
-        ggml_backend_sched_reserve(ctx_clip.sched.get(), gf);
+        if (!ggml_backend_sched_reserve(ctx_clip.sched.get(), gf)) {
+            LOG_ERR("%s: failed to reserve compute buffers\n", __func__);
+            return std::nullopt;
+        }
 
         ctx_clip.mem_compute.clear();
         for (size_t i = 0; i < ctx_clip.backend_ptrs.size(); ++i) {
