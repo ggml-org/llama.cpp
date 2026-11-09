@@ -378,6 +378,7 @@ mtmd_helper_resampler * mtmd_helper_resampler_init(int32_t rate_in, int32_t rate
     }
     ma_resampler_config config = ma_resampler_config_init(ma_format_f32, 1, (ma_uint32) rate_in, (ma_uint32) rate_out,
                                                           ma_resample_algorithm_linear);
+    config.linear.lpfOrder = MA_MAX_FILTER_ORDER;
     if (ma_resampler_init(&config, nullptr, &ctx->rs) != MA_SUCCESS) {
         LOG_ERR("%s: failed to initialize the resampler %d -> %d\n", __func__, rate_in, rate_out);
         delete ctx;
