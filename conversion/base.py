@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 if 'NO_LOCAL_GGUF' not in os.environ:
     sys.path.insert(1, str(Path(__file__).parent.parent / 'gguf-py'))
 import gguf
+from . import quant_mix
 from gguf.vocab import MistralTokenizerType, MistralVocab
 
 try:
@@ -133,7 +134,9 @@ class ModelBase:
                  target_model_dir: Path | None = None,
                  fuse_gate_up_exps: bool = False,
                  fp8_as_q8: bool = False,
-                 fuse_qkv: bool = False):
+                 fuse_qkv: bool = False,
+                 tensor_type_overrides: list | None = None,
+                 imatrix_file: str | None = None):
         if type(self) is ModelBase or \
                 type(self) is TextModel or \
                 type(self) is MmprojModel:
@@ -158,6 +161,8 @@ class ModelBase:
         self._up_exp_buffer: dict[int, Tensor] = {}
         self._unfusable_gate_up_layers: set[int] = set()
         self.fuse_qkv = fuse_qkv
+        self.tensor_type_overrides = tensor_type_overrides or []
+        self.imatrix_file = imatrix_file or ""
         self._q_buffer: dict[int, Tensor] = {}
         self._k_buffer: dict[int, Tensor] = {}
         self._v_buffer: dict[int, Tensor] = {}
@@ -1150,6 +1155,56 @@ class ModelBase:
             or new_name[-7:] not in (".weight", ".lora_a", ".lora_b")
         )
 
+    @property
+    def _quant_ctx(self) -> quant_mix.QuantCtx:
+        # built lazily; only consulted for mixed K/I-quant ftypes
+        cached = getattr(self, "_quant_ctx_cache", None)
+        if cached is not None:
+            return cached
+        n_layer = getattr(self, "block_count", 0) or 0
+        n_expert = int(self.hparams.get("num_local_experts", self.hparams.get("n_routed_experts", 1)) or 1)
+        n_head = int(self.hparams.get("num_attention_heads", 0) or 0)
+        n_head_kv = int(self.hparams.get("num_key_value_heads", n_head) or n_head)
+        n_gqa = (n_head // n_head_kv) if n_head_kv else 1
+        n_embd = int(self.hparams.get("hidden_size", self.hparams.get("n_embd", 0)) or 0)
+        est_params = 12 * n_layer * n_embd * n_embd if n_embd else 0
+        cached = quant_mix.QuantCtx(
+            n_layer=n_layer, n_expert=n_expert, n_gqa=n_gqa,
+            arch=gguf.MODEL_ARCH_NAMES.get(self.model_arch, ""),
+            is_70b=est_params > 40e9, has_imatrix=False)
+        self._quant_ctx_cache = cached
+        return cached
+
+    @property
+    def _quantize_raw_path(self) -> str:
+        # locate the quantize-raw helper (K/I-quant quantization, not available in gguf-py)
+        cached = getattr(self, "_quantize_raw_path_cache", None)
+        if cached is not None:
+            return cached
+        import shutil
+        p = os.environ.get("LLAMA_QUANTIZE_RAW") or shutil.which("quantize-raw")
+        if not p:
+            p = str(Path(__file__).parent.parent / "build" / "bin" / "quantize-raw")
+        self._quantize_raw_path_cache = p
+        return p
+
+    def _quantize_with_helper(self, data_torch: Tensor, new_name: str, qtype: gguf.GGMLQuantizationType) -> tuple[np.ndarray, gguf.GGMLQuantizationType]:
+        import subprocess
+        arr = data_torch.detach().to(torch.float32).contiguous().numpy()
+        if arr.ndim == 1:
+            arr = arr.reshape(1, -1)
+        nrows, npr = arr.shape
+        # ensure npr is compatible with the quant block size
+        qtype = quant_mix.tensor_type_fallback("", npr, qtype)
+        # pass the imatrix file (may be empty); the helper fails if the type requires one and it is missing
+        cmd = [self._quantize_raw_path, str(int(qtype)), str(nrows), str(npr), new_name, self.imatrix_file]
+        r = subprocess.run(cmd, input=arr.tobytes(), capture_output=True)
+        if r.returncode != 0:
+            raise RuntimeError(f"quantize-raw failed for {new_name} ({qtype.name}): {r.stderr.decode().strip()}")
+        from gguf.constants import GGML_QUANT_SIZES
+        block, tsize = GGML_QUANT_SIZES[qtype]
+        return np.frombuffer(r.stdout, dtype=np.uint8).reshape(nrows, npr // block * tsize), qtype
+
     def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
         if name in self._fp8_e4m3_preserved and n_dims >= 2:
             if self._tensor_requires_f32(new_name, bid, n_dims):
@@ -1555,25 +1610,47 @@ class ModelBase:
                         data_qtype = gguf.GGMLQuantizationType.TQ1_0
                     elif self.ftype == gguf.LlamaFileType.MOSTLY_TQ2_0:
                         data_qtype = gguf.GGMLQuantizationType.TQ2_0
+                    elif self.ftype in quant_mix.FTYPE_DEFAULT:
+                        base = quant_mix.FTYPE_DEFAULT[self.ftype]
+                        cat = quant_mix.tensor_category(new_name)
+                        data_qtype = quant_mix.get_tensor_type(self.ftype, cat, new_name, self._quant_ctx, base)
+                        ncols = data_torch.shape[-1] if data_torch.ndim else 0
+                        data_qtype = quant_mix.tensor_type_fallback(new_name, ncols, data_qtype)
                     else:
                         raise ValueError(f"Unknown file type: {self.ftype.name}")
+
+                # explicit per-tensor override wins (from --tensor-type / --tensor-type-file)
+                if self.tensor_type_overrides:
+                    ov = quant_mix.match_override(self.tensor_type_overrides, new_name)
+                    if ov is not None and not (n_dims <= 1 or new_name.endswith("_norm.weight")):
+                        data_qtype = ov
 
                 if data_torch.dtype == torch.float8_e4m3fn:
                     data = data_torch.view(torch.uint8).numpy() if data_qtype == gguf.GGMLQuantizationType.F8_E4M3 else data_torch.float().numpy()
                 else:
                     data = data_torch.numpy()
 
-                # a chunked tensor quantizes as one chunk at a time, while it is written
-                quantize = data.quantize if isinstance(data, gguf.LazyChunkedTensor) else (
-                    lambda qtype, d=data: gguf.quants.quantize(d, qtype))
+                # pick the quantization path:
+                #   floats            -> stored as-is
+                #   python-quantizable -> gguf-py
+                #   K/I-quants         -> quantize-raw helper (gguf-py can only dequantize these)
+                uses_helper = (data_qtype not in quant_mix.FLOAT_TYPES
+                               and data_qtype != gguf.GGMLQuantizationType.F8_E4M3
+                               and data_qtype not in quant_mix.PYTHON_QUANTIZABLE)
+                if uses_helper:
+                    data, data_qtype = self._quantize_with_helper(data_torch, new_name, data_qtype)
+                else:
+                    # a chunked tensor quantizes as one chunk at a time, while it is written
+                    quantize = data.quantize if isinstance(data, gguf.LazyChunkedTensor) else (
+                        lambda qtype, d=data: gguf.quants.quantize(d, qtype))
 
-                if not (data_qtype == gguf.GGMLQuantizationType.F8_E4M3 and data.dtype == np.uint8):
-                    try:
-                        data = quantize(data_qtype)
-                    except gguf.QuantError as e:
-                        logger.warning("%s, %s", e, "falling back to F16")
-                        data_qtype = gguf.GGMLQuantizationType.F16
-                        data = quantize(data_qtype)
+                    if not (data_qtype == gguf.GGMLQuantizationType.F8_E4M3 and data.dtype == np.uint8):
+                        try:
+                            data = quantize(data_qtype)
+                        except gguf.QuantError as e:
+                            logger.warning("%s, %s", e, "falling back to F16")
+                            data_qtype = gguf.GGMLQuantizationType.F16
+                            data = quantize(data_qtype)
 
                 shape = gguf.quant_shape_from_byte_shape(data.shape, data_qtype) if data.dtype == np.uint8 else data.shape
 

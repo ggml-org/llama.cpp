@@ -25,6 +25,7 @@ from conversion import (
     _mistral_common_installed,
     _mistral_import_error_msg,
 )
+from conversion import quant_mix
 
 
 def split_str_to_n_bytes(split_str: str) -> int:
@@ -57,8 +58,24 @@ def parse_args() -> argparse.Namespace:
         help="path to write to; default: based on input. {ftype} will be replaced by the outtype.",
     )
     parser.add_argument(
-        "--outtype", type=str, choices=["f32", "f16", "bf16", "q8_0", "tq1_0", "tq2_0", "auto"], default="auto",
-        help="output format - use f32 for float32, f16 for float16, bf16 for bfloat16, q8_0 for Q8_0, tq1_0 or tq2_0 for ternary, and auto to preserve supported FP8 weights and otherwise select the highest-fidelity 16-bit float type",
+        "--outtype", type=str, choices=["f32", "f16", "bf16", "q8_0", "tq1_0", "tq2_0", "auto",
+                                         "q2_k", "q2_k_s", "q3_k_s", "q3_k_m", "q3_k_l",
+                                         "q4_k_s", "q4_k_m", "q5_k_s", "q5_k_m", "q6_k",
+                                         "iq1_s", "iq1_m", "iq2_xxs", "iq2_xs", "iq2_s", "iq2_m",
+                                         "iq3_xxs", "iq3_xs", "iq3_s", "iq3_m", "iq4_nl", "iq4_xs"], default="auto",
+        help="output format - use f32 for float32, f16 for float16, bf16 for bfloat16, q8_0 for Q8_0, tq1_0 or tq2_0 for ternary, auto to preserve supported FP8 weights and otherwise select the highest-fidelity 16-bit float type, or a mixed K/I-quant type (q4_k_m, q5_k_m, q6_k, iq4_xs, ...) to quantize directly from safetensors without an FP16 intermediate",
+    )
+    parser.add_argument(
+        "--tensor-type", type=str, action="append", default=[], metavar="NAME=TYPE",
+        help="quantize the matching tensor to the given type, e.g. --tensor-type attn_q=q8_0. NAME is a gguf tensor name substring (case-insensitive), first match wins. May be specified multiple times.",
+    )
+    parser.add_argument(
+        "--tensor-type-file", type=Path, metavar="FILE",
+        help="file with one 'gguf_name=type' per entry (whitespace separated) giving per-tensor quant targets; first match wins. Same format as llama-quantize --tensor-type-file.",
+    )
+    parser.add_argument(
+        "--imatrix", type=Path, metavar="FILE",
+        help="importance matrix file (from llama-imatrix); required for low-bit I-quants (iq1_s, iq1_m, iq2_xxs/xs/s, iq3_xxs). The conversion fails if a tensor targets an imatrix type but no matching imatrix entry is available.",
     )
     parser.add_argument(
         "--bigendian", action="store_true",
@@ -217,6 +234,29 @@ def main() -> None:
         "tq1_0": gguf.LlamaFileType.MOSTLY_TQ1_0,
         "tq2_0": gguf.LlamaFileType.MOSTLY_TQ2_0,
         "auto": gguf.LlamaFileType.GUESSED,
+        # mixed K/I-quant ftypes: quantize directly from safetensors, no FP16 intermediate
+        "q2_k": gguf.LlamaFileType.MOSTLY_Q2_K,
+        "q2_k_s": gguf.LlamaFileType.MOSTLY_Q2_K_S,
+        "q3_k_s": gguf.LlamaFileType.MOSTLY_Q3_K_S,
+        "q3_k_m": gguf.LlamaFileType.MOSTLY_Q3_K_M,
+        "q3_k_l": gguf.LlamaFileType.MOSTLY_Q3_K_L,
+        "q4_k_s": gguf.LlamaFileType.MOSTLY_Q4_K_S,
+        "q4_k_m": gguf.LlamaFileType.MOSTLY_Q4_K_M,
+        "q5_k_s": gguf.LlamaFileType.MOSTLY_Q5_K_S,
+        "q5_k_m": gguf.LlamaFileType.MOSTLY_Q5_K_M,
+        "q6_k": gguf.LlamaFileType.MOSTLY_Q6_K,
+        "iq1_s": gguf.LlamaFileType.MOSTLY_IQ1_S,
+        "iq1_m": gguf.LlamaFileType.MOSTLY_IQ1_M,
+        "iq2_xxs": gguf.LlamaFileType.MOSTLY_IQ2_XXS,
+        "iq2_xs": gguf.LlamaFileType.MOSTLY_IQ2_XS,
+        "iq2_s": gguf.LlamaFileType.MOSTLY_IQ2_S,
+        "iq2_m": gguf.LlamaFileType.MOSTLY_IQ2_M,
+        "iq3_xxs": gguf.LlamaFileType.MOSTLY_IQ3_XXS,
+        "iq3_xs": gguf.LlamaFileType.MOSTLY_IQ3_XS,
+        "iq3_s": gguf.LlamaFileType.MOSTLY_IQ3_S,
+        "iq3_m": gguf.LlamaFileType.MOSTLY_IQ3_M,
+        "iq4_nl": gguf.LlamaFileType.MOSTLY_IQ4_NL,
+        "iq4_xs": gguf.LlamaFileType.MOSTLY_IQ4_XS,
     }
 
     is_split = args.split_max_tensors > 0 or args.split_max_size != "0"
@@ -295,6 +335,10 @@ def main() -> None:
             if args.mtp:
                 model_class.mtp_only = True
 
+        tensor_type_specs = list(args.tensor_type)
+        if args.tensor_type_file is not None:
+            tensor_type_specs += args.tensor_type_file.read_text().split()
+        tensor_type_overrides = quant_mix.parse_tensor_type_overrides(tensor_type_specs)
         model_instance = model_class(dir_model, output_type, fname_out,
                                      is_big_endian=args.bigendian, use_temp_file=args.use_temp_file,
                                      eager=args.no_lazy,
@@ -308,6 +352,8 @@ def main() -> None:
                                      fuse_gate_up_exps=args.fuse_gate_up_exps,
                                      fp8_as_q8=args.fp8_as_q8,
                                      fuse_qkv=args.fuse_qkv,
+                                     tensor_type_overrides=tensor_type_overrides,
+                                     imatrix_file=str(args.imatrix) if args.imatrix else None,
                                      )
 
         if args.vocab_only:
