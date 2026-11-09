@@ -127,8 +127,12 @@ static_assert(sizeof(vk_flash_attn_push_constants) <= 128, "sizeof(vk_flash_attn
 struct vk_xe_fa_push_constants {
     uint32_t neq1;
     uint32_t neq2;
+    uint32_t neq3;
     uint32_t nek1;
     uint32_t nek2;
+    uint32_t nek3;
+    uint32_t nev2;
+    uint32_t nev3;
     uint32_t nem1;
     uint32_t nem2;
     uint32_t nem3;
@@ -142,7 +146,6 @@ struct vk_xe_fa_push_constants {
     uint32_t nbk3;
     uint32_t nbv3;
     uint32_t nb3;
-    uint32_t gqa_ratio;
     uint32_t flag;
     float scale;
 };

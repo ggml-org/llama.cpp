@@ -433,7 +433,7 @@ struct vk_fa_pipeline_state {
 
 struct vk_xe_fa_pipeline_state {
     uint32_t HSK, HSV;
-    uint32_t gqa_ratio;
+    uint32_t qk_ratio, pv_ratio;
     uint32_t decode_n;
     bool unaligned_seq_len;
     bool unaligned_q;
@@ -441,8 +441,8 @@ struct vk_xe_fa_pipeline_state {
     bool multi_head_mask;
 
     bool operator<(const vk_xe_fa_pipeline_state &b) const {
-        return std::tie(HSK, HSV, gqa_ratio, decode_n, unaligned_seq_len, unaligned_q, partial_row_mask, multi_head_mask) <
-               std::tie(b.HSK, b.HSV, b.gqa_ratio, b.decode_n, b.unaligned_seq_len, b.unaligned_q, b.partial_row_mask, b.multi_head_mask);
+        return std::tie(HSK, HSV, qk_ratio, pv_ratio, decode_n, unaligned_seq_len, unaligned_q, partial_row_mask, multi_head_mask) <
+               std::tie(b.HSK, b.HSV, b.qk_ratio, b.pv_ratio, b.decode_n, b.unaligned_seq_len, b.unaligned_q, b.partial_row_mask, b.multi_head_mask);
     }
 };
 
