@@ -1699,7 +1699,7 @@ ggml_tensor * llm_graph_context::build_lora_mm(
         }
 
         const float adapter_scale = lora.second;
-        const float scale = lw->get_scale(lora.first->alpha, adapter_scale);
+        const float scale = lw->get_scale(lora.first->alpha, lora.first->use_rslora, adapter_scale);
 
         ggml_tensor * ab_cur = ggml_mul_mat(
                 ctx0, lw->b,
@@ -1786,9 +1786,7 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
             continue;
         }
 
-        const float alpha = lora.first->alpha;
-        const float rank  = (float) lw->b->ne[0];
-        const float scale = alpha ? lora.second * alpha / rank : lora.second;
+        const float scale = lw->get_scale(lora.first->alpha, lora.first->use_rslora, lora.second);
 
         ggml_tensor * ab_cur = ggml_mul_mat_id(
                 ctx0, lw->b,
@@ -2787,7 +2785,7 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd, float to
             }
 
             const float adapter_scale = lora.second;
-            const float scale = lw->get_scale(lora.first->alpha, adapter_scale);
+            const float scale = lw->get_scale(lora.first->alpha, lora.first->use_rslora, adapter_scale);
 
             ggml_tensor * inpL_delta = ggml_scale(ctx0, ggml_mul_mat(
                         ctx0, lw->b, // non-transposed lora_b
