@@ -614,7 +614,7 @@
 								: 'Go to start'}
 						class="pointer-events-auto size-10 rounded-full! md:size-9 {isStripHidden
 							? 'bg-transparent! hover:bg-transparent!'
-							: 'matte-key bg-surface-raised! hover:bg-surface-raised! dark:bg-muted-foreground/15! dark:hover:bg-muted-foreground/15!'}"
+							: 'bg-muted/60 border border-border/20 backdrop-blur-sm bg-background! hover:bg-background! dark:bg-muted-foreground/15! dark:hover:bg-muted-foreground/15!'}"
 						href={uiStore.isSidebarExpanded && !isLogoToggle ? ROUTES.START : undefined}
 						icon={isLogoToggle && logoHovered
 							? uiStore.isSidebarExpanded
@@ -638,7 +638,7 @@
 				{#if isOnMobile}
 					<ActionIcon
 						ariaLabel="Search"
-						class="matte-key size-10 rounded-full! bg-surface-raised! hover:bg-surface-raised! dark:bg-muted-foreground/15! dark:hover:bg-muted-foreground/15!"
+						class="bg-muted/60 border border-border/20 backdrop-blur-sm size-10 rounded-full! bg-background! hover:bg-background! dark:bg-muted-foreground/15! dark:hover:bg-muted-foreground/15!"
 						icon={Search}
 						iconSize="size-4.5"
 						onclick={() => handleSidebarAction(SidebarAction.SEARCH)}
@@ -699,7 +699,7 @@
 				     items with the actions above) -->
 				{#if !isOnMobile}
 					<SidebarNavigationActions
-						class="inset-group-surface mx-2 mb-2 p-1"
+						class="rounded-xl border border-border/20 bg-background/55 shadow-sm dark:bg-foreground/5 mx-2 mb-2 p-1"
 						items={SIDEBAR_FOOTER_ITEMS}
 						onAction={handleSidebarAction}
 					/>

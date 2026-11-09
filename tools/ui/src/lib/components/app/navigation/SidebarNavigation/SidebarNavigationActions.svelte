@@ -104,7 +104,7 @@
 			<div transition:fade={itemTransition}>
 				<Button
 					class="w-full min-w-9 justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100 max-md:h-12 max-md:rounded-2xl max-md:px-3 max-md:text-[17px] {isActive
-						? 'selected-row-surface text-accent-foreground'
+						? 'bg-accent text-accent-foreground'
 						: ''}"
 					href={item.route}
 					onclick={() => {
