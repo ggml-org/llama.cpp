@@ -6735,8 +6735,7 @@ struct ggml_tensor * ggml_top_k_mask(
     GGML_ASSERT(mask->type == GGML_TYPE_F16 || mask->type == GGML_TYPE_F32);
     GGML_ASSERT(mask->nb[0] == ggml_type_size(mask->type));
     GGML_ASSERT(top_k->type == GGML_TYPE_I32);
-    GGML_ASSERT(mask->ne[1] == 0 ? top_k->ne[1] == 0 : top_k->ne[1] % mask->ne[1] == 0);
-    GGML_ASSERT(top_k->ne[2] % mask->ne[2] == 0 && top_k->ne[3] % mask->ne[3] == 0);
+    GGML_ASSERT(top_k->ne[1] % mask->ne[1] == 0 && top_k->ne[2] % mask->ne[2] == 0 && top_k->ne[3] % mask->ne[3] == 0);
 
     if (score) {
         GGML_ASSERT(score->type == GGML_TYPE_F32);

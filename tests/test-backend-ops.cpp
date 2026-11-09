@@ -10505,10 +10505,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         // blocks picked per head, the mask broadcast over the heads
         test_cases.emplace_back(new test_top_k_mask(type, 512, 16, 32, 4, 0, true, 6, 4, 1));
         test_cases.emplace_back(new test_top_k_mask(type, 1024, 8, 128, 16, 8, false, 3, 2, 2));
-        // empty, a query chunk past the last token
-        test_cases.emplace_back(new test_top_k_mask(type, 256, 0, 0, 16, 0, false, 0));
         // one mask row for all rows and streams (QSA)
         test_cases.emplace_back(new test_top_k_mask(type, 1001, 4, 70, 16, 3, true, 7, 1, 1, false, true));
+        // empty, a QSA query chunk past the last token
+        test_cases.emplace_back(new test_top_k_mask(type, 1001, 4, 70, 16, 3, true, 0, 1, 1, false, true));
         test_cases.emplace_back(new test_top_k_mask(type, 512, 8, 16, 32, 7, true, 5, 1, 4, false, true));
     }
 
