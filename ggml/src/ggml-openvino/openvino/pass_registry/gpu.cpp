@@ -5,6 +5,7 @@
 #include "ggml-openvino/openvino/pass/fuse_moe_compressed.h"
 #include "ggml-openvino/openvino/pass/fuse_moe_router.h"
 #include "ggml-openvino/openvino/pass/keep_sum_square_fp32.h"
+#include "ggml-openvino/openvino/pass/move_scale_before_matmul.h"
 
 namespace ov {
 namespace frontend {
@@ -26,6 +27,9 @@ void register_gpu_passes(ov::pass::Manager & manager, const GraphTraits & traits
         // integer zero point, so it is a no-op on the separate-gate/up models above.
         manager.register_pass<pass::FuseMoeCompressedFusedGateUp>();
     }
+
+    // f16 range: apply a scalar scale before a weight MatMul instead of after it (granite residual_scale).
+    manager.register_pass<pass::MoveScaleBeforeMatMul>();
 
     // Workaround for an OpenVINO GPU-plugin defect: an eltwise op whose operands differ in
     // rank is computed wrongly once the plugin fuses it as a post-op into `rms`. gemma-4
