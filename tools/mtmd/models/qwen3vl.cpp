@@ -1,6 +1,6 @@
 #include "models.h"
 
-ggml_cgraph * clip_graph_qwen3vl::build() {
+ggml_cgraph * mtmd_graph_qwen3vl::build() {
     GGML_ASSERT(model.patch_bias != nullptr);
     GGML_ASSERT(model.position_embeddings != nullptr);
     GGML_ASSERT(model.class_embedding == nullptr);

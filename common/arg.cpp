@@ -4,6 +4,7 @@
 #include "chat.h"
 #include "common.h"
 #include "download.h"
+#include "http.h"
 #include "json-schema-to-grammar.h"
 #include "json.h"
 #include "llama.h"
@@ -399,7 +400,26 @@ bool common_models_handler_is_preset_repo(const common_models_handler & handler)
     return !handler.plan.preset.url.empty();
 }
 
+static common_download_opts download_opts_for_url(const common_download_opts & opts, const std::string & url) {
+    common_download_opts result = opts;
+    try {
+        const auto hf    = common_http_parse_url(common_get_model_endpoint());
+        const auto parts = common_http_parse_url(url);
+
+        if (parts.scheme == hf.scheme &&
+            parts.host   == hf.host &&
+            parts.port   == hf.port &&
+            string_starts_with(result.bearer_token, "hf_")) {
+            return result;
+        }
+    } catch (const std::exception &) {
+    }
+    result.bearer_token.clear();
+    return result;
+}
+
 static std::vector<common_download_task> build_url_tasks(const common_params_model & model, common_download_opts opts) {
+    opts = download_opts_for_url(opts, model.url);
     auto parts = common_download_get_all_parts(model.url);
     std::vector<common_download_task> tasks;
 
@@ -488,7 +508,7 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
         common_download_task task;
         task.url        = params.mmproj.url;
         task.local_path = params.mmproj.path;
-        task.opts       = opts;
+        task.opts       = download_opts_for_url(opts, task.url);
         tasks.push_back(task);
     }
     bool had_spec_url = false;
@@ -496,7 +516,7 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
         common_download_task task;
         task.url        = params.speculative.draft.mparams.url;
         task.local_path = params.speculative.draft.mparams.path;
-        task.opts       = opts;
+        task.opts       = download_opts_for_url(opts, task.url);
         tasks.push_back(task);
         had_spec_url = true;
     }
@@ -710,7 +730,7 @@ static void common_params_apply_system_config(common_params & params, llama_exam
     std::vector<std::filesystem::path> paths;
 
 #if defined(_WIN32)
-    const std::filesystem::path program_data = common_get_path_from_env("PROGRAMDATA");
+    const std::filesystem::path program_data = common_get_env("PROGRAMDATA");
     if (!program_data.empty()) {
         paths.push_back(program_data / "llama.cpp" / "config.ini");
     }
@@ -2734,6 +2754,17 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.moe_cache_size = (size_t) value*1024*1024;
         }
     ).set_env("LLAMA_ARG_MOE_CACHE_MIB"));
+    add_opt(common_arg(
+        {"--moe-cache-cpu-share"}, "F",
+        string_format("share of the MoE cache misses that the CPU computes from the host experts instead of uploading them to the GPU once the cache is full, from 0 to 1 (default: %.2f)", (double) params.moe_cache_cpu_share),
+        [](common_params & params, const std::string & value) {
+            const float share = std::stof(value);
+            if (share < 0.0f || share > 1.0f) {
+                throw std::invalid_argument("invalid value");
+            }
+            params.moe_cache_cpu_share = share;
+        }
+    ).set_env("LLAMA_ARG_MOE_CACHE_CPU_SHARE"));
     add_opt(common_arg(
         {"-ncffn", "--n-cpu-ffn"}, "N",
         "keep the dense FFN weights of the first N layers in the CPU\n"

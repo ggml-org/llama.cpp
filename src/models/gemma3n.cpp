@@ -81,7 +81,7 @@ void llama_model_gemma3n::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_gemma3n::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
 // get 2D slice view from a 3D tensor, the idx corresponds to the 3rd dim
@@ -91,9 +91,8 @@ static ggml_tensor * gemma3n_view_2d_slice(ggml_context * ctx0, ggml_tensor * x,
                         idx * x->ne[0] * x->ne[1] * ggml_element_size(x));
 }
 
-llama_model_gemma3n::graph::graph(const llama_model & model, const llm_graph_params & params) :
+llama_model_gemma3n::graph::graph(const llm_graph_params & params) :
     llm_graph_context(params),
-    model(model),
     n_embd_head(model.hparams.n_embd_head_k()),
     n_embd_altup(model.hparams.n_embd_altup),
     n_altup(model.hparams.n_altup),
@@ -133,8 +132,6 @@ llama_model_gemma3n::graph::graph(const llama_model & model, const llm_graph_par
 
     for (int il = 0; il < n_layer; ++il) {
         // this block is made to be closely resemble Gemma3p5DecoderLayer on python code
-        const float freq_base_l  = model.get_rope_freq_base(cparams, il);
-        const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
 
         ggml_tensor * cur         = inpL;                    // [n_embd, n_tokens, n_altup]
         ggml_tensor * predictions = altup_predict(cur, il);  // [n_embd, n_tokens, n_altup]
@@ -163,11 +160,8 @@ llama_model_gemma3n::graph::graph(const llama_model & model, const llm_graph_par
             cb(Kcur, "Kcur_normed", il);
             cb(Vcur, "Vcur_normed", il);
 
-            Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                                 ext_factor, attn_factor, beta_fast, beta_slow);
-
-            Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                                 ext_factor, attn_factor, beta_fast, beta_slow);
+            Qcur = build_rope(Qcur, inp_pos, il);
+            Kcur = build_rope(Kcur, inp_pos, il);
 
             cb(Qcur, "Qcur_pos", il);
             cb(Kcur, "Kcur_pos", il);
@@ -191,8 +185,7 @@ llama_model_gemma3n::graph::graph(const llama_model & model, const llm_graph_par
             Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, il);
             cb(Qcur, "Qcur_normed", il);
 
-            Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                                 ext_factor, attn_factor, beta_fast, beta_slow);
+            Qcur = build_rope(Qcur, inp_pos, il);
             cb(Qcur, "Qcur_pos", il);
 
             cur = build_attn(inp_attn,

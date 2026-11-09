@@ -1,12 +1,12 @@
 #include "models.h"
 
-ggml_cgraph * clip_graph_hunyuanvl::build() {
+ggml_cgraph * mtmd_graph_hunyuanvl::build() {
     const int merge = hparams.n_merge;
     const int pw    = n_patches_x;
     const int ph    = n_patches_y;
 
     // position embedding: declared as a graph input, filled on CPU
-    // by clip_image_batch_encode (see PROJECTOR_TYPE_HUNYUANVL branch there).
+    // by mtmd_subcontext::encode() (see PROJECTOR_TYPE_HUNYUANVL branch there).
     ggml_tensor * pos_embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, ph * pw);
     ggml_set_name(pos_embd, "hunyuanvl_pos_embd");
     ggml_set_input(pos_embd);

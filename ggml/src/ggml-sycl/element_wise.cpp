@@ -1183,9 +1183,7 @@ static void ggml_sycl_op_swiglu_oai(ggml_backend_sycl_context & ctx, ggml_tensor
     GGML_ASSERT(ggml_is_contiguous_1(src0));
     GGML_ASSERT(src0->nb[0] == ggml_element_size(src0));
     GGML_ASSERT(ggml_is_contiguous(dst));
-
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
-    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16);
     GGML_ASSERT(src0->type == dst->type);
     GGML_ASSERT(dst->ne[0] == nc);
     GGML_ASSERT(ggml_nrows(dst) == ggml_nrows(src0));
@@ -1197,20 +1195,33 @@ static void ggml_sycl_op_swiglu_oai(ggml_backend_sycl_context & ctx, ggml_tensor
         GGML_ASSERT(src0->type == src1->type);
     }
 
-    //const int32_t swapped = ((const int32_t *) dst->op_params)[1];
     const int32_t swapped = ggml_get_op_params_i32(dst, 1);
-    const float alpha = ggml_get_op_params_f32(dst, 2);
-    const float limit = ggml_get_op_params_f32(dst, 3);
+    const float   alpha   = ggml_get_op_params_f32(dst, 2);
+    const float   limit   = ggml_get_op_params_f32(dst, 3);
 
-    float * src0_p = (float *) src0_d;
-    float * src1_p = (float *) src1_d;
+    if (src0->type == GGML_TYPE_F16) {
+        sycl::half * src0_p = (sycl::half *) src0_d;
+        sycl::half * src1_p = (sycl::half *) src1_d;
 
-    if (!src1) {
-        src0_p += swapped ? nc : 0;
-        src1_p += swapped ? 0 : nc;
+        if (!src1) {
+            src0_p += swapped ? nc : 0;
+            src1_p += swapped ? 0 : nc;
+        }
+
+        swiglu_oai_sycl(src0_p, src1_p, (sycl::half *) dst_d, ggml_nelements(dst), nc, src0_o / sizeof(sycl::half),
+                        src1_o / sizeof(sycl::half), alpha, limit, stream);
+    } else {
+        float * src0_p = (float *) src0_d;
+        float * src1_p = (float *) src1_d;
+
+        if (!src1) {
+            src0_p += swapped ? nc : 0;
+            src1_p += swapped ? 0 : nc;
+        }
+
+        swiglu_oai_sycl(src0_p, src1_p, (float *) dst_d, ggml_nelements(dst), nc, src0_o / sizeof(float),
+                        src1_o / sizeof(float), alpha, limit, stream);
     }
-
-    swiglu_oai_sycl(src0_p, src1_p, (float *)dst_d, ggml_nelements(dst), nc, src0_o / sizeof(float), src1_o / sizeof(float), alpha, limit, stream);
 }
 
 template <typename T>
