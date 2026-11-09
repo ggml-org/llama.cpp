@@ -141,6 +141,17 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
 
         res->use_concurrency = getenv("GGML_METAL_CONCURRENCY_DISABLE") == nil;
 
+        // Non-Apple Metal drivers (AMD/Intel) do not guarantee cross-command-buffer
+        // ordering when several command buffers are committed from different threads
+        // on the same queue. That races the graph and silently corrupts results
+        // (observed with LFM3 on an AMD RX 580). Keep concurrency for Apple GPUs only.
+        if (res->use_concurrency && ![[device name] hasPrefix:@"Apple "] &&
+            getenv("GGML_METAL_CONCURRENCY_ENABLE") == NULL) {
+            GGML_LOG_INFO("%s: disabling concurrency on non-Apple GPU: %s\n",
+                          __func__, [[device name] UTF8String]);
+            res->use_concurrency = false;
+        }
+
         {
             const char * val = getenv("GGML_METAL_GRAPH_DEBUG");
             res->debug_graph = val ? atoi(val) : 0;
@@ -251,10 +262,25 @@ const char * ggml_metal_get_name(ggml_metal_t ctx) {
     return ctx->name;
 }
 
+// TEMP instrumentation: how much of the sync is real GPU work vs driver wait
+static double g_sync_gpu_ms  = 0.0;
+static double g_sync_wait_ms = 0.0;
+static int    g_sync_n       = 0;
+
 void ggml_metal_synchronize(ggml_metal_t ctx) {
     // wait for any backend operations to finish
     if (ctx->cmd_buf_last) {
-        [ctx->cmd_buf_last waitUntilCompleted];
+        const int64_t t0 = ggml_time_us();
+        id<MTLCommandBuffer> cb = ctx->cmd_buf_last;
+        [cb waitUntilCompleted];
+        if (getenv("GGML_METAL_GPU_TIME") != NULL) {
+            g_sync_gpu_ms  += 1e3*(cb.GPUEndTime - cb.GPUStartTime);
+            g_sync_wait_ms += (ggml_time_us() - t0)/1e3;
+            if (++g_sync_n % 32 == 0) {
+                fprintf(stderr, "METAL sync n=%d avg_gpu=%.2f ms avg_wait=%.2f ms\n",
+                        g_sync_n, g_sync_gpu_ms/g_sync_n, g_sync_wait_ms/g_sync_n);
+            }
+        }
         ctx->cmd_buf_last = nil;
     }
 
@@ -486,6 +512,30 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
 
     // number of threads in addition to the main thread
     const int n_cb = ctx->n_cb;
+    if (getenv("GGML_METAL_GPU_TIME")) { static int cnt = 0; if (++cnt <= 6) fprintf(stderr, "METAL graph: n_cb=%d nodes=%d\n", n_cb, (int) gf->n_nodes); }
+
+    // node-type histogram: where the dispatches actually are
+    if (getenv("GGML_METAL_NODE_LOG")) {
+        static int cnt = 0;
+        if (++cnt <= 3) {
+            const int n = gf->n_nodes;
+            const char ** names = malloc(n*sizeof(char *));
+            int * counts = malloc(n*sizeof(int));
+            int n_uniq = 0;
+            for (int i = 0; i < n; ++i) {
+                const char * nm = ggml_op_name(gf->nodes[i]->op);
+                int found = -1;
+                for (int j = 0; j < n_uniq; ++j) { if (strcmp(names[j], nm) == 0) { found = j; break; } }
+                if (found < 0) { names[n_uniq] = nm; counts[n_uniq] = 1; n_uniq++; }
+                else { counts[found]++; }
+            }
+            fprintf(stderr, "METAL nodes: total=%d unique=%d\n", n, n_uniq);
+            for (int j = 0; j < n_uniq; ++j) {
+                fprintf(stderr, "METAL node %-24s %6d  %5.1f%%\n", names[j], counts[j], 100.0*counts[j]/n);
+            }
+            free(names); free(counts);
+        }
+    }
 
     // keep the memory wired
     ggml_metal_device_rsets_keep_alive(ctx->dev);
@@ -605,6 +655,19 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
         }
 
         dispatch_apply(n_cb, ctx->d_queue, ctx->encode_async);
+
+        // TEMP: force one wait and report real GPU busy time for this graph
+        if (getenv("GGML_METAL_GPU_TIME") && ctx->cmd_buf_last) {
+            static int cnt = 0;
+            id<MTLCommandBuffer> last = ctx->cmd_buf_last;
+            const int64_t t0 = ggml_time_us();
+            [last waitUntilCompleted];
+            if (++cnt <= 8) {
+                fprintf(stderr, "METAL graph gpu=%.2f ms wait=%.2f ms nodes=%d\n",
+                        1e3*(last.GPUEndTime - last.GPUStartTime), (ggml_time_us() - t0)/1e3, (int) gf->n_nodes);
+            }
+            ctx->cmd_buf_last = nil;
+        }
 
         // for debugging: block until graph is computed
         //[ctx->cmd_buf_last waitUntilCompleted];
@@ -732,6 +795,13 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
     // counters are race-free; override whatever the caller requested
     if (ggml_metal_fusion_info_stats(ctx->finfo)) {
         n_cb = 0;
+    }
+
+    // GGML_METAL_N_CB overrides the requested value; on eGPUs a single command buffer is
+    // often faster for large graphs (each commit costs a fixed round trip), while small
+    // graphs prefer the encode overlap of a second buffer
+    if (getenv("GGML_METAL_N_CB")) {
+        n_cb = atoi(getenv("GGML_METAL_N_CB"));
     }
 
     if (ctx->n_cb != n_cb) {

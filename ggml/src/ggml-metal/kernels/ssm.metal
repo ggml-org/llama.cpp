@@ -17,11 +17,11 @@ kernel void kernel_ssm_conv_f32_f32(
     const int64_t i3 = tgpig.z;
 
     const int64_t nc  = FC_ssm_conv_nc;
-  //const int64_t ncs = args.ne00;
-  //const int64_t nr  = args.ne01;
-  //const int64_t n_t = args.ne1;
-  //const int64_t n_s = args.ne2;
 
+    // Causal conv1d (same as CPU reference in ssm_conv_f32.c):
+    // y[t] = sum_{i0=0}^{nc-1} sx[t+i0] * w[i0]
+    // sx already has (nc-1) zero-padding at start; sx[t+i0] covers x[t+i0-(nc-1)]..x[t+i0]
+    // w[i0] is the weight for tap i0 (w[nc-1] = current tap x[t], w[0] = oldest tap x[t-nc+1])
     device const float * s = (device const float *) ((device const char *) src0 + ir*args.nb01 + i2*args.nb00 + i3*args.nb02);
     device const float * c = (device const float *) ((device const char *) src1 + ir*args.nb11);
     device       float * x = (device       float *) ((device       char *) dst  + ir*args.nb0  + i2*args.nb1  + i3*args.nb2);
@@ -48,19 +48,26 @@ kernel void kernel_ssm_conv_f32_f32_4(
     const int64_t i3 = tgpig.z;
 
     const int64_t nc  = FC_ssm_conv_nc;
-  //const int64_t ncs = args.ne00;
-  //const int64_t nr  = args.ne01;
-  //const int64_t n_t = args.ne1;
-  //const int64_t n_s = args.ne2;
 
-    device const float4 * s = (device const float4 *) ((device const char *) src0 + ir*args.nb01 + i2*args.nb00 + i3*args.nb02);
-    device const float4 * c = (device const float4 *) ((device const char *) src1 + ir*args.nb11);
-    device       float  * x = (device       float  *) ((device       char *) dst  + ir*args.nb0  + i2*args.nb1  + i3*args.nb2);
+    // Causal conv1d: y[t] = sum_{i0=0}^{nc-1} sx[t+i0] * w[i0]
+    // Same index for both src0 and src1 (see CPU reference ssm_conv_f32.c)
+    // Vectorized: process 4 elements at a time, with bounds checking for partial vectors
+    device const float * s = (device const float *) ((device const char *) src0 + ir*args.nb01 + i2*args.nb00 + i3*args.nb02);
+    device const float * c = (device const float *) ((device const char *) src1 + ir*args.nb11);
+    device       float * x = (device       float  *) ((device       char *) dst  + ir*args.nb0  + i2*args.nb1  + i3*args.nb2);
 
     float sumf = 0.0f;
 
-    FOR_UNROLL (int64_t i0 = 0; i0 < nc/4; ++i0) {
-        sumf += dot(s[i0], c[i0]);
+    const int64_t n4 = (nc + 3) / 4;
+    FOR_UNROLL (int64_t i0 = 0; i0 < n4; ++i0) {
+        float4 s_val = float4(0.0f, 0.0f, 0.0f, 0.0f);
+        float4 c_val = float4(0.0f, 0.0f, 0.0f, 0.0f);
+        const int64_t base = i0 * 4;
+        if (base + 0 < nc) { s_val.x = s[base + 0]; c_val.x = c[base + 0]; }
+        if (base + 1 < nc) { s_val.y = s[base + 1]; c_val.y = c[base + 1]; }
+        if (base + 2 < nc) { s_val.z = s[base + 2]; c_val.z = c[base + 2]; }
+        if (base + 3 < nc) { s_val.w = s[base + 3]; c_val.w = c[base + 3]; }
+        sumf += dot(s_val, c_val);
     }
 
     x[0] = FC_ssm_conv_silu ? sumf/(1.0f + exp(-sumf)) : sumf;
@@ -91,21 +98,17 @@ kernel void kernel_ssm_conv_f32_f32_batched(
     const int64_t i2      = i2_base + i2_off;
 
     const int64_t nc  = FC_ssm_conv_nc;  // conv kernel size (typically 4)
-    const int64_t n_t = args.ne1;   // number of tokens
+    const int64_t n_t = args.ne1;   // number of tokens (op->ne[1])
 
     // Bounds check for partial batches at the end
     if (i2 >= n_t) {
         return;
     }
 
-    // Load conv weights (shared across all tokens for this row)
-    device const float * c = (device const float *) ((device const char *) src1 + ir*args.nb11);
-
-    // Load source for this specific token
+    // Causal conv1d: y[t] = sum_{i0=0}^{nc-1} sx[t+i0] * w[i0] (same index)
     device const float * s = (device const float *) ((device const char *) src0 + ir*args.nb01 + i2*args.nb00 + i3*args.nb02);
-
-    // Output location for this token
-    device float * x = (device float *) ((device char *) dst + ir*args.nb0 + i2*args.nb1 + i3*args.nb2);
+    device const float * c = (device const float *) ((device const char *) src1 + ir*args.nb11);
+    device       float * x = (device float *) ((device char *) dst + ir*args.nb0 + i2*args.nb1 + i3*args.nb2);
 
     float sumf = 0.0f;
     FOR_UNROLL (int64_t i0 = 0; i0 < nc; ++i0) {
@@ -136,25 +139,30 @@ kernel void kernel_ssm_conv_f32_f32_batched_4(
     const int64_t i2      = i2_base + i2_off;
 
     const int64_t nc  = FC_ssm_conv_nc;  // conv kernel size (typically 4)
-    const int64_t n_t = args.ne1;   // number of tokens
+    const int64_t n_t = args.ne1;   // number of tokens (op->ne[1])
 
     // Bounds check for partial batches at the end
     if (i2 >= n_t) {
         return;
     }
 
-    // Load conv weights (shared across all tokens for this row)
-    device const float4 * c = (device const float4 *) ((device const char *) src1 + ir*args.nb11);
-
-    // Load source for this specific token
-    device const float4 * s = (device const float4 *) ((device const char *) src0 + ir*args.nb01 + i2*args.nb00 + i3*args.nb02);
-
-    // Output location for this token
-    device float * x = (device float *) ((device char *) dst + ir*args.nb0 + i2*args.nb1 + i3*args.nb2);
+    // Causal conv1d: y[t] = sum_{i0=0}^{nc-1} sx[t+i0] * w[i0] (same index as CPU reference)
+    // Vectorized: process 4 elements at a time, with bounds checking for partial vectors
+    device const float * s = (device const float *) ((device const char *) src0 + ir*args.nb01 + i2*args.nb00 + i3*args.nb02);
+    device const float * c = (device const float *) ((device const char *) src1 + ir*args.nb11);
+    device       float * x = (device float *) ((device char *) dst + ir*args.nb0 + i2*args.nb1 + i3*args.nb2);
 
     float sumf = 0.0f;
-    FOR_UNROLL (int64_t i0 = 0; i0 < nc/4; ++i0) {
-        sumf += dot(s[i0], c[i0]);
+    const int64_t n4 = (nc + 3) / 4;
+    FOR_UNROLL (int64_t i0 = 0; i0 < n4; ++i0) {
+        float4 s_val = float4(0.0f, 0.0f, 0.0f, 0.0f);
+        float4 c_val = float4(0.0f, 0.0f, 0.0f, 0.0f);
+        const int64_t base = i0 * 4;
+        if (base + 0 < nc) { s_val.x = s[base + 0]; c_val.x = c[base + 0]; }
+        if (base + 1 < nc) { s_val.y = s[base + 1]; c_val.y = c[base + 1]; }
+        if (base + 2 < nc) { s_val.z = s[base + 2]; c_val.z = c[base + 2]; }
+        if (base + 3 < nc) { s_val.w = s[base + 3]; c_val.w = c[base + 3]; }
+        sumf += dot(s_val, c_val);
     }
 
     x[0] = FC_ssm_conv_silu ? sumf/(1.0f + exp(-sumf)) : sumf;
