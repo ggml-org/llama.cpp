@@ -2090,10 +2090,6 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         if (op->src[2]->op == GGML_OP_PERMUTE) {
             reason = "GATED_DELTA_NET with PERMUTE src2 is not supported";
         }
-        else if (op->src[3]->ne[0] != 1) {
-            // kda (per-key-dimension gating) not supported by fused GatedDeltaNet op
-            reason = "GATED_DELTA_NET with kda (per-key-dimension gating) is not supported";
-        }
         else if (op->op_params[0] > 1) {
             if (ggml_openvino_is_static()) {
                 reason = "GATED_DELTA_NET snapshots require dynamic execution";
