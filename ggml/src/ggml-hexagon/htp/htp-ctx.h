@@ -82,6 +82,7 @@ struct htp_ops_context {
 struct htp_context {
     dspqueue_t             dsp_queue;
 
+    struct htp_mmap        shm;
     struct htp_mmap        mmap[HTP_MAX_MMAPS];
     dma_queue_t            dma[HTP_MAX_NTHREADS];
     struct htp_thread_trace trace[HTP_MAX_NTHREADS];
