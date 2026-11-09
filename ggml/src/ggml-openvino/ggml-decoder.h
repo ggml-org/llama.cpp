@@ -83,7 +83,7 @@ struct ComputeParams {
     //    [ 18432,     4,     1,     1]            0: NONE        cache_r_l0
     // 4: [ 18432,     1,     1,     1] VIEW                 cache_r_l0 (reshaped) (view)
     //    [ 18432,     4,     1,     1]            0: RESHAPE     cache_r_l0 (reshaped)
-    // 5: [ 18432,     1,     1,     1] SCALE                cache_r_l0 (reshaped) (view) (view)
+    // 5: [ 18432,     1,     1,     1] FILL                 cache_r_l0 (reshaped) (view) (view)
     //    [ 18432,     1,     1,     1]            0: VIEW        cache_r_l0 (reshaped) (view)
 
     int s_copy_active_slot_len = -1;
@@ -406,6 +406,11 @@ public:
         return tensor != nullptr && (strncmp(tensor->name, "cache_r_l", strlen("cache_r_l")) == 0 ||
                                      strncmp(tensor->name, "cache_s_l", strlen("cache_s_l")) == 0 ||
                                      strncmp(tensor->name, "cache_ple_r_l", strlen("cache_ple_r_l")) == 0);
+    }
+
+    // build_rs clears the states of new sequences in place: SCALE by 0 (the prior form) or FILL with 0
+    inline static bool is_recurrent_cache_reset(const ggml_tensor * node) {
+        return (node->op == GGML_OP_SCALE || node->op == GGML_OP_FILL) && is_recurrent_cache(node->view_src);
     }
 
     inline static bool is_cache(const ggml_tensor * tensor, const ggml_tensor * op) {
