@@ -881,9 +881,10 @@ public:
                     enum_values[_generate_constant_rule(v)] += 1;
                 }
             } else if (is_required && comp.kind() != common_chat_schema::KIND_ANY) {
+                // Direct non-structural children are used for merging. anyOf alternatives are not merged.
+                // Empty schemas are skipped.
                 leaves.push_back(&comp);
             }
-            
         };
         for (const auto & child : schema.children) {
             if (child->kind() == common_chat_schema::KIND_ANY_OF) {
@@ -925,6 +926,9 @@ public:
                 }
             }
             if (all_numeric) {
+                if (lo > hi) {
+                    throw std::invalid_argument("allOf has an empty numeric range");
+                }
                 if (any_integer) {
                     common_chat_schema_integer merged;
                     merged.minimum = lo;
