@@ -4,7 +4,7 @@
 	"version": "1.0.0",
 	"type": "module",
 	"scripts": {
-		"build": "npm run build-pwa-assets && vite build",
+		"build": "npm run build-pwa-assets && node --max-old-space-size=6144 ./node_modules/vite/bin/vite.js build",
 		"build-pwa-assets": "pwa-assets-generator --root . --config pwa-assets.config.ts && pwa-assets-generator --root . --config pwa-assets-dark.config.ts && node scripts/make-icons-circular.js",
 		"dev": "bash scripts/dev.sh",
 		"preview": "vite preview",
