@@ -83,7 +83,7 @@ struct ComputeParams {
     //    [ 18432,     4,     1,     1]            0: NONE        cache_r_l0
     // 4: [ 18432,     1,     1,     1] VIEW                 cache_r_l0 (reshaped) (view)
     //    [ 18432,     4,     1,     1]            0: RESHAPE     cache_r_l0 (reshaped)
-    // 5: [ 18432,     1,     1,     1] FILL                 cache_r_l0 (reshaped) (view) (view)
+    // 5: [ 18432,     1,     1,     1] SCALE                cache_r_l0 (reshaped) (view) (view)
     //    [ 18432,     1,     1,     1]            0: VIEW        cache_r_l0 (reshaped) (view)
 
     int s_copy_active_slot_len = -1;
@@ -409,8 +409,8 @@ public:
     }
 
     inline static bool is_recurrent_cache_reset(const ggml_tensor * node) {
-        return (node->op == GGML_OP_SCALE || node->op == GGML_OP_FILL) && node->view_src != nullptr &&
-               is_recurrent_cache(node->view_src);
+        const bool is_scale_or_fill = node->op == GGML_OP_SCALE || node->op == GGML_OP_FILL;
+        return is_scale_or_fill && node->view_src != nullptr && is_recurrent_cache(node->view_src);
     }
 
     inline static bool is_cache(const ggml_tensor * tensor, const ggml_tensor * op) {
