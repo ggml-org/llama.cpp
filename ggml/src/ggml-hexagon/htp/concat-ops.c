@@ -3,7 +3,7 @@
 #include "hex-common.h"
 #include "dma-copy.h"
 #include "hex-fastdiv.h"
-#include "hex-profile.h"
+#include "htp-trace.h"
 #include "hexagon_protos.h"
 #include "hexagon_types.h"
 #include "htp-ctx.h"
@@ -21,11 +21,11 @@ struct htp_concat_context {
     struct htp_ops_context * octx;
     uint8_t * spad0_base;
     uint8_t * spad1_base;
-    uint32_t  spad0_size_per_thread;
-    uint32_t  spad1_size_per_thread;
+    uint32_t  spad0_size_per_hvx;
+    uint32_t  spad1_size_per_hvx;
     uint32_t  row_start;
     uint32_t  nrows;
-    uint32_t  nrows_per_thread;
+    uint32_t  nrows_per_hvx;
     uint32_t  nplanes;
     struct fastdiv_values div_ne2;
 };
@@ -36,7 +36,7 @@ static inline dma_addr_t concat_plane_addr(const struct htp_tensor * t, uint32_t
     return t->data + i2 * t->nb[2] + i3 * t->nb[3];
 }
 
-static void concat_2d_f32_transposed(unsigned int nth, unsigned int ith, void * data) {
+static void concat_2d_f32_transposed(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     struct htp_concat_context * cctx = (struct htp_concat_context *) data;
     struct htp_ops_context * octx = cctx->octx;
 
@@ -48,12 +48,12 @@ static void concat_2d_f32_transposed(unsigned int nth, unsigned int ith, void * 
     const uint32_t src1_ne0 = src1->ne[0];
 
     // dst rows [row_begin, row_end) of this thread; a dst row is a src0 row followed by a src1 column
-    const uint32_t row_begin = cctx->row_start + ith * cctx->nrows_per_thread;
-    const uint32_t row_end   = MIN(row_begin + cctx->nrows_per_thread, cctx->row_start + cctx->nrows);
+    const uint32_t row_begin = cctx->row_start + ith * cctx->nrows_per_hvx;
+    const uint32_t row_end   = MIN(row_begin + cctx->nrows_per_hvx, cctx->row_start + cctx->nrows);
     if (row_begin >= row_end) return;
 
-    dma_queue * dma_q = octx->ctx->dma[ith];
-    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+    dma_queue * dma_q = th->dma_q;
+    struct htp_thread_trace * tr = th->trace;
 
     const struct fastdiv_values * div_ne2 = &cctx->div_ne2;
     const uint32_t ne2 = dst->ne[2];
@@ -72,8 +72,8 @@ static void concat_2d_f32_transposed(unsigned int nth, unsigned int ith, void * 
     const uint32_t spad0_stride      = src0_row_padded + block_cols_padded * sizeof(float);
 
     // two slots per scratchpad: tile b gathers in slot b&1 while dst[b-1] and src1[b+1] DMA in the other
-    uint8_t * spad0_base = cctx->spad0_base + ith * cctx->spad0_size_per_thread;
-    uint8_t * spad1_base = cctx->spad1_base + ith * cctx->spad1_size_per_thread;
+    uint8_t * spad0_base = cctx->spad0_base + ith * cctx->spad0_size_per_hvx;
+    uint8_t * spad1_base = cctx->spad1_base + ith * cctx->spad1_size_per_hvx;
     const uint32_t spad0_slot = block_rows * spad0_stride;
     const uint32_t spad1_slot = block_cols_padded * spad1_stride;
 
@@ -153,7 +153,7 @@ static void concat_2d_f32_transposed(unsigned int nth, unsigned int ith, void * 
     dma_queue_flush(dma_q);
 }
 
-static void concat_2d_f16_transposed(unsigned int nth, unsigned int ith, void * data) {
+static void concat_2d_f16_transposed(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     struct htp_concat_context * cctx = (struct htp_concat_context *) data;
     struct htp_ops_context * octx = cctx->octx;
 
@@ -165,12 +165,12 @@ static void concat_2d_f16_transposed(unsigned int nth, unsigned int ith, void * 
     const uint32_t src1_ne0 = src1->ne[0];
 
     // dst rows [row_begin, row_end) of this thread; a dst row is a src0 row followed by a src1 column
-    const uint32_t row_begin = cctx->row_start + ith * cctx->nrows_per_thread;
-    const uint32_t row_end   = MIN(row_begin + cctx->nrows_per_thread, cctx->row_start + cctx->nrows);
+    const uint32_t row_begin = cctx->row_start + ith * cctx->nrows_per_hvx;
+    const uint32_t row_end   = MIN(row_begin + cctx->nrows_per_hvx, cctx->row_start + cctx->nrows);
     if (row_begin >= row_end) return;
 
-    dma_queue * dma_q = octx->ctx->dma[ith];
-    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+    dma_queue * dma_q = th->dma_q;
+    struct htp_thread_trace * tr = th->trace;
 
     const struct fastdiv_values * div_ne2 = &cctx->div_ne2;
     const uint32_t ne2 = dst->ne[2];
@@ -189,8 +189,8 @@ static void concat_2d_f16_transposed(unsigned int nth, unsigned int ith, void * 
     const uint32_t spad0_stride      = src0_row_padded + block_cols_padded * sizeof(__fp16);
 
     // two slots per scratchpad: tile b gathers in slot b&1 while dst[b-1] and src1[b+1] DMA in the other
-    uint8_t * spad0_base = cctx->spad0_base + ith * cctx->spad0_size_per_thread;
-    uint8_t * spad1_base = cctx->spad1_base + ith * cctx->spad1_size_per_thread;
+    uint8_t * spad0_base = cctx->spad0_base + ith * cctx->spad0_size_per_hvx;
+    uint8_t * spad1_base = cctx->spad1_base + ith * cctx->spad1_size_per_hvx;
     const uint32_t spad0_slot = block_rows * spad0_stride;
     const uint32_t spad1_slot = block_cols_padded * spad1_stride;
 
@@ -311,7 +311,7 @@ static int concat_regular(struct htp_ops_context * octx, int dim, uint32_t type_
 }
 
 static int concat_transposed(struct htp_ops_context * octx, const struct htp_concat_kernel_params * kparams, uint32_t type_size) {
-    if (!htp_ops_context_set_n_threads(octx, kparams->n_threads)) {
+    if (!htp_ops_context_set_n_hvx(octx, kparams->n_hvx)) {
         return HTP_STATUS_INVAL_PARAMS;
     }
 
@@ -334,10 +334,10 @@ static int concat_transposed(struct htp_ops_context * octx, const struct htp_con
         return HTP_STATUS_VTCM_TOO_SMALL;
     }
 
-    const uint32_t n_threads = octx->n_threads;
+    const uint32_t n_hvx = octx->n_hvx;
 
     struct htp_concat_transposed_vtcm_layout layout;
-    htp_concat_transposed_vtcm_layout_build(&layout, octx->src[0]->ne[0], octx->src[1]->ne[0], type_size, n_threads);
+    htp_concat_transposed_vtcm_layout_build(&layout, octx->src[0]->ne[0], octx->src[1]->ne[0], type_size, n_hvx);
 
     uint8_t * vtcm_base = (uint8_t *) octx->ctx->vtcm_base;
 
@@ -345,16 +345,16 @@ static int concat_transposed(struct htp_ops_context * octx, const struct htp_con
     cctx.octx                  = octx;
     cctx.spad0_base            = VTCM_LAYOUT_PTR(uint8_t, vtcm_base, layout.off_spad0);
     cctx.spad1_base            = VTCM_LAYOUT_PTR(uint8_t, vtcm_base, layout.off_spad1);
-    cctx.spad0_size_per_thread = layout.src0_spad_size_per_thread;
-    cctx.spad1_size_per_thread = layout.src1_spad_size_per_thread;
+    cctx.spad0_size_per_hvx    = layout.src0_spad_size_per_hvx;
+    cctx.spad1_size_per_hvx    = layout.src1_spad_size_per_hvx;
     cctx.row_start             = row_start;
     cctx.nrows                 = nrows;
     cctx.nplanes               = dst->ne[2] * dst->ne[3];
     cctx.div_ne2               = kparams->u.transposed.div_ne2;
-    cctx.nrows_per_thread      = fastdiv(nrows + n_threads - 1, &octx->n_threads_div);
+    cctx.nrows_per_hvx         = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div);
 
     work_queue_func_t worker_func = (type_size == 4) ? concat_2d_f32_transposed : concat_2d_f16_transposed;
-    work_queue_run(octx->ctx->work_queue, worker_func, &cctx, n_threads);
+    work_queue_run(octx->ctx->hvx_queue, worker_func, &cctx, n_hvx);
     return HTP_STATUS_OK;
 }
 
@@ -377,7 +377,7 @@ int op_concat(struct htp_ops_context * octx) {
             break;
 
         case HTP_CONCAT_KERNEL_GATHER_ROWS:
-            status = htp_gather_rows(octx, src0, src1, &kparams->u.gather, kparams->n_threads);
+            status = htp_gather_rows(octx, src0, src1, &kparams->u.gather, kparams->n_hvx);
             break;
 
         default:

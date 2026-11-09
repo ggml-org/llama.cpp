@@ -9,7 +9,7 @@
 
 #include "dma-queue.h"
 #include "hex-common.h"
-#include "hex-profile.h"
+#include "htp-trace.h"
 #include "htp-ctx.h"
 #include "htp-tensor.h"
 #include "hvx-utils.h"
@@ -57,7 +57,7 @@ struct dsv4_hc_pre_context {
     uint32_t token_start;
     uint32_t n_chunks;
     uint32_t total_jobs;
-    uint32_t jobs_per_thread;
+    uint32_t jobs_per_hvx;
     float scale;
     uint8_t * vtcm;
     uint32_t dma_block_chunks;
@@ -178,7 +178,7 @@ static __attribute__((noinline)) void dsv4_hc_pre_gated_block_f32(
     }
 }
 
-static void dsv4_hc_pre_thread_plain_f32(unsigned int nth, unsigned int ith, void * data) {
+static void dsv4_hc_pre_thread_plain_f32(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     struct dsv4_hc_pre_context * dctx = (struct dsv4_hc_pre_context *) data;
     struct htp_ops_context *     octx = dctx->octx;
 
@@ -187,8 +187,8 @@ static void dsv4_hc_pre_thread_plain_f32(unsigned int nth, unsigned int ith, voi
 
     const uint32_t row_stride  = dctx->dma_row_stride;
     const uint32_t buffer_size = dctx->dma_buffer_size;
-    const uint32_t start       = dctx->jobs_per_thread * ith;
-    const uint32_t end         = hex_smin(start + dctx->jobs_per_thread, dctx->total_jobs);
+    const uint32_t start       = dctx->jobs_per_hvx * ith;
+    const uint32_t end         = hex_smin(start + dctx->jobs_per_hvx, dctx->total_jobs);
     if (start >= end) {
         return;
     }
@@ -198,7 +198,7 @@ static void dsv4_hc_pre_thread_plain_f32(unsigned int nth, unsigned int ith, voi
         dctx->vtcm + 2*buffer_size*ith + buffer_size,
     };
 
-    dma_queue * dma_q = octx->ctx->dma[ith];
+    dma_queue * dma_q = th->dma_q;
     uint32_t prefetch_job = start;
     for (uint32_t i = 0; i < 2 && prefetch_job < end; ++i) {
         const struct dsv4_hc_block block = dsv4_hc_pre_block_make(dctx, prefetch_job, end);
@@ -208,7 +208,7 @@ static void dsv4_hc_pre_thread_plain_f32(unsigned int nth, unsigned int ith, voi
         prefetch_job += block.count;
     }
 
-    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+    struct htp_thread_trace * tr = th->trace;
 
     uint32_t job  = start;
     uint32_t curr = 0;
@@ -244,7 +244,7 @@ static void dsv4_hc_pre_thread_plain_f32(unsigned int nth, unsigned int ith, voi
     (void) nth;
 }
 
-static void dsv4_hc_pre_thread_gated_f32(unsigned int nth, unsigned int ith, void * data) {
+static void dsv4_hc_pre_thread_gated_f32(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     struct dsv4_hc_pre_context * dctx = (struct dsv4_hc_pre_context *) data;
     struct htp_ops_context *     octx = dctx->octx;
 
@@ -253,8 +253,8 @@ static void dsv4_hc_pre_thread_gated_f32(unsigned int nth, unsigned int ith, voi
 
     const uint32_t row_stride  = dctx->dma_row_stride;
     const uint32_t buffer_size = dctx->dma_buffer_size;
-    const uint32_t start       = dctx->jobs_per_thread * ith;
-    const uint32_t end         = hex_smin(start + dctx->jobs_per_thread, dctx->total_jobs);
+    const uint32_t start       = dctx->jobs_per_hvx * ith;
+    const uint32_t end         = hex_smin(start + dctx->jobs_per_hvx, dctx->total_jobs);
     if (start >= end) {
         return;
     }
@@ -264,7 +264,7 @@ static void dsv4_hc_pre_thread_gated_f32(unsigned int nth, unsigned int ith, voi
         dctx->vtcm + 2*buffer_size*ith + buffer_size,
     };
 
-    dma_queue * dma_q = octx->ctx->dma[ith];
+    dma_queue * dma_q = th->dma_q;
     uint32_t prefetch_job = start;
     for (uint32_t i = 0; i < 2 && prefetch_job < end; ++i) {
         const struct dsv4_hc_block block = dsv4_hc_pre_block_make(dctx, prefetch_job, end);
@@ -274,7 +274,7 @@ static void dsv4_hc_pre_thread_gated_f32(unsigned int nth, unsigned int ith, voi
         prefetch_job += block.count;
     }
 
-    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+    struct htp_thread_trace * tr = th->trace;
 
     uint32_t job  = start;
     uint32_t curr = 0;
@@ -317,22 +317,22 @@ int op_dsv4_hc_pre(struct htp_ops_context * octx) {
     const struct htp_dsv4_hc_pre_kernel_params * kparams =
         (const struct htp_dsv4_hc_pre_kernel_params *) octx->kernel_params;
 
-    const uint32_t n_threads = kparams->n_threads;
-    if (!htp_ops_context_set_n_threads_div(octx, n_threads, kparams->div_n_threads)) {
+    const uint32_t n_hvx = kparams->n_hvx;
+    if (!htp_ops_context_set_n_hvx_div(octx, n_hvx, kparams->div_n_hvx)) {
         return HTP_STATUS_INVAL_PARAMS;
     }
 
     uint32_t token_start     = 0;
     uint32_t n_tokens        = x->ne[2];
     uint32_t total_jobs      = kparams->total_jobs;
-    uint32_t jobs_per_thread = kparams->jobs_per_thread;
+    uint32_t jobs_per_hvx    = kparams->jobs_per_hvx;
     if (octx->ctx->mdev.count > 1) {
         const bool can_split = htp_tensor_mdev_data_aligned(dst) && ((dst->nb[1] & (HTP_TENSOR_MDEV_LINE_SIZE - 1)) == 0);
         const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(n_tokens, can_split ? 1 : 0, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
         token_start     = range.start;
         n_tokens        = range.count;
         total_jobs      = n_tokens * kparams->n_chunks;
-        jobs_per_thread = fastdiv(total_jobs + n_threads - 1, &kparams->div_n_threads);
+        jobs_per_hvx    = fastdiv(total_jobs + n_hvx - 1, &kparams->div_n_hvx);
     }
 
     if (n_tokens == 0) {
@@ -348,7 +348,7 @@ int op_dsv4_hc_pre(struct htp_ops_context * octx) {
         .token_start      = token_start,
         .n_chunks         = kparams->n_chunks,
         .total_jobs       = total_jobs,
-        .jobs_per_thread  = jobs_per_thread,
+        .jobs_per_hvx     = jobs_per_hvx,
         .scale            = scale,
         .vtcm             = (uint8_t *) octx->ctx->vtcm_base,
         .dma_block_chunks = kparams->dma_block_chunks,
@@ -363,11 +363,11 @@ int op_dsv4_hc_pre(struct htp_ops_context * octx) {
         default: return HTP_STATUS_INVAL_PARAMS;
     }
 
-    FARF(HIGH, "dsv4-hc-pre: (%ux%ux%u) -> (%ux%u) : ktype %u tokens %u:%u nth %u\n",
+    FARF(HIGH, "dsv4-hc-pre: (%ux%ux%u) -> (%ux%u) : ktype %u tokens %u:%u nhvx %u\n",
          x->ne[0], x->ne[1], x->ne[2], dst->ne[0], dst->ne[1], kparams->kernel_type,
-         token_start, token_start + n_tokens, n_threads);
+         token_start, token_start + n_tokens, n_hvx);
 
-    work_queue_run(octx->ctx->work_queue, worker, &dctx, n_threads);
+    work_queue_run(octx->ctx->hvx_queue, worker, &dctx, n_hvx);
     return HTP_STATUS_OK;
 }
 
@@ -380,7 +380,7 @@ struct dsv4_hc_post_context {
     const struct htp_dsv4_hc_post_kernel_params * kparams;
     uint32_t token_start;
     uint32_t total_jobs;
-    uint32_t jobs_per_thread;
+    uint32_t jobs_per_hvx;
     uint8_t * vtcm;
 };
 
@@ -481,7 +481,7 @@ static inline void dsv4_hc_post_push_comb(
                    16, comb->nb[1], 16, 4);
 }
 
-static void dsv4_hc_post_thread_identity_f32(unsigned int nth, unsigned int ith, void * data) {
+static void dsv4_hc_post_thread_identity_f32(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     struct dsv4_hc_post_context * dctx = (struct dsv4_hc_post_context *) data;
     struct htp_ops_context *      octx = dctx->octx;
 
@@ -491,8 +491,8 @@ static void dsv4_hc_post_thread_identity_f32(unsigned int nth, unsigned int ith,
     const uint32_t block_chunks = dctx->kparams->dma_block_chunks;
     const uint32_t row_stride   = dctx->kparams->dma_row_stride;
     const uint32_t buffer_size  = dctx->kparams->dma_buffer_size;
-    const uint32_t start        = dctx->jobs_per_thread * ith;
-    const uint32_t end          = hex_smin(start + dctx->jobs_per_thread, dctx->total_jobs);
+    const uint32_t start        = dctx->jobs_per_hvx * ith;
+    const uint32_t end          = hex_smin(start + dctx->jobs_per_hvx, dctx->total_jobs);
     if (start >= end) {
         return;
     }
@@ -502,7 +502,7 @@ static void dsv4_hc_post_thread_identity_f32(unsigned int nth, unsigned int ith,
         dctx->vtcm + 2*buffer_size*ith + buffer_size,
     };
 
-    dma_queue * dma_q = octx->ctx->dma[ith];
+    dma_queue * dma_q = th->dma_q;
     uint32_t prefetch_job = start;
     for (uint32_t i = 0; i < 2 && prefetch_job < end; ++i) {
         const struct dsv4_hc_block block = dsv4_hc_post_block_make(dctx, prefetch_job, end, block_chunks);
@@ -512,7 +512,7 @@ static void dsv4_hc_post_thread_identity_f32(unsigned int nth, unsigned int ith,
         prefetch_job += block.count;
     }
 
-    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+    struct htp_thread_trace * tr = th->trace;
 
     uint32_t job  = start;
     uint32_t curr = 0;
@@ -549,7 +549,7 @@ static void dsv4_hc_post_thread_identity_f32(unsigned int nth, unsigned int ith,
     (void) nth;
 }
 
-static void dsv4_hc_post_thread_comb_f32(unsigned int nth, unsigned int ith, void * data) {
+static void dsv4_hc_post_thread_comb_f32(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     struct dsv4_hc_post_context * dctx = (struct dsv4_hc_post_context *) data;
     struct htp_ops_context *      octx = dctx->octx;
 
@@ -559,8 +559,8 @@ static void dsv4_hc_post_thread_comb_f32(unsigned int nth, unsigned int ith, voi
     const uint32_t block_chunks = dctx->kparams->dma_block_chunks;
     const uint32_t row_stride   = dctx->kparams->dma_row_stride;
     const uint32_t buffer_size  = dctx->kparams->dma_buffer_size;
-    const uint32_t start        = dctx->jobs_per_thread * ith;
-    const uint32_t end          = hex_smin(start + dctx->jobs_per_thread, dctx->total_jobs);
+    const uint32_t start        = dctx->jobs_per_hvx * ith;
+    const uint32_t end          = hex_smin(start + dctx->jobs_per_hvx, dctx->total_jobs);
     if (start >= end) {
         return;
     }
@@ -570,7 +570,7 @@ static void dsv4_hc_post_thread_comb_f32(unsigned int nth, unsigned int ith, voi
         dctx->vtcm + 2*buffer_size*ith + buffer_size,
     };
 
-    dma_queue * dma_q = octx->ctx->dma[ith];
+    dma_queue * dma_q = th->dma_q;
     uint32_t prefetch_job = start;
     for (uint32_t i = 0; i < 2 && prefetch_job < end; ++i) {
         const struct dsv4_hc_block block = dsv4_hc_post_block_make(dctx, prefetch_job, end, block_chunks);
@@ -580,7 +580,7 @@ static void dsv4_hc_post_thread_comb_f32(unsigned int nth, unsigned int ith, voi
         prefetch_job += block.count;
     }
 
-    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+    struct htp_thread_trace * tr = th->trace;
 
     uint32_t job  = start;
     uint32_t curr = 0;
@@ -627,22 +627,22 @@ int op_dsv4_hc_post(struct htp_ops_context * octx) {
     const struct htp_dsv4_hc_post_kernel_params * kparams =
         (const struct htp_dsv4_hc_post_kernel_params *) octx->kernel_params;
 
-    const uint32_t n_threads = kparams->n_threads;
-    if (!htp_ops_context_set_n_threads_div(octx, n_threads, kparams->div_n_threads)) {
+    const uint32_t n_hvx = kparams->n_hvx;
+    if (!htp_ops_context_set_n_hvx_div(octx, n_hvx, kparams->div_n_hvx)) {
         return HTP_STATUS_INVAL_PARAMS;
     }
 
     uint32_t token_start     = 0;
     uint32_t n_tokens        = x->ne[1];
     uint32_t total_jobs      = kparams->total_jobs;
-    uint32_t jobs_per_thread = kparams->jobs_per_thread;
+    uint32_t jobs_per_hvx    = kparams->jobs_per_hvx;
     if (octx->ctx->mdev.count > 1) {
         const bool can_split = htp_tensor_mdev_data_aligned(dst) && ((dst->nb[2] & (HTP_TENSOR_MDEV_LINE_SIZE - 1)) == 0);
         const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(n_tokens, can_split ? 1 : 0, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
         token_start     = range.start;
         n_tokens        = range.count;
         total_jobs      = n_tokens * kparams->n_chunks;
-        jobs_per_thread = fastdiv(total_jobs + n_threads - 1, &kparams->div_n_threads);
+        jobs_per_hvx    = fastdiv(total_jobs + n_hvx - 1, &kparams->div_n_hvx);
     }
 
     if (n_tokens == 0) {
@@ -654,7 +654,7 @@ int op_dsv4_hc_post(struct htp_ops_context * octx) {
         .kparams         = kparams,
         .token_start     = token_start,
         .total_jobs      = total_jobs,
-        .jobs_per_thread = jobs_per_thread,
+        .jobs_per_hvx    = jobs_per_hvx,
         .vtcm            = (uint8_t *) octx->ctx->vtcm_base,
     };
 
@@ -665,11 +665,11 @@ int op_dsv4_hc_post(struct htp_ops_context * octx) {
         default: return HTP_STATUS_INVAL_PARAMS;
     }
 
-    FARF(HIGH, "dsv4-hc-post: (%ux%u) (%ux%ux%u) -> (%ux%ux%u) : ktype %u tokens %u:%u nth %u\n",
+    FARF(HIGH, "dsv4-hc-post: (%ux%u) (%ux%ux%u) -> (%ux%ux%u) : ktype %u tokens %u:%u nhvx %u\n",
          x->ne[0], x->ne[1], residual->ne[0], residual->ne[1], residual->ne[2],
          dst->ne[0], dst->ne[1], dst->ne[2], kparams->kernel_type,
-         token_start, token_start + n_tokens, n_threads);
+         token_start, token_start + n_tokens, n_hvx);
 
-    work_queue_run(octx->ctx->work_queue, worker, &dctx, n_threads);
+    work_queue_run(octx->ctx->hvx_queue, worker, &dctx, n_hvx);
     return HTP_STATUS_OK;
 }

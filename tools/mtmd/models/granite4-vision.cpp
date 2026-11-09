@@ -1,6 +1,6 @@
 #include "models.h"
-#include "../clip-impl.h"
-#include "../clip-model.h"
+#include "../mtmd-impl.h"
+#include "../mtmd-model.h"
 
 #include <algorithm>
 #include <cmath>
@@ -9,7 +9,7 @@
 #include <vector>
 
 /*
- * Granite Vision 4.1 clip graph
+ * Granite Vision 4.1 vision graph
  *
  *   Stage 1a: SigLIP vision tower (N layers, post-norm)
  *   Stage 1b: WindowQFormer blocks (deepstack + spatial)
@@ -22,7 +22,7 @@
 // ---------------------------------------------------------------------------
 
 // split the stacked tiles into the batch axis, then run the usual patch embedding
-ggml_tensor * clip_graph_granite4_vision::build_tile_inp() {
+ggml_tensor * mtmd_graph_granite4_vision::build_tile_inp() {
     ggml_tensor * inp_raw = build_inp_raw();
 
     if (n_tiles > 1) {
@@ -41,7 +41,7 @@ ggml_tensor * clip_graph_granite4_vision::build_tile_inp() {
     return inp;
 }
 
-ggml_tensor * clip_graph_granite4_vision::gather(
+ggml_tensor * mtmd_graph_granite4_vision::gather(
         ggml_tensor * src,
         const std::string & name,
         int idx_len) {
@@ -52,7 +52,7 @@ ggml_tensor * clip_graph_granite4_vision::gather(
     return ggml_get_rows(ctx0, src, idx);
 }
 
-ggml_tensor * clip_graph_granite4_vision::interp_down(
+ggml_tensor * mtmd_graph_granite4_vision::interp_down(
         ggml_tensor * src,
         int side,
         int new_side) {
@@ -72,7 +72,7 @@ ggml_tensor * clip_graph_granite4_vision::interp_down(
 // build_block - WindowQFormer block implementation
 // ---------------------------------------------------------------------------
 
-ggml_tensor * clip_graph_granite4_vision::build_block(
+ggml_tensor * mtmd_graph_granite4_vision::build_block(
         const qf_block & blk,
         ggml_tensor * h,
         int bid,
@@ -244,7 +244,7 @@ ggml_tensor * clip_graph_granite4_vision::build_block(
 
 // Build the K-tiled, base-scaled newline row tensor.
 // Shape: (n_mmproj_embd, 1)
-ggml_tensor * clip_graph_granite4_vision::build_newline_row(ggml_context * ctx0) {
+ggml_tensor * mtmd_graph_granite4_vision::build_newline_row(ggml_context * ctx0) {
     const int K = (int) model.qf_proj_blocks.size();
     GGML_ASSERT(K > 0);
     GGML_ASSERT(n_mmproj_embd % K == 0);
@@ -272,7 +272,7 @@ ggml_tensor * clip_graph_granite4_vision::build_newline_row(ggml_context * ctx0)
 // Assemble [overview, tile(0,0), tile(0,1), ...] into one token sequence:
 // the overview tokens first, then the tile grid read in raster order with one newline per row.
 // ref: https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/models/llava_next/modeling_llava_next.py#L266
-ggml_tensor * clip_graph_granite4_vision::build_anyres_assembly(ggml_tensor * cur, int out_side) {
+ggml_tensor * mtmd_graph_granite4_vision::build_anyres_assembly(ggml_tensor * cur, int out_side) {
     const int n_dim  = cur->ne[0];
     const int grid_x = anyres.grid_x;
     const int grid_y = anyres.grid_y;
@@ -293,7 +293,7 @@ ggml_tensor * clip_graph_granite4_vision::build_anyres_assembly(ggml_tensor * cu
 
     // drop the tokens that only cover the padding added when resizing to the grid
     int off_x, off_y, w, h;
-    clip_anyres_unpad(cur_w, cur_h, anyres.orig_nx, anyres.orig_ny, off_x, off_y, w, h);
+    mtmd_anyres_unpad(cur_w, cur_h, anyres.orig_nx, anyres.orig_ny, off_x, off_y, w, h);
     if (w != cur_w || h != cur_h) {
         tiles = ggml_cont(ctx0, ggml_view_3d(ctx0, tiles, n_dim, w, h,
                                              tiles->nb[1], tiles->nb[2],
@@ -307,7 +307,7 @@ ggml_tensor * clip_graph_granite4_vision::build_anyres_assembly(ggml_tensor * cu
     return ggml_concat(ctx0, base, tiles, 1);
 }
 
-ggml_cgraph * clip_graph_granite4_vision::build() {
+ggml_cgraph * mtmd_graph_granite4_vision::build() {
     GGML_ASSERT(model.patch_embeddings_0 != nullptr);
     GGML_ASSERT(model.position_embeddings != nullptr);
     GGML_ASSERT(model.class_embedding == nullptr);

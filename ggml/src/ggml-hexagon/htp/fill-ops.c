@@ -6,7 +6,7 @@
 #include <string.h>
 
 #include "hex-common.h"
-#include "hex-profile.h"
+#include "htp-trace.h"
 
 #include "hvx-copy.h"
 #include "hvx-utils.h"
@@ -36,27 +36,27 @@
 struct htp_fill_context {
     struct htp_ops_context * octx;
     const struct htp_fill_kernel_params * kparams;
-    uint32_t nrows_per_thread;
+    uint32_t nrows_per_hvx;
     uint32_t total_rows;  // ne1 * ne2 * ne3
     uint32_t row_start;
     HVX_Vector splat_vec;
     uint32_t   elem_size;
 };
 
-static void fill_thread_contiguous(unsigned int nth, unsigned int ith, void * data) {
+static void fill_thread_contiguous(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     const struct htp_fill_context * fctx = (const struct htp_fill_context *) data;
     struct htp_ops_context        * octx = fctx->octx;
     fill_preamble;
 
     // Parallelise over the flat row index spanning ne1*ne2*ne3
-    const uint32_t ir0 = fctx->row_start + fctx->nrows_per_thread * ith;
-    const uint32_t ir1 = MIN(ir0 + fctx->nrows_per_thread, fctx->row_start + fctx->total_rows);
+    const uint32_t ir0 = fctx->row_start + fctx->nrows_per_hvx * ith;
+    const uint32_t ir1 = MIN(ir0 + fctx->nrows_per_hvx, fctx->row_start + fctx->total_rows);
 
     if (ir0 >= ir1) {
         return;
     }
 
-    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+    struct htp_thread_trace * tr = th->trace;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir0);
 
     const uint32_t elem_start = ir0 * ne0;
@@ -68,21 +68,21 @@ static void fill_thread_contiguous(unsigned int nth, unsigned int ith, void * da
     FARF(HIGH, "fill-contig %u/%u: rows %u:%u\n", ith, nth, ir0, ir1);
 }
 
-static void fill_thread_strided(unsigned int nth, unsigned int ith, void * data) {
+static void fill_thread_strided(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     const struct htp_fill_context * fctx = (const struct htp_fill_context *) data;
     struct htp_ops_context        * octx = fctx->octx;
     const struct htp_fill_kernel_params * kparams = fctx->kparams;
     fill_preamble;
 
     // Parallelise over the flat row index spanning ne1*ne2*ne3
-    const uint32_t ir0 = fctx->row_start + fctx->nrows_per_thread * ith;
-    const uint32_t ir1 = MIN(ir0 + fctx->nrows_per_thread, fctx->row_start + fctx->total_rows);
+    const uint32_t ir0 = fctx->row_start + fctx->nrows_per_hvx * ith;
+    const uint32_t ir1 = MIN(ir0 + fctx->nrows_per_hvx, fctx->row_start + fctx->total_rows);
 
     if (ir0 >= ir1) {
         return;
     }
 
-    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+    struct htp_thread_trace * tr = th->trace;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir0);
 
     for (uint32_t ir = ir0; ir < ir1; ++ir) {
@@ -120,11 +120,11 @@ int op_fill(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
     }
 
-    if (!htp_ops_context_set_n_threads(octx, MIN(kparams->n_threads, nrows))) {
+    if (!htp_ops_context_set_n_hvx(octx, MIN(kparams->n_hvx, nrows))) {
         return HTP_STATUS_INVAL_PARAMS;
     }
 
-    const uint32_t n_threads = octx->n_threads;
+    const uint32_t n_hvx = octx->n_hvx;
 
     FARF(HIGH, "fill: (%ux%ux%ux%u) type=%u ktype=%u\n",
          dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3], dst->type, kparams->kernel_type);
@@ -135,7 +135,7 @@ int op_fill(struct htp_ops_context * octx) {
     struct htp_fill_context fctx = {
         .octx             = octx,
         .kparams          = kparams,
-        .nrows_per_thread = fastdiv(nrows + n_threads - 1, &octx->n_threads_div),
+        .nrows_per_hvx    = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div),
         .total_rows       = nrows,
         .row_start        = row_start,
         .elem_size        = kparams->elem_size,
@@ -156,7 +156,7 @@ int op_fill(struct htp_ops_context * octx) {
         ? fill_thread_contiguous
         : fill_thread_strided;
 
-    work_queue_run(octx->ctx->work_queue, worker, &fctx, n_threads);
+    work_queue_run(octx->ctx->hvx_queue, worker, &fctx, n_hvx);
 
     return HTP_STATUS_OK;
 }

@@ -5,7 +5,7 @@ static constexpr int SPK_DILATIONS[3]  = { 2, 3, 4 }; // enc_dilations[1..3]
 
 // conv1d, kernel K, padding "same" (reflect), dilation d
 // x: [C, T] (ne[0]=C, ne[1]=T) -> [out_c, T]
-ggml_tensor * clip_graph_qwen3tts_spkenc::conv1d_same(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int dilation) const {
+ggml_tensor * mtmd_graph_qwen3tts_spkenc::conv1d_same(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int dilation) const {
     const int K   = (int) w->ne[0];
     const int IC  = (int) w->ne[1];
     const int OC  = (int) w->ne[2];
@@ -27,7 +27,7 @@ ggml_tensor * clip_graph_qwen3tts_spkenc::conv1d_same(ggml_tensor * x, ggml_tens
 
     ggml_tensor * w2d = ggml_reshape_2d(ctx0, w, (int64_t) K * IC, OC);
     ggml_tensor * y   = ggml_mul_mat(ctx0, w2d, col); // [OC, T_out]
-    ggml_prec_set_acc(y, GGML_PREC_F32);
+    ggml_prec_set_acc(y, GGML_PREC_BF16);
 
     ggml_tensor * b2d = ggml_reshape_2d(ctx0, b, OC, 1);
     y = ggml_add(ctx0, y, b2d);
@@ -36,7 +36,7 @@ ggml_tensor * clip_graph_qwen3tts_spkenc::conv1d_same(ggml_tensor * x, ggml_tens
 
 // Res2Net: split channel axis into `scale` chunks, chain dilated conv1d branches
 // x: [C, T] -> [C, T]
-ggml_tensor * clip_graph_qwen3tts_spkenc::res2net(ggml_tensor * x, const clip_layer & layer, int dilation, int scale) const {
+ggml_tensor * mtmd_graph_qwen3tts_spkenc::res2net(ggml_tensor * x, const mtmd_layer & layer, int dilation, int scale) const {
     const int64_t C  = x->ne[0];
     const int64_t T  = x->ne[1];
     const int64_t Cs = C / scale;
@@ -70,7 +70,7 @@ ggml_tensor * clip_graph_qwen3tts_spkenc::res2net(ggml_tensor * x, const clip_la
 }
 
 // squeeze-and-excitation gate. x: [C, T] -> [C, T]
-ggml_tensor * clip_graph_qwen3tts_spkenc::se_block(ggml_tensor * x, const clip_layer & layer) const {
+ggml_tensor * mtmd_graph_qwen3tts_spkenc::se_block(ggml_tensor * x, const mtmd_layer & layer) const {
     // temporal mean, keepdim: transpose so T is on ne[0], reduce, transpose back
     ggml_tensor * x_t  = ggml_cont(ctx0, ggml_transpose(ctx0, x));    // [T, C]
     ggml_tensor * mean = ggml_mean(ctx0, x_t);                        // [1, C]
@@ -85,7 +85,7 @@ ggml_tensor * clip_graph_qwen3tts_spkenc::se_block(ggml_tensor * x, const clip_l
 }
 
 // tdnn1 -> res2net -> tdnn2 -> se, plus residual. x: [C, T] -> [C, T]
-ggml_tensor * clip_graph_qwen3tts_spkenc::se_res2net_block(ggml_tensor * x, const clip_layer & layer, int dilation, int scale) const {
+ggml_tensor * mtmd_graph_qwen3tts_spkenc::se_res2net_block(ggml_tensor * x, const mtmd_layer & layer, int dilation, int scale) const {
     ggml_tensor * residual = x;
     ggml_tensor * h  = conv1d_same(x, layer.conv_pw1_w, layer.conv_pw1_b, 1); // tdnn1
     h = ggml_relu(ctx0, h);
@@ -97,7 +97,7 @@ ggml_tensor * clip_graph_qwen3tts_spkenc::se_res2net_block(ggml_tensor * x, cons
 }
 
 // attentive statistics pooling. x: [C, T] -> [2*C, 1]
-ggml_tensor * clip_graph_qwen3tts_spkenc::attentive_stats_pool(ggml_tensor * x) const {
+ggml_tensor * mtmd_graph_qwen3tts_spkenc::attentive_stats_pool(ggml_tensor * x) const {
     const int64_t T = x->ne[1];
 
     // mean over T: [C, 1]
@@ -151,7 +151,7 @@ ggml_tensor * clip_graph_qwen3tts_spkenc::attentive_stats_pool(ggml_tensor * x) 
     return ggml_concat(ctx0, w_mean, w_std, 0); // [2C, 1]
 }
 
-ggml_cgraph * clip_graph_qwen3tts_spkenc::build() {
+ggml_cgraph * mtmd_graph_qwen3tts_spkenc::build() {
     // inp_raw: [T, n_mel, 1, 1], from mtmd_audio_preprocessor_qwen3tts_spk
     ggml_tensor * inp = build_inp_raw(1);
     inp = ggml_reshape_2d(ctx0, inp, inp->ne[0], inp->ne[1]);

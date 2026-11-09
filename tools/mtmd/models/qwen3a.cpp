@@ -1,6 +1,6 @@
 #include "models.h"
 
-ggml_cgraph * clip_graph_qwen3a::build() {
+ggml_cgraph * mtmd_graph_qwen3a::build() {
     // Ref implementation: https://github.com/QwenLM/Qwen3-ASR/blob/main/qwen_asr/core/transformers_backend/modeling_qwen3_asr.py
 
     // inp_raw: [n_frames, n_mel, 1]  (nx=n_frames, ny=n_mel)
