@@ -104,26 +104,26 @@
 	 * shadcn names, kept so the vendored components and their classes keep working.
 	 * They alias semantic tokens; new code uses the semantic names directly.
 	 */
-	--background: var(--surface-page);
-	--foreground: var(--fg-default);
-	--card: var(--surface-raised);
-	--card-foreground: var(--fg-default);
-	--popover: var(--surface-raised);
-	--popover-foreground: var(--fg-default);
-	--primary: var(--action-primary);
-	--primary-foreground: var(--fg-on-action);
-	--secondary: var(--surface-emphasis);
-	--secondary-foreground: var(--fg-default);
-	--muted: var(--surface-muted);
-	--muted-foreground: var(--fg-muted);
-	--accent: var(--surface-selected);
-	--accent-foreground: var(--fg-default);
-	--destructive: var(--fg-danger);
-	--border: var(--line-default);
-	--input: var(--line-field);
-	--ring: var(--line-focus);
-	--code-background: var(--surface-code);
-	--code-foreground: var(--fg-code);
+	--background: var(--background);
+	--foreground: var(--foreground);
+	--card: var(--card);
+	--card-foreground: var(--foreground);
+	--popover: var(--card);
+	--popover-foreground: var(--foreground);
+	--primary: var(--primary);
+	--primary-foreground: var(--primary-foreground);
+	--secondary: var(--accent);
+	--secondary-foreground: var(--foreground);
+	--muted: var(--muted);
+	--muted-foreground: var(--muted-foreground);
+	--accent: var(--accent);
+	--accent-foreground: var(--foreground);
+	--destructive: var(--destructive);
+	--border: var(--border);
+	--input: var(--input);
+	--ring: var(--ring);
+	--code-background: var(--code-background);
+	--code-foreground: var(--code-foreground);
 }
 
 /* iOS 26 gives an installed app with viewport-fit=cover and a translucent status bar a
@@ -236,7 +236,7 @@
 	}
 
 	*:hover {
-		scrollbar-color: color-mix(in oklch, var(--fg-muted) 30%, transparent) transparent;
+		scrollbar-color: color-mix(in oklch, var(--muted-foreground) 30%, transparent) transparent;
 	}
 
 	*::-webkit-scrollbar {
@@ -255,11 +255,11 @@
 	}
 
 	*:hover::-webkit-scrollbar-thumb {
-		background: color-mix(in oklch, var(--fg-muted) 30%, transparent);
+		background: color-mix(in oklch, var(--muted-foreground) 30%, transparent);
 	}
 
 	*::-webkit-scrollbar-thumb:hover {
-		background: color-mix(in oklch, var(--fg-muted) 50%, transparent);
+		background: color-mix(in oklch, var(--muted-foreground) 50%, transparent);
 	}
 
 	:where(code, pre, kbd, samp) {

@@ -532,7 +532,7 @@
 			'h-dvh md:h-[calc(100dvh-1.125rem)]',
 			// phone: it stays put under the page, which slides aside to uncover it
 			isOnMobile && 'bg-(--sidebar-reveal-bg)',
-			'md:rounded-(--sidebar-radius)',
+			'md:rounded-2xl',
 			'flex flex-col justify-between',
 			// desktop only: on a phone the background follows the reveal frame by frame
 			'md:transition-[width,padding,margin,background-color,box-shadow,backdrop-filter] md:duration-200 md:ease-out',
@@ -540,7 +540,7 @@
 			isSettling && 'md:duration-300 md:ease-[cubic-bezier(0.34,1.56,0.64,1)]',
 			isDocked && !uiStore.isSidebarExpanded ? 'md:w-12' : 'md:w-(--sidebar-width)',
 			(uiStore.isSidebarExpanded || (isFloating && isPeeking)) &&
-				'md:sidebar-surface max-md:shadow-(--elevation-surface)',
+				'md:bg-muted/60 md:backdrop-blur-xl max-md:shadow-md',
 			isFloating && 'md:-mr-[calc(var(--sidebar-width)-3rem)]',
 			isStripHidden && 'md:pointer-events-none',
 			uiStore.isSidebarExpanded && 'is-expanded'
