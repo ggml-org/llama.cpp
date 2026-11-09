@@ -1,5 +1,21 @@
 import { CODE_BLOCK, NEWLINE } from '$lib/constants';
 import hljs from 'highlight.js';
+import bash from 'highlight.js/lib/languages/bash';
+
+// highlight.js's bash marks strings, variables and keywords but leaves a command's name and its flags plain, so a
+// command (`curl -H … -d …`) reads as one colour. Mark them too: the name as a built-in, the flags as attributes.
+hljs.registerLanguage('bash', (api) => {
+	const base = bash(api);
+
+	return {
+		...base,
+		contains: [
+			{ match: CODE_BLOCK.SHELL_COMMAND_REGEX, scope: 'built_in' },
+			{ match: CODE_BLOCK.SHELL_FLAG_REGEX, scope: 'attr' },
+			...(base.contains ?? [])
+		]
+	};
+});
 
 export interface IncompleteCodeBlock {
 	language: string;
