@@ -205,20 +205,23 @@ static int cpu_count_math_cpus(int n_cpu) {
  */
 int32_t common_cpu_get_num_math() {
 #if defined(__x86_64__) && defined(__linux__) && !defined(__ANDROID__)
-    int n_cpu = sysconf(_SC_NPROCESSORS_ONLN);
-    if (n_cpu < 1) {
-        return common_cpu_get_num_physical_cores();
-    }
-    if (is_hybrid_cpu()) {
-        cpu_set_t affinity;
-        if (!pthread_getaffinity_np(pthread_self(), sizeof(affinity), &affinity)) {
+    int32_t n_math = common_cpu_get_num_physical_cores();
+    cpu_set_t affinity;
+    if (!pthread_getaffinity_np(pthread_self(), sizeof(affinity), &affinity)) {
+        int n_cpu = sysconf(_SC_NPROCESSORS_ONLN);
+        if (n_cpu > 0 && is_hybrid_cpu()) {
             int result = cpu_count_math_cpus(n_cpu);
             pthread_setaffinity_np(pthread_self(), sizeof(affinity), &affinity);
             if (result > 0) {
-                return result;
+                n_math = result;
             }
         }
+        int n_allowed = CPU_COUNT(&affinity);
+        if (n_allowed > 0) {
+            n_math = std::min(n_math, n_allowed);
+        }
     }
+    return n_math;
 #elif defined(__riscv) && defined(__linux__)
     std::ifstream cpuinfo("/proc/cpuinfo");
     std::string line;
