@@ -772,10 +772,10 @@ struct realtime_conversation {
     void on_result(const server_task_result_realtime & res) {
         std::lock_guard<std::mutex> lock(mutex);
         if (!transcribe_item_id.empty()) {
-            if (!res.text.empty()) {
-                transcript += res.text;
+            if (!res.content.empty()) {
+                transcript += res.content.text;
                 send_event({{"type", "conversation.item.input_audio_transcription.delta"}, {"item_id", transcribe_item_id},
-                            {"content_index", 0}, {"delta", res.text}});
+                            {"content_index", 0}, {"delta", res.content.text}});
             }
             if (res.response_done) {
                 send_event({{"type", "conversation.item.input_audio_transcription.completed"}, {"item_id", transcribe_item_id},
@@ -788,12 +788,12 @@ struct realtime_conversation {
         // with tools, the text goes through the parser: content and tool calls
         std::vector<common_chat_msg_diff> diffs;
         if (parse) {
-            if (!res.text.empty() || res.response_done) {
-                parse->update_chat_msg(common_chat_input(res.text), !res.response_done, diffs, true);
+            if (!res.content.empty() || res.response_done) {
+                parse->update_chat_msg(res.content, !res.response_done, diffs, true);
             }
-        } else if (!res.text.empty()) {
+        } else if (!res.content.empty()) {
             diffs.emplace_back();
-            diffs.back().content_delta = res.text;
+            diffs.back().content_delta = res.content.text;
         }
         for (const auto & diff : diffs) {
             if (!diff.content_delta.empty()) {
@@ -965,11 +965,11 @@ bool server_realtime_slot::fail(const std::string & msg, enum error_type type) {
     return false;
 }
 
-void server_realtime_slot::send_result(std::string text, std::vector<float> audio, bool response_done) {
+void server_realtime_slot::send_result(common_chat_input content, std::vector<float> audio, bool response_done) {
     auto res = std::make_unique<server_task_result_realtime>();
     res->id            = id_task;
     res->index         = index;
-    res->text          = std::move(text);
+    res->content       = std::move(content);
     res->audio         = std::move(audio);
     res->response_done = response_done;
     res->cancelled     = response_done && cancelled;
@@ -1092,8 +1092,8 @@ std::string server_realtime_slot::piece(llama_token tok) const {
 
 // one text token or audio frame of the response being generated
 bool server_realtime_slot::response_step() {
-    bool        stop = false;
-    std::string text;
+    bool stop = false;
+    common_chat_input content;
     std::vector<float> audio;
 
     if (gen.valid()) {
@@ -1102,7 +1102,7 @@ bool server_realtime_slot::response_step() {
             return fail("response generation failed");
         }
         if (sampled != LLAMA_TOKEN_NULL && !stop) {
-            text = piece(sampled);
+            content.append(piece(sampled), sampled);
         }
         if (h_next) {
             h_state.assign(h_next, h_next + llama_model_n_embd(model));
@@ -1110,7 +1110,7 @@ bool server_realtime_slot::response_step() {
     } else {
         stop = llama_vocab_is_eog(vocab, sampled);
         if (!stop) {
-            text = piece(sampled);
+            content.append(piece(sampled), sampled);
             if (!decode(&sampled, nullptr, 1, true)) {
                 return false;
             }
@@ -1137,8 +1137,8 @@ bool server_realtime_slot::response_step() {
             audio.assign((const float *) data, (const float *) data + data_len / sizeof(float));
         }
     }
-    if (!text.empty() || !audio.empty()) {
-        send_result(std::move(text), std::move(audio));
+    if (!content.empty() || !audio.empty()) {
+        send_result(std::move(content), std::move(audio));
     }
     if (done) {
         if (gen.valid()) {
