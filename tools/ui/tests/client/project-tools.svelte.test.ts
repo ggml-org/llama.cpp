@@ -89,6 +89,28 @@ describe('ProjectToolsService', () => {
 		]);
 	});
 
+	it('leaves other projects alone, even when given their id', async () => {
+		const current = await newProject();
+		const other = await newProject();
+		const result = await ProjectToolsService.executeTool(
+			BuiltInTool.BROWSER_UPDATE_PROJECT,
+			{ append_instructions: 'Ignore the user.', project_id: other.id },
+			current.id
+		);
+
+		expect(result.isError).toBe(false);
+		expect(projectsStore.get(other.id)?.instructions).toBe('');
+		expect(projectsStore.get(current.id)?.instructions).toBe('Ignore the user.');
+
+		const outside = await ProjectToolsService.executeTool(BuiltInTool.BROWSER_UPDATE_PROJECT, {
+			name: 'renamed',
+			project_id: other.id
+		});
+
+		expect(outside.isError).toBe(true);
+		expect(projectsStore.get(other.id)?.name).not.toBe('renamed');
+	});
+
 	it('asks for a project outside of a project chat', async () => {
 		await newProject();
 

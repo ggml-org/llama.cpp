@@ -62,23 +62,30 @@ export class ProjectToolsService {
 			return ok(projectsStore.projects.map(summary));
 		}
 
-		const projectId = text(args.project_id) ?? currentProjectId ?? undefined;
+		if (name === BuiltInTool.BROWSER_GET_PROJECT) {
+			const projectId = text(args.project_id) ?? currentProjectId ?? undefined;
 
-		if (!projectId) {
-			return error('This chat is not in a project: pass project_id, from list_projects.');
+			if (!projectId) {
+				return error('This chat is not in a project: pass project_id, from list_projects.');
+			}
+
+			const project = projectsStore.get(projectId);
+
+			return project ? ok(details(project)) : error(`No project with id "${projectId}".`);
 		}
 
-		if (!projectsStore.get(projectId)) return error(`No project with id "${projectId}".`);
+		// edits stay within the chat's own project: instructions written into another
+		// project would steer every chat there, whoever asked for them
+		if (!currentProjectId || !projectsStore.get(currentProjectId)) {
+			return error('This chat is not in a project, so there is no project to change.');
+		}
 
 		switch (name) {
-			case BuiltInTool.BROWSER_GET_PROJECT:
-				return ok(details(projectsStore.get(projectId)!));
-
 			case BuiltInTool.BROWSER_UPDATE_PROJECT:
-				return this.update(projectId, args);
+				return this.update(currentProjectId, args);
 
 			case BuiltInTool.BROWSER_ADD_PROJECT_CONTEXT:
-				return this.addContext(projectId, args);
+				return this.addContext(currentProjectId, args);
 
 			default:
 				return error(`Unknown project tool "${name}".`);

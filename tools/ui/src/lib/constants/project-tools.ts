@@ -44,7 +44,7 @@ export function buildProjectToolDefinitions(): OpenAIToolDefinition[] {
 		),
 		tool(
 			BuiltInTool.BROWSER_UPDATE_PROJECT,
-			'Updates a project: renames it, sets its goal, and replaces or extends its instructions. Instructions are added to every new chat in the project. Only the given fields change.',
+			"Updates the current chat's project: renames it, sets its goal, and replaces or extends its instructions. Instructions are added to every new chat in the project. Only the given fields change.",
 			{
 				append_instructions: {
 					description: 'Text added after the current instructions, on a new line.',
@@ -58,13 +58,12 @@ export function buildProjectToolDefinitions(): OpenAIToolDefinition[] {
 					description: 'Replaces all of the instructions. Use append_instructions to keep them.',
 					type: JsonSchemaType.STRING
 				},
-				name: { description: 'New name of the project.', type: JsonSchemaType.STRING },
-				project_id: PROJECT_ID_PROPERTY
+				name: { description: 'New name of the project.', type: JsonSchemaType.STRING }
 			}
 		),
 		tool(
 			BuiltInTool.BROWSER_ADD_PROJECT_CONTEXT,
-			'Adds context to a project, which new chats in it start with: either a file on the server, referenced by its absolute path, or a text note saved with the project. Give either path, or note_name with note_content.',
+			"Adds context to the current chat's project, which new chats in it start with: either a file on the server, referenced by its absolute path, or a text note saved with the project. Give either path, or note_name with note_content.",
 			{
 				note_content: { description: 'Text of the note.', type: JsonSchemaType.STRING },
 				note_name: {
@@ -74,8 +73,7 @@ export function buildProjectToolDefinitions(): OpenAIToolDefinition[] {
 				path: {
 					description: 'Absolute path of a server file to reference.',
 					type: JsonSchemaType.STRING
-				},
-				project_id: PROJECT_ID_PROPERTY
+				}
 			}
 		)
 	];
