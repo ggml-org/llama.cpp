@@ -14032,7 +14032,48 @@ static bool run_tensor_copy_unaligned(ggml_backend_t backend) {
 
     printf("  set_tensor unaligned: %zu cases run, %d failed\n", sizeof(cases)/sizeof(cases[0]), n_fail_set);
 
-    return async_ok && get_ok && n_fail_set == 0;
+    int n_fail_n = 0;
+    for (const auto & c : cases) {
+        ggml_backend_tensor_set(t, ref.data(), 0, nbytes);
+
+        std::fill(host.begin(), host.end(), guard);
+        uint8_t * slot = base + c.host_offs;
+        memcpy(slot, payload.data() + c.tensor_offs, c.size);
+
+        struct ggml_tensor * ts[] = { t };
+        const struct ggml_tensor * cts[] = { t };
+        const size_t offs[]  = { c.tensor_offs };
+        const size_t sz[]    = { c.size };
+        const size_t doffs[] = { 0 };
+        ggml_backend_tensor_set_n(ts, slot, offs, sz, doffs, 1);
+        const bool src_guard = guard_ok(host, slot, c.size);
+
+        std::fill(back.begin(), back.end(), guard);
+        ggml_backend_tensor_get(t, back_base, 0, nbytes);
+
+        bool data_ok = memcmp(back_base + c.tensor_offs, payload.data() + c.tensor_offs, c.size) == 0;
+        if (data_ok && c.tensor_offs > 0 && memcmp(back_base, ref.data(), c.tensor_offs) != 0) {
+            data_ok = false;
+        }
+        const size_t tail = c.tensor_offs + c.size;
+        if (data_ok && tail < nbytes && memcmp(back_base + tail, ref.data() + tail, nbytes - tail) != 0) {
+            data_ok = false;
+        }
+
+        std::fill(host.begin(), host.end(), guard);
+        ggml_backend_tensor_get_n(cts, slot, offs, sz, doffs, 1);
+        const bool got = memcmp(slot, payload.data() + c.tensor_offs, c.size) == 0;
+
+        const bool ok = data_ok && got && src_guard && guard_ok(host, slot, c.size) && guard_ok(back, back_base, nbytes);
+        if (!ok) {
+            printf("  FAIL set/get_tensor_n: host_offs=%zu tensor_offs=%zu size=%zu\n", c.host_offs, c.tensor_offs, c.size);
+            n_fail_n++;
+        }
+    }
+
+    printf("  set/get_tensor_n unaligned: %zu cases run, %d failed\n", sizeof(cases)/sizeof(cases[0]), n_fail_n);
+
+    return async_ok && get_ok && n_fail_set == 0 && n_fail_n == 0;
 }
 
 static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mode mode, const char * op_names_filter, const char * params_filter,

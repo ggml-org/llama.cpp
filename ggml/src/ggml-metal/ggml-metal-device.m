@@ -2522,10 +2522,8 @@ void ggml_metal_buffer_set_tensor_n(ggml_metal_buffer_t buf, struct ggml_tensor 
 
     @autoreleasepool {
         void * data_ptr = (void *) min_data;
-        id<MTLBuffer> buf_src = [buf->dev->mtl_device newBufferWithBytesNoCopy:data_ptr
-                                                               length:max_data - min_data
-                                                              options:MTLResourceStorageModeShared
-                                                          deallocator:nil];
+        size_t base_offs = 0;
+        id<MTLBuffer> buf_src = ggml_metal_device_wrap_host(buf->dev, data_ptr, (size_t) (max_data - min_data), &base_offs);
 
         GGML_ASSERT(buf_src);
 
@@ -2544,8 +2542,11 @@ void ggml_metal_buffer_set_tensor_n(ggml_metal_buffer_t buf, struct ggml_tensor 
                 struct ggml_metal_buffer_id bid_dst = ggml_metal_buffer_get_id(tensor_buf, tensors[i]);
                 bid_dst.offs += offsets[i];
 
+                // base_offs is the page padding below min_data
+                const size_t host_off = base_offs + ((uintptr_t) data[i] - min_data);
+
                 [encoder copyFromBuffer:buf_src
-                           sourceOffset:(uintptr_t) data[i] - min_data
+                           sourceOffset:host_off
                                toBuffer:bid_dst.metal
                       destinationOffset:bid_dst.offs
                                    size:sizes[i]];
@@ -2579,10 +2580,9 @@ void ggml_metal_buffer_get_tensor_n(ggml_metal_buffer_t buf, const struct ggml_t
     }
 
     @autoreleasepool {
-        id<MTLBuffer> buf_dst = [buf->dev->mtl_device newBufferWithBytesNoCopy:(void *) min_data
-                                                               length:max_data - min_data
-                                                              options:MTLResourceStorageModeShared
-                                                          deallocator:nil];
+        void * data_ptr = (void *) min_data;
+        size_t base_offs = 0;
+        id<MTLBuffer> buf_dst = ggml_metal_device_wrap_host(buf->dev, data_ptr, (size_t) (max_data - min_data), &base_offs);
 
         GGML_ASSERT(buf_dst);
 
@@ -2601,10 +2601,13 @@ void ggml_metal_buffer_get_tensor_n(ggml_metal_buffer_t buf, const struct ggml_t
                 struct ggml_metal_buffer_id bid_src = ggml_metal_buffer_get_id(tensor_buf, tensors[i]);
                 bid_src.offs += offsets[i];
 
+                // base_offs is the page padding below min_data
+                const size_t host_off = base_offs + ((uintptr_t) data[i] - min_data);
+
                 [encoder copyFromBuffer:bid_src.metal
                            sourceOffset:bid_src.offs
                                toBuffer:buf_dst
-                      destinationOffset:(uintptr_t) data[i] - min_data
+                      destinationOffset:host_off
                                    size:sizes[i]];
             }
 
