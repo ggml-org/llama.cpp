@@ -858,6 +858,7 @@ public:
 
     std::string _visit_all_of(const common_chat_schema_all_of & schema, const std::string & name, const std::string & rule_name) {
         std::unordered_set<std::string> required;
+        std::unordered_set<std::string> prop_names;
         std::vector<std::pair<std::string, const common_chat_schema *>> properties;
         std::map<std::string, size_t> enum_values;
         std::function<void(const common_chat_schema &, bool, int)> add_component = [&](const common_chat_schema & comp, bool is_required, int depth) {
@@ -870,7 +871,15 @@ public:
                 }
             } else if (comp.kind() == common_chat_schema::KIND_OBJECT) {
                 for (const auto & prop : as<common_chat_schema_object>(comp).properties) {
-                    properties.emplace_back(prop.name, prop.schema.get());
+                    if (prop_names.insert(prop.name).second) {
+                        properties.emplace_back(prop.name, prop.schema.get());
+                    } else if (is_required && required.find(prop.name) == required.end()) {
+                        for (auto & p : properties) {
+                            if (p.first == prop.name) {
+                                p.second = prop.schema.get();
+                            }
+                        }
+                    }
                     if (is_required) {
                         required.insert(prop.name);
                     }

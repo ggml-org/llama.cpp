@@ -1509,6 +1509,35 @@ static void test_json_schema() {
     );
 }
 
+static void test_json_schema_all_of_repeated_properties() {
+    test_schema(
+        "allOf components that repeat a property",
+        R"""({"allOf": [{"type": "object", "properties": {"a": {"type": "integer"}}}, {"type": "object", "properties": {"a": {"type": "integer"}}}]})""",
+        {
+            R"""({"a": 1})""",
+        },
+        {
+            R"""({"a": 1, "a": 1})""",
+        });
+
+    test_schema(
+        "allOf property schema from a required component wins over an anyOf alternative",
+        R"""({
+            "allOf": [
+                {"anyOf": [{"type": "object", "properties": {"a": {"type": "string"}}}, {"type": "object", "properties": {"b": {"type": "boolean"}}}]},
+                {"type": "object", "properties": {"a": {"type": "integer"}}, "required": ["a"]}
+            ]
+        })""",
+        {
+            R"""({"a": 1, "b": true})""",
+        },
+        {
+            R"""({"a": "s"})""",
+            R"""({"b": true})""",
+        });
+}
+
+
 int main() {
     fprintf(stdout, "Running grammar integration tests...\n");
     test_simple_grammar();
@@ -1521,6 +1550,7 @@ int main() {
     test_failure_missing_root_symbol();
     test_custom_root_symbol_check();
     test_json_schema();
+    test_json_schema_all_of_repeated_properties();
     fprintf(stdout, "All tests passed.\n");
     return 0;
 }
