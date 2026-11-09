@@ -390,10 +390,14 @@ async function importTraces(page: Page, file: string): Promise<void> {
 		page.locator('aside button[aria-label="Expand navigation"]')
 	];
 
-	for (const key of keys) {
-		if (await reachable(settings)) break;
+	// a few rounds, as a cold dev server reloads the page once it has optimized its dependencies,
+	// which can land right after a key opened the sidebar and close it again
+	for (let round = 0; round < 3 && !(await reachable(settings)); round++) {
+		for (const key of keys) {
+			if (await reachable(settings)) break;
 
-		if ((await key.count()) > 0 && (await reachable(key.first()))) await key.first().click();
+			if ((await key.count()) > 0 && (await reachable(key.first()))) await key.first().click();
+		}
 	}
 
 	await settings.click();
