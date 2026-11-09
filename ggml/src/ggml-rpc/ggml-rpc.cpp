@@ -514,12 +514,8 @@ public:
     rpc_dispatcher() {
     }
 
-    void send(enum rpc_cmd cmd, std::shared_ptr<const void> input, size_t input_size);
-    void send(enum rpc_cmd cmd, std::shared_ptr<const void> input, size_t input_size, void * output, size_t output_size);
-    // payload is sent after input without a copy, the call returns once it is sent
-    void send(enum rpc_cmd cmd, std::shared_ptr<const void> input, size_t input_size, const void * payload, size_t payload_size);
-    void send_async(enum rpc_cmd cmd, std::shared_ptr<const void> input, size_t input_size);
-    void send_async(enum rpc_cmd cmd, std::shared_ptr<const void> input, size_t input_size, void * output, size_t output_size);
+    void send(enum rpc_cmd cmd, std::shared_ptr<const void> input, size_t input_size, const void * payload, size_t payload_size, void * output, size_t output_size);
+    void send_async(enum rpc_cmd cmd, std::shared_ptr<const void> input, size_t input_size, void * output = nullptr, size_t output_size = 0);
 
     ggml_backend_event_t event_new(ggml_backend_dev_t dev);
     void event_free(ggml_backend_event_t event);
@@ -550,15 +546,20 @@ private:
     };
     using rpc_msg_ptr   = std::shared_ptr<rpc_msg>;
     using rpc_msg_queue = message_queue<rpc_msg_ptr>;
+
     struct rpc_event {
         rpc_msg_ptr              msg;
         std::shared_future<void> sf;
     };
+
     std::mutex graph_mutex;
     std::unordered_map<uint32_t, std::unordered_set<uint64_t>> graph_uids;
-    rpc_msg_queue    queue;
-    socket_ptr       sock;
+
+    rpc_msg_queue queue;
+    socket_ptr    sock;
+
     rpc_dispatcher_flags flags = {};
+
     std::atomic_uint busy_spin_users = 0;
     std::atomic_bool running;
     std::thread      thread;
@@ -569,49 +570,15 @@ static void rpc_dispatcher_trampoline(rpc_dispatcher * dispatcher)
     dispatcher->work();
 }
 
-void rpc_dispatcher::send(enum rpc_cmd cmd, std::shared_ptr<const void> input, size_t input_size) {
+void rpc_dispatcher::send(enum rpc_cmd cmd, std::shared_ptr<const void> input, size_t input_size, const void * payload, size_t payload_size, void * output, size_t output_size) {
     auto msg = std::make_shared<rpc_msg>();
     msg->cmd = cmd;
-    msg->input = input;
-    msg->input_size = input_size;
-    msg->output = nullptr;
-    msg->output_size = 0;
-    GGML_ASSERT(queue.push(msg));
-    auto future = msg->completion.get_future();
-    future.wait();
-}
-
-void rpc_dispatcher::send_async(enum rpc_cmd cmd, std::shared_ptr<const void> input, size_t input_size) {
-    auto msg = std::make_shared<rpc_msg>();
-    msg->cmd = cmd;
-    msg->input = input;
-    msg->input_size = input_size;
-    msg->output = nullptr;
-    msg->output_size = 0;
-    GGML_ASSERT(queue.push(msg));
-}
-
-void rpc_dispatcher::send(enum rpc_cmd cmd, std::shared_ptr<const void> input, size_t input_size, const void * payload, size_t payload_size) {
-    auto msg = std::make_shared<rpc_msg>();
-    msg->cmd = cmd;
-    msg->input = input;
-    msg->input_size = input_size;
-    msg->output = nullptr;
-    msg->output_size = 0;
-    msg->payload = payload;
-    msg->payload_size = payload_size;
-    GGML_ASSERT(queue.push(msg));
-    auto future = msg->completion.get_future();
-    future.wait();
-}
-
-void rpc_dispatcher::send(enum rpc_cmd cmd, std::shared_ptr<const void> input, size_t input_size, void * output, size_t output_size) {
-    auto msg = std::make_shared<rpc_msg>();
-    msg->cmd = cmd;
-    msg->input = input;
+    msg->input = std::move(input);
     msg->input_size = input_size;
     msg->output = output;
     msg->output_size = output_size;
+    msg->payload = payload;
+    msg->payload_size = payload_size;
     GGML_ASSERT(queue.push(msg));
     auto future = msg->completion.get_future();
     future.wait();
@@ -620,7 +587,7 @@ void rpc_dispatcher::send(enum rpc_cmd cmd, std::shared_ptr<const void> input, s
 void rpc_dispatcher::send_async(enum rpc_cmd cmd, std::shared_ptr<const void> input, size_t input_size, void * output, size_t output_size) {
     auto msg = std::make_shared<rpc_msg>();
     msg->cmd = cmd;
-    msg->input = input;
+    msg->input = std::move(input);
     msg->input_size = input_size;
     msg->output = output;
     msg->output_size = output_size;
@@ -767,7 +734,7 @@ static void ggml_backend_rpc_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     auto request = std::make_shared<rpc_msg_free_buffer_req>();
     request->remote_ptr = ctx->remote_ptr;
     LOG_DBG2("[%s] remote_ptr: 0x%" PRIx64 "\n", __func__, request->remote_ptr);
-    ctx->dispatcher->send(RPC_CMD_FREE_BUFFER, request, sizeof(*request));
+    ctx->dispatcher->send(RPC_CMD_FREE_BUFFER, request, sizeof(*request), nullptr, 0, nullptr, 0);
     delete ctx;
 }
 
@@ -780,7 +747,7 @@ static void * ggml_backend_rpc_buffer_get_base(ggml_backend_buffer_t buffer) {
     request->remote_ptr = ctx->remote_ptr;
     LOG_DBG2("[%s] remote_ptr: 0x%" PRIx64 "\n", __func__, ctx->remote_ptr);
     rpc_msg_buffer_get_base_rsp response;
-    ctx->dispatcher->send(RPC_CMD_BUFFER_GET_BASE, request, sizeof(*request), &response, sizeof(response));
+    ctx->dispatcher->send(RPC_CMD_BUFFER_GET_BASE, request, sizeof(*request), nullptr, 0, &response, sizeof(response));
     ctx->base_ptr = reinterpret_cast<void *>(response.base_ptr);
     return ctx->base_ptr;
 }
@@ -846,7 +813,7 @@ static enum ggml_status ggml_backend_rpc_buffer_init_tensor(ggml_backend_buffer_
         LOG_DBG2("[%s] tensor: %s\n", __func__, rpc_log_format_tensor(tensor).c_str());
         auto request = std::make_shared<rpc_msg_init_tensor_req>();
         request->tensor = serialize_tensor(tensor);
-        ctx->dispatcher->send(RPC_CMD_INIT_TENSOR, request, sizeof(*request));
+        ctx->dispatcher->send(RPC_CMD_INIT_TENSOR, request, sizeof(*request), nullptr, 0, nullptr, 0);
     }
     return GGML_STATUS_SUCCESS;
 }
@@ -861,7 +828,7 @@ static void ggml_backend_rpc_buffer_memset_tensor(
     request->value  = value;
     LOG_DBG2("[%s] tensor: %s, offset: %zu, size: %s, value: %u\n", __func__, rpc_log_format_tensor(tensor).c_str(), offset,
              rpc_log_format_size(size).c_str(), value);
-    ctx->dispatcher->send(RPC_CMD_MEMSET_TENSOR, request, sizeof(*request));
+    ctx->dispatcher->send(RPC_CMD_MEMSET_TENSOR, request, sizeof(*request), nullptr, 0, nullptr, 0);
 }
 
 // input serialization format: | rpc_tensor | cache_flag (1 byte) | offset (8 bytes) | data (size bytes)
@@ -900,7 +867,7 @@ static void ggml_backend_rpc_buffer_set_tensor(ggml_backend_buffer_t buffer, ggm
         request->offset = offset;
         request->hash = fnv_hash((const uint8_t*)data, size);
         rpc_msg_set_tensor_hash_rsp response;
-        ctx->dispatcher->send(RPC_CMD_SET_TENSOR_HASH, request, sizeof(*request), &response, sizeof(response));
+        ctx->dispatcher->send(RPC_CMD_SET_TENSOR_HASH, request, sizeof(*request), nullptr, 0, &response, sizeof(response));
         LOG_DBG2("[%s] tensor: %s, hash: 0x%" PRIx64 ", cache: %s\n", __func__, rpc_log_format_tensor(tensor).c_str(),
                  request->hash, response.result ? "hit" : "miss");
         if (response.result) {
@@ -912,7 +879,7 @@ static void ggml_backend_rpc_buffer_set_tensor(ggml_backend_buffer_t buffer, ggm
     }
     size_t header_size;
     auto header = serialize_set_tensor(rpc_tensor, cache_flag, offset, nullptr, 0, header_size);
-    ctx->dispatcher->send(RPC_CMD_SET_TENSOR, header, header_size, data, size);
+    ctx->dispatcher->send(RPC_CMD_SET_TENSOR, header, header_size, data, size, nullptr, 0);
 }
 
 static void ggml_backend_rpc_buffer_set_tensor_2d(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data,
@@ -934,7 +901,7 @@ static void ggml_backend_rpc_buffer_set_tensor_2d(ggml_backend_buffer_t buffer, 
         memcpy(dest + i*size, (const char *)data + i*stride_data, size);
     }
     std::shared_ptr<uint8_t> input_ptr(input, std::default_delete<uint8_t[]>());
-    ctx->dispatcher->send(RPC_CMD_SET_TENSOR_2D, input_ptr, input_size);
+    ctx->dispatcher->send(RPC_CMD_SET_TENSOR_2D, input_ptr, input_size, nullptr, 0, nullptr, 0);
 }
 
 static void ggml_backend_rpc_buffer_get_tensor_2d(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data,
@@ -949,10 +916,10 @@ static void ggml_backend_rpc_buffer_get_tensor_2d(ggml_backend_buffer_t buffer, 
     request->n_copies = n_copies;
     request->stride   = stride_tensor;
     if (stride_data == size) {
-        ctx->dispatcher->send(RPC_CMD_GET_TENSOR_2D, request, sizeof(*request), data, size*n_copies);
+        ctx->dispatcher->send(RPC_CMD_GET_TENSOR_2D, request, sizeof(*request), nullptr, 0, data, size*n_copies);
     } else {
         std::vector<uint8_t> packed(size*n_copies);
-        ctx->dispatcher->send(RPC_CMD_GET_TENSOR_2D, request, sizeof(*request), packed.data(), packed.size());
+        ctx->dispatcher->send(RPC_CMD_GET_TENSOR_2D, request, sizeof(*request), nullptr, 0, packed.data(), packed.size());
         for (size_t i = 0; i < n_copies; i++) {
             memcpy((char *)data + i*stride_data, packed.data() + i*size, size);
         }
@@ -967,7 +934,7 @@ static void ggml_backend_rpc_buffer_get_tensor(ggml_backend_buffer_t buffer, con
     request->tensor = serialize_tensor(tensor);
     request->offset = offset;
     request->size = size;
-    ctx->dispatcher->send(RPC_CMD_GET_TENSOR, request, sizeof(*request), data, size);
+    ctx->dispatcher->send(RPC_CMD_GET_TENSOR, request, sizeof(*request), nullptr, 0, data, size);
 }
 
 static bool ggml_backend_rpc_buffer_cpy_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * src, ggml_tensor * dst) {
@@ -987,7 +954,7 @@ static bool ggml_backend_rpc_buffer_cpy_tensor(ggml_backend_buffer_t buffer, con
         request->src = serialize_tensor(src);
         request->dst = serialize_tensor(dst);
         rpc_msg_copy_tensor_rsp response;
-        ctx->dispatcher->send(RPC_CMD_COPY_TENSOR, request, sizeof(*request), &response, sizeof(response));
+        ctx->dispatcher->send(RPC_CMD_COPY_TENSOR, request, sizeof(*request), nullptr, 0, &response, sizeof(response));
         return response.result;
     }
     return false;
@@ -999,7 +966,7 @@ static void ggml_backend_rpc_buffer_clear(ggml_backend_buffer_t buffer, uint8_t 
     request->remote_ptr = ctx->remote_ptr;
     request->value = value;
     LOG_DBG2("[%s] remote_ptr: 0x%" PRIx64 ", value: %u\n", __func__, request->remote_ptr, request->value);
-    ctx->dispatcher->send(RPC_CMD_BUFFER_CLEAR, request, sizeof(*request));
+    ctx->dispatcher->send(RPC_CMD_BUFFER_CLEAR, request, sizeof(*request), nullptr, 0, nullptr, 0);
 }
 
 static ggml_backend_buffer_i ggml_backend_rpc_buffer_interface = {
@@ -1032,7 +999,7 @@ static ggml_backend_buffer_t ggml_backend_rpc_buffer_type_alloc_buffer(ggml_back
     rpc_msg_alloc_buffer_rsp response;
 
     auto dispatcher = get_dispatcher(buft_ctx->endpoint);
-    dispatcher->send(RPC_CMD_ALLOC_BUFFER, request, sizeof(*request), &response, sizeof(response));
+    dispatcher->send(RPC_CMD_ALLOC_BUFFER, request, sizeof(*request), nullptr, 0, &response, sizeof(response));
     if (response.remote_ptr != 0) {
         LOG_DBG("[%s] endpoint: %s, device: %u, size: %s -> remote_ptr: 0x%" PRIx64 ", remote_size: %s\n",
                 __func__, buft_ctx->endpoint.c_str(), buft_ctx->device, rpc_log_format_size(request->size).c_str(),
@@ -1053,7 +1020,7 @@ static size_t get_alignment(const std::shared_ptr<rpc_dispatcher> & dispatcher, 
     auto request = std::make_shared<rpc_msg_get_alignment_req>();
     request->device = device;
     rpc_msg_get_alignment_rsp response;
-    dispatcher->send(RPC_CMD_GET_ALIGNMENT, request, sizeof(*request), &response, sizeof(response));
+    dispatcher->send(RPC_CMD_GET_ALIGNMENT, request, sizeof(*request), nullptr, 0, &response, sizeof(response));
     LOG_DBG2("[%s] device: %u, alignment: %s\n", __func__, device, rpc_log_format_size(response.alignment).c_str());
     return response.alignment;
 }
@@ -1067,7 +1034,7 @@ static size_t get_max_size(const std::shared_ptr<rpc_dispatcher> & dispatcher, u
     auto request = std::make_shared<rpc_msg_get_max_size_req>();
     request->device = device;
     rpc_msg_get_max_size_rsp response;
-    dispatcher->send(RPC_CMD_GET_MAX_SIZE, request, sizeof(*request), &response, sizeof(response));
+    dispatcher->send(RPC_CMD_GET_MAX_SIZE, request, sizeof(*request), nullptr, 0, &response, sizeof(response));
     LOG_DBG2("[%s] device: %u, max_size: %s\n", __func__, device, rpc_log_format_size(response.max_size).c_str());
     return response.max_size;
 }
@@ -1152,7 +1119,7 @@ static size_t ggml_backend_rpc_buffer_type_get_alloc_size(ggml_backend_buffer_ty
         LOG_DBG2("[%s] cache miss: %s, querying server\n", __func__, rpc_log_format_tensor(tensor).c_str());
         rpc_msg_get_alloc_size_rsp response;
         auto dispatcher = get_dispatcher(buft_ctx->endpoint);
-        dispatcher->send(RPC_CMD_GET_ALLOC_SIZE, request, sizeof(*request), &response, sizeof(response));
+        dispatcher->send(RPC_CMD_GET_ALLOC_SIZE, request, sizeof(*request), nullptr, 0, &response, sizeof(response));
 
         {
             std::lock_guard<std::mutex> lock(cache_mutex);
@@ -1204,7 +1171,7 @@ static void ggml_backend_rpc_set_tensor_async(ggml_backend_t backend, ggml_tenso
         request->hash = fnv_hash((const uint8_t*)data, size);
         rpc_msg_set_tensor_hash_rsp response;
         // TODO: make this async
-        ctx->dispatcher->send(RPC_CMD_SET_TENSOR_HASH, request, sizeof(*request), &response, sizeof(response));
+        ctx->dispatcher->send(RPC_CMD_SET_TENSOR_HASH, request, sizeof(*request), nullptr, 0, &response, sizeof(response));
         LOG_DBG2("[%s] tensor: %s, hash: 0x%" PRIx64 ", cache: %s\n", __func__, rpc_log_format_tensor(tensor).c_str(),
                  request->hash, response.result ? "hit" : "miss");
         if (response.result) {
@@ -1422,7 +1389,7 @@ void ggml_backend_rpc_get_device_memory(const char * endpoint, uint32_t device, 
     auto request = std::make_shared<rpc_msg_get_device_memory_req>();
     request->device = device;
     rpc_msg_get_device_memory_rsp response;
-    dispatcher->send(RPC_CMD_GET_DEVICE_MEMORY, request, sizeof(*request), &response, sizeof(response));
+    dispatcher->send(RPC_CMD_GET_DEVICE_MEMORY, request, sizeof(*request), nullptr, 0, &response, sizeof(response));
     LOG_DBG2("[%s] device: %u, free: %s, total: %s\n", __func__, device,
              rpc_log_format_size(response.free_mem).c_str(), rpc_log_format_size(response.total_mem).c_str());
     *free = response.free_mem;
@@ -3219,7 +3186,7 @@ static void ggml_backend_rpc_comm_free(void * comm_ctx_v) {
     for (const auto & rank : comm_ctx->ranks) {
         auto request = std::make_shared<rpc_msg_comm_free_req>();
         request->device = rank.device;
-        rank.dispatcher->send(RPC_CMD_COMM_FREE, request, sizeof(*request));
+        rank.dispatcher->send(RPC_CMD_COMM_FREE, request, sizeof(*request), nullptr, 0, nullptr, 0);
         rank.dispatcher->busy_spin_release();
     }
     delete comm_ctx;
@@ -3371,7 +3338,7 @@ ggml_backend_reg_t ggml_backend_rpc_reg(void) {
 static uint32_t ggml_backend_rpc_get_device_count(const char * endpoint) {
     auto dispatcher = get_dispatcher(endpoint);
     rpc_msg_device_count_rsp response;
-    dispatcher->send(RPC_CMD_DEVICE_COUNT, nullptr, 0, &response, sizeof(response));
+    dispatcher->send(RPC_CMD_DEVICE_COUNT, nullptr, 0, nullptr, 0, &response, sizeof(response));
     return response.device_count;
 }
 
