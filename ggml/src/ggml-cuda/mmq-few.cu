@@ -6,6 +6,9 @@
 
 #include <type_traits>
 
+// NVIDIA only: the kernel uses the NVIDIA int8 MMA fragment layout and cp.async.
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+
 using namespace ggml_cuda_mma;
 
 // Few-row MMQ: int8 MMA mat-mul for 2-24 src1 columns. A CUDA block has 16 src0 rows (32 for 2 column groups on large matrices).
@@ -828,7 +831,7 @@ static int ggml_cuda_mmq_few_min_ncols(const ggml_type type, const int cc, const
     if (cc == GGML_CUDA_CC_DGX_SPARK) { // tuned on DGX Spark GB10
         return type == GGML_TYPE_IQ4_XS || type == GGML_TYPE_IQ4_NL ? 8 : 2;
     }
-    switch (type) { // tuned on RTX 5090, also used for the other GPUs
+    switch (type) { // all GPUs except DGX Spark, tuned on RTX 5090
         case GGML_TYPE_Q3_K:   return 3;
         case GGML_TYPE_Q5_K:   return 3;
         case GGML_TYPE_Q4_K:   return 4;
@@ -857,3 +860,17 @@ bool ggml_cuda_should_use_mmq_few(const ggml_tensor * src0, const ggml_tensor * 
     const int x_alignment = mmq_few_unaligned(src0->type, nunits_stage) ? (ggml_type_size(src0->type) % 4 == 0 ? 4 : 2) : 16;
     return ggml_cuda_is_aligned(src0, x_alignment) && ggml_cuda_is_aligned(src1, 16);
 }
+
+#else // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+
+void ggml_cuda_mul_mat_q_few(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    GGML_UNUSED_VARS(ctx, src0, src1, dst);
+    GGML_ABORT("fatal error");
+}
+
+bool ggml_cuda_should_use_mmq_few(const ggml_tensor * src0, const ggml_tensor * src1, const int cc) {
+    GGML_UNUSED_VARS(src0, src1, cc);
+    return false;
+}
+
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
