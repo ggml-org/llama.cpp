@@ -33,6 +33,9 @@
 #include "ggml-cuda/mmq.cuh"
 #include "ggml-cuda/mmvf.cuh"
 #include "ggml-cuda/mmvq.cuh"
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+#include "ggml-cuda/mmid-f32.cuh"
+#endif
 #include "ggml-cuda/moe-weighted-reduction.cuh"
 #include "ggml-cuda/norm.cuh"
 #include "ggml-cuda/opt-step-adamw.cuh"
@@ -1980,6 +1983,11 @@ static bool ggml_cuda_mul_mat_id_needs_sync(const ggml_tensor * dst, const int c
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
 
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+    if (ggml_cuda_mul_mat_id_f32_supported(dst, cc)) {
+        return false;
+    }
+#endif
     if (ggml_cuda_mul_mat_id_has_f32_src1(dst) || src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
         return true;
     }
@@ -2017,6 +2025,13 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
 
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
     const bool src1_f32 = ggml_cuda_mul_mat_id_has_f32_src1(dst);
+
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+    if (ggml_cuda_mul_mat_id_f32_supported(dst, cc)) {
+        ggml_cuda_mul_mat_id_f32(ctx, dst);
+        return;
+    }
+#endif
 
     // [TAG_MUL_MAT_ID_CUDA_GRAPHS]
     if (!src1_f32 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
@@ -5374,6 +5389,11 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                 }
                 if (ggml_cuda_mul_mat_id_has_f32_src1(op)) {
                     const int cc = ggml_cuda_info().devices[dev_ctx->device].cc;
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+                    if (ggml_cuda_mul_mat_id_f32_supported(op, cc)) {
+                        return true;
+                    }
+#endif
                     if (!GGML_CUDA_CC_IS_NVIDIA(cc) || b->type != GGML_TYPE_F32 || !ggml_is_contiguous(b) ||
                             !ggml_is_contiguous_to_2(a) || (a->type != GGML_TYPE_F32 && !ggml_get_to_fp32_cuda(a->type))) {
                         return false;

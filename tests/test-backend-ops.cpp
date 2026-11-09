@@ -10897,13 +10897,23 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 4, 4, false, 16, 10, 256));
     }
 
-    for (ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q8_0, GGML_TYPE_BF16 }) {
+    for (ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q8_0, GGML_TYPE_Q5_0, GGML_TYPE_BF16 }) {
         for (int n : { 1, 16 }) {
             test_cases.emplace_back(new test_mul_mat_id(type, GGML_TYPE_F32, 4, 2, false, 32, n, 256, 1e5f));
         }
         test_cases.emplace_back(new test_mul_mat_id_fusion(type, GGML_TYPE_F32, 4, 2, false, 32, 1, 256, 2, true, 1e5f));
         test_cases.emplace_back(new test_mul_mat_vec_fusion(type, GGML_GLU_OP_SWIGLU, 1, 32, 256,
             true, 4, 2, false, true, true, false, { 1, 1 }, 1e5f));
+    }
+
+    for (ggml_type type : { GGML_TYPE_Q8_0, GGML_TYPE_Q5_0 }) {
+        for (bool broadcast : { false, true }) {
+            test_cases.emplace_back(new test_mul_mat_id(type, GGML_TYPE_F32, 64, 8, broadcast, 2304, 1, 896, 1e5f, 2336));
+        }
+    }
+    for (bool broadcast : { false, true }) {
+        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q4_K, GGML_TYPE_F32, 64, 8, broadcast, 2304, 1, 1024, 1e5f, 2336));
+        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q4_K, GGML_TYPE_F32, 64, 8, broadcast, 2304, 16, 1024, 1e5f, 2336));
     }
 
     // test src1 f16 overflow
@@ -12065,6 +12075,20 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         for (int bs : {1, 2, 3, 4, 8}) {
             test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, m, bs, 4096, {1, 1}, {1, 1}));
         }
+    }
+
+    // One token, F32 activation, strided experts. mmvq cannot take this activation.
+    for (ggml_type type : { GGML_TYPE_Q8_0, GGML_TYPE_Q5_0 }) {
+        for (bool broadcast : { false, true }) {
+            test_cases.emplace_back(new test_mul_mat_id(type, GGML_TYPE_F32, 64, 8, broadcast, 2304, 1, 896, 1e5f, 2336));
+        }
+    }
+    for (bool broadcast : { false, true }) {
+        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q4_K, GGML_TYPE_F32, 64, 8, broadcast, 2304, 1, 1024, 1e5f, 2336));
+        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q4_K, GGML_TYPE_F32, 64, 8, broadcast, 2304, 16, 1024, 1e5f, 2336));
+    }
+    for (int n : {16, 64}) {
+        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q4_K, GGML_TYPE_F32, 128, 4, false, 4096, n, 2048, 1e5f));
     }
 
     // qwen3-30b-a3b
