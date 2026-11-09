@@ -16,7 +16,7 @@ enum common_params_fit_status {
 //   - its context follows the context of the main model, so its memory is measured again whenever that context changes
 //   - shares_model tells the fit that the weights are already counted in the main model, as for an MTP context
 struct common_fit_extra_model {
-    const char * path_model;
+    std::vector<std::string> paths_model;
     llama_model_params * mparams;
     llama_context_params * cparams;
     bool shares_model;
@@ -28,19 +28,19 @@ struct common_fit_extra_model {
 //   - only parameters that have the same value as in llama_default_model_params are modified
 //     with the exception of the context size which is modified if and only if equal to 0
 common_params_fit_status common_fit_params(
-                         const char * path_model,
+     const std::vector<std::string> & paths_model,
                  llama_model_params * mparams,
                llama_context_params * cparams,
                               float * tensor_split,          // writable buffer for tensor split, needs at least llama_max_devices elements
    llama_model_tensor_buft_override * tensor_buft_overrides, // writable buffer for overrides, needs at least llama_max_tensor_buft_overrides elements
                              size_t * margins,               // margins of memory to leave per device in bytes
                            uint32_t   n_ctx_min,             // minimum context size to set when trying to reduce memory use
-      const common_fit_extra_model * extra,                  // model to fit alongside the main one, nullptr if there is none
+       const common_fit_extra_model * extra,                  // model to fit alongside the main one, nullptr if there is none
                      ggml_log_level   log_level);            // minimum log level to print during fitting, lower levels go to debug log
 
 // print estimated memory to stdout
 void common_fit_print(
-                         const char * path_model,
+     const std::vector<std::string> & paths_model,
                  llama_model_params * mparams,
                llama_context_params * cparams);
 
@@ -75,7 +75,7 @@ std::vector<common_memory_breakdown_row> common_memory_breakdown_rows(const llam
 // load model + context with no_alloc and return the memory breakdown, params are used as-is
 // n_ctx_train and n_ctx are optional outputs; throws on failure
 std::vector<common_memory_breakdown_row> common_fit_measure(
-                         const char * path_model,
+     const std::vector<std::string> & paths_model,
            const llama_model_params * mparams,
          const llama_context_params * cparams,
                            uint32_t * n_ctx_train,
@@ -99,7 +99,7 @@ using common_device_memory_data_vec = std::vector<common_device_memory_data>;
 
 // Load a model + context with no_alloc and return the per-device memory breakdown.
 common_device_memory_data_vec common_get_device_memory_data(
-                         const char * path_model,
+     const std::vector<std::string> & paths_model,
            const llama_model_params * mparams,
          const llama_context_params * cparams,
     std::vector<ggml_backend_dev_t> & devs,
