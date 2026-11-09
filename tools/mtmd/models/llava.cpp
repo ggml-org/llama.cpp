@@ -2,7 +2,7 @@
 
 // this graph is used by llava, granite and glm
 // due to having embedding_stack (used by granite), we cannot reuse build_vit
-ggml_cgraph * clip_graph_llava::build() {
+ggml_cgraph * mtmd_graph_llava::build() {
     const int batch_size = 1;
     const int n_pos = n_patches + (model.class_embedding ? 1 : 0);
 

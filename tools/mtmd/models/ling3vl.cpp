@@ -1,6 +1,6 @@
 #include "models.h"
 
-ggml_cgraph * clip_graph_ling3vl::build() {
+ggml_cgraph * mtmd_graph_ling3vl::build() {
     // same vision tower as qwen3vl, but the merger is norm-only (no fc1/fc2) and
     // the projector MLP lives at the top level (mm.0 / mm.2)
     GGML_ASSERT(model.class_embedding == nullptr);
@@ -57,7 +57,7 @@ ggml_cgraph * clip_graph_ling3vl::build() {
 
     ggml_tensor * inpL = build_vit(
         inp, n_pos, norm_t, hparams.ffn_op, learned_pos_embd,
-        [&](ggml_tensor * c, const clip_layer &) {
+        [&](ggml_tensor * c, const mtmd_layer &) {
             return ggml_rope_multi(
                 ctx0, c, positions, nullptr,
                 d_head/2, mrope_sections, GGML_ROPE_TYPE_VISION, 32768, 10000, 1, 0, 1, 32, 1);

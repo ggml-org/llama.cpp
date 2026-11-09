@@ -1,7 +1,7 @@
 #include "models.h"
 #include <cmath>
 
-ggml_cgraph * clip_graph_gemma4v::build() {
+ggml_cgraph * mtmd_graph_gemma4v::build() {
     ggml_tensor * inp_raw = build_inp_raw();
 
     // patches = 2 * (patches - 0.5)
@@ -43,7 +43,7 @@ ggml_cgraph * clip_graph_gemma4v::build() {
     }
 
     // similar to build_rope_2d, but use neox ordering
-    auto add_pos = [&](ggml_tensor * cur, const clip_layer &) {
+    auto add_pos = [&](ggml_tensor * cur, const mtmd_layer &) {
         const int64_t n_dim = cur->ne[0];
 
         // first half, dims [0, n_dim/2)
@@ -117,7 +117,7 @@ ggml_cgraph * clip_graph_gemma4v::build() {
     return gf;
 }
 
-ggml_tensor * clip_graph_gemma4v::build_mm(ggml_tensor * w, ggml_tensor * x) const {
+ggml_tensor * mtmd_graph_gemma4v::build_mm(ggml_tensor * w, ggml_tensor * x) const {
     // Gemma4ClippableLinear
 
     auto it = model.clamp_info_map.find(w->name);
