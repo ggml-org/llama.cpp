@@ -64,8 +64,8 @@
 		var(--background)
 	);
 	--font-mono:
-		'Llama Mono', ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono',
-		Consolas, 'Liberation Mono', Menlo, monospace;
+		ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas,
+		'Liberation Mono', Menlo, monospace;
 	--layer-popover: 1000000;
 
 	--chat-form-area-height: 8rem;
@@ -123,9 +123,6 @@
 }
 
 @theme inline {
-	/* the sans everywhere, headings included (their size sets the optical size): Llama Sans, then the system stack
-	   while it loads or if it can't */
-	--font-sans: 'Llama Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
 	--radius-sm: calc(var(--radius) - 4px);
 	--radius-md: calc(var(--radius) - 2px);
 	--radius-lg: var(--radius);
