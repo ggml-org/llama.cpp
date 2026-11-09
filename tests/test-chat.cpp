@@ -6941,7 +6941,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .tools({ special_function_tool })
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .expect(message_assist_call)
-            .expect_rules({ "tool-0", "tool-call-0" })
+            .expect_rules({ "tool-0", "tool-calls" })
             .run();
 
         // Parallel calls, one message per call
@@ -6984,7 +6984,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
         // Markup quoted in an answer has no preceding <|eom|>, so it stays content instead of
         // becoming an invocation the user never asked for
-        tst.test(" to=user<|message|>You invoke it like this:\n" + call_markup + "<|eot|>")
+        tst.test(" to=user<|message|>You invoke it like this:\n" + call_markup)
             .tools({ special_function_tool })
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .expect_content("You invoke it like this:\n" + call_markup)
@@ -7008,7 +7008,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
         // Tool markup inside the analysis channel is reasoning, not a call
         tst.test(" to=self<|message|>I could use " + call_markup + " here<|eom|>"
-                 "<|start|>assistant to=user<|message|>Hello!<|eot|>")
+                 "<|start|>assistant to=user<|message|>Hello!")
             .tools({ special_function_tool })
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .expect_reasoning("I could use " + call_markup + " here")

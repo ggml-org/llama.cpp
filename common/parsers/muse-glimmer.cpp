@@ -83,7 +83,6 @@ common_chat_params common_chat_params_init_muse_glimmer(const common_chat_templa
                                         p.tool_arg_close(p.literal("</atem:parameter>")));
 
             auto tool_choice = p.choice();
-            std::vector<std::pair<common_peg_parser, common_peg_parser>> calls;
             foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
                 const auto &      function = tool.at("function");
                 const std::string name     = function.at("name");
@@ -109,7 +108,6 @@ common_chat_params common_chat_params_init_muse_glimmer(const common_chat_templa
                     args = p.zero_or_more(p.choice(arg_rules) + p.space());
                 }
 
-                // The recipient names the tool, so the header up to <|message|> is the trigger
                 auto open = p.tool_open(start_token + p.literal("assistant to=") + p.tool_name(p.literal(name)) + message);
                 auto body = p.rule("tool-" + std::to_string(tool_index),
                     p.literal("<atem:function_calls>") + p.space() + p.literal("<atem:invoke name=\"" + name + "\">") + p.space()
@@ -117,14 +115,10 @@ common_chat_params common_chat_params_init_muse_glimmer(const common_chat_templa
                     << p.tool_close(p.literal("</atem:invoke>") + p.space() + p.literal("</atem:function_calls>")));
 
                 tool_choice |= open + body;
-                calls.emplace_back(open, body);
             });
 
             auto more       = inputs.parallel_tool_calls ? p.zero_or_more(eom + tool_choice) : p.eps();
-            auto tool_calls = p.choice();
-            for (size_t i = 0; i < calls.size(); i++) {
-                tool_calls |= p.trigger_rule("tool-call-" + std::to_string(i), calls[i].first, calls[i].second + more);
-            }
+            auto tool_calls = p.rule("tool-calls", tool_choice + more);
 
             if (inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED) {
                 return p.zero_or_more(start + analysis) + tool_calls;
@@ -137,10 +131,11 @@ common_chat_params common_chat_params_init_muse_glimmer(const common_chat_templa
     });
 
     if (include_grammar) {
-        // The grammar scans for the triggers itself, so the sampler runs it from the first token
+        // Every message opens with a recipient header, so the grammar constrains the whole turn from the first token
+        // and a recipient that is not self, user, or a tool cannot be generated
         data.grammar_lazy = false;
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
-            data.parser.build_grammar(builder, !has_response_format && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO);
+            data.parser.build_grammar(builder);
         });
     }
 
