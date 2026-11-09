@@ -248,24 +248,54 @@ class MarkdownBlockWidget extends WidgetType {
 
 interface LivePreview {
 	atomic: DecorationSet;
+	/** The top-level blocks the decorations were built from, reused while the text stays put. */
+	blocks: MarkdownBlock[];
 	decorations: DecorationSet;
+	/** Which blocks show raw text, e.g. `"2,3"`; a cursor move within them changes nothing. */
+	editingKey: string;
 	focused: boolean;
+}
+
+function editingFlags(blocks: MarkdownBlock[], state: EditorState, focused: boolean): boolean[] {
+	const { ranges } = state.selection;
+
+	return blocks.map(
+		(block) => focused && ranges.some((range) => range.from <= block.to && range.to >= block.from)
+	);
+}
+
+function keyOf(flags: boolean[]): string {
+	return flags.flatMap((editing, index) => (editing ? [index] : [])).join(',');
+}
+
+function buildPreview(
+	state: EditorState,
+	focused: boolean,
+	options: MarkdownLivePreviewOptions,
+	blocks: MarkdownBlock[] = collectBlocks(state)
+): LivePreview {
+	const flags = editingFlags(blocks, state, focused);
+
+	return {
+		...buildDecorations(state, blocks, flags, options),
+		blocks,
+		editingKey: keyOf(flags),
+		focused
+	};
 }
 
 function buildDecorations(
 	state: EditorState,
-	focused: boolean,
+	blocks: MarkdownBlock[],
+	flags: boolean[],
 	options: MarkdownLivePreviewOptions
-): Omit<LivePreview, 'focused'> {
+): Pick<LivePreview, 'atomic' | 'decorations'> {
 	const decorations: Range<Decoration>[] = [];
 	const atomic: Range<Decoration>[] = [];
-	const { doc, selection } = state;
+	const { doc } = state;
 
-	for (const block of collectBlocks(state)) {
-		const isEditing =
-			focused && selection.ranges.some((range) => range.from <= block.to && range.to >= block.from);
-
-		if (!isEditing) {
+	for (const [index, block] of blocks.entries()) {
+		if (!flags[index]) {
 			const source = doc.sliceString(block.from, block.sourceTo);
 			const widget = new MarkdownBlockWidget(source, block.gapRem, options);
 
@@ -313,7 +343,7 @@ const setFocused = StateEffect.define<boolean>();
 
 export function markdownLivePreview(options: MarkdownLivePreviewOptions = {}): Extension {
 	const field = StateField.define<LivePreview>({
-		create: (state) => ({ ...buildDecorations(state, false, options), focused: false }),
+		create: (state) => buildPreview(state, false, options),
 		provide: (f) => [
 			EditorView.decorations.from(f, (value) => value.decorations),
 			EditorView.decorations.from(f, (value) => value.atomic),
@@ -332,7 +362,22 @@ export function markdownLivePreview(options: MarkdownLivePreviewOptions = {}): E
 				return value;
 			}
 
-			return { ...buildDecorations(tr.state, focused, options), focused };
+			if (tr.docChanged || treeChanged) return buildPreview(tr.state, focused, options);
+
+			// a cursor move or a focus change: the blocks are the same, so only a change in
+			// which of them shows raw text needs new decorations
+			const flags = editingFlags(value.blocks, tr.state, focused);
+			const editingKey = keyOf(flags);
+
+			if (editingKey === value.editingKey)
+				return focused === value.focused ? value : { ...value, focused };
+
+			return {
+				...buildDecorations(tr.state, value.blocks, flags, options),
+				blocks: value.blocks,
+				editingKey,
+				focused
+			};
 		}
 	});
 
