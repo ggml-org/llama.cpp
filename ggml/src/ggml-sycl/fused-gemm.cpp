@@ -612,21 +612,31 @@ static __dpct_inline__ void fg_decode_q2_K(const uint8_t * __restrict__ qs, cons
     }
 }
 
+// scales of the two 16-value halves of sub-block ib
+static __dpct_inline__ void fg_q3_K_dl(const uint8_t * __restrict__ scales, const float d, const int ib, float * dl) {
+#pragma unroll
+    for (int i = 0; i < 2; ++i) {
+        const int s  = 2 * ib + i;
+        const int sc = ((scales[s % 8] >> (4 * (s / 8))) & 0xF) | (((scales[8 + s % 4] >> (2 * (s / 4))) & 3) << 4);
+        dl[i] = d * (sc - 32);
+    }
+}
+
 template <typename E>
 static __dpct_inline__ void fg_decode_q3_K(const uint8_t * __restrict__ qs, const uint8_t * __restrict__ hmask,
                                            const uint8_t * __restrict__ scales, const float d, const int ib,
                                            typename E::pair * a) {
-    const uint8_t * q = qs + 32 * (ib / 4);
+    // block_q3_K is 110 bytes, so qs and hmask are only 2-byte aligned
+    const uint16_t * q = (const uint16_t *) (qs + 32 * (ib / 4));
+    const uint16_t * h = (const uint16_t *) hmask;
     const int shift = 2 * (ib % 4);
+    float dl[2];
+    fg_q3_K_dl(scales, d, ib, dl);
 #pragma unroll
     for (int j = 0; j < 16; ++j) {
-        const int s = 2 * ib + j / 8;
-        const int sc = ((scales[s % 8] >> (4 * (s / 8))) & 0xF) |
-                       (((scales[8 + s % 4] >> (2 * (s / 4))) & 3) << 4);
-        const float dl = d * (sc - 32);
-        const int q0 = ((q[2 * j] >> shift) & 3) - ((hmask[2 * j] & (1 << ib)) ? 0 : 4);
-        const int q1 = ((q[2 * j + 1] >> shift) & 3) - ((hmask[2 * j + 1] & (1 << ib)) ? 0 : 4);
-        a[j] = E::make(dl * q0, dl * q1);
+        // per byte: 2 low bits, plus 4 if the hmask bit is set, minus 4
+        const uint32_t v = ((q[j] >> shift) & 0x0303u) | (((h[j] >> ib) & 0x0101u) << 2);
+        a[j] = E::make(dl[j / 8] * ((int) (v & 0xFF) - 4), dl[j / 8] * ((int) (v >> 8) - 4));
     }
 }
 
@@ -764,8 +774,23 @@ template <> struct fg_soa<block_q3_K> {
         const uint8_t * hmask = x + nblocks * (QK_K / 4);
         const uint8_t * scales = hmask + nblocks * (QK_K / 8);
         const float d = (float) ((const sycl::half *) (scales + nblocks * 12))[ib];
-        fg_decode_q3_K<E>(x + ib * (QK_K / 4), hmask + ib * (QK_K / 8), scales + ib * 12, d,
-                          kb % (QK_K / 32), a);
+        const int sub = kb % (QK_K / 32);
+        // 16-byte aligned, see opt_for_reorder_id
+        using v4 = sycl::vec<uint32_t, 4>;
+        const v4 * q = (const v4 *) (x + ib * (QK_K / 4) + 32 * (sub / 4));
+        const v4 * h = (const v4 *) (hmask + ib * (QK_K / 8));
+        const v4 qv[2] = { q[0], q[1] };
+        const v4 hv[2] = { h[0], h[1] };
+        const int shift = 2 * (sub % 4);
+        float dl[2];
+        fg_q3_K_dl(scales + ib * 12, d, sub, dl);
+#pragma unroll
+        for (int w = 0; w < 8; ++w) {
+            const uint32_t v = ((qv[w / 4][w % 4] >> shift) & 0x03030303u) | (((hv[w / 4][w % 4] >> sub) & 0x01010101u) << 2);
+            const float    f = dl[w / 4];
+            a[2 * w]     = E::make(f * ((int) (v & 0xFF) - 4), f * ((int) ((v >> 8) & 0xFF) - 4));
+            a[2 * w + 1] = E::make(f * ((int) ((v >> 16) & 0xFF) - 4), f * ((int) (v >> 24) - 4));
+        }
     }
 };
 
