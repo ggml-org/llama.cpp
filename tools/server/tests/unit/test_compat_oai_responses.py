@@ -112,3 +112,34 @@ def test_responses_stream_with_llama_telemetry():
     assert completed is not None
     assert "usage" in completed["response"]
     assert "timings" in completed
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_responses_verbose(stream):
+    global server
+    server.start()
+
+    for verbose in [True, False]:
+        data = {
+            "input": [
+                {"role": "system", "content": "Book"},
+                {"role": "user", "content": "What is the best book"},
+            ],
+            "max_output_tokens": 8,
+            "stream": stream,
+            "verbose": verbose,
+        }
+        if stream:
+            events = list(server.make_stream_request("POST", "/responses", data=data))
+        else:
+            res = server.make_request("POST", "/responses", data=data)
+            assert res.status_code == 200
+            events = [res.body]
+
+        debug = [e["__verbose"] for e in events if "__verbose" in e]
+        if verbose:
+            assert len(debug) == 1, "__verbose should be sent once"
+            assert "__verbose" in events[-1], "__verbose should be on the final event"
+            assert "Book" in debug[0]["prompt"]
+        else:
+            assert debug == []
