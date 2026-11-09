@@ -56,7 +56,7 @@ static OutputVector translate_gated_delta_net_ref(const NodeContext & context);
 
 // Asks the device: OpenVINO releases without the per-key gate reject a rank-4 gate when the node is built, and a plugin
 // without a per-key kernel leaves the node out of query_model
-static bool gdn_per_key_gate_supported() {
+bool gdn_per_key_gate_supported() {
     static const bool supported = [] {
         ov::ParameterVector params;
         auto param = [&params](const ov::Shape & shape) {
