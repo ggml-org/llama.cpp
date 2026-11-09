@@ -2281,7 +2281,7 @@ static bool htp_kparams_solve_ssm_scan(
         return false;
     }
 
-    const uint32_t sess_threads = htp_session_n_threads(sess);
+    const uint32_t sess_hvx = htp_session_n_hvx(sess);
 
     kparams->row_tile        = HTP_SSM_SCAN_ROW_TILE_DEFAULT;
     kparams->token_tile      = (uint16_t) (std::min)(n_tokens, HTP_SSM_SCAN_TOKEN_TILE_DEFAULT);
@@ -2296,10 +2296,10 @@ static bool htp_kparams_solve_ssm_scan(
     kparams->group_units     = kparams->heads_per_group * n_row_blocks;
     kparams->units_per_seq   = n_head * n_row_blocks;
     kparams->total_units     = (uint32_t) total_units;
-    kparams->n_threads       = (uint16_t) (std::min)(sess_threads, kparams->total_units);
+    kparams->n_hvx           = (uint16_t) (std::min)(sess_hvx, kparams->total_units);
 
     struct htp_ssm_scan_vtcm_layout layout;
-    htp_ssm_scan_vtcm_layout_build(&layout, d_state, kparams->row_tile, kparams->token_tile, kparams->n_threads);
+    htp_ssm_scan_vtcm_layout_build(&layout, d_state, kparams->row_tile, kparams->token_tile, n_tokens, kparams->n_hvx);
 
     // Fixed DMA packages need one native descriptor per push. Use v73 16-bit field limits on all targets.
     const size_t dma_max        = 0xFFFF;
@@ -2313,11 +2313,11 @@ static bool htp_kparams_solve_ssm_scan(
 
     if (use_vtcm) {
         kparams->kernel_type     = HTP_SSM_SCAN_KERNEL_MAMBA2_VTCM;
-        kparams->vtcm_per_thread = (uint32_t) layout.bytes_per_thread;
+        kparams->vtcm_per_hvx    = (uint32_t) layout.bytes_per_hvx;
         kparams->vtcm_size       = (uint32_t) layout.total_bytes;
     } else {
         kparams->kernel_type = HTP_SSM_SCAN_KERNEL_FALLBACK;
-        kparams->n_threads   = (uint16_t) (std::min)(sess_threads, n_head);
+        kparams->n_hvx       = (uint16_t) (std::min)(sess_hvx, n_head);
     }
 
     kparams->div_units_per_seq   = init_fastdiv_values(kparams->units_per_seq);

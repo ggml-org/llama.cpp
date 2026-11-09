@@ -219,8 +219,7 @@ static inline bool dma_ring_push_single_1d(dma_ring * r, dma_data ddata, size_t 
     return true;
 }
 
-static inline bool dma_ring_push_single_2d_ordered(dma_ring * r, dma_data ddata, size_t dst_stride, size_t src_stride,
-        size_t row_size, size_t nrows, bool ordered) {
+static inline bool dma_ring_push_single_2d(dma_ring * r, dma_data ddata, size_t dst_stride, size_t src_stride, size_t row_size, size_t nrows) {
 #if __HVX_ARCH__ > 79
     assert(!((ddata.src | ddata.dst) >> 40) || nrows == 0);
     const uint32_t src_hi = (uint32_t) (ddata.src >> 32);
@@ -241,7 +240,7 @@ static inline bool dma_ring_push_single_2d_ordered(dma_ring * r, dma_data ddata,
     desc->dst_bypass     = 1;
     desc->src_comp       = 0;
     desc->dst_comp       = 0;
-    desc->order          = ordered;
+    desc->order          = 0;
     desc->done           = 0;
     desc->src_stride     = src_stride;
     desc->dst_stride     = dst_stride;
@@ -285,11 +284,6 @@ static inline bool dma_ring_push_single_2d_ordered(dma_ring * r, dma_data ddata,
 
     r->push_idx = (r->push_idx + 1) & r->idx_mask;
     return true;
-}
-
-static inline bool dma_ring_push_single_2d(dma_ring * r, dma_data ddata, size_t dst_stride, size_t src_stride,
-        size_t row_size, size_t nrows) {
-    return dma_ring_push_single_2d_ordered(r, ddata, dst_stride, src_stride, row_size, nrows, false);
 }
 
 #if __HVX_ARCH__ < 75
@@ -366,10 +360,6 @@ static inline bool dma_queue_push_single_1d(dma_queue * q, dma_data ddata, size_
 
 static inline bool dma_queue_push_single_2d(dma_queue * q, dma_data ddata, size_t dst_stride, size_t src_stride, size_t row_size, size_t nrows) {
     return dma_ring_push_single_2d(q->ring0, ddata, dst_stride, src_stride, row_size, nrows);
-}
-
-static inline bool dma_queue_push_single_2d_ordered(dma_queue * q, dma_data ddata, size_t dst_stride, size_t src_stride, size_t row_size, size_t nrows) {
-    return dma_ring_push_single_2d_ordered(q->ring0, ddata, dst_stride, src_stride, row_size, nrows, true);
 }
 
 static inline dma_data dma_queue_pop(dma_queue * q) {
