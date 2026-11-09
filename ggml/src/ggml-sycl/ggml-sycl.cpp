@@ -6077,7 +6077,7 @@ static void ggml_sycl_set_main_device(const int main_device) try {
         return;
     }
     check_allow_gpu_index(main_device);
-    dpct::select_device(main_device);
+    SYCL_CHECK(ggml_sycl_set_device(main_device));
 
     if (g_ggml_sycl_debug) {
         dpct::device_info prop;
