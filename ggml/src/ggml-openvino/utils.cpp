@@ -364,8 +364,8 @@ static void reset_single_slot_recurrent_cache(ggml_cgraph * cgraph,
     std::set<ggml_backend_buffer_t> buffers;
     for (int i = 0; i < cgraph->n_nodes; i++) {
         auto * node = cgraph->nodes[i];
-        if (GgmlOvDecoder::is_recurrent_cache_reset(node) && node->view_src->ne[1] == 1 &&
-            node->view_src->buffer != nullptr) {
+        if (GgmlOvDecoder::is_recurrent_cache_reset(node) &&
+            node->view_src->ne[1] == 1 && node->view_src->buffer != nullptr) {
             buffers.insert(node->view_src->buffer);
         }
     }
