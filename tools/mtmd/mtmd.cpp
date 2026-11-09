@@ -1,4 +1,5 @@
 #include "mtmd-subcontext.h"
+#include "models/models.h"
 #include "mtmd-impl.h"
 #include "mtmd.h"
 #include "mtmd-internal.h"
@@ -4724,8 +4725,9 @@ bool mtmd_audio_stream_gemma4a::init(const mtmd_audio_stream_params & params) {
     frames_per_tok  = 4;
     samples_per_tok = frames_per_tok * hop;
 
+    // whole attention blocks, so the rows match the offline path
     const int n_step = (int) ((int64_t) params.step_ms * hparams->audio_sample_rate / 1000 / hop);
-    n_step_mel = MTMD_ALIGN(std::max(n_step, frames_per_tok), frames_per_tok);
+    n_step_mel = MTMD_ALIGN(std::max(n_step, frames_per_tok), (int) mtmd_graph_gemma4a::chunk_size * frames_per_tok);
 
     enc_state = sctx->enc_state_init(n_step_mel);
     if (!enc_state) {
