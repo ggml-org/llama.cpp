@@ -4,6 +4,9 @@ void llama_model_rwkv6::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS,     hparams.f_norm_eps, false);
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps, false);
     ml.get_key(LLM_KV_WKV_HEAD_SIZE,               hparams.wkv_head_size);
+    if (hparams.wkv_head_size == 0) {
+        throw std::runtime_error("rwkv6: wkv_head_size must be > 0");
+    }
     ml.get_key(LLM_KV_TIME_MIX_EXTRA_DIM,          hparams.time_mix_extra_dim);
     ml.get_key(LLM_KV_TIME_DECAY_EXTRA_DIM,        hparams.time_decay_extra_dim);
     ml.get_key(LLM_KV_RESCALE_EVERY_N_LAYERS,      hparams.rescale_every_n_layers, false);

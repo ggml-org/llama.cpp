@@ -7,6 +7,9 @@ void llama_model_nemotron_h::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_SSM_INNER_SIZE,     hparams.ssm_d_inner);
     ml.get_key(LLM_KV_SSM_STATE_SIZE,     hparams.ssm_d_state);
     ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
+    if (hparams.ssm_dt_rank == 0) {
+        throw std::runtime_error("nemotron-h: ssm_dt_rank must be > 0");
+    }
     ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
 
     // A layer is recurrent IFF the n_head_kv value is set to 0 and
