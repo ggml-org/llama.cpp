@@ -25,7 +25,13 @@
 		UI_DATA_ATTRS
 	} from '$lib/constants';
 	import { RouterService } from '$lib/services/router.service';
-	import { chatStore, conversationsStore, settingsStore, tabsStore } from '$lib/stores';
+	import {
+		chatStore,
+		conversationsStore,
+		settingsStore,
+		sidebarDragStore,
+		tabsStore
+	} from '$lib/stores';
 	import type { MenuAction } from '$lib/types';
 	import { onMount } from 'svelte';
 
@@ -66,6 +72,20 @@
 	let contextMenuOpen = $state(false);
 
 	let isLoading = $derived(chatStore.getAllLoadingChats().includes(conversation.id));
+	let isLanding = $derived(sidebarDragStore.landingConvId === conversation.id);
+
+	// the row's own controls (the fork link, stop, its menu) keep their press
+	function handlePointerDown(event: PointerEvent) {
+		if (isSelectionMode) return;
+
+		const control = (event.target as Element).closest(
+			'a, button, [role="button"], [data-slot$="-trigger"]'
+		);
+
+		if (control && control !== event.currentTarget) return;
+
+		sidebarDragStore.pressConversation(event, conversation.id);
+	}
 
 	function handleEdit(event: Event) {
 		event.stopPropagation();
@@ -236,14 +256,17 @@
 
 <ContextMenuActions bind:open={contextMenuOpen} {actions} disabled={isSelectionMode}>
 	<button
-		class="group flex min-h-9 w-full cursor-pointer items-center justify-between space-x-3 rounded-lg py-1.5 text-left transition-colors hover:bg-foreground/10 {isActive
+		class="group flex min-h-9 w-full cursor-pointer items-center justify-between space-x-3 rounded-lg py-1.5 text-left md:min-h-8 md:py-1 transition-colors hover:bg-foreground/10 hover:text-foreground {isLanding
+			? 'invisible'
+			: ''} {isActive
 			? 'bg-foreground/5 text-accent-foreground'
-			: ''} {contextMenuOpen ? 'bg-foreground/10' : ''} {isSelected
+			: 'text-foreground/75'} {contextMenuOpen ? 'bg-foreground/10' : ''} {isSelected
 			? 'bg-primary/10 hover:bg-primary/15'
 			: ''} {isSelectionMode ? 'is-selection-mode' : ''} px-2"
 		{...{ [UI_DATA_ATTRS.CONVERSATION_ROW]: conversation.id }}
 		onauxclick={handleAuxClick}
 		onclick={(e) => handleSelect(e)}
+		ondragstart={(e) => e.preventDefault()}
 		onfocusin={handleMouseOver}
 		onfocusout={(e) => {
 			if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
@@ -253,6 +276,7 @@
 		onmousedown={(e) => handleRowMouseDown(e)}
 		onmouseleave={handleMouseLeave}
 		onmouseover={handleMouseOver}
+		onpointerdown={handlePointerDown}
 	>
 		<div
 			style:padding-left="{depth * FORK_TREE_DEPTH_PADDING}px"
@@ -321,7 +345,7 @@
 				</Tooltip.Root>
 			{/if}
 
-			<TruncatedText class="text-sm font-medium" showTooltip={false} text={conversation.name} />
+			<TruncatedText class="text-sm" showTooltip={false} text={conversation.name} />
 		</div>
 
 		{#if !isSelectionMode && renderActionsDropdown}
