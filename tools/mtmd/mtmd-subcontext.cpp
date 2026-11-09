@@ -135,15 +135,13 @@ mtmd_subcontext::mtmd_subcontext(const mtmd_model & model, mtmd_backends & backe
 
     buf_compute_meta.resize(max_nodes * ggml_tensor_overhead() + ggml_graph_overhead_custom(max_nodes, false));
 
-    // TODO: fix warmup for audio gen
+    auto batch = get_dummy_batch();
     if (model.modality != MTMD_MODALITY_GEN_AUDIO) {
         // check batching support
-        auto batch = get_dummy_batch();
         support_batch = mtmd_get_graph_builder(this, batch)->support_batch();
-
-        if (params.warmup) {
-            warmup(batch);
-        }
+    }
+    if (params.warmup) {
+        warmup(batch);
     }
 }
 
@@ -156,6 +154,11 @@ mtmd_image_f32_batch mtmd_subcontext::get_dummy_batch() const {
         const int sz = hparams.warmup_image_size;
         img.set_size({sz, sz}, false, false);
         LOG_INF("%s: warmup with image size = %d x %d\n", __func__, sz, sz);
+    } else if (model.modality == MTMD_MODALITY_GEN_AUDIO) {
+        // TODO: improve this, move to per-model impl
+        const int n_embd = model.n_mmproj_embd();
+        img.set_size({n_embd, 1}, false, true);
+        LOG_INF("%s: warmup with one gen-audio step\n", __func__);
     } else {
         // GEMMA4UA uses n_mel_bins as a raw-waveform frame size (640), not a mel-bin count,
         // so the [1, 256] bound only applies to FFT-based models.
