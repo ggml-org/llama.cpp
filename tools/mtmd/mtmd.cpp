@@ -635,10 +635,10 @@ struct mtmd_context {
     bool ov_img_first      = false;
 
     // MiniCPM-V 4.6/4.7 prepends an <image_id>N</image_id> tag before <image>
-    bool use_image_id = false;
+    bool has_prompt_img_id = false;
 
     // Kimi-K3.1 writes the original image size after img_beg
-    bool img_beg_kimik31 = false;
+    bool has_prompt_img_size = false;
 
     // string template for slice image delimiters with row/col (idefics3)
     std::string sli_img_start_tmpl;
@@ -833,7 +833,7 @@ struct mtmd_context {
                     tok_row_end       = {lookup_token("\n")};
                     tok_row_end_trail = false; // no trailing end-of-row token
                     ov_img_first      = true;
-                    use_image_id      = true;
+                    has_prompt_img_id = true;
                     if (ctx_v->model.proj_type == PROJECTOR_TYPE_MINICPM_OCR_1_0) {
                         image_preproc = std::make_unique<mtmd_image_preprocessor_minicpm_ocr_1_0>(models.v.get());
                     } else {
@@ -1011,7 +1011,7 @@ struct mtmd_context {
                     // <|media_begin|>image WxH<|media_content|> ... (image embeddings) ... <|media_end|>
                     img_beg = "<|media_begin|>";
                     img_end = "<|media_end|>";
-                    img_beg_kimik31 = true;
+                    has_prompt_img_size = true;
                     image_preproc = std::make_unique<mtmd_image_preprocessor_kimik25>(models.v.get());
                 } break;
             case PROJECTOR_TYPE_LIGHTONOCR:
@@ -1634,7 +1634,7 @@ struct mtmd_tokenizer {
             if (!ctx->img_beg.empty()) {
                 add_text(ctx->img_beg, true); // add image begin token
             }
-            if (ctx->img_beg_kimik31) {
+            if (ctx->has_prompt_img_size) {
                 add_text(string_format("image %ux%u<|media_content|>", bitmaps[0]->nx, bitmaps[0]->ny), true);
             }
 
@@ -1691,7 +1691,7 @@ struct mtmd_tokenizer {
 
             if (has_tiling_grid && ctx->proj_type_v() == PROJECTOR_TYPE_MINICPMV4_7) {
                 GGML_ASSERT(bitmaps.size() == 1);
-                if (ctx->use_image_id) {
+                if (ctx->has_prompt_img_id) {
                     add_text("<image_id>" + std::to_string(n_images_added) + "</image_id>", true);
                 }
                 add_text(ctx->tok_ov_img_start);
@@ -1716,7 +1716,7 @@ struct mtmd_tokenizer {
 
                 // add overview image (first)
                 if (ctx->ov_img_first) {
-                    if (ctx->use_image_id) {
+                    if (ctx->has_prompt_img_id) {
                         add_text("<image_id>" + std::to_string(n_images_added) + "</image_id>", true);
                     }
                     add_text(ctx->tok_ov_img_start);
