@@ -43,6 +43,8 @@ no one. The reasons are in Storybook's **Philosophy**.
 - Both share one icon, the same glyph in both fonts. Use the lockup and icon files from the assets; never redraw,
   stretch, recolour (beyond ink and light) or outline them. In live text, the lockup is typed: U+E002 followed by
   the name, in the matching font (in Llama Mono at 90% of the size so its icon matches Llama's).
+- Keep half the icon's height clear all round either lockup, with nothing else inside it. The smallest size is 12 px;
+  below that, use the icon alone. Brand › Logo › Lockup shows how both are built.
 
 ## Type
 
