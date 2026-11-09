@@ -1,4 +1,4 @@
-// Geometry of the Llama icon (ggml-org/llama.brand, icon/icon-light.svg, a 600 x 600 drawing).
+// Geometry of the Llama icon (ggml-org/llama-brand, icon/icon-light.svg, a 600 x 600 drawing).
 // Everything the logo page draws is derived from these numbers.
 
 export type Pt = [number, number];

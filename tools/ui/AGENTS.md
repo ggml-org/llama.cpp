@@ -26,6 +26,6 @@ Anything that is mostly content (a doc, an overview, a showcase or a Storybook p
 
 ### mdsvex versions
 
-- `tools/ui` is on mdsvex `0.12.7`, which only Storybook's `.svx` pages use. The llama.brand showcase and specimen are on `1.0.0-next.3`, and `LogoShowcase.svx` comes from there.
+- `tools/ui` is on mdsvex `0.12.7`, which only Storybook's `.svx` pages use. The llama-brand showcase and specimen are on `1.0.0-next.3`, and `LogoShowcase.svx` comes from there.
 - mdsvex 1.0 is the direction. Move `tools/ui` to it, pinned to an exact `next` version, while it only serves Storybook pages; write new `.svx` pages so they work on both.
 - Messages: 1.0's `@mdsvex/render` can render a document as it streams in (`@mdsvex/render/stream`) and as Svelte (`Node.svelte`). The plan is to swap the unified/remark/rehype pipeline inside `MarkdownContent` for it, keeping `MarkdownContent`'s API, so chat messages, the live-preview Markdown editor and the Notebook (which all render through `MarkdownContent`) switch together. Check parity first: GFM, math, Mermaid, the safe-HTML config, file-mention badges and the code-block actions, plus bundle size and streaming performance.

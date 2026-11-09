@@ -1,5 +1,5 @@
 // The swag prints, fabrics and placements, as the Swag Creator (ggml-org/swag-creator, src/lib/prints.ts and
-// garments.ts) defines them: every print but the quantized L comes from llama.brand, and placements are measured as a
+// garments.ts) defines them: every print but the quantized L comes from llama-brand, and placements are measured as a
 // print shop does, in centimetres from the centre front of the neckline.
 import iconDark from '../../assets/files/logo/svg/icon/icon-dark.svg?url';
 import iconLight from '../../assets/files/logo/svg/icon/icon-light.svg?url';
@@ -16,7 +16,7 @@ export interface Artwork {
 	placements?: string[];
 	/** scales the placement's print area for this artwork */
 	printScale?: { height: number; width: number };
-	/** a llama.brand file per tone; the quantized L is drawn in code instead */
+	/** a llama-brand file per tone; the quantized L is drawn in code instead */
 	src?: Record<Tone, string>;
 }
 

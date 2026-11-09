@@ -1,4 +1,4 @@
-// The quantized L, the one swag print drawn in code rather than taken from llama.brand. Ported from the Swag Creator
+// The quantized L, the one swag print drawn in code rather than taken from llama-brand. Ported from the Swag Creator
 // (huggingface.co/spaces/ggml-org/swag-creator, src/lib/artworks/generative.ts): the same 40 px grid, the same layer
 // ladder and the same legend, with two changes for the design system: the legend's accent is cinder (art-cinder,
 // #EE6C1E; the app uses #F65E00) and it is set in Llama Mono. The geometry stays as the app draws it.
@@ -9,7 +9,7 @@ const SIZE = 600;
 const PIXEL = 40;
 const LEGEND_WIDTH = 900;
 const ACCENT = '#EE6C1E';
-/** The icon's two pieces, verbatim from llama.brand icon/icon-*.svg */
+/** The icon's two pieces, verbatim from llama-brand icon/icon-*.svg */
 const STROKE_PATH =
 	'M240 392H0L199.602 46.0254C216.032 17.5463 246.411 3.25756e-05 279.29 0H466.154L240 392Z';
 const FOOT_PATH =

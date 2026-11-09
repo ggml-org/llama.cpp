@@ -1,4 +1,4 @@
-/* The specimen's sheet, from ggml-org/llama.brand (fonts/specimen/src/app.css), scoped to .specimen so none of it
+/* The specimen's sheet, from ggml-org/llama-brand (fonts/specimen/src/app.css), scoped to .specimen so none of it
    reaches the other stories; :where() keeps each rule as specific as it is there. Dark mode follows Storybook's
    .dark class instead of prefers-color-scheme. */
 .specimen {

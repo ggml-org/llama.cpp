@@ -1,6 +1,6 @@
 <!--
 	The brand's logo files as a grid of thumbnails, each with links to download it as SVG, WebP or PNG. The files are
-	copied from ggml-org/llama.brand (logo/svg, logo/webp, logo/png, built by logo/scripts there); copy them again
+	copied from ggml-org/llama-brand (logo/svg, logo/webp, logo/png, built by logo/scripts there); copy them again
 	when the brand repo's logos change.
 -->
 <script lang="ts">
@@ -396,8 +396,8 @@
 					? 'Profile pictures and banners for X, LinkedIn and YouTube, at each platform’s size'
 					: 'The icon for the web app, a PWA, Apple’s platforms, Android and Windows, and as the native apps ship it, at each platform’s size and in its shape'},
 			to download as SVG, WebP or PNG. They come from
-			<a class="underline underline-offset-2" href="https://github.com/ggml-org/llama.brand"
-				>ggml-org/llama.brand</a
+			<a class="underline underline-offset-2" href="https://github.com/ggml-org/llama-brand"
+				>ggml-org/llama-brand</a
 			>, under CC BY-NC 4.0 with the permissions in its BRAND-USAGE.md: use them as they are to
 			refer to Llama.app and Llama.cpp, without changing the mark.
 		</p>

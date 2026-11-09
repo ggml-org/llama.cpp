@@ -174,5 +174,5 @@ export const specs: [string, string][] = [
 	['Corners', `two 120° outer corners, cut back ${trim}, radius ≈ ${r}`],
 	['Colours', '#111111 on light, #FAFAFA on dark'],
 	['In Llama Sans', 'U+E000, cap-height tall on the baseline'],
-	['Source', 'ggml-org/llama.brand · CC BY-NC 4.0']
+	['Source', 'ggml-org/llama-brand · CC BY-NC 4.0']
 ];

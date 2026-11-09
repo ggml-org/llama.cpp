@@ -2,7 +2,7 @@
 title: Llama icon
 ---
 
-<!-- The logo showcase page from ggml-org/llama.brand (logo/showcase/src/routes/+page.svx), framed by ShowcaseFrame: the origin, then the rules that shape the icon and its numbers; its lockups are the Usage story -->
+<!-- The logo showcase page from ggml-org/llama-brand (logo/showcase/src/routes/+page.svx), framed by ShowcaseFrame: the origin, then the rules that shape the icon and its numbers; its lockups are the Usage story -->
 
 <script>
 	import { SIZE, SPLIT } from './lib/logo';

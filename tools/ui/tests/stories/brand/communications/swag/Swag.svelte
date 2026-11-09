@@ -35,7 +35,7 @@
 
 		<p>
 			Prints for t-shirts and hoodies, as the Swag Creator previews them on 3D garments. Every print
-			comes from llama.brand except the quantized L, which is drawn in code, so it stays exact at
+			comes from llama-brand except the quantized L, which is drawn in code, so it stays exact at
 			any size.
 		</p>
 	</header>

@@ -43,7 +43,7 @@ The short version of **Philosophy**; the reasons are in **Ideology**, **Product*
 
 ## How it fits together
 
-<Figure n={4} caption="The products and their repositories. llama.brand supplies the brand; llama.cpp holds the engine and Llama UI, in tools/ui, this Storybook's home; the native apps run llama-server and open Llama Chat. llama.app shows models the way Llama Chat does.">
+<Figure n={4} caption="The products and their repositories. llama-brand supplies the brand; llama.cpp holds the engine and Llama UI, in tools/ui, this Storybook's home; the native apps run llama-server and open Llama Chat. llama.app shows models the way Llama Chat does.">
 	<Products />
 </Figure>
 

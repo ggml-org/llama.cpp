@@ -1,6 +1,6 @@
 <!--
 	The logo showcase's frame: the grey card the page sits on, with the showcase's colours and fonts. A copy of the
-	page template in ggml-org/llama.brand (logo/showcase/src/lib/templates/Doc.svelte); the showcase in lib/ and
+	page template in ggml-org/llama-brand (logo/showcase/src/lib/templates/Doc.svelte); the showcase in lib/ and
 	LogoShowcase.svx are copied from there too, so change them there first.
 -->
 <script lang="ts">
