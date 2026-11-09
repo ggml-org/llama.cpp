@@ -981,6 +981,7 @@ bool is_recurrent_cache_reset_case(const NodeContext & context) {
 OutputVector translate_recurrent_cache_reset(const NodeContext & context) {
     auto cache_rs = context.get_input(0);
     if (context.get_op_case() == 2) {
+        // cleared by reset_single_slot_recurrent_cache
         return {cache_rs};
     }
 

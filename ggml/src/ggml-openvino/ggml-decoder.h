@@ -408,7 +408,6 @@ public:
                                      strncmp(tensor->name, "cache_ple_r_l", strlen("cache_ple_r_l")) == 0);
     }
 
-    // build_rs clears the states of new sequences in place: SCALE by 0 (the prior form) or FILL with 0
     inline static bool is_recurrent_cache_reset(const ggml_tensor * node) {
         return (node->op == GGML_OP_SCALE || node->op == GGML_OP_FILL) && is_recurrent_cache(node->view_src);
     }
