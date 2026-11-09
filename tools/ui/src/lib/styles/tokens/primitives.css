@@ -87,6 +87,8 @@
 	--white-a40: oklch(1 0 0 / 0.4);
 	--white-a50: oklch(1 0 0 / 0.5);
 	--white-a85: oklch(1 0 0 / 0.85);
+	--black-a3: oklch(0 0 0 / 0.03);
+	--black-a4: oklch(0 0 0 / 0.04);
 	--black-a5: oklch(0 0 0 / 0.05);
 	--black-a6: oklch(0 0 0 / 0.06);
 	--black-a8: oklch(0 0 0 / 0.08);
