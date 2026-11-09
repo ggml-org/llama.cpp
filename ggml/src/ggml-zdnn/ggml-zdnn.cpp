@@ -5,6 +5,7 @@
 #include "ggml-zdnn/common.hpp"
 #include "ggml-zdnn/fattn.hpp"
 #include "ggml-zdnn/mmf.hpp"
+#include "ggml-zdnn/mmid.hpp"
 #include "ggml-zdnn/mmq.hpp"
 #include "ggml-zdnn/utils.hpp"
 #include "ggml.h"
@@ -37,6 +38,11 @@ static bool ggml_zdnn_compute_forward(
         case GGML_OP_MUL_MAT:
             {
                 ggml_zdnn_compute_forward_mul_mat(ctx, dst);
+            } break;
+
+        case GGML_OP_MUL_MAT_ID:
+            {
+                ggml_zdnn_mul_mat_id(ctx, dst);
             } break;
 
         case GGML_OP_FLASH_ATTN_EXT:
@@ -131,8 +137,8 @@ static bool ggml_zdnn_supports_op(const ggml_backend_zdnn_device_context * ctx_d
                     case GGML_TYPE_F32:
                     case GGML_TYPE_F16:
                     case GGML_TYPE_BF16:
-                        // the inputs ztensor is used, and views have none
-                        return inputs->view_src == nullptr;
+                        // the inputs ztensor is used, and views and MUL_MAT_ID outputs have none
+                        return inputs->view_src == nullptr && inputs->op != GGML_OP_MUL_MAT_ID;
                     case GGML_TYPE_Q8_0:
                         // the inputs are quantized from their data, so views work as well
                         return ctx_dev->has_parmblkformat_1 && inputs->type == GGML_TYPE_F32;
@@ -140,6 +146,9 @@ static bool ggml_zdnn_supports_op(const ggml_backend_zdnn_device_context * ctx_d
                         return false;
                 }
             } break;
+
+        case GGML_OP_MUL_MAT_ID:
+            return ggml_zdnn_supports_mul_mat_id(ctx_dev, op);
 
         case GGML_OP_FLASH_ATTN_EXT:
             return ggml_zdnn_supports_flash_attn_ext(ctx_dev, op);
@@ -343,7 +352,7 @@ static void ggml_backend_zdnn_buffer_set_tensor(ggml_backend_buffer_t buffer, gg
     }
 
     ggml_backend_zdnn_buffer * extra = (ggml_backend_zdnn_buffer *)tensor->extra;
-    if (extra == nullptr) {
+    if (extra == nullptr || extra->ztensor.buffer == nullptr) {
         return;
     }
 
