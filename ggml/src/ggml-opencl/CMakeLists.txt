@@ -329,6 +329,7 @@ set(GGML_OPENCL_KERNELS
     conv2_dw
     flash_attn_repack
     flash_attn_pre_f16
+    flash_attn_pv_direct
     flash_attn_f32_f16
     flash_attn_f32_q8_0
     flash_attn_f32_q4_0
