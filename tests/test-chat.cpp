@@ -1726,7 +1726,7 @@ class peg_test_builder {
         test_peg_parser(tester_.tmpls_.get(), {}, [this](peg_test_case & t) { t = tc_; }, tester_.detailed_debug_);
 
         if (!tester_.specials_.ids.empty()) {
-            LOG_INF("\x1b[38;5;126m[%s, tokenized]\x1b[0m\n\n", tester_.template_path().c_str());
+            LOG_INF("\n\x1b[38;5;126m[%s, tokenized]\x1b[0m\n%s\n\n", tester_.template_path().c_str(), tc_.input.c_str());
             common_chat_templates_set_specials(tester_.tmpls_.get(), tester_.specials_);
             test_peg_parser(tester_.tmpls_.get(), tester_.specials_, [this](peg_test_case & t) { t = tc_; },
                             tester_.detailed_debug_);
@@ -2328,9 +2328,17 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         "const": "42"
     })";
 
+    // Special tokens of the templates that use the Qwen3-Coder format.
+    // Check a model's vocab defines them before reusing these, a model can share the syntax without the tokens.
+    const std::vector<std::string> qwen3_coder_specials = {
+        "<|im_start|>", "<|im_end|>", "<think>", "</think>",
+        "<tool_call>", "</tool_call>", "<tool_response>", "</tool_response>",
+    };
+
     {
         // Qwen3.5 (basically same as Nemotron, but keeping separate tests just in case)
         auto tst = peg_tester("models/templates/Qwen3.5-4B.jinja", detailed_debug);
+        tst.specials(qwen3_coder_specials);
 
         tst.test("I'm\nthinking\n</think>\n\nHello, world!\nWhat's up?")
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
@@ -2906,6 +2914,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     {
         // NVIDIA Nemotron-3 Nano
         auto tst = peg_tester("models/templates/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16.jinja", detailed_debug);
+        tst.specials(qwen3_coder_specials);
 
         tst.test("Hello, world!\nWhat's up?").
             enable_thinking(false).
@@ -3201,6 +3210,8 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     {
         // Google Gemma 4 (tool calling with Gemma4 dict format)
         auto tst = peg_tester("models/templates/google-gemma-4-31B-it.jinja");
+        tst.specials({ "<|turn>", "<turn|>", "<|channel>", "<channel|>", "<|tool_call>", "<tool_call|>",
+                       "<|tool_response>", "<tool_response|>", "<|tool>", "<tool|>", "<|\"|>", "<|think|>" });
 
         tst.test("Hello, world!").expect(simple_assist_msg("Hello, world!")).run();
 
@@ -3763,6 +3774,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     {
         // Qwen3-Coder (tool calling with XML-style format)
         auto tst = peg_tester("models/templates/Qwen3-Coder.jinja", detailed_debug);
+        tst.specials(qwen3_coder_specials);
 
         tst.test("Hello, world!\nWhat's up?").expect(message_assist).expect_reconstruction().run();
 
@@ -5791,6 +5803,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
     {
         auto tst = peg_tester("models/templates/LFM3.jinja", detailed_debug);
+        tst.specials(qwen3_coder_specials);
 
         tst.test("Hello, world!\nWhat's up?")
             .enable_thinking(false)
@@ -7018,6 +7031,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     // Muse Glimmer format tests
     {
         auto tst = peg_tester("models/templates/muse-glimmer.jinja", detailed_debug);
+        tst.specials({ "<|start|>", "<|message|>", "<|eom|>", "<|eot|>" });
 
         const std::string call_markup =
             "<atem:function_calls>\n"
@@ -7440,6 +7454,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
     {
         auto tst = peg_tester("models/templates/StepFun3.5-Flash.jinja", detailed_debug);
+        tst.specials(qwen3_coder_specials);
 
         tst.test("I was thinking\n</think>\nNow I'm not.").
             enable_thinking(true).
