@@ -1,4 +1,5 @@
 import { ROW_LONG_PRESS_MS, ROW_LONG_PRESS_SLOP_PX } from '$lib/constants';
+import { hapticTap } from '$lib/utils';
 
 interface LongPressOptions {
 	/** Read on every press, so a hold only counts while this holds. */
@@ -35,7 +36,9 @@ export function useLongPress({ enabled, onLongPress }: LongPressOptions) {
 		press = null;
 		isPressing = false;
 		suppressClick = true;
-		navigator.vibrate?.(10);
+		// a hold lands with a tap of the haptic engine, as a native one does (Android: iOS plays
+		// its tick only inside a gesture's handler, and the hold fires from a timer)
+		hapticTap();
 		onLongPress();
 	}
 

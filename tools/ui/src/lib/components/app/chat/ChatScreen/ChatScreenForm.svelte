@@ -4,6 +4,7 @@
 	import { ChatForm } from '$lib/components/app';
 	import { useDraftMessages } from '$lib/hooks/use-draft-messages.svelte';
 	import { deviceStore } from '$lib/stores';
+	import { hapticTap } from '$lib/utils';
 	import { onMount } from 'svelte';
 
 	interface Props {
@@ -80,6 +81,10 @@
 			return;
 
 		if (!chatFormRef?.checkModelSelected()) return;
+
+		// the message goes: a phone confirms it by feel. Before any await, so it still runs inside
+		// the tap or keypress that sent it, which iOS needs to play the tick
+		hapticTap();
 
 		const messageToSend = message.trim();
 		const filesToSend = [...uploadedFiles];

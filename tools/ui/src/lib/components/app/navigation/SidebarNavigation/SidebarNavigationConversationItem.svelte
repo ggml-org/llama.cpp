@@ -82,9 +82,8 @@
 		onLongPress: openHoldMenu
 	});
 
+	// the hold itself taps the haptic engine
 	async function openHoldMenu() {
-		// the menu opens with a tap of the haptic engine (Android; iOS gives none from a timer)
-		hapticTap();
 		renderActionsDropdown = true;
 		await tick();
 		dropdownOpen = true;
