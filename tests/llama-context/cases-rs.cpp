@@ -501,8 +501,8 @@ struct case_nan_clear : ctx_test {
     bool uses_fill() const override { return false; }
 
     std::string skip_reason(model_run & mr) const override {
-        if (!llama_model_is_recurrent(mr.model) && !llama_model_is_hybrid(mr.model)) {
-            return "the model has no recurrent state";
+        if (!llama_model_is_recurrent(mr.model) || llama_model_is_hybrid(mr.model)) {
+            return "a NaN fill would also reach the attention cache";
         }
 
         return ctx_test::skip_reason(mr);
