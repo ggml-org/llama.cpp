@@ -5,7 +5,7 @@
 	overflow-wrap: break-word;
 }
 
-.markdown-block--unstable {
+.markdown-content :global(.markdown-block--unstable) {
 	display: contents;
 }
 
@@ -275,7 +275,7 @@ div.markdown-user-content :global(.table-wrapper) {
 
 /* Scroll container for code blocks (both streaming and completed) */
 .markdown-content :global(.code-block-scroll-container),
-.streaming-code-scroll-container {
+.markdown-content :global(.streaming-code-scroll-container) {
 	min-height: var(--min-message-height);
 	max-height: var(--max-message-height);
 	overflow-y: auto;
@@ -762,14 +762,14 @@ div.markdown-user-content :global(.table-wrapper) {
 }
 
 /* Streaming mermaid block - empty preview box */
-.mermaid-streaming-block {
+.markdown-content :global(.mermaid-streaming-block) {
 	min-height: 300px;
 	display: flex;
 	align-items: center;
 	justify-content: center;
 }
 
-.mermaid-loading-placeholder {
+.markdown-content :global(.mermaid-loading-placeholder) {
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -777,7 +777,7 @@ div.markdown-user-content :global(.table-wrapper) {
 	color: var(--muted-foreground);
 }
 
-.mermaid-loading-text {
+.markdown-content :global(.mermaid-loading-text) {
 	font-size: 0.875rem;
 	font-style: italic;
 }
