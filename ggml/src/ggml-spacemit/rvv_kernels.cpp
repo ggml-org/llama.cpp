@@ -168,6 +168,35 @@ static inline vfloat32m2_t rvv_expf_approx_f32m2(vfloat32m2_t x, size_t vl) {
                                     __riscv_vmfgt_vf_f32m2_b16(__riscv_vfabs_v_f32m2(n, vl), 192.0f, vl), vl);
 }
 
+// log1p(t) for t in [0, 1] (Cephes logf polynomial). 1 + t is rounded, so the rounding error
+// (t - ((1 + t) - 1), exact in float) is added back as a first-order correction; for tiny t the
+// result is t. Used by softplus, whose t = exp(-|x|) keeps it within ~4 ulp for normal results.
+static inline vfloat32m2_t rvv_log1pf_01_f32m2(vfloat32m2_t t, size_t vl) {
+    const vfloat32m2_t u   = __riscv_vfadd_vf_f32m2(t, 1.0f, vl);
+    const vfloat32m2_t err = __riscv_vfdiv_vv_f32m2(
+        __riscv_vfsub_vv_f32m2(t, __riscv_vfsub_vf_f32m2(u, 1.0f, vl), vl), u, vl);
+    // u in [1, 2]: reduce to m in [sqrt(2)/2, sqrt(2)], u = m * 2^e with e in {0, 1}
+    const vbool16_t    big = __riscv_vmfgt_vf_f32m2_b16(u, 0x1.6a09e6p+0f, vl);
+    const vfloat32m2_t m   = __riscv_vmerge_vvm_f32m2(u, __riscv_vfmul_vf_f32m2(u, 0.5f, vl), big, vl);
+    const vfloat32m2_t e   = __riscv_vfmerge_vfm_f32m2(__riscv_vfmv_v_f_f32m2(0.0f, vl), 1.0f, big, vl);
+    const vfloat32m2_t f   = __riscv_vfsub_vf_f32m2(m, 1.0f, vl);
+    const vfloat32m2_t z   = __riscv_vfmul_vv_f32m2(f, f, vl);
+    vfloat32m2_t p = __riscv_vfmv_v_f_f32m2(7.0376836292E-2f, vl);
+    p = __riscv_vfmadd_vv_f32m2(p, f, __riscv_vfmv_v_f_f32m2(-1.1514610310E-1f, vl), vl);
+    p = __riscv_vfmadd_vv_f32m2(p, f, __riscv_vfmv_v_f_f32m2( 1.1676998740E-1f, vl), vl);
+    p = __riscv_vfmadd_vv_f32m2(p, f, __riscv_vfmv_v_f_f32m2(-1.2420140846E-1f, vl), vl);
+    p = __riscv_vfmadd_vv_f32m2(p, f, __riscv_vfmv_v_f_f32m2( 1.4249322787E-1f, vl), vl);
+    p = __riscv_vfmadd_vv_f32m2(p, f, __riscv_vfmv_v_f_f32m2(-1.6668057665E-1f, vl), vl);
+    p = __riscv_vfmadd_vv_f32m2(p, f, __riscv_vfmv_v_f_f32m2( 2.0000714765E-1f, vl), vl);
+    p = __riscv_vfmadd_vv_f32m2(p, f, __riscv_vfmv_v_f_f32m2(-2.4999993993E-1f, vl), vl);
+    p = __riscv_vfmadd_vv_f32m2(p, f, __riscv_vfmv_v_f_f32m2( 3.3333331174E-1f, vl), vl);
+    vfloat32m2_t y = __riscv_vfmul_vv_f32m2(__riscv_vfmul_vv_f32m2(p, f, vl), z, vl);  // f^3 P(f)
+    y = __riscv_vfmacc_vf_f32m2(y, -2.12194440e-4f, e, vl);
+    y = __riscv_vfmacc_vf_f32m2(y, -0.5f, z, vl);
+    y = __riscv_vfadd_vv_f32m2(y, err, vl);
+    return __riscv_vfmacc_vf_f32m2(__riscv_vfadd_vv_f32m2(f, y, vl), 0.693359375f, e, vl);
+}
+
 static inline vfloat32m2_t rvv_tanh_approx_f32m2(vfloat32m2_t x, size_t vl) {
     const vfloat32m2_t abs_x       = __riscv_vfabs_v_f32m2(x, vl);
     const vfloat32m2_t neg_2_abs   = __riscv_vfmul_vf_f32m2(abs_x, -2.0f, vl);
@@ -4412,11 +4441,11 @@ DEFINE_UNARY_F32_RVV(forward_unary_sigmoid_f32,
 DEFINE_UNARY_F32_RVV(forward_unary_neg_f32,
     __riscv_vfneg_v_f32m2(v, vl))
 DEFINE_UNARY_F32_RVV(forward_unary_softplus_f32,
-    /* softplus(x) = log(1 + exp(x)) */
+    /* softplus(x) = log(1 + exp(x)) = max(x, 0) + log1p(exp(-|x|)) */
     __riscv_vfadd_vv_f32m2(
         __riscv_vfmax_vf_f32m2(v, 0.0f, vl),
-        rvv_expf_approx_f32m2(
-            __riscv_vfneg_v_f32m2(__riscv_vfabs_v_f32m2(v, vl), vl), vl),
+        rvv_log1pf_01_f32m2(rvv_expf_approx_f32m2(
+            __riscv_vfneg_v_f32m2(__riscv_vfabs_v_f32m2(v, vl), vl), vl), vl),
         vl))
 
 // Plain softmax (no mask, no sinks, no ALiBi) — RVV fast path
