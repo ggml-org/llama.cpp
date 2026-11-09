@@ -67,7 +67,9 @@
 	{...{ [UI_DATA_ATTRS.ACTIVE_TAB]: isActive ? 'true' : undefined }}
 	class={cn(
 		TAB_SURFACE_CLASS,
-		'relative max-w-52 min-w-0 shrink-0 gap-1 pr-1 first:ml-2',
+		// each tab sits in its context-menu trigger, so the first trigger marks
+		// the first tab
+		'relative max-w-52 min-w-0 shrink-0 gap-1 pr-1 [:first-child>&]:ml-2',
 		isLoading ? 'pl-1' : 'pl-3',
 		isActive ? TAB_SURFACE_ACTIVE_CLASS : TAB_SURFACE_IDLE_CLASS
 	)}

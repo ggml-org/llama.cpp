@@ -1,4 +1,4 @@
-ARG UBUNTU_VERSION=24.04
+ARG UBUNTU_VERSION=26.04
 ARG BUILD_DATE=N/A
 ARG APP_VERSION=N/A
 ARG APP_REVISION=N/A
@@ -22,9 +22,7 @@ FROM docker.io/ubuntu:$UBUNTU_VERSION AS build
 ARG TARGETARCH
 
 RUN apt-get update && \
-    apt-get install -y gcc-14 g++-14 build-essential git cmake libssl-dev
-
-ENV CC=gcc-14 CXX=g++-14
+    apt-get install -y build-essential git cmake libssl-dev
 
 WORKDIR /app
 

@@ -63,6 +63,22 @@ export { default as DropdownMenuSearchable } from './DropdownMenuSearchable.svel
  * ```
  */
 export { default as DropdownMenuActions } from './DropdownMenuActions.svelte';
+
+/**
+ * **ContextMenuActions** - Right-click menu with an item's actions
+ *
+ * Wraps an item so right-clicking it opens the same actions as its
+ * DropdownMenuActions "more actions" menu. Adds no element to the layout and
+ * stays out of the way on phones, where the dropdown's drawer covers it.
+ *
+ * @example
+ * ```svelte
+ * <ContextMenuActions {actions}>
+ *   <button>...</button>
+ * </ContextMenuActions>
+ * ```
+ */
+export { default as ContextMenuActions } from './ContextMenuActions.svelte';
 /**
  * **SidebarNavigation** - Sidebar with actions menu and conversation list
  *

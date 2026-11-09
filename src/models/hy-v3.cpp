@@ -89,12 +89,12 @@ void llama_model_hy_v3::load_arch_tensors(llama_model_loader & ml) {
 
 std::unique_ptr<llm_graph_context> llama_model_hy_v3::build_arch_graph(const llm_graph_params & params) const {
     if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
-        return std::make_unique<graph_mtp>(*this, params);
+        return std::make_unique<graph_mtp>(params);
     }
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_hy_v3::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_hy_v3::graph::graph(const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
@@ -119,19 +119,14 @@ llama_model_hy_v3::graph::graph(const llama_model & model, const llm_graph_param
 
         // self-attention
         {
-            ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
 
             auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur, n_embd_head, n_head, n_head_kv, il);
 
             Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, nullptr, LLM_NORM_RMS, il);
             Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, nullptr, LLM_NORM_RMS, il);
 
-            Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, rope_factors,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow);
-            Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, rope_factors,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow);
+            Qcur = build_rope(Qcur, inp_pos, il);
+            Kcur = build_rope(Kcur, inp_pos, il);
 
             cur = build_attn(inp_attn,
                     model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
@@ -225,7 +220,7 @@ llama_model_hy_v3::graph::graph(const llama_model & model, const llm_graph_param
 //   hy_v3 decoder block -> final_layernorm (stored as nextn.shared_head_norm) ->
 //   shared LM head (the main model's lm_head; the checkpoint has no separate
 //   MTP head or MTP embeddings).
-llama_model_hy_v3::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params)
+llama_model_hy_v3::graph_mtp::graph_mtp(const llm_graph_params & params)
     : llm_graph_context(params) {
     GGML_ASSERT(hparams.n_layer_nextn > 0 && "HY_V3 MTP requires n_layer_nextn > 0");
 
@@ -286,19 +281,14 @@ llama_model_hy_v3::graph_mtp::graph_mtp(const llama_model & model, const llm_gra
     cb(cur, "mtp_attn_norm", il);
 
     {
-        ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
 
         auto [Qcur, Kcur, Vcur] = build_qkv(layer, cur, n_embd_head, n_head, n_head_kv, il);
 
         Qcur = build_norm(Qcur, layer.attn_q_norm, nullptr, LLM_NORM_RMS, il);
         Kcur = build_norm(Kcur, layer.attn_k_norm, nullptr, LLM_NORM_RMS, il);
 
-        Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, rope_factors,
-                n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                ext_factor, attn_factor, beta_fast, beta_slow);
-        Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, rope_factors,
-                n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                ext_factor, attn_factor, beta_fast, beta_slow);
+        Qcur = build_rope(Qcur, inp_pos, il);
+        Kcur = build_rope(Kcur, inp_pos, il);
 
         const float kq_scale = 1.0f / sqrtf(float(n_embd_head));
 

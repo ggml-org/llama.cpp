@@ -428,6 +428,8 @@ struct ggml_tensor_extra_gpu {
 };
 
 extern int g_ggml_sycl_use_level_zero_api;
+extern int g_ggml_sycl_bmg_vram_check;
+bool sycl_get_mem_info(int device, size_t * free, size_t * total);
 void * ggml_sycl_malloc_device(size_t size, sycl::queue &q,
                                ggml_sycl_mem_type type = GGML_SYCL_MEM_DIRECT);
 void ggml_sycl_free_device(void *ptr, sycl::queue &q);

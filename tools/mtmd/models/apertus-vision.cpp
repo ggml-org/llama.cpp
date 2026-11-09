@@ -105,7 +105,7 @@ static ggml_tensor * apertus_build_attention(
     return ggml_add(ctx0, residual, cur);
 }
 
-ggml_cgraph * clip_graph_apertus_vision::build() {
+ggml_cgraph * mtmd_graph_apertus_vision::build() {
     GGML_ASSERT(n_batch == 1);
 
     ggml_tensor * cur = build_inp_raw();

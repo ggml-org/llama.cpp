@@ -172,14 +172,24 @@ void llama_model_step35::load_arch_tensors(llama_model_loader & ml) {
     }
 }
 
-std::unique_ptr<llm_graph_context> llama_model_step35::build_arch_graph(const llm_graph_params & params) const {
-    if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
-        return std::make_unique<graph_mtp>(*this, params);
+llama_rope_params llama_model_step35::get_rope_params(const llama_cparams & cparams, int il) const {
+    auto res = llama_model::get_rope_params(cparams, il);
+
+    if (hparams.is_swa(il)) {
+        res.factors = nullptr;
     }
-    return std::make_unique<graph>(*this, params);
+
+    return res;
 }
 
-llama_model_step35::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+std::unique_ptr<llm_graph_context> llama_model_step35::build_arch_graph(const llm_graph_params & params) const {
+    if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
+        return std::make_unique<graph_mtp>(params);
+    }
+    return std::make_unique<graph>(params);
+}
+
+llama_model_step35::graph::graph(const llm_graph_params & params) : llm_graph_context(params) {
     ggml_tensor * cur;
     ggml_tensor * inpL;
 
@@ -194,9 +204,6 @@ llama_model_step35::graph::graph(const llama_model & model, const llm_graph_para
 
         const uint32_t n_head_l    = hparams.n_head(il);
         const uint32_t n_head_kv_l = hparams.n_head_kv(il);
-
-        const float freq_base_l  = model.get_rope_freq_base(cparams, il);
-        const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
 
         cur = inpL;
 
@@ -232,19 +239,8 @@ llama_model_step35::graph::graph(const llama_model & model, const llm_graph_para
             }
 
             // RoPE (partial rotary factors per layer)
-            const bool is_swa = hparams.is_swa(il);
-            ggml_tensor * rope_factors = is_swa ? nullptr : model.get_rope_factors(cparams, il);
-            const int64_t n_rot_l = hparams.n_rot(il);
-            Qcur = ggml_rope_ext(
-                ctx0, Qcur, inp_pos, rope_factors,
-                n_rot_l, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                ext_factor, attn_factor, beta_fast, beta_slow
-            );
-            Kcur = ggml_rope_ext(
-                ctx0, Kcur, inp_pos, rope_factors,
-                n_rot_l, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                ext_factor, attn_factor, beta_fast, beta_slow
-            );
+            Qcur = build_rope(Qcur, inp_pos, il);
+            Kcur = build_rope(Kcur, inp_pos, il);
             cb(Qcur, "Qcur_pos", il);
             cb(Kcur, "Kcur_pos", il);
 
@@ -354,7 +350,7 @@ llama_model_step35::graph::graph(const llama_model & model, const llm_graph_para
 }
 
 // LLM_GRAPH_TYPE_DECODER_MTP draft head for Step3p5 (MoE)
-llama_model_step35::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params)
+llama_model_step35::graph_mtp::graph_mtp(const llm_graph_params & params)
     : llm_graph_context(params) {
     GGML_ASSERT(hparams.n_layer_nextn > 0 && "STEP35 MTP requires n_layer_nextn > 0");
 
@@ -374,9 +370,6 @@ llama_model_step35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
 
     const uint32_t n_head_l    = hparams.n_head(il);
     const uint32_t n_head_kv_l = hparams.n_head_kv(il);
-
-    const float freq_base_l  = model.get_rope_freq_base(cparams, il);
-    const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
 
     auto inp = std::make_unique<llm_graph_input_embd_h>(hparams.n_embd_inp(), hparams.n_embd);
 
@@ -441,18 +434,8 @@ llama_model_step35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
         cb(Kcur, "mtp_Kcur_normed", il);
     }
 
-    const bool    is_swa       = hparams.is_swa(il);
-    ggml_tensor * rope_factors = is_swa ? nullptr : model.get_rope_factors(cparams, il);
-    const int64_t n_rot_l      = hparams.n_rot(il);
-
-    Qcur = ggml_rope_ext(
-        ctx0, Qcur, inp_pos, rope_factors,
-        n_rot_l, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-        ext_factor, attn_factor, beta_fast, beta_slow);
-    Kcur = ggml_rope_ext(
-        ctx0, Kcur, inp_pos, rope_factors,
-        n_rot_l, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-        ext_factor, attn_factor, beta_fast, beta_slow);
+    Qcur = build_rope(Qcur, inp_pos, il);
+    Kcur = build_rope(Kcur, inp_pos, il);
     cb(Qcur, "mtp_Qcur_pos", il);
     cb(Kcur, "mtp_Kcur_pos", il);
 

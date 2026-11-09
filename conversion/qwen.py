@@ -170,7 +170,7 @@ class Qwen2MoeModel(TextModel):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
-@ModelBase.register("Qwen3ForCausalLM", "Qwen3Model")
+@ModelBase.register("Qwen3ForCausalLM", "Qwen3Model", "LlavaOnevision2ForConditionalGeneration")
 @ModelBase.example("Qwen/Qwen3-8B")
 class Qwen3Model(Qwen2Model):
     model_arch = gguf.MODEL_ARCH.QWEN3

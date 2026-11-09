@@ -221,10 +221,12 @@ class SpecialVocab:
                 if isinstance(merges, list) and merges:
                     if isinstance(merges[0], str):
                         self.merges = merges
-                    elif isinstance(merges[0], list) and len(merges[0]) == 2 and isinstance(merges[0][0], str):
+                    elif isinstance(merges[0], list):
                         # New format since transformers 4.45 to support spaces in merges
                         # ref: https://github.com/ggml-org/llama.cpp/issues/9692
                         # TODO: internally store as the new format instead of converting to old
+                        if not all(isinstance(pair, list) and len(pair) == 2 and all(isinstance(s, str) for s in pair) for pair in merges):
+                            raise ValueError("Unknown tokenizer merges format")
                         if any(' ' in s for pair in merges for s in pair):
                             logger.warning(f'Spaces in merges detected, encoding as {chr(ord(" ") + 256)!r}')
                         self.merges = [
@@ -350,21 +352,20 @@ class SpecialVocab:
                         continue
         if not tokenizer_config:
             return True
-        chat_template_alt = None
+        chat_template = tokenizer_config.get('chat_template')
         chat_template_json = path / 'chat_template.json'
         chat_template_jinja = path / 'chat_template.jinja'
         if chat_template_jinja.is_file():
             with open(chat_template_jinja, encoding = 'utf-8') as f:
-                chat_template_alt = f.read()
+                chat_template = f.read()
             if additional_templates := list((path / 'additional_chat_templates').glob('*.jinja')):
-                chat_template_alt = [{'name': 'default', 'template': chat_template_alt}]
+                chat_template = [{'name': 'default', 'template': chat_template}]
                 for template_path in additional_templates:
                     with open(template_path, encoding = 'utf-8') as fp:
-                        chat_template_alt.append({'name': template_path.stem, 'template': fp.read()})
+                        chat_template.append({'name': template_path.stem, 'template': fp.read()})
         elif chat_template_json.is_file():
             with open(chat_template_json, encoding = 'utf-8') as f:
-                chat_template_alt = json.load(f).get('chat_template')
-        chat_template = tokenizer_config.get('chat_template', chat_template_alt)
+                chat_template = json.load(f).get('chat_template')
         if chat_template is None or isinstance(chat_template, (str, list)):
             self.chat_template = chat_template
         else:

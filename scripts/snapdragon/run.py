@@ -33,12 +33,14 @@ MANAGED_ENV_NAMES = (
     "GGML_HEXAGON_MM_SELECT",
     "GGML_HEXAGON_FA_SELECT",
     "GGML_HEXAGON_FA_HEAD_SPLIT",
+    "GGML_HEXAGON_LI_SELECT",
     "GGML_HEXAGON_GDN_SELECT",
     "GGML_HEXAGON_AR_SELECT",
     "GGML_HEXAGON_AR_SCATTER",
     "GGML_HEXAGON_ETM",
     "GGML_HEXAGON_ARCH",
     "GGML_HEXAGON_OPTRACE",
+    "GGML_HEXAGON_LIBHTP_DIR",
     "GGML_OPENCL_PLATFORM",
     "GGML_OPENCL_DEVICE",
     "GGML_OPENCL_OPFILTER",
@@ -49,23 +51,9 @@ MANAGED_ENV_NAMES = (
     "GGML_OPENCL_ADRENO_XMEM_GEMM",
     "GGML_OPENCL_ADRENO_USE_LARGE_BUFFER",
     "GGML_SCHED_DEBUG",
-    "ADSP_LIBRARY_PATH",
-    "CDSP_LIBRARY_PATH",
-    "CDSP1_LIBRARY_PATH",
-    "CDSP2_LIBRARY_PATH",
-    "CDSP3_LIBRARY_PATH",
     "MTMD_BACKEND_DEVICE",
     "D",
     "DEVICE",
-)
-
-
-DSP_LIBRARY_ENV_NAMES = (
-    "ADSP_LIBRARY_PATH",
-    "CDSP_LIBRARY_PATH",
-    "CDSP1_LIBRARY_PATH",
-    "CDSP2_LIBRARY_PATH",
-    "CDSP3_LIBRARY_PATH",
 )
 
 
@@ -111,10 +99,7 @@ def default_target_dir(target_type, target_transport, home_dir):
 
 
 def library_env_parts(lib_dir):
-    env_parts = [f"LD_LIBRARY_PATH={lib_dir}"]
-    for name in DSP_LIBRARY_ENV_NAMES:
-        env_parts.append(f"{name}={lib_dir}")
-    return env_parts
+    return [f"LD_LIBRARY_PATH={lib_dir}"]
 
 
 def adb_root(adb_base):
@@ -177,11 +162,17 @@ def device_arg_from_devices(devices):
 
 
 def normalize_cmd_device_args(cmd_args):
+    exec_name = os.path.basename(cmd_args[0]) if cmd_args else ""
+    if exec_name.endswith(".exe"):
+        exec_name = exec_name[:-4]
+
     for i, arg in enumerate(cmd_args):
         if arg == "--device" and i + 1 < len(cmd_args):
             cmd_args[i + 1] = device_arg_from_devices(cmd_args[i + 1])
         elif arg.startswith("--device="):
             cmd_args[i] = "--device=" + device_arg_from_devices(arg.split("=", 1)[1])
+        elif exec_name in ("test-backend-ops", "test-llama-archs") and arg in ("-b", "--backend") and i + 1 < len(cmd_args):
+            cmd_args[i + 1] = device_arg_from_devices(cmd_args[i + 1])
 
 
 def main():
@@ -229,11 +220,13 @@ def main():
     parser.add_argument("--hex-mm-select", help="Select MUL_MAT and MUL_MAT_ID kernel (GGML_HEXAGON_MM_SELECT) 2:HMX,1:HVX,0:disable")
     parser.add_argument("--hex-fa-select", help="Select Flash Attention kernel (GGML_HEXAGON_FA_SELECT) 2:HMX,1:HVX,0:disable")
     parser.add_argument("--hex-fa-head-split", help="Enable (1) or disable (0) head-parallel flash_attn partitioning (GGML_HEXAGON_FA_HEAD_SPLIT)")
+    parser.add_argument("--hex-li-select", help="Select Lightning Indexer kernel (GGML_HEXAGON_LI_SELECT) 2:HMX,1:HVX,0:disable")
     parser.add_argument("--hex-gdn-select", help="Select Gated Delta Net kernel (GGML_HEXAGON_GDN_SELECT) 2:HMX,1:HVX,0:disable")
     parser.add_argument("--hex-ar-select", help="Select All-Reduce kernel (GGML_HEXAGON_AR_SELECT) 1:enable,0:disable")
     parser.add_argument("--hex-ar-scatter", help="Enable (1) or disable (0) reduce-scatter for fused ALLREDUCE+ADD (GGML_HEXAGON_AR_SCATTER)")
     parser.add_argument("--hex-etm", help="Enable Embedded Trace Macrocell hardware tracing / trace logging (GGML_HEXAGON_ETM)")
     parser.add_argument("--hex-arch", help="Target Hexagon NPU architecture version override (v73, v75, v79, v81, etc.) (GGML_HEXAGON_ARCH)")
+    parser.add_argument("--hex-libhtp-dir", default=os.environ.get("GGML_HEXAGON_LIBHTP_DIR"), help="Directory containing libggml-htp-v<arch>.so (GGML_HEXAGON_LIBHTP_DIR)")
     parser.add_argument("--hex-optrace", help="Trace buffer size in number of records (GGML_HEXAGON_OPTRACE)")
 
     # OpenCL specific parameters
@@ -299,6 +292,10 @@ def main():
             env_vars[env_name] = str(opt_val)
 
     # Resolve and filter devices (HTP vs OpenCL)
+    exec_name = os.path.basename(cmd_args[0]) if cmd_args else ""
+    if exec_name.endswith(".exe"):
+        exec_name = exec_name[:-4]
+
     device_in_cmd = None
     for i, arg in enumerate(cmd_args):
         if arg == "--device" and i + 1 < len(cmd_args):
@@ -306,6 +303,9 @@ def main():
             break
         elif arg.startswith("--device="):
             device_in_cmd = arg.split("=", 1)[1]
+            break
+        elif exec_name in ("test-backend-ops", "test-llama-archs") and arg in ("-b", "--backend") and i + 1 < len(cmd_args):
+            device_in_cmd = cmd_args[i + 1]
             break
 
     if args.devices is not None:
@@ -375,11 +375,13 @@ def main():
     set_env("GGML_HEXAGON_MM_SELECT", args.hex_mm_select)
     set_env("GGML_HEXAGON_FA_SELECT", args.hex_fa_select)
     set_env("GGML_HEXAGON_FA_HEAD_SPLIT", args.hex_fa_head_split)
+    set_env("GGML_HEXAGON_LI_SELECT", args.hex_li_select)
     set_env("GGML_HEXAGON_GDN_SELECT", args.hex_gdn_select)
     set_env("GGML_HEXAGON_AR_SELECT", args.hex_ar_select)
     set_env("GGML_HEXAGON_AR_SCATTER", args.hex_ar_scatter)
     set_env("GGML_HEXAGON_ETM", args.hex_etm)
     set_env("GGML_HEXAGON_ARCH", args.hex_arch)
+    set_env("GGML_HEXAGON_LIBHTP_DIR", args.hex_libhtp_dir)
     set_env("GGML_HEXAGON_OPTRACE", args.hex_optrace)
     set_env("MTMD_BACKEND_DEVICE", args.mtmd_device)
 
@@ -402,7 +404,7 @@ def main():
 
     # Resolve executable path
     executable = cmd_args[0]
-    known_binaries = ["llama-cli", "llama-bench", "llama-completion", "llama-mtmd-cli", "test-backend-ops"]
+    known_binaries = ["llama-cli", "llama-bench", "llama-completion", "llama-mtmd-cli", "test-backend-ops", "test-llama-archs"]
     if executable in known_binaries:
         if target_type in ("android", "linux"):
             resolved_exec = f"./bin/{executable}"
@@ -419,22 +421,23 @@ def main():
         basename = basename[:-4]
 
     device_val = None
-    if basename == "test-backend-ops":
-        for i in range(len(cmd_args)):
-            if cmd_args[i] in ("-p", "--params") and i + 1 < len(cmd_args):
-                val = cmd_args[i + 1]
-                new_val = ""
-                for j, char in enumerate(val):
-                    if char in ('[', ']'):
-                        if j > 0 and val[j - 1] == '\\':
-                            new_val += char
+    if basename in ("test-backend-ops", "test-llama-archs"):
+        if basename == "test-backend-ops":
+            for i in range(len(cmd_args)):
+                if cmd_args[i] in ("-p", "--params") and i + 1 < len(cmd_args):
+                    val = cmd_args[i + 1]
+                    new_val = ""
+                    for j, char in enumerate(val):
+                        if char in ('[', ']'):
+                            if j > 0 and val[j - 1] == '\\':
+                                new_val += char
+                            else:
+                                new_val += '\\' + char
                         else:
-                            new_val += '\\' + char
-                    else:
-                        new_val += char
-                cmd_args[i + 1] = new_val
+                            new_val += char
+                    cmd_args[i + 1] = new_val
 
-        has_b = any(arg == "-b" for arg in cmd_args)
+        has_b = any(arg in ("-b", "--backend") for arg in cmd_args)
         if not has_b:
             if args.devices:
                 device_val = device_arg_from_devices(args.devices)
@@ -462,9 +465,13 @@ def main():
         or args.hex_profile is not None
         or args.hex_optrace is not None
     )
-    if verbose_trigger and basename in ("llama-cli", "llama-completion", "llama-bench", "llama-server", "llama-mtmd-cli"):
-        if "-v" not in cmd_args and "--verbose" not in cmd_args:
-            cmd_args.append("-v")
+    if verbose_trigger:
+        if basename == "test-llama-archs":
+            if "-v" not in cmd_args:
+                cmd_args += ["-v", "5"]
+        elif basename in ("llama-cli", "llama-completion", "llama-bench", "llama-server", "llama-mtmd-cli"):
+            if "-v" not in cmd_args and "--verbose" not in cmd_args:
+                cmd_args.append("-v")
 
     # Inject defaults for llama-cli, llama-completion, and llama-server if not overridden by the user
     if basename in ("llama-cli", "llama-completion", "llama-server"):
@@ -551,8 +558,6 @@ def main():
 
         for k in MANAGED_ENV_NAMES:
             local_env.pop(k, None)
-        for name in DSP_LIBRARY_ENV_NAMES:
-            local_env[name] = lib_dir
         for k, v in env_vars.items():
             local_env[k] = v
 

@@ -1918,10 +1918,14 @@ select_read_interruptible(socket_t sock, time_t sec, time_t usec,
   while (!interrupted()) {
     auto left = std::chrono::duration_cast<std::chrono::microseconds>(
         deadline - std::chrono::steady_clock::now());
-    auto wait =
-        (std::max)((std::min)(left, slice), std::chrono::microseconds(0));
-    auto ret = select_impl(sock, POLLIN, 0, static_cast<time_t>(wait.count()));
-    if (ret != 0 || wait < slice) { return ret; }
+    auto last = left < slice;
+    // poll() takes whole milliseconds, so round the last wait up to keep it
+    // from ending before the deadline.
+    auto wait_usec = last ? (std::max)((left.count() + 999) / 1000 * 1000,
+                                       static_cast<decltype(left.count())>(0))
+                          : slice.count();
+    auto ret = select_impl(sock, POLLIN, 0, static_cast<time_t>(wait_usec));
+    if (ret != 0 || last) { return ret; }
   }
   return 0;
 }
@@ -4413,6 +4417,7 @@ bool redirect(T &cli, Request &req, Response &res,
                      Error &error) {
   Request new_req = req;
   new_req.path = path;
+  new_req.params.clear();
   new_req.redirect_count_ -= 1;
 
   if (res.status == StatusCode::SeeOther_303 &&
@@ -7937,7 +7942,8 @@ ssize_t SocketStream::read(char *ptr, size_t size) {
 ssize_t SocketStream::write(const char *ptr, size_t size) {
   if (!wait_writable()) { return -1; }
 
-#if defined(_WIN32) && !defined(_WIN64)
+  // Winsock's send() takes an int length, even on 64-bit Windows
+#ifdef _WIN32
   size =
       (std::min)(size, static_cast<size_t>((std::numeric_limits<int>::max)()));
 #endif
@@ -10352,7 +10358,10 @@ Server::process_request(Stream &strm, const std::string &remote_addr,
   if ((req.method == "GET" || req.method == "HEAD") &&
       req.has_header("Range")) {
     const auto &range_header_value = req.get_header_value("Range");
-    if (!detail::parse_range_header(range_header_value, req.ranges)) {
+    // RFC 9110 14.2: a range unit other than bytes must be ignored
+    auto unit = range_header_value.substr(0, range_header_value.find('='));
+    if (detail::case_ignore::equal(unit, "bytes") &&
+        !detail::parse_range_header(range_header_value, req.ranges)) {
       connection_closed = true;
       res.status = StatusCode::RangeNotSatisfiable_416;
       output_error_log(Error::InvalidRangeHeader, &req);
@@ -10881,6 +10890,9 @@ bool ClientImpl::send_(Request &req, Response &res, Error &error) {
     // socket.
     socket_should_be_closed_when_request_is_done_ = false;
 
+    // A redirect or a retry sent inside a request keeps its stop()
+    if (socket_requests_in_flight_ == 0) { stop_requested_ = false; }
+
     if (!socket_reusable()) {
       if (!ensure_socket_connection(socket_, error)) { return false; }
 
@@ -10928,6 +10940,7 @@ bool ClientImpl::send_(Request &req, Response &res, Error &error) {
   });
 
   ret = process_socket(socket_, req.start_time_, [&](Stream &strm) {
+    strm.set_read_interrupt([this] { return stop_requested_.load(); });
     return handle_request(strm, req, res, close_connection, error);
   });
 
@@ -13146,6 +13159,9 @@ void ClientImpl::stop() {
   // are not thread-safe.
   if (socket_requests_in_flight_ > 0) {
     shutdown_socket(socket_);
+    // shutdown() does not wake a read waiting in WSAPoll on Windows, so the
+    // request's reads also give up once they see this flag.
+    stop_requested_ = true;
 
     // Aside from that, we set a flag for the socket to be closed when we're
     // done.
@@ -18108,6 +18124,9 @@ ssize_t read(session_t session, void *buf, size_t len, TlsError &err) {
   }
 
   auto wsession = static_cast<impl::WolfSSLSession *>(session);
+  constexpr auto max_len =
+      static_cast<size_t>((std::numeric_limits<int>::max)());
+  if (len > max_len) { len = max_len; }
   int ret = wolfSSL_read(wsession->ssl, buf, static_cast<int>(len));
 
   if (ret > 0) {

@@ -710,6 +710,8 @@ npm run test:server   # Server-side unit tests
 npm run test:ui       # Storybook visual tests
 ```
 
+Locally, the browser tests (e2e, client and Storybook) run in your installed Google Chrome with its sandbox on, since Chrome updates itself and Playwright's bundled Chromium lags behind security fixes. CI (`CI` set) uses the bundled Chromium from `npx playwright install`.
+
 ### Storybook Development
 
 ```bash

@@ -156,7 +156,7 @@ static ggml_tensor * apertus_audio_lstm(
     return ggml_add(ctx0, sequence, residual);
 }
 
-ggml_cgraph * clip_graph_apertus_audio::build() {
+ggml_cgraph * mtmd_graph_apertus_audio::build() {
     GGML_ASSERT(n_batch == 1);
     GGML_ASSERT(model.apertus_a_convs.size() == hparams.audio_downsample_ratios.size() + 2);
     GGML_ASSERT(model.apertus_a_resblocks.size() == hparams.audio_downsample_ratios.size());

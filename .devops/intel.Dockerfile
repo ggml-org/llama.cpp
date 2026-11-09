@@ -64,7 +64,7 @@ RUN mkdir -p /app/full \
     && cp requirements.txt /app/full \
     && cp .devops/tools.sh /app/full/tools.sh
 
-FROM docker.io/intel/oneapi-toolkit:$ONEAPI_VERSION AS base
+FROM docker.io/intel/deep-learning-essentials:$ONEAPI_VERSION AS base
 
 ARG BUILD_DATE=N/A
 ARG APP_VERSION=N/A
@@ -78,6 +78,8 @@ LABEL org.opencontainers.image.created=$BUILD_DATE \
       org.opencontainers.image.description="LLM inference in C/C++" \
       org.opencontainers.image.url=$IMAGE_URL \
       org.opencontainers.image.source=$IMAGE_SOURCE
+
+COPY --from=build /opt/intel/oneapi/dnnl /opt/intel/oneapi/dnnl
 
 #Following versions are for multiple GPUs, since 26.x has known issue:
 #   https://github.com/ggml-org/llama.cpp/issues/21747,

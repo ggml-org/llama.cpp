@@ -37,6 +37,7 @@ add_library(${HTP_LIB} SHARED
     repeat-ops.c
     ssm-conv.c
     cumsum-ops.c
+    top-k-mask-ops.c
     fill-ops.c
     concat-ops.c
     diag-ops.c
@@ -49,6 +50,8 @@ add_library(${HTP_LIB} SHARED
     pool-ops.c
     upscale-ops.c
     allreduce-ops.c
+    dsv4-hc-ops.c
+    lightning-indexer-ops.c
 )
 
 target_compile_definitions(${HTP_LIB} PRIVATE

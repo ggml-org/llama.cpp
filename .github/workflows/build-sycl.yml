@@ -38,7 +38,7 @@ env:
   LLAMA_ARG_LOG_TIMESTAMPS: 1
 
 jobs:
-  ubuntu-24-sycl:
+  ubuntu-26-sycl:
     strategy:
       matrix:
         build: [fp32, fp16]
@@ -48,7 +48,7 @@ jobs:
           - build: fp16
             fp16: ON
 
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
 
     env:
       ONEAPI_ROOT: /opt/intel/oneapi/
@@ -103,7 +103,7 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
         with:
-          key: sycl-ubuntu-24-${{ matrix.build }}
+          key: sycl-ubuntu-26-${{ matrix.build }}
           folder: llama.cpp
           hf_bucket: ggml-org/cache
 
@@ -131,7 +131,7 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
         with:
-          key: sycl-ubuntu-24-${{ matrix.build }}
+          key: sycl-ubuntu-26-${{ matrix.build }}
           folder: llama.cpp
           evict-old-files: 1d
           hf_bucket: ggml-org/cache

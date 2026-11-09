@@ -8,6 +8,7 @@ void llama_model_maple::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all);
 
     ml.get_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl);
+    hparams.rope_pattern = hparams.is_swa_impl;
 
     hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
     hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
@@ -59,10 +60,10 @@ void llama_model_maple::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_maple::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_maple::graph::graph(const llama_model & model, const llm_graph_params & params) :
+llama_model_maple::graph::graph(const llm_graph_params & params) :
     llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_k();
 
@@ -87,16 +88,8 @@ llama_model_maple::graph::graph(const llama_model & model, const llm_graph_param
             cb(Qcur, "Qcur_normed", il);
             cb(Kcur, "Kcur_normed", il);
 
-            if (hparams.is_swa(il)) {
-                const int64_t n_rot_l = hparams.n_rot(il);
-                const float freq_base_l = model.get_rope_freq_base(cparams, il);
-                const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
-
-                Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot_l, rope_type, n_ctx_orig, freq_base_l,
-                                     freq_scale_l, ext_factor, attn_factor, beta_fast, beta_slow);
-                Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_rot_l, rope_type, n_ctx_orig, freq_base_l,
-                                     freq_scale_l, ext_factor, attn_factor, beta_fast, beta_slow);
-            }
+            Qcur = build_rope(Qcur, inp_pos, il);
+            Kcur = build_rope(Kcur, inp_pos, il);
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);
             cb(Vcur, "Vcur", il);

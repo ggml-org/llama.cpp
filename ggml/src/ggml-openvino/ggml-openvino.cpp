@@ -1520,6 +1520,11 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
             return {false, "FLASH_ATTN_EXT gemma3n pattern on GPU is not supported"};
         }
 
+        // K/V row lists (ggml_flash_attn_ext_rows) are not supported
+        if (op->src[5] != nullptr) {
+            return {false, "FLASH_ATTN_EXT with K/V row lists is not supported"};
+        }
+
         if (op->src[4] != nullptr) {
             return {false, "FLASH_ATTN_EXT with sinks is not supported"};
         }
@@ -1631,6 +1636,9 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         break;
     }
     case GGML_OP_ROPE: {
+        if (!ggml_rope_get_truncate(op)) {
+            return {false, "ROPE without YaRN truncation is not supported"};
+        }
         if (op->view_src != nullptr && !ggml_is_contiguous(op->src[0])) {
             return {false, "ROPE on VIEW / non-contiguous input is not supported"};
         }

@@ -1,6 +1,7 @@
 #include "ggml.h"
 #include "mmq.hpp"
 #include "quantize.hpp"
+#include "utils.hpp"
 
 #include <algorithm>
 #include <future>
@@ -188,6 +189,11 @@ void ggml_zdnn_mul_mat_q(
 
     ggml_backend_zdnn_buffer * weights_extra = (ggml_backend_zdnn_buffer *)weights->extra;
     ggml_backend_zdnn_buffer * output_extra  = (ggml_backend_zdnn_buffer *)output->extra;
+
+    // weights read straight into a host buffer skip set_tensor, so transform them on first use
+    if (!weights_extra->ztensor.is_transformed) {
+        ggml_zdnn_load_tensor_q(weights_extra, weights);
+    }
 
     // starting threads costs more than it saves for small inputs, e.g. during token generation
     const int32_t n_threads = ne10*ne11 >= 65536 ? ctx->n_threads : 1;

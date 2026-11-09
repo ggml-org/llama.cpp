@@ -385,7 +385,7 @@ static bool is_draft_file(const std::string & fname) {
 }
 
 common_presets common_preset_context::load_from_models_dir(const std::string & models_dir) const {
-    const std::filesystem::path dir = std::filesystem::u8path(models_dir);
+    const std::filesystem::path dir = models_dir;
     if (!std::filesystem::exists(dir) || !std::filesystem::is_directory(dir)) {
         throw std::runtime_error(string_format("error: '%s' does not exist or is not a directory\n", models_dir.c_str()));
     }
