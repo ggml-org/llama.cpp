@@ -57,15 +57,16 @@
 	});
 
 	let statusDot = $derived.by(() => {
-		if (isDownload) return isDownloadPaused ? 'bg-yellow-500' : 'bg-blue-500 animate-pulse';
+		if (isDownload)
+			return isDownloadPaused ? 'status-lamp orb-warning' : 'status-lamp orb-blue animate-pulse';
 
-		if (status === ServerModelStatus.FAILED) return 'bg-red-500';
+		if (status === ServerModelStatus.FAILED) return 'status-lamp orb-danger';
 
 		if (status === ServerModelStatus.LOADING) return 'bg-muted-foreground/50 animate-pulse';
 
-		if (status === ServerModelStatus.SLEEPING) return 'bg-orange-400';
+		if (status === ServerModelStatus.SLEEPING) return 'status-lamp orb-warning';
 
-		if (isLoaded) return 'bg-green-500';
+		if (isLoaded) return 'status-lamp orb-success';
 
 		return 'bg-muted-foreground/50';
 	});
@@ -81,9 +82,9 @@
 			<ModelAvatar
 				{option}
 				quantPositionClass="-bottom-1.5 -right-1.5"
-				quantSize="h-6 w-6"
+				quantSize="size-6"
 				showBaseModelAvatar
-				size="h-12 w-12"
+				size="size-12"
 			/>
 
 			<div class="min-w-0">
@@ -100,7 +101,7 @@
 
 				<p class="mt-1 flex items-center gap-x-2 text-xs text-muted-foreground">
 					<span class="flex shrink-0 items-center gap-1">
-						<span class="h-2 w-2 shrink-0 rounded-full {statusDot}"></span>
+						<span class="size-2 shrink-0 rounded-full {statusDot}"></span>
 
 						{statusLabel}
 					</span>
@@ -112,12 +113,12 @@
 		{#if !isMobile}
 			<Button
 				aria-label="Close details"
-				class="h-7 w-7"
+				class="size-7"
 				onclick={onClose}
 				size="icon"
 				variant="ghost"
 			>
-				<X class="h-4 w-4" />
+				<X class="size-icon-md" />
 			</Button>
 		{/if}
 	</div>

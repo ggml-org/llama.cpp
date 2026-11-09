@@ -216,10 +216,7 @@
 
 	<Popover.Content
 		align="start"
-		class={[
-			'w-[var(--bits-popover-anchor-width)] max-w-none rounded-xl border-border/50 p-0 shadow-xl',
-			className
-		]}
+		class={['w-[var(--bits-popover-anchor-width)] max-w-none rounded-xl p-0', className]}
 		{customAnchor}
 		onCloseAutoFocus={(event) => event.preventDefault()}
 		onOpenAutoFocus={(event) => event.preventDefault()}
@@ -248,7 +245,7 @@
 					{@const Icon = entry.type === FileMentionEntryType.DIRECTORY ? Folder : File}
 					<Icon
 						class={[
-							'mt-0.5 h-4 w-4 shrink-0',
+							'mt-0.5 size-icon-md shrink-0',
 							entry.type === FileMentionEntryType.DIRECTORY
 								? 'text-amber-500'
 								: 'text-muted-foreground'

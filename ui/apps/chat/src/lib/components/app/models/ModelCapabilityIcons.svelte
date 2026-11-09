@@ -25,7 +25,7 @@
 		gapClass = 'gap-1.25',
 		hideCapabilities = false,
 		hideModalities = false,
-		iconSize = 'h-3 w-3',
+		iconSize = 'size-icon-xs',
 		modalities,
 		supportsThinking = false,
 		supportsToolUse = false

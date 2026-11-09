@@ -68,7 +68,7 @@
 							{#if favicon}
 								<img
 									alt=""
-									class="h-3 w-3 shrink-0 rounded-sm"
+									class="size-3 shrink-0 rounded-sm"
 									onerror={(e) => {
 										(e.currentTarget as HTMLImageElement).style.display = 'none';
 									}}
@@ -94,14 +94,14 @@
 			/>
 
 			<Button
-				class="h-7 w-7 p-0"
+				class="size-7 p-0"
 				disabled={!extra.content}
 				onclick={handleDownload}
 				size="sm"
 				title="Download content"
 				variant="ghost"
 			>
-				<Download class="h-3.5 w-3.5" />
+				<Download class="size-icon-md" />
 			</Button>
 		</div>
 

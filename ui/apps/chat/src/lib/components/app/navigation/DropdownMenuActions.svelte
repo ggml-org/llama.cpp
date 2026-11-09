@@ -82,7 +82,7 @@
 						onclick={(event) => runAction(action, event)}
 						type="button"
 					>
-						{@render iconComponent(action.icon, 'h-4 w-4 shrink-0')}
+						{@render iconComponent(action.icon, 'size-icon-md shrink-0')}
 
 						<span class="flex flex-1 flex-col">
 							{action.label}

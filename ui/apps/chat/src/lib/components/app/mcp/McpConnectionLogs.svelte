@@ -35,9 +35,9 @@
 				class="flex w-full items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
 			>
 				{#if isExpanded}
-					<ChevronDown class="h-3.5 w-3.5" />
+					<ChevronDown class="size-icon-sm" />
 				{:else}
-					<ChevronRight class="h-3.5 w-3.5" />
+					<ChevronRight class="size-icon-sm" />
 				{/if}
 
 				<span>Connection Log ({logs.length})</span>
@@ -60,7 +60,7 @@
 							{formatTime(log.timestamp)}
 						</span>
 
-						<IconComponent class="mt-0.5 h-3 w-3 shrink-0" />
+						<IconComponent class="mt-0.5 size-icon-xs shrink-0" />
 
 						<span class="break-all">{log.message}</span>
 					</div>

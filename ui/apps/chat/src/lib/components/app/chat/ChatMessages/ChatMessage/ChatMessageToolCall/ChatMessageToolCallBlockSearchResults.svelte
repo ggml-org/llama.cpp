@@ -97,12 +97,12 @@
 				{#if faviconUrl}
 					<img
 						alt=""
-						class="h-3 w-3 shrink-0 rounded-sm"
+						class="size-3 shrink-0 rounded-sm"
 						onerror={hideBrokenIcon}
 						src={faviconUrl}
 					/>
 				{:else}
-					<Globe class="text-muted-foreground/70 h-3 w-3 shrink-0" />
+					<Globe class="text-muted-foreground/70 size-icon-xs shrink-0" />
 				{/if}
 
 				<span class="truncate font-medium text-foreground/80">{result.title}</span>
@@ -163,7 +163,7 @@
 		</div>
 	{:else if showSpinner}
 		<div class="text-muted-foreground/70 flex items-center gap-2 py-1 text-xs italic">
-			<Loader2 class="h-3 w-3 animate-spin" />
+			<Loader2 class="size-icon-xs animate-spin" />
 
 			<span>Searching...</span>
 		</div>

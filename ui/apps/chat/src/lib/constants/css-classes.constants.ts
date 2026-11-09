@@ -4,15 +4,14 @@ export const BOX_BORDER =
 export const INPUT_CLASSES = `
     bg-muted/60 dark:bg-muted/75
     ${BOX_BORDER}
-    shadow-sm
+    matte-key
     outline-none
     text-foreground
 `;
 
 export const PANEL_CLASSES = `
     bg-background
-    border border-border/30 dark:border-border/20
-    shadow-sm backdrop-blur-lg!
+    elevated-control backdrop-blur-lg!
     rounded-t-lg!
 `;
 
@@ -31,11 +30,16 @@ export const TAB_SURFACE_CLASS =
 
 /** Tab surface at rest: invisible until hovered. */
 export const TAB_SURFACE_IDLE_CLASS =
-	'border-transparent hover:bg-primary/10 hover:border-border/10 hover:shadow-sm';
+	'border-transparent hover:bg-primary/10 hover:border-border/10 hover:shadow-(--elevation-control)';
+
+/** A round matte glass key (see GlassKey): white glass over the page, a faint hairline, and
+ *  matte-key's blur and saturation with its small shadow, so what scrolls under it softens. */
+export const GLASS_KEY_CLASS =
+	'matte-key flex shrink-0 cursor-pointer items-center justify-center rounded-full border border-border/20 bg-surface-glass text-accent-foreground outline-none transition-colors focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50';
 
 /** Tab surface of the open tab. */
 export const TAB_SURFACE_ACTIVE_CLASS =
-	'bg-muted/60 border-border/10 shadow-sm text-accent-foreground hover:bg-primary/15';
+	'matte-key bg-muted/60 border-border/10 text-accent-foreground hover:bg-primary/15';
 
 /** Selects the focused chat-form input (either renderer) to restore focus after model actions. */
 export const CHAT_INPUT_FOCUS_SELECTOR =
@@ -66,17 +70,8 @@ export const FILTER_TRIGGER_CLASS = `
     ${INPUT_CLASSES}
 `;
 
-/** The filter toggles' shared box: the same fill, border and shadow as a filter trigger. */
-export const FILTER_TOGGLE_GROUP_CLASS = `
-    h-8
-    overflow-hidden
-    divide-x divide-border/30 dark:divide-border/20
-    ${INPUT_CLASSES}
-`;
-
-/** One filter toggle of the models manager toolbar; its group draws the box. */
-export const FILTER_TOGGLE_ITEM_CLASS =
-	'h-full rounded-none hover:bg-muted/80 dark:hover:bg-muted data-[state=on]:bg-muted-foreground/15 data-[state=on]:text-foreground dark:data-[state=on]:bg-muted-foreground/25';
+/** One filter toggle of the models manager toolbar: a 32px wide key in the 32px tall group. */
+export const FILTER_TOGGLE_ITEM_CLASS = 'w-8';
 
 /** Column grid shared by every row of the models manager table. Below md the context,
  *  status and actions columns are dropped, so a phone gives the whole width to the
@@ -98,13 +93,13 @@ export const MODEL_VARIANT_BADGE_CLASS =
 	'inline-flex w-fit shrink-0 items-center justify-center whitespace-nowrap rounded-md bg-primary px-1.5 py-0 text-[10px] font-mono font-semibold uppercase tracking-wide text-primary-foreground';
 
 /** Default Tailwind size class for inline icon components (lucide, etc.). */
-export const ICON_CLASS_DEFAULT = 'h-4 w-4';
+export const ICON_CLASS_DEFAULT = 'size-icon-md';
 
 /** Small Tailwind size class for inline icons. */
-export const ICON_CLASS_SM = 'h-3.5 w-3.5';
+export const ICON_CLASS_SM = 'size-icon-sm';
 
 /** Extra-small Tailwind size class for inline icons. */
-export const ICON_CLASS_XS = 'h-3 w-3';
+export const ICON_CLASS_XS = 'size-icon-xs';
 
 /** Icon size + spinning animation; used for live-streaming tool indicators. */
-export const ICON_CLASS_SPIN = 'h-4 w-4 animate-spin';
+export const ICON_CLASS_SPIN = 'size-icon-md animate-spin';

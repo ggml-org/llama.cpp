@@ -208,7 +208,11 @@
 	{#each pdfImages as image, index (index)}
 		<p class="mb-2 text-sm text-white/50">Page {index + 1}</p>
 
-		<img alt="PDF Page {index + 1}" class="mx-auto max-w-[85vw] rounded-lg shadow-lg" src={image} />
+		<img
+			alt="PDF Page {index + 1}"
+			class="mx-auto max-w-[85vw] rounded-lg shadow-(--elevation-raised)"
+			src={image}
+		/>
 
 		<div class="h-4"></div>
 	{/each}
@@ -220,7 +224,7 @@
 	<div class="flex flex-1 items-center justify-center p-8">
 		<div class="text-center">
 			<div
-				class="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-white border-t-transparent"
+				class="mx-auto mb-4 size-8 animate-spin rounded-full border-4 border-white border-t-transparent"
 			></div>
 
 			<p class="text-white/70">{message}</p>
@@ -231,7 +235,7 @@
 {#snippet status(message: string, detail?: string)}
 	<div class="flex flex-1 items-center justify-center p-8">
 		<div class="text-center">
-			<FileText class="mx-auto mb-4 h-16 w-16 text-white/50" />
+			<FileText class="mx-auto mb-4 size-16 text-white/50" />
 
 			<p class={['text-white/70', detail && 'mb-4']}>{message}</p>
 

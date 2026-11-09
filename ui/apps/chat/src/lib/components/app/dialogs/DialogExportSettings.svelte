@@ -28,9 +28,9 @@
 		<AlertDialog.Header>
 			<AlertDialog.Title class="flex items-center gap-2">
 				{#if includeSensitiveData}
-					<ShieldOff class="h-5 w-5 text-destructive" />
+					<ShieldOff class="size-icon-lg text-destructive" />
 				{:else}
-					<Shield class="h-5 w-5 text-destructive" />
+					<Shield class="size-icon-lg text-destructive" />
 				{/if}
 				Export Settings
 			</AlertDialog.Title>
@@ -69,10 +69,7 @@
 		<AlertDialog.Footer>
 			<AlertDialog.Cancel onclick={onCancel}>Cancel</AlertDialog.Cancel>
 
-			<AlertDialog.Action
-				class="bg-destructive text-white hover:bg-destructive/80"
-				onclick={onConfirm}
-			>
+			<AlertDialog.Action onclick={onConfirm} variant="destructive">
 				{#if includeSensitiveData}
 					Export Anyway
 				{:else}

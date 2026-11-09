@@ -26,7 +26,7 @@
 						disabled={serverStore.loading}
 						onclick={() => serverStore.fetch()}
 					>
-						<RefreshCw class="h-3 w-3 {serverStore.loading ? 'animate-spin' : ''}" />
+						<RefreshCw class="size-icon-xs {serverStore.loading ? 'animate-spin' : ''}" />
 						{serverStore.loading ? 'Retrying...' : 'Retry'}
 					</button>
 				{/if}

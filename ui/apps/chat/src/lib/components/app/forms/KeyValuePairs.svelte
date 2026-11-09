@@ -120,7 +120,7 @@
 			onclick={addPair}
 			type="button"
 		>
-			<Plus class="h-3 w-3" />
+			<Plus class="size-icon-xs" />
 			{addButtonLabel}
 		</button>
 	</div>
@@ -160,7 +160,7 @@
 						onclick={() => removePair(index)}
 						type="button"
 					>
-						<Trash2 class="h-3.5 w-3.5" />
+						<Trash2 class="size-icon-sm" />
 					</button>
 				</div>
 			{/each}

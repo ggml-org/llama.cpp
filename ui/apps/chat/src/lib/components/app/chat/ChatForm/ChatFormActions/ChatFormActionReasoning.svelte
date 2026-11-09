@@ -30,9 +30,9 @@
 {#snippet triggerLabel()}
 	<span class="flex items-center gap-0.75 {reasoning.isOff ? 'text-muted-foreground' : ''}">
 		{#if reasoning.isOff}
-			<LightbulbOff class="size-3.25 max-md:size-4 shrink-0" />
+			<LightbulbOff class="size-3.25 max-md:size-icon-md shrink-0" />
 		{:else}
-			<Lightbulb class="size-3.25 max-md:size-4 shrink-0" />
+			<Lightbulb class="size-3.25 max-md:size-icon-md shrink-0" />
 		{/if}
 
 		{#if !isDefault}
@@ -64,7 +64,7 @@
 
 		{#if level.hasInfo}
 			<!-- no hover on a phone: the hint rides on the icon's own title there -->
-			<Info class="h-3.5 w-3.5 shrink-0 text-muted-foreground" title={MAX_EFFORT_HINT} />
+			<Info class="size-icon-md shrink-0 text-muted-foreground" title={MAX_EFFORT_HINT} />
 		{/if}
 	</button>
 {/snippet}
@@ -132,7 +132,7 @@
 					{#if level.hasInfo}
 						<Tooltip.Root>
 							<Tooltip.Trigger>
-								<Info class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+								<Info class="size-icon-md shrink-0 text-muted-foreground" />
 							</Tooltip.Trigger>
 
 							<Tooltip.Content side="right">

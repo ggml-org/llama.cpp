@@ -43,17 +43,16 @@
 </script>
 
 <div class="text-muted-foreground flex items-center gap-2 py-1.5">
-	<Clock class="text-muted-foreground/60 h-3.5 w-3.5 shrink-0" />
+	<Clock class="text-muted-foreground/60 size-icon-sm shrink-0" />
 
 	{#if showSpinner}
 		<span class="text-foreground/80 text-sm font-medium">Current time</span>
 
-		<Loader2 class="text-muted-foreground/70 h-3 w-3 animate-spin" />
+		<Loader2 class="text-muted-foreground/70 size-icon-xs animate-spin" />
 	{:else if dateMeta.errorMessage}
 		<span class="text-foreground/80 text-sm font-medium">Current time&nbsp;</span>
 
-		<span class="text-red-600 text-xs italic dark:text-red-400">-&nbsp;{dateMeta.errorMessage}</span
-		>
+		<span class="text-fg-danger text-xs italic">-&nbsp;{dateMeta.errorMessage}</span>
 	{:else if dateMeta.dateString}
 		<span class="text-foreground/80 text-sm font-medium">Current time is&nbsp;</span>
 

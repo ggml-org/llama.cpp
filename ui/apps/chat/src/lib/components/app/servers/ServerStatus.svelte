@@ -18,11 +18,11 @@
 	let serverData = $derived(serverStore.props);
 
 	function getStatusColor() {
-		if (loading) return 'bg-yellow-500';
+		if (loading) return 'status-lamp orb-warning';
 
-		if (error) return 'bg-red-500';
+		if (error) return 'status-lamp orb-danger';
 
-		if (serverData) return 'bg-green-500';
+		if (serverData) return 'status-lamp orb-success';
 
 		return 'bg-gray-500';
 	}
@@ -40,14 +40,14 @@
 
 <div class="flex items-center space-x-3 {className}">
 	<div class="flex items-center space-x-2">
-		<div class="h-2 w-2 rounded-full {getStatusColor()}"></div>
+		<div class="size-2 rounded-full {getStatusColor()}"></div>
 
 		<span class="text-sm text-muted-foreground">{getStatusText()}</span>
 	</div>
 
 	{#if serverData && !error}
 		<Badge class="text-xs" variant="outline">
-			<Server class="mr-1 h-3 w-3" />
+			<Server class="mr-1 size-icon-xs" />
 
 			{model || 'Unknown Model'}
 		</Badge>

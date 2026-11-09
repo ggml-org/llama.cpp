@@ -78,7 +78,7 @@
 						class={cn(
 							// ghost brings no fill of its own for the muted composer surface to fight over
 							buttonVariants({ variant: 'ghost' }),
-							'file-upload-button h-8 w-8 cursor-pointer rounded-full bg-background p-0 shadow-sm dark:bg-muted-foreground/15'
+							'file-upload-button matte-key size-8 cursor-pointer rounded-full bg-background p-0 dark:bg-muted-foreground/15'
 						)}
 						disabled={chatFormActions.disabled}
 					>

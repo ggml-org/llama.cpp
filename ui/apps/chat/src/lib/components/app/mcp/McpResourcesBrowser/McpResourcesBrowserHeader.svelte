@@ -23,7 +23,7 @@
 		/>
 
 		<Button
-			class="h-8 w-8 p-0"
+			class="size-8 p-0"
 			disabled={isLoading}
 			onclick={onRefresh}
 			size="sm"

@@ -106,7 +106,7 @@
 
 					{#if favorite}
 						<!-- the heart is decorative, the button's text carries the state -->
-						<Heart aria-hidden="true" class="h-3.5 w-3.5 shrink-0 text-rose-500" />
+						<Heart aria-hidden="true" class="size-icon-sm shrink-0 text-rose-500" />
 
 						<span class="sr-only">favorited</span>
 					{/if}

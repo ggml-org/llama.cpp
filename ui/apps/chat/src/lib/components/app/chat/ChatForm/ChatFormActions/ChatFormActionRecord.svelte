@@ -37,14 +37,15 @@
 	<Tooltip.Root>
 		<Tooltip.Trigger>
 			<Button
-				class="h-8 w-8 max-md:h-9 max-md:w-9 rounded-full p-0 {isRecording
-					? 'animate-pulse bg-red-500 text-white hover:bg-red-600'
+				class="size-8 max-md:size-9 rounded-full p-0 {isRecording
+					? 'matte-orb orb-danger animate-pulse text-white! hover:bg-transparent'
 					: showWarning
-						? 'bg-amber-500/15 text-amber-600 hover:bg-amber-500/25 dark:text-amber-400'
+						? 'bg-surface-warning text-fg-warning hover:bg-surface-warning'
 						: ''}"
 				disabled={disabled || isLoading || !hasAudioModality}
 				onclick={onMicClick}
 				type="button"
+				variant={isRecording || showWarning ? 'ghost' : 'default'}
 			>
 				<span class="sr-only"
 					>{isRecording

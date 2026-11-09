@@ -26,9 +26,9 @@
 >
 	<span class={revealOnHover ? revealClass : ''}>
 		<ActionIcon
-			class="h-5 w-5 hover:text-foreground"
+			class="size-icon-lg hover:text-foreground"
 			icon={Info}
-			iconSize="h-4 w-4"
+			iconSize="size-icon-md"
 			onclick={() => uiStore.openModelDetails(option.id)}
 			tooltip="Manage model"
 			tooltipAsTitle
@@ -36,12 +36,12 @@
 	</span>
 
 	{#if isFav}
-		<span class="flex h-5 w-5 items-center justify-center">
+		<span class="flex size-5 items-center justify-center">
 			<span class="flex group-hover:hidden [@media(pointer:coarse)]:hidden">
 				<ActionIcon
-					class="h-5 w-5 text-rose-500"
+					class="size-icon-lg text-rose-500"
 					icon={Heart}
-					iconSize="h-4 w-4"
+					iconSize="size-icon-md"
 					onclick={() => modelsStore.toggleFavorite(option.model)}
 					tooltip="Remove from favorites"
 					tooltipAsTitle
@@ -50,9 +50,9 @@
 
 			<span class="hidden group-hover:flex [@media(pointer:coarse)]:flex">
 				<ActionIcon
-					class="h-5 w-5 hover:text-foreground"
+					class="size-icon-lg hover:text-foreground"
 					icon={HeartOff}
-					iconSize="h-4 w-4"
+					iconSize="size-icon-md"
 					onclick={() => modelsStore.toggleFavorite(option.model)}
 					tooltip="Remove from favorites"
 					tooltipAsTitle
@@ -62,9 +62,9 @@
 	{:else}
 		<span class={revealOnHover ? revealClass : ''}>
 			<ActionIcon
-				class="h-5 w-5 hover:text-foreground"
+				class="size-icon-lg hover:text-foreground"
 				icon={Heart}
-				iconSize="h-4 w-4"
+				iconSize="size-icon-md"
 				onclick={() => modelsStore.toggleFavorite(option.model)}
 				tooltip="Add to favorites"
 				tooltipAsTitle

@@ -26,13 +26,8 @@
 
 	{#snippet actions()}
 		<DropdownMenu.Root>
-			<ButtonGroup.Root class="overflow-hidden rounded-md shadow-sm">
-				<Button
-					class="!rounded-r-none !shadow-none"
-					onclick={() => onDecision(ToolPermissionDecision.ONCE)}
-					size="sm"
-					variant="secondary"
-				>
+			<ButtonGroup.Root>
+				<Button onclick={() => onDecision(ToolPermissionDecision.ONCE)} size="sm" variant="outline">
 					Allow once
 				</Button>
 
@@ -41,11 +36,11 @@
 				<DropdownMenu.Trigger
 					aria-label="More allow options"
 					class={cn(
-						buttonVariants({ size: 'sm', variant: 'secondary' }),
-						'inline-flex cursor-pointer items-center !rounded-l-none !shadow-none !px-2'
+						buttonVariants({ size: 'sm', variant: 'outline' }),
+						'inline-flex cursor-pointer items-center !px-2'
 					)}
 				>
-					<ChevronDown class="h-3.5 w-3.5" />
+					<ChevronDown class="size-icon-sm" />
 				</DropdownMenu.Trigger>
 			</ButtonGroup.Root>
 

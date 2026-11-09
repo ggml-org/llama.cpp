@@ -294,9 +294,7 @@
 			</div>
 
 			<Dialog.Footer>
-				<Button onclick={() => handleOpenChange(false)} size="sm" variant="secondary">
-					Cancel
-				</Button>
+				<Button onclick={() => handleOpenChange(false)} size="sm" variant="outline">Cancel</Button>
 
 				<Button aria-label="Save" disabled={!canSave} size="sm" type="submit" variant="default">
 					Add

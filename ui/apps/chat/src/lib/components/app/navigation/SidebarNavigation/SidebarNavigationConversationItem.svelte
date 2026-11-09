@@ -323,7 +323,7 @@
 		class={[
 			'group flex min-h-9 w-full cursor-pointer items-center justify-between space-x-3 rounded-lg px-2 py-1.5 text-left select-none [-webkit-touch-callout:none] transition-[background-color,color,scale] hover:bg-foreground/10 hover:text-foreground max-md:min-h-12 max-md:rounded-2xl max-md:px-3.5 max-md:py-3 md:min-h-8 md:py-1',
 			isLanding && 'invisible',
-			isActive ? 'bg-accent text-accent-foreground' : 'text-foreground/75',
+			isActive ? 'selected-row-surface text-accent-foreground' : 'text-foreground/75',
 			contextMenuOpen && 'bg-foreground/10',
 			isSelected && 'bg-primary/10 hover:bg-primary/15',
 			isSelectionMode && 'is-selection-mode',

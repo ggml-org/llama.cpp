@@ -262,7 +262,7 @@
 	>
 		<Dialog.Header class="border-b border-border/30 px-4 py-3" showCloseButton={false}>
 			<Dialog.Title class="flex items-center gap-2">
-				<FolderOpen class="h-5 w-5" />
+				<FolderOpen class="size-icon-lg" />
 
 				<span>MCP Resources</span>
 
@@ -322,10 +322,10 @@
 
 						{#if templatePreviewLoading}
 							<div class="flex flex-1 items-center justify-center">
-								<Loader2 class="h-6 w-6 animate-spin text-muted-foreground" />
+								<Loader2 class="size-6 animate-spin text-muted-foreground" />
 							</div>
 						{:else if templatePreviewError}
-							<div class="flex flex-1 flex-col items-center justify-center gap-2 text-red-500">
+							<div class="flex flex-1 flex-col items-center justify-center gap-2 text-fg-danger">
 								<span class="text-sm">{templatePreviewError}</span>
 
 								<Button

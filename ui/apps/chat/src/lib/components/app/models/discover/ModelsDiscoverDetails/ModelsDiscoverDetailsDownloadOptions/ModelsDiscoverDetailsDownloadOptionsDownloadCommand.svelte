@@ -61,7 +61,7 @@
 </script>
 
 <div
-	class="relative flex items-center gap-2 overflow-hidden rounded-lg border border-border/40 bg-background py-2.5 pl-4 pr-10 shadow-xs dark:border-border/35 dark:bg-background/50"
+	class="relative flex items-center gap-2 overflow-hidden rounded-lg bg-background py-2.5 pl-4 pr-10 elevated-control dark:bg-background/50"
 >
 	<!-- Single line: long commands scroll horizontally instead of wrapping. -->
 	<div
@@ -128,9 +128,9 @@
 		type="button"
 	>
 		{#if copied}
-			<Check class="h-3.5 w-3.5 text-green-500" />
+			<Check class="size-icon-sm text-fg-success" />
 		{:else}
-			<Copy class="h-3.5 w-3.5" />
+			<Copy class="size-icon-sm" />
 		{/if}
 	</button>
 </div>
