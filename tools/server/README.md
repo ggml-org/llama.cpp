@@ -872,7 +872,7 @@ Returns raw audio bytes (`audio/wav` by default) rather than JSON. For more info
 
 `n_predict`: Max number of audio frames to generate. Defaults to `512`; generation normally stops earlier once the model emits an end-of-speech token.
 
-`response_format`: `wav` (default) or `pcm` (raw `float32` little-endian mono samples, no header; the response `Content-Type` carries the sample rate, e.g. `audio/pcm;rate=24000;encoding=float;bits=32`).
+`response_format`: `wav` (default), `pcm` (raw `float32` little-endian mono samples, no header; the response `Content-Type` carries the sample rate, e.g. `audio/pcm;rate=24000;encoding=float;bits=32`) or `pcm16` (same, as signed 16-bit samples, e.g. `audio/pcm;rate=24000;encoding=signed-int;bits=16`).
 
 `stream`: If `true`, the response is streamed as audio becomes available instead of waiting for the full generation to finish. WAV streaming writes an RFC-noncompliant header with an unknown (`0xFFFFFFFF`) size field, since the final length isn't known up front; most players and decoders (ffmpeg, VLC, ...) handle this by reading until EOF.
 
@@ -1651,6 +1651,33 @@ LFM3-Omni is not trained to reason, run it with `--reasoning off` so that its tu
 Tools go into the system prompt with the chat template, and the tool calls are parsed as in `/v1/chat/completions`. The client runs the calls of a response, sends their results as `function_call_output` items, then asks for the next response.
 
 See [examples/realtime_client.py](../../examples/realtime_client.py) for a client with the `openai` library.
+
+### POST `/v1/audio/speech`: OpenAI-compatible Speech API
+
+Generates speech from text, for models that can generate audio. The request is converted to a [`/tts`](#post-tts-generate-speech-audio-from-text) request, so the `/tts` options such as `lang`, `seed` or `speaker_ref_b64` can also be used.
+
+*Options:*
+
+`input`: The text to speak.
+
+`voice`: One of the `voices` listed by `GET /props`, as a name or as `{"id": "..."}`. OpenAI voice names such as `alloy` are not mapped: a model with predefined voices rejects them.
+
+`response_format`: `wav` or `pcm` (raw signed 16-bit little-endian mono samples, no header). Defaults to `wav`, unlike the `mp3` of the OpenAI API. Other formats are rejected. The sample rate is the one of the model and is not resampled to the 24 kHz of the OpenAI API, the response `Content-Type` carries it.
+
+`stream_format`: `audio` streams the response as it becomes available, see `stream` in `/tts` for the WAV header it writes. `sse` is rejected. The response is not streamed when omitted.
+
+`speed`: Only `1.0` is accepted.
+
+`instructions`: Ignored.
+
+*Examples:*
+
+```shell
+curl http://127.0.0.1:8080/v1/audio/speech \
+    -H "Content-Type: application/json" \
+    -d '{"model": "tts", "input": "Hello, this is a test."}' \
+    -o output.wav
+```
 
 ### POST `/v1/responses`: OpenAI-compatible Responses API
 
