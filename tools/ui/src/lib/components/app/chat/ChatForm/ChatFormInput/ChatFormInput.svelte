@@ -70,7 +70,11 @@
 </script>
 
 <div
-	class={['chat-form-input mb-0.5 min-h-[2.375rem] flex-1', disabled && 'cursor-not-allowed', className]}
+	class={[
+		'chat-form-input mb-0.5 min-h-[2.375rem] flex-1',
+		disabled && 'cursor-not-allowed',
+		className
+	]}
 >
 	<MarkdownEditor
 		bind:this={editor}
