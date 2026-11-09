@@ -637,18 +637,23 @@ def test_cancel_request():
     server.n_predict = -1
     server.n_slots = 1
     server.server_slots = True
+    server.enable_ctx_shift = True
     server.start()
-    # send a request that will take a long time, but cancel it before it finishes
+    # context shift keeps the generation running until the request is cancelled
     try:
         server.make_request("POST", "/completion", data={
             "prompt": "I believe the meaning of life is",
         }, timeout=0.1)
     except requests.exceptions.ReadTimeout:
         pass # expected
-    # make sure the slot is free
-    time.sleep(2)
-    res = server.make_request("GET", "/slots")
-    assert res.body[0]["is_processing"] == False
+    # the slot is freed once the server notices the closed connection
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        res = server.make_request("GET", "/slots")
+        if not res.body[0]["is_processing"]:
+            return
+        time.sleep(0.1)
+    raise AssertionError("slot is still processing after the request was cancelled")
 
 
 # this test exercises the host-memory prompt cache

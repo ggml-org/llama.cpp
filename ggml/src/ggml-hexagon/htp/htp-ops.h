@@ -51,6 +51,7 @@ enum htp_op_code {
     HTP_OP_MUL_MAT_ADD,
     HTP_OP_RMS_NORM,
     HTP_OP_RMS_NORM_MUL,
+    HTP_OP_RMS_NORM_MUL_ADD,
     HTP_OP_UNARY_SILU,
     HTP_OP_UNARY_GELU,
     HTP_OP_UNARY_SIGMOID,
@@ -116,18 +117,27 @@ enum htp_op_code {
     HTP_OP_GLU_SIGMOID,
     HTP_OP_UNARY_CEIL,
     HTP_OP_UNARY_SGN,
+    HTP_OP_UPSCALE,
+    HTP_OP_CONV_3D,
+    HTP_OP_DSV4_HC_PRE,
+    HTP_OP_DSV4_HC_POST,
+    HTP_OP_TOP_K_MASK,
+    HTP_OP_LIGHTNING_INDEXER,
 
     HTP_OP_INVALID
 };
 
-#define HTP_OP_MAX_DIMS    4    // aka GGML_MAX_DIMS
-#define HTP_OP_MAX_INPUTS  10   // aka GGML_MAX_SRCS
-#define HTP_OP_MAX_OUTPUTS 4
-#define HTP_OP_MAX_PARAMS  16   // aka GGML_MAX_OP_PARAMS
+#define HTP_OP_MAX_DIMS        4     // aka GGML_MAX_DIMS
+#define HTP_OP_MAX_INPUTS      10    // aka GGML_MAX_SRCS
+#define HTP_OP_MAX_OUTPUTS     4
+#define HTP_OP_MAX_PARAMS      16    // aka GGML_MAX_OP_PARAMS
 #define HTP_OP_MAX_KERN_PARAMS 32
 
-#define HTP_OP_MAX_BUFS    64
-#define HTP_OP_MAX_TENSORS 65534 // must stay under 64K (uint16)
+#define HTP_OP_MAX_BUFS        64
+#define HTP_OP_MAX_TENSORS     65534 // must stay under 64K (uint16)
+
+#define HTP_OP_MAX_NTHREADS    10
+#define HTP_OP_MAX_NHVX        8
 
 #define HTP_FENCE_TIMEOUT  (1000000000ULL)
 #define HTP_FENCE_SLOT_SIZE 128
@@ -184,8 +194,20 @@ struct htp_op_desc {
     uint16_t pad[2];                    // padding to align to 64 bits
 };
 
-#ifndef HTP_MAX_NTHREADS
+#ifdef __HVX_ARCH__
+#if __HVX_ARCH__ <= 73
+#define HTP_MAX_NTHREADS 6
+#define HTP_MAX_NHVX     4
+#elif __HVX_ARCH__ <= 75
+#define HTP_MAX_NTHREADS 8
+#define HTP_MAX_NHVX     6
+#else
 #define HTP_MAX_NTHREADS 10
+#define HTP_MAX_NHVX     8
+#endif
+
+_Static_assert(HTP_MAX_NTHREADS <= HTP_OP_MAX_NTHREADS, "HTP_MAX_NTHREADS exceeds HTP_OP_MAX_NTHREADS");
+_Static_assert(HTP_MAX_NHVX     <= HTP_OP_MAX_NHVX,     "HTP_MAX_NHVX exceeds HTP_OP_MAX_NHVX");
 #endif
 
 #define HTP_TRACE_MAX_EVENTS 256
@@ -278,7 +300,7 @@ struct htp_opbatch_rsp {
     uint32_t n_tensors;      // Number of tensors
     uint32_t n_ops;          // Number of op profile descriptors
     uint32_t usecs;          // Number of usec
-    uint32_t n_traces[HTP_MAX_NTHREADS + 1];
+    uint32_t n_traces[HTP_OP_MAX_NTHREADS];
     // struct htp_prof_desc profs[];  -- dspqueue buf 0
 };
 

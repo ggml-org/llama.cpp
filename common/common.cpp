@@ -219,6 +219,23 @@ int32_t common_cpu_get_num_math() {
             }
         }
     }
+#elif defined(__riscv) && defined(__linux__)
+    std::ifstream cpuinfo("/proc/cpuinfo");
+    std::string line;
+    int32_t n_a100 = 0;
+    while (std::getline(cpuinfo, line)) {
+        std::istringstream fields(line);
+        std::string key;
+        std::string separator;
+        uint64_t marchid;
+        if (fields >> key >> separator >> std::hex >> marchid &&
+            key == "marchid" && separator == ":" && marchid == UINT64_C(0x8000000041000002)) {
+            ++n_a100;
+        }
+    }
+    if (n_a100 > 0) {
+        return n_a100;
+    }
 #elif defined(__powerpc64__) || defined(__powerpc__)
     int32_t smt_factor = 1;
     int phy_cpus = common_cpu_get_num_physical_cores();
@@ -878,27 +895,7 @@ bool fs_validate_filename(const std::string & filename, bool allow_subdirs) {
     return true;
 }
 
-#include <iostream>
-
-
 #ifdef _WIN32
-std::wstring utf8_to_wstring(const std::string & str) {
-    if (str.empty()) {
-        return std::wstring();
-    }
-
-    int size = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.size(), NULL, 0);
-
-    if (size <= 0) {
-        return std::wstring();
-    }
-
-    std::wstring wstr(size, 0);
-    MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.size(), &wstr[0], size);
-
-    return wstr;
-}
-
 std::string wstring_to_utf8(const std::wstring & str) {
     if (str.empty()) {
         return std::string();
@@ -916,12 +913,6 @@ std::string wstring_to_utf8(const std::wstring & str) {
     return utf8;
 }
 #endif
-
-// returns the path as a UTF-8 string, preserving its separators
-std::string fs_path_to_utf8(const std::filesystem::path & path) {
-    const auto value = path.u8string();
-    return std::string(value.begin(), value.end());
-}
 
 void fs_write_atomic(const std::filesystem::path & path, const std::string & data) {
     // a random suffix gives every writer its own temporary file, across processes and containers
@@ -946,7 +937,7 @@ void fs_write_atomic(const std::filesystem::path & path, const std::string & dat
 
     if (file.fail() || ec) {
         std::filesystem::remove(path_tmp, ec);
-        throw std::runtime_error("failed to write file: " + fs_path_to_utf8(path));
+        throw std::runtime_error("failed to write file: " + path.string());
     }
 }
 
@@ -972,20 +963,9 @@ void common_set_env(const std::string & name, const std::string & value) {
 #endif
 }
 
-std::filesystem::path common_get_path_from_env(const std::string & name) {
-#if defined(_WIN32)
-    const std::wstring wname = utf8_to_wstring(name);
-    const wchar_t * wvalue = _wgetenv(wname.c_str());
-    return wvalue ? std::filesystem::path(wvalue) : std::filesystem::path();
-#else
-    const char * value = std::getenv(name.c_str());
-    return value ? std::filesystem::path(value) : std::filesystem::path();
-#endif
-}
-
 #if !defined(_WIN32)
 static std::filesystem::path get_home_directory() {
-    std::filesystem::path home = common_get_path_from_env("HOME");
+    std::filesystem::path home = common_get_env("HOME");
     if (!home.empty()) {
         return home;
     }
@@ -998,19 +978,19 @@ static std::filesystem::path get_home_directory() {
 #endif
 
 std::filesystem::path fs_get_cache_directory() {
-    std::filesystem::path cache_directory = common_get_path_from_env("LLAMA_CACHE");
+    std::filesystem::path cache_directory = common_get_env("LLAMA_CACHE");
     if (!cache_directory.empty()) {
         return cache_directory;
     }
 #if defined(_WIN32)
-    cache_directory = common_get_path_from_env("LOCALAPPDATA");
+    cache_directory = common_get_env("LOCALAPPDATA");
     if (cache_directory.empty()) {
         throw std::runtime_error("Failed to find %LOCALAPPDATA% directory");
     }
 #elif defined(__APPLE__)
     cache_directory = get_home_directory() / "Library/Caches";
 #else
-    cache_directory = common_get_path_from_env("XDG_CACHE_HOME");
+    cache_directory = common_get_env("XDG_CACHE_HOME");
     if (cache_directory.empty()) {
         cache_directory = get_home_directory() / ".cache";
     }
@@ -1021,12 +1001,12 @@ std::filesystem::path fs_get_cache_directory() {
 std::filesystem::path fs_get_config_directory() {
     std::filesystem::path config_directory;
 #if defined(_WIN32)
-    config_directory = common_get_path_from_env("APPDATA");
+    config_directory = common_get_env("APPDATA");
     if (config_directory.empty()) {
         throw std::runtime_error("Failed to find %APPDATA% directory");
     }
 #else
-    config_directory = common_get_path_from_env("XDG_CONFIG_HOME");
+    config_directory = common_get_env("XDG_CONFIG_HOME");
     if (config_directory.empty()) {
         config_directory = get_home_directory() / ".config";
     }
@@ -1040,9 +1020,9 @@ std::filesystem::path fs_get_cache_file(const std::string & filename) {
     std::error_code ec;
     common_create_directories(cache_directory, ec);
     if (ec) {
-        throw std::runtime_error("failed to create cache directory: " + fs_path_to_utf8(cache_directory));
+        throw std::runtime_error("failed to create cache directory: " + cache_directory.string());
     }
-    return cache_directory / std::filesystem::u8path(filename);
+    return cache_directory / filename;
 }
 
 //
@@ -1333,6 +1313,12 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
         LOG_INF("%s", "decision model reads the embeddings output, enabling embedding mode\n");
     }
 
+    if (llama_model_classifier_free_guidance(model)) {
+        params.kv_unified   = true;
+        cparams.kv_unified  = true;
+        cparams.n_seq_max  *= 2;
+    }
+
     // embeddings need the whole batch in one ubatch, so n_batch must not be larger than n_ubatch
     // (server.cpp does this check for --embedding, but before the model is loaded)
     if (cparams.embeddings && cparams.n_batch > cparams.n_ubatch) {
@@ -1473,7 +1459,7 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
         if (params.control_vector_layer_start <= 0) params.control_vector_layer_start = 1;
         if (params.control_vector_layer_end   <= 0) params.control_vector_layer_end   = llama_model_n_layer(model);
 
-        const auto cvec = common_control_vector_load(params.control_vectors);
+        const auto cvec = common_control_vector_load(params.control_vectors, llama_model_n_layer(model));
         if (cvec.n_embd == -1) {
             return res;
         }
@@ -1772,7 +1758,8 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.type_k = params.cache_type_k;
     cparams.type_v = params.cache_type_v;
 
-    cparams.moe_cache_size = params.moe_cache_size;
+    cparams.moe_cache_size      = params.moe_cache_size;
+    cparams.moe_cache_cpu_share = params.moe_cache_cpu_share;
 
     return cparams;
 }
@@ -1995,7 +1982,7 @@ float common_embd_similarity_cos(const float * embd1, const float * embd2, int n
 // Control vector utils
 //
 
-static common_control_vector_data common_control_vector_load_one(const common_control_vector_load_info & load_info) {
+static common_control_vector_data common_control_vector_load_one(const common_control_vector_load_info & load_info, int32_t n_layer) {
     common_control_vector_data result = { -1, {} };
 
     ggml_context * ctx = nullptr;
@@ -2036,6 +2023,10 @@ static common_control_vector_data common_control_vector_load_one(const common_co
             COM_ERR("invalid (zero) direction tensor layer index in %s\n", load_info.fname.c_str());
             result.n_embd = -1;
             break;
+        } else if (layer_idx > n_layer) {
+            COM_ERR("direction tensor layer index %d exceeds the model layer count %d in %s\n", layer_idx, n_layer, load_info.fname.c_str());
+            result.n_embd = -1;
+            break;
         }
 
         struct ggml_tensor * tensor = ggml_get_tensor(ctx, name.c_str());
@@ -2059,10 +2050,10 @@ static common_control_vector_data common_control_vector_load_one(const common_co
         }
 
         // extend if necessary - do not store data for layer 0 (it's not used)
-        result.data.resize(std::max(result.data.size(), static_cast<size_t>(result.n_embd * layer_idx)), 0.0f);
+        result.data.resize(std::max(result.data.size(), (size_t) result.n_embd * layer_idx), 0.0f);
 
         const float * src = (const float *) tensor->data;
-        float * dst = result.data.data() + result.n_embd * (layer_idx - 1);  // layer 1 at [0]
+        float * dst = result.data.data() + (size_t) result.n_embd * (layer_idx - 1);  // layer 1 at [0]
         for (int j = 0; j < result.n_embd; j++) {
             dst[j] += src[j] * load_info.strength;  // allows multiple directions for same layer in same file
         }
@@ -2080,11 +2071,11 @@ static common_control_vector_data common_control_vector_load_one(const common_co
     return result;
 }
 
-common_control_vector_data common_control_vector_load(const std::vector<common_control_vector_load_info> & load_infos) {
+common_control_vector_data common_control_vector_load(const std::vector<common_control_vector_load_info> & load_infos, int32_t n_layer) {
     common_control_vector_data result = { -1, {} };
 
     for (const auto & info : load_infos) {
-        auto cur = common_control_vector_load_one(info);
+        auto cur = common_control_vector_load_one(info, n_layer);
 
         if (cur.n_embd == -1) {
             result.n_embd = -1;
@@ -2260,6 +2251,16 @@ int32_t common_batch::add_embd(llama_embd embd, const llama_pos * pos, llama_seq
     return size() - 1;
 }
 
+int32_t common_batch::add_embd_row(int32_t row, const llama_pos * pos, llama_seq_id seq_id, bool output) {
+    token t = { LLAMA_TOKEN_NULL, { 0, 0, 0, 0 }, seq_id, output, { nullptr, 0, 0 }, { nullptr, 0, 0 }, {} };
+    t.embd_row = row;
+    for (int32_t j = 0; j < n_pos; ++j) {
+        t.pos[j] = pos[j];
+    }
+    tokens.push_back(t);
+    return size() - 1;
+}
+
 llama_batch_ext * common_batch::get_sub_batch(int32_t off, int32_t n) {
     GGML_ASSERT(batch && "common_batch was not initialized with a context");
     GGML_ASSERT(off >= 0 && n >= 0 && off + n <= size());
@@ -2280,6 +2281,12 @@ llama_batch_ext * common_batch::get_sub_batch(int32_t off, int32_t n) {
             if (t.embd.data && !llama_batch_ext_set_embd_token(res, idx, t.embd)) {
                 GGML_ABORT("%s: failed to set the embedding of token %d at index %d\n", __func__, t.id, i);
             }
+        } else if (t.embd_row >= 0) {
+            idx = llama_batch_ext_add_embd_row(res, t.seq_id, t.embd_row);
+            if (idx < 0) {
+                GGML_ABORT("%s: failed to add embd row %d at index %d (error %d, n = %d)\n", __func__, t.embd_row, i, idx, n);
+            }
+            llama_batch_ext_set_pos(res, idx, t.pos.data());
         } else {
             idx = llama_batch_ext_add_embd(res, t.seq_id, t.embd);
             if (idx < 0) {

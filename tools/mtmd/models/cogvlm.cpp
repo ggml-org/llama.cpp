@@ -1,6 +1,6 @@
 #include "models.h"
 
-ggml_cgraph * clip_graph_cogvlm::build() {
+ggml_cgraph * mtmd_graph_cogvlm::build() {
     GGML_ASSERT(model.class_embedding != nullptr);
     GGML_ASSERT(model.position_embeddings != nullptr);
 

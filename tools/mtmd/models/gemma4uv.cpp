@@ -1,7 +1,7 @@
 #include "models.h"
 #include <cmath>
 
-ggml_cgraph * clip_graph_gemma4uv::build() {
+ggml_cgraph * mtmd_graph_gemma4uv::build() {
     ggml_tensor * inp_raw = build_inp_raw();
 
     // Gemma4UnifiedVisionEmbedder uses default pytorch LayerNorm, not RMSNorm

@@ -1845,6 +1845,71 @@ void ggml_gemv_q8_0_4x8_q8_0(int                        n,
     UNUSED(ncols_interleaved);
     UNUSED(blocklen);
 
+#if defined(__aarch64__) && defined(__ARM_FEATURE_SVE)
+    // 256-bit SVE: 32 x int8 -> 8 x int32
+    if (ggml_cpu_get_sve_cnt() == QK8_0) {
+        const block_q8_0x4 * GGML_RESTRICT b_ptr = (const block_q8_0x4 *) vx;
+
+        const svbool_t pg   = svptrue_b8();
+        const svbool_t pg4w = svptrue_pat_b32(SV_VL4);
+
+        // after svtbl + svcvt the scale lanes are [d0,d0,d1,d1,d2,d2,d3,d3]: lane pair j = row j
+        const svuint16_t d_idx = svreinterpret_u16_u32(svlsr_n_u32_x(pg, svindex_u32(0, 1), 1));
+
+        for (int c = 0; c < nc; c += ncols_interleaved) {
+            const block_q8_0 * GGML_RESTRICT a_ptr = (const block_q8_0 *) vy;
+
+            svfloat32_t acc = svdup_n_f32(0.0f);
+
+            for (int b = 0; b < nb; ++b) {
+                const int8_t * GGML_RESTRICT bq = (const int8_t *) b_ptr->qs;
+
+                uint64_t a_chunk0;
+                uint64_t a_chunk1;
+                uint64_t a_chunk2;
+                uint64_t a_chunk3;
+                uint64_t b_d;
+
+                memcpy(&a_chunk0, a_ptr->qs +  0, sizeof(a_chunk0));
+                memcpy(&a_chunk1, a_ptr->qs +  8, sizeof(a_chunk1));
+                memcpy(&a_chunk2, a_ptr->qs + 16, sizeof(a_chunk2));
+                memcpy(&a_chunk3, a_ptr->qs + 24, sizeof(a_chunk3));
+                memcpy(&b_d, b_ptr->d, sizeof(b_d));
+
+                const svint8_t aq0 = svreinterpret_s8_u64(svdup_n_u64(a_chunk0));
+                const svint8_t aq1 = svreinterpret_s8_u64(svdup_n_u64(a_chunk1));
+                const svint8_t aq2 = svreinterpret_s8_u64(svdup_n_u64(a_chunk2));
+                const svint8_t aq3 = svreinterpret_s8_u64(svdup_n_u64(a_chunk3));
+
+                const svint8_t bq0 = svld1_s8(pg, bq +  0);
+                const svint8_t bq1 = svld1_s8(pg, bq + 32);
+                const svint8_t bq2 = svld1_s8(pg, bq + 64);
+                const svint8_t bq3 = svld1_s8(pg, bq + 96);
+
+                const svint32_t iacc0 = svdot_s32(svdup_n_s32(0), bq0, aq0);
+                const svint32_t iacc1 = svdot_s32(svdup_n_s32(0), bq1, aq1);
+                const svint32_t iacc2 = svdot_s32(svdup_n_s32(0), bq2, aq2);
+                const svint32_t iacc3 = svdot_s32(svdup_n_s32(0), bq3, aq3);
+
+                const svint32_t isum = svadd_s32_x(pg, svadd_s32_x(pg, iacc0, iacc1), svadd_s32_x(pg, iacc2, iacc3));
+
+                const svfloat16_t bd_h  = svtbl_f16(svreinterpret_f16_u64(svdup_n_u64(b_d)), d_idx);
+                const svfloat32_t scale = svmul_n_f32_x(pg, svcvt_f32_f16_x(pg, bd_h), GGML_CPU_FP16_TO_FP32(a_ptr->d));
+
+                acc = svmla_f32_x(pg, acc, svcvt_f32_s32_x(pg, isum), scale);
+
+                ++a_ptr;
+                ++b_ptr;
+            }
+
+            svst1_f32(pg4w, s, svadd_f32_x(pg, svuzp1_f32(acc, acc), svuzp2_f32(acc, acc)));
+            s += ncols_interleaved;
+        }
+
+        return;
+    }
+#endif  // defined(__aarch64__) && defined(__ARM_FEATURE_SVE)
+
 #if defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
     const block_q8_0x4 * b_ptr = (const block_q8_0x4 *) vx;
 
