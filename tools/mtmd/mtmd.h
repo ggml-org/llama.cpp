@@ -505,7 +505,7 @@ struct mtmd_gen_inp {
     float * embd;   // the hidden state from backbone, must have n_text_embd elements
     int32_t top_k;
     float   top_p;
-    float   temp; // sampling temperature, or noise scale for flow-matching decoders
+    float   temp; // sampling temperature, or noise scale for flow-matching decoders (0 = no noise)
     float   penalty_repeat; // repetition penalty of the sampled codes, <= 1 is off
     int32_t penalty_last_n; // frames the repetition penalty looks back on
 
