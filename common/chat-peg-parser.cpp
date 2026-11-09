@@ -131,6 +131,12 @@ static std::string normalize_quotes_to_json(const std::string & input) {
             continue;
         }
 
+        // Models can emit raw control characters inside string literals; escape them to keep the JSON valid.
+        if ((in_single_quoted || in_double_quoted) && static_cast<unsigned char>(c) < 0x20) {
+            result += escape_json_string_inner(std::string(1, c));
+            continue;
+        }
+
         // Handle quote characters
         if (c == '"') {
             if (in_single_quoted) {
