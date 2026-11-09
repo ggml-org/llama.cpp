@@ -637,6 +637,9 @@ struct mtmd_context {
     // MiniCPM-V 4.6/4.7 prepends an <image_id>N</image_id> tag before <image>
     bool use_image_id = false;
 
+    // Kimi-K3.1 writes the original image size after img_beg
+    bool img_beg_kimik31 = false;
+
     // string template for slice image delimiters with row/col (idefics3)
     std::string sli_img_start_tmpl;
 
@@ -1000,6 +1003,14 @@ struct mtmd_context {
                         img_beg = "<|media_begin|>";
                         img_end = "<|media_end|>";
                     }
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(models.v.get());
+                } break;
+            case PROJECTOR_TYPE_KIMIK31:
+                {
+                    // <|media_begin|>image WxH<|media_content|> ... (image embeddings) ... <|media_end|>
+                    img_beg = "<|media_begin|>";
+                    img_end = "<|media_end|>";
+                    img_beg_kimik31 = true;
                     image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(models.v.get());
                 } break;
             case PROJECTOR_TYPE_LIGHTONOCR:
@@ -1621,6 +1632,9 @@ struct mtmd_tokenizer {
 
             if (!ctx->img_beg.empty()) {
                 add_text(ctx->img_beg, true); // add image begin token
+            }
+            if (ctx->img_beg_kimik31) {
+                add_text(string_format("image %ux%u<|media_content|>", bitmaps[0]->nx, bitmaps[0]->ny), true);
             }
 
             // TODO @ngxson : this is quite hacky because preprocessor only support batch with one single element, that need to be fixed in the future (e.g. by changing the preprocessor interface always take single input)

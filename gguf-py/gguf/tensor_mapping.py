@@ -2282,6 +2282,7 @@ class TensorNameMap:
             "vision_tower.post_trunk_norm", # dots.ocr
             "vision_encoder.post_trunk_norm", # dots3note
             "vit.perceive.after_rms", # HunyuanVL
+            "mm_projector.post_norm", # Kimi-K3.1
         ),
 
         MODEL_TENSOR.V_MM_INP_PROJ: (

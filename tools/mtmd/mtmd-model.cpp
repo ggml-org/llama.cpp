@@ -546,6 +546,7 @@ struct mtmd_model_loader {
                         hparams.set_warmup_n_tokens(256); // avoid OOM on warmup
                     } break;
                 case PROJECTOR_TYPE_KIMIK25:
+                case PROJECTOR_TYPE_KIMIK31:
                     {
                         hparams.image_resize_algo = RESIZE_ALGO_BICUBIC;
                         hparams.rope_theta = 10000.0f;
@@ -560,6 +561,9 @@ struct mtmd_model_loader {
                             hparams.warmup_image_size = static_cast<int>(std::sqrt(max_pixels));
                         } else {
                             hparams.set_limit_image_tokens(2, 4096);
+                        }
+                        if (model.proj_type == PROJECTOR_TYPE_KIMIK31) {
+                            hparams.set_warmup_n_tokens(46*46); // avoid OOM on warmup
                         }
                     } break;
                 case PROJECTOR_TYPE_DEEPSEEK4V:
@@ -2142,6 +2146,12 @@ struct mtmd_model_loader {
                     model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 1, "bias"));
                     model.mm_2_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
                     model.mm_2_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
+                } break;
+            case PROJECTOR_TYPE_KIMIK31:
+                {
+                    model.mm_1_w         = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"));
+                    model.mm_2_w         = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_post_norm_w = get_tensor(string_format(TN_MM_POST_NORM, "weight"));
                 } break;
             case PROJECTOR_TYPE_DEEPSEEK4V:
                 {
@@ -3937,6 +3947,7 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
         case PROJECTOR_TYPE_D1OMNI_V:
         case PROJECTOR_TYPE_KIMIVL:
         case PROJECTOR_TYPE_KIMIK25:
+        case PROJECTOR_TYPE_KIMIK31:
             {
                 // dynamic size
                 int out_patch_size = params.patch_size * hparams.n_merge;
@@ -4278,6 +4289,7 @@ int mtmd_model::n_mmproj_embd() const {
         case PROJECTOR_TYPE_KIMIVL:
         case PROJECTOR_TYPE_PADDLEOCR:
         case PROJECTOR_TYPE_KIMIK25:
+        case PROJECTOR_TYPE_KIMIK31:
         case PROJECTOR_TYPE_YASA2:
         case PROJECTOR_TYPE_DEEPSEEK4V:
         case PROJECTOR_TYPE_DEEPSEEK41V:
