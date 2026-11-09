@@ -1,7 +1,7 @@
 <!--
-	Shared, as a slideshow of four setups, from one person to the internet: a laptop running the Llama app, reached from
-	a smartphone through Llama Connect; a home server on a small workstation for the family; llama-server on an office
-	server for the people who work there; and a cluster of small workstations, two stacked, open to the internet. Each
+	Shared, as a slideshow of four setups, from one person to anyone: a laptop running the Llama app, reached from a
+	smartphone through Llama Connect; a home server on a small workstation for the family; llama-server on an office
+	server for the people who work there; and a cluster of small workstations, two stacked, shared over the internet. Each
 	slide draws the machine that runs the model with a communications motif, dashed lines to the devices that use it,
 	and how they connect. The tabs are Llama UI's own; the motifs read their inks from the --p-* variables, set here
 	from the theme so they follow light and dark.
@@ -35,7 +35,7 @@
 				note: 'A MacBook with an M chip, or a laptop with an NVIDIA RTX Spark'
 			},
 			id: 'personal',
-			line: 'The Llama app runs on your laptop; your smartphone opens Llama Chat as a web app and reaches it through Llama Connect.',
+			line: 'The Llama app runs on your laptop; your smartphone reaches it through Llama Connect and picks up the conversations you started there.',
 			link: 'Llama Connect',
 			name: 'Your laptop, from your phone'
 		},
@@ -76,9 +76,9 @@
 				note: 'Home servers or workstations, together'
 			},
 			id: 'internet',
-			line: 'A home server or a cluster of workstations runs the largest open models, and is opened to the internet.',
+			line: 'A home server or a cluster of workstations runs the largest open models and is opened to the internet, so people without the hardware can use it too.',
 			link: 'The internet',
-			name: 'Open to the internet'
+			name: 'Shared with others'
 		}
 	];
 
