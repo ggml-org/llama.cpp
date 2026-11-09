@@ -12,10 +12,7 @@
 
 <div
 	bind:this={ref}
-	class={cn(
-		'mt-6 flex flex-row gap-2 sm:mt-0 sm:justify-end [&>*]:flex-1 sm:[&>*]:flex-none',
-		className
-	)}
+	class={cn('flex flex-row gap-2 sm:justify-end [&>*]:flex-1 sm:[&>*]:flex-none', className)}
 	data-slot="alert-dialog-footer"
 	{...restProps}
 >

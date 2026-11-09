@@ -132,6 +132,9 @@ export {
 // Portal utilities
 export { portalToBody } from './portal-to-body';
 
+// Haptic utilities
+export { hapticTap } from './haptics';
+
 // Precision utilities
 export { normalizeFloatingPoint, normalizeNumber } from './precision';
 
