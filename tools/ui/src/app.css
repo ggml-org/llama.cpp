@@ -49,6 +49,39 @@
 	--page-top: calc(var(--corner-control-top) + 3.75rem);
 	/* expanded desktop sidebar width, overridden once the user drags its edge */
 	--sidebar-width: 18rem;
+	--background: oklch(1 0 0);
+	--foreground: oklch(0.145 0 0);
+	--card: oklch(1 0 0);
+	--card-foreground: oklch(0.145 0 0);
+	--popover: oklch(1 0 0);
+	--popover-foreground: oklch(0.145 0 0);
+	--primary: oklch(0.205 0 0);
+	--primary-foreground: oklch(0.985 0 0);
+	--secondary: oklch(0.95 0 0);
+	--secondary-foreground: oklch(0.205 0 0);
+	--muted: oklch(0.97 0 0);
+	--muted-foreground: oklch(0.556 0 0);
+	--accent: oklch(0.95 0 0);
+	--accent-foreground: oklch(0.205 0 0);
+	--destructive: oklch(0.577 0.245 27.325);
+	--border: oklch(0.875 0 0);
+	--input: oklch(0.92 0 0);
+	--ring: oklch(0.708 0 0);
+	--chart-1: oklch(0.646 0.222 41.116);
+	--chart-2: oklch(0.6 0.118 184.704);
+	--chart-3: oklch(0.398 0.07 227.392);
+	--chart-4: oklch(0.828 0.189 84.429);
+	--chart-5: oklch(0.769 0.188 70.08);
+	--sidebar: oklch(0.985 0 0);
+	--sidebar-foreground: oklch(0.145 0 0);
+	--sidebar-primary: oklch(0.205 0 0);
+	--sidebar-primary-foreground: oklch(0.985 0 0);
+	--sidebar-accent: oklch(0.97 0 0);
+	--sidebar-accent-foreground: oklch(0.205 0 0);
+	--sidebar-border: oklch(0.922 0 0);
+	--sidebar-ring: oklch(0.708 0 0);
+	--code-background: oklch(0.985 0 0);
+	--code-foreground: oklch(0.145 0 0);
 	/* phone sidebar width, which the page slides aside to reveal */
 	--sidebar-reveal: min(80dvw, 20rem);
 	/* the desktop sidebar's muted/60 over the page, made opaque so the slid page's corners can match it */
@@ -72,31 +105,6 @@
 	--chat-form-area-offset: 2rem;
 	--chat-form-padding-top: 6rem;
 	--max-message-height: max(24rem, min(80dvh, calc(100dvh - var(--chat-form-area-height) - 12rem)));
-
-	/*
-	 * shadcn names, kept so the vendored components and their classes keep working.
-	 * They alias semantic tokens; new code uses the semantic names directly.
-	 */
-	--background: var(--background);
-	--foreground: var(--foreground);
-	--card: var(--card);
-	--card-foreground: var(--foreground);
-	--popover: var(--card);
-	--popover-foreground: var(--foreground);
-	--primary: var(--primary);
-	--primary-foreground: var(--primary-foreground);
-	--secondary: var(--accent);
-	--secondary-foreground: var(--foreground);
-	--muted: var(--muted);
-	--muted-foreground: var(--muted-foreground);
-	--accent: var(--accent);
-	--accent-foreground: var(--foreground);
-	--destructive: var(--destructive);
-	--border: var(--border);
-	--input: var(--input);
-	--ring: var(--ring);
-	--code-background: var(--code-background);
-	--code-foreground: var(--code-foreground);
 }
 
 /* iOS 26 gives an installed app with viewport-fit=cover and a translucent status bar a
@@ -122,6 +130,42 @@
 	}
 }
 
+.dark {
+	--background: oklch(0.16 0 0);
+	--foreground: oklch(0.985 0 0);
+	--card: oklch(0.205 0 0);
+	--card-foreground: oklch(0.985 0 0);
+	--popover: oklch(0.205 0 0);
+	--popover-foreground: oklch(0.985 0 0);
+	--primary: oklch(0.922 0 0);
+	--primary-foreground: oklch(0.205 0 0);
+	--secondary: oklch(0.29 0 0);
+	--secondary-foreground: oklch(0.985 0 0);
+	--muted: oklch(0.269 0 0);
+	--muted-foreground: oklch(0.708 0 0);
+	--accent: oklch(0.269 0 0);
+	--accent-foreground: oklch(0.985 0 0);
+	--destructive: oklch(0.704 0.191 22.216);
+	--border: oklch(1 0 0 / 30%);
+	--input: oklch(1 0 0 / 30%);
+	--ring: oklch(0.556 0 0);
+	--chart-1: oklch(0.488 0.243 264.376);
+	--chart-2: oklch(0.696 0.17 162.48);
+	--chart-3: oklch(0.769 0.188 70.08);
+	--chart-4: oklch(0.627 0.265 303.9);
+	--chart-5: oklch(0.645 0.246 16.439);
+	--sidebar: oklch(0.2 0 0);
+	--sidebar-foreground: oklch(0.985 0 0);
+	--sidebar-primary: oklch(0.488 0.243 264.376);
+	--sidebar-primary-foreground: oklch(0.985 0 0);
+	--sidebar-accent: oklch(0.269 0 0);
+	--sidebar-accent-foreground: oklch(0.985 0 0);
+	--sidebar-border: oklch(1 0 0 / 10%);
+	--sidebar-ring: oklch(0.556 0 0);
+	--code-background: oklch(0.225 0 0);
+	--code-foreground: oklch(0.875 0 0);
+}
+
 @theme inline {
 	--radius-sm: calc(var(--radius) - 4px);
 	--radius-md: calc(var(--radius) - 2px);
@@ -145,6 +189,19 @@
 	--color-border: var(--border);
 	--color-input: var(--input);
 	--color-ring: var(--ring);
+	--color-chart-1: var(--chart-1);
+	--color-chart-2: var(--chart-2);
+	--color-chart-3: var(--chart-3);
+	--color-chart-4: var(--chart-4);
+	--color-chart-5: var(--chart-5);
+	--color-sidebar: var(--sidebar);
+	--color-sidebar-foreground: var(--sidebar-foreground);
+	--color-sidebar-primary: var(--sidebar-primary);
+	--color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+	--color-sidebar-accent: var(--sidebar-accent);
+	--color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+	--color-sidebar-border: var(--sidebar-border);
+	--color-sidebar-ring: var(--sidebar-ring);
 }
 
 @layer base {
