@@ -1,7 +1,9 @@
+#include <algorithm>
 #include <filesystem>
 #include <set>
 #include <sstream>
 #include <string>
+#include <vector>
 
 #ifdef _WIN32
 #   define WIN32_LEAN_AND_MEAN
@@ -27,6 +29,13 @@
 #include "libdl.h"
 
 #include <domain.h>
+
+extern int opt_verbose;
+
+#ifndef HEX_VERBOSE
+#define HEX_VERBOSE(...) \
+    if (opt_verbose) GGML_LOG_DEBUG(__VA_ARGS__)
+#endif
 
 //
 // Driver API types
@@ -422,4 +431,189 @@ int htpdrv_get_arch(int domain, int * arch) {
     uint32_t val = arch_ver.capability & 0xff;
     *arch = (int) ((val >> 4) * 10 + (val & 0x0f));
     return 0;
+}
+
+// Directory of the HTP library as a path with a trailing slash, or empty if it cannot be resolved.
+// Checks GGML_HEXAGON_LIBHTP_DIR first, then the module directory and ../lib.
+// On Windows, non-ASCII directories or paths with spaces use the 8.3 short name.
+std::string htp_lib_dir() {
+    namespace fs = std::filesystem;
+
+    std::vector<fs::path> candidates;
+
+    const char * env_dir = getenv("GGML_HEXAGON_LIBHTP_DIR");
+    if (env_dir && *env_dir) {
+        std::error_code ec;
+        fs::path p = fs::absolute(env_dir, ec);
+        if (!ec) {
+            candidates.push_back(p);
+        }
+    }
+
+#ifdef _WIN32
+    HMODULE hm = nullptr;
+    if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCWSTR) &htp_lib_dir, &hm)) {
+        std::wstring buf(32768, L'\0');
+        DWORD n = GetModuleFileNameW(hm, buf.data(), (DWORD) buf.size());
+        if (n > 0 && n < buf.size()) {
+            buf.resize(n);
+            std::error_code ec;
+            fs::path mod_path = fs::canonical(buf, ec);
+            if (ec) {
+                mod_path = fs::absolute(buf, ec);
+            }
+            const fs::path mod_dir = mod_path.parent_path();
+            candidates.push_back(mod_dir);
+            candidates.push_back(mod_dir / "lib");
+            candidates.push_back(mod_dir / ".." / "lib");
+        }
+    }
+#elif defined(__linux__) || defined(__ANDROID__)
+    Dl_info info;
+    if (dladdr((void *) &htp_lib_dir, &info) && info.dli_fname) {
+        std::error_code ec;
+        fs::path mod_path = fs::canonical(info.dli_fname, ec);
+        if (ec) {
+            mod_path = fs::absolute(info.dli_fname, ec);
+        }
+        const fs::path mod_dir = mod_path.parent_path();
+        candidates.push_back(mod_dir);
+        candidates.push_back(mod_dir / "lib");
+        candidates.push_back(mod_dir / ".." / "lib");
+    }
+#endif
+
+    for (size_t i = 0; i < candidates.size(); ++i) {
+        const fs::path & d = candidates[i];
+        std::error_code ec;
+        if (!fs::is_directory(d, ec)) {
+            continue;
+        }
+
+        // For auto-discovered directories, verify it contains an HTP library
+        const bool is_env = (env_dir && i == 0);
+        if (!is_env) {
+            bool found = false;
+            for (const auto & entry : fs::directory_iterator(d, ec)) {
+                if (ec) {
+                    break;
+                }
+                const std::string fn = entry.path().filename().string();
+                if (fn.rfind("libggml-htp-", 0) == 0) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                continue;
+            }
+        }
+
+        std::error_code ec_canon;
+        fs::path abs_d = fs::canonical(d, ec_canon);
+        if (ec_canon) {
+            abs_d = fs::absolute(d, ec_canon);
+        }
+
+#ifdef _WIN32
+        std::wstring dir = abs_d.wstring();
+        auto is_ascii = [](const std::wstring & s) {
+            return std::all_of(s.begin(), s.end(), [](wchar_t c) { return c < 0x80; });
+        };
+        auto has_spaces = [](const std::wstring & s) {
+            return std::any_of(s.begin(), s.end(), [](wchar_t c) { return c == L' '; });
+        };
+
+        if (!is_ascii(dir) || has_spaces(dir)) {
+            DWORD m = GetShortPathNameW(dir.c_str(), nullptr, 0);
+            if (m > 0) {
+                std::wstring sp(m, L'\0');
+                DWORD res = GetShortPathNameW(dir.c_str(), sp.data(), (DWORD) sp.size());
+                if (res > 0 && res < sp.size()) {
+                    sp.resize(res);
+                    if (is_ascii(sp)) {
+                        dir = sp;
+                    }
+                }
+            }
+            if (!is_ascii(dir)) {
+                continue;
+            }
+        }
+        if (dir.back() != L'\\' && dir.back() != L'/') {
+            dir += L'\\';
+        }
+        return std::string(dir.begin(), dir.end());
+#else
+        std::string dir = abs_d.string();
+        if (dir.back() != '/') {
+            dir += '/';
+        }
+        return dir;
+#endif
+    }
+
+    return {};
+}
+
+int htpdrv_set_dsp_search_path(int domain_id, const std::string & path, const char * dev_name) {
+    if (path.empty()) {
+        return AEE_SUCCESS;
+    }
+
+    std::string clean_path = path;
+    while (clean_path.size() > 1 && (clean_path.back() == '/' || clean_path.back() == '\\')) {
+        clean_path.pop_back();
+    }
+
+    fastrpc_manage_dsp_lib_path p {};
+    p.effec_domain_id = domain_id;
+    p.type            = FASTRPC_SET_PATH;
+    p.path            = const_cast<char *>(clean_path.c_str());
+    p.pathlen         = clean_path.size() + 1;
+
+    int err = remote_session_control(FASTRPC_MANAGE_DSP_LIBRARY_PATH, (void *) &p, sizeof(p));
+    if (err != AEE_SUCCESS && domain_id != -1) {
+        p.effec_domain_id = -1;
+        err = remote_session_control(FASTRPC_MANAGE_DSP_LIBRARY_PATH, (void *) &p, sizeof(p));
+    }
+
+    const char * name = dev_name ? dev_name : "driver";
+    if (err == AEE_SUCCESS) {
+        GGML_LOG_INFO("ggml-hex: %s set DSP search path (domain %d) to %s\n", name, p.effec_domain_id, clean_path.c_str());
+        return AEE_SUCCESS;
+    }
+
+    HEX_VERBOSE("ggml-hex: %s FASTRPC_MANAGE_DSP_LIBRARY_PATH failed (0x%x)\n", name, err);
+    return err;
+}
+
+void htpdrv_set_dsp_env_path(const std::string & path, const char * dev_name) {
+    if (path.empty()) {
+        return;
+    }
+
+    std::string clean_path = path;
+    while (clean_path.size() > 1 && (clean_path.back() == '/' || clean_path.back() == '\\')) {
+        clean_path.pop_back();
+    }
+
+    const char * name = dev_name ? dev_name : "driver";
+    HEX_VERBOSE("ggml-hex: %s setting DSP search path via process env to %s\n", name, clean_path.c_str());
+
+    static const char * const env_names[] = {
+        "ADSP_LIBRARY_PATH",
+        "CDSP_LIBRARY_PATH",
+        "CDSP1_LIBRARY_PATH",
+        "CDSP2_LIBRARY_PATH",
+        "CDSP3_LIBRARY_PATH",
+    };
+    for (const char * env_name : env_names) {
+#ifdef _WIN32
+        SetEnvironmentVariableA(env_name, clean_path.c_str());
+#else
+        setenv(env_name, clean_path.c_str(), 1);
+#endif
+    }
 }

@@ -20,6 +20,7 @@ void quantize_q1_0(device const float * src, device block_q1_0 & dst) {
 }
 
 void quantize_q2_0(device const float * src, device block_q2_0 & dst) {
+#pragma METAL fp math_mode(safe)
     float amax = 0.0f;
     for (int j = 0; j < QK2_0; j++) {
         float a = fabs(src[j]);

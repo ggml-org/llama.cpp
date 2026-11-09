@@ -373,6 +373,9 @@ static const struct ggml_backend_buffer_i ggml_backend_et_buffer_i = {
     /* .cpy_tensor      = */ ggml_backend_et_buffer_cpy_tensor,
     /* .clear           = */ ggml_backend_et_buffer_clear,
     /* .reset           = */ NULL,
+    /* .set_tensor_n    = */ NULL,
+    /* .get_tensor_n    = */ NULL,
+    /* .cpy_tensor_n    = */ NULL,
 };
 
 static const char * ggml_backend_et_buffer_type_get_name(ggml_backend_buffer_type_t buft) {
@@ -1066,7 +1069,7 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 const bool zero_rot_offset  = ggml_get_op_params_i32(op, 15) == 0;
 
                 supported =
-                    zero_view_offset && zero_rot_offset && ndims <= 512 &&
+                    ggml_rope_get_truncate(op) && zero_view_offset && zero_rot_offset && ndims <= 512 &&
                     (is_normal || (is_neox && ndims % 16 == 0) || (is_imrope && ndims % 16 == 0 && has_sections));
             } else {
                 supported = false;
@@ -1270,7 +1273,7 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_FLASH_ATTN_EXT:
             if (op->type == GGML_TYPE_F32 && op->src[0] && op->src[0]->type == GGML_TYPE_F32 && op->src[1] &&
                 (op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_F16) && op->src[2] &&
-                (op->src[2]->type == GGML_TYPE_F32 || op->src[2]->type == GGML_TYPE_F16) && op->src[4] == nullptr &&
+                (op->src[2]->type == GGML_TYPE_F32 || op->src[2]->type == GGML_TYPE_F16) && op->src[4] == nullptr && op->src[5] == nullptr &&
                 ggml_is_contiguous_rows(op) && ggml_is_contiguous_rows(op->src[0])) {
                 float max_bias      = 0.0f;
                 float logit_softcap = 0.0f;
@@ -1296,7 +1299,7 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 const bool me_eligible = op->src[1]->type == GGML_TYPE_F16 && op->src[2]->type == GGML_TYPE_F16 &&
                                          (op->src[0]->ne[0] % 32) == 0;
 
-                supported = me_eligible && mask_ok && (prec == GGML_PREC_F32 || prec == GGML_PREC_DEFAULT) &&
+                supported = me_eligible && mask_ok && (prec == GGML_PREC_F32 || prec == GGML_PREC_BF16 || prec == GGML_PREC_DEFAULT) &&
                             max_bias == 0.0f && logit_softcap == 0.0f && op->src[0]->nb[0] == sizeof(float) &&
                             op->src[1]->nb[0] == k_elem && op->src[2]->nb[0] == v_elem && op->nb[0] == sizeof(float) &&
                             op->src[0]->ne[0] == op->src[1]->ne[0] &&  // dk matches

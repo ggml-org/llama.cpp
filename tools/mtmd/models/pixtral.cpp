@@ -1,6 +1,6 @@
 #include "models.h"
 
-ggml_cgraph * clip_graph_pixtral::build() {
+ggml_cgraph * mtmd_graph_pixtral::build() {
     const int n_merge = hparams.n_merge;
 
     // 2D input positions
@@ -12,7 +12,7 @@ ggml_cgraph * clip_graph_pixtral::build() {
     ggml_set_name(pos_w, "pos_w");
     ggml_set_input(pos_w);
 
-    auto add_pos = [&](ggml_tensor * cur, const clip_layer &) {
+    auto add_pos = [&](ggml_tensor * cur, const mtmd_layer &) {
         return build_rope_2d(ctx0, cur, pos_h, pos_w, hparams.rope_theta, true);
     };
 

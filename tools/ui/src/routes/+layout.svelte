@@ -13,7 +13,6 @@
 		HEADERS,
 		MODELS_ROUTE_ID,
 		NEW_CHAT_TAB_ID,
-		ROUTES,
 		SETTINGS_KEYS,
 		TOOLTIP_DELAY_DURATION
 	} from '$lib/constants';
@@ -47,12 +46,7 @@
 	let innerHeight = $state<number | undefined>();
 	let innerWidth = $state(browser ? window.innerWidth : 0);
 
-	let chatSidebar:
-		| {
-				activateSearchMode?: () => void;
-				editActiveConversation?: () => void;
-		  }
-		| undefined = $state();
+	let chatSidebar: { editActiveConversation?: () => void } | undefined = $state();
 
 	let showBuildVersion = $derived(
 		settingsStore.config[SETTINGS_KEYS.SHOW_BUILD_VERSION] as boolean
@@ -125,20 +119,6 @@
 		}
 	}
 
-	// navigating away from the new-chat screen drops its tab, so it does not
-	// linger once the user moves to a real conversation or another route
-	let previousChatId = $state<string | undefined>(undefined);
-
-	$effect(() => {
-		const id = page.params.id ?? (page.route.id === '/(chat)' ? NEW_CHAT_TAB_ID : undefined);
-		const prev = untrack(() => previousChatId);
-
-		previousChatId = id;
-
-		if (id !== prev && prev && settingsStore.config.conversationTabs && prev === NEW_CHAT_TAB_ID) {
-			untrack(() => tabsStore.removeTabs([NEW_CHAT_TAB_ID]));
-		}
-	});
 	// the models page returns to wherever it was reached from, by any kind of navigation
 	afterNavigate(() => uiStore.rememberModelsReturnRoute());
 
@@ -322,15 +302,7 @@
 
 <Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
 	<div class="flex flex-col md:flex-row">
-		<SidebarNavigation
-			onSearchClick={() => {
-				if (deviceStore.isMobile) {
-					goto(ROUTES.SEARCH);
-				} else if (chatSidebar?.activateSearchMode) {
-					chatSidebar.activateSearchMode();
-				}
-			}}
-		/>
+		<SidebarNavigation />
 
 		<!-- min-w-0 lets the chat column shrink below its content width, so wide
 		     code blocks and tables scroll inside their own containers instead of

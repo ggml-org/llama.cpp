@@ -2,6 +2,8 @@
 
 #include "json-schema-to-grammar.h"
 
+#include <unordered_set>
+
 namespace server_schema {
 
 //
@@ -246,6 +248,23 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
             if (ctx.params.sampling.dry_sequence_breakers.empty()) {
                 throw std::runtime_error("Error: dry_sequence_breakers must be a non-empty array of strings");
             }
+
+            // each distinct breaker costs a full vocabulary scan at sampler init, so dedupe before counting
+            std::unordered_set<std::string> seen;
+            std::vector<std::string> unique_breakers;
+
+            for (const auto & breaker : ctx.params.sampling.dry_sequence_breakers) {
+                if (seen.insert(breaker).second) {
+                    unique_breakers.push_back(breaker);
+                }
+            }
+
+            if (unique_breakers.size() > LLAMA_DRY_MAX_SEQ_BREAKERS) {
+                throw std::runtime_error(string_format(
+                    "Error: dry_sequence_breakers must contain at most %d distinct entries", LLAMA_DRY_MAX_SEQ_BREAKERS));
+            }
+
+            ctx.params.sampling.dry_sequence_breakers = std::move(unique_breakers);
         }));
 
     // handle both "json_schema" and "grammar"

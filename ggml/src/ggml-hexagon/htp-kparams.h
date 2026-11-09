@@ -7,15 +7,18 @@
 #include "htp/argsort-ops.h"
 #include "htp/binary-ops.h"
 #include "htp/concat-ops.h"
+#include "htp/conv2d-ops.h"
 #include "htp/cpy-ops.h"
 #include "htp/cumsum-ops.h"
 #include "htp/diag-ops.h"
+#include "htp/dsv4-hc-ops.h"
 #include "htp/fill-ops.h"
 #include "htp/flash-attn-ops.h"
 #include "htp/gated-delta-net-ops.h"
 #include "htp/get-rows-ops.h"
 #include "htp/glu-ops.h"
 #include "htp/im2col-ops.h"
+#include "htp/lightning-indexer-ops.h"
 #include "htp/matmul-ops.h"
 #include "htp/pad-ops.h"
 #include "htp/pool-ops.h"
@@ -27,13 +30,16 @@
 #include "htp/solve-tri-ops.h"
 #include "htp/ssm-conv.h"
 #include "htp/sum-rows-ops.h"
+#include "htp/top-k-mask-ops.h"
 #include "htp/unary-ops.h"
+#include "htp/upscale-ops.h"
 
 #include <type_traits>
 #include <utility>
 
 bool        htp_rows_stride(const int64_t * ne, const size_t * nb, size_t * stride);
 bool        htp_matmul_can_collapse(const struct ggml_tensor * src0, const struct ggml_tensor * src1, const struct ggml_tensor * dst);
+bool        htp_matmul_add_can_collapse(const struct ggml_tensor * src0, const struct ggml_tensor * src1, const struct ggml_tensor * src2, const struct ggml_tensor * dst);
 ggml_tensor htp_tensor_collapse_rows(const struct ggml_tensor * t);
 
 template <typename... Args>
@@ -44,6 +50,18 @@ static inline bool htp_kparams_check(Args &&... args) {
     decltype(htp_kparams_type(SolveFn)) kparams;
     return SolveFn(std::forward<Args>(args)..., &kparams);
 }
+
+struct htp_opnode;
+
+bool htp_kparams_solve(
+    const struct ggml_hexagon_session * sess,
+    struct htp_opnode & node
+);
+
+void htp_opnode_collapse(
+    const struct ggml_hexagon_session * sess,
+    struct htp_opnode & node
+);
 
 bool htp_kparams_solve(
     const struct ggml_hexagon_session * sess,
@@ -70,6 +88,14 @@ bool htp_kparams_solve_allreduce(
 );
 
 bool htp_kparams_solve_rms_norm_mul(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * src0,
+    const struct ggml_tensor * src1,
+    const struct ggml_tensor * dst,
+    struct htp_unary_kernel_params * kparams
+);
+
+bool htp_kparams_solve_rms_norm_mul_add(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * src0,
     const struct ggml_tensor * src1,
@@ -119,5 +145,20 @@ bool htp_kparams_solve_unary_mul_glu(
     const struct ggml_tensor * dst,
     struct htp_glu_kernel_params * kparams
 );
+
+bool htp_kparams_solve_upscale(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * src0,
+    const struct ggml_tensor * dst,
+    struct htp_upscale_kernel_params * kparams
+);
+
+static inline bool htp_kparams_solve_upscale(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * op,
+    struct htp_upscale_kernel_params * kparams
+) {
+    return htp_kparams_solve_upscale(sess, op->src[0], op, kparams);
+}
 
 #endif // HTP_KPARAMS_H
