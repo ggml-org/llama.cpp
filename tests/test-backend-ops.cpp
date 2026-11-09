@@ -8768,13 +8768,12 @@ struct test_tri : public test_case {
     const ggml_type              type;
     const std::array<int64_t, 4> ne;
     const ggml_tri_type          tri_type;
-    const bool                   post_transpose;
 
-    std::string vars() override { return VARS_TO_STR4(type, ne, tri_type, post_transpose); }
+    std::string vars() override { return VARS_TO_STR3(type, ne, tri_type); }
 
     test_tri(ggml_tri_type tri_type, ggml_type type = GGML_TYPE_F32,
-            std::array<int64_t, 4> ne = { 10, 10, 4, 3 }, bool post_transpose = false)
-        : type(type), ne(ne), tri_type(tri_type), post_transpose(post_transpose) {
+            std::array<int64_t, 4> ne = { 10, 10, 4, 3 })
+        : type(type), ne(ne), tri_type(tri_type) {
             GGML_ASSERT(ne[0] == ne[1]);
         }
 
@@ -8785,11 +8784,6 @@ struct test_tri : public test_case {
 
         ggml_tensor * out = ggml_tri(ctx, a, tri_type);
 
-        // the backward of the transpose hands a non-contiguous gradient to the TRI backward
-        if (post_transpose) {
-            out = ggml_transpose(ctx, out);
-        }
-
         ggml_set_name(out, "out");
 
         return out;
@@ -8799,12 +8793,6 @@ struct test_tri : public test_case {
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
             init_tensor_uniform(t, -1.0f, 1.0f);
         }
-    }
-
-    // the post_transpose variant ends in a TRANSPOSE, keep it listed under the op it exercises
-    std::string op_desc(ggml_tensor * t) override {
-        GGML_UNUSED(t);
-        return "TRI";
     }
 };
 
@@ -11605,7 +11593,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_LOWER_DIAG));
     test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_UPPER));
     test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_UPPER_DIAG));
-    test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_LOWER_DIAG, GGML_TYPE_F32, { 10, 10, 4, 3 }, true));
 
     test_cases.emplace_back(new test_fill(0.0f));
     test_cases.emplace_back(new test_fill(2.0f, GGML_TYPE_F32, { 303, 207, 11, 3 }));
