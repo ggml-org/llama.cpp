@@ -10,9 +10,11 @@
 	interface Props {
 		actions: MenuAction[];
 		kind: MenuKind;
+		/** Closes the menu, e.g. after a pick in a submenu. */
+		onClose: () => void;
 	}
 
-	let { actions, kind }: Props = $props();
+	let { actions, kind, onClose }: Props = $props();
 
 	// both kits wrap the same bits-ui menu parts, so the rows render alike
 	let Menu = $derived(kind === MenuKind.CONTEXT ? ContextMenu : DropdownMenu);
@@ -23,7 +25,9 @@
 		<Menu.Separator />
 	{/if}
 
-	{#if action.tooltip}
+	{#if action.submenu}
+		{@render action.submenu({ close: onClose, kind })}
+	{:else if action.tooltip}
 		<!-- a disabled item takes no pointer events, so the wrapper holds the hover -->
 		<Tooltip.Root>
 			<Tooltip.Trigger>
