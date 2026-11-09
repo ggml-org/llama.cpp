@@ -1007,6 +1007,7 @@ struct vk_device_struct {
     // [size_idx][kda] where size_idx: 0=d16, 1=d32, 2=d64, 3=d128
     vk_pipeline pipeline_gated_delta_net[4][2];
     vk_pipeline pipeline_gated_delta_net_cm;
+    vk_pipeline pipeline_gated_delta_net_cm_v32;
     vk_pipeline pipeline_gated_delta_net_cm_v128;
     vk_pipeline pipeline_ssm_scan_f32_d128;
     vk_pipeline pipeline_ssm_scan_f32_d256;

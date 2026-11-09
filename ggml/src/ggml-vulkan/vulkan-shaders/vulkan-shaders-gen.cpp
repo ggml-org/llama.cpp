@@ -1172,11 +1172,14 @@ void process_shaders() {
 #if defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT) && defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
     // VH=32: fits NVIDIA's 48 KiB shared limit
     string_to_spv("gated_delta_net_f32", "gated_delta_net_cm.comp", merge_maps(base_dict, {{"COOPMAT2", "1"}, {"VH", "32"}}), true, false, true);
+    string_to_spv("gated_delta_net_f32", "gated_delta_net_cm.comp", merge_maps(base_dict, {{"COOPMAT2", "1"}, {"V", "32"}}), true, false, true, false, "_v32");
     string_to_spv("gated_delta_net_f32", "gated_delta_net_cm.comp", merge_maps(base_dict, {{"COOPMAT2", "1"}, {"V", "128"}, {"VH", "32"}}), true, false, true, false, "_v128");
 #endif
 #if defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT) && defined(GGML_VULKAN_COOPMAT_MAINTENANCE1_GLSLC_SUPPORT)
     string_to_spv("gated_delta_net_f32", "gated_delta_net_cm.comp", merge_maps(base_dict, {{"BF16ACC", "1"}, {"SUBGROUP_SIZE", "64"}}), true, true, false, false, "_bf16acc_wave64");
     string_to_spv("gated_delta_net_f32", "gated_delta_net_cm.comp", merge_maps(base_dict, {{"SUBGROUP_SIZE", "64"}}), true, true, false, false, "_wave64");
+    string_to_spv("gated_delta_net_f32", "gated_delta_net_cm.comp", merge_maps(base_dict, {{"BF16ACC", "1"}, {"SUBGROUP_SIZE", "64"}, {"V", "32"}}), true, true, false, false, "_bf16acc_wave64_v32");
+    string_to_spv("gated_delta_net_f32", "gated_delta_net_cm.comp", merge_maps(base_dict, {{"SUBGROUP_SIZE", "64"}, {"V", "32"}}), true, true, false, false, "_wave64_v32");
     // whole-head V=128 variant: state mirror in a gmem scratch buffer (won't fit LDS).
     // For head counts that tail the CU grid at V=64 (e.g. 48-head 27B on 64 CUs).
     string_to_spv("gated_delta_net_f32", "gated_delta_net_cm.comp", merge_maps(base_dict, {{"BF16ACC", "1"}, {"SUBGROUP_SIZE", "64"}, {"GMEM_MIRROR", "1"}, {"V", "128"}}), true, true, false, false, "_bf16acc_wave64_v128");

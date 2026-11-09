@@ -3775,12 +3775,15 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             }
         }
 
-        // chunked coopmat GDN prefill: coopmat2 on NVIDIA, coopmat1 on RDNA4 (the scan wins on RDNA3)
+        // chunked coopmat GDN prefill: coopmat2 on NVIDIA, coopmat1 on AMD
         const bool gdn_chunked = getenv("GGML_VK_DISABLE_GDN_CHUNKED") == nullptr;
 #if defined(VK_NV_cooperative_matrix2) && defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT) && defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT)
         if (gdn_chunked && device->coopmat2 && device->coopmat2_bf16_support) {
             ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm,
                 "gated_delta_net_f32_cm2", gated_delta_net_f32_cm2_len, gated_delta_net_f32_cm2_data,
+                "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {}, 1, true, true, 32);
+            ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm_v32,
+                "gated_delta_net_f32_cm2_v32", gated_delta_net_f32_cm2_v32_len, gated_delta_net_f32_cm2_v32_data,
                 "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {}, 1, true, true, 32);
             ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm_v128,
                 "gated_delta_net_f32_cm2_v128", gated_delta_net_f32_cm2_v128_len, gated_delta_net_f32_cm2_v128_data,
@@ -3788,8 +3791,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         }
 #endif
 #if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT) && defined(GGML_VULKAN_COOPMAT_MAINTENANCE1_GLSLC_SUPPORT) && defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT)
-        if (gdn_chunked && device->architecture == vk_device_architecture::AMD_RDNA4 &&
-            device->coopmat_support && device->coopmat_bf16_support && device->coopmat_m1_per_element_ops &&
+        if (gdn_chunked && device->coopmat_support && device->coopmat_bf16_support && device->coopmat_m1_per_element_ops &&
             device->subgroup_size == 64) {
             const bool bf16acc = device->coopmat_bf16_acc_support;
             // V=64: state mirror in shared, 7 bindings
@@ -3797,6 +3799,11 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
                 bf16acc ? "gated_delta_net_f32_cm1_bf16acc_wave64" : "gated_delta_net_f32_cm1_wave64",
                 bf16acc ? gated_delta_net_f32_cm1_bf16acc_wave64_len : gated_delta_net_f32_cm1_wave64_len,
                 bf16acc ? (const void *)gated_delta_net_f32_cm1_bf16acc_wave64_data : (const void *)gated_delta_net_f32_cm1_wave64_data,
+                "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {}, 1, true, true, 64);
+            ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm_v32,
+                bf16acc ? "gated_delta_net_f32_cm1_bf16acc_wave64_v32" : "gated_delta_net_f32_cm1_wave64_v32",
+                bf16acc ? gated_delta_net_f32_cm1_bf16acc_wave64_v32_len : gated_delta_net_f32_cm1_wave64_v32_len,
+                bf16acc ? (const void *)gated_delta_net_f32_cm1_bf16acc_wave64_v32_data : (const void *)gated_delta_net_f32_cm1_wave64_v32_data,
                 "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {}, 1, true, true, 64);
             // V=128: state mirror in a gmem scratch buffer, 8 bindings
             ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm_v128,
@@ -10564,14 +10571,19 @@ void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& subctx, 
     const uint32_t s_off = S_v * H * n_tokens * n_seqs;
 
     const ggml_tensor * src_g = dst->src[3];
+    // RDNA3: the scan is faster below ~4k tokens
+    const uint32_t cm_min_tokens = ctx->device->architecture == AMD_RDNA3 ? 4096u : 64u;
     const bool use_cm = ctx->device->pipeline_gated_delta_net_cm != nullptr &&
-        src_g->ne[0] == 1 && S_v == 128 && dst->src[0]->ne[0] == 128 && K == 1 && n_tokens >= 64;
+        src_g->ne[0] == 1 && S_v == 128 && dst->src[0]->ne[0] == 128 && K == 1 && n_tokens >= cm_min_tokens;
 
+    bool use_v32  = false;
     bool use_v128 = false;
-    if (use_cm && ctx->device->pipeline_gated_delta_net_cm_v128 != nullptr) {
-        const uint32_t nsm = ctx->device->shader_core_count;
-        if (nsm != 0) {
-            const uint32_t wg64  = 2u * H * n_seqs;
+    const uint32_t nsm = ctx->device->shader_core_count;
+    if (use_cm && nsm != 0) {
+        const uint32_t wg64 = 2u * H * n_seqs;
+        // V=32 only pays off while V=64 leaves at least half the cores idle
+        use_v32 = ctx->device->pipeline_gated_delta_net_cm_v32 != nullptr && 2u * wg64 <= nsm;
+        if (!use_v32 && ctx->device->pipeline_gated_delta_net_cm_v128 != nullptr) {
             const uint32_t wg128 = H * n_seqs;
             const uint32_t waves64  = (wg64  + nsm - 1) / nsm;
             const uint32_t waves128 = (wg128 + nsm - 1) / nsm;
@@ -10580,11 +10592,12 @@ void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& subctx, 
         }
     }
 
-    const uint32_t cm_V     = use_v128 ? 128u : GGML_VK_GDN_CM_V;
+    const uint32_t cm_V     = use_v128 ? 128u : (use_v32 ? 32u : GGML_VK_GDN_CM_V);
     const bool     cm_gmem  = use_v128 && !ctx->device->coopmat2;
 
     vk_pipeline pipeline = use_v128
         ? ctx->device->pipeline_gated_delta_net_cm_v128
+        : use_v32 ? ctx->device->pipeline_gated_delta_net_cm_v32
         : (use_cm ? ctx->device->pipeline_gated_delta_net_cm
                    : ggml_vk_op_get_pipeline(ctx, dst->src[0], dst->src[1], dst->src[2], dst, dst->op));
     GGML_ASSERT(pipeline != nullptr);
