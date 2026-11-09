@@ -15,6 +15,7 @@
 		ServerLoadingSplash
 	} from '$lib/components/app';
 	import {
+		CHAT_FORM_BOTTOM_OFFSET,
 		CHAT_FORM_MOVE_IN_EASING,
 		CHAT_FORM_MOVE_IN_MS,
 		CHAT_FORM_MOVE_OUT_EASING,
@@ -58,13 +59,13 @@
 	let hasPropsError = $derived(!!serverStore.error);
 	let isCurrentConversationLoading = $derived(chatStore.isLoading || chatStore.isStreaming());
 	let chatFormBottomPosition = $derived.by(() => {
-		if (!deviceStore.isMobile) return '1rem';
+		if (!deviceStore.isMobile) return CHAT_FORM_BOTTOM_OFFSET.desktop;
 
-		if (deviceStore.isStandalone) return '1.5rem';
+		if (deviceStore.isStandalone) return CHAT_FORM_BOTTOM_OFFSET.installedApp;
 
-		if (deviceStore.isIOSSafari) return '0.5rem';
+		if (deviceStore.isIOSSafari) return CHAT_FORM_BOTTOM_OFFSET.iosSafari;
 
-		return '0.75rem';
+		return CHAT_FORM_BOTTOM_OFFSET.phoneBrowser;
 	});
 
 	// The page is the scroller: it follows new content while the reader sits at

@@ -13,6 +13,7 @@ export * from './storage.constants';
 export * from './icons.constants';
 export * from './attachment-menu.constants';
 export * from './auto-scroll.constants';
+export * from './context-gauge-dial.constants';
 export * from './context-gauge-popup.constants';
 export * from './conversation-import.constants';
 export * from './binary-detection.constants';

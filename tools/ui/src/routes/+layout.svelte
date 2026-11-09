@@ -443,9 +443,9 @@
 
 	<Toaster closeButton richColors />
 
-	<!-- loaded on demand, so it stays out of the production bundle -->
+	<!-- a debug tool, kept with the tests and loaded on demand, so it stays out of the production bundle -->
 	{#if import.meta.env.DEV && import.meta.env.VITE_DEBUG}
-		{#await import('$lib/components/app/misc/ViewportProbe.svelte') then { default: ViewportProbe }}
+		{#await import('../../tests/debug/ViewportProbe.svelte') then { default: ViewportProbe }}
 			<ViewportProbe />
 		{/await}
 	{/if}

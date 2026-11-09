@@ -122,6 +122,8 @@ export const SIDEBAR_OVERSTRETCH_PX = 80;
 export const SIDEBAR_SETTLE_MS = 300;
 /** Duration of the sidebar's open and close slide, matching its `duration-200` transition. */
 export const SIDEBAR_TOGGLE_MS = 200;
+/** The sidebar's contents fading out while a phone's full-screen search covers them, and back in. */
+export const SIDEBAR_CONTENT_FADE_MS = 200;
 
 /** Phone sidebar reveal: the page slides aside by this share of the screen, up to the max width. */
 export const SIDEBAR_REVEAL_RATIO = 0.8;

@@ -19,6 +19,7 @@
 		ROUTES,
 		SIDEBAR_COLLAPSE_WIDTH,
 		SIDEBAR_COLLAPSED_WIDTH,
+		SIDEBAR_CONTENT_FADE_MS,
 		SIDEBAR_MAX_WIDTH,
 		SIDEBAR_MIN_WIDTH,
 		SIDEBAR_OVERSTRETCH_PX,
@@ -600,8 +601,8 @@
 			</div>
 
 			<div
-				in:fade={{ duration: 200 }}
-				out:fade={{ duration: 200 }}
+				in:fade={{ duration: SIDEBAR_CONTENT_FADE_MS }}
+				out:fade={{ duration: SIDEBAR_CONTENT_FADE_MS }}
 				class="mt-2 flex min-h-0 flex-1 flex-col gap-4 md:gap-1 md:transition-opacity md:duration-150 md:ease-out {isStripHidden
 					? 'md:opacity-0 md:invisible'
 					: ''}"
