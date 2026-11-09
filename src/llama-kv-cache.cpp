@@ -79,9 +79,10 @@ llama_kv_cache::llama_kv_cache(
     const layer_filter_cb & filter,
     const  layer_reuse_cb & reuse,
     const  layer_share_cb & share,
-               const char * name_tag) :
+               const char * name_tag,
+                     bool   is_indexer) :
     model(model), hparams(hparams), v_trans(v_trans),
-    n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_swa(n_swa),
+    n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_swa(n_swa), is_indexer(is_indexer),
     attn_rot_bufs(no_alloc), swa_type(swa_type), ctxs_bufs(no_alloc),
     other(static_cast<llama_kv_cache *>(mem_other)),
     v_cells_impl(other ? other->v_cells_impl : std::make_shared<llama_kv_cells_vec>()),
@@ -1413,7 +1414,8 @@ uint32_t llama_kv_cache::get_n_kv_rows(const llama_ubatch & ubatch) const {
     }
 
     // pad like n_kv so that the graph can be reused
-    return std::min(GGML_PAD(n_max, n_pad_cur), get_size());
+    // never 0, it means that kv_rows are not used (f.ex. the sequences have no cells yet in a cache that shares the cells of another one)
+    return std::min(std::max(n_pad_cur, GGML_PAD(n_max, n_pad_cur)), get_size());
 }
 
 ggml_tensor * llama_kv_cache::get_k(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const {
@@ -1682,6 +1684,9 @@ struct args_set_input_attn_mask {
 
     // cell of each mask column per stream, nullptr if the columns are the cells
     const int32_t * rows;
+
+    // every token of a sequence reuses the mask row of the first one (dspark draft blocks)
+    bool block_uniform;
 };
 
 template<typename T, bool causal, bool swa, bool is_2d, bool alibi>
@@ -1708,10 +1713,15 @@ static void set_input_attn_mask_impl(const args_set_input_attn_mask & args, T * 
     llama_pos seq_pos_min[LLAMA_MAX_SEQ];
     std::fill(seq_pos_min, seq_pos_min + LLAMA_MAX_SEQ, INT32_MAX);
 
+    // first token of each sequence, used when the mask rows are shared within a sequence
+    uint32_t seq_first[LLAMA_MAX_SEQ];
+    std::fill(seq_first, seq_first + LLAMA_MAX_SEQ, ubatch->n_tokens);
+
     for (uint32_t i = 0; i < ubatch->n_tokens; ++i) {
         const llama_seq_id seq_id = ubatch->seq_id[i][0];
 
         seq_pos_min[seq_id] = std::min(seq_pos_min[seq_id], ubatch->pos[i]);
+        seq_first[seq_id]   = std::min(seq_first[seq_id],   i);
     }
 
     for (uint32_t s = 0; s < n_stream; ++s) {
@@ -1728,12 +1738,15 @@ static void set_input_attn_mask_impl(const args_set_input_attn_mask & args, T * 
 
             const auto & cells = v_cells.at(seq_to_stream[seq_id]);
 
+            // shared mask rows: every query of the sequence uses the row of its first token
+            const uint32_t iq = args.block_uniform ? seq_first[seq_id] : i;
+
                   llama_pos p0 = -1;
-            const llama_pos p1 = ubatch->pos[i];
+            const llama_pos p1 = ubatch->pos[iq];
 
             // for M-RoPE
-            const llama_pos p1_x = is_2d ? ubatch->pos[i + ubatch->n_tokens*2] : 0;
-            const llama_pos p1_y = is_2d ? ubatch->pos[i + ubatch->n_tokens]   : 0;
+            const llama_pos p1_x = is_2d ? ubatch->pos[iq + ubatch->n_tokens*2] : 0;
+            const llama_pos p1_y = is_2d ? ubatch->pos[iq + ubatch->n_tokens]   : 0;
 
             const uint64_t idst = n_kv*i;
 
@@ -1940,6 +1953,7 @@ void llama_kv_cache::set_input_attn_mask(const llm_attn_mask & attn_mask, const 
             /*.n_stream         =*/ n_stream,
             /*.n_tps            =*/ n_tps,
             /*.rows             =*/ rows,
+            /*.block_uniform    =*/ attn_mask.block_uniform,
         };
 
         if (dst->type == GGML_TYPE_F16) {
@@ -2076,53 +2090,69 @@ size_t llama_kv_cache::size_v_bytes() const {
 ggml_tensor * llama_kv_cache::build_rope_shift(
         const llama_cparams & cparams,
                ggml_context * ctx,
-                ggml_tensor * cur,
+                ggml_tensor * k,
                 ggml_tensor * shift,
                 ggml_tensor * rot,
-                ggml_tensor * factors,
-                      float   freq_base,
-                      float   freq_scale,
                    uint32_t   il) const {
-    const auto & n_ctx_orig = cparams.n_ctx_orig_yarn;
+    const llama_rope_params rp = is_indexer ? model.get_rope_params_indexer(cparams, il) : model.get_rope_params(cparams, il);
 
-    const auto & yarn_ext_factor  = cparams.yarn_ext_factor;
-    const auto & yarn_beta_fast   = cparams.yarn_beta_fast;
-    const auto & yarn_beta_slow   = cparams.yarn_beta_slow;
-    const auto & yarn_attn_factor = cparams.yarn_attn_factor;
-
-    const auto & n_rot     = hparams.n_rot(il);
-    const auto & rope_type = hparams.rope_type == LLAMA_ROPE_TYPE_MROPE || hparams.rope_type == LLAMA_ROPE_TYPE_IMROPE
+    const auto rope_type = rp.type == LLAMA_ROPE_TYPE_MROPE || rp.type == LLAMA_ROPE_TYPE_IMROPE
                                 // @ngxson : this is a workaround
                                 // for M-RoPE, we want to rotate the whole vector when doing KV shift
                                 // a normal RoPE should work, we just need to use the correct ordering
                                 // ref: https://github.com/ggml-org/llama.cpp/pull/13870
                                 ? LLAMA_ROPE_TYPE_NEOX
-                                : hparams.rope_type;
-    ggml_tensor * tmp;
+                                : rp.type;
 
-    if (ggml_is_quantized(cur->type)) {
-        // dequantize to f32 -> RoPE -> quantize back
-        tmp = ggml_cast(ctx, cur, GGML_TYPE_F32);
+    const int64_t n_head_kv     = hparams.n_head_kv(il);
+    const int64_t n_embd_k_gqa  = hparams.n_embd_k_gqa(il);
+    const int64_t n_embd_head_k = hparams.n_embd_head_k(il);
+    const int64_t n_cells       = ggml_nelements(k)/n_embd_k_gqa;
 
-        // rotate back
-        tmp = llama_mul_mat_hadamard(ctx, tmp, rot);
+    if (!ggml_is_quantized(k->type) && !rot && !rp.k_norm) {
+        // we rotate only the n_rot dimensions
+        ggml_tensor * k_rope =
+            ggml_view_3d(ctx, k,
+                rp.n_rot, n_head_kv, n_cells,
+                ggml_row_size(k->type, n_embd_head_k),
+                ggml_row_size(k->type, n_embd_k_gqa),
+                ggml_row_size(k->type, rp.n_offs));
 
-        tmp = ggml_rope_ext(ctx, tmp,
-                shift, factors, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                yarn_ext_factor, yarn_attn_factor, yarn_beta_fast, yarn_beta_slow);
-
-        // rotate fwd
-        tmp = llama_mul_mat_hadamard(ctx, tmp, rot);
-
-        tmp = ggml_cpy(ctx, tmp, cur);
-    } else {
-        // we rotate only the first n_rot dimensions
-        tmp = ggml_rope_ext_inplace(ctx, cur,
-                shift, factors, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                yarn_ext_factor, yarn_attn_factor, yarn_beta_fast, yarn_beta_slow);
+        return ggml_rope_ext_inplace(ctx, k_rope,
+                shift, rp.factors, rp.n_rot, rope_type, rp.n_ctx_orig, rp.freq_base, rp.freq_scale,
+                rp.ext_factor, rp.attn_factor, rp.beta_fast, rp.beta_slow);
     }
 
-    return tmp;
+    // convert to f32 -> RoPE -> convert back, on whole rows as a head is not always a multiple of the block size
+    ggml_tensor * tmp = ggml_reshape_3d(ctx, ggml_cast(ctx, k, GGML_TYPE_F32), n_embd_head_k, n_head_kv, n_cells);
+
+    // rotate back
+    if (rot) {
+        tmp = llama_mul_mat_hadamard(ctx, tmp, rot);
+    }
+
+    // the RMS norm commutes with RoPE, but the weight does not
+    if (rp.k_norm) {
+        tmp = ggml_div(ctx, tmp, rp.k_norm);
+    }
+
+    tmp = ggml_rope_ext(ctx, tmp,
+            shift, rp.factors, rp.n_rot, rope_type, rp.n_ctx_orig, rp.freq_base, rp.freq_scale,
+            rp.ext_factor, rp.attn_factor, rp.beta_fast, rp.beta_slow);
+    if (rp.n_offs > 0) {
+        tmp = ggml_rope_set_offset(tmp, rp.n_offs);
+    }
+
+    if (rp.k_norm) {
+        tmp = ggml_mul(ctx, tmp, rp.k_norm);
+    }
+
+    // rotate fwd
+    if (rot) {
+        tmp = llama_mul_mat_hadamard(ctx, tmp, rot);
+    }
+
+    return ggml_cpy(ctx, tmp, k);
 }
 
 class llm_graph_input_k_shift : public llm_graph_input_i {
@@ -2166,26 +2196,7 @@ ggml_cgraph * llama_kv_cache::build_graph_shift(llm_graph_result * res, llama_co
             continue;
         }
 
-        const int64_t n_head_kv    = hparams.n_head_kv(il);
-        const int64_t n_embd_k_gqa = hparams.n_embd_k_gqa(il);
-
-        const auto n_rot         = hparams.n_rot(il);
-        const auto n_embd_head_k = hparams.n_embd_head_k(il);
-        const auto n_embd_nope   = hparams.n_lora_kv > 0 ? n_embd_head_k - n_rot : 0;
-
-        const float freq_base_l  = model.get_rope_freq_base (cparams, il);
-        const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
-
-        ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
-
-        ggml_tensor * k =
-            ggml_view_3d(ctx, layer.k,
-                n_rot, n_head_kv, get_size()*n_stream,
-                ggml_row_size(layer.k->type, n_embd_head_k),
-                ggml_row_size(layer.k->type, n_embd_k_gqa),
-                ggml_row_size(layer.k->type, n_embd_nope));
-
-        ggml_tensor * cur = build_rope_shift(cparams, ctx, k, inp->k_shift, layer.k_rot, rope_factors, freq_base_l, freq_scale_l, il);
+        ggml_tensor * cur = build_rope_shift(cparams, ctx, layer.k, inp->k_shift, layer.k_rot, il);
 
         ggml_build_forward_expand(gf, cur);
     }

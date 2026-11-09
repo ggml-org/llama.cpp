@@ -14,6 +14,7 @@
 #include "llama-sampler.h"
 #include "llama.h"
 
+#include <algorithm>
 #include <cinttypes>
 #include <cmath>
 #include <cstring>
@@ -201,7 +202,7 @@ llama_context::llama_context(
     }
 
     cparams.n_rs_seq = params.n_rs_seq;
-    if (cparams.n_rs_seq > 0 && !llm_arch_supports_rs_rollback(model.arch)) {
+    if (cparams.n_rs_seq > 0 && (!llm_arch_supports_rs_rollback(model.arch) || !hparams.causal_attn)) {
         LLAMA_LOG_DEBUG("%s: n_rs_seq=%u requested but model does not support recurrent partial rollback; clamping to 0\n",
                         __func__, cparams.n_rs_seq);
         cparams.n_rs_seq = 0;
@@ -332,6 +333,18 @@ llama_context::llama_context(
     cparams.flash_attn = params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED;
     cparams.auto_fa    = params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_AUTO;
 
+    // the KV cache is shared with ctx_other, so follow its flash attention setting instead of resolving it here:
+    // the probe disables it when the layers and the shared KV are on different devices, which breaks a quantized V cache
+    if (model.arch == LLM_ARCH_GEMMA4_ASSISTANT) {
+        const bool flash_attn_other = cparams.ctx_other->get_cparams().flash_attn;
+        if (!cparams.auto_fa && cparams.flash_attn != flash_attn_other) {
+            LLAMA_LOG_WARN("%s: flash_attn = %d does not match the context the KV cache is shared with, using %d\n",
+                    __func__, cparams.flash_attn, flash_attn_other);
+        }
+        cparams.flash_attn = flash_attn_other;
+        cparams.auto_fa    = false;
+    }
+
     cparams.fused_gdn_ar = true;
     cparams.fused_gdn_ch = true;
     cparams.auto_fgdn    = false;
@@ -378,7 +391,8 @@ llama_context::llama_context(
 
     cparams.op_offload     = params.op_offload;
     cparams.kv_unified     = params.kv_unified;
-    cparams.moe_cache_size = params.moe_cache_size;
+    cparams.moe_cache_size      = params.moe_cache_size;
+    cparams.moe_cache_cpu_share = params.moe_cache_cpu_share;
 
     // resolved after flash attention, see resolve_fused_ops()
     {
@@ -457,6 +471,22 @@ llama_context::llama_context(
                 throw std::runtime_error(format("failed to initialize %s backend", ggml_backend_dev_name(dev.dev)));
             }
             backends.emplace_back(backend);
+        }
+
+        // tensors of ctx_other (e.g. a shared KV cache) can be on devices that this model does not use
+        if (cparams.ctx_other) {
+            for (const auto & dev_other : llama_get_model(cparams.ctx_other)->devices) {
+                const bool found = std::any_of(model.devices.begin(), model.devices.end(),
+                        [&](const llama_device & dev) { return dev.dev == dev_other.dev; });
+                if (found) {
+                    continue;
+                }
+                ggml_backend_t backend = ggml_backend_dev_init(dev_other.dev, nullptr);
+                if (backend == nullptr) {
+                    throw std::runtime_error(format("failed to initialize %s backend", ggml_backend_dev_name(dev_other.dev)));
+                }
+                backends.emplace_back(backend);
+            }
         }
 
         // add ACCEL backends (such as BLAS)
@@ -583,7 +613,7 @@ llama_context::llama_context(
         }
 
         if (cparams.moe_cache_size > 0) {
-            moe_cache = std::make_unique<llama_moe_cache>(model, model.no_alloc(), backend_ptrs, backend_buft, cparams.moe_cache_size);
+            moe_cache = std::make_unique<llama_moe_cache>(model, model.no_alloc(), backend_ptrs, backend_buft, cparams.moe_cache_size, cparams.moe_cache_cpu_share);
         }
 
         sched_reserve();
@@ -2695,7 +2725,7 @@ void llama_context::output_reorder() {
 
 uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
     uint32_t res;
-    if (model.arch == LLM_ARCH_KIMI_K3 || model.arch == LLM_ARCH_GLM5_NEXT) {
+    if (model.arch == LLM_ARCH_KIMI_K3 || model.arch == LLM_ARCH_KIMI_K31 || model.arch == LLM_ARCH_GLM5_NEXT) {
         // the n_tokens*40 budget below is exhausted at ubatch 3840
         res = std::max<uint32_t>(n_tokens * 160, 64u * model.n_tensors());
     } else if (model.arch == LLM_ARCH_HRM_TEXT) {
@@ -2703,6 +2733,7 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
         res = std::max<uint32_t>(n_tokens * 80, 64u * model.n_tensors());
     } else if (model.arch == LLM_ARCH_QWEN3NEXT ||
         model.arch == LLM_ARCH_KIMI_LINEAR ||
+        model.arch == LLM_ARCH_METIS16 ||
         model.arch == LLM_ARCH_BAILINGMOE3 ||
         model.arch == LLM_ARCH_QWEN35 ||
         model.arch == LLM_ARCH_QWEN35MOE ||
@@ -2711,6 +2742,7 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
         model.arch == LLM_ARCH_QWEN4EXP ||
         model.arch == LLM_ARCH_DEEPSEEK4 ||
         model.arch == LLM_ARCH_DEEPSEEK41 ||
+        model.arch == LLM_ARCH_XING4_0 ||
         (model.arch == LLM_ARCH_DFLASH && model.hparams.dsv4_hc_mult > 0) ||
         model.arch == LLM_ARCH_NANBEIGE ||
         model.arch == LLM_ARCH_MINIMAX_01 ||
@@ -2879,7 +2911,7 @@ llm_graph_params llama_context::graph_params(
             const llama_memory_context_i * mctx,
                           llm_graph_type   gtype) const {
     return {
-        /*.arch        =*/ model.arch,
+        /*.model       =*/ &model,
         /*.hparams     =*/ model.hparams,
         /*.cparams     =*/ cparams,
         /*.ubatch      =*/ ubatch,
@@ -3320,7 +3352,8 @@ public:
         for (const auto & winfo : winfos) {
             auto * buft = ggml_backend_buffer_get_type(winfo.tensor->buffer);
 
-            const int64_t n = winfo.size/ggml_element_size(winfo.tensor);
+            GGML_ASSERT(winfo.size % ggml_type_size(winfo.tensor->type) == 0);
+            const int64_t n = winfo.size/ggml_type_size(winfo.tensor->type)*ggml_blck_size(winfo.tensor->type);
 
             auto & mbuf = mbufs_new[buft];
 
@@ -3451,7 +3484,8 @@ public:
         for (const auto & rinfo : rinfos) {
             auto * buft = ggml_backend_buffer_get_type(rinfo.tensor->buffer);
 
-            const int64_t n = rinfo.size/ggml_element_size(rinfo.tensor);
+            GGML_ASSERT(rinfo.size % ggml_type_size(rinfo.tensor->type) == 0);
+            const int64_t n = rinfo.size/ggml_type_size(rinfo.tensor->type)*ggml_blck_size(rinfo.tensor->type);
 
             auto & mbuf = mbufs_new[buft];
 
@@ -3523,8 +3557,8 @@ public:
 
                 const size_t n_copy = std::min(src_size - src_off, dst_size - dst_off);
 
-                const size_t   el   = ggml_element_size(src_t);
-                const int64_t n_el = (int64_t) (n_copy / el);
+                GGML_ASSERT(n_copy % ggml_type_size(src_t->type) == 0);
+                const int64_t n_el = n_copy / ggml_type_size(src_t->type) * ggml_blck_size(src_t->type);
 
                 auto * src_v = ggml_view_1d(ctx_scratch, src_t, n_el, src_off);
                 ggml_backend_view_init(src_v);
@@ -4240,6 +4274,7 @@ llama_context_params llama_context_default_params() {
         /*.type_k                      =*/ GGML_TYPE_F16,
         /*.type_v                      =*/ GGML_TYPE_F16,
         /*.moe_cache_size              =*/ 0,
+        /*.moe_cache_cpu_share         =*/ 0.0f,
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
         /*.embeddings                  =*/ false,

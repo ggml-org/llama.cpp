@@ -3,7 +3,7 @@
 #include "ggml.h"
 #include "ggml-cpp.h"
 #include "gguf.h"
-#include "clip.h"
+#include "mtmd.h"
 
 #include <array>
 #include <climits>
@@ -25,7 +25,7 @@
 #include <windows.h>
 #endif
 
-// Internal header for clip.cpp
+// !!! Internal header, to be used by mtmd only !!!
 
 #define MTMD_INTERNAL_HEADER
 
@@ -113,6 +113,11 @@
 #define KEY_GEN_AUDIO_PENALTY_LAST_N "clip.gen.audio.sampling.penalty_last_n"
 #define KEY_AUDIO_SUBSMPL_FACTOR   "clip.audio.subsampling_factor"
 
+// nemotron transcribe
+#define KEY_A_ROPE_DIMS            "clip.audio.rope_dims"
+#define KEY_A_SPK_N_BLOCK          "clip.audio.spk.block_count"
+#define KEY_A_SPK_N_HEAD           "clip.audio.spk.head_count"
+
 //
 // tensor name constants
 //
@@ -122,6 +127,7 @@
 #define TN_PATCH_EMBD      "v.patch_embd.weight"  // not rename tensor with ".0" postfix for backward compat
 #define TN_PATCH_EMBD_1    "v.patch_embd.weight.1"
 #define TN_PATCH_BIAS      "v.patch_embd.bias"
+#define TN_ROPE_FREQS      "v.rope_freqs.weight"
 #define TN_NORM_EMBD       "v.norm_embd.%s"
 #define TN_PATCH_NORM      "v.patch_norm.%d.%s"
 #define TN_ATTN_QKV        "%s.blk.%d.attn_qkv.%s"
@@ -255,6 +261,13 @@
 #define TN_A_GEN_CODE_HEAD_NORM "a.gen.code.head_norm.%s"
 #define TN_A_GEN_CODE_MASK_EMBD "a.gen.code.mask_embd"
 #define TN_ATTN_GATE            "%s.blk.%d.attn_gate.%s"
+
+// drama3 tower, the rest of the block uses the generic names with prefix "a.gen.code"
+#define TN_A_GEN_CODE_ENORM        "a.gen.code.blk.%d.enorm.%s"
+#define TN_A_GEN_CODE_HNORM        "a.gen.code.blk.%d.hnorm.%s"
+#define TN_A_GEN_CODE_EH_PROJ      "a.gen.code.blk.%d.eh_proj.%s"
+#define TN_A_GEN_CODE_BLK_EMBD     "a.gen.code.blk.%d.embd.%s"
+#define TN_A_GEN_CODE_BLK_OUT_NORM "a.gen.code.blk.%d.out_norm.%s"
 
 // qwen3tts code2wav (RVQ codes -> raw PCM)
 // pre_transformer layers use the generic TN_ATTN_*/TN_FFN_*/TN_LN_*/TN_LS_* macros, prefix "a.gen.wav.tfm"
@@ -469,38 +482,15 @@
 #define TN_CONV_NORM_MEAN        "%s.blk.%d.conv_norm_mean"
 #define TN_CONV_NORM_VAR         "%s.blk.%d.conv_norm_var"
 
+// nemotron transcribe
+#define TN_A_SPK_INP_PROJ        "a.spk.input_projection.%s"
+#define TN_A_SPK_HEAD            "a.spk.head.%s.%s" // proj, upsample, fc1, fc2
+#define TN_A_SPK_SIL_EMB         "a.spk.head.sil_emb"
+#define TN_A_FUSION_NORM         "a.fusion.%s.%s"   // asr_norm, spk_norm
+#define TN_A_FUSION_KERNEL       "a.fusion.spk_kernel"
+
 // align x to upper multiple of n
-#define CLIP_ALIGN(x, n) ((((x) + (n) - 1) / (n)) * (n))
-
-// sliding window KV cache of a causal audio encoder, see clip_enc_state_init()
-struct clip_enc_state {
-    int32_t n_ctx  = 0; // ring slots: attention window + frames per call
-    int32_t n_past = 0; // absolute position of the next frame
-
-    std::vector<int32_t> slot_pos;  // absolute position held by each slot, -1 if empty
-    std::vector<float>   stem_tail; // last conv stem output frame, empty on a cold start
-
-    ggml_context_ptr        ctx_data;
-    ggml_backend_buffer_ptr buf;
-    std::vector<ggml_tensor *> k; // per layer [n_embd_kv, n_ctx]
-    std::vector<ggml_tensor *> v;
-
-    // lfm3a: same order as list_lfm3a_state_slots(), F32 [ne0, ne1], updated in place
-    std::vector<ggml_tensor *> slots;
-};
-
-// per-sequence state of audio generation, see clip_gen_state_init()
-struct clip_gen_state {
-    std::mt19937 rng;
-
-    ggml_context_ptr        ctx_data;
-    ggml_backend_buffer_ptr buf;
-    std::vector<ggml_tensor *> slots; // same order as list_gen_state_slots(), F32 [ne0, ne1]
-};
-
-// forward declaration
-// TODO: improve this later
-struct clip_ctx;
+#define MTMD_ALIGN(x, n) ((((x) + (n) - 1) / (n)) * (n))
 
 enum projector_type {
     PROJECTOR_TYPE_MLP,
@@ -530,7 +520,7 @@ enum projector_type {
     PROJECTOR_TYPE_QWEN2A,
     PROJECTOR_TYPE_QWEN3A,
     PROJECTOR_TYPE_GLMA,
-    PROJECTOR_TYPE_QWEN25O, // will be replaced by QWEN2A or QWEN25VL depending on clip_ctx
+    PROJECTOR_TYPE_QWEN25O, // will be replaced by QWEN2A or QWEN25VL depending on mtmd_subcontext
     PROJECTOR_TYPE_VOXTRAL,
     PROJECTOR_TYPE_VOXTRAL_RT,
     PROJECTOR_TYPE_MERALION,
@@ -567,7 +557,9 @@ enum projector_type {
     PROJECTOR_TYPE_MINICPMV4_7,
     PROJECTOR_TYPE_MINICPM_OCR_1_0,
     PROJECTOR_TYPE_GRANITE_SPEECH,
+    PROJECTOR_TYPE_NEMOTRON_TRANSCRIBE,
     PROJECTOR_TYPE_MIMOVL,
+    PROJECTOR_TYPE_MAGEVL,
     PROJECTOR_TYPE_MINIMAX_M3,
     PROJECTOR_TYPE_GRANITE4_VISION,
     PROJECTOR_TYPE_MIMO_AUDIO,
@@ -577,10 +569,13 @@ enum projector_type {
     PROJECTOR_TYPE_POCKETTTS_GEN,
     PROJECTOR_TYPE_SOPRANO,
     PROJECTOR_TYPE_LFM3A_GEN,
+    PROJECTOR_TYPE_DRAMA3_GEN,
     PROJECTOR_TYPE_MUSE_GLIMMER,
     PROJECTOR_TYPE_SENSENOVA_U1,
     PROJECTOR_TYPE_COHERE2V,
     PROJECTOR_TYPE_MUSE_SPARK_AUDIO,
+    PROJECTOR_TYPE_CHATTERBOX,
+    PROJECTOR_TYPE_CHATTERBOX_SPKENC,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -647,7 +642,9 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_MINICPMV4_7,       "minicpmv4_7"},
     { PROJECTOR_TYPE_MINICPM_OCR_1_0,   "minicpm_ocr_1_0"},
     { PROJECTOR_TYPE_GRANITE_SPEECH,    "granite_speech"},
+    { PROJECTOR_TYPE_NEMOTRON_TRANSCRIBE, "nemotron_transcribe"},
     { PROJECTOR_TYPE_MIMOVL,            "mimovl"},
+    { PROJECTOR_TYPE_MAGEVL,            "magevl"},
     { PROJECTOR_TYPE_MINIMAX_M3,        "minimax_m3"},
     { PROJECTOR_TYPE_GRANITE4_VISION,   "granite4_vision"},
     { PROJECTOR_TYPE_MIMO_AUDIO,        "mimo_audio"},
@@ -658,13 +655,16 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_POCKETTTS_GEN,     "pockettts_gen"},
     { PROJECTOR_TYPE_SOPRANO,           "soprano"},
     { PROJECTOR_TYPE_LFM3A_GEN,         "lfm3a_gen"},
+    { PROJECTOR_TYPE_DRAMA3_GEN,        "drama3_gen"},
     { PROJECTOR_TYPE_MUSE_GLIMMER,      "muse-glimmer"},
     { PROJECTOR_TYPE_SENSENOVA_U1,      "sensenova_u1"},
     { PROJECTOR_TYPE_COHERE2V,          "cohere2v"},
     { PROJECTOR_TYPE_MUSE_SPARK_AUDIO,  "muse-spark-audio"},
+    { PROJECTOR_TYPE_CHATTERBOX,        "chatterbox"},
+    { PROJECTOR_TYPE_CHATTERBOX_SPKENC, "chatterbox_spkenc"},
 };
 
-static projector_type clip_projector_type_from_string(const std::string & str) {
+static projector_type projector_type_from_string(const std::string & str) {
     for (const auto & pair : PROJECTOR_TYPE_NAMES) {
         if (pair.second == str) {
             return pair.first;
@@ -673,13 +673,30 @@ static projector_type clip_projector_type_from_string(const std::string & str) {
     return PROJECTOR_TYPE_UNKNOWN;
 }
 
+struct mtmd_image_size {
+    int width;
+    int height;
+    bool operator==(const mtmd_image_size & other) const {
+        return width == other.width && height == other.height;
+    }
+    bool operator!=(const mtmd_image_size & other) const {
+        return !(*this == other);
+    }
+    int area() const {
+        // avoid overflow when computing area
+        GGML_ASSERT(width  >= 0 && width  <= 46000);
+        GGML_ASSERT(height >= 0 && height <= 46000);
+        return width * height;
+    }
+};
+
 // RGB uint8 image
-struct clip_image_u8 {
-    clip_image_size get_size() const {
+struct mtmd_image_u8 {
+    mtmd_image_size get_size() const {
         return { nx, ny };
     }
 
-    void set_size(clip_image_size size, bool is_placeholder) {
+    void set_size(mtmd_image_size size, bool is_placeholder) {
         nx = size.width;
         ny = size.height;
         if (is_placeholder) {
@@ -695,7 +712,7 @@ struct clip_image_u8 {
 
     const std::vector<uint8_t> & get_ro_buf() const {
         if (is_placeholder()) {
-            throw std::runtime_error("this clip_image_u8 is a placeholder");
+            throw std::runtime_error("this mtmd_image_u8 is a placeholder");
         }
         return buf;
     }
@@ -742,20 +759,20 @@ struct clip_image_u8 {
 struct mtmd_serialization; // forward declaration
 
 // separators appended after the image tokens of one entry, as rows of v.tok_embd_sep
-enum clip_suffix_type : int32_t {
-    CLIP_SUFFIX_NONE = 0,
+enum mtmd_suffix_type : int32_t {
+    MTMD_SUFFIX_NONE = 0,
     // MiniCPM-V 4.7 tiles
-    CLIP_SUFFIX_MINICPMV_OV,       // </image>
-    CLIP_SUFFIX_MINICPMV_OV_SLICE, // </image><slice>
-    CLIP_SUFFIX_MINICPMV_SLICE,    // </slice><slice>
-    CLIP_SUFFIX_MINICPMV_ROW_END,  // </slice>\n<slice>
-    CLIP_SUFFIX_MINICPMV_LAST,     // </slice>
-    CLIP_SUFFIX_COUNT,
+    MTMD_SUFFIX_MINICPMV_OV,       // </image>
+    MTMD_SUFFIX_MINICPMV_OV_SLICE, // </image><slice>
+    MTMD_SUFFIX_MINICPMV_SLICE,    // </slice><slice>
+    MTMD_SUFFIX_MINICPMV_ROW_END,  // </slice>\n<slice>
+    MTMD_SUFFIX_MINICPMV_LAST,     // </slice>
+    MTMD_SUFFIX_COUNT,
 };
 
 // rows of v.tok_embd_sep for each suffix type
 // MiniCPM-V 4.7 rows (set by the converter): 0 = </image>, 1 = <slice>, 2 = </slice>, 3 = \n
-static inline const std::vector<int> & clip_suffix_rows(clip_suffix_type type) {
+static inline const std::vector<int> & mtmd_suffix_rows(mtmd_suffix_type type) {
     static const std::vector<int> none;
     static const std::vector<int> minicpmv_ov       = { 0 };
     static const std::vector<int> minicpmv_ov_slice = { 0, 1 };
@@ -763,12 +780,12 @@ static inline const std::vector<int> & clip_suffix_rows(clip_suffix_type type) {
     static const std::vector<int> minicpmv_row_end  = { 2, 3, 1 };
     static const std::vector<int> minicpmv_last     = { 2 };
     switch (type) {
-        case CLIP_SUFFIX_NONE:              return none;
-        case CLIP_SUFFIX_MINICPMV_OV:       return minicpmv_ov;
-        case CLIP_SUFFIX_MINICPMV_OV_SLICE: return minicpmv_ov_slice;
-        case CLIP_SUFFIX_MINICPMV_SLICE:    return minicpmv_slice;
-        case CLIP_SUFFIX_MINICPMV_ROW_END:  return minicpmv_row_end;
-        case CLIP_SUFFIX_MINICPMV_LAST:     return minicpmv_last;
+        case MTMD_SUFFIX_NONE:              return none;
+        case MTMD_SUFFIX_MINICPMV_OV:       return minicpmv_ov;
+        case MTMD_SUFFIX_MINICPMV_OV_SLICE: return minicpmv_ov_slice;
+        case MTMD_SUFFIX_MINICPMV_SLICE:    return minicpmv_slice;
+        case MTMD_SUFFIX_MINICPMV_ROW_END:  return minicpmv_row_end;
+        case MTMD_SUFFIX_MINICPMV_LAST:     return minicpmv_last;
         default: GGML_ABORT("invalid suffix type");
     }
 }
@@ -779,7 +796,7 @@ static inline const std::vector<int> & clip_suffix_rows(clip_suffix_type type) {
 //     Memory layout: RGBRGB...RGBRGB... (nt times)
 // For audio, only one channel is used, buf.size() == nx*ny
 //     nx will be n_frames and ny will be n_mel
-struct clip_image_f32 {
+struct mtmd_image_f32 {
     // marks the global view in e.g., DeepSeek-OCR Models
     bool add_viewsep = false;
     // appends a learned newline (or EOI) token after the image
@@ -789,7 +806,7 @@ struct clip_image_f32 {
     // depends on the chunk position, set at tokenize time (see mtmd_tokenizer::add_media)
     int32_t lead_pad = 0;
     // separators appended after the image tokens
-    clip_suffix_type suffix_type = CLIP_SUFFIX_NONE;
+    mtmd_suffix_type suffix_type = MTMD_SUFFIX_NONE;
 
     // tile grid of the image group this entry belongs to
     // llava-next "anyres" (Granite4 Vision): the whole grid is encoded and assembled in a single graph
@@ -806,14 +823,14 @@ struct clip_image_f32 {
     };
     anyres_info anyres;
 
-    clip_image_size get_size() const {
+    mtmd_image_size get_size() const {
         return { nx_, ny_ };
     }
 
     int nx() const { return nx_; }
     int ny() const { return ny_; }
 
-    void set_size(clip_image_size size, bool is_placeholder, bool is_audio) {
+    void set_size(mtmd_image_size size, bool is_placeholder, bool is_audio) {
         nx_ = size.width;
         ny_ = size.height;
         if (is_placeholder) {
@@ -831,7 +848,7 @@ struct clip_image_f32 {
         buf = new_buf;
     }
 
-    void from_u8(const clip_image_u8 & img) {
+    void from_u8(const mtmd_image_u8 & img) {
         auto size = img.get_size();
         nx_ = size.width;
         ny_ = size.height;
@@ -863,7 +880,7 @@ struct clip_image_f32 {
 
     const std::vector<float> & get_ro_buf() const {
         if (is_placeholder()) {
-            throw std::runtime_error("this clip_image_f32 is a placeholder");
+            throw std::runtime_error("this mtmd_image_f32 is a placeholder");
         }
         return buf;
     }
@@ -889,7 +906,7 @@ struct clip_image_f32 {
 
 // token area kept after removing the padding added by the anyres resize
 // ref: https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/models/llava_next/modeling_llava_next.py#L109
-static inline void clip_anyres_unpad(int cur_w, int cur_h, int orig_w, int orig_h,
+static inline void mtmd_anyres_unpad(int cur_w, int cur_h, int orig_w, int orig_h,
                                      int & off_x, int & off_y, int & out_w, int & out_h) {
     off_x = 0;
     off_y = 0;
@@ -931,21 +948,21 @@ static inline dsv4_block_layout dsv4_get_block_layout(int n_llm_w, int n_llm_h, 
 // logging
 //
 
-static void clip_log_callback_default(enum ggml_log_level level, const char * text, void * user_data) {
+static void mtmd_log_callback_default(enum ggml_log_level level, const char * text, void * user_data) {
     (void) level;
     (void) user_data;
     fputs(text, stderr);
     fflush(stderr);
 }
 
-struct clip_logger_state {
+struct mtmd_logger_state {
     ggml_log_callback log_callback;
     void * log_callback_user_data;
 };
 
-extern struct clip_logger_state g_logger_state;
+extern struct mtmd_logger_state g_logger_state;
 
-static void clip_log_internal_v(enum ggml_log_level level, const char * format, va_list args) {
+static void mtmd_log_internal_v(enum ggml_log_level level, const char * format, va_list args) {
     if (format == NULL) {
         return;
     }
@@ -965,31 +982,31 @@ static void clip_log_internal_v(enum ggml_log_level level, const char * format, 
     va_end(args_copy);
 }
 
-static void clip_log_internal(enum ggml_log_level level, const char * format, ...) {
+static void mtmd_log_internal(enum ggml_log_level level, const char * format, ...) {
     va_list args;
     va_start(args, format);
-    clip_log_internal_v(level, format, args);
+    mtmd_log_internal_v(level, format, args);
     va_end(args);
 }
 
-#define LOG_TRC(...) clip_log_internal(GGML_LOG_LEVEL_DEBUG, __VA_ARGS__)
-#define LOG_DBG(...) clip_log_internal(GGML_LOG_LEVEL_DEBUG, __VA_ARGS__)
-#define LOG_INF(...) clip_log_internal(GGML_LOG_LEVEL_INFO,  __VA_ARGS__)
-#define LOG_WRN(...) clip_log_internal(GGML_LOG_LEVEL_WARN,  __VA_ARGS__)
-#define LOG_ERR(...) clip_log_internal(GGML_LOG_LEVEL_ERROR, __VA_ARGS__)
-#define LOG_CNT(...) clip_log_internal(GGML_LOG_LEVEL_CONT,  __VA_ARGS__)
+#define LOG_TRC(...) mtmd_log_internal(GGML_LOG_LEVEL_DEBUG, __VA_ARGS__)
+#define LOG_DBG(...) mtmd_log_internal(GGML_LOG_LEVEL_DEBUG, __VA_ARGS__)
+#define LOG_INF(...) mtmd_log_internal(GGML_LOG_LEVEL_INFO,  __VA_ARGS__)
+#define LOG_WRN(...) mtmd_log_internal(GGML_LOG_LEVEL_WARN,  __VA_ARGS__)
+#define LOG_ERR(...) mtmd_log_internal(GGML_LOG_LEVEL_ERROR, __VA_ARGS__)
+#define LOG_CNT(...) mtmd_log_internal(GGML_LOG_LEVEL_CONT,  __VA_ARGS__)
 
 //
 // cpp wrappers
 //
 
-struct clip_image_f32_batch {
-    std::vector<clip_image_f32> entries;
+struct mtmd_image_f32_batch {
+    std::vector<mtmd_image_f32> entries;
     bool is_audio = false;
     bool is_video = false;
 
-    clip_image_f32_batch clone() const {
-        clip_image_f32_batch new_batch{
+    mtmd_image_f32_batch clone() const {
+        mtmd_image_f32_batch new_batch{
             /* entries  */ {},
             /* is_audio */ is_audio,
             /* is_video */ is_video,
@@ -1209,9 +1226,3 @@ static void print_tensor_data(ggml_tensor * t, uint8_t * data, int64_t n) {
     }
 }
 
-//
-// API used internally with mtmd
-//
-
-projector_type clip_get_projector_type(const struct clip_ctx * ctx);
-void clip_set_debug_output_embeddings(struct clip_ctx * ctx, bool debug);

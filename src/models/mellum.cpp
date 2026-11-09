@@ -88,24 +88,37 @@ void llama_model_mellum::load_arch_tensors(llama_model_loader & ml) {
     }
 }
 
+llama_rope_params llama_model_mellum::get_rope_params(const llama_cparams & cparams, int il) const {
+    auto res = llama_model::get_rope_params(cparams, il);
+
+    if (hparams.is_swa(il)) {
+        res.ext_factor  = 0.0f;
+        res.attn_factor = 1.0f;
+        res.beta_fast   = 32.0f;
+        res.beta_slow   = 1.0f;
+    }
+
+    return res;
+}
+
 std::unique_ptr<llm_graph_context> llama_model_mellum::build_arch_graph(const llm_graph_params & params) const {
     const bool iswa = hparams.swa_type == LLAMA_SWA_TYPE_STANDARD;
 
     if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
         if (iswa) {
-            return std::make_unique<graph_mtp<true>>(*this, params);
+            return std::make_unique<graph_mtp<true>>(params);
         }
-        return std::make_unique<graph_mtp<false>>(*this, params);
+        return std::make_unique<graph_mtp<false>>(params);
     }
 
     if (iswa) {
-        return std::make_unique<graph<true>>(*this, params);
+        return std::make_unique<graph<true>>(params);
     }
-    return std::make_unique<graph<false>>(*this, params);
+    return std::make_unique<graph<false>>(params);
 }
 
 template <bool iswa>
-llama_model_mellum::graph<iswa>::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_mellum::graph<iswa>::graph(const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
@@ -151,26 +164,8 @@ llama_model_mellum::graph<iswa>::graph(const llama_model & model, const llm_grap
             Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, nullptr, LLM_NORM_RMS, il);
             cb(Kcur, "Kcur_normed", il);
 
-            const bool is_swa = hparams.is_swa(il);
-
-            const float freq_base_l   = model.get_rope_freq_base(cparams, il);
-            const float freq_scale_l  = model.get_rope_freq_scale(cparams, il);
-            const float ext_factor_l  = is_swa ? 0.0f : ext_factor;
-            const float attn_factor_l = is_swa ? 1.0f : attn_factor;
-            const float beta_fast_l   = is_swa ? 32.0f : beta_fast;
-            const float beta_slow_l   = is_swa ? 1.0f  : beta_slow;
-
-            Qcur = ggml_rope_ext(
-                ctx0, Qcur, inp_pos, nullptr,
-                n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l
-                );
-
-            Kcur = ggml_rope_ext(
-                ctx0, Kcur, inp_pos, nullptr,
-                n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l
-                );
+            Qcur = build_rope(Qcur, inp_pos, il);
+            Kcur = build_rope(Kcur, inp_pos, il);
 
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);
@@ -246,7 +241,7 @@ llama_model_mellum::graph<iswa>::graph(const llama_model & model, const llm_grap
 }
 
 template <bool iswa>
-llama_model_mellum::graph_mtp<iswa>::graph_mtp(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_mellum::graph_mtp<iswa>::graph_mtp(const llm_graph_params & params) : llm_graph_context(params) {
     GGML_ASSERT(hparams.n_layer_nextn == 1 && "MELLUM MTP currently only supports a single MTP block");
 
     const int64_t n_embd_head = hparams.n_embd_head_v();
@@ -329,26 +324,8 @@ llama_model_mellum::graph_mtp<iswa>::graph_mtp(const llama_model & model, const 
         Kcur = build_norm(Kcur, layer.attn_k_norm, nullptr, LLM_NORM_RMS, il);
         cb(Kcur, "mtp_Kcur_normed", il);
 
-        const bool is_swa = hparams.is_swa(il);
-
-        const float freq_base_l   = model.get_rope_freq_base(cparams, il);
-        const float freq_scale_l  = model.get_rope_freq_scale(cparams, il);
-        const float ext_factor_l  = is_swa ? 0.0f : ext_factor;
-        const float attn_factor_l = is_swa ? 1.0f : attn_factor;
-        const float beta_fast_l   = is_swa ? 32.0f : beta_fast;
-        const float beta_slow_l   = is_swa ? 1.0f  : beta_slow;
-
-        Qcur = ggml_rope_ext(
-            ctx0, Qcur, inp_pos, nullptr,
-            n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-            ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l
-            );
-
-        Kcur = ggml_rope_ext(
-            ctx0, Kcur, inp_pos, nullptr,
-            n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-            ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l
-            );
+        Qcur = build_rope(Qcur, inp_pos, il);
+        Kcur = build_rope(Kcur, inp_pos, il);
 
         cb(Qcur, "mtp_Qcur", il);
         cb(Kcur, "mtp_Kcur", il);
