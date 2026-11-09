@@ -126,8 +126,8 @@ struct rpc_msg_hello_req {
 };
 
 // server feature flags in rpc_msg_hello_rsp::flags
-enum rpc_server_flags : uint8_t {
-    RPC_SERVER_FLAG_SEND_TENSOR_HASH = 1 << 0, // client should try SET_TENSOR_HASH before sending tensor data
+enum rpc_dispatcher_flags : uint8_t {
+    RPC_DISPATCHER_FLAGS_SEND_TENSOR_HASH = 1 << 0, // client should try SET_TENSOR_HASH before sending tensor data
 };
 
 struct rpc_msg_hello_rsp {
@@ -437,7 +437,7 @@ static inline void rpc_cpu_relax() {
 // Performs HELLO handshake with transport auto-negotiation.
 // Advertises local capabilities via conn_caps; if the server responds with
 // matching capabilities, the socket is upgraded transparently.
-static bool negotiate_hello(const std::shared_ptr<socket_t> & sock, bool & send_tensor_hash) {
+static bool negotiate_hello(const std::shared_ptr<socket_t> & sock, rpc_dispatcher_flags & flags) {
     rpc_msg_hello_req request = {};
     rpc_msg_hello_rsp response = {};
 
@@ -453,7 +453,7 @@ static bool negotiate_hello(const std::shared_ptr<socket_t> & sock, bool & send_
     }
 
     sock->update_caps(response.conn_caps);
-    send_tensor_hash = response.flags & RPC_SERVER_FLAG_SEND_TENSOR_HASH;
+    flags = (rpc_dispatcher_flags) response.flags;
     LOG_DBG("[%s] handshake ok: server version %d.%d.%d, transport: %s\n",
             __func__, response.major, response.minor, response.patch, sock->transport_name());
     return true;
@@ -533,7 +533,7 @@ public:
     void start(const std::string & endpoint);
     void work();
 
-    bool get_send_tensor_hash() const { return send_tensor_hash; }
+    bool get_send_tensor_hash() const { return flags & RPC_DISPATCHER_FLAGS_SEND_TENSOR_HASH; }
 
     ~rpc_dispatcher();
 
@@ -558,7 +558,7 @@ private:
     std::unordered_map<uint32_t, std::unordered_set<uint64_t>> graph_uids;
     rpc_msg_queue    queue;
     socket_ptr       sock;
-    bool             send_tensor_hash = false;
+    rpc_dispatcher_flags flags = {};
     std::atomic_uint busy_spin_users = 0;
     std::atomic_bool running;
     std::thread      thread;
@@ -688,7 +688,7 @@ void rpc_dispatcher::start(const std::string & endpoint) {
     if (sock == nullptr) {
         GGML_ABORT("Failed to connect to %s\n", endpoint.c_str());
     }
-    if (!negotiate_hello(sock, send_tensor_hash)) {
+    if (!negotiate_hello(sock, flags)) {
         GGML_ABORT("RPC handshake failed for %s\n", endpoint.c_str());
     }
     LOG_DBG("[%s] connected to %s\n", __func__, endpoint.c_str());
@@ -1517,7 +1517,7 @@ void rpc_server::hello(rpc_msg_hello_rsp & response) {
     response.major = RPC_PROTO_MAJOR_VERSION;
     response.minor = RPC_PROTO_MINOR_VERSION;
     response.patch = RPC_PROTO_PATCH_VERSION;
-    response.flags = cache_dir ? RPC_SERVER_FLAG_SEND_TENSOR_HASH : 0;
+    response.flags = cache_dir ? RPC_DISPATCHER_FLAGS_SEND_TENSOR_HASH : 0;
     LOG_DBG("[%s] version: %d.%d.%d\n", __func__, response.major, response.minor, response.patch);
 }
 
