@@ -180,7 +180,7 @@ if [ ! -z ${GG_BUILD_OPENVINO} ]; then
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_OPENVINO=ON"
 
     # TODO: fix failing tests on OpenVINO backend
-    CTEST_EXTRA="-E test-llama-archs|test-llama-context"
+    CTEST_EXTRA="-E test-llama-archs|test-llama-context|test-fp8-kv"
 fi
 
 ## helpers

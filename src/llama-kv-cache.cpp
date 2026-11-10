@@ -246,7 +246,7 @@ llama_kv_cache::llama_kv_cache(
 
         map_layer_ids[il] = layers.size();
 
-        layers.push_back({ il, k, v, k_stream, v_stream, });
+        layers.push_back({ il, k, v, model.layers[il].k_cache_s, model.layers[il].v_cache_s, k_stream, v_stream, });
     }
 
     if (reuse) {
@@ -1470,6 +1470,30 @@ ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_k
             ggml_row_size(v->type, kv_size*n_embd_v_gqa)*sinfo.s0);
 }
 
+static bool is_type_scaled(ggml_type type) {
+    return type == GGML_TYPE_F8_E4M3;
+}
+
+ggml_tensor * llama_kv_cache::get_k_scale(int32_t il) const {
+    if (!is_type_scaled(type_k())) {
+        return nullptr;
+    }
+
+    const int32_t ikv = map_layer_ids.at(il);
+
+    return layers[ikv].k_scale;
+}
+
+ggml_tensor * llama_kv_cache::get_v_scale(int32_t il) const {
+    if (!is_type_scaled(type_v())) {
+        return nullptr;
+    }
+
+    const int32_t ikv = map_layer_ids.at(il);
+
+    return layers[ikv].v_scale;
+}
+
 ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il, const slot_info & sinfo) const {
     GGML_UNUSED(sinfo);
 
@@ -2109,7 +2133,7 @@ ggml_tensor * llama_kv_cache::build_rope_shift(
     const int64_t n_embd_head_k = hparams.n_embd_head_k(il);
     const int64_t n_cells       = ggml_nelements(k)/n_embd_k_gqa;
 
-    if (!ggml_is_quantized(k->type) && !rot && !rp.k_norm) {
+    if (!ggml_is_quantized(k->type) && k->type != GGML_TYPE_F8_E4M3 && !rot && !rp.k_norm) {
         // we rotate only the n_rot dimensions
         ggml_tensor * k_rope =
             ggml_view_3d(ctx, k,
@@ -3047,6 +3071,14 @@ ggml_tensor * llama_kv_cache_context::get_k(ggml_context * ctx, int32_t il) cons
 
 ggml_tensor * llama_kv_cache_context::get_v(ggml_context * ctx, int32_t il) const {
     return kv->get_v(ctx, il, n_kv, sinfos[i_cur]);
+}
+
+ggml_tensor * llama_kv_cache_context::get_k_scale(int32_t il) const {
+    return kv->get_k_scale(il);
+}
+
+ggml_tensor * llama_kv_cache_context::get_v_scale(int32_t il) const {
+    return kv->get_v_scale(il);
 }
 
 ggml_tensor * llama_kv_cache_context::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const {
