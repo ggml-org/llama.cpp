@@ -170,6 +170,8 @@ static const char * cache_settings[] = {
     // GGML_OPENVINO_KV_SLICE only changes dynamic runtime bindings. Dynamic
     // attention graphs accept either shape and share the same compiled blob.
     "GGML_OPENVINO_GDN_NATIVE_STATE",
+    "GGML_OPENVINO_GDN_DECOMPOSE",
+    "GGML_OPENVINO_GDN_DECOMPOSE_CHUNK",
     "GGML_OPENVINO_MANUAL_GQA_ATTN",
     "GGML_OPENVINO_EXACT_ZERO_POINT",
     "GGML_OPENVINO_STATEFUL_EXECUTION",
@@ -364,6 +366,7 @@ uint64_t ggml_openvino_model_fingerprint(const ggml_cgraph * cgraph,
         const char * value = ggml_openvino_getenv_str(name, "");
         h = fnv1a(h, value, strlen(value) + 1);
     }
+    h = fnv1a_u64(h, ggml_openvino_gdn_decompose_enabled() ? ggml_openvino_gdn_decompose_chunk() : 0);
     if (const char * debug_nodes = ggml_openvino_getenv_str("GGML_OPENVINO_DEBUG_NODE")) {
         h = fnv1a(h, "GGML_OPENVINO_DEBUG_NODE", sizeof("GGML_OPENVINO_DEBUG_NODE"));
         h = fnv1a(h, debug_nodes, strlen(debug_nodes) + 1);

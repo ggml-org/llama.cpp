@@ -170,6 +170,8 @@ void ggml_openvino_device_config::init() {
         "GGML_OPENVINO_DISABLE_SHAPE_FROM_MASK",
         "GGML_OPENVINO_GDN_Q_SCALE",
         "GGML_OPENVINO_GDN_NATIVE_STATE",
+        "GGML_OPENVINO_GDN_DECOMPOSE",
+        "GGML_OPENVINO_GDN_DECOMPOSE_CHUNK",
         "GGML_OPENVINO_NPU_L0_HOST_TENSORS",
         "GGML_OPENVINO_KV_SLICE",
         "GGML_OPENVINO_NPU_HFA_PREFILL",
@@ -322,6 +324,35 @@ bool ggml_openvino_gdn_prescale_enabled() {
 bool ggml_openvino_gdn_native_state_enabled() {
     // only verified on NPU so far
     return ggml_openvino_is_npu() && ggml_openvino_getenv_int("GGML_OPENVINO_GDN_NATIVE_STATE") > 0;
+}
+
+bool ggml_openvino_npu_is_4000() {
+    if (!ggml_openvino_is_npu()) {
+        return false;
+    }
+    static const bool is_4000 = [] {
+        try {
+            return ov_singleton_core().get_property("NPU", "DEVICE_ARCHITECTURE").as<std::string>() == "4000";
+        } catch (...) {
+            return false;
+        }
+    }();
+    return is_4000;
+}
+
+bool ggml_openvino_gdn_decompose_enabled() {
+    if (ggml_openvino_getenv_str("GGML_OPENVINO_GDN_DECOMPOSE") != nullptr) {
+        return ggml_openvino_getenv_int("GGML_OPENVINO_GDN_DECOMPOSE") > 0;
+    }
+    return ggml_openvino_npu_is_4000();
+}
+
+int ggml_openvino_gdn_decompose_chunk() {
+    const int chunk = ggml_openvino_getenv_int("GGML_OPENVINO_GDN_DECOMPOSE_CHUNK");
+    if (chunk >= 2 && chunk <= 128 && (chunk & (chunk - 1)) == 0) {
+        return chunk;
+    }
+    return 16;
 }
 
 float ggml_openvino_gdn_q_scale() {
