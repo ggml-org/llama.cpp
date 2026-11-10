@@ -23,10 +23,31 @@ var<storage, read_write> dst: array<f32>;
 @group(0) @binding(7)
 var<storage, read_write> dst_fuse: array<f32>;
 #define DST_SNAP dst_fuse
-#define PARAMS_BINDING 8
+#define NEXT_BINDING 8
 #else
 #define DST_SNAP dst
-#define PARAMS_BINDING 7
+#define NEXT_BINDING 7
+#endif
+
+#ifdef REPLAY
+// pending tokens to run before the new ones (see ggml_gated_delta_net)
+@group(0) @binding(NEXT_BINDING)
+var<storage, read_write> pend_k: array<f32>;
+
+@group(0) @binding(NEXT_BINDING + 1)
+var<storage, read_write> pend_v: array<f32>;
+
+@group(0) @binding(NEXT_BINDING + 2)
+var<storage, read_write> pend_gb: array<f32>;
+
+@group(0) @binding(NEXT_BINDING + 3)
+var<storage, read_write> n_rep: array<i32>;
+
+var<workgroup> wg_n_rep: u32;
+
+#define PARAMS_BINDING (NEXT_BINDING + 4)
+#else
+#define PARAMS_BINDING NEXT_BINDING
 #endif
 
 struct Params {
@@ -53,6 +74,21 @@ struct Params {
     scale: f32,
     dst_fuse_nb2: u32,
     dst_fuse_off: u32,
+
+    n_pend: u32,
+    keep: u32,
+
+    spk1: u32,
+    spk2: u32,
+    spk3: u32,
+
+    spv1: u32,
+    spv2: u32,
+    spv3: u32,
+
+    spg1: u32,
+    spg2: u32,
+    spg3: u32,
 };
 
 @group(0) @binding(PARAMS_BINDING)
@@ -91,6 +127,66 @@ fn main(
     for (var i = 0u; i < S_V; i++) {
         state[i] = src_state[state_in_base + col * S_V + i];
     }
+
+#ifdef REPLAY
+    if (col == 0u) {
+        wg_n_rep = u32(n_rep[seq_id]);
+    }
+    let n_r = workgroupUniformLoad(&wg_n_rep);
+
+    for (var t = 0u; t < n_r; t++) {
+        let k_off = seq_id * params.spk3 + t * params.spk2 + iq1 * params.spk1;
+        let v_off = seq_id * params.spv3 + t * params.spv2 + head_id * params.spv1;
+        let g_off = seq_id * params.spg3 + t * params.spg2 + head_id * params.spg1;
+
+        sh_k[col] = pend_k[k_off + col];
+
+#ifdef KDA
+        sh_g[col] = exp(pend_gb[g_off + col]);
+#endif
+
+        workgroupBarrier();
+
+        let v_val = pend_v[v_off + col];
+        let beta_val = pend_gb[g_off + params.n_pend * params.spg2];
+
+        // same update as below, without the attention output
+        var kv_col = 0.0;
+        var delta_col = 0.0;
+
+#ifdef KDA
+        for (var i = 0u; i < S_V; i++) {
+            kv_col += (sh_g[i] * state[i]) * sh_k[i];
+        }
+
+        delta_col = (v_val - kv_col) * beta_val;
+
+        for (var i = 0u; i < S_V; i++) {
+            state[i] = sh_g[i] * state[i] + sh_k[i] * delta_col;
+        }
+#else
+        let g_val = exp(pend_gb[g_off]);
+
+        for (var i = 0u; i < S_V; i++) {
+            kv_col += state[i] * sh_k[i];
+        }
+
+        delta_col = (v_val - g_val * kv_col) * beta_val;
+
+        for (var i = 0u; i < S_V; i++) {
+            state[i] = g_val * state[i] + sh_k[i] * delta_col;
+        }
+#endif
+
+        workgroupBarrier();
+    }
+
+    if (params.keep != 0u) {
+        for (var i = 0u; i < S_V; i++) {
+            DST_SNAP[snap_off + state_out_base + col * S_V + i] = state[i];
+        }
+    }
+#endif
 
     var attn_off = (seq_id * params.n_tokens * params.h + head_id) * S_V;
 
@@ -160,7 +256,14 @@ fn main(
         workgroupBarrier();
     }
 
-    if (params.K == 1u) {
+#ifdef REPLAY
+    // replay with keep: the state output is the state after the replay
+    let write_state = params.K == 1u && params.keep == 0u;
+#else
+    let write_state = params.K == 1u;
+#endif
+
+    if (write_state) {
         for (var i = 0u; i < S_V; i++) {
             DST_SNAP[snap_off + state_out_base + col * S_V + i] = state[i];
         }
