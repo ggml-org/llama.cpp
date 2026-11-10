@@ -78,22 +78,26 @@ int main() {
         ggml_set_f32(assistant->layers[0].k_cache_s, 2.0f);
         ggml_set_f32(assistant->layers[0].v_cache_s, 4.0f);
 
-        llama_kv_cache source(*target, false, target->hparams, GGML_TYPE_F8_E4M3, GGML_TYPE_F8_E4M3,
-                false, false, true, 32, 1, 0, LLAMA_SWA_TYPE_NONE, nullptr, nullptr,
-                [](uint32_t il) { return il == 0 ? 2 : -1; }, nullptr);
-        llama_kv_cache shared(*assistant, false, assistant->hparams, GGML_TYPE_F8_E4M3, GGML_TYPE_F8_E4M3,
-                false, false, true, 32, 1, 0, LLAMA_SWA_TYPE_NONE, &source, nullptr, nullptr,
-                [](int32_t il) { return il == 0 ? 2 : 1; });
+        for (ggml_type type_k : { GGML_TYPE_F16, GGML_TYPE_F8_E4M3 }) {
+            for (ggml_type type_v : { GGML_TYPE_F16, GGML_TYPE_F8_E4M3 }) {
+                llama_kv_cache source(*target, false, target->hparams, type_k, type_v,
+                        false, false, true, 32, 1, 0, LLAMA_SWA_TYPE_NONE, nullptr, nullptr,
+                        [](uint32_t il) { return il == 0 ? 2 : -1; }, nullptr);
+                llama_kv_cache shared(*assistant, false, assistant->hparams, type_k, type_v,
+                        false, false, true, 32, 1, 0, LLAMA_SWA_TYPE_NONE, &source, nullptr, nullptr,
+                        [](int32_t il) { return il == 0 ? 2 : 1; });
 
-        GGML_ASSERT(source.get_k_scale(2) == target->layers[2].k_cache_s);
-        GGML_ASSERT(source.get_v_scale(2) == target->layers[2].v_cache_s);
-        GGML_ASSERT(source.get_k_scale(0) == source.get_k_scale(2));
-        GGML_ASSERT(source.get_v_scale(0) == source.get_v_scale(2));
-        GGML_ASSERT(shared.get_k_storage(0) == source.get_k_storage(2));
-        GGML_ASSERT(shared.get_k_scale(0) == source.get_k_scale(2));
-        GGML_ASSERT(shared.get_v_scale(0) == source.get_v_scale(2));
-        GGML_ASSERT(shared.get_k_scale(1) == nullptr);
-        GGML_ASSERT(shared.get_v_scale(1) == nullptr);
+                GGML_ASSERT(source.get_k_scale(2) == (type_k == GGML_TYPE_F8_E4M3 ? target->layers[2].k_cache_s : nullptr));
+                GGML_ASSERT(source.get_v_scale(2) == (type_v == GGML_TYPE_F8_E4M3 ? target->layers[2].v_cache_s : nullptr));
+                GGML_ASSERT(source.get_k_scale(0) == source.get_k_scale(2));
+                GGML_ASSERT(source.get_v_scale(0) == source.get_v_scale(2));
+                GGML_ASSERT(shared.get_k_storage(0) == source.get_k_storage(2));
+                GGML_ASSERT(shared.get_k_scale(0) == source.get_k_scale(2));
+                GGML_ASSERT(shared.get_v_scale(0) == source.get_v_scale(2));
+                GGML_ASSERT(shared.get_k_scale(1) == nullptr);
+                GGML_ASSERT(shared.get_v_scale(1) == nullptr);
+            }
+        }
     }
 
     llama_backend_free();

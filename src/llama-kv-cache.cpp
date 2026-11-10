@@ -1470,13 +1470,25 @@ ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_k
             ggml_row_size(v->type, kv_size*n_embd_v_gqa)*sinfo.s0);
 }
 
+static bool is_type_scaled(ggml_type type) {
+    return type == GGML_TYPE_F8_E4M3;
+}
+
 ggml_tensor * llama_kv_cache::get_k_scale(int32_t il) const {
+    if (!is_type_scaled(type_k())) {
+        return nullptr;
+    }
+
     const int32_t ikv = map_layer_ids.at(il);
 
     return layers[ikv].k_scale;
 }
 
 ggml_tensor * llama_kv_cache::get_v_scale(int32_t il) const {
+    if (!is_type_scaled(type_v())) {
+        return nullptr;
+    }
+
     const int32_t ikv = map_layer_ids.at(il);
 
     return layers[ikv].v_scale;

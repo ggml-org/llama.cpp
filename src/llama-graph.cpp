@@ -3328,10 +3328,6 @@ llm_graph_input_attn_kv * llm_graph_context::build_attn_inp_kv() const {
     return (llm_graph_input_attn_kv *) res->add_input(std::move(inp));
 }
 
-static bool is_type_scaled(ggml_type type) {
-    return type == GGML_TYPE_F8_E4M3;
-}
-
 static void build_attn_scale_kv_inputs(
         ggml_context * ctx,
         const llama_kv_cache_context * mctx,
@@ -3339,18 +3335,15 @@ static void build_attn_scale_kv_inputs(
         ggml_tensor * & k,
         ggml_tensor * & v,
         int32_t il) {
-    if (is_type_scaled(mctx->type_k())) {
+    if (ggml_tensor * scale = mctx->get_k_scale(il)) {
         // Store K/s and move its dequant scale to Q: (Q*s) dot (K/s) = Q dot K.
-        ggml_tensor * scale = mctx->get_k_scale(il);
-        if (scale) {
-            q = ggml_mul(ctx, q, scale);
-            if (k) {
-                k = ggml_div(ctx, k, scale);
-            }
+        q = ggml_mul(ctx, q, scale);
+        if (k) {
+            k = ggml_div(ctx, k, scale);
         }
     }
 
-    if (is_type_scaled(mctx->type_v()) && v) {
+    if (v) {
         // Store V/s here and restore its dequant scale after the weighted sum.
         ggml_tensor * scale = mctx->get_v_scale(il);
         if (scale) {
@@ -3364,12 +3357,9 @@ static ggml_tensor * build_attn_scale_kv_output(
         const llama_kv_cache_context * mctx,
         ggml_tensor * cur,
         int32_t il) {
-    if (is_type_scaled(mctx->type_v())) {
+    if (ggml_tensor * scale = mctx->get_v_scale(il)) {
         // P*(V/s)*s = P*V.
-        ggml_tensor * scale = mctx->get_v_scale(il);
-        if (scale) {
-            cur = ggml_mul(ctx, cur, scale);
-        }
+        cur = ggml_mul(ctx, cur, scale);
     }
 
     return cur;
