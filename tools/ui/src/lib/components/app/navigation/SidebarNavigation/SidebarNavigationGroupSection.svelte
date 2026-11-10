@@ -90,7 +90,7 @@
 <!-- a group is a section like Pinned and Recent: its chats show here only,
      and a chat dropped anywhere on it joins the group -->
 <SidebarNavigationDropZone
-	class="flex min-w-0 flex-col"
+	class="flex min-w-0 flex-col gap-4 md:gap-0"
 	holds={(convId) => items.some(({ conversation }) => conversation.id === convId)}
 	onDrop={handleDrop}
 	{sectionId}

@@ -193,7 +193,8 @@
 <!-- rows and headings open their own menus; anywhere else, down to the empty
      space under the last section, offers the same actions as the Recent heading -->
 <ContextMenuActions bind:open={listMenuOpen} actions={recentActions} disabled={isSelectionMode}>
-	<div class="flex flex-1 flex-col gap-4">
+	<!-- a phone spaces its sections a little wider than the rows inside them -->
+	<div class="flex flex-1 flex-col gap-6 md:gap-4">
 		{#each sections as section (section.id)}
 			{@const isDragged = section.id === sidebarDragStore.sectionId}
 
@@ -285,7 +286,7 @@
 
 {#snippet pinnedSection()}
 	<SidebarNavigationDropZone
-		class="flex flex-col"
+		class="flex flex-col gap-4 md:gap-0"
 		holds={(convId) => isPinned(convId)}
 		onDrop={handleDropPinned}
 		sectionId={SIDEBAR_SECTION_IDS.PINNED}
