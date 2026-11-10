@@ -144,9 +144,10 @@
 				extensions: [
 					customCompartment.of(extensions),
 					history(),
-					// Shift+Enter and Ctrl/Cmd+Enter add a line, continuing lists and quotes
+					// Shift+Enter and Ctrl/Cmd+Enter add a line, continuing lists and quotes. Mod is
+					// Ctrl off macOS, where the chat form still takes Meta+Enter as Ctrl+Enter
 					keymap.of(
-						['Shift-Enter', 'Mod-Enter', 'Ctrl-Enter'].map((key) => ({
+						['Shift-Enter', 'Mod-Enter', 'Ctrl-Enter', 'Meta-Enter'].map((key) => ({
 							key,
 							run: (target) => insertNewlineContinueMarkup(target) || insertNewlineAndIndent(target)
 						}))
