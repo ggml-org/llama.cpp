@@ -191,15 +191,14 @@ static std::map<std::string, std::map<std::string, std::string>> parse_ini_from_
         // comment ::= [;#] (!newline .)*
         auto comment = p.rule("comment", p.chars("[;#]", 1, 1) + p.zero_or_more(p.negate(newline) + p.any()));
 
-        // eol ::= ws comment? (newline / EOF)
-        auto eol = p.rule("eol", ws + p.optional(comment) + (newline | p.end()));
+        // eol ::= ws (newline / EOF)
+        auto eol = p.rule("eol", ws + (newline | p.end()));
 
         // ident ::= [a-zA-Z_] [a-zA-Z0-9_.-]*
         auto ident = p.rule("ident", p.chars("[a-zA-Z_]", 1, 1) + p.chars("[a-zA-Z0-9_.-]", 0, -1));
 
-        // value ::= (!eol-start .)*
-        auto eol_start = p.rule("eol-start", ws + (p.chars("[;#]", 1, 1) | newline | p.end()));
-        auto value = p.rule("value", p.zero_or_more(p.negate(eol_start) + p.any()));
+        // value ::= (!eol .)*
+        auto value = p.rule("value", p.zero_or_more(p.negate(eol) + p.any()));
 
         // header-line ::= "[" ws ident ws "]" eol
         auto header_line = p.rule("header-line", "[" + ws + p.tag("section-name", p.chars("[^]]")) + ws + "]" + eol);
