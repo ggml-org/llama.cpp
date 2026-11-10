@@ -257,7 +257,7 @@ llama_model_xing4_0::graph_mtp::graph_mtp(const llama_model & model, const llm_g
     ggml_tensor * concat = ggml_concat(ctx0, e_norm, h_norm, 0);
     cb(concat, "mtp_concat", il);
 
-    ggml_tensor * cur = build_lora_mm(layer.nextn.eh_proj, concat, layer.nextn.eh_proj_s);
+    ggml_tensor * cur = build_lora_mm(layer.nextn.eh_proj, concat);
     cb(cur, "mtp_eh_proj", il);
 
     ggml_tensor * inpSA = cur;
@@ -265,13 +265,13 @@ llama_model_xing4_0::graph_mtp::graph_mtp(const llama_model & model, const llm_g
     cur = build_norm(cur, layer.attn_norm, nullptr, LLM_NORM_RMS, il);
     cb(cur, "mtp_attn_norm", il);
 
-    ggml_tensor * q = ggml_mul_mat(ctx0, layer.wq_a, cur);
+    ggml_tensor * q = build_lora_mm(layer.wq_a, cur);
     cb(q, "mtp_q_a", il);
 
     q = build_norm(q, layer.attn_q_a_norm, nullptr, LLM_NORM_RMS, il);
     cb(q, "mtp_q_a_norm", il);
 
-    q = ggml_mul_mat(ctx0, layer.wq_b, q);
+    q = build_lora_mm(layer.wq_b, q);
     cb(q, "mtp_q_b", il);
 
     ggml_tensor * q_nope =
@@ -287,7 +287,7 @@ llama_model_xing4_0::graph_mtp::graph_mtp(const llama_model & model, const llm_g
                 ggml_row_size(q->type, n_embd_head_qk_nope));
     cb(q_pe, "mtp_q_pe", il);
 
-    ggml_tensor * kv_cmpr_pe = ggml_mul_mat(ctx0, layer.wkv_a_mqa, cur);
+    ggml_tensor * kv_cmpr_pe = build_lora_mm(layer.wkv_a_mqa, cur);
     cb(kv_cmpr_pe, "mtp_kv_cmpr_pe", il);
 
     ggml_tensor * kv_cmpr =
@@ -325,7 +325,7 @@ llama_model_xing4_0::graph_mtp::graph_mtp(const llama_model & model, const llm_g
     q_nope = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);
     cb(q_nope, "mtp_q_nope_perm", il);
 
-    ggml_tensor * q_nope_absorbed = ggml_mul_mat(ctx0, layer.wk_b, q_nope);
+    ggml_tensor * q_nope_absorbed = build_lora_mm(layer.wk_b, q_nope);
     cb(q_nope_absorbed, "mtp_q_nope_absorbed", il);
 
     q_nope_absorbed = ggml_permute(ctx0, q_nope_absorbed, 0, 2, 1, 3);
@@ -344,7 +344,7 @@ llama_model_xing4_0::graph_mtp::graph_mtp(const llama_model & model, const llm_g
     cb(Vcur, "mtp_Vcur", il);
 
     cur = build_attn(inp_attn_k,
-            layer.wo, nullptr, layer.wo_s,
+            layer.wo, nullptr,
             Qcur, Kcur, Vcur, nullptr, nullptr, layer.wv_b, kq_scale, il);
     cb(cur, "mtp_attn_out", il);
 
@@ -370,9 +370,9 @@ llama_model_xing4_0::graph_mtp::graph_mtp(const llama_model & model, const llm_g
     cb(moe_out, "mtp_ffn_moe_out", il);
 
     ggml_tensor * ffn_shexp = build_ffn(cur,
-            layer.ffn_up_shexp, nullptr, nullptr,
-            layer.ffn_gate_shexp, nullptr, nullptr,
-            layer.ffn_down_shexp, nullptr, nullptr,
+            layer.ffn_up_shexp, nullptr,
+            layer.ffn_gate_shexp, nullptr,
+            layer.ffn_down_shexp, nullptr,
             nullptr, LLM_FFN_SILU, LLM_FFN_PAR, il);
     cb(ffn_shexp, "mtp_ffn_shexp", il);
 
@@ -400,13 +400,9 @@ llama_model_xing4_0::graph_mtp::graph_mtp(const llama_model & model, const llm_g
             ? layer.nextn.shared_head_head
             : model.output;
 
-    ggml_tensor * head_s = layer.nextn.shared_head_head
-            ? layer.nextn.shared_head_head_s
-            : model.output_s;
-
     GGML_ASSERT(head_w && "xing4_0 MTP: missing LM head (nextn.shared_head_head or model.output)");
 
-    cur = build_lora_mm(head_w, cur, head_s);
+    cur = build_lora_mm(head_w, cur);
     cb(cur, "result_output", -1);
 
     res->t_logits = cur;
@@ -496,7 +492,7 @@ ggml_tensor * llama_model_xing4_0::graph::build_hc_pre(
 
     ggml_tensor * flat = ggml_reshape_2d(ctx0, x, hc_dim, nt);
     ggml_tensor * flat_norm = ggml_rms_norm(ctx0, flat, norm_rms_eps);
-    ggml_tensor * mixes = ggml_mul_mat(ctx0, hc_fn, flat_norm);
+    ggml_tensor * mixes = build_lora_mm(hc_fn, flat_norm);
     cb(mixes, "hc_mixes", il);
 
     ggml_tensor * scale_pre  = xing4_0_view_1d(ctx0, hc_scale, 1, 0);
@@ -643,13 +639,13 @@ llama_model_xing4_0::graph::graph(const llama_model & model, const llm_graph_par
         cb(cur, "attn_norm", il);
 
         // MLA self-attention (identical to deepseek2)
-        ggml_tensor * q = ggml_mul_mat(ctx0, layer.wq_a, cur);
+        ggml_tensor * q = build_lora_mm(layer.wq_a, cur);
         cb(q, "q_a", il);
 
         q = build_norm(q, layer.attn_q_a_norm, nullptr, LLM_NORM_RMS, il);
         cb(q, "q_anorm", il);
 
-        q = ggml_mul_mat(ctx0, layer.wq_b, q);
+        q = build_lora_mm(layer.wq_b, q);
         cb(q, "q_b", il);
 
         // split into {n_embd_head_qk_nope, n_head, n_tokens}
@@ -664,7 +660,7 @@ llama_model_xing4_0::graph::graph(const llama_model & model, const llm_graph_par
             ggml_row_size(q->type, n_embd_head_k) * n_head, ggml_row_size(q->type, n_embd_head_qk_nope));
         cb(q_pe, "q_pe_in", il);
 
-        ggml_tensor * kv_cmpr_pe = ggml_mul_mat(ctx0, layer.wkv_a_mqa, cur);
+        ggml_tensor * kv_cmpr_pe = build_lora_mm(layer.wkv_a_mqa, cur);
         cb(kv_cmpr_pe, "kv_cmpr_pe", il);
 
         // split into {kv_lora_rank, n_tokens}
@@ -694,7 +690,7 @@ llama_model_xing4_0::graph::graph(const llama_model & model, const llm_graph_par
         cb(q_nope, "q_nope_perm", il);
 
         // {n_embd_head_qk_nope, kv_lora_rank, n_head} x {n_embd_head_qk_nope, n_tokens, n_head}
-        ggml_tensor * q_nope_absorbed = ggml_mul_mat(ctx0, layer.wk_b, q_nope);
+        ggml_tensor * q_nope_absorbed = build_lora_mm(layer.wk_b, q_nope);
         cb(q_nope_absorbed, "q_nope_absorbed", il);
 
         // {kv_lora_rank, n_head, n_tokens}
@@ -719,7 +715,7 @@ llama_model_xing4_0::graph::graph(const llama_model & model, const llm_graph_par
 
         // note: MLA with the absorption optimization converts into MQA (ie: GQA with 1 group)
         cur = build_attn(inp_attn_k,
-                layer.wo, nullptr, layer.wo_s,
+                layer.wo, nullptr,
                 Qcur, Kcur, Vcur, nullptr, nullptr, layer.wv_b, kq_scale, il);
         cb(cur, "attn_out", il);
 
@@ -754,9 +750,9 @@ llama_model_xing4_0::graph::graph(const llama_model & model, const llm_graph_par
 
         if ((uint32_t) il < hparams.n_layer_dense_lead) {
             cur = build_ffn(cur,
-                layer.ffn_up, nullptr, nullptr,
-                layer.ffn_gate, nullptr, nullptr,
-                layer.ffn_down, nullptr, nullptr,
+                layer.ffn_up, nullptr,
+                layer.ffn_gate, nullptr,
+                layer.ffn_down, nullptr,
                 nullptr, LLM_FFN_SILU, LLM_FFN_PAR, il);
             cb(cur, "ffn_out", il);
         } else {
@@ -780,9 +776,9 @@ llama_model_xing4_0::graph::graph(const llama_model & model, const llm_graph_par
             {
                 ggml_tensor * ffn_shexp =
                     build_ffn(cur,
-                        layer.ffn_up_shexp, nullptr, nullptr,
-                        layer.ffn_gate_shexp, nullptr, nullptr,
-                        layer.ffn_down_shexp, nullptr, nullptr,
+                        layer.ffn_up_shexp, nullptr,
+                        layer.ffn_gate_shexp, nullptr,
+                        layer.ffn_down_shexp, nullptr,
                         nullptr, LLM_FFN_SILU, LLM_FFN_PAR, il);
                 cb(ffn_shexp, "ffn_shexp", il);
 
@@ -813,7 +809,7 @@ llama_model_xing4_0::graph::graph(const llama_model & model, const llm_graph_par
     res->t_embd = cur;
 
     // lm_head
-    cur = ggml_mul_mat(ctx0, model.output, cur);
+    cur = build_lora_mm(model.output, cur);
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;
