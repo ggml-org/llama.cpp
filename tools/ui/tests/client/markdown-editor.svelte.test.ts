@@ -171,6 +171,20 @@ describe('MarkdownEditor', () => {
 		});
 	});
 
+	it('keeps a setext heading raw, so its underline never disappears', async () => {
+		const screen = render(MarkdownEditor, { value: 'test\n---\nafter' });
+
+		await vi.waitFor(() => {
+			expect(
+				[...screen.container.querySelectorAll('.cm-md-block')].map((b) => b.textContent)
+			).toEqual(['after']);
+			expect([...screen.container.querySelectorAll('.cm-line')].map((l) => l.textContent)).toEqual([
+				'test',
+				'---'
+			]);
+		});
+	});
+
 	it('renders a $$ math block with a blank line as one block', async () => {
 		const screen = render(MarkdownEditor, { value: '$$\na\n\nb\n$$' });
 

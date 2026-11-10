@@ -37,8 +37,9 @@ interface LivePreview {
 	raw: boolean[];
 }
 
-// A link reference definition renders to nothing, so it stays raw to remain reachable
-const ALWAYS_RAW_NAMES = new Set(['LinkReference']);
+// Blocks that stay raw: a link reference definition renders to nothing, and a setext
+// heading would hide its underline (`---` under a line of text is easy to type by accident)
+const ALWAYS_RAW_NAMES = new Set(['LinkReference', 'SetextHeading1', 'SetextHeading2']);
 const setFocused = StateEffect.define<boolean>();
 // Whether the editor has focus. One field for every preview, so a preview that replaces
 // another (new options) starts from the focus the editor has.
@@ -129,7 +130,7 @@ function buildPreview(
 
 		const lineClass = CODE_BLOCK_NAMES.has(block.name)
 			? 'cm-md-raw-code'
-			: ALWAYS_RAW_NAMES.has(block.name)
+			: block.name === 'LinkReference'
 				? 'cm-md-raw-definition'
 				: null;
 
