@@ -9,6 +9,7 @@
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import {
 		BOX_BORDER,
+		CHAT_FORM_CHROME_FADE_MS,
 		FAVICON_PATHS,
 		FAVICON_SELECTORS,
 		HEADERS,
@@ -39,6 +40,7 @@
 	import { ModeWatcher } from 'mode-watcher';
 	import { untrack } from 'svelte';
 	import { onMount } from 'svelte';
+	import { fade } from 'svelte/transition';
 	import { Toaster } from 'svelte-sonner';
 	import { pwaAssetsHead } from 'virtual:pwa-assets/head';
 
@@ -357,9 +359,11 @@
 			onpointermove={sidebarReveal.handlePointerMove}
 			onpointerup={sidebarReveal.handlePointerUp}
 		>
-			<!-- the installed app's status bar sits over the page: what scrolls under it fades out -->
-			{#if deviceStore.isMobile}
+			<!-- the installed app's status bar sits over the page: what scrolls under it fades out;
+			     the expanded chat form keeps clear of the bar itself -->
+			{#if deviceStore.isMobile && !uiStore.isComposerExpanded}
 				<div
+					transition:fade={{ duration: CHAT_FORM_CHROME_FADE_MS }}
 					aria-hidden="true"
 					class="status-bar-fade sidebar-reveal-pin-top pointer-events-none fixed inset-x-0 top-0 z-20"
 				></div>
@@ -384,16 +388,19 @@
 				></div>
 			{/if}
 
-			<!-- the phone sidebar sits under the page, so its toggle rides on the page -->
-			{#if deviceStore.isMobile && !page.url.hash.includes(ROUTES.SEARCH)}
-				<ActionIcon
-					ariaLabel={uiStore.isSidebarExpanded ? 'Collapse navigation' : 'Expand navigation'}
-					class="sidebar-reveal-pin-top fixed top-(--corner-control-top) left-4 z-20 transition-colors h-10 w-10 rounded-full bg-muted/60 border border-border/20 shadow-sm text-accent-foreground"
-					icon={MenuIcon}
-					iconSize="size-6"
-					onclick={toggleSidebar}
-					size="lg"
-				/>
+			<!-- the phone sidebar sits under the page, so its toggle rides on the page; it steps
+			     aside while the expanded chat form covers the screen -->
+			{#if deviceStore.isMobile && !page.url.hash.includes(ROUTES.SEARCH) && !uiStore.isComposerExpanded}
+				<div transition:fade={{ duration: CHAT_FORM_CHROME_FADE_MS }}>
+					<ActionIcon
+						ariaLabel={uiStore.isSidebarExpanded ? 'Collapse navigation' : 'Expand navigation'}
+						class="sidebar-reveal-pin-top fixed top-(--corner-control-top) left-4 z-20 transition-colors h-10 w-10 rounded-full bg-muted/60 border border-border/20 shadow-sm text-accent-foreground"
+						icon={MenuIcon}
+						iconSize="size-6"
+						onclick={toggleSidebar}
+						size="lg"
+					/>
+				</div>
 			{/if}
 
 			{@render children?.()}

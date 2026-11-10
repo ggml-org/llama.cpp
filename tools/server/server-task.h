@@ -70,6 +70,8 @@ struct server_control_response {
     mtmd_helper_gen_audio_out_mode out_mode  = MTMD_HELPER_GEN_AUDIO_OUT_AUTO;
     common_params_sampling         sampling;       // of the text tokens: tool call grammar and preserved tokens
     int32_t                        n_predict = -1; // text tokens and audio frames, -1: until the context is full
+    std::string                    lang;           // empty: model default
+    std::string                    voice;          // empty: model default
 };
 
 struct task_params {

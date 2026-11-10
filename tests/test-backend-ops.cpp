@@ -11931,6 +11931,23 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // the batches of a are padded, nb[2] is not a multiple of nb[1]
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 8, 1, 64, {8, 1}, {1, 1}, {0, 1, 2, 3}, 0, 1, false, 16, 16));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F32, 8, 16, 64, {8, 1}, {1, 1}, {0, 1, 2, 3}, 0, 1, false, 16, 16));
+    // Ragged expert slices, strided routing IDs and broadcast activations.
+    for (ggml_type type : {GGML_TYPE_Q8_0, GGML_TYPE_IQ4_NL, GGML_TYPE_IQ3_S, GGML_TYPE_Q2_K, GGML_TYPE_Q3_K}) {
+        for (int n : {3, 17, 33}) {
+            for (bool broadcast : {false, true}) {
+                test_cases.emplace_back(new test_mul_mat_id(type, GGML_TYPE_F32, 37, 2, broadcast, 65, n, 256));
+            }
+            test_cases.emplace_back(new test_mul_mat_id(type, GGML_TYPE_F32, 37, 2, false, 65, n, 256, 0, false, true));
+        }
+    }
+
+    // Both experts receive every token
+    for (ggml_type type : {GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, GGML_TYPE_Q4_K}) {
+        for (int n : {64, 65}) {
+            test_cases.emplace_back(new test_mul_mat_id(type, GGML_TYPE_F32, 2, 2, false, 33, n, 512));
+        }
+    }
+
     // as is a view whose experts are strided by more rows than it uses
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F32, GGML_TYPE_F32, 4, 2, false, 8,  1, 64, 64));
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F16, GGML_TYPE_F32, 4, 2, false, 8, 16, 64, 64));
@@ -12412,6 +12429,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {20000, 3, 2, 1}, dim == 0 ? 333 : 1, dim, 1));
         test_cases.emplace_back(new test_concat(GGML_TYPE_Q8_0, {8192, 2, 1, 1}, dim == 0 ? 4096 : 1, dim, 0));
     }
+
+    // GDN conv_input
+    for (int64_t ne_b_d : { 31, 32, 33, 64 }) {
+        test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {3, 10240, 1, 1}, ne_b_d, 0, 16));
+        test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {1, 37, 1, 1}, ne_b_d, 0, 16));
+    }
+    test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {64, 37, 1, 1}, 32, 0, 16));
+    // Empty src0
+    test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {0, 64, 1, 1}, 33, 0, 16));
 
     for (ggml_sort_order order : {GGML_SORT_ORDER_ASC, GGML_SORT_ORDER_DESC}) {
         for (uint32_t i = 4; i <= 1024*1024; i *= 2) {
@@ -13181,9 +13207,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         test_cases.emplace_back(new test_arange(GGML_TYPE_F32, 0.0f, n, 1.0f));
     }
 
-    // delta-net conv input: conv state followed by the transposed qkv of the ubatch
-    test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {3, 8192, 1, 1}, 512, 0, 16));
-
     // LoRA at prefill: B is [rank, n_out], so K = rank
     for (int64_t k : {16, 32, 48, 64}) {
         test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F32, 2048, 512, k, {1, 1}, {1, 1}));
@@ -13213,6 +13236,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         for (int64_t n_tokens : {512, 2048}) {
             test_cases.emplace_back(new test_glu(GGML_GLU_OP_SWIGLU, type, { 2*17408, n_tokens, 1, 1 }, 0, false));
             test_cases.emplace_back(new test_glu_split(GGML_GLU_OP_SWIGLU, type, { 17408, n_tokens, 1, 1 }, 0));
+        }
+    }
+
+    // GDN conv_input shapes
+    for (int64_t channels : {8192, 10240}) {
+        for (int64_t n_tokens : {512, 2048, 4096}) {
+            test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {3, channels, 1, 1}, n_tokens, 0, 16));
         }
     }
 
@@ -13452,7 +13482,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
 
     // qwen3-30b-a3b
     for (int bs : {1, 4, 8, 32, 64, 128, 256, 512}) {
-        for (ggml_type type_a : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GGML_TYPE_Q4_K, GGML_TYPE_Q6_K, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ4_XS}) {
+        for (ggml_type type_a : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, GGML_TYPE_Q4_K, GGML_TYPE_Q6_K, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ4_XS}) {
             for (ggml_type type_b : {GGML_TYPE_F32}) {
                 test_cases.emplace_back(new test_mul_mat_id(type_a, type_b, 128, 8, false, 768, bs, 2048));
                 test_cases.emplace_back(new test_mul_mat_id_fusion(type_a, type_b, 128, 8, false, 768, bs, 2048, 1));

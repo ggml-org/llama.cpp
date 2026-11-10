@@ -56,6 +56,8 @@ export const SYSTEM_MESSAGE_PLACEHOLDER = 'System message';
 export const UI_DATA_ATTRS = {
 	ACTIVE: 'data-active',
 	ACTIVE_TAB: 'data-active-tab',
+	/** On <html> while the main chat form is expanded (a full-screen sheet on a phone). */
+	CHAT_FORM_SHEET: 'data-chat-form-sheet',
 	CONVERSATION_ROW: 'data-conversation-row',
 	HIGHLIGHT_THEME_PREVIEW: 'data-highlight-theme-preview',
 	PICKER_INDEX: 'data-picker-index',

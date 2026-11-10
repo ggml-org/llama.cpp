@@ -500,3 +500,7 @@ common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates
 // language and voice are optional, the template defines their defaults
 std::string common_chat_get_tts_prompt(const common_chat_templates * chat_templates, const std::string & text,
                                        const std::string & language = "", const std::string & voice = "");
+
+// system prompt line for the speech language and voice (e.g. LFM3-Audio), empty if not used
+std::string common_chat_get_speech_system_prompt(const common_chat_templates * chat_templates,
+                                                 const std::string & language, const std::string & voice);

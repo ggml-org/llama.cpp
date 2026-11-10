@@ -130,6 +130,8 @@ struct realtime_conversation {
     std::string                    type = "realtime";
     std::string                    instructions;
     std::string                    language; // transcription
+    std::string                    out_language;
+    std::string                    out_voice;
     mtmd_helper_gen_audio_out_mode out_mode          = MTMD_HELPER_GEN_AUDIO_OUT_AUTO;
     int32_t                        max_output_tokens = -1; // "inf"
     int                            input_rate        = 16000;
@@ -176,7 +178,8 @@ struct realtime_conversation {
 
     std::atomic<bool> closed{false};
 
-    realtime_conversation(const server_realtime_deps & deps, server_http_context::ws_conn & conn) : deps(deps), conn(conn) {}
+    realtime_conversation(const server_realtime_deps & deps, server_http_context::ws_conn & conn)
+        : deps(deps), conn(conn), out_language(deps.params.tts_lang), out_voice(deps.params.tts_voice) {}
 
     //
     // events
@@ -207,7 +210,11 @@ struct realtime_conversation {
         }
         json audio = {{"input", audio_in}};
         if (deps.cap.audio_gen) {
-            audio["output"] = {{"format", {{"type", "audio/pcm"}, {"rate", output_rate}}}};
+            audio["output"] = {
+                {"format",   {{"type", "audio/pcm"}, {"rate", output_rate}}},
+                {"voice",    out_voice.empty()    ? json(nullptr) : json(out_voice)},
+                {"language", out_language.empty() ? json(nullptr) : json(out_language)},
+            };
         }
         return {
             {"id",                id},
@@ -245,7 +252,7 @@ struct realtime_conversation {
 
     // sampling of a response: the server defaults, with the tool call grammar of chat
     common_params_sampling response_sampling(const common_chat_session * chat) const {
-        common_params_sampling sampling = deps.sampling;
+        common_params_sampling sampling = deps.params.sampling;
         if (chat) {
             chat->apply_sampling(sampling);
         }
@@ -544,6 +551,8 @@ struct realtime_conversation {
             return;
         }
         response.out_mode = mode;
+        response.lang     = out_language;
+        response.voice    = out_voice;
 
         // with tools, the output goes through the tool call parser of the chat template and its grammar
         std::optional<common_chat_session> chat;
@@ -661,6 +670,27 @@ struct realtime_conversation {
         if (in.contains("transcription") && in["transcription"].is_object()) {
             language = json_value(in["transcription"], "language", language);
         }
+        const json out = audio.value("output", json::object());
+        if (out.contains("voice") || out.contains("language")) {
+            std::string voice = out_voice;
+            if (out.contains("voice")) {
+                // string or {"id": name}
+                const json & v = out["voice"];
+                voice = v.is_object() ? json_value(v, "id", std::string()) : v.is_string() ? v.get<std::string>() : std::string();
+            }
+            const std::string lang = json_value(out, "language", out_language);
+            const auto & voices = deps.meta.tts_voices;
+            if (!voice.empty() && !voices.empty() && std::find(voices.begin(), voices.end(), voice) == voices.end()) {
+                send_error("session.update: unknown voice \"" + voice + "\", see \"voices\" in GET /props");
+                return;
+            }
+            if (started && (voice != out_voice || lang != out_language)) {
+                send_error("session.update: the output voice and language cannot change after the first audio or message");
+                return;
+            }
+            out_voice    = voice;
+            out_language = lang;
+        }
         if (!started && !configure()) {
             send_error("the chat template does not fit the realtime turn format", "server_error");
             return;
@@ -674,6 +704,11 @@ struct realtime_conversation {
         if (type == "transcription") {
             const auto preset = common_chat_get_asr_prompt(deps.meta.chat_params.tmpls.get(), language);
             instructions = preset.system;
+        } else if (deps.cap.audio_gen) {
+            const std::string speech = common_chat_get_speech_system_prompt(deps.meta.chat_params.tmpls.get(), out_language, out_voice);
+            if (!speech.empty()) {
+                instructions = instructions.empty() ? speech : speech + "\n" + instructions;
+            }
         }
         const bool ok = derive_turn_text();
         instructions = saved;
@@ -869,7 +904,7 @@ struct realtime_conversation {
         {
             server_task task(SERVER_TASK_TYPE_REALTIME);
             task.id                       = rd.get_new_id();
-            task.params.sampling          = deps.sampling;
+            task.params.sampling          = deps.params.sampling;
             task.params.stream            = true;
             task.params.oaicompat_cmpl_id = id;
             task.params.oaicompat_model   = deps.meta.model_name;
@@ -1052,6 +1087,15 @@ bool server_realtime_slot::response_start(const server_realtime_op & op) {
         inp.data.stream   = true;
         inp.data.out_type = MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM;
         inp.data.out_mode = op.response.out_mode;
+        inp.set_lang(op.response.lang);
+        // predefined voice -> speaker ref, LFM3 uses the system prompt instead
+        if (!op.response.voice.empty() && mtmd_gen_audio_get_info(mctx).n_voices > 0) {
+            mtmd::bitmap_ptr voice(mtmd_gen_audio_get_voice(mctx, op.response.voice.c_str()));
+            if (!voice) {
+                return fail("unknown voice \"" + op.response.voice + "\"", ERROR_TYPE_INVALID_REQUEST);
+            }
+            inp.set_speaker_ref(std::move(voice));
+        }
         if (gen.set_input(inp.get()) != 0) {
             return fail("failed to start the response");
         }
