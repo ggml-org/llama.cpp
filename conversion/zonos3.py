@@ -21,6 +21,15 @@ CODEC_HEAD      = Path("autoencoder") / "heads" / CODEC_VARIANT / "step_0050000.
 CODEC_STAGES    = [0, 2, 4, 6, 8]  # transformer stages of the decoder
 
 DEFAULT_VOICE = "Savannah_en-American_F_1"
+
+# speaker encoder (ownmect_s2), MECT_B2 blocks: (cnn depth, out channels, (stride f, stride t), expansion)
+SPK_CKPT   = Path("speaker_encoders") / "ownmect_s2" / "ckpt_0037.pth"
+SPK_STAGES = [
+    [(3, 32, (1, 1), 4)] * 2,
+    [(3, 64, (2, 1), 2)] + [(3, 64, (1, 2), 2)] * 3,
+    [(3, 128, (2, 1), 2)] + [(3, 128, (1, 2), 2)] * 4,
+    [(3, 256, (2, 1), 1)] + [(2, 256, (1, 2), 1)] * 2,
+]
 VOICE_MAX_FRAMES = 900  # reference_max_frames of the reference
 
 # GDN geometry, hard-coded in the reference (zonos3.reference.lm)
@@ -326,7 +335,7 @@ class Zonos3TextModel(TextModel):
 @ModelBase.register("Zonos3Model")
 class Zonos3MmprojModel(MmprojModel):
     has_vision_encoder = False
-    has_audio_encoder = False
+    has_audio_encoder = True
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -341,12 +350,24 @@ class Zonos3MmprojModel(MmprojModel):
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         name, _ = item
-        if name.startswith(("multi_output.", "multi_embedder.")):
+        if name.startswith(("multi_output.", "multi_embedder.", "speaker_projection.")):
             return item
         return None
 
     def set_gguf_parameters(self):
         self.gguf_writer.add_file_type(self.ftype)
+
+        # speaker encoder for voice cloning, the front-end hparams are hard-coded in tools/mtmd
+        self.gguf_writer.add_clip_has_audio_encoder(True)
+        self.gguf_writer.add_clip_audio_projector_type(gguf.VisionProjectorType.ZONOS3_SPKENC)
+        self.gguf_writer.add_audio_projection_dim(self.n_embd_text)
+        self.gguf_writer.add_audio_num_mel_bins(80)
+        self.gguf_writer.add_audio_block_count(0)
+        self.gguf_writer.add_audio_embedding_length(192)
+        self.gguf_writer.add_audio_head_count(1)
+        self.gguf_writer.add_audio_feed_forward_length(192)
+        self.gguf_writer.add_audio_attention_layernorm_eps(1e-5)
+
         self.gguf_writer.add_clip_has_gen_audio_encoder(True)
         self.gguf_writer.add_clip_gen_audio_projector_type(gguf.VisionProjectorType.ZONOS3_GEN)
         self.gguf_writer.add_gen_audio_projection_dim(self.n_embd_text)
@@ -361,8 +382,8 @@ class Zonos3MmprojModel(MmprojModel):
         # softcap and the codec hparams are hard-coded in tools/mtmd
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
-        # read on the host, or used by get_rows / ggml_ssm_conv
-        if new_name.startswith("voice.") or new_name.endswith((".table", ".dw.weight", ".mixer.weight", ".resample.weight")):
+        # read on the host, or used by get_rows / ggml_ssm_conv / the conv ops of the speaker encoder
+        if new_name.startswith(("voice.", "a.spk.")) or new_name.endswith((".table", ".dw.weight", ".mixer.weight", ".resample.weight")):
             return gguf.GGMLQuantizationType.F32
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
@@ -372,7 +393,83 @@ class Zonos3MmprojModel(MmprojModel):
         g, v = sd[prefix + ".weight_g"].float(), sd[prefix + ".weight_v"].float()
         return (g * v / v.flatten(1).norm(dim=1).view(-1, *[1] * (v.dim() - 1))).squeeze(-1)
 
+    def _speaker_encoder(self) -> Iterable[tuple[str, Tensor]]:
+        # same layout as the reference ggml runtime (tools/convert_gguf.py speaker-encoder)
+        sd = torch.load(self.dir_model / SPK_CKPT, map_location="cpu", weights_only=True)["modules"]["spk_model"]
+        sd = {k[len("model."):]: v.double() for k, v in sd.items() if not k.endswith("num_batches_tracked")}
+        p = "a.spk"
+
+        def bn(dst: str, src: str) -> Iterable[tuple[str, Tensor]]:
+            scale = sd[src + ".weight"] / torch.sqrt(sd[src + ".running_var"] + 1e-5)
+            yield (f"{p}.{dst}.scale", scale)
+            yield (f"{p}.{dst}.shift", sd[src + ".bias"] - sd[src + ".running_mean"] * scale)
+
+        def put(dst: str, t: Tensor) -> tuple[str, Tensor]:
+            return (f"{p}.{dst}", t)
+
+        fe = "feature_extractor."
+        yield put("fe.head.conv.weight", sd[fe + "head.0.weight"])
+        yield put("fe.head.conv.bias",   sd[fe + "head.0.bias"])
+        yield from bn("fe.head.bn", fe + "head.1")
+        c_in, f_in = 32, 80
+        for si, stage in enumerate(SPK_STAGES):
+            for k, (depth, out_ch, (s_f, s_t), expansion) in enumerate(stage):
+                src, dst = f"{fe}mect_block{si + 1}.{k}.", f"fe.b{si + 1}.{k}."
+                oc = out_ch * expansion
+                for r in range(depth):
+                    cs, cd = f"{src}cnn_block.{r}.", f"{dst}cnn.{r}."
+                    # grouped 3x3 convs, one depthwise kernel per input slot of a group
+                    for conv in ("conv1", "conv2"):
+                        w = sd[cs + conv + ".weight"]
+                        for j in range(w.shape[1]):
+                            yield put(f"{cd}{conv}.w{j}", w[:, j:j + 1])
+                    for i in (1, 2):
+                        yield put(f"{cd}pw{i}.weight", sd[f"{cs}conv_pw{i}.weight"])
+                        yield put(f"{cd}pw{i}.bias",   sd[f"{cs}conv_pw{i}.bias"])
+                        yield from bn(f"{cd}bn{i}", f"{cs}bn{i}")
+                    if cs + "shortcut.0.weight" in sd:
+                        yield put(cd + "sc.weight", sd[cs + "shortcut.0.weight"])
+                        yield from bn(cd + "sc.bn", cs + "shortcut.1")
+                if expansion > 1:
+                    yield put(dst + "reduce.weight", sd[src + "reduce_conv.0.weight"])
+                    yield put(dst + "reduce.bias",   sd[src + "reduce_conv.0.bias"])
+                    yield from bn(dst + "reduce.bn", src + "reduce_conv.1")
+                yield put(dst + "rproj.weight",    sd[src + "reduce_project.0.weight"].squeeze(-1))
+                yield put(dst + "rproj.bias",      sd[src + "reduce_project.0.bias"])
+                yield put(dst + "rproj.ln.weight", sd[src + "reduce_project.1.weight"])
+                yield put(dst + "rproj.ln.bias",   sd[src + "reduce_project.1.bias"])
+                yield put(dst + "pos.dw.weight",   sd[src + "pos_conv.pos_conv.0.weight"].squeeze(1))
+                yield put(dst + "pos.dw.bias",     sd[src + "pos_conv.pos_conv.0.bias"])
+                yield from bn(dst + "pos.bn", src + "pos_conv.pos_conv.1")
+                yield put(dst + "pos.pw.weight",   sd[src + "pos_conv.pos_conv.3.weight"].squeeze(-1))
+                yield put(dst + "pos.pw.bias",     sd[src + "pos_conv.pos_conv.3.bias"])
+                tr = src + "transformer."
+                for a, b in (("q", "q_proj"), ("k", "k_proj"), ("v", "v_proj"), ("o", "out_proj")):
+                    yield put(f"{dst}attn.{a}.weight", sd[f"{tr}attention.{b}.weight"])
+                    yield put(f"{dst}attn.{a}.bias",   sd[f"{tr}attention.{b}.bias"])
+                yield put(dst + "ln1.weight", sd[tr + "layer_norm.weight"])
+                yield put(dst + "ln1.bias",   sd[tr + "layer_norm.bias"])
+                moe = tr + "feed_forward.intermediate_dense.token_moe."
+                yield put(dst + "moe.gate.weight",    sd[moe + "gate.weight"])
+                yield put(dst + "moe.experts.weight", sd[moe + "experts.weight"])
+                yield put(dst + "ffn_out.weight", sd[tr + "feed_forward.output_dense.weight"])
+                yield put(dst + "ffn_out.bias",   sd[tr + "feed_forward.output_dense.bias"])
+                yield put(dst + "ln2.weight", sd[tr + "final_layer_norm.weight"])
+                yield put(dst + "ln2.bias",   sd[tr + "final_layer_norm.bias"])
+                yield put(dst + "eproj.weight", sd[src + "expansion_project.0.weight"].squeeze(-1))
+                yield put(dst + "eproj.bias",   sd[src + "expansion_project.0.bias"])
+                c_in, f_in = c_in * s_f, f_in // s_f
+        # the stage outputs are mixed by softmax weights
+        yield put("fe.dense_w", torch.softmax(sd[fe + "dense3.inputs_weights"], dim=1)[0, :, :, 0])
+        yield put("pool.l1.weight", sd["encoding_layers.linear1.weight"].squeeze(-1))
+        yield put("pool.l1.bias",   sd["encoding_layers.linear1.bias"])
+        yield put("pool.l2.weight", sd["encoding_layers.linear2.weight"].squeeze(-1))
+        yield put("pool.l2.bias",   sd["encoding_layers.linear2.bias"])
+        yield from bn("bn", "bn")
+        yield put("linear.weight", sd["linear.weight"])
+
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        yield from self._speaker_encoder()
         logger.info(f"gguf: loading codec decoder from '{CODEC_GENERATOR}' and '{CODEC_HEAD}'")
         gen  = torch.load(self.dir_model / CODEC_GENERATOR, map_location="cpu", mmap=True, weights_only=True)["generator"]
         head = torch.load(self.dir_model / CODEC_HEAD,      map_location="cpu", mmap=True, weights_only=True)["trainable"]
@@ -449,8 +546,13 @@ class Zonos3MmprojModel(MmprojModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         T = gguf.MODEL_TENSOR
 
-        if name.startswith("a.gen.wav."):
+        if name.startswith(("a.gen.wav.", "a.spk.")):
             yield (name, data_torch)
+            return
+
+        # the speaker encoder ends with the speaker projection of the backbone
+        if name.startswith("speaker_projection."):
+            yield ("a.spk.proj." + name.split(".")[-1], data_torch)
             return
 
         if name == "multi_output.weight":

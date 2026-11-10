@@ -1702,6 +1702,7 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
         case PROJECTOR_TYPE_GEMMA4UA:
         case PROJECTOR_TYPE_MUSE_SPARK_AUDIO:
         case PROJECTOR_TYPE_QWEN3TTS_SPKENC:
+        case PROJECTOR_TYPE_ZONOS3_SPKENC:
             {
                 // do nothing
             } break;

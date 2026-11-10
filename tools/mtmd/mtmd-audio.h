@@ -242,6 +242,16 @@ struct mtmd_audio_preprocessor_chatterbox_ref : mtmd_audio_preprocessor {
     mtmd_audio_cache ve_cache;     // entry 4
 };
 
+// zonos3 speaker encoder front-end: kaldi fbank with a hamming window [80 x n_frames] (mel major)
+struct mtmd_audio_preprocessor_zonos3_spk : mtmd_audio_preprocessor {
+    mtmd_audio_preprocessor_zonos3_spk(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
+    void initialize() override;
+    bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
+
+  private:
+    mtmd_audio_cache cache;
+};
+
 struct mtmd_audio_preprocessor_parakeet : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_parakeet(const mtmd_model * model) : mtmd_audio_preprocessor(model) { }
     void initialize() override;

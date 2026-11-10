@@ -1265,6 +1265,10 @@ struct mtmd_context {
                 {
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_qwen3tts_spk>(models.a.get());
                 } break;
+            case PROJECTOR_TYPE_ZONOS3_SPKENC:
+                {
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_zonos3_spk>(models.a.get());
+                } break;
             case PROJECTOR_TYPE_POCKETTTS_SPKENC:
                 {
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_pockettts>(models.a.get());

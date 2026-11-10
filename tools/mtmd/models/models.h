@@ -341,6 +341,27 @@ struct mtmd_graph_mimo_audio : mtmd_graph {
     ggml_cgraph * build() override;
 };
 
+// zonos3 speaker encoder: MECT-B2 + ASTP, then the speaker projection of the backbone
+struct mtmd_graph_zonos3_spkenc : mtmd_graph {
+    mtmd_graph_zonos3_spkenc(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+
+    ggml_tensor * W(const std::string & name) const;
+    bool          has(const std::string & name) const;
+    ggml_tensor * chan(ggml_tensor * v) const;
+    ggml_tensor * bn(ggml_tensor * x, const std::string & p) const;
+    ggml_tensor * conv(ggml_tensor * x, const std::string & p, int s_t, int s_f, bool bias, int pad) const;
+    ggml_tensor * grouped3x3(ggml_tensor * x, const std::string & p, int s_t, int s_f) const;
+    ggml_tensor * res_block(ggml_tensor * x, const std::string & q, int s_f, int s_t) const;
+    ggml_tensor * linear(ggml_tensor * x, const std::string & p) const;
+    ggml_tensor * layer_norm(ggml_tensor * x, const std::string & p) const;
+    ggml_tensor * flatten(ggml_tensor * x) const;
+    ggml_tensor * unflatten(ggml_tensor * x, int64_t F, int64_t C) const;
+    ggml_tensor * attention(ggml_tensor * h, const std::string & p) const;
+    ggml_tensor * moe_ffn(ggml_tensor * h, const std::string & p) const;
+    ggml_tensor * pos_conv(ggml_tensor * h, const std::string & p) const;
+};
+
 struct mtmd_graph_qwen3tts_spkenc : mtmd_graph {
     mtmd_graph_qwen3tts_spkenc(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;

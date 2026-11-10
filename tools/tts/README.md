@@ -192,8 +192,9 @@ python convert_hf_to_gguf.py path/to/drama-3 --mmproj --outtype bf16 --outfile m
 
 Available params:
 - `--tts-voice` picks one of the predefined voices of the release (`Savannah_en-American_F_1` by default); `llama-server` lists them in `GET /props`. A voice is the prompt prefix of its reference codes, the default speaker mode of the reference
-- The language is the one of the text, `--tts-lang` is not used. Supply normalized text: numbers, dates and abbreviations are read as written
-- Note: `--tts-speaker-file` is not supported yet (voice cloning)
+- The language is the one of the text, `--tts-lang` is not used
+- Note: there is no text normalization (the reference uses NeMo text normalization), numbers, dates and abbreviations are read as written; supply normalized text, e.g. "twenty twenty-four" instead of "2024"
+- `--tts-speaker-file` clones the voice of a clip (the first 60 s are used) with the speaker encoder of the release, the "embedding" speaker mode of the reference
 - Note: `--top-k` and `--top-p` are not used, frames are sampled with the settings of the reference: temperature 0.75 (`--temp` changes it), top-k 80, top-p 0.69, repetition penalty 2.4 over the last 96 frames of codebooks 0 to 5
 - Each frame is 2940 samples (about 67 ms), generation stops at the end-of-audio code
 
@@ -209,7 +210,7 @@ llama-tts -m zonos3-mini.gguf \
 
 **Note for GGUF conversion:**
 
-Convert the root of the release repository, not the `lm/` subdirectory. The mmproj holds the codebook heads, the predefined voices and the `keep2_plain` codec decoder, it is best kept in F32:
+Convert the root of the release repository, not the `lm/` subdirectory. The mmproj holds the codebook heads, the predefined voices, the speaker encoder and the `keep2_plain` codec decoder, it is best kept in F32:
 
 ```sh
 python convert_hf_to_gguf.py path/to/ZONOS3-Mini --outtype q8_0 --outfile zonos3-mini.gguf

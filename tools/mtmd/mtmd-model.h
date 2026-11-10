@@ -1227,6 +1227,7 @@ struct mtmd_model {
 
     // chatterbox tensors read on the host, see cbx_read_tensor()
     std::map<std::string, ggml_tensor *> cbx_tensors;
+    std::map<std::string, ggml_tensor *> zonos3_spk; // a.spk.*
     // predefined voices, no rows if the voice is named in the prompt (lfm3a)
     std::map<std::string, mtmd_gen_voice> gen_voices;
 

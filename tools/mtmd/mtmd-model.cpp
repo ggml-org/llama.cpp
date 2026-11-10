@@ -955,6 +955,15 @@ struct mtmd_model_loader {
                                 "%s: mimo_audio: %s must be > 0\n", __func__, KEY_A_LOCAL_GROUP_SIZE));
                         }
                     } break;
+                case PROJECTOR_TYPE_ZONOS3_SPKENC:
+                    {
+                        // kaldi fbank front-end
+                        hparams.audio_sample_rate = 16000;
+                        hparams.audio_n_fft       = 512;
+                        hparams.audio_window_len  = 400;
+                        hparams.audio_hop_len     = 160;
+                        hparams.warmup_audio_size = 1000;
+                    } break;
                 case PROJECTOR_TYPE_QWEN3TTS_SPKENC:
                     {
                         // ECAPA-TDNN speaker encoder, mel front-end uses the Slaney default (fmin=0, fmax=sr/2)
@@ -1464,6 +1473,7 @@ struct mtmd_model_loader {
         const bool has_standard_layers = (
             model.proj_type != PROJECTOR_TYPE_GEMMA3NV &&
             model.proj_type != PROJECTOR_TYPE_QWEN3TTS_SPKENC &&
+            model.proj_type != PROJECTOR_TYPE_ZONOS3_SPKENC &&
             model.proj_type != PROJECTOR_TYPE_POCKETTTS_GEN &&
             model.proj_type != PROJECTOR_TYPE_SOPRANO &&
             model.proj_type != PROJECTOR_TYPE_MUSE_SPARK_AUDIO &&
@@ -2934,6 +2944,19 @@ struct mtmd_model_loader {
                         }
                     }
                 } break;
+            case PROJECTOR_TYPE_ZONOS3_SPKENC:
+                {
+                    // the graph reads the tensors by name
+                    for (int64_t i = 0; i < gguf_get_n_tensors(ctx_gguf.get()); ++i) {
+                        const char * name = gguf_get_tensor_name(ctx_gguf.get(), i);
+                        if (strncmp(name, "a.spk.", 6) == 0) {
+                            model.zonos3_spk[name] = get_tensor(name);
+                        }
+                    }
+                    if (!model.zonos3_spk.count("a.spk.proj.weight") || !model.zonos3_spk.count("a.spk.linear.weight")) {
+                        throw std::runtime_error(string_format("%s: zonos3: missing speaker encoder tensors\n", __func__));
+                    }
+                } break;
             case PROJECTOR_TYPE_CHATTERBOX_SPKENC:
                 {
                     auto & c = model.cbx;
@@ -4247,6 +4270,7 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
                 n_patches = ((img->nx() + ws - 1) / ws) * (ws / ds);
             } break;
         case PROJECTOR_TYPE_QWEN3TTS_SPKENC:
+        case PROJECTOR_TYPE_ZONOS3_SPKENC:
             {
                 // pooling gives one speaker embedding, whatever the clip length is
                 n_patches = 1;
@@ -4440,6 +4464,8 @@ int mtmd_model::n_mmproj_embd() const {
             return mm_2_w->ne[1];
         case PROJECTOR_TYPE_QWEN3TTS_SPKENC:
             return mm_fc_w->ne[2];
+        case PROJECTOR_TYPE_ZONOS3_SPKENC:
+            return zonos3_spk.at("a.spk.proj.weight")->ne[1];
         case PROJECTOR_TYPE_QWEN3TTS_GEN:
         case PROJECTOR_TYPE_LFM3A_GEN:
         case PROJECTOR_TYPE_DRAMA3_GEN:

@@ -2465,6 +2465,7 @@ public:
         }
 
         // prompt: [voice rows] [condition rows] BOS text EOS [silence rows]
+        // the speaker CFG of the reference is omitted: it adds too much code and maintenance cost
         if (inp->speaker_ref) {
             segment seg;
             if (!encode_speaker(inp->speaker_ref, seg.embd)) {

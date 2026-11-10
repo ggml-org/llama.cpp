@@ -7109,6 +7109,7 @@ class VisionProjectorType:
     SOPRANO = "soprano" # audio generation: Vocos decoder
     DRAMA3_GEN = "drama3_gen" # audio generation: codebook tower + Fish DAC decoder
     ZONOS3_GEN = "zonos3_gen" # audio generation: 10 codebook heads + ZAC decoder
+    ZONOS3_SPKENC = "zonos3_spkenc" # audio: MECT-B2 speaker encoder
     HUNYUANVL      = "hunyuanvl"
     PARAKEET       = "parakeet"  # audio
     MINIMAXM3      = "minimax_m3"
