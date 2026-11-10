@@ -1718,15 +1718,20 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
             } break;
         case PROJECTOR_TYPE_ZONOS3_GEN:
             if (params->gen_process == MTMD_SUBCTX_GEN_PROCESS_GEN_WAV) {
-                // frame-major codes -> codebook-major rows
+                // frame-major codes -> codebook-major rows; a residual code of -1 is missing and left out
                 const int64_t n_cb     = mtmd_graph_zonos3_gen::n_codebooks;
                 const int64_t n_codes  = mtmd_graph_zonos3_gen::n_cb_vocab;
                 GGML_ASSERT(params->codes != nullptr && params->codes->size() % n_cb == 0);
                 const int64_t n_frames = (int64_t) params->codes->size() / n_cb;
                 std::vector<int32_t> rows(params->codes->size());
+                std::vector<float>   keep((size_t) n_frames * (n_cb - 1), 1.0f);
                 for (int64_t t = 0; t < n_frames; t++) {
                     for (int64_t c = 0; c < n_cb; c++) {
-                        const int32_t code = (*params->codes)[t * n_cb + c];
+                        int32_t code = (*params->codes)[t * n_cb + c];
+                        if (code == -1 && c > 0) {
+                            keep[(c - 1) * n_frames + t] = 0.0f;
+                            code = 0;
+                        }
                         if (code < 0 || code >= n_codes) {
                             LOG_ERR("%s: code out of range (%d, codebook size %lld)\n", __func__, code, (long long) n_codes);
                             return false;
@@ -1735,6 +1740,7 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
                     }
                 }
                 set_input_i32("inp_codes", rows);
+                set_input_f32("inp_keep", keep);
                 set_gen_state_in();
             } else {
                 const int64_t n_cb    = mtmd_graph_zonos3_gen::n_codebooks;

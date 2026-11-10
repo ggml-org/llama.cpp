@@ -517,6 +517,7 @@ struct mtmd_gen_inp {
     // for MTMD_GEN_PROCESS_TYPE_GEN_WAV
     // pass either codes (discrete) or feats (continuous), depending on the pipeline
     // lfm3a GEN_CODE also takes codes: the codes revealed so far, -1 for a masked codebook
+    // zonos3 GEN_WAV: -1 for a residual code not known yet, the frame is decoded without it
     int32_t * codes;
     size_t    n_codes;
     const float * feats;

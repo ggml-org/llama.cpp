@@ -145,15 +145,21 @@ ggml_cgraph * mtmd_graph_zonos3_gen::build_gen_wav() {
         return ggml_view_1d(ctx0, inp_codes, T, (size_t) c * T * ggml_element_size(inp_codes));
     };
 
+    // 1 for a known residual code, 0 for a missing one (early decode of a frame), codebook-major
+    ggml_tensor * inp_keep = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, T * (n_codebooks - 1));
+    ggml_set_name(inp_keep, "inp_keep");
+    ggml_set_input(inp_keep);
+
     ggml_tensor * x = ggml_add(ctx0, ggml_get_rows(ctx0, z.sem_table, codes_of(0)), z.sem_bias); // [semantic_dim, T]
     for (size_t i = 0; i < z.sem.size(); i++) {
         x = convnext(x, z.sem[i], "sem_conv_" + std::to_string(i));
     }
     x = ggml_add(ctx0, ggml_mul_mat(ctx0, z.sem_out_w, x), z.sem_out_b); // [latent, T]
     for (int c = 1; c < n_codebooks; c++) {
-        x = ggml_add(ctx0, x, ggml_get_rows(ctx0, z.res_table, codes_of(c)));
+        ggml_tensor * bias = ggml_view_1d(ctx0, z.res_bias, z.res_bias->ne[0], (size_t) (c - 1) * z.res_bias->nb[1]);
+        ggml_tensor * keep = ggml_view_2d(ctx0, inp_keep, 1, T, ggml_element_size(inp_keep), (size_t) (c - 1) * T * ggml_element_size(inp_keep));
+        x = ggml_add(ctx0, x, ggml_mul(ctx0, ggml_add(ctx0, ggml_get_rows(ctx0, z.res_table, codes_of(c)), bias), keep));
     }
-    x = ggml_add(ctx0, x, z.res_bias);
     cb(x, "zac_latent", -1);
 
     ggml_tensor * frames = ggml_reshape_1d(ctx0, state_in.at("pos"), 1);

@@ -906,7 +906,7 @@ struct mtmd_zonos3_wav {
     ggml_tensor * sem_out_w = nullptr;
     ggml_tensor * sem_out_b = nullptr;
     ggml_tensor * res_table = nullptr; // merged
-    ggml_tensor * res_bias  = nullptr; // summed
+    ggml_tensor * res_bias  = nullptr; // [latent, n_codebooks - 1]
 
     std::vector<stage> stages;
 

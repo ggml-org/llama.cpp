@@ -2649,8 +2649,8 @@ public:
         h_state_buf.assign(h, h + n_embd);
         *h_state_out = h_state_buf.data();
 
-        if (stream && n_ready() - n_decoded >= stream_frames) {
-            return decode_wav(false) ? 0 : 1;
+        if (stream) {
+            return decode_stream() ? 0 : 1;
         }
         return 0;
     }
@@ -2836,6 +2836,36 @@ private:
             n = std::min(n, (size_t) eos_row);
         }
         return n;
+    }
+
+    // streaming, as the reference does for the first audio: the silence frames are decoded with silence codes only,
+    // then the first generated frame from its first code alone; later chunks of complete frames grow 2, 4, 8
+    bool decode_stream() {
+        if (n_decoded == 0) {
+            const size_t n_rows = rows.size() / n_cb;
+            if (n_rows <= (size_t) n_prefill || rows[(size_t) n_prefill * n_cb] >= audio_eoa) {
+                return true;
+            }
+            std::vector<int32_t> codes;
+            for (int k = 0; k < n_prefill; k++) {
+                codes.insert(codes.end(), silence_frame, silence_frame + n_cb);
+            }
+            for (int cb = 0; cb < n_cb; cb++) {
+                const size_t r = (size_t) n_prefill + cb;
+                const int32_t c = r < n_rows ? rows[r * n_cb + cb] : -1;
+                codes.push_back(c >= audio_eoa ? -1 : c);
+            }
+            if (!run_codec(codes.data(), codes.size())) {
+                return false;
+            }
+            n_decoded = n_prefill + 1;
+            return true;
+        }
+        const size_t n_chunk = std::min(stream_frames, n_decoded - n_prefill + 1);
+        if (n_ready() >= n_decoded + n_chunk) {
+            return decode_wav(false);
+        }
+        return true;
     }
 
     // the silence frames are decoded too, as left context

@@ -494,7 +494,8 @@ class Zonos3MmprojModel(MmprojModel):
         yield (f"{p}.sem.bias",  b)
         res = [rvq(f"quantizer.quantizer.quantizers.{i}") for i in range(self.n_codebooks - 1)]
         yield (f"{p}.res.table", torch.cat([t for t, _ in res], dim=0))
-        yield (f"{p}.res.bias",  torch.stack([b for _, b in res]).sum(0))
+        # one bias per residual codebook, a frame decoded before all its codes are known leaves the missing ones out
+        yield (f"{p}.res.bias",  torch.stack([b for _, b in res]))
 
         n_sem = sum(1 for k in gen if k.startswith("semantic_head.") and k.endswith(".dwconv.weight"))
         for i in range(n_sem):
