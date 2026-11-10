@@ -161,7 +161,7 @@
 			icon: FolderInput,
 			label: 'Move to group',
 			onclick: handlePickGroup,
-			submenu: groupSubmenu
+			submenu: deviceStore.isMobile ? undefined : groupSubmenu
 		},
 		...(groupId
 			? [
