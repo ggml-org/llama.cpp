@@ -1,0 +1,189 @@
+/*
+	llama.app's landing figures in the design system's figure language (Philosophy's figures, Architecture's diagrams):
+	a quiet tinted panel, parts on card surfaces, Mono kicker labels, hairline wires with arrowheads, dashed slots, and
+	the brand's art colours in roles. The roles are variables, so one drawing takes either direction:
+	- `.lf` (A · Figure): neutral, as Philosophy draws, with cinder as the one accent
+	- `.lf.arch` (B · Architecture): as Architecture › Stack draws, apps in cinder, Llama in the skies, the engine and the
+	  model files in grey
+*/
+
+.lf {
+  --figure-muted: color-mix(in oklab, var(--fg-muted) 75%, var(--fg-default));
+  --panel-bg: color-mix(in oklab, var(--fg-default) 2.5%, var(--surface-page));
+  --wire: color-mix(in oklab, var(--fg-default) 28%, transparent);
+
+  /* apps, Llama, the engine and its files: a strong colour for lines and labels, a soft one for fills */
+  --app: var(--fg-default);
+  --app-bg: var(--surface-raised);
+  --app-line: var(--line-default);
+  --lib: var(--fg-default);
+  --lib-bg: var(--surface-raised);
+  --lib-line: var(--line-default);
+  --be: var(--fg-default);
+  --be-bg: var(--surface-raised);
+  --be-line: var(--line-default);
+
+  color: var(--fg-default);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.lf.arch {
+  --app: color-mix(in oklab, var(--art-cinder) 80%, black);
+  --app-bg: color-mix(in oklab, var(--art-cinder) 10%, var(--surface-page));
+  --app-line: color-mix(in oklab, var(--art-cinder) 45%, transparent);
+  --lib: var(--art-night-sky);
+  --lib-bg: color-mix(in oklab, var(--art-day-sky) 24%, var(--surface-page));
+  --lib-line: color-mix(in oklab, var(--art-night-sky) 35%, transparent);
+  --be: var(--neutral-600);
+  --be-bg: var(--surface-muted);
+  --be-line: var(--line-default);
+}
+
+.dark .lf.arch {
+  --app: var(--art-cinder);
+  --app-bg: color-mix(in oklab, var(--art-cinder) 14%, var(--surface-page));
+  --lib: var(--art-day-sky);
+  --lib-bg: color-mix(in oklab, var(--art-night-sky) 55%, var(--surface-page));
+  --lib-line: color-mix(in oklab, var(--art-day-sky) 35%, transparent);
+  --be: var(--neutral-300);
+}
+
+/* the figure's panel, as Philosophy's Figure draws it */
+.lf .panel {
+  display: grid;
+  gap: 16px;
+  padding: clamp(18px, 3.5vw, 28px);
+  border: 1px solid var(--line-default);
+  border-radius: 14px;
+  background: var(--panel-bg);
+}
+
+/* the Mono kicker: a part's label, a layer's number, a figure's caption */
+.lf .kicker {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  margin: 0;
+  color: var(--figure-muted);
+  font: 500 11px / 1.4 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.lf .kicker b {
+  color: var(--fg-default);
+  font-weight: 500;
+}
+.lf .dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--art-cinder);
+}
+
+/* a part: a card surface, its fill and edge from its role */
+.lf .part {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--line-default);
+  border-radius: var(--radius-panel);
+  background: var(--surface-raised);
+}
+.lf .part.app {
+  border-color: var(--app-line);
+  background: var(--app-bg);
+}
+.lf .part.lib {
+  border-color: var(--lib-line);
+  background: var(--lib-bg);
+}
+.lf .part.be {
+  border-color: var(--be-line);
+  background: var(--be-bg);
+}
+.lf .part.slot {
+  border-style: dashed;
+  background: none;
+}
+.lf .part h4 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+.lf .part.app h4,
+.lf .app-ink {
+  color: var(--app);
+}
+.lf .part.lib h4,
+.lf .lib-ink {
+  color: var(--lib);
+}
+.lf .part.be h4,
+.lf .be-ink {
+  color: var(--be);
+}
+.lf .muted {
+  color: var(--figure-muted);
+  font-size: 13px;
+}
+.lf code,
+.lf .mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+/* a hairline wire down to what it feeds, with its arrowhead */
+.lf .wire {
+  position: relative;
+  justify-self: center;
+  width: 1px;
+  height: 22px;
+  background: var(--wire);
+}
+.lf .wire::after {
+  position: absolute;
+  bottom: -1px;
+  left: -3px;
+  border-top: 5px solid var(--wire);
+  border-right: 3.5px solid transparent;
+  border-left: 3.5px solid transparent;
+  content: "";
+}
+
+/* a model's mark, as Llama's menus show it: its maker's logo in a small circle */
+.lf .mark {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: color-mix(in oklab, var(--fg-default) 7%, transparent);
+  color: var(--fg-default);
+}
+.lf .mark svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* the key, as Architecture › Stack sets it */
+.lf .key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+}
+.lf .key span {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--figure-muted);
+  font-size: 12px;
+}
+.lf .key i {
+  width: 10px;
+  height: 10px;
+  border: 1px solid;
+  border-radius: 3px;
+}

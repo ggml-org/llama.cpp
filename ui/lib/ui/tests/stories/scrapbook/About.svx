@@ -1,0 +1,26 @@
+<!--
+	The Scrapbook's front page: what goes in it and how a proposal is filed. Set in the Philosophy pages' Editorial.
+-->
+
+<p class="kicker">Scrapbook</p>
+
+# Scrapbook
+
+<p class="lead">Proposals, prototypes and variations, rendered before anything is decided. A design is worked out here, side by side, then built where it belongs.</p>
+
+## What goes here
+
+- **UI:** a new screen, a component, an interaction or a flow, in a few versions.
+- **Communications:** a post, a key visual or a layout, in a few directions.
+- **Brand:** a mark, a lockup, a colour or a type detail, when the brand itself is in question.
+
+## How to file one
+
+- Title it `Scrapbook/UI/<topic>`, `Scrapbook/Communications/<topic>` or `Scrapbook/Brand/<topic>`.
+- Make one story per variation, named so they compare: `A · Compact`, `B · Spacious`.
+- Build each from the real components, tokens, fonts and files, so what you compare is what would ship.
+- Show both themes, and a phone width where it matters.
+
+## When one is chosen
+
+The chosen version is built in its own section, under **UI**, **Communications** or **Brand**. The others stay in the Scrapbook as a record until they're no longer useful.
