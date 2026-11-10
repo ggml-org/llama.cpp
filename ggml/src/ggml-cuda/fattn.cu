@@ -60,7 +60,7 @@ static __global__ void flash_attn_mask_to_sparse_indices(
                     selected |= (!oob || q < q1 - q0) && isfinite(__half2float(mask[q*s31 + i]));
                 }
             }
-            selected_warp[item] = (lane_mask_t)__ballot_sync(ballot_mask, (int) selected);
+            selected_warp[item] = (lane_mask_t)ggml_cuda_ballot((int) selected, ballot_mask);
             warp_count += popc(selected_warp[item]);
         }
 
