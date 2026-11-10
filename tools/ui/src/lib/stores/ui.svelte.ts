@@ -67,6 +67,10 @@ class UiStore {
 	discoverModelsOpen = $state(false);
 	/** Sidebar sections showing all their chats past the preview, for this session. */
 	expandedSidebarSections = new SvelteSet<string>();
+
+	/** Whether the main chat form is expanded into its large editor. */
+	isComposerExpanded = $state(false);
+
 	/** Set while the user drags the sidebar edge, so width transitions can step aside. */
 	isSidebarResizing = $state(false);
 

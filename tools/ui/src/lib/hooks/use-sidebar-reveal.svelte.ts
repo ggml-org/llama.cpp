@@ -214,6 +214,10 @@ export function useSidebarReveal() {
 		if (!deviceStore.isMobile || !event.isPrimary) return;
 
 		const wasExpanded = uiStore.isSidebarExpanded;
+
+		// the expanded chat form covers the screen: a drag over it is not for the sidebar
+		if (uiStore.isComposerExpanded && !wasExpanded) return;
+
 		const isAnywhere = !wasExpanded && event.clientX > SIDEBAR_REVEAL_EDGE_PX;
 
 		if (isAnywhere && ownsHorizontalDrag(event.target, event.currentTarget as Element)) return;
