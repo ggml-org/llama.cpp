@@ -125,11 +125,11 @@ struct ggml_backend_openvino_buffer_context {
             return;
         }
 
-        const auto & device_name = ggml_openvino_get_device_name();
+        const auto & device_name = ggml_openvino_get_available_devices()[device];
 
         if (is_remote) {
             GGML_ASSERT(ggml_openvino_is_gpu());
-            auto remote_context = ggml_openvino_get_remote_context();
+            auto remote_context = ggml_openvino_get_remote_context(device_name);
             auto gpu_context = remote_context->as<ov::intel_gpu::ocl::ClContext>();
             ov::intel_gpu::ocl::USMTensor usm_tensor =
                 gpu_context.create_usm_device_tensor(ov::element::u8, ov::Shape{size});
@@ -426,7 +426,8 @@ static enum ggml_status ggml_backend_openvino_buffer_init_tensor(ggml_backend_bu
             if (!ggml_are_same_shape(tensor, tensor->view_src) && ggml_is_contiguous(tensor) &&
                 !ggml_is_quantized(tensor->type) && tensor->data != nullptr && ggml_nbytes(tensor) > 0) {
                 if (ggml_openvino_tensor_extra * extra =
-                        ggml_openvino_create_tensor_extra(tensor, ctx->is_remote)) {
+                        ggml_openvino_create_tensor_extra(tensor, ctx->is_remote,
+                                                          ggml_openvino_get_available_devices()[ctx->device])) {
                     auto it = ctx->tensor_extras.find(tensor);
                     if (it != ctx->tensor_extras.end()) {
                         delete it->second;
@@ -444,7 +445,8 @@ static enum ggml_status ggml_backend_openvino_buffer_init_tensor(ggml_backend_bu
     ctx = (ggml_backend_openvino_buffer_context *) buffer->context;
 
     if (tensor->data != nullptr && !ggml_is_quantized(tensor->type) && ggml_nbytes(tensor) > 0) {
-        ggml_openvino_tensor_extra * extra = ggml_openvino_create_tensor_extra(tensor, ctx->is_remote);
+        ggml_openvino_tensor_extra * extra = ggml_openvino_create_tensor_extra(
+            tensor, ctx->is_remote, ggml_openvino_get_available_devices()[ctx->device]);
         if (extra != nullptr) {
             auto it = ctx->tensor_extras.find(tensor);
             if (it != ctx->tensor_extras.end()) {
@@ -469,7 +471,7 @@ static void ggml_backend_openvino_buffer_memset_tensor(ggml_backend_buffer_t buf
 
     if (ctx->is_remote) {
         // For remote (device) buffers, use OpenCL USM memfill
-        cl_command_queue queue = ggml_openvino_get_cl_queue();
+        cl_command_queue queue = ggml_openvino_get_cl_queue(ggml_openvino_get_available_devices()[ctx->device]);
         auto mem_fill_fn = ggml_openvino_get_clEnqueueMemFillINTEL();
         if (mem_fill_fn != nullptr) {
             uint8_t pattern = value;
@@ -668,7 +670,7 @@ static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer
     } else {
         // Non-weight tensor (KV cache, activations, etc.) - copy data. test-backend-ops also goes here
         if (ctx->is_remote) {
-            cl_command_queue queue = ggml_openvino_get_cl_queue();
+            cl_command_queue queue = ggml_openvino_get_cl_queue(ggml_openvino_get_available_devices()[ctx->device]);
             auto mem_cpy_fn = ggml_openvino_get_clEnqueueMemcpyINTEL();
             if (mem_cpy_fn != nullptr) {
                 cl_int err = mem_cpy_fn(queue, CL_TRUE, (char *) tensor->data + offset, data, size,
@@ -688,7 +690,8 @@ static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer
         if (ggml_openvino_extra_unchanged(ctx, tensor)) {
             return;
         }
-        ggml_openvino_tensor_extra * extra = ggml_openvino_create_tensor_extra(tensor, ctx->is_remote);
+        ggml_openvino_tensor_extra * extra = ggml_openvino_create_tensor_extra(
+            tensor, ctx->is_remote, ggml_openvino_get_available_devices()[ctx->device]);
         if (extra == nullptr) {
             // GGML_LOG_ERROR("%s: failed to create tensor extra for %s\n", __func__, tensor->name);
             return;
@@ -718,7 +721,7 @@ static void ggml_backend_openvino_buffer_get_tensor(ggml_backend_buffer_t buffer
 
     if (ctx->is_remote) {
         // For remote (device) buffers, use OpenCL USM memcpy (device-to-host)
-        cl_command_queue queue = ggml_openvino_get_cl_queue();
+        cl_command_queue queue = ggml_openvino_get_cl_queue(ggml_openvino_get_available_devices()[ctx->device]);
         auto mem_cpy_fn = ggml_openvino_get_clEnqueueMemcpyINTEL();
         if (mem_cpy_fn != nullptr) {
             cl_int err = mem_cpy_fn(queue, CL_TRUE, data, (const char *) tensor->data + offset,
@@ -744,7 +747,7 @@ static bool ggml_backend_openvino_buffer_cpy_tensor(ggml_backend_buffer_t buffer
 
     if (ctx->is_remote) {
         // For remote (device) buffers, use OpenCL USM memcpy
-        cl_command_queue queue = ggml_openvino_get_cl_queue();
+        cl_command_queue queue = ggml_openvino_get_cl_queue(ggml_openvino_get_available_devices()[ctx->device]);
         auto mem_cpy_fn = ggml_openvino_get_clEnqueueMemcpyINTEL();
         if (mem_cpy_fn == nullptr) {
             GGML_LOG_ERROR("%s: clEnqueueMemcpyINTEL not available for GPU buffer\n", __func__);
@@ -764,7 +767,7 @@ static bool ggml_backend_openvino_buffer_cpy_tensor(ggml_backend_buffer_t buffer
         if (ggml_backend_buffer_is_openvino(src->buffer)) {
             ggml_backend_openvino_buffer_context * src_ctx =
                 (ggml_backend_openvino_buffer_context *) src->buffer->context;
-            if (src_ctx->is_remote) {
+            if (src_ctx->is_remote && src_ctx->device == ctx->device) {
                 cl_int err = mem_cpy_fn(queue, CL_TRUE, dst->data,
                                         src->data, ggml_nbytes(src),
                                         0, nullptr, nullptr);
@@ -800,7 +803,7 @@ static void ggml_backend_openvino_buffer_clear(ggml_backend_buffer_t buffer, uin
     ggml_backend_openvino_buffer_context * ctx = (ggml_backend_openvino_buffer_context *) buffer->context;
     GGML_ASSERT(ctx->data != nullptr);
     if (ctx->is_remote) {
-        cl_command_queue queue = ggml_openvino_get_cl_queue();
+        cl_command_queue queue = ggml_openvino_get_cl_queue(ggml_openvino_get_available_devices()[ctx->device]);
         auto mem_fill_fn = ggml_openvino_get_clEnqueueMemFillINTEL();
         if (mem_fill_fn != nullptr) {
             uint8_t pattern = value;
@@ -864,9 +867,9 @@ static size_t ggml_backend_openvino_buffer_type_get_alignment(ggml_backend_buffe
 }
 
 static size_t ggml_backend_openvino_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
-    GGML_UNUSED(buft);
     // A GPU caps a single memory object, so let ggml split a large buffer into parts that fit
-    return ggml_openvino_max_alloc_size();
+    ggml_backend_openvino_buffer_type_context * buft_ctx = (ggml_backend_openvino_buffer_type_context *) buft->context;
+    return ggml_openvino_max_alloc_size(ggml_openvino_get_available_devices()[buft_ctx->device]);
 }
 
 static size_t ggml_backend_openvino_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft,
@@ -1130,11 +1133,11 @@ static ggml_guid_t ggml_backend_openvino_guid(void) {
     return &guid;
 }
 
-static std::shared_ptr<ov_runtime_context> get_ov_runtime_context_ptr() {
+static std::shared_ptr<ov_runtime_context> get_ov_runtime_context_ptr(int device) {
     // Share compiled models, but give every backend its own requests and KV state.
     static auto cache = std::make_shared<ov_compiled_model_cache>();
     auto r_ctx = std::make_shared<ov_runtime_context>();
-    r_ctx->device = ggml_openvino_get_device_name();
+    r_ctx->device = ggml_openvino_get_available_devices()[device];
     r_ctx->stateful = is_stateful_enabled() && !ggml_openvino_is_npu();
     r_ctx->compiled_cache = cache;
     std::lock_guard<std::mutex> cache_lock(cache->mutex);
@@ -1155,7 +1158,7 @@ GGML_BACKEND_API ggml_backend_t ggml_backend_openvino_init(int device) {
         return nullptr;
     }
 
-    ctx->runtime_context = get_ov_runtime_context_ptr();
+    ctx->runtime_context = get_ov_runtime_context_ptr(device);
     if (ctx->runtime_context == nullptr) {
         GGML_LOG_ERROR("%s: failed to allocate runtime context\n", __func__);
         delete ctx;
@@ -1343,9 +1346,9 @@ static void ggml_backend_openvino_device_get_memory(ggml_backend_dev_t dev, size
 
 static enum ggml_backend_dev_type ggml_backend_openvino_device_get_type(ggml_backend_dev_t dev) {
     ggml_backend_openvino_device_context * ctx = (ggml_backend_openvino_device_context *) dev->context;
-    // Only the device selected by GGML_OPENVINO_DEVICE is offered for offload. The others are
+    // Only the devices selected by GGML_OPENVINO_DEVICE are offered for offload. The others are
     // registered for discovery (--list-devices) only; llama.cpp skips IGPU devices when a GPU exists.
-    return ctx->ov_name == ggml_openvino_get_device_name() ? GGML_BACKEND_DEVICE_TYPE_GPU : GGML_BACKEND_DEVICE_TYPE_IGPU;
+    return ggml_openvino_is_selected_device(ctx->ov_name) ? GGML_BACKEND_DEVICE_TYPE_GPU : GGML_BACKEND_DEVICE_TYPE_IGPU;
 }
 
 static void ggml_backend_openvino_device_get_props(ggml_backend_dev_t dev, ggml_backend_dev_props * props) {
@@ -1366,7 +1369,7 @@ static void ggml_backend_openvino_device_get_props(ggml_backend_dev_t dev, ggml_
 static ggml_backend_t ggml_backend_openvino_device_init(ggml_backend_dev_t dev, const char * params) {
     GGML_UNUSED(params);
     ggml_backend_openvino_device_context * ctx = (ggml_backend_openvino_device_context *) dev->context;
-    if (ctx->ov_name != ggml_openvino_get_device_name()) {
+    if (!ggml_openvino_is_selected_device(ctx->ov_name)) {
         // Not an error: test-backend-ops initializes every device
         GGML_LOG_WARN("%s: %s (OpenVINO %s) is not the selected device, no ops will run on it; "
                       "set GGML_OPENVINO_DEVICE=%s to use it\n",
@@ -2077,7 +2080,7 @@ static ggml_openvino_op_support ggml_backend_openvino_device_supports_op_impl(gg
     GGML_ASSERT(dev->reg != nullptr);
 
     ggml_backend_openvino_device_context * dev_ctx = (ggml_backend_openvino_device_context *) dev->context;
-    if (dev_ctx->ov_name != ggml_openvino_get_device_name()) {
+    if (!ggml_openvino_is_selected_device(dev_ctx->ov_name)) {
         // Data placed on a non-selected device (e.g. with -dev) can never run here; stop with a hint
         // instead of the generic scheduler abort. Unallocated tensors (test-backend-ops) pass through.
         for (int i = -1; i < GGML_MAX_SRC; i++) {
@@ -2237,8 +2240,13 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
 }
 
 static bool ggml_backend_openvino_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
-    return ggml_backend_buft_is_openvino(buft) || ggml_backend_buft_is_host(buft);
-    GGML_UNUSED(dev);
+    if (ggml_backend_buft_is_openvino(buft)) {
+        ggml_backend_openvino_device_context * dev_ctx = (ggml_backend_openvino_device_context *) dev->context;
+        ggml_backend_openvino_buffer_type_context * buft_ctx =
+            (ggml_backend_openvino_buffer_type_context *) buft->context;
+        return buft_ctx->device == dev_ctx->device;
+    }
+    return ggml_backend_buft_is_host(buft);
 }
 
 static const struct ggml_backend_device_i ggml_backend_openvino_device_interface = {
@@ -2315,7 +2323,7 @@ GGML_BACKEND_API ggml_backend_reg_t ggml_backend_openvino_reg(void) {
                 dev_ctx->ov_name = openvino_devices[i];
                 // The device is chosen with GGML_OPENVINO_DEVICE, not -dev, so show the value to set
                 dev_ctx->description = "GGML_OPENVINO_DEVICE=" + dev_ctx->ov_name +
-                                       (dev_ctx->ov_name == ggml_openvino_get_device_name() ? " (selected)" : "") +
+                                       (ggml_openvino_is_selected_device(dev_ctx->ov_name) ? " (selected)" : "") +
                                        " - " + ggml_openvino_get_device_description(dev_ctx->ov_name);
                 dev_ctx->total_memory = 0;
                 if (ov_device_has_prefix(dev_ctx->ov_name, "GPU")) {
