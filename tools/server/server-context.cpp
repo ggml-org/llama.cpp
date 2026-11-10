@@ -2032,7 +2032,12 @@ private:
             // mtmd_helper always re-eval the whole prompt
             slot.prompt_clear();
             task.tts_inp.data.seq_id = slot.id;
-            if (slot.tts.ctx.set_input(task.tts_inp.get()) != 0) {
+            const int32_t ret = slot.tts.ctx.set_input(task.tts_inp.get());
+            if (ret == 2) {
+                send_error(task, "invalid TTS input: the model may not support \"speed\" or \"loudness\", see the server log", ERROR_TYPE_INVALID_REQUEST);
+                return false;
+            }
+            if (ret != 0) {
                 send_error(task, "failed to process TTS prompt", ERROR_TYPE_SERVER);
                 return false;
             }
@@ -5752,7 +5757,7 @@ static json parse_tts_body(const server_http_req & req) {
             body[k] = std::stoll(body[k].get<std::string>());
         }
     }
-    for (const char * k : { "top_p", "temperature", "repeat_penalty", "speed" }) {
+    for (const char * k : { "top_p", "temperature", "repeat_penalty", "speed", "loudness" }) {
         if (body.contains(k) && body[k].is_string()) {
             body[k] = std::stof(body[k].get<std::string>());
         }

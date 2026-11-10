@@ -107,6 +107,8 @@ public:
     virtual int32_t flush() = 0;
     // continuing a sequence (inp->n_past > 0) with the model's own text/audio switching
     virtual bool supports_continue() const { return false; }
+    // mtmd_helper_gen_audio_inp::speed and loudness other than the defaults
+    virtual bool supports_delivery() const { return false; }
     virtual bool next_is_text() const { return false; }
 
     std::vector<llama_logit_bias> logit_bias; // see mtmd_helper_gen_audio_get_logit_bias()
@@ -2423,6 +2425,8 @@ class zonos3_gen_audio_pipeline : public mtmd_gen_audio_pipeline {
 public:
     using mtmd_gen_audio_pipeline::mtmd_gen_audio_pipeline;
 
+    bool supports_delivery() const override { return true; }
+
     void reset() override {
         seq_id = 0;
         pos = 0;
@@ -2474,11 +2478,17 @@ public:
             segments.push_back(std::move(seg));
         }
 
+        // condition rows: the bucket of each value over the checkpoint edges, or unknown
+        auto bucket = [](const std::vector<float> & edges, float v) {
+            return std::to_string(std::upper_bound(edges.begin(), edges.end(), v) - edges.begin());
+        };
+        const std::string loudness = inp->loudness != 0.0f ? bucket(loudness_edges, inp->loudness) : "unk";
+        const std::string rate     = inp->speed != 1.0f ? bucket(rate_edges, inp->speed * typical_rate) : "unk";
         segment text;
-        for (const char * name : { "<|loudness_unk|>", "<|fmax_unk|>", "<|speaking_rate_unk|>" }) {
+        for (const std::string & name : { "<|loudness_" + loudness + "|>", std::string("<|fmax_unk|>"), "<|speaking_rate_" + rate + "|>" }) {
             const llama_token t = find_special_token(vocab, name);
             if (t == LLAMA_TOKEN_NULL) {
-                LOG_ERR("mtmd_helper_gen_audio: missing ZONOS3 token %s in vocab\n", name);
+                LOG_ERR("mtmd_helper_gen_audio: missing ZONOS3 token %s in vocab\n", name.c_str());
                 return 1;
             }
             text.tokens.push_back(t);
@@ -2702,6 +2712,14 @@ private:
     static constexpr int n_vocab   = 4098; // codes, EOA, pad
     static constexpr int audio_eoa = 4096;
     static constexpr int audio_pad = 4097;
+
+    // condition_edges of params.json; speed 1 is this many UTF-8 bytes per second, the middle of the rate buckets
+    const std::vector<float> loudness_edges = { -29.778f, -26.947f, -25.047f, -23.3f, -21.743f, -20.386f, -19.186f, -17.851f, -15.967f };
+    const std::vector<float> rate_edges = {
+        6.546f, 8.182f, 9.273f, 10.31f, 11.054f, 11.667f, 12.193f, 12.656f, 13.083f, 13.476f, 13.846f, 14.196f, 14.53f, 14.887f, 15.193f,
+        15.517f, 15.865f, 16.208f, 16.579f, 16.972f, 17.411f, 17.898f, 18.434f, 19.069f, 19.818f, 20.816f, 22.286f, 24.722f, 29.25f,
+    };
+    static constexpr float typical_rate = 15.0f;
 
     // digital silence of the ZAC codec (registries/silence_frame_*.json)
     static constexpr int32_t silence_frame[n_cb] = { 1918, 746, 3544, 234, 1267, 2914, 3944, 2849, 326, 1337 };
@@ -2948,6 +2966,8 @@ struct mtmd_helper_gen_audio_inp mtmd_helper_gen_audio_inp_default(void) {
     inp.top_p    = 1.0f;
     inp.temp     = -1.0f; // model default
     inp.seed     = UINT32_MAX; // random
+    inp.speed    = 1.0f;
+    inp.loudness = 0.0f;
     inp.out_type = MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV;
     return inp;
 }
@@ -2960,6 +2980,14 @@ int32_t mtmd_helper_gen_audio_set_input(mtmd_helper_gen_audio * ctx, const mtmd_
     if (inp->n_past > 0 && !ctx->pipeline->supports_continue()) {
         LOG_ERR("mtmd_helper_gen_audio: the pipeline cannot continue a sequence\n");
         return 1;
+    }
+    if (!std::isfinite(inp->speed) || inp->speed <= 0.0f || !std::isfinite(inp->loudness) || inp->loudness > 0.0f) {
+        LOG_ERR("mtmd_helper_gen_audio: speed must be > 0 and loudness < 0 LUFS (0 = model default)\n");
+        return 2;
+    }
+    if ((inp->speed != 1.0f || inp->loudness != 0.0f) && !ctx->pipeline->supports_delivery()) {
+        LOG_ERR("mtmd_helper_gen_audio: the model does not support speed or loudness\n");
+        return 2;
     }
     ctx->pipeline->logit_bias.clear();
     return ctx->pipeline->set_input(inp);

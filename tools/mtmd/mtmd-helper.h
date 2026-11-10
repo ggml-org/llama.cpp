@@ -264,6 +264,10 @@ struct mtmd_helper_gen_audio_inp {
     float    temp; // audio frame temperature if the model supports it, < 0 = model default, 0 = greedy
     uint32_t seed; // UINT32_MAX for random (default: random)
 
+    // delivery (only for models that support it); other models reject non-default values
+    float speed;    // speaking speed relative to a typical pace, > 0 (default: 1.0 = the model's own pace)
+    float loudness; // target loudness in LUFS, < 0 (default: 0.0 = the model's own loudness)
+
     enum mtmd_helper_gen_audio_outtype out_type;
 };
 
@@ -277,6 +281,7 @@ MTMD_API void mtmd_helper_gen_audio_free(mtmd_helper_gen_audio * ctx);
 
 MTMD_API void mtmd_helper_gen_audio_reset(mtmd_helper_gen_audio * ctx);
 
+// returns 0 on success, 2 if the input is invalid for the model (e.g. unsupported speed or loudness), 1 on other errors
 MTMD_API int32_t mtmd_helper_gen_audio_set_input(
                         mtmd_helper_gen_audio * ctx,
                         const struct mtmd_helper_gen_audio_inp * inp);

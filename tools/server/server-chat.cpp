@@ -790,10 +790,6 @@ json convert_speech_to_tts(const json & inp_body) {
         throw std::invalid_argument("Only 'audio' stream_format is supported for speech");
     }
 
-    if (json_value(inp_body, "speed", 1.0) != 1.0) {
-        throw std::invalid_argument("'speed' is not supported for speech");
-    }
-
     if (!json_value(inp_body, "instructions", std::string()).empty()) {
         SRV_WRN("%s", "'instructions' is not supported for speech and is ignored\n");
     }
