@@ -1,10 +1,11 @@
 // Guards the Enter-key contract of the chat form: Enter sends, and Shift+Enter or
 // Ctrl/Cmd+Enter adds a line (continuing lists), in the small form and in the expanded
-// editor alike. With sending on Enter turned off, the two swap.
+// editor alike. With sending on Enter turned off, or on a touch screen, the two swap.
 
 import ChatFormTestWrapper from './components/ChatFormTestWrapper.svelte';
 import { EditorView } from '@codemirror/view';
 import { SETTINGS_KEYS } from '$lib/constants';
+import { deviceStore } from '$lib/stores';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
 import { tick } from 'svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -37,6 +38,7 @@ async function renderForm({ expanded = false } = {}) {
 describe('ChatForm Enter', () => {
 	afterEach(() => {
 		settingsStore.updateConfig(SETTINGS_KEYS.SEND_ON_ENTER, true);
+		vi.restoreAllMocks();
 	});
 
 	it.each([false, true])('sends on Enter (expanded: %s)', async (expanded) => {
@@ -76,6 +78,18 @@ describe('ChatForm Enter', () => {
 
 		expect(onSubmit).not.toHaveBeenCalled();
 		expect(editor.state.doc.toString()).toBe('- one\n- two');
+	});
+
+	it('adds a line on Enter with a touch screen', async () => {
+		vi.spyOn(deviceStore, 'isTouch', 'get').mockReturnValue(true);
+
+		const { editor, onSubmit } = await renderForm({ expanded: true });
+
+		await userEvent.keyboard('hello{Enter}world');
+		await tick();
+
+		expect(onSubmit).not.toHaveBeenCalled();
+		expect(editor.state.doc.toString()).toBe('hello\nworld');
 	});
 
 	it('swaps the two with sending on Enter turned off', async () => {

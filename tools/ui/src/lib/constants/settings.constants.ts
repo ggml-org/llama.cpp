@@ -107,7 +107,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 			},
 			{
 				defaultValue: true,
-				help: 'Use Enter to send messages, and Shift + Enter or Ctrl/Cmd + Enter for new lines. When disabled, Enter adds a line and Ctrl/Cmd + Enter sends.',
+				help: 'Use Enter to send messages, and Shift + Enter or Ctrl/Cmd + Enter for new lines. When disabled, and always on a touch screen, Enter adds a line and Ctrl/Cmd + Enter sends.',
 				key: SETTINGS_KEYS.SEND_ON_ENTER,
 				label: 'Send message on Enter',
 				type: SettingsFieldType.CHECKBOX

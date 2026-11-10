@@ -391,11 +391,12 @@
 
 		if (event.key === KeyboardKey.ENTER && !event.shiftKey && !isIMEComposing(event)) {
 			const isModifier = event.ctrlKey || event.metaKey;
-
 			// Enter sends and Ctrl/Cmd+Enter adds a line, the other way round when sending
-			// on Enter is off; Shift+Enter always adds one. Skipping submit lets the editor's
-			// own newline through
-			if (isModifier === (currentConfig.sendOnEnter !== false)) return;
+			// on Enter is off or the keyboard is on screen, whose Return has no Shift;
+			// Shift+Enter always adds one. Skipping submit lets the editor's newline through
+			const sendOnEnter = currentConfig.sendOnEnter !== false && !deviceStore.isTouch;
+
+			if (isModifier === sendOnEnter) return;
 
 			event.preventDefault();
 
