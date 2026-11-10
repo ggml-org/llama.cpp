@@ -370,6 +370,7 @@ static void ggml_backend_blas_device_get_props(ggml_backend_dev_t dev, struct gg
         /* .buffer_from_host_ptr  = */ true,
         /* .events                = */ false,
         /* .mmap_support          = */ true,
+        /* .async_host_input      = */ false,
     };
 }
 
