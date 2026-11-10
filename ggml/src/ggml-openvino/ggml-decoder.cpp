@@ -439,9 +439,14 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
                 }
             } else if (consumer->op == GGML_OP_SSM_CONV) {
                 const auto * concat = consumer->src[0];
-                if (concat->op == GGML_OP_CONCAT) {
-                    const auto * transposed = concat->src[1];
-                    recurrent_sequence = transposed->op == GGML_OP_TRANSPOSE && transposed->src[0] == node;
+                if (concat->op == GGML_OP_CONCAT && concat->src[1]->op == GGML_OP_TRANSPOSE) {
+                    const auto * seq = concat->src[1]->src[0];
+                    // LFM2 short convolutions gate the input first: transpose(mul(view(node), view(node))).
+                    if (seq->op == GGML_OP_MUL && seq->src[0]->op == GGML_OP_VIEW && seq->src[0]->src[0] == node &&
+                        seq->src[1]->op == GGML_OP_VIEW && seq->src[1]->src[0] == node) {
+                        seq = node;
+                    }
+                    recurrent_sequence = seq == node;
                 }
             } else if (consumer->op == GGML_OP_UNARY && ggml_get_unary_op(consumer) == GGML_UNARY_OP_SOFTPLUS) {
                 const auto * biased = consumer->src[0];
