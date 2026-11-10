@@ -1457,6 +1457,15 @@ struct ggml_backend_cuda_context {
     std::string name;
     cudaEvent_t copy_event = nullptr;
 
+    // dedicated H2D upload stream for async tensor sets (research 3.1b)
+    cudaStream_t up_stream = nullptr;
+    static constexpr int n_up_events = 64;
+    cudaEvent_t up_events[n_up_events] = { nullptr };
+    int         up_event_idx = 0;
+    // marks the main stream at the moment a copy starts, so up_stream waits for the
+    // compute that already occupies the staging buffer without holding a scheduler event
+    cudaEvent_t up_wait_event = nullptr;
+
     cudaStream_t streams[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = {};
     cublasHandle_t cublas_handles[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = {};
     void * cublas_workspaces[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = {};
